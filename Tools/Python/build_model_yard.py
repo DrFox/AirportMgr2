@@ -57,6 +57,12 @@ ROWS = [
         ("/Game/Aircraft/Plane2/SK_Plane2", "Plane2 (Twin Otter)"),
         ("/Game/Aircraft/Plane3/SK_Plane3", "Plane3 (Dash 8-Q400)"),
         ("/Game/Aircraft/Plane4/SK_Plane4", "Plane4 (737-800W)"),
+        # THE 777 GOES LAST AND IT IS NOT CLOSE: 64.78 m of span against the 737's 35.79 and
+        # 73.88 m of length against its 39.3. It is the reason the floor below grew - six
+        # aeroplanes fitted 220 m and seven do not - and standing it beside the narrowbody is
+        # most of the argument for keeping a yard at all. A Code E aeroplane next to a Code C
+        # one says what "the airport has to be rebuilt" means in a way no figure does.
+        ("/Game/Aircraft/Plane6/SK_Plane6", "Plane6 (777-300ER)"),
     ]),
     ("Ground equipment", 500.0, [
         ("/Game/Vehicles/GPU1/SK_GPU1", "GPU1 (towed)"),
@@ -66,23 +72,38 @@ ROWS = [
     ]),
 ]
 
-# How far apart the two rows sit on X. Generous, because an aircraft's row position is its
-# ORIGIN and the Dash 8's origin is on its main gear with 16 m of fuselage behind it.
-ROW_PITCH_UU = 5000.0
+# How far apart the two rows sit on X. A row's position is each model's ORIGIN, and every
+# aeroplane here is authored about its NOSE GEAR - so almost the whole airframe hangs AFT of
+# the row line and the pitch has to clear the longest tail behind it.
+#
+# 100 m SINCE 2026-09-21, UP FROM 50. The note here used to name the Dash 8 "with 16 m of
+# fuselage behind it", which was true when plane3 was imported about its mains and has not
+# been since it was re-exported about its nose. The binding model now is plane6: a 777-300ER
+# is 73.88 m long with its nose gear 5.89 m from the nose, so 68 m of aeroplane sits behind
+# the line and at the old pitch its tail reached 18 m PAST the ground-equipment row. A
+# 100 m pitch leaves about 23 m between the 777's tailcone and the fuel truck's nose.
+ROW_PITCH_UU = 10000.0
 
 # The floor. /Engine/BasicShapes/Plane is 100 x 100 uu at scale 1, so these are metres x 1.
-FLOOR_X_M = 220.0
-FLOOR_Y_M = 220.0
+#
+# 300 m SINCE 2026-09-21, UP FROM 220, AND IT IS THE SPAN THAT FORCED IT RATHER THAN THE
+# LENGTH. Six aeroplanes and their gaps came to 186 m across the aircraft row; plane6's
+# 64.78 m of wing takes it to 263, which at 220 m put a wingtip 21 m off the edge and the
+# aeroplane standing on the void. Worth re-checking on the next import: the row is centred on
+# Y = 0, so what matters is that the sum of the spans plus twelve metres per gap stays under
+# this figure. place_row prints that sum every run ("Aircraft: N model(s) over M m").
+FLOOR_X_M = 300.0
+FLOOR_Y_M = 300.0
 
 # THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
 #
 # THIS REVERSES THE ORIGINAL ARGUMENT, which is recorded here rather than deleted. It ran: use
 # a NEUTRAL GREY, not an apron material, because the apron is built for a road mesh carrying
 # its own UV1 (colour there comes from UV1, not from the material's parameters) and a single
-# scaled BasicShapes/Plane has UV 0-1 across 220 m - so a tiling surface stretches one texel
-# over the whole yard. A studio grey was also called the better backdrop for judging colours.
+# scaled BasicShapes/Plane has UV 0-1 across the whole floor - so a tiling surface
+# stretches one texel over the whole yard. A studio grey was also called the better backdrop for judging colours.
 #
-# THE STRETCH IS REAL AND IS THE POINT. At 220 m across one UV tile there is no readable
+# THE STRETCH IS REAL AND IS THE POINT. At 300 m across one UV tile there is no readable
 # texture left, so M_Ground resolves to a flat olive that reads as a field rather than as a
 # studio - which is what was wanted, and is why the objection does not bite. What the argument
 # still correctly warns against is a material whose detail MATTERS: put M_ApronConcrete here

@@ -27,10 +27,61 @@ So: never delete these four, and note that clear_previous's survivor check asks 
 REGISTRY when the thing that survives is the FILE. See the memory
 unreal-headless-delete-reports-success: check os.path.isfile, not list_assets.
 
-REIMPORT IS THE OPERATION THIS ACTUALLY IS, same as reimport_plane2.py: the source changed,
-the asset did not move or get renamed and keeps its 16 meshes, 7 joints and 8 material slots.
-UInterchangeManager::ReimportAsset updates the UObject in place, so its package path, GUID and
-M_ModelYard's reference to it survive by construction.
+REIMPORT IS THE OPERATION THIS ACTUALLY IS, same as reimport_plane2.py: the source changed
+and the asset did not move or get renamed. UInterchangeManager::ReimportAsset updates the
+UObject in place, so its package path, GUID and every reference to it - M_ModelYard's,
+DA_Aircraft_Plane3's, ABP_Plane3's skeleton - survive by construction.
+
+AND IT IS NOW A RIG CHANGE, NOT ONLY A MATERIAL ONE. On 2026-09-21 plane3 gained retraction
+bones and bay doors: build_gear_rig.py added gear_L, gear_R, gear_nose and four door bones,
+re-parented the wheels under their legs and the steer bone under gear_nose, and
+build_gear_bays.py modelled the four door panels. The skin went from 7 joints to 14 and the
+mesh from 19 parts to 23. That is exactly what a reimport is for and exactly what would be
+lost by a delete-and-recreate, since the ABP targets this mesh's Skeleton by object.
+
+THE HEADER USED TO STATE THE COUNTS - "keeps its 16 meshes, 7 joints and 8 material slots" -
+and every one of those numbers is now wrong. They are not restated. A count in prose beside
+an asset that is re-imported whenever the model changes is a figure with nothing keeping it
+true; what this script actually enforces is EXPECTED_SKIN below, which names parts rather
+than counting them.
+
+THE SKELETON CANNOT BE REGENERATED HEADLESSLY, AND THIS REIMPORT NEEDS IT REGENERATED.
+MEASURED 2026-09-21, not inferred: the run logs
+
+    LogInterchangeEngine: Error: UInterchangeSkeletalMeshFactory::EndImportAssetObject_
+    GameThread, cannot merge bone tree with the existing skeleton.
+
+and leaves a MESH carrying 14 bones beside a SKELETON still carrying 7.
+
+WHY THE MERGE REFUSES. USkeleton::MergeAllBonesToBoneTree accepts bones being ADDED to a
+tree; it refuses a tree whose SHAPE changed. plane3's did: build_gear_rig.py re-parented
+wheel_L and wheel_R from `root` onto the new gear_L and gear_R, and nosewheel_steer from
+`root` onto gear_nose. Three bones changed parent, so this is a different skeleton wearing
+the old one's names, and the engine is right to refuse it.
+
+WHY HEADLESS CANNOT ANSWER. InterchangeSkeletalMeshFactory.cpp's next move when the merge
+fails is to offer to RECREATE the skeleton - and that path is gated on
+`if (GIsRunningUnattendedScript)`, which -unattended sets, so it posts an error instead of
+asking. There is no Python route round it either: USkeleton::MergeAllBonesToBoneTree is
+ENGINE_API and not a UFUNCTION, and unreal.Skeleton's `copy_bones_from_skeleton` is a
+GeometryScript call that copies bone attributes onto a DynamicMesh - a different thing
+entirely under a promising name.
+
+SO THIS ONE STEP IS DONE BY HAND, ONCE, IN THE OPEN EDITOR: right-click SK_Plane3 ->
+Reimport, and answer YES to regenerating the skeleton. Then run this script to verify, and
+the rest of the pipeline scripts as normal. What it costs is that plane3's asset is no
+longer reproducible from zero by a commandlet - it never was, since a reimport presupposes
+the asset - and what it buys is not carrying a wrapper around an engine-internal API for a
+job done once per rig change. bone_report() below is what refuses a run that half-landed, so
+the manual step cannot be silently skipped.
+
+IT DOES NOT SWEEP THE ORPHANED MATERIALS. rebuild_fleet_materials() at the end repoints every
+slot onto the shared M_Fleet instances, which ORPHANS the per-asset UMaterials Interchange
+just regenerated - about 48 KB of dead uber-graph each, referenced by nothing and invisible to
+every test. import_models.py learned to sweep automatically on 2026-09-21 and this script did
+not, because the sweep wants the set of folders a run touched and this one has exactly one.
+Run Tools/Python/clean_orphan_materials.py after this; the tell is
+Content/Aircraft/Plane3/Materials/ existing at all.
 """
 import os
 import sys
@@ -59,10 +110,24 @@ PIPELINE_PATH = "/Game/Aircraft/Plane3/PL_Plane3_Reimport"
 # CHECKED AGAINST THE .glb RATHER THAN THE ASSET, because that is the artefact Unreal reads and
 # the one a stale export would betray. "The legs stopped spinning" is invisible in any count,
 # extent or material slot the rest of this script measures - it is a statement about WEIGHTS,
-# so it takes a check that reads weights.
+# so it takes a check that reads weights. The same argument covers every row added since.
+#
+# THE LEGS MOVED OFF `root` ON 2026-09-21, WHICH IS THE SECOND REIMPORT THIS TABLE HAS SEEN.
+# plane3/scripts/build_gear_rig.py added retract bones and bay doors, so the two main legs
+# now ride gear_L and gear_R rather than the root they were bolted to when the gear was
+# fixed, and four door meshes joined that never existed before. The nose leg is the one row
+# that did NOT change: it rode nosewheel_steer then and it rides it now, because the steer
+# bone was RE-PARENTED under gear_nose rather than replaced - the leg still steers about its
+# strut and now retracts with its parent for free.
+#
+# A ROW PER MOVING PART, and the doors are in here for the same reason the legs are: a door
+# left on `root` is a door that hangs open through the whole cycle, and nothing but a weight
+# check can tell.
 EXPECTED_SKIN = {
     "wheel_L": "wheel_L", "wheel_R": "wheel_R", "nosewheel": "nosewheel",
-    "gearRear_L": "root", "gearRear_R": "root", "gearFront": "nosewheel_steer",
+    "gearRear_L": "gear_L", "gearRear_R": "gear_R", "gearFront": "nosewheel_steer",
+    "maindoor_L": "door_main_L", "maindoor_R": "door_main_R",
+    "nosedoor_L": "door_nose_L", "nosedoor_R": "door_nose_R",
 }
 
 # Stray meshes the failed rename left behind, each with the real mesh it duplicates.
@@ -226,6 +291,52 @@ def check_source_skin():
     return ok
 
 
+def bone_report(mesh):
+    """The MESH's bone list and the SKELETON's, compared - because they can disagree.
+
+    THIS IS THE CHECK THE 2026-09-21 REIMPORT NEEDED AND DID NOT HAVE. Interchange updated
+    the mesh to 14 bones and left the Skeleton asset on 7, and every other check in this
+    script passed: slots, extents and skin weights are all read off the mesh or the .glb, and
+    none of them can see a stale Skeleton. What breaks is everything downstream - the axis
+    resolver reads AnimPose::GetBoneNames off the SKELETON and found no gear, and the Anim
+    Blueprint targets the SKELETON and so could not have driven a new bone at all.
+
+    THE JOINTS THE .glb DECLARES ARE THE AUTHORITY, not either asset: the export is the thing
+    that changed, and both assets are meant to follow it.
+    """
+    declared = airside_import.joint_names(airside_import.read_gltf(SOURCE) or {})
+    try:
+        component = unreal.new_object(unreal.SkeletalMeshComponent)
+        component.set_skeletal_mesh_asset(mesh)
+        on_mesh = [str(component.get_bone_name(i)) for i in range(component.get_num_bones())]
+    except Exception as exc:
+        say("NOTE could not read the mesh's bones (%s) - bone check SKIPPED, not passed" % exc)
+        return True
+
+    skeleton = mesh.get_editor_property("skeleton")
+    if skeleton is None:
+        fail("the mesh has no skeleton at all")
+        return False
+    pose = skeleton.get_reference_pose()
+    on_skeleton = [str(n) for n in unreal.AnimPose.get_bone_names(pose)]
+
+    say("the .glb declares %d joint(s); the mesh carries %d; the skeleton carries %d"
+        % (len(declared), len(on_mesh), len(on_skeleton)))
+
+    ok = True
+    for label, have in (("mesh", on_mesh), ("skeleton", on_skeleton)):
+        missing = [b for b in declared if b not in have]
+        if missing:
+            fail("the %s is missing %d joint(s) the export declares: %s. See THE SKELETON "
+                 "CANNOT BE REGENERATED HEADLESSLY in this file's header - this run cannot "
+                 "finish the job and the reimport has to be done once in the open editor."
+                 % (label, len(missing), ", ".join(missing)))
+            ok = False
+    if ok:
+        say("PASS the mesh AND the skeleton both carry every joint the export declares")
+    return ok
+
+
 def main():
     say("=" * 78)
     clear_strays()
@@ -282,6 +393,9 @@ def main():
         ok = False
     else:
         say("PASS every one of %d slot(s) carries a material" % after_count)
+
+    if not bone_report(mesh):
+        ok = False
 
     if unreal.EditorAssetLibrary.load_asset("/Game/Maps/M_ModelYard") is None:
         say("NOTE M_ModelYard not at /Game/Maps; reference survival not checked here")

@@ -25,10 +25,15 @@ check that survives the script is the automation test
 Airside.Content.PushbackNeedsAuthored, which loads each asset in a fresh editor and asserts
 the same table this file writes. If the two ever disagree, believe the test.
 
-THE FIVE ENTRIES ARE THE WHOLE LIST. A type absent from here loads with FAirframe's own
+THE ENTRIES BELOW ARE THE WHOLE LIST. A type absent from here loads with FAirframe's own
 default, which is VehicleTug - the conservative answer, because "needs a tug" of something
 that does not is a missing fee, while "reverses itself" of an A320 is an airport that never
 needs the depot.
+
+IT SAID "THE FIVE ENTRIES" UNTIL 2026-09-21 AND THERE WERE SIX, which is why it no longer
+says a number. A count in prose beside a list is a second statement of the list's length with
+nothing keeping the two in step, and it goes stale on the first addition - CLAUDE.md's rule
+about naming rather than counting, in the smallest possible form.
 """
 import unreal
 
@@ -54,6 +59,13 @@ NEEDS = {
     "/Game/Entities/DA_Aircraft_Plane3": (
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "a Q400 turns out of a regional stand on its own props; the depot is the jets' tax",
+    ),
+    "/Game/Entities/DA_Aircraft_Plane6": (
+        unreal.PushbackNeed.VEHICLE_TUG,
+        "a 350 t 777-300ER is the far end of the same argument - and it is here rather than "
+        "left to the class default on purpose: an unset field that happens to agree with the "
+        "default is indistinguishable from an asset nobody authored, which is the point the "
+        "Plane7 row already makes from the other side",
     ),
     "/Game/Entities/DA_Aircraft_A320": (
         unreal.PushbackNeed.VEHICLE_TUG,

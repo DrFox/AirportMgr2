@@ -39,6 +39,24 @@ import wire_anim_lib
 # BayDoorAngleDegrees 0 (open) to +90 (shut), and a leg that folds aft has its axis pointing
 # the other way rather than its number negated. See plane5/scripts/build_rig.py, and
 # UAirsideAgentAnim::GearAnglesFrom for which fraction is inverted and why.
+#
+# THE GEAR AND DOOR BONES TAKE -1 SINCE 2026-09-21, AND THEY TOOK None BEFORE IT. That was a
+# sign error, and it had been on screen in nobody's view: until PR #250's animation bench
+# there was nothing in the editor that drove a retract, so the whole travelling half of this
+# table had never been WATCHED. plane6's 777 is what exposed it.
+#
+# Blender is right-handed and UE is left-handed, so the import MIRRORS every bone-local
+# rotation - the model's positive is the graph's negative. That is the same flip the rolling
+# bones above have always carried, and "the rigs turn the other way about their own axis" was
+# always a statement about the whole rig rather than about wheels. Measured off this rig's
+# reference pose, at +GearAngleDegrees both main legs swung OUTBOARD, through the wing they
+# retract into; at -1 they fold inboard, which is the pose the model keys.
+#
+# THE MIRRORING IS STILL IN THE BONE and this does not undo it: gear_L points one way and
+# gear_R the other, so ONE GearAngleDegrees still folds the pair inboard. What -1 fixes is the
+# handedness of the rig, not the symmetry of a pair. See Tools/wire_plane6_anim.py's header
+# for the measurements and the control that established it, and
+# AirportMgr.View.AnimYard.GearFoldsIntoTheAirframe for the test that now pins it.
 PLAN = [
     ("prop_L",          "PropAngleDegrees",    -1.0),
     ("prop_R",          "PropAngleDegrees",    -1.0),
@@ -46,13 +64,13 @@ PLAN = [
     ("wheel_R",         "WheelAngleDegrees",   -1.0),
     ("nosewheel",       "WheelAngleDegrees",   -1.0),
     ("nosewheel_steer", "SteerAngleDegrees",   None),
-    ("gear_L",          "GearAngleDegrees",    None),
-    ("gear_R",          "GearAngleDegrees",    None),
-    ("gear_nose",       "GearAngleDegrees",    None),
-    ("door_main_L",     "BayDoorAngleDegrees", None),
-    ("door_main_R",     "BayDoorAngleDegrees", None),
-    ("door_nose_L",     "BayDoorAngleDegrees", None),
-    ("door_nose_R",     "BayDoorAngleDegrees", None),
+    ("gear_L",          "GearAngleDegrees",    -1.0),
+    ("gear_R",          "GearAngleDegrees",    -1.0),
+    ("gear_nose",       "GearAngleDegrees",    -1.0),
+    ("door_main_L",     "BayDoorAngleDegrees", -1.0),
+    ("door_main_R",     "BayDoorAngleDegrees", -1.0),
+    ("door_nose_L",     "BayDoorAngleDegrees", -1.0),
+    ("door_nose_R",     "BayDoorAngleDegrees", -1.0),
 ]
 
 MODEL = wire_anim_lib.Model("plane5", "/Game/Aircraft/Plane5/ABP_Plane5", PLAN)

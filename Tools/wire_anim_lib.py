@@ -212,9 +212,21 @@ def run():
     connect(c2l, 0, root, 0)
 
     execute_tool(BT + "compile_blueprint", json.dumps({"blueprint": BP, "warnings_as_errors": False}))
-    execute_tool(AT + "save_assets", json.dumps({"asset_paths": ["%(asset)s"]}))
-    return {"wired": [b for b, _, _, _ in PLAN]}
+    # THE SAVE'S ANSWER IS CARRIED BACK, because it can be NO. See main().
+    saved = execute_tool(AT + "save_assets", json.dumps({"asset_paths": ["%(asset)s"]}))
+    return {"wired": [b for b, _, _, _ in PLAN], "saved": saved}
 '''
+
+
+def saved_ok(answer):
+    """Did save_assets actually say yes?
+
+    LENIENT ABOUT THE SHAPE, STRICT ABOUT THE ANSWER. The tool has returned a bare bool here;
+    a null would mean it answered nothing, which is not a yes. Anything that is not explicitly
+    False or None is taken as success, so a future version returning a count or a list of
+    paths does not start failing runs that worked.
+    """
+    return answer is not False and answer is not None
 
 
 def connect_mcp(model):
@@ -370,5 +382,31 @@ def main(argv, model):
                          "asset": model.bp_path}
         result = call(session, "editor_toolset.toolsets.programmatic.ProgrammaticToolset",
                       "execute_tool_script", {"script": script}, timeout=WIRE_TIMEOUT)
-        print("wired: %s" % json.loads(result)["wired"])
+        wired = json.loads(result)
+        print("wired: %s" % wired["wired"])
+        # THE SAVE CAN RETURN FALSE AND WRITE NOTHING, AND THE VERIFY BELOW CANNOT SEE IT.
+        #
+        # This bit plane3 on 2026-09-21 and cost a whole round trip. The run wired thirteen
+        # bones, compiled, printed VERIFY PASS for every one of them - and left the OLD
+        # six-node graph on disk. Nothing was wrong with the graph; it existed only in the
+        # editor's memory, and the editor was closed a minute later.
+        #
+        # THE VERIFY READS THE LIVE EDITOR, which is the right thing for checking that the
+        # nodes and pins are what the plan asked for and the wrong thing for checking that
+        # they survive. Those are two questions and only one of them was being asked. This is
+        # the project's oldest trap - "both headless save APIs report success while writing
+        # nothing" - in the one shape it had not yet taken here, where the API is honest and
+        # says false and the caller throws the answer away.
+        #
+        # WHY IT SAID NO is not known and is deliberately not guessed at in this message: on
+        # the run that failed, SK_Plane3_Skeleton was itself dirty and unsaved, which is the
+        # obvious suspect and is not evidence. What the operator needs is to be told, and to
+        # be told what to do, which costs nothing whether the guess is right or not.
+        if not saved_ok(wired.get("saved")):
+            print("FAIL the graph was wired and compiled but save_assets returned %r - it is "
+                  "in the editor's memory and NOT on disk. Save All in the editor (Ctrl+Shift"
+                  "+S) now, before closing it, then re-run this with --verify to confirm. Do "
+                  "not trust the PASS lines above: they read the live editor, not the file."
+                  % (wired.get("saved"),))
+            return 1
     return 0 if verify(session, model, axes) else 1

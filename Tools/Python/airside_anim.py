@@ -34,7 +34,9 @@ identical across the copies, and the two that were not identical had drifted rat
 diverged on purpose.
 """
 import json
+import math
 import os
+import re
 import struct
 
 import unreal
@@ -193,6 +195,53 @@ COMPONENT_OF_LOCAL_AXIS = {0: "Roll", 1: "Pitch", 2: "Yaw"}
 # wheel_R sit either side of the centreline, so whatever they turn about lies along UE's Y.
 AXLE_UE = (0.0, 1.0, 0.0)
 
+# The left main wheel, in the two spellings this fleet uses. ONE a side up to plane5, and
+# wheel_L1..L<N> once a leg carries a bogie - plane6's 777 has three axles a side and
+# therefore no bone called `wheel_L` at all.
+_AXLE_ANCHOR = re.compile(r"^wheel_L\d*$")
+
+
+def axle_anchor(bones):
+    """The bone whose local axle anchors the whole rig's rotation axis, or None.
+
+    WHY A FUNCTION AND NOT THE LITERAL "wheel_L" IT REPLACED. resolve_axis needs ONE bone it
+    can be sure turns about UE's Y, and every left main wheel qualifies - they are parallel
+    by construction, riding one axle beam. Which one is therefore arbitrary, and hard-coding
+    the single-axle spelling made "this rig has one main wheel a side" a silent precondition
+    of wiring any AnimGraph. plane6 is where that came due: its bogie's wheels are
+    wheel_L1..L3, and the KeyError would have read as a missing bone rather than as an
+    assumption about how many wheels an aeroplane has.
+
+    THE LOWEST-NUMBERED, so the choice is a rule rather than whatever sorted() happened to
+    put first. `wheel_L` itself sorts ahead of `wheel_L1` on the same rule, which is what a
+    single-axle rig wants and what keeps plane1, plane2, plane3, plane4, plane5 and plane7
+    resolving against exactly the bone they resolved against before.
+
+    NOT THE RIGHT one, deliberately: the sign convention below is carried from SK_Plane2's
+    LEFT wheel, and anchoring on the other side would flip it.
+    """
+    candidates = sorted(name for name in bones if _AXLE_ANCHOR.match(name))
+    return candidates[0] if candidates else None
+
+
+# How nearly two steering bones must point the same way before one's SIGN may be carried to
+# the other. See _sign_against_reference.
+#
+# 0.85 IS 32 DEGREES, AND IT WAS 0.99 - ONE DEGREE - UNTIL plane6. The tighter figure was not
+# measuring what the check is for. The question asked here is a SIGN: does this rig's steering
+# bone point broadly WITH plane2's or AGAINST it, so that plane2's plain positive carries over
+# or has to be negated. Any pair short of perpendicular answers that; what the guard is really
+# there to refuse is a rig whose steer bone is oriented on some different principle, where the
+# dot is near zero and the sign is a coin toss.
+#
+# A ONE-DEGREE BAND MADE A MODELLING FACT INTO A WIRING REFUSAL. plane6's nose leg is raked
+# 12.4 degrees - it has to be, to fold past the nose cone, and a nose leg steers about its
+# strut - so it agrees with plane2's vertical strut at 0.977 and was refused for it. The angle
+# is LOGGED at every run whatever it is, which is the part that would actually catch a rig
+# drifting; a threshold that fires on a correct model teaches its reader to widen it, and the
+# next widening is the one that admits a genuinely wrong sign.
+STEER_AGREEMENT = 0.85
+
 # The rig a new one is checked against. SK_Plane2 is a SHIPPED, HAND-WIRED, KNOWN-GOOD asset -
 # ABP_Plane2 has driven the Twin Otter in game for weeks - and it carries the three bone
 # classes every aeroplane here shares with it: a propeller, a rolling wheel and a steering
@@ -246,7 +295,7 @@ def bone_frames(mesh_path):
     return frames
 
 
-def resolve_axis(mesh_path, driven_bones):
+def resolve_axis(mesh_path, driven_bones, raked=()):
     """(bone, rotator component, sign) for every driven bone, MEASURED - or [] on failure.
 
     WHY THIS IS MEASURED AND NOT TYPED. Every wiring script in this project before plane5 took
@@ -258,14 +307,28 @@ def resolve_axis(mesh_path, driven_bones):
     wrong axis would be easy to miss - four doors and three legs, most of them small and most
     of the time stowed - and plane7 has the same thirteen.
 
-    THE ANCHOR IS THE AXLE - see AXLE_UE. Whichever of wheel_L's own local axes lies along
-    UE Y is the local axis this rig rotates about, and since each build_rig.py poses every
-    bone about the same one, it is the local axis for all of them.
+    THE ANCHOR IS THE AXLE - see AXLE_UE and axle_anchor. Whichever of the left main wheel's
+    own local axes lies along UE Y is the local axis this rig rotates about, and since each
+    build_rig.py poses every bone about the same one, it is the local axis for all of them.
 
     THE UNIFORMITY IS CHECKED RATHER THAN TRUSTED: every driven bone's chosen axis must lie
     along one of UE's own axes to within about a degree. A bone whose rotation axis points
     somewhere diagonal is a bone the rigger did not align, and on a rig built from one table
     and posed by one line that is a change to look at rather than a rounding.
+
+    `raked` IS HOW A RIGGER SAYS "I MEANT THAT ONE", and plane6 is what forced it to exist.
+    Squareness is NOT a correctness requirement - a Transform (Modify) Bone in Bone Space
+    turns the bone about its OWN axes, so the graph never asks what the world thinks - it is
+    a MODELLING sanity check, and it was written against six rigs that happened to be square
+    everywhere. A 777 is not: its nose leg is raked 12.4 degrees so it can fold past the nose
+    cone, and a nose leg steers about its STRUT rather than about the vertical, so
+    nosewheel_steer is diagonal ON PURPOSE. Its two bay doors hinge on a slanted line for the
+    same reason. Deleting the check to admit them would have taken the guard off the other
+    fourteen bones of the same rig.
+
+    SO A NAMED BONE IS REPORTED WITH ITS ANGLE INSTEAD OF FAILED, and a named bone that turns
+    out to be SQUARE fails - a stale declaration is how a guard quietly stops guarding, and
+    this one would go stale the moment a rig is straightened. Both directions are checked.
 
     THE SIGN COMES FROM A SHIPPED GRAPH. ABP_Plane2 drives nosewheel_steer with a plain
     GetSteerAngleDegrees() on Yaw and no negation, so a steer bone whose local axis points the
@@ -284,15 +347,21 @@ def resolve_axis(mesh_path, driven_bones):
              % (label, ", ".join(missing), ", ".join(sorted(frames))))
         return []
 
-    index, along = _closest_axis(frames["wheel_L"], AXLE_UE)
+    anchor = axle_anchor(driven_bones)
+    if anchor is None:
+        fail("no left main wheel among the driven bones, so there is no axle to anchor the "
+             "rotation axis on. Bones offered: %s" % ", ".join(driven_bones))
+        return []
+
+    index, along = _closest_axis(frames[anchor], AXLE_UE)
     if abs(along) < 0.99:
-        fail("wheel_L's axle is not along UE Y - its closest local axis is %s at %.2f. Either "
+        fail("%s's axle is not along UE Y - its closest local axis is %s at %.2f. Either "
              "the bone is not on the axle, or the import reoriented the rig."
-             % ("XYZ"[index], along))
+             % (anchor, "XYZ"[index], along))
         return []
     component = COMPONENT_OF_LOCAL_AXIS[index]
-    say("    the rig turns about each bone's local %s (%s), anchored on wheel_L's axle lying "
-        "along UE Y at %.3f" % ("XYZ"[index], component, along))
+    say("    the rig turns about each bone's local %s (%s), anchored on %s's axle lying "
+        "along UE Y at %.3f" % ("XYZ"[index], component, anchor, along))
 
     sign = _sign_against_reference(frames, index, label)
     if sign is None:
@@ -301,11 +370,28 @@ def resolve_axis(mesh_path, driven_bones):
     rows = []
     for bone in driven_bones:
         axis = frames[bone][index]
-        if max(abs(value) for value in axis) < 0.99:
+        squareness = max(abs(value) for value in axis)
+        declared = bone in raked
+        if squareness >= 0.99 and declared:
+            fail("%s is declared raked and its local %s is square to the airframe after all "
+                 "(%.3f along one of UE's axes). The declaration is stale - drop it, or the "
+                 "next bone the rigger tilts by accident is admitted without a word."
+                 % (bone, "XYZ"[index], squareness))
+            continue
+        if squareness < 0.99 and not declared:
             fail("%s's local %s points (%.2f, %.2f, %.2f), which is along none of UE's axes. "
-                 "A driven bone on this rig should be square to the airframe."
+                 "A driven bone on this rig should be square to the airframe, or be named in "
+                 "this model's `raked` list with the reason it is not."
                  % (bone, "XYZ"[index], axis[0], axis[1], axis[2]))
             continue
+        if declared:
+            # REPORTED WITH ITS ANGLE, not merely permitted. The figure is the only thing that
+            # would show a raked bone drifting - a hinge re-fitted to a different slope still
+            # lands in the list and would otherwise pass in silence.
+            say("    NOTE %s is raked %.1f deg off UE's axes, as declared (local %s points "
+                "(%.2f, %.2f, %.2f)) - it turns about its own length either way"
+                % (bone, math.degrees(math.acos(min(1.0, squareness))), "XYZ"[index],
+                   axis[0], axis[1], axis[2]))
         rows.append((bone, component, sign))
     return rows
 
@@ -343,14 +429,15 @@ def _sign_against_reference(frames, index, label):
     ours = frames["nosewheel_steer"][index]
     theirs = reference["nosewheel_steer"][index]
     agreement = sum(a * b for a, b in zip(ours, theirs))
-    if abs(agreement) < 0.99:
+    if abs(agreement) < STEER_AGREEMENT:
         fail("nosewheel_steer's local %s points %.2f away from SK_Plane2's - the two steering "
              "bones are not oriented alike, so plane2's sign convention cannot be carried "
              "over" % ("XYZ"[index], agreement))
         return None
     sign = 1.0 if agreement > 0 else -1.0
-    say("    PASS nosewheel_steer agrees with SK_Plane2's to %.3f, so the fleet's signs carry "
-        "over (x %+.0f)" % (agreement, sign))
+    say("    PASS nosewheel_steer agrees with SK_Plane2's to %.3f (%.1f deg apart), so the "
+        "fleet's signs carry over (x %+.0f)"
+        % (agreement, math.degrees(math.acos(min(1.0, abs(agreement)))), sign))
     return sign
 
 
