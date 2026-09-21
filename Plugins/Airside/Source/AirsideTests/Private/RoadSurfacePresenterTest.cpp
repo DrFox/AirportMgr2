@@ -197,4 +197,94 @@ bool FRoadSurfacePresenterLayerPipelineTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * Issue #193: URoadSurfacePresenter::RunwayMarkingMID (and GhostMID, the same shape) were
+ * created ONCE, on first use, and never compared to the base material a LATER rebuild passed
+ * in - only ever checked for null. PR #232's resolved-content cache on the actor
+ * (RefreshResolvedContentCacheIfDirty, invalidated by PostEditChangeProperty) already
+ * re-resolves SurfaceMaterial the moment it is edited in Details, so the base handed to
+ * RunwayMarkingMaterialInstance DOES change from one rebuild to the next - but the cached
+ * instance kept pointing at whatever it was first built against, so the runway kept its old
+ * paint colour while the road surface itself re-skinned. This composes the two fixes (#232's
+ * cache correctly refreshing, #193's instance correctly following it) rather than assuming
+ * either in isolation.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCachedMaterialInstanceFollowsBaseChangeTest,
+	"Airside.Present.CachedMaterialInstanceFollowsBaseChange",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCachedMaterialInstanceFollowsBaseChangeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor spawned"), Actor))
+	{
+		return false;
+	}
+
+	// TWO DISTINCT, REAL MaterialInterfaces - the engine's own built-in defaults, so a
+	// leftover cache reads as the WRONG asset rather than merely "a material of some kind".
+	UMaterialInterface* SurfaceMatA = UMaterial::GetDefaultMaterial(MD_Surface);
+	UMaterialInterface* SurfaceMatB = UMaterial::GetDefaultMaterial(MD_DeferredDecal);
+	Actor->SurfaceMaterial = SurfaceMatA;
+
+	// A RUNWAY - the minimum RebuildRunwayMarkings needs to paint RunwayPaint, whose material
+	// is RunwayMarkingMID (RoadSurfacePresenterLayerPipelineTest, above, established the same
+	// fixture shape for the same reason).
+	Actor->PlaceNode(FVector2D(-200000.0, -200000.0));
+	if (!TestNotNull(TEXT("the actor has a network"), Actor->Network.Get()))
+	{
+		return false;
+	}
+	URoadNetwork& Net = *Actor->Network;
+	URoadProfile* Runway = TestProfiles::Runway();
+	const FRoadNodeId RA = Net.AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId RB = Net.AddNode(FVector2D(100000.0, 0.0));
+	Net.AddStraightSegment(RA, RB, Runway);
+
+	Actor->RebuildMesh();
+	URoadSurfacePresenter* Presenter = Actor->GetPresenter();
+	if (!TestNotNull(TEXT("the actor has a presenter"), Presenter))
+	{
+		return false;
+	}
+
+	UDynamicMeshComponent* RunwayPaintComponent = Presenter->GetLayerComponentForTest(ESurfaceLayer::RunwayPaint);
+	auto ParentOf = [](UDynamicMeshComponent* Component) -> UMaterialInterface*
+	{
+		UMaterialInstanceDynamic* MID = Component != nullptr
+			? Cast<UMaterialInstanceDynamic>(Component->GetMaterial(0)) : nullptr;
+		UMaterialInterface* Parent = MID != nullptr ? MID->Parent : nullptr;
+		return Parent;
+	};
+
+	if (!TestEqual(TEXT("RunwayPaint's instance starts parented to the first surface material"),
+		ParentOf(RunwayPaintComponent), SurfaceMatA))
+	{
+		return false;
+	}
+
+#if WITH_EDITOR
+	// THE BASE CHANGES, exactly as editing SurfaceMaterial in Details does: the resolved
+	// cache is invalidated, so the very next rebuild resolves SurfaceMatB and hands it to
+	// RunwayMarkingMaterialInstance as a NEW base. A null FProperty is fine here, the same as
+	// ResolvedContentOncePerRebuildTest's own use of PostEditChangeProperty - the
+	// implementation does not branch on which property changed.
+	Actor->SurfaceMaterial = SurfaceMatB;
+	FPropertyChangedEvent DummyEvent(nullptr);
+	Actor->PostEditChangeProperty(DummyEvent);
+	Actor->RebuildMesh();
+
+	// THE MEASUREMENT: on unfixed code RunwayMarkingMID answers exactly what it did above,
+	// still parented to SurfaceMatA, because RunwayMarkingMaterialInstance's own null check
+	// never asked whether the base had moved.
+	TestEqual(TEXT("RunwayPaint's instance follows the SECOND surface material - the cached ")
+		TEXT("instance is not left parented to the first forever"),
+		ParentOf(RunwayPaintComponent), SurfaceMatB);
+#endif
+
+	return true;
+}
+
 #endif

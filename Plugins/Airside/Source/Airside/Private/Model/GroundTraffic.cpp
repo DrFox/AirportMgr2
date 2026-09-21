@@ -34,11 +34,26 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	// which found no runway at all - every other field here is meaningless until one is.
 	if (Plan.Why != EArrivalRefusal::NoRunway)
 	{
+		// LIVE AIRCRAFT-ROLE ENTITIES, not GetEntities().Num() (issue #193): that count is the
+		// whole slot array, dead ones included (RemoveEntity leaves a freed slot behind, same
+		// as every other free-list table in this model) and depots included (their PoseRole is
+		// a service role, not Aircraft - see FEntityInstance::PoseRole). A log line that says
+		// "N stand(s) on the airport" and means "N slots ever allocated" is exactly the kind of
+		// banner this project's own notes warn about: it reads as evidence of a count nothing
+		// actually measured.
+		int32 StandCount = 0;
+		for (const FEntityInstance& Entity : Network.GetEntities())
+		{
+			if (Entity.bAlive && Entity.PoseRole == EServiceRole::Aircraft)
+			{
+				++StandCount;
+			}
+		}
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Arrival: runway %s, %.0f uu long, %.0f needed to stop, %d usable exit(s), ")
 			TEXT("%d stand(s) on the airport."),
 			*RunwayDesignator::ToPairText(Plan.End.Direction), Plan.End.Length, Plan.Needed,
-			Plan.ExitCount, Network.GetEntities().Num());
+			Plan.ExitCount, StandCount);
 	}
 
 	if (!Plan.IsValid())
@@ -340,6 +355,16 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		Occupancy.Release(AgentId, FTrafficResource::OfNode(Agent.GoalNode));
 		bStandsMayHaveFreed = true;
 	}
+
+	// CLEARED HERE, WHERE THE GOAL ACTUALLY MOVES - not by the caller after this returns.
+	// ReofferStands used to clear it on the agent AFTER this call by re-running FindIndex(Id),
+	// but SetGoalFrom below is about to give this redirect a real destination, and the
+	// broadcast a few lines down (OnAgentPhaseChanged) can run a listener that retires an
+	// agent synchronously - UFuelService::OnAgentPhase calls RetireAgent from inside it. A
+	// caller re-indexing Agents by Id AFTER that broadcast can find INDEX_NONE and index off
+	// the end. Clearing before the broadcast needs no such lookup: Agent is still the entry
+	// this call already found.
+	Agent.ClearAwaitingStand();
 
 	// CAPTURED BEFORE StartTaxi, which always primes a cold start of its own
 	// (bEngineRunning=true, EngineRPM=0.0) - so these are whether the engine was running and
@@ -716,6 +741,17 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	// by FRoadAgent::Advance - see its own comment. This loop is left with: advance, watch
 	// the phase, accrue the stall clock, drop an agent once it says Gone. The deadlock pass
 	// that READS that clock runs after it, below, and does not touch this order.
+	//
+	// RE-ENTRANCY CONTRACT (issue #193): the broadcasts below - OnAgentPhaseChanged, here and
+	// in RedirectAgent/RetireAgent - can run a listener that calls back into this class and
+	// retires or redirects ANY agent, including ones still to be visited this tick
+	// (UFuelService::OnAgentPhase calls RetireAgent synchronously). This loop tolerates that
+	// for two reasons together: it runs by DESCENDING index, so a RemoveAt at or below the
+	// current Index only ever shifts already-visited slots (Index and above), never the ones
+	// still to come; and it holds no reference across a broadcast - Agent and Index are used
+	// only before each Broadcast call, never after. A caller that re-derives an index AFTER a
+	// broadcast (FindIndex(Id) once RedirectAgent has already returned) does not have this
+	// protection - see ReofferStands, which used to do exactly that.
 	for (int32 Index = Agents.Num() - 1; Index >= 0; --Index)
 	{
 		FRoadAgent& Agent = Agents[Index];
@@ -936,7 +972,14 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 		}
 		if (RedirectAgent(Id, &Network, Route))
 		{
-			Agents[FindIndex(Id)].ClearAwaitingStand();
+			// NOT Agents[FindIndex(Id)] HERE (issue #193): RedirectAgent already cleared
+			// bAwaitingStand itself, before its own OnAgentPhaseChanged broadcast - see its
+			// comment. Re-deriving the index AFTER that call is exactly the bug this fix
+			// removes: a listener on that broadcast (UFuelService::OnAgentPhase) can call
+			// RetireAgent synchronously and remove Id from Agents, so FindIndex(Id) here would
+			// return INDEX_NONE and Agents[INDEX_NONE] would be an out-of-bounds write. Id and
+			// Stand.Index are plain values, not indices into Agents, so the log below is safe
+			// whether or not the agent survived its own redirect.
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: a stand freed; sent to the stand at node %d"), Id, Stand.Index);
 		}
 	}

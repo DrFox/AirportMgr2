@@ -406,6 +406,31 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 		return INDEX_NONE;
 	}
 
+	// PRICED AND REFUSED BEFORE THE SCOPE OPENS - issue #193. This call used to end in
+	// CommitAndNotify, whose own header says it is "for an edit that moves no pavement... a
+	// bare node, naming a runway, splitting a segment" - but a plotted depot moves an apron
+	// pad AND places the same UEntityDefinition PlaceEntity charges BuildCost::ForEntity for,
+	// so a plotted depot was free while the identical stand placed with PlaceEntity was paid
+	// for, and undo's money accounting never saw the plot at all. Two quotes, one for the
+	// entity and one for the pad it sits on (the same rate AddApron charges, at the WOUND
+	// outline QuoteForApron already reasons about), summed the way QuoteForAllPavement and
+	// DeleteNode's own doomed-segment total already sum several FBuildQuotes into one -
+	// there is no third pricing mechanism to invent here, only this file's existing two.
+	// CanAfford runs BEFORE Net.PlaceEntity below for the same reason PlaceEntity's own quote
+	// does: an abandoned FRoadEditScope drops the undo SNAPSHOT, not the mutation, so a
+	// refusal after the entity is placed would leave it built and unpaid for.
+	FBuildQuote Quote = BuildCost::ForEntity(*Definition);
+	const FBuildQuote ApronQuote = QuoteForApron(Wound);
+	Quote.BaseAmount += ApronQuote.BaseAmount;
+	Quote.What = FText::Format(NSLOCTEXT("BuildCost", "DepotPlusPad", "{0} + {1}"),
+		Quote.What, ApronQuote.What);
+	if (!CanAfford(Quote))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("PlaceEntityInPlot refused: cannot afford %s"),
+			*Quote.What.ToString());
+		return INDEX_NONE;
+	}
+
 	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place fuel depot"));
 
 	FEntityPlacement Placement;
@@ -441,7 +466,11 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 		return INDEX_NONE;
 	}
 
-	CommitAndNotify(Edit);
+	// CommitPurchase, NOT CommitAndNotify (issue #193): the charge above must actually change
+	// hands, and the pending-charge id must land on the undo snapshot through the SAME path
+	// PlaceEntity's own commit uses - CommitPurchase is that one door, not a second one this
+	// call would otherwise need to keep in step with it.
+	CommitPurchase(Edit, Quote);
 	return Placed.Index;
 }
 
