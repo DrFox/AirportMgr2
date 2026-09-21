@@ -188,8 +188,31 @@ public:
 	/** The tool the number keys selected, or null before BeginPlay has built them. */
 	IBuildTool* GetActiveTool() const;
 
-	/** Everything the active tool needs to judge the current cursor. */
+	/**
+	 * Everything the active tool needs to judge the current cursor, built FRESH: runs the
+	 * whole snap + guide pipeline (FBuildSession::MakeContext - a junction solve per live
+	 * node outside its cheap-reject radius, then the guide chain) every time it is called.
+	 *
+	 * CALL THIS SPARINGLY. It exists for the handful of call sites that genuinely need a
+	 * context newer than the frame's own - a click or drag event reading the mouse position
+	 * at the moment it fired, not at the top of PlayerTick - see GetFrameContext() for the
+	 * one built once a frame and shared by everything that does not. Issue #167: before the
+	 * split, EVERY reader called this directly, 3-5 times in a single PlayerTick.
+	 */
 	FToolContext MakeToolContext() const;
+
+	/**
+	 * This frame's context, built ONCE at the top of PlayerTick and read by CollectToolReadout,
+	 * Tick, and ARoadBuildHUD::DrawHUD (which runs after this frame's PlayerTick, over the
+	 * same mouse position) - issue #167. Before this, each of those three called
+	 * MakeToolContext() independently, so a frame with no drag paid for the whole snap + guide
+	 * pipeline three times over for one cursor position; a drag frame paid for it five.
+	 *
+	 * NOT rebuilt for UpdateDrag: a drag reads the mouse position again, after this was built,
+	 * so it calls MakeToolContext() itself for a context that reflects where the cursor
+	 * actually is right now - see UpdateDrag's own comment.
+	 */
+	const FToolContext& GetFrameContext() const { return FrameContext; }
 
 	/**
 	 * What the active tool says about the gesture in progress - bays, warnings, whether
@@ -201,8 +224,28 @@ public:
 	 */
 	const FToolReadout& GetToolReadout() const { return ToolReadoutCollector.Readout; }
 
-	/** Drives one frame's collection without a whole tick. Same precedent as GetHudForTest. */
-	void CollectToolReadoutForTest() { CollectToolReadout(); }
+	/** Drives one frame's collection without a whole tick. Same precedent as GetHudForTest.
+	 *  Refreshes FrameContext first - issue #167 made CollectToolReadout read that member
+	 *  rather than build its own, and this must still work standalone, with no PlayerTick
+	 *  to have built it. */
+	void CollectToolReadoutForTest() { FrameContext = MakeToolContext(); CollectToolReadout(); }
+
+	/** Runs PlayerTick without a real tick loop - same precedent as CollectToolReadoutForTest.
+	 *  Issue #167's composition test uses this to prove PlayerTick builds exactly one context
+	 *  and hands it to CollectToolReadout and Tick, rather than each building its own. The
+	 *  caller must have called InitInputSystem() first - PlayerTick asserts a PlayerInput
+	 *  exists, which a bare SpawnActor never creates on its own. */
+	void PlayerTickForTest(float DeltaTime) { PlayerTick(DeltaTime); }
+
+	/** Points this instance at InTarget without going through BeginPlay's level search - same
+	 *  precedent as PlayerTickForTest, for a test that has no level to search. */
+	void SetTargetForTest(ARoadNetworkActor* InTarget) { Target = InTarget; }
+
+	/** How many FToolContexts FBuildSession has actually built, for the composition test
+	 *  above: PlayerTickForTest brackets a tick with this to count contexts built DURING it,
+	 *  rather than asserting on a side effect that would still look right if two contexts
+	 *  happened to agree. See FBuildSession::MakeContextCallCountForTest. */
+	int32 MakeContextCallCountForTest() const;
 
 	// --- Actions ---------------------------------------------------------------------
 	//
@@ -476,6 +519,11 @@ private:
 	 * UObject reference in it, so there is nothing here for the GC to keep alive.
 	 */
 	FToolReadoutCollector ToolReadoutCollector;
+
+	/** See GetFrameContext(). Built once at the top of PlayerTick; not a UPROPERTY for the
+	 *  same reason ToolReadoutCollector above is not one - FToolContext holds no UObject
+	 *  reference the GC needs to know about. */
+	FToolContext FrameContext;
 
 	// --- Press, drag, release ---------------------------------------------------------
 	//

@@ -310,8 +310,16 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 	return true;
 }
 
+int32 FRoadNetworkSolver::NodeClaimsCallCountForTest = 0;
+
 bool FRoadNetworkSolver::NodeClaims(const URoadNetwork& Network, FRoadNodeId Node, const FVector2D& Point, double Factor)
 {
+	// COUNTED BEFORE ANY REFUSAL BELOW: this is "did a solve run", not "did it succeed" - see
+	// the counter's own comment. FRoadNodeSnapRule's cheap reject is meant to stop this
+	// function being CALLED for a node the cursor could not possibly be inside, not merely to
+	// make the call return false quickly.
+	++NodeClaimsCallCountForTest;
+
 	if (Factor <= 0.0)
 	{
 		return false;

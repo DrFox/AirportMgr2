@@ -6,6 +6,7 @@
 #include "LedgerPanelWidget.h"
 #include "Components/InputComponent.h"
 #include "Content/AirsideSettings.h"
+#include "Engine/LocalPlayer.h"
 #include "Entities/AircraftType.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
@@ -24,6 +25,7 @@
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
+#include "SceneView.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/ScreenPick.h"
 
@@ -519,15 +521,42 @@ int32 ARoadBuildController::HoverAgentUnderCursor() const
 	{
 		return 0;
 	}
+
+	// ONE PROJECTION MATRIX FOR EVERY AGENT, not one per agent - issue #167. What this used
+	// to call per agent, ProjectWorldLocationToScreen, forwards to
+	// UGameplayStatics::ProjectWorldToScreen, which fetches FSceneViewProjectionData and
+	// rebuilds its view-projection matrix from scratch on every single call - the same numbers
+	// for every agent this frame, since the view has not moved mid-tick. Fetched once here
+	// instead and handed to FSceneView::ProjectWorldToScreen per agent, which is the same
+	// underlying maths with the per-call setup taken out.
+	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	if (LocalPlayer == nullptr || LocalPlayer->ViewportClient == nullptr)
+	{
+		return 0;
+	}
+	FSceneViewProjectionData ProjectionData;
+	if (!LocalPlayer->GetProjectionData(LocalPlayer->ViewportClient->Viewport, ProjectionData))
+	{
+		return 0;
+	}
+	const FMatrix ViewProjectionMatrix = ProjectionData.ComputeViewProjectionMatrix();
+	const FIntRect ConstrainedViewRect = ProjectionData.GetConstrainedViewRect();
+
 	// Project the VIEW's location, not the model's road-plane position: the view carries
 	// altitude, and an aircraft on final is picked where it is drawn.
+	//
+	// RESERVED, issue #167: these used to grow one push at a time over every live agent.
+	const TArray<FRoadAgent>& Agents = AgentModel->GetAgents();
 	TArray<FVector2D> Screen;
 	TArray<int32> Ids;
-	for (const FRoadAgent& Agent : AgentModel->GetAgents())
+	Screen.Reserve(Agents.Num());
+	Ids.Reserve(Agents.Num());
+	for (const FRoadAgent& Agent : Agents)
 	{
 		const ARoadAgentActor* View = Target->GetAgentView(Agent.Id);
 		FVector2D At;
-		if (View != nullptr && ProjectWorldLocationToScreen(View->GetActorLocation(), At))
+		if (View != nullptr && FSceneView::ProjectWorldToScreen(
+			View->GetActorLocation(), ConstrainedViewRect, ViewProjectionMatrix, At))
 		{
 			Screen.Add(At);
 			Ids.Add(Agent.Id);
@@ -619,6 +648,11 @@ void ARoadBuildController::SelectTool(int32 Index)
 int32 ARoadBuildController::GetActiveToolIndex() const
 {
 	return Session.GetActiveToolIndex();
+}
+
+int32 ARoadBuildController::MakeContextCallCountForTest() const
+{
+	return Session.MakeContextCallCountForTest();
 }
 
 
@@ -806,12 +840,20 @@ void ARoadBuildController::UpdateDrag()
 	{
 		return;
 	}
+
+	// A FRESH CONTEXT HERE, not FrameContext - issue #167. GetMousePosition just read above is
+	// this frame's cursor at the MOMENT of the drag, which can differ from where it was when
+	// PlayerTick built FrameContext at the top of the frame; a drag legitimately needs that.
+	// ONE rebuild covers both calls below, where this used to build one per call (up to two on
+	// the frame a drag begins) - the "1-2 more while dragging" issue #167 measured.
+	const FToolContext DragContext = MakeToolContext();
+
 	if (Step == EGestureStep::DragBegan)
 	{
-		Tool->OnDragBegin(MakeToolContext());
+		Tool->OnDragBegin(DragContext);
 	}
 
-	Tool->OnDrag(MakeToolContext());
+	Tool->OnDrag(DragContext);
 }
 
 void ARoadBuildController::OnPrimaryReleased()
@@ -842,6 +884,21 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 
 	UpdateView(DeltaTime);
 
+	// ONE CONTEXT FOR THE WHOLE FRAME - issue #167. CollectToolReadout and Tick below, and
+	// ARoadBuildHUD::DrawHUD after this frame's PlayerTick returns, all read GetFrameContext()
+	// instead of calling MakeToolContext() themselves. MakeToolContext runs the whole snap +
+	// guide pipeline (a junction solve per live node outside its cheap-reject radius, then the
+	// guide chain over every source) and used to be called by each of those independently -
+	// 3-5 times a frame for one cursor position. UpdateDrag is the one exception: a drag reads
+	// the mouse position again, after this line, and needs a context that reflects it - see
+	// UpdateDrag's own comment.
+	//
+	// BUILT BEFORE THE TARGET GUARD BELOW, same as CollectToolReadout always ran before it:
+	// MakeToolContext already null-guards Target internally (Target->MakeTunables only runs
+	// when Target is set), so building it here costs nothing extra on a frame with no road
+	// actor and keeps FrameContext's own null-Target behaviour identical to before.
+	FrameContext = MakeToolContext();
+
 	// BEFORE THE TARGET GUARD, so a frame with no road actor clears the bar instead of
 	// leaving the last gesture's bay count sitting on it forever.
 	CollectToolReadout();
@@ -852,16 +909,20 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	}
 
 	// The deletion planner judges its rejoins by the same rules a click obeys, so the two
-	// cannot drift apart - Target->MakeTunables (called below, from MakeToolContext, every
-	// tick there is an active tool - always, after BeginPlay) refreshes
-	// Target->PlacementLimits.NewRoadHalfWidth in place for exactly this reason. See
-	// ARoadNetworkActor::PlacementLimits and issue #93.
+	// cannot drift apart - Target->MakeTunables, called above while building FrameContext,
+	// refreshes Target->PlacementLimits.NewRoadHalfWidth in place for exactly this reason. See
+	// ARoadNetworkActor::PlacementLimits and issue #93. STILL ONCE A FRAME after issue #167,
+	// not moved to a "profile changed" event: NewRoadHalfWidth comes from
+	// ARoadNetworkActor::ResolveProfile (the actor's own authored/fallback profile), which has
+	// no connection to a tool's WidthIndex or its OnReselect cycle - MakeTunables refreshes it
+	// so a details-panel edit to that profile takes effect on the very next frame, a fact
+	// folding this into the once-a-frame build preserves exactly, at a fifth of the cost.
 
 	UpdateDrag();
 
 	if (IBuildTool* Tool = GetActiveTool())
 	{
-		Tool->Tick(MakeToolContext());
+		Tool->Tick(FrameContext);
 	}
 }
 
@@ -878,7 +939,9 @@ void ARoadBuildController::CollectToolReadout()
 	}
 	if (const IBuildTool* Tool = GetActiveTool())
 	{
-		Tool->BuildReadout(MakeToolContext(), ToolReadoutCollector);
+		// FrameContext, not a fresh MakeToolContext() - issue #167. Built once at the top of
+		// PlayerTick, above, and shared with Tick and the HUD.
+		Tool->BuildReadout(FrameContext, ToolReadoutCollector);
 	}
 }
 

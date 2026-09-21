@@ -108,9 +108,17 @@ void ARoadBuildHUD::DrawHUD()
 	// the click cannot disagree.
 	if (IBuildTool* Tool = Controller->GetActiveTool())
 	{
-		// ONE CONTEXT for both, not two calls: the prompt must describe the same frame the
-		// ghost does, which is the whole reason the readout is filled beside the preview.
-		const FToolContext Context = Controller->MakeToolContext();
+		// THE FRAME'S CONTEXT, not a fresh MakeToolContext() call - issue #167. DrawHUD runs
+		// after this frame's PlayerTick, over the same cursor position PlayerTick already
+		// built one for and handed to Tick and CollectToolReadout; a fourth build here for the
+		// same frame was pure repetition of the whole snap + guide pipeline. See
+		// ARoadBuildController::GetFrameContext.
+		//
+		// STILL ONE CONTEXT FOR BOTH calls below: the prompt must describe the same frame the
+		// ghost does, which is the whole reason the readout is filled beside the preview - that
+		// part of this comment predates #167 and still holds, just from a shared frame context
+		// instead of a locally built one.
+		const FToolContext& Context = Controller->GetFrameContext();
 		Tool->BuildPreview(Context, *this);
 
 		// The tool name and the clock moved to UBuildBarWidget; this class draws only in

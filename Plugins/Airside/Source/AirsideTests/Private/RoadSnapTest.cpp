@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Build/RoadNetworkSolver.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
@@ -244,6 +245,72 @@ bool FRoadSnapTest::RunTest(const FString& Parameters)
 		const FRoadSnapResult NoChord = Chain.Resolve(*Network, FVector2D(1000.0, 100.0), Settings);
 		TestTrue(TEXT("a removed segment is not split"), NoChord.Kind == ERoadSnapKind::Free);
 	}
+
+	return true;
+}
+
+/**
+ * THE CHEAP REJECT, issue #167. Before this, every live node outside the fixed radius paid a
+ * full FRoadNetworkSolver::NodeClaims (a junction solve, with the TArray allocations that go
+ * with assembling arms and a boundary polygon) just to be told the cursor was nowhere near
+ * it - on an airport of more than a handful of nodes, the dominant cost of every hover.
+ * MaxPossibleNodeClaimReach's whole job is to answer "could this node possibly be it" from
+ * data already on the node, with no solve, so a node the cursor cannot possibly be inside
+ * never reaches NodeClaims at all - while one it genuinely could be inside still does, and
+ * still snaps.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadNodeSnapRuleCheapRejectTest,
+	"Airside.Tool.NodeSnapDoesNotSolveWhatCannotBeInReach",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadNodeSnapRuleCheapRejectTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	if (!TestNotNull(TEXT("network constructed"), Network)) { return false; }
+
+	// A DEAD END, deliberately: FRoadNetworkSolver::NodeClaims' own comment records that a
+	// node with no polygon - a dead end among them - falls back to a plain circle at the
+	// arm's half-width, which is what makes this fixture's answer predictable without having
+	// to reason about a real corner's fitted boundary. Hub has exactly one incident segment;
+	// Far the same. 10 m wide, so 500 uu of half-width either side of the centreline.
+	URoadProfile* Profile = URoadProfile::MakeTransient(1000.0, 100.0, 0.0);
+	if (!TestNotNull(TEXT("a profile"), Profile)) { return false; }
+
+	const FRoadNodeId Hub = Network->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId Far = Network->AddNode(FVector2D(2000.0, 0.0));
+	Network->AddStraightSegment(Hub, Far, Profile);
+
+	FRoadSnapSettings Settings;
+	Settings.NodeRadius = 150.0;
+	Settings.SegmentRadius = 150.0;
+	Settings.bSnapToSegments = false;   // isolates the node rule from the segment rule
+	Settings.JunctionSnapFactor = 1.0;
+
+	const FRoadNodeSnapRule Rule;
+	FRoadSnapQuery Query;
+	FRoadSnapResult Result;
+
+	// FAR OUTSIDE ANYTHING this 2000 uu chord could pave. The cheap reject must decline both
+	// nodes here before NodeClaims runs for either of them.
+	FRoadNetworkSolver::ResetNodeClaimsCallCountForTest();
+	Query.Cursor = FVector2D(50000.0, 0.0);
+	const bool bFarClaimed = Rule.Resolve(*Network, Query, Settings, Result);
+	TestFalse(TEXT("a cursor far beyond any possible reach is not claimed"), bFarClaimed);
+	TestEqual(TEXT("and the solve never ran for it - this is the line that goes red if the "
+					"cheap reject is removed"),
+		FRoadNetworkSolver::NodeClaimsCallCountForTest, 0);
+
+	// WITHIN HUB'S OWN DEAD-END REACH (its arm's 500 uu half-width), past the fixed 150 uu
+	// radius - the same shape as Airside.Tool.Snap's "the junction reach claims what
+	// NodeRadius could not", on the simplest topology that answer is unambiguous for.
+	FRoadNetworkSolver::ResetNodeClaimsCallCountForTest();
+	Query.Cursor = FVector2D(300.0, 0.0);
+	const bool bNearClaimed = Rule.Resolve(*Network, Query, Settings, Result);
+	TestTrue(TEXT("a cursor inside the dead end's own reach still snaps"), bNearClaimed);
+	TestTrue(TEXT("to the hub"), Result.Kind == ERoadSnapKind::Node && Result.Node == Hub);
+	TestTrue(TEXT("and the solve DID run to decide it"),
+		FRoadNetworkSolver::NodeClaimsCallCountForTest > 0);
 
 	return true;
 }
