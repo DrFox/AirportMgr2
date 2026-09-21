@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Model/RoadEntity.h"
+#include "Model/Airframe.h"
 #include "LandingRun.generated.h"
 
 /** Where an arrival has got to. */

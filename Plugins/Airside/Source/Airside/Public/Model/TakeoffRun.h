@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Model/RoadEntity.h"
+#include "Model/Airframe.h"
 #include "TakeoffRun.generated.h"
 
 /** Where a departure has got to. */

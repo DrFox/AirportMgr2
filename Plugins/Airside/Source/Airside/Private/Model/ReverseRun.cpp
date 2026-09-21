@@ -61,6 +61,10 @@ bool FReverseRun::Start(const FRoutePlan& InPlan, const FAirframe& Airframe, dou
 		return false;
 	}
 
+	// LOGGED ONCE, HERE, rather than from EffectiveSteerLaw itself - see #176. Advance below
+	// calls it every frame this manoeuvre runs; Start runs once per bay entry.
+	WarnIfSteerLawUnsupported(Airframe);
+
 	// THE CHECK THAT MAKES THIS SAFE TO PLAY BACK. A pre-computed manoeuvre is only as good as
 	// the curve it was given, and playing back a curve the body cannot hold is exactly the
 	// crabbing this design exists to remove - it would simply do it silently, because playback

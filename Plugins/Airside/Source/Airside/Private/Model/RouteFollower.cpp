@@ -16,6 +16,12 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe
 	// Ground is NOT copied here any more (issue #83) - Advance and Replace take the airframe
 	// fresh from their caller every time instead.
 
+	// LOGGED ONCE, HERE - not from EffectiveSteerLaw, which Advance below calls twice every
+	// frame this follower runs. #176: that used to log inline and turned one mis-authored
+	// airframe into ~3800 lines/s at 60 fps across a busy apron. Start runs once per dispatch,
+	// which is the granularity the warning actually wants.
+	WarnIfSteerLawUnsupported(InAirframe);
+
 	// The whole route costed before the first frame. See FSpeedProfile: once braking is
 	// limited, a corner discovered by arriving at it is already twenty-five metres too late.
 	{
@@ -219,6 +225,10 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 
 void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FAirframe& InAirframe)
 {
+	// See Start's own comment: a replan re-binds the airframe just as a dispatch does, so it
+	// gets the same once-per-call warning rather than none at all.
+	WarnIfSteerLawUnsupported(InAirframe);
+
 	Plan = NewPlan;
 	Travelled = FMath::Clamp(Travelled, 0.0, Plan.Length);
 	{
