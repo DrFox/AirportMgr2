@@ -66,7 +66,8 @@ void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
 			RowColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(),
 				TEXT("RowColumn"));
 			UVerticalBoxSlot* RowsSlot = Column->AddChildToVerticalBox(RowColumn);
-			RowsSlot->SetPadding(FMargin(0.0f, 6.0f, 0.0f, 0.0f));
+			// UUIStyle::RowGap, not a literal here: see its own comment (issue #192).
+			RowsSlot->SetPadding(FMargin(0.0f, Style->RowGap, 0.0f, 0.0f));
 		}
 	}
 	// CardWidget is found and cached by EnsureCardRoot itself now (issue #187) - see its own comment.

@@ -141,8 +141,10 @@ private:
 	 *  opacity is fixed at birth, so this is the only place that constructs Slate widgets. */
 	UBorder* BuildCard(const UUIStyle& Style, const FNotificationEntry& Entry);
 
-	/** The fade curve, read at construction and again every later tick. */
-	float OpacityFor(const FNotificationEntry& Entry) const;
+	/** The fade curve, read at construction and again every later tick. Takes the style rather
+	 *  than reading CachedStyle itself, matching ColourFor/BuildCard/SyncCards, all of which are
+	 *  already threaded the style their caller resolved. */
+	float OpacityFor(const UUIStyle& Style, const FNotificationEntry& Entry) const;
 
 	/** Severity to palette slot. Static: it reads the style, not the widget. */
 	static FLinearColor ColourFor(const UUIStyle& Style, ENotificationSeverity Severity);

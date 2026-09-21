@@ -150,15 +150,16 @@ UTexture2D* UToastStackWidget::IconFor(ENotificationSeverity Severity) const
 	}
 }
 
-float UToastStackWidget::OpacityFor(const FNotificationEntry& Entry) const
+float UToastStackWidget::OpacityFor(const UUIStyle& Style, const FNotificationEntry& Entry) const
 {
-	// Fades over its last two seconds rather than vanishing, so the eye is not pulled to a
-	// sudden disappearance at the edge of vision. Never below 0.15: a toast that has faded
-	// out but not yet expired would still be taking up a row, and an invisible row that
-	// pushes the others around reads as a glitch.
+	// Fades over its last ToastFadeDuration seconds rather than vanishing, so the eye is not
+	// pulled to a sudden disappearance at the edge of vision. Never below ToastFadeFloor: a
+	// toast that has faded out but not yet expired would still be taking up a row, and an
+	// invisible row that pushes the others around reads as a glitch. Both were bare literals
+	// (2.0 / 0.15) until issue #192 - see UUIStyle::ToastFadeDuration's own comment.
 	const double Remaining = Notifications->FeedLifetimeRealSeconds
 		- (Notifications->Now() - Entry.RaisedAtRealSeconds);
-	return static_cast<float>(FMath::Clamp(Remaining / 2.0, 0.15, 1.0));
+	return static_cast<float>(FMath::Clamp(Remaining / Style.ToastFadeDuration, Style.ToastFadeFloor, 1.0));
 }
 
 void UToastStackWidget::SyncCards(const UUIStyle& Style)
@@ -227,7 +228,7 @@ void UToastStackWidget::SyncCards(const UUIStyle& Style)
 	{
 		if (Cards[Index].Card != nullptr)
 		{
-			Cards[Index].Card->SetRenderOpacity(OpacityFor(Entries[Index]));
+			Cards[Index].Card->SetRenderOpacity(OpacityFor(Style, Entries[Index]));
 		}
 	}
 }
@@ -247,8 +248,9 @@ UBorder* UToastStackWidget::BuildCard(const UUIStyle& Style, const FNotification
 	// PanelDark, not Panel: a toast floats OVER the world and sits directly above a
 	// Panel-coloured bar, so drawing it in Panel made it read as part of the bar.
 	UBorder* Row = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+	// UUIStyle::OutlineAlpha, not a literal here: see its own comment (issue #192).
 	Row->SetBrush(FSlateRoundedBoxBrush(Style.PanelDark, Style.CornerRadius,
-		FLinearColor(Severity.R, Severity.G, Severity.B, 0.85f), ToastOutlineWidth));
+		FLinearColor(Severity.R, Severity.G, Severity.B, Style.OutlineAlpha), ToastOutlineWidth));
 	Row->SetPadding(FMargin(12.0f, 9.0f));
 
 	UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
@@ -283,7 +285,7 @@ UBorder* UToastStackWidget::BuildCard(const UUIStyle& Style, const FNotification
 	// Set once at birth rather than left at 1.0: a toast built partway through its fade (the
 	// tail of a burst posted in one frame with an already-ticked one) must not flash at full
 	// opacity for a frame before the next tick corrects it.
-	Row->SetRenderOpacity(OpacityFor(Entry));
+	Row->SetRenderOpacity(OpacityFor(Style, Entry));
 
 	// NEWEST AT THE BOTTOM, which is what append gives: the eye that just looked at the
 	// bar is already at the bottom of the screen, and a new toast appearing under the

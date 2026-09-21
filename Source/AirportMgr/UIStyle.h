@@ -88,6 +88,18 @@ public:
 	/** It worked. A sage that belongs to the same field as the grass, not a UI green. */
 	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Positive = FLinearColor::FromSRGBColor(FColor(0x7E, 0x9C, 0x6B));
 
+	/**
+	 * The plot-panel backdrop ARoadBuildHUD::DrawPlotPanel draws behind its readout text - the
+	 * one label in the game that can land on grass, concrete or the ghost's own white, where
+	 * coloured text alone is unreadable. NOT a PreviewPalette entry (issue #192, following
+	 * PR #224's move of that table into Present/): PreviewPalette is the shared table the HUD
+	 * and the editor viewport's IToolPreviewSink both read so a style's LOOK cannot drift
+	 * between the two; this backdrop has exactly one reader (the game HUD's own text panel) and
+	 * belongs with the rest of the game UI's colours instead. Default equals the old literal
+	 * `FLinearColor(0.02f, 0.03f, 0.04f, 0.72f)`.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor HudGround = FLinearColor(0.02f, 0.03f, 0.04f, 0.72f);
+
 	UPROPERTY(EditAnywhere, Category = "Type") FSlateFontInfo TitleFont;
 	UPROPERTY(EditAnywhere, Category = "Type") FSlateFontInfo LabelFont;
 
@@ -119,6 +131,49 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Metrics") float CornerRadius = 5.0f;
 	UPROPERTY(EditAnywhere, Category = "Metrics") float SectionPadding = 14.0f;
+
+	/**
+	 * Padding inside the one bordered card EnsureCardRoot builds for every panel that calls it
+	 * (the inspector, the offer inbox, the ledger). NAMED by issue #192: it was a bare
+	 * `FMargin(12.0f, 10.0f)` inside UAirportMgrPanelWidget::EnsureCardRoot with nothing else
+	 * in the codebase reading the same value, the "UI literals remaining after #89-#91" finding.
+	 * Default equals that literal, so this is a rename, not a re-tune - see UIStyleTest.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Metrics") FMargin CardPadding = FMargin(12.0f, 10.0f);
+
+	/**
+	 * Gap between stacked rows in a list panel. NAMED by issue #192 for the ledger panel's own
+	 * row spacing (`ULedgerPanelWidget::EnsureSlots`'s `FMargin(0.0f, 6.0f, 0.0f, 0.0f)`), which
+	 * had no name at all. UOfferInboxWidget::RowGap is a SEPARATE, already-named per-widget
+	 * knob (its own EditAnywhere property, predating this issue) and is deliberately left alone
+	 * - the two happening to share a value today is not a reason to delete a knob a Blueprint
+	 * restyle may already be relying on. Default equals the ledger's old literal.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Metrics") float RowGap = 6.0f;
+
+	/**
+	 * Padding inside an offer's Accept/Decline button, both states. NAMED by issue #192: two
+	 * identical `FMargin(12.0f, 5.0f)` literals in UOfferInboxWidget::MakeAnswerButton
+	 * (SetNormalPadding and SetPressedPadding both took the same value, unnamed, twice).
+	 * Default equals that literal.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Metrics") FMargin ButtonPadding = FMargin(12.0f, 5.0f);
+
+	/**
+	 * Alpha of a toast card's severity-coloured outline (UToastStackWidget::BuildCard). NAMED
+	 * by issue #192: a bare `0.85f` built inline into the FSlateRoundedBoxBrush's outline
+	 * colour, with no other reader. Default equals that literal.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Metrics", meta = (ClampMin = "0.0", ClampMax = "1.0")) float OutlineAlpha = 0.85f;
+
+	/**
+	 * The two constants of UToastStackWidget::OpacityFor's fade curve - see that function's own
+	 * comment for the reasoning, unchanged by this rename. NAMED by issue #192: both were bare
+	 * literals (`2.0` and `0.15`) in a single FMath::Clamp call with no other reader. Defaults
+	 * equal those literals.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Metrics", meta = (ClampMin = "0.0")) float ToastFadeDuration = 2.0f;
+	UPROPERTY(EditAnywhere, Category = "Metrics", meta = (ClampMin = "0.0", ClampMax = "1.0")) float ToastFadeFloor = 0.15f;
 
 	/**
 	 * Keyed by FBuildAction::Id, NOT held as a field on the action.
