@@ -27,12 +27,23 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 	GroundSpeed = static_cast<float>(Motion.GroundSpeed);
 	bAirborne = Motion.bAirborne;
 
-	// THE GEAR, COPIED AND NOT DERIVED - the model ran the cycle, doors and all, and this is
-	// where it got to. See FRoadAgent::AdvanceGear.
-	GearDownFraction = static_cast<float>(Motion.GearDownFraction);
-	BayDoorOpenFraction = static_cast<float>(Motion.BayDoorOpenFraction);
-	GearAnglesFrom(GearDownFraction, BayDoorOpenFraction, GearRetractedAngleDegrees,
-		BayDoorClosedAngleDegrees, GearAngleDegrees, BayDoorAngleDegrees);
+	// THE GEAR, COPIED AND NOT DERIVED - the model ran the cycle, doors and truck and all, and
+	// this is where it got to. See FRoadAgent::AdvanceGear.
+	//
+	// UNPACKED FROM ONE STRUCT INTO THREE FLOATS, which is the only place in the project that
+	// happens and is deliberate: FAgentMotion carries an FGearPose because the model always
+	// writes the three together, while an Animation Blueprint reads each one by NAME off a
+	// variable getter. Nesting them here would break every shipped graph.
+	GearDownFraction = static_cast<float>(Motion.GearPose.GearDownFraction);
+	BayDoorOpenFraction = static_cast<float>(Motion.GearPose.BayDoorOpenFraction);
+	TruckLevelFraction = static_cast<float>(Motion.GearPose.TruckLevelFraction);
+
+	// ONE RULE, THREE TIMES. Each fraction counts DOWNNESS, OPENNESS or LEVELNESS - its own
+	// rest state, which is the bind pose - and each angle counts travel away from it. See
+	// AngleFromRestFraction, which carries the sign trap this used to ship.
+	GearAngleDegrees = AngleFromRestFraction(GearDownFraction, GearRetractedAngleDegrees);
+	BayDoorAngleDegrees = AngleFromRestFraction(BayDoorOpenFraction, BayDoorClosedAngleDegrees);
+	TruckTiltAngleDegrees = AngleFromRestFraction(TruckLevelFraction, TruckTiltedAngleDegrees);
 
 	// COPIED, NOT DERIVED. The model steered with this exact angle - see
 	// FRouteFollower::SteerDegrees - so the wheel the player watches is the one that turned
@@ -146,23 +157,12 @@ float UAirsideAgentAnim::PropStepDegrees(float RPM, float DeltaSeconds, int32 Bl
 	return FMath::Min(FMath::Max(Wanted, 0.0f), Largest);
 }
 
-void UAirsideAgentAnim::GearAnglesFrom(float GearDownFraction, float DoorOpenFraction,
-	float RetractedAngle, float DoorClosedAngle, float& OutGearAngle, float& OutDoorAngle)
+float UAirsideAgentAnim::AngleFromRestFraction(float RestFraction, float TravelledAngle)
 {
-	// ONE MINUS THE FRACTION, because the fraction counts DOWNNESS and the angle counts
-	// travel away from the bind pose. Getting this the other way round parks an aeroplane on
-	// a folded leg, which is a state the mesh can express perfectly happily.
-	OutGearAngle = (1.0f - GearDownFraction) * RetractedAngle;
-
-	// AND ONE MINUS IT AGAIN FOR THE DOORS, BUT FOR THE OPPOSITE REASON - which is why this
-	// is two lines that look alike and are not. The gear's bind pose is DOWN, so zero travel
-	// means down. The doors' bind pose is OPEN, so zero travel means open, and the door has
-	// to travel to be SHUT. Both fractions are therefore inverted, and only one of them is
-	// inverted because of what the fraction counts.
-	//
-	// THIS SHIPPED AS DoorOpenFraction * DoorAngle and was wrong on screen in a way that read
-	// as a sequencing bug rather than a sign one: the doors shut at the start of the cycle,
-	// the gear retracted through them, and they opened again at the end. The model, the
-	// evaluator and the animgraph were all correct; the two ends of one lerp were swapped.
-	OutDoorAngle = (1.0f - DoorOpenFraction) * DoorClosedAngle;
+	// ONE MINUS THE FRACTION, because every fraction in FGearPose counts how far the part is
+	// toward its REST state - down, open, level - and the angle counts travel AWAY from that
+	// state, which is the bind pose. Getting it the other way round parks an aeroplane on a
+	// folded leg with its bay shut round the wheels, which is a state the mesh can express
+	// perfectly happily and which has been on screen once. See the header.
+	return (1.0f - RestFraction) * TravelledAngle;
 }

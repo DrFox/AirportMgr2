@@ -71,13 +71,31 @@ public:
 		float SpinDownSeconds, float& InOutRateDegPerSec);
 
 	/**
-	 * Both bone angles from both fractions. Zero is the bind pose for each.
+	 * A bone angle from a REST-STATE fraction and that rig's measured travel. Zero is the
+	 * bind pose.
+	 *
+	 * ONE MINUS THE FRACTION, ONCE, FOR ALL THREE GEAR BONES. This was GearAnglesFrom, which
+	 * computed the gear and the door together in two lines that looked alike and were not -
+	 * the gear's bind pose is DOWN and the door's is OPEN, so both invert, but for different
+	 * reasons, and the comment saying so ran to a paragraph. The truck made a third, at which
+	 * point the function wanted eight parameters and the paragraph wanted a third clause.
+	 *
+	 * THE PARAGRAPH TURNED OUT TO BE ONE SENTENCE. Every fraction in FGearPose is named for
+	 * its REST state and is 1.0 there - GearDOWN, BayDoorOPEN, TruckLEVEL - and every rig's
+	 * bind pose IS that rest state, because a bind pose is a parked aeroplane. So "how far
+	 * from the bind pose" is one minus the fraction in every case, and the three differing
+	 * reasons were three instances of one convention rather than three facts.
+	 *
+	 * THE TRAP IS UNCHANGED AND IS WHY THE CONVENTION IS WORTH NAMING: this shipped once as
+	 * DoorOpenFraction * DoorAngle, and was wrong on screen in a way that read as a sequencing
+	 * bug rather than a sign one - the doors shut at the start of the cycle, the gear
+	 * retracted through them, and they opened again at the end. The model, the evaluator and
+	 * the animgraph were all correct; the two ends of one lerp were swapped.
 	 *
 	 * Static and free of the instance so it can be tested without an actor or a skeleton -
 	 * the same reason PropStepDegrees and WheelStepDegrees are.
 	 */
-	static void GearAnglesFrom(float GearDownFraction, float DoorOpenFraction,
-		float RetractedAngle, float DoorClosedAngle, float& OutGearAngle, float& OutDoorAngle);
+	static float AngleFromRestFraction(float RestFraction, float TravelledAngle);
 
 	/**
 	 * Accumulated propeller rotation, degrees. Apply to the 'prop' bone.
@@ -160,6 +178,22 @@ public:
 	float BayDoorOpenFraction = 1.0f;
 
 	/**
+	 * The main gear truck: 1 level, 0 fully tilted. Copied from the model.
+	 *
+	 * DEFAULTS TO LEVEL to join the two above in describing a parked aeroplane, which is the
+	 * bind pose. See FGearPose::TruckLevelFraction for what a truck is and why the tilt is
+	 * driven by the retraction cycle rather than by weight on the wheels.
+	 *
+	 * FLAT HERE AND NESTED IN THE MODEL, deliberately. FAgentMotion carries one FGearPose
+	 * because its three fractions are always written together; this class carries three loose
+	 * floats because an Animation Blueprint reads each one by NAME off a variable getter, and
+	 * a struct member would break every shipped graph - see the refactor contract in
+	 * CLAUDE.md. The copy in NativeUpdateAnimation is where the two shapes meet.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float TruckLevelFraction = 1.0f;
+
+	/**
 	 * Gear rotation, degrees. Apply to gear_nose, gear_L and gear_R - the RETRACT bones, not
 	 * the rolling ones, which take WheelAngleDegrees.
 	 *
@@ -185,6 +219,22 @@ public:
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float BayDoorAngleDegrees = 0.0f;
+
+	/**
+	 * Truck tilt, degrees. Apply to truck_L and truck_R - the BOGIE BEAM bones, which sit
+	 * BETWEEN the retract bone and the rolling ones.
+	 *
+	 * ZERO IS LEVEL, which is the bind pose, because a rig is built standing on its wheels.
+	 *
+	 * THE BONE ORDER MATTERS MORE HERE THAN ANYWHERE ELSE IN THE GRAPH. The chain is
+	 * gear_L > truck_L > wheel_L1..L3, three deep, and a Transform (Modify) Bone node must
+	 * come AFTER every node for a bone it is the parent of - so the wheels are driven first,
+	 * then the truck, then the leg. Wrong way round and the truck tilts inside a leg that has
+	 * already folded, which reads as a modelling fault rather than a wiring one. See
+	 * Tools/Python/airside_anim.py, where the bone plan puts the truck rule above both.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float TruckTiltAngleDegrees = 0.0f;
 
 	/** Speed over the ground, uu per second. Exposed so the graph can blend on it if wanted. */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
@@ -239,6 +289,36 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Airside")
 	float BayDoorClosedAngleDegrees = 81.0f;
+
+	/**
+	 * The angle at which this rig's main truck is fully TILTED, degrees. Zero means the rig
+	 * has no truck.
+	 *
+	 * NAMED FOR THE TRAVELLED-TO END, as BayDoorClosedAngleDegrees and
+	 * GearRetractedAngleDegrees are, because that is the end the rig puts work into - level is
+	 * simply the bind pose.
+	 *
+	 * ZERO BY DEFAULT AND NOT A FLEET FIGURE, which is the one place this property differs
+	 * from the two above it. They default to plane4's measurements because plane4 is the rig
+	 * they were written for; NO SHIPPED RIG HAS A TRUCK BONE AT ALL, so a made-up default here
+	 * would be a number nobody measured sitting in the slot where a measurement goes. Zero is
+	 * also correct rather than merely safe: with no truck bone to drive there is nothing for
+	 * a non-zero angle to move, so it is the right answer for every rig in the fleet.
+	 *
+	 * THE FIRST REAL FIGURE WILL BE THE A380's (plane8), not the 777's. plane6 was the
+	 * aeroplane this feature was built for and it shipped without truck bones in the end, so
+	 * whoever rigs plane8 measures this - by posing the bogie to the angle at which it clears
+	 * the bay, the way build_export.py found BayDoorClosedAngleDegrees' 81 by sweeping.
+	 *
+	 * AN A380 MAY WANT TWO OF THESE. Its wing gear is a four-wheel bogie and its body gear a
+	 * six-wheel one, and if the drawing puts them at different tilt angles they need a figure
+	 * each - one fraction still drives both, because they move on the same cycle. That is a
+	 * second property the day the drawing says so, and not before; the same judgement, and
+	 * the same wording, BayDoorClosedAngleDegrees already carries about a rig that models its
+	 * doors shut.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Airside")
+	float TruckTiltedAngleDegrees = 0.0f;
 
 	/**
 	 * How long the wheels take to spin down to a stop once airborne, seconds (#107 item 8).

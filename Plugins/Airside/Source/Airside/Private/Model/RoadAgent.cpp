@@ -145,23 +145,41 @@ void FRoadAgent::AdvanceGear(double DeltaSeconds)
 	}
 }
 
-void FRoadAgent::GearFractions(double& OutGearDown, double& OutDoorOpen) const
+FGearPose FRoadAgent::GearPose() const
 {
 	// THE RESTING POSES ARE ANSWERED HERE AND NOT BY THE EVALUATOR, because a resting pose is
 	// not a point in a cycle - a fixed-gear airframe has no cycle to sample at all.
-	// THE TWO RESTING POSES ARE DIFFERENT, and that is the point: on a 737 the nose bay doors
-	// are linked to the strut, so they hang OPEN with the gear down and shut only once it is
-	// stowed. A parked or approaching aeroplane therefore sits gear-down, doors-open - which
-	// is also SK_Plane4's bind pose, so the animgraph applies no rotation at all there.
+	// THE RESTING POSES ARE DIFFERENT FROM EACH OTHER, and that is the point: on a 737 the
+	// nose bay doors are linked to the strut, so they hang OPEN with the gear down and shut
+	// only once it is stowed. A parked or approaching aeroplane therefore sits gear-down,
+	// doors-open - which is also SK_Plane4's bind pose, so the animgraph applies no rotation
+	// at all there. The truck divides the same way and the other way round: LEVEL at rest
+	// down, fully TILTED at rest up, because that is the only attitude the well will take.
+	// SO THEY ARE ASKED OF THE EVALUATOR AS ITS OWN ENDPOINTS rather than written out here as
+	// a table of ones and zeroes, which is what this did until 2026-09-21. The table was a
+	// SECOND evaluator wearing a switch statement, and it had already drifted from the first:
+	// it returned doors-SHUT on reaching Up for every airframe, including one whose
+	// DoorSeconds is zero - which FractionsAt reports doors-OPEN for throughout the whole
+	// cycle, because zero means "no bay doors", not "instant ones". A rig with door bones and
+	// no authored door time would have held them open across the entire retraction and snapped
+	// them shut on the frame the phase changed. Nothing in the fleet is authored that way
+	// today, so this is a defect removed rather than one reported from play - found while
+	// adding the truck, which divides exactly the same way and would have been a third copy of
+	// the same mistake. Airside.Model.GearRestingPosesComeFromTheEvaluator pins it.
+	//
+	// Each clause below is the cycle run PAST its end, which FractionsAt already clamps - so a
+	// resting pose is literally the pose the cycle arrives in, and cannot disagree with it.
 	switch (GearPhase)
 	{
-	case EGearPhase::Down: OutGearDown = 1.0; OutDoorOpen = 1.0; return;
-	case EGearPhase::Up:   OutGearDown = 0.0; OutDoorOpen = 0.0; return;
-	default: break;
+	case EGearPhase::Down:
+		return Airframe.Gear.FractionsAt(Airframe.Gear.CycleSeconds(), /*bRaising*/ false);
+	case EGearPhase::Up:
+		return Airframe.Gear.FractionsAt(Airframe.Gear.CycleSeconds(), /*bRaising*/ true);
+	default:
+		break;
 	}
 
-	Airframe.Gear.FractionsAt(GearCycleSeconds, GearPhase == EGearPhase::Raising,
-		OutGearDown, OutDoorOpen);
+	return Airframe.Gear.FractionsAt(GearCycleSeconds, GearPhase == EGearPhase::Raising);
 }
 
 FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
@@ -251,10 +269,10 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	Motion.bAirborne = (Phase == EAgentPhase::Departing && Departure.Phase == ETakeoffPhase::Climb)
 		|| (Phase == EAgentPhase::Arriving && !Arrival.IsOnGround());
 
-	// THE GEAR, BOTH NUMBERS FROM THE ONE EVALUATOR - see FGearPerformance::FractionsAt. The
-	// view applies these to bones and derives neither of them; a second evaluator would let
-	// the doors the player sees disagree with the doors the model thinks it opened.
-	GearFractions(Motion.GearDownFraction, Motion.BayDoorOpenFraction);
+	// THE GEAR, EVERY NUMBER FROM THE ONE EVALUATOR - see FGearPerformance::FractionsAt. The
+	// view applies these to bones and derives none of them; a second evaluator would let the
+	// doors the player sees disagree with the doors the model thinks it opened.
+	Motion.GearPose = GearPose();
 
 	return Motion;
 }
