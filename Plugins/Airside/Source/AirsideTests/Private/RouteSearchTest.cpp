@@ -260,4 +260,84 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// Named as a sibling, not folded into .Find above, for the same automation-tree reason the
+// file banner gives: a distinct dotted leaf, no bare parent for it to collide with.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteSearchEdgeCostCacheTest,
+	"Airside.Model.RouteSearch.EdgeCostCache",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRouteSearchEdgeCostCacheTest::RunTest(const FString& Parameters)
+{
+	// #171: EdgeCost must read FGuidelineEdge::Length rather than re-sampling and re-measuring
+	// the curve on every relaxation. SampleGuidelineCallCountForTest is the boundary that
+	// proves it - see URoadNetwork::SampleGuideline's own comment. A test that only checked
+	// the ROUTE returned would pass on the un-fixed code too: the cache is read-only here and
+	// changes nothing about which path is chosen, only how many times the curve is measured
+	// finding it.
+
+	// UNREACHABLE: the search relaxes every edge in Start's small component before Open
+	// drains, then reports Unreachable - so NO step is ever walked to build a polyline, and a
+	// fixed EdgeCost must leave the counter exactly where it found it. Before the fix, each of
+	// those relaxations (including the reverse direction of an edge back toward the already-
+	// closed Start, costed before the closed check discards it) sampled and measured the curve
+	// itself, so this is the case the fix must bring to EXACTLY zero, not merely lower.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FGuidelineNodeId Start = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+		const FGuidelineNodeId Mid = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
+		const FGuidelineNodeId Branch = Net->AddGuidelineNode(FVector2D(1000.0, 1000.0));
+		Join(*Net, Start, Mid);
+		Join(*Net, Start, Branch);
+
+		// Disconnected from the rest: no edge reaches it, so the search cannot find it and can
+		// only exhaust the reachable component trying.
+		const FGuidelineNodeId Goal = Net->AddGuidelineNode(FVector2D(9000.0, 9000.0));
+
+		FRouteQuery Query;
+		Query.Start = Start;
+		Query.Goal = Goal;
+		Query.Class = ETraversalClass::Aircraft;
+
+		const int32 Before = Net->SampleGuidelineCallCountForTest();
+		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+		const int32 After = Net->SampleGuidelineCallCountForTest();
+
+		TestEqual(TEXT("an unreachable goal is reported as such"), Plan.Result, ERouteResult::Unreachable);
+		TestEqual(TEXT("no relaxation samples the curve it costs"), After - Before, 0);
+	}
+
+	// REACHABLE: the diamond from .Find above, with two candidate ways into East, so the
+	// search relaxes more edges than the winning route has steps. SampleGuideline is still
+	// called here - the polyline the follower walks and the overlay draws still has to come
+	// from somewhere - but ONLY by the post-search reconstruction, exactly once per step of
+	// the WINNING route, never once per relaxation during the search itself.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FGuidelineNodeId West = Net->AddGuidelineNode(FVector2D(-1000.0, 0.0));
+		const FGuidelineNodeId East = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
+		const FGuidelineNodeId North = Net->AddGuidelineNode(FVector2D(0.0, 4000.0));
+		const FGuidelineNodeId South = Net->AddGuidelineNode(FVector2D(0.0, -100.0));
+		Join(*Net, West, North);
+		Join(*Net, North, East);
+		Join(*Net, West, South);
+		Join(*Net, South, East);
+
+		FRouteQuery Query;
+		Query.Start = West;
+		Query.Goal = East;
+		Query.Class = ETraversalClass::Aircraft;
+
+		const int32 Before = Net->SampleGuidelineCallCountForTest();
+		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+		const int32 After = Net->SampleGuidelineCallCountForTest();
+
+		if (!TestTrue(TEXT("a route is found"), Plan.IsValid())) { return false; }
+		TestEqual(TEXT("SampleGuideline runs only to build the winning polyline, once per step"),
+			After - Before, Plan.Steps.Num());
+	}
+
+	return true;
+}
+
 #endif

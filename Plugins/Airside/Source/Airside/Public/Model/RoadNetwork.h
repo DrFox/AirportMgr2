@@ -296,6 +296,16 @@ public:
 	bool SampleGuideline(FGuidelineEdgeId Edge, TArray<FVector2D>& Out, bool bFromB = false) const;
 
 	/**
+	 * How many times SampleGuideline has actually run, for #171: RouteSearch caches each
+	 * edge's length on the edge itself (FGuidelineEdge::Length) precisely so a route search
+	 * never has to call this per relaxation, and a test brackets a RouteSearch::Find with this
+	 * to prove the cache is being read rather than silently bypassed. Counts every call
+	 * regardless of caller, the same convention as UBuildSession::MakeContextCallCountForTest -
+	 * a test reads the delta across the operation it is measuring, not the raw total.
+	 */
+	int32 SampleGuidelineCallCountForTest() const { return SampleGuidelineCalls; }
+
+	/**
 	 * Mutable access to a guideline node.
 	 *
 	 * The counterpart to GetGuidelineEdgeMutable. Needed because HoldingPositionFor and
@@ -383,6 +393,18 @@ public:
 	 * limit and geometry to decide whether to take it.
 	 */
 	TArray<FGuidelineEdgeId> GetOutgoingGuidelines(FGuidelineNodeId Node, ETraversalClass Class) const;
+
+	/**
+	 * Same rule as GetOutgoingGuidelines - access AND direction - visited edge by edge with no
+	 * TArray at all (#171). RouteSearch's inner loop calls this once per node EXPANSION, and a
+	 * node can be expanded from several arms before the search finishes, so GetOutgoingGuidelines'
+	 * fresh array on every one of those calls was an allocation the search paid for and threw
+	 * away before the next relaxation. GetOutgoingGuidelines is now a thin forwarder onto this,
+	 * kept for its own callers (tests, GroundTrafficRebuild) that actually want the array - one
+	 * incidence-and-direction rule, not two copies of it that could drift apart.
+	 */
+	void ForEachOutgoingGuideline(FGuidelineNodeId Node, ETraversalClass Class,
+		TFunctionRef<void(FGuidelineEdgeId)> Visit) const;
 
 	/**
 	 * True when Node has line on it that leads OFF the service geometry it belongs to.
@@ -596,4 +618,9 @@ private:
 
 	UPROPERTY() TArray<FEntityInstance> Entities;
 	UPROPERTY() TArray<int32>           EntityFreeList;
+
+	/** See SampleGuidelineCallCountForTest. mutable for the same reason ContextBuildCountForTest
+	 *  is on UBuildSession: SampleGuideline is const and this counts real work it did, not a
+	 *  decision. Not a UPROPERTY - a session counter, not state. */
+	mutable int32 SampleGuidelineCalls = 0;
 };

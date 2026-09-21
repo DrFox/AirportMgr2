@@ -593,6 +593,12 @@ FGuidelineEdgeId URoadNetwork::AddGuidelineEdge(FGuidelineEdge&& Edge)
 	const FGuidelineNodeId EndA = Edge.A;
 	const FGuidelineNodeId EndB = Edge.B;
 
+	// Cached HERE, once, from the same evaluator SampleGuideline itself calls - see
+	// FGuidelineEdge::Length (#171). Both ends are already known live above, so this needs no
+	// lookup back through GetGuidelineEdge once the edge is in the array.
+	Edge.Length = GuidelineGeom::Length(
+		GuidelineNodes[EndA.Index].Position, Edge.Control, GuidelineNodes[EndB.Index].Position);
+
 	const FGuidelineEdgeId Handle =
 		RoadSlot::Add<FGuidelineEdgeId>(GuidelineEdges, GuidelineEdgeFreeList, MoveTemp(Edge));
 
@@ -665,6 +671,11 @@ bool URoadNetwork::RelinkGuidelineEdge(FGuidelineEdgeId Edge, FGuidelineNodeId N
 
 	Found->A = NewA;
 	Found->B = NewB;
+
+	// The ends just moved, so the cached length would otherwise go on describing the edge's
+	// PREVIOUS geometry - see FGuidelineEdge::Length (#171).
+	Found->Length = GuidelineGeom::Length(
+		GuidelineNodes[NewA.Index].Position, Found->Control, GuidelineNodes[NewB.Index].Position);
 
 	GuidelineNodes[NewA.Index].Incident.AddUnique(Edge);
 	if (NewB != NewA)
@@ -791,6 +802,12 @@ FGuidelineNode* URoadNetwork::GetGuidelineNodeMutable(FGuidelineNodeId Node)
 
 bool URoadNetwork::SampleGuideline(FGuidelineEdgeId Edge, TArray<FVector2D>& Out, bool bFromB) const
 {
+	// Counted for SampleGuidelineCallCountForTest (#171), unconditionally and first: a route
+	// search that reads FGuidelineEdge::Length instead of calling this must show zero calls
+	// per Find, and a count taken after an early-out below would miss exactly the callers a
+	// stale cache would make MORE of.
+	++SampleGuidelineCalls;
+
 	const FGuidelineEdge* Found = GetGuidelineEdge(Edge);
 	if (Found == nullptr)
 	{
@@ -938,15 +955,13 @@ FRoadSegmentId URoadNetwork::RunwayNearGuidelineNode(FGuidelineNodeId Node) cons
 	return FRoadSegmentId();
 }
 
-TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
-	FGuidelineNodeId Node, ETraversalClass Class) const
+void URoadNetwork::ForEachOutgoingGuideline(
+	FGuidelineNodeId Node, ETraversalClass Class, TFunctionRef<void(FGuidelineEdgeId)> Visit) const
 {
-	TArray<FGuidelineEdgeId> Out;
-
 	const FGuidelineNode* Found = RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
 	if (Found == nullptr)
 	{
-		return Out;
+		return;
 	}
 
 	for (const FGuidelineEdgeId Id : Found->Incident)
@@ -971,10 +986,20 @@ TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
 
 		if (bPermitted)
 		{
-			Out.Add(Id);
+			Visit(Id);
 		}
 	}
+}
 
+TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
+	FGuidelineNodeId Node, ETraversalClass Class) const
+{
+	// A thin forwarder onto ForEachOutgoingGuideline (#171), added so RouteSearch's inner loop
+	// could stop paying for this array on every node expansion - see that method's own comment.
+	// This function's own callers (tests, GroundTrafficRebuild) still get the TArray they want,
+	// from the one incidence-and-direction rule rather than a second copy of it.
+	TArray<FGuidelineEdgeId> Out;
+	ForEachOutgoingGuideline(Node, Class, [&Out](FGuidelineEdgeId Id) { Out.Add(Id); });
 	return Out;
 }
 
