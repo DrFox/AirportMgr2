@@ -76,12 +76,26 @@ namespace RoadGeom
 		const FVector2D& B0, const FVector2D& B1);
 
 	/**
-	 * True when Point lies inside the polygon, by crossing number.
+	 * True when Point lies inside the polygon, by WINDING NUMBER - crossing number (even-odd)
+	 * until issue #182, when this became the plugin's ONE point-in-polygon test and absorbed
+	 * PlotFit's own file-static Contains, which had carried the winding-number rule on its
+	 * own rather than share this function.
 	 *
-	 * Winding-agnostic, so it answers the same for an outline stored either way round. A
-	 * point exactly on an edge is not guaranteed either answer, which is acceptable for
-	 * picking - the cursor is never exactly on a line - and would not be for containment
-	 * that decides geometry.
+	 * THE TWO RULES AGREE ON EVERY ORDINARY SIMPLE POLYGON and disagree only where a polygon
+	 * winds around some region more than once without any edge crossing another - two loops
+	 * of one outline meeting at a shared vertex rather than overlapping through a crossing,
+	 * which RoadGeom::IsSimplePolygon accepts on purpose (a shared endpoint is not a crossing
+	 * - see its own comment) and a freeform gesture can produce. Winding number counts that
+	 * region as inside, which is the honest reading of "how many times does the boundary wind
+	 * around this point"; even-odd's crossing count can come out even there and call it
+	 * outside. PlotFit::Contains's own comment argued exactly this before it was deleted.
+	 *
+	 * Still winding-agnostic in the OTHER sense - CW or CCW, an outline answers the same -
+	 * because the test is on whether the count is NONZERO, not on its sign.
+	 *
+	 * A point exactly on an edge is not guaranteed either answer, which is acceptable for
+	 * picking - the cursor is never exactly on a line - and callers that must judge a
+	 * boundary-exact corner probe just inside it first instead (PlotFit::CornerInsetUu).
 	 */
 	AIRSIDE_API bool PointInPolygon(TArrayView<const FVector2D> Polygon, const FVector2D& Point);
 

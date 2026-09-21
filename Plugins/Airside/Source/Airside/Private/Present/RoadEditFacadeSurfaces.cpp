@@ -13,13 +13,15 @@
 #include "AirsideLog.h"
 #include "Algo/Reverse.h"
 #include "Build/AnchorLink.h"
+#include "Build/DepotKit.h"
+#include "Build/PlotLayoutStrategy.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadNetwork.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadSlotMap.h"
 #include "Model/RouteSearch.h"
 #include "Present/RoadNetworkActor.h"
-#include "Solve/PlotFit.h"
+#include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/RoadEditHistory.h"
 
@@ -296,6 +298,32 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 	return Placed.Index;
 }
 
+PlotYard::FReservation URoadEditFacade::ReserveForPlot(TArrayView<const FVector2D> Outline,
+	FVector2D FrontageA, FVector2D FrontageB, EPlaceableEntity Kind) const
+{
+	++PlotEvaluatorCount;
+
+	// THE SAME RESOLUTION FPlotPlaceTool::ReservationFor makes: a definition the target
+	// cannot resolve falls back to the scatter layout, which is what an unauthored plot type
+	// would have drawn anyway - see that function's own comment on why a second source of
+	// truth for the layout shipped once already (DA_FuelDepot vs. the tool's own Kind map).
+	const UEntityDefinition* Definition = GetEntityDefinition(Kind);
+	const EPlotLayout Layout = Definition != nullptr ? Definition->Layout : EPlotLayout::Scatter;
+	const TArray<PlotYard::FKitSpec> Specs = ResolveDepotKits();
+
+	// THE GATE IS THE FRONTAGE MIDPOINT, which is also what PlaceEntityInPlot stores as the
+	// entity's own Position below - DepotYardSeed keys off exactly that pose, so this solve
+	// and the one the presenter re-derives from the built entity roll the same yard.
+	FPlotSite Site;
+	Site.Outline = Outline;
+	Site.FrontageA = FrontageA;
+	Site.FrontageB = FrontageB;
+	Site.Gate = (FrontageA + FrontageB) * 0.5;
+	Site.Seed = DepotYardSeed(Site.Gate);
+
+	return PlotLayoutFor(Layout)->Solve(Site, Specs);
+}
+
 int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	FVector2D FrontageA, FVector2D FrontageB,
 	const TArray<EDepotModule>& Modules, EPlaceableEntity Kind)
@@ -330,9 +358,9 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// COUNTER-CLOCKWISE, exactly the correction AddApron makes and for the same reason: the
 	// pad goes through the same triangulator, which orients its triangles from the winding,
 	// and the surface is not two-sided. Stored clockwise, the pad faces DOWN - the fence and
-	// the modules still stand up, because PlotFit derives the interior side from the signed
-	// area, and the concrete is simply absent. That shipped on 2026-09-15 and took a
-	// screenshot to find.
+	// the modules still stand up, because PlotYard derives the interior side from the signed
+	// area (PlotYard::InwardOf), and the concrete is simply absent. That shipped on
+	// 2026-09-15 and took a screenshot to find.
 	//
 	// KEPT EVEN THOUGH THE GESTURE NOW HANDS IN A COUNTER-CLOCKWISE RECTANGLE. It costs a
 	// shoelace sum, and the alternative is a facade that is correct only for the one caller
@@ -343,8 +371,9 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 		Algo::Reverse(Wound);
 
 		// The frontage travels with it. It was given in the ORIGINAL winding order, and
-		// PlotFit reads which side the interior is on from that direction - left alone
-		// across a reversal, it would lay every bay across the road instead of into the plot.
+		// PlotYard::InwardOf reads which side the interior is on from that direction - left
+		// alone across a reversal, it would lay every module across the road instead of into
+		// the plot.
 		Swap(FrontageA, FrontageB);
 	}
 
@@ -356,12 +385,24 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// The plot also touches a road BY CONSTRUCTION, so the old "no road within reach"
 	// refusal went with it. The Idle stage reports a cursor near no service road before a
 	// click is even possible, which is earlier and cheaper than refusing at commit.
-	const PlotFit::FPlotFit Fit = PlotFit::FitBays(Wound, FrontageA, FrontageB);
-	if (!Fit.bFits)
+	//
+	// ONE EVALUATOR - issue #182. This used to judge the commit against PlotFit::FitBays, a
+	// 4 m x 12 m bay grid with its own point-in-polygon test, while FPlotPlaceTool judged the
+	// SAME plot's ghost and readout against PlotYard::Reserve - two solvers, free to disagree
+	// on exactly the plots where FitBays's own comment said its winding-number test earned
+	// its keep. ReserveForPlot runs the IDENTICAL call the tool's preview makes, so whatever
+	// the player was shown is what gets judged here.
+	const PlotYard::FReservation Reservation = ReserveForPlot(Wound, FrontageA, FrontageB, Kind);
+	if (Reservation.Stands.Num() == 0)
 	{
+		// RESERVES NOTHING IS THE ONE REFUSAL, not "fewer than asked for" - the 2026-09-20
+		// module-kits design rules a kit's ceiling fixed at draw time and a partial fit
+		// ordinary (see its section 3.3): a plot that holds three sheds and no tank still
+		// builds, exactly as it did before reservation existed. Only a plot that would place
+		// NOTHING AT ALL is refused, which is what FPlotPlaceTool's own readout already warns
+		// about ("This plot holds nothing") - the same evaluator, the same threshold.
 		UE_LOG(LogRoadMesh, Warning,
-			TEXT("PlaceEntityInPlot refused: the plot is smaller than one %.0f m bay."),
-			PlotFit::BayWidthUu / 100.0);
+			TEXT("PlaceEntityInPlot refused: this plot has no room to reserve anything."));
 		return INDEX_NONE;
 	}
 
@@ -371,29 +412,28 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	Placement.Definition = Definition;
 	Placement.Anchors = Definition->Anchors;
 
-	// THE GATE IS THE POSE, and there is exactly one of it however many sheds the plot
+	// THE GATE IS THE POSE, and there is exactly one of it however many modules the plot
 	// holds - BuildFuelDepot's ruling that two lead-ins from one small building into one
 	// road is a duplicate painted line. It sits at the middle of the frontage edge, which
-	// is the one point on the plot the road is reliably nearest.
+	// is the one point on the plot the road is reliably nearest - and the same point
+	// ReserveForPlot just seeded the yard from.
 	Placement.Position = (FrontageA + FrontageB) * 0.5;
 
-	// The bays all face the same way, so the first one's heading IS the installation's.
-	Placement.Heading = Fit.Bays[0].Heading;
+	// Every module the yard places is squared to the SAME frontage, so the inward normal IS
+	// the installation's own heading - the fact PlotFit::FitBays's uniform Bay.Heading used
+	// to state and PlotYard::InwardOf states now, without a solve of its own.
+	Placement.Heading = RoadGeom::Bearing(PlotYard::InwardOf(Wound, FrontageA, FrontageB));
 	Placement.PoseRole = Definition->PoseRole;
 	Placement.Outline = Wound;
-	Placement.Modules = Modules;
 
-	// TRAILING MODULES ARE DROPPED, not squeezed in. A player who chose four modules for a
-	// three-bay plot gets three and is told so; scaling the bays to fit would silently
-	// change the size they drew, which is the one thing a drawn plot must never do.
-	if (Placement.Modules.Num() > Fit.Bays.Num())
-	{
-		UE_LOG(LogRoadMesh, Warning,
-			TEXT("PlaceEntityInPlot: %d modules chosen but only %d bays fit; dropped %d."),
-			Placement.Modules.Num(), Fit.Bays.Num(),
-			Placement.Modules.Num() - Fit.Bays.Num());
-		Placement.Modules.SetNum(Fit.Bays.Num());
-	}
+	// STORED WHOLE, NEVER TRUNCATED TO WHAT FITS - issue #182 again. FitBays's bay count used
+	// to cap Modules here, which was a SECOND capacity rule competing with the reservation
+	// that decides what actually stands (the four-point gesture spec's own section 8 named
+	// this as a second opinion before this evaluator existed to replace it). The reservation
+	// is recomputed, never saved (2026-09-20 module-kits design section 3.4), so the entity
+	// keeps exactly what the player chose and UPlotPresenter lights only the stands the SAME
+	// solve, run again from the built entity, actually reserved.
+	Placement.Modules = Modules;
 
 	const FEntityInstanceId Placed = Net.PlaceEntity(Placement);
 	if (!Placed.IsSet())

@@ -8,6 +8,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Present/PlotPresenter.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/PlotFit.h"
@@ -1358,6 +1359,96 @@ bool FPlotSolvesOnceForTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("three frames locked in Confirm run no further solve"),
 		Tool.GetSolveCountForTest(), 2);
+
+	return true;
+}
+
+/**
+ * ONE EVALUATOR ANSWERS BOTH QUESTIONS - issue #182. `Committable(Stage == Confirm)` used to
+ * light the Build button regardless of whether the reservation placed anything, and
+ * `URoadEditFacade::PlaceEntityInPlot` judged the commit against `PlotFit::FitBays` - a
+ * different solver from the one the ghost and readout used - and threw its own refusal away
+ * in `FPlotPlaceTool::OnCommit`, which dropped to Idle whatever it answered.
+ *
+ * A PLOT TOO SHALLOW FOR ANYTHING AT ALL, not merely for the mix chosen: 15 m of frontage (the
+ * gesture's own minimum) and 1 m of depth, shallower than even a pump's 3 m footprint before
+ * clearance is added. `Reservation.Stands` must come back empty for every layout, which is
+ * what makes this a "reserves nothing" case rather than a "reserves less than asked for" one -
+ * the 2026-09-20 module-kits design rules the second kind ordinary and buildable.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotEmptyReservationIsRefusedByOneEvaluatorTest,
+	"Airside.Tool.PlotEmptyReservationIsRefusedByOneEvaluator",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotEmptyReservationIsRefusedByOneEvaluatorTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+
+	// READ BACK, not assumed: the anchor lands on the road's own kerb offset, which this test
+	// has no business predicting - the same reason FPlotFrontageSnapsInFiveMetreStepsTest
+	// queries Quad() rather than the cursor it clicked with.
+	TArray<FVector2D> Anchored;
+	Tool.Quad(PlotAt(Actor, FVector2D(0.0, 200.0)), Anchored);
+	if (!TestTrue(TEXT("an anchor to build the shallow plot from"), Anchored.Num() >= 1))
+	{
+		return false;
+	}
+	const FVector2D Anchor = Anchored[0];
+
+	Tool.OnClick(PlotAt(Actor, Anchor + FVector2D(1500.0, 0.0)));
+	Tool.OnClick(PlotAt(Actor, Anchor + FVector2D(750.0, 100.0)));
+	Tool.OnClick(PlotAt(Actor, Anchor + FVector2D(0.0, 100.0)));
+	if (!TestEqual(TEXT("all four corners pinned"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Confirm)))
+	{
+		return false;
+	}
+
+	const FToolContext Confirming = PlotAt(Actor, Anchor + FVector2D(0.0, 100.0));
+
+	// THE READOUT SIDE. GetSolveCountForTest proves this ran the real packer rather than
+	// answering from a stale memo - a solve that never ran cannot be trusted to have found
+	// nothing.
+	FToolReadoutCollector Collector;
+	Tool.BuildReadout(Confirming, Collector);
+	TestEqual(TEXT("the readout's own evaluator ran exactly once"), Tool.GetSolveCountForTest(), 1);
+	TestFalse(TEXT("a plot that reserves nothing is not committable"),
+		Collector.Readout.bCommittable);
+	TestTrue(TEXT("and says so"),
+		Collector.Readout.Warnings.ContainsByPredicate(
+			[](const FString& W) { return W == TEXT("This plot holds nothing"); }));
+
+	// THE COMMIT SIDE. PlotEvaluatorCountForTest proves the FACADE also ran its own copy of
+	// the same call - ReserveForPlot, not a cached answer or a different solver - rather than
+	// refusing for a reason unrelated to the reservation.
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("a facade to ask"), Facade)) { return false; }
+	const int32 EvaluatorCountBefore = Facade->PlotEvaluatorCountForTest();
+
+	Tool.OnCommit(Confirming);
+
+	TestEqual(TEXT("nothing was built from a plot that reserves nothing"), LiveEntities(Actor), 0);
+	TestEqual(TEXT("OnCommit leaves a refused plot in Confirm, not Idle"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Confirm));
+	TestEqual(TEXT("the facade's own evaluator ran exactly once for the commit"),
+		Facade->PlotEvaluatorCountForTest(), EvaluatorCountBefore + 1);
+
+	// AND THE READOUT SAYS SO AGAIN, on the frame after the refused Build - the tool's own
+	// safety-net warning, distinct from (and additional evidence beside) "holds nothing".
+	FToolReadoutCollector AfterCommit;
+	Tool.BuildReadout(Confirming, AfterCommit);
+	TestFalse(TEXT("still not committable after the refused commit"), AfterCommit.Readout.bCommittable);
 
 	return true;
 }

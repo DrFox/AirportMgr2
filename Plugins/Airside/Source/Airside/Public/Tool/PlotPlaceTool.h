@@ -206,6 +206,22 @@ private:
 
 	EPlotStage Stage = EPlotStage::Idle;
 
+	/**
+	 * OnCommit's own PlaceEntityInPlot call was refused by the facade, for a shape
+	 * BuildReadout's Committable already agreed could not be placed - issue #182.
+	 *
+	 * A SAFETY NET, not the ordinary path. Committable is computed from the same evaluator
+	 * (see ReservationFor) PlaceEntityInPlot judges the commit against, so a refusal here
+	 * should already have greyed the Build button - the same "earlier, not instead"
+	 * relationship OnClick's own IsSimplePolygon guard has with the facade's. Kept anyway,
+	 * because CLAUDE.md's rule is to honour a mutator's return, not to trust that some other
+	 * check made it unreachable.
+	 *
+	 * CLEARED ON EVERY GESTURE BOUNDARY (a fresh anchor, a cancel, a deactivate) so a stale
+	 * refusal from one plot cannot bleed its warning onto the next.
+	 */
+	bool bLastCommitRefused = false;
+
 	/** Unit vector along the road at the anchor. */
 	FVector2D Along = FVector2D(1.0, 0.0);
 
