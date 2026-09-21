@@ -293,4 +293,111 @@ bool FAnimYardCameraNeedsNoAirportTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnimYardCameraStartsInFrontOfTheAircraftTest,
+	"AirportMgr.View.AnimYard.CameraStartsInFrontOfTheAircraft",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnimYardCameraStartsInFrontOfTheAircraftTest::RunTest(const FString& Parameters)
+{
+	// WHY THE PLAYERSTART DOES NOT DECIDE THIS, reported from play 2026-09-21: moving it moves
+	// nothing. AAnimYardGameMode sets DefaultPawnClass to null, so no pawn is ever spawned at
+	// it, and FBuildCameraRig::Reset snaps Focus to the WORLD ORIGIN - between the two rows,
+	// looking at neither. The opening view is decided here instead, and it is DERIVED from
+	// where the models actually stand rather than typed, so re-running build_model_yard.py with
+	// a new model in the row re-aims the camera by itself.
+	FAirsideTestWorld TestWorld(/*bSpawnActor*/ false);
+	if (TestWorld.World == nullptr) { AddError(TEXT("no test world")); return false; }
+
+	USkeletalMesh* Truck = LoadTruckMesh();
+	if (Truck == nullptr) { AddError(TEXT("SK_FuelTruck1 did not load")); return false; }
+
+	// A ROW OF THREE "AIRCRAFT" ALONG Y AT X = 2500, and one VEHICLE far off on the other side
+	// at X = -2500 - the yard's real shape. The vehicle is here to be ignored: it is the thing
+	// that drags a naive "centre of everything" framing back to the origin, which is the view
+	// being fixed.
+	const double RowX = 2500.0;
+	ASkeletalMeshActor* Near = PlaceRiggedModel(*TestWorld.World, FVector(RowX, -8000.0, 0.0), Truck);
+	ASkeletalMeshActor* Mid = PlaceRiggedModel(*TestWorld.World, FVector(RowX, 0.0, 0.0), Truck);
+	ASkeletalMeshActor* Far = PlaceRiggedModel(*TestWorld.World, FVector(RowX, 8000.0, 0.0), Truck);
+	ASkeletalMeshActor* Vehicle = PlaceRiggedModel(*TestWorld.World, FVector(-2500.0, 0.0, 0.0), Truck);
+
+	AAnimYard* Yard = TestWorld.World->SpawnActor<AAnimYard>();
+	if (Yard == nullptr) { AddError(TEXT("no yard")); return false; }
+
+	// The same mesh dresses both, so the rig's bIsVehicle is what tells them apart - which is
+	// exactly what the framing has to read.
+	Yard->RigResolver = [Truck, Vehicle](USkeletalMesh* Mesh, FYardRig& Out)
+	{
+		if (Mesh != Truck) { return false; }
+		Out.AnimClass = UAirsideAgentAnim::StaticClass();
+		Out.bIsVehicle = false;
+		return true;
+	};
+	Yard->AdoptSubjects();
+	Yard->SetSubjectIsVehicleForTest(Vehicle, true);
+
+	AAnimYardController* Controller = TestWorld.World->SpawnActor<AAnimYardController>();
+	if (Controller == nullptr) { AddError(TEXT("no controller")); return false; }
+	Controller->SetYardForTest(Yard);
+
+	Controller->AimAtTheAircraft();
+	UBuildCameraComponent* Camera = Controller->Camera();
+	if (Camera == nullptr) { AddError(TEXT("no camera component")); return false; }
+	Camera->CreateBuildCamera(*Controller, 0.0);
+
+	ACameraActor* Spawned = Camera->CameraActorForTest();
+	if (Spawned == nullptr) { AddError(TEXT("no camera actor")); return false; }
+
+	const FVector Eye = Spawned->GetActorLocation();
+	const FRotator Look = Spawned->GetActorRotation();
+
+	// 1. IN FRONT OF THEM. The models are unrotated and UAircraftType's local space is "origin
+	// at the NOSE GEAR, +X forward", so the noses point along world +X and "in front" is a
+	// GREATER X than the row stands at. Nothing in the yard script rotates a model, so this is
+	// a fact about the level rather than an assumption about it.
+	TestTrue(*FString::Printf(TEXT("the camera is in front of the row, not behind it "
+		"(camera X %.0f against the row's %.0f)"), Eye.X, RowX), Eye.X > RowX);
+
+	// 2. FACING THEM. Looking back along -X is yaw 180.
+	TestEqual(TEXT("the camera looks back down the row's nose line"),
+		FMath::UnwindDegrees(Look.Yaw), 180.0, 1.0);
+
+	// 3. ABOVE THE FLOOR AND LOOKING DOWN A LITTLE. Not a plan view - the whole point is to see
+	// the aircraft from the front - but not at zero either, or the row collapses into one line
+	// and the models behind hide the ones in front.
+	TestTrue(*FString::Printf(TEXT("the camera is above the floor (%.0f uu)"), Eye.Z), Eye.Z > 0.0);
+	TestTrue(*FString::Printf(TEXT("and is looking down, but not steeply (%.1f degrees)"), -Look.Pitch),
+		-Look.Pitch > 0.0 && -Look.Pitch < 35.0);
+
+	// 4. EVERY AIRCRAFT IS IN SHOT. This is the assertion that makes the distance mean
+	// something: a camera aimed correctly but standing too close frames one aeroplane, and the
+	// bench's whole method is comparing the row against itself.
+	const double HalfFov = Camera->FieldOfView * 0.5;
+	const FVector2D EyeXY(Eye.X, Eye.Y);
+	const FVector2D Forward(FMath::Cos(FMath::DegreesToRadians(Look.Yaw)),
+		FMath::Sin(FMath::DegreesToRadians(Look.Yaw)));
+
+	for (const ASkeletalMeshActor* Aircraft : { Near, Mid, Far })
+	{
+		const FVector At = Aircraft->GetActorLocation();
+		FVector2D ToModel = FVector2D(At.X, At.Y) - EyeXY;
+		ToModel.Normalize();
+
+		const double OffAxis = FMath::RadiansToDegrees(FMath::Acos(
+			FMath::Clamp(FVector2D::DotProduct(Forward, ToModel), -1.0, 1.0)));
+
+		TestTrue(*FString::Printf(TEXT("%s is inside the opening shot (%.1f degrees off axis, "
+			"half-FOV is %.1f)"), *Aircraft->GetName(), OffAxis, HalfFov), OffAxis < HalfFov);
+	}
+
+	// 5. THE VEHICLE ROW DOES NOT PULL THE SHOT. Its mark is 5000 uu the other side of the
+	// origin; a framing that averaged every subject would sit the camera between the two rows
+	// facing nothing, which is what the world-origin default already did.
+	TestTrue(TEXT("the ground-vehicle row does not drag the camera back towards the origin"),
+		Eye.X > RowX);
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

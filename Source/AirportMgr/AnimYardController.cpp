@@ -47,6 +47,32 @@ namespace
 
 	/** How much of a step a fine drag is worth. */
 	constexpr double FineScrubScale = 0.1;
+
+	/**
+	 * How much wider than the marks the opening shot is framed.
+	 *
+	 * THE MARKS ARE ORIGINS, NOT EXTENTS. Each is a nose gear or an axle, so the row's real
+	 * width is the span between them PLUS half an aeroplane at each end - and the widest here
+	 * is a 737 at 35.8 m across. A quarter again covers that on the yard's 185 m row and leaves
+	 * the outermost models clear of the frame edge rather than touching it.
+	 */
+	constexpr double YardFramingMargin = 1.25;
+
+	/**
+	 * The pitch band the YARD's camera uses, degrees - shallower at both ends than the
+	 * airport's 12..70.
+	 *
+	 * A MODEL YARD IS LOOKED AT, NOT PLANNED ON. FCameraRigLimits::MinPitch argues its 12 from
+	 * keeping the horizon on screen and its 70 from "laying an airport out", and the second
+	 * reason does not exist here: there is no plan to read, only models to look at from the
+	 * front. At the framing distance the airport's band gives about 45 degrees, which is a
+	 * view down onto the wings - the roofs of the aeroplanes, not their faces.
+	 *
+	 * NOT ZERO AT THE BOTTOM. Dead level collapses the row into one line and the models behind
+	 * hide the ones in front; four degrees separates them without reading as a look-down.
+	 */
+	constexpr double YardMinPitch = 4.0;
+	constexpr double YardMaxPitch = 28.0;
 }
 
 TArrayView<const FYardActionBinding> YardActions()
@@ -82,6 +108,10 @@ void AAnimYardController::BeginPlay()
 				"Re-run Tools/Python/build_model_yard.py to place one."));
 	}
 
+	// AIMED BEFORE THE CAMERA IS MADE, because CreateBuildCamera is what resets the rig and the
+	// reset is what reads the limits. The other order builds the camera from last frame's aim.
+	AimAtTheAircraft();
+
 	if (CameraComponent != nullptr)
 	{
 		CameraComponent->CreateBuildCamera(*this, YardSurfaceZ);
@@ -96,6 +126,62 @@ void AAnimYardController::BeginPlay()
 		Keys += FString::Printf(TEXT("\n    %-12s %s"), *Action.Key.GetDisplayName().ToString(), Action.Help);
 	}
 	UE_LOG(LogRoadBuild, Log, TEXT("Anim yard controller ready. WASD/QE to fly, middle-drag to turn.%s"), *Keys);
+}
+
+void AAnimYardController::AimAtTheAircraft()
+{
+	if (CameraComponent == nullptr || Yard() == nullptr)
+	{
+		return;
+	}
+
+	FBox2D Marks(ForceInit);
+	double HeadingDegrees = 0.0;
+	if (!Yard()->AircraftFraming(Marks, HeadingDegrees))
+	{
+		// Nothing driven to aim at. The rig's own default - the world origin - is as good an
+		// answer as exists, and saying so beats a camera pointed at a row that is not there.
+		UE_LOG(LogRoadBuild, Warning,
+			TEXT("Anim yard: no driven aircraft to aim the opening view at; using the origin."));
+		return;
+	}
+
+	FCameraRigLimits& Limits = CameraComponent->ViewLimits;
+
+	// ORBIT ABOUT THE MIDDLE OF THE ROW, so panning and rotating from the opening shot turn
+	// about what you are looking at rather than about a corner of it.
+	Limits.StartFocus = Marks.GetCenter();
+
+	// FACING THEM IS THE OPPOSITE OF THEIR HEADING. Yaw is the direction the camera LOOKS
+	// along, so looking at the noses of a row facing H means looking along H + 180 - and
+	// CameraLocation then backs the camera off the far side, which puts it in front of them.
+	// Derived from the models' own facing rather than assuming +X: nothing in the yard script
+	// rotates a model today, and a framing that silently depended on that would break quietly
+	// the day one does.
+	Limits.StartYaw = HeadingDegrees + 180.0;
+
+	// THE DISTANCE IS SOLVED FROM THE ROW AND THE LENS, not chosen. Half the row subtends half
+	// the horizontal field of view at exactly this range, so every model is in shot with the
+	// margin to spare - and adding a seventh aeroplane widens the shot by itself.
+	//
+	// THE LONGER SIDE OF THE MARKS IS THE ROW. It is a line of models, so its bounding box is
+	// long one way and near zero the other, whichever axis the row happens to run along.
+	const FVector2D Size = Marks.GetSize();
+	const double Span = FMath::Max(Size.X, Size.Y);
+	const double HalfFovRadians = FMath::DegreesToRadians(CameraComponent->FieldOfView * 0.5);
+	const double Fit = Span * 0.5 / FMath::Max(FMath::Tan(HalfFovRadians), KINDA_SMALL_NUMBER);
+	Limits.StartDistance = FMath::Max(Fit * YardFramingMargin, Limits.MinDistance);
+
+	// See YardMinPitch: the airport's band is argued from laying an airport out, which is not
+	// what happens here.
+	Limits.MinPitch = YardMinPitch;
+	Limits.MaxPitch = YardMaxPitch;
+
+	UE_LOG(LogRoadBuild, Log,
+		TEXT("Anim yard view: %.0f uu in front of %d m of aircraft centred on (%.0f, %.0f), "
+			"looking along %.0f degrees."),
+		Limits.StartDistance, FMath::RoundToInt(Span / 100.0),
+		Limits.StartFocus.X, Limits.StartFocus.Y, Limits.StartYaw);
 }
 
 void AAnimYardController::SetupInputComponent()

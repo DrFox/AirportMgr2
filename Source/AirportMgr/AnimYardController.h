@@ -84,6 +84,21 @@ public:
 	 */
 	void Do(EYardAction Action);
 
+	/**
+	 * Point the opening view at the row of aircraft, from in front of their noses.
+	 *
+	 * SETS THE CAMERA'S LIMITS AND MUST RUN BEFORE CreateBuildCamera, because that is what
+	 * calls FBuildCameraRig::Reset, and Reset is what reads StartFocus/StartYaw/StartDistance.
+	 *
+	 * WHY THIS EXISTS AT ALL: moving the level's PlayerStart does nothing here, which was
+	 * reported from play and is correct rather than broken. AAnimYardGameMode sets
+	 * DefaultPawnClass to null - the camera actor is the view target, and a pawn would only
+	 * take input away - so nothing is ever spawned at the PlayerStart, and the rig's own reset
+	 * put the focus on the world origin, which in this level is the empty strip BETWEEN the
+	 * two rows.
+	 */
+	void AimAtTheAircraft();
+
 	/** Which channel the caret is on, and therefore which one a scrub moves. */
 	EYardChannel Caret() const { return CaretChannel; }
 

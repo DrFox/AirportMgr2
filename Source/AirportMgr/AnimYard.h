@@ -78,6 +78,16 @@ struct FYardSubject
 
 	/** Radians, yaw from +X - the placed actor's own facing, kept so the row stays as authored. */
 	UPROPERTY() double Heading = 0.0;
+
+	/**
+	 * A ground vehicle rather than an aircraft, as the catalogue answered.
+	 *
+	 * FALSE FOR AN UNDRIVEN SUBJECT, which is not a claim that it is an aeroplane - nothing
+	 * resolved a rig for it, so nothing said either way. AircraftFraming only counts DRIVEN
+	 * subjects for exactly that reason; today the three undriven models are all vehicles, and
+	 * counting them as aircraft would drag the opening shot to the wrong row.
+	 */
+	UPROPERTY() bool bIsVehicle = false;
 };
 
 /**
@@ -167,6 +177,30 @@ public:
 
 	/** What is soloed, or null. */
 	const AActor* Solo() const { return SoloSource; }
+
+	/**
+	 * Where the driven AIRCRAFT stand and which way they face. False if none are driven.
+	 *
+	 * WHAT THE OPENING SHOT IS AIMED FROM, and derived rather than typed for the reason
+	 * build_model_yard.py measures its own layout: a camera aimed at coordinates copied out of
+	 * that script is a second statement of where the row is, and it goes stale the first time
+	 * a model is added to the row.
+	 *
+	 * MARKS ONLY, not mesh bounds. A mark is where the label is, and it is what the row was
+	 * spaced on; the models' own extents add up to roughly a quarter more, which the caller
+	 * covers with a margin rather than by loading every mesh to ask.
+	 */
+	bool AircraftFraming(FBox2D& OutMarks, double& OutHeadingDegrees) const;
+
+	/**
+	 * Forces a subject's kind - see FYardSubject::bIsVehicle.
+	 *
+	 * TEST ONLY, and it exists because the two kinds are told apart by the CATALOGUE's answer
+	 * rather than by the mesh: a test that dresses every model with the one rigged mesh in the
+	 * project cannot otherwise make a row of aircraft and a vehicle beside it, which is the
+	 * arrangement the framing has to get right.
+	 */
+	void SetSubjectIsVehicleForTest(const AActor* Source, bool bIsVehicle);
 
 	/**
 	 * The subject nearest this road-plane point, or null if the yard is empty.

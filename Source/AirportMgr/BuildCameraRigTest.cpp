@@ -132,7 +132,11 @@ bool FBuildCameraRigLimitsTest::RunTest(const FString& Parameters)
 		Rig.Reset(Limits);
 
 		TestEqual(TEXT("Reset also copies the limits"), Rig.MinDistance, 111.0);
-		TestTrue(TEXT("Focus snaps to the origin"), Rig.Focus.Equals(FVector2D::ZeroVector, 1e-9));
+		// THE AIRPORT IS UNCHANGED BY StartFocus EXISTING. Limits above never sets one, so it
+		// holds its default - and that default has to still be the origin, which is the value
+		// Reset hard-coded before the model yard's bench needed to aim somewhere else.
+		TestTrue(TEXT("with no StartFocus authored, Focus still snaps to the origin exactly as "
+			"it did before StartFocus existed"), Rig.Focus.Equals(FVector2D::ZeroVector, 1e-9));
 		TestEqual(TEXT("Distance snaps to StartDistance"), Rig.Distance, 4000.0, 1e-9);
 		TestEqual(TEXT("Yaw snaps to StartYaw"), Rig.Yaw, 30.0, 1e-9);
 	}
@@ -149,6 +153,21 @@ bool FBuildCameraRigLimitsTest::RunTest(const FString& Parameters)
 		FBuildCameraRig Rig;
 		Rig.Reset(Narrow);
 		TestEqual(TEXT("an out-of-range StartDistance is clamped to MinDistance"), Rig.Distance, 1000.0, 1e-9);
+	}
+
+	// 4. AN AUTHORED StartFocus IS WHERE THE RESET LANDS. The third of the starting pose, added
+	// for the model yard, whose row of aircraft stands nowhere near the world origin - see
+	// AAnimYardController::AimAtTheAircraft.
+	{
+		FCameraRigLimits Aimed;
+		Aimed.StartFocus = FVector2D(2500.0, -620.0);
+
+		FBuildCameraRig Rig;
+		Rig.Focus = FVector2D(500.0, -250.0);
+		Rig.Reset(Aimed);
+
+		TestTrue(TEXT("Focus snaps to the authored StartFocus, not to the origin"),
+			Rig.Focus.Equals(FVector2D(2500.0, -620.0), 1e-9));
 	}
 
 	return true;

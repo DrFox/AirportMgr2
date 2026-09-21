@@ -120,6 +120,7 @@ int32 AAnimYard::AdoptSubjects()
 
 				Subject.Agent = Agent;
 				Subject.Gear = Rig.Gear;
+				Subject.bIsVehicle = Rig.bIsVehicle;
 				++NewlyDriven;
 			}
 		}
@@ -167,6 +168,50 @@ void AAnimYard::SetSolo(const AActor* Source)
 	// PUSHED AT ONCE rather than left to the next Tick, so the row parks on the keypress. A
 	// frame of the old pose after a deliberate change reads as the key not having worked.
 	PushMotion();
+}
+
+bool AAnimYard::AircraftFraming(FBox2D& OutMarks, double& OutHeadingDegrees) const
+{
+	OutMarks = FBox2D(ForceInit);
+	OutHeadingDegrees = 0.0;
+
+	bool bAny = false;
+	for (const FYardSubject& Subject : SubjectList)
+	{
+		// DRIVEN AIRCRAFT ONLY. See FYardSubject::bIsVehicle - an undriven subject has no
+		// answer either way, and today all three of them are vehicles standing on the other
+		// row entirely.
+		if (Subject.Agent == nullptr || Subject.bIsVehicle)
+		{
+			continue;
+		}
+
+		OutMarks += Subject.Mark;
+
+		if (!bAny)
+		{
+			// THE FIRST ONE'S FACING SPEAKS FOR THE ROW. They are placed by one loop with one
+			// rotation, so averaging would produce the same answer more slowly - and if a row
+			// ever is fanned out, the first model's nose is a better thing to stand in front
+			// of than a mean nobody is pointing along.
+			OutHeadingDegrees = FMath::RadiansToDegrees(Subject.Heading);
+			bAny = true;
+		}
+	}
+
+	return bAny;
+}
+
+void AAnimYard::SetSubjectIsVehicleForTest(const AActor* Source, bool bIsVehicle)
+{
+	for (FYardSubject& Subject : SubjectList)
+	{
+		if (Subject.Source == Source)
+		{
+			Subject.bIsVehicle = bIsVehicle;
+			return;
+		}
+	}
 }
 
 const AActor* AAnimYard::NearestSubject(FVector2D Point) const

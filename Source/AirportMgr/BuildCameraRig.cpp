@@ -11,7 +11,7 @@ void FBuildCameraRig::ApplyLimits(const FCameraRigLimits& Limits)
 void FBuildCameraRig::Reset(const FCameraRigLimits& Limits)
 {
 	ApplyLimits(Limits);
-	Focus = FVector2D::ZeroVector;
+	Focus = Limits.StartFocus;
 	Distance = FMath::Clamp(Limits.StartDistance, MinDistance, MaxDistance);
 	Yaw = Limits.StartYaw;
 }
