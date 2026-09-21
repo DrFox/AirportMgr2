@@ -238,6 +238,22 @@ struct AIRSIDE_API FGuidelineEdge
 	UPROPERTY() FGuidelineEndRef EndRefA;
 	UPROPERTY() FGuidelineEndRef EndRefB;
 
+	/**
+	 * Sampled length of Control's curve between A and B, in uu. Written by
+	 * URoadNetwork::AddGuidelineEdge, RelinkGuidelineEdge and SplitGuidelineEdge - the only
+	 * three places this edge's endpoints or Control can change - from GuidelineGeom::Length,
+	 * which samples exactly as SampleGuideline itself does (#171).
+	 *
+	 * A CACHE, not a second measurement: "the guideline graph samples ONCE" (CLAUDE.md) means
+	 * one evaluator produces the number the search costs, the overlay draws and the follower
+	 * walks, not that the number is recomputed by hand at every one of those call sites. Before
+	 * this existed, RouteSearch's EdgeCost re-sampled and re-measured this same curve on EVERY
+	 * relaxation of every edge - a node can be relaxed several times before Closed catches it -
+	 * so a route search paid for the same polyline again and again for geometry that cannot
+	 * have changed since the edge was last written.
+	 */
+	UPROPERTY() double Length = 0.0;
+
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
 };

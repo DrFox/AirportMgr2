@@ -8,16 +8,20 @@
 
 namespace
 {
-	/** Sampled length plus the query's congestion charge. Negative when the edge cannot be
-	 *  measured, which is how the search skips it. */
-	double EdgeCost(const URoadNetwork& Network, FGuidelineEdgeId EdgeId, const FRouteQuery& Query)
+	/**
+	 * Cached length plus the query's congestion charge.
+	 *
+	 * Reads FGuidelineEdge::Length rather than sampling (#171): this used to call
+	 * Network.SampleGuideline and measure the resulting polyline on EVERY relaxation of every
+	 * edge, and a node can be relaxed several times before Closed catches it - so the same
+	 * curve was sampled and measured again and again for geometry that had not changed since
+	 * URoadNetwork last wrote it. Takes the edge by reference because every call site has
+	 * already looked it up to check A != B; a second lookup here would just be the same
+	 * allocation-per-relaxation complaint wearing a different hat.
+	 */
+	double EdgeCost(const FGuidelineEdge& Edge, FGuidelineEdgeId EdgeId, const FRouteQuery& Query)
 	{
-		TArray<FVector2D> Points;
-		if (!Network.SampleGuideline(EdgeId, Points))
-		{
-			return -1.0;
-		}
-		double Length = GuidelineGeom::PolylineLength(Points);
+		double Length = Edge.Length;
 
 		// Congestion: what others hold on this edge, weighted. Additive and non-negative,
 		// so the straight-line heuristic stays admissible and the first pop stays optimal.
@@ -76,9 +80,18 @@ namespace
 			return A.Key < B.Key;
 		};
 
+		// Sized off the graph up front (#171): Best, Arrived and Closed can each hold every
+		// node the search settles, and a search over a real airport commonly does, so growing
+		// each of them by rehashing one node at a time paid for several reallocations a call
+		// that reserved once would not.
+		const int32 NumNodes = Network.GetGuidelineNodes().Num();
+
 		TMap<FGuidelineNodeId, double> Best;
+		Best.Reserve(NumNodes);
 		TMap<FGuidelineNodeId, FRouteStep> Arrived;
+		Arrived.Reserve(NumNodes);
 		TSet<FGuidelineNodeId> Closed;
+		Closed.Reserve(NumNodes);
 
 		// Whether a runway's chain is in use - held by somebody other than the querier, or
 		// occupied by the querier's own body (ERunwayAvoidance::Held says why both) - once
@@ -99,6 +112,7 @@ namespace
 			return bHeld;
 		};
 		TArray<TPair<double, FGuidelineNodeId>> Open;
+		Open.Reserve(NumNodes);
 
 		Best.Add(Query.Start, 0.0);
 		Open.HeapPush(TPair<double, FGuidelineNodeId>(Heuristic(StartNode->Position), Query.Start), ByCost);
@@ -136,17 +150,24 @@ namespace
 			// Traffic class and one-way direction are already applied here - this is the
 			// network's own answer to "what may leave this node", so the search never
 			// re-implements the rule and cannot drift from it.
-			for (const FGuidelineEdgeId EdgeId : Network.GetOutgoingGuidelines(At, Query.Class))
+			//
+			// ForEachOutgoingGuideline, not GetOutgoingGuidelines (#171): the array
+			// GetOutgoingGuidelines built was a fresh TArray thrown away at the end of every
+			// one of these node expansions, and a route search over a real airport expands
+			// many nodes. Each `continue` below becomes a `return` from this visitor - the
+			// same "skip this edge" the loop meant, since there is no outer loop left to
+			// continue.
+			Network.ForEachOutgoingGuideline(At, Query.Class, [&](FGuidelineEdgeId EdgeId)
 			{
 				const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
 				if (Edge == nullptr || Edge->A == Edge->B)
 				{
-					continue;
+					return;
 				}
 
 				if (Query.BannedEdge.IsSet() && EdgeId == Query.BannedEdge)
 				{
-					continue;
+					return;
 				}
 
 				// A banned NODE bans every edge INTO it, whichever arm - the deadlock replan's
@@ -155,7 +176,7 @@ namespace
 				if (Query.BannedNode.IsSet()
 					&& ((Edge->B == At ? Edge->A : Edge->B) == Query.BannedNode))
 				{
-					continue;
+					return;
 				}
 
 				// Runway-derived edges are the strip itself. See ERunwayAvoidance for who may
@@ -164,32 +185,32 @@ namespace
 					&& Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom)
 					&& (Query.AvoidRunways == ERunwayAvoidance::All || IsRunwayHeld(Edge->DerivedFrom)))
 				{
-					continue;
+					return;
 				}
 
 				if (!bIgnoreWingspan && ExceedsWingspan(*Edge, Query.Wingspan))
 				{
-					continue;
+					return;
 				}
 
-				const double Cost = EdgeCost(Network, EdgeId, Query);
+				const double Cost = EdgeCost(*Edge, EdgeId, Query);
 				if (Cost < 0.0)
 				{
-					continue;
+					return;
 				}
 
 				const bool bReversed = (Edge->B == At);
 				const FGuidelineNodeId Next = bReversed ? Edge->A : Edge->B;
 				if (Closed.Contains(Next))
 				{
-					continue;
+					return;
 				}
 
 				const double Tentative = Reached + Cost;
 				const double* Known = Best.Find(Next);
 				if (Known != nullptr && *Known <= Tentative)
 				{
-					continue;
+					return;
 				}
 
 				Best.Add(Next, Tentative);
@@ -209,7 +230,7 @@ namespace
 				const FGuidelineNode* NextNode = Network.GetGuidelineNode(Next);
 				const double Estimate = NextNode != nullptr ? Heuristic(NextNode->Position) : 0.0;
 				Open.HeapPush(TPair<double, FGuidelineNodeId>(Tentative + Estimate, Next), ByCost);
-			}
+			});
 		}
 
 		if (Plan.Result != ERouteResult::Found)
