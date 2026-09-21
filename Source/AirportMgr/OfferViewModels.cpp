@@ -36,17 +36,34 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 	UE_MVVM_SET_PROPERTY_VALUE(TypeName, Live->TypeName);
 	UE_MVVM_SET_PROPERTY_VALUE(Eta, DescribeEta(Live->ArrivesAt, Clock.Now()));
 
-	// THE REAL PLAN, with the live occupancy. The greyed-out reason is the sentence the
-	// arrival itself would print, because it is the same refusal.
-	const EArrivalRefusal Why = Board.WhyNotAcceptable(Traffic, Network, *Live);
-	UE_MVVM_SET_PROPERTY_VALUE(bAcceptable, Why == EArrivalRefusal::None);
+	// THE REAL PLAN IS EXPENSIVE (issue #169): a full ArrivalPlanner::Plan is a route search
+	// over every stand, then every runway exit, so it is only re-run when one of the three
+	// things it could possibly depend on has moved since the last time - see this class's own
+	// comment on the three revisions below. Everything else on this row (Eta above) stays
+	// O(1) and keeps updating every call regardless.
+	const uint32 BoardNow = Board.Revision();
+	const uint32 GuidelineNow = Network.GetGuidelineRevision();
+	const uint32 OccupancyNow = Traffic.OccupancyRevision();
+	if (!bWhyComputed || BoardNow != BoardRevisionAt || GuidelineNow != GuidelineRevisionAt
+		|| OccupancyNow != OccupancyRevisionAt)
+	{
+		// THE REAL PLAN, with the live occupancy. The greyed-out reason is the sentence the
+		// arrival itself would print, because it is the same refusal.
+		const EArrivalRefusal Why = Board.WhyNotAcceptable(Traffic, Network, *Live);
+		UE_MVVM_SET_PROPERTY_VALUE(bAcceptable, Why == EArrivalRefusal::None);
 
-	// THE REASON-ONLY OVERLOAD, not a plan built by hand just to carry Why - ToastStackWidget
-	// already reads it this way, and a plan with every other field default-constructed is not
-	// a plan, it is Why wearing a bigger struct.
-	UE_MVVM_SET_PROPERTY_VALUE(Refusal, Why == EArrivalRefusal::None
-		? FText::GetEmpty()
-		: FText::FromString(ArrivalPlanner::DescribeRefusal(Why)));
+		// THE REASON-ONLY OVERLOAD, not a plan built by hand just to carry Why - ToastStackWidget
+		// already reads it this way, and a plan with every other field default-constructed is not
+		// a plan, it is Why wearing a bigger struct.
+		UE_MVVM_SET_PROPERTY_VALUE(Refusal, Why == EArrivalRefusal::None
+			? FText::GetEmpty()
+			: FText::FromString(ArrivalPlanner::DescribeRefusal(Why)));
+
+		BoardRevisionAt = BoardNow;
+		GuidelineRevisionAt = GuidelineNow;
+		OccupancyRevisionAt = OccupancyNow;
+		bWhyComputed = true;
+	}
 }
 
 void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraffic,
@@ -57,35 +74,47 @@ void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraf
 	Network = const_cast<URoadNetwork*>(&InNetwork);
 	Clock = const_cast<USimClock*>(&InClock);
 
-	const TArray<UFlight*> Pending = InBoard.Offers();
-
-	// Rows are rebuilt only when the SET of offers changed; otherwise the existing rows are
-	// refreshed in place. A row object replaced every tick would drop the list view's
-	// selection and re-run every binding for no reason.
-	bool bSameFlights = Rows.Num() == Pending.Num();
-	if (bSameFlights)
+	// THE ROW SET is rebuilt only when the BOARD's own revision has moved - added, accepted,
+	// declined or expired (issue #169). InBoard.Offers() allocates a fresh TArray on every
+	// call, and the diff against Rows below was the same cost again; gating both on
+	// Board.Revision() means a quiet inbox does neither, every frame, for as long as nothing
+	// has happened - which is most frames a player is simply looking at the panel.
+	const uint32 BoardNow = InBoard.Revision();
+	if (!bRowsValid || BoardNow != BoardRevisionAt)
 	{
-		for (int32 Index = 0; Index < Rows.Num(); ++Index)
+		const TArray<UFlight*> Pending = InBoard.Offers();
+
+		// Rows are rebuilt only when the SET of offers changed; otherwise the existing rows are
+		// refreshed in place. A row object replaced every tick would drop the list view's
+		// selection and re-run every binding for no reason.
+		bool bSameFlights = Rows.Num() == Pending.Num();
+		if (bSameFlights)
 		{
-			if (Rows[Index] == nullptr || Rows[Index]->Flight.Get() != Pending[Index])
+			for (int32 Index = 0; Index < Rows.Num(); ++Index)
 			{
-				bSameFlights = false;
-				break;
+				if (Rows[Index] == nullptr || Rows[Index]->Flight.Get() != Pending[Index])
+				{
+					bSameFlights = false;
+					break;
+				}
 			}
 		}
-	}
 
-	if (!bSameFlights)
-	{
-		Rows.Reset();
-		Offers.Reset();
-		for (UFlight* Each : Pending)
+		if (!bSameFlights)
 		{
-			UOfferViewModel* Row = NewObject<UOfferViewModel>(this);
-			Row->Flight = Each;
-			Rows.Add(Row);
-			Offers.Add(Row);
+			Rows.Reset();
+			Offers.Reset();
+			for (UFlight* Each : Pending)
+			{
+				UOfferViewModel* Row = NewObject<UOfferViewModel>(this);
+				Row->Flight = Each;
+				Rows.Add(Row);
+				Offers.Add(Row);
+			}
 		}
+
+		BoardRevisionAt = BoardNow;
+		bRowsValid = true;
 	}
 
 	for (TObjectPtr<UOfferViewModel>& Row : Rows)

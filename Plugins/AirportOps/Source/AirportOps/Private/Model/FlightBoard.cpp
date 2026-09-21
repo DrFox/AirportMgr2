@@ -49,7 +49,7 @@ void UFlightBoard::AddOffer(USimClock& Clock, UFlight* Offer)
 	}
 	Flights.Add(Offer);
 	ScheduleExpiry(Clock, *Offer);
-	OnChanged.Broadcast();
+	++RevisionCount;
 }
 
 void UFlightBoard::ScheduleExpiry(USimClock& Clock, UFlight& Offer)
@@ -70,7 +70,7 @@ void UFlightBoard::ScheduleExpiry(USimClock& Clock, UFlight& Offer)
 		{
 			Due->Phase = EFlightPhase::Expired;
 			UE_LOG(LogAirportOps, Log, TEXT("Offer %d lapsed unanswered"), Due->Id);
-			OnChanged.Broadcast();
+			++RevisionCount;
 		}
 	});
 	ExpiryHandles.Add(Offer.Id, Handle);
@@ -110,7 +110,7 @@ bool UFlightBoard::Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d accepted: stand %d held, landing at %.0f"),
 		Flight.Id, Flight.Stand.Index, Flight.ArrivesAt);
-	OnChanged.Broadcast();
+	++RevisionCount;
 	return true;
 }
 
@@ -160,14 +160,14 @@ void UFlightBoard::DispatchNow(UGroundTraffic& Traffic, UFlight& Flight)
 		// does not exist yet; saying so is what stops it being a silent disappearance.
 		UE_LOG(LogAirportOps, Warning,
 			TEXT("Flight %d could not be dispatched at its ETA; it keeps no stand"), Flight.Id);
-		OnChanged.Broadcast();
+		++RevisionCount;
 		return;
 	}
 
 	Flight.AgentId = Traffic.GetNewestAgentId();
 	Flight.Phase = EFlightPhase::Landing;
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d dispatched as agent %d"), Flight.Id, Flight.AgentId);
-	OnChanged.Broadcast();
+	++RevisionCount;
 }
 
 void UFlightBoard::Decline(USimClock& Clock, UFlight& Flight)
@@ -179,12 +179,15 @@ void UFlightBoard::Decline(USimClock& Clock, UFlight& Flight)
 	CancelExpiry(Clock, Flight);
 	Flight.Phase = EFlightPhase::Declined;
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d declined"), Flight.Id);
-	OnChanged.Broadcast();
+	++RevisionCount;
 }
 
 EArrivalRefusal UFlightBoard::WhyNotAcceptable(const UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const UFlight& Flight) const
 {
+	// #169: counted before the search runs, not after - GetWhyNotAcceptableCallsForTest exists
+	// to measure exactly how often this expensive call is reached, whatever it returns.
+	++WhyNotAcceptableCallsForTest;
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, Flight.ApproachFocus, Flight.Airframe,
 		&Traffic.GetOccupancy());
 	return Plan.Why;
@@ -339,7 +342,7 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 		PostParkingFee(Now, *Flight);
 	}
 
-	OnChanged.Broadcast();
+	++RevisionCount;
 }
 
 void UFlightBoard::OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network)

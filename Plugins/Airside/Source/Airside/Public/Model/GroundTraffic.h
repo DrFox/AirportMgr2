@@ -656,6 +656,36 @@ public:
 	const FTrafficOccupancy& GetOccupancy() const { return Occupancy; }
 
 	/**
+	 * Bumped whenever occupancy changes in a way ArrivalPlanner::Plan could answer
+	 * differently for - a stand held or freed, a runway taken or cleared (issue #169).
+	 *
+	 * NOT every Occupancy mutation: a taxiing agent's edge and node claims churn every tick
+	 * (Arbitrate re-claims the whole table each frame) and Plan never reads them - only
+	 * IsHeld on a stand's PoseNode and IsAnyHeld on RunwaySurfaces do. The sites that bump
+	 * this are exactly the ones that can move one of those two answers: Admit/RetireAgent/
+	 * ClearAgents (an agent's claims appear or vanish wholesale), RedirectAgent (frees the
+	 * old goal, claims the new one), HoldStand/ReleaseHold (AirportOps's own reservation,
+	 * with no agent involved at all), and AdvanceOnce's LinedUp/Airborne/removal/generic
+	 * phase-changed branches (a departure claims or releases the runway chain it holds -
+	 * see AdvanceOnce's own comment on why Airborne is not even a phase change and so is not
+	 * covered by watching phase alone).
+	 *
+	 * SAME IDIOM AS ULedger::Revision AND URoadNetwork::GetGuidelineRevision: a plain
+	 * session counter, not a UPROPERTY - a poller's cheapest question is "has anything
+	 * changed since the number I remember", and this is the number for occupancy.
+	 *
+	 * WHAT THIS DOES NOT COVER: a taxiing (not landing or departing) agent crossing a live
+	 * runway holds its surface through the same per-tick claim pass as an edge, with no
+	 * discrete claim/release event of its own - see FClaimPass::Run (TrafficClaims.cpp).
+	 * A cache keyed on this revision can therefore under-report "runway in use" for the
+	 * width of one such crossing. Accepted rather than chased: it self-corrects on the very
+	 * next bump (arrivals, departures and stand holds are the common case in a live
+	 * airport), and ArrivalPlanner::Plan itself is unaffected - only a viewmodel's CACHE of
+	 * its answer would read stale, for at most the length of one crossing.
+	 */
+	uint32 OccupancyRevision() const { return OccupancyRevisionCount; }
+
+	/**
 	 * The agent currently holding Node, or 0 if nobody is (0 is never a real agent id - see
 	 * FRoadAgent::Id). Wraps FTrafficResource::OfNode and IsHeld's ExcludingAgent=0 idiom
 	 * ("exclude no real agent") so a caller outside Model/ can ask "who is here" without
@@ -890,6 +920,10 @@ private:
 	 * correct thing.
 	 */
 	bool bStandsMayHaveFreed = false;
+
+	/** See OccupancyRevision. Not a UPROPERTY, the same reason LastStepsForTest above is
+	 *  not: a session counter about calls made, not state a save would ever need. */
+	uint32 OccupancyRevisionCount = 0;
 
 	// ResolveDeadlocks, CanReplanAtBlockedStep, EReResolve, ReResolvePlan and SpliceReplan ALL
 	// MOVED to FDeadlockResolver / FPlanReResolver (issue #84) - both declared above, near

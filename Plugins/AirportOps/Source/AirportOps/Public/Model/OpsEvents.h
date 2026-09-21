@@ -27,8 +27,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsNotification, const FString&, Te
  * contract events arrive with the systems that raise them; declaring them now would be a
  * list nothing consumes, which is the bug CLAUDE.md names three times.
  *
- * NOT EVERY CHANGE BELONGS HERE, though - see UFlightBoard::OnChanged's own comment for the
- * one deliberate exception: a coarse "something changed, re-read me" signal a C++ viewmodel
+ * NOT EVERY CHANGE BELONGS HERE, though - see UFlightBoard::Revision's own comment for the
+ * one deliberate exception: a coarse "something changed, re-read me" counter a C++ viewmodel
  * polls off of is not an outcome, and putting it here would be a discrete-events bus growing
  * a member that carries no information about what happened.
  */

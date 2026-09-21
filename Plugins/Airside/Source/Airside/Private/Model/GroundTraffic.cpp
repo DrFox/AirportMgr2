@@ -271,6 +271,10 @@ int32 UGroundTraffic::Admit(FRoadAgent&& Agent)
 	// Broadcast AFTER the add, so a listener that spawns the view can find the agent it is
 	// being told about - see UAirsideTraffic::SpawnView, which reads LastMotion off it.
 	OnAgentPhaseChanged.Broadcast(Id, EAgentPhase::Gone, Born);
+	// #169: a new agent's dispatch claims its goal node in this same call, before this
+	// function returns - see OccupancyRevision's own comment for why one bump per call
+	// covers every claim made inside it.
+	++OccupancyRevisionCount;
 	return Id;
 }
 
@@ -432,6 +436,10 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	{
 		OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
 	}
+	// #169: UNCONDITIONAL, unlike the broadcast above - the old goal was freed and the new one
+	// claimed (ClaimGoalNodeAtDispatch, above) whether or not the phase itself moved, and a
+	// Parked -> Taxiing redirect is the common case where it does not.
+	++OccupancyRevisionCount;
 	return true;
 }
 
@@ -562,6 +570,9 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		*UEnum::GetValueAsString(Agent.Airframe.PushbackNeed));
 
 	OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
+	// #169: the push claims the taxi-out goal node (ClaimGoalNodeAtDispatch, above) in this
+	// same call.
+	++OccupancyRevisionCount;
 	return EDepartureRefusal::None;
 }
 
@@ -611,6 +622,7 @@ bool UGroundTraffic::RetireAgent(int32 AgentId)
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d retired"), AgentId);
 	OnAgentPhaseChanged.Broadcast(AgentId, Before, EAgentPhase::Gone);
+	++OccupancyRevisionCount;   // #169: ReleaseAll, above, may have freed a stand or a runway.
 	return true;
 }
 
@@ -625,6 +637,9 @@ void UGroundTraffic::ClearAgents()
 
 	Agents.Reset();
 	Occupancy.Clear();
+	// #169: AFTER Clear(), not folded into the loop above - the loop only announces; this is
+	// the point every claim actually goes.
+	++OccupancyRevisionCount;
 }
 
 bool UGroundTraffic::HoldStand(int32 HolderId, FGuidelineNodeId PoseNode)
@@ -638,12 +653,22 @@ bool UGroundTraffic::HoldStand(int32 HolderId, FGuidelineNodeId PoseNode)
 	// ReleaseHold's use of ReleaseReservations depends on this staying false.
 	const FTrafficClaim Claim = FTrafficClaim::Make(HolderId, FTrafficResource::OfNode(PoseNode), /*bOccupied*/ false);
 	FTrafficClaim Blocker;
-	return Occupancy.TryClaim(Claim, Blocker) == EClaimResult::Granted;
+	const bool bGranted = Occupancy.TryClaim(Claim, Blocker) == EClaimResult::Granted;
+	if (bGranted)
+	{
+		// #169: no agent and no phase change is involved in an AirportOps hold, so nothing
+		// else would ever bump this for it.
+		++OccupancyRevisionCount;
+	}
+	return bGranted;
 }
 
 void UGroundTraffic::ReleaseHold(int32 HolderId)
 {
 	Occupancy.ReleaseReservations(HolderId);
+	// #169: unconditional - releasing a hold nobody made is harmless (see ReleaseReservations's
+	// own comment) and a caller that just wants to be sure has no cheaper way to ask.
+	++OccupancyRevisionCount;
 }
 
 bool UGroundTraffic::IsStandHeld(FGuidelineNodeId PoseNode, int32 ExcludingHolder) const
@@ -726,6 +751,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			// Broadcast AFTER the removal so a listener that asks GetAgentCount sees the
 			// agent already gone, which is what "To == Gone" promises.
 			OnAgentPhaseChanged.Broadcast(Id, Before, EAgentPhase::Gone);
+			++OccupancyRevisionCount;   // #169: ReleaseAll, above, may have freed a stand or a runway.
 			continue;
 		}
 
@@ -794,6 +820,12 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 						Id, Blocker.AgentId, Segment.Index);
 				}
 			}
+			// #169: the runway is now held, whether or not every segment's claim above was
+			// Granted - see ArrivalPlanner::Plan's own RunwayOccupied check, which this is the
+			// production source of. NOT covered by the phase-changed broadcast at the bottom
+			// of this loop: this class's own comment on this switch says why Departing before
+			// and after this event is not a phase change at all.
+			++OccupancyRevisionCount;
 			break;
 
 		case EAgentEvent::Parked:
@@ -829,6 +861,9 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 				Agent.RunwayHeld.Reset();
 				Agent.EndCrossing();
 				UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Id);
+				// #169: the mirror of LinedUp's bump, above, and for the same reason - Departing
+				// before and after Airborne, so the phase-changed broadcast below never fires.
+				++OccupancyRevisionCount;
 			}
 			break;
 
@@ -853,6 +888,12 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 		if (Agent.Phase != Before)
 		{
 			OnAgentPhaseChanged.Broadcast(Id, Before, Agent.Phase);
+			// #169: covers the Parked handover above (Pass.ClaimGoalNode claimed the stand
+			// earlier in this same iteration) and every other phase change that can move an
+			// arrival's answer - Arriving ending, a departure starting its push. LinedUp and
+			// Airborne bump for themselves, above, because they are the one case a phase change
+			// does NOT accompany the occupancy change.
+			++OccupancyRevisionCount;
 		}
 	}
 
