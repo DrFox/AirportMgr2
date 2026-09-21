@@ -7,6 +7,7 @@
 #include "Model/ArrivalPlanner.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RouteSearch.h"
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -108,6 +109,45 @@ bool FArrivalPlannerEarliestExitWinsTest::RunTest(const FString& Parameters)
 			Along <= 0.0 && Along >= -6000.0 - 1.0 && FMath::Abs(ExitNode->Position.Y) < 1.0);
 	}
 
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// (c2) #190, deferred from #171/#201: Plan's own exit loop calls ChooseStand once PER EXIT,
+// and ChooseStand itself now runs one multi-goal search regardless of stand count - so a
+// two-exit airport with several stands must cost exactly two full graph searches, not
+// two-times-stand-count the old per-stand loop did.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalPlannerSearchCountTest,
+	"Airside.Model.ArrivalPlanner.PlanSearchCount",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalPlannerSearchCountTest::RunTest(const FString& Parameters)
+{
+	// SAME EXIT TOPOLOGY, different stand counts - rather than a hardcoded expected count,
+	// because Plan's own exit loop stops at the first FORWARD exit it finds (see Plan's own
+	// comment) and exactly how many exits that visits is a fact about the exit geometry, not
+	// something this test should have to re-derive. What #190 promises is narrower and
+	// exactly measurable: the search count must not grow with the number of STANDS.
+	const FAirframe Airframe = TestAirframes::Piper();
+
+	const FTestAirport OneStand = FTestAirport::Build(Airframe, { .StandCount = 1, .ExitCount = 2 });
+	RouteSearch::ResetSearchCallCountForTest();
+	const FArrivalPlan PlanOne = ArrivalPlanner::Plan(*OneStand.Net, OneStand.Threshold, Airframe);
+	const int32 SearchesWithOneStand = RouteSearch::SearchCallCountForTest();
+
+	const FTestAirport SixStands = FTestAirport::Build(Airframe, { .StandCount = 6, .ExitCount = 2 });
+	RouteSearch::ResetSearchCallCountForTest();
+	const FArrivalPlan PlanSix = ArrivalPlanner::Plan(*SixStands.Net, SixStands.Threshold, Airframe);
+	const int32 SearchesWithSixStands = RouteSearch::SearchCallCountForTest();
+
+	if (!TestTrue(TEXT("both airports accept the arrival"), PlanOne.IsValid() && PlanSix.IsValid()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("at least one search ran (the exit loop found a stand)"), SearchesWithOneStand > 0);
+	TestEqual(TEXT("the search count does not grow with the number of stands - #190's whole point"),
+		SearchesWithSixStands, SearchesWithOneStand);
 	return true;
 }
 
