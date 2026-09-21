@@ -31,6 +31,62 @@ namespace
 	}
 
 	/**
+	 * Axis-aligned box around a guideline edge's three control points (its two ends and its
+	 * Control) - always CONTAINING, because a quadratic Bezier never leaves the convex hull of
+	 * the points that define it, and never exact, because the curve does not fill the hull.
+	 *
+	 * FOR REJECTING AN EDGE BEFORE PAYING FOR URoadNetwork::SampleGuideline, which walks the
+	 * whole polyline and heap-allocates it (#177): every joinable edge in the network used to be
+	 * sampled by every link's own Find call, so an airport with a hundred taxiways nowhere near a
+	 * given stand paid for all hundred on each of that stand's entries. This box is the cheap
+	 * question "could the curve possibly be closer than Reach", asked with three subtractions
+	 * instead of a walk.
+	 */
+	struct FEdgeBounds
+	{
+		FVector2D Min;
+		FVector2D Max;
+	};
+
+	FEdgeBounds BoundsOf(const FVector2D& A, const FVector2D& Control, const FVector2D& B)
+	{
+		FEdgeBounds Bounds;
+		Bounds.Min = FVector2D(FMath::Min3(A.X, Control.X, B.X), FMath::Min3(A.Y, Control.Y, B.Y));
+		Bounds.Max = FVector2D(FMath::Max3(A.X, Control.X, B.X), FMath::Max3(A.Y, Control.Y, B.Y));
+		return Bounds;
+	}
+
+	/**
+	 * Squared distance from Point to the nearest point OF the box - zero when Point is inside
+	 * it. Squared so the caller compares against a squared reach and never pays for a sqrt on an
+	 * edge it is about to reject anyway.
+	 */
+	double DistSqrToBounds(const FVector2D& Point, const FEdgeBounds& Bounds)
+	{
+		const double Dx = FMath::Max(Bounds.Min.X - Point.X, FMath::Max(0.0, Point.X - Bounds.Max.X));
+		const double Dy = FMath::Max(Bounds.Min.Y - Point.Y, FMath::Max(0.0, Point.Y - Bounds.Max.Y));
+		return Dx * Dx + Dy * Dy;
+	}
+
+	/**
+	 * True when Origin could not possibly reach Edge's curve within Best - so the caller may
+	 * skip sampling it outright.
+	 *
+	 * SAFE FOR A RAY TOO, not just proximity, because Dir is always unit length here: the point a
+	 * ray actually hits is Origin + Dir * AlongRay, so the Euclidean distance from Origin to that
+	 * point equals AlongRay exactly, and the box - being a superset of the curve - can only be
+	 * NEARER to Origin than that point is. A box the ray could not reach within Best therefore
+	 * proves the true hit, if any, is no closer than Best either, which is exactly the bound the
+	 * per-point rejection just below already enforces; this only avoids paying to compute it.
+	 */
+	bool CannotReachWithin(const FVector2D& Origin, const FGuidelineNode& A,
+		const FGuidelineEdge& Edge, const FGuidelineNode& B, double Best)
+	{
+		const FEdgeBounds Bounds = BoundsOf(A.Position, Edge.Control, B.Position);
+		return DistSqrToBounds(Origin, Bounds) >= Best * Best;
+	}
+
+	/**
 	 * Ray against one segment. OutAlongRay is in uu; OutAlongSegment is a 0..1 fraction.
 	 *
 	 * A ray, not a line: a lead-in points one way, and a guideline BEHIND the stand is
@@ -73,6 +129,21 @@ bool FRayLinkFinder::Find(const URoadNetwork& Network, const FPendingLink& Link,
 	{
 		const FGuidelineEdge& Edge = Edges[Index];
 		if (!IsJoinable(Edge, Link, AnchorNodes))
+		{
+			continue;
+		}
+
+		const FGuidelineNode* NodeA = Network.GetGuidelineNode(Edge.A);
+		const FGuidelineNode* NodeB = Network.GetGuidelineNode(Edge.B);
+		if (NodeA == nullptr || NodeB == nullptr)
+		{
+			continue;
+		}
+
+		// REJECTED BEFORE SAMPLING, for #177 - see CannotReachWithin. Best tightens as a
+		// nearer edge is found, so this gets MORE aggressive over the loop, exactly like the
+		// per-point AlongRay test a few lines down.
+		if (CannotReachWithin(Link.At, *NodeA, Edge, *NodeB, Best))
 		{
 			continue;
 		}
@@ -129,6 +200,22 @@ bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink&
 	{
 		const FGuidelineEdge& Edge = Edges[Index];
 		if (!IsJoinable(Edge, Link, AnchorNodes))
+		{
+			continue;
+		}
+
+		const FGuidelineNode* NodeA = Network.GetGuidelineNode(Edge.A);
+		const FGuidelineNode* NodeB = Network.GetGuidelineNode(Edge.B);
+		if (NodeA == nullptr || NodeB == nullptr)
+		{
+			continue;
+		}
+
+		// REJECTED BEFORE SAMPLING, for #177: this finder used to sample EVERY joinable edge
+		// in the network on EVERY call, so a stand's four declared entries each paid for a full
+		// scan of every taxiway and every other stand's lane on the airport, almost none of
+		// which could ever be within ServiceLinkRadius. See CannotReachWithin.
+		if (CannotReachWithin(Link.At, *NodeA, Edge, *NodeB, Best))
 		{
 			continue;
 		}
