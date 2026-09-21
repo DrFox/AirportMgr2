@@ -818,6 +818,96 @@ def import_one(spec):
     return ok
 
 
+def content_file(package):
+    """The .uasset a /Game/ package path names, as an absolute file on disk.
+
+    HERE SINCE 2026-09-21, having been import_models.py's private helper. Two callers now:
+    already_imported() asks whether a model is present, sweep_orphan_materials() asks whether
+    a delete actually happened. Both distrust the asset registry for the same recorded reason.
+    """
+    root = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_content_dir())
+    return os.path.join(root, package[len("/Game/"):].replace("/", os.sep) + ".uasset")
+
+
+def sweep_orphan_materials(roots, keep_prefixes=("/Game/Materials/Fleet",)):
+    """Delete the per-asset materials rebuild_fleet_materials() just orphaned. Returns the count.
+
+    WHY THESE EXIST. Interchange generates one full UMaterial per glTF material on every
+    import - about 48 KB each, carrying the entire glTF uber-graph (iridescence, anisotropy,
+    normals, occlusion, specular, UV transforms) to express three constants. Material
+    generation is left ON deliberately, because the slot NAMES come from that pass and they
+    are what the remap matches on. So every import makes them, and every rebuild orphans them.
+
+    HERE, AND CALLED FROM import_models.py, SINCE 2026-09-21. The sweep existed as
+    Tools/Python/clean_orphan_materials.py and had to be REMEMBERED, which is the same shape
+    of bug rebuild_fleet_materials' own comment argues against one function up: "that is why
+    it lives in the mechanism rather than in a habit ... nothing errors and nothing looks
+    wrong, which is exactly why it has to be automatic". It was not automatic, and plane7
+    shipped its seven to main in PR #225 - 336 KB of dead uber-graph, referenced by nothing,
+    in the only populated Materials/ folder in the fleet.
+
+    NOTHING IS DELETED ON THE STRENGTH OF BEING IN THE RIGHT FOLDER. Each candidate goes only
+    if find_package_referencers_for_asset returns nothing for it, because the failure mode of
+    getting this wrong is an asset that renders as the default grey and a mesh slot that can
+    only be repaired by re-importing. A material still worn by something is reported and kept.
+
+    REFERENCERS ARE PACKAGE-LEVEL. That call answers "which packages point at this one", so a
+    material referenced only by its own package reads as unreferenced, which is what we want.
+    A redirector left by an earlier rename COUNTS as a referencer, so run this after fixing up
+    redirectors if any rename has happened, or it reports a false positive and keeps an asset
+    that is genuinely dead.
+
+    AND THE DELETE IS CHECKED ON DISK. Both headless delete APIs report success while writing
+    nothing - see already_imported() above for the day one of them "cleared 3 asset(s)" that
+    were still there. The return value is not the evidence; the absent file is.
+    """
+    def kept(path):
+        return any(path.startswith(p) for p in keep_prefixes)
+
+    candidates = []
+    for root in roots:
+        if not unreal.EditorAssetLibrary.does_directory_exist(root):
+            continue
+        for path in unreal.EditorAssetLibrary.list_assets(root, recursive=True):
+            clean = path.split(".")[0]
+            if kept(clean):
+                continue
+            asset = unreal.EditorAssetLibrary.load_asset(clean)
+            if isinstance(asset, (unreal.Material, unreal.MaterialInstanceConstant)):
+                candidates.append(clean)
+
+    say("%d material asset(s) under %s outside the keep list"
+        % (len(candidates), ", ".join(roots)))
+    dead, live = [], []
+    for path in sorted(set(candidates)):
+        refs = [r for r in
+                unreal.EditorAssetLibrary.find_package_referencers_for_asset(path, False)
+                if r.split(".")[0] != path]
+        (live if refs else dead).append((path, refs))
+
+    for path, refs in live:
+        say("KEEP  %-52s still worn by %s"
+            % (path, ", ".join(sorted(r.split("/")[-1] for r in refs))))
+
+    removed = 0
+    for path, _ in dead:
+        expected = content_file(path)
+        loaded = unreal.EditorAssetLibrary.load_asset(path)
+        if loaded is not None:
+            unreal.EditorAssetLibrary.delete_loaded_asset(loaded)
+        else:
+            unreal.EditorAssetLibrary.delete_asset(path)
+        if os.path.isfile(expected):
+            fail("%s reported deleted but its .uasset is still on disk" % path)
+        else:
+            removed += 1
+            say("DELETED %s" % path)
+
+    say("%d unreferenced, %d gone from disk, %d still worn"
+        % (len(dead), removed, len(live)))
+    return removed
+
+
 def rebuild_fleet_materials():
     """Repoint every imported slot back onto the shared M_Fleet instances.
 

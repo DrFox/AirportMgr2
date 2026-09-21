@@ -35,7 +35,9 @@ import unreal
 # reads as "the commandlet did nothing" rather than as a missing path. Put it on first.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from airside_import import Spec, import_one, rebuild_fleet_materials, say  # noqa: E402
+from airside_import import (  # noqa: E402
+    Spec, content_file, import_one, rebuild_fleet_materials, say,
+    sweep_orphan_materials)
 
 
 MODELS = r"C:\repos\AirportMgr2Models"
@@ -267,12 +269,6 @@ SPECS = [
 ]
 
 
-def content_file(package):
-    """The .uasset a /Game/ package path names, as an absolute file on disk."""
-    root = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_content_dir())
-    return os.path.join(root, package[len("/Game/"):].replace("/", os.sep) + ".uasset")
-
-
 def already_imported(spec):
     """True when this model's mesh is already in Content, so this run must leave it alone.
 
@@ -334,6 +330,27 @@ def main():
     # An import regenerates per-asset materials and reassigns every slot, silently
     # undoing the shared set. Rebuilt here so no import can leave it undone.
     rebuild_fleet_materials()
+
+    # AND THEN SWEPT, for the same reason and in the same breath. The rebuild above ORPHANS
+    # the per-asset materials Interchange just generated; leaving them is ~48 KB of dead
+    # uber-graph per flat colour, referenced by nothing and invisible to every test.
+    #
+    # ONLY THE FOLDERS THIS RUN IMPORTED INTO. A sweep of all of /Game/Aircraft and
+    # /Game/Vehicles is what Tools/Python/clean_orphan_materials.py is for and is the right
+    # tool when tidying up after the fact; running that breadth automatically would let an
+    # import delete an unreferenced material somebody had parked beside a model they had not
+    # wired up yet. A run that imports nothing sweeps nothing.
+    #
+    # IT WAS A SEPARATE SCRIPT AND HAD TO BE REMEMBERED until 2026-09-21, and it was not:
+    # plane7 reached main in PR #225 carrying all seven of its generated materials.
+    # results is one row per Spec, in order, so they zip. A SKIP contributes nothing; a FAIL
+    # is swept anyway, because the sweep deletes only what nothing references and a
+    # half-imported model's orphans are exactly as dead as a whole one's.
+    swept = [spec.mesh_dir for spec, (_, ok) in zip(SPECS, results) if ok is not None]
+    if swept:
+        say("-" * 70)
+        sweep_orphan_materials(swept)
+
     say("DONE")
 
 
