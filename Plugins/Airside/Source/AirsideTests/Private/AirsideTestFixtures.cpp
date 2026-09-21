@@ -11,6 +11,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/SnapGuideChain.h"
+#include "Tool/SnapGuideLabel.h"
 
 // FAirsideTestWorld's constructor/destructor now live in Testing/AirsideTestWorld.h (#189) -
 // AirsideTestFixtures.h forwards to that header rather than declaring its own copy.
@@ -361,13 +362,26 @@ bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D&
 	return Actor->PlaceRunway(From, To, Profile);
 }
 
-/** Every candidate ONE source proposes, with the rest of the chain kept out of it. */
+/**
+ * Every candidate ONE source proposes, with the rest of the chain kept out of it.
+ *
+ * DESCRIPTION IS FILLED HERE, NOT BY Source.Propose - #183 moved that out of every source and
+ * into FSnapGuideChain::Resolve, which this helper bypasses on purpose (it exists to test ONE
+ * source's raw output, arbitration and all). A test that reads Candidate.Description - most of
+ * NetworkGuideSourceTest does - would otherwise see an empty string forever; filling it here,
+ * the same way Resolve does for its winners, keeps every such test unchanged and still measuring
+ * what it always measured, while production Propose stays free of the allocation.
+ */
 TArray<SnapGuide::FCandidate> ProposedBy(const IGuideSource& Source,
 	const URoadNetwork& Network, const FGuideAnchor& Anchor,
 	const TOptional<FVector2D>& Cursor)
 {
 	TArray<SnapGuide::FCandidate> Out;
 	Source.Propose(Network, Anchor, Cursor.Get(Anchor.Origin), Out);
+	for (SnapGuide::FCandidate& Candidate : Out)
+	{
+		Candidate.Description = SnapGuide::Describe(Network, Anchor, Candidate.Label);
+	}
 	return Out;
 }
 }

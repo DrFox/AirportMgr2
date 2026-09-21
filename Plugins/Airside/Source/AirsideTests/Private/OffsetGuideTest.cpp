@@ -6,6 +6,7 @@
 #include "Solve/GuideArbiter.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/SnapGuideChain.h"
+#include "Tool/SnapGuideLabel.h"
 #include "Tool/SnapGuideSettings.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -73,9 +74,15 @@ bool FOffsetGuideMatchesTheExistingGapTest::RunTest(const FString& Parameters)
 		FMath::IsNearlyEqual(Candidates[0].Through.Y, 8000.0, 1.0));
 
 	// THE NUMBER IS IN THE LABEL, or the player cannot tell 40 m from 45 m.
-	TestTrue(*FString::Printf(TEXT("the label carries the gap, got '%s'"),
-		*Candidates[0].Description),
-		Candidates[0].Description.Contains(TEXT("40 m")));
+	//
+	// Description ITSELF IS EMPTY HERE - #183 moved its formatting out of Propose and into
+	// FSnapGuideChain::Resolve, which this test bypasses to look at the raw candidate. Calling
+	// SnapGuide::Describe directly is what this test is for: the recipe (Label) is what Propose
+	// actually promises now, and this measures that the recipe still produces "40 m".
+	const FString Text = SnapGuide::Describe(*Actor->Network, AnchorAt(FVector2D(0.0, 5000.0)),
+		Candidates[0].Label);
+	TestTrue(*FString::Printf(TEXT("the label carries the gap, got '%s'"), *Text),
+		Text.Contains(TEXT("40 m")));
 
 	// AND IT PULLS A NEAR CURSOR EXACTLY ONTO THE SPACING.
 	const SnapGuide::FResult Result = SnapGuide::Arbitrate(

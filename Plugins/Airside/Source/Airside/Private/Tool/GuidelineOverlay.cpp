@@ -5,6 +5,12 @@
 
 void GuidelineOverlay::Draw(const URoadNetwork& Network, IToolPreviewSink& Sink)
 {
+	// HOISTED OUT OF THE LOOP - #183. This ran once per DrawHUD/Render call before, but a fresh
+	// TArray PER EDGE meant a heap allocation per edge every time; Reset() below keeps whatever
+	// capacity the first edge grew and just drops the count, so only the first edge on the field
+	// ever grows the buffer.
+	TArray<FVector2D> Points;
+
 	const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
 	for (int32 Index = 0; Index < Edges.Num(); ++Index)
 	{
@@ -13,9 +19,12 @@ void GuidelineOverlay::Draw(const URoadNetwork& Network, IToolPreviewSink& Sink)
 			continue;
 		}
 
+		// GuidelineGeom::Sample APPENDS rather than clearing - see its own header - so this
+		// Reset is what stops one edge's points bleeding into the next's polyline.
+		Points.Reset();
+
 		// The same sampling the search costed and a follower will walk, so what is drawn is
 		// what is driven. Do not add a second evaluator here - see the header.
-		TArray<FVector2D> Points;
 		if (!Network.SampleGuideline(Network.GuidelineEdgeIdAt(Index), Points))
 		{
 			continue;
