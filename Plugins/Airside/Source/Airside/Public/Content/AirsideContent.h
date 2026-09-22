@@ -277,6 +277,25 @@ public:
 	TSoftObjectPtr<UStaticMesh> VehicleMesh;
 
 	/**
+	 * The chainlink fence's Ø60 mm line post. Base-centred, 245 cm tall, 1 unit = 1 cm once
+	 * imported - see AirportMgr2Models/accessories/chainlink/README.md. Null falls back to a
+	 * scaled engine cube. Authored by Tools/Python/build_fence_content.py.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
+	TSoftObjectPtr<UStaticMesh> FenceLinePost;
+
+	/** The Ø90 mm corner and gate post - heavier instead of braced (README "Not here"). */
+	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
+	TSoftObjectPtr<UStaticMesh> FenceHeavyPost;
+
+	/**
+	 * The fabric: Masked, two-sided, chainlink.png with its alpha-coverage mips. Null falls back
+	 * to the sink's default surface material - visible and wrong, which is the failure to prefer.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
+	TSoftObjectPtr<UMaterialInterface> FenceFabricMaterial;
+
+	/**
 	 * A RIGGED ground vehicle. Preferred over VehicleMesh; null falls back to it.
 	 *
 	 * "A truck's wheels turn and nothing else does, and there is no rig yet" is what stood
