@@ -2,8 +2,10 @@
 #include "Misc/AutomationTest.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
+#include "Content/FenceKit.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RunwayFacts.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/ScopeExit.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -215,6 +217,30 @@ bool FEveryPlaceableEntityResolvesFromContentTest::RunTest(const FString& Parame
 			UAirsideSettings::ResolvePlaceable(Kind), Markers[Index]);
 	}
 
+	return true;
+}
+
+/**
+ * The project's content set names a whole fence kit, and the fabric is masked and two-sided.
+ *
+ * AGAINST THE REAL DA_AirsideContent, not a NewObject: the failure this guards is the one a
+ * build_*.py writes nothing and reports success, and only the saved asset can show it. A
+ * translucent fabric would sort wrongly; a one-sided one vanishes from inside the plot.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAirsideContentFenceKitResolvesTest,
+	"Airside.Content.FenceKitResolves",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAirsideContentFenceKitResolvesTest::RunTest(const FString& Parameters)
+{
+	const FFenceKit Kit = UAirsideSettings::ResolveFenceKit();
+	TestNotNull(TEXT("the line post is authored"), Kit.LinePost);
+	TestNotNull(TEXT("the heavy post is authored"), Kit.HeavyPost);
+	if (!TestNotNull(TEXT("the fabric material is authored"), Kit.Fabric)) { return false; }
+	TestEqual(TEXT("the fabric is Masked, per the asset README"),
+		Kit.Fabric->GetBlendMode(), EBlendMode::BLEND_Masked);
+	TestTrue(TEXT("and two-sided"), Kit.Fabric->IsTwoSided());
 	return true;
 }
 
