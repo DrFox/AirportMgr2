@@ -29,13 +29,21 @@ namespace PlotYard
 	inline constexpr double ClearanceUu = 100.0;
 
 	/**
-	 * The lane kept clear from the gate into the plot, uu. 6.2 m, the fuel truck's length.
+	 * The lane kept clear from the gate into the plot, uu - and the fence's gate gap, which is
+	 * the same number. 10 m: fueltruck1's 8.5 m plus about 0.75 m either side.
+	 *
+	 * WAS 6.2 m, "the fuel truck's length", until 2026-09-22 - the length of a truck that no
+	 * longer ships. With 8.5 m of truck in it, a truck turning out of the gate swept its body
+	 * through the posts (PIE: "gets stuck trying to turn out through the gate"). NOT THE WHOLE
+	 * FIX: the route out still turns at R=206 uu against a steering lock of R>=699 uu, so the
+	 * truck crabs through the turn (LogAirsideTraffic "Route asks for R=206 uu"); the wider gap
+	 * only gives the crabbing body room to clear the fence.
 	 *
 	 * A DEPOT THE TRUCK CANNOT LEAVE LOOKS PERFECTLY CORRECT FROM EVERY ANGLE - the same
 	 * failure the fence's gate gap exists to prevent, and the reason that gap is counted
 	 * rather than eyeballed.
 	 */
-	inline constexpr double GateCorridorUu = 620.0;
+	inline constexpr double GateCorridorUu = 1000.0;
 
 	/**
 	 * Candidate poses tried per module before it is dropped.
