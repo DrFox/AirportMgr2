@@ -13,6 +13,7 @@
 #include "AirsideLog.h"
 #include "Algo/Reverse.h"
 #include "Build/AnchorLink.h"
+#include "Content/AirsideSettings.h"
 #include "Build/DepotKit.h"
 #include "Build/PlotLayoutStrategy.h"
 #include "Entities/EntityDefinition.h"
@@ -448,9 +449,28 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// Every module the yard places is squared to the SAME frontage, so the inward normal IS
 	// the installation's own heading - the fact PlotFit::FitBays's uniform Bay.Heading used
 	// to state and PlotYard::InwardOf states now, without a solve of its own.
-	Placement.Heading = RoadGeom::Bearing(PlotYard::InwardOf(Wound, FrontageA, FrontageB));
+	const FVector2D Inward = PlotYard::InwardOf(Wound, FrontageA, FrontageB);
+	Placement.Heading = RoadGeom::Bearing(Inward);
 	Placement.PoseRole = Definition->PoseRole;
 	Placement.Outline = Wound;
+
+	// THE TRUCKS' HOME, SET BACK INTO THE YARD far enough that the link onto the road can turn
+	// at a radius the largest service vehicle can steer - FAnchorLink::PoseSetbackFor. On the
+	// gate, as it was until 2026-09-22, the square turn onto the road had the kerb's 300 uu and
+	// came out at R = 206 against a lock of 699: the truck crabbed out of every depot.
+	Placement.PoseSetbackUu = FAnchorLink::PoseSetbackFor(Net, Placement.Position, Inward,
+		UAirsideSettings::ResolveLargestServiceVehicle(), Owner.ServiceLinkRadius);
+	const FVector2D Home = Placement.Position + Inward.GetSafeNormal() * Placement.PoseSetbackUu;
+	if (!RoadGeom::PointInPolygon(Wound, Home))
+	{
+		// SAID, NOT REFUSED: the depot still works, its trucks just start outside the fence.
+		// Only a plot shallower than the turn needs can do this.
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot: the trucks' home, %.0f uu in from the gate so they can turn "
+				 "onto the road, is outside this plot - draw it deeper."), Placement.PoseSetbackUu);
+	}
+	UE_LOG(LogRoadMesh, Log, TEXT("PlaceEntityInPlot: trucks' home set %.0f uu in from the gate"),
+		Placement.PoseSetbackUu);
 
 	// STORED WHOLE, NEVER TRUNCATED TO WHAT FITS - issue #182 again. FitBays's bay count used
 	// to cap Modules here, which was a SECOND capacity rule competing with the reservation
@@ -505,10 +525,38 @@ int32 URoadEditFacade::FindEntityAt(FVector2D Where, double Radius) const
 		return INDEX_NONE;
 	}
 
-	// Picked by the entity's own position - its stop mark - rather than by any anchor. An
-	// anchor is where a vehicle parks; the stand is the thing being pointed at.
-	return RoadSlot::NearestAlive<FEntityInstance>(Network->GetEntities(), Where, Radius,
-		[](const FEntityInstance& Entity) { return Entity.Position; });
+	const TArray<FEntityInstance>& Entities = Network->GetEntities();
+
+	// A STAND BY ITS STOP MARK, within the pick radius - its own position rather than any
+	// anchor: an anchor is where a vehicle parks, the stand is the thing being pointed at.
+	// FIRST, because it is the smaller target, the precedent FSelectTool sets for aircraft
+	// over stands.
+	//
+	// A PLOT NEVER BY ITS POSITION. That is the gate midpoint, and until 2026-09-22 it was the
+	// only way to select or remove a depot: a small click at the gate, with the whole plot and
+	// its buildings dead to the cursor. Mapped out of reach here rather than filtered after,
+	// so a plot's gate cannot win the radius pick over a stand beside it.
+	const int32 Stand = RoadSlot::NearestAlive<FEntityInstance>(Entities, Where, Radius,
+		[](const FEntityInstance& Entity)
+		{
+			return Entity.IsPlotted() ? FVector2D(TNumericLimits<double>::Max()) : Entity.Position;
+		});
+	if (Stand != INDEX_NONE)
+	{
+		return Stand;
+	}
+
+	// A PLOT BY ITS GROUND: anywhere inside the outline the player drew, which is also
+	// everywhere its buildings stand - PlotYard keeps every module inside the plot.
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		const FEntityInstance& Entity = Entities[Index];
+		if (Entity.bAlive && Entity.IsPlotted() && RoadGeom::PointInPolygon(Entity.Outline, Where))
+		{
+			return Index;
+		}
+	}
+	return INDEX_NONE;
 }
 
 void URoadEditFacade::ClearNetwork()

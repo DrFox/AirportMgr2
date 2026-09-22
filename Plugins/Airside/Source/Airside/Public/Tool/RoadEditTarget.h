@@ -316,6 +316,12 @@ public:
 		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) = 0;
 
 	virtual bool DeleteEntity(int32 EntityIndex) = 0;
+
+	/**
+	 * The entity a click at Where means: a stand within Radius of its stop mark, else a plot
+	 * whose outline contains Where - its ground and every building on it. INDEX_NONE for
+	 * neither. A plot is never picked by its gate; see URoadEditFacade::FindEntityAt.
+	 */
 	virtual int32 FindEntityAt(FVector2D Where, double Radius) const = 0;
 
 	/** The definition of Kind, read-only: a tool previews what would be placed, never

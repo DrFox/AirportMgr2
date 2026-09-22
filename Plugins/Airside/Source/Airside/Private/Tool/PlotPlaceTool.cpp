@@ -424,11 +424,43 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 	return Memo.Reservation;
 }
 
+int32 FPlotPlaceTool::PlotUnder(const FToolContext& Context)
+{
+	const URoadNetwork* Network = Context.Network();
+	if (Context.Target == nullptr || Network == nullptr)
+	{
+		return INDEX_NONE;
+	}
+	const int32 Under = Context.Target->FindEntityAt(Context.Cursor, Context.SnapRadius);
+	if (!Network->GetEntities().IsValidIndex(Under))
+	{
+		return INDEX_NONE;
+	}
+	// A PRE-PLOT DEPOT HAS NO GROUND to click, so FindEntityAt finds it the way it finds a
+	// stand - by its pose within the pick radius - and its fuel role is what says it is ours.
+	const FEntityInstance& Entity = Network->GetEntities()[Under];
+	return Entity.IsPlotted() || Entity.PoseRole == EServiceRole::Fuel ? Under : INDEX_NONE;
+}
+
 void FPlotPlaceTool::OnClick(const FToolContext& Context)
 {
 	const URoadNetwork* Network = Context.Network();
 	if (Context.Target == nullptr || Network == nullptr)
 	{
+		return;
+	}
+
+	// REMOVE: the depot whose ground was clicked, and nothing else - no gesture is started or
+	// advanced. Until 2026-09-22 this tool ignored Remove entirely, so the bar's Remove button
+	// lit on the depot tool did nothing and a depot could only go by undo. DeleteEntity
+	// refunds through the purse and is one undo step, as a stand's removal is.
+	if (Context.bRemoveModifier)
+	{
+		const int32 Doomed = PlotUnder(Context);
+		if (Doomed != INDEX_NONE)
+		{
+			Context.Target->DeleteEntity(Doomed);
+		}
 		return;
 	}
 
@@ -625,6 +657,27 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 		return;
 	}
 
+	// REMOVE shows what a click would take - the whole plot, outlined doomed - and none of
+	// the placement ghost, which would be offering to build while the click deletes.
+	if (Context.bRemoveModifier)
+	{
+		const int32 Doomed = PlotUnder(Context);
+		if (Doomed != INDEX_NONE)
+		{
+			const FEntityInstance& Entity = Network->GetEntities()[Doomed];
+			if (Entity.IsPlotted())
+			{
+				Sink.Polygon(Entity.Outline, EPreviewStyle::Doomed);
+			}
+			else
+			{
+				Sink.Marker(Entity.Position, EPreviewStyle::Doomed);
+			}
+			Sink.Label(Context.Cursor, TEXT("remove fuel depot"), EPreviewStyle::Doomed);
+		}
+		return;
+	}
+
 	if (Stage == EPlotStage::Idle)
 	{
 		// The anchors the player could take, so the grid is visible before it is committed
@@ -783,6 +836,18 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink& Sink) const
 {
 	const URoadNetwork* Network = Context.Network();
+
+	// REMOVE ASKS A DIFFERENT QUESTION from placement, so it gets its own answer: the Idle
+	// readout's "move near a service road" would be advice about a gesture Remove never makes.
+	if (Context.bRemoveModifier)
+	{
+		if (PlotUnder(Context) == INDEX_NONE)
+		{
+			Sink.Warning(TEXT("Click a fuel depot to remove it"));
+		}
+		Sink.Committable(false);
+		return;
+	}
 
 	if (Stage == EPlotStage::Idle)
 	{

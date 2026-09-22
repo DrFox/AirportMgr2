@@ -15,8 +15,15 @@
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/PlotPlaceTool.h"
+#include "Tool/SelectTool.h"
+#include "Tool/Selection.h"
+#include "Entities/EntityDefinition.h"
+#include "Present/AirsideBuildingsActor.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/ToolReadout.h"
+#include "Model/SpeedProfile.h"
+#include "Model/RoutePolicy.h"
+#include "Model/RouteSearch.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -1683,6 +1690,268 @@ bool FPlotPreviewOutlinesTheGroundActuallyReservedTest::RunTest(const FString& P
 			FMath::IsNearlyEqual(Diagonal, 497.2, 5.0));
 	}
 
+	return true;
+}
+
+namespace
+{
+	/** A 30 x 24 m depot owning a shed and a tank, gate mid-frontage. Prefixed against the unity build. */
+	int32 DepotPickPlace(ARoadNetworkActor* Actor)
+	{
+		UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = FVector2D(1500.0, 0.0);
+		Placement.Heading = UE_DOUBLE_HALF_PI;
+		Placement.PoseRole = EServiceRole::Fuel;
+		Placement.Outline = { FVector2D(0.0, 0.0), FVector2D(3000.0, 0.0),
+		                      FVector2D(3000.0, 2400.0), FVector2D(0.0, 2400.0) };
+		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank };
+		return Actor->Network->PlaceEntity(Placement).Index;
+	}
+
+	/** Counts lines by style - FPlotPlaceTool and FSelectTool draw a plot as a polygon of lines. */
+	struct FDepotPickSink : public IToolPreviewSink
+	{
+		TMap<EPreviewStyle, int32> Lines;
+		TMap<EPreviewStyle, int32> Markers;
+		virtual void Marker(const FVector2D&, EPreviewStyle Style) override { Markers.FindOrAdd(Style)++; }
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle Style) override { Lines.FindOrAdd(Style)++; }
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString&, EPreviewStyle) override {}
+		int32 LinesOf(EPreviewStyle S) const { const int32* N = Lines.Find(S); return N ? *N : 0; }
+		int32 MarkersOf(EPreviewStyle S) const { const int32* N = Markers.Find(S); return N ? *N : 0; }
+	};
+}
+
+/**
+ * A depot is picked by its ground and its buildings - never by a small click at its gate - and
+ * a stand is still picked by its stop mark.
+ *
+ * THE BEHAVIOUR CHANGE OF 2026-09-22. FindEntityAt measured distance to every entity's
+ * Position, which for a depot is the gate midpoint, so the only way to select or remove one
+ * was to find that point. Asserted through the actor, which is the pick every tool calls.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotIsPickedByItsGroundTest,
+	"Airside.Tool.DepotIsPickedByItsGround",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotIsPickedByItsGroundTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestTrue(TEXT("a road network and buildings actor"),
+		Actor != nullptr && TestWorld.Buildings != nullptr)) { return false; }
+
+	Actor->ClearNetwork();
+	const int32 Depot = DepotPickPlace(Actor);
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const int32 Stand = Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(10000.0, 0.0), 0.0).Index;
+	Actor->RebuildMesh();
+	if (!TestTrue(TEXT("both entities placed"), Depot != INDEX_NONE && Stand != INDEX_NONE)) { return false; }
+
+	constexpr double Radius = 400.0;
+	TestEqual(TEXT("a click deep in the plot picks the depot"),
+		Actor->FindEntityAt(FVector2D(2800.0, 2200.0), Radius), Depot);
+	TestEqual(TEXT("a click just outside the plot, 3 m from its gate, picks nothing - the gate is no longer a target"),
+		Actor->FindEntityAt(FVector2D(1500.0, -300.0), Radius), INDEX_NONE);
+	TestEqual(TEXT("a stand is still picked by its stop mark"),
+		Actor->FindEntityAt(FVector2D(10100.0, 0.0), Radius), Stand);
+
+	// A BUILDING'S OWN FOOTPRINT, from the presenter that drew it - "click the buildings".
+	FTransform Building;
+	if (!TestTrue(TEXT("the depot's buildings stand"),
+		TestWorld.Buildings->GetPlotPresenter()->GetInstanceTransformForTest(0, Building))) { return false; }
+	TestEqual(TEXT("a click on a building picks its depot"),
+		Actor->FindEntityAt(FVector2D(Building.GetLocation()), Radius), Depot);
+
+	// THE SELECT TOOL, end to end: the click selects it and the highlight is the plot's outline,
+	// not a ring at the gate.
+	FSelectTool Select;
+	FSelection Selection;
+	FToolContext Context = TestTool::ContextAt(*Actor, FVector2D(2800.0, 2200.0), ERoadSnapKind::Free, Radius);
+	Context.Selection = &Selection;
+	Select.OnClick(Context);
+	TestTrue(TEXT("the click selects the depot"),
+		Selection.Kind == ESelectionKind::Stand && Selection.Id == Depot);
+
+	FDepotPickSink Sink;
+	Select.BuildPreview(Context, Sink);
+	TestEqual(TEXT("the selected depot is drawn as its four-sided outline"), Sink.LinesOf(EPreviewStyle::Selected), 4);
+	TestEqual(TEXT("and not as a ring at its gate"), Sink.MarkersOf(EPreviewStyle::Selected), 0);
+	return true;
+}
+
+/**
+ * Remove lit on the depot tool deletes the depot clicked, anywhere on its ground, and starts
+ * no plot gesture; a click on open ground removes nothing.
+ *
+ * THE TOOL IGNORED REMOVE until 2026-09-22 - the bar's Remove button did nothing on it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotToolRemovesADepotTest,
+	"Airside.Tool.PlotToolRemovesADepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotToolRemovesADepotTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a road network"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	const int32 Depot = DepotPickPlace(Actor);
+	if (!TestTrue(TEXT("a depot placed"), Depot != INDEX_NONE)) { return false; }
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+
+	FToolContext Miss = TestTool::ContextAt(*Actor, FVector2D(8000.0, 8000.0), ERoadSnapKind::Free, 400.0);
+	Miss.bRemoveModifier = true;
+	Tool.OnClick(Miss);
+	TestTrue(TEXT("a remove click on open ground leaves the depot"),
+		Actor->Network->GetEntities()[Depot].bAlive);
+	TestEqual(TEXT("and starts no plot gesture"), Tool.PinnedCount(), 0);
+
+	FToolContext Hit = TestTool::ContextAt(*Actor, FVector2D(2800.0, 2200.0), ERoadSnapKind::Free, 400.0);
+	Hit.bRemoveModifier = true;
+
+	FDepotPickSink Sink;
+	Tool.BuildPreview(Hit, Sink);
+	TestEqual(TEXT("the preview outlines the whole plot as doomed"), Sink.LinesOf(EPreviewStyle::Doomed), 4);
+
+	Tool.OnClick(Hit);
+	TestFalse(TEXT("a remove click inside the plot deletes the depot"),
+		Actor->Network->GetEntities().IsValidIndex(Depot) && Actor->Network->GetEntities()[Depot].bAlive);
+	TestEqual(TEXT("and starts no plot gesture either"), Tool.PinnedCount(), 0);
+
+	// A PRE-PLOT DEPOT - fuel role, no outline - the format M_Starter still held on 2026-09-22.
+	// It has no ground to click, so it is taken at its pose, like a stand; before this it could
+	// not be removed by any tool.
+	UEntityDefinition* Legacy = UEntityDefinition::MakeFuelDepotTransient();
+	FEntityPlacement Old;
+	Old.Definition = Legacy;
+	Old.Anchors = Legacy->Anchors;
+	Old.Position = FVector2D(20000.0, 0.0);
+	Old.Heading = 0.0;
+	Old.PoseRole = EServiceRole::Fuel;
+	const int32 OldDepot = Actor->Network->PlaceEntity(Old).Index;
+	if (!TestTrue(TEXT("an old-format depot placed"), OldDepot != INDEX_NONE)) { return false; }
+
+	FToolContext AtOld = TestTool::ContextAt(*Actor, FVector2D(20100.0, 0.0), ERoadSnapKind::Free, 400.0);
+	AtOld.bRemoveModifier = true;
+	Tool.OnClick(AtOld);
+	TestFalse(TEXT("a remove click at an old-format depot's pose deletes it"),
+		Actor->Network->GetEntities().IsValidIndex(OldDepot) && Actor->Network->GetEntities()[OldDepot].bAlive);
+
+	// AND NOT A STAND: the depot tool removes depots only.
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const int32 Stand = Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(30000.0, 0.0), 0.0).Index;
+	FToolContext AtStand = TestTool::ContextAt(*Actor, FVector2D(30100.0, 0.0), ERoadSnapKind::Free, 400.0);
+	AtStand.bRemoveModifier = true;
+	Tool.OnClick(AtStand);
+	TestTrue(TEXT("a remove click on a stand with the depot tool leaves the stand"),
+		Actor->Network->GetEntities().IsValidIndex(Stand) && Actor->Network->GetEntities()[Stand].bAlive);
+	return true;
+}
+
+/**
+ * A fuel truck leaving a drawn depot can steer every curve of its way out, both ways along the
+ * road - and its home is inside the plot, not on the kerb.
+ *
+ * REPORTED FROM PIE 2026-09-22: the truck "gets stuck trying to turn out through the gate". The
+ * log said why - "Route asks for R=206 uu ... the steering lock allows only R>=699". The depot's
+ * pose node, the truck's home, sat at the gate on the kerb about 300 uu from the road's line,
+ * facing straight at it, and FAnchorLink squeezed a square turn onto the road into those 300 uu.
+ * Widening the gate (the first, visual fix) could not touch it: the gate never enters the route.
+ *
+ * ASKED OF FSpeedProfile, the one authority on whether a vehicle can drive a line, over the
+ * WHOLE route - see TruckDrivesTheWholeRouteToTheHydrant for why a per-edge check is not enough.
+ * Drawn through the real tool and placed through the real facade, because the setback is decided
+ * at placement.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotTruckTurnsOutWithinItsLockTest,
+	"Airside.Tool.DepotTruckTurnsOutWithinItsLock",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotTruckTurnsOutWithinItsLockTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a road network"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	// 20 x 14 m north of the road - the smallest plot that holds one of each (see
+	// FuelYardFitsTheConceptSheet).
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(2000.0, 200.0), FVector2D(1000.0, 1600.0));
+	Tool.OnCommit(PlotAt(Actor, FVector2D(1000.0, 1600.0)));
+	Actor->RebuildMesh();
+
+	const FEntityInstance* Depot = nullptr;
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (Entity.bAlive && Entity.IsPlotted()) { Depot = &Entity; break; }
+	}
+	if (!TestNotNull(TEXT("a depot was placed"), Depot)) { return false; }
+	const FGuidelineNode* Home = Actor->Network->GetGuidelineNode(Depot->PoseNode);
+	if (!TestNotNull(TEXT("its truck has a home node"), Home)) { return false; }
+
+	// SET BACK FROM THE GATE, not merely "inside": the gate is ON the outline, and a point on
+	// the boundary reads as inside - which is how this assertion first passed on the bug.
+	TestTrue(*FString::Printf(TEXT("the truck's home is set back into the plot, not on the kerb - (%.0f, %.0f), gate (%.0f, %.0f)"),
+		Home->Position.X, Home->Position.Y, Depot->Position.X, Depot->Position.Y),
+		RoadGeom::PointInPolygon(Depot->Outline, Home->Position)
+		&& FVector2D::Distance(Home->Position, Depot->Position) > 100.0);
+
+	// BOTH ENDS OF THE ROAD: a turn out to the left and one to the right, so a fix that
+	// rounded only one of the two sweeps cannot pass.
+	FGuidelineNodeId West;
+	FGuidelineNodeId East;
+	double WestX = TNumericLimits<double>::Max();
+	double EastX = -TNumericLimits<double>::Max();
+	const TArray<FGuidelineNode>& Nodes = Actor->Network->GetGuidelineNodes();
+	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+	{
+		if (!Nodes[Index].bAlive || Nodes[Index].Incident.Num() == 0 || FMath::Abs(Nodes[Index].Position.Y) > 600.0)
+		{
+			continue;
+		}
+		if (Nodes[Index].Position.X < WestX) { WestX = Nodes[Index].Position.X; West = Actor->Network->GuidelineNodeIdAt(Index); }
+		if (Nodes[Index].Position.X > EastX) { EastX = Nodes[Index].Position.X; East = Actor->Network->GuidelineNodeIdAt(Index); }
+	}
+	if (!TestTrue(TEXT("the road has guideline ends to drive to"), West.IsSet() && East.IsSet())) { return false; }
+
+	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	for (const FGuidelineNodeId Goal : { West, East })
+	{
+		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
+		Query.Start = Depot->PoseNode;
+		Query.Goal = Goal;
+		Query.Class = ETraversalClass::GroundVehicle;
+		const FRoutePlan Plan = RouteSearch::Find(*Actor->Network, Query);
+		const TCHAR* Which = Goal == West ? TEXT("west") : TEXT("east");
+		if (!TestTrue(*FString::Printf(TEXT("the truck routes out of the depot to the %s"), Which),
+			Plan.IsValid() && Plan.Polyline.Num() >= 2))
+		{
+			continue;
+		}
+
+		FSpeedProfile Profile;
+		Profile.Build(Plan.Polyline, Truck);
+		TestFalse(*FString::Printf(
+			TEXT("turning out %s asks for no curve the lock cannot hold (tightest R=%.0f uu at %.0f, lock R>=%.0f)"),
+			Which, Profile.GetTightestRadius(), Profile.GetTightestAt(), Truck.TightestFollowableRadius()),
+			Profile.WasTighterThanLock());
+		TestFalse(*FString::Printf(TEXT("and no instant corner turning out %s (sharpest %.0f deg)"),
+			Which, Profile.GetSharpestDegrees()), Profile.HasSharpVertex());
+	}
 	return true;
 }
 

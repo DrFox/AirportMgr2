@@ -297,6 +297,12 @@ struct AIRSIDE_API FEntityInstance
 	UPROPERTY() TArray<FVector2D> Outline;
 
 	/**
+	 * Drawn as a plot - a depot - rather than stamped at a pose like a stand. The one test
+	 * for it, so "is this a plot" is not re-spelled as a count at each new call site.
+	 */
+	bool IsPlotted() const { return Outline.Num() >= 3; }
+
+	/**
 	 * What the player put in the bays, in bay order. Empty for a plotless entity.
 	 *
 	 * THE FOURTH CAPTURED FACT - see Trucks above, whose comment called for exactly this:
@@ -347,6 +353,18 @@ struct AIRSIDE_API FEntityPlacement
 
 	/** What fills the bays, in bay order. Empty for an ordinary plop. */
 	TArray<EDepotModule> Modules;
+
+	/**
+	 * How far along Heading the pose NODE stands from Position, uu. Zero - on Position - for
+	 * everything but a drawn depot.
+	 *
+	 * A DEPOT'S Position IS ITS GATE and stays its gate: the fence's gap, the frontage the
+	 * presenter recovers and the yard's seed are all read off it. Its NODE is where its trucks
+	 * live and leave from, and on the gate that was on the kerb - too close to the road for the
+	 * truck to turn out onto it (FAnchorLink::PoseSetbackFor). So the two part company here, and
+	 * only here.
+	 */
+	double PoseSetbackUu = 0.0;
 };
 
 /**

@@ -178,4 +178,28 @@ struct AIRSIDE_API FAnchorLink
 	 */
 	static FGuidelineNodeId Join(URoadNetwork& Network, FPendingLink& Link, const FLinkHit& Hit,
 		TSet<FGuidelineNodeId>& AnchorNodes, const FAirframe& LargestServiceVehicle);
+
+	/**
+	 * The radius a ground-vehicle link's curves are laid at: the largest service vehicle's lock
+	 * plus a tenth. Join sizes every ground fillet from this and PoseSetbackFor sizes the room
+	 * for one from it - ONE figure, so the room asked for is the room the join will spend.
+	 */
+	static double ServiceLaneRadius(const FAirframe& LargestServiceVehicle);
+
+	/**
+	 * How far to set a service pose back from At, along Inward, so that the link Build will lay
+	 * from it has room for a square turn onto its road at ServiceLaneRadius. Zero when it already
+	 * has, or when no road is in reach (Build will log that one).
+	 *
+	 * ASKS Resolve, the builder's own search, where the link would meet the road - not a second
+	 * measurement of "nearest road" that could pick a different one. Assumes the road runs square
+	 * to Inward, which a plot's frontage road does by construction.
+	 *
+	 * WHY IT EXISTS: a depot's pose is its gate, on the kerb, about 300 uu from the road's line.
+	 * Join then had 300 uu to fit a square turn that wants CornerRunFor(769, 90 deg) = 1088, and
+	 * clamped the curve to R = 206 - "the fuel truck gets stuck turning out through the gate",
+	 * PIE 2026-09-22.
+	 */
+	static double PoseSetbackFor(const URoadNetwork& Network, const FVector2D& At,
+		const FVector2D& Inward, const FAirframe& LargestServiceVehicle, double ServiceLinkRadius);
 };

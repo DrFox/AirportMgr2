@@ -7,6 +7,35 @@
 
 #define LOCTEXT_NAMESPACE "Airside"
 
+namespace
+{
+	/**
+	 * One entity drawn in a selection style: a plot as its whole outline, a stand as a ring
+	 * at its stop mark.
+	 *
+	 * THE OUTLINE, NOT A RING AT THE GATE, since 2026-09-22: a plot is picked by its ground
+	 * (URoadEditFacade::FindEntityAt), so the highlight has to be that ground, or the player
+	 * clicks a building and sees a dot light up metres away at the road.
+	 */
+	void DrawEntity(const URoadNetwork& Network, int32 Index, EPreviewStyle Style,
+		IToolPreviewSink& Sink)
+	{
+		if (!Network.GetEntities().IsValidIndex(Index))
+		{
+			return;
+		}
+		const FEntityInstance& Entity = Network.GetEntities()[Index];
+		if (Entity.IsPlotted())
+		{
+			Sink.Polygon(Entity.Outline, Style);
+		}
+		else
+		{
+			Sink.Marker(Entity.Position, Style);
+		}
+	}
+}
+
 FText FSelectTool::GetDisplayName() const
 {
 	return LOCTEXT("SelectTool", "Select");
@@ -118,16 +147,24 @@ void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 	else if (Context.Target != nullptr)
 	{
 		const int32 Stand = Context.Target->FindEntityAt(Context.Cursor, Context.SnapRadius);
-		if (Stand != INDEX_NONE && PositionOf(Context, ESelectionKind::Stand, Stand, At))
+		if (Stand != INDEX_NONE && PositionOf(Context, ESelectionKind::Stand, Stand, At)
+			&& Context.Network() != nullptr)
 		{
-			Sink.Marker(At, EPreviewStyle::Hover);
+			DrawEntity(*Context.Network(), Stand, EPreviewStyle::Hover, Sink);
 		}
 	}
 
 	if (Context.Selection != nullptr && Context.Selection->IsSet()
 		&& PositionOf(Context, Context.Selection->Kind, Context.Selection->Id, At))
 	{
-		Sink.Marker(At, EPreviewStyle::Selected);
+		if (Context.Selection->Kind == ESelectionKind::Stand && Context.Network() != nullptr)
+		{
+			DrawEntity(*Context.Network(), Context.Selection->Id, EPreviewStyle::Selected, Sink);
+		}
+		else
+		{
+			Sink.Marker(At, EPreviewStyle::Selected);
+		}
 
 		// The selected aircraft's remaining route, in the style the Route tool used: the one
 		// useful picture that tool drew, kept.

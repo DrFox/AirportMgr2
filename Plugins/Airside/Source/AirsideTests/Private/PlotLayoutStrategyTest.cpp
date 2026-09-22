@@ -257,7 +257,7 @@ bool FFuelYardLeavesRoomTest::RunTest(const FString& Parameters)
  * moved the Tier 1 depot out of reach of the tier it is for, which is a subtler failure than
  * 65% coverage and a harder one to see.
  *
- * 15 x 12 m, AND NEITHER FIGURE IS THE SHEET'S 11 x 8.
+ * 20 x 14 m, AND NEITHER FIGURE IS THE SHEET'S 11 x 8.
  *
  * THE DEPTH went to 12 m because an 8 m shed in an 8 m site leaves nothing in front of the
  * door, and with its apron the depot did not fit its own plot at all - see
@@ -267,6 +267,11 @@ bool FFuelYardLeavesRoomTest::RunTest(const FString& Parameters)
  * clearance 1.0 + pump 2.0 - and FPlotPlaceTool::FrontageStepUu snaps a frontage to 5 m
  * steps, so 13 m is not drawable and 15 m is the next one that is. An 11 m plot was never
  * drawable either; the sheet's figure is art, not a gesture the player can make.
+ *
+ * 20 m SINCE 2026-09-22, when the gate lane (PlotYard::GateCorridorUu) went from 6.2 to 8 m
+ * for the 8.5 m truck that ships, and 14 m deep with it: the side columns start one lane in
+ * from the gate, so a 5 m tank needs 8 + 5 = 13 m of depth. The user chose the wider gate over
+ * keeping the 15 x 12 m plot.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFuelYardFitsTheConceptSheetTest,
@@ -275,9 +280,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFuelYardFitsTheConceptSheetTest::RunTest(const FString& Parameters)
 {
-	const TArray<FVector2D> Outline = StrategyRect(1500.0, 1200.0);
+	const TArray<FVector2D> Outline = StrategyRect(2000.0, 1400.0);
 	const TArray<PlotYard::FKitSpec> Specs = StrategySpecs();
-	const FPlotSite Site = StrategySite(Outline, 1500.0);
+	const FPlotSite Site = StrategySite(Outline, 2000.0);
 
 	const PlotYard::FReservation R =
 		PlotLayoutFor(EPlotLayout::FuelYardBands)->Solve(Site, Specs);
