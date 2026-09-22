@@ -21,11 +21,17 @@
 
 namespace
 {
-	/** A 12 m x 8 m plot at X - three bays, the Tier 1 depot as drawn. */
+	/**
+	 * A 15 m x 8 m plot at X - the smallest drawable frontage that still gets a gate.
+	 *
+	 * 12 m UNTIL 2026-09-22, "the Tier 1 depot as drawn". The gate went to 8 m for the 8.5 m
+	 * truck, and FenceLayout wants a 2.5 m bay either side of it: 13 m, so 15 m in the tool's
+	 * 5 m frontage steps.
+	 */
 	TArray<FVector2D> ThreeBayPlotAt(double X)
 	{
-		return { FVector2D(X, 0.0), FVector2D(X + 1200.0, 0.0),
-		         FVector2D(X + 1200.0, 800.0), FVector2D(X, 800.0) };
+		return { FVector2D(X, 0.0), FVector2D(X + 1500.0, 0.0),
+		         FVector2D(X + 1500.0, 800.0), FVector2D(X, 800.0) };
 	}
 
 	/**
@@ -40,7 +46,7 @@ namespace
 		FEntityPlacement Placement;
 		Placement.Definition = Depot;
 		Placement.Anchors = Depot->Anchors;
-		Placement.Position = FVector2D(X + 600.0, 0.0);
+		Placement.Position = FVector2D(X + 750.0, 0.0);
 		Placement.Heading = UE_DOUBLE_HALF_PI;
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = ThreeBayPlotAt(X);
@@ -141,7 +147,7 @@ bool FPlotPresenterDressesEachBayTest::RunTest(const FString& Parameters)
 
 	const int32 One = Plots->GetFencePostCount();
 
-	// A FENCE STANDS even round a plot too small to seat a module - the 12 x 8 m Tier 1 plot
+	// A FENCE STANDS even round a plot too small to seat a module - the 15 x 8 m Tier 1 plot
 	// seats none under the band layout. The fence is the claim here; modules are
 	// PlotPresenterLaysOutTheDepot's. The exact number moves with the spacing and is not the
 	// claim either.

@@ -30,20 +30,23 @@ namespace PlotYard
 
 	/**
 	 * The lane kept clear from the gate into the plot, uu - and the fence's gate gap, which is
-	 * the same number. 10 m: fueltruck1's 8.5 m plus about 0.75 m either side.
+	 * the same number. 8 m.
 	 *
 	 * WAS 6.2 m, "the fuel truck's length", until 2026-09-22 - the length of a truck that no
-	 * longer ships. With 8.5 m of truck in it, a truck turning out of the gate swept its body
-	 * through the posts (PIE: "gets stuck trying to turn out through the gate"). NOT THE WHOLE
-	 * FIX: the route out still turns at R=206 uu against a steering lock of R>=699 uu, so the
-	 * truck crabs through the turn (LogAirsideTraffic "Route asks for R=206 uu"); the wider gap
-	 * only gives the crabbing body room to clear the fence.
+	 * longer ships. With 8.5 m of truck turning out of it, the body swept through the gate
+	 * posts (PIE: "gets stuck trying to turn out through the gate"). 10 m was tried and cost
+	 * too much: seven plot tests failed, small plots lost their gates. 8 m costs the 12 m
+	 * Tier 1 plot its gate (FenceLayout wants 13 m of frontage), which the user accepted.
+	 *
+	 * NOT THE WHOLE FIX: the route out still turns at R=206 uu against a steering lock of
+	 * R>=699 uu, so the truck crabs through the turn (LogAirsideTraffic "Route asks for R=206
+	 * uu"); the wider gap gives the crabbing body room to clear the fence.
 	 *
 	 * A DEPOT THE TRUCK CANNOT LEAVE LOOKS PERFECTLY CORRECT FROM EVERY ANGLE - the same
 	 * failure the fence's gate gap exists to prevent, and the reason that gap is counted
 	 * rather than eyeballed.
 	 */
-	inline constexpr double GateCorridorUu = 1000.0;
+	inline constexpr double GateCorridorUu = 800.0;
 
 	/**
 	 * Candidate poses tried per module before it is dropped.
