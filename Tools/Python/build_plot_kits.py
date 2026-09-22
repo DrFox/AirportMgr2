@@ -4,11 +4,15 @@
 
 Every result line is prefixed MARKER: so it can be grepped out of the log.
 
-THE FIGURES ARE THE GREY-BOX TABLE, DELIBERATELY. DepotKit.cpp has carried them since the
-yard solver was written and they are what the depot looks like today, so authoring the kits
-changes nothing on screen - which is the point. Content landing and the numbers moving are
-two changes, and doing them together would leave nobody able to say which one moved the
-depot. The real dimensions arrive with the meshes, in FuelDepot1/.
+THE FIGURES ARE THE MESHES' SINCE 2026-09-22, for the shed and the tank. They were the
+grey-box table until then, deliberately - content landing and the numbers moving were kept
+as two changes - and the meshes are what moved them: measured off the imported assets
+(build_depot_content.py prints the bounds) and checked every test run by
+AirportMgr.Content.DepotKitMeshesMatchTheirFootprints. The pump keeps its grey box.
+
+  shed  9.42 x 5.00 m a bay (roof eaves included), 0.75 m per end cap, 5.44 m to the ridge
+  tank  2.20 x 4.80 m, long axis along the run - parallel to the frontage, as the concept
+        sheet stands it - and 2.64 m to the hatch
 
 WEIGHTS AND RUN CAPS ARE NEW, and they are the design doc's:
 
@@ -19,9 +23,12 @@ WEIGHTS AND RUN CAPS ARE NEW, and they are the design doc's:
 A WEIGHT SETS A CEILING, NOT A STRATEGY. The player buys in whatever order they like up to
 it, so a generous weight costs nothing and a mean one silently forbids a build they wanted.
 
-BakedMeshes IS LEFT EMPTY. An empty array means grey box, which the runtime already falls
-back to and AirportMgr.Content.EveryDepotModuleHasItsOwnKit explicitly permits. The meshes
-are a later slice and filling these with placeholders would make that test assert nothing.
+THE SHED IS PARTS, THE TANK IS BAKED. The shed ships as one bay and one end (FuelDepot1/shed/
+SPEC.md) and the presenter lays cap, bays and mirrored cap along the run; the tank is one
+mesh that never groups. The pump's BakedMeshes stays empty, which is the grey box.
+
+EVERY FIELD IS SET ON EVERY RUN, defaults included - these are authored in place, so a field
+left alone keeps whatever was last saved (memory: authoring uassets headlessly).
 """
 import os
 import sys
@@ -30,6 +37,7 @@ import unreal
 
 KIT_PATH = "/Game/Entities"
 CONTENT_ASSET = "/Game/DA_AirsideContent"
+MESH_DIR = "/Game/Environment/FuelDepot"
 
 # name, display, length uu, width uu, height uu, back fence, weight, run cap, apron x uu
 #
@@ -37,10 +45,21 @@ CONTENT_ASSET = "/Game/DA_AirsideContent"
 # ground there is not somewhere another module may go. A tank is plumbed and a pump is walked
 # up to; neither needs more than the clearance every module already gets.
 KITS = [
-    ("DA_Kit_FuelShed", "Vehicle shed", 800.0, 400.0, 400.0, True, 3, 3, 400.0),
-    ("DA_Kit_FuelTank", "Fuel tank", 500.0, 500.0, 250.0, False, 2, 1, 0.0),
+    ("DA_Kit_FuelShed", "Vehicle shed", 942.0, 500.0, 544.0, True, 3, 3, 400.0),
+    ("DA_Kit_FuelTank", "Fuel tank", 220.0, 480.0, 264.0, False, 2, 1, 0.0),
     ("DA_Kit_FuelPump", "Fuel pump", 300.0, 200.0, 150.0, False, 1, 1, 0.0),
 ]
+
+# name -> (assembly, baked meshes, cap mesh, bay mesh, cap uu, mesh yaw degrees).
+#
+# THE SHED'S YAW IS 90: its openings face the mesh's +Y and its bays tile along +X, and the
+# kit wants the opening towards the gate (-X) and the run along +Y. A quarter turn does both.
+# The tank lies along its mesh's Y already, which is the kit's run axis, so it takes none.
+LOOKS = {
+    "DA_Kit_FuelShed": ("PARTS", [], "SM_ShedEnd", "SM_ShedBay", 75.0, 90.0),
+    "DA_Kit_FuelTank": ("BAKED", ["SM_FuelTank"], None, None, 0.0, 0.0),
+    "DA_Kit_FuelPump": ("BAKED", [], None, None, 0.0, 0.0),
+}
 
 # EDepotModule, in the enum's own order - the index into KITS above IS the enum value, the
 # same agreement DepotKitSpecs relies on. A map built the other way round would dress every
@@ -86,15 +105,31 @@ def author_kit(name, display, length, width, height, back_fence, weight, run_cap
     asset.set_editor_property("against_the_back_fence", back_fence)
     asset.set_editor_property("reserve_weight", weight)
     asset.set_editor_property("run_cap", run_cap)
-    asset.set_editor_property("assembly", unreal.KitAssembly.BAKED)
+    assembly, baked, cap, bay, cap_uu, yaw = LOOKS[name]
+
+    def mesh(stem):
+        if stem is None:
+            return None
+        found = unreal.EditorAssetLibrary.load_asset("%s/%s" % (MESH_DIR, stem))
+        if not isinstance(found, unreal.StaticMesh):
+            fail("%s names %s/%s, which is not a static mesh - run build_depot_content.py"
+                 % (name, MESH_DIR, stem))
+        return found
+
+    asset.set_editor_property("assembly", getattr(unreal.KitAssembly, assembly))
+    asset.set_editor_property("baked_meshes", [mesh(m) for m in baked])
+    asset.set_editor_property("part_cap_mesh", mesh(cap))
+    asset.set_editor_property("part_bay_mesh", mesh(bay))
+    asset.set_editor_property("part_cap_uu", cap_uu)
+    asset.set_editor_property("mesh_yaw_deg", yaw)
 
     # X ONLY. The apron reaches towards the gate; nothing yet needs ground kept clear to its
     # sides, and a Y an author could not explain is a number the layout would silently obey.
     asset.set_editor_property("apron_uu", unreal.Vector2D(apron_x, 0.0))
 
     unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
-    log("%s: %.0f x %.0f uu, apron %.0f, weight %d, run cap %d"
-        % (name, length, width, apron_x, weight, run_cap))
+    log("%s: %.0f x %.0f uu, apron %.0f, weight %d, run cap %d, %s, cap %.0f, yaw %.0f"
+        % (name, length, width, apron_x, weight, run_cap, assembly, cap_uu, yaw))
     return asset
 
 

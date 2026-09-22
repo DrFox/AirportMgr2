@@ -79,7 +79,7 @@ AAirsideBuildingsActor::AAirsideBuildingsActor()
 
 	Plots = CreateDefaultSubobject<UPlotPresenter>(TEXT("Plots"));
 	Plots->Initialise(ModuleBoxes, ModuleGhosts,
-		FFenceTargets{ FencePosts, FenceHeavyPosts, FenceFabric });
+		FFenceTargets{ FencePosts, FenceHeavyPosts, FenceFabric }, RootComponent);
 }
 
 void AAirsideBuildingsActor::PostInitProperties()
@@ -100,7 +100,7 @@ void AAirsideBuildingsActor::PostInitProperties()
 	if (Plots != nullptr)
 	{
 		Plots->Initialise(ModuleBoxes, ModuleGhosts,
-			FFenceTargets{ FencePosts, FenceHeavyPosts, FenceFabric });
+			FFenceTargets{ FencePosts, FenceHeavyPosts, FenceFabric }, RootComponent);
 	}
 }
 
@@ -247,6 +247,8 @@ void AAirsideBuildingsActor::Rebuild(const URoadNetwork& Network)
 	}
 
 	// THROUGH THE ROAD NETWORK'S ONE RESOLVER (issue #181) - see UPlotPresenter::RebuildFrom.
-	// THE FENCE'S CONTENT through UAirsideSettings' one resolver, like every content default.
-	Plots->RebuildFrom(Network, Road->ResolveDepotKits(), UAirsideSettings::ResolveFenceKit());
+	// THE FENCE'S CONTENT AND THE MODULES' MESHES through UAirsideSettings' one resolver each,
+	// like every content default.
+	Plots->RebuildFrom(Network, Road->ResolveDepotKits(), UAirsideSettings::ResolveFenceKit(),
+		UAirsideSettings::ResolveDepotLooks());
 }

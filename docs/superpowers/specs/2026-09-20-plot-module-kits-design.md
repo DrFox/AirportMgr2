@@ -39,6 +39,13 @@ unchanged.
 - **Kits are hand-authored `UDataAsset`s, exactly as `UAircraftType` is.** No manifest
   emitted from Blender, no generated asset. Drift is caught by registry-walking tests, which
   is the precedent `AircraftLookTest` set and the reason it exists.
+- **REVISED 2026-09-22: the shed is PARTS, not baked.** The shed arrived modular
+  (`FuelDepot1/shed`: one bay, one end, rib-phased so bays butt seamlessly), and a
+  partly-bought run is drawn as a built building plus ghost bays - which a baked N-bay mesh
+  can only express with a cap at the seam. `UPlotPresenter` now lays cap, N bays and a
+  mirrored cap; `UPlotModuleKit::PartCapUu` is reserved at both ends through
+  `FKitSpec::RunWidthUu`, and `PartPitchUu` was removed (the pitch is `Footprint.Y`). Baked
+  stays for single meshes (the tank). The two bullets below are the original decision.
 - **Blender bakes whole shed variants; it does not ship a wall kit.** One parametric script
   emits a 1-, 2- and 3-bay shed. The runtime assembles nothing. See §7.2.
 - **The parts path is designed and not built.** `EKitAssembly` has both values from day one;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Content/DepotModuleLook.h"
 #include "Content/FenceKit.h"
 #include "Engine/DeveloperSettings.h"
 #include "Model/RoadEntity.h"
@@ -199,6 +200,13 @@ public:
 
 	/** The chainlink fence's meshes and material - the content defaults, each null if unset. */
 	static FFenceKit ResolveFenceKit();
+
+	/**
+	 * Every depot module's meshes, indexed by EDepotModule and walked to its sentinel like
+	 * DepotKitSpecs. A module with no kit, or a kit with no meshes, resolves to a look whose
+	 * HasMeshes() is false - which the presenter draws as the grey box.
+	 */
+	static TArray<FDepotModuleLook> ResolveDepotLooks();
 
 	/**
 	 * A service vehicle's RIGGED body and the graph that drives it, or an empty view when the

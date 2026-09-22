@@ -276,6 +276,54 @@ FFenceKit UAirsideSettings::ResolveFenceKit()
 	return Kit;
 }
 
+TArray<FDepotModuleLook> UAirsideSettings::ResolveDepotLooks()
+{
+	TArray<FDepotModuleLook> Looks;
+	Looks.SetNum(static_cast<int32>(EDepotModule::Count));
+
+	const UAirsideContent* Content = GetContent();
+	if (Content == nullptr)
+	{
+		return Looks;
+	}
+
+	for (int32 Raw = 0; Raw < Looks.Num(); ++Raw)
+	{
+		const TObjectPtr<UPlotModuleKit>* Found = Content->DepotKits.Find(static_cast<EDepotModule>(Raw));
+		const UPlotModuleKit* Kit = Found != nullptr ? Found->Get() : nullptr;
+		if (Kit == nullptr)
+		{
+			continue;
+		}
+
+		FDepotModuleLook& Look = Looks[Raw];
+		Look.Assembly = Kit->Assembly;
+		// A QUARTER TURN, NEVER BETWEEN: a far cap is mirrored along an axis OF THE MESH, and
+		// only a quarter-turn yaw lines the run up with one. 45 would mirror it diagonally.
+		Look.MeshYawDeg = FMath::RoundToDouble(Kit->MeshYawDeg / 90.0) * 90.0;
+		if (Kit->Assembly == EKitAssembly::Parts)
+		{
+			Look.Cap = Kit->PartCapMesh.LoadSynchronous();
+			Look.Bay = Kit->PartBayMesh.LoadSynchronous();
+		}
+		else
+		{
+			for (const TSoftObjectPtr<UStaticMesh>& Mesh : Kit->BakedMeshes)
+			{
+				// A NULL ENTRY ENDS THE LIST rather than leaving a hole: index is bay count - 1,
+				// so a hole would put a two-bay mesh under a one-bay run.
+				UStaticMesh* Loaded = Mesh.LoadSynchronous();
+				if (Loaded == nullptr)
+				{
+					break;
+				}
+				Look.Baked.Add(Loaded);
+			}
+		}
+	}
+	return Looks;
+}
+
 FResolvedAgentView UAirsideSettings::ResolveVehicleView()
 {
 	const UAirsideContent* Content = GetContent();

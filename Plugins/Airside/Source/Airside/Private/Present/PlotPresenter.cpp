@@ -7,6 +7,8 @@
 #include "Components/DynamicMeshComponent.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/SceneComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
@@ -142,6 +144,98 @@ namespace
 	}
 
 	/**
+	 * Every slot of a pooled ghost wears the one ghost material. A mesh has as many slots as
+	 * Blender gave it looks, and a slot left alone draws that look solid inside a ghost.
+	 */
+	void ApplyGhostMaterial(UInstancedStaticMeshComponent& Component, UMaterialInterface* Ghost)
+	{
+		if (Ghost == nullptr)
+		{
+			return;
+		}
+		for (int32 Slot = 0; Slot < Component.GetNumMaterials(); ++Slot)
+		{
+			Component.SetMaterial(Slot, Ghost);
+		}
+	}
+
+	/**
+	 * A mesh's plan bounds in the KIT's frame - +X away from the road, the run along +Y -
+	 * after turning it by YawDeg and, for a far cap, mirroring it along the run.
+	 *
+	 * EXACT FOR A QUARTER TURN, which is all ResolveDepotLooks hands out: the sine and cosine
+	 * are rounded so a 90 degree turn maps the box's corners onto each other rather than
+	 * 1e-14 off, and the box stays the box.
+	 */
+	struct FKitBox
+	{
+		FVector2D Min = FVector2D::ZeroVector;
+		FVector2D Max = FVector2D::ZeroVector;
+		double MinZ = 0.0;
+	};
+
+	FKitBox KitBoxOf(const UStaticMesh& Mesh, double YawDeg, bool bMirrorRun)
+	{
+		const FBox Bounds = Mesh.GetBoundingBox();
+		const double Rad = FMath::DegreesToRadians(YawDeg);
+		const double C = FMath::RoundToDouble(FMath::Cos(Rad));
+		const double S = FMath::RoundToDouble(FMath::Sin(Rad));
+
+		FKitBox Out;
+		Out.Min = FVector2D(TNumericLimits<double>::Max());
+		Out.Max = FVector2D(-TNumericLimits<double>::Max());
+		Out.MinZ = Bounds.Min.Z;
+		for (const double X : { Bounds.Min.X, Bounds.Max.X })
+		{
+			for (const double Y : { Bounds.Min.Y, Bounds.Max.Y })
+			{
+				FVector2D Kit(X * C - Y * S, X * S + Y * C);
+				if (bMirrorRun)
+				{
+					Kit.Y = -Kit.Y;
+				}
+				Out.Min = FVector2D::Min(Out.Min, Kit);
+				Out.Max = FVector2D::Max(Out.Max, Kit);
+			}
+		}
+		return Out;
+	}
+
+	/**
+	 * One mesh piece's instance transform: its origin at (KitX, KitY) in the stand's frame,
+	 * turned by the stand's heading plus the mesh's own yaw, standing on the ground.
+	 *
+	 * THE MIRROR IS A NEGATIVE SCALE ON WHICHEVER MESH AXIS THE YAW LAYS ALONG THE RUN - X
+	 * for a quarter turn, Y for none. It is applied first, in the mesh's own frame, which is
+	 * where FTransform applies scale. UE 5.8's GPU scene flips culling per instance on a
+	 * negative determinant (INSTANCE_SCENE_DATA_FLAG_DETERMINANT_SIGN), so a mirrored cap in
+	 * the same component as an unmirrored one is not drawn inside out.
+	 */
+	FTransform PieceAt(const FVector2D& Origin, double Heading, double KitX, double KitY,
+		double YawDeg, bool bMirrorRun, double BaseZ)
+	{
+		const FVector2D Forward(FMath::Cos(Heading), FMath::Sin(Heading));
+		const FVector2D Across = RoadGeom::PerpCCW(Forward);
+		const FVector2D Where = Origin + Forward * KitX + Across * KitY;
+
+		FVector Scale = FVector::OneVector;
+		if (bMirrorRun)
+		{
+			const bool bQuarterTurn = FMath::Abs(FMath::Sin(FMath::DegreesToRadians(YawDeg))) > 0.5;
+			if (bQuarterTurn)
+			{
+				Scale.X = -1.0;
+			}
+			else
+			{
+				Scale.Y = -1.0;
+			}
+		}
+		return FTransform(FRotator(0.0, FMath::RadiansToDegrees(Heading) + YawDeg, 0.0),
+			FVector(Where.X, Where.Y, BaseZ), Scale);
+	}
+
+	/**
 	 * Which edge of the plot is its frontage, recovered from the entity alone.
 	 *
 	 * EXACT, NOT A GUESS, and not a second search either. URoadEditFacade::PlaceEntityInPlot
@@ -184,10 +278,12 @@ namespace
 }
 
 void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes,
-	UInstancedStaticMeshComponent* InGhosts, const FFenceTargets& InFence)
+	UInstancedStaticMeshComponent* InGhosts, const FFenceTargets& InFence,
+	USceneComponent* InMeshParent)
 {
 	Boxes = InBoxes;
 	GhostBoxes = InGhosts;
+	MeshParent = InMeshParent;
 	FencePostsInto = InFence.Posts;
 	FenceHeavyPostsInto = InFence.HeavyPosts;
 	FenceFabricInto = InFence.Fabric;
@@ -198,6 +294,143 @@ int32 UPlotPresenter::GetInstanceCount() const
 	// FROM Placed, NOT THE COMPONENT, so this and GetInstanceTransformForTest agree by
 	// construction rather than by both happening to read the same place today.
 	return Placed.Num();
+}
+
+int32 UPlotPresenter::GetMeshInstanceCountForTest(const UStaticMesh* Mesh, bool bGhost) const
+{
+	const TObjectPtr<UInstancedStaticMeshComponent>* Found =
+		(bGhost ? GhostMeshPool : MeshPool).Find(Mesh);
+	return Found != nullptr && *Found != nullptr ? (*Found)->GetInstanceCount() : 0;
+}
+
+bool UPlotPresenter::GetMeshInstanceTransformForTest(const UStaticMesh* Mesh, bool bGhost,
+	int32 Index, FTransform& OutTransform) const
+{
+	const TObjectPtr<UInstancedStaticMeshComponent>* Found =
+		(bGhost ? GhostMeshPool : MeshPool).Find(Mesh);
+	if (Found == nullptr || *Found == nullptr)
+	{
+		return false;
+	}
+	return (*Found)->GetInstanceTransform(Index, OutTransform, /*bWorldSpace=*/true);
+}
+
+UInstancedStaticMeshComponent* UPlotPresenter::PoolFor(UStaticMesh* Mesh, bool bGhost)
+{
+	if (Mesh == nullptr || MeshParent == nullptr || MeshParent->GetOwner() == nullptr)
+	{
+		return nullptr;
+	}
+	TMap<TObjectPtr<UStaticMesh>, TObjectPtr<UInstancedStaticMeshComponent>>& Pool =
+		bGhost ? GhostMeshPool : MeshPool;
+	if (const TObjectPtr<UInstancedStaticMeshComponent>* Found = Pool.Find(Mesh))
+	{
+		if (IsValid(*Found))
+		{
+			return *Found;
+		}
+	}
+
+	// TRANSIENT and never added to the actor's instance components, so nothing about it is
+	// saved - see MeshPool's comment. No collision, for DressAsCubes' reason on the actor.
+	AActor* Owner = MeshParent->GetOwner();
+	UInstancedStaticMeshComponent* Made = NewObject<UInstancedStaticMeshComponent>(
+		Owner, NAME_None, RF_Transient);
+	Made->SetupAttachment(MeshParent);
+	Made->SetStaticMesh(Mesh);
+	Made->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	if (bGhost && GhostBoxes != nullptr)
+	{
+		ApplyGhostMaterial(*Made, GhostBoxes->GetMaterial(0));
+	}
+	if (Owner->GetWorld() != nullptr)
+	{
+		Made->RegisterComponent();
+	}
+	Pool.Add(Mesh, Made);
+	UE_LOG(LogAirside, Log, TEXT("Plots: made a %s component for %s"),
+		bGhost ? TEXT("ghost") : TEXT("module"), *Mesh->GetName());
+	return Made;
+}
+
+bool UPlotPresenter::DrawMeshes(const FDepotModuleLook& Look, const PlotYard::FKitSpec& Spec,
+	const FVector2D& RunCentre, double Heading, int32 Lit, int32 Dark)
+{
+	if (!Look.HasMeshes() || MeshParent == nullptr)
+	{
+		return false;
+	}
+	const double Yaw = Look.MeshYawDeg;
+	const int32 Length = Lit + Dark;
+
+	if (Look.Assembly == EKitAssembly::Baked)
+	{
+		// EACH SPAN IS ONE BAKED MESH, centred on the span by its own bounds - the lit span
+		// and the ghosted remainder, exactly where the grey boxes stood.
+		const double FullWidth = Spec.RunWidthUu(Length);
+		const double LitWidth = Lit > 0 ? Spec.RunWidthUu(Lit) : 0.0;
+		const double Start = -FullWidth * 0.5;
+		auto Span = [&](int32 Count, double Centre, bool bGhost)
+		{
+			UStaticMesh* Mesh = Look.Baked[FMath::Min(Count, Look.Baked.Num()) - 1];
+			if (UInstancedStaticMeshComponent* Into = PoolFor(Mesh, bGhost))
+			{
+				const FKitBox Box = KitBoxOf(*Mesh, Yaw, /*bMirrorRun=*/false);
+				const FVector2D Mid = (Box.Min + Box.Max) * 0.5;
+				Into->AddInstance(PieceAt(RunCentre, Heading, -Mid.X, Centre - Mid.Y, Yaw,
+					/*bMirrorRun=*/false, -Box.MinZ), /*bWorldSpace=*/true);
+			}
+		};
+		if (Lit > 0)
+		{
+			Span(Lit, Start + LitWidth * 0.5, false);
+		}
+		if (Dark > 0 && GhostBoxes != nullptr)
+		{
+			Span(Dark, Start + LitWidth + (FullWidth - LitWidth) * 0.5, true);
+		}
+		return true;
+	}
+
+	// PARTS: cap, N bays, mirrored cap, laid along the run from its near end. Every piece is
+	// aligned by its OWN bounds' near edge, so a mesh origin is not a contract; the depth is
+	// centred on the BAY's bounds for every piece, so a cap whose eaves reach differently
+	// still lines up with the wall it closes.
+	const FKitBox Bay = KitBoxOf(*Look.Bay, Yaw, false);
+	const FKitBox Cap = KitBoxOf(*Look.Cap, Yaw, false);
+	const FKitBox FarCap = KitBoxOf(*Look.Cap, Yaw, /*bMirrorRun=*/true);
+	const double DepthOffset = -(Bay.Min.X + Bay.Max.X) * 0.5;
+	double Cursor = -Spec.RunWidthUu(Length) * 0.5;
+
+	auto Piece = [&](UStaticMesh* Mesh, const FKitBox& Box, bool bMirror, bool bGhost, double Advance)
+	{
+		if (!bGhost || GhostBoxes != nullptr)
+		{
+			if (UInstancedStaticMeshComponent* Into = PoolFor(Mesh, bGhost))
+			{
+				Into->AddInstance(PieceAt(RunCentre, Heading, DepthOffset, Cursor - Box.Min.Y,
+					Yaw, bMirror, -Box.MinZ), /*bWorldSpace=*/true);
+			}
+		}
+		Cursor += Advance;
+	};
+
+	// BUILT BAYS GET BOTH CAPS - a partly-bought run is a finished building, not a cut one -
+	// and the ghosted bays run on from its far cap with none of their own. That keeps the
+	// whole run inside RunWidthUu(Length): two caps and Length bays, however it is split.
+	// With nothing built the ghost is the whole building, caps included.
+	const bool bBuilt = Lit > 0;
+	Piece(Look.Cap, Cap, false, !bBuilt, Spec.RunEndUu);
+	for (int32 Bays = 0; Bays < (bBuilt ? Lit : Length); ++Bays)
+	{
+		Piece(Look.Bay, Bay, false, !bBuilt, Spec.Footprint.WidthUu);
+	}
+	Piece(Look.Cap, FarCap, true, !bBuilt, Spec.RunEndUu);
+	for (int32 Bays = 0; bBuilt && Bays < Dark; ++Bays)
+	{
+		Piece(Look.Bay, Bay, false, true, Spec.Footprint.WidthUu);
+	}
+	return true;
 }
 
 bool UPlotPresenter::GetInstanceTransformForTest(int32 Index, FTransform& OutTransform) const
@@ -228,6 +461,17 @@ void UPlotPresenter::Clear()
 	{
 		FenceHeavyPostsInto->ClearInstances();
 	}
+	for (const TMap<TObjectPtr<UStaticMesh>, TObjectPtr<UInstancedStaticMeshComponent>>* Pool
+		: { &MeshPool, &GhostMeshPool })
+	{
+		for (const auto& Entry : *Pool)
+		{
+			if (IsValid(Entry.Value))
+			{
+				Entry.Value->ClearInstances();
+			}
+		}
+	}
 	if (FenceFabricInto != nullptr)
 	{
 		// THROUGH THE SINK, EMPTY, rather than resetting the mesh by hand: the sink is the one
@@ -246,7 +490,8 @@ void UPlotPresenter::Clear()
 }
 
 void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
-	TArrayView<const PlotYard::FKitSpec> Specs, const FFenceKit& Kit)
+	TArrayView<const PlotYard::FKitSpec> Specs, const FFenceKit& Kit,
+	TArrayView<const FDepotModuleLook> Looks)
 {
 	if (Boxes == nullptr)
 	{
@@ -269,6 +514,20 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 		FenceHeavyPostsInto->SetStaticMesh(Kit.HeavyPost);
 	}
 	FRoadMeshBuffers Fabric;
+
+	// THE GHOST MATERIAL IS THE ONE GhostBoxes WEARS, on every pooled ghost - one source, set
+	// by the owner each rebuild, rather than a second resolution here. Re-applied per rebuild
+	// for the fence posts' reason: the content set can change under an open editor.
+	if (GhostBoxes != nullptr)
+	{
+		for (const auto& Entry : GhostMeshPool)
+		{
+			if (IsValid(Entry.Value))
+			{
+				ApplyGhostMaterial(*Entry.Value, GhostBoxes->GetMaterial(0));
+			}
+		}
+	}
 
 	// RESOLVED ONCE BY THE CALLER, not per plot: the specs are the same for every plot, and
 	// resolving the same three kits once per depot would do the work once per building on
@@ -352,13 +611,13 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 			{
 				continue;
 			}
-			const PlotYard::FFootprint& One = Specs[Stand.KitIndex].Footprint;
+			const PlotYard::FKitSpec& Spec = Specs[Stand.KitIndex];
+			const PlotYard::FFootprint& One = Spec.Footprint;
 			const double HeightUu = HeightFor(static_cast<EDepotModule>(Stand.KitIndex));
 
 			// A RUN FILLS FROM ONE END. Bays the player owns are drawn solid at that end and
 			// the rest ghosted, so a run visibly GROWS along its length rather than appearing
-			// whole. While these are boxes it is two boxes; with meshes it becomes
-			// BakedMeshes[lit - 1] plus a ghost for the remainder.
+			// whole. Boxes, a baked mesh per span, or parts laid bay by bay - see DrawMeshes.
 			const int32 Lit = FMath::Clamp(Owned[Stand.KitIndex], 0, Stand.RunLength);
 			Owned[Stand.KitIndex] -= Lit;
 			const int32 Dark = Stand.RunLength - Lit;
@@ -368,7 +627,13 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 			// keeps the two halves inside the ground the solver actually reserved.
 			const FVector2D Forward(FMath::Cos(Stand.Heading), FMath::Sin(Stand.Heading));
 			const FVector2D Across = RoadGeom::PerpCCW(Forward);
-			const double FullWidth = One.WidthUu * Stand.RunLength;
+
+			// THROUGH RunWidthUu, caps included, so the spans below split exactly the width the
+			// solver reserved. The built span is a whole building - both caps - and the ghosts
+			// take what is left; with no caps (every grey box) this is the old N x width.
+			const double FullWidth = Spec.RunWidthUu(Stand.RunLength);
+			const double LitWidth = Lit > 0 ? Spec.RunWidthUu(Lit) : 0.0;
+			const double DarkWidth = FullWidth - LitWidth;
 
 			// FLUSH TO THE BACK OF WHAT IT CLAIMED - ONLY WHEN THE STAND CLAIMED AN APRON AT
 			// ALL. A stand's centre is the centre of its footprint PLUS its apron only under
@@ -379,26 +644,33 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 			// own centre - applying this offset there drew the box half an apron outside the
 			// ground the sampler actually fenced off (issue #193).
 			const FVector2D ToBack = Reservation.bStandsIncludeApron
-				? Forward * (Specs[Stand.KitIndex].ApronUu.X * 0.5)
+				? Forward * (Spec.ApronUu.X * 0.5)
 				: FVector2D::ZeroVector;
+			const FVector2D RunCentre = Stand.Centre + ToBack;
+
+			const FDepotModuleLook* Look =
+				Looks.IsValidIndex(Stand.KitIndex) ? &Looks[Stand.KitIndex] : nullptr;
+			const bool bMeshes = Look != nullptr
+				&& DrawMeshes(*Look, Spec, RunCentre, Stand.Heading, Lit, Dark);
 
 			if (Lit > 0)
 			{
-				const double LitWidth = One.WidthUu * Lit;
-				const FVector2D Centre =
-					Stand.Centre + ToBack + Across * ((LitWidth - FullWidth) * 0.5);
+				const FVector2D Centre = RunCentre + Across * ((LitWidth - FullWidth) * 0.5);
 				const FTransform ModuleAt =
 					BoxAt(Centre, Stand.Heading, One.LengthUu, LitWidth, HeightUu);
-				Boxes->AddInstance(ModuleAt, /*bWorldSpace=*/true);
+				// THE ENVELOPE IS RECORDED EITHER WAY: GetInstanceTransformForTest answers
+				// where the building stands, whatever it is drawn with.
+				if (!bMeshes)
+				{
+					Boxes->AddInstance(ModuleAt, /*bWorldSpace=*/true);
+				}
 				Placed.Add(ModuleAt);
 				ModuleBoxes += Lit;
 			}
 
-			if (Dark > 0 && GhostBoxes != nullptr)
+			if (Dark > 0 && GhostBoxes != nullptr && !bMeshes)
 			{
-				const double DarkWidth = One.WidthUu * Dark;
-				const FVector2D Centre =
-					Stand.Centre + ToBack + Across * ((FullWidth - DarkWidth) * 0.5);
+				const FVector2D Centre = RunCentre + Across * ((FullWidth - DarkWidth) * 0.5);
 				GhostBoxes->AddInstance(
 					BoxAt(Centre, Stand.Heading, One.LengthUu, DarkWidth, HeightUu),
 					/*bWorldSpace=*/true);

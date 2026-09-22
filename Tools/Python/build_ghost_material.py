@@ -194,6 +194,12 @@ def build_ghost_material():
     lib.connect_material_property(emissive, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     lib.connect_material_property(opacity, "", unreal.MaterialProperty.MP_OPACITY)
 
+    # INSTANCED, because the depot's ghost bays are instances (issue #265): without the flag a
+    # game world substitutes the default material, the ghosts draw opaque and the log says
+    # "missing usage flag InstancedStaticMeshes" once. The editor sets usage flags on first use
+    # and never saves them, so an interactive session hides this.
+    material.set_editor_property("used_with_instanced_static_meshes", True)
+
     lib.recompile_material(material)
     unreal.EditorAssetLibrary.save_asset(path)
     unreal.log("MARKER: %s built and saved" % path)

@@ -513,9 +513,9 @@ PlotYard::FReservation PlotYard::Reserve(TArrayView<const FVector2D> Outline,
 			// THE RUN'S FOOTPRINT, not the module's. Bays share walls, so a run is N times as
 			// wide and exactly as deep - no clearance between bays, because they are one
 			// building. FKitSpec::Footprint stays one module's so that this multiplication
-			// happens in exactly one place.
+			// happens in exactly one place, FKitSpec::RunWidthUu, which adds the end caps.
 			FFootprint Run = Kits[Kit].Footprint;
-			Run.WidthUu *= Length;
+			Run.WidthUu = Kits[Kit].RunWidthUu(Length);
 
 			Stand.RunLength = Length;
 			const bool bPlaced = bTakesTheRay
