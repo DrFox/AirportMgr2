@@ -51,11 +51,11 @@ Tests:
 ### Geometry: `Solve/FenceLayout` (CoreMinimal only)
 
 ```
-FenceLayout::Solve(Outline, Gate, Spec) -> FFenceLayout
-  FFenceSpec   SpacingUu 250, FabricHeightUu 240, TileUu 240, FaceOffsetUu 3, GateWidthUu
-  FFenceLayout Posts[] {Position, YawRad, Kind: Line | Corner | Gate}
+FenceLayout::Solve(Outline, Gate, Spec) -> FenceLayout::FLayout
+  FSpec   SpacingUu 250, TileUu 240, FaceOffsetUu 3, GateWidthUu   (height is the presenter's)
+  FLayout Posts[] {Position, YawRad, Kind: Line | Corner | Gate}
                Spans[] {A, B, U0, U1}
-               bHasGate, GateEdge, GateWidthUu
+               bHasGate, GateCentre   (no edge index: the solver may reverse the ring)
 ```
 
 - Corner post at every outline vertex, yawed to the interior-angle bisector.
@@ -91,11 +91,14 @@ stretch within ±12% of `SpacingUu`.
   average two edges' normals.
 - `Placed` holds modules only; the "MODULES BEFORE THE FENCE" ordering comment is replaced
   by one line saying why it no longer applies.
-- Census line keeps its one `UE_LOG`, reworded to posts, spans and gate
-  (`gate W uu on edge E`, or `none` at Warning). `GetGateGapCount` stays, returning 0 or 1.
-- Null content (the tests' case): posts are the engine cube scaled to Ø60 / Ø90 x 245 cm;
-  fabric takes the grey-box material, never none (a material-less dynamic mesh draws the
-  floor checker).
+- Census line keeps its one `UE_LOG`, reworded to posts, fabric bays and gates; a plot with
+  no gate gets its own Warning. `GetGateGapCount` now counts plots with a gate.
+- Null content (the tests' case): posts are the engine cube scaled to Ø6 / Ø9 x 245 uu;
+  the fabric takes the sink's own default surface material (the grid checker) - the same
+  visible-but-wrong fallback the road uses, no second path.
+- Fabric quads bypass `FRoadMeshBuffers::AppendTriangleUp`: its sliver guard measures XY
+  area, zero for every vertical triangle. Wound so the engine normal faces out (measured).
+- Posts have no collision, like the modules. Clear gate opening is 611 uu (post centres 620).
 
 Tests: `Airside.Present.PlotFence` - spawn both actors, place a plot, assert HISM instance
 counts equal the layout's per-kind post counts and fabric triangles equal `2 x Spans`.
@@ -103,9 +106,10 @@ counts equal the layout's per-kind post counts and fabric triangles equal `2 x S
 
 ### Content (editor closed)
 
-- `import_models.py`: Specs for both post FBXs into `/Game/Environment/Fence/`; remove the
-  docstring's "not here" entry for chainlink. `chainlink_post` material checked on arrival.
-- New `Tools/Python/build_fence_material.py`: imports `chainlink.png` / `chainlink_n.png`,
+- One new `Tools/Python/build_fence_content.py`, NOT `import_models.py` (that table drives a
+  glTF vehicle pipeline). Imports both post FBXs into `/Game/Environment/Fence/` and
+  MEASURES them (245 uu tall, radius 3 / 4.5, base at 0 - all matched first run); imports
+  `chainlink.png` / `chainlink_n.png`,
   sets `bDoScaleMipsForAlphaCoverage = true`, `AlphaCoverageThresholds = (0,0,0,0.33)`
   (`Texture.h:1371-1375`), reads both back; authors `M_ChainlinkFabric` - Masked, Two
   Sided, clip 0.33, BaseColor + OpacityMask from the albedo, Normal from `_n`.
