@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Components/DynamicMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Engine/StaticMesh.h"
 #include "Entities/EntityDefinition.h"
@@ -685,13 +686,11 @@ bool FPlotPresenterAssemblesAShedFromPartsTest::RunTest(const FString& Parameter
 
 	TestEqual(TEXT("one shed bay bought"), Plots->GetModuleCount(), 1);
 
-	// DRAWABLE, NOT JUST COUNTED. Every count below read correctly in PIE on 2026-09-22 while
-	// the components belonged to the CDO - no world, never registered, nothing on screen.
+	// DRAWABLE, NOT JUST COUNTED. A spawned actor gets this right either way - the duplicate
+	// is what broke; see PlotPresenterDuplicateOwnsItsMeshComponents.
 	const UInstancedStaticMeshComponent* BayComponent = Plots->GetMeshComponentForTest(Bay, false);
 	if (!TestNotNull(TEXT("a component draws the bay"), BayComponent)) { return false; }
-	TestTrue(TEXT("owned by this buildings actor, not its class default"),
-		BayComponent->GetOwner() == TestWorld.Buildings);
-	TestTrue(TEXT("and registered, so it renders"), BayComponent->IsRegistered());
+	TestTrue(TEXT("registered, so it renders"), BayComponent->IsRegistered());
 	TestEqual(TEXT("a built bay is one bay mesh"), Plots->GetMeshInstanceCountForTest(Bay, false), 1);
 	TestEqual(TEXT("closed by a cap at each end - a partly-bought run is a finished building"),
 		Plots->GetMeshInstanceCountForTest(Cap, false), 2);
@@ -827,6 +826,58 @@ bool FPlotPresenterCentresABakedMeshTest::RunTest(const FString& Parameters)
 		Drawn.GetLocation().Z, -Tank->GetBoundingBox().Min.Z, 0.01);
 	TestNearlyEqual(TEXT("facing the way the stand faces"),
 		Drawn.Rotator().Yaw, Envelope.Rotator().Yaw, 0.01);
+	return true;
+}
+
+/**
+ * A DUPLICATED buildings actor - what PIE makes of the level's - owns the mesh components its
+ * presenter creates.
+ *
+ * THE PIE BUG OF 2026-09-22. PostInitProperties handed the presenter RootComponent, which at
+ * that point on a duplicate still names the CDO's root, so the shed and tank components were
+ * made under the CDO: no world, never registered, nothing on screen - while every count the
+ * other tests read was right. A SPAWNED actor gets it right either way, which is why the
+ * spawned-actor test passed with the bug in; this one was seen to fail with it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPresenterDuplicateOwnsItsMeshComponentsTest,
+	"Airside.Present.PlotPresenterDuplicateOwnsItsMeshComponents",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPresenterDuplicateOwnsItsMeshComponentsTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	UStaticMesh* Cap = PartsTestMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	UStaticMesh* Bay = PartsTestMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	if (!TestTrue(TEXT("buildings actor, depot and both stand-in meshes"),
+		TestWorld.Buildings != nullptr && Depot != nullptr && Cap != nullptr && Bay != nullptr))
+	{
+		return false;
+	}
+
+	AAirsideBuildingsActor* Dup = DuplicateObject<AAirsideBuildingsActor>(
+		TestWorld.Buildings, TestWorld.Buildings->GetOuter());
+	if (!TestTrue(TEXT("a duplicate with a presenter"),
+		Dup != nullptr && Dup->GetPlotPresenter() != nullptr)) { return false; }
+
+	Actor->ClearNetwork();
+	PlacePartsDepot(Actor, Depot, { EDepotModule::Shed });
+
+	TArray<PlotYard::FKitSpec> Specs;
+	TArray<FDepotModuleLook> Looks;
+	PartsTestKit(Cap, Bay, Specs, Looks);
+	Dup->GetPlotPresenter()->RebuildFrom(*Actor->Network, Specs, FFenceKit(), Looks);
+
+	const UInstancedStaticMeshComponent* BayComponent =
+		Dup->GetPlotPresenter()->GetMeshComponentForTest(Bay, false);
+	if (!TestNotNull(TEXT("the duplicate made a component for the bay"), BayComponent)) { return false; }
+	TestEqual(TEXT("owned by the duplicate, not the class default - a CDO-owned component has no world"),
+		static_cast<const UObject*>(BayComponent->GetOwner()), static_cast<const UObject*>(Dup));
+	TestTrue(TEXT("and it has the duplicate's world to render in"),
+		BayComponent->GetWorld() == TestWorld.World);
 	return true;
 }
 
