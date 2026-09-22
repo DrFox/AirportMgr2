@@ -773,6 +773,11 @@ void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
 		Plots->RebuildFrom(*Network, ResolveDepotKits());
 	}
 
+	// THE BUILDINGS, through the delegate - see OnTopologyRebuilt's own comment. After the
+	// surface, so a plot drawn this frame has its pad underneath it before its sheds go up;
+	// before Traffic, matching where the direct call stood.
+	OnTopologyRebuilt.Broadcast(*Network);
+
 	// The guideline graph was just regenerated with new handles. Every agent's route must be
 	// re-pointed at the nodes that now hold its positions, or the occupancy table would be
 	// keyed on slots the builder has already freed - see UGroundTraffic::OnGraphRebuilt.

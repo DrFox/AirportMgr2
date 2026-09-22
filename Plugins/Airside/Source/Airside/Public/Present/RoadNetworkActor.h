@@ -258,6 +258,22 @@ public:
 	UPlotPresenter* GetPlotPresenter() const { return Plots; }
 
 	/**
+	 * Fired after every TOPOLOGY rebuild, once the surface is built - where the plot boxes
+	 * used to be drawn by a direct call on this actor.
+	 *
+	 * A DELEGATE, NOT A POINTER TO THE BUILDINGS ACTOR, so this actor does not know buildings
+	 * exist: a depot's sheds are objects standing on the airport, not road network, and this
+	 * class reached 2313 lines by owning everything that stood on it. Geometry (drag-frame)
+	 * and Markings rebuilds do not fire it, for the reason RebuildMeshForChange gives - nothing
+	 * a listener derives from has moved. Native, not dynamic: it carries a const reference,
+	 * and nothing in Blueprint listens.
+	 *
+	 * ENFORCED BY: Airside.Present.BuildingsActorDrawsThroughTheDelegate.
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnTopologyRebuilt, const URoadNetwork&);
+	FOnTopologyRebuilt OnTopologyRebuilt;
+
+	/**
 	 * Every graph mutator, query and undo step - see URoadEditFacade.
 	 *
 	 * READ ACCESS TO THE SUBOBJECT, not a forwarder per method, for exactly the reason
