@@ -145,6 +145,14 @@ public:
 
 private:
 	/**
+	 * The plotted entity under the cursor for a Remove gesture, or INDEX_NONE.
+	 *
+	 * PLOTS ONLY: this is the depot tool, and Remove lit on it removes depots. A stand under
+	 * the cursor is the stand tool's to remove, where the player can see it is one.
+	 */
+	static int32 PlotUnder(const FToolContext& Context);
+
+	/**
 	 * What this plot would hold, solved by the same code the presenter runs.
 	 *
 	 * SHARED BY THE GHOST AND THE READOUT. The ghost draws these stands and the readout

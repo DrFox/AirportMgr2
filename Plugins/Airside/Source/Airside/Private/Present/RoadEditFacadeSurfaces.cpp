@@ -505,10 +505,38 @@ int32 URoadEditFacade::FindEntityAt(FVector2D Where, double Radius) const
 		return INDEX_NONE;
 	}
 
-	// Picked by the entity's own position - its stop mark - rather than by any anchor. An
-	// anchor is where a vehicle parks; the stand is the thing being pointed at.
-	return RoadSlot::NearestAlive<FEntityInstance>(Network->GetEntities(), Where, Radius,
-		[](const FEntityInstance& Entity) { return Entity.Position; });
+	const TArray<FEntityInstance>& Entities = Network->GetEntities();
+
+	// A STAND BY ITS STOP MARK, within the pick radius - its own position rather than any
+	// anchor: an anchor is where a vehicle parks, the stand is the thing being pointed at.
+	// FIRST, because it is the smaller target, the precedent FSelectTool sets for aircraft
+	// over stands.
+	//
+	// A PLOT NEVER BY ITS POSITION. That is the gate midpoint, and until 2026-09-22 it was the
+	// only way to select or remove a depot: a small click at the gate, with the whole plot and
+	// its buildings dead to the cursor. Mapped out of reach here rather than filtered after,
+	// so a plot's gate cannot win the radius pick over a stand beside it.
+	const int32 Stand = RoadSlot::NearestAlive<FEntityInstance>(Entities, Where, Radius,
+		[](const FEntityInstance& Entity)
+		{
+			return Entity.IsPlotted() ? FVector2D(TNumericLimits<double>::Max()) : Entity.Position;
+		});
+	if (Stand != INDEX_NONE)
+	{
+		return Stand;
+	}
+
+	// A PLOT BY ITS GROUND: anywhere inside the outline the player drew, which is also
+	// everywhere its buildings stand - PlotYard keeps every module inside the plot.
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		const FEntityInstance& Entity = Entities[Index];
+		if (Entity.bAlive && Entity.IsPlotted() && RoadGeom::PointInPolygon(Entity.Outline, Where))
+		{
+			return Index;
+		}
+	}
+	return INDEX_NONE;
 }
 
 void URoadEditFacade::ClearNetwork()

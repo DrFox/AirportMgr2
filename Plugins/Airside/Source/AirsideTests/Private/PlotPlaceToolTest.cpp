@@ -15,6 +15,10 @@
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/PlotPlaceTool.h"
+#include "Tool/SelectTool.h"
+#include "Tool/Selection.h"
+#include "Entities/EntityDefinition.h"
+#include "Present/AirsideBuildingsActor.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/ToolReadout.h"
 
@@ -1683,6 +1687,140 @@ bool FPlotPreviewOutlinesTheGroundActuallyReservedTest::RunTest(const FString& P
 			FMath::IsNearlyEqual(Diagonal, 497.2, 5.0));
 	}
 
+	return true;
+}
+
+namespace
+{
+	/** A 30 x 24 m depot owning a shed and a tank, gate mid-frontage. Prefixed against the unity build. */
+	int32 DepotPickPlace(ARoadNetworkActor* Actor)
+	{
+		UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = FVector2D(1500.0, 0.0);
+		Placement.Heading = UE_DOUBLE_HALF_PI;
+		Placement.PoseRole = EServiceRole::Fuel;
+		Placement.Outline = { FVector2D(0.0, 0.0), FVector2D(3000.0, 0.0),
+		                      FVector2D(3000.0, 2400.0), FVector2D(0.0, 2400.0) };
+		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank };
+		return Actor->Network->PlaceEntity(Placement).Index;
+	}
+
+	/** Counts lines by style - FPlotPlaceTool and FSelectTool draw a plot as a polygon of lines. */
+	struct FDepotPickSink : public IToolPreviewSink
+	{
+		TMap<EPreviewStyle, int32> Lines;
+		TMap<EPreviewStyle, int32> Markers;
+		virtual void Marker(const FVector2D&, EPreviewStyle Style) override { Markers.FindOrAdd(Style)++; }
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle Style) override { Lines.FindOrAdd(Style)++; }
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString&, EPreviewStyle) override {}
+		int32 LinesOf(EPreviewStyle S) const { const int32* N = Lines.Find(S); return N ? *N : 0; }
+		int32 MarkersOf(EPreviewStyle S) const { const int32* N = Markers.Find(S); return N ? *N : 0; }
+	};
+}
+
+/**
+ * A depot is picked by its ground and its buildings - never by a small click at its gate - and
+ * a stand is still picked by its stop mark.
+ *
+ * THE BEHAVIOUR CHANGE OF 2026-09-22. FindEntityAt measured distance to every entity's
+ * Position, which for a depot is the gate midpoint, so the only way to select or remove one
+ * was to find that point. Asserted through the actor, which is the pick every tool calls.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotIsPickedByItsGroundTest,
+	"Airside.Tool.DepotIsPickedByItsGround",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotIsPickedByItsGroundTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestTrue(TEXT("a road network and buildings actor"),
+		Actor != nullptr && TestWorld.Buildings != nullptr)) { return false; }
+
+	Actor->ClearNetwork();
+	const int32 Depot = DepotPickPlace(Actor);
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const int32 Stand = Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(10000.0, 0.0), 0.0).Index;
+	Actor->RebuildMesh();
+	if (!TestTrue(TEXT("both entities placed"), Depot != INDEX_NONE && Stand != INDEX_NONE)) { return false; }
+
+	constexpr double Radius = 400.0;
+	TestEqual(TEXT("a click deep in the plot picks the depot"),
+		Actor->FindEntityAt(FVector2D(2800.0, 2200.0), Radius), Depot);
+	TestEqual(TEXT("a click just outside the plot, 3 m from its gate, picks nothing - the gate is no longer a target"),
+		Actor->FindEntityAt(FVector2D(1500.0, -300.0), Radius), INDEX_NONE);
+	TestEqual(TEXT("a stand is still picked by its stop mark"),
+		Actor->FindEntityAt(FVector2D(10100.0, 0.0), Radius), Stand);
+
+	// A BUILDING'S OWN FOOTPRINT, from the presenter that drew it - "click the buildings".
+	FTransform Building;
+	if (!TestTrue(TEXT("the depot's buildings stand"),
+		TestWorld.Buildings->GetPlotPresenter()->GetInstanceTransformForTest(0, Building))) { return false; }
+	TestEqual(TEXT("a click on a building picks its depot"),
+		Actor->FindEntityAt(FVector2D(Building.GetLocation()), Radius), Depot);
+
+	// THE SELECT TOOL, end to end: the click selects it and the highlight is the plot's outline,
+	// not a ring at the gate.
+	FSelectTool Select;
+	FSelection Selection;
+	FToolContext Context = TestTool::ContextAt(*Actor, FVector2D(2800.0, 2200.0), ERoadSnapKind::Free, Radius);
+	Context.Selection = &Selection;
+	Select.OnClick(Context);
+	TestTrue(TEXT("the click selects the depot"),
+		Selection.Kind == ESelectionKind::Stand && Selection.Id == Depot);
+
+	FDepotPickSink Sink;
+	Select.BuildPreview(Context, Sink);
+	TestEqual(TEXT("the selected depot is drawn as its four-sided outline"), Sink.LinesOf(EPreviewStyle::Selected), 4);
+	TestEqual(TEXT("and not as a ring at its gate"), Sink.MarkersOf(EPreviewStyle::Selected), 0);
+	return true;
+}
+
+/**
+ * Remove lit on the depot tool deletes the depot clicked, anywhere on its ground, and starts
+ * no plot gesture; a click on open ground removes nothing.
+ *
+ * THE TOOL IGNORED REMOVE until 2026-09-22 - the bar's Remove button did nothing on it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotToolRemovesADepotTest,
+	"Airside.Tool.PlotToolRemovesADepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotToolRemovesADepotTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a road network"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	const int32 Depot = DepotPickPlace(Actor);
+	if (!TestTrue(TEXT("a depot placed"), Depot != INDEX_NONE)) { return false; }
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+
+	FToolContext Miss = TestTool::ContextAt(*Actor, FVector2D(8000.0, 8000.0), ERoadSnapKind::Free, 400.0);
+	Miss.bRemoveModifier = true;
+	Tool.OnClick(Miss);
+	TestTrue(TEXT("a remove click on open ground leaves the depot"),
+		Actor->Network->GetEntities()[Depot].bAlive);
+	TestEqual(TEXT("and starts no plot gesture"), Tool.PinnedCount(), 0);
+
+	FToolContext Hit = TestTool::ContextAt(*Actor, FVector2D(2800.0, 2200.0), ERoadSnapKind::Free, 400.0);
+	Hit.bRemoveModifier = true;
+
+	FDepotPickSink Sink;
+	Tool.BuildPreview(Hit, Sink);
+	TestEqual(TEXT("the preview outlines the whole plot as doomed"), Sink.LinesOf(EPreviewStyle::Doomed), 4);
+
+	Tool.OnClick(Hit);
+	TestFalse(TEXT("a remove click inside the plot deletes the depot"),
+		Actor->Network->GetEntities().IsValidIndex(Depot) && Actor->Network->GetEntities()[Depot].bAlive);
+	TestEqual(TEXT("and starts no plot gesture either"), Tool.PinnedCount(), 0);
 	return true;
 }
 
