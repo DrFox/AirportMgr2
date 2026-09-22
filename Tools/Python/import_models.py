@@ -18,8 +18,8 @@ file's header for why the three existing import_*.py scripts are left as they ar
 
 WHAT IS DELIBERATELY NOT HERE:
 
-- accessories/chainlink. Two fence POSTS are exported and no panel, so nothing here can
-  assemble a fence line. Worth importing when the panel lands.
+- accessories/chainlink. Imported by build_fence_content.py instead: two static FBX posts and a
+  texture pair, none of which this glTF vehicle table's machinery applies to.
 - baggageCart1, FuelDepot1, concepts. Concept art only; no export exists.
 - boeing737-900/737.fbx. 10 KB, dated 2024, beside a .blend that is clearly the real work.
   A stub, not a model.

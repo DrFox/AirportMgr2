@@ -1,9 +1,12 @@
 #include "Present/AirsideBuildingsActor.h"
 
 #include "AirsideLog.h"
+#include "Components/DynamicMeshComponent.h"
+#include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Content/AirsidePrimitives.h"
+#include "Content/AirsideSettings.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -15,7 +18,7 @@
 namespace
 {
 	/**
-	 * A module ISM: the engine cube, no collision.
+	 * An instanced component of engine cubes, no collision.
 	 *
 	 * THE ENGINE'S OWN PRIMITIVE, not an authored asset, for the reason ARoadAgentActor's
 	 * placeholder records at its own FObjectFinder - grey-box geometry that shows only until
@@ -24,7 +27,7 @@ namespace
 	 * against the road plane, so a collider here would be something the build tools could
 	 * trace against by accident.
 	 */
-	void DressAsModuleBoxes(UInstancedStaticMeshComponent& Component, UStaticMesh* Cube)
+	void DressAsCubes(UInstancedStaticMeshComponent& Component, UStaticMesh* Cube)
 	{
 		if (Cube != nullptr)
 		{
@@ -46,16 +49,37 @@ AAirsideBuildingsActor::AAirsideBuildingsActor()
 
 	ModuleBoxes = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ModuleBoxes"));
 	ModuleBoxes->SetupAttachment(RootComponent);
-	DressAsModuleBoxes(*ModuleBoxes, CubeMesh);
+	DressAsCubes(*ModuleBoxes, CubeMesh);
 
 	// THE GHOSTS GET THEIR OWN COMPONENT, sharing the cube and differing only in material -
 	// see ModuleGhosts' own comment.
 	ModuleGhosts = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ModuleGhosts"));
 	ModuleGhosts->SetupAttachment(RootComponent);
-	DressAsModuleBoxes(*ModuleGhosts, CubeMesh);
+	DressAsCubes(*ModuleGhosts, CubeMesh);
+
+	// THE FENCE. Posts start as the cube for the grey-box fallback; the presenter swaps in the
+	// authored meshes each rebuild when the content set has them.
+	FencePosts = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("FencePosts"));
+	FencePosts->SetupAttachment(RootComponent);
+	DressAsCubes(*FencePosts, CubeMesh);
+
+	FenceHeavyPosts = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("FenceHeavyPosts"));
+	FenceHeavyPosts->SetupAttachment(RootComponent);
+	DressAsCubes(*FenceHeavyPosts, CubeMesh);
+
+	// ABSOLUTE, like every surface ARoadNetworkActor draws: the strip is built in world
+	// coordinates and must not be transformed a second time.
+	FenceFabric = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("FenceFabric"));
+	FenceFabric->SetupAttachment(RootComponent);
+	FenceFabric->SetUsingAbsoluteLocation(true);
+	FenceFabric->SetUsingAbsoluteRotation(true);
+	FenceFabric->SetUsingAbsoluteScale(true);
+	FenceFabric->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	FenceFabric->bAffectDistanceFieldLighting = false;
 
 	Plots = CreateDefaultSubobject<UPlotPresenter>(TEXT("Plots"));
-	Plots->Initialise(ModuleBoxes, ModuleGhosts);
+	Plots->Initialise(ModuleBoxes, ModuleGhosts,
+		FFenceTargets{ FencePosts, FenceHeavyPosts, FenceFabric });
 }
 
 void AAirsideBuildingsActor::PostInitProperties()
@@ -70,9 +94,13 @@ void AAirsideBuildingsActor::PostInitProperties()
 	Plots = Cast<UPlotPresenter>(GetDefaultSubobjectByName(TEXT("Plots")));
 	ModuleBoxes = Cast<UInstancedStaticMeshComponent>(GetDefaultSubobjectByName(TEXT("ModuleBoxes")));
 	ModuleGhosts = Cast<UInstancedStaticMeshComponent>(GetDefaultSubobjectByName(TEXT("ModuleGhosts")));
+	FencePosts = Cast<UHierarchicalInstancedStaticMeshComponent>(GetDefaultSubobjectByName(TEXT("FencePosts")));
+	FenceHeavyPosts = Cast<UHierarchicalInstancedStaticMeshComponent>(GetDefaultSubobjectByName(TEXT("FenceHeavyPosts")));
+	FenceFabric = Cast<UDynamicMeshComponent>(GetDefaultSubobjectByName(TEXT("FenceFabric")));
 	if (Plots != nullptr)
 	{
-		Plots->Initialise(ModuleBoxes, ModuleGhosts);
+		Plots->Initialise(ModuleBoxes, ModuleGhosts,
+			FFenceTargets{ FencePosts, FenceHeavyPosts, FenceFabric });
 	}
 }
 
@@ -219,5 +247,6 @@ void AAirsideBuildingsActor::Rebuild(const URoadNetwork& Network)
 	}
 
 	// THROUGH THE ROAD NETWORK'S ONE RESOLVER (issue #181) - see UPlotPresenter::RebuildFrom.
-	Plots->RebuildFrom(Network, Road->ResolveDepotKits());
+	// THE FENCE'S CONTENT through UAirsideSettings' one resolver, like every content default.
+	Plots->RebuildFrom(Network, Road->ResolveDepotKits(), UAirsideSettings::ResolveFenceKit());
 }

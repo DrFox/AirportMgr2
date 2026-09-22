@@ -117,37 +117,38 @@ bool FPlotPresenterDressesEachBayTest::RunTest(const FString& Parameters)
 
 	Actor->ClearNetwork();
 	Actor->RebuildMesh();
-	TestEqual(TEXT("an empty airport stands nothing up"),
-		TestWorld.Buildings->GetPlotPresenter()->GetInstanceCount(), 0);
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	TestEqual(TEXT("an empty airport stands no modules up"), Plots->GetInstanceCount(), 0);
+	TestEqual(TEXT("and no fence"), Plots->GetFencePostCount(), 0);
 
 	PlaceDepot(Actor, Depot, 0.0);
 	Actor->RebuildMesh();
 
-	const int32 One = TestWorld.Buildings->GetPlotPresenter()->GetInstanceCount();
+	const int32 One = Plots->GetFencePostCount();
 
-	// Three modules plus a fence, so the count is well over three - the exact number moves
-	// with the panel length and is not the claim. What IS the claim is that the modules and
-	// the fence both went up.
-	TestTrue(TEXT("three modules and a fence stand up"), One > 3);
+	// A FENCE STANDS even round a plot too small to seat a module - the 12 x 8 m Tier 1 plot
+	// seats none under the band layout. The fence is the claim here; modules are
+	// PlotPresenterLaysOutTheDepot's. The exact number moves with the spacing and is not the
+	// claim either.
+	TestTrue(TEXT("a fence stands up"), One > 0);
 
 	// THE GATE IS A GAP. A fence with no gate is a depot no truck can leave, and it would
-	// look completely correct from every angle - so the skipped bay is counted, not eyeballed.
-	TestTrue(TEXT("and the fence is left open at the gate"),
-		TestWorld.Buildings->GetPlotPresenter()->GetGateGapCount() > 0);
+	// look completely correct from every angle - so the gate is counted, not eyeballed.
+	TestTrue(TEXT("and the fence is left open at the gate"), Plots->GetGateGapCount() > 0);
 
 	// A SECOND DEPOT MUST ADD, NOT REPLACE. A presenter that rebuilt from only the last
 	// entity passes every single-depot assertion and loses every depot but one on screen.
 	PlaceDepot(Actor, Depot, 4000.0);
 	Actor->RebuildMesh();
 	TestEqual(TEXT("a second depot adds its own, it does not replace the first"),
-		TestWorld.Buildings->GetPlotPresenter()->GetInstanceCount(), One * 2);
+		Plots->GetFencePostCount(), One * 2);
 
 	// AND A REBUILD IS IDEMPOTENT. RebuildMesh runs on every graph change, so a presenter
 	// that appended instead of clearing would double the boxes every time the player drew a
 	// road anywhere on the airport.
 	Actor->RebuildMesh();
-	TestEqual(TEXT("rebuilding again does not double the boxes"),
-		TestWorld.Buildings->GetPlotPresenter()->GetInstanceCount(), One * 2);
+	TestEqual(TEXT("rebuilding again does not double the fence"),
+		Plots->GetFencePostCount(), One * 2);
 
 	return true;
 }
@@ -177,9 +178,8 @@ bool FPlotPresenterLaysOutTheDepotTest::RunTest(const FString& Parameters)
 
 	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
 
-	// THE MODULES ARE THE FIRST INSTANCES a plot adds, before its fence. That ordering is
-	// why this can name them at all - and why it uses ONE depot: with two, the second
-	// depot's modules sit after the first depot's fence and the slice would be wrong.
+	// EVERY INSTANCE IS A MODULE since the fence moved to its own components (2026-09-22), so
+	// the first depot's are simply the first Modules entries.
 	const int32 Modules = Plots->GetModuleCount();
 	if (!TestEqual(TEXT("all three modules of the mix stand"), Modules, 3))
 	{
@@ -187,7 +187,7 @@ bool FPlotPresenterLaysOutTheDepotTest::RunTest(const FString& Parameters)
 	}
 
 	const TArray<FTransform> Instances = PlotInstances(TestWorld.Buildings);
-	if (!TestTrue(TEXT("the fence went up around them"), Instances.Num() > Modules))
+	if (!TestTrue(TEXT("the fence went up around them"), Plots->GetFencePostCount() > 0))
 	{
 		return false;
 	}
@@ -234,13 +234,13 @@ bool FPlotPresenterLaysOutTheDepotTest::RunTest(const FString& Parameters)
 	Actor->RebuildMesh();
 
 	const TArray<FTransform> Both = PlotInstances(TestWorld.Buildings);
-	if (!TestTrue(TEXT("the second depot stood up too"), Both.Num() > Instances.Num()))
+	if (!TestEqual(TEXT("the second depot stood its modules up too"), Both.Num(), Instances.Num() * 2))
 	{
 		return false;
 	}
 
-	// The first depot's modules are unchanged, so the second depot's are the ones added
-	// after the first plot's fence - compared RELATIVE to each depot's own pose, or two
+	// The first depot's modules are unchanged, so the second depot's are the ones after the
+	// first depot's - compared RELATIVE to each depot's own pose, or two
 	// identical yards 40 m apart would differ merely by being 40 m apart.
 	//
 	// TWO IDENTICAL PLOTS LAY OUT IDENTICALLY, which is also the reverse of what this asserted
@@ -342,7 +342,7 @@ bool FPlotPresenterSurvivesDuplicationTest::RunTest(const FString& Parameters)
 	// The real claim: the duplicate's boxes land somewhere its own presenter can count,
 	// which they cannot if it is still filling the CDO's component.
 	TestTrue(TEXT("the duplicate's own boxes stand up"),
-		Dup->GetPlotPresenter()->GetInstanceCount() > 3);
+		Dup->GetPlotPresenter()->GetFencePostCount() > 0);
 
 	return true;
 }

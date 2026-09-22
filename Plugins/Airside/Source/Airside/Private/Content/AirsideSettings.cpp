@@ -263,6 +263,19 @@ UStaticMesh* UAirsideSettings::ResolveVehicleMesh()
 	return Content != nullptr ? Content->VehicleMesh.LoadSynchronous() : nullptr;
 }
 
+FFenceKit UAirsideSettings::ResolveFenceKit()
+{
+	FFenceKit Kit;
+	const UAirsideContent* Content = GetContent();
+	if (Content != nullptr)
+	{
+		Kit.LinePost = Content->FenceLinePost.LoadSynchronous();
+		Kit.HeavyPost = Content->FenceHeavyPost.LoadSynchronous();
+		Kit.Fabric = Content->FenceFabricMaterial.LoadSynchronous();
+	}
+	return Kit;
+}
+
 FResolvedAgentView UAirsideSettings::ResolveVehicleView()
 {
 	const UAirsideContent* Content = GetContent();

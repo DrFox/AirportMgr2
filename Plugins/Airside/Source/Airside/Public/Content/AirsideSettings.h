@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Content/FenceKit.h"
 #include "Engine/DeveloperSettings.h"
 #include "Model/RoadEntity.h"
 #include "AirsideSettings.generated.h"
@@ -195,6 +196,9 @@ public:
 
 	/** A service vehicle's body mesh - the content default, or null with none configured. */
 	static UStaticMesh* ResolveVehicleMesh();
+
+	/** The chainlink fence's meshes and material - the content defaults, each null if unset. */
+	static FFenceKit ResolveFenceKit();
 
 	/**
 	 * A service vehicle's RIGGED body and the graph that drives it, or an empty view when the
