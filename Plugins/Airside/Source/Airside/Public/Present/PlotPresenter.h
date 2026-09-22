@@ -2,9 +2,9 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "Solve/PlotYard.h"
 #include "PlotPresenter.generated.h"
 
-class ARoadNetworkActor;
 class UInstancedStaticMeshComponent;
 class URoadNetwork;
 
@@ -42,8 +42,24 @@ public:
 	/**
 	 * Clear and re-add an instance per module standing where the yard solver put it, plus a
 	 * fence round every plot's outline.
+	 *
+	 * THE KITS ARE HANDED IN, not looked up. This used to reach its owning ARoadNetworkActor
+	 * for ResolveDepotKits (issue #181), which tied the presenter to whichever actor happened
+	 * to be its outer - and the buildings split moved that outer. The caller resolves through
+	 * the ONE resolver, ARoadNetworkActor::ResolveDepotKits, so issue #181's second-resolution
+	 * drift stays impossible: this class has no way to resolve them itself. (Before #181 it
+	 * called DepotKitSpecs(UAirsideSettings::GetContent()) directly - a second resolution of
+	 * the table FPlotPlaceTool's ghost reads through IRoadEditTarget, and the two drifted.)
 	 */
-	void RebuildFrom(const URoadNetwork& Network);
+	void RebuildFrom(const URoadNetwork& Network, TArrayView<const PlotYard::FKitSpec> Specs);
+
+	/**
+	 * Empty every component and zero every count, as if rebuilt from an airport with no plots.
+	 *
+	 * FOR AN OWNER WITH NOTHING TO DRAW FROM - a buildings actor whose road network is gone.
+	 * RebuildFrom starts with exactly this, so the two cannot disagree about what "empty" is.
+	 */
+	void Clear();
 
 	/** For tests: how many boxes are standing. */
 	int32 GetInstanceCount() const;
@@ -104,19 +120,6 @@ public:
 	int32 GetGateGapCount() const { return GateGaps; }
 
 private:
-	/**
-	 * The owning actor - a checked lookup, not a stored pointer, for the reason
-	 * URoadEditFacade::Actor() gives: this presenter is ALWAYS a CreateDefaultSubobject of one
-	 * (see ARoadNetworkActor::Plots), so a null Outer here is a construction error rather than
-	 * a state to handle gracefully.
-	 *
-	 * ADDED FOR ResolveDepotKits (issue #181): RebuildFrom used to call
-	 * DepotKitSpecs(UAirsideSettings::GetContent()) itself, a second resolution of the same
-	 * table FPlotPlaceTool's ghost reads through IRoadEditTarget - this reaches the actor's
-	 * ONE method instead, the same one the facade forwards to.
-	 */
-	ARoadNetworkActor& Actor() const;
-
 	UPROPERTY(Transient) TObjectPtr<UInstancedStaticMeshComponent> Boxes;
 
 	/** Reserved-but-unbought slots. Wears the ghost material; see Initialise. */

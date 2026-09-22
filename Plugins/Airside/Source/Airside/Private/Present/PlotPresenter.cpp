@@ -7,7 +7,6 @@
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
-#include "Present/RoadNetworkActor.h"
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 
@@ -105,17 +104,6 @@ namespace
 
 }
 
-ARoadNetworkActor& UPlotPresenter::Actor() const
-{
-	// See the header: this presenter is a CreateDefaultSubobject of the actor it draws for,
-	// never constructed standalone, so a null Outer here means something built this the wrong
-	// way rather than a state RebuildFrom should tolerate.
-	ARoadNetworkActor* Found = GetTypedOuter<ARoadNetworkActor>();
-	checkf(Found != nullptr, TEXT("UPlotPresenter has no owning ARoadNetworkActor - it must be ")
-		TEXT("a CreateDefaultSubobject of one, never constructed standalone"));
-	return *Found;
-}
-
 void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes,
 	UInstancedStaticMeshComponent* InGhosts)
 {
@@ -140,17 +128,12 @@ bool UPlotPresenter::GetInstanceTransformForTest(int32 Index, FTransform& OutTra
 	return true;
 }
 
-void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
+void UPlotPresenter::Clear()
 {
-	if (Boxes == nullptr)
+	if (Boxes != nullptr)
 	{
-		return;
+		Boxes->ClearInstances();
 	}
-
-	// CLEARED AND REBUILT WHOLE, like every other derived geometry in this plugin. An
-	// incremental update would need to know which instance belonged to which entity, which
-	// is a second index that must agree with the model - and the counts here are tens.
-	Boxes->ClearInstances();
 	if (GhostBoxes != nullptr)
 	{
 		GhostBoxes->ClearInstances();
@@ -161,17 +144,31 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 	ModuleBoxes = 0;
 	Dropped = 0;
 	Ghosts = 0;
+}
 
-	// HOISTED OUT OF THE LOOP: the specs are the same for every plot, and resolving the same
-	// three kits once per depot would do the work once per building on the airport.
+void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
+	TArrayView<const PlotYard::FKitSpec> Specs)
+{
+	if (Boxes == nullptr)
+	{
+		return;
+	}
+
+	// CLEARED AND REBUILT WHOLE, like every other derived geometry in this plugin. An
+	// incremental update would need to know which instance belonged to which entity, which
+	// is a second index that must agree with the model - and the counts here are tens.
+	Clear();
+
+	// RESOLVED ONCE BY THE CALLER, not per plot: the specs are the same for every plot, and
+	// resolving the same three kits once per depot would do the work once per building on
+	// the airport.
 	//
-	// THROUGH THE ACTOR, NOT DepotKitSpecs(UAirsideSettings::GetContent()) HERE (issue #181):
-	// that was a second resolution of the table FPlotPlaceTool's ghost reads through
+	// THROUGH ARoadNetworkActor::ResolveDepotKits, NOT DepotKitSpecs(GetContent()) (issue
+	// #181): that was a second resolution of the table FPlotPlaceTool's ghost reads through
 	// IRoadEditTarget::ResolveDepotKits, and the two drifted the moment DA_FuelDepot's layout
 	// was authored - see ReservationFor's own comment on that failure. NULL CONTENT IS STILL A
-	// LEGAL ANSWER and the tests rely on it: ARoadNetworkActor::ResolveDepotKits falls every
-	// kit back to the grey-box table the same way this call used to.
-	const TArray<PlotYard::FKitSpec> Specs = Actor().ResolveDepotKits();
+	// LEGAL ANSWER and the tests rely on it: ResolveDepotKits falls every kit back to the
+	// grey-box table.
 
 	int32 Plots = 0;
 

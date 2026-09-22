@@ -770,7 +770,7 @@ void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
 		{
 			PlotGhostBoxes->SetMaterial(0, ResolveGhostMaterial());
 		}
-		Plots->RebuildFrom(*Network);
+		Plots->RebuildFrom(*Network, ResolveDepotKits());
 	}
 
 	// The guideline graph was just regenerated with new handles. Every agent's route must be
