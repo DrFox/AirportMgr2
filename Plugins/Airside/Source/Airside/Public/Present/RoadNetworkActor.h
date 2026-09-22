@@ -23,7 +23,6 @@ class UAirsideTraffic;
 class UGroundTraffic;
 class UTyreSmoke;
 class UEntityDefinition;
-class UPlotPresenter;
 enum class EAgentPhase : uint8;
 enum class EDepartureRefusal : uint8;
 
@@ -33,14 +32,13 @@ enum class EDepartureRefusal : uint8;
 // Present/AirsideTraffic.h, which every .cpp dereferencing the pointer already includes,
 // still pulls in the full Model/GroundTraffic.h.
 //
-// UEntityDefinition and UPlotPresenter are FORWARD DECLARED THE SAME WAY (issue #191):
-// both are held only behind TObjectPtr here, with every accessor returning a bare pointer
+// UEntityDefinition is FORWARD DECLARED THE SAME WAY (issue #191): it is held only behind
+// TObjectPtr here, with every accessor returning a bare pointer
 // (ResolveStandDefinition/ResolveFuelDepotDefinition/ResolveEntityDefinition/
-// GetEntityDefinition, GetPlotPresenter). Their complete types still reach this TU - the
-// class needs them nowhere else - via Tool/RoadEditTarget.h below, which already includes
-// Entities/EntityDefinition.h as ITS OWN base-interface dependency; UPlotPresenter's own
-// header moved to the .cpp instead, since nothing here names it but this forward
-// declaration. Model/RoadHandles.h, Entities/EntityDefinition.h, Tool/RoadHeal.h and
+// GetEntityDefinition). Its complete type still reaches this TU - the class needs it nowhere
+// else - via Tool/RoadEditTarget.h below, which already includes Entities/EntityDefinition.h
+// as ITS OWN base-interface dependency. (UPlotPresenter was forward declared here for the same
+// reason until 2026-09-22, when plots moved to AAirsideBuildingsActor.) Model/RoadHandles.h, Entities/EntityDefinition.h, Tool/RoadHeal.h and
 // Profiles/RoadProfile.h used to be listed again here too, redundantly: Tool/RoadEditTarget.h
 // (below, mandatory - it is IRoadEditTarget, this actor's base) already includes all four
 // directly, so repeating them bought this header nothing and cost every one of its ~65
@@ -254,9 +252,6 @@ public:
 	 */
 	URoadSurfacePresenter* GetPresenter() const { return Presenter; }
 
-	/** The plot boxes - see UPlotPresenter. */
-	UPlotPresenter* GetPlotPresenter() const { return Plots; }
-
 	/**
 	 * Fired after every TOPOLOGY rebuild, once the surface is built - where the plot boxes
 	 * used to be drawn by a direct call on this actor.
@@ -402,7 +397,8 @@ public:
 	/**
 	 * The depot kit table, from the content set - see IRoadEditTarget::ResolveDepotKits.
 	 *
-	 * THE SAME METHOD UPlotPresenter CALLS, through this actor rather than through
+	 * THE SAME METHOD UPlotPresenter's KITS COME FROM (AAirsideBuildingsActor passes them in),
+	 * through this actor rather than through
 	 * DepotKitSpecs(UAirsideSettings::GetContent()) a second time (issue #181) - a presenter
 	 * and a tool resolving the table independently is the split the reservation design (#180)
 	 * exists to prevent, in a new place.
@@ -798,7 +794,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Markings")
 	TObjectPtr<UMaterialInterface> TyreSmokeMaterial;
 
-	/** The touchdown puffs - see UTyreSmoke. A subobject like Traffic and Plots, because it
+	/** The touchdown puffs - see UTyreSmoke. A subobject like Traffic, because it
 	 *  owns components and a lifetime, and the actor only forwards to it. */
 	UPROPERTY(VisibleAnywhere, Category = "Airside|Markings")
 	TObjectPtr<UTyreSmoke> Smoke;
@@ -1013,19 +1009,8 @@ private:
 	 */
 	UPROPERTY(Transient) TObjectPtr<URoadSurfacePresenter> Presenter;
 
-	/** The boxes standing in plotted installations' bays - see UPlotPresenter's own header.
-	 *  Same CreateDefaultSubobject and Transient reasoning as Presenter. */
-	UPROPERTY(Transient) TObjectPtr<UPlotPresenter> Plots;
-
-	/** The one component every built plot box and fence panel is an instance in. A UPROPERTY
-	 *  and NOT Transient, unlike the presenter that fills it: it is a scene component this
-	 *  actor owns, exactly as the five dynamic mesh components are. */
-	UPROPERTY() TObjectPtr<UInstancedStaticMeshComponent> PlotBoxes;
-
-	/** The same again for reserved bays nobody has bought, wearing the ghost material.
-	 *  A SECOND COMPONENT because an instance carries a transform and not a material, so a
-	 *  ghosted slot cannot differ from a built one inside PlotBoxes. */
-	UPROPERTY() TObjectPtr<UInstancedStaticMeshComponent> PlotGhostBoxes;
+	// THE PLOT PRESENTER AND ITS TWO COMPONENTS LIVED HERE until 2026-09-22 - see
+	// AAirsideBuildingsActor, which owns them now, and OnTopologyRebuilt, which feeds it.
 
 	/** Every graph mutator, query and undo step - see URoadEditFacade's own header. Same
 	 *  CreateDefaultSubobject and Transient reasoning as Presenter. */
@@ -1093,7 +1078,8 @@ private:
 	 * passing Topology, kept at its old name and signature because IRoadEditTarget, a
 	 * UFUNCTION(CallInEditor) button, and every test in this plugin call it with no
 	 * argument and expect a full rebuild. This is where Kind is read: Geometry runs the
-	 * presenter's surface-only path and returns before Plots or Traffic are touched;
+	 * presenter's surface-only path and returns before the buildings (OnTopologyRebuilt)
+	 * or Traffic are touched;
 	 * Topology runs the whole pipeline exactly as RebuildMesh always has.
 	 */
 	void RebuildMeshForChange(EChangeKind Kind);

@@ -6,6 +6,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Present/AirsideBuildingsActor.h"
 #include "Present/PlotPresenter.h"
 #include "Present/RoadNetworkActor.h"
 #include "Build/DepotKit.h"
@@ -75,10 +76,10 @@ namespace
 	}
 
 	/** Every instance the plot presenter is holding, in the order it added them. */
-	TArray<FTransform> PlotInstances(const ARoadNetworkActor* Actor)
+	TArray<FTransform> PlotInstances(const AAirsideBuildingsActor* Buildings)
 	{
 		TArray<FTransform> Out;
-		const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+		const UPlotPresenter* Plots = Buildings->GetPlotPresenter();
 		if (Plots == nullptr)
 		{
 			return Out;
@@ -109,7 +110,7 @@ bool FPlotPresenterDressesEachBayTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-	if (!TestNotNull(TEXT("a plot presenter"), Actor->GetPlotPresenter())) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), TestWorld.Buildings->GetPlotPresenter())) { return false; }
 
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
@@ -117,12 +118,12 @@ bool FPlotPresenterDressesEachBayTest::RunTest(const FString& Parameters)
 	Actor->ClearNetwork();
 	Actor->RebuildMesh();
 	TestEqual(TEXT("an empty airport stands nothing up"),
-		Actor->GetPlotPresenter()->GetInstanceCount(), 0);
+		TestWorld.Buildings->GetPlotPresenter()->GetInstanceCount(), 0);
 
 	PlaceDepot(Actor, Depot, 0.0);
 	Actor->RebuildMesh();
 
-	const int32 One = Actor->GetPlotPresenter()->GetInstanceCount();
+	const int32 One = TestWorld.Buildings->GetPlotPresenter()->GetInstanceCount();
 
 	// Three modules plus a fence, so the count is well over three - the exact number moves
 	// with the panel length and is not the claim. What IS the claim is that the modules and
@@ -132,21 +133,21 @@ bool FPlotPresenterDressesEachBayTest::RunTest(const FString& Parameters)
 	// THE GATE IS A GAP. A fence with no gate is a depot no truck can leave, and it would
 	// look completely correct from every angle - so the skipped bay is counted, not eyeballed.
 	TestTrue(TEXT("and the fence is left open at the gate"),
-		Actor->GetPlotPresenter()->GetGateGapCount() > 0);
+		TestWorld.Buildings->GetPlotPresenter()->GetGateGapCount() > 0);
 
 	// A SECOND DEPOT MUST ADD, NOT REPLACE. A presenter that rebuilt from only the last
 	// entity passes every single-depot assertion and loses every depot but one on screen.
 	PlaceDepot(Actor, Depot, 4000.0);
 	Actor->RebuildMesh();
 	TestEqual(TEXT("a second depot adds its own, it does not replace the first"),
-		Actor->GetPlotPresenter()->GetInstanceCount(), One * 2);
+		TestWorld.Buildings->GetPlotPresenter()->GetInstanceCount(), One * 2);
 
 	// AND A REBUILD IS IDEMPOTENT. RebuildMesh runs on every graph change, so a presenter
 	// that appended instead of clearing would double the boxes every time the player drew a
 	// road anywhere on the airport.
 	Actor->RebuildMesh();
 	TestEqual(TEXT("rebuilding again does not double the boxes"),
-		Actor->GetPlotPresenter()->GetInstanceCount(), One * 2);
+		TestWorld.Buildings->GetPlotPresenter()->GetInstanceCount(), One * 2);
 
 	return true;
 }
@@ -165,7 +166,7 @@ bool FPlotPresenterLaysOutTheDepotTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-	if (!TestNotNull(TEXT("a plot presenter"), Actor->GetPlotPresenter())) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), TestWorld.Buildings->GetPlotPresenter())) { return false; }
 
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
@@ -174,7 +175,7 @@ bool FPlotPresenterLaysOutTheDepotTest::RunTest(const FString& Parameters)
 	PlaceDeepDepot(Actor, Depot, 0.0);
 	Actor->RebuildMesh();
 
-	const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
 
 	// THE MODULES ARE THE FIRST INSTANCES a plot adds, before its fence. That ordering is
 	// why this can name them at all - and why it uses ONE depot: with two, the second
@@ -185,7 +186,7 @@ bool FPlotPresenterLaysOutTheDepotTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	const TArray<FTransform> Instances = PlotInstances(Actor);
+	const TArray<FTransform> Instances = PlotInstances(TestWorld.Buildings);
 	if (!TestTrue(TEXT("the fence went up around them"), Instances.Num() > Modules))
 	{
 		return false;
@@ -214,7 +215,7 @@ bool FPlotPresenterLaysOutTheDepotTest::RunTest(const FString& Parameters)
 	// outside: RebuildMesh runs on every graph change, and a yard reseeded each time would
 	// shift while the player laid a road on the far side of the airport.
 	Actor->RebuildMesh();
-	const TArray<FTransform> After = PlotInstances(Actor);
+	const TArray<FTransform> After = PlotInstances(TestWorld.Buildings);
 
 	if (!TestEqual(TEXT("a rebuild puts the same number of things up"),
 		Instances.Num(), After.Num()))
@@ -232,7 +233,7 @@ bool FPlotPresenterLaysOutTheDepotTest::RunTest(const FString& Parameters)
 	PlaceDeepDepot(Actor, Depot, 4000.0);
 	Actor->RebuildMesh();
 
-	const TArray<FTransform> Both = PlotInstances(Actor);
+	const TArray<FTransform> Both = PlotInstances(TestWorld.Buildings);
 	if (!TestTrue(TEXT("the second depot stood up too"), Both.Num() > Instances.Num()))
 	{
 		return false;
@@ -316,7 +317,12 @@ bool FPlotPresenterSurvivesDuplicationTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
-	ARoadNetworkActor* Dup = DuplicateObject<ARoadNetworkActor>(Actor, Actor->GetOuter());
+	// THE CLAIM MOVED WITH THE PRESENTER on 2026-09-22: the buildings actor owns it now, so
+	// that is the actor duplicated. DuplicateObject registers nothing, so the duplicate is
+	// bound by hand - the thing under test is the re-pointing, not the binding.
+	if (!TestNotNull(TEXT("a buildings actor"), TestWorld.Buildings)) { return false; }
+	AAirsideBuildingsActor* Dup = DuplicateObject<AAirsideBuildingsActor>(
+		TestWorld.Buildings, TestWorld.Buildings->GetOuter());
 	if (!TestNotNull(TEXT("a duplicate"), Dup)) { return false; }
 
 	if (!TestNotNull(TEXT("the duplicate has a plot presenter"), Dup->GetPlotPresenter()))
@@ -329,9 +335,9 @@ bool FPlotPresenterSurvivesDuplicationTest::RunTest(const FString& Parameters)
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
 
-	Dup->ClearNetwork();
-	PlaceDepot(Dup, Depot, 0.0);
-	Dup->RebuildMesh();
+	Actor->ClearNetwork();
+	PlaceDepot(Actor, Depot, 0.0);
+	Dup->BindTo(Actor);
 
 	// The real claim: the duplicate's boxes land somewhere its own presenter can count,
 	// which they cannot if it is still filling the CDO's component.
@@ -364,7 +370,7 @@ bool FPlotPresenterGhostsUnboughtSlotsTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-	if (!TestNotNull(TEXT("a plot presenter"), Actor->GetPlotPresenter())) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), TestWorld.Buildings->GetPlotPresenter())) { return false; }
 
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
@@ -377,7 +383,7 @@ bool FPlotPresenterGhostsUnboughtSlotsTest::RunTest(const FString& Parameters)
 	PlaceDeepDepot(Actor, Depot, /*X=*/0.0);
 	Actor->RebuildMesh();
 
-	const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
 
 	// WHAT WAS BOUGHT IS DRAWN SOLID. PlaceDeepDepot owns one of each, so three bays are lit
 	// however the reservation grouped them.
@@ -450,7 +456,7 @@ bool FPlotPresenterCountsDropsTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-	if (!TestNotNull(TEXT("a plot presenter"), Actor->GetPlotPresenter())) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), TestWorld.Buildings->GetPlotPresenter())) { return false; }
 
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
@@ -476,7 +482,7 @@ bool FPlotPresenterCountsDropsTest::RunTest(const FString& Parameters)
 	Actor->Network->PlaceEntity(Placement);
 	Actor->RebuildMesh();
 
-	const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
 
 	// THE SAME SOLVE THE PRESENTER RAN, through the seam it goes through - see
 	// PlotPresenterGhostsUnboughtSlotsTest's own comment on why this recomputes rather than
@@ -533,7 +539,7 @@ bool FPlotPresenterDrawsTheObjectNotTheApronTest::RunTest(const FString& Paramet
 	PlaceDeepDepot(Actor, Depot, /*X=*/0.0);
 	Actor->RebuildMesh();
 
-	const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
 
 	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
 	const TArray<FVector2D> Outline = DeepPlotAt(0.0);
