@@ -13,9 +13,11 @@ NOT import_models.py. That table drives airside_import's glTF SKELETAL pipeline 
 nodes, rigs, axle checks - and these are three static FBX meshes, the fence's shape
 (build_fence_content.py), whose import this follows.
 
-FIRST IMPORT ONLY for the meshes: an existing asset is kept and re-measured, never
-re-imported over (memory: a re-import strands a stray mesh). To take a new export, delete
-the SM_ asset first. Materials and flags are re-applied every run; they are idempotent.
+RE-IMPORTED IN PLACE WHEN THE EXPORT IS NEWER than the .uasset, and kept otherwise. In
+place - same package, replace_existing - so DA_Kit_FuelShed's reference survives; deleting
+and re-importing would break it. The run lists the folder afterwards and fails on anything
+it did not expect, because a re-import has stranded a stray mesh before (memory:
+import_models.py is first-import only). Materials and flags are re-applied every run.
 
 MEASURED AFTER IMPORT, not trusted. FBX unit and axis handling differs between exporters,
 and a shed that arrives 5.4 uu tall is a correct-looking import of the wrong size. Every
@@ -86,14 +88,17 @@ def camel(material_name):
 
 def import_mesh(name, folder, stem):
     path = "%s/%s" % (MESH_DIR, name)
-    if unreal.EditorAssetLibrary.does_asset_exist(path):
-        say("kept existing %s" % path)
-        return unreal.EditorAssetLibrary.load_asset(path)
-
     source = os.path.join(MODELS, folder, "export", stem + ".fbx")
     if not os.path.exists(source):
         fail("no export at %s - run the model's build script in the models repo" % source)
         return None
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        on_disk = os.path.join(unreal.Paths.project_content_dir(),
+                               MESH_DIR[len("/Game/"):], name + ".uasset")
+        if os.path.getmtime(source) <= os.path.getmtime(on_disk):
+            say("kept existing %s (export not newer)" % path)
+            return unreal.EditorAssetLibrary.load_asset(path)
+        say("export newer than %s - re-importing in place" % path)
     task = unreal.AssetImportTask()
     task.filename = source
     task.destination_path = MESH_DIR
@@ -106,10 +111,31 @@ def import_mesh(name, folder, stem):
     return unreal.EditorAssetLibrary.load_asset(path)
 
 
+def disable_nanite(name, mesh):
+    """NANITE OFF on every depot mesh: sub-2k-triangle props drawn through instanced
+    components, where Nanite buys nothing. It was turned off on 2026-09-22 while chasing the
+    tank's widened bounds and was NOT their cause (see measure()); it stays off on its own
+    merits. Saved here so the setting sticks even when measure() then fails."""
+    settings = mesh.get_editor_property("nanite_settings")
+    if settings.enabled:
+        settings.enabled = False
+        mesh.set_editor_property("nanite_settings", settings)
+        unreal.EditorAssetLibrary.save_asset("%s/%s" % (MESH_DIR, name), only_if_is_dirty=False)
+        say("%s Nanite off, %d triangle(s) at LOD0" % (name, mesh.get_num_triangles(0)))
+
+
 def measure(name, mesh, want_min, want_max):
-    box = mesh.get_bounding_box()
-    got_min = (box.min.x, box.min.y, box.min.z)
-    got_max = (box.max.x, box.max.y, box.max.z)
+    """The GEOMETRY's extent, from the mesh description's vertices - not get_bounding_box().
+
+    TWO DIFFERENT ANSWERS, by session: straight after an import the engine returns the mesh
+    description's exact bounds (UStaticMesh::CachedMeshDescriptionBounds); on an asset loaded
+    from disk it returns the render data's, which for the curved tank came back 1.6 uu wider a
+    side and 2 uu below ground (2026-09-22) with the vertices still exactly +-110. This check
+    exists to catch unit and axis mistakes in the export, so it reads the vertices."""
+    desc = mesh.get_static_mesh_description(0)
+    points = [desc.get_vertex_position(unreal.VertexID(i)) for i in range(desc.get_vertex_count())]
+    got_min = (min(p.x for p in points), min(p.y for p in points), min(p.z for p in points))
+    got_max = (max(p.x for p in points), max(p.y for p in points), max(p.z for p in points))
     say("%s bounds min (%.1f, %.1f, %.1f) max (%.1f, %.1f, %.1f)" % ((name,) + got_min + got_max))
     ok = True
     for axis, got, want in zip("xyzxyz", got_min + got_max, want_min + want_max):
@@ -221,6 +247,7 @@ def run():
         if not isinstance(mesh, unreal.StaticMesh):
             fail("%s is not a StaticMesh after import (got %r)" % (name, mesh))
             continue
+        disable_nanite(name, mesh)
         if not measure(name, mesh, want_min, want_max):
             continue
         # EVERY .glb OF THE MODEL, not just this mesh's: the .glb drops a slot no face uses
@@ -236,6 +263,16 @@ def run():
     # now. Checked on disk and by referencer, never by folder alone - see the sweeper.
     swept = sweep_orphan_materials([MESH_DIR])
     say("swept %d generated material(s) from %s" % (swept, MESH_DIR))
+
+    # NOTHING BUT THE MESHES may be left in the folder - see the docstring on re-imports.
+    expected = {m[0] for m in MESHES}
+    found = {p.split("/")[-1].split(".")[0]
+             for p in unreal.EditorAssetLibrary.list_assets(MESH_DIR, recursive=True)}
+    stray = sorted(found - expected)
+    if stray:
+        fail("%s holds unexpected asset(s): %s" % (MESH_DIR, ", ".join(stray)))
+    else:
+        say("PASS %s holds exactly %s" % (MESH_DIR, ", ".join(sorted(expected))))
 
 
 run()

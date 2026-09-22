@@ -650,7 +650,7 @@ namespace
 }
 
 /**
- * A shed run is assembled from parts: cap, the bays bought, mirrored cap, then ghost bays.
+ * A shed run is assembled from parts: cap, the bays bought, the cap turned, then ghost bays.
  *
  * DRIVEN THROUGH THE PRESENTER with a stand-in look rather than through content, so what is
  * asserted is the assembly and not whatever the shipped kit happens to be today.
@@ -711,10 +711,13 @@ bool FPlotPresenterAssemblesAShedFromPartsTest::RunTest(const FString& Parameter
 		&& Plots->GetMeshInstanceTransformForTest(Cap, false, 1, FarCap)
 		&& Plots->GetMeshInstanceTransformForTest(Bay, true, 0, FirstGhost))) { return false; }
 
-	// THE FAR CAP IS MIRRORED, THE NEAR ONE IS NOT - one mesh authored for the near end, as
-	// the shed's SPEC.md authors it. A far cap drawn unmirrored shows its open side outward.
-	TestTrue(TEXT("the near cap is not mirrored"), NearCap.GetDeterminant() > 0.0);
-	TestTrue(TEXT("the far cap is"), FarCap.GetDeterminant() < 0.0);
+	// THE FAR CAP IS THE NEAR ONE TURNED HALF A TURN, NEVER MIRRORED. It was a negative-scale
+	// instance until 2026-09-22, and that gable drew black in PIE - single-sheet walls under a
+	// two-sided material, lit from inside. Unturned, it would face its open side outward.
+	TestTrue(TEXT("no cap is mirrored - neither near"), NearCap.GetDeterminant() > 0.0);
+	TestTrue(TEXT("nor far"), FarCap.GetDeterminant() > 0.0);
+	TestNearlyEqual(TEXT("the far cap faces half a turn from the near one"),
+		FMath::Abs(FRotator::NormalizeAxis(FarCap.Rotator().Yaw - NearCap.Rotator().Yaw)), 180.0, 0.01);
 
 	// ALONG THE RUN, from the built envelope's near edge: cube and cylinder are 100 uu and
 	// centred, so each centre sits 50 uu past where the piece starts. Cap (50 reserved), one

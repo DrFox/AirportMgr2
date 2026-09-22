@@ -12,7 +12,7 @@ enum class EKitAssembly : uint8
 	/** Whole meshes, one per bay count. Blender bakes them. */
 	Baked,
 	/**
-	 * Cap + Bay x N + mirrored Cap, assembled at runtime - BUILT 2026-09-22 for the shed.
+	 * Cap + Bay x N + Cap turned half a turn, assembled at runtime - BUILT 2026-09-22 for the shed.
 	 *
 	 * THE DESIGN DOC CHOSE BAKED and the shed arrived modular: Blender ships one bay and one
 	 * end, spec'd so N bays butt with no visible seam. Baking 1-, 2- and 3-bay variants would
@@ -116,8 +116,10 @@ public:
 	TArray<TSoftObjectPtr<UStaticMesh>> BakedMeshes;
 
 	/**
-	 * Parts only. The end of a run, authored for the NEAR end and mirrored along the run for
-	 * the far one, as FuelDepot1/shed/SPEC.md authors it.
+	 * Parts only. The end of a run, authored for the NEAR end and turned half a turn for the
+	 * far one - never mirrored, since a mirrored instance of a single-sheet two-sided wall
+	 * drew black (2026-09-22). So it must be SYMMETRIC FRONT TO BACK, as
+	 * FuelDepot1/shed/SPEC.md authors it.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Kit|Parts") TSoftObjectPtr<UStaticMesh> PartCapMesh;
 
@@ -142,7 +144,7 @@ public:
 
 	/**
 	 * Yaw from the MESH's own frame to the kit's, degrees: +X away from the road, the run
-	 * along +Y. A MULTIPLE OF 90, or a run cannot be mirrored along an axis of the mesh.
+	 * along +Y. A MULTIPLE OF 90, so the mesh's bounds stay a box in the kit's frame.
 	 *
 	 * HERE RATHER THAN BAKED INTO THE IMPORT: the models repo states its own axes (the shed's
 	 * openings face -Y and bays tile along +X), and restating them in an import option would

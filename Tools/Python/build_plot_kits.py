@@ -24,7 +24,7 @@ A WEIGHT SETS A CEILING, NOT A STRATEGY. The player buys in whatever order they 
 it, so a generous weight costs nothing and a mean one silently forbids a build they wanted.
 
 THE SHED IS PARTS, THE TANK IS BAKED. The shed ships as one bay and one end (FuelDepot1/shed/
-SPEC.md) and the presenter lays cap, bays and mirrored cap along the run; the tank is one
+SPEC.md) and the presenter lays cap, bays and the cap turned half a turn along the run; the tank is one
 mesh that never groups. The pump's BakedMeshes stays empty, which is the grey box.
 
 EVERY FIELD IS SET ON EVERY RUN, defaults included - these are authored in place, so a field

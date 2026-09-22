@@ -180,8 +180,11 @@ bool FPlotKitContentTest::RunTest(const FString& Parameters)
  * UPlotPresenter lays pieces out in, so a wrong yaw fails here as a footprint swapped end for
  * end rather than in PIE as a shed standing sideways.
  *
- * ONE UNIT OF SLACK, not zero: the figures are authored as whole uu from metres with three
- * decimals, and the tank's 263.9 uu height is not a thing worth a failure.
+ * FOUR UNITS OF SLACK, not zero, and measured rather than chosen: GetBoundingBox on an asset
+ * loaded from disk returns its RENDER bounds, which on the curved tank read 223.2 x 480.9 uu
+ * against vertices of exactly 220 x 480 (2026-09-22) - while the flat shed pieces read exact.
+ * The presenter lays out with the same render bounds, so that is what is measured here; the
+ * import script checks the vertices themselves.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDepotKitMeshesMatchTheirFootprintsTest,
@@ -194,7 +197,7 @@ bool FDepotKitMeshesMatchTheirFootprintsTest::RunTest(const FString& Parameters)
 		UAirsideContent::StaticClass(), nullptr, TEXT("/Game/DA_AirsideContent")));
 	if (!TestNotNull(TEXT("DA_AirsideContent is on disk"), Content)) { return false; }
 
-	constexpr double SlackUu = 1.0;
+	constexpr double SlackUu = 4.0;
 
 	// The mesh's plan extent in the kit's frame: a quarter turn swaps its X and Y.
 	auto KitExtent = [](const UStaticMesh& Mesh, double YawDeg)
@@ -214,7 +217,7 @@ bool FDepotKitMeshesMatchTheirFootprintsTest::RunTest(const FString& Parameters)
 		}
 		const FString Name = Kit->GetName();
 
-		TestTrue(*FString::Printf(TEXT("%s's mesh yaw is a quarter turn, or a far cap cannot be mirrored"), *Name),
+		TestTrue(*FString::Printf(TEXT("%s's mesh yaw is a quarter turn, so its bounds stay a box in the kit's frame"), *Name),
 			FMath::IsNearlyZero(FMath::Fmod(Kit->MeshYawDeg, 90.0)));
 
 		if (Kit->Assembly == EKitAssembly::Parts)
@@ -234,8 +237,11 @@ bool FDepotKitMeshesMatchTheirFootprintsTest::RunTest(const FString& Parameters)
 				BayExtent.Y, Kit->Footprint.Y, SlackUu);
 			TestNearlyEqual(*FString::Printf(TEXT("%s's cap reaches PartCapUu, the ground the solver reserves for it"), *Name),
 				CapExtent.Y, Kit->PartCapUu, SlackUu);
-			TestTrue(*FString::Printf(TEXT("%s's cap is no deeper than the bay it closes"), *Name),
-				CapExtent.X <= BayExtent.X + SlackUu);
+			// AS DEEP AS THE BAY, not merely no deeper: the far cap is this one turned half a
+			// turn and centred on its own depth, which lines up with the bay only when the two
+			// span the same depth - the bounds half of "symmetric front to back" (SPEC.md).
+			TestNearlyEqual(*FString::Printf(TEXT("%s's cap spans the bay's whole depth, so it turns into place"), *Name),
+				CapExtent.X, BayExtent.X, SlackUu);
 			++Measured;
 			continue;
 		}
@@ -352,7 +358,7 @@ bool FDepotDrawsItsShippedMeshesTest::RunTest(const FString& Parameters)
 	};
 	TestTrue(TEXT("the bay stands inside the ground its module reserved"), Inside(Bay, 0));
 	TestTrue(TEXT("so does the near cap"), Inside(Cap, 0));
-	TestTrue(TEXT("and the mirrored far cap"), Inside(Cap, 1));
+	TestTrue(TEXT("and the far cap, turned half a turn"), Inside(Cap, 1));
 	return true;
 }
 

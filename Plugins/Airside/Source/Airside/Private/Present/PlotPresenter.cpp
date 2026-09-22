@@ -161,7 +161,7 @@ namespace
 
 	/**
 	 * A mesh's plan bounds in the KIT's frame - +X away from the road, the run along +Y -
-	 * after turning it by YawDeg and, for a far cap, mirroring it along the run.
+	 * after turning it by YawDeg.
 	 *
 	 * EXACT FOR A QUARTER TURN, which is all ResolveDepotLooks hands out: the sine and cosine
 	 * are rounded so a 90 degree turn maps the box's corners onto each other rather than
@@ -174,7 +174,7 @@ namespace
 		double MinZ = 0.0;
 	};
 
-	FKitBox KitBoxOf(const UStaticMesh& Mesh, double YawDeg, bool bMirrorRun)
+	FKitBox KitBoxOf(const UStaticMesh& Mesh, double YawDeg)
 	{
 		const FBox Bounds = Mesh.GetBoundingBox();
 		const double Rad = FMath::DegreesToRadians(YawDeg);
@@ -189,11 +189,7 @@ namespace
 		{
 			for (const double Y : { Bounds.Min.Y, Bounds.Max.Y })
 			{
-				FVector2D Kit(X * C - Y * S, X * S + Y * C);
-				if (bMirrorRun)
-				{
-					Kit.Y = -Kit.Y;
-				}
+				const FVector2D Kit(X * C - Y * S, X * S + Y * C);
 				Out.Min = FVector2D::Min(Out.Min, Kit);
 				Out.Max = FVector2D::Max(Out.Max, Kit);
 			}
@@ -205,34 +201,19 @@ namespace
 	 * One mesh piece's instance transform: its origin at (KitX, KitY) in the stand's frame,
 	 * turned by the stand's heading plus the mesh's own yaw, standing on the ground.
 	 *
-	 * THE MIRROR IS A NEGATIVE SCALE ON WHICHEVER MESH AXIS THE YAW LAYS ALONG THE RUN - X
-	 * for a quarter turn, Y for none. It is applied first, in the mesh's own frame, which is
-	 * where FTransform applies scale. UE 5.8's GPU scene flips culling per instance on a
-	 * negative determinant (INSTANCE_SCENE_DATA_FLAG_DETERMINANT_SIGN), so a mirrored cap in
-	 * the same component as an unmirrored one is not drawn inside out.
+	 * NEVER A NEGATIVE SCALE. The far cap was a mirrored instance until 2026-09-22, and in PIE
+	 * that gable drew black: the walls are single sheets under a two-sided material, and the
+	 * mirrored instance was lit from its inside. It is the near cap turned half a turn now -
+	 * see DrawMeshes.
 	 */
 	FTransform PieceAt(const FVector2D& Origin, double Heading, double KitX, double KitY,
-		double YawDeg, bool bMirrorRun, double BaseZ)
+		double YawDeg, double BaseZ)
 	{
 		const FVector2D Forward(FMath::Cos(Heading), FMath::Sin(Heading));
 		const FVector2D Across = RoadGeom::PerpCCW(Forward);
 		const FVector2D Where = Origin + Forward * KitX + Across * KitY;
-
-		FVector Scale = FVector::OneVector;
-		if (bMirrorRun)
-		{
-			const bool bQuarterTurn = FMath::Abs(FMath::Sin(FMath::DegreesToRadians(YawDeg))) > 0.5;
-			if (bQuarterTurn)
-			{
-				Scale.X = -1.0;
-			}
-			else
-			{
-				Scale.Y = -1.0;
-			}
-		}
 		return FTransform(FRotator(0.0, FMath::RadiansToDegrees(Heading) + YawDeg, 0.0),
-			FVector(Where.X, Where.Y, BaseZ), Scale);
+			FVector(Where.X, Where.Y, BaseZ));
 	}
 
 	/**
@@ -383,10 +364,10 @@ bool UPlotPresenter::DrawMeshes(const FDepotModuleLook& Look, const PlotYard::FK
 			UStaticMesh* Mesh = Look.Baked[FMath::Min(Count, Look.Baked.Num()) - 1];
 			if (UInstancedStaticMeshComponent* Into = PoolFor(Mesh, bGhost))
 			{
-				const FKitBox Box = KitBoxOf(*Mesh, Yaw, /*bMirrorRun=*/false);
+				const FKitBox Box = KitBoxOf(*Mesh, Yaw);
 				const FVector2D Mid = (Box.Min + Box.Max) * 0.5;
 				Into->AddInstance(PieceAt(RunCentre, Heading, -Mid.X, Centre - Mid.Y, Yaw,
-					/*bMirrorRun=*/false, -Box.MinZ), /*bWorldSpace=*/true);
+					-Box.MinZ), /*bWorldSpace=*/true);
 			}
 		};
 		if (Lit > 0)
@@ -400,24 +381,28 @@ bool UPlotPresenter::DrawMeshes(const FDepotModuleLook& Look, const PlotYard::FK
 		return true;
 	}
 
-	// PARTS: cap, N bays, mirrored cap, laid along the run from its near end. Every piece is
-	// aligned by its OWN bounds' near edge, so a mesh origin is not a contract; the depth is
-	// centred on the BAY's bounds for every piece, so a cap whose eaves reach differently
-	// still lines up with the wall it closes.
-	const FKitBox Bay = KitBoxOf(*Look.Bay, Yaw, false);
-	const FKitBox Cap = KitBoxOf(*Look.Cap, Yaw, false);
-	const FKitBox FarCap = KitBoxOf(*Look.Cap, Yaw, /*bMirrorRun=*/true);
-	const double DepthOffset = -(Bay.Min.X + Bay.Max.X) * 0.5;
+	// PARTS: cap, N bays, the cap again turned half a turn, laid along the run from its near
+	// end. Every piece is aligned by its OWN bounds - near edge along the run, centre across
+	// the depth - so a mesh origin is not a contract.
+	//
+	// THE FAR CAP IS TURNED, NOT MIRRORED (2026-09-22): a mirrored instance of these
+	// single-sheet, two-sided walls drew black in PIE. Turning needs a cap symmetric front to
+	// back, which FuelDepot1/shed/SPEC.md makes a contract and
+	// AirportMgr.Content.DepotKitMeshesMatchTheirFootprints measures on the bounds.
+	const double FarYaw = Yaw + 180.0;
+	const FKitBox Bay = KitBoxOf(*Look.Bay, Yaw);
+	const FKitBox Cap = KitBoxOf(*Look.Cap, Yaw);
+	const FKitBox FarCap = KitBoxOf(*Look.Cap, FarYaw);
 	double Cursor = -Spec.RunWidthUu(Length) * 0.5;
 
-	auto Piece = [&](UStaticMesh* Mesh, const FKitBox& Box, bool bMirror, bool bGhost, double Advance)
+	auto Piece = [&](UStaticMesh* Mesh, const FKitBox& Box, double PieceYaw, bool bGhost, double Advance)
 	{
 		if (!bGhost || GhostBoxes != nullptr)
 		{
 			if (UInstancedStaticMeshComponent* Into = PoolFor(Mesh, bGhost))
 			{
-				Into->AddInstance(PieceAt(RunCentre, Heading, DepthOffset, Cursor - Box.Min.Y,
-					Yaw, bMirror, -Box.MinZ), /*bWorldSpace=*/true);
+				Into->AddInstance(PieceAt(RunCentre, Heading, -(Box.Min.X + Box.Max.X) * 0.5,
+					Cursor - Box.Min.Y, PieceYaw, -Box.MinZ), /*bWorldSpace=*/true);
 			}
 		}
 		Cursor += Advance;
@@ -428,15 +413,15 @@ bool UPlotPresenter::DrawMeshes(const FDepotModuleLook& Look, const PlotYard::FK
 	// whole run inside RunWidthUu(Length): two caps and Length bays, however it is split.
 	// With nothing built the ghost is the whole building, caps included.
 	const bool bBuilt = Lit > 0;
-	Piece(Look.Cap, Cap, false, !bBuilt, Spec.RunEndUu);
+	Piece(Look.Cap, Cap, Yaw, !bBuilt, Spec.RunEndUu);
 	for (int32 Bays = 0; Bays < (bBuilt ? Lit : Length); ++Bays)
 	{
-		Piece(Look.Bay, Bay, false, !bBuilt, Spec.Footprint.WidthUu);
+		Piece(Look.Bay, Bay, Yaw, !bBuilt, Spec.Footprint.WidthUu);
 	}
-	Piece(Look.Cap, FarCap, true, !bBuilt, Spec.RunEndUu);
+	Piece(Look.Cap, FarCap, FarYaw, !bBuilt, Spec.RunEndUu);
 	for (int32 Bays = 0; bBuilt && Bays < Dark; ++Bays)
 	{
-		Piece(Look.Bay, Bay, false, true, Spec.Footprint.WidthUu);
+		Piece(Look.Bay, Bay, Yaw, true, Spec.Footprint.WidthUu);
 	}
 	return true;
 }

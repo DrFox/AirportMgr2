@@ -298,8 +298,8 @@ TArray<FDepotModuleLook> UAirsideSettings::ResolveDepotLooks()
 
 		FDepotModuleLook& Look = Looks[Raw];
 		Look.Assembly = Kit->Assembly;
-		// A QUARTER TURN, NEVER BETWEEN: a far cap is mirrored along an axis OF THE MESH, and
-		// only a quarter-turn yaw lines the run up with one. 45 would mirror it diagonally.
+		// A QUARTER TURN, NEVER BETWEEN: the presenter lays pieces out by their bounds, and only
+		// a quarter turn keeps a mesh's bounds a box in the kit's frame. 45 would widen it.
 		Look.MeshYawDeg = FMath::RoundToDouble(Kit->MeshYawDeg / 90.0) * 90.0;
 		if (Kit->Assembly == EKitAssembly::Parts)
 		{
