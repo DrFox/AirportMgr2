@@ -3,10 +3,15 @@
 #include "AirsideLog.h"
 #include "Build/DepotKit.h"
 #include "Build/PlotLayoutStrategy.h"
+#include "Build/RoadMeshSink.h"
+#include "Components/DynamicMeshComponent.h"
+#include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Present/DynamicMeshSink.h"
+#include "Solve/FenceLayout.h"
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 
@@ -27,10 +32,84 @@ namespace
 	constexpr double TankHeightUu = 250.0;
 	constexpr double PumpHeightUu = 150.0;
 
-	/** Fence panel: 2.5 m of run, 2 m tall, a hand's breadth thick. */
-	constexpr double FenceBayUu = 250.0;
-	constexpr double FenceHeightUu = 200.0;
-	constexpr double FenceThicknessUu = 10.0;
+	/**
+	 * The chainlink kit's figures, uu - the asset README's, not chosen here. POST AND FABRIC
+	 * HEIGHT ARE ONE DECISION WITH THE TEXTURE: its V range IS 240 uu of fabric, so changing the
+	 * fabric height without regenerating chainlink.png makes the diamonds stop being square.
+	 */
+	constexpr double FencePostHeightUu = 245.0;
+	constexpr double FenceFabricHeightUu = 240.0;
+	constexpr double FenceLinePostDiameterUu = 6.0;
+	constexpr double FenceHeavyPostDiameterUu = 9.0;
+
+	/** The asset contract's layout, gated at the truck corridor's width. */
+	FenceLayout::FSpec FenceSpec()
+	{
+		FenceLayout::FSpec Spec;
+		Spec.GateWidthUu = PlotYard::GateCorridorUu;
+		return Spec;
+	}
+
+	/**
+	 * One post's instance transform.
+	 *
+	 * TWO ORIGINS, because the fallback and the asset disagree about where theirs is: the
+	 * authored post is base-centred at 1:1, the engine cube is 100 uu and centred. A cube
+	 * placed like a post sinks to its waist, and a post placed like a cube floats.
+	 */
+	FTransform FencePostAt(const FenceLayout::FPost& Post, const UStaticMesh* Authored)
+	{
+		const FRotator Rotation(0.0, FMath::RadiansToDegrees(Post.YawRad), 0.0);
+		if (Authored != nullptr)
+		{
+			return FTransform(Rotation, FVector(Post.Position.X, Post.Position.Y, 0.0));
+		}
+		const double Diameter = Post.Kind == FenceLayout::EPostKind::Line
+			? FenceLinePostDiameterUu : FenceHeavyPostDiameterUu;
+		return FTransform(Rotation,
+			FVector(Post.Position.X, Post.Position.Y, FencePostHeightUu * 0.5),
+			FVector(Diameter / CubeUu, Diameter / CubeUu, FencePostHeightUu / CubeUu));
+	}
+
+	/**
+	 * One bay of fabric: a vertical quad, four vertices of its own, two triangles.
+	 *
+	 * NOT SHARED WITH THE NEXT BAY. FDynamicMeshSink computes per-vertex normals, and a vertex
+	 * shared at a corner would average two edges' normals and shade a smear down the post.
+	 *
+	 * NOT THROUGH AppendTriangleUp, whose sliver guard measures area in XY - which is zero for
+	 * every vertical triangle, so it would drop the whole fence. Wound (A0, B1, B0), (A0, A1, B1)
+	 * so the engine's left-handed normal points OUTWARD; Airside.Present.PlotFenceFabricFacesOut
+	 * measures it.
+	 */
+	void AppendFenceBay(FRoadMeshBuffers& Buffers, const FenceLayout::FSpan& Span)
+	{
+		const int32 A0 = Buffers.Positions.Num();
+		Buffers.Positions.Add(FVector3d(Span.A.X, Span.A.Y, 0.0));
+		Buffers.Positions.Add(FVector3d(Span.B.X, Span.B.Y, 0.0));
+		Buffers.Positions.Add(FVector3d(Span.B.X, Span.B.Y, FenceFabricHeightUu));
+		Buffers.Positions.Add(FVector3d(Span.A.X, Span.A.Y, FenceFabricHeightUu));
+		const int32 B0 = A0 + 1;
+		const int32 B1 = A0 + 2;
+		const int32 A1 = A0 + 3;
+
+		// V 1 AT THE GROUND, 0 AT THE TOP - the image's own orientation. The texture does not
+		// tile in V, so this is the one direction that is not arbitrary.
+		const float U0 = static_cast<float>(Span.U0);
+		const float U1 = static_cast<float>(Span.U1);
+		Buffers.UV0.Append({ FVector2f(U0, 1.0f), FVector2f(U1, 1.0f),
+		                     FVector2f(U1, 0.0f), FVector2f(U0, 0.0f) });
+
+		// The sink reads three UV layers per vertex; the fabric's material samples only UV0.
+		for (int32 Corner = 0; Corner < 4; ++Corner)
+		{
+			Buffers.UV1.Add(FVector2f::ZeroVector);
+			Buffers.UV2.Add(FVector2f::ZeroVector);
+		}
+
+		Buffers.Indices.Append({ A0, B1, B0, A0, A1, B1 });
+		Buffers.MaterialIDs.Append({ 0, 0 });
+	}
 
 	double HeightFor(EDepotModule Module)
 	{
@@ -105,10 +184,13 @@ namespace
 }
 
 void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes,
-	UInstancedStaticMeshComponent* InGhosts)
+	UInstancedStaticMeshComponent* InGhosts, const FFenceTargets& InFence)
 {
 	Boxes = InBoxes;
 	GhostBoxes = InGhosts;
+	FencePostsInto = InFence.Posts;
+	FenceHeavyPostsInto = InFence.HeavyPosts;
+	FenceFabricInto = InFence.Fabric;
 }
 
 int32 UPlotPresenter::GetInstanceCount() const
@@ -138,8 +220,25 @@ void UPlotPresenter::Clear()
 	{
 		GhostBoxes->ClearInstances();
 	}
+	if (FencePostsInto != nullptr)
+	{
+		FencePostsInto->ClearInstances();
+	}
+	if (FenceHeavyPostsInto != nullptr)
+	{
+		FenceHeavyPostsInto->ClearInstances();
+	}
+	if (FenceFabricInto != nullptr)
+	{
+		// THROUGH THE SINK, EMPTY, rather than resetting the mesh by hand: the sink is the one
+		// place that knows how buffers become this component's mesh, empty ones included.
+		FDynamicMeshSink(FenceFabricInto, nullptr, /*bInUseConstantVertexColour=*/false,
+			nullptr, /*bInQuiet=*/true).Accept(FRoadMeshBuffers());
+	}
 	Placed.Reset();
-	GateGaps = 0;
+	Gates = 0;
+	FencePosts = 0;
+	FenceSpans = 0;
 	RoomForMore = 0;
 	ModuleBoxes = 0;
 	Dropped = 0;
@@ -147,7 +246,7 @@ void UPlotPresenter::Clear()
 }
 
 void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
-	TArrayView<const PlotYard::FKitSpec> Specs)
+	TArrayView<const PlotYard::FKitSpec> Specs, const FFenceKit& Kit)
 {
 	if (Boxes == nullptr)
 	{
@@ -158,6 +257,18 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 	// incremental update would need to know which instance belonged to which entity, which
 	// is a second index that must agree with the model - and the counts here are tens.
 	Clear();
+
+	// THE AUTHORED POSTS, when there are any. Set per rebuild rather than once, because the
+	// content set can change under an open editor; SetStaticMesh is a no-op when unchanged.
+	if (FencePostsInto != nullptr && Kit.LinePost != nullptr)
+	{
+		FencePostsInto->SetStaticMesh(Kit.LinePost);
+	}
+	if (FenceHeavyPostsInto != nullptr && Kit.HeavyPost != nullptr)
+	{
+		FenceHeavyPostsInto->SetStaticMesh(Kit.HeavyPost);
+	}
+	FRoadMeshBuffers Fabric;
 
 	// RESOLVED ONCE BY THE CALLER, not per plot: the specs are the same for every plot, and
 	// resolving the same three kits once per depot would do the work once per building on
@@ -171,11 +282,6 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 	// grey-box table.
 
 	int32 Plots = 0;
-
-	// INSTANCES, NOT BAYS, and the two parted company when runs arrived: a three-bay shed run
-	// is three modules drawn as ONE box. ModuleBoxes counts what the player owns; this counts
-	// what was handed to the component, which is the only thing the fence tally can subtract.
-	int32 ModuleInstances = 0;
 
 	for (const FEntityInstance& Entity : Network.GetEntities())
 	{
@@ -237,10 +343,9 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 			}
 		}
 
-		// MODULES BEFORE THE FENCE, always: Airside.Present.PlotPresenterScattersModules
-		// names the first ModuleBoxes instances of a plot as its modules, and reordering
-		// these two loops would silently make it measure fence panels instead. The ghosts go
-		// in their own component, so they never enter that count at all.
+		// MODULES ONLY IN Placed since 2026-09-22 - the fence draws into its own components, so
+		// the first ModuleBoxes instances of a plot are its modules with no ordering to keep.
+		// The ghosts go in their own component, so they never enter that count at all.
 		for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
 		{
 			if (!Specs.IsValidIndex(Stand.KitIndex))
@@ -286,7 +391,6 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 					BoxAt(Centre, Stand.Heading, One.LengthUu, LitWidth, HeightUu);
 				Boxes->AddInstance(ModuleAt, /*bWorldSpace=*/true);
 				Placed.Add(ModuleAt);
-				++ModuleInstances;
 				ModuleBoxes += Lit;
 			}
 
@@ -315,45 +419,50 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 
 		// --- The fence -----------------------------------------------------------------
 		//
-		// THE GATE IS A GAP, not a different mesh. The bay nearest the pose is left out, and
-		// the pose is the gate - so the hole in the fence is where the truck actually
-		// leaves, by construction rather than by a second decision that could disagree.
-		for (int32 I = 0; I < Entity.Outline.Num(); ++I)
+		// THE GATE IS A GAP OF EXACTLY THE TRUCK CORRIDOR, centred on the pose, so the hole in
+		// the fence is where the truck actually leaves and as wide as the lane PlotYard keeps
+		// clear behind it - one number, not two decisions that could disagree.
+		const FenceLayout::FLayout Fence = FenceLayout::Solve(Entity.Outline, Entity.Position, FenceSpec());
+		if (Fence.bHasGate)
 		{
-			const FVector2D& From = Entity.Outline[I];
-			const FVector2D& To = Entity.Outline[(I + 1) % Entity.Outline.Num()];
+			++Gates;
+		}
+		else
+		{
+			// A DEPOT NO TRUCK CAN LEAVE, said out loud - see GetGateGapCount.
+			UE_LOG(LogAirside, Warning,
+				TEXT("Plots: the plot gated at (%.0f, %.0f) has no gate - its frontage is ")
+				TEXT("shorter than a %.0f uu gate plus a bay either side"),
+				Entity.Position.X, Entity.Position.Y, PlotYard::GateCorridorUu);
+		}
 
-			const FVector2D Along = To - From;
-			const double Length = Along.Size();
-			if (Length < FenceBayUu)
+		for (const FenceLayout::FPost& Post : Fence.Posts)
+		{
+			const bool bHeavy = Post.Kind != FenceLayout::EPostKind::Line;
+			UHierarchicalInstancedStaticMeshComponent* Into =
+				bHeavy ? FenceHeavyPostsInto.Get() : FencePostsInto.Get();
+			if (Into == nullptr)
 			{
 				continue;
 			}
-
-			const FVector2D Unit = Along / Length;
-			const double Heading = FMath::Atan2(Unit.Y, Unit.X);
-			const int32 Bays = FMath::FloorToInt(Length / FenceBayUu);
-
-			// A bay that would overhang the end of the edge is DROPPED rather than
-			// shortened: a stretched last panel is a second opinion about where the
-			// boundary is, and the short remainder reads as a gap rather than a mistake.
-			for (int32 B = 0; B < Bays; ++B)
-			{
-				const FVector2D Centre =
-					From + Unit * ((static_cast<double>(B) + 0.5) * FenceBayUu);
-
-				if (FVector2D::Distance(Centre, Entity.Position) < FenceBayUu)
-				{
-					++GateGaps;
-					continue;
-				}
-
-				const FTransform PanelAt = BoxAt(Centre, Heading,
-					FenceBayUu, FenceThicknessUu, FenceHeightUu);
-				Boxes->AddInstance(PanelAt, /*bWorldSpace=*/true);
-				Placed.Add(PanelAt);
-			}
+			Into->AddInstance(FencePostAt(Post, bHeavy ? Kit.HeavyPost : Kit.LinePost),
+				/*bWorldSpace=*/true);
+			++FencePosts;
 		}
+		for (const FenceLayout::FSpan& Span : Fence.Spans)
+		{
+			AppendFenceBay(Fabric, Span);
+			++FenceSpans;
+		}
+	}
+
+	// ONE STRIP FOR EVERY PLOT'S FABRIC, one draw call - the reason the fabric is a strip and
+	// not a mesh per bay (asset README). Quiet: the sink's per-call DIAG lines describe the
+	// road surface, and a fence line beside them would read as a second road.
+	if (FenceFabricInto != nullptr)
+	{
+		FDynamicMeshSink(FenceFabricInto, Kit.Fabric, /*bInUseConstantVertexColour=*/false,
+			nullptr, /*bInQuiet=*/true).Accept(Fabric);
 	}
 
 	// WHAT IS LEFT TO GROW INTO: a count of unlit bays, not a sampled estimate. It used to
@@ -367,9 +476,9 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 	// ONE CENSUS LINE PER REBUILD, beside the surface builder's own. Zero plots is the
 	// common idle rebuild and stays quiet.
 	//
-	// IT NAMES THE GATE GAPS, which is the one thing that cannot be seen from a box count:
-	// a fence with no gap is a depot no truck can leave, and it looks completely correct
-	// from every angle on screen.
+	// IT NAMES THE GATES, which is the one thing that cannot be seen from a box count: a
+	// fence with no gap is a depot no truck can leave, and it looks completely correct from
+	// every angle on screen.
 	if (Plots > 0)
 	{
 		// IT NAMES THE GHOSTS, because a depot drawn entirely in ghosts is a depot nobody has
@@ -377,8 +486,7 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 		// alone.
 		UE_LOG(LogAirside, Log,
 			TEXT("Plots: %d plot(s), %d module bay(s) built, %d ghosted, %d dropped, "
-				 "%d fence panel(s), %d gate gap(s)"),
-			Plots, ModuleBoxes, Ghosts, Dropped,
-			Placed.Num() - ModuleInstances, GateGaps);
+				 "%d fence post(s), %d fabric bay(s), %d gate(s)"),
+			Plots, ModuleBoxes, Ghosts, Dropped, FencePosts, FenceSpans, Gates);
 	}
 }

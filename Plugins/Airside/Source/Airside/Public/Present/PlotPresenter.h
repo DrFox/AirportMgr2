@@ -2,11 +2,25 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "Content/FenceKit.h"
 #include "Solve/PlotYard.h"
 #include "PlotPresenter.generated.h"
 
+class UDynamicMeshComponent;
+class UHierarchicalInstancedStaticMeshComponent;
 class UInstancedStaticMeshComponent;
 class URoadNetwork;
+
+/**
+ * Where the fence is drawn. Bundled because it travels together - see CLAUDE.md "one struct
+ * per thing" - and any member may be null, which draws that part of the fence nowhere.
+ */
+struct FFenceTargets
+{
+	UHierarchicalInstancedStaticMeshComponent* Posts = nullptr;
+	UHierarchicalInstancedStaticMeshComponent* HeavyPosts = nullptr;
+	UDynamicMeshComponent* Fabric = nullptr;
+};
 
 /**
  * The boxes standing in a plotted installation's bays, and the fence round its outline.
@@ -17,9 +31,10 @@ class URoadNetwork;
  * standing on the surface rather than part of it. The pad is the surface's, and it is built
  * there; see URoadSurfacePresenter.
  *
- * ONE COMPONENT FOR EVERY MODULE TYPE AND THE FENCE TOO. An instance carries its own
- * transform including scale, so one engine cube dresses a shed, a tank, a pump and a fence
- * panel by scaling differently. That is a GREY BOX and says so: the split into one component
+ * ONE COMPONENT FOR EVERY MODULE TYPE - THE FENCE HAS ITS OWN, since 2026-09-22 (posts are
+ * two authored meshes and the fabric is a strip, not a box). An instance carries its own
+ * transform including scale, so one engine cube dresses a shed, a tank and a pump by
+ * scaling differently. That is a GREY BOX and says so: the split into one component
  * per authored mesh IS the art swap, when there are meshes to swap in, and nothing else
  * about this class moves when it happens.
  */
@@ -34,10 +49,12 @@ public:
 	 *
 	 * TWO OF THEM, because an instance carries a transform and not a material: a ghosted slot
 	 * cannot differ from a built one inside a single component. InGhosts may be null, and
-	 * then a plot simply draws nothing for the room it has left.
+	 * then a plot simply draws nothing for the room it has left. InFence names the fence's
+	 * three components; see FFenceTargets.
 	 */
 	void Initialise(UInstancedStaticMeshComponent* InBoxes,
-		UInstancedStaticMeshComponent* InGhosts = nullptr);
+		UInstancedStaticMeshComponent* InGhosts = nullptr,
+		const FFenceTargets& InFence = FFenceTargets());
 
 	/**
 	 * Clear and re-add an instance per module standing where the yard solver put it, plus a
@@ -50,8 +67,12 @@ public:
 	 * drift stays impossible: this class has no way to resolve them itself. (Before #181 it
 	 * called DepotKitSpecs(UAirsideSettings::GetContent()) directly - a second resolution of
 	 * the table FPlotPlaceTool's ghost reads through IRoadEditTarget, and the two drifted.)
+	 *
+	 * Kit is the fence's meshes and material, resolved by the caller for the same one-resolver
+	 * reason as the specs; a null member falls back to grey box.
 	 */
-	void RebuildFrom(const URoadNetwork& Network, TArrayView<const PlotYard::FKitSpec> Specs);
+	void RebuildFrom(const URoadNetwork& Network, TArrayView<const PlotYard::FKitSpec> Specs,
+		const FFenceKit& Kit = FFenceKit());
 
 	/**
 	 * Empty every component and zero every count, as if rebuilt from an airport with no plots.
@@ -112,12 +133,21 @@ public:
 	bool GetInstanceTransformForTest(int32 Index, FTransform& OutTransform) const;
 
 	/**
-	 * For tests: how many fence bays were skipped to leave a gate.
+	 * For tests: how many plots got a gate. One per plot, or the census names the one that did
+	 * not - see FenceLayout::FLayout::bHasGate.
 	 *
-	 * A fence with no gate is a depot no truck can leave, and it would look completely
-	 * correct from every angle - which is why the gap is counted rather than eyeballed.
+	 * A fence with no gate is a depot no truck can leave, and it would look completely correct
+	 * from every angle - which is why the gate is counted rather than eyeballed. It counted
+	 * SKIPPED BAYS until 2026-09-22, when the gate stopped being "the bay nearest the pose" and
+	 * became an opening of exactly PlotYard::GateCorridorUu.
 	 */
-	int32 GetGateGapCount() const { return GateGaps; }
+	int32 GetGateGapCount() const { return Gates; }
+
+	/** For tests: fence posts of every kind drawn in the last rebuild. */
+	int32 GetFencePostCount() const { return FencePosts; }
+
+	/** For tests: fabric bays drawn in the last rebuild. */
+	int32 GetFenceSpanCount() const { return FenceSpans; }
 
 private:
 	UPROPERTY(Transient) TObjectPtr<UInstancedStaticMeshComponent> Boxes;
@@ -126,7 +156,8 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UInstancedStaticMeshComponent> GhostBoxes;
 
 	/**
-	 * Every transform added during the last rebuild, in the order it was added.
+	 * Every MODULE transform added during the last rebuild, in the order it was added - the
+	 * fence is not in it since 2026-09-22, when it moved to its own components.
 	 *
 	 * BECAUSE THE INSTANCE INDEX IS ABOUT TO STOP MEANING ANYTHING. One component held every
 	 * box, so "instance 3" was a fact about the PLOT; a second component for the ghosts - and
@@ -137,7 +168,18 @@ private:
 	TArray<FTransform> Placed;
 
 	/** Counted during the last RebuildFrom. See GetGateGapCount. */
-	int32 GateGaps = 0;
+	int32 Gates = 0;
+
+	/** Counted during the last RebuildFrom. See GetFencePostCount. */
+	int32 FencePosts = 0;
+
+	/** Counted during the last RebuildFrom. See GetFenceSpanCount. */
+	int32 FenceSpans = 0;
+
+	/** See FFenceTargets. UPROPERTY for the reason Boxes is one. */
+	UPROPERTY(Transient) TObjectPtr<UHierarchicalInstancedStaticMeshComponent> FencePostsInto;
+	UPROPERTY(Transient) TObjectPtr<UHierarchicalInstancedStaticMeshComponent> FenceHeavyPostsInto;
+	UPROPERTY(Transient) TObjectPtr<UDynamicMeshComponent> FenceFabricInto;
 
 	/** Counted during the last RebuildFrom. See GetRoomForMore. */
 	int32 RoomForMore = 0;

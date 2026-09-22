@@ -5,6 +5,8 @@
 #include "AirsideBuildingsActor.generated.h"
 
 class ARoadNetworkActor;
+class UDynamicMeshComponent;
+class UHierarchicalInstancedStaticMeshComponent;
 class UInstancedStaticMeshComponent;
 class UPlotPresenter;
 class URoadNetwork;
@@ -64,6 +66,14 @@ public:
 	/** The plot boxes - see UPlotPresenter. */
 	UPlotPresenter* GetPlotPresenter() const { return Plots; }
 
+	/**
+	 * For tests: the fence's components. Same ...ForTest precedent as
+	 * UPlotPresenter::GetInstanceTransformForTest - widening them would open them to everything.
+	 */
+	UHierarchicalInstancedStaticMeshComponent* GetFencePostsForTest() const { return FencePosts; }
+	UHierarchicalInstancedStaticMeshComponent* GetFenceHeavyPostsForTest() const { return FenceHeavyPosts; }
+	UDynamicMeshComponent* GetFenceFabricForTest() const { return FenceFabric; }
+
 	virtual void PostInitProperties() override;
 	virtual void PostRegisterAllComponents() override;
 	virtual void UnregisterAllComponents(bool bForReregister = false) override;
@@ -103,6 +113,23 @@ private:
 	 * ARoadNetworkActor::PlotGhostBoxes.
 	 */
 	UPROPERTY() TObjectPtr<UInstancedStaticMeshComponent> ModuleGhosts;
+
+	/**
+	 * The chainlink line posts - HIERARCHICAL, unlike the module boxes, because a perimeter is
+	 * hundreds of identical posts and the hierarchy is what culls the ones off screen.
+	 */
+	UPROPERTY() TObjectPtr<UHierarchicalInstancedStaticMeshComponent> FencePosts;
+
+	/** Corner and gate posts - the heavier mesh. */
+	UPROPERTY() TObjectPtr<UHierarchicalInstancedStaticMeshComponent> FenceHeavyPosts;
+
+	/**
+	 * Every plot's fabric, one strip. Distance-field lighting OFF: Lumen's distance fields
+	 * ignore opacity masks, so a fence left on would be a solid wall in the field and drop a
+	 * black box over the plot (asset README). A dynamic mesh builds no distance field today;
+	 * the flag is set so a later switch to a static mesh cannot quietly bring the box back.
+	 */
+	UPROPERTY() TObjectPtr<UDynamicMeshComponent> FenceFabric;
 
 	/**
 	 * WEAK, because the road network can be destroyed first - a level unload tears actors
