@@ -9,6 +9,7 @@
 #include "CoreMinimal.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Present/AirsideBuildingsActor.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/RoadEditTarget.h"
 
@@ -47,6 +48,14 @@ struct FAirsideTestWorld
 	/** Null when constructed with bSpawnActor=false. */
 	ARoadNetworkActor* Actor = nullptr;
 
+	/**
+	 * Null when constructed with bSpawnActor=false. Spawned AFTER Actor, so it finds and binds
+	 * to it on registration - the real path, not a test-only BindTo. EVERY TEST THAT SPAWNS A
+	 * ROAD NETWORK GETS ONE because plots stopped being the road network's to draw on
+	 * 2026-09-22; a fixture without it would pass every plot test that forgot to ask.
+	 */
+	AAirsideBuildingsActor* Buildings = nullptr;
+
 	explicit FAirsideTestWorld(bool bSpawnActor = true, EWorldType::Type WorldType = EWorldType::Game)
 	{
 		World = UWorld::CreateWorld(WorldType, false);
@@ -56,6 +65,7 @@ struct FAirsideTestWorld
 		if (bSpawnActor)
 		{
 			Actor = World->SpawnActor<ARoadNetworkActor>();
+			Buildings = World->SpawnActor<AAirsideBuildingsActor>();
 		}
 	}
 

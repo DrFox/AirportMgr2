@@ -11,6 +11,7 @@
 #include "EngineUtils.h"
 #include "InteractiveToolManager.h"
 #include "Model/RoadNetwork.h"
+#include "Present/AirsideBuildingsActor.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildEdModeCommands.h"
 #include "ScopedTransaction.h"
@@ -265,7 +266,10 @@ ARoadNetworkActor* URoadBuildEditorTool::ResolveTarget() const
 	// Found or created. Having to drag one in by hand before anything works was a
 	// convenience gap, not a design requirement - and in the editor there is nothing to
 	// warn at.
-	return ARoadNetworkActor::FindOrCreate(World);
+	ARoadNetworkActor* Road = ARoadNetworkActor::FindOrCreate(World);
+	// See URoadBuildEdMode::MakeReselectContext: the buildings actor is created beside it.
+	AAirsideBuildingsActor::FindOrCreate(World, Road);
+	return Road;
 }
 
 bool URoadBuildEditorTool::RayToPlane(const FRay& Ray, FVector2D& OutPosition) const

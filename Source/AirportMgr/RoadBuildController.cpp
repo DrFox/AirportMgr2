@@ -21,6 +21,7 @@
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadEditFacade.h"
+#include "Present/AirsideBuildingsActor.h"
 #include "Present/RoadNetworkActor.h"
 #include "SceneView.h"
 #include "Solve/RoadGeom.h"
@@ -57,6 +58,11 @@ void ARoadBuildController::BeginPlay()
 			TEXT("No ARoadNetworkActor in the level - place one, or clicks will do nothing."));
 		return;
 	}
+
+	// THE BUILDINGS, found or spawned for this play session. M_Starter has one placed, so this
+	// normally finds it; spawning covers a level that predates the split, where the depots
+	// would otherwise be invisible in play and present in the editor.
+	AAirsideBuildingsActor::FindOrCreate(GetWorld(), Target);
 
 	// See HasRunway's own comment: the cache this subscribes to invalidate is issue #187.
 	BindRunwayCacheInvalidation();

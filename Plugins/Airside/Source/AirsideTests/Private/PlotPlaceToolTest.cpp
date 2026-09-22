@@ -1109,7 +1109,7 @@ bool FPlotReadoutCountsRoomNotSlotsTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-	if (!TestNotNull(TEXT("a plot presenter"), Actor->GetPlotPresenter())) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), TestWorld.Buildings->GetPlotPresenter())) { return false; }
 
 	Actor->ClearNetwork();
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
@@ -1168,7 +1168,7 @@ bool FPlotReadoutCountsRoomNotSlotsTest::RunTest(const FString& Parameters)
 	Tool.OnCommit(Confirming);
 	Actor->RebuildMesh();
 
-	const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
 	TestEqual(TEXT("the bays promised are the bays the built depot has"),
 		Plots->GetModuleCount() + Plots->GetGhostCount(), Promised);
 

@@ -18,7 +18,6 @@
 #include "Model/DeparturePlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideTraffic.h"
-#include "Present/PlotPresenter.h"  // UPlotPresenter is forward-declared in the header now (issue #191); this .cpp dereferences Plots-> directly
 #include "Present/RoadEditFacade.h"
 #include "Profiles/RoadProfile.h"
 
@@ -111,43 +110,6 @@ ARoadNetworkActor::ARoadNetworkActor()
 	// ApronDrawToolTest.cpp already know them by those names), and this is just how they are
 	// handed across the Present-internal boundary in one indexed call instead of five.
 	InitialisePresenterLayers();
-
-	// The plot boxes: one instanced component, every module and fence panel an instance in
-	// it. The ENGINE'S OWN primitive, not an authored asset, for the reason
-	// ARoadAgentActor's placeholder records at its own FObjectFinder - grey-box geometry
-	// that shows only until real meshes arrive has no business owning content of its own.
-	PlotBoxes = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("PlotBoxes"));
-	PlotBoxes->SetupAttachment(RootComponent);
-	{
-		static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(AirsidePrimitives::CubePath());
-		if (Cube.Succeeded())
-		{
-			PlotBoxes->SetStaticMesh(Cube.Object);
-		}
-	}
-
-	// No collision, matching every other surface this actor draws: the world is flat and
-	// every pick is exact maths against the road plane, so a collider here would be
-	// something the build tools could trace against by accident.
-	PlotBoxes->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-
-	// THE GHOSTS GET THEIR OWN COMPONENT, sharing the cube and differing only in material.
-	// An instance carries a transform and not a material, so reserved-but-unbought bays
-	// cannot be told apart from built ones inside PlotBoxes.
-	PlotGhostBoxes =
-		CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("PlotGhostBoxes"));
-	PlotGhostBoxes->SetupAttachment(RootComponent);
-	{
-		static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(AirsidePrimitives::CubePath());
-		if (Cube.Succeeded())
-		{
-			PlotGhostBoxes->SetStaticMesh(Cube.Object);
-		}
-	}
-	PlotGhostBoxes->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-
-	Plots = CreateDefaultSubobject<UPlotPresenter>(TEXT("Plots"));
-	Plots->Initialise(PlotBoxes, PlotGhostBoxes);
 
 	Facade = CreateDefaultSubobject<URoadEditFacade>(TEXT("Facade"));
 
@@ -319,19 +281,6 @@ void ARoadNetworkActor::PostInitProperties()
 	Facade = Cast<URoadEditFacade>(GetDefaultSubobjectByName(TEXT("Facade")));
 	Traffic = Cast<UAirsideTraffic>(GetDefaultSubobjectByName(TEXT("Traffic")));
 	Smoke = Cast<UTyreSmoke>(GetDefaultSubobjectByName(TEXT("Smoke")));
-	Plots = Cast<UPlotPresenter>(GetDefaultSubobjectByName(TEXT("Plots")));
-
-	// The component travels the same way, and the presenter must be re-pointed AT IT: a
-	// duplicate's presenter would otherwise still be filling the CDO s component, so the
-	// boxes would be added to an object no level ever renders.
-	PlotBoxes = Cast<UInstancedStaticMeshComponent>(
-		GetDefaultSubobjectByName(TEXT("PlotBoxes")));
-	PlotGhostBoxes = Cast<UInstancedStaticMeshComponent>(
-		GetDefaultSubobjectByName(TEXT("PlotGhostBoxes")));
-	if (Plots != nullptr)
-	{
-		Plots->Initialise(PlotBoxes, PlotGhostBoxes);
-	}
 
 }
 
@@ -371,6 +320,24 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 	// the solver over one would be work done to produce nothing.
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
 	{
+		// THE PLOT COMPONENTS THIS ACTOR NO LONGER OWNS, swept by name. Until 2026-09-22 they
+		// were default subobjects here, and M_Starter.umap was saved with one. Deleting the
+		// UPROPERTY does not delete the saved component: AActor::ResetOwnedComponents collects
+		// components by OUTER, so the orphan still registers and renders whatever instances it
+		// was saved with - stale grey boxes over a depot the buildings actor is also drawing.
+		// Kept until every level has been resaved; place_buildings_actor.py resaves M_Starter.
+		for (UInstancedStaticMeshComponent* Stale :
+			TInlineComponentArray<UInstancedStaticMeshComponent*>(this))
+		{
+			const FName Name = Stale->GetFName();
+			if (Name == TEXT("PlotBoxes") || Name == TEXT("PlotGhostBoxes"))
+			{
+				UE_LOG(LogAirside, Log, TEXT("Swept legacy plot component %s from %s"),
+					*Name.ToString(), *GetName());
+				Stale->DestroyComponent();
+			}
+		}
+
 		// THE SURFACE LAYERS, RE-POINTED HERE AND NOT IN PostInitProperties, which is where
 		// this was tried first and silently did nothing.
 		//
@@ -590,7 +557,8 @@ int32 ARoadNetworkActor::GetTaxiwayProfileCount() const
 TArray<PlotYard::FKitSpec> ARoadNetworkActor::ResolveDepotKits() const
 {
 	// THE ONE CALL SITE, per CLAUDE.md's "Content/ resolves every content default in exactly
-	// one function": both URoadEditFacade (for FPlotPlaceTool) and UPlotPresenter reach this
+	// one function": both URoadEditFacade (for FPlotPlaceTool) and AAirsideBuildingsActor (for
+	// UPlotPresenter) reach this
 	// method rather than calling DepotKitSpecs(UAirsideSettings::GetContent()) themselves -
 	// see issue #181, where the tool had grown its own copy of this exact line.
 	const UAirsideContent* Content = UAirsideSettings::GetContent();
@@ -730,8 +698,8 @@ void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
 		// SURFACE ONLY (issue #165). A drag frame moved positions and nothing else, so the
 		// solve and the mesh it feeds are the only things that can have changed - see
 		// URoadSurfacePresenter::RebuildSurfaceOnly for exactly what that skips and why, and
-		// URoadEditFacade::MoveNode for the notify this answers. Plots and Traffic are
-		// skipped here too: RebuildFrom and OnGraphRebuilt both re-derive from the guideline
+		// URoadEditFacade::MoveNode for the notify this answers. The buildings
+		// (OnTopologyRebuilt) and Traffic are skipped here too: RebuildFrom and OnGraphRebuilt both re-derive from the guideline
 		// graph RebuildSurfaceOnly deliberately leaves untouched, so re-running them against
 		// it would cost the same as a full rebuild for no new information.
 		Presenter->RebuildSurfaceOnly(*Network, MakeSurfaceSettings());
@@ -749,8 +717,8 @@ void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
 		// node - so routing this flag through Topology invalidated the very node whose flag
 		// had just been set, and every other live FGuidelineNodeId in the level besides
 		// (three tests caught this the day it was tried). RebuildMarkingsOnly repaints the
-		// HoldingPaint layer from the CURRENT graph instead. Plots and Traffic are skipped
-		// for the same reason Geometry skips them above: nothing they derive from moved.
+		// HoldingPaint layer from the CURRENT graph instead. The buildings and Traffic are
+		// skipped for the same reason Geometry skips them above: nothing they derive from moved.
 		Presenter->RebuildMarkingsOnly(*Network, MakeSurfaceSettings());
 		return;
 	}
@@ -758,20 +726,10 @@ void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
 	++TopologyRebuildCount;
 	Presenter->Rebuild(*Network, MakeSurfaceSettings());
 
-	// The boxes standing on that surface. After the surface, so a plot drawn this frame has
-	// its pad underneath it before its sheds go up.
-	if (Plots != nullptr)
-	{
-		// THROUGH THE RESOLVER, never the raw property, and here rather than in the
-		// constructor: a CDO cannot LoadSynchronous, and the material a level authored is
-		// only known once the actor exists. Null leaves the cube's default, which reads as
-		// a built bay - wrong, but visible, which is the failure mode to prefer.
-		if (PlotGhostBoxes != nullptr)
-		{
-			PlotGhostBoxes->SetMaterial(0, ResolveGhostMaterial());
-		}
-		Plots->RebuildFrom(*Network);
-	}
+	// THE BUILDINGS, through the delegate - see OnTopologyRebuilt's own comment. After the
+	// surface, so a plot drawn this frame has its pad underneath it before its sheds go up;
+	// before Traffic, matching where the direct call stood.
+	OnTopologyRebuilt.Broadcast(*Network);
 
 	// The guideline graph was just regenerated with new handles. Every agent's route must be
 	// re-pointed at the nodes that now hold its positions, or the occupancy table would be
