@@ -1714,7 +1714,7 @@ def run():
 run()
 ```
 
-Before running, check that `unreal.StaticMesh.get_bounding_box` exists in 5.8. Grep the engine: `grep -rn "GetBoundingBox" D:/Epic/UE_5.8/Engine/Source/Runtime/Engine/Classes/Engine/StaticMesh.h`. If it isn't a UFUNCTION, use `mesh.get_bounds()` (BoxSphereBounds: `.box_extent`, `.origin`) and derive min/max from origin ± extent. Also confirm `delete_all_material_expressions` exists. The memory "Material graph authoring traps" says delete-all deletes half: if the rebuilt material shows duplicated nodes, delete the asset (checking on disk afterwards) and recreate it.
+Verified while planning: `UStaticMesh::GetBoundingBox` is a BlueprintPure UFUNCTION (`StaticMesh.h:2203`) and `UMaterialEditingLibrary::DeleteAllMaterialExpressions` exists (`MaterialEditingLibrary.h:150`). The memory "Material graph authoring traps" says delete-all deletes half: if the rebuilt material shows duplicated nodes, delete the asset (checking on disk afterwards) and recreate it.
 
 - [ ] **Step 2: Run it (editor closed)**
 
