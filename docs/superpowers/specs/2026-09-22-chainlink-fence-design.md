@@ -27,17 +27,23 @@ selection needs a click target.
   Traffic. Geometry and Markings rebuilds still do not broadcast.
 - `UPlotPresenter::Actor()` retargets to the buildings actor. `ResolveDepotKits` and the
   ghost material are reached through its road-actor pointer (still one resolver each).
-- The road actor's plot accessors stay as forwarders (null-safe when no buildings actor
-  exists), or the PR names each removal and why.
+- `GetPlotPresenter` is REMOVED from the road actor, not forwarded: it is plain C++ with only
+  test callers, and a forwarder needs a road-to-buildings pointer that undoes the split. Tests
+  read `FAirsideTestWorld::Buildings`. Every road-network creation site (fixture, editor mode,
+  editor tool, PIE controller) calls `AAirsideBuildingsActor::FindOrCreate` beside it.
+- M_Starter was saved with the old `PlotBoxes`; the road actor sweeps it by name on
+  registration, and the level is resaved.
 - Place the actor in every `.umap` either driver uses (headless level edit; verify on disk,
   see memory on locked .umaps; fall back to a manual drag-in step).
 - Refactor contract: `UE_LOG(` and comment-line counts before/after in the PR body.
 
 Tests:
-- `Airside.Present.BuildingsActorWired` - spawn both actors, place a plot, assert
-  `GetModuleCount() > 0` on the buildings actor. Fails if the delegate is unwired.
-- `Airside.Present.BuildingsActorAlone` - road actor absent: no crash, nothing built,
-  the Warning line emitted.
+- `Airside.Present.BuildingsActorDrawsThroughTheDelegate` - road actor and depot first, then
+  the buildings actor: it binds unasked, catches up, and empties on the next topology rebuild.
+  Verified red with the Broadcast commented out.
+- `Airside.Present.BuildingsActorAloneDrawsNothing` - road actor absent: no crash, nothing
+  built, the Warning line emitted.
+- `Airside.Present.BuildingsActorFindOrCreateIsIdempotent` - three drivers call it.
 - Existing `PlotPresenterTest` cases move to the buildings actor and stay green unchanged.
 
 ## PR 2 — the fence
