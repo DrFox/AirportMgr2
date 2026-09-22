@@ -13,6 +13,7 @@
 #include "AirsideLog.h"
 #include "Algo/Reverse.h"
 #include "Build/AnchorLink.h"
+#include "Content/AirsideSettings.h"
 #include "Build/DepotKit.h"
 #include "Build/PlotLayoutStrategy.h"
 #include "Entities/EntityDefinition.h"
@@ -448,9 +449,28 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// Every module the yard places is squared to the SAME frontage, so the inward normal IS
 	// the installation's own heading - the fact PlotFit::FitBays's uniform Bay.Heading used
 	// to state and PlotYard::InwardOf states now, without a solve of its own.
-	Placement.Heading = RoadGeom::Bearing(PlotYard::InwardOf(Wound, FrontageA, FrontageB));
+	const FVector2D Inward = PlotYard::InwardOf(Wound, FrontageA, FrontageB);
+	Placement.Heading = RoadGeom::Bearing(Inward);
 	Placement.PoseRole = Definition->PoseRole;
 	Placement.Outline = Wound;
+
+	// THE TRUCKS' HOME, SET BACK INTO THE YARD far enough that the link onto the road can turn
+	// at a radius the largest service vehicle can steer - FAnchorLink::PoseSetbackFor. On the
+	// gate, as it was until 2026-09-22, the square turn onto the road had the kerb's 300 uu and
+	// came out at R = 206 against a lock of 699: the truck crabbed out of every depot.
+	Placement.PoseSetbackUu = FAnchorLink::PoseSetbackFor(Net, Placement.Position, Inward,
+		UAirsideSettings::ResolveLargestServiceVehicle(), Owner.ServiceLinkRadius);
+	const FVector2D Home = Placement.Position + Inward.GetSafeNormal() * Placement.PoseSetbackUu;
+	if (!RoadGeom::PointInPolygon(Wound, Home))
+	{
+		// SAID, NOT REFUSED: the depot still works, its trucks just start outside the fence.
+		// Only a plot shallower than the turn needs can do this.
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot: the trucks' home, %.0f uu in from the gate so they can turn "
+				 "onto the road, is outside this plot - draw it deeper."), Placement.PoseSetbackUu);
+	}
+	UE_LOG(LogRoadMesh, Log, TEXT("PlaceEntityInPlot: trucks' home set %.0f uu in from the gate"),
+		Placement.PoseSetbackUu);
 
 	// STORED WHOLE, NEVER TRUNCATED TO WHAT FITS - issue #182 again. FitBays's bay count used
 	// to cap Modules here, which was a SECOND capacity rule competing with the reservation

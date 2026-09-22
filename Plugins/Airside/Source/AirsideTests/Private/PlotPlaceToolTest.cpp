@@ -21,6 +21,9 @@
 #include "Present/AirsideBuildingsActor.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/ToolReadout.h"
+#include "Model/SpeedProfile.h"
+#include "Model/RoutePolicy.h"
+#include "Model/RouteSearch.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -1849,6 +1852,106 @@ bool FPlotToolRemovesADepotTest::RunTest(const FString& Parameters)
 	Tool.OnClick(AtStand);
 	TestTrue(TEXT("a remove click on a stand with the depot tool leaves the stand"),
 		Actor->Network->GetEntities().IsValidIndex(Stand) && Actor->Network->GetEntities()[Stand].bAlive);
+	return true;
+}
+
+/**
+ * A fuel truck leaving a drawn depot can steer every curve of its way out, both ways along the
+ * road - and its home is inside the plot, not on the kerb.
+ *
+ * REPORTED FROM PIE 2026-09-22: the truck "gets stuck trying to turn out through the gate". The
+ * log said why - "Route asks for R=206 uu ... the steering lock allows only R>=699". The depot's
+ * pose node, the truck's home, sat at the gate on the kerb about 300 uu from the road's line,
+ * facing straight at it, and FAnchorLink squeezed a square turn onto the road into those 300 uu.
+ * Widening the gate (the first, visual fix) could not touch it: the gate never enters the route.
+ *
+ * ASKED OF FSpeedProfile, the one authority on whether a vehicle can drive a line, over the
+ * WHOLE route - see TruckDrivesTheWholeRouteToTheHydrant for why a per-edge check is not enough.
+ * Drawn through the real tool and placed through the real facade, because the setback is decided
+ * at placement.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotTruckTurnsOutWithinItsLockTest,
+	"Airside.Tool.DepotTruckTurnsOutWithinItsLock",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotTruckTurnsOutWithinItsLockTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a road network"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	// 20 x 14 m north of the road - the smallest plot that holds one of each (see
+	// FuelYardFitsTheConceptSheet).
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(2000.0, 200.0), FVector2D(1000.0, 1600.0));
+	Tool.OnCommit(PlotAt(Actor, FVector2D(1000.0, 1600.0)));
+	Actor->RebuildMesh();
+
+	const FEntityInstance* Depot = nullptr;
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (Entity.bAlive && Entity.IsPlotted()) { Depot = &Entity; break; }
+	}
+	if (!TestNotNull(TEXT("a depot was placed"), Depot)) { return false; }
+	const FGuidelineNode* Home = Actor->Network->GetGuidelineNode(Depot->PoseNode);
+	if (!TestNotNull(TEXT("its truck has a home node"), Home)) { return false; }
+
+	// SET BACK FROM THE GATE, not merely "inside": the gate is ON the outline, and a point on
+	// the boundary reads as inside - which is how this assertion first passed on the bug.
+	TestTrue(*FString::Printf(TEXT("the truck's home is set back into the plot, not on the kerb - (%.0f, %.0f), gate (%.0f, %.0f)"),
+		Home->Position.X, Home->Position.Y, Depot->Position.X, Depot->Position.Y),
+		RoadGeom::PointInPolygon(Depot->Outline, Home->Position)
+		&& FVector2D::Distance(Home->Position, Depot->Position) > 100.0);
+
+	// BOTH ENDS OF THE ROAD: a turn out to the left and one to the right, so a fix that
+	// rounded only one of the two sweeps cannot pass.
+	FGuidelineNodeId West;
+	FGuidelineNodeId East;
+	double WestX = TNumericLimits<double>::Max();
+	double EastX = -TNumericLimits<double>::Max();
+	const TArray<FGuidelineNode>& Nodes = Actor->Network->GetGuidelineNodes();
+	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+	{
+		if (!Nodes[Index].bAlive || Nodes[Index].Incident.Num() == 0 || FMath::Abs(Nodes[Index].Position.Y) > 600.0)
+		{
+			continue;
+		}
+		if (Nodes[Index].Position.X < WestX) { WestX = Nodes[Index].Position.X; West = Actor->Network->GuidelineNodeIdAt(Index); }
+		if (Nodes[Index].Position.X > EastX) { EastX = Nodes[Index].Position.X; East = Actor->Network->GuidelineNodeIdAt(Index); }
+	}
+	if (!TestTrue(TEXT("the road has guideline ends to drive to"), West.IsSet() && East.IsSet())) { return false; }
+
+	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	for (const FGuidelineNodeId Goal : { West, East })
+	{
+		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
+		Query.Start = Depot->PoseNode;
+		Query.Goal = Goal;
+		Query.Class = ETraversalClass::GroundVehicle;
+		const FRoutePlan Plan = RouteSearch::Find(*Actor->Network, Query);
+		const TCHAR* Which = Goal == West ? TEXT("west") : TEXT("east");
+		if (!TestTrue(*FString::Printf(TEXT("the truck routes out of the depot to the %s"), Which),
+			Plan.IsValid() && Plan.Polyline.Num() >= 2))
+		{
+			continue;
+		}
+
+		FSpeedProfile Profile;
+		Profile.Build(Plan.Polyline, Truck);
+		TestFalse(*FString::Printf(
+			TEXT("turning out %s asks for no curve the lock cannot hold (tightest R=%.0f uu at %.0f, lock R>=%.0f)"),
+			Which, Profile.GetTightestRadius(), Profile.GetTightestAt(), Truck.TightestFollowableRadius()),
+			Profile.WasTighterThanLock());
+		TestFalse(*FString::Printf(TEXT("and no instant corner turning out %s (sharpest %.0f deg)"),
+			Which, Profile.GetSharpestDegrees()), Profile.HasSharpVertex());
+	}
 	return true;
 }
 

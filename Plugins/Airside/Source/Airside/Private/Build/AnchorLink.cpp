@@ -679,8 +679,8 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	{
 		// ISSUE #190: the caller's resolved vehicle, not a fresh resolve - this ran twice
 		// per link (here and at the warning below) before Build started passing one down.
-		constexpr double Slack = 1.1;
-		LaneRadius = LargestServiceVehicle.TightestFollowableRadius() * Slack;
+		// The tenth of slack is ServiceLaneRadius's, shared with PoseSetbackFor.
+		LaneRadius = ServiceLaneRadius(LargestServiceVehicle);
 	}
 
 	if (Link.LaneOwner.IsSet() && LaneRadius > 0.0)
@@ -1200,4 +1200,44 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FAirframe& LargestServiceV
 	}
 
 	return Joined;
+}
+
+double FAnchorLink::ServiceLaneRadius(const FAirframe& LargestServiceVehicle)
+{
+	// PLUS A TENTH ON THE LOCK, measured rather than chosen - see Join's own comment on the 4 m
+	// fixture that came out at 707 against 699.4 when sized at exactly the lock.
+	constexpr double Slack = 1.1;
+	return LargestServiceVehicle.TightestFollowableRadius() * Slack;
+}
+
+double FAnchorLink::PoseSetbackFor(const URoadNetwork& Network, const FVector2D& At,
+	const FVector2D& Inward, const FAirframe& LargestServiceVehicle, double ServiceLinkRadius)
+{
+	// THE LINK Gather WOULD MAKE for a service pose: found by proximity, within the service
+	// radius, for a ground vehicle.
+	FPendingLink Link;
+	Link.Kind = ELinkKind::Proximity;
+	Link.At = At;
+	Link.Class = ETraversalClass::GroundVehicle;
+	Link.Reach = ServiceLinkRadius;
+
+	const FLinkHit Hit = Resolve(Network, Link, TSet<FGuidelineNodeId>());
+	const FGuidelineEdge* Edge = Hit.IsSet() ? Network.GetGuidelineEdge(Hit.Edge) : nullptr;
+	const FGuidelineNode* A = Edge != nullptr ? Network.GetGuidelineNode(Edge->A) : nullptr;
+	const FGuidelineNode* B = Edge != nullptr ? Network.GetGuidelineNode(Edge->B) : nullptr;
+	if (A == nullptr || B == nullptr || Inward.IsNearlyZero())
+	{
+		return 0.0;
+	}
+
+	// THE ROOM Join WILL MEASURE: LeadRoom is the lead-in's length less a weld tolerance, and
+	// a square turn's fillet needs CornerRunFor of the lane radius. A second tolerance on top,
+	// so the fillet is never clamped by rounding alone.
+	const FVector2D Meets = GuidelineGeom::Eval(A->Position, Edge->Control, B->Position, Hit.Param);
+	const double Needs = GuidelineGeom::CornerRunFor(ServiceLaneRadius(LargestServiceVehicle),
+		UE_DOUBLE_HALF_PI) + 2.0 * LeadInWeldTolerance;
+
+	// ALONG INWARD ONLY: the part of the gap that setting back actually lengthens.
+	const double Have = FVector2D::DotProduct(At - Meets, Inward.GetSafeNormal());
+	return FMath::Max(Needs - Have, 0.0);
 }

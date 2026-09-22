@@ -1268,10 +1268,13 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement)
 	// ONE OF THEM, however many bays the plot holds. BuildFuelDepot already ruled that two
 	// lead-ins from one small building into one road is a duplicate painted line, so a
 	// depot's sheds are capacity and visuals - the yard's single gate is the pose.
-	Instance.PoseNode = AddGuidelineNode(Placement.Position, /*bDerived=*/false);
-
 	const double Cos = FMath::Cos(Placement.Heading);
 	const double Sin = FMath::Sin(Placement.Heading);
+
+	// SET BACK ALONG THE HEADING when the placement asks - a drawn depot's trucks live inside
+	// its gate, not on it. See FEntityPlacement::PoseSetbackUu.
+	Instance.PoseNode = AddGuidelineNode(
+		Placement.Position + FVector2D(Cos, Sin) * Placement.PoseSetbackUu, /*bDerived=*/false);
 
 	for (const FEntityAnchor& Anchor : Placement.Anchors)
 	{
