@@ -145,10 +145,12 @@ public:
 
 private:
 	/**
-	 * The plotted entity under the cursor for a Remove gesture, or INDEX_NONE.
+	 * The depot under the cursor for a Remove gesture, or INDEX_NONE.
 	 *
-	 * PLOTS ONLY: this is the depot tool, and Remove lit on it removes depots. A stand under
-	 * the cursor is the stand tool's to remove, where the player can see it is one.
+	 * DEPOTS ONLY: this is the depot tool, and Remove lit on it removes depots. A stand under
+	 * the cursor is the stand tool's to remove, where the player can see it is one. A depot is
+	 * a plotted entity, OR a fuel-role entity with no outline - the format depots were placed
+	 * in before plots, still saved in M_Starter on 2026-09-22 and otherwise unremovable.
 	 */
 	static int32 PlotUnder(const FToolContext& Context);
 

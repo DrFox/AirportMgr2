@@ -432,8 +432,14 @@ int32 FPlotPlaceTool::PlotUnder(const FToolContext& Context)
 		return INDEX_NONE;
 	}
 	const int32 Under = Context.Target->FindEntityAt(Context.Cursor, Context.SnapRadius);
-	return Network->GetEntities().IsValidIndex(Under) && Network->GetEntities()[Under].IsPlotted()
-		? Under : INDEX_NONE;
+	if (!Network->GetEntities().IsValidIndex(Under))
+	{
+		return INDEX_NONE;
+	}
+	// A PRE-PLOT DEPOT HAS NO GROUND to click, so FindEntityAt finds it the way it finds a
+	// stand - by its pose within the pick radius - and its fuel role is what says it is ours.
+	const FEntityInstance& Entity = Network->GetEntities()[Under];
+	return Entity.IsPlotted() || Entity.PoseRole == EServiceRole::Fuel ? Under : INDEX_NONE;
 }
 
 void FPlotPlaceTool::OnClick(const FToolContext& Context)
@@ -659,7 +665,14 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 		if (Doomed != INDEX_NONE)
 		{
 			const FEntityInstance& Entity = Network->GetEntities()[Doomed];
-			Sink.Polygon(Entity.Outline, EPreviewStyle::Doomed);
+			if (Entity.IsPlotted())
+			{
+				Sink.Polygon(Entity.Outline, EPreviewStyle::Doomed);
+			}
+			else
+			{
+				Sink.Marker(Entity.Position, EPreviewStyle::Doomed);
+			}
 			Sink.Label(Context.Cursor, TEXT("remove fuel depot"), EPreviewStyle::Doomed);
 		}
 		return;

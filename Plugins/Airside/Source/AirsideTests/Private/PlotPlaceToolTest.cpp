@@ -1821,6 +1821,34 @@ bool FPlotToolRemovesADepotTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("a remove click inside the plot deletes the depot"),
 		Actor->Network->GetEntities().IsValidIndex(Depot) && Actor->Network->GetEntities()[Depot].bAlive);
 	TestEqual(TEXT("and starts no plot gesture either"), Tool.PinnedCount(), 0);
+
+	// A PRE-PLOT DEPOT - fuel role, no outline - the format M_Starter still held on 2026-09-22.
+	// It has no ground to click, so it is taken at its pose, like a stand; before this it could
+	// not be removed by any tool.
+	UEntityDefinition* Legacy = UEntityDefinition::MakeFuelDepotTransient();
+	FEntityPlacement Old;
+	Old.Definition = Legacy;
+	Old.Anchors = Legacy->Anchors;
+	Old.Position = FVector2D(20000.0, 0.0);
+	Old.Heading = 0.0;
+	Old.PoseRole = EServiceRole::Fuel;
+	const int32 OldDepot = Actor->Network->PlaceEntity(Old).Index;
+	if (!TestTrue(TEXT("an old-format depot placed"), OldDepot != INDEX_NONE)) { return false; }
+
+	FToolContext AtOld = TestTool::ContextAt(*Actor, FVector2D(20100.0, 0.0), ERoadSnapKind::Free, 400.0);
+	AtOld.bRemoveModifier = true;
+	Tool.OnClick(AtOld);
+	TestFalse(TEXT("a remove click at an old-format depot's pose deletes it"),
+		Actor->Network->GetEntities().IsValidIndex(OldDepot) && Actor->Network->GetEntities()[OldDepot].bAlive);
+
+	// AND NOT A STAND: the depot tool removes depots only.
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const int32 Stand = Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(30000.0, 0.0), 0.0).Index;
+	FToolContext AtStand = TestTool::ContextAt(*Actor, FVector2D(30100.0, 0.0), ERoadSnapKind::Free, 400.0);
+	AtStand.bRemoveModifier = true;
+	Tool.OnClick(AtStand);
+	TestTrue(TEXT("a remove click on a stand with the depot tool leaves the stand"),
+		Actor->Network->GetEntities().IsValidIndex(Stand) && Actor->Network->GetEntities()[Stand].bAlive);
 	return true;
 }
 
