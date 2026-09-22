@@ -10,7 +10,7 @@ namespace
 	{
 		PlotYard::FFootprint Out;
 		Out.LengthUu = Kit.Footprint.LengthUu + Kit.ApronUu.X;
-		Out.WidthUu = Kit.Footprint.WidthUu * RunLength + Kit.ApronUu.Y * 2.0;
+		Out.WidthUu = Kit.RunWidthUu(RunLength) + Kit.ApronUu.Y * 2.0;
 		Out.bAgainstTheBackFence = Kit.Footprint.bAgainstTheBackFence;
 		return Out;
 	}

@@ -1,7 +1,9 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Components/DynamicMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
+#include "Engine/StaticMesh.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
@@ -59,6 +61,19 @@ namespace
 	{
 		return { FVector2D(X, 0.0), FVector2D(X + 2000.0, 0.0),
 		         FVector2D(X + 2000.0, 2400.0), FVector2D(X, 2400.0) };
+	}
+
+	/**
+	 * A 30 m x 24 m plot - DeepPlotAt ten metres wider, for a test that needs ROOM LEFT OVER.
+	 *
+	 * DeepPlotAt held one of each with room to spare at the grey-box figures; at the real
+	 * shed's (9.4 m deep, 5 m a bay plus 0.75 m caps, a 4 m apron) its 20 m reserves exactly
+	 * the one-of-each it is given (2026-09-22), so a ghost test on it proves nothing.
+	 */
+	TArray<FVector2D> SpareRoomPlotAt(double X)
+	{
+		return { FVector2D(X, 0.0), FVector2D(X + 3000.0, 0.0),
+		         FVector2D(X + 3000.0, 2400.0), FVector2D(X, 2400.0) };
 	}
 
 	/** PlaceDepot's mix and pose, on a plot with room behind the shed. */
@@ -377,10 +392,18 @@ bool FPlotPresenterGhostsUnboughtSlotsTest::RunTest(const FString& Parameters)
 
 	Actor->ClearNetwork();
 
-	// THE DEEP PLOT, not ThreeBayPlotAt: 20 x 24 m has room to reserve more than the starter
+	// A PLOT WITH ROOM LEFT OVER, not ThreeBayPlotAt: 30 x 24 m reserves more than the starter
 	// one-of-each, and a plot that reserved exactly three would pass this test while proving
-	// nothing about ghosts.
-	PlaceDeepDepot(Actor, Depot, /*X=*/0.0);
+	// nothing about ghosts - which DeepPlotAt became once the real shed arrived.
+	FEntityPlacement Placement;
+	Placement.Definition = Depot;
+	Placement.Anchors = Depot->Anchors;
+	Placement.Position = FVector2D(1500.0, 0.0);
+	Placement.Heading = UE_DOUBLE_HALF_PI;
+	Placement.PoseRole = EServiceRole::Fuel;
+	Placement.Outline = SpareRoomPlotAt(0.0);
+	Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+	Actor->Network->PlaceEntity(Placement);
 	Actor->RebuildMesh();
 
 	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
@@ -391,7 +414,7 @@ bool FPlotPresenterGhostsUnboughtSlotsTest::RunTest(const FString& Parameters)
 
 	// AND THE SPARE ROOM IS DRAWN. This is the claim the whole design rests on: the player
 	// can see what the plot would hold before spending anything on it.
-	TestTrue(TEXT("a 20 x 24 m plot has spare capacity to ghost"),
+	TestTrue(TEXT("a 30 x 24 m plot has spare capacity to ghost"),
 		Plots->GetGhostCount() > 0);
 
 	// A RESERVATION CANNOT DROP. Unlike LayOut, Reserve chose the list, so a drop is a bug
@@ -405,16 +428,16 @@ bool FPlotPresenterGhostsUnboughtSlotsTest::RunTest(const FString& Parameters)
 	// would measure a band-laid depot against a scattered one's stand count.
 	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
 
-	// A NAMED LOCAL, because FPlotSite::Outline is a VIEW. Assigning DeepPlotAt(0.0) straight
-	// into it binds the view to a temporary that dies at the semicolon, and the solve then
-	// reads freed memory - which here returned a plausible-looking 3 rather than crashing.
-	const TArray<FVector2D> Outline = DeepPlotAt(0.0);
+	// A NAMED LOCAL, because FPlotSite::Outline is a VIEW. Assigning SpareRoomPlotAt(0.0)
+	// straight into it binds the view to a temporary that dies at the semicolon, and the solve
+	// then reads freed memory - which here returned a plausible-looking 3 rather than crashing.
+	const TArray<FVector2D> Outline = SpareRoomPlotAt(0.0);
 
 	FPlotSite Site;
 	Site.Outline = Outline;
 	Site.FrontageA = FVector2D(0.0, 0.0);
-	Site.FrontageB = FVector2D(2000.0, 0.0);
-	Site.Gate = FVector2D(1000.0, 0.0);
+	Site.FrontageB = FVector2D(3000.0, 0.0);
+	Site.Gate = FVector2D(1500.0, 0.0);
 	Site.Seed = DepotYardSeed(Site.Gate);
 
 	const PlotYard::FReservation Reservation =
@@ -579,6 +602,285 @@ bool FPlotPresenterDrawsTheObjectNotTheApronTest::RunTest(const FString& Paramet
 	// it, so this stays an invariant across the seam.
 	TestEqual(TEXT("nothing was dropped"), Plots->GetDroppedCount(), 0);
 
+	return true;
+}
+
+namespace
+{
+	/** An engine primitive by path - a stand-in for an authored piece, so no content is needed. */
+	UStaticMesh* PartsTestMesh(const TCHAR* Path)
+	{
+		return LoadObject<UStaticMesh>(nullptr, Path);
+	}
+
+	/** PlaceDeepDepot's plot and pose, owning exactly Modules. */
+	void PlacePartsDepot(ARoadNetworkActor* Actor, UEntityDefinition* Depot,
+		const TArray<EDepotModule>& Modules)
+	{
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = FVector2D(1000.0, 0.0);
+		Placement.Heading = UE_DOUBLE_HALF_PI;
+		Placement.PoseRole = EServiceRole::Fuel;
+		Placement.Outline = DeepPlotAt(0.0);
+		Placement.Modules = Modules;
+		Actor->Network->PlaceEntity(Placement);
+	}
+
+	/** Where a point stands along the run - the envelope's own Across (right) axis. */
+	double PartsAlongRun(const FTransform& Envelope, const FVector& Where)
+	{
+		const FVector Across = Envelope.GetRotation().GetRightVector();
+		return FVector::DotProduct(Where - Envelope.GetLocation(), Across);
+	}
+
+	/** The shed as parts - cube cap, cylinder bay - over the grey-box specs with a 50 uu cap. */
+	void PartsTestKit(UStaticMesh* Cap, UStaticMesh* Bay,
+		TArray<PlotYard::FKitSpec>& OutSpecs, TArray<FDepotModuleLook>& OutLooks)
+	{
+		OutSpecs = DepotKitSpecs(nullptr);
+		OutSpecs[static_cast<int32>(EDepotModule::Shed)].RunEndUu = 50.0;
+		OutLooks.SetNum(OutSpecs.Num());
+		FDepotModuleLook& Look = OutLooks[static_cast<int32>(EDepotModule::Shed)];
+		Look.Assembly = EKitAssembly::Parts;
+		Look.Cap = Cap;
+		Look.Bay = Bay;
+	}
+}
+
+/**
+ * A shed run is assembled from parts: cap, the bays bought, the cap turned, then ghost bays.
+ *
+ * DRIVEN THROUGH THE PRESENTER with a stand-in look rather than through content, so what is
+ * asserted is the assembly and not whatever the shipped kit happens to be today.
+ * AirportMgr.Content.DepotDrawsItsShippedMeshes is the other half: the actor handing the
+ * real kit in.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPresenterAssemblesAShedFromPartsTest,
+	"Airside.Present.PlotPresenterAssemblesAShedFromParts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPresenterAssemblesAShedFromPartsTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	UStaticMesh* Cap = PartsTestMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	UStaticMesh* Bay = PartsTestMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	if (!TestTrue(TEXT("presenter, depot and both stand-in meshes"),
+		Plots != nullptr && Depot != nullptr && Cap != nullptr && Bay != nullptr)) { return false; }
+
+	Actor->ClearNetwork();
+	PlacePartsDepot(Actor, Depot, { EDepotModule::Shed });
+
+	TArray<PlotYard::FKitSpec> Specs;
+	TArray<FDepotModuleLook> Looks;
+	PartsTestKit(Cap, Bay, Specs, Looks);
+	const PlotYard::FKitSpec& Shed = Specs[static_cast<int32>(EDepotModule::Shed)];
+
+	Plots->RebuildFrom(*Actor->Network, Specs, FFenceKit(), Looks);
+
+	TestEqual(TEXT("one shed bay bought"), Plots->GetModuleCount(), 1);
+
+	// DRAWABLE, NOT JUST COUNTED. A spawned actor gets this right either way - the duplicate
+	// is what broke; see PlotPresenterDuplicateOwnsItsMeshComponents.
+	const UInstancedStaticMeshComponent* BayComponent = Plots->GetMeshComponentForTest(Bay, false);
+	if (!TestNotNull(TEXT("a component draws the bay"), BayComponent)) { return false; }
+	TestTrue(TEXT("registered, so it renders"), BayComponent->IsRegistered());
+	TestEqual(TEXT("a built bay is one bay mesh"), Plots->GetMeshInstanceCountForTest(Bay, false), 1);
+	TestEqual(TEXT("closed by a cap at each end - a partly-bought run is a finished building"),
+		Plots->GetMeshInstanceCountForTest(Cap, false), 2);
+	TestEqual(TEXT("and its ghosted bays carry no caps of their own"),
+		Plots->GetMeshInstanceCountForTest(Cap, true), 0);
+	const int32 GhostBays = Plots->GetMeshInstanceCountForTest(Bay, true);
+	if (!TestTrue(*FString::Printf(
+		TEXT("the run reserved more than the bay bought, got %d ghost bay(s)"), GhostBays),
+		GhostBays >= 1)) { return false; }
+
+	FTransform Envelope;
+	FTransform NearCap;
+	FTransform FarCap;
+	FTransform FirstGhost;
+	if (!TestTrue(TEXT("the envelope and every piece can be read back"),
+		Plots->GetInstanceTransformForTest(0, Envelope)
+		&& Plots->GetMeshInstanceTransformForTest(Cap, false, 0, NearCap)
+		&& Plots->GetMeshInstanceTransformForTest(Cap, false, 1, FarCap)
+		&& Plots->GetMeshInstanceTransformForTest(Bay, true, 0, FirstGhost))) { return false; }
+
+	// THE FAR CAP IS THE NEAR ONE TURNED HALF A TURN, NEVER MIRRORED. It was a negative-scale
+	// instance until 2026-09-22, and that gable drew black in PIE - single-sheet walls under a
+	// two-sided material, lit from inside. Unturned, it would face its open side outward.
+	TestTrue(TEXT("no cap is mirrored - neither near"), NearCap.GetDeterminant() > 0.0);
+	TestTrue(TEXT("nor far"), FarCap.GetDeterminant() > 0.0);
+	TestNearlyEqual(TEXT("the far cap faces half a turn from the near one"),
+		FMath::Abs(FRotator::NormalizeAxis(FarCap.Rotator().Yaw - NearCap.Rotator().Yaw)), 180.0, 0.01);
+
+	// ALONG THE RUN, from the built envelope's near edge: cube and cylinder are 100 uu and
+	// centred, so each centre sits 50 uu past where the piece starts. Cap (50 reserved), one
+	// 400 uu bay, far cap, then the ghosts carry on from the far cap's end.
+	const double LitWidth = Shed.RunWidthUu(1);
+	const double Start = -LitWidth * 0.5;
+	TestNearlyEqual(TEXT("the near cap starts the run"),
+		PartsAlongRun(Envelope, NearCap.GetLocation()), Start + 50.0, 0.01);
+	TestNearlyEqual(TEXT("the far cap starts after one cap and one bay"),
+		PartsAlongRun(Envelope, FarCap.GetLocation()),
+		Start + Shed.RunEndUu + Shed.Footprint.WidthUu + 50.0, 0.01);
+	TestNearlyEqual(TEXT("and the first ghost bay starts where the built building ends"),
+		PartsAlongRun(Envelope, FirstGhost.GetLocation()), Start + LitWidth + 50.0, 0.01);
+
+	// ALL IN ONE ROW: the depth offset centres every piece on the same line through the stand.
+	const FVector Forward = Envelope.GetRotation().GetForwardVector();
+	const double Row = FVector::DotProduct(NearCap.GetLocation() - Envelope.GetLocation(), Forward);
+	TestNearlyEqual(TEXT("the far cap stands in the near cap's row"),
+		FVector::DotProduct(FarCap.GetLocation() - Envelope.GetLocation(), Forward), Row, 0.01);
+	TestNearlyEqual(TEXT("and so does the ghost bay"),
+		FVector::DotProduct(FirstGhost.GetLocation() - Envelope.GetLocation(), Forward), Row, 0.01);
+
+	// IDEMPOTENT, like every other derived geometry: a rebuild that appended would double the
+	// shed every time a road was drawn anywhere on the airport.
+	Plots->RebuildFrom(*Actor->Network, Specs, FFenceKit(), Looks);
+	TestEqual(TEXT("rebuilding again does not double the caps"),
+		Plots->GetMeshInstanceCountForTest(Cap, false), 2);
+	return true;
+}
+
+/**
+ * With no bay bought the ghost is the whole building, both caps included, and nothing is solid.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPresenterGhostsAWholeUnboughtShedTest,
+	"Airside.Present.PlotPresenterGhostsAWholeUnboughtShed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPresenterGhostsAWholeUnboughtShedTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	UStaticMesh* Cap = PartsTestMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	UStaticMesh* Bay = PartsTestMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	if (!TestTrue(TEXT("presenter, depot and both stand-in meshes"),
+		Plots != nullptr && Depot != nullptr && Cap != nullptr && Bay != nullptr)) { return false; }
+
+	Actor->ClearNetwork();
+	PlacePartsDepot(Actor, Depot, {});
+
+	TArray<PlotYard::FKitSpec> Specs;
+	TArray<FDepotModuleLook> Looks;
+	PartsTestKit(Cap, Bay, Specs, Looks);
+	Plots->RebuildFrom(*Actor->Network, Specs, FFenceKit(), Looks);
+
+	if (!TestTrue(TEXT("the plot reserved at least one shed run"),
+		Plots->GetMeshInstanceCountForTest(Bay, true) >= 1)) { return false; }
+	TestEqual(TEXT("nothing is built"), Plots->GetMeshInstanceCountForTest(Bay, false)
+		+ Plots->GetMeshInstanceCountForTest(Cap, false), 0);
+	const int32 GhostCaps = Plots->GetMeshInstanceCountForTest(Cap, true);
+	TestTrue(*FString::Printf(TEXT("every ghosted run has both its caps, got %d cap(s)"), GhostCaps),
+		GhostCaps >= 2 && GhostCaps % 2 == 0);
+	return true;
+}
+
+/**
+ * A baked mesh stands centred on the envelope it replaces, on the ground, facing the stand.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPresenterCentresABakedMeshTest,
+	"Airside.Present.PlotPresenterCentresABakedMesh",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPresenterCentresABakedMeshTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	UStaticMesh* Tank = PartsTestMesh(TEXT("/Engine/BasicShapes/Cone.Cone"));
+	if (!TestTrue(TEXT("presenter, depot and the stand-in mesh"),
+		Plots != nullptr && Depot != nullptr && Tank != nullptr)) { return false; }
+
+	Actor->ClearNetwork();
+	PlacePartsDepot(Actor, Depot, { EDepotModule::Tank });
+
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(nullptr);
+	TArray<FDepotModuleLook> Looks;
+	Looks.SetNum(Specs.Num());
+	Looks[static_cast<int32>(EDepotModule::Tank)].Baked = { Tank };
+
+	Plots->RebuildFrom(*Actor->Network, Specs, FFenceKit(), Looks);
+
+	FTransform Envelope;
+	FTransform Drawn;
+	if (!TestTrue(TEXT("one tank built and drawn from its mesh"),
+		Plots->GetModuleCount() == 1
+		&& Plots->GetInstanceTransformForTest(0, Envelope)
+		&& Plots->GetMeshInstanceTransformForTest(Tank, false, 0, Drawn))) { return false; }
+
+	TestNearlyEqual(TEXT("centred on its envelope in X"),
+		Drawn.GetLocation().X, Envelope.GetLocation().X, 0.01);
+	TestNearlyEqual(TEXT("and in Y"), Drawn.GetLocation().Y, Envelope.GetLocation().Y, 0.01);
+	TestNearlyEqual(TEXT("standing on the ground by its own bounds, not sunk to its waist"),
+		Drawn.GetLocation().Z, -Tank->GetBoundingBox().Min.Z, 0.01);
+	TestNearlyEqual(TEXT("facing the way the stand faces"),
+		Drawn.Rotator().Yaw, Envelope.Rotator().Yaw, 0.01);
+	return true;
+}
+
+/**
+ * A DUPLICATED buildings actor - what PIE makes of the level's - owns the mesh components its
+ * presenter creates.
+ *
+ * THE PIE BUG OF 2026-09-22. PostInitProperties handed the presenter RootComponent, which at
+ * that point on a duplicate still names the CDO's root, so the shed and tank components were
+ * made under the CDO: no world, never registered, nothing on screen - while every count the
+ * other tests read was right. A SPAWNED actor gets it right either way, which is why the
+ * spawned-actor test passed with the bug in; this one was seen to fail with it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPresenterDuplicateOwnsItsMeshComponentsTest,
+	"Airside.Present.PlotPresenterDuplicateOwnsItsMeshComponents",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPresenterDuplicateOwnsItsMeshComponentsTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	UStaticMesh* Cap = PartsTestMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	UStaticMesh* Bay = PartsTestMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	if (!TestTrue(TEXT("buildings actor, depot and both stand-in meshes"),
+		TestWorld.Buildings != nullptr && Depot != nullptr && Cap != nullptr && Bay != nullptr))
+	{
+		return false;
+	}
+
+	AAirsideBuildingsActor* Dup = DuplicateObject<AAirsideBuildingsActor>(
+		TestWorld.Buildings, TestWorld.Buildings->GetOuter());
+	if (!TestTrue(TEXT("a duplicate with a presenter"),
+		Dup != nullptr && Dup->GetPlotPresenter() != nullptr)) { return false; }
+
+	Actor->ClearNetwork();
+	PlacePartsDepot(Actor, Depot, { EDepotModule::Shed });
+
+	TArray<PlotYard::FKitSpec> Specs;
+	TArray<FDepotModuleLook> Looks;
+	PartsTestKit(Cap, Bay, Specs, Looks);
+	Dup->GetPlotPresenter()->RebuildFrom(*Actor->Network, Specs, FFenceKit(), Looks);
+
+	const UInstancedStaticMeshComponent* BayComponent =
+		Dup->GetPlotPresenter()->GetMeshComponentForTest(Bay, false);
+	if (!TestNotNull(TEXT("the duplicate made a component for the bay"), BayComponent)) { return false; }
+	TestEqual(TEXT("owned by the duplicate, not the class default - a CDO-owned component has no world"),
+		static_cast<const UObject*>(BayComponent->GetOwner()), static_cast<const UObject*>(Dup));
+	TestTrue(TEXT("and it has the duplicate's world to render in"),
+		BayComponent->GetWorld() == TestWorld.World);
 	return true;
 }
 

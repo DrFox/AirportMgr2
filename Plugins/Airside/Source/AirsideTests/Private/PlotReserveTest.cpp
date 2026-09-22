@@ -44,13 +44,63 @@ namespace
 		return { Shed, Tank, Pump };
 	}
 
-	/** The ground one stand actually occupies - the RUN's footprint, not one module's. */
+	/**
+	 * The ground one stand actually occupies - the RUN's footprint, not one module's, end caps
+	 * included. Through RunWidthUu, the product the solver itself reserves with.
+	 */
 	PlotYard::FFootprint RunFootprint(const TArray<PlotYard::FKitSpec>& Specs,
 		const PlotYard::FReservedStand& Stand)
 	{
 		PlotYard::FFootprint Out = Specs[Stand.KitIndex].Footprint;
-		Out.WidthUu *= Stand.RunLength;
+		Out.WidthUu = Specs[Stand.KitIndex].RunWidthUu(Stand.RunLength);
 		return Out;
+	}
+
+	/**
+	 * True when two stands' run footprints miss each other.
+	 *
+	 * Two convex shapes miss each other if and only if some axis separates them, so finding
+	 * one is proof rather than evidence. Checked on the solver's own StandCorners so the test
+	 * is not checking its own arithmetic.
+	 */
+	bool ReserveStandsSeparated(const TArray<PlotYard::FKitSpec>& Specs,
+		const PlotYard::FReservedStand& StandA, const PlotYard::FReservedStand& StandB)
+	{
+		TArray<FVector2D> CornersA;
+		TArray<FVector2D> CornersB;
+		PlotYard::StandCorners(StandA, RunFootprint(Specs, StandA), CornersA);
+		PlotYard::StandCorners(StandB, RunFootprint(Specs, StandB), CornersB);
+
+		const FVector2D Axes[] = {
+			(CornersA[1] - CornersA[0]).GetSafeNormal(),
+			(CornersA[3] - CornersA[0]).GetSafeNormal(),
+			(CornersB[1] - CornersB[0]).GetSafeNormal(),
+			(CornersB[3] - CornersB[0]).GetSafeNormal() };
+
+		for (const FVector2D& Axis : Axes)
+		{
+			double MinA = TNumericLimits<double>::Max();
+			double MaxA = -TNumericLimits<double>::Max();
+			double MinB = TNumericLimits<double>::Max();
+			double MaxB = -TNumericLimits<double>::Max();
+			for (const FVector2D& P : CornersA)
+			{
+				const double D = FVector2D::DotProduct(P, Axis);
+				MinA = FMath::Min(MinA, D);
+				MaxA = FMath::Max(MaxA, D);
+			}
+			for (const FVector2D& P : CornersB)
+			{
+				const double D = FVector2D::DotProduct(P, Axis);
+				MinB = FMath::Min(MinB, D);
+				MaxB = FMath::Max(MaxB, D);
+			}
+			if (MaxA < MinB || MaxB < MinA)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 }
 
@@ -136,46 +186,8 @@ bool FPlotReserveNeverOverlapsTest::RunTest(const FString& Parameters)
 		{
 			for (int32 B = A + 1; B < Reservation.Stands.Num(); ++B)
 			{
-				TArray<FVector2D> CornersA;
-				TArray<FVector2D> CornersB;
-				PlotYard::StandCorners(Reservation.Stands[A],
-					RunFootprint(Specs, Reservation.Stands[A]), CornersA);
-				PlotYard::StandCorners(Reservation.Stands[B],
-					RunFootprint(Specs, Reservation.Stands[B]), CornersB);
-
-				// Two convex shapes miss each other if and only if some axis separates them,
-				// so finding one is proof rather than evidence.
-				bool bSeparated = false;
-				const FVector2D Axes[] = {
-					(CornersA[1] - CornersA[0]).GetSafeNormal(),
-					(CornersA[3] - CornersA[0]).GetSafeNormal(),
-					(CornersB[1] - CornersB[0]).GetSafeNormal(),
-					(CornersB[3] - CornersB[0]).GetSafeNormal() };
-
-				for (const FVector2D& Axis : Axes)
-				{
-					double MinA = TNumericLimits<double>::Max();
-					double MaxA = -TNumericLimits<double>::Max();
-					double MinB = TNumericLimits<double>::Max();
-					double MaxB = -TNumericLimits<double>::Max();
-					for (const FVector2D& P : CornersA)
-					{
-						const double D = FVector2D::DotProduct(P, Axis);
-						MinA = FMath::Min(MinA, D);
-						MaxA = FMath::Max(MaxA, D);
-					}
-					for (const FVector2D& P : CornersB)
-					{
-						const double D = FVector2D::DotProduct(P, Axis);
-						MinB = FMath::Min(MinB, D);
-						MaxB = FMath::Max(MaxB, D);
-					}
-					if (MaxA < MinB || MaxB < MinA)
-					{
-						bSeparated = true;
-						break;
-					}
-				}
+				const bool bSeparated = ReserveStandsSeparated(Specs,
+					Reservation.Stands[A], Reservation.Stands[B]);
 
 				TestTrue(*FString::Printf(
 					TEXT("seed %d: stands %d and %d do not overlap"), Seed, A, B),
@@ -461,6 +473,57 @@ bool FPlotReserveBacksOneRunOnlyTest::RunTest(const FString& Parameters)
 		ShedStands), ShedStands > 1);
 	TestEqual(TEXT("exactly one shed run is square against the back fence"), Squared, 1);
 
+	return true;
+}
+
+/**
+ * A run reserves its end caps: FKitSpec::RunWidthUu is the width Reserve samples with, so
+ * runs of a capped kit never overlap once the caps are counted.
+ *
+ * CAPS WIDER THAN HALF THE CLEARANCE, deliberately. PlotYard keeps ClearanceUu between
+ * stands, so a solver that sampled bare N x width would still stand two runs 100 uu apart -
+ * and two 150 uu caps meeting across that gap overlap by 200. A cap narrower than half the
+ * clearance would pass whether or not Reserve counted it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotReserveRunsClaimTheirEndCapsTest,
+	"Airside.Solve.PlotReserveRunsClaimTheirEndCaps",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotReserveRunsClaimTheirEndCapsTest::RunTest(const FString& Parameters)
+{
+	TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
+	Specs[0].RunCap = 3;
+	Specs[0].RunEndUu = 150.0;
+
+	TestEqual(TEXT("a three-bay run is three bays and two caps wide"),
+		Specs[0].RunWidthUu(3), 400.0 * 3 + 150.0 * 2);
+	TestEqual(TEXT("and a kit with no caps is exactly N modules wide, as before caps"),
+		Specs[1].RunWidthUu(2), 500.0 * 2);
+
+	const TArray<FVector2D> Outline = ReserveRect(6000.0, 3000.0);
+	int32 ShedRuns = 0;
+	for (int32 Seed = 0; Seed < 8; ++Seed)
+	{
+		const PlotYard::FReservation Reservation = PlotYard::Reserve(
+			Outline, FVector2D(0.0, 0.0), FVector2D(6000.0, 0.0), FVector2D(3000.0, 0.0),
+			Specs, Seed);
+
+		for (int32 A = 0; A < Reservation.Stands.Num(); ++A)
+		{
+			ShedRuns += Reservation.Stands[A].KitIndex == 0 ? 1 : 0;
+			for (int32 B = A + 1; B < Reservation.Stands.Num(); ++B)
+			{
+				TestTrue(*FString::Printf(
+					TEXT("seed %d: stands %d and %d do not overlap, caps counted"), Seed, A, B),
+					ReserveStandsSeparated(Specs, Reservation.Stands[A], Reservation.Stands[B]));
+			}
+		}
+	}
+
+	// SEVERAL SHED RUNS, or the claim is about nothing: one run has no neighbour to overlap.
+	TestTrue(*FString::Printf(TEXT("the plot held several capped runs, got %d over 8 seeds"),
+		ShedRuns), ShedRuns > 8);
 	return true;
 }
 

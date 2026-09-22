@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "Content/DepotModuleLook.h"
 #include "Content/FenceKit.h"
 #include "Solve/PlotYard.h"
 #include "PlotPresenter.generated.h"
@@ -10,6 +11,8 @@ class UDynamicMeshComponent;
 class UHierarchicalInstancedStaticMeshComponent;
 class UInstancedStaticMeshComponent;
 class URoadNetwork;
+class USceneComponent;
+class UStaticMesh;
 
 /**
  * Where the fence is drawn. Bundled because it travels together - see CLAUDE.md "one struct
@@ -31,12 +34,11 @@ struct FFenceTargets
  * standing on the surface rather than part of it. The pad is the surface's, and it is built
  * there; see URoadSurfacePresenter.
  *
- * ONE COMPONENT FOR EVERY MODULE TYPE - THE FENCE HAS ITS OWN, since 2026-09-22 (posts are
- * two authored meshes and the fabric is a strip, not a box). An instance carries its own
- * transform including scale, so one engine cube dresses a shed, a tank and a pump by
- * scaling differently. That is a GREY BOX and says so: the split into one component
- * per authored mesh IS the art swap, when there are meshes to swap in, and nothing else
- * about this class moves when it happens.
+ * ONE COMPONENT PER AUTHORED MESH, since 2026-09-22, plus the grey-box cube for a module
+ * whose kit has none. An instance carries a transform and not a mesh, so the shed's cap, the
+ * shed's bay and the tank each need their own; they are created on first use under the mesh
+ * parent the owner hands in, and pooled by mesh. The fence has its own components (posts
+ * are two authored meshes and the fabric is a strip, not a box).
  */
 UCLASS()
 class AIRSIDE_API UPlotPresenter : public UObject
@@ -51,10 +53,15 @@ public:
 	 * cannot differ from a built one inside a single component. InGhosts may be null, and
 	 * then a plot simply draws nothing for the room it has left. InFence names the fence's
 	 * three components; see FFenceTargets.
+	 *
+	 * InMeshParent is where per-mesh components are attached when a kit has meshes. NULL
+	 * DRAWS EVERY MODULE AS A GREY BOX, meshes or not: a component needs an owning actor, and
+	 * a presenter with none has nowhere to put one.
 	 */
 	void Initialise(UInstancedStaticMeshComponent* InBoxes,
 		UInstancedStaticMeshComponent* InGhosts = nullptr,
-		const FFenceTargets& InFence = FFenceTargets());
+		const FFenceTargets& InFence = FFenceTargets(),
+		USceneComponent* InMeshParent = nullptr);
 
 	/**
 	 * Clear and re-add an instance per module standing where the yard solver put it, plus a
@@ -70,9 +77,13 @@ public:
 	 *
 	 * Kit is the fence's meshes and material, resolved by the caller for the same one-resolver
 	 * reason as the specs; a null member falls back to grey box.
+	 *
+	 * Looks are the modules' meshes, indexed like Specs (UAirsideSettings::ResolveDepotLooks).
+	 * EMPTY, OR A LOOK WITH NO MESHES, IS THE GREY BOX - the path every test with no content
+	 * set exercises, and a pump still takes today.
 	 */
 	void RebuildFrom(const URoadNetwork& Network, TArrayView<const PlotYard::FKitSpec> Specs,
-		const FFenceKit& Kit = FFenceKit());
+		const FFenceKit& Kit = FFenceKit(), TArrayView<const FDepotModuleLook> Looks = {});
 
 	/**
 	 * Empty every component and zero every count, as if rebuilt from an airport with no plots.
@@ -143,6 +154,19 @@ public:
 	 */
 	int32 GetGateGapCount() const { return Gates; }
 
+	/**
+	 * For tests: instances of one authored mesh drawn in the last rebuild, built or ghosted.
+	 * Zero for a mesh no component was ever made for.
+	 */
+	int32 GetMeshInstanceCountForTest(const UStaticMesh* Mesh, bool bGhost) const;
+
+	/** For tests: the pooled component drawing Mesh, or null if none was made. */
+	const UInstancedStaticMeshComponent* GetMeshComponentForTest(const UStaticMesh* Mesh, bool bGhost) const;
+
+	/** For tests: one of those instances' world transform, false if there is no such one. */
+	bool GetMeshInstanceTransformForTest(const UStaticMesh* Mesh, bool bGhost, int32 Index,
+		FTransform& OutTransform) const;
+
 	/** For tests: fence posts of every kind drawn in the last rebuild. */
 	int32 GetFencePostCount() const { return FencePosts; }
 
@@ -154,6 +178,32 @@ private:
 
 	/** Reserved-but-unbought slots. Wears the ghost material; see Initialise. */
 	UPROPERTY(Transient) TObjectPtr<UInstancedStaticMeshComponent> GhostBoxes;
+
+	/** Where per-mesh components are attached; null draws grey boxes only. See Initialise. */
+	UPROPERTY(Transient) TObjectPtr<USceneComponent> MeshParent;
+
+	/**
+	 * One component per authored mesh, built modules and ghosts apart - an instance carries a
+	 * transform and not a material, the reason GhostBoxes exists.
+	 *
+	 * UPROPERTY SO THE COLLECTOR SEES THEM, Transient so they are never saved into the level:
+	 * a component saved there would come back on load holding last session's instances, the
+	 * orphan a removed default subobject left behind once (memory: "removed default subobject
+	 * still renders"). They are re-made on the first rebuild after a load.
+	 */
+	UPROPERTY(Transient) TMap<TObjectPtr<UStaticMesh>, TObjectPtr<UInstancedStaticMeshComponent>> MeshPool;
+	UPROPERTY(Transient) TMap<TObjectPtr<UStaticMesh>, TObjectPtr<UInstancedStaticMeshComponent>> GhostMeshPool;
+
+	/** The pooled component drawing Mesh, made on first use; null with no MeshParent. */
+	UInstancedStaticMeshComponent* PoolFor(UStaticMesh* Mesh, bool bGhost);
+
+	/**
+	 * Draws one stand's modules from their meshes - see RebuildFrom's loop, which computed the
+	 * built and ghosted spans this lays pieces along. Returns false when there is nothing to
+	 * draw them with, and the caller draws boxes instead.
+	 */
+	bool DrawMeshes(const FDepotModuleLook& Look, const PlotYard::FKitSpec& Spec,
+		const FVector2D& RunCentre, double Heading, int32 Lit, int32 Dark);
 
 	/**
 	 * Every MODULE transform added during the last rebuild, in the order it was added - the

@@ -11,7 +11,14 @@ enum class EKitAssembly : uint8
 {
 	/** Whole meshes, one per bay count. Blender bakes them. */
 	Baked,
-	/** Cap + Bay x N + Cap, assembled at runtime. DESIGNED, NOT BUILT. */
+	/**
+	 * Cap + Bay x N + Cap turned half a turn, assembled at runtime - BUILT 2026-09-22 for the shed.
+	 *
+	 * THE DESIGN DOC CHOSE BAKED and the shed arrived modular: Blender ships one bay and one
+	 * end, spec'd so N bays butt with no visible seam. Baking 1-, 2- and 3-bay variants would
+	 * be three meshes restating one bay, and a partly-bought run is drawn as TWO pieces
+	 * (built + ghost) that a baked mesh can only express with a cap at the seam.
+	 */
 	Parts
 };
 
@@ -65,7 +72,7 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Kit") FVector2D ApronUu = FVector2D::ZeroVector;
 
-	/** Grey-box height, uu. Retired once BakedMeshes is set. */
+	/** Grey-box height, uu. Unused by a kit that has meshes. */
 	UPROPERTY(EditAnywhere, Category = "Kit") double HeightUu = 0.0;
 
 	/**
@@ -99,7 +106,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Kit") EKitAssembly Assembly = EKitAssembly::Baked;
 
 	/**
-	 * Baked only. Index = bay count - 1, so exactly RunCap entries and none null.
+	 * Baked only. Index = bay count - 1, so exactly RunCap entries and none null. Each is
+	 * centred on its footprint by its own bounds, so its origin is not a contract.
 	 *
 	 * EMPTY IS LEGAL and means grey box. That is what lets the runtime half of this work
 	 * land and be tested before any mesh exists.
@@ -107,8 +115,41 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Kit")
 	TArray<TSoftObjectPtr<UStaticMesh>> BakedMeshes;
 
-	/** Parts only. UNUSED while EKitAssembly::Parts is unimplemented. */
+	/**
+	 * Parts only. The end of a run, authored for the NEAR end and turned half a turn for the
+	 * far one - never mirrored, since a mirrored instance of a single-sheet two-sided wall
+	 * drew black (2026-09-22). So it must be SYMMETRIC FRONT TO BACK, as
+	 * FuelDepot1/shed/SPEC.md authors it.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Kit|Parts") TSoftObjectPtr<UStaticMesh> PartCapMesh;
+
+	/**
+	 * Parts only. One bay, repeated along the run.
+	 *
+	 * ITS PITCH IS Footprint.Y, NOT A FIELD OF ITS OWN. There was a PartPitchUu beside it
+	 * until 2026-09-22, when the parts path was built and it became a second statement of the
+	 * one width the solver reserves per module - removed rather than kept in step.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Kit|Parts") TSoftObjectPtr<UStaticMesh> PartBayMesh;
-	UPROPERTY(EditAnywhere, Category = "Kit|Parts") double PartPitchUu = 0.0;
+
+	/**
+	 * Parts only. How far ONE cap reaches along the run beyond the bays, uu - roof overhang
+	 * included, because the overhang is what would touch a neighbour.
+	 *
+	 * RESERVED, NOT JUST DRAWN: PlotYard::FKitSpec::RunWidthUu adds it at both ends, so a
+	 * three-bay run claims its caps as ground. Left out, two sheds side by side would each
+	 * push their gable into the ClearanceUu between them.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Kit|Parts") double PartCapUu = 0.0;
+
+	/**
+	 * Yaw from the MESH's own frame to the kit's, degrees: +X away from the road, the run
+	 * along +Y. A MULTIPLE OF 90, so the mesh's bounds stay a box in the kit's frame.
+	 *
+	 * HERE RATHER THAN BAKED INTO THE IMPORT: the models repo states its own axes (the shed's
+	 * openings face -Y and bays tile along +X), and restating them in an import option would
+	 * be a transform nobody can see on the asset. Measured, not derived - see
+	 * AirportMgr.Content.DepotKitMeshesMatchTheirFootprints.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Kit") double MeshYawDeg = 0.0;
 };

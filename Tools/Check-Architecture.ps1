@@ -74,6 +74,9 @@
           `// ENFORCED BY:` marker within three lines naming what actually holds the line
           true. Starts as a count so the backlog is visible; promotes to a failure once it
           reaches zero (see CLAUDE.md's "Conventions" for the marker itself).
+      14. A run's width is FKitSpec::RunWidthUu, never WidthUu times a run length by hand.
+          Five sites did the product until the shed's end caps arrived (2026-09-22) and had
+          to be added to each; PlotYard.h is the one legal home.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -645,10 +648,37 @@ foreach ($module in $modules) {
     }
 }
 
+# --- 14. A run's width comes from FKitSpec::RunWidthUu --------------------------------------
+# Five sites multiplied a module's width by a run length by hand until 2026-09-22 - the
+# sampler, the bands strategy, the tool's outline twice and the presenter - and the shed's end
+# caps then had to be added to all five or a building would stand wider than the ground it
+# reserved. RunWidthUu in PlotYard.h is the one product; this fails on the hand-written shape
+# coming back. Test modules are exempt: they assert AGAINST the product, which is the point.
+$runWidthPatterns = @(
+    'WidthUu\s*\*=?\s*[\w.]*(RunLength|Length|Lit|Dark|Count)\b',
+    '\b[\w.]*(RunLength|Length|Lit|Dark)\s*\*\s*[\w.]*WidthUu\b'
+)
+foreach ($module in $modules) {
+    foreach ($half in 'Public', 'Private') {
+        $dir = Join-Path $module $half
+        foreach ($file in Get-Sources $dir @('.h', '.cpp')) {
+            if ($file.Name -eq 'PlotYard.h') { continue }
+            foreach ($pattern in $runWidthPatterns) {
+                $hits = Select-String -Path $file.FullName -Pattern $pattern
+                foreach ($h in $hits) {
+                    $t = $h.Line.Trim()
+                    if ($t.StartsWith('//') -or $t.StartsWith('*')) { continue }
+                    $failures.Add("run-width: $($file.FullName):$($h.LineNumber) multiplies a width by a run length by hand; use FKitSpec::RunWidthUu, which adds the end caps: $t")
+                }
+            }
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 Write-Host "Check-Architecture: $($commentFactWarnings.Count) comment-only-fact warning(s) (rule 12; see Tools/Check-Architecture.ps1's own comment)." -ForegroundColor Yellow
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations, graph-probe)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations, graph-probe, run-width)' -ForegroundColor Green
     exit 0
 }
 

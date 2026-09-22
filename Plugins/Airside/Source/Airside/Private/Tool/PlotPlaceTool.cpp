@@ -767,12 +767,12 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 		if (Reservation.bStandsIncludeApron)
 		{
 			Run.LengthUu = Kit.Footprint.LengthUu + Kit.ApronUu.X;
-			Run.WidthUu = Kit.Footprint.WidthUu * Stand.RunLength + Kit.ApronUu.Y * 2.0;
+			Run.WidthUu = Kit.RunWidthUu(Stand.RunLength) + Kit.ApronUu.Y * 2.0;
 		}
 		else
 		{
 			Run.LengthUu = Kit.Footprint.LengthUu;
-			Run.WidthUu = Kit.Footprint.WidthUu * Stand.RunLength;
+			Run.WidthUu = Kit.RunWidthUu(Stand.RunLength);
 		}
 
 		PlotYard::StandCorners(Stand, Run, StandOutline);

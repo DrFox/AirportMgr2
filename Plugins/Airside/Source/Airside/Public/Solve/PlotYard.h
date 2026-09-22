@@ -156,6 +156,25 @@ namespace PlotYard
 
 		/** Modules of this kit grouped into one stand at one heading. 1 = never grouped. */
 		int32 RunCap = 1;
+
+		/**
+		 * Beyond the bays at EACH end of a run, uu - a modular building's end caps. Zero for
+		 * anything that is not assembled from parts.
+		 */
+		double RunEndUu = 0.0;
+
+		/**
+		 * The width a run of Length modules stands on, caps included.
+		 *
+		 * THE ONE MULTIPLICATION. Five sites did "Footprint.WidthUu * RunLength" by hand - the
+		 * sampler, the bands strategy, the tool's outline twice and the presenter - and adding
+		 * end caps to four of them would have drawn a shed wider than the ground it reserved.
+		 * ENFORCED BY: Check-Architecture rule 14, which fails on the hand-written product.
+		 */
+		double RunWidthUu(int32 Length) const
+		{
+			return Footprint.WidthUu * Length + RunEndUu * 2.0;
+		}
 	};
 
 	struct FReservedStand : FStand
