@@ -97,10 +97,15 @@ void AAirsideBuildingsActor::PostInitProperties()
 	FencePosts = Cast<UHierarchicalInstancedStaticMeshComponent>(GetDefaultSubobjectByName(TEXT("FencePosts")));
 	FenceHeavyPosts = Cast<UHierarchicalInstancedStaticMeshComponent>(GetDefaultSubobjectByName(TEXT("FenceHeavyPosts")));
 	FenceFabric = Cast<UDynamicMeshComponent>(GetDefaultSubobjectByName(TEXT("FenceFabric")));
+	// THE ROOT BY NAME TOO, NOT RootComponent. At this point RootComponent still holds the value
+	// InitProperties copied from the CDO - the CDO's own root - and pooled mesh components made
+	// under it belong to the CDO: no world, never registered, drawn nowhere, while every
+	// instance count reads correctly (PIE, 2026-09-22: "registered 0, world None").
+	USceneComponent* Root = Cast<USceneComponent>(GetDefaultSubobjectByName(TEXT("Root")));
 	if (Plots != nullptr)
 	{
 		Plots->Initialise(ModuleBoxes, ModuleGhosts,
-			FFenceTargets{ FencePosts, FenceHeavyPosts, FenceFabric }, RootComponent);
+			FFenceTargets{ FencePosts, FenceHeavyPosts, FenceFabric }, Root);
 	}
 }
 

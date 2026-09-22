@@ -684,6 +684,14 @@ bool FPlotPresenterAssemblesAShedFromPartsTest::RunTest(const FString& Parameter
 	Plots->RebuildFrom(*Actor->Network, Specs, FFenceKit(), Looks);
 
 	TestEqual(TEXT("one shed bay bought"), Plots->GetModuleCount(), 1);
+
+	// DRAWABLE, NOT JUST COUNTED. Every count below read correctly in PIE on 2026-09-22 while
+	// the components belonged to the CDO - no world, never registered, nothing on screen.
+	const UInstancedStaticMeshComponent* BayComponent = Plots->GetMeshComponentForTest(Bay, false);
+	if (!TestNotNull(TEXT("a component draws the bay"), BayComponent)) { return false; }
+	TestTrue(TEXT("owned by this buildings actor, not its class default"),
+		BayComponent->GetOwner() == TestWorld.Buildings);
+	TestTrue(TEXT("and registered, so it renders"), BayComponent->IsRegistered());
 	TestEqual(TEXT("a built bay is one bay mesh"), Plots->GetMeshInstanceCountForTest(Bay, false), 1);
 	TestEqual(TEXT("closed by a cap at each end - a partly-bought run is a finished building"),
 		Plots->GetMeshInstanceCountForTest(Cap, false), 2);

@@ -160,6 +160,9 @@ public:
 	 */
 	int32 GetMeshInstanceCountForTest(const UStaticMesh* Mesh, bool bGhost) const;
 
+	/** For tests: the pooled component drawing Mesh, or null if none was made. */
+	const UInstancedStaticMeshComponent* GetMeshComponentForTest(const UStaticMesh* Mesh, bool bGhost) const;
+
 	/** For tests: one of those instances' world transform, false if there is no such one. */
 	bool GetMeshInstanceTransformForTest(const UStaticMesh* Mesh, bool bGhost, int32 Index,
 		FTransform& OutTransform) const;

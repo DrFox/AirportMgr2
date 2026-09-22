@@ -303,6 +303,14 @@ int32 UPlotPresenter::GetMeshInstanceCountForTest(const UStaticMesh* Mesh, bool 
 	return Found != nullptr && *Found != nullptr ? (*Found)->GetInstanceCount() : 0;
 }
 
+const UInstancedStaticMeshComponent* UPlotPresenter::GetMeshComponentForTest(
+	const UStaticMesh* Mesh, bool bGhost) const
+{
+	const TObjectPtr<UInstancedStaticMeshComponent>* Found =
+		(bGhost ? GhostMeshPool : MeshPool).Find(Mesh);
+	return Found != nullptr ? Found->Get() : nullptr;
+}
+
 bool UPlotPresenter::GetMeshInstanceTransformForTest(const UStaticMesh* Mesh, bool bGhost,
 	int32 Index, FTransform& OutTransform) const
 {
@@ -753,6 +761,27 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 	// every angle on screen.
 	if (Plots > 0)
 	{
+		// A POOLED COMPONENT THAT CANNOT DRAW, said out loud. On 2026-09-22 the shed and tank
+		// were built in PIE, every count was right, and nothing showed: the components belonged
+		// to the CDO - no world, never registered. Quiet when all is well.
+		for (const TMap<TObjectPtr<UStaticMesh>, TObjectPtr<UInstancedStaticMeshComponent>>* Pool
+			: { &MeshPool, &GhostMeshPool })
+		{
+			for (const auto& Entry : *Pool)
+			{
+				const UInstancedStaticMeshComponent* Comp = Entry.Value;
+				if (IsValid(Comp) && Comp->GetInstanceCount() > 0 && !Comp->IsRegistered())
+				{
+					UE_LOG(LogAirside, Warning,
+						TEXT("Plots: the %s component for %s holds %d instance(s) but is not ")
+						TEXT("registered (owner %s, world %s) - they draw nowhere"),
+						Pool == &GhostMeshPool ? TEXT("ghost") : TEXT("module"),
+						*GetNameSafe(Entry.Key), Comp->GetInstanceCount(),
+						*GetNameSafe(Comp->GetOwner()), *GetNameSafe(Comp->GetWorld()));
+				}
+			}
+		}
+
 		// IT NAMES THE GHOSTS, because a depot drawn entirely in ghosts is a depot nobody has
 		// bought anything for - which looks identical to a broken presenter from a box count
 		// alone.
