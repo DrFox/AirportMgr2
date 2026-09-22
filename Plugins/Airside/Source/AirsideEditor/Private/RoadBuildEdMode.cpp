@@ -3,6 +3,7 @@
 #include "AirsideEditorLog.h"
 #include "Editor.h"
 #include "EdModeInteractiveToolsContext.h"
+#include "Present/AirsideBuildingsActor.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildEdModeCommands.h"
 #include "RoadBuildEditorTool.h"
@@ -242,7 +243,11 @@ FToolContext URoadBuildEdMode::MakeReselectContext(bool bRemoveModifier, bool bI
 	// with no Enter(), which is why that test cannot drive StartToolAction's lambda directly
 	// (see its own header comment) and drives this instead.
 	FToolContext Context;
-	Context.Target = ARoadNetworkActor::FindOrCreate(GetWorld());
+	ARoadNetworkActor* Road = ARoadNetworkActor::FindOrCreate(GetWorld());
+	// AND ITS BUILDINGS, created beside it: a level with a road network and no buildings
+	// actor draws no depots and says nothing about why.
+	AAirsideBuildingsActor::FindOrCreate(GetWorld(), Road);
+	Context.Target = Road;
 	Context.bRemoveModifier = bRemoveModifier;
 	Context.bInsertModifier = bInsertModifier;
 	return Context;
