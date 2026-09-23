@@ -77,7 +77,7 @@ PROP = "fan_L"
 #
 # THE BOGIE'S CENTRE IS THE AXLE, which is why these are averaged rather than one being
 # picked. A multi-axle truck pivots about its centre, and that is the point
-# FAirframe::FixedAxleX means.
+# FChassis::FixedAxleX means.
 #
 # IT READS -3123.0 uu AND THE MIDDLE AXLE IS AT -3122.0, a centimetre apart, because the
 # bogie is not quite evenly spaced: 1.45 m from the forward axle to the middle and 1.48 m

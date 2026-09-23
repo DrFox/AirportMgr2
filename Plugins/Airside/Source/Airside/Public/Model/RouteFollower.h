@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Model/Airframe.h"
+#include "Model/Chassis.h"
 #include "Model/RouteSearch.h"
 #include "Model/SpeedProfile.h"
 #include "RouteFollower.generated.h"
@@ -65,7 +65,8 @@ struct AIRSIDE_API FRouteFollower
 	UPROPERTY() double Speed = 0.0;
 
 	// GROUND IS NOT STORED HERE ANY MORE (issue #83) - see FLandingRun's own note. Start,
-	// Advance and Replace take the airframe by reference from FRoadAgent::Airframe instead.
+	// Advance and Replace take the chassis by reference from FRoadAgent::Airframe.Chassis
+	// instead - the chassis ALONE since 2026-09-23, because following a line needs no wingspan.
 
 	/**
 	 * The crab angle at which speed has fallen all the way to FGroundPerformance::MinSteeringSpeed.
@@ -197,7 +198,7 @@ private:
 	void RebuildReverseLegSteps();
 
 public:
-	void Start(const FRoutePlan& InPlan, const FAirframe& InAirframe, double InitialSpeed = 0.0,
+	void Start(const FRoutePlan& InPlan, const FChassis& InChassis, double InitialSpeed = 0.0,
 		TOptional<double> InitialHeading = TOptional<double>(), double InitialTravelled = 0.0);
 
 	/**
@@ -213,17 +214,17 @@ public:
 	 * caller that ignores the return value leaves its agent where it was rather than
 	 * teleporting it to the origin, which is this project's most-repeated bug.
 	 *
-	 * InAirframe MUST be the same one Start (or the last Replace) was given - see
+	 * InChassis MUST be the same one Start (or the last Replace) was given - see
 	 * FLandingRun::Advance's note; this is the same contract by the same construction.
 	 */
-	bool Advance(double DeltaSeconds, const FAirframe& InAirframe, double StopWithin,
+	bool Advance(double DeltaSeconds, const FChassis& InChassis, double StopWithin,
 		FVector2D& OutPosition, double& OutHeading);
 
 	/** Advance with nothing ahead. Kept so every caller and test from before the traffic
 	 *  model reads exactly as it did. */
-	bool Advance(double DeltaSeconds, const FAirframe& InAirframe, FVector2D& OutPosition, double& OutHeading)
+	bool Advance(double DeltaSeconds, const FChassis& InChassis, FVector2D& OutPosition, double& OutHeading)
 	{
-		return Advance(DeltaSeconds, InAirframe, TNumericLimits<double>::Max(), OutPosition, OutHeading);
+		return Advance(DeltaSeconds, InChassis, TNumericLimits<double>::Max(), OutPosition, OutHeading);
 	}
 
 	/**
@@ -236,7 +237,7 @@ public:
 	 * TAKES THE AIRFRAME TOO, now that Ground is not stored here (issue #83): the profile
 	 * rebuild below needs it exactly as Start's did.
 	 */
-	void Replace(const FRoutePlan& NewPlan, const FAirframe& InAirframe);
+	void Replace(const FRoutePlan& NewPlan, const FChassis& InChassis);
 
 	/** True once the whole polyline has been walked. Always true for an invalid plan. */
 	bool HasArrived() const;

@@ -45,7 +45,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	Actor->GetTraffic()->OnAgentPhaseChanged.AddLambda(
 		[&Transitions](int32, EAgentPhase From, EAgentPhase To) { Transitions.Emplace(From, To); });
 
-	FGroundPerformance Ground = TestAirframes::Piper().Ground;
+	FGroundPerformance Ground = TestAirframes::Piper().Chassis.Ground;
 
 	// DISTINCTIVE, not authored: 1000 is the Piper's own Taxi.SpeedCap AND what a
 	// default-constructed FGroundPerformance carries, so leaving the figure alone could not
@@ -61,7 +61,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	// distance is correctly refused, so a fixture that picked a length out of the air would
 	// be testing the refusal or the acceptance depending on numbers nobody was watching.
 	FAirframe Airframe;
-	Airframe.Ground = Ground;
+	Airframe.Chassis.Ground = Ground;
 	Airframe.Climb = Climb;
 	Airframe.Approach = Approach;
 

@@ -552,7 +552,7 @@ FLinkHit FAnchorLink::Resolve(const URoadNetwork& Network, const FPendingLink& L
 }
 
 FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, const FLinkHit& Hit,
-	TSet<FGuidelineNodeId>& AnchorNodes, const FAirframe& LargestServiceVehicle)
+	TSet<FGuidelineNodeId>& AnchorNodes, const FChassis& LargestServiceVehicle)
 {
 	const FGuidelineEdge* Found = Network.GetGuidelineEdge(Hit.Edge);
 	const FGuidelineNode* EndA = Found != nullptr ? Network.GetGuidelineNode(Found->A) : nullptr;
@@ -1057,7 +1057,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	return LeadEnd;
 }
 
-int32 FAnchorLink::Build(URoadNetwork& Network, const FAirframe& LargestServiceVehicle,
+int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVehicle,
 	double MaxLeadIn, double ServiceLinkRadius)
 {
 	// Gathered up front, because joining one anchor adds and removes edges and an
@@ -1202,7 +1202,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FAirframe& LargestServiceV
 	return Joined;
 }
 
-double FAnchorLink::ServiceLaneRadius(const FAirframe& LargestServiceVehicle)
+double FAnchorLink::ServiceLaneRadius(const FChassis& LargestServiceVehicle)
 {
 	// PLUS A TENTH ON THE LOCK, measured rather than chosen - see Join's own comment on the 4 m
 	// fixture that came out at 707 against 699.4 when sized at exactly the lock.
@@ -1211,7 +1211,7 @@ double FAnchorLink::ServiceLaneRadius(const FAirframe& LargestServiceVehicle)
 }
 
 double FAnchorLink::PoseSetbackFor(const URoadNetwork& Network, const FVector2D& At,
-	const FVector2D& Inward, const FAirframe& LargestServiceVehicle, double ServiceLinkRadius)
+	const FVector2D& Inward, const FChassis& LargestServiceVehicle, double ServiceLinkRadius)
 {
 	// THE LINK Gather WOULD MAKE for a service pose: found by proximity, within the service
 	// radius, for a ground vehicle.

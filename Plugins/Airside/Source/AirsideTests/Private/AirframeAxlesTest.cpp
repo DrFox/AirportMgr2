@@ -22,17 +22,17 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	// 1. ZERO IS "NOT MEASURED", and it must mean the old law rather than a wheelbase of
 	//    nothing - every vehicle in the game relies on that, so it is asserted first.
 	const FAirframe Unmeasured;
-	TestFalse(TEXT("an airframe nobody measured does not claim axles"), Unmeasured.HasAxles());
+	TestFalse(TEXT("an airframe nobody measured does not claim axles"), Unmeasured.Chassis.HasAxles());
 	TestEqual(TEXT("and its wheelbase is zero rather than a negative"),
-		Unmeasured.Wheelbase(), 0.0);
+		Unmeasured.Chassis.Wheelbase(), 0.0);
 
 	// 2. A conforming airframe: origin ON the steered axle, mains aft, so the wheelbase is
 	//    the distance between them and is POSITIVE whichever way the figures are signed.
 	FAirframe Conforming;
-	Conforming.SteerAxleX = 0.0;
-	Conforming.FixedAxleX = -454.3;
-	TestTrue(TEXT("axle figures turn the geometric law on"), Conforming.HasAxles());
-	TestEqual(TEXT("wheelbase is nose gear to main gear"), Conforming.Wheelbase(), 454.3, 0.01);
+	Conforming.Chassis.SteerAxleX = 0.0;
+	Conforming.Chassis.FixedAxleX = -454.3;
+	TestTrue(TEXT("axle figures turn the geometric law on"), Conforming.Chassis.HasAxles());
+	TestEqual(TEXT("wheelbase is nose gear to main gear"), Conforming.Chassis.Wheelbase(), 454.3, 0.01);
 
 	// 3. A DECLARED DEVIATION - origin at the FIXED axle - measures the same wheelbase. If
 	//    this ever fails, the two laws disagree about the same vehicle.
@@ -43,12 +43,12 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	//    UAirsideSettings::ResolveDefaultVehicle's fuel truck carries SteerAxleX 494.5 against
 	//    FixedAxleX 0, because fueltruck1 is exported about its rear axle. Kept as a
 	//    HAND-BUILT airframe rather than repointed at the truck, because what is being pinned
-	//    is FAirframe::Wheelbase's arithmetic, not any one asset's figures.
+	//    is FChassis::Wheelbase's arithmetic, not any one asset's figures.
 	FAirframe Deviating;
-	Deviating.SteerAxleX = 454.3;
-	Deviating.FixedAxleX = 0.0;
+	Deviating.Chassis.SteerAxleX = 454.3;
+	Deviating.Chassis.FixedAxleX = 0.0;
 	TestEqual(TEXT("a main-gear origin measures the same wheelbase"),
-		Deviating.Wheelbase(), 454.3, 0.01);
+		Deviating.Chassis.Wheelbase(), 454.3, 0.01);
 
 	// 4. The figures survive the trip through an authored type, which is the only path the
 	//    game uses - a field added to FAirframe and not copied in Airframe() is a figure
@@ -67,17 +67,17 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	Type->Ground.MaxLateralAccelUu = 200.0;
 
 	const FAirframe Built = Type->Airframe();
-	TestEqual(TEXT("SteerAxleX reaches the airframe"), Built.SteerAxleX, 260.0, 0.01);
-	TestEqual(TEXT("FixedAxleX reaches the airframe"), Built.FixedAxleX, 0.0, 0.01);
+	TestEqual(TEXT("SteerAxleX reaches the airframe"), Built.Chassis.SteerAxleX, 260.0, 0.01);
+	TestEqual(TEXT("FixedAxleX reaches the airframe"), Built.Chassis.FixedAxleX, 0.0, 0.01);
 	TestEqual(TEXT("the steering lock reaches the airframe"),
-		Built.Ground.MaxSteerDegrees, 55.0, 0.01);
+		Built.Chassis.Ground.MaxSteerDegrees, 55.0, 0.01);
 	TestEqual(TEXT("the lateral accel limit reaches the airframe"),
-		Built.Ground.MaxLateralAccelUu, 200.0, 0.01);
+		Built.Chassis.Ground.MaxLateralAccelUu, 200.0, 0.01);
 
 	// BodyCentreX is DERIVED in Airframe() rather than authored, so it cannot disagree with
 	// the footprint it comes from. Claims read it - see FClaimPass::CentreOf.
 	TestEqual(TEXT("the body centre is derived from the footprint"),
-		Built.BodyCentreX, (385.1 + -531.5) * 0.5, 0.01);
+		Built.Chassis.BodyCentreX, (385.1 + -531.5) * 0.5, 0.01);
 
 	// THE PUSHBACK NEED MAKES THE SAME TRIP, and it is asserted here for the reason this
 	// whole section exists: it is authored on the type, read in Model/, and the ONE crossing
@@ -105,21 +105,21 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	//    re-origined. It is the one figure that survives the whole substitution unchanged.
 	UAircraftType* Meridian = TestAirframes::PiperType();
 	const FAirframe Piper = Meridian->Airframe();
-	TestTrue(TEXT("the Meridian steers geometrically"), Piper.HasAxles());
+	TestTrue(TEXT("the Meridian steers geometrically"), Piper.Chassis.HasAxles());
 	TestEqual(TEXT("its wheelbase is the measured 2.378 m, unchanged by the re-origin"),
-		Piper.Wheelbase(), 237.8, 0.1);
+		Piper.Chassis.Wheelbase(), 237.8, 0.1);
 	TestEqual(TEXT("its steered axle is the origin, per the class convention"),
-		Piper.SteerAxleX, 0.0, 0.01);
+		Piper.Chassis.SteerAxleX, 0.0, 0.01);
 	TestEqual(TEXT("and its mains are aft of that origin, not on it"),
-		Piper.FixedAxleX, -237.8, 0.1);
-	TestTrue(TEXT("it has a steering lock to turn on"), Piper.Ground.MaxSteerDegrees > 0.0);
+		Piper.Chassis.FixedAxleX, -237.8, 0.1);
+	TestTrue(TEXT("it has a steering lock to turn on"), Piper.Chassis.Ground.MaxSteerDegrees > 0.0);
 
 	// AND IT IS NOW PITCHED ABOUT ITS MAINS, which ARoadAgentActor::SetPose keys off exactly
 	// this field being non-zero. Asserted here because the sign is what makes the correction
 	// move the tail DOWN and the nose UP rather than the reverse, and a positive FixedAxleX
 	// would pass every other check in this function.
 	TestTrue(TEXT("a non-zero, aft fixed axle is what turns the pitch-pivot correction on"),
-		Piper.FixedAxleX < 0.0);
+		Piper.Chassis.FixedAxleX < 0.0);
 
 	// 6. THE AIRLINERS STAY ON THE PIVOT LAW, deliberately: no mesh to measure against, and
 	//    a published wheelbase would be a figure nobody could check on screen. They are kept
@@ -128,7 +128,7 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	UAircraftType* Airbus = NewObject<UAircraftType>();
 	UAircraftType::BuildA320(Airbus);
 	TestFalse(TEXT("the A320 is not measured, so it keeps the flat rate"),
-		Airbus->Airframe().HasAxles());
+		Airbus->Airframe().Chassis.HasAxles());
 
 	return true;
 }
@@ -521,9 +521,9 @@ bool FVehicleFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 
 	const FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
 	TestTrue(TEXT("the service vehicle steers geometrically rather than pivoting"),
-		Van.HasAxles());
-	TestEqual(TEXT("SteerAxleX matches the rig's front axle"), Van.SteerAxleX, FrontX.GetValue(), 1.0);
-	TestEqual(TEXT("FixedAxleX matches the rig's rear axle"), Van.FixedAxleX, RearX.GetValue(), 1.0);
+		Van.Chassis.HasAxles());
+	TestEqual(TEXT("SteerAxleX matches the rig's front axle"), Van.Chassis.SteerAxleX, FrontX.GetValue(), 1.0);
+	TestEqual(TEXT("FixedAxleX matches the rig's rear axle"), Van.Chassis.FixedAxleX, RearX.GetValue(), 1.0);
 
 	return true;
 }

@@ -211,7 +211,7 @@ bool FTrafficSplitPlanReResolverStandaloneTest::RunTest(const FString& Parameter
 		Agent.Phase = EAgentPhase::Taxiing;
 		Agent.Class = ETraversalClass::Aircraft;
 		Agent.GoalNode = East;
-		Agent.Follower.Start(Plan, FAirframe());
+		Agent.Follower.Start(Plan, FChassis());
 
 		FNodeReachCache Reach;
 		FRunwayChainCache Chains;

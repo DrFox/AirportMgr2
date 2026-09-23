@@ -279,13 +279,13 @@ void UAirsideTraffic::Advance(double DeltaSeconds, double InSurfaceZ, const URoa
 			// gear is FixedAxleX along the fuselage from it - a negative number, 14 m on the
 			// Q400. Smoking at the origin would put the puffs under the nose, which touches
 			// down seconds later and somewhere else.
-			const FVector2D Mains = Agent.LastMotion.Position + Along * Agent.Airframe.FixedAxleX;
-			const double HalfTrack = Agent.Airframe.MainGearTrack * 0.5;
+			const FVector2D Mains = Agent.LastMotion.Position + Along * Agent.Airframe.Chassis.FixedAxleX;
+			const double HalfTrack = Agent.Airframe.Chassis.MainGearTrack * 0.5;
 
 			// UNMEASURED TRACK MEANS ONE PUFF, on the centreline, rather than a fabricated
-			// pair - the same discipline FAirframe::HasAxles applies to the steering law. A
+			// pair - the same discipline FChassis::HasAxles applies to the steering law. A
 			// made-up track puts smoke where the aeroplane has no wheels.
-			if (Agent.Airframe.HasMainGearTrack())
+			if (Agent.Airframe.Chassis.HasMainGearTrack())
 			{
 				Smoke->Puff(FVector(Mains - Across * HalfTrack, SurfaceZ), Agent.Airframe.Wingspan);
 				Smoke->Puff(FVector(Mains + Across * HalfTrack, SurfaceZ), Agent.Airframe.Wingspan);
@@ -301,8 +301,8 @@ void UAirsideTraffic::Advance(double DeltaSeconds, double InSurfaceZ, const URoa
 			// guessed at otherwise if no smoke appeared.
 			UE_LOG(LogAirside, Log,
 				TEXT("Touchdown smoke: agent %d, %d puff(s) at (%.0f, %.0f), track %.0f uu, span %.0f uu."),
-				Agent.Id, Agent.Airframe.HasMainGearTrack() ? 2 : 1, Mains.X, Mains.Y,
-				Agent.Airframe.MainGearTrack, Agent.Airframe.Wingspan);
+				Agent.Id, Agent.Airframe.Chassis.HasMainGearTrack() ? 2 : 1, Mains.X, Mains.Y,
+				Agent.Airframe.Chassis.MainGearTrack, Agent.Airframe.Wingspan);
 		}
 	}
 }

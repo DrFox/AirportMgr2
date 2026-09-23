@@ -36,15 +36,15 @@ bool FRollingWheelsTest::RunTest(const FString& Parameters)
 	// An airframe that can actually fly a landing: the figures matter only in that the
 	// landing run refuses to begin without them.
 	FAirframe Airframe;
-	Airframe.Ground.Taxi.Accel = 100.0;
-	Airframe.Ground.Taxi.Decel = 200.0;
-	Airframe.Ground.Taxi.SpeedCap = 1000.0;
-	Airframe.Ground.Takeoff.Accel = 450.0;
-	Airframe.Ground.Takeoff.Decel = 400.0;
-	Airframe.Ground.Takeoff.SpeedCap = 3100.0;
-	Airframe.Ground.Landing.Accel = 100.0;
-	Airframe.Ground.Landing.Decel = 400.0;
-	Airframe.Ground.Landing.SpeedCap = 3600.0;
+	Airframe.Chassis.Ground.Taxi.Accel = 100.0;
+	Airframe.Chassis.Ground.Taxi.Decel = 200.0;
+	Airframe.Chassis.Ground.Taxi.SpeedCap = 1000.0;
+	Airframe.Chassis.Ground.Takeoff.Accel = 450.0;
+	Airframe.Chassis.Ground.Takeoff.Decel = 400.0;
+	Airframe.Chassis.Ground.Takeoff.SpeedCap = 3100.0;
+	Airframe.Chassis.Ground.Landing.Accel = 100.0;
+	Airframe.Chassis.Ground.Landing.Decel = 400.0;
+	Airframe.Chassis.Ground.Landing.SpeedCap = 3600.0;
 	Airframe.Climb.ClimbSpeed = 4400.0;
 	Airframe.Climb.ClearAltitude = 30000.0;
 	Airframe.Engine.MaxRPM = 2200.0;

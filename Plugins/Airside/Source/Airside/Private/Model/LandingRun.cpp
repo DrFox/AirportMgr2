@@ -20,7 +20,7 @@ double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
 	// structs separately, often before an FAirframe exists at all), so the bundling happens
 	// here rather than pushing an FAirframe requirement onto every caller of a distance query.
 	FAirframe ProbeAirframe;
-	ProbeAirframe.Ground = InGround;
+	ProbeAirframe.Chassis.Ground = InGround;
 	ProbeAirframe.Climb = InClimb;
 	ProbeAirframe.Approach = InApproach;
 
@@ -70,13 +70,13 @@ bool FLandingRun::Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 	Phase = ELandingPhase::Vacated;
 
 	const double Needed = RequiredLandingDistance(
-		InAirframe.Ground, InAirframe.Climb, InAirframe.Approach) * LandingMargin;
+		InAirframe.Chassis.Ground, InAirframe.Climb, InAirframe.Approach) * LandingMargin;
 	if (InEnd.Length < Needed)
 	{
 		UE_LOG(LogAirsideTraffic, Warning,
 			TEXT("Arrival refused: %.0f uu of runway, %.0f needed to stop from %.0f uu/s "
 				 "(%.0f flown plus a %.0f%% margin)."),
-			InEnd.Length, Needed, InAirframe.Ground.Landing.SpeedCap,
+			InEnd.Length, Needed, InAirframe.Chassis.Ground.Landing.SpeedCap,
 			Needed / LandingMargin, (LandingMargin - 1.0) * 100.0);
 		return false;
 	}
@@ -88,7 +88,7 @@ bool FLandingRun::Begin(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 {
 	Phase = ELandingPhase::Vacated;
 
-	const FGroundPerformance& InGround = InAirframe.Ground;
+	const FGroundPerformance& InGround = InAirframe.Chassis.Ground;
 	const FClimbPerformance& InClimb = InAirframe.Climb;
 	const FApproachPerformance& InApproach = InAirframe.Approach;
 
@@ -146,7 +146,7 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 		return false;
 	}
 
-	const FGroundPerformance& Ground = InAirframe.Ground;
+	const FGroundPerformance& Ground = InAirframe.Chassis.Ground;
 	const FClimbPerformance& Climb = InAirframe.Climb;
 	const FApproachPerformance& Approach = InAirframe.Approach;
 	const double Vr = Ground.Takeoff.SpeedCap;

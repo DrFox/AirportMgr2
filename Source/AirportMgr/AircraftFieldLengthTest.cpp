@@ -127,9 +127,9 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		}
 
 		const FAirframe Airframe = Type->Airframe();
-		const double Roll = FTakeoffRun::RequiredRoll(Airframe.Ground, Airframe.Climb);
+		const double Roll = FTakeoffRun::RequiredRoll(Airframe.Chassis.Ground, Airframe.Climb);
 		const double Landing =
-			FLandingRun::RequiredLandingDistance(Airframe.Ground, Airframe.Climb, Airframe.Approach)
+			FLandingRun::RequiredLandingDistance(Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach)
 			* FLandingRun::LandingMargin;
 
 		TestTrue(*FString::Printf(TEXT("%s publishes a take-off field length"), Each.Label),

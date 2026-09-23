@@ -30,12 +30,12 @@ namespace DeparturePlanner
 			return Out;
 		}
 
-		if (!Airframe.Ground.IsSet() || !Airframe.Ground.Takeoff.IsSet() || !Airframe.Climb.IsSet())
+		if (!Airframe.Chassis.Ground.IsSet() || !Airframe.Chassis.Ground.Takeoff.IsSet() || !Airframe.Climb.IsSet())
 		{
 			Out.Why = EDepartureRefusal::NoPerformance;
 			return Out;
 		}
-		Out.Needed = FTakeoffRun::RequiredRoll(Airframe.Ground, Airframe.Climb);
+		Out.Needed = FTakeoffRun::RequiredRoll(Airframe.Chassis.Ground, Airframe.Climb);
 
 		// Every strip node from the threshold, nearest first. MinDistance 0: a node AT the
 		// threshold is the backtrack's goal, and the first one past it with enough runway

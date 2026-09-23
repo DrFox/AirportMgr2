@@ -70,7 +70,7 @@ bool FTurnPathIsTighterThanItsFilletTest::RunTest(const FString& Parameters)
 	//
 	// RESTATED, not read from the constant, for the reason every geometry test here restates
 	// its arithmetic: a test that imported the margin would pass if someone set it to 1.0.
-	const FAirframe Largest = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Largest = UAirsideSettings::ResolveLargestServiceVehicle();
 	const double Lock = FMath::Sin(FMath::DegreesToRadians(
 		FMath::Clamp(Largest.Ground.MaxSteerDegrees, 0.0, 90.0)));
 	if (!TestTrue(TEXT("the largest service vehicle has a steering lock to clear"),

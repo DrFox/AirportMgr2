@@ -150,8 +150,11 @@ public:
 	 * lock was widened from 45 to 50 degrees so it would fit an authored 500 uu corner, which
 	 * is shrinking the vehicle to fit the road - and this function exists to make that
 	 * inversion impossible to repeat.
+	 *
+	 * A CHASSIS, NOT AN AIRFRAME, since 2026-09-23: road corners are sized from the lock and
+	 * the wheelbase, and nothing that sizes concrete has any use for a climb rate.
 	 */
-	static FAirframe ResolveLargestServiceVehicle();
+	static FChassis ResolveLargestServiceVehicle();
 
 	/**
 	 * How many times ResolveLargestServiceVehicle has actually run, for issue #190's test

@@ -76,9 +76,9 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 
 	constexpr double Dt = 1.0 / 60.0;
 	// What one tick may change, with half again for the frame the handover spends twice.
-	const double SpeedStepAllowed = FMath::Max3(Airframe.Ground.Landing.Decel, Airframe.Ground.Taxi.Accel,
-		Airframe.Ground.Taxi.Decel) * Dt * 1.5 + 1.0;
-	const double HeadingStepAllowed = FMath::DegreesToRadians(Airframe.Ground.MaxTurnRateDegPerSec) * Dt * 1.5 + 1.0e-4;
+	const double SpeedStepAllowed = FMath::Max3(Airframe.Chassis.Ground.Landing.Decel, Airframe.Chassis.Ground.Taxi.Accel,
+		Airframe.Chassis.Ground.Taxi.Decel) * Dt * 1.5 + 1.0;
+	const double HeadingStepAllowed = FMath::DegreesToRadians(Airframe.Chassis.Ground.MaxTurnRateDegPerSec) * Dt * 1.5 + 1.0e-4;
 
 	bool bHadGround = false;
 	FVector2D PrevAt = FVector2D::ZeroVector;
@@ -166,7 +166,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FArrivalTakesTheArcNotTheJunctionTest::RunTest(const FString& Parameters)
 {
 	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
-	const double Raw = FLandingRun::RequiredLandingDistance(Airframe.Ground, Airframe.Climb, Airframe.Approach);
+	const double Raw = FLandingRun::RequiredLandingDistance(Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach);
 	const double Needed = Raw * FLandingRun::LandingMargin;
 	// The junction 3000 past the margined figure: its arc starts 3000 SHORT of it, and well
 	// past the raw one.

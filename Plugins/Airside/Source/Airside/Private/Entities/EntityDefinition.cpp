@@ -171,7 +171,7 @@ FRoutePlan FStandLeg::ToPlan() const
 }
 
 void UEntityDefinition::BuildCodeCStandFor(
-	UEntityDefinition* Definition, UAircraftType* Aircraft, const FAirframe& Largest)
+	UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest)
 {
 	if (Definition == nullptr)
 	{
@@ -285,7 +285,7 @@ void UEntityDefinition::BuildCodeCStandFor(
 }
 
 void UEntityDefinition::BuildStandTemplate(
-	UEntityDefinition& Definition, EIcaoCode Letter, const FAirframe& Largest)
+	UEntityDefinition& Definition, EIcaoCode Letter, const FChassis& Largest)
 {
 	// THE LAYOUT IS BUILT FOR THE FLOOR OF ITS LETTER'S BAND. 53 m to just under 75 is all
 	// Code C, and a template authored at a comfortable 60 would fail exactly where a player

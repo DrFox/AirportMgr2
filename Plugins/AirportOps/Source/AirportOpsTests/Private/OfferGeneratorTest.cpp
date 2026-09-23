@@ -42,7 +42,7 @@ namespace
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
 		const double Needed = FLandingRun::RequiredLandingDistance(
-			For.Ground, For.Climb, For.Approach) * FLandingRun::LandingMargin;
+			For.Chassis.Ground, For.Climb, For.Approach) * FLandingRun::LandingMargin;
 		const double Length = FMath::Max(Needed * 3.0, 60000.0);
 		const FVector2D ExitAt(Length * 0.5, 0.0);
 

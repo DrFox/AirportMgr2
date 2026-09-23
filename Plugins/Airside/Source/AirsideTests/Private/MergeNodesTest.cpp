@@ -279,7 +279,7 @@ bool FMergingClosePointsRemovesTheSpuriousSlowdownTest::RunTest(const FString& P
 	auto SlowestAlong = [&Airframe](const TArray<FVector2D>& Route)
 	{
 		FSpeedProfile Profile;
-		Profile.Build(Route, Airframe);
+		Profile.Build(Route, Airframe.Chassis);
 
 		double Total = 0.0;
 		for (int32 Index = 1; Index < Route.Num(); ++Index)
@@ -319,7 +319,7 @@ bool FMergingClosePointsRemovesTheSpuriousSlowdownTest::RunTest(const FString& P
 	// pass on a profile that was never impeded and this test would measure nothing.
 	if (!TestTrue(TEXT("the close pair really does slow the route down - otherwise this test "
 					   "is measuring nothing"),
-			Before < Airframe.Ground.Taxi.SpeedCap - 1.0))
+			Before < Airframe.Chassis.Ground.Taxi.SpeedCap - 1.0))
 	{
 		return false;
 	}
@@ -331,7 +331,7 @@ bool FMergingClosePointsRemovesTheSpuriousSlowdownTest::RunTest(const FString& P
 	// The figures in the log, so a reader can see the size of the effect rather than only
 	// that there was one. Taxi cap is %.0f.
 	AddInfo(FString::Printf(TEXT("slowest on route: %.0f uu/s before the merge, %.0f after; "
-		"taxi cap is %.0f"), Before, After, Airframe.Ground.Taxi.SpeedCap));
+		"taxi cap is %.0f"), Before, After, Airframe.Chassis.Ground.Taxi.SpeedCap));
 
 	TestTrue(*FString::Printf(
 		TEXT("merging the close pair raises the slowest speed on the route, from %.0f to "

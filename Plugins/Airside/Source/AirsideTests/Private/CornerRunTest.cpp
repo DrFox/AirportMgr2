@@ -75,7 +75,7 @@ bool FShiftDeflectionRoundTripsToItsRadiusTest::RunTest(const FString& Parameter
     // exactly as FAnchorLink::Join builds it - the first curve from the line it leaves, the
     // second onto the line it joins - and both are handed to TightestRadius. A helper shared
     // with production could be wrong in one place and agree with itself, which is the reason
-    // FAirframe::TightestFollowableRadius gives at its own copy.
+    // FChassis::TightestFollowableRadius gives at its own copy.
     for (const double Radius : { 250.0, 699.4, 2500.0 })
     {
         for (const double Shift : { 120.0, 400.0, 1000.0, 1978.0, 5400.0, 20000.0 })

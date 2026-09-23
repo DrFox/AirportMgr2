@@ -65,7 +65,7 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 	// asset exists to point it at, this is the fallback every project runs on - including
 	// every automation test, which configures no content set at all.
 	FAirframe Piper;
-	Piper.Ground = UAircraftType::PiperMeridianGround();
+	Piper.Chassis.Ground = UAircraftType::PiperMeridianGround();
 	Piper.Climb = UAircraftType::PiperMeridianClimb();
 	Piper.Approach = UAircraftType::PiperMeridianApproach();
 	Piper.Engine = UAircraftType::PiperMeridianEngine();
@@ -86,7 +86,7 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 
 int32 UAirsideSettings::ResolveLargestServiceVehicleCallCountForTest = 0;
 
-FAirframe UAirsideSettings::ResolveLargestServiceVehicle()
+FChassis UAirsideSettings::ResolveLargestServiceVehicle()
 {
 	// COUNTED BEFORE ANYTHING ELSE - see the counter's own comment. Issue #190: this used to
 	// be called fresh per arm, per ordered arm pair and twice per link; a production caller
@@ -98,7 +98,7 @@ FAirframe UAirsideSettings::ResolveLargestServiceVehicle()
 	// failure this codebase has shipped three times. When the second dispenser arrives, this
 	// function gains the comparison and every service road corner widens on the next rebuild,
 	// with no other site to find.
-	return ResolveDefaultVehicle();
+	return ResolveDefaultVehicle().Chassis;
 }
 
 FAirframe UAirsideSettings::ResolveDefaultVehicle()
@@ -114,9 +114,9 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// rather than a road one. Written out rather than left to the struct defaults because
 	// this is where a truck's performance is DECIDED, and a reader must be able to see the
 	// figures without opening another header to find out they happen to coincide.
-	Van.Ground.Taxi.Accel = 100.0;
-	Van.Ground.Taxi.Decel = 200.0;
-	Van.Ground.Taxi.SpeedCap = 1000.0;
+	Van.Chassis.Ground.Taxi.Accel = 100.0;
+	Van.Chassis.Ground.Taxi.Decel = 200.0;
+	Van.Chassis.Ground.Taxi.SpeedCap = 1000.0;
 
 	// ZERO, AND IT MEANS IT. A truck's wheels are driven and steered independently of any
 	// thrust line, so it can stop with the wheel turned and pull away again. None of the "a
@@ -128,7 +128,7 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// moment this truck got measured axles: under rolling-steer the yaw is v*sin(d)/L, so at
 	// zero speed the heading cannot move at all, let alone snap. What genuinely needs a
 	// non-zero floor is the SOLVER, not the vehicle - FRouteFollower::ProgressEpsilon.
-	Van.Ground.MinSteeringSpeed = 0.0;
+	Van.Chassis.Ground.MinSteeringSpeed = 0.0;
 
 	// 0.3 g. AUTHORED RATHER THAN INHERITED, which it was until 2026-09-15: the struct default
 	// is 147 uu/s^2, an AIRCRAFT CABIN comfort figure, and nothing here ever chose it. A van on
@@ -136,18 +136,18 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// steering is geometric - at the 699 uu the lock allows, the difference between 11.5 km/h
 	// and 16. The note above about writing every figure out rather than inheriting it applies
 	// to this one too; it was simply missed.
-	Van.Ground.MaxLateralAccelUu = 294.0;
+	Van.Chassis.Ground.MaxLateralAccelUu = 294.0;
 
 	// NINE TIMES an airframe's 10 deg/s. A van turns into a depot in its own length; an
 	// aircraft's rate here would sweep it across the kerb and back.
 	//
 	// A CEILING NOW, NOT THE LAW, because the axles below turn the geometric law on. It stays
 	// as the guard it always was against a rate nothing else bounds.
-	Van.Ground.MaxTurnRateDegPerSec = 90.0;
+	Van.Chassis.Ground.MaxTurnRateDegPerSec = 90.0;
 
 	// MEASURED AXLES, which is what stops the truck PIVOTING.
 	//
-	// FAirframe::Wheelbase's own comment argues the other way - "a van is authored at 90
+	// FChassis::Wheelbase's own comment argues the other way - "a van is authored at 90
 	// deg/s and would need 83 degrees of lock at its creep speed, so it is pivoting rather
 	// than steering, and a bicycle model would cripple every service vehicle on the airport".
 	// That was right about a van NOBODY HAD MEASURED: with no axles the wheelbase is zero,
@@ -178,9 +178,9 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// asserts both figures against the mesh's own bones so they cannot drift from it.
 	// DECLARED, since the law stopped being inferred from these two numbers on
 	// 2026-09-15 - see ESteerLaw. A truck steers on a front axle; it does not pivot.
-	Van.SteerLaw = ESteerLaw::RollingSteer;
-	Van.SteerAxleX = 494.5;
-	Van.FixedAxleX = 0.0;
+	Van.Chassis.SteerLaw = ESteerLaw::RollingSteer;
+	Van.Chassis.SteerAxleX = 494.5;
+	Van.Chassis.FixedAxleX = 0.0;
 
 	// 45 degrees, written out rather than left at FGroundRegime's 60. The struct default is
 	// an aircraft nose gear's, and a rigid truck does not have that: 60 would give a 5.7 m
@@ -197,7 +197,7 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// 16.2 m, correct for a rigid 8.5 m truck, where the old figures gave 11.2 m and a
 	// Transit. Reversing is tighter still, Wheelbase / tan(lock) = 4.95 m, which is why a
 	// driver backs into a tight space rather than nosing in.
-	Van.Ground.MaxSteerDegrees = 45.0;
+	Van.Chassis.Ground.MaxSteerDegrees = 45.0;
 
 	// A TRUCK CANNOT FLY, AND SAYS SO. Zeroed rather than left at the struct defaults, which
 	// are a light twin's and are all NON-ZERO - so a default-constructed FApproachPerformance
