@@ -6,6 +6,9 @@
 #include "Entities/EntityDefinition.h"
 #include "Model/RunwayFacts.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialParameterCollection.h"
+#include "MaterialCachedData.h"
+#include "Engine/StaticMesh.h"
 #include "Misc/ScopeExit.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -241,6 +244,88 @@ bool FAirsideContentFenceKitResolvesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the fabric is Masked, per the asset README"),
 		Kit.Fabric->GetBlendMode(), EBlendMode::BLEND_Masked);
 	TestTrue(TEXT("and two-sided"), Kit.Fabric->IsTwoSided());
+	return true;
+}
+
+
+/**
+ * The fence's distance fade is WIRED: the fabric and both posts' materials read one parameter
+ * collection, the posts are masked (an opaque post cannot fade), and the collection's figures
+ * are ordered so the fade can happen at all.
+ *
+ * WHY: at build-camera range the wire and the posts are sub-pixel (build_fence_content.py's
+ * docstring has the figures), and the fade is the only thing standing between the player and
+ * a band of crawling noise. It lives entirely in content, so a rerun of the script that writes
+ * nothing, or an import that resets the posts' slot to chainlink_post, would drop it silently.
+ *
+ * NAMES, not a count, per CLAUDE.md "lists that must agree": the script's FADE list is the
+ * other half of this one, and a parameter it renamed would otherwise read as 0 in HLSL.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAirsideContentFenceFadeWiredTest,
+	"Airside.Content.FenceFadeWired",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAirsideContentFenceFadeWiredTest::RunTest(const FString& Parameters)
+{
+	const FFenceKit Kit = UAirsideSettings::ResolveFenceKit();
+	if (!TestNotNull(TEXT("the fabric material is authored"), Kit.Fabric)
+		|| !TestNotNull(TEXT("the line post is authored"), Kit.LinePost)
+		|| !TestNotNull(TEXT("the heavy post is authored"), Kit.HeavyPost))
+	{
+		return false;
+	}
+
+	auto CollectionOf = [this](const UMaterialInterface* Material, const TCHAR* What)
+		-> const UMaterialParameterCollection*
+	{
+		if (!TestNotNull(*FString::Printf(TEXT("%s has a material"), What), Material)) { return nullptr; }
+		const TArray<FMaterialParameterCollectionInfo>& Infos =
+			Material->GetCachedExpressionData().ParameterCollectionInfos;
+		if (!TestEqual(*FString::Printf(TEXT("%s reads exactly one parameter collection"), What), Infos.Num(), 1))
+		{
+			return nullptr;
+		}
+		return Infos[0].ParameterCollection;
+	};
+
+	const UMaterialParameterCollection* Fade = CollectionOf(Kit.Fabric, TEXT("the fabric"));
+	const UMaterialInterface* LineMat = Kit.LinePost->GetMaterial(0);
+	const UMaterialInterface* HeavyMat = Kit.HeavyPost->GetMaterial(0);
+	const UMaterialParameterCollection* LineFade = CollectionOf(LineMat, TEXT("the line post"));
+	const UMaterialParameterCollection* HeavyFade = CollectionOf(HeavyMat, TEXT("the heavy post"));
+	if (!TestNotNull(TEXT("the fabric's collection loaded"), Fade)) { return false; }
+	TestTrue(TEXT("the line post fades by the fabric's collection"), LineFade == Fade);
+	TestTrue(TEXT("the heavy post fades by the fabric's collection"), HeavyFade == Fade);
+	if (LineMat != nullptr)
+	{
+		TestEqual(TEXT("the line post is Masked - an opaque one cannot dither out"),
+			LineMat->GetBlendMode(), EBlendMode::BLEND_Masked);
+	}
+	if (HeavyMat != nullptr)
+	{
+		TestEqual(TEXT("the heavy post is Masked"), HeavyMat->GetBlendMode(), EBlendMode::BLEND_Masked);
+	}
+
+	auto Get = [this, Fade](const TCHAR* Name) -> float
+	{
+		bool bFound = false;
+		const float Value = Fade->GetScalarParameterDefaultValue(FName(Name), bFound);
+		TestTrue(*FString::Printf(TEXT("the collection has %s"), Name), bFound);
+		return Value;
+	};
+	const float VeilBelowPx = Get(TEXT("VeilBelowPx"));
+	const float WireAbovePx = Get(TEXT("WireAbovePx"));
+	const float VeilOpacity = Get(TEXT("VeilOpacity"));
+	const float PostFadeStart = Get(TEXT("PostFadeStart"));
+	const float PostFadeEnd = Get(TEXT("PostFadeEnd"));
+	const float FadeStart = Get(TEXT("FadeStart"));
+	const float FadeEnd = Get(TEXT("FadeEnd"));
+	TestTrue(TEXT("the veil takes over below the size the wire is whole at"), VeilBelowPx < WireAbovePx);
+	TestTrue(TEXT("the veil is partly see-through, not solid and not gone"), VeilOpacity > 0.f && VeilOpacity < 1.f);
+	TestTrue(TEXT("the posts' fade runs forwards"), PostFadeStart < PostFadeEnd);
+	TestTrue(TEXT("the fence's fade runs forwards"), FadeStart < FadeEnd);
+	TestTrue(TEXT("the posts are gone before the fabric starts to go"), PostFadeEnd <= FadeStart);
 	return true;
 }
 
