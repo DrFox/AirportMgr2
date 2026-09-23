@@ -667,9 +667,10 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) co
 
 	// OVERLAP WITH ANY OTHER PLOTTED ENTITY - a stand or a depot, named differently because a
 	// player fixes the two by different gestures (move the new stand, or delete someone
-	// else's depot). A LEGACY POINT STAND (IsStand() but not IsPlotted()) has no polygon to
-	// test against and is skipped - the same reason DEPOT overlap checks in this codebase
-	// only ever compare drawn outlines.
+	// else's depot). EVERY STAND IS PLOTTED, since Task 6 (URoadNetwork::PlaceEntity and
+	// EnsureStandOutlines both give a point-placed or legacy-loaded stand the Code C box its
+	// pose implies), so this test no longer special-cases one - the IsPlotted() guard below
+	// exists only for a not-yet-alive slot, same as it always did for a depot's own check.
 	const URoadNetwork* Network = GetNetwork();
 	if (Network != nullptr)
 	{

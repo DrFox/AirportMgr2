@@ -415,4 +415,133 @@ bool FStandPlotPlacesOtherLettersTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * Task 6: a stand old enough to have loaded with NO outline at all - a level saved before
+ * Ruling 6 gave every point-placed stand one at placement - gets the Code C box its pose
+ * implies, the moment EnsureStandOutlines runs (URoadNetwork::PostLoad in production).
+ *
+ * PLACEMENT ITSELF ALREADY GIVES AN OUTLINE, since Ruling 6, so this test builds its "legacy"
+ * case by clearing the one placement just wrote (FRoadNetworkTestAccess::SetEntityOutlineForTest)
+ * rather than by placing and expecting emptiness - the only way left to construct the case
+ * EnsureStandOutlines exists for.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandOutlineLegacyGetsCodeCBoxTest,
+	"Airside.Model.StandOutline.LegacyGetsCodeCBox",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandOutlineLegacyGetsCodeCBoxTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+
+	IRoadEditTarget* Target = Actor;
+	const double Heading = FMath::DegreesToRadians(90.0);
+	const int32 Index = Target->PlaceStand(FVector2D(1000.0, 2000.0), Heading);
+	if (!TestTrue(TEXT("a stand is placed"), Index != INDEX_NONE)) { return false; }
+	const FEntityInstanceId StandId = Actor->Network->EntityIdAt(Index);
+
+	// BACK TO EMPTY, simulating a save from before Ruling 6 - see the test's own comment above.
+	FRoadNetworkTestAccess NetworkAccess(*Actor->Network);
+	if (!TestTrue(TEXT("the outline is cleared to stand in for pre-Task-6 save data"),
+			NetworkAccess.SetEntityOutlineForTest(StandId, {})))
+	{
+		return false;
+	}
+
+	const FEntityInstance* Entity = Actor->Network->GetEntity(StandId);
+	if (!TestNotNull(TEXT("the stand resolves"), Entity)) { return false; }
+	if (!TestEqual(TEXT("outline really is empty before the fix runs"), Entity->Outline.Num(), 0))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("EnsureStandOutlines fixes exactly the one legacy stand"),
+		Actor->Network->EnsureStandOutlines(), 1);
+
+	TArray<FVector2D> Expected;
+	StandBox::FStandPose Pose;
+	Pose.Position = Entity->Position;
+	Pose.Facing = FVector2D(FMath::Cos(Entity->Heading), FMath::Sin(Entity->Heading));
+	StandBox::BoxAt(Pose, EIcaoCode::C, Expected);
+	TestTrue(TEXT("the outline is the Code C box at the stand's own pose"),
+		Entity->Outline == Expected);
+
+	TestTrue(TEXT("the stop mark sits inside the outline it was just given"),
+		RoadGeom::PointInPolygon(Entity->Outline, Entity->Position));
+
+	TestEqual(TEXT("a second pass finds nothing left to fix - idempotent"),
+		Actor->Network->EnsureStandOutlines(), 0);
+
+	// A DEPOT NEVER MEETS IsStand() - EnsureStandOutlines' own guard, GiveStandOutlineIfMissing -
+	// so one placed the legacy way and never drawn stays outline-less through both passes above.
+	const int32 DepotIndex =
+		Target->PlaceEntity(FVector2D(9000.0, 9000.0), 0.0, EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("a depot is placed"), DepotIndex != INDEX_NONE)) { return false; }
+	const FEntityInstance& Depot = Actor->Network->GetEntities()[DepotIndex];
+	TestTrue(TEXT("the depot is never a stand"), !Depot.IsStand());
+	TestEqual(TEXT("and EnsureStandOutlines left its outline alone"), Depot.Outline.Num(), 0);
+
+	return true;
+}
+
+/**
+ * Ruling 6: outlines are given AT PLACEMENT, not only on load - a stand point-placed through
+ * IRoadEditTarget::PlaceEntity is IsPlotted() from the moment it is placed, with the same Code
+ * C box EnsureStandOutlines would have given it on the next load. A depot placed the identical
+ * way stays outline-less, because only IsStand() ever gets one.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandOutlinePointPlacedStandGetsOutlineTest,
+	"Airside.Model.StandOutline.PointPlacedStandGetsOutline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandOutlinePointPlacedStandGetsOutlineTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+
+	IRoadEditTarget* Target = Actor;
+	const double Heading = FMath::DegreesToRadians(30.0);
+	const int32 StandIndex =
+		Target->PlaceEntity(FVector2D(3000.0, -1500.0), Heading, EPlaceableEntity::Stand);
+	if (!TestTrue(TEXT("a stand is placed"), StandIndex != INDEX_NONE)) { return false; }
+
+	const FEntityInstance& Stand = Actor->Network->GetEntities()[StandIndex];
+	// ONE LINE, BOTH NAMES - Check-Architecture's is-plotted-not-depot rule, same as
+	// PlacesCodeC above.
+	TestTrue(TEXT("it is a stand, plotted from the moment it is placed"),
+		Stand.IsStand() && Stand.IsPlotted());
+
+	TArray<FVector2D> Expected;
+	StandBox::FStandPose Pose;
+	Pose.Position = Stand.Position;
+	Pose.Facing = FVector2D(FMath::Cos(Stand.Heading), FMath::Sin(Stand.Heading));
+	StandBox::BoxAt(Pose, EIcaoCode::C, Expected);
+	TestTrue(TEXT("its outline is the Code C box at its own pose"), Stand.Outline == Expected);
+
+	// A DEPOT PLACED THE SAME WAY STAYS OUTLINE-LESS - GiveStandOutlineIfMissing's IsStand()
+	// guard, exercised through the real tool-facing entry point rather than URoadNetwork direct.
+	const int32 DepotIndex =
+		Target->PlaceEntity(FVector2D(9000.0, 9000.0), 0.0, EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("a depot is placed"), DepotIndex != INDEX_NONE)) { return false; }
+	const FEntityInstance& Depot = Actor->Network->GetEntities()[DepotIndex];
+	TestTrue(TEXT("it is a depot, and stays unplotted"), Depot.IsDepot() && !Depot.IsPlotted());
+	TestEqual(TEXT("its outline stays empty"), Depot.Outline.Num(), 0);
+
+	return true;
+}
+
 #endif

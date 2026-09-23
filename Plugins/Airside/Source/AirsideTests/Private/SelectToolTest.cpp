@@ -22,11 +22,19 @@ namespace
 	struct FSelToolSink : public IToolPreviewSink
 	{
 		TMap<EPreviewStyle, int32> Markers;
+
+		// TASK 6: a selected stand is IsPlotted() now (every stand carries an outline), so
+		// DrawEntity (SelectTool.cpp) draws it as Sink.Polygon - four Line calls closing the
+		// box - rather than a single Marker at its stop mark. Tracked beside Markers for the
+		// same reason FDepotPickSink (PlotPlaceToolTest.cpp) tracks both.
+		TMap<EPreviewStyle, int32> Lines;
+
 		virtual void Marker(const FVector2D&, EPreviewStyle Style) override { Markers.FindOrAdd(Style)++; }
-		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle Style) override { Lines.FindOrAdd(Style)++; }
 		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
 		virtual void Label(const FVector2D&, const FString&, EPreviewStyle) override {}
 		int32 Count(EPreviewStyle S) const { const int32* N = Markers.Find(S); return N ? *N : 0; }
+		int32 LinesOf(EPreviewStyle S) const { const int32* N = Lines.Find(S); return N ? *N : 0; }
 	};
 
 	/** An actor with a network, one authored edge, one stand at (50000, 0) and one van
@@ -137,11 +145,16 @@ bool FSelectToolPickTest::RunTest(const FString& Parameters)
 	Tool.OnClick(SelToolContext(F.Actor, Sel, F.StandAt, 0));
 	TestTrue(TEXT("a click on a stand selects it"), Sel.Kind == ESelectionKind::Stand && Sel.Id == F.StandIndex);
 
-	// 3. Preview names the selection with the Selected style.
+	// 3. Preview names the selection with the Selected style - as its outline, not a ring at
+	// its stop mark, since Task 6 made every stand IsPlotted() (DrawEntity, SelectTool.cpp).
+	// Four Line calls, closing StandBox::BoxAt's four-corner rectangle - see FSelToolSink.
 	{
 		FSelToolSink Sink;
 		Tool.BuildPreview(SelToolContext(F.Actor, Sel, FVector2D(90000.0, 90000.0), 0), Sink);
-		TestEqual(TEXT("the selected stand gets one Selected marker"), Sink.Count(EPreviewStyle::Selected), 1);
+		TestEqual(TEXT("no Selected marker - a plotted stand draws as a polygon instead"),
+			Sink.Count(EPreviewStyle::Selected), 0);
+		TestEqual(TEXT("the selected stand is drawn as its four-sided Code C outline"),
+			Sink.LinesOf(EPreviewStyle::Selected), 4);
 		TestEqual(TEXT("nothing hovered, so no Hover marker"), Sink.Count(EPreviewStyle::Hover), 0);
 	}
 	{

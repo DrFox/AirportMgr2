@@ -6,6 +6,7 @@
 #include "Solve/GuidelineGeom.h"
 #include "Solve/JunctionSolver.h"
 #include "Solve/RoadGeom.h"
+#include "Solve/StandBox.h"
 
 FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
 {
@@ -1201,6 +1202,59 @@ FApronId URoadNetwork::ApronIdAt(int32 Index) const
 	return RoadSlot::HandleAt<FApronId>(Aprons, Index);
 }
 
+void URoadNetwork::PostLoad()
+{
+	Super::PostLoad();
+	EnsureStandOutlines();
+}
+
+bool URoadNetwork::GiveStandOutlineIfMissing(FEntityInstance& Instance)
+{
+	if (!Instance.IsStand() || Instance.Outline.Num() >= 3)
+	{
+		return false;
+	}
+
+	// Same Heading -> Facing conversion PlaceEntity's own anchor resolution below uses -
+	// see its Cos/Sin two lines down. Position is already the nose-gear stop mark (the pose
+	// StandBox::BoxAt wants), captured at placement or loaded straight off the instance.
+	StandBox::FStandPose Pose;
+	Pose.Position = Instance.Position;
+	Pose.Facing = FVector2D(FMath::Cos(Instance.Heading), FMath::Sin(Instance.Heading));
+	StandBox::BoxAt(Pose, EIcaoCode::C, Instance.Outline);
+	return true;
+}
+
+int32 URoadNetwork::EnsureStandOutlines()
+{
+	int32 Changed = 0;
+	for (FEntityInstance& Instance : Entities)
+	{
+		if (!Instance.bAlive)
+		{
+			continue;
+		}
+		if (GiveStandOutlineIfMissing(Instance))
+		{
+			// See this function's own header comment on why the DesignWingspan write lives
+			// HERE and not in GiveStandOutlineIfMissing: only a stand old enough to have
+			// loaded with no outline at all is being pinned to a letter for the first time.
+			if (Instance.DesignWingspan == 0.0)
+			{
+				Instance.DesignWingspan = IcaoCode::DesignSpanForLetter(EIcaoCode::C);
+			}
+			++Changed;
+		}
+	}
+
+	if (Changed > 0)
+	{
+		UE_LOG(LogAirside, Log,
+			TEXT("EnsureStandOutlines: %d legacy stand(s) given a Code C outline"), Changed);
+	}
+	return Changed;
+}
+
 FEntityInstanceId URoadNetwork::PlaceEntity(
 	UEntityDefinition* Definition, TConstArrayView<FEntityAnchor> Anchors,
 	const FVector2D& Position, double Heading, double DesignWingspan, EServiceRole PoseRole,
@@ -1242,6 +1296,14 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement)
 
 	Instance.Outline = Placement.Outline;
 	Instance.Modules = Placement.Modules;
+
+	// TASK 6 / RULING 6: a stand placed with no drawn plot (Placement.Outline empty) gets its
+	// Code C box RIGHT HERE, not only the next time EnsureStandOutlines runs at load. This is
+	// the legacy point path's own placement, not just PlaceStand's - the facade's PlaceEntity
+	// forwards through the other overload into this one, so covering this one function covers
+	// both. A drawn stand's own Outline (>= 3 points already) and a depot (never IsStand())
+	// are both left exactly as given - see GiveStandOutlineIfMissing's guard.
+	GiveStandOutlineIfMissing(Instance);
 
 	// DERIVED FROM THE SHEDS, not captured, whenever there are modules at all. A shed is a
 	// truck: the player's mix IS the fleet size, so a separately-stated count could only

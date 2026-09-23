@@ -56,8 +56,15 @@ bool FPlotPlacementCarriesOutlineTest::RunTest(const FString& Parameters)
 	// THE WHOLE POINT OF THE OVERLOAD: the pre-plot signature still compiles and still
 	// means what it meant. Roughly thirty callers depend on that, almost all of them
 	// tests, and a forwarder nobody exercises is a forwarder that rots.
+	//
+	// PoseRole::Fuel IS NOW EXPLICIT (Task 6): the signature's own default is
+	// EServiceRole::Aircraft, so calling it with only four arguments - as this line did before
+	// Task 6 - placed Depot's definition under a STAND'S pose role, and a stand placed the
+	// legacy way now gets a Code C outline at placement (Ruling 6). Naming Fuel keeps this
+	// case what its comment below always meant it to be: a depot, which never gets one.
 	const FEntityInstanceId Old = Net->PlaceEntity(
-		Depot, Depot->Anchors, FVector2D(5000.0, 0.0), 0.0);
+		Depot, Depot->Anchors, FVector2D(5000.0, 0.0), 0.0, /*DesignWingspan=*/0.0,
+		EServiceRole::Fuel);
 	TestTrue(TEXT("the pre-plot signature still places"), Old.IsSet());
 
 	const FEntityInstance* Legacy = Net->GetEntity(Old);
