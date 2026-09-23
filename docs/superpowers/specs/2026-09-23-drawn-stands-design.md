@@ -18,10 +18,13 @@ Key 3 is the stand tool. It is the depot's plot gesture pointed at a taxiway:
 rectangle, and a skewed quad would need its letter measured from an inscribed rectangle the player
 cannot see.
 
-**REVISED 2026-09-23 (task 9):** the stand tool does not offer free-start snap guides
-(`IBuildTool::WantsFreeStartGuides` stays the base `false`, unlike the depot's `FPlotPlaceTool`).
-The first click is snapped to the taxiway's own step grid exactly as the depot's is to a service
-road's, and a guide drawn over a click that then snaps elsewhere is a guide not obeyed.
+**REVISED 2026-09-23 (task 9):** the stand tool does not offer free-start snap guides - it
+behaves AS the depot's `FPlotPlaceTool` already does, for the same reason. Neither overrides
+`IBuildTool::WantsFreeStartGuides`, so both stay the base `false`
+(`BuildSessionTest.cpp`'s own `FreeStarts` list names four tools - Taxiway, Apron, Runway,
+Road - and the depot was never a fifth). The first click is snapped to the taxiway's own step
+grid exactly as the depot's is to a service road's, and a guide drawn over a click that then
+snaps elsewhere is a guide not obeyed.
 
 **Orientation.** The aircraft taxis in forwards and reverses (pushback) out onto the taxiway. So
 its TAIL is to the entrance edge and its NOSE points inward, away from the taxiway. Say "entrance
@@ -48,11 +51,21 @@ field.
   letter's), so capturing it verbatim would read back one letter wider than drawn;
   `DesignSpanForLetter` is the hair-under value that still reads back as `L` through
   `LetterForWingspan`. `DesignWingspan` stays the slot the Inspector ("Code X") and
-  `FStandSummary` read, so neither changes. A test asserts, over every stand WHOSE SPAN IS
-  KNOWN (`DesignWingspan > 0` - 0 is legal and means "unknown", the raw
-  `URoadNetwork::PlaceEntity` overload test fixtures use; every production path sets it),
-  `LetterForWingspan(DesignWingspan) == LetterForStandSize(outline)` so the two captured facts
-  cannot drift.
+  `FStandSummary` read, so neither changes.
+
+  Named by their real test names rather than "a test asserts": `Airside.Present.StandPlot.
+  PlacesCodeC` and `Airside.Present.StandPlot.PlacesOtherLetters` (D, E, F) each place a stand
+  THROUGH `PlaceStandInPlot` (the drawn path) and assert `LetterForWingspan(Entity.
+  DesignWingspan)` reads the same letter `StandBox::LetterOf(outline)` does, so the two
+  captured facts cannot drift for any letter that can be built (C-F). This covers PLOTTED
+  stands only - the migration tests (`Airside.Model.StandOutline.LegacyGetsCodeCBox`,
+  `...PointPlacedStandGetsOutline`) assert the migrated/point-placed OUTLINE equals
+  `StandBox::BoxAt(pose, C)`, not this letter invariant; no test pins `LetterForWingspan
+  (DesignWingspan) == LetterForStandSize(outline)` on that path today. A stand migrated or
+  point-placed through `UEntityDefinition::MakeStandTransient`'s A320 design aircraft DOES
+  capture a known, non-zero `DesignWingspan`, but nothing asserts it reads back as C the way
+  the drawn-path tests do; 0 stays legal there and means "unknown", the raw
+  `URoadNetwork::PlaceEntity` overload test fixtures use directly.
 - **Kind, not outline.** `IsPlotted()` has meant "is a depot" at several sites. It stops meaning
   that: `FEntityInstance::IsDepot()` (`PoseRole != Aircraft`) and `IsStand()` (`PoseRole ==
   Aircraft`) become the tests, and `UPlotPresenter`, `FindEntityAt`, `DeleteEntity` labels and the
