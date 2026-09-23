@@ -101,12 +101,23 @@ Log (`LogAirside`, on every choice):
 ## Paint
 
 Built in `RoadSurfacePresenter::RebuildMarkings` beside the holding bars, same builder idiom
-(`MarkingQuads::AddQuad`, UV1 = 0 solid):
+(`MarkingQuads::AddQuad`/`AddRect`, UV1 = 0 solid), through `FStandMarkingBuilder` (task 8):
 
-- **Lead-in line**: entrance midpoint to the stop mark, along the heading.
-- **Stop bar**: across the heading at the stop mark.
-- **Letter**: a flat `UTextRenderComponent` near the entrance, owned by the surface presenter.
-  (Local +X is the glyph's facing - see the TextRender memory; pitch it to lie flat.)
+- **Lead-in line**: entrance midpoint to the stop mark, along the heading, 15 cm wide.
+- **Stop bar**: across the heading at the stop mark, 40 cm x 3 m.
+- **Letter**: REVISED 2026-09-23 (task 8) - not the `UTextRenderComponent` this section
+  originally specified. The letter is PAINT, seven-segment strokes of quads through the same
+  builder: A-F are exactly the letters a calculator's seven-segment display draws (A b C d E
+  F), 3 m tall with a 30 cm stroke, centred 4 m inside the entrance. Three reasons, in the
+  order they mattered: (1) paint needs no component lifecycle, where a `UTextRenderComponent`
+  is a transient subobject and this project has already been bitten by a transient subobject
+  pointer resetting to the CDO on level duplication (see the memory note on that trap); (2)
+  paint is headless-testable through the same buffers every other marking is measured
+  through, rather than requiring a spawned actor and a font; (3) paint lies flat by
+  construction - every vertex carries the Z it is given - where a `UTextRenderComponent`
+  needs its pitch set correctly to avoid standing up out of the ground (see the TextRender
+  glyph-frame memory this section used to cite as the risk). DesignWingspan = 0 (a raw-model
+  fixture stand nobody measured) paints no letter, but still paints the lead-in and stop bar.
 
 ## Out of this slice
 
@@ -126,3 +137,7 @@ reshaping a placed stand (remove and redraw).
 - **Kind gate:** a drawn stand gets no fence, no modules; depot tests stay green.
 - **Composition:** spawn the actor, draw a stand through the tool, run an arrival, it parks.
 - **Lint:** the `IsPlotted()` rule goes red if a new call site appears.
+- **Paint (Build, task 8):** one lead-in and one stop bar per drawn stand; the letter's
+  seven-segment shape paints the right segment count (Code C: a,d,e,f; Code E: a,d,e,f,g);
+  the lead-in's far end sits on the stop mark; every marking quad faces up. Composition:
+  placing a stand paints it with no other edit in between.

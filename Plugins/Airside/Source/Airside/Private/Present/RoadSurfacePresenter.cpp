@@ -7,6 +7,7 @@
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Build/RunwayMarkingBuilder.h"
+#include "Build/StandMarkingBuilder.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Debug/RoadRebuildCensus.h"
 #include "DrawDebugHelpers.h"
@@ -404,10 +405,23 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	// THE ROAD'S OWN MATERIAL, on purpose: every vertex carries UV1 = 0, which M_RoadSurface
 	// reads as "on the centreline" and paints MarkingColor across the whole quad. See
 	// FHoldingPositionMarkingBuilder for why that is the paint wanted and not a defect.
+	//
+	// STAND PAINT SHARES THIS LAYER (task 8): a drawn stand's lead-in, stop bar and letter are
+	// the same solid-MarkingColor quad, so a second component would only be a second material
+	// instance drawing the identical thing. HoldingPositionsPainted is captured OUTSIDE the
+	// lambda, not read off the returned Count, because Count below has to be the SUM of both
+	// builders' finds - RebuildLayer's own SetVisibility(Count > 0) would otherwise hide a
+	// level's stand paint whenever it had no holding position to report, which is exactly the
+	// wrong answer for an airport with stands and no runway yet.
+	int32 HoldingPositionsPainted = 0;
+	int32 StandsPainted = 0;
+	FStandMarkingCensus StandCensus;
 	const int32 Painted = RebuildLayer(ESurfaceLayer::HoldingPaint,
-		[&Network, MarkingZ](FRoadMeshBuffers& OutBuffers)
+		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus](FRoadMeshBuffers& OutBuffers)
 		{
-			return FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, OutBuffers);
+			HoldingPositionsPainted = FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, OutBuffers);
+			StandsPainted = FStandMarkingBuilder::Build(Network, MarkingZ, OutBuffers, &StandCensus);
+			return HoldingPositionsPainted + StandsPainted;
 		},
 		Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
 	if (Painted == INDEX_NONE)
@@ -421,8 +435,9 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	// all four callers rather than three that pass it and one that cannot.
 	if (!Settings.bQuiet)
 	{
-		UE_LOG(LogRoadMesh, Log, TEXT("Holding positions: %d painted, %d triangle(s) at Z=%.1f"),
-			Painted, Buffers.Indices.Num() / 3, MarkingZ);
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Holding positions: %d painted, %d stand(s), %d triangle(s) at Z=%.1f"),
+			HoldingPositionsPainted, StandsPainted, Buffers.Indices.Num() / 3, MarkingZ);
 	}
 }
 
