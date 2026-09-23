@@ -7,6 +7,31 @@
 #include "Model/TrafficOccupancy.h"
 #include "Solve/IcaoCode.h"
 
+namespace
+{
+	/**
+	 * Stands exist, and not one of them admits Airframe - size alone, reachable or not.
+	 *
+	 * EVERY STAND, NOT THE REACHABLE ONES ChooseStand counts: a too-small stand's lead-in
+	 * carries its letter's span limit (FAnchorLink's one rule, final review I5), so to a
+	 * widebody it is not reachable at all and ChooseStand's own too-small tally never sees it.
+	 * The same IsStandCandidate filter and the same StandAdmits rule, so this cannot disagree
+	 * with ChooseStand about what a stand is or what fits it - only about whether reach
+	 * matters, which for "draw a bigger stand" it does not.
+	 */
+	bool EveryStandTooSmall(const URoadNetwork& Network, const FAirframe& Airframe)
+	{
+		int32 Stands = 0;
+		for (const FEntityInstance& Stand : Network.GetEntities())
+		{
+			if (!Stand.IsStandCandidate()) { continue; }
+			++Stands;
+			if (IcaoCode::StandAdmits(Stand.DesignWingspan, Airframe.Wingspan)) { return false; }
+		}
+		return Stands > 0;
+	}
+}
+
 namespace ArrivalPlanner
 {
 	FGuidelineNodeId ChooseStand(const URoadNetwork& Network, FGuidelineNodeId From,
@@ -14,7 +39,8 @@ namespace ArrivalPlanner
 		FRoutePlan* OutRoute, bool* bOutSawHeld)
 	{
 		// Every live STAND's pose node - never a depot's, even though a depot has a pose node
-		// too (FEntityInstance::IsStand/IsDepot; PoseRole captured at placement) - in
+		// too (FEntityInstance::IsStandCandidate, the ONE filter UStandAllocator::Reserve also
+		// calls; PoseRole captured at placement) - in
 		// FEntityInstance ENUMERATION ORDER. The tie-break below ("first minimum wins")
 		// depends on Candidates keeping GetEntities()'s own order, exactly as the old
 		// per-stand loop implicitly did by walking it directly. CandidateSpan is kept
@@ -27,7 +53,7 @@ namespace ArrivalPlanner
 		CandidateSpan.Reserve(Network.GetEntities().Num());
 		for (const FEntityInstance& Stand : Network.GetEntities())
 		{
-			if (Stand.bAlive && Stand.PoseNode.IsSet() && Stand.IsStand())
+			if (Stand.IsStandCandidate())
 			{
 				Candidates.Add(Stand.PoseNode);
 				CandidateSpan.Add(Stand.DesignWingspan);
@@ -149,6 +175,7 @@ namespace ArrivalPlanner
 		const FTrafficOccupancy* Occupancy)
 	{
 		FArrivalPlan Out;
+		Out.AircraftWingspan = Airframe.Wingspan;
 
 		// 1. WHICH RUNWAY. Nearest threshold to the query point, which is the user's own choice
 		//    of rule - there is no wind model, so nothing else could decide it.
@@ -292,8 +319,17 @@ namespace ArrivalPlanner
 
 		if (!Out.TaxiIn.IsValid())
 		{
-			// Two refusals for two fixes: no stand reachable at all means build a taxiway; every
-			// reachable stand held means wait, or build a stand.
+			// Three refusals for three fixes: every stand too small means draw a bigger one; no
+			// stand reachable at all means build a taxiway; every reachable stand held means
+			// wait, or build a stand. SIZE FIRST, because it is a fact about the ground that no
+			// taxiway or waiting changes - and it used to fall through to NoRouteToStand, sending
+			// the player to build a taxiway that already reached every stand (final review I6).
+			// Held cannot also be true then: a stand is only counted held once it has admitted.
+			if (EveryStandTooSmall(Network, Airframe))
+			{
+				Out.Why = EArrivalRefusal::NoStandBigEnough;
+				return Out;
+			}
 			Out.Why = bSawHeldStand ? EArrivalRefusal::NoFreeStand : EArrivalRefusal::NoRouteToStand;
 			return Out;
 		}
@@ -310,7 +346,7 @@ namespace ArrivalPlanner
 		return Out;
 	}
 
-	FString DescribeRefusal(EArrivalRefusal Why)
+	FString DescribeRefusal(EArrivalRefusal Why, double AircraftWingspan)
 	{
 		// The figure-free wording, for a listener that has the reason and not the plan. The
 		// plan overload below defers to this wherever it has no figures to add, so one
@@ -337,6 +373,26 @@ namespace ArrivalPlanner
 
 		case EArrivalRefusal::NotAdmitted:
 			return TEXT("Arrival refused: this aircraft is not admitted to that runway.");
+
+		case EArrivalRefusal::NoStandBigEnough:
+			// THE LETTER IS THE LEVER - the player draws stands by letter, so "too small" alone
+			// leaves them guessing how big. Named only for a span the table can name: wider
+			// than Code F is a span no stand can ever be drawn for, and saying "Code F" there
+			// would send them to build one that still refuses it.
+			if (AircraftWingspan > IcaoCode::MaxWingspanForLetter(EIcaoCode::F))
+			{
+				return FString::Printf(
+					TEXT("Arrival refused: a %.1f m wingspan is wider than any stand can be built for."),
+					AircraftWingspan / 100.0);
+			}
+			if (AircraftWingspan > 0.0)
+			{
+				return FString::Printf(
+					TEXT("Arrival refused: this aircraft needs a Code %s stand, and none on the field is ")
+					TEXT("big enough. Draw a bigger stand."),
+					*IcaoCode::LetterForWingspan(AircraftWingspan));
+			}
+			return TEXT("Arrival refused: every stand is too small for this aircraft. Draw a bigger stand.");
 
 		case EArrivalRefusal::None:
 		default:
@@ -376,8 +432,9 @@ namespace ArrivalPlanner
 
 		default:
 			// NoRunway, RunwayOccupied, NoFreeStand and None carry no figures, so their
-			// wording is the reason-only overload's and is not repeated here.
-			return DescribeRefusal(Plan.Why);
+			// wording is the reason-only overload's and is not repeated here. NoStandBigEnough
+			// is worded there too, handed the plan's own span so it can name the letter.
+			return DescribeRefusal(Plan.Why, Plan.AircraftWingspan);
 		}
 	}
 }

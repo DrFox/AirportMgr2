@@ -139,6 +139,21 @@ airline is not offered an A380 until an F stand exists - no extra site.
 Log (`LogAirside`, on every choice):
 `ChooseStand: span 79.8 m -> node N (Code F); 3 too small, 1 held`.
 
+**REVISED 2026-09-23 (final review C1, I6).** One candidate filter: `FEntityInstance::
+IsStandCandidate()` (alive, pose node, `IsStand()`) is what both `ChooseStand` and
+`UStandAllocator::Reserve` ask before `StandAdmits` - the allocator had no kind check, and a
+fuel depot's 0 span "admits anything", so it held depots for airliners.
+
+**Every stand too small is its own refusal**, `EArrivalRefusal::NoStandBigEnough`, not
+`NoRouteToStand`: when no taxi-in is found and no live stand on the field `StandAdmits` the
+aircraft (reachable or not - a too-small stand's lead-in carries its letter's span limit, so
+to a widebody it is not reachable at all), `Plan` says so. The player text names the letter
+to build: "Arrival refused: this aircraft needs a Code F stand, and none on the field is big
+enough. Draw a bigger stand." (`FArrivalPlan::AircraftWingspan` carries the span; the inbox
+passes the flight's own; the toast, which has only the reason, gets the letter-free
+sentence.) It is a permanent refusal for `UOfferGenerator`, so no A380 is offered until an F
+stand exists.
+
 ## Paint
 
 Built in `RoadSurfacePresenter::RebuildMarkings` beside the holding bars, same builder idiom

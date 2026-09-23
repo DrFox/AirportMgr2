@@ -315,6 +315,22 @@ struct AIRSIDE_API FEntityInstance
 	bool IsDepot() const { return PoseRole == EServiceRole::Fuel; }
 
 	/**
+	 * May an aircraft be sent here at all: alive, a stand, and with a stop mark to route to.
+	 * Size is NOT asked here - that is IcaoCode::StandAdmits, once this has said yes.
+	 *
+	 * ONE PREDICATE, TWO CALLERS: ArrivalPlanner::ChooseStand (live dispatch) and
+	 * UStandAllocator::Reserve (holding a stand for an accepted flight). They used to spell
+	 * the filter each their own way, and the allocator's spelling had no IsStand() - harmless
+	 * while it compared raw spans, and a fuel depot handed to an airliner the day it switched
+	 * to StandAdmits, under which a depot's 0 span means "unknown, admits anything" (final
+	 * review C1). A member rather than a free function beside ChooseStand because both inputs
+	 * are this instance's own captured facts, exactly like IsStand() above, and AirportOps
+	 * already includes this header and not ArrivalPlanner's.
+	 * ENFORCED BY: AirportOps.Model.StandAllocator.NeverReservesADepot.
+	 */
+	bool IsStandCandidate() const { return bAlive && PoseNode.IsSet() && IsStand(); }
+
+	/**
 	 * What the player put in the bays, in bay order. Empty for a plotless entity.
 	 *
 	 * THE FOURTH CAPTURED FACT - see Trucks above, whose comment called for exactly this:

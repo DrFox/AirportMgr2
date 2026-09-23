@@ -31,7 +31,11 @@ bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
 		const FEntityInstance& Stand = Entities[Index];
-		if (!Stand.bAlive || !Stand.PoseNode.IsSet() || !IcaoCode::StandAdmits(Stand.DesignWingspan, Wingspan))
+		// IsStandCandidate, THE SAME FILTER ChooseStand applies - never a hand-spelled one. This
+		// line used to read bAlive + PoseNode alone, with no kind check, and StandAdmits' "0 span
+		// admits anything" then handed a fuel depot (whose DesignWingspan is 0) to any airliner
+		// as the smallest "stand" on the field (final review C1).
+		if (!Stand.IsStandCandidate() || !IcaoCode::StandAdmits(Stand.DesignWingspan, Wingspan))
 		{
 			continue;
 		}

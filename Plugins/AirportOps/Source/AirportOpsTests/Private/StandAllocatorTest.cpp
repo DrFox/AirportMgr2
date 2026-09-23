@@ -7,6 +7,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Model/StandAllocator.h"
+#include "Solve/IcaoCode.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -156,6 +157,78 @@ bool FStandAllocatorSurvivesRebuildTest::RunTest(const FString& Parameters)
 	UFlight* Rival = FlightNeeding(3400.0, 2);
 	TestFalse(TEXT("the reservation keeps a rival off the stand after a rebuild"),
 		Allocator->Reserve(*Traffic, *Network, *Rival));
+	return true;
+}
+
+// NAMED, NOT ANONYMOUS, unlike the helpers at the top of this file: the tests module is a
+// UNITY build, and a new anonymous helper is one more name that can collide with another
+// file's copy the moment both land in one translation unit.
+namespace StandAllocatorDepotTest
+{
+	/** A fuel depot placed the raw way - DesignWingspan 0, which is exactly the "unknown,
+	 *  admits anything" IcaoCode::StandAdmits reads, and a pose node, which is all the old
+	 *  filter asked for. */
+	void PlaceDepot(URoadNetwork& Net, const FVector2D& At)
+	{
+		UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+		Net.PlaceEntity(Depot, Depot->Anchors, At, 0.0, /*DesignWingspan*/ 0.0,
+			Depot->PoseRole, Depot->Trucks);
+	}
+}
+
+// FINAL REVIEW C1: bcc0b05 moved this allocator onto IcaoCode::StandAdmits/StandRank, under
+// which a 0 span admits anything and ranks as C - and a fuel depot's DesignWingspan is 0. The
+// old filter was alive + pose node only, never IsStand(), so a depot became the "smallest"
+// stand for every flight up to Code C and a candidate for everything wider. ChooseStand had
+// the kind check all along; the two now call ONE predicate, FEntityInstance::IsStandCandidate.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandAllocatorNeverReservesADepotTest,
+	"AirportOps.Model.StandAllocator.NeverReservesADepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandAllocatorNeverReservesADepotTest::RunTest(const FString& Parameters)
+{
+	using namespace StandAllocatorDepotTest;
+
+	// THE DEPOT FIRST, so enumeration order cannot be what saves the stand: a depot ranking C
+	// beats an F stand on rank alone, whatever order they sit in.
+	{
+		URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+		PlaceDepot(*Network, FVector2D(-20000.0, 0.0));
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+		Network->PlaceEntity(Stand, Stand->Anchors, FVector2D(20000.0, 0.0), 0.0,
+			IcaoCode::DesignSpanForLetter(EIcaoCode::F), Stand->PoseRole, Stand->Trucks);
+
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+		UStandAllocator* Allocator = NewObject<UStandAllocator>();
+		UFlight* A380 = FlightNeeding(7980.0, 1);   // 79.8 m, the A380-800's published span
+		if (!TestTrue(TEXT("an A380 flight is reserved a stand"), Allocator->Reserve(*Traffic, *Network, *A380)))
+		{
+			return false;
+		}
+		const FEntityInstance* Chosen = Network->GetEntity(A380->Stand);
+		TestTrue(TEXT("and it is the F stand - a fuel depot is never a stand to reserve"),
+			Chosen != nullptr && Chosen->IsStand());
+	}
+
+	// EVERY C STAND HELD: the depot is still no fallback. A flight with nowhere to go is
+	// refused, which is the answer the sequencer can act on; one "parked" in a fuel depot is
+	// an aeroplane sent to taxi into a truck yard.
+	{
+		URoadNetwork* Network = NetworkWithStands({ IcaoCode::DesignSpanForLetter(EIcaoCode::C) });
+		PlaceDepot(*Network, FVector2D(-20000.0, 0.0));
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+		UStandAllocator* Allocator = NewObject<UStandAllocator>();
+		UFlight* First = FlightNeeding(3580.0, 1);
+		UFlight* Second = FlightNeeding(3580.0, 2);
+		if (!TestTrue(TEXT("the first C flight takes the only C stand"), Allocator->Reserve(*Traffic, *Network, *First)))
+		{
+			return false;
+		}
+		TestFalse(TEXT("the second C flight is refused rather than handed the depot"),
+			Allocator->Reserve(*Traffic, *Network, *Second));
+		TestFalse(TEXT("and nothing was written to it"), Second->Stand.IsSet());
+	}
 	return true;
 }
 
