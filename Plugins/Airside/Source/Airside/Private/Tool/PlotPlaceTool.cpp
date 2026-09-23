@@ -630,9 +630,9 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 
 	if (Stage == EPlotStage::Idle)
 	{
-		FRoadSegmentId Road;
-		double AlongT = 0.0;
-		if (Network == nullptr || !PlotGesture::NearestRoad(*Network, Context.Cursor, PlotGesture::IsServiceRoad, Road, AlongT))
+		PlotGesture::FAnchor Unused;
+		if (Network == nullptr
+			|| !PlotGesture::AnchorAt(*Network, Context.Cursor, PlotGesture::IsServiceRoad, Unused))
 		{
 			// THE SAME QUESTION THE CLICK ASKS, so the warning cannot say "move near a
 			// service road" while a click would have anchored perfectly well.

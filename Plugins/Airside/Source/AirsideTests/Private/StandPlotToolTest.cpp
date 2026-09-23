@@ -308,6 +308,15 @@ bool FStandPlotLetterAtThresholdsTest::RunTest(const FString& Parameters)
 				*FString::Printf(TEXT("Code %s floor %s: the Stand fact is IcaoCode's letter for the drawn size"),
 					IcaoCode::ToLetter(Letter), Short == 0.0 ? TEXT("exactly") : TEXT("less 1 m of depth")),
 				FactOf(Readout, TEXT("Stand")), ExpectedStandFact(Width, Depth - Short));
+
+			// AT THE FLOOR ITSELF, THE LETTER BY NAME - not only "whatever IcaoCode says", which
+			// would pass on a table and a tool that were both wrong the same way.
+			if (Short == 0.0)
+			{
+				TestEqual(*FString::Printf(TEXT("Code %s drawn exactly at its floor reads as Code %s"),
+						IcaoCode::ToLetter(Letter), IcaoCode::ToLetter(Letter)),
+					FactOf(Readout, TEXT("Stand")), FString(TEXT("Code ")) + IcaoCode::ToLetter(Letter));
+			}
 		}
 	}
 
@@ -605,6 +614,148 @@ bool FStandPlotPreviewDrawsTheKeepOutTest::RunTest(const FString& Parameters)
 		Sink.TouchesIn((Shown[0] + Shown[1]) * 0.5, EPreviewStyle::Pending));
 
 	TestTrue(TEXT("and the letter is labelled on the ground"), Sink.Says(TEXT("Code C")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotZeroDepthClickStaysTest,
+	"Airside.Tool.StandPlot.ZeroDepthClickStays",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotZeroDepthClickStaysTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	FStandPlotTool Tool;
+	Tool.OnClick(At(Actor, AnchorCursor));
+	const FVector2D Anchor = PinnedAnchor(Tool, Actor);
+	Tool.OnClick(At(Actor, Anchor + FVector2D(6000.0, 0.0)));
+	if (!TestEqual(TEXT("dragging the depth"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Depth))) { return false; }
+
+	// ON THE ENTRANCE LINE: zero depth folds the rectangle onto its own entrance edge, and a
+	// click that locked it would leave the player holding a shape only Cancel escapes.
+	Tool.OnClick(At(Actor, Anchor + FVector2D(3000.0, 0.0)));
+	TestEqual(TEXT("a click on the entrance line does not lock a zero-depth stand"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Depth));
+
+	// BEHIND IT, toward the taxiway: clamped to zero depth, so refused the same way.
+	Tool.OnClick(At(Actor, Anchor + FVector2D(3000.0, -500.0)));
+	TestEqual(TEXT("nor does a click behind it, on the taxiway side"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Depth));
+	return true;
+}
+
+namespace StandPlotToolFixture
+{
+	/**
+	 * Taxiways at about 30 degrees with non-integer node coordinates - the case where the
+	 * tool's unit vectors are 1 give or take an ulp, so a rectangle drawn exactly at a letter's
+	 * floor measures an ulp either side of it unless StandBox rounds its lengths.
+	 *
+	 * SEVERAL ANGLES, because whether a given angle lands an ulp low is luck: the first single
+	 * 30-degree fixture written for this passed WITHOUT the rounding, measuring nothing.
+	 */
+	const double DiagonalDegrees[] = { 30.0, 28.7, 31.9, 33.3, 26.1, 37.7, 29.45 };
+	const FVector2D DiagonalCentre(12.3456, -56.7891);
+	const double DiagonalHalfLength = 10000.3137;
+
+	void DiagonalWorld(ARoadNetworkActor* Actor, const FVector2D& A, const FVector2D& B)
+	{
+		Actor->ClearNetwork();
+		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+		IRoadEditTarget* Target = Actor;
+		const int32 NodeA = Target->PlaceNode(A);
+		const int32 NodeB = Target->PlaceNode(B);
+		Target->ConnectNodes(NodeA, NodeB, ERoadKind::Taxiway, INDEX_NONE);
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotDiagonalTaxiwayReadsItsLetterTest,
+	"Airside.Tool.StandPlot.DiagonalTaxiwayReadsItsLetter",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotDiagonalTaxiwayReadsItsLetterTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	for (const double Degrees : DiagonalDegrees)
+	{
+		const FVector2D Dir(FMath::Cos(FMath::DegreesToRadians(Degrees)), FMath::Sin(FMath::DegreesToRadians(Degrees)));
+		const FVector2D DiagonalA = DiagonalCentre - Dir * DiagonalHalfLength;
+		const FVector2D DiagonalB = DiagonalCentre + Dir * DiagonalHalfLength;
+		const FVector2D Unit = (DiagonalB - DiagonalA).GetSafeNormal();
+		const FVector2D Left = RoadGeom::PerpCCW(Unit);
+		const FVector2D Mid = (DiagonalA + DiagonalB) * 0.5;
+
+		// EVERY LETTER AT ITS EXACT FLOOR, from BOTH SIDES of the taxiway - the two sides wind the
+		// rectangle opposite ways, and the facade reverses one of them, measuring the OPPOSITE
+		// edge. A and B cannot be built yet, so for them only the readout's letter is asserted.
+		for (EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+		{
+			const bool bBuildable = Letter >= EIcaoCode::C;
+			const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(Letter));
+			const double Depth = IcaoCode::StandDepthForLetter(Letter);
+			const FString Expected = FString(TEXT("Code ")) + IcaoCode::ToLetter(Letter);
+
+			for (const double Side : { 1.0, -1.0 })
+			{
+				const TCHAR* SideName = Side > 0.0 ? TEXT("left") : TEXT("right");
+				const TCHAR* Name = IcaoCode::ToLetter(Letter);
+				DiagonalWorld(Actor, DiagonalA, DiagonalB);
+
+				// Start 50 m back along the taxiway so even Code F's 110 m entrance stays beside it.
+				const FVector2D Start = Mid - Unit * 5000.0 + Left * (Side * 1000.0);
+				FStandPlotTool Tool;
+				Tool.OnClick(At(Actor, Start));
+				if (!TestEqual(*FString::Printf(TEXT("%.2f deg, Code %s %s: anchored"), Degrees, Name, SideName),
+					static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Entrance))) { continue; }
+
+				TArray<FVector2D> Anchored;
+				Tool.Rect(At(Actor, Start), Anchored);
+				const FVector2D Anchor = Anchored[0];
+				const FVector2D Inward = Left * Side;
+				Tool.OnClick(At(Actor, Anchor + Unit * Width));
+				Tool.OnClick(At(Actor, Anchor + Unit * Width + Inward * Depth));
+				if (!TestEqual(*FString::Printf(TEXT("%.2f deg, Code %s %s: locked"), Degrees, Name, SideName),
+					static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Confirm))) { continue; }
+
+				const FToolReadout Readout = ReadoutOf(Tool, At(Actor, Start));
+				TestEqual(*FString::Printf(TEXT("%.2f deg, Code %s %s: a stand drawn exactly at the floor reads as its letter"),
+					Degrees, Name, SideName), FactOf(Readout, TEXT("Stand")), Expected);
+				if (!bBuildable) { continue; }
+
+				TestTrue(*FString::Printf(TEXT("%.2f deg, Code %s %s: and Build is lit"), Degrees, Name, SideName),
+					Readout.bCommittable);
+
+				// THE COMMIT MEASURES THE REVERSED OUTLINE on one of the two sides - the edge the
+				// readout did not measure. A lit Build and a refused commit is the bug this pins.
+				Tool.OnCommit(At(Actor, Start));
+				const FEntityInstance* Placed = nullptr;
+				for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+				{
+					if (Entity.bAlive && Entity.IsStand()) { Placed = &Entity; }
+				}
+				if (!TestNotNull(*FString::Printf(TEXT("%.2f deg, Code %s %s: the commit places it"), Degrees, Name, SideName),
+					Placed)) { continue; }
+				const TOptional<EIcaoCode> Read = StandBox::LetterOf(Placed->Outline);
+				TestTrue(*FString::Printf(TEXT("%.2f deg, Code %s %s: and the stored outline reads as the same letter"),
+					Degrees, Name, SideName), Read.IsSet() && *Read == Letter);
+			}
+		}
+	}
 	return true;
 }
 

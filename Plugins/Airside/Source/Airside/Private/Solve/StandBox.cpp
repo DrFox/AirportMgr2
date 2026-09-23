@@ -33,12 +33,28 @@ namespace StandBox
 
 	double WidthOf(TArrayView<const FVector2D> Rect)
 	{
-		return (Rect[1] - Rect[0]).Length();
+		// ROUNDED TO A WHOLE uu, because the raw length is not the length the player drew.
+		// The stand tool builds a corner as a unit direction times a whole-uu length, and off
+		// the axes that unit vector is 1 give or take an ulp - so a stand dragged exactly to a
+		// letter's floor measured 5499.999999999 against a 5500 floor, and
+		// LetterForStandSize's exact >= read it as the letter below while Size said "55 m".
+		// Worse, URoadEditFacade::PlaceStandInPlot reverses a clockwise outline and so
+		// measures the OPPOSITE edge, which is not bitwise equal to this one: the readout could
+		// light Build for one letter and the commit store another, or refuse.
+		//
+		// HERE, NOT AT EACH CALLER, because every consumer - the tool's readout and preview,
+		// WhyStandRefused, PlaceStandInPlot, LetterOf - measures through these two, so rounding
+		// once makes them agree by construction. Whole uu (1 cm) because every floor in
+		// IcaoCode's table is a whole uu and no gesture quantises finer than 1 m.
+		// ENFORCED BY: Airside.Solve.StandBox.MeasuresWholeUu, and
+		// Airside.Tool.StandPlot.DiagonalTaxiwayReadsItsLetter for the tool and the commit.
+		return FMath::RoundToDouble((Rect[1] - Rect[0]).Length());
 	}
 
 	double DepthOf(TArrayView<const FVector2D> Rect)
 	{
-		return (Rect[2] - Rect[1]).Length();
+		// Rounded for WidthOf's reason - see there.
+		return FMath::RoundToDouble((Rect[2] - Rect[1]).Length());
 	}
 
 	TOptional<EIcaoCode> LetterOf(TArrayView<const FVector2D> Rect)

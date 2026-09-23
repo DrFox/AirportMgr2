@@ -145,4 +145,48 @@ bool FStandBoxNoLetterTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandBoxMeasuresWholeUuTest,
+	"Airside.Solve.StandBox.MeasuresWholeUu",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandBoxMeasuresWholeUuTest::RunTest(const FString& Parameters)
+{
+	// A DIAGONAL RECTANGLE EXACTLY AT CODE C'S FLOOR, built the way the stand tool builds one:
+	// a corner plus a unit direction times a whole-uu length. Off the axes the unit vector is
+	// 1 give or take an ulp, so the raw edge length lands an ulp either side of the floor -
+	// and LetterForStandSize's exact >= reads the low side as the letter below.
+	const EIcaoCode Letter = EIcaoCode::C;
+	const double W = IcaoCode::StandWidthForLetter(Letter);
+	const double D = IcaoCode::StandDepthForLetter(Letter);
+
+	int32 Inexact = 0;
+	for (int32 Step = 1; Step < 360; ++Step)
+	{
+		const double Angle = FMath::DegreesToRadians(Step * 0.73 + 0.1234);
+		const FVector2D Along = FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)).GetSafeNormal();
+		const FVector2D Inward = RoadGeom::PerpCCW(Along);
+		const FVector2D Origin(1234.5678, -987.6543);
+		const TArray<FVector2D> Rect = {
+			Origin, Origin + Along * W, Origin + Along * W + Inward * D, Origin + Inward * D };
+
+		// COUNTED, so the test says whether the raw lengths really were inexact here - a sweep
+		// where every length came out exact would pass without having measured the rounding.
+		if ((Rect[1] - Rect[0]).Length() != W || (Rect[2] - Rect[1]).Length() != D) { ++Inexact; }
+
+		TestEqual(TEXT("WidthOf is a whole uu, so a floor drawn exactly reads as the floor"),
+			StandBox::WidthOf(Rect), W);
+		TestEqual(TEXT("DepthOf is a whole uu, for the same reason"), StandBox::DepthOf(Rect), D);
+
+		const TOptional<EIcaoCode> Read = StandBox::LetterOf(Rect);
+		if (TestTrue(TEXT("the diagonal floor rect reads as a letter"), Read.IsSet()))
+		{
+			TestEqual(TEXT("and it is the letter whose floor it was drawn at"), *Read, Letter);
+		}
+	}
+	TestTrue(TEXT("the sweep met raw lengths an ulp off the floor, so the rounding was exercised"),
+		Inexact > 0);
+	return true;
+}
+
 #endif

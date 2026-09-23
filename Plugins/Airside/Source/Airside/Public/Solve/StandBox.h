@@ -48,11 +48,14 @@ namespace StandBox
 	 */
 	AIRSIDE_API void BoxAt(const FStandPose& Pose, EIcaoCode Letter, TArray<FVector2D>& OutCorners);
 
-	/** |Rect[1] - Rect[0]| - the entrance edge's own length. Rect convention: entrance edge
-	 *  0->1, then inward to 2 and 3, as BoxAt produces and a drawn stand is saved. */
+	/** |Rect[1] - Rect[0]| - the entrance edge's own length, ROUNDED TO A WHOLE uu so a stand
+	 *  drawn exactly at a floor off the axes reads as that floor (see the .cpp). Rect
+	 *  convention: entrance edge 0->1, then inward to 2 and 3, as BoxAt produces and a drawn
+	 *  stand is saved. */
 	AIRSIDE_API double WidthOf(TArrayView<const FVector2D> Rect);
 
-	/** |Rect[2] - Rect[1]| - how far the entrance edge was dragged inward. */
+	/** |Rect[2] - Rect[1]| - how far the entrance edge was dragged inward, rounded to a whole
+	 *  uu for WidthOf's reason. */
 	AIRSIDE_API double DepthOf(TArrayView<const FVector2D> Rect);
 
 	/**

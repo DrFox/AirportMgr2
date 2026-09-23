@@ -192,12 +192,16 @@ void FStandPlotTool::OnClick(const FToolContext& Context)
 		// to fail this is ZERO DEPTH - a cursor on or behind the entrance line - which folds
 		// the rectangle onto its own entrance edge.
 		//
-		// RoadGeom::IsSimplePolygon ITSELF, not a match on WhyStandRefused's wording: it is the
-		// first question that evaluator asks ("the outline crosses itself"), so this is the
-		// same rule asked earlier, and a reworded refusal cannot silently disarm it. Every
-		// OTHER refusal - too small, an unfit letter, an overlap - still locks: the rectangle
-		// is a real shape, and the readout names the lever while the player looks at it.
-		if (!RoadGeom::IsSimplePolygon(Shown))
+		// ASKED AS A DEPTH, NOT ONLY AS IsSimplePolygon: a zero-depth rectangle is two edges
+		// laid back over the other two, and RoadGeom::SegmentsCross does not count a collinear
+		// overlap as a crossing, so IsSimplePolygon passed it and the click locked a stand of
+		// no depth (Airside.Tool.StandPlot.ZeroDepthClickStays, review round 1). The polygon
+		// test stays for anything else that could fold - it is WhyStandRefused's own first
+		// question, asked earlier, and matching that function's wording instead would let a
+		// reworded refusal silently disarm it. Every OTHER refusal - too small, an unfit
+		// letter, an overlap - still locks: the rectangle is a real shape, and the readout
+		// names the lever while the player looks at it.
+		if (StandBox::DepthOf(Shown) <= 0.0 || !RoadGeom::IsSimplePolygon(Shown))
 		{
 			return;
 		}

@@ -256,20 +256,27 @@ namespace PlotGesture
 	{
 		// The anchors the player could take, so the grid is visible before it is committed
 		// to. Snap style: these are what the gesture would attach to.
-		FRoadSegmentId Road;
-		double AlongT = 0.0;
-		if (!NearestRoad(Network, Cursor, Accept, Road, AlongT))
+		//
+		// AnchorAt'S QUESTION FIRST, so "is there an anchor here" has one answer: the tools'
+		// readouts ask AnchorAt, and this used to answer yes on its own for a zero-length
+		// segment or one whose ends could not be read - drawing a dot the click then refused,
+		// while the bar said "move near a road" (review round 1).
+		FAnchor Unused;
+		if (!AnchorAt(Network, Cursor, Accept, Unused))
 		{
 			return false;
 		}
 
+		FRoadSegmentId Road;
+		double AlongT = 0.0;
 		FVector2D RoadA = FVector2D::ZeroVector;
 		FVector2D RoadB = FVector2D::ZeroVector;
-		if (!Network.SegmentEnds(Road, RoadA, RoadB))
+		if (!NearestRoad(Network, Cursor, Accept, Road, AlongT)
+			|| !Network.SegmentEnds(Road, RoadA, RoadB))
 		{
-			// A ROAD WAS FOUND, so the caller's "move near a road" would be wrong; drawing
-			// nothing is the honest answer for a segment whose ends cannot be read.
-			return true;
+			// Unreachable once AnchorAt has succeeded on the same arguments; honoured anyway,
+			// per CLAUDE.md's out-parameter rule, rather than drawing from unset ends.
+			return false;
 		}
 
 		const FVector2D Span = RoadB - RoadA;

@@ -749,8 +749,10 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Wound);
 	// GUARANTEED SET: WhyStandRefused's size gate above already refused anything smaller
 	// than Code A's floor, which is the same condition LetterOf is unset under, and
-	// reversing a rectangle's winding does not change the lengths LetterOf measures (opposite
-	// edges of a rectangle are equal, so WidthOf/DepthOf read the same before and after).
+	// reversing a rectangle's winding does not change the lengths LetterOf measures. NOT
+	// because opposite edges of a rectangle are equal - in floats they are not, and the
+	// reversed outline's edge 0->1 is the drawn rectangle's far edge - but because
+	// StandBox::WidthOf/DepthOf round to a whole uu, which both edges agree on.
 	if (!Letter.IsSet())
 	{
 		UE_LOG(LogRoadMesh, Warning,
