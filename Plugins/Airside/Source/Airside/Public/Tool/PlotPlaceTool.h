@@ -4,6 +4,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Solve/PlotYard.h"
+#include "Tool/PlotGesture.h"
 #include "Tool/RoadBuildTool.h"
 
 /**
@@ -37,31 +38,6 @@ enum class EPlotStage : uint8
 	/** Four corners. Nothing moves until Build, or until Cancel steps back. */
 	Confirm
 };
-
-namespace PlotGesture
-{
-	/** 15 m. A yard narrower than this is not a yard - see the 2026-09-16 gesture spec. */
-	inline constexpr double MinFrontageUu = 1500.0;
-
-	/**
-	 * 5 m. The step above the minimum.
-	 *
-	 * PUBLIC because the tests assert against it and a copy of the number in a test is a
-	 * second source for it - which is exactly how the anchor came to stride 4 m under a
-	 * frontage growing in 5 m steps.
-	 */
-	inline constexpr double FrontageStepUu = 500.0;
-
-	/**
-	 * How far from a service road a plot can be started, uu. 20 m.
-	 *
-	 * THE PLAYER STANDS WHERE THE PLOT GOES, not on the road it fronts. Requiring the cursor
-	 * to be over the carriageway made the anchors vanish the moment you moved off it, which
-	 * reads as placing the depot ON the road (PIE, 2026-09-17). Far enough to stand inside
-	 * the plot's own footprint; near enough not to grab a road across the field.
-	 */
-	inline constexpr double AnchorReachUu = 2000.0;
-}
 
 /**
  * Placing a fuel depot: snap to a service road, drag a width, drag a depth, press Build.

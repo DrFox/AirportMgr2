@@ -28,6 +28,7 @@
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 #include "Solve/StandBox.h"
+#include "Tool/PlotGesture.h"
 #include "Present/RoadEditHistory.h"
 
 bool URoadEditFacade::Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoadNetwork&)> Step)
@@ -541,26 +542,6 @@ namespace
 	}
 
 	/**
-	 * Is this segment a service road - the same question PlotPlaceTool.cpp's file-local
-	 * IsServiceRoad asks, and for the same reason: the segment carries no ERoadKind of its
-	 * own (that is a CHOICE the facade resolves into a profile at lay time - see
-	 * URoadNetworkActor::ResolveProfileFor), so "a truck may drive here" is asked of the
-	 * profile's guidelines instead. Not shared with that file-local helper: Tool/ must not
-	 * depend on Present/ (see Tool/RoadEditTarget.h's own header) and this file already
-	 * takes the FRoadSegment rather than a network and an id, since every caller here is
-	 * already mid-iteration over URoadNetwork::GetSegments().
-	 */
-	bool IsServiceRoadSegment(const FRoadSegment& Segment)
-	{
-		if (Segment.Profile == nullptr) { return false; }
-		for (const FProfileGuideline& Guideline : Segment.Profile->Guidelines)
-		{
-			if (Guideline.Class == ETraversalClass::GroundVehicle) { return true; }
-		}
-		return false;
-	}
-
-	/**
 	 * Does the straight chord A-B (a segment's two node positions) enter Outline's interior -
 	 * either endpoint inside, or a crossing with any edge?
 	 *
@@ -693,11 +674,20 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) co
 	// entrance taxiway this stand is drawn off necessarily runs along (never through) the
 	// entrance edge, which RoadGeom::SegmentsCross does not count as entering (collinear
 	// overlap is not a crossing - see its own header).
+	//
+	// "SERVICE ROAD" IS PlotGesture::IsServiceRoad, the question the gesture's own anchor
+	// search asks. This file kept a private copy (IsServiceRoadSegment) until 2026-09-23 on
+	// the belief that Present/ could not reach Tool/ - but only the reverse is forbidden
+	// (Check-Architecture rule 1: Tool/ never includes Present/), and a second copy of "a
+	// truck may drive here" is a stand refused over a road the tool would not anchor on.
 	if (Network != nullptr)
 	{
-		for (const FRoadSegment& Segment : Network->GetSegments())
+		const TArray<FRoadSegment>& Segments = Network->GetSegments();
+		for (int32 SegmentIndex = 0; SegmentIndex < Segments.Num(); ++SegmentIndex)
 		{
-			if (!Segment.bAlive || IsServiceRoadSegment(Segment)) { continue; }
+			const FRoadSegment& Segment = Segments[SegmentIndex];
+			if (!Segment.bAlive
+				|| PlotGesture::IsServiceRoad(*Network, Network->SegmentIdAt(SegmentIndex))) { continue; }
 			const FRoadNode* NodeA = Network->GetNode(Segment.A);
 			const FRoadNode* NodeB = Network->GetNode(Segment.B);
 			if (NodeA == nullptr || NodeB == nullptr) { continue; }
