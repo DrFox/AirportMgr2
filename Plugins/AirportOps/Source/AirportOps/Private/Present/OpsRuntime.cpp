@@ -482,7 +482,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 		return false;
 	}
 	// THE LOAD-TIME REPAIRS A LEVEL GETS FROM PostLoad AND PostRegisterAllComponents, which a
-	// save game never runs - OpsSave::Restore is Serialize, nothing else (final review C2).
+	// save game does not get - OpsSave::Restore is Serialize alone (final review C2).
 	// Outlines first: a stand saved before stands had them gets its Code C box, and only a
 	// stand with an outline has a letter to rebind by. Then every stand's definition, which
 	// for D/E/F is a path to an object this session never built.
