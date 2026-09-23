@@ -5,6 +5,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Solve/IcaoCode.h"
 
 bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight)
 {
@@ -17,13 +18,20 @@ bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 	}
 
 	FEntityInstanceId Best;
-	double BestWingspan = TNumericLimits<double>::Max();
+	// RANK, NOT THE RAW SPAN: IcaoCode::StandRank/StandAdmits are the ONE rule ArrivalPlanner::
+	// ChooseStand also calls (drawn-stands admission fix round 1) - a legacy stand's captured
+	// DesignWingspan is compared by LETTER, never against Wingspan as a raw double, so a stand
+	// this allocator holds for a flight is never one ChooseStand would have refused it at
+	// touchdown. "First fit by size, smallest that admits" (see this class's own header
+	// comment) is unchanged - only what "smallest" and "admits" are measured BY moved to the
+	// shared table.
+	int32 BestRank = TNumericLimits<int32>::Max();
 
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
 		const FEntityInstance& Stand = Entities[Index];
-		if (!Stand.bAlive || !Stand.PoseNode.IsSet() || Stand.DesignWingspan < Wingspan)
+		if (!Stand.bAlive || !Stand.PoseNode.IsSet() || !IcaoCode::StandAdmits(Stand.DesignWingspan, Wingspan))
 		{
 			continue;
 		}
@@ -36,9 +44,13 @@ bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 			continue;
 		}
 
-		if (Stand.DesignWingspan < BestWingspan)
+		// STRICT LESS-THAN, so a later stand of the SAME letter never overtakes an earlier
+		// one - first-found-wins on a rank tie, exactly the shape the raw-span comparison this
+		// replaced had for an exact tie.
+		const int32 Rank = IcaoCode::StandRank(Stand.DesignWingspan);
+		if (Rank < BestRank)
 		{
-			BestWingspan = Stand.DesignWingspan;
+			BestRank = Rank;
 			Best = Network.EntityIdAt(Index);
 		}
 	}
@@ -57,7 +69,7 @@ bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 	Flight.Stand = Best;
 	UE_LOG(LogAirportOps, Log,
 		TEXT("Flight %d holds stand %d: a %.0f uu stand for a %.0f uu span"),
-		Flight.Id, Best.Index, BestWingspan, Wingspan);
+		Flight.Id, Best.Index, Chosen->DesignWingspan, Wingspan);
 	return true;
 }
 

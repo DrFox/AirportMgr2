@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
@@ -76,6 +77,33 @@ bool FStandAllocatorTooWideTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("a wingspan no stand admits is refused"),
 		Allocator->Reserve(*Traffic, *Network, *Wide));
 	TestFalse(TEXT("and nothing was written to the flight"), Wide->Stand.IsSet());
+	return true;
+}
+
+// FIX ROUND 1 (drawn-stands Task 4 review, finding 2): this allocator used to admit by RAW
+// DesignWingspan compare (Stand.DesignWingspan < Wingspan), which disagreed with
+// ArrivalPlanner::ChooseStand's letter-based admission on exactly this pair - a legacy stand
+// captured at 3410 (an older A320 measurement) is Code C, same as a 737-800's published 3580,
+// so ChooseStand admitted it while this allocator refused it (3410 < 3580 as raw doubles).
+// Both now call IcaoCode::StandAdmits/StandRank, so a stand this allocator holds for a flight
+// is never one ChooseStand would refuse the same aircraft at touchdown.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandAllocatorAgreesWithChooseStandOnLegacySpansTest,
+	"AirportOps.Model.StandAllocator.AgreesWithChooseStandOnLegacySpans",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandAllocatorAgreesWithChooseStandOnLegacySpansTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Network = NetworkWithStands({3410.0}); // legacy Code C figure, not today's 3580
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	UStandAllocator* Allocator = NewObject<UStandAllocator>();
+
+	UAircraftType* B738 = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::Build737(B738);
+	UFlight* Flight = FlightNeeding(B738->Airframe().Wingspan, 1); // 3580, also Code C
+
+	TestTrue(TEXT("a legacy-span stand still admits by letter, agreeing with ChooseStand - not by raw span"),
+		Allocator->Reserve(*Traffic, *Network, *Flight));
 	return true;
 }
 
