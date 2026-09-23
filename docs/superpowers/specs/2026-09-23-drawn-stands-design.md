@@ -18,6 +18,11 @@ Key 3 is the stand tool. It is the depot's plot gesture pointed at a taxiway:
 rectangle, and a skewed quad would need its letter measured from an inscribed rectangle the player
 cannot see.
 
+**REVISED 2026-09-23 (task 9):** the stand tool does not offer free-start snap guides
+(`IBuildTool::WantsFreeStartGuides` stays the base `false`, unlike the depot's `FPlotPlaceTool`).
+The first click is snapped to the taxiway's own step grid exactly as the depot's is to a service
+road's, and a guide drawn over a click that then snaps elsewhere is a guide not obeyed.
+
 **Orientation.** The aircraft taxis in forwards and reverses (pushback) out onto the taxiway. So
 its TAIL is to the entrance edge and its NOSE points inward, away from the taxiway. Say "entrance
 edge", never "frontage", when talking about stands: frontage read as "where the nose is".
@@ -37,10 +42,17 @@ edge", never "frontage", when talking about stands: frontage read as "where the 
 A stand is an ordinary `FEntityInstance` with an `Outline` - the field depot plots use. No new
 field.
 
-- **Captured at commit, together:** the pose and `DesignWingspan` = the letter's max wingspan.
-  `DesignWingspan` stays the slot the Inspector ("Code X") and `FStandSummary` read, so neither
-  changes. A test asserts, over every stand, `LetterForWingspan(DesignWingspan) ==
-  LetterForStandSize(outline)` so the two captured facts cannot drift.
+- **Captured at commit, together:** the pose and `DesignWingspan`. **REVISED 2026-09-23 (task
+  9):** `DesignWingspan = IcaoCode::DesignSpanForLetter(L)`, not "the letter's max wingspan" -
+  `MaxWingspanForLetter(L)` is the EXCLUSIVE edge for every letter but F (already the next
+  letter's), so capturing it verbatim would read back one letter wider than drawn;
+  `DesignSpanForLetter` is the hair-under value that still reads back as `L` through
+  `LetterForWingspan`. `DesignWingspan` stays the slot the Inspector ("Code X") and
+  `FStandSummary` read, so neither changes. A test asserts, over every stand WHOSE SPAN IS
+  KNOWN (`DesignWingspan > 0` - 0 is legal and means "unknown", the raw
+  `URoadNetwork::PlaceEntity` overload test fixtures use; every production path sets it),
+  `LetterForWingspan(DesignWingspan) == LetterForStandSize(outline)` so the two captured facts
+  cannot drift.
 - **Kind, not outline.** `IsPlotted()` has meant "is a depot" at several sites. It stops meaning
   that: `FEntityInstance::IsDepot()` (`PoseRole != Aircraft`) and `IsStand()` (`PoseRole ==
   Aircraft`) become the tests, and `UPlotPresenter`, `FindEntityAt`, `DeleteEntity` labels and the
@@ -68,11 +80,17 @@ is plain apron beyond the nose. Turning extra width into longer straight service
 
 ### Definition per letter
 
-`UAirsideSettings::ResolveStandDefinition(EIcaoCode)` - the one resolver. Letter C returns
-`DA_Stand_CodeC` (the authored content); the others are transient definitions built once through
-`BuildStandTemplate(Letter)` and cached, with `DesignAircraft` = the largest shipped
-`UAircraftType` of that letter, or null. Code D has no aircraft today: a D stand admits by span
-but has no parked-aircraft envelope to draw.
+**REVISED 2026-09-23 (task 9):** the resolver is `ARoadNetworkActor::ResolveStandDefinitionFor
+(EIcaoCode)`, not `UAirsideSettings::ResolveStandDefinition` - it lives on the actor because the
+transient per-letter definitions it builds are cached there, alongside the Code C
+`StandDefinition` property `ResolveStandDefinitionFor` forwards to unchanged. Letter C returns
+that property's content (`DA_Stand_CodeC` in a real level); the others are transient definitions
+built once through `BuildStandTemplate(Letter)` and cached, with `DesignAircraft` = the largest
+shipped `UAircraftType` of that letter, or null. Code D has no aircraft today: a D stand admits by
+span but has no parked-aircraft envelope to draw. **Code A and B's own templates do not fit their
+own floor** - task 1's finding, live in `WhyStandRefused`: `ResolveStandDefinitionFor` returns
+null for them and the tool refuses with "Code A/B stands cannot be built yet" rather than placing
+a stand narrower than its own template needs.
 
 ### Commit
 
@@ -84,16 +102,26 @@ letter's definition, and the outline.
 ### Migration
 
 On load, an alive stand (`PoseRole == Aircraft`) with no outline gets `StandBox::BoxAt(pose,
-C)`'s four corners, and its `DesignWingspan` if 0. After that "a stand has an outline" holds
-everywhere. Every stand in a saved level today is Code C.
+C)`'s four corners, and its `DesignWingspan` if 0. **REVISED 2026-09-23 (task 9):** this also
+runs at POINT PLACEMENT, not only on load - `URoadNetwork::PlaceEntity`'s point-placement path
+gives a stand its Code C box right there, rather than waiting for the next `EnsureStandOutlines`
+pass at a load nobody has done yet, so a legacy call site placing a stand by pose alone still
+gets an outline immediately. After that "a stand has an outline" holds everywhere. Every stand in
+a saved level today is Code C.
 
 ## Admission
 
-`ArrivalPlanner::ChooseStand`: same single `FindToGoals` search. Among reachable, un-held
-candidates it drops `DesignWingspan < Airframe.Wingspan` (0 = unknown = admitted, as today) and
-picks the lowest letter, then the shortest taxi. It still returns a bigger stand when every
-smaller one is held. `OfferGenerator` and `FlightBoard` call `ArrivalPlanner::Plan`, which calls
-this, so an airline is not offered an A380 until an F stand exists - no extra site.
+`ArrivalPlanner::ChooseStand`: same single `FindToGoals` search. **REVISED 2026-09-23 (task 9):**
+the drop rule is not the raw compare `DesignWingspan < Airframe.Wingspan` - among reachable,
+un-held candidates it drops any stand `IcaoCode::StandAdmits(DesignWingspan, Airframe.Wingspan)`
+refuses, which compares the two BY LETTER rather than as raw doubles (0 either side still means
+"unknown, admits anything", as today - `StandAdmits`'s own contract). `StandRank` then picks the
+lowest ADMITTING letter, not the raw span, then the shortest taxi. It still returns a bigger stand
+when every smaller one is held. This is the ONE rule - `AirportOps`'s `UStandAllocator::Reserve`
+calls the same `IcaoCode::StandAdmits`/`StandRank` pair rather than keeping its own comparison, so
+a stand held for an accepted flight and one chosen at live dispatch cannot disagree about what
+fits. `OfferGenerator` and `FlightBoard` call `ArrivalPlanner::Plan`, which calls this, so an
+airline is not offered an A380 until an F stand exists - no extra site.
 
 Log (`LogAirside`, on every choice):
 `ChooseStand: span 79.8 m -> node N (Code F); 3 too small, 1 held`.

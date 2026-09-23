@@ -8,6 +8,7 @@
 #include "Entities/EntityDefinition.h"
 #include "InputCoreTypes.h"
 #include "Model/GroundTraffic.h"
+#include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -1059,6 +1060,177 @@ bool FStandPlotRemoveNamesTheAircraftInUseTest::RunTest(const FString& Parameter
 	Tool.BuildPreview(Remove, Free);
 	TestTrue(TEXT("still says remove"), Free.Says(TEXT("remove stand")));
 	TestFalse(TEXT("a free stand carries no in-use label"), Free.Says(TEXT("in use")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotDrawnStandTakesAnArrivalTest,
+	"Airside.Tool.StandPlot.DrawnStandTakesAnArrival",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotDrawnStandTakesAnArrivalTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	// TASK 9: THE SEAM FROM TOOL TO ADMISSION. Every earlier task proved its own layer in
+	// isolation - the gesture measures a rectangle, the facade turns it into a stand with a
+	// captured letter, ArrivalPlanner reads DesignWingspan back through IcaoCode::StandAdmits
+	// - but nothing before this test drew a stand with the same clicks a player makes and
+	// then landed an aircraft on the airport that now has one. ArrivalDispatchTest is the
+	// smallest existing end-to-end fixture (grep LandAircraft/DispatchArrival) and this
+	// follows its shape - a runway sized to the airframe, an exit, a taxiway - but places the
+	// stand through FStandPlotTool rather than Actor->PlaceStand, which is the one thing that
+	// fixture does not exercise.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// A 737-800: Build737 gives it Code C (Wingspan 3580 uu, under Code C's 3600 uu ceiling -
+	// IcaoCode::LetterForWingspan), and it is one of the two fixtures named for this test.
+	// Ground is authored; Climb and Approach are left at their struct defaults, which are all
+	// positive and so IsSet() - enough to fly this fixture's landing.
+	UAircraftType* Type = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::Build737(Type);
+	FAirframe Airframe = Type->Airframe();
+
+	// STEER LAW, CORRECTED FOR A FIXTURE THAT NOW ACTUALLY MOVES. Build737's own comment calls
+	// this "the PAPER 737... nothing ever flies it", and its Ground carries no SteerAxleX/
+	// FixedAxleX for exactly that reason - the flying 737 is DA_Aircraft_Plane4's measured
+	// rig, not this one. UAircraftType::SteerLaw defaults RollingSteer, so taken unchanged this
+	// airframe would fail FAirframe::NeedsSteerLawWarning and WarnIfSteerLawUnsupported would
+	// log a LogAirside Error the first time a phase binds it - which AutomationTestFramework
+	// treats as a test failure regardless of what RunTest returns. Pivot is what
+	// EffectiveSteerLaw falls back to anyway for an unmeasured wheelbase; setting it here
+	// merely skips the one-time warning for a fixture that is deliberately using the paper
+	// type to fly.
+	Airframe.SteerLaw = ESteerLaw::Pivot;
+
+	// FORCES Network INTO EXISTENCE ON THE ACTOR ITSELF, exactly as ArrivalDispatchTest does,
+	// so the FTestAirport built below lands on Actor->Network rather than an orphan object the
+	// tool's clicks (which read Context.Network() off the actor) would never see.
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	if (!TestNotNull(TEXT("the actor has a network"), Actor->Network.Get())) { return false; }
+
+	// A CODE C DEFINITION WITH NO CONTENT ASSET: ResolveStandDefinitionFor(C) forwards to
+	// ResolveStandDefinition() unchanged (ARoadNetworkActor's own comment on why), which reads
+	// this property - the same fixture every other test in this file uses, so drawing a Code C
+	// stand needs no DA_Stand_CodeC to be loaded in a bare automation run.
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+
+	// THE AIRPORT: a runway sized to the 737, one exit, a taxiway south of it - NOT derived yet
+	// (bDerived=false, matching ArrivalDispatchTest's own "world variant") and NO STAND
+	// (StandCount=0): the stand under test is drawn through the tool below, not FTestAirport's
+	// own placement, which is exactly the seam this test exists to cross.
+	const FTestAirport Fixture =
+		FTestAirport::Build(Airframe, { .StandCount = 0, .bDerived = false }, Actor->Network.Get());
+	const FVector2D ThresholdAt = Fixture.Threshold;
+	const FVector2D ExitAt = Fixture.ExitAt;
+
+	// THE TAXIWAY RUNS SOUTH FROM THE EXIT - FTestAirport::Build's own single-exit shape lays
+	// it ExitNode -> ExitNode + (0, -20000) - so the click sits 10 m east of its centreline
+	// (within PlotGesture::AnchorReachUu, 20 m) and 10000 uu down it, leaving room for a
+	// Code C rectangle (59 x 55 m) on both ends before the exit and the taxiway's dead end.
+	// NOT NAMED AnchorCursor - StandPlotToolFixture already declares one at file scope, and a
+	// local of the same name would shadow it (C4459) rather than reuse it: this test anchors
+	// on FTestAirport's own taxiway, not TaxiwayWorld's.
+	const FVector2D ClickAt = ExitAt + FVector2D(1000.0, -10000.0);
+
+	FStandPlotTool Tool;
+	Tool.OnClick(At(Actor, ClickAt));
+	if (!TestEqual(TEXT("the click anchors on the taxiway FTestAirport laid"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Entrance)))
+	{
+		return false;
+	}
+	const FVector2D Anchor = PinnedAnchor(Tool, Actor);
+
+	// ALONG AND INWARD, NOT ASSUMED: PlotGesture::AnchorAt takes Along from the segment's own
+	// A -> B order, and FTestAirport lays the taxiway ExitNode -> TaxiEnd, i.e. south; Inward
+	// is whichever side of the centreline the cursor fell on (RoadGeom::PerpCCW((0,-1)) is
+	// (1,0), and the anchor cursor sits east of it), i.e. east. Both read off PlotGesture.cpp
+	// directly rather than re-derived here, so a change to either rule is caught by the four
+	// corners not landing where this test expects rather than by this test silently agreeing
+	// with whatever the tool did.
+	const FVector2D Along(0.0, -1.0);
+	const FVector2D Inward(1.0, 0.0);
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+
+	Tool.OnClick(At(Actor, Anchor + Along * Width));
+	if (!TestEqual(TEXT("the entrance edge pins and the depth drag begins"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Depth)))
+	{
+		return false;
+	}
+	Tool.OnClick(At(Actor, Anchor + Along * Width + Inward * Depth));
+	if (!TestEqual(TEXT("a Code C floor rectangle locks"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Confirm)))
+	{
+		return false;
+	}
+
+	const FToolReadout Readout = ReadoutOf(Tool, At(Actor, ClickAt));
+	if (!TestTrue(TEXT("Build is lit over a Code C rectangle beside a taxiway"), Readout.bCommittable))
+	{
+		return false;
+	}
+
+	// BUILD, THROUGH THE TOOL - PlaceStandInPlot, WhyStandRefused, CommitPurchase and the
+	// facade's own NotifyChanged(Topology), which is what re-derives the guideline graph and
+	// links the stand's anchors - none of it called by hand, which is the whole point of
+	// drawing the stand this way rather than through Actor->PlaceStand.
+	Tool.OnCommit(At(Actor, ClickAt));
+	if (!TestEqual(TEXT("Build places exactly one stand"), LiveStands(Actor), 1)) { return false; }
+
+	FGuidelineNodeId StandPose;
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (Entity.bAlive && Entity.IsStand()) { StandPose = Entity.PoseNode; }
+	}
+	if (!TestTrue(TEXT("the drawn stand has a pose node"), StandPose.IsSet())) { return false; }
+
+	// THE MEASUREMENT: ORDERING AN ARRIVAL ON AN AIRPORT WHOSE ONLY STAND WAS DRAWN THROUGH
+	// THE TOOL PRODUCES AN AIRCRAFT THAT PARKS ON IT. Everything above can be perfect and this
+	// can still be false - ArrivalDispatchTest's own reason for existing, applied to the new
+	// path.
+	const int32 Before = Actor->GetAgentCount();
+	const bool bDispatched = Actor->DispatchArrival(ThresholdAt, Airframe);
+	if (!TestTrue(TEXT("an arrival is accepted on a runway with a drawn stand beside its exit"),
+		bDispatched))
+	{
+		return false;
+	}
+	TestEqual(TEXT("and an aircraft exists as a result"), Actor->GetAgentCount(), Before + 1);
+
+	// RUN TO COMPLETION, bounded as ArrivalDispatchTest's own loop is: 6000 * 0.1 s = 600
+	// simulated seconds, comfortably past the landing roll plus the taxi to the drawn stand.
+	int32 Ticks = 0;
+	while (Actor->LastAgentPhaseForTest() != EAgentPhase::Parked && Ticks < 6000)
+	{
+		Actor->Tick(0.1f);
+		++Ticks;
+	}
+	if (!TestEqual(FString::Printf(TEXT("the arrival parks within %d ticks (phase %d)"),
+		Ticks, static_cast<int32>(Actor->LastAgentPhaseForTest())),
+		Actor->LastAgentPhaseForTest(), EAgentPhase::Parked))
+	{
+		return false;
+	}
+
+	// THE ASSERTION THE BRIEF NAMES: the agent's own stand node is the drawn stand's PoseNode
+	// - not merely "some stand parked somewhere", which a phase check alone cannot tell apart
+	// from an agent that stalled over the wrong node. GoalNode is set from the route
+	// ArrivalPlanner::ChooseStand returned at dispatch and nothing past that point repoints it
+	// (see FRoadAgent::Advance's Parked branches), so reading it back here after parking is
+	// reading the same node dispatch chose.
+	const int32 AgentId = Actor->GetTraffic()->GetNewestAgentId();
+	const FRoadAgent* Agent = Actor->GetTraffic()->GetModel()->FindAgent(AgentId);
+	if (!TestNotNull(TEXT("the parked agent resolves"), Agent)) { return false; }
+	TestTrue(TEXT("the agent's stand node is the drawn stand's own PoseNode - the seam from ")
+		TEXT("tool to admission is wired: a stand the tool builds is one the planner chooses"),
+		Agent->GoalNode == StandPose);
+
 	return true;
 }
 
