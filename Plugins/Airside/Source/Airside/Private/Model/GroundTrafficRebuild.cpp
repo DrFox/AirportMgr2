@@ -80,7 +80,7 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 	}
 
 	FRouteQuery Query = FRouteQuery::For(ERouteErrand::Replan,
-		UGroundTraffic::StepFromNode(Plan, SpliceStep), Agent.GoalNode, Agent.Airframe, Agent.Class);
+		UGroundTraffic::StepFromNode(Plan, SpliceStep), Agent.GoalNode, Agent.Wingspan(), Agent.Class);
 	Query.BannedEdge = BannedEdge;
 	Query.BannedNode = BannedNode;
 
@@ -138,7 +138,7 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 
 	// Replace, NOT Start: the line up to the splice is unchanged and the agent is part way
 	// along it, so Travelled, Speed and Heading all survive. See FRouteFollower::Replace.
-	Agent.Follower.Replace(Spliced, Agent.Airframe.Chassis);
+	Agent.Follower.Replace(Spliced, Agent.Chassis());
 
 	// THE RESERVATIONS, AND ONLY THOSE. They were made for a route that no longer exists past
 	// the splice, so holding them would block the line the agent has just been re-routed away
@@ -540,12 +540,13 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// the replan searches to a live stand rather than to a freed handle and truncates. No
 	// stand: it is marked awaiting, and the truncation that follows gives it a node to wait
 	// at. Spec 2026-09-07-stand-occupancy §5. Vehicles and departures keep M2's rules.
-	if (!Goal.IsSet() && Agent.Class == ETraversalClass::Aircraft && !Agent.bDepartureArmed
+	if (!Goal.IsSet() && Agent.Class == ETraversalClass::Aircraft && Agent.AsAircraft() != nullptr
+		&& !Agent.bDepartureArmed
 		&& Failed < Plan.Steps.Num())
 	{
 		const FGuidelineNodeId ReplanFrom = UGroundTraffic::StepFromNode(Plan, Failed);
 		const FGuidelineNodeId NewStand = ArrivalPlanner::ChooseStand(
-			Network, ReplanFrom, Agent.Airframe, &Occupancy, Agent.Id);
+			Network, ReplanFrom, *Agent.AsAircraft(), &Occupancy, Agent.Id);
 		if (NewStand.IsSet())
 		{
 			Agent.SetGoal(NewStand);
@@ -616,7 +617,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	else
 	{
 		FRouteQuery Query = FRouteQuery::For(ERouteErrand::RebuildReResolve,
-			UGroundTraffic::StepFromNode(Plan, Failed), Agent.GoalNode, Agent.Airframe, Agent.Class);
+			UGroundTraffic::StepFromNode(Plan, Failed), Agent.GoalNode, Agent.Wingspan(), Agent.Class);
 
 		// The congestion term, as ReplanAt takes it: the guidelines that survived the rebuild
 		// by handle - every hand-drawn one - still carry real queues, and a re-routed arrival
@@ -675,7 +676,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// the truncation was applied in place - which Replace handles: TArray's assignment
 		// guards self-assignment, and what this call is here for is the speed profile, rebuilt
 		// so the agent brakes to the new end instead of running off it.
-		Agent.Follower.Replace(Plan, Agent.Airframe.Chassis);
+		Agent.Follower.Replace(Plan, Agent.Chassis());
 	}
 
 	UE_LOG(LogAirsideTraffic, Log,

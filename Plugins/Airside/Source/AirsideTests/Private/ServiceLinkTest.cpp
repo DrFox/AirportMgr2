@@ -1384,14 +1384,14 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 	// AT THE LEVEL OF THE COMPOSITION, not the struct. Airside.Model.ReverseRun already drives
 	// FReverseRun to its limits on a hand-made arc and passed throughout; what was untested was
 	// whether anything ever HANDS it one. That is the seam, so that is where the test goes.
-	// THE LARGEST VEHICLE'S CHASSIS IN THE DEFAULT VEHICLE'S BUNDLE: StartTaxi takes a whole
-	// FAirframe, and ResolveLargestServiceVehicle has returned only the chassis since
-	// 2026-09-23. Identical to the old single call while the two resolve the same truck.
-	FAirframe Truck = UAirsideSettings::ResolveDefaultVehicle();
+	// THE LARGEST VEHICLE'S CHASSIS IN THE DEFAULT VEHICLE'S BUNDLE: StartDrive takes a whole
+	// FVehicle, and ResolveLargestServiceVehicle returns only the chassis (2026-09-23).
+	// Identical to the old single call while the two resolve the same truck.
+	FVehicle Truck = UAirsideSettings::ResolveDefaultVehicle();
 	Truck.Chassis = UAirsideSettings::ResolveLargestServiceVehicle();
 
 	FRoadAgent Agent;
-	Agent.StartTaxi(Leaving, Truck);
+	Agent.StartDrive(Leaving, Truck);
 	Agent.Class = ETraversalClass::GroundVehicle;
 	Agent.ReverseSpeed = 100.0;
 

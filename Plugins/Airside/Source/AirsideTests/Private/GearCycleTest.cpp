@@ -327,8 +327,8 @@ bool FGearRestingPosesComeFromTheEvaluatorTest::RunTest(const FString& Parameter
 	//
 	// So the resting poses are the cycle's OWN ENDPOINTS now, and this is what says so.
 	FRoadAgent Agent;
-	Agent.Airframe.Gear.TravelSeconds = 4.0;
-	Agent.Airframe.Gear.DoorSeconds = 0.0;
+	Agent.EditAirframeForTest().Gear.TravelSeconds = 4.0;
+	Agent.EditAirframeForTest().Gear.DoorSeconds = 0.0;
 
 	Agent.GearPhase = EGearPhase::Raising;
 	Agent.GearCycleSeconds = 3.9;
@@ -347,13 +347,13 @@ bool FGearRestingPosesComeFromTheEvaluatorTest::RunTest(const FString& Parameter
 
 	// AND AN AIRFRAME THAT DOES HAVE DOORS STILL SHUTS THEM, which is what proves the fix is
 	// the evaluator being consulted rather than the door stage being lost.
-	Agent.Airframe.Gear.DoorSeconds = 1.0;
+	Agent.EditAirframeForTest().Gear.DoorSeconds = 1.0;
 	TestEqual(TEXT("an airframe with authored doors still rests with them shut"),
 		Agent.GearPose().BayDoorOpenFraction, 0.0);
 
 	// THE TRUCK DIVIDES THE SAME WAY, and gets it right by construction rather than by a
 	// second table entry: tilted at rest up, level at rest down, for an airframe with a truck.
-	Agent.Airframe.Gear.TruckTiltSeconds = 2.0;
+	Agent.EditAirframeForTest().Gear.TruckTiltSeconds = 2.0;
 	TestEqual(TEXT("a truck rests TILTED with the gear up, which is how it fits the well"),
 		Agent.GearPose().TruckLevelFraction, 0.0);
 
@@ -365,7 +365,7 @@ bool FGearRestingPosesComeFromTheEvaluatorTest::RunTest(const FString& Parameter
 
 	// AND AN AIRFRAME WITH NO TRUCK RESTS LEVEL IN BOTH PHASES, which is the value that
 	// rotates a bone the rig does not have by exactly nothing.
-	Agent.Airframe.Gear.TruckTiltSeconds = 0.0;
+	Agent.EditAirframeForTest().Gear.TruckTiltSeconds = 0.0;
 	Agent.GearPhase = EGearPhase::Up;
 	TestEqual(TEXT("a single-axle airframe reports a level truck even stowed"),
 		Agent.GearPose().TruckLevelFraction, 1.0);
@@ -385,9 +385,9 @@ bool FGearRetractsAtHeightNotLiftOffTest::RunTest(const FString& Parameters)
 	// FAgentMotion::bAirborne's own comment ("Stage 2's gear retraction hangs on this")
 	// predicted otherwise and is what this test exists to contradict.
 	FRoadAgent Agent;
-	Agent.Airframe.Gear.TravelSeconds = 7.0;
-	Agent.Airframe.Gear.DoorSeconds = 1.0;
-	Agent.Airframe.Gear.RetractAboveHeight = 9000.0;
+	Agent.EditAirframeForTest().Gear.TravelSeconds = 7.0;
+	Agent.EditAirframeForTest().Gear.DoorSeconds = 1.0;
+	Agent.EditAirframeForTest().Gear.RetractAboveHeight = 9000.0;
 	Agent.Phase = EAgentPhase::Departing;
 
 	// AIRBORNE BUT LOW. The rotation is already guarded by Airside.Present.AgentMotion case
@@ -431,10 +431,10 @@ bool FGearDescendingArrivalDoesNotRetractTest::RunTest(const FString& Parameters
 	// "airborne and above the retract height" word for word. If altitude alone decided, a
 	// landing aeroplane would raise its gear on short final.
 	FRoadAgent Agent;
-	Agent.Airframe.Gear.TravelSeconds = 7.0;
-	Agent.Airframe.Gear.DoorSeconds = 1.0;
-	Agent.Airframe.Gear.RetractAboveHeight = 9000.0;
-	Agent.Airframe.Gear.ExtendBelowHeight = 15000.0;
+	Agent.EditAirframeForTest().Gear.TravelSeconds = 7.0;
+	Agent.EditAirframeForTest().Gear.DoorSeconds = 1.0;
+	Agent.EditAirframeForTest().Gear.RetractAboveHeight = 9000.0;
+	Agent.EditAirframeForTest().Gear.ExtendBelowHeight = 15000.0;
 
 	Agent.Phase = EAgentPhase::Arriving;
 	Agent.LastMotion.bAirborne = true;
@@ -498,9 +498,9 @@ bool FGearReachesTheMotionDescriptionTest::RunTest(const FString& Parameters)
 	// THE SEAM. FAgentMotion is everything the view is told, so a fraction the model computes
 	// and does not publish here is a fraction no Animation Blueprint can ever read.
 	FRoadAgent Agent;
-	Agent.Airframe.Gear.TravelSeconds = 7.0;
-	Agent.Airframe.Gear.DoorSeconds = 1.0;
-	Agent.Airframe.Gear.TruckTiltSeconds = 2.0;
+	Agent.EditAirframeForTest().Gear.TravelSeconds = 7.0;
+	Agent.EditAirframeForTest().Gear.DoorSeconds = 1.0;
+	Agent.EditAirframeForTest().Gear.TruckTiltSeconds = 2.0;
 
 	// AT REST FIRST, because "down and locked" is what every taxiing aeroplane reports and it
 	// is the value a broken default would most plausibly be mistaken for.

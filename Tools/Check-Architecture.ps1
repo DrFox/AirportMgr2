@@ -268,6 +268,15 @@ $AllowedCallers = @(
         ProdReason  = 'a new production caller resolves the default airframe a second way instead of taking it from context - route it through one of the rows above or extend this row and say why'
     },
     @{
+        # FRoadAgent's bundles are private since 2026-09-23 so the unused one of the two cannot
+        # be read; this is the one writable door, and it exists for test fixtures only.
+        Name        = 'FRoadAgent::EditAirframeForTest'
+        Pattern     = '\bEditAirframeForTest\s*\('
+        ProdAllowed = @('RoadAgent.h')
+        TestExempt  = $true
+        ProdReason  = 'start the agent through StartTaxi/StartArrival/StartPushback/StartDrive, which keep its body and bundle consistent'
+    },
+    @{
         Name        = 'DepotKitSpecs'
         Pattern     = 'DepotKitSpecs\s*\('
         ProdAllowed = @('DepotKit.h', 'DepotKit.cpp', 'RoadNetworkActor.cpp')
@@ -689,7 +698,7 @@ foreach ($module in $modules) {
 # A LISTED FILE THAT IS MISSING FAILS. A rename would otherwise turn this rule into a check
 # of nothing, which reports exactly like a pass.
 $chassisOnly = @(
-    'Public\Model\Chassis.h', 'Private\Model\Chassis.cpp',
+    'Public\Model\Chassis.h', 'Private\Model\Chassis.cpp', 'Public\Model\Vehicle.h',
     'Public\Model\RouteFollower.h', 'Private\Model\RouteFollower.cpp',
     'Public\Model\ReverseRun.h', 'Private\Model\ReverseRun.cpp',
     'Public\Model\SpeedProfile.h', 'Private\Model\SpeedProfile.cpp',

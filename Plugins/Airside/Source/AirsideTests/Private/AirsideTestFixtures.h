@@ -133,8 +133,9 @@ namespace TestAirframes
 	FAirframe Piper();
 
 	/** Ground defaults (Accel 100, Decel 200, cap 1000), a nimble nosewheel so corners do
-	 *  not dominate the clock, and nothing that could arm a departure. */
-	FAirframe Van();
+	 *  not dominate the clock, and nothing that could arm a departure - an FVehicle since
+	 *  2026-09-23, so there is no climb to arm one with. */
+	FVehicle Van();
 
 	/** The content-set default airframe with Climb cleared, so it taxis but never lands or
 	 *  departs - a ground vehicle in everything but name. */

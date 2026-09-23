@@ -24,7 +24,7 @@ bool FSteeringFloorZeroStillTaxisTest::RunTest(const FString& Parameters)
 	// Nothing else in the suite would have caught it. The van would simply never have moved,
 	// which reads as a routing bug and would have been chased as one - which is the same
 	// wrong-subsystem hunt that cost this project three sessions in September 2026.
-	FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
+	FVehicle Van = UAirsideSettings::ResolveDefaultVehicle();
 	Van.Chassis.Ground.MinSteeringSpeed = 0.0;
 
 	TestTrue(
@@ -54,7 +54,7 @@ bool FSteeringFloorSharpVertexStillCreepsTest::RunTest(const FString& Parameters
 	//
 	// So both floors take the GREATER of the physical minimum and the solver's progress
 	// epsilon. The aircraft keeps its physics; the van creeps.
-	FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
+	FVehicle Van = UAirsideSettings::ResolveDefaultVehicle();
 	Van.Chassis.Ground.MinSteeringSpeed = 0.0;
 
 	// A right-angle vertex at 1000 uu: due east, then due north. Nothing samples the corner,

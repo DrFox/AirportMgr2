@@ -351,12 +351,12 @@ bool FRouteRunwayPenaltyTest::RunTest(const FString& Parameters)
 	const FAirframe Airframe;
 
 	// GraphProbe: no filter, no penalty. The strip is ordinary line and the short way wins.
-	const FRouteQuery Probe = FRouteQuery::For(ERouteErrand::GraphProbe, A, B, Airframe, ETraversalClass::Aircraft);
+	const FRouteQuery Probe = FRouteQuery::For(ERouteErrand::GraphProbe, A, B, Airframe.Wingspan, ETraversalClass::Aircraft);
 	TestTrue(TEXT("with no policy at all the strip is ordinary line - the short way"),
 		ViaRunway(RouteSearch::Find(*Net, Probe)));
 
 	// PlayerIssued: no filter, but a penalty. Same graph, opposite answer.
-	FRouteQuery Player = FRouteQuery::For(ERouteErrand::PlayerIssued, A, B, Airframe, ETraversalClass::Aircraft);
+	FRouteQuery Player = FRouteQuery::For(ERouteErrand::PlayerIssued, A, B, Airframe.Wingspan, ETraversalClass::Aircraft);
 	TestTrue(TEXT("the penalty alone sends a player-issued route round the strip"),
 		ViaDetour(RouteSearch::Find(*Net, Player)));
 
@@ -402,7 +402,7 @@ bool FRouteRunwayOnlyWayTest::RunTest(const FString& Parameters)
 	const FAirframe Airframe;
 
 	const FRoutePlan Player = RouteSearch::Find(*Net,
-		FRouteQuery::For(ERouteErrand::PlayerIssued, A, B, Airframe, ETraversalClass::Aircraft));
+		FRouteQuery::For(ERouteErrand::PlayerIssued, A, B, Airframe.Wingspan, ETraversalClass::Aircraft));
 	TestTrue(TEXT("a penalty is expensive, not impossible: the only way through is still found"),
 		Player.IsValid());
 
@@ -410,7 +410,7 @@ bool FRouteRunwayOnlyWayTest::RunTest(const FString& Parameters)
 	// on the very same graph - so the assertion above is about the penalty, not about the
 	// graph happening to be routable.
 	const FRoutePlan TaxiIn = RouteSearch::Find(*Net,
-		FRouteQuery::For(ERouteErrand::ArrivalTaxiIn, A, B, Airframe, ETraversalClass::Aircraft));
+		FRouteQuery::For(ERouteErrand::ArrivalTaxiIn, A, B, Airframe.Wingspan, ETraversalClass::Aircraft));
 	TestEqual(TEXT("a filtered errand refuses the same graph outright"),
 		TaxiIn.Result, ERouteResult::Unreachable);
 
@@ -470,31 +470,31 @@ bool FRouteChangedErrandsTest::RunTest(const FString& Parameters)
 	// the errand's row, not about the graph preferring the detour anyway.
 	TestTrue(TEXT("an errand with no rule takes the strip - the behaviour reported"),
 		ViaRunway(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::GraphProbe, A, B, Airframe, ETraversalClass::Aircraft))));
+			FRouteQuery::For(ERouteErrand::GraphProbe, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
 
 	// The two pushback errands. PushbackTaxiOut is the long taxi from where a push ends to
 	// the runway entry, and is the site that reproduces the report.
 	TestTrue(TEXT("PushbackTaxiOut no longer taxis down the strip"),
 		ViaDetour(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::PushbackTaxiOut, A, B, Airframe, ETraversalClass::Aircraft))));
+			FRouteQuery::For(ERouteErrand::PushbackTaxiOut, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
 	TestTrue(TEXT("PushbackClear no longer taxis down the strip"),
 		ViaDetour(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::PushbackClear, A, B, Airframe, ETraversalClass::Aircraft))));
+			FRouteQuery::For(ERouteErrand::PushbackClear, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
 
 	// And the errands that already had a rule, so a future edit to the table cannot quietly
 	// swap two rows and leave this file green.
 	TestTrue(TEXT("ArrivalTaxiIn still refuses the strip"),
 		ViaDetour(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::ArrivalTaxiIn, A, B, Airframe, ETraversalClass::Aircraft))));
+			FRouteQuery::For(ERouteErrand::ArrivalTaxiIn, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
 	TestTrue(TEXT("DepartureToEntry still refuses the strip"),
 		ViaDetour(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::DepartureToEntry, A, B, Airframe, ETraversalClass::Aircraft))));
+			FRouteQuery::For(ERouteErrand::DepartureToEntry, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
 
 	// THE EXCEPTION, asserted rather than assumed. A backtrack exists to use the strip, and
 	// an over-eager ban would silently strand every intersection departure.
 	TestTrue(TEXT("DepartureBacktrack still MAY use the strip - the one errand that must"),
 		ViaRunway(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::DepartureBacktrack, A, B, Airframe, ETraversalClass::Aircraft))));
+			FRouteQuery::For(ERouteErrand::DepartureBacktrack, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
 
 	return true;
 }

@@ -457,13 +457,13 @@ namespace
 }
 
 FRouteQuery FRouteQuery::For(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,
-	const FAirframe& Airframe, ETraversalClass Class)
+	double Wingspan, ETraversalClass Class)
 {
 	FRouteQuery Query;
 	Query.Start = Start;
 	Query.Goal = Goal;
 	Query.Class = Class;
-	Query.Wingspan = Airframe.Wingspan;
+	Query.Wingspan = Wingspan;
 	Query.Errand = Errand;
 	Query.Policy = FRoutePolicy::For(Errand);
 

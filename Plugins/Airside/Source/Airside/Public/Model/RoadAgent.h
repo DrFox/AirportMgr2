@@ -11,11 +11,30 @@
 #include "Model/RouteSearch.h"
 #include "Model/TakeoffRun.h"
 #include "Model/TrafficOccupancy.h"
+#include "Model/Vehicle.h"
 #include "RoadAgent.generated.h"
 
 // Forward declared only for the friends below - see FRoadAgent::CrossingRunway.
 class UGroundTraffic;
 struct FClaimPass;
+
+/**
+ * WHICH BUNDLE an agent was started with - and so which of FRoadAgent's two it may read.
+ *
+ * NOT ETraversalClass, deliberately. Class is a ROUTING fact (which guidelines admit it,
+ * what priority it gets) and tests and dispatch write it after the start; this is a fact
+ * about the DATA, set by the one Start* call that stored the bundle and by nothing else. A
+ * van someone re-classed as Emergency is still a vehicle, and must still read its own chassis.
+ */
+UENUM()
+enum class EAgentBody : uint8
+{
+	/** Started through StartTaxi / StartArrival / StartPushback, with an FAirframe. */
+	Aircraft,
+
+	/** Started through StartDrive, with an FVehicle. */
+	Vehicle
+};
 
 /**
  * Where an agent has got to. Replaces five independent bools - bArriving, bDeparting,
@@ -187,10 +206,44 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() EAgentPhase Phase = EAgentPhase::Taxiing;
 
 	/**
-	 * Every fact about this aeroplane, in one place. See FAirframe for why this replaced
-	 * four separate parameters (Ground, Climb, Approach, Engine) plus a bare Wingspan.
+	 * How this agent rolls - the aircraft's chassis or the vehicle's, whichever it was started
+	 * with. What every ground phase (follower, reverse, claims) reads.
+	 *
+	 * AN ACCESSOR OVER TWO PRIVATE BUNDLES rather than one field, since 2026-09-23 - see Body.
+	 * A vehicle used to be an FAirframe with its climb zeroed; now it is an FVehicle, and the
+	 * agent needs somewhere to hold either. UHT reflects neither TVariant nor TOptional, and
+	 * every field here must be a UPROPERTY (see bDepartureArmed), so the two sit side by side
+	 * and this picks one. The bundles are PRIVATE so the unused one cannot be read by mistake:
+	 * a default FAirframe's climb answers IsSet() true, which is exactly the "a van reports
+	 * itself landable" trap ResolveDefaultVehicle used to zero fields to avoid.
 	 */
-	UPROPERTY() FAirframe Airframe;
+	const FChassis& Chassis() const { return Body == EAgentBody::Aircraft ? Airframe.Chassis : Vehicle.Chassis; }
+
+	/** The aeroplane's full bundle, or null for a vehicle. The only way to read flight data. */
+	const FAirframe* AsAircraft() const { return Body == EAgentBody::Aircraft ? &Airframe : nullptr; }
+
+	/** The vehicle's bundle, or null for an aircraft. */
+	const FVehicle* AsVehicle() const { return Body == EAgentBody::Vehicle ? &Vehicle : nullptr; }
+
+	/**
+	 * The aeroplane's bundle, WRITABLE, and the agent marked an aircraft - for tests that
+	 * assemble an agent field by field or change a figure mid-flight to prove it is read live.
+	 * Production code starts an agent through Start*; Check-Architecture rule 4 keeps this to
+	 * the test modules.
+	 */
+	FAirframe& EditAirframeForTest() { Body = EAgentBody::Aircraft; return Airframe; }
+
+	/** Which bundle this agent carries - see EAgentBody. */
+	EAgentBody GetBody() const { return Body; }
+
+	/** What the inspector calls it - FAirframe::TypeCode or FVehicle::TypeCode. */
+	FName TypeCode() const { return Body == EAgentBody::Aircraft ? Airframe.TypeCode : Vehicle.TypeCode; }
+
+	/**
+	 * The span a route search must clear. ZERO for a vehicle, which FRouteQuery::Wingspan reads
+	 * as unlimited - the answer ResolveDefaultVehicle used to reach by zeroing an airframe's.
+	 */
+	double Wingspan() const { return Body == EAgentBody::Aircraft ? Airframe.Wingspan : 0.0; }
 
 	/**
 	 * Drives Phase == Arriving.
@@ -656,8 +709,24 @@ public:
 	bool StartArrival(const FRunwayEnd& End, const FAirframe& InAirframe, double VacateAt,
 		const FRoutePlan& InTaxiInPlan);
 
-	/** Starts a plain taxi with no prior landing: Phase becomes Taxiing. */
+	/** Starts a plain taxi with no prior landing: Phase becomes Taxiing. An aircraft. */
 	void StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe);
+
+	/**
+	 * StartTaxi for a service vehicle: Phase becomes Taxiing, Body becomes Vehicle.
+	 *
+	 * A SEPARATE NAME AND NOT AN OVERLOAD, so a call site says which kind of thing it is
+	 * sending - and a braced or default-constructed argument cannot silently pick one.
+	 */
+	void StartDrive(const FRoutePlan& Plan, const FVehicle& InVehicle);
+
+	/**
+	 * Restarts a taxi along a new plan with the bundle this agent already carries, whichever
+	 * kind it is - UGroundTraffic::RedirectAgent's "a redirect changes where it goes, not what
+	 * it is". Replaces that function copying Agent.Airframe out and handing it back to
+	 * StartTaxi, which cannot be written for an agent that may hold either bundle.
+	 */
+	void RestartTaxi(const FRoutePlan& Plan);
 
 	/**
 	 * Sends a parked aeroplane off its stand: Phase becomes Manoeuvring. False, and leaves
@@ -707,6 +776,19 @@ public:
 	bool Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEvent& OutEvent);
 
 private:
+	/** Which of the two bundles below is live - see EAgentBody. Written only by the Start* calls. */
+	UPROPERTY() EAgentBody Body = EAgentBody::Aircraft;
+
+	/**
+	 * Every fact about this aeroplane, in one place, when Body is Aircraft. See FAirframe for
+	 * why this replaced four separate parameters (Ground, Climb, Approach, Engine) plus a bare
+	 * Wingspan. Read through Chassis() / AsAircraft(), never directly - see Chassis().
+	 */
+	UPROPERTY() FAirframe Airframe;
+
+	/** The vehicle's bundle, when Body is Vehicle. Read through Chassis() / AsVehicle(). */
+	UPROPERTY() FVehicle Vehicle;
+
 	/**
 	 * Checks whether the taxi has reached a reverse leg and, if so, drives the whole
 	 * handover: arms FReverseRun, or stops the agent and says why it refused. Split out of

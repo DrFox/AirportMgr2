@@ -173,7 +173,7 @@ bool FTruckCrossesTaxiwayTest::RunTest(const FString& Parameters)
 			// slowing for any other reason - a corner, or its own destination.
 			bTruckWaited |= Van->Phase == EAgentPhase::Taxiing
 				&& Van->GetWaitingOn() == Aircraft
-				&& Van->LastMotion.GroundSpeed < 0.5 * Van->Airframe.Chassis.Ground.Taxi.SpeedCap;
+				&& Van->LastMotion.GroundSpeed < 0.5 * Van->Chassis().Ground.Taxi.SpeedCap;
 		}
 	}
 

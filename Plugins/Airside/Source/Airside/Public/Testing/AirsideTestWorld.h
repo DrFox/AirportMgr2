@@ -203,6 +203,7 @@ struct FNullEditTarget : IRoadEditTarget
 		return FRoutePlan();
 	}
 	virtual bool DispatchAgent(const FRoutePlan&, const FAirframe&, ETraversalClass) override { return false; }
+	virtual bool DispatchAgent(const FRoutePlan&, const FVehicle&, ETraversalClass) override { return false; }
 	using IRoadEditTarget::DispatchAgent;
 	virtual void RebuildMesh() override {}
 

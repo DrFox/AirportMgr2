@@ -205,6 +205,8 @@ public:
 	using IRoadEditTarget::DispatchAgent;
 	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe,
 		ETraversalClass Class) override;
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FVehicle& Vehicle,
+		ETraversalClass Class) override;
 
 	virtual bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const override;
 

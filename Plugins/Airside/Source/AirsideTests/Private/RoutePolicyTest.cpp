@@ -117,7 +117,7 @@ bool FRoutePolicyQueryTest::RunTest(const FString& Parameters)
 
 	const FRouteQuery TaxiIn = FRouteQuery::For(
 		ERouteErrand::ArrivalTaxiIn, FGuidelineNodeId(), FGuidelineNodeId(),
-		Airframe, ETraversalClass::Aircraft);
+		Airframe.Wingspan, ETraversalClass::Aircraft);
 
 	TestEqual(TEXT("the errand is carried, so the search can refuse an unset one"),
 		TaxiIn.Errand, ERouteErrand::ArrivalTaxiIn);
@@ -130,7 +130,7 @@ bool FRoutePolicyQueryTest::RunTest(const FString& Parameters)
 
 	const FRouteQuery Backtrack = FRouteQuery::For(
 		ERouteErrand::DepartureBacktrack, FGuidelineNodeId(), FGuidelineNodeId(),
-		Airframe, ETraversalClass::Aircraft);
+		Airframe.Wingspan, ETraversalClass::Aircraft);
 	TestEqual(TEXT("the one errand that must use a strip is not given a filter"),
 		Backtrack.AvoidRunways, ERunwayAvoidance::None);
 
@@ -177,7 +177,7 @@ bool FRouteErrandRefusalTest::RunTest(const FString& Parameters)
 	// refusal below is about the query and not about an empty network.
 	{
 		const FRoutePlan Good = RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::GraphProbe, A, B, Airframe, ETraversalClass::Aircraft));
+			FRouteQuery::For(ERouteErrand::GraphProbe, A, B, Airframe.Wingspan, ETraversalClass::Aircraft));
 		if (!TestTrue(TEXT("the control routes, so the refusals below are about the query"), Good.IsValid()))
 		{
 			return false;
@@ -194,7 +194,7 @@ bool FRouteErrandRefusalTest::RunTest(const FString& Parameters)
 
 	// 2. Required occupancy, no table.
 	{
-		const FRouteQuery Q = FRouteQuery::For(ERouteErrand::VehicleToJob, A, B, Airframe, ETraversalClass::GroundVehicle);
+		const FRouteQuery Q = FRouteQuery::For(ERouteErrand::VehicleToJob, A, B, Airframe.Wingspan, ETraversalClass::GroundVehicle);
 		TestFalse(TEXT("an errand that must weigh congestion will not route without the table"),
 			RouteSearch::Find(*Net, Q).IsValid());
 	}
@@ -204,7 +204,7 @@ bool FRouteErrandRefusalTest::RunTest(const FString& Parameters)
 	// silently dropping the pointer leaves it reasoning about a cost never applied.
 	{
 		FTrafficOccupancy Table;
-		FRouteQuery Q = FRouteQuery::For(ERouteErrand::CandidateComparison, A, B, Airframe, ETraversalClass::GroundVehicle);
+		FRouteQuery Q = FRouteQuery::For(ERouteErrand::CandidateComparison, A, B, Airframe.Wingspan, ETraversalClass::GroundVehicle);
 		Q.WithCongestion(Table, 1, 2.0);
 		TestFalse(TEXT("an errand costed on shape alone refuses a table rather than ignoring it"),
 			RouteSearch::Find(*Net, Q).IsValid());

@@ -27,15 +27,13 @@ bool FVehicleAgentTest::RunTest(const FString& Parameters)
 	// The performance bundle first, world-free. FGroundPerformance::IsSet is what every
 	// caller checks before moving anything, so it is what this must satisfy - a truck that
 	// fails it freezes on the line with nothing to say why.
-	const FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
+	const FVehicle Van = UAirsideSettings::ResolveDefaultVehicle();
 	TestTrue(TEXT("a vehicle can move about an airport"), Van.Chassis.Ground.IsSet());
 	TestEqual(TEXT("and says what it is"), Van.TypeCode, FName(TEXT("FUEL")));
-	TestEqual(TEXT("with no wing to fit through a turn"), Van.Wingspan, 0.0);
 
-	// A VEHICLE NEVER FLIES, so Climb and Approach stay at their struct defaults and nothing
-	// may read them. Pinned because the alternative - filling them in - is authored numbers
-	// nothing reads, which this codebase has shipped three times over.
-	TestFalse(TEXT("no landing figures: a truck declines to land"), Van.Approach.IsSet());
+	// A VEHICLE NEVER FLIES - and since 2026-09-23 it has no climb or approach to leave unset.
+	// That used to be pinned here as Approach.IsSet() == false on a zeroed FAirframe; it is
+	// pinned below instead, on the dispatched agent, as AsAircraft() == null.
 
 	// It turns far harder than an aeroplane. Asserted as a relation rather than a number, so
 	// tuning either figure does not break this and reversing them does.
@@ -82,6 +80,20 @@ bool FVehicleAgentTest::RunTest(const FString& Parameters)
 		Actor->DispatchAgent(Plan, Van, ETraversalClass::GroundVehicle))) { return false; }
 
 	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+
+	// THE BUNDLE SEAM (2026-09-23): the FVehicle overload of DispatchAgent must reach
+	// FRoadAgent::StartDrive. Unwired - say it fell through to the FAirframe path - the agent
+	// would carry a default airframe whose climb answers IsSet() true and whose chassis pivots.
+	const FRoadAgent* Truck = Actor->GetTraffic()->GetModel()->FindAgent(Id);
+	if (!TestNotNull(TEXT("the model holds the truck"), Truck)) { return false; }
+	TestEqual(TEXT("it was started as a vehicle"), Truck->GetBody(), EAgentBody::Vehicle);
+	TestNull(TEXT("so it has no flight data to read"), Truck->AsAircraft());
+	TestEqual(TEXT("it rolls on the vehicle's own chassis"),
+		Truck->Chassis().Wheelbase(), Van.Chassis.Wheelbase(), 0.001);
+	TestEqual(TEXT("with no wing to fit through a turn"), Truck->Wingspan(), 0.0);
+	TestEqual(TEXT("and the inspector still names it"), Truck->TypeCode(), FName(TEXT("FUEL")));
+	TestEqual(TEXT("a truck has no propeller to spool"), Truck->LastMotion.EngineRPM, 0.0);
+
 	ARoadAgentActor* View = Actor->GetTraffic()->GetAgentView(Id);
 	if (!TestNotNull(TEXT("a view was spawned for it"), View)) { return false; }
 

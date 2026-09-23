@@ -5,6 +5,7 @@
 #include "Model/OpsSave.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteSearch.h"
+#include "Model/Vehicle.h"
 #include "UObject/Object.h"
 
 class USimClock;
@@ -281,14 +282,15 @@ public:
 	double DwellSecondsFor(const FEntityInstance& Depot) const;
 
 	/**
-	 * The truck's performance figures, dispatched with every fuel demand.
+	 * The truck's bundle - chassis and type code - dispatched with every fuel demand. An
+	 * FVehicle since 2026-09-23, not an FAirframe with its climb zeroed (see Model/Vehicle.h).
 	 *
 	 * Set from UAirsideSettings::ResolveDefaultVehicle() at attach, next to DwellSeconds
 	 * above - not resolved here at dispatch time. This is Model/, and reaching Content/ was
 	 * the only Model->Content edge in either plugin (#104): Present/ (UOpsRuntime) is where
 	 * every other content default gets resolved once and handed down.
 	 */
-	UPROPERTY() FAirframe TruckAirframe;
+	UPROPERTY() FVehicle TruckVehicle;
 
 	/**
 	 * Every phase change in the traffic model - the events this class is driven by.

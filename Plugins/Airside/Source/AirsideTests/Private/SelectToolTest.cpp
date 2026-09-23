@@ -62,8 +62,8 @@ namespace
 		F.StandIndex = Placed.Index;
 
 		FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::GroundVehicle;
-		FAirframe Van = UAirsideSettings::ResolveDefaultAirframe();
-		Van.Climb = FClimbPerformance();
+		// A REAL VEHICLE since 2026-09-23, not the default airframe with its climb cleared.
+		const FVehicle Van = UAirsideSettings::ResolveDefaultVehicle();
 		F.Actor->DispatchAgent(RouteSearch::Find(Net, Q), Van, ETraversalClass::GroundVehicle);
 		F.AgentId = F.Actor->GetTraffic()->GetNewestAgentId();
 		return F;

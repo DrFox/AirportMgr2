@@ -851,6 +851,12 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FAirframe& A
 	return Traffic->DispatchAgent(Network, Plan, Airframe, SurfaceZ, ShutdownPauseSeconds, Class);
 }
 
+bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FVehicle& Vehicle,
+	ETraversalClass Class)
+{
+	return Traffic->DispatchAgent(Network, Plan, Vehicle, SurfaceZ, ShutdownPauseSeconds, Class);
+}
+
 void ARoadNetworkActor::ClearAgents()
 {
 	Traffic->ClearAgents();

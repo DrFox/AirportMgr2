@@ -519,7 +519,7 @@ bool FVehicleFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	const FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
+	const FVehicle Van = UAirsideSettings::ResolveDefaultVehicle();
 	TestTrue(TEXT("the service vehicle steers geometrically rather than pivoting"),
 		Van.Chassis.HasAxles());
 	TestEqual(TEXT("SteerAxleX matches the rig's front axle"), Van.Chassis.SteerAxleX, FrontX.GetValue(), 1.0);

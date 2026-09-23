@@ -458,7 +458,10 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 	// AN AIRCRAFT THAT HAS PARKED. Its goal must be a STAND's pose - an aircraft parked on a
 	// taxiway junction (the stand-death fallback) is at no stand and demands nothing, which
 	// falls out of this same lookup rather than needing a rule of its own.
-	if (Agent->Class != ETraversalClass::Aircraft || FindByAircraft(AgentId) != nullptr)
+	// AsAircraft AS WELL AS Class: the turnaround below is an aeroplane's figure, and only an
+	// agent started with an FAirframe carries one (see FRoadAgent::Chassis).
+	const FAirframe* Aircraft = Agent->AsAircraft();
+	if (Agent->Class != ETraversalClass::Aircraft || Aircraft == nullptr || FindByAircraft(AgentId) != nullptr)
 	{
 		return;
 	}
@@ -482,12 +485,12 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 	// The figure rides on the AGENT, in its airframe bundle, because this class may not
 	// include Entities/ and so cannot ask the aircraft's type - the same reason the pose role
 	// is read off FEntityInstance above. See FAirframe::TurnaroundSeconds.
-	Demand.TurnaroundEndsAt = Clock.Now() + Agent->Airframe.TurnaroundSeconds;
+	Demand.TurnaroundEndsAt = Clock.Now() + Aircraft->TurnaroundSeconds;
 	Demands.Add(Demand);
 
 	UE_LOG(LogAirportOps, Log,
 		TEXT("Fuel: aircraft %d parked at stand %d; needs fuel, away in %.0f game s"),
-		AgentId, Stand.Index, Agent->Airframe.TurnaroundSeconds);
+		AgentId, Stand.Index, Aircraft->TurnaroundSeconds);
 }
 
 void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
@@ -602,11 +605,11 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 					GuidelineGeom::PolylineLength(Choice.Plan.Polyline), Choice.Plan.Polyline.Num(), *Path);
 			}
 
-			// ShutdownPause 0 - see TruckShutdownPause. TruckAirframe is set once at attach
+			// ShutdownPause 0 - see TruckShutdownPause. TruckVehicle is set once at attach
 			// (UOpsRuntime::Attach), not resolved here - this is Model/, and Content/ was the
 			// only edge from Model/ to Content/ in either plugin (#104).
 			const int32 TruckId = Traffic.DispatchAgent(&Network, Choice.Plan,
-				TruckAirframe, ETraversalClass::GroundVehicle,
+				TruckVehicle, ETraversalClass::GroundVehicle,
 				TruckShutdownPause);
 			if (TruckId == 0)
 			{
@@ -643,9 +646,10 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 			// EARNED HERE AND NOWHERE ELSE. The aircraft's own airframe prices it, so a code F
 			// fuelling is worth more than a code A one for the same reason its landing is. An
 			// Unserviceable demand never reaches this branch, which IS the forfeit.
-			if (const FRoadAgent* Fuelled = Traffic.FindAgent(Demand.AircraftId))
+			const FRoadAgent* Fuelled = Traffic.FindAgent(Demand.AircraftId);
+			if (const FAirframe* Aircraft = Fuelled != nullptr ? Fuelled->AsAircraft() : nullptr)
 			{
-				PostServiceFee(Clock.Now(), Fuelled->Airframe);
+				PostServiceFee(Clock.Now(), *Aircraft);
 			}
 
 			// CLEARED BEFORE THE TRIP HOME, so the truck belongs to GoingHome and to nothing

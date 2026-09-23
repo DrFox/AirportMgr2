@@ -145,7 +145,7 @@ bool FLeadInSweepTest::RunTest(const FString& Parameters)
 		// never meant to assert. An FAirframe default carries Wingspan 0 - unconstrained -
 		// which is what the brace-init this replaces passed positionally.
 		const FRouteQuery Query = FRouteQuery::For(
-			ERouteErrand::GraphProbe, From, Instance.PoseNode, FAirframe(), ETraversalClass::Aircraft);
+			ERouteErrand::GraphProbe, From, Instance.PoseNode, 0.0, ETraversalClass::Aircraft);
 		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
 
 		if (TestTrue(TEXT("a route reaches the stand from the west"), Plan.IsValid()))
@@ -170,7 +170,7 @@ bool FLeadInSweepTest::RunTest(const FString& Parameters)
 		// never meant to assert. An FAirframe default carries Wingspan 0 - unconstrained -
 		// which is what the brace-init this replaces passed positionally.
 		const FRouteQuery Query = FRouteQuery::For(
-			ERouteErrand::GraphProbe, From, Instance.PoseNode, FAirframe(), ETraversalClass::Aircraft);
+			ERouteErrand::GraphProbe, From, Instance.PoseNode, 0.0, ETraversalClass::Aircraft);
 		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
 
 		if (TestTrue(TEXT("a route reaches the stand from the east"), Plan.IsValid()))

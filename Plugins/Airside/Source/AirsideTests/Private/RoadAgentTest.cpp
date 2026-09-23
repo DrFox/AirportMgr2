@@ -467,7 +467,7 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 	// CUT, NOT RE-ARMED: no Departure.Start, no new agent - the same FTakeoffRun that has
 	// been rolling since ArmDeparture. A copy taken at Start would keep accelerating at the
 	// Piper's own figure regardless of this.
-	Agent.Airframe.Chassis.Ground.Takeoff.Accel = 0.01;
+	Agent.EditAirframeForTest().Chassis.Ground.Takeoff.Accel = 0.01;
 
 	constexpr int32 MeasureTicks = 30; // half a second
 	const double BeforeSpeed = Agent.Departure.Speed;
@@ -480,7 +480,7 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(
 		TEXT("a near-zero accel written to Airframe takes effect with no re-arm, proving ")
 		TEXT("Advance reads it live (gained %.2f uu/s over %.1f s, was accelerating at %.0f uu/s2)"),
-		Gained, MeasureTicks * Step, Agent.Airframe.Chassis.Ground.Takeoff.Accel),
+		Gained, MeasureTicks * Step, Agent.Chassis().Ground.Takeoff.Accel),
 		Gained < 1.0);
 
 	return true;

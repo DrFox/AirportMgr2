@@ -144,7 +144,6 @@ namespace RouteSearch
 }
 
 struct FTrafficOccupancy;
-struct FAirframe;
 
 /** What is being routed, and what it is allowed to use. */
 USTRUCT()
@@ -251,7 +250,7 @@ struct AIRSIDE_API FRouteQuery
 	 * the "set it after" list for the same reason.
 	 */
 	static FRouteQuery For(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,
-		const FAirframe& Airframe, ETraversalClass Class);
+		double Wingspan, ETraversalClass Class);
 
 	/** Chainable: the congestion cost term, set together because CongestionWeight is
 	 *  meaningless without Occupancy and QueryingAgent is meaningless without both. */
