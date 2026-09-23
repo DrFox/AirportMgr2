@@ -85,10 +85,16 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 		// Facing = (cos H, sin H), the project's idiom (RoadGeom::Bearing's own inverse) -
 		// see StandPlotPlacementTest for the same derivation read the other way.
 		const FVector2D Facing(FMath::Cos(Entity.Heading), FMath::Sin(Entity.Heading));
-		// -PerpCCW(Facing), THE SAME "Side" StandBox::BoxAt uses (see its own comment) - not
-		// an independent choice of "right", so a segment's quad lands on the box the entity
-		// was actually drawn as, not a mirror image of it.
-		const FVector2D Right = -RoadGeom::PerpCCW(Facing);
+		// THE READER'S RIGHT IS PerpCCW(Facing), because Unreal is LEFT-HANDED: with X forward
+		// and Z up, +Y is to the right, and (-Along.Y, Along.X) is +Y for Along = +X - the frame
+		// RunwayMarkingBuilder's FRunwayFrame derives (its Across) and paints every designation
+		// by. This read -PerpCCW until the final review (I3), borrowed from StandBox::BoxAt's
+		// "Side" on the belief that the glyph had to agree with the box's own side - but the
+		// box is symmetric about the heading, so its side's sign decides nothing there, while
+		// here it decides which way every letter reads: the painted C opened to the left and
+		// the "d" read as "b". That derivation assumed a right-handed map. The lead-in and stop
+		// bar below are symmetric about the heading too, so only the glyph could show it.
+		const FVector2D Right = RoadGeom::PerpCCW(Facing);
 
 		// StandBox::PoseFor's own derivation, run in reverse - see this class's header for
 		// why this reads the pose rather than Outline[0]/[1].

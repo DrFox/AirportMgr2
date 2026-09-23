@@ -30,6 +30,13 @@ struct AIRSIDE_API FStandMarkingCensus
  * construction because every vertex it emits carries the Z it is given, the same as any
  * other quad MarkingQuads::AddQuad produces.
  *
+ * NOT MarkingGlyphs (Build/MarkingGlyphs.h), the runway designation font, although it is the
+ * obvious table to share: it has L, C, R and the digits, and of A b C d E F only C - five of
+ * the six letters would have to be authored into it anyway, as polylines on its 1 x 1.6 cell
+ * rather than the seven rectangles here that ARE the letter set. The reading FRAME is shared
+ * with it instead (reader's right = PerpCCW(up), RunwayMarkingBuilder's FRunwayFrame), which
+ * is the part that was wrong - see Build() - and the part a second table cannot drift on.
+ *
  * A Build/ class beside the other marking builders, for the same reason none of them are
  * part of FRoadMeshBuilder: a marking that lands on a road (or stand pad) vertex must not
  * weld to it. The two surfaces meet; they are not one surface.

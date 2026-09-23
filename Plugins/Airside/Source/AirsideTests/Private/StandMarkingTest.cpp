@@ -206,18 +206,24 @@ bool FStandMarkingLeadInEndsAtStopMarkTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("one stand painted"), Painted, 1)) { return false; }
 
 	// The lead-in is the FIRST quad MarkingQuads::AddQuad emits (4 consecutive vertices,
-	// verified by FStandMarkingPaintsOnePerStandTest's own count) - its last two vertices are
-	// indices 2 and 3.
-	const FVector3d& V2 = Buffers.Positions[2];
-	const FVector3d& V3 = Buffers.Positions[3];
+	// verified by FStandMarkingPaintsOnePerStandTest's own count). EXACTLY TWO of them - its
+	// far end - straddle the stop mark. Counted rather than read at fixed indices 2 and 3:
+	// AddQuad swaps corners 1 and 3 whenever the handed-in order winds clockwise, so WHICH
+	// slots hold the far end follows the sign of the across axis, not the geometry. The final
+	// review's glyph-frame fix (I3) flipped that sign and moved the far end to slots 1 and 2
+	// with the paint itself unchanged - a test pinned to slots measured the corner order.
 	const double Tolerance = FStandMarkingBuilder::LeadInWidth * 0.5 + 0.01;
-	const double Distance2 = FVector2D::Distance(FVector2D(V2.X, V2.Y), Instance->Position);
-	const double Distance3 = FVector2D::Distance(FVector2D(V3.X, V3.Y), Instance->Position);
-
-	TestTrue(FString::Printf(TEXT("vertex 2 straddles the stop mark (%.3f <= %.3f)"), Distance2, Tolerance),
-		Distance2 <= Tolerance);
-	TestTrue(FString::Printf(TEXT("vertex 3 straddles the stop mark (%.3f <= %.3f)"), Distance3, Tolerance),
-		Distance3 <= Tolerance);
+	int32 AtStopMark = 0;
+	FString Distances;
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		const FVector3d& V = Buffers.Positions[Index];
+		const double Distance = FVector2D::Distance(FVector2D(V.X, V.Y), Instance->Position);
+		Distances += FString::Printf(TEXT(" %.3f"), Distance);
+		if (Distance <= Tolerance) { ++AtStopMark; }
+	}
+	TestEqual(FString::Printf(TEXT("two lead-in corners straddle the stop mark within %.3f (distances:%s)"),
+		Tolerance, *Distances), AtStopMark, 2);
 
 	return true;
 }
@@ -244,6 +250,69 @@ bool FStandMarkingQuadsFaceUpTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("some geometry to measure"), Buffers.Indices.Num() > 0)) { return false; }
 
 	return AllTrianglesFaceUp(Buffers, *this);
+}
+
+/**
+ * FINAL REVIEW I3: THE LETTER READS THE RIGHT WAY ROUND. The segment COUNT (GlyphSegments
+ * above) cannot see a mirror - a reversed C has the same four strokes - so this measures
+ * which SIDE the strokes land on, in the reader's own frame: Up = Facing (a pilot taxiing
+ * in), Right = PerpCCW(Facing), the frame RunwayMarkingBuilder's FRunwayFrame derives for a
+ * left-handed world. A "C" opens to the reader's right, so its mass sits LEFT of centre; a
+ * "d"'s vertical stroke is on the right, so its mass sits RIGHT. Mirrored, both flip sign -
+ * which is the whole defect: the painted "d" read as "b".
+ *
+ * Mean, not every vertex: C's top and bottom bars span the full width by design, so "every
+ * vertex left of centre" is false for a correct C too. The mean still separates the two
+ * cases by a whole stroke's width either way.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingGlyphReadsUnmirroredTest,
+	"Airside.Build.StandMarking.GlyphReadsUnmirrored",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingGlyphReadsUnmirroredTest::RunTest(const FString& Parameters)
+{
+	using namespace StandMarkingTest;
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	// Mean offset of the glyph's own vertices along the reader's right, from the glyph centre.
+	// The builder paints lead-in (4 vertices) then stop bar (4) then the glyph, per stand - see
+	// LeadInEndsAtStopMark above for the same reliance on emission order.
+	auto MeanRightOf = [&](EIcaoCode Letter, double& OutMean) -> bool
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FEntityInstance* Instance = Net->GetEntity(PlaceDrawnStand(*Net, Stand, Letter, 0.0));
+		if (Instance == nullptr) { return false; }
+		FRoadMeshBuffers Buffers;
+		FStandMarkingBuilder::Build(*Net, 10.0, Buffers);
+		constexpr int32 FirstGlyphVertex = 8;
+		if (Buffers.Positions.Num() <= FirstGlyphVertex) { return false; }
+
+		const FVector2D Facing(FMath::Cos(Instance->Heading), FMath::Sin(Instance->Heading));
+		const FVector2D ReaderRight = RoadGeom::PerpCCW(Facing);
+		// PlaceDrawnStand's own entrance edge: Y = 0 from X = 0 to the letter's floor width.
+		const FVector2D EntranceMid(IcaoCode::StandWidthForLetter(Letter) * 0.5, 0.0);
+		const FVector2D GlyphCentre = EntranceMid + Facing * FStandMarkingBuilder::GlyphInset;
+
+		double Sum = 0.0;
+		for (int32 Index = FirstGlyphVertex; Index < Buffers.Positions.Num(); ++Index)
+		{
+			const FVector3d& V = Buffers.Positions[Index];
+			Sum += FVector2D::DotProduct(FVector2D(V.X, V.Y) - GlyphCentre, ReaderRight);
+		}
+		OutMean = Sum / (Buffers.Positions.Num() - FirstGlyphVertex);
+		return true;
+	};
+
+	double MeanC = 0.0, MeanD = 0.0;
+	if (!TestTrue(TEXT("a Code C glyph was painted to measure"), MeanRightOf(EIcaoCode::C, MeanC))) { return false; }
+	if (!TestTrue(TEXT("a Code D glyph was painted to measure"), MeanRightOf(EIcaoCode::D, MeanD))) { return false; }
+
+	TestTrue(FString::Printf(TEXT("C's strokes sit on the reader's LEFT - it opens to the right (mean %.1f uu)"), MeanC),
+		MeanC < 0.0);
+	TestTrue(FString::Printf(TEXT("d's upright sits on the reader's RIGHT - else it reads as b (mean %.1f uu)"), MeanD),
+		MeanD > 0.0);
+	return true;
 }
 
 /**

@@ -174,6 +174,12 @@ Built in `RoadSurfacePresenter::RebuildMarkings` beside the holding bars, same b
   needs its pitch set correctly to avoid standing up out of the ground (see the TextRender
   glyph-frame memory this section used to cite as the risk). DesignWingspan = 0 (a raw-model
   fixture stand nobody measured) paints no letter, but still paints the lead-in and stop bar.
+- **Glyph frame** (REVISED 2026-09-23, final review I3): "up" is the heading (read by a pilot
+  taxiing in) and the reader's RIGHT is `PerpCCW(Facing)` - Unreal is left-handed, the frame
+  `RunwayMarkingBuilder`'s `FRunwayFrame` already paints designations in. Task 8 used
+  `-PerpCCW` (a right-handed derivation), which painted every letter mirrored: "d" read as "b".
+  Pinned by `Airside.Build.StandMarking.GlyphReadsUnmirrored` (C's strokes sit left of centre,
+  d's upright right).
 
 ## Out of this slice
 
