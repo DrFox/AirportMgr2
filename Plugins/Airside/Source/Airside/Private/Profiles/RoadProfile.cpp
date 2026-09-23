@@ -122,11 +122,11 @@ URoadProfile* URoadProfile::MakeServiceRoadTransient(double LaneWidth, double Ke
 	double FilletRadius)
 {
 	URoadProfile* Profile = NewObject<URoadProfile>(GetTransientPackage());
-	FillServiceRoad(Profile, LaneWidth, KerbWidth, FilletRadius);
+	FillTwoWayRoad(Profile, LaneWidth, KerbWidth, FilletRadius);
 	return Profile;
 }
 
-void URoadProfile::FillServiceRoad(URoadProfile* Profile, double LaneWidth, double KerbWidth,
+void URoadProfile::FillTwoWayRoad(URoadProfile* Profile, double LaneWidth, double KerbWidth,
 	double FilletRadius)
 {
 	if (Profile == nullptr)
@@ -137,10 +137,10 @@ void URoadProfile::FillServiceRoad(URoadProfile* Profile, double LaneWidth, doub
 	Profile->Bands.Reset();
 	Profile->Guidelines.Reset();
 
-	// Clamped for the reason Fill clamps its shoulder: a lane of zero or negative width
+	// Clamped for the reason Fill clamps its shoulder: a band of zero or negative width
 	// would put the band boundaries out of order and invert the ribbon.
-	const double Kerb = FMath::Clamp(KerbWidth, 0.0, FMath::Max(LaneWidth, 0.0) * 0.45);
-	const double Lane = FMath::Max(LaneWidth - 2.0 * Kerb, 0.0);
+	const double Lane = FMath::Max(LaneWidth, 0.0);
+	const double Kerb = FMath::Clamp(KerbWidth, 0.0, Lane * 0.45);
 
 	auto AddBand = [Profile](double Width, ERoadBandType Type, const TCHAR* Slot)
 	{
@@ -161,23 +161,34 @@ void URoadProfile::FillServiceRoad(URoadProfile* Profile, double LaneWidth, doub
 	// (Asphalt, Concrete, Kerb) so a material set assigned on the actor skins this with no
 	// further authoring; with no set they are inert and every band is slot 0, as before.
 	AddBand(Kerb, ERoadBandType::Curb, TEXT("Kerb"));
+	// TWO LANE BANDS rather than one of twice the width: the ribbon is the same, but the
+	// cross-section now says how many lanes it carries, which is what the lanes are.
+	AddBand(Lane, ERoadBandType::Lane, TEXT("Asphalt"));
 	AddBand(Lane, ERoadBandType::Lane, TEXT("Asphalt"));
 	AddBand(Kerb, ERoadBandType::Curb, TEXT("Kerb"));
 
-	// ONE guideline, centred, bidirectional, GroundVehicle. Bidirectional because a 6 m lane
-	// IS one line both ways; the traffic model's own footprint and gap rules are what keep
-	// two trucks apart on it, exactly as they keep two aircraft apart on a taxiway.
-	FProfileGuideline Centre;
-	Centre.CentreOffset = 0.0;
-	Centre.Class = ETraversalClass::GroundVehicle;
-	Centre.Direction = EGuidelineDir::Bidirectional;
-	Centre.Width = Lane;
+	// TWO one-way lanes, one each way (spec 2026-09-23). Until then this was ONE centred
+	// bidirectional line, "because a 6 m lane IS one line both ways" - which left nothing to
+	// route on a side of, and trucks meeting head-on on a single line.
+	//
+	// AUTHORED FOR RIGHT-HAND TRAFFIC. The A->B lane is at the POSITIVE offset: the model's
+	// left is PerpCCW of the tangent, and UE is left-handed, so seen from above that is
+	// screen-RIGHT of travel. Left-hand traffic is FProfileGuideline::OffsetFor's mirror.
+	// ENFORCED BY: Airside.Build.TwoWay.LanesDerived (asserts world Y, not this sign)
+	for (const EGuidelineDir Dir : { EGuidelineDir::AToB, EGuidelineDir::BToA })
+	{
+		FProfileGuideline Line;
+		Line.CentreOffset = (Dir == EGuidelineDir::AToB ? 0.5 : -0.5) * Lane;
+		Line.Class = ETraversalClass::GroundVehicle;
+		Line.Direction = Dir;
+		Line.Width = Lane;
 
-	// 0 IS UNLIMITED (see FProfileGuideline::MaxWingspan), which is right rather than lax:
-	// nothing with a wing is admitted here at all - the CLASS refuses aircraft - so a span
-	// limit would be a second, weaker statement of a rule already made exactly.
-	Centre.MaxWingspan = 0.0;
-	Profile->Guidelines.Add(Centre);
+		// 0 IS UNLIMITED (see FProfileGuideline::MaxWingspan), which is right rather than
+		// lax: nothing with a wing is admitted here at all - the CLASS refuses aircraft - so
+		// a span limit would be a second, weaker statement of a rule already made exactly.
+		Line.MaxWingspan = 0.0;
+		Profile->Guidelines.Add(Line);
+	}
 
 	Profile->CentrelineOffset = -1.0;
 	Profile->PreferredFilletRadius = FilletRadius;
