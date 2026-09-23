@@ -138,7 +138,7 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 
 	// Replace, NOT Start: the line up to the splice is unchanged and the agent is part way
 	// along it, so Travelled, Speed and Heading all survive. See FRouteFollower::Replace.
-	Agent.Follower.Replace(Spliced, Agent.Airframe);
+	Agent.Follower.Replace(Spliced, Agent.Airframe.Chassis);
 
 	// THE RESERVATIONS, AND ONLY THOSE. They were made for a route that no longer exists past
 	// the splice, so holding them would block the line the agent has just been re-routed away
@@ -675,7 +675,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// the truncation was applied in place - which Replace handles: TArray's assignment
 		// guards self-assignment, and what this call is here for is the speed profile, rebuilt
 		// so the agent brakes to the new end instead of running off it.
-		Agent.Follower.Replace(Plan, Agent.Airframe);
+		Agent.Follower.Replace(Plan, Agent.Airframe.Chassis);
 	}
 
 	UE_LOG(LogAirsideTraffic, Log,

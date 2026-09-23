@@ -47,7 +47,7 @@ bool FTakeoffRun::Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 {
 	Phase = ETakeoffPhase::Clear;
 
-	const FGroundPerformance& InGround = InAirframe.Ground;
+	const FGroundPerformance& InGround = InAirframe.Chassis.Ground;
 	const FClimbPerformance& InClimb = InAirframe.Climb;
 
 	if (!InGround.IsSet() || !InGround.Takeoff.IsSet() || !InClimb.IsSet())
@@ -110,7 +110,7 @@ bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 		return false;
 	}
 
-	const FGroundPerformance& Ground = InAirframe.Ground;
+	const FGroundPerformance& Ground = InAirframe.Chassis.Ground;
 	const FClimbPerformance& Climb = InAirframe.Climb;
 	const double RunwayHeading = RoadGeom::Bearing(End.Direction);
 

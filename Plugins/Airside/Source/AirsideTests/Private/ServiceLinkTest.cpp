@@ -743,7 +743,7 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 	// sessions because a test checked the figure a builder asked for while the follower drove
 	// the figure it got. So this measures GuidelineGeom::TightestRadius on the edge that is in
 	// the graph.
-	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	const double Lock = FMath::Sin(FMath::DegreesToRadians(
 		FMath::Clamp(Truck.Ground.MaxSteerDegrees, 0.0, 90.0)));
 	if (!TestTrue(TEXT("the largest service vehicle steers on measured axles"),
@@ -916,7 +916,7 @@ bool FTruckDrivesTheWholeRouteToTheHydrantTest::RunTest(const FString& Parameter
 	// THE LARGEST VEHICLE ADMITTED, not the one that happens to be driving - the same rule
 	// the ground geometry is sized by. A road a big dispenser cannot take is a defect whether
 	// or not a small van could have managed it.
-	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 
 	FSpeedProfile Profile;
 	Profile.Build(Plan.Polyline, Truck);
@@ -1119,7 +1119,7 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	// held the same edges to the right bar, so two tests were using two vehicles as the bar for
 	// one property - a pair that drifts, and the rule is that ground geometry is sized for the
 	// largest vehicle ADMITTED, never the one driving now.
-	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	const double Lock = FMath::Sin(FMath::DegreesToRadians(
 		FMath::Clamp(Truck.Ground.MaxSteerDegrees, 0.0, 90.0)));
 	if (!TestTrue(TEXT("the largest service vehicle steers on measured axles"),
@@ -1337,7 +1337,7 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 	// attempts shipped green because tests re-implemented the rule per edge instead of asking
 	// FSpeedProfile over a whole route; this asks it, about the route the player watched.
 	{
-		const FAirframe Dispenser = UAirsideSettings::ResolveLargestServiceVehicle();
+		const FChassis Dispenser = UAirsideSettings::ResolveLargestServiceVehicle();
 
 		TArray<EDriveDirection> Spans;
 		Leaving.DescribeSpanDirections(Spans);
@@ -1384,7 +1384,11 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 	// AT THE LEVEL OF THE COMPOSITION, not the struct. Airside.Model.ReverseRun already drives
 	// FReverseRun to its limits on a hand-made arc and passed throughout; what was untested was
 	// whether anything ever HANDS it one. That is the seam, so that is where the test goes.
-	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	// THE LARGEST VEHICLE'S CHASSIS IN THE DEFAULT VEHICLE'S BUNDLE: StartTaxi takes a whole
+	// FAirframe, and ResolveLargestServiceVehicle has returned only the chassis since
+	// 2026-09-23. Identical to the old single call while the two resolve the same truck.
+	FAirframe Truck = UAirsideSettings::ResolveDefaultVehicle();
+	Truck.Chassis = UAirsideSettings::ResolveLargestServiceVehicle();
 
 	FRoadAgent Agent;
 	Agent.StartTaxi(Leaving, Truck);
@@ -1406,7 +1410,7 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 		TEXT("arming the reverse moved the body %.1f uu from the service point (wheelbase %.0f)"),
 		HydrantNode != nullptr
 			? FVector2D::Distance(HydrantNode->Position, Motion.Position) : 0.0,
-		Truck.Wheelbase()));
+		Truck.Chassis.Wheelbase()));
 
 	double Previous = Motion.Heading;
 	FVector2D Was = Motion.Position;

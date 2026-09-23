@@ -89,7 +89,7 @@ bool FDeparturePlannerIntersectionTest::RunTest(const FString& Parameters)
 	FDepartureAirport A = BuildDepartureAirport(GetTransientPackage());
 	if (!TestTrue(TEXT("the stand is linked"), A.StandNode.IsSet())) { return false; }
 	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
-	const double Needed = FTakeoffRun::RequiredRoll(Airframe.Ground, Airframe.Climb);
+	const double Needed = FTakeoffRun::RequiredRoll(Airframe.Chassis.Ground, Airframe.Climb);
 
 	const FDeparturePlan Plan = DeparturePlanner::Plan(*A.Net, A.StandNode, A.EAt - FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
 	UE_LOG(LogAirsideTests, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
@@ -146,7 +146,7 @@ bool FDeparturePlannerBacktrackTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the stand is linked"), StandNode.IsSet())) { return false; }
 
 	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
-	const double Needed = FTakeoffRun::RequiredRoll(Airframe.Ground, Airframe.Climb);
+	const double Needed = FTakeoffRun::RequiredRoll(Airframe.Chassis.Ground, Airframe.Climb);
 	TestTrue(FString::Printf(TEXT("fixture: the hairpin entry leaves 24000, short of the %.0f needed"), Needed), Needed > 24000.0);
 
 	const FDeparturePlan Plan = DeparturePlanner::Plan(*Net, StandNode, WAt + FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
@@ -188,7 +188,7 @@ bool FDepartureFromIntersectionIsContinuousTest::RunTest(const FString& Paramete
 		Traffic->FindAgent(Id)->bDepartureArmed && FMath::Abs(Traffic->FindAgent(Id)->DepartureOrder.EntryOffset - Plan.EntryOffset) < 1.0);
 
 	constexpr double Dt = 1.0 / 60.0;
-	const double PositionStepAllowed = (Airframe.Ground.Takeoff.SpeedCap + 1.0) * Dt * 1.5 + 5.0;
+	const double PositionStepAllowed = (Airframe.Chassis.Ground.Takeoff.SpeedCap + 1.0) * Dt * 1.5 + 5.0;
 	bool bSawDeparting = false, bAirborne = false;
 	FVector2D PrevAt = FVector2D::ZeroVector;
 	bool bHavePrev = false;

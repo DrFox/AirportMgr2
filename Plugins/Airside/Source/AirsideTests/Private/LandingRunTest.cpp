@@ -100,14 +100,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FLandingRunTest::RunTest(const FString& Parameters)
 {
 	const FAirframe Piper = TestAirframes::Piper();
-	const FGroundPerformance& Ground = Piper.Ground;
+	const FGroundPerformance& Ground = Piper.Chassis.Ground;
 	const FClimbPerformance& Climb = Piper.Climb;
 	const FApproachPerformance& Approach = Piper.Approach;
 
 	// Issue #83: FLandingRun no longer stores Ground/Climb/Approach - Start and Advance take
 	// the bundle by reference instead, same as FRoadAgent hands its own Airframe in.
 	FAirframe Airframe;
-	Airframe.Ground = Ground;
+	Airframe.Chassis.Ground = Ground;
 	Airframe.Climb = Climb;
 	Airframe.Approach = Approach;
 
@@ -255,10 +255,10 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 	//    can still taxi, which is why FGroundPerformance::IsSet does not require Landing.
 	{
 		FAirframe NoLandingAirframe = Airframe;
-		NoLandingAirframe.Ground.Landing = FGroundRegime();
-		NoLandingAirframe.Ground.Landing.SpeedCap = 0.0;
+		NoLandingAirframe.Chassis.Ground.Landing = FGroundRegime();
+		NoLandingAirframe.Chassis.Ground.Landing.SpeedCap = 0.0;
 
-		TestTrue(TEXT("it can still move about the airport"), NoLandingAirframe.Ground.IsSet());
+		TestTrue(TEXT("it can still move about the airport"), NoLandingAirframe.Chassis.Ground.IsSet());
 
 		FLandingRun Run;
 		TestFalse(TEXT("but it cannot land"),
@@ -310,7 +310,7 @@ bool FLandingTouchdownEdgeTest::RunTest(const FString& Parameters)
 {
 	FAirframe Airframe;
 	const FAirframe Piper = TestAirframes::Piper();
-	Airframe.Ground = Piper.Ground;
+	Airframe.Chassis.Ground = Piper.Chassis.Ground;
 	Airframe.Climb = Piper.Climb;
 	Airframe.Approach = Piper.Approach;
 

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Model/Airframe.h"
+#include "Model/Chassis.h"
 #include "SpeedProfile.generated.h"
 
 /**
@@ -67,7 +67,7 @@ struct AIRSIDE_API FSpeedProfile
 	 * struct per thing" - the alternative was a second parameter that some caller would one
 	 * day forget to keep in step.
 	 */
-	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+	void Build(const TArray<FVector2D>& Points, const FChassis& Chassis,
 		EDriveDirection Direction = EDriveDirection::Forward);
 
 	/**
@@ -89,7 +89,7 @@ struct AIRSIDE_API FSpeedProfile
 	 * SpanDirections is one entry per SPAN, so Points.Num() - 1 of them. An empty view means
 	 * the whole line is Forward, which is what the overload above passes.
 	 */
-	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+	void Build(const TArray<FVector2D>& Points, const FChassis& Chassis,
 		TConstArrayView<EDriveDirection> SpanDirections);
 
 	/**
@@ -109,7 +109,7 @@ struct AIRSIDE_API FSpeedProfile
 	 * PUBLIC FOR A REASON NARROWER THAN IT LOOKS: with FRouteFollower no longer keeping its
 	 * own Ground copy (issue #83), this is the one follower-side record of which airframe's
 	 * figures a taxi actually started on - UAirsideTraffic::LastAgentTaxiSpeedCapForTest
-	 * reads it rather than the agent's own Airframe, which would be a tautology (the test
+	 * reads it rather than the agent's own Chassis, which would be a tautology (the test
 	 * already knows what it dispatched; the question is whether the handover used it).
 	 */
 	double GetFallback() const { return Fallback; }
@@ -127,7 +127,7 @@ struct AIRSIDE_API FSpeedProfile
 	 * Grep for "the same expression FSpeedProfile::Build uses, written out rather than
 	 * shared": that comment appears at every site that should have called this instead.
 	 *
-	 * Restating arithmetic in a test is right, and FAirframe::TightestFollowableRadius argues
+	 * Restating arithmetic in a test is right, and FChassis::TightestFollowableRadius argues
 	 * for it. Restating a JUDGEMENT is not the same thing: the judgement is what the game
 	 * acts on, and a copy of it can agree with itself while disagreeing with the original.
 	 */

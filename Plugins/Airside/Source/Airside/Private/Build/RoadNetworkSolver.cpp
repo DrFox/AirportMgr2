@@ -2,7 +2,7 @@
 
 #include "Build/ExitGeometry.h"
 
-#include "Model/Airframe.h"
+#include "Model/Chassis.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/JunctionSolver.h"
@@ -41,7 +41,7 @@ namespace
 	 */
 	bool BuildNodeInput(const URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
 		FJunctionInput& OutInput, TArray<FRoadSegmentId>& OutArmSegments,
-		const FAirframe* LargestServiceVehicle)
+		const FChassis* LargestServiceVehicle)
 	{
 		const TArray<FRoadNode>& Nodes = Network.GetNodes();
 		if (!Nodes.IsValidIndex(NodeIndex))
@@ -123,7 +123,7 @@ namespace
 }
 
 double FRoadNetworkSolver::ZeroRadiusCut(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode,
-	const FAirframe* LargestServiceVehicle)
+	const FChassis* LargestServiceVehicle)
 {
 	FJunctionInput Input;
 	TArray<FRoadSegmentId> ArmSegments;
@@ -146,7 +146,7 @@ double FRoadNetworkSolver::ZeroRadiusCut(const URoadNetwork& Network, FRoadSegme
 }
 
 bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIndex,
-	int32 ArcSegments, FRoadNodeCuts& Out, const FAirframe* LargestServiceVehicle)
+	int32 ArcSegments, FRoadNodeCuts& Out, const FChassis* LargestServiceVehicle)
 {
 	const TArray<FRoadNode>& Nodes = Network.GetNodes();
 	if (!Nodes.IsValidIndex(NodeIndex))
@@ -322,7 +322,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 int32 FRoadNetworkSolver::NodeClaimsCallCountForTest = 0;
 
 bool FRoadNetworkSolver::NodeClaims(const URoadNetwork& Network, FRoadNodeId Node, const FVector2D& Point, double Factor,
-	const FAirframe* LargestServiceVehicle)
+	const FChassis* LargestServiceVehicle)
 {
 	// COUNTED BEFORE ANY REFUSAL BELOW: this is "did a solve run", not "did it succeed" - see
 	// the counter's own comment. FRoadNodeSnapRule's cheap reject is meant to stop this
@@ -392,7 +392,7 @@ bool FRoadNetworkSolver::NodeClaims(const URoadNetwork& Network, FRoadNodeId Nod
 }
 
 double FRoadNetworkSolver::ArmCutDistance(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode,
-	const FAirframe* LargestServiceVehicle)
+	const FChassis* LargestServiceVehicle)
 {
 	FRoadNodeCuts Cuts;
 	if (!SolveNodeCuts(Network, AtNode.Index, 4, Cuts, LargestServiceVehicle) || !Cuts.Result.bValid)
@@ -404,7 +404,7 @@ double FRoadNetworkSolver::ArmCutDistance(const URoadNetwork& Network, FRoadSegm
 }
 
 double FRoadNetworkSolver::NodeReach(const URoadNetwork& Network, FRoadNodeId Node,
-	int32 ArcSegments, const FAirframe* LargestServiceVehicle)
+	int32 ArcSegments, const FChassis* LargestServiceVehicle)
 {
 	FRoadNodeCuts Cuts;
 	if (!SolveNodeCuts(Network, Node.Index, ArcSegments, Cuts, LargestServiceVehicle) || !Cuts.Result.bValid)
@@ -431,7 +431,7 @@ double FRoadNetworkSolver::NodeReach(const URoadNetwork& Network, FRoadNodeId No
 }
 
 void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
-	FRoadSolveResult& InOutResult, const FAirframe* LargestServiceVehicle)
+	FRoadSolveResult& InOutResult, const FChassis* LargestServiceVehicle)
 {
 	const TArray<FRoadNode>& Nodes = Network.GetNodes();
 	if (!Nodes.IsValidIndex(NodeIndex))
@@ -510,7 +510,7 @@ void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, i
 }
 
 FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSegments,
-	const FAirframe* LargestServiceVehicle)
+	const FChassis* LargestServiceVehicle)
 {
 	FRoadSolveResult Out;
 

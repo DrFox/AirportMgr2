@@ -77,6 +77,10 @@
       14. A run's width is FKitSpec::RunWidthUu, never WidthUu times a run length by hand.
           Five sites did the product until the shed's end caps arrived (2026-09-22) and had
           to be added to each; PlotYard.h is the one legal home.
+      15. Ground-only consumers never name FAirframe (2026-09-23). The follower, the reverse,
+          the speed profile and the road builders take FChassis; an FAirframe parameter
+          coming back is a truck being handed a wingspan again. A listed file that no longer
+          exists FAILS rather than passing, so a rename cannot switch the rule off.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -675,10 +679,42 @@ foreach ($module in $modules) {
     }
 }
 
+# --- 15. Ground-only consumers take FChassis, never FAirframe ------------------------------
+# FChassis was split out of FAirframe on 2026-09-23 (Model/Chassis.h says why): a service
+# vehicle was carried as an aeroplane with its climb zeroed, and every ground consumer took
+# the whole bundle to read five fields of it. These files only ROLL things or size concrete
+# for them; naming FAirframe in code here is that coupling coming back. Comment lines are
+# exempt, the way rules 5, 7 and 13 exempt a WHY comment that names the banned token.
+#
+# A LISTED FILE THAT IS MISSING FAILS. A rename would otherwise turn this rule into a check
+# of nothing, which reports exactly like a pass.
+$chassisOnly = @(
+    'Public\Model\Chassis.h', 'Private\Model\Chassis.cpp',
+    'Public\Model\RouteFollower.h', 'Private\Model\RouteFollower.cpp',
+    'Public\Model\ReverseRun.h', 'Private\Model\ReverseRun.cpp',
+    'Public\Model\SpeedProfile.h', 'Private\Model\SpeedProfile.cpp',
+    'Public\Build\AnchorLink.h', 'Private\Build\AnchorLink.cpp',
+    'Public\Build\RoadGuidelineBuilder.h', 'Private\Build\RoadGuidelineBuilder.cpp',
+    'Public\Build\RoadNetworkSolver.h', 'Private\Build\RoadNetworkSolver.cpp',
+    'Public\Profiles\RoadProfile.h', 'Private\Profiles\RoadProfile.cpp'
+)
+foreach ($rel in $chassisOnly) {
+    $path = Join-Path $plugin $rel
+    if (-not (Test-Path $path)) {
+        $failures.Add("chassis-only: $path is listed in rule 15 but does not exist - update the list, do not let the rule check nothing")
+        continue
+    }
+    foreach ($h in (Select-String -Path $path -Pattern '\bFAirframe\b')) {
+        $t = $h.Line.Trim()
+        if ($t.StartsWith('//') -or $t.StartsWith('*') -or $t.StartsWith('/*')) { continue }
+        $failures.Add("chassis-only: $($path):$($h.LineNumber) names FAirframe; a ground-only consumer takes FChassis (Model/Chassis.h): $t")
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 Write-Host "Check-Architecture: $($commentFactWarnings.Count) comment-only-fact warning(s) (rule 12; see Tools/Check-Architecture.ps1's own comment)." -ForegroundColor Yellow
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations, graph-probe, run-width)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations, graph-probe, run-width, chassis-only)' -ForegroundColor Green
     exit 0
 }
 

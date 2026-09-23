@@ -19,10 +19,10 @@ bool FClaimCentreTest::RunTest(const FString& Parameters)
 	// it is not standing on and leaves its own tail unclaimed, which is a collision nobody
 	// would be able to explain from the logs.
 	FRoadAgent Agent;
-	Agent.Airframe.Ground = TestAirframes::Piper().Ground;
-	Agent.Airframe.SteerAxleX = 0.0;
-	Agent.Airframe.FixedAxleX = -454.3;
-	Agent.Airframe.BodyCentreX = -629.3;   // (167.5 + -1426.1) / 2, plane2 as measured
+	Agent.Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
+	Agent.Airframe.Chassis.SteerAxleX = 0.0;
+	Agent.Airframe.Chassis.FixedAxleX = -454.3;
+	Agent.Airframe.Chassis.BodyCentreX = -629.3;   // (167.5 + -1426.1) / 2, plane2 as measured
 	Agent.Follower.Travelled = 10000.0;
 
 	TestEqual(TEXT("the centre is the body centre, not the steered axle"),
@@ -32,10 +32,10 @@ bool FClaimCentreTest::RunTest(const FString& Parameters)
 	// Piper's Travelled is its nose gear (SteerAxleX ahead of an origin at the main gear),
 	// and its centre is behind that by the wheelbase and the body offset together.
 	FRoadAgent Piper;
-	Piper.Airframe.Ground = TestAirframes::Piper().Ground;
-	Piper.Airframe.SteerAxleX = 260.0;
-	Piper.Airframe.FixedAxleX = 0.0;
-	Piper.Airframe.BodyCentreX = -73.2;    // (385.1 + -531.5) / 2
+	Piper.Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
+	Piper.Airframe.Chassis.SteerAxleX = 260.0;
+	Piper.Airframe.Chassis.FixedAxleX = 0.0;
+	Piper.Airframe.Chassis.BodyCentreX = -73.2;    // (385.1 + -531.5) / 2
 	Piper.Follower.Travelled = 10000.0;
 
 	TestEqual(TEXT("a deviating origin subtracts both offsets"),
@@ -44,7 +44,7 @@ bool FClaimCentreTest::RunTest(const FString& Parameters)
 	// AN UNMEASURED AGENT KEEPS TODAY'S ANSWER EXACTLY - every vehicle takes this path, and
 	// a claim window that moved under them would be a traffic model quietly re-tuned.
 	FRoadAgent Unmeasured;
-	Unmeasured.Airframe.Ground = TestAirframes::Piper().Ground;
+	Unmeasured.Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
 	Unmeasured.Follower.Travelled = 10000.0;
 	TestEqual(TEXT("an unmeasured agent's centre is still Travelled"),
 		FClaimPass::CentreOf(Unmeasured), 10000.0, 0.0001);
@@ -62,10 +62,10 @@ bool FClaimCentreTest::RunTest(const FString& Parameters)
 	// an aeroplane still holding the stand it has left while pushing into ground it has not
 	// claimed. Neither is visible in any log, which is why it is a test.
 	FRoadAgent Pushing;
-	Pushing.Airframe.Ground = TestAirframes::Piper().Ground;
-	Pushing.Airframe.SteerAxleX = 0.0;
-	Pushing.Airframe.FixedAxleX = -454.3;
-	Pushing.Airframe.BodyCentreX = -629.3;   // plane2 as measured, as above
+	Pushing.Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
+	Pushing.Airframe.Chassis.SteerAxleX = 0.0;
+	Pushing.Airframe.Chassis.FixedAxleX = -454.3;
+	Pushing.Airframe.Chassis.BodyCentreX = -629.3;   // plane2 as measured, as above
 	Pushing.Phase = EAgentPhase::Manoeuvring;
 	Pushing.Pushback.Travelled = 10000.0;
 
@@ -85,7 +85,7 @@ bool FClaimCentreTest::RunTest(const FString& Parameters)
 	// the stale one would claim ground the aeroplane is nowhere near, and the two are
 	// deliberately different numbers here so that mistake cannot pass.
 	FRoadAgent Stale;
-	Stale.Airframe.Ground = TestAirframes::Piper().Ground;
+	Stale.Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
 	Stale.Phase = EAgentPhase::Manoeuvring;
 	Stale.Follower.Travelled = 99000.0;   // where the taxi IN ended
 	Stale.Pushback.Travelled = 1500.0;    // where the push has got to

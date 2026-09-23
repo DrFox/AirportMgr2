@@ -3,7 +3,7 @@
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
 
-void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe, double InitialSpeed,
+void FRouteFollower::Start(const FRoutePlan& InPlan, const FChassis& InChassis, double InitialSpeed,
 	TOptional<double> InitialHeading, double InitialTravelled)
 {
 	Plan = InPlan;
@@ -33,7 +33,7 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe
 	// frame this follower runs. #176: that used to log inline and turned one mis-authored
 	// airframe into ~3800 lines/s at 60 fps across a busy apron. Start runs once per dispatch,
 	// which is the granularity the warning actually wants.
-	WarnIfSteerLawUnsupported(InAirframe);
+	WarnIfSteerLawUnsupported(InChassis);
 
 	// The whole route costed before the first frame. See FSpeedProfile: once braking is
 	// limited, a corner discovered by arriving at it is already twenty-five metres too late.
@@ -45,7 +45,7 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe
 		// everything downstream, including the warning a human acts on.
 		TArray<EDriveDirection> Spans;
 		Plan.DescribeSpanDirections(Spans);
-		Profile.Build(Plan.Polyline, InAirframe, Spans);
+		Profile.Build(Plan.Polyline, InChassis, Spans);
 	}
 
 	// FROM REST BY DEFAULT. An aeroplane on a stand is stopped, and snapping to taxi speed
@@ -81,7 +81,7 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe
 	}
 }
 
-bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, double StopWithin,
+bool FRouteFollower::Advance(double DeltaSeconds, const FChassis& InChassis, double StopWithin,
 	FVector2D& OutPosition, double& OutHeading)
 {
 	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
@@ -89,7 +89,7 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 		return false;
 	}
 
-	const FGroundPerformance& Ground = InAirframe.Ground;
+	const FGroundPerformance& Ground = InChassis.Ground;
 
 	// The stop point in route distance, fixed BEFORE the move: StopWithin was measured from
 	// where the agent was when the arbiter looked, and re-measuring it after moving would
@@ -131,7 +131,7 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	const double Error = FMath::UnwindRadians(LineHeading - Heading);
 
 	// HOW FAR THE NOSE MAY COME ROUND THIS FRAME, and there are two laws because there are
-	// two kinds of vehicle on an airport - see FAirframe::HasAxles.
+	// two kinds of vehicle on an airport - see FChassis::HasAxles.
 	//
 	// ROLLING-STEER is the kinematic bicycle model, and the change is smaller than it
 	// sounds because the steering angle was already being computed here: Error IS the angle
@@ -155,11 +155,11 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	const double Lock = FMath::DegreesToRadians(FMath::Max(0.0, Ground.MaxSteerDegrees));
 
 	double MaxStep = 0.0;
-	if (InAirframe.EffectiveSteerLaw() == ESteerLaw::RollingSteer)
+	if (InChassis.EffectiveSteerLaw() == ESteerLaw::RollingSteer)
 	{
 		const double Steer = FMath::Clamp(Error, -Lock, Lock);
 		SteerDegrees = FMath::RadiansToDegrees(Steer);
-		MaxStep = FMath::Abs(Speed * FMath::Sin(Steer) / InAirframe.Wheelbase()) * DeltaSeconds;
+		MaxStep = FMath::Abs(Speed * FMath::Sin(Steer) / InChassis.Wheelbase()) * DeltaSeconds;
 	}
 	else
 	{
@@ -192,7 +192,7 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	// a seventh of the speed. What genuinely cannot be tracked is only the error the lock
 	// itself cannot absorb, and on a corner too tight for the lock that is exactly what
 	// grows - so the crab term still does its job where it should.
-	const double Crab = InAirframe.EffectiveSteerLaw() == ESteerLaw::RollingSteer
+	const double Crab = InChassis.EffectiveSteerLaw() == ESteerLaw::RollingSteer
 		? FMath::RadiansToDegrees(FMath::Max(0.0, FMath::Abs(Error) - Lock))
 		: FMath::RadiansToDegrees(FMath::Abs(Error - Step));
 
@@ -237,16 +237,16 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	// derive the body centre from it. The STEERED AXLE is what rides the line, and on every
 	// conforming airframe those are the same point - TrailPoint then returns OutPosition
 	// untouched rather than nudging it by a rounding error.
-	OutPosition = RoadGeom::TrailPoint(OutPosition, Heading, -InAirframe.SteerAxleX);
+	OutPosition = RoadGeom::TrailPoint(OutPosition, Heading, -InChassis.SteerAxleX);
 	OutHeading = Heading;
 	return true;
 }
 
-void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FAirframe& InAirframe)
+void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FChassis& InChassis)
 {
 	// See Start's own comment: a replan re-binds the airframe just as a dispatch does, so it
 	// gets the same once-per-call warning rather than none at all.
-	WarnIfSteerLawUnsupported(InAirframe);
+	WarnIfSteerLawUnsupported(InChassis);
 
 	Plan = NewPlan;
 	Travelled = FMath::Clamp(Travelled, 0.0, Plan.Length);
@@ -271,7 +271,7 @@ void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FAirframe& InAirfr
 		// everything downstream, including the warning a human acts on.
 		TArray<EDriveDirection> Spans;
 		Plan.DescribeSpanDirections(Spans);
-		Profile.Build(Plan.Polyline, InAirframe, Spans);
+		Profile.Build(Plan.Polyline, InChassis, Spans);
 	}
 }
 

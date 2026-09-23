@@ -42,7 +42,7 @@ bool FServiceRoadFilletClearsTheTruckLockTest::RunTest(const FString& Parameters
 	//
 	// It still MEASURES rather than trusting: ResolvedFilletRadius could be wired to the
 	// wrong resolver, or the margin dropped, and the arithmetic below catches both.
-	const FAirframe Largest = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Largest = UAirsideSettings::ResolveLargestServiceVehicle();
 
 	// Guard rather than assume: a largest vehicle that pivots would divide by zero below, and
 	// would also mean the resolver had stopped describing a steered vehicle at all.

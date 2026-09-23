@@ -235,7 +235,7 @@ bool FMeridianPitchesAboutItsMainsTest::RunTest(const FString& Parameters)
 	// swap was a change of numbers.
 	//
 	// ARoadAgentActor::SetPose corrects for pitch by holding FAgentMotion::PitchPivotX still,
-	// and FRoadAgent copies that straight off FAirframe::FixedAxleX. A ZERO PIVOT IS EXACTLY
+	// and FRoadAgent copies that straight off FChassis::FixedAxleX. A ZERO PIVOT IS EXACTLY
 	// ZERO CORRECTION, so while the Meridian's origin WAS its main-gear axle - which is what
 	// SM_PiperMeridian was imported about - this aeroplane was silently exempt from the whole
 	// mechanism. plane7 is exported about the nose gear, so FixedAxleX is -237.8 and the
@@ -256,7 +256,7 @@ bool FMeridianPitchesAboutItsMainsTest::RunTest(const FString& Parameters)
 	//    uncorrected aeroplane keeps its ORIGIN on the surface, and the origin is what
 	//    GetActorLocation reports.
 	TestTrue(FString::Printf(TEXT("the Meridian declares a main gear aft of its origin "
-		"(%.1f uu)"), Meridian.FixedAxleX), Meridian.FixedAxleX < -100.0);
+		"(%.1f uu)"), Meridian.Chassis.FixedAxleX), Meridian.Chassis.FixedAxleX < -100.0);
 
 	constexpr double SurfaceZ = 40.0;
 	constexpr double PitchDegrees = 8.0;
@@ -279,7 +279,7 @@ bool FMeridianPitchesAboutItsMainsTest::RunTest(const FString& Parameters)
 	Pitched.Position = FVector2D(-800.0, 1500.0);
 	Pitched.Heading = FMath::DegreesToRadians(115.0);
 	Pitched.PitchDegrees = PitchDegrees;
-	Pitched.PitchPivotX = Meridian.FixedAxleX;
+	Pitched.PitchPivotX = Meridian.Chassis.FixedAxleX;
 	Flaring->SetMotion(Pitched, SurfaceZ);
 
 	// 2. THE MAINS STAY ON THE TARMAC. Asked of the actor's own transform rather than
@@ -296,7 +296,7 @@ bool FMeridianPitchesAboutItsMainsTest::RunTest(const FString& Parameters)
 	//    false before plane7, when the correction was the identity and the origin stayed
 	//    exactly on the surface.
 	const double Lift = Flaring->GetActorLocation().Z - SurfaceZ;
-	const double Want = -Meridian.FixedAxleX * FMath::Sin(FMath::DegreesToRadians(PitchDegrees));
+	const double Want = -Meridian.Chassis.FixedAxleX * FMath::Sin(FMath::DegreesToRadians(PitchDegrees));
 	TestTrue(FString::Printf(TEXT("while its nose gear lifts by the wheelbase times sin(pitch)"
 		" - %.1f uu against %.1f"), Lift, Want), FMath::Abs(Lift - Want) < 1.0);
 

@@ -41,7 +41,7 @@ bool FArrivalPlannerRunwayTooShortTest::RunTest(const FString& Parameters)
 {
 	const FAirframe Airframe = TestAirframes::Piper();
 	const double Needed = FLandingRun::RequiredLandingDistance(
-		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 
 	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
 	URoadProfile* Runway = TestProfiles::Runway();
@@ -205,7 +205,7 @@ bool FArrivalPlannerNoExitTest::RunTest(const FString& Parameters)
 {
 	const FAirframe Airframe = TestAirframes::Piper();
 	const double Needed = FLandingRun::RequiredLandingDistance(
-		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 
 	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
 	URoadProfile* Runway = TestProfiles::Runway();
@@ -238,7 +238,7 @@ bool FArrivalPlannerNoRouteToStandTest::RunTest(const FString& Parameters)
 {
 	const FAirframe Airframe = TestAirframes::Piper();
 	const double Needed = FLandingRun::RequiredLandingDistance(
-		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 	const double RunwayLength = Needed * 1.5;
 
 	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());

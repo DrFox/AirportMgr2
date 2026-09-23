@@ -1,7 +1,5 @@
 #include "Model/Airframe.h"
 
-#include "AirsideLog.h"
-
 FGearPose FGearPerformance::FractionsAt(double Elapsed, bool bRaising) const
 {
 	FGearPose Pose;
@@ -67,22 +65,4 @@ FGearPose FGearPerformance::FractionsAt(double Elapsed, bool bRaising) const
 		? FMath::Clamp((At - Doors - Travel) / Tilt, 0.0, 1.0)
 		: 1.0;
 	return Pose;
-}
-
-void WarnIfSteerLawUnsupported(const FAirframe& Airframe)
-{
-	if (!Airframe.NeedsSteerLawWarning())
-	{
-		return;
-	}
-
-	// THE SAME MESSAGE FAirframe::EffectiveSteerLaw USED TO LOG INLINE, moved here by #176 so
-	// the pure query on FRouteFollower::Advance's hot path does not pay for AirsideLog.h, and
-	// so the Error is emitted once per CALLER of this function - once per dispatch or replan -
-	// rather than once per frame.
-	UE_LOG(LogAirside, Error,
-		TEXT("Airframe '%s' declares RollingSteer with no wheelbase (steer axle %.1f, "
-		     "fixed axle %.1f). Falling back to the pivot law - it will turn about "
-		     "itself rather than steer."),
-		*Airframe.TypeCode.ToString(), Airframe.SteerAxleX, Airframe.FixedAxleX);
 }

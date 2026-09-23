@@ -3,7 +3,7 @@
 #include "AirsideLog.h"
 #include "Build/ExitGeometry.h"
 #include "Build/RoadMeshBuilder.h"
-#include "Model/Airframe.h"
+#include "Model/Chassis.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
@@ -47,7 +47,7 @@ namespace
 }
 
 void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult& Solved,
-	const FAirframe& LargestServiceVehicle)
+	const FChassis& LargestServiceVehicle)
 {
 	// Clear the previous derivation before regenerating, or Build accumulates.
 	//

@@ -1,7 +1,7 @@
 #include "Profiles/RoadProfile.h"
 
 #include "Content/AirsideSettings.h"
-#include "Model/Airframe.h"
+#include "Model/Chassis.h"
 
 double URoadProfile::ResolvedFilletRadius() const
 {
@@ -16,7 +16,7 @@ double URoadProfile::ResolvedFilletRadius() const
 	return ResolvedFilletRadius(UAirsideSettings::ResolveLargestServiceVehicle());
 }
 
-double URoadProfile::ResolvedFilletRadius(const FAirframe& LargestServiceVehicle) const
+double URoadProfile::ResolvedFilletRadius(const FChassis& LargestServiceVehicle) const
 {
 	if (PreferredFilletRadius > 0.0)
 	{

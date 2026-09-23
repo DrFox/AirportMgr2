@@ -55,18 +55,18 @@ namespace
 	FAirframe NoseGearTwinOtter()
 	{
 		FAirframe Airframe;
-		Airframe.Ground = TestAirframes::Piper().Ground;
-		Airframe.Ground.MaxSteerDegrees = 60.0;
-		Airframe.Ground.MaxLateralAccelUu = 147.0;
+		Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
+		Airframe.Chassis.Ground.MaxSteerDegrees = 60.0;
+		Airframe.Chassis.Ground.MaxLateralAccelUu = 147.0;
 
 		// DECLARED SINCE 2026-09-15, and these four tests are the reason the declaration had
 		// to become explicit. They used to get the rolling-steer law for free by filling in
 		// the axles below, which is the same inference that silently turned a fuel truck into
 		// something that pivots on the spot. FAirframe defaults to Pivot now, so an airframe
 		// that means to steer says so.
-		Airframe.SteerLaw = ESteerLaw::RollingSteer;
-		Airframe.SteerAxleX = 0.0;
-		Airframe.FixedAxleX = -454.3;
+		Airframe.Chassis.SteerLaw = ESteerLaw::RollingSteer;
+		Airframe.Chassis.SteerAxleX = 0.0;
+		Airframe.Chassis.FixedAxleX = -454.3;
 		return Airframe;
 	}
 }
@@ -85,7 +85,7 @@ bool FNoseGearTracksTest::RunTest(const FString& Parameters)
 	const FAirframe Airframe = NoseGearTwinOtter();
 
 	FRouteFollower Follower;
-	Follower.Start(NoseGearPlan(NoseGearArc(R)), Airframe, Airframe.Ground.Taxi.SpeedCap);
+	Follower.Start(NoseGearPlan(NoseGearArc(R)), Airframe.Chassis, Airframe.Chassis.Ground.Taxi.SpeedCap);
 
 	double WorstSteerOffLine = 0.0;
 	double MainsInsideBy = 0.0;
@@ -95,7 +95,7 @@ bool FNoseGearTracksTest::RunTest(const FString& Parameters)
 	{
 		FVector2D Origin = FVector2D::ZeroVector;
 		double Heading = 0.0;
-		if (!Follower.Advance(NoseGearFrame, Airframe, Origin, Heading))
+		if (!Follower.Advance(NoseGearFrame, Airframe.Chassis, Origin, Heading))
 		{
 			break;
 		}
@@ -113,7 +113,7 @@ bool FNoseGearTracksTest::RunTest(const FString& Parameters)
 		// are skipped because a smoothed vertex there averages with the straights.
 		if (Origin.X > 500.0 && Origin.Y < R - 500.0)
 		{
-			const FVector2D Mains = RoadGeom::TrailPoint(Origin, Heading, Airframe.FixedAxleX);
+			const FVector2D Mains = RoadGeom::TrailPoint(Origin, Heading, Airframe.Chassis.FixedAxleX);
 			const double MainsRadius = FVector2D::Distance(Mains, FVector2D(0.0, R));
 			MainsInsideBy = FMath::Max(MainsInsideBy, R - MainsRadius);
 			bMeasuredInTheTurn = true;
@@ -133,7 +133,7 @@ bool FNoseGearTracksTest::RunTest(const FString& Parameters)
 	// follows a radius R settles with its rear axle at sqrt(R^2 - L^2) from the centre, so
 	// it cuts in by R minus that - 34 uu here. Asserting only "inside" would pass on a body
 	// that barely leaned, which is the failure this whole change is about.
-	const double Expected = R - FMath::Sqrt(R * R - Airframe.Wheelbase() * Airframe.Wheelbase());
+	const double Expected = R - FMath::Sqrt(R * R - Airframe.Chassis.Wheelbase() * Airframe.Chassis.Wheelbase());
 	TestTrue(FString::Printf(
 		TEXT("the mains cut inside by about %.1f uu, measured %.1f"), Expected, MainsInsideBy),
 		FMath::Abs(MainsInsideBy - Expected) < 5.0);
@@ -152,12 +152,12 @@ bool FUnmeasuredAirframeUnchangedTest::RunTest(const FString& Parameters)
 	// 83 degrees of lock at its creep speed - it pivots, and the geometric law would cripple
 	// it. So an airframe with no axles must behave EXACTLY as it does today.
 	FAirframe Pivot;
-	Pivot.Ground = TestAirframes::Piper().Ground;
-	Pivot.Ground.MaxTurnRateDegPerSec = 90.0;
+	Pivot.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
+	Pivot.Chassis.Ground.MaxTurnRateDegPerSec = 90.0;
 
 	FRouteFollower Follower;
 	Follower.Start(NoseGearPlan({FVector2D(0.0, 0.0), FVector2D(4000.0, 0.0),
-		FVector2D(4000.0, 4000.0)}), Pivot, Pivot.Ground.Taxi.SpeedCap);
+		FVector2D(4000.0, 4000.0)}), Pivot.Chassis, Pivot.Chassis.Ground.Taxi.SpeedCap);
 
 	double Worst = 0.0;
 	double Previous = Follower.Heading;
@@ -165,7 +165,7 @@ bool FUnmeasuredAirframeUnchangedTest::RunTest(const FString& Parameters)
 	{
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
-		if (!Follower.Advance(NoseGearFrame, Pivot, At, Heading))
+		if (!Follower.Advance(NoseGearFrame, Pivot.Chassis, At, Heading))
 		{
 			break;
 		}
@@ -194,18 +194,18 @@ bool FSteerNeverExceedsLockTest::RunTest(const FString& Parameters)
 	// artefact, so the direction of travel really does change instantly and the lock is the
 	// only thing standing between the model and an aeroplane that swaps ends.
 	FAirframe Airframe = NoseGearTwinOtter();
-	Airframe.Ground.MaxSteerDegrees = 45.0;
+	Airframe.Chassis.Ground.MaxSteerDegrees = 45.0;
 
 	FRouteFollower Follower;
 	Follower.Start(NoseGearPlan({FVector2D(0.0, 0.0), FVector2D(4000.0, 0.0),
-		FVector2D(4000.0, 4000.0)}), Airframe, Airframe.Ground.Taxi.SpeedCap);
+		FVector2D(4000.0, 4000.0)}), Airframe.Chassis, Airframe.Chassis.Ground.Taxi.SpeedCap);
 
 	double WorstSteer = 0.0;
 	for (int32 Frame = 0; Frame < 4000; ++Frame)
 	{
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
-		if (!Follower.Advance(NoseGearFrame, Airframe, At, Heading))
+		if (!Follower.Advance(NoseGearFrame, Airframe.Chassis, At, Heading))
 		{
 			break;
 		}
@@ -232,10 +232,10 @@ bool FCornerSpeedIsLateralAccelTest::RunTest(const FString& Parameters)
 	// cabin, which is what actually stops a taxiing aircraft cornering faster.
 	const double R = 3000.0;
 	FAirframe Airframe = NoseGearTwinOtter();
-	Airframe.Ground.MaxLateralAccelUu = 147.0;   // 0.15 g
+	Airframe.Chassis.Ground.MaxLateralAccelUu = 147.0;   // 0.15 g
 
 	FRouteFollower Follower;
-	Follower.Start(NoseGearPlan(NoseGearArc(R)), Airframe, 0.0);
+	Follower.Start(NoseGearPlan(NoseGearArc(R)), Airframe.Chassis, 0.0);
 
 	double FastestOnTheStraight = 0.0;
 	double FastestInTheArc = 0.0;
@@ -243,7 +243,7 @@ bool FCornerSpeedIsLateralAccelTest::RunTest(const FString& Parameters)
 	{
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
-		if (!Follower.Advance(NoseGearFrame, Airframe, At, Heading))
+		if (!Follower.Advance(NoseGearFrame, Airframe.Chassis, At, Heading))
 		{
 			break;
 		}
@@ -260,11 +260,11 @@ bool FCornerSpeedIsLateralAccelTest::RunTest(const FString& Parameters)
 	// It got going first, or "slower in the turn" would be true of an aeroplane that never
 	// moved.
 	TestTrue(FString::Printf(TEXT("it reached taxi speed on the straight (%.0f uu/s)"),
-		FastestOnTheStraight), FastestOnTheStraight > Airframe.Ground.Taxi.SpeedCap * 0.9);
+		FastestOnTheStraight), FastestOnTheStraight > Airframe.Chassis.Ground.Taxi.SpeedCap * 0.9);
 
 	// sqrt(147 * 3000) = 664 uu/s. The old law gave 10 deg/s x 3000 = 524, so this is the
 	// turn getting FASTER for a stated reason rather than a raised number.
-	const double Expected = FMath::Sqrt(Airframe.Ground.MaxLateralAccelUu * R);
+	const double Expected = FMath::Sqrt(Airframe.Chassis.Ground.MaxLateralAccelUu * R);
 	TestTrue(FString::Printf(TEXT("the arc is taken at about sqrt(a*R) = %.0f, measured %.0f"),
 		Expected, FastestInTheArc), FMath::Abs(FastestInTheArc - Expected) < 60.0);
 
@@ -293,7 +293,7 @@ bool FCornerTighterThanLockCrawlsTest::RunTest(const FString& Parameters)
 	// a warning that names the radius and the lock that refused it. The speed here is not the
 	// interesting part; that a human is told is.
 	FAirframe Airframe = NoseGearTwinOtter();
-	Airframe.Ground.MaxSteerDegrees = 10.0;   // rudder-pedal range: L/sin(10) = 26 m
+	Airframe.Chassis.Ground.MaxSteerDegrees = 10.0;   // rudder-pedal range: L/sin(10) = 26 m
 
 	const double R = 1000.0;                      // a 10 m radius, far inside that
 	const TArray<FVector2D> Tight = NoseGearArc(R);
@@ -314,13 +314,13 @@ bool FCornerTighterThanLockCrawlsTest::RunTest(const FString& Parameters)
 		EAutomationExpectedErrorFlags::Contains, 0);
 
 	FSpeedProfile Profile;
-	Profile.Build(Tight, Airframe);
+	Profile.Build(Tight, Airframe.Chassis);
 	const double Limit = Profile.LimitAt(MidArc);
 
 	// The arithmetic restated rather than shared with FSpeedProfile - see
-	// FAirframe::TightestFollowableRadius on why a helper both sides called could be wrong in
+	// FChassis::TightestFollowableRadius on why a helper both sides called could be wrong in
 	// one place and agree with itself.
-	const double LateralAccelSpeed = FMath::Sqrt(Airframe.Ground.MaxLateralAccelUu * R);
+	const double LateralAccelSpeed = FMath::Sqrt(Airframe.Chassis.Ground.MaxLateralAccelUu * R);
 
 	TestTrue(
 		FString::Printf(
@@ -334,17 +334,17 @@ bool FCornerTighterThanLockCrawlsTest::RunTest(const FString& Parameters)
 	// substituting the floor would fail here while passing the assertion above.
 	TestTrue(
 		FString::Printf(TEXT("and is well above the steering floor %.0f, not pinned to it"),
-			Airframe.Ground.MinSteeringSpeed),
-		Limit > Airframe.Ground.MinSteeringSpeed + 1.0);
+			Airframe.Chassis.Ground.MinSteeringSpeed),
+		Limit > Airframe.Chassis.Ground.MinSteeringSpeed + 1.0);
 
 	// AND A FOLLOWABLE ONE IS FASTER STILL, or the assertions above would pass on a profile
 	// that capped everything at the same place. The same arc at a tiller's 60 degrees is well
 	// within the lock, so the lateral-accel rule applies without the lock ever binding.
 	FAirframe Tiller = NoseGearTwinOtter();
 	FSpeedProfile Roomy;
-	Roomy.Build(Tight, Tiller);
+	Roomy.Build(Tight, Tiller.Chassis);
 	TestTrue(TEXT("the same corner at full tiller is not reduced to a crawl"),
-		Roomy.LimitAt(MidArc) > Tiller.Ground.MinSteeringSpeed + 1.0);
+		Roomy.LimitAt(MidArc) > Tiller.Chassis.Ground.MinSteeringSpeed + 1.0);
 
 	return true;
 }
@@ -369,11 +369,11 @@ bool FAuthoredStopPointsDoNotMoveTest::RunTest(const FString& Parameters)
 	auto RunToRest = [&](double SteerAxleX, bool bUseTarget)
 	{
 		FAirframe Airframe = NoseGearTwinOtter();
-		Airframe.SteerAxleX = SteerAxleX;
-		Airframe.FixedAxleX = SteerAxleX - 454.3;
+		Airframe.Chassis.SteerAxleX = SteerAxleX;
+		Airframe.Chassis.FixedAxleX = SteerAxleX - 454.3;
 
 		FRouteFollower Follower;
-		Follower.Start(NoseGearPlan(Straight), Airframe, 0.0);
+		Follower.Start(NoseGearPlan(Straight), Airframe.Chassis, 0.0);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -382,7 +382,7 @@ bool FAuthoredStopPointsDoNotMoveTest::RunTest(const FString& Parameters)
 			const double StopWithin = bUseTarget
 				? FMath::Max(0.0, Target - Follower.Travelled)
 				: TNumericLimits<double>::Max();
-			Follower.Advance(NoseGearFrame, Airframe, StopWithin, At, Heading);
+			Follower.Advance(NoseGearFrame, Airframe.Chassis, StopWithin, At, Heading);
 		}
 		return TPair<double, double>(At.X, Follower.Travelled);
 	};

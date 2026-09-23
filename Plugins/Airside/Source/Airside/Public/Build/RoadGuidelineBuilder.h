@@ -5,7 +5,7 @@
 #include "Model/RoadHandles.h"
 
 class URoadNetwork;
-struct FAirframe;
+struct FChassis;
 
 /**
  * Derives the guideline graph from a solved surface network.
@@ -35,5 +35,5 @@ struct AIRSIDE_API FRoadGuidelineBuilder
 	 * (Check-Architecture's Build->Content rule).
 	 */
 	static void Build(URoadNetwork& Network, const FRoadSolveResult& Solved,
-		const FAirframe& LargestServiceVehicle);
+		const FChassis& LargestServiceVehicle);
 };

@@ -41,10 +41,10 @@ bool FRoadAgentArrivalHandoverTest::RunTest(const FString& Parameters)
 	// tell "the follower got the airframe's ground performance" apart from "the follower
 	// never got it and is still running on the struct default" - the exact defect issue #27
 	// was. 1234 belongs to neither.
-	Airframe.Ground.Taxi.SpeedCap = 1234.0;
+	Airframe.Chassis.Ground.Taxi.SpeedCap = 1234.0;
 
 	const double Needed = FLandingRun::RequiredLandingDistance(
-		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 	const double RunwayLength = Needed * 1.5;
 
 	FRunwayEnd End;
@@ -124,11 +124,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRoadAgentDepartureHandoverTest::RunTest(const FString& Parameters)
 {
 	FAirframe Airframe;
-	Airframe.Ground = TestAirframes::Piper().Ground;
+	Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
 	Airframe.Climb = TestAirframes::Piper().Climb;
 
 	if (!TestTrue(TEXT("the Meridian has take-off and climb performance to arm a departure"),
-		Airframe.Ground.Takeoff.IsSet() && Airframe.Climb.IsSet()))
+		Airframe.Chassis.Ground.Takeoff.IsSet() && Airframe.Climb.IsSet()))
 	{
 		return false;
 	}
@@ -220,7 +220,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRoadAgentParkedHandoverTest::RunTest(const FString& Parameters)
 {
 	FAirframe Airframe;
-	Airframe.Ground = TestAirframes::Piper().Ground;
+	Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
 
 	const FRoutePlan Plan = StraightPlan(FVector2D(0.0, 0.0), FVector2D(50000.0, 0.0));
 
@@ -427,7 +427,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 {
 	FAirframe Airframe;
-	Airframe.Ground = TestAirframes::Piper().Ground;
+	Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
 	Airframe.Climb = TestAirframes::Piper().Climb;
 
 	constexpr double RunwayLength = 100000.0;
@@ -452,7 +452,7 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 	int32 Ticks = 0;
 	while (Ticks < 25000
 		&& !(Agent.Phase == EAgentPhase::Departing && Agent.Departure.Phase == ETakeoffPhase::Roll
-			&& Agent.Departure.Speed > Airframe.Ground.Takeoff.SpeedCap * 0.3))
+			&& Agent.Departure.Speed > Airframe.Chassis.Ground.Takeoff.SpeedCap * 0.3))
 	{
 		Agent.Advance(Step, Motion, Event);
 		++Ticks;
@@ -467,7 +467,7 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 	// CUT, NOT RE-ARMED: no Departure.Start, no new agent - the same FTakeoffRun that has
 	// been rolling since ArmDeparture. A copy taken at Start would keep accelerating at the
 	// Piper's own figure regardless of this.
-	Agent.Airframe.Ground.Takeoff.Accel = 0.01;
+	Agent.Airframe.Chassis.Ground.Takeoff.Accel = 0.01;
 
 	constexpr int32 MeasureTicks = 30; // half a second
 	const double BeforeSpeed = Agent.Departure.Speed;
@@ -480,7 +480,7 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(
 		TEXT("a near-zero accel written to Airframe takes effect with no re-arm, proving ")
 		TEXT("Advance reads it live (gained %.2f uu/s over %.1f s, was accelerating at %.0f uu/s2)"),
-		Gained, MeasureTicks * Step, Agent.Airframe.Ground.Takeoff.Accel),
+		Gained, MeasureTicks * Step, Agent.Airframe.Chassis.Ground.Takeoff.Accel),
 		Gained < 1.0);
 
 	return true;

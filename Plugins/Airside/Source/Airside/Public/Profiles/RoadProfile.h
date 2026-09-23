@@ -5,7 +5,7 @@
 #include "Model/RoadTraffic.h"
 #include "RoadProfile.generated.h"
 
-struct FAirframe;
+struct FChassis;
 
 /**
  * Which authored cross-section a build gesture lays.
@@ -189,7 +189,7 @@ public:
 	 * self-resolves, for the many callers (tests, the debug gallery) that ask once and are
 	 * not inside a hot loop.
 	 */
-	double ResolvedFilletRadius(const FAirframe& LargestServiceVehicle) const;
+	double ResolvedFilletRadius(const FChassis& LargestServiceVehicle) const;
 
 	/**
 	 * Segments with this profile PASS THROUGH a node rather than ending at it, so they are

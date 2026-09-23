@@ -22,8 +22,8 @@ bool FFieldLengthsCoverTheRollTest::RunTest(const FString& Parameters)
 	// SHORTER than the roll would admit an aircraft to a strip it then runs off the end of.
 	auto Check = [this](const TCHAR* Name, const FAirframe& Airframe)
 	{
-		const double Roll = FTakeoffRun::RequiredRoll(Airframe.Ground, Airframe.Climb);
-		const double Landing = FLandingRun::RequiredLandingDistance(Airframe.Ground, Airframe.Climb, Airframe.Approach)
+		const double Roll = FTakeoffRun::RequiredRoll(Airframe.Chassis.Ground, Airframe.Climb);
+		const double Landing = FLandingRun::RequiredLandingDistance(Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach)
 			* FLandingRun::LandingMargin;
 		TestTrue(FString::Printf(TEXT("%s publishes a take-off field length"), Name), Airframe.Requirements.TakeoffFieldLength > 0.0);
 		TestTrue(FString::Printf(TEXT("%s publishes a landing field length"), Name), Airframe.Requirements.LandingFieldLength > 0.0);

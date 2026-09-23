@@ -119,12 +119,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FTurnRateTest::RunTest(const FString& Parameters)
 {
-	const FGroundPerformance Piper = TestAirframes::Piper().Ground;
+	const FGroundPerformance Piper = TestAirframes::Piper().Chassis.Ground;
 
 	// Issue #83: FRouteFollower no longer stores Ground - Start and Advance take the bundle
 	// by reference instead, same as FRoadAgent hands its own Airframe in.
 	FAirframe Airframe;
-	Airframe.Ground = Piper;
+	Airframe.Chassis.Ground = Piper;
 
 	if (!TestTrue(TEXT("the Meridian's ground performance is authored"), Piper.IsSet()))
 	{
@@ -141,7 +141,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 	//    HUNDRED degrees a second. A Meridian can manage twenty.
 	{
 		FRouteFollower Follower;
-		Follower.Start(TurnRatePlan(TurnRateCorner()), Airframe);
+		Follower.Start(TurnRatePlan(TurnRateCorner()), Airframe.Chassis);
 
 		double WorstRate = 0.0;
 		double Previous = Follower.Heading;
@@ -150,7 +150,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0;
-			if (!Follower.Advance(TurnRateFrame, Airframe, At, Heading))
+			if (!Follower.Advance(TurnRateFrame, Airframe.Chassis, At, Heading))
 			{
 				break;
 			}
@@ -177,7 +177,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		constexpr double Radius = 2500.0;
 
 		FRouteFollower Follower;
-		Follower.Start(TurnRatePlan(TurnRateSweptRoute(Radius)), Airframe);
+		Follower.Start(TurnRatePlan(TurnRateSweptRoute(Radius)), Airframe.Chassis);
 
 		double WorstCrab = 0.0;
 		double TopSpeedOverall = 0.0;
@@ -195,7 +195,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0;
-			if (!Follower.Advance(TurnRateFrame, Airframe, At, Heading))
+			if (!Follower.Advance(TurnRateFrame, Airframe.Chassis, At, Heading))
 			{
 				break;
 			}
@@ -244,7 +244,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 	//    could plausibly cover - not that it is absent.
 	{
 		FRouteFollower Follower;
-		Follower.Start(TurnRatePlan(TurnRateCorner()), Airframe);
+		Follower.Start(TurnRatePlan(TurnRateCorner()), Airframe.Chassis);
 
 		double WorstCrab = 0.0;
 		double CrabStartedAt = -1.0;
@@ -264,7 +264,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0;
-			if (!Follower.Advance(TurnRateFrame, Airframe, At, Heading))
+			if (!Follower.Advance(TurnRateFrame, Airframe.Chassis, At, Heading))
 			{
 				break;
 			}
@@ -346,7 +346,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 	//    552 m/s2. Fifty-six g. A Meridian brakes at two.
 	{
 		FRouteFollower Follower;
-		Follower.Start(TurnRatePlan(TurnRateLongCorner()), Airframe);
+		Follower.Start(TurnRatePlan(TurnRateLongCorner()), Airframe.Chassis);
 
 		double WorstAccel = 0.0;
 		double WorstDecel = 0.0;
@@ -356,7 +356,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0;
-			if (!Follower.Advance(TurnRateFrame, Airframe, At, Heading))
+			if (!Follower.Advance(TurnRateFrame, Airframe.Chassis, At, Heading))
 			{
 				break;
 			}
@@ -389,7 +389,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		const double Corner = 10000.0;
 
 		FRouteFollower Follower;
-		Follower.Start(TurnRatePlan(TurnRateLongCorner()), Airframe);
+		Follower.Start(TurnRatePlan(TurnRateLongCorner()), Airframe.Chassis);
 
 		// Sampled at two distances OUT from the corner, and compared against the curve the
 		// physics demands. "It was slow at the corner" is not enough - the old reactive law
@@ -409,7 +409,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0;
-			if (!Follower.Advance(TurnRateFrame, Airframe, At, Heading))
+			if (!Follower.Advance(TurnRateFrame, Airframe.Chassis, At, Heading))
 			{
 				break;
 			}
@@ -499,7 +499,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		auto Journey = [&Piper, &Airframe, Length](double Step)
 		{
 			FRouteFollower Follower;
-			Follower.Start(TurnRatePlan({ FVector2D(0.0, 0.0), FVector2D(Length, 0.0) }), Airframe);
+			Follower.Start(TurnRatePlan({ FVector2D(0.0, 0.0), FVector2D(Length, 0.0) }), Airframe.Chassis);
 
 			FJourney Result;
 			Result.bStartedFromRest = Follower.Speed <= KINDA_SMALL_NUMBER;
@@ -511,7 +511,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 			{
 				FVector2D At;
 				double Heading = 0.0;
-				if (!Follower.Advance(Step, Airframe, At, Heading))
+				if (!Follower.Advance(Step, Airframe.Chassis, At, Heading))
 				{
 					break;
 				}
@@ -566,7 +566,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 	//    destination is fine and is what section 6 asks for; stopping mid-turn is not.
 	{
 		FRouteFollower Follower;
-		Follower.Start(TurnRatePlan(TurnRateCorner()), Airframe);
+		Follower.Start(TurnRatePlan(TurnRateCorner()), Airframe.Chassis);
 
 		double Elapsed = 0.0;
 		bool bRollingWhileTurning = true;
@@ -575,7 +575,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0;
-			if (!Follower.Advance(TurnRateFrame, Airframe, At, Heading))
+			if (!Follower.Advance(TurnRateFrame, Airframe.Chassis, At, Heading))
 			{
 				break;
 			}

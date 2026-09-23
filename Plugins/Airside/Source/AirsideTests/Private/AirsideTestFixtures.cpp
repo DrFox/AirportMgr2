@@ -33,7 +33,7 @@ FToolContext TestTool::ContextAt(IRoadEditTarget& Target, const FVector2D& Where
 FAirframe TestAirframes::Piper()
 {
 	FAirframe A;
-	A.Ground = UAircraftType::PiperMeridianGround();
+	A.Chassis.Ground = UAircraftType::PiperMeridianGround();
 	A.Climb = UAircraftType::PiperMeridianClimb();
 	A.Approach = UAircraftType::PiperMeridianApproach();
 	A.Engine = UAircraftType::PiperMeridianEngine();
@@ -43,7 +43,7 @@ FAirframe TestAirframes::Piper()
 FAirframe TestAirframes::Van()
 {
 	FAirframe A;
-	A.Ground.MaxTurnRateDegPerSec = 90.0;
+	A.Chassis.Ground.MaxTurnRateDegPerSec = 90.0;
 	return A;
 }
 
@@ -121,7 +121,7 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 	// length out of the air would test the refusal or the acceptance depending on numbers
 	// nobody was watching.
 	const double Needed = FLandingRun::RequiredLandingDistance(
-		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 	const FVector2D Exit1At(Needed * 1.2, 0.0);
 	const FVector2D FarAt(Needed * 3.0, 0.0);
 
@@ -212,7 +212,7 @@ FTestAirport FTestAirport::BuildScale(const FAirframe& Airframe, int32 Seed, boo
 	// SIZED FROM THE AIRCRAFT, same reasoning as Build() above - a strip that could not
 	// actually land the airframe would test the wrong thing at any scale.
 	const double Needed = FLandingRun::RequiredLandingDistance(
-		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 
 	URoadProfile* Runway = TestProfiles::Runway();
 	URoadProfile* Taxiway = TestProfiles::Taxiway();

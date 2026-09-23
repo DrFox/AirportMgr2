@@ -26,13 +26,13 @@ namespace
 	 * that no span produced a visible step: either way it would pass on the very bug it
 	 * exists to catch. Both limits are measured on their own, in Airside.Model.TurnRate.
 	 */
-	FAirframe HeadingTestUnlimitedAirframe()
+	FChassis HeadingTestUnlimitedChassis()
 	{
-		FAirframe Airframe;
-		Airframe.Ground.MaxTurnRateDegPerSec = 1.0e6;
-		Airframe.Ground.Taxi.Accel = 1.0e9;
-		Airframe.Ground.Taxi.Decel = 1.0e9;
-		return Airframe;
+		FChassis Chassis;
+		Chassis.Ground.MaxTurnRateDegPerSec = 1.0e6;
+		Chassis.Ground.Taxi.Accel = 1.0e9;
+		Chassis.Ground.Taxi.Decel = 1.0e9;
+		return Chassis;
 	}
 
 	/** A quarter circle of radius R, as the sampled polyline a swept lead-in produces. */
@@ -172,9 +172,9 @@ bool FFollowerHeadingTest::RunTest(const FString& Parameters)
 		Plan.Polyline = QuarterCircle(2500.0, 16);
 		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
 
-		const FAirframe Airframe = HeadingTestUnlimitedAirframe();
+		const FChassis Chassis = HeadingTestUnlimitedChassis();
 		FRouteFollower Follower;
-		Follower.Start(Plan, Airframe);
+		Follower.Start(Plan, Chassis);
 
 		// Sixty frames a second, which is the rate the jerk was actually seen at.
 		constexpr double Frame = 1.0 / 60.0;
@@ -187,7 +187,7 @@ bool FFollowerHeadingTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0;
-			if (!Follower.Advance(Frame, Airframe, At, Heading))
+			if (!Follower.Advance(Frame, Chassis, At, Heading))
 			{
 				break;
 			}

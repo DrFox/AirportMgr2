@@ -5,7 +5,7 @@
 #include "Templates/Function.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadMeshSink.h"
-#include "Model/Airframe.h"
+#include "Model/Chassis.h"
 #include "Model/RoadHandles.h"
 #include "Model/RunwayFacts.h"
 #include "Tool/RoadEditTarget.h"
@@ -124,7 +124,7 @@ public:
 		 * than defaulting to a real vehicle: a caller that forgets to set this gets a fillet
 		 * radius of zero rather than a plausible-looking wrong one, which fails loudly.
 		 */
-		FAirframe LargestServiceVehicle;
+		FChassis LargestServiceVehicle;
 
 		/** Already resolved - see ARoadNetworkActor::ResolveSurfaceMaterial and its siblings. */
 		UMaterialInterface* SurfaceMaterial = nullptr;

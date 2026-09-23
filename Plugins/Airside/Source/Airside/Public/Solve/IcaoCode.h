@@ -184,7 +184,7 @@ namespace IcaoCode
 	 * Aft of the STOP MARK, not a length, because that is what a layout measured from the
 	 * nose-gear origin actually needs - a nose overhang differs by type and is not this
 	 * question. An airframe whose own origin is elsewhere (the Piper declares its main gear;
-	 * see FAirframe::SteerAxleX) is measured about that origin instead, and is far inside any
+	 * see FChassis::SteerAxleX) is measured about that origin instead, and is far inside any
 	 * of these figures.
 	 *
 	 * Takes the enum, as StandWidthForLetter does.

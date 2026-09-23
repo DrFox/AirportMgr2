@@ -28,7 +28,7 @@ bool FVehicleAgentTest::RunTest(const FString& Parameters)
 	// caller checks before moving anything, so it is what this must satisfy - a truck that
 	// fails it freezes on the line with nothing to say why.
 	const FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
-	TestTrue(TEXT("a vehicle can move about an airport"), Van.Ground.IsSet());
+	TestTrue(TEXT("a vehicle can move about an airport"), Van.Chassis.Ground.IsSet());
 	TestEqual(TEXT("and says what it is"), Van.TypeCode, FName(TEXT("FUEL")));
 	TestEqual(TEXT("with no wing to fit through a turn"), Van.Wingspan, 0.0);
 
@@ -40,8 +40,8 @@ bool FVehicleAgentTest::RunTest(const FString& Parameters)
 	// It turns far harder than an aeroplane. Asserted as a relation rather than a number, so
 	// tuning either figure does not break this and reversing them does.
 	TestTrue(TEXT("a van slews its wheel harder than an airframe"),
-		Van.Ground.MaxTurnRateDegPerSec
-			> UAirsideSettings::ResolveDefaultAirframe().Ground.MaxTurnRateDegPerSec);
+		Van.Chassis.Ground.MaxTurnRateDegPerSec
+			> UAirsideSettings::ResolveDefaultAirframe().Chassis.Ground.MaxTurnRateDegPerSec);
 
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }

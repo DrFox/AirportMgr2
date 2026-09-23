@@ -373,7 +373,7 @@ public:
 	 * this change removes. BuildCodeCStand forwards with ResolveLargestServiceVehicle().
 	 */
 	static void BuildCodeCStandFor(
-		UEntityDefinition* Definition, UAircraftType* Aircraft, const FAirframe& Largest);
+		UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest);
 
 	/**
 	 * Lay the layout template - entry, staging rank, a bay per service anchor, and the legs
@@ -392,7 +392,7 @@ public:
 	 * no authored content here for IcaoCode::Parse to fail on - see Solve/IcaoCode.h.
 	 */
 	static void BuildStandTemplate(
-		UEntityDefinition& Definition, EIcaoCode Letter, const FAirframe& Largest);
+		UEntityDefinition& Definition, EIcaoCode Letter, const FChassis& Largest);
 
 	/**
 	 * Fill Definition with the fuel depot layout: a box on a service road, and one truck.
