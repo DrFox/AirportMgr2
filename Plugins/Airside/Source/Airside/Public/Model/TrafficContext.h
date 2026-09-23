@@ -41,4 +41,12 @@ struct FTrafficContext
 	/** UGroundTraffic::GetSimSeconds() at the moment this context was built - the deadlock
 	 *  resolver's retry clock. 0 for a caller with no clock of its own (a bare test). */
 	double SimSeconds = 0.0;
+
+	/**
+	 * True for the one rebuild after the airport's drive side flipped (spec 2026-09-23 §2).
+	 * Every lane then sits where the opposite lane was - the A->B lane's old positions hold
+	 * the B->A lane's new nodes EXACTLY - so re-resolving a plan by position lands a driving
+	 * vehicle on a lane running against it. FPlanReResolver rejoins it by heading instead.
+	 */
+	bool bLanesMirrored = false;
 };

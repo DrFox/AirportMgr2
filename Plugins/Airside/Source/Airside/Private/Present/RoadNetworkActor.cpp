@@ -995,6 +995,16 @@ bool ARoadNetworkActor::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSe
 	return Facade->SetIntermediateHoldingPosition(NodeIndex, bSet);
 }
 
+bool ARoadNetworkActor::SetDriveSide(EDriveSide Side)
+{
+	return Facade->SetDriveSide(Side);
+}
+
+EDriveSide ARoadNetworkActor::GetDriveSide() const
+{
+	return Network != nullptr ? Network->GetDriveSide() : EDriveSide::Right;
+}
+
 bool ARoadNetworkActor::DisconnectGuideline(int32 EdgeIndex)
 {
 	return Facade->DisconnectGuideline(EdgeIndex);

@@ -79,7 +79,7 @@ enum class EGuidelineDir : uint8
  * followed - the lane the player is shown is the lane that is driven (the sample-once rule).
  * See FProfileGuideline::OffsetFor.
  */
-UENUM()
+UENUM(BlueprintType)
 enum class EDriveSide : uint8
 {
 	Right,

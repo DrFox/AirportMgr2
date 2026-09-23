@@ -626,6 +626,33 @@ bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 		[Id](URoadNetwork& Net) { return Net.RemoveGuidelineEdge(Id); });
 }
 
+bool URoadEditFacade::SetDriveSide(EDriveSide Side)
+{
+	URoadNetwork* Network = Actor().Network;
+	// Refused BEFORE the scope, for the reason SetIntermediateHoldingPosition gives: there is
+	// no rollback, and a no-op inside a scope would push an undo step that does nothing.
+	if (Network == nullptr || Network->GetDriveSide() == Side)
+	{
+		return false;
+	}
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("drive side"));
+	Network->SetDriveSide(Side);
+	// TOPOLOGY, not Markings: every lane moves, so the guideline graph is re-derived - which
+	// is the whole edit. The centre-line paint does not move (it sits on offset 0), but the
+	// rebuild repaints it anyway, and that is cheaper than a second change kind for one edit.
+	CommitAndNotify(Edit, EChangeKind::Topology);
+
+	int32 Lanes = 0;
+	for (const FGuidelineEdge& Edge : Network->GetGuidelineEdges())
+	{
+		Lanes += (Edge.bAlive && Edge.bDerived && Edge.DerivedFrom.IsSet()
+			&& Edge.Direction != EGuidelineDir::Bidirectional) ? 1 : 0;
+	}
+	UE_LOG(LogRoadMesh, Log, TEXT("Drive side -> %s, %d road lane edge(s) re-derived"),
+		Side == EDriveSide::Left ? TEXT("Left") : TEXT("Right"), Lanes);
+	return true;
+}
+
 bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 {
 	URoadNetwork* Network = Actor().Network;
