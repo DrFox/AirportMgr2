@@ -367,6 +367,11 @@ def post_material(mpc, meshes):
         return None
     mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
     mat.set_editor_property("opacity_mask_clip_value", CLIP)
+    # USAGE FLAGS, set and saved here: the posts are HISM instances of Nanite meshes, and the
+    # editor sets a missing flag in memory on first use and never saves it, so a packaged
+    # build would draw them with the default material (MapCheck "missing the usage flag").
+    mat.set_editor_property("used_with_instanced_static_meshes", True)
+    mat.set_editor_property("used_with_nanite", True)
 
     ok = True
     base = lib.create_material_expression(mat, unreal.MaterialExpressionConstant3Vector, -300, 0)
@@ -394,6 +399,10 @@ def post_material(mpc, meshes):
     if back.get_editor_property("blend_mode") != unreal.BlendMode.BLEND_MASKED:
         fail("%s did not save masked" % path)
         return None
+    for flag in ("used_with_instanced_static_meshes", "used_with_nanite"):
+        if not back.get_editor_property(flag):
+            fail("%s did not save %s" % (path, flag))
+            return None
     for mesh in meshes:
         again = unreal.EditorAssetLibrary.load_asset(mesh.get_path_name().split(".")[0])
         if again.get_material(0) != back:
