@@ -63,6 +63,12 @@ ROWS = [
         # most of the argument for keeping a yard at all. A Code E aeroplane next to a Code C
         # one says what "the airport has to be rebuilt" means in a way no figure does.
         ("/Game/Aircraft/Plane6/SK_Plane6", "Plane6 (777-300ER)"),
+        # THE A380 GOES AFTER THE 777, AND WHAT IT ADDS IS WIDTH: 79.75 m of span against
+        # the 777's 64.78, and 15 m of fuselage the 777 does not have UNDER it - a second
+        # deck. It is 1.2 m SHORTER than the 777 nose to tail, which standing them side by
+        # side makes plain in a way no figure does, and it is why the floor below grew
+        # again: eight aeroplanes and their gaps are 355 m across, past 300.
+        ("/Game/Aircraft/Plane8/SK_Plane8", "Plane8 (A380-800)"),
     ]),
     ("Ground equipment", 500.0, [
         ("/Game/Vehicles/GPU1/SK_GPU1", "GPU1 (towed)"),
@@ -92,8 +98,13 @@ ROW_PITCH_UU = 10000.0
 # aeroplane standing on the void. Worth re-checking on the next import: the row is centred on
 # Y = 0, so what matters is that the sum of the spans plus twelve metres per gap stays under
 # this figure. place_row prints that sum every run ("Aircraft: N model(s) over M m").
+#
+# 400 m SINCE 2026-09-23, UP FROM 300, FOR plane8. The seven-aeroplane row came to 263 m;
+# the A380's 79.75 m of wing and its 12 m gap take it to 355, which at 300 m put a wingtip
+# 27 m off the edge. The same re-check as last time, with the same answer: it is the span
+# that binds, and there is no letter above Code F for the next one to be wider than.
 FLOOR_X_M = 300.0
-FLOOR_Y_M = 300.0
+FLOOR_Y_M = 400.0
 
 # THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
 #

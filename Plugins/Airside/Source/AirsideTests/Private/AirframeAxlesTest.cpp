@@ -167,6 +167,11 @@ static const TCHAR* const MeasuredTypes[] = {
 	// Tools/Python/build_plane7_type.py, which checks the same four figures from the other
 	// direction.
 	TEXT("/Game/Entities/DA_Aircraft_Plane7"),
+	// THE A380 IS THE SECOND BOGIE ROW AND THE FIRST WITH TWO UNITS A SIDE. Its rig numbers
+	// the wheels per side - wheel_L1..L2 on the wing bogie, wheel_L3..L5 on the body bogie -
+	// precisely so that LeftMainWheel below finds wheel_L1 the way it finds plane6's; the
+	// models repo names the MESHES by unit and the BONES by the game's rule, and says so.
+	TEXT("/Game/Entities/DA_Aircraft_Plane8"),
 };
 
 /**
@@ -408,6 +413,10 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		  TEXT("a 350 t 777-300ER is the far end of the same progression - and this row is "
 			   "the only thing distinguishing an asset authored VehicleTug from one nobody "
 			   "authored at all, since the class default says the same thing") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane8"), EPushbackNeed::VehicleTug,
+		  TEXT("a 575 t A380 is the end of the progression - nothing heavier flies - and the "
+			   "row exists for the reason plane6's does: authored VehicleTug and default "
+			   "VehicleTug read the same, so only the table can tell them apart") },
 		{ TEXT("/Game/Entities/DA_Aircraft_A320"),   EPushbackNeed::VehicleTug,
 		  TEXT("an A320 is what forces the Pushback depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_B738"),   EPushbackNeed::VehicleTug,

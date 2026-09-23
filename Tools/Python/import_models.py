@@ -266,6 +266,40 @@ SPECS = [
              "have doors, as plane5's does.",
     ),
     Spec(
+        key="plane8",
+        source=MODELS + r"\plane8\export\plane8.glb",
+        mesh_dir="/Game/Aircraft/Plane8",
+        skel_name="SK_Plane8",
+        # ONE MESH PER WHEEL, TWENTY-TWO OF THEM, and these are the MESH node stems rather
+        # than the bones - plane8's wheel MESHES are named by unit and index
+        # (wheel_wing_L_0..3, wheel_body_L_0..5) while its wheel BONES are numbered per side
+        # (wheel_L1..L5) for the game's lookups. This row wants the meshes.
+        #
+        # ALL TWENTY, NOT ONE UNIT: axle_centres_uu averages what it matches, and the mean of
+        # the wing bogies (station 33.55) and the body bogies (36.87) is the point the whole
+        # main-gear group pivots about, which is what FAirframe::FixedAxleX means. plane6
+        # averages its six for the same reason.
+        front_nodes=["wheel_nose_0", "wheel_nose_1"],
+        rear_nodes=["wheel_wing_L_%d" % i for i in range(4)]
+                   + ["wheel_wing_R_%d" % i for i in range(4)]
+                   + ["wheel_body_L_%d" % i for i in range(6)]
+                   + ["wheel_body_R_%d" % i for i in range(6)],
+        front_label="nose gear",
+        rear_label="main gear (wing and body bogies)",
+        # NOSE GEAR, the CONTACT PATCH - plane6's ruling, for plane6's reason. This leg is
+        # raked too: trunnion at station 5.672, axle at 4.972, so the steer axis meets the
+        # ground 0.7 m aft of where the tyre does, and build_export.py's UE_ORIGIN is the
+        # tyre, (0, 4.972, 0) in Blender world space, read from gear_pivots.json.
+        origin_on="front",
+        note="Airbus A380-800. 72.70 m long, 79.75 m span, 24.10 m to the fin tip against "
+             "Airbus's published 72.72 / 79.75 / 24.09 - all three within 2 cm, and the "
+             "span is the figure that puts this aeroplane at Code F, 25 cm inside its 80 m "
+             "ceiling. Origin on the NOSE gear. Thirty-six joints, twice plane6's eighteen: "
+             "four fans, ten main axles on four BOGIES with their own tilt bones - the "
+             "first rig to use BONE_RULES' truck/bogie needles - five retract bones and "
+             "ten bay doors. Every one carries a mesh; build_rig.py asserts it.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",
