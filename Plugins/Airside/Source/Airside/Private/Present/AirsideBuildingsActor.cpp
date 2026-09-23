@@ -76,6 +76,13 @@ AAirsideBuildingsActor::AAirsideBuildingsActor()
 	FenceFabric->SetUsingAbsoluteScale(true);
 	FenceFabric->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	FenceFabric->bAffectDistanceFieldLighting = false;
+	// NO SHADOW from the fabric. The shadow pass samples T_Chainlink at a mip picked by the
+	// shadow map's texel size, which steps with camera distance, and from mip 5 down the
+	// alpha is uniform (0.213 at every texel, measured from chainlink.png 2026-09-23) - so
+	// alpha coverage can only make the whole fabric solid or empty. It cast a 2.4 m wall
+	// shadow at one zoom notch and nothing at the next. A real chainlink shadow is barely
+	// there; the posts keep theirs. ENFORCED BY: Airside.Present.PlotFenceFabricCastsNoShadow
+	FenceFabric->SetCastShadow(false);
 
 	Plots = CreateDefaultSubobject<UPlotPresenter>(TEXT("Plots"));
 	Plots->Initialise(ModuleBoxes, ModuleGhosts,

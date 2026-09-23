@@ -3,6 +3,7 @@
 #include "Content/AirsideContent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
+#include "Materials/MaterialParameterCollection.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 
@@ -268,6 +269,16 @@ FFenceKit UAirsideSettings::ResolveFenceKit()
 		Kit.LinePost = Content->FenceLinePost.LoadSynchronous();
 		Kit.HeavyPost = Content->FenceHeavyPost.LoadSynchronous();
 		Kit.Fabric = Content->FenceFabricMaterial.LoadSynchronous();
+
+		// THE NAME IS build_fence_content.py's FADE list's. A missing parameter leaves 0 - no
+		// cull - rather than culling posts the material is still drawing.
+		// ENFORCED BY: Airside.Content.FenceFadeWired (the collection carries PostFadeEnd)
+		if (const UMaterialParameterCollection* Fade = Content->FenceFadeCollection.LoadSynchronous())
+		{
+			bool bFound = false;
+			const float End = Fade->GetScalarParameterDefaultValue(TEXT("PostFadeEnd"), bFound);
+			Kit.PostFadeEndUu = bFound ? End : 0.0;
+		}
 	}
 	return Kit;
 }

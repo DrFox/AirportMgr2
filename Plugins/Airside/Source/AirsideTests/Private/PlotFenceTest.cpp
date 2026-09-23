@@ -2,6 +2,9 @@
 #include "AirsideTestFixtures.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
+#include "Content/AirsideSettings.h"
+#include "Content/FenceKit.h"
+#include "Engine/StaticMesh.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "Entities/EntityDefinition.h"
@@ -100,6 +103,81 @@ bool FPlotFenceReachesTheComponentsTest::RunTest(const FString& Parameters)
 		Expected.CountOf(FenceLayout::EPostKind::Line));
 	TestEqual(TEXT("nor the fabric"),
 		Fabric->GetDynamicMesh()->GetMeshRef().TriangleCount(), 2 * Expected.Spans.Num());
+	return true;
+}
+
+/**
+ * Both post components cull just past the distance the material has faded the posts by.
+ *
+ * WHY: past PostFadeEnd a post is fully dithered away but still drawn - every one of hundreds
+ * per plot rasterised and shaded for nothing. The cull is the saving; this pins that the
+ * presenter sets it from the kit, on BOTH components, and not so early that it cuts a post
+ * the material still draws (the engine measures to the bounds centre, a pixel can be a whole
+ * radius nearer). Against the real content set, so a kit with no collection shows as 0.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotFencePostsCullWhereFadedTest,
+	"Airside.Present.PlotFencePostsCullWhereFaded",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotFencePostsCullWhereFadedTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	if (!TestNotNull(TEXT("a buildings actor"), TestWorld.Buildings)) { return false; }
+	ARoadNetworkActor* Road = TestWorld.Actor;
+	Road->ClearNetwork();
+	PlaceFenceTestDepot(Road);
+	Road->RebuildMesh();
+
+	const FFenceKit Kit = UAirsideSettings::ResolveFenceKit();
+	if (!TestTrue(TEXT("the content set resolves a post fade distance"), Kit.PostFadeEndUu > 0.0))
+	{
+		return false;
+	}
+	const TPair<const TCHAR*, UHierarchicalInstancedStaticMeshComponent*> Components[] = {
+		{ TEXT("line"), TestWorld.Buildings->GetFencePostsForTest() },
+		{ TEXT("heavy"), TestWorld.Buildings->GetFenceHeavyPostsForTest() } };
+	for (const auto& [Name, Posts] : Components)
+	{
+		if (!TestNotNull(*FString::Printf(TEXT("the %s posts' component"), Name), Posts)) { continue; }
+		const UStaticMesh* Mesh = Posts->GetStaticMesh();
+		if (!TestNotNull(*FString::Printf(TEXT("the %s posts have a mesh"), Name), Mesh)) { continue; }
+		int32 Start = -1;
+		int32 End = -1;
+		Posts->GetCullDistances(Start, End);
+		const double Radius = Mesh->GetBounds().SphereRadius;
+		TestTrue(*FString::Printf(TEXT("the %s posts cull no nearer than a whole radius past the fade"), Name),
+			End >= Kit.PostFadeEndUu + Radius);
+		TestTrue(*FString::Printf(TEXT("the %s posts cull no further than that plus rounding - else they draw faded"), Name),
+			End <= Kit.PostFadeEndUu + Radius + 1.0);
+	}
+	return true;
+}
+
+/**
+ * The fabric casts no shadow; the posts still do.
+ *
+ * WHY: the fabric's shadow flipped between a solid 2.4 m wall and nothing as the camera
+ * zoomed, because T_Chainlink's small mips are uniform and the shadow map's mip steps with
+ * distance (AAirsideBuildingsActor's constructor has the figures). The posts' shadows are
+ * the ground contact the fence keeps, so turning shadows off wholesale is the wrong fix.
+ * On the SPAWNED actor, not the CDO: a saved or duplicated actor is what the player sees.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotFenceFabricCastsNoShadowTest,
+	"Airside.Present.PlotFenceFabricCastsNoShadow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotFenceFabricCastsNoShadowTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a buildings actor"), TestWorld.Buildings)) { return false; }
+	const UDynamicMeshComponent* Fabric = TestWorld.Buildings->GetFenceFabricForTest();
+	if (!TestNotNull(TEXT("the fabric component"), Fabric)) { return false; }
+	TestFalse(TEXT("the fabric casts no shadow - its small mips are all-or-nothing"), Fabric->CastShadow);
+	TestTrue(TEXT("the line posts still cast theirs"), TestWorld.Buildings->GetFencePostsForTest()->CastShadow);
+	TestTrue(TEXT("and the heavy posts"), TestWorld.Buildings->GetFenceHeavyPostsForTest()->CastShadow);
 	return true;
 }
 
