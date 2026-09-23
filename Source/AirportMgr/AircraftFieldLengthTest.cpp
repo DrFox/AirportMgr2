@@ -99,6 +99,17 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		// noticing.
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane6.DA_Aircraft_Plane6"), TEXT("plane6"), 0.0,
 		  nullptr },
+		// plane8 ALSO CARRIES NO CEILING, AND NOT FOR plane6's REASON. The A380's published
+		// take-off field length (~3,000 m, Airbus AC 3-3-1) is SHORTER than the 777-300ER's
+		// 3,120 - four engines on 575 t against two on 351 t - so "must ask less than the 777"
+		// would be a TRUE claim this row could make. It is not made, because the point of a
+		// ceiling here is a rung on the field-length ladder, and the A380 is not a rung on it:
+		// what refuses this type is a 45 m runway and a Code E stand, not 120 m of pavement.
+		// Its gameplay claim is width, and this struct has no column for width; a ceiling
+		// that happened to hold would be read as the ladder having one more step than it has.
+		// The roll-against-published check below is real, as it is for plane6.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane8.DA_Aircraft_Plane8"), TEXT("plane8"), 0.0,
+		  nullptr },
 	};
 
 	for (const FPublished& Each : Published)

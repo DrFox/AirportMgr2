@@ -123,6 +123,13 @@ namespace IcaoCode
 			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3538.0,  507.0,  -950.0, -2150.0, 600.0 },
 			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0, -1300.0, -3000.0, 600.0 },
 			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6800.0,  800.0, -1600.0, -3700.0, 600.0 },
+			// CODE F HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-23, and no figure moved.
+			// DA_Aircraft_Plane8, the A380-800, measures 6775 uu from its nose-gear stop mark
+			// to its tailcone and 7940 uu of wing (7975 across the wingtip fences) - inside
+			// MaxTailAft by 125 uu and MaxWingspan by 25 even at the fences, the same "built
+			// to the letter" margin plane6 showed under E.
+			// The row stays as authored; Tools/Python/build_plane8_type.py checks both
+			// measurements against it every run and FAILS if a re-export grows past either.
 			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0,  900.0, -1900.0, -4300.0, 600.0 },
 		};
 

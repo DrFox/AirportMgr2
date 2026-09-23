@@ -67,6 +67,12 @@ NEEDS = {
         "default is indistinguishable from an asset nobody authored, which is the point the "
         "Plane7 row already makes from the other side",
     ),
+    "/Game/Entities/DA_Aircraft_Plane8": (
+        unreal.PushbackNeed.VEHICLE_TUG,
+        "a 575 t A380 is the end of the progression - nothing heavier flies - and it is "
+        "authored for the reason the Plane6 row gives: an unset field that agrees with the "
+        "class default cannot be told from an asset nobody wrote",
+    ),
     "/Game/Entities/DA_Aircraft_A320": (
         unreal.PushbackNeed.VEHICLE_TUG,
         "an A320 is what forces the Pushback depot",
