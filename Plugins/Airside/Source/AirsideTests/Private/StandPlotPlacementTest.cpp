@@ -1,8 +1,12 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Build/AnchorLink.h"
+#include "Build/AnchorLinkFinder.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/RoadEntity.h"
+#include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Solve/IcaoCode.h"
@@ -541,6 +545,157 @@ bool FStandOutlinePointPlacedStandGetsOutlineTest::RunTest(const FString& Parame
 	TestTrue(TEXT("it is a depot, and stays unplotted"), Depot.IsDepot() && !Depot.IsPlotted());
 	TestEqual(TEXT("its outline stays empty"), Depot.Outline.Num(), 0);
 
+	return true;
+}
+
+/**
+ * FINAL REVIEW I5: A DRAWN STAND'S LEAD-IN IS SIZED BY ITS OWN LETTER. D, E and F have no
+ * design aircraft (UAirsideSettings::ResolveLargestAircraftOfLetter returns null for every
+ * letter today), and FAnchorLink read both the lead-in's radius and its span limit off that
+ * aircraft - so a drawn F stand was painted with Code C's 25 m radius and no span limit at
+ * all. The letter the stand was drawn as is captured (DesignWingspan), and is what admission
+ * reads; the lead-in now reads it too.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotLeadInSizedByLetterTest,
+	"Airside.Present.StandPlot.LeadInSizedByLetter",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotLeadInSizedByLetterTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	// THE PENDING LINK, measured before any join: FAnchorLink::Gather is where the radius and
+	// the limit are decided, so reading them there asks exactly the question, with no road
+	// geometry downstream able to hide the figure.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		UEntityDefinition* FStand = UEntityDefinition::MakeStandTransient(EIcaoCode::F);
+		if (!TestTrue(TEXT("the Code F template has no design aircraft - the case under test"),
+			FStand->DesignAircraft == nullptr)) { return false; }
+
+		const FVector2D A(0.0, 0.0);
+		const FVector2D B(IcaoCode::StandWidthForLetter(EIcaoCode::F), 0.0);
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, FVector2D(0.0, 1.0), EIcaoCode::F);
+		FEntityPlacement Placement;
+		Placement.Definition = FStand;
+		Placement.Anchors = FStand->Anchors;
+		Placement.Position = Pose.Position;
+		Placement.Heading = RoadGeom::Bearing(Pose.Facing);
+		Placement.PoseRole = FStand->PoseRole;
+		StandBox::BoxAt(Pose, EIcaoCode::F, Placement.Outline);
+		Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(EIcaoCode::F);
+		const FEntityInstanceId Placed = Net->PlaceEntity(Placement);
+		const FEntityInstance* Stand = Net->GetEntity(Placed);
+		if (!TestNotNull(TEXT("the F stand is placed"), Stand)) { return false; }
+
+		TArray<FPendingLink> Pending;
+		TSet<FGuidelineNodeId> AnchorNodes;
+		FAnchorLink::Gather(*Net, FAnchorLink::DefaultMaxLeadIn, FAnchorLink::DefaultServiceLinkRadius,
+			Pending, AnchorNodes);
+		const FPendingLink* LeadIn = Pending.FindByPredicate(
+			[Stand](const FPendingLink& Link) { return Link.Node == Stand->PoseNode; });
+		if (!TestNotNull(TEXT("the pose casts a lead-in"), LeadIn)) { return false; }
+
+		TestEqual(TEXT("the lead-in sweeps at Code F's radius, not Code C's"),
+			LeadIn->Radius, IcaoCode::RadiusForLetter(EIcaoCode::F));
+		TestEqual(TEXT("and limits span to the widest Code F - the letter admission reads, not unlimited"),
+			LeadIn->MaxWingspan, IcaoCode::MaxWingspanForLetter(EIcaoCode::F));
+	}
+
+	// THE SAME STAND, DRAWN THROUGH THE FACADE, TAKES AN A380 - the span limit above must not
+	// be one that refuses the very aircraft the letter admits.
+	{
+		FAirsideTestWorld TestWorld;
+		if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+		Actor->ClearNetwork();
+
+		// LONGER THAN LayTaxiway's 200 m: an F stand's entrance is ~190 m wide, and its
+		// lead-in must meet the taxiway well clear of the far node for the entry sweeps.
+		IRoadEditTarget* Target = Actor;
+		const int32 West = Target->PlaceNode(FVector2D(-40000.0, 0.0));
+		const int32 East = Target->PlaceNode(FVector2D(60000.0, 0.0));
+		Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
+
+		FVector2D A, B;
+		const TArray<FVector2D> Rect = FloorRect(EIcaoCode::F, 1000.0, A, B);
+		const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+		if (!TestTrue(TEXT("a Code F floor rect beside the taxiway is placed"), Index != INDEX_NONE)) { return false; }
+		Actor->RebuildMesh();
+		const FGuidelineNodeId StandPose = Actor->Network->GetEntities()[Index].PoseNode;
+
+		// FROM THE TAXIWAY'S WEST END - the nearest guideline node to it, whatever the builder
+		// named it.
+		FGuidelineNodeId From;
+		double BestDistance = TNumericLimits<double>::Max();
+		const TArray<FGuidelineNode>& Nodes = Actor->Network->GetGuidelineNodes();
+		for (int32 NodeIndex = 0; NodeIndex < Nodes.Num(); ++NodeIndex)
+		{
+			const FGuidelineNodeId Id = Actor->Network->GuidelineNodeIdAt(NodeIndex);
+			if (!Id.IsSet()) { continue; }
+			const double Distance = FVector2D::Distance(Nodes[NodeIndex].Position, FVector2D(-39000.0, 0.0));
+			if (Distance < BestDistance) { BestDistance = Distance; From = Id; }
+		}
+		if (!TestTrue(TEXT("a taxiway node to start from"), From.IsSet())) { return false; }
+
+		FAirframe A380;
+		A380.Wingspan = 7980.0;   // the A380-800's published 79.8 m
+		const FGuidelineNodeId Chosen = ArrivalPlanner::ChooseStand(*Actor->Network, From, A380, nullptr, 0);
+		TestTrue(TEXT("an A380 is given the drawn F stand"), Chosen.IsSet() && Chosen == StandPose);
+	}
+	return true;
+}
+
+/**
+ * FINAL REVIEW (cheap minor): a depot plot may not be laid over a stand. WhyStandRefused
+ * already refused a STAND over a depot; the reverse had no check at all, so a depot drawn
+ * across a stand's apron placed, fenced and seated its tanks under the parked aircraft. The
+ * same (edge-tolerant) OutlinesOverlap answers both directions, so a depot flush against a
+ * stand's edge still places.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotDepotRefusesStandOverlapTest,
+	"Airside.Present.StandPlot.DepotRefusesStandOverlap",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotDepotRefusesStandOverlapTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+
+	FVector2D A, B;
+	const TArray<FVector2D> Stand = FloorRect(EIcaoCode::C, 1000.0, A, B);
+	IRoadEditTarget* Target = Actor;
+	if (!TestTrue(TEXT("a Code C stand is placed"), Target->PlaceStandInPlot(Stand, A, B) != INDEX_NONE)) { return false; }
+
+	// A 30 x 24 m plot - DepotIsPickedByItsGround's own - with its frontage on Y = FrontY.
+	const auto Plot = [](double X0, double FrontY)
+	{
+		return TArray<FVector2D>{ FVector2D(X0, FrontY), FVector2D(X0 + 3000.0, FrontY),
+			FVector2D(X0 + 3000.0, FrontY + 2400.0), FVector2D(X0, FrontY + 2400.0) };
+	};
+	const TArray<EDepotModule> Modules = { EDepotModule::Shed, EDepotModule::Tank };
+
+	// ACROSS THE STAND'S MIDDLE: refused.
+	const TArray<FVector2D> Over = Plot(1000.0, 2000.0);
+	TestEqual(TEXT("a depot plot laid over a stand is refused"),
+		Target->PlaceEntityInPlot(Over, Over[0], Over[1], Modules, EPlaceableEntity::FuelDepot), INDEX_NONE);
+
+	// FLUSH AGAINST THE STAND'S WEST EDGE: sharing an edge is not overlapping - and this is
+	// also the control that proves the refusal above was for the overlap, not for anything
+	// else about a plot of this size.
+	const TArray<FVector2D> Flush = Plot(-3000.0, 2000.0);
+	TestTrue(TEXT("the same plot flush beside the stand is placed"),
+		Target->PlaceEntityInPlot(Flush, Flush[0], Flush[1], Modules, EPlaceableEntity::FuelDepot) != INDEX_NONE);
 	return true;
 }
 

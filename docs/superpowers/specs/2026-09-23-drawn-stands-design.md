@@ -105,6 +105,14 @@ own floor** - task 1's finding, live in `WhyStandRefused`: `ResolveStandDefiniti
 null for them and the tool refuses with "Code A/B stands cannot be built yet" rather than placing
 a stand narrower than its own template needs.
 
+**REVISED 2026-09-23 (final review I5): the lead-in is sized by the stand's LETTER.**
+`FAnchorLink` read both the aircraft lead-in's radius and its span limit off the definition's
+design aircraft, so a drawn D/E/F stand (no design aircraft) got Code C's radius and no limit.
+One rule now (`LeadInSizingFor`): the letter of the captured `DesignWingspan` - the letter
+admission reads - gives `RadiusForLetter` and `MaxWingspanForLetter`. A stand with span 0
+("unknown") keeps the design-aircraft reading. Per-letter design aircraft in content (plane8
+for F) stay deferred.
+
 ### Commit
 
 `IRoadEditTarget::PlaceStandInPlot(Outline)` -> `URoadEditFacade`, sibling of
