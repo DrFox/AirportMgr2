@@ -55,10 +55,16 @@ edges (`URoadNetwork::ForEachOutgoingGuideline`, `RoadNetwork.cpp:1072`).
   cycles the tier; `ARoadNetworkActor::ResolveProfileFor` (`RoadNetworkActor.cpp:934`)
   honours `WidthIndex` for roads. The tier name shows where the taxiway code does.
 - Each tier names a **design vehicle**; its fillet is solved so that vehicle's swept path
-  fits (section 6). Narrow: bowser figures. Standard: bowser. Wide: the rig. Replaces
+  fits (section 6). Narrow and Standard: the bowser (Standard's extra 0.5 m per lane
+  is clearance, not a bigger vehicle - nothing between bowser and rig exists yet).
+  Wide: the rig. Replaces
   `ResolveLargestServiceVehicle` as the fillet source for roads.
-- Existing levels: the old profile asset is kept as the Standard tier (same path), so
-  placed roads re-derive as Standard two-lane roads. No player saves exist
+- Existing levels: today's road is a 600 uu lane + 60 uu kerbs (`build_road_profiles.py:52-53`),
+  a 6.0 m carriageway - exactly Narrow (2 x 3.0 m), not Standard (7.0 m). The old profile
+  asset is kept as the **Narrow** tier (same path, same total width), so placed roads
+  re-derive as Narrow two-lane roads and nothing on the map changes width. The bowser
+  (~2.5 m) stays admitted on Narrow (~0.25 m each side), so fuel service on existing
+  maps keeps working. No player saves exist
   (memory `no-player-saves-yet`); note the break in the PR anyway.
 
 ## 2. Drive side
@@ -151,7 +157,23 @@ Reporting:
 - Callers pass the vehicle: `FuelService` currently queries with `Wingspan = 0`
   (`:229-232`) and no vehicle.
 
-## 7. Testing
+## 7. Lane markings
+
+Requested 2026-09-23. `FRoadLaneMarkingBuilder` in `Build/`, beside
+`FRunwayMarkingBuilder` and `FHoldingPositionMarkingBuilder` and for the same reason
+(paint landing on a road vertex must not perturb the bitwise-welded surface): quads for a
+marking component of its own, UV1 = 0 painting solid `MarkingColor`, white instance.
+
+- A dashed centre line between the two lanes of every two-lane road segment: 100 mm
+  wide, 3 m on / 6 m off (tunable constants, unjudged until seen), phase starting at each
+  cut line so dashes never enter a junction polygon.
+- Drawn on the segment's surface centreline (offset 0), which the drive side does not
+  move, so flipping side repaints nothing.
+- Nothing stored: derived per build, like runway paint. A census count
+  (`LogAirside: Lane markings: <N> dashes on <M> segments`) for the log and tests.
+- Out of scope: edge lines, direction arrows, give-way lines at junctions.
+
+## 8. Testing
 
 World-free `Model/` / `Solve/` tests written first, each red before its code:
 
@@ -170,6 +192,8 @@ World-free `Model/` / `Solve/` tests written first, each red before its code:
    route arriving in either direction reaches it without a detour.
 9. Composition: spawn `ARoadNetworkActor`, toggle drive side, tick; agent re-plans and
    ends on the new side (seam test for `SetDriveSide`).
+10. Lane markings: every dash lies within the segment between its cut lines, centred on
+    offset 0; none inside a junction polygon; count matches length / pitch.
 
 Each rule also gets the "delete it and watch the test go red" check (memory
 `a-green-test-may-measure-nothing`).
@@ -184,8 +208,9 @@ index across arms (the shape section 3 removes).
 
 Three PRs, in order, each built and tested:
 
-1. Two-way lanes, drive side, junction pairing, dead-end U-turn, anchor links
-   (sections 2-5, tests 1-5, 8, 9). One Standard-width two-lane profile.
+1. Two-way lanes, drive side, junction pairing, dead-end U-turn, anchor links, lane
+   markings (sections 2-5, 7, tests 1-5, 8-10). The existing road becomes the Narrow
+   two-lane profile.
 2. Width tiers and tool cycling (section 1).
 3. Vehicle size, sweep, gating, TooNarrow reporting (section 6, tests 6-7).
 
@@ -195,5 +220,4 @@ The rig import (articulated step 2) follows PR 3.
 
 - Per-edge search cost of `VehicleFits` is a few comparisons; no concern at ~hundreds of
   edges (2026-09-23).
-- Lane markings (centre line paint) are not in scope; the lanes are visible via the
-  guideline overlay only. Say if you want them in PR 1.
+- Dash length/gap and line width are first guesses; judge on screen after PR 1.
