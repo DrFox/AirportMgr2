@@ -117,7 +117,7 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 	}
 
 	TestTrue(TEXT("the van yielded: its speed fell below half its taxi cap while blocked"),
-		VanMinSpeedWhileWaiting < 0.5 * VanNow->Airframe.Chassis.Ground.Taxi.SpeedCap);
+		VanMinSpeedWhileWaiting < 0.5 * VanNow->Chassis().Ground.Taxi.SpeedCap);
 	TestTrue(TEXT("the aircraft never was"), PlaneMinStopWithin > 1000.0);
 	TestTrue(TEXT("the van's wait named the aircraft"), bVanWaitedOnPlane);
 	// SEPARATION AGAINST WHAT THE RULE ACTUALLY RESERVES, which is the gap plus half the

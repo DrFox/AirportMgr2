@@ -101,13 +101,13 @@ FChassis UAirsideSettings::ResolveLargestServiceVehicle()
 	return ResolveDefaultVehicle().Chassis;
 }
 
-FAirframe UAirsideSettings::ResolveDefaultVehicle()
+FVehicle UAirsideSettings::ResolveDefaultVehicle()
 {
 	// NO CONTENT LOOKUP, unlike ResolveDefaultAirframe above, and deliberately: there is no
 	// UVehicleType asset to point at yet, so a soft pointer here would be a content slot
 	// nothing could fill - the "authored numbers nothing reads" failure, one level up. M3
 	// adds the type with the fleet, and this function is where it will be resolved.
-	FAirframe Van;
+	FVehicle Van;
 
 	// A LIGHT COMMERCIAL VEHICLE, in FGroundRegime's units (uu/s and uu/s^2; a uu is a
 	// centimetre). 1 m/s^2 up, 2 m/s^2 braking, 10 m/s flat out - an airside speed limit
@@ -199,23 +199,19 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// driver backs into a tight space rather than nosing in.
 	Van.Chassis.Ground.MaxSteerDegrees = 45.0;
 
-	// A TRUCK CANNOT FLY, AND SAYS SO. Zeroed rather than left at the struct defaults, which
-	// are a light twin's and are all NON-ZERO - so a default-constructed FApproachPerformance
-	// answers IsSet() == true, and this van would have passed as landable to anything that
-	// asked (ArrivalPlanner and FRoadAgent both branch on exactly that call). Nothing asks
-	// today, which is precisely why it is worth making false by construction rather than by
-	// nobody having got round to it.
+	// A TRUCK CANNOT FLY, AND NOW CANNOT EVEN BE ASKED TO. Until 2026-09-23 this was an
+	// FAirframe, and its climb and approach were zeroed here by hand because their struct
+	// defaults are a light twin's and all NON-ZERO - a default FApproachPerformance answers
+	// IsSet() == true, so an unzeroed van would have passed as landable to ArrivalPlanner and
+	// FRoadAgent, which both branch on exactly that call. An FVehicle has no climb, approach,
+	// gear or engine to zero, and FRoadAgent::AsAircraft() answers null for it, so the
+	// question is unrepresentable rather than answered false.
 	//
-	// One decisive field each is enough: IsSet() is an AND over every figure.
-	Van.Approach.GlideslopeDegrees = 0.0;
-	Van.Climb.LiftAngleAtRotateDegrees = 0.0;
-
-	// ENGINE IS LEFT ALONE, deliberately, and it is the one exception. FRoadAgent runs the
-	// spool-up and spool-down through it and writes EngineRPM into FAgentMotion; zeroing it
-	// would make a truck's own motion struct describe an engine that never turns, which is a
-	// lie about a running vehicle rather than a refusal to fly. The box does not draw it.
+	// THE ENGINE WENT WITH THEM. It was left at its defaults so FRoadAgent would spool a
+	// propeller RPM into FAgentMotion for a truck; the one reader, UAirsideAgentAnim, drives a
+	// prop, and a truck's RPM is now zero - see FRoadAgent::StartEngineAtSpeed.
 	//
-	// What the inspector SAYS this is - see FAirframe::TypeCode. FUEL rather than VAN
+	// What the inspector SAYS this is - see FVehicle::TypeCode. FUEL rather than VAN
 	// because the panel names the job the player can see, and this slice has exactly one.
 	Van.TypeCode = TEXT("FUEL");
 

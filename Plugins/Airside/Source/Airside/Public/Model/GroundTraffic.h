@@ -149,6 +149,13 @@ public:
 		ETraversalClass Class, double ShutdownPauseSeconds);
 
 	/**
+	 * The same, for a service vehicle: the agent is started with StartDrive and carries an
+	 * FVehicle. See FRoadAgent::Chassis for why the two bundles are held side by side.
+	 */
+	int32 DispatchAgent(const URoadNetwork* Network, const FRoutePlan& Plan, const FVehicle& Vehicle,
+		ETraversalClass Class, double ShutdownPauseSeconds);
+
+	/**
 	 * Sends an EXISTING agent along a new plan, keeping its id and its class.
 	 *
 	 * The seam AirportOps composes "go to the stand, dwell, return to the depot" from
@@ -556,6 +563,15 @@ private:
 	 * "one struct per thing" rule exists to prevent.
 	 */
 	void ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork* Network, const FRoutePlan& Plan) const;
+
+	/**
+	 * Everything both DispatchAgent overloads do once the agent is started with its bundle:
+	 * the pause, the reverse speed, class, goal, departure arming, the posing Advance, Admit
+	 * and the goal claim. ONE BODY, so the two overloads differ in the Start* call and in
+	 * nothing else - a second copy is where an aircraft and a truck would start to disagree.
+	 */
+	int32 AdmitDispatched(FRoadAgent&& Agent, const URoadNetwork* Network, const FRoutePlan& Plan,
+		ETraversalClass Class, double ShutdownPauseSeconds);
 
 	/**
 	 * One claim pass over every agent, highest rank first. Spec 2026-09-06 §3.4.

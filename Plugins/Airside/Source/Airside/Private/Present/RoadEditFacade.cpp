@@ -160,6 +160,12 @@ bool URoadEditFacade::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Air
 	return Actor().DispatchAgent(Plan, Airframe, Class);
 }
 
+bool URoadEditFacade::DispatchAgent(const FRoutePlan& Plan, const FVehicle& Vehicle,
+	ETraversalClass Class)
+{
+	return Actor().DispatchAgent(Plan, Vehicle, Class);
+}
+
 bool URoadEditFacade::MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const
 {
 	// NodeIdAt already returns unset for a dead or out-of-range slot - see RoadSlot::HandleAt.

@@ -101,10 +101,13 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 	// pose: a view that fetched its own mesh by path was how a content move turned every
 	// aircraft into a cube - see ARoadAgentActor::SetAirframe.
 	//
-	// BY THE AGENT'S CLASS, because an aircraft and a truck are different assets of different
+	// BY WHAT THE AGENT IS, because an aircraft and a truck are different assets of different
 	// KINDS - one skeletal, one static. Decided HERE rather than inside the view, so the view
 	// still knows nothing about traffic classes and stays the dumb thing its header promises.
-	if (Agent->Class == ETraversalClass::Aircraft)
+	//
+	// BY BODY, NOT BY CLASS, since 2026-09-23: the mesh fields live on the FAirframe, and only
+	// an agent started with one has them. Class is a routing fact (see EAgentBody).
+	if (const FAirframe* Aircraft = Agent->AsAircraft())
 	{
 		// THE AGENT'S OWN AIRFRAME FIRST, the content default only as a fallback - see
 		// UAirsideSettings::ResolveAgentView, the one place this three-way fallback is typed
@@ -113,12 +116,12 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 		// Meridian: the name, the figures and the refusal reasons were all the right type's,
 		// and only the aeroplane on the runway was not. It went unnoticed for as long as
 		// there was exactly one aircraft model to wear.
-		const FResolvedAgentView Resolved = UAirsideSettings::ResolveAgentView(Agent->Airframe);
+		const FResolvedAgentView Resolved = UAirsideSettings::ResolveAgentView(*Aircraft);
 		if (Resolved.Mesh != nullptr)
 		{
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d wears %s (%s)"),
 				AgentId, *Resolved.Mesh->GetName(),
-				Agent->Airframe.Mesh.IsNull() ? TEXT("content default") : TEXT("its own type"));
+				Aircraft->Mesh.IsNull() ? TEXT("content default") : TEXT("its own type"));
 		}
 		View->SetAirframe(Resolved.Mesh, Resolved.AnimClass);
 	}
@@ -181,6 +184,14 @@ bool UAirsideTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 {
 	SurfaceZ = InSurfaceZ;
 	return Model->DispatchAgent(Network, Plan, Airframe, Class, ShutdownPauseSeconds) != 0;
+}
+
+bool UAirsideTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePlan& Plan,
+	const FVehicle& Vehicle, double InSurfaceZ, double ShutdownPauseSeconds, ETraversalClass Class)
+{
+	// Recorded before the dispatch for the reason the FAirframe overload gives.
+	SurfaceZ = InSurfaceZ;
+	return Model->DispatchAgent(Network, Plan, Vehicle, Class, ShutdownPauseSeconds) != 0;
 }
 
 bool UAirsideTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
@@ -267,7 +278,8 @@ void UAirsideTraffic::Advance(double DeltaSeconds, double InSurfaceZ, const URoa
 		// TOUCHDOWN. An EDGE, true for one Advance only, so this fires once per landing -
 		// see FLandingRun::bTouchedDown, which is cleared at the top of every Advance for
 		// exactly this reason.
-		if (Agent.Arrival.bTouchedDown && Smoke != nullptr)
+		const FAirframe* Aircraft = Agent.AsAircraft();
+		if (Agent.Arrival.bTouchedDown && Smoke != nullptr && Aircraft != nullptr)
 		{
 			const FVector2D Along(FMath::Cos(Agent.LastMotion.Heading), FMath::Sin(Agent.LastMotion.Heading));
 			// Same convention as FRunwayMarkingBuilder's runway frame: across is the along
@@ -279,20 +291,20 @@ void UAirsideTraffic::Advance(double DeltaSeconds, double InSurfaceZ, const URoa
 			// gear is FixedAxleX along the fuselage from it - a negative number, 14 m on the
 			// Q400. Smoking at the origin would put the puffs under the nose, which touches
 			// down seconds later and somewhere else.
-			const FVector2D Mains = Agent.LastMotion.Position + Along * Agent.Airframe.Chassis.FixedAxleX;
-			const double HalfTrack = Agent.Airframe.Chassis.MainGearTrack * 0.5;
+			const FVector2D Mains = Agent.LastMotion.Position + Along * Aircraft->Chassis.FixedAxleX;
+			const double HalfTrack = Aircraft->Chassis.MainGearTrack * 0.5;
 
 			// UNMEASURED TRACK MEANS ONE PUFF, on the centreline, rather than a fabricated
 			// pair - the same discipline FChassis::HasAxles applies to the steering law. A
 			// made-up track puts smoke where the aeroplane has no wheels.
-			if (Agent.Airframe.Chassis.HasMainGearTrack())
+			if (Aircraft->Chassis.HasMainGearTrack())
 			{
-				Smoke->Puff(FVector(Mains - Across * HalfTrack, SurfaceZ), Agent.Airframe.Wingspan);
-				Smoke->Puff(FVector(Mains + Across * HalfTrack, SurfaceZ), Agent.Airframe.Wingspan);
+				Smoke->Puff(FVector(Mains - Across * HalfTrack, SurfaceZ), Aircraft->Wingspan);
+				Smoke->Puff(FVector(Mains + Across * HalfTrack, SurfaceZ), Aircraft->Wingspan);
 			}
 			else
 			{
-				Smoke->Puff(FVector(Mains, SurfaceZ), Agent.Airframe.Wingspan);
+				Smoke->Puff(FVector(Mains, SurfaceZ), Aircraft->Wingspan);
 			}
 
 			// INSTRUMENTED AT THE BOUNDARY, because the alternative is asking for another
@@ -301,8 +313,8 @@ void UAirsideTraffic::Advance(double DeltaSeconds, double InSurfaceZ, const URoa
 			// guessed at otherwise if no smoke appeared.
 			UE_LOG(LogAirside, Log,
 				TEXT("Touchdown smoke: agent %d, %d puff(s) at (%.0f, %.0f), track %.0f uu, span %.0f uu."),
-				Agent.Id, Agent.Airframe.Chassis.HasMainGearTrack() ? 2 : 1, Mains.X, Mains.Y,
-				Agent.Airframe.Chassis.MainGearTrack, Agent.Airframe.Wingspan);
+				Agent.Id, Aircraft->Chassis.HasMainGearTrack() ? 2 : 1, Mains.X, Mains.Y,
+				Aircraft->Chassis.MainGearTrack, Aircraft->Wingspan);
 		}
 	}
 }

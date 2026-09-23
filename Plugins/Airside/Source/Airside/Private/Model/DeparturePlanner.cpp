@@ -65,7 +65,7 @@ namespace DeparturePlanner
 			// naming the errand is what puts that difference in the one table rather than
 			// in two arguments at two call sites.
 			return RouteSearch::Find(Network,
-				FRouteQuery::For(Errand, Start, Candidate, Airframe, Class));
+				FRouteQuery::For(Errand, Start, Candidate, Airframe.Wingspan, Class));
 		};
 
 		auto Accept = [&](const FRoutePlan& Route, FGuidelineNodeId Candidate, double Offset, bool bBacktrack)

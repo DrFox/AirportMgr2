@@ -6,6 +6,7 @@
 #include "Model/RoadTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RouteSearch.h"
+#include "Model/Vehicle.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RunwayFacts.h"
 #include "Profiles/RoadProfile.h"
@@ -395,6 +396,20 @@ public:
 	bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe)
 	{
 		return DispatchAgent(Plan, Airframe, ETraversalClass::Aircraft);
+	}
+
+	/**
+	 * The same, for a service vehicle - an FVehicle, not an FAirframe with its climb zeroed
+	 * (2026-09-23). AN OVERLOAD BY BUNDLE, so the argument says what kind of thing is sent and
+	 * FRoadAgent's body follows from it; Class stays the routing fact it always was.
+	 */
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FVehicle& Vehicle,
+		ETraversalClass Class) = 0;
+
+	/** GroundVehicle by default, the vehicle counterpart of the Aircraft overload above. */
+	bool DispatchAgent(const FRoutePlan& Plan, const FVehicle& Vehicle)
+	{
+		return DispatchAgent(Plan, Vehicle, ETraversalClass::GroundVehicle);
 	}
 
 	virtual void RebuildMesh() = 0;

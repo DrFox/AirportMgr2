@@ -207,6 +207,8 @@ public:
 	using IRoadEditTarget::DispatchAgent;
 	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe,
 		ETraversalClass Class) override;
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FVehicle& Vehicle,
+		ETraversalClass Class) override;
 
 	/** Removes every agent and its cube. Forwards to Traffic. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Airside")

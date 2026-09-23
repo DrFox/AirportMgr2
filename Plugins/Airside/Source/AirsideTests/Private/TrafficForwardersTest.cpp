@@ -55,8 +55,9 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	TArray<TPair<EAgentPhase, EAgentPhase>> Relayed;
 	Traffic->OnAgentPhaseChanged.AddLambda([&Relayed](int32, EAgentPhase From, EAgentPhase To) { Relayed.Emplace(From, To); });
 
-	FAirframe Van = UAirsideSettings::ResolveDefaultAirframe();
-	Van.Climb = FClimbPerformance();   // a van does not fly; unset Climb means no departure can arm
+	// A REAL VEHICLE since 2026-09-23: it used to be the default airframe with Climb cleared
+	// so no departure could arm; an FVehicle has no climb, so none can.
+	const FVehicle Van = UAirsideSettings::ResolveDefaultVehicle();
 	if (!TestTrue(TEXT("dispatch through the actor is accepted"), Actor->DispatchAgent(Plan, Van, ETraversalClass::GroundVehicle))) { return false; }
 
 	const int32 Id = Traffic->GetNewestAgentId();

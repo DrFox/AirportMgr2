@@ -114,6 +114,10 @@ public:
 	bool DispatchAgent(const URoadNetwork* Network, const FRoutePlan& Plan, const FAirframe& Airframe,
 		double SurfaceZ, double ShutdownPauseSeconds, ETraversalClass Class = ETraversalClass::Aircraft);
 
+	/** The same, for a service vehicle - see UGroundTraffic's FVehicle overload. */
+	bool DispatchAgent(const URoadNetwork* Network, const FRoutePlan& Plan, const FVehicle& Vehicle,
+		double SurfaceZ, double ShutdownPauseSeconds, ETraversalClass Class = ETraversalClass::GroundVehicle);
+
 	/**
 	 * Sends an EXISTING agent along a new plan, keeping its id and its view.
 	 *

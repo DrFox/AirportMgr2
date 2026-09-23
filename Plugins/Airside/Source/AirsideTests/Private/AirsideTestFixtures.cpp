@@ -40,9 +40,9 @@ FAirframe TestAirframes::Piper()
 	return A;
 }
 
-FAirframe TestAirframes::Van()
+FVehicle TestAirframes::Van()
 {
-	FAirframe A;
+	FVehicle A;
 	A.Chassis.Ground.MaxTurnRateDegPerSec = 90.0;
 	return A;
 }
