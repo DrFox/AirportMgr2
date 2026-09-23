@@ -304,6 +304,80 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 	return Placed.Index;
 }
 
+namespace
+{
+	/**
+	 * How far two outlines must interpenetrate, uu, before OutlinesOverlap calls it an
+	 * overlap. One centimetre: the PlotFit::CornerInsetUu precedent, and for the same reason -
+	 * a boundary-exact question answered by floating point is a coin flip, and the question
+	 * meant is "do these interiors share ground", not "is this point on that line".
+	 */
+	constexpr double OverlapToleranceUu = 1.0;
+
+	/**
+	 * Do two outlines share INTERIOR - more than OverlapToleranceUu of ground in common?
+	 * Touching along an edge or at a corner is NOT overlapping.
+	 *
+	 * SEPARATING AXES, NOT CONTAINMENT (final review I4). This was "any vertex of one inside
+	 * the other, or an edge of one crossing an edge of the other", through RoadGeom::
+	 * PointInPolygon and RoadGeom::SegmentsCross. Both are undefined exactly on a boundary
+	 * (RoadGeom.h says so of the first), and a row of stands drawn off one taxiway grid puts
+	 * every neighbour's corner exactly on the last one's edge, to within the ulps of two
+	 * independent sums: the second stand of a row was refused "overlaps stand 0" by a coin
+	 * flip. Two convex outlines are disjoint exactly when some edge normal of either separates
+	 * their projections, so asking that axis by axis with a tolerance makes "touching" a
+	 * margin rather than a knife edge - and a real overlap, of any shape (one inside the
+	 * other, or crossed like a plus sign, the two cases the old test needed both halves for),
+	 * still has no separating axis and is still refused.
+	 *
+	 * CONVEX INPUTS, which is every outline that reaches here: a stand is StandBox's
+	 * rectangle, a depot plot the gesture's rectangle. A non-convex one would be judged by its
+	 * own edges' normals, so the answer errs toward "overlaps" (refusal), never toward
+	 * letting two interiors share ground.
+	 */
+	bool OutlinesOverlap(TArrayView<const FVector2D> A, TArrayView<const FVector2D> B)
+	{
+		// Is there an edge normal of Edges along which A and B's projections are apart, or
+		// meet within the tolerance?
+		const auto SeparatedByEdgesOf = [A, B](TArrayView<const FVector2D> Edges)
+		{
+			const int32 Num = Edges.Num();
+			for (int32 Index = 0; Index < Num; ++Index)
+			{
+				const FVector2D Edge = Edges[(Index + 1) % Num] - Edges[Index];
+				const double Length = Edge.Size();
+				if (Length <= UE_DOUBLE_SMALL_NUMBER)
+				{
+					continue;
+				}
+				// Unit length, so the tolerance below is in uu along every axis alike.
+				const FVector2D Axis(-Edge.Y / Length, Edge.X / Length);
+
+				double MinA = TNumericLimits<double>::Max(), MaxA = TNumericLimits<double>::Lowest();
+				for (const FVector2D& P : A)
+				{
+					const double D = FVector2D::DotProduct(P, Axis);
+					MinA = FMath::Min(MinA, D);
+					MaxA = FMath::Max(MaxA, D);
+				}
+				double MinB = TNumericLimits<double>::Max(), MaxB = TNumericLimits<double>::Lowest();
+				for (const FVector2D& P : B)
+				{
+					const double D = FVector2D::DotProduct(P, Axis);
+					MinB = FMath::Min(MinB, D);
+					MaxB = FMath::Max(MaxB, D);
+				}
+				if (MaxA - MinB <= OverlapToleranceUu || MaxB - MinA <= OverlapToleranceUu)
+				{
+					return true;
+				}
+			}
+			return false;
+		};
+		return !SeparatedByEdgesOf(A) && !SeparatedByEdgesOf(B);
+	}
+}
+
 PlotYard::FReservation URoadEditFacade::ReserveForPlot(TArrayView<const FVector2D> Outline,
 	FVector2D FrontageA, FVector2D FrontageB, EPlaceableEntity Kind) const
 {
@@ -359,6 +433,22 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("PlaceEntityInPlot refused: the outline crosses itself"));
 		return INDEX_NONE;
+	}
+
+	// NOT OVER A STAND. WhyStandRefused has always refused a stand drawn over a depot; the
+	// reverse had no check, so a depot plot laid across a stand's apron placed its fence and
+	// tanks under the parked aircraft (final review). The SAME OutlinesOverlap, so a depot
+	// flush against a stand's edge places exactly as a stand flush against a depot does.
+	// Stands only: depot-on-depot was never refused and is not this fix's to change.
+	for (int32 Index = 0; Index < Net.GetEntities().Num(); ++Index)
+	{
+		const FEntityInstance& Entity = Net.GetEntities()[Index];
+		if (Entity.bAlive && Entity.IsStand() && Entity.IsPlotted() && OutlinesOverlap(Outline, Entity.Outline))
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("PlaceEntityInPlot refused: the plot overlaps stand %d"), Index);
+			return INDEX_NONE;
+		}
 	}
 
 	// COUNTER-CLOCKWISE, exactly the correction AddApron makes and for the same reason: the
@@ -502,46 +592,6 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 namespace
 {
 	/**
-	 * Do two convex quads overlap - any vertex of one inside the other, or an edge of one
-	 * crossing an edge of the other?
-	 *
-	 * BOTH HALVES ARE NEEDED. Edge-crossing alone misses one rectangle wholly inside another
-	 * (two drawn stands sharing a corner point, or one drawn entirely inside a larger one),
-	 * which shares no crossing edge with anything. Vertex-containment alone misses two
-	 * rectangles that overlap like a plus sign, offset so neither contains a corner of the
-	 * other. RoadGeom::PointInPolygon and RoadGeom::SegmentsCross are the plugin's one
-	 * answer to each question - see their own headers for why a shared endpoint or a
-	 * collinear touch does not count as either.
-	 */
-	bool OutlinesOverlap(TArrayView<const FVector2D> A, TArrayView<const FVector2D> B)
-	{
-		for (const FVector2D& P : A)
-		{
-			if (RoadGeom::PointInPolygon(B, P)) { return true; }
-		}
-		for (const FVector2D& P : B)
-		{
-			if (RoadGeom::PointInPolygon(A, P)) { return true; }
-		}
-
-		const int32 NumA = A.Num();
-		const int32 NumB = B.Num();
-		for (int32 IndexA = 0; IndexA < NumA; ++IndexA)
-		{
-			const FVector2D& A0 = A[IndexA];
-			const FVector2D& A1 = A[(IndexA + 1) % NumA];
-			for (int32 IndexB = 0; IndexB < NumB; ++IndexB)
-			{
-				if (RoadGeom::SegmentsCross(A0, A1, B[IndexB], B[(IndexB + 1) % NumB]))
-				{
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	/**
 	 * Does the straight chord A-B (a segment's two node positions) enter Outline's interior -
 	 * either endpoint inside, or a crossing with any edge?
 	 *
@@ -652,6 +702,8 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) co
 	// EnsureStandOutlines both give a point-placed or legacy-loaded stand the Code C box its
 	// pose implies), so this test no longer special-cases one - the IsPlotted() guard below
 	// exists only for a not-yet-alive slot, same as it always did for a depot's own check.
+	// ENFORCED BY: Airside.Model.StandOutline.PointPlacedStandGetsOutline, ...LegacyGetsCodeCBox,
+	// and AirportOps.Present.RuntimeLoad.LegacyStandGetsOutline (a save-game load, too).
 	const URoadNetwork* Network = GetNetwork();
 	if (Network != nullptr)
 	{
@@ -868,8 +920,15 @@ int32 URoadEditFacade::FindEntityAt(FVector2D Where, double Radius) const
 	//
 	// A PLOT NEVER BY ITS POSITION. That is the gate midpoint, and until 2026-09-22 it was the
 	// only way to select or remove a depot: a small click at the gate, with the whole plot and
-	// its buildings dead to the cursor. Mapped out of reach here rather than filtered after,
-	// so a plot's gate cannot win the radius pick over a stand beside it.
+	// its buildings dead to the cursor. Mapped out of reach here rather than filtered after.
+	//
+	// SINCE DRAWN STANDS, EVERY STAND IS PLOTTED TOO (placement and EnsureStandOutlines both
+	// give one its box), so this radius pick now finds only a stand WITHOUT an outline - the
+	// ground pick below takes every plotted one, stands and depots alike, by the ground the
+	// player can see. Kept, not deleted, for the window a legacy stand has none: between a
+	// load that has not migrated it yet and the rebind that does (the "gate cannot win the
+	// radius pick over a stand" this used to justify it by no longer arises - no plotted
+	// entity is in this pick at all).
 	const int32 Stand = RoadSlot::NearestAlive<FEntityInstance>(Entities, Where, Radius,
 		[](const FEntityInstance& Entity)
 		{

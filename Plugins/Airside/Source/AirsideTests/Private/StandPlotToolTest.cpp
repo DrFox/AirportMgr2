@@ -436,6 +436,77 @@ bool FStandPlotCommitPlacesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * FINAL REVIEW I4: STANDS IN A ROW. The first thing a player does after drawing one stand is
+ * draw the next beside it, anchored at the first one's far corner on the same taxiway grid -
+ * so the two share an edge to within the ulps two independent sums of the same figures land
+ * on. The overlap test used RoadGeom::PointInPolygon, whose on-edge answer is undefined, so
+ * the neighbour could be refused as "overlaps stand 0" by a floating-point coin flip.
+ *
+ * TOUCHING IS NOT OVERLAPPING; a real metre of overlap still is - both halves, or a check
+ * that simply stopped looking would pass the first.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotFlushNeighboursBothPlaceTest,
+	"Airside.Tool.StandPlot.FlushNeighboursBothPlace",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotFlushNeighboursBothPlaceTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+
+	TArray<FVector2D> First;
+	{
+		FStandPlotTool Tool;
+		if (!TestTrue(TEXT("the first stand reaches Confirm"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+		Tool.Rect(At(Actor, AnchorCursor), First);
+		Tool.OnCommit(At(Actor, AnchorCursor));
+		if (!TestEqual(TEXT("the first stand places"), LiveStands(Actor), 1)) { return false; }
+	}
+
+	// THE SECOND ANCHOR, clicked at the first one's far entrance corner - the corner the player
+	// sees, not a figure this test computes and the tool might not reproduce.
+	const FVector2D FarCorner = First[1];
+	FStandPlotTool Tool;
+	Tool.OnClick(At(Actor, FarCorner));
+	if (!TestEqual(TEXT("a click on the first stand's far corner anchors on the taxiway"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Entrance))) { return false; }
+	TArray<FVector2D> Shown;
+	Tool.Rect(At(Actor, FarCorner), Shown);
+	if (!TestTrue(TEXT("the grid puts the second anchor ON the first stand's corner, or this is not a flush row"),
+		Shown.Num() > 0 && Shown[0].Equals(FarCorner, 1.0))) { return false; }
+	const FVector2D Anchor = Shown[0];
+	Tool.OnClick(At(Actor, Anchor + FVector2D(Width, 0.0)));
+	Tool.OnClick(At(Actor, Anchor + FVector2D(Width, Depth)));
+	if (!TestEqual(TEXT("the second stand reaches Confirm"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Confirm))) { return false; }
+
+	const FToolReadout Readout = ReadoutOf(Tool, At(Actor, Anchor));
+	TestTrue(FString::Printf(TEXT("Build is lit for a neighbour sharing only an edge (warnings: %s)"),
+		*FString::Join(Readout.Warnings, TEXT("; "))), Readout.bCommittable);
+	Tool.OnCommit(At(Actor, Anchor));
+	TestEqual(TEXT("and both stands stand"), LiveStands(Actor), 2);
+
+	// A REAL METRE OF OVERLAP is still refused: the first stand's own rectangle slid back
+	// 100 uu short of flush.
+	TArray<FVector2D> Overlapping = First;
+	for (FVector2D& Corner : Overlapping) { Corner += FVector2D(Width - 100.0, 0.0); }
+	IRoadEditTarget* Target = Actor;
+	const FString Why = Target->WhyStandRefused(Overlapping);
+	TestTrue(FString::Printf(TEXT("a stand overlapping its neighbour by 1 m is refused ('%s')"), *Why),
+		Why.Contains(TEXT("overlaps")));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotCancelStepsBackTest,
 	"Airside.Tool.StandPlot.CancelStepsBack",
