@@ -72,6 +72,21 @@ enum class EGuidelineDir : uint8
 };
 
 /**
+ * Which side of a two-lane road traffic keeps to, airport-wide (spec 2026-09-23 §2).
+ *
+ * ONE SETTING, NOT PER ROAD: a junction between roads of opposite sides would need crossover
+ * logic that no real airside has. Applied when guidelines are DERIVED, never when they are
+ * followed - the lane the player is shown is the lane that is driven (the sample-once rule).
+ * See FProfileGuideline::OffsetFor.
+ */
+UENUM()
+enum class EDriveSide : uint8
+{
+	Right,
+	Left
+};
+
+/**
  * Right-of-way rank. Higher wins. Spec 5.4:
  *
  *     Emergency > Aircraft > Pedestrian > GroundVehicle
