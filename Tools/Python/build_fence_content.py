@@ -37,8 +37,10 @@ tuned live in PIE. THIS SCRIPT OWNS THEIR DEFAULTS: a rerun writes FADE back ove
 tuning, so copy a tuned value into FADE before running it again.
 
 STILL MASKED, never translucent (see material()): the partial opacity is a blue-noise dither
-that TSR resolves into a veil. The SHADOW pass keeps the old behaviour - plain wire alpha,
-solid posts - because the "camera" in the shadow pass is the LIGHT's view, and a fade keyed
+that TSR resolves into a veil. The FABRIC casts no shadow at all (AAirsideBuildingsActor's
+constructor says why); its material's shadow input is kept only so the fabric shadows
+correctly up close if that is ever turned back on. The SHADOW pass keeps the old behaviour -
+plain wire alpha, solid posts - because the "camera" in the shadow pass is the LIGHT's view, and a fade keyed
 on it would fade shadows by the sun's position rather than the player's.
 
 DISTANCE, NOT DEPTH: the fades measure straight-line distance to the camera, not PixelDepth,

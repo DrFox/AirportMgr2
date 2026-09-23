@@ -156,6 +156,32 @@ bool FPlotFencePostsCullWhereFadedTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * The fabric casts no shadow; the posts still do.
+ *
+ * WHY: the fabric's shadow flipped between a solid 2.4 m wall and nothing as the camera
+ * zoomed, because T_Chainlink's small mips are uniform and the shadow map's mip steps with
+ * distance (AAirsideBuildingsActor's constructor has the figures). The posts' shadows are
+ * the ground contact the fence keeps, so turning shadows off wholesale is the wrong fix.
+ * On the SPAWNED actor, not the CDO: a saved or duplicated actor is what the player sees.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotFenceFabricCastsNoShadowTest,
+	"Airside.Present.PlotFenceFabricCastsNoShadow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotFenceFabricCastsNoShadowTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a buildings actor"), TestWorld.Buildings)) { return false; }
+	const UDynamicMeshComponent* Fabric = TestWorld.Buildings->GetFenceFabricForTest();
+	if (!TestNotNull(TEXT("the fabric component"), Fabric)) { return false; }
+	TestFalse(TEXT("the fabric casts no shadow - its small mips are all-or-nothing"), Fabric->CastShadow);
+	TestTrue(TEXT("the line posts still cast theirs"), TestWorld.Buildings->GetFencePostsForTest()->CastShadow);
+	TestTrue(TEXT("and the heavy posts"), TestWorld.Buildings->GetFenceHeavyPostsForTest()->CastShadow);
+	return true;
+}
+
+/**
  * The fabric faces OUT and is textured by distance along the edge.
  *
  * ENGINE-COMPUTED NORMALS, per memory: Unreal's winding is left-handed and a hand-derived
