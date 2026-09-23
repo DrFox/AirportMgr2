@@ -720,6 +720,22 @@ foreach ($rel in $chassisOnly) {
     }
 }
 
+# --- 16. Turn paths never pair guidelines by index across arms -------------------------------
+# Until 2026-09-23 FRoadGuidelineBuilder paired guideline N of one arm with guideline N of the
+# next over the smaller count. Offsets are per segment A->B and arms meet at mixed ends, so on
+# two-lane roads that paired an ARRIVING lane with an ARRIVING lane, and a one-lane arm meeting
+# a two-lane arm lost a lane. The shape it had: a Min over two profiles' Guidelines.Num().
+$turnBuilder = Join-Path $plugin 'Private\Build\RoadGuidelineBuilder.cpp'
+if (-not (Test-Path $turnBuilder)) {
+    $failures.Add("turn-index-pairing: $turnBuilder is named by rule 16 but does not exist - update the rule, do not let it check nothing")
+} else {
+    $turnText = Get-Content -Raw $turnBuilder
+    foreach ($m in [regex]::Matches($turnText, 'Min\(\s*\w+->Guidelines\.Num\(\)')) {
+        $line = ($turnText.Substring(0, $m.Index) -split "`n").Count
+        $failures.Add("turn-index-pairing: $($turnBuilder):$line pairs turn-path guidelines by index; pair arriving lanes with leaving lanes instead")
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 Write-Host "Check-Architecture: $($commentFactWarnings.Count) comment-only-fact warning(s) (rule 12; see Tools/Check-Architecture.ps1's own comment)." -ForegroundColor Yellow
 if ($failures.Count -eq 0) {
