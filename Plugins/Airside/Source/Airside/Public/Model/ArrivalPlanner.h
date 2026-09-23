@@ -118,12 +118,20 @@ struct AIRSIDE_API FArrivalPlan
 namespace ArrivalPlanner
 {
 	/**
-	 * The best FREE stand reachable from From: shortest taxi with runway edges excluded, skipping
-	 * any stand whose pose node Occupancy says is held by an agent other than ExcludingAgent.
-	 * Unset when none. OutRoute receives the winning route; bOutSawHeld reports that at least one
-	 * reachable stand was skipped for being held, which is how Plan tells NoFreeStand from
-	 * NoRouteToStand. Factored out of Plan so the rebuild can ask it from a node that is not a
-	 * runway exit (UGroundTraffic::ReResolvePlan) and the re-offer from wherever a waiter stopped.
+	 * The best FREE stand reachable from From that Airframe is ADMITTED to: the SMALLEST ICAO
+	 * letter stand that is Airframe's own letter or wider (never smaller - GDD's "smallest
+	 * free stand that fits", so a widebody never parks an A320 out of the one stand it needs),
+	 * then the shortest taxi among ties, with runway edges excluded and any stand whose pose
+	 * node Occupancy says is held by an agent other than ExcludingAgent skipped. Unset when
+	 * none. An airframe with no known wingspan (Wingspan <= 0) or a stand nobody measured
+	 * (DesignWingspan == 0) is admitted to anything, as it always was before letter admission
+	 * existed - there is nothing to compare a size against.
+	 *
+	 * OutRoute receives the winning route; bOutSawHeld reports that at least one reachable,
+	 * ADMITTED stand was skipped for being held, which is how Plan tells NoFreeStand from
+	 * NoRouteToStand - a stand skipped for being too SMALL is neither, and is not counted here.
+	 * Factored out of Plan so the rebuild can ask it from a node that is not a runway exit
+	 * (UGroundTraffic::ReResolvePlan) and the re-offer from wherever a waiter stopped.
 	 */
 	AIRSIDE_API FGuidelineNodeId ChooseStand(const URoadNetwork& Network, FGuidelineNodeId From,
 		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingAgent,
