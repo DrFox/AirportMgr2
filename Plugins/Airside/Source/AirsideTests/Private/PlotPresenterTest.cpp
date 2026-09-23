@@ -890,4 +890,52 @@ bool FPlotPresenterDuplicateOwnsItsMeshComponentsTest::RunTest(const FString& Pa
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandOutlineIsNotADepotTest,
+	"Airside.Present.PlotPresenter.StandOutlineIsNotADepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandOutlineIsNotADepotTest::RunTest(const FString& Parameters)
+{
+	// COMPOSITION LEVEL, the same reason FPlotPresenterDressesEachBayTest is: the bug this
+	// test pins (RebuildFrom fencing by Outline.Num() alone, not by kind) is only visible
+	// once the buildings actor actually rebuilds from the network - a check of FEntityInstance
+	// alone would pass on a fully broken presenter.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), TestWorld.Buildings->GetPlotPresenter())) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+
+	// PLACED THROUGH THE REAL TOOL PATH, not a hand-built FEntityPlacement like PlaceDepot
+	// above: PoseRole has to come from IRoadEditTarget::PlaceEntity resolving
+	// Definition->PoseRole the way an actual stand placement does, so this test cannot pass
+	// by accident of a fixture that never exercised production's kind-capture at all.
+	const int32 Placed = Actor->PlaceEntity(FVector2D::ZeroVector, 0.0, EPlaceableEntity::Stand);
+	if (!TestTrue(TEXT("a stand is placed"), Placed != INDEX_NONE)) { return false; }
+	const FEntityInstanceId StandId = Actor->Network->EntityIdAt(Placed);
+
+	// AN OUTLINE WRITTEN ON DIRECTLY: no production path draws a stand's outline yet (that is
+	// later work in this SDD slice), so FRoadNetworkTestAccess - the friend struct that exists
+	// for exactly a write no production caller makes - is the only way to build the case this
+	// test exists to catch: a stand instance whose Outline.Num() >= 3.
+	FRoadNetworkTestAccess NetworkAccess(*Actor->Network);
+	const bool bWrote = NetworkAccess.SetEntityOutlineForTest(StandId,
+		{ FVector2D(0.0, 0.0), FVector2D(1500.0, 0.0), FVector2D(1500.0, 800.0), FVector2D(0.0, 800.0) });
+	if (!TestTrue(TEXT("the outline was written onto the placed stand"), bWrote)) { return false; }
+
+	Actor->RebuildMesh();
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+
+	TestEqual(TEXT("a drawn stand is ground, not a yard - no fence round an aircraft"),
+		Plots->GetFencePostCount(), 0);
+	TestEqual(TEXT("a drawn stand is ground, not a yard - no fence round an aircraft"),
+		Plots->GetInstanceCount(), 0);
+
+	return true;
+}
+
 #endif

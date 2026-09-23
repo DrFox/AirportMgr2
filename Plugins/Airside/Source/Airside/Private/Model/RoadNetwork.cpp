@@ -1005,6 +1005,17 @@ bool FRoadNetworkTestAccess::SetGuidelineNodePriorityOverrideForTest(FGuidelineN
 	return true;
 }
 
+bool FRoadNetworkTestAccess::SetEntityOutlineForTest(FEntityInstanceId Entity, TArray<FVector2D> Outline)
+{
+	FEntityInstance* Found = Network.GetEntityMutable(Entity);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->Outline = MoveTemp(Outline);
+	return true;
+}
+
 void URoadNetwork::PruneHoldingPositionMarks()
 {
 	HoldingPositionMarks.RemoveAll([this](const FHoldingPositionMark& Mark)
@@ -1334,6 +1345,11 @@ const FEntityInstance* URoadNetwork::GetEntity(FEntityInstanceId Entity) const
 FEntityInstanceId URoadNetwork::EntityIdAt(int32 Index) const
 {
 	return RoadSlot::HandleAt<FEntityInstanceId>(Entities, Index);
+}
+
+FEntityInstance* URoadNetwork::GetEntityMutable(FEntityInstanceId Entity)
+{
+	return RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
 }
 
 int32 URoadNetwork::FindEntityIndexByPoseNode(FGuidelineNodeId Node) const

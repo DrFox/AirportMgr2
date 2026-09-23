@@ -297,10 +297,22 @@ struct AIRSIDE_API FEntityInstance
 	UPROPERTY() TArray<FVector2D> Outline;
 
 	/**
-	 * Drawn as a plot - a depot - rather than stamped at a pose like a stand. The one test
-	 * for it, so "is this a plot" is not re-spelled as a count at each new call site.
+	 * Has a drawn outline - a depot plot OR a drawn stand. The one test for "was this drawn
+	 * rather than stamped", so a count is not re-spelled at each new call site.
+	 *
+	 * NEVER USE IT TO MEAN "DEPOT": a stand can be plotted too (2026-09-23's "drawn stands"
+	 * work), so a site that fences, prices or labels by outline alone now catches a stand as
+	 * well - ask IsDepot() (or IsStand()) for kind, and IsPlotted() only for "has ground to
+	 * draw". Check-Architecture.ps1's IsPlotted rule is what stops this meaning drifting back.
 	 */
 	bool IsPlotted() const { return Outline.Num() >= 3; }
+
+	/** A stand: its pose node is an aircraft's stop mark. PoseRole is the captured kind -
+	 *  Model/ cannot ask the definition. */
+	bool IsStand() const { return PoseRole == EServiceRole::Aircraft; }
+
+	/** A fuel depot, plotted or pre-plot. */
+	bool IsDepot() const { return PoseRole == EServiceRole::Fuel; }
 
 	/**
 	 * What the player put in the bays, in bay order. Empty for a plotless entity.

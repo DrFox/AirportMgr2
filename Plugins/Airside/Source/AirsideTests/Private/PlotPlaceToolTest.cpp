@@ -1895,7 +1895,7 @@ bool FDepotTruckTurnsOutWithinItsLockTest::RunTest(const FString& Parameters)
 	const FEntityInstance* Depot = nullptr;
 	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
 	{
-		if (Entity.bAlive && Entity.IsPlotted()) { Depot = &Entity; break; }
+		if (Entity.bAlive && Entity.IsDepot() && Entity.IsPlotted()) { Depot = &Entity; break; }
 	}
 	if (!TestNotNull(TEXT("a depot was placed"), Depot)) { return false; }
 	const FGuidelineNode* Home = Actor->Network->GetGuidelineNode(Depot->PoseNode);

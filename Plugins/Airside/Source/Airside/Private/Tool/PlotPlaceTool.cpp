@@ -438,8 +438,10 @@ int32 FPlotPlaceTool::PlotUnder(const FToolContext& Context)
 	}
 	// A PRE-PLOT DEPOT HAS NO GROUND to click, so FindEntityAt finds it the way it finds a
 	// stand - by its pose within the pick radius - and its fuel role is what says it is ours.
+	// KIND, NOT OUTLINE: IsDepot() alone is enough now that a stand can be plotted too - the
+	// old `IsPlotted() || PoseRole == Fuel` would have picked up a drawn stand here as well.
 	const FEntityInstance& Entity = Network->GetEntities()[Under];
-	return Entity.IsPlotted() || Entity.PoseRole == EServiceRole::Fuel ? Under : INDEX_NONE;
+	return Entity.IsDepot() ? Under : INDEX_NONE;
 }
 
 void FPlotPlaceTool::OnClick(const FToolContext& Context)
@@ -665,7 +667,11 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 		if (Doomed != INDEX_NONE)
 		{
 			const FEntityInstance& Entity = Network->GetEntities()[Doomed];
-			if (Entity.IsPlotted())
+			// Entity is already a depot here - PlotUnder only ever returns one - but the
+			// kind is named on this line too, not left implicit in the caller, so a reader
+			// (and Check-Architecture's IsPlotted rule) does not have to trust that at a
+			// distance: IsPlotted() alone decides plotted vs pre-plot, never depot vs stand.
+			if (Entity.IsDepot() && Entity.IsPlotted())
 			{
 				Sink.Polygon(Entity.Outline, EPreviewStyle::Doomed);
 			}

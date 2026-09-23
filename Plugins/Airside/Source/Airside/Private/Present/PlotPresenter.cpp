@@ -537,7 +537,11 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 
 	for (const FEntityInstance& Entity : Network.GetEntities())
 	{
-		if (!Entity.bAlive || Entity.Outline.Num() < 3)
+		// KIND, NOT OUTLINE, SAYS DEPOT (2026-09-23): a stand can carry a drawn Outline too
+		// now, and this loop stands modules and a fence round whatever it does not skip here -
+		// Outline.Num() alone used to fence a drawn stand exactly like a depot's yard. See
+		// Airside.Present.PlotPresenter.StandOutlineIsNotADepot.
+		if (!Entity.bAlive || !Entity.IsDepot() || !Entity.IsPlotted())
 		{
 			continue;
 		}

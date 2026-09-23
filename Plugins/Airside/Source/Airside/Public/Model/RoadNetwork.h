@@ -713,6 +713,12 @@ private:
 	 *  FGuidelineNode::PriorityOverride's own comment). */
 	FGuidelineNode* GetGuidelineNodeMutable(FGuidelineNodeId Node);
 
+	/** Kept private, same reason as the two above: no production placement path writes an
+	 *  entity's Outline after PlaceEntity yet (a stand's own drawn outline is later work in
+	 *  this SDD slice); FRoadNetworkTestAccess::SetEntityOutlineForTest reaches through this
+	 *  to build that case ahead of the tool that will draw one. */
+	FEntityInstance* GetEntityMutable(FEntityInstanceId Entity);
+
 	friend struct FRoadNetworkTestAccess;
 
 	UPROPERTY() TArray<FRoadNode>    Nodes;
@@ -803,6 +809,11 @@ struct AIRSIDE_API FRoadNetworkTestAccess
 	/** Write PriorityOverride directly - see FGuidelineNode's own comment. False for a
 	 *  dead node. */
 	bool SetGuidelineNodePriorityOverrideForTest(FGuidelineNodeId Node, TArray<ETraversalClass> PriorityOverride);
+
+	/** Write Outline directly onto an already-placed entity - simulating a drawn stand
+	 *  (Airside.Present.PlotPresenter.StandOutlineIsNotADepot) before any production path can
+	 *  draw one. False for a dead entity. */
+	bool SetEntityOutlineForTest(FEntityInstanceId Entity, TArray<FVector2D> Outline);
 
 private:
 	URoadNetwork& Network;

@@ -505,7 +505,7 @@ bool URoadEditFacade::DeleteEntity(int32 EntityIndex)
 	// issue named it - a fuel depot removed under "delete stand" is the wrong word in the
 	// undo history and the log. Doomed.IsSet() means the index is still live to read.
 	const FEntityInstance* Entity = Doomed.IsSet() ? Network->GetEntity(Doomed) : nullptr;
-	const TCHAR* Label = (Entity != nullptr && Entity->PoseRole == EServiceRole::Fuel)
+	const TCHAR* Label = (Entity != nullptr && Entity->IsDepot())
 		? TEXT("delete fuel depot") : TEXT("delete stand");
 
 	// Quoted from the DEFINITION, which is what was paid for, while the instance still names
