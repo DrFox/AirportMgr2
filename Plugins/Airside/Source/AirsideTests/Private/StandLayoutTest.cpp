@@ -386,4 +386,41 @@ bool FEveryAirframeFitsItsLettersRowTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandLayoutEveryLetterReportTest,
+	"Airside.Entities.StandLayoutEveryLetterReport",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandLayoutEveryLetterReportTest::RunTest(const FString& Parameters)
+{
+	// A MEASUREMENT FIRST, a verdict second. Only C was ever built; the drawn-stand tool offers
+	// all six, so each letter's template either fits its own floor or the tool must refuse it.
+	// This test records which, and pins that FitsItsLetter agrees with the raw extents - the
+	// tool trusts FitsItsLetter, so it must not be a second opinion.
+	for (int32 Index = 0; Index <= static_cast<int32>(EIcaoCode::F); ++Index)
+	{
+		const EIcaoCode Letter = static_cast<EIcaoCode>(Index);
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(Letter);
+		if (!TestNotNull(TEXT("a template"), Stand)) { return false; }
+
+		const bool bFits = UEntityDefinition::FitsItsLetter(*Stand, Letter);
+		AddInfo(FString::Printf(TEXT("Code %s: floor %.0f x %.0f, needs %.0f x %.0f, bays %d -> %s"),
+			IcaoCode::ToLetter(Letter),
+			IcaoCode::StandWidthForLetter(Letter), IcaoCode::StandDepthForLetter(Letter),
+			Stand->RequiredExtent.X, Stand->RequiredExtent.Y, Stand->ServiceBays.Num(),
+			bFits ? TEXT("FITS") : TEXT("DOES NOT FIT")));
+
+		TestEqual(*FString::Printf(TEXT("FitsItsLetter agrees with the extents for %s"), IcaoCode::ToLetter(Letter)),
+			bFits,
+			Stand->RequiredExtent.X <= IcaoCode::StandWidthForLetter(Letter)
+				&& Stand->RequiredExtent.Y <= IcaoCode::StandDepthForLetter(Letter)
+				&& IcaoCode::LetterForStandSize(Stand->RequiredExtent.X, Stand->RequiredExtent.Y) == IcaoCode::ToLetter(Letter));
+	}
+
+	// C IS THE SHIPPING STAND and must keep fitting, whatever the others do.
+	TestTrue(TEXT("Code C fits its floor"),
+		UEntityDefinition::FitsItsLetter(*UEntityDefinition::MakeStandTransient(EIcaoCode::C), EIcaoCode::C));
+	return true;
+}
+
 #endif
