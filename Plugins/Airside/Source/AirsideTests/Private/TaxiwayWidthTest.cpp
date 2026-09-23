@@ -48,10 +48,10 @@ namespace
 		}
 		using IRoadEditTarget::UpdateGhost;
 
-		virtual int32 GetTaxiwayProfileCount() const override { return TaxiwayProfiles.Num(); }
-		virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const override
+		virtual int32 GetWidthCount(ERoadKind Kind) const override { return Kind == ERoadKind::Taxiway ? TaxiwayProfiles.Num() : 0; }
+		virtual URoadProfile* ResolveWidthProfile(ERoadKind Kind, int32 Index) const override
 		{
-			if (TaxiwayProfiles.Num() == 0)
+			if (Kind != ERoadKind::Taxiway || TaxiwayProfiles.Num() == 0)
 			{
 				return nullptr;
 			}
@@ -79,7 +79,7 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
-	const int32 Count = Actor->GetTaxiwayProfileCount();
+	const int32 Count = Actor->GetWidthCount(ERoadKind::Taxiway);
 	if (!TestTrue(TEXT("the content set declares standard taxiway widths - run "
 		"Tools/Python/build_road_profiles.py if this fails"), Count > 1))
 	{
@@ -130,7 +130,7 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
 		Tool.OnReselect(TestTool::ContextAt(*Actor, FVector2D::ZeroVector));   // index 0
 
-		const URoadProfile* Narrowest = Actor->ResolveTaxiwayProfile(0);
+		const URoadProfile* Narrowest = Actor->ResolveWidthProfile(ERoadKind::Taxiway, 0);
 		if (!TestNotNull(TEXT("the narrowest profile loads"), Narrowest)) { return false; }
 
 		const int32 Before = Actor->Network->GetSegments().Num();
@@ -154,14 +154,19 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	// 4. A SERVICE ROAD IGNORES THE CYCLE. It has one authored cross-section and the tool
-	//    that lays it is the same class, so the index must never reach it - otherwise key 9
-	//    would quietly lay a road at a taxiway's width, paving wide for vans.
+	// 4. A SERVICE ROAD CYCLES ITS OWN TIERS, NEVER THE TAXIWAYS'. Until 2026-09-23 a road
+	//    ignored the cycle outright, because the only list was the taxiways' and key 9 would
+	//    have laid a road at a taxiway's width, paving wide for vans. The seam keys the list by
+	//    kind now (Airside.Tool.ServiceRoadWidth covers the tiers); what must still hold is the
+	//    danger this block was written for.
 	{
 		FRoadDrawTool Road(ERoadKind::ServiceRoad);
 		Road.OnReselect(TestTool::ContextAt(*Actor, FVector2D::ZeroVector));
-		TestEqual(TEXT("a service road tool has no width to choose"),
-			Road.GetWidthIndex(), INDEX_NONE);
+		const URoadProfile* Chosen = Actor->ResolveProfileFor(ERoadKind::ServiceRoad, Road.GetWidthIndex());
+		TestTrue(TEXT("a road's first width is a road - two lanes, never a taxiway's one aircraft line"),
+			Chosen != nullptr && Chosen->Guidelines.Num() == 2);
+		TestTrue(TEXT("and narrower than the narrowest taxiway"),
+			Chosen != nullptr && Chosen->GetTotalWidth() < Actor->ResolveWidthProfile(ERoadKind::Taxiway, 0)->GetTotalWidth());
 	}
 
 	// 5. AN EMPTY LIST REFUSES rather than choosing nothing quietly - a project that has

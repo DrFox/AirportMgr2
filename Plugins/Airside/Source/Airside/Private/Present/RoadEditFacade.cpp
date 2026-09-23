@@ -111,14 +111,14 @@ URoadProfile* URoadEditFacade::ResolveRunwayProfile(int32 Index) const
 	return Actor().ResolveRunwayProfile(Index);
 }
 
-int32 URoadEditFacade::GetTaxiwayProfileCount() const
+int32 URoadEditFacade::GetWidthCount(ERoadKind Kind) const
 {
-	return Actor().GetTaxiwayProfileCount();
+	return Actor().GetWidthCount(Kind);
 }
 
-URoadProfile* URoadEditFacade::ResolveTaxiwayProfile(int32 Index) const
+URoadProfile* URoadEditFacade::ResolveWidthProfile(ERoadKind Kind, int32 Index) const
 {
-	return Actor().ResolveTaxiwayProfile(Index);
+	return Actor().ResolveWidthProfile(Kind, Index);
 }
 
 const UEntityDefinition* URoadEditFacade::GetEntityDefinition(EPlaceableEntity Kind) const

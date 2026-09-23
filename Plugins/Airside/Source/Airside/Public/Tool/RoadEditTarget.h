@@ -200,25 +200,28 @@ public:
 	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const = 0;
 
 	/**
-	 * How many standard taxiway widths the content set declares.
+	 * How many standard widths the content set declares for Kind: the ICAO taxiway codes,
+	 * or the Narrow / Standard / Wide road tiers.
 	 *
-	 * THE RUNWAY PAIR ABOVE, FOR TAXIWAYS, and deliberately the same shape: the tool holds
-	 * an index and knows nothing about UAirsideContent. Zero is a real answer - a project
-	 * that has authored no taxiway profiles - and the tool says so rather than cycling
+	 * ONE PAIR KEYED BY KIND since 2026-09-23. It was GetTaxiwayProfileCount /
+	 * ResolveTaxiwayProfile, taxiway-only, and road tiers would have been a second parallel
+	 * pair - two lists that must agree about "what can this tool cycle", the failure CLAUDE.md
+	 * names. The tool holds an index and knows nothing about UAirsideContent. Zero is a real
+	 * answer - a project that has authored none - and the tool says so rather than cycling
 	 * through nothing in silence.
 	 */
-	virtual int32 GetTaxiwayProfileCount() const = 0;
+	virtual int32 GetWidthCount(ERoadKind Kind) const = 0;
 
 	/**
-	 * The Nth standard taxiway profile, clamped to a live index by the implementer. Null
-	 * when GetTaxiwayProfileCount() is zero.
+	 * The Nth standard profile for Kind, clamped to a live index by the implementer. Null
+	 * when GetWidthCount(Kind) is zero.
 	 *
-	 * SEPARATE FROM the default a taxiway gets with no index. That default is the actor's
-	 * own Profile - per-instance tuning that ARoadNetworkActor::ResolveProfile keeps the
-	 * content set out of on purpose - and this is the standard set a player cycles through.
-	 * Two questions, two resolvers, and the level's tuning is not disturbed by the tool.
+	 * SEPARATE FROM the default a road gets with no index. For a taxiway that default is the
+	 * actor's own Profile - per-instance tuning ARoadNetworkActor::ResolveProfile keeps the
+	 * content set out of on purpose - and for a service road it is the actor's override or
+	 * the narrowest tier. This is the standard set a player cycles through.
 	 */
-	virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const = 0;
+	virtual URoadProfile* ResolveWidthProfile(ERoadKind Kind, int32 Index) const = 0;
 
 	/**
 	 * The cross-section a click with this Kind and WidthIndex would actually lay.
@@ -229,7 +232,7 @@ public:
 	 * anchor's half-width. Both existing sites now forward here, so the agreement is structural
 	 * rather than maintained by hand.
 	 *
-	 * NOT A REPLACEMENT for ResolveTaxiwayProfile and its siblings: those answer "what is width
+	 * NOT A REPLACEMENT for ResolveWidthProfile and its siblings: those answer "what is width
 	 * 2", which is a content question. This answers "what would this GESTURE lay", which folds in
 	 * the service road's exemption and the taxiway's fallback.
 	 *

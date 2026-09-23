@@ -586,11 +586,11 @@ bool FProfileResolutionIsOneRuleTest::RunTest(const FString& Parameters)
 	// AND AN INDEX THE CONTENT SET CAN ANSWER GIVES THAT ONE, not the fallback. Reported rather
 	// than failed when the content set is empty: this is a rule about resolution, not about what
 	// a particular project happens to ship.
-	if (Target->GetTaxiwayProfileCount() > 0)
+	if (Target->GetWidthCount(ERoadKind::Taxiway) > 0)
 	{
 		TestEqual(TEXT("an index resolves to that width"),
 			Target->ResolveProfileFor(ERoadKind::Taxiway, 0),
-			Target->ResolveTaxiwayProfile(0));
+			Target->ResolveWidthProfile(ERoadKind::Taxiway, 0));
 	}
 	else
 	{
