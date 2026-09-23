@@ -3,6 +3,7 @@
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/RoadGeom.h"
+#include "Tool/RoadBuildTool.h"
 
 namespace PlotGesture
 {
@@ -34,6 +35,30 @@ namespace PlotGesture
 			}
 		}
 		return false;
+	}
+
+	bool IsTaxiway(const URoadNetwork& Network, FRoadSegmentId Id)
+	{
+		const FRoadSegment* Segment = Network.GetSegment(Id);
+		if (Segment == nullptr || Segment->Profile == nullptr)
+		{
+			return false;
+		}
+
+		// BOTH HALVES, because either alone admits the wrong ground. An aircraft line alone
+		// would admit a mixed cross-section a truck also drives (a stand opening onto a
+		// service road is exactly what the stand tool refuses); no truck line alone would
+		// admit a profile with no lines at all, which nothing can taxi on.
+		bool bAircraft = false;
+		for (const FProfileGuideline& Guideline : Segment->Profile->Guidelines)
+		{
+			if (Guideline.Class == ETraversalClass::GroundVehicle)
+			{
+				return false;
+			}
+			bAircraft |= Guideline.Class == ETraversalClass::Aircraft;
+		}
+		return bAircraft;
 	}
 
 	/**
@@ -167,5 +192,110 @@ namespace PlotGesture
 			bFound = true;
 		}
 		return bFound;
+	}
+
+	bool AnchorAt(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept,
+		FAnchor& Out)
+	{
+		// MOVED FROM FPlotPlaceTool::OnClick's Idle case when the stand tool needed the same
+		// first click against a taxiway. ONE RULE, EVERY PLOT TOOL: a second copy of the grid
+		// and the kerb offset is two plots, drawn side by side off two kinds of road, that
+		// cannot sit flush - the reason the frontage has a quantum at all.
+		//
+		// FROM WHERE THE PLOT GOES, not from the carriageway. See NearestRoad for why this
+		// searches rather than reading the driver's snap.
+		FRoadSegmentId Road;
+		double AlongT = 0.0;
+		if (!NearestRoad(Network, Cursor, Accept, Road, AlongT))
+		{
+			return false;
+		}
+
+		FVector2D RoadA = FVector2D::ZeroVector;
+		FVector2D RoadB = FVector2D::ZeroVector;
+		if (!Network.SegmentEnds(Road, RoadA, RoadB))
+		{
+			return false;
+		}
+
+		const FVector2D Span = RoadB - RoadA;
+		const double Length = Span.Size();
+		if (Length <= 0.0)
+		{
+			return false;
+		}
+
+		FAnchor Anchor;
+		Anchor.Along = Span / Length;
+
+		// ANCHORED ON THE ROAD'S OWN BAY GRID, measured from the segment's A end. Quantising
+		// per SEGMENT rather than globally means two plots on one segment sit flush and a
+		// plot never straddles a junction - see the design doc's open question 1.
+		Anchor.Corner = RoadA + Anchor.Along * AnchorOffset(AnchorIndexAt(AlongT, Length));
+
+		// WHICH SIDE THE CURSOR IS ON, not a rule. A depot goes on the side of the road the
+		// player is pointing at; the alternative is a fixed side that is wrong half the time
+		// and cannot be argued with.
+		const FVector2D Left = RoadGeom::PerpCCW(Anchor.Along);
+		const double Side = FVector2D::DotProduct(Cursor - Anchor.Corner, Left);
+		Anchor.Inward = Side >= 0.0 ? Left : -Left;
+
+		// OFF THE CARRIAGEWAY, and only now that the side is known. Measured BEFORE this
+		// step, because the side has to be read against the centreline the cursor was
+		// judged from - offsetting first would tilt that test by half a road width.
+		Anchor.Corner += Anchor.Inward * KerbOffset(Network, Road, Side >= 0.0);
+
+		// WRITTEN ONLY ON SUCCESS, so a caller that ignores the return still holds the
+		// anchor it had - CLAUDE.md's out-parameter rule.
+		Out = Anchor;
+		return true;
+	}
+
+	bool DescribeAnchors(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept,
+		IToolPreviewSink& Sink)
+	{
+		// The anchors the player could take, so the grid is visible before it is committed
+		// to. Snap style: these are what the gesture would attach to.
+		FRoadSegmentId Road;
+		double AlongT = 0.0;
+		if (!NearestRoad(Network, Cursor, Accept, Road, AlongT))
+		{
+			return false;
+		}
+
+		FVector2D RoadA = FVector2D::ZeroVector;
+		FVector2D RoadB = FVector2D::ZeroVector;
+		if (!Network.SegmentEnds(Road, RoadA, RoadB))
+		{
+			// A ROAD WAS FOUND, so the caller's "move near a road" would be wrong; drawing
+			// nothing is the honest answer for a segment whose ends cannot be read.
+			return true;
+		}
+
+		const FVector2D Span = RoadB - RoadA;
+		const double Length = Span.Size();
+		const FVector2D Unit = Span.GetSafeNormal();
+
+		// THE DOTS STAND WHERE THE CORNER WILL, off the kerb on the side the cursor
+		// is on - not on the centreline they are derived from. A dot you aim at and
+		// a corner that lands half a road away is the preview disagreeing with the
+		// click, which is the one thing this codebase will not have.
+		const FVector2D Left = RoadGeom::PerpCCW(Unit);
+		const bool bLeft = FVector2D::DotProduct(Cursor - RoadA, Left) >= 0.0;
+		const FVector2D Offset = (bLeft ? Left : -Left) * KerbOffset(Network, Road, bLeft);
+
+		// THE ONE A CLICK WOULD TAKE IS DRAWN DIFFERENTLY. A row of identical dots
+		// says where anchors exist; it does not say which one the cursor has. Pending
+		// is the style every other tool uses for "this is what the click does", and
+		// it double-rings, so the chosen point reads at a glance.
+		const int32 Chosen = AnchorIndexAt(AlongT, Length);
+
+		const int32 Count = FMath::FloorToInt(Length / FrontageStepUu);
+		for (int32 I = 0; I <= Count; ++I)
+		{
+			Sink.Marker(RoadA + Unit * AnchorOffset(I) + Offset,
+				I == Chosen ? EPreviewStyle::Pending : EPreviewStyle::Snap);
+		}
+		return true;
 	}
 }

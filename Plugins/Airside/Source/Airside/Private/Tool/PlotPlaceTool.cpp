@@ -87,9 +87,10 @@ bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditT
 		// 0 is "corner 1" on screen. A label naming a corner the bar does not is worse than
 		// no label.
 		//
-		// SPELT OUT, not braced, as RoadGuideAnchor::AddNodeCandidates and FStandPlaceTool's
-		// own DescribeGuideAnchor are: a third member arrived on FGuidePoint in 2026-09-20 and
-		// a braced initialiser would have taken the default for it in silence. Reference is
+		// SPELT OUT, not braced, as RoadGuideAnchor::AddNodeCandidates is (and the deleted
+		// FStandPlaceTool's DescribeGuideAnchor was): a third member arrived on FGuidePoint
+		// in 2026-09-20 and a braced initialiser would have taken the default for it in
+		// silence. Reference is
 		// left at its ThisGesture default here DELIBERATELY - these are the gesture's own
 		// pinned corners, the one column that needs no button - but that is a decision this
 		// line states rather than one a brace would have made by omission.
@@ -307,47 +308,17 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 	{
 	case EPlotStage::Idle:
 	{
-		// FROM WHERE THE PLOT GOES, not from the carriageway. See PlotGesture::NearestRoad for
-		// why this searches rather than reading the driver's snap.
-		FRoadSegmentId Road;
-		double AlongT = 0.0;
-		if (!PlotGesture::NearestRoad(*Network, Context.Cursor, PlotGesture::IsServiceRoad, Road, AlongT))
+		// THE SHARED FIRST CLICK - the grid, the side and the kerb offset all live in
+		// PlotGesture::AnchorAt, which the stand tool asks of a taxiway the same way this asks
+		// of a service road. See its own comments for each of the three.
+		PlotGesture::FAnchor Anchor;
+		if (!PlotGesture::AnchorAt(*Network, Context.Cursor, PlotGesture::IsServiceRoad, Anchor))
 		{
 			return;
 		}
-
-		FVector2D RoadA = FVector2D::ZeroVector;
-		FVector2D RoadB = FVector2D::ZeroVector;
-		if (!Network->SegmentEnds(Road, RoadA, RoadB))
-		{
-			return;
-		}
-
-		const FVector2D Span = RoadB - RoadA;
-		const double Length = Span.Size();
-		if (Length <= 0.0)
-		{
-			return;
-		}
-
-		Along = Span / Length;
-
-		// ANCHORED ON THE ROAD'S OWN BAY GRID, measured from the segment's A end. Quantising
-		// per SEGMENT rather than globally means two plots on one segment sit flush and a
-		// plot never straddles a junction - see the design doc's open question 1.
-		Corners[0] = RoadA + Along * PlotGesture::AnchorOffset(PlotGesture::AnchorIndexAt(AlongT, Length));
-
-		// WHICH SIDE THE CURSOR IS ON, not a rule. A depot goes on the side of the road the
-		// player is pointing at; the alternative is a fixed side that is wrong half the time
-		// and cannot be argued with.
-		const FVector2D Left = RoadGeom::PerpCCW(Along);
-		const double Side = FVector2D::DotProduct(Context.Cursor - Corners[0], Left);
-		Inward = Side >= 0.0 ? Left : -Left;
-
-		// OFF THE CARRIAGEWAY, and only now that the side is known. Measured BEFORE this
-		// step, because the side has to be read against the centreline the cursor was
-		// judged from - offsetting first would tilt that test by half a road width.
-		Corners[0] += Inward * PlotGesture::KerbOffset(*Network, Road, Side >= 0.0);
+		Corners[0] = Anchor.Corner;
+		Along = Anchor.Along;
+		Inward = Anchor.Inward;
 
 		// A FRESH GESTURE, so any refusal the LAST one earned at commit is no longer about
 		// anything on screen - see bLastCommitRefused's own comment.
@@ -523,44 +494,9 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 
 	if (Stage == EPlotStage::Idle)
 	{
-		// The anchors the player could take, so the grid is visible before it is committed
-		// to. Snap style: these are what the gesture would attach to.
-		FRoadSegmentId Road;
-		double AlongT = 0.0;
-		if (PlotGesture::NearestRoad(*Network, Context.Cursor, PlotGesture::IsServiceRoad, Road, AlongT))
-		{
-			FVector2D RoadA = FVector2D::ZeroVector;
-			FVector2D RoadB = FVector2D::ZeroVector;
-			if (Network->SegmentEnds(Road, RoadA, RoadB))
-			{
-				const FVector2D Span = RoadB - RoadA;
-				const double Length = Span.Size();
-				const FVector2D Unit = Span.GetSafeNormal();
-
-				// THE DOTS STAND WHERE THE CORNER WILL, off the kerb on the side the cursor
-				// is on - not on the centreline they are derived from. A dot you aim at and
-				// a corner that lands half a road away is the preview disagreeing with the
-				// click, which is the one thing this codebase will not have.
-				const FVector2D Left = RoadGeom::PerpCCW(Unit);
-				const bool bLeft = FVector2D::DotProduct(Context.Cursor - RoadA, Left) >= 0.0;
-				const FVector2D Offset = (bLeft ? Left : -Left)
-					* PlotGesture::KerbOffset(*Network, Road, bLeft);
-
-				// THE ONE A CLICK WOULD TAKE IS DRAWN DIFFERENTLY. A row of identical dots
-				// says where anchors exist; it does not say which one the cursor has. Pending
-				// is the style every other tool uses for "this is what the click does", and
-				// it double-rings, so the chosen point reads at a glance.
-				const int32 Chosen = PlotGesture::AnchorIndexAt(AlongT, Length);
-
-				const int32 Count = FMath::FloorToInt(Length / PlotGesture::FrontageStepUu);
-				for (int32 I = 0; I <= Count; ++I)
-				{
-					Sink.Marker(RoadA + Unit * PlotGesture::AnchorOffset(I) + Offset,
-						I == Chosen ? EPreviewStyle::Pending : EPreviewStyle::Snap);
-				}
-			}
-		}
-		else
+		// THE SAME GRID THE CLICK ANCHORS ON - PlotGesture::DescribeAnchors and AnchorAt are
+		// one rule written once, so the heavier dot is the anchor a click takes.
+		if (!PlotGesture::DescribeAnchors(*Network, Context.Cursor, PlotGesture::IsServiceRoad, Sink))
 		{
 			Sink.Label(Context.Cursor, TEXT("move near a service road"), EPreviewStyle::Refused);
 		}

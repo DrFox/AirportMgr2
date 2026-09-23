@@ -192,10 +192,10 @@ bool FFreeStartOffersOnlyPositionalGuidesTest::RunTest(const FString& Parameters
  * THE TRAP THIS EXISTS FOR, paid for twice on 2026-09-20 and once in front of the user: a tool
  * that describes an anchor and stops has a guide computed and thrown away. Nothing in
  * FBuildSession draws one - the emission is the TOOL'S, in BuildPreview - so the anchor's own
- * test can pass on a feature that shows nothing. Four tools, four previews, four clicks.
+ * test can pass on a feature that shows nothing. Three tools, three previews, three clicks.
  *
- * ONE TEST OVER FOUR TOOLS rather than four tests, because the thing being asserted is the
- * same sentence four times and a fifth opted-in tool should have to be added to exactly one
+ * ONE TEST OVER THREE TOOLS rather than three tests, because the thing being asserted is the
+ * same sentence three times and a fourth opted-in tool should have to be added to exactly one
  * list. The tool id names which failed.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -205,11 +205,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFreeStartToolsDrawTheirGuideTest::RunTest(const FString& Parameters)
 {
-	// THE FOUR CLASSES, not the five registry entries: Taxiway and Road are one FRoadDrawTool
-	// under two entries, so drawing is the same code twice. Both are still walked, because the
+	// THE THREE CLASSES, not the four registry entries: Taxiway and Road are one FRoadDrawTool
+	// under two entries, so drawing is the same code twice. (Four classes until 2026-09-23,
+	// when the stand became a drawn plot anchored on a taxiway and left the free start - see
+	// Airside.Tool.BuildSession item 5.) Both are still walked, because the
 	// entry is what the player picks and an entry wired to the wrong constructor would show
 	// here and nowhere else.
-	for (const TCHAR* Id : { TEXT("Taxiway"), TEXT("Road"), TEXT("Apron"), TEXT("Stand"), TEXT("Runway") })
+	for (const TCHAR* Id : { TEXT("Taxiway"), TEXT("Road"), TEXT("Apron"), TEXT("Runway") })
 	{
 		FFreeStart Start;
 		if (!TestTrue(*FString::Printf(TEXT("an idle '%s' tool"), Id), Begin(Start, Id)))
@@ -307,30 +309,9 @@ bool FFreeStartClickLandsOnTheGuideTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	// 3. THE STAND TOOL places its pose on it.
-	{
-		FFreeStart Start;
-		if (!TestTrue(TEXT("an idle stand tool"), Begin(Start, TEXT("Stand")))) { return false; }
-
-		const FToolContext Context = Start.At(OffTheLine);
-		const FVector2D Guided = Context.GuidedCursor();
-
-		Start.Tool->OnClick(Context);
-
-		// HONOURED, NOT ASSUMED: with no stand definition in the content set PlaceEntity
-		// legitimately places nothing, and asserting on an empty array would report the
-		// content rather than the tool.
-		const TArray<FEntityInstance>& Entities = Start.TestWorld.Actor->Network->GetEntities();
-		if (Entities.Num() == 0)
-		{
-			AddInfo(TEXT("No stand definition resolves; the stand's click not checked"));
-		}
-		else
-		{
-			TestTrue(TEXT("a stand's pose lands on the guide"),
-				Entities.Last().Position.Equals(Guided, 1.0));
-		}
-	}
+	// 3. THE STAND TOOL WAS HERE until 2026-09-23 - its press-drag-release placed the pose on
+	// the guide. The drawn stand anchors on a taxiway's step grid instead and does not opt in;
+	// it is asserted guide-free in Airside.Tool.ToolsThatDidNotOptInGetNoFreeStart.
 
 	// 4. THE RUNWAY TOOL takes its first threshold from it. Read back through the tool's own
 	// preview rather than the graph: one click lays no strip, so there is nothing in the
@@ -406,7 +387,8 @@ bool FFreeStartWorksOnTheShippedDefaultsTest::RunTest(const FString& Parameters)
  * A TOOL THAT DID NOT OPT IN IS UNCHANGED BY ANY OF THIS.
  *
  * The other half of the ruling, and the half a permissive base would quietly undo. The fuel
- * depot's first click MUST land on a service road - it is already snap-constrained, and its
+ * depot's first click MUST land on a service road (and the drawn stand's on a taxiway, the
+ * same gesture since 2026-09-23) - it is already snap-constrained, and its
  * own anchor comment warns that a second rule about where that anchor may go would be a
  * second opinion. Measured through MakeContext, so it is the DRIVER's answer and not the
  * virtual's own report.
@@ -418,7 +400,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FToolsThatDidNotOptInGetNoFreeStartTest::RunTest(const FString& Parameters)
 {
-	for (const TCHAR* Id : { TEXT("FuelDepot"), TEXT("Guideline"), TEXT("HoldingPosition"), TEXT("Select") })
+	for (const TCHAR* Id : { TEXT("FuelDepot"), TEXT("Stand"), TEXT("Guideline"), TEXT("HoldingPosition"), TEXT("Select") })
 	{
 		FFreeStart Start;
 		if (!TestTrue(*FString::Printf(TEXT("an idle '%s' tool"), Id), Begin(Start, Id)))

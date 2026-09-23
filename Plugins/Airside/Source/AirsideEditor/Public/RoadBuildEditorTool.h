@@ -232,7 +232,7 @@ private:
 	 * OwnSession IS LAZY (issue #190): ITF builds a new UObject per activation, and every
 	 * shipping path hands one of THESE a SharedSession before Sess() is ever called - so a
 	 * value-typed OwnSession used to construct a full nine-tool FBuildSession (FRoadDrawTool
-	 * x2, FApronDrawTool, FStandPlaceTool, FGuidelineDrawTool, FRunwayTool, FHoldingPointTool,
+	 * x2, FApronDrawTool, FStandPlotTool, FGuidelineDrawTool, FRunwayTool, FHoldingPointTool,
 	 * FPlotPlaceTool, FSelectTool) on EVERY activation and throw it away unread the moment
 	 * SharedSession was set. Building it only the one time Sess() is actually called with no
 	 * SharedSession - a tool used outside the mode - keeps the fallback this comment already

@@ -119,8 +119,8 @@ struct FGuideAnchor
 	 * Origin ON the cursor, SnapGuide::Arbitrate can measure no direction from one to the other
 	 * and every EFit::Angular candidate sits out of its own accord. So a free start offers
 	 * Collinear, AngledFrom and MatchingGap - and LevelWith only where the tool ALSO names a
-	 * Reference direction for those lines to run along, which is why FStandPlaceTool names its
-	 * heading and FRunwayTool, having none, does not.
+	 * Reference direction for those lines to run along, which is why the deleted FStandPlaceTool
+	 * named its heading and FRunwayTool, having none, does not.
 	 */
 	bool bFreeStart = false;
 

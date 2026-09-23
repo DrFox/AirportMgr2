@@ -1,0 +1,914 @@
+#include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
+#include "Misc/AutomationTest.h"
+#include "Build/RoadGuidelineBuilder.h"
+#include "Build/RoadNetworkSolver.h"
+#include "Content/AirsideSettings.h"
+#include "Entities/AircraftType.h"
+#include "Entities/EntityDefinition.h"
+#include "InputCoreTypes.h"
+#include "Model/GroundTraffic.h"
+#include "Model/RoadEntity.h"
+#include "Model/RoadGuideline.h"
+#include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
+#include "Model/RouteSearch.h"
+#include "Present/AirsideTraffic.h"
+#include "Present/RoadNetworkActor.h"
+#include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
+#include "Solve/RoadGeom.h"
+#include "Solve/StandBox.h"
+#include "Tool/BuildSession.h"
+#include "Tool/PlotGesture.h"
+#include "Tool/RoadEditTarget.h"
+#include "Tool/StandPlotTool.h"
+#include "Tool/ToolReadout.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+// NAMED, NOT ANONYMOUS - the tests module is a UNITY build, and an anonymous-namespace helper
+// of a common name (LayRoad, LiveEntities, ...) compiles alone and collides with another
+// file's copy the moment both land in one translation unit. PlotPlaceToolTest.cpp has both.
+namespace StandPlotToolFixture
+{
+	/** Free-snap, 150uu radius - see TestTool::ContextAt (#104). The stand tool reads no
+	 *  snap: its first click SEARCHES for a taxiway (PlotGesture::NearestRoad). */
+	FToolContext At(ARoadNetworkActor* Actor, const FVector2D& Where)
+	{
+		return TestTool::ContextAt(*Actor, Where);
+	}
+
+	/** A real road SEGMENT along X at Y, 200 m long - the anchor search reads the road graph,
+	 *  not a guideline, so a test that laid only guidelines would anchor on nothing. */
+	void LayRoad(ARoadNetworkActor* Actor, double Y, ERoadKind Kind)
+	{
+		IRoadEditTarget* Target = Actor;
+		const int32 West = Target->PlaceNode(FVector2D(-10000.0, Y));
+		const int32 East = Target->PlaceNode(FVector2D(10000.0, Y));
+		Target->ConnectNodes(West, East, Kind, INDEX_NONE);
+	}
+
+	/** Alive AND a stand - never a bare count, which a depot would also satisfy. */
+	int32 LiveStands(const ARoadNetworkActor* Actor)
+	{
+		int32 Count = 0;
+		for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+		{
+			if (Entity.bAlive && Entity.IsStand()) { ++Count; }
+		}
+		return Count;
+	}
+
+	int32 LiveEntities(const ARoadNetworkActor* Actor)
+	{
+		int32 Count = 0;
+		for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+		{
+			if (Entity.bAlive) { ++Count; }
+		}
+		return Count;
+	}
+
+	FToolReadout ReadoutOf(const FStandPlotTool& Tool, const FToolContext& Context)
+	{
+		FToolReadoutCollector Collector;
+		Tool.BuildReadout(Context, Collector);
+		return Collector.Readout;
+	}
+
+	/** The value of one readout fact, or "<absent>" - distinct from every real value. */
+	FString FactOf(const FToolReadout& Readout, const TCHAR* Label)
+	{
+		for (const TPair<FString, FString>& Fact : Readout.Facts)
+		{
+			if (Fact.Key == Label) { return Fact.Value; }
+		}
+		return TEXT("<absent>");
+	}
+
+	/** What the readout's Stand fact should say for a W x D rectangle, from IcaoCode itself. */
+	FString ExpectedStandFact(double Width, double Depth)
+	{
+		const FString Letter = IcaoCode::LetterForStandSize(Width, Depth);
+		return Letter.IsEmpty() ? FString(TEXT("-")) : FString::Printf(TEXT("Code %s"), *Letter);
+	}
+
+	/** The narrowest entrance width the gesture can produce that is at least Floor - the
+	 *  frontage moves in steps, so a letter's exact floor width is usually not reachable. */
+	double ReachableWidthAtLeast(double Floor)
+	{
+		if (Floor <= PlotGesture::MinFrontageUu) { return PlotGesture::MinFrontageUu; }
+		return PlotGesture::MinFrontageUu
+			+ FMath::CeilToDouble((Floor - PlotGesture::MinFrontageUu) / PlotGesture::FrontageStepUu)
+			* PlotGesture::FrontageStepUu;
+	}
+
+	/** Where the first click sits: 10 m north of a taxiway laid along Y = 0, inside reach. */
+	const FVector2D AnchorCursor(0.0, 1000.0);
+
+	/** The anchor the tool pinned - Rect's corner 0, read back rather than predicted. */
+	FVector2D PinnedAnchor(const FStandPlotTool& Tool, ARoadNetworkActor* Actor)
+	{
+		TArray<FVector2D> Shown;
+		Tool.Rect(At(Actor, AnchorCursor), Shown);
+		return Shown.Num() > 0 ? Shown[0] : FVector2D::ZeroVector;
+	}
+
+	/**
+	 * Anchor, entrance end Width east, depth Depth north: the three clicks. Width must be one
+	 * the frontage steps can reach (ReachableWidthAtLeast) and Depth a whole metre, or the
+	 * rectangle drawn is not the one asked for. Returns whether the gesture reached Confirm.
+	 */
+	bool DrawStand(FStandPlotTool& Tool, ARoadNetworkActor* Actor, double Width, double Depth)
+	{
+		Tool.OnClick(At(Actor, AnchorCursor));
+		if (Tool.GetStage() != EStandStage::Entrance) { return false; }
+		const FVector2D Anchor = PinnedAnchor(Tool, Actor);
+		Tool.OnClick(At(Actor, Anchor + FVector2D(Width, 0.0)));
+		Tool.OnClick(At(Actor, Anchor + FVector2D(Width, Depth)));
+		return Tool.GetStage() == EStandStage::Confirm;
+	}
+
+	/** A fresh network with one taxiway at Y = 0 and a stand definition to build from. */
+	void TaxiwayWorld(ARoadNetworkActor* Actor)
+	{
+		Actor->ClearNetwork();
+		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+		LayRoad(Actor, 0.0, ERoadKind::Taxiway);
+	}
+
+	/** Records lines by style and every label, for the preview assertions. */
+	struct FStandPlotSink : IToolPreviewSink
+	{
+		struct FLine { FVector2D From; FVector2D To; EPreviewStyle Style; };
+		TArray<FLine> Lines;
+		TArray<TPair<FString, EPreviewStyle>> Labels;
+
+		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle Style) override
+		{
+			Lines.Add({ From, To, Style });
+		}
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString& Text, EPreviewStyle Style) override
+		{
+			Labels.Emplace(Text, Style);
+		}
+
+		bool Says(const FString& Fragment) const
+		{
+			return Labels.ContainsByPredicate(
+				[&](const TPair<FString, EPreviewStyle>& L) { return L.Key.Contains(Fragment); });
+		}
+
+		/** Whether a line in Style touches Point - how a transformed corner is found. */
+		bool TouchesIn(const FVector2D& Point, EPreviewStyle Style) const
+		{
+			return Lines.ContainsByPredicate([&](const FLine& L)
+			{
+				return L.Style == Style && (L.From.Equals(Point, 1.0) || L.To.Equals(Point, 1.0));
+			});
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotAnchorsOnTaxiwayOnlyTest,
+	"Airside.Tool.StandPlot.AnchorsOnTaxiwayOnly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotAnchorsOnTaxiwayOnlyTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// A SERVICE ROAD ONLY, at exactly the reach a taxiway is anchored from below. An aircraft
+	// stand opening onto a road trucks use would have its arrivals taxi on one.
+	Actor->ClearNetwork();
+	LayRoad(Actor, 0.0, ERoadKind::ServiceRoad);
+	{
+		FStandPlotTool Tool;
+		Tool.OnClick(At(Actor, AnchorCursor));
+		TestEqual(TEXT("a click beside a service road anchors nothing - stands open off taxiways"),
+			static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Idle));
+
+		const FToolReadout Readout = ReadoutOf(Tool, At(Actor, AnchorCursor));
+		TestTrue(TEXT("and the readout says what to move near, so the refusal is not silent"),
+			Readout.Warnings.ContainsByPredicate([](const FString& W) { return W.Contains(TEXT("taxiway")); }));
+	}
+
+	// THE SAME CLICK, beside a taxiway, starts the entrance edge.
+	TaxiwayWorld(Actor);
+	{
+		FStandPlotTool Tool;
+		Tool.OnClick(At(Actor, AnchorCursor));
+		TestEqual(TEXT("a click within reach of a taxiway pins the entrance's first end"),
+			static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Entrance));
+
+		// OFF THE CARRIAGEWAY, as the depot's anchor is: a stand whose entrance sat on the
+		// centreline would be built over half the taxiway.
+		const FVector2D Anchor = PinnedAnchor(Tool, Actor);
+		TestTrue(TEXT("the anchor stands off the taxiway's centreline, on the cursor's side"),
+			Anchor.Y > 0.0);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotWidthStepsTest,
+	"Airside.Tool.StandPlot.WidthSteps",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotWidthStepsTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	FStandPlotTool Tool;
+	Tool.OnClick(At(Actor, AnchorCursor));
+	if (!TestEqual(TEXT("anchored"), static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Entrance))) { return false; }
+	const FVector2D Anchor = PinnedAnchor(Tool, Actor);
+
+	// THE DEPOT'S STEPS, read from PlotGesture rather than retyped: a stand and a depot drawn
+	// off one grid must be able to sit flush, which only a shared quantum allows.
+	const double Min = PlotGesture::MinFrontageUu;
+	const double Step = PlotGesture::FrontageStepUu;
+	struct FCase { double Reach; double Expected; const TCHAR* Why; };
+	const FCase Cases[] = {
+		{ Min + 2.4 * Step, Min + 2.0 * Step, TEXT("under half a step past a mark rounds back to it") },
+		{ Min + 2.6 * Step, Min + 3.0 * Step, TEXT("over half a step rounds on to the next mark") },
+		{ Min * 0.3,        Min,              TEXT("a drag shorter than the minimum is held at the minimum") },
+		{ -(Min + 4.1 * Step), Min + 4.0 * Step, TEXT("dragging the other way along the taxiway steps the same") },
+	};
+	for (const FCase& Case : Cases)
+	{
+		TArray<FVector2D> Shown;
+		Tool.Rect(At(Actor, Anchor + FVector2D(Case.Reach, 300.0)), Shown);
+		if (!TestEqual(TEXT("four corners while the entrance is dragged"), Shown.Num(), 4)) { continue; }
+		TestEqual(Case.Why, StandBox::WidthOf(Shown), Case.Expected, 1e-6);
+	}
+
+	// AND THE CLICK PINS THE STEPPED WIDTH, not the raw reach.
+	Tool.OnClick(At(Actor, Anchor + FVector2D(Min + 2.4 * Step, 300.0)));
+	TArray<FVector2D> Pinned;
+	Tool.Rect(At(Actor, Anchor + FVector2D(9999.0, 2000.0)), Pinned);
+	if (TestEqual(TEXT("four corners once the entrance is pinned"), Pinned.Num(), 4))
+	{
+		TestEqual(TEXT("the pinned entrance keeps the stepped width whatever the cursor does next"),
+			StandBox::WidthOf(Pinned), Min + 2.0 * Step, 1e-6);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotLetterAtThresholdsTest,
+	"Airside.Tool.StandPlot.LetterAtThresholds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotLetterAtThresholdsTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// EVERY LETTER, at its own depth floor and one depth step (1 m, the tool's rounding) short
+	// of it. The letter must change EXACTLY there - the threshold is IcaoCode's, so a tool that
+	// kept its own table, or measured a different rectangle than it drew, lands on the wrong
+	// side of one of these twelve.
+	for (EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	{
+		const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(Letter));
+		const double Depth = IcaoCode::StandDepthForLetter(Letter);
+
+		for (const double Short : { 0.0, 100.0 })
+		{
+			TaxiwayWorld(Actor);
+			FStandPlotTool Tool;
+			if (!TestTrue(FString::Printf(TEXT("Code %s: the gesture reaches Confirm"), IcaoCode::ToLetter(Letter)),
+				DrawStand(Tool, Actor, Width, Depth - Short)))
+			{
+				continue;
+			}
+
+			const FToolReadout Readout = ReadoutOf(Tool, At(Actor, AnchorCursor));
+			TestEqual(
+				*FString::Printf(TEXT("Code %s floor %s: the Stand fact is IcaoCode's letter for the drawn size"),
+					IcaoCode::ToLetter(Letter), Short == 0.0 ? TEXT("exactly") : TEXT("less 1 m of depth")),
+				FactOf(Readout, TEXT("Stand")), ExpectedStandFact(Width, Depth - Short));
+		}
+	}
+
+	// AT THE C FLOOR, THE NEXT LETTER'S LEVER: how much wider and deeper D needs, from the
+	// same table. The player is told what to drag, not left to guess the thresholds.
+	{
+		TaxiwayWorld(Actor);
+		const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+		const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+		FStandPlotTool Tool;
+		if (TestTrue(TEXT("a Code C floor stand reaches Confirm"), DrawStand(Tool, Actor, Width, Depth)))
+		{
+			const int32 Wider = FMath::CeilToInt((IcaoCode::StandWidthForLetter(EIcaoCode::D) - Width) / 100.0);
+			const int32 Deeper = FMath::CeilToInt((IcaoCode::StandDepthForLetter(EIcaoCode::D) - Depth) / 100.0);
+			const FToolReadout Readout = ReadoutOf(Tool, At(Actor, AnchorCursor));
+			TestEqual(TEXT("the Next fact names D and both deficits in whole metres"),
+				FactOf(Readout, TEXT("Next")),
+				FString::Printf(TEXT("Code D: %d m wider, %d m deeper"), Wider, Deeper));
+			TestEqual(TEXT("and three of three points are pinned"),
+				FactOf(Readout, TEXT("Stand Points")), FString(TEXT("3/3")));
+			TestTrue(TEXT("and a buildable letter lights Build"), Readout.bCommittable);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotTooSmallNotCommittableTest,
+	"Airside.Tool.StandPlot.TooSmallNotCommittable",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotTooSmallNotCommittableTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	// 15 x 15 m: the narrowest entrance the steps allow, and far short of Code A's depth.
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a 15 x 15 m stand still locks - no letter is a refusal, not an error"),
+		DrawStand(Tool, Actor, PlotGesture::MinFrontageUu, 1500.0)))
+	{
+		return false;
+	}
+
+	const FToolReadout Readout = ReadoutOf(Tool, At(Actor, AnchorCursor));
+	TestFalse(TEXT("Build stays grey over a stand no aircraft fits"), Readout.bCommittable);
+	TestEqual(TEXT("the Stand fact says there is no letter"), FactOf(Readout, TEXT("Stand")), FString(TEXT("-")));
+
+	// THE FACADE'S OWN REASON, verbatim: the tool asks WhyStandRefused rather than wording its
+	// own, so the bar and the refusal at commit can never disagree.
+	TArray<FVector2D> Shown;
+	Tool.Rect(At(Actor, AnchorCursor), Shown);
+	const FString Why = static_cast<IRoadEditTarget*>(Actor)->WhyStandRefused(Shown);
+	TestTrue(TEXT("the facade refuses it for size"), Why.Contains(TEXT("more")));
+	TestTrue(TEXT("and the readout's warning is that same sentence"), Readout.Warnings.Contains(Why));
+
+	// AND BUILD DOES NOTHING, so a grey button is not merely cosmetic.
+	Tool.OnCommit(At(Actor, AnchorCursor));
+	TestEqual(TEXT("committing a refused stand places nothing"), LiveStands(Actor), 0);
+	TestEqual(TEXT("and leaves the gesture locked for the player to cancel back"), static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Confirm));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotCommitPlacesTest,
+	"Airside.Tool.StandPlot.CommitPlaces",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotCommitPlacesTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a Code C stand reaches Confirm"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+
+	// NOTHING BEFORE BUILD: the third click locks, it does not build - the review beat.
+	TestEqual(TEXT("locking places nothing"), LiveStands(Actor), 0);
+
+	TArray<FVector2D> Drawn;
+	Tool.Rect(At(Actor, AnchorCursor), Drawn);
+
+	Tool.OnCommit(At(Actor, AnchorCursor));
+	if (!TestEqual(TEXT("Build places exactly one stand"), LiveStands(Actor), 1)) { return false; }
+	TestEqual(TEXT("and the tool is ready for the next"), static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Idle));
+
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (!Entity.bAlive || !Entity.IsStand()) { continue; }
+		if (!TestEqual(TEXT("the stand carries the drawn rectangle as its outline"), Entity.Outline.Num(), 4)) { break; }
+
+		// THE SAME RECTANGLE THE GHOST SHOWED - measured, not assumed. The facade may reverse
+		// the winding, so size and letter are compared rather than corner order.
+		TestEqual(TEXT("as wide as drawn"), StandBox::WidthOf(Entity.Outline), StandBox::WidthOf(Drawn), 1.0);
+		TestEqual(TEXT("as deep as drawn"), StandBox::DepthOf(Entity.Outline), StandBox::DepthOf(Drawn), 1.0);
+
+		const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Entity.Outline);
+		if (TestTrue(TEXT("the outline reads as a letter"), Letter.IsSet()))
+		{
+			TestEqual(TEXT("and it is Code C"), FString(IcaoCode::ToLetter(*Letter)), FString(TEXT("C")));
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotCancelStepsBackTest,
+	"Airside.Tool.StandPlot.CancelStepsBack",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotCancelStepsBackTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("locked"), DrawStand(Tool, Actor, 6000.0, 5500.0))) { return false; }
+
+	// ONE STAGE AT A TIME, the depot's answer to a misclick: binning the whole gesture is a
+	// harsher response than the mistake deserves.
+	const FToolContext Here = At(Actor, AnchorCursor);
+	Tool.OnCancel(Here);
+	TestEqual(TEXT("Confirm steps back to Depth"), static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Depth));
+	Tool.OnCancel(Here);
+	TestEqual(TEXT("Depth steps back to Entrance"), static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Entrance));
+	Tool.OnCancel(Here);
+	TestEqual(TEXT("Entrance steps back to Idle"), static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Idle));
+	Tool.OnCancel(Here);
+	TestEqual(TEXT("and Idle stays Idle"), static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Idle));
+	TestEqual(TEXT("nothing was placed on the way"), LiveStands(Actor), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotRemoveTakesStandsOnlyTest,
+	"Airside.Tool.StandPlot.RemoveTakesStandsOnly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotRemoveTakesStandsOnlyTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a stand drawn"), DrawStand(Tool, Actor, 6000.0, 5500.0))) { return false; }
+	TArray<FVector2D> Drawn;
+	Tool.Rect(At(Actor, AnchorCursor), Drawn);
+	Tool.OnCommit(At(Actor, AnchorCursor));
+	if (!TestEqual(TEXT("and built"), LiveStands(Actor), 1)) { return false; }
+
+	// A DEPOT, well clear of the stand, placed the pre-plot way so FindEntityAt picks it by pose.
+	const FVector2D DepotAt(-6000.0, 8000.0);
+	IRoadEditTarget* Target = Actor;
+	if (!TestTrue(TEXT("a depot placed"), Target->PlaceEntity(DepotAt, 0.0, EPlaceableEntity::FuelDepot) != INDEX_NONE))
+	{
+		return false;
+	}
+	if (!TestTrue(TEXT("the pick really finds the depot there, so the refusal below is the tool's"),
+		Target->FindEntityAt(DepotAt, 150.0) != INDEX_NONE))
+	{
+		return false;
+	}
+
+	FToolContext OverDepot = At(Actor, DepotAt);
+	OverDepot.bRemoveModifier = true;
+	FStandPlotSink DepotPreview;
+	Tool.BuildPreview(OverDepot, DepotPreview);
+	TestFalse(TEXT("Remove over a depot offers nothing - the depot tool removes depots"),
+		DepotPreview.Says(TEXT("remove")));
+	Tool.OnClick(OverDepot);
+	TestEqual(TEXT("and clicking it deletes nothing"), LiveEntities(Actor), 2);
+
+	// OVER THE STAND'S GROUND - its middle, well away from the stop mark, because every stand
+	// now has an outline and is picked by it.
+	const FVector2D StandMiddle = (Drawn[0] + Drawn[2]) * 0.5;
+	FToolContext OverStand = At(Actor, StandMiddle);
+	OverStand.bRemoveModifier = true;
+	FStandPlotSink StandPreview;
+	Tool.BuildPreview(OverStand, StandPreview);
+	TestTrue(TEXT("Remove over a stand says so"), StandPreview.Says(TEXT("remove stand")));
+	Tool.OnClick(OverStand);
+	TestEqual(TEXT("and the click deletes the stand"), LiveStands(Actor), 0);
+	TestEqual(TEXT("leaving the depot"), LiveEntities(Actor), 1);
+	TestEqual(TEXT("no gesture was started by a Remove click"), static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Idle));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotRegistryKeyThreeTest,
+	"Airside.Tool.StandPlot.RegistryKeyThree",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotRegistryKeyThreeTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	const FToolRegistration* Three = nullptr;
+	for (const FToolRegistration& Entry : ToolRegistry())
+	{
+		if (Entry.Key == EKeys::Three) { Three = &Entry; }
+	}
+	if (!TestNotNull(TEXT("key 3 is registered"), Three)) { return false; }
+
+	TUniquePtr<IBuildTool> Made = Three->Make();
+	if (!TestTrue(TEXT("and makes a tool"), Made.IsValid())) { return false; }
+	TestEqual(TEXT("named Stand"), Made->GetDisplayName().ToString(), FString(TEXT("Stand")));
+
+	// THE NAME ALONE CANNOT TELL THE OLD TOOL FROM THE NEW - both said "Stand". Behaviour can:
+	// the press-drag-release tool placed a stand on a click and stayed idle; the drawn-stand
+	// tool anchors an entrance edge and places nothing until Build.
+	Made->OnClick(At(Actor, AnchorCursor));
+	TestFalse(TEXT("a click beside a taxiway starts a gesture rather than dropping a stand"), Made->IsIdle());
+	TestEqual(TEXT("and places nothing yet"), LiveStands(Actor), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotPreviewDrawsTheKeepOutTest,
+	"Airside.Tool.StandPlot.PreviewDrawsTheKeepOut",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotPreviewDrawsTheKeepOutTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a Code C stand locked"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+
+	TArray<FVector2D> Shown;
+	Tool.Rect(At(Actor, AnchorCursor), Shown);
+	const FVector2D Inward(0.0, 1.0);
+	const StandBox::FStandPose Pose = StandBox::PoseFor(Shown[0], Shown[1], Inward, EIcaoCode::C);
+	const FVector2D Left = RoadGeom::PerpCCW(Pose.Facing);
+	const double HalfSpan = 0.5 * IcaoCode::MaxWingspanForLetter(EIcaoCode::C);
+
+	FStandPlotSink Sink;
+	Tool.BuildPreview(At(Actor, AnchorCursor), Sink);
+
+	// THE KEEP-OUT, in the stand's own frame transformed by the pose the commit will store:
+	// the box IcaoCode::WingKeepOutContains tests, not an impression of it. Each corner is
+	// checked, so a box drawn about the wrong origin or with its axes swapped misses.
+	const double Fwd = IcaoCode::WingFwdForLetter(EIcaoCode::C);
+	const double Aft = IcaoCode::WingAftForLetter(EIcaoCode::C);
+	for (const FVector2D& Local : { FVector2D(Fwd, HalfSpan), FVector2D(Fwd, -HalfSpan),
+		FVector2D(Aft, HalfSpan), FVector2D(Aft, -HalfSpan) })
+	{
+		TestTrue(TEXT("the local box's own corner is the keep-out's edge"),
+			IcaoCode::WingKeepOutContains(EIcaoCode::C, Local));
+		const FVector2D World = Pose.Position + Pose.Facing * Local.X + Left * Local.Y;
+		TestTrue(*FString::Printf(TEXT("a Pending edge reaches keep-out corner (%.0f, %.0f)"), Local.X, Local.Y),
+			Sink.TouchesIn(World, EPreviewStyle::Pending));
+	}
+
+	// THE LEAD-IN: entrance midpoint to the stop mark, the line an arrival taxis in along.
+	TestTrue(TEXT("a Pending lead-in reaches the stop mark"), Sink.TouchesIn(Pose.Position, EPreviewStyle::Pending));
+	TestTrue(TEXT("from the entrance edge's midpoint"),
+		Sink.TouchesIn((Shown[0] + Shown[1]) * 0.5, EPreviewStyle::Pending));
+
+	TestTrue(TEXT("and the letter is labelled on the ground"), Sink.Says(TEXT("Code C")));
+	return true;
+}
+
+// --- Carried over from StandPlaceToolTest.cpp (Airside.Tool.StandPlace) ---------------------
+//
+// That file tested FStandPlaceTool's press-drag-release, deleted with the tool. What it said
+// about the STAND - its definition, removal, undo, anchor survival and in-use warning - is
+// still true of a drawn stand and is asserted here through the tool that now places one.
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotDesignAircraftIsNotTheStandTest,
+	"Airside.Tool.StandPlot.DesignAircraftIsNotTheStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotDesignAircraftIsNotTheStandTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// THROUGH THE RESOLVER, not the raw property. StandDefinition stays null unless somebody
+	// authored one: the actor used to have the content default written INTO it, which is what
+	// silently gave every level a material set and a stand it never asked for. Asking the
+	// resolver is now the only way to know what the actor will actually place.
+	UEntityDefinition* Stand = Actor->ResolveStandDefinition();
+	if (!TestNotNull(TEXT("the actor resolves a stand definition"), Stand)) { return false; }
+	TestTrue(TEXT("and its anchors are all named and distinct"),
+		UEntityDefinition::HasUsableAnchorIds(Stand));
+
+	// A Code C stand takes an A320 AND a 737-800, and their doors are metres apart. Where a
+	// service is REQUIRED therefore belongs to the aircraft; what the ground can PROVIDE
+	// belongs to the stand. Baking one type's geometry into the stand is the bug this split
+	// exists to prevent, and this is the assertion that would catch it coming back.
+	const UAircraftType* Design = Stand->DesignAircraft.Get();
+	if (!TestNotNull(TEXT("the stand names a design aircraft"), Design)) { return false; }
+
+	TestTrue(TEXT("the aircraft carries the plan footprint"), Design->Footprint.IsSet());
+	TestTrue(TEXT("and its service points are all named and distinct"),
+		UAircraftType::HasUsableServiceIds(Design));
+	TestTrue(TEXT("the stand provides fuel"), Stand->Provides(EServiceRole::Fuel));
+
+	// The stand's own anchors are GROUND fixtures. None of them may be a place on an
+	// airframe, so none should sit where a door does.
+	TestTrue(TEXT("the stand declares ground fixtures"), Stand->Anchors.Num() > 0);
+
+	// THE PROPERTY THE SPLIT BUYS. Two Code C types, same stand, and their hold doors
+	// must NOT land in the same place - if they did, the stand could have carried the
+	// geometry after all and this whole change bought nothing.
+	UAircraftType* Boeing = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::Build737(Boeing);
+
+	const FEntityAnchor* AirbusHold = Design->ServicePoints.FindByPredicate(
+		[](const FEntityAnchor& Each) { return Each.Id == FName(TEXT("HoldFwd")); });
+	const FEntityAnchor* BoeingHold = Boeing->ServicePoints.FindByPredicate(
+		[](const FEntityAnchor& Each) { return Each.Id == FName(TEXT("HoldFwd")); });
+
+	if (TestNotNull(TEXT("the A320 has a forward hold"), AirbusHold)
+		&& TestNotNull(TEXT("and so does the 737"), BoeingHold))
+	{
+		TestTrue(TEXT("their forward holds are at DIFFERENT stations"),
+			FMath::Abs(AirbusHold->LocalPosition.X - BoeingHold->LocalPosition.X) > 100.0);
+	}
+
+	TestTrue(TEXT("and the two types are not the same length"),
+		FMath::Abs(Design->Footprint.TailX - Boeing->Footprint.TailX) > 100.0);
+
+	// Four sides of the envelope plus fuselage, wing and tailplane: seven segments.
+	TArray<FVector2D> Outline;
+	UAircraftType::BuildFootprintLines(Design->Footprint, Outline);
+	TestEqual(TEXT("the outline is seven segments"), Outline.Num(), 14);
+
+	// Every service point must fall within the aircraft it belongs to, or the outline
+	// is decoration rather than orientation.
+	const double HalfSpan = Design->Footprint.Wingspan * 0.5;
+	for (const FEntityAnchor& Point : Design->ServicePoints)
+	{
+		TestTrue(FString::Printf(TEXT("service point %s lies within the wingspan"), *Point.Id.ToString()),
+			FMath::Abs(Point.LocalPosition.Y) <= HalfSpan);
+		TestTrue(FString::Printf(TEXT("service point %s lies along the fuselage"), *Point.Id.ToString()),
+			Point.LocalPosition.X <= Design->Footprint.NoseX
+			&& Point.LocalPosition.X >= Design->Footprint.TailX);
+	}
+
+	// An unauthored footprint draws nothing rather than a degenerate dot at the origin.
+	FEntityFootprint Empty;
+	TestFalse(TEXT("an unauthored footprint reports itself unset"), Empty.IsSet());
+	UAircraftType::BuildFootprintLines(Empty, Outline);
+	TestEqual(TEXT("and produces no segments at all"), Outline.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotRemoveTakesItsAnchorNodesTest,
+	"Airside.Tool.StandPlot.RemoveTakesItsAnchorNodes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotRemoveTakesItsAnchorNodesTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a stand drawn"), DrawStand(Tool, Actor, 6000.0, 5500.0))) { return false; }
+	TArray<FVector2D> Drawn;
+	Tool.Rect(At(Actor, AnchorCursor), Drawn);
+	Tool.OnCommit(At(Actor, AnchorCursor));
+	if (!TestEqual(TEXT("a stand to remove"), LiveStands(Actor), 1)) { return false; }
+
+	TArray<FGuidelineNodeId> Owned;
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (!Entity.bAlive || !Entity.IsStand()) { continue; }
+		for (const FResolvedAnchor& Anchor : Entity.ResolvedAnchors) { Owned.Add(Anchor.Node); }
+	}
+	TestTrue(TEXT("the stand resolved anchors to take with it"), Owned.Num() > 0);
+
+	FToolContext Remove = At(Actor, (Drawn[0] + Drawn[2]) * 0.5);
+	Remove.bRemoveModifier = true;
+	Tool.OnClick(Remove);
+
+	TestEqual(TEXT("ctrl-click removes the stand"), LiveStands(Actor), 0);
+	for (const FGuidelineNodeId& Node : Owned)
+	{
+		TestNull(TEXT("and its anchor nodes went with it"), Actor->Network->GetGuidelineNode(Node));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotUndoIsOneEditTest,
+	"Airside.Tool.StandPlot.UndoIsOneEdit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotUndoIsOneEditTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a stand drawn"), DrawStand(Tool, Actor, 6000.0, 5500.0))) { return false; }
+	Tool.OnCommit(At(Actor, AnchorCursor));
+	if (!TestEqual(TEXT("placed"), LiveStands(Actor), 1)) { return false; }
+
+	int32 Anchors = 0;
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (Entity.bAlive && Entity.IsStand()) { Anchors = Entity.ResolvedAnchors.Num(); }
+	}
+
+	// Placing is one edit, not nine: the stand and every anchor come and go together.
+	TestEqual(TEXT("as a single named edit"), Actor->PeekUndoLabel(), FString(TEXT("place stand")));
+	TestTrue(TEXT("undo takes it back"), Actor->Undo());
+	TestEqual(TEXT("all of it"), LiveStands(Actor), 0);
+
+	TestTrue(TEXT("and redo returns it"), Actor->Redo());
+	int32 Restored = -1;
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (Entity.bAlive && Entity.IsStand()) { Restored = Entity.ResolvedAnchors.Num(); }
+	}
+	TestEqual(TEXT("with its anchors"), Restored, Anchors);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotAnchorsSurviveRebuildsTest,
+	"Airside.Tool.StandPlot.AnchorsSurviveRebuilds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotAnchorsSurviveRebuildsTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	// --- THE PROPERTY THE WHOLE DESIGN RESTS ON ---------------------------------------
+	//
+	// FRoadGuidelineBuilder::Build destroys and re-adds every DERIVED guideline node on
+	// each run, advancing its generation - so anything holding a derived node's handle
+	// across a rebuild finds it dangling. A stand's anchors are exactly that: handles,
+	// stored, and expected to outlive every edit made elsewhere on the airport.
+	//
+	// They survive because they are created NON-DERIVED and the orphan sweep requires
+	// bDerived. Asserted here through the TOOL, because that is the path a player takes.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a stand drawn"), DrawStand(Tool, Actor, 6000.0, 5500.0))) { return false; }
+	Tool.OnCommit(At(Actor, AnchorCursor));
+	if (!TestEqual(TEXT("and built"), LiveStands(Actor), 1)) { return false; }
+
+	TArray<FGuidelineNodeId> Anchors;
+	TArray<FVector2D> Positions;
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (!Entity.bAlive || !Entity.IsStand()) { continue; }
+		for (const FResolvedAnchor& Anchor : Entity.ResolvedAnchors)
+		{
+			Anchors.Add(Anchor.Node);
+			const FGuidelineNode* Node = Actor->Network->GetGuidelineNode(Anchor.Node);
+			Positions.Add(Node != nullptr ? Node->Position : FVector2D::ZeroVector);
+		}
+	}
+	TestTrue(TEXT("anchors to follow"), Anchors.Num() > 0);
+
+	// More taxiway for the builder to churn, drawn after the stand exists.
+	IRoadEditTarget* Target = Actor;
+	const int32 Hub = Target->PlaceNode(FVector2D(-30000.0, -20000.0));
+	const int32 East = Target->PlaceNode(FVector2D(-18000.0, -20000.0));
+	Target->ConnectNodes(Hub, East, ERoadKind::Taxiway, INDEX_NONE);
+
+	// Twice, because the sweep only bites on a rebuild that finds nodes from a previous
+	// one - a single pass would leave the interesting case untested.
+	const FRoadSolveResult First = FRoadNetworkSolver::SolveAll(*Actor->Network);
+	FRoadGuidelineBuilder::Build(*Actor->Network, First, UAirsideSettings::ResolveLargestServiceVehicle());
+	const FRoadSolveResult Second = FRoadNetworkSolver::SolveAll(*Actor->Network);
+	FRoadGuidelineBuilder::Build(*Actor->Network, Second, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	for (int32 Index = 0; Index < Anchors.Num(); ++Index)
+	{
+		const FGuidelineNode* Node = Actor->Network->GetGuidelineNode(Anchors[Index]);
+		if (!TestNotNull(TEXT("an anchor handle still resolves after two rebuilds"), Node)) { continue; }
+
+		// And to the SAME node, not merely to something. A rebuild that re-pointed an
+		// anchor would satisfy a null check and still send the fuel truck elsewhere.
+		TestTrue(TEXT("at the position it was placed at"), Node->Position.Equals(Positions[Index], 0.01));
+		TestFalse(TEXT("and it is still not owned by the derivation"), Node->bDerived);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotRemoveNamesTheAircraftInUseTest,
+	"Airside.Tool.StandPlot.RemoveNamesTheAircraftInUse",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotRemoveNamesTheAircraftInUseTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	// A stand IN USE is labelled before it is deleted (spec 2026-09-07-stand-occupancy §6).
+	// The click still removes it; the label is the warning.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a stand drawn"), DrawStand(Tool, Actor, 6000.0, 5500.0))) { return false; }
+	TArray<FVector2D> Drawn;
+	Tool.Rect(At(Actor, AnchorCursor), Drawn);
+	Tool.OnCommit(At(Actor, AnchorCursor));
+	if (!TestEqual(TEXT("placed a stand to occupy"), LiveStands(Actor), 1)) { return false; }
+
+	FGuidelineNodeId Pose;
+	for (const FEntityInstance& E : Actor->Network->GetEntities()) { if (E.bAlive && E.IsStand()) { Pose = E.PoseNode; } }
+	if (!TestTrue(TEXT("the stand has a pose node"), Pose.IsSet())) { return false; }
+
+	// An authored way in, so an aircraft can be sent to it without routing the taxiway.
+	const FGuidelineNode* PoseNode = Actor->Network->GetGuidelineNode(Pose);
+	if (!TestNotNull(TEXT("the pose node resolves"), PoseNode)) { return false; }
+	const FVector2D PoseAt = PoseNode->Position;
+	const FGuidelineNodeId From = Actor->Network->AddGuidelineNode(PoseAt + FVector2D(0.0, 20000.0), false);
+	{
+		FGuidelineEdge Edge;
+		Edge.A = From; Edge.B = Pose;
+		Edge.Control = PoseAt + FVector2D(0.0, 10000.0);
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.bDerived = false;
+		Actor->Network->AddGuidelineEdge(MoveTemp(Edge));
+	}
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = From; Q.Goal = Pose; Q.Class = ETraversalClass::Aircraft;
+	if (!TestTrue(TEXT("an aircraft is sent to the stand"),
+		Actor->DispatchAgent(RouteSearch::Find(*Actor->Network, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+
+	FToolContext Remove = At(Actor, (Drawn[0] + Drawn[2]) * 0.5);
+	Remove.bRemoveModifier = true;
+	FStandPlotSink InUse;
+	Tool.BuildPreview(Remove, InUse);
+	TestTrue(TEXT("the remove preview names the aircraft using the stand"),
+		InUse.Says(FString::Printf(TEXT("in use by aircraft %d"), Id)));
+
+	Actor->GetTraffic()->RetireAgent(Id);
+	FStandPlotSink Free;
+	Tool.BuildPreview(Remove, Free);
+	TestTrue(TEXT("still says remove"), Free.Says(TEXT("remove stand")));
+	TestFalse(TEXT("a free stand carries no in-use label"), Free.Says(TEXT("in use")));
+	return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS

@@ -507,7 +507,7 @@ void FRoadDrawTool::OnDeactivate(const FToolContext& Context)
 	// returns early otherwise), but BuildSession::SelectTool's own doc says OnDeactivate must
 	// tolerate a default-constructed FToolContext - the session holds no IRoadEditTarget of
 	// its own. Every other draw tool resets its part-drawn state unconditionally on
-	// deactivate (FOutlineDrawTool, FPlotPlaceTool, FRunwayTool, FStandPlaceTool); this one
+	// deactivate (FOutlineDrawTool, FPlotPlaceTool, FRunwayTool, FStandPlotTool); this one
 	// must too, or a chain started with a target survives a later deactivate that has none,
 	// and reappears - unfinished and un-cancellable by anything outside a click - next time
 	// this tool is picked.

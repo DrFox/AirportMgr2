@@ -10,7 +10,7 @@
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RunwayTool.h"
 #include "Tool/SelectTool.h"
-#include "Tool/StandPlaceTool.h"
+#include "Tool/StandPlotTool.h"
 
 #define LOCTEXT_NAMESPACE "BuildSession"
 
@@ -45,8 +45,8 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 			[] { return MakeUnique<FApronDrawTool>(); },
 			EEditHandleKind::ApronCorner },
 		{ EKeys::Three, TEXT("Stand"),    LOCTEXT("Stand",     "Stand"),
-			LOCTEXT("StandTooltip", "Place an aircraft stand: press to position, drag to aim, release."),
-			[] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::Stand); },
+			LOCTEXT("StandTooltip", "Place an aircraft stand: click a taxiway to start the entrance, drag along it for width, away from it for depth, then press Build. Bigger stands take bigger aircraft."),
+			[] { return MakeUnique<FStandPlotTool>(); },
 			EEditHandleKind::None },
 		{ EKeys::Five,  TEXT("Guideline"), LOCTEXT("Guideline", "Guidelines"),
 			LOCTEXT("GuidelineTooltip", "Draw a routing link the derivation never made: click a node, click another."),
@@ -80,10 +80,12 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// ZERO, after nine: it is the next key along a keyboard's top row, and every other
 		// number is spoken for.
 		//
-		// A DIFFERENT TOOL FROM KEY 3, which it did not used to be - this was one
-		// FStandPlaceTool under two entries until the depot became a drawn plot. A stand
-		// keeps press-drag-release because it has no plot: its extent is its design
-		// aircraft's, and a rectangle round it would be a second opinion about how big it is.
+		// A DIFFERENT TOOL FROM KEY 3, though the same gesture: FPlotPlaceTool here, snapped
+		// to a service road; FStandPlotTool there, snapped to a taxiway, sharing the first
+		// click through PlotGesture. Until 2026-09-23 a stand kept press-drag-release on the
+		// belief that it had no plot - its extent was its design aircraft's. Drawn stands
+		// reversed that: the rectangle's size now DECIDES the letter, so it is the one fact
+		// about the stand rather than a second opinion (drawn-stands spec).
 		//
 		// AND A STAGED GESTURE, not the apron's freeform one it briefly borrowed. That reuse
 		// was cheap and PIE showed what it cost - see the plot gesture design doc.
