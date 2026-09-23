@@ -205,6 +205,11 @@ namespace IcaoCode
 		return Rows[UE_ARRAY_COUNT(Rows) - 1].Letter;
 	}
 
+	double MaxWingspanForLetter(EIcaoCode Code)
+	{
+		return RowFor(Code).MaxWingspan;
+	}
+
 	double MaxWingspanForWidth(double TotalWidth)
 	{
 		const FRow* Nearest = &Rows[0];
@@ -351,5 +356,42 @@ namespace IcaoCode
 		// Smaller than Code A in one dimension or both. Empty, not "A": see the header for
 		// why a letter here would admit an aircraft to a space it does not fit.
 		return FString();
+	}
+
+	namespace
+	{
+		/**
+		 * LetterForWingspan + Parse for a KNOWN, positive span - always succeeds. LetterForWingspan
+		 * only ever returns one of Rows' own six letters and Parse recognises all six exactly, so
+		 * GetValue() here can never hit an unset TOptional. Callers pass Uu > 0 only; StandAdmits
+		 * and StandRank handle "unknown" (<= 0) themselves before reaching this.
+		 */
+		EIcaoCode LetterOfKnownSpan(double Uu)
+		{
+			return Parse(LetterForWingspan(Uu)).GetValue();
+		}
+	}
+
+	bool StandAdmits(double StandDesignSpanUu, double AircraftSpanUu)
+	{
+		if (StandDesignSpanUu <= 0.0 || AircraftSpanUu <= 0.0)
+		{
+			return true;
+		}
+		if (AircraftSpanUu > MaxWingspanForLetter(EIcaoCode::F))
+		{
+			return false;
+		}
+		return static_cast<uint8>(LetterOfKnownSpan(StandDesignSpanUu))
+			>= static_cast<uint8>(LetterOfKnownSpan(AircraftSpanUu));
+	}
+
+	int32 StandRank(double StandDesignSpanUu)
+	{
+		if (StandDesignSpanUu <= 0.0)
+		{
+			return static_cast<int32>(EIcaoCode::C);
+		}
+		return static_cast<int32>(LetterOfKnownSpan(StandDesignSpanUu));
 	}
 }

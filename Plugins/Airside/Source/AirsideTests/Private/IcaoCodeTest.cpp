@@ -261,4 +261,97 @@ bool FWingKeepOutIsTheUnionOfAdmittedWingsTest::RunTest(const FString& Parameter
 	return true;
 }
 
+// FIX ROUND 1 (drawn-stands Task 4 review, finding 1): MaxWingspanForLetter is the ONE real
+// "too wide" ceiling this table has, so it must agree EXACTLY with the boundary
+// LetterForWingspan itself reads off Rows - a hair under a letter's own ceiling is still that
+// letter, and (for every letter but F, which has nothing above it to roll into) AT the
+// ceiling has already rolled over to the next one.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMaxWingspanForLetterMatchesTheBandEdgesTest,
+	"Airside.Solve.MaxWingspanForLetterMatchesTheBandEdges",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMaxWingspanForLetterMatchesTheBandEdgesTest::RunTest(const FString& Parameters)
+{
+	const EIcaoCode Ladder[] = { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E };
+	for (const EIcaoCode Code : Ladder)
+	{
+		const double Ceiling = IcaoCode::MaxWingspanForLetter(Code);
+		const EIcaoCode Next = static_cast<EIcaoCode>(static_cast<uint8>(Code) + 1);
+		TestEqual(
+			*FString::Printf(TEXT("%s: a hair under its own ceiling is still %s"),
+				IcaoCode::ToLetter(Code), IcaoCode::ToLetter(Code)),
+			IcaoCode::LetterForWingspan(Ceiling - 1.0), FString(IcaoCode::ToLetter(Code)));
+		TestEqual(
+			*FString::Printf(TEXT("%s: AT its own ceiling has rolled over to %s"),
+				IcaoCode::ToLetter(Code), IcaoCode::ToLetter(Next)),
+			IcaoCode::LetterForWingspan(Ceiling), FString(IcaoCode::ToLetter(Next)));
+	}
+
+	// CODE F IS THE ONE ROW WITH NOTHING ABOVE IT TO ROLL INTO - both a hair under its
+	// ceiling and exactly AT it still read "F", which is exactly why StandAdmits cannot use
+	// LetterForWingspan's return alone to tell "genuinely F" from "wider than anything built"
+	// and has to ask this function about the ceiling directly instead.
+	const double FCeiling = IcaoCode::MaxWingspanForLetter(EIcaoCode::F);
+	TestEqual(TEXT("F: a hair under its own ceiling is still F"),
+		IcaoCode::LetterForWingspan(FCeiling - 1.0), FString(TEXT("F")));
+	TestEqual(TEXT("F: AT its own ceiling is still F - nothing to roll over to"),
+		IcaoCode::LetterForWingspan(FCeiling), FString(TEXT("F")));
+	TestEqual(TEXT("F's own ceiling is 80 m, the one real 'too wide' threshold this table has"),
+		FCeiling, 8000.0);
+
+	return true;
+}
+
+// FIX ROUND 1, finding 2: ONE admission rule for ArrivalPlanner::ChooseStand and
+// UStandAllocator::Reserve, which used to each compare Stand.DesignWingspan against an
+// aircraft's Wingspan as raw doubles and had started to disagree about a legacy-span stand.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandAdmitsComparesLettersTest,
+	"Airside.Solve.StandAdmitsComparesLetters",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandAdmitsComparesLettersTest::RunTest(const FString& Parameters)
+{
+	// THE LEGACY CASE this rule exists for: a stand's captured span (3410, an older A320
+	// measurement) and a 737-800's published span (3580) are BOTH Code C - LetterForWingspan(
+	// 3410) and LetterForWingspan(3580) agree - so the stand admits the aircraft even though
+	// 3410 < 3580 as raw numbers, which a raw-double compare would have refused.
+	TestTrue(TEXT("a legacy-span stand still admits by letter, not by raw span"),
+		IcaoCode::StandAdmits(3410.0, 3580.0));
+
+	TestFalse(TEXT("a stand too small by letter is refused"),
+		IcaoCode::StandAdmits(2000.0, 3580.0));
+
+	// "Smallest that fits" is StandRank's question, not StandAdmits' - a bigger-lettered
+	// stand than strictly needed still admits.
+	TestTrue(TEXT("a bigger stand than needed still admits"),
+		IcaoCode::StandAdmits(6000.0, 3580.0));
+
+	// UNKNOWN, EITHER SIDE, ADMITS ANYTHING - the pre-letter-admission behaviour every caller
+	// saw before this rule existed, preserved so no existing fixture's stands or airframes
+	// (every one of them built with DesignWingspan/Wingspan left at its 0.0 default) changed
+	// meaning under it.
+	TestTrue(TEXT("an unmeasured stand admits anything"), IcaoCode::StandAdmits(0.0, 9000.0));
+	TestTrue(TEXT("an airframe with no known span is admitted anywhere"),
+		IcaoCode::StandAdmits(2000.0, 0.0));
+
+	// WIDER THAN EVERY LETTER ADMITS IS NEVER ADMITTED - not even by a genuine Code F stand,
+	// which is the one real refusal MaxWingspanForLetter(F) exists to make possible.
+	const double FCeiling = IcaoCode::MaxWingspanForLetter(EIcaoCode::F);
+	TestTrue(TEXT("a genuine Code F stand admits a genuine Code F aircraft"),
+		IcaoCode::StandAdmits(FCeiling, FCeiling - 1.0));
+	TestFalse(TEXT("nothing admits an aircraft wider than Code F allows, even a Code F stand"),
+		IcaoCode::StandAdmits(FCeiling, FCeiling + 1000.0));
+
+	// RANK: A=0 .. F=5, unknown ranks as C - the legacy default IcaoCode's own
+	// RadiusForLetter fallback used before Parse existed.
+	TestEqual(TEXT("Code A ranks 0"), IcaoCode::StandRank(1000.0), static_cast<int32>(EIcaoCode::A));
+	TestEqual(TEXT("Code F ranks 5"), IcaoCode::StandRank(FCeiling - 1.0), static_cast<int32>(EIcaoCode::F));
+	TestEqual(TEXT("unknown ranks as C, the legacy default"),
+		IcaoCode::StandRank(0.0), static_cast<int32>(EIcaoCode::C));
+
+	return true;
+}
+
 #endif

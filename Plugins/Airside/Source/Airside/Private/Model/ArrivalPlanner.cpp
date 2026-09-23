@@ -9,44 +9,6 @@
 
 namespace ArrivalPlanner
 {
-	namespace
-	{
-		/**
-		 * The ICAO letter Uu (a wingspan, uu) counts as, or unset for Uu <= 0 -
-		 * FEntityInstance::DesignWingspan's own "unknown" value, and also what any airframe
-		 * that never set Wingspan reports (every hand-built TestAirframes fixture bar the
-		 * measured ones, and any content that predates this task).
-		 *
-		 * DELIBERATELY DOES NOT special-case "wider than every letter": IcaoCode::
-		 * LetterForWingspan's own contract clamps to F for anything past E's band ("anything
-		 * wider F" - see its doc comment), so there is no wingspan that table itself refuses.
-		 * An aircraft whose span clamps to F is refused the ORDINARY way below - by there
-		 * being no F-or-wider stand reachable - not by a dedicated branch here, because no
-		 * such branch could ever fire without duplicating IcaoCode.cpp's own F-row ceiling as
-		 * a second figure in this file (see CLAUDE.md on a literal at a second call site).
-		 */
-		TOptional<EIcaoCode> LetterOfSpan(double Uu)
-		{
-			if (Uu <= 0.0)
-			{
-				return TOptional<EIcaoCode>();
-			}
-			return IcaoCode::Parse(IcaoCode::LetterForWingspan(Uu));
-		}
-
-		/**
-		 * Ordinal for ranking candidates against each other: A=0 .. F=5. UNKNOWN (unset)
-		 * RANKS AS C, the legacy default IcaoCode.h's own RadiusForLetter fallback used
-		 * before Parse existed - a stand nobody measured competes at a nominal middling size
-		 * rather than always winning (as the smallest) or always losing (as the largest) a
-		 * best-stand comparison against measured ones.
-		 */
-		uint8 RankOf(const TOptional<EIcaoCode>& Letter)
-		{
-			return Letter.IsSet() ? static_cast<uint8>(Letter.GetValue()) : static_cast<uint8>(EIcaoCode::C);
-		}
-	}
-
 	FGuidelineNodeId ChooseStand(const URoadNetwork& Network, FGuidelineNodeId From,
 		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingAgent,
 		FRoutePlan* OutRoute, bool* bOutSawHeld)
@@ -55,29 +17,28 @@ namespace ArrivalPlanner
 		// too (FEntityInstance::IsStand/IsDepot; PoseRole captured at placement) - in
 		// FEntityInstance ENUMERATION ORDER. The tie-break below ("first minimum wins")
 		// depends on Candidates keeping GetEntities()'s own order, exactly as the old
-		// per-stand loop implicitly did by walking it directly. CandidateLetter is kept
+		// per-stand loop implicitly did by walking it directly. CandidateSpan is kept
 		// parallel by construction (same filter, same push, same index) rather than
 		// recomputed from Candidates afterwards, so the two arrays cannot disagree about
 		// which stand is which.
 		TArray<FGuidelineNodeId> Candidates;
-		TArray<TOptional<EIcaoCode>> CandidateLetter;
+		TArray<double> CandidateSpan;
 		Candidates.Reserve(Network.GetEntities().Num());
-		CandidateLetter.Reserve(Network.GetEntities().Num());
+		CandidateSpan.Reserve(Network.GetEntities().Num());
 		for (const FEntityInstance& Stand : Network.GetEntities())
 		{
 			if (Stand.bAlive && Stand.PoseNode.IsSet() && Stand.IsStand())
 			{
 				Candidates.Add(Stand.PoseNode);
-				CandidateLetter.Add(LetterOfSpan(Stand.DesignWingspan));
+				CandidateSpan.Add(Stand.DesignWingspan);
 			}
 		}
 
-		// GDD's "smallest free stand that fits", the admission half: an aircraft whose own
-		// wingspan is unknown (Wingspan <= 0 - Need unset) is admitted to anything, exactly
-		// as every caller before this task saw, and a stand nobody measured (DesignWingspan
-		// == 0 - CandidateLetter[i] unset) admits anything for the same "nothing to compare"
-		// reason - see the skip test below, which only fires when BOTH letters are set.
-		const TOptional<EIcaoCode> Need = LetterOfSpan(Airframe.Wingspan);
+		// ADMISSION AND RANK BOTH COME FROM IcaoCode::StandAdmits/StandRank - the ONE rule
+		// UStandAllocator::Reserve also calls, so a legacy stand's captured DesignWingspan
+		// and an aircraft's Wingspan are always compared by LETTER, in exactly one place, never
+		// against each other as raw doubles here or anywhere else. See those functions' own
+		// comments for unknown-admits-anything and the wider-than-F refusal.
 
 		// Built by hand rather than FRouteQuery::For: that factory also takes a Goal, and
 		// there isn't ONE here - FindToGoals takes the whole Candidates set instead of a
@@ -107,7 +68,7 @@ namespace ArrivalPlanner
 		FGuidelineNodeId Best;
 		int32 BestIndex = INDEX_NONE;
 		double BestLength = TNumericLimits<double>::Max();
-		uint8 BestRank = TNumericLimits<uint8>::Max();
+		int32 BestRank = TNumericLimits<int32>::Max();
 		bool bSawHeld = false;
 		int32 TooSmallCount = 0;
 		int32 HeldCount = 0;
@@ -120,8 +81,9 @@ namespace ArrivalPlanner
 			// Asked BEFORE Held: size is a property of the ground, not of the traffic on it, so
 			// a stand too small for this aircraft is never counted as "held" in the sense that
 			// word reports to the player (wait, or build another - see NoFreeStand's wording).
-			// Only fires when BOTH letters are set - see LetterOfSpan and Need's own comments.
-			if (Need.IsSet() && CandidateLetter[Index].IsSet() && CandidateLetter[Index].GetValue() < Need.GetValue())
+			// IcaoCode::StandAdmits is where "unknown admits anything" and "wider than F is
+			// never admitted" both live - see its own comment.
+			if (!IcaoCode::StandAdmits(CandidateSpan[Index], Airframe.Wingspan))
 			{
 				++TooSmallCount;
 				continue;
@@ -141,7 +103,7 @@ namespace ArrivalPlanner
 			// STRICT, so a later equal rank-and-length never overtakes an earlier one - the
 			// same "first minimum wins" contract ChooseStandMultiGoalTieBreakTest pins for
 			// length, now the first test applied rather than the only one.
-			const uint8 Rank = RankOf(CandidateLetter[Index]);
+			const int32 Rank = IcaoCode::StandRank(CandidateSpan[Index]);
 			if (Rank < BestRank || (Rank == BestRank && Reach[Index].Length < BestLength))
 			{
 				BestRank = Rank;
@@ -160,21 +122,25 @@ namespace ArrivalPlanner
 		// (Code %s); %d too small, %d held" is CLAUDE.md's own "pressing 7 does nothing"
 		// discipline applied here: a refusal with no line saying WHY (too small vs. held vs.
 		// simply unreachable) is what cost the runway-length bug a whole session. Code %s is
-		// the WINNING stand's own letter when one was found (its DesignWingspan may still be
-		// unknown, hence "?"), else the aircraft's OWN required letter Need (also "?" for an
-		// airframe with no known wingspan) - either way, the letter that decided the outcome.
-		const TCHAR* CodeText = TEXT("?");
-		if (BestIndex != INDEX_NONE && CandidateLetter[BestIndex].IsSet())
+		// the WINNING stand's own letter when one was found (a known span - an unmeasured
+		// winner reports "?", since 0 has no letter), else the aircraft's OWN letter for
+		// context on a refusal (also "?" for an airframe with no known span, or one wider
+		// than MaxWingspanForLetter(F) admits - LetterForWingspan has nothing useful to say
+		// about either). Reading the letter back off LetterForWingspan rather than the Rank
+		// ordinal above keeps this presentation-only - it duplicates no admission decision.
+		FString CodeText = TEXT("?");
+		if (BestIndex != INDEX_NONE && CandidateSpan[BestIndex] > 0.0)
 		{
-			CodeText = IcaoCode::ToLetter(CandidateLetter[BestIndex].GetValue());
+			CodeText = IcaoCode::LetterForWingspan(CandidateSpan[BestIndex]);
 		}
-		else if (!Best.IsSet() && Need.IsSet())
+		else if (!Best.IsSet() && Airframe.Wingspan > 0.0
+			&& Airframe.Wingspan <= IcaoCode::MaxWingspanForLetter(EIcaoCode::F))
 		{
-			CodeText = IcaoCode::ToLetter(Need.GetValue());
+			CodeText = IcaoCode::LetterForWingspan(Airframe.Wingspan);
 		}
 		UE_LOG(LogAirside, Log,
 			TEXT("ChooseStand: span %.1f m -> node %d (Code %s); %d too small, %d held"),
-			Airframe.Wingspan / 100.0, Best.Index, CodeText, TooSmallCount, HeldCount);
+			Airframe.Wingspan / 100.0, Best.Index, *CodeText, TooSmallCount, HeldCount);
 
 		return Best;
 	}

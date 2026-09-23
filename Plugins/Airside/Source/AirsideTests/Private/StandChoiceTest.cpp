@@ -9,6 +9,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
+#include "Solve/IcaoCode.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -186,7 +187,7 @@ bool FStandChoiceSmallestLetterBeatsNearerTest::RunTest(const FString& Parameter
 	const FGuidelineNodeId Chosen = ArrivalPlanner::ChooseStand(*Star.Net, Star.From, KingAir, nullptr, 0);
 
 	TestEqual(TEXT("big stands are kept for big aircraft (GDD 'smallest free stand that fits')"), Chosen, StandB);
-	TestTrue(TEXT("not the nearer stand sized for a wider aircraft"), Chosen != StandE);
+	TestNotEqual(TEXT("not the nearer stand sized for a wider aircraft"), Chosen, StandE);
 	return true;
 }
 
@@ -278,12 +279,12 @@ bool FStandChoiceUnknownSpanAdmittedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// Nothing on the field is wide enough. IcaoCode::LetterForWingspan clamps to F for anything
-// past E's band (its own doc comment: "anything wider F") rather than refusing outright, so
-// this is not a dedicated early-return - it is the ordinary "too small" skip applied when the
-// aircraft's own letter is F and nothing on the field is F or wider. Proven with a KNOWN,
-// narrower stand (not an unmeasured one, which the rule above admits regardless) so the skip
-// is the thing under test, not the unknown-span carve-out.
+// FIX ROUND 1 (review finding 1): IcaoCode::MaxWingspanForLetter now gives this rule a REAL
+// "too wide" ceiling - see its own comment - so this offers a GENUINE Code F stand (its own
+// captured span sits exactly at F's ceiling) and still refuses a 9000 uu aircraft, which is
+// wider than Code F itself admits. Not the "no F-or-wider stand happens to exist" case the
+// earlier draft of this test settled for - the widest stand this codebase can build is on the
+// field, and it is still not wide enough.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandChoiceWiderThanFNowhereTest,
 	"Airside.Model.StandChoice.WiderThanFNowhere",
@@ -292,13 +293,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FStandChoiceWiderThanFNowhereTest::RunTest(const FString& Parameters)
 {
 	FAdmissionStar Star = BuildAdmissionStar();
-	Star.AddStand(500.0, FVector2D(1.0, 0.0), 6000.0); // Code E - known, but narrower than F
+	// DesignWingspan = MaxWingspanForLetter(F) EXACTLY: F is the one row with no letter above
+	// it to roll over into, so LetterForWingspan reads AT this ceiling the same as a hair
+	// under it - both "F" (see that function's own comment) - and a stand captured with this
+	// span is a genuine Code F stand, the widest this table can describe.
+	Star.AddStand(500.0, FVector2D(1.0, 0.0), IcaoCode::MaxWingspanForLetter(EIcaoCode::F));
 
 	FAirframe TooWide;
-	TooWide.Wingspan = 9000.0; // wider than any real airframe this codebase ships
+	TooWide.Wingspan = 9000.0; // wider than IcaoCode::MaxWingspanForLetter(EIcaoCode::F) (8000)
 	const FGuidelineNodeId Chosen = ArrivalPlanner::ChooseStand(*Star.Net, Star.From, TooWide, nullptr, 0);
 
-	TestFalse(TEXT("nowhere on the field is wide enough, and nothing crashes finding that out"), Chosen.IsSet());
+	TestFalse(TEXT("even a genuine Code F stand does not admit an aircraft wider than Code F allows"),
+		Chosen.IsSet());
 	return true;
 }
 
