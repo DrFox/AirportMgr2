@@ -590,6 +590,23 @@ namespace
 	}
 }
 
+FBuildQuote URoadEditFacade::QuoteStand(const UEntityDefinition& Definition,
+	TArrayView<const FVector2D> Outline) const
+{
+	// THE ONE PLACE THIS QUOTE IS BUILT - fix round 1 on this task's own review: WhyStandRefused's
+	// afford gate and PlaceStandInPlot's charge used to each compute the entity-plus-pad total
+	// by hand, and had already drifted (WhyStandRefused summed BaseAmount but never combined
+	// the "{0} + {1}" What text PlaceStandInPlot's own copy carried) - the same "two solvers,
+	// free to disagree" shape issue #182 closed for the plot reservation itself, reopened here
+	// in a smaller way. Mirrors PlaceEntityInPlot's own two-quote sum exactly.
+	FBuildQuote Quote = BuildCost::ForEntity(Definition);
+	const FBuildQuote ApronQuote = QuoteForApron(Outline);
+	Quote.BaseAmount += ApronQuote.BaseAmount;
+	Quote.What = FText::Format(NSLOCTEXT("BuildCost", "StandPlusPad", "{0} + {1}"),
+		Quote.What, ApronQuote.What);
+	return Quote;
+}
+
 FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) const
 {
 	// SELF-CROSSING FIRST, AND GUARDS THE MALFORMED CASE TOO - StandBox::WidthOf/DepthOf
@@ -691,14 +708,12 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) co
 	}
 
 	// AFFORD, LAST - the same "priced and refused before the scope opens" ordering
-	// PlaceEntityInPlot uses (issue #193), and the same two-quote sum: the entity itself plus
-	// the pad it sits on, at the WOUND outline's own worth. Winding does not change the
-	// quote (BuildCost::ForApron reasons about area magnitude), so this may be asked of
-	// Outline exactly as given.
+	// PlaceEntityInPlot uses (issue #193). QuoteStand is the ONE place the entity-plus-pad
+	// quote is built - see its own comment for why this used to be a second, drifted copy of
+	// PlaceStandInPlot's own pricing. Winding does not change the quote (BuildCost::ForApron
+	// reasons about area magnitude), so this may be asked of Outline exactly as given.
 	const UEntityDefinition* Definition = Actor().ResolveStandDefinitionFor(*Letter);
-	FBuildQuote Quote = BuildCost::ForEntity(*Definition);
-	const FBuildQuote ApronQuote = QuoteForApron(Outline);
-	Quote.BaseAmount += ApronQuote.BaseAmount;
+	const FBuildQuote Quote = QuoteStand(*Definition, Outline);
 	if (!CanAfford(Quote))
 	{
 		return FString::Printf(TEXT("cannot afford %s"), *Quote.What.ToString());
@@ -768,14 +783,11 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, *Letter);
 
 	// PRICED AND REFUSED BEFORE THE SCOPE OPENS - issue #193, the same ordering
-	// PlaceEntityInPlot uses. WhyStandRefused already ran this exact afford check as its own
-	// last gate, but its answer is not carried forward (it returns a string, not a quote), so
-	// the charge itself is computed fresh here, on the wound outline this call actually places.
-	FBuildQuote Quote = BuildCost::ForEntity(*Definition);
-	const FBuildQuote ApronQuote = QuoteForApron(Wound);
-	Quote.BaseAmount += ApronQuote.BaseAmount;
-	Quote.What = FText::Format(NSLOCTEXT("BuildCost", "StandPlusPad", "{0} + {1}"),
-		Quote.What, ApronQuote.What);
+	// PlaceEntityInPlot uses. WhyStandRefused already ran this exact afford check (through the
+	// SAME QuoteStand this calls) as its own last gate, but its answer is not carried forward
+	// (it returns a string, not a quote), so the charge itself is computed fresh here, on the
+	// wound outline this call actually places.
+	const FBuildQuote Quote = QuoteStand(*Definition, Wound);
 	if (!CanAfford(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceStandInPlot refused: cannot afford %s"),
@@ -793,20 +805,25 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	Placement.PoseRole = Definition->PoseRole;
 	Placement.Outline = Wound;
 
-	// A HAIR UNDER THE LETTER'S OWN CEILING, NOT THE CEILING ITSELF. IcaoCode::LetterForWingspan
-	// treats a row's MaxWingspan as the FIRST value that belongs to the NEXT letter up (see
-	// Airside.Solve.MaxWingspanForLetterMatchesTheBandEdges) - every letter but F rolls over
-	// AT its own ceiling. A drawn stand's captured DesignWingspan feeds IcaoCode::StandAdmits/
-	// StandRank the same way a legacy stand's does (ArrivalPlanner::ChooseStand,
-	// UStandAllocator::Reserve), so the letter it reads back as must be the letter it was
-	// actually drawn to - the ceiling itself would silently rank and admit this stand one
-	// letter too generous. The 1 uu has no other meaning and Code F, with nothing above it to
-	// roll into, is unaffected either way.
-	Placement.DesignWingspan = IcaoCode::MaxWingspanForLetter(*Letter) - 1.0;
+	// THE WIDEST SPAN THAT STILL READS BACK AS THIS LETTER - see
+	// IcaoCode::DesignSpanForLetter's own header for why MaxWingspanForLetter's ceiling
+	// itself cannot be used here: a drawn stand's captured DesignWingspan feeds
+	// IcaoCode::StandAdmits/StandRank the same way a legacy stand's does
+	// (ArrivalPlanner::ChooseStand, UStandAllocator::Reserve), so the letter it reads back as
+	// must be the letter it was actually drawn to.
+	Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(*Letter);
 
 	const FEntityInstanceId Placed = Net.PlaceEntity(Placement);
 	if (!Placed.IsSet())
 	{
+		// NOT SILENT: every other refusal in this function logs on the way out, and an
+		// accepted placement that URoadNetwork::PlaceEntity itself then refuses (a dead
+		// Definition slipping past ResolveStandDefinitionFor, say) is exactly the kind of
+		// "the tool does nothing" report this project's CLAUDE.md warns is expensive to debug
+		// blind.
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceStandInPlot refused: URoadNetwork::PlaceEntity refused an accepted "
+				 "Code %s stand - report this as a bug."), IcaoCode::ToLetter(*Letter));
 		return INDEX_NONE;
 	}
 

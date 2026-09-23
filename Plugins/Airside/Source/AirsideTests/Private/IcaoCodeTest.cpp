@@ -303,6 +303,35 @@ bool FMaxWingspanForLetterMatchesTheBandEdgesTest::RunTest(const FString& Parame
 	return true;
 }
 
+// DRAWN-STANDS TASK 5 REVIEW, FIX ROUND 1: a drawn stand's captured DesignWingspan must read
+// back through LetterForWingspan as the LETTER IT WAS DRAWN TO, not the one above it - see
+// DesignSpanForLetter's own header for why MaxWingspanForLetter's ceiling itself cannot be
+// used for this directly.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDesignSpanForLetterReadsBackAsItsOwnLetterTest,
+	"Airside.Solve.DesignSpanForLetterReadsBackAsItsOwnLetter",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDesignSpanForLetterReadsBackAsItsOwnLetterTest::RunTest(const FString& Parameters)
+{
+	const EIcaoCode Ladder[] = {
+		EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F };
+	for (const EIcaoCode Code : Ladder)
+	{
+		const double Span = IcaoCode::DesignSpanForLetter(Code);
+		TestEqual(
+			*FString::Printf(TEXT("%s: DesignSpanForLetter reads back as %s"),
+				IcaoCode::ToLetter(Code), IcaoCode::ToLetter(Code)),
+			IcaoCode::LetterForWingspan(Span), FString(IcaoCode::ToLetter(Code)));
+		TestTrue(
+			*FString::Printf(TEXT("%s: a stand designed for its own span admits an aircraft of "
+				"exactly that span"), IcaoCode::ToLetter(Code)),
+			IcaoCode::StandAdmits(Span, Span));
+	}
+
+	return true;
+}
+
 // FIX ROUND 1, finding 2: ONE admission rule for ArrivalPlanner::ChooseStand and
 // UStandAllocator::Reserve, which used to each compare Stand.DesignWingspan against an
 // aircraft's Wingspan as raw doubles and had started to disagree about a legacy-span stand.

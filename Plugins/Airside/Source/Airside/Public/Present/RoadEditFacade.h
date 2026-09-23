@@ -432,6 +432,17 @@ private:
 	PlotYard::FReservation ReserveForPlot(TArrayView<const FVector2D> Outline,
 		FVector2D FrontageA, FVector2D FrontageB, EPlaceableEntity Kind) const;
 
+	/**
+	 * The one quote a drawn stand is priced at: BuildCost::ForEntity(Definition) plus the pad
+	 * it sits on (QuoteForApron(Outline)), combined into one "{0} + {1}" What text - the same
+	 * shape QuoteForApron's own callers in PlaceEntityInPlot already sum by hand, pulled out
+	 * here because WhyStandRefused's afford gate and PlaceStandInPlot's charge both need
+	 * EXACTLY this figure and had drifted into two slightly different copies of it (fix round
+	 * 1 on this task's own review).
+	 */
+	FBuildQuote QuoteStand(const UEntityDefinition& Definition,
+		TArrayView<const FVector2D> Outline) const;
+
 	IBuildPurse* Purse = nullptr;
 
 	/** What the pavement was worth when the current interactive drag began. See EndInteractiveEdit. */

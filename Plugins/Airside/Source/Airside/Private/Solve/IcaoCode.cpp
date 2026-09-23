@@ -210,6 +210,24 @@ namespace IcaoCode
 		return RowFor(Code).MaxWingspan;
 	}
 
+	double DesignSpanForLetter(EIcaoCode Code)
+	{
+		// F HAS NOTHING ABOVE IT TO ROLL INTO - see MaxWingspanForLetter's own comment and
+		// Airside.Solve.MaxWingspanForLetterMatchesTheBandEdges: LetterForWingspan reads "F"
+		// both a hair under F's own ceiling and exactly AT it, so the ceiling itself is
+		// already the widest span this table still calls F.
+		if (Code == EIcaoCode::F)
+		{
+			return MaxWingspanForLetter(Code);
+		}
+
+		// EVERY OTHER LETTER: one uu under its own ceiling, which LetterForWingspan's
+		// strict-less-than row test has already handed to the NEXT letter at the ceiling
+		// itself. The 1.0 has no meaning beyond "not the ceiling" - any value in the open
+		// interval below it would do, and this is the smallest step the table's uu unit has.
+		return MaxWingspanForLetter(Code) - 1.0;
+	}
+
 	double MaxWingspanForWidth(double TotalWidth)
 	{
 		const FRow* Nearest = &Rows[0];

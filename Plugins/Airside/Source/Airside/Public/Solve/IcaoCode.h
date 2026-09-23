@@ -93,8 +93,37 @@ namespace IcaoCode
 	 * nothing outside this file could tell them apart without exposing the row's own ceiling.
 	 * Pinned against LetterForWingspan's own band edges by
 	 * Airside.Solve.MaxWingspanForLetterMatchesTheBandEdges.
+	 *
+	 * THE VALUE ITSELF IS THE EXCLUSIVE EDGE FOR EVERY LETTER BUT F, AND INCLUSIVE FOR F.
+	 * LetterForWingspan's row loop is `WingspanUu < Row.MaxWingspan` - strictly less - so a
+	 * span exactly AT Code X's own ceiling has ALREADY rolled over and reads as the NEXT
+	 * letter up; only a span a hair under it still reads as X. Code F alone has no row above
+	 * it to roll into, so both a hair under its ceiling and exactly AT it still read "F" - see
+	 * the test named above for both halves of this, pinned for all six letters. A caller that
+	 * wants a span which reads back as ITS OWN letter - a drawn stand's captured
+	 * DesignWingspan, for one - wants DesignSpanForLetter below, not this value directly.
 	 */
 	AIRSIDE_API double MaxWingspanForLetter(EIcaoCode Code);
+
+	/**
+	 * The widest wingspan, uu, that still reads back as Code through LetterForWingspan - "the
+	 * widest aircraft this letter's stand may honestly claim to be designed for".
+	 *
+	 * NOT MaxWingspanForLetter(Code) ITSELF, for every letter but F - see that function's own
+	 * comment: its value is the EXCLUSIVE edge, already the next letter's, so a caller that
+	 * captured it as a "Code X" aircraft's span would have LetterForWingspan (and therefore
+	 * IcaoCode::StandAdmits/StandRank, which both read a captured span through it) report the
+	 * stand as one letter wider than it was drawn. A hair under the ceiling - one uu, which has
+	 * no meaning beyond "not the ceiling itself" - is the whole of the correction. Code F is
+	 * the one exception: it has nothing above it to roll into, so its own ceiling is ALREADY
+	 * the widest span the table still calls F (LetterForWingspan reads "F" both a hair under
+	 * it and exactly at it), and MaxWingspanForLetter(F) is used unchanged.
+	 *
+	 * Pinned for all six letters by Airside.Solve.DesignSpanForLetterReadsBackAsItsOwnLetter:
+	 * LetterForWingspan(DesignSpanForLetter(L)) == ToLetter(L), and
+	 * StandAdmits(DesignSpanForLetter(L), DesignSpanForLetter(L)) is true.
+	 */
+	AIRSIDE_API double DesignSpanForLetter(EIcaoCode Code);
 
 	/**
 	 * The widest wingspan, uu, that a runway of TotalWidth, uu, is built for. Nearest code
