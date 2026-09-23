@@ -60,9 +60,10 @@ edges (`URoadNetwork::ForEachOutgoingGuideline`, `RoadNetwork.cpp:1072`).
   Wide: the rig. Replaces
   `ResolveLargestServiceVehicle` as the fillet source for roads.
 - Existing levels: today's road is a 600 uu lane + 60 uu kerbs (`build_road_profiles.py:52-53`),
-  a 6.0 m carriageway - exactly Narrow (2 x 3.0 m), not Standard (7.0 m). The old profile
-  asset is kept as the **Narrow** tier (same path, same total width), so placed roads
-  re-derive as Narrow two-lane roads and nothing on the map changes width. The bowser
+  and `FillServiceRoad`'s LaneWidth INCLUDES the kerbs (`RoadProfile.cpp:143`), so today's
+  carriageway is 4.8 m (6.0 m kerb to kerb) - narrower than even Narrow (2 x 3.0 m). The
+  old profile asset is kept as the **Narrow** tier (same path, filled in place), so placed
+  roads re-derive as Narrow two-lane roads and widen 1.2 m (6.0 -> 7.2 m overall). The bowser
   (~2.5 m) stays admitted on Narrow (~0.25 m each side), so fuel service on existing
   maps keeps working. No player saves exist
   (memory `no-player-saves-yet`); note the break in the PR anyway.
@@ -94,16 +95,33 @@ that is exactly one turn per arm pair. Bidirectional guidelines (taxiways) both 
 and leave, so taxiway behaviour is unchanged. A 1-lane arm meeting a 2-lane arm connects.
 Still no U-turns at junctions (`From == To` skipped, `:455`).
 
-Turn control point stays the junction node (`:545`) so samples stay on one quadratic.
+Turn control point: the node (`:545`) is right only for lanes ON the centreline, where
+both arms' tangent lines meet at it. An offset lane's tangent line misses the node, so a
+node-controlled quadratic would leave and join the lanes at an angle. The control becomes
+the intersection of the arriving lane's line and the leaving lane's line
+(`RoadGeom::LineIntersect`); when both guidelines are at offset 0 it stays exactly the
+node (bitwise, so taxiway turns are untouched), and when the lines are near-parallel or
+the intersection is behind either end (straight through) it is the chord midpoint.
 
 ## 4. Dead ends
 
-A node with exactly one road arm gets a derived U-turn edge from that arm's arriving
-lane end to its leaving lane end. Geometry: quadratic whose control point sits beyond the
-node on the segment axis, giving a radius about half the lane spacing. No mesh bulb
-(ruled): vehicles visibly leave the tarmac turning. The turn-radius check in section 6
-means large vehicles cannot use it and report "dead end too tight". Edge flagged
-`bDerived`, rebuilt with the segment.
+A node with exactly one road arm whose profile has an arriving and a leaving lane gets a
+derived U-turn from the arriving lane end to the leaving lane end.
+
+GEOMETRY (found while planning, 2026-09-23): one quadratic cannot turn 180 degrees - its
+end tangents would be parallel and its control point at infinity. And a loop of the lane
+spacing (3 m) is far inside any vehicle's lock. So the U-turn is a BALLOON, a chain of six
+quadratics through five intermediate derived nodes (`Solve/UTurnGeom`): a reverse curve
+swinging out to one side, a half circle of radius R, and the mirror reverse curve back.
+R = the design vehicle's `TightestFollowableRadius() / (1/sqrt(2))`, because a 90 degree
+quadratic's tightest radius is 0.707 of its leg (the same loss
+`URoadProfile::JunctionScalingMargin` documents). For the bowser that is ~10 m, and the
+balloon reaches about 3R (~30 m) past the road end.
+
+No mesh bulb (ruled): vehicles visibly drive over grass on the balloon. All six edges are
+one-way, `bDerived`, no `DerivedFrom` (they belong to the node, like turn paths), rebuilt
+with the network. In PR 3 the rig fails the bowser-sized balloon and reports "dead end too
+tight"; PR 2 sizes R per tier's design vehicle.
 
 ## 5. Stand and depot links
 
