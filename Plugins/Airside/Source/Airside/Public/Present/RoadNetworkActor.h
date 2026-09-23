@@ -578,15 +578,23 @@ public:
 	 * A drawn stand's definition, per letter (A-F, indexed by EIcaoCode's own ordinal) -
 	 * lazily built by ResolveStandDefinitionFor and cached here so every stand of the same
 	 * letter on this actor shares one Flyweight, the same reason StandDefinition exists.
+	 * Code C keeps using StandDefinition/ResolveStandDefinition instead - see
+	 * ResolveStandDefinitionFor - so this array is never touched for C and index 2
+	 * (EIcaoCode::C) stays unset.
 	 *
-	 * NOT TRANSIENT, unlike RuntimeProfile or the resolved-material caches below: a placed
-	 * stand's FEntityInstance::Definition is a UPROPERTY the level SAVES, so the definition
-	 * it points at must survive a save too, or reloading the level would hand every non-C
-	 * stand back a null Definition. Code C keeps using StandDefinition/ResolveStandDefinition
-	 * instead - see ResolveStandDefinitionFor - so this array is never touched for C and
-	 * index 2 (EIcaoCode::C) stays unset.
+	 * TRANSIENT, like RuntimeProfile and the resolved-material caches below - REVERSED by the
+	 * final review (C2/I7). It used to be saved, on the argument that a stand's saved
+	 * Definition must find its object again on load. That held for a LEVEL and for nothing
+	 * else: OpsSave writes Definition as a PATH, and a new session has nothing at that path,
+	 * so a loaded D stand came back with a null Definition and "NOT reachable". And saving
+	 * the cache froze its templates into the level - A/B stayed unbuildable, and a D/E/F
+	 * template change never reached a level that already had one. So the cache is derived
+	 * state again, rebuilt on demand, and RebindStandDefinitions is what re-points every
+	 * stand at it after any load - level or save game. The objects themselves carry
+	 * RF_Transient, so a level save writes a stand's reference to one as null rather than
+	 * serialising a stale copy beside it; the rebind is what fills it back in.
 	 */
-	UPROPERTY() TArray<TObjectPtr<UEntityDefinition>> LetterStandDefinitions;
+	UPROPERTY(Transient) TArray<TObjectPtr<UEntityDefinition>> LetterStandDefinitions;
 
 	/**
 	 * What the fuel depot tool places. Unset falls back to the content set's Placeables map
@@ -1152,11 +1160,12 @@ public:
 	 * (StandDefinition, else DA_Stand_CodeC by content default), and a drawn Code C stand
 	 * must place the SAME object a legacy PlaceStand drops, or the two could disagree about
 	 * anchors, trucks or the envelope. Every other letter has no authored asset (Task 1's own
-	 * finding), so it is built once with UEntityDefinition::MakeStandTransient(Letter, this) -
-	 * OUTERED TO THIS ACTOR, NOT THE TRANSIENT PACKAGE, because LetterStandDefinitions is a
-	 * saved UPROPERTY and a transient-package object would be nulled at the next save - and
+	 * finding), so it is built once with UEntityDefinition::MakeStandTransient(Letter, this),
+	 * flagged RF_Transient - see LetterStandDefinitions for why it is never saved - and
 	 * cached in LetterStandDefinitions[ordinal] so a second stand of the same letter reuses
-	 * it rather than building a second Flyweight.
+	 * it rather than building a second Flyweight. OUTERED TO THIS ACTOR still, so its
+	 * lifetime is the actor's; before the final review that outer was also what kept it in a
+	 * level save, which is now exactly what RF_Transient declines.
 	 *
 	 * NULL, LOGGED ONCE PER LETTER, when the built template does not fit its own letter's
 	 * floor - UEntityDefinition::FitsItsLetter, and Task 1's measured table: A and B do not
@@ -1169,6 +1178,30 @@ public:
 	 * never mutates the actor's own authored properties.
 	 */
 	UEntityDefinition*  ResolveStandDefinitionFor(EIcaoCode Letter) const;
+
+	/**
+	 * Re-point every live, plotted stand's Definition at the one its OUTLINE's letter
+	 * resolves to (ResolveStandDefinitionFor(StandBox::LetterOf(Outline))) - Code C to the
+	 * authored asset, D/E/F to this actor's cache. Returns how many changed; logs the count,
+	 * and a Warning naming each stand whose outline reads as no letter, or as one with no
+	 * buildable definition (A/B today), which is left exactly as it was.
+	 *
+	 * THE ONE REBIND STEP, run wherever a network is (re)loaded, because the per-letter
+	 * definitions are never saved (LetterStandDefinitions): from PostRegisterAllComponents,
+	 * which runs after serialisation for a level load AND a PIE duplicate (see its own
+	 * comment on why neither PostLoad nor BeginPlay covers both, and why the editor viewport
+	 * needs it as much as play does), and from the ops layer's save-game load after it
+	 * restores a snapshot, which runs Serialize and never PostLoad. Idempotent: a stand already on its
+	 * letter's definition is not touched and not counted.
+	 *
+	 * ON THE ACTOR, not the facade or the model: it is the second reader of the definition
+	 * cache this actor owns (ResolveStandDefinitionFor is the first), and Model/ may not
+	 * reach Entities/ to resolve anything. The write itself goes through URoadNetwork::
+	 * SetEntityDefinition, a pure pointer write.
+	 * ENFORCED BY: AirportOps.Present.RuntimeLoad.DrawnStandSurvivesLoad,
+	 * Airside.Present.StandPlot.RebindsAfterLevelLoad.
+	 */
+	int32 RebindStandDefinitions();
 
 	/**
 	 * What the fuel depot tool places: the authored value if there is one, else the

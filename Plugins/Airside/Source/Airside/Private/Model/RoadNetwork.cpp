@@ -1560,6 +1560,18 @@ bool URoadNetwork::RefreshResolvedAnchor(
 	return false;
 }
 
+bool URoadNetwork::SetEntityDefinition(FEntityInstanceId Entity, UEntityDefinition* Definition)
+{
+	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr)
+	{
+		return false;
+	}
+
+	Instance->Definition = Definition;
+	return true;
+}
+
 bool URoadNetwork::SetEntityPoseRole(FEntityInstanceId Entity, EServiceRole PoseRole)
 {
 	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);

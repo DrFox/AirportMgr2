@@ -1,10 +1,13 @@
 #include "CoreMinimal.h"
 #include "Content/AirsideSettings.h"
+#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/InspectFacts.h"
 #include "Model/OpsEvents.h"
+#include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
@@ -17,6 +20,7 @@
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
 #include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -329,6 +333,155 @@ bool FOpsRuntimeLandNearTest::RunTest(const FString& Parameters)
 		"one fact that proves the caller's FAirframe* actually reaches AcceptImmediate"),
 		Offers[1]->Airframe.TypeCode, Override.TypeCode);
 
+	return true;
+}
+
+// NAMED, NOT ANONYMOUS - the tests module is a UNITY build; see StandAllocatorTest.cpp.
+namespace OpsRuntimeStandLoadTest
+{
+	/** The one live stand on Actor's network, by index, or INDEX_NONE. */
+	int32 OnlyStand(const ARoadNetworkActor* Actor)
+	{
+		const TArray<FEntityInstance>& Entities = Actor->Network->GetEntities();
+		for (int32 Index = 0; Index < Entities.Num(); ++Index)
+		{
+			if (Entities[Index].bAlive && Entities[Index].IsStand()) { return Index; }
+		}
+		return INDEX_NONE;
+	}
+}
+
+/**
+ * FINAL REVIEW C2: A DRAWN D STAND SURVIVES A SAVE AND A LOAD IN A NEW SESSION. OpsSave writes
+ * FEntityInstance::Definition as a PATH, and a D/E/F definition is a transient object built by
+ * ARoadNetworkActor::ResolveStandDefinitionFor - in a new session there is nothing at that path,
+ * the restored stand's Definition came back null, FAnchorLink::Gather skipped it, and the
+ * Inspector said "NOT reachable" over a stand the player could see. The load now rebinds every
+ * stand's definition from its own outline's letter (ARoadNetworkActor::RebindStandDefinitions).
+ *
+ * THE NEW SESSION IS SIMULATED BY RENAMING the saved definition out of the path the save
+ * recorded, which is exactly what a fresh process looks like to the archive's path lookup -
+ * and the load goes into a SECOND actor in a second world, whose definition cache is empty.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeDrawnStandSurvivesLoadTest,
+	"AirportOps.Present.RuntimeLoad.DrawnStandSurvivesLoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeDrawnStandSurvivesLoadTest::RunTest(const FString& Parameters)
+{
+	using namespace OpsRuntimeStandLoadTest;
+	const FString Slot = TEXT("AirportOpsTest_DrawnStand");
+
+	UEntityDefinition* SavedDefinition = nullptr;
+	{
+		FAirsideTestWorld TestWorld;
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(TEXT("an actor to draw on"), Actor)) { return false; }
+		Actor->ClearNetwork();
+		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+
+		IRoadEditTarget* Target = Actor;
+		const int32 West = Target->PlaceNode(FVector2D(-10000.0, 0.0));
+		const int32 East = Target->PlaceNode(FVector2D(20000.0, 0.0));
+		Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
+
+		// A CODE D FLOOR, entrance 10 m clear of the taxiway - D because C alone has an
+		// authored asset and would come back by path in any session.
+		const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::D);
+		const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::D);
+		const FVector2D A(0.0, 1000.0), B(Width, 1000.0);
+		const TArray<FVector2D> Rect = { A, B, FVector2D(Width, 1000.0 + Depth), FVector2D(0.0, 1000.0 + Depth) };
+		const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+		if (!TestTrue(TEXT("a Code D stand is drawn"), Index != INDEX_NONE)) { return false; }
+		Actor->RebuildMesh();
+
+		FStandFacts Before;
+		if (!TestTrue(TEXT("the stand describes"), InspectFacts::DescribeStand(nullptr, *Actor->Network, Index, Before))
+			|| !TestTrue(TEXT("and is reachable before the save, or the load proves nothing"), Before.bReachable))
+		{
+			return false;
+		}
+		SavedDefinition = Actor->Network->GetEntities()[Index].Definition;
+
+		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+		Runtime->Attach(Actor);
+		if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+
+		// RENAMED WHILE ITS WORLD IS STILL UP, so nothing between here and the load can see
+		// the object in a half-torn-down outer.
+		if (!TestNotNull(TEXT("the drawn stand had a definition to save"), SavedDefinition)) { return false; }
+		SavedDefinition->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
+	}
+
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a fresh actor to load into"), Actor)) { return false; }
+	// A NETWORK TO LOAD INTO - a fresh actor makes one lazily, and LoadFromSlot refuses
+	// without one rather than inventing it.
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
+
+	const int32 Index = OnlyStand(Actor);
+	if (!TestTrue(TEXT("the stand came back"), Index != INDEX_NONE)) { return false; }
+	const FEntityInstance& Stand = Actor->Network->GetEntities()[Index];
+	TestNotNull(TEXT("with a definition, rebound from its own outline's letter"), Stand.Definition.Get());
+	TestTrue(TEXT("and not the saved session's object, which a new session would not have"),
+		Stand.Definition.Get() != SavedDefinition);
+
+	FStandFacts After;
+	TestTrue(TEXT("the loaded stand describes"), InspectFacts::DescribeStand(nullptr, *Actor->Network, Index, After));
+	TestTrue(TEXT("and is REACHABLE - the Inspector's own query, which read NOT reachable"), After.bReachable);
+	return true;
+}
+
+/**
+ * FINAL REVIEW C2, second half: OpsSave::Restore runs Serialize, never PostLoad, so the
+ * outline migration URoadNetwork::PostLoad runs for a LEVEL never ran for a SAVE GAME - a
+ * stand saved before stands had outlines came back outline-less, and every "a stand has an
+ * outline" rule downstream (overlap, paint, rebind) quietly skipped it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeLegacyStandGetsOutlineOnLoadTest,
+	"AirportOps.Present.RuntimeLoad.LegacyStandGetsOutline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeLegacyStandGetsOutlineOnLoadTest::RunTest(const FString& Parameters)
+{
+	using namespace OpsRuntimeStandLoadTest;
+
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+
+	IRoadEditTarget* Target = Actor;
+	const int32 Placed = Target->PlaceStand(FVector2D(1000.0, 2000.0), FMath::DegreesToRadians(90.0));
+	if (!TestTrue(TEXT("a stand is placed"), Placed != INDEX_NONE)) { return false; }
+
+	// BACK TO NO OUTLINE, the shape of a save from before stands had one - the same
+	// construction Airside.Model.StandOutline.LegacyGetsCodeCBox uses, since placement itself
+	// now always gives one.
+	FRoadNetworkTestAccess Access(*Actor->Network);
+	if (!TestTrue(TEXT("the outline is cleared"), Access.SetEntityOutlineForTest(Actor->Network->EntityIdAt(Placed), {})))
+	{
+		return false;
+	}
+
+	const FString Slot = TEXT("AirportOpsTest_LegacyStand");
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
+
+	const int32 Index = OnlyStand(Actor);
+	if (!TestTrue(TEXT("the stand came back"), Index != INDEX_NONE)) { return false; }
+	TestEqual(TEXT("with the Code C box its pose implies - four corners"),
+		Actor->Network->GetEntities()[Index].Outline.Num(), 4);
 	return true;
 }
 

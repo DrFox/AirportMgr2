@@ -668,6 +668,17 @@ public:
 	 */
 	bool SetEntityPoseRole(FEntityInstanceId Entity, EServiceRole PoseRole);
 
+	/**
+	 * Re-point an entity at Definition. False for a dead entity.
+	 *
+	 * A PURE POINTER WRITE, which is all Model/ may do with a UEntityDefinition (forward
+	 * declared; never dereferenced here). ARoadNetworkActor::RebindStandDefinitions is the
+	 * caller: a drawn D/E/F stand's definition is never saved, so every load re-points it.
+	 * Anchors and trucks are NOT re-captured - a rebind lands on the definition the stand was
+	 * committed from, whose anchors the saved ResolvedAnchors already are.
+	 */
+	bool SetEntityDefinition(FEntityInstanceId Entity, UEntityDefinition* Definition);
+
 	// --- Narrow mutators replacing the raw *Mutable accessors (#191) -------------------
 	// GetSegmentMutable, GetGuidelineEdgeMutable and GetGuidelineNodeMutable used to be
 	// public, which let a caller write one field of a multi-field fact and leave the rest

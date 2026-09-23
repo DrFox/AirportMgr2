@@ -130,6 +130,18 @@ pass at a load nobody has done yet, so a legacy call site placing a stand by pos
 gets an outline immediately. After that "a stand has an outline" holds everywhere. Every stand in
 a saved level today is Code C.
 
+**REVISED 2026-09-23 (final review C2/I7): the per-letter definitions are never saved; every
+load rebinds.** `ARoadNetworkActor::LetterStandDefinitions` is `UPROPERTY(Transient)` and each
+D/E/F definition carries `RF_Transient`, so a level save writes a stand's reference to it as
+null (no frozen template copy - A/B stayed unbuildable and D/E/F template changes never reached
+a saved level). `OpsSave` writes `Definition` as a path, which a new session cannot resolve.
+One step repairs both: `ARoadNetworkActor::RebindStandDefinitions()` sets every live, plotted
+stand's `Definition = ResolveStandDefinitionFor(StandBox::LetterOf(Outline))` (Code C to the
+authored asset), leaving it untouched with a Warning if the letter is unset or unbuildable. It
+runs from `PostRegisterAllComponents` (after serialisation for a level load and a PIE duplicate
+alike, before `RebuildMesh`) and from `UOpsRuntime::LoadFromSlot` after `OpsSave::Restore`, which
+also now runs `EnsureStandOutlines` first - `Restore` is `Serialize` only, never `PostLoad`.
+
 ## Admission
 
 `ArrivalPlanner::ChooseStand`: same single `FindToGoals` search. **REVISED 2026-09-23 (task 9):**

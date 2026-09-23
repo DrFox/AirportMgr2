@@ -481,6 +481,13 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	{
 		return false;
 	}
+	// THE LOAD-TIME REPAIRS A LEVEL GETS FROM PostLoad AND PostRegisterAllComponents, which a
+	// save game never runs - OpsSave::Restore is Serialize, nothing else (final review C2).
+	// Outlines first: a stand saved before stands had them gets its Code C box, and only a
+	// stand with an outline has a letter to rebind by. Then every stand's definition, which
+	// for D/E/F is a path to an object this session never built.
+	Target->Network->EnsureStandOutlines();
+	Target->RebindStandDefinitions();
 	// THROUGH THE FACADE, not Target->History->Clear() directly (issue #191): the history is
 	// URoadEditFacade's undo state to manage, and reaching past it from another plugin's
 	// composition root is exactly the layering slip the facade's ClearHistory doc comment

@@ -699,4 +699,54 @@ bool FStandPlotDepotRefusesStandOverlapTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+/**
+ * FINAL REVIEW C2/I7, THE LEVEL HALF: a D stand's definition is RF_Transient, so a level save
+ * writes the stand's reference to it as null - and the actor's load path (PostRegisterAllComponents,
+ * which runs after serialisation for a level load and a PIE duplicate alike) must put it back
+ * before the rebuild that decides whether the stand is joined to anything. Re-registering is
+ * that same path, as MeshFreshnessTest uses it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotRebindsAfterLevelLoadTest,
+	"Airside.Present.StandPlot.RebindsAfterLevelLoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotRebindsAfterLevelLoadTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	LayTaxiway(Actor, 0.0);
+
+	FVector2D A, B;
+	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::D, 1000.0, A, B);
+	IRoadEditTarget* Target = Actor;
+	const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+	if (!TestTrue(TEXT("a Code D stand is placed"), Index != INDEX_NONE)) { return false; }
+	const FEntityInstanceId Id = Actor->Network->EntityIdAt(Index);
+
+	UEntityDefinition* Placed = Actor->Network->GetEntity(Id)->Definition;
+	if (!TestNotNull(TEXT("placed with a definition"), Placed)) { return false; }
+	TestTrue(TEXT("which is RF_Transient - a level save writes the reference as null, never a frozen copy"),
+		Placed->HasAnyFlags(RF_Transient));
+
+	// WHAT A SAVED LEVEL LOADS AS: the reference nulled by the save.
+	Actor->Network->SetEntityDefinition(Id, nullptr);
+
+	Actor->ReregisterAllComponents();
+
+	const FEntityInstance* Loaded = Actor->Network->GetEntity(Id);
+	if (!TestNotNull(TEXT("the stand is still there"), Loaded)) { return false; }
+	TestNotNull(TEXT("the load path rebound its definition from the outline's letter"), Loaded->Definition.Get());
+	const FGuidelineNode* Pose = Actor->Network->GetGuidelineNode(Loaded->PoseNode);
+	TestTrue(TEXT("BEFORE the rebuild - its lead-in is joined, so the Inspector says reachable"),
+		Pose != nullptr && Pose->Incident.Num() > 0);
+	return true;
+}
+
 #endif
