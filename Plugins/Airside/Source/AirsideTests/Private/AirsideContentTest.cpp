@@ -326,6 +326,16 @@ bool FAirsideContentFenceFadeWiredTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the posts' fade runs forwards"), PostFadeStart < PostFadeEnd);
 	TestTrue(TEXT("the fence's fade runs forwards"), FadeStart < FadeEnd);
 	TestTrue(TEXT("the posts are gone before the fabric starts to go"), PostFadeEnd <= FadeStart);
+
+	// THE CULL READS THE SAME FIGURE: DA_AirsideContent names a collection of its own, and it
+	// must be the one the materials fade by, or the posts cull where the material says nothing.
+	TestEqual(TEXT("the kit's post fade end is the materials' collection's"), Kit.PostFadeEndUu,
+		static_cast<double>(PostFadeEnd));
+
+	// NANITE OFF: a post is a few hundred triangles in a HISM, where Nanite buys nothing, and
+	// the masked fade would put every post on Nanite's programmable raster path.
+	TestFalse(TEXT("the line post is not Nanite"), Kit.LinePost->IsNaniteEnabled());
+	TestFalse(TEXT("the heavy post is not Nanite"), Kit.HeavyPost->IsNaniteEnabled());
 	return true;
 }
 

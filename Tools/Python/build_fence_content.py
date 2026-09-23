@@ -38,8 +38,16 @@ tuning, so copy a tuned value into FADE before running it again.
 
 STILL MASKED, never translucent (see material()): the partial opacity is a blue-noise dither
 that TSR resolves into a veil. The SHADOW pass keeps the old behaviour - plain wire alpha,
-solid posts - because PixelDepth there is depth from the LIGHT, and a fade keyed on it would
-fade shadows by the sun's position rather than the camera's.
+solid posts - because the "camera" in the shadow pass is the LIGHT's view, and a fade keyed
+on it would fade shadows by the sun's position rather than the player's.
+
+DISTANCE, NOT DEPTH: the fades measure straight-line distance to the camera, not PixelDepth,
+because the posts' instance CULL (UPlotPresenter, at PostFadeEnd) is a distance. Keyed on
+depth, a post at the edge of the screen - depth well under its distance - would be culled
+while the material still drew it half-faded.
+
+NANITE OFF on both posts: a few hundred triangles in a HISM, where Nanite buys nothing, and
+a masked material would put every post on Nanite's programmable raster path.
 """
 import os
 
@@ -103,7 +111,7 @@ FABRIC_HLSL = (
     "float UvPerPx = max(max(length(UvPerPxX), length(UvPerPxY)), 1e-7);\n"
     "float DiamondPx = (1.0 / %.1f) / UvPerPx;\n"
     "float Wire = saturate((DiamondPx - VeilBelowPx) / max(WireAbovePx - VeilBelowPx, 1e-3));\n"
-    "float Fade = 1.0 - saturate((Depth - FadeStart) / max(FadeEnd - FadeStart, 1.0));\n"
+    "float Fade = 1.0 - saturate((Dist - FadeStart) / max(FadeEnd - FadeStart, 1.0));\n"
     "float Coverage = lerp(VeilOpacity, WireA > %.3f ? 1.0 : 0.0, Wire) * Fade;\n"
     % (DIAMONDS_PER_UV, CLIP)
 ) + DITHER_HLSL
@@ -111,8 +119,8 @@ FABRIC_HLSL = (
 # The post's fade is the product of its own early fade and the whole-fence fade, so a post
 # can never outlive the fabric it holds up whatever the tuning.
 POST_HLSL = (
-    "float Own = 1.0 - saturate((Depth - PostFadeStart) / max(PostFadeEnd - PostFadeStart, 1.0));\n"
-    "float Fence = 1.0 - saturate((Depth - FadeStart) / max(FadeEnd - FadeStart, 1.0));\n"
+    "float Own = 1.0 - saturate((Dist - PostFadeStart) / max(PostFadeEnd - PostFadeStart, 1.0));\n"
+    "float Fence = 1.0 - saturate((Dist - FadeStart) / max(FadeEnd - FadeStart, 1.0));\n"
     "float Coverage = Own * Fence;\n"
 ) + DITHER_HLSL
 
@@ -261,14 +269,14 @@ def add_fade(lib, mat, mpc, hlsl, mpc_names, inputs, shadow):
     """Custom node -> ShadowPassSwitch -> Opacity Mask.
 
     `inputs` maps a Custom input name to (expression, output name) for the non-collection
-    ones; Depth is always PixelDepth. `shadow` is (expression, output name) feeding the
+    ones; Dist is always the pixel's distance to the camera. `shadow` is (expression, output name) feeding the
     SHADOW pass unchanged - see the module docstring for why the fade stays out of it.
     Returns False on the first connection that did not take; connect_material_expressions
     reports a nameless or misnamed pin only through its bool."""
     custom = lib.create_material_expression(mat, unreal.MaterialExpressionCustom, -250, 500)
     custom.set_editor_property("code", hlsl)
     custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT1)
-    names = list(inputs.keys()) + ["Depth"] + list(mpc_names)
+    names = list(inputs.keys()) + ["Dist"] + list(mpc_names)
     pins = []
     for n in names:
         pin = unreal.CustomInput()
@@ -279,8 +287,12 @@ def add_fade(lib, mat, mpc, hlsl, mpc_names, inputs, shadow):
     ok = True
     for n, (src, out) in inputs.items():
         ok &= lib.connect_material_expressions(src, out, custom, n)
-    depth = lib.create_material_expression(mat, unreal.MaterialExpressionPixelDepth, -550, 500)
-    ok &= lib.connect_material_expressions(depth, "", custom, "Depth")
+    world = lib.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, -850, 440)
+    camera = lib.create_material_expression(mat, unreal.MaterialExpressionCameraPositionWS, -850, 500)
+    dist = lib.create_material_expression(mat, unreal.MaterialExpressionDistance, -550, 500)
+    ok &= lib.connect_material_expressions(world, "", dist, "A")
+    ok &= lib.connect_material_expressions(camera, "", dist, "B")
+    ok &= lib.connect_material_expressions(dist, "", custom, "Dist")
     for i, n in enumerate(mpc_names):
         cp = lib.create_material_expression(mat, unreal.MaterialExpressionCollectionParameter, -550, 560 + 60 * i)
         cp.set_editor_property("collection", mpc)
@@ -367,11 +379,13 @@ def post_material(mpc, meshes):
         return None
     mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
     mat.set_editor_property("opacity_mask_clip_value", CLIP)
-    # USAGE FLAGS, set and saved here: the posts are HISM instances of Nanite meshes, and the
-    # editor sets a missing flag in memory on first use and never saves it, so a packaged
-    # build would draw them with the default material (MapCheck "missing the usage flag").
+    # USAGE FLAG, set and saved here: the posts are HISM instances, and the editor sets a
+    # missing flag in memory on first use and never saves it, so a packaged build would draw
+    # them with the default material (MapCheck "missing the usage flag"). Nanite is set FALSE,
+    # stated because the field is ours: the posts are not Nanite (see the docstring), and the
+    # flag would only compile shader permutations nothing draws with.
     mat.set_editor_property("used_with_instanced_static_meshes", True)
-    mat.set_editor_property("used_with_nanite", True)
+    mat.set_editor_property("used_with_nanite", False)
 
     ok = True
     base = lib.create_material_expression(mat, unreal.MaterialExpressionConstant3Vector, -300, 0)
@@ -393,22 +407,27 @@ def post_material(mpc, meshes):
 
     for mesh in meshes:
         mesh.set_material(0, mat)
+        settings = mesh.get_editor_property("nanite_settings")
+        settings.enabled = False
+        mesh.set_editor_property("nanite_settings", settings)
         unreal.EditorAssetLibrary.save_asset(mesh.get_path_name().split(".")[0], only_if_is_dirty=False)
 
     back = unreal.EditorAssetLibrary.load_asset(path)
     if back.get_editor_property("blend_mode") != unreal.BlendMode.BLEND_MASKED:
         fail("%s did not save masked" % path)
         return None
-    for flag in ("used_with_instanced_static_meshes", "used_with_nanite"):
-        if not back.get_editor_property(flag):
-            fail("%s did not save %s" % (path, flag))
-            return None
+    if not back.get_editor_property("used_with_instanced_static_meshes"):
+        fail("%s did not save used_with_instanced_static_meshes" % path)
+        return None
     for mesh in meshes:
         again = unreal.EditorAssetLibrary.load_asset(mesh.get_path_name().split(".")[0])
         if again.get_material(0) != back:
             fail("%s slot 0 is %r, not %s" % (again.get_name(), again.get_material(0), POST_MAT_NAME))
             return None
-    say("PASS %s masked, colour %s, on slot 0 of %s" % (
+        if again.get_editor_property("nanite_settings").enabled:
+            fail("%s is still Nanite after save" % again.get_name())
+            return None
+    say("PASS %s masked, colour %s, on slot 0 of %s, Nanite off" % (
         POST_MAT_NAME, colour, ", ".join(m.get_name() for m in meshes)))
     return back
 
@@ -444,10 +463,12 @@ def run():
     for prop, mesh in meshes.items():
         content.set_editor_property(prop, mesh)
     content.set_editor_property("fence_fabric_material", mat)
+    content.set_editor_property("fence_fade_collection", mpc)
     unreal.EditorAssetLibrary.save_asset(CONTENT, only_if_is_dirty=False)
 
     back = unreal.EditorAssetLibrary.load_asset(CONTENT)
-    missing = [p for p in ("fence_line_post", "fence_heavy_post", "fence_fabric_material")
+    missing = [p for p in ("fence_line_post", "fence_heavy_post", "fence_fabric_material",
+                           "fence_fade_collection")
                if back.get_editor_property(p) is None]
     if missing:
         fail("DA_AirsideContent lost %s on save" % ", ".join(missing))

@@ -11,6 +11,7 @@
 #include "AirsideContent.generated.h"
 
 class UMaterialInterface;
+class UMaterialParameterCollection;
 class URoadProfile;
 class UAnimInstance;
 class USkeletalMesh;
@@ -294,6 +295,14 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
 	TSoftObjectPtr<UMaterialInterface> FenceFabricMaterial;
+
+	/**
+	 * MPC_FenceFade, the distance fade both fence materials read. Named here as well because
+	 * the posts' instance cull distance must agree with its PostFadeEnd - see
+	 * UAirsideSettings::ResolveFenceKit. Null means no cull: posts draw at every distance.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
+	TSoftObjectPtr<UMaterialParameterCollection> FenceFadeCollection;
 
 	/**
 	 * A RIGGED ground vehicle. Preferred over VehicleMesh; null falls back to it.
