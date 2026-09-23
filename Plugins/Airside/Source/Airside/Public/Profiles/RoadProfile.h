@@ -224,6 +224,16 @@ public:
 	UPROPERTY(EditAnywhere) bool bContinuousThroughJunctions = false;
 
 	/**
+	 * Whether the ROAD MATERIAL paints this profile's centreline. M_RoadSurface paints a solid
+	 * line wherever |UV1 lateral| < CentrelineWidth - a taxiway's yellow centreline. A two-way
+	 * road's centre is painted instead by FRoadLaneMarkingBuilder as white dashes, and with
+	 * this left true the dashes sat on a solid yellow line (review of 2026-09-23). False makes
+	 * FRoadProfileBands keep every lateral far from zero, which is the only thing UV1.X feeds.
+	 * ENFORCED BY: Airside.Build.TwoWayRoadHasNoMaterialCentreline
+	 */
+	UPROPERTY(EditAnywhere) bool bMaterialCentreline = true;
+
+	/**
 	 * How far before a junction an exit from THIS profile begins, uu, measured along the
 	 * centreline - and the same distance back along the taxiway that meets it. Read only
 	 * from a continuous profile: the runway decides its own exits, per profile, so an 18 m

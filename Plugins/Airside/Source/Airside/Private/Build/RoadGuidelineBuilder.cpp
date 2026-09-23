@@ -321,6 +321,13 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			// leave TWO guidelines on this segment - the player's, attached to nothing, and
 			// a fresh derived one that every turn path and every route would use instead.
 			// The edit would appear to have done nothing at all.
+			// A SPARED LANE IGNORES THE DRIVE SIDE (review of 2026-09-23, left as is): the
+			// player's hand-edited edge keeps the geometry they gave it, so after a flip the other
+			// lane is derived onto the positions it still occupies - two coincident lanes, running
+			// opposite ways. Reaching it needs a hand-edited ROAD lane: on 2026-09-23 the only
+			// writer that turns a segment's derived edge into an edited one was
+			// FRoadNetworkTestAccess::MarkGuidelineEdgeEditedForTest (the guideline tool draws
+			// connectors, which re-resolve by identity and survive a flip).
 			const FGuidelineEdgeId Spared = FindSparedEdge(Network, SegmentId, Which);
 			if (Spared.IsSet())
 			{

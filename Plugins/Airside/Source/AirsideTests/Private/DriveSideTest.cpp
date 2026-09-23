@@ -97,10 +97,16 @@ bool FDriveSideCompositionTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("a route down the road"), Plan.IsValid())) { return false; }
 	if (!TestTrue(TEXT("a truck is dispatched"),
 		Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultVehicle(), ETraversalClass::GroundVehicle))) { return false; }
-	for (int32 Tick = 0; Tick < 60; ++Tick)
+	// WELL INTO THE ROAD before the flip, far from any lane node. A straight lane is ONE edge
+	// with nodes only at its cut ends, and the first version of the rejoin searched NODES
+	// near the truck - it passed a test that flipped 60 ticks in, beside the start node, and
+	// stranded every truck anywhere else (review of 2026-09-23).
+	for (int32 Tick = 0; Tick < 20000 && Actor->GetTraffic()->LastAgentPositionForTest().X < 15000.0; ++Tick)
 	{
 		Actor->Tick(1.0f / 30.0f);
 	}
+	TestTrue(TEXT("the truck is mid-road, tens of metres from any lane node"),
+		Actor->GetTraffic()->LastAgentPositionForTest().X >= 15000.0);
 
 	TestTrue(TEXT("the flip is an edit"), Actor->SetDriveSide(EDriveSide::Left));
 	TestFalse(TEXT("flipping to the side it has is refused, so no empty undo step"), Actor->SetDriveSide(EDriveSide::Left));
@@ -121,6 +127,7 @@ bool FDriveSideCompositionTest::RunTest(const FString& Parameters)
 		Final.X, Final.Y, static_cast<int32>(Actor->GetTraffic()->LastAgentPhaseForTest()), Actor->GetTraffic()->GetAgentCount());
 	TestTrue(TEXT("the truck stopped or was retired rather than driving on for ever"), bParked);
 	TestTrue(TEXT("and it is not on the old right-hand line"), Final.Y < 100.0);
+	TestTrue(TEXT("and it carried on to the far end rather than stopping where it was"), Final.X > 35000.0);
 
 	TestTrue(TEXT("undo takes the flip back"), Actor->Undo());
 	TestEqual(TEXT("right-hand again"),

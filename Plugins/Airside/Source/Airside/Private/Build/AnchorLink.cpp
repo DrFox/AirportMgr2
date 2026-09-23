@@ -1139,6 +1139,12 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 		// driveway serves both lanes; so does this. Aircraft are excluded: a taxiway is one
 		// line, and a ray-cast lead-in has no second lane to find. Not counted in Joined - the
 		// census counts anchors, and this is still one anchor.
+		//
+		// KNOWN GAP (review of 2026-09-23, left as is): the far lane's lead-in CROSSES the near
+		// lane with no graph node where they cross, so the claim model - per edge and per node -
+		// cannot see a truck turning across it and one driving along it. Two trucks can overlap
+		// at a driveway. Splitting both at the crossing would fix it, and would also make the
+		// crossing a junction trucks could turn at; not worth that until it is seen in play.
 		// ENFORCED BY: Airside.Build.TwoWay.AnchorBothLanes
 		if (Link.Class != ETraversalClass::Aircraft && JoinedSegment.IsSet())
 		{

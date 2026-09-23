@@ -116,6 +116,7 @@ void URoadProfile::Fill(URoadProfile* Profile, double TotalWidth, double FilletR
 
 	Profile->CentrelineOffset = -1.0;
 	Profile->PreferredFilletRadius = FilletRadius;
+	Profile->bMaterialCentreline = true;
 }
 
 URoadProfile* URoadProfile::MakeServiceRoadTransient(double LaneWidth, double KerbWidth,
@@ -193,6 +194,8 @@ void URoadProfile::FillTwoWayRoad(URoadProfile* Profile, double LaneWidth, doubl
 	Profile->CentrelineOffset = -1.0;
 	Profile->PreferredFilletRadius = FilletRadius;
 	Profile->bContinuousThroughJunctions = false;
+	// Its centre is white dashes (FRoadLaneMarkingBuilder), not the material's taxiway line.
+	Profile->bMaterialCentreline = false;
 
 	// A ROAD HAS NO EXITS TO GRADE. ExitLength is read only from a continuous profile (see
 	// its own comment), so this is belt and braces - but a non-zero value here would be an
