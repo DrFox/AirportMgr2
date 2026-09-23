@@ -23,8 +23,11 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/RoadNetworkActor.h"
+#include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
+#include "Solve/StandBox.h"
 #include "Present/RoadEditHistory.h"
 
 bool URoadEditFacade::Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoadNetwork&)> Step)
@@ -492,6 +495,327 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// PlaceEntity's own commit uses - CommitPurchase is that one door, not a second one this
 	// call would otherwise need to keep in step with it.
 	CommitPurchase(Edit, Quote);
+	return Placed.Index;
+}
+
+namespace
+{
+	/**
+	 * Do two convex quads overlap - any vertex of one inside the other, or an edge of one
+	 * crossing an edge of the other?
+	 *
+	 * BOTH HALVES ARE NEEDED. Edge-crossing alone misses one rectangle wholly inside another
+	 * (two drawn stands sharing a corner point, or one drawn entirely inside a larger one),
+	 * which shares no crossing edge with anything. Vertex-containment alone misses two
+	 * rectangles that overlap like a plus sign, offset so neither contains a corner of the
+	 * other. RoadGeom::PointInPolygon and RoadGeom::SegmentsCross are the plugin's one
+	 * answer to each question - see their own headers for why a shared endpoint or a
+	 * collinear touch does not count as either.
+	 */
+	bool OutlinesOverlap(TArrayView<const FVector2D> A, TArrayView<const FVector2D> B)
+	{
+		for (const FVector2D& P : A)
+		{
+			if (RoadGeom::PointInPolygon(B, P)) { return true; }
+		}
+		for (const FVector2D& P : B)
+		{
+			if (RoadGeom::PointInPolygon(A, P)) { return true; }
+		}
+
+		const int32 NumA = A.Num();
+		const int32 NumB = B.Num();
+		for (int32 IndexA = 0; IndexA < NumA; ++IndexA)
+		{
+			const FVector2D& A0 = A[IndexA];
+			const FVector2D& A1 = A[(IndexA + 1) % NumA];
+			for (int32 IndexB = 0; IndexB < NumB; ++IndexB)
+			{
+				if (RoadGeom::SegmentsCross(A0, A1, B[IndexB], B[(IndexB + 1) % NumB]))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Is this segment a service road - the same question PlotPlaceTool.cpp's file-local
+	 * IsServiceRoad asks, and for the same reason: the segment carries no ERoadKind of its
+	 * own (that is a CHOICE the facade resolves into a profile at lay time - see
+	 * URoadNetworkActor::ResolveProfileFor), so "a truck may drive here" is asked of the
+	 * profile's guidelines instead. Not shared with that file-local helper: Tool/ must not
+	 * depend on Present/ (see Tool/RoadEditTarget.h's own header) and this file already
+	 * takes the FRoadSegment rather than a network and an id, since every caller here is
+	 * already mid-iteration over URoadNetwork::GetSegments().
+	 */
+	bool IsServiceRoadSegment(const FRoadSegment& Segment)
+	{
+		if (Segment.Profile == nullptr) { return false; }
+		for (const FProfileGuideline& Guideline : Segment.Profile->Guidelines)
+		{
+			if (Guideline.Class == ETraversalClass::GroundVehicle) { return true; }
+		}
+		return false;
+	}
+
+	/**
+	 * Does the straight chord A-B (a segment's two node positions) enter Outline's interior -
+	 * either endpoint inside, or a crossing with any edge?
+	 *
+	 * THE CHORD, NOT THE CURVE. A segment may carry a Bezier Control point off the straight
+	 * line between its ends, but the entrance edge a stand is drawn against is itself
+	 * straight, so a taxiway curving away from the chord toward the stand would have to
+	 * cross the chord first - the straight-line test is conservative in the direction that
+	 * matters (it never MISSES a road that actually reaches the interior along a nearly
+	 * straight run, which is every taxiway this gesture draws against).
+	 */
+	bool SegmentEntersInterior(const FVector2D& A, const FVector2D& B,
+		TArrayView<const FVector2D> Outline)
+	{
+		if (RoadGeom::PointInPolygon(Outline, A) || RoadGeom::PointInPolygon(Outline, B))
+		{
+			return true;
+		}
+		const int32 Num = Outline.Num();
+		for (int32 Index = 0; Index < Num; ++Index)
+		{
+			if (RoadGeom::SegmentsCross(A, B, Outline[Index], Outline[(Index + 1) % Num]))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
+FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) const
+{
+	// SELF-CROSSING FIRST, AND GUARDS THE MALFORMED CASE TOO - StandBox::WidthOf/DepthOf
+	// below do not check Outline.Num() themselves (Solve/StandBox.h's own note), and every
+	// real candidate is StandBox::BoxAt's own four corners, so fewer than four reads the
+	// same as a rectangle that folds through itself: not a shape to measure.
+	if (Outline.Num() < 4 || !RoadGeom::IsSimplePolygon(Outline))
+	{
+		return TEXT("the outline crosses itself");
+	}
+
+	// SIZE, MEASURED AGAINST CODE A'S OWN FLOOR - not the rectangle's own resolved letter,
+	// because there is no resolved letter yet for anything smaller than A's floor: that is
+	// exactly the condition StandBox::LetterOf is unset under (IcaoCode::LetterForStandSize's
+	// "too small for any letter"). A's floor is the smallest of the six, so this is the one
+	// gate that ever refuses for size, and it must run before LetterOf is asked to read a box
+	// too small for it to name.
+	const double Width = StandBox::WidthOf(Outline);
+	const double Depth = StandBox::DepthOf(Outline);
+	const double FloorWidth = IcaoCode::StandWidthForLetter(EIcaoCode::A);
+	const double FloorDepth = IcaoCode::StandDepthForLetter(EIcaoCode::A);
+	if (Width < FloorWidth || Depth < FloorDepth)
+	{
+		// TWO INDEPENDENT DEFICITS, NAMED SEPARATELY, so a drag that is both narrow and
+		// shallow does not make the player guess which dimension to fix first.
+		TArray<FString> Deficits;
+		if (Width < FloorWidth)
+		{
+			Deficits.Add(FString::Printf(TEXT("needs %.0f m more width"),
+				(FloorWidth - Width) / 100.0));
+		}
+		if (Depth < FloorDepth)
+		{
+			Deficits.Add(FString::Printf(TEXT("needs %.0f m more depth"),
+				(FloorDepth - Depth) / 100.0));
+		}
+		return FString::Join(Deficits, TEXT(" and "));
+	}
+
+	// THE LETTER THE DRAWN BOX READS AS. Guaranteed set past the size gate above (the same
+	// "smaller than Code A's floor" condition both check), but read back through the
+	// TOptional rather than GetValue()'d blind, so a future change to either rule fails loud
+	// here instead of asserting on a box neither gate actually refused.
+	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Outline);
+	if (!Letter.IsSet())
+	{
+		return TEXT("needs more width and depth");
+	}
+
+	// THE LETTER'S OWN TEMPLATE, RESOLVED AND MEASURED - Task 1's finding, live: A and B do
+	// not fit their own floor today, C through F do. ResolveStandDefinitionFor is the one
+	// place that answer is cached and logged; this asks it rather than re-deriving FitsItsLetter.
+	if (Actor().ResolveStandDefinitionFor(*Letter) == nullptr)
+	{
+		return FString::Printf(TEXT("Code %s stands cannot be built yet"),
+			IcaoCode::ToLetter(*Letter));
+	}
+
+	// OVERLAP WITH ANY OTHER PLOTTED ENTITY - a stand or a depot, named differently because a
+	// player fixes the two by different gestures (move the new stand, or delete someone
+	// else's depot). A LEGACY POINT STAND (IsStand() but not IsPlotted()) has no polygon to
+	// test against and is skipped - the same reason DEPOT overlap checks in this codebase
+	// only ever compare drawn outlines.
+	const URoadNetwork* Network = GetNetwork();
+	if (Network != nullptr)
+	{
+		const TArray<FEntityInstance>& Entities = Network->GetEntities();
+		for (int32 Index = 0; Index < Entities.Num(); ++Index)
+		{
+			const FEntityInstance& Entity = Entities[Index];
+			if (!Entity.bAlive || !Entity.IsPlotted()) { continue; }
+			if (OutlinesOverlap(Outline, Entity.Outline))
+			{
+				return Entity.IsStand()
+					? FString::Printf(TEXT("overlaps stand %d"), Index)
+					: FString(TEXT("overlaps a fuel depot"));
+			}
+		}
+	}
+
+	// A TAXIWAY THROUGH THE INTERIOR. SERVICE ROADS ARE ALLOWED - the template's own GSE road
+	// crosses the box's back strip on purpose (UEntityDefinition::BuildStandTemplate), and the
+	// entrance taxiway this stand is drawn off necessarily runs along (never through) the
+	// entrance edge, which RoadGeom::SegmentsCross does not count as entering (collinear
+	// overlap is not a crossing - see its own header).
+	if (Network != nullptr)
+	{
+		for (const FRoadSegment& Segment : Network->GetSegments())
+		{
+			if (!Segment.bAlive || IsServiceRoadSegment(Segment)) { continue; }
+			const FRoadNode* NodeA = Network->GetNode(Segment.A);
+			const FRoadNode* NodeB = Network->GetNode(Segment.B);
+			if (NodeA == nullptr || NodeB == nullptr) { continue; }
+			if (SegmentEntersInterior(NodeA->Position, NodeB->Position, Outline))
+			{
+				return TEXT("a taxiway crosses the stand");
+			}
+		}
+	}
+
+	// AFFORD, LAST - the same "priced and refused before the scope opens" ordering
+	// PlaceEntityInPlot uses (issue #193), and the same two-quote sum: the entity itself plus
+	// the pad it sits on, at the WOUND outline's own worth. Winding does not change the
+	// quote (BuildCost::ForApron reasons about area magnitude), so this may be asked of
+	// Outline exactly as given.
+	const UEntityDefinition* Definition = Actor().ResolveStandDefinitionFor(*Letter);
+	FBuildQuote Quote = BuildCost::ForEntity(*Definition);
+	const FBuildQuote ApronQuote = QuoteForApron(Outline);
+	Quote.BaseAmount += ApronQuote.BaseAmount;
+	if (!CanAfford(Quote))
+	{
+		return FString::Printf(TEXT("cannot afford %s"), *Quote.What.ToString());
+	}
+
+	return FString();
+}
+
+int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
+	FVector2D EntranceA, FVector2D EntranceB)
+{
+	ARoadNetworkActor& Owner = Actor();
+
+	// ONE EVALUATOR - the #182 lesson applied to stands. WhyStandRefused is exactly what a
+	// tool's own readout would ask, so a commit here can never approve what the readout just
+	// refused, or the reverse. Asked of Outline BEFORE the CCW correction below, because
+	// every check inside it is winding-independent - see WhyStandRefused's own header.
+	const FString Refusal = WhyStandRefused(Outline);
+	if (!Refusal.IsEmpty())
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("PlaceStandInPlot refused: %s"), *Refusal);
+		return INDEX_NONE;
+	}
+
+	URoadNetwork& Net = EnsureNetwork();
+
+	// COUNTER-CLOCKWISE, exactly the correction PlaceEntityInPlot makes and for the same
+	// reason - kept even though the gesture already hands in a CCW rectangle, because the
+	// alternative is a facade correct only for the one caller that happens to get the
+	// winding right. The entrance points travel with the reversal: StandBox::PoseFor and
+	// PlotYard::InwardOf both read the interior side from the ORIGINAL winding direction, so
+	// leaving them unswapped after a reversal would derive an Inward pointing the wrong way.
+	TArray<FVector2D> Wound = Outline;
+	FVector2D A = EntranceA;
+	FVector2D B = EntranceB;
+	if (RoadGeom::PolygonArea(Wound) < 0.0)
+	{
+		Algo::Reverse(Wound);
+		Swap(A, B);
+	}
+
+	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Wound);
+	// GUARANTEED SET: WhyStandRefused's size gate above already refused anything smaller
+	// than Code A's floor, which is the same condition LetterOf is unset under, and
+	// reversing a rectangle's winding does not change the lengths LetterOf measures (opposite
+	// edges of a rectangle are equal, so WidthOf/DepthOf read the same before and after).
+	if (!Letter.IsSet())
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceStandInPlot refused: the wound outline has no letter, though "
+				 "WhyStandRefused passed it - report this as a bug."));
+		return INDEX_NONE;
+	}
+
+	UEntityDefinition* Definition = Owner.ResolveStandDefinitionFor(*Letter);
+	if (Definition == nullptr)
+	{
+		// SAME REASON: WhyStandRefused already checks this before returning empty. Guarded
+		// rather than assumed, for the same "report this as a bug" reason as the letter above.
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceStandInPlot refused: Code %s has no definition, though WhyStandRefused "
+				 "passed it - report this as a bug."), IcaoCode::ToLetter(*Letter));
+		return INDEX_NONE;
+	}
+
+	const FVector2D Inward = PlotYard::InwardOf(Wound, A, B);
+	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, *Letter);
+
+	// PRICED AND REFUSED BEFORE THE SCOPE OPENS - issue #193, the same ordering
+	// PlaceEntityInPlot uses. WhyStandRefused already ran this exact afford check as its own
+	// last gate, but its answer is not carried forward (it returns a string, not a quote), so
+	// the charge itself is computed fresh here, on the wound outline this call actually places.
+	FBuildQuote Quote = BuildCost::ForEntity(*Definition);
+	const FBuildQuote ApronQuote = QuoteForApron(Wound);
+	Quote.BaseAmount += ApronQuote.BaseAmount;
+	Quote.What = FText::Format(NSLOCTEXT("BuildCost", "StandPlusPad", "{0} + {1}"),
+		Quote.What, ApronQuote.What);
+	if (!CanAfford(Quote))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("PlaceStandInPlot refused: cannot afford %s"),
+			*Quote.What.ToString());
+		return INDEX_NONE;
+	}
+
+	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place stand"));
+
+	FEntityPlacement Placement;
+	Placement.Definition = Definition;
+	Placement.Anchors = Definition->Anchors;
+	Placement.Position = Pose.Position;
+	Placement.Heading = RoadGeom::Bearing(Pose.Facing);
+	Placement.PoseRole = Definition->PoseRole;
+	Placement.Outline = Wound;
+
+	// A HAIR UNDER THE LETTER'S OWN CEILING, NOT THE CEILING ITSELF. IcaoCode::LetterForWingspan
+	// treats a row's MaxWingspan as the FIRST value that belongs to the NEXT letter up (see
+	// Airside.Solve.MaxWingspanForLetterMatchesTheBandEdges) - every letter but F rolls over
+	// AT its own ceiling. A drawn stand's captured DesignWingspan feeds IcaoCode::StandAdmits/
+	// StandRank the same way a legacy stand's does (ArrivalPlanner::ChooseStand,
+	// UStandAllocator::Reserve), so the letter it reads back as must be the letter it was
+	// actually drawn to - the ceiling itself would silently rank and admit this stand one
+	// letter too generous. The 1 uu has no other meaning and Code F, with nothing above it to
+	// roll into, is unaffected either way.
+	Placement.DesignWingspan = IcaoCode::MaxWingspanForLetter(*Letter) - 1.0;
+
+	const FEntityInstanceId Placed = Net.PlaceEntity(Placement);
+	if (!Placed.IsSet())
+	{
+		return INDEX_NONE;
+	}
+
+	CommitPurchase(Edit, Quote);
+
+	UE_LOG(LogRoadMesh, Log, TEXT("PlaceStandInPlot: Code %s stand, %.0f x %.0f m"),
+		IcaoCode::ToLetter(*Letter),
+		StandBox::WidthOf(Wound) / 100.0, StandBox::DepthOf(Wound) / 100.0);
+
 	return Placed.Index;
 }
 

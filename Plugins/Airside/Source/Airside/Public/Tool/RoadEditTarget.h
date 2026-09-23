@@ -315,6 +315,36 @@ public:
 		FVector2D FrontageA, FVector2D FrontageB,
 		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) = 0;
 
+	/**
+	 * Turn an ACCEPTED drawn rectangle into a stand - see WhyStandRefused for the refusal
+	 * this is expected to have already cleared. EntranceA/EntranceB are the same two points
+	 * as Outline's own entrance edge (Outline[0]/[1] in the convention StandBox.h
+	 * documents), carried separately because a caller correcting Outline's winding must
+	 * swap them together - see URoadEditFacade::PlaceStandInPlot, which mirrors
+	 * PlaceEntityInPlot's own CCW correction for exactly that reason.
+	 *
+	 * NOT AN OVERLOAD OF PlaceEntity, for the same reason PlaceEntityInPlot is not: the pose
+	 * is derived from the drawn box and the letter it reads as, not stated by the caller.
+	 *
+	 * Returns the entity index, or INDEX_NONE - WhyStandRefused names why, and the facade
+	 * logs it.
+	 */
+	virtual int32 PlaceStandInPlot(const TArray<FVector2D>& Outline,
+		FVector2D EntranceA, FVector2D EntranceB) = 0;
+
+	/**
+	 * Why a drawn rectangle cannot become a stand - empty means it can.
+	 *
+	 * THE ONE EVALUATOR, the #182 lesson applied to stands: a tool's readout and
+	 * PlaceStandInPlot's commit both ask this rather than keeping their own opinions, so a
+	 * preview can never approve what the commit refuses, or the reverse. See
+	 * URoadEditFacade::WhyStandRefused for the refusal order (self-crossing, too small
+	 * against Code A's own floor, an unfit letter, an overlap, a taxiway through the
+	 * interior, then afford) and why each check is winding-independent, so this may be
+	 * asked of Outline exactly as drawn, before any CCW correction.
+	 */
+	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline) const = 0;
+
 	virtual bool DeleteEntity(int32 EntityIndex) = 0;
 
 	/**

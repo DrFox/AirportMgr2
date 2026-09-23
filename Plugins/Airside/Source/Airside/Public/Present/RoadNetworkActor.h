@@ -549,6 +549,14 @@ public:
 		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) override;
 	using IRoadEditTarget::PlaceStand;
 
+	/** Forwards to the facade, like every other IRoadEditTarget member - see
+	 *  URoadEditFacade::PlaceStandInPlot. */
+	virtual int32 PlaceStandInPlot(const TArray<FVector2D>& Outline,
+		FVector2D EntranceA, FVector2D EntranceB) override;
+
+	/** Forwards to the facade - see URoadEditFacade::WhyStandRefused. */
+	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline) const override;
+
 	/** Remove a placed entity, and the anchor nodes it owns. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DeleteEntity(int32 EntityIndex) override;
@@ -565,6 +573,20 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
 	TObjectPtr<UEntityDefinition> StandDefinition;
+
+	/**
+	 * A drawn stand's definition, per letter (A-F, indexed by EIcaoCode's own ordinal) -
+	 * lazily built by ResolveStandDefinitionFor and cached here so every stand of the same
+	 * letter on this actor shares one Flyweight, the same reason StandDefinition exists.
+	 *
+	 * NOT TRANSIENT, unlike RuntimeProfile or the resolved-material caches below: a placed
+	 * stand's FEntityInstance::Definition is a UPROPERTY the level SAVES, so the definition
+	 * it points at must survive a save too, or reloading the level would hand every non-C
+	 * stand back a null Definition. Code C keeps using StandDefinition/ResolveStandDefinition
+	 * instead - see ResolveStandDefinitionFor - so this array is never touched for C and
+	 * index 2 (EIcaoCode::C) stays unset.
+	 */
+	UPROPERTY() TArray<TObjectPtr<UEntityDefinition>> LetterStandDefinitions;
 
 	/**
 	 * What the fuel depot tool places. Unset falls back to the content set's Placeables map
@@ -1120,6 +1142,33 @@ public:
 	UMaterialInterface* ResolveGhostMaterial() const;
 	URoadMaterialSet*   ResolveMaterialSet() const;
 	UEntityDefinition*  ResolveStandDefinition() const;
+
+	/**
+	 * A stand template for Letter, resolved and cached the same way ResolveStandDefinition
+	 * resolves Code C's - the drawn-stand commit path's one place to ask "what does a Code X
+	 * stand look like".
+	 *
+	 * CODE C FORWARDS TO ResolveStandDefinition() UNCHANGED: it alone has an authored asset
+	 * (StandDefinition, else DA_Stand_CodeC by content default), and a drawn Code C stand
+	 * must place the SAME object a legacy PlaceStand drops, or the two could disagree about
+	 * anchors, trucks or the envelope. Every other letter has no authored asset (Task 1's own
+	 * finding), so it is built once with UEntityDefinition::MakeStandTransient(Letter, this) -
+	 * OUTERED TO THIS ACTOR, NOT THE TRANSIENT PACKAGE, because LetterStandDefinitions is a
+	 * saved UPROPERTY and a transient-package object would be nulled at the next save - and
+	 * cached in LetterStandDefinitions[ordinal] so a second stand of the same letter reuses
+	 * it rather than building a second Flyweight.
+	 *
+	 * NULL, LOGGED ONCE PER LETTER, when the built template does not fit its own letter's
+	 * floor - UEntityDefinition::FitsItsLetter, and Task 1's measured table: A and B do not
+	 * fit today, C through F do. A caller refuses on null; WhyStandRefused is what turns
+	 * that into "Code X stands cannot be built yet" for the player.
+	 *
+	 * CONST, with a const_cast to fill the cache - the same shape ResolveProfile's
+	 * RuntimeProfile cache would use if that method were const; this one can be, because
+	 * every caller (WhyStandRefused, PlaceStandInPlot) only ever reads or builds a template,
+	 * never mutates the actor's own authored properties.
+	 */
+	UEntityDefinition*  ResolveStandDefinitionFor(EIcaoCode Letter) const;
 
 	/**
 	 * What the fuel depot tool places: the authored value if there is one, else the

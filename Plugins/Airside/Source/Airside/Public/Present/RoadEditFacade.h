@@ -176,6 +176,9 @@ public:
 		FVector2D FrontageA, FVector2D FrontageB,
 		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) override;
 	using IRoadEditTarget::PlaceStand;
+	virtual int32 PlaceStandInPlot(const TArray<FVector2D>& Outline,
+		FVector2D EntranceA, FVector2D EntranceB) override;
+	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline) const override;
 	virtual bool DeleteEntity(int32 EntityIndex) override;
 	virtual int32 FindEntityAt(FVector2D Where, double Radius) const override;
 	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity Kind) const override;
