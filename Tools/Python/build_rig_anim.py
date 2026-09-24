@@ -125,6 +125,9 @@ RIGS = [
         # See the module header's second carve-out: SteerAngleDegrees is utility1's OWN wheel
         # deflection, not the towbar's angle - wiring these now would be a wrong answer, not a
         # missing one.
+        # THE CHANNEL EXISTS SINCE 2026-09-24 (task 4): UAirsideAgentAnim.TowbarAngleDegrees,
+        # and Tools/wire_fuelTrailer1_anim.py wires all three to it. Kept in this set so this
+        # plan never suggests bone_plan's SteerAngleDegrees for them.
         unwired={"steer_FL", "steer_FR", "towbar_yaw"},
     ),
 ]
@@ -153,15 +156,13 @@ def report_plan(rig):
         matched = dict(bone_plan([bone])).get(bone, "?")
         if matched.startswith("?"):
             say("    %-12s  NOT WIRED THIS ROUND - bone_plan finds no rule for it either, and "
-                "even if it did, no UAirsideAgentAnim channel yet carries the towbar link's "
-                "own angle (see this module's header, 'A SECOND CARVE-OUT'). Flagged for "
-                "whoever adds that channel." % bone)
+                "the channel it takes is TowbarAngleDegrees (see this module's header, 'A "
+                "SECOND CARVE-OUT'); Tools/wire_fuelTrailer1_anim.py wires it." % bone)
         else:
             say("    %-12s  NOT WIRED THIS ROUND, though bone_plan's ordinary rule matches it "
                 "(%s) - see this module's own header, 'A SECOND CARVE-OUT'. %s is a WRONG "
-                "answer for this bone, not a missing one; the real angle (the towbar link's "
-                "own, relative to the body it follows) has no channel yet. Flagged for "
-                "whoever adds it." % (bone, matched, matched))
+                "answer for this bone, not a missing one; wire it to TowbarAngleDegrees "
+                "instead - Tools/wire_fuelTrailer1_anim.py does." % (bone, matched, matched))
     say("")
     say("  ON EVERY DRIVEN NODE:")
     say("    Translation Mode = IGNORE            <- leave it alone")

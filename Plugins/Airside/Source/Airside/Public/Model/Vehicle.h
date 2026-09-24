@@ -57,6 +57,13 @@ struct AIRSIDE_API FTowLink
 
 	/** Body width, mirrors excluded. */
 	UPROPERTY(EditAnywhere) double Width = 0.0;
+
+	/**
+	 * A towbar: no body of its own, so nothing to draw for it. NAMED rather than tested inline
+	 * at each site, because the view asks it twice - to skip a mesh, and to find the bar that
+	 * swings a drawbar body's front axle (UAirsideTraffic::SpawnView).
+	 */
+	bool IsBar() const { return BodyFront == 0.0 && BodyRear == 0.0; }
 };
 
 /**

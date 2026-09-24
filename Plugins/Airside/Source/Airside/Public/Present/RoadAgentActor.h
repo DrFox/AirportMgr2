@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Misc/Optional.h"
 #include "Model/AgentMotion.h"
 #include "RoadAgentActor.generated.h"
 
@@ -9,6 +10,52 @@ class UAnimInstance;
 class USkeletalMesh;
 class USkeletalMeshComponent;
 class UStaticMeshComponent;
+
+/**
+ * One drawn link of a tow: the mesh standing on a BODY-carrying FTowLink, and what its anim
+ * instance needs to read that link rather than the cab. See ARoadAgentActor::SetVehicleTrailer.
+ *
+ * ONE STRUCT, NOT PARALLEL ARRAYS of components and indices: the pair must never drift, and
+ * the anim finds its own entry by component (ARoadAgentActor::FindTowLinkView).
+ */
+USTRUCT()
+struct AIRSIDE_API FTowLinkView
+{
+	GENERATED_BODY()
+
+	/**
+	 * The trailer mesh. A UPROPERTY and NOT Transient, so a duplicated actor's copy points at
+	 * the duplicate's own component rather than the source's or the CDO's - memory note
+	 * "transient subobject pointers reset on duplication". Airside.Present.RigActor.
+	 * TrailerSurvivesDuplication.
+	 */
+	UPROPERTY() TObjectPtr<USkeletalMeshComponent> Mesh = nullptr;
+
+	/** The FAgentMotion::Tow index this mesh stands on. */
+	UPROPERTY() int32 Link = INDEX_NONE;
+
+	/**
+	 * The BAR link that swings this body's front axle, or INDEX_NONE - a semi-trailer couples
+	 * straight onto the cab. Decided by the dresser from FTowLink::IsBar, which the view cannot
+	 * see: "the link before has no mesh" would also be true of a body whose asset failed to load.
+	 */
+	UPROPERTY() int32 TowbarLink = INDEX_NONE;
+
+	/**
+	 * How far this link's axle has rolled along its own heading, uu, signed; the trailer's
+	 * wheel angle is this over the radius (UAirsideAgentAnim::WheelAngleFromTravel).
+	 *
+	 * THE AXLE'S OWN TRAVEL, NOT THE CAB'S SPEED: round a bend the trailer axle cuts in and
+	 * covers less ground, and at a standstill turn it can barely move while the cab rolls on.
+	 * Summed from the model's axle positions because FTowPose carries no speed - the positions
+	 * ARE the model's answer, and differencing them is arithmetic, not a second trailer model.
+	 * Not a UPROPERTY: view state rebuilt from the next SetMotion, never saved.
+	 */
+	double RolledUu = 0.0;
+
+	/** Where the axle was at the last SetMotion; unset until the first. */
+	TOptional<FVector2D> LastAxle;
+};
 
 /**
  * The aircraft that stands where an agent is. A VIEW, and nothing else.
@@ -78,6 +125,40 @@ public:
 	 */
 	void SetVehicleAirframe(USkeletalMesh* Mesh, UClass* AnimClass, const FVector& BoxSizeUu);
 
+	/**
+	 * Dress tow link Link with a trailer mesh: creates that link's skeletal component, or
+	 * re-dresses it if it exists. Null Mesh draws nothing for the link. TowbarLink is the bar
+	 * link that swings this body's front axle, INDEX_NONE for none - see FTowLinkView.
+	 *
+	 * SetMotion then stands it on Motion.Tow[Link]'s AXLE at that link's heading, every
+	 * frame, because every trailer mesh here has its origin on its link's axle (tankTrailer1 at
+	 * the tandem centre, fuelTrailer1 at its rear axle - measured off the imported skeletons,
+	 * 2026-09-24). A mesh whose origin sat elsewhere would need an offset HERE, not a second
+	 * pose from the model.
+	 *
+	 * TAKES A LINK, unlike the brief's (Mesh, AnimClass): the tow is a chain (spec 2026-09-24
+	 * §4) and the utility's body is link 1, not 0 - so which pose a mesh stands on is part of
+	 * dressing it. The component is created at run time, never in the constructor, so a rigid
+	 * vehicle and every aircraft carry none.
+	 */
+	void SetVehicleTrailer(int32 Link, USkeletalMesh* Mesh, UClass* AnimClass, int32 TowbarLink = INDEX_NONE);
+
+	/**
+	 * The drawn link whose mesh is Component, or null - the cab's own component, an aircraft's.
+	 * Read by UAirsideAgentAnim, which is how a trailer's anim instance learns it is one.
+	 *
+	 * LOOKED UP, NOT PUSHED onto the anim instance: an anim instance is re-created whenever its
+	 * component re-initialises (a mesh swap, a re-register), and a link index set on the old one
+	 * would be silently lost. The component is the stable key.
+	 */
+	const FTowLinkView* FindTowLinkView(const USkeletalMeshComponent* Component) const;
+
+	/** Link's trailer component, or null. For Airside.Present.RigActor.*. */
+	USkeletalMeshComponent* TrailerForTest(int32 Link) const;
+
+	/** How many trailer meshes this view draws. For Airside.Present.RigActor.*. */
+	int32 TrailerCountForTest() const { return TowViews.Num(); }
+
 	/** True once either vehicle path has dressed this view. For Airside.Present.VehicleAgentView. */
 	bool HasVehicleBodyForTest() const { return bIsVehicle; }
 
@@ -102,6 +183,12 @@ private:
 	 * reads as a content problem and the other as a routing bug.
 	 */
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Placeholder;
+
+	/**
+	 * One entry per BODY-carrying tow link, in tow order; empty for anything rigid. See
+	 * FTowLinkView for why it is a UPROPERTY and not Transient.
+	 */
+	UPROPERTY() TArray<FTowLinkView> TowViews;
 
 	/**
 	 * False when the airframe asset was missing and the cube stood in.

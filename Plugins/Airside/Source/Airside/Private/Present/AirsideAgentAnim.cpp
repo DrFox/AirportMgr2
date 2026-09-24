@@ -45,18 +45,34 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 	BayDoorAngleDegrees = AngleFromRestFraction(BayDoorOpenFraction, BayDoorClosedAngleDegrees);
 	TruckTiltAngleDegrees = AngleFromRestFraction(TruckLevelFraction, TruckTiltedAngleDegrees);
 
-	// COPIED, NOT DERIVED. The model steered with this exact angle - see
-	// FRouteFollower::SteerDegrees - so the wheel the player watches is the one that turned
-	// the aeroplane rather than a second opinion about it.
-	SteerAngleDegrees = static_cast<float>(Motion.SteerAngleDegrees);
+	// A TRAILER'S INSTANCE READS ITS OWN LINK. Every mesh on the agent shares one owning actor,
+	// so without this a trailer's wheels would roll at the CAB's speed and its turntable steer
+	// by the CAB's wheel - see TowbarAngleDegrees. The actor answers which component is which.
+	if (const FTowLinkView* Tow = Agent->FindTowLinkView(GetSkelMeshComponent()))
+	{
+		SteerAngleDegrees = 0.0f;
+		TowbarAngleDegrees = (Motion.Tow.IsValidIndex(Tow->TowbarLink) && Motion.Tow.IsValidIndex(Tow->Link))
+			? RelativeYawDegrees(Motion.Tow[Tow->TowbarLink].Heading, Motion.Tow[Tow->Link].Heading)
+			: 0.0f;
+		// The AXLE's travel, not the cab's speed - see FTowLinkView::RolledUu.
+		WheelAngleDegrees = WheelAngleFromTravel(Tow->RolledUu, MainWheelRadius);
+	}
+	else
+	{
+		// COPIED, NOT DERIVED. The model steered with this exact angle - see
+		// FRouteFollower::SteerDegrees - so the wheel the player watches is the one that turned
+		// the aeroplane rather than a second opinion about it.
+		SteerAngleDegrees = static_cast<float>(Motion.SteerAngleDegrees);
+		TowbarAngleDegrees = 0.0f;
 
-	// WHEELS: v = wr on the ground; DECAYED, NOT DROPPED, in the air (#107 item 8) - see
-	// WheelStepDegrees and FAgentMotion::GroundSpeed's own header.
-	WheelAngleDegrees = FMath::Fmod(
-		WheelAngleDegrees
-			+ WheelStepDegrees(GroundSpeed, MainWheelRadius, bAirborne, DeltaSeconds,
-				WheelSpinDownSeconds, WheelRateDegPerSec),
-		360.0f);
+		// WHEELS: v = wr on the ground; DECAYED, NOT DROPPED, in the air (#107 item 8) - see
+		// WheelStepDegrees and FAgentMotion::GroundSpeed's own header.
+		WheelAngleDegrees = FMath::Fmod(
+			WheelAngleDegrees
+				+ WheelStepDegrees(GroundSpeed, MainWheelRadius, bAirborne, DeltaSeconds,
+					WheelSpinDownSeconds, WheelRateDegPerSec),
+			360.0f);
+	}
 
 	// PROPELLER: RPM to degrees a second is x6 - 360 degrees over 60 seconds.
 	//
@@ -165,4 +181,20 @@ float UAirsideAgentAnim::AngleFromRestFraction(float RestFraction, float Travell
 	// folded leg with its bay shut round the wheels, which is a state the mesh can express
 	// perfectly happily and which has been on screen once. See the header.
 	return (1.0f - RestFraction) * TravelledAngle;
+}
+
+float UAirsideAgentAnim::RelativeYawDegrees(double Heading, double RelativeTo)
+{
+	// FindDeltaAngleRadians wraps to -PI..PI - see the header for why the raw difference is wrong.
+	return static_cast<float>(FMath::RadiansToDegrees(FMath::FindDeltaAngleRadians(RelativeTo, Heading)));
+}
+
+float UAirsideAgentAnim::WheelAngleFromTravel(double TravelUu, float Radius)
+{
+	if (Radius <= 0.0f)
+	{
+		return 0.0f;
+	}
+	// In DOUBLE until after the Fmod - see the header.
+	return static_cast<float>(FMath::Fmod(FMath::RadiansToDegrees(TravelUu / Radius), 360.0));
 }

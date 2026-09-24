@@ -98,6 +98,29 @@ public:
 	static float AngleFromRestFraction(float RestFraction, float TravelledAngle);
 
 	/**
+	 * Heading minus RelativeTo, both radians, as degrees WRAPPED to -180..180 and signed the
+	 * way Heading turns - the sign SteerAngleDegrees already has, so a towbar bone is wired
+	 * exactly as a steer bone is.
+	 *
+	 * WRAPPED because headings are: a bar at 179 degrees ahead of a body at -179 has swung 2,
+	 * and the raw difference of 358 would spin the towbar a full turn at the seam.
+	 *
+	 * Static for the reason the others are: testable without an actor or a skeleton.
+	 */
+	static float RelativeYawDegrees(double Heading, double RelativeTo);
+
+	/**
+	 * A wheel's angle from the distance its axle has rolled, degrees, -360..360; zero for a
+	 * radius that is not positive, rather than a division by it.
+	 *
+	 * ABSOLUTE, NOT A STEP, unlike WheelStepDegrees: a trailer's axle travel is handed over
+	 * whole by ARoadAgentActor (FTowLinkView::RolledUu), so there is nothing to integrate here
+	 * and no frame rate for the answer to depend on. The Fmod is in double, because the travel
+	 * is: a trailer that has rolled ten kilometres still turns its wheel to the degree.
+	 */
+	static float WheelAngleFromTravel(double TravelUu, float Radius);
+
+	/**
 	 * Accumulated propeller rotation, degrees. Apply to the 'prop' bone.
 	 *
 	 * WRAPPED to 0..360 rather than allowed to run on: at 2000 RPM this gains 12,000 degrees
@@ -133,6 +156,23 @@ public:
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float SteerAngleDegrees = 0.0f;
+
+	/**
+	 * A DRAWBAR TRAILER'S towbar, degrees: the bar link's heading off this body's, signed as
+	 * SteerAngleDegrees is (see RelativeYawDegrees). Apply to towbar_yaw AND to the front
+	 * steer bones - on a turntable the front axle turns with the bar.
+	 *
+	 * A CHANNEL OF ITS OWN, NOT SteerAngleDegrees REUSED. That is the CAB's front-wheel
+	 * deflection, the angle the follower steered with; a trailer's front axle follows the bar,
+	 * which lags and differs. Wiring the turntable to the cab's steer would draw a plausible,
+	 * wrong answer - see Tools/wire_fuelTrailer1_anim.py's header. On a trailer instance
+	 * SteerAngleDegrees is held at zero for the same reason.
+	 *
+	 * Zero on anything that is not a drawbar body: the cab, an aircraft, a semi-trailer (whose
+	 * link couples straight to the cab's fifth wheel and has no bar).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float TowbarAngleDegrees = 0.0f;
 
 	/**
 	 * The wheel's own turn rate, degrees per second - carried between frames so it can decay

@@ -139,6 +139,35 @@ void ARoadAgentActor::SetMotion(const FAgentMotion& Motion, double SurfaceZ)
 	// is GroundSpeed over the wheel radius, the propeller turns while the engine does - and
 	// storing them now means the model side is finished and testable before the asset lands.
 	LastMotion = Motion;
+
+	// THE TOW: each drawn link stands on the model's pose for it - its AXLE, which is every
+	// trailer mesh's origin (see SetVehicleTrailer), at its link's heading. Read, never worked
+	// out: FRoadAgent::DescribeMotion placed these with the same PoseChain the router gated.
+	// Nothing to do for a rigid vehicle, whose TowViews and Motion.Tow are both empty.
+	for (FTowLinkView& Tow : TowViews)
+	{
+		if (Tow.Mesh == nullptr || !Motion.Tow.IsValidIndex(Tow.Link))
+		{
+			continue;
+		}
+		const FTowPose& Pose = Motion.Tow[Tow.Link];
+		const FVector2D Forward(FMath::Cos(Pose.Heading), FMath::Sin(Pose.Heading));
+
+		// SIGNED along the link's own heading, so a reversing trailer rolls its wheels back -
+		// the rule FAgentMotion::GroundSpeed's sign carries for the cab.
+		if (Tow.LastAxle.IsSet())
+		{
+			Tow.RolledUu += FVector2D::DotProduct(Pose.Axle - Tow.LastAxle.GetValue(), Forward);
+		}
+		Tow.LastAxle = Pose.Axle;
+
+		// ON THE SURFACE, no lift: a trailer's origin is on the ground like the cab's. No pitch:
+		// a towed body on a flat airfield has none, and the cab's flare correction is an
+		// aircraft's.
+		Tow.Mesh->SetWorldLocationAndRotation(
+			FVector(Pose.Axle.X, Pose.Axle.Y, SurfaceZ + Motion.Altitude),
+			FRotator(0.0, FMath::RadiansToDegrees(Pose.Heading), 0.0));
+	}
 }
 
 void ARoadAgentActor::SetAirframe(USkeletalMesh* InAirframe, UClass* AnimClass)
@@ -265,4 +294,79 @@ void ARoadAgentActor::SetVehicleAirframe(USkeletalMesh* Mesh, UClass* AnimClass,
 	// footprint was recorded above. A second implementation would be that list again, free
 	// to drift.
 	SetAirframe(Mesh, AnimClass);
+}
+
+void ARoadAgentActor::SetVehicleTrailer(int32 Link, USkeletalMesh* Mesh, UClass* AnimClass, int32 TowbarLink)
+{
+	if (Link < 0 || Mesh == nullptr)
+	{
+		// NOTHING TO DRAW, said out loud: a body link that should carry a trailer and shows none
+		// otherwise reads as a routing bug (a cab driving alone) rather than as missing content.
+		UE_LOG(LogAirside, Warning, TEXT("Trailer link %d: no mesh; the link is simulated but not drawn."), Link);
+		return;
+	}
+
+	FTowLinkView* View = TowViews.FindByPredicate([Link](const FTowLinkView& V) { return V.Link == Link; });
+	if (View == nullptr)
+	{
+		// CREATED AT RUN TIME, NOT IN THE CONSTRUCTOR: a default subobject would put a trailer
+		// component on every truck and every aircraft. Outered to this actor and held by a
+		// non-Transient UPROPERTY, so a duplicate remaps it to its own copy - see FTowLinkView::Mesh.
+		USkeletalMeshComponent* Component = NewObject<USkeletalMeshComponent>(
+			this, *FString::Printf(TEXT("Trailer%d"), Link));
+		Component->SetupAttachment(RootComponent);
+
+		// ABSOLUTE, because SetMotion places it in WORLD space from the model's link pose. As a
+		// plain child it would inherit the cab's pitch correction and yaw, and the placement
+		// would have to undo them - a second pose to keep in agreement with the first.
+		Component->SetUsingAbsoluteLocation(true);
+		Component->SetUsingAbsoluteRotation(true);
+		Component->SetUsingAbsoluteScale(true);
+
+		// The cab's rules, for the cab's reasons - see the constructor.
+		Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Component->SetCastShadow(false);
+#if WITH_EDITORONLY_DATA
+		Component->bVisualizeComponent = false;
+#endif
+		AddInstanceComponent(Component);
+		if (GetWorld() != nullptr)
+		{
+			Component->RegisterComponent();
+		}
+
+		FTowLinkView& Added = TowViews.AddDefaulted_GetRef();
+		Added.Mesh = Component;
+		Added.Link = Link;
+		View = &Added;
+	}
+	View->TowbarLink = TowbarLink;
+
+	// SetAirframe's order, for SetAirframe's reasons: overrides cleared before the mesh, the
+	// anim class AFTER it so the instance binds to the skeleton it will drive.
+	View->Mesh->EmptyOverrideMaterials();
+	View->Mesh->SetSkeletalMeshAsset(Mesh);
+	if (AnimClass != nullptr)
+	{
+		View->Mesh->SetAnimationMode(EAnimationMode::AnimationBlueprint);
+		View->Mesh->SetAnimInstanceClass(AnimClass);
+	}
+
+	UE_LOG(LogAirside, Log, TEXT("Trailer link %d wears '%s' (towbar link %d, anim %s)"),
+		Link, *Mesh->GetName(), TowbarLink, AnimClass != nullptr ? *AnimClass->GetName() : TEXT("none"));
+}
+
+const FTowLinkView* ARoadAgentActor::FindTowLinkView(const USkeletalMeshComponent* Component) const
+{
+	if (Component == nullptr)
+	{
+		return nullptr;
+	}
+	return TowViews.FindByPredicate([Component](const FTowLinkView& V) { return V.Mesh == Component; });
+}
+
+USkeletalMeshComponent* ARoadAgentActor::TrailerForTest(int32 Link) const
+{
+	const FTowLinkView* View = TowViews.FindByPredicate([Link](const FTowLinkView& V) { return V.Link == Link; });
+	return View != nullptr ? View->Mesh.Get() : nullptr;
 }

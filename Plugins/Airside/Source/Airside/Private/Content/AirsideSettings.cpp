@@ -7,6 +7,16 @@
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 
+// ONE CONSTANT PER ARTICULATED VEHICLE: the code its Resolve*Vehicle stamps and the key
+// ResolveVehicleViewFor picks its look by. Two string literals would be two sources of truth,
+// and a rename of one would dress the rig as a fuel truck with nothing to say why. NAMED, not
+// anonymous, because the module is a unity build.
+namespace AirsideVehicleCodes
+{
+	static const TCHAR* const Rig = TEXT("RIG");
+	static const TCHAR* const UtilityTow = TEXT("UTILITY");
+}
+
 // File-local, matching every other category in this module.
 DEFINE_LOG_CATEGORY_STATIC(LogAirsideContent, Log, All);
 
@@ -108,7 +118,7 @@ FVehicle UAirsideSettings::ResolveRigVehicle()
 	// here has measured how a loaded articulated tanker accelerates, and inventing figures
 	// would be worse than inheriting honest ones. Geometry is what gating needs.
 	FVehicle Rig = ResolveDefaultVehicle();
-	Rig.TypeCode = TEXT("RIG");
+	Rig.TypeCode = AirsideVehicleCodes::Rig;
 
 	// MEASURED from truckCab1.glb and tankTrailer1.glb on 2026-09-24. Tractor: steer_FL/FR at
 	// x 370 from the rear-axle origin; body 516 ahead, 78 behind; 254 over the body (mirrors
@@ -447,7 +457,7 @@ FVehicle UAirsideSettings::ResolveUtilityTowVehicle()
 	// has measured how a loaded bowser trailer accelerates behind a baggage tug, and inventing
 	// figures would be worse than inheriting honest ones. Geometry is what gating needs.
 	FVehicle Utility = ResolveDefaultVehicle();
-	Utility.TypeCode = TEXT("UTILITY");
+	Utility.TypeCode = AirsideVehicleCodes::UtilityTow;
 
 	// utility1 (the TUG MA-50, utility1/SPEC.md): steer_FL/FR at X 149.3 from the rear-axle
 	// origin, MEASURED off the imported SK_Utility1's reference pose (Tools/Python/
@@ -539,5 +549,24 @@ FResolvedTowView UAirsideSettings::ResolveUtilityTowView()
 	{
 		View.Links[1].AnimClass = Content->UtilityTrailerAnimClass.LoadSynchronous();
 	}
+	return View;
+}
+
+FResolvedTowView UAirsideSettings::ResolveVehicleViewFor(const FVehicle& Vehicle)
+{
+	if (Vehicle.TypeCode == FName(AirsideVehicleCodes::Rig))
+	{
+		return ResolveRigView();
+	}
+	if (Vehicle.TypeCode == FName(AirsideVehicleCodes::UtilityTow))
+	{
+		return ResolveUtilityTowView();
+	}
+
+	// RIGID: the one vehicle look there has always been, and no links - so a vehicle that
+	// somehow carried a Tow with no look of its own shows its cab alone, and SpawnView's
+	// count check says so.
+	FResolvedTowView View;
+	View.Cab = ResolveVehicleView();
 	return View;
 }

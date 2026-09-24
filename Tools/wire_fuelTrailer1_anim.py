@@ -6,25 +6,33 @@
 THE EDITOR MUST BE RUNNING. Copied from Tools/wire_tankTrailer1_anim.py (see
 docs/2026-09-20-animgraph-authoring.md).
 
-FOUR WHEELS, NO STEER, NO TOWBAR - AND THAT IS THE WHOLE POINT OF THIS PLAN, NOT AN OMISSION.
-fuelTrailer1's own bones are root, steer_FL/FR, wheel_FL/FR, wheel_RL/RR, towbar_yaw, towbar,
-tow_eye and hitch (see build_rig_anim.py / import_fueltrailer1.py). tow_eye and hitch are
-coupling SOCKETS - not on this PLAN for the same reason fifth_wheel is not on truckCab1's.
-steer_FL, steer_FR AND towbar_yaw ARE recognised, driveable-LOOKING bones - bone_plan's
-ordinary substring rule matches steer_FL/FR to SteerAngleDegrees - and they are DELIBERATELY
-left off this PLAN anyway: UAirsideAgentAnim.SteerAngleDegrees is utility1's OWN front-wheel
-deflection (FRoadAgent::DescribeMotion: "the CONTROL INPUT... the angle the follower steered
-with"), not any fact about this trailer's own hitch geometry. Wiring the turntable to it would
-make the towbar visibly follow whatever utility1's front wheels are doing at that instant - a
-WRONG answer, not a missing one, and worse than leaving it in the reference pose (comments-
-that-admit-a-defect memory: a plausible-looking wrong answer is the one nothing catches). The
-real source - the towbar link's own angle, relative to the body it follows (spec 2026-09-24
-revision §4: "the towbar is animated on the trailer's own towbar_yaw bone from the towbar
-link's angle") - has no UAirsideAgentAnim channel yet; that is Task 4's job, and
-build_rig_anim.py's own header ('A SECOND CARVE-OUT') and its RIGS entry for this model both
-flag it by name so it is not silently forgotten.
+FOUR WHEELS, THEN THE TURNTABLE (task 4, 2026-09-24). fuelTrailer1's own bones are root,
+steer_FL/FR, wheel_FL/FR, wheel_RL/RR, towbar_yaw, towbar, tow_eye and hitch (see
+build_rig_anim.py / import_fueltrailer1.py). tow_eye and hitch are coupling SOCKETS - not on
+this PLAN for the same reason fifth_wheel is not on truckCab1's.
 
-AXIS: Yaw, in Bone Space - MEASURED off SK_FuelTrailer1's reference pose on 2026-09-24: each
+steer_FL, steer_FR AND towbar_yaw TAKE TowbarAngleDegrees, NOT SteerAngleDegrees. The latter is
+utility1's OWN front-wheel deflection (the angle the follower steered with); wiring the
+turntable to it would draw the bar following the tug's wheels - a plausible, WRONG answer. They
+were left unwired until UAirsideAgentAnim grew the right channel: TowbarAngleDegrees, the
+towbar link's heading off this body's (spec 2026-09-24 revision §4), which ARoadAgentActor
+hands to the trailer's own anim instance (FTowLinkView). On a turntable the front axle turns
+with the bar, so all three bones take the one angle. On a trailer instance SteerAngleDegrees
+is held at zero.
+
+TURNTABLE AXIS: Yaw, in Bone Space, NO SIGN - MEASURED 2026-09-24 off SK_FuelTrailer1's
+reference pose (airside_anim.bone_frames): towbar_yaw, steer_FL and steer_FR all have the
+IDENTITY frame (local Z = UE +Z, up), so a bone-space yaw of +a turns them exactly as an actor
+yaw of +a turns the actor - and TowbarAngleDegrees is signed the way Heading turns. The same
+direct wiring wire_utility1_anim.py gives its steer bones, whose frames are the same.
+
+ORDER: wheels first, then steer_FL/FR (the parents of wheel_FL/FR - steer AFTER the wheel it
+carries, as ABP_Utility1 has it), then towbar_yaw (the parent of towbar, which nothing drives).
+
+WHEELS: rolled by the trailer's OWN axle travel (FTowLinkView::RolledUu over MainWheelRadius),
+not the tug's speed - that is UAirsideAgentAnim's side, and needs nothing here.
+
+WHEEL AXIS: Yaw, in Bone Space - MEASURED off SK_FuelTrailer1's reference pose on 2026-09-24: each
 wheel bone's local Z resolves to UE's Y (the axle direction) at -1.0000, bone for bone
 identical to SK_Utility1's own wheels and to the shipped SK_FuelTruck1's. See
 wire_utility1_anim.py's header for the fuller argument (measured, not assumed).
@@ -50,6 +58,9 @@ PLAN = [
     ("wheel_RR", "WheelAngleDegrees", -1.0),
     ("wheel_FL", "WheelAngleDegrees", -1.0),
     ("wheel_FR", "WheelAngleDegrees", -1.0),
+    ("steer_FL", "TowbarAngleDegrees", None),
+    ("steer_FR", "TowbarAngleDegrees", None),
+    ("towbar_yaw", "TowbarAngleDegrees", None),
 ]
 
 MODES = {

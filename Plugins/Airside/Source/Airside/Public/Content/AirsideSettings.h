@@ -336,4 +336,17 @@ public:
 	 * rather than being left out of the array" - written for exactly this vehicle.
 	 */
 	static FResolvedTowView ResolveUtilityTowView();
+
+	/**
+	 * THE LOOK FOR THIS VEHICLE: its cab plus one entry per Tow link - ResolveRigView for the
+	 * rig, ResolveUtilityTowView for utility1 + fuelTrailer1, and for anything else
+	 * ResolveVehicleView as the Cab with no Links (rigid, as every truck was before).
+	 *
+	 * THE ONE PLACE THE CHOICE IS MADE, by TypeCode - the code each Resolve*Vehicle above stamps,
+	 * from one constant per vehicle in this file - so the dresser (UAirsideTraffic::SpawnView)
+	 * names no vehicle and no asset. Keyed on the TypeCode rather than on the Tow's shape
+	 * because two vehicles may share a shape and not a look.
+	 * ENFORCED BY: Airside.Present.RigActor.TrailerOnItsLink (each vehicle's cab wears its own mesh).
+	 */
+	static FResolvedTowView ResolveVehicleViewFor(const FVehicle& Vehicle);
 };
