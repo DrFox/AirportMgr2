@@ -27,6 +27,32 @@ struct FResolvedAgentView
 };
 
 /**
+ * What UAirsideSettings::ResolveRigView (and any sibling Resolve*View for another articulated
+ * vehicle - see ResolveRigView's own comment) resolved: the powered unit plus one entry per
+ * FVehicle::Tow link, IN TOW ORDER.
+ *
+ * ONE ENTRY PER LINK, NOT PER BODY. A link with no body of its own - FTowLink::BodyFront and
+ * BodyRear both zero, a bar (see FTowLink) - resolves to an EMPTY FResolvedAgentView
+ * (Mesh == nullptr) rather than being left out of the array, so Links[i] always answers
+ * Tow[i] and a caller walking the chain never has to know in advance which links carry a
+ * body. That is the whole reason this is its own struct rather than a single
+ * FResolvedAgentView: the rig's one-link semi-trailer chain and a future two-link drawbar
+ * chain (a bar, then a body) both fit through the SAME shape with no change to it - only the
+ * content fields and the resolver function differ per vehicle.
+ */
+USTRUCT()
+struct FResolvedTowView
+{
+	GENERATED_BODY()
+
+	/** The powered unit - the rig's tractor. */
+	UPROPERTY() FResolvedAgentView Cab;
+
+	/** One entry per FVehicle::Tow link, in order - see this struct's own comment. */
+	UPROPERTY() TArray<FResolvedAgentView> Links;
+};
+
+/**
  * Where the plugin is told which content set to use. The ONE remaining path, and it is data.
  *
  * A UDeveloperSettings puts it in Config/DefaultAirside.ini as one readable line and gives it
@@ -258,4 +284,29 @@ public:
 	 * unwired than one that looks wired and is not.
 	 */
 	static FResolvedAgentView ResolveVehicleView();
+
+	/**
+	 * The articulated rig's view: truckCab1's mesh and ABP, plus tankTrailer1's for
+	 * ResolveRigVehicle's one Tow link - or an empty view for any link/asset the content set
+	 * does not name, matching ResolveVehicleView's null-safe shape.
+	 *
+	 * A SEPARATE FUNCTION FROM ResolveVehicleView, for the reason ResolveRigVehicle is
+	 * separate from ResolveDefaultVehicle: the content diverges completely (two meshes, not
+	 * one) rather than being a second reading of the same field, so branching inside
+	 * ResolveVehicleView on HasTrailer() would make one function resolve two unrelated sets
+	 * of soft pointers - the "Content/ resolves every content default in exactly one
+	 * function" rule read the other way round.
+	 *
+	 * TAKES NO FVehicle, mirroring ResolveRigVehicle's own no-arg shape: the content it reads
+	 * (RigCabMesh/RigCabAnimClass/RigTrailerMesh/RigTrailerAnimClass on UAirsideContent) is
+	 * fixed to THIS rig, the way ResolveRigVehicle's figures are. FResolvedTowView::Links is
+	 * sized to ResolveRigVehicle's own Tow.Num() (one today), so a future second rig link
+	 * would need a second content field here and a second entry there, not a change to the
+	 * struct itself - see FResolvedTowView's own comment.
+	 *
+	 * A sibling ResolveUtilityTowView() for utility1 + fuelTrailer1's two-link chain (a bar,
+	 * then a body) would follow the same shape: its own content fields, its own function,
+	 * the same FResolvedTowView return type.
+	 */
+	static FResolvedTowView ResolveRigView();
 };

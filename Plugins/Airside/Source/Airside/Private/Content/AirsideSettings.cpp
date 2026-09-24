@@ -410,3 +410,33 @@ FResolvedAgentView UAirsideSettings::ResolveVehicleView()
 	}
 	return View;
 }
+
+FResolvedTowView UAirsideSettings::ResolveRigView()
+{
+	const UAirsideContent* Content = GetContent();
+
+	FResolvedTowView View;
+	if (Content == nullptr)
+	{
+		return View;
+	}
+
+	View.Cab.Mesh = Content->RigCabMesh.LoadSynchronous();
+	if (View.Cab.Mesh != nullptr)
+	{
+		View.Cab.AnimClass = Content->RigCabAnimClass.LoadSynchronous();
+	}
+
+	// ONE ENTRY, MATCHING ResolveRigVehicle's OWN ONE-LINK Tow ARRAY - see FResolvedTowView's
+	// own comment for why the array exists at all rather than a bare FResolvedAgentView. A
+	// second rig link would need a second content field and a second entry here; nothing
+	// about the STRUCT would need to change, which is the property the sibling
+	// ResolveUtilityTowView (utility1 + fuelTrailer1, a two-link chain) relies on.
+	View.Links.SetNum(1);
+	View.Links[0].Mesh = Content->RigTrailerMesh.LoadSynchronous();
+	if (View.Links[0].Mesh != nullptr)
+	{
+		View.Links[0].AnimClass = Content->RigTrailerAnimClass.LoadSynchronous();
+	}
+	return View;
+}

@@ -280,14 +280,14 @@ public:
 	TSoftObjectPtr<UStaticMesh> VehicleMesh;
 
 	/**
-	 * The chainlink fence's Ø60 mm line post. Base-centred, 245 cm tall, 1 unit = 1 cm once
+	 * The chainlink fence's ï¿½60 mm line post. Base-centred, 245 cm tall, 1 unit = 1 cm once
 	 * imported - see AirportMgr2Models/accessories/chainlink/README.md. Null falls back to a
 	 * scaled engine cube. Authored by Tools/Python/build_fence_content.py.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
 	TSoftObjectPtr<UStaticMesh> FenceLinePost;
 
-	/** The Ø90 mm corner and gate post - heavier instead of braced (README "Not here"). */
+	/** The ï¿½90 mm corner and gate post - heavier instead of braced (README "Not here"). */
 	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
 	TSoftObjectPtr<UStaticMesh> FenceHeavyPost;
 
@@ -347,4 +347,34 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftClassPtr<UAnimInstance> AgentAnimClass;
+
+	/**
+	 * The articulated rig's tractor - truckCab1. BESIDE VehicleSkeletalMesh rather than
+	 * reusing it, for the reason AgentMesh sits beside VehicleMesh: a property that might name
+	 * either the plain service vehicle or the rig would need a cast at the point of use, and
+	 * the editor would offer every skeletal mesh in the project in one picker. Null leaves
+	 * UAirsideSettings::ResolveRigView's Cab empty - the rig is not drawn (spec's Wide-tier
+	 * design vehicle is used for sizing regardless; see ResolveRigVehicle).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<USkeletalMesh> RigCabMesh;
+
+	/**
+	 * What drives RigCabMesh's wheels and steering. Null leaves it in its reference pose - see
+	 * VehicleAnimClass's own comment for why this is a soft class and must be built on
+	 * UAirsideAgentAnim.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftClassPtr<UAnimInstance> RigCabAnimClass;
+
+	/**
+	 * The articulated rig's one Tow link (spec 2026-09-23 section 6; ResolveRigVehicle) - tankTrailer1.
+	 * See RigCabMesh's own comment for why this is a separate property rather than a shared one.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<USkeletalMesh> RigTrailerMesh;
+
+	/** What drives RigTrailerMesh's four wheels. Null leaves it in its reference pose. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftClassPtr<UAnimInstance> RigTrailerAnimClass;
 };
