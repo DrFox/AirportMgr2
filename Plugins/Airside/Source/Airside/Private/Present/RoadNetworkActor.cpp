@@ -963,6 +963,7 @@ URoadProfile* ARoadNetworkActor::ResolveProfileFor(ERoadKind Kind, int32 WidthIn
 	// cross-section, and a TAXIWAY index reaching it would have laid 23 m for vans. The index
 	// is now resolved against the ROAD list (ResolveWidthProfile keys by kind), so it can only
 	// ever name a road tier.
+	// ENFORCED BY: Airside.Present.RoadWidthResolution, Airside.Tool.TaxiwayWidth (section 4)
 	URoadProfile* Chosen = nullptr;
 	if (WidthIndex != INDEX_NONE)
 	{

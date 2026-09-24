@@ -19,6 +19,30 @@
 #include "Vehicle.generated.h"
 
 /**
+ * A semi-trailer, when a vehicle pulls one (spec 2026-09-23 §6). Measured from the model, uu.
+ * KingpinToAxle == 0 means NO TRAILER - a rigid vehicle - which is the default, so every
+ * vehicle assembled before trailers existed stays rigid without being told.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FTrailer
+{
+	GENERATED_BODY()
+
+	/** Where the kingpin sits on the TRACTOR, ahead of its fixed axle. */
+	UPROPERTY(EditAnywhere) double KingpinX = 0.0;
+
+	/** Kingpin to the trailer's own axle (tandem centre). Zero: no trailer. */
+	UPROPERTY(EditAnywhere) double KingpinToAxle = 0.0;
+
+	/** How far the trailer's body reaches ahead of the kingpin, and behind its axle. */
+	UPROPERTY(EditAnywhere) double FrontAheadOfKingpin = 0.0;
+	UPROPERTY(EditAnywhere) double RearBehindAxle = 0.0;
+
+	/** Body width, mirrors excluded. */
+	UPROPERTY(EditAnywhere) double Width = 0.0;
+};
+
+/**
  * Every fact about one service vehicle that a dispatch needs, bundled - FAirframe's rule
  * ("one struct, not four parameters") applied to the other kind of thing on the apron.
  */
@@ -36,4 +60,23 @@ struct AIRSIDE_API FVehicle
 	 * agent carries no pointer to a type. NAME_None for a vehicle assembled by hand.
 	 */
 	UPROPERTY(EditAnywhere) FName TypeCode;
+
+	/**
+	 * The body's footprint, uu, measured from the model (spec 2026-09-23 §6): width over the
+	 * body with MIRRORS EXCLUDED - they sit above a kerb and overhang it legally - and how far
+	 * the body reaches ahead of and behind the FIXED axle (the chassis origin; RearX negative).
+	 * What route search gates a vehicle on: its width in a lane, and through VehicleSweep its
+	 * swept path round a corner. BodyWidth 0 means UNMEASURED and gates nothing.
+	 */
+	UPROPERTY(EditAnywhere) double BodyWidth = 0.0;
+	UPROPERTY(EditAnywhere) double BodyFrontX = 0.0;
+	UPROPERTY(EditAnywhere) double BodyRearX = 0.0;
+
+	/** The semi-trailer, if any. See FTrailer: rigid by default. */
+	UPROPERTY(EditAnywhere) FTrailer Trailer;
+
+	bool HasTrailer() const { return Trailer.KingpinToAxle > 0.0; }
+
+	/** The widest part of the vehicle - what a lane must take. */
+	double WidestBody() const { return FMath::Max(BodyWidth, HasTrailer() ? Trailer.Width : 0.0); }
 };

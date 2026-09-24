@@ -79,6 +79,14 @@ enum class EFuelRefusal : uint8
 	NoRoute,
 
 	/**
+	 * Joined and connected, but only over road the truck does not fit - a lane narrower than
+	 * its body or a corner its swept path cannot take (route search's TooNarrow, spec
+	 * 2026-09-23 §6). ITS OWN REFUSAL AND NOT NoRoute, for NoPump's reason: "no road from
+	 * depot" about a road that is there sends the player to fix the wrong thing.
+	 */
+	TooNarrow,
+
+	/**
 	 * A depot is on a road and has a truck, but no PUMP was built in its plot.
 	 *
 	 * ITS OWN REFUSAL AND NOT NoRoute, for the reason ChooseDepot's busy branch records at

@@ -135,6 +135,14 @@ public:
 	static FVehicle ResolveDefaultVehicle();
 
 	/**
+	 * The articulated fuel rig (truckCab1 + tankTrailer1), for the big-aircraft stands - the
+	 * Wide road tier's design vehicle (spec 2026-09-23 §6). HARD-CODED for ResolveDefaultVehicle's
+	 * reason: there is no vehicle type asset yet. Not dispatched by anything until the rig is
+	 * imported (articulated step 2); route search and the Wide corners are sized against it now.
+	 */
+	static FVehicle ResolveRigVehicle();
+
+	/**
 	 * The biggest thing that may drive on a service road, which is what the road's corners
 	 * are sized for.
 	 *

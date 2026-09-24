@@ -5,6 +5,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficOccupancy.h"
+#include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
 
 namespace
@@ -146,7 +147,7 @@ namespace
 	 * through as a parameter instead. RunwayInUse is the caller's own map, threaded through by
 	 * reference, so its per-runway memo is paid once per SEARCH, not once per expansion.
 	 */
-	void ExpandNode(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreWingspan,
+	void ExpandNode(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreSize,
 		FGuidelineNodeId At, double Reached, const TSet<FGuidelineNodeId>& Closed,
 		TFunctionRef<double(const FVector2D&)> Heuristic, TMap<int32, bool>& RunwayInUse,
 		TMap<int32, bool>& RunwaySeeds,
@@ -243,7 +244,11 @@ namespace
 				return;
 			}
 
-			if (!bIgnoreWingspan && ExceedsWingspan(*Edge, Query.Wingspan))
+			// SIZE: an aircraft's wingspan, and since 2026-09-23 a vehicle's body (VehicleFit).
+			// One flag for both, because Find's unconstrained retry lifts both to tell "too big"
+			// from "not connected".
+			if (!bIgnoreSize && (ExceedsWingspan(*Edge, Query.Wingspan)
+				|| (Query.Vehicle != nullptr && !VehicleFit::Fits(*Edge, *Query.Vehicle, Network))))
 			{
 				return;
 			}
@@ -371,7 +376,7 @@ namespace
 		return Plan;
 	}
 
-	FRoutePlan RunSearch(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreWingspan)
+	FRoutePlan RunSearch(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreSize)
 	{
 		++GSearchCallCountForTest;
 
@@ -445,7 +450,7 @@ namespace
 			}
 
 			const double Reached = Best.FindChecked(At);
-			ExpandNode(Network, Query, bIgnoreWingspan, At, Reached, Closed, Heuristic, RunwayInUse, RunwaySeeds, Best, Arrived, Open);
+			ExpandNode(Network, Query, bIgnoreSize, At, Reached, Closed, Heuristic, RunwayInUse, RunwaySeeds, Best, Arrived, Open);
 		}
 
 		if (Plan.Result != ERouteResult::Found)
@@ -621,8 +626,8 @@ namespace RouteSearch
 			return Plan;
 		}
 
-		Plan = RunSearch(Network, Query, /*bIgnoreWingspan=*/false);
-		if (Plan.IsValid() || Query.Wingspan <= 0.0)
+		Plan = RunSearch(Network, Query, /*bIgnoreSize=*/false);
+		if (Plan.IsValid() || (Query.Wingspan <= 0.0 && Query.Vehicle == nullptr))
 		{
 			return Plan;
 		}
@@ -630,10 +635,25 @@ namespace RouteSearch
 		// Paid only on failure, and only when a wingspan was actually given. The answer it
 		// buys - "the taxiways are joined up, your aircraft is too big" - is a different
 		// job for the player than "nothing connects these two".
-		const FRoutePlan Unconstrained = RunSearch(Network, Query, /*bIgnoreWingspan=*/true);
+		const FRoutePlan Unconstrained = RunSearch(Network, Query, /*bIgnoreSize=*/true);
 		if (Unconstrained.IsValid())
 		{
-			Plan.Result = ERouteResult::TooWide;
+			Plan.Result = Query.Vehicle != nullptr ? ERouteResult::TooNarrow : ERouteResult::TooWide;
+			if (Query.Vehicle != nullptr)
+			{
+				// WHERE, walked along the route that WOULD have been taken: the first edge on it
+				// this vehicle does not fit. Not necessarily the only one - the first is what a
+				// player driving it would hit.
+				for (const FRouteStep& Step : Unconstrained.Steps)
+				{
+					const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step.Edge);
+					if (Edge != nullptr && !VehicleFit::Fits(*Edge, *Query.Vehicle, Network))
+					{
+						Plan.RejectedEdge = Step.Edge;
+						break;
+					}
+				}
+			}
 		}
 
 		return Plan;
@@ -715,7 +735,7 @@ namespace RouteSearch
 			}
 
 			const double Reached = Result.Best.FindChecked(At);
-			ExpandNode(Network, Query, /*bIgnoreWingspan=*/false, At, Reached, Closed, Heuristic,
+			ExpandNode(Network, Query, /*bIgnoreSize=*/false, At, Reached, Closed, Heuristic,
 				RunwayInUse, RunwaySeeds, Result.Best, Result.Arrived, Open);
 		}
 

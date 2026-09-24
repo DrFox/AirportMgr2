@@ -109,6 +109,16 @@ struct AIRSIDE_API FPlanReResolver
 		const FTrafficContext& Context, const FGuidelineNodeIndex& NodeIndex);
 
 	/**
+	 * The query an AGENT's re-route runs: For(Errand, Start, Goal, its wingspan, its class),
+	 * plus its body when it is a vehicle (spec 2026-09-23 §6). ONE SEAM for every re-route -
+	 * ReplanAt, the rebuild's re-resolve and the drive-side rejoin - so none of them can send a
+	 * truck down road it does not fit (review of 2026-09-24: all three passed wingspan only).
+	 * The vehicle is held BY POINTER into Agent, which must outlive the search.
+	 */
+	static FRouteQuery QueryFor(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,
+		const FRoadAgent& Agent);
+
+	/**
 	 * Runs Query and splices its answer onto Plan's first KeepSteps steps, IN PLACE.
 	 *
 	 * True and Plan is the new journey; FALSE AND PLAN IS UNTOUCHED - the search or the

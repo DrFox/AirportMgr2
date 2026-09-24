@@ -10,8 +10,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUTurnBalloonTest, "Airside.Solve.UTurnBalloon"
 
 bool FUTurnBalloonTest::RunTest(const FString& Parameters)
 {
-	// The two lane ends of a Narrow road at a dead end facing +Y, and the 8.5 m dispenser's
-	// lock radius (699 uu, the figure URoadProfile::JunctionScalingMargin's comment quotes).
+	// The two lane ends of a Narrow road at a dead end facing +Y, and a 699 uu lock radius -
+	// the 8.5 m bowser's when the balloon was prototyped (it is 510 at 6.2 m). The figure is the
+	// input the prototype was run with, not a claim about today's truck.
 	const FVector2D In(-150.0, 0.0);
 	const FVector2D Out(150.0, 0.0);
 	const FVector2D Axis(0.0, 1.0);

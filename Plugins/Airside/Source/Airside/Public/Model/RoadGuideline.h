@@ -147,6 +147,30 @@ struct AIRSIDE_API FGuidelineEdge
 	/** 0 means unlimited. Spec 5.6. */
 	UPROPERTY() double MaxWingspan = 0.0;
 
+	/**
+	 * What this edge offers a VEHICLE'S BODY, measured by FRoadGuidelineBuilder on the same
+	 * samples the follower walks (spec 2026-09-23 §6), so route search can gate a vehicle
+	 * without re-deriving any geometry:
+	 *   MinRadius  - the tightest radius the curve delivers; 0 for a straight edge.
+	 *   ClearInner / ClearOuter - distance from the line to the edge of the PAVEMENT, toward
+	 *                and away from the curve's centre, the minimum over the samples.
+	 * -1 means UNMEASURED and gates nothing: straight lanes (their Width gates them), dead-end
+	 * balloons (over grass, ruled), and anything hand-drawn or saved before this existed.
+	 */
+	UPROPERTY() double MinRadius = 0.0;
+	UPROPERTY() double ClearInner = -1.0;
+	UPROPERTY() double ClearOuter = -1.0;
+
+	/**
+	 * The same clearances PER SAMPLE, one entry per point GuidelineGeom::Sample gives this
+	 * curve (2026-09-24). VehicleFit simulates the vehicle along those samples
+	 * (VehicleSweep::Trace) and asks, at each one, whether the body's reach either side fits
+	 * the tarmac there - which a single minimum cannot answer, because a trailer cuts in late
+	 * and a turn is widest in the middle. Empty means unmeasured (as -1 above).
+	 */
+	UPROPERTY() TArray<float> ClearInnerAt;
+	UPROPERTY() TArray<float> ClearOuterAt;
+
 	/** The surface this was derived from; unset when hand-drawn. */
 	UPROPERTY() FRoadSegmentId DerivedFrom;
 
@@ -194,7 +218,7 @@ struct AIRSIDE_API FGuidelineEdge
 	 *
 	 * IT SAYS WHICH LIMIT JUDGES THE EDGE, and that is the whole of it. A reversing vehicle
 	 * pivots about its FIXED axle, so it holds L/tan(lock) where forward driving needs
-	 * L/sin(lock) - 494.5 uu against 699.3 for the shipping dispenser, about 30% tighter. A
+	 * L/sin(lock) - 361 uu against 510 for the 6.2 m bowser, about 30% tighter. A
 	 * reverse leg is therefore LEGITIMATELY tighter than the forward limit, and a test that
 	 * swept every laid edge past FSpeedProfile's forward rule would refuse the one manoeuvre
 	 * the layout was designed around.

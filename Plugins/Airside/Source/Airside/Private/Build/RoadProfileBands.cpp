@@ -89,9 +89,9 @@ FRoadProfileBands FRoadProfileBands::FromProfile(const URoadProfile* Profile,
 	}
 
 	// NO MATERIAL CENTRELINE: shift every lateral far from zero, so M_RoadSurface's
-	// |lateral| < CentrelineWidth mask is false everywhere on this ribbon. UV1.X feeds nothing
-	// else in the material (build_road_material.py), and a uniform shift keeps the laterals
-	// ascending. See URoadProfile::bMaterialCentreline.
+	// |lateral| < CentrelineWidth mask is false everywhere on this ribbon. A uniform shift keeps
+	// the laterals ascending. If the road material ever reads UV1.X for anything else, a
+	// two-way road will carry this offset into it - see URoadProfile::bMaterialCentreline.
 	if (!Profile->bMaterialCentreline)
 	{
 		constexpr float NoCentrelineLateral = 100000.0f;

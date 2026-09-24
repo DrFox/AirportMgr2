@@ -40,7 +40,7 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	//    THIS USED TO NAME THE PIPER, which was the one aircraft type declaring it, until
 	//    plane7 replaced the placeholder mesh on 2026-09-21 and brought the Meridian onto the
 	//    nose-gear origin. The rule is still live and still exercised by a shipped asset:
-	//    UAirsideSettings::ResolveDefaultVehicle's fuel truck carries SteerAxleX 494.5 against
+	//    UAirsideSettings::ResolveDefaultVehicle's fuel truck carries SteerAxleX 360.7 against
 	//    FixedAxleX 0, because fueltruck1 is exported about its rear axle. Kept as a
 	//    HAND-BUILT airframe rather than repointed at the truck, because what is being pinned
 	//    is FChassis::Wheelbase's arithmetic, not any one asset's figures.

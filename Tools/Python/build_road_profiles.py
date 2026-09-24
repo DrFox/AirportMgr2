@@ -54,16 +54,24 @@ CONTENT_SET = "/Game/DA_AirsideContent"
 # nothing. Passing zero below is what asks for that derivation.
 LANE_WIDTH = 300.0
 
+KERB_WIDTH = 60.0
+DERIVE_FILLET = 0.0
+
 # THE ROAD TIERS (spec 2026-09-23 section 1), narrow first - the order the road tool cycles in.
 # Per-lane widths; every tier is two lanes between the same kerbs. The Narrow tier keeps the
 # asset name every placed road already points at, so existing roads stay Narrow.
+#
+# (name, per-lane width, fillet). Every tier's corner is DERIVED from the largest service
+# vehicle (the bowser). The Wide tier carried an authored 30 m fillet for the articulated rig
+# from 2026-09-24 until the same day: that figure came from a steady-state swept-path model
+# that the EU turning circle showed to be far too harsh. Simulated through the actual turn,
+# and allowed to swing across both lanes as real drivers do, the rig turns both ways at the
+# derived corner (Airside.Model.RigTurnsOnWide).
 ROAD_TIERS = [
-    ("DA_RoadProfile_ServiceRoad", LANE_WIDTH),          # Narrow, 2 x 3.0 m
-    ("DA_RoadProfile_ServiceRoad_Standard", 350.0),      # Standard, 2 x 3.5 m
-    ("DA_RoadProfile_ServiceRoad_Wide", 450.0),          # Wide, 2 x 4.5 m - the articulated rig's
+    ("DA_RoadProfile_ServiceRoad", LANE_WIDTH, DERIVE_FILLET),           # Narrow, 2 x 3.0 m
+    ("DA_RoadProfile_ServiceRoad_Standard", 350.0, DERIVE_FILLET),       # Standard, 2 x 3.5 m
+    ("DA_RoadProfile_ServiceRoad_Wide", 450.0, DERIVE_FILLET),           # Wide, 2 x 4.5 m
 ]
-KERB_WIDTH = 60.0
-DERIVE_FILLET = 0.0
 
 # THE STANDARD TAXIWAY WIDTHS, by ICAO aerodrome code letter - the same reasoning
 # UAirsideContent::RunwayProfiles gives for its own set: a taxiway conforms to one of these
@@ -117,12 +125,12 @@ def data_asset_factory(asset_class):
 def build_service_roads():
     """One asset per road tier, narrowest first - the order the tool cycles in."""
     built = []
-    for name, lane_width in ROAD_TIERS:
+    for name, lane_width, fillet in ROAD_TIERS:
         profile = replace_asset(name, unreal.RoadProfile, data_asset_factory(unreal.RoadProfile))
         if profile is None:
             continue
 
-        unreal.RoadProfile.fill_two_way_road(profile, lane_width, KERB_WIDTH, DERIVE_FILLET)
+        unreal.RoadProfile.fill_two_way_road(profile, lane_width, KERB_WIDTH, fillet)
         # only_if_is_dirty=False: a Fill through Python does not mark the package dirty, and the
         # default then saves NOTHING while reporting success (memory: save_asset writes nothing
         # unless forced).

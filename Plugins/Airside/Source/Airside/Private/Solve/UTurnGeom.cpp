@@ -12,8 +12,7 @@ namespace
 	 * Each reverse curve is two quadratics meeting at the midpoint of their control points,
 	 * which is what makes the joint tangent-continuous: C1 lies on InEnd's tangent line
 	 * (x = -Half), C2 on the circle's leftmost tangent line (x = -R), and the inflection is
-	 * their midpoint. The quarter circles use the tangent-line crossing as control, the same
-	 * construction every turn path in FRoadGuidelineBuilder uses.
+	 * their midpoint. The quarter circles use the tangent-line crossing as control.
 	 */
 	TArray<UTurnGeom::FPiece> Pieces(const FVector2D& O, const FVector2D& U, const FVector2D& V,
 		double Half, const FVector2D& OutEnd, double R)

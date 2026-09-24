@@ -269,7 +269,7 @@ bool FFuelYardLeavesRoomTest::RunTest(const FString& Parameters)
  * drawable either; the sheet's figure is art, not a gesture the player can make.
  *
  * 20 m SINCE 2026-09-22, when the gate lane (PlotYard::GateCorridorUu) went from 6.2 to 8 m
- * for the 8.5 m truck that ships, and 14 m deep with it: the side columns start one lane in
+ * for the 8.5 m truck that shipped then (6.2 m since 2026-09-24), and 14 m deep with it: the side columns start one lane in
  * from the gate, so a 5 m tank needs 8 + 5 = 13 m of depth. The user chose the wider gate over
  * keeping the 15 x 12 m plot.
  */

@@ -30,6 +30,91 @@ namespace
 		return FMath::Clamp((CentreOffset + HalfRight) / Total, 0.0, 1.0);
 	}
 
+	/**
+	 * The pavement at one junction: its polygon and the ribbons of the arms that meet there.
+	 * A vehicle's swept path may use any of it - a truck swinging wide into the other lane, or
+	 * across the junction's fillet, is on tarmac - and nothing outside it.
+	 */
+	struct FJunctionPavement
+	{
+		TArray<FVector2D> Polygon;
+		TArray<TArray<FVector2D>> Ribbons;
+
+		bool Contains(const FVector2D& Point) const
+		{
+			if (Polygon.Num() >= 3 && RoadGeom::PointInPolygon(Polygon, Point))
+			{
+				return true;
+			}
+			for (const TArray<FVector2D>& Ribbon : Ribbons)
+			{
+				if (RoadGeom::PointInPolygon(Ribbon, Point))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+	};
+
+	/** 10 uu steps to 30 m: finer than any lane, further than any vehicle sweeps. */
+	constexpr double ClearanceStep = 10.0;
+	constexpr double ClearanceCap = 3000.0;
+
+	/**
+	 * Measures what a turn offers a vehicle's body (spec 2026-09-23 §6) on GuidelineGeom::Sample,
+	 * so route search judges the line that is driven, not a second evaluation of it. MinRadius
+	 * is GuidelineGeom::TightestRadius, the figure the lock warning below uses.
+	 * ENFORCED BY: Airside.Build.MeasuredOnFollowerSamples
+	 * Clearances march along each sample's normal until the point leaves the pavement.
+	 */
+	void MeasureTurn(FGuidelineEdge& Turn, const FVector2D& PA, const FVector2D& PB, const FJunctionPavement& Pavement)
+	{
+		Turn.MinRadius = GuidelineGeom::TightestRadius(PA, Turn.Control, PB);
+		const double Cross = FVector2D::CrossProduct(Turn.Control - PA, PB - Turn.Control);
+		if (FMath::IsNearlyZero(Cross))
+		{
+			// Straight through: no inside to a straight line; the lane width gates it.
+			Turn.MinRadius = 0.0;
+			return;
+		}
+		TArray<FVector2D> Points;
+		GuidelineGeom::Sample(PA, Turn.Control, PB, Points);
+		// EVERY SAMPLE, recorded per sample (2026-09-24). A first cut kept only the minimum over
+		// the middle third, because a single minimum over all samples was always the in-lane
+		// ends (280 uu at every Wide fillet) and the steady-state envelope it was compared with
+		// only applies at the apex. VehicleFit now simulates the turn and compares sample by
+		// sample, so the ends are judged by what reaches them - usually nothing wide.
+		Turn.ClearInnerAt.SetNum(Points.Num());
+		Turn.ClearOuterAt.SetNum(Points.Num());
+		double Inner = ClearanceCap;
+		double Outer = ClearanceCap;
+		for (int32 Index = 0; Index < Points.Num(); ++Index)
+		{
+			const FVector2D Tangent = (Points[FMath::Min(Index + 1, Points.Num() - 1)]
+				- Points[FMath::Max(Index - 1, 0)]).GetSafeNormal();
+			// The centre of a counter-clockwise (positive cross) curve is on its PerpCCW side.
+			const FVector2D Inward = RoadGeom::PerpCCW(Tangent) * (Cross > 0.0 ? 1.0 : -1.0);
+			auto March = [&](const FVector2D& Dir)
+			{
+				double D = 0.0;
+				while (D < ClearanceCap && Pavement.Contains(Points[Index] + Dir * (D + ClearanceStep)))
+				{
+					D += ClearanceStep;
+				}
+				return D;
+			};
+			const double In = March(Inward);
+			const double Out = March(-Inward);
+			Turn.ClearInnerAt[Index] = static_cast<float>(In);
+			Turn.ClearOuterAt[Index] = static_cast<float>(Out);
+			Inner = FMath::Min(Inner, In);
+			Outer = FMath::Min(Outer, Out);
+		}
+		Turn.ClearInner = Inner;
+		Turn.ClearOuter = Outer;
+	}
+
 	/** A live, hand-edited guideline already covering this segment's Nth declared guideline. */
 	FGuidelineEdgeId FindSparedEdge(const URoadNetwork& Network, FRoadSegmentId Segment, int32 Which)
 	{
@@ -324,10 +409,9 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			// A SPARED LANE IGNORES THE DRIVE SIDE (review of 2026-09-23, left as is): the
 			// player's hand-edited edge keeps the geometry they gave it, so after a flip the other
 			// lane is derived onto the positions it still occupies - two coincident lanes, running
-			// opposite ways. Reaching it needs a hand-edited ROAD lane: on 2026-09-23 the only
-			// writer that turns a segment's derived edge into an edited one was
-			// FRoadNetworkTestAccess::MarkGuidelineEdgeEditedForTest (the guideline tool draws
-			// connectors, which re-resolve by identity and survive a flip).
+			// opposite ways. Anything that lets a player edit a road LANE in place must re-apply
+			// the drive side to it; connectors drawn between lanes re-resolve by identity and
+			// survive a flip (Airside.Build.TwoWay.SparedEdgeSurvivesFlip).
 			const FGuidelineEdgeId Spared = FindSparedEdge(Network, SegmentId, Which);
 			if (Spared.IsSet())
 			{
@@ -459,6 +543,24 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		// Network.NodeIdAt, not a hand-built handle (#79, #173).
 		const FRoadNodeId NodeId = Network.NodeIdAt(Pair.Key);
 
+		// The tarmac a turn here may sweep: the junction polygon (its boundary minus the fan
+		// centre SolveBoundary appends) and every arm's ribbon, from its four cut points. End
+		// B's cut is authored from B's side, so its "left" is the A->B right - the quad still
+		// closes, and PointInPolygon takes either winding.
+		FJunctionPavement Pavement;
+		if (Pair.Value.Boundary.Num() > 3)
+		{
+			Pavement.Polygon = Pair.Value.Boundary;
+			Pavement.Polygon.Pop();
+		}
+		for (const FRoadSegmentId& ArmSeg : *ArmSegments)
+		{
+			if (const FRoadSegment* Arm = Network.GetSegment(ArmSeg))
+			{
+				Pavement.Ribbons.Add({ Arm->LeftCutA, Arm->RightCutA, Arm->LeftCutB, Arm->RightCutB });
+			}
+		}
+
 		// A DEAD END TURNS VEHICLES ROUND (spec 2026-09-23 §4, ruled: an edge, no mesh). One-way
 		// lanes would otherwise strand anything that drove into a stub. A bidirectional arm (a
 		// taxiway, or a one-lane road) is skipped: its one line already runs both ways, and a
@@ -530,6 +632,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 				Loop.AllowedTraffic = Mask;
 				Loop.Direction = EGuidelineDir::AToB;
 				Loop.Width = FMath::Min(InLine.Width, OutLine.Width);
+				// The LOCK is checked on a balloon; its clearances stay unmeasured (-1), because
+				// it lies over grass by ruling and has no pavement edge to measure to.
+				Loop.MinRadius = GuidelineGeom::TightestRadius(
+					Network.GetGuidelineNode(Prev)->Position, Loop.Control, Pieces[Index].End);
 				Loop.bDerived = true;
 				// DerivedFrom stays unset, like a turn path: the balloon belongs to the node.
 				Network.AddGuidelineEdge(MoveTemp(Loop));
@@ -698,6 +804,9 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 						(FromLimit <= 0.0) ? ToLimit :
 						(ToLimit   <= 0.0) ? FromLimit :
 						FMath::Min(FromLimit, ToLimit);
+					// ENFORCED BY: Airside.Build.TurnClearance
+					MeasureTurn(Turn, Network.GetGuidelineNode(Turn.A)->Position,
+						Network.GetGuidelineNode(Turn.B)->Position, Pavement);
 					Turn.bDerived = true;
 					// DerivedFrom stays unset: a turn path belongs to the junction, not to
 					// either segment, and that is how the two are told apart.
@@ -720,7 +829,13 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// the junction and reversed; the route log said R=120 uu where the vehicle
 					// needed 699.
 					//
-					// A WARNING AND NOT A REFUSAL. The corner is still the best this junction
+					// A WARNING AND NOT A REFUSAL - HERE. Since 2026-09-24 route search DOES refuse
+					// this corner to any vehicle whose lock it beats (VehicleFit): the edge is still
+					// laid, so the graph stays connected and other vehicles still use it, but the
+					// truck that crabbed through it before is now sent another way or told "no road
+					// wide enough". Deliberate - crabbing was the defect this warning was written for.
+					//
+					// (Original reasoning, still true of the edge itself:) The corner is still the best this junction
 					// can do, and refusing to lay it would leave the network disconnected -
 					// which is worse than a slow corner and much harder to diagnose. What the
 					// player can act on is the segment length, so that is what this names.
