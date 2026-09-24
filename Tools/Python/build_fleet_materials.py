@@ -75,7 +75,7 @@ import sys
 # rebuild_fleet_materials() exec's this file, because that exec passes one in.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from airside_import import FLEET, MERGE_TOL, PRETTY  # noqa: E402
+from airside_import import FLEET, MERGE_TOL, PRETTY, glb_path  # noqa: E402
 
 import unreal
 
@@ -88,10 +88,10 @@ MASTER_PATH = "%s/%s" % (MAT_DIR, MASTER_NAME)
 OLD_DIR = "/Game/Aircraft/Materials"
 OLD_MASTER = "%s/M_Aircraft" % OLD_DIR
 
-MODELS = r"C:\repos\AirportMgr2Models"
-# FLEET, PRETTY and MERGE_TOL now come from airside_import - see the note there. They lived
-# here, with a second copy in verify_fleet_materials.py, until plane1 was added to one and
-# not the other.
+# FLEET, PRETTY, MERGE_TOL and glb_path now come from airside_import - see the note there.
+# FLEET and MERGE_TOL lived here, with a second copy in verify_fleet_materials.py, until
+# plane1 was added to one and not the other; glb_path was a THIRD copy that silently ignored
+# the FLEET tuple's own stem field (see airside_import.glb_path's own comment).
 EXACT_TOL = 1e-6
 
 # Slot names in Content that a LATER export renamed. Interchange names a slot after the
@@ -116,10 +116,6 @@ def say(msg):
 
 def fail(msg):
     unreal.log_error("MARKER: FAIL " + str(msg))
-
-
-def glb_path(asset):
-    return os.path.join(MODELS, asset, "export", "%s.glb" % asset)
 
 
 def gltf_materials(path):
@@ -174,7 +170,7 @@ def collect():
     """look -> [cluster], each cluster = (values, [asset], [slot name], exact?)."""
     per_look, sided = {}, []
     for asset in sorted(FLEET):
-        path = glb_path(asset)
+        path = glb_path(FLEET[asset][0])
         if not os.path.exists(path):
             fail("%s missing - %s not scraped" % (path, asset))
             continue

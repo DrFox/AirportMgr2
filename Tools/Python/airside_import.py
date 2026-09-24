@@ -66,17 +66,46 @@ FLEET = {
     "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
     "tug1":       ("tug1",       "/Game/Vehicles/Tug1/SK_Tug1"),
     "utility1":   ("utility1",   "/Game/Vehicles/Utility1/SK_Utility1"),
+    "truckCab1":  ("truckCab1",  "/Game/Vehicles/Rig/TruckCab1/SK_TruckCab1"),
+    # "truckCab1/tankTrailer1": see glb_path below - tankTrailer1 has no export/ of its own.
+    # truckCab1/scripts/build_export.py exports both assets from ONE .blend into truckCab1's
+    # own export/ folder ("two assets from one file... each with its own .fbx/.glb in
+    # truckCab1/export/"), so its glb is a SIBLING of truckCab1.glb, not the tankTrailer1
+    # folder's own export - which does not exist.
+    "tankTrailer1": ("truckCab1/tankTrailer1", "/Game/Vehicles/Rig/TankTrailer1/SK_TankTrailer1"),
 }
 
 # Asset folder name -> the name Content uses, for instance naming only.
 PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
           "plane5": "Plane5", "plane6": "Plane6", "plane7": "Plane7",
           "plane8": "Plane8",
-          "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1"}
+          "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1",
+          "truckCab1": "TruckCab1", "tankTrailer1": "TankTrailer1"}
 
 # Below this two looks are the same colour written twice. The verifier may not check tighter
 # than the builder merges, or every merged look fails.
 MERGE_TOL = 0.005
+
+MODELS = r"C:\repos\AirportMgr2Models"
+
+
+def glb_path(stem):
+    """MODELS/<folder>/export/<file>.glb - folder and file are the SAME name unless stem
+    contains a '/' (folder/file), which lets a FLEET entry name a .glb that ships from a
+    DIFFERENT model's export folder - tankTrailer1's does (see FLEET's own comment).
+
+    THE STEM FIELD WAS DEAD BEFORE THIS. FLEET's own docstring already promised "the .glb's
+    stem under each script's own MODELS root... so a model whose export is named differently
+    needs no special case", but build_fleet_materials.py's own glb_path built every path from
+    the FLEET KEY and never read this tuple field, and verify_fleet_materials.py's separate
+    copy read the stem but still assumed folder == file. Neither would have found
+    tankTrailer1.glb, which is the first entry that actually needed the promise kept. Fixed
+    HERE, in the one place FLEET itself lives, rather than in either duplicate again - see
+    "check where a list is CONSUMED" (CLAUDE.md).
+    """
+    folder, _, file = stem.rpartition("/")
+    folder = folder or file
+    return os.path.join(MODELS, folder, "export", "%s.glb" % file)
 
 
 def say(msg):
