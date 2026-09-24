@@ -239,3 +239,19 @@ The rig import (articulated step 2) follows PR 3.
 - Per-edge search cost of `VehicleFits` is a few comparisons; no concern at ~hundreds of
   edges (2026-09-23).
 - Dash length/gap and line width are first guesses; judge on screen after PR 1.
+
+## Amendments from implementation (2026-09-24)
+
+- **Bowser back to 6.2 m** (owner's ruling, PR #275): at 8.5 m it was 3.26 m over the tyres,
+  wider than a Narrow lane. Uniform shrink in Blender; wheelbase 3.607 m; footprint 620.
+- **The rig fits a straight Narrow lane** (2.54 m + 2 x 0.15 m margin < 3.0 m), as real
+  lorries do. Test 6's "TooNarrow on Narrow and Standard" became: TooNarrow at a Narrow
+  CORNER, admitted on a Wide T both ways.
+- **Clearance is measured at the apex** (middle third of a turn's samples). Measured over
+  every sample, the in-lane ends set it to 280 uu at every fillet and forced a 55 m corner.
+- **Wide tier fillet authored at 30 m**: the smallest that passed for the rig was 27.5 m
+  (steady-state envelope, conservative). Narrow/Standard stay derived from the bowser.
+- **Balloons check the lock only** (clearance unmeasured, over grass): the rig passes the
+  bowser-sized balloon on its lock alone, contrary to §4's "rig fails the balloon".
+- **Refusal**: `EFuelRefusal::TooNarrow`, card "no road wide enough for the fuel truck",
+  log names the first edge that does not fit.
