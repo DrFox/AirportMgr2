@@ -8,6 +8,44 @@ struct FVehicle;
 class URoadNetwork;
 
 /**
+ * Which of VehicleFit's rules refused an edge. A PLAIN enum: it travels on FFitVerdict, which
+ * nothing reflects (CLAUDE.md on plain enums and UHT).
+ */
+enum class EFitRefusal : uint8
+{
+	None,
+	/** The widest body plus its margins is wider than the lane. */
+	LaneTooNarrow,
+	/** The curve is tighter than the steering lock can follow. */
+	TighterThanLock,
+	/** The simulated tow folded past VehicleSweep::MaxHitchRadians on the curve. */
+	Jackknife,
+	/** At some sample the swept width is wider than the tarmac there. */
+	SweptOverTarmac
+};
+
+/**
+ * VehicleFit's answer with its figures, so a refusal can say "swept 7.6 m vs tarmac 6.0 m"
+ * rather than only "no" (spec 2026-09-24 §3, the test course's refusal line).
+ *
+ * Needed/Available are in uu and mean, per Refusal: LaneTooNarrow - body plus margins vs lane
+ * width; TighterThanLock - the lock's radius vs the curve's MinRadius; SweptOverTarmac - swept
+ * width vs tarmac width at the WORST sample (Sample). Zero where the rule has no figure.
+ */
+struct AIRSIDE_API FFitVerdict
+{
+	EFitRefusal Refusal = EFitRefusal::None;
+	double Needed = 0.0;
+	double Available = 0.0;
+	int32 Sample = INDEX_NONE;
+
+	bool Fits() const { return Refusal == EFitRefusal::None; }
+
+	/** One line for a log: "swept 7.6 m vs tarmac 6.0 m at sample 12". Empty when it fits. */
+	FString Describe() const;
+};
+
+/**
  * Whether a vehicle's body fits an edge (spec 2026-09-23 §6) - the ONE rule route search
  * gates vehicles on, beside the wingspan rule it gates aircraft on.
  *
@@ -30,6 +68,13 @@ namespace VehicleFit
 {
 	/** Kept clear each side of a body in a lane, uu: mirrors and the wobble of a real driver. */
 	constexpr double WidthMargin = 15.0;
+
+	/**
+	 * The rule, with its reason. Fits() below is this call's bool - ONE evaluator, so a refusal
+	 * line can never name a figure the router did not actually judge on.
+	 * ENFORCED BY: Airside.Model.VehicleFitClearance (Judge and Fits agree case for case)
+	 */
+	AIRSIDE_API FFitVerdict Judge(const FGuidelineEdge& Edge, const FVehicle& Vehicle, const URoadNetwork& Network);
 
 	AIRSIDE_API bool Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle, const URoadNetwork& Network);
 
