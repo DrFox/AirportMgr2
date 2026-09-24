@@ -257,6 +257,33 @@ def ensure_master(two_sided):
     return master
 
 
+def existing_suffixed_name(look, assets):
+    """An existing MI_<Look>_<Pretty(asset)> that already names ONE OF `assets`, or None.
+
+    WHY THIS EXISTS (task 3b incident, 2026-09-24). A per-look cluster that does not cover the
+    WHOLE fleet is named after its LEAD - sorted(cluster["assets"])[0] - recomputed FRESH every
+    run. That is fine the day the cluster is born, and wrong every day after: fuelTrailer1
+    sorts alphabetically before truckCab1 and utility1 (capital 'T' < lowercase 't'), so the
+    moment it joined the existing {truckCab1, utility1} "body" cluster by VALUE, the lead
+    silently became fuelTrailer1 and MI_Body_TruckCab1 was renamed to MI_Body_FuelTrailer1 -
+    which the prune step then read as "MI_Body_TruckCab1 is no longer produced" and deleted,
+    and truckCab1's OWN mesh (never re-exported, never asked to change) was re-saved to follow
+    it. A cluster's identity should not depend on which of its CURRENT members happens to sort
+    first; it should depend on which one it was ALREADY NAMED FOR. So: before computing a fresh
+    name, ask whether ANY member of this cluster already has a file on disk under the name that
+    member would produce - and if so, that name wins, whoever the alphabetical lead is now.
+
+    Only ever REUSES a name; never invents one from an asset not in `assets`, so a genuinely
+    new cluster (no existing member) still gets instance_name's fresh, lead-based name.
+    """
+    camel = "".join(part.capitalize() for part in look.split("_"))
+    for asset in sorted(assets):
+        candidate = "MI_%s_%s" % (camel, PRETTY[asset])
+        if unreal.EditorAssetLibrary.does_asset_exist("%s/%s" % (MAT_DIR, candidate)):
+            return candidate
+    return None
+
+
 def ensure_instance(master, name, values):
     lib = unreal.MaterialEditingLibrary
     path = "%s/%s" % (MAT_DIR, name)
@@ -265,14 +292,26 @@ def ensure_instance(master, name, values):
             and unreal.EditorAssetLibrary.does_asset_exist(old)):
         unreal.EditorAssetLibrary.rename_asset(old, path)
     if unreal.EditorAssetLibrary.does_asset_exist(path):
+        # CREATE-IF-MISSING, AND NOTHING ELSE, FOR AN ASSET THAT ALREADY EXISTS - task 3b's
+        # incident (2026-09-24), same root cause existing_suffixed_name's own comment records:
+        # a shared MI_* is the fleet's ACCEPTED LOOK for everything already wearing it, and
+        # re-deriving its value from whichever asset the CURRENT run's clustering happens to
+        # put first (never an average - see collect()'s own comment) silently nudges every
+        # OTHER vehicle's colour by up to MERGE_TOL every time a new asset joins its cluster.
+        # Parenting is still asserted (cheap, and needed once if OLD_DIR migration just ran);
+        # the three VALUE parameters and the save below are SKIPPED - an existing instance's
+        # authored look is the one thing here that must be re-derived on purpose, not as a
+        # side effect of some other asset's import.
         mi = unreal.EditorAssetLibrary.load_asset(path)
-    else:
-        tools = unreal.AssetToolsHelpers.get_asset_tools()
-        mi = tools.create_asset(name, MAT_DIR, unreal.MaterialInstanceConstant,
-                                unreal.MaterialInstanceConstantFactoryNew())
-        if mi is None:
-            fail("create_asset returned None for %s" % path)
-            return None
+        lib.set_material_instance_parent(mi, master)
+        return mi
+
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    mi = tools.create_asset(name, MAT_DIR, unreal.MaterialInstanceConstant,
+                            unreal.MaterialInstanceConstantFactoryNew())
+    if mi is None:
+        fail("create_asset returned None for %s" % path)
+        return None
     lib.set_material_instance_parent(mi, master)
     rgb, metallic, rough = values[0], values[1], values[2]
     lib.set_material_instance_vector_parameter_value(
@@ -354,6 +393,12 @@ def run():
         for cluster in clusters:
             lead = sorted(cluster["assets"])[0]
             name = instance_name(look, lead, shared)
+            if not shared:
+                # KEEP A SUFFIXED CLUSTER'S EXISTING NAME STABLE - see existing_suffixed_name's
+                # own comment (task 3b, 2026-09-24). Only reached when NOT shared, because a
+                # shared (whole-fleet, one-cluster) look's name never depends on `lead` at all
+                # (instance_name's own branch) and so cannot be perturbed this way.
+                name = existing_suffixed_name(look, cluster["assets"]) or name
             mi = ensure_instance(master, name, cluster["values"])
             if mi is None:
                 continue
