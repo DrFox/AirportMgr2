@@ -48,6 +48,7 @@ namespace
 		// in the text - a number that has to agree with an asset is a number that drifts.
 		case EFuelRefusal::StandUnjoined: return TEXT("no road within reach of the stand's entrances");
 		case EFuelRefusal::NoRoute:       return TEXT("no road from depot");
+		case EFuelRefusal::TooNarrow:     return TEXT("no road wide enough for the fuel truck");
 		case EFuelRefusal::NoPump:        return TEXT("depot has no pump");
 		default:                          return TEXT("unserviceable");
 		}
@@ -124,6 +125,8 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 	Result.Why = EFuelRefusal::NoDepot;
 
 	double BestLength = TNumericLimits<double>::Max();
+	bool bAnyTooNarrow = false;
+	FGuidelineEdgeId NarrowAt;
 
 	/**
 	 * A joined depot with a fleet, all of it already out.
@@ -244,7 +247,17 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		// EOccupancyUse::Never on this errand's row IS that rule, and the search REFUSES a
 		// table passed alongside it rather than quietly ignoring one.
 
+		// THE TRUCK THAT WILL DRIVE IT, so a depot is only chosen over road that truck fits
+		// (spec 2026-09-23 §6). A depot reachable only over too-narrow road is remembered, so
+		// the refusal below can say so rather than "no road".
+		Query.WithVehicle(TruckVehicle);
+
 		const FRoutePlan Plan = RouteSearch::Find(Network, Query);
+		if (Plan.Result == ERouteResult::TooNarrow)
+		{
+			bAnyTooNarrow = true;
+			NarrowAt = Plan.RejectedEdge;
+		}
 		if (!Plan.IsValid() || Plan.Length >= BestLength)
 		{
 			continue;
@@ -289,6 +302,13 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		// not. And DEFERRING a genuine NoRoute costs nothing: the moment the truck is home
 		// the depot is idle, this branch stops firing, and the real reason is reported.
 		Result.Why = EFuelRefusal::None;
+	}
+	else if (bAnyTooNarrow)
+	{
+		Result.Why = EFuelRefusal::TooNarrow;
+		UE_LOG(LogAirportOps, Warning,
+			TEXT("Fuel: no road wide enough for %s from any depot - the first edge it does not fit is guideline edge %d"),
+			*TruckVehicle.TypeCode.ToString(), NarrowAt.Index);
 	}
 	else
 	{
@@ -344,6 +364,7 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		// there rather than into the back of it. The flicker argument covers a WINNER being
 		// re-picked every tick, which a committed route is not.
 		Query.WithCongestion(Traffic.GetOccupancy(), TruckId, Traffic.Rules.CongestionWeight);
+		Query.WithVehicle(TruckVehicle);
 		Query.RunwayPenalty = Traffic.Rules.RunwayPenalty;
 		Plan = RouteSearch::Find(Network, Query);
 	}

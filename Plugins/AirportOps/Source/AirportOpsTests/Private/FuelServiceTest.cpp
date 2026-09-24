@@ -576,6 +576,26 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 			FString(TEXT("no fuel depot")));
 	}
 
+	// NO ROAD WIDE ENOUGH (spec 2026-09-23 §6). Everything is joined and connected, but the
+	// truck does not fit the road - so the reason must say THAT, not "no road from depot",
+	// which would send the player looking for a gap in a road that is there. A 20 m body
+	// fits no lane on the fixture's airport; the real bowser fits them all.
+	{
+		FFuelFixture Fixture;
+		Fixture.Build(/*bWithRoad=*/true);
+		Fixture.Service->TruckVehicle.BodyWidth = 2000.0;
+		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
+		Fixture.Advance(0.2);
+
+		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+		TestEqual(TEXT("because no road is wide enough for the truck"),
+			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
+			static_cast<int32>(EFuelRefusal::TooNarrow));
+		TestEqual(TEXT("and the card says the road is too narrow, not missing"),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
+			FString(TEXT("no road wide enough for the fuel truck")));
+	}
+
 	// A DEPOT WITH NO PUMP. On a road, with a truck, and still unable to fuel - so the
 	// reason must name the PUMP. Before NoPump existed this fell through to NoRoute and
 	// said "no road from depot" about a depot sitting on a road, sending the player to look
