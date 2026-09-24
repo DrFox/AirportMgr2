@@ -52,7 +52,11 @@ struct FRigCourseWaypoint
 	/** The leg that ENDS here, as the log names it: "Standard, right 90". */
 	UPROPERTY() FString Label;
 
-	/** 0 Narrow, 1 Standard, 2 Wide - the service-road width index the lane was laid at. */
+	/**
+	 * 0 Narrow, 1 Standard, 2 Wide - the service-road width index the lane was laid at.
+	 * INDEX_NONE for the return road's waypoints (the width step and the one before it), which
+	 * belong to no single tier.
+	 */
 	UPROPERTY() int32 Tier = 0;
 
 	ERigCourseFeature Feature = ERigCourseFeature::Connector;

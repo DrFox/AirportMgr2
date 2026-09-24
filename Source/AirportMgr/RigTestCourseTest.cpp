@@ -365,6 +365,11 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 		Probe.PerSide[1].Excess, *Probe.PerSide[1].Where), Probe.PerSide[1].Excess <= 10.0);
 	TestTrue(FString::Printf(TEXT("KNOWN GAP: the rig's trailer cuts in past the inner edge on near-side turns (worst %.0f uu: %s)"),
 		Probe.PerSide[0].Excess, *Probe.PerSide[0].Where), Probe.PerSide[0].Excess > 10.0);
+	// AND NO WORSE THAN MEASURED: the floor above only says the gap is still there, so a
+	// regression that put the trailer further off the pavement would pass it. The ceiling is the
+	// measurement - worst 342 uu at the east link's corner, 2026-09-25 - plus a little room.
+	TestTrue(FString::Printf(TEXT("KNOWN GAP, bounded: the rig's inner cut-in is no worse than the 3.4 m measured on 2026-09-25 (worst %.0f uu: %s)"),
+		Probe.PerSide[0].Excess, *Probe.PerSide[0].Where), Probe.PerSide[0].Excess <= 400.0);
 	// The same cut-in shows on the LANE just before a near-side corner (measured 164 uu at the
 	// east link's stub): the trailer leaves the road before the junction pavement begins. Bound
 	// it by the turn's own overrun - it is the approach to that cut, never a worse one.
