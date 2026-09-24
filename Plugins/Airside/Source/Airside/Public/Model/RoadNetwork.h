@@ -31,6 +31,14 @@ class AIRSIDE_API URoadNetwork : public UObject
 	GENERATED_BODY()
 
 public:
+	/**
+	 * Super::PostLoad() then EnsureStandOutlines() - see that function. Only override this
+	 * class has: a level saved before outlines existed (or before stands could be point-
+	 * placed at all) loads with live IsStand() entities carrying no Outline, and nothing
+	 * else in the load path would ever give them one.
+	 */
+	virtual void PostLoad() override;
+
 	FRoadNodeId AddNode(const FVector2D& Position);
 	bool RemoveNode(FRoadNodeId Node);
 
@@ -537,6 +545,33 @@ public:
 	FEntityInstanceId PlaceEntity(const FEntityPlacement& Placement);
 
 	/**
+	 * Give every alive IsStand() entity with Outline.Num() < 3 the Code C box its pose
+	 * implies (StandBox::BoxAt) - a stand drawn with a real letter, or one placed through
+	 * PlaceEntity above since Task 6, already has 4+ points and is skipped. Returns how many
+	 * it changed; logs LogAirside when that is more than zero.
+	 *
+	 * EXISTS FOR LEGACY SAVE DATA - a level saved before a stand's outline was given at
+	 * placement at all. PostLoad calls this so "a stand has an outline" holds everywhere,
+	 * which is what lets WhyStandRefused's overlap check (URoadEditFacade) test every stand
+	 * by outline alone rather than special-casing an un-plotted one.
+	 *
+	 * ALSO SETS DesignWingspan TO IcaoCode::DesignSpanForLetter(EIcaoCode::C) WHEN IT IS 0 -
+	 * an old stand had no captured wingspan at all, and is now being pinned to a real letter
+	 * for the first time, so it is pinned on both axes together rather than gaining an
+	 * outline that implies a letter its admission rule does not honour. NOT DesignWingspan(C)
+	 * ITSELF (Ruling 5): MaxWingspanForLetter(C) is the boundary the NEXT letter's row starts
+	 * at, and reads back as "D" - DesignSpanForLetter sits one uu under it, which is what
+	 * makes the round trip land on C.
+	 *
+	 * DELIBERATELY NOT the same write PlaceEntity's own outline-giving makes (see its call
+	 * site) - a freshly point-placed stand keeps DesignWingspan == 0, "unknown, admits any
+	 * aircraft", which StandChoiceTest's whole module depends on unchanged. Only a stand
+	 * loaded with no outline AT ALL - one that predates Task 6 - is old enough to have never
+	 * had a chance to be admission-limited, and this is the one place that changes.
+	 */
+	int32 EnsureStandOutlines();
+
+	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
 	 * them - RemoveGuidelineNode cascades. So deleting a stand also deletes the taxi line
 	 * drawn into it, which is intended (a lead-in to a deleted stand leads nowhere) but is
@@ -644,6 +679,17 @@ public:
 	 */
 	bool SetEntityPoseRole(FEntityInstanceId Entity, EServiceRole PoseRole);
 
+	/**
+	 * Re-point an entity at Definition. False for a dead entity.
+	 *
+	 * A PURE POINTER WRITE, which is all Model/ may do with a UEntityDefinition (forward
+	 * declared; never dereferenced here). ARoadNetworkActor::RebindStandDefinitions is the
+	 * caller: a drawn D/E/F stand's definition is never saved, so every load re-points it.
+	 * Anchors and trucks are NOT re-captured - a rebind lands on the definition the stand was
+	 * committed from, whose anchors the saved ResolvedAnchors already are.
+	 */
+	bool SetEntityDefinition(FEntityInstanceId Entity, UEntityDefinition* Definition);
+
 	// --- Narrow mutators replacing the raw *Mutable accessors (#191) -------------------
 	// GetSegmentMutable, GetGuidelineEdgeMutable and GetGuidelineNodeMutable used to be
 	// public, which let a caller write one field of a multi-field fact and leave the rest
@@ -704,6 +750,20 @@ public:
 	bool SetGuidelineNodeHoldingPosition(FGuidelineNodeId Node, EHoldingPositionKind Kind, FRoadSegmentId For);
 
 private:
+	/**
+	 * The outline half of EnsureStandOutlines' rule, shared with PlaceEntity(const
+	 * FEntityPlacement&) - ONE PLACE that turns a pose into a Code C box, per Task 6's own
+	 * "implement it once". Writes Instance.Outline and returns true only for a live IsStand()
+	 * entity whose Outline.Num() < 3; a depot, or a stand that already carries a drawn
+	 * outline (any letter), is left alone and this returns false.
+	 *
+	 * DOES NOT TOUCH DesignWingspan - see EnsureStandOutlines' own comment on why that write
+	 * stays out of the placement path. Static: it needs nothing from a live network, only the
+	 * instance handed to it, so both callers can use it on an FEntityInstance& they already
+	 * have without a redundant handle round trip.
+	 */
+	static bool GiveStandOutlineIfMissing(FEntityInstance& Instance);
+
 	void SortIncident(FRoadNodeId Node);
 
 	/** Kept private (#191) - SplitSegment, SetNodePosition and SetRunwayFacts above still
@@ -723,6 +783,12 @@ private:
 	 *  through this directly for PriorityOverride, which none of them cover (see
 	 *  FGuidelineNode::PriorityOverride's own comment). */
 	FGuidelineNode* GetGuidelineNodeMutable(FGuidelineNodeId Node);
+
+	/** Kept private, same reason as the two above: no production placement path writes an
+	 *  entity's Outline after PlaceEntity yet (a stand's own drawn outline is later work in
+	 *  this SDD slice); FRoadNetworkTestAccess::SetEntityOutlineForTest reaches through this
+	 *  to build that case ahead of the tool that will draw one. */
+	FEntityInstance* GetEntityMutable(FEntityInstanceId Entity);
 
 	friend struct FRoadNetworkTestAccess;
 
@@ -820,6 +886,11 @@ struct AIRSIDE_API FRoadNetworkTestAccess
 	/** Write PriorityOverride directly - see FGuidelineNode's own comment. False for a
 	 *  dead node. */
 	bool SetGuidelineNodePriorityOverrideForTest(FGuidelineNodeId Node, TArray<ETraversalClass> PriorityOverride);
+
+	/** Write Outline directly onto an already-placed entity - simulating a drawn stand
+	 *  (Airside.Present.PlotPresenter.StandOutlineIsNotADepot) before any production path can
+	 *  draw one. False for a dead entity. */
+	bool SetEntityOutlineForTest(FEntityInstanceId Entity, TArray<FVector2D> Outline);
 
 private:
 	URoadNetwork& Network;

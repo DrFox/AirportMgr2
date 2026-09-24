@@ -145,8 +145,17 @@ bool FGuideSettingsGiveEveryAxisItsOwnFlagTest::RunTest(const FString& Parameter
 		Defaults.IsReferenceOn(SnapGuide::EReference::ServiceRoad));
 	TestTrue(TEXT("World is on"), Defaults.IsReferenceOn(SnapGuide::EReference::World));
 	TestFalse(TEXT("Runway is off"), Defaults.IsReferenceOn(SnapGuide::EReference::Runway));
-	TestFalse(TEXT("Apron is off"), Defaults.IsReferenceOn(SnapGuide::EReference::Apron));
-	TestFalse(TEXT("and Stand is off"), Defaults.IsReferenceOn(SnapGuide::EReference::Stand));
+
+	// APRON AND STAND ARE ON SINCE 2026-09-24. Both shipped off, and a player reported apron
+	// guides "lost" in PIE: the column was simply off, for the reason Collinear's comment above
+	// records - a guide behind a button nothing points to is a guide the player concludes is
+	// broken. Stand now carries every drawn stand's and depot's edges too, the lines a road on
+	// an apron is most often laid against. Asserted on the fields as well as the switch, since
+	// a reference switch that read some other flag would pass the second and fail the first.
+	TestTrue(TEXT("Apron is on: a road laid beside an apron wants its edge"),
+		Defaults.IsReferenceOn(SnapGuide::EReference::Apron) && Defaults.bApron);
+	TestTrue(TEXT("and Stand is on: a stand's or depot's edge is the commonest thing to line up with"),
+		Defaults.IsReferenceOn(SnapGuide::EReference::Stand) && Defaults.bStand);
 
 	return true;
 }

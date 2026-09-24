@@ -59,8 +59,14 @@ bool SnapGuide::IsLegalCell(ERelation Relation, EReference Reference)
 
 	case ERelation::AngledFrom:
 		// A line out of a reference's END, so the reference needs an end to radiate from - a
-		// segment's node, an apron edge's corner. A stand is a point and a direction with no
-		// end; a world axis has no position at all.
+		// segment's node, an apron edge's corner. A world axis has no position at all.
+		//
+		// STAND JOINED THIS ROW ON 2026-09-24. The hole read "a stand is a point and a direction
+		// with no end", which was true of the only Stand source then - FAlignedGuideSource reads
+		// the POSE - and stopped being true when every stand gained an outline (drawn, or the
+		// Code C box EnsureStandOutlines gives an old one) and a fuel depot its plot. Their
+		// corners are ends exactly as an apron's are, and the Plots instance of
+		// FApronAngledGuideSource throws spokes from them.
 		//
 		// THISGESTURE IS ABSENT, and this is the one hole here that is not about geometry:
 		// LevelWith x ThisGesture already proposes lines through every pinned corner along the
@@ -70,7 +76,8 @@ bool SnapGuide::IsLegalCell(ERelation Relation, EReference Reference)
 		return Reference == EReference::Taxiway
 			|| Reference == EReference::ServiceRoad
 			|| Reference == EReference::Runway
-			|| Reference == EReference::Apron;
+			|| Reference == EReference::Apron
+			|| Reference == EReference::Stand;
 
 	case ERelation::MatchingGap:
 		// THE TWO ROAD COLUMNS, AND THEY ARE GENUINELY DIFFERENT STANDARDS. ICAO separates

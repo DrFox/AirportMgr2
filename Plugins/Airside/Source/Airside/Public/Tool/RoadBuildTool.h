@@ -364,8 +364,8 @@ struct IToolPreviewSink
 	/**
 	 * The dashed line to every guide winner, and its label at the line's midpoint.
 	 *
-	 * FIVE TOOLS MADE THIS EMISSION SEPARATELY - OutlineDrawTool, RunwayTool, StandPlaceTool,
-	 * RoadDrawTool, PlotPlaceTool (#192) - each with its own copy of "one line, one label,
+	 * FIVE TOOLS MADE THIS EMISSION SEPARATELY - OutlineDrawTool, RunwayTool, StandPlaceTool
+	 * (deleted 2026-09-23), RoadDrawTool, PlotPlaceTool (#192) - each with its own copy of "one line, one label,
 	 * per winner" and its own comment defending the copy. NON-VIRTUAL, like Polyline above: it
 	 * is built entirely from Line and Label, so every sink gets it for free rather than each
 	 * reimplementing the loop.

@@ -28,6 +28,34 @@ namespace RoadGeom
 	AIRSIDE_API double CcwAngleBetween(const FVector2D& From, const FVector2D& To);
 
 	/**
+	 * Unsigned angle between two directions, in [0, UE_DOUBLE_PI], as atan2(|cross|, dot).
+	 *
+	 * NOT acos(dot), which every caller wrote first. acos has a square-root singularity at
+	 * +/-1: a dot ONE ulp off -1 - which a snap guide's normalise-project-normalise round trip
+	 * leaves for nearly half of all bearings (40 of 89 in Airside.Tool.TJunctionFitsBothWays,
+	 * 2026-09-24) - reads 1.5e-8 rad off pi, and a caller testing "straight through" any finer
+	 * than that answers by the last bit of a double. That was the T-junction refusal of
+	 * 2026-09-24 (samples/t-junctions.png). atan2 of the pair is accurate to an ulp of the
+	 * ANGLE everywhere, and needs neither input to be unit length.
+	 * ENFORCED BY: Check-Architecture rule 18 (no Acos in Airside/AirportOps production code),
+	 * Airside.Solve.StraightThroughIsOneDefinition
+	 */
+	AIRSIDE_API double AngleBetween(const FVector2D& A, const FVector2D& B);
+
+	/**
+	 * How close to pi two arms' outgoing tangents must be for the node between them to be ONE
+	 * straight road - no corner to round, no cut, whatever the two widths. THE one definition:
+	 * SolveFillet (which draws the junction) and CornerReachAtZeroRadius (which RoadPlacement
+	 * refuses with) both read it through IsStraightThrough. They used to hold 1e-6 and
+	 * `sin < 1e-9` respectively, and in the gap the solver would draw a straight node the
+	 * validator had already refused as a corner hundreds of kilometres long.
+	 */
+	inline constexpr double StraightThroughTolerance = 1e-6;
+
+	/** Whether Theta - an unsigned [0, pi] angle or a CCW [0, 2pi) one - is straight through. */
+	AIRSIDE_API bool IsStraightThrough(double Theta);
+
+	/**
 	 * Current slewed toward Target by at most MaxStep radians, the short way round the
 	 * +/-PI seam, clamped by the REMAINING error so the last step lands exactly on Target
 	 * rather than overshooting it. The turn-rate idiom FTakeoffRun's line-up and
@@ -168,7 +196,8 @@ namespace RoadGeom
 	/**
 	 * How far along each arm the inner corner between two arms sits with NO fillet at all -
 	 * the floor no radius can go below. Theta is the angle between the two outgoing tangents
-	 * (0 = coincident, PI = straight through). Returns false, with both reaches infinite,
+	 * (0 = coincident, PI = straight through: within StraightThroughTolerance - the same test
+	 * SolveFillet makes - both reaches are zero). Returns false, with both reaches infinite,
 	 * when the arms are so nearly coincident that the offset edges never meet.
 	 *
 	 * Closed form of the same intersection SolveFillet finds at Radius 0, kept here so the

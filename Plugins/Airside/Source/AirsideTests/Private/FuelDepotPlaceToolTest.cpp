@@ -11,7 +11,7 @@
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/BuildSession.h"
-#include "Tool/StandPlaceTool.h"
+#include "Tool/RoadEditTarget.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -32,14 +32,13 @@ bool FFuelDepotPlaceToolTest::RunTest(const FString& Parameters)
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
-	FStandPlaceTool DepotTool(EPlaceableEntity::FuelDepot);
-	TestEqual(TEXT("the depot tool names itself"),
-		DepotTool.GetDisplayName().ToString(), FString(TEXT("Fuel depot")));
-
-	FToolContext ToolContext;
-	ToolContext.Target = Actor;
-	ToolContext.Cursor = FVector2D(3000.0, 3000.0);
-	DepotTool.OnClick(ToolContext);
+	// THROUGH THE EDIT TARGET, not a tool. This drove FStandPlaceTool constructed with each
+	// kind until 2026-09-23, when that press-drag-release tool was deleted for the drawn stand
+	// (FStandPlotTool) - but what it asserted was always the FACADE's: that PlaceEntity
+	// resolves the definition by kind and gives each its own pose role. That survives the
+	// tool, so the facade is now called directly and nothing here depends on a gesture.
+	IRoadEditTarget* Target = Actor;
+	Target->PlaceEntity(FVector2D(3000.0, 3000.0), 0.0, EPlaceableEntity::FuelDepot);
 
 	if (!TestEqual(TEXT("one entity placed"), Actor->Network->GetEntities().Num(), 1)) { return false; }
 
@@ -54,12 +53,8 @@ bool FFuelDepotPlaceToolTest::RunTest(const FString& Parameters)
 			Placed.ResolvedAnchors.Num(), 0);
 	}
 
-	// The SAME tool class with the other kind still places a stand: one class, two entries.
-	FStandPlaceTool StandTool(EPlaceableEntity::Stand);
-	TestEqual(TEXT("and the stand tool still names itself"),
-		StandTool.GetDisplayName().ToString(), FString(TEXT("Stand")));
-	ToolContext.Cursor = FVector2D(-3000.0, -3000.0);
-	StandTool.OnClick(ToolContext);
+	// The SAME call with the other kind places a stand: only the definition differs by kind.
+	Target->PlaceEntity(FVector2D(-3000.0, -3000.0), 0.0, EPlaceableEntity::Stand);
 
 	if (!TestEqual(TEXT("two entities now"), Actor->Network->GetEntities().Num(), 2)) { return false; }
 	{
@@ -83,8 +78,7 @@ bool FFuelDepotPlaceToolTest::RunTest(const FString& Parameters)
 	// names DA_FuelDepot. That is the resolver's whole contract, and what a player who never
 	// touches the Details panel gets.
 	Actor->FuelDepotDefinition = nullptr;
-	ToolContext.Cursor = FVector2D(9000.0, 9000.0);
-	DepotTool.OnClick(ToolContext);
+	Target->PlaceEntity(FVector2D(9000.0, 9000.0), 0.0, EPlaceableEntity::FuelDepot);
 	if (!TestEqual(TEXT("the content default places a third entity"),
 		Actor->Network->GetEntities().Num(), 3)) { return false; }
 	TestEqual(TEXT("and it is a depot, by its pose role"),
@@ -103,8 +97,7 @@ bool FFuelDepotPlaceToolTest::RunTest(const FString& Parameters)
 		Settings->Content.Reset();
 		ON_SCOPE_EXIT { Settings->Content = Configured; };
 
-		ToolContext.Cursor = FVector2D(15000.0, 15000.0);
-		DepotTool.OnClick(ToolContext);
+		Target->PlaceEntity(FVector2D(15000.0, 15000.0), 0.0, EPlaceableEntity::FuelDepot);
 		TestEqual(TEXT("no depot definition anywhere places nothing"),
 			Actor->Network->GetEntities().Num(), 3);
 	}

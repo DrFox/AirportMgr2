@@ -77,6 +77,55 @@ namespace IcaoCode
 	AIRSIDE_API FString LetterForWingspan(double WingspanUu);
 
 	/**
+	 * LetterForWingspan's own inverse for the WIDEST letter: the widest wingspan, uu, that
+	 * Code still admits before the NEXT letter up would be asked for - Rows' own MaxWingspan
+	 * column, read back out.
+	 *
+	 * THE ONE REAL "TOO WIDE" TEST THIS TABLE HAS. LetterForWingspan's contract is
+	 * deliberately total - "anything wider F" (see its own comment) - so it can never itself
+	 * report a span nothing on the table admits; that is exactly right for a caller that only
+	 * ever wants "the nearest reasonable letter" and must not refuse. A caller that DOES need
+	 * to refuse a genuinely unadmittable span - StandAdmits below is the one that exists for -
+	 * asks THIS function about EIcaoCode::F instead. Added for exactly that call, after an
+	 * earlier drawn-stands admission draft tried to special-case "wider than F" by composing
+	 * LetterForWingspan + Parse alone and found it structurally could not: a genuine Code F
+	 * aircraft and one twice as wide as anything ever built both parse to the string "F", and
+	 * nothing outside this file could tell them apart without exposing the row's own ceiling.
+	 * Pinned against LetterForWingspan's own band edges by
+	 * Airside.Solve.MaxWingspanForLetterMatchesTheBandEdges.
+	 *
+	 * THE VALUE ITSELF IS THE EXCLUSIVE EDGE FOR EVERY LETTER BUT F, AND INCLUSIVE FOR F.
+	 * LetterForWingspan's row loop is `WingspanUu < Row.MaxWingspan` - strictly less - so a
+	 * span exactly AT Code X's own ceiling has ALREADY rolled over and reads as the NEXT
+	 * letter up; only a span a hair under it still reads as X. Code F alone has no row above
+	 * it to roll into, so both a hair under its ceiling and exactly AT it still read "F" - see
+	 * the test named above for both halves of this, pinned for all six letters. A caller that
+	 * wants a span which reads back as ITS OWN letter - a drawn stand's captured
+	 * DesignWingspan, for one - wants DesignSpanForLetter below, not this value directly.
+	 */
+	AIRSIDE_API double MaxWingspanForLetter(EIcaoCode Code);
+
+	/**
+	 * The widest wingspan, uu, that still reads back as Code through LetterForWingspan - "the
+	 * widest aircraft this letter's stand may honestly claim to be designed for".
+	 *
+	 * NOT MaxWingspanForLetter(Code) ITSELF, for every letter but F - see that function's own
+	 * comment: its value is the EXCLUSIVE edge, already the next letter's, so a caller that
+	 * captured it as a "Code X" aircraft's span would have LetterForWingspan (and therefore
+	 * IcaoCode::StandAdmits/StandRank, which both read a captured span through it) report the
+	 * stand as one letter wider than it was drawn. A hair under the ceiling - one uu, which has
+	 * no meaning beyond "not the ceiling itself" - is the whole of the correction. Code F is
+	 * the one exception: it has nothing above it to roll into, so its own ceiling is ALREADY
+	 * the widest span the table still calls F (LetterForWingspan reads "F" both a hair under
+	 * it and exactly at it), and MaxWingspanForLetter(F) is used unchanged.
+	 *
+	 * Pinned for all six letters by Airside.Solve.DesignSpanForLetterReadsBackAsItsOwnLetter:
+	 * LetterForWingspan(DesignSpanForLetter(L)) == ToLetter(L), and
+	 * StandAdmits(DesignSpanForLetter(L), DesignSpanForLetter(L)) is true.
+	 */
+	AIRSIDE_API double DesignSpanForLetter(EIcaoCode Code);
+
+	/**
 	 * The widest wingspan, uu, that a runway of TotalWidth, uu, is built for. Nearest code
 	 * wins; a width shared by two letters (45 m serves both D and E) resolves to the WIDER
 	 * one, because the wider figure is the one the width was actually chosen for.
@@ -250,4 +299,45 @@ namespace IcaoCode
 	 * box, so a crossing of any length is found.
 	 */
 	AIRSIDE_API bool WingKeepOutCrossedBy(EIcaoCode Code, const FVector2D& A, const FVector2D& B);
+
+	/**
+	 * THE ONE ADMISSION RULE: may an aircraft of AircraftSpanUu use a stand designed for
+	 * StandDesignSpanUu - compared by LETTER, never by the raw spans against each other.
+	 *
+	 * WHY A LETTER COMPARE AND NOT StandDesignSpanUu >= AircraftSpanUu: a stand's captured
+	 * DesignWingspan is often a LEGACY figure (an older measurement of the type it was drawn
+	 * for, or a hand-typed one) rather than today's authored span, and two different numbers
+	 * can be the SAME letter - LetterForWingspan(3410) and LetterForWingspan(3580) are both
+	 * "C". Comparing the raw doubles would refuse a 737-800 (3580) a stand built for an A320
+	 * whose captured span happens to read 3410, even though both are ordinary Code C
+	 * aeroplanes and the stand fits either. See Airside.Solve.StandAdmitsComparesLetters.
+	 *
+	 * ONE RULE, TWO CALLERS: ArrivalPlanner::ChooseStand (live dispatch, shortest taxi among
+	 * admitted stands) and UStandAllocator::Reserve (holding a stand for an accepted flight
+	 * before it lands) used to each compare the raw spans their own way, and had started to
+	 * disagree - a legacy-span stand admitted a 737 in one and refused it in the other, same
+	 * aircraft, same stand. Moved here so there is exactly one place this can be decided.
+	 *
+	 * UNKNOWN ADMITS ANYTHING, EITHER SIDE: StandDesignSpanUu <= 0 (a stand nobody measured -
+	 * FEntityInstance::DesignWingspan's own "unknown") or AircraftSpanUu <= 0 (an airframe
+	 * that never set Wingspan - every hand-built TestAirframes fixture bar the measured ones,
+	 * and any content older than this rule) means there is nothing to compare a size against,
+	 * so nothing is refused for size - exactly the behaviour every caller saw before this rule
+	 * existed.
+	 *
+	 * WIDER THAN EVERY LETTER ADMITS (AircraftSpanUu > MaxWingspanForLetter(EIcaoCode::F)) IS
+	 * NEVER ADMITTED, full stop - see MaxWingspanForLetter's own comment on why this is the
+	 * one place that ceiling can be asked about at all.
+	 */
+	AIRSIDE_API bool StandAdmits(double StandDesignSpanUu, double AircraftSpanUu);
+
+	/**
+	 * Ordinal for ranking stands against each other by size: A=0 .. F=5, for "the SMALLEST
+	 * admitted stand wins" (GDD: big stands are kept for big aircraft). UNKNOWN (<= 0) RANKS
+	 * AS C - the legacy default IcaoCode's own RadiusForLetter fallback used before Parse
+	 * existed - so an unmeasured stand competes at a nominal middling size rather than always
+	 * winning (as the smallest) or always losing (as the largest) a best-stand comparison
+	 * against measured ones. Only meaningful for a stand StandAdmits already agreed to.
+	 */
+	AIRSIDE_API int32 StandRank(double StandDesignSpanUu);
 }

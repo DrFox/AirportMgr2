@@ -23,7 +23,8 @@ bool UOfferGenerator::IsPermanentRefusal(EArrivalRefusal Why)
 		return false;
 
 	// These need the player to BUILD something. NoRunway, RunwayTooShort, NotAdmitted,
-	// NoExit, NoRouteToStand.
+	// NoExit, NoRouteToStand, NoStandBigEnough (a bigger stand - so no airline is offered an
+	// A380 until an F stand exists, which is the drawn-stands spec's own promise).
 	default:
 		return true;
 	}

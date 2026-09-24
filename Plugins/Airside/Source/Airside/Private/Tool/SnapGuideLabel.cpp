@@ -49,6 +49,29 @@ namespace
 			// would read, exactly as FApronGuideSource's own header says.
 			return TEXT("the apron edge");
 
+		case SnapGuide::ELabelSubject::ApronCorner:
+			return TEXT("the apron corner");
+
+		case SnapGuide::ELabelSubject::EntityEdge:
+		case SnapGuide::ELabelSubject::EntityCorner:
+		{
+			// HONOURED, NOT ASSUMED, like GesturePoint above: a stale index says so with "".
+			if (!Network.GetEntities().IsValidIndex(Label.SubjectIndex))
+			{
+				return FString();
+			}
+			const FEntityInstance& Entity = Network.GetEntities()[Label.SubjectIndex];
+			const bool bCorner = Label.Subject == SnapGuide::ELabelSubject::EntityCorner;
+
+			// BY KIND, which the instance captured at placement - a Model/ fact, no definition
+			// read. The last word is EntityNaming's own for an unnamed thing, and is unreachable
+			// while ForEachOutlineEdge walks only stands and depots.
+			const TCHAR* Kind = Entity.IsDepot() ? TEXT("fuel depot")
+				: Entity.IsStand() ? TEXT("stand")
+				: TEXT("installation");
+			return FString::Printf(TEXT("the %s's %s"), Kind, bCorner ? TEXT("corner") : TEXT("edge"));
+		}
+
 		default:
 			return FString();
 		}
@@ -93,6 +116,9 @@ FString SnapGuide::Describe(const URoadNetwork& Network, const FGuideAnchor& Anc
 
 	case ELabelKind::EdgeFlushWith:
 		return FString::Printf(TEXT("edge flush with %s"), *Name);
+
+	case ELabelKind::LevelWith:
+		return FString::Printf(TEXT("level with %s"), *Name);
 
 	case ELabelKind::MatchingGap:
 		// /100.0: GapUu is uu and 100 uu is 1 m, the same conversion FOffsetGuideSource's Printf

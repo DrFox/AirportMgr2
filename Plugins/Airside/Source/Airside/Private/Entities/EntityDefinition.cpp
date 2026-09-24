@@ -5,6 +5,7 @@
 #include "Model/RoadNetwork.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/IcaoCode.h"
+#include "Solve/RoadGeom.h"
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient()
 {
@@ -27,6 +28,38 @@ UEntityDefinition* UEntityDefinition::MakeStandTransient()
 	BuildCodeCStand(Definition, A320);
 
 	return Definition;
+}
+
+UEntityDefinition* UEntityDefinition::MakeStandTransient(EIcaoCode Letter, UObject* Outer)
+{
+	// THE SAME A320 THE ZERO-ARG OVERLOAD USES, and only for Code C - see the header. No
+	// shipped UAircraftType is sized for D, E or F yet (that is Task 5's job in the
+	// drawn-stands plan); a null design aircraft is supported by BuildStandFor and does not
+	// change RequiredExtent, which is all a caller measuring "does the letter's floor fit"
+	// needs.
+	UAircraftType* Aircraft = nullptr;
+	if (Letter == EIcaoCode::C)
+	{
+		Aircraft = NewObject<UAircraftType>(Outer);
+		UAircraftType::BuildA320(Aircraft);
+	}
+
+	UEntityDefinition* Definition = NewObject<UEntityDefinition>(Outer);
+	BuildStandFor(Definition, Aircraft, Letter, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	return Definition;
+}
+
+bool UEntityDefinition::FitsItsLetter(const UEntityDefinition& Stand, EIcaoCode Letter)
+{
+	// THE TOOL TRUSTS THIS RATHER THAN RE-DERIVING IT - see the header. Both halves: the raw
+	// bounds against Letter's own floor, AND that the extent still reads back as Letter under
+	// LetterForStandSize, which answers the LARGEST letter the extent admits rather than just
+	// "does it fit inside Letter's box".
+	return Stand.RequiredExtent.X <= IcaoCode::StandWidthForLetter(Letter)
+		&& Stand.RequiredExtent.Y <= IcaoCode::StandDepthForLetter(Letter)
+		&& IcaoCode::LetterForStandSize(Stand.RequiredExtent.X, Stand.RequiredExtent.Y)
+			== IcaoCode::ToLetter(Letter);
 }
 
 void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition, UAircraftType* Aircraft)
@@ -98,7 +131,9 @@ namespace
 				continue;
 			}
 
-			const double Interior = FMath::Acos(FMath::Clamp(FVector2D::DotProduct(In, Out), -1.0, 1.0));
+			// AngleBetween, not acos(dot) - Check-Architecture rule 18. The pi - 0.01 test below
+			// never needed the precision; the one idiom is what the rule can hold.
+			const double Interior = RoadGeom::AngleBetween(In, Out);
 			if (Interior > UE_DOUBLE_PI - 0.01)
 			{
 				// Collinear: no corner to round, and CornerRunFor would return nothing useful.
@@ -173,6 +208,15 @@ FRoutePlan FStandLeg::ToPlan() const
 void UEntityDefinition::BuildCodeCStandFor(
 	UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest)
 {
+	// A ONE-LINE FORWARDER - see the header. The body used to live here with Letter pinned to
+	// C as a local const; it is now BuildStandFor's body with Letter a parameter, so this name
+	// keeps compiling for build_stand_asset.py and the tests that measure Code C's derivation.
+	BuildStandFor(Definition, Aircraft, EIcaoCode::C, Largest);
+}
+
+void UEntityDefinition::BuildStandFor(
+	UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FChassis& Largest)
+{
 	if (Definition == nullptr)
 	{
 		return;
@@ -186,7 +230,11 @@ void UEntityDefinition::BuildCodeCStandFor(
 	// a stand nothing can be shown parked on.
 	Definition->DesignAircraft = Aircraft;
 
-	// A Code C contact stand: the ground half of a turnaround.
+	// A contact stand: the ground half of a turnaround. This function now takes Letter as a
+	// parameter rather than pinning it to C: the wing-relative fixtures below (hydrant, hold,
+	// GPU) move with Letter's own wing band, but the passenger door and tug stand are still
+	// the FIXED offsets authored for Code C's fuselage - they do not re-derive per letter. What
+	// results is measured, not assumed to fit: see FitsItsLetter and the every-letter test.
 	//
 	// ORIGIN is the NOSE GEAR STOP POSITION - the mark painted on the apron that a docking
 	// guidance system stops the aircraft at. An aircraft parked here shares this pose
@@ -209,7 +257,8 @@ void UEntityDefinition::BuildCodeCStandFor(
 		Definition->Anchors.Add(Fixture);
 	};
 
-	const EIcaoCode Letter = EIcaoCode::C;
+	// Letter is now a PARAMETER - see BuildStandFor's header. What was here was a local const
+	// pinning it to C; every use below reads the parameter unchanged.
 
 	// EVERY FIXTURE IS CLEAR OF THE WING, and that is what places them rather than taste.
 	// Ruled 2026-09-17: nothing drives under a wing, so a service position beneath one could

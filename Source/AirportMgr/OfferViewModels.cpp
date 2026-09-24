@@ -55,9 +55,11 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 		// THE REASON-ONLY OVERLOAD, not a plan built by hand just to carry Why - ToastStackWidget
 		// already reads it this way, and a plan with every other field default-constructed is not
 		// a plan, it is Why wearing a bigger struct.
+		// THE FLIGHT'S OWN SPAN rides along so NoStandBigEnough can name the letter to build
+		// ("needs a Code F stand") - the row has the airframe, which the toast does not.
 		Refusal = Why == EArrivalRefusal::None
 			? FText::GetEmpty()
-			: FText::FromString(ArrivalPlanner::DescribeRefusal(Why));
+			: FText::FromString(ArrivalPlanner::DescribeRefusal(Why, Live->Airframe.Wingspan));
 
 		BoardRevisionAt = BoardNow;
 		GuidelineRevisionAt = GuidelineNow;

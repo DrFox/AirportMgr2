@@ -52,6 +52,12 @@ enum class EArrivalRefusal : uint8
 	/** Stands are reachable, but every one of them is held by another aircraft. Distinct from
 	 *  NoRouteToStand because the player's fix differs: wait (or build a stand), not a taxiway. */
 	NoFreeStand,
+
+	/** Stands exist, but every one of them is too SMALL for this aircraft - StandAdmits refused
+	 *  them all, reachable or not. Distinct from NoRouteToStand because the player's fix
+	 *  differs: draw a bigger stand, not a taxiway. FArrivalPlan::AircraftWingspan names the
+	 *  letter needed. */
+	NoStandBigEnough,
 };
 
 /**
@@ -97,6 +103,13 @@ struct AIRSIDE_API FArrivalPlan
 	UPROPERTY() FRoutePlan TaxiIn;
 
 	/**
+	 * The planned airframe's wingspan, uu - carried so DescribeRefusal can name the stand
+	 * letter a NoStandBigEnough refusal needs ("needs a Code F stand") from the plan alone,
+	 * the same reason Needed is carried for RunwayTooShort's figures.
+	 */
+	UPROPERTY() double AircraftWingspan = 0.0;
+
+	/**
 	 * None means every step above succeeded and every other field is meaningful.
 	 *
 	 * DEFAULTS TO NoRunway, not None - fail closed. A default-constructed plan (one nobody
@@ -118,12 +131,24 @@ struct AIRSIDE_API FArrivalPlan
 namespace ArrivalPlanner
 {
 	/**
-	 * The best FREE stand reachable from From: shortest taxi with runway edges excluded, skipping
-	 * any stand whose pose node Occupancy says is held by an agent other than ExcludingAgent.
-	 * Unset when none. OutRoute receives the winning route; bOutSawHeld reports that at least one
-	 * reachable stand was skipped for being held, which is how Plan tells NoFreeStand from
-	 * NoRouteToStand. Factored out of Plan so the rebuild can ask it from a node that is not a
-	 * runway exit (UGroundTraffic::ReResolvePlan) and the re-offer from wherever a waiter stopped.
+	 * The best FREE stand reachable from From that Airframe is ADMITTED to: the SMALLEST ICAO
+	 * letter stand that is Airframe's own letter or wider (never smaller - GDD's "smallest
+	 * free stand that fits", so a widebody never parks an A320 out of the one stand it needs),
+	 * then the shortest taxi among ties, with runway edges excluded and any stand whose pose
+	 * node Occupancy says is held by an agent other than ExcludingAgent skipped. Unset when
+	 * none. An airframe with no known wingspan (Wingspan <= 0) or a stand nobody measured
+	 * (DesignWingspan == 0) is admitted to anything, as it always was before letter admission
+	 * existed - there is nothing to compare a size against.
+	 *
+	 * OutRoute receives the winning route; bOutSawHeld reports that at least one reachable,
+	 * ADMITTED stand was skipped for being held, which is how Plan tells NoFreeStand from
+	 * NoRouteToStand - a stand skipped for being too SMALL is neither, and is not counted here.
+	 * Plan tells NoStandBigEnough apart on its own, by asking every stand on the field rather
+	 * than the reachable ones: a too-small stand's lead-in carries its letter's span limit
+	 * (FAnchorLink), so to a widebody it is not even REACHABLE, and a count taken here would
+	 * never see it.
+	 * Factored out of Plan so the rebuild can ask it from a node that is not a runway exit
+	 * (UGroundTraffic::ReResolvePlan) and the re-offer from wherever a waiter stopped.
 	 */
 	AIRSIDE_API FGuidelineNodeId ChooseStand(const URoadNetwork& Network, FGuidelineNodeId From,
 		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingAgent,
@@ -161,6 +186,11 @@ namespace ArrivalPlanner
 	 * where a measurement belongs would be worse than omitting it. The wording still lives
 	 * in ONE switch - the plan overload defers to this and then adds its figures - so the
 	 * two cannot drift into describing the same refusal differently.
+	 *
+	 * AircraftWingspan, when a caller has one (the inbox has the flight's airframe; the toast
+	 * does not), lets NoStandBigEnough name the letter to build. It is not a figure off a plan
+	 * - it is the aircraft's own span, which the inbox knows as surely as the plan does - and
+	 * 0 falls back to the letter-free sentence.
 	 */
-	AIRSIDE_API FString DescribeRefusal(EArrivalRefusal Why);
+	AIRSIDE_API FString DescribeRefusal(EArrivalRefusal Why, double AircraftWingspan = 0.0);
 }

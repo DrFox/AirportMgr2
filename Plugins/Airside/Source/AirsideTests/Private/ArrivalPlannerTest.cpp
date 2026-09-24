@@ -1,14 +1,17 @@
 #include "CoreMinimal.h"
 #include "Content/AirsideSettings.h"
 #include "AirsideTestFixtures.h"
+#include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -273,6 +276,76 @@ bool FArrivalPlannerNoRouteToStandTest::RunTest(const FString& Parameters)
 		Plan.Why, EArrivalRefusal::NoRouteToStand);
 	TestTrue(TEXT("and at least one exit was found - the refusal is about the STAND, not the exit"),
 		Plan.ExitCount > 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// (f2) FINAL REVIEW I6: every stand on the field is too SMALL. The route is there - the
+// taxiway reaches a stand - so "no route from any usable exit to a stand" sends the player to
+// build a taxiway that already exists. The fix is a bigger stand, and the refusal says which
+// letter.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalPlannerNoStandBigEnoughTest,
+	"Airside.Model.ArrivalPlanner.NoStandBigEnough",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalPlannerNoStandBigEnoughTest::RunTest(const FString& Parameters)
+{
+	// THE PIPER'S LANDING, AN A380'S WINGS: every other figure stays the fixture's own so the
+	// runway, exit and taxi are the ones NoRouteToStand above already proves work. Only the
+	// span - the one input stand admission reads - is the widebody's (79.8 m, published).
+	FAirframe Airframe = TestAirframes::Piper();
+	Airframe.Wingspan = 7980.0;
+	const double Needed = FLandingRun::RequiredLandingDistance(
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+	const double RunwayLength = Needed * 1.5;
+
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
+
+	// THE RUNWAY ADMITS IT, so the refusal under test is the STAND's. A 45 m strip's width
+	// table says Code E (RunwayAdmission reads a declared guideline limit first), which would
+	// refuse this airframe NotAdmitted before a stand is ever asked about.
+	if (!TestTrue(TEXT("the runway profile has a centre guideline to declare a limit on"),
+		Runway->Guidelines.Num() > 0)) { return false; }
+	Runway->Guidelines[0].MaxWingspan = IcaoCode::MaxWingspanForLetter(EIcaoCode::F);
+
+	const FVector2D ThresholdAt(0.0, 0.0);
+	const FVector2D ExitAt(RunwayLength * 0.8, 0.0);
+	const FRoadNodeId Threshold = Network->AddNode(ThresholdAt);
+	const FRoadNodeId Exit = Network->AddNode(ExitAt);
+	const FRoadNodeId Far = Network->AddNode(FVector2D(RunwayLength, 0.0));
+	Network->AddStraightSegment(Threshold, Exit, Runway);
+	Network->AddStraightSegment(Exit, Far, Runway);
+	const FRoadNodeId TaxiEnd = Network->AddNode(ExitAt + FVector2D(0.0, -20000.0));
+	Network->AddStraightSegment(Exit, TaxiEnd, Taxiway);
+
+	// ONE CODE C STAND beside the taxiway, facing east so its lead-in casts west onto it -
+	// FTestAirport's own stand pose, but with a MEASURED span: a 0 would admit anything.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	Network->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -10000.0), 0.0,
+		IcaoCode::DesignSpanForLetter(EIcaoCode::C), Stand->PoseRole, Stand->Trucks);
+
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
+	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FAnchorLink::Build(*Network, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe);
+	TestEqual(TEXT("only too-small stands refuses NoStandBigEnough, not NoRouteToStand"),
+		Plan.Why, EArrivalRefusal::NoStandBigEnough);
+
+	const FString Sentence = ArrivalPlanner::DescribeRefusal(Plan);
+	TestTrue(FString::Printf(TEXT("the refusal names the letter the player must build: '%s'"), *Sentence),
+		Sentence.Contains(TEXT("Code F")));
+	TestFalse(TEXT("and does not send them to build a taxiway"), Sentence.Contains(TEXT("route")));
+
+	// THE INBOX AND THE TOAST SEE ONLY THE REASON (see DescribeRefusal's two overloads); the
+	// inbox has the flight's airframe, so it can still name the letter.
+	TestTrue(TEXT("the reason-only sentence names the letter when handed the span"),
+		ArrivalPlanner::DescribeRefusal(EArrivalRefusal::NoStandBigEnough, Airframe.Wingspan).Contains(TEXT("Code F")));
+	TestFalse(TEXT("and is not empty without one - the toast has no airframe"),
+		ArrivalPlanner::DescribeRefusal(EArrivalRefusal::NoStandBigEnough).IsEmpty());
 	return true;
 }
 

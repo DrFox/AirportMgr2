@@ -12,7 +12,9 @@ class UAirsideContent;
 class USkeletalMesh;
 class UStaticMesh;
 class UEntityDefinition;
+class UAircraftType;
 enum class EPlaceableEntity : uint8;
+enum class EIcaoCode : uint8;
 
 /** What UAirsideSettings::ResolveAgentView resolved - see its own comment. */
 USTRUCT()
@@ -205,6 +207,26 @@ public:
 	 * ARoadNetworkActor::ResolveStandDefinition / ::ResolveFuelDepotDefinition.
 	 */
 	static UEntityDefinition* ResolvePlaceable(EPlaceableEntity Kind);
+
+	/**
+	 * The largest shipped UAircraftType whose ICAO code letter is Letter, or null - the
+	 * drawn-stand commit path's one place to ask "what would actually park on a Code X
+	 * stand", matching every other Resolve* here (CLAUDE.md's "Content/ resolves every
+	 * content default in exactly one function").
+	 *
+	 * RETURNS NULL FOR EVERY LETTER TODAY, and that is a finding, not a stub left half done.
+	 * UAirsideContent carries exactly one aircraft reference (DefaultAircraft, a single
+	 * TSoftObjectPtr) - no per-letter table and no list of shipped UAircraftType assets to
+	 * search (grepped: there is no AircraftTypes array anywhere in AirsideContent.h). Adding
+	 * an AssetRegistry scan to answer one letter would be exactly the kind of mechanism this
+	 * project reaches for only when nothing simpler exists, and a scan built for this one
+	 * caller would still need a per-letter Code match on every asset found, which is a second
+	 * table by another name. Code C does not call this at all - it keeps its authored
+	 * DA_Stand_CodeC / DA_Aircraft_A320 pairing through ResolveStandDefinition - so this is
+	 * the seam a future per-letter aircraft asset would resolve through, not a duplicate of
+	 * Code C's own answer.
+	 */
+	static UAircraftType* ResolveLargestAircraftOfLetter(EIcaoCode Letter);
 
 	/** A service vehicle's body mesh - the content default, or null with none configured. */
 	static UStaticMesh* ResolveVehicleMesh();

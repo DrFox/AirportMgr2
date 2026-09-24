@@ -246,7 +246,7 @@ bool FRoadBuildEdModeCommandBindingTest::RunTest(const FString& Parameters)
 
 /**
  * ISSUE #190: URoadBuildEditorTool::OwnSession used to be a VALUE member - a full nine-tool
- * FBuildSession (FRoadDrawTool x2, FApronDrawTool, FStandPlaceTool, FGuidelineDrawTool,
+ * FBuildSession (FRoadDrawTool x2, FApronDrawTool, FStandPlotTool, FGuidelineDrawTool,
  * FRunwayTool, FHoldingPointTool, FPlotPlaceTool, FSelectTool) constructed by every activation
  * ITF made, whether or not this instance ever read it - which it never does once
  * SetSharedSession has been called, since Sess() always prefers SharedSession. This is what

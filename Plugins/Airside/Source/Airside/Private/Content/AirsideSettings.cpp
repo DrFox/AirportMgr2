@@ -301,6 +301,16 @@ UEntityDefinition* UAirsideSettings::ResolvePlaceable(EPlaceableEntity Kind)
 	return Found != nullptr ? Found->LoadSynchronous() : nullptr;
 }
 
+UAircraftType* UAirsideSettings::ResolveLargestAircraftOfLetter(EIcaoCode Letter)
+{
+	// SEE THE HEADER: no scannable per-letter list exists (UAirsideContent carries one
+	// DefaultAircraft soft pointer, not a table), and adding an AssetRegistry scan for one
+	// caller would be a second table by another name. Null for every letter until a real
+	// one is authored and this function is the one place that starts resolving it.
+	(void)Letter;   // kept named for the caller and for when a real table lands
+	return nullptr;
+}
+
 UStaticMesh* UAirsideSettings::ResolveVehicleMesh()
 {
 	const UAirsideContent* Content = GetContent();

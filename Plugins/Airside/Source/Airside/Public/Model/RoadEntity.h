@@ -297,10 +297,38 @@ struct AIRSIDE_API FEntityInstance
 	UPROPERTY() TArray<FVector2D> Outline;
 
 	/**
-	 * Drawn as a plot - a depot - rather than stamped at a pose like a stand. The one test
-	 * for it, so "is this a plot" is not re-spelled as a count at each new call site.
+	 * Has a drawn outline - a depot plot OR a drawn stand. The one test for "was this drawn
+	 * rather than stamped", so a count is not re-spelled at each new call site.
+	 *
+	 * NEVER USE IT TO MEAN "DEPOT": a stand can be plotted too (2026-09-23's "drawn stands"
+	 * work), so a site that fences, prices or labels by outline alone now catches a stand as
+	 * well - ask IsDepot() (or IsStand()) for kind, and IsPlotted() only for "has ground to
+	 * draw". Check-Architecture.ps1's IsPlotted rule is what stops this meaning drifting back.
 	 */
 	bool IsPlotted() const { return Outline.Num() >= 3; }
+
+	/** A stand: its pose node is an aircraft's stop mark. PoseRole is the captured kind -
+	 *  Model/ cannot ask the definition. */
+	bool IsStand() const { return PoseRole == EServiceRole::Aircraft; }
+
+	/** A fuel depot, plotted or pre-plot. */
+	bool IsDepot() const { return PoseRole == EServiceRole::Fuel; }
+
+	/**
+	 * May an aircraft be sent here at all: alive, a stand, and with a stop mark to route to.
+	 * Size is NOT asked here - that is IcaoCode::StandAdmits, once this has said yes.
+	 *
+	 * ONE PREDICATE, TWO CALLERS: ArrivalPlanner::ChooseStand (live dispatch) and
+	 * UStandAllocator::Reserve (holding a stand for an accepted flight). They used to spell
+	 * the filter each their own way, and the allocator's spelling had no IsStand() - harmless
+	 * while it compared raw spans, and a fuel depot handed to an airliner the day it switched
+	 * to StandAdmits, under which a depot's 0 span means "unknown, admits anything" (final
+	 * review C1). A member rather than a free function beside ChooseStand because both inputs
+	 * are this instance's own captured facts, exactly like IsStand() above, and AirportOps
+	 * already includes this header and not ArrivalPlanner's.
+	 * ENFORCED BY: AirportOps.Model.StandAllocator.NeverReservesADepot.
+	 */
+	bool IsStandCandidate() const { return bAlive && PoseNode.IsSet() && IsStand(); }
 
 	/**
 	 * What the player put in the bays, in bay order. Empty for a plotless entity.

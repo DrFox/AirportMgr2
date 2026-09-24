@@ -343,6 +343,19 @@ public:
 	static UEntityDefinition* MakeStandTransient();
 
 	/**
+	 * A transient stand template for ANY ICAO letter, A-F - the overload MakeStandTransient()
+	 * specialises to Code C.
+	 *
+	 * NO AIRCRAFT YET for a letter other than C: the shipping stand still gets the real A320
+	 * (see MakeStandTransient()'s own comment on why the fixture must be the shipping stand),
+	 * but nothing yet names "the" largest shipped airframe of each OTHER letter, so those
+	 * templates are built against nullptr - BuildStandFor's header says a null aircraft is
+	 * supported. A caller that measures whether a letter's FLOOR fits its own template does
+	 * not need an aircraft to do it: RequiredExtent comes off IcaoCode and the anchors alone.
+	 */
+	static UEntityDefinition* MakeStandTransient(EIcaoCode Letter, UObject* Outer = GetTransientPackage());
+
+	/**
 	 * Fill Definition with the Code C contact stand layout, replacing whatever it held.
 	 *
 	 * Shared by MakeStandTransient and the commandlet that authors the DA_Stand_CodeC data
@@ -372,9 +385,49 @@ public:
 	 * the equipment boxes must move outward; asked of the shipping vehicle alone, that
 	 * assertion would pass just as well against a hand-typed figure, which is exactly what
 	 * this change removes. BuildCodeCStand forwards with ResolveLargestServiceVehicle().
+	 *
+	 * A ONE-LINE FORWARDER onto BuildStandFor(..., EIcaoCode::C, ...) since the drawn-stand
+	 * work generalised the body to every letter - kept, at this name, because
+	 * Tools/Python/build_stand_asset.py and the tests that prove Code C's derivation both
+	 * call it.
 	 */
 	static void BuildCodeCStandFor(
 		UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest);
+
+	/**
+	 * BuildCodeCStandFor's body, generalised to ANY ICAO letter: the plant, the lane and the
+	 * bays for a contact stand sized off IcaoCode's row for Letter rather than Code C's alone.
+	 *
+	 * ONE BODY FOR EVERY LETTER, not six copies, because the anchors - the hydrant, the hold,
+	 * the GPU, the door, the tug stand - are Code C's plant positioned relative to the wing
+	 * band and the letter's own floor (see BuildStandTemplate), and that arithmetic does not
+	 * change with the letter. What DOES change per letter is whether the result fits: a
+	 * template built for the wing band and ground clearances a small letter's floor cannot
+	 * hold may overflow its own box, and this function does not correct for that - it lays
+	 * the plant and reports the extent it needed. FitsItsLetter is the verdict.
+	 *
+	 * A NULL AIRCRAFT IS SUPPORTED for every letter, same as BuildCodeCStandFor: only
+	 * DesignAircraft is set from it, and nothing else in this body or BuildStandTemplate
+	 * dereferences the pointer.
+	 */
+	static void BuildStandFor(
+		UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FChassis& Largest);
+
+	/**
+	 * True when Stand's measured RequiredExtent both fits inside Letter's floor (width and
+	 * depth) AND still reads back as Letter under LetterForStandSize - the same test the
+	 * table itself would apply to a hand-drawn rectangle of that size.
+	 *
+	 * BOTH HALVES, DELIBERATELY, not just the bounds check. LetterForStandSize answers the
+	 * LARGEST letter whose width AND depth both fit the extent (IcaoCode.h's own doc), so a
+	 * template that fits inside Letter's box but whose extent is also big enough to admit the
+	 * NEXT letter up would pass the bounds check and still not be Letter's stand - it would be
+	 * a bigger letter's stand that happened to be built under this letter's name. THE DRAWN-STAND
+	 * TOOL TRUSTS THIS FUNCTION RATHER THAN RE-DERIVING IT: a tool that re-checked bounds on
+	 * its own would be a second opinion on the same numbers, and the two could drift the way
+	 * CLAUDE.md warns two tables always do.
+	 */
+	static bool FitsItsLetter(const UEntityDefinition& Stand, EIcaoCode Letter);
 
 	/**
 	 * Lay the layout template - entry, staging rank, a bay per service anchor, and the legs

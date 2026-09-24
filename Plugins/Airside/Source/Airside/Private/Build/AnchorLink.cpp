@@ -73,6 +73,56 @@ namespace
 		return IcaoCode::RadiusForLetter(EIcaoCode::C);
 	}
 
+	/** What a stand's aircraft lead-in is laid to: the widest wing it takes, and its radius. */
+	struct FLeadInSizing
+	{
+		/** uu; 0 is UNLIMITED, FProfileGuideline::MaxWingspan's own convention. */
+		double MaxWingspan = 0.0;
+		/** uu - see RadiusForCode above. */
+		double Radius = 0.0;
+	};
+
+	/**
+	 * THE ONE RULE for sizing a lead-in: the stand's own LETTER - the one admission reads
+	 * (IcaoCode::StandAdmits compares by letter against the captured DesignWingspan) - for
+	 * both the painted radius and the span limit.
+	 *
+	 * FROM THE CAPTURED DesignWingspan, not the definition's design aircraft (final review
+	 * I5). A drawn D, E or F stand has NO design aircraft (UAirsideSettings::
+	 * ResolveLargestAircraftOfLetter returns null for every letter today), and reading the
+	 * aircraft gave it Code C's 25 m radius and no span limit at all. And even with one,
+	 * the aircraft's RAW span was a second rule disagreeing with the first: a Code C stand
+	 * designed around the A320 (34.1 m) limited its lead-in to 34.1 m, so a 737-800 (35.8 m,
+	 * also C) was ADMITTED to the stand and then TooWide on the only line into it.
+	 * MaxWingspanForLetter is the letter's own ceiling - exclusive for A-E, so an edge's
+	 * "Wingspan > MaxWingspan" refuses exactly what StandAdmits refuses, bar the one span AT
+	 * the ceiling, which admission has already turned away.
+	 *
+	 * AN UNMEASURED STAND (DesignWingspan 0, the raw PlaceEntity fixtures and every depot)
+	 * keeps the old reading - the design aircraft if there is one, else unlimited at Code C's
+	 * radius - because 0 says nothing about a letter, and "unknown admits anything" is
+	 * StandAdmits' own contract for it.
+	 */
+	FLeadInSizing LeadInSizingFor(const FEntityInstance& Instance)
+	{
+		FLeadInSizing Out;
+		if (Instance.IsStand() && Instance.DesignWingspan > 0.0)
+		{
+			// Parse of a letter this program derived (LetterForWingspan is total), so it is
+			// always set - read through the TOptional anyway, per IcaoCode::Parse's own note.
+			if (const TOptional<EIcaoCode> Letter = IcaoCode::Parse(IcaoCode::LetterForWingspan(Instance.DesignWingspan)))
+			{
+				Out.MaxWingspan = IcaoCode::MaxWingspanForLetter(*Letter);
+				Out.Radius = IcaoCode::RadiusForLetter(*Letter);
+				return Out;
+			}
+		}
+		const UAircraftType* Design = Instance.Definition != nullptr ? Instance.Definition->DesignAircraft.Get() : nullptr;
+		Out.MaxWingspan = Design != nullptr ? Design->Footprint.Wingspan : 0.0;
+		Out.Radius = RadiusForCode(Design != nullptr ? Design->Code : FName());
+		return Out;
+	}
+
 	/**
 	 * Which way a link LEAVES a declared entry, and how much lane there is that way.
 	 *
@@ -252,20 +302,16 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		// place allowed to know a handle is {index, generation}.
 		const FEntityInstanceId EntityId = Network.EntityIdAt(Index);
 
-		// The stand's design aircraft is what its lead-in can take. A Code C stand's link
-		// then refuses a widebody by the ordinary wingspan rule rather than by a special
-		// case, and the search reports TooWide instead of a bare "no route".
-		const double StandWingspan = Instance.Definition->DesignAircraft != nullptr
-			? Instance.Definition->DesignAircraft->Footprint.Wingspan
-			: 0.0;
-
-		// The same design aircraft decides how wide the painted line sweeps. Its CODE
-		// LETTER, not its span: aerodromes are dimensioned by code letter, and the line is
-		// laid once for the largest aircraft the stand admits.
-		const double StandRadius = RadiusForCode(
-			Instance.Definition->DesignAircraft != nullptr
-				? Instance.Definition->DesignAircraft->Code
-				: FName());
+		// The stand's LETTER is what its lead-in can take - see LeadInSizingFor for why the
+		// letter and not the design aircraft. A Code C stand's link then refuses a widebody by
+		// the ordinary wingspan rule rather than by a special case, and the search reports
+		// TooWide instead of a bare "no route".
+		//
+		// The same letter decides how wide the painted line sweeps: aerodromes are dimensioned
+		// by code letter, and the line is laid once for the largest aircraft the stand admits.
+		const FLeadInSizing Sizing = LeadInSizingFor(Instance);
+		const double StandWingspan = Sizing.MaxWingspan;
+		const double StandRadius = Sizing.Radius;
 
 		// The pose first. It is not an anchor - see FEntityInstance::PoseNode - but it needs
 		// a lead-in for exactly the same reason, and it is the one the entity's OWN traffic
@@ -443,10 +489,7 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		// back to the circular fillet Link.Radius / tan(theta/2). It is carried rather than
 		// dropped because that fallback still needs a radius, and 2500 uu for a Code C is the
 		// painted line's own.
-		const double StandRadius = RadiusForCode(
-			Instance->Definition->DesignAircraft != nullptr
-				? Instance->Definition->DesignAircraft->Code
-				: FName());
+		const double StandRadius = LeadInSizingFor(*Instance).Radius;
 
 		// ONE STATEMENT OF WHAT AN ENTRY LINK IS, used by the probe below and by the link
 		// finally emitted. Written twice they could differ, and the probe would then be
@@ -702,8 +745,9 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 			// AND WHETHER ITS CORNER FITS IN FRONT OF THE ENTRY. The turn onto the road is the
 			// GENTLER of the two corners the connector makes with it - the one a truck joining
 			// the traffic takes - and CornerRunFor says how much run that needs.
-			const double Turn = FMath::Acos(FMath::Clamp(
-				FMath::Abs(FVector2D::DotProduct(Along, RoadDir)), -1.0, 1.0));
+			// The ACUTE angle between the two lines, folded from AngleBetween's [0, pi] - rule 18.
+			const double Crossing = RoadGeom::AngleBetween(Along, RoadDir);
+			const double Turn = FMath::Min(Crossing, UE_DOUBLE_PI - Crossing);
 			const double Needs = GuidelineGeom::CornerRunFor(LaneRadius, UE_DOUBLE_PI - Turn);
 
 			// LINK.REACH IS DOING TWO JOBS HERE, and the second one is named so it is deliberate.
@@ -785,9 +829,10 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// The lead-in makes two corners with the taxiway - theta one way, 180 - theta the
 	// other - and the SHARPER one sizes the offset, so it gets at least its radius and
 	// the shallower one simply sweeps more gently.
-	const double Cosine = FMath::Clamp(
-		FVector2D::DotProduct(-Link.Dir, TaxiDir), -1.0, 1.0);
-	const double Theta = FMath::Acos(Cosine);
+	// AngleBetween, not acos: the guard below is a thousandth of a radian and acos was never
+	// wrong by that much, but one idiom for "the angle between two directions" is the one
+	// Check-Architecture rule 18 can hold (see RoadGeom::AngleBetween for the one that bit).
+	const double Theta = RoadGeom::AngleBetween(-Link.Dir, TaxiDir);
 	const double Sharper = FMath::Min(Theta, UE_DOUBLE_PI - Theta);
 
 	double Offset = 0.0;

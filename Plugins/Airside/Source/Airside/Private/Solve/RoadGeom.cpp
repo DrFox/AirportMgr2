@@ -78,6 +78,19 @@ double RoadGeom::CcwAngleBetween(const FVector2D& From, const FVector2D& To)
 	return Angle;
 }
 
+double RoadGeom::AngleBetween(const FVector2D& A, const FVector2D& B)
+{
+	// atan2(|cross|, dot), never acos(dot) - see the header. The absolute cross folds the
+	// result into [0, pi], which is what the unsigned callers (corner reach, turn limits,
+	// guide error) all want.
+	return FMath::Atan2(FMath::Abs(FVector2D::CrossProduct(A, B)), FVector2D::DotProduct(A, B));
+}
+
+bool RoadGeom::IsStraightThrough(double Theta)
+{
+	return FMath::Abs(Theta - UE_DOUBLE_PI) < StraightThroughTolerance;
+}
+
 bool RoadGeom::LineIntersect(const FRay2D& A, const FRay2D& B, FVector2D& OutPoint)
 {
 	const double Denominator = A.Dir.X * B.Dir.Y - A.Dir.Y * B.Dir.X;
@@ -142,13 +155,17 @@ RoadGeom::FFillet RoadGeom::SolveFillet(const FRay2D& A, const FRay2D& B, double
 	FFillet Result;
 	Result.Theta = CcwAngleBetween(A.Dir, B.Dir);
 
+	// The near-COINCIDENT guard below only. It happens to hold the same 1e-6 as
+	// StraightThroughTolerance, but it answers a different question (is the half-angle too
+	// small to divide by) and must not be what "straight through" is read from.
 	constexpr double CollinearEpsilon = 1e-6;
 
 	// Theta == PI means the two edges run in opposite directions along one straight
 	// line: there is no corner to round. This is the COMMON case, not an edge case,
 	// because long drags auto-subdivide into collinear segments. Rounding here would
-	// facet every straight run.
-	if (FMath::Abs(Result.Theta - UE_DOUBLE_PI) < CollinearEpsilon)
+	// facet every straight run. IsStraightThrough, not a local epsilon: the placement
+	// validator must call exactly these nodes straight, or it refuses roads this draws.
+	if (IsStraightThrough(Result.Theta))
 	{
 		Result.bValid = true;
 		Result.bStraightThrough = true;
@@ -394,11 +411,25 @@ bool RoadGeom::CornerReachAtZeroRadius(double HalfWidthA, double HalfWidthB, dou
 	//
 	// THE SOLVER WAS NEVER THE PROBLEM: every chained road makes a node with two arms at pi,
 	// and those have always drawn. It was this validator alone that would not allow one.
+	//
+	// AND "AT pi" MEANS THE SOLVER'S pi, NOT THE LAST BIT OF ONE (2026-09-24,
+	// samples/t-junctions.png). The fix above still asked `sin < 1e-9`, i.e. within 1e-9 rad,
+	// while SolveFillet calls a node straight within 1e-6. A guided click one ulp off the line
+	// read 1.5e-8 off pi through acos - inside the solver's window, outside this one - and
+	// with a width step between the arms (a service road judged at the taxiway's width) the
+	// near-parallel inner edges met (dHalf / 1.5e-8) = ~680 km out: a T refused as
+	// "too short to hold the corner". So straight-through is read from IsStraightThrough, the
+	// one definition both share, and the sine test below is left guarding only the hairpin.
+	if (IsStraightThrough(Theta))
+	{
+		OutAlongA = OutAlongB = 0.0;
+		return true;
+	}
 	if (SinTheta < 1e-9)
 	{
-		const bool bStraightThrough = CosTheta < 0.0;
-		OutAlongA = OutAlongB = bStraightThrough ? 0.0 : TNumericLimits<double>::Max();
-		return bStraightThrough;
+		// Only Theta -> 0 can reach here now: the hairpin, which has no finite reach.
+		OutAlongA = OutAlongB = TNumericLimits<double>::Max();
+		return false;
 	}
 
 	OutAlongA = FMath::Max(0.0, (HalfWidthB + HalfWidthA * CosTheta) / SinTheta);

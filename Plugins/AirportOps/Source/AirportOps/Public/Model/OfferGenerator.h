@@ -96,8 +96,8 @@ public:
 	 * PERMANENT refusals only. RunwayOccupied and NoFreeStand clear on their own, so an
 	 * aeroplane refused for those is still worth offering - the player answers the offer
 	 * minutes before it lands, and the row shows the live reason meanwhile. RunwayTooShort,
-	 * NotAdmitted, NoExit and NoRouteToStand do not clear without the player building
-	 * something, so offering them is offering a button that can never be pressed.
+	 * NotAdmitted, NoExit, NoRouteToStand and NoStandBigEnough do not clear without the
+	 * player building something, so offering them is offering a button that can never be pressed.
 	 *
 	 * Static because it reads its arguments and nothing else, and because the tests want to
 	 * ask it without owning a generator.

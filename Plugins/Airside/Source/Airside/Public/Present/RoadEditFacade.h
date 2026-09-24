@@ -183,6 +183,9 @@ public:
 		FVector2D FrontageA, FVector2D FrontageB,
 		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) override;
 	using IRoadEditTarget::PlaceStand;
+	virtual int32 PlaceStandInPlot(const TArray<FVector2D>& Outline,
+		FVector2D EntranceA, FVector2D EntranceB) override;
+	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline) const override;
 	virtual bool DeleteEntity(int32 EntityIndex) override;
 	virtual int32 FindEntityAt(FVector2D Where, double Radius) const override;
 	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity Kind) const override;
@@ -437,6 +440,17 @@ private:
 	 */
 	PlotYard::FReservation ReserveForPlot(TArrayView<const FVector2D> Outline,
 		FVector2D FrontageA, FVector2D FrontageB, EPlaceableEntity Kind) const;
+
+	/**
+	 * The one quote a drawn stand is priced at: BuildCost::ForEntity(Definition) plus the pad
+	 * it sits on (QuoteForApron(Outline)), combined into one "{0} + {1}" What text - the same
+	 * shape QuoteForApron's own callers in PlaceEntityInPlot already sum by hand, pulled out
+	 * here because WhyStandRefused's afford gate and PlaceStandInPlot's charge both need
+	 * EXACTLY this figure and had drifted into two slightly different copies of it (fix round
+	 * 1 on this task's own review).
+	 */
+	FBuildQuote QuoteStand(const UEntityDefinition& Definition,
+		TArrayView<const FVector2D> Outline) const;
 
 	IBuildPurse* Purse = nullptr;
 

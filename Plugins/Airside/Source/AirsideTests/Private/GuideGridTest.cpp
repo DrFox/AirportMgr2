@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Solve/GuideArbiter.h"
@@ -12,7 +13,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 /**
- * THE GRID IS A LIST, AND THIS IS ITS FIRST CONSUMER. Twenty-five of the forty-two pairs are
+ * THE GRID IS A LIST, AND THIS IS ITS FIRST CONSUMER. Twenty-six of the forty-two pairs are
  * legal; a hole is a statement, not an omission, so the count is asserted rather than the shape.
  * See the 2026-09-20 guide-grid design section 3 for each hole's reason.
  *
@@ -20,6 +21,9 @@
  * same day. Five cells arrived by that doubling and one by argument: LevelWith x Runway, whose
  * hole had rested on a runway's thresholds being "ordinary nodes already served by Road" - a
  * sentence the split made false. See SnapGuide::IsLegalCell's LevelWith row.
+ *
+ * TWENTY-SIX SINCE 2026-09-24: AngledFrom x Stand, once every stand and depot had an outline
+ * whose corners are ends to radiate from. See IsLegalCell's AngledFrom row.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FGuideGridDeclaresItsCellsTest,
@@ -45,7 +49,7 @@ bool FGuideGridDeclaresItsCellsTest::RunTest(const FString& Parameters)
 			}
 		}
 	}
-	TestEqual(TEXT("twenty-five of the forty-two pairs are legal"), Legal, 25);
+	TestEqual(TEXT("twenty-six of the forty-two pairs are legal"), Legal, 26);
 
 	// THE TWO ROAD COLUMNS AGREE, ROW BY ROW. A taxiway and a service road are the same SHAPE
 	// on the field - a centreline with pavement either side and ends to radiate from - so
@@ -85,6 +89,11 @@ bool FGuideGridDeclaresItsCellsTest::RunTest(const FString& Parameters)
 		SnapGuide::IsLegalCell(SnapGuide::ERelation::AngledFrom, SnapGuide::EReference::ThisGesture));
 	TestTrue(TEXT("but another road's end does throw spokes"),
 		SnapGuide::IsLegalCell(SnapGuide::ERelation::AngledFrom, SnapGuide::EReference::Taxiway));
+
+	// AND SO DOES A STAND'S CORNER, since 2026-09-24 - the hole this cell used to be rested on
+	// "a stand is a point and a direction with no end", which its outline made false.
+	TestTrue(TEXT("a stand's or depot's outline corner throws spokes too"),
+		SnapGuide::IsLegalCell(SnapGuide::ERelation::AngledFrom, SnapGuide::EReference::Stand));
 
 	return true;
 }
@@ -170,9 +179,11 @@ bool FGuideGridHasNoCellOutsideTheListTest::RunTest(const FString& Parameters)
 	// AN APRON TOO, since 2026-09-20 - four sources answer for that column now, and this test is
 	// the only thing standing between them and a cell the grid does not declare.
 	//
-	// NO STAND: placing an entity needs a UEntityDefinition this fixture has no business
-	// authoring, so the Stand column stays unexercised here. Said out loud because a test whose
-	// coverage is narrower than its name is how a green run comes to mean nothing.
+	// A STAND TOO, since 2026-09-24. This used to say "no stand: placing an entity needs a
+	// UEntityDefinition this fixture has no business authoring" - but the test world resolves a
+	// stand definition for PlaceStand, and a point-placed stand now carries a Code C outline, so
+	// the four outline sources' Plots instances tag the Stand column here and must be seen to
+	// tag only declared cells. The stand is asserted plotted below, or it would exercise nothing.
 	if (!TestTrue(TEXT("the runway is laid"),
 		TestGuide::LayRunway(Actor, FVector2D(-30000.0, 9000.0), FVector2D(30000.0, 9000.0))))
 	{
@@ -195,6 +206,15 @@ bool FGuideGridHasNoCellOutsideTheListTest::RunTest(const FString& Parameters)
 	const int32 VanEast = Target->PlaceNode(FVector2D(10000.0, -3000.0));
 	Target->ConnectNodes(VanWest, VanEast, ERoadKind::ServiceRoad, INDEX_NONE);
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
+
+	const int32 Stand = Target->PlaceStand(FVector2D(-4000.0, 5000.0), 0.0);
+	if (!TestTrue(TEXT("a stand is placed"), Actor->Network->GetEntities().IsValidIndex(Stand))) { return false; }
+	const FEntityInstance& Placed = Actor->Network->GetEntities()[Stand];
+	if (!TestTrue(TEXT("and it has an outline for the Plots sources to walk"),
+		Placed.IsStand() && Placed.IsPlotted()))
+	{
+		return false;
+	}
 
 	FGuideAnchor Anchor;
 	Anchor.Origin = FVector2D(0.0, 3000.0);

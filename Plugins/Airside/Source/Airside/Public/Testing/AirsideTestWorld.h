@@ -189,6 +189,11 @@ struct FNullEditTarget : IRoadEditTarget
 	using IRoadEditTarget::PlaceStand;
 	virtual int32 PlaceEntityInPlot(const TArray<FVector2D>&, FVector2D, FVector2D,
 		const TArray<EDepotModule>&, EPlaceableEntity) override { return INDEX_NONE; }
+	virtual int32 PlaceStandInPlot(const TArray<FVector2D>&, FVector2D, FVector2D) override { return INDEX_NONE; }
+	/** A NULL TARGET HAS NOTHING TO OFFER, so it refuses rather than answering the empty
+	 *  string "placeable" - the one WhyStandRefused implementer where an empty Outline is
+	 *  the normal case, not a malformed one. */
+	virtual FString WhyStandRefused(TArrayView<const FVector2D>) const override { return TEXT("no target"); }
 	virtual bool DeleteEntity(int32) override { return false; }
 	virtual int32 FindEntityAt(FVector2D, double) const override { return INDEX_NONE; }
 	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity) const override { return nullptr; }

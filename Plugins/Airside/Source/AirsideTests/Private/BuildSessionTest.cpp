@@ -66,20 +66,24 @@ bool FBuildSessionTest::RunTest(const FString& Parameters)
 			PlaneHitSession.LastPlaneHit().Equals(FVector2D(1234.0, -500.0), 1e-6));
 	}
 
-	// 5. WHICH TOOLS GUIDE A GESTURE THAT HAS NOT STARTED, and it is FIVE of the nine - ruled
+	// 5. WHICH TOOLS GUIDE A GESTURE THAT HAS NOT STARTED, and it is FOUR of the nine - ruled
 	// 2026-09-20: "a lot of the tools would benefit from snapping to guides before the first
 	// place of the road. It doesnt make sense for all of them, but some it does."
+	//
+	// FIVE UNTIL 2026-09-23: the stand was one, for lining a row of stands up by their stop
+	// marks. The drawn stand (FStandPlotTool) anchors its first click on a taxiway's step grid,
+	// as the depot does on a service road's, so a free-start guide there would be drawn and
+	// then not obeyed - the stand left this list for the reason the depot was never on it.
 	//
 	// THE LIST IS WRITTEN HERE, BY ID, AND NOT ASKED OF THE TOOLS. Walking the registry and
 	// comparing each tool's WantsFreeStartGuides() against itself would pass however the
 	// virtual was answered - the vacuous shape this file's item 2 exists to avoid. Naming the
-	// five is what makes a sixth tool opting in, or one of these quietly dropping out, a
+	// four is what makes a fifth tool opting in, or one of these quietly dropping out, a
 	// failure rather than a change nobody notices.
 	{
 		const TSet<FName> FreeStarts = {
 			FName(TEXT("Taxiway")),   // in line with an existing one, or a gap from a pair
 			FName(TEXT("Apron")),     // an outline started flush with a road edge
-			FName(TEXT("Stand")),     // level with a row of stands - see FStandPlaceTool
 			FName(TEXT("Runway")),    // a threshold in line with another runway
 			FName(TEXT("Road")),      // the same argument as Taxiway; one class, two entries
 		};
