@@ -12,8 +12,26 @@ WHY THIS EXISTS, given that import_plane2.py says materials are NOT authored her
 That note is right about what it was defending against: hand-typing base colours into Unreal
 is a second transcription of numbers that already live in Blender, and the two drift the
 first time the model is re-exported. Nothing below types a colour. Values are read out of the
-exported .glb, so Blender stays the single source of truth and a re-export followed by a
-re-run of this script propagates a change with no hand editing.
+exported .glb, so Blender stays the single source of truth for a look NOT YET ACCEPTED.
+
+THE CONTRACT CHANGED ON 2026-09-24 (task 3b, fix round 1) FOR A LOOK ALREADY ACCEPTED: an
+EXISTING shared MI_* instance's colour is now FROZEN by default, and a re-run does NOT
+propagate a change to it on its own. The incident: fuelTrailer1 joined the fleet, its own
+scraped "chassis"/"tyre"/"metal"/etc. values landed within MERGE_TOL of eleven EXISTING shared
+instances, and because a cluster's saved value was always whichever asset's export happened to
+be scraped FIRST (see collect()'s own comment - never an average), fuelTrailer1 silently became
+those eleven instances' new representative, nudging every OTHER vehicle wearing them by up to
+MERGE_TOL - and for the "body" look specifically renamed MI_Body_TruckCab1 to
+MI_Body_FuelTrailer1, which then read as unreferenced and got truckCab1's own untouched mesh
+re-saved to follow it. None of that was a deliberate recolour; it was a side effect of an
+unrelated import. See ensure_instance's own comment for the guard.
+
+A DELIBERATE recolour - the look was genuinely re-authored in Blender and the shared instance
+should follow - still needs no hand editing: name the look in REFRESH_LOOKS below for one run
+(it is read every time this script runs, by -script= or by airside_import.
+rebuild_fleet_materials()'s exec - both paths import this same module-level list, so no
+argument-passing mechanism was needed for either caller), let the rebuild run, then remove it.
+Leaving a look in REFRESH_LOOKS permanently is exactly the bug this contract exists to prevent.
 
 What changed is the requirement. Interchange's glTF pipeline delivered exactly what it was
 asked for, and it is unusable for three reasons:
@@ -108,6 +126,16 @@ EXACT_TOL = 1e-6
 SLOT_RENAMES = {
     "/Game/Aircraft/Plane3/SK_Plane3": {"plane3_metal": "plane3_strut"},
 }
+
+# THE OPT-IN FOR A DELIBERATE RECOLOUR - see the docstring's own "THE CONTRACT CHANGED ON
+# 2026-09-24" section. ensure_instance() below refuses to rewrite an EXISTING MI_* instance's
+# colour/metallic/roughness unless its LOOK NAME (the bare word, e.g. "chassis" or "body" -
+# not the instance name "MI_Chassis") is listed here. Name a look for ONE run to push a real
+# change through from whichever asset is now its representative, then remove it - a look left
+# here permanently means every future import can silently re-nudge it again, which is the
+# 2026-09-24 incident this whole contract exists to prevent. Empty by default: nothing here
+# has needed a deliberate recolour yet.
+REFRESH_LOOKS = set()
 
 
 def say(msg):
@@ -284,35 +312,48 @@ def existing_suffixed_name(look, assets):
     return None
 
 
-def ensure_instance(master, name, values):
+def ensure_instance(master, name, values, look):
+    """Create the instance if it is missing; otherwise leave its VALUE alone unless `look` is
+    in REFRESH_LOOKS - see that list's own comment and the docstring's "THE CONTRACT CHANGED ON
+    2026-09-24" section for why an existing instance is frozen by default and how to opt out of
+    that, deliberately, for one run.
+    """
     lib = unreal.MaterialEditingLibrary
     path = "%s/%s" % (MAT_DIR, name)
     old = "%s/%s" % (OLD_DIR, name)
     if (not unreal.EditorAssetLibrary.does_asset_exist(path)
             and unreal.EditorAssetLibrary.does_asset_exist(old)):
         unreal.EditorAssetLibrary.rename_asset(old, path)
+
     if unreal.EditorAssetLibrary.does_asset_exist(path):
-        # CREATE-IF-MISSING, AND NOTHING ELSE, FOR AN ASSET THAT ALREADY EXISTS - task 3b's
-        # incident (2026-09-24), same root cause existing_suffixed_name's own comment records:
-        # a shared MI_* is the fleet's ACCEPTED LOOK for everything already wearing it, and
-        # re-deriving its value from whichever asset the CURRENT run's clustering happens to
-        # put first (never an average - see collect()'s own comment) silently nudges every
-        # OTHER vehicle's colour by up to MERGE_TOL every time a new asset joins its cluster.
-        # Parenting is still asserted (cheap, and needed once if OLD_DIR migration just ran);
-        # the three VALUE parameters and the save below are SKIPPED - an existing instance's
-        # authored look is the one thing here that must be re-derived on purpose, not as a
-        # side effect of some other asset's import.
         mi = unreal.EditorAssetLibrary.load_asset(path)
         lib.set_material_instance_parent(mi, master)
-        return mi
+        if look not in REFRESH_LOOKS:
+            # CREATE-IF-MISSING, AND NOTHING ELSE, FOR AN ASSET THAT ALREADY EXISTS - task 3b's
+            # incident (2026-09-24), same root cause existing_suffixed_name's own comment
+            # records: a shared MI_* is the fleet's ACCEPTED LOOK for everything already
+            # wearing it, and re-deriving its value from whichever asset the CURRENT run's
+            # clustering happens to put first (never an average - see collect()'s own comment)
+            # silently nudges every OTHER vehicle's colour by up to MERGE_TOL every time a new
+            # asset joins its cluster. Parenting is still asserted above (cheap, and needed
+            # once if OLD_DIR migration just ran); the three VALUE parameters and the save
+            # below are SKIPPED - an existing instance's authored look is the one thing here
+            # that must be re-derived on PURPOSE (REFRESH_LOOKS), not as a side effect of some
+            # other asset's import.
+            return mi
+        say("REFRESH %s: '%s' is in REFRESH_LOOKS - rewriting its value from this run's own "
+            "representative" % (name, look))
+    else:
+        tools = unreal.AssetToolsHelpers.get_asset_tools()
+        mi = tools.create_asset(name, MAT_DIR, unreal.MaterialInstanceConstant,
+                                unreal.MaterialInstanceConstantFactoryNew())
+        if mi is None:
+            fail("create_asset returned None for %s" % path)
+            return None
+        lib.set_material_instance_parent(mi, master)
 
-    tools = unreal.AssetToolsHelpers.get_asset_tools()
-    mi = tools.create_asset(name, MAT_DIR, unreal.MaterialInstanceConstant,
-                            unreal.MaterialInstanceConstantFactoryNew())
-    if mi is None:
-        fail("create_asset returned None for %s" % path)
-        return None
-    lib.set_material_instance_parent(mi, master)
+    # REACHED BY TWO PATHS ONLY: a brand-new instance, or an existing one whose look opted into
+    # REFRESH_LOOKS above - never by an existing instance nothing asked to change.
     rgb, metallic, rough = values[0], values[1], values[2]
     lib.set_material_instance_vector_parameter_value(
         mi, "BaseColor", unreal.LinearColor(rgb[0], rgb[1], rgb[2], 1.0))
@@ -399,7 +440,7 @@ def run():
                 # shared (whole-fleet, one-cluster) look's name never depends on `lead` at all
                 # (instance_name's own branch) and so cannot be perturbed this way.
                 name = existing_suffixed_name(look, cluster["assets"]) or name
-            mi = ensure_instance(master, name, cluster["values"])
+            mi = ensure_instance(master, name, cluster["values"], look)
             if mi is None:
                 continue
             made.append(name)
