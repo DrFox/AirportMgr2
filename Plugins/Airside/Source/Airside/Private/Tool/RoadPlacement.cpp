@@ -35,7 +35,9 @@ namespace
 	 */
 	bool CornerFits(const FArm& New, const FArm& Existing, double& OutReachOnNew)
 	{
-		const double Theta = FMath::Acos(FMath::Clamp(FVector2D::DotProduct(New.Dir, Existing.Dir), -1.0, 1.0));
+		// AngleBetween, not acos(dot): acos reads a guided click one ulp off -1 as 1.5e-8 rad
+		// off pi, which is how a straight T came to be refused (RoadGeom::AngleBetween).
+		const double Theta = RoadGeom::AngleBetween(New.Dir, Existing.Dir);
 		double AlongNew = 0.0;
 		double AlongExisting = 0.0;
 		if (!RoadGeom::CornerReachAtZeroRadius(New.Half, Existing.Half, Theta, AlongNew, AlongExisting))
@@ -90,8 +92,9 @@ ERoadPlacement RoadPlacement::Validate(const URoadNetwork& Network, FRoadNodeId 
 		{
 			return false;
 		}
-		const double Cosine = FMath::Clamp(FVector2D::DotProduct(A, B), -1.0, 1.0);
-		return FMath::RadiansToDegrees(FMath::Acos(Cosine)) < Limits.MinTurnDegrees;
+		// acos would do at a 25-degree limit; AngleBetween anyway, so this file measures a
+		// corner one way and rule 18 has no exception to carry for it.
+		return FMath::RadiansToDegrees(RoadGeom::AngleBetween(A, B)) < Limits.MinTurnDegrees;
 	};
 
 	const FVector2D Outgoing = (To.Position - Start->Position) / Length;
@@ -320,7 +323,9 @@ bool RoadPlacement::NodeCornersFit(const URoadNetwork& Network, FRoadNodeId Node
 			{
 				return false;
 			}
-			const double Theta = FMath::Acos(FMath::Clamp(FVector2D::DotProduct(Arms[I].Dir, Arms[J].Dir), -1.0, 1.0));
+			// AngleBetween for the reason CornerFits gives: a node dragged onto a guide line
+			// must read straight through, not 1.5e-8 off it.
+			const double Theta = RoadGeom::AngleBetween(Arms[I].Dir, Arms[J].Dir);
 			double AlongI = 0.0;
 			double AlongJ = 0.0;
 			if (!RoadGeom::CornerReachAtZeroRadius(Arms[I].Half, Arms[J].Half, Theta, AlongI, AlongJ))

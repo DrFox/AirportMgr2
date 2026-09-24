@@ -745,8 +745,9 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 			// AND WHETHER ITS CORNER FITS IN FRONT OF THE ENTRY. The turn onto the road is the
 			// GENTLER of the two corners the connector makes with it - the one a truck joining
 			// the traffic takes - and CornerRunFor says how much run that needs.
-			const double Turn = FMath::Acos(FMath::Clamp(
-				FMath::Abs(FVector2D::DotProduct(Along, RoadDir)), -1.0, 1.0));
+			// The ACUTE angle between the two lines, folded from AngleBetween's [0, pi] - rule 18.
+			const double Crossing = RoadGeom::AngleBetween(Along, RoadDir);
+			const double Turn = FMath::Min(Crossing, UE_DOUBLE_PI - Crossing);
 			const double Needs = GuidelineGeom::CornerRunFor(LaneRadius, UE_DOUBLE_PI - Turn);
 
 			// LINK.REACH IS DOING TWO JOBS HERE, and the second one is named so it is deliberate.
@@ -828,9 +829,10 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// The lead-in makes two corners with the taxiway - theta one way, 180 - theta the
 	// other - and the SHARPER one sizes the offset, so it gets at least its radius and
 	// the shallower one simply sweeps more gently.
-	const double Cosine = FMath::Clamp(
-		FVector2D::DotProduct(-Link.Dir, TaxiDir), -1.0, 1.0);
-	const double Theta = FMath::Acos(Cosine);
+	// AngleBetween, not acos: the guard below is a thousandth of a radian and acos was never
+	// wrong by that much, but one idiom for "the angle between two directions" is the one
+	// Check-Architecture rule 18 can hold (see RoadGeom::AngleBetween for the one that bit).
+	const double Theta = RoadGeom::AngleBetween(-Link.Dir, TaxiDir);
 	const double Sharper = FMath::Min(Theta, UE_DOUBLE_PI - Theta);
 
 	double Offset = 0.0;

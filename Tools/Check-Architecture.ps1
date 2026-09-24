@@ -94,6 +94,9 @@
           IsStand() states the kind explicitly and is exempt (Controller ruling, 2026-09-23:
           later tasks write `IsStand() && IsPlotted()` outside these files and that must
           pass too).
+      18. No Acos in the Airside/AirportOps production modules (2026-09-24). acos(dot) is
+          1.5e-8 rad wrong one ulp from +/-1, which refused a guided T junction as "too short
+          to hold the corner"; RoadGeom::AngleBetween (atan2 of cross and dot) is the idiom.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -773,10 +776,28 @@ foreach ($tree in $trees) {
     }
 }
 
+# --- 18. No Acos in production: the angle between two directions is RoadGeom::AngleBetween ---
+# 2026-09-24, samples/t-junctions.png. acos(dot) has a square-root singularity at +/-1: a dot one
+# ulp off -1 - which a snap guide's round trip leaves for 40 of 89 bearings - reads 1.5e-8 rad off
+# pi, and RoadPlacement's `sin < 1e-9` straight-through test then refused a T the solver (1e-6)
+# would have drawn. The same shape sat at six sites; GuideArbiter's 1e-9-degree TieEpsilon was
+# swamped by it too. AngleBetween is atan2(|cross|, dot), accurate everywhere. RoadGeom.cpp is
+# not exempt because AngleBetween does not need acos either. Test modules are exempt (a test
+# may measure what acos says, as Airside.Tool.TJunctionFitsBothWays does on purpose).
+foreach ($module in $modules) {
+    foreach ($file in Get-Sources $module @('.h', '.cpp')) {
+        foreach ($h in (Select-String -Path $file.FullName -Pattern '\bAcos\s*\(')) {
+            $t = $h.Line.Trim()
+            if ($t -match '^(//|/\*|\*)') { continue }
+            $failures.Add("no-acos: $($file.FullName):$($h.LineNumber) measures an angle with acos, which is 1.5e-8 rad wrong one ulp from +/-1; use RoadGeom::AngleBetween (fold with Min(T, pi - T) for a line): $t")
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 Write-Host "Check-Architecture: $($commentFactWarnings.Count) comment-only-fact warning(s) (rule 12; see Tools/Check-Architecture.ps1's own comment)." -ForegroundColor Yellow
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations, graph-probe, run-width, chassis-only, turn-index-pairing, is-plotted-not-depot)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations, graph-probe, run-width, chassis-only, turn-index-pairing, is-plotted-not-depot, no-acos)' -ForegroundColor Green
     exit 0
 }
 

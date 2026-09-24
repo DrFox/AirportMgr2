@@ -1,5 +1,7 @@
 #include "Solve/GuideArbiter.h"
 
+#include "Solve/RoadGeom.h"
+
 namespace
 {
 	/**
@@ -13,8 +15,13 @@ namespace
 	/** Acute angle between two unit directions, in degrees. A guide is a LINE: see Arbitrate. */
 	double ErrorDegrees(const FVector2D& A, const FVector2D& B)
 	{
-		const double Aligned = FMath::Abs(FVector2D::DotProduct(A, B));
-		return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Aligned, 0.0, 1.0)));
+		// NOT acos(|dot|), which this was until 2026-09-24: near alignment acos turns a
+		// one-ulp difference in the dot into 8.5e-7 degrees - three orders of magnitude over
+		// TieEpsilon above - so two candidates meaning the same line, with the cursor on it,
+		// were ranked by rounding after all. Folding AngleBetween's [0, pi] onto the acute
+		// angle keeps "a guide is a line" and resolves the angle to the ulp.
+		const double Theta = RoadGeom::AngleBetween(A, B);
+		return FMath::RadiansToDegrees(FMath::Min(Theta, UE_DOUBLE_PI - Theta));
 	}
 
 	/**

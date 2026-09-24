@@ -300,7 +300,9 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 				// exit; the strip's own width is what the position must clear.
 				const double TaxiwayHalfWidth = Profile->GetTotalWidth() * 0.5;
 				const FVector2D Axis = Network.GetOutgoingTangent(ArmSeg, NodeId);
-				const double AxisAngle = FMath::Acos(FMath::Clamp(FMath::Abs(FVector2D::DotProduct(Axis, RunwayAxis)), 0.0, 1.0));
+				// Acute, folded from AngleBetween rather than acos(|dot|) - Check-Architecture rule 18.
+				const double AxisCrossing = RoadGeom::AngleBetween(Axis, RunwayAxis);
+				const double AxisAngle = FMath::Min(AxisCrossing, UE_DOUBLE_PI - AxisCrossing);
 				Length = FMath::Max(Length, ExitGeometry::TaxiwayEndFloor(RunwayHalfWidth, TaxiwayHalfWidth, AxisAngle));
 
 				// AND NEVER INSIDE THE FLARE: at least the pavement cut, which is where the

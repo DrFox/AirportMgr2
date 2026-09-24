@@ -5,6 +5,7 @@
 #include "Model/RoadNetwork.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/IcaoCode.h"
+#include "Solve/RoadGeom.h"
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient()
 {
@@ -130,7 +131,9 @@ namespace
 				continue;
 			}
 
-			const double Interior = FMath::Acos(FMath::Clamp(FVector2D::DotProduct(In, Out), -1.0, 1.0));
+			// AngleBetween, not acos(dot) - Check-Architecture rule 18. The pi - 0.01 test below
+			// never needed the precision; the one idiom is what the rule can hold.
+			const double Interior = RoadGeom::AngleBetween(In, Out);
 			if (Interior > UE_DOUBLE_PI - 0.01)
 			{
 				// Collinear: no corner to round, and CornerRunFor would return nothing useful.
