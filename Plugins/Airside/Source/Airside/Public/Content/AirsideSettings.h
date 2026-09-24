@@ -309,4 +309,31 @@ public:
 	 * the same FResolvedTowView return type.
 	 */
 	static FResolvedTowView ResolveRigView();
+
+	/**
+	 * utility1 towing fuelTrailer1 (spec 2026-09-24 revision, section 4) - the SIBLING
+	 * ResolveRigView's own comment promised: utility1 is the powered unit, and Tow holds the
+	 * drawbar's TWO links - the towbar (a bar: BodyFront and BodyRear both zero) then the body.
+	 * MIRRORS ResolveRigVehicle's shape (a chassis from ResolveDefaultVehicle, overridden with
+	 * this vehicle's own measured axles and body, plus a Tow chain), not called from it: the
+	 * two vehicles share no figures, so there is nothing for one function to hand the other.
+	 */
+	static FVehicle ResolveUtilityTowVehicle();
+
+	/**
+	 * utility1's mesh and ABP, plus fuelTrailer1's for ResolveUtilityTowVehicle's two Tow
+	 * links - or an empty view for any mesh/ABP the content set does not name.
+	 *
+	 * A SEPARATE FUNCTION FROM ResolveRigView, for the reason ResolveRigView already gives for
+	 * being separate from ResolveVehicleView: the content diverges completely (utility1's and
+	 * fuelTrailer1's own soft pointers, not a second reading of RigCabMesh/RigTrailerMesh).
+	 *
+	 * Links.Num() == 2, matching ResolveUtilityTowVehicle's own two-link Tow: Links[0] (the
+	 * towbar) resolves to an EMPTY FResolvedAgentView (Mesh == nullptr) always, because the
+	 * towbar carries no mesh of its own - fuelTrailer1 is ONE skinned asset covering both
+	 * links, and Links[1] is where it (and its ABP) actually resolves. See FResolvedTowView's
+	 * own comment: "a link with no body of its own... resolves to an EMPTY FResolvedAgentView
+	 * rather than being left out of the array" - written for exactly this vehicle.
+	 */
+	static FResolvedTowView ResolveUtilityTowView();
 };

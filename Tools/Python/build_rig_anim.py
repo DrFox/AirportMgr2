@@ -33,6 +33,32 @@ bones take SteerAngleDegrees, and steer_FL/FR are the PARENTS of wheel_FL/FR (ro
 the steering) - wire the steer node before the wheel node it carries, matching
 build_fueltruck_anim.py's own note on the aircraft convention (steer AFTER wheel, per
 FCSPose::SafeSetCSBoneTransforms). The trailer: four wheels, no steer, no chain.
+
+EXTENDED 2026-09-24 (task 3b) FOR THE DRAWBAR CHAIN: utility1 (the tow) and fuelTrailer1 (the
+towed bowser) join RIGS below. Their MECHANISM is identical to the rig's - create-if-absent,
+target skeleton, parent class, print the plan - which is why they are entries in the SAME
+table rather than a sibling script; only the model facts differ, and RIGS is where every
+model's facts already live.
+
+fuelTrailer1's steer_FL, steer_FR AND towbar_yaw ARE A SECOND CARVE-OUT, of a different shape
+from fifth_wheel/kingpin's. Those two are SOCKETS - no AnimGraph channel could ever apply to
+them. steer_FL/FR and towbar_yaw are the OPPOSITE: bone_plan's ordinary substring rule matches
+them correctly (SteerAngleDegrees), and the match is even semantically sensible - the whole
+front axle turntable, steer bones included, genuinely turns together by ONE angle. What is
+missing is not a rule but a DATA CHANNEL: UAirsideAgentAnim.SteerAngleDegrees is copied from
+FAgentMotion.SteerAngleDegrees, which FRoadAgent::DescribeMotion documents as "the CONTROL
+INPUT... the angle the follower steered with" - utility1's OWN front-wheel deflection, not any
+fact about a trailer riding behind it. Wiring fuelTrailer1's turntable to it would make the
+BOWSER's own steering angle follow whatever utility1's front wheels happen to be doing at the
+same instant, which is a different, wrong physical quantity - not "no animation", a WRONG one,
+which this project's own conventions treat as worse (comments-that-admit-a-defect memory: a
+plausible-looking wrong answer is the one nothing catches). The real source - the towbar
+link's own angle relative to the body it follows - is not modelled anywhere yet (spec 2026-09-24
+revision, section 4: "the towbar is animated on the trailer's own towbar_yaw bone from the
+towbar link's angle" is future work, not this task's). So RIGS marks these three bones
+'unwired' rather than 'sockets': report_plan STILL prints bone_plan's honest suggestion for
+them (SteerAngleDegrees IS the rule match), but flags each one, by name, as NOT to be wired
+this round - so a reader who only skims the per-bone list is not quietly handed the wrong wire.
 """
 import os
 import sys
@@ -44,9 +70,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from airside_anim import bone_plan, fail, joint_names, say  # noqa: E402
 
 MODELS_ROOT = r"C:\repos\AirportMgr2Models\truckCab1\export"
+UTILITY_ROOT = r"C:\repos\AirportMgr2Models\utility1\export"
 
 # key -> (glb, skeleton path, mesh path, abp folder, abp name, socket bones excluded from the
-# driven-bone plan - see the header above for why fifth_wheel and kingpin are not on it).
+# driven-bone plan - see the header above for why fifth_wheel and kingpin are not on it -
+# 'unwired': bones bone_plan matches correctly but that are NOT to be wired this round because
+# no data channel is right for them yet - see the header's second carve-out).
 RIGS = [
     dict(
         key="truckCab1",
@@ -56,6 +85,7 @@ RIGS = [
         abp_path="/Game/Vehicles/Rig/TruckCab1",
         abp_name="ABP_TruckCab1",
         sockets={"fifth_wheel"},
+        unwired=set(),
     ),
     dict(
         key="tankTrailer1",
@@ -65,6 +95,37 @@ RIGS = [
         abp_path="/Game/Vehicles/Rig/TankTrailer1",
         abp_name="ABP_TankTrailer1",
         sockets={"kingpin"},
+        unwired=set(),
+    ),
+    dict(
+        key="utility1",
+        source=os.path.join(UTILITY_ROOT, "utility1.glb"),
+        skeleton="/Game/Vehicles/Utility1/SK_Utility1_Skeleton",
+        mesh="/Game/Vehicles/Utility1/SK_Utility1",
+        abp_path="/Game/Vehicles/Utility1",
+        abp_name="ABP_Utility1",
+        # 'hitch' is the coupling SOCKET fuelTrailer1's tow_eye snaps onto - not driven.
+        # 'beacon' matches no BONE_RULES needle (nothing here drives a lamp mast) and is left
+        # to report as UNRECOGNISED rather than hidden in this set, which is for sockets a
+        # name-based rule would otherwise mis-match, not for "nothing drives this yet".
+        sockets={"hitch"},
+        unwired=set(),
+    ),
+    dict(
+        key="fuelTrailer1",
+        source=os.path.join(UTILITY_ROOT, "fuelTrailer1.glb"),
+        skeleton="/Game/Vehicles/FuelTrailer1/SK_FuelTrailer1_Skeleton",
+        mesh="/Game/Vehicles/FuelTrailer1/SK_FuelTrailer1",
+        abp_path="/Game/Vehicles/FuelTrailer1",
+        abp_name="ABP_FuelTrailer1",
+        # tow_eye (onto utility1's hitch) and hitch (fuelTrailer1's OWN rear coupling, for a
+        # further trailer in the train - unused, this trailer sits at the train's end) are
+        # both SOCKETS.
+        sockets={"tow_eye", "hitch"},
+        # See the module header's second carve-out: SteerAngleDegrees is utility1's OWN wheel
+        # deflection, not the towbar's angle - wiring these now would be a wrong answer, not a
+        # missing one.
+        unwired={"steer_FL", "steer_FR", "towbar_yaw"},
     ),
 ]
 
@@ -72,7 +133,8 @@ RIGS = [
 def report_plan(rig):
     """The editor work this script cannot do, as a list rather than a memory of one."""
     names = joint_names(rig["source"])
-    driven = [n for n in names if n.lower() != "root" and n not in rig["sockets"]]
+    unwired = rig.get("unwired", set())
+    driven = [n for n in names if n.lower() != "root" and n not in rig["sockets"] and n not in unwired]
 
     say("")
     say("STILL TO DO for %s - this commandlet's `unreal` module cannot make graph nodes, and "
@@ -87,6 +149,19 @@ def report_plan(rig):
             "'%s') would wire this to WheelAngleDegrees if not excluded by hand. It is a "
             "coupling point the presenter positions from FTowLink geometry, not a bone any "
             "AnimGraph here drives." % (socket, socket))
+    for bone in sorted(b for b in unwired if b in names):
+        matched = dict(bone_plan([bone])).get(bone, "?")
+        if matched.startswith("?"):
+            say("    %-12s  NOT WIRED THIS ROUND - bone_plan finds no rule for it either, and "
+                "even if it did, no UAirsideAgentAnim channel yet carries the towbar link's "
+                "own angle (see this module's header, 'A SECOND CARVE-OUT'). Flagged for "
+                "whoever adds that channel." % bone)
+        else:
+            say("    %-12s  NOT WIRED THIS ROUND, though bone_plan's ordinary rule matches it "
+                "(%s) - see this module's own header, 'A SECOND CARVE-OUT'. %s is a WRONG "
+                "answer for this bone, not a missing one; the real angle (the towbar link's "
+                "own, relative to the body it follows) has no channel yet. Flagged for "
+                "whoever adds it." % (bone, matched, matched))
     say("")
     say("  ON EVERY DRIVEN NODE:")
     say("    Translation Mode = IGNORE            <- leave it alone")

@@ -73,6 +73,10 @@ FLEET = {
     # truckCab1/export/"), so its glb is a SIBLING of truckCab1.glb, not the tankTrailer1
     # folder's own export - which does not exist.
     "tankTrailer1": ("truckCab1/tankTrailer1", "/Game/Vehicles/Rig/TankTrailer1/SK_TankTrailer1"),
+    # fuelTrailer1.glb ships from UTILITY1's own export/ folder (utility1/scripts/build_export_
+    # fueltrailer.py: "the towed asset is built by scripts inside the tower's file") - the same
+    # folder/file mismatch tankTrailer1 has, and the reason the stem field exists at all.
+    "fuelTrailer1": ("utility1/fuelTrailer1", "/Game/Vehicles/FuelTrailer1/SK_FuelTrailer1"),
 }
 
 # Asset folder name -> the name Content uses, for instance naming only.
@@ -80,7 +84,8 @@ PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": 
           "plane5": "Plane5", "plane6": "Plane6", "plane7": "Plane7",
           "plane8": "Plane8",
           "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1",
-          "truckCab1": "TruckCab1", "tankTrailer1": "TankTrailer1"}
+          "truckCab1": "TruckCab1", "tankTrailer1": "TankTrailer1",
+          "fuelTrailer1": "FuelTrailer1"}
 
 # Below this two looks are the same colour written twice. The verifier may not check tighter
 # than the builder merges, or every merged look fails.

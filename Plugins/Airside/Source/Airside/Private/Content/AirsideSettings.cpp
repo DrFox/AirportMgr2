@@ -440,3 +440,104 @@ FResolvedTowView UAirsideSettings::ResolveRigView()
 	}
 	return View;
 }
+
+FVehicle UAirsideSettings::ResolveUtilityTowVehicle()
+{
+	// THE DEFAULT VEHICLE'S PERFORMANCE, for the reason ResolveRigVehicle gives: nothing here
+	// has measured how a loaded bowser trailer accelerates behind a baggage tug, and inventing
+	// figures would be worse than inheriting honest ones. Geometry is what gating needs.
+	FVehicle Utility = ResolveDefaultVehicle();
+	Utility.TypeCode = TEXT("UTILITY");
+
+	// utility1 (the TUG MA-50, utility1/SPEC.md): steer_FL/FR at X 149.3 from the rear-axle
+	// origin, MEASURED off the imported SK_Utility1's reference pose (Tools/Python/
+	// import_fueltrailer1.py's report_tow_chain, 2026-09-24) - 1.493 m, matching utility1/
+	// README.md's own verification table ("wheelbase 1.493", 0.4% short of SPEC.md's 1.499
+	// target, "measured, not aimed at"). The BODY - 208.6 ahead of the rear axle, 95.7 behind
+	// it (the coupler reaches behind the axle - see the hitch figure below), 172.6 wide (over
+	// the tyres, mirrors excluded) - is SK_Utility1's own mesh bounds, same measurement.
+	Utility.Chassis.SteerAxleX = 149.3;
+	Utility.Chassis.FixedAxleX = 0.0;
+	Utility.BodyWidth = 172.6;
+	Utility.BodyFrontX = 208.6;
+	Utility.BodyRearX = -95.7;
+
+	// THE TOW IS A DRAWBAR CHAIN, TWO LINKS (spec 2026-09-24 revision, section 4): a towbar
+	// (BAR - both BodyFront and BodyRear zero, per FTowLink's own comment), then the body.
+	// Both links MEASURED off the imported SK_Utility1 and SK_FuelTrailer1 on 2026-09-24 -
+	// Tools/Python/import_fueltrailer1.py's report_tow_chain, which prints every figure below
+	// with its own derivation at the site it measured it.
+	//
+	// LINK 0, THE TOWBAR. HitchX: utility1's own 'hitch' bone, X=-90.68 uu - README.md's own
+	// "hitch socket... 0.907 m behind utility1's rear axle" (added 2026-09-23), matching to a
+	// centimetre. Length: the towbar's own hitch (its 'tow_eye' bone, X=335.0) to its own axle
+	// ('towbar_yaw', X=221.0) - 114.0 uu, matching README's "eye 1.14 from the yaw axis".
+	// Width: the combined X/Y bounds of the towbar-region mesh parts (axle_front, yoke,
+	// towbar, both knuckles, both front wheels) - 128.0 uu, narrower than the body since it is
+	// what actually sweeps between the hitch and the axle (FTowLink's own comment).
+	FTowLink Towbar;
+	Towbar.HitchX = -90.7;
+	Towbar.Length = 114.0;
+	Towbar.BodyFront = 0.0;
+	Towbar.BodyRear = 0.0;
+	Towbar.Width = 128.0;
+
+	// LINK 1, THE BODY. HitchX 0.0: the body's hitch IS the towbar's own axle (towbar_yaw) -
+	// there is no further offset between where the towbar ends and the body's turntable
+	// begins, so unlike the towbar's HitchX this one is exact by construction, not measured.
+	// Length: towbar_yaw (the hitch) to the rear axle ('root', the origin) - 221.0 uu, README's
+	// own "wheelbase 2.21" (baggageCart1's rig, number for number) x 100. BodyFront/BodyRear:
+	// the combined bounds of the body-region mesh parts (frame, tank and its fittings, the
+	// control bay, hose reel, nozzle, rear lamps/clevis, mudguards, the rear axle, both rear
+	// wheels) against towbar_yaw and the origin - 48.0 uu ahead of the hitch (the control bay
+	// oversails the turntable), 44.1 uu behind the axle. Width 146.4 uu matches README's own
+	// "overall... 1.46 wide" exactly.
+	FTowLink Body;
+	Body.HitchX = 0.0;
+	Body.Length = 221.0;
+	Body.BodyFront = 48.0;
+	Body.BodyRear = 44.1;
+	Body.Width = 146.4;
+
+	Utility.Tow = { Towbar, Body };
+
+	// THE LOCK IS LEFT AT ResolveDefaultVehicle's 45 degrees, UNMEASURED for utility1 itself -
+	// unlike the rig's 40, nothing here has reason to override it: this task's own tests gate
+	// on the CHAIN's geometry (link count, link lengths against the skeleton), not on how
+	// tightly utility1 can turn. utility1/SPEC.md's own "turning radius 115 in (2.921 m)"
+	// would resolve to about 27 degrees on this wheelbase (atan(1.493/2.921)) if measured
+	// properly against the model rather than the datasheet, and is a follow-up, not this one.
+	return Utility;
+}
+
+FResolvedTowView UAirsideSettings::ResolveUtilityTowView()
+{
+	const UAirsideContent* Content = GetContent();
+
+	FResolvedTowView View;
+	if (Content == nullptr)
+	{
+		return View;
+	}
+
+	View.Cab.Mesh = Content->UtilityMesh.LoadSynchronous();
+	if (View.Cab.Mesh != nullptr)
+	{
+		View.Cab.AnimClass = Content->UtilityAnimClass.LoadSynchronous();
+	}
+
+	// TWO ENTRIES, MATCHING ResolveUtilityTowVehicle's OWN TWO-LINK Tow ARRAY. Links[0] (the
+	// towbar) is left at its default-constructed, empty FResolvedAgentView (Mesh == nullptr)
+	// ALWAYS - not merely when content names nothing - because fuelTrailer1 is ONE skinned
+	// asset covering the towbar, the turntable and the body together (there is no second mesh
+	// for a towbar-only entry to ever resolve to). Links[1] is where UtilityTrailerMesh and
+	// UtilityTrailerAnimClass actually land - see FResolvedTowView's own comment, which
+	// describes exactly this shape.
+	View.Links.SetNum(2);
+	View.Links[1].Mesh = Content->UtilityTrailerMesh.LoadSynchronous();
+	if (View.Links[1].Mesh != nullptr)
+	{
+		View.Links[1].AnimClass = Content->UtilityTrailerAnimClass.LoadSynchronous();
+	}
+	return View;
+}

@@ -377,4 +377,47 @@ public:
 	/** What drives RigTrailerMesh's four wheels. Null leaves it in its reference pose. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftClassPtr<UAnimInstance> RigTrailerAnimClass;
+
+	/**
+	 * utility1, the powered unit of the drawbar chain (spec 2026-09-24 revision, section 4;
+	 * UAirsideSettings::ResolveUtilityTowVehicle). BESIDE RigCabMesh rather than reusing it, for
+	 * the same reason RigCabMesh sits beside VehicleSkeletalMesh: a property that might name any
+	 * of three rigged vehicles would need a cast at the point of use and the editor would offer
+	 * every skeletal mesh in the project in one picker. Null leaves
+	 * UAirsideSettings::ResolveUtilityTowView's Cab empty.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<USkeletalMesh> UtilityMesh;
+
+	/**
+	 * What drives UtilityMesh's four wheels and its two front steer bones. Null leaves it in
+	 * its reference pose - see RigCabAnimClass's own comment for why this is a soft class and
+	 * must be built on UAirsideAgentAnim.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftClassPtr<UAnimInstance> UtilityAnimClass;
+
+	/**
+	 * fuelTrailer1, the drawbar bowser utility1 tows - the BODY link of the two-link chain
+	 * (ResolveUtilityTowVehicle's Tow[1]; Tow[0], the towbar, carries no mesh of its own - see
+	 * FTowLink's own comment on a bar link). ONE MESH FOR THE WHOLE TRAILER, unlike the rig's
+	 * cab+trailer pair: fuelTrailer1 is a single skinned asset carrying the towbar, the
+	 * turntable and the body together (utility1/README.md's own rig diagram), so there is
+	 * nothing for a second soft pointer to name.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<USkeletalMesh> UtilityTrailerMesh;
+
+	/**
+	 * What drives UtilityTrailerMesh's four wheels. Null leaves it in its reference pose.
+	 *
+	 * DRIVES WHEEL SPIN ONLY, TODAY. steer_FL/FR and towbar_yaw are recognised bones with no
+	 * channel that fits them yet - UAirsideAgentAnim::SteerAngleDegrees is utility1's OWN front
+	 * wheel deflection (FRouteFollower::SteerDegrees), which has no meaning for a towed
+	 * trailer's own hitch geometry - so this ABP leaves them unwired rather than misusing it.
+	 * The angle source (the towbar link's own angle relative to the body it follows) is a
+	 * future channel - flagged for whichever task drives the drawbar trailer's motion.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftClassPtr<UAnimInstance> UtilityTrailerAnimClass;
 };
