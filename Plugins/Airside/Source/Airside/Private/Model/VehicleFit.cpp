@@ -6,6 +6,27 @@
 #include "Solve/GuidelineGeom.h"
 #include "Solve/VehicleSweep.h"
 
+VehicleSweep::FBody VehicleFit::BodyOf(const FVehicle& Vehicle)
+{
+	VehicleSweep::FBody Body;
+	Body.Wheelbase = Vehicle.Chassis.Wheelbase();
+	Body.Width = Vehicle.BodyWidth;
+	Body.FrontX = Vehicle.BodyFrontX;
+	Body.RearX = Vehicle.BodyRearX;
+	// Link for link, field for field: FTowLink is FLink with UPROPERTYs on. An empty Tow maps to
+	// an empty chain - rigid - as an unset FTrailer used to map to KingpinToAxle 0.
+	for (const FTowLink& Link : Vehicle.Tow)
+	{
+		VehicleSweep::FLink& Out = Body.Tow.AddDefaulted_GetRef();
+		Out.HitchX = Link.HitchX;
+		Out.Length = Link.Length;
+		Out.BodyFront = Link.BodyFront;
+		Out.BodyRear = Link.BodyRear;
+		Out.Width = Link.Width;
+	}
+	return Body;
+}
+
 bool VehicleFit::Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle, const URoadNetwork& Network)
 {
 	const double Widest = Vehicle.WidestBody();
@@ -44,21 +65,8 @@ bool VehicleFit::Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle, const
 		return true;   // measured against a different sampling: say nothing rather than guess
 	}
 
-	VehicleSweep::FBody Body;
-	Body.Wheelbase = Vehicle.Chassis.Wheelbase();
-	Body.Width = Vehicle.BodyWidth;
-	Body.FrontX = Vehicle.BodyFrontX;
-	Body.RearX = Vehicle.BodyRearX;
-	if (Vehicle.HasTrailer())
-	{
-		Body.KingpinX = Vehicle.Trailer.KingpinX;
-		Body.KingpinToAxle = Vehicle.Trailer.KingpinToAxle;
-		Body.TrailerFront = Vehicle.Trailer.FrontAheadOfKingpin;
-		Body.TrailerRear = Vehicle.Trailer.RearBehindAxle;
-		Body.TrailerWidth = Vehicle.Trailer.Width;
-	}
 	TArray<double> Inner, Outer;
-	if (!VehicleSweep::Trace(Body, Path, Inner, Outer))
+	if (!VehicleSweep::Trace(BodyOf(Vehicle), Path, Inner, Outer))
 	{
 		return false;
 	}

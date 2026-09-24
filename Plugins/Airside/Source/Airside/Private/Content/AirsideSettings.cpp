@@ -119,11 +119,15 @@ FVehicle UAirsideSettings::ResolveRigVehicle()
 	Rig.BodyWidth = 254.0;
 	Rig.BodyFrontX = 516.0;
 	Rig.BodyRearX = -78.0;
-	Rig.Trailer.KingpinX = 57.3;
-	Rig.Trailer.KingpinToAxle = 1029.5;
-	Rig.Trailer.FrontAheadOfKingpin = 166.0;
-	Rig.Trailer.RearBehindAxle = 121.5;
-	Rig.Trailer.Width = 254.0;
+	// ONE LINK: a semi-trailer is the one-link tow (see FTowLink). Figures unchanged from when
+	// this was FTrailer, so route gating (#276) judges the rig exactly as it did.
+	FTowLink Trailer;
+	Trailer.HitchX = 57.3;
+	Trailer.Length = 1029.5;
+	Trailer.BodyFront = 166.0;
+	Trailer.BodyRear = 121.5;
+	Trailer.Width = 254.0;
+	Rig.Tow = { Trailer };
 
 	// 40 degrees is ASSUMED - the model carries no lock, and 40-45 is a tractor unit's range.
 	// The lock allows 5.8 m at the steered axle. In a STEADY circle the trailer folds below

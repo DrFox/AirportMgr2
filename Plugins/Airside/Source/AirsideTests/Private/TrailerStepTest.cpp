@@ -118,7 +118,11 @@ namespace TrailerStepTraceMirror
 		constexpr double Step = 10.0;
 		const FVector2D InTangent = (Path[1] - Path[0]).GetSafeNormal();
 		const FVector2D OutTangent = (Path.Last() - Path[Path.Num() - 2]).GetSafeNormal();
-		const double Lead = Body.Wheelbase + Body.KingpinX + Body.KingpinToAxle + Body.FrontX + 200.0;
+		// ONE TRAILER, read off the chain's first link: since 2026-09-24 Trace walks a chain
+		// (VehicleSweep::StepChain), and this mirror keeps the one-trailer loop it replaced, so
+		// the comparison below also pins that a one-link chain IS the old semi-trailer.
+		const VehicleSweep::FLink Trailer = Body.Tow.Num() > 0 ? Body.Tow[0] : VehicleSweep::FLink();
+		const double Lead = Body.Wheelbase + Trailer.HitchX + Trailer.Length + Body.FrontX + 200.0;
 
 		const FVector2D Mid = Path[Path.Num() / 2];
 		const double Turn = FVector2D::CrossProduct(Mid - Path[0], Path.Last() - Mid);
@@ -139,9 +143,9 @@ namespace TrailerStepTraceMirror
 		for (double D = 0.0; D < Lead; D += Step) { Steps.Add(Path.Last() + OutTangent * D); }
 
 		FVector2D Fixed = Steps[0] - InTangent * Body.Wheelbase;
-		FVector2D Kingpin = Fixed + InTangent * Body.KingpinX;
-		FVector2D TrailerAxle = Kingpin - InTangent * Body.KingpinToAxle;
-		const bool bTrailer = Body.KingpinToAxle > 0.0;
+		FVector2D Kingpin = Fixed + InTangent * Trailer.HitchX;
+		FVector2D TrailerAxle = Kingpin - InTangent * Trailer.Length;
+		const bool bTrailer = Trailer.Length > 0.0;
 
 		TArray<FVector2D, TInlineAllocator<16>> Corners;
 		for (const FVector2D& Steered : Steps)
@@ -159,14 +163,14 @@ namespace TrailerStepTraceMirror
 			}
 			if (bTrailer)
 			{
-				Kingpin = Fixed + Heading * Body.KingpinX;
-				if (!VehicleSweep::StepTrailer(Kingpin, Heading, Body.KingpinToAxle, TrailerAxle))
+				Kingpin = Fixed + Heading * Trailer.HitchX;
+				if (!VehicleSweep::StepTrailer(Kingpin, Heading, Trailer.Length, TrailerAxle))
 				{
 					return false;
 				}
 				const FVector2D Trailing = VehicleSweep::TrailerHeading(Kingpin, TrailerAxle);
-				const FVector2D TrailerSide = Perp(Trailing) * (Body.TrailerWidth * 0.5);
-				for (const double X : { Body.KingpinToAxle + Body.TrailerFront, -Body.TrailerRear, 0.0, Body.KingpinToAxle * 0.5 })
+				const FVector2D TrailerSide = Perp(Trailing) * (Trailer.Width * 0.5);
+				for (const double X : { Trailer.Length + Trailer.BodyFront, -Trailer.BodyRear, 0.0, Trailer.Length * 0.5 })
 				{
 					Corners.Add(TrailerAxle + Trailing * X + TrailerSide);
 					Corners.Add(TrailerAxle + Trailing * X - TrailerSide);
@@ -222,8 +226,7 @@ bool FTrailerStepTraceUsesStepperTest::RunTest(const FString& Parameters)
 	// on the same samples Trace walks - ONE evaluator, not two that happen to agree today.
 	VehicleSweep::FBody Body;
 	Body.Wheelbase = 370.0; Body.Width = 254.0; Body.FrontX = 516.0; Body.RearX = -78.0;
-	Body.KingpinX = 57.3; Body.KingpinToAxle = 1029.5;
-	Body.TrailerFront = 166.0; Body.TrailerRear = 121.5; Body.TrailerWidth = 254.0;
+	Body.Tow.Add({ /*HitchX*/ 57.3, /*Length*/ 1029.5, /*BodyFront*/ 166.0, /*BodyRear*/ 121.5, /*Width*/ 254.0 });
 
 	TArray<FVector2D> Path;
 	for (int32 I = 0; I <= 16; ++I)

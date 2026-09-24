@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Solve/VehicleSweep.h"
 
 struct FGuidelineEdge;
 struct FVehicle;
@@ -31,4 +32,13 @@ namespace VehicleFit
 	constexpr double WidthMargin = 15.0;
 
 	AIRSIDE_API bool Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle, const URoadNetwork& Network);
+
+	/**
+	 * The vehicle as VehicleSweep sees it: the tractor's body and its tow, link by link.
+	 *
+	 * ONE MAPPING, shared by the router (Fits, above) and the driver (FRoadAgent's tow step and
+	 * DescribeMotion). Two hand-written copies of this would be two chains that could disagree
+	 * about a hitch - the second evaluator the one-stepper rule exists to prevent.
+	 */
+	AIRSIDE_API VehicleSweep::FBody BodyOf(const FVehicle& Vehicle);
 }

@@ -27,7 +27,7 @@ bool FVehicleBodyTest::RunTest(const FString& Parameters)
 
 	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
 	TestTrue(TEXT("the rig pulls a trailer"), Rig.HasTrailer());
-	TestTrue(TEXT("whose kingpin is a trailer-length ahead of its axle"), Rig.Trailer.KingpinToAxle > 1000.0);
+	TestTrue(TEXT("whose kingpin is a trailer-length ahead of its axle"), Rig.Tow.Num() == 1 && Rig.Tow[0].Length > 1000.0);
 	return true;
 }
 
@@ -41,11 +41,7 @@ bool FVehicleSweepTest::RunTest(const FString& Parameters)
 	Rig.Width = 254.0;
 	Rig.FrontX = 516.0;
 	Rig.RearX = -78.0;
-	Rig.KingpinX = 57.3;
-	Rig.KingpinToAxle = 1029.5;
-	Rig.TrailerFront = 166.0;
-	Rig.TrailerRear = 121.5;
-	Rig.TrailerWidth = 254.0;
+	Rig.Tow.Add({ /*HitchX*/ 57.3, /*Length*/ 1029.5, /*BodyFront*/ 166.0, /*BodyRear*/ 121.5, /*Width*/ 254.0 });
 
 	const VehicleSweep::FEnvelope At15 = VehicleSweep::Envelope(Rig, 1500.0);
 	TestTrue(TEXT("the rig holds a 15 m turn"), At15.bHolds);
@@ -81,8 +77,7 @@ namespace VehicleSweepTrace
 	{
 		VehicleSweep::FBody Body;
 		Body.Wheelbase = 370.0; Body.Width = 254.0; Body.FrontX = 516.0; Body.RearX = -78.0;
-		Body.KingpinX = 57.3; Body.KingpinToAxle = KingpinToAxle;
-		Body.TrailerFront = 166.0; Body.TrailerRear = 121.5; Body.TrailerWidth = 254.0;
+		Body.Tow.Add({ /*HitchX*/ 57.3, /*Length*/ KingpinToAxle, /*BodyFront*/ 166.0, /*BodyRear*/ 121.5, /*Width*/ 254.0 });
 		return Body;
 	}
 

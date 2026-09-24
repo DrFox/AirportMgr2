@@ -432,6 +432,21 @@ struct AIRSIDE_API FRoadAgent
 	FVector2D GroundPosition() const { return LastMotion.Position; }
 
 	/**
+	 * Where each link of the vehicle's tow has its axle, road-plane XY - one per FTowLink, and
+	 * EMPTY for anything rigid. Laid straight behind the cab at StartDrive and stepped with the
+	 * cab in every tow sub-step after (see FollowAndTow); NEVER re-derived from the route, which
+	 * is what lets a trailer lag a corner the way a real one does (spec §1).
+	 *
+	 * AXLES AND NOT HITCH ANGLES, although the spec first said "angle": the pursuit steps an
+	 * axle position (VehicleSweep::StepChain, the same call Trace makes), and an angle would be
+	 * converted to a point and back every sub-step - a rounding the router never makes.
+	 */
+	UPROPERTY() TArray<FVector2D> TowAxles;
+
+	/** The link that jack-knifed, which stopped this agent, or INDEX_NONE. See JackknifedLink. */
+	int32 GetJackknifedLink() const { return JackknifedLink; }
+
+	/**
 	 * The plan this agent is walking, how far along it, and how fast - from whichever struct
 	 * is actually driving.
 	 *
@@ -788,6 +803,30 @@ private:
 
 	/** The vehicle's bundle, when Body is Vehicle. Read through Chassis() / AsVehicle(). */
 	UPROPERTY() FVehicle Vehicle;
+
+	/**
+	 * Which link of the tow folded past VehicleSweep::MaxHitchRadians, or INDEX_NONE. Set by
+	 * FollowAndTow, cleared by StartDrive; while set the agent holds where it folded.
+	 *
+	 * AN INDEX, NOT A bool: "jack-knifed" and "which link" are one fact, and the log and the
+	 * test both want the second. NOT AN EAgentPhase either: a folded rig is still Taxiing as far
+	 * as dispatch, claims and the rebuild are concerned - it holds its ground and the route it
+	 * was on - and a new phase would be a case in every switch on Phase for a bug detector
+	 * forward driving never trips (spec §1).
+	 */
+	UPROPERTY() int32 JackknifedLink = INDEX_NONE;
+
+	/**
+	 * Follower.Advance, plus the tow. RIGID: exactly the one call it always was, so nothing
+	 * without a trailer moves differently. TOWING: the frame is cut into sub-steps no longer
+	 * than VehicleSweep::TraceStep at the vehicle's speed cap, and each sub-step moves the cab
+	 * and then steps the chain behind it - the router's step length, so the trailer drives the
+	 * path Trace gated it on, and a long frame is many short ones rather than one long pull.
+	 *
+	 * The stop point is honoured ACROSS the sub-steps: each is handed what is left of
+	 * StopWithin, not all of it again, or N sub-steps could each creep up to the full distance.
+	 */
+	bool FollowAndTow(double DeltaSeconds, FVector2D& OutAt, double& OutHeading);
 
 	/**
 	 * Checks whether the taxi has reached a reverse leg and, if so, drives the whole

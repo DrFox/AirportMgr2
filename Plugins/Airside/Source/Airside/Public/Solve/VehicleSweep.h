@@ -17,25 +17,104 @@
  */
 namespace VehicleSweep
 {
-	/** A body in the fixed axle's frame, uu. KingpinToAxle 0 means no trailer. */
+	/**
+	 * One link of a tow, uu - FTowLink's figures, which Solve/ cannot see (CoreMinimal only).
+	 * HitchX along the PREVIOUS body from its fixed axle (negative behind); Length hitch to this
+	 * link's axle; BodyFront ahead of the hitch, BodyRear behind the axle. Was FBody's
+	 * KingpinX / KingpinToAxle / TrailerFront / TrailerRear / TrailerWidth, one semi-trailer.
+	 */
+	struct FLink
+	{
+		double HitchX = 0.0;
+		double Length = 0.0;
+		double BodyFront = 0.0;
+		double BodyRear = 0.0;
+		double Width = 0.0;
+	};
+
+	/**
+	 * A body in the fixed axle's frame, uu, and what it pulls. An empty Tow means rigid.
+	 *
+	 * INLINE FOR TWO LINKS - the rig has one, a drawbar trailer two - because the agent maps an
+	 * FVehicle onto this every sub-step (FRoadAgent::DescribeMotion, the tow step) and a heap
+	 * allocation per call is a cost with nothing bought by it. A baggage train spills to the
+	 * heap and still works.
+	 */
 	struct FBody
 	{
 		double Wheelbase = 0.0;
 		double Width = 0.0;
 		double FrontX = 0.0;
 		double RearX = 0.0;
-		double KingpinX = 0.0;
-		double KingpinToAxle = 0.0;
-		double TrailerFront = 0.0;
-		double TrailerRear = 0.0;
-		double TrailerWidth = 0.0;
+		TArray<FLink, TInlineAllocator<2>> Tow;
 	};
+
+	/**
+	 * Past square to whatever pulls it, a link has JACK-KNIFED: 90 degrees. Driving forwards
+	 * inside the lock never reaches it, so for forward driving it is a bug detector, and the
+	 * reversing step will need it for real (spec §1).
+	 *
+	 * WHY 90 AND NOT A MEASURED LIMIT: the models carry no stop on the fifth wheel or the
+	 * drawbar, and 90 is where the pursuit itself stops meaning anything - past square, a
+	 * forward pull on the hitch drives the axle BACKWARDS. It is the same line StepTrailer's
+	 * Dot < 0 draws, named, so a tighter limit (a real trailer's ~70-80 degrees of body
+	 * clearance) is one edit here rather than a sign test somewhere else.
+	 */
+	constexpr double MaxHitchRadians = UE_HALF_PI;
+
+	/**
+	 * How far the chain is stepped at a time, uu: Trace's step, and the longest the agent's
+	 * sub-step takes it (FRoadAgent's tow step divides this by the vehicle's speed cap).
+	 *
+	 * ONE NUMBER FOR BOTH because the pursuit is FIRST-ORDER in its step: two walkers at
+	 * different step lengths trace measurably different trailer paths, and the router would
+	 * admit the rig on one while the driver drove the other. 10 uu: a tenth of the lane margin,
+	 * and the step the Python prototype that set the test figures used (2026-09-24).
+	 */
+	constexpr double TraceStep = 10.0;
+
+	/** Where a link is, after a step: its hitch, its axle, and its heading (unit, axle to hitch). */
+	struct FLinkPose
+	{
+		FVector2D Hitch = FVector2D::ZeroVector;
+		FVector2D Axle = FVector2D::ZeroVector;
+		FVector2D Heading = FVector2D::UnitX();
+	};
+
+	/**
+	 * Lays a chain DEAD STRAIGHT behind a tractor whose fixed axle is at Fixed facing Heading
+	 * (unit) - how a vehicle spawns, and how Trace starts its lead-in. OutAxles gets one axle
+	 * per link.
+	 */
+	AIRSIDE_API void LayChainStraight(const FBody& Body, const FVector2D& Fixed, const FVector2D& Heading,
+		TArray<FVector2D>& OutAxles);
+
+	/**
+	 * Where every link of a chain IS, given its axles and the tractor's fixed axle and heading,
+	 * without moving anything: each hitch sits HitchX along its puller from the puller's axle,
+	 * and each link faces from its axle to its hitch. What the view is shown, and what Trace
+	 * puts body corners on.
+	 */
+	AIRSIDE_API void PoseChain(const FBody& Body, const FVector2D& Fixed, const FVector2D& Heading,
+		TArrayView<const FVector2D> Axles, TArray<FLinkPose, TInlineAllocator<2>>& OutPoses);
+
+	/**
+	 * THE CHAIN STEP, the one walk both Trace and FRoadAgent make. The tractor's fixed axle has
+	 * moved to Fixed facing Heading (unit); every link, in order, is pulled by its puller's hitch
+	 * point with StepTrailer - link 0 by the tractor, link k by link k-1 as it has JUST moved.
+	 *
+	 * False on a JACK-KNIFE: StepTrailer's own fold (Dot < 0), or a link past MaxHitchRadians to
+	 * its puller. OutFoldedLink and OutFoldRadians then name the first link that folded and its
+	 * angle; links after it are not stepped. Otherwise they are INDEX_NONE and the worst angle.
+	 */
+	AIRSIDE_API bool StepChain(const FBody& Body, const FVector2D& Fixed, const FVector2D& Heading,
+		TArrayView<FVector2D> InOutAxles, int32& OutFoldedLink, double& OutFoldRadians);
 
 	/**
 	 * Offsets from the steered axle's path, uu: Inner toward the turn centre, Outer away from
 	 * it. bHolds false when the turn cannot be held at all - tighter than the wheelbase, or a
-	 * kingpin circle smaller than the trailer (it would jack-knife) - and then the offsets are
-	 * meaningless.
+	 * kingpin circle smaller than the trailer (it would jack-knife; since the chain, ANY link's
+	 * hitch circle smaller than that link) - and then the offsets are meaningless.
 	 */
 	struct FEnvelope
 	{
@@ -73,7 +152,13 @@ namespace VehicleSweep
 	 *
 	 * False when the trailer folds past square to the tractor (a jack-knife): not drivable.
 	 * Measured on the SAME samples the follower walks, per the sample-once rule.
+	 *
+	 * A CHAIN since 2026-09-24: every link is stepped by StepChain and every link's body adds
+	 * its corners, so a drawbar trailer is gated exactly as the rig is. OutAxles, when given,
+	 * receives every link's axle at every step, link-major within a step (step i, link k at
+	 * i * Tow.Num() + k) - what Airside.Model.Tow.FollowerMatchesTraceForRig holds the driving
+	 * agent to. Nothing in production asks for it.
 	 */
 	AIRSIDE_API bool Trace(const FBody& Body, TArrayView<const FVector2D> Path,
-		TArray<double>& OutInner, TArray<double>& OutOuter);
+		TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles = nullptr);
 }

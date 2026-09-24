@@ -15,6 +15,24 @@
 #include "AgentMotion.generated.h"
 
 /**
+ * Where one link of a tow is this frame (see FTowLink): the point it couples at, its axle, and
+ * the way it faces. Road-plane XY, uu; Heading radians from +X, axle toward hitch.
+ *
+ * WHAT THE VIEW PLACES A TRAILER BY - hitch and heading - and it is the model's answer, not
+ * one the actor works out: a view that derived the trailer's yaw from two frames of the cab
+ * would be a second trailer model beside VehicleSweep::StepChain.
+ */
+USTRUCT()
+struct AIRSIDE_API FTowPose
+{
+	GENERATED_BODY()
+
+	UPROPERTY() FVector2D Hitch = FVector2D::ZeroVector;
+	UPROPERTY() FVector2D Axle = FVector2D::ZeroVector;
+	UPROPERTY() double Heading = 0.0;
+};
+
+/**
  * Everything the VIEW needs to show an agent: where it is, and what it is doing.
  *
  * SetPose used to take a position, a heading, a surface height, an altitude and a pitch, and
@@ -129,4 +147,19 @@ struct AIRSIDE_API FAgentMotion
 	 * answer that rotates no bone at all.
 	 */
 	UPROPERTY() FGearPose GearPose;
+
+	/**
+	 * One pose per link of the tow, tractor end first; EMPTY for anything rigid, which is every
+	 * aircraft and every vehicle but the rig and the drawbar trailer. Filled by
+	 * FRoadAgent::DescribeMotion from the axles the agent steps.
+	 *
+	 * NOT A UPROPERTY, AND INLINE FOR TWO. This struct is copied several times per agent per
+	 * sub-step - DescribeMotion returns it, LastMotion keeps it, OutMotion and the traffic
+	 * loop's local take it again (RoadAgent.cpp and GroundTraffic.cpp, 2026-09-24) - and a
+	 * plain TArray would make each copy of a towing vehicle's motion a heap allocation. UHT
+	 * refuses an allocator on a UPROPERTY, and nothing needs this reflected: the motion is
+	 * rewritten by every Advance and never saved. A rigid agent's empty array copies for free
+	 * either way.
+	 */
+	TArray<FTowPose, TInlineAllocator<2>> Tow;
 };
