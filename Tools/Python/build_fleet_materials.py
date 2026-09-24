@@ -292,8 +292,9 @@ def remap(mesh_path, by_slot):
         say("%s absent; skipped" % mesh_path)
         return 0, []
     renames = SLOT_RENAMES.get(mesh_path, {})
+    original = mesh.get_editor_property("materials")
     out, moved, left, renamed = [], 0, [], []
-    for slot in mesh.get_editor_property("materials"):
+    for slot in original:
         slot_name = str(slot.material_slot_name)
         if slot_name in renames:
             renamed.append("%s->%s" % (slot_name, renames[slot_name]))
@@ -309,6 +310,30 @@ def remap(mesh_path, by_slot):
     if renamed:
         say("%s: slot(s) renamed to match the newer export: %s"
             % (mesh_path.split("/")[-1], ", ".join(renamed)))
+
+    # SAVE ONLY WHEN A SLOT ACTUALLY CHANGED, not unconditionally like this used to.
+    #
+    # THE INCIDENT THIS GUARDS AGAINST (2026-09-24): adding truckCab1/tankTrailer1 to FLEET
+    # meant re-running this across the WHOLE fleet (the established workflow -
+    # import_models.py's own tail does the same after every import), and the unconditional
+    # set_editor_property + save_asset below touched all 14 meshes and every pre-existing
+    # MI_* instance regardless of whether that particular asset's own slots changed - 36
+    # files of binary re-save noise landed in a PR whose only real content was two new
+    # assets, and had to be reverted by hand afterwards. set_editor_property on the materials
+    # TArray marks the package dirty even when the rebuilt array is VALUE-IDENTICAL to what
+    # was already there, and save_asset(only_if_is_dirty=False) writes regardless of
+    # dirtiness anyway - so nothing here previously distinguished "this mesh's slots changed"
+    # from "this mesh was merely visited by the loop". Comparing the rebuilt list against
+    # what was already on the mesh, index for index, is what makes that distinction; an
+    # untouched mesh is skipped and never dirtied at all.
+    changed = (len(out) != len(original) or any(
+        a.material_interface != b.material_interface
+        or str(a.material_slot_name) != str(b.material_slot_name)
+        for a, b in zip(out, original)))
+    if not changed:
+        say("%s: no slot changed; left untouched" % mesh_path.split("/")[-1])
+        return moved, left
+
     mesh.set_editor_property("materials", out)
     unreal.EditorAssetLibrary.save_asset(mesh_path, only_if_is_dirty=False)
     return moved, left
@@ -383,4 +408,18 @@ def run():
     say("DONE")
 
 
-run()
+# GUARDED BY NAME, NOT BY "__main__" - and that distinction matters here. This is the one
+# script another script legitimately IMPORTS: airside_import.rebuild_fleet_materials() runs it
+# with `exec(compile(...), {"__name__": "__from_import__", ...})` specifically so it is NOT
+# "build_fleet_materials" (the name a plain `import build_fleet_materials` would set) - that
+# was already true before this guard existed, it just had nothing to distinguish itself from.
+# An unguarded run() at module scope meant `import build_fleet_materials` ALONE reran the FULL
+# fleet rebuild as a side effect of the import statement - which is exactly how a "read the
+# mesh's current slots" verification script silently re-touched all 14 fleet meshes and
+# recreated MI_Livery during Task 3's fix round, undoing a revert that had just been checked
+# clean. See remap()'s own comment for the rest of that incident. `!= "build_fleet_materials"`
+# (rather than `== "__main__"`) is what keeps BOTH the direct `-script=` invocation AND
+# rebuild_fleet_materials()'s exec working exactly as before, and only a bare Python import
+# inert.
+if __name__ != "build_fleet_materials":
+    run()
