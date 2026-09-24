@@ -8,6 +8,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
+#include "Model/SpeedProfile.h"
 #include "Model/RouteSearch.h"
 #include "Model/VehicleFit.h"
 #include "Present/AirsideTraffic.h"
@@ -46,18 +47,29 @@ namespace RigCourse
 	constexpr double TierGap   = 6000.0;
 	constexpr double TierPitch = LaneHeight + TierGap;
 
-	// Connectors: WIDE in the middle, so a join refuses as little as it can, but the 20 m stub
-	// that meets a lane is laid in THAT LANE'S tier, so the width changes at a connector CORNER
-	// and never at a straight-through node. Measured 2026-09-25: with the change at the lane's
-	// entry node, the rig took 55 s over the 69 m Narrow straight against 14 s on Wide, and the
-	// utility 28 s (why is untraced; a lane offset step at the join is the suspect). Odd tiers are the lane ROTATED 180 degrees
-	// about its centre, so every lane is driven with the same turns in the same order (a
-	// serpentine), joined by an east link, a west link, and a return road round the outside.
+	// Connectors: WIDE in the middle, so a join refuses as little as it can; the 20 m stub that
+	// meets a lane is in THAT LANE'S tier, so a lane's entry and exit are not width steps - the
+	// width step is ONE named feature of its own (WidthStepX below), not an accident of every
+	// join. Odd tiers are the lane ROTATED 180 degrees about its centre, so every lane is driven
+	// with the same turns in the same order (a serpentine), joined by an east link, a west link,
+	// and a return road round the outside.
 	constexpr double EastLinkX   = LaneLength + 2000.0;
 	constexpr double WestLinkX   = -3000.0;
 	constexpr double ReturnEastX = LaneLength + 6000.0;
 	constexpr double ReturnWestX = -5000.0;
 	constexpr double ReturnSouthY = -4000.0;
+
+	// THE WIDTH STEP, on the return road's south straight: Narrow from the east corner to here,
+	// Wide from here on, so the leg that ends at the west corner crosses a Narrow -> Wide change
+	// at a straight-through node. KEPT TO PIN A BUILDER DEFECT (controller ruling 5,
+	// 2026-09-25): the derived turn there is a lane-offset jog, MinRadius 0 and unmeasured, so
+	// route search does not gate it, and FSpeedProfile reports a sharp vertex and crawls it.
+	// Measured before this was a feature: 55 s for the rig over a 69 m straight that takes 14 s
+	// without the step. The fix belongs in the guideline builder (blend the lane offset over a
+	// transition length), not here.
+	constexpr double WidthStepX = LaneLength / 2.0;
+	constexpr int32 WidthStepFrom = 0;   // Narrow
+	constexpr int32 WidthStepTo = 2;     // Wide
 
 	constexpr int32 TierCount = 3;
 	constexpr int32 ConnectorTier = 2;   // Wide
@@ -86,6 +98,7 @@ namespace RigCourse
 		case ERigCourseFeature::Left90:      return TEXT("left 90");
 		case ERigCourseFeature::TeeJunction: return TEXT("T junction");
 		case ERigCourseFeature::DeadEnd:     return TEXT("dead end U-turn");
+		case ERigCourseFeature::WidthStep:   return TEXT("Narrow->Wide mid-straight");
 		default:                             return TEXT("connector");
 		}
 	}
@@ -153,13 +166,14 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 		Target.MakeLiveNodeId(Index, Out);
 		return Out;
 	};
-	int32 Laid = 0, Failed = 0;
-	auto Connect = [&Target, &Laid, &Failed](int32 A, int32 B, int32 Tier)
+	int32 Laid = 0;
+	RefusedConnects = 0;
+	auto Connect = [this, &Target, &Laid](int32 A, int32 B, int32 Tier)
 	{
 		if (Target.ConnectNodes(A, B, ERoadKind::ServiceRoad, Tier)) { ++Laid; }
 		else
 		{
-			++Failed;
+			++RefusedConnects;
 			UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: ConnectNodes(%d, %d, tier %d) refused."), A, B, Tier);
 		}
 	};
@@ -196,11 +210,13 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 	// Return: tier 2's exit round the outside, back to tier 0's entry.
 	const int32 R0 = Place(FVector2D(ReturnEastX, 2.0 * TierPitch + LaneHeight));
 	const int32 R1 = Place(FVector2D(ReturnEastX, ReturnSouthY));
+	const int32 Step = Place(FVector2D(WidthStepX, ReturnSouthY));
 	const int32 R2 = Place(FVector2D(ReturnWestX, ReturnSouthY));
 	const int32 R3 = Place(FVector2D(ReturnWestX, 0.0));
 	Connect(Lanes[2].P4, R0, 2);
 	Connect(R0, R1, ConnectorTier);
-	Connect(R1, R2, ConnectorTier);
+	Connect(R1, Step, WidthStepFrom);
+	Connect(Step, R2, WidthStepTo);
 	Connect(R2, R3, ConnectorTier);
 	Connect(R3, Lanes[0].P0, 0);
 
@@ -233,10 +249,23 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 		Add(L.P3, L.P2, ERigCourseFeature::TeeJunction, TEXT("T junction out of the stem"));
 		Add(L.P4, L.P3, TurnFeature(P3 - P2, P4 - P3), nullptr);          // the corner at P3
 	}
+	// The return: to the width step's node, then ACROSS it to the west corner - so the one leg
+	// that drives the jog is the one labelled with it, and no other leg does.
+	auto AddReturn = [this, &Id](int32 Node, int32 From, ERigCourseFeature Feature, const TCHAR* Label)
+	{
+		FRigCourseWaypoint& W = Waypoints.AddDefaulted_GetRef();
+		W.Node = Id(Node);
+		W.From = Id(From);
+		W.Tier = INDEX_NONE;
+		W.Feature = Feature;
+		W.Label = Label;
+	};
+	AddReturn(Step, R1, ERigCourseFeature::Connector, TEXT("return, to the width step"));
+	AddReturn(R2, Step, ERigCourseFeature::WidthStep, RigCourse::FeatureText(ERigCourseFeature::WidthStep));
 
 	LoopResults.SetNum(Waypoints.Num() * Vehicles.Num());
 	UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: course laid - %d segment(s) (%d refused), %d waypoint(s), %d feature(s), %d tier(s) of %d."),
-		Laid, Failed, Waypoints.Num(), FeatureCountForTest(), TierCount, Widths);
+		Laid, RefusedConnects, Waypoints.Num(), FeatureCountForTest(), TierCount, Widths);
 }
 
 int32 ARigTestCourse::FeatureCountForTest() const
@@ -244,7 +273,8 @@ int32 ARigTestCourse::FeatureCountForTest() const
 	TSet<TPair<int32, uint8>> Seen;
 	for (const FRigCourseWaypoint& W : Waypoints)
 	{
-		if (W.Feature != ERigCourseFeature::Connector)
+		// The 3 x 5 lane features; the width step is its own named feature, counted apart.
+		if (W.Feature != ERigCourseFeature::Connector && W.Feature != ERigCourseFeature::WidthStep)
 		{
 			Seen.Add(TPair<int32, uint8>(W.Tier, static_cast<uint8>(W.Feature)));
 		}
@@ -303,12 +333,12 @@ FGuidelineNodeId ARigTestCourse::ResolveWaypoint(const URoadNetwork& Network, co
 	return Best;
 }
 
-double ARigTestCourse::LegTimeoutSeconds(const FVehicle& Vehicle, double Length)
+double ARigTestCourse::LegTimeoutSeconds(const FVehicle& Vehicle, double Length, double Factor)
 {
 	const FGroundRegime& Taxi = Vehicle.Chassis.Ground.Taxi;
 	const double Cap = FMath::Max(Taxi.SpeedCap, 1.0);
 	const double Ideal = Length / Cap + Cap / FMath::Max(Taxi.Accel, 1.0) + Cap / FMath::Max(Taxi.Decel, 1.0);
-	return LegTimeoutFactor * Ideal;
+	return Factor * Ideal;
 }
 
 void ARigTestCourse::Tick(float DeltaSeconds)
@@ -336,7 +366,7 @@ void ARigTestCourse::TickDriver(double DeltaSeconds)
 	const FRoadAgent* Agent = Model != nullptr ? Model->FindAgent(ActiveAgentId) : nullptr;
 	if (Agent == nullptr)
 	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s vanished before it arrived."), Leg, *To.Label, *Who);
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s vanished before it arrived; skipped as stuck."), Leg, *To.Label, *Who);
 		ActiveAgentId = 0;
 		FinishAttempt(ERigLegOutcome::Stuck, TEXT("vanished"));
 		return;
@@ -353,6 +383,8 @@ void ARigTestCourse::TickDriver(double DeltaSeconds)
 
 	// A JACK-KNIFED AGENT HOLDS FOR EVER: only StartDrive clears the link, and every course
 	// agent is fresh. Retire it through the normal path and move on.
+	// ENFORCED BY: Airside.Model.Tow.JackknifeStops (the fold holds 60 frames on) and
+	// AirportMgr.RigCourse.JackknifeIsRetired (this branch is what ends the leg)
 	if (Agent->GetJackknifedLink() != INDEX_NONE)
 	{
 		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s jack-knifed at link %d"),
@@ -393,6 +425,13 @@ void ARigTestCourse::StartAttempt()
 	const URoadNetwork* Network = NetworkActor->GetNetwork();
 	if (Network == nullptr)
 	{
+		// Nothing to plan over: say so ONCE and wait, rather than a warning every tick or a
+		// loop of "refused" legs that would blame the roads for a missing network.
+		if (!bWarnedNoNetwork)
+		{
+			bWarnedNoNetwork = true;
+			UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: the network actor has no network - nothing to drive."));
+		}
 		return;
 	}
 	const FRigCourseWaypoint& From = Waypoints[Leg];
@@ -405,7 +444,11 @@ void ARigTestCourse::StartAttempt()
 	const FGuidelineNodeId Goal = ResolveWaypoint(*Network, To);
 	FRoutePlan Plan;
 	FString Reason;
-	if (!Start.IsSet() || !Goal.IsSet())
+	if (PlanOverrideForTest && PlanOverrideForTest(Leg, VehicleSlot, Plan))
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: leg %d (%s) %s: plan overridden by the test."), Leg, *To.Label, *Who);
+	}
+	else if (!Start.IsSet() || !Goal.IsSet())
 	{
 		Reason = FString::Printf(TEXT("%s: no lane end at %s"), *Who, Start.IsSet() ? TEXT("the goal") : TEXT("the start"));
 	}
@@ -439,16 +482,34 @@ void ARigTestCourse::StartAttempt()
 
 	if (!NetworkActor->DispatchAgent(Plan, Vehicle, ETraversalClass::GroundVehicle))
 	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s: the dispatch was refused; skipped."), Leg, *To.Label, *Who);
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s: the dispatch was refused; skipped as stuck."), Leg, *To.Label, *Who);
 		FinishAttempt(ERigLegOutcome::Stuck, TEXT("dispatch refused"));
 		return;
 	}
+	// THE NEWEST ID, because the forwarder answers only a bool: ARoadNetworkActor::DispatchAgent
+	// is an IRoadEditTarget override, and widening that seam for one dev tool is not worth it.
+	// Sound here because one agent is out at a time and the dispatch just succeeded.
 	ActiveAgentId = NetworkActor->GetTraffic()->GetNewestAgentId();
 	ActiveElapsed = 0.0;
-	ActiveTimeout = LegTimeoutSeconds(Vehicle, Plan.Length);
-	ActiveGoal = Network->GetGuidelineNode(Goal)->Position;
+	ActiveTimeout = LegTimeoutSeconds(Vehicle, Plan.Length, LegTimeoutFactor);
+	// The plan's own end: the goal's lane end, or wherever an overriding plan goes.
+	ActiveGoal = Plan.Polyline.Last();
 	bActiveReversed = false;
 	LoopResults[Key].GoalPosition = ActiveGoal;
+	LoopResults[Key].AgentId = ActiveAgentId;
+
+	// THE CRAWL, REPORTED: FSpeedProfile is the drivability authority, and a sharp vertex is an
+	// instantaneous heading change it crawls at steering speed - the width step's jog, and
+	// nothing else on this course should have one (AirportMgr.RigCourse.OneLoopHeadless).
+	FSpeedProfile Profile;
+	Profile.Build(Plan.Polyline, Vehicle.Chassis);
+	LoopResults[Key].SharpVertexCount = Profile.GetSharpVertexCount();
+	LoopResults[Key].SharpestDegrees = Profile.GetSharpestDegrees();
+	if (Profile.HasSharpVertex())
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s: FSpeedProfile reports %d sharp vertex(es), sharpest %.0f deg at %.0f m - it will crawl there."),
+			Leg, *To.Label, *Who, Profile.GetSharpVertexCount(), Profile.GetSharpestDegrees(), Profile.GetSharpestAt() / 100.0);
+	}
 	UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: leg %d (%s) %s dispatched as agent %d, %.0f m, allowance %.0f s."),
 		Leg, *To.Label, *Who, ActiveAgentId, Plan.Length / 100.0, ActiveTimeout);
 }
@@ -471,7 +532,7 @@ FString ARigTestCourse::DescribeRefusal(const URoadNetwork& Network, const FRout
 	// THE ROUTER'S OWN RULE, asked again for its figures (VehicleFit::Judge is Fits' body), so
 	// the numbers printed are the ones the refusal was made on.
 	const FFitVerdict Verdict = VehicleFit::Judge(*Edge, Vehicle, Network);
-	Text += FString::Printf(TEXT(" at node %d (%.0f, %.0f)"), Edge->A.Index, At->Position.X, At->Position.Y);
+	Text += FString::Printf(TEXT(" at guideline node %d (%.0f, %.0f)"), Edge->A.Index, At->Position.X, At->Position.Y);
 	if (!Verdict.Fits())
 	{
 		Text += TEXT(", ") + Verdict.Describe();

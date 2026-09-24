@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Model/RoadHandles.h"
+#include "Model/RouteSearch.h"
 #include "Model/Vehicle.h"
 #include "RigTestCourse.generated.h"
 
@@ -25,7 +26,14 @@ enum class ERigCourseFeature : uint8
 	/** The T junction, into its stem or back out of it - the stem is driven both ways. */
 	TeeJunction,
 	/** The dead end's derived U-turn balloon. */
-	DeadEnd
+	DeadEnd,
+	/**
+	 * A width change on a STRAIGHT, at a degree-2 node: Narrow -> Wide mid-straight. Kept on
+	 * purpose (controller ruling 5, 2026-09-25) to pin a builder defect rather than lay round
+	 * it: the derived turn at such a node is a lane-offset jog with MinRadius 0 (unmeasured, so
+	 * not gated) that FSpeedProfile reports as a sharp vertex and crawls. Not one of the 3 x 5.
+	 */
+	WidthStep
 };
 
 /**
@@ -77,6 +85,11 @@ struct FRigLegResult
 	double DistanceLeft = 0.0;
 	/** True if the agent was ever seen Reversing on this leg: the course has no reverse legs. */
 	bool bReversed = false;
+	/** The agent that drove it, or 0 - retired by the time the result is read. */
+	int32 AgentId = 0;
+	/** FSpeedProfile::GetSharpVertexCount over the leg's plan: instantaneous heading changes. */
+	int32 SharpVertexCount = 0;
+	double SharpestDegrees = 0.0;
 };
 
 /**
@@ -137,18 +150,28 @@ public:
 	const TArray<FRigLegResult>& LastLoopResultsForTest() const { return LastLoopResults; }
 
 	/**
-	 * A leg's allowance, seconds: LegTimeoutFactor times the time to drive Length at the cap
-	 * speed from rest to rest. Past it the leg is logged stuck and skipped.
+	 * A leg's allowance, seconds: Factor times the time to drive Length at the cap speed from
+	 * rest to rest. Past it the leg is logged stuck and skipped.
 	 */
-	static double LegTimeoutSeconds(const FVehicle& Vehicle, double Length);
+	static double LegTimeoutSeconds(const FVehicle& Vehicle, double Length, double Factor);
+
+	/** The stuck exit's test: a tiny factor makes every leg time out. */
+	void SetLegTimeoutFactorForTest(double Factor) { LegTimeoutFactor = Factor; }
 
 	/**
-	 * THREE TIMES the ideal - generous on purpose: this is a hang detector, not a speed test,
-	 * and corners slow a vehicle well below its cap. The ideal includes getting up to speed and
-	 * stopping again (Cap/Accel + Cap/Decel), because on a 25 m leg that is most of the time
-	 * and a bare Length/Cap would call a healthy truck stuck.
+	 * Consulted in StartAttempt BEFORE route search: return true having filled the plan to
+	 * drive that (leg, vehicle slot) on it instead. The jack-knife exit's test feeds a hairpin
+	 * the rig folds on, which no route search would ever hand out.
 	 */
-	static constexpr double LegTimeoutFactor = 3.0;
+	TFunction<bool(int32 Leg, int32 Slot, FRoutePlan& OutPlan)> PlanOverrideForTest;
+
+	/** The agent out now (0 when none), and the leg and vehicle slot it is on. */
+	int32 GetActiveAgentIdForTest() const { return ActiveAgentId; }
+	int32 GetActiveLegForTest() const { return Leg; }
+	int32 GetActiveSlotForTest() const { return VehicleSlot; }
+
+	/** ConnectNodes calls refused while the course was laid. */
+	int32 GetRefusedConnectsForTest() const { return RefusedConnects; }
 
 private:
 	void TickDriver(double DeltaSeconds);
@@ -184,6 +207,19 @@ private:
 	/** This loop's results, and the last completed loop's. */
 	TArray<FRigLegResult> LoopResults;
 	TArray<FRigLegResult> LastLoopResults;
+
+	/**
+	 * THREE TIMES the ideal - generous on purpose: this is a hang detector, not a speed test,
+	 * and corners slow a vehicle well below its cap. The ideal includes getting up to speed and
+	 * stopping again (Cap/Accel + Cap/Decel), because on a 25 m leg that is most of the time
+	 * and a bare Length/Cap would call a healthy truck stuck. Measured 2026-09-25: the slowest
+	 * healthy leg used 0.33 of it. An INSTANCE member, not a constant, only so a test can
+	 * shrink it and make the stuck exit fire; nothing else sets it.
+	 */
+	double LegTimeoutFactor = 3.0;
+
+	int32 RefusedConnects = 0;
+	bool bWarnedNoNetwork = false;
 
 	/** Where each refused (leg, vehicle) starts, for the red label - kept until it drives. */
 	TMap<int32, TPair<FVector, FString>> RefusalLabels;
