@@ -145,6 +145,13 @@ public:
 	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override;
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
 	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet) override;
+
+	/**
+	 * The airport's drive side, as one undoable edit that re-derives every lane (spec
+	 * 2026-09-23 §2). False, pushing no undo step, when it already is Side. NOT on
+	 * IRoadEditTarget: no tool sets it - the bar does, through the actor.
+	 */
+	bool SetDriveSide(EDriveSide Side);
 	virtual int32 SplitSegment(int32 SegmentIndex, FVector2D At) override;
 	virtual bool DeleteNode(int32 NodeIndex) override;
 	virtual bool DeleteSegment(int32 SegmentIndex) override;

@@ -11,6 +11,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
+#include "Solve/GuidelineGeom.h"
 
 bool FPlanReResolver::SpliceReplan(const URoadNetwork& Network, const FRouteQuery& Query,
 	int32 KeepSteps, FRoutePlan& Plan)
@@ -212,7 +213,9 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// just above: Network, Rules, Occupancy, NodeReach and RunwayChains are all fixed for the
 	// duration of this call, so every ReResolvePlan call and the stand re-offer pass below
 	// share the one bundle rather than each naming the five UGroundTraffic members again.
-	const FTrafficContext Context{Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds};
+	FTrafficContext Context{Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds};
+	Context.bLanesMirrored = LastDriveSide.IsSet() && LastDriveSide.GetValue() != Network.GetDriveSide();
+	LastDriveSide = Network.GetDriveSide();
 
 	int32 Considered = 0;
 	int32 Replanned = 0;
@@ -335,6 +338,161 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		LastRebuild.ReResolved, Replanned, Truncated, Stranded);
 }
 
+namespace
+{
+	/**
+	 * How far a driving vehicle may be moved sideways onto a lane running its way after a
+	 * drive-side flip, uu: two Wide lanes (2 x 450), rounded up. The flip moves every lane by
+	 * the lane spacing; anything further is a different road.
+	 */
+	constexpr double FlipRejoinRadius = 1000.0;
+
+	/**
+	 * After a drive-side flip: the nearest point, within FlipRejoinRadius of the vehicle, on an
+	 * edge running the way it was driving with a route to its goal from there; that route and
+	 * how far along its first step the point is. The vehicle hops sideways onto it - a visible
+	 * 3-4 m jump, once, on a deliberate airport-wide setting change; the alternative was
+	 * stranding every truck on the road.
+	 */
+	bool RejoinAfterFlip(FRoadAgent& Agent, const FRoutePlan& Plan, const FTrafficContext& Context,
+		FRoutePlan& OutPlan, double& OutTravelled, FVector2D& OutAt)
+	{
+		const URoadNetwork& Network = Context.Network;
+		const FVector2D Here = Agent.LastMotion.Position;
+		const FVector2D Facing(FMath::Cos(Agent.LastMotion.Heading), FMath::Sin(Agent.LastMotion.Heading));
+
+		// The goal is usually an anchor or a stand pose, whose handle survives any rebuild. A
+		// lane end does not, and the NEAREST node to where the plan ended is the wrong stand-in
+		// for the same reason the start is: the old lane end's position now holds the start of
+		// the lane running the other way. So: the nearest node the vehicle can ARRIVE at still
+		// heading the way the old plan arrived.
+		FGuidelineNodeId Goal = Network.GetGuidelineNode(Agent.GoalNode) != nullptr ? Agent.GoalNode : FGuidelineNodeId();
+		if (!Goal.IsSet() && Plan.Polyline.Num() >= 2)
+		{
+			const FVector2D End = Plan.Polyline.Last();
+			const FVector2D Arriving = (End - Plan.Polyline[Plan.Polyline.Num() - 2]).GetSafeNormal();
+			double Best = FlipRejoinRadius;
+			const TArray<FGuidelineNode>& All = Network.GetGuidelineNodes();
+			for (int32 Index = 0; Index < All.Num(); ++Index)
+			{
+				const double Distance = FVector2D::Distance(All[Index].Position, End);
+				if (!All[Index].bAlive || Distance >= Best)
+				{
+					continue;
+				}
+				bool bArrivesFacing = false;
+				for (const FGuidelineEdgeId EdgeId : All[Index].Incident)
+				{
+					const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
+					if (Edge == nullptr || !Edge->AllowedTraffic.Allows(Agent.Class))
+					{
+						continue;
+					}
+					const bool bAtB = Edge->B == Network.GuidelineNodeIdAt(Index);
+					const bool bMayArrive = Edge->Direction == EGuidelineDir::Bidirectional
+						|| (bAtB && Edge->Direction == EGuidelineDir::AToB)
+						|| (!bAtB && Edge->Direction == EGuidelineDir::BToA);
+					bArrivesFacing |= bMayArrive
+						&& FVector2D::DotProduct((All[Index].Position - Edge->Control).GetSafeNormal(), Arriving) > 0.5;
+				}
+				if (bArrivesFacing)
+				{
+					Best = Distance;
+					Goal = Network.GuidelineNodeIdAt(Index);
+				}
+			}
+		}
+		if (!Goal.IsSet())
+		{
+			return false;
+		}
+
+		// EDGES, NOT NODES. A straight lane is ONE edge with nodes only at its cut ends, so a
+		// search for nearby NODES found one only for a truck beside a lane end, and stranded
+		// every other truck on the road for good (review of 2026-09-23). The vehicle is
+		// projected onto the nearest edge running its way and restarts part-way along it.
+		//
+		// A LINEAR SCAN, sampling every edge, once per driving vehicle, once per flip -
+		// O(vehicles x edges x samples), UNMEASURED on 2026-09-23 and accepted because a flip
+		// is a deliberate, rare setting change. Bound it with a spatial index before anything
+		// makes a flip cheap to repeat.
+		struct FCandidate
+		{
+			FGuidelineEdgeId Edge;
+			FGuidelineNodeId From;
+			double Distance = 0.0;
+			double Along = 0.0;
+			FVector2D At = FVector2D::ZeroVector;
+		};
+		TArray<FCandidate> Candidates;
+		const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
+		{
+			const FGuidelineEdge& Edge = Edges[Index];
+			if (!Edge.bAlive || !Edge.AllowedTraffic.Allows(Agent.Class))
+			{
+				continue;
+			}
+			const FGuidelineEdgeId Id = Network.GuidelineEdgeIdAt(Index);
+			TArray<FVector2D> Points;
+			if (!Network.SampleGuideline(Id, Points) || Points.Num() < 2)
+			{
+				continue;
+			}
+			int32 Span = 0;
+			double Fraction = 0.0;
+			const double Distance = GuidelineGeom::NearestOnPolyline(Points, Here, Span, Fraction);
+			if (Distance > FlipRejoinRadius)
+			{
+				continue;
+			}
+
+			// Arc length from A to the projection, on the SAME samples the plan will walk.
+			double FromA = 0.0;
+			double Total = 0.0;
+			for (int32 P = 1; P < Points.Num(); ++P)
+			{
+				const double Leg = FVector2D::Distance(Points[P - 1], Points[P]);
+				FromA += P - 1 < Span ? Leg : (P - 1 == Span ? Leg * Fraction : 0.0);
+				Total += Leg;
+			}
+			const FVector2D AlongAToB = (Points[Span + 1] - Points[Span]).GetSafeNormal();
+			const FVector2D At = FMath::Lerp(Points[Span], Points[Span + 1], Fraction);
+
+			const bool bMayAToB = Edge.Direction != EGuidelineDir::BToA;
+			const bool bMayBToA = Edge.Direction != EGuidelineDir::AToB;
+			if (bMayAToB && FVector2D::DotProduct(AlongAToB, Facing) > 0.5)
+			{
+				Candidates.Add({ Id, Edge.A, Distance, FromA, At });
+			}
+			else if (bMayBToA && FVector2D::DotProduct(-AlongAToB, Facing) > 0.5)
+			{
+				Candidates.Add({ Id, Edge.B, Distance, Total - FromA, At });
+			}
+		}
+		Candidates.Sort([](const FCandidate& L, const FCandidate& R) { return L.Distance < R.Distance; });
+
+		for (const FCandidate& Candidate : Candidates)
+		{
+			FRouteQuery Query = FRouteQuery::For(ERouteErrand::RebuildReResolve,
+				Candidate.From, Goal, Agent.Wingspan(), Agent.Class);
+			Query.WithCongestion(Context.Occupancy, Agent.Id, Context.Rules.CongestionWeight);
+			const FRoutePlan Found = RouteSearch::Find(Network, Query);
+			// The route must BEGIN with the edge the vehicle is on, or starting it part-way
+			// along the first step would put it on some other road.
+			if (Found.IsValid() && Found.Steps.Num() > 0 && Found.Steps[0].Edge == Candidate.Edge)
+			{
+				OutPlan = Found;
+				OutTravelled = Candidate.Along;
+				OutAt = Candidate.At;
+				Agent.SetGoal(Goal);
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
 FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	FRoadAgent& Agent, FRoutePlan& Plan, int32 FromStep, const FTrafficContext& Context,
 	const FGuidelineNodeIndex& NodeIndex)
@@ -421,6 +579,33 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	if (Plan.Steps.Num() == 0 || FromStep < 0 || FromStep >= Plan.Steps.Num())
 	{
 		return Strand(TEXT("its plan is malformed: no steps, or a current step off the end of them"));
+	}
+
+	// THE DRIVE SIDE FLIPPED. Position is no guide now - the old lane's positions hold the
+	// opposite lane's nodes exactly - so a driving vehicle rejoins by HEADING and re-routes.
+	// Only ground vehicles: aircraft use centreline taxiways, which a flip does not move.
+	// ENFORCED BY: Airside.Present.DriveSide.Composition
+	if (Context.bLanesMirrored && bDriving && Agent.Class == ETraversalClass::GroundVehicle)
+	{
+		FRoutePlan Rejoined;
+		double Travelled = 0.0;
+		FVector2D At = FVector2D::ZeroVector;
+		if (!RejoinAfterFlip(Agent, Plan, Context, Rejoined, Travelled, At))
+		{
+			return Strand(TEXT("the drive side flipped and no lane running its way reaches its goal"));
+		}
+		Occupancy.ReleaseReservations(Agent.Id);
+		Occupancy.ReleaseGuidelineClaimsOf(Agent.Id);
+		Agent.ClearArbitration();
+		Agent.ResetStall();
+		const FGuidelineNodeId Goal = Agent.GoalNode;
+		Agent.RestartTaxi(Rejoined, Travelled);
+		// RestartTaxi's fallback pose is the plan's first point; the vehicle is part-way along.
+		Agent.LastMotion.Position = At;
+		Agent.SetGoal(Goal);
+		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d rejoined its side after the drive side flipped: %.0f uu to go"),
+			Agent.Id, Rejoined.Length - Travelled);
+		return EReResolve::Replanned;
 	}
 
 	const double Radius = Rules.ResolveRadius;

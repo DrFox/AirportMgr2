@@ -97,6 +97,11 @@ ICONS = {
     # The ledger panel. An abacus rather than a scroll or a notebook: it reads as COUNTING
     # at 24 pixels, where a scroll reads as a quest log and a notebook as notes.
     "game.ledger":         ("delapouite", "abacus"),
+
+    # The drive-side toggle (2026-09-23). A steering wheel: it reads as DRIVING at 24 pixels,
+    # and which side the wheel sits on is the everyday sign of which side a country drives.
+    # "delapouite/two-way-traffic" returns the HTML 404 under HTTP 200; this one is real.
+    "game.driveside":      ("delapouite", "steering-wheel"),
 }
 
 # The notification icons, one per ENotificationSeverity. Keyed by the severity name rather

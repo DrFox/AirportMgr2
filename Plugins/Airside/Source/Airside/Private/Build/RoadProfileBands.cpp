@@ -88,6 +88,19 @@ FRoadProfileBands FRoadProfileBands::FromProfile(const URoadProfile* Profile,
 		}
 	}
 
+	// NO MATERIAL CENTRELINE: shift every lateral far from zero, so M_RoadSurface's
+	// |lateral| < CentrelineWidth mask is false everywhere on this ribbon. UV1.X feeds nothing
+	// else in the material (build_road_material.py), and a uniform shift keeps the laterals
+	// ascending. See URoadProfile::bMaterialCentreline.
+	if (!Profile->bMaterialCentreline)
+	{
+		constexpr float NoCentrelineLateral = 100000.0f;
+		for (float& Shifted : Out.Laterals)
+		{
+			Shifted += NoCentrelineLateral;
+		}
+	}
+
 	// The centreline sits at lateral 0, which is HalfRight along a cut line that starts at
 	// -HalfRight. Derived here from the same two half-widths the laterals use, so no caller
 	// can arrive at a different answer for where the middle of the road is.

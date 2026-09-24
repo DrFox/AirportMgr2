@@ -415,6 +415,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet) override;
 
+	/** Which side of a two-lane road traffic keeps to. Forwards to the facade; undoable. */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	bool SetDriveSide(EDriveSide Side);
+
+	/** Right when there is no network yet - the default a new one would have. */
+	EDriveSide GetDriveSide() const;
+
 	/**
 	 * DEPRECATED NAME, kept so a Blueprint that bound "SetHoldShort" still compiles - the
 	 * refactor contract: every UFUNCTION stays reachable at its old name as a forwarder.

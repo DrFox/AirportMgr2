@@ -36,10 +36,13 @@ namespace
 	}
 
 	/** A TURN PATH carries no DerivedFrom - that is how it is told apart from a segment's own
-	 *  guideline (see FRoadGuidelineBuilder, where DerivedFrom is deliberately left unset). */
+	 *  guideline (see FRoadGuidelineBuilder, where DerivedFrom is deliberately left unset).
+	 *  So does a dead end's U-turn balloon (2026-09-23), which lies at a road's FAR end - so a
+	 *  turn path here is also one whose control lies within the crossing junction at the
+	 *  origin. The taxiway ends are dead ends too, but a bidirectional arm gets no balloon. */
 	bool IsTurnPath(const FGuidelineEdge& Edge)
 	{
-		return Edge.bAlive && Edge.bDerived && !Edge.DerivedFrom.IsSet();
+		return Edge.bAlive && Edge.bDerived && !Edge.DerivedFrom.IsSet() && Edge.Control.Size() < 5000.0;
 	}
 }
 

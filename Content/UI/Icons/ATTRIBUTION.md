@@ -17,6 +17,7 @@ drives the downloads, so it cannot drift from what was fetched.
 | `edit.redo` | clockwise-rotation | delapouite |
 | `edit.remove` | trash-can | delapouite |
 | `edit.undo` | anticlockwise-rotation | delapouite |
+| `game.driveside` | steering-wheel | delapouite |
 | `game.feedown` | pay-money | delapouite |
 | `game.feeup` | receive-money | delapouite |
 | `game.ledger` | abacus | delapouite |

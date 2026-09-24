@@ -346,13 +346,15 @@ void FRoadAgent::StartDrive(const FRoutePlan& Plan, const FVehicle& InVehicle)
 	RestartTaxi(Plan);
 }
 
-void FRoadAgent::RestartTaxi(const FRoutePlan& Plan)
+void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled)
 {
 	// THE BODY OF WHAT StartTaxi USED TO BE, minus the one line that stored the airframe:
 	// the bundle is whatever the caller (StartTaxi, StartDrive, or a redirect keeping its own)
 	// has already put in place, and Chassis() reads the right one of the two.
 	Phase = EAgentPhase::Taxiing;
-	Follower.Start(Plan, Chassis());
+	// InitialTravelled is non-zero for one caller: a vehicle rejoining its lane MID-EDGE after a
+	// drive-side flip (FPlanReResolver), which starts part-way along the plan's first step.
+	Follower.Start(Plan, Chassis(), 0.0, TOptional<double>(), InitialTravelled);
 
 	bEngineRunning = true;
 

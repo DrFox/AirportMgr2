@@ -1,4 +1,4 @@
-"""Authors the service-road cross-section and wires it into the content set. Run headless:
+"""Authors the road cross-sections and wires them into the content set. Run headless:
 
   UnrealEditor-Cmd.exe <project> -run=pythonscript -script=<this file> -unattended -nosplash -nopause
 
@@ -20,18 +20,21 @@ The taxiway profile is deliberately NOT authored here. It has never been an asse
 that carry no profile fall back to ARoadNetworkActor's own FallbackWidth, which is
 per-instance tuning the content set has no business overriding (see ResolveProfile).
 
-Re-running replaces the asset, and that needs the editor CLOSED: a running editor holds the
-.uasset open and create_asset then refuses under -unattended.
+Re-running FILLS EACH ASSET IN PLACE (since 2026-09-23). It used to delete and recreate, which
+dies on references: DA_AirsideContent and every saved level point at these assets, and a
+delete under -unattended either refuses or leaves the referencers pointing at nothing. It
+still needs the editor CLOSED, because a running editor holds the .uasset open.
 """
 import unreal
 
 ASSET_DIR = "/Game"
 CONTENT_SET = "/Game/DA_AirsideContent"
 
-# The service road's CROSS-SECTION, in uu (a uu is a centimetre): a 6 m lane between 0.6 m
-# kerbs. Wide enough for two vans to pass, tight enough that a road reads as a road beside a
-# 23 m taxiway. These are the defaults URoadProfile::MakeServiceRoadTransient uses, so the
-# shipped asset and every test fixture are the same cross-section.
+# The service road's CROSS-SECTION, in uu (a uu is a centimetre): two 3 m lanes, one each way,
+# between 0.6 m kerbs - 7.2 m overall, the NARROW road. LANE_WIDTH IS PER LANE since
+# 2026-09-23; until then it was kerb to kerb, so "600" meant 4.8 m of carriageway. These are
+# the defaults URoadProfile::MakeServiceRoadTransient uses, so the shipped asset and every
+# test fixture are the same cross-section.
 #
 # THE CORNER IS NOT STATED HERE, and this comment used to name one - "on a 7.5 m corner" -
 # for a breath after the constant beneath it had gone. A figure in prose drifts exactly as a
@@ -49,7 +52,7 @@ CONTENT_SET = "/Game/DA_AirsideContent"
 # The radius is now DERIVED in C++ from the largest service vehicle admitted - see
 # URoadProfile::ResolvedFilletRadius - so this script states nothing and can drift from
 # nothing. Passing zero below is what asks for that derivation.
-LANE_WIDTH = 600.0
+LANE_WIDTH = 300.0
 KERB_WIDTH = 60.0
 DERIVE_FILLET = 0.0
 
@@ -74,16 +77,18 @@ TAXIWAY_FILLET_RATIO = 2.0 / 3.0
 
 
 def replace_asset(name, asset_class, factory):
-    """Delete any existing asset of this name and create a fresh one."""
+    """The existing asset of this name, to be refilled in place; created only if missing.
+
+    NOT delete-and-recreate - see the module docstring. The caller's Fill resets every band
+    and guideline, so reusing the object leaves nothing of the old cross-section behind.
+    """
     path = "%s/%s" % (ASSET_DIR, name)
 
     if unreal.EditorAssetLibrary.does_asset_exist(path):
         existing = unreal.EditorAssetLibrary.load_asset(path)
         if existing is not None:
-            unreal.EditorAssetLibrary.delete_loaded_asset(existing)
-        else:
-            unreal.EditorAssetLibrary.delete_asset(path)
-        unreal.log("MARKER: replaced existing %s" % path)
+            unreal.log("MARKER: refilling existing %s in place" % path)
+            return existing
 
     tools = unreal.AssetToolsHelpers.get_asset_tools()
     created = tools.create_asset(name, ASSET_DIR, asset_class, factory)
@@ -107,8 +112,11 @@ def build_service_road():
     if profile is None:
         return None
 
-    unreal.RoadProfile.fill_service_road(profile, LANE_WIDTH, KERB_WIDTH, DERIVE_FILLET)
-    unreal.EditorAssetLibrary.save_asset("%s/DA_RoadProfile_ServiceRoad" % ASSET_DIR)
+    unreal.RoadProfile.fill_two_way_road(profile, LANE_WIDTH, KERB_WIDTH, DERIVE_FILLET)
+    # only_if_is_dirty=False: a Fill through Python does not mark the package dirty, and the
+    # default then saves NOTHING while reporting success (memory: save_asset writes nothing
+    # unless forced).
+    unreal.EditorAssetLibrary.save_asset("%s/DA_RoadProfile_ServiceRoad" % ASSET_DIR, only_if_is_dirty=False)
 
     bands = profile.get_editor_property("bands")
     guidelines = profile.get_editor_property("guidelines")
@@ -139,7 +147,7 @@ def build_taxiways():
 
         fillet = width * TAXIWAY_FILLET_RATIO
         unreal.RoadProfile.fill(profile, width, fillet)
-        unreal.EditorAssetLibrary.save_asset("%s/%s" % (ASSET_DIR, name))
+        unreal.EditorAssetLibrary.save_asset("%s/%s" % (ASSET_DIR, name), only_if_is_dirty=False)
 
         unreal.log("MARKER: %s built, %.1f m wide, %.1f m fillet" % (
             name, width / 100.0, fillet / 100.0))

@@ -552,6 +552,13 @@ private:
 	/** What the last OnGraphRebuilt did. Test-facing, as above. */
 	FGraphRebuildSummary LastRebuild;
 
+	/**
+	 * The drive side the last OnGraphRebuilt saw, so the next can tell a flip from any other
+	 * edit (FTrafficContext::bLanesMirrored). Unset until the first rebuild. Not a UPROPERTY:
+	 * it describes what this session's agents were planned against, not saved state.
+	 */
+	TOptional<EDriveSide> LastDriveSide;
+
 	/** Assigns the id, stores the agent, announces Gone -> its phase. The one place all three happen. */
 	int32 Admit(FRoadAgent&& Agent);
 

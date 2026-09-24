@@ -1,6 +1,7 @@
 #include "BuildActions.h"
 #include "Model/Pricing.h"
 #include "Present/OpsRuntime.h"
+#include "Present/RoadNetworkActor.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "RoadBuildController.h"
 #include "Tool/BuildSession.h"
@@ -159,6 +160,22 @@ namespace
 			[](FBuildActionContext& Ctx) { Ctx.Controller.QuickSave(); }, Never, HasRuntime));
 		Out.Add(Make(TEXT("game.load"), EActionSection::Game, LOCTEXT("Load", "Load"), EKeys::L, false,
 			[](FBuildActionContext& Ctx) { Ctx.Controller.QuickLoad(); }, Never, HasRuntime));
+
+		// THE DRIVE SIDE (spec 2026-09-23 §2), through this table for the fee lever's reason
+		// below. Lit while traffic keeps left. No key: a mis-hit re-lanes the whole airport.
+		// Bound to Ctx.Target, the road actor, which owns the edit and its undo step.
+		Out.Add(Make(TEXT("game.driveside"), EActionSection::Game, LOCTEXT("DriveLeft", "Drive left"),
+			EKeys::Invalid, false,
+			[](FBuildActionContext& Ctx)
+			{
+				if (Ctx.Target != nullptr)
+				{
+					Ctx.Target->SetDriveSide(Ctx.Target->GetDriveSide() == EDriveSide::Left
+						? EDriveSide::Right : EDriveSide::Left);
+				}
+			},
+			[](const FBuildActionContext& Ctx) { return Ctx.Target != nullptr && Ctx.Target->GetDriveSide() == EDriveSide::Left; },
+			[](const FBuildActionContext& Ctx) { return Ctx.Target != nullptr; }));
 
 		// THE FEE LEVER, and it goes THROUGH THIS TABLE rather than beside it. BuildActions is
 		// already the one list the bar, the key bindings and the inspector all read, and a pair

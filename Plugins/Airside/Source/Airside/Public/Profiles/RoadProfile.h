@@ -66,8 +66,21 @@ struct AIRSIDE_API FProfileGuideline
 {
 	GENERATED_BODY()
 
-	/** Lateral offset from the centreline in uu: positive left, negative right. */
+	/**
+	 * Lateral offset from the centreline in uu: positive left, negative right - LEFT IN THE
+	 * MODEL'S SENSE, PerpCCW of the A->B tangent (JunctionSolver's LeftCut). UE is
+	 * left-handed, so seen from above that is SCREEN-RIGHT of travel. Authored for
+	 * right-hand traffic; read it through OffsetFor, never directly, when laying a lane.
+	 */
 	UPROPERTY(EditAnywhere) double CentreOffset = 0.0;
+
+	/**
+	 * CentreOffset as laid under Side. Profiles are authored for right-hand traffic and left
+	 * mirrors them across the centreline; Direction stays tied to A/B, so the lane that ran
+	 * A->B on the right runs A->B on the left - which is what left-hand traffic is. A
+	 * centreline guideline (a taxiway's) does not move under either side.
+	 */
+	double OffsetFor(EDriveSide Side) const { return Side == EDriveSide::Left ? -CentreOffset : CentreOffset; }
 
 	UPROPERTY(EditAnywhere) ETraversalClass Class = ETraversalClass::Aircraft;
 	UPROPERTY(EditAnywhere) EGuidelineDir Direction = EGuidelineDir::Bidirectional;
@@ -211,6 +224,16 @@ public:
 	UPROPERTY(EditAnywhere) bool bContinuousThroughJunctions = false;
 
 	/**
+	 * Whether the ROAD MATERIAL paints this profile's centreline. M_RoadSurface paints a solid
+	 * line wherever |UV1 lateral| < CentrelineWidth - a taxiway's yellow centreline. A two-way
+	 * road's centre is painted instead by FRoadLaneMarkingBuilder as white dashes, and with
+	 * this left true the dashes sat on a solid yellow line (review of 2026-09-23). False makes
+	 * FRoadProfileBands keep every lateral far from zero, which is the only thing UV1.X feeds.
+	 * ENFORCED BY: Airside.Build.TwoWayRoadHasNoMaterialCentreline
+	 */
+	UPROPERTY(EditAnywhere) bool bMaterialCentreline = true;
+
+	/**
 	 * How far before a junction an exit from THIS profile begins, uu, measured along the
 	 * centreline - and the same distance back along the taxiway that meets it. Read only
 	 * from a continuous profile: the runway decides its own exits, per profile, so an 18 m
@@ -266,12 +289,15 @@ public:
 		double ShoulderWidth = 0.0);
 
 	/**
-	 * Fills Profile with the SERVICE ROAD cross-section: kerb | lane | kerb, and one
-	 * guideline of class GroundVehicle.
+	 * Fills Profile with the SERVICE ROAD cross-section: kerb | lane | lane | kerb, and two
+	 * one-way GroundVehicle guidelines, one each way (spec 2026-09-23). LaneWidth is PER
+	 * LANE and EXCLUDES the kerbs - the old FillServiceRoad's LaneWidth was kerb to kerb,
+	 * which is how a "6 m" road came to have 4.8 m of carriageway; the rename is so no
+	 * caller keeps passing the old meaning unnoticed.
 	 *
 	 * A SECOND FILL RATHER THAN A PARAMETER ON THE FIRST, deliberately. Fill's taxiway is a
 	 * concrete lane between asphalt run-offs carrying ONE AIRCRAFT guideline; this is a
-	 * narrow kerbed lane carrying ONE VEHICLE guideline, and the two differ in band type,
+	 * kerbed carriageway carrying TWO VEHICLE lanes, and the two differ in band type,
 	 * band count, guideline class and exit length. A shared function taking five flags would
 	 * be a switch on "which road is this" spelled as parameters, and every caller would
 	 * still have to know which combination meant a road.
@@ -285,15 +311,14 @@ public:
 	 * than a second transcription of them that is free to drift.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	static void FillServiceRoad(URoadProfile* Profile, double LaneWidth, double KerbWidth,
+	static void FillTwoWayRoad(URoadProfile* Profile, double LaneWidth, double KerbWidth,
 		double FilletRadius);
 
 	/**
-	 * FillServiceRoad plus a NewObject, so there is one description of a service road.
+	 * FillTwoWayRoad plus a NewObject, so there is one description of a service road.
 	 *
-	 * The defaults are a 6 m lane with 0.6 m kerbs: wide enough for two vans to pass, tight
-	 * enough that a road reads as a road beside a 23 m taxiway - whose own fillet is 15.3 m,
-	 * so this is still visibly the smaller junction.
+	 * The defaults are the NARROW road: two 3 m lanes between 0.6 m kerbs, 7.2 m overall -
+	 * two vans pass, and it still reads as a road beside a 23 m taxiway.
 	 *
 	 * THE CORNER IS NOT A NUMBER ANY MORE. It was 500 uu, then 750, typed in four places -
 	 * here, build_road_profiles.py, DA_RoadProfile_ServiceRoad, and the test pinning two of
@@ -304,6 +329,6 @@ public:
 	 * rule aircraft geometry already follows, and leaves no second figure to drift.
 	 * See URoadProfile::ResolvedFilletRadius.
 	 */
-	static URoadProfile* MakeServiceRoadTransient(double LaneWidth = 600.0,
+	static URoadProfile* MakeServiceRoadTransient(double LaneWidth = 300.0,
 		double KerbWidth = 60.0, double FilletRadius = 0.0);
 };

@@ -7,6 +7,20 @@
 #include "Solve/JunctionSolver.h"
 #include "Solve/RoadGeom.h"
 
+bool URoadNetwork::SetDriveSide(EDriveSide Side)
+{
+	if (DriveSide == Side)
+	{
+		return false;
+	}
+	DriveSide = Side;
+	// NO ++EditRevision: that clock is scoped to nodes and segments (see GetEditRevision), and
+	// a flip moves neither - only the guidelines, which the rebuild re-derives and whose own
+	// clock the builder advances.
+	UE_LOG(LogAirside, Log, TEXT("Drive side -> %s"), Side == EDriveSide::Left ? TEXT("Left") : TEXT("Right"));
+	return true;
+}
+
 FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
 {
 	FRoadNode Node;
@@ -384,6 +398,9 @@ void URoadNetwork::CopyFrom(const URoadNetwork& Source)
 	GuidelineRevision = Source.GuidelineRevision;
 
 	HoldingPositionMarks = Source.HoldingPositionMarks;
+	// Named for the reason DefaultProfile is: the guideline builder reads it, so a scratch
+	// copy that dropped it would derive the other side's lanes.
+	DriveSide = Source.DriveSide;
 
 	Aprons = Source.Aprons;
 	ApronFreeList = Source.ApronFreeList;

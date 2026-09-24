@@ -726,7 +726,7 @@ public:
 	 * it is". Replaces that function copying Agent.Airframe out and handing it back to
 	 * StartTaxi, which cannot be written for an agent that may hold either bundle.
 	 */
-	void RestartTaxi(const FRoutePlan& Plan);
+	void RestartTaxi(const FRoutePlan& Plan, double InitialTravelled = 0.0);
 
 	/**
 	 * Sends a parked aeroplane off its stand: Phase becomes Manoeuvring. False, and leaves

@@ -3,6 +3,7 @@
 #include "AirsideLog.h"
 #include "Build/AnchorLink.h"
 #include "Build/HoldingPositionMarkingBuilder.h"
+#include "Build/RoadLaneMarkingBuilder.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -222,10 +223,19 @@ void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const F
 	UMaterialInterface* Material = RunwayMarkingMaterialInstance(Settings.SurfaceMaterial);
 
 	FRoadMeshBuffers Buffers;
+	// THE WHITE PAINT LAYER CARRIES ROAD LANE LINES TOO (spec 2026-09-23 §7), rather than a
+	// component of their own: a lane line is white road paint exactly as a runway's is, and a
+	// new default subobject would need every saved level resaved (a removed or added default
+	// subobject lingers in the .umap). RunwayCount keeps the census below counting runways.
+	int32 RunwayCount = 0;
+	int32 LaneDashes = 0;
+	int32 LaneSegments = 0;
 	const int32 Painted = RebuildLayer(ESurfaceLayer::RunwayPaint,
-		[&Network, MarkingZ, &Census](FRoadMeshBuffers& OutBuffers)
+		[&Network, MarkingZ, &Census, &RunwayCount, &LaneDashes, &LaneSegments](FRoadMeshBuffers& OutBuffers)
 		{
-			return FRunwayMarkingBuilder::Build(Network, MarkingZ, OutBuffers, &Census);
+			RunwayCount = FRunwayMarkingBuilder::Build(Network, MarkingZ, OutBuffers, &Census);
+			LaneDashes = FRoadLaneMarkingBuilder::Build(Network, MarkingZ, OutBuffers, &LaneSegments);
+			return RunwayCount + LaneDashes;
 		},
 		Material != nullptr ? Material : Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers,
 		Settings.bQuiet);
@@ -243,8 +253,9 @@ void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const F
 		UE_LOG(LogRoadMesh, Log,
 			TEXT("Runway markings: %d runway(s), %d triangle(s) at Z=%.1f - %d threshold stripes, %d designator strokes, ")
 			TEXT("%d centreline dashes, %d aiming bars, %d touchdown stripes, %d side stripes, %d grass markers"),
-			Painted, Buffers.Indices.Num() / 3, MarkingZ, Census.ThresholdStripes, Census.DesignatorStrokes,
+			RunwayCount, Buffers.Indices.Num() / 3, MarkingZ, Census.ThresholdStripes, Census.DesignatorStrokes,
 			Census.CentrelineDashes, Census.AimingPointBars, Census.TouchdownStripes, Census.SideStripes, Census.GrassMarkers);
+		UE_LOG(LogRoadMesh, Log, TEXT("Lane markings: %d dashes on %d segment(s)"), LaneDashes, LaneSegments);
 	}
 }
 
