@@ -80,17 +80,16 @@ namespace
 		}
 		TArray<FVector2D> Points;
 		GuidelineGeom::Sample(PA, Turn.Control, PB, Points);
+		// EVERY SAMPLE, recorded per sample (2026-09-24). A first cut kept only the minimum over
+		// the middle third, because a single minimum over all samples was always the in-lane
+		// ends (280 uu at every Wide fillet) and the steady-state envelope it was compared with
+		// only applies at the apex. VehicleFit now simulates the turn and compares sample by
+		// sample, so the ends are judged by what reaches them - usually nothing wide.
+		Turn.ClearInnerAt.SetNum(Points.Num());
+		Turn.ClearOuterAt.SetNum(Points.Num());
 		double Inner = ClearanceCap;
 		double Outer = ClearanceCap;
-		// THE MIDDLE THIRD ONLY, where a quadratic turn is tightest - because that is where
-		// the steady-state envelope it is compared against (VehicleSweep at MinRadius) can
-		// happen. At the ends the line is still in its lane, off-tracking has not built up,
-		// and the lane's own half-width is the clearance: taking the minimum over EVERY sample
-		// made that 280 uu the answer at every Wide fillet from 10 m to 80 m (probe,
-		// 2026-09-24), and a rig could only turn right at a 55 m corner.
-		const int32 FirstSample = Points.Num() / 3;
-		const int32 LastSample = Points.Num() - 1 - Points.Num() / 3;
-		for (int32 Index = FirstSample; Index <= LastSample; ++Index)
+		for (int32 Index = 0; Index < Points.Num(); ++Index)
 		{
 			const FVector2D Tangent = (Points[FMath::Min(Index + 1, Points.Num() - 1)]
 				- Points[FMath::Max(Index - 1, 0)]).GetSafeNormal();
@@ -105,8 +104,12 @@ namespace
 				}
 				return D;
 			};
-			Inner = FMath::Min(Inner, March(Inward));
-			Outer = FMath::Min(Outer, March(-Inward));
+			const double In = March(Inward);
+			const double Out = March(-Inward);
+			Turn.ClearInnerAt[Index] = static_cast<float>(In);
+			Turn.ClearOuterAt[Index] = static_cast<float>(Out);
+			Inner = FMath::Min(Inner, In);
+			Outer = FMath::Min(Outer, Out);
 		}
 		Turn.ClearInner = Inner;
 		Turn.ClearOuter = Outer;

@@ -61,17 +61,16 @@ DERIVE_FILLET = 0.0
 # Per-lane widths; every tier is two lanes between the same kerbs. The Narrow tier keeps the
 # asset name every placed road already points at, so existing roads stay Narrow.
 #
-# (name, per-lane width, fillet). DERIVE_FILLET sizes the corner from the largest service
-# vehicle (the bowser). THE WIDE TIER IS AUTHORED, because its design vehicle is the
-# articulated rig, whose limit is its TRAILER'S swept path, not a steering lock: the smallest
-# fillet at which the rig turned both ways at a Wide T was 27.5 m (probe of 2026-09-24,
-# steady-state envelope), and 30 m is that plus a margin. Airside.Model.RigTurnsOnWide loads
-# THIS asset and fails if the figure stops being enough.
-WIDE_FILLET = 3000.0
+# (name, per-lane width, fillet). Every tier's corner is DERIVED from the largest service
+# vehicle (the bowser). The Wide tier carried an authored 30 m fillet for the articulated rig
+# from 2026-09-24 until the same day: that figure came from a steady-state swept-path model
+# that the EU turning circle showed to be far too harsh. Simulated through the actual turn,
+# and allowed to swing across both lanes as real drivers do, the rig turns both ways at the
+# derived corner (Airside.Model.RigTurnsOnWide).
 ROAD_TIERS = [
     ("DA_RoadProfile_ServiceRoad", LANE_WIDTH, DERIVE_FILLET),           # Narrow, 2 x 3.0 m
     ("DA_RoadProfile_ServiceRoad_Standard", 350.0, DERIVE_FILLET),       # Standard, 2 x 3.5 m
-    ("DA_RoadProfile_ServiceRoad_Wide", 450.0, WIDE_FILLET),             # Wide, 2 x 4.5 m - the rig's
+    ("DA_RoadProfile_ServiceRoad_Wide", 450.0, DERIVE_FILLET),           # Wide, 2 x 4.5 m
 ]
 
 # THE STANDARD TAXIWAY WIDTHS, by ICAO aerodrome code letter - the same reasoning

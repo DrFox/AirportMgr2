@@ -247,10 +247,17 @@ The rig import (articulated step 2) follows PR 3.
 - **The rig fits a straight Narrow lane** (2.54 m + 2 x 0.15 m margin < 3.0 m), as real
   lorries do. Test 6's "TooNarrow on Narrow and Standard" became: TooNarrow at a Narrow
   CORNER, admitted on a Wide T both ways.
-- **Clearance is measured at the apex** (middle third of a turn's samples). Measured over
-  every sample, the in-lane ends set it to 280 uu at every fillet and forced a 55 m corner.
-- **Wide tier fillet authored at 30 m**: the smallest that passed for the rig was 27.5 m
-  (steady-state envelope, conservative). Narrow/Standard stay derived from the bowser.
+- **Turns are SIMULATED, not steady-state** (second revision, 2026-09-24). The steady-state
+  envelope failed the EU turning circle and demanded a 30 m Wide corner. `VehicleSweep::Trace`
+  steps cab and trailer along the turn's own samples; the builder stores tarmac clearance at
+  every sample; a vehicle fits where, at each sample, its swept width (inside + outside) fits
+  the tarmac width there - it may swing across both lanes, as real drivers do. Known gap: the
+  claim model does not reserve the other lane, so an oncoming vehicle can overlap.
+- **Result**: the rig turns at Narrow and Wide junctions on the derived (bowser) corner; no
+  tier needs an authored fillet. It is refused at corners tighter than the cab's lock and where
+  the tarmac is too narrow for its swept width.
+- **The rig model's trailer is 10.3 m kingpin to axles** - longer than road-legal (~7.7 m with
+  this cab meets the EU 12.5/5.3 m circle). Raised with the owner; the gating uses the model as is.
 - **Balloons check the lock only** (clearance unmeasured, over grass): the rig passes the
   bowser-sized balloon on its lock alone, contrary to §4's "rig fails the balloon".
 - **Refusal**: `EFuelRefusal::TooNarrow`, card "no road wide enough for the fuel truck",

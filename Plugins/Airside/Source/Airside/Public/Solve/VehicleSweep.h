@@ -44,4 +44,24 @@ namespace VehicleSweep
 	};
 
 	AIRSIDE_API FEnvelope Envelope(const FBody& Body, double SteerRadius);
+
+	/**
+	 * THE TURN AS DRIVEN, not the steady state (review of 2026-09-24). The steered axle walks
+	 * Path - lead in straight along its first tangent, out straight along its last, far enough
+	 * for the whole vehicle - the fixed axle pursues it at the wheelbase, the kingpin rides the
+	 * tractor, and the trailer axle pursues the kingpin at KingpinToAxle. At every step each
+	 * body corner (and each axle end) is projected onto Path; its reach toward the turn's
+	 * centre and away from it is kept against the NEAREST SAMPLE, so OutInner[i]/OutOuter[i]
+	 * say how far the body reached either side of Path[i]. Points that project beyond either
+	 * end are in the straight lanes and are not recorded - lane Width gates those.
+	 *
+	 * WHY: a 90 degree corner ends before the trailer settles, so it cuts in less than
+	 * Envelope says - the steady-state model made the first Wide corner 30 m, where real rigs
+	 * turn in yards. It also cannot say WHERE the cut-in happens, which Trace does.
+	 *
+	 * False when the trailer folds past square to the tractor (a jack-knife): not drivable.
+	 * Measured on the SAME samples the follower walks, per the sample-once rule.
+	 */
+	AIRSIDE_API bool Trace(const FBody& Body, TArrayView<const FVector2D> Path,
+		TArray<double>& OutInner, TArray<double>& OutOuter);
 }

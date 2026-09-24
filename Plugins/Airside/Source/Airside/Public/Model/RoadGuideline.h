@@ -161,6 +161,16 @@ struct AIRSIDE_API FGuidelineEdge
 	UPROPERTY() double ClearInner = -1.0;
 	UPROPERTY() double ClearOuter = -1.0;
 
+	/**
+	 * The same clearances PER SAMPLE, one entry per point GuidelineGeom::Sample gives this
+	 * curve (2026-09-24). VehicleFit simulates the vehicle along those samples
+	 * (VehicleSweep::Trace) and asks, at each one, whether the body's reach either side fits
+	 * the tarmac there - which a single minimum cannot answer, because a trailer cuts in late
+	 * and a turn is widest in the middle. Empty means unmeasured (as -1 above).
+	 */
+	UPROPERTY() TArray<float> ClearInnerAt;
+	UPROPERTY() TArray<float> ClearOuterAt;
+
 	/** The surface this was derived from; unset when hand-drawn. */
 	UPROPERTY() FRoadSegmentId DerivedFrom;
 

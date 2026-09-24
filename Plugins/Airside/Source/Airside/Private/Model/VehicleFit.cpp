@@ -1,10 +1,12 @@
 #include "Model/VehicleFit.h"
 
 #include "Model/RoadGuideline.h"
+#include "Model/RoadNetwork.h"
 #include "Model/Vehicle.h"
+#include "Solve/GuidelineGeom.h"
 #include "Solve/VehicleSweep.h"
 
-bool VehicleFit::Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle)
+bool VehicleFit::Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle, const URoadNetwork& Network)
 {
 	const double Widest = Vehicle.WidestBody();
 	if (Widest > 0.0 && Edge.Width > 0.0 && Widest + 2.0 * WidthMargin > Edge.Width)
@@ -21,9 +23,24 @@ bool VehicleFit::Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle)
 	{
 		return false;
 	}
-	if (Widest <= 0.0)
+	if (Widest <= 0.0 || Edge.ClearInnerAt.Num() == 0)
 	{
 		return true;
+	}
+
+	const FGuidelineNode* A = Network.GetGuidelineNode(Edge.A);
+	const FGuidelineNode* B = Network.GetGuidelineNode(Edge.B);
+	if (A == nullptr || B == nullptr)
+	{
+		return true;
+	}
+	// THE SAMPLES THE BUILDER MEASURED AND THE FOLLOWER WALKS - the same call, so the
+	// clearances line up with the simulated path index for index.
+	TArray<FVector2D> Path;
+	GuidelineGeom::Sample(A->Position, Edge.Control, B->Position, Path);
+	if (Path.Num() != Edge.ClearInnerAt.Num() || Path.Num() != Edge.ClearOuterAt.Num())
+	{
+		return true;   // measured against a different sampling: say nothing rather than guess
 	}
 
 	VehicleSweep::FBody Body;
@@ -39,11 +56,17 @@ bool VehicleFit::Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle)
 		Body.TrailerRear = Vehicle.Trailer.RearBehindAxle;
 		Body.TrailerWidth = Vehicle.Trailer.Width;
 	}
-	const VehicleSweep::FEnvelope Envelope = VehicleSweep::Envelope(Body, Edge.MinRadius);
-	if (!Envelope.bHolds)
+	TArray<double> Inner, Outer;
+	if (!VehicleSweep::Trace(Body, Path, Inner, Outer))
 	{
 		return false;
 	}
-	return (Edge.ClearInner < 0.0 || Envelope.Inner <= Edge.ClearInner)
-		&& (Edge.ClearOuter < 0.0 || Envelope.Outer <= Edge.ClearOuter);
+	for (int32 Index = 0; Index < Path.Num(); ++Index)
+	{
+		if (Inner[Index] + Outer[Index] > Edge.ClearInnerAt[Index] + Edge.ClearOuterAt[Index])
+		{
+			return false;
+		}
+	}
+	return true;
 }

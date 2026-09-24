@@ -111,8 +111,17 @@ bool FVehicleGatingTest::RunTest(const FString& Parameters)
 			// of its rule (memory: FSpeedProfile is the drivability authority).
 			TestFalse(TEXT("and every metre of the route it was given is inside its lock"), Profile.WasTighterThanLock());
 		}
+		// SINCE 2026-09-24 THE RIG MAKES THIS TURN: simulated rather than steady-state, and
+		// swinging across both lanes as a real driver does (VehicleFit). It was refused here
+		// under the steady-state model, which the EU turning circle showed to be far too harsh.
+		TestTrue(TEXT("the rig gets round a Narrow corner, swinging across both lanes"),
+			Route(*Net, From, To, Rig).IsValid());
+	}
+	{
+		// A CORNER TIGHTER THAN THE CAB CAN STEER: a 2 m fillet on a Narrow T.
+		URoadNetwork* Net = TurnNorth(URoadProfile::MakeServiceRoadTransient(300.0, 60.0, 200.0), From, To);
 		const FRoutePlan RigPlan = Route(*Net, From, To, Rig);
-		TestEqual(TEXT("the rig's trailer cannot get round a Narrow corner"),
+		TestEqual(TEXT("the rig cannot steer round a 2 m corner"),
 			static_cast<int32>(RigPlan.Result), static_cast<int32>(ERouteResult::TooNarrow));
 		TestTrue(TEXT("and it says which edge"), RigPlan.RejectedEdge.IsSet());
 		const FGuidelineEdge* Rejected = Net->GetGuidelineEdge(RigPlan.RejectedEdge);
@@ -188,7 +197,8 @@ bool FRigTurnsOnWideTest::RunTest(const FString& Parameters)
 			&& VehicleGating::Route(*Net, NIn, WOut, Vehicle).IsValid();
 	};
 	TestTrue(TEXT("the rig turns both ways at a Wide junction - the tier it is the design vehicle of"), BothWays(Wide, Rig));
-	TestFalse(TEXT("and not at a Narrow one"), BothWays(Narrow, Rig));
+	TestTrue(TEXT("and at a Narrow one too, across both lanes - measured 2026-09-24 once the turn was simulated"),
+		BothWays(Narrow, Rig));
 	TestTrue(TEXT("the bowser turns both ways at a Narrow junction, as it did before gating"), BothWays(Narrow, Bowser));
 	return true;
 }
@@ -197,34 +207,48 @@ bool FRigTurnsOnWideTest::RunTest(const FString& Parameters)
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-// Review of 2026-09-24 item 4: removing the clearance comparison from VehicleFit left all 264
-// Model/Build tests green, so nothing measured it. These edges pass the lock and the envelope
-// holds; ONLY the clearance decides. Hand figures (Python, same geometry): the rig at R = 3000
-// sweeps 333 uu inside its steered axle's path and 156 outside.
+// Review of 2026-09-24 item 4, and the per-sample rule that replaced the steady-state one.
+// The edge is a REAL measured turn from a Wide T (so the path, the samples and the lock are
+// real); only its clearances are overridden, so nothing but the clearance comparison decides.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleFitClearanceTest, "Airside.Model.VehicleFitClearance",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FVehicleFitClearanceTest::RunTest(const FString& Parameters)
 {
 	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
-	FGuidelineEdge Turn;
-	Turn.MinRadius = 3000.0;
-	Turn.ClearOuter = 1000.0;
+	FGuidelineNodeId From, To;
+	URoadNetwork* Net = TurnNorth(URoadProfile::MakeServiceRoadTransient(450.0, 60.0, 1500.0), From, To);
 
-	Turn.ClearInner = 300.0;
-	TestFalse(TEXT("a trailer cutting 333 uu inside does not fit 300 of pavement"), VehicleFit::Fits(Turn, Rig));
-	Turn.ClearInner = 400.0;
-	TestTrue(TEXT("but fits 400"), VehicleFit::Fits(Turn, Rig));
+	const FGuidelineEdge* Found = nullptr;
+	for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+	{
+		if (Edge.bAlive && !Edge.DerivedFrom.IsSet() && Edge.MinRadius > Rig.Chassis.TightestFollowableRadius()
+			&& Edge.ClearInnerAt.Num() > 0 && Edge.Control.Size() < 10000.0)
+		{
+			Found = &Edge;
+			break;
+		}
+	}
+	if (!TestNotNull(TEXT("a measured turn the rig's lock can take"), Found)) { return false; }
+	FGuidelineEdge Turn = *Found;
 
-	Turn.ClearInner = 1000.0;
-	Turn.ClearOuter = 100.0;
-	TestFalse(TEXT("a cab swinging 156 uu out does not fit 100 outside"), VehicleFit::Fits(Turn, Rig));
-	Turn.ClearOuter = 200.0;
-	TestTrue(TEXT("but fits 200"), VehicleFit::Fits(Turn, Rig));
-
-	Turn.ClearInner = -1.0;
-	Turn.ClearOuter = -1.0;
-	TestTrue(TEXT("unmeasured clearance gates nothing - a balloon over grass"), VehicleFit::Fits(Turn, Rig));
+	auto WithClearance = [&Turn](float In, float Out)
+	{
+		FGuidelineEdge Copy = Turn;
+		for (float& V : Copy.ClearInnerAt) { V = In; }
+		for (float& V : Copy.ClearOuterAt) { V = Out; }
+		return Copy;
+	};
+	TestTrue(TEXT("with 20 m of tarmac either side the rig fits"),
+		VehicleFit::Fits(WithClearance(2000.f, 2000.f), Rig, *Net));
+	TestFalse(TEXT("with 1 m either side it does not - the clearance alone refuses"),
+		VehicleFit::Fits(WithClearance(100.f, 100.f), Rig, *Net));
+	TestTrue(TEXT("a tight inside is fine when the outside has room: the rig swings wide"),
+		VehicleFit::Fits(WithClearance(150.f, 2000.f), Rig, *Net));
+	FGuidelineEdge Unmeasured = Turn;
+	Unmeasured.ClearInnerAt.Reset();
+	Unmeasured.ClearOuterAt.Reset();
+	TestTrue(TEXT("unmeasured clearance gates nothing - a balloon over grass"), VehicleFit::Fits(Unmeasured, Rig, *Net));
 	return true;
 }
 

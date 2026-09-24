@@ -72,3 +72,108 @@ bool FVehicleSweepTest::RunTest(const FString& Parameters)
 }
 
 #endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+namespace VehicleSweepTrace
+{
+	VehicleSweep::FBody Rig(double KingpinToAxle = 1029.5)
+	{
+		VehicleSweep::FBody Body;
+		Body.Wheelbase = 370.0; Body.Width = 254.0; Body.FrontX = 516.0; Body.RearX = -78.0;
+		Body.KingpinX = 57.3; Body.KingpinToAxle = KingpinToAxle;
+		Body.TrailerFront = 166.0; Body.TrailerRear = 121.5; Body.TrailerWidth = 254.0;
+		return Body;
+	}
+
+	/** A right-angle quadratic turn, legs Leg: the shape a junction's turn path has. */
+	TArray<FVector2D> RightAngle(double Leg)
+	{
+		TArray<FVector2D> Path;
+		for (int32 I = 0; I <= 16; ++I)
+		{
+			const double T = I / 16.0;
+			const FVector2D A(0.0, -Leg), C(0.0, 0.0), B(Leg, 0.0);
+			Path.Add(A * FMath::Square(1.0 - T) + C * (2.0 * (1.0 - T) * T) + B * (T * T));
+		}
+		return Path;
+	}
+
+	double MaxOf(const TArray<double>& Values)
+	{
+		double Out = 0.0;
+		for (const double V : Values) { Out = FMath::Max(Out, V); }
+		return Out;
+	}
+}
+
+// A REGULATION, not a figure of ours (EU Directive 96/53/EC): an articulated vehicle must turn
+// a full circle within an outer radius of 12.5 m and an inner of 5.3 m. A rig with a 7.7 m
+// trailer wheelbase and our cab passes it under the steady-state model - the check that the
+// maths agrees with the road. (Our tankTrailer1 is 10.3 m kingpin to axles and does NOT pass;
+// see the log line below and the spec's amendments - a model question, raised 2026-09-24.)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleSweepEuCircleTest, "Airside.Solve.VehicleSweepEuCircle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVehicleSweepEuCircleTest::RunTest(const FString& Parameters)
+{
+	auto InnerAtOuter = [](const VehicleSweep::FBody& Body, double Outer, bool& bHolds)
+	{
+		double Lo = Body.Wheelbase + 1.0, Hi = 4000.0;
+		for (int32 I = 0; I < 60; ++I)
+		{
+			const double Mid = (Lo + Hi) * 0.5;
+			const double R = Mid + VehicleSweep::Envelope(Body, Mid).Outer;
+			(R > Outer ? Hi : Lo) = Mid;
+		}
+		const VehicleSweep::FEnvelope E = VehicleSweep::Envelope(Body, Lo);
+		bHolds = E.bHolds;
+		return Lo - E.Inner;
+	};
+	bool bHolds = false;
+	const double Inner = InnerAtOuter(VehicleSweepTrace::Rig(770.0), 1250.0, bHolds);
+	TestTrue(TEXT("a legal-length trailer holds the EU circle"), bHolds);
+	TestTrue(TEXT("and clears its 5.3 m inner radius"), Inner >= 529.0);
+
+	bool bOursHolds = false;
+	const double Ours = InnerAtOuter(VehicleSweepTrace::Rig(), 1250.0, bOursHolds);
+	AddInfo(FString::Printf(TEXT("tankTrailer1 (10.3 m wheelbase) on the EU circle: holds %d, inner %.0f uu (5.3 m required)"),
+		bOursHolds ? 1 : 0, Ours));
+	return true;
+}
+
+// THE TURN AS DRIVEN (review of 2026-09-24): the steered axle walks the path, the fixed axle
+// and the trailer trail it, and the body's reach either side is recorded against the sample it
+// is nearest. A 90 degree corner ends before the trailer settles, so it cuts in LESS than the
+// steady-state figure - which is what made the first cut of the Wide corner 30 m.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleSweepTraceTest, "Airside.Solve.VehicleSweepTrace",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVehicleSweepTraceTest::RunTest(const FString& Parameters)
+{
+	using namespace VehicleSweepTrace;
+	TArray<double> Inner, Outer;
+
+	TArray<FVector2D> Straight;
+	for (int32 I = 0; I <= 16; ++I) { Straight.Add(FVector2D(I * 200.0, 0.0)); }
+	TestTrue(TEXT("a straight road is drivable"), VehicleSweep::Trace(Rig(), Straight, Inner, Outer));
+	TestEqual(TEXT("one reading per sample"), Inner.Num(), Straight.Num());
+	TestTrue(TEXT("and on it the body reaches half its width either side, no more"),
+		MaxOf(Inner) <= 127.0 + 1.0 && MaxOf(Outer) <= 127.0 + 1.0);
+
+	// Hand figures from the Python prototype of this simulation (2026-09-24).
+	const TArray<FVector2D> Tight = RightAngle(800.0);   // tightest radius ~566
+	TestTrue(TEXT("the rig makes a tight right angle - no jack-knife"), VehicleSweep::Trace(Rig(), Tight, Inner, Outer));
+	TestFalse(TEXT("where the steady-state model said the turn could not be held at all"),
+		VehicleSweep::Envelope(Rig(), 566.0).bHolds);
+	TestEqual(TEXT("its trailer cuts 6.3 m inside"), MaxOf(Inner), 629.0, 15.0);
+
+	const TArray<FVector2D> Wide = RightAngle(2000.0);  // tightest radius ~1414
+	VehicleSweep::Trace(Rig(), Wide, Inner, Outer);
+	TestEqual(TEXT("a wider corner, 4.5 m"), MaxOf(Inner), 453.0, 15.0);
+	TestTrue(TEXT("less than the steady-state figure at the same radius"),
+		MaxOf(Inner) < VehicleSweep::Envelope(Rig(), 1414.0).Inner);
+	return true;
+}
+
+#endif

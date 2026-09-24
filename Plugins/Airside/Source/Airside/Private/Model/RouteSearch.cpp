@@ -248,7 +248,7 @@ namespace
 			// One flag for both, because Find's unconstrained retry lifts both to tell "too big"
 			// from "not connected".
 			if (!bIgnoreSize && (ExceedsWingspan(*Edge, Query.Wingspan)
-				|| (Query.Vehicle != nullptr && !VehicleFit::Fits(*Edge, *Query.Vehicle))))
+				|| (Query.Vehicle != nullptr && !VehicleFit::Fits(*Edge, *Query.Vehicle, Network))))
 			{
 				return;
 			}
@@ -647,7 +647,7 @@ namespace RouteSearch
 				for (const FRouteStep& Step : Unconstrained.Steps)
 				{
 					const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step.Edge);
-					if (Edge != nullptr && !VehicleFit::Fits(*Edge, *Query.Vehicle))
+					if (Edge != nullptr && !VehicleFit::Fits(*Edge, *Query.Vehicle, Network))
 					{
 						Plan.RejectedEdge = Step.Edge;
 						break;

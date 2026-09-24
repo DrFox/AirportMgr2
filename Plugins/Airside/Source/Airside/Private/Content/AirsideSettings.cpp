@@ -126,8 +126,13 @@ FVehicle UAirsideSettings::ResolveRigVehicle()
 	Rig.Trailer.Width = 254.0;
 
 	// 40 degrees is ASSUMED - the model carries no lock, and 40-45 is a tractor unit's range.
-	// The trailer, not the lock, is what limits this vehicle: it cannot hold a steady turn
-	// tighter than ~10.4 m at the steered axle (VehicleSweep), where the lock alone allows 5.8.
+	// The lock allows 5.8 m at the steered axle. In a STEADY circle the trailer folds below
+	// ~10.9 m, but a real 90 degree corner ends before it settles: VehicleSweep::Trace, which
+	// route search uses, gets it round a 5.7 m corner without jack-knifing.
+	//
+	// THE TRAILER IS LONGER THAN A ROAD-LEGAL ONE: 10.3 m kingpin to axles, where the EU
+	// turning circle (12.5 m / 5.3 m) needs about 7.7 m with this cab - see
+	// Airside.Solve.VehicleSweepEuCircle, which reports it. A model question, raised 2026-09-24.
 	Rig.Chassis.Ground.MaxSteerDegrees = 40.0;
 	return Rig;
 }
