@@ -102,6 +102,36 @@ FChassis UAirsideSettings::ResolveLargestServiceVehicle()
 	return ResolveDefaultVehicle().Chassis;
 }
 
+FVehicle UAirsideSettings::ResolveRigVehicle()
+{
+	// The DEFAULT VEHICLE'S PERFORMANCE, a rigid truck's, with the rig's own geometry: nothing
+	// here has measured how a loaded articulated tanker accelerates, and inventing figures
+	// would be worse than inheriting honest ones. Geometry is what gating needs.
+	FVehicle Rig = ResolveDefaultVehicle();
+	Rig.TypeCode = TEXT("RIG");
+
+	// MEASURED from truckCab1.glb and tankTrailer1.glb on 2026-09-24. Tractor: steer_FL/FR at
+	// x 370 from the rear-axle origin; body 516 ahead, 78 behind; 254 over the body (mirrors
+	// excluded); fifth wheel 57.3 ahead of the rear axle. Trailer: kingpin 1029.5 ahead of the
+	// tandem centre; body 166 ahead of the kingpin and 121.5 behind the tandem; 254 wide.
+	Rig.Chassis.SteerAxleX = 370.0;
+	Rig.Chassis.FixedAxleX = 0.0;
+	Rig.BodyWidth = 254.0;
+	Rig.BodyFrontX = 516.0;
+	Rig.BodyRearX = -78.0;
+	Rig.Trailer.KingpinX = 57.3;
+	Rig.Trailer.KingpinToAxle = 1029.5;
+	Rig.Trailer.FrontAheadOfKingpin = 166.0;
+	Rig.Trailer.RearBehindAxle = 121.5;
+	Rig.Trailer.Width = 254.0;
+
+	// 40 degrees is ASSUMED - the model carries no lock, and 40-45 is a tractor unit's range.
+	// The trailer, not the lock, is what limits this vehicle: it cannot hold a steady turn
+	// tighter than ~10.4 m at the steered axle (VehicleSweep), where the lock alone allows 5.8.
+	Rig.Chassis.Ground.MaxSteerDegrees = 40.0;
+	return Rig;
+}
+
 FVehicle UAirsideSettings::ResolveDefaultVehicle()
 {
 	// NO CONTENT LOOKUP, unlike ResolveDefaultAirframe above, and deliberately: there is no
@@ -203,6 +233,14 @@ FVehicle UAirsideSettings::ResolveDefaultVehicle()
 	// Reversing is tighter still, Wheelbase / tan(lock) = 3.61 m, which is why a driver backs
 	// into a tight space rather than nosing in.
 	Van.Chassis.Ground.MaxSteerDegrees = 45.0;
+
+	// THE BODY, measured from fueltruck1.glb on 2026-09-24 after it went back to 6.2 m: 481.8
+	// ahead of the rear axle to the front bumper, 138.2 behind it, 237.4 over the body with the
+	// wing mirrors excluded (2.79 m with them). 620 overall, which is VehicleFootprint - see
+	// Airside.Model.VehicleBody, which holds the two together.
+	Van.BodyWidth = 237.4;
+	Van.BodyFrontX = 481.8;
+	Van.BodyRearX = -138.2;
 
 	// A TRUCK CANNOT FLY, AND NOW CANNOT EVEN BE ASKED TO. Until 2026-09-23 this was an
 	// FAirframe, and its climb and approach were zeroed here by hand because their struct
