@@ -147,6 +147,20 @@ struct AIRSIDE_API FGuidelineEdge
 	/** 0 means unlimited. Spec 5.6. */
 	UPROPERTY() double MaxWingspan = 0.0;
 
+	/**
+	 * What this edge offers a VEHICLE'S BODY, measured by FRoadGuidelineBuilder on the same
+	 * samples the follower walks (spec 2026-09-23 §6), so route search can gate a vehicle
+	 * without re-deriving any geometry:
+	 *   MinRadius  - the tightest radius the curve delivers; 0 for a straight edge.
+	 *   ClearInner / ClearOuter - distance from the line to the edge of the PAVEMENT, toward
+	 *                and away from the curve's centre, the minimum over the samples.
+	 * -1 means UNMEASURED and gates nothing: straight lanes (their Width gates them), dead-end
+	 * balloons (over grass, ruled), and anything hand-drawn or saved before this existed.
+	 */
+	UPROPERTY() double MinRadius = 0.0;
+	UPROPERTY() double ClearInner = -1.0;
+	UPROPERTY() double ClearOuter = -1.0;
+
 	/** The surface this was derived from; unset when hand-drawn. */
 	UPROPERTY() FRoadSegmentId DerivedFrom;
 
