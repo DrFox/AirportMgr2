@@ -827,7 +827,13 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// the junction and reversed; the route log said R=120 uu where the vehicle
 					// needed 699.
 					//
-					// A WARNING AND NOT A REFUSAL. The corner is still the best this junction
+					// A WARNING AND NOT A REFUSAL - HERE. Since 2026-09-24 route search DOES refuse
+					// this corner to any vehicle whose lock it beats (VehicleFit): the edge is still
+					// laid, so the graph stays connected and other vehicles still use it, but the
+					// truck that crabbed through it before is now sent another way or told "no road
+					// wide enough". Deliberate - crabbing was the defect this warning was written for.
+					//
+					// (Original reasoning, still true of the edge itself:) The corner is still the best this junction
 					// can do, and refusing to lay it would leave the network disconnected -
 					// which is worse than a slow corner and much harder to diagnose. What the
 					// player can act on is the segment length, so that is what this names.

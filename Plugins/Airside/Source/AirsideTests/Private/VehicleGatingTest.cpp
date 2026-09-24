@@ -5,6 +5,8 @@
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
+#include "Model/PlanReResolver.h"
+#include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
@@ -188,6 +190,64 @@ bool FRigTurnsOnWideTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the rig turns both ways at a Wide junction - the tier it is the design vehicle of"), BothWays(Wide, Rig));
 	TestFalse(TEXT("and not at a Narrow one"), BothWays(Narrow, Rig));
 	TestTrue(TEXT("the bowser turns both ways at a Narrow junction, as it did before gating"), BothWays(Narrow, Bowser));
+	return true;
+}
+
+#endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+// Review of 2026-09-24 item 4: removing the clearance comparison from VehicleFit left all 264
+// Model/Build tests green, so nothing measured it. These edges pass the lock and the envelope
+// holds; ONLY the clearance decides. Hand figures (Python, same geometry): the rig at R = 3000
+// sweeps 333 uu inside its steered axle's path and 156 outside.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleFitClearanceTest, "Airside.Model.VehicleFitClearance",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVehicleFitClearanceTest::RunTest(const FString& Parameters)
+{
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	FGuidelineEdge Turn;
+	Turn.MinRadius = 3000.0;
+	Turn.ClearOuter = 1000.0;
+
+	Turn.ClearInner = 300.0;
+	TestFalse(TEXT("a trailer cutting 333 uu inside does not fit 300 of pavement"), VehicleFit::Fits(Turn, Rig));
+	Turn.ClearInner = 400.0;
+	TestTrue(TEXT("but fits 400"), VehicleFit::Fits(Turn, Rig));
+
+	Turn.ClearInner = 1000.0;
+	Turn.ClearOuter = 100.0;
+	TestFalse(TEXT("a cab swinging 156 uu out does not fit 100 outside"), VehicleFit::Fits(Turn, Rig));
+	Turn.ClearOuter = 200.0;
+	TestTrue(TEXT("but fits 200"), VehicleFit::Fits(Turn, Rig));
+
+	Turn.ClearInner = -1.0;
+	Turn.ClearOuter = -1.0;
+	TestTrue(TEXT("unmeasured clearance gates nothing - a balloon over grass"), VehicleFit::Fits(Turn, Rig));
+	return true;
+}
+
+// Review item 1: every query an AGENT's re-route builds carries its body, so a road edit or a
+// deadlock replan cannot send a truck down road it does not fit. One seam, three callers.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentQueryCarriesBodyTest, "Airside.Model.AgentQueryCarriesBody",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAgentQueryCarriesBodyTest::RunTest(const FString& Parameters)
+{
+	FRoutePlan Plan;
+	FRoadAgent Truck;
+	Truck.StartDrive(Plan, UAirsideSettings::ResolveDefaultVehicle());
+	const FRouteQuery TruckQuery = FPlanReResolver::QueryFor(ERouteErrand::Replan,
+		FGuidelineNodeId(), FGuidelineNodeId(), Truck);
+	TestTrue(TEXT("a truck's re-route is gated on the truck"), TruckQuery.Vehicle == Truck.AsVehicle() && TruckQuery.Vehicle != nullptr);
+
+	FRoadAgent Plane;
+	Plane.StartTaxi(Plan, UAirsideSettings::ResolveDefaultAirframe());
+	const FRouteQuery PlaneQuery = FPlanReResolver::QueryFor(ERouteErrand::Replan,
+		FGuidelineNodeId(), FGuidelineNodeId(), Plane);
+	TestNull(TEXT("an aircraft's carries no vehicle"), PlaneQuery.Vehicle);
+	TestTrue(TEXT("but its wingspan"), PlaneQuery.Wingspan > 0.0);
 	return true;
 }
 

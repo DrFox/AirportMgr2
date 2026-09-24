@@ -80,8 +80,8 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 		return false;
 	}
 
-	FRouteQuery Query = FRouteQuery::For(ERouteErrand::Replan,
-		UGroundTraffic::StepFromNode(Plan, SpliceStep), Agent.GoalNode, Agent.Wingspan(), Agent.Class);
+	FRouteQuery Query = QueryFor(ERouteErrand::Replan,
+		UGroundTraffic::StepFromNode(Plan, SpliceStep), Agent.GoalNode, Agent);
 	Query.BannedEdge = BannedEdge;
 	Query.BannedNode = BannedNode;
 
@@ -338,6 +338,17 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		LastRebuild.ReResolved, Replanned, Truncated, Stranded);
 }
 
+FRouteQuery FPlanReResolver::QueryFor(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,
+	const FRoadAgent& Agent)
+{
+	FRouteQuery Query = FRouteQuery::For(Errand, Start, Goal, Agent.Wingspan(), Agent.Class);
+	if (const FVehicle* Vehicle = Agent.AsVehicle())
+	{
+		Query.WithVehicle(*Vehicle);
+	}
+	return Query;
+}
+
 namespace
 {
 	/**
@@ -474,8 +485,8 @@ namespace
 
 		for (const FCandidate& Candidate : Candidates)
 		{
-			FRouteQuery Query = FRouteQuery::For(ERouteErrand::RebuildReResolve,
-				Candidate.From, Goal, Agent.Wingspan(), Agent.Class);
+			FRouteQuery Query = FPlanReResolver::QueryFor(ERouteErrand::RebuildReResolve,
+				Candidate.From, Goal, Agent);
 			Query.WithCongestion(Context.Occupancy, Agent.Id, Context.Rules.CongestionWeight);
 			const FRoutePlan Found = RouteSearch::Find(Network, Query);
 			// The route must BEGIN with the edge the vehicle is on, or starting it part-way
@@ -801,8 +812,8 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	}
 	else
 	{
-		FRouteQuery Query = FRouteQuery::For(ERouteErrand::RebuildReResolve,
-			UGroundTraffic::StepFromNode(Plan, Failed), Agent.GoalNode, Agent.Wingspan(), Agent.Class);
+		FRouteQuery Query = QueryFor(ERouteErrand::RebuildReResolve,
+			UGroundTraffic::StepFromNode(Plan, Failed), Agent.GoalNode, Agent);
 
 		// The congestion term, as ReplanAt takes it: the guidelines that survived the rebuild
 		// by handle - every hand-drawn one - still carry real queues, and a re-routed arrival

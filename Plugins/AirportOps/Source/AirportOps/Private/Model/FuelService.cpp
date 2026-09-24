@@ -367,6 +367,21 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		Query.WithVehicle(TruckVehicle);
 		Query.RunwayPenalty = Traffic.Rules.RunwayPenalty;
 		Plan = RouteSearch::Find(Network, Query);
+
+		// HOME EVEN IF IT DOES NOT FIT (review of 2026-09-24). The way out was chosen for a
+		// road this truck fits; the way back can meet a tighter corner - the near-side turn is
+		// the tight one - and retiring the truck at the stand costs the airport a truck on
+		// every such job. So it drives home ungated, and the log names the edge, which is the
+		// player's cue to widen that road.
+		// ENFORCED BY: AirportOps.Ops.FuelTruckGetsHomeWhenTooNarrow
+		if (Plan.Result == ERouteResult::TooNarrow)
+		{
+			UE_LOG(LogAirportOps, Warning,
+				TEXT("Fuel: truck %d does not fit the road home to depot %d (first misfit: guideline edge %d); driving it anyway"),
+				TruckId, Depot.Index, Plan.RejectedEdge.Index);
+			Query.Vehicle = nullptr;
+			Plan = RouteSearch::Find(Network, Query);
+		}
 	}
 
 	// REDIRECT, NOT DISPATCH: the truck keeps its id and its view, and RedirectAgent accepts

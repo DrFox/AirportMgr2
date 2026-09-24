@@ -1165,3 +1165,34 @@ bool FTruckNeverTeleportsOnItsRoundTripTest::RunTest(const FString& Parameters)
 }
 
 #endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+// Review of 2026-09-24 item 3: a truck whose way OUT fitted can meet a corner on the way HOME
+// that does not - the near-side turn is the tighter one. Retiring it at the stand costs the
+// airport a truck per job; it drives home ungated instead, and the log says why.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTruckGetsHomeWhenTooNarrowTest, "AirportOps.Ops.FuelTruckGetsHomeWhenTooNarrow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelTruckGetsHomeWhenTooNarrowTest::RunTest(const FString& Parameters)
+{
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+	Fixture.Advance(0.2);
+	const int32 TruckId = Fixture.Service->GetDemands()[0].TruckId;
+	if (!TestTrue(TEXT("a truck went out for it"), TruckId != 0)) { return false; }
+
+	// Out it went; now nothing on the airport fits it on the way back.
+	Fixture.Service->TruckVehicle.BodyWidth = 2000.0;
+	Fixture.Traffic->RetireAgent(Aircraft);
+	Fixture.Advance(0.2);
+
+	TestNotNull(TEXT("the truck is not retired at the stand"), Fixture.Traffic->FindAgent(TruckId));
+	TestEqual(TEXT("it drives home anyway"), Fixture.Service->TrucksGoingHomeForTest(), 1);
+	return true;
+}
+
+#endif
