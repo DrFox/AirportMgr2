@@ -234,7 +234,7 @@ public:
 	 *
 	 * NOT A REPLACEMENT for ResolveWidthProfile and its siblings: those answer "what is width
 	 * 2", which is a content question. This answers "what would this GESTURE lay", which folds in
-	 * the service road's exemption and the taxiway's fallback.
+	 * each kind's default: the service road's override or narrowest tier, the taxiway's fallback.
 	 *
 	 * NOT CONST, unlike its siblings above, and the reason is ARoadNetworkActor::ResolveProfile:
 	 * a taxiway with no index falls back to the actor's own profile, which builds a RuntimeProfile

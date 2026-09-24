@@ -766,7 +766,7 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 	// unchanged FromNodeIndex/SnapResult, and the cache already knows that without a Resolve*
 	// call. Only a validity flip on an otherwise-unchanged ghost costs one (GhostMaterial).
 	bool bValidityChanged = false;
-	if (Presenter->IsGhostCacheHit(Network, FromNodeIndex, SnapResult, bValid, bValidityChanged))
+	if (Presenter->IsGhostCacheHit(Network, FromNodeIndex, SnapResult, bValid, bValidityChanged, Kind, WidthIndex))
 	{
 		if (bValidityChanged)
 		{
@@ -776,7 +776,7 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 	}
 
 	Presenter->UpdateGhost(Network, FromNodeIndex, SnapResult, bValid,
-		MakeGhostSurfaceSettings(Kind, WidthIndex));
+		MakeGhostSurfaceSettings(Kind, WidthIndex), Kind, WidthIndex);
 }
 
 bool ARoadNetworkActor::BuildGhostBuffers(

@@ -714,7 +714,7 @@ bool URoadSurfacePresenter::BuildGhostBuffers(URoadNetwork* Network, int32 FromN
 }
 
 bool URoadSurfacePresenter::IsGhostCacheHit(const URoadNetwork* Network, int32 FromNodeIndex,
-	const FRoadSnapResult& Snap, bool bValid, bool& bOutValidityChanged) const
+	const FRoadSnapResult& Snap, bool bValid, bool& bOutValidityChanged, ERoadKind Kind, int32 WidthIndex) const
 {
 	bOutValidityChanged = false;
 
@@ -735,7 +735,9 @@ bool URoadSurfacePresenter::IsGhostCacheHit(const URoadNetwork* Network, int32 F
 	if (bGhostVisible
 		&& FromNodeIndex == LastGhostFrom
 		&& Snap.Kind == LastGhostKind
-		&& QuantiseGhostPosition(Snap.Position) == LastGhostTo)
+		&& QuantiseGhostPosition(Snap.Position) == LastGhostTo
+		&& Kind == LastGhostRoadKind
+		&& WidthIndex == LastGhostWidthIndex)
 	{
 		bOutValidityChanged = (bValid != bLastGhostValid);
 		return true;
@@ -756,7 +758,7 @@ void URoadSurfacePresenter::SetGhostValidity(bool bValid, UMaterialInterface* Gh
 }
 
 void URoadSurfacePresenter::UpdateGhost(URoadNetwork* Network, int32 FromNodeIndex,
-	const FRoadSnapResult& Snap, bool bValid, const FSurfaceSettings& Settings)
+	const FRoadSnapResult& Snap, bool bValid, const FSurfaceSettings& Settings, ERoadKind Kind, int32 WidthIndex)
 {
 	// The cache-hit short-circuit this used to open with is now the caller's job - see
 	// IsGhostCacheHit and SetGhostValidity, which exist so the caller can skip resolving
@@ -803,5 +805,7 @@ void URoadSurfacePresenter::UpdateGhost(URoadNetwork* Network, int32 FromNodeInd
 	LastGhostFrom = FromNodeIndex;
 	LastGhostTo = QuantiseGhostPosition(Snap.Position);
 	LastGhostKind = Snap.Kind;
+	LastGhostRoadKind = Kind;
+	LastGhostWidthIndex = WidthIndex;
 	bLastGhostValid = bValid;
 }

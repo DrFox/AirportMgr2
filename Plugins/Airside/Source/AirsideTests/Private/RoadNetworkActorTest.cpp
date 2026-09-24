@@ -330,6 +330,19 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("a real cursor move is not a cache hit"),
 			Presenter->IsGhostCacheHit(Actor->Network, GhostFrom, Moved, true, bValidityChanged));
 
+		// A WIDTH CHANGE WITH A STILL CURSOR is not a cache hit either (review of 2026-09-23).
+		// The key used to be position only, so pressing the tool's key again mid-chain logged the
+		// new width while the ghost kept showing the old one - and the click laid the new one.
+		TestTrue(TEXT("the ghost's own width, unchanged, is still a hit"),
+			Presenter->IsGhostCacheHit(Actor->Network, GhostFrom, Jittered, true, bValidityChanged,
+				ERoadKind::Taxiway, INDEX_NONE));
+		TestFalse(TEXT("a different width at the same cursor is not a cache hit"),
+			Presenter->IsGhostCacheHit(Actor->Network, GhostFrom, Jittered, true, bValidityChanged,
+				ERoadKind::Taxiway, 2));
+		TestFalse(TEXT("nor is a different kind of road"),
+			Presenter->IsGhostCacheHit(Actor->Network, GhostFrom, Jittered, true, bValidityChanged,
+				ERoadKind::ServiceRoad, INDEX_NONE));
+
 		FRoadMeshBuffers MovedBuffers;
 		TestTrue(TEXT("the ghost rebuilds at the new position"),
 			Actor->BuildGhostBuffers(GhostFrom, Moved, MovedBuffers));
@@ -572,11 +585,15 @@ bool FProfileResolutionIsOneRuleTest::RunTest(const FString& Parameters)
 
 	IRoadEditTarget* Target = Actor;
 
-	// A SERVICE ROAD IGNORES THE INDEX OUTRIGHT - it has one authored cross-section, and an
-	// index reaching it would lay a taxiway's width on a lane meant for vans.
-	TestEqual(TEXT("a service road answers the same whatever index is passed"),
-		Target->ResolveProfileFor(ERoadKind::ServiceRoad, 0),
-		Target->ResolveProfileFor(ERoadKind::ServiceRoad, INDEX_NONE));
+	// A SERVICE ROAD'S INDEX NAMES A ROAD TIER, never a taxiway width (2026-09-23). Until then
+	// it ignored the index outright, because the only list was the taxiways' and an index
+	// reaching a road would have laid a taxiway's width on a lane meant for vans. Every index
+	// the road list can answer must still be a road: two lanes, never one aircraft line.
+	for (int32 Tier = 0; Tier < Target->GetWidthCount(ERoadKind::ServiceRoad); ++Tier)
+	{
+		const URoadProfile* Road = Target->ResolveProfileFor(ERoadKind::ServiceRoad, Tier);
+		TestTrue(TEXT("a road index resolves to a two-lane road"), Road != nullptr && Road->Guidelines.Num() == 2);
+	}
 
 	// A TAXIWAY WITH NO INDEX FALLS BACK TO THE LEVEL'S OWN TUNING, which is the honest answer
 	// where the service road has none.

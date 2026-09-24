@@ -420,7 +420,7 @@ void FRoadDrawTool::OnReselect(const FToolContext& Context)
 	{
 		// SAID OUT LOUD. Returning in silence is indistinguishable from a key that never
 		// arrived: the player presses the tool's key again, nothing widens, and nothing
-		// anywhere says why. A content set with no taxiway profiles is a real state - it
+		// anywhere says why. A content set with no profiles for this kind is a real state - it
 		// is what a project that has not run build_road_profiles.py has.
 		UE_LOG(LogAirside, Warning,
 			TEXT("%s width unchanged: the content set declares no %s profiles, so "
