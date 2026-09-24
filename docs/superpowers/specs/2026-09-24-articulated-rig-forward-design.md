@@ -90,6 +90,30 @@ The whole job is four sub-projects, each with its own spec -> plan -> build:
   ends with `RigCourse: loop N - D/T legs driven; refused: <list>`, which says which tier to
   widen.
 
+## 4. REVISED 2026-09-24: the tow is a CHAIN, and the utility + fuel trailer drives too
+
+User ruling (the same day, before Task 2): `AirportMgr2Models/utility1` now has `fuelTrailer1`,
+a **full drawbar trailer**. A towbar pivots on a steered front axle (`towbar_yaw`,
+`steer_FL/FR`), and the body has a fixed rear axle. It couples its `tow_eye` onto utility1's
+`hitch` socket, which is about 0.91 m BEHIND utility1's rear axle at z 0.308. The trailer
+wheelbase is 2.21 m (from the model scripts; MEASURE from the glb, do not retype).
+
+- **The tow is a chain of links, not one semi-trailer.** Each link is (hitch offset along the
+  previous body from its fixed axle, where negative is behind; length from the hitch to this
+  link's axle; body extents and width). The rig is ONE link (hitch +57.3, length 1029.5). The
+  drawbar trailer is TWO: the towbar (hitch -~91, length = eye to front axle, no body), then
+  the body (hitch 0 at the front axle, length = the trailer wheelbase, body extents). A
+  baggage train later is N links. `FTrailer` becomes this chain on `FVehicle`, and the rig's
+  figures move into it unchanged.
+- **The same stepper runs per link**, pulled by the previous link's hitch point: the Task 1
+  `StepTrailer`. `VehicleSweep::Trace` and `VehicleFit` walk the chain, so gating covers the
+  drawbar trailer too. It stays ONE evaluator.
+- The agent stores one axle position per link. Motion carries a pose per link. The actor
+  places one mesh per BODY-carrying link, and the towbar is animated on the trailer's own
+  `towbar_yaw` bone from the towbar link's angle.
+- **The test course loops both vehicles**, rig and utility + trailer, one at a time and
+  alternating, and reports refusals per vehicle.
+
 ## Tests
 
 - **Stepper:** a straight keeps the hitch at 0; a steady circle converges to the analytic

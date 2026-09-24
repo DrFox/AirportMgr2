@@ -62,23 +62,28 @@ Trace's loop (lines ~111-118) calls StepTrailer instead of inlining it; the jack
 - [ ] Build twice, RED, implement, GREEN; run `-Filter Airside.Solve` and `-Filter Airside.Model` (VehicleFit, gating).
 - [ ] Commit `refactor(solve): one trailer stepper, shared by Trace`.
 
-### Task 2: The agent carries the trailer
+### Task 2: The tow is a chain; the agent carries it
 
-**Files:** `Public/Model/RoadAgent.h`, `Private/Model/RoadAgent.cpp` (StartDrive ~342, Advance), `Public/Model/AgentMotion.h`, tests in `AirsideTests/Private/SweepAgreementTest.cpp`.
+REVISED 2026-09-24 (spec section 4): the tow is a CHAIN of links, so the drawbar fuel trailer (2 links) and the rig (1 link) share one model.
+
+**Files:** `Public/Model/Vehicle.h` (FTrailer -> chain), `Private/Content/AirsideSettings.cpp` (ResolveRigVehicle figures move into the chain unchanged), `Public/Solve/VehicleSweep.h` + `.cpp` (FBody and Trace walk the chain), `Private/Model/VehicleFit.cpp` (maps the chain), `Public/Model/RoadAgent.h` + `Private/Model/RoadAgent.cpp` (StartDrive ~342, Advance), `Public/Model/AgentMotion.h`, and tests (SweepAgreementTest.cpp plus the existing VehicleSweep / VehicleFit tests).
 
 **Produces:**
-- On `FRoadAgent`: `UPROPERTY() FVector2D TrailerAxle`, and `bool HasTrailer() const` (Body == Vehicle && Vehicle.HasTrailer()). Initialised in StartDrive straight behind the kingpin along the start heading. The kingpin is the fixed axle + heading * KingpinX. First find which point `FAgentMotion::Position` is (fixed axle or body centre, see DescribeMotion) and derive the kingpin from the right one; state it at the site.
-- Stepped in Advance, inside the SAME sub-step loop that moves the cab (never once per frame), through `VehicleSweep::StepTrailer`.
-- Jack-knife guard: if StepTrailer returns false, or the hitch angle exceeds `MaxHitchRadians` (a named constant, 90°, with a WHY), the agent stops (reuse the existing stop/refuse path; read how Advance ends a drive) and logs `LogAirside Warning: "Rig %s jack-knifed at (%.0f,%.0f), hitch %.0f deg"`.
-- `FAgentMotion` gains `UPROPERTY() bool bHasTrailer = false; UPROPERTY() FVector2D Kingpin; UPROPERTY() double TrailerHeading = 0.0;` (radians, world), filled by DescribeMotion when HasTrailer.
-- [ ] Tests, prefix `Airside.Model.Rig.`:
-  - `.RigStartsStraight`: StartDrive with ResolveRigVehicle on a straight plan gives hitch 0 and TrailerAxle KingpinToAxle behind the kingpin.
-  - `.FollowerMatchesTraceForRig`: extend FollowerMatchesSweep. Drive the rig's agent (with the plan's polyline) through the SweepAgreement 90° turn; the trailer axle samples match VehicleSweep::Trace on the same path within 5 uu. Reason: routing and driving agree.
-  - `.LongFrameIsSubStepped`: one Advance of 2 s equals twenty of 0.1 s to within 1 uu (trailer axle). Reason: Review Focus 2.
-  - `.RigidHasNoTrailer`: a bowser agent's motion has bHasTrailer false; every existing agent test is unchanged.
-  - `.JackknifeStops`: a forced hairpin plan tighter than the lock ends with the agent stopped and the warning logged. Use an unbuffered log spy (memory note).
-- [ ] RED, implement, GREEN; run `-Filter Airside.Model` + `-Filter Airside.Present`.
-- [ ] Commit `feat(model): the rig's agent carries and steps its trailer`.
+- `USTRUCT FTowLink { double HitchX; double Length; double BodyFront; double BodyRear; double Width; }`, uu. HitchX is measured along the PREVIOUS body from its fixed axle (the cab's for link 0), negative behind. Length is hitch to this link's axle. Zero body = a bar (towbar), which sweeps its width only.
+- `FVehicle::Tow`: `TArray<FTowLink>`. It replaces FTrailer; `HasTrailer()` becomes `Tow.Num() > 0`. ResolveRigVehicle becomes ONE link {HitchX 57.3, Length 1029.5, BodyFront 166, BodyRear 121.5, Width 254}. Every #276 gating test must stay green unchanged, since the rig's numbers are identical.
+- VehicleSweep::FBody carries the chain. Trace steps every link in order with `StepTrailer`, pulled by the previous link's hitch point, and adds every body's corners. `Dot < 0` on any link = jack-knife.
+- FRoadAgent stores `TArray<FVector2D> TowAxles` (one per link), initialised straight behind at StartDrive, stepped per sub-step in Advance.
+- Jack-knife guard: StepTrailer false, or any link's angle to the thing pulling it past `MaxHitchRadians` (90 degrees, named, with a WHY) -> the agent stops and logs `LogAirside Warning: "Tow %s jack-knifed at link %d (%.0f,%.0f), angle %.0f deg"`.
+- `FAgentMotion` gains `TArray<FTowPose> Tow` where `FTowPose { FVector2D Hitch; FVector2D Axle; double Heading; }`, filled by DescribeMotion. (A TArray in motion is fine if FAgentMotion is only copied per frame. Check its size and copy sites and justify.)
+- [ ] Tests, prefix `Airside.Model.Tow.`:
+  - `.RigStartsStraight`.
+  - `.FollowerMatchesTraceForRig`: extend FollowerMatchesSweep. The rig agent through the 90 degree SweepAgreement turn matches Trace's trailer-axle samples within 5 uu.
+  - `.DrawbarChainFollows`: a 2-link drawbar (hand figures in the test: hitch -91, towbar 150, body wheelbase 221) through the same turn. Both axles stay within their link Length of their hitch every sample, and the body axle cuts inside the towbar axle. Reason: a chain, not a copy.
+  - `.LongFrameIsSubStepped`: one 2 s Advance equals twenty 0.1 s ones within 1 uu, for every axle.
+  - `.RigidHasNoTow`: every existing agent test is unchanged.
+  - `.JackknifeStops`: a forced hairpin ends with the agent stopped and the warning logged, using an unbuffered spy.
+- [ ] RED, implement, GREEN; run `-Filter Airside.Solve`, `-Filter Airside.Model`, `-Filter Airside.Present`, then the full suite.
+- [ ] Commit `feat(model): the tow is a chain of links; agents carry and step it`.
 
 ### Task 3: Import the rig and resolve its content
 
@@ -92,14 +97,23 @@ Trace's loop (lines ~111-118) calls StepTrailer instead of inlining it; the jack
 - [ ] Test `Airside...Content.RigResolves` (game module): both meshes and both ABPs resolve non-null, and the trailer mesh's bounds length is about KingpinToAxle + front + rear, within 10%. Reason: the geometry matches the imported mesh (memory "measured beats typed").
 - [ ] Commit the .uassets and scripts: `feat(content): import the articulated rig (truckCab1 + tankTrailer1)`.
 
+### Task 3b: Import fuelTrailer1 and assemble the utility + trailer vehicle
+
+**Files:** `Tools/Python/import_rig.py` (extend it, or a sibling `import_fueltrailer1.py`; ONE script per asset family, justify), `Tools/Python/build_rig_anim.py` (an ABP for fuelTrailer1: wheel spin on all four, steer_FL/FR and towbar_yaw from the towbar link's angle), `AirsideSettings` (`ResolveUtilityTowVehicle()` -> FVehicle, beside ResolveRigVehicle; the content view extended the same way as Task 3).
+
+- utility1 is already imported (`Content/Vehicles/Utility1/SK_Utility1`). Check its hitch socket/bone and chassis figures (wheelbase 1.499 m per its SPEC.md; the hitch pin about 0.907 m behind the rear axle, z 0.308), MEASURED from the glb/skeleton, not typed from here.
+- fuelTrailer1 figures, MEASURED from its glb bones (tow_eye, towbar_yaw at the front axle, the rear axle): towbar link length = tow_eye to front axle; body link length = trailer wheelbase (~2.21 m); body extents and width. Record every figure with its source and date at the site, as ResolveRigVehicle does.
+- Test `...Content.UtilityTowResolves`: the meshes and ABPs resolve; the chain has 2 links; link lengths match the skeleton's bone distances within 1 uu. Reason: measured, not typed.
+- Commit `feat(content): utility1 tows fuelTrailer1`.
+
 ### Task 4: The actor shows the trailer
 
 **Files:** `Public/Present/RoadAgentActor.h` + `.cpp`, the presenter that dresses vehicle actors (find the `SetVehicleAirframe` caller), and tests in `AirsideTests/Private/` (actor tests, e.g. beside AgentActor tests).
 
-**Produces:** `void ARoadAgentActor::SetVehicleTrailer(USkeletalMesh* Mesh, UClass* AnimClass);` which creates or updates a `UPROPERTY() TObjectPtr<USkeletalMeshComponent> Trailer` component. It must survive duplication: read the memory note on transient subobject pointers and the existing Airframe component pattern. `SetMotion` places the trailer at `Motion.Kingpin` (world, at SurfaceZ) with yaw `Motion.TrailerHeading`, hidden when `!Motion.bHasTrailer`. The dresser calls SetVehicleTrailer when the resolved view has a trailer.
+**Produces:** `void ARoadAgentActor::SetVehicleTrailer(USkeletalMesh* Mesh, UClass* AnimClass);` which creates or updates a `UPROPERTY() TObjectPtr<USkeletalMeshComponent> Trailer` component. It must survive duplication: read the memory note on transient subobject pointers and the existing Airframe component pattern. REVISED for the chain: one trailer mesh per BODY-carrying link, placed from `Motion.Tow[i]` (the body is positioned from its axle and heading; its mesh origin convention decides the point, so check each glb's origin: tankTrailer1 is at the tandem centre, fuelTrailer1 at its rear axle), with the drawbar's towbar link driving the trailer ABP's towbar_yaw and steer. `SetMotion` places them; none when `Motion.Tow` is empty. The dresser calls SetVehicleTrailer when the resolved view has a trailer.
 
 - [ ] Tests, prefix `Airside.Present.RigActor.`:
-  - `.TrailerOnKingpin`: spawn a rig agent actor, tick once; the trailer component's world location XY equals Motion.Kingpin, and its yaw equals TrailerHeading (degrees), within 0.01.
+  - `.TrailerOnItsLink`: rig and utility+trailer actors, ticked once; each trailer mesh's world XY/yaw matches its link pose within 0.01 (yaw in degrees).
   - `.RigidHasNoTrailerComponent`.
   - `.TrailerSurvivesDuplication`: duplicate the actor (as DuplicatedActorOwnsItsSubobjects does); the copy owns its own trailer component.
 - [ ] Commit `feat(present): the rig's trailer drawn at the kingpin`.
@@ -111,9 +125,10 @@ Trace's loop (lines ~111-118) calls StepTrailer instead of inlining it; the jack
 **Produces:** `ARigTestCourse : AActor`:
 - At BeginPlay it finds the level's ARoadNetworkActor (as ARoadBuildController does) and lays, through IRoadEditTarget, three service-road lanes, one per width tier. Read #274's tier API (`ResolveProfileFor(Kind, WidthIndex)`, the RoadDrawTool width cycling) for how a tier is chosen. Each lane has: a long straight (80 m); left 90 and right 90 corners; a T junction whose stem is driven both ways; a dead end (its U-turn is derived). The lanes are joined into one circuit. Every coordinate is a named constant at the top of the file, with the tier spacing wide enough (60 m) that lanes do not interact.
 - `TArray<FRoadNodeId> Waypoints` in visiting order, each with a label ("Standard, right 90").
-- Driver: when no rig is out, it plans the leg from Waypoints[i] to Waypoints[i+1] with `FRouteQuery ... .WithVehicle(ResolveRigVehicle())`, dispatches with `UAirsideTraffic`/`GroundTraffic::DispatchAgent(Network, Plan, Rig, ...)` (find the actor-level forwarder), and on arrival advances i. Wraps at the end.
+- Vehicles: the rig and the utility + fuel trailer ALTERNATE legs (one out at a time), and refusals are reported per vehicle.
+- Driver: when no vehicle is out, it plans the leg from Waypoints[i] to Waypoints[i+1] with `FRouteQuery ... .WithVehicle(ResolveRigVehicle())`, dispatches with `UAirsideTraffic`/`GroundTraffic::DispatchAgent(Network, Plan, Rig, ...)` (find the actor-level forwarder), and on arrival advances i. Wraps at the end.
 - A refused leg (no Found plan) is skipped, and logged ONCE per loop: `UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) refused: %s"), ...)`, with the refusal reason from the route result and VehicleFit (swept vs tarmac where available). A red DrawDebugString is placed at the leg's start while it stays refused.
-- At the loop end: `UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: loop %d - %d/%d legs driven; refused: %s"), ...)`.
+- At the loop end: `UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: loop %d - rig %d/%d, utility+trailer %d/%d legs driven; refused: %s"), ...)`.
 - `void BuildCourseForTest(IRoadEditTarget&)` and `int32 LegCountForTest()` for the headless test.
 
 - [ ] Test `AirportMgr.RigCourse.OneLoopHeadless`:
