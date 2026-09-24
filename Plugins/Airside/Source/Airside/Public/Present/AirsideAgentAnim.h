@@ -4,6 +4,8 @@
 #include "Animation/AnimInstance.h"
 #include "AirsideAgentAnim.generated.h"
 
+struct FReferenceSkeleton;
+
 /**
  * What an aircraft's moving parts are doing, ready for an Animation Blueprint to apply.
  *
@@ -26,6 +28,9 @@ class AIRSIDE_API UAirsideAgentAnim : public UAnimInstance
 
 public:
 	virtual void NativeUpdateAnimation(float DeltaSeconds) override;
+
+	/** Settles WheelRadius - see its own comment. */
+	virtual void NativeInitializeAnimation() override;
 
 	/**
 	 * How far the propeller may turn this frame, degrees.
@@ -119,6 +124,19 @@ public:
 	 * is: a trailer that has rolled ten kilometres still turns its wheel to the degree.
 	 */
 	static float WheelAngleFromTravel(double TravelUu, float Radius);
+
+	/**
+	 * A vehicle rig's wheel radius, MEASURED: the reference-pose height of its first bone
+	 * named wheel* above the ground, since every vehicle mesh here sits with its tyres on
+	 * z = 0 (the import refuses one that does not - airside_import.report_bounds). Fallback
+	 * when the skeleton has no such bone, or it sits at or below the ground.
+	 *
+	 * STARTS WITH "wheel", not contains: truckCab1's fifth_wheel is a coupling socket, and a
+	 * substring match would measure the coupling plate as a tyre.
+	 *
+	 * Static so it is testable against a skeleton alone.
+	 */
+	static float WheelHubRadius(const FReferenceSkeleton& Skeleton, float Fallback);
 
 	/**
 	 * Accumulated propeller rotation, degrees. Apply to the 'prop' bone.
@@ -301,6 +319,23 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Airside")
 	float MainWheelRadius = 21.0f;
+
+	/**
+	 * The radius the wheels actually roll with, uu, settled at initialise.
+	 *
+	 * A VEHICLE'S IS READ OFF ITS OWN SKELETON (WheelHubRadius), not typed: no vehicle ABP
+	 * sets MainWheelRadius, so every truck and trailer rolled on the Meridian's 21 uu and the
+	 * tank trailer's 53.8 uu wheels spun about 2.5 times too fast. MainWheelRadius stays the
+	 * FALLBACK, used only when the skeleton has no wheel bone.
+	 *
+	 * AN AIRCRAFT KEEPS MainWheelRadius. Its figure is already measured - copied from
+	 * UAircraftType into the ABP and checked against the rig's hub by Airside.Content.
+	 * AirframeAxles - and airframe rigs name their wheels inconsistently (nosewheel against
+	 * main_*), where the one radius must be the MAINS': a first-wheel-bone rule could measure
+	 * the nose wheel instead.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float WheelRadius = 21.0f;
 
 	/**
 	 * How far this rig's gear folds, degrees. plane4's is 90.

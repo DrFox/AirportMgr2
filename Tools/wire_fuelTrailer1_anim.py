@@ -18,7 +18,7 @@ were left unwired until UAirsideAgentAnim grew the right channel: TowbarAngleDeg
 towbar link's heading off this body's (spec 2026-09-24 revision §4), which ARoadAgentActor
 hands to the trailer's own anim instance (FTowLinkView). On a turntable the front axle turns
 with the bar, so all three bones take the one angle. On a trailer instance SteerAngleDegrees
-is held at zero.
+is held at zero. AN APPROXIMATION: each steer bone pivots about its own hub, not the turntable centre.
 
 TURNTABLE AXIS: Yaw, in Bone Space, NO SIGN - MEASURED 2026-09-24 off SK_FuelTrailer1's
 reference pose (airside_anim.bone_frames): towbar_yaw, steer_FL and steer_FR all have the

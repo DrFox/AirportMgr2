@@ -159,6 +159,12 @@ public:
 	/** How many trailer meshes this view draws. For Airside.Present.RigActor.*. */
 	int32 TrailerCountForTest() const { return TowViews.Num(); }
 
+	/**
+	 * True once either vehicle path has dressed this view. Read by UAirsideAgentAnim, which
+	 * measures a vehicle's wheel radius off its skeleton and keeps an aircraft's authored one.
+	 */
+	bool IsVehicle() const { return bIsVehicle; }
+
 	/** True once either vehicle path has dressed this view. For Airside.Present.VehicleAgentView. */
 	bool HasVehicleBodyForTest() const { return bIsVehicle; }
 

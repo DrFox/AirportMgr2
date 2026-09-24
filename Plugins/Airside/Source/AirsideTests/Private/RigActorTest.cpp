@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "AnimationRuntime.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Content/AirsideSettings.h"
 #include "Engine/Level.h"
@@ -104,10 +105,30 @@ bool FRigActorTrailerOnItsLinkTest::RunTest(const FString& Parameters)
 		TestEqual(FString::Printf(TEXT("%s: the cab wears its own mesh"), Case.Name),
 			Cab != nullptr ? Cab->GetSkeletalMeshAsset() : nullptr, Case.Look.Cab.Mesh.Get());
 
-		// Driven until the tow has visibly folded, so a yaw match is a real one.
-		for (int32 I = 0; I < 900 && RigActorTest::FoldDegrees(View->GetMotion()) < 2.0; ++I)
+		// Driven until the tow has visibly folded, so a yaw match is a real one, and on through
+		// most of the bend, so the trailer's axle has cut in by a measurable distance. The CAB's
+		// travel and each link AXLE's own path are summed alongside, for the wheels to be judged
+		// against. (Stopping at 2 degrees, the utility had gone 4.8 m and its axle matched the
+		// cab's distance to the tenth of a uu.)
+		double CabTravel = 0.0;
+		FVector2D CabWas = View->GetMotion().Position;
+		TArray<double> AxleTravel;
+		TArray<FVector2D> AxleWas;
+		for (const FTowPose& Pose : View->GetMotion().Tow)
+		{
+			AxleTravel.Add(0.0);
+			AxleWas.Add(Pose.Axle);
+		}
+		for (int32 I = 0; I < 1800 && (RigActorTest::FoldDegrees(View->GetMotion()) < 2.0 || CabTravel < 4500.0); ++I)
 		{
 			Actor->Tick(1.0f / 30.0f);
+			CabTravel += FVector2D::Distance(View->GetMotion().Position, CabWas);
+			CabWas = View->GetMotion().Position;
+			for (int32 L = 0; L < AxleWas.Num() && L < View->GetMotion().Tow.Num(); ++L)
+			{
+				AxleTravel[L] += FVector2D::Distance(View->GetMotion().Tow[L].Axle, AxleWas[L]);
+				AxleWas[L] = View->GetMotion().Tow[L].Axle;
+			}
 		}
 		const FAgentMotion& Motion = View->GetMotion();
 		TestTrue(FString::Printf(TEXT("%s: the tow folded (%.2f deg) so yaw is measured"), Case.Name,
@@ -155,11 +176,86 @@ bool FRigActorTrailerOnItsLinkTest::RunTest(const FString& Parameters)
 			}
 			TestEqual(FString::Printf(TEXT("%s: link %d does not steer by the cab's wheel"), Case.Name, Link),
 				Anim->SteerAngleDegrees, 0.0f);
-			TestTrue(FString::Printf(TEXT("%s: link %d wheels have rolled"), Case.Name, Link),
-				FMath::Abs(Anim->WheelAngleDegrees) > 0.0f);
+			// THE WHEELS ROLL BY THIS AXLE'S OWN TRAVEL, over this rig's own radius. Forward
+			// travel is positive (a flipped sign fails), and round a bend the trailer axle cuts
+			// in, so it covers LESS than the cab (the cab's speed would fail).
+			const FTowLinkView* TowView = View->FindTowLinkView(Trailer);
+			if (!TestNotNull(FString::Printf(TEXT("%s: link %d found by its component"), Case.Name, Link), TowView)) { continue; }
+			TestEqual(FString::Printf(TEXT("%s: link %d wheel angle is its axle travel over its radius"), Case.Name, Link),
+				Anim->WheelAngleDegrees,
+				UAirsideAgentAnim::WheelAngleFromTravel(TowView->RolledUu, Anim->WheelRadius), 0.01f);
+			TestTrue(FString::Printf(TEXT("%s: link %d rolled forward (%.1f uu)"), Case.Name, Link, TowView->RolledUu),
+				TowView->RolledUu > 0.0);
+			TestEqual(FString::Printf(TEXT("%s: link %d rolled its own axle's path"), Case.Name, Link),
+				TowView->RolledUu, AxleTravel.IsValidIndex(Link) ? AxleTravel[Link] : -1.0, 0.5);
+			TestTrue(FString::Printf(TEXT("%s: link %d axle cut in: %.1f uu against the cab's %.1f"), Case.Name, Link,
+				TowView->RolledUu, CabTravel), TowView->RolledUu < CabTravel);
+			AddInfo(FString::Printf(TEXT("%s: link %d rolled %.1f uu, its axle's path %.1f, the cab %.1f"), Case.Name, Link,
+				TowView->RolledUu, AxleTravel.IsValidIndex(Link) ? AxleTravel[Link] : -1.0, CabTravel));
 		}
 		TestEqual(FString::Printf(TEXT("%s: one mesh per body-carrying link"), Case.Name),
 			View->TrailerCountForTest(), Bodies);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigActorTrailerWheelRadiusTest,
+	"Airside.Present.RigActor.TrailerWheelRadiusIsMeasured",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigActorTrailerWheelRadiusTest::RunTest(const FString& Parameters)
+{
+	// THE WHEEL THE ANIMATION SPINS IS THE WHEEL THE MESH CARRIES - Airside.Content.
+	// AirframeAxles' rule, for trailers. The hub's reference-pose height IS the radius (z = 0 is
+	// the contact plane). Measured here off a NAMED bone per mesh rather than through
+	// UAirsideAgentAnim::WheelHubRadius, so the rule that picks the bone is checked too. On the
+	// 21 uu default the tank trailer's 53.8 uu wheels spun about 2.5x too fast.
+	struct FCase { FVehicle Vehicle; FName Bone; };
+	const FCase Cases[] = {
+		{ UAirsideSettings::ResolveRigVehicle(), TEXT("wheel_1L") },
+		{ UAirsideSettings::ResolveUtilityTowVehicle(), TEXT("wheel_RL") },
+	};
+	for (const FCase& Case : Cases)
+	{
+		FAirsideTestWorld TestWorld;
+		if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+		const FRoutePlan Plan = RigActorTest::CurvedRoad(*TestWorld.Actor);
+		ARoadAgentActor* View = RigActorTest::Dispatch(*TestWorld.Actor, Plan, Case.Vehicle);
+		if (!TestNotNull(TEXT("a view"), View)) { return false; }
+
+		for (int32 Link = 0; Link < Case.Vehicle.Tow.Num(); ++Link)
+		{
+			USkeletalMeshComponent* Trailer = View->TrailerForTest(Link);
+			if (Trailer == nullptr) { continue; }
+			const FString Who = Trailer->GetSkeletalMeshAsset()->GetName();
+			const FReferenceSkeleton& Rig = Trailer->GetSkeletalMeshAsset()->GetRefSkeleton();
+			const int32 Wheel = Rig.FindBoneIndex(Case.Bone);
+			if (!TestTrue(FString::Printf(TEXT("%s has %s to measure against"), *Who, *Case.Bone.ToString()),
+				Wheel != INDEX_NONE)) { continue; }
+			const double Hub = FAnimationRuntime::GetComponentSpaceTransformRefPose(Rig, Wheel).GetTranslation().Z;
+			const UAirsideAgentAnim* Anim = Cast<UAirsideAgentAnim>(Trailer->GetAnimInstance());
+			if (!TestNotNull(FString::Printf(TEXT("%s animates"), *Who), Anim)) { continue; }
+			TestEqual(FString::Printf(TEXT("%s rolls on the hub height its rig carries"), *Who),
+				static_cast<double>(Anim->WheelRadius), Hub, 0.5);
+
+			// THE TURNTABLE IS NOT DOUBLED: steer_FL/FR and towbar_yaw each take the towbar angle,
+			// which is right only while the steer bones are NOT children of towbar_yaw - were they,
+			// the front wheels would turn by twice the bar's angle.
+			const int32 TowbarYaw = Rig.FindBoneIndex(TEXT("towbar_yaw"));
+			if (TowbarYaw != INDEX_NONE)
+			{
+				for (const TCHAR* Steer : { TEXT("steer_FL"), TEXT("steer_FR") })
+				{
+					const int32 Bone = Rig.FindBoneIndex(Steer);
+					TestTrue(FString::Printf(TEXT("%s: %s exists"), *Who, Steer), Bone != INDEX_NONE);
+					for (int32 Up = Bone; Up != INDEX_NONE; Up = Rig.GetParentIndex(Up))
+					{
+						TestNotEqual(FString::Printf(TEXT("%s: %s does not hang under towbar_yaw"), *Who, Steer), Up, TowbarYaw);
+					}
+				}
+			}
+		}
 	}
 	return true;
 }

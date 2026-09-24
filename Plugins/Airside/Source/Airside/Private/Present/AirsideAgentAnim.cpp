@@ -2,17 +2,43 @@
 
 #include "Present/RoadAgentActor.h"
 
+#include "AnimationRuntime.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
+
+void UAirsideAgentAnim::NativeInitializeAnimation()
+{
+	Super::NativeInitializeAnimation();
+
+	// The fallback first, so the preview in the ABP editor (no agent) and every aircraft
+	// roll exactly as they always did - see WheelRadius.
+	WheelRadius = MainWheelRadius;
+
+	const ARoadAgentActor* Agent = Cast<ARoadAgentActor>(GetOwningActor());
+	const USkeletalMeshComponent* Component = GetSkelMeshComponent();
+	if (Agent == nullptr || Component == nullptr)
+	{
+		return;
+	}
+	// A VEHICLE: the cab (dressed by SetVehicleAirframe, which marks the actor first) or one
+	// of its trailers (whose FTowLinkView exists before its anim class is set).
+	if (!Agent->IsVehicle() && Agent->FindTowLinkView(Component) == nullptr)
+	{
+		return;
+	}
+	if (const USkeletalMesh* Mesh = Component->GetSkeletalMeshAsset())
+	{
+		WheelRadius = WheelHubRadius(Mesh->GetRefSkeleton(), MainWheelRadius);
+	}
+}
+
 void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 {
 	Super::NativeUpdateAnimation(DeltaSeconds);
 
-	const ARoadAgentActor* Agent = Cast<ARoadAgentActor>(TryGetPawnOwner());
-	if (Agent == nullptr)
-	{
-		// An agent is an AActor, not a APawn, so TryGetPawnOwner never finds it. Asked for
-		// first anyway because it is the cheap path and costs nothing when it fails.
-		Agent = Cast<ARoadAgentActor>(GetOwningActor());
-	}
+	// THE OWNING ACTOR, not TryGetPawnOwner: an agent is an AActor, never an APawn, so that
+	// path could not succeed - and casting a pawn to this actor was a compile warning.
+	const ARoadAgentActor* Agent = Cast<ARoadAgentActor>(GetOwningActor());
 
 	if (Agent == nullptr)
 	{
@@ -55,7 +81,7 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 			? RelativeYawDegrees(Motion.Tow[Tow->TowbarLink].Heading, Motion.Tow[Tow->Link].Heading)
 			: 0.0f;
 		// The AXLE's travel, not the cab's speed - see FTowLinkView::RolledUu.
-		WheelAngleDegrees = WheelAngleFromTravel(Tow->RolledUu, MainWheelRadius);
+		WheelAngleDegrees = WheelAngleFromTravel(Tow->RolledUu, WheelRadius);
 	}
 	else
 	{
@@ -69,7 +95,7 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 		// WheelStepDegrees and FAgentMotion::GroundSpeed's own header.
 		WheelAngleDegrees = FMath::Fmod(
 			WheelAngleDegrees
-				+ WheelStepDegrees(GroundSpeed, MainWheelRadius, bAirborne, DeltaSeconds,
+				+ WheelStepDegrees(GroundSpeed, WheelRadius, bAirborne, DeltaSeconds,
 					WheelSpinDownSeconds, WheelRateDegPerSec),
 			360.0f);
 	}
@@ -197,4 +223,19 @@ float UAirsideAgentAnim::WheelAngleFromTravel(double TravelUu, float Radius)
 	}
 	// In DOUBLE until after the Fmod - see the header.
 	return static_cast<float>(FMath::Fmod(FMath::RadiansToDegrees(TravelUu / Radius), 360.0));
+}
+
+float UAirsideAgentAnim::WheelHubRadius(const FReferenceSkeleton& Skeleton, float Fallback)
+{
+	for (int32 Bone = 0; Bone < Skeleton.GetNum(); ++Bone)
+	{
+		if (!Skeleton.GetBoneName(Bone).ToString().StartsWith(TEXT("wheel")))
+		{
+			continue;
+		}
+		// The HUB's height in the reference pose IS the radius: z = 0 is the contact plane.
+		const double Hub = FAnimationRuntime::GetComponentSpaceTransformRefPose(Skeleton, Bone).GetTranslation().Z;
+		return Hub > 0.0 ? static_cast<float>(Hub) : Fallback;
+	}
+	return Fallback;
 }
