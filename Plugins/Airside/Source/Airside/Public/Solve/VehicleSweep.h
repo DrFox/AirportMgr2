@@ -47,6 +47,17 @@ namespace VehicleSweep
 	AIRSIDE_API FEnvelope Envelope(const FBody& Body, double SteerRadius);
 
 	/**
+	 * Advance a trailer whose kingpin has moved to Kingpin: the axle is pulled toward it and
+	 * kept KingpinToAxle behind (discrete tractrix, the pursuit Trace already used). Returns
+	 * false when the trailer has jack-knifed (its heading opposes CabHeading).
+	 */
+	AIRSIDE_API bool StepTrailer(const FVector2D& Kingpin, const FVector2D& CabHeading,
+		double KingpinToAxle, FVector2D& InOutTrailerAxle);
+
+	/** Trailer heading (unit) from axle to kingpin. */
+	AIRSIDE_API FVector2D TrailerHeading(const FVector2D& Kingpin, const FVector2D& TrailerAxle);
+
+	/**
 	 * THE TURN AS DRIVEN, not the steady state (review of 2026-09-24). The steered axle walks
 	 * Path - lead in straight along its first tangent, out straight along its last, far enough
 	 * for the whole vehicle - the fixed axle pursues it at the wheelbase, the kingpin rides the

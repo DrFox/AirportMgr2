@@ -46,6 +46,22 @@ namespace
 	FVector2D Perp(const FVector2D& V) { return FVector2D(-V.Y, V.X); }
 }
 
+FVector2D VehicleSweep::TrailerHeading(const FVector2D& Kingpin, const FVector2D& TrailerAxle)
+{
+	return (Kingpin - TrailerAxle).GetSafeNormal();
+}
+
+bool VehicleSweep::StepTrailer(const FVector2D& Kingpin, const FVector2D& CabHeading,
+	double KingpinToAxle, FVector2D& InOutTrailerAxle)
+{
+	// Pursuit: the axle stays its fixed distance behind the kingpin it follows (discrete
+	// tractrix - Trace's inline copy before this was pulled out, 2026-09-24).
+	FVector2D Trailing = TrailerHeading(Kingpin, InOutTrailerAxle);
+	InOutTrailerAxle = Kingpin - Trailing * KingpinToAxle;
+	Trailing = TrailerHeading(Kingpin, InOutTrailerAxle);
+	return FVector2D::DotProduct(Trailing, CabHeading) >= 0.0;   // < 0: folded past square, a jack-knife
+}
+
 bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
 	TArray<double>& OutInner, TArray<double>& OutOuter)
 {
@@ -111,13 +127,11 @@ bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
 		if (bTrailer)
 		{
 			Kingpin = Fixed + Heading * Body.KingpinX;
-			FVector2D Trailing = (Kingpin - TrailerAxle).GetSafeNormal();
-			TrailerAxle = Kingpin - Trailing * Body.KingpinToAxle;
-			Trailing = (Kingpin - TrailerAxle).GetSafeNormal();
-			if (FVector2D::DotProduct(Trailing, Heading) < 0.0)
+			if (!StepTrailer(Kingpin, Heading, Body.KingpinToAxle, TrailerAxle))
 			{
 				return false;   // folded past square: a jack-knife
 			}
+			const FVector2D Trailing = TrailerHeading(Kingpin, TrailerAxle);
 			const FVector2D TrailerSide = Perp(Trailing) * (Body.TrailerWidth * 0.5);
 			for (const double X : { Body.KingpinToAxle + Body.TrailerFront, -Body.TrailerRear, 0.0, Body.KingpinToAxle * 0.5 })
 			{
