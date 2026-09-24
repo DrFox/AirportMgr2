@@ -544,14 +544,28 @@ URoadProfile* ARoadNetworkActor::ResolveServiceRoadProfile() const
 	// profile comes back from a save with a null pointer, which URoadNetwork::DefaultProfile
 	// repairs as a TAXIWAY - so a "helpful" default here would silently admit aircraft onto
 	// a service road the next time the level was loaded. Null instead, and the caller refuses.
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->ServiceRoadProfile.LoadSynchronous() : nullptr;
+	// The NARROWEST tier: what a road tool lays before the player cycles (spec 2026-09-23 §1),
+	// and the same asset the single ServiceRoadProfile field named before tiers existed.
+	return ResolveWidthProfile(ERoadKind::ServiceRoad, 0);
 }
 
-int32 ARoadNetworkActor::GetTaxiwayProfileCount() const
+namespace
 {
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->TaxiwayProfiles.Num() : 0;
+	/** Kind's standard width list in the content set - the ONE place a kind picks its list. */
+	const TArray<TSoftObjectPtr<URoadProfile>>* WidthListFor(const UAirsideContent* Content, ERoadKind Kind)
+	{
+		if (Content == nullptr)
+		{
+			return nullptr;
+		}
+		return Kind == ERoadKind::ServiceRoad ? &Content->ServiceRoadProfiles : &Content->TaxiwayProfiles;
+	}
+}
+
+int32 ARoadNetworkActor::GetWidthCount(ERoadKind Kind) const
+{
+	const TArray<TSoftObjectPtr<URoadProfile>>* List = WidthListFor(UAirsideSettings::GetContent(), Kind);
+	return List != nullptr ? List->Num() : 0;
 }
 
 TArray<PlotYard::FKitSpec> ARoadNetworkActor::ResolveDepotKits() const
@@ -565,20 +579,20 @@ TArray<PlotYard::FKitSpec> ARoadNetworkActor::ResolveDepotKits() const
 	return DepotKitSpecs(Content);
 }
 
-URoadProfile* ARoadNetworkActor::ResolveTaxiwayProfile(int32 Index) const
+URoadProfile* ARoadNetworkActor::ResolveWidthProfile(ERoadKind Kind, int32 Index) const
 {
 	// THE CONTENT SET, unlike ResolveProfile below, and the two answer different questions:
 	// this is the standard set a player cycles through, that one is this level's own tuning.
 	// Keeping them apart is what lets the width cycle exist without the content set
 	// overriding an instance whose width was tuned in the Details panel - the exact defect
 	// ResolveProfile's own comment records.
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	if (Content == nullptr || Content->TaxiwayProfiles.Num() == 0)
+	const TArray<TSoftObjectPtr<URoadProfile>>* List = WidthListFor(UAirsideSettings::GetContent(), Kind);
+	if (List == nullptr || List->Num() == 0)
 	{
 		return nullptr;
 	}
-	const int32 Clamped = FMath::Clamp(Index, 0, Content->TaxiwayProfiles.Num() - 1);
-	return Content->TaxiwayProfiles[Clamped].LoadSynchronous();
+	const int32 Clamped = FMath::Clamp(Index, 0, List->Num() - 1);
+	return (*List)[Clamped].LoadSynchronous();
 }
 
 URoadProfile* ARoadNetworkActor::ResolveProfile()
@@ -752,7 +766,7 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 	// unchanged FromNodeIndex/SnapResult, and the cache already knows that without a Resolve*
 	// call. Only a validity flip on an otherwise-unchanged ghost costs one (GhostMaterial).
 	bool bValidityChanged = false;
-	if (Presenter->IsGhostCacheHit(Network, FromNodeIndex, SnapResult, bValid, bValidityChanged))
+	if (Presenter->IsGhostCacheHit(Network, FromNodeIndex, SnapResult, bValid, bValidityChanged, Kind, WidthIndex))
 	{
 		if (bValidityChanged)
 		{
@@ -762,7 +776,7 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 	}
 
 	Presenter->UpdateGhost(Network, FromNodeIndex, SnapResult, bValid,
-		MakeGhostSurfaceSettings(Kind, WidthIndex));
+		MakeGhostSurfaceSettings(Kind, WidthIndex), Kind, WidthIndex);
 }
 
 bool ARoadNetworkActor::BuildGhostBuffers(
@@ -938,22 +952,25 @@ URoadProfile* ARoadNetworkActor::ResolveProfileFor(ERoadKind Kind, int32 WidthIn
 	// would be a second answer to "which profile is this?" - the exact shape of bug the
 	// registry and the action table exist to prevent elsewhere.
 	//
-	// A CHOSEN WIDTH WINS OVER THE DEFAULT, and only for a taxiway: WidthIndex names one of
-	// the content set's standard widths (the tool cycles it on key-again), INDEX_NONE means
+	// A CHOSEN WIDTH WINS OVER THE DEFAULT: WidthIndex names one of the content set's
+	// standard widths FOR THIS KIND (the tool cycles it on key-again), INDEX_NONE means
 	// "whatever this kind defaults to". The default for a taxiway is the ACTOR's own profile,
 	// which ResolveProfile keeps the content set out of on purpose - so a player who never
-	// touches the cycle lays exactly the road this level was tuned for.
+	// touches the cycle lays exactly the road this level was tuned for. A service road's is
+	// ResolveServiceRoadProfile.
 	//
-	// A service road ignores the index outright: it has one authored cross-section, and an
-	// index reaching it would lay a taxiway's width on a lane meant for vans.
+	// Until 2026-09-23 a service road ignored the index outright: it had one authored
+	// cross-section, and a TAXIWAY index reaching it would have laid 23 m for vans. The index
+	// is now resolved against the ROAD list (ResolveWidthProfile keys by kind), so it can only
+	// ever name a road tier.
 	URoadProfile* Chosen = nullptr;
-	if (Kind == ERoadKind::ServiceRoad)
+	if (WidthIndex != INDEX_NONE)
+	{
+		Chosen = ResolveWidthProfile(Kind, WidthIndex);
+	}
+	else if (Kind == ERoadKind::ServiceRoad)
 	{
 		Chosen = ResolveServiceRoadProfile();
-	}
-	else if (WidthIndex != INDEX_NONE)
-	{
-		Chosen = ResolveTaxiwayProfile(WidthIndex);
 	}
 	if (Chosen == nullptr && Kind != ERoadKind::ServiceRoad)
 	{

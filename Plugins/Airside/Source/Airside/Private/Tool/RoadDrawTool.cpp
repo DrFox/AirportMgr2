@@ -397,15 +397,11 @@ void FRoadDrawTool::OnReselect(const FToolContext& Context)
 	// the number keys are spoken for, and "press the tool's key again" is a gesture a
 	// player already knows from it.
 	//
-	// A SERVICE ROAD HAS NOTHING TO CYCLE. It carries one authored cross-section - see
-	// UAirsideContent::ServiceRoadProfile - so this refuses rather than reaching for the
-	// taxiway list, which would lay a 23 m lane for vans.
-	if (Kind == ERoadKind::ServiceRoad)
-	{
-		UE_LOG(LogAirside, Log,
-			TEXT("Road width unchanged: a service road has one authored cross-section"));
-		return;
-	}
+	// A SERVICE ROAD CYCLES ITS TIERS TOO (2026-09-23), Narrow / Standard / Wide. It used to
+	// refuse here - "one authored cross-section" - and reaching for the taxiway list would
+	// have laid a 23 m lane for vans. The seam now keys the list by Kind, so a road index can
+	// only ever name a road tier.
+	const TCHAR* What = Kind == ERoadKind::ServiceRoad ? TEXT("Road") : TEXT("Taxiway");
 
 	if (Context.Target == nullptr)
 	{
@@ -414,22 +410,22 @@ void FRoadDrawTool::OnReselect(const FToolContext& Context)
 		// caller bug, not a fresh project, and one shared message would blame the content
 		// set for a null target.
 		UE_LOG(LogAirside, Warning,
-			TEXT("Taxiway width unchanged: no edit target in context, so there is nothing "
-			     "to ask for widths"));
+			TEXT("%s width unchanged: no edit target in context, so there is nothing "
+			     "to ask for widths"), What);
 		return;
 	}
 
-	const int32 Count = Context.Target->GetTaxiwayProfileCount();
+	const int32 Count = Context.Target->GetWidthCount(Kind);
 	if (Count <= 0)
 	{
 		// SAID OUT LOUD. Returning in silence is indistinguishable from a key that never
 		// arrived: the player presses the tool's key again, nothing widens, and nothing
-		// anywhere says why. A content set with no taxiway profiles is a real state - it
+		// anywhere says why. A content set with no profiles for this kind is a real state - it
 		// is what a project that has not run build_road_profiles.py has.
 		UE_LOG(LogAirside, Warning,
-			TEXT("Taxiway width unchanged: the content set declares no taxiway profiles, so "
+			TEXT("%s width unchanged: the content set declares no %s profiles, so "
 			     "there is nothing to cycle through. Author them with "
-			     "Tools/Python/build_road_profiles.py."));
+			     "Tools/Python/build_road_profiles.py."), What, Kind == ERoadKind::ServiceRoad ? TEXT("road") : TEXT("taxiway"));
 		return;
 	}
 
@@ -440,9 +436,9 @@ void FRoadDrawTool::OnReselect(const FToolContext& Context)
 
 	// The width is otherwise visible only in the ghost, and only once a chain is started -
 	// so a player who has not clicked yet has no way to tell the key did anything.
-	const URoadProfile* Profile = Context.Target->ResolveTaxiwayProfile(WidthIndex);
-	UE_LOG(LogAirside, Log, TEXT("Taxiway width -> %d of %d, %.1f m"),
-		WidthIndex + 1, Count, Profile != nullptr ? Profile->GetTotalWidth() / 100.0 : 0.0);
+	const URoadProfile* Profile = Context.Target->ResolveWidthProfile(Kind, WidthIndex);
+	UE_LOG(LogAirside, Log, TEXT("%s width -> %d of %d, %.1f m"),
+		What, WidthIndex + 1, Count, Profile != nullptr ? Profile->GetTotalWidth() / 100.0 : 0.0);
 
 	// The part-drawn chain, if any, must hear about it: the state carries its own copy so
 	// it can build its successor, and a chain left on the old width would finish at a

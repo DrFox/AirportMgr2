@@ -133,8 +133,8 @@ public:
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex) override;
 
 	/** Forwarded to the actor, which owns the content lookup - see IRoadEditTarget. */
-	virtual int32 GetTaxiwayProfileCount() const override;
-	virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const override;
+	virtual int32 GetWidthCount(ERoadKind Kind) const override;
+	virtual URoadProfile* ResolveWidthProfile(ERoadKind Kind, int32 Index) const override;
 	using IRoadEditTarget::ConnectNodes;
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) override;

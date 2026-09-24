@@ -14,7 +14,7 @@ WHY THIS ASSET HAS TO EXIST AT ALL. A road segment stores a POINTER to its profi
 URoadNetwork::DefaultProfile repairs a null one with the TAXIWAY profile - so a service road
 laid against a transient profile would come back from a save as a taxiway: widened to 23 m
 and, far worse, admitting aircraft onto a lane laid for vans. Without this asset the road
-tool refuses to lay anything and says so. See UAirsideContent::ServiceRoadProfile.
+tool refuses to lay anything and says so. See UAirsideContent::ServiceRoadProfiles.
 
 The taxiway profile is deliberately NOT authored here. It has never been an asset: segments
 that carry no profile fall back to ARoadNetworkActor's own FallbackWidth, which is
@@ -53,6 +53,15 @@ CONTENT_SET = "/Game/DA_AirsideContent"
 # URoadProfile::ResolvedFilletRadius - so this script states nothing and can drift from
 # nothing. Passing zero below is what asks for that derivation.
 LANE_WIDTH = 300.0
+
+# THE ROAD TIERS (spec 2026-09-23 section 1), narrow first - the order the road tool cycles in.
+# Per-lane widths; every tier is two lanes between the same kerbs. The Narrow tier keeps the
+# asset name every placed road already points at, so existing roads stay Narrow.
+ROAD_TIERS = [
+    ("DA_RoadProfile_ServiceRoad", LANE_WIDTH),          # Narrow, 2 x 3.0 m
+    ("DA_RoadProfile_ServiceRoad_Standard", 350.0),      # Standard, 2 x 3.5 m
+    ("DA_RoadProfile_ServiceRoad_Wide", 450.0),          # Wide, 2 x 4.5 m - the articulated rig's
+]
 KERB_WIDTH = 60.0
 DERIVE_FILLET = 0.0
 
@@ -105,36 +114,35 @@ def data_asset_factory(asset_class):
     return factory
 
 
-def build_service_road():
-    profile = replace_asset(
-        "DA_RoadProfile_ServiceRoad", unreal.RoadProfile,
-        data_asset_factory(unreal.RoadProfile))
-    if profile is None:
-        return None
+def build_service_roads():
+    """One asset per road tier, narrowest first - the order the tool cycles in."""
+    built = []
+    for name, lane_width in ROAD_TIERS:
+        profile = replace_asset(name, unreal.RoadProfile, data_asset_factory(unreal.RoadProfile))
+        if profile is None:
+            continue
 
-    unreal.RoadProfile.fill_two_way_road(profile, LANE_WIDTH, KERB_WIDTH, DERIVE_FILLET)
-    # only_if_is_dirty=False: a Fill through Python does not mark the package dirty, and the
-    # default then saves NOTHING while reporting success (memory: save_asset writes nothing
-    # unless forced).
-    unreal.EditorAssetLibrary.save_asset("%s/DA_RoadProfile_ServiceRoad" % ASSET_DIR, only_if_is_dirty=False)
+        unreal.RoadProfile.fill_two_way_road(profile, lane_width, KERB_WIDTH, DERIVE_FILLET)
+        # only_if_is_dirty=False: a Fill through Python does not mark the package dirty, and the
+        # default then saves NOTHING while reporting success (memory: save_asset writes nothing
+        # unless forced).
+        unreal.EditorAssetLibrary.save_asset("%s/%s" % (ASSET_DIR, name), only_if_is_dirty=False)
 
-    bands = profile.get_editor_property("bands")
-    guidelines = profile.get_editor_property("guidelines")
-    unreal.log("MARKER: DA_RoadProfile_ServiceRoad built, %d bands, %d guideline(s)" % (
-        len(bands), len(guidelines)))
-    for band in bands:
-        unreal.log("MARKER:   band %s %.0f uu slot '%s'" % (
-            band.get_editor_property("type"), band.get_editor_property("width"),
-            band.get_editor_property("material_slot")))
-    for lane in guidelines:
-        unreal.log("MARKER:   guideline class %s, %s, max wingspan %.0f" % (
-            lane.get_editor_property("class_"), lane.get_editor_property("direction"),
-            lane.get_editor_property("max_wingspan")))
-    unreal.log("MARKER:   continuous=%s exit_length=%.0f" % (
-        profile.get_editor_property("continuous_through_junctions"),
-        profile.get_editor_property("exit_length")))
-    return profile
-
+        bands = profile.get_editor_property("bands")
+        guidelines = profile.get_editor_property("guidelines")
+        unreal.log("MARKER: %s built, %d bands, %d guideline(s), %.1f m overall" % (
+            name, len(bands), len(guidelines),
+            sum(band.get_editor_property("width") for band in bands) / 100.0))
+        for band in bands:
+            unreal.log("MARKER:   band %s %.0f uu slot '%s'" % (
+                band.get_editor_property("type"), band.get_editor_property("width"),
+                band.get_editor_property("material_slot")))
+        for lane in guidelines:
+            unreal.log("MARKER:   guideline class %s, %s, offset %.0f" % (
+                lane.get_editor_property("class_"), lane.get_editor_property("direction"),
+                lane.get_editor_property("centre_offset")))
+        built.append(profile)
+    return built
 
 def build_taxiways():
     """One asset per standard width, narrowest first - the order the tool cycles in."""
@@ -173,8 +181,8 @@ def wire_taxiways_into_content(profiles):
         CONTENT_SET, len(content.get_editor_property("taxiway_profiles"))))
 
 
-def wire_into_content(profile):
-    """Point the content set's ServiceRoadProfile at it.
+def wire_into_content(profiles):
+    """Point the content set's ServiceRoadProfiles at the tiers, narrowest first.
 
     SET BY SCRIPT, and that does not contradict UAirsideContent's reason for existing. What
     that class removed was a PATH IN C++, invisible to the editor and unfixable when a folder
@@ -184,18 +192,18 @@ def wire_into_content(profile):
     """
     content = unreal.EditorAssetLibrary.load_asset(CONTENT_SET)
     if content is None:
-        unreal.log_error("MARKER: %s not found - nothing to wire the profile into." % CONTENT_SET)
+        unreal.log_error("MARKER: %s not found - nothing to wire the profiles into." % CONTENT_SET)
         return
 
-    content.set_editor_property("service_road_profile", profile)
-    unreal.EditorAssetLibrary.save_asset(CONTENT_SET)
-    unreal.log("MARKER: %s.ServiceRoadProfile -> %s" % (
-        CONTENT_SET, content.get_editor_property("service_road_profile")))
+    content.set_editor_property("service_road_profiles", profiles)
+    unreal.EditorAssetLibrary.save_asset(CONTENT_SET, only_if_is_dirty=False)
+    unreal.log("MARKER: %s.ServiceRoadProfiles -> %d profile(s)" % (
+        CONTENT_SET, len(content.get_editor_property("service_road_profiles"))))
 
 
-road = build_service_road()
-if road is not None:
-    wire_into_content(road)
+roads = build_service_roads()
+if roads:
+    wire_into_content(roads)
 
 taxiways = build_taxiways()
 if taxiways:

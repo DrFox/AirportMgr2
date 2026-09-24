@@ -167,8 +167,8 @@ private:
 	ERoadKind Kind = ERoadKind::Taxiway;
 
 	/**
-	 * Which standard taxiway width the next click lays, or INDEX_NONE for the level's own
-	 * default.
+	 * Which standard width of this tool's KIND the next click lays - an ICAO taxiway code or
+	 * a road tier - or INDEX_NONE for the kind's default.
 	 *
 	 * ON THE TOOL, not on FToolContext, for the reason ERoadKind gives about itself: it is
 	 * a fact about the TOOL the player selected rather than about the gesture, and a
@@ -178,8 +178,9 @@ private:
 	 * level was tuned for - see ARoadNetworkActor::ResolveProfile, whose comment records
 	 * what happened the last time a default was quietly overridden.
 	 *
-	 * A SERVICE ROAD NEVER SETS IT: that kind has one authored cross-section, so the cycle
-	 * refuses rather than laying a taxiway's width on a lane meant for vans.
+	 * A SERVICE ROAD SETS IT TOO since 2026-09-23 (Narrow / Standard / Wide). It used to
+	 * refuse, having one authored cross-section; IRoadEditTarget::ResolveWidthProfile keys
+	 * the list by kind, so a road's index can only name a road tier.
 	 */
 	int32 WidthIndex = INDEX_NONE;
 };

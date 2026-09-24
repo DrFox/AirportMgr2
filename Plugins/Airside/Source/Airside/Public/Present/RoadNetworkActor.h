@@ -389,9 +389,9 @@ public:
 	 */
 	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override;
 
-	/** The standard taxiway widths, from the content set - see IRoadEditTarget. */
-	virtual int32 GetTaxiwayProfileCount() const override;
-	virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const override;
+	/** The standard widths for a kind, from the content set - see IRoadEditTarget. */
+	virtual int32 GetWidthCount(ERoadKind Kind) const override;
+	virtual URoadProfile* ResolveWidthProfile(ERoadKind Kind, int32 Index) const override;
 
 	/** See IRoadEditTarget::ResolveProfileFor - the one place this rule lives. */
 	virtual URoadProfile* ResolveProfileFor(ERoadKind Kind, int32 WidthIndex) override;
@@ -668,7 +668,7 @@ public:
 
 	/**
 	 * Cross-section for SERVICE ROADS laid through this facade - see ERoadKind. Unset falls
-	 * back to the content set's ServiceRoadProfile.
+	 * back to the content set's narrowest road tier (UAirsideContent::ServiceRoadProfiles[0]).
 	 *
 	 * A SECOND PROPERTY rather than a map keyed by kind: there are two kinds, and two asset
 	 * pickers in the Details panel are easier to author than a map, for no loss until a
@@ -676,7 +676,7 @@ public:
 	 *
 	 * NO FallbackWidth TWIN, unlike Profile. That property's on-demand RuntimeProfile exists
 	 * so the FIRST click of a session lays something; a road that fell back to a transient
-	 * profile would come back from a save as a TAXIWAY (see UAirsideContent::ServiceRoadProfile
+	 * profile would come back from a save as a TAXIWAY (see UAirsideContent::ServiceRoadProfiles
 	 * for why that is worse than nothing), so the road tool refuses instead and names the
 	 * asset that is missing.
 	 */
