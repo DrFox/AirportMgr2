@@ -11,8 +11,9 @@
  * form with no dependence on the path before the corner, and because the cost of being wrong
  * in this direction is a corner sized a little generously rather than a trailer over a kerb.
  *
- * THE STEERED AXLE RIDES THE LINE (FRouteFollower), so Radius is the steered axle's; the
- * fixed axle runs at sqrt(R^2 - L^2) and every body corner is placed from there.
+ * THE STEERED AXLE RIDES THE LINE, as it does in FRouteFollower, so Radius is the steered
+ * axle's; the fixed axle runs at sqrt(R^2 - L^2) and every body corner is placed from there.
+ * ENFORCED BY: Airside.Model.FollowerMatchesSweep (follower and Trace agree on the cut-in)
  */
 namespace VehicleSweep
 {

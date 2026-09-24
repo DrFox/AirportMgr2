@@ -43,7 +43,11 @@ PIPELINE_NAME = "PL_FuelTruck1_Combine"
 # re-export that changes scale is caught HERE rather than as a truck that looks right and
 # makes every clearance and footprint figure in the sim quietly false.
 #
-# 8.500 m SINCE 2026-09-15, up from 6.200 - which was a Ford Transit, an 11.2 m kerb-to-kerb
+# 6.200 m AGAIN SINCE 2026-09-24: the 8.5 m below was a uniform enlargement to test crabbing,
+# and it made the truck 3.26 m wide - wider than a road lane. Re-imported in place by
+# reimport_fueltruck1.py; this first-import script is not re-run. The history:
+#
+# 8.500 m FROM 2026-09-15, up from 6.200 - which was a Ford Transit, an 11.2 m kerb-to-kerb
 # circle parked beside a 737. 8.5 m is the smallest real hydrant dispenser. The resize was
 # done in the MODEL (align_and_scale.py's LENGTH_TARGET) and not here; see the note above
 # YAW for why an import-time scale cannot do it.

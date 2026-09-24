@@ -22,7 +22,7 @@ bool FReverseTurnsTighterThanForwardTest::RunTest(const FString& Parameters)
 	// 90 degrees, because tan exceeds sin there.
 	//
 	// That is the whole argument for backing into a bay rather than driving through one: the
-	// manoeuvre that needs 699 uu of room forwards needs 495 in reverse, about 30% less, and a
+	// manoeuvre that needs 510 uu of room forwards needs 361 in reverse, about 30% less, and a
 	// drive-through bay would have needed TWO forward corners where this needs none.
 	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	if (!TestTrue(TEXT("the service vehicle steers on measured axles"), Truck.HasAxles()))
@@ -71,8 +71,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FSpeedProfileJudgesReverseByTheReverseLimitTest::RunTest(const FString& Parameters)
 {
-	// THE ONE ARC THAT DISCRIMINATES. Between the reverse limit (495) and the forward one
-	// (699) sits a band of curves a vehicle can back along and cannot drive along. An arc in
+	// THE ONE ARC THAT DISCRIMINATES. Between the reverse limit (361 for the 6.2 m bowser) and
+	// the forward one (510) sits a band of curves a vehicle can back along and cannot drive along. An arc in
 	// that band is the only shape that tells the two rules apart: judged forwards it must be
 	// refused, judged backwards it must be accepted.
 	//

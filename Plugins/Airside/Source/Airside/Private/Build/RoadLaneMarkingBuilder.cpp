@@ -1,5 +1,6 @@
 #include "Build/RoadLaneMarkingBuilder.h"
 
+#include "AirsideLog.h"
 #include "Build/MarkingQuads.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
@@ -38,9 +39,15 @@ int32 FRoadLaneMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoa
 			continue;
 		}
 
-		// STRAIGHT, because production lays only straight segments (URoadNetwork::
-		// AddStraightSegment is the one caller that makes one). A curved road would need the
-		// dashes laid along its sample array instead.
+		// STRAIGHT SEGMENTS ONLY: dashes are laid along the chord. A curved segment is skipped
+		// and said so, rather than painted along a line its road does not follow - it would
+		// need the dashes laid along its sample array instead.
+		if (!(Segment.Control - (NodeA->Position + NodeB->Position) * 0.5).IsNearlyZero(1.0))
+		{
+			UE_LOG(LogAirside, Warning, TEXT("Lane markings: segment from (%.0f,%.0f) is curved; no centre line painted"),
+				NodeA->Position.X, NodeA->Position.Y);
+			continue;
+		}
 		const FVector2D Along = NodeB->Position - NodeA->Position;
 		const double Length = Along.Size();
 		const double First = Segment.TrimA;

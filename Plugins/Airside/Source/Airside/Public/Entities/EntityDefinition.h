@@ -98,8 +98,9 @@ struct AIRSIDE_API FStandLeg
  * anything derived: off the service road into a PARKING BAY, forward to the service point,
  * REVERSE clear of the aeroplane, then forward out. Three earlier designs had the vehicle back
  * INTO its working position; this one drives in forwards and reverses out, which is what the
- * ground actually costs - the expensive manoeuvre lands in open ground at the reverse limit of
- * 494.5 uu instead of beside the aircraft at the forward limit of 699.3.
+ * ground actually costs - the expensive manoeuvre lands in open ground at the reverse limit
+ * (L/tan(lock), 361 uu for the 6.2 m bowser) instead of beside the aircraft at the forward
+ * limit (L/sin(lock), 510 uu).
  *
  * THE PARKING BAY IS NOT THE SERVICE POINT. The vehicle WAITS in the bay; it WORKS at the
  * anchor. Collapsing the two is what produced a layout where every service position had to

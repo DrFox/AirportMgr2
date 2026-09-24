@@ -169,8 +169,8 @@ FVehicle UAirsideSettings::ResolveDefaultVehicle()
 	// 0.3 g. AUTHORED RATHER THAN INHERITED, which it was until 2026-09-15: the struct default
 	// is 147 uu/s^2, an AIRCRAFT CABIN comfort figure, and nothing here ever chose it. A van on
 	// dry concrete does 0.3 g without drama, and this is what decides corner speed once
-	// steering is geometric - at the 699 uu the lock allows, the difference between 11.5 km/h
-	// and 16. The note above about writing every figure out rather than inheriting it applies
+	// steering is geometric - at the 510 uu the lock allows, the difference between 9.9 km/h
+	// and 13.9 (699 uu, 11.5 and 16, while the truck was 8.5 m). The note above about writing every figure out rather than inheriting it applies
 	// to this one too; it was simply missed.
 	Van.Chassis.Ground.MaxLateralAccelUu = 294.0;
 
@@ -224,8 +224,8 @@ FVehicle UAirsideSettings::ResolveDefaultVehicle()
 	Van.Chassis.FixedAxleX = 0.0;
 
 	// 45 degrees, written out rather than left at FGroundRegime's 60. The struct default is
-	// an aircraft nose gear's, and a rigid truck does not have that: 60 would give a 5.7 m
-	// radius on this wheelbase, a turning circle no 8.5 m truck makes.
+	// an aircraft nose gear's, and a rigid truck does not have that: 60 would give a 4.2 m
+	// radius on this wheelbase, a turning circle no rigid truck of this size makes.
 	//
 	// BACK TO 45 FROM 50, 2026-09-15, AND THE 50 WAS NEVER A MEASUREMENT. It was raised on
 	// 2026-09-14 so the truck's lock would clear a service road fillet authored at 500 uu -

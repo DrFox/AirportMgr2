@@ -13,8 +13,8 @@
  *
  * It exists because the two directions are judged by DIFFERENT LIMITS. Forwards a rigid
  * vehicle pivots about its steered axle and cannot hold an arc under L/sin(lock); backwards it
- * pivots about its fixed axle and the limit falls to L/tan(lock) - 495 uu against 699 for the
- * 8.5 m dispenser. A reverse leg judged by the forward rule is refused for being legal.
+ * pivots about its fixed axle and the limit falls to L/tan(lock) - 361 uu against 510 for the
+ * 6.2 m bowser. A reverse leg judged by the forward rule is refused for being legal.
  */
 UENUM()
 enum class EDriveDirection : uint8

@@ -1189,7 +1189,7 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	// FORWARD EDGES ONLY, and skipping the rest is the whole reason FGuidelineEdge::bReverseLeg
 	// exists. A reverse leg is LEGITIMATELY tighter than the forward limit - a reversing
 	// vehicle pivots about its FIXED axle and holds L/tan(lock) where forward driving needs
-	// L/sin(lock), 494.5 against 699.3 - so sweeping every laid edge past the forward rule
+	// L/sin(lock), 494.5 against 699.3 (the 8.5 m truck then) - so sweeping every laid edge past the forward rule
 	// refuses the one manoeuvre the layout is designed around. Measured: it reported 547 uu,
 	// which is a reverse leg comfortably inside its own limit and 152 uu outside a limit that
 	// does not apply to it.

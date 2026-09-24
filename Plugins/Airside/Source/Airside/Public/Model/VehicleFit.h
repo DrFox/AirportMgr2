@@ -18,8 +18,8 @@ class URoadNetwork;
  * SWEPT WIDTH AGAINST TARMAC WIDTH, not inside against inside (2026-09-24): the line is the
  * lane's centre, and a real rig turning on the near side swings OUT into the other lane to
  * keep its trailer off the kerb. Holding it to its own lane's line refused turns real rigs
- * make every day. The cost, stated: the claim model does not reserve the other lane, so an
- * oncoming vehicle can overlap a rig mid-turn.
+ * make every day. The cost, stated: nothing here reserves the other lane, so an oncoming
+ * vehicle can overlap a rig mid-turn.
  *
  * UNMEASURED GATES NOTHING: Width 0, MinRadius 0, no per-sample clearances - hand-drawn edges,
  * straight lanes, balloons over grass, anything saved before this existed - and a vehicle

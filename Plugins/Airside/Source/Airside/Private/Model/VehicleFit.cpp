@@ -34,8 +34,9 @@ bool VehicleFit::Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle, const
 	{
 		return true;
 	}
-	// THE SAMPLES THE BUILDER MEASURED AND THE FOLLOWER WALKS - the same call, so the
-	// clearances line up with the simulated path index for index.
+	// The samples the builder measured the clearances on, so they line up with the simulated
+	// path index for index.
+	// ENFORCED BY: Airside.Build.MeasuredOnFollowerSamples (these are the follower's points too)
 	TArray<FVector2D> Path;
 	GuidelineGeom::Sample(A->Position, Edge.Control, B->Position, Path);
 	if (Path.Num() != Edge.ClearInnerAt.Num() || Path.Num() != Edge.ClearOuterAt.Num())

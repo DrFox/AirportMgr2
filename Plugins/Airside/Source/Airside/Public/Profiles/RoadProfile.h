@@ -228,7 +228,7 @@ public:
 	 * line wherever |UV1 lateral| < CentrelineWidth - a taxiway's yellow centreline. A two-way
 	 * road's centre is painted instead by FRoadLaneMarkingBuilder as white dashes, and with
 	 * this left true the dashes sat on a solid yellow line (review of 2026-09-23). False makes
-	 * FRoadProfileBands keep every lateral far from zero, which is the only thing UV1.X feeds.
+	 * FRoadProfileBands keep every lateral far from zero, out of the material's centreline band.
 	 * ENFORCED BY: Airside.Build.TwoWayRoadHasNoMaterialCentreline
 	 */
 	UPROPERTY(EditAnywhere) bool bMaterialCentreline = true;

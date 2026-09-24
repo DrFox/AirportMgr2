@@ -258,7 +258,7 @@ struct AIRSIDE_API FChassis
 	 * by name, "that offset belongs here as a field and not as a constant at the call site" -
 	 * until plane7 replaced the placeholder mesh it was measured off and brought it onto the
 	 * nose-gear origin with the rest of the fleet. The live declarer is now
-	 * UAirsideSettings::ResolveDefaultVehicle's fuel truck, which carries SteerAxleX 494.5
+	 * UAirsideSettings::ResolveDefaultVehicle's fuel truck, which carries SteerAxleX 360.7
 	 * against FixedAxleX 0: fueltruck1 is exported about its rear axle because that is what a
 	 * front-steered truck pivots about, so on a VEHICLE the deviation is the model's own
 	 * choice rather than an importer's accident.
@@ -403,7 +403,7 @@ struct AIRSIDE_API FChassis
 	 * affordable. Forwards, the body pivots about the STEERED axle and the arc the steered
 	 * wheels describe has radius L/sin(lock). Backwards it pivots about the FIXED axle, whose
 	 * arc is L/tan(lock) - strictly smaller for any lock under 90 degrees, since tan exceeds
-	 * sin there. For the 8.5 m dispenser that is 495 uu against 699, about 30% less room.
+	 * sin there. For the 6.2 m bowser that is 361 uu against 510, about 30% less room.
 	 *
 	 * WHY THAT MATTERS RATHER THAN BEING A CURIOSITY: a bay is a dead end, so a vehicle either
 	 * backs into it or the bay is a drive-through needing TWO forward corners. Backing in needs

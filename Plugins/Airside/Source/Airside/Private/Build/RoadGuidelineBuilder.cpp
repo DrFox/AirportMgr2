@@ -62,10 +62,10 @@ namespace
 	constexpr double ClearanceCap = 3000.0;
 
 	/**
-	 * Measures what a turn offers a vehicle's body (spec 2026-09-23 §6) ON THE SAMPLES THE
-	 * FOLLOWER WALKS - GuidelineGeom::Sample, the call URoadNetwork::SampleGuideline makes - so
-	 * route search judges the line that is driven, not a second evaluation of it. MinRadius is
-	 * GuidelineGeom::TightestRadius, the figure the lock warning below already trusts.
+	 * Measures what a turn offers a vehicle's body (spec 2026-09-23 §6) on GuidelineGeom::Sample,
+	 * so route search judges the line that is driven, not a second evaluation of it. MinRadius
+	 * is GuidelineGeom::TightestRadius, the figure the lock warning below uses.
+	 * ENFORCED BY: Airside.Build.MeasuredOnFollowerSamples
 	 * Clearances march along each sample's normal until the point leaves the pavement.
 	 */
 	void MeasureTurn(FGuidelineEdge& Turn, const FVector2D& PA, const FVector2D& PB, const FJunctionPavement& Pavement)
@@ -409,10 +409,9 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			// A SPARED LANE IGNORES THE DRIVE SIDE (review of 2026-09-23, left as is): the
 			// player's hand-edited edge keeps the geometry they gave it, so after a flip the other
 			// lane is derived onto the positions it still occupies - two coincident lanes, running
-			// opposite ways. Reaching it needs a hand-edited ROAD lane: on 2026-09-23 the only
-			// writer that turns a segment's derived edge into an edited one was
-			// FRoadNetworkTestAccess::MarkGuidelineEdgeEditedForTest (the guideline tool draws
-			// connectors, which re-resolve by identity and survive a flip).
+			// opposite ways. Anything that lets a player edit a road LANE in place must re-apply
+			// the drive side to it; connectors drawn between lanes re-resolve by identity and
+			// survive a flip (Airside.Build.TwoWay.SparedEdgeSurvivesFlip).
 			const FGuidelineEdgeId Spared = FindSparedEdge(Network, SegmentId, Which);
 			if (Spared.IsSet())
 			{
