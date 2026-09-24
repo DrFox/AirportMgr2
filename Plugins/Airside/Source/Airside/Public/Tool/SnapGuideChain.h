@@ -464,11 +464,61 @@ protected:
 };
 
 /**
+ * WHOSE closed outlines an outline source walks - the apron surfaces, or the plotted stands and
+ * fuel depots. Each set answers to its own column: Aprons to EReference::Apron, Plots to
+ * EReference::Stand.
+ *
+ * ADDED 2026-09-24, from PIE: a road could line up with an apron's edge but not with a drawn
+ * stand's or a depot plot's, although every stand has an outline since the drawn-stands work
+ * (a drawn one, or the Code C box URoadNetwork::EnsureStandOutlines gives an old one). The only
+ * Stand-column source read the entity's POSE - its centre and heading - so the edge the player
+ * could see on the ground was nothing a guide knew about.
+ *
+ * AN ENUM, NOT A BOOL: the two are not "apron" and "not apron", and a third set (a building's
+ * footprint) is easy to imagine.
+ */
+enum class EGuideOutlines : uint8
+{
+	Aprons,
+	Plots
+};
+
+/**
+ * Shared policy for the four sources that walk closed OUTLINES - Parallel, Collinear, AngledFrom
+ * and LevelWith against an apron's edges and corners, and since 2026-09-24 against a plotted
+ * stand's or depot's too.
+ *
+ * STRATEGY BY CONSTRUCTOR KNOB, THE SAME SHAPE AS FSegmentGuideSource: the four relations stay
+ * four classes (the chain skips a source by its declared Relation() before it walks, so one class
+ * per relation is what makes the Relation row switchable - see FApronGuideSource), and WHICH
+ * outlines each walks is a value fixed at construction. The chain registers each class twice,
+ * once per EGuideOutlines. REJECTED: a second family of four classes for plots, which would be
+ * the geometry of every edge relation written twice and free to drift - the flush displacement,
+ * the one-end-per-edge spoke rule, the corner's axes - and a single walk that visited BOTH sets
+ * from one instance, which would have to pick one column per candidate inside every lambda and
+ * leave the Apron and Stand buttons one bug away from gating each other's lines.
+ *
+ * THE CLASS NAMES KEEP "Apron", because the apron was first and every existing call site and test
+ * names them; the default argument keeps them meaning what they meant. The Plots instance is the
+ * second registration, not a second class.
+ */
+struct AIRSIDE_API FOutlineGuideSource : public IGuideSource
+{
+protected:
+	explicit FOutlineGuideSource(EGuideOutlines InOutlines) : Outlines(InOutlines) {}
+
+	/** Which outlines this instance walks. See EGuideOutlines. */
+	EGuideOutlines Outlines;
+};
+
+/**
  * An apron's EDGES, as a direction to point along and its perpendicular.
  *
  * AN APRON IS A BOUNDARY, NOT A CENTRELINE, and that is what separates this whole family from
  * the road sources. A road is a line with pavement either side; an apron edge IS the pavement's
  * limit. FApronLineGuideSource is where that difference bites - see the displacement there.
+ * A plotted stand's or depot's outline is a boundary in exactly the same sense, which is why the
+ * Plots instance of each source needs no rule of its own.
  *
  * FOUR SOURCES, ONE PER RELATION - Parallel here, Collinear, AngledFrom and LevelWith below.
  * FSnapGuideChain::Resolve skips a source by its declared Relation() BEFORE it walks anything,
@@ -478,10 +528,16 @@ protected:
  *
  * NO NAME OF ITS OWN. FApronSurface carries a material slot and nothing a player would read, so
  * the label is "the apron edge" and the dashed line says WHICH - exactly as FRoadDrawTool labels
- * an unnamed node "that node" and lets the drawn line carry the rest.
+ * an unnamed node "that node" and lets the drawn line carry the rest. A plot's label names its
+ * KIND instead ("the stand's edge", "the fuel depot's corner") - see ELabelSubject::EntityEdge.
  */
-struct AIRSIDE_API FApronGuideSource final : public IGuideSource
+struct AIRSIDE_API FApronGuideSource final : public FOutlineGuideSource
 {
+	explicit FApronGuideSource(EGuideOutlines InOutlines = EGuideOutlines::Aprons)
+		: FOutlineGuideSource(InOutlines)
+	{
+	}
+
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
 		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
@@ -498,8 +554,13 @@ struct AIRSIDE_API FApronGuideSource final : public IGuideSource
  * 2026-09-20 design section 6 - this is the only cell where a centreline meets an extended
  * boundary, so it is the only place the rule applies.
  */
-struct AIRSIDE_API FApronLineGuideSource final : public IGuideSource
+struct AIRSIDE_API FApronLineGuideSource final : public FOutlineGuideSource
 {
+	explicit FApronLineGuideSource(EGuideOutlines InOutlines = EGuideOutlines::Aprons)
+		: FOutlineGuideSource(InOutlines)
+	{
+	}
+
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
 		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
@@ -508,8 +569,13 @@ struct AIRSIDE_API FApronLineGuideSource final : public IGuideSource
 };
 
 /** Spokes at 45, 90 and 135 degrees out of an apron's corners - see FAngledRoadGuideSource. */
-struct AIRSIDE_API FApronAngledGuideSource final : public IGuideSource
+struct AIRSIDE_API FApronAngledGuideSource final : public FOutlineGuideSource
 {
+	explicit FApronAngledGuideSource(EGuideOutlines InOutlines = EGuideOutlines::Aprons)
+		: FOutlineGuideSource(InOutlines)
+	{
+	}
+
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
 		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
@@ -523,9 +589,18 @@ struct AIRSIDE_API FApronAngledGuideSource final : public IGuideSource
  * NOT DISPLACED, unlike FApronLineGuideSource. A corner is a POINT, not an extended edge - there
  * is nothing for a road's flank to run flush along, so centre-to-corner is what "level with" can
  * mean here.
+ *
+ * WITH NO GESTURE REFERENCE - a road's free start, before its first click - the corner's OWN
+ * edge is the axis, since 2026-09-24. See the .cpp for why that is the outline's own frame and
+ * not an invented one, and why a boundary drag is left out of it.
  */
-struct AIRSIDE_API FApronCornerGuideSource final : public IGuideSource
+struct AIRSIDE_API FApronCornerGuideSource final : public FOutlineGuideSource
 {
+	explicit FApronCornerGuideSource(EGuideOutlines InOutlines = EGuideOutlines::Aprons)
+		: FOutlineGuideSource(InOutlines)
+	{
+	}
+
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
 		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;

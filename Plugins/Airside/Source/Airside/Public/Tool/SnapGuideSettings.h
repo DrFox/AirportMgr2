@@ -87,13 +87,26 @@ struct AIRSIDE_API FSnapGuideSettings
 	UPROPERTY(EditAnywhere, Category = "Snap to")
 	bool bRunway = false;
 
-	/** Apron edges and corners. Four sources answer for it - see FApronGuideSource. */
+	/**
+	 * Apron edges and corners. Four sources answer for it - see FApronGuideSource.
+	 *
+	 * ON SINCE 2026-09-24, for the reason bCollinear gives above: a player reported apron guides
+	 * "lost" in PIE, and the log showed the column simply defaulted off. A guide the player must
+	 * find a button to meet is a guide they conclude is broken.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Snap to")
-	bool bApron = false;
+	bool bApron = true;
 
-	/** A placed entity's pose - a stand, a depot. Was `bAligned`, which named a relation. */
+	/**
+	 * A stand or fuel depot - its pose, and since 2026-09-24 its drawn outline's edges and
+	 * corners (the Plots instances of the four outline sources; see EGuideOutlines). Was
+	 * `bAligned`, which named a relation.
+	 *
+	 * ON SINCE 2026-09-24, beside bApron and for the same report: the edges a road is most often
+	 * lined up with on an apron are the stands', and a column that shipped off hid all of them.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Snap to")
-	bool bStand = false;
+	bool bStand = true;
 
 	/** 0/45/90/135 degrees. */
 	UPROPERTY(EditAnywhere, Category = "Snap to")

@@ -151,31 +151,36 @@ namespace
 	}
 
 	/**
-	 * Every live apron edge in reach of the drag, as (A, B, Along).
+	 * Every live outline edge in reach of the drag, as (A, B, Along, Owner) - the aprons', or
+	 * the plotted stands' and depots', by Which. Owner is the entity's index in
+	 * Network.GetEntities() for a plot, INDEX_NONE for an apron (whose label needs none).
 	 *
-	 * ONE WALK, FOUR SOURCES. The apron column needs a source per relation - see
-	 * FApronGuideSource - and four copies of this loop is four places for the wrap-around from
-	 * the last corner back to the first to be got wrong.
+	 * ONE WALK, EIGHT SOURCES. The outline columns need a source per relation - see
+	 * FApronGuideSource - and every copy of this loop is a place for the wrap-around from the last
+	 * corner back to the first to be got wrong. It was ForEachApronEdge until 2026-09-24; the
+	 * plot set was added HERE, as a second outer loop feeding the same inner polygon walk, rather
+	 * than as a second function, so the wrap, the degenerate-edge guard and the reach test stay
+	 * written once. See FOutlineGuideSource for the pattern and the alternatives rejected.
 	 */
-	void ForEachApronEdge(const URoadNetwork& Network, const FVector2D& Origin,
-		const SnapGuide::FTuning& Tuning,
-		TFunctionRef<void(const FVector2D&, const FVector2D&, const FVector2D&)> Visit)
+	void ForEachOutlineEdge(const URoadNetwork& Network, EGuideOutlines Which,
+		const FVector2D& Origin, const SnapGuide::FTuning& Tuning,
+		TFunctionRef<void(const FVector2D&, const FVector2D&, const FVector2D&, int32)> Visit)
 	{
 		const double Reach = Tuning.SearchRadiusUu;
 
-		for (const FApronSurface& Apron : Network.GetAprons())
+		const auto WalkPolygon = [&Origin, Reach, &Visit](const TArray<FVector2D>& Outline, int32 Owner)
 		{
-			if (!Apron.bAlive || Apron.Outline.Num() < 3)
+			if (Outline.Num() < 3)
 			{
-				continue;
+				return;
 			}
 
-			for (int32 Index = 0; Index < Apron.Outline.Num(); ++Index)
+			for (int32 Index = 0; Index < Outline.Num(); ++Index)
 			{
 				// WRAPPING, so the last corner joins the first: an outline is a closed polygon,
 				// and the edge that closes it is as real as any other.
-				const FVector2D& A = Apron.Outline[Index];
-				const FVector2D& B = Apron.Outline[(Index + 1) % Apron.Outline.Num()];
+				const FVector2D& A = Outline[Index];
+				const FVector2D& B = Outline[(Index + 1) % Outline.Num()];
 
 				const FVector2D Span = B - A;
 				if (Span.IsNearlyZero()
@@ -183,9 +188,70 @@ namespace
 				{
 					continue;
 				}
-				Visit(A, B, Span.GetSafeNormal());
+				Visit(A, B, Span.GetSafeNormal(), Owner);
 			}
+		};
+
+		switch (Which)
+		{
+		case EGuideOutlines::Aprons:
+			for (const FApronSurface& Apron : Network.GetAprons())
+			{
+				if (Apron.bAlive)
+				{
+					WalkPolygon(Apron.Outline, INDEX_NONE);
+				}
+			}
+			return;
+
+		case EGuideOutlines::Plots:
+		{
+			// INDEXED, NOT A RANGE-FOR - the label carries the entity's INDEX so its kind is read
+			// only for a winner (#183), the same reason FAlignedGuideSource indexes.
+			const TArray<FEntityInstance>& Entities = Network.GetEntities();
+			for (int32 Index = 0; Index < Entities.Num(); ++Index)
+			{
+				const FEntityInstance& Entity = Entities[Index];
+
+				// A STAND OR A DEPOT, BY KIND, AND DRAWN - never "plotted means depot"
+				// (Check-Architecture rule 17). Both kinds are named because both are what the
+				// Stand column means today; a future kind with an outline is argued in here, not
+				// admitted by default.
+				const bool bPlottedStandOrDepot = (Entity.IsStand() || Entity.IsDepot()) && Entity.IsPlotted();
+				if (Entity.bAlive && bPlottedStandOrDepot)
+				{
+					WalkPolygon(Entity.Outline, Index);
+				}
+			}
+			return;
 		}
+		}
+	}
+
+	/** The column an outline set answers to. See EGuideOutlines. */
+	SnapGuide::EReference GuideOutlineColumn(EGuideOutlines Which)
+	{
+		return Which == EGuideOutlines::Plots ? SnapGuide::EReference::Stand : SnapGuide::EReference::Apron;
+	}
+
+	/**
+	 * The label recipe for one outline's edge or corner - "the apron edge", "the stand's corner".
+	 * ONE FUNCTION so the four outline sources cannot name one set four ways. Nothing is
+	 * formatted here - see FGuideLabel.
+	 */
+	SnapGuide::FGuideLabel GuideOutlineSubject(EGuideOutlines Which, int32 Owner, bool bCorner)
+	{
+		SnapGuide::FGuideLabel Subject;
+		if (Which == EGuideOutlines::Plots)
+		{
+			Subject.Subject = bCorner ? SnapGuide::ELabelSubject::EntityCorner : SnapGuide::ELabelSubject::EntityEdge;
+			Subject.SubjectIndex = Owner;
+		}
+		else
+		{
+			Subject.Subject = bCorner ? SnapGuide::ELabelSubject::ApronCorner : SnapGuide::ELabelSubject::ApronEdge;
+		}
+		return Subject;
 	}
 
 	/**
@@ -633,15 +699,15 @@ void FApronGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor&
 	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
 	const SnapGuide::FTuning& Tuning) const
 {
-	SnapGuide::FGuideLabel Subject;
-	Subject.Subject = SnapGuide::ELabelSubject::ApronEdge;
-	ForEachApronEdge(Network, Anchor.Origin, Tuning,
-		[&Anchor, &Subject, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
+	const EGuideOutlines Which = Outlines;
+	ForEachOutlineEdge(Network, Which, Anchor.Origin, Tuning,
+		[&Anchor, Which, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along, int32 Owner)
 		{
 			// ANGULAR, THROUGH THE DRAG'S OWN ORIGIN - this answers "which way from here", so
 			// there is no position to be flush with and the half-width never applies.
 			AddDirections(Along, Anchor.Origin, ClosestOn(A, B, Anchor.Origin),
-				SnapGuide::EReference::Apron, TEXT("parallel to"), Subject, Out);
+				GuideOutlineColumn(Which), TEXT("parallel to"),
+				GuideOutlineSubject(Which, Owner, /*bCorner=*/false), Out);
 		});
 }
 
@@ -649,21 +715,24 @@ void FApronLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
 	const SnapGuide::FTuning& Tuning) const
 {
-	ForEachApronEdge(Network, Cursor, Tuning,
-		[&Anchor, &Cursor, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
+	const EGuideOutlines Which = Outlines;
+	ForEachOutlineEdge(Network, Which, Cursor, Tuning,
+		[&Anchor, &Cursor, Which, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along, int32 Owner)
 		{
 			SnapGuide::FCandidate InLine;
 			InLine.Direction = Along;
 			InLine.Fit = SnapGuide::EFit::Perpendicular;
 			InLine.ReferenceAt = ClosestOn(A, B, Cursor);
 			InLine.Relation = SnapGuide::ERelation::Collinear;
-			InLine.Reference = SnapGuide::EReference::Apron;
-			InLine.Label.Subject = SnapGuide::ELabelSubject::ApronEdge;
+			InLine.Reference = GuideOutlineColumn(Which);
+			InLine.Label = GuideOutlineSubject(Which, Owner, /*bCorner=*/false);
 
 			// FLUSH, NOT CENTRED. An apron edge is a BOUNDARY and a road's cursor is its
 			// CENTRELINE, so lining the two up directly would put half the road's pavement over
 			// the apron. Displacing by the half-width puts the road's EDGE on it, which is what
-			// "in line with the apron" means to a player. Design section 6.
+			// "in line with the apron" means to a player. Design section 6. A stand's or a
+			// depot's outline is the same kind of boundary, and a service road run along a
+			// stand's side wants its kerb on that line, not its crown.
 			//
 			// A BOUNDARY DRAG IS NOT DISPLACED: an apron corner against another apron's edge is
 			// boundary against boundary, and those already mean the same thing.
@@ -705,12 +774,12 @@ void FApronAngledGuideSource::Propose(const URoadNetwork& Network, const FGuideA
 	// ONE END PER EDGE, not both: an outline is closed, so every corner is the A end of exactly
 	// one edge. Visiting B as well would propose each corner's spokes twice - once per edge
 	// meeting there - and a duplicate candidate is a tie the source order then has to break.
-	SnapGuide::FGuideLabel Subject;
-	Subject.Subject = SnapGuide::ELabelSubject::ApronEdge;
-	ForEachApronEdge(Network, Cursor, Tuning,
-		[&Subject, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
+	const EGuideOutlines Which = Outlines;
+	ForEachOutlineEdge(Network, Which, Cursor, Tuning,
+		[Which, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along, int32 Owner)
 		{
-			AddSpokes(A, Along, SnapGuide::EReference::Apron, Subject, Out);
+			AddSpokes(A, Along, GuideOutlineColumn(Which),
+				GuideOutlineSubject(Which, Owner, /*bCorner=*/false), Out);
 		});
 }
 
@@ -718,19 +787,56 @@ void FApronCornerGuideSource::Propose(const URoadNetwork& Network, const FGuideA
 	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
 	const SnapGuide::FTuning& Tuning) const
 {
-	// NEEDS THE GESTURE'S OWN AXES, like FPointAlignGuideSource: "level with that corner" means
-	// level ALONG the edge you are extending, so with no reference there is no axis to measure
-	// against and nothing to propose rather than an invented one.
+	const EGuideOutlines Which = Outlines;
+
+	// NO GESTURE REFERENCE - a road's free start, before its first click (see
+	// FGuideAnchor::bFreeStart) - AND THE CORNER'S OWN EDGE BECOMES THE AXIS. Since 2026-09-24.
+	//
+	// This used to return here, on the reasoning that "level with that corner" means level
+	// ALONG the edge you are extending, and with no reference there was no axis to measure
+	// against. That left a road's first click with no corner to be level with at all, when
+	// starting a service road level with a stand's corner is the case the plot-edge work was
+	// asked for. The corner's own edge IS an axis - the outline's own frame, not an invented
+	// one - and the line along it through the corner is where "abreast of that corner" lies.
+	//
+	// ONE LINE PER EDGE, through its A end: for a rectangle the line across AB at A is the
+	// previous edge's own line, which that edge's visit already proposes, so emitting both
+	// would put every line in twice.
+	//
+	// A CENTRELINE DRAG ONLY. For a boundary drag (an apron or plot corner) the undisplaced line
+	// along an edge IS what FApronLineGuideSource already offers as "in line with", and the
+	// same line under a LevelWith label would win every tie with it (LevelWith ranks first) -
+	// renaming the collinear guide rather than adding one. A centreline drag's collinear line is
+	// displaced flush, so the line through the corner itself is new to it.
 	if (Anchor.Reference.IsNearlyZero())
 	{
+		if (Anchor.Point != EDragPoint::Centreline)
+		{
+			return;
+		}
+
+		ForEachOutlineEdge(Network, Which, Cursor, Tuning,
+			[Which, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along, int32 Owner)
+			{
+				SnapGuide::FCandidate Level;
+				Level.Direction = Along;
+				Level.Through = A;
+				Level.Fit = SnapGuide::EFit::Perpendicular;
+				Level.ReferenceAt = A;
+				Level.Relation = SnapGuide::ERelation::LevelWith;
+				Level.Reference = GuideOutlineColumn(Which);
+				Level.Label = GuideOutlineSubject(Which, Owner, /*bCorner=*/true);
+				Level.Label.Kind = SnapGuide::ELabelKind::LevelWith;
+				Out.Add(Level);
+			});
 		return;
 	}
 
 	const FVector2D Along = Anchor.Reference.GetSafeNormal();
 	const FVector2D Across = RoadGeom::PerpCCW(Along);
 
-	ForEachApronEdge(Network, Cursor, Tuning,
-		[&Along, &Across, &Out](const FVector2D& A, const FVector2D& B, const FVector2D&)
+	ForEachOutlineEdge(Network, Which, Cursor, Tuning,
+		[&Along, &Across, Which, &Out](const FVector2D& A, const FVector2D& B, const FVector2D&, int32 Owner)
 		{
 			// THE CORNER IS A POINT, so it is not displaced by the drag's half-width - there is
 			// no extended edge for a road's flank to run flush along. See this source's header.
@@ -740,17 +846,20 @@ void FApronCornerGuideSource::Propose(const URoadNetwork& Network, const FGuideA
 			Level.Fit = SnapGuide::EFit::Perpendicular;
 			Level.ReferenceAt = A;
 			Level.Relation = SnapGuide::ERelation::LevelWith;
-			Level.Reference = SnapGuide::EReference::Apron;
-			// LITERAL, NOT DegreesTo/SquareTo + ApronEdge: an apron CORNER has no "the apron
-			// edge" to be level or square WITH, so the whole string is fixed rather than built
-			// from a subject - see ELabelKind::Literal.
-			Level.Label.Kind = SnapGuide::ELabelKind::Literal;
-			Level.Label.Text = TEXT("0 degrees to the apron corner");
+			Level.Reference = GuideOutlineColumn(Which);
+
+			// A CORNER SUBJECT, not the edge's: a CORNER has no "the apron edge" to be level or
+			// square WITH. This was a Literal until 2026-09-24 ("0 degrees to the apron corner");
+			// ApronCorner + DegreesTo(0) reads byte-identically, and lets a plot's corner say
+			// "the stand's corner" through the same two lines.
+			Level.Label = GuideOutlineSubject(Which, Owner, /*bCorner=*/true);
+			Level.Label.Kind = SnapGuide::ELabelKind::DegreesTo;
+			Level.Label.Degrees = 0;
 			Out.Add(Level);
 
 			SnapGuide::FCandidate Square = Level;
 			Square.Direction = Across;
-			Square.Label.Text = TEXT("square to the apron corner");
+			Square.Label.Kind = SnapGuide::ELabelKind::SquareTo;
 			Out.Add(Square);
 		});
 }
@@ -972,6 +1081,15 @@ FSnapGuideChain::FSnapGuideChain()
 	AddSource(MakeUnique<FApronLineGuideSource>());
 	AddSource(MakeUnique<FApronAngledGuideSource>());
 	AddSource(MakeUnique<FApronCornerGuideSource>());
+
+	// THE SAME FOUR AGAIN, OVER PLOTTED STANDS' AND DEPOTS' OUTLINES - 2026-09-24. A second
+	// registration of each, not a second class: see FOutlineGuideSource. Every relation they tag
+	// against Stand must be a declared cell (SnapGuide::IsLegalCell), which
+	// Airside.Tool.GuideGridHasNoCellOutsideTheList measures from what this chain produces.
+	AddSource(MakeUnique<FApronGuideSource>(EGuideOutlines::Plots));
+	AddSource(MakeUnique<FApronLineGuideSource>(EGuideOutlines::Plots));
+	AddSource(MakeUnique<FApronAngledGuideSource>(EGuideOutlines::Plots));
+	AddSource(MakeUnique<FApronCornerGuideSource>(EGuideOutlines::Plots));
 	AddSource(MakeUnique<FWorldGuideSource>());
 	AddSource(MakeUnique<FOffsetGuideSource>());
 }

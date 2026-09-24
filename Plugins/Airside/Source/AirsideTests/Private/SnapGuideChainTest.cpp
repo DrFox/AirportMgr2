@@ -55,7 +55,10 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	// relation it serves, not one source that declares several. FRunwayLineGuideSource split off
 	// FRunwayGuideSource for exactly that reason; AngledFrom then arrived as road and runway
 	// separately; and the Apron column arrived as four at once.
-	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 15);
+	//
+	// NINETEEN SINCE 2026-09-24: the same four again, each registered a second time over plotted
+	// stands' and depots' outlines (EGuideOutlines::Plots) - see FOutlineGuideSource.
+	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 19);
 
 	const FGuideAnchor Anchor = Frontage();
 

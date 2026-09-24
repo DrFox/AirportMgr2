@@ -104,7 +104,7 @@ namespace SnapGuide
 	 *
 	 * THE ONE PLACE THE GRID IS WRITTEN DOWN. FSnapGuideSettings::IsEnabled consults it, the
 	 * registry test walks it, and Airside.Tool.GuideGridHasNoCellOutsideTheList asserts no
-	 * source can propose a pair it rejects. Twenty-five of the forty-two pairs are legal; the
+	 * source can propose a pair it rejects. Twenty-six of the forty-two pairs are legal; the
 	 * holes are reasoned about one by one at each row below, not merely left out.
 	 */
 	AIRSIDE_API bool IsLegalCell(ERelation Relation, EReference Reference);
@@ -154,9 +154,17 @@ namespace SnapGuide
 		/** "<GapUu, in metres> m, matching <Name>" - FOffsetGuideSource. */
 		MatchingGap,
 		/** FGuideLabel::Text IS the whole string - a compile-time literal, so a pointer costs
-		 *  nothing and needs no <Name> at all. World axes and the apron corner's two fixed
-		 *  strings use this. */
+		 *  nothing and needs no <Name> at all. The world axes use this. (The apron corner's two
+		 *  fixed strings did until 2026-09-24; they are ApronCorner + DegreesTo/SquareTo now,
+		 *  byte-identical, so a plot's corner could share their recipe.) */
 		Literal,
+		/**
+		 * "level with <Name>" - FApronCornerGuideSource with NO gesture reference, since
+		 * 2026-09-24. "0 degrees to the corner" is measured from the gesture's own direction, and
+		 * a free start has none; the line then runs along the corner's own edge, and this is the
+		 * one honest thing to call it.
+		 */
+		LevelWith,
 	};
 
 	/**
@@ -179,6 +187,19 @@ namespace SnapGuide
 		Entity,
 		/** The fixed "the apron edge" text - FApronSurface carries no name of its own. */
 		ApronEdge,
+		/** The fixed "the apron corner" text, for the same reason. */
+		ApronCorner,
+		/**
+		 * "the stand's edge" / "the fuel depot's edge", by the KIND of Network.GetEntities()
+		 * [SubjectIndex] - added 2026-09-24 with the plot outline sources.
+		 *
+		 * THE KIND, NOT EntityNaming::Describe's display name: an edge is a PART of a stand or a
+		 * depot, and "the Code C Stand's edge" reads as the name of a thing rather than a part of
+		 * one. The dashed line says WHICH, exactly as it does for the apron.
+		 */
+		EntityEdge,
+		/** "the stand's corner" / "the fuel depot's corner" - see EntityEdge. */
+		EntityCorner,
 	};
 
 	/**
@@ -220,7 +241,8 @@ namespace SnapGuide
 		 */
 		int32 SegmentIndex = INDEX_NONE;
 
-		/** FGuideAnchor::AlignTo's index (GesturePoint) or Network.GetEntities()'s (Entity). */
+		/** FGuideAnchor::AlignTo's index (GesturePoint) or Network.GetEntities()'s (Entity,
+		 *  EntityEdge, EntityCorner). */
 		int32 SubjectIndex = INDEX_NONE;
 
 		/**
