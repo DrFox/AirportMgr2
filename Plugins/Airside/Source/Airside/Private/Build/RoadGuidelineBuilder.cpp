@@ -82,7 +82,15 @@ namespace
 		GuidelineGeom::Sample(PA, Turn.Control, PB, Points);
 		double Inner = ClearanceCap;
 		double Outer = ClearanceCap;
-		for (int32 Index = 0; Index < Points.Num(); ++Index)
+		// THE MIDDLE THIRD ONLY, where a quadratic turn is tightest - because that is where
+		// the steady-state envelope it is compared against (VehicleSweep at MinRadius) can
+		// happen. At the ends the line is still in its lane, off-tracking has not built up,
+		// and the lane's own half-width is the clearance: taking the minimum over EVERY sample
+		// made that 280 uu the answer at every Wide fillet from 10 m to 80 m (probe,
+		// 2026-09-24), and a rig could only turn right at a 55 m corner.
+		const int32 FirstSample = Points.Num() / 3;
+		const int32 LastSample = Points.Num() - 1 - Points.Num() / 3;
+		for (int32 Index = FirstSample; Index <= LastSample; ++Index)
 		{
 			const FVector2D Tangent = (Points[FMath::Min(Index + 1, Points.Num() - 1)]
 				- Points[FMath::Max(Index - 1, 0)]).GetSafeNormal();

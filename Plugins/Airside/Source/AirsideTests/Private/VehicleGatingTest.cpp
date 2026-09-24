@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
@@ -136,6 +137,57 @@ bool FVehicleGatingTest::RunTest(const FString& Parameters)
 		FRouteQuery Query = FRouteQuery::For(ERouteErrand::GraphProbe, From, To, 0.0, ETraversalClass::GroundVehicle);
 		TestTrue(TEXT("a query with no vehicle is not gated"), RouteSearch::Find(*Net, Query).IsValid());
 	}
+	return true;
+}
+
+#endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+// Spec §6 / plan Task 5: the Wide tier's corners are sized for the rig, and it is the AUTHORED
+// ASSET that is tested - loaded from the content set - so the figure lives in one place
+// (build_road_profiles.py writes it) and this test holds it to its job.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRigTurnsOnWideTest, "Airside.Model.RigTurnsOnWide",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigTurnsOnWideTest::RunTest(const FString& Parameters)
+{
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (!TestTrue(TEXT("the content set has three road tiers"), Content != nullptr && Content->ServiceRoadProfiles.Num() == 3))
+	{
+		return false;
+	}
+	URoadProfile* Wide = Content->ServiceRoadProfiles[2].LoadSynchronous();
+	URoadProfile* Narrow = Content->ServiceRoadProfiles[0].LoadSynchronous();
+	if (!TestTrue(TEXT("the Wide and Narrow tiers load"), Wide != nullptr && Narrow != nullptr)) { return false; }
+
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	const FVehicle Bowser = UAirsideSettings::ResolveDefaultVehicle();
+
+	// Both turns at a T: the near-side one (W->N, a right turn on screen) is the tight one.
+	auto BothWays = [&](URoadProfile* Profile, const FVehicle& Vehicle)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadNodeId Hub = Net->AddNode(FVector2D(0.0, 0.0));
+		const FRoadSegmentId West = Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(-40000.0, 0.0)), Profile);
+		Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(40000.0, 0.0)), Profile);
+		const FRoadSegmentId North = Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(0.0, 40000.0)), Profile);
+		VehicleGating::Derive(*Net);
+		FGuidelineNodeId WIn, WOut, NIn, NOut;
+		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+		{
+			if (!Edge.bAlive) { continue; }
+			if (Edge.DerivedFrom == West && Edge.Direction == EGuidelineDir::BToA) { WIn = Edge.B; }
+			if (Edge.DerivedFrom == West && Edge.Direction == EGuidelineDir::AToB) { WOut = Edge.B; }
+			if (Edge.DerivedFrom == North && Edge.Direction == EGuidelineDir::AToB) { NOut = Edge.B; }
+			if (Edge.DerivedFrom == North && Edge.Direction == EGuidelineDir::BToA) { NIn = Edge.B; }
+		}
+		return VehicleGating::Route(*Net, WIn, NOut, Vehicle).IsValid()
+			&& VehicleGating::Route(*Net, NIn, WOut, Vehicle).IsValid();
+	};
+	TestTrue(TEXT("the rig turns both ways at a Wide junction - the tier it is the design vehicle of"), BothWays(Wide, Rig));
+	TestFalse(TEXT("and not at a Narrow one"), BothWays(Narrow, Rig));
+	TestTrue(TEXT("the bowser turns both ways at a Narrow junction, as it did before gating"), BothWays(Narrow, Bowser));
 	return true;
 }
 
