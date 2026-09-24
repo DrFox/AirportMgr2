@@ -68,7 +68,7 @@ PROP = "fan_L_in"
 #
 # ALL TEN ARE AVERAGED FOR THE FIXED AXLE, as plane6 averages its six: axle_centres_uu's
 # mean is the point the whole main-gear group pivots about, which is what
-# FAirframe::FixedAxleX means for the rolling-steer law. The TRACK is measured off the WING
+# FChassis::FixedAxleX means for the rolling-steer law. The TRACK is measured off the WING
 # bogies alone - see axles_and_radius.
 MAIN_WHEELS_L = ("wheel_L1", "wheel_L2", "wheel_L3", "wheel_L4", "wheel_L5")
 MAIN_WHEELS_R = ("wheel_R1", "wheel_R2", "wheel_R3", "wheel_R4", "wheel_R5")
@@ -164,7 +164,7 @@ def axles_and_radius(leg_height):
     SPEED by and every wheel takes the one angle - the nose pair will roll 6 % slow, which is
     the compromise plane6's three-axle bogie already makes against its own nose wheel.
 
-    THE TRACK IS THE WING BOGIES', NOT THE MEAN OF ALL TWENTY. FAirframe::MainGearTrack is
+    THE TRACK IS THE WING BOGIES', NOT THE MEAN OF ALL TWENTY. FChassis::MainGearTrack is
     where tyre smoke lands at touchdown and where a tug lines up; the mean of a 12.5 m wing
     track and a 5.3 m body track is a 8.1 m figure that puts the smoke between the two units
     where there is no wheel at all. The OUTER pair is what a viewer sees.

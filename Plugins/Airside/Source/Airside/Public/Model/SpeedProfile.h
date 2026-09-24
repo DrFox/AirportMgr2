@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Model/Airframe.h"
+#include "Model/Chassis.h"
 #include "SpeedProfile.generated.h"
 
 /**
@@ -13,8 +13,8 @@
  *
  * It exists because the two directions are judged by DIFFERENT LIMITS. Forwards a rigid
  * vehicle pivots about its steered axle and cannot hold an arc under L/sin(lock); backwards it
- * pivots about its fixed axle and the limit falls to L/tan(lock) - 495 uu against 699 for the
- * 8.5 m dispenser. A reverse leg judged by the forward rule is refused for being legal.
+ * pivots about its fixed axle and the limit falls to L/tan(lock) - 361 uu against 510 for the
+ * 6.2 m bowser. A reverse leg judged by the forward rule is refused for being legal.
  */
 UENUM()
 enum class EDriveDirection : uint8
@@ -67,7 +67,7 @@ struct AIRSIDE_API FSpeedProfile
 	 * struct per thing" - the alternative was a second parameter that some caller would one
 	 * day forget to keep in step.
 	 */
-	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+	void Build(const TArray<FVector2D>& Points, const FChassis& Chassis,
 		EDriveDirection Direction = EDriveDirection::Forward);
 
 	/**
@@ -89,7 +89,7 @@ struct AIRSIDE_API FSpeedProfile
 	 * SpanDirections is one entry per SPAN, so Points.Num() - 1 of them. An empty view means
 	 * the whole line is Forward, which is what the overload above passes.
 	 */
-	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+	void Build(const TArray<FVector2D>& Points, const FChassis& Chassis,
 		TConstArrayView<EDriveDirection> SpanDirections);
 
 	/**
@@ -109,7 +109,7 @@ struct AIRSIDE_API FSpeedProfile
 	 * PUBLIC FOR A REASON NARROWER THAN IT LOOKS: with FRouteFollower no longer keeping its
 	 * own Ground copy (issue #83), this is the one follower-side record of which airframe's
 	 * figures a taxi actually started on - UAirsideTraffic::LastAgentTaxiSpeedCapForTest
-	 * reads it rather than the agent's own Airframe, which would be a tautology (the test
+	 * reads it rather than the agent's own Chassis, which would be a tautology (the test
 	 * already knows what it dispatched; the question is whether the handover used it).
 	 */
 	double GetFallback() const { return Fallback; }
@@ -127,7 +127,7 @@ struct AIRSIDE_API FSpeedProfile
 	 * Grep for "the same expression FSpeedProfile::Build uses, written out rather than
 	 * shared": that comment appears at every site that should have called this instead.
 	 *
-	 * Restating arithmetic in a test is right, and FAirframe::TightestFollowableRadius argues
+	 * Restating arithmetic in a test is right, and FChassis::TightestFollowableRadius argues
 	 * for it. Restating a JUDGEMENT is not the same thing: the judgement is what the game
 	 * acts on, and a copy of it can agree with itself while disagreeing with the original.
 	 */

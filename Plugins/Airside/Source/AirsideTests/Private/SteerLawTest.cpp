@@ -14,7 +14,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FSteerLawWithoutAxlesFallsBackTest::RunTest(const FString& Parameters)
 {
 	// THE BUG THIS ENUM EXISTS TO MAKE IMPOSSIBLE. The law used to be INFERRED from whether
-	// anyone had measured the axles - FAirframe::HasAxles() was the selector - so forgetting
+	// anyone had measured the axles - FChassis::HasAxles() was the selector - so forgetting
 	// to measure a vehicle silently swapped which physical law governed it. Reported from
 	// play 2026-09-14: "the truck drives up to the stand, stops, swings 90 degrees on the
 	// spot and drives off." That is the pivot law, running on something nobody meant to
@@ -32,9 +32,9 @@ bool FSteerLawWithoutAxlesFallsBackTest::RunTest(const FString& Parameters)
 		EAutomationExpectedErrorFlags::Contains, 1);
 
 	FAirframe Unmeasured;
-	Unmeasured.SteerLaw = ESteerLaw::RollingSteer;
-	Unmeasured.SteerAxleX = 0.0;
-	Unmeasured.FixedAxleX = 0.0;
+	Unmeasured.Chassis.SteerLaw = ESteerLaw::RollingSteer;
+	Unmeasured.Chassis.SteerAxleX = 0.0;
+	Unmeasured.Chassis.FixedAxleX = 0.0;
 
 	// #176: EffectiveSteerLaw is PURE now - it no longer logs from here, because it sat on
 	// FRouteFollower::Advance's hot path and logged twice per agent per SUBSTEP. The warning
@@ -42,33 +42,33 @@ bool FSteerLawWithoutAxlesFallsBackTest::RunTest(const FString& Parameters)
 	// an airframe to a phase; asked for explicitly here so this test still pins that the
 	// warning IS emitted for exactly this airframe, which is what the AddExpectedError above
 	// is checking.
-	WarnIfSteerLawUnsupported(Unmeasured);
+	WarnIfSteerLawUnsupported(Unmeasured.Chassis);
 
 	TestEqual(
 		TEXT("an airframe claiming to steer geometrically with no wheelbase falls back to pivot"),
-		Unmeasured.EffectiveSteerLaw(), ESteerLaw::Pivot);
+		Unmeasured.Chassis.EffectiveSteerLaw(), ESteerLaw::Pivot);
 
 	FAirframe Measured;
-	Measured.SteerLaw = ESteerLaw::RollingSteer;
-	Measured.SteerAxleX = 360.0;
-	Measured.FixedAxleX = 0.0;
+	Measured.Chassis.SteerLaw = ESteerLaw::RollingSteer;
+	Measured.Chassis.SteerAxleX = 360.0;
+	Measured.Chassis.FixedAxleX = 0.0;
 
 	TestEqual(
 		TEXT("and one with real axles keeps the law it declared"),
-		Measured.EffectiveSteerLaw(), ESteerLaw::RollingSteer);
+		Measured.Chassis.EffectiveSteerLaw(), ESteerLaw::RollingSteer);
 
 	// A PIVOT AIRFRAME IS NOT PROMOTED BY ACCIDENT. Measured axles on something declared
 	// Pivot must STAY Pivot - otherwise the enum is decoration and the wheelbase is still
 	// the selector, which is exactly the arrangement this replaces. A belt loader that
 	// happens to have its axles filled in must not silently start steering like a truck.
 	FAirframe DeliberatePivot;
-	DeliberatePivot.SteerLaw = ESteerLaw::Pivot;
-	DeliberatePivot.SteerAxleX = 360.0;
-	DeliberatePivot.FixedAxleX = 0.0;
+	DeliberatePivot.Chassis.SteerLaw = ESteerLaw::Pivot;
+	DeliberatePivot.Chassis.SteerAxleX = 360.0;
+	DeliberatePivot.Chassis.FixedAxleX = 0.0;
 
 	TestEqual(
 		TEXT("measured axles do not promote an airframe that declared itself a pivot"),
-		DeliberatePivot.EffectiveSteerLaw(), ESteerLaw::Pivot);
+		DeliberatePivot.Chassis.EffectiveSteerLaw(), ESteerLaw::Pivot);
 
 	// AND THE DEFAULT IS THE SAFE ONE. An airframe nobody has authored at all is exactly the
 	// one that must not claim to steer geometrically: TightestFollowableRadius would divide
@@ -76,7 +76,7 @@ bool FSteerLawWithoutAxlesFallsBackTest::RunTest(const FString& Parameters)
 	const FAirframe Unauthored;
 	TestEqual(
 		TEXT("an unauthored airframe defaults to the law that needs no measurements"),
-		Unauthored.EffectiveSteerLaw(), ESteerLaw::Pivot);
+		Unauthored.Chassis.EffectiveSteerLaw(), ESteerLaw::Pivot);
 
 	return true;
 }
@@ -108,9 +108,9 @@ bool FSteerLawWarnsOncePerDispatchTest::RunTest(const FString& Parameters)
 	// exercises the same Advance loop TurnRateTest does rather than a struct that would
 	// divide by zero on its ground performance before the steer law is ever asked about.
 	FAirframe Bad = TestAirframes::Piper();
-	Bad.SteerLaw = ESteerLaw::RollingSteer;
-	Bad.SteerAxleX = 0.0;
-	Bad.FixedAxleX = 0.0;
+	Bad.Chassis.SteerLaw = ESteerLaw::RollingSteer;
+	Bad.Chassis.SteerAxleX = 0.0;
+	Bad.Chassis.FixedAxleX = 0.0;
 
 	FRoutePlan Plan;
 	Plan.Result = ERouteResult::Found;
@@ -118,7 +118,7 @@ bool FSteerLawWarnsOncePerDispatchTest::RunTest(const FString& Parameters)
 	Plan.Length = 20000.0;
 
 	FRouteFollower Follower;
-	Follower.Start(Plan, Bad);
+	Follower.Start(Plan, Bad.Chassis);
 
 	// MANY ADVANCE CALLS, not one - a single call would pass even with the old inline log,
 	// since "twice" and "many thousands" both round to "more than the one Start already
@@ -128,7 +128,7 @@ bool FSteerLawWarnsOncePerDispatchTest::RunTest(const FString& Parameters)
 	{
 		FVector2D At;
 		double Heading = 0.0;
-		if (!Follower.Advance(1.0 / 60.0, Bad, At, Heading))
+		if (!Follower.Advance(1.0 / 60.0, Bad.Chassis, At, Heading))
 		{
 			break;
 		}

@@ -266,6 +266,41 @@ bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink&
 // FAnchorLink::Gather gives each point of road to the entry nearest it. The measurement itself
 // survives as GuidelineGeom::NearestBetweenPolylines, which the clearance tests still use.
 
+FLinkHit FindSiblingLane(const URoadNetwork& Network, const FPendingLink& Link,
+	const TSet<FGuidelineNodeId>& AnchorNodes, FRoadSegmentId Segment, int32 JoinedIndex)
+{
+	FLinkHit Out;
+	double Best = Link.Reach;
+	const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
+	for (int32 Index = 0; Index < Edges.Num(); ++Index)
+	{
+		const FGuidelineEdge& Edge = Edges[Index];
+		if (Edge.DerivedFrom != Segment || Edge.DerivedGuidelineIndex == JoinedIndex
+			|| !IsJoinable(Edge, Link, AnchorNodes))
+		{
+			continue;
+		}
+		// Network.GuidelineEdgeIdAt, not a hand-built handle (#79, #173).
+		const FGuidelineEdgeId Id = Network.GuidelineEdgeIdAt(Index);
+		TArray<FVector2D> Points;
+		if (!Network.SampleGuideline(Id, Points))
+		{
+			continue;
+		}
+		int32 Span = 0;
+		double Fraction = 0.0;
+		const double Distance = GuidelineGeom::NearestOnPolyline(Points, Link.At, Span, Fraction);
+		if (Distance <= FAnchorLink::LeadInWeldTolerance || Distance >= Best)
+		{
+			continue;
+		}
+		Best = Distance;
+		Out.Edge = Id;
+		Out.Param = GuidelineGeom::ParamAtSample(Span, Fraction, Points.Num());
+	}
+	return Out;
+}
+
 const ILinkFinder& LinkFinderFor(ELinkKind Kind)
 {
 	static const FRayLinkFinder Ray;

@@ -196,7 +196,7 @@ double FClaimPass::CentreOf(const FRoadAgent& Agent)
 	// AND THE DISTANCE COMES FROM WHICHEVER STRUCT IS DRIVING - see FRoadAgent::
 	// DistanceAlongPlan. Agent.Follower.Travelled on a manoeuvring agent is where the taxi IN
 	// ended, which measured 99 000 uu against a real 1 500 the first time it was asked.
-	const double Ahead = Agent.Airframe.BodyCentreX - Agent.Airframe.SteerAxleX;
+	const double Ahead = Agent.Chassis().BodyCentreX - Agent.Chassis().SteerAxleX;
 	const double Sign = Agent.Phase == EAgentPhase::Manoeuvring ? -1.0 : 1.0;
 	return Agent.DistanceAlongPlan() + Sign * Ahead;
 }
@@ -214,8 +214,9 @@ FClaimPass::FClaimWindow FClaimPass::WindowFor(const FRoadAgent& Agent) const
 
 	// The airframe's own braking figure, not the rules': the window has to be the distance
 	// THIS airframe needs, or an agent reserves less line than it can stop in. Read off
-	// Agent.Airframe now (issue #83) - the follower no longer keeps its own copy of it.
-	const double Decel = FMath::Max(KINDA_SMALL_NUMBER, Agent.Airframe.Ground.Taxi.Decel);
+	// Agent.Chassis() now (issue #83; the chassis alone since 2026-09-23) - the follower no
+	// longer keeps its own copy of it.
+	const double Decel = FMath::Max(KINDA_SMALL_NUMBER, Agent.Chassis().Ground.Taxi.Decel);
 	//
 	// AND THE SPEED IS THE DRIVING PHASE'S. A push runs at a metre or two a second and brakes
 	// on its own PushAccel, so this reserves rather more line than it strictly needs - which

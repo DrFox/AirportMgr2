@@ -5,6 +5,7 @@
 #include "Content/FenceKit.h"
 #include "Engine/DeveloperSettings.h"
 #include "Model/RoadEntity.h"
+#include "Model/Vehicle.h"
 #include "AirsideSettings.generated.h"
 
 class UAirsideContent;
@@ -117,24 +118,31 @@ public:
 	/**
 	 * The performance a SERVICE VEHICLE moves with - the one place a truck's figures live.
 	 *
-	 * AN FAirframe FOR A THING WITH NO AIRFRAME, and that is scaffolding, named as such by
-	 * the fuel-service spec (§0.1). FRouteFollower, FRoadAgent and the arbiter all take one
-	 * FAirframe, so giving a truck anything else this slice would mean a second follower
-	 * before there is a second KIND of movement to justify one. M3 replaces this with a
-	 * vehicle-shaped performance bundle when the fleet arrives.
+	 * AN FVehicle SINCE 2026-09-23. It was an FAirframe - "scaffolding, named as such by the
+	 * fuel-service spec (§0.1)": FRouteFollower, FRoadAgent and the arbiter all took one
+	 * FAirframe, and M3 was to replace it "with a vehicle-shaped performance bundle when the
+	 * fleet arrives". The articulated rig arrived first, and a trailer on FAirframe would have
+	 * put a kingpin on every aeroplane, so the bundle came now: FChassis (what rolls) plus a
+	 * type code. See Model/Vehicle.h.
 	 *
-	 * ONLY Ground IS SET, and Climb and Approach are deliberately ZEROED so IsSet() answers
-	 * false for both. Their struct defaults are a light twin's and are all non-zero, so a
-	 * van left at them would report itself landable to anything that asked - and both
-	 * ArrivalPlanner and FRoadAgent branch on exactly that call. Nothing asks today; that is
-	 * the reason to make it false by construction rather than by nobody having got round to
-	 * it. Engine is the one exception, for the reason given at the assignment.
+	 * NOTHING IS ZEROED ANY MORE. Climb and Approach used to be zeroed here so IsSet() answered
+	 * false - their defaults are a light twin's, and a van left at them would have reported
+	 * itself landable to ArrivalPlanner and FRoadAgent, which both branch on that call. An
+	 * FVehicle has no such fields, and FRoadAgent::AsAircraft() is null for one.
 	 *
-	 * Wingspan 0 because 0 is UNLIMITED in the edge test (FRouteQuery::Wingspan) - the right
-	 * answer rather than a lax one, since a road guideline carries no span limit either, so
-	 * neither side of that comparison means anything for a van.
+	 * Wingspan is no longer a field either: FRoadAgent::Wingspan() answers 0 for a vehicle,
+	 * which FRouteQuery::Wingspan reads as UNLIMITED - the right answer rather than a lax one,
+	 * since a road guideline carries no span limit either.
 	 */
-	static FAirframe ResolveDefaultVehicle();
+	static FVehicle ResolveDefaultVehicle();
+
+	/**
+	 * The articulated fuel rig (truckCab1 + tankTrailer1), for the big-aircraft stands - the
+	 * Wide road tier's design vehicle (spec 2026-09-23 §6). HARD-CODED for ResolveDefaultVehicle's
+	 * reason: there is no vehicle type asset yet. Not dispatched by anything until the rig is
+	 * imported (articulated step 2); route search and the Wide corners are sized against it now.
+	 */
+	static FVehicle ResolveRigVehicle();
 
 	/**
 	 * The biggest thing that may drive on a service road, which is what the road's corners
@@ -152,8 +160,11 @@ public:
 	 * lock was widened from 45 to 50 degrees so it would fit an authored 500 uu corner, which
 	 * is shrinking the vehicle to fit the road - and this function exists to make that
 	 * inversion impossible to repeat.
+	 *
+	 * A CHASSIS, NOT AN AIRFRAME, since 2026-09-23: road corners are sized from the lock and
+	 * the wheelbase, and nothing that sizes concrete has any use for a climb rate.
 	 */
-	static FAirframe ResolveLargestServiceVehicle();
+	static FChassis ResolveLargestServiceVehicle();
 
 	/**
 	 * How many times ResolveLargestServiceVehicle has actually run, for issue #190's test

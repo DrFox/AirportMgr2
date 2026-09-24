@@ -11,6 +11,7 @@
 #include "AirsideContent.generated.h"
 
 class UMaterialInterface;
+class UMaterialParameterCollection;
 class URoadProfile;
 class UAnimInstance;
 class USkeletalMesh;
@@ -165,7 +166,9 @@ public:
 	TArray<TSoftObjectPtr<URoadProfile>> TaxiwayProfiles;
 
 	/**
-	 * The SERVICE ROAD cross-section a ground vehicle drives on.
+	 * The SERVICE ROAD cross-sections a ground vehicle drives on: the Narrow / Standard / Wide
+	 * tiers, narrow first - the order the road tool cycles in, and [0] is what it lays before
+	 * the player cycles (spec 2026-09-23, section 1). A single ServiceRoadProfile until then.
 	 *
 	 * AN AUTHORED ASSET, for exactly the reason RunwayProfiles gives: a segment stores a
 	 * POINTER to its profile, and URoadNetwork::DefaultProfile repairs any segment whose
@@ -179,7 +182,7 @@ public:
 	 * and for the same reason: a silent fallback here is the wrong behaviour at every junction.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
-	TSoftObjectPtr<URoadProfile> ServiceRoadProfile;
+	TArray<TSoftObjectPtr<URoadProfile>> ServiceRoadProfiles;
 
 	/**
 	 * DEPRECATED (issue #192 item 1). What the stand tool placed before Placeables existed.
@@ -294,6 +297,14 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
 	TSoftObjectPtr<UMaterialInterface> FenceFabricMaterial;
+
+	/**
+	 * MPC_FenceFade, the distance fade both fence materials read. Named here as well because
+	 * the posts' instance cull distance must agree with its PostFadeEnd - see
+	 * UAirsideSettings::ResolveFenceKit. Null means no cull: posts draw at every distance.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
+	TSoftObjectPtr<UMaterialParameterCollection> FenceFadeCollection;
 
 	/**
 	 * A RIGGED ground vehicle. Preferred over VehicleMesh; null falls back to it.

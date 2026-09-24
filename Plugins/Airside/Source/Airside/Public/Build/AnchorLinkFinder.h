@@ -141,5 +141,18 @@ struct AIRSIDE_API FProximityLinkFinder final : public ILinkFinder
 		const TSet<FGuidelineNodeId>& AnchorNodes, FLinkHit& OutHit) const override;
 };
 
+/**
+ * The OTHER lane of the two-lane road a link has just joined (spec 2026-09-23 §5): the
+ * nearest point on a joinable guideline derived from Segment whose guideline index is not
+ * JoinedIndex. Unset when the road has no such lane (a taxiway, a one-lane road) or it is out
+ * of Link.Reach.
+ *
+ * A FUNCTION HERE, NOT A THIRD ILinkFinder: it answers a follow-up about a link already
+ * resolved, not how to resolve one, so LinkFinderFor has no kind to select it by. Here rather
+ * than in AnchorLink.cpp so it shares IsJoinable - the eligibility test this file keeps once.
+ */
+AIRSIDE_API FLinkHit FindSiblingLane(const URoadNetwork& Network, const FPendingLink& Link,
+	const TSet<FGuidelineNodeId>& AnchorNodes, FRoadSegmentId Segment, int32 JoinedIndex);
+
 /** Picks the finder for Kind. One switch, not scattered through FAnchorLink::Build. */
 AIRSIDE_API const ILinkFinder& LinkFinderFor(ELinkKind Kind);

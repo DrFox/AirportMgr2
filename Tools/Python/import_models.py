@@ -96,7 +96,7 @@ SPECS = [
         # is a FIRST-import tool.
         note="Cessna 172S Skyhawk. 8.233 m long, 11.00 m span, 2.659 m to the fin tip - the "
              "real aircraft's own figures to within 6 cm. Origin on the NOSE gear; the main "
-             "axle is at -163.0 uu, which is the figure FAirframe::FixedAxleX wants when "
+             "axle is at -163.0 uu, which is the figure FChassis::FixedAxleX wants when "
              "this type is authored. Six joints, and the gear is FIXED - a 172 has nothing "
              "to retract, so this is the first modelled type since plane2 with no gear "
              "cycle at all.",
@@ -122,7 +122,7 @@ SPECS = [
         #
         # Measured off the re-export: nose gear at 0.0 uu, mains at -1382.0 uu. The main
         # AXLE is at -1404.5 uu - the mesh bbox centre above includes the strut - which is
-        # the figure FAirframe::FixedAxleX wants when this type is authored.
+        # the figure FChassis::FixedAxleX wants when this type is authored.
         origin_on="front",
         note="de Havilland Dash 8-Q400. 32.5 m long, 28.2 m span - the real aircraft's own "
              "figures. Origin on the NOSE gear, 14.045 m forward of the mains.",
@@ -151,7 +151,7 @@ SPECS = [
         # source rather than corrected here.
         note="Boeing 737-800W. 39.3 m long, 35.8 m span over the winglets, 12.6 m to the fin "
              "tip - the real aircraft's own figures. Origin on the NOSE gear; the main axle "
-             "is at -1560.0 uu, which is the figure FAirframe::FixedAxleX wants when this "
+             "is at -1560.0 uu, which is the figure FChassis::FixedAxleX wants when this "
              "type is authored. Twelve joints: the gear retracts and the nose bay doors "
              "hinge, but nothing in the engine drives either yet.",
     ),
@@ -179,7 +179,7 @@ SPECS = [
         note="Beechcraft King Air 350i. 14.00 m long, 17.69 m span, 4.40 m to the fin tip "
              "against the Beechcraft Specification and Description's 14.22 / 17.65 / 4.37. "
              "Origin on the NOSE gear; the main axle is at about -460 uu, which is the figure "
-             "FAirframe::FixedAxleX wants when this type is authored - and it is 35 cm SHORT "
+             "FChassis::FixedAxleX wants when this type is authored - and it is 35 cm SHORT "
              "of the S&D's 16 ft 3 in (4.95 m) wheelbase, because build_gear.py worked from "
              "14 ft 11 in. Fourteen joints, the most of any aeroplane here: the gear retracts "
              "forward into each nacelle, and BOTH bays have doors.",
@@ -198,7 +198,7 @@ SPECS = [
         # ALL SIX, NOT THE MIDDLE PAIR, and that is a decision rather than an inclusive
         # reflex. axle_centres_uu AVERAGES what it matches, so six wheels give the BOGIE'S
         # CENTRE - which is the point a multi-axle truck actually pivots about and therefore
-        # the point FAirframe::FixedAxleX wants. It reads -3123.0 uu against the middle
+        # the point FChassis::FixedAxleX wants. It reads -3123.0 uu against the middle
         # axle's own -3122.0, a centimetre apart because the bogie is not quite evenly
         # spaced (1.45 m forward, 1.48 m aft); Boeing's published 31.22 m wheelbase is
         # measured to that middle axle. Naming the middle pair here would measure correctly
@@ -222,7 +222,7 @@ SPECS = [
              "which matters because 64.78 m is 22 cm inside Code E's 65 m ceiling and this "
              "is the first airframe in the project at any letter but B or C. Origin on the "
              "NOSE gear; the main bogie centre is at -3123.0 uu, which is the figure "
-             "FAirframe::FixedAxleX wants when this type is authored. Eighteen joints, the "
+             "FChassis::FixedAxleX wants when this type is authored. Eighteen joints, the "
              "most of any model here: six main wheels on two three-axle bogies, and all "
              "four bay doors, as plane5's and plane7's have. NO TRUCK BONES - the bogies "
              "are rigid on their legs, so FGearPerformance::TruckTiltSeconds stays zero and "
@@ -262,7 +262,7 @@ SPECS = [
              "3.44 - the length is 3.4% short DELIBERATELY, see the model's README, and the "
              "wingspan (the figure stands and gates are sized from) is exact by construction. "
              "Origin on the NOSE gear; the main axle is at -237.8 uu, which is the figure "
-             "FAirframe::FixedAxleX wants. Thirteen joints: the gear retracts and BOTH bays "
+             "FChassis::FixedAxleX wants. Thirteen joints: the gear retracts and BOTH bays "
              "have doors, as plane5's does.",
     ),
     Spec(
@@ -277,7 +277,7 @@ SPECS = [
         #
         # ALL TWENTY, NOT ONE UNIT: axle_centres_uu averages what it matches, and the mean of
         # the wing bogies (station 33.55) and the body bogies (36.87) is the point the whole
-        # main-gear group pivots about, which is what FAirframe::FixedAxleX means. plane6
+        # main-gear group pivots about, which is what FChassis::FixedAxleX means. plane6
         # averages its six for the same reason.
         front_nodes=["wheel_nose_0", "wheel_nose_1"],
         rear_nodes=["wheel_wing_L_%d" % i for i in range(4)]

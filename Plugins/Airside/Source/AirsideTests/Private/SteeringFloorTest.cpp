@@ -24,12 +24,12 @@ bool FSteeringFloorZeroStillTaxisTest::RunTest(const FString& Parameters)
 	// Nothing else in the suite would have caught it. The van would simply never have moved,
 	// which reads as a routing bug and would have been chased as one - which is the same
 	// wrong-subsystem hunt that cost this project three sessions in September 2026.
-	FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
-	Van.Ground.MinSteeringSpeed = 0.0;
+	FVehicle Van = UAirsideSettings::ResolveDefaultVehicle();
+	Van.Chassis.Ground.MinSteeringSpeed = 0.0;
 
 	TestTrue(
 		TEXT("a vehicle that can stop mid-turn still has usable ground performance"),
-		Van.Ground.IsSet());
+		Van.Chassis.Ground.IsSet());
 
 	return true;
 }
@@ -54,8 +54,8 @@ bool FSteeringFloorSharpVertexStillCreepsTest::RunTest(const FString& Parameters
 	//
 	// So both floors take the GREATER of the physical minimum and the solver's progress
 	// epsilon. The aircraft keeps its physics; the van creeps.
-	FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
-	Van.Ground.MinSteeringSpeed = 0.0;
+	FVehicle Van = UAirsideSettings::ResolveDefaultVehicle();
+	Van.Chassis.Ground.MinSteeringSpeed = 0.0;
 
 	// A right-angle vertex at 1000 uu: due east, then due north. Nothing samples the corner,
 	// so the heading changes instantly and FSpeedProfile calls it untakeable - which is
@@ -64,7 +64,7 @@ bool FSteeringFloorSharpVertexStillCreepsTest::RunTest(const FString& Parameters
 		FVector2D(0.0, 0.0), FVector2D(1000.0, 0.0), FVector2D(1000.0, 1000.0) };
 
 	FSpeedProfile Profile;
-	Profile.Build(Corner, Van);
+	Profile.Build(Corner, Van.Chassis);
 
 	TestTrue(
 		FString::Printf(
@@ -77,17 +77,17 @@ bool FSteeringFloorSharpVertexStillCreepsTest::RunTest(const FString& Parameters
 	// physical floor rather than in place of it. A Piper's own steering minimum is far above
 	// the epsilon, so the epsilon must not be what governs it.
 	const FAirframe Piper = UAirsideSettings::ResolveDefaultAirframe();
-	if (Piper.Ground.MinSteeringSpeed > FRouteFollower::ProgressEpsilon)
+	if (Piper.Chassis.Ground.MinSteeringSpeed > FRouteFollower::ProgressEpsilon)
 	{
 		FSpeedProfile Aircraft;
-		Aircraft.Build(Corner, Piper);
+		Aircraft.Build(Corner, Piper.Chassis);
 
 		TestTrue(
 			FString::Printf(
 				TEXT("an aircraft still crawls its sharp vertex at its own steering minimum ")
 				TEXT("%.0f, not at the solver epsilon"),
-				Piper.Ground.MinSteeringSpeed),
-			Aircraft.LimitAt(1000.0) >= Piper.Ground.MinSteeringSpeed - KINDA_SMALL_NUMBER);
+				Piper.Chassis.Ground.MinSteeringSpeed),
+			Aircraft.LimitAt(1000.0) >= Piper.Chassis.Ground.MinSteeringSpeed - KINDA_SMALL_NUMBER);
 	}
 
 	return true;

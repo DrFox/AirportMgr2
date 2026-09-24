@@ -77,7 +77,11 @@
       14. A run's width is FKitSpec::RunWidthUu, never WidthUu times a run length by hand.
           Five sites did the product until the shed's end caps arrived (2026-09-22) and had
           to be added to each; PlotYard.h is the one legal home.
-      15. IsPlotted() is not "is a depot". A stand can be plotted too (2026-09-23's "drawn
+      15. Ground-only consumers never name FAirframe (2026-09-23). The follower, the reverse,
+          the speed profile and the road builders take FChassis; an FAirframe parameter
+          coming back is a truck being handed a wingspan again. A listed file that no longer
+          exists FAILS rather than passing, so a rename cannot switch the rule off.
+      17. IsPlotted() is not "is a depot". A stand can be plotted too (2026-09-23's "drawn
           stands" work), so a site that read Outline.Num() >= 3, or called IsPlotted(), to
           mean "this is a depot" fenced, priced or labelled a drawn stand exactly like a
           depot's yard (Airside.Present.PlotPresenter.StandOutlineIsNotADepot pins this at
@@ -275,6 +279,15 @@ $AllowedCallers = @(
         ProdAllowed = @('AirsideSettings.h', 'AirsideSettings.cpp', 'RoadBuildController.cpp', 'OpsRuntime.cpp')
         TestExempt  = $true
         ProdReason  = 'a new production caller resolves the default airframe a second way instead of taking it from context - route it through one of the rows above or extend this row and say why'
+    },
+    @{
+        # FRoadAgent's bundles are private since 2026-09-23 so the unused one of the two cannot
+        # be read; this is the one writable door, and it exists for test fixtures only.
+        Name        = 'FRoadAgent::EditAirframeForTest'
+        Pattern     = '\bEditAirframeForTest\s*\('
+        ProdAllowed = @('RoadAgent.h')
+        TestExempt  = $true
+        ProdReason  = 'start the agent through StartTaxi/StartArrival/StartPushback/StartDrive, which keep its body and bundle consistent'
     },
     @{
         Name        = 'DepotKitSpecs'
@@ -688,7 +701,55 @@ foreach ($module in $modules) {
     }
 }
 
-# --- 15. IsPlotted() is not "is a depot" ----------------------------------------------------
+# --- 15. Ground-only consumers take FChassis, never FAirframe ------------------------------
+# FChassis was split out of FAirframe on 2026-09-23 (Model/Chassis.h says why): a service
+# vehicle was carried as an aeroplane with its climb zeroed, and every ground consumer took
+# the whole bundle to read five fields of it. These files only ROLL things or size concrete
+# for them; naming FAirframe in code here is that coupling coming back. Comment lines are
+# exempt, the way rules 5, 7 and 13 exempt a WHY comment that names the banned token.
+#
+# A LISTED FILE THAT IS MISSING FAILS. A rename would otherwise turn this rule into a check
+# of nothing, which reports exactly like a pass.
+$chassisOnly = @(
+    'Public\Model\Chassis.h', 'Private\Model\Chassis.cpp', 'Public\Model\Vehicle.h',
+    'Public\Model\RouteFollower.h', 'Private\Model\RouteFollower.cpp',
+    'Public\Model\ReverseRun.h', 'Private\Model\ReverseRun.cpp',
+    'Public\Model\SpeedProfile.h', 'Private\Model\SpeedProfile.cpp',
+    'Public\Build\AnchorLink.h', 'Private\Build\AnchorLink.cpp',
+    'Public\Build\RoadGuidelineBuilder.h', 'Private\Build\RoadGuidelineBuilder.cpp',
+    'Public\Build\RoadNetworkSolver.h', 'Private\Build\RoadNetworkSolver.cpp',
+    'Public\Profiles\RoadProfile.h', 'Private\Profiles\RoadProfile.cpp'
+)
+foreach ($rel in $chassisOnly) {
+    $path = Join-Path $plugin $rel
+    if (-not (Test-Path $path)) {
+        $failures.Add("chassis-only: $path is listed in rule 15 but does not exist - update the list, do not let the rule check nothing")
+        continue
+    }
+    foreach ($h in (Select-String -Path $path -Pattern '\bFAirframe\b')) {
+        $t = $h.Line.Trim()
+        if ($t.StartsWith('//') -or $t.StartsWith('*') -or $t.StartsWith('/*')) { continue }
+        $failures.Add("chassis-only: $($path):$($h.LineNumber) names FAirframe; a ground-only consumer takes FChassis (Model/Chassis.h): $t")
+    }
+}
+
+# --- 16. Turn paths never pair guidelines by index across arms -------------------------------
+# Until 2026-09-23 FRoadGuidelineBuilder paired guideline N of one arm with guideline N of the
+# next over the smaller count. Offsets are per segment A->B and arms meet at mixed ends, so on
+# two-lane roads that paired an ARRIVING lane with an ARRIVING lane, and a one-lane arm meeting
+# a two-lane arm lost a lane. The shape it had: a Min over two profiles' Guidelines.Num().
+$turnBuilder = Join-Path $plugin 'Private\Build\RoadGuidelineBuilder.cpp'
+if (-not (Test-Path $turnBuilder)) {
+    $failures.Add("turn-index-pairing: $turnBuilder is named by rule 16 but does not exist - update the rule, do not let it check nothing")
+} else {
+    $turnText = Get-Content -Raw $turnBuilder
+    foreach ($m in [regex]::Matches($turnText, 'Min\(\s*\w+->Guidelines\.Num\(\)')) {
+        $line = ($turnText.Substring(0, $m.Index) -split "`n").Count
+        $failures.Add("turn-index-pairing: $($turnBuilder):$line pairs turn-path guidelines by index; pair arriving lanes with leaving lanes instead")
+    }
+}
+
+# --- 17. IsPlotted() is not "is a depot" ----------------------------------------------------
 # A stand can be plotted too (2026-09-23's "drawn stands" work), so the outline-means-depot
 # shape RebuildFrom shipped (Outline.Num() >= 3, no kind check) is exactly the bug
 # Airside.Present.PlotPresenter.StandOutlineIsNotADepot pins. RoadEntity.h is IsPlotted()'s own
@@ -715,7 +776,7 @@ foreach ($tree in $trees) {
 # --- Verdict -------------------------------------------------------------------------------
 Write-Host "Check-Architecture: $($commentFactWarnings.Count) comment-only-fact warning(s) (rule 12; see Tools/Check-Architecture.ps1's own comment)." -ForegroundColor Yellow
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations, graph-probe, run-width, is-plotted-not-depot)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations, graph-probe, run-width, chassis-only, turn-index-pairing, is-plotted-not-depot)' -ForegroundColor Green
     exit 0
 }
 

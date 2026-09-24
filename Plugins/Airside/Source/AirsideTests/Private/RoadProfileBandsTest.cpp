@@ -61,3 +61,35 @@ bool FRoadProfileBandsTest::RunTest(const FString& Parameters)
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+// A TWO-WAY ROAD'S CENTRE IS PAINTED BY FRoadLaneMarkingBuilder (white dashes), not by the
+// material. M_RoadSurface paints a solid line wherever |UV1 lateral| < CentrelineWidth, which
+// is right for a taxiway and put a yellow line under the dashes on every road (review of
+// 2026-09-23). So a profile that opts out keeps every lateral far from zero.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTwoWayRoadHasNoMaterialCentrelineTest,
+	"Airside.Build.TwoWayRoadHasNoMaterialCentreline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTwoWayRoadHasNoMaterialCentrelineTest::RunTest(const FString& Parameters)
+{
+	const FRoadProfileBands Road = FRoadProfileBands::FromProfile(URoadProfile::MakeServiceRoadTransient());
+	float Nearest = TNumericLimits<float>::Max();
+	for (const float Lateral : Road.Laterals)
+	{
+		Nearest = FMath::Min(Nearest, FMath::Abs(Lateral));
+	}
+	// 1000 uu is far beyond any CentrelineWidth a road material could be given.
+	TestTrue(TEXT("no band boundary of a two-way road lies near a material centreline"), Nearest > 1000.0f);
+	TestTrue(TEXT("and the laterals still ascend, so the ribbon's interpolation is unchanged in shape"),
+		Road.Laterals.Num() >= 2 && Road.Laterals[0] < Road.Laterals.Last());
+
+	const FRoadProfileBands Taxiway = FRoadProfileBands::FromProfile(URoadProfile::MakeTransient(2300.0, 1500.0));
+	TestTrue(TEXT("a taxiway keeps its painted centreline: its laterals straddle zero"),
+		Taxiway.Laterals.Num() >= 2 && Taxiway.Laterals[0] < 0.0f && Taxiway.Laterals.Last() > 0.0f);
+	return true;
+}
+
+#endif

@@ -48,7 +48,7 @@ bool FAgentPushbackCompositionTest::RunTest(const FString& Parameters)
 		[&Transitions](int32, EAgentPhase From, EAgentPhase To) { Transitions.Emplace(From, To); });
 
 	FAirframe Airframe;
-	Airframe.Ground = TestAirframes::Piper().Ground;
+	Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
 	Airframe.Climb = TestAirframes::Piper().Climb;
 	Airframe.Approach = TestAirframes::Piper().Approach;
 	Airframe.Engine = TestAirframes::Piper().Engine;

@@ -111,14 +111,14 @@ URoadProfile* URoadEditFacade::ResolveRunwayProfile(int32 Index) const
 	return Actor().ResolveRunwayProfile(Index);
 }
 
-int32 URoadEditFacade::GetTaxiwayProfileCount() const
+int32 URoadEditFacade::GetWidthCount(ERoadKind Kind) const
 {
-	return Actor().GetTaxiwayProfileCount();
+	return Actor().GetWidthCount(Kind);
 }
 
-URoadProfile* URoadEditFacade::ResolveTaxiwayProfile(int32 Index) const
+URoadProfile* URoadEditFacade::ResolveWidthProfile(ERoadKind Kind, int32 Index) const
 {
-	return Actor().ResolveTaxiwayProfile(Index);
+	return Actor().ResolveWidthProfile(Kind, Index);
 }
 
 const UEntityDefinition* URoadEditFacade::GetEntityDefinition(EPlaceableEntity Kind) const
@@ -158,6 +158,12 @@ bool URoadEditFacade::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Air
 	ETraversalClass Class)
 {
 	return Actor().DispatchAgent(Plan, Airframe, Class);
+}
+
+bool URoadEditFacade::DispatchAgent(const FRoutePlan& Plan, const FVehicle& Vehicle,
+	ETraversalClass Class)
+{
+	return Actor().DispatchAgent(Plan, Vehicle, Class);
 }
 
 bool URoadEditFacade::MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const
@@ -357,14 +363,9 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	// aeroplanes onto a lane laid for vans. There is no transient fallback to reach for
 	// either; see ARoadNetworkActor::ResolveServiceRoadProfile.
 	//
-	// A CHOSEN WIDTH WINS OVER THE DEFAULT, and only for a taxiway: WidthIndex names one of
-	// the content set's standard widths (the tool cycles it on key-again), INDEX_NONE means
-	// "whatever this kind defaults to". The default for a taxiway is the ACTOR's own
-	// profile, which ResolveProfile keeps the content set out of on purpose - so a player
-	// who never touches the cycle lays exactly the road this level was tuned for.
-	//
-	// A service road ignores the index outright: it has one authored cross-section, and an
-	// index reaching it would lay a taxiway's width on a lane meant for vans.
+	// WHICH WIDTH is ARoadNetworkActor::ResolveProfileFor's rule, stated once there: a chosen
+	// index names a standard width of THIS kind (a taxiway code or a road tier), INDEX_NONE
+	// the kind's default.
 	URoadProfile* Chosen = ResolveProfileFor(Kind, WidthIndex);
 	if (Chosen == nullptr && Kind == ERoadKind::ServiceRoad)
 	{
@@ -618,6 +619,33 @@ bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 	// commit shape as DeleteApron/DeleteEntity and belonged with them).
 	return DeleteSlot(true, TEXT("unlink guidelines"),
 		[Id](URoadNetwork& Net) { return Net.RemoveGuidelineEdge(Id); });
+}
+
+bool URoadEditFacade::SetDriveSide(EDriveSide Side)
+{
+	URoadNetwork* Network = Actor().Network;
+	// Refused BEFORE the scope, for the reason SetIntermediateHoldingPosition gives: there is
+	// no rollback, and a no-op inside a scope would push an undo step that does nothing.
+	if (Network == nullptr || Network->GetDriveSide() == Side)
+	{
+		return false;
+	}
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("drive side"));
+	Network->SetDriveSide(Side);
+	// TOPOLOGY, not Markings: every lane moves, so the guideline graph is re-derived - which
+	// is the whole edit. The centre-line paint does not move (it sits on offset 0), but the
+	// rebuild repaints it anyway, and that is cheaper than a second change kind for one edit.
+	CommitAndNotify(Edit, EChangeKind::Topology);
+
+	int32 Lanes = 0;
+	for (const FGuidelineEdge& Edge : Network->GetGuidelineEdges())
+	{
+		Lanes += (Edge.bAlive && Edge.bDerived && Edge.DerivedFrom.IsSet()
+			&& Edge.Direction != EGuidelineDir::Bidirectional) ? 1 : 0;
+	}
+	UE_LOG(LogRoadMesh, Log, TEXT("Drive side -> %s, %d road lane edge(s) re-derived"),
+		Side == EDriveSide::Left ? TEXT("Left") : TEXT("Right"), Lanes);
+	return true;
 }
 
 bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)

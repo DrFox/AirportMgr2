@@ -145,15 +145,15 @@ bool FEveryTemplateLegIsDrivableByEveryVehicleTest::RunTest(const FString& Param
 	// in a test is what let four attempts ship green and crab in PIE.
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 
-	TArray<TPair<FString, FAirframe>> Fleet;
-	Fleet.Emplace(TEXT("default vehicle"), UAirsideSettings::ResolveDefaultVehicle());
-	const FAirframe Largest = UAirsideSettings::ResolveLargestServiceVehicle();
+	TArray<TPair<FString, FChassis>> Fleet;
+	Fleet.Emplace(TEXT("default vehicle"), UAirsideSettings::ResolveDefaultVehicle().Chassis);
+	const FChassis Largest = UAirsideSettings::ResolveLargestServiceVehicle();
 	if (!FMath::IsNearlyEqual(Largest.Wheelbase(), Fleet[0].Value.Wheelbase(), 0.01))
 	{
 		Fleet.Emplace(TEXT("largest service vehicle"), Largest);
 	}
 
-	for (const TPair<FString, FAirframe>& Vehicle : Fleet)
+	for (const TPair<FString, FChassis>& Vehicle : Fleet)
 	{
 		for (const FNamedLeg& Named : LegsOf(*Stand))
 		{
@@ -343,7 +343,7 @@ bool FEveryAirframeFitsItsLettersRowTest::RunTest(const FString& Parameters)
 
 		// CONVERTED TO NOSE-GEAR COORDINATES FIRST, because the row is stated about the stop
 		// mark and a footprint is stated about whatever origin its type declares. Zero means
-		// the origin IS the steered axle (see FAirframe::SteerAxleX).
+		// the origin IS the steered axle (see FChassis::SteerAxleX).
 		//
 		// THE CONVERSION IS A NO-OP FOR ALL THREE TYPES TODAY and it STAYS, which is the
 		// point worth recording. It was here because the Piper declared 237.8 - its main gear

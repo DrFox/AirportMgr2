@@ -22,9 +22,9 @@ bool FReverseTurnsTighterThanForwardTest::RunTest(const FString& Parameters)
 	// 90 degrees, because tan exceeds sin there.
 	//
 	// That is the whole argument for backing into a bay rather than driving through one: the
-	// manoeuvre that needs 699 uu of room forwards needs 495 in reverse, about 30% less, and a
+	// manoeuvre that needs 510 uu of room forwards needs 361 in reverse, about 30% less, and a
 	// drive-through bay would have needed TWO forward corners where this needs none.
-	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	if (!TestTrue(TEXT("the service vehicle steers on measured axles"), Truck.HasAxles()))
 	{
 		return false;
@@ -39,7 +39,7 @@ bool FReverseTurnsTighterThanForwardTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("a reversing vehicle turns tighter than a forward one"), Reverse < Forward);
 
 	// THE ARITHMETIC, RESTATED rather than shared with the accessor - the reason
-	// FAirframe::TightestFollowableRadius gives at its own copy. A helper both sides called
+	// FChassis::TightestFollowableRadius gives at its own copy. A helper both sides called
 	// could be wrong in one place and agree with itself.
 	const double Lock = FMath::DegreesToRadians(FMath::Clamp(Truck.Ground.MaxSteerDegrees, 0.0, 90.0));
 	TestTrue(
@@ -51,12 +51,12 @@ bool FReverseTurnsTighterThanForwardTest::RunTest(const FString& Parameters)
 	// geometrically" rather than "it can turn on a sixpence". A pivot-law vehicle turns about
 	// itself and has no such limit; reporting 0 for it would read as an infinitely tight
 	// requirement to any caller comparing a radius against it.
-	FAirframe Pivoting = Truck;
+	FChassis Pivoting = Truck;
 	Pivoting.SteerLaw = ESteerLaw::Pivot;
 	TestEqual(TEXT("a pivot-law vehicle reports no reverse limit"),
 		Pivoting.TightestReversibleRadius(), 0.0, UE_DOUBLE_KINDA_SMALL_NUMBER);
 
-	FAirframe Locked = Truck;
+	FChassis Locked = Truck;
 	Locked.Ground.MaxSteerDegrees = 0.0;
 	TestEqual(TEXT("a vehicle with no steering lock reports no reverse limit"),
 		Locked.TightestReversibleRadius(), 0.0, UE_DOUBLE_KINDA_SMALL_NUMBER);
@@ -71,8 +71,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FSpeedProfileJudgesReverseByTheReverseLimitTest::RunTest(const FString& Parameters)
 {
-	// THE ONE ARC THAT DISCRIMINATES. Between the reverse limit (495) and the forward one
-	// (699) sits a band of curves a vehicle can back along and cannot drive along. An arc in
+	// THE ONE ARC THAT DISCRIMINATES. Between the reverse limit (361 for the 6.2 m bowser) and
+	// the forward one (510) sits a band of curves a vehicle can back along and cannot drive along. An arc in
 	// that band is the only shape that tells the two rules apart: judged forwards it must be
 	// refused, judged backwards it must be accepted.
 	//
@@ -80,7 +80,7 @@ bool FSpeedProfileJudgesReverseByTheReverseLimitTest::RunTest(const FString& Par
 	// being legal, or - far worse - not checked at all, which is precisely how four attempts
 	// at stand routing shipped green and crabbed. The oracle learns direction BEFORE anything
 	// reverses, rather than after something does.
-	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	const double Forward = Truck.TightestFollowableRadius();
 	const double Reverse = Truck.TightestReversibleRadius();
 	if (!TestTrue(TEXT("there is a band between the two limits to aim at"), Reverse < Forward))
@@ -140,17 +140,17 @@ namespace ReverseFixture
 	/**
 	 * EVERY GROUND VEHICLE THE GAME HAS, asked of the resolvers rather than typed here.
 	 *
-	 * The fleet is one airframe today - ResolveLargestServiceVehicle's own comment says it
+	 * The fleet is one chassis today - ResolveLargestServiceVehicle's own comment says it
 	 * returns the same one as ResolveDefaultVehicle - and a hand-written list would stay a
 	 * list of one after somebody adds the second. Enumerating from the resolvers means a new
 	 * vehicle widens every test below without anyone remembering to.
 	 */
-	inline TArray<TPair<FString, FAirframe>> GroundFleet()
+	inline TArray<TPair<FString, FChassis>> GroundFleet()
 	{
-		TArray<TPair<FString, FAirframe>> Fleet;
-		Fleet.Emplace(TEXT("default vehicle"), UAirsideSettings::ResolveDefaultVehicle());
+		TArray<TPair<FString, FChassis>> Fleet;
+		Fleet.Emplace(TEXT("default vehicle"), UAirsideSettings::ResolveDefaultVehicle().Chassis);
 
-		const FAirframe Largest = UAirsideSettings::ResolveLargestServiceVehicle();
+		const FChassis Largest = UAirsideSettings::ResolveLargestServiceVehicle();
 		if (!FMath::IsNearlyEqual(Largest.Wheelbase(),
 				Fleet[0].Value.Wheelbase(), UE_DOUBLE_KINDA_SMALL_NUMBER))
 		{
@@ -194,19 +194,19 @@ bool FEveryGroundVehicleBacksIntoItsBayWithoutCrabbingTest::RunTest(const FStrin
 	// curve the body cannot hold is crabbed silently. Asked of EVERY vehicle in the fleet, at
 	// the tightest arc each one is allowed, and at one just inside that limit which must be
 	// refused rather than driven badly.
-	const TArray<TPair<FString, FAirframe>> Fleet = GroundFleet();
+	const TArray<TPair<FString, FChassis>> Fleet = GroundFleet();
 	if (!TestTrue(TEXT("there is a ground fleet to check"), Fleet.Num() > 0))
 	{
 		return false;
 	}
 
-	for (const TPair<FString, FAirframe>& Vehicle : Fleet)
+	for (const TPair<FString, FChassis>& Vehicle : Fleet)
 	{
-		const FAirframe& Airframe = Vehicle.Value;
-		const double Limit = Airframe.TightestReversibleRadius();
+		const FChassis& Chassis = Vehicle.Value;
+		const double Limit = Chassis.TightestReversibleRadius();
 
 		AddInfo(FString::Printf(TEXT("%s: wheelbase %.0f, reverse limit %.0f uu"),
-			*Vehicle.Key, Airframe.Wheelbase(), Limit));
+			*Vehicle.Key, Chassis.Wheelbase(), Limit));
 
 		if (!TestTrue(*FString::Printf(TEXT("%s steers geometrically"), *Vehicle.Key), Limit > 0.0))
 		{
@@ -218,20 +218,20 @@ bool FEveryGroundVehicleBacksIntoItsBayWithoutCrabbingTest::RunTest(const FStrin
 		TestTrue(
 			*FString::Printf(TEXT("%s arms on an arc at its own reverse limit (%.0f uu)"),
 				*Vehicle.Key, Limit),
-			Run.Start(ArcPlan(Limit * 1.01), Airframe, /*InReverseSpeed=*/100.0));
+			Run.Start(ArcPlan(Limit * 1.01), Chassis, /*InReverseSpeed=*/100.0));
 
 		// AND REFUSES ONE INSIDE IT. This is the half that matters: a manoeuvre that armed on
 		// anything would guarantee nothing at all.
 		FReverseRun TooTight;
 		TestFalse(
 			*FString::Printf(TEXT("%s refuses an arc inside its reverse limit"), *Vehicle.Key),
-			TooTight.Start(ArcPlan(Limit * 0.8), Airframe, /*InReverseSpeed=*/100.0));
+			TooTight.Start(ArcPlan(Limit * 0.8), Chassis, /*InReverseSpeed=*/100.0));
 
 		// DRIVEN TO THE END, and the body faces AWAY from the way it is moving the whole time.
 		FVector2D Position = FVector2D::ZeroVector;
 		double Heading = 0.0;
 		int32 Frames = 0;
-		while (Run.Advance(1.0 / 30.0, Airframe, /*StopWithin=*/1000.0, Position, Heading) && Frames < 10000)
+		while (Run.Advance(1.0 / 30.0, Chassis, /*StopWithin=*/1000.0, Position, Heading) && Frames < 10000)
 		{
 			++Frames;
 		}
@@ -276,7 +276,7 @@ bool FReverseSpeedIsWhatItAchievedTest::RunTest(const FString& Parameters)
 {
 	using namespace ReverseFixture;
 
-	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	const double Limit = Truck.TightestReversibleRadius();
 
 	FReverseRun Run;
@@ -349,7 +349,7 @@ bool FReverseSpeedIsWhatItAchievedTest::RunTest(const FString& Parameters)
  *
  * THE ANGLE IS NOT A CHOICE. Backing along an arc, a rigid vehicle pivots about its FIXED
  * axle, so tan(steer) = Wheelbase / Radius - which is the exact inverse of
- * FAirframe::TightestReversibleRadius, Wheelbase / tan(lock), the rule
+ * FChassis::TightestReversibleRadius, Wheelbase / tan(lock), the rule
  * Airside.Model.ReverseTurnsTighterThanForward already pins. That is why this asserts against
  * the accessor rather than a typed-in number: an arc at exactly the vehicle's limit must ask
  * for exactly its lock, and if the two ever disagree one of them is wrong.
@@ -369,7 +369,7 @@ bool FReverseSteersRatherThanSlidingTest::RunTest(const FString& Parameters)
 {
 	using namespace ReverseFixture;
 
-	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	if (!TestTrue(TEXT("the service vehicle steers on measured axles"), Truck.HasAxles()))
 	{
 		return false;
@@ -451,7 +451,7 @@ bool FReverseSteersRatherThanSlidingTest::RunTest(const FString& Parameters)
 	// atan(Wheelbase/Radius) AT THE LIMIT IS THE LOCK ITSELF, and this arc is 5% outside the
 	// limit, so the angle must land just inside the lock. That is the cross-check which makes
 	// this more than a snapshot of whatever the code happens to produce: the same two figures,
-	// FAirframe::Wheelbase and Ground.MaxSteerDegrees, have to satisfy both the accessor and
+	// FChassis::Wheelbase and Ground.MaxSteerDegrees, have to satisfy both the accessor and
 	// the steering, and a sign or a factor wrong in either shows up as a gap here.
 	TestTrue(*FString::Printf(
 		TEXT("and it lands just inside the lock, never on or past it (%.2f vs %.2f)"),
@@ -476,7 +476,7 @@ bool FReverseSteersRatherThanSlidingTest::RunTest(const FString& Parameters)
 	// A PIVOT-LAW VEHICLE HAS NO STEERED WHEEL TO DRAW, the same rule FRouteFollower states
 	// where it sets SteerDegrees to zero for one. Without this a van would sprout a steering
 	// angle it has no bone for.
-	FAirframe Pivoting = Truck;
+	FChassis Pivoting = Truck;
 	Pivoting.SteerLaw = ESteerLaw::Pivot;
 	FReverseRun Van;
 	if (TestTrue(TEXT("a pivot-law vehicle still arms"),
@@ -555,7 +555,7 @@ bool FReverseLegCursorMatchesOracleTest::RunTest(const FString& Parameters)
 	Plan.Steps[7].bReverseLeg = true;
 
 	FRouteFollower Follower;
-	Follower.Start(Plan, FAirframe());
+	Follower.Start(Plan, FChassis());
 
 	bool bAllMatch = true;
 	FString Mismatch;

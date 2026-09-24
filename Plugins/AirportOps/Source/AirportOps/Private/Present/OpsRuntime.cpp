@@ -159,10 +159,10 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 			Scenario->FuelDwellSeconds, Scenario->StartingBalance);
 	}
 
-	// TruckAirframe resolved HERE, once, not by FuelService at every dispatch (#104): this is
+	// TruckVehicle resolved HERE, once, not by FuelService at every dispatch (#104): this is
 	// Present/, where every other content default gets resolved, and Model/ has no business
 	// reaching Content/ for it.
-	FuelService->TruckAirframe = UAirsideSettings::ResolveDefaultVehicle();
+	FuelService->TruckVehicle = UAirsideSettings::ResolveDefaultVehicle();
 
 	// THE MONEY, wired in one breath like the scenario figures above, so none of these is the
 	// one somebody forgot to connect. Each of the three posts to the ledger for its own part of

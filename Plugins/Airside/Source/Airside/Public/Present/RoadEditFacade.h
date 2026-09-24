@@ -133,8 +133,8 @@ public:
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex) override;
 
 	/** Forwarded to the actor, which owns the content lookup - see IRoadEditTarget. */
-	virtual int32 GetTaxiwayProfileCount() const override;
-	virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const override;
+	virtual int32 GetWidthCount(ERoadKind Kind) const override;
+	virtual URoadProfile* ResolveWidthProfile(ERoadKind Kind, int32 Index) const override;
 	using IRoadEditTarget::ConnectNodes;
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) override;
@@ -145,6 +145,13 @@ public:
 	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override;
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
 	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet) override;
+
+	/**
+	 * The airport's drive side, as one undoable edit that re-derives every lane (spec
+	 * 2026-09-23 §2). False, pushing no undo step, when it already is Side. NOT on
+	 * IRoadEditTarget: no tool sets it - the bar does, through the actor.
+	 */
+	bool SetDriveSide(EDriveSide Side);
 	virtual int32 SplitSegment(int32 SegmentIndex, FVector2D At) override;
 	virtual bool DeleteNode(int32 NodeIndex) override;
 	virtual bool DeleteSegment(int32 SegmentIndex) override;
@@ -207,6 +214,8 @@ public:
 	virtual void RebuildMesh() override;
 	using IRoadEditTarget::DispatchAgent;
 	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe,
+		ETraversalClass Class) override;
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FVehicle& Vehicle,
 		ETraversalClass Class) override;
 
 	virtual bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const override;

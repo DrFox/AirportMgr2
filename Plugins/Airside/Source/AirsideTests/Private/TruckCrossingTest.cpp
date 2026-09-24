@@ -87,7 +87,7 @@ bool FTruckCrossesTaxiwayTest::RunTest(const FString& Parameters)
 	// dispatched until the table SAYS the aircraft holds the node. What is then measured is
 	// who gives way, which is the only thing this test is about.
 	FAirframe SlowPlane = UAirsideSettings::ResolveDefaultAirframe();
-	SlowPlane.Ground.Taxi.SpeedCap = 200.0;
+	SlowPlane.Chassis.Ground.Taxi.SpeedCap = 200.0;
 
 	const int32 Aircraft = Traffic->DispatchAgent(Net, AircraftPlan, SlowPlane,
 		ETraversalClass::Aircraft, 0.0);
@@ -173,7 +173,7 @@ bool FTruckCrossesTaxiwayTest::RunTest(const FString& Parameters)
 			// slowing for any other reason - a corner, or its own destination.
 			bTruckWaited |= Van->Phase == EAgentPhase::Taxiing
 				&& Van->GetWaitingOn() == Aircraft
-				&& Van->LastMotion.GroundSpeed < 0.5 * Van->Airframe.Ground.Taxi.SpeedCap;
+				&& Van->LastMotion.GroundSpeed < 0.5 * Van->Chassis().Ground.Taxi.SpeedCap;
 		}
 	}
 

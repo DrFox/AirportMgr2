@@ -117,7 +117,7 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 	}
 
 	TestTrue(TEXT("the van yielded: its speed fell below half its taxi cap while blocked"),
-		VanMinSpeedWhileWaiting < 0.5 * VanNow->Airframe.Ground.Taxi.SpeedCap);
+		VanMinSpeedWhileWaiting < 0.5 * VanNow->Chassis().Ground.Taxi.SpeedCap);
 	TestTrue(TEXT("the aircraft never was"), PlaneMinStopWithin > 1000.0);
 	TestTrue(TEXT("the van's wait named the aircraft"), bVanWaitedOnPlane);
 	// SEPARATION AGAINST WHAT THE RULE ACTUALLY RESERVES, which is the gap plus half the
@@ -205,7 +205,7 @@ bool FTrafficCarFollowingTest::RunTest(const FString& Parameters)
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	FAirframe Leader = TestAirframes::GroundOnly();
-	Leader.Ground.Taxi.SpeedCap = 600.0;   // slower, so the follower catches it
+	Leader.Chassis.Ground.Taxi.SpeedCap = 600.0;   // slower, so the follower catches it
 	const int32 Lead = Traffic->DispatchAgent(Net, Plan, Leader, ETraversalClass::Aircraft, 1.0);
 	int32 Follow = 0;
 	double MinGap = TNumericLimits<double>::Max();

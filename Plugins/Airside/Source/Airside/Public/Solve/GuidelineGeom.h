@@ -262,7 +262,7 @@ namespace GuidelineGeom
 	 * another need no transition, and a caller that treated a zero run as a curve would lay a
 	 * degenerate one. A Radius of zero or less returns the right-angle cap - no constraint -
 	 * which is what an airframe with no measured axles asks for (see
-	 * FAirframe::TightestFollowableRadius, where zero means "nothing to clear").
+	 * FChassis::TightestFollowableRadius, where zero means "nothing to clear").
 	 */
 	AIRSIDE_API double ShiftDeflectionFor(double Radius, double Shift, double& OutRun);
 

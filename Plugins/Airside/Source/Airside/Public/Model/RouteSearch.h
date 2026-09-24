@@ -7,6 +7,8 @@
 #include "Model/SpeedProfile.h"
 #include "RouteSearch.generated.h"
 
+struct FVehicle;
+
 class URoadNetwork;
 
 /**
@@ -41,6 +43,14 @@ enum class ERouteResult : uint8
 	 * Code C stand reports the same thing as a taxiway nobody ever joined up.
 	 */
 	TooWide,
+
+	/**
+	 * Reachable, but only over road this VEHICLE does not fit - a lane narrower than its body,
+	 * or a corner its swept path or its lock cannot take (VehicleFit, spec 2026-09-23 §6).
+	 * TooWide's twin, found the same way: an unconstrained retry after a failure. The plan's
+	 * RejectedEdge names where.
+	 */
+	TooNarrow,
 };
 
 /** One edge of a found route, in traversal order. */
@@ -105,6 +115,12 @@ struct AIRSIDE_API FRoutePlan
 
 	UPROPERTY() double Length = 0.0;
 
+	/**
+	 * On TooNarrow: the first edge of the unconstrained route the vehicle does not fit, so a
+	 * refusal can say WHERE ("the corner at ...") rather than only that. Unset otherwise.
+	 */
+	UPROPERTY() FGuidelineEdgeId RejectedEdge;
+
 	bool IsValid() const { return Result == ERouteResult::Found; }
 
 	/**
@@ -144,7 +160,6 @@ namespace RouteSearch
 }
 
 struct FTrafficOccupancy;
-struct FAirframe;
 
 /** What is being routed, and what it is allowed to use. */
 USTRUCT()
@@ -251,7 +266,21 @@ struct AIRSIDE_API FRouteQuery
 	 * the "set it after" list for the same reason.
 	 */
 	static FRouteQuery For(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,
-		const FAirframe& Airframe, ETraversalClass Class);
+		double Wingspan, ETraversalClass Class);
+
+	/**
+	 * The vehicle to gate on: route only where it fits (VehicleFit). Null, the default, gates
+	 * nothing - every query made before 2026-09-23, and every aircraft's, is unchanged. A
+	 * POINTER, not a copy and not a UPROPERTY: a query lives for one search, and the caller's
+	 * vehicle outlives it.
+	 */
+	const FVehicle* Vehicle = nullptr;
+
+	FRouteQuery& WithVehicle(const FVehicle& InVehicle)
+	{
+		Vehicle = &InVehicle;
+		return *this;
+	}
 
 	/** Chainable: the congestion cost term, set together because CongestionWeight is
 	 *  meaningless without Occupancy and QueryingAgent is meaningless without both. */

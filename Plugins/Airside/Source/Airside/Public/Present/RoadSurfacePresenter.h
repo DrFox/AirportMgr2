@@ -5,7 +5,7 @@
 #include "Templates/Function.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadMeshSink.h"
-#include "Model/Airframe.h"
+#include "Model/Chassis.h"
 #include "Model/RoadHandles.h"
 #include "Model/RunwayFacts.h"
 #include "Tool/RoadEditTarget.h"
@@ -124,7 +124,7 @@ public:
 		 * than defaulting to a real vehicle: a caller that forgets to set this gets a fillet
 		 * radius of zero rather than a plausible-looking wrong one, which fails loudly.
 		 */
-		FAirframe LargestServiceVehicle;
+		FChassis LargestServiceVehicle;
 
 		/** Already resolved - see ARoadNetworkActor::ResolveSurfaceMaterial and its siblings. */
 		UMaterialInterface* SurfaceMaterial = nullptr;
@@ -269,7 +269,8 @@ public:
 	 * query let it ask first. A const query, so it is safe to call speculatively.
 	 */
 	bool IsGhostCacheHit(const URoadNetwork* Network, int32 FromNodeIndex, const FRoadSnapResult& Snap,
-		bool bValid, bool& bOutValidityChanged) const;
+		bool bValid, bool& bOutValidityChanged,
+		ERoadKind Kind = ERoadKind::Taxiway, int32 WidthIndex = INDEX_NONE) const;
 
 	/**
 	 * The cache-hit path: update only the ghost material's ValidityBlend parameter.
@@ -291,7 +292,8 @@ public:
 	 * always does the full rebuild.
 	 */
 	void UpdateGhost(URoadNetwork* Network, int32 FromNodeIndex, const FRoadSnapResult& Snap,
-		bool bValid, const FSurfaceSettings& Settings);
+		bool bValid, const FSurfaceSettings& Settings,
+		ERoadKind Kind = ERoadKind::Taxiway, int32 WidthIndex = INDEX_NONE);
 
 	/**
 	 * The ghost's triangles, without touching a component, a material or a renderer.
@@ -507,6 +509,12 @@ private:
 	int32 LastGhostFrom = INDEX_NONE;
 	FVector2D LastGhostTo = FVector2D::ZeroVector;
 	ERoadSnapKind LastGhostKind = ERoadSnapKind::Free;
+	// The TOOL's kind and chosen width, part of the key since 2026-09-23: with position alone,
+	// cycling the width with a still cursor logged the new width and kept drawing the old one,
+	// and the click then laid a road the ghost had never shown. Plain values, not the resolved
+	// profile, so a still drag still resolves nothing (see ARoadNetworkActor::UpdateGhost).
+	ERoadKind LastGhostRoadKind = ERoadKind::Taxiway;
+	int32 LastGhostWidthIndex = INDEX_NONE;
 	bool bLastGhostValid = true;
 	bool bGhostVisible = false;
 };

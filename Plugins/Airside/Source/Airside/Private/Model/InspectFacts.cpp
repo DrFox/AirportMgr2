@@ -94,8 +94,8 @@ namespace InspectFacts
 			return false;
 		}
 		Out.Id = Agent->Id;
-		Out.TypeName = !Agent->Airframe.TypeCode.IsNone()
-			? Agent->Airframe.TypeCode.ToString()
+		Out.TypeName = !Agent->TypeCode().IsNone()
+			? Agent->TypeCode().ToString()
 			: FString(Agent->Class == ETraversalClass::Aircraft ? TEXT("Aircraft") : TEXT("Vehicle"));
 		Out.Phase = Agent->Phase;
 		// Model heading is radians yaw from +X (east), anticlockwise. Compass is degrees from

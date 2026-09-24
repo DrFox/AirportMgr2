@@ -3,6 +3,7 @@
 #include "Content/AirsideContent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
+#include "Materials/MaterialParameterCollection.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 
@@ -65,7 +66,7 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 	// asset exists to point it at, this is the fallback every project runs on - including
 	// every automation test, which configures no content set at all.
 	FAirframe Piper;
-	Piper.Ground = UAircraftType::PiperMeridianGround();
+	Piper.Chassis.Ground = UAircraftType::PiperMeridianGround();
 	Piper.Climb = UAircraftType::PiperMeridianClimb();
 	Piper.Approach = UAircraftType::PiperMeridianApproach();
 	Piper.Engine = UAircraftType::PiperMeridianEngine();
@@ -86,7 +87,7 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 
 int32 UAirsideSettings::ResolveLargestServiceVehicleCallCountForTest = 0;
 
-FAirframe UAirsideSettings::ResolveLargestServiceVehicle()
+FChassis UAirsideSettings::ResolveLargestServiceVehicle()
 {
 	// COUNTED BEFORE ANYTHING ELSE - see the counter's own comment. Issue #190: this used to
 	// be called fresh per arm, per ordered arm pair and twice per link; a production caller
@@ -98,25 +99,60 @@ FAirframe UAirsideSettings::ResolveLargestServiceVehicle()
 	// failure this codebase has shipped three times. When the second dispenser arrives, this
 	// function gains the comparison and every service road corner widens on the next rebuild,
 	// with no other site to find.
-	return ResolveDefaultVehicle();
+	return ResolveDefaultVehicle().Chassis;
 }
 
-FAirframe UAirsideSettings::ResolveDefaultVehicle()
+FVehicle UAirsideSettings::ResolveRigVehicle()
+{
+	// The DEFAULT VEHICLE'S PERFORMANCE, a rigid truck's, with the rig's own geometry: nothing
+	// here has measured how a loaded articulated tanker accelerates, and inventing figures
+	// would be worse than inheriting honest ones. Geometry is what gating needs.
+	FVehicle Rig = ResolveDefaultVehicle();
+	Rig.TypeCode = TEXT("RIG");
+
+	// MEASURED from truckCab1.glb and tankTrailer1.glb on 2026-09-24. Tractor: steer_FL/FR at
+	// x 370 from the rear-axle origin; body 516 ahead, 78 behind; 254 over the body (mirrors
+	// excluded); fifth wheel 57.3 ahead of the rear axle. Trailer: kingpin 1029.5 ahead of the
+	// tandem centre; body 166 ahead of the kingpin and 121.5 behind the tandem; 254 wide.
+	Rig.Chassis.SteerAxleX = 370.0;
+	Rig.Chassis.FixedAxleX = 0.0;
+	Rig.BodyWidth = 254.0;
+	Rig.BodyFrontX = 516.0;
+	Rig.BodyRearX = -78.0;
+	Rig.Trailer.KingpinX = 57.3;
+	Rig.Trailer.KingpinToAxle = 1029.5;
+	Rig.Trailer.FrontAheadOfKingpin = 166.0;
+	Rig.Trailer.RearBehindAxle = 121.5;
+	Rig.Trailer.Width = 254.0;
+
+	// 40 degrees is ASSUMED - the model carries no lock, and 40-45 is a tractor unit's range.
+	// The lock allows 5.8 m at the steered axle. In a STEADY circle the trailer folds below
+	// ~10.9 m, but a real 90 degree corner ends before it settles: VehicleSweep::Trace, which
+	// route search uses, gets it round a 5.7 m corner without jack-knifing.
+	//
+	// THE TRAILER IS LONGER THAN A ROAD-LEGAL ONE: 10.3 m kingpin to axles, where the EU
+	// turning circle (12.5 m / 5.3 m) needs about 7.7 m with this cab - see
+	// Airside.Solve.VehicleSweepEuCircle, which reports it. A model question, raised 2026-09-24.
+	Rig.Chassis.Ground.MaxSteerDegrees = 40.0;
+	return Rig;
+}
+
+FVehicle UAirsideSettings::ResolveDefaultVehicle()
 {
 	// NO CONTENT LOOKUP, unlike ResolveDefaultAirframe above, and deliberately: there is no
 	// UVehicleType asset to point at yet, so a soft pointer here would be a content slot
 	// nothing could fill - the "authored numbers nothing reads" failure, one level up. M3
 	// adds the type with the fleet, and this function is where it will be resolved.
-	FAirframe Van;
+	FVehicle Van;
 
 	// A LIGHT COMMERCIAL VEHICLE, in FGroundRegime's units (uu/s and uu/s^2; a uu is a
 	// centimetre). 1 m/s^2 up, 2 m/s^2 braking, 10 m/s flat out - an airside speed limit
 	// rather than a road one. Written out rather than left to the struct defaults because
 	// this is where a truck's performance is DECIDED, and a reader must be able to see the
 	// figures without opening another header to find out they happen to coincide.
-	Van.Ground.Taxi.Accel = 100.0;
-	Van.Ground.Taxi.Decel = 200.0;
-	Van.Ground.Taxi.SpeedCap = 1000.0;
+	Van.Chassis.Ground.Taxi.Accel = 100.0;
+	Van.Chassis.Ground.Taxi.Decel = 200.0;
+	Van.Chassis.Ground.Taxi.SpeedCap = 1000.0;
 
 	// ZERO, AND IT MEANS IT. A truck's wheels are driven and steered independently of any
 	// thrust line, so it can stop with the wheel turned and pull away again. None of the "a
@@ -128,26 +164,26 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// moment this truck got measured axles: under rolling-steer the yaw is v*sin(d)/L, so at
 	// zero speed the heading cannot move at all, let alone snap. What genuinely needs a
 	// non-zero floor is the SOLVER, not the vehicle - FRouteFollower::ProgressEpsilon.
-	Van.Ground.MinSteeringSpeed = 0.0;
+	Van.Chassis.Ground.MinSteeringSpeed = 0.0;
 
 	// 0.3 g. AUTHORED RATHER THAN INHERITED, which it was until 2026-09-15: the struct default
 	// is 147 uu/s^2, an AIRCRAFT CABIN comfort figure, and nothing here ever chose it. A van on
 	// dry concrete does 0.3 g without drama, and this is what decides corner speed once
-	// steering is geometric - at the 699 uu the lock allows, the difference between 11.5 km/h
-	// and 16. The note above about writing every figure out rather than inheriting it applies
+	// steering is geometric - at the 510 uu the lock allows, the difference between 9.9 km/h
+	// and 13.9 (699 uu, 11.5 and 16, while the truck was 8.5 m). The note above about writing every figure out rather than inheriting it applies
 	// to this one too; it was simply missed.
-	Van.Ground.MaxLateralAccelUu = 294.0;
+	Van.Chassis.Ground.MaxLateralAccelUu = 294.0;
 
 	// NINE TIMES an airframe's 10 deg/s. A van turns into a depot in its own length; an
 	// aircraft's rate here would sweep it across the kerb and back.
 	//
 	// A CEILING NOW, NOT THE LAW, because the axles below turn the geometric law on. It stays
 	// as the guard it always was against a rate nothing else bounds.
-	Van.Ground.MaxTurnRateDegPerSec = 90.0;
+	Van.Chassis.Ground.MaxTurnRateDegPerSec = 90.0;
 
 	// MEASURED AXLES, which is what stops the truck PIVOTING.
 	//
-	// FAirframe::Wheelbase's own comment argues the other way - "a van is authored at 90
+	// FChassis::Wheelbase's own comment argues the other way - "a van is authored at 90
 	// deg/s and would need 83 degrees of lock at its creep speed, so it is pivoting rather
 	// than steering, and a bicycle model would cripple every service vehicle on the airport".
 	// That was right about a van NOBODY HAD MEASURED: with no axles the wheelbase is zero,
@@ -156,11 +192,16 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// it is a spin about the rear axle. Reported from play on 2026-09-14: the truck drives up
 	// to the stand, stops, swings 90 degrees on the spot and drives off.
 	//
-	// fueltruck1 HAS been measured. Its rig puts steer_FL/FR at x = 494.5 uu and wheel_RL/RR
-	// at the origin, so the wheelbase is 4.945 m and the geometric law has real figures to
+	// fueltruck1 HAS been measured. Its rig puts steer_FL/FR at x = 360.7 uu and wheel_RL/RR
+	// at the origin, so the wheelbase is 3.607 m and the geometric law has real figures to
 	// work with.
 	//
-	// RESIZED 2026-09-15 from 3.607 m, when the truck itself went from 6.2 m to 8.5. The old
+	// BACK TO 3.607 m ON 2026-09-24, with the truck back to its modelled 6.2 m. The 8.5 m
+	// enlargement below was made to test crabbing, and uniform scaling took the width to
+	// 3.26 m over the tyres - wider than the 3 m road lane it drives in once roads had lanes
+	// and vehicles were gated on width. Shrunk as it was grown, uniformly, in the model.
+	//
+	// (History) RESIZED 2026-09-15 from 3.607 m, when the truck itself went from 6.2 m to 8.5. The old
 	// figures were a Ford Transit's: an 11.2 m kerb-to-kerb circle, parked beside a 737. 8.5 m
 	// is the SMALLEST real hydrant dispenser, and larger classes follow - which is why the
 	// road this turns on is sized from ResolveLargestServiceVehicle and never from here.
@@ -178,13 +219,13 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// asserts both figures against the mesh's own bones so they cannot drift from it.
 	// DECLARED, since the law stopped being inferred from these two numbers on
 	// 2026-09-15 - see ESteerLaw. A truck steers on a front axle; it does not pivot.
-	Van.SteerLaw = ESteerLaw::RollingSteer;
-	Van.SteerAxleX = 494.5;
-	Van.FixedAxleX = 0.0;
+	Van.Chassis.SteerLaw = ESteerLaw::RollingSteer;
+	Van.Chassis.SteerAxleX = 360.7;
+	Van.Chassis.FixedAxleX = 0.0;
 
 	// 45 degrees, written out rather than left at FGroundRegime's 60. The struct default is
-	// an aircraft nose gear's, and a rigid truck does not have that: 60 would give a 5.7 m
-	// radius on this wheelbase, a turning circle no 8.5 m truck makes.
+	// an aircraft nose gear's, and a rigid truck does not have that: 60 would give a 4.2 m
+	// radius on this wheelbase, a turning circle no rigid truck of this size makes.
 	//
 	// BACK TO 45 FROM 50, 2026-09-15, AND THE 50 WAS NEVER A MEASUREMENT. It was raised on
 	// 2026-09-14 so the truck's lock would clear a service road fillet authored at 500 uu -
@@ -193,29 +234,32 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// admitted, never for the one using it now. The fillet is DERIVED from the vehicle now
 	// (URoadProfile::ResolvedFilletRadius), so the lock can go back to what a rigid truck has.
 	//
-	// 45 on a 4.945 m wheelbase is a 6.99 m front-axle radius - a kerb-to-kerb circle near
-	// 16.2 m, correct for a rigid 8.5 m truck, where the old figures gave 11.2 m and a
-	// Transit. Reversing is tighter still, Wheelbase / tan(lock) = 4.95 m, which is why a
-	// driver backs into a tight space rather than nosing in.
-	Van.Ground.MaxSteerDegrees = 45.0;
+	// 45 on the 3.607 m wheelbase is a 5.10 m front-axle radius (it was 6.99 m at 8.5 m).
+	// Reversing is tighter still, Wheelbase / tan(lock) = 3.61 m, which is why a driver backs
+	// into a tight space rather than nosing in.
+	Van.Chassis.Ground.MaxSteerDegrees = 45.0;
 
-	// A TRUCK CANNOT FLY, AND SAYS SO. Zeroed rather than left at the struct defaults, which
-	// are a light twin's and are all NON-ZERO - so a default-constructed FApproachPerformance
-	// answers IsSet() == true, and this van would have passed as landable to anything that
-	// asked (ArrivalPlanner and FRoadAgent both branch on exactly that call). Nothing asks
-	// today, which is precisely why it is worth making false by construction rather than by
-	// nobody having got round to it.
-	//
-	// One decisive field each is enough: IsSet() is an AND over every figure.
-	Van.Approach.GlideslopeDegrees = 0.0;
-	Van.Climb.LiftAngleAtRotateDegrees = 0.0;
+	// THE BODY, measured from fueltruck1.glb on 2026-09-24 after it went back to 6.2 m: 481.8
+	// ahead of the rear axle to the front bumper, 138.2 behind it, 237.4 over the body with the
+	// wing mirrors excluded (2.79 m with them). 620 overall, which is VehicleFootprint - see
+	// Airside.Model.VehicleBody, which holds the two together.
+	Van.BodyWidth = 237.4;
+	Van.BodyFrontX = 481.8;
+	Van.BodyRearX = -138.2;
 
-	// ENGINE IS LEFT ALONE, deliberately, and it is the one exception. FRoadAgent runs the
-	// spool-up and spool-down through it and writes EngineRPM into FAgentMotion; zeroing it
-	// would make a truck's own motion struct describe an engine that never turns, which is a
-	// lie about a running vehicle rather than a refusal to fly. The box does not draw it.
+	// A TRUCK CANNOT FLY, AND NOW CANNOT EVEN BE ASKED TO. Until 2026-09-23 this was an
+	// FAirframe, and its climb and approach were zeroed here by hand because their struct
+	// defaults are a light twin's and all NON-ZERO - a default FApproachPerformance answers
+	// IsSet() == true, so an unzeroed van would have passed as landable to ArrivalPlanner and
+	// FRoadAgent, which both branch on exactly that call. An FVehicle has no climb, approach,
+	// gear or engine to zero, and FRoadAgent::AsAircraft() answers null for it, so the
+	// question is unrepresentable rather than answered false.
 	//
-	// What the inspector SAYS this is - see FAirframe::TypeCode. FUEL rather than VAN
+	// THE ENGINE WENT WITH THEM. It was left at its defaults so FRoadAgent would spool a
+	// propeller RPM into FAgentMotion for a truck; the one reader, UAirsideAgentAnim, drives a
+	// prop, and a truck's RPM is now zero - see FRoadAgent::StartEngineAtSpeed.
+	//
+	// What the inspector SAYS this is - see FVehicle::TypeCode. FUEL rather than VAN
 	// because the panel names the job the player can see, and this slice has exactly one.
 	Van.TypeCode = TEXT("FUEL");
 
@@ -282,6 +326,16 @@ FFenceKit UAirsideSettings::ResolveFenceKit()
 		Kit.LinePost = Content->FenceLinePost.LoadSynchronous();
 		Kit.HeavyPost = Content->FenceHeavyPost.LoadSynchronous();
 		Kit.Fabric = Content->FenceFabricMaterial.LoadSynchronous();
+
+		// THE NAME IS build_fence_content.py's FADE list's. A missing parameter leaves 0 - no
+		// cull - rather than culling posts the material is still drawing.
+		// ENFORCED BY: Airside.Content.FenceFadeWired (the collection carries PostFadeEnd)
+		if (const UMaterialParameterCollection* Fade = Content->FenceFadeCollection.LoadSynchronous())
+		{
+			bool bFound = false;
+			const float End = Fade->GetScalarParameterDefaultValue(TEXT("PostFadeEnd"), bFound);
+			Kit.PostFadeEndUu = bFound ? End : 0.0;
+		}
 	}
 	return Kit;
 }

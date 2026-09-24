@@ -94,7 +94,7 @@ public:
 	 * its default on assets saved before it existed.
 	 *
 	 * A type with this default and no axles therefore declares a law its data cannot support,
-	 * which FAirframe::EffectiveSteerLaw reports as an error and falls back from. That is the
+	 * which FChassis::EffectiveSteerLaw reports as an error and falls back from. That is the
 	 * intended outcome: the behaviour is what it always was, and it is now loud instead of
 	 * silent.
 	 */
@@ -102,7 +102,7 @@ public:
 
 	/**
 	 * The steered axle in local X, uu. Zero is this class's convention - the origin IS the
-	 * nose gear, so there is nothing to offset. See FAirframe::SteerAxleX.
+	 * nose gear, so there is nothing to offset. See FChassis::SteerAxleX.
 	 */
 	UPROPERTY(EditAnywhere) double SteerAxleX = 0.0;
 
@@ -111,7 +111,7 @@ public:
 
 	/**
 	 * Distance between the two main wheels, uu. Zero means unmeasured - see
-	 * FAirframe::MainGearTrack, which this is carried into by Airframe() below.
+	 * FChassis::MainGearTrack, which this is carried into by Airframe() below.
 	 *
 	 * MEASURED FROM THE RIG by the build script, not typed from a datasheet, for the same
 	 * reason the axles are: it is a fact about the model that is DRAWN. Tyre smoke hung off
@@ -200,22 +200,22 @@ public:
 	FAirframe Airframe() const
 	{
 		FAirframe Out;
-		Out.Ground = Ground;
+		Out.Chassis.Ground = Ground;
 		Out.Climb = Climb;
 		Out.Approach = Approach;
 		Out.Engine = Engine;
 		Out.Gear = Gear;
 		Out.Wingspan = Footprint.Wingspan;
-		Out.SteerLaw = SteerLaw;
-		Out.SteerAxleX = SteerAxleX;
-		Out.MainGearTrack = MainGearTrack;
-		Out.FixedAxleX = FixedAxleX;
+		Out.Chassis.SteerLaw = SteerLaw;
+		Out.Chassis.SteerAxleX = SteerAxleX;
+		Out.Chassis.MainGearTrack = MainGearTrack;
+		Out.Chassis.FixedAxleX = FixedAxleX;
 
 		// DERIVED, not authored: two numbers that must agree are one number. The footprint
 		// already says where the nose and tail are, so the centre is arithmetic - and an
 		// authored copy would drift the first time a mesh was re-exported, which is exactly
 		// how the four position figures in build_plane2_type.py went stale.
-		Out.BodyCentreX = (Footprint.NoseX + Footprint.TailX) * 0.5;
+		Out.Chassis.BodyCentreX = (Footprint.NoseX + Footprint.TailX) * 0.5;
 		Out.Requirements = Requirements;
 		// ShortCode, falling back to Code. Assigning Code alone was the defect: it is the
 		// aerodrome letter, so TypeCode could not tell an A320 from a 737.

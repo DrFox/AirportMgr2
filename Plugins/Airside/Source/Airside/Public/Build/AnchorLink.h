@@ -4,7 +4,7 @@
 #include "Build/AnchorLinkFinder.h"
 
 class URoadNetwork;
-struct FAirframe;
+struct FChassis;
 
 /**
  * Joins entity anchors to the guideline graph by casting each one's lead-in.
@@ -138,7 +138,7 @@ struct AIRSIDE_API FAnchorLink
 	 * the same answer to every Join it calls, which is also why this file no longer includes
 	 * Content/AirsideSettings.h (Check-Architecture's Build->Content rule).
 	 */
-	static int32 Build(URoadNetwork& Network, const FAirframe& LargestServiceVehicle,
+	static int32 Build(URoadNetwork& Network, const FChassis& LargestServiceVehicle,
 		double MaxLeadIn = DefaultMaxLeadIn, double ServiceLinkRadius = DefaultServiceLinkRadius);
 
 	/**
@@ -177,14 +177,14 @@ struct AIRSIDE_API FAnchorLink
 	 * moments earlier by this same link's own Resolve.
 	 */
 	static FGuidelineNodeId Join(URoadNetwork& Network, FPendingLink& Link, const FLinkHit& Hit,
-		TSet<FGuidelineNodeId>& AnchorNodes, const FAirframe& LargestServiceVehicle);
+		TSet<FGuidelineNodeId>& AnchorNodes, const FChassis& LargestServiceVehicle);
 
 	/**
 	 * The radius a ground-vehicle link's curves are laid at: the largest service vehicle's lock
 	 * plus a tenth. Join sizes every ground fillet from this and PoseSetbackFor sizes the room
 	 * for one from it - ONE figure, so the room asked for is the room the join will spend.
 	 */
-	static double ServiceLaneRadius(const FAirframe& LargestServiceVehicle);
+	static double ServiceLaneRadius(const FChassis& LargestServiceVehicle);
 
 	/**
 	 * How far to set a service pose back from At, along Inward, so that the link Build will lay
@@ -201,5 +201,5 @@ struct AIRSIDE_API FAnchorLink
 	 * PIE 2026-09-22.
 	 */
 	static double PoseSetbackFor(const URoadNetwork& Network, const FVector2D& At,
-		const FVector2D& Inward, const FAirframe& LargestServiceVehicle, double ServiceLinkRadius);
+		const FVector2D& Inward, const FChassis& LargestServiceVehicle, double ServiceLinkRadius);
 };

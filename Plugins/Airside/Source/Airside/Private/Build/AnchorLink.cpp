@@ -595,7 +595,7 @@ FLinkHit FAnchorLink::Resolve(const URoadNetwork& Network, const FPendingLink& L
 }
 
 FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, const FLinkHit& Hit,
-	TSet<FGuidelineNodeId>& AnchorNodes, const FAirframe& LargestServiceVehicle)
+	TSet<FGuidelineNodeId>& AnchorNodes, const FChassis& LargestServiceVehicle)
 {
 	const FGuidelineEdge* Found = Network.GetGuidelineEdge(Hit.Edge);
 	const FGuidelineNode* EndA = Found != nullptr ? Network.GetGuidelineNode(Found->A) : nullptr;
@@ -1100,7 +1100,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	return LeadEnd;
 }
 
-int32 FAnchorLink::Build(URoadNetwork& Network, const FAirframe& LargestServiceVehicle,
+int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVehicle,
 	double MaxLeadIn, double ServiceLinkRadius)
 {
 	// Gathered up front, because joining one anchor adds and removes edges and an
@@ -1165,10 +1165,38 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FAirframe& LargestServiceV
 			continue;
 		}
 
+		// Read BEFORE Join, which splits Hit.Edge and retires its id.
+		const FGuidelineEdge* HitEdge = Network.GetGuidelineEdge(Hit.Edge);
+		const FRoadSegmentId JoinedSegment = HitEdge ? HitEdge->DerivedFrom : FRoadSegmentId();
+		const int32 JoinedIndex = HitEdge ? HitEdge->DerivedGuidelineIndex : INDEX_NONE;
+
 		const FGuidelineNodeId LeadEnd = Join(Network, Link, Hit, AnchorNodes, LargestServiceVehicle);
 		if (!LeadEnd.IsSet())
 		{
 			continue;
+		}
+
+		// THE OTHER LANE TOO (spec 2026-09-23 §5). Joining only the nearest guideline was right
+		// while a road was one line; on a two-lane road it made the anchor reachable from one
+		// direction only, and traffic the other way drove to the next dead end and back. A
+		// driveway serves both lanes; so does this. Aircraft are excluded: a taxiway is one
+		// line, and a ray-cast lead-in has no second lane to find. Not counted in Joined - the
+		// census counts anchors, and this is still one anchor.
+		//
+		// KNOWN GAP (review of 2026-09-23, left as is): the far lane's lead-in CROSSES the near
+		// lane with no graph node where they cross, so the claim model - per edge and per node -
+		// cannot see a truck turning across it and one driving along it. Two trucks can overlap
+		// at a driveway. Splitting both at the crossing would fix it, and would also make the
+		// crossing a junction trucks could turn at; not worth that until it is seen in play.
+		// ENFORCED BY: Airside.Build.TwoWay.AnchorBothLanes
+		if (Link.Class != ETraversalClass::Aircraft && JoinedSegment.IsSet())
+		{
+			const FLinkHit Sibling = FindSiblingLane(Network, Link, AnchorNodes, JoinedSegment, JoinedIndex);
+			if (Sibling.IsSet())
+			{
+				FPendingLink Again = Link;
+				Join(Network, Again, Sibling, AnchorNodes, LargestServiceVehicle);
+			}
 		}
 
 		++Joined;
@@ -1245,7 +1273,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FAirframe& LargestServiceV
 	return Joined;
 }
 
-double FAnchorLink::ServiceLaneRadius(const FAirframe& LargestServiceVehicle)
+double FAnchorLink::ServiceLaneRadius(const FChassis& LargestServiceVehicle)
 {
 	// PLUS A TENTH ON THE LOCK, measured rather than chosen - see Join's own comment on the 4 m
 	// fixture that came out at 707 against 699.4 when sized at exactly the lock.
@@ -1254,7 +1282,7 @@ double FAnchorLink::ServiceLaneRadius(const FAirframe& LargestServiceVehicle)
 }
 
 double FAnchorLink::PoseSetbackFor(const URoadNetwork& Network, const FVector2D& At,
-	const FVector2D& Inward, const FAirframe& LargestServiceVehicle, double ServiceLinkRadius)
+	const FVector2D& Inward, const FChassis& LargestServiceVehicle, double ServiceLinkRadius)
 {
 	// THE LINK Gather WOULD MAKE for a service pose: found by proximity, within the service
 	// radius, for a ground vehicle.

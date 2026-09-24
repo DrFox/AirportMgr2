@@ -33,13 +33,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FTakeoffRunTest::RunTest(const FString& Parameters)
 {
 	const FAirframe PiperAirframe = TestAirframes::Piper();
-	const FGroundPerformance& Piper = PiperAirframe.Ground;
+	const FGroundPerformance& Piper = PiperAirframe.Chassis.Ground;
 	const FClimbPerformance& Climb = PiperAirframe.Climb;
 
 	// Issue #83: FTakeoffRun no longer stores Ground/Climb - Start and Advance take the
 	// bundle by reference instead, same as FRoadAgent hands its own Airframe in.
 	FAirframe Airframe;
-	Airframe.Ground = Piper;
+	Airframe.Chassis.Ground = Piper;
 	Airframe.Climb = Climb;
 
 	if (!TestTrue(TEXT("the Meridian has take-off and climb performance"),

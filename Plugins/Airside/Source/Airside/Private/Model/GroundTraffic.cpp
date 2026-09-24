@@ -160,7 +160,26 @@ int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 
 	FRoadAgent Agent;
 	Agent.StartTaxi(Plan, Airframe);
+	return AdmitDispatched(MoveTemp(Agent), Network, Plan, Class, ShutdownPauseSeconds);
+}
 
+int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePlan& Plan,
+	const FVehicle& Vehicle, ETraversalClass Class, double ShutdownPauseSeconds)
+{
+	// The same refusal the FAirframe overload makes, before anything is started.
+	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
+	{
+		return 0;
+	}
+
+	FRoadAgent Agent;
+	Agent.StartDrive(Plan, Vehicle);
+	return AdmitDispatched(MoveTemp(Agent), Network, Plan, Class, ShutdownPauseSeconds);
+}
+
+int32 UGroundTraffic::AdmitDispatched(FRoadAgent&& Agent, const URoadNetwork* Network,
+	const FRoutePlan& Plan, ETraversalClass Class, double ShutdownPauseSeconds)
+{
 	// FRoadAgent is world-free and cannot read the actor's UPROPERTY for itself, so the
 	// pause is copied in at dispatch - the only time the two ever need to meet.
 	Agent.ShutdownPause = ShutdownPauseSeconds;
@@ -202,7 +221,9 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 	// is a fact about the network and the last polyline point is the only thing that knows
 	// where the route actually finished. A route that ends anywhere else simply taxis, which
 	// is what every route did before departures existed.
-	if (Network == nullptr || Plan.Polyline.Num() == 0 || !Agent.Airframe.Climb.IsSet())
+	// AsAircraft, since 2026-09-23: a vehicle has no climb to ask about, rather than a zeroed one.
+	const FAirframe* Aircraft = Agent.AsAircraft();
+	if (Network == nullptr || Plan.Polyline.Num() == 0 || Aircraft == nullptr || !Aircraft->Climb.IsSet())
 	{
 		return;
 	}
@@ -342,10 +363,10 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		return false;
 	}
 
-	// The airframe is the agent's own - a redirect changes where it goes, not what it is.
-	// Copied out first: StartTaxi assigns Airframe from its argument, and handing it a
-	// reference to the very field it overwrites is a self-assignment nobody should rely on.
-	const FAirframe Own = Agent.Airframe;
+	// The bundle is the agent's own - a redirect changes where it goes, not what it is. It
+	// used to be copied out here and handed back to StartTaxi, which assigned it from its
+	// argument; RestartTaxi keeps whichever bundle (airframe or vehicle) the agent already
+	// holds and never touches it, so there is nothing to copy and no self-assignment.
 
 	// THE OLD STAND FREES NOW, between ticks: the next claim pass would drop it anyway
 	// (ClaimGoalNode reads the new goal), but a planner asking in this frame must see it
@@ -373,7 +394,7 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	const bool bWasRunning = Agent.bEngineRunning;
 	const double PriorRPM = Agent.EngineRPM;
 
-	Agent.StartTaxi(Plan, Own);
+	Agent.RestartTaxi(Plan);
 
 	if (bWasRunning)
 	{
@@ -451,6 +472,16 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		return EDepartureRefusal::NotParked;
 	}
 	FRoadAgent& Agent = Agents[Index];
+
+	// AN AEROPLANE'S ERRAND. A parked vehicle has no runway to plan for and no pushback need;
+	// before 2026-09-23 it would have been planned with a zeroed airframe and refused by the
+	// planner for want of a take-off roll. Refused here, by kind, and said so.
+	const FAirframe* Aircraft = Agent.AsAircraft();
+	if (Aircraft == nullptr)
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("DepartAgent %d refused: not an aircraft."), AgentId);
+		return EDepartureRefusal::NoRoute;
+	}
 	if (!Agent.GoalNode.IsSet())
 	{
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("DepartAgent %d refused: parked at no node."), AgentId);
@@ -459,7 +490,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 
 	// From where it PARKED - its goal node - not from its polyline position: the search is
 	// over the graph and the pose node is the graph's name for this stand.
-	const FDeparturePlan Plan = DeparturePlanner::PlanAny(Network, Agent.GoalNode, Agent.Airframe, Agent.Class);
+	const FDeparturePlan Plan = DeparturePlanner::PlanAny(Network, Agent.GoalNode, *Aircraft, Agent.Class);
 	UE_LOG(LogAirsideTraffic, Log, TEXT("DepartAgent %d: %s"), AgentId, *DeparturePlanner::Describe(Plan));
 	if (!Plan.IsValid())
 	{
@@ -510,7 +541,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	// far past a junction an aeroplane must finish is the same question as how much room it
 	// takes up, and inventing a second answer is how the two drift.
 	const FPushbackPlan Push = PushbackPlanner::Plan(Network, Agent.GoalNode, Plan,
-		Agent.Airframe, Agent.Class,
+		*Aircraft, Agent.Class,
 		Rules.FootprintFor(Agent.Class) + Rules.GapFor(Agent.Class));
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("DepartAgent %d: %s"), AgentId,
@@ -545,9 +576,12 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	}
 
 	const EAgentPhase Before = Agent.Phase;
-	if (!Agent.StartPushback(Push.PushRoute, Push.TaxiOutRoute, Agent.Airframe,
-		Rules.PushSpeedFor(Agent.Airframe.PushbackNeed), Rules.PushAccel,
-		Agent.Airframe.Engine.MaxRPM * Rules.PowerbackRPMFraction))
+	// COPIED, because StartPushback assigns the agent's own airframe from its argument and
+	// Aircraft points at that very field.
+	const FAirframe Own = *Aircraft;
+	if (!Agent.StartPushback(Push.PushRoute, Push.TaxiOutRoute, Own,
+		Rules.PushSpeedFor(Own.PushbackNeed), Rules.PushAccel,
+		Own.Engine.MaxRPM * Rules.PowerbackRPMFraction))
 	{
 		return EDepartureRefusal::NoRoute;
 	}
@@ -565,7 +599,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Agent %d pushing back %.0f uu, then %.0f uu to taxi out, %s"),
 		AgentId, Push.PushRoute.Length, Push.TaxiOutRoute.Length,
-		*UEnum::GetValueAsString(Agent.Airframe.PushbackNeed));
+		*UEnum::GetValueAsString(Own.PushbackNeed));
 
 	OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
 	// #169: the push claims the taxi-out goal node (ClaimGoalNodeAtDispatch, above) in this
@@ -960,12 +994,12 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 	for (const int32 Id : Waiting)
 	{
 		const FRoadAgent* Agent = FindAgent(Id);
-		if (Agent == nullptr)
+		if (Agent == nullptr || Agent->AsAircraft() == nullptr)
 		{
 			continue;
 		}
 		FRoutePlan Route;
-		const FGuidelineNodeId Stand = ArrivalPlanner::ChooseStand(Network, Agent->GoalNode, Agent->Airframe, &Occupancy, Id, &Route);
+		const FGuidelineNodeId Stand = ArrivalPlanner::ChooseStand(Network, Agent->GoalNode, *Agent->AsAircraft(), &Occupancy, Id, &Route);
 		if (!Stand.IsSet() || !Route.IsValid())
 		{
 			continue;

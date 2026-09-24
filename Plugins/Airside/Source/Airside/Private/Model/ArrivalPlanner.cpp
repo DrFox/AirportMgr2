@@ -212,7 +212,7 @@ namespace ArrivalPlanner
 		// The distance the model actually flies, plus its margin - see FLandingRun. The closed
 		// form this replaced demanded 649 m of a 297 m landing and refused every runway on the
 		// field, which is what "pressing 7 does nothing" turned out to be.
-		Out.Needed = FLandingRun::RequiredLandingDistance(Airframe.Ground, Airframe.Climb, Airframe.Approach)
+		Out.Needed = FLandingRun::RequiredLandingDistance(Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach)
 			* FLandingRun::LandingMargin;
 
 		// 2. THE EARLIEST EXIT IT COULD TAKE, asked before anything is armed - the same

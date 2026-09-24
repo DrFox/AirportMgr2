@@ -506,6 +506,24 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 	{
 		FenceHeavyPostsInto->SetStaticMesh(Kit.HeavyPost);
 	}
+	// CULLED WHERE THE MATERIAL HAS FADED THEM, so a post past PostFadeEnd costs nothing
+	// rather than being drawn and fully dithered away. The engine culls on the distance to
+	// each instance's BOUNDS CENTRE (NaniteCullingCommon.ush: "tests just the center-point"),
+	// while the material fades per pixel, and a pixel can sit a whole bounds radius nearer
+	// the camera than the centre - so the radius is added, or the tip of a post the material
+	// still half-draws would vanish at once. Reset to 0 (never) without a fade, for the
+	// SetStaticMesh reason above: the content set can change under an open editor.
+	for (UHierarchicalInstancedStaticMeshComponent* Posts : { FencePostsInto.Get(), FenceHeavyPostsInto.Get() })
+	{
+		if (Posts == nullptr)
+		{
+			continue;
+		}
+		const UStaticMesh* Mesh = Posts->GetStaticMesh();
+		const int32 End = (Kit.PostFadeEndUu > 0.0 && Mesh != nullptr)
+			? FMath::CeilToInt32(Kit.PostFadeEndUu + Mesh->GetBounds().SphereRadius) : 0;
+		Posts->SetCullDistances(0, End);
+	}
 	FRoadMeshBuffers Fabric;
 
 	// THE GHOST MATERIAL IS THE ONE GhostBoxes WEARS, on every pooled ghost - one source, set

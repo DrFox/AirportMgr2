@@ -51,6 +51,15 @@ void FRoadAgent::StartEngineAtSpeed()
 {
 	bEngineRunning = true;
 
+	// A VEHICLE HAS NO PROPELLER TO SHOW, and since 2026-09-23 no FEnginePerformance to spool
+	// one with: it carried an aeroplane's engine figures only because it was carried as an
+	// FAirframe. Running, at zero RPM - the only reader, UAirsideAgentAnim, drives a prop.
+	if (Body != EAgentBody::Aircraft)
+	{
+		EngineRPM = 0.0;
+		return;
+	}
+
 	// The same fallback AdvanceEngine uses when nothing is authored, so an airframe with no
 	// engine figures still shows a turning propeller rather than a stopped one.
 	EngineRPM = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : FEnginePerformance{}.MaxRPM;
@@ -58,6 +67,13 @@ void FRoadAgent::StartEngineAtSpeed()
 
 void FRoadAgent::AdvanceEngine(double DeltaSeconds)
 {
+	// See StartEngineAtSpeed: a vehicle's RPM stays zero, running or not.
+	if (Body != EAgentBody::Aircraft)
+	{
+		EngineRPM = 0.0;
+		return;
+	}
+
 	if (!Airframe.Engine.IsSet())
 	{
 		// Nothing authored: fall back to the switch this replaced, so an airframe with no
@@ -81,7 +97,9 @@ void FRoadAgent::AdvanceEngine(double DeltaSeconds)
 
 void FRoadAgent::AdvanceGear(double DeltaSeconds)
 {
-	if (!Airframe.Gear.IsSet())
+	// A VEHICLE'S WHEELS ARE ITS GEAR and never retract - the same fixed-gear answer an
+	// aeroplane with no travel authored gets, reached by kind rather than by a zeroed field.
+	if (Body != EAgentBody::Aircraft || !Airframe.Gear.IsSet())
 	{
 		// FIXED GEAR, permanently - see FGearPerformance, where zero travel means a fact
 		// about the aeroplane rather than a missing measurement. Asserted rather than left
@@ -230,7 +248,7 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// WHERE IT PITCHES ABOUT, which is a fact about the airframe rather than about this
 	// frame - carried here because FAgentMotion is everything the view needs and the view
 	// has no airframe to ask. See FAgentMotion::PitchPivotX.
-	Motion.PitchPivotX = Airframe.FixedAxleX;
+	Motion.PitchPivotX = Chassis().FixedAxleX;
 
 	// THE STEERING, from whichever phase is doing it - which for every phase but one is the
 	// follower. A landing rollout and a take-off roll are steered on the rudder with the
@@ -289,6 +307,7 @@ bool FRoadAgent::StartArrival(const FRunwayEnd& End, const FAirframe& InAirframe
 	}
 
 	Phase = EAgentPhase::Arriving;
+	Body = EAgentBody::Aircraft;
 	Airframe = InAirframe;
 	TaxiInPlan = InTaxiInPlan;
 	bEngineRunning = true;
@@ -315,9 +334,27 @@ bool FRoadAgent::StartArrival(const FRunwayEnd& End, const FAirframe& InAirframe
 
 void FRoadAgent::StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe)
 {
-	Phase = EAgentPhase::Taxiing;
+	Body = EAgentBody::Aircraft;
 	Airframe = InAirframe;
-	Follower.Start(Plan, InAirframe);
+	RestartTaxi(Plan);
+}
+
+void FRoadAgent::StartDrive(const FRoutePlan& Plan, const FVehicle& InVehicle)
+{
+	Body = EAgentBody::Vehicle;
+	Vehicle = InVehicle;
+	RestartTaxi(Plan);
+}
+
+void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled)
+{
+	// THE BODY OF WHAT StartTaxi USED TO BE, minus the one line that stored the airframe:
+	// the bundle is whatever the caller (StartTaxi, StartDrive, or a redirect keeping its own)
+	// has already put in place, and Chassis() reads the right one of the two.
+	Phase = EAgentPhase::Taxiing;
+	// InitialTravelled is non-zero for one caller: a vehicle rejoining its lane MID-EDGE after a
+	// drive-side flip (FPlanReResolver), which starts part-way along the plan's first step.
+	Follower.Start(Plan, Chassis(), 0.0, TOptional<double>(), InitialTravelled);
 
 	bEngineRunning = true;
 
@@ -353,6 +390,7 @@ bool FRoadAgent::StartPushback(const FRoutePlan& PushPlan, const FRoutePlan& InT
 	}
 
 	Phase = EAgentPhase::Manoeuvring;
+	Body = EAgentBody::Aircraft;
 	Airframe = InAirframe;
 	PushbackThrustRPM = ThrustRPM;
 
@@ -447,7 +485,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		OutEvent = EAgentEvent::Vacated;
 		// Speed, heading AND distance carry over: the rollout crossed VacateAt last frame
 		// and stopped this far past it, which is this far along the arc.
-		Follower.Start(TaxiInPlan, Airframe, Arrival.Speed, LastMotion.Heading,
+		Follower.Start(TaxiInPlan, Chassis(), Arrival.Speed, LastMotion.Heading,
 			Arrival.Travelled - Arrival.VacateAt);
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Vacated; taxiing in."));
 
@@ -513,7 +551,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			// would undo the spool the push has been running - see StartPushback.
 			Phase = EAgentPhase::Taxiing;
 			OutEvent = EAgentEvent::PushedBack;
-			Follower.Start(TaxiOutPlan, Airframe, 0.0, Pushback.Heading);
+			Follower.Start(TaxiOutPlan, Chassis(), 0.0, Pushback.Heading);
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Push complete; taxiing out."));
 
 			// AND TAXI THIS SAME FRAME, falling out of this branch rather than returning, for
@@ -545,7 +583,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// StopWithin, not the unbounded overload: arbitration is the ONE input into the one
 		// follower, and it defaults to unbounded, so an agent nobody has arbitrated for
 		// drives exactly as it did before M2.
-		if (Follower.Advance(DeltaSeconds, Airframe, StopWithin, FollowAt, FollowHeading))
+		if (Follower.Advance(DeltaSeconds, Chassis(), StopWithin, FollowAt, FollowHeading))
 		{
 			LastMotion = DescribeMotion(FollowAt, FollowHeading);
 			OutMotion = LastMotion;
@@ -621,7 +659,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// and walked rather than steered: a heading error going backwards GROWS.
 		FVector2D BackAt = At;
 		double BackHeading = Heading;
-		if (Reverse.Advance(DeltaSeconds, Airframe, StopWithin, BackAt, BackHeading))
+		if (Reverse.Advance(DeltaSeconds, Chassis(), StopWithin, BackAt, BackHeading))
 		{
 			LastMotion = DescribeMotion(BackAt, BackHeading);
 			OutMotion = LastMotion;
@@ -665,7 +703,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		}
 
 		Phase = EAgentPhase::Taxiing;
-		Follower.Start(Remainder, Airframe, 0.0, LastMotion.Heading);
+		Follower.Start(Remainder, Chassis(), 0.0, LastMotion.Heading);
 
 		// AND ONE WHEELBASE IN, because the two phases measure DIFFERENT AXLES along their
 		// polyline and this is where that bites. FReverseRun tracks the FIXED axle - it is what
@@ -681,7 +719,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// moving it afterwards is the whole of the correction.
 		//
 		// CLAMPED, so a remainder shorter than the vehicle cannot seek past its own end.
-		Follower.Travelled = FMath::Min(Airframe.Wheelbase(), Remainder.Length);
+		Follower.Travelled = FMath::Min(Chassis().Wheelbase(), Remainder.Length);
 
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Backed out; driving on (%.0f uu left)."),
 			Remainder.Length);
@@ -691,7 +729,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// and a frame with no motion at all is the step the handover-continuity test catches.
 		FVector2D OnAt = At;
 		double OnHeading = LastMotion.Heading;
-		if (Follower.Advance(DeltaSeconds, Airframe, StopWithin, OnAt, OnHeading))
+		if (Follower.Advance(DeltaSeconds, Chassis(), StopWithin, OnAt, OnHeading))
 		{
 			LastMotion = DescribeMotion(OnAt, OnHeading);
 		}
@@ -781,7 +819,7 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 	}
 
 	const FRoutePlan Span = RouteSearch::Section(Follower.Plan, From, To);
-	if (Reverse.Start(Span, Airframe, ReverseSpeed))
+	if (Reverse.Start(Span, Chassis(), ReverseSpeed))
 	{
 		// WHERE THE TAXI PICKS UP, read before the phase changes because
 		// Follower.Plan is what it is read from.
@@ -814,7 +852,7 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 		// 494 uu wheelbase by AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip,
 		// which is the test that reproduces the REDIRECT the player watched -
 		// a truck parked at a service point being handed its route home.
-		Reverse.Travelled = FMath::Min(Airframe.Wheelbase(), Span.Length);
+		Reverse.Travelled = FMath::Min(Chassis().Wheelbase(), Span.Length);
 
 		// POSED ON THE ARMING FRAME, not on the next one, and this is the same
 		// rule UGroundTraffic follows at dispatch: a zero-second Advance asks
@@ -824,7 +862,7 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 		// showed up as exactly that the first time this ran.
 		FVector2D BackAt = At;
 		double BackHeading = Heading;
-		Reverse.Advance(0.0, Airframe, StopWithin, BackAt, BackHeading);
+		Reverse.Advance(0.0, Chassis(), StopWithin, BackAt, BackHeading);
 		LastMotion = DescribeMotion(BackAt, BackHeading);
 		OutMotion = LastMotion;
 		UE_LOG(LogAirsideTraffic, Log,
@@ -840,7 +878,7 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 	UE_LOG(LogAirsideTraffic, Warning,
 		TEXT("Reverse leg refused - %s cannot back along it. Stopping rather "
 		     "than driving it forwards."),
-		Airframe.HasAxles() ? TEXT("this vehicle") : TEXT("an unmeasured vehicle"));
+		Chassis().HasAxles() ? TEXT("this vehicle") : TEXT("an unmeasured vehicle"));
 	Follower.Speed = 0.0;
 	OutMotion = LastMotion;
 	return true;

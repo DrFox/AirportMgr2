@@ -168,8 +168,8 @@ struct FNullEditTarget : IRoadEditTarget
 	virtual double GetMinimumRunwayLength() const override { return 0.0; }
 	virtual int32 GetRunwayProfileCount() const override { return 0; }
 	virtual URoadProfile* ResolveRunwayProfile(int32) const override { return nullptr; }
-	virtual int32 GetTaxiwayProfileCount() const override { return 0; }
-	virtual URoadProfile* ResolveTaxiwayProfile(int32) const override { return nullptr; }
+	virtual int32 GetWidthCount(ERoadKind) const override { return 0; }
+	virtual URoadProfile* ResolveWidthProfile(ERoadKind, int32) const override { return nullptr; }
 	virtual URoadProfile* ResolveProfileFor(ERoadKind, int32) override { return nullptr; }
 	virtual bool DisconnectGuideline(int32) override { return false; }
 	virtual bool SetIntermediateHoldingPosition(int32, bool) override { return false; }
@@ -208,6 +208,7 @@ struct FNullEditTarget : IRoadEditTarget
 		return FRoutePlan();
 	}
 	virtual bool DispatchAgent(const FRoutePlan&, const FAirframe&, ETraversalClass) override { return false; }
+	virtual bool DispatchAgent(const FRoutePlan&, const FVehicle&, ETraversalClass) override { return false; }
 	using IRoadEditTarget::DispatchAgent;
 	virtual void RebuildMesh() override {}
 

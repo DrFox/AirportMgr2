@@ -54,7 +54,7 @@ namespace
 	}
 }
 
-bool FReverseRun::Start(const FRoutePlan& InPlan, const FAirframe& Airframe, double InReverseSpeed)
+bool FReverseRun::Start(const FRoutePlan& InPlan, const FChassis& Chassis, double InReverseSpeed)
 {
 	if (!InPlan.IsValid() || InPlan.Polyline.Num() < 2 || InPlan.Length <= UE_KINDA_SMALL_NUMBER)
 	{
@@ -63,7 +63,7 @@ bool FReverseRun::Start(const FRoutePlan& InPlan, const FAirframe& Airframe, dou
 
 	// LOGGED ONCE, HERE, rather than from EffectiveSteerLaw itself - see #176. Advance below
 	// calls it every frame this manoeuvre runs; Start runs once per bay entry.
-	WarnIfSteerLawUnsupported(Airframe);
+	WarnIfSteerLawUnsupported(Chassis);
 
 	// THE CHECK THAT MAKES THIS SAFE TO PLAY BACK. A pre-computed manoeuvre is only as good as
 	// the curve it was given, and playing back a curve the body cannot hold is exactly the
@@ -75,7 +75,7 @@ bool FReverseRun::Start(const FRoutePlan& InPlan, const FAirframe& Airframe, dou
 	// its rule is what let four attempts at stand routing ship green - see
 	// FSpeedProfile::WasTighterThanLock.
 	FSpeedProfile Check;
-	Check.Build(InPlan.Polyline, Airframe, EDriveDirection::Reverse);
+	Check.Build(InPlan.Polyline, Chassis, EDriveDirection::Reverse);
 
 	if (Check.WasTighterThanLock())
 	{
@@ -84,8 +84,8 @@ bool FReverseRun::Start(const FRoutePlan& InPlan, const FAirframe& Airframe, dou
 			     "only hold R>=%.0f going backwards (wheelbase %.0f, lock %.0f deg). Widen the "
 			     "bay's approach."),
 			Check.GetTightestRadius(), Check.GetTightestAt(),
-			Airframe.TightestReversibleRadius(), Airframe.Wheelbase(),
-			Airframe.Ground.MaxSteerDegrees);
+			Chassis.TightestReversibleRadius(), Chassis.Wheelbase(),
+			Chassis.Ground.MaxSteerDegrees);
 		return false;
 	}
 
@@ -117,7 +117,7 @@ bool FReverseRun::Start(const FRoutePlan& InPlan, const FAirframe& Airframe, dou
 	return true;
 }
 
-bool FReverseRun::Advance(double DeltaSeconds, const FAirframe& Airframe, double StopWithin,
+bool FReverseRun::Advance(double DeltaSeconds, const FChassis& Chassis, double StopWithin,
 	FVector2D& OutPosition, double& OutHeading)
 {
 	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
@@ -145,7 +145,7 @@ bool FReverseRun::Advance(double DeltaSeconds, const FAirframe& Airframe, double
 
 	// WHERE THE WHEELS POINT. Backing along an arc, a rigid vehicle pivots about its FIXED
 	// axle - the point this run walks along the line - so tan(steer) = Wheelbase / Radius, the
-	// exact inverse of FAirframe::TightestReversibleRadius. Curvature is 1/Radius with a sign,
+	// exact inverse of FChassis::TightestReversibleRadius. Curvature is 1/Radius with a sign,
 	// which is why it is expressed that way round and never divides by a radius that could be
 	// a straight line's infinity.
 	//
@@ -160,14 +160,14 @@ bool FReverseRun::Advance(double DeltaSeconds, const FAirframe& Airframe, double
 	// can hold - clamped anyway, since a curvature read across a vertex on a plan that only
 	// just passed could round the wrong side of it, and a wheel through its own stop is a
 	// thing the player sees.
-	if (Airframe.EffectiveSteerLaw() == ESteerLaw::RollingSteer
-		&& Airframe.Wheelbase() > UE_DOUBLE_KINDA_SMALL_NUMBER)
+	if (Chassis.EffectiveSteerLaw() == ESteerLaw::RollingSteer
+		&& Chassis.Wheelbase() > UE_DOUBLE_KINDA_SMALL_NUMBER)
 	{
 		const double Curvature =
-			SignedCurvature(Plan.Polyline, Plan.Length, Travelled, Airframe.Wheelbase());
-		const double Lock = FMath::Clamp(Airframe.Ground.MaxSteerDegrees, 0.0, 90.0);
+			SignedCurvature(Plan.Polyline, Plan.Length, Travelled, Chassis.Wheelbase());
+		const double Lock = FMath::Clamp(Chassis.Ground.MaxSteerDegrees, 0.0, 90.0);
 		SteerDegrees = FMath::Clamp(
-			FMath::RadiansToDegrees(-FMath::Atan(Curvature * Airframe.Wheelbase())), -Lock, Lock);
+			FMath::RadiansToDegrees(-FMath::Atan(Curvature * Chassis.Wheelbase())), -Lock, Lock);
 	}
 	else
 	{

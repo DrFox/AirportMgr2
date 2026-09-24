@@ -78,7 +78,7 @@ struct AIRSIDE_API FReverseRun
 	 * IT IS GEOMETRY, NOT AN INPUT. Playback has no error term to steer on, so this is derived
 	 * from the curve the fixed axle is on: backing along an arc, a rigid vehicle pivots about
 	 * that axle, so tan(steer) = Wheelbase / Radius - the exact inverse of
-	 * FAirframe::TightestReversibleRadius. At the vehicle's own limit it comes out as its own
+	 * FChassis::TightestReversibleRadius. At the vehicle's own limit it comes out as its own
 	 * lock, which is what Airside.Model.ReverseSteersRatherThanSliding checks it against.
 	 *
 	 * OPPOSITE THE YAW, and that is not a sign slip. Reversing counter-steers: the front wheels
@@ -97,11 +97,11 @@ struct AIRSIDE_API FReverseRun
 	 * Arms the manoeuvre, and REFUSES it if this airframe cannot back along that curve.
 	 *
 	 * Returns false and touches nothing when the plan is invalid, too short to have a
-	 * direction, or asks for an arc tighter than FAirframe::TightestReversibleRadius - the
+	 * direction, or asks for an arc tighter than FChassis::TightestReversibleRadius - the
 	 * last of which is logged with the radius and the place, because a bay that cannot be
 	 * entered is a defect in whatever laid it and the log is what finds it.
 	 */
-	bool Start(const FRoutePlan& InPlan, const FAirframe& Airframe, double InReverseSpeed);
+	bool Start(const FRoutePlan& InPlan, const FChassis& Chassis, double InReverseSpeed);
 
 	/**
 	 * One frame. FALSE MEANS THE MANOEUVRE IS OVER and the caller should hand over - the same
@@ -116,12 +116,12 @@ struct AIRSIDE_API FReverseRun
 	 * and no target heading, for the reason FPushbackRun's header gives about walking the
 	 * right line in the first place.
 	 *
-	 * THE AIRFRAME IS TAKEN PER FRAME, as FLandingRun::Advance and FTakeoffRun::Advance take
+	 * THE CHASSIS IS TAKEN PER FRAME, as FLandingRun::Advance and FTakeoffRun::Advance take
 	 * it, rather than having Start copy a wheelbase and a steering lock in. Two struct fields
-	 * that must agree with an FAirframe somewhere else are two chances to disagree with it;
+	 * that must agree with an FChassis somewhere else are two chances to disagree with it;
 	 * see CLAUDE.md, "one struct per thing". SteerDegrees is what needs it.
 	 */
-	bool Advance(double DeltaSeconds, const FAirframe& Airframe, double StopWithin,
+	bool Advance(double DeltaSeconds, const FChassis& Chassis, double StopWithin,
 		FVector2D& OutPosition, double& OutHeading);
 
 	/** True once the vehicle has backed the length of its manoeuvre. */

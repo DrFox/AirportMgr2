@@ -144,7 +144,7 @@ bool FLargestServiceVehiclePassedDownMatchesSelfResolvedTest::RunTest(const FStr
 	Net->AddStraightSegment(Centre, North, Road);
 	Net->AddStraightSegment(Centre, West, Road);
 
-	const FAirframe Vehicle = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Vehicle = UAirsideSettings::ResolveLargestServiceVehicle();
 
 	// SELF-RESOLVING: the path every test and every call site outside a rebuild still uses.
 	const FRoadSolveResult SolvedSelfResolved = FRoadNetworkSolver::SolveAll(*Net);

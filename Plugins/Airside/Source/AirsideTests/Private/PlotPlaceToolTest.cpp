@@ -1926,7 +1926,7 @@ bool FDepotTruckTurnsOutWithinItsLockTest::RunTest(const FString& Parameters)
 	}
 	if (!TestTrue(TEXT("the road has guideline ends to drive to"), West.IsSet() && East.IsSet())) { return false; }
 
-	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	for (const FGuidelineNodeId Goal : { West, East })
 	{
 		FRouteQuery Query;

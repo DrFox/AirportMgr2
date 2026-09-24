@@ -5,7 +5,7 @@
 #include "Solve/JunctionSolver.h"
 
 class URoadNetwork;
-struct FAirframe;
+struct FChassis;
 
 /** Every node's solved boundary, keyed by FRoadNodeId::Index. */
 struct FRoadSolveResult
@@ -60,7 +60,7 @@ public:
 	 * profile to resolve its own, exactly as before this parameter existed.
 	 */
 	static FRoadSolveResult SolveAll(URoadNetwork& Network, int32 ArcSegments = 12,
-		const FAirframe* LargestServiceVehicle = nullptr);
+		const FChassis* LargestServiceVehicle = nullptr);
 
 	/**
 	 * Solve ONE node's cut distances, writing nothing back to the model.
@@ -74,7 +74,7 @@ public:
 	 * a junction reaches and the distance the mesh actually paves cannot drift apart.
 	 */
 	static bool SolveNodeCuts(const URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
-		FRoadNodeCuts& Out, const FAirframe* LargestServiceVehicle = nullptr);
+		FRoadNodeCuts& Out, const FChassis* LargestServiceVehicle = nullptr);
 
 	/**
 	 * SolveAll's own per-node body, exposed for exactly ONE node: solve its cuts, solve its
@@ -95,7 +95,7 @@ public:
 	 * node it is not sure is still live without checking first.
 	 */
 	static void SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
-		FRoadSolveResult& InOutResult, const FAirframe* LargestServiceVehicle = nullptr);
+		FRoadSolveResult& InOutResult, const FChassis* LargestServiceVehicle = nullptr);
 
 	/**
 	 * How far a node's pavement reaches from its centre, in uu. Zero when it has no arms.
@@ -106,7 +106,7 @@ public:
 	 * exactly tangent, where their rims would land on coincident edges.
 	 */
 	static double NodeReach(const URoadNetwork& Network, FRoadNodeId Node, int32 ArcSegments = 12,
-		const FAirframe* LargestServiceVehicle = nullptr);
+		const FChassis* LargestServiceVehicle = nullptr);
 
 	/**
 	 * The LEAST a segment can be cut back at AtNode: the junction there solved with every
@@ -116,7 +116,7 @@ public:
 	 * be solved at all, so a caller never sees a floor it cannot reason about.
 	 */
 	static double ZeroRadiusCut(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode,
-		const FAirframe* LargestServiceVehicle = nullptr);
+		const FChassis* LargestServiceVehicle = nullptr);
 
 	/**
 	 * Does the junction at Node PAVE this point? True when the point lies inside the
@@ -131,7 +131,7 @@ public:
 	 * half-width, which is the cap it does pave.
 	 */
 	static bool NodeClaims(const URoadNetwork& Network, FRoadNodeId Node, const FVector2D& Point, double Factor = 1.0,
-		const FAirframe* LargestServiceVehicle = nullptr);
+		const FChassis* LargestServiceVehicle = nullptr);
 
 	/**
 	 * How many times NodeClaims has actually run a junction solve, for the issue #167 test
@@ -154,5 +154,5 @@ public:
 	 * (2026-09-06). 0 when the node cannot be solved or Segment is not one of its arms.
 	 */
 	static double ArmCutDistance(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode,
-		const FAirframe* LargestServiceVehicle = nullptr);
+		const FChassis* LargestServiceVehicle = nullptr);
 };

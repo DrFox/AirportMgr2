@@ -48,6 +48,7 @@ namespace
 		// in the text - a number that has to agree with an asset is a number that drifts.
 		case EFuelRefusal::StandUnjoined: return TEXT("no road within reach of the stand's entrances");
 		case EFuelRefusal::NoRoute:       return TEXT("no road from depot");
+		case EFuelRefusal::TooNarrow:     return TEXT("no road wide enough for the fuel truck");
 		case EFuelRefusal::NoPump:        return TEXT("depot has no pump");
 		default:                          return TEXT("unserviceable");
 		}
@@ -124,6 +125,8 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 	Result.Why = EFuelRefusal::NoDepot;
 
 	double BestLength = TNumericLimits<double>::Max();
+	bool bAnyTooNarrow = false;
+	FGuidelineEdgeId NarrowAt;
 
 	/**
 	 * A joined depot with a fleet, all of it already out.
@@ -244,7 +247,17 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		// EOccupancyUse::Never on this errand's row IS that rule, and the search REFUSES a
 		// table passed alongside it rather than quietly ignoring one.
 
+		// THE TRUCK THAT WILL DRIVE IT, so a depot is only chosen over road that truck fits
+		// (spec 2026-09-23 §6). A depot reachable only over too-narrow road is remembered, so
+		// the refusal below can say so rather than "no road".
+		Query.WithVehicle(TruckVehicle);
+
 		const FRoutePlan Plan = RouteSearch::Find(Network, Query);
+		if (Plan.Result == ERouteResult::TooNarrow)
+		{
+			bAnyTooNarrow = true;
+			NarrowAt = Plan.RejectedEdge;
+		}
 		if (!Plan.IsValid() || Plan.Length >= BestLength)
 		{
 			continue;
@@ -289,6 +302,13 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		// not. And DEFERRING a genuine NoRoute costs nothing: the moment the truck is home
 		// the depot is idle, this branch stops firing, and the real reason is reported.
 		Result.Why = EFuelRefusal::None;
+	}
+	else if (bAnyTooNarrow)
+	{
+		Result.Why = EFuelRefusal::TooNarrow;
+		UE_LOG(LogAirportOps, Warning,
+			TEXT("Fuel: no road wide enough for %s from any depot - the first edge it does not fit is guideline edge %d"),
+			*TruckVehicle.TypeCode.ToString(), NarrowAt.Index);
 	}
 	else
 	{
@@ -344,8 +364,24 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		// there rather than into the back of it. The flicker argument covers a WINNER being
 		// re-picked every tick, which a committed route is not.
 		Query.WithCongestion(Traffic.GetOccupancy(), TruckId, Traffic.Rules.CongestionWeight);
+		Query.WithVehicle(TruckVehicle);
 		Query.RunwayPenalty = Traffic.Rules.RunwayPenalty;
 		Plan = RouteSearch::Find(Network, Query);
+
+		// HOME EVEN IF IT DOES NOT FIT (review of 2026-09-24). The way out was chosen for a
+		// road this truck fits; the way back can meet a tighter corner - the near-side turn is
+		// the tight one - and retiring the truck at the stand costs the airport a truck on
+		// every such job. So it drives home ungated, and the log names the edge, which is the
+		// player's cue to widen that road.
+		// ENFORCED BY: AirportOps.Ops.FuelTruckGetsHomeWhenTooNarrow
+		if (Plan.Result == ERouteResult::TooNarrow)
+		{
+			UE_LOG(LogAirportOps, Warning,
+				TEXT("Fuel: truck %d does not fit the road home to depot %d (first misfit: guideline edge %d); driving it anyway"),
+				TruckId, Depot.Index, Plan.RejectedEdge.Index);
+			Query.Vehicle = nullptr;
+			Plan = RouteSearch::Find(Network, Query);
+		}
 	}
 
 	// REDIRECT, NOT DISPATCH: the truck keeps its id and its view, and RedirectAgent accepts
@@ -458,7 +494,10 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 	// AN AIRCRAFT THAT HAS PARKED. Its goal must be a STAND's pose - an aircraft parked on a
 	// taxiway junction (the stand-death fallback) is at no stand and demands nothing, which
 	// falls out of this same lookup rather than needing a rule of its own.
-	if (Agent->Class != ETraversalClass::Aircraft || FindByAircraft(AgentId) != nullptr)
+	// AsAircraft AS WELL AS Class: the turnaround below is an aeroplane's figure, and only an
+	// agent started with an FAirframe carries one (see FRoadAgent::Chassis).
+	const FAirframe* Aircraft = Agent->AsAircraft();
+	if (Agent->Class != ETraversalClass::Aircraft || Aircraft == nullptr || FindByAircraft(AgentId) != nullptr)
 	{
 		return;
 	}
@@ -482,12 +521,12 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 	// The figure rides on the AGENT, in its airframe bundle, because this class may not
 	// include Entities/ and so cannot ask the aircraft's type - the same reason the pose role
 	// is read off FEntityInstance above. See FAirframe::TurnaroundSeconds.
-	Demand.TurnaroundEndsAt = Clock.Now() + Agent->Airframe.TurnaroundSeconds;
+	Demand.TurnaroundEndsAt = Clock.Now() + Aircraft->TurnaroundSeconds;
 	Demands.Add(Demand);
 
 	UE_LOG(LogAirportOps, Log,
 		TEXT("Fuel: aircraft %d parked at stand %d; needs fuel, away in %.0f game s"),
-		AgentId, Stand.Index, Agent->Airframe.TurnaroundSeconds);
+		AgentId, Stand.Index, Aircraft->TurnaroundSeconds);
 }
 
 void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
@@ -602,11 +641,11 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 					GuidelineGeom::PolylineLength(Choice.Plan.Polyline), Choice.Plan.Polyline.Num(), *Path);
 			}
 
-			// ShutdownPause 0 - see TruckShutdownPause. TruckAirframe is set once at attach
+			// ShutdownPause 0 - see TruckShutdownPause. TruckVehicle is set once at attach
 			// (UOpsRuntime::Attach), not resolved here - this is Model/, and Content/ was the
 			// only edge from Model/ to Content/ in either plugin (#104).
 			const int32 TruckId = Traffic.DispatchAgent(&Network, Choice.Plan,
-				TruckAirframe, ETraversalClass::GroundVehicle,
+				TruckVehicle, ETraversalClass::GroundVehicle,
 				TruckShutdownPause);
 			if (TruckId == 0)
 			{
@@ -643,9 +682,10 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 			// EARNED HERE AND NOWHERE ELSE. The aircraft's own airframe prices it, so a code F
 			// fuelling is worth more than a code A one for the same reason its landing is. An
 			// Unserviceable demand never reaches this branch, which IS the forfeit.
-			if (const FRoadAgent* Fuelled = Traffic.FindAgent(Demand.AircraftId))
+			const FRoadAgent* Fuelled = Traffic.FindAgent(Demand.AircraftId);
+			if (const FAirframe* Aircraft = Fuelled != nullptr ? Fuelled->AsAircraft() : nullptr)
 			{
-				PostServiceFee(Clock.Now(), Fuelled->Airframe);
+				PostServiceFee(Clock.Now(), *Aircraft);
 			}
 
 			// CLEARED BEFORE THE TRIP HOME, so the truck belongs to GoingHome and to nothing

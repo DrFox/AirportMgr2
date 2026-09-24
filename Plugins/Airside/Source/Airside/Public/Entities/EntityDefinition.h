@@ -98,8 +98,9 @@ struct AIRSIDE_API FStandLeg
  * anything derived: off the service road into a PARKING BAY, forward to the service point,
  * REVERSE clear of the aeroplane, then forward out. Three earlier designs had the vehicle back
  * INTO its working position; this one drives in forwards and reverses out, which is what the
- * ground actually costs - the expensive manoeuvre lands in open ground at the reverse limit of
- * 494.5 uu instead of beside the aircraft at the forward limit of 699.3.
+ * ground actually costs - the expensive manoeuvre lands in open ground at the reverse limit
+ * (L/tan(lock), 361 uu for the 6.2 m bowser) instead of beside the aircraft at the forward
+ * limit (L/sin(lock), 510 uu).
  *
  * THE PARKING BAY IS NOT THE SERVICE POINT. The vehicle WAITS in the bay; it WORKS at the
  * anchor. Collapsing the two is what produced a layout where every service position had to
@@ -391,7 +392,7 @@ public:
 	 * call it.
 	 */
 	static void BuildCodeCStandFor(
-		UEntityDefinition* Definition, UAircraftType* Aircraft, const FAirframe& Largest);
+		UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest);
 
 	/**
 	 * BuildCodeCStandFor's body, generalised to ANY ICAO letter: the plant, the lane and the
@@ -410,7 +411,7 @@ public:
 	 * dereferences the pointer.
 	 */
 	static void BuildStandFor(
-		UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FAirframe& Largest);
+		UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FChassis& Largest);
 
 	/**
 	 * True when Stand's measured RequiredExtent both fits inside Letter's floor (width and
@@ -445,7 +446,7 @@ public:
 	 * no authored content here for IcaoCode::Parse to fail on - see Solve/IcaoCode.h.
 	 */
 	static void BuildStandTemplate(
-		UEntityDefinition& Definition, EIcaoCode Letter, const FAirframe& Largest);
+		UEntityDefinition& Definition, EIcaoCode Letter, const FChassis& Largest);
 
 	/**
 	 * Fill Definition with the fuel depot layout: a box on a service road, and one truck.

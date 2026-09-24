@@ -1175,7 +1175,7 @@ bool FStandPlotDrawnStandTakesAnArrivalTest::RunTest(const FString& Parameters)
 	// EffectiveSteerLaw falls back to anyway for an unmeasured wheelbase; setting it here
 	// merely skips the one-time warning for a fixture that is deliberately using the paper
 	// type to fly.
-	Airframe.SteerLaw = ESteerLaw::Pivot;
+	Airframe.Chassis.SteerLaw = ESteerLaw::Pivot;
 
 	// FORCES Network INTO EXISTENCE ON THE ACTOR ITSELF, exactly as ArrivalDispatchTest does,
 	// so the FTestAirport built below lands on Actor->Network rather than an orphan object the

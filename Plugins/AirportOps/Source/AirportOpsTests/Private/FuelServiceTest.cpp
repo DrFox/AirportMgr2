@@ -200,9 +200,9 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	Clock = NewObject<USimClock>(GetTransientPackage());
 
 	// UOpsRuntime::Attach's job in production (#104) - a bare NewObject has no Present/ to
-	// set this, and an unset TruckAirframe means a truck dispatched with zero speed and
+	// set this, and an unset TruckVehicle means a truck dispatched with zero speed and
 	// acceleration, not the one every other caller of DispatchAgent gets.
-	Service->TruckAirframe = UAirsideSettings::ResolveDefaultVehicle();
+	Service->TruckVehicle = UAirsideSettings::ResolveDefaultVehicle();
 
 	FGuidelineNodeId TaxiSouth, TaxiNorth;
 	LayLine(*Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
@@ -574,6 +574,26 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and the card says so"),
 			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
 			FString(TEXT("no fuel depot")));
+	}
+
+	// NO ROAD WIDE ENOUGH (spec 2026-09-23 §6). Everything is joined and connected, but the
+	// truck does not fit the road - so the reason must say THAT, not "no road from depot",
+	// which would send the player looking for a gap in a road that is there. A 20 m body
+	// fits no lane on the fixture's airport; the real bowser fits them all.
+	{
+		FFuelFixture Fixture;
+		Fixture.Build(/*bWithRoad=*/true);
+		Fixture.Service->TruckVehicle.BodyWidth = 2000.0;
+		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
+		Fixture.Advance(0.2);
+
+		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+		TestEqual(TEXT("because no road is wide enough for the truck"),
+			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
+			static_cast<int32>(EFuelRefusal::TooNarrow));
+		TestEqual(TEXT("and the card says the road is too narrow, not missing"),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
+			FString(TEXT("no road wide enough for the fuel truck")));
 	}
 
 	// A DEPOT WITH NO PUMP. On a road, with a truck, and still unable to fuel - so the
@@ -1141,6 +1161,37 @@ bool FTruckNeverTeleportsOnItsRoundTripTest::RunTest(const FString& Parameters)
 			Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt),
 		Fixture.WorstJump < 60.0);
 
+	return true;
+}
+
+#endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+// Review of 2026-09-24 item 3: a truck whose way OUT fitted can meet a corner on the way HOME
+// that does not - the near-side turn is the tighter one. Retiring it at the stand costs the
+// airport a truck per job; it drives home ungated instead, and the log says why.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTruckGetsHomeWhenTooNarrowTest, "AirportOps.Ops.FuelTruckGetsHomeWhenTooNarrow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelTruckGetsHomeWhenTooNarrowTest::RunTest(const FString& Parameters)
+{
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+	Fixture.Advance(0.2);
+	const int32 TruckId = Fixture.Service->GetDemands()[0].TruckId;
+	if (!TestTrue(TEXT("a truck went out for it"), TruckId != 0)) { return false; }
+
+	// Out it went; now nothing on the airport fits it on the way back.
+	Fixture.Service->TruckVehicle.BodyWidth = 2000.0;
+	Fixture.Traffic->RetireAgent(Aircraft);
+	Fixture.Advance(0.2);
+
+	TestNotNull(TEXT("the truck is not retired at the stand"), Fixture.Traffic->FindAgent(TruckId));
+	TestEqual(TEXT("it drives home anyway"), Fixture.Service->TrucksGoingHomeForTest(), 1);
 	return true;
 }
 

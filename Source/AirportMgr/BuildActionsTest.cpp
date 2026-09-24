@@ -156,6 +156,23 @@ bool FFeeLeverIsInTheOneListTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDriveSideIsInTheOneListTest,
+	"AirportMgr.Actions.DriveSideIsInTheOneList",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDriveSideIsInTheOneListTest::RunTest(const FString& Parameters)
+{
+	// Through the one table for the fee lever's reason (spec 2026-09-23 §2): a toggle added
+	// straight to the widget would be a button nothing else knew about.
+	const FBuildAction* Side = FindAction(FName(TEXT("game.driveside")));
+	if (!TestNotNull(TEXT("the drive side can be flipped from the one action list"), Side)) { return false; }
+	TestEqual(TEXT("it sits in the Game section, an airport-wide setting"), Side->Section, EActionSection::Game);
+	// NO KEY: a mis-hit would re-lane the whole airport.
+	TestFalse(TEXT("it has no key binding"), Side->Key.IsValid());
+	return true;
+}
+
 /**
  * ONE BUTTON PER ROW AND PER COLUMN, WALKED FROM BOTH ENUMS. A row or column with no button is
  * a guide the player cannot switch, and nothing else would say so.

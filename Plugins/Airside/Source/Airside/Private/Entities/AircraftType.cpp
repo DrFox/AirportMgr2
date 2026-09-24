@@ -236,7 +236,7 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	// composes it any more.
 	//
 	// THE FIXED-AXLE ORIGIN IS NOT LOST FROM THE CODEBASE, which matters because
-	// FAirframe::FixedAxleX cited this type as its one live declarer.
+	// FChassis::FixedAxleX cited this type as its one live declarer.
 	// UAirsideSettings::ResolveDefaultVehicle's truck declares it, and for the model's own
 	// reason rather than an importer's accident: fueltruck1 is exported about the rear axle
 	// because that is what a front-steered truck pivots about.

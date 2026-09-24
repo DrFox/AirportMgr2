@@ -119,6 +119,17 @@ public:
 	 */
 	uint32 GetEditRevision() const { return EditRevision; }
 
+	/** Which side of a two-lane road traffic keeps to. See EDriveSide. */
+	EDriveSide GetDriveSide() const { return DriveSide; }
+
+	/**
+	 * Sets the airport's drive side. False, changing nothing, when it already is Side - so a
+	 * caller can tell a no-op from an edit and not commit an undo step that does nothing.
+	 * Guidelines are NOT re-derived here: the network is the model and the builder derives,
+	 * so the caller rebuilds exactly as it does after any other edit (URoadEditFacade does).
+	 */
+	bool SetDriveSide(EDriveSide Side);
+
 	/**
 	 * Overwrite every node/segment/guideline/apron/entity array from Source, leaving handles
 	 * (index and generation) identical to what DuplicateObject would have produced - a plain
@@ -796,6 +807,12 @@ private:
 
 	/** See GetEditRevision. Plain, not a UPROPERTY - a session clock, not state. */
 	uint32 EditRevision = 0;
+
+	/**
+	 * A UPROPERTY, so it saves with the airport and undo's DuplicateObject snapshot carries
+	 * it. Right by default: a network saved before 2026-09-23 loads right-hand.
+	 */
+	UPROPERTY() EDriveSide DriveSide = EDriveSide::Right;
 
 	/**
 	 * SAVED, not transient: this is the only durable record that a bar was ever placed.
