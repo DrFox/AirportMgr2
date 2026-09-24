@@ -44,8 +44,11 @@ struct AIRSIDE_API FTrafficRules
 	 * is sized from this figure so that "what is on screen is the length the arbiter actually
 	 * keeps clear". A 6.2 m truck reserving 5 m is that promise broken in the direction that
 	 * hurts: the arbiter would let a second agent into road this one is occupying.
+	 *
+	 * 850 from 2026-09-15 to 2026-09-24, while the truck was enlarged to 8.5 m; back to 620
+	 * with it. Airside.Content.VehicleFootprintMatchesTheMesh is what caught both moves.
 	 */
-	UPROPERTY(EditAnywhere) double VehicleFootprint = 850.0;
+	UPROPERTY(EditAnywhere) double VehicleFootprint = 620.0;
 
 	/** Clear line kept ahead of the nose, beyond the braking distance, uu. */
 	UPROPERTY(EditAnywhere) double AircraftGap = 1500.0;

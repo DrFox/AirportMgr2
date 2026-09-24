@@ -157,11 +157,16 @@ FVehicle UAirsideSettings::ResolveDefaultVehicle()
 	// it is a spin about the rear axle. Reported from play on 2026-09-14: the truck drives up
 	// to the stand, stops, swings 90 degrees on the spot and drives off.
 	//
-	// fueltruck1 HAS been measured. Its rig puts steer_FL/FR at x = 494.5 uu and wheel_RL/RR
-	// at the origin, so the wheelbase is 4.945 m and the geometric law has real figures to
+	// fueltruck1 HAS been measured. Its rig puts steer_FL/FR at x = 360.7 uu and wheel_RL/RR
+	// at the origin, so the wheelbase is 3.607 m and the geometric law has real figures to
 	// work with.
 	//
-	// RESIZED 2026-09-15 from 3.607 m, when the truck itself went from 6.2 m to 8.5. The old
+	// BACK TO 3.607 m ON 2026-09-24, with the truck back to its modelled 6.2 m. The 8.5 m
+	// enlargement below was made to test crabbing, and uniform scaling took the width to
+	// 3.26 m over the tyres - wider than the 3 m road lane it drives in once roads had lanes
+	// and vehicles were gated on width. Shrunk as it was grown, uniformly, in the model.
+	//
+	// (History) RESIZED 2026-09-15 from 3.607 m, when the truck itself went from 6.2 m to 8.5. The old
 	// figures were a Ford Transit's: an 11.2 m kerb-to-kerb circle, parked beside a 737. 8.5 m
 	// is the SMALLEST real hydrant dispenser, and larger classes follow - which is why the
 	// road this turns on is sized from ResolveLargestServiceVehicle and never from here.
@@ -180,7 +185,7 @@ FVehicle UAirsideSettings::ResolveDefaultVehicle()
 	// DECLARED, since the law stopped being inferred from these two numbers on
 	// 2026-09-15 - see ESteerLaw. A truck steers on a front axle; it does not pivot.
 	Van.Chassis.SteerLaw = ESteerLaw::RollingSteer;
-	Van.Chassis.SteerAxleX = 494.5;
+	Van.Chassis.SteerAxleX = 360.7;
 	Van.Chassis.FixedAxleX = 0.0;
 
 	// 45 degrees, written out rather than left at FGroundRegime's 60. The struct default is
@@ -194,10 +199,9 @@ FVehicle UAirsideSettings::ResolveDefaultVehicle()
 	// admitted, never for the one using it now. The fillet is DERIVED from the vehicle now
 	// (URoadProfile::ResolvedFilletRadius), so the lock can go back to what a rigid truck has.
 	//
-	// 45 on a 4.945 m wheelbase is a 6.99 m front-axle radius - a kerb-to-kerb circle near
-	// 16.2 m, correct for a rigid 8.5 m truck, where the old figures gave 11.2 m and a
-	// Transit. Reversing is tighter still, Wheelbase / tan(lock) = 4.95 m, which is why a
-	// driver backs into a tight space rather than nosing in.
+	// 45 on the 3.607 m wheelbase is a 5.10 m front-axle radius (it was 6.99 m at 8.5 m).
+	// Reversing is tighter still, Wheelbase / tan(lock) = 3.61 m, which is why a driver backs
+	// into a tight space rather than nosing in.
 	Van.Chassis.Ground.MaxSteerDegrees = 45.0;
 
 	// A TRUCK CANNOT FLY, AND NOW CANNOT EVEN BE ASKED TO. Until 2026-09-23 this was an
