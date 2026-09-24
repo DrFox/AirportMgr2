@@ -40,6 +40,13 @@ The whole job is four sub-projects, each with its own spec -> plan -> build:
 
 - `FRoadAgent` carries a **hitch angle** (radians, trailer yaw relative to cab yaw). A rigid
   vehicle (`!HasTrailer()`) leaves it at 0 and never steps it.
+  **REVISED 2026-09-25 (task 6, checked against the code):** this became a chain, not one
+  angle - `FRoadAgent::TowAxles` (`TArray<FVector2D>`) holds each link's own axle position,
+  road-plane XY, one per `FTowLink`, filled by `FollowAndTow` every tow sub-step and never
+  re-derived from the route. A hitch angle for the actor to draw is recovered from
+  consecutive axle positions where the presenter needs one; the agent's own stored state is
+  positions, not an angle - see §4, which already documents the chain this replaced the
+  single trailer with.
 - **ONE STEPPER.** The trailer step inside `VehicleSweep::Trace` is extracted into one
   `Solve/` function. It takes the kingpin's motion over the step and returns the new hitch
   angle, with the kingpin offset EXACT, not placed on the drive axle. Trace and the agent
@@ -62,6 +69,11 @@ The whole job is four sub-projects, each with its own spec -> plan -> build:
 - **Animation:** each mesh gets its own Animation Blueprint, built by script like
   `build_fueltruck_anim.py`. The cab gets steer on the front wheels and spin on all wheels;
   the trailer gets spin on its tandem wheels.
+  **REVISED 2026-09-25 (task 6, checked against the code):** wheel radius for the spin is not
+  a typed figure - `UAirsideAgentAnim` calls `WheelHubRadius(Mesh->GetRefSkeleton(),
+  MainWheelRadius)`, measuring the hub off the vehicle's own imported skeleton (falling back
+  to `MainWheelRadius` only when the bone is absent), the same "measured, not typed" rule
+  the rest of the fleet's geometry follows.
 - **Content:** `UAirsideSettings` resolves the rig's meshes and ABPs in one function, beside
   `ResolveRigVehicle()`. No asset path appears at a second site.
 - **Actor:** `ARoadAgentActor` gains an optional trailer skeletal-mesh component, created only
@@ -80,6 +92,14 @@ The whole job is four sub-projects, each with its own spec -> plan -> build:
   its U-turn. The lanes are joined into one circuit, so one loop visits every feature.
 - **`M_RigTest`** holds a floor, the network actor, the course actor and the road-build game
   mode (so the camera and tools work). It is made once by `Tools/Python/build_rig_test_level.py`.
+  **REVISED 2026-09-25 (task 6):** built. The floor is centred and sized off
+  `RigTestCourse.cpp`'s own layout constants (250 x 340 m course, 500 x 600 m floor,
+  centred on the course's own bounding box, not the world origin - the course lays its nodes
+  in absolute world XY, so the floor follows it rather than the other way round), plus a sun,
+  sky light and fog matching `M_ModelYard`'s. `ARoadNetworkActor` and `ARigTestCourse` are
+  spawned with every property at its content-resolved default (`ResolveSurfaceMaterial` and
+  siblings fall back to `UAirsideSettings::GetContent()` when the actor's own field is null),
+  and the world settings' game mode override is `BP_RoadBuildGameMode`.
 - **Driving:** the course names an ordered list of waypoint nodes. A small driver sends the
   rig from each waypoint to the next through the normal route search, with the rig's
   `FVehicle`, so `VehicleFit` gating applies. On arrival it takes the next leg; after the
@@ -89,6 +109,38 @@ The whole job is four sub-projects, each with its own spec -> plan -> build:
   at node 31, swept 7.6 m vs tarmac 6.0 m`, and a red label marks it on the road. Each loop
   ends with `RigCourse: loop N - D/T legs driven; refused: <list>`, which says which tier to
   widen.
+
+**REVISED 2026-09-25 (task 6, checked against the code) - four course facts pinned by the
+built level and its tests:**
+
+- **A width-step feature is laid on purpose, to pin a builder defect.** The course's return
+  road changes Narrow -> Wide mid-straight, at a degree-2 node (`RigTestCourse.cpp`'s
+  `RigCourse::WidthStepX`), rather than routing round it. The derived turn there is a
+  lane-offset jog with `MinRadius` 0 (unmeasured, so route search does not gate it), and
+  `FSpeedProfile` reports it as a sharp vertex and crawls: 55 s over a 69 m straight that
+  takes 14 s without the step (measured, `RigTestCourse.cpp`'s own comment). The fix belongs
+  in the guideline builder - blending the lane offset over a transition length - not in the
+  course; kept as a feature (controller ruling 5, 2026-09-25) rather than laid round, so the
+  defect stays pinned until that fix lands. Open follow-up below.
+- **The rig's trailer has a known, bounded near-side overrun.** `RigTestCourseTest.cpp`
+  measured 2026-09-25: on every near-side (right) turn the trailer cuts 2.0-3.4 m past the
+  inner pavement edge while its swept WIDTH still fits - `VehicleFit` judges the swept
+  envelope against the tarmac as a whole, not which side of the lane centreline the cut
+  lands on. The test pins the gap at the measured 3.4 m worst case rather than treating it as
+  unbounded. **Open question, not decided here:** should `VehicleFit` start judging
+  clearance per side while the agent holds its lane, or should the agent swing wide on a
+  near-side turn to keep the cut inside its own lane? Either changes gating or steering
+  behaviour outside this step's scope.
+- **The rig is refused at every dead-end U-turn, and this is a sizing decision, not a bug.**
+  `UTurnGeom::Balloon`'s dead-end balloons are sized off
+  `UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius()` - the bowser,
+  510 uu (5.1 m) forwards (`RoadGuidelineBuilder.cpp`'s own comment: "For the 6.2 m bowser
+  that is 361 uu against 510"). The rig's own figure is `Wheelbase()/sin(lock)` = 370 uu /
+  sin(40 deg) = 576 uu (5.8 m), so every dead end on this course refuses it by design - the
+  balloon was never built to admit it. **Open, for the user:** widen every dead-end balloon
+  to the rig's 5.8 m (which oversizes it for every other vehicle that uses one today), add a
+  second, rig-sized balloon class, or accept that the rig never reverses out of a dead end on
+  this course.
 
 ## 4. REVISED 2026-09-24: the tow is a CHAIN, and the utility + fuel trailer drives too
 
@@ -139,3 +191,32 @@ across both lanes (a known gap from the road-lanes spec).
 
 - If the loop reports refusals on Standard or Wide, the roads-spec response is to widen the
   tier or its derived corner. That is a follow-up decision, not part of this step.
+
+**ADDED 2026-09-25 (task 6), follow-ups found by the full build and not fixed here:**
+
+- **The width-step builder fix.** Blend the lane offset over a transition length in the
+  guideline builder so a Narrow -> Wide straight-through node stops producing a `MinRadius`-0
+  jog. Today it is pinned as a deliberate course feature (§3) rather than routed round.
+- **Dead-end sizing for the rig.** The U-turn balloon is sized off the bowser's 5.1 m lock;
+  the rig needs 5.8 m and is refused at every dead end on this course (§3). Needs a user
+  decision: widen every balloon, add a second rig-sized balloon class, or accept the rig
+  never reverses out of a dead end here.
+- **The near-side overrun.** The rig's trailer cuts 2.0-3.4 m past the inner pavement edge on
+  near-side turns while its swept width still fits (§3, measured and bounded, not fixed).
+  Needs a decision: judge `VehicleFit` per side, or have the agent swing wide.
+- **`AAnimYard` draws no trailer.** The bench adopts one `ASkeletalMeshActor` per placed
+  model and calls `SetVehicleAirframe`/`SetAirframe` with a single mesh; nothing in
+  `AnimYard.cpp` wires a second, tow-carried mesh for a body-carrying link, so a rig or
+  drawbar trailer placed in `M_ModelYard` would animate its cab only.
+- **utility1's steering lock is unmeasured.** `ResolveUtilityTowVehicle` leaves it at
+  `ResolveDefaultVehicle`'s 45 degrees; utility1/SPEC.md's own "turning radius 115 in
+  (2.921 m)" datasheet figure would resolve to about 27 degrees on the measured 1.493 m
+  wheelbase if measured properly against the model, per that function's own comment.
+- **`fueltruck1.glb` is missing from the models repo at the path the AirportMgr2 import
+  scripts read.** `AirportMgr2Models/fueltruck1/export/` now holds only `MOVED.md`: since
+  2026-09-24 fueltruck1 is built inside `rigidCab1/rigidCab1.blend` and exported to
+  `rigidCab1/export/fueltruck1.glb`, but `import_fueltruck.py`, `reimport_fueltruck1.py` and
+  `build_fueltruck_anim.py` (in the `AirportMgr2` checkout, not this worktree) still point at
+  the old, now-empty path.
+- **The reverse chain (step 2).** Out of this step already (see "Out of this step"), restated
+  here because it is the next of the four sub-projects "Where this sits" lists.
