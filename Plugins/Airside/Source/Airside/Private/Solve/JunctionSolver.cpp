@@ -117,6 +117,12 @@ FJunctionResult FJunctionSolver::SolveCuts(const FJunctionInput& Input)
 				? 0.0 : Result.Corners[PrevIndex].ParamB;
 
 			Result.Arms[Index].CutDistance = FMath::Max3(FromLeft, FromRight, 0.0);
+
+			// A TAPER'S INSET, a floor the corners cannot see - see FJunctionArm::MinCutDistance.
+			// Capped by the arm's allowance like a dead end's cap, so a short segment gets a
+			// shorter taper, never crossed cuts.
+			Result.Arms[Index].CutDistance = FMath::Max(Result.Arms[Index].CutDistance,
+				FMath::Min(Input.Arms[Index].MinCutDistance, Input.Arms[Index].MaxCutDistance));
 		}
 
 		Result.bValid = true;
@@ -129,8 +135,12 @@ FJunctionResult FJunctionSolver::SolveCuts(const FJunctionInput& Input)
 		const FVector2D Normal = RoadGeom::PerpCCW(Arm.Tangent);
 		const FVector2D CutCentre = Input.Position + Arm.Tangent * Result.Arms[Index].CutDistance;
 
-		Result.Arms[Index].LeftCut  = CutCentre + Normal * FMath::Max(Arm.HalfWidthLeft, 0.0);
-		Result.Arms[Index].RightCut = CutCentre - Normal * FMath::Max(Arm.HalfWidthRight, 0.0);
+		// The ribbon's own half-widths when the corner was solved on wider ones - see
+		// FJunctionArm::CutHalfWidthLeft.
+		const double Left = Arm.CutHalfWidthLeft >= 0.0 ? Arm.CutHalfWidthLeft : Arm.HalfWidthLeft;
+		const double Right = Arm.CutHalfWidthRight >= 0.0 ? Arm.CutHalfWidthRight : Arm.HalfWidthRight;
+		Result.Arms[Index].LeftCut  = CutCentre + Normal * FMath::Max(Left, 0.0);
+		Result.Arms[Index].RightCut = CutCentre - Normal * FMath::Max(Right, 0.0);
 	}
 
 	return Result;
@@ -217,7 +227,15 @@ void FJunctionSolver::SolveBoundary(const FJunctionInput& Input, FJunctionResult
 		}
 
 		ArcSamples.Reset();
-		RoadGeom::SampleArc(Corner, Input.ArcSegments, ArcSamples);
+		if (Input.Arms[Index].RimToNext.Num() > 0)
+		{
+			// A widened corner: its rim as the caller laid it, in place of the arc.
+			ArcSamples = Input.Arms[Index].RimToNext;
+		}
+		else
+		{
+			RoadGeom::SampleArc(Corner, Input.ArcSegments, ArcSamples);
+		}
 		for (const FVector2D& Sample : ArcSamples)
 		{
 			AddArcPoint(Sample);
@@ -273,6 +291,45 @@ void FJunctionSolver::SolveBoundary(const FJunctionInput& Input, FJunctionResult
 			{
 				Apex = Centroid;
 				bFanIsCounterClockwise = true;
+			}
+		}
+
+		// A BEND WHOSE OUTSIDE IS CONCENTRIC WITH ITS INSIDE (RimToNext, 2026-09-25) is an annulus
+		// sector: the node lies OUTSIDE the outer arc, and the centroid of an L sits in its elbow's
+		// grass. What sees the whole rim is on the bend's bisector, between the inner corner of the
+		// arms' square and the outer arc - so walk that bisector out from the inner fillet's centre
+		// and take the first point that sees it all. Tried only after the two apexes above, and only
+		// where the OUTSIDE corner carries a caller's rim (the concentric outer edge) - so every
+		// junction that fanned, or was refused and ear-clipped, before does exactly as before.
+		// ENFORCED BY: Airside.Build.BendLanes.WeldExact (the Wide bend fans; ear-clipping would not weld)
+		if (!bFanIsCounterClockwise && ArmCount == 2 && InOutResult.Corners.Num() == 2)
+		{
+			for (int32 CornerIndex = 0; CornerIndex < 2; ++CornerIndex)
+			{
+				const RoadGeom::FFillet& Corner = InOutResult.Corners[CornerIndex];
+				const RoadGeom::FFillet& Other = InOutResult.Corners[1 - CornerIndex];
+				if (!Corner.bValid || Corner.bStraightThrough || Corner.Theta >= UE_DOUBLE_PI || Corner.Radius <= 0.0
+					|| Other.Theta < UE_DOUBLE_PI || Input.Arms[1 - CornerIndex].RimToNext.Num() == 0)
+				{
+					continue;
+				}
+				const FVector2D Out = (Input.Position - Corner.Centre).GetSafeNormal();
+				double Farthest = 0.0;
+				for (const FVector2D& Point : Rim)
+				{
+					Farthest = FMath::Max(Farthest, FVector2D::Distance(Point, Corner.Centre));
+				}
+				constexpr int32 Candidates = 64;
+				for (int32 Step = 1; Step < Candidates && !bFanIsCounterClockwise; ++Step)
+				{
+					const FVector2D Candidate = Corner.Centre
+						+ Out * (Corner.Radius + (Farthest - Corner.Radius) * Step / Candidates);
+					if (IsFanCounterClockwise(Rim, Candidate))
+					{
+						Apex = Candidate;
+						bFanIsCounterClockwise = true;
+					}
+				}
 			}
 		}
 	}

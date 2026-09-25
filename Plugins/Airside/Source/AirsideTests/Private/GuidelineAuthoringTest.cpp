@@ -30,7 +30,7 @@ namespace
 		Net->AddStraightSegment(FarA, FarB, Profile);
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 		return Net;
 	}
 
@@ -140,7 +140,7 @@ bool FGuidelineAuthoringTest::RunTest(const FString& Parameters)
 	for (int32 Pass = 0; Pass < 2; ++Pass)
 	{
 		const FRoadSolveResult Again = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveRoadDesignVehicles());
 	}
 
 	// The edge itself survives - this much the builder does promise.

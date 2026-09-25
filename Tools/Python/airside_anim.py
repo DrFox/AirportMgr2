@@ -282,14 +282,41 @@ def _closest_axis(frame, want):
 
 def bone_frames(mesh_path):
     """{bone: (localX, localY, localZ)} in COMPONENT space, off a skeletal mesh's reference
-    pose. {} with a logged failure if the asset is not there."""
+    pose. {} with a logged failure if the asset is not there.
+
+    FAILS LOUDLY IF THE POSE IS SHORT OF THE SKELETON'S OWN BONE COUNT (found 2026-09-24, task
+    3b fix round 1): unreal.AnimPose.get_bone_names(skeleton.get_reference_pose()) silently
+    dropped SK_Utility1's un-skinned 'hitch' bone - 8 of its 9 declared bones came back, no
+    error - while a transient SkeletalMeshComponent's get_bone_name(i) saw all 9. A caller
+    asking resolve_axis for that missing bone's axis got "no bone named hitch" two frames away
+    with nothing here explaining why; a caller asking for a bone that WAS present, expecting a
+    dict of every driven bone, would have no way to notice one was quietly missing at all.
+    Checked here, once, against the component's own count - the same mechanism
+    airside_import.report_rig already uses to read bone NAMES - rather than trusted.
+    """
     mesh = unreal.EditorAssetLibrary.load_asset(mesh_path)
     if mesh is None:
         fail("no %s" % mesh_path)
         return {}
-    pose = mesh.get_editor_property("skeleton").get_reference_pose()
+    skeleton = mesh.get_editor_property("skeleton")
+    if skeleton is None:
+        fail("%s has no skeleton" % mesh_path)
+        return {}
+    pose = skeleton.get_reference_pose()
+    names = unreal.AnimPose.get_bone_names(pose)
+
+    component = unreal.new_object(unreal.SkeletalMeshComponent)
+    component.set_skeletal_mesh_asset(mesh)
+    declared = component.get_num_bones()
+    if len(names) != declared:
+        fail("%s: AnimPose's reference pose carries %d bone(s), the skeleton declares %d - "
+             "at least one bone (typically an un-skinned socket) is being silently dropped "
+             "from this function's result - see bone_frames' own comment (2026-09-24)."
+             % (mesh_path, len(names), declared))
+        return {}
+
     frames = {}
-    for name in unreal.AnimPose.get_bone_names(pose):
+    for name in names:
         transform = unreal.AnimPose.get_bone_pose(pose, name, unreal.AnimPoseSpaces.WORLD)
         frames[str(name)] = _local_axes(transform.rotation)
     return frames

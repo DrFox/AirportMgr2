@@ -57,7 +57,7 @@ bool FArrivalPlannerRunwayTooShortTest::RunTest(const FString& Parameters)
 	Network->AddStraightSegment(A, B, Runway);
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
-	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, FVector2D::ZeroVector, Airframe);
 
@@ -268,7 +268,7 @@ bool FArrivalPlannerNoRouteToStandTest::RunTest(const FString& Parameters)
 	Network->AddStraightSegment(Exit, TaxiEnd, Taxiway);
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
-	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe);
 
@@ -328,7 +328,7 @@ bool FArrivalPlannerNoStandBigEnoughTest::RunTest(const FString& Parameters)
 		IcaoCode::DesignSpanForLetter(EIcaoCode::C), Stand->PoseRole, Stand->Trucks);
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
-	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 	FAnchorLink::Build(*Network, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe);

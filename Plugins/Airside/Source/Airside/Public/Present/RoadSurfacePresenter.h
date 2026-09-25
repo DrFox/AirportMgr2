@@ -6,6 +6,7 @@
 #include "Build/AnchorLink.h"
 #include "Build/RoadMeshSink.h"
 #include "Model/Chassis.h"
+#include "Profiles/RoadDesignVehicles.h"
 #include "Model/RoadHandles.h"
 #include "Model/RunwayFacts.h"
 #include "Tool/RoadEditTarget.h"
@@ -113,8 +114,10 @@ public:
 		double ServiceLinkRadius = FAnchorLink::DefaultServiceLinkRadius;
 
 		/**
-		 * The biggest thing that may drive a service road - see
-		 * UAirsideSettings::ResolveLargestServiceVehicle.
+		 * What each road's turns are sized for: the biggest RIGID thing that may drive a service
+		 * road (UAirsideSettings::ResolveLargestServiceVehicle) as the Default, with each width
+		 * tier's own design vehicle beside it - the rig on Wide (ResolveTierDesignVehicles,
+		 * 2026-09-25). The anchor linker takes Default only: see URoadSurfacePresenter::Rebuild.
 		 *
 		 * RESOLVED ONCE HERE, not by the solver, the guideline builder or the anchor
 		 * linker (issue #190). Each of those used to build a fresh FAirframe by calling
@@ -124,7 +127,7 @@ public:
 		 * than defaulting to a real vehicle: a caller that forgets to set this gets a fillet
 		 * radius of zero rather than a plausible-looking wrong one, which fails loudly.
 		 */
-		FChassis LargestServiceVehicle;
+		FRoadDesignVehicles DesignVehicles;
 
 		/** Already resolved - see ARoadNetworkActor::ResolveSurfaceMaterial and its siblings. */
 		UMaterialInterface* SurfaceMaterial = nullptr;

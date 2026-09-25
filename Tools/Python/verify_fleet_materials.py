@@ -42,8 +42,9 @@ import unreal
 MAT_DIR = "/Game/Materials/Fleet"
 MASTER_PATH = "%s/M_Fleet" % MAT_DIR
 OLD_DIR = "/Game/Aircraft/Materials"
-MODELS = r"C:\repos\AirportMgr2Models"
-# FLEET AND THE TOLERANCE COME FROM airside_import, and both used to be typed here.
+# FLEET, THE TOLERANCE AND fleet_glb COME FROM airside_import, and all three used to be typed
+# or duplicated here - the old copy assumed folder == file, which is wrong for tankTrailer1 (see
+# airside_import.EXPORT_FOLDER).
 #
 # THE COPY WAS NOT HARMLESS. This file's FLEET listed plane2 onwards; when plane1 joined the
 # BUILDER on 2026-09-19 it was not added here, so this script checked seven assets, printed

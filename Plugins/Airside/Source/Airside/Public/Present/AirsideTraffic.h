@@ -131,6 +131,10 @@ public:
 	 */
 	bool RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
 
+	/** See UGroundTraffic::ExtendRoute: Tail appended to a moving agent's route, no stop at the join. */
+	bool ExtendRoute(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Tail,
+		double KeepBehind = -1.0, double* OutDropped = nullptr);
+
 	/** See UGroundTraffic::DepartAgent. A null Network is refused as NoRoute. */
 	EDepartureRefusal DepartAgent(int32 AgentId, const URoadNetwork* Network);
 

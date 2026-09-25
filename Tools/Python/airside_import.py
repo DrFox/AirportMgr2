@@ -70,6 +70,17 @@ FLEET = {
     "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
     "tug1":       ("tug1",       "/Game/Vehicles/Tug1/SK_Tug1"),
     "utility1":   ("utility1",   "/Game/Vehicles/Utility1/SK_Utility1"),
+    "truckCab1":  ("truckCab1",  "/Game/Vehicles/Rig/TruckCab1/SK_TruckCab1"),
+    # tankTrailer1 has no export/ of its own - see EXPORT_FOLDER below.
+    # truckCab1/scripts/build_export.py exports both assets from ONE .blend into truckCab1's
+    # own export/ folder ("two assets from one file... each with its own .fbx/.glb in
+    # truckCab1/export/"), so its glb is a SIBLING of truckCab1.glb, not the tankTrailer1
+    # folder's own export - which does not exist.
+    "tankTrailer1": ("tankTrailer1", "/Game/Vehicles/Rig/TankTrailer1/SK_TankTrailer1"),
+    # fuelTrailer1.glb ships from UTILITY1's own export/ folder (utility1/scripts/build_export_
+    # fueltrailer.py: "the towed asset is built by scripts inside the tower's file") - the same
+    # folder mismatch tankTrailer1 has - see EXPORT_FOLDER below.
+    "fuelTrailer1": ("fuelTrailer1", "/Game/Vehicles/FuelTrailer1/SK_FuelTrailer1"),
     "catering1":  ("catering1",  "/Game/Vehicles/Catering1/SK_Catering1"),
     "baggageCart1": ("baggageCart1", "/Game/Vehicles/BaggageCart1/SK_BaggageCart1"),
     "curtainTrailer1": ("curtainTrailer1", "/Game/Vehicles/CurtainTrailer1/SK_CurtainTrailer1"),
@@ -81,6 +92,8 @@ PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": 
           "plane8": "Plane8", "plane9": "Plane9", "plane10": "Plane10",
           "plane11": "Plane11", "plane12": "Plane12",
           "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1",
+          "truckCab1": "TruckCab1", "tankTrailer1": "TankTrailer1",
+          "fuelTrailer1": "FuelTrailer1",
           "catering1": "Catering1", "baggageCart1": "BaggageCart1",
           "curtainTrailer1": "CurtainTrailer1"}
 
@@ -90,6 +103,13 @@ PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": 
 # hand, so the move made the rebuild skip the truck, and with it gone the shared looks
 # re-clustered: MI_Livery_Plane1 was renamed MI_Livery and every mesh was resaved.
 EXPORT_FOLDER = {"fueltruck1": "rigidCab1",
+                 # Towed assets ship from their TOWER's export/ folder: each is built by scripts
+                 # inside the tower's .blend (truckCab1/scripts/build_export.py,
+                 # utility1/scripts/build_export_fueltrailer.py). Until the 2026-09-25 merge of
+                 # main this was a second mechanism, a "folder/file" FLEET stem read by glb_path;
+                 # one mapping, one reader (fleet_glb) is the rule - see CLAUDE.md "lists that
+                 # must agree are one list".
+                 "tankTrailer1": "truckCab1", "fuelTrailer1": "utility1",
                  # catering1 is the chassis' second body, built in the same .blend; the
                  # curtain trailer is built in the tractor's (truckCab1/README.md).
                  "catering1": "rigidCab1", "curtainTrailer1": "truckCab1"}
@@ -103,6 +123,8 @@ def fleet_glb(models_root, key):
 # Below this two looks are the same colour written twice. The verifier may not check tighter
 # than the builder merges, or every merged look fails.
 MERGE_TOL = 0.005
+
+
 
 
 def say(msg):
@@ -465,6 +487,35 @@ def drop_reimport_pipeline(path):
     """Tooling, not content - import_plane2.py's phrase and its habit."""
     if unreal.EditorAssetLibrary.does_asset_exist(path):
         unreal.EditorAssetLibrary.delete_asset(path)
+
+
+def save_mesh_and_skeleton(mesh_path):
+    """Saves a reimported skeletal mesh AND the Skeleton asset it points at. True when both saved.
+
+    THE SKELETON IS A SEPARATE PACKAGE, and reimport_pipeline's update_skeleton_reference_pose
+    writes to it - a new bone ADDS to it. Saving only the mesh left SK_Utility1_Skeleton on disk
+    without the 'hitch' bone reimport_utility1.py had just added (2026-09-25): the next editor
+    session merged the bone back in from the mesh on load, marked the Skeleton dirty and asked
+    the user to save it, and anything reading the .uasset saw the old tree. Every reimport_*.py
+    that uses reimport_pipeline and saved only MESH had this gap.
+    ENFORCED BY: AirportMgr.Content.SkeletonHoldsEveryMeshBone (every mesh bone is in the saved
+    Skeleton's reference skeleton, for the towing fleet's meshes)
+
+    Forced (only_if_is_dirty=False) for the reason save_everything gives.
+    """
+    ok = unreal.EditorAssetLibrary.save_asset(mesh_path, only_if_is_dirty=False)
+    mesh = unreal.EditorAssetLibrary.load_asset(mesh_path)
+    skeleton = mesh.get_editor_property("skeleton") if mesh is not None else None
+    if skeleton is None:
+        fail("%s has no skeleton to save" % mesh_path)
+        return False
+    skeleton_path = skeleton.get_path_name().split(".")[0]
+    if unreal.EditorAssetLibrary.save_asset(skeleton_path, only_if_is_dirty=False):
+        say("saved %s and its skeleton %s" % (mesh_path.split("/")[-1], skeleton_path.split("/")[-1]))
+    else:
+        fail("could not save %s's skeleton %s" % (mesh_path, skeleton_path))
+        ok = False
+    return ok
 
 
 def import_mesh(spec, pipeline_path):

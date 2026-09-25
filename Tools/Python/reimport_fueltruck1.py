@@ -159,7 +159,12 @@ def main():
     else:
         say("PASS the mesh is the export's length, %.1f uu" % got)
 
-    unreal.EditorAssetLibrary.save_asset(MESH, only_if_is_dirty=False)
+
+    # THE SKELETON TOO, not the mesh alone: reimport_pipeline updates the Skeleton asset, and a
+    # Skeleton left unsaved is the stale bone tree the next session re-merges and asks to save
+    # - see airside_import.save_mesh_and_skeleton.
+    if not airside_import.save_mesh_and_skeleton(MESH):
+        ok = False
 
     # AND THE SKELETON, SAVED BY NAME. It is a separate package that the reimport updates in
     # memory (update_skeleton_reference_pose) and does not mark for saving - the Skeleton on

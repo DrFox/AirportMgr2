@@ -4,6 +4,8 @@
 #include "Animation/AnimInstance.h"
 #include "AirsideAgentAnim.generated.h"
 
+struct FReferenceSkeleton;
+
 /**
  * What an aircraft's moving parts are doing, ready for an Animation Blueprint to apply.
  *
@@ -26,6 +28,9 @@ class AIRSIDE_API UAirsideAgentAnim : public UAnimInstance
 
 public:
 	virtual void NativeUpdateAnimation(float DeltaSeconds) override;
+
+	/** Settles WheelRadius - see its own comment. */
+	virtual void NativeInitializeAnimation() override;
 
 	/**
 	 * How far the propeller may turn this frame, degrees.
@@ -98,6 +103,43 @@ public:
 	static float AngleFromRestFraction(float RestFraction, float TravelledAngle);
 
 	/**
+	 * Heading minus RelativeTo, both radians, as degrees WRAPPED to -180..180 and signed the
+	 * way Heading turns - the sign SteerAngleDegrees already has, so a towbar bone is wired
+	 * exactly as a steer bone is.
+	 *
+	 * WRAPPED because headings are: a bar at 179 degrees ahead of a body at -179 has swung 2,
+	 * and the raw difference of 358 would spin the towbar a full turn at the seam.
+	 *
+	 * Static for the reason the others are: testable without an actor or a skeleton.
+	 */
+	static float RelativeYawDegrees(double Heading, double RelativeTo);
+
+	/**
+	 * A wheel's angle from the distance its axle has rolled, degrees, -360..360; zero for a
+	 * radius that is not positive, rather than a division by it.
+	 *
+	 * ABSOLUTE, NOT A STEP, unlike WheelStepDegrees: a trailer's axle travel is handed over
+	 * whole by ARoadAgentActor (FTowLinkView::RolledUu), so there is nothing to integrate here
+	 * and no frame rate for the answer to depend on. The Fmod is in double, because the travel
+	 * is: a trailer that has rolled ten kilometres still turns its wheel to the degree.
+	 */
+	static float WheelAngleFromTravel(double TravelUu, float Radius);
+
+	/**
+	 * A vehicle rig's wheel radius, MEASURED: the reference-pose height of the first bone
+	 * named wheel* that sits ABOVE the ground, since every vehicle mesh here sits with its
+	 * tyres on z = 0 (the import refuses one that does not - airside_import.report_bounds).
+	 * A wheel*-named bone at or below the ground is skipped in favour of the next one, rather
+	 * than falling back at once - see the .cpp. Fallback when no such bone exists at all.
+	 *
+	 * STARTS WITH "wheel", not contains: truckCab1's fifth_wheel is a coupling socket, and a
+	 * substring match would measure the coupling plate as a tyre.
+	 *
+	 * Static so it is testable against a skeleton alone.
+	 */
+	static float WheelHubRadius(const FReferenceSkeleton& Skeleton, float Fallback);
+
+	/**
 	 * How far a working part has gone, from a DEPLOYED-END fraction and that rig's measured
 	 * travel - seconds into a clip, uu of slide, or degrees of swing. Zero is the bind pose.
 	 *
@@ -148,6 +190,23 @@ public:
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float SteerAngleDegrees = 0.0f;
+
+	/**
+	 * A DRAWBAR TRAILER'S towbar, degrees: the bar link's heading off this body's, signed as
+	 * SteerAngleDegrees is (see RelativeYawDegrees). Apply to towbar_yaw AND to the front
+	 * steer bones - on a turntable the front axle turns with the bar.
+	 *
+	 * A CHANNEL OF ITS OWN, NOT SteerAngleDegrees REUSED. That is the CAB's front-wheel
+	 * deflection, the angle the follower steered with; a trailer's front axle follows the bar,
+	 * which lags and differs. Wiring the turntable to the cab's steer would draw a plausible,
+	 * wrong answer - see Tools/wire_fuelTrailer1_anim.py's header. On a trailer instance
+	 * SteerAngleDegrees is held at zero for the same reason.
+	 *
+	 * Zero on anything that is not a drawbar body: the cab, an aircraft, a semi-trailer (whose
+	 * link couples straight to the cab's fifth wheel and has no bar).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float TowbarAngleDegrees = 0.0f;
 
 	/**
 	 * The wheel's own turn rate, degrees per second - carried between frames so it can decay
@@ -315,6 +374,23 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Airside")
 	float MainWheelRadius = 21.0f;
+
+	/**
+	 * The radius the wheels actually roll with, uu, settled at initialise.
+	 *
+	 * A VEHICLE'S IS READ OFF ITS OWN SKELETON (WheelHubRadius), not typed: no vehicle ABP
+	 * sets MainWheelRadius, so every truck and trailer rolled on the Meridian's 21 uu and the
+	 * tank trailer's 53.8 uu wheels spun about 2.5 times too fast. MainWheelRadius stays the
+	 * FALLBACK, used only when the skeleton has no wheel bone.
+	 *
+	 * AN AIRCRAFT KEEPS MainWheelRadius. Its figure is already measured - copied from
+	 * UAircraftType into the ABP and checked against the rig's hub by Airside.Content.
+	 * AirframeAxles - and airframe rigs name their wheels inconsistently (nosewheel against
+	 * main_*), where the one radius must be the MAINS': a first-wheel-bone rule could measure
+	 * the nose wheel instead.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float WheelRadius = 21.0f;
 
 	/**
 	 * How far this rig's gear folds, degrees. plane4's is 90.
