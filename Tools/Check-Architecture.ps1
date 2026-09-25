@@ -293,6 +293,18 @@ $AllowedCallers = @(
         ProdReason  = 'start the agent through StartTaxi/StartArrival/StartPushback/StartDrive, which keep its body and bundle consistent'
     },
     @{
+        # ONE TOW STEPPER (2026-09-25, the whole-route tow check). The router's verdict and the
+        # driven agent's fold are one fact only while both step the chain through
+        # VehicleFit::StepTow; a second production caller of StepChain is a second evaluator,
+        # the shape that let a balloon admit a rig that then jack-knifed. Trace (one curve) is
+        # the other sanctioned caller, in the same Solve file.
+        Name        = 'VehicleSweep::StepChain'
+        Pattern     = '\bStepChain\s*\('
+        ProdAllowed = @('VehicleSweep.h', 'VehicleSweep.cpp', 'VehicleFit.cpp')
+        TestExempt  = $true
+        ProdReason  = 'step a tow through VehicleFit::StepTow, the one step the router (JudgePlan) and the agent (FollowAndTow) share'
+    },
+    @{
         Name        = 'DepotKitSpecs'
         Pattern     = 'DepotKitSpecs\s*\('
         ProdAllowed = @('DepotKit.h', 'DepotKit.cpp', 'RoadNetworkActor.cpp')

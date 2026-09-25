@@ -136,6 +136,37 @@ bool VehicleSweep::StepChain(const FBody& Body, const FVector2D& Fixed, const FV
 	return true;
 }
 
+void VehicleSweep::BodyCorners(const FBody& Body, const FVector2D& Fixed, const FVector2D& Heading,
+	TArrayView<const FVector2D> Axles, FCorners& OutCorners)
+{
+	OutCorners.Reset();
+	const FVector2D Side = Perp(Heading) * (Body.Width * 0.5);
+	for (const double X : { Body.FrontX, Body.RearX, 0.0 })
+	{
+		OutCorners.Add(Fixed + Heading * X + Side);
+		OutCorners.Add(Fixed + Heading * X - Side);
+	}
+	if (Body.Tow.Num() == 0)
+	{
+		return;
+	}
+	// Every link's body: front, rear, axle and mid-length, each side. A bar (no body) still
+	// sweeps its width from hitch to axle.
+	TArray<FLinkPose, TInlineAllocator<2>> Poses;
+	PoseChain(Body, Fixed, Heading, Axles, Poses);
+	for (int32 Index = 0; Index < Poses.Num(); ++Index)
+	{
+		const FLink& Link = Body.Tow[Index];
+		const FLinkPose& Pose = Poses[Index];
+		const FVector2D LinkSide = Perp(Pose.Heading) * (Link.Width * 0.5);
+		for (const double X : { Link.Length + Link.BodyFront, -Link.BodyRear, 0.0, Link.Length * 0.5 })
+		{
+			OutCorners.Add(Pose.Axle + Pose.Heading * X + LinkSide);
+			OutCorners.Add(Pose.Axle + Pose.Heading * X - LinkSide);
+		}
+	}
+}
+
 bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
 	TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles)
 {
@@ -197,23 +228,14 @@ bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
 	FVector2D Fixed = Steps[0] - InTangent * Body.Wheelbase;
 	TArray<FVector2D> Axles;
 	LayChainStraight(Body, Fixed, InTangent, Axles);
-	TArray<FLinkPose, TInlineAllocator<2>> Poses;
-
-	TArray<FVector2D, TInlineAllocator<24>> Corners;
+	FCorners Corners;
 	for (const FVector2D& Steered : Steps)
 	{
 		// Pursuit: each trailing point stays its fixed distance behind the one it follows.
 		FVector2D Heading = (Steered - Fixed).GetSafeNormal();
 		Fixed = Steered - Heading * Body.Wheelbase;
 		Heading = (Steered - Fixed).GetSafeNormal();
-		const FVector2D Side = Perp(Heading) * (Body.Width * 0.5);
 
-		Corners.Reset();
-		for (const double X : { Body.FrontX, Body.RearX, 0.0 })
-		{
-			Corners.Add(Fixed + Heading * X + Side);
-			Corners.Add(Fixed + Heading * X - Side);
-		}
 		if (Body.Tow.Num() > 0)
 		{
 			int32 FoldedLink = INDEX_NONE;
@@ -226,21 +248,10 @@ bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
 			{
 				OutAxles->Append(Axles);
 			}
-			// Every link's body: front, rear, axle and mid-length, each side. A bar (no body)
-			// still sweeps its width from hitch to axle.
-			PoseChain(Body, Fixed, Heading, Axles, Poses);
-			for (int32 Index = 0; Index < Poses.Num(); ++Index)
-			{
-				const FLink& Link = Body.Tow[Index];
-				const FLinkPose& Pose = Poses[Index];
-				const FVector2D LinkSide = Perp(Pose.Heading) * (Link.Width * 0.5);
-				for (const double X : { Link.Length + Link.BodyFront, -Link.BodyRear, 0.0, Link.Length * 0.5 })
-				{
-					Corners.Add(Pose.Axle + Pose.Heading * X + LinkSide);
-					Corners.Add(Pose.Axle + Pose.Heading * X - LinkSide);
-				}
-			}
 		}
+		// The cab's corners and then every link's, from where the chain now IS - BodyCorners,
+		// which VehicleFit::JudgePlan puts on the whole route too (one list of corners, not two).
+		BodyCorners(Body, Fixed, Heading, Axles, Corners);
 
 		for (const FVector2D& Corner : Corners)
 		{

@@ -5,6 +5,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficOccupancy.h"
+#include "Model/Vehicle.h"
 #include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
 
@@ -24,6 +25,25 @@ namespace
 	 * the traffic through it.
 	 */
 	int32 GRunwaySeedResolveCountForTest = 0;
+
+	/** See RouteSearch::TowCheckCountForTest. Bumped once per VehicleFit::JudgePlan Find runs. */
+	int32 GTowCheckCountForTest = 0;
+
+	/** See RouteSearch::TowCheckSecondsForTest: wall-clock seconds spent in those checks. */
+	double GTowCheckSecondsForTest = 0.0;
+
+	/**
+	 * How many times Find re-searches after the whole-route tow check folds a plan, each time
+	 * excluding the edge the fold happened on, before it refuses.
+	 *
+	 * 4, AND A BOUND AT ALL, because each retry is a full search plus a whole-route drive, and a
+	 * graph with no route that holds the trailer would otherwise be searched once per edge in
+	 * it. Four covers what the courses and tests have shown (2026-09-25): a fold is one tight
+	 * manoeuvre - a balloon, three same-hand quarters - with at most a couple of ways round it;
+	 * Airside.Model.Tow.WholeRouteRetriesRoundAFold finds its way round on the first retry. Past
+	 * four, the answer a player needs is "this road folds the trailer", not a fifth detour.
+	 */
+	constexpr int32 MaxTowRetries = 4;
 
 	/**
 	 * Cached length plus the query's congestion charge.
@@ -152,7 +172,7 @@ namespace
 		TFunctionRef<double(const FVector2D&)> Heuristic, TMap<int32, bool>& RunwayInUse,
 		TMap<int32, bool>& RunwaySeeds,
 		TMap<FGuidelineNodeId, double>& Best, TMap<FGuidelineNodeId, FRouteStep>& Arrived,
-		TArray<TPair<double, FGuidelineNodeId>>& Open)
+		TArray<TPair<double, FGuidelineNodeId>>& Open, const TSet<FGuidelineEdgeId>* Excluded = nullptr)
 	{
 		// Whether an edge's source segment IS a runway, once per segment seen. A slot lookup
 		// plus a profile resolve, which the avoidance test below used to pay on EVERY relaxation
@@ -217,6 +237,14 @@ namespace
 			}
 
 			if (Query.BannedEdge.IsSet() && EdgeId == Query.BannedEdge)
+			{
+				return;
+			}
+
+			// A TOW'S FOLD EXCLUSIONS, Find's own and per call - NOT BannedEdge, which is the
+			// deadlock resolver's one edge and must survive a tow retry untouched. A set, because
+			// each retry adds one and the earlier ones must stay out.
+			if (Excluded != nullptr && Excluded->Contains(EdgeId))
 			{
 				return;
 			}
@@ -376,7 +404,8 @@ namespace
 		return Plan;
 	}
 
-	FRoutePlan RunSearch(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreSize)
+	FRoutePlan RunSearch(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreSize,
+		const TSet<FGuidelineEdgeId>* Excluded = nullptr)
 	{
 		++GSearchCallCountForTest;
 
@@ -450,7 +479,8 @@ namespace
 			}
 
 			const double Reached = Best.FindChecked(At);
-			ExpandNode(Network, Query, bIgnoreSize, At, Reached, Closed, Heuristic, RunwayInUse, RunwaySeeds, Best, Arrived, Open);
+			ExpandNode(Network, Query, bIgnoreSize, At, Reached, Closed, Heuristic, RunwayInUse, RunwaySeeds, Best, Arrived, Open,
+				Excluded);
 		}
 
 		if (Plan.Result != ERouteResult::Found)
@@ -458,6 +488,83 @@ namespace
 			return Plan;
 		}
 		return BuildPlanFromArrival(Network, Query.Start, *StartNode, Query.Goal, Arrived);
+	}
+
+	/**
+	 * THE WHOLE-ROUTE TOW CHECK, run on a plan the per-edge search already found (2026-09-25).
+	 * Found is returned as it is when the vehicle's trailer holds over the whole drive
+	 * (VehicleFit::JudgePlan). Otherwise the edge the fold happened on is excluded and the
+	 * search is run again - up to MaxTowRetries times - so a tow takes a way round that works
+	 * rather than being refused outright; when none does, TooNarrow carrying the FIRST verdict.
+	 *
+	 * A DECORATOR ON THE SEARCH, NOT A TERM IN IT. The per-edge rule (VehicleFit::Judge) is a
+	 * filter A* can apply edge by edge because it depends on nothing but the edge. A trailer's
+	 * angle depends on every edge before it, so a node's cost would depend on the path into it
+	 * and the search would stop being a search over nodes. Judging the found plan and excluding
+	 * where it failed keeps A* exact and pays only for tows.
+	 *
+	 * THE EXCLUSION IS THE EDGE THE FOLD HAPPENED ON (the edge the cab is driving at the first
+	 * failing sample - FFitVerdict::Edge), not the edge
+	 * where the angle began to build - which was the first design, rejected by tracing it on the
+	 * retry test's own graph (Airside.Model.Tow.WholeRouteRetriesRoundAFold): the climb begins on the
+	 * junction's entry curve, and that curve is SHARED by the way round, so excluding it threw
+	 * the working route away with the folding one. The fold's edge is the manoeuvre's tail, on
+	 * every route through that manoeuvre - in a balloon every piece is, so excluding any one
+	 * takes the whole balloon out - and on no route that avoids it. The cost, stated: a route
+	 * reaching the same edge by a straighter approach is excluded with it.
+	 *
+	 * THE FIRST VERDICT IS REPORTED on refusal, not the last: it is about the route the player
+	 * would expect (the shortest), where a retry's is about a detour they never asked for.
+	 */
+	FRoutePlan CheckWholeRouteTow(const URoadNetwork& Network, const FRouteQuery& Query, FRoutePlan Found)
+	{
+		TSet<FGuidelineEdgeId> Excluded;
+		FFitVerdict First;
+		const FString Who = Query.Vehicle->TypeCode.ToString();
+		for (int32 Attempt = 0; ; ++Attempt)
+		{
+			++GTowCheckCountForTest;
+			const double Began = FPlatformTime::Seconds();
+			const FFitVerdict Verdict = VehicleFit::JudgePlan(Found, *Query.Vehicle, Network);
+			GTowCheckSecondsForTest += FPlatformTime::Seconds() - Began;
+			if (Verdict.Fits())
+			{
+				if (Attempt > 0)
+				{
+					UE_LOG(LogAirside, Log, TEXT("Route %d -> %d: %s takes a way round that holds its tow after %d retr%s (%.1f m)."),
+						Query.Start.Index, Query.Goal.Index, *Who, Attempt, Attempt == 1 ? TEXT("y") : TEXT("ies"),
+						Found.Length / 100.0);
+				}
+				return Found;
+			}
+			if (Attempt == 0)
+			{
+				First = Verdict;
+			}
+
+			const FGuidelineEdgeId Exclude = Verdict.Edge;
+			const bool bCanRetry = Attempt < MaxTowRetries && Exclude.IsSet() && !Excluded.Contains(Exclude);
+			UE_LOG(LogAirside, Log, TEXT("Route %d -> %d: %s refused on the whole route (attempt %d): %s%s"),
+				Query.Start.Index, Query.Goal.Index, *Who, Attempt + 1, *Verdict.Describe(),
+				bCanRetry ? *FString::Printf(TEXT("; retrying without guideline edge %d"), Exclude.Index) : TEXT(""));
+			if (!bCanRetry)
+			{
+				break;
+			}
+			Excluded.Add(Exclude);
+			Found = RunSearch(Network, Query, /*bIgnoreSize=*/false, &Excluded);
+			if (!Found.IsValid())
+			{
+				break;
+			}
+		}
+
+		FRoutePlan Refused;
+		Refused.Result = ERouteResult::TooNarrow;
+		Refused.Start = Query.Start;
+		Refused.RejectedEdge = First.Edge;
+		Refused.RejectedBy = First;
+		return Refused;
 	}
 }
 
@@ -596,6 +703,10 @@ namespace RouteSearch
 	int32 SearchCallCountForTest() { return GSearchCallCountForTest; }
 	void ResetSearchCallCountForTest() { GSearchCallCountForTest = 0; }
 
+	int32 TowCheckCountForTest() { return GTowCheckCountForTest; }
+	void ResetTowCheckCountForTest() { GTowCheckCountForTest = 0; GTowCheckSecondsForTest = 0.0; }
+	double TowCheckSecondsForTest() { return GTowCheckSecondsForTest; }
+
 	FRoutePlan Find(const URoadNetwork& Network, const FRouteQuery& Query)
 	{
 		FRoutePlan Plan;
@@ -627,6 +738,15 @@ namespace RouteSearch
 		}
 
 		Plan = RunSearch(Network, Query, /*bIgnoreSize=*/false);
+
+		// A TOW, AND ONLY A TOW, is judged on the whole plan too: rigid vehicles and aircraft
+		// never reach this, so their routing is bit-identical to before it existed
+		// (Airside.Model.Tow.WholeRouteSkipsRigidAndAircraft counts the checks).
+		if (Plan.IsValid() && Query.Vehicle != nullptr && Query.Vehicle->HasTrailer())
+		{
+			return CheckWholeRouteTow(Network, Query, MoveTemp(Plan));
+		}
+
 		if (Plan.IsValid() || (Query.Wingspan <= 0.0 && Query.Vehicle == nullptr))
 		{
 			return Plan;
@@ -647,9 +767,16 @@ namespace RouteSearch
 				for (const FRouteStep& Step : Unconstrained.Steps)
 				{
 					const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step.Edge);
-					if (Edge != nullptr && !VehicleFit::Fits(*Edge, *Query.Vehicle, Network))
+					if (Edge == nullptr)
+					{
+						continue;
+					}
+					// Judge, not Fits: the same rule, kept with its figures on the plan (RejectedBy).
+					const FFitVerdict Verdict = VehicleFit::Judge(*Edge, *Query.Vehicle, Network);
+					if (!Verdict.Fits())
 					{
 						Plan.RejectedEdge = Step.Edge;
+						Plan.RejectedBy = Verdict;
 						break;
 					}
 				}

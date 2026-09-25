@@ -248,13 +248,46 @@ fillets are sized per width tier; dead-end balloons are NOT:**
   All three clear the rig's 575.6 uu lock, so the router ADMITTED the rig at every dead end - and
   the rig JACK-KNIFED (90 deg at link 0) in all three balloons on `OneLoopHeadless`, the utility
   and bowser driving them cleanly. The lock is the cab's limit, not the trailer's, and
-  `VehicleFit` does not trace a balloon's tow (Open: "One evaluator for a whole route's tow", both
+  `VehicleFit` does not trace a balloon's tow (then Open: "One evaluator for a whole route's tow", both
   halves). So inside this footprint a gentler balloon only moves the rig's refusal from the lock
   to a fold; it was not committed. To land it, the whole-route tow trace must land first (the rig
   then refused on Jackknife, the bowser and utility on gentler curves); the patch is kept with the
   session's report.
 - **The course:** the rig bypasses all three dead-end stems (look-ahead), their U-turns refused
   on the lock-radius reason; its corners on Wide are laid for it.
+
+**REVISED 2026-09-25 ("whole-route tow check", user-approved) - the router follows the trailer
+over the whole planned route, so it cannot send a tow where its trailer folds:**
+
+- **The gap it closes** (was Open, "One evaluator for a whole route's tow"): `VehicleFit::Judge`
+  lays the train straight at the start of every edge, and returns "fits" before tracing an edge
+  with no clearance data (balloons), so the router admitted the rig into reshaped balloons whose
+  every piece cleared its lock, and the agent jack-knifed in all three.
+- **The check:** `VehicleFit::JudgePlan` drives a found plan exactly as `FRoadAgent` will - a
+  `FRouteFollower` from rest, the chain laid straight ONCE at the plan's first point
+  (`VehicleFit::LayTow`, which `StartDrive` now calls) and stepped every
+  `VehicleFit::TowSubStepSeconds` with `VehicleFit::StepTow`, the one step `FollowAndTow` now
+  takes too. It refuses on a fold (`EFitRefusal::TrailerFolds`), and on swept body over tarmac
+  at any sample of an edge that HAS per-sample clearances (the per-edge rule, on the whole
+  route's carried chain). A lint row holds `VehicleSweep::StepChain` to its two sanctioned callers.
+- **Where it hooks:** `RouteSearch::Find`, after a found plan, only when the query's vehicle has a
+  tow - a decorator on the search, not a term in it (a trailer's angle depends on the path into a
+  node, which A* cannot cost). Rigid vehicles and aircraft never reach it: their routing is
+  bit-identical (`Airside.Model.Tow.WholeRouteSkipsRigidAndAircraft` counts zero checks).
+- **Retry:** on a fold the edge the cab is driving at the first failing sample is excluded and
+  the search re-run, up to 4 times; then `TooNarrow` with `FRoutePlan::RejectedBy` carrying the
+  first fold: "trailer folds at guideline node N / (x, y), link L, angle A deg". Excluding where
+  the angle began to build was traced and rejected: that is usually a junction's entry curve the
+  way round shares.
+- **One evaluator, pinned:** `Airside.Model.Tow.WholeRouteVerdictIsTheAgents` - over ten shapes
+  the router's verdict equals whether the dispatched agent jack-knifes, at the check's own step
+  (fold at the same route distance, bitwise) and at the game's 1/30 s frames.
+- **An S relieves, it does not fold** (the brief proposed an S as the failing case): after a left
+  curve the trailer lags right, and a right curve swings the cab back toward it. What folds is
+  same-hand turning: three 90 degree quarters that each clear the lock (worst 90 deg) where two
+  hold (75 deg). `Airside.Model.Tow.WholeRouteFoldRefused`.
+- **Known approximation:** the chain is laid straight at the PLAN's start. A redirect or a rebuild
+  re-resolve plans from a vehicle whose trailer is already angled; the check starts it straight.
 
 **REVISED 2026-09-25 ("one route per loop") - the course drives one route per loop, like the
 game; legs are progress markers:**
@@ -362,14 +395,6 @@ across both lanes (a known gap from the road-lanes spec).
   inset at all still gets the old straight diagonal. The capped-taper warning names the length.
 - **The rig U-turns at road ends once reversing exists (step 2):** a three-point turn, not a
   bigger balloon (user ruling 2026-09-25). Until then every dead end refuses it on its lock.
-- **One evaluator for a whole route's tow (a real gap, found 2026-09-25).** Two halves:
-  (a) balloon edges carry no clearance data, so `VehicleFit::Judge` returns "fits" before it
-  reaches `VehicleSweep::Trace` - the jack-knife check never runs on a balloon; (b) `Trace` lays
-  the train straight at the start of EVERY edge, forgetting the hitch angle carried across
-  edges - S-bends (the width taper's included), and lead-ins all start the trailer straighter than it is.
-  Measured consequence: a rig-lock balloon was admitted and the agent folded on it. Proposed
-  fix: trace the WHOLE found plan once, with the chain carried across edges, and reject the plan
-  if it folds. Not implemented.
 - **The near-side overrun.** The rig's trailer cuts 2.0-3.4 m past the inner pavement edge on
   near-side turns while its swept width still fits (§3, measured and bounded, not fixed).
   Needs a decision: judge `VehicleFit` per side, or have the agent swing wide.

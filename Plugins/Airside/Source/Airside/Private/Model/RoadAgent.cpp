@@ -380,9 +380,9 @@ void FRoadAgent::StartDrive(const FRoutePlan& Plan, const FVehicle& InVehicle)
 		FVector2D Steered = LastMotion.Position;
 		double LineHeading = 0.0;
 		GuidelineGeom::PointAtDistance(Follower.Plan.Polyline, Follower.Travelled, Steered, LineHeading);
-		const FVector2D Forward(FMath::Cos(Follower.Heading), FMath::Sin(Follower.Heading));
-		const FVector2D Fixed = Steered - Forward * (Chassis().SteerAxleX - Chassis().FixedAxleX);
-		VehicleSweep::LayChainStraight(VehicleFit::BodyOf(Vehicle), Fixed, Forward, TowAxles);
+		// VehicleFit::LayTow, which VehicleFit::JudgePlan lays the router's chain with too: the
+		// whole-route check starts its tow exactly where this one starts.
+		VehicleFit::LayTow(Vehicle, Steered, FVector2D(FMath::Cos(Follower.Heading), FMath::Sin(Follower.Heading)), TowAxles);
 	}
 }
 
@@ -402,8 +402,9 @@ bool FRoadAgent::FollowAndTow(double DeltaSeconds, FVector2D& OutAt, double& Out
 	// time delivered as shorter frames walk identical sub-steps - Airside.Model.Tow.
 	// LongFrameIsSubStepped. The cab moves in the same loop, so each chain step is taken
 	// against where the cab actually is, never interpolated.
-	const double SpeedCap = FMath::Max(Chassis().Ground.Taxi.SpeedCap, UE_KINDA_SMALL_NUMBER);
-	const double Longest = VehicleSweep::TraceStep / SpeedCap;
+	// VehicleFit::TowSubStepSeconds: the same sub-step VehicleFit::JudgePlan drives the route
+	// with before the router admits it.
+	const double Longest = VehicleFit::TowSubStepSeconds(Chassis());
 	// Less a hair, so an exact multiple of the sub-step (2 s / 0.01 s) is not rounded up to
 	// one spare step by the division's last bit - GroundTraffic's own LastStepsForTest trap.
 	const int32 Steps = FMath::Max(1, FMath::CeilToInt32(DeltaSeconds / Longest - UE_KINDA_SMALL_NUMBER));
@@ -422,11 +423,11 @@ bool FRoadAgent::FollowAndTow(double DeltaSeconds, FVector2D& OutAt, double& Out
 		}
 		bMoved = true;
 
-		const FVector2D Forward(FMath::Cos(OutHeading), FMath::Sin(OutHeading));
-		const FVector2D Fixed = OutAt + Forward * Chassis().FixedAxleX;
+		// VehicleFit::StepTow - THE step VehicleFit::JudgePlan takes too, so the router's
+		// whole-route verdict is this loop's, run ahead of time.
 		int32 FoldedLink = INDEX_NONE;
 		double FoldRadians = 0.0;
-		if (!VehicleSweep::StepChain(Towed, Fixed, Forward, TowAxles, FoldedLink, FoldRadians))
+		if (!VehicleFit::StepTow(Towed, Chassis(), OutAt, OutHeading, TowAxles, FoldedLink, FoldRadians))
 		{
 			// STOPPED AND SAID SO, once: the next frames take the hold branch in Advance and
 			// never reach this again. A bug detector for forward driving (spec §1), so it is a

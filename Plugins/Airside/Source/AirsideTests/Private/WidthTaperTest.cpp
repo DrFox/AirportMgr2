@@ -11,6 +11,7 @@
 #include "Model/RouteSearch.h"
 #include "Model/SpeedProfile.h"
 #include "Model/Vehicle.h"
+#include "Model/VehicleFit.h"
 #include "Profiles/RoadDesignVehicles.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
@@ -124,9 +125,20 @@ bool FWidthTaperDrivableTest::RunTest(const FString& Parameters)
 	};
 	for (const FLane& Lane : Lanes)
 	{
+		RouteSearch::ResetTowCheckCountForTest();
 		const FRoutePlan Plan = RigRoute(*Step.Net, Lane.Start, Lane.Goal, Rig);
-		if (!TestTrue(FString::Printf(TEXT("%s: the rig is admitted across the taper (%d)"), Lane.Name, static_cast<int32>(Plan.Result)),
-			Plan.IsValid())) { continue; }
+		if (!TestTrue(FString::Printf(TEXT("%s: the rig is admitted across the taper (%d) %s"), Lane.Name, static_cast<int32>(Plan.Result),
+			*Plan.RejectedBy.Describe()), Plan.IsValid())) { continue; }
+
+		// ON THE WHOLE ROUTE TOO (2026-09-25): the S was sized for the rig, so its trailer, carried
+		// across both of the S's pieces rather than laid straight at each, holds - judged ONCE,
+		// first time, with no retry needed.
+		TestEqual(FString::Printf(TEXT("%s: one whole-route tow check, passed first time"), Lane.Name),
+			RouteSearch::TowCheckCountForTest(), 1);
+		const FFitVerdict Whole = VehicleFit::JudgePlan(Plan, Rig, *Step.Net);
+		UE_LOG(LogTemp, Display, TEXT("WidthTaper: %s whole-route worst hitch %.1f deg"), Lane.Name, FMath::RadiansToDegrees(Whole.Radians));
+		TestTrue(FString::Printf(TEXT("%s: the whole-route check holds the trailer across the taper (%s)"), Lane.Name,
+			*Whole.Describe()), Whole.Fits());
 
 		// FSpeedProfile IS THE DRIVABILITY AUTHORITY: over the whole route, not per edge.
 		FSpeedProfile Profile;

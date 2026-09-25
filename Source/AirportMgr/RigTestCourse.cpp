@@ -1044,6 +1044,12 @@ FString ARigTestCourse::DescribeRefusal(const URoadNetwork& Network, const FRout
 	{
 		return Text;
 	}
+	// A WHOLE-ROUTE REFUSAL (a tow folding, 2026-09-25) names its own place and figures: no edge
+	// re-judged on its own would refuse it, which is the point of the check.
+	if (Plan.RejectedBy.bWholeRoute && !Plan.RejectedBy.Fits())
+	{
+		return Text + TEXT(", ") + Plan.RejectedBy.Describe();
+	}
 	const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Plan.RejectedEdge);
 	const FGuidelineNode* At = Edge != nullptr ? Network.GetGuidelineNode(Edge->A) : nullptr;
 	if (Edge == nullptr || At == nullptr)

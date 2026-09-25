@@ -788,7 +788,11 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 	Watch.Continuity = &Continuity;
 	Watch.Overlap = &Overlap;
 	GLog->AddOutputDevice(&Spy);
+	RouteSearch::ResetTowCheckCountForTest();
 	const int32 Ticks = RunUntil(*Actor, *Course, MaxTicks, [Course]() { return Course->LoopsCompletedByAllForTest() >= 1; }, Watch);
+	// THE WHOLE-ROUTE TOW CHECK'S COST, counted: the course plans per loop and per look-ahead, never per frame.
+	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %d whole-route tow check(s) over the loop, %.1f ms in all"),
+		RouteSearch::TowCheckCountForTest(), RouteSearch::TowCheckSecondsForTest() * 1000.0);
 	GLog->RemoveOutputDevice(&Spy);
 	Probe.Finish();
 	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: both loops took %d ticks (%.0f s sim); rig %d loop(s), utility %d; %d turn / %d lane tow point(s) probed"),

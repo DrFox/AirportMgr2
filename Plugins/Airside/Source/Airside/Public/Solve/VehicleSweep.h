@@ -115,6 +115,21 @@ namespace VehicleSweep
 	AIRSIDE_API bool StepChain(const FBody& Body, const FVector2D& Fixed, const FVector2D& Heading,
 		TArrayView<FVector2D> InOutAxles, int32& OutFoldedLink, double& OutFoldRadians);
 
+	/** Every body corner one pose sweeps: 6 for the cab, 8 per link. Inline for the rig and a drawbar. */
+	using FCorners = TArray<FVector2D, TInlineAllocator<24>>;
+
+	/**
+	 * The points a vehicle's body reaches at one pose - the cab's front, rear and fixed axle
+	 * each side, then every link's front, rear, axle and mid-length each side - placed from
+	 * the tractor's fixed axle at Fixed facing Heading (unit) and the chain's Axles.
+	 *
+	 * PULLED OUT OF Trace (2026-09-25) so VehicleFit::JudgePlan, which measures the WHOLE
+	 * route's sweep with the chain carried across edges, puts the same corners on the road
+	 * that one curve's Trace does. Two corner lists would be two answers to "how wide is it".
+	 */
+	AIRSIDE_API void BodyCorners(const FBody& Body, const FVector2D& Fixed, const FVector2D& Heading,
+		TArrayView<const FVector2D> Axles, FCorners& OutCorners);
+
 	/**
 	 * Offsets from the steered axle's path, uu: Inner toward the turn centre, Outer away from
 	 * it. bHolds false when the turn cannot be held at all - tighter than the wheelbase, or a
