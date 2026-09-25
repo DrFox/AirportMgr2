@@ -77,6 +77,11 @@ NEEDS = {
         "default is indistinguishable from an asset nobody authored, which is the point the "
         "Plane7 row already makes from the other side",
     ),
+    "/Game/Entities/DA_Aircraft_Plane11": (
+        unreal.PushbackNeed.VEHICLE_TUG,
+        "a 319 t A350-1000 needs the tug the 777 beside it does - authored rather than left "
+        "to the class default for the Plane6 row's reason",
+    ),
     "/Game/Entities/DA_Aircraft_Plane8": (
         unreal.PushbackNeed.VEHICLE_TUG,
         "a 575 t A380 is the end of the progression - nothing heavier flies - and it is "

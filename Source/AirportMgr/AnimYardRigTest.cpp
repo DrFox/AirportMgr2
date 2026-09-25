@@ -8,6 +8,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Model/Airframe.h"
 #include "Model/AgentMotion.h"
+#include "Present/AirsideAgentAnim.h"
 #include "Present/RoadAgentActor.h"
 #include "Testing/AirsideTestWorld.h"
 
@@ -155,11 +156,24 @@ bool FAnimYardEveryRigDrivesItsBonesTest::RunTest(const FString& Parameters)
 			continue;
 		}
 
-		// 2. THE WHEELS. Half a second at taxi speed is several turns of a 0.2 m wheel, so
-		// anything hanging off a wheel bone is somewhere else entirely by the end of it.
+		// 2. THE WHEELS, ROLLED A QUARTER TURN OF THIS RIG'S OWN WHEEL - never a fixed time.
+		// This was half a second at taxi speed, 400 uu of roll, and plane11's 63.66 uu wheel
+		// is 399.99 uu round: its wheels turned exactly ONE revolution and came back to the
+		// parked pose 0.009 degrees off, inside MovedBones' tolerance, so a correctly wired
+		// graph read as unwired (2026-09-25). Any fixed roll is a whole number of turns for
+		// SOME radius; a quarter of this rig's own circumference is 90 degrees for every rig.
+		const UAirsideAgentAnim* Anim = Cast<UAirsideAgentAnim>(Component->GetAnimInstance());
+		const double Radius = Anim != nullptr ? Anim->MainWheelRadius : 0.0;
+		if (!TestTrue(*FString::Printf(TEXT("%s: the anim instance is a UAirsideAgentAnim with a "
+			"wheel radius (%.2f uu)"), *Who, Radius), Radius > KINDA_SMALL_NUMBER))
+		{
+			Agent->Destroy();
+			continue;
+		}
 		Bench.Reset();
 		Bench.GroundSpeed = Bench.TaxiSpeed;
-		Settle(*Agent, *Component, Bench.ToAgentMotion(Entry.Rig.Gear), 0.5);
+		const double QuarterTurnSeconds = (0.5 * UE_DOUBLE_PI * Radius) / Bench.TaxiSpeed;
+		Settle(*Agent, *Component, Bench.ToAgentMotion(Entry.Rig.Gear), QuarterTurnSeconds);
 		const TSet<int32> ByWheels = MovedBones(Parked, PoseOf(*Component));
 
 		TestTrue(*FString::Printf(TEXT("%s: rolling the wheels moves at least one bone - if this "

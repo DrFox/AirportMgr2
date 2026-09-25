@@ -182,6 +182,9 @@ static const TCHAR* const MeasuredTypes[] = {
 	// footprint is a plan shadow of a pitched mesh, and this row is what says the pipeline
 	// measures such a mesh the same way it measures a level one.
 	TEXT("/Game/Entities/DA_Aircraft_Plane12"),
+	// THE A350 IS THE ROW THAT BINDS CODE E'S TAIL. Its rudder at 6901.3 uu aft of the stop
+	// mark is what MaxTailAft 6902 is sized from, so this row goes red if a re-export grows it.
+	TEXT("/Game/Entities/DA_Aircraft_Plane11"),
 };
 
 /**
@@ -429,6 +432,8 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		  TEXT("a 350 t 777-300ER is the far end of the same progression - and this row is "
 			   "the only thing distinguishing an asset authored VehicleTug from one nobody "
 			   "authored at all, since the class default says the same thing") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane11"), EPushbackNeed::VehicleTug,
+		  TEXT("a 319 t A350-1000 needs the tug the 777 beside it does") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane8"), EPushbackNeed::VehicleTug,
 		  TEXT("a 575 t A380 is the end of the progression - nothing heavier flies - and the "
 			   "row exists for the reason plane6's does: authored VehicleTug and default "

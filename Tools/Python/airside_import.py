@@ -64,6 +64,7 @@ FLEET = {
     "plane8":     ("plane8",     "/Game/Aircraft/Plane8/SK_Plane8"),
     "plane9":     ("plane9",     "/Game/Aircraft/Plane9/SK_Plane9"),
     "plane10":    ("plane10",    "/Game/Aircraft/Plane10/SK_Plane10"),
+    "plane11":    ("plane11",    "/Game/Aircraft/Plane11/SK_Plane11"),
     "plane12":    ("plane12",    "/Game/Aircraft/Plane12/SK_Plane12"),
     "fueltruck1": ("fueltruck1", "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"),
     "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
@@ -77,7 +78,8 @@ FLEET = {
 # Asset folder name -> the name Content uses, for instance naming only.
 PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
           "plane5": "Plane5", "plane6": "Plane6", "plane7": "Plane7",
-          "plane8": "Plane8", "plane9": "Plane9", "plane10": "Plane10", "plane12": "Plane12",
+          "plane8": "Plane8", "plane9": "Plane9", "plane10": "Plane10",
+          "plane11": "Plane11", "plane12": "Plane12",
           "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1",
           "catering1": "Catering1", "baggageCart1": "BaggageCart1",
           "curtainTrailer1": "CurtainTrailer1"}

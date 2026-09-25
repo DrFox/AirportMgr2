@@ -74,6 +74,10 @@ ROWS = [
         # aeroplanes fitted 220 m and seven do not - and standing it beside the narrowbody is
         # most of the argument for keeping a yard at all. A Code E aeroplane next to a Code C
         # one says what "the airport has to be rebuilt" means in a way no figure does.
+        # THE A350 BEFORE THE 777, ON SPAN BY 9 CM: 64.69 m against 64.78, and 0.2 m shorter
+        # (73.65 against 73.88). Two Code E twins side by side, one per maker, is the point -
+        # and the A350's nose leg folding AFT where the 777's goes forward shows under G.
+        ("/Game/Aircraft/Plane11/SK_Plane11", "Plane11 (A350-1000)"),
         ("/Game/Aircraft/Plane6/SK_Plane6", "Plane6 (777-300ER)"),
         # THE A380 GOES AFTER THE 777, AND WHAT IT ADDS IS WIDTH: 79.75 m of span against
         # the 777's 64.78, and 15 m of fuselage the 777 does not have UNDER it - a second
@@ -136,8 +140,11 @@ ROW_PITCH_UU = 10000.0
 #
 # 470 m SINCE 2026-09-25, UP FROM 450, FOR plane12 - the prediction above came true a day
 # early. The Cherokee's 9.14 m and its 12 m gap take the row to about 450 m, at the edge.
+#
+# 540 m SINCE 2026-09-25, UP FROM 470, FOR plane11. The A350's 64.69 m and its 12 m gap take
+# the row from about 450 m to about 527. Span still binds.
 FLOOR_X_M = 300.0
-FLOOR_Y_M = 470.0
+FLOOR_Y_M = 540.0
 
 # THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
 #

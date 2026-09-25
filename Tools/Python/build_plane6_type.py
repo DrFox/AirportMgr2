@@ -112,7 +112,10 @@ BAY_DOOR_CLOSED_ANGLE_DEGREES = 81.0
 # ground geometry a metre inside the 777's own tail. Code E was an AUTHORED design value -
 # the row's own comment invites exactly this revision when a type arrives that exceeds it -
 # and it is now MEASURED, as Code C has been since the 737-800 was corrected on 2026-09-19.
-MAX_TAIL_AFT_E = 6800.0
+#
+# 6902 SINCE 2026-09-25: plane11's A350-1000 reaches 6901.3 uu and the row followed it. This
+# aeroplane is now 103 uu inside rather than tight against it.
+MAX_TAIL_AFT_E = 6902.0
 
 
 def say(msg):
