@@ -344,8 +344,8 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 
 		// Now churn the graph. Twice, because the first Build has nothing to clear.
 		const FRoadSolveResult LiveSolved = FRoadNetworkSolver::SolveAll(*Live);
-		FRoadGuidelineBuilder::Build(*Live, LiveSolved, UAirsideSettings::ResolveLargestServiceVehicle());
-		FRoadGuidelineBuilder::Build(*Live, LiveSolved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Live, LiveSolved, UAirsideSettings::ResolveRoadDesignVehicles());
+		FRoadGuidelineBuilder::Build(*Live, LiveSolved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		const FEntityInstance* After = Live->GetEntity(Gate12);
 		if (TestNotNull(TEXT("the stand survives a rebuild"), After))

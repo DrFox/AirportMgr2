@@ -377,6 +377,16 @@ public:
 	uint32 GetGuidelineRevision() const { return GuidelineRevision; }
 
 	/**
+	 * The capped bend widenings the last TRACING solve warned about, by a key of the bend and its
+	 * figures (FRoadNetworkSolver::SolveAll). Kept so the rig course - laid once, rebuilt on every
+	 * Topology edit - warns about a bend once until that bend's geometry changes, not every
+	 * rebuild (re-review of 8de90a45). The solver replaces it wholesale each tracing solve, so a
+	 * bend that is fixed and later capped again warns again. Transient: a session's log, not state.
+	 * ENFORCED BY: Airside.Build.BendLanes.CappedWideningWarnsOncePerGeometry
+	 */
+	TSet<uint32>& CappedWideningsWarned() { return CappedWideningsWarnedKeys; }
+
+	/**
 	 * The handle for a live slot index, for callers walking GetGuidelineNodes() by index.
 	 * Unset for a dead or out-of-range slot, so a caller cannot build a handle to a node
 	 * that RoadSlot::IsValid would then reject.
@@ -804,6 +814,9 @@ private:
 
 	/** See GetGuidelineRevision. Plain, not a UPROPERTY - it is a session clock, not state. */
 	uint32 GuidelineRevision = 0;
+
+	/** See CappedWideningsWarned. */
+	TSet<uint32> CappedWideningsWarnedKeys;
 
 	/** See GetEditRevision. Plain, not a UPROPERTY - a session clock, not state. */
 	uint32 EditRevision = 0;

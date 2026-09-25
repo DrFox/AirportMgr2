@@ -26,7 +26,7 @@ namespace VehicleGating
 	void Derive(URoadNetwork& Net)
 	{
 		FRoadGuidelineBuilder::Build(Net, FRoadNetworkSolver::SolveAll(Net),
-			UAirsideSettings::ResolveLargestServiceVehicle());
+			UAirsideSettings::ResolveRoadDesignVehicles());
 	}
 
 	/** Straight road (0,0)->(30000,0); returns its A->B lane's ends. */
@@ -249,6 +249,18 @@ bool FVehicleFitClearanceTest::RunTest(const FString& Parameters)
 	Unmeasured.ClearInnerAt.Reset();
 	Unmeasured.ClearOuterAt.Reset();
 	TestTrue(TEXT("unmeasured clearance gates nothing - a balloon over grass"), VehicleFit::Fits(Unmeasured, Rig, *Net));
+
+	// JUDGE IS THE RULE WITH ITS REASON (the test course prints it): it must agree with Fits
+	// case for case, and a clearance refusal must carry the figures it was refused on.
+	const FFitVerdict Refused = VehicleFit::Judge(WithClearance(100.f, 100.f), Rig, *Net);
+	TestEqual(TEXT("Judge names the clearance rule for a 2 m road"),
+		static_cast<int32>(Refused.Refusal), static_cast<int32>(EFitRefusal::SweptOverTarmac));
+	TestEqual(TEXT("and the tarmac it compared against is the 2 m it was given"), Refused.Available, 200.0, 0.01);
+	TestTrue(TEXT("and a swept width wider than that"), Refused.Needed > Refused.Available);
+	TestFalse(TEXT("and it describes itself"), Refused.Describe().IsEmpty());
+	TestTrue(TEXT("Judge agrees with Fits on the fitting case"),
+		VehicleFit::Judge(WithClearance(2000.f, 2000.f), Rig, *Net).Fits());
+	TestTrue(TEXT("and on the unmeasured one"), VehicleFit::Judge(Unmeasured, Rig, *Net).Fits());
 	return true;
 }
 

@@ -11,6 +11,8 @@
 #include "Model/RoadTraffic.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
+#include "Model/Vehicle.h"
+#include "Model/VehicleFit.h"
 #include "Model/SimClock.h"
 #include "Solve/GuidelineGeom.h"
 
@@ -334,6 +336,25 @@ void UFuelService::PostServiceFee(double Now, const FAirframe& Airframe)
 		NSLOCTEXT("Ledger", "Fuelling", "Fuelling"));
 }
 
+bool UFuelService::MayDriveUngated(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
+	FString* OutWhy)
+{
+	if (!Vehicle.HasTrailer())
+	{
+		return true;
+	}
+	const FFitVerdict Whole = VehicleFit::JudgePlan(Plan, Vehicle, Network);
+	if (Whole.Refusal != EFitRefusal::TrailerFolds)
+	{
+		return true;
+	}
+	if (OutWhy != nullptr)
+	{
+		*OutWhy = Whole.Describe();
+	}
+	return false;
+}
+
 void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	int32 TruckId, FEntityInstanceId Depot)
 {
@@ -374,13 +395,28 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		// every such job. So it drives home ungated, and the log names the edge, which is the
 		// player's cue to widen that road.
 		// ENFORCED BY: AirportOps.Ops.FuelTruckGetsHomeWhenTooNarrow
+		//
+		// BUT NEVER A ROUTE THAT FOLDS ITS TRAILER (review of 9441ccf1). A body a little wide for
+		// a corner scuffs a kerb; a trailer past square is a jack-knife, and the agent stops dead
+		// where it folds, holding the road. So a TOW's ungated route is judged whole
+		// (VehicleFit::JudgePlan, the router's own check) and, if it folds, not driven: the truck
+		// is retired below, with the fold named. Rigid trucks - every truck today - are unchanged.
+		// ENFORCED BY: AirportOps.Ops.FuelTowNeverDrivenHomeIntoAFold
 		if (Plan.Result == ERouteResult::TooNarrow)
 		{
 			UE_LOG(LogAirportOps, Warning,
-				TEXT("Fuel: truck %d does not fit the road home to depot %d (first misfit: guideline edge %d); driving it anyway"),
-				TruckId, Depot.Index, Plan.RejectedEdge.Index);
+				TEXT("Fuel: truck %d does not fit the road home to depot %d (%s, guideline edge %d); driving it anyway"),
+				TruckId, Depot.Index, *Plan.RejectedBy.Describe(), Plan.RejectedEdge.Index);
 			Query.Vehicle = nullptr;
 			Plan = RouteSearch::Find(Network, Query);
+			FString Why;
+			if (Plan.IsValid() && !MayDriveUngated(Plan, TruckVehicle, Network, &Why))
+			{
+				UE_LOG(LogAirportOps, Warning,
+					TEXT("Fuel: truck %d's ungated road home to depot %d does not hold its tow either (%s); not driven"),
+					TruckId, Depot.Index, *Why);
+				Plan = FRoutePlan();
+			}
 		}
 	}
 

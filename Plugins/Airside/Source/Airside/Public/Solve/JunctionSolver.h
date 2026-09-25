@@ -32,6 +32,16 @@ struct FJunctionArm
 	double MaxCutDistance = TNumericLimits<double>::Max();
 
 	/**
+	 * The nearest this arm's cut may sit to the node, uu - a FLOOR under whatever the corners
+	 * ask for, itself capped by MaxCutDistance. Zero by default. Set by the caller for a WIDTH
+	 * TAPER: at a straight-through node whose two arms differ in width, both cuts are inset so
+	 * the polygon between them is the taper, and the lanes have the room to change offset on
+	 * an S rather than a jog (FRoadNetworkSolver, FRoadGuidelineBuilder). Its cut vertices are
+	 * this arm's own, shared with the polygon exactly as every other cut is.
+	 */
+	double MinCutDistance = 0.0;
+
+	/**
 	 * This arm PASSES THROUGH the node rather than ending at it, so it is never trimmed.
 	 *
 	 * A runway is the case: its edges run unbroken past an exit, and the fillets belong to
@@ -44,6 +54,25 @@ struct FJunctionArm
 	 * stated for a case that previously could not arise.
 	 */
 	bool bContinuous = false;
+
+	/**
+	 * THE RIM BETWEEN THIS ARM'S LEFT CUT AND THE NEXT ARM'S RIGHT CUT, when not the corner's
+	 * fillet arc: a bend's inside widened to what its design vehicle sweeps (BendWidening,
+	 * 2026-09-25). Empty - every corner but a widened one - means the fillet's arc, sampled as
+	 * before. Points only BETWEEN the two cut vertices: those stay SolveCuts' own, shared
+	 * verbatim with the segments, so the weld is the same weld whatever runs between them.
+	 */
+	TArray<FVector2D> RimToNext;
+
+	/**
+	 * THE RIBBON'S OWN HALF-WIDTHS AT THE CUT, when the corner is solved on wider ones: a two-arm
+	 * road bend whose arms differ in width is solved as if both were the wider (the bend runs at
+	 * one width, 2026-09-25), and the narrower arm's ribbon still ends at its own width - its cut
+	 * vertices are placed from these, and the caller's rim tapers from them to the wide edges.
+	 * Negative (the default) means "the same as HalfWidthLeft / HalfWidthRight".
+	 */
+	double CutHalfWidthLeft = -1.0;
+	double CutHalfWidthRight = -1.0;
 
 	/** Opaque caller tag, e.g. a packed FRoadSegmentId index. Never read by the solver. */
 	int32 UserData = INDEX_NONE;

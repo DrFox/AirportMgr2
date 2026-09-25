@@ -6,6 +6,17 @@
 #include "Materials/MaterialParameterCollection.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
+#include "Profiles/RoadProfile.h"
+
+// ONE CONSTANT PER ARTICULATED VEHICLE: the code its Resolve*Vehicle stamps and the key
+// ResolveVehicleViewFor picks its look by. Two string literals would be two sources of truth,
+// and a rename of one would dress the rig as a fuel truck with nothing to say why. NAMED, not
+// anonymous, because the module is a unity build.
+namespace AirsideVehicleCodes
+{
+	static const TCHAR* const Rig = TEXT("RIG");
+	static const TCHAR* const UtilityTow = TEXT("UTILITY");
+}
 
 // File-local, matching every other category in this module.
 DEFINE_LOG_CATEGORY_STATIC(LogAirsideContent, Log, All);
@@ -102,13 +113,95 @@ FChassis UAirsideSettings::ResolveLargestServiceVehicle()
 	return ResolveDefaultVehicle().Chassis;
 }
 
+FVehicle UAirsideSettings::ResolveLargestServiceBody()
+{
+	FVehicle Out = ResolveDefaultVehicle();
+	Out.Chassis = ResolveLargestServiceVehicle();
+	return Out;
+}
+
+namespace AirsideSettingsTierCache
+{
+	/** What ResolveTierDesignVehicles last resolved, and from which content set and Wide asset. */
+	struct FCache
+	{
+		bool bValid = false;
+		TWeakObjectPtr<const UAirsideContent> Content;
+		FSoftObjectPath WidePath;
+		TMap<TObjectKey<URoadProfile>, FVehicle> Map;
+	};
+
+	FCache& Get()
+	{
+		static FCache Cache;
+		return Cache;
+	}
+}
+
+int32 UAirsideSettings::ResolveTierDesignVehiclesCallCountForTest = 0;
+
+void UAirsideSettings::ResetTierDesignVehiclesCacheForTest()
+{
+	AirsideSettingsTierCache::Get() = AirsideSettingsTierCache::FCache();
+	ResolveTierDesignVehiclesCallCountForTest = 0;
+}
+
+const TMap<TObjectKey<URoadProfile>, FVehicle>& UAirsideSettings::ResolveTierDesignVehicles()
+{
+	AirsideSettingsTierCache::FCache& Cache = AirsideSettingsTierCache::Get();
+
+	// THE CHEAP CHECK: the content set already in memory (Get, never a load) and the path its
+	// Wide tier names. Either changing - another set configured, the tier list re-authored -
+	// is a miss; nothing else in the answer can change while the editor runs (the rig's figures
+	// are code).
+	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
+	const UAirsideContent* InMemory = Settings != nullptr ? Settings->Content.Get() : nullptr;
+	if (Cache.bValid && InMemory != nullptr && Cache.Content.Get() == InMemory)
+	{
+		const bool bHasWide = InMemory->ServiceRoadProfiles.IsValidIndex(WideServiceTier);
+		const FSoftObjectPath WidePath = bHasWide ? InMemory->ServiceRoadProfiles[WideServiceTier].ToSoftObjectPath() : FSoftObjectPath();
+		if (WidePath == Cache.WidePath)
+		{
+			return Cache.Map;
+		}
+	}
+
+	++ResolveTierDesignVehiclesCallCountForTest;
+	Cache = AirsideSettingsTierCache::FCache();
+	const UAirsideContent* Content = GetContent();
+	// NO WIDE TIER, NO EXCEPTION: a content set with fewer tiers than Wide's index has nothing
+	// designed for the rig, and every road stays sized for the default - never the narrowest
+	// tier promoted to the rig's, which would oversize the one road a small set lays.
+	if (Content != nullptr && Content->ServiceRoadProfiles.IsValidIndex(WideServiceTier))
+	{
+		Cache.WidePath = Content->ServiceRoadProfiles[WideServiceTier].ToSoftObjectPath();
+		if (const URoadProfile* Wide = Content->ServiceRoadProfiles[WideServiceTier].LoadSynchronous())
+		{
+			// THE RIG ON WIDE (user ruling 2026-09-25): its lock radius, 370 / sin 40 = 576 uu
+			// against the bowser's 510, is what the Wide tier's corners are laid for.
+			// The WHOLE rig since 2026-09-25: its trailer is what a Wide bend's inside is widened for.
+			Cache.Map.Add(TObjectKey<URoadProfile>(Wide), ResolveRigVehicle());
+		}
+	}
+	Cache.Content = Content;
+	Cache.bValid = Content != nullptr;
+	return Cache.Map;
+}
+
+FRoadDesignVehicles UAirsideSettings::ResolveRoadDesignVehicles()
+{
+	FRoadDesignVehicles Out(ResolveLargestServiceBody());
+	Out.PerProfile = ResolveTierDesignVehicles();
+	return Out;
+}
+
 FVehicle UAirsideSettings::ResolveRigVehicle()
 {
 	// The DEFAULT VEHICLE'S PERFORMANCE, a rigid truck's, with the rig's own geometry: nothing
 	// here has measured how a loaded articulated tanker accelerates, and inventing figures
 	// would be worse than inheriting honest ones. Geometry is what gating needs.
 	FVehicle Rig = ResolveDefaultVehicle();
-	Rig.TypeCode = TEXT("RIG");
+	Rig.TypeCode = AirsideVehicleCodes::Rig;
 
 	// MEASURED from truckCab1.glb and tankTrailer1.glb on 2026-09-24. Tractor: steer_FL/FR at
 	// x 370 from the rear-axle origin; body 516 ahead, 78 behind; 254 over the body (mirrors
@@ -119,11 +212,15 @@ FVehicle UAirsideSettings::ResolveRigVehicle()
 	Rig.BodyWidth = 254.0;
 	Rig.BodyFrontX = 516.0;
 	Rig.BodyRearX = -78.0;
-	Rig.Trailer.KingpinX = 57.3;
-	Rig.Trailer.KingpinToAxle = 1029.5;
-	Rig.Trailer.FrontAheadOfKingpin = 166.0;
-	Rig.Trailer.RearBehindAxle = 121.5;
-	Rig.Trailer.Width = 254.0;
+	// ONE LINK: a semi-trailer is the one-link tow (see FTowLink). Figures unchanged from when
+	// this was FTrailer, so route gating (#276) judges the rig exactly as it did.
+	FTowLink Trailer;
+	Trailer.HitchX = 57.3;
+	Trailer.Length = 1029.5;
+	Trailer.BodyFront = 166.0;
+	Trailer.BodyRear = 121.5;
+	Trailer.Width = 254.0;
+	Rig.Tow = { Trailer };
 
 	// 40 degrees is ASSUMED - the model carries no lock, and 40-45 is a tractor unit's range.
 	// The lock allows 5.8 m at the steered axle. In a STEADY circle the trailer folds below
@@ -412,5 +509,155 @@ FResolvedAgentView UAirsideSettings::ResolveVehicleView()
 			View.AnimClass = Content->VehicleAnimClass.LoadSynchronous();
 		}
 	}
+	return View;
+}
+
+FResolvedTowView UAirsideSettings::ResolveRigView()
+{
+	const UAirsideContent* Content = GetContent();
+
+	FResolvedTowView View;
+	if (Content == nullptr)
+	{
+		return View;
+	}
+
+	View.Cab.Mesh = Content->RigCabMesh.LoadSynchronous();
+	if (View.Cab.Mesh != nullptr)
+	{
+		View.Cab.AnimClass = Content->RigCabAnimClass.LoadSynchronous();
+	}
+
+	// ONE ENTRY, MATCHING ResolveRigVehicle's OWN ONE-LINK Tow ARRAY - see FResolvedTowView's
+	// own comment for why the array exists at all rather than a bare FResolvedAgentView. A
+	// second rig link would need a second content field and a second entry here; nothing
+	// about the STRUCT would need to change, which is the property the sibling
+	// ResolveUtilityTowView (utility1 + fuelTrailer1, a two-link chain) relies on.
+	View.Links.SetNum(1);
+	View.Links[0].Mesh = Content->RigTrailerMesh.LoadSynchronous();
+	if (View.Links[0].Mesh != nullptr)
+	{
+		View.Links[0].AnimClass = Content->RigTrailerAnimClass.LoadSynchronous();
+	}
+	return View;
+}
+
+FVehicle UAirsideSettings::ResolveUtilityTowVehicle()
+{
+	// THE DEFAULT VEHICLE'S PERFORMANCE, for the reason ResolveRigVehicle gives: nothing here
+	// has measured how a loaded bowser trailer accelerates behind a baggage tug, and inventing
+	// figures would be worse than inheriting honest ones. Geometry is what gating needs.
+	FVehicle Utility = ResolveDefaultVehicle();
+	Utility.TypeCode = AirsideVehicleCodes::UtilityTow;
+
+	// utility1 (the TUG MA-50, utility1/SPEC.md): steer_FL/FR at X 149.3 from the rear-axle
+	// origin, MEASURED off the imported SK_Utility1's reference pose (Tools/Python/
+	// import_fueltrailer1.py's report_tow_chain, 2026-09-24) - 1.493 m, matching utility1/
+	// README.md's own verification table ("wheelbase 1.493", 0.4% short of SPEC.md's 1.499
+	// target, "measured, not aimed at"). The BODY - 208.6 ahead of the rear axle, 95.7 behind
+	// it (the coupler reaches behind the axle - see the hitch figure below), 172.6 wide (over
+	// the tyres, mirrors excluded) - is SK_Utility1's own mesh bounds, same measurement.
+	Utility.Chassis.SteerAxleX = 149.3;
+	Utility.Chassis.FixedAxleX = 0.0;
+	Utility.BodyWidth = 172.6;
+	Utility.BodyFrontX = 208.6;
+	Utility.BodyRearX = -95.7;
+
+	// THE TOW IS A DRAWBAR CHAIN, TWO LINKS (spec 2026-09-24 revision, section 4): a towbar
+	// (BAR - both BodyFront and BodyRear zero, per FTowLink's own comment), then the body.
+	// Both links MEASURED off the imported SK_Utility1 and SK_FuelTrailer1 on 2026-09-24 -
+	// Tools/Python/import_fueltrailer1.py's report_tow_chain, which prints every figure below
+	// with its own derivation at the site it measured it.
+	//
+	// LINK 0, THE TOWBAR. HitchX: utility1's own 'hitch' bone, X=-90.68 uu - README.md's own
+	// "hitch socket... 0.907 m behind utility1's rear axle" (added 2026-09-23), matching to a
+	// centimetre. Length: the towbar's own hitch (its 'tow_eye' bone, X=335.0) to its own axle
+	// ('towbar_yaw', X=221.0) - 114.0 uu, matching README's "eye 1.14 from the yaw axis".
+	// Width: the combined X/Y bounds of the towbar-region mesh parts (axle_front, yoke,
+	// towbar, both knuckles, both front wheels) - 128.0 uu, narrower than the body since it is
+	// what actually sweeps between the hitch and the axle (FTowLink's own comment).
+	FTowLink Towbar;
+	Towbar.HitchX = -90.7;
+	Towbar.Length = 114.0;
+	Towbar.BodyFront = 0.0;
+	Towbar.BodyRear = 0.0;
+	Towbar.Width = 128.0;
+
+	// LINK 1, THE BODY. HitchX 0.0: the body's hitch IS the towbar's own axle (towbar_yaw) -
+	// there is no further offset between where the towbar ends and the body's turntable
+	// begins, so unlike the towbar's HitchX this one is exact by construction, not measured.
+	// Length: towbar_yaw (the hitch) to the rear axle ('root', the origin) - 221.0 uu, README's
+	// own "wheelbase 2.21" (baggageCart1's rig, number for number) x 100. BodyFront/BodyRear:
+	// the combined bounds of the body-region mesh parts (frame, tank and its fittings, the
+	// control bay, hose reel, nozzle, rear lamps/clevis, mudguards, the rear axle, both rear
+	// wheels) against towbar_yaw and the origin - 48.0 uu ahead of the hitch (the control bay
+	// oversails the turntable), 44.1 uu behind the axle. Width 146.4 uu matches README's own
+	// "overall... 1.46 wide" exactly.
+	FTowLink Body;
+	Body.HitchX = 0.0;
+	Body.Length = 221.0;
+	Body.BodyFront = 48.0;
+	Body.BodyRear = 44.1;
+	Body.Width = 146.4;
+
+	Utility.Tow = { Towbar, Body };
+
+	// THE LOCK IS LEFT AT ResolveDefaultVehicle's 45 degrees, UNMEASURED for utility1 itself -
+	// unlike the rig's 40, nothing here has reason to override it: this task's own tests gate
+	// on the CHAIN's geometry (link count, link lengths against the skeleton), not on how
+	// tightly utility1 can turn. utility1/SPEC.md's own "turning radius 115 in (2.921 m)"
+	// would resolve to about 27 degrees on this wheelbase (atan(1.493/2.921)) if measured
+	// properly against the model rather than the datasheet, and is a follow-up, not this one.
+	return Utility;
+}
+
+FResolvedTowView UAirsideSettings::ResolveUtilityTowView()
+{
+	const UAirsideContent* Content = GetContent();
+
+	FResolvedTowView View;
+	if (Content == nullptr)
+	{
+		return View;
+	}
+
+	View.Cab.Mesh = Content->UtilityMesh.LoadSynchronous();
+	if (View.Cab.Mesh != nullptr)
+	{
+		View.Cab.AnimClass = Content->UtilityAnimClass.LoadSynchronous();
+	}
+
+	// TWO ENTRIES, MATCHING ResolveUtilityTowVehicle's OWN TWO-LINK Tow ARRAY. Links[0] (the
+	// towbar) is left at its default-constructed, empty FResolvedAgentView (Mesh == nullptr)
+	// ALWAYS - not merely when content names nothing - because fuelTrailer1 is ONE skinned
+	// asset covering the towbar, the turntable and the body together (there is no second mesh
+	// for a towbar-only entry to ever resolve to). Links[1] is where UtilityTrailerMesh and
+	// UtilityTrailerAnimClass actually land - see FResolvedTowView's own comment, which
+	// describes exactly this shape.
+	View.Links.SetNum(2);
+	View.Links[1].Mesh = Content->UtilityTrailerMesh.LoadSynchronous();
+	if (View.Links[1].Mesh != nullptr)
+	{
+		View.Links[1].AnimClass = Content->UtilityTrailerAnimClass.LoadSynchronous();
+	}
+	return View;
+}
+
+FResolvedTowView UAirsideSettings::ResolveVehicleViewFor(const FVehicle& Vehicle)
+{
+	if (Vehicle.TypeCode == FName(AirsideVehicleCodes::Rig))
+	{
+		return ResolveRigView();
+	}
+	if (Vehicle.TypeCode == FName(AirsideVehicleCodes::UtilityTow))
+	{
+		return ResolveUtilityTowView();
+	}
+
+	// RIGID: the one vehicle look there has always been, and no links - so a vehicle that
+	// somehow carried a Tow with no look of its own shows its cab alone, and SpawnView's
+	// count check says so.
+	FResolvedTowView View;
+	View.Cab = ResolveVehicleView();
 	return View;
 }

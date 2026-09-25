@@ -71,7 +71,7 @@ namespace
 		}
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Actor->Network);
-		FRoadGuidelineBuilder::Build(*Actor->Network, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Actor->Network, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 	}
 }
 

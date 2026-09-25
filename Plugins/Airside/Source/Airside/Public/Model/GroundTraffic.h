@@ -172,6 +172,37 @@ public:
 	bool RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
 
 	/**
+	 * Appends Tail to a MOVING agent's route, IN PLACE: RouteSearch::Splice of the live plan's
+	 * every step with Tail, handed to the follower with Replace. Travelled, Speed, Heading and a
+	 * tow's chain all carry on - the agent never learns its old goal was a goal.
+	 *
+	 * NOT RedirectAgent, which is a dispatch: it restarts the follower from REST at the new
+	 * plan's first point, so a vehicle sent on from where it stopped stops first. Nor ReplanAt,
+	 * which searches from a step to the agent's OWN goal; this keeps the whole route and moves
+	 * the goal. For a caller that already knows where the agent goes next before it gets
+	 * there - the rig test course joining one loop onto the next, as a real job would chain a
+	 * return leg - and wants no stop at the join.
+	 *
+	 * FALSE AND NOTHING CHANGED when the agent is unknown or not Taxiing, or when Tail does not
+	 * start at the node the live plan ends on (Splice's own precondition: two lines that do not
+	 * meet would put a jump in the polyline). The goal moves exactly as RedirectAgent moves it,
+	 * through the same two private calls (ReleaseGoal, TakeGoal): the old claim and any stand wait
+	 * let go, the departure re-armed or disarmed for the NEW end, the new goal claimed.
+	 * ENFORCED BY: Airside.Model.Traffic.ExtendRouteKeepsMoving, .ExtendRouteMovesTheGoal
+	 *
+	 * KeepBehind >= 0 ALSO TRIMS the driven history: whole steps ending more than KeepBehind uu
+	 * behind the agent are dropped, and Travelled is rebased by the distance dropped (written to
+	 * OutDropped), so a caller that extends for ever does not grow the route - or the per-tick
+	 * walks over it - for ever. A caller keeping distances along the route (markers) subtracts
+	 * OutDropped. Skipped, not forced, while the agent is held at a step (GetBlockedStep() >= 0):
+	 * the arbitration names that step by index, and re-indexing it under a held agent is not
+	 * worth the saving.
+	 * ENFORCED BY: Airside.Model.Traffic.ExtendRouteTrimsHistory
+	 */
+	bool ExtendRoute(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Tail,
+		double KeepBehind = -1.0, double* OutDropped = nullptr);
+
+	/**
 	 * Sends a PARKED agent to whichever runway gives the shortest admitted taxi, with the
 	 * take-off armed - the inspector's Depart button. Anything not Parked is refused as
 	 * NotParked: a taxiing aircraft has a plan, an arriving one is not on the ground, a
@@ -570,6 +601,15 @@ private:
 	 * "one struct per thing" rule exists to prevent.
 	 */
 	void ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork* Network, const FRoutePlan& Plan) const;
+
+	/**
+	 * THE GOAL CHANGE, in two halves because RedirectAgent restarts the follower between them:
+	 * ReleaseGoal lets the old goal's claim and any stand wait go; TakeGoal sets the new goal
+	 * from Plan, arms or disarms its departure and claims it. RedirectAgent and ExtendRoute
+	 * both call exactly these, so the two ways of moving a goal cannot drift apart.
+	 */
+	void ReleaseGoal(FRoadAgent& Agent, int32 AgentId);
+	void TakeGoal(FRoadAgent& Agent, int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
 
 	/**
 	 * Everything both DispatchAgent overloads do once the agent is started with its bundle:

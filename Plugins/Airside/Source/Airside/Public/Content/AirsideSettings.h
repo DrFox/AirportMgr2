@@ -6,6 +6,7 @@
 #include "Engine/DeveloperSettings.h"
 #include "Model/RoadEntity.h"
 #include "Model/Vehicle.h"
+#include "Profiles/RoadDesignVehicles.h"
 #include "AirsideSettings.generated.h"
 
 class UAirsideContent;
@@ -24,6 +25,32 @@ struct FResolvedAgentView
 
 	UPROPERTY() TObjectPtr<USkeletalMesh> Mesh = nullptr;
 	UPROPERTY() TObjectPtr<UClass> AnimClass = nullptr;
+};
+
+/**
+ * What UAirsideSettings::ResolveRigView (and any sibling Resolve*View for another articulated
+ * vehicle - see ResolveRigView's own comment) resolved: the powered unit plus one entry per
+ * FVehicle::Tow link, IN TOW ORDER.
+ *
+ * ONE ENTRY PER LINK, NOT PER BODY. A link with no body of its own - FTowLink::BodyFront and
+ * BodyRear both zero, a bar (see FTowLink) - resolves to an EMPTY FResolvedAgentView
+ * (Mesh == nullptr) rather than being left out of the array, so Links[i] always answers
+ * Tow[i] and a caller walking the chain never has to know in advance which links carry a
+ * body. That is the whole reason this is its own struct rather than a single
+ * FResolvedAgentView: the rig's one-link semi-trailer chain and a future two-link drawbar
+ * chain (a bar, then a body) both fit through the SAME shape with no change to it - only the
+ * content fields and the resolver function differ per vehicle.
+ */
+USTRUCT()
+struct FResolvedTowView
+{
+	GENERATED_BODY()
+
+	/** The powered unit - the rig's tractor. */
+	UPROPERTY() FResolvedAgentView Cab;
+
+	/** One entry per FVehicle::Tow link, in order - see this struct's own comment. */
+	UPROPERTY() TArray<FResolvedAgentView> Links;
 };
 
 /**
@@ -167,6 +194,49 @@ public:
 	static FChassis ResolveLargestServiceVehicle();
 
 	/**
+	 * THE SAME VEHICLE WITH ITS BODY: ResolveLargestServiceVehicle's chassis on the vehicle it
+	 * belongs to (one today, ResolveDefaultVehicle), for a caller that traces what the vehicle
+	 * sweeps - a bend's inside is widened to it (FRoadDesignVehicles::Default). The chassis comes
+	 * FROM ResolveLargestServiceVehicle, so the day that function compares vehicles this answers
+	 * with the winner's chassis, and #190's counter still counts one resolve per call.
+	 */
+	static FVehicle ResolveLargestServiceBody();
+
+	/**
+	 * THE ONE PLACE a service-road width tier names its design vehicle (user ruling 2026-09-25,
+	 * see FRoadDesignVehicles): the Wide tier - ServiceRoadProfiles[WideServiceTier] - is
+	 * designed for the articulated rig (ResolveRigVehicle), and every other tier is left to the
+	 * default, the largest rigid service vehicle. Only the profiles that DIFFER from that default
+	 * are named. Fillets only: see FRoadDesignVehicles for why balloons are not per tier.
+	 *
+	 * CACHED, and a REFERENCE to the cache (review 2026-09-25): URoadProfile's self-resolving
+	 * ResolvedFilletRadius asks this per arm, and the cursor's snap (RoadSnap's NodeClaims and
+	 * ArmCutDistance) and the ghost preview reach that per cursor move - resolving the content set,
+	 * loading the Wide profile and building the rig each time is the #190/#167 cost. Re-resolved
+	 * only when the content set or its Wide tier's asset changes.
+	 * ENFORCED BY: Airside.Build.DesignVehicle.TierResolvedOncePerContent
+	 */
+	static const TMap<TObjectKey<URoadProfile>, FVehicle>& ResolveTierDesignVehicles();
+
+	/** How many times ResolveTierDesignVehicles actually resolved (cache misses) - see its comment. */
+	static int32 ResolveTierDesignVehiclesCallCountForTest;
+
+	/** Empties that cache and zeroes its counter, so a test starts from a cold resolve. */
+	static void ResetTierDesignVehiclesCacheForTest();
+
+	/**
+	 * ResolveLargestServiceVehicle as the default, with ResolveTierDesignVehicles' exceptions:
+	 * what a caller that asks once (a profile's own ResolvedFilletRadius, a test) is handed.
+	 */
+	static FRoadDesignVehicles ResolveRoadDesignVehicles();
+
+	/**
+	 * The Wide service-road tier's index in UAirsideContent::ServiceRoadProfiles, which is
+	 * authored narrow first: Narrow 0, Standard 1, Wide 2. Named, not typed at the call site.
+	 */
+	static constexpr int32 WideServiceTier = 2;
+
+	/**
 	 * How many times ResolveLargestServiceVehicle has actually run, for issue #190's test
 	 * that a rebuild resolves it ONCE and hands the answer down, rather than re-building the
 	 * FAirframe by value per arm (RoadNetworkSolver's BuildNodeInput), per ordered arm pair
@@ -258,4 +328,69 @@ public:
 	 * unwired than one that looks wired and is not.
 	 */
 	static FResolvedAgentView ResolveVehicleView();
+
+	/**
+	 * The articulated rig's view: truckCab1's mesh and ABP, plus tankTrailer1's for
+	 * ResolveRigVehicle's one Tow link - or an empty view for any link/asset the content set
+	 * does not name, matching ResolveVehicleView's null-safe shape.
+	 *
+	 * A SEPARATE FUNCTION FROM ResolveVehicleView, for the reason ResolveRigVehicle is
+	 * separate from ResolveDefaultVehicle: the content diverges completely (two meshes, not
+	 * one) rather than being a second reading of the same field, so branching inside
+	 * ResolveVehicleView on HasTrailer() would make one function resolve two unrelated sets
+	 * of soft pointers - the "Content/ resolves every content default in exactly one
+	 * function" rule read the other way round.
+	 *
+	 * TAKES NO FVehicle, mirroring ResolveRigVehicle's own no-arg shape: the content it reads
+	 * (RigCabMesh/RigCabAnimClass/RigTrailerMesh/RigTrailerAnimClass on UAirsideContent) is
+	 * fixed to THIS rig, the way ResolveRigVehicle's figures are. FResolvedTowView::Links is
+	 * sized to ResolveRigVehicle's own Tow.Num() (one today), so a future second rig link
+	 * would need a second content field here and a second entry there, not a change to the
+	 * struct itself - see FResolvedTowView's own comment.
+	 *
+	 * A sibling ResolveUtilityTowView() for utility1 + fuelTrailer1's two-link chain (a bar,
+	 * then a body) would follow the same shape: its own content fields, its own function,
+	 * the same FResolvedTowView return type.
+	 */
+	static FResolvedTowView ResolveRigView();
+
+	/**
+	 * utility1 towing fuelTrailer1 (spec 2026-09-24 revision, section 4) - the SIBLING
+	 * ResolveRigView's own comment promised: utility1 is the powered unit, and Tow holds the
+	 * drawbar's TWO links - the towbar (a bar: BodyFront and BodyRear both zero) then the body.
+	 * MIRRORS ResolveRigVehicle's shape (a chassis from ResolveDefaultVehicle, overridden with
+	 * this vehicle's own measured axles and body, plus a Tow chain), not called from it: the
+	 * two vehicles share no figures, so there is nothing for one function to hand the other.
+	 */
+	static FVehicle ResolveUtilityTowVehicle();
+
+	/**
+	 * utility1's mesh and ABP, plus fuelTrailer1's for ResolveUtilityTowVehicle's two Tow
+	 * links - or an empty view for any mesh/ABP the content set does not name.
+	 *
+	 * A SEPARATE FUNCTION FROM ResolveRigView, for the reason ResolveRigView already gives for
+	 * being separate from ResolveVehicleView: the content diverges completely (utility1's and
+	 * fuelTrailer1's own soft pointers, not a second reading of RigCabMesh/RigTrailerMesh).
+	 *
+	 * Links.Num() == 2, matching ResolveUtilityTowVehicle's own two-link Tow: Links[0] (the
+	 * towbar) resolves to an EMPTY FResolvedAgentView (Mesh == nullptr) always, because the
+	 * towbar carries no mesh of its own - fuelTrailer1 is ONE skinned asset covering both
+	 * links, and Links[1] is where it (and its ABP) actually resolves. See FResolvedTowView's
+	 * own comment: "a link with no body of its own... resolves to an EMPTY FResolvedAgentView
+	 * rather than being left out of the array" - written for exactly this vehicle.
+	 */
+	static FResolvedTowView ResolveUtilityTowView();
+
+	/**
+	 * THE LOOK FOR THIS VEHICLE: its cab plus one entry per Tow link - ResolveRigView for the
+	 * rig, ResolveUtilityTowView for utility1 + fuelTrailer1, and for anything else
+	 * ResolveVehicleView as the Cab with no Links (rigid, as every truck was before).
+	 *
+	 * THE ONE PLACE THE CHOICE IS MADE, by TypeCode - the code each Resolve*Vehicle above stamps,
+	 * from one constant per vehicle in this file - so the dresser (UAirsideTraffic::SpawnView)
+	 * names no vehicle and no asset. Keyed on the TypeCode rather than on the Tow's shape
+	 * because two vehicles may share a shape and not a look.
+	 * ENFORCED BY: Airside.Present.RigActor.TrailerOnItsLink (each vehicle's cab wears its own mesh).
+	 */
+	static FResolvedTowView ResolveVehicleViewFor(const FVehicle& Vehicle);
 };

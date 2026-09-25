@@ -14,6 +14,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
+#include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RunwayDesignator.h"
 
@@ -211,11 +212,13 @@ int32 UGroundTraffic::AdmitDispatched(FRoadAgent&& Agent, const URoadNetwork* Ne
 
 void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork* Network, const FRoutePlan& Plan) const
 {
-	// CLEARED FIRST, and before every early return below. RedirectAgent sends an EXISTING
-	// agent along a new plan: one that had been armed for a runway and is now sent to a
-	// stand would otherwise keep the old chain and hold that runway against everybody for
-	// the rest of the session.
+	// CLEARED FIRST, and before every early return below. RedirectAgent and ExtendRoute send
+	// an EXISTING agent along a new plan: one that had been armed for a runway and is now sent
+	// to a stand would otherwise keep the old chain and hold that runway against everybody for
+	// the rest of the session - and, with the ARMING kept too (bDepartureArmed and its order,
+	// which this used to leave), take off on arriving at a stand. Disarmed with it.
 	Agent.DepartureRunway.Reset();
+	Agent.DisarmDeparture();
 
 	// DOES THIS ROUTE END ON A RUNWAY? Asked here rather than by the tool, because the answer
 	// is a fact about the network and the last polyline point is the only thing that knows
@@ -347,6 +350,177 @@ bool UGroundTraffic::BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySe
 	return true;
 }
 
+void UGroundTraffic::ReleaseGoal(FRoadAgent& Agent, int32 AgentId)
+{
+	// THE OLD STAND FREES NOW, between ticks: the next claim pass would drop it anyway
+	// (ClaimGoalNode reads the new goal), but a planner asking in this frame must see it
+	// free. And the model notes that a stand may have freed, for the re-offer pass.
+	if (Agent.GoalNode.IsSet())
+	{
+		Occupancy.Release(AgentId, FTrafficResource::OfNode(Agent.GoalNode));
+		bStandsMayHaveFreed = true;
+	}
+
+	// CLEARED HERE, WHERE THE GOAL ACTUALLY MOVES - not by the caller after this returns.
+	// ReofferStands used to clear it on the agent AFTER RedirectAgent by re-running
+	// FindIndex(Id), but TakeGoal is about to give the agent a real destination, and
+	// RedirectAgent's broadcast (OnAgentPhaseChanged) can run a listener that retires an
+	// agent synchronously - UFuelService::OnAgentPhase calls RetireAgent from inside it. A
+	// caller re-indexing Agents by Id AFTER that broadcast can find INDEX_NONE and index off
+	// the end. Clearing before the broadcast needs no such lookup: Agent is still the entry
+	// the caller already found.
+	Agent.ClearAwaitingStand();
+}
+
+void UGroundTraffic::TakeGoal(FRoadAgent& Agent, int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
+{
+	// THE NEW GOAL, ITS DEPARTURE AND ITS CLAIM, in that order: the arming reads the plan's
+	// end, and the claim reads the goal SetGoalFrom has just written.
+	Agent.SetGoalFrom(Plan);
+	ArmDepartureIfRunway(Agent, Network, Plan);
+	if (Network != nullptr)
+	{
+		ClaimGoalNodeAtDispatch(Agent, AgentId, *Network);
+	}
+	// #169: UNCONDITIONAL - the old goal was freed (ReleaseGoal) and the new one claimed whether
+	// or not the agent's phase moves, and a Parked -> Taxiing redirect or an extension under a
+	// moving agent is the common case where it does not. HERE, with the claim, so no caller of
+	// the goal change can forget it; bumped before RedirectAgent's broadcast, so a listener
+	// reading the revision sees the goal it is being told about.
+	++OccupancyRevisionCount;
+}
+
+bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Tail,
+	double KeepBehind, double* OutDropped)
+{
+	if (OutDropped != nullptr)
+	{
+		*OutDropped = 0.0;
+	}
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	FRoadAgent& Agent = Agents[Index];
+	const FRoutePlan& Live = Agent.Follower.Plan;
+	if (Agent.Phase != EAgentPhase::Taxiing || !Live.IsValid())
+	{
+		return false;
+	}
+	// EVERY STEP KEPT: the join is the live plan's end, so the agent is on the unchanged prefix
+	// and Replace's "Travelled survives" is exact.
+	FRoutePlan Spliced = RouteSearch::Splice(Live, Live.Steps.Num(), Tail);
+	if (!Spliced.IsValid())
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("ExtendRoute %d refused: the tail does not start where the route ends"), AgentId);
+		return false;
+	}
+
+	// THE DRIVEN HISTORY, TRIMMED to whole steps ending more than KeepBehind behind the agent.
+	// Built here as the plan the steps after the cut would have made on their own: starting at
+	// the node the last dropped step arrives at, its polyline from that step's end vertex, every
+	// kept step's EndVertex and EndDistance re-based - Splice's own re-basing, run backwards.
+	double Dropped = 0.0;
+	if (KeepBehind >= 0.0 && Agent.GetBlockedStep() < 0)
+	{
+		const double Cut = Agent.Follower.Travelled - KeepBehind;
+		int32 Keep = 0;
+		while (Keep < Spliced.Steps.Num() && Spliced.Steps[Keep].EndDistance < Cut)
+		{
+			++Keep;
+		}
+		if (Keep > 0 && Keep < Spliced.Steps.Num())
+		{
+			const FRouteStep& LastDropped = Spliced.Steps[Keep - 1];
+			FRoutePlan Trimmed;
+			Trimmed.Result = Spliced.Result;
+			Trimmed.Start = LastDropped.To;
+			for (int32 At = LastDropped.EndVertex; At < Spliced.Polyline.Num(); ++At)
+			{
+				Trimmed.Polyline.Add(Spliced.Polyline[At]);
+			}
+			for (int32 Step = Keep; Step < Spliced.Steps.Num(); ++Step)
+			{
+				FRouteStep Rebased = Spliced.Steps[Step];
+				Rebased.EndVertex -= LastDropped.EndVertex;
+				Rebased.EndDistance -= LastDropped.EndDistance;
+				Trimmed.Steps.Add(Rebased);
+			}
+			Trimmed.Length = GuidelineGeom::PolylineLength(Trimmed.Polyline);
+			Dropped = LastDropped.EndDistance;
+			Spliced = MoveTemp(Trimmed);
+		}
+	}
+
+	// SAID, NOT SILENT, WHEN THE TAIL DOES NOT CONTINUE THE LINE: Splice welds at the NODE, so a
+	// tail that leaves the join at an angle beyond the steer lock (or, with sampling, a point
+	// off it) is accepted and then driven as a kink - RedirectAgent's kept-pose warning, for the
+	// same reason: a caller should not inherit a crawl or a fold it cannot trace to here.
+	{
+		FVector2D EndAt = FVector2D::ZeroVector;
+		double EndHeading = 0.0;
+		FVector2D TailAt = FVector2D::ZeroVector;
+		double TailHeading = 0.0;
+		if (GuidelineGeom::PointAtDistance(Live.Polyline, Live.Length, EndAt, EndHeading)
+			&& GuidelineGeom::PointAtDistance(Tail.Polyline, 0.0, TailAt, TailHeading))
+		{
+			const double OffDegrees = FMath::Abs(FMath::RadiansToDegrees(FMath::UnwindRadians(TailHeading - EndHeading)));
+			const double LockDegrees = Agent.Chassis().Ground.MaxSteerDegrees;
+			const double Gap = FVector2D::Distance(EndAt, TailAt);
+			if (OffDegrees > LockDegrees || Gap > 1.0)
+			{
+				UE_LOG(LogAirsideTraffic, Warning, TEXT("ExtendRoute %d: the tail does not continue the route - it leaves %.0f deg off the route's end heading (lock %.0f), %.0f uu from its end; expect a crawl or a fold at the join."),
+					AgentId, OffDegrees, LockDegrees, Gap);
+			}
+		}
+	}
+
+	// THE EXTENDED ROUTE JUDGED WHOLE, FROM THE LIVE CHAIN (review of 9441ccf1). The tail was
+	// judged on its own, from a straight lay at its start; the trailer arrives at the join swung
+	// by whatever the live route ended with, and two curves that each hold it can fold it
+	// together. Refused before anything changes, like a tail that does not join: the caller's
+	// route runs out and it plans again from rest.
+	// ENFORCED BY: Airside.Model.Tow.ExtendRouteJudgesTheJoin
+	if (const FVehicle* Vehicle = Agent.AsVehicle();
+		Vehicle != nullptr && Vehicle->HasTrailer() && Agent.TowAxles.Num() == Vehicle->Tow.Num()
+		&& Agent.GetJackknifedLink() == INDEX_NONE && Network != nullptr)
+	{
+		FTowSeed Seed;
+		Seed.Axles = Agent.TowAxles;
+		Seed.Heading = Agent.Follower.Heading;
+		Seed.Speed = Agent.Follower.Speed;
+		Seed.Travelled = Agent.Follower.Travelled - Dropped;
+		const FFitVerdict Whole = VehicleFit::JudgePlan(Spliced, *Vehicle, *Network, &Seed);
+		if (Whole.Refusal == EFitRefusal::TrailerFolds)
+		{
+			UE_LOG(LogAirsideTraffic, Warning, TEXT("ExtendRoute %d refused: the extended route folds the %s's tow (%s)"),
+				AgentId, *Vehicle->TypeCode.ToString(), *Whole.Describe());
+			return false;
+		}
+	}
+
+	// THE GOAL MOVES, EXACTLY AS IN RedirectAgent AND THROUGH THE SAME TWO CALLS: the old goal's
+	// claim and any stand wait let go (ReleaseGoal), then the new goal, its departure arming
+	// (re-evaluated for the new end - an extended route whose OLD end was a runway must not take
+	// off there) and its claim (TakeGoal).
+	// ENFORCED BY: Airside.Model.Traffic.ExtendRouteMovesTheGoal
+	ReleaseGoal(Agent, AgentId);
+	const double WasLength = Live.Length;
+	Agent.Follower.Replace(Spliced, Agent.Chassis());
+	// REBASED AFTER Replace, before any Advance: Replace resets the follower's walk cursor to the
+	// polyline's start, so the cursor and the rebased Travelled agree from the first step on.
+	Agent.Follower.Travelled -= Dropped;
+	if (OutDropped != nullptr)
+	{
+		*OutDropped = Dropped;
+	}
+	TakeGoal(Agent, AgentId, Network, Spliced);
+	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d route extended: %.0f uu on from %.0f, %.0f uu of driven route trimmed"),
+		AgentId, Tail.Length, WasLength, Dropped);
+	return true;
+}
+
 bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
 {
 	const int32 Index = FindIndex(AgentId);
@@ -368,24 +542,8 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// argument; RestartTaxi keeps whichever bundle (airframe or vehicle) the agent already
 	// holds and never touches it, so there is nothing to copy and no self-assignment.
 
-	// THE OLD STAND FREES NOW, between ticks: the next claim pass would drop it anyway
-	// (ClaimGoalNode reads the new goal), but a planner asking in this frame must see it
-	// free. And the model notes that a stand may have freed, for the re-offer pass.
-	if (Agent.GoalNode.IsSet())
-	{
-		Occupancy.Release(AgentId, FTrafficResource::OfNode(Agent.GoalNode));
-		bStandsMayHaveFreed = true;
-	}
-
-	// CLEARED HERE, WHERE THE GOAL ACTUALLY MOVES - not by the caller after this returns.
-	// ReofferStands used to clear it on the agent AFTER this call by re-running FindIndex(Id),
-	// but SetGoalFrom below is about to give this redirect a real destination, and the
-	// broadcast a few lines down (OnAgentPhaseChanged) can run a listener that retires an
-	// agent synchronously - UFuelService::OnAgentPhase calls RetireAgent from inside it. A
-	// caller re-indexing Agents by Id AFTER that broadcast can find INDEX_NONE and index off
-	// the end. Clearing before the broadcast needs no such lookup: Agent is still the entry
-	// this call already found.
-	Agent.ClearAwaitingStand();
+	// THE OLD GOAL LETS GO - see ReleaseGoal, shared with ExtendRoute so the two cannot drift.
+	ReleaseGoal(Agent, AgentId);
 
 	// CAPTURED BEFORE StartTaxi, which always primes a cold start of its own
 	// (bEngineRunning=true, EngineRPM=0.0) - so these are whether the engine was running and
@@ -394,7 +552,45 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	const bool bWasRunning = Agent.bEngineRunning;
 	const double PriorRPM = Agent.EngineRPM;
 
-	Agent.RestartTaxi(Plan);
+	// A TOW KEEPS ITS CAB'S HEADING through a redirect, as it keeps its chain (StartDrive: "a rig
+	// re-routed mid-drive keeps its trailer where it is, angled as it was"). The chain is stepped
+	// against the cab's FIXED axle, a wheelbase behind the steered axle the follower re-seats on
+	// the new line; seeding the heading from that line instead swings the fixed axle sideways in
+	// one frame, and the chain reads the swing as a pull of up to a wheelbase. Measured
+	// 2026-09-25: both tows on the rig course folded on the first frame of the leg that starts
+	// on the width step's jog, and every handover moved the rig's trailer axle up to 350 uu.
+	// Anything WITHOUT a chain keeps seeding from the line - an aircraft sent somewhere new
+	// faces its new route at once, which Airside.Model.Traffic.RedirectPosesImmediatelyEvenPaused
+	// pins; the follower's slew then closes the gap for a tow, at its own rate.
+	// ENFORCED BY: Airside.Model.Tow.RedirectKeepsChainAndHeading
+	const TOptional<double> KeptHeading = Agent.TowAxles.Num() > 0
+		? TOptional<double>(Agent.Follower.Heading) : TOptional<double>();
+
+	// SAID, NOT SILENT, when the kept pose cannot drive the new line: a plan that starts beyond
+	// the steer lock of where the cab points, or somewhere other than where its steered axle
+	// stands, has the follower slew or jump and the chain fold a frame later - with nothing
+	// naming the redirect as the cause. The rig course always redirects from the lane end it
+	// stopped on; AirportOps' return-to-depot for a towing vehicle need not be so careful, and
+	// would otherwise inherit a silent fold.
+	if (KeptHeading.IsSet())
+	{
+		FVector2D Steered = FVector2D::ZeroVector;
+		double OldLineHeading = 0.0;
+		const bool bHasSteered = GuidelineGeom::PointAtDistance(Agent.Follower.Plan.Polyline, Agent.Follower.Travelled,
+			Steered, OldLineHeading);
+		FVector2D NewStart = FVector2D::ZeroVector;
+		double NewHeading = KeptHeading.GetValue();
+		GuidelineGeom::PointAtDistance(Plan.Polyline, 0.0, NewStart, NewHeading);
+		const double OffDegrees = FMath::Abs(FMath::RadiansToDegrees(FMath::UnwindRadians(NewHeading - KeptHeading.GetValue())));
+		const double LockDegrees = Agent.Chassis().Ground.MaxSteerDegrees;
+		const double StartGap = bHasSteered ? FVector2D::Distance(Steered, Plan.Polyline[0]) : 0.0;
+		if (OffDegrees > LockDegrees || StartGap > 1.0)
+		{
+			UE_LOG(LogAirsideTraffic, Warning, TEXT("RedirectAgent %d: the tow's kept pose does not fit the new line - start heading %.0f deg off the cab (lock %.0f), start %.0f uu from the steered axle; expect a slew or a fold."),
+				AgentId, OffDegrees, LockDegrees, StartGap);
+		}
+	}
+	Agent.RestartTaxi(Plan, 0.0, KeptHeading);
 
 	if (bWasRunning)
 	{
@@ -429,13 +625,8 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 
 	// Class is NOT re-derived: a van redirected is still a van. StartTaxi rewrites the
 	// follower and the airframe and nothing else, so the identity fields survive it; only
-	// the goal moves, because that is the whole of what a redirect changes.
-	Agent.SetGoalFrom(Plan);
-	ArmDepartureIfRunway(Agent, Network, Plan);
-	if (Network != nullptr)
-	{
-		ClaimGoalNodeAtDispatch(Agent, AgentId, *Network);
-	}
+	// the goal moves, because that is the whole of what a redirect changes - TakeGoal.
+	TakeGoal(Agent, AgentId, Network, Plan);
 
 	// POSED NOW, NOT LEFT FOR THE NEXT TICK (#107 item 3) - the same reason DispatchAgent runs
 	// a zero-second Advance before Admit. UGroundTraffic::Advance early-returns on a paused
@@ -455,10 +646,8 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	{
 		OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
 	}
-	// #169: UNCONDITIONAL, unlike the broadcast above - the old goal was freed and the new one
-	// claimed (ClaimGoalNodeAtDispatch, above) whether or not the phase itself moved, and a
-	// Parked -> Taxiing redirect is the common case where it does not.
-	++OccupancyRevisionCount;
+	// #169: the occupancy revision was bumped in TakeGoal, with the claim - unconditional, unlike
+	// the broadcast above.
 	return true;
 }
 

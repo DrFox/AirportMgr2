@@ -144,7 +144,8 @@ bool FLargestServiceVehiclePassedDownMatchesSelfResolvedTest::RunTest(const FStr
 	Net->AddStraightSegment(Centre, North, Road);
 	Net->AddStraightSegment(Centre, West, Road);
 
-	const FChassis Vehicle = UAirsideSettings::ResolveLargestServiceVehicle();
+	// PER TIER since 2026-09-25: what a rebuild passes down, and what each profile resolves for itself.
+	const FRoadDesignVehicles Vehicle = UAirsideSettings::ResolveRoadDesignVehicles();
 
 	// SELF-RESOLVING: the path every test and every call site outside a rebuild still uses.
 	const FRoadSolveResult SolvedSelfResolved = FRoadNetworkSolver::SolveAll(*Net);
