@@ -7,7 +7,7 @@ bool FPushbackRun::Start(const FRoutePlan& InPlan, double InPushSpeed, double In
 {
 	FVector2D At = FVector2D::ZeroVector;
 	double Tangent = 0.0;
-	if (!InPlan.IsValid()
+	if (!InPlan.IsDrivable()
 		|| !GuidelineGeom::PointAtDistance(InPlan.Polyline, 0.0, At, Tangent))
 	{
 		// NOTHING TOUCHED. A manoeuvre that cannot be flown must leave no trace of itself

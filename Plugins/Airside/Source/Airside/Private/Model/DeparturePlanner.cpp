@@ -90,7 +90,7 @@ namespace DeparturePlanner
 				break;
 			}
 			const FRoutePlan Route = TryRoute(Candidate, ERouteErrand::DepartureToEntry);
-			if (!Route.IsValid() || Route.Polyline.Num() < 2)
+			if (!Route.IsDrivable())
 			{
 				continue;
 			}
@@ -108,7 +108,7 @@ namespace DeparturePlanner
 		for (const FGuidelineNodeId& Candidate : Candidates)
 		{
 			const FRoutePlan Route = TryRoute(Candidate, ERouteErrand::DepartureBacktrack);
-			if (!Route.IsValid() || Route.Polyline.Num() < 2)
+			if (!Route.IsDrivable())
 			{
 				continue;
 			}

@@ -56,7 +56,7 @@ namespace
 
 bool FReverseRun::Start(const FRoutePlan& InPlan, const FChassis& Chassis, double InReverseSpeed)
 {
-	if (!InPlan.IsValid() || InPlan.Polyline.Num() < 2 || InPlan.Length <= UE_KINDA_SMALL_NUMBER)
+	if (!InPlan.IsDrivable())
 	{
 		return false;
 	}
@@ -120,7 +120,21 @@ bool FReverseRun::Start(const FRoutePlan& InPlan, const FChassis& Chassis, doubl
 bool FReverseRun::Advance(double DeltaSeconds, const FChassis& Chassis, double StopWithin,
 	FVector2D& OutPosition, double& OutHeading)
 {
-	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
+	// FALSE MEANS THE MANOEUVRE IS OVER AND ITS LAST MOTION HAS ALREADY BEEN REPORTED - the
+	// SAME contract FPushbackRun::Advance and FLandingRun::Advance check at the top of their
+	// own frame, checked here for the same reason: a caller that reads false must never also
+	// receive movement it was not told about (issue #297).
+	//
+	// THIS USED TO BE THE OTHER HALF OF THE CONTRACT MISMATCH. The manoeuvre's final frame -
+	// the one that walks Travelled up to Plan.Length - used to compute its OWN final pose and
+	// then hand back `!HasArrived()`, i.e. false, on the very same call. FRoadAgent's "AND
+	// DRIVE THIS SAME FRAME" resume, mirroring FPushbackRun's handover, assumes false means
+	// nothing moved and re-reads LastMotion.Heading from the PREVIOUS call to seed the taxi -
+	// so that final, accurate pose was computed and then thrown away, and the taxi resumed
+	// facing one tick short of where the reverse actually finished. Checked here, before
+	// moving, the frame that reaches the end reports it and returns true; HasArrived is
+	// re-asked at the top of the NEXT call once that motion is already on the record.
+	if (!Plan.IsDrivable() || HasArrived())
 	{
 		Speed = 0.0;
 		SteerDegrees = 0.0;
@@ -179,7 +193,12 @@ bool FReverseRun::Advance(double DeltaSeconds, const FChassis& Chassis, double S
 	double LineHeading = 0.0;
 	if (!GuidelineGeom::PointAtDistance(Plan.Polyline, Travelled, OutPosition, LineHeading))
 	{
-		return false;
+		// The pose is left exactly as the caller had it, as FPushbackRun::Advance leaves its -
+		// declining to MOVE is not the same as handing over. The old `return false` here was
+		// the other spelling of #297: a sampling hiccup mid-manoeuvre made the vehicle look
+		// finished, so the agent picked the taxi up at ResumeStep from wherever Travelled
+		// happened to be rather than the end of the span.
+		return true;
 	}
 
 	// THE WHOLE HEADING LAW, and it is one line because the curve was solved for this vehicle
@@ -188,5 +207,9 @@ bool FReverseRun::Advance(double DeltaSeconds, const FChassis& Chassis, double S
 	// backing into a bay is. The steered axle trails; the fixed axle is the point on the line.
 	OutHeading = FMath::UnwindRadians(LineHeading + UE_DOUBLE_PI);
 
-	return !HasArrived();
+	// TRUE WHILE IT IS STILL MINE, for the same reason FPushbackRun::Advance's own tail gives:
+	// HasArrived is re-asked at the TOP of the next frame rather than answered here, so the
+	// manoeuvre's last frame still reports its own motion instead of a caller reading false
+	// throwing it away.
+	return true;
 }

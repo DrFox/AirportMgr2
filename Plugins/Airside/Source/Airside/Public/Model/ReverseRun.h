@@ -108,6 +108,12 @@ struct AIRSIDE_API FReverseRun
 	 * contract FLandingRun::Advance and FPushbackRun::Advance use, so FRoadAgent's arm for
 	 * this phase reads like the arms either side of it.
 	 *
+	 * ACTUALLY THE SAME CONTRACT NOW (issue #297): this used to check HasArrived AFTER moving
+	 * and hand back false on the very frame it reported the manoeuvre's own final pose, so
+	 * FRoadAgent's resume - which assumes false means nothing moved, exactly as it does for
+	 * the push - re-seeded the taxi from a heading one frame stale and threw the accurate
+	 * final pose away. See the .cpp for the corrected shape.
+	 *
 	 * StopWithin is arbitration's one input, as it is for the follower: a vehicle asked to
 	 * hold stops where it is and resumes when the distance opens again.
 	 *

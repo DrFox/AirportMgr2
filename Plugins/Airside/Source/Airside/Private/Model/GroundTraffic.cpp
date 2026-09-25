@@ -141,7 +141,7 @@ void UGroundTraffic::ClaimGoalNodeAtDispatch(const FRoadAgent& Agent, int32 Id, 
 int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePlan& Plan,
 	const FAirframe& Airframe, ETraversalClass Class, double ShutdownPauseSeconds)
 {
-	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
+	if (!Plan.IsDrivable())
 	{
 		return 0;
 	}
@@ -168,7 +168,7 @@ int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 	const FVehicle& Vehicle, ETraversalClass Class, double ShutdownPauseSeconds)
 {
 	// The same refusal the FAirframe overload makes, before anything is started.
-	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
+	if (!Plan.IsDrivable())
 	{
 		return 0;
 	}
@@ -524,7 +524,7 @@ bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, con
 bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
 {
 	const int32 Index = FindIndex(AgentId);
-	if (Index == INDEX_NONE || !Plan.IsValid() || Plan.Polyline.Num() < 2)
+	if (Index == INDEX_NONE || !Plan.IsDrivable())
 	{
 		return false;
 	}
