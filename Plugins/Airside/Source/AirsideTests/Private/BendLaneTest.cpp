@@ -719,4 +719,69 @@ bool FBendLaneCappedOncePerGeometryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBendLaneOuterEdgeTest, "Airside.Build.BendLanes.OuterEdgeConcentric",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBendLaneOuterEdgeTest::RunTest(const FString& Parameters)
+{
+	// THE OUTSIDE FOLLOWS THE LANES (user ruling 2026-09-25). The lanes turn about the inner
+	// fillet's centre; the outer edge was the tier's fillet about its OWN centre, leaving a band
+	// outside the outer lane nobody drives. Now the outer rim is the arc about the lanes' centre at
+	// the inner fillet's radius plus the road width - and tangent to both arms' outer edges, which
+	// the ribbons run along.
+	using namespace BendLane;
+	const TArray<URoadProfile*> Profiles = Tiers();
+	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
+		Profiles.Num() == 3 && !Profiles.Contains(nullptr))) { return false; }
+	for (int32 Tier = 0; Tier < 3; ++Tier)
+	{
+		const FBend Bend = Build(Profiles[Tier]);
+		RoadGeom::FFillet Inner, Outer;
+		const FJunctionResult* Junction = Bend.Solved.NodeResults.Find(Bend.Corner.Index);
+		if (!TestTrue(FString::Printf(TEXT("%s: the bend solved, with its two fillets"), Names[Tier]),
+			Junction != nullptr && BendProbe::Fillets(Bend.Solved, Bend.Corner, Inner, Outer))) { continue; }
+		const double Width = Profiles[Tier]->GetTotalWidth();
+		const double Expected = Inner.Radius + Width;
+		const FVector2D& C = Inner.Centre;
+
+		// The rim's points between the inner arc's two radial lines, on the OUTER side of the road.
+		const double From = FMath::Atan2(Inner.TangentA.Y - C.Y, Inner.TangentA.X - C.X);
+		const double Span = FMath::UnwindRadians(FMath::Atan2(Inner.TangentB.Y - C.Y, Inner.TangentB.X - C.X) - From);
+		int32 OnArc = 0;
+		double Worst = 0.0;
+		for (int32 Slot = 0; Slot + 1 < Junction->Boundary.Num(); ++Slot)
+		{
+			const FVector2D P = Junction->Boundary[Slot];
+			const double Distance = FVector2D::Distance(P, C);
+			const double Along = FMath::UnwindRadians(FMath::Atan2(P.Y - C.Y, P.X - C.X) - From) / Span;
+			if (Distance < Inner.Radius + Width * 0.5 || Along < -1.0e-6 || Along > 1.0 + 1.0e-6)
+			{
+				continue;
+			}
+			++OnArc;
+			Worst = FMath::Max(Worst, FMath::Abs(Distance - Expected));
+		}
+		AddInfo(FString::Printf(TEXT("%s: outer edge was a %.0f uu fillet about its own centre; now %.1f uu about the lanes' centre (inner %.0f + width %.0f), %d rim points"),
+			Names[Tier], Outer.Radius, Expected, Inner.Radius, Width, OnArc));
+		TestTrue(FString::Printf(TEXT("%s: the outer rim is an arc round the bend (%d points)"), Names[Tier], OnArc), OnArc >= 8);
+		TestTrue(FString::Printf(TEXT("%s: every point of it is the inner radius plus the road width from the lanes' centre (worst %.3f uu off)"),
+			Names[Tier], Worst), Worst <= 0.01);
+
+		// TANGENT: the arc's ends lie on the arms' outer edges, where the radius meets them square.
+		// West arm along +X at y = -Width/2 (the bend turns left, north); north arm up x = 8000 + Width/2.
+		const FVector2D WestFoot(C.X, -Width * 0.5);
+		const FVector2D NorthFoot(8000.0 + Width * 0.5, C.Y);
+		for (const FVector2D& Foot : { WestFoot, NorthFoot })
+		{
+			bool bFound = false;
+			for (const FVector2D& P : Junction->Boundary) { bFound |= P.Equals(Foot, 0.01); }
+			TestTrue(FString::Printf(TEXT("%s: the arc meets an arm's outer edge at the foot of its centre (%.1f, %.1f) - tangent there"),
+				Names[Tier], Foot.X, Foot.Y), bFound);
+			TestTrue(FString::Printf(TEXT("%s: and the foot is the arc's radius from the centre"), Names[Tier]),
+				FMath::IsNearlyEqual(FVector2D::Distance(Foot, C), Expected, 0.01));
+		}
+	}
+	return true;
+}
+
 #endif

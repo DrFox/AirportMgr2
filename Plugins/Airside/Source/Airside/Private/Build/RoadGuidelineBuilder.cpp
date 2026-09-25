@@ -797,6 +797,9 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// would use the outside of the bend - and turn at 306 / 606 uu on Narrow, 186 / 636
 					// on Wide, below both design vehicles' locks, where they turn at 726 / 938 and
 					// 853 / 1171 today (measured 2026-09-25). The ruling forbids a tighter turn.
+					// SINCE 2026-09-25 THE OUTER EDGE FOLLOWS: the solver lays the outside as the arc about
+					// this same centre at the inner radius plus the road width (ConcentricOuterEdge,
+					// RoadNetworkSolver.cpp), so both edges and every lane now share the one centre.
 					//
 					// ONLY WHERE THE CONSTRUCTION HOLDS: two arms, a service-road lane on both (a
 					// taxiway's corner is authored for aircraft - PreferredFilletRadius - and stays as it

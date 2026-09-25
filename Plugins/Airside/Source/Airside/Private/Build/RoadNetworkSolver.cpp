@@ -623,6 +623,98 @@ void WidenBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out,
 		}
 	}
 }
+
+/**
+ * THE BEND'S OUTSIDE, CONCENTRIC WITH ITS LANES (user ruling 2026-09-25). The builder lays a
+ * two-arm service-road bend's lanes as arcs about the INNER fillet's centre (BendLane, 4f874ec3);
+ * the outer edge was the tier's fillet about its OWN centre, so a band of pavement outside the
+ * outer lane was never driven. Now the outer rim is the arc about the same centre at the inner
+ * fillet's radius plus the road width - a road width outside the inner edge everywhere round the
+ * bend, as it is on the straights.
+ *
+ * TANGENT TO BOTH ARMS BY CONSTRUCTION: the arms' outer edges run a road width outside their inner
+ * edges, and the inner fillet's circle touches the inner edges, so the circle a road width larger
+ * touches the outer edges - at the foot of the centre on each, the same distance along the arm as
+ * the inner tangent point. Each arm's cut already sits there or further out (the inner fillet
+ * pushed it there, the widening further), so the rim runs from the cut vertex straight along the
+ * outer edge to that foot, round the arc, and back out to the other cut vertex.
+ *
+ * THE INNER FILLET'S RADIUS, NOT THE WIDENED INNER EDGE'S: the widening pushes the inside INTO THE
+ * GRASS, toward the centre, for the trailer's cut; the lanes stay on their arcs. Measuring the
+ * outside off the widened edge would pull it by the widening's depth into the outer lane - 272 uu
+ * on the Wide tier, past the outer lane's centre line.
+ *
+ * WELD UNTOUCHED: the rim runs BETWEEN the solver's own cut vertices (FJunctionArm::RimToNext), so
+ * the ribbons weld to it bitwise exactly as they did to the fillet arc. Two arms of one total width
+ * only (the lanes' own condition is one width), service roads only (a taxiway's corner is authored
+ * for aircraft), T and X junctions untouched.
+ * ENFORCED BY: Airside.Build.BendLanes.OuterEdgeConcentric, .WeldExact
+ */
+void ConcentricOuterEdge(const URoadNetwork& Network, FRoadNodeCuts& Out)
+{
+	if (!Out.Result.bValid || Out.Input.Arms.Num() != 2 || Out.ArmSegments.Num() != 2 || Out.Result.Corners.Num() != 2)
+	{
+		return;
+	}
+	const FJunctionArm& Arm0 = Out.Input.Arms[0];
+	const FJunctionArm& Arm1 = Out.Input.Arms[1];
+	const double Width = Arm0.HalfWidthLeft + Arm0.HalfWidthRight;
+	if (!FMath::IsNearlyEqual(Width, Arm1.HalfWidthLeft + Arm1.HalfWidthRight, 1.0e-6) || Arm0.bContinuous || Arm1.bContinuous)
+	{
+		return;
+	}
+	for (int32 Arm = 0; Arm < 2; ++Arm)
+	{
+		const FRoadSegment* Segment = Network.GetSegment(Out.ArmSegments[Arm]);
+		const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+		if (Profile == nullptr || !Profile->Guidelines.ContainsByPredicate(
+			[](const FProfileGuideline& Line) { return Line.Class == ETraversalClass::GroundVehicle; }))
+		{
+			return;
+		}
+	}
+	// The inner corner is the one under a half turn; the outer, the other.
+	int32 Inner = INDEX_NONE;
+	for (int32 Corner = 0; Corner < 2; ++Corner)
+	{
+		const RoadGeom::FFillet& Fillet = Out.Result.Corners[Corner];
+		if (Fillet.bValid && !Fillet.bStraightThrough && Fillet.Theta < UE_DOUBLE_PI && Fillet.Radius > 0.0)
+		{
+			Inner = Corner;
+		}
+	}
+	if (Inner == INDEX_NONE)
+	{
+		return;
+	}
+	const int32 Outer = 1 - Inner;
+	const RoadGeom::FFillet& InnerFillet = Out.Result.Corners[Inner];
+	const FVector2D Centre = InnerFillet.Centre;
+	const double Radius = InnerFillet.Radius + Width;
+
+	// The outer corner runs from arm Outer's LEFT edge to arm Inner's RIGHT edge (corner i lies
+	// between arm i's left edge and arm i+1's right edge). The foot of the centre on each edge line.
+	const FRay2D From = FJunctionSolver::MakeLeftEdge(Out.Input, Outer);
+	const FRay2D To = FJunctionSolver::MakeRightEdge(Out.Input, Inner);
+	const FVector2D Start = From.Origin + From.Dir * FVector2D::DotProduct(Centre - From.Origin, From.Dir);
+	const FVector2D End = To.Origin + To.Dir * FVector2D::DotProduct(Centre - To.Origin, To.Dir);
+	const double StartAngle = FMath::Atan2(Start.Y - Centre.Y, Start.X - Centre.X);
+	const double Sweep = FMath::UnwindRadians(FMath::Atan2(End.Y - Centre.Y, End.X - Centre.X) - StartAngle);
+	// As finely as the inner fillet, scaled by the larger radius so a piece is no longer.
+	const int32 Pieces = FMath::Clamp(FMath::CeilToInt32(Out.Input.ArcSegments * Radius / FMath::Max(InnerFillet.Radius, 1.0)),
+		Out.Input.ArcSegments, 64);
+
+	TArray<FVector2D> Rim;
+	Rim.Reserve(Pieces + 1);
+	Rim.Add(Start);
+	for (int32 Piece = 1; Piece < Pieces; ++Piece)
+	{
+		const double Angle = StartAngle + Sweep * (static_cast<double>(Piece) / Pieces);
+		Rim.Add(Centre + FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)) * Radius);
+	}
+	Rim.Add(End);
+	Out.Input.Arms[Outer].RimToNext = MoveTemp(Rim);
+}
 }
 
 int32 FRoadNetworkSolver::WideningTraceCountForTest = 0;
@@ -637,6 +729,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 		return false;
 	}
 	WidenBend(Network, NodeIndex, Out, DesignVehicles, Widening);
+	ConcentricOuterEdge(Network, Out);
 	return true;
 }
 

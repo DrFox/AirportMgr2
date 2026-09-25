@@ -289,6 +289,45 @@ void FJunctionSolver::SolveBoundary(const FJunctionInput& Input, FJunctionResult
 				bFanIsCounterClockwise = true;
 			}
 		}
+
+		// A BEND WHOSE OUTSIDE IS CONCENTRIC WITH ITS INSIDE (RimToNext, 2026-09-25) is an annulus
+		// sector: the node lies OUTSIDE the outer arc, and the centroid of an L sits in its elbow's
+		// grass. What sees the whole rim is on the bend's bisector, between the inner corner of the
+		// arms' square and the outer arc - so walk that bisector out from the inner fillet's centre
+		// and take the first point that sees it all. Tried only after the two apexes above, and only
+		// where the OUTSIDE corner carries a caller's rim (the concentric outer edge) - so every
+		// junction that fanned, or was refused and ear-clipped, before does exactly as before.
+		// ENFORCED BY: Airside.Build.BendLanes.WeldExact (the Wide bend fans; ear-clipping would not weld)
+		if (!bFanIsCounterClockwise && ArmCount == 2 && InOutResult.Corners.Num() == 2)
+		{
+			for (int32 CornerIndex = 0; CornerIndex < 2; ++CornerIndex)
+			{
+				const RoadGeom::FFillet& Corner = InOutResult.Corners[CornerIndex];
+				const RoadGeom::FFillet& Other = InOutResult.Corners[1 - CornerIndex];
+				if (!Corner.bValid || Corner.bStraightThrough || Corner.Theta >= UE_DOUBLE_PI || Corner.Radius <= 0.0
+					|| Other.Theta < UE_DOUBLE_PI || Input.Arms[1 - CornerIndex].RimToNext.Num() == 0)
+				{
+					continue;
+				}
+				const FVector2D Out = (Input.Position - Corner.Centre).GetSafeNormal();
+				double Farthest = 0.0;
+				for (const FVector2D& Point : Rim)
+				{
+					Farthest = FMath::Max(Farthest, FVector2D::Distance(Point, Corner.Centre));
+				}
+				constexpr int32 Candidates = 64;
+				for (int32 Step = 1; Step < Candidates && !bFanIsCounterClockwise; ++Step)
+				{
+					const FVector2D Candidate = Corner.Centre
+						+ Out * (Corner.Radius + (Farthest - Corner.Radius) * Step / Candidates);
+					if (IsFanCounterClockwise(Rim, Candidate))
+					{
+						Apex = Candidate;
+						bFanIsCounterClockwise = true;
+					}
+				}
+			}
+		}
 	}
 
 	// The fan apex is appended last so rim indices stay stable for callers: the rim is
