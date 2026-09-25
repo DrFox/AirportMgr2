@@ -919,6 +919,15 @@ void FRoadAgent::Park(const FVector2D& At, double Heading, FAgentMotion& OutMoti
 	Phase = EAgentPhase::Parked;
 	ShutdownCountdown = ShutdownPause;
 
+	// ZEROED HERE, ONCE, rather than relying on DescribeMotion's Parked/Gone case alone:
+	// SpeedAlongPlan() (TrafficClaims.cpp's stop-window arithmetic) and the tow seed copies
+	// (GroundTraffic.cpp, GroundTrafficRebuild.cpp) read Follower.Speed DIRECTLY, with no
+	// phase guard, so a parked agent with its follower left at taxi speed is readable as
+	// still taxiing by everything but the panel. This project has shipped exactly that
+	// regression before - a frozen follower speed read as real by a caller other than
+	// DescribeMotion - which is why both belts are kept rather than trusting the buckle.
+	Follower.Speed = 0.0;
+
 	// RE-DESCRIBED, so the motion this frame hands back agrees with the phase it just
 	// entered: (At, Heading) is this frame's own rest pose - see each call site for why it
 	// is never the same as LastMotion going in - and a panel reading "Parked, 0.4 m/s" for

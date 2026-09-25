@@ -851,9 +851,12 @@ private:
 	 * the ritual to keep in step instead of one. Airside.Model.RoadAgent.
 	 * ReverseLastLegParksAtRest pins the reverse-leg case.
 	 *
-	 * NOT ZEROING Follower.Speed BY HAND ANY MORE, either: DescribeMotion's own switch now
-	 * answers zero for Parked/Gone directly (see there), so the panel is right regardless of
-	 * whatever the follower's Speed field still happens to hold.
+	 * ZEROES Follower.Speed ONCE, HERE, rather than at each closing site as before: DescribeMotion's
+	 * own switch also answers zero for Parked/Gone directly (see there), but that only fixes what
+	 * the PANEL reads. SpeedAlongPlan() and the tow seed copies (GroundTraffic.cpp,
+	 * GroundTrafficRebuild.cpp) read Follower.Speed directly, with no phase guard, so a stale taxi
+	 * speed left in it is a fact a parked agent can still be caught telling other code - the shape
+	 * this project has shipped as a regression before.
 	 */
 	void Park(const FVector2D& At, double Heading, FAgentMotion& OutMotion);
 
