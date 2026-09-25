@@ -1,7 +1,7 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
-#include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/AgentMotion.h"
@@ -25,21 +25,9 @@
 
 namespace DesignVehicle
 {
-	/** The three content tiers, narrow first, or an empty array when the set does not have them. */
-	TArray<URoadProfile*> Tiers()
-	{
-		TArray<URoadProfile*> Out;
-		const UAirsideContent* Content = UAirsideSettings::GetContent();
-		if (Content == nullptr || Content->ServiceRoadProfiles.Num() != 3)
-		{
-			return Out;
-		}
-		for (const TSoftObjectPtr<URoadProfile>& Tier : Content->ServiceRoadProfiles)
-		{
-			Out.Add(Tier.LoadSynchronous());
-		}
-		return Out;
-	}
+	/** The three content tiers, narrow first, or an empty array when the set does not have them.
+	 *  #310: was its own copy, byte-identical to BendLaneTest's and WidthTaperTest's. */
+	TArray<URoadProfile*> Tiers() { return TestProfiles::ServiceTiers(); }
 
 	/** A 30 m stub (0,0)->(3000,0) of Profile, derived as a rebuild derives it; returns the lanes' outer ends. */
 	URoadNetwork* DeadEnd(URoadProfile* Profile, const FRoadDesignVehicles& Designs, FGuidelineNodeId& OutIn, FGuidelineNodeId& OutBack)

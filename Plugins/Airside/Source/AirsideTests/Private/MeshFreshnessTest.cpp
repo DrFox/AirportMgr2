@@ -157,8 +157,7 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 	const int32 FirstNode = Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	const int32 Before = Actor->GetPresenter()->SurfaceTriangleCountForTest();
 
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 
 	// Below the default 50000 uu MinimumRunwayLength - PlaceRunway refuses under it, and
 	// this test wants a short runway, not a realistic one.
@@ -711,8 +710,7 @@ namespace
 		// same reason MeshRebuildsOnFacadeChange above places one before its own PlaceRunway.
 		Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 
-		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Runway->bContinuousThroughJunctions = true;
+		URoadProfile* Runway = TestProfiles::Runway();
 		// Below the default 50000 uu minimum - MeshRebuildsOnFacadeChange's own comment on
 		// PlaceRunway above explains why a short test strip needs this rather than a
 		// half-kilometre one.
@@ -752,8 +750,7 @@ namespace
 		if (!T.TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 		Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 
-		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Runway->bContinuousThroughJunctions = true;
+		URoadProfile* Runway = TestProfiles::Runway();
 		Actor->MinimumRunwayLength = 100.0;
 		if (!T.TestTrue(TEXT("a runway is placed"),
 			Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(6000.0, 0.0), Runway))) { return false; }

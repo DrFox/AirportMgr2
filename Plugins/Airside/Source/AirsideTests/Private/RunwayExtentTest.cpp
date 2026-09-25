@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
@@ -15,10 +16,9 @@ namespace
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
-		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Runway->bContinuousThroughJunctions = true;
+		URoadProfile* Runway = TestProfiles::Runway();
 
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+		URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 		OutThresholdWest = FVector2D(0.0, 0.0);
 		const FRoadNodeId West = Net->AddNode(OutThresholdWest);
@@ -181,7 +181,7 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 	//    every airport is in before a runway is laid.
 	{
 		URoadNetwork* Bare = NewObject<URoadNetwork>(GetTransientPackage());
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+		URoadProfile* Taxiway = TestProfiles::Taxiway();
 		const FRoadNodeId A = Bare->AddNode(FVector2D::ZeroVector);
 		const FRoadNodeId B = Bare->AddNode(FVector2D(5000.0, 0.0));
 		Bare->AddStraightSegment(A, B, Taxiway);
@@ -199,8 +199,7 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 		URoadNetwork* MultiNet = NewObject<URoadNetwork>(GetTransientPackage());
 
 		// The runway under test: 18 m wide, own half width 900.
-		URoadProfile* Narrow = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-		Narrow->bContinuousThroughJunctions = true;
+		URoadProfile* Narrow = TestProfiles::NarrowRunway();
 		const FRoadNodeId NarrowW = MultiNet->AddNode(FVector2D(0.0, 0.0));
 		const FRoadNodeId NarrowE = MultiNet->AddNode(FVector2D(50000.0, 0.0));
 		const FRoadSegmentId NarrowSeed = MultiNet->AddStraightSegment(NarrowW, NarrowE, Narrow);

@@ -26,8 +26,7 @@ namespace
 			Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 			Actor->MinimumRunwayLength = 10000.0;
 
-			URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-			Profile->bContinuousThroughJunctions = true;
+			URoadProfile* Profile = TestProfiles::Runway();
 			if (!Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(40000.0, 0.0), Profile))
 			{
 				return false;
@@ -64,8 +63,7 @@ namespace
 			Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 			Actor->MinimumRunwayLength = 10000.0;
 
-			URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-			Profile->bContinuousThroughJunctions = true;
+			URoadProfile* Profile = TestProfiles::Runway();
 			if (!Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(40000.0, 0.0), Profile))
 			{
 				return false;
@@ -296,8 +294,7 @@ bool FDeletingABareRunwayThresholdStillShortensItTest::RunTest(const FString& Pa
 
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	Actor->MinimumRunwayLength = 10000.0;
-	URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Profile->bContinuousThroughJunctions = true;
+	URoadProfile* Profile = TestProfiles::Runway();
 	if (!TestTrue(TEXT("a plain runway was laid"),
 			Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(40000.0, 0.0), Profile)))
 	{

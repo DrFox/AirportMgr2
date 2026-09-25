@@ -567,8 +567,7 @@ bool FMoveRunwayThresholdRefusesUnderMinimumLengthTest::RunTest(const FString& P
 	const double Minimum = 10000.0;
 	Actor->MinimumRunwayLength = Minimum;
 
-	URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Profile->bContinuousThroughJunctions = true;
+	URoadProfile* Profile = TestProfiles::Runway();
 
 	// Comfortably over the minimum, so there is room to drag the threshold IN.
 	Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(Minimum * 1.5, 0.0), Profile);
@@ -626,8 +625,7 @@ bool FDraggingAThresholdRedesignatesTheRunwayTest::RunTest(const FString& Parame
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	Actor->MinimumRunwayLength = 10000.0;
 
-	URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Profile->bContinuousThroughJunctions = true;
+	URoadProfile* Profile = TestProfiles::Runway();
 
 	const double Length = Actor->MinimumRunwayLength * 1.5;
 	Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(Length, 0.0), Profile);
@@ -997,8 +995,7 @@ namespace
 		Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 		Actor->MinimumRunwayLength = 10000.0;
 
-		URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Profile->bContinuousThroughJunctions = true;
+		URoadProfile* Profile = TestProfiles::Runway();
 		if (!Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(Length, 0.0), Profile))
 		{
 			return INDEX_NONE;

@@ -16,6 +16,7 @@
 // no change.
 
 #include "CoreMinimal.h"
+#include "Build/RoadNetworkSolver.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
@@ -63,11 +64,13 @@ namespace TestGuide
 	 * runway is not a road kind - it is a segment placed through PlaceRunway with a runway
 	 * profile, which is what URoadNetwork::IsRunwaySegment then recognises.
 	 *
-	 * MinimumRunwayLength is dropped first: it defaults to 50000 uu and PlaceRunway refuses
-	 * anything under it, so a test strip either lowers the bar or is half a kilometre long.
-	 * MeshFreshnessTest does exactly this, for exactly this reason.
+	 * Minimum is dropped first: MinimumRunwayLength defaults to 50000 uu and PlaceRunway
+	 * refuses anything under it, so a test strip either lowers the bar or is half a kilometre
+	 * long. MeshFreshnessTest does exactly this, for exactly this reason. Defaulted to 100.0,
+	 * the figure every existing caller wanted, so #310's migration needed no call-site change;
+	 * a caller that wants PlaceRunway's own refusal passes the real 50000 through explicitly.
 	 */
-	bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To);
+	bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To, double Minimum = 100.0);
 
 	/**
 	 * Every candidate ONE source proposes, with the rest of the chain kept out of it.
@@ -174,6 +177,16 @@ namespace TestProfiles
 	/** 2300 wide / 1500 / 230 - the taxiway every fixture in the module uses. NOT continuous
 	 *  through junctions: a taxiway is not a runway chain. */
 	URoadProfile* Taxiway();
+
+	/**
+	 * The content set's three service-road tiers (narrow first), or empty when the set does
+	 * not have exactly three - #310: byte-identical in BendLaneTest, WidthTaperTest and
+	 * DesignVehicleTest (blame cbe729d6) before this, each with its own `!= 3` literal that a
+	 * fourth tier would have had to fix in three places at once. Guarded on
+	 * UAirsideSettings::WideServiceTier + 1, not a bare 3, so the guard NAMES why three: Wide
+	 * is index 2, and Resolve*() below it reads ServiceRoadProfiles[WideServiceTier].
+	 */
+	TArray<URoadProfile*> ServiceTiers();
 }
 
 /**
@@ -315,6 +328,28 @@ namespace TestGraph
 
 	/** Solve, derive guidelines and re-link every entity: what the facade's RebuildMesh does. */
 	void Rebuild(URoadNetwork& Net);
+
+	/** A Corner() fixture's own network, solve result and the three handles a caller needs -
+	 *  the node between the two arms, and each arm's segment. */
+	struct FCornerFixture
+	{
+		URoadNetwork* Net = nullptr;
+		FRoadSolveResult Solved;
+		FRoadNodeId Corner;
+		FRoadSegmentId First;
+		FRoadSegmentId Second;
+	};
+
+	/**
+	 * A 3-node road fixture, solved and guideline-built the production way
+	 * (ResolveRoadDesignVehicles, then the solver, then the builder): West(0,0) -> Corner ->
+	 * Far, First carrying Profile and Second carrying SecondProfile (or Profile again if
+	 * null). #310: BendLaneTest's right-angle bend (CornerAt (8000,0), FarAt (8000,8000)) and
+	 * WidthTaperTest's straight width step (CornerAt (6000,0), FarAt (12000,0)) were the SAME
+	 * fixture typed twice - only the two points differ, not the shape.
+	 */
+	FCornerFixture Corner(URoadProfile* Profile, URoadProfile* SecondProfile = nullptr,
+		const FVector2D& CornerAt = FVector2D(8000.0, 0.0), const FVector2D& FarAt = FVector2D(8000.0, 8000.0));
 }
 
 /**

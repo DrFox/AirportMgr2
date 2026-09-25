@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayQuery.h"
@@ -23,9 +24,8 @@ bool FRunwayQueryOneEvaluatorTest::RunTest(const FString& Parameters)
 	// The same shape RunwayChainTest builds: a runway split at an exit into R1/R2, a
 	// taxiway off the split, and a second, disjoint runway that must never be swept in.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Runway = TestProfiles::Runway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 	const FRoadNodeId T = Net->AddNode(FVector2D(0.0, 0.0));
 	const FRoadNodeId E = Net->AddNode(FVector2D(60000.0, 0.0));

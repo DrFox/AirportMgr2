@@ -23,9 +23,8 @@ namespace
 	 */
 	FRoadSegmentId RunwayAndTaxiway(URoadNetwork& Net)
 	{
-		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Runway->bContinuousThroughJunctions = true;
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+		URoadProfile* Runway = TestProfiles::Runway();
+		URoadProfile* Taxiway = TestProfiles::Taxiway();
 		const FRoadNodeId W = Net.AddNode(FVector2D(0.0, 0.0));
 		const FRoadNodeId X = Net.AddNode(FVector2D(50000.0, 0.0));
 		const FRoadNodeId E = Net.AddNode(FVector2D(100000.0, 0.0));
@@ -165,8 +164,7 @@ bool FRunwayMarkingsDrawnTest::RunTest(const FString& Parameters)
 	// Airside.Present.MeshIsFreshAfterLoad uses.
 	Actor->PlaceNode(FVector2D(0.0, 60000.0));
 
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	if (!TestTrue(TEXT("a runway is placed through the actor"),
 		Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(150000.0, 0.0), Runway))) { return false; }
 
@@ -209,8 +207,7 @@ bool FRunwayRubberDrawnTest::RunTest(const FString& Parameters)
 	Actor->RubberMaterial = UMaterial::GetDefaultMaterial(MD_Surface);
 
 	Actor->PlaceNode(FVector2D(0.0, 60000.0));
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	if (!TestTrue(TEXT("a runway is placed through the actor"),
 		Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(150000.0, 0.0), Runway))) { return false; }
 

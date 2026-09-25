@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
@@ -18,9 +19,8 @@ bool FRunwayChainTest::RunTest(const FString& Parameters)
 	// A runway split at an exit into two segments, a taxiway off the exit, and a SECOND
 	// runway elsewhere that must not be swept into the chain.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Runway = TestProfiles::Runway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 	const FRoadNodeId T = Net->AddNode(FVector2D(0.0, 0.0));
 	const FRoadNodeId E = Net->AddNode(FVector2D(60000.0, 0.0));
@@ -100,8 +100,7 @@ bool FArrivalPlannerRunwayOccupiedTest::RunTest(const FString& Parameters)
 	// no stands): the assertion is that a held runway is refused BEFORE any of that, with
 	// its own reason, and that the same graph unheld gets past the runway step.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	const FRoadNodeId T = Net->AddNode(FVector2D(0.0, 0.0));
 	const FRoadNodeId E = Net->AddNode(FVector2D(60000.0, 0.0));
 	const FRoadNodeId F = Net->AddNode(FVector2D(120000.0, 0.0));

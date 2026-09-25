@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "AirsideTestsLog.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -32,9 +33,8 @@ namespace
 	{
 		FPlanAnyAirport Out;
 		Out.Net = NewObject<URoadNetwork>(Outer);
-		URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-		Runway->bContinuousThroughJunctions = true;
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+		URoadProfile* Runway = TestProfiles::NarrowRunway();
+		URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 		const FRoadNodeId W = Out.Net->AddNode(FVector2D(-40000.0, 0.0));
 		const FRoadNodeId X = Out.Net->AddNode(FVector2D(20000.0, 0.0));
