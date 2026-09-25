@@ -663,50 +663,11 @@ URoadProfile* ARoadNetworkActor::ResolveProfile()
 
 FBuildSessionTunables ARoadNetworkActor::MakeTunables(double ViewWorldWidth)
 {
-	// The corner-fit rule needs the width of the road about to be drawn, which only the
-	// actor's own profile resolver knows - refreshed on PlacementLimits itself, not just the
-	// Tunables copy, so URoadEditFacade::PlanNodeDeletion (which reads PlacementLimits
-	// directly, not through here) judges a rejoin against the same width a click just did.
-	// NewRoadHalfWidth is deliberately not a UPROPERTY - see FRoadPlacementLimits - so this
-	// is a cache refresh, the same shape as RuntimeProfile, not a write to authored state.
-	if (const URoadProfile* ProfileForLimits = ResolveProfile())
-	{
-		PlacementLimits.NewRoadHalfWidth = ProfileForLimits->GetMaxHalfWidth();
-	}
-
-	FBuildSessionTunables Tunables;
-	Tunables.Snap = Snap;
-	Tunables.GuideSources = GuideSources;
-	Tunables.Limits = PlacementLimits;
-
-	// ViewWorldWidth > 0: the caller has no view-scale UPROPERTY of its own to read (the
-	// editor tool) and wants a radius that stays clickable at any zoom - the same 2% floor
-	// URoadBuildEditorTool::MakeContextAt used to compute for itself. 0: the caller (the
-	// runtime driver) has its own ToolPickRadius and overwrites this right after - see
-	// ARoadBuildController::MakeToolContext.
-	if (ViewWorldWidth > 0.0)
-	{
-		const double Floor = FMath::Max(150.0, ViewWorldWidth * 0.02);
-		Tunables.ToolPickRadius = Floor;
-
-		// A FLOOR ON THE AUTHORED VALUE, not an overwrite of it: the road-snap radii are
-		// per-airport now (FRoadNetworkActor::Snap, issue #93), and folding them down to a
-		// fixed 150/150 here would be a THIRD place they came from, on top of the level
-		// author's own choice and the class default. Without the floor, "has to be a screen
-		// distance, not a world one" - the reason MakeContextAt computed this at all - goes
-		// straight back to being sub-pixel at 20000 uu of view width: max() keeps whichever
-		// of the two is more generous, so a wide-open airport with untouched defaults still
-		// snaps by screen size, and an airport whose author widened NodeRadius past the
-		// floor keeps that choice.
-		Tunables.Snap.NodeRadius = FMath::Max(Tunables.Snap.NodeRadius, Floor);
-		Tunables.Snap.SegmentRadius = FMath::Max(Tunables.Snap.SegmentRadius, Floor);
-	}
-	else
-	{
-		Tunables.ToolPickRadius = FBuildSessionTunables().ToolPickRadius;
-	}
-
-	return Tunables;
+	// FORWARDS TO Facade (issue #298) - see URoadEditFacade::MakeTunables for the bundle itself.
+	// Kept here at the same name/signature: see this method's own header comment for why a
+	// forwarder, not a repointed call site, is what the two drivers holding
+	// TObjectPtr<ARoadNetworkActor> need.
+	return Facade->MakeTunables(ViewWorldWidth);
 }
 
 void ARoadNetworkActor::RebuildMesh()
@@ -974,39 +935,9 @@ int32 ARoadNetworkActor::PlaceNode(FVector2D Where)
 
 URoadProfile* ARoadNetworkActor::ResolveProfileFor(ERoadKind Kind, int32 WidthIndex)
 {
-	// EXTRACTED FROM ConnectNodes SO THE GHOST AND THE CLICK CANNOT DISAGREE. The preview has
-	// to price what a click would actually lay, and a tool resolving the profile for itself
-	// would be a second answer to "which profile is this?" - the exact shape of bug the
-	// registry and the action table exist to prevent elsewhere.
-	//
-	// A CHOSEN WIDTH WINS OVER THE DEFAULT: WidthIndex names one of the content set's
-	// standard widths FOR THIS KIND (the tool cycles it on key-again), INDEX_NONE means
-	// "whatever this kind defaults to". The default for a taxiway is the ACTOR's own profile,
-	// which ResolveProfile keeps the content set out of on purpose - so a player who never
-	// touches the cycle lays exactly the road this level was tuned for. A service road's is
-	// ResolveServiceRoadProfile.
-	//
-	// Until 2026-09-23 a service road ignored the index outright: it had one authored
-	// cross-section, and a TAXIWAY index reaching it would have laid 23 m for vans. The index
-	// is now resolved against the ROAD list (ResolveWidthProfile keys by kind), so it can only
-	// ever name a road tier.
-	// ENFORCED BY: Airside.Present.RoadWidthResolution, Airside.Tool.TaxiwayWidth (section 4)
-	URoadProfile* Chosen = nullptr;
-	if (WidthIndex != INDEX_NONE)
-	{
-		Chosen = ResolveWidthProfile(Kind, WidthIndex);
-	}
-	else if (Kind == ERoadKind::ServiceRoad)
-	{
-		Chosen = ResolveServiceRoadProfile();
-	}
-	if (Chosen == nullptr && Kind != ERoadKind::ServiceRoad)
-	{
-		// No index, or an index the content set cannot answer. Either way the level's own
-		// tuning is the honest fallback here - unlike the service road, a taxiway always has one.
-		Chosen = ResolveProfile();
-	}
-	return Chosen;
+	// FORWARDS TO Facade (issue #298) - see URoadEditFacade::ResolveProfileFor for the width
+	// rule itself and URoadNetworkActor.h's own comment on why this forwarder still exists.
+	return Facade->ResolveProfileFor(Kind, WidthIndex);
 }
 
 bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind,

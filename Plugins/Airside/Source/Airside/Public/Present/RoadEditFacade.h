@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/BuildPurse.h"
+#include "Tool/BuildSession.h"
 #include "Tool/RoadEditTarget.h"
 #include "RoadEditFacade.generated.h"
 
@@ -102,12 +103,23 @@ class AIRSIDE_API URoadEditFacade : public UObject, public IRoadEditTarget
 
 public:
 	/**
-	 * See IRoadEditTarget::ResolveProfileFor. Forwards to the actor, which owns the Resolve*
-	 * family this composes - the facade is a mutator, and a resolution living here as well
-	 * would be the second copy the move on 2026-09-20 existed to remove.
+	 * See IRoadEditTarget::ResolveProfileFor. THE WIDTH RULE ITSELF (issue #298, moved back from
+	 * ARoadNetworkActor, where it sat from 2026-09-20 until the review that became this issue
+	 * found it): a CHOSEN WIDTH WINS OVER THE DEFAULT. WidthIndex names one of the content set's
+	 * standard widths FOR THIS KIND (the tool cycles it on key-again); INDEX_NONE means
+	 * "whatever this kind defaults to". The default for a taxiway is the actor's OWN profile
+	 * (Actor().ResolveProfile()), which keeps the content set out of it on purpose, so a player
+	 * who never touches the cycle lays exactly the road this level was tuned for. A service
+	 * road's is Actor().ResolveServiceRoadProfile().
 	 *
-	 * WAS THE PRIVATE ResolveProfileForKind. Same question, now asked through the interface so
-	 * a tool can ask it too; the callers inside this class are unchanged.
+	 * A ROAD'S STANDARD WIDTHS (Actor().ResolveWidthProfile) ARE STILL A CONTENT QUESTION, not
+	 * this facade's - this composes the RULE (which of three content/level answers a click
+	 * gets), not the content lookups themselves, the same division MakeTunables draws between
+	 * composing a bundle and resolving what goes in it.
+	 *
+	 * NOT CONST - see IRoadEditTarget::ResolveProfileFor's own comment; ResolveProfile lazily
+	 * fills RuntimeProfile on the actor, a decision that header records deliberately.
+	 * ENFORCED BY: Airside.Present.RoadWidthResolution, Airside.Tool.TaxiwayWidth (section 4).
 	 */
 	virtual URoadProfile* ResolveProfileFor(ERoadKind Kind, int32 WidthIndex) override;
 
@@ -234,6 +246,27 @@ public:
 
 	/** Discard the whole graph and the mesh built from it. Undoable. */
 	void ClearNetwork();
+
+	/**
+	 * Snap and placement tunables, for a driver-supplied view scale, as one bundle - see
+	 * FBuildSessionTunables. Moved off ARoadNetworkActor by issue #298: it COMPOSES
+	 * PlacementLimits/Snap/GuideSources (level-authored tunables this facade already reads
+	 * through Actor(), the same pattern as MinimumRunwayLength/StandDefinition - see the class
+	 * comment) with ResolveProfile - a resolve this class is the right place for, not a
+	 * level-authored UPROPERTY only an AActor could hold. THE ONE PLACE both drivers assemble
+	 * this now: before issue #93, ARoadBuildController filled Tunables.Snap/Limits from its own
+	 * seven UPROPERTYs every tick, and URoadBuildEditorTool built a DIFFERENT set from a
+	 * view-derived radius, leaving Limits at struct defaults entirely - the same click was
+	 * judged by different rules depending on which driver was open.
+	 *
+	 * ViewWorldWidth > 0 asks for an adaptive ToolPickRadius sized off it (what the editor
+	 * tool needs, having no view-distance UPROPERTY of its own to read); 0 leaves
+	 * ToolPickRadius at its class default for a caller - the runtime driver - that overwrites
+	 * it right after with its own ToolPickRadius view fact. Not const: resolving the
+	 * corner-fit half-width goes through Actor().ResolveProfile(), which is deliberately
+	 * non-const - see that method's own comment.
+	 */
+	FBuildSessionTunables MakeTunables(double ViewWorldWidth);
 
 	/**
 	 * How many times PlanNodeDeletion has actually run RoadHeal::PlanNodeDeletion (a cache

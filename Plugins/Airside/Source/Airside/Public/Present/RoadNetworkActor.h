@@ -402,7 +402,11 @@ public:
 	virtual int32 GetWidthCount(ERoadKind Kind) const override;
 	virtual URoadProfile* ResolveWidthProfile(ERoadKind Kind, int32 Index) const override;
 
-	/** See IRoadEditTarget::ResolveProfileFor - the one place this rule lives. */
+	/** See IRoadEditTarget::ResolveProfileFor. FORWARDS TO Facade (issue #298: the width rule
+	 *  moved back there, see URoadEditFacade::ResolveProfileFor's own comment) - kept here,
+	 *  not just on the facade, because IRoadEditTarget's other implementer (this actor) must
+	 *  answer the same interface question the same way, and MakeGhostSurfaceSettings below
+	 *  calls this unqualified name on itself. */
 	virtual URoadProfile* ResolveProfileFor(ERoadKind Kind, int32 WidthIndex) override;
 
 	/**
@@ -525,19 +529,14 @@ public:
 	FSnapGuideSettings GuideSources;
 
 	/**
-	 * Snap and placement tunables, for a driver-supplied view scale, as one bundle - see
-	 * FBuildSessionTunables. THE ONE PLACE both drivers assemble this now: before issue #93,
-	 * ARoadBuildController filled Tunables.Snap/Limits from its own seven UPROPERTYs every
-	 * tick, and URoadBuildEditorTool built a DIFFERENT set from a view-derived radius, leaving
-	 * Limits at struct defaults entirely - the same click was judged by different rules
-	 * depending on which driver was open.
-	 *
-	 * ViewWorldWidth > 0 asks for an adaptive ToolPickRadius sized off it (what the editor
-	 * tool needs, having no view-distance UPROPERTY of its own to read); 0 leaves
-	 * ToolPickRadius at its class default for a caller - the runtime driver - that overwrites
-	 * it right after with its own ToolPickRadius view fact. Not const: resolving the
-	 * corner-fit half-width goes through ResolveProfile, which is deliberately non-const -
-	 * see that method's own comment.
+	 * Snap and placement tunables, for a driver-supplied view scale - FORWARDS TO Facade
+	 * (issue #298: composing this bundle is a mutator-shaped resolve, not a level-authored
+	 * UPROPERTY only an AActor could hold - see URoadEditFacade::MakeTunables for the bundle
+	 * itself, the issue #93 history, and the ViewWorldWidth floor). Kept here, at the same name
+	 * and signature, because RoadBuildController and RoadBuildEditorTool hold a
+	 * TObjectPtr<ARoadNetworkActor>, not an IRoadEditTarget - MakeTunables was never part of
+	 * that interface - so this forwarder is what the refactor contract calls "every member
+	 * stays reachable at its old name" for a caller that is not virtual dispatch at all.
 	 */
 	FBuildSessionTunables MakeTunables(double ViewWorldWidth);
 
