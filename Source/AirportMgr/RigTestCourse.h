@@ -331,6 +331,18 @@ public:
 	/** Swaps Slot's vehicle - the plan cache's vehicle-identity test. */
 	void SetVehicleForTest(int32 Slot, const FVehicle& Vehicle) { Vehicles[Slot] = Vehicle; }
 
+	/** Every (edge, fits) the per-vehicle FitCaches hold - the staleness test reads them all. */
+	void ForEachFitCacheEntryForTest(TFunctionRef<void(FGuidelineEdgeId Edge, bool bFits)> Visit) const
+	{
+		for (const TPair<uint32, TMap<FGuidelineEdgeId, bool>>& Vehicle : FitCaches)
+		{
+			for (const TPair<FGuidelineEdgeId, bool>& Entry : Vehicle.Value)
+			{
+				Visit(Entry.Key, Entry.Value);
+			}
+		}
+	}
+
 	/** PlanBetween's cache misses since BeginPlay: Finds actually run. */
 	int32 GetPlanFindsForTest() const { return TotalPlanFinds; }
 

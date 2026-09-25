@@ -307,7 +307,8 @@ struct AIRSIDE_API FRouteQuery
 	 * costs - measured 2026-09-25, ~20 ms a Find for the rig on its course, 92 Finds on one tick.
 	 * The CALLER guarantees what the memo is keyed on and cannot see: the same Vehicle and the
 	 * same graph (URoadNetwork::GetGuidelineRevision). Null, the default: Find memoises within
-	 * itself only.
+	 * itself only. Edge handles carry a generation, so a re-derived edge is a new key even so.
+	 * ENFORCED BY: AirportMgr.RigCourse.FitCacheDropsOnRebuild (the one owner, the rig course)
 	 */
 	TMap<FGuidelineEdgeId, bool>* FitCache = nullptr;
 

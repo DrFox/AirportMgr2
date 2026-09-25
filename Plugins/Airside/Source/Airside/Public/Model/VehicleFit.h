@@ -195,4 +195,12 @@ namespace VehicleFit
 	 */
 	AIRSIDE_API FFitVerdict JudgePlan(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
 		const FTowSeed* Seed = nullptr);
+
+	/**
+	 * TEST ONLY: turns off JudgePlan's shortcut that skips projecting the body where no vertex in
+	 * reach has clearance data, so a test can hold the shortcut to the plain projection verdict for
+	 * verdict. On by default and in production.
+	 * ENFORCED BY: Airside.Model.Tow.ProjectionShortcutKeepsTheVerdict
+	 */
+	AIRSIDE_API void SetProjectionShortcutForTest(bool bEnabled);
 }

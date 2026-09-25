@@ -856,8 +856,21 @@ FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSe
 	// ENFORCED BY: Airside.Build.BendLanes.CappedWideningWarns
 	if (Widening == EWideningTrace::Trace)
 	{
+		// ONCE PER GEOMETRY (re-review of 8de90a45): keyed on the bend's segment, where it is and
+		// what it says, so an unchanged capped bend is not re-warned by every Topology rebuild.
+		TSet<uint32> Warned;
 		for (const FCappedWidening& Capped : Out.CappedWidenings)
 		{
+			uint32 Key = GetTypeHash(Capped.Segment);
+			for (const double Figure : { Capped.Position.X, Capped.Position.Y, Capped.Missing, Capped.Overrun, Capped.Length, Capped.LengthNeeded })
+			{
+				Key = HashCombine(Key, GetTypeHash(FMath::RoundToInt64(Figure)));
+			}
+			Warned.Add(Key);
+			if (Network.CappedWideningsWarned().Contains(Key))
+			{
+				continue;
+			}
 			UE_LOG(LogRoadSolve, Warning,
 				TEXT("Bend at (%.0f,%.0f): its inside widening is capped by a short arm - %.0f uu of it is missing, so its ")
 				TEXT("design vehicle still leaves the tarmac by about %.0f uu there. Segment %d is %.1f m long; draw it at ")
@@ -865,6 +878,7 @@ FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSe
 				Capped.Position.X, Capped.Position.Y, Capped.Missing, Capped.Overrun, Capped.Segment.Index,
 				Capped.Length / 100.0, Capped.LengthNeeded / 100.0);
 		}
+		Network.CappedWideningsWarned() = MoveTemp(Warned);
 	}
 
 	return Out;

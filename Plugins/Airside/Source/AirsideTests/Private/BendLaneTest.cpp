@@ -677,4 +677,46 @@ bool FBendLaneCappedWarnsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBendLaneCappedOncePerGeometryTest, "Airside.Build.BendLanes.CappedWideningWarnsOncePerGeometry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBendLaneCappedOncePerGeometryTest::RunTest(const FString& Parameters)
+{
+	// ONCE UNTIL THE BEND CHANGES (re-review of 8de90a45): the rig course is laid once and rebuilt
+	// on every Topology edit, and its capped Wide bends said so on every one. The same bend over
+	// three tracing rebuilds warns once; shorten its stub and it warns again, with the new figures.
+	using namespace BendLane;
+	const TArray<URoadProfile*> Profiles = Tiers();
+	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
+		Profiles.Num() == 3 && !Profiles.Contains(nullptr))) { return false; }
+	URoadProfile* Wide = Profiles[UAirsideSettings::WideServiceTier];
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadNodeId West = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId Corner = Net->AddNode(FVector2D(8000.0, 0.0));
+	Net->AddStraightSegment(West, Corner, Wide);
+	const FRoadNodeId Stub = Net->AddNode(FVector2D(8000.0, 2500.0));
+	Net->AddStraightSegment(Corner, Stub, Wide);
+	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
+
+	FCappedSpy Spy;
+	GLog->AddOutputDevice(&Spy);
+	for (int32 Rebuild = 0; Rebuild < 3; ++Rebuild)
+	{
+		FRoadNetworkSolver::SolveAll(*Net, 12, &Designs, EWideningTrace::Trace);
+	}
+	const int32 Unchanged = Spy.Lines.Num();
+	Net->SetNodePosition(Stub, FVector2D(8000.0, 2000.0));
+	FRoadNetworkSolver::SolveAll(*Net, 12, &Designs, EWideningTrace::Trace);
+	FRoadNetworkSolver::SolveAll(*Net, 12, &Designs, EWideningTrace::Trace);
+	GLog->RemoveOutputDevice(&Spy);
+
+	TestEqual(TEXT("the same capped bend over three rebuilds is warned once"), Unchanged, 1);
+	TestEqual(TEXT("its stub shortened, it is warned again - once"), Spy.Lines.Num(), 2);
+	if (Spy.Lines.Num() == 2)
+	{
+		TestTrue(TEXT("with the new figures"), Spy.Lines[1] != Spy.Lines[0]);
+	}
+	return true;
+}
+
 #endif

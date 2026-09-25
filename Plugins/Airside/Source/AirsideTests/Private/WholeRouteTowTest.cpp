@@ -1,4 +1,6 @@
 #include "CoreMinimal.h"
+#include "Build/RoadGuidelineBuilder.h"
+#include "Build/RoadNetworkSolver.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/AgentMotion.h"
@@ -12,6 +14,8 @@
 #include "Model/TrafficOccupancy.h"
 #include "Model/Vehicle.h"
 #include "Model/VehicleFit.h"
+#include "Profiles/RoadDesignVehicles.h"
+#include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/VehicleSweep.h"
 
@@ -658,6 +662,88 @@ bool FWholeRouteSpliceReplanTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("spliced on, the three quarters fold: the replan is refused"),
 		FPlanReResolver::SpliceReplan(*Loop.Net, Query, 2, Plan));
 	TestEqual(TEXT("and the plan is untouched"), Plan.Length, LengthBefore);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWholeRouteShortcutTest, "Airside.Model.Tow.ProjectionShortcutKeepsTheVerdict",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWholeRouteShortcutTest::RunTest(const FString& Parameters)
+{
+	// THE SHORTCUT CHANGES THE COST, NEVER THE VERDICT (re-review of 8de90a45). JudgePlan skips
+	// projecting the body where no vertex in reach measured clearances; every such sample is one
+	// the tarmac check then ignores. Held to the plain projection, field for field, on plans that
+	// mix measured and unmeasured stretches: a measured quarter at 3 m (refused) and at 40 m, a
+	// derived Narrow T turn for the rig and the drawbar utility (measured corners between plain
+	// lanes), and the three-quarter fold (nothing measured).
+	using namespace WholeRouteTowFixture;
+	struct FCase { FString Name; const URoadNetwork* Net; FRoutePlan Plan; FVehicle Vehicle; };
+	TArray<FCase> Cases;
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	const FVehicle Utility = UAirsideSettings::ResolveUtilityTowVehicle();
+	for (const double Tarmac : { 300.0, 4000.0 })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FGuidelineNodeId Start = Node(*Net, -4000.0, 0.0);
+		const FGuidelineNodeId P0 = Node(*Net, 0.0, 0.0);
+		const FGuidelineNodeId P1 = Node(*Net, Leg, Leg);
+		const FGuidelineNodeId Goal = Node(*Net, Leg, Leg + 4000.0);
+		Edge(*Net, Start, P0);
+		const FVector2D Control(Leg, 0.0);
+		const FGuidelineEdgeId Quarter = Edge(*Net, P0, P1, &Control);
+		Edge(*Net, P1, Goal);
+		const int32 Count = Samples(*Net, Quarter).Num();
+		FGuidelineEdge Measured = *Net->GetGuidelineEdge(Quarter);
+		Measured.ClearInnerAt.Init(static_cast<float>(Tarmac * 0.5), Count);
+		Measured.ClearOuterAt.Init(static_cast<float>(Tarmac * 0.5), Count);
+		Net->RemoveGuidelineEdge(Quarter);
+		Net->AddGuidelineEdge(MoveTemp(Measured));
+		Cases.Add({ FString::Printf(TEXT("measured quarter, %.0f uu of tarmac"), Tarmac), Net, Route(*Net, Start, Goal, nullptr), Rig });
+	}
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Narrow = URoadProfile::MakeServiceRoadTransient(300.0);
+		const FRoadNodeId Hub = Net->AddNode(FVector2D(0.0, 0.0));
+		const FRoadSegmentId West = Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(-30000.0, 0.0)), Narrow);
+		Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(30000.0, 0.0)), Narrow);
+		const FRoadSegmentId North = Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(0.0, 30000.0)), Narrow);
+		const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
+		FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net, 12, &Designs), Designs);
+		FGuidelineNodeId From, To;
+		for (const FGuidelineEdge& E : Net->GetGuidelineEdges())
+		{
+			if (!E.bAlive) { continue; }
+			if (E.DerivedFrom == West && E.Direction == EGuidelineDir::BToA) { From = E.B; }
+			if (E.DerivedFrom == North && E.Direction == EGuidelineDir::AToB) { To = E.B; }
+		}
+		const FRoutePlan Turn = Route(*Net, From, To, nullptr);
+		Cases.Add({ TEXT("derived T turn, rig"), Net, Turn, Rig });
+		Cases.Add({ TEXT("derived T turn, utility"), Net, Turn, Utility });
+	}
+	{
+		const FGraph Loop = Bends({ 1, 1, 1 });
+		Cases.Add({ TEXT("three quarters, unmeasured"), Loop.Net, Route(*Loop.Net, Loop.Start, Loop.Goal, nullptr), Rig });
+	}
+
+	int32 Refused = 0;
+	for (const FCase& Case : Cases)
+	{
+		if (!TestTrue(FString::Printf(TEXT("%s: a plan"), *Case.Name), Case.Plan.IsValid())) { continue; }
+		VehicleFit::SetProjectionShortcutForTest(false);
+		const FFitVerdict Plain = VehicleFit::JudgePlan(Case.Plan, Case.Vehicle, *Case.Net);
+		VehicleFit::SetProjectionShortcutForTest(true);
+		const FFitVerdict Short = VehicleFit::JudgePlan(Case.Plan, Case.Vehicle, *Case.Net);
+		AddInfo(FString::Printf(TEXT("%s: %s"), *Case.Name, Plain.Fits() ? TEXT("fits") : *Plain.Describe()));
+		TestEqual(FString::Printf(TEXT("%s: same refusal"), *Case.Name), static_cast<int32>(Short.Refusal), static_cast<int32>(Plain.Refusal));
+		TestEqual(FString::Printf(TEXT("%s: same fold distance"), *Case.Name), Short.Along, Plain.Along);
+		TestEqual(FString::Printf(TEXT("%s: same worst angle"), *Case.Name), Short.Radians, Plain.Radians);
+		TestEqual(FString::Printf(TEXT("%s: same swept figure"), *Case.Name), Short.Needed, Plain.Needed);
+		TestEqual(FString::Printf(TEXT("%s: same tarmac figure"), *Case.Name), Short.Available, Plain.Available);
+		TestEqual(FString::Printf(TEXT("%s: at the same sample"), *Case.Name), Short.Sample, Plain.Sample);
+		Refused += Plain.Refusal == EFitRefusal::SweptOverTarmac ? 1 : 0;
+	}
+	VehicleFit::SetProjectionShortcutForTest(true);
+	TestTrue(TEXT("NOT VACUOUS: a clearance refusal is among them"), Refused > 0);
 	return true;
 }
 

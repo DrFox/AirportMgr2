@@ -128,6 +128,17 @@ bool VehicleFit::Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle, const
 	return Judge(Edge, Vehicle, Network).Fits();
 }
 
+namespace
+{
+	/** See VehicleFit::SetProjectionShortcutForTest. */
+	bool GProjectionShortcut = true;
+}
+
+void VehicleFit::SetProjectionShortcutForTest(bool bEnabled)
+{
+	GProjectionShortcut = bEnabled;
+}
+
 double VehicleFit::TowSubStepSeconds(const FChassis& Chassis)
 {
 	// SIZED BY TIME at the cap, not by distance: a sub-step at the cap covers exactly TraceStep,
@@ -357,7 +368,7 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 		{
 			++Hi;
 		}
-		if (Hi <= Lo || MeasuredBefore[Hi + 1] == MeasuredBefore[Lo])
+		if (Hi <= Lo || (GProjectionShortcut && MeasuredBefore[Hi + 1] == MeasuredBefore[Lo]))
 		{
 			continue;
 		}
