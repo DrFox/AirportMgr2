@@ -230,6 +230,22 @@ fillets are sized per width tier; dead-end balloons are NOT:**
   user chose the smaller road: the rig is refused at every dead end on its lock, and will turn
   at a road end with a three-point turn once reversing exists (step 2) - not with a bigger
   balloon. Pinned by `Airside.Build.DesignVehicle.WideDeadEndRefusesRigUntilReversing`.
+  **REVISED 2026-09-25 ("same footprint, gentler curves", approved, then STOPPED on measurement,
+  not landed):** the balloon was reshaped inside today's bowser footprint and measured. The box
+  (old construction, bowser lock 510.1 uu): 1818 uu past the lane ends, 727 uu either side, on
+  every tier; its tightest piece 514 uu (a quadratic across a 90 degree arc gives only 0.707 R).
+  Reshaped - half circle in four 45 degree quadratics, `GuidelineGeom`'s lane change out to it,
+  circle radius chosen where the two deliver the same radius - the tightest piece rose to
+  642 / 650 / 666 uu (Narrow / Standard / Wide) at reach 1818 and half-width 695 / 704 / 721,
+  i.e. no larger on either axis; free S tangent lengths gained nothing, 8 circle pieces ~27 uu more.
+  All three clear the rig's 575.6 uu lock, so the router ADMITTED the rig at every dead end - and
+  the rig JACK-KNIFED (90 deg at link 0) in all three balloons on `OneLoopHeadless`, the utility
+  and bowser driving them cleanly. The lock is the cab's limit, not the trailer's, and
+  `VehicleFit` does not trace a balloon's tow (Open: "One evaluator for a whole route's tow", both
+  halves). So inside this footprint a gentler balloon only moves the rig's refusal from the lock
+  to a fold; it was not committed. To land it, the whole-route tow trace must land first (the rig
+  then refused on Jackknife, the bowser and utility on gentler curves); the patch is kept with the
+  session's report.
 - **The course:** the rig bypasses all three dead-end stems (look-ahead), their U-turns refused
   on the lock-radius reason; its corners on Wide are laid for it.
 
