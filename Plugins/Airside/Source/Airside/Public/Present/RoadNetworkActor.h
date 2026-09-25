@@ -1256,26 +1256,12 @@ public:
 	 * AUTHORED INPUT, READ AND NEVER WRITTEN save for the on-demand fallback cache - see
 	 * the .cpp. Public (moved from private by issue #32): URoadEditFacade::ConnectNodes and
 	 * ::DeleteNode call this directly, in place of the bare member access they used when
-	 * they were part of this class. Still non-const, because it lazily fills RuntimeProfile
-	 * - see ResolveProfileForTest for the const-preserving path a test needs instead.
+	 * they were part of this class. Non-const because it lazily fills RuntimeProfile; already
+	 * public, so a test that needs to ask what the actor would use (without mutating it -
+	 * Airside.Present.AuthoredPropertiesUntouched) calls this directly rather than through a
+	 * *ForTest wrapper that added nothing (issue #298 deleted ResolveProfileForTest).
 	 */
 	URoadProfile* ResolveProfile();
-
-	/**
-	 * ResolveProfile, for the test that guards it. Not for production use.
-	 *
-	 * ResolveProfile is non-const because it caches into RuntimeProfile, and
-	 * Airside.Present.AuthoredPropertiesUntouched has to be able to ask what the actor would
-	 * use without being given the write access that whole test exists to forbid.
-	 */
-	const URoadProfile* ResolveProfileForTest() { return ResolveProfile(); }
-
-	// SurfaceTriangleCountForTest/RunwayMarkingTriangleCountForTest/EffectiveMaterialSetForTest
-	// deleted (code review on issue #80's PR): they forwarded to Presenter with nothing added,
-	// and GetPresenter() above exists precisely so a test can ask the presenter itself instead
-	// of the actor growing one forwarder per presenter query. Callers (MeshFreshnessTest.cpp,
-	// RunwaySurfaceTest.cpp) now call Actor->GetPresenter()->SurfaceTriangleCountForTest() etc.
-	// directly - see URoadSurfacePresenter's own header for those three.
 
 	/**
 	 * How many times RebuildMesh has run, for Airside.Present.MeshRebuildsOnFacadeChange.
@@ -1301,19 +1287,13 @@ public:
 	 */
 	int32 TopologyRebuildCountForTest() const { return TopologyRebuildCount; }
 
-	/** The newest agent's Phase, for the same test - see UAirsideTraffic::
-	 *  LastAgentPhaseForTest for why Gone stands in for "no agent". */
-	EAgentPhase LastAgentPhaseForTest() const;
-
-	/** The newest agent's own taxi speed cap, for the same test. Forwards to Traffic. */
-	double LastAgentTaxiSpeedCapForTest() const;
-
-	/** The stand definition this actor would use, for the same test. */
-	UEntityDefinition* ResolveStandDefinitionForTest() const { return ResolveStandDefinition(); }
-
-	/** Whose subobject the facade / presenter is, for Airside.Present.DuplicatedActorOwnsItsSubobjects. */
-	UObject* FacadeOuterForTest() const;
-	UObject* PresenterOuterForTest() const;
+	// LastAgentPhaseForTest/LastAgentTaxiSpeedCapForTest/FacadeOuterForTest/PresenterOuterForTest/
+	// ResolveStandDefinitionForTest/ResolveProfileForTest deleted (issue #298): each forwarded to
+	// GetTraffic()/GetEditFacade()->GetOuter()/GetPresenter()->GetOuter()/ResolveStandDefinition()/
+	// ResolveProfile() with nothing added - the same shape issue #80 already removed six of these
+	// for once. A test now calls the subobject or the already-public resolver directly, matching
+	// GetPresenter()/GetEditFacade()'s own "read access to a subobject, not a forwarder" rule.
+	// ENFORCED BY: Check-Architecture.ps1's *ForTest( rule (this header's own allow-list is what's left).
 
 	/**
 	 * The presenter's own LayerComponents[Layer], for Airside.Present.NetworkActor.

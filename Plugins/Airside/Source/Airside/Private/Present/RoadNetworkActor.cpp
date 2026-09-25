@@ -304,16 +304,6 @@ void ARoadNetworkActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyCh
 }
 #endif
 
-UObject* ARoadNetworkActor::FacadeOuterForTest() const
-{
-	return Facade ? Facade->GetOuter() : nullptr;
-}
-
-UObject* ARoadNetworkActor::PresenterOuterForTest() const
-{
-	return Presenter ? Presenter->GetOuter() : nullptr;
-}
-
 void ARoadNetworkActor::PostRegisterAllComponents()
 {
 	Super::PostRegisterAllComponents();
@@ -1021,16 +1011,6 @@ EDepartureRefusal ARoadNetworkActor::DepartAgent(int32 AgentId)
 ARoadAgentActor* ARoadNetworkActor::GetAgentView(int32 AgentId) const
 {
 	return Traffic->GetAgentView(AgentId);
-}
-
-EAgentPhase ARoadNetworkActor::LastAgentPhaseForTest() const
-{
-	return Traffic->LastAgentPhaseForTest();
-}
-
-double ARoadNetworkActor::LastAgentTaxiSpeedCapForTest() const
-{
-	return Traffic->LastAgentTaxiSpeedCapForTest();
 }
 
 FRoutePlan ARoadNetworkActor::FindRoute(

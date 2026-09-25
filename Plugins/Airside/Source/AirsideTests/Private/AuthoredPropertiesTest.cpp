@@ -92,7 +92,7 @@ bool FAuthoredPropertiesTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("an authored profile survives a rebuild"),
 			Actor->Profile.Get(), Mine);
 		TestEqual(TEXT("and is what the actor resolves"),
-			Actor->ResolveProfileForTest(), static_cast<const URoadProfile*>(Mine));
+			Actor->ResolveProfile(), Mine);
 	}
 
 	return true;

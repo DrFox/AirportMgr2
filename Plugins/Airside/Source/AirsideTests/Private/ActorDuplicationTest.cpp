@@ -41,9 +41,9 @@ bool FActorDuplicationTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the actor duplicates"), Dup)) { return false; }
 
 	TestEqual(TEXT("the duplicate's facade belongs to the duplicate, not the CDO"),
-		Dup->FacadeOuterForTest(), static_cast<UObject*>(Dup));
+		Dup->GetEditFacade() ? Dup->GetEditFacade()->GetOuter() : nullptr, static_cast<UObject*>(Dup));
 	TestEqual(TEXT("the duplicate's presenter belongs to the duplicate"),
-		Dup->PresenterOuterForTest(), static_cast<UObject*>(Dup));
+		Dup->GetPresenter() ? Dup->GetPresenter()->GetOuter() : nullptr, static_cast<UObject*>(Dup));
 	TestEqual(TEXT("the duplicate's traffic belongs to the duplicate"),
 		Dup->GetTraffic() ? Dup->GetTraffic()->GetOuter() : nullptr, static_cast<UObject*>(Dup));
 
