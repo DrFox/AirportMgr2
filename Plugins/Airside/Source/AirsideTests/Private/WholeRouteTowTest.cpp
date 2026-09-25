@@ -1,11 +1,15 @@
 #include "CoreMinimal.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
+#include "Model/AgentMotion.h"
+#include "Model/GroundTraffic.h"
+#include "Model/PlanReResolver.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
+#include "Model/TrafficOccupancy.h"
 #include "Model/Vehicle.h"
 #include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
@@ -266,6 +270,7 @@ bool FWholeRouteRetriesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("through the entry quarters both routes share"),
 		Plan.Steps.ContainsByPredicate([&](const FRouteStep& Step) { return Step.Edge == First; })
 		&& Plan.Steps.ContainsByPredicate([&](const FRouteStep& Step) { return Step.Edge == SecondQuarter; }));
+	AddInfo(FString::Printf(TEXT("way round %.1f m against the %.1f m route that folds (%.2fx)"), Plan.Length / 100.0, Unjudged.Length / 100.0, Plan.Length / Unjudged.Length));
 	TestTrue(TEXT("longer than the one that folds"), Plan.Length > Unjudged.Length);
 	TestEqual(TEXT("two whole-route checks: the fold, then the way round"), RouteSearch::TowCheckCountForTest(), 2);
 
@@ -388,6 +393,271 @@ bool FWholeRouteVerdictIsTheAgentsTest::RunTest(const FString& Parameters)
 	// NOT VACUOUS: a set where every plan held (or every one folded) would agree for any check.
 	TestTrue(TEXT("the set holds at least one fold"), Folds > 0);
 	TestTrue(TEXT("and at least one route that holds"), Holds > 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWholeRouteClearanceRefusedTest, "Airside.Model.Tow.WholeRouteClearanceRefused",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWholeRouteClearanceRefusedTest::RunTest(const FString& Parameters)
+{
+	// THE CLEARANCE HALF of the whole-route check (review of 9441ccf1: untested). One quarter
+	// the rig's trailer holds (45 deg), carrying per-sample clearances as the builder measures
+	// them: 3 m of tarmac across it is less than the rig sweeps turning, 40 m is more. The drive
+	// is the same both times; only the tarmac it is measured against changes.
+	using namespace WholeRouteTowFixture;
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	for (const double Tarmac : { 300.0, 4000.0 })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FGuidelineNodeId Start = Node(*Net, -4000.0, 0.0);
+		const FGuidelineNodeId P0 = Node(*Net, 0.0, 0.0);
+		const FGuidelineNodeId P1 = Node(*Net, Leg, Leg);
+		const FGuidelineNodeId Goal = Node(*Net, Leg, Leg + 4000.0);
+		Edge(*Net, Start, P0);
+		const FVector2D Control(Leg, 0.0);
+		const FGuidelineEdgeId Quarter = Edge(*Net, P0, P1, &Control);
+		Edge(*Net, P1, Goal);
+		// The builder's per-sample clearances, one per sample the follower walks - an edge is
+		// added whole, so written through the network's test door.
+		const TArray<FVector2D> Points = Samples(*Net, Quarter);
+		FGuidelineEdge Measured = *Net->GetGuidelineEdge(Quarter);
+		Measured.ClearInnerAt.Init(static_cast<float>(Tarmac * 0.5), Points.Num());
+		Measured.ClearOuterAt.Init(static_cast<float>(Tarmac * 0.5), Points.Num());
+		Net->RemoveGuidelineEdge(Quarter);
+		const FGuidelineEdgeId MeasuredQuarter = Net->AddGuidelineEdge(MoveTemp(Measured));
+
+		const FRoutePlan Plan = Route(*Net, Start, Goal, nullptr);
+		if (!TestTrue(TEXT("an unjudged plan round the quarter"), Plan.IsValid())) { continue; }
+		const FFitVerdict Verdict = VehicleFit::JudgePlan(Plan, Rig, *Net);
+		AddInfo(FString::Printf(TEXT("tarmac %.0f uu: %s (worst hitch %.1f deg)"), Tarmac,
+			Verdict.Fits() ? TEXT("fits") : *Verdict.Describe(), FMath::RadiansToDegrees(Verdict.Radians)));
+		if (Tarmac < 1000.0)
+		{
+			TestEqual(TEXT("3 m of tarmac: refused, the swept body over it"),
+				static_cast<int32>(Verdict.Refusal), static_cast<int32>(EFitRefusal::SweptOverTarmac));
+			TestTrue(TEXT("on the whole-route rule"), Verdict.bWholeRoute);
+			TestTrue(TEXT("naming the quarter"), Verdict.Edge == MeasuredQuarter);
+			TestTrue(TEXT("at one of its own samples"), Verdict.Sample >= 0 && Verdict.Sample < Points.Num());
+			TestTrue(FString::Printf(TEXT("swept (%.0f) wider than the tarmac (%.0f)"), Verdict.Needed, Verdict.Available),
+				Verdict.Needed > Verdict.Available && FMath::IsNearlyEqual(Verdict.Available, Tarmac, 1.0));
+		}
+		else
+		{
+			TestTrue(FString::Printf(TEXT("40 m of tarmac: fits (%s)"), *Verdict.Describe()), Verdict.Fits());
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWholeRouteSeededTest, "Airside.Model.Tow.WholeRouteSeededFromTheLiveChain",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWholeRouteSeededTest::RunTest(const FString& Parameters)
+{
+	// A RE-ROUTE STARTS WHERE THE TRAILER IS (review of 9441ccf1). The rig drives one quarter of
+	// the three-quarter loop and is caught at its end with the trailer swung; what is left - two
+	// more quarters - holds from a STRAIGHT lay (a U, 75 deg) but folds from the chain as it is.
+	// The seam is FPlanReResolver::QueryFor, which every re-route's query comes from.
+	using namespace WholeRouteTowFixture;
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	const FGraph Loop = Bends({ 1, 1, 1 });
+	const FRoutePlan Whole = Route(*Loop.Net, Loop.Start, Loop.Goal, nullptr);
+	if (!TestTrue(TEXT("the loop's plan"), Whole.IsValid() && Whole.Steps.Num() == 5)) { return false; }
+	const double FirstQuarterEnds = Whole.Steps[1].EndDistance;
+
+	FRoadAgent Agent;
+	Agent.StartDrive(Whole, Rig);
+	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
+	for (int32 Frame = 0; Frame < 30 * 600 && Agent.Follower.Travelled < FirstQuarterEnds; ++Frame)
+	{
+		Agent.Advance(1.0 / 30.0, Motion, Event);
+	}
+	if (!TestEqual(TEXT("the rig drove the first quarter without folding"), Agent.GetJackknifedLink(), static_cast<int32>(INDEX_NONE))) { return false; }
+
+	// The rest of the loop, as the search from the first quarter's end returns it.
+	const FGuidelineNodeId P1 = Whole.Steps[1].To;
+	const FRoutePlan Rest = Route(*Loop.Net, P1, Loop.Goal, nullptr);
+	TestTrue(TEXT("from a straight lay the rest - a U - holds"), VehicleFit::JudgePlan(Rest, Rig, *Loop.Net).Fits());
+
+	FRouteQuery Query = FPlanReResolver::QueryFor(ERouteErrand::GraphProbe, P1, Loop.Goal, Agent);
+	if (!TestTrue(TEXT("QueryFor seeds a tow's query with its live chain"), Query.TowSeed.IsSet())) { return false; }
+	TestEqual(TEXT("one axle per link, the agent's own"), Query.TowSeed->Axles.Num(), Agent.TowAxles.Num());
+	TestEqual(TEXT("at the agent's heading"), Query.TowSeed->Heading, Agent.Follower.Heading);
+	// The vehicle is this far past the rest's first point.
+	Query.TowSeed->Travelled = Agent.Follower.Travelled - FirstQuarterEnds;
+	const FFitVerdict Seeded = VehicleFit::JudgePlan(Rest, Rig, *Loop.Net, Query.TowSeed.GetPtrOrNull());
+	AddInfo(FString::Printf(TEXT("seeded: %s"), *Seeded.Describe()));
+	TestEqual(TEXT("from the live chain the rest folds - the trailer was already swung"),
+		static_cast<int32>(Seeded.Refusal), static_cast<int32>(EFitRefusal::TrailerFolds));
+	const FRoutePlan Refused = RouteSearch::Find(*Loop.Net, Query);
+	TestEqual(TEXT("and Find, handed that query, refuses the route on the fold"),
+		static_cast<int32>(Refused.RejectedBy.Refusal), static_cast<int32>(EFitRefusal::TrailerFolds));
+
+	// THE AGENT AGREES: driven on, it jack-knifes.
+	for (int32 Frame = 0; Frame < 30 * 600 && Event != EAgentEvent::Parked && Agent.GetJackknifedLink() == INDEX_NONE; ++Frame)
+	{
+		Agent.Advance(1.0 / 30.0, Motion, Event);
+	}
+	TestEqual(TEXT("and the agent, driven on, jack-knifes"), Agent.GetJackknifedLink(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWholeRouteExtendTest, "Airside.Model.Tow.ExtendRouteJudgesTheJoin",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWholeRouteExtendTest::RunTest(const FString& Parameters)
+{
+	// AN EXTENSION IS JUDGED WITH WHAT IT JOINS (review of 9441ccf1). The rig is out on a U (two
+	// quarters, which hold). A third quarter on its own holds too (45 deg from straight); spliced
+	// on, the three fold - ExtendRoute refuses it and leaves the route as it was. A straight on
+	// from the same node is taken.
+	using namespace WholeRouteTowFixture;
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId Start = Node(*Net, -4000.0, 0.0);
+	const FGuidelineNodeId P0 = Node(*Net, 0.0, 0.0);
+	Edge(*Net, Start, P0);
+	FVector2D At(0.0, 0.0);
+	FVector2D Heading(1.0, 0.0);
+	FGuidelineEdgeId Q1, Q2, Q3;
+	const FGuidelineNodeId P1 = Quarter(*Net, P0, At, Heading, 1, Q1);
+	const FGuidelineNodeId P2 = Quarter(*Net, P1, At, Heading, 1, Q2);
+	FVector2D TurnAt = At;
+	FVector2D TurnHeading = Heading;
+	const FGuidelineNodeId P3 = Quarter(*Net, P2, TurnAt, TurnHeading, 1, Q3);
+	const FVector2D OutAt = TurnAt + TurnHeading * 4000.0;
+	const FGuidelineNodeId TurnGoal = Node(*Net, OutAt.X, OutAt.Y);
+	Edge(*Net, P3, TurnGoal);
+	const FVector2D OnAt = At + Heading * 4000.0;
+	const FGuidelineNodeId StraightGoal = Node(*Net, OnAt.X, OnAt.Y);
+	Edge(*Net, P2, StraightGoal);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = Traffic->DispatchAgent(Net, Route(*Net, Start, P2, nullptr), Rig, ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("the rig is out on the U"), Id > 0)) { return false; }
+	for (int32 Tick = 0; Tick < 30 * 10; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestNotNull(TEXT("still out"), Traffic->FindAgent(Id))) { return false; }
+	const double LengthBefore = Traffic->FindAgent(Id)->Follower.Plan.Length;
+
+	const FRoutePlan Turn = Route(*Net, P2, TurnGoal, nullptr);
+	TestTrue(TEXT("the third quarter on its own holds, from a straight lay"), VehicleFit::JudgePlan(Turn, Rig, *Net).Fits());
+	TestFalse(TEXT("spliced on to the U, it folds: the extension is refused"), Traffic->ExtendRoute(Id, Net, Turn));
+	TestEqual(TEXT("and the live route is as it was"), Traffic->FindAgent(Id)->Follower.Plan.Length, LengthBefore);
+	TestTrue(TEXT("a straight on from the same node is taken"), Traffic->ExtendRoute(Id, Net, Route(*Net, P2, StraightGoal, nullptr)));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWholeRouteDetourCapTest, "Airside.Model.Tow.WholeRouteDetourIsCapped",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWholeRouteDetourCapTest::RunTest(const FString& Parameters)
+{
+	// A WAY ROUND IS TAKEN ONLY WHEN IT IS NOT A TOUR (review of 9441ccf1). Three quarters to a
+	// goal 80 m straight on - the route that folds - or, from the second quarter's end, Gap uu of
+	// straight, the third quarter, 40 m south and a wide left quarter back east to the same goal,
+	// which holds. At a 40 m gap the way round is 1.4x the route that folds and is taken; at
+	// 200 m it is 3.4x, over MaxTowDetourFactor, and the rig is refused with the fold instead.
+	using namespace WholeRouteTowFixture;
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	for (const double Gap : { 4000.0, 20000.0 })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FGuidelineNodeId Start = Node(*Net, -4000.0, 0.0);
+		const FGuidelineNodeId P0 = Node(*Net, 0.0, 0.0);
+		Edge(*Net, Start, P0);
+		FVector2D At(0.0, 0.0);
+		FVector2D Heading(1.0, 0.0);
+		FGuidelineEdgeId First, SecondQuarter, TightQuarter, RelaxedQuarter;
+		const FGuidelineNodeId P1 = Quarter(*Net, P0, At, Heading, 1, First);
+		const FGuidelineNodeId P2 = Quarter(*Net, P1, At, Heading, 1, SecondQuarter);
+		FVector2D TightAt = At;
+		FVector2D TightHeading = Heading;
+		const FGuidelineNodeId P3 = Quarter(*Net, P2, TightAt, TightHeading, 1, TightQuarter);
+		const double Straight = 8000.0;
+		const FVector2D GoalAt = TightAt + TightHeading * Straight;
+		const FGuidelineNodeId Goal = Node(*Net, GoalAt.X, GoalAt.Y);
+		Edge(*Net, P3, Goal);
+
+		// The way round: the gap, the third quarter, 40 m on, a wide left quarter (legs 40 m) and
+		// east to the goal.
+		const double Wide = 4000.0;
+		FVector2D WideAt = At + Heading * Gap;
+		FVector2D WideHeading = Heading;
+		const FGuidelineNodeId P2b = Node(*Net, WideAt.X, WideAt.Y);
+		Edge(*Net, P2, P2b);
+		const FGuidelineNodeId P3b = Quarter(*Net, P2b, WideAt, WideHeading, 1, RelaxedQuarter);
+		const FVector2D SouthAt = WideAt + WideHeading * (Straight - Wide);
+		const FGuidelineNodeId S1 = Node(*Net, SouthAt.X, SouthAt.Y);
+		Edge(*Net, P3b, S1);
+		const FVector2D Control = SouthAt + WideHeading * Wide;
+		const FVector2D EastAt = Control + FVector2D(-WideHeading.Y, WideHeading.X) * Wide;
+		const FGuidelineNodeId S2 = Node(*Net, EastAt.X, EastAt.Y);
+		Edge(*Net, S1, S2, &Control);
+		Edge(*Net, S2, Goal);
+
+		const FRoutePlan Folding = Route(*Net, Start, Goal, nullptr);
+		const FRoutePlan Plan = Route(*Net, Start, Goal, &Rig);
+		AddInfo(FString::Printf(TEXT("gap %.0f uu: folding route %.1f m; rig %s (%.1f m, %.2fx)"), Gap, Folding.Length / 100.0,
+			Plan.IsValid() ? TEXT("routed round") : *Plan.RejectedBy.Describe(), Plan.Length / 100.0,
+			Plan.IsValid() ? Plan.Length / Folding.Length : 0.0));
+		TestTrue(TEXT("the shortest route is the one that folds"),
+			Folding.Steps.ContainsByPredicate([&](const FRouteStep& Step) { return Step.Edge == TightQuarter; }));
+		if (Gap < 10000.0)
+		{
+			TestTrue(TEXT("a short way round is taken"), Plan.IsValid()
+				&& !Plan.Steps.ContainsByPredicate([&](const FRouteStep& Step) { return Step.Edge == TightQuarter; }));
+		}
+		else
+		{
+			// ONLY ITS LENGTH REFUSES IT: with the cap lifted this way round is taken (the mutation
+			// that goes red here, 2026-09-25), so the trailer holds on it.
+			TestFalse(TEXT("a way round over 3x the folding route is not taken"), Plan.IsValid());
+			TestEqual(TEXT("the rig is refused with the fold"),
+				static_cast<int32>(Plan.RejectedBy.Refusal), static_cast<int32>(EFitRefusal::TrailerFolds));
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWholeRouteSpliceReplanTest, "Airside.Model.Tow.SpliceReplanJudgesTheWhole",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWholeRouteSpliceReplanTest::RunTest(const FString& Parameters)
+{
+	// A REPLAN'S TAIL IS JUDGED WITH THE PREFIX IT IS SPLICED ONTO (review of 9441ccf1). The rig
+	// is part-way round the first quarter of the loop; a replan from that quarter's end finds the
+	// rest - a U, which holds on its own - but spliced on, the whole is three quarters and folds.
+	// FPlanReResolver::SpliceReplan refuses it and leaves the plan exactly as it was.
+	using namespace WholeRouteTowFixture;
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	const FGraph Loop = Bends({ 1, 1, 1 });
+	const FRoutePlan Whole = Route(*Loop.Net, Loop.Start, Loop.Goal, nullptr);
+	if (!TestTrue(TEXT("the loop's plan"), Whole.IsValid() && Whole.Steps.Num() == 5)) { return false; }
+
+	FRoadAgent Agent;
+	Agent.StartDrive(Whole, Rig);
+	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
+	for (int32 Frame = 0; Frame < 30 * 600 && Agent.Follower.Travelled < Whole.Steps[0].EndDistance + 300.0; ++Frame)
+	{
+		Agent.Advance(1.0 / 30.0, Motion, Event);
+	}
+	const FGuidelineNodeId P1 = Whole.Steps[1].To;
+	TestTrue(TEXT("the tail alone - a U - holds"), VehicleFit::JudgePlan(Route(*Loop.Net, P1, Loop.Goal, nullptr), Rig, *Loop.Net).Fits());
+
+	FRoutePlan Plan = RouteSearch::Section(Whole, 0, 1);
+	const double LengthBefore = Plan.Length;
+	FRouteQuery Query = FPlanReResolver::QueryFor(ERouteErrand::Replan, P1, Loop.Goal, Agent);
+	const FTrafficOccupancy Nobody;   // a replan reads the table; nobody else is out
+	Query.WithCongestion(Nobody, Agent.Id, 2.0);
+	TestFalse(TEXT("spliced on, the three quarters fold: the replan is refused"),
+		FPlanReResolver::SpliceReplan(*Loop.Net, Query, 2, Plan));
+	TestEqual(TEXT("and the plan is untouched"), Plan.Length, LengthBefore);
 	return true;
 }
 

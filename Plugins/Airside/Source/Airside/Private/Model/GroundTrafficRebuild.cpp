@@ -11,12 +11,17 @@
 #include "Model/RoutePolicy.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
+#include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
 
 bool FPlanReResolver::SpliceReplan(const URoadNetwork& Network, const FRouteQuery& Query,
 	int32 KeepSteps, FRoutePlan& Plan)
 {
-	const FRoutePlan Tail = RouteSearch::Find(Network, Query);
+	// THE TAIL IS SEARCHED UNSEEDED: it starts at a node ahead of the vehicle, where its chain
+	// is not yet - the live chain belongs to the WHOLE splice, judged just below.
+	FRouteQuery TailQuery = Query;
+	TailQuery.TowSeed.Reset();
+	const FRoutePlan Tail = RouteSearch::Find(Network, TailQuery);
 	if (!Tail.IsValid())
 	{
 		return false;
@@ -26,6 +31,21 @@ bool FPlanReResolver::SpliceReplan(const URoadNetwork& Network, const FRouteQuer
 	if (!Spliced.IsValid())
 	{
 		return false;
+	}
+
+	// THE SPLICE JUDGED WHOLE, from the live chain (review of 9441ccf1): a tail that holds from a
+	// straight start can still fold a trailer already swung by the kept prefix. Refused like a
+	// failed search - Plan untouched - and said at Log level: a re-route that folds is the reason
+	// a tow will next be stranded or replanned, and nobody else logs it.
+	if (Query.Vehicle != nullptr && Query.Vehicle->HasTrailer())
+	{
+		const FFitVerdict Whole = VehicleFit::JudgePlan(Spliced, *Query.Vehicle, Network, Query.TowSeed.GetPtrOrNull());
+		if (!Whole.Fits())
+		{
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Re-route %d -> %d refused: the spliced route does not hold the %s's tow (%s)"),
+				Query.Start.Index, Query.Goal.Index, *Query.Vehicle->TypeCode.ToString(), *Whole.Describe());
+			return false;
+		}
 	}
 
 	// LAST, so a failure at either step above leaves Plan exactly as the caller handed it in.
@@ -345,6 +365,18 @@ FRouteQuery FPlanReResolver::QueryFor(ERouteErrand Errand, FGuidelineNodeId Star
 	if (const FVehicle* Vehicle = Agent.AsVehicle())
 	{
 		Query.WithVehicle(*Vehicle);
+		// THE LIVE CHAIN (review of 9441ccf1), so a re-route of a tow is judged from where its
+		// trailer IS, not from a straight lay: its axles, heading and speed, and Travelled along
+		// its CURRENT plan - right for a splice's kept prefix (SpliceReplan), and overwritten by a
+		// rejoin with where it starts on the new one. Not for a folded tow: it is going nowhere.
+		if (Vehicle->HasTrailer() && Agent.TowAxles.Num() == Vehicle->Tow.Num() && Agent.GetJackknifedLink() == INDEX_NONE)
+		{
+			FTowSeed& Seed = Query.TowSeed.Emplace();
+			Seed.Axles = Agent.TowAxles;
+			Seed.Heading = Agent.Follower.Heading;
+			Seed.Speed = Agent.Follower.Speed;
+			Seed.Travelled = Agent.Follower.Travelled;
+		}
 	}
 	return Query;
 }
@@ -488,6 +520,13 @@ namespace
 			FRouteQuery Query = FPlanReResolver::QueryFor(ERouteErrand::RebuildReResolve,
 				Candidate.From, Goal, Agent);
 			Query.WithCongestion(Context.Occupancy, Agent.Id, Context.Rules.CongestionWeight);
+			// THE REJOIN STARTS PART-WAY ALONG ITS FIRST STEP, from rest (RestartTaxi below), so
+			// that is where its tow is judged from - the chain as it is, not laid straight.
+			if (Query.TowSeed.IsSet())
+			{
+				Query.TowSeed->Travelled = Candidate.Along;
+				Query.TowSeed->Speed = 0.0;
+			}
 			const FRoutePlan Found = RouteSearch::Find(Network, Query);
 			// The route must BEGIN with the edge the vehicle is on, or starting it part-way
 			// along the first step would put it on some other road.

@@ -78,6 +78,22 @@ struct AIRSIDE_API FFitVerdict
 };
 
 /**
+ * A tow ALREADY ON THE ROAD, for VehicleFit::JudgePlan to start from instead of laying the chain
+ * straight (review of 9441ccf1): a redirect or a re-resolve moves a vehicle whose trailer is
+ * already angled, and judging its new route from a straight chain is judging a different truck.
+ * Axles are FRoadAgent::TowAxles, BY VIEW - the agent outlives the one search that reads them;
+ * Heading and Speed are the follower's; Travelled is how far along the JUDGED plan the vehicle
+ * already is (the rejoin's part-way start, or the kept prefix of a splice).
+ */
+struct FTowSeed
+{
+	TArrayView<const FVector2D> Axles;
+	double Heading = 0.0;
+	double Speed = 0.0;
+	double Travelled = 0.0;
+};
+
+/**
  * Whether a vehicle's body fits an edge (spec 2026-09-23 §6) - the ONE rule route search
  * gates vehicles on, beside the wingspan rule it gates aircraft on.
  *
@@ -169,9 +185,14 @@ namespace VehicleFit
 	 * the one place this check decides anything - 5 uu of hitch is the difference. Running the
 	 * follower is what makes "the router admitted it" and "the agent drove it" the same fact.
 	 *
+	 * SEEDED, when Seed is given (and carries one axle per link): the follower starts Seed->Travelled
+	 * along the plan at its heading and speed, the chain where the live one is - no straight lay.
+	 * ENFORCED BY: Airside.Model.Tow.WholeRouteSeededFromTheLiveChain
+	 *
 	 * A plan's REVERSE LEGS are not driven: the check stops at the first, as FRoadAgent hands
 	 * those to FReverseRun, which does not step the chain (spec Open: the reverse chain).
 	 * Rigid vehicles fit trivially; RouteSearch does not call this for them at all.
 	 */
-	AIRSIDE_API FFitVerdict JudgePlan(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network);
+	AIRSIDE_API FFitVerdict JudgePlan(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
+		const FTowSeed* Seed = nullptr);
 }

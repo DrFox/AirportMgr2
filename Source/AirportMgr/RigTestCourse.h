@@ -325,6 +325,14 @@ public:
 	int32 GetRefusedConnectsForTest() const { return RefusedConnects; }
 
 	/**
+	 * Wall-clock ms PlanLoopRoute has taken, worst single call and in total, since BeginPlay.
+	 * The loop-boundary hitch: a route is planned on one tick, look-ahead and all.
+	 */
+	double GetWorstPlanMsForTest() const { return WorstPlanMs; }
+	double GetTotalPlanMsForTest() const { return TotalPlanMs; }
+	int32 GetPlanCallsForTest() const { return PlanCalls; }
+
+	/**
 	 * How long the utility waits before its first dispatch, seconds. 20 s, WHY: both vehicles
 	 * start at the same node (tier 0's entry, on opposite lanes), and the rig's first leg - the
 	 * 80 m straight, ~12 s from rest at the bowser's figures - takes it clear of that junction
@@ -430,6 +438,32 @@ private:
 	double LegTimeoutFactor = 3.0;
 
 	int32 RefusedConnects = 0;
+
+	/** PlanBetween's answers - see its body. Mutable: a cache behind a const query. */
+	struct FPlanCacheKey
+	{
+		FGuidelineNodeId Start;
+		FGuidelineNodeId Goal;
+		int32 Slot = 0;
+		bool operator==(const FPlanCacheKey& Other) const { return Start == Other.Start && Goal == Other.Goal && Slot == Other.Slot; }
+		friend uint32 GetTypeHash(const FPlanCacheKey& Key)
+		{
+			return HashCombine(HashCombine(GetTypeHash(Key.Start), GetTypeHash(Key.Goal)), ::GetTypeHash(Key.Slot));
+		}
+	};
+	struct FCachedPlan
+	{
+		FRoutePlan Plan;
+		FString Reason;
+	};
+	mutable TMap<FPlanCacheKey, FCachedPlan> PlanCache;
+	mutable TWeakObjectPtr<const URoadNetwork> PlanCacheNetwork;
+	mutable uint32 PlanCacheRevision = 0;
+
+	/** See GetWorstPlanMsForTest. */
+	double WorstPlanMs = 0.0;
+	double TotalPlanMs = 0.0;
+	int32 PlanCalls = 0;
 	bool bWarnedNoNetwork = false;
 
 	/** Where each refused (vehicle, leg) starts, for the red label - kept until it drives. */

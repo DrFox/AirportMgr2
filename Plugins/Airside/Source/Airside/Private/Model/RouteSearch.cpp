@@ -46,6 +46,15 @@ namespace
 	constexpr int32 MaxTowRetries = 4;
 
 	/**
+	 * How much longer than the first (folding) route a way round may be before the tow is
+	 * refused instead: 3x (review of 9441ccf1). Past that the "way round" is a tour of the
+	 * airport the player never asked for, and the honest answer is the fold, which says where
+	 * to widen. RetriesRoundAFold's way round is 1.06x the route that folds (2026-09-25).
+	 * ENFORCED BY: Airside.Model.Tow.WholeRouteDetourIsCapped
+	 */
+	constexpr double MaxTowDetourFactor = 3.0;
+
+	/**
 	 * Cached length plus the query's congestion charge.
 	 *
 	 * Reads FGuidelineEdge::Length rather than sampling (#171): this used to call
@@ -521,11 +530,12 @@ namespace
 		TSet<FGuidelineEdgeId> Excluded;
 		FFitVerdict First;
 		const FString Who = Query.Vehicle->TypeCode.ToString();
+		const double FirstLength = Found.Length;
 		for (int32 Attempt = 0; ; ++Attempt)
 		{
 			++GTowCheckCountForTest;
 			const double Began = FPlatformTime::Seconds();
-			const FFitVerdict Verdict = VehicleFit::JudgePlan(Found, *Query.Vehicle, Network);
+			const FFitVerdict Verdict = VehicleFit::JudgePlan(Found, *Query.Vehicle, Network, Query.TowSeed.GetPtrOrNull());
 			GTowCheckSecondsForTest += FPlatformTime::Seconds() - Began;
 			if (Verdict.Fits())
 			{
@@ -561,6 +571,27 @@ namespace
 			{
 				break;
 			}
+			if (Found.Length > MaxTowDetourFactor * FirstLength)
+			{
+				UE_LOG(LogAirside, Verbose, TEXT("Route %d -> %d: %s's way round is %.1f m, over %.0fx the %.1f m route that folds; not taken."),
+					Query.Start.Index, Query.Goal.Index, *Who, Found.Length / 100.0, MaxTowDetourFactor, FirstLength / 100.0);
+				break;
+			}
+		}
+
+		// THE REFUSAL, AT LOG LEVEL FOR A VEHICLE ALREADY OUT (review of 9441ccf1): a replan or a
+		// rebuild's re-resolve that folds is why a tow on the airport is about to be stranded, and
+		// nothing else says so. A dispatch or a tool's query (the rig course, a probe) is answered
+		// by its caller, which logs RejectedBy itself - Verbose there, as the per-attempt line is.
+		if (Query.Errand == ERouteErrand::Replan || Query.Errand == ERouteErrand::RebuildReResolve)
+		{
+			UE_LOG(LogAirside, Log, TEXT("Route %d -> %d: %s refused, its tow folds: %s"),
+				Query.Start.Index, Query.Goal.Index, *Who, *First.Describe());
+		}
+		else
+		{
+			UE_LOG(LogAirside, Verbose, TEXT("Route %d -> %d: %s refused, its tow folds: %s"),
+				Query.Start.Index, Query.Goal.Index, *Who, *First.Describe());
 		}
 
 		FRoutePlan Refused;
@@ -746,6 +777,11 @@ namespace RouteSearch
 		// A TOW, AND ONLY A TOW, is judged on the whole plan too: rigid vehicles and aircraft
 		// never reach this, so their routing is bit-identical to before it existed
 		// (Airside.Model.Tow.WholeRouteSkipsRigidAndAircraft counts the checks).
+		//
+		// FindToGoals HAS NO SUCH HOOK, deliberately: its one production caller is
+		// ArrivalPlanner::ChooseStand, an AIRCRAFT's stand choice, and aircraft have no tow. A
+		// vehicle that ever chose among goals with it would need its winner judged here, by Find.
+		// ENFORCED BY: Check-Architecture's allowed-callers row "RouteSearch::FindToGoals"
 		if (Plan.IsValid() && Query.Vehicle != nullptr && Query.Vehicle->HasTrailer())
 		{
 			return CheckWholeRouteTow(Network, Query, MoveTemp(Plan));

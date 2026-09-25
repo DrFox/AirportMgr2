@@ -345,6 +345,16 @@ over the whole planned route, so it cannot send a tow where its trailer folds:**
   hold (75 deg). `Airside.Model.Tow.WholeRouteFoldRefused`.
 - **Known approximation:** the chain is laid straight at the PLAN's start. A redirect or a rebuild
   re-resolve plans from a vehicle whose trailer is already angled; the check starts it straight.
+  **REVISED 2026-09-25 (review of f6e40bd2 + 9441ccf1):** no longer for re-routes. `FTowSeed` (axles,
+  heading, speed, Travelled) on `FRouteQuery::TowSeed`, set by `FPlanReResolver::QueryFor`, starts
+  `JudgePlan` from the live chain (the rejoin passes its part-way start); `SpliceReplan` searches its
+  tail unseeded and judges the WHOLE splice from the live chain; `UGroundTraffic::ExtendRoute` judges
+  the extended route from the live chain and refuses a fold; the rig course judges its joined loop
+  route once and cuts it before a fold. A way round longer than 3x the folding route is not taken
+  (`MaxTowDetourFactor`). FuelService's ungated way home is never driven by a tow it folds
+  (`UFuelService::MayDriveUngated`). Fold refusals of a replan / rebuild re-resolve log at Log.
+  The course caches `PlanBetween` per (start, goal, vehicle, graph revision): the rig's loop-boundary
+  plan fell from 2452 ms to 44 ms (the first, cold plan is still ~2.3 s).
 
 **REVISED 2026-09-25 ("one route per loop") - the course drives one route per loop, like the
 game; legs are progress markers:**

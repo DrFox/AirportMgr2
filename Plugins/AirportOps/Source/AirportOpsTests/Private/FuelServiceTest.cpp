@@ -13,6 +13,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
+#include "Model/Vehicle.h"
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -1192,6 +1193,73 @@ bool FFuelTruckGetsHomeWhenTooNarrowTest::RunTest(const FString& Parameters)
 
 	TestNotNull(TEXT("the truck is not retired at the stand"), Fixture.Traffic->FindAgent(TruckId));
 	TestEqual(TEXT("it drives home anyway"), Fixture.Service->TrucksGoingHomeForTest(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTowNeverDrivenHomeIntoAFoldTest, "AirportOps.Ops.FuelTowNeverDrivenHomeIntoAFold",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelTowNeverDrivenHomeIntoAFoldTest::RunTest(const FString& Parameters)
+{
+	// THE UNGATED FALLBACK IS FOR A SCUFFED KERB, NOT A JACK-KNIFE (review of 9441ccf1): a truck
+	// that does not fit the road home drives it anyway (FuelTruckGetsHomeWhenTooNarrow), UNLESS it
+	// tows something that route folds - UFuelService::MayDriveUngated, the rule SendTruckHome asks.
+	// On a hand-drawn road, because the fuel fixture's roads turn left and right and fold nothing:
+	// three same-hand quarters (the turn of a dead-end balloon) fold the rig; two - a U - do not.
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	const FVehicle Bowser = UAirsideSettings::ResolveDefaultVehicle();
+	for (const int32 Quarters : { 3, 2 })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		auto Node = [Net](const FVector2D& At) { return Net->AddGuidelineNode(At, /*bDerived=*/false); };
+		auto Join = [Net](FGuidelineNodeId A, FGuidelineNodeId B, const FVector2D& Control)
+		{
+			FGuidelineEdge Edge;
+			Edge.A = A;
+			Edge.B = B;
+			Edge.Control = Control;
+			Edge.AllowedTraffic = FTrafficMask::All();
+			Edge.Direction = EGuidelineDir::AToB;
+			Edge.bDerived = false;
+			Net->AddGuidelineEdge(MoveTemp(Edge));
+		};
+		const double Leg = 830.0;
+		const FGuidelineNodeId Start = Node(FVector2D(-4000.0, 0.0));
+		FGuidelineNodeId From = Node(FVector2D::ZeroVector);
+		Join(Start, From, FVector2D(-2000.0, 0.0));
+		FVector2D At = FVector2D::ZeroVector;
+		FVector2D Heading(1.0, 0.0);
+		for (int32 Quarter = 0; Quarter < Quarters; ++Quarter)
+		{
+			const FVector2D Side(-Heading.Y, Heading.X);
+			const FVector2D Control = At + Heading * Leg;
+			At = Control + Side * Leg;
+			Heading = Side;
+			const FGuidelineNodeId To = Node(At);
+			Join(From, To, Control);
+			From = To;
+		}
+		const FGuidelineNodeId Goal = Node(At + Heading * 4000.0);
+		Join(From, Goal, At + Heading * 2000.0);
+		const FRoutePlan Plan = RouteSearch::Find(*Net,
+			FRouteQuery::For(ERouteErrand::GraphProbe, Start, Goal, 0.0, ETraversalClass::GroundVehicle));
+		if (!TestTrue(TEXT("an ungated plan"), Plan.IsValid())) { continue; }
+
+		FString Why;
+		const bool bMay = UFuelService::MayDriveUngated(Plan, Rig, *Net, &Why);
+		AddInfo(FString::Printf(TEXT("%d quarters: rig %s %s"), Quarters, bMay ? TEXT("may drive") : TEXT("may not:"), *Why));
+		if (Quarters == 3)
+		{
+			TestFalse(TEXT("a rig is never sent home ungated on a road that folds its trailer"), bMay);
+			TestTrue(TEXT("and the reason is the fold"), Why.StartsWith(TEXT("trailer folds at guideline node")));
+		}
+		else
+		{
+			TestTrue(TEXT("a road its trailer holds is driven ungated, as for any truck"), bMay);
+		}
+		TestTrue(TEXT("a rigid truck is always driven home ungated - nothing to fold"), UFuelService::MayDriveUngated(Plan, Bowser, *Net));
+	}
 	return true;
 }
 

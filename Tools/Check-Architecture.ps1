@@ -293,6 +293,16 @@ $AllowedCallers = @(
         ProdReason  = 'start the agent through StartTaxi/StartArrival/StartPushback/StartDrive, which keep its body and bundle consistent'
     },
     @{
+        # NO TOW HOOK IN FindToGoals (review of 9441ccf1): the whole-route tow check lives in
+        # RouteSearch::Find only, so a multi-goal search is sound only for callers with no tow -
+        # today the aircraft's stand choice. A vehicle caller must add the hook first.
+        Name        = 'RouteSearch::FindToGoals'
+        Pattern     = '\bFindToGoals\s*\('
+        ProdAllowed = @('RouteSearch.h', 'RouteSearch.cpp', 'ArrivalPlanner.cpp')
+        TestExempt  = $true
+        ProdReason  = 'FindToGoals has no whole-route tow check (RouteSearch.cpp, Find); route a vehicle with Find, or add the hook'
+    },
+    @{
         # ONE TOW STEPPER (2026-09-25, the whole-route tow check). The router's verdict and the
         # driven agent's fold are one fact only while both step the chain through
         # VehicleFit::StepTow; a second production caller of StepChain is a second evaluator,

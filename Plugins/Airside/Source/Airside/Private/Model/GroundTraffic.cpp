@@ -14,6 +14,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
+#include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RunwayDesignator.h"
 
@@ -472,6 +473,30 @@ bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, con
 				UE_LOG(LogAirsideTraffic, Warning, TEXT("ExtendRoute %d: the tail does not continue the route - it leaves %.0f deg off the route's end heading (lock %.0f), %.0f uu from its end; expect a crawl or a fold at the join."),
 					AgentId, OffDegrees, LockDegrees, Gap);
 			}
+		}
+	}
+
+	// THE EXTENDED ROUTE JUDGED WHOLE, FROM THE LIVE CHAIN (review of 9441ccf1). The tail was
+	// judged on its own, from a straight lay at its start; the trailer arrives at the join swung
+	// by whatever the live route ended with, and two curves that each hold it can fold it
+	// together. Refused before anything changes, like a tail that does not join: the caller's
+	// route runs out and it plans again from rest.
+	// ENFORCED BY: Airside.Model.Tow.ExtendRouteJudgesTheJoin
+	if (const FVehicle* Vehicle = Agent.AsVehicle();
+		Vehicle != nullptr && Vehicle->HasTrailer() && Agent.TowAxles.Num() == Vehicle->Tow.Num()
+		&& Agent.GetJackknifedLink() == INDEX_NONE && Network != nullptr)
+	{
+		FTowSeed Seed;
+		Seed.Axles = Agent.TowAxles;
+		Seed.Heading = Agent.Follower.Heading;
+		Seed.Speed = Agent.Follower.Speed;
+		Seed.Travelled = Agent.Follower.Travelled - Dropped;
+		const FFitVerdict Whole = VehicleFit::JudgePlan(Spliced, *Vehicle, *Network, &Seed);
+		if (Whole.Refusal == EFitRefusal::TrailerFolds)
+		{
+			UE_LOG(LogAirsideTraffic, Warning, TEXT("ExtendRoute %d refused: the extended route folds the %s's tow (%s)"),
+				AgentId, *Vehicle->TypeCode.ToString(), *Whole.Describe());
+			return false;
 		}
 	}
 

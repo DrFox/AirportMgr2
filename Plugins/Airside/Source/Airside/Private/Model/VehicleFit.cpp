@@ -204,7 +204,8 @@ namespace
 	constexpr double MaxJudgedPlanSeconds = 3600.0;
 }
 
-FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehicle, const URoadNetwork& Network)
+FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehicle, const URoadNetwork& Network,
+	const FTowSeed* Seed)
 {
 	FFitVerdict Verdict;
 	Verdict.bWholeRoute = true;
@@ -230,14 +231,24 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 	const VehicleSweep::FBody Body = BodyOf(Vehicle);
 
 	// DISPATCHED AS StartDrive DISPATCHES: the follower from rest on the plan's first point,
-	// facing its line, the chain laid straight behind - once, here, and never again.
+	// facing its line, the chain laid straight behind - once, here, and never again. OR, SEEDED,
+	// as RestartTaxi restarts a vehicle already out: part-way along (InitialTravelled, which a
+	// rejoin passes), at its own heading and speed, its chain exactly where it is.
 	FRouteFollower Follower;
-	Follower.Start(Plan, Chassis);
-	FVector2D Steered = Plan.Polyline[0];
-	double LineHeading = 0.0;
-	GuidelineGeom::PointAtDistance(Plan.Polyline, Follower.Travelled, Steered, LineHeading);
 	TArray<FVector2D> Axles;
-	LayTow(Vehicle, Steered, FVector2D(FMath::Cos(Follower.Heading), FMath::Sin(Follower.Heading)), Axles);
+	if (Seed != nullptr && Seed->Axles.Num() == Vehicle.Tow.Num())
+	{
+		Follower.Start(Plan, Chassis, Seed->Speed, Seed->Heading, Seed->Travelled);
+		Axles.Append(Seed->Axles.GetData(), Seed->Axles.Num());
+	}
+	else
+	{
+		Follower.Start(Plan, Chassis);
+		FVector2D Steered = Plan.Polyline[0];
+		double LineHeading = 0.0;
+		GuidelineGeom::PointAtDistance(Plan.Polyline, Follower.Travelled, Steered, LineHeading);
+		LayTow(Vehicle, Steered, FVector2D(FMath::Cos(Follower.Heading), FMath::Sin(Follower.Heading)), Axles);
+	}
 
 	// THE CLEARANCE HALF, only where an edge on the plan has per-sample data to judge against:
 	// a route of straights and balloons pays for the fold walk and nothing else.

@@ -3,6 +3,7 @@
 #include "Content/AirsideSettings.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
+#include "Misc/ScopeExit.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadGuideline.h"
@@ -641,6 +642,31 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 		OutReason = FString::Printf(TEXT("%s: no lane end at %s"), *Who, Start.IsSet() ? TEXT("the goal") : TEXT("the start"));
 		return false;
 	}
+	// CACHED PER (start, goal, vehicle), dated by the graph's revision (review of 9441ccf1): the
+	// look-ahead asks the same pairs again and again on the one tick a loop is planned - HasOnward
+	// is a lap of Finds per stop - and with the whole-route tow check each Find of a rig into a
+	// balloon is a drive round it. Measured 2026-09-25: 2.4 s per rig loop boundary before, see
+	// AirportMgr.RigCourse.OneLoopHeadless's "route plan(s)" line for after. A refusal is cached
+	// too: it is as much a fact about the graph and the body as a route is. The vehicle is its
+	// slot: Vehicles is fixed once the course is laid.
+	const uint32 Revision = Network->GetGuidelineRevision();
+	if (Network != PlanCacheNetwork.Get() || Revision != PlanCacheRevision)
+	{
+		PlanCache.Reset();
+		PlanCacheNetwork = Network;
+		PlanCacheRevision = Revision;
+	}
+	const FPlanCacheKey Key{ Start, Goal, Slot };
+	if (const FCachedPlan* Hit = PlanCache.Find(Key))
+	{
+		OutPlan = Hit->Plan;
+		OutReason = Hit->Reason;
+		return Hit->Plan.IsValid();
+	}
+	ON_SCOPE_EXIT
+	{
+		PlanCache.Add(Key, FCachedPlan{ OutPlan, OutReason });
+	};
 	// PlayerIssued, NOT VehicleToJob: the course is a tool asking for a route directly, and
 	// VehicleToJob requires the occupancy table - a congestion cost that, with the other vehicle
 	// out, would make this route depend on where that vehicle happens to be, so a refusal would
@@ -735,6 +761,16 @@ bool ARigTestCourse::PlanLoopRoute(FRigCourseRunner& Runner, int32 Loop, int32 F
 	const int32 N = Waypoints.Num();
 	const FString& Who = VehicleNames[Runner.Slot];
 	const FVehicle& Vehicle = Vehicles[Runner.Slot];
+	// THE HITCH, TIMED: this whole call runs on one tick - every leg's plan and every look-ahead.
+	const double PlanBegan = FPlatformTime::Seconds();
+	ON_SCOPE_EXIT
+	{
+		const double Ms = (FPlatformTime::Seconds() - PlanBegan) * 1000.0;
+		WorstPlanMs = FMath::Max(WorstPlanMs, Ms);
+		TotalPlanMs += Ms;
+		++PlanCalls;
+		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s loop %d route from waypoint %d planned in %.1f ms."), *Who, Loop, From, Ms);
+	};
 	OutPlan = FRoutePlan();
 	OutMarkers.Reset();
 	OutEndStop = From;
@@ -862,6 +898,39 @@ bool ARigTestCourse::PlanLoopRoute(FRigCourseRunner& Runner, int32 Loop, int32 F
 		Marker.Length = Leg.Length;
 		Position = Target;
 		OutEndStop = Target;
+	}
+	// THE JOINED ROUTE JUDGED WHOLE (review of 9441ccf1): every leg was judged on its own plan,
+	// from a straight lay at its start, but the vehicle arrives at each join with its trailer
+	// swung by the leg before. Judged ONCE, as the route will be dispatched (from rest at its first
+	// point) - judging each join as it was made drove the route again per leg, 344 / 895 ms per
+	// rig / utility loop boundary (2026-09-25). An extension of a live route is judged again, from
+	// the live chain, by UGroundTraffic::ExtendRoute. A route that folds is CUT at the last leg's
+	// end before the fold: the vehicle runs out there and plans on from rest, as for a leg that
+	// does not join.
+	// ENFORCED BY: Airside.Model.Tow.ExtendRouteJudgesTheJoin (the live re-judge); the cut itself
+	// is unpinned - no leg pair on this course folds when joined (none was cut, 2026-09-25).
+	if (OutPlan.IsValid() && Vehicle.HasTrailer() && OutMarkers.Num() > 1)
+	{
+		const FFitVerdict Whole = VehicleFit::JudgePlan(OutPlan, Vehicle, *NetworkActor->GetNetwork());
+		if (Whole.Refusal == EFitRefusal::TrailerFolds)
+		{
+			int32 Keep = 0;
+			while (Keep + 1 < OutMarkers.Num() && OutMarkers[Keep + 1].EndDistance < Whole.Along)
+			{
+				++Keep;
+			}
+			const double CutAt = OutMarkers[Keep].EndDistance;
+			const int32 LastStep = OutPlan.Steps.IndexOfByPredicate(
+				[CutAt](const FRouteStep& Step) { return FMath::IsNearlyEqual(Step.EndDistance, CutAt, 0.01); });
+			if (LastStep != INDEX_NONE)
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d: the joined route folds the tow (%s); it ends at waypoint %d and plans on from rest."),
+					*Who, Loop, *Whole.Describe(), OutMarkers[Keep].Target % N);
+				OutPlan = RouteSearch::Section(OutPlan, 0, LastStep);
+				OutMarkers.SetNum(Keep + 1);
+				OutEndStop = OutMarkers[Keep].Target;
+			}
+		}
 	}
 	return OutPlan.IsValid();
 }

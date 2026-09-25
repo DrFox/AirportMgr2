@@ -291,6 +291,16 @@ struct AIRSIDE_API FRouteQuery
 	 */
 	const FVehicle* Vehicle = nullptr;
 
+	/**
+	 * The tow's LIVE chain, when the vehicle searching is already on the road with its trailer
+	 * angled: RouteSearch::Find's whole-route check starts from it instead of a straight lay
+	 * (VehicleFit::JudgePlan). Travelled is along the plan this search returns - a rejoin that
+	 * starts part-way along its first step sets it. Set by FPlanReResolver::QueryFor; unset,
+	 * the default, for a fresh dispatch. A splice's TAIL is not where the vehicle is, so
+	 * FPlanReResolver::SpliceReplan clears it for the search and judges the whole splice with it.
+	 */
+	TOptional<FTowSeed> TowSeed;
+
 	FRouteQuery& WithVehicle(const FVehicle& InVehicle)
 	{
 		Vehicle = &InVehicle;
