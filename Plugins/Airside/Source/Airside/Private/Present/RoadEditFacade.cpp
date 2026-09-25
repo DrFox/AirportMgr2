@@ -282,6 +282,81 @@ void URoadEditFacade::CommitAndNotify(FRoadEditScope& Edit, EChangeKind Kind)
 	NotifyChanged(Kind);
 }
 
+void URoadEditFacade::AdoptNetwork(URoadNetwork& NewNetwork)
+{
+	Actor().Network = &NewNetwork;
+
+	// The preview may be describing a node that no longer exists in the replacement, and its
+	// cache compares only the cursor and the start node - neither of which a network swap
+	// changes. See this method's own header comment for the four call sites this replaced.
+	Actor().HideGhost();
+	NotifyChanged();
+}
+
+bool URoadEditFacade::ApplyInteractiveMutation(const TCHAR* Label,
+	TFunctionRef<bool(URoadNetwork&)> Mutate, bool bChangesGraphShape,
+	TFunctionRef<bool(const URoadNetwork&)> Verify)
+{
+	ARoadNetworkActor& Owner = Actor();
+
+	// JOINS A DRAG ALREADY IN PROGRESS, so the whole drag is one undo step; on its own it is
+	// one edit of its own. IsEditing is what tells the two apart - see this method's own
+	// header comment.
+	URoadEditHistory* Use = HistoryForEdit();
+	const bool bOwnsEdit = Use != nullptr && !Use->IsEditing();
+	if (bOwnsEdit)
+	{
+		Use->BeginEdit(*Owner.Network, Label);
+	}
+
+	const bool bMutated = Mutate(*Owner.Network);
+	if (!bMutated)
+	{
+		if (bOwnsEdit)
+		{
+			// Nothing was touched, so ABANDON is right here and Revert would be wrong - see
+			// URoadEditHistory::RevertEdit on the distinction.
+			Use->AbandonEdit();
+		}
+		return false;
+	}
+
+	if (!Verify(*Owner.Network))
+	{
+		// REVERTED, NOT ABANDONED, and unconditional on Use != nullptr rather than gated on
+		// bOwnsEdit - see this method's own header comment for why a Verify failure cannot
+		// simply be refused.
+		if (Use != nullptr)
+		{
+			if (URoadNetwork* Reverted = Use->RevertEdit())
+			{
+				AdoptNetwork(*Reverted);
+			}
+		}
+		return false;
+	}
+
+	if (bOwnsEdit)
+	{
+		Use->CommitEdit();
+	}
+
+	// GEOMETRY ONLY WHILE AN INTERACTIVE EDIT IS STILL OPEN, AND ONLY WHEN THIS MUTATION DOES
+	// NOT CHANGE THE GRAPH'S SHAPE - see this method's own header comment (the bare-call trap,
+	// issue #165/#190, and bChangesGraphShape, issue #299) for the full reasoning.
+	if (!bChangesGraphShape && bInteractiveEditOpen)
+	{
+		bGeometryChangedDuringEdit = true;
+		NotifyChanged(EChangeKind::Geometry);
+	}
+	else
+	{
+		NotifyChanged(EChangeKind::Topology);
+	}
+
+	return true;
+}
+
 int32 URoadEditFacade::PlaceNode(FVector2D Where)
 {
 	// The network is made BEFORE the scope, so the snapshot is of an empty graph rather
@@ -858,12 +933,12 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 			// REVERTED, NOT ABANDONED. The node has already moved on every frame of the drag, so
 			// dropping the snapshot would leave the longer taxiway standing and unpaid for. This is
 			// the one edit that has to be undone rather than merely refused - see
-			// URoadEditHistory::RevertEdit.
+			// URoadEditHistory::RevertEdit. AdoptNetwork (#299) is the same "swap the live network
+			// and catch the ghost up" tail Travel and ApplyInteractiveMutation's own Verify-failure
+			// branch use.
 			if (URoadNetwork* Reverted = History->RevertEdit())
 			{
-				Actor().Network = Reverted;
-				HideGhost();
-				NotifyChanged();
+				AdoptNetwork(*Reverted);
 			}
 			UE_LOG(LogRoadMesh, Log,
 				TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount);
@@ -955,60 +1030,12 @@ bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVect
 		return false;
 	}
 
-	// JOINS A DRAG ALREADY IN PROGRESS, so the whole drag is one undo step; on its own it is
-	// one edit of its own. IsEditing is what tells the two apart - the arrangement MoveNode
-	// uses, and NOT an FRoadEditScope: a scope calls BeginEdit unconditionally, which
-	// ensure-fails on the pending snapshot an interactive edit has already taken.
-	URoadEditHistory* Use = HistoryForEdit();
-	const bool bOwnsEdit = Use != nullptr && !Use->IsEditing();
-	if (bOwnsEdit)
-	{
-		Use->BeginEdit(*Owner.Network, TEXT("move apron corner"));
-	}
-
-	const bool bMoved = Owner.Network->SetApronCorner(Apron, CornerIndex, To);
-
-	if (bOwnsEdit)
-	{
-		if (bMoved)
-		{
-			Use->CommitEdit();
-		}
-		else
-		{
-			Use->AbandonEdit();
-		}
-	}
-
-	// GEOMETRY ONLY WHILE AN INTERACTIVE EDIT IS STILL OPEN - THE BARE-CALL TRAP (review
-	// follow-up on #165). bInteractiveEditOpen here means this call joined a drag that
-	// BeginInteractiveEdit started and EndInteractiveEdit has not yet closed - the ONLY case
-	// where something downstream (EndInteractiveEdit's own Topology notify) is guaranteed to
-	// catch the derived graph up later. Anything else has no EndInteractiveEdit coming and
-	// must do the whole job itself, Topology, right here: a BARE call (bOwnsEdit was true -
-	// this very call opened and closed its own tiny history edit above, with no surrounding
-	// BeginInteractiveEdit at all) never set the flag in the first place.
-	//
-	// bInteractiveEditOpen, NOT `Use != nullptr && Use->IsEditing()` (issue #190) - that test
-	// was always false in an editor world, where HistoryForEdit() is a deliberate no-op (see
-	// its own comment), so an editor-mode drag notified Topology on every frame regardless of
-	// URoadBuildEdMode's own Begin/EndInteractiveEdit calls bracketing it exactly as PIE's do.
-	// An apron corner is not in the road graph at all (see OnDragBegin's own comment), so a
-	// Topology rebuild here does not cost this call anything a Geometry one would have saved
-	// beyond what a genuine mid-drag frame already skips.
-	if (bMoved)
-	{
-		if (bInteractiveEditOpen)
-		{
-			bGeometryChangedDuringEdit = true;
-			NotifyChanged(EChangeKind::Geometry);
-		}
-		else
-		{
-			NotifyChanged(EChangeKind::Topology);
-		}
-	}
-	return bMoved;
+	// AN APRON CORNER IS NOT IN THE ROAD GRAPH AT ALL, so its notify never has a reason to
+	// change the graph's SHAPE - bChangesGraphShape stays at its default, false, the same as
+	// MoveNode. See ApplyInteractiveMutation's own header comment for the Geometry/Topology
+	// split this joins (the bare-call trap, issues #165/#190/#299).
+	return ApplyInteractiveMutation(TEXT("move apron corner"),
+		[Apron, CornerIndex, To](URoadNetwork& Net) { return Net.SetApronCorner(Apron, CornerIndex, To); });
 }
 
 bool URoadEditFacade::MergeNodes(int32 KeepIndex, int32 AbsorbIndex)
@@ -1026,68 +1053,36 @@ bool URoadEditFacade::MergeNodes(int32 KeepIndex, int32 AbsorbIndex)
 		return false;
 	}
 
-	ARoadNetworkActor& Owner = Actor();
-
-	// JOINS A DRAG ALREADY IN PROGRESS, so drop-to-merge is ONE undo step with the move that
-	// carried the node there - the arrangement MoveNode already uses, and the reason
-	// IsEditing is what tells the two apart. On its own it is one edit of its own.
-	URoadEditHistory* Use = HistoryForEdit();
-	const bool bOwnsEdit = Use != nullptr && !Use->IsEditing();
-	if (bOwnsEdit)
-	{
-		Use->BeginEdit(*Owner.Network, TEXT("merge nodes"));
-	}
-
-	if (!Owner.Network->MergeNodes(Keep, Absorb))
-	{
-		if (bOwnsEdit && Use != nullptr)
-		{
-			// Nothing was touched, so ABANDON is right here and Revert would be wrong - see
-			// URoadEditHistory::RevertEdit on the distinction.
-			Use->AbandonEdit();
-		}
-		return false;
-	}
-
 	// JUDGED AFTER, AND ONLY AFTER. RoadPlacement::NodeCornersFit reads a node's CURRENT arms
 	// and judges them at a proposed position; it has no way to be asked about an arm set that
 	// does not exist yet. So unlike MoveNode - which can and does judge before moving - a
-	// merge has to happen before its corners can be measured at all.
-	//
-	// WHICH IS WHY THIS REVERTS RATHER THAN REFUSING. AbandonEdit drops the snapshot and
-	// leaves the model as the edit left it, which here would be a merged junction the solver
-	// cannot surface. RevertEdit hands back the state the edit started from, exactly as
-	// EndInteractiveEdit does for a drag nobody can pay for.
-	const FRoadNode* Merged = Owner.Network->GetNode(Keep);
-	if (Merged != nullptr && !RoadPlacement::NodeCornersFit(*Owner.Network, Keep, Merged->Position))
-	{
-		if (Use != nullptr)
+	// merge has to happen before its corners can be measured at all, which is exactly what
+	// ApplyInteractiveMutation's Verify parameter exists for: run after Mutate, and REVERT
+	// rather than refuse on a false answer (see that method's own header comment).
+	const bool bMerged = ApplyInteractiveMutation(TEXT("merge nodes"),
+		[Keep, Absorb](URoadNetwork& Net) { return Net.MergeNodes(Keep, Absorb); },
+		// A node disappeared - the graph's SHAPE changed - so this always notifies Topology,
+		// drag or no drag: see ApplyInteractiveMutation's own header comment for why that
+		// differs from MoveNode/MoveApronCorner's mid-drag Geometry notify.
+		/*bChangesGraphShape*/ true,
+		[Keep, KeepIndex, AbsorbIndex](const URoadNetwork& Net)
 		{
-			if (URoadNetwork* Reverted = Use->RevertEdit())
+			const FRoadNode* Merged = Net.GetNode(Keep);
+			const bool bFits = Merged != nullptr && RoadPlacement::NodeCornersFit(Net, Keep, Merged->Position);
+			if (!bFits)
 			{
-				Owner.Network = Reverted;
-				HideGhost();
-				NotifyChanged();
+				UE_LOG(LogRoadMesh, Log,
+					TEXT("Merge refused: node %d folded into %d makes a corner the solver cannot "
+						 "trim, so the whole edit is reverted."), AbsorbIndex, KeepIndex);
 			}
-		}
-		UE_LOG(LogRoadMesh, Log,
-			TEXT("Merge refused: node %d folded into %d makes a corner the solver cannot "
-				 "trim, so the whole edit is reverted."), AbsorbIndex, KeepIndex);
-		return false;
-	}
+			return bFits;
+		});
 
-	UE_LOG(LogRoadMesh, Log, TEXT("Merged node %d into %d"), AbsorbIndex, KeepIndex);
-
-	if (bOwnsEdit && Use != nullptr)
+	if (bMerged)
 	{
-		Use->CommitEdit();
+		UE_LOG(LogRoadMesh, Log, TEXT("Merged node %d into %d"), AbsorbIndex, KeepIndex);
 	}
-
-	// Pavement changed AND a node was removed - the graph's SHAPE changed - so this notifies
-	// Topology (the default), unlike SetIntermediateHoldingPosition (issue #179), which
-	// notifies the cheaper EChangeKind::Markings because it changes neither.
-	NotifyChanged();
-	return true;
+	return bMerged;
 }
 
 bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
@@ -1253,67 +1248,12 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 		break;
 	}
 
-	// Joins a drag already in progress, so the whole drag is one undo step; on its own it
-	// is one edit of its own. IsEditing is what tells the two apart.
-	URoadEditHistory* Use = HistoryForEdit();
-	const bool bOwnsEdit = Use != nullptr && !Use->IsEditing();
-	if (bOwnsEdit)
-	{
-		Use->BeginEdit(*Owner.Network, TEXT("move node"));
-	}
-
-	const bool bMoved = Owner.Network->SetNodePosition(Node, To);
-
-	if (bOwnsEdit)
-	{
-		if (bMoved)
-		{
-			Use->CommitEdit();
-		}
-		else
-		{
-			Use->AbandonEdit();
-		}
-	}
-
-	// UNCONDITIONAL on bOwnsEdit, deliberately: a drag calls this every frame and only the
-	// FIRST frame owns the edit (see IsEditing above), but every frame that actually moves
-	// the node must still rebuild - that per-frame notification during a drag is the whole
-	// reason this is not folded into CommitAndNotify, which fires once per committed edit.
-	//
-	// GEOMETRY ONLY WHILE AN INTERACTIVE EDIT IS STILL OPEN - THE BARE-CALL TRAP (review
-	// follow-up on #165). A move changes no node's existence and no segment's
-	// endpoints-as-a-set, only where things sit, so a frame that is part of a real drag can
-	// rebuild the surface alone and skip the guideline graph, anchor links, plots and
-	// traffic - EndInteractiveEdit fires the one Topology notify that catches those up once
-	// the drag commits (see bGeometryChangedDuringEdit's own comment). But that promise only
-	// holds while bInteractiveEditOpen is true, meaning THIS call joined a drag
-	// BeginInteractiveEdit opened and EndInteractiveEdit has not yet closed. A BARE call has
-	// no EndInteractiveEdit coming at all (bOwnsEdit was true - this call opened and closed
-	// its own tiny history edit above, the un-wrapped `Actor->MoveNode(...)` every test
-	// before this review makes) and never set the flag, so it falls to the else branch and
-	// does the whole job itself, Topology, right here.
-	//
-	// bInteractiveEditOpen, NOT `Use != nullptr && Use->IsEditing()` (issue #190) - that test
-	// was always false in an editor world, where HistoryForEdit() is a deliberate no-op (see
-	// its own comment): Use was null for every editor-mode move regardless of whether
-	// URoadBuildEdMode had a real drag open, so every editor drag frame notified Topology in
-	// full and EndInteractiveEdit's own History-gated early return meant nothing ever fired
-	// the one catch-up notify a committed drag owes the derived graph.
-	if (bMoved)
-	{
-		if (bInteractiveEditOpen)
-		{
-			bGeometryChangedDuringEdit = true;
-			NotifyChanged(EChangeKind::Geometry);
-		}
-		else
-		{
-			NotifyChanged(EChangeKind::Topology);
-		}
-	}
-
-	return bMoved;
+	// A move changes no node's existence and no segment's endpoints-as-a-set, only where
+	// things sit, so bChangesGraphShape stays at its default, false: see
+	// ApplyInteractiveMutation's own header comment for the bare-call-trap Geometry/Topology
+	// split this joins (issues #165/#190/#299).
+	return ApplyInteractiveMutation(TEXT("move node"),
+		[Node, To](URoadNetwork& Net) { return Net.SetNodePosition(Node, To); });
 }
 
 FRoadDeletionPlan URoadEditFacade::PlanNodeDeletion(int32 NodeIndex) const

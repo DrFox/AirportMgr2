@@ -167,7 +167,13 @@ public:
 	FString PeekUndoLabel() const;
 	FString PeekRedoLabel() const;
 
-	/** Forget everything. For a new level, or a network replaced wholesale. */
+	/**
+	 * Forget everything. For a new level, or a network replaced wholesale.
+	 *
+	 * CALLS AbandonEdit() FIRST (issue #299) rather than dropping PendingSnapshot/PendingLabel
+	 * by hand: a pending edit still open when Clear runs left PendingCharge/PendingQuote behind
+	 * before this, which the next edit's CommitEdit would then attach itself to.
+	 */
 	void Clear();
 
 private:

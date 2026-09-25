@@ -338,6 +338,15 @@ public:
 	int32 GhostNetworkAllocCountForTest() const { return GhostNetworkAllocCount; }
 
 	/**
+	 * Whether the ghost layer is currently showing, for a test that measures
+	 * URoadEditFacade::AdoptNetwork's HideGhost() call (issue #299) rather than trusting that
+	 * a network swap happened to leave nothing stale on screen - see AdoptNetwork's own header
+	 * comment for why a stale ghost would otherwise survive Undo, a reverted drag or a
+	 * reverted merge.
+	 */
+	bool IsGhostVisibleForTest() const { return bGhostVisible; }
+
+	/**
 	 * LayerComponents[Layer], for Airside.Present.NetworkActor.
 	 *
 	 * GetLayerComponent itself is private, and every OTHER test reads a layer's component

@@ -13,6 +13,7 @@
 #include "Engine/World.h"
 #include "Entities/EntityDefinition.h"
 #include "Profiles/RoadProfile.h"
+#include "Tool/RoadSnap.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -1335,5 +1336,118 @@ bool FMutatorNotifiesExactlyOnceTest::RunTest(const FString& Parameters)
 // of IRoadEditTarget's read-only surface are the same story. ClearHistory (issue #191, added
 // to the header after this table was first drafted) is the same shape again: it deliberately
 // skips EnsureHistory and calls neither Edit.Commit() nor NotifyChanged - see its own comment.
+
+// ---------------------------------------------------------------------------------------
+// Issue #299: Undo (through Travel), EndInteractiveEdit's cannot-afford revert, and MergeNodes'
+// corner-fit revert now all swap the live network through the ONE URoadEditFacade::AdoptNetwork,
+// rather than three (four, with ClearNetwork) hand-rolled copies of "Owner.Network = X;
+// HideGhost(); NotifyChanged();". MutatorNotifiesExactlyOnce above already pins the NotifyChanged
+// half of that tail for every row it drives; this measures the half nothing before this issue
+// ever did - HideGhost - which a network swap that forgot to call would leave silently wrong: the
+// preview would keep describing a node that may no longer exist, on screen until the next mouse
+// move happened to prove it stale, and every existing test that reads only RebuildCountForTest or
+// a triangle buffer would still pass with that call missing.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAdoptNetworkHidesGhostTest,
+	"Airside.Present.AdoptNetworkHidesGhost",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAdoptNetworkHidesGhostTest::RunTest(const FString& Parameters)
+{
+	// A GHOST OVER A LIVE NODE - Free-kind, the same shape RoadNetworkActorTest's own ghost
+	// fixture uses, needing no authored profile beyond whatever ConnectNodes' own default
+	// fallback already resolves.
+	auto ShowGhostOver = [](ARoadNetworkActor& Actor, int32 FromNodeIndex, const FVector2D& Toward)
+	{
+		FRoadSnapResult Snap;
+		Snap.Kind = ERoadSnapKind::Free;
+		Snap.Position = Toward;
+		Actor.UpdateGhost(FromNodeIndex, Snap, /*bValid*/ true, ERoadKind::ServiceRoad, INDEX_NONE);
+	};
+
+	// --- Undo, through Travel/AdoptNetwork -------------------------------------------------
+	{
+		ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+		if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+		const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		ShowGhostOver(*Actor, A, FVector2D(2000.0, 2000.0));
+		if (!TestTrue(TEXT("the ghost shows before undo"),
+			Actor->GetPresenter()->IsGhostVisibleForTest())) { return false; }
+
+		const int32 RebuildsBefore = Actor->RebuildCountForTest();
+		TestTrue(TEXT("the placement undoes"), Actor->Undo());
+		TestFalse(TEXT("Undo's AdoptNetwork hid the ghost"),
+			Actor->GetPresenter()->IsGhostVisibleForTest());
+		TestEqual(TEXT("and bumped RebuildCountForTest by exactly one, AdoptNetwork's own notify"),
+			Actor->RebuildCountForTest(), RebuildsBefore + 1);
+	}
+
+	// --- An unaffordable drag, through EndInteractiveEdit's revert/AdoptNetwork -------------
+	{
+		ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+		if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+		if (URoadProfile* Profile = Actor->ResolveProfile()) { Profile->CostPerMetre = 300.0; }
+
+		const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 B = Actor->PlaceNode(FVector2D(1000.0, 0.0));
+		if (!TestTrue(TEXT("the taxiway connects"), Actor->ConnectNodes(A, B))) { return false; }
+
+		// REUSES MeshFreshnessTest's OWN FAlwaysBrokePurse (this file's anonymous namespace,
+		// above): a second copy of "affords nothing" would be exactly the duplication #299
+		// exists to remove, one file down.
+		FAlwaysBrokePurse Purse;
+		Actor->GetEditFacade()->SetPurse(&Purse);
+
+		Actor->BeginInteractiveEdit(TEXT("drag node"));
+		if (!TestTrue(TEXT("the drag itself moves the node"),
+			Actor->MoveNode(B, FVector2D(20000.0, 0.0)))) { return false; }
+
+		ShowGhostOver(*Actor, A, FVector2D(5000.0, 5000.0));
+		if (!TestTrue(TEXT("the ghost shows before the revert"),
+			Actor->GetPresenter()->IsGhostVisibleForTest())) { return false; }
+
+		const int32 RebuildsBefore = Actor->RebuildCountForTest();
+		Actor->EndInteractiveEdit(true);
+		TestFalse(TEXT("the unaffordable drag's revert hid the ghost"),
+			Actor->GetPresenter()->IsGhostVisibleForTest());
+		TestEqual(TEXT("and bumped RebuildCountForTest by exactly one, AdoptNetwork's own notify"),
+			Actor->RebuildCountForTest(), RebuildsBefore + 1);
+	}
+
+	// --- A reverted merge, through ApplyInteractiveMutation's Verify/AdoptNetwork -----------
+	{
+		ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+		if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+		// KEEP GETS A SHORT ARM; ABSORB'S ARM LANDS AT A TINY ANGLE FROM IT. After the merge,
+		// Keep holds both arms at Keep's own position, and the ~0.57 degree angle between a
+		// 100 uu arm and a ~100.01 uu arm needs far more reach than either arm has, whatever
+		// half-width the default profile resolves to - deliberately too sharp to depend on the
+		// number (CornerFitTest's own acute-corner case makes the same argument at a shallower
+		// angle against a named profile).
+		const int32 Keep = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 Far1 = Actor->PlaceNode(FVector2D(100.0, 0.0));
+		if (!TestTrue(TEXT("Keep's arm connects"), Actor->ConnectNodes(Keep, Far1))) { return false; }
+
+		const int32 Absorb = Actor->PlaceNode(FVector2D(5.0, 5.0));
+		const int32 Far2 = Actor->PlaceNode(FVector2D(100.0, 1.0));
+		if (!TestTrue(TEXT("Absorb's arm connects"), Actor->ConnectNodes(Absorb, Far2))) { return false; }
+
+		ShowGhostOver(*Actor, Keep, FVector2D(50.0, 50.0));
+		if (!TestTrue(TEXT("the ghost shows before the merge"),
+			Actor->GetPresenter()->IsGhostVisibleForTest())) { return false; }
+
+		const int32 RebuildsBefore = Actor->RebuildCountForTest();
+		TestFalse(TEXT("the merge makes a corner the solver cannot trim, so it reverts"),
+			Actor->MergeNodes(Keep, Absorb));
+		TestFalse(TEXT("the reverted merge's AdoptNetwork hid the ghost"),
+			Actor->GetPresenter()->IsGhostVisibleForTest());
+		TestEqual(TEXT("and bumped RebuildCountForTest by exactly one, AdoptNetwork's own notify"),
+			Actor->RebuildCountForTest(), RebuildsBefore + 1);
+	}
+
+	return true;
+}
 
 #endif
