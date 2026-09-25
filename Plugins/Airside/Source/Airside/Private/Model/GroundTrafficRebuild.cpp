@@ -663,7 +663,8 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// them its edge actually reaches. Twins by EDGE, not by a second spatial query: the builder
 	// joins every such pair with its turn path, and a coincident node nothing joins is not the
 	// same place for routing anyway.
-	// ENFORCED BY: AirportMgr.RigCourse.RebuildKeepsTheCourse, Airside.Model.Traffic.RebuildCoincidentTwins
+	// ENFORCED BY: AirportMgr.RigCourse.RebuildKeepsTheCourse, Airside.Model.Traffic.RebuildCoincidentTwins,
+	// Airside.Model.Traffic.RebuildTwinAtCurrentStep (the Prev re-point), Airside.Model.Traffic.RebuildGoalIsATwin
 	constexpr double TwinTolerance = 1.0;
 	auto TwinsOf = [&Network](FGuidelineNodeId Node, TArray<FGuidelineNodeId, TInlineAllocator<4>>& Out)
 	{

@@ -154,6 +154,13 @@ built level and its tests:**
   to no sharp vertex, and neither vehicle crawls there. Consequence to know: a Narrow -> Standard
   taper is sized for the bowser, so the rig is now REFUSED on its lock there, where the unmeasured
   jog used to wave it through to crawl.
+  **Review round:** the trigger is a LANE OFFSET, not a width difference - intended: a same-width
+  profile change whose lanes move, and a one-lane bidirectional road meeting a two-lane one, taper
+  too (`WidthTaper.SameWidthOffsetLanes`, `.OneLaneMeetsTwo`: insets 174 and 272 uu, bowser-sized).
+  The S is ONE construction in `GuidelineGeom` (`LaneChangeLength` sizes, `LaneChange` lays;
+  `Airside.Solve.LaneChangeRoundTrips`). A taper capped by a short segment warns against the
+  vehicle that sized it, with the length it needs (`WidthTaper.CappedTaperWarns`: 3 m Wide stub,
+  S 397 uu vs the rig's 576, "at least 4.6 m").
 - **The rig's trailer has a known, bounded near-side overrun.** `RigTestCourseTest.cpp`
   measured 2026-09-25: on every near-side (right) turn the trailer cuts 2.0-3.4 m past the
   inner pavement edge while its swept WIDTH still fits - `VehicleFit` judges the swept
@@ -273,6 +280,16 @@ game; legs are progress markers:**
   (`KeepBehind`, Travelled rebased) so an endless course's route stays bounded. The course
   reports a sharp vertex AT a join; the only ones were the width step's jog, at its node's lane
   end - none since the width taper (§3).
+- **A GAME FIX, NOT A COURSE FIX (2026-09-25, 0277a642 + review round):** the utility skipping
+  every dead end in reverse was `FPlanReResolver::ReResolvePlan` - which runs for EVERY agent
+  class on EVERY graph rebuild, on main too. It found each step's end by position; at a
+  straight-through node the two arms' lane ends are coincident twins joined by a zero-length
+  turn path, `FindNearestNode`'s slot-order tie-break named the wrong one, the step "failed", and
+  the replan to the route's end dropped every via point. Fixed: a position resolves to the node
+  and its zero-length twins, the step takes the one its edge reaches (the first step's start is
+  re-pointed when its twin is the one), and an intact plan's goal is its last step's end.
+  Pinned by `Airside.Model.Traffic.RebuildCoincidentTwins`, `.RebuildTwinAtCurrentStep`,
+  `.RebuildGoalIsATwin` and `AirportMgr.RigCourse.RebuildKeepsTheCourse`.
 - **Measured:** the rig's leg 0 now takes 12.1 s against a derived no-stop 11.8 s (it slows for
   the corner at its end); every waypoint is passed moving, at the speed profile's own limit
   where the profile slows it. One dispatch per vehicle, one extension per loop boundary.
@@ -335,6 +352,14 @@ across both lanes (a known gap from the road-lanes spec).
 
 **ADDED 2026-09-25 (task 6), follow-ups found by the full build and not fixed here:**
 
+- **A zero-length twin STEP re-resolved in reverse** (review item 5, rare): where the plan's own
+  step is the zero-length B1->B2 path and the lookup names the twins the other way round, the
+  twin match can pick the wrong one of the pair; the step then fails and replans as before the fix.
+- **`TwinsOf` searches one hop** (review item 6): only nodes a single zero-length edge joins count
+  as twins. Three or more coincident nodes chained through each other are not gathered.
+- **A taper capped to nothing falls back to the chord jog** (review item 9): `GuidelineGeom::
+  LaneChange` lays nothing when the lane ends are within 1 uu along, so a segment too short to
+  inset at all still gets the old straight diagonal. The capped-taper warning names the length.
 - **The rig U-turns at road ends once reversing exists (step 2):** a three-point turn, not a
   bigger balloon (user ruling 2026-09-25). Until then every dead end refuses it on its lock.
 - **One evaluator for a whole route's tow (a real gap, found 2026-09-25).** Two halves:

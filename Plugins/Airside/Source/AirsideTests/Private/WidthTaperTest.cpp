@@ -290,4 +290,168 @@ bool FWidthTaperSurfaceWeldsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace WidthTaper
+{
+	/** LogAirside taper warnings. Unbuffered (CanBeUsedOnMultipleThreads), or the log thread delivers late. */
+	struct FTaperSpy : public FOutputDevice
+	{
+		TArray<FString> Lines;
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			if (Verbosity == ELogVerbosity::Warning && Category == FName(TEXT("LogAirside")) && FString(V).Contains(TEXT("Width taper at")))
+			{
+				Lines.Add(FString(V));
+			}
+		}
+	};
+
+	/** Two straight segments West->Mid->East of the given profiles, derived the production way. */
+	FStep BuildPair(URoadProfile* WestProfile, URoadProfile* EastProfile, double EastLength)
+	{
+		FStep Out;
+		Out.Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadNodeId West = Out.Net->AddNode(FVector2D(0.0, 0.0));
+		Out.Mid = Out.Net->AddNode(FVector2D(6000.0, 0.0));
+		const FRoadNodeId East = Out.Net->AddNode(FVector2D(6000.0 + EastLength, 0.0));
+		Out.Narrow = Out.Net->AddStraightSegment(West, Out.Mid, WestProfile);
+		Out.Wide = Out.Net->AddStraightSegment(Out.Mid, East, EastProfile);
+		const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
+		Out.Solved = FRoadNetworkSolver::SolveAll(*Out.Net, 12, &Designs);
+		FRoadGuidelineBuilder::Build(*Out.Net, Out.Solved, Designs);
+		return Out;
+	}
+
+	/** Turn edges starting within 20 m of the step node, and the tightest MinRadius among them. */
+	int32 TaperPieces(const FStep& Step, double& OutTightest)
+	{
+		int32 Count = 0;
+		OutTightest = TNumericLimits<double>::Max();
+		for (const FGuidelineEdge& Edge : Step.Net->GetGuidelineEdges())
+		{
+			const FGuidelineNode* A = Edge.bAlive ? Step.Net->GetGuidelineNode(Edge.A) : nullptr;
+			if (A == nullptr || Edge.DerivedFrom.IsSet() || FMath::Abs(A->Position.X - 6000.0) > 2000.0) { continue; }
+			++Count;
+			OutTightest = FMath::Min(OutTightest, Edge.MinRadius);
+		}
+		return Count;
+	}
+}
+
+// A CAPPED TAPER SAYS SO (review of 5660420c). The solver caps each arm's inset by its segment's
+// slack, so a short Wide segment at a width step gets an S tighter than the rig's lock - which
+// the router then refuses on the lock, and nothing said why or what to draw. The builder now
+// warns against the vehicle that SIZED the taper, naming the taper and the length it needs.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWidthTaperCappedWarnsTest, "Airside.Build.WidthTaper.CappedTaperWarns",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWidthTaperCappedWarnsTest::RunTest(const FString& Parameters)
+{
+	using namespace WidthTaper;
+	const TArray<URoadProfile*> Profiles = Tiers();
+	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
+		Profiles.Num() == 3 && !Profiles.Contains(nullptr))) { return false; }
+	FTaperSpy Spy;
+	GLog->AddOutputDevice(&Spy);
+	// The control: 60 m of Wide holds its whole half of the taper - no warning.
+	BuildPair(Profiles[0], Profiles[2], 6000.0);
+	const int32 Long = Spy.Lines.Num();
+	// A 3 m Wide stub: its allowance is 0.45 x 300 = 135 uu against the 206 its half needs.
+	const FStep Short = BuildPair(Profiles[0], Profiles[2], 300.0);
+	GLog->RemoveOutputDevice(&Spy);
+	const FRoadSegment* Wide = Short.Net->GetSegment(Short.Wide);
+	TestTrue(FString::Printf(TEXT("the short Wide arm's inset was capped below its 206 uu half (%.0f)"), Wide != nullptr ? Wide->TrimA : -1.0),
+		Wide != nullptr && Wide->TrimA < 206.0 && Wide->TrimA > 0.0);
+	TestEqual(TEXT("the long segments' taper holds its length and says nothing"), Long, 0);
+	TestTrue(FString::Printf(TEXT("the capped taper warns (%d line(s))"), Spy.Lines.Num() - Long), Spy.Lines.Num() - Long > 0);
+	for (int32 I = Long; I < Spy.Lines.Num(); ++I)
+	{
+		UE_LOG(LogTemp, Display, TEXT("WidthTaper.CappedTaperWarns: %s"), *Spy.Lines[I]);
+		TestTrue(TEXT("naming the rig's lock (Wide's design vehicle sized it), not the bowser's"), Spy.Lines[I].Contains(TEXT("needs 576")));
+		TestTrue(TEXT("and the segment length that holds it"), Spy.Lines[I].Contains(TEXT("at least")) && Spy.Lines[I].Contains(TEXT(" m long")));
+	}
+	return true;
+}
+
+// THE TRIGGER IS A LANE OFFSET (intended, review of 5660420c). Two same-width profiles whose
+// lanes sit at different offsets taper: the line steps, whatever the width does.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWidthTaperSameWidthTest, "Airside.Build.WidthTaper.SameWidthOffsetLanes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWidthTaperSameWidthTest::RunTest(const FString& Parameters)
+{
+	using namespace WidthTaper;
+	URoadProfile* West = URoadProfile::MakeServiceRoadTransient();
+	URoadProfile* East = URoadProfile::MakeServiceRoadTransient();
+	for (FProfileGuideline& Line : East->Guidelines) { Line.CentreOffset *= 0.6; }
+	TestEqual(TEXT("the two profiles are the same width"), West->GetTotalWidth(), East->GetTotalWidth());
+	const FStep Step = BuildPair(West, East, 6000.0);
+	const FRoadSegment* A = Step.Net->GetSegment(Step.Narrow);
+	const FRoadSegment* B = Step.Net->GetSegment(Step.Wide);
+	TestTrue(FString::Printf(TEXT("both cuts are inset though the widths match (%.0f, %.0f)"), A->TrimB, B->TrimA), A->TrimB > 0.0 && B->TrimA > 0.0);
+	double Tightest = 0.0;
+	const int32 Pieces = TaperPieces(Step, Tightest);
+	const double Lock = UAirsideSettings::ResolveRoadDesignVehicles().Default.TightestFollowableRadius();
+	UE_LOG(LogTemp, Display, TEXT("WidthTaper.SameWidthOffsetLanes: insets %.0f + %.0f, %d piece(s), tightest %.1f vs lock %.1f"), A->TrimB, B->TrimA, Pieces, Tightest, Lock);
+	TestEqual(TEXT("each lane crosses on an S: two pieces each way"), Pieces, 4);
+	TestTrue(FString::Printf(TEXT("sized for the design vehicle (%.1f vs %.1f)"), Tightest, Lock), Tightest >= Lock);
+	return true;
+}
+
+// AND A ONE-LANE BIDIRECTIONAL ROAD MEETING A TWO-LANE ONE (MixedLaneCounts' shape) tapers:
+// its centreline steps onto each lane of the other road.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWidthTaperOneLaneTest, "Airside.Build.WidthTaper.OneLaneMeetsTwo",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWidthTaperOneLaneTest::RunTest(const FString& Parameters)
+{
+	using namespace WidthTaper;
+	URoadProfile* One = NewObject<URoadProfile>(GetTransientPackage());
+	FProfileBand Band;
+	Band.Width = 700.0;
+	Band.Type = ERoadBandType::Lane;
+	One->Bands.Add(Band);
+	FProfileGuideline Line;
+	Line.Class = ETraversalClass::GroundVehicle;
+	Line.Direction = EGuidelineDir::Bidirectional;
+	Line.Width = 700.0;
+	One->Guidelines.Add(Line);
+	One->ExitLength = 0.0;
+	const FStep Step = BuildPair(One, URoadProfile::MakeServiceRoadTransient(), 6000.0);
+	const FRoadSegment* A = Step.Net->GetSegment(Step.Narrow);
+	const FRoadSegment* B = Step.Net->GetSegment(Step.Wide);
+	TestTrue(FString::Printf(TEXT("both cuts are inset (%.0f, %.0f)"), A->TrimB, B->TrimA), A->TrimB > 0.0 && B->TrimA > 0.0);
+	double Tightest = 0.0;
+	const int32 Pieces = TaperPieces(Step, Tightest);
+	const double Lock = UAirsideSettings::ResolveRoadDesignVehicles().Default.TightestFollowableRadius();
+	UE_LOG(LogTemp, Display, TEXT("WidthTaper.OneLaneMeetsTwo: insets %.0f + %.0f, %d piece(s), tightest %.1f vs lock %.1f"), A->TrimB, B->TrimA, Pieces, Tightest, Lock);
+	TestEqual(TEXT("onto each lane and back off the other: two S, four pieces"), Pieces, 4);
+	TestTrue(FString::Printf(TEXT("sized for the design vehicle (%.1f vs %.1f)"), Tightest, Lock), Tightest >= Lock);
+	return true;
+}
+
+// ONE EVALUATOR, ROUND TRIP: an S laid by GuidelineGeom::LaneChange across the length
+// LaneChangeLength reserved for a radius delivers that radius.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLaneChangeRoundTripTest, "Airside.Solve.LaneChangeRoundTrips",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLaneChangeRoundTripTest::RunTest(const FString& Parameters)
+{
+	for (const double Radius : { 510.0, 576.0, 1500.0 })
+	{
+		for (const double Shift : { 30.0, 75.0, 300.0 })
+		{
+			const double Along = GuidelineGeom::LaneChangeLength(Radius, Shift);
+			const FVector2D From(0.0, 0.0);
+			const FVector2D To(Along, Shift);
+			FVector2D C1, Mid, C2;
+			if (!TestTrue(TEXT("the S is laid"), GuidelineGeom::LaneChange(From, To, FVector2D(1.0, 0.0), C1, Mid, C2))) { continue; }
+			const double Got = FMath::Min(GuidelineGeom::TightestRadius(From, C1, Mid), GuidelineGeom::TightestRadius(Mid, C2, To));
+			TestTrue(FString::Printf(TEXT("R %.0f, shift %.0f: laid across %.1f uu it delivers %.3f"), Radius, Shift, Along, Got),
+				FMath::Abs(Got - Radius) < 1e-6 * Radius);
+		}
+	}
+	return true;
+}
+
 #endif

@@ -552,6 +552,32 @@ double GuidelineGeom::ShiftDeflectionFor(double Radius, double Shift, double& Ou
 	return Deflect;
 }
 
+double GuidelineGeom::LaneChangeLength(double Radius, double Shift)
+{
+	double Run = 0.0;
+	const double Deflect = ShiftDeflectionFor(Radius, Shift, Run);
+	return 2.0 * Run * (1.0 + FMath::Cos(Deflect));
+}
+
+bool GuidelineGeom::LaneChange(const FVector2D& From, const FVector2D& To, const FVector2D& Travel,
+	FVector2D& OutControlIn, FVector2D& OutMid, FVector2D& OutControlOut)
+{
+	const FVector2D Dir = Travel.GetSafeNormal();
+	const double Along = FVector2D::DotProduct(To - From, Dir);
+	const double Shift = FMath::Abs(FVector2D::CrossProduct(Dir, To - From));
+	if (Along <= 1.0 || Shift <= 1.0)
+	{
+		return false;
+	}
+	// tan(b/2) = Shift / Along, s = Shift / (2 sin b) - see the header.
+	const double Deflect = 2.0 * FMath::Atan2(Shift, Along);
+	const double Run = Shift / (2.0 * FMath::Sin(Deflect));
+	OutControlIn = From + Dir * Run;
+	OutMid = (From + To) * 0.5;
+	OutControlOut = To - Dir * Run;
+	return true;
+}
+
 double GuidelineGeom::CornerRunFor(double Radius, double Interior)
 {
 	const double Half = Interior * 0.5;

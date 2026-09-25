@@ -17,15 +17,21 @@ double URoadProfile::ResolvedFilletRadius() const
 	// service road, the largest rigid vehicle otherwise (UAirsideSettings::ResolveTierDesignVehicles).
 	// Looked up in the cached tier map, never by building an FRoadDesignVehicles per arm (a map
 	// copy) - see ResolveTierDesignVehicles' comment on who calls this how often.
+	return ResolvedFilletRadius(ResolvedDesignVehicle());
+}
+
+FChassis URoadProfile::ResolvedDesignVehicle() const
+{
+	// THE ONE TIER LOOKUP AND FALLBACK both self-resolving answers read (review of 5660420c):
+	// this profile's tier vehicle, else the largest rigid service vehicle.
 	const FChassis* Tier = UAirsideSettings::ResolveTierDesignVehicles().Find(TObjectKey<URoadProfile>(this));
-	return ResolvedFilletRadius(Tier != nullptr ? *Tier : UAirsideSettings::ResolveLargestServiceVehicle());
+	return Tier != nullptr ? *Tier : UAirsideSettings::ResolveLargestServiceVehicle();
 }
 
 double URoadProfile::ResolvedDesignRadius() const
 {
-	// The same lookup as ResolvedFilletRadius() above, answering with the lock rather than a fillet.
-	const FChassis* Tier = UAirsideSettings::ResolveTierDesignVehicles().Find(TObjectKey<URoadProfile>(this));
-	return (Tier != nullptr ? *Tier : UAirsideSettings::ResolveLargestServiceVehicle()).TightestFollowableRadius();
+	// The same vehicle as ResolvedFilletRadius() above, answering with the lock rather than a fillet.
+	return ResolvedDesignVehicle().TightestFollowableRadius();
 }
 
 double URoadProfile::ResolvedFilletRadius(const FChassis& DesignVehicle) const

@@ -213,6 +213,9 @@ public:
 	 */
 	double ResolvedDesignRadius() const;
 
+	/** The design vehicle the two self-resolving answers above share: one lookup, one fallback. */
+	FChassis ResolvedDesignVehicle() const;
+
 	/**
 	 * Segments with this profile PASS THROUGH a node rather than ending at it, so they are
 	 * never trimmed and no junction polygon is paved over them. True for a runway.

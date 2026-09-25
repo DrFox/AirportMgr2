@@ -29,12 +29,9 @@ namespace
 
 namespace
 {
-	/**
-	 * Each end's share of a segment's slack (its length less both ends' floors). UNDER a
-	 * half, so two ends that each take their whole share still leave a ribbon between them:
-	 * at exactly a half the cut centres would touch and the ribbon would have no length.
-	 */
-	constexpr double SlackShare = 0.45;
+	// SlackShare moved to FRoadNetworkSolver (public) with its comment, so the builder's
+	// capped-taper warning can say how long a segment must be from the same figure.
+	constexpr double SlackShare = FRoadNetworkSolver::SlackShare;
 
 	/**
 	 * A tenth of a percent over the design vehicle's lock, so the builder's re-derivation of the
@@ -60,6 +57,10 @@ namespace
 	 * and sizing them from a circle would be a second evaluator of the curve that is driven.
 	 * Worked, 2026-09-25: d 75 uu, R 576 (the rig, Wide's design vehicle) gives b 20.6 deg,
 	 * s 107, L 412 uu - against sqrt(4 R d - d^2) = 409 for the circle.
+	 *
+	 * THE TRIGGER IS A LANE OFFSET, NOT A WIDTH DIFFERENCE - intended (review of 5660420c): a
+	 * same-width profile change with its lanes at other offsets, and a one-lane bidirectional
+	 * road meeting a two-lane one, step the line just the same and taper just the same.
 	 *
 	 * THE WIDER ARM'S DESIGN VEHICLE sizes it (the brief's ruling): the taper is part of the wide
 	 * road, and a rig admitted to the Wide road must be able to follow onto it. A Narrow ->
@@ -122,9 +123,7 @@ namespace
 		const double Radius = DesignVehicles != nullptr
 			? DesignVehicles->For(Wider).TightestFollowableRadius()
 			: Wider->ResolvedDesignRadius();
-		double Run = 0.0;
-		const double Deflect = GuidelineGeom::ShiftDeflectionFor(Radius * TaperRadiusMargin, OutShift, Run);
-		return 2.0 * Run * (1.0 + FMath::Cos(Deflect));
+		return GuidelineGeom::LaneChangeLength(Radius * TaperRadiusMargin, OutShift);
 	}
 
 	/**

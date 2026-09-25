@@ -3,6 +3,7 @@
 #include "AirsideLog.h"
 #include "Build/ExitGeometry.h"
 #include "Build/RoadMeshBuilder.h"
+#include "Build/RoadNetworkSolver.h"
 #include "Model/Chassis.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -801,26 +802,37 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// edge, and measured like any turn - its MinRadius is what route search gates on.
 					// Only at a TWO-arm node: a through road's width change inside a larger junction
 					// keeps the chord, and is not this ruling's.
+					// THE TRIGGER IS "THE LANES ARE OFFSET", NOT "THE WIDTHS DIFFER" - intended: what
+					// the S removes is a lateral step in the LINE, whatever made it. So a same-width
+					// profile change whose lanes sit at other offsets tapers too, and so does a
+					// one-lane bidirectional road meeting a two-lane one (its centreline steps a
+					// quarter-width onto each lane).
+					// ENFORCED BY: Airside.Build.WidthTaper.SameWidthOffsetLanes, Airside.Build.WidthTaper.OneLaneMeetsTwo
 					// ENFORCED BY: Airside.Build.WidthTaper.Drivable, Airside.Build.WidthTaper.LanesContinuous
 					bool bTaperS = false;
 					FVector2D TaperMid = FVector2D::ZeroVector;
 					FVector2D TaperControlOut = FVector2D::ZeroVector;
+					FVector2D TaperFrom = FVector2D::ZeroVector;
+					FVector2D TaperTo = FVector2D::ZeroVector;
+					FVector2D TaperTravel = FVector2D::ZeroVector;
 					if (ArmSegments->Num() == 2
 						&& RoadGeom::IsStraightThrough(RoadGeom::AngleBetween(
 							Network.GetOutgoingTangent(FromSeg, NodeId), Network.GetOutgoingTangent(ToSeg, NodeId))))
 					{
-						const FVector2D PA = Network.GetGuidelineNode(Turn.A)->Position;
-						const FVector2D PB = Network.GetGuidelineNode(Turn.B)->Position;
+						// GuidelineGeom's ONE lane-change construction, the same the solver sized
+						// the inset with (LaneChangeLength). Along <= 1 uu (a taper capped to
+						// nothing) leaves the chord - see the spec's Open list.
 						const FVector2D Travel = -Network.GetOutgoingTangent(FromSeg, NodeId).GetSafeNormal();
-						const double Along = FVector2D::DotProduct(PB - PA, Travel);
-						const double Across = FMath::Abs(FVector2D::CrossProduct(Travel, PB - PA));
-						if (Along > 1.0 && Across > 1.0)
+						FVector2D ControlIn, Mid, ControlOut;
+						if (GuidelineGeom::LaneChange(Network.GetGuidelineNode(Turn.A)->Position,
+							Network.GetGuidelineNode(Turn.B)->Position, Travel, ControlIn, Mid, ControlOut))
 						{
-							const double Deflect = 2.0 * FMath::Atan2(Across, Along);
-							const double Run = Across / (2.0 * FMath::Sin(Deflect));
-							TaperMid = (PA + PB) * 0.5;
-							Turn.Control = PA + Travel * Run;
-							TaperControlOut = PB - Travel * Run;
+							TaperMid = Mid;
+							TaperFrom = Network.GetGuidelineNode(Turn.A)->Position;
+							TaperTo = Network.GetGuidelineNode(Turn.B)->Position;
+							TaperTravel = Travel;
+							Turn.Control = ControlIn;
+							TaperControlOut = ControlOut;
 							bTaperS = true;
 						}
 					}
@@ -920,7 +932,39 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 							const FChassis& LargestServiceVehicle =
 								FromDesign.TightestFollowableRadius() <= ToDesign.TightestFollowableRadius() ? FromDesign : ToDesign;
 							const double Needed = LargestServiceVehicle.TightestFollowableRadius();
-							if (Needed > 0.0)
+
+							// A TAPER IS JUDGED BY WHAT SIZED IT, not by the corner rule above (review
+							// of 5660420c): the solver sized the S for the WIDER arm's design vehicle
+							// (FRoadNetworkSolver's WidthTaperLength) and then capped the inset by the
+							// segment's slack - so a short segment gets a tighter S, silently, and the
+							// "right-angle corner" text below names the wrong fix. Said here with the
+							// vehicle, the length the S needed and the segment length that holds it.
+							// ENFORCED BY: Airside.Build.WidthTaper.CappedTaperWarns
+							if (bTaperS)
+							{
+								const FChassis& Sizing = FromProfile->GetTotalWidth() >= ToProfile->GetTotalWidth() ? FromDesign : ToDesign;
+								const double SizingRadius = Sizing.TightestFollowableRadius();
+								const double Delivered = GuidelineGeom::TightestRadius(
+									Network.GetGuidelineNode(Piece.A)->Position, Piece.Control,
+									Network.GetGuidelineNode(Piece.B)->Position);
+								// Once per S: both pieces are the same curve mirrored.
+								if (SizingRadius > 0.0 && Delivered < SizingRadius && &Piece == &Pieces[0])
+								{
+									const double Shift = FMath::Abs(FVector2D::CrossProduct(TaperTravel, TaperTo - TaperFrom));
+									const double Have = FVector2D::DotProduct(TaperTo - TaperFrom, TaperTravel);
+									const double NeedLength = GuidelineGeom::LaneChangeLength(SizingRadius, Shift);
+									UE_LOG(LogAirside, Warning,
+										TEXT("Width taper at (%.0f,%.0f): its S-curve radius is %.0f uu, but the vehicle "
+										     "it is sized for needs %.0f (wheelbase %.0f, lock %.0f deg). The lanes step "
+										     "%.0f uu across a %.0f uu taper that needs %.0f: a segment here is too short "
+										     "to hold its half. Draw each segment at the width change at least %.1f m "
+										     "long, plus its far junction's cut-back."),
+										Node->Position.X, Node->Position.Y, Delivered, SizingRadius,
+										Sizing.Wheelbase(), Sizing.Ground.MaxSteerDegrees, Shift, Have, NeedLength,
+										0.5 * NeedLength / FRoadNetworkSolver::SlackShare / 100.0);
+								}
+							}
+							else if (Needed > 0.0)
 							{
 								const double Delivered = GuidelineGeom::TightestRadius(
 									Network.GetGuidelineNode(Piece.A)->Position,

@@ -54,6 +54,15 @@ class AIRSIDE_API FRoadNetworkSolver
 {
 public:
 	/**
+	 * Each end's share of a segment's slack (its length less both ends' floors). UNDER a
+	 * half, so two ends that each take their whole share still leave a ribbon between them:
+	 * at exactly a half the cut centres would touch and the ribbon would have no length.
+	 * Public so FRoadGuidelineBuilder's capped-taper warning names a segment length from the
+	 * same figure that capped it.
+	 */
+	static constexpr double SlackShare = 0.45;
+
+	/**
 	 * DesignVehicles IS OPTIONAL, and null means "resolve it yourself" - see
 	 * BuildNodeInput's own comment (issue #190). A caller mid-rebuild (URoadSurfacePresenter)
 	 * has already resolved it once and passes the answer down every arm of every node reads;

@@ -267,6 +267,28 @@ namespace GuidelineGeom
 	AIRSIDE_API double ShiftDeflectionFor(double Radius, double Shift, double& OutRun);
 
 	/**
+	 * THE LANE CHANGE, AS ONE EVALUATOR (review of 5660420c): the S of two symmetric quadratics
+	 * that runs Along forward while stepping Shift across. Everything that lays or sizes one goes
+	 * through the two functions below, so the length a solver reserves and the curve a builder
+	 * lays are one construction, not two that agree by arithmetic.
+	 *
+	 * LaneChangeLength: the Along an S needs so that each quadratic delivers Radius -
+	 * ShiftDeflectionFor's tangent s and deflection b, laid out: Along = 2 s (1 + cos b),
+	 * Shift = 2 s sin b. Zero for no shift.
+	 *
+	 * LaneChange: the S from From to To for a given travel direction - the first curve's control,
+	 * the inflection (the midpoint, by symmetry) and the second curve's control. From
+	 * 2 s (1 + cos b) = Along and 2 s sin b = Shift: tan(b/2) = Shift / Along and
+	 * s = Shift / (2 sin b); its delivered radius is then Shift cos(b/2) / (4 sin^2(b/2)), which
+	 * is LaneChangeLength's inverse - Airside.Solve.LaneChangeRoundTrips measures the two against
+	 * each other. False, outputs untouched, when Along or Shift is under a uu: nothing to lay.
+	 */
+	AIRSIDE_API double LaneChangeLength(double Radius, double Shift);
+
+	AIRSIDE_API bool LaneChange(const FVector2D& From, const FVector2D& To, const FVector2D& Travel,
+		FVector2D& OutControlIn, FVector2D& OutMid, FVector2D& OutControlOut);
+
+	/**
 	 * Position and heading at Distance along a polyline, clamped to both ends.
 	 *
 	 * Heading is the direction of the segment being walked, in radians, and is held from

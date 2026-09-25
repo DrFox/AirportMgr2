@@ -3310,4 +3310,117 @@ bool FTrafficRebuildCoincidentTwinsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace TwinFixture
+{
+	/** A->B1, B1->B2 (zero length), and B2->C when bToC; B1 and B2 at one point. */
+	struct FTwins { FGuidelineNodeId A, B1, B2, C; };
+
+	/**
+	 * Swept and rebuilt the way FRoadGuidelineBuilder rebuilds: every node and edge removed and
+	 * re-added with new handles. bSwap adds B2's node before B1's, which is what decides the slot
+	 * order FindNearestNode breaks the positional tie by - so a test can make the lookup name
+	 * whichever twin it needs to be WRONG.
+	 */
+	FTwins Build(URoadNetwork& Net, bool bSwap, bool bToC)
+	{
+		TArray<FGuidelineEdgeId> Edges;
+		for (int32 I = 0; I < Net.GetGuidelineEdges().Num(); ++I) { if (Net.GetGuidelineEdges()[I].bAlive) { Edges.Add(Net.GuidelineEdgeIdAt(I)); } }
+		for (const FGuidelineEdgeId& Id : Edges) { Net.RemoveGuidelineEdge(Id); }
+		for (int32 I = 0; I < Net.GetGuidelineNodes().Num(); ++I) { if (Net.GetGuidelineNodes()[I].bAlive) { Net.RemoveGuidelineNode(Net.GuidelineNodeIdAt(I)); } }
+		FTwins G;
+		G.A = Net.AddGuidelineNode(FVector2D(0.0, 0.0));
+		if (bSwap) { G.B2 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0)); G.B1 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0)); }
+		else { G.B1 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0)); G.B2 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0)); }
+		G.C = Net.AddGuidelineNode(FVector2D(40000.0, 0.0));
+		TestGraph::Join(Net, G.A, G.B1);
+		TestGraph::Join(Net, G.B1, G.B2);
+		if (bToC) { TestGraph::Join(Net, G.B2, G.C); }
+		return G;
+	}
+}
+
+// THE FIRST STEP'S START MAY BE THE WRONG TWIN (review of 0277a642). An agent on step B2->C:
+// the node its step leaves from is found by position, and the lookup names B1. B1->C has no
+// edge, so the re-resolver must take B2 from B1's twins AND re-point Steps[FromStep-1].To at
+// it - every tick's StepFromNode reads that handle (crossing arm, tail claim, RankAt, replan
+// start). Run under both slot orders; the one where the lookup names B1 is the case.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRebuildTwinAtCurrentStepTest,
+	"Airside.Model.Traffic.RebuildTwinAtCurrentStep",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRebuildTwinAtCurrentStepTest::RunTest(const FString& Parameters)
+{
+	int32 Exercised = 0;
+	for (const bool bSwap : { false, true })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const TwinFixture::FTwins Was = TwinFixture::Build(*Net, bSwap, true);
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Was.A, Was.C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+		TickUntil(*Traffic, *Net, 120.0, [&](int32)
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Van);
+			return A != nullptr && A->Follower.Plan.Steps.Num() == 3 && A->Follower.Travelled <= A->Follower.Plan.Steps[1].EndDistance + 500.0;
+		});
+		const FRoadAgent* Agent = Traffic->FindAgent(Van);
+		if (!TestTrue(TEXT("the van is out on a three-step plan"), Agent != nullptr && Agent->Follower.Plan.Steps.Num() == 3)) { return false; }
+		if (!TestEqual(TEXT("and on step 2, B2->C"), UGroundTraffic::CurrentStep(Agent->Follower.Plan, Agent->Follower.Travelled), 2)) { return false; }
+
+		const TwinFixture::FTwins Now = TwinFixture::Build(*Net, bSwap, true);
+		if (RouteSearch::FindNearestNode(*Net, FVector2D(20000.0, 0.0), ETraversalClass::GroundVehicle, 25.0) != Now.B1)
+		{
+			continue;   // the lookup names the right twin under this order - not the case under test
+		}
+		++Exercised;
+		Traffic->OnGraphRebuilt(*Net);
+		const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();
+		TestEqual(TEXT("re-resolved, NOT replanned: nothing was lost"), Summary.Replanned, 0);
+		TestEqual(TEXT("nor truncated"), Summary.Truncated, 0);
+		Agent = Traffic->FindAgent(Van);
+		TestTrue(TEXT("the node the current step leaves from is re-pointed at B2, the twin its edge leaves - not the B1 the lookup named"),
+			UGroundTraffic::StepFromNode(Agent->Follower.Plan, 2) == Now.B2);
+		TestTrue(TEXT("and the step itself ends at C"), Agent->Follower.Plan.Steps[2].To == Now.C);
+	}
+	TestTrue(TEXT("one slot order made the lookup name the wrong twin - the case was exercised"), Exercised > 0);
+	return true;
+}
+
+// A ROUTE THAT ENDS AT A TWIN (review of 0277a642): A->B1->B2, goal B2. Every step re-resolves,
+// so the goal must be the LAST STEP'S END, chosen by the edge that reaches it - a position lookup
+// names B1, and every later replan would search to the wrong node.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRebuildGoalIsATwinTest,
+	"Airside.Model.Traffic.RebuildGoalIsATwin",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRebuildGoalIsATwinTest::RunTest(const FString& Parameters)
+{
+	int32 Exercised = 0;
+	for (const bool bSwap : { false, true })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const TwinFixture::FTwins Was = TwinFixture::Build(*Net, bSwap, false);
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Was.A, Was.B2, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+		TickUntil(*Traffic, *Net, 5.0, [](int32) { return true; });
+		const FRoadAgent* Agent = Traffic->FindAgent(Van);
+		if (!TestTrue(TEXT("the van is out, A->B1->B2"), Agent != nullptr && Agent->Follower.Plan.Steps.Num() == 2)) { return false; }
+
+		const TwinFixture::FTwins Now = TwinFixture::Build(*Net, bSwap, false);
+		if (RouteSearch::FindNearestNode(*Net, FVector2D(20000.0, 0.0), ETraversalClass::GroundVehicle, 25.0) != Now.B1)
+		{
+			continue;
+		}
+		++Exercised;
+		Traffic->OnGraphRebuilt(*Net);
+		TestEqual(TEXT("re-resolved, NOT replanned"), Traffic->GetLastRebuildSummaryForTest().Replanned, 0);
+		Agent = Traffic->FindAgent(Van);
+		TestTrue(TEXT("the last step ends at B2"), Agent->Follower.Plan.Steps.Last().To == Now.B2);
+		TestTrue(TEXT("and the goal is B2, the last step's end - not the B1 a position lookup names"), Agent->GoalNode == Now.B2);
+	}
+	TestTrue(TEXT("one slot order made the lookup name the wrong twin - the case was exercised"), Exercised > 0);
+	return true;
+}
+
 #endif
