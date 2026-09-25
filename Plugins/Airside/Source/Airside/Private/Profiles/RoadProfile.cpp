@@ -13,17 +13,19 @@ double URoadProfile::ResolvedFilletRadius() const
 	//
 	// SELF-RESOLVING, for a caller that asks once and is not inside a hot loop - see the
 	// other overload for the one that is (issue #190).
-	return ResolvedFilletRadius(UAirsideSettings::ResolveLargestServiceVehicle());
+	// PER TIER since 2026-09-25: this profile's own design vehicle - the rig for the Wide
+	// service road, the largest rigid vehicle otherwise (UAirsideSettings::ResolveTierDesignVehicles).
+	return ResolvedFilletRadius(UAirsideSettings::ResolveRoadDesignVehicles().For(this));
 }
 
-double URoadProfile::ResolvedFilletRadius(const FChassis& LargestServiceVehicle) const
+double URoadProfile::ResolvedFilletRadius(const FChassis& DesignVehicle) const
 {
 	if (PreferredFilletRadius > 0.0)
 	{
 		return PreferredFilletRadius;
 	}
 
-	return LargestServiceVehicle.TightestFollowableRadius() * JunctionScalingMargin;
+	return DesignVehicle.TightestFollowableRadius() * JunctionScalingMargin;
 }
 
 double URoadProfile::GetTotalWidth() const

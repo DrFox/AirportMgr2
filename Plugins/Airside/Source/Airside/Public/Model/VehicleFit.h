@@ -86,4 +86,29 @@ namespace VehicleFit
 	 * about a hitch - the second evaluator the one-stepper rule exists to prevent.
 	 */
 	AIRSIDE_API VehicleSweep::FBody BodyOf(const FVehicle& Vehicle);
+
+	/**
+	 * The NeededRadius to hand UTurnGeom::Balloon for a dead end whose lanes end at InEnd and
+	 * OutEnd, so that Vehicle is carried round it. A rigid vehicle: its lock, as every balloon
+	 * was sized. A TOW: the smallest radius from its lock up (3% steps, the balloon's own) at
+	 * which VehicleSweep::Trace carries the whole chain round the balloon without folding, times
+	 * TowBalloonMargin.
+	 *
+	 * WHY NOT THE LOCK FOR A TOW TOO: measured 2026-09-25 for the rig on the Wide tier, a balloon
+	 * sized at its 576 uu lock folds the 10.3 m trailer (Trace and the agent agree: folds at 550,
+	 * holds at 600). Its lock is the cab's limit, and the trailer's limit is further out. And the
+	 * router cannot catch it per edge: a balloon is six pieces and the fold builds over the loop,
+	 * while VehicleFit judges one edge at a time.
+	 * ENFORCED BY: Airside.Build.DesignVehicle.WideDeadEndAdmitsRig (the rig driven round a Wide
+	 * dead end by an agent does not fold)
+	 */
+	AIRSIDE_API double BalloonRadiusFor(const FVehicle& Vehicle, const FVector2D& InEnd, const FVector2D& OutEnd,
+		const FVector2D& Axis);
+
+	/**
+	 * Headroom on a tow's traced balloon radius. 1.1, WHY: the Trace behind BalloonRadiusFor leads
+	 * in DEAD STRAIGHT; a rig arriving at a stem off a T junction 30 m back still carries some
+	 * hitch angle into the loop, and the traced threshold is where the fold just fails to happen.
+	 */
+	constexpr double TowBalloonMargin = 1.1;
 }

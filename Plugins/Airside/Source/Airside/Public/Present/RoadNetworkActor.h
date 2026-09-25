@@ -1002,6 +1002,12 @@ private:
 	 *  keeps the garbage collector tracing these) has no fixed-array support for TObjectPtr. */
 	UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInterface>> ResolvedRunwayMaterialsCache;
 
+	/**
+	 * UAirsideSettings::ResolveTierDesignVehicles, cached with the materials above. Not a
+	 * UPROPERTY: TObjectKey is weak, so nothing here needs the collector to trace it.
+	 */
+	TMap<TObjectKey<URoadProfile>, FVehicle> ResolvedTierDesignVehiclesCache;
+
 	/** Resolves SurfaceMaterial/ApronMaterial/RubberMaterial/GhostMaterial/the three runway
 	 *  materials into the cache above if, and only if, bResolvedContentDirty - see the
 	 *  cache's own comment. Called from MakeSurfaceSettings, which reads the cache after. */

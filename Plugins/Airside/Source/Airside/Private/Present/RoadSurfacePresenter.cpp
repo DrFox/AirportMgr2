@@ -520,7 +520,7 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 	// every node it visits; without this, that ran UAirsideSettings::ResolveLargestServiceVehicle
 	// fresh each time, on every Geometry rebuild a drag frame produces as well as every Topology
 	// one.
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Network, 12, &Settings.LargestServiceVehicle);
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Network, 12, &Settings.DesignVehicles);
 
 	// TOPOLOGY ONLY, PAST HERE (issue #165). A Geometry change - a MoveNode or
 	// MoveApronCorner drag frame - moved positions and nothing else, so the graph's SHAPE is
@@ -536,12 +536,16 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 		// Anchor lead-ins go second and must: they join stands to guidelines that only exist
 		// once the line above has run, and both are swept and rebuilt together. Both take the
 		// SAME resolved vehicle SolveAll just used, rather than resolving their own (#190).
-		FRoadGuidelineBuilder::Build(Network, Solved, Settings.LargestServiceVehicle);
+		FRoadGuidelineBuilder::Build(Network, Solved, Settings.DesignVehicles);
 		//
 		// THE SERVICE RADIUS COMES DOWN FROM THE LEVEL - see ARoadNetworkActor::ServiceLinkRadius.
 		// The aircraft cap keeps FAnchorLink's own default beside it, deliberately: one is
 		// per-airport gameplay tuning and the other is a fact about a painted line.
-		FAnchorLink::Build(Network, Settings.LargestServiceVehicle, FAnchorLink::DefaultMaxLeadIn,
+		// THE DEFAULT, NOT PER TIER: a stand or depot link is driven by the rigid trucks that
+		// service stands and live in depots. The rig has no stand or depot to go to yet (spec
+		// §"Out of this step", step 3); sizing every link's lane radius for it would widen every
+		// yard approach for a vehicle that never uses one.
+		FAnchorLink::Build(Network, Settings.DesignVehicles.Default, FAnchorLink::DefaultMaxLeadIn,
 			Settings.ServiceLinkRadius);
 	}
 

@@ -6,6 +6,7 @@
 #include "Engine/DeveloperSettings.h"
 #include "Model/RoadEntity.h"
 #include "Model/Vehicle.h"
+#include "Profiles/RoadDesignVehicles.h"
 #include "AirsideSettings.generated.h"
 
 class UAirsideContent;
@@ -191,6 +192,29 @@ public:
 	 * the wheelbase, and nothing that sizes concrete has any use for a climb rate.
 	 */
 	static FChassis ResolveLargestServiceVehicle();
+
+	/**
+	 * THE ONE PLACE a service-road width tier names its design vehicle (user ruling 2026-09-25,
+	 * see FRoadDesignVehicles): the Wide tier - ServiceRoadProfiles[WideServiceTier] - is
+	 * designed for the articulated rig (ResolveRigVehicle), and every other tier is left to the
+	 * default, the largest rigid service vehicle. Only the profiles that DIFFER from that default
+	 * are named. Reads the content set, so a caller in a rebuild caches it (ARoadNetworkActor's
+	 * resolved-content cache) rather than calling it per rebuild.
+	 * ENFORCED BY: Airside.Build.DesignVehicle.WideDeadEndAdmitsRig and its siblings
+	 */
+	static TMap<TObjectKey<URoadProfile>, FVehicle> ResolveTierDesignVehicles();
+
+	/**
+	 * ResolveLargestServiceVehicle as the default, with ResolveTierDesignVehicles' exceptions:
+	 * what a caller that asks once (a profile's own ResolvedFilletRadius, a test) is handed.
+	 */
+	static FRoadDesignVehicles ResolveRoadDesignVehicles();
+
+	/**
+	 * The Wide service-road tier's index in UAirsideContent::ServiceRoadProfiles, which is
+	 * authored narrow first: Narrow 0, Standard 1, Wide 2. Named, not typed at the call site.
+	 */
+	static constexpr int32 WideServiceTier = 2;
 
 	/**
 	 * How many times ResolveLargestServiceVehicle has actually run, for issue #190's test

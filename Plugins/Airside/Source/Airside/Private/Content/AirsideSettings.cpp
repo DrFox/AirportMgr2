@@ -6,6 +6,7 @@
 #include "Materials/MaterialParameterCollection.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
+#include "Profiles/RoadProfile.h"
 
 // ONE CONSTANT PER ARTICULATED VEHICLE: the code its Resolve*Vehicle stamps and the key
 // ResolveVehicleViewFor picks its look by. Two string literals would be two sources of truth,
@@ -110,6 +111,34 @@ FChassis UAirsideSettings::ResolveLargestServiceVehicle()
 	// function gains the comparison and every service road corner widens on the next rebuild,
 	// with no other site to find.
 	return ResolveDefaultVehicle().Chassis;
+}
+
+TMap<TObjectKey<URoadProfile>, FVehicle> UAirsideSettings::ResolveTierDesignVehicles()
+{
+	TMap<TObjectKey<URoadProfile>, FVehicle> Out;
+	const UAirsideContent* Content = GetContent();
+	// NO WIDE TIER, NO EXCEPTION: a content set with fewer tiers than Wide's index has nothing
+	// designed for the rig, and every road stays sized for the default - never the narrowest
+	// tier promoted to the rig's, which would oversize the one road a small set lays.
+	if (Content == nullptr || !Content->ServiceRoadProfiles.IsValidIndex(WideServiceTier))
+	{
+		return Out;
+	}
+	if (const URoadProfile* Wide = Content->ServiceRoadProfiles[WideServiceTier].LoadSynchronous())
+	{
+		// THE RIG ON WIDE (user ruling 2026-09-25): its lock radius, 370 / sin 40 = 576 uu against
+		// the bowser's 510, is what the Wide tier's corners and dead ends are laid for, so the
+		// rig can turn at a Wide dead end and nowhere narrower.
+		Out.Add(TObjectKey<URoadProfile>(Wide), ResolveRigVehicle());
+	}
+	return Out;
+}
+
+FRoadDesignVehicles UAirsideSettings::ResolveRoadDesignVehicles()
+{
+	FRoadDesignVehicles Out(ResolveLargestServiceVehicle());
+	Out.PerProfile = ResolveTierDesignVehicles();
+	return Out;
 }
 
 FVehicle UAirsideSettings::ResolveRigVehicle()

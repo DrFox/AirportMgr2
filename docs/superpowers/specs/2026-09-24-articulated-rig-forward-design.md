@@ -149,6 +149,7 @@ built level and its tests:**
   near-side turn to keep the cut inside its own lane? Either changes gating or steering
   behaviour outside this step's scope.
 - **The rig is refused at every dead-end U-turn, and this is a sizing decision, not a bug.**
+  **(Superseded 2026-09-25 by the per-tier design vehicle note below: Wide dead ends turn it.)**
   `UTurnGeom::Balloon`'s dead-end balloons are sized off
   `UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius()` - the bowser,
   510 uu (5.1 m) forwards (`Chassis.h:406`'s own comment: "For the 6.2 m bowser
@@ -192,6 +193,32 @@ tows drive the course at once, continuously:**
 - **Known gap, measured not fixed:** claims do not reserve the oncoming lane, and the two
   vehicles' bodies do overlap - see `OneLoopHeadless`'s overlap lines for the worst figure and
   where. No claim logic was added.
+
+**REVISED 2026-09-25 ("per-tier design vehicle", user ruling) - turning loops are sized per
+width tier, which closes the dead-end sizing question above:**
+
+- **Each service-road width tier names its design vehicle:** Wide = the articulated rig,
+  Narrow and Standard = the bowser (unchanged). Decided in ONE place,
+  `UAirsideSettings::ResolveTierDesignVehicles` (Wide is `ServiceRoadProfiles[WideServiceTier]`),
+  carried per rebuild as `FRoadDesignVehicles` (`Profiles/RoadDesignVehicles.h`) in place of
+  the one `FChassis` the solver and builder took (issue #190's resolve-once shape kept).
+- **Moved to per tier:** junction fillets (`URoadProfile::ResolvedFilletRadius`, per arm in
+  `FRoadNetworkSolver`), dead-end balloons (`FRoadGuidelineBuilder`), and the builder's
+  corner-shortfall warning (the less demanding of the two arms' design vehicles, as the corner
+  fillet is the smaller of the two arms'). **Stayed the bowser:** stand and depot links
+  (`FAnchorLink`, `PoseSetbackFor`) and stand layout (`EntityDefinition`) - they are driven by
+  the rigid trucks that service stands and live in depots; the rig has none yet (step 3).
+  Taxiways and runways are unaffected (authored fillets; not service tiers).
+- **Measured, not assumed: the rig's lock is not enough for a dead end.** A balloon sized at
+  the rig's 576 uu lock was ADMITTED by the router and FOLDED the trailer on the agent - the
+  lock is the cab's limit, and `VehicleFit` judges the balloon one piece at a time while the
+  fold builds over the loop. `VehicleSweep::Trace` and the agent agree: folds at 550, holds at
+  600. So a tow's balloon is sized by its chain: `VehicleFit::BalloonRadiusFor` traces the tow
+  round the balloon it would lay and takes the smallest radius that holds, times
+  `TowBalloonMargin` (1.1, for the hitch angle a rig carries in off a junction). Rigid
+  vehicles keep the bare lock.
+- **The course:** the rig now drives the Wide dead end's U-turn; the Narrow and Standard stems
+  are bypassed (look-ahead) with their U-turns still refused on the lock-radius reason.
 
 ## 4. REVISED 2026-09-24: the tow is a CHAIN, and the utility + fuel trailer drives too
 
@@ -254,10 +281,6 @@ across both lanes (a known gap from the road-lanes spec).
 - **The width-step builder fix.** Blend the lane offset over a transition length in the
   guideline builder so a Narrow -> Wide straight-through node stops producing a `MinRadius`-0
   jog. Today it is pinned as a deliberate course feature (§3) rather than routed round.
-- **Dead-end sizing for the rig.** The U-turn balloon is sized off the bowser's 5.1 m lock;
-  the rig needs 5.8 m and is refused at every dead end on this course (§3). Needs a user
-  decision: widen every balloon, add a second rig-sized balloon class, or accept the rig
-  never reverses out of a dead end here.
 - **The near-side overrun.** The rig's trailer cuts 2.0-3.4 m past the inner pavement edge on
   near-side turns while its swept width still fits (§3, measured and bounded, not fixed).
   Needs a decision: judge `VehicleFit` per side, or have the agent swing wide.

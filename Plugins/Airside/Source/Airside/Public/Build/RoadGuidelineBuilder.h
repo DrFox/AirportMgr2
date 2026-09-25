@@ -5,7 +5,7 @@
 #include "Model/RoadHandles.h"
 
 class URoadNetwork;
-struct FChassis;
+struct FRoadDesignVehicles;
 
 /**
  * Derives the guideline graph from a solved surface network.
@@ -26,7 +26,9 @@ struct AIRSIDE_API FRoadGuidelineBuilder
 	 *
 	 * Edges with bDerived == false are left untouched, along with the nodes they need.
 	 *
-	 * LargestServiceVehicle IS REQUIRED, not resolved in here - issue #190. Every turn path
+	 * DesignVehicles IS REQUIRED, not resolved in here - issue #190. Each profile's design
+	 * vehicle (FRoadDesignVehicles - per width tier since 2026-09-25) sizes that road's dead-end
+	 * balloon and the corner warning below. Every turn path
 	 * this builder lays warns against the same figure (a right-angle corner's takeable
 	 * radius), once per ordered arm pair, and used to call
 	 * UAirsideSettings::ResolveLargestServiceVehicle() fresh each time. Content/ is resolved
@@ -35,5 +37,5 @@ struct AIRSIDE_API FRoadGuidelineBuilder
 	 * (Check-Architecture's Build->Content rule).
 	 */
 	static void Build(URoadNetwork& Network, const FRoadSolveResult& Solved,
-		const FChassis& LargestServiceVehicle);
+		const FRoadDesignVehicles& DesignVehicles);
 };

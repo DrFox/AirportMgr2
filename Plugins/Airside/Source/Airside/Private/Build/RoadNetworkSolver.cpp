@@ -4,6 +4,7 @@
 
 #include "Model/Chassis.h"
 #include "Model/RoadNetwork.h"
+#include "Profiles/RoadDesignVehicles.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/JunctionSolver.h"
 #include "Solve/RoadGeom.h"
@@ -41,7 +42,7 @@ namespace
 	 */
 	bool BuildNodeInput(const URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
 		FJunctionInput& OutInput, TArray<FRoadSegmentId>& OutArmSegments,
-		const FChassis* LargestServiceVehicle)
+		const FRoadDesignVehicles* DesignVehicles)
 	{
 		const TArray<FRoadNode>& Nodes = Network.GetNodes();
 		if (!Nodes.IsValidIndex(NodeIndex))
@@ -73,10 +74,13 @@ namespace
 			Arm.HalfWidthRight = Profile ? Profile->GetHalfWidthRight() : 0.0;
 			// ISSUE #190: the passed-down vehicle when the caller has one, the profile's own
 			// self-resolving overload otherwise - see BuildNodeInput's caller-supplied
-			// LargestServiceVehicle and URoadProfile::ResolvedFilletRadius's two overloads.
+			// DesignVehicles and URoadProfile::ResolvedFilletRadius's two overloads.
+			// PER ARM, PER TIER (2026-09-25): each arm's fillet from its own profile's design
+			// vehicle, so a Wide road's corner is laid for the rig; a corner between two arms takes
+			// the smaller of their fillets (FJunctionSolver), so it is the rig's only when both are.
 			Arm.FilletRadius = Profile
-				? (LargestServiceVehicle ? Profile->ResolvedFilletRadius(*LargestServiceVehicle)
-				                          : Profile->ResolvedFilletRadius())
+				? (DesignVehicles ? Profile->ResolvedFilletRadius(DesignVehicles->For(Profile))
+				                  : Profile->ResolvedFilletRadius())
 				: 0.0;
 			// A runway passes through: never trimmed, never filleted. See FJunctionArm.
 			Arm.bContinuous    = Profile ? Profile->bContinuousThroughJunctions : false;
@@ -123,11 +127,11 @@ namespace
 }
 
 double FRoadNetworkSolver::ZeroRadiusCut(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode,
-	const FChassis* LargestServiceVehicle)
+	const FRoadDesignVehicles* DesignVehicles)
 {
 	FJunctionInput Input;
 	TArray<FRoadSegmentId> ArmSegments;
-	if (!BuildNodeInput(Network, AtNode.Index, 4, Input, ArmSegments, LargestServiceVehicle) || Input.Arms.Num() == 1)
+	if (!BuildNodeInput(Network, AtNode.Index, 4, Input, ArmSegments, DesignVehicles) || Input.Arms.Num() == 1)
 	{
 		return 0.0;   // no node, or a dead end - whose cap shrinks rather than holding a floor
 	}
@@ -146,7 +150,7 @@ double FRoadNetworkSolver::ZeroRadiusCut(const URoadNetwork& Network, FRoadSegme
 }
 
 bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIndex,
-	int32 ArcSegments, FRoadNodeCuts& Out, const FChassis* LargestServiceVehicle)
+	int32 ArcSegments, FRoadNodeCuts& Out, const FRoadDesignVehicles* DesignVehicles)
 {
 	const TArray<FRoadNode>& Nodes = Network.GetNodes();
 	if (!Nodes.IsValidIndex(NodeIndex))
@@ -167,7 +171,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 	// FJunctionSolver requires. Do not re-sort here.
 	Out.Input = FJunctionInput();
 	Out.ArmSegments.Reset();
-	if (!BuildNodeInput(Network, NodeIndex, ArcSegments, Out.Input, Out.ArmSegments, LargestServiceVehicle))
+	if (!BuildNodeInput(Network, NodeIndex, ArcSegments, Out.Input, Out.ArmSegments, DesignVehicles))
 	{
 		return false;
 	}
@@ -211,7 +215,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 		// when the segment is short (FJunctionArm::MaxCutDistance). Only a corner has a floor.
 		const double MinHere = Out.Input.Arms.Num() == 1 ? 0.0 : ZeroHere.Arms[ArmIndex].CutDistance;
 		const double MinFar = Segment
-			? ZeroRadiusCut(Network, SegmentId, Network.GetOtherEnd(SegmentId, NodeId), LargestServiceVehicle)
+			? ZeroRadiusCut(Network, SegmentId, Network.GetOtherEnd(SegmentId, NodeId), DesignVehicles)
 			: 0.0;
 		const double Slack = Length - MinHere - MinFar;
 		if (Slack < 0.0)
@@ -322,7 +326,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 int32 FRoadNetworkSolver::NodeClaimsCallCountForTest = 0;
 
 bool FRoadNetworkSolver::NodeClaims(const URoadNetwork& Network, FRoadNodeId Node, const FVector2D& Point, double Factor,
-	const FChassis* LargestServiceVehicle)
+	const FRoadDesignVehicles* DesignVehicles)
 {
 	// COUNTED BEFORE ANY REFUSAL BELOW: this is "did a solve run", not "did it succeed" - see
 	// the counter's own comment. FRoadNodeSnapRule's cheap reject is meant to stop this
@@ -341,7 +345,7 @@ bool FRoadNetworkSolver::NodeClaims(const URoadNetwork& Network, FRoadNodeId Nod
 	}
 
 	FRoadNodeCuts Cuts;
-	if (!SolveNodeCuts(Network, Node.Index, 4, Cuts, LargestServiceVehicle) || !Cuts.Result.bValid)
+	if (!SolveNodeCuts(Network, Node.Index, 4, Cuts, DesignVehicles) || !Cuts.Result.bValid)
 	{
 		return false;
 	}
@@ -392,10 +396,10 @@ bool FRoadNetworkSolver::NodeClaims(const URoadNetwork& Network, FRoadNodeId Nod
 }
 
 double FRoadNetworkSolver::ArmCutDistance(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode,
-	const FChassis* LargestServiceVehicle)
+	const FRoadDesignVehicles* DesignVehicles)
 {
 	FRoadNodeCuts Cuts;
-	if (!SolveNodeCuts(Network, AtNode.Index, 4, Cuts, LargestServiceVehicle) || !Cuts.Result.bValid)
+	if (!SolveNodeCuts(Network, AtNode.Index, 4, Cuts, DesignVehicles) || !Cuts.Result.bValid)
 	{
 		return 0.0;
 	}
@@ -404,10 +408,10 @@ double FRoadNetworkSolver::ArmCutDistance(const URoadNetwork& Network, FRoadSegm
 }
 
 double FRoadNetworkSolver::NodeReach(const URoadNetwork& Network, FRoadNodeId Node,
-	int32 ArcSegments, const FChassis* LargestServiceVehicle)
+	int32 ArcSegments, const FRoadDesignVehicles* DesignVehicles)
 {
 	FRoadNodeCuts Cuts;
-	if (!SolveNodeCuts(Network, Node.Index, ArcSegments, Cuts, LargestServiceVehicle) || !Cuts.Result.bValid)
+	if (!SolveNodeCuts(Network, Node.Index, ArcSegments, Cuts, DesignVehicles) || !Cuts.Result.bValid)
 	{
 		// No arms, or a solve that declined. Either way this node paves nothing, so it
 		// claims nothing - a bare node must not grow a snap radius around itself.
@@ -431,7 +435,7 @@ double FRoadNetworkSolver::NodeReach(const URoadNetwork& Network, FRoadNodeId No
 }
 
 void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
-	FRoadSolveResult& InOutResult, const FChassis* LargestServiceVehicle)
+	FRoadSolveResult& InOutResult, const FRoadDesignVehicles* DesignVehicles)
 {
 	const TArray<FRoadNode>& Nodes = Network.GetNodes();
 	if (!Nodes.IsValidIndex(NodeIndex))
@@ -452,7 +456,7 @@ void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, i
 	// so a tool asking how far this junction reaches gets the answer from the same
 	// code that decides where the pavement actually stops.
 	FRoadNodeCuts Cuts;
-	if (!SolveNodeCuts(Network, NodeIndex, ArcSegments, Cuts, LargestServiceVehicle))
+	if (!SolveNodeCuts(Network, NodeIndex, ArcSegments, Cuts, DesignVehicles))
 	{
 		return;
 	}
@@ -510,7 +514,7 @@ void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, i
 }
 
 FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSegments,
-	const FChassis* LargestServiceVehicle)
+	const FRoadDesignVehicles* DesignVehicles)
 {
 	FRoadSolveResult Out;
 
@@ -521,7 +525,7 @@ FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSe
 	const int32 NodeCount = Network.GetNodes().Num();
 	for (int32 NodeIndex = 0; NodeIndex < NodeCount; ++NodeIndex)
 	{
-		SolveNodeInto(Network, NodeIndex, ArcSegments, Out, LargestServiceVehicle);
+		SolveNodeInto(Network, NodeIndex, ArcSegments, Out, DesignVehicles);
 	}
 
 	return Out;

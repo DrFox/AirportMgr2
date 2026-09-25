@@ -179,7 +179,8 @@ public:
 
 	/**
 	 * The radius a junction on this profile actually turns on: the authored one, or - when
-	 * that is zero - one derived from the largest vehicle admitted.
+	 * that is zero - one derived from this profile's DESIGN VEHICLE: the largest vehicle its
+	 * tier is laid for (UAirsideSettings::ResolveTierDesignVehicles - the rig on Wide).
 	 *
 	 * THE ONLY LEGAL READER OF PreferredFilletRadius. Read the field directly and a service
 	 * road turns on nothing at all.
@@ -202,7 +203,7 @@ public:
 	 * self-resolves, for the many callers (tests, the debug gallery) that ask once and are
 	 * not inside a hot loop.
 	 */
-	double ResolvedFilletRadius(const FChassis& LargestServiceVehicle) const;
+	double ResolvedFilletRadius(const FChassis& DesignVehicle) const;
 
 	/**
 	 * Segments with this profile PASS THROUGH a node rather than ending at it, so they are

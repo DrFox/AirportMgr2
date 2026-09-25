@@ -6,6 +6,8 @@
 #include "Model/Chassis.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/VehicleFit.h"
+#include "Profiles/RoadDesignVehicles.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
@@ -134,7 +136,7 @@ namespace
 }
 
 void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult& Solved,
-	const FChassis& LargestServiceVehicle)
+	const FRoadDesignVehicles& DesignVehicles)
 {
 	// Clear the previous derivation before regenerating, or Build accumulates.
 	//
@@ -568,8 +570,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		// taxiway, or a one-lane road) is skipped: its one line already runs both ways, and a
 		// balloon there would be a change nobody asked for.
 		//
-		// SIZED FOR THE LARGEST SERVICE VEHICLE, the figure the fillets use, and laid over
-		// grass - the balloon reaches ~4x the lock radius past the road end (UTurnGeom.h).
+		// SIZED FOR THE ROAD'S DESIGN VEHICLE, the figure its fillets use - per width tier since
+		// 2026-09-25, so a Wide dead end turns the rig and a Narrow one the bowser, and no dead end
+		// is oversized for a vehicle its tier was never laid for - and laid over grass: the
+		// balloon reaches ~4x the lock radius past the road end (UTurnGeom.h).
 		// ENFORCED BY: Airside.Build.TwoWay.DeadEnd, Airside.Solve.UTurnBalloon
 		if (ArmSegments->Num() == 1)
 		{
@@ -607,8 +611,14 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			const FVector2D OutAt = Network.GetGuidelineNode(*OutEnd)->Position;
 			// Out of the road, past the dead end.
 			const FVector2D Axis = -Network.GetOutgoingTangent(ArmSeg, NodeId).GetSafeNormal();
+			// A TOW'S BALLOON IS SIZED BY ITS CHAIN, a rigid vehicle's by its lock - see
+			// VehicleFit::BalloonRadiusFor, which traces the tow round the balloon it would lay.
+			const FVehicle* DesignTow = DesignVehicles.VehicleFor(Profile);
+			const double BalloonNeeds = DesignTow != nullptr
+				? VehicleFit::BalloonRadiusFor(*DesignTow, InAt, OutAt, Axis)
+				: DesignVehicles.For(Profile).TightestFollowableRadius();
 			const TArray<UTurnGeom::FPiece> Pieces =
-				UTurnGeom::Balloon(InAt, OutAt, Axis, LargestServiceVehicle.TightestFollowableRadius());
+				UTurnGeom::Balloon(InAt, OutAt, Axis, BalloonNeeds);
 			if (Pieces.Num() == 0)
 			{
 				UE_LOG(LogAirside, Warning, TEXT("Dead end at (%.0f,%.0f): no U-turn laid - its lane ends coincide"),
@@ -842,9 +852,18 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// which is worse than a slow corner and much harder to diagnose. What the
 					// player can act on is the segment length, so that is what this names.
 					{
-						// ISSUE #190: LargestServiceVehicle is the caller's, resolved once for
-						// the whole rebuild - see this function's own comment - not re-resolved
-						// per ordered arm pair the way this warning used to.
+						// ISSUE #190: DesignVehicles is the caller's, resolved once for the whole
+						// rebuild - see this function's own comment - not re-resolved per ordered
+						// arm pair the way this warning used to.
+						//
+						// THE LESS DEMANDING OF THE TWO ARMS' DESIGN VEHICLES: the corner's fillet
+						// is the smaller of the arms' (FJunctionSolver), so a Wide road meeting a
+						// Narrow one is laid for the bowser, and warning there against the rig
+						// would name a shortfall nobody designed that corner to meet.
+						const FChassis& FromDesign = DesignVehicles.For(FromProfile);
+						const FChassis& ToDesign = DesignVehicles.For(ToProfile);
+						const FChassis& LargestServiceVehicle =
+							FromDesign.TightestFollowableRadius() <= ToDesign.TightestFollowableRadius() ? FromDesign : ToDesign;
 						const double Needed = LargestServiceVehicle.TightestFollowableRadius();
 						if (Needed > 0.0)
 						{
