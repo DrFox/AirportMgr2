@@ -130,6 +130,13 @@ bool FResolvedContentCachedAcrossRebuildsTest::RunTest(const FString& Parameters
  * (the SetGhostValidity branch of UpdateGhost, called on a cache HIT with bValidityChanged).
  * Both must read ResolvedGhostMaterialCache after RefreshResolvedContentCacheIfDirty(), the same
  * as every other Resolve* in MakeSurfaceSettings, rather than resolving fresh.
+ *
+ * KIND IS Taxiway, NOT ServiceRoad, ON PURPOSE: MakeGhostSurfaceSettings also resolves
+ * Settings.Profile through ResolveProfileFor, and a ServiceRoad ghost's profile comes from
+ * ResolveServiceRoadProfile - a SEPARATE, PRE-EXISTING GetContent() call this issue's two sites
+ * do not own and this test must not blame on them. A Taxiway ghost's profile is ResolveProfile,
+ * this actor's own on-demand fallback, which never calls GetContent - so GetContentCallCountForTest
+ * here measures only the material resolution these two sites are actually responsible for.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FGhostDragDoesNotReresolveContentTest,
@@ -156,7 +163,7 @@ bool FGhostDragDoesNotReresolveContentTest::RunTest(const FString& Parameters)
 		FRoadSnapResult Snap;
 		Snap.Kind = ERoadSnapKind::Free;
 		Snap.Position = FVector2D(2000.0 + Frame * 100.0, 2000.0);
-		Actor->UpdateGhost(A, Snap, /*bValid*/ true, ERoadKind::ServiceRoad, INDEX_NONE);
+		Actor->UpdateGhost(A, Snap, /*bValid*/ true, ERoadKind::Taxiway, INDEX_NONE);
 	}
 	TestEqual(TEXT("20 frames of a moving ghost make zero GetContent calls - the resolved cache held"),
 		UAirsideSettings::GetContentCallCountForTest, 0);
@@ -172,7 +179,7 @@ bool FGhostDragDoesNotReresolveContentTest::RunTest(const FString& Parameters)
 	for (int32 Frame = 0; Frame < 20; ++Frame)
 	{
 		bValid = !bValid;
-		Actor->UpdateGhost(A, Held, bValid, ERoadKind::ServiceRoad, INDEX_NONE);
+		Actor->UpdateGhost(A, Held, bValid, ERoadKind::Taxiway, INDEX_NONE);
 	}
 	TestEqual(TEXT("20 validity flips over a held ghost make zero GetContent calls - the resolved cache held"),
 		UAirsideSettings::GetContentCallCountForTest, 0);
