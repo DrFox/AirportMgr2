@@ -189,6 +189,9 @@ static const TCHAR* const MeasuredTypes[] = {
 	// Its 38.05 m span is over Code C's 36 m by 2.05, so this row goes red if a re-export trims
 	// the wing into C - and until it, Code D's row had no modelled aeroplane to be checked by.
 	TEXT("/Game/Entities/DA_Aircraft_Plane13"),
+	// THE PHENOM 300 IS THE FIRST MEASURED CODE B JET. Its 15.91 m span is over Code A's 15 m
+	// by 0.91 across the winglets, so this row goes red if a re-export trims them into A.
+	TEXT("/Game/Entities/DA_Aircraft_Plane14"),
 };
 
 /**
@@ -440,6 +443,9 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		  TEXT("a 319 t A350-1000 needs the tug the 777 beside it does") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane13"), EPushbackNeed::VehicleTug,
 		  TEXT("a 124 t 757-300 needs the tug the 737 below it and the A350 above it both do") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane14"), EPushbackNeed::VehicleTug,
+		  TEXT("a Phenom 300 has no thrust reversers, so unlike the turboprops it is towed off "
+			   "a stand") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane8"), EPushbackNeed::VehicleTug,
 		  TEXT("a 575 t A380 is the end of the progression - nothing heavier flies - and the "
 			   "row exists for the reason plane6's does: authored VehicleTug and default "

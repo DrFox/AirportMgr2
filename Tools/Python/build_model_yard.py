@@ -61,6 +61,10 @@ ROWS = [
         # for and what the Code letter turns on. Length agrees (14.00 against 15.77), so
         # nothing is traded away by choosing. These two are the fleet's only Code B pair and
         # standing them together is most of the reason for placing this one at all.
+        # THE PHENOM BETWEEN THE CARAVAN AND THE KING AIR, ON SPAN: 15.91 m against 15.88 and
+        # 17.69 - three centimetres past the Caravan. The only jet among the propellers, and
+        # longer than either neighbour (15.64 m), which the row makes plain.
+        ("/Game/Aircraft/Plane14/SK_Plane14", "Plane14 (Phenom 300)"),
         ("/Game/Aircraft/Plane5/SK_Plane5", "Plane5 (King Air 350i)"),
         ("/Game/Aircraft/Plane2/SK_Plane2", "Plane2 (Twin Otter)"),
         ("/Game/Aircraft/Plane3/SK_Plane3", "Plane3 (Dash 8-Q400)"),
@@ -152,8 +156,11 @@ ROW_PITCH_UU = 10000.0
 # 600 m SINCE 2026-09-25, UP FROM 540, FOR plane13. The 757's 38.05 m and its 12 m gap take
 # the row from about 527 m to about 577. Span still binds; its 54.7 m length is inside the
 # 777's, which sets ROW_PITCH_UU.
+#
+# 640 m SINCE 2026-09-25, UP FROM 600, FOR plane14. The Phenom's 15.91 m and its 12 m gap take
+# the row from about 577 m to about 605 - past 600. Span still binds.
 FLOOR_X_M = 300.0
-FLOOR_Y_M = 600.0
+FLOOR_Y_M = 640.0
 
 # THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
 #
