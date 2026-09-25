@@ -840,9 +840,13 @@ bool URoadNetwork::SplitGuidelineEdge(FGuidelineEdgeId Edge, double T, double We
 	// the whole curve's numbers (#288). Mark unmeasured rather than re-measure: re-measuring
 	// needs FRoadGuidelineBuilder::MeasureTurn and the junction pavement polygon the ORIGINAL
 	// numbers were marched against, and this is Model/, which must not depend on Build/ to get
-	// either. A rebuild re-runs MeasureTurn on the new topology and fills them in properly;
-	// until then the halves gate nothing, same as any other unmeasured edge. See the
-	// "PER-HALF FIELDS" comment beside FGuidelineEdge for the full list this mirrors.
+	// either - and a rebuild does not close the gap on its own: it re-derives the turn path
+	// (MeasureTurn fills it in) and then FAnchorLink::Build splits it AGAIN, so a lead-in half
+	// is unmeasured after EVERY rebuild, not just until the next one. The halves stay
+	// unmeasured for as long as the split exists - VehicleFit says nothing for them rather
+	// than guessing; re-measuring them belongs to a Build/ pass after AnchorLink (a
+	// follow-up), not here. See the "PER-HALF FIELDS" comment beside FGuidelineEdge for the
+	// full list this mirrors.
 	const auto MarkUnmeasured = [](FGuidelineEdge& Half)
 	{
 		Half.MinRadius = 0.0;
