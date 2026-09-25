@@ -226,6 +226,10 @@ namespace PlotGesture
 		}
 
 		FAnchor Anchor;
+		Anchor.Road = Road;
+		Anchor.AlongT = AlongT;
+		Anchor.RoadA = RoadA;
+		Anchor.RoadB = RoadB;
 		Anchor.Along = Span / Length;
 
 		// ANCHORED ON THE ROAD'S OWN BAY GRID, measured from the segment's A end. Quantising
@@ -261,25 +265,18 @@ namespace PlotGesture
 		// readouts ask AnchorAt, and this used to answer yes on its own for a zero-length
 		// segment or one whose ends could not be read - drawing a dot the click then refused,
 		// while the bar said "move near a road" (review round 1).
-		FAnchor Unused;
-		if (!AnchorAt(Network, Cursor, Accept, Unused))
+		//
+		// ONE SEARCH, NOT TWO - issue #302. This used to call NearestRoad a second time here
+		// for the segment and T that AnchorAt had just resolved, an O(segments) search paid for
+		// twice on every Idle-stage hover frame; Anchor.Road/AlongT/RoadA/RoadB are that same
+		// search's own answer, carried out on FAnchor rather than thrown away.
+		FAnchor Anchor;
+		if (!AnchorAt(Network, Cursor, Accept, Anchor))
 		{
 			return false;
 		}
 
-		FRoadSegmentId Road;
-		double AlongT = 0.0;
-		FVector2D RoadA = FVector2D::ZeroVector;
-		FVector2D RoadB = FVector2D::ZeroVector;
-		if (!NearestRoad(Network, Cursor, Accept, Road, AlongT)
-			|| !Network.SegmentEnds(Road, RoadA, RoadB))
-		{
-			// Unreachable once AnchorAt has succeeded on the same arguments; honoured anyway,
-			// per CLAUDE.md's out-parameter rule, rather than drawing from unset ends.
-			return false;
-		}
-
-		const FVector2D Span = RoadB - RoadA;
+		const FVector2D Span = Anchor.RoadB - Anchor.RoadA;
 		const double Length = Span.Size();
 		const FVector2D Unit = Span.GetSafeNormal();
 
@@ -288,19 +285,19 @@ namespace PlotGesture
 		// a corner that lands half a road away is the preview disagreeing with the
 		// click, which is the one thing this codebase will not have.
 		const FVector2D Left = RoadGeom::PerpCCW(Unit);
-		const bool bLeft = FVector2D::DotProduct(Cursor - RoadA, Left) >= 0.0;
-		const FVector2D Offset = (bLeft ? Left : -Left) * KerbOffset(Network, Road, bLeft);
+		const bool bLeft = FVector2D::DotProduct(Cursor - Anchor.RoadA, Left) >= 0.0;
+		const FVector2D Offset = (bLeft ? Left : -Left) * KerbOffset(Network, Anchor.Road, bLeft);
 
 		// THE ONE A CLICK WOULD TAKE IS DRAWN DIFFERENTLY. A row of identical dots
 		// says where anchors exist; it does not say which one the cursor has. Pending
 		// is the style every other tool uses for "this is what the click does", and
 		// it double-rings, so the chosen point reads at a glance.
-		const int32 Chosen = AnchorIndexAt(AlongT, Length);
+		const int32 Chosen = AnchorIndexAt(Anchor.AlongT, Length);
 
 		const int32 Count = FMath::FloorToInt(Length / FrontageStepUu);
 		for (int32 I = 0; I <= Count; ++I)
 		{
-			Sink.Marker(RoadA + Unit * AnchorOffset(I) + Offset,
+			Sink.Marker(Anchor.RoadA + Unit * AnchorOffset(I) + Offset,
 				I == Chosen ? EPreviewStyle::Pending : EPreviewStyle::Snap);
 		}
 		return true;

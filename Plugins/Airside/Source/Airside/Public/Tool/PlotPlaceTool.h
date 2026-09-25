@@ -6,9 +6,14 @@
 #include "Solve/PlotYard.h"
 #include "Tool/PlotGesture.h"
 #include "Tool/RoadBuildTool.h"
+#include "Tool/StagedPlotTool.h"
 
 /**
  * How far through placing a plot the gesture is.
+ *
+ * A UENUM FOR THE READER, A PinnedCount() FOR THE MACHINERY: FStagedPlotTool tracks progress
+ * as a single int (issue #302 - see its own comment on why), and GetStage() below is a one-line
+ * cast back to this so every existing caller and test keeps naming the stage it always did.
  *
  * AN ENUM, NOT A STATE OBJECT PER STAGE - and that is a deliberate departure from
  * FOutlineDrawTool, which this tool otherwise resembles. There, the data genuinely DIFFERS
@@ -50,32 +55,35 @@ enum class EPlotStage : uint8
  * THE FOURTH CLICK LOCKS, IT DOES NOT BUILD. The review beat between locking and committing
  * is where the readout's cost and warnings actually get read - see IToolReadoutSink. Build
  * is a widget, so OnCommit is reachable at any moment and every stage but Confirm ignores it.
+ *
+ * A FStagedPlotTool (issue #302): the anchor search, the Remove branch, the cancel step-back,
+ * OnCommit's return-honouring and OnDeactivate are the base's, shared bit-for-bit with
+ * FStandPlotTool rather than copied into it. What is genuinely this tool's own - the free
+ * quad's shape, the module footprints, the kit facts - lives in the hooks below.
  */
-class AIRSIDE_API FPlotPlaceTool : public IBuildTool
+class AIRSIDE_API FPlotPlaceTool : public FStagedPlotTool
 {
 public:
-	explicit FPlotPlaceTool(EPlaceableEntity InKind) : Kind(InKind) {}
+	explicit FPlotPlaceTool(EPlaceableEntity InKind) : FStagedPlotTool(4), Kind(InKind) {}
 
 	virtual FText GetDisplayName() const override;
-
-	virtual void OnClick(const FToolContext& Context) override;
-	virtual void OnCancel(const FToolContext& Context) override;
-	virtual void OnCommit(const FToolContext& Context) override;
-	virtual void OnDeactivate(const FToolContext& Context) override;
-	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const override;
-	virtual void BuildReadout(const FToolContext& Context, IToolReadoutSink& Sink) const override;
-	virtual bool IsIdle() const override { return Stage == EPlotStage::Idle; }
 
 	/**
 	 * THE BACK CORNERS ONLY - see the implementation for why the anchor and the frontage are
 	 * left alone. This is what tells the driver's guide chain which point is moving and which
 	 * edge it grew from; the tool resolves nothing itself and remembers no frame.
+	 *
+	 * NOT A FStagedPlotTool HOOK: FStandPlotTool answers no guide at all (its first two clicks
+	 * are already grid-constrained the same way this tool's are - see its header), so there is
+	 * nothing here for the base to share and this stays IBuildTool's own virtual, overridden
+	 * only where a tool actually has an answer.
 	 */
 	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
 		FGuideAnchor& Out) const override;
 
-	/** For tests. */
-	EPlotStage GetStage() const { return Stage; }
+	/** For tests: the stage FPlotPlaceTool's own callers and tests have always named, cast
+	 *  from FStagedPlotTool::PinnedCount(). */
+	EPlotStage GetStage() const { return static_cast<EPlotStage>(PinnedCount()); }
 
 	/**
 	 * What the depot STARTS with. No longer what the plot can hold.
@@ -85,9 +93,6 @@ public:
 	 * only which bays are lit the moment the depot is built.
 	 */
 	void SetModules(const TArray<EDepotModule>& InModules) { Modules = InModules; }
-
-	/** How many corners the player has placed, 0 to 4. What the readout reports as "N/4". */
-	int32 PinnedCount() const;
 
 	/**
 	 * How many times ReservationFor has actually run the packer, rather than been asked to.
@@ -107,29 +112,51 @@ public:
 	 * this is what a test compares the presenter's own specs against to prove the two really
 	 * are one table read twice, not two tables that happen to agree today.
 	 */
-	TArray<PlotYard::FKitSpec> GetSpecsForTest() const { return Memo.Specs; }
+	TArray<PlotYard::FKitSpec> GetSpecsForTest() const { return Specs; }
 
 	/**
 	 * The plot as it stands THIS frame: pinned corners as placed, the moving one taken from
 	 * the cursor, in the outline's own winding with the frontage as edge 0->1.
 	 *
-	 * ONE DERIVATION, EVERY CALLER. The preview draws it, the readout measures it and
-	 * OnCommit builds from it, so the ghost, the facts and the built thing cannot describe
-	 * three different shapes. Fewer than two pinned corners gives fewer than four out.
+	 * A THIN NAME FOR Shape() (issue #302's hook), kept public because every test in this
+	 * module calls Tool.Quad(...) by name. ONE DERIVATION, EVERY CALLER - the preview draws
+	 * it, the readout measures it and OnCommit builds from it, so the ghost, the facts and the
+	 * built thing cannot describe three different shapes. Fewer than two pinned corners gives
+	 * fewer than four out.
 	 */
-	void Quad(const FToolContext& Context, TArray<FVector2D>& OutQuad) const;
+	void Quad(const FToolContext& Context, TArray<FVector2D>& OutQuad) const { Shape(Context, OutQuad); }
 
-private:
+protected:
+	virtual bool Filter(const URoadNetwork& Network, FRoadSegmentId Id) const override
+	{
+		return PlotGesture::IsServiceRoad(Network, Id);
+	}
+
 	/**
-	 * The depot under the cursor for a Remove gesture, or INDEX_NONE.
-	 *
 	 * DEPOTS ONLY: this is the depot tool, and Remove lit on it removes depots. A stand under
 	 * the cursor is the stand tool's to remove, where the player can see it is one. A depot is
 	 * a plotted entity, OR a fuel-role entity with no outline - the format depots were placed
 	 * in before plots, still saved in M_Starter on 2026-09-22 and otherwise unremovable.
+	 *
+	 * KIND, NOT OUTLINE: IsDepot() alone is enough now that a stand can be plotted too - the
+	 * old `IsPlotted() || PoseRole == Fuel` would have picked up a drawn stand here as well.
 	 */
-	static int32 PlotUnder(const FToolContext& Context);
+	virtual bool IsMine(const FEntityInstance& Entity) const override { return Entity.IsDepot(); }
 
+	virtual FString RemoveLabel() const override { return TEXT("remove fuel depot"); }
+	virtual FString RemoveWarning() const override { return TEXT("Click a fuel depot to remove it"); }
+	virtual FString RoadNoun() const override { return TEXT("a service road"); }
+	virtual FString PointsFactLabel() const override { return TEXT("Plot Points"); }
+
+	virtual void Shape(const FToolContext& Context, TArray<FVector2D>& OutShape) const override;
+	virtual bool CanCloseShape(TConstArrayView<FVector2D> Shown) const override;
+	virtual int32 Place(const FToolContext& Context, const TArray<FVector2D>& Outline) const override;
+	virtual void Describe(const FToolContext& Context, TConstArrayView<FVector2D> Shown,
+		IToolPreviewSink& Sink) const override;
+	virtual void DescribeReadout(const FToolContext& Context, TConstArrayView<FVector2D> Shown,
+		IToolReadoutSink& Sink) const override;
+
+private:
 	/**
 	 * What this plot would hold, solved by the same code the presenter runs.
 	 *
@@ -150,36 +177,26 @@ private:
 	 * of it: a hover frame paid for the packer twice and the spec table four times, and a
 	 * frame in Confirm stage paid for both though nothing had moved.
 	 *
-	 * MUTABLE, AND KEYED RATHER THAN CLEARED PER FRAME, because nothing here is told when a
-	 * frame starts: PR #199 gives BuildPreview and BuildReadout the same FToolContext in the
-	 * game driver, but the editor mode's Tick and BuildPreview calls are NOT guaranteed the
-	 * same cursor (URoadBuildEditorTool::OnUpdateHover and DrawPersistentState build theirs
-	 * separately), and CollectToolReadout runs BEFORE Tick in ARoadBuildController::PlayerTick
-	 * so a memo written only in Tick would hand BuildReadout last frame's shape. Comparing the
-	 * outline itself sidesteps both: whichever caller asks first with a given shape pays for
-	 * the solve, and every other caller - that frame, the next, or from the other driver -
-	 * reads the same answer until the shape actually changes.
-	 *
-	 * THE KIT SPECS ARE RESOLVED HERE TOO, once, because they never depended on the outline in
-	 * the first place - DepotKitSpecs walks EDepotModule, not the quad - so refetching them
-	 * alongside the packer on every outline change (or once, lazily, for an outline that never
-	 * completes - see ReservationFor) is what "once per solve, not per caller" means for a
-	 * value nothing here invalidates.
+	 * KEYED BY THE OUTLINE THROUGH THE BASE'S TOutlineMemo (issue #302), with Layout as this
+	 * payload's own extra key: two plots of the same four corners under two different layouts
+	 * (an authored definition changing under the player's feet) must not answer from a memo
+	 * that only ever looked at geometry.
 	 */
-	struct FReservationMemo
+	struct FReservationPayload
 	{
-		bool bValid = false;
-		FVector2D Outline[4] = { FVector2D::ZeroVector, FVector2D::ZeroVector,
-			FVector2D::ZeroVector, FVector2D::ZeroVector };
 		EPlotLayout Layout = EPlotLayout::Scatter;
-
-		/** Resolved once, lazily: see ReservationFor for why this flag exists apart from bValid. */
-		bool bSpecsResolved = false;
-		TArray<PlotYard::FKitSpec> Specs;
-
 		PlotYard::FReservation Reservation;
 	};
-	mutable FReservationMemo Memo;
+	mutable TOutlineMemo<FReservationPayload> Memo;
+
+	/**
+	 * The kit specs, resolved once ever rather than once per outline - DepotKitSpecs walks
+	 * EDepotModule, not the quad, so it owes nothing to the memo above and stays a separate
+	 * cache: BuildReadout lists every kit at zero from the Frontage stage on, before an
+	 * outline has ever been complete enough to key a memo entry at all.
+	 */
+	mutable bool bSpecsResolved = false;
+	mutable TArray<PlotYard::FKitSpec> Specs;
 
 	/** Bumped only on an actual solve - a cache hit must not move it. See GetSolveCountForTest. */
 	mutable int32 SolveCountForTest = 0;
@@ -189,44 +206,4 @@ private:
 	/** One of each is the concept sheet's depot, and the smallest one that actually works. */
 	TArray<EDepotModule> Modules = {
 		EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
-
-	EPlotStage Stage = EPlotStage::Idle;
-
-	/**
-	 * OnCommit's own PlaceEntityInPlot call was refused by the facade, for a shape
-	 * BuildReadout's Committable already agreed could not be placed - issue #182.
-	 *
-	 * A SAFETY NET, not the ordinary path. Committable is computed from the same evaluator
-	 * (see ReservationFor) PlaceEntityInPlot judges the commit against, so a refusal here
-	 * should already have greyed the Build button - the same "earlier, not instead"
-	 * relationship OnClick's own IsSimplePolygon guard has with the facade's. Kept anyway,
-	 * because CLAUDE.md's rule is to honour a mutator's return, not to trust that some other
-	 * check made it unreachable.
-	 *
-	 * CLEARED ON EVERY GESTURE BOUNDARY (a fresh anchor, a cancel, a deactivate) so a stale
-	 * refusal from one plot cannot bleed its warning onto the next.
-	 */
-	bool bLastCommitRefused = false;
-
-	/** Unit vector along the road at the anchor. */
-	FVector2D Along = FVector2D(1.0, 0.0);
-
-	/** Unit vector away from the road, on the side the cursor was when it anchored. */
-	FVector2D Inward = FVector2D(0.0, 1.0);
-
-	/**
-	 * The corners, in the order they are pinned: anchor, far frontage end, far back, near
-	 * back.
-	 *
-	 * Corners[0] IS the anchor - it had a member of its own until the quad landed, and two
-	 * names for one point is how the two come to disagree. It is quantised onto the road's
-	 * own step and stood off the kerb at the first click; see OnClick.
-	 *
-	 * ENTRIES PAST PinnedCount() ARE STALE and must not be read. Quad() rebuilds the moving
-	 * one from the cursor every frame rather than trusting what is here, because drawing a
-	 * stale corner is how a ghost shows the PREVIOUS gesture's geometry - which this tool
-	 * has already done once, with a depth that outlived the gesture that set it.
-	 */
-	FVector2D Corners[4] = { FVector2D::ZeroVector, FVector2D::ZeroVector,
-		FVector2D::ZeroVector, FVector2D::ZeroVector };
 };
