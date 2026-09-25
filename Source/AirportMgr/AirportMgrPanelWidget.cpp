@@ -42,7 +42,12 @@ UPanelWidget* UAirportMgrPanelWidget::EnsureCardRoot(FName CardName, const FAnch
 	UVerticalBox* Column = nullptr;
 	if (WidgetTree->RootWidget == nullptr)
 	{
-		const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null
+		// PanelStyle, not another ResolveStyle() call (issue #309): Initialize sets it before
+		// BuildOnce runs, and EnsureCardRoot is only ever called FROM BuildOnce (or something
+		// it calls), so the resolve two lines above in Initialize has always already happened
+		// by the time this runs - this was a second LoadSynchronous of the same asset for no
+		// reason, not a per-frame cost (EnsureCardRoot runs once, guarded by bBuilt).
+		const UUIStyle* Style = PanelStyle;
 
 		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("PanelRoot"));
 		WidgetTree->RootWidget = Root;

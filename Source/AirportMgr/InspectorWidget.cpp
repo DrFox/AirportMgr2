@@ -160,41 +160,16 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			return;
 		}
 		bAircraft = true;
-		Title = FString::Printf(TEXT("%s  #%d"), *F.TypeName, F.Id);
-		// m/s and knots side by side: the sim's unit and the one a pilot reads.
-		//
-		// MAGNITUDE. FAgentMotion::GroundSpeed became signed on 2026-09-20 so the view could
-		// roll a reversing vehicle's wheels backwards, and a readout is not that view: an
-		// aircraft on a pushback would otherwise report "-1.5 m/s (-3 kt)", which reads as a
-		// fault rather than as a direction. Which way it is going is the Status line's job.
-		const double Shown = FMath::Abs(F.GroundSpeed);
-		// LOCTEXT for the words, FString::Format (not Printf) for the sentence - issue #192.
-		// UE 5.8's FString::Printf format string must be a compile-time literal
-		// (FormatStringSan), so an NSLOCTEXT result cannot be its Fmt argument. Every number is
-		// pre-formatted with the SAME %-specifier as before into its own FString, then dropped
-		// into the translatable template as a plain {n} string substitution, so every digit this
-		// already printed is unchanged - only the words around them can now be translated.
-		const FText EngineState = F.bEngineRunning
-			? NSLOCTEXT("AirportMgr", "InspectorEngineRunning", "running")
-			: NSLOCTEXT("AirportMgr", "InspectorEngineOff", "off");
-		Facts = FString::Format(
-			*NSLOCTEXT("AirportMgr", "InspectorAircraftFacts",
-				"Heading {0}\nSpeed {1} m/s ({2} kt)\nAltitude {3} m\nTo {4}\nEngine {5}").ToString(),
-			{
-				FString::Printf(TEXT("%03.0f"), F.HeadingDegrees),
-				FString::Printf(TEXT("%.1f"), Shown / 100.0),
-				FString::Printf(TEXT("%.0f"), Shown / 100.0 * 1.94384),
-				FString::Printf(TEXT("%.0f"), F.Altitude / 100.0),
-				F.Destination,
-				EngineState.ToString(),
-			});
-		Status = F.Status;
 		bDepartEnabled = F.bCanDepart;
 
 		// THE FUEL LINE, from the layer that knows what fuel is. Reached through the ops
 		// subsystem rather than through Target, because the airport actor is Airside's and
 		// must not carry a pointer to a service it is forbidden to know about - see
 		// FAgentFacts::Fuel, the field this fills and DescribeAgent deliberately leaves empty.
+		//
+		// READ EVERY TICK, NOT GATED: this is the fuel service's own cheap lookup (a
+		// FindByPredicate over active trucks), not the cost FInspectorKey targets below - its
+		// RESULT is one of the key's fields, so it has to run before the key can be compared.
 		if (const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
 		{
 			if (const UFuelService* Fuel = Runtime->GetFuelService())
@@ -202,11 +177,66 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 				F.Fuel = Fuel->DescribeAgent(F.Id);
 			}
 		}
-		if (!F.Fuel.IsEmpty())
+
+		// MAGNITUDE. FAgentMotion::GroundSpeed became signed on 2026-09-20 so the view could
+		// roll a reversing vehicle's wheels backwards, and a readout is not that view: an
+		// aircraft on a pushback would otherwise report "-1.5 m/s (-3 kt)", which reads as a
+		// fault rather than as a direction. Which way it is going is the Status line's job.
+		const double Shown = FMath::Abs(F.GroundSpeed);
+
+		// THE GATE, ONE LEVEL EARLIER THAN LastTitle/LastFacts/LastStatus (issue #309): built
+		// from the FINEST rounding the Printf specifiers below use for each quantity, so two
+		// facts that would compose to an identical sentence never fail this cheaper check first.
+		// See FInspectorKey's own comment for why Phase holds F.Status rather than F.Phase, and
+		// why speed keys on tenths of m/s rather than the coarser whole-knot figure also printed
+		// below (PR #329 review: a change that moves the m/s decimal without moving the rounded
+		// knot integer was composing nothing, leaving the m/s line stale).
+		FInspectorKey Key;
+		Key.Id = F.Id;
+		Key.Phase = F.Status;
+		Key.HeadingRounded = FMath::RoundToInt(F.HeadingDegrees);
+		Key.SpeedTenthsRounded = FMath::RoundToInt(Shown / 100.0 * 10.0);
+		Key.AltitudeRounded = FMath::RoundToInt(F.Altitude / 100.0);
+		Key.Destination = F.Destination;
+		Key.bEngineRunning = F.bEngineRunning;
+		Key.Fuel = F.Fuel;
+
+		if (Key != LastComposedKey)
 		{
-			Facts += FString::Format(
-				*NSLOCTEXT("AirportMgr", "InspectorFuelLine", "\nFuel {0}").ToString(), { F.Fuel });
+			++ComposeCalls;   // See ComposeCountForTest.
+			LastComposedKey = Key;
+
+			LastComposedTitle = FString::Printf(TEXT("%s  #%d"), *F.TypeName, F.Id);
+			// LOCTEXT for the words, FString::Format (not Printf) for the sentence - issue #192.
+			// UE 5.8's FString::Printf format string must be a compile-time literal
+			// (FormatStringSan), so an NSLOCTEXT result cannot be its Fmt argument. Every number is
+			// pre-formatted with the SAME %-specifier as before into its own FString, then dropped
+			// into the translatable template as a plain {n} string substitution, so every digit this
+			// already printed is unchanged - only the words around them can now be translated.
+			const FText EngineState = F.bEngineRunning
+				? NSLOCTEXT("AirportMgr", "InspectorEngineRunning", "running")
+				: NSLOCTEXT("AirportMgr", "InspectorEngineOff", "off");
+			LastComposedFacts = FString::Format(
+				*NSLOCTEXT("AirportMgr", "InspectorAircraftFacts",
+					"Heading {0}\nSpeed {1} m/s ({2} kt)\nAltitude {3} m\nTo {4}\nEngine {5}").ToString(),
+				{
+					FString::Printf(TEXT("%03.0f"), F.HeadingDegrees),
+					FString::Printf(TEXT("%.1f"), Shown / 100.0),
+					FString::Printf(TEXT("%.0f"), Shown / 100.0 * 1.94384),
+					FString::Printf(TEXT("%.0f"), F.Altitude / 100.0),
+					F.Destination,
+					EngineState.ToString(),
+				});
+			if (!F.Fuel.IsEmpty())
+			{
+				LastComposedFacts += FString::Format(
+					*NSLOCTEXT("AirportMgr", "InspectorFuelLine", "\nFuel {0}").ToString(), { F.Fuel });
+			}
+			LastComposedStatus = F.Status;
 		}
+		Title = LastComposedTitle;
+		Facts = LastComposedFacts;
+		Status = LastComposedStatus;
 	}
 	else
 	{

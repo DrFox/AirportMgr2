@@ -105,8 +105,8 @@ protected:
 	 * NAMED DIFFERENTLY FROM UInspectorWidget's OLD FIELD (CachedStyle) ON PURPOSE:
 	 * UToastStackWidget (issue #186, PR #200, in flight alongside this one) independently
 	 * added its OWN CachedStyle for the identical reason - proof the pattern generalises, but
-	 * also a name UHT will not let a subclass shadow. Toast's own field is left alone rather
-	 * than reworked here; a follow-up can point it at this one once #200 lands.
+	 * also a name UHT will not let a subclass shadow. THE FOLLOW-UP THIS COMMENT PROMISED
+	 * LANDED with issue #309: Toast's CachedStyle is gone and TickFeed reads this field now.
 	 */
 	UPROPERTY() TObjectPtr<const UUIStyle> PanelStyle;
 

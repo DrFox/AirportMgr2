@@ -110,10 +110,10 @@ protected:
 private:
 	UPROPERTY() TObjectPtr<UNotificationCentre> Notifications;
 
-	/** Resolved once in BuildOnce, not re-resolved every tick - the pattern UInspectorWidget's
-	 *  CachedStyle already uses. TObjectPtr, not a raw pointer, so the style asset stays a GC
-	 *  root for as long as this widget is reachable. */
-	UPROPERTY() TObjectPtr<const UUIStyle> CachedStyle;
+	// This class's OWN CachedStyle field (issue #186, PR #200) is gone (issue #309): it
+	// duplicated UAirportMgrPanelWidget::PanelStyle - the base class's own comment on PanelStyle
+	// named this exact field as the follow-up that would point it there once #200 landed, and
+	// #200 has been in main since. TickFeed below reads PanelStyle now.
 
 	/** One icon per severity, resolved once in BuildOnce instead of a LoadSynchronous() every
 	 *  tick per visible card - see IconFor. */
@@ -142,7 +142,7 @@ private:
 	UBorder* BuildCard(const UUIStyle& Style, const FNotificationEntry& Entry);
 
 	/** The fade curve, read at construction and again every later tick. Takes the style rather
-	 *  than reading CachedStyle itself, matching ColourFor/BuildCard/SyncCards, all of which are
+	 *  than reading PanelStyle itself, matching ColourFor/BuildCard/SyncCards, all of which are
 	 *  already threaded the style their caller resolved. */
 	float OpacityFor(const UUIStyle& Style, const FNotificationEntry& Entry) const;
 

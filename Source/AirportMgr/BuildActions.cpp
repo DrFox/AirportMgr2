@@ -8,6 +8,8 @@
 
 #define LOCTEXT_NAMESPACE "AirportMgr"
 
+int32 FBuildActionContext::ConstructCalls = 0;
+
 FBuildActionContext::FBuildActionContext(ARoadBuildController& InController)
 	: Controller(InController)
 	// SAME LOOKUP TryRun always did inline (UOpsRuntimeSubsystem::Get(GetWorld())) - moved
@@ -16,6 +18,7 @@ FBuildActionContext::FBuildActionContext(ARoadBuildController& InController)
 	, Runtime(UOpsRuntimeSubsystem::Get(InController.GetWorld()))
 	, Target(InController.GetTarget())
 {
+	++ConstructCalls;   // See ConstructCountForTest.
 }
 
 namespace

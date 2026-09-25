@@ -126,6 +126,11 @@ public:
 	 *  refresh is cheap without a viewport ticking it for real. */
 	void NativeTickForTest(float DeltaTime) { FGeometry G; NativeTick(G, DeltaTime); }
 
+	/** RefreshState's per-entry work, given the controller directly rather than through
+	 *  Controller() - see RefreshStateFor's own comment for why NativeTickForTest alone cannot
+	 *  reach it in FAirsideTestWorld (issue #309). */
+	void RefreshStateForTest(ARoadBuildController& C) { RefreshStateFor(C); }
+
 	/** How many times RefreshClock/RefreshBalance actually called SetText, as opposed to how
 	 *  many times they were asked - issue #187's gate measured directly, the same seam
 	 *  UInspectorWidget's own SetTextCallCountForTest uses. */
@@ -178,6 +183,25 @@ private:
 	void EnsureSlots(const UUIStyle* Style);
 	void BuildButtons(const UUIStyle* Style);
 	void RefreshState();
+
+	/**
+	 * RefreshState's own body, taking the controller Controller() would otherwise have to
+	 * resolve - split out so RefreshStateForTest can drive it directly.
+	 *
+	 * WHY A SPLIT WAS NEEDED (issue #309): FAirsideTestWorld's UWorld::CreateWorld never calls
+	 * UWorld::InitializeActorsForPlay, so UWorld::AreActorsInitialized() stays false forever and
+	 * AActor::PostActorConstruction never calls PostInitializeComponents on anything spawned into
+	 * it - not just controllers. AController::PostInitializeComponents is the call that reaches
+	 * UWorld::AddController (verified against the engine source, Actor.cpp/Controller.cpp), so a
+	 * controller spawned into this fixture never joins PlayerControllerList, and Controller()'s
+	 * GetFirstPlayerController() fallback - the mechanism FBarCachesStyleAcrossTicksTest's own
+	 * comment describes and relies on - returns null in every test that uses it, including that
+	 * one (confirmed with a temporary diagnostic UE_LOG, since removed). That test's assertion
+	 * (zero ResolveStyle calls) happens to hold either way, so it passed anyway; a construct-COUNT
+	 * assertion does not have that luxury, since RefreshState() returning early also reads as
+	 * "zero constructions" - the wrong reason for the right number.
+	 */
+	void RefreshStateFor(ARoadBuildController& C);
 	void RefreshClock();
 
 	/** The balance, and the landing-fee multiplier beside it. Called from the same tick. */

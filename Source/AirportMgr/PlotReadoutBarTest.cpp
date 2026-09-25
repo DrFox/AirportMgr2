@@ -38,7 +38,11 @@ bool FPlotReadoutReachesTheBarTest::RunTest(const FString& Parameters)
 	// DISABLED WHEN NOTHING IS COMMITTABLE. A fresh controller has no gesture in progress,
 	// so the readout's bCommittable default of false must reach the button - a Build button
 	// lit with nothing to build is the failure the sink's own comment names.
-	TestFalse(TEXT("nothing to build, so Build is disabled"), Build->IsEnabled(*C));
+	//
+	// FBuildActionContext(*C), not the bare *C an implicit conversion used to accept here
+	// (issue #309 made the constructor explicit) - this call site is one of the two the
+	// compiler found once that conversion stopped being silent.
+	TestFalse(TEXT("nothing to build, so Build is disabled"), Build->IsEnabled(FBuildActionContext(*C)));
 	TestFalse(TEXT("and the readout says so"), C->GetToolReadout().bCommittable);
 
 	// AND THE COLLECTOR IS REFILLED, not appended to. Two ticks with no gesture must leave

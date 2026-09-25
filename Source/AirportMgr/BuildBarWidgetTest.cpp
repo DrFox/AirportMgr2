@@ -176,4 +176,58 @@ bool FBarCachesStyleAcrossTicksTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * ONE CONTEXT PER BAR TICK, not one per IsEnabled/IsActive call - issue #309, the same shape
+ * FPlayerTickBuildsOneContextTest pins for PlayerTick/DrawHUD. RefreshState used to let
+ * `Action.IsEnabled(*C)` / `Action.IsActive(*C)` convert `*C` through FBuildActionContext's own
+ * constructor - a GetSubsystem lookup (BuildActions.cpp:11-19) - IMPLICITLY, once per call, for
+ * every one of BuildActions()'s few dozen entries: ~70 constructions a tick for a context
+ * BuildActions.h's own comment says is "resolved ONCE". Making the constructor explicit is what
+ * turned that silent conversion into a compile error at RefreshState, which is what this test
+ * would have caught as "2 or more" before the fix built one context and threaded it through.
+ *
+ * RefreshStateForTest(*C), not NativeTickForTest: NativeTick reaches this work through
+ * Controller(), whose GetFirstPlayerController() fallback needs the controller registered in
+ * UWorld::PlayerControllerList - and FAirsideTestWorld's bare UWorld::CreateWorld never calls
+ * UWorld::InitializeActorsForPlay, so AActor::PostActorConstruction never calls
+ * PostInitializeComponents on anything spawned into it (verified with a diagnostic UE_LOG: C
+ * was a valid, spawned controller and GetFirstPlayerController() still came back null). A
+ * NativeTickForTest-driven version of this test would measure RefreshState's early return, not
+ * its body - see RefreshStateFor's own comment for the mechanism. FBarCachesStyleAcrossTicksTest
+ * above never noticed, because its own assertion (zero ResolveStyle calls) holds either way.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBarTickBuildsOneActionContextTest,
+	"AirportMgr.Actions.BarTickBuildsOneActionContext",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBarTickBuildsOneActionContextTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(TestWorld.Actor);
+	// A PlayerInput is required before any of RefreshState's IsEnabled/IsActive queries would
+	// be safe to run against - same precedent as FPlayerTickBuildsOneContextTest.
+	C->InitInputSystem();
+
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
+
+	const int32 Before = FBuildActionContext::ConstructCountForTest();
+	Bar->RefreshStateForTest(*C);
+	const int32 After = FBuildActionContext::ConstructCountForTest();
+
+	// EXACTLY ONE: RefreshState builds one FBuildActionContext and passes it to every entry's
+	// IsEnabled and IsActive - this goes to 2 or more the moment either call reverts to
+	// converting a bare controller reference of its own.
+	TestEqual(TEXT("one bar tick builds exactly one FBuildActionContext for every entry's "
+		"IsEnabled and IsActive together"),
+		After - Before, 1);
+
+	return true;
+}
+
 #endif

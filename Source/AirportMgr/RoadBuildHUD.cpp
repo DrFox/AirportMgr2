@@ -34,6 +34,14 @@ ARoadBuildHUD::ARoadBuildHUD()
 	}
 }
 
+void ARoadBuildHUD::BeginPlay()
+{
+	Super::BeginPlay();
+	// See CachedStyle's own comment (issue #309): resolved once here instead of every frame
+	// DrawPlotPanel draws.
+	CachedStyle = UAirportMgrUISettings::ResolveStyle();   // never null
+}
+
 void ARoadBuildHUD::DrawHUD()
 {
 	Super::DrawHUD();
@@ -239,9 +247,10 @@ void ARoadBuildHUD::DrawPlotPanel(const FVector2D& PlanePoint, const TArray<FStr
 	// white - and coloured text alone is unreadable on at least one of them.
 	//
 	// UUIStyle::HudGround, not a literal here (issue #192) - see that field's own comment for
-	// why this is a style colour and not a PreviewPalette entry.
-	DrawRect(UAirportMgrUISettings::ResolveStyle()->HudGround,
-		Left, Top, Widest + PadX * 2.0f, Block + PadY * 2.0f);
+	// why this is a style colour and not a PreviewPalette entry. CachedStyle, not another
+	// ResolveStyle() call - see its own comment (issue #309).
+	const UUIStyle* Style = CachedStyle != nullptr ? CachedStyle : UAirportMgrUISettings::ResolveStyle();
+	DrawRect(Style->HudGround, Left, Top, Widest + PadX * 2.0f, Block + PadY * 2.0f);
 
 	for (int32 Index = 0; Index < Lines.Num(); ++Index)
 	{

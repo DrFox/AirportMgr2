@@ -5,6 +5,7 @@
 #include "Content/AirsideSettings.h"
 #include "InspectorWidget.h"
 #include "Misc/AutomationTest.h"
+#include "Model/InspectFacts.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
@@ -192,6 +193,134 @@ bool FInspectorIdleTickSetsNoTextTest::RunTest(const FString& Parameters)
 	Panel->Refresh(Actor, Sel);
 	TestEqual(TEXT("an unchanged selection refreshed again sets no more text"),
 		Panel->SetTextCallCountForTest(), AfterFirstShownRefresh);
+
+	return true;
+}
+
+/**
+ * A PARKED AIRCRAFT COMPOSES NOTHING ON A REPEATED REFRESH - issue #309, one level upstream of
+ * FInspectorIdleTickSetsNoTextTest above. That test proves SetText adds no more calls; it
+ * does NOT prove the four Printfs and two NSLOCTEXT lookups that build the sentence SetText
+ * then compares stopped running - they used to run every Refresh regardless, gated only at the
+ * very end. This measures the earlier gate (FInspectorKey) directly, through
+ * ComposeCountForTest, rather than trusting that an unchanged SetText count means an unchanged
+ * compose count - which is exactly the assumption #187 shipped and #309 found false here.
+ *
+ * PARKED, not taxiing: a parked aircraft awaiting dispatch is the common idle case CLAUDE.md's
+ * "airside-speedprofile" note and this file's own FInspectorWidgetTest both drive to, and it is
+ * the scenario where heading/speed/altitude truly stop moving tick to tick - a taxiing aircraft
+ * would legitimately recompose every tick and this test would fail for the wrong reason.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorIdleTickComposesNoTextTest,
+	"AirportMgr.Inspector.IdleTickComposesNoText",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorIdleTickComposesNoTextTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	UWorld* World = TestWorld.World;
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(20000.0, 0.0), false);
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A; Edge.B = B;
+		Edge.Control = FVector2D(10000.0, 0.0);
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.bDerived = false;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(RouteSearch::Find(Net, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+
+	// RUN IT TO PARKED, same loop FInspectorWidgetTest uses, so heading/speed/altitude actually
+	// stop moving rather than merely being unobserved between two calls with no tick between.
+	for (int32 I = 0; I < 20000 && Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked; ++I) { Actor->Tick(1.0f / 30.0f); }
+	if (!TestEqual(TEXT("the agent parked"),
+		static_cast<uint8>(Actor->GetTraffic()->LastAgentPhaseForTest()), static_cast<uint8>(EAgentPhase::Parked))) { return false; }
+
+	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = Id;
+
+	// First Refresh composes - a real cost, not what this test measures.
+	Panel->Refresh(Actor, Sel);
+	const int32 Before = Panel->ComposeCountForTest();
+
+	for (int32 Tick = 0; Tick < 10; ++Tick)
+	{
+		Panel->Refresh(Actor, Sel);
+	}
+
+	TestEqual(TEXT("ten idle refreshes of a PARKED aircraft compose the sentence zero more "
+		"times - FInspectorKey read unchanged, so Refresh never reran the Printf/FString::Format "
+		"work SetTextCallCountForTest's own gate only compared the RESULT of"),
+		Panel->ComposeCountForTest(), Before);
+
+	return true;
+}
+
+/**
+ * A SUB-KNOT SPEED CHANGE STILL RECOMPOSES - PR #329 review, on FInspectorIdleTickComposesNoTextTest's
+ * own key. The Facts line prints speed TWICE from the same Shown value at two different
+ * precisions - m/s to one decimal (%.1f), knots to zero (%.0f) - and 1 kt is 0.514 m/s, finer
+ * than a whole knot, so FInspectorKey keying on the ROUNDED KNOT alone missed a real, displayed
+ * m/s change whenever it landed on the same knot: 5.0 -> 5.1 m/s both round to 10 kt. The key
+ * now uses SpeedTenthsRounded (tenths of m/s) for exactly this reason - see its own comment.
+ *
+ * PRECOMPUTED FACTS, not a simulated aircraft: this needs an EXACT, repeatable speed pair (5.0
+ * and 5.1 m/s, same rounded knot), which a real dispatch would take many idle ticks to happen
+ * upon by chance if it ever did - Refresh's own PrecomputedAgentFacts parameter exists for
+ * exactly this bypass (see its class comment), and no world state beyond a non-null Target is
+ * needed since the aircraft branch never touches Target when facts are precomputed.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorSubKnotSpeedChangeRecomposesTest,
+	"AirportMgr.Inspector.SubKnotSpeedChangeRecomposes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorSubKnotSpeedChangeRecomposesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+
+	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = 1;
+
+	FAgentFacts Facts;
+	Facts.Id = 1;
+	Facts.TypeName = TEXT("TestType");
+	Facts.HeadingDegrees = 90.0;
+	Facts.Altitude = 0.0;
+	Facts.Destination = TEXT("Stand 1");
+	Facts.Status = TEXT("Taxiing");
+	Facts.bEngineRunning = true;
+	Facts.bCanDepart = false;
+
+	// 500 uu/s = 5.0 m/s = 9.7192 kt, rounds to 10.
+	Facts.GroundSpeed = 500.0;
+	Panel->Refresh(Actor, Sel, &Facts);
+	const int32 Before = Panel->ComposeCountForTest();
+
+	// 510 uu/s = 5.1 m/s (a real, %.1f-visible change) = 9.913584 kt - STILL rounds to 10.
+	Facts.GroundSpeed = 510.0;
+	Panel->Refresh(Actor, Sel, &Facts);
+
+	TestEqual(TEXT("5.0 -> 5.1 m/s recomposes even though the rounded knot figure (10) did not "
+		"change - keying on whole knots alone would have left this at Before"),
+		Panel->ComposeCountForTest(), Before + 1);
 
 	return true;
 }
