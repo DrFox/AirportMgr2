@@ -407,7 +407,8 @@ bool ARoadBuildController::IsRemoveHeld() const
 	return IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
 }
 
-FToolContext ARoadBuildController::MakeToolContext() const
+void ARoadBuildController::ComputeCurrentPlaneHitAndTunables(
+	FVector2D& OutPlaneHit, FBuildSessionTunables& OutTunables) const
 {
 	// Runs every PlayerTick, so a frame where the cursor is off the plane (above the
 	// horizon, say) cannot simply skip building a context - the ghost and the snap chain
@@ -416,19 +417,26 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	// its default constructor did (uninitialised), so a refused frame fed garbage into
 	// Session.MakeContext -> ResolveSnap -> SnapChain.Resolve. Same fallback
 	// URoadBuildEditorTool::MakeContext already uses with HoverPosition.
-	FVector2D PlaneHit = Session.LastPlaneHit();
-	CursorOnRoadPlane(PlaneHit);
+	OutPlaneHit = Session.LastPlaneHit();
+	CursorOnRoadPlane(OutPlaneHit);
 
 	// Read fresh every call rather than cached, so a details-panel edit to the airport's own
 	// Snap/PlacementLimits takes effect on the very next click. Target->MakeTunables is the
 	// one place both drivers build this now - see issue #93 - and also refreshes
 	// Target->PlacementLimits.NewRoadHalfWidth in place, which is what keeps the deletion
 	// planner's own corner-fit check current (see ARoadNetworkActor::PlacementLimits).
-	FBuildSessionTunables Tunables = Target != nullptr ? Target->MakeTunables(0.0) : FBuildSessionTunables();
+	OutTunables = Target != nullptr ? Target->MakeTunables(0.0) : FBuildSessionTunables();
 
 	// ToolPickRadius is this driver's own view fact, not an airport tunable - see its
 	// declaration on this class.
-	Tunables.ToolPickRadius = ToolPickRadius;
+	OutTunables.ToolPickRadius = ToolPickRadius;
+}
+
+FToolContext ARoadBuildController::MakeToolContext() const
+{
+	FVector2D PlaneHit;
+	FBuildSessionTunables Tunables;
+	ComputeCurrentPlaneHitAndTunables(PlaneHit, Tunables);
 
 	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
 	// it rather than being folded into it.
@@ -438,6 +446,12 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	// inserted ahead of HoverAgent, so leaving this call as it was would have passed an int32
 	// agent id into a bool - compiling perfectly and suspending every guide the moment the
 	// cursor was over an aeroplane, while the hover pick silently became 0.
+	//
+	// STRAIGHT TO Session.MakeContext, NOT THROUGH GetFrameContext - deliberately (issue #303).
+	// This function exists for callers that want the pipeline run fresh against the mouse
+	// position at the exact moment they fire (a click, a drag step - see this method's own
+	// header comment); PlayerTick is the one caller that wants the cache, and reaches it
+	// directly with the same PlaneHit/Tunables this function just assembled.
 	return Session.MakeContext(Target, PlaneHit, Tunables,
 		IsRemoveHeld(),
 		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift),
@@ -932,11 +946,29 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	// the mouse position again, after this line, and needs a context that reflects it - see
 	// UpdateDrag's own comment.
 	//
+	// THROUGH Session.GetFrameContext, NOT MakeToolContext, since issue #303 moved the cache
+	// itself onto FBuildSession - this driver's own contribution is only assembling the same
+	// PlaneHit/Tunables MakeToolContext would, through the one shared helper. The editor mode's
+	// OnUpdateHover reaches the SAME session function for the SAME reason: URoadBuildEditorTool
+	// has no equivalent "top of frame" hook to build once and pass down the way PlayerTick
+	// always has, so the cache is what lets its Render and DrawHUD reuse this frame's answer
+	// instead of rebuilding it independently.
+	//
 	// BUILT BEFORE THE TARGET GUARD BELOW, same as CollectToolReadout always ran before it:
-	// MakeToolContext already null-guards Target internally (Target->MakeTunables only runs
-	// when Target is set), so building it here costs nothing extra on a frame with no road
-	// actor and keeps FrameContext's own null-Target behaviour identical to before.
-	FrameContext = MakeToolContext();
+	// ComputeCurrentPlaneHitAndTunables already null-guards Target internally (Target->
+	// MakeTunables only runs when Target is set), so building it here costs nothing extra on a
+	// frame with no road actor and keeps FrameContext's own null-Target behaviour identical to
+	// before.
+	{
+		FVector2D PlaneHit;
+		FBuildSessionTunables Tunables;
+		ComputeCurrentPlaneHitAndTunables(PlaneHit, Tunables);
+		FrameContext = Session.GetFrameContext(Target, PlaneHit, Tunables,
+			IsRemoveHeld(),
+			IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift),
+			IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt),
+			HoverAgentUnderCursor());
+	}
 
 	// BEFORE THE TARGET GUARD, so a frame with no road actor clears the bar instead of
 	// leaving the last gesture's bay count sitting on it forever.

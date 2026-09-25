@@ -105,6 +105,18 @@ public:
 	 *  ViewCentreDistance's own comment. */
 	void SetViewCentreDistanceForTest(double Distance) { ViewCentreDistance = Distance; }
 
+	/**
+	 * Stands in for what Render() and DrawHUD() each ask of the session, every frame either
+	 * actually runs: both call MakeHoverContext() and nothing else that could rebuild a
+	 * context - see Render's BuildPreview call and DrawHUD's BuildReadout call. A real
+	 * IToolsContextRenderAPI/FSceneView/FCanvas needs a live viewport this headless harness
+	 * does not have, same precedent as SetViewCentreDistanceForTest standing in for Render's
+	 * own measurement. Airside.Editor.HoverFrameBuildsOneContext drives OnUpdateHover for real
+	 * and this twice more, in Render's and DrawHUD's place, to measure issue #303's cache
+	 * across all three without needing to fake UE's renderer.
+	 */
+	void HoverFrameContextForTest() const { MakeHoverContext(); }
+
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;

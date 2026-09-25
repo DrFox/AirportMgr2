@@ -136,6 +136,13 @@ void FBuildSession::SetGestureMode(EGestureMode InMode, const FToolContext& Deac
 
 	Mode = InMode;
 
+	// A MODE CHANGE ALWAYS CHANGES WHAT MakeContext WOULD ANSWER - EditHandles at least - so
+	// GetFrameContext's cache would already miss on GetActiveTool() changing to/from the edit
+	// tool. Cleared explicitly anyway rather than left to that side effect: issue #303 wants
+	// the session's own mutators to retire their own cache, the same way a setter would
+	// invalidate a derived member it keeps.
+	InvalidateFrameContextCache();
+
 	// NAMED, not a number: this line is how "which mode am I actually in" gets answered from
 	// the log rather than guessed at, which is the failure the report that prompted the merge
 	// took the long way round.
@@ -160,6 +167,12 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 		{
 			Active->OnReselect(DeactivateContext);
 		}
+
+		// GetFrameContext's key cannot see this: GetActiveTool() returns the SAME pointer, but
+		// OnReselect can still drop a sticky Remove/Insert modifier below - the exact edge case
+		// ARoadBuildController::SelectTool's own comment names for issue #190's cache, which
+		// issue #303's cache inherits unchanged.
+		InvalidateFrameContextCache();
 		return;
 	}
 
@@ -171,6 +184,11 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 	}
 
 	ActiveTool = Index;
+
+	// A REAL SWITCH ALSO CHANGES GetActiveTool()'s POINTER, which GetFrameContext's key already
+	// includes - but OnDeactivate above can itself change what the OUTGOING tool would answer
+	// (its own stage), and cleared here rather than relied upon is cheaper to read than to prove.
+	InvalidateFrameContextCache();
 
 	// A STICKY BUILD MODIFIER WAS CHOSEN FOR THE TOOL IT WAS LIT UNDER, so picking another
 	// drops it - what stops a Remove left on from the road tool deleting the first stand the
@@ -313,6 +331,35 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	return Context;
 }
 
+const FToolContext& FBuildSession::GetFrameContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
+	const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
+	bool bSuspendGuides, int32 HoverAgent) const
+{
+	FFrameContextKey NewKey;
+	NewKey.Target = Target;
+	NewKey.Tool = GetActiveTool();
+	NewKey.PlaneHit = PlaneHit;
+	NewKey.Tunables = Tunables;
+	NewKey.bRemoveModifier = bRemoveModifier;
+	NewKey.bInsertModifier = bInsertModifier;
+	NewKey.bSuspendGuides = bSuspendGuides;
+	NewKey.HoverAgent = HoverAgent;
+
+	if (bHasFrameContextCache && NewKey == LastFrameContextKey)
+	{
+		// SAME QUESTION AS LAST CALL - issue #303. Whichever driver or entry point is asking,
+		// two calls with an identical key can only differ if something changed the network
+		// without moving any of them - see InvalidateFrameContextCache for how that is covered.
+		return CachedFrameContext;
+	}
+
+	CachedFrameContext = MakeContext(Target, PlaneHit, Tunables, bRemoveModifier, bInsertModifier,
+		bSuspendGuides, HoverAgent);
+	LastFrameContextKey = NewKey;
+	bHasFrameContextCache = true;
+	return CachedFrameContext;
+}
+
 void FBuildSession::CancelActiveGesture(const FToolContext& Context)
 {
 	IBuildTool* Tool = GetActiveTool();
@@ -323,6 +370,11 @@ void FBuildSession::CancelActiveGesture(const FToolContext& Context)
 	if (!Tool->IsIdle())
 	{
 		Tool->OnCancel(Context);
+
+		// OnCancel abandons the tool's own stage - not visible to GetFrameContext's key, the
+		// same reason ARoadBuildController::OnCancelGesture pairs this call with
+		// InvalidateToolReadoutCache.
+		InvalidateFrameContextCache();
 		return;
 	}
 	// Idle, and not in Select: cancel means "put the tool down". Two cancels from mid-gesture

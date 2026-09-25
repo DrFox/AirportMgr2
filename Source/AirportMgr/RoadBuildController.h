@@ -473,7 +473,24 @@ private:
 	void CollectToolReadout();
 
 	/**
+	 * PlaneHit and Tunables exactly as MakeToolContext assembles them, factored out so
+	 * PlayerTick can hand the SAME values to FBuildSession::GetFrameContext instead of a second,
+	 * hand-copied version of this logic - issue #303. ONE FUNCTION, not two independent
+	 * assemblies of "what does the cursor mean right now": CLAUDE.md's "lists that must agree
+	 * are ONE list", applied to a computation rather than a table. MakeToolContext still calls
+	 * Session.MakeContext directly rather than through the cache - it exists for the handful of
+	 * callers (a click, a drag step) that read the mouse position at the moment they fire, and
+	 * changing what it means was not this issue's scope.
+	 */
+	void ComputeCurrentPlaneHitAndTunables(FVector2D& OutPlaneHit, FBuildSessionTunables& OutTunables) const;
+
+	/**
 	 * Forces the next CollectToolReadout to rebuild regardless of FToolReadoutKey - issue #190.
+	 * Also retires FBuildSession's own frame-context cache (issue #303) - the SAME nine call
+	 * sites this method already has cover exactly what that cache cannot see either: a click, a
+	 * drag step, a commit, a cancel, an undo or redo, a network cleared out from under the tool.
+	 * One list, not two grown side by side to agree by hand - see FBuildSession::
+	 * InvalidateFrameContextCache for the risk of a future site missing one of the two clears.
 	 *
 	 * THE KEY IS A FINGERPRINT OF FToolContext, not of a tool's own member state (PlotPlaceTool's
 	 * pinned-corner count and the like): a tool has no generic "stage" a driver could read, and
@@ -483,7 +500,7 @@ private:
 	 * or redo, a tool or mode switch - calls this right after, so the cache never has to guess
 	 * whether one of those changed the answer: it just stops trusting last frame's key.
 	 */
-	void InvalidateToolReadoutCache() { bHasReadoutKey = false; }
+	void InvalidateToolReadoutCache() { bHasReadoutKey = false; Session.InvalidateFrameContextCache(); }
 
 	void OnCancelGesture();
 
