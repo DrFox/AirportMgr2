@@ -79,13 +79,6 @@ namespace InspectFacts
 		}
 	}
 
-	FString IcaoCodeForWingspan(double WingspanUu)
-	{
-		// The table itself is Solve/IcaoCode.h now - shared with RunwayAdmission (width ->
-		// wingspan) and AnchorLink (letter -> stand radius). See #85.
-		return IcaoCode::LetterForWingspan(WingspanUu);
-	}
-
 	bool DescribeAgent(const UGroundTraffic& Traffic, const URoadNetwork* Network, int32 AgentId, FAgentFacts& Out)
 	{
 		const FRoadAgent* Agent = Traffic.FindAgent(AgentId);
@@ -121,7 +114,10 @@ namespace InspectFacts
 		const FEntityInstance& E = Entities[EntityIndex];
 		Out.Index = EntityIndex;
 		Out.DesignWingspan = E.DesignWingspan;
-		Out.SizeClass = IcaoCodeForWingspan(E.DesignWingspan);
+		// The table itself is Solve/IcaoCode.h - shared with RunwayAdmission (width ->
+		// wingspan) and AnchorLink (letter -> stand radius). See #85, and #292 for the
+		// one-caller forwarder this used to go through.
+		Out.SizeClass = IcaoCode::LetterForWingspan(E.DesignWingspan);
 		Out.AnchorCount = E.ResolvedAnchors.Num();
 
 		// Captured at placement - see FEntityInstance::PoseRole. It is how the panel tells a

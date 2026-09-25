@@ -98,7 +98,4 @@ namespace InspectFacts
 	 * branches on it.
 	 */
 	AIRSIDE_API FString StatusOf(const FRoadAgent& Agent);
-
-	/** ICAO aerodrome reference code letter for a wingspan in uu: A <15 m, B <24, C <36, D <52, E <65, F otherwise. */
-	AIRSIDE_API FString IcaoCodeForWingspan(double WingspanUu);
 }

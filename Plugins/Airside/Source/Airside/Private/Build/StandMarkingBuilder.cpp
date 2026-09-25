@@ -73,7 +73,9 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 		TOptional<EIcaoCode> GlyphLetter;
 		if (Entity.DesignWingspan > 0.0)
 		{
-			GlyphLetter = IcaoCode::Parse(IcaoCode::LetterForWingspan(Entity.DesignWingspan));
+			// CodeForWingspan, not Parse(LetterForWingspan(...)) - the primitive, shared with
+			// AnchorLink's LeadInSizingFor and IcaoCode.cpp's own StandAdmits (#292).
+			GlyphLetter = IcaoCode::CodeForWingspan(Entity.DesignWingspan);
 		}
 
 		// THE LETTER THE DEPTH CALC USES - ALWAYS SET, Code C standing for "unknown" exactly

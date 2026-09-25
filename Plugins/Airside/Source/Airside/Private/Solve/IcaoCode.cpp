@@ -125,34 +125,51 @@ namespace IcaoCode
 		};
 
 		// D and E deliberately share RunwayWidth (45 m serves both) - see MaxWingspanForWidth.
+		//
+		// DESIGNATED INITIALISERS SINCE 2026-09-25 (#292) - eleven positional doubles read
+		// back as which column only by counting commas against the struct above, and that is
+		// exactly how a column got typed into the wrong slot unnoticed. A column is now named
+		// at its own value, so a misplaced figure is a compile error (wrong member) rather
+		// than a row that silently sizes a stand from the wrong figure.
 		static const FRow Rows[] = {
-			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0,  1000.0,  300.0,   -50.0,  -700.0, 600.0 },
-			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0,  400.0,  -300.0, -1400.0, 600.0 },
+			{ .Letter = TEXT("A"), .MaxWingspan = 1500.0, .RunwayWidth = 1800.0, .StandTurnRadius = 1500.0,
+			  .WingtipClearance = 300.0, .StandDepth = 2000.0, .MaxTailAft = 1000.0, .MaxNoseFwd = 300.0,
+			  .WingFwd = -50.0, .WingAft = -700.0, .AftEdgeAllowance = 600.0 },
+			{ .Letter = TEXT("B"), .MaxWingspan = 2400.0, .RunwayWidth = 2300.0, .StandTurnRadius = 2000.0,
+			  .WingtipClearance = 300.0, .StandDepth = 3000.0, .MaxTailAft = 2000.0, .MaxNoseFwd = 400.0,
+			  .WingFwd = -300.0, .WingAft = -1400.0, .AftEdgeAllowance = 600.0 },
 			// MaxNoseFwd 509 SINCE 2026-09-25, UP FROM 507, FOR plane9. The paper A320 (BuildA320)
 			// types the brochure's 5.07 m; DA_Aircraft_Plane9, traced off Airbus's own 3-view,
 			// measures 508.4 uu - 1.4 cm longer, which is the drawing's and left as it is, the
 			// same "built to the letter" call plane6 forced on Code E. Both still fit.
-			// Tools/Python/build_plane9_type.py checks the measurement against this every run.
-			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3538.0,  509.0,  -950.0, -2150.0, 600.0 },
+			// ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
+			{ .Letter = TEXT("C"), .MaxWingspan = 3600.0, .RunwayWidth = 3000.0, .StandTurnRadius = 2500.0,
+			  .WingtipClearance = 450.0, .StandDepth = 5500.0, .MaxTailAft = 3538.0, .MaxNoseFwd = 509.0,
+			  .WingFwd = -950.0, .WingAft = -2150.0, .AftEdgeAllowance = 600.0 },
 			// CODE D HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-25, and no figure moved.
 			// DA_Aircraft_Plane13, the 757-300, measures 4878 uu aft of its stop mark, 589 uu
 			// forward and 3805 uu of span - inside by 622, 111 and 1395. Loose, unlike C and E:
 			// the row was authored for aeroplanes up to 52 m and nothing that large is modelled.
-			// Tools/Python/build_plane13_type.py checks all three every run.
-			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0, -1300.0, -3000.0, 600.0 },
+			// ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
+			{ .Letter = TEXT("D"), .MaxWingspan = 5200.0, .RunwayWidth = 4500.0, .StandTurnRadius = 4000.0,
+			  .WingtipClearance = 750.0, .StandDepth = 7000.0, .MaxTailAft = 5500.0, .MaxNoseFwd = 700.0,
+			  .WingFwd = -1300.0, .WingAft = -3000.0, .AftEdgeAllowance = 600.0 },
 			// MaxTailAft 6902 SINCE 2026-09-25, UP FROM 6800, FOR plane11 - see MaxTailAft's note.
-			// Tools/Python/build_plane11_type.py checks the measurement against this every run.
-			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6902.0,  800.0, -1600.0, -3700.0, 600.0 },
+			// ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
+			{ .Letter = TEXT("E"), .MaxWingspan = 6500.0, .RunwayWidth = 4500.0, .StandTurnRadius = 5000.0,
+			  .WingtipClearance = 750.0, .StandDepth = 9000.0, .MaxTailAft = 6902.0, .MaxNoseFwd = 800.0,
+			  .WingFwd = -1600.0, .WingAft = -3700.0, .AftEdgeAllowance = 600.0 },
 			// CODE F HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-23, and no figure moved.
 			// DA_Aircraft_Plane8, the A380-800, measures 6775 uu from its nose-gear stop mark
 			// to its tailcone and 7940 uu of wing (7975 across the wingtip fences) - inside
 			// MaxTailAft by 125 uu and MaxWingspan by 25 even at the fences, the same "built
-			// to the letter" margin plane6 showed under E.
-			// The row stays as authored; Tools/Python/build_plane8_type.py checks both
-			// measurements against it every run and FAILS if a re-export grows past either.
+			// to the letter" margin plane6 showed under E. The row stays as authored.
+			// ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
 			// MaxTailAft 7000 SINCE 2026-09-25, UP FROM 6900: E rose past it for plane11, and the
 			// column must stay ordered. The A380 is now 225 uu inside it, not 125.
-			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  7000.0,  900.0, -1900.0, -4300.0, 600.0 },
+			{ .Letter = TEXT("F"), .MaxWingspan = 8000.0, .RunwayWidth = 6000.0, .StandTurnRadius = 6000.0,
+			  .WingtipClearance = 750.0, .StandDepth = 10000.0, .MaxTailAft = 7000.0, .MaxNoseFwd = 900.0,
+			  .WingFwd = -1900.0, .WingAft = -4300.0, .AftEdgeAllowance = 600.0 },
 		};
 
 		/**
@@ -214,17 +231,22 @@ namespace IcaoCode
 		return RowFor(Code).Letter;
 	}
 
-	FString LetterForWingspan(double WingspanUu)
+	EIcaoCode CodeForWingspan(double WingspanUu)
 	{
-		for (const FRow& Row : Rows)
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Rows); ++Index)
 		{
-			if (WingspanUu < Row.MaxWingspan)
+			if (WingspanUu < Rows[Index].MaxWingspan)
 			{
-				return Row.Letter;
+				return static_cast<EIcaoCode>(Index);
 			}
 		}
 		// Wider than every row: still F, the widest letter the table has.
-		return Rows[UE_ARRAY_COUNT(Rows) - 1].Letter;
+		return static_cast<EIcaoCode>(UE_ARRAY_COUNT(Rows) - 1);
+	}
+
+	FString LetterForWingspan(double WingspanUu)
+	{
+		return ToLetter(CodeForWingspan(WingspanUu));
 	}
 
 	double MaxWingspanForLetter(EIcaoCode Code)
@@ -398,20 +420,6 @@ namespace IcaoCode
 		return FString();
 	}
 
-	namespace
-	{
-		/**
-		 * LetterForWingspan + Parse for a KNOWN, positive span - always succeeds. LetterForWingspan
-		 * only ever returns one of Rows' own six letters and Parse recognises all six exactly, so
-		 * GetValue() here can never hit an unset TOptional. Callers pass Uu > 0 only; StandAdmits
-		 * and StandRank handle "unknown" (<= 0) themselves before reaching this.
-		 */
-		EIcaoCode LetterOfKnownSpan(double Uu)
-		{
-			return Parse(LetterForWingspan(Uu)).GetValue();
-		}
-	}
-
 	bool StandAdmits(double StandDesignSpanUu, double AircraftSpanUu)
 	{
 		if (StandDesignSpanUu <= 0.0 || AircraftSpanUu <= 0.0)
@@ -422,8 +430,8 @@ namespace IcaoCode
 		{
 			return false;
 		}
-		return static_cast<uint8>(LetterOfKnownSpan(StandDesignSpanUu))
-			>= static_cast<uint8>(LetterOfKnownSpan(AircraftSpanUu));
+		return static_cast<uint8>(CodeForWingspan(StandDesignSpanUu))
+			>= static_cast<uint8>(CodeForWingspan(AircraftSpanUu));
 	}
 
 	int32 StandRank(double StandDesignSpanUu)
@@ -432,6 +440,6 @@ namespace IcaoCode
 		{
 			return static_cast<int32>(EIcaoCode::C);
 		}
-		return static_cast<int32>(LetterOfKnownSpan(StandDesignSpanUu));
+		return static_cast<int32>(CodeForWingspan(StandDesignSpanUu));
 	}
 }

@@ -69,19 +69,6 @@ MAIN_WHEELS_R = ("wheel_R1", "wheel_R2")
 # so this must describe the fan on screen; the class default of 3 would alias backwards.
 PROP_BLADE_COUNT = 36
 
-# IcaoCode.cpp's Code D row, as this script expects to find it - the first time that row has
-# had a modelled type to measure. Checked every run so a re-export that grows past its letter
-# fails here, in the script that measured it. Nothing binds: the 757-300 is inside all three
-# by a clear margin (the row was authored for aeroplanes up to 52 m and 55 m aft).
-MAX_TAIL_AFT_D = 5500.0
-MAX_NOSE_FWD_D = 700.0
-MAX_SPAN_D = 5200.0
-# AND THE FLOOR, which no other type script checks because no other type sits this close to
-# the letter below it: Code C's 3600. The span is 3805 - two metres over - and a re-export
-# that trimmed the wing past C's ceiling would quietly make a Code D type fit a Code C stand.
-MIN_SPAN_D = 3600.0
-
-
 def say(msg):
     unreal.log("MARKER: " + str(msg))
 
@@ -312,28 +299,6 @@ def set_regime(ground, name, values):
     ground.set_editor_property(name, regime)
 
 
-def check_letter(m):
-    """Code D, checked against the measurement rather than asserted - the three figures the
-    letters-row test pins, plus the floor, so a re-export that leaves its row fails HERE first."""
-    span = m["footprint"]["wingspan"]
-    nose = m["footprint"]["nose_x"] - m["steer_axle_x"]
-    tail = -(m["footprint"]["tail_x"] - m["steer_axle_x"])
-    for label, got, limit in (("span", span, MAX_SPAN_D), ("nose", nose, MAX_NOSE_FWD_D),
-                              ("tail", tail, MAX_TAIL_AFT_D)):
-        if got > limit:
-            fail("%s measures %.1f uu against Code D's %.0f - raise the row in "
-                 "Solve/IcaoCode.cpp and this constant with it" % (label, got, limit))
-        else:
-            say("PASS %s %.1f uu is inside Code D's %.0f by %.1f" % (label, got, limit,
-                                                                     limit - got))
-    if span <= MIN_SPAN_D:
-        fail("span measures %.1f uu, inside Code C's %.0f - this is no longer a Code D type"
-             % (span, MIN_SPAN_D))
-    else:
-        say("PASS span %.1f uu is over Code C's %.0f by %.1f, so the letter is D"
-            % (span, MIN_SPAN_D, span - MIN_SPAN_D))
-
-
 def author_type():
     path = "%s/%s" % (TYPE_PATH, TYPE_NAME)
     asset = unreal.EditorAssetLibrary.load_asset(path)
@@ -371,7 +336,6 @@ def author_type():
     say("measured off the rig: steer axle %.1f, fixed axle %.1f uu (wheelbase %.1f), track %.1f"
         % (m["steer_axle_x"], m["fixed_axle_x"],
            abs(m["fixed_axle_x"] - m["steer_axle_x"]), m["main_gear_track"]))
-    check_letter(m)
     say("tightest followable radius %.0f uu (%.1f m) at %.0f degrees of lock"
         % (tightest_radius_uu(), tightest_radius_uu() / 100.0,
            STEERING["max_steer_degrees"]))
