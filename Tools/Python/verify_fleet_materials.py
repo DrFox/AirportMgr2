@@ -35,16 +35,16 @@ import sys
 # for the full note.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from airside_import import FLEET, MERGE_TOL, glb_path  # noqa: E402
+from airside_import import FLEET, MERGE_TOL, fleet_glb  # noqa: E402
 
 import unreal
 
 MAT_DIR = "/Game/Materials/Fleet"
 MASTER_PATH = "%s/M_Fleet" % MAT_DIR
 OLD_DIR = "/Game/Aircraft/Materials"
-# FLEET, THE TOLERANCE AND glb_path COME FROM airside_import, and all three used to be typed
-# or duplicated here - glb_path assumed folder == file, which is wrong for tankTrailer1 (see
-# airside_import.glb_path's own comment).
+# FLEET, THE TOLERANCE AND fleet_glb COME FROM airside_import, and all three used to be typed
+# or duplicated here - the old copy assumed folder == file, which is wrong for tankTrailer1 (see
+# airside_import.EXPORT_FOLDER).
 #
 # THE COPY WAS NOT HARMLESS. This file's FLEET listed plane2 onwards; when plane1 joined the
 # BUILDER on 2026-09-19 it was not added here, so this script checked seven assets, printed
@@ -67,8 +67,8 @@ def fail(msg):
     unreal.log_error("MARKER: FAIL " + str(msg))
 
 
-def gltf_materials(stem):
-    path = glb_path(stem)
+def gltf_materials(asset):
+    path = fleet_glb(MODELS, asset)
     out = {}
     with open(path, "rb") as handle:
         handle.read(12)

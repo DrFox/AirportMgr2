@@ -51,7 +51,7 @@ from airside_import import Spec, fail, say  # noqa: E402
 # fuelTrailer1.glb ships from UTILITY1'S export/ folder (utility1/scripts/build_export_
 # fueltrailer.py: "the towed asset is built by scripts inside the tower's file"), a sibling of
 # utility1.glb rather than a folder of its own - the same shape tankTrailer1.glb ships from
-# truckCab1's export/, which is why airside_import.glb_path takes a folder/file stem.
+# truckCab1's export/, which is why airside_import.EXPORT_FOLDER maps both to their tower.
 MODELS_ROOT = r"C:\repos\AirportMgr2Models\utility1\export"
 UTILITY1_MESH = "/Game/Vehicles/Utility1/SK_Utility1"
 

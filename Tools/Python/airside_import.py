@@ -62,55 +62,57 @@ FLEET = {
     "plane6":     ("plane6",     "/Game/Aircraft/Plane6/SK_Plane6"),
     "plane7":     ("plane7",     "/Game/Aircraft/Plane7/SK_Plane7"),
     "plane8":     ("plane8",     "/Game/Aircraft/Plane8/SK_Plane8"),
+    "plane9":     ("plane9",     "/Game/Aircraft/Plane9/SK_Plane9"),
     "fueltruck1": ("fueltruck1", "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"),
     "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
     "tug1":       ("tug1",       "/Game/Vehicles/Tug1/SK_Tug1"),
     "utility1":   ("utility1",   "/Game/Vehicles/Utility1/SK_Utility1"),
     "truckCab1":  ("truckCab1",  "/Game/Vehicles/Rig/TruckCab1/SK_TruckCab1"),
-    # "truckCab1/tankTrailer1": see glb_path below - tankTrailer1 has no export/ of its own.
+    # tankTrailer1 has no export/ of its own - see EXPORT_FOLDER below.
     # truckCab1/scripts/build_export.py exports both assets from ONE .blend into truckCab1's
     # own export/ folder ("two assets from one file... each with its own .fbx/.glb in
     # truckCab1/export/"), so its glb is a SIBLING of truckCab1.glb, not the tankTrailer1
     # folder's own export - which does not exist.
-    "tankTrailer1": ("truckCab1/tankTrailer1", "/Game/Vehicles/Rig/TankTrailer1/SK_TankTrailer1"),
+    "tankTrailer1": ("tankTrailer1", "/Game/Vehicles/Rig/TankTrailer1/SK_TankTrailer1"),
     # fuelTrailer1.glb ships from UTILITY1's own export/ folder (utility1/scripts/build_export_
     # fueltrailer.py: "the towed asset is built by scripts inside the tower's file") - the same
-    # folder/file mismatch tankTrailer1 has, and the reason the stem field exists at all.
-    "fuelTrailer1": ("utility1/fuelTrailer1", "/Game/Vehicles/FuelTrailer1/SK_FuelTrailer1"),
+    # folder mismatch tankTrailer1 has - see EXPORT_FOLDER below.
+    "fuelTrailer1": ("fuelTrailer1", "/Game/Vehicles/FuelTrailer1/SK_FuelTrailer1"),
 }
 
 # Asset folder name -> the name Content uses, for instance naming only.
 PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
           "plane5": "Plane5", "plane6": "Plane6", "plane7": "Plane7",
-          "plane8": "Plane8",
+          "plane8": "Plane8", "plane9": "Plane9",
           "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1",
           "truckCab1": "TruckCab1", "tankTrailer1": "TankTrailer1",
           "fuelTrailer1": "FuelTrailer1"}
+
+# EXPORTS THAT DO NOT LIVE IN THEIR OWN KEY'S FOLDER. fueltruck1 has been built inside
+# rigidCab1/rigidCab1.blend since 2026-09-24 (fueltruck1/export/MOVED.md) and exports to
+# rigidCab1/export/. Until 2026-09-25 both fleet scripts rebuilt <key>/export/<key>.glb by
+# hand, so the move made the rebuild skip the truck, and with it gone the shared looks
+# re-clustered: MI_Livery_Plane1 was renamed MI_Livery and every mesh was resaved.
+EXPORT_FOLDER = {"fueltruck1": "rigidCab1",
+                 # Towed assets ship from their TOWER's export/ folder: each is built by scripts
+                 # inside the tower's .blend (truckCab1/scripts/build_export.py,
+                 # utility1/scripts/build_export_fueltrailer.py). Until the 2026-09-25 merge of
+                 # main this was a second mechanism, a "folder/file" FLEET stem read by glb_path;
+                 # one mapping, one reader (fleet_glb) is the rule - see CLAUDE.md "lists that
+                 # must agree are one list".
+                 "tankTrailer1": "truckCab1", "fuelTrailer1": "utility1"}
+
+
+def fleet_glb(models_root, key):
+    """The .glb a FLEET key is scraped from - the one path both fleet scripts read."""
+    folder = EXPORT_FOLDER.get(key, key)
+    return os.path.join(models_root, folder, "export", "%s.glb" % FLEET[key][0])
 
 # Below this two looks are the same colour written twice. The verifier may not check tighter
 # than the builder merges, or every merged look fails.
 MERGE_TOL = 0.005
 
-MODELS = r"C:\repos\AirportMgr2Models"
 
-
-def glb_path(stem):
-    """MODELS/<folder>/export/<file>.glb - folder and file are the SAME name unless stem
-    contains a '/' (folder/file), which lets a FLEET entry name a .glb that ships from a
-    DIFFERENT model's export folder - tankTrailer1's does (see FLEET's own comment).
-
-    THE STEM FIELD WAS DEAD BEFORE THIS. FLEET's own docstring already promised "the .glb's
-    stem under each script's own MODELS root... so a model whose export is named differently
-    needs no special case", but build_fleet_materials.py's own glb_path built every path from
-    the FLEET KEY and never read this tuple field, and verify_fleet_materials.py's separate
-    copy read the stem but still assumed folder == file. Neither would have found
-    tankTrailer1.glb, which is the first entry that actually needed the promise kept. Fixed
-    HERE, in the one place FLEET itself lives, rather than in either duplicate again - see
-    "check where a list is CONSUMED" (CLAUDE.md).
-    """
-    folder, _, file = stem.rpartition("/")
-    folder = folder or file
-    return os.path.join(MODELS, folder, "export", "%s.glb" % file)
 
 
 def say(msg):

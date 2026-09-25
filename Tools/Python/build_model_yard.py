@@ -56,6 +56,10 @@ ROWS = [
         ("/Game/Aircraft/Plane5/SK_Plane5", "Plane5 (King Air 350i)"),
         ("/Game/Aircraft/Plane2/SK_Plane2", "Plane2 (Twin Otter)"),
         ("/Game/Aircraft/Plane3/SK_Plane3", "Plane3 (Dash 8-Q400)"),
+        # THE A320 BEFORE THE 737, ON SPAN: 35.44 m against 35.79 (length agrees, 37.57
+        # against 39.3). The two Code C jets side by side is the point - same letter, same
+        # stands, and the A320's nose visibly further past its gear.
+        ("/Game/Aircraft/Plane9/SK_Plane9", "Plane9 (A320-200)"),
         ("/Game/Aircraft/Plane4/SK_Plane4", "Plane4 (737-800W)"),
         # THE 777 GOES LAST AND IT IS NOT CLOSE: 64.78 m of span against the 737's 35.79 and
         # 73.88 m of length against its 39.3. It is the reason the floor below grew - six
@@ -103,8 +107,11 @@ ROW_PITCH_UU = 10000.0
 # the A380's 79.75 m of wing and its 12 m gap take it to 355, which at 300 m put a wingtip
 # 27 m off the edge. The same re-check as last time, with the same answer: it is the span
 # that binds, and there is no letter above Code F for the next one to be wider than.
+#
+# 450 m SINCE 2026-09-25, UP FROM 400, FOR plane9. The A320's 35.44 m and its 12 m gap take
+# the nine-aeroplane row from 355 to about 402 m - past 400. Span still binds.
 FLOOR_X_M = 300.0
-FLOOR_Y_M = 400.0
+FLOOR_Y_M = 450.0
 
 # THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
 #
