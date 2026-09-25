@@ -394,7 +394,20 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	const bool bWasRunning = Agent.bEngineRunning;
 	const double PriorRPM = Agent.EngineRPM;
 
-	Agent.RestartTaxi(Plan);
+	// A TOW KEEPS ITS CAB'S HEADING through a redirect, as it keeps its chain (StartDrive: "a rig
+	// re-routed mid-drive keeps its trailer where it is, angled as it was"). The chain is stepped
+	// against the cab's FIXED axle, a wheelbase behind the steered axle the follower re-seats on
+	// the new line; seeding the heading from that line instead swings the fixed axle sideways in
+	// one frame, and the chain reads the swing as a pull of up to a wheelbase. Measured
+	// 2026-09-25: both tows on the rig course folded on the first frame of the leg that starts
+	// on the width step's jog, and every handover moved the rig's trailer axle up to 350 uu.
+	// Anything WITHOUT a chain keeps seeding from the line - an aircraft sent somewhere new
+	// faces its new route at once, which Airside.Model.Traffic.RedirectPosesImmediatelyEvenPaused
+	// pins; the follower's slew then closes the gap for a tow, at its own rate.
+	// ENFORCED BY: Airside.Model.Tow.RedirectKeepsChainAndHeading
+	const TOptional<double> KeptHeading = Agent.TowAxles.Num() > 0
+		? TOptional<double>(Agent.Follower.Heading) : TOptional<double>();
+	Agent.RestartTaxi(Plan, 0.0, KeptHeading);
 
 	if (bWasRunning)
 	{

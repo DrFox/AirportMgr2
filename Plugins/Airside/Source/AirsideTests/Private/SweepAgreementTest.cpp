@@ -5,6 +5,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/OutputDeviceRedirector.h"
 #include "Model/AgentMotion.h"
+#include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -488,6 +489,80 @@ bool FTowJackknifeStopsTest::RunTest(const FString& Parameters)
 	{
 		AddInfo(*Line);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTowRedirectKeepsChainAndHeadingTest, "Airside.Model.Tow.RedirectKeepsChainAndHeading",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTowRedirectKeepsChainAndHeadingTest::RunTest(const FString& Parameters)
+{
+	// A REDIRECT IS NOT A NEW VEHICLE (the rig test course's continuous run, 2026-09-25): a rig
+	// parked at the end of one leg and sent on along the next keeps its trailer where it is AND
+	// its cab facing the way it faced. The next leg starts with a 45 degree jog, the shape of
+	// the course's width step, because that is where seeding the cab from the new line swung
+	// its fixed axle sideways and folded the chain on the first frame.
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+
+	FRoutePlan First;
+	First.Result = ERouteResult::Found;
+	for (double X = 0.0; X <= 4000.0; X += 100.0)
+	{
+		First.Polyline.Add(FVector2D(X, 0.0));
+	}
+	First.Length = GuidelineGeom::PolylineLength(First.Polyline);
+	const int32 Id = Traffic->DispatchAgent(nullptr, First, Rig, ETraversalClass::GroundVehicle, 0.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	for (int32 Tick = 0; Tick < 4000 && Traffic->FindAgent(Id)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Traffic->Advance(0.05, nullptr);
+	}
+	if (!TestEqual(TEXT("the rig parked at the end of its first leg"),
+		static_cast<int32>(Traffic->FindAgent(Id)->Phase), static_cast<int32>(EAgentPhase::Parked))) { return false; }
+	const TArray<FVector2D> Before = Traffic->FindAgent(Id)->TowAxles;
+	const double HeadingBefore = Traffic->FindAgent(Id)->Follower.Heading;
+
+	FRoutePlan Next;
+	Next.Result = ERouteResult::Found;
+	Next.Polyline.Add(First.Polyline.Last());
+	Next.Polyline.Add(First.Polyline.Last() + FVector2D(100.0, 100.0));
+	for (double X = 4200.0; X <= 8000.0; X += 100.0)
+	{
+		Next.Polyline.Add(FVector2D(X, 100.0));
+	}
+	Next.Length = GuidelineGeom::PolylineLength(Next.Polyline);
+	if (!TestTrue(TEXT("the redirect is accepted"), Traffic->RedirectAgent(Id, nullptr, Next))) { return false; }
+
+	const FRoadAgent* Agent = Traffic->FindAgent(Id);
+	if (!TestEqual(TEXT("the chain is still one axle per link"), Agent->TowAxles.Num(), Before.Num())) { return false; }
+	for (int32 I = 0; I < Before.Num(); ++I)
+	{
+		TestTrue(*FString::Printf(TEXT("link %d's axle did not move in the redirect - the chain was not re-laid (%.2f uu)"),
+			I, FVector2D::Distance(Agent->TowAxles[I], Before[I])), Agent->TowAxles[I] == Before[I]);
+	}
+	TestEqual(TEXT("the cab kept its heading rather than snapping to the jog's 45 degrees"),
+		Agent->Follower.Heading, HeadingBefore);
+
+	// And it drives the jog without folding, its axles moving no further per tick than it travels.
+	double WorstStep = 0.0;
+	TArray<FVector2D> Prev = Agent->TowAxles;
+	for (int32 Tick = 0; Tick < 400 && Traffic->FindAgent(Id)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Traffic->Advance(0.05, nullptr);
+		Agent = Traffic->FindAgent(Id);
+		if (Tick < 2)
+		{
+			for (int32 I = 0; I < Prev.Num(); ++I)
+			{
+				WorstStep = FMath::Max(WorstStep, FVector2D::Distance(Agent->TowAxles[I], Prev[I]));
+			}
+		}
+		Prev = Agent->TowAxles;
+	}
+	TestEqual(TEXT("the tow never jack-knifed on the jog"), Agent->GetJackknifedLink(), static_cast<int32>(INDEX_NONE));
+	TestTrue(*FString::Printf(TEXT("pulling away from rest, no axle moved more than a sub-step (%.2f uu)"), WorstStep),
+		WorstStep <= VehicleSweep::TraceStep);
 	return true;
 }
 

@@ -159,6 +159,40 @@ built level and its tests:**
   second, rig-sized balloon class, or accept that the rig never reverses out of a dead end on
   this course.
 
+**REVISED 2026-09-25 ("continuous", user-approved design, checked against the code) - both
+tows drive the course at once, continuously:**
+
+- **One persistent agent per vehicle.** At each waypoint the arrived agent is REDIRECTED
+  (`UAirsideTraffic::RedirectAgent`) onto its next leg, not retired and respawned, so the tow
+  chain (`FRoadAgent::TowAxles`) carries across the waypoint instead of being re-laid straight.
+  Finding: a redirect already kept the chain (`RestartTaxi` never touches `TowAxles`; only
+  `StartDrive` lays it straight) and does NOT clear `JackknifedLink` - but it re-seeded the
+  cab's HEADING from the new line. At the width step's jog that swung the cab's fixed axle
+  sideways in one frame and folded both tows on the first frame of the next leg; every other
+  handover moved the rig's trailer axle up to 350 uu. `UGroundTraffic::RedirectAgent` now keeps
+  the heading of anything that has a chain (`RestartTaxi`'s new `InitialHeading`); rigid
+  vehicles and aircraft still face their new line at once. Pinned by
+  `Airside.Model.Tow.RedirectKeepsChainAndHeading` and by `OneLoopHeadless`'s handover check
+  (axles move <= `VehicleSweep::TraceStep` across every handover; a re-lay would have moved
+  the rig's by up to 660 uu).
+- **Opposite directions.** The rig runs the waypoints forwards; the utility + trailer runs
+  them in reverse, arriving at each waypoint along `(Node, Next)` - `FRigCourseWaypoint::Next`
+  is the first node of the road the forward leg leaves by - after `UtilityStartDelay` (20 s,
+  so the rig is clear of the shared start junction). Results are keyed by FORWARD leg index
+  (the same node pair) in both directions. A leg turns at the node it LEAVES, so a reversed
+  leg turns at its other end: the utility's dead-end U-turn falls in "T junction into the
+  stem, reversed", and its width-step jog in "return, to the width step, reversed".
+- **Refused legs.** A refused leg is logged once per loop and keeps its red label; the vehicle
+  routes on to the next waypoint it can reach from where it stands. None is reachable from a
+  dead end the rig cannot U-turn in (§3's sizing decision), so there it is STRANDED: logged,
+  retired, and dispatched fresh at the next waypoint - the one place the rig's chain is still
+  re-laid (3 times a loop). Jack-knifed and stuck vehicles take the same exit.
+- **Per-vehicle loops:** `RigCourse: rig loop N - D/T legs driven; refused: ...` and
+  `RigCourse: utility loop N - ...`.
+- **Known gap, measured not fixed:** claims do not reserve the oncoming lane, and the two
+  vehicles' bodies do overlap - see `OneLoopHeadless`'s overlap lines for the worst figure and
+  where. No claim logic was added.
+
 ## 4. REVISED 2026-09-24: the tow is a CHAIN, and the utility + fuel trailer drives too
 
 User ruling (the same day, before Task 2): `AirportMgr2Models/utility1` now has `fuelTrailer1`,
@@ -182,6 +216,8 @@ wheelbase is 2.21 m (from the model scripts; MEASURE from the glb, do not retype
   `towbar_yaw` bone from the towbar link's angle.
 - **The test course loops both vehicles**, rig and utility + trailer, one at a time and
   alternating, and reports refusals per vehicle.
+  **REVISED 2026-09-25:** no longer one at a time - both at once, in opposite directions,
+  each with one persistent agent; see §3's "continuous" note.
 
 ## Tests
 

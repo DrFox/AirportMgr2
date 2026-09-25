@@ -138,15 +138,10 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 	using namespace RigCourse;
 
 	Waypoints.Reset();
-	LoopResults.Reset();
-	LastLoopResults.Reset();
 	RefusalLabels.Reset();
-	Leg = 0;
-	VehicleSlot = 0;
-	ActiveAgentId = 0;
 
 	Vehicles = { UAirsideSettings::ResolveRigVehicle(), UAirsideSettings::ResolveUtilityTowVehicle() };
-	VehicleNames = { TEXT("rig"), TEXT("utility+trailer") };
+	VehicleNames = { TEXT("rig"), TEXT("utility") };
 
 	const int32 Widths = Target.GetWidthCount(ERoadKind::ServiceRoad);
 	if (Widths < TierCount)
@@ -221,15 +216,19 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 	Connect(R3, Lanes[0].P0, 0);
 
 	const int32 EntryFrom[TierCount] = { R3, E1, W1 };
+	// The first node after each lane's exit, on the road out: the reverse runner arrives at P4
+	// from here.
+	const int32 ExitNext[TierCount] = { E0, W0, R0 };
 	for (int32 Tier = 0; Tier < TierCount; ++Tier)
 	{
 		const FLaneNodes& L = Lanes[Tier];
 		const FString Name = TierNames[Tier];
-		auto Add = [this, &Id, &Name, Tier](int32 Node, int32 From, ERigCourseFeature Feature, const TCHAR* Detail)
+		auto Add = [this, &Id, &Name, Tier](int32 Node, int32 From, int32 Next, ERigCourseFeature Feature, const TCHAR* Detail)
 		{
 			FRigCourseWaypoint& W = Waypoints.AddDefaulted_GetRef();
 			W.Node = Id(Node);
 			W.From = Id(From);
+			W.Next = Id(Next);
 			W.Tier = Tier;
 			W.Feature = Feature;
 			W.Label = FString::Printf(TEXT("%s, %s"), *Name,
@@ -241,29 +240,42 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 		const FVector2D P3 = LanePoint(Tier, LaneStraight, LaneHeight);
 		const FVector2D P4 = LanePoint(Tier, LaneLength, LaneHeight);
 
-		Add(L.P0, EntryFrom[Tier], ERigCourseFeature::Connector, TEXT("connector in"));
-		Add(L.P1, L.P0, ERigCourseFeature::Straight, nullptr);
-		Add(L.P2, L.P1, TurnFeature(P1 - P0, P2 - P1), nullptr);          // the corner at P1
-		Add(L.S,  L.P2, ERigCourseFeature::TeeJunction, TEXT("T junction into the stem"));
-		Add(L.P2, L.S,  ERigCourseFeature::DeadEnd, nullptr);
-		Add(L.P3, L.P2, ERigCourseFeature::TeeJunction, TEXT("T junction out of the stem"));
-		Add(L.P4, L.P3, TurnFeature(P3 - P2, P4 - P3), nullptr);          // the corner at P3
+		// Next: the leg from S leaves it back towards P2, through the dead end's balloon - so S
+		// arrived along (S, P2) is the lane end BEFORE the balloon, whichever way it is run.
+		Add(L.P0, EntryFrom[Tier], L.P1, ERigCourseFeature::Connector, TEXT("connector in"));
+		Add(L.P1, L.P0, L.P2, ERigCourseFeature::Straight, nullptr);
+		Add(L.P2, L.P1, L.S,  TurnFeature(P1 - P0, P2 - P1), nullptr);          // the corner at P1
+		Add(L.S,  L.P2, L.P2, ERigCourseFeature::TeeJunction, TEXT("T junction into the stem"));
+		Add(L.P2, L.S,  L.P3, ERigCourseFeature::DeadEnd, nullptr);
+		Add(L.P3, L.P2, L.P4, ERigCourseFeature::TeeJunction, TEXT("T junction out of the stem"));
+		Add(L.P4, L.P3, ExitNext[Tier], TurnFeature(P3 - P2, P4 - P3), nullptr);          // the corner at P3
 	}
 	// The return: to the width step's node, then ACROSS it to the west corner - so the one leg
 	// that drives the jog is the one labelled with it, and no other leg does.
-	auto AddReturn = [this, &Id](int32 Node, int32 From, ERigCourseFeature Feature, const TCHAR* Label)
+	auto AddReturn = [this, &Id](int32 Node, int32 From, int32 Next, ERigCourseFeature Feature, const TCHAR* Label)
 	{
 		FRigCourseWaypoint& W = Waypoints.AddDefaulted_GetRef();
 		W.Node = Id(Node);
 		W.From = Id(From);
+		W.Next = Id(Next);
 		W.Tier = INDEX_NONE;
 		W.Feature = Feature;
 		W.Label = Label;
 	};
-	AddReturn(Step, R1, ERigCourseFeature::Connector, TEXT("return, to the width step"));
-	AddReturn(R2, Step, ERigCourseFeature::WidthStep, RigCourse::FeatureText(ERigCourseFeature::WidthStep));
+	AddReturn(Step, R1, R2, ERigCourseFeature::Connector, TEXT("return, to the width step"));
+	AddReturn(R2, Step, R3, ERigCourseFeature::WidthStep, RigCourse::FeatureText(ERigCourseFeature::WidthStep));
 
-	LoopResults.SetNum(Waypoints.Num() * Vehicles.Num());
+	// THE RUNNERS: the rig forwards from the loop's start, the utility the other way from the
+	// same node, after UtilityStartDelay.
+	Runners.Reset();
+	for (int32 Slot = 0; Slot < Vehicles.Num(); ++Slot)
+	{
+		FRigCourseRunner& Runner = Runners.AddDefaulted_GetRef();
+		Runner.Slot = Slot;
+		Runner.bReverse = Slot == 1;
+		Runner.StartDelay = Runner.bReverse ? UtilityStartDelay : 0.0;
+		Runner.LoopResults.SetNum(Waypoints.Num());
+	}
 	UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: course laid - %d segment(s) (%d refused), %d waypoint(s), %d feature(s), %d tier(s) of %d."),
 		Laid, RefusedConnects, Waypoints.Num(), FeatureCountForTest(), TierCount, Widths);
 }
@@ -341,86 +353,225 @@ double ARigTestCourse::LegTimeoutSeconds(const FVehicle& Vehicle, double Length,
 	return Factor * Ideal;
 }
 
+int32 ARigTestCourse::LoopsCompletedByAllForTest() const
+{
+	int32 Fewest = Runners.Num() > 0 ? TNumericLimits<int32>::Max() : 0;
+	for (const FRigCourseRunner& Runner : Runners)
+	{
+		Fewest = FMath::Min(Fewest, Runner.LoopsCompleted);
+	}
+	return Fewest;
+}
+
+FRigCourseWaypoint ARigTestCourse::StopAt(bool bReverse, int32 Position) const
+{
+	const int32 N = Waypoints.Num();
+	if (N == 0)
+	{
+		return FRigCourseWaypoint();
+	}
+	const int32 P = ((Position % N) + N) % N;
+	if (!bReverse)
+	{
+		return Waypoints[P];
+	}
+	// THE SAME NODE, ARRIVED AT THE OTHER WAY: along the road the forward leg leaves it by. The
+	// reverse runner's leg P then runs forward leg N - 1 - P's node pair backwards - and, since a
+	// leg's turn is at the node it LEAVES, turns at the other end of it: at the dead end the
+	// U-turn falls in the reversed "T junction into the stem" leg. Keyed by node pair, not by
+	// turn, so a result's index means the same road in both directions.
+	FRigCourseWaypoint Stop = Waypoints[(N - P) % N];
+	Stop.From = Stop.Next;
+	return Stop;
+}
+
+int32 ARigTestCourse::LegAt(bool bReverse, int32 Position) const
+{
+	const int32 N = Waypoints.Num();
+	if (N == 0)
+	{
+		return 0;
+	}
+	const int32 P = ((Position % N) + N) % N;
+	return bReverse ? N - 1 - P : P;
+}
+
+FString ARigTestCourse::LegLabel(const FRigCourseRunner& Runner, int32 Position) const
+{
+	const int32 N = Waypoints.Num();
+	const FString& Label = Waypoints[(LegAt(Runner.bReverse, Position) + 1) % N].Label;
+	return Runner.bReverse ? Label + TEXT(", reversed") : Label;
+}
+
 void ARigTestCourse::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	TickDriver(DeltaSeconds);
+	if (Waypoints.Num() >= 2 && ResolveNetworkActor() != nullptr)
+	{
+		for (FRigCourseRunner& Runner : Runners)
+		{
+			TickRunner(Runner, DeltaSeconds);
+		}
+	}
 	DrawRefusals();
 }
 
-void ARigTestCourse::TickDriver(double DeltaSeconds)
+void ARigTestCourse::TickRunner(FRigCourseRunner& Runner, double DeltaSeconds)
 {
-	if (Waypoints.Num() < 2 || Vehicles.Num() == 0 || ResolveNetworkActor() == nullptr)
+	const FString& Who = VehicleNames[Runner.Slot];
+	if (Runner.StartDelay > 0.0)
 	{
-		return;
+		Runner.StartDelay -= DeltaSeconds;
+		if (Runner.StartDelay > 0.0)
+		{
+			return;
+		}
+		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s starts after %.0f s, running the course %s."),
+			*Who, UtilityStartDelay, Runner.bReverse ? TEXT("in reverse") : TEXT("forwards"));
 	}
-	if (ActiveAgentId == 0)
+	if (Runner.AgentId == 0)
 	{
-		StartAttempt();
+		SendOn(Runner);
 		return;
 	}
 
-	const FRigCourseWaypoint& To = Waypoints[(Leg + 1) % Waypoints.Num()];
-	const FString& Who = VehicleNames[VehicleSlot];
+	const int32 Loop = Runner.LoopsCompleted + 1;
+	// The leg the drive ENDS with: its own leg, or the last one it was routed past.
+	const int32 Leg = LegAt(Runner.bReverse, Runner.Target - 1);
+	const FString Label = LegLabel(Runner, Runner.Target - 1);
 	UGroundTraffic* Model = NetworkActor->GetGroundTraffic();
-	const FRoadAgent* Agent = Model != nullptr ? Model->FindAgent(ActiveAgentId) : nullptr;
+	const FRoadAgent* Agent = Model != nullptr ? Model->FindAgent(Runner.AgentId) : nullptr;
 	if (Agent == nullptr)
 	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s vanished before it arrived; skipped as stuck."), Leg, *To.Label, *Who);
-		ActiveAgentId = 0;
-		FinishAttempt(ERigLegOutcome::Stuck, TEXT("vanished"));
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d leg %d (%s) vanished before it arrived; skipped as stuck."),
+			*Who, Loop, Leg, *Label);
+		Runner.AgentId = 0;
+		AbandonDrive(Runner, ERigLegOutcome::Stuck, TEXT("vanished"));
 		return;
 	}
 
 	// The course has no stands and no reverse legs, so a Reversing agent means the layout is
 	// wrong - and the Reversing phase does not step the tow chain, so it would drive a lie.
-	if (Agent->Phase == EAgentPhase::Reversing && !bActiveReversed)
+	if (Agent->Phase == EAgentPhase::Reversing && !Runner.bReversed)
 	{
-		bActiveReversed = true;
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s entered Reversing - the course has no reverse legs."),
-			Leg, *To.Label, *Who);
+		Runner.bReversed = true;
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d leg %d (%s) entered Reversing - the course has no reverse legs."),
+			*Who, Loop, Leg, *Label);
 	}
 
-	// A JACK-KNIFED AGENT HOLDS FOR EVER: only StartDrive clears the link, and every course
-	// agent is fresh. Retire it through the normal path and move on.
+	// A JACK-KNIFED AGENT HOLDS FOR EVER: only StartDrive clears the link, and a redirect
+	// (RestartTaxi) does not call it - so redirecting a folded agent would leave it holding at
+	// the next waypoint too. Retire it through the normal path; the next tick dispatches a
+	// fresh one, chain laid straight, from the next waypoint.
 	// ENFORCED BY: Airside.Model.Tow.JackknifeStops (the fold holds 60 frames on) and
 	// AirportMgr.RigCourse.JackknifeIsRetired (this branch is what ends the leg)
 	if (Agent->GetJackknifedLink() != INDEX_NONE)
 	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s jack-knifed at link %d"),
-			Leg, *To.Label, *Who, Agent->GetJackknifedLink());
-		NetworkActor->GetTraffic()->RetireAgent(ActiveAgentId);
-		ActiveAgentId = 0;
-		FinishAttempt(ERigLegOutcome::Jackknifed);
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d leg %d (%s) jack-knifed at link %d"),
+			*Who, Loop, Leg, *Label, Agent->GetJackknifedLink());
+		AbandonDrive(Runner, ERigLegOutcome::Jackknifed);
 		return;
 	}
 	if (Agent->Phase == EAgentPhase::Parked)
 	{
-		const FVector2D End = Agent->GroundPosition();
 		const double Left = Agent->PlanInProgress().Length - Agent->DistanceAlongPlan();
-		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: leg %d (%s) %s arrived in %.1f s, %.0f uu of its line left."),
-			Leg, *To.Label, *Who, ActiveElapsed, Left);
-		FRigLegResult& Result = LoopResults[Leg * Vehicles.Num() + VehicleSlot];
-		Result.EndPosition = End;
-		Result.DistanceLeft = Left;
-		NetworkActor->GetTraffic()->RetireAgent(ActiveAgentId);
-		ActiveAgentId = 0;
-		FinishAttempt(ERigLegOutcome::Driven);
+		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s loop %d leg %d (%s) arrived in %.1f s, %.0f uu of its line left."),
+			*Who, Loop, Leg, *Label, Runner.Elapsed, Left);
+		if (Runner.Target == Runner.Position + 1)
+		{
+			FRigLegResult& Result = Runner.LoopResults[Leg];
+			Result.Outcome = ERigLegOutcome::Driven;
+			Result.EndPosition = Agent->GroundPosition();
+			Result.DistanceLeft = Left;
+			Result.bReversed = Runner.bReversed;
+			RefusalLabels.Remove(Runner.Slot * Waypoints.Num() + Leg);
+		}
+		// A routed-past drive's legs were all recorded when it was planned (SendOn).
+		Runner.bReversed = false;
+		ArriveAt(Runner, Runner.Target);
+		// ON, WITHOUT RETIRING: the same agent takes the next leg from where it stopped.
+		SendOn(Runner);
 		return;
 	}
 
-	ActiveElapsed += DeltaSeconds;
-	if (ActiveElapsed > ActiveTimeout)
+	Runner.Elapsed += DeltaSeconds;
+	if (Runner.Elapsed > Runner.Timeout)
 	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s stuck: not arrived after %.0f s (allowance %.0f s); skipped."),
-			Leg, *To.Label, *Who, ActiveElapsed, ActiveTimeout);
-		NetworkActor->GetTraffic()->RetireAgent(ActiveAgentId);
-		ActiveAgentId = 0;
-		FinishAttempt(ERigLegOutcome::Stuck);
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d leg %d (%s) stuck: not arrived after %.0f s (allowance %.0f s); skipped."),
+			*Who, Loop, Leg, *Label, Runner.Elapsed, Runner.Timeout);
+		AbandonDrive(Runner, ERigLegOutcome::Stuck);
 	}
 }
 
-void ARigTestCourse::StartAttempt()
+bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCourseWaypoint& To, int32 Slot,
+	FRoutePlan& OutPlan, FString& OutReason) const
+{
+	const URoadNetwork* Network = NetworkActor != nullptr ? NetworkActor->GetNetwork() : nullptr;
+	const FString& Who = VehicleNames[Slot];
+	if (Network == nullptr)
+	{
+		OutReason = FString::Printf(TEXT("%s: no network"), *Who);
+		return false;
+	}
+	const FGuidelineNodeId Start = ResolveWaypoint(*Network, From);
+	const FGuidelineNodeId Goal = ResolveWaypoint(*Network, To);
+	if (!Start.IsSet() || !Goal.IsSet())
+	{
+		OutReason = FString::Printf(TEXT("%s: no lane end at %s"), *Who, Start.IsSet() ? TEXT("the goal") : TEXT("the start"));
+		return false;
+	}
+	// PlayerIssued, NOT VehicleToJob: the course is a tool asking for a route directly, and
+	// VehicleToJob requires the occupancy table - a congestion cost that, with the other vehicle
+	// out, would make this route depend on where that vehicle happens to be, so a refusal would
+	// stop being a fact about the body. The gate that matters is WithVehicle.
+	FRouteQuery Query = FRouteQuery::For(ERouteErrand::PlayerIssued, Start, Goal, 0.0, ETraversalClass::GroundVehicle);
+	Query.WithVehicle(Vehicles[Slot]);
+	OutPlan = RouteSearch::Find(*Network, Query);
+	if (!OutPlan.IsValid())
+	{
+		OutReason = DescribeRefusal(*Network, OutPlan, Slot);
+		return false;
+	}
+	return true;
+}
+
+bool ARigTestCourse::PlanOwnLeg(const FRigCourseRunner& Runner, int32 Position, FRoutePlan& OutPlan, FString& OutReason) const
+{
+	const int32 Leg = LegAt(Runner.bReverse, Position);
+	if (PlanOverrideForTest && PlanOverrideForTest(Leg, Runner.Slot, OutPlan))
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s leg %d (%s): plan overridden by the test."),
+			*VehicleNames[Runner.Slot], Leg, *LegLabel(Runner, Position));
+		return true;
+	}
+	return PlanBetween(StopAt(Runner.bReverse, Position), StopAt(Runner.bReverse, Position + 1), Runner.Slot, OutPlan, OutReason);
+}
+
+void ARigTestCourse::RecordRefusal(FRigCourseRunner& Runner, int32 Position, const FString& Reason)
+{
+	const int32 Leg = LegAt(Runner.bReverse, Position);
+	const FString Label = LegLabel(Runner, Position);
+	// ONCE PER LOOP: a runner visits each leg's position once a loop, and this is the only line.
+	UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d leg %d (%s) refused: %s"),
+		*VehicleNames[Runner.Slot], Runner.LoopsCompleted + 1, Leg, *Label, *Reason);
+
+	FRigLegResult& Result = Runner.LoopResults[Leg];
+	Result.Outcome = ERigLegOutcome::Refused;
+	Result.Reason = Reason;
+
+	const URoadNetwork* Network = NetworkActor->GetNetwork();
+	const FRigCourseWaypoint From = StopAt(Runner.bReverse, Position);
+	const FGuidelineNodeId Start = Network != nullptr ? ResolveWaypoint(*Network, From) : FGuidelineNodeId();
+	const FGuidelineNode* StartNode = Start.IsSet() ? Network->GetGuidelineNode(Start) : nullptr;
+	const FRoadNode* RoadNode = Network != nullptr ? Network->GetNode(From.Node) : nullptr;
+	const FVector2D StartAt = StartNode != nullptr ? StartNode->Position
+		: (RoadNode != nullptr ? RoadNode->Position : FVector2D::ZeroVector);
+	const double Z = NetworkActor->GetActorLocation().Z + 400.0;
+	RefusalLabels.Add(Runner.Slot * Waypoints.Num() + Leg, TPair<FVector, FString>(FVector(StartAt, Z),
+		FString::Printf(TEXT("%s leg %d (%s) refused: %s"), *VehicleNames[Runner.Slot], Leg, *Label, *Reason)));
+}
+
+void ARigTestCourse::SendOn(FRigCourseRunner& Runner)
 {
 	const URoadNetwork* Network = NetworkActor->GetNetwork();
 	if (Network == nullptr)
@@ -434,90 +585,141 @@ void ARigTestCourse::StartAttempt()
 		}
 		return;
 	}
-	const FRigCourseWaypoint& From = Waypoints[Leg];
-	const FRigCourseWaypoint& To = Waypoints[(Leg + 1) % Waypoints.Num()];
-	const FVehicle& Vehicle = Vehicles[VehicleSlot];
-	const FString& Who = VehicleNames[VehicleSlot];
-	const int32 Key = Leg * Vehicles.Num() + VehicleSlot;
+	const int32 N = Waypoints.Num();
+	const FString& Who = VehicleNames[Runner.Slot];
+	const FVehicle& Vehicle = Vehicles[Runner.Slot];
 
-	const FGuidelineNodeId Start = ResolveWaypoint(*Network, From);
-	const FGuidelineNodeId Goal = ResolveWaypoint(*Network, To);
-	FRoutePlan Plan;
-	FString Reason;
-	if (PlanOverrideForTest && PlanOverrideForTest(Leg, VehicleSlot, Plan))
+	// AT MOST ONE LAP PER CALL: every pass either sends the vehicle and returns, or moves it one
+	// stop on (stranded), so a course that refuses everything still returns.
+	for (int32 Tries = 0; Tries < N; ++Tries)
 	{
-		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: leg %d (%s) %s: plan overridden by the test."), Leg, *To.Label, *Who);
-	}
-	else if (!Start.IsSet() || !Goal.IsSet())
-	{
-		Reason = FString::Printf(TEXT("%s: no lane end at %s"), *Who, Start.IsSet() ? TEXT("the goal") : TEXT("the start"));
-	}
-	else
-	{
-		// PlayerIssued, NOT VehicleToJob: the course is a tool asking for a route directly, and
-		// VehicleToJob requires the occupancy table - a congestion cost that, with one vehicle
-		// out at a time, could only ever be zero. The gate that matters is WithVehicle.
-		FRouteQuery Query = FRouteQuery::For(ERouteErrand::PlayerIssued, Start, Goal, 0.0, ETraversalClass::GroundVehicle);
-		Query.WithVehicle(Vehicle);
-		Plan = RouteSearch::Find(*Network, Query);
-		if (!Plan.IsValid())
+		FRoutePlan Plan;
+		FString Reason;
+		int32 Target = Runner.Position + 1;
+		if (!PlanOwnLeg(Runner, Runner.Position, Plan, Reason))
 		{
-			Reason = DescribeRefusal(*Network, Plan, Vehicle);
+			RecordRefusal(Runner, Runner.Position, Reason);
+
+			// ROUTE ON, FROM WHERE IT IS: the next waypoint it CAN reach, up to the loop's end
+			// (so a loop's results are all its own). It does not stop for the refusal.
+			Target = INDEX_NONE;
+			const FRigCourseWaypoint From = StopAt(Runner.bReverse, Runner.Position);
+			for (int32 Stop = Runner.Position + 2; Stop <= N; ++Stop)
+			{
+				FString Unused;
+				if (PlanBetween(From, StopAt(Runner.bReverse, Stop), Runner.Slot, Plan, Unused))
+				{
+					Target = Stop;
+					break;
+				}
+			}
+			if (Target == INDEX_NONE)
+			{
+				// STRANDED: nothing ahead is reachable from this lane end - the rig at a dead end
+				// it cannot U-turn in, which would need the reversing step. The only way on is a
+				// fresh vehicle at the next waypoint; its chain is laid straight there.
+				UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d stranded at the start of leg %d (%s): no later waypoint is reachable from here; %s at the next waypoint."),
+					*Who, Runner.LoopsCompleted + 1, LegAt(Runner.bReverse, Runner.Position), *LegLabel(Runner, Runner.Position),
+					Runner.AgentId != 0 ? TEXT("retired, and dispatched fresh") : TEXT("dispatched fresh"));
+				if (Runner.AgentId != 0)
+				{
+					NetworkActor->GetTraffic()->RetireAgent(Runner.AgentId);
+					Runner.AgentId = 0;
+				}
+				Runner.bReversed = false;
+				ArriveAt(Runner, Runner.Position + 1);
+				continue;
+			}
+			// THE LEGS IT PASSES, each judged on its OWN plan: the loop's refusals are then exactly
+			// the legs the router refuses this body, whatever road the vehicle took past them.
+			for (int32 Passed = Runner.Position + 1; Passed < Target; ++Passed)
+			{
+				FRoutePlan Own;
+				FString OwnReason;
+				if (PlanOwnLeg(Runner, Passed, Own, OwnReason))
+				{
+					Runner.LoopResults[LegAt(Runner.bReverse, Passed)].Outcome = ERigLegOutcome::Bypassed;
+				}
+				else
+				{
+					RecordRefusal(Runner, Passed, OwnReason);
+				}
+			}
+			UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s loop %d routed on past the refusal to waypoint %d, %.0f m."),
+				*Who, Runner.LoopsCompleted + 1, Target % N, Plan.Length / 100.0);
 		}
-	}
+		Runner.Target = Target;
 
-	const FGuidelineNode* StartNode = Start.IsSet() ? Network->GetGuidelineNode(Start) : nullptr;
-	const FVector2D StartAt = StartNode != nullptr ? StartNode->Position
-		: (Network->GetNode(From.Node) != nullptr ? Network->GetNode(From.Node)->Position : FVector2D::ZeroVector);
-	if (!Reason.IsEmpty())
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) refused: %s"), Leg, *To.Label, *Reason);
-		const double Z = NetworkActor->GetActorLocation().Z + 400.0;
-		RefusalLabels.Add(Key, TPair<FVector, FString>(FVector(StartAt, Z),
-			FString::Printf(TEXT("leg %d (%s) refused: %s"), Leg, *To.Label, *Reason)));
-		FinishAttempt(ERigLegOutcome::Refused, Reason);
+		bool bFresh = Runner.AgentId == 0;
+		if (!bFresh)
+		{
+			// THE CHAIN CARRIES ON: RedirectAgent's RestartTaxi re-seats the follower on the plan's
+			// first point - the lane end it has just stopped on - and leaves TowAxles and the fold
+			// alone; StartDrive, which a redirect does not call, is where a chain is laid straight.
+			// ENFORCED BY: AirportMgr.RigCourse.OneLoopHeadless (the tow moves no more than one
+			// sub-step across every handover, and one agent drives every continuous leg)
+			if (!NetworkActor->GetTraffic()->RedirectAgent(Runner.AgentId, Network, Plan))
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s agent %d: the redirect was refused; retired, dispatching fresh."),
+					*Who, Runner.AgentId);
+				NetworkActor->GetTraffic()->RetireAgent(Runner.AgentId);
+				Runner.AgentId = 0;
+				bFresh = true;
+			}
+		}
+		if (bFresh)
+		{
+			if (!NetworkActor->DispatchAgent(Plan, Vehicle, ETraversalClass::GroundVehicle))
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d leg %d (%s): the dispatch was refused; skipped as stuck."),
+					*Who, Runner.LoopsCompleted + 1, LegAt(Runner.bReverse, Target - 1), *LegLabel(Runner, Target - 1));
+				AbandonDrive(Runner, ERigLegOutcome::Stuck, TEXT("dispatch refused"));
+				return;
+			}
+			// THE NEWEST ID, because the forwarder answers only a bool: ARoadNetworkActor::DispatchAgent
+			// is an IRoadEditTarget override, and widening that seam for one dev tool is not worth
+			// it. Sound with two vehicles out because nothing dispatches between that call and this
+			// line: the game thread runs both, back to back.
+			Runner.AgentId = NetworkActor->GetTraffic()->GetNewestAgentId();
+			++Runner.Dispatches;
+		}
+		Runner.Elapsed = 0.0;
+		Runner.Timeout = LegTimeoutSeconds(Vehicle, Plan.Length, LegTimeoutFactor);
+		Runner.bReversed = false;
+
+		const int32 Leg = LegAt(Runner.bReverse, Target - 1);
+		const FString Label = LegLabel(Runner, Target - 1);
+		if (Target == Runner.Position + 1)
+		{
+			FRigLegResult& Result = Runner.LoopResults[Leg];
+			// The plan's own end: the goal's lane end, or wherever an overriding plan goes.
+			Result.GoalPosition = Plan.Polyline.Last();
+			Result.AgentId = Runner.AgentId;
+
+			// THE CRAWL, REPORTED: FSpeedProfile is the drivability authority, and a sharp vertex
+			// is an instantaneous heading change it crawls at steering speed - the width step's
+			// jog, and nothing else on this course should have one (AirportMgr.RigCourse.OneLoopHeadless).
+			FSpeedProfile Profile;
+			Profile.Build(Plan.Polyline, Vehicle.Chassis);
+			Result.SharpVertexCount = Profile.GetSharpVertexCount();
+			Result.SharpestDegrees = Profile.GetSharpestDegrees();
+			if (Profile.HasSharpVertex())
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s leg %d (%s): FSpeedProfile reports %d sharp vertex(es), sharpest %.0f deg at %.0f m - it will crawl there."),
+					*Who, Leg, *Label, Profile.GetSharpVertexCount(), Profile.GetSharpestDegrees(), Profile.GetSharpestAt() / 100.0);
+			}
+		}
+		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s loop %d leg %d (%s) %s agent %d, %.0f m, allowance %.0f s."),
+			*Who, Runner.LoopsCompleted + 1, Leg, *Label, bFresh ? TEXT("dispatched as") : TEXT("redirected, same"),
+			Runner.AgentId, Plan.Length / 100.0, Runner.Timeout);
 		return;
 	}
-	RefusalLabels.Remove(Key);
-
-	if (!NetworkActor->DispatchAgent(Plan, Vehicle, ETraversalClass::GroundVehicle))
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s: the dispatch was refused; skipped as stuck."), Leg, *To.Label, *Who);
-		FinishAttempt(ERigLegOutcome::Stuck, TEXT("dispatch refused"));
-		return;
-	}
-	// THE NEWEST ID, because the forwarder answers only a bool: ARoadNetworkActor::DispatchAgent
-	// is an IRoadEditTarget override, and widening that seam for one dev tool is not worth it.
-	// Sound here because one agent is out at a time and the dispatch just succeeded.
-	ActiveAgentId = NetworkActor->GetTraffic()->GetNewestAgentId();
-	ActiveElapsed = 0.0;
-	ActiveTimeout = LegTimeoutSeconds(Vehicle, Plan.Length, LegTimeoutFactor);
-	// The plan's own end: the goal's lane end, or wherever an overriding plan goes.
-	ActiveGoal = Plan.Polyline.Last();
-	bActiveReversed = false;
-	LoopResults[Key].GoalPosition = ActiveGoal;
-	LoopResults[Key].AgentId = ActiveAgentId;
-
-	// THE CRAWL, REPORTED: FSpeedProfile is the drivability authority, and a sharp vertex is an
-	// instantaneous heading change it crawls at steering speed - the width step's jog, and
-	// nothing else on this course should have one (AirportMgr.RigCourse.OneLoopHeadless).
-	FSpeedProfile Profile;
-	Profile.Build(Plan.Polyline, Vehicle.Chassis);
-	LoopResults[Key].SharpVertexCount = Profile.GetSharpVertexCount();
-	LoopResults[Key].SharpestDegrees = Profile.GetSharpestDegrees();
-	if (Profile.HasSharpVertex())
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: leg %d (%s) %s: FSpeedProfile reports %d sharp vertex(es), sharpest %.0f deg at %.0f m - it will crawl there."),
-			Leg, *To.Label, *Who, Profile.GetSharpVertexCount(), Profile.GetSharpestDegrees(), Profile.GetSharpestAt() / 100.0);
-	}
-	UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: leg %d (%s) %s dispatched as agent %d, %.0f m, allowance %.0f s."),
-		Leg, *To.Label, *Who, ActiveAgentId, Plan.Length / 100.0, ActiveTimeout);
 }
 
-FString ARigTestCourse::DescribeRefusal(const URoadNetwork& Network, const FRoutePlan& Plan, const FVehicle& Vehicle) const
+FString ARigTestCourse::DescribeRefusal(const URoadNetwork& Network, const FRoutePlan& Plan, int32 Slot) const
 {
 	const UEnum* ResultEnum = StaticEnum<ERouteResult>();
-	FString Text = FString::Printf(TEXT("%s %s"), *VehicleNames[VehicleSlot],
+	FString Text = FString::Printf(TEXT("%s %s"), *VehicleNames[Slot],
 		*ResultEnum->GetNameStringByValue(static_cast<int64>(Plan.Result)));
 	if (Plan.Result != ERouteResult::TooNarrow || !Plan.RejectedEdge.IsSet())
 	{
@@ -531,7 +733,7 @@ FString ARigTestCourse::DescribeRefusal(const URoadNetwork& Network, const FRout
 	}
 	// THE ROUTER'S OWN RULE, asked again for its figures (VehicleFit::Judge is Fits' body), so
 	// the numbers printed are the ones the refusal was made on.
-	const FFitVerdict Verdict = VehicleFit::Judge(*Edge, Vehicle, Network);
+	const FFitVerdict Verdict = VehicleFit::Judge(*Edge, Vehicles[Slot], Network);
 	Text += FString::Printf(TEXT(" at guideline node %d (%.0f, %.0f)"), Edge->A.Index, At->Position.X, At->Position.Y);
 	if (!Verdict.Fits())
 	{
@@ -540,59 +742,59 @@ FString ARigTestCourse::DescribeRefusal(const URoadNetwork& Network, const FRout
 	return Text;
 }
 
-void ARigTestCourse::FinishAttempt(ERigLegOutcome Outcome, const FString& Reason)
+void ARigTestCourse::AbandonDrive(FRigCourseRunner& Runner, ERigLegOutcome Outcome, const FString& Reason)
 {
-	FRigLegResult& Result = LoopResults[Leg * Vehicles.Num() + VehicleSlot];
+	FRigLegResult& Result = Runner.LoopResults[LegAt(Runner.bReverse, Runner.Target - 1)];
 	Result.Outcome = Outcome;
 	Result.Reason = Reason;
-	Result.bReversed = bActiveReversed;
-	bActiveReversed = false;
-
-	if (++VehicleSlot < Vehicles.Num())
+	Result.bReversed = Runner.bReversed;
+	Runner.bReversed = false;
+	if (Runner.AgentId != 0)
 	{
-		return;
+		NetworkActor->GetTraffic()->RetireAgent(Runner.AgentId);
+		Runner.AgentId = 0;
 	}
-	VehicleSlot = 0;
-	if (++Leg < Waypoints.Num())
-	{
-		return;
-	}
-	Leg = 0;
-	EndLoop();
+	// ON TO THE STOP IT WAS DRIVING TO: the next tick dispatches a fresh agent from there.
+	ArriveAt(Runner, Runner.Target);
 }
 
-void ARigTestCourse::EndLoop()
+void ARigTestCourse::ArriveAt(FRigCourseRunner& Runner, int32 Stop)
 {
-	++LoopsCompleted;
-	TArray<int32> Driven;
-	Driven.Init(0, Vehicles.Num());
-	TArray<FString> Refused;
-	for (int32 V = 0; V < Vehicles.Num(); ++V)
+	Runner.Position = Stop;
+	if (Runner.Position >= Waypoints.Num())
 	{
-		TArray<FString> Mine;
-		for (int32 L = 0; L < Waypoints.Num(); ++L)
-		{
-			const FRigLegResult& R = LoopResults[L * Vehicles.Num() + V];
-			const FString& Label = Waypoints[(L + 1) % Waypoints.Num()].Label;
-			switch (R.Outcome)
-			{
-			case ERigLegOutcome::Driven:     ++Driven[V]; break;
-			case ERigLegOutcome::Refused:    Mine.Add(FString::Printf(TEXT("%d (%s)"), L, *Label)); break;
-			case ERigLegOutcome::Jackknifed: Mine.Add(FString::Printf(TEXT("%d (%s, jack-knifed)"), L, *Label)); break;
-			case ERigLegOutcome::Stuck:      Mine.Add(FString::Printf(TEXT("%d (%s, stuck)"), L, *Label)); break;
-			default: break;
-			}
-		}
-		Refused.Add(FString::Printf(TEXT("%s: %s"), *VehicleNames[V],
-			Mine.Num() > 0 ? *FString::Join(Mine, TEXT(", ")) : TEXT("none")));
+		Runner.Position -= Waypoints.Num();
+		EndLoop(Runner);
 	}
-	UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: loop %d - rig %d/%d, utility+trailer %d/%d legs driven; refused: %s"),
-		LoopsCompleted, Driven[0], Waypoints.Num(), Vehicles.Num() > 1 ? Driven[1] : 0, Waypoints.Num(),
-		*FString::Join(Refused, TEXT("; ")));
+	Runner.Target = Runner.Position;
+}
 
-	LastLoopResults = LoopResults;
-	LoopResults.Reset();
-	LoopResults.SetNum(Waypoints.Num() * Vehicles.Num());
+void ARigTestCourse::EndLoop(FRigCourseRunner& Runner)
+{
+	++Runner.LoopsCompleted;
+	int32 Driven = 0;
+	TArray<FString> Mine;
+	for (int32 L = 0; L < Waypoints.Num(); ++L)
+	{
+		const FRigLegResult& R = Runner.LoopResults[L];
+		const FString& Label = Waypoints[(L + 1) % Waypoints.Num()].Label;
+		switch (R.Outcome)
+		{
+		case ERigLegOutcome::Driven:     ++Driven; break;
+		case ERigLegOutcome::Refused:    Mine.Add(FString::Printf(TEXT("%d (%s)"), L, *Label)); break;
+		case ERigLegOutcome::Bypassed:   Mine.Add(FString::Printf(TEXT("%d (%s, bypassed)"), L, *Label)); break;
+		case ERigLegOutcome::Jackknifed: Mine.Add(FString::Printf(TEXT("%d (%s, jack-knifed)"), L, *Label)); break;
+		case ERigLegOutcome::Stuck:      Mine.Add(FString::Printf(TEXT("%d (%s, stuck)"), L, *Label)); break;
+		default: break;
+		}
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s loop %d - %d/%d legs driven; refused: %s"),
+		*VehicleNames[Runner.Slot], Runner.LoopsCompleted, Driven, Waypoints.Num(),
+		Mine.Num() > 0 ? *FString::Join(Mine, TEXT(", ")) : TEXT("none"));
+
+	Runner.LastLoopResults = Runner.LoopResults;
+	Runner.LoopResults.Reset();
+	Runner.LoopResults.SetNum(Waypoints.Num());
 }
 
 void ARigTestCourse::DrawRefusals() const

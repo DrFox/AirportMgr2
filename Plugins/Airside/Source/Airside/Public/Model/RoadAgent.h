@@ -740,8 +740,12 @@ public:
 	 * kind it is - UGroundTraffic::RedirectAgent's "a redirect changes where it goes, not what
 	 * it is". Replaces that function copying Agent.Airframe out and handing it back to
 	 * StartTaxi, which cannot be written for an agent that may hold either bundle.
+	 *
+	 * InitialHeading, when set, is the body heading to start from instead of the line's own at
+	 * the start: UGroundTraffic::RedirectAgent passes a TOW's current heading, see there.
 	 */
-	void RestartTaxi(const FRoutePlan& Plan, double InitialTravelled = 0.0);
+	void RestartTaxi(const FRoutePlan& Plan, double InitialTravelled = 0.0,
+		TOptional<double> InitialHeading = TOptional<double>());
 
 	/**
 	 * Sends a parked aeroplane off its stand: Phase becomes Manoeuvring. False, and leaves
