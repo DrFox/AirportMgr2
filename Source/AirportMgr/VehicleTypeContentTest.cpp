@@ -93,8 +93,11 @@ namespace
 		return Count > 0 ? TOptional<double>(Sum / Count) : TOptional<double>();
 	}
 
-	/** Push a motion in and let the graph run on it - AnimYardRigTest's Settle. */
-	void Settle(ARoadAgentActor& Agent, USkeletalMeshComponent& Component, const FAgentMotion& Motion,
+	/**
+	 * Push a motion in and let the graph run on it - AnimYardRigTest's Settle, PREFIXED because
+	 * the module is a unity build: two anonymous-namespace Settles in one batch are C2084.
+	 */
+	void VehicleTypeSettle(ARoadAgentActor& Agent, USkeletalMeshComponent& Component, const FAgentMotion& Motion,
 		double Seconds)
 	{
 		Agent.SetMotion(Motion, 0.0);
@@ -330,7 +333,7 @@ bool FVehicleTypesWorkingPartsMoveTest::RunTest(const FString& Parameters)
 		const auto PoseAt = [&](double Body, double Seconds)
 		{
 			Bench.BodyFraction = Body;
-			Settle(*Agent, *Component, Bench.ToAgentMotion(FGearPerformance()), Seconds);
+			VehicleTypeSettle(*Agent, *Component, Bench.ToAgentMotion(FGearPerformance()), Seconds);
 			return Component->GetComponentSpaceTransforms();
 		};
 

@@ -48,6 +48,11 @@ ROWS = [
         # 2026-09-21 and it is 0.31 m SHORTER than the download was, which changes nothing
         # about where it stands: the 172 is still 0.5 m shorter and 2.1 m narrower.
         ("/Game/Aircraft/Plane7/SK_Plane7", "Plane7 (PA-46 Meridian)"),
+        # THE CARAVAN BETWEEN THE MERIDIAN AND THE KING AIR, ON SPAN: 15.88 m against 13.11 and
+        # 17.69. Length does not agree (12.68 against the King Air's 14.00 - fine) and neither
+        # does height; span is what the row is sorted on. It is the first Code B aeroplane in
+        # the row, so the A/B line falls between it and the Meridian.
+        ("/Game/Aircraft/Plane10/SK_Plane10", "Plane10 (Grand Caravan)"),
         # AHEAD OF THE TWIN OTTER, and "smallest first" had to pick a dimension to be first
         # ON. It picks SPAN - 17.69 m against 19.75 - because span is what the row is read
         # for and what the Code letter turns on. Length agrees (14.00 against 15.77), so
@@ -122,6 +127,9 @@ ROW_PITCH_UU = 10000.0
 #
 # 450 m SINCE 2026-09-25, UP FROM 400, FOR plane9. The A320's 35.44 m and its 12 m gap take
 # the nine-aeroplane row from 355 to about 402 m - past 400. Span still binds.
+#
+# plane10, 2026-09-25, and 450 stands: the Caravan's 15.88 m and its 12 m gap take the row to
+# about 430 m. The next aeroplane of any span over ~8 m will not fit.
 FLOOR_X_M = 300.0
 FLOOR_Y_M = 450.0
 

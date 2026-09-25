@@ -56,6 +56,11 @@ NEEDS = {
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "a Twin Otter beta-ranges off a stand",
     ),
+    "/Game/Entities/DA_Aircraft_Plane10": (
+        unreal.PushbackNeed.SELF_MANOEUVRE,
+        "a Caravan reverses off a stand on its own prop - the PT6's reverse pitch - and the "
+        "class default of VehicleTug would gate a grass-strip single behind the depot",
+    ),
     "/Game/Entities/DA_Aircraft_Plane3": (
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "a Q400 turns out of a regional stand on its own props; the depot is the jets' tax",

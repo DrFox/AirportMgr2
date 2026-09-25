@@ -326,6 +326,26 @@ SPECS = [
              "wing root, not 90) and BOTH bays have doors.",
     ),
     Spec(
+        key="plane10",
+        source=MODELS + r"\plane10\export\plane10.glb",
+        mesh_dir="/Game/Aircraft/Plane10",
+        skel_name="SK_Plane10",
+        # plane1's SIX JOINTS AND plane1's NAMES: root, prop, wheel_L/_R, nosewheel_steer,
+        # nosewheel. Fixed gear, so no leg is a bone; maingear_L/_R and nosegear are meshes,
+        # the last skinned to nosewheel_steer so the fork turns with the tyre.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, the contact patch - plane10/scripts/build_export.py's UE_ORIGIN is
+        # (0, NOSE_S, 0), the nose axle's station on the ground.
+        origin_on="front",
+        note="Cessna 208B Grand Caravan, cargo pod. 12.675 m long, 15.875 m span, 4.707 m "
+             "to the fin tip against the POH three-view's 12.675 / 15.875 / 4.712. Origin "
+             "on the NOSE gear. Six joints and FIXED gear, plane1's shape: nothing retracts, "
+             "so the type declares no gear cycle. One 3-blade prop the spinner rides.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",
