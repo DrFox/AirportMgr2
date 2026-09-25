@@ -41,9 +41,33 @@ struct FCappedWidening
 	double LengthNeeded = 0.0;
 };
 
+/**
+ * A two-arm ROAD bend's outer edge (RoadNetworkSolver.cpp, ConcentricOuterEdge): laid concentric
+ * with the lanes, or why not. One per service-road bend a solve saw; SolveAll logs each on a
+ * Topology rebuild, a skip at Warning (re-review of d487f0da: the course showed three shapes and
+ * the solver said nothing about the two that were not the rule).
+ */
+struct FBendOuter
+{
+	int32 NodeIndex = INDEX_NONE;
+	FVector2D Position = FVector2D::ZeroVector;
+	bool bApplied = false;
+	/** Empty when applied; otherwise the named reason it could not be. */
+	FString Reason;
+	/** The arms' profile names, "A / B". */
+	FString Tiers;
+	double InnerRadius = 0.0;
+	double OuterRadius = 0.0;
+	/** The two arms' total widths; the arc is sized for the wider. */
+	double Widths[2] = { 0.0, 0.0 };
+};
+
 /** Every node's solved boundary, keyed by FRoadNodeId::Index. */
 struct FRoadSolveResult
 {
+	/** Every two-arm road bend's outer edge - see FBendOuter. */
+	TArray<FBendOuter> BendOuters;
+
 	/** Bends whose widening a short arm capped - see FCappedWidening. */
 	TArray<FCappedWidening> CappedWidenings;
 
@@ -78,6 +102,8 @@ struct FRoadNodeCuts
 	TArray<FRoadSegmentId> ArmSegments;
 	/** Set when this node's inside widening was capped by a short arm (NodeIndex INDEX_NONE otherwise). */
 	FCappedWidening Capped;
+	/** Set when this node is a two-arm road bend (NodeIndex INDEX_NONE otherwise). */
+	FBendOuter Outer;
 };
 
 /**

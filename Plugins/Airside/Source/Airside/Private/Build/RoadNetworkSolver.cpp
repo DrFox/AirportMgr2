@@ -650,30 +650,26 @@ void WidenBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out,
  * for aircraft), T and X junctions untouched.
  * ENFORCED BY: Airside.Build.BendLanes.OuterEdgeConcentric, .WeldExact
  */
-void ConcentricOuterEdge(const URoadNetwork& Network, FRoadNodeCuts& Out)
+void ConcentricOuterEdge(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out)
 {
 	if (!Out.Result.bValid || Out.Input.Arms.Num() != 2 || Out.ArmSegments.Num() != 2 || Out.Result.Corners.Num() != 2)
 	{
 		return;
 	}
-	const FJunctionArm& Arm0 = Out.Input.Arms[0];
-	const FJunctionArm& Arm1 = Out.Input.Arms[1];
-	const double Width = Arm0.HalfWidthLeft + Arm0.HalfWidthRight;
-	if (!FMath::IsNearlyEqual(Width, Arm1.HalfWidthLeft + Arm1.HalfWidthRight, 1.0e-6) || Arm0.bContinuous || Arm1.bContinuous)
-	{
-		return;
-	}
+	// A ROAD BEND: both arms service roads (a ground-vehicle lane) - a taxiway's corner is authored
+	// for aircraft and is not this rule's - and a corner under a half turn. Anything else is not a
+	// bend this rule is for, and is not recorded.
+	const URoadProfile* Profiles[2] = { nullptr, nullptr };
 	for (int32 Arm = 0; Arm < 2; ++Arm)
 	{
 		const FRoadSegment* Segment = Network.GetSegment(Out.ArmSegments[Arm]);
-		const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
-		if (Profile == nullptr || !Profile->Guidelines.ContainsByPredicate(
+		Profiles[Arm] = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+		if (Profiles[Arm] == nullptr || !Profiles[Arm]->Guidelines.ContainsByPredicate(
 			[](const FProfileGuideline& Line) { return Line.Class == ETraversalClass::GroundVehicle; }))
 		{
 			return;
 		}
 	}
-	// The inner corner is the one under a half turn; the outer, the other.
 	int32 Inner = INDEX_NONE;
 	for (int32 Corner = 0; Corner < 2; ++Corner)
 	{
@@ -685,19 +681,76 @@ void ConcentricOuterEdge(const URoadNetwork& Network, FRoadNodeCuts& Out)
 	}
 	if (Inner == INDEX_NONE)
 	{
-		return;
+		return;   // straight through (or no corner at all): not a bend
 	}
+
+	FBendOuter& Note = Out.Outer;
+	Note.NodeIndex = NodeIndex;
+	Note.Position = Out.Input.Position;
+	Note.Tiers = FString::Printf(TEXT("%s / %s"), *Profiles[0]->GetName(), *Profiles[1]->GetName());
 	const int32 Outer = 1 - Inner;
 	const RoadGeom::FFillet& InnerFillet = Out.Result.Corners[Inner];
-	const FVector2D Centre = InnerFillet.Centre;
-	const double Radius = InnerFillet.Radius + Width;
+	Note.InnerRadius = InnerFillet.Radius;
+	for (int32 Arm = 0; Arm < 2; ++Arm)
+	{
+		Note.Widths[Arm] = Out.Input.Arms[Arm].HalfWidthLeft + Out.Input.Arms[Arm].HalfWidthRight;
+	}
+	if (Out.Input.Arms[0].bContinuous || Out.Input.Arms[1].bContinuous)
+	{
+		// GENUINELY NOT A ROAD'S CORNER: a continuous arm passes through the node uncut (a runway,
+		// bContinuousThroughJunctions) and contributes no rim - there is no outer corner to lay.
+		Note.Reason = TEXT("an arm passes through the node uncut (continuous profile): no outer corner exists");
+		return;
+	}
 
+	// THE ARC: about the inner fillet's centre - the lanes' - at its radius plus the WIDER arm's
+	// width. At a width step the two outer edges sit different distances from that centre, so no
+	// one circle touches both: sized for the wider, it touches the wider arm's outer edge and meets
+	// the narrower's where it crosses it, on the node's side of the foot (the first crossing coming
+	// round the bend), leaving a crease of acos(d / R) there. Sized for the narrower instead, it
+	// would run inside the wider arm's outer lane - the wider arm's pavement is the one that must
+	// hold, so the wider width it is, for either arm, arriving or leaving.
+	const FVector2D Centre = InnerFillet.Centre;
+	const double Radius = InnerFillet.Radius + FMath::Max(Note.Widths[0], Note.Widths[1]);
+	Note.OuterRadius = Radius;
+
+	// Where the arc meets an arm's outer edge: the foot of the centre when the edge is a radius
+	// away (tangent), else the crossing nearer the node.
+	auto MeetEdge = [&Centre, Radius](const FRay2D& Edge, FVector2D& OutPoint) -> bool
+	{
+		const double Foot = FVector2D::DotProduct(Centre - Edge.Origin, Edge.Dir);
+		const FVector2D FootPoint = Edge.Origin + Edge.Dir * Foot;
+		const double Distance = FVector2D::Distance(FootPoint, Centre);
+		if (Distance > Radius + 1.0e-6)
+		{
+			return false;
+		}
+		const double Half = Distance >= Radius ? 0.0 : FMath::Sqrt(Radius * Radius - Distance * Distance);
+		if (Foot - Half < 0.0)
+		{
+			return false;
+		}
+		OutPoint = Half == 0.0 ? FootPoint : Edge.Origin + Edge.Dir * (Foot - Half);
+		return true;
+	};
 	// The outer corner runs from arm Outer's LEFT edge to arm Inner's RIGHT edge (corner i lies
-	// between arm i's left edge and arm i+1's right edge). The foot of the centre on each edge line.
-	const FRay2D From = FJunctionSolver::MakeLeftEdge(Out.Input, Outer);
-	const FRay2D To = FJunctionSolver::MakeRightEdge(Out.Input, Inner);
-	const FVector2D Start = From.Origin + From.Dir * FVector2D::DotProduct(Centre - From.Origin, From.Dir);
-	const FVector2D End = To.Origin + To.Dir * FVector2D::DotProduct(Centre - To.Origin, To.Dir);
+	// between arm i's left edge and arm i+1's right edge).
+	FVector2D Start, End;
+	if (!MeetEdge(FJunctionSolver::MakeLeftEdge(Out.Input, Outer), Start)
+		|| !MeetEdge(FJunctionSolver::MakeRightEdge(Out.Input, Inner), End))
+	{
+		Note.Reason = TEXT("the outer arc meets an arm's outer edge behind the node");
+		return;
+	}
+	// The arc must end inside each arm's cut, or the rim would run past the cut vertex it joins.
+	const double StartAlong = FVector2D::DotProduct(Start - Out.Input.Position, Out.Input.Arms[Outer].Tangent);
+	const double EndAlong = FVector2D::DotProduct(End - Out.Input.Position, Out.Input.Arms[Inner].Tangent);
+	if (StartAlong > Out.Result.Arms[Outer].CutDistance + 1.0e-6 || EndAlong > Out.Result.Arms[Inner].CutDistance + 1.0e-6)
+	{
+		Note.Reason = FString::Printf(TEXT("the outer arc meets an arm beyond its cut (%.0f / %.0f uu vs cuts %.0f / %.0f)"),
+			StartAlong, EndAlong, Out.Result.Arms[Outer].CutDistance, Out.Result.Arms[Inner].CutDistance);
+		return;
+	}
 	const double StartAngle = FMath::Atan2(Start.Y - Centre.Y, Start.X - Centre.X);
 	const double Sweep = FMath::UnwindRadians(FMath::Atan2(End.Y - Centre.Y, End.X - Centre.X) - StartAngle);
 	// As finely as the inner fillet, scaled by the larger radius so a piece is no longer.
@@ -714,6 +767,7 @@ void ConcentricOuterEdge(const URoadNetwork& Network, FRoadNodeCuts& Out)
 	}
 	Rim.Add(End);
 	Out.Input.Arms[Outer].RimToNext = MoveTemp(Rim);
+	Note.bApplied = true;
 }
 }
 
@@ -729,7 +783,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 		return false;
 	}
 	WidenBend(Network, NodeIndex, Out, DesignVehicles, Widening);
-	ConcentricOuterEdge(Network, Out);
+	ConcentricOuterEdge(Network, NodeIndex, Out);
 	return true;
 }
 
@@ -874,6 +928,10 @@ void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, i
 	{
 		InOutResult.CappedWidenings.Add(Cuts.Capped);
 	}
+	if (Cuts.Outer.NodeIndex != INDEX_NONE)
+	{
+		InOutResult.BendOuters.Add(Cuts.Outer);
+	}
 
 	FJunctionInput& Input = Cuts.Input;
 	FJunctionResult& Result = Cuts.Result;
@@ -972,6 +1030,22 @@ FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSe
 				Capped.Length / 100.0, Capped.LengthNeeded / 100.0);
 		}
 		Network.CappedWideningsWarned() = MoveTemp(Warned);
+
+		// EVERY ROAD BEND SAYS WHICH OUTER EDGE IT GOT (re-review of d487f0da): the rule, or the named
+		// reason it could not be - a skip at Warning, so a second shape is never silent again.
+		for (const FBendOuter& Bend : Out.BendOuters)
+		{
+			if (Bend.bApplied)
+			{
+				UE_LOG(LogRoadSolve, Log, TEXT("Bend at (%.0f,%.0f) [%s]: outer arc applied - inner %.0f uu, outer %.0f uu (widths %.0f / %.0f)."),
+					Bend.Position.X, Bend.Position.Y, *Bend.Tiers, Bend.InnerRadius, Bend.OuterRadius, Bend.Widths[0], Bend.Widths[1]);
+			}
+			else
+			{
+				UE_LOG(LogRoadSolve, Warning, TEXT("Bend at (%.0f,%.0f) [%s]: outer arc skipped: %s - inner %.0f uu (widths %.0f / %.0f)."),
+					Bend.Position.X, Bend.Position.Y, *Bend.Tiers, *Bend.Reason, Bend.InnerRadius, Bend.Widths[0], Bend.Widths[1]);
+			}
+		}
 	}
 
 	return Out;

@@ -1749,4 +1749,59 @@ bool FRigCourseFitCacheDropsOnRebuildTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigCourseEveryBendIsConcentricTest,
+	"AirportMgr.RigCourse.EveryBendIsConcentric",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigCourseEveryBendIsConcentricTest::RunTest(const FString& Parameters)
+{
+	// ONE SHAPE (re-review of d487f0da: the user saw three on the course). Every two-arm road bend
+	// the course lays gets the outer edge concentric with its lanes - width steps included - and
+	// paves by the fan with its cut vertices bitwise on the rim, so the ribbons weld as before.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
+	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	Course->BuildCourseForTest(*Actor);
+	URoadNetwork& Net = *Actor->Network;
+	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net, 12, &Designs, EWideningTrace::Trace);
+
+	int32 Applied = 0;
+	for (const FBendOuter& Bend : Solved.BendOuters)
+	{
+		const FCappedWidening* Capped = Solved.CappedWidenings.FindByPredicate(
+			[&Bend](const FCappedWidening& C) { return C.NodeIndex == Bend.NodeIndex; });
+		const FJunctionResult* Row = Solved.NodeResults.Find(Bend.NodeIndex);
+		const bool bWidened = Row != nullptr && Row->Arms.Num() == 2 && Row->Corners.Num() == 2;
+		AddInfo(FString::Printf(TEXT("BENDROW (%.0f, %.0f) | %s | %s | inner %.0f | outer %.0f | widths %.0f / %.0f | cuts %.0f / %.0f | widening %s"),
+			Bend.Position.X, Bend.Position.Y, *Bend.Tiers, Bend.bApplied ? TEXT("applied") : *(TEXT("skipped: ") + Bend.Reason),
+			Bend.InnerRadius, Bend.OuterRadius, Bend.Widths[0], Bend.Widths[1],
+			bWidened ? Row->Arms[0].CutDistance : 0.0, bWidened ? Row->Arms[1].CutDistance : 0.0,
+			Capped != nullptr ? *FString::Printf(TEXT("CAPPED by segment %d (%.0f uu missing)"), Capped->Segment.Index, Capped->Missing) : TEXT("full or none")));
+		TestTrue(FString::Printf(TEXT("bend at (%.0f, %.0f) [%s] has the concentric outer edge (%s)"),
+			Bend.Position.X, Bend.Position.Y, *Bend.Tiers, *Bend.Reason), Bend.bApplied);
+		if (!Bend.bApplied) { continue; }
+		++Applied;
+		const FJunctionResult* Junction = Solved.NodeResults.Find(Bend.NodeIndex);
+		if (!TestNotNull(TEXT("its junction solved"), Junction)) { continue; }
+		TestTrue(FString::Printf(TEXT("bend at (%.0f, %.0f) is paved by the fan, not ear-clipped"), Bend.Position.X, Bend.Position.Y),
+			Junction->Triangles.Num() > 0);
+		for (const FJunctionArmResult& Arm : Junction->Arms)
+		{
+			for (const FVector2D& Cut : { Arm.LeftCut, Arm.RightCut })
+			{
+				bool bOnRim = false;
+				for (const FVector2D& P : Junction->Boundary) { bOnRim |= (P.X == Cut.X && P.Y == Cut.Y); }
+				TestTrue(FString::Printf(TEXT("bend at (%.0f, %.0f): cut vertex (%.1f, %.1f) is on the rim bitwise - the weld"),
+					Bend.Position.X, Bend.Position.Y, Cut.X, Cut.Y), bOnRim);
+			}
+		}
+	}
+	TestTrue(FString::Printf(TEXT("the course has bends to judge (%d)"), Solved.BendOuters.Num()), Applied >= 8);
+	return true;
+}
+
 #endif
