@@ -1,5 +1,6 @@
 #include "Model/RunwayAdmission.h"
 
+#include "Model/Airframe.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"

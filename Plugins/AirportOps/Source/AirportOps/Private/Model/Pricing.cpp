@@ -1,6 +1,7 @@
 #include "Model/Pricing.h"
 
 #include "AirportOpsLog.h"
+#include "Model/Airframe.h"
 #include "Model/RoadEntity.h"
 #include "Solve/IcaoCode.h"
 

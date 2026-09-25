@@ -19,6 +19,7 @@ class IBuildPurse;
 class URoadProfile;
 class UGroundTraffic;
 class UEntityDefinition;
+struct FAirframe; // #300: DispatchAgent takes it by reference and forwards it on; RoadEntity.h no longer pulls in Airframe.h, so this header names its own forward declaration.
 
 /**
  * What a graph change notification is ABOUT - issue #165, extended to three kinds by issue

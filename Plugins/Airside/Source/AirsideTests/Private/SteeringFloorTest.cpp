@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
+#include "Model/Airframe.h"
 #include "Model/RoadEntity.h"
 #include "Model/RouteFollower.h"
 #include "Model/SpeedProfile.h"

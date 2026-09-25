@@ -16,6 +16,7 @@ class UEntityDefinition;
 class UAircraftType;
 enum class EPlaceableEntity : uint8;
 enum class EIcaoCode : uint8;
+struct FAirframe; // #300: ResolveDefaultAirframe/ResolveAgentView only declare it here (by value, by reference); AirsideSettings.cpp gets the full type via Entities/AircraftType.h.
 
 /** What UAirsideSettings::ResolveAgentView resolved - see its own comment. */
 USTRUCT()
