@@ -59,23 +59,6 @@ namespace
 		}
 	};
 
-	/**
-	 * The most one quadratic of a bend lane's arc may sweep, radians: 22.5 degrees, so a right
-	 * angle is four pieces delivering cos(11.25) = 0.981 of the arc's radius (GuidelineGeom::Arc).
-	 * Two pieces would deliver 0.924 and eight 0.995; four is where the loss is under the lane's
-	 * own width in 50 and the graph grows by three nodes per lane per bend.
-	 */
-	constexpr double BendPieceSweep = UE_DOUBLE_PI / 8.0;
-
-	/**
-	 * How far a lane end may sit off the tangent point of its bend's inner fillet, uu, and the two
-	 * ends' radii differ, for the lane to be laid concentric. Both are the SAME solver value
-	 * reached by two float paths when the arms match, so the spread is a rounding error; a real
-	 * mismatch (a Narrow arm meeting a Wide one: the lanes sit 210 and 285 uu off their inner
-	 * edges) is tens of uu and keeps the quadratic.
-	 */
-	constexpr double BendTangentTolerance = 1.0;
-
 	/** 10 uu steps to 30 m: finer than any lane, further than any vehicle sweeps. */
 	constexpr double ClearanceStep = 10.0;
 	constexpr double ClearanceCap = 3000.0;
@@ -635,7 +618,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			// Out of the road, past the dead end.
 			const FVector2D Axis = -Network.GetOutgoingTangent(ArmSeg, NodeId).GetSafeNormal();
 			const TArray<UTurnGeom::FPiece> Pieces =
-				UTurnGeom::Balloon(InAt, OutAt, Axis, DesignVehicles.Default.TightestFollowableRadius());
+				UTurnGeom::Balloon(InAt, OutAt, Axis, DesignVehicles.Default.Chassis.TightestFollowableRadius());
 			if (Pieces.Num() == 0)
 			{
 				UE_LOG(LogAirside, Warning, TEXT("Dead end at (%.0f,%.0f): no U-turn laid - its lane ends coincide"),
@@ -749,20 +732,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// Arriving at this node along the From arm, then leaving along the To
 					// arm. Either arm may be one-way, and a turn that ignores that lands an
 					// agent on a node it cannot leave.
-					const bool bFromAtA = (FromSegment->A == NodeId);
-					const bool bToAtA   = (ToSegment->A == NodeId);
-					const EGuidelineDir FromDir = FromProfile->Guidelines[FromWhich].Direction;
-					const EGuidelineDir ToDir   = ToProfile->Guidelines[ToWhich].Direction;
-
-					const bool bMayArrive =
-						FromDir == EGuidelineDir::Bidirectional ||
-						(bFromAtA  && FromDir == EGuidelineDir::BToA) ||
-						(!bFromAtA && FromDir == EGuidelineDir::AToB);
-
-					const bool bMayLeave =
-						ToDir == EGuidelineDir::Bidirectional ||
-						(bToAtA  && ToDir == EGuidelineDir::AToB) ||
-						(!bToAtA && ToDir == EGuidelineDir::BToA);
+					// FProfileGuideline's one reading of Direction at a node, which the solver's bend
+					// widening traces the same turns by.
+					const bool bMayArrive = FromProfile->Guidelines[FromWhich].ArrivesAt(FromSegment->A == NodeId);
+					const bool bMayLeave = ToProfile->Guidelines[ToWhich].LeavesFrom(ToSegment->A == NodeId);
 
 					if (!bMayArrive || !bMayLeave)
 					{
@@ -811,11 +784,12 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// quadratic above runs cut to cut with its control on the lane lines' crossing -
 					// one quadratic across the corner's whole sweep, which delivers only cos(sweep/2) of
 					// the arc it approximates (0.707 at a right angle: 726 uu on a Narrow inner lane
-					// whose arc is 1026) and bulges off it by 62 uu at the apex. The cut IS the inner
-					// fillet's tangent point, so each lane end is ALREADY a tangent point of a circle
-					// about that fillet's centre, at the lane's own distance from the inner edge - the
-					// lane's line concentric with the pavement's inside. So the turn is that arc, laid
-					// in pieces (GuidelineGeom::Arc), each sampled once like any edge.
+					// whose arc is 1026) and bulges off it by 62 uu at the apex. The cut is the inner
+					// fillet's tangent point (or, where the solver widened the inside, further out along
+					// the arm), so each lane line touches a circle about that fillet's centre at the
+					// lane's own distance from the inner edge - the lane concentric with the pavement's
+					// inside. So the turn is that arc, laid in pieces (GuidelineGeom::BendLane), each
+					// sampled once like any edge.
 					//
 					// CONCENTRIC WITH THE INNER EDGE, NOT THE OUTER, and not by preference: the two
 					// fillets have the SAME radius, so their centres sit a road width apart on each axis
@@ -848,16 +822,12 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 							const FVector2D PB = Network.GetGuidelineNode(Turn.B)->Position;
 							const FVector2D ArriveDir = -Network.GetOutgoingTangent(FromSeg, NodeId).GetSafeNormal();
 							const FVector2D LeaveDir = Network.GetOutgoingTangent(ToSeg, NodeId).GetSafeNormal();
-							const double Bend = FVector2D::CrossProduct(ArriveDir, LeaveDir);
-							const bool bAroundIt = Bend * FVector2D::CrossProduct(ArriveDir, Inside->Centre - PA) > 0.0;
-							const bool bTangent =
-								FMath::Abs(FVector2D::DotProduct(PA - Inside->Centre, ArriveDir)) <= BendTangentTolerance
-								&& FMath::Abs(FVector2D::DotProduct(PB - Inside->Centre, LeaveDir)) <= BendTangentTolerance
-								&& FMath::Abs(FVector2D::Distance(PA, Inside->Centre) - FVector2D::Distance(PB, Inside->Centre)) <= BendTangentTolerance;
-							if (bAroundIt && bTangent)
-							{
-								GuidelineGeom::Arc(PA, ArriveDir, PB, LeaveDir, Inside->Centre, BendPieceSweep, BendArc);
-							}
+							// GuidelineGeom::BendLane refuses what the construction cannot hold: lanes at
+							// two distances from the edge, a tangent point behind a lane end, a turn not
+							// round this corner. A widened bend's lane ends sit back from their tangent
+							// points (the solver cut the arms back to hold the widening) and are joined
+							// to the arc by straight leads.
+							GuidelineGeom::BendLane(PA, ArriveDir, PB, LeaveDir, Inside->Centre, BendArc);
 						}
 					}
 
@@ -936,7 +906,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 						(ToLimit   <= 0.0) ? FromLimit :
 						FMath::Min(FromLimit, ToLimit);
 					// THE S IS TWO PIECES meeting at a node of their own, and a bend's arc one per
-					// BendPieceSweep of its turn; everything below - the measure, the lock warning,
+					// BendArcPieceSweep of its turn; everything below - the measure, the lock warning,
 					// the add - is done to each piece alike.
 					TArray<FGuidelineEdge, TInlineAllocator<4>> Pieces;
 					if (BendArc.Num() > 0)

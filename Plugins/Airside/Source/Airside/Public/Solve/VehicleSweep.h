@@ -181,12 +181,21 @@ namespace VehicleSweep
 	 * (VehicleFit::Judge, VehicleFit.cpp) only needs OutInner/OutOuter; a test comparing the
 	 * agent's own path against Trace's is the reason the parameter exists at all.
 	 *
-	 * OutBodyPoints, when given, receives EVERY body corner at every step - lead-in and lead-out
-	 * included, whether or not it projects onto Path - for a caller that asks where the body
-	 * went against the pavement itself rather than against Path's clearances: the bend lanes'
-	 * swept-path measure (Testing/BendProbe.h), the pavement the inside of a bend is widened to.
+	 * THE DRIVE ITSELF IS Drive, below: Trace is Drive plus the projection onto Path.
 	 */
 	AIRSIDE_API bool Trace(const FBody& Body, TArrayView<const FVector2D> Path,
-		TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles = nullptr,
-		TArray<FVector2D>* OutBodyPoints = nullptr);
+		TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles = nullptr);
+
+	/**
+	 * THE TURN AS DRIVEN, with nothing measured: Trace's pursuit - the lead-in straight along
+	 * Path's first chord, Path, the lead-out along its last, the chain stepped by StepChain -
+	 * handing Visit every pose's BodyCorners. SPLIT OUT OF Trace (bend widening, 2026-09-25) for
+	 * a caller that puts the body against the PAVEMENT rather than against Path's samples: the
+	 * inside of a bend is widened to what this sweeps (BendWidening), and Testing/BendProbe.h
+	 * measures the built bend with it. One pursuit, so the pavement is widened for the drive the
+	 * router judges. False on a jack-knife, as Trace.
+	 * ENFORCED BY: Airside.Solve.VehicleSweepTrace (Trace, through this), Airside.Build.BendLanes.WideBendCarriesTheRig
+	 */
+	AIRSIDE_API bool Drive(const FBody& Body, TArrayView<const FVector2D> Path,
+		TFunctionRef<void(const FCorners&)> Visit, TArray<FVector2D>* OutAxles = nullptr);
 }

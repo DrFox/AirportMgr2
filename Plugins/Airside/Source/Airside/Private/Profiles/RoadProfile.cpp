@@ -2,6 +2,7 @@
 
 #include "Content/AirsideSettings.h"
 #include "Model/Chassis.h"
+#include "Model/Vehicle.h"
 
 double URoadProfile::ResolvedFilletRadius() const
 {
@@ -24,8 +25,15 @@ FChassis URoadProfile::ResolvedDesignVehicle() const
 {
 	// THE ONE TIER LOOKUP AND FALLBACK both self-resolving answers read (review of 5660420c):
 	// this profile's tier vehicle, else the largest rigid service vehicle.
-	const FChassis* Tier = UAirsideSettings::ResolveTierDesignVehicles().Find(TObjectKey<URoadProfile>(this));
-	return Tier != nullptr ? *Tier : UAirsideSettings::ResolveLargestServiceVehicle();
+	const FVehicle* Tier = UAirsideSettings::ResolveTierDesignVehicles().Find(TObjectKey<URoadProfile>(this));
+	return Tier != nullptr ? Tier->Chassis : UAirsideSettings::ResolveLargestServiceVehicle();
+}
+
+FVehicle URoadProfile::ResolvedDesignBody() const
+{
+	// The same lookup and fallback as ResolvedDesignVehicle, answering with the whole vehicle.
+	const FVehicle* Tier = UAirsideSettings::ResolveTierDesignVehicles().Find(TObjectKey<URoadProfile>(this));
+	return Tier != nullptr ? *Tier : UAirsideSettings::ResolveLargestServiceBody();
 }
 
 double URoadProfile::ResolvedDesignRadius() const

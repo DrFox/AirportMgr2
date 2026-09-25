@@ -19,7 +19,7 @@
 /**
  * WHAT A BEND HANDS A VEHICLE, measured (bend lanes, 2026-09-25): the pavement's two fillets,
  * each lane's turn path as the chain of derived edges it is, and how far a vehicle's body
- * leaves the tarmac driving it - traced by VehicleSweep::Trace, the router's own pursuit, with
+ * leaves the tarmac driving it - driven by VehicleSweep::Drive, the router's own pursuit (Trace's), with
  * every body corner put against the pavement polygons themselves rather than against the
  * per-sample clearances (which are marched along one normal and only exist on turn edges).
  */
@@ -278,9 +278,9 @@ namespace BendProbe
 		FOverrun Out;
 		const TArray<FVector2D>& Line = Chain.Driven;
 		if (Line.Num() < 2 || Chain.Path.Num() < 2) { return Out; }
-		TArray<double> Inner, Outer;
 		TArray<FVector2D> Points;
-		Out.bTraced = VehicleSweep::Trace(VehicleFit::BodyOf(Vehicle), Line, Inner, Outer, nullptr, &Points);
+		Out.bTraced = VehicleSweep::Drive(VehicleFit::BodyOf(Vehicle), Line,
+			[&Points](const VehicleSweep::FCorners& Corners) { Points.Append(Corners); });
 		const FVector2D Mid = Chain.Path[Chain.Path.Num() / 2];
 		const double TurnSign = FVector2D::CrossProduct(Mid - Chain.Path[0], Chain.Path.Last() - Mid) >= 0.0 ? 1.0 : -1.0;
 		for (const FVector2D& P : Points)
@@ -319,6 +319,52 @@ namespace BendProbe
 			}
 		}
 		return Out;
+	}
+
+	/** Every body corner a vehicle reaches driving Chain.Driven - VehicleSweep::Drive's, as Overrun takes them. */
+	inline TArray<FVector2D> BodyPoints(const FTurnChain& Chain, const FVehicle& Vehicle)
+	{
+		TArray<FVector2D> Points;
+		if (Chain.Driven.Num() >= 2)
+		{
+			VehicleSweep::Drive(VehicleFit::BodyOf(Vehicle), Chain.Driven,
+				[&Points](const VehicleSweep::FCorners& Corners) { Points.Append(Corners); });
+		}
+		return Points;
+	}
+
+	/**
+	 * The least distance from any of Points to the junction's RIM - every boundary edge but the
+	 * cut lines, which are the seam to a ribbon, not an edge of the tarmac. How close a body comes
+	 * to the pavement's edge through the bend: a widening laid "only by what is left" leaves this
+	 * near its margin, a generous one far above it.
+	 */
+	inline double RimClearance(const FJunctionResult& Junction, const TArray<FVector2D>& Points)
+	{
+		if (Junction.Boundary.Num() < 4) { return TNumericLimits<double>::Max(); }
+		const int32 Rim = Junction.Boundary.Num() - 1;
+		auto IsCutLine = [&Junction](const FVector2D& A, const FVector2D& B)
+		{
+			for (const FJunctionArmResult& Arm : Junction.Arms)
+			{
+				if ((A == Arm.LeftCut && B == Arm.RightCut) || (A == Arm.RightCut && B == Arm.LeftCut)) { return true; }
+			}
+			return false;
+		};
+		double Least = TNumericLimits<double>::Max();
+		for (int32 I = 0; I < Rim; ++I)
+		{
+			const FVector2D A = Junction.Boundary[I];
+			const FVector2D B = Junction.Boundary[(I + 1) % Rim];
+			if (IsCutLine(A, B)) { continue; }
+			const FVector2D AB = B - A;
+			for (const FVector2D& P : Points)
+			{
+				const double T = FMath::Clamp(FVector2D::DotProduct(P - A, AB) / FMath::Max(AB.SizeSquared(), 1e-12), 0.0, 1.0);
+				Least = FMath::Min(Least, FVector2D::Distance(P, A + AB * T));
+			}
+		}
+		return Least;
 	}
 
 	/** Spread of a chain's samples' distances from Centre: max - min. 0 is concentric. */

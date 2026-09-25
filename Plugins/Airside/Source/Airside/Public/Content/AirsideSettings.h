@@ -194,6 +194,15 @@ public:
 	static FChassis ResolveLargestServiceVehicle();
 
 	/**
+	 * THE SAME VEHICLE WITH ITS BODY: ResolveLargestServiceVehicle's chassis on the vehicle it
+	 * belongs to (one today, ResolveDefaultVehicle), for a caller that traces what the vehicle
+	 * sweeps - a bend's inside is widened to it (FRoadDesignVehicles::Default). The chassis comes
+	 * FROM ResolveLargestServiceVehicle, so the day that function compares vehicles this answers
+	 * with the winner's chassis, and #190's counter still counts one resolve per call.
+	 */
+	static FVehicle ResolveLargestServiceBody();
+
+	/**
 	 * THE ONE PLACE a service-road width tier names its design vehicle (user ruling 2026-09-25,
 	 * see FRoadDesignVehicles): the Wide tier - ServiceRoadProfiles[WideServiceTier] - is
 	 * designed for the articulated rig (ResolveRigVehicle), and every other tier is left to the
@@ -207,7 +216,7 @@ public:
 	 * only when the content set or its Wide tier's asset changes.
 	 * ENFORCED BY: Airside.Build.DesignVehicle.TierResolvedOncePerContent
 	 */
-	static const TMap<TObjectKey<URoadProfile>, FChassis>& ResolveTierDesignVehicles();
+	static const TMap<TObjectKey<URoadProfile>, FVehicle>& ResolveTierDesignVehicles();
 
 	/** How many times ResolveTierDesignVehicles actually resolved (cache misses) - see its comment. */
 	static int32 ResolveTierDesignVehiclesCallCountForTest;

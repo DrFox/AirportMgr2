@@ -202,7 +202,7 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	// CONTENT LOOKUP"), so there is nothing the cache below would save it; what matters is
 	// that it runs ONCE HERE rather than once per arm/per ordered arm pair/twice per link
 	// further down the pipeline, which is what URoadSurfacePresenter::Rebuild now relies on.
-	Settings.DesignVehicles = FRoadDesignVehicles(UAirsideSettings::ResolveLargestServiceVehicle());
+	Settings.DesignVehicles = FRoadDesignVehicles(UAirsideSettings::ResolveLargestServiceBody());
 
 	// THE EXPENSIVE HALF, CACHED - see RefreshResolvedContentCacheIfDirty and
 	// bResolvedContentDirty's own comments.

@@ -4,6 +4,11 @@
 
 const FChassis& FRoadDesignVehicles::For(const URoadProfile* Profile) const
 {
-	const FChassis* Found = Profile != nullptr ? PerProfile.Find(TObjectKey<URoadProfile>(Profile)) : nullptr;
+	return VehicleFor(Profile).Chassis;
+}
+
+const FVehicle& FRoadDesignVehicles::VehicleFor(const URoadProfile* Profile) const
+{
+	const FVehicle* Found = Profile != nullptr ? PerProfile.Find(TObjectKey<URoadProfile>(Profile)) : nullptr;
 	return Found != nullptr ? *Found : Default;
 }

@@ -545,7 +545,7 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 		// service stands and live in depots. The rig has no stand or depot to go to yet (spec
 		// §"Out of this step", step 3); sizing every link's lane radius for it would widen every
 		// yard approach for a vehicle that never uses one.
-		FAnchorLink::Build(Network, Settings.DesignVehicles.Default, FAnchorLink::DefaultMaxLeadIn,
+		FAnchorLink::Build(Network, Settings.DesignVehicles.Default.Chassis, FAnchorLink::DefaultMaxLeadIn,
 			Settings.ServiceLinkRadius);
 	}
 

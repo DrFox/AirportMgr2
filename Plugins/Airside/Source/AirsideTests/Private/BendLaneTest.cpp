@@ -57,6 +57,38 @@ namespace BendLane
 		OutOuter = &Turns[bFirstInner ? 1 : 0];
 	}
 
+	/** The samples of a chain's CURVED pieces only: the arc, without any straight lead a widened bend adds. */
+	TArray<FVector2D> ArcSamples(const URoadNetwork& Net, const BendProbe::FTurnChain& Chain)
+	{
+		TArray<FVector2D> Out;
+		for (const FGuidelineEdgeId Id : Chain.Pieces)
+		{
+			const FGuidelineEdge* Piece = Net.GetGuidelineEdge(Id);
+			if (Piece == nullptr || Piece->MinRadius <= 0.0) { continue; }
+			GuidelineGeom::Sample(Net.GetGuidelineNode(Piece->A)->Position, Piece->Control, Net.GetGuidelineNode(Piece->B)->Position, Out);
+		}
+		return Out;
+	}
+
+	/** The tightest CURVED piece of a chain; a straight piece's 0 means "no curve", not "no radius". */
+	double Tightest(const URoadNetwork& Net, const BendProbe::FTurnChain& Chain)
+	{
+		double Out = TNumericLimits<double>::Max();
+		for (const FGuidelineEdgeId Id : Chain.Pieces)
+		{
+			const FGuidelineEdge* Piece = Net.GetGuidelineEdge(Id);
+			if (Piece != nullptr && Piece->MinRadius > 0.0) { Out = FMath::Min(Out, Piece->MinRadius); }
+		}
+		return Out;
+	}
+	/** Where the fillet alone would cut the arms: its tangent point's distance from the node, along the arm. */
+	double FilletCutOf(const URoadNetwork& Net, FRoadNodeId Corner, const RoadGeom::FFillet& Inner)
+	{
+		const FVector2D Node = Net.GetNode(Corner)->Position;
+		const FVector2D Along = (Inner.TangentA - Inner.Corner).GetSafeNormal();
+		return FVector2D::DotProduct(Inner.TangentA - Node, Along);
+	}
+
 	/** The mean distance of a chain's arc samples from Centre - the arc's radius when it is one. */
 	double MeanRadius(const BendProbe::FTurnChain& Chain, const FVector2D& Centre)
 	{
@@ -126,6 +158,7 @@ bool FBendLaneCensusTest::RunTest(const FString& Parameters)
 			double LeastIn = TNumericLimits<double>::Max(), LeastOut = TNumericLimits<double>::Max();
 			for (int32 I = 0; I < Turn.Path.Num(); ++I)
 			{
+				if (Turn.ClearIn[I] < 0.0) { continue; }   // a straight lead carries none
 				LeastIn = FMath::Min(LeastIn, Turn.ClearIn[I]);
 				LeastOut = FMath::Min(LeastOut, Turn.ClearOut[I]);
 			}
@@ -133,70 +166,16 @@ bool FBendLaneCensusTest::RunTest(const FString& Parameters)
 			const BendProbe::FOverrun BowserOff = BendProbe::Overrun(Turn, Bowser, Pavement);
 			const BendProbe::FOverrun UtilityOff = BendProbe::Overrun(Turn, Utility, Pavement);
 			UE_LOG(LogTemp, Display, TEXT("BendCensus %s %s turn: %d piece(s), MinRadius %.0f; about inner centre %.0f..%.0f, about outer centre %.0f..%.0f; least clear in %.0f out %.0f; from (%.0f, %.0f) to (%.0f, %.0f)"),
-				Names[Tier], InMin < Inner.Radius + 0.5 * Profiles[Tier]->GetTotalWidth() ? TEXT("inner-lane") : TEXT("outer-lane"), Turn.Pieces.Num(), Turn.MinRadius, InMin, InMax, OutMin, OutMax,
+				Names[Tier], InMin < Inner.Radius + 0.5 * Profiles[Tier]->GetTotalWidth() ? TEXT("inner-lane") : TEXT("outer-lane"), Turn.Pieces.Num(), Tightest(*Bend.Net, Turn), InMin, InMax, OutMin, OutMax,
 				LeastIn, LeastOut, Turn.Path[0].X, Turn.Path[0].Y, Turn.Path.Last().X, Turn.Path.Last().Y);
 			UE_LOG(LogTemp, Display, TEXT("BendCensus %s %s turn: off the tarmac - rig inner %.0f outer %.0f (traced %d) at (%.0f, %.0f); bowser inner %.0f outer %.0f; utility inner %.0f outer %.0f"),
 				Names[Tier], InMin < Inner.Radius + 0.5 * Profiles[Tier]->GetTotalWidth() ? TEXT("inner-lane") : TEXT("outer-lane"), RigOff.Inner, RigOff.Outer, RigOff.bTraced ? 1 : 0,
 				RigOff.InnerAt.X, RigOff.InnerAt.Y, BowserOff.Inner, BowserOff.Outer, UtilityOff.Inner, UtilityOff.Outer);
-			// WHERE the rig leaves the inside: angle about the inner fillet's centre (the fillet runs
-			// -90 to 0 here) and how far past each arm's cut line.
-			{
-				double MinAngle = 1e9, MaxAngle = -1e9, PastCutX = -1e9, PastCutY = -1e9;
-				for (int32 I = 0; I < RigOff.InnerPoints.Num(); ++I)
-				{
-					const FVector2D D = RigOff.InnerPoints[I] - Inner.Centre;
-					const double Deg = FMath::RadiansToDegrees(FMath::Atan2(D.Y, D.X));
-					MinAngle = FMath::Min(MinAngle, Deg);
-					MaxAngle = FMath::Max(MaxAngle, Deg);
-					PastCutX = FMath::Max(PastCutX, (8000.0 - Junction.Arms[0].CutDistance) - RigOff.InnerPoints[I].X);
-					PastCutY = FMath::Max(PastCutY, RigOff.InnerPoints[I].Y - Junction.Arms[1].CutDistance);
-				}
-				UE_LOG(LogTemp, Display, TEXT("BendCensus %s: rig inner overrun at %d point(s), %.0f..%.0f deg about the inner centre; furthest past the west cut %.0f, past the north cut %.0f"),
-					Names[Tier], RigOff.InnerPoints.Num(), MinAngle, MaxAngle, PastCutX, PastCutY);
-				for (int32 Deg = -90; Deg <= 0; Deg += 10)
-				{
-					double Deepest = 0.0;
-					for (int32 I = 0; I < RigOff.InnerPoints.Num(); ++I)
-					{
-						const FVector2D D = RigOff.InnerPoints[I] - Inner.Centre;
-						const double A = FMath::RadiansToDegrees(FMath::Atan2(D.Y, D.X));
-						if (A >= Deg - 5 && A < Deg + 5) { Deepest = FMath::Max(Deepest, Inner.Radius - D.Size()); }
-					}
-					UE_LOG(LogTemp, Display, TEXT("BendCensus %s: rig inside the fillet circle at %d deg: %.0f"), Names[Tier], Deg, Deepest);
-				}
-			}
 		}
 	}
 	return true;
 }
 
-namespace BendLane
-{
-	/** The samples of a chain's CURVED pieces only: the arc, without any straight lead a widened bend adds. */
-	TArray<FVector2D> ArcSamples(const URoadNetwork& Net, const BendProbe::FTurnChain& Chain)
-	{
-		TArray<FVector2D> Out;
-		for (const FGuidelineEdgeId Id : Chain.Pieces)
-		{
-			const FGuidelineEdge* Piece = Net.GetGuidelineEdge(Id);
-			if (Piece == nullptr || Piece->MinRadius <= 0.0) { continue; }
-			GuidelineGeom::Sample(Net.GetGuidelineNode(Piece->A)->Position, Piece->Control, Net.GetGuidelineNode(Piece->B)->Position, Out);
-		}
-		return Out;
-	}
-
-	/** The tightest CURVED piece of a chain; a straight piece's 0 means "no curve", not "no radius". */
-	double Tightest(const URoadNetwork& Net, const BendProbe::FTurnChain& Chain)
-	{
-		double Out = TNumericLimits<double>::Max();
-		for (const FGuidelineEdgeId Id : Chain.Pieces)
-		{
-			const FGuidelineEdge* Piece = Net.GetGuidelineEdge(Id);
-			if (Piece != nullptr && Piece->MinRadius > 0.0) { Out = FMath::Min(Out, Piece->MinRadius); }
-		}
-		return Out;
-	}
-}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBendLaneConcentricTest, "Airside.Build.BendLanes.ConcentricWithPavement",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -452,6 +431,115 @@ bool FBendLaneTaxiwayTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("each taxiway turn is one quadratic"), Turn.Pieces.Num(), 1);
 		const FGuidelineEdge* Edge = Bend.Net->GetGuidelineEdge(Turn.Pieces[0]);
 		TestTrue(TEXT("controlled on the node, exactly"), Edge != nullptr && Edge->Control == Bend.Net->GetNode(Bend.Corner)->Position);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBendLaneWideRigTest, "Airside.Build.BendLanes.WideBendCarriesTheRig",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBendLaneWideRigTest::RunTest(const FString& Parameters)
+{
+	// THE WIDE TIER'S DESIGN VEHICLE STAYS ON ITS TARMAC (ruling 2026-09-25, step 2): on concentric
+	// lanes alone the rig's trailer still left the inner edge by 247 uu (measured), so the solver
+	// widens the inside to its traced sweep plus a margin. Driven round both lane turns here by the
+	// router's own pursuit, against the pavement the mesh paves, the rig leaves it nowhere. The
+	// router's clearances come from the widened pavement - its inner clearance on the arc exceeds
+	// what the unwidened edge gave - and the widened corner is still paved by the fan (the shoulder
+	// band ring and all), not the ear-clip fallback that has no band.
+	using namespace BendLane;
+	const TArray<URoadProfile*> Profiles = Tiers();
+	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
+		Profiles.Num() == 3 && !Profiles.Contains(nullptr))) { return false; }
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	const int32 Wide = UAirsideSettings::WideServiceTier;
+	const FBend Bend = Build(Profiles[Wide]);
+	RoadGeom::FFillet Inner, Outer;
+	if (!TestTrue(TEXT("the bend has an inner and an outer fillet"), BendProbe::Fillets(Bend.Solved, Bend.Corner, Inner, Outer))) { return false; }
+	const FJunctionResult& Junction = Bend.Solved.NodeResults[Bend.Corner.Index];
+	const BendProbe::FPavement Pavement = BendProbe::PavementAll(*Bend.Net, Bend.Solved);
+	const double Half = 0.5 * Profiles[Wide]->GetTotalWidth();
+	const double Offset = FMath::Abs(Profiles[Wide]->Guidelines[0].CentreOffset);
+
+	// Widened at all: an arm is cut back past the fillet's tangent point to hold it.
+	const double FilletCut = FilletCutOf(*Bend.Net, Bend.Corner, Inner);
+	TestTrue(FString::Printf(TEXT("Wide: an arm is cut back past the fillet to hold the widening (cuts %.0f / %.0f, fillet's %.0f)"),
+		Junction.Arms[0].CutDistance, Junction.Arms[1].CutDistance, FilletCut),
+		FMath::Max(Junction.Arms[0].CutDistance, Junction.Arms[1].CutDistance) > FilletCut + 100.0);
+	TestTrue(TEXT("Wide: the widened corner is paved by the fan - same bands as every junction"), Junction.Triangles.Num() > 0);
+
+	const TArray<BendProbe::FTurnChain> Chains = BendProbe::TurnsAt(*Bend.Net, Bend.Corner);
+	TestEqual(TEXT("Wide: both lane turns are there to drive"), Chains.Num(), 2);
+	for (const BendProbe::FTurnChain& Turn : Chains)
+	{
+		const BendProbe::FOverrun Off = BendProbe::Overrun(Turn, Rig, Pavement);
+		TestTrue(TEXT("Wide: the rig's drive was traced to the end"), Off.bTraced);
+		TestEqual(FString::Printf(TEXT("Wide: the rig stays on the tarmac inside the bend (off by %.0f uu at (%.0f, %.0f))"),
+			Off.Inner, Off.InnerAt.X, Off.InnerAt.Y), Off.Inner, 0.0);
+		TestEqual(TEXT("Wide: and outside it"), Off.Outer, 0.0);
+	}
+
+	// THE ROUTER READS THE WIDENED PAVEMENT: the inner lane's clearance inward, somewhere on its
+	// arc, is well past the 285 uu the unwidened edge gave it (the lane's distance off that edge).
+	const BendProbe::FTurnChain* InLane = nullptr;
+	const BendProbe::FTurnChain* OutLane = nullptr;
+	SplitLanes(Chains, Inner.Centre, InLane, OutLane);
+	if (!TestTrue(TEXT("Wide: two lane turns"), InLane != nullptr)) { return false; }
+	double MostIn = 0.0;
+	for (const double Clear : InLane->ClearIn) { MostIn = FMath::Max(MostIn, Clear); }
+	TestTrue(FString::Printf(TEXT("Wide: the inner lane's clearances are the widened pavement's (%.0f inward at best, vs %.0f to the unwidened edge)"),
+		MostIn, Half - Offset), MostIn >= Half - Offset + 100.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBendLaneWideningOnlyTest, "Airside.Build.BendLanes.WideningOnlyWhereNeeded",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBendLaneWideningOnlyTest::RunTest(const FString& Parameters)
+{
+	// ONLY BY WHAT IS LEFT (ruling 2026-09-25): Narrow and Standard widen for THEIR design vehicle,
+	// the bowser, which stays on their tarmac - so nothing moves there, the cuts are the fillet's
+	// own. And on Wide the rig comes as close to the widened edge as the margin allows and no
+	// further off: the widening is its sweep plus BendWidening::Margin (25 uu), not a generous one.
+	using namespace BendLane;
+	const TArray<URoadProfile*> Profiles = Tiers();
+	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
+		Profiles.Num() == 3 && !Profiles.Contains(nullptr))) { return false; }
+	const FVehicle Bowser = UAirsideSettings::ResolveDefaultVehicle();
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	for (int32 Tier = 0; Tier < 3; ++Tier)
+	{
+		const FBend Bend = Build(Profiles[Tier]);
+		RoadGeom::FFillet Inner, Outer;
+		if (!TestTrue(TEXT("the bend has an inner and an outer fillet"), BendProbe::Fillets(Bend.Solved, Bend.Corner, Inner, Outer))) { continue; }
+		const FJunctionResult& Junction = Bend.Solved.NodeResults[Bend.Corner.Index];
+		const BendProbe::FPavement Pavement = BendProbe::PavementAll(*Bend.Net, Bend.Solved);
+		const TArray<BendProbe::FTurnChain> Chains = BendProbe::TurnsAt(*Bend.Net, Bend.Corner);
+		for (const BendProbe::FTurnChain& Turn : Chains)
+		{
+			TestEqual(FString::Printf(TEXT("%s: the bowser stays on the tarmac"), Names[Tier]), BendProbe::Overrun(Turn, Bowser, Pavement).Inner, 0.0);
+		}
+		const double FilletCut = FilletCutOf(*Bend.Net, Bend.Corner, Inner);
+		if (Tier != UAirsideSettings::WideServiceTier)
+		{
+			TestTrue(FString::Printf(TEXT("%s: not widened - the cuts are the fillet's own (%.1f / %.1f vs %.1f)"), Names[Tier],
+				Junction.Arms[0].CutDistance, Junction.Arms[1].CutDistance, FilletCut),
+				FMath::Abs(Junction.Arms[0].CutDistance - FilletCut) < 1e-3 && FMath::Abs(Junction.Arms[1].CutDistance - FilletCut) < 1e-3);
+			continue;
+		}
+		// Wide: how close the rig's body comes to the junction's rim over both turns.
+		TArray<FVector2D> Points;
+		for (const BendProbe::FTurnChain& Turn : Chains)
+		{
+			Points.Append(BendProbe::BodyPoints(Turn, Rig));
+		}
+		const double Clearance = BendProbe::RimClearance(Junction, Points);
+		UE_LOG(LogTemp, Display, TEXT("BendLanes: Wide rig's closest approach to the widened rim %.1f uu; cuts %.0f / %.0f (fillet's %.0f)"),
+			Clearance, Junction.Arms[0].CutDistance, Junction.Arms[1].CutDistance, FilletCut);
+		// 25 uu margin, less a bin of lean (25 x 0.25) where the envelope's bins interpolate, plus
+		// 15 uu for the bins' own 25 uu resolution along the edge: a tight fit, not a generous one.
+		TestTrue(FString::Printf(TEXT("Wide: the rig passes within the margin of the widened edge, not far inside it (closest %.1f uu)"), Clearance),
+			Clearance > 0.0 && Clearance <= 25.0 + 15.0);
 	}
 	return true;
 }

@@ -113,6 +113,13 @@ FChassis UAirsideSettings::ResolveLargestServiceVehicle()
 	return ResolveDefaultVehicle().Chassis;
 }
 
+FVehicle UAirsideSettings::ResolveLargestServiceBody()
+{
+	FVehicle Out = ResolveDefaultVehicle();
+	Out.Chassis = ResolveLargestServiceVehicle();
+	return Out;
+}
+
 namespace AirsideSettingsTierCache
 {
 	/** What ResolveTierDesignVehicles last resolved, and from which content set and Wide asset. */
@@ -121,7 +128,7 @@ namespace AirsideSettingsTierCache
 		bool bValid = false;
 		TWeakObjectPtr<const UAirsideContent> Content;
 		FSoftObjectPath WidePath;
-		TMap<TObjectKey<URoadProfile>, FChassis> Map;
+		TMap<TObjectKey<URoadProfile>, FVehicle> Map;
 	};
 
 	FCache& Get()
@@ -139,7 +146,7 @@ void UAirsideSettings::ResetTierDesignVehiclesCacheForTest()
 	ResolveTierDesignVehiclesCallCountForTest = 0;
 }
 
-const TMap<TObjectKey<URoadProfile>, FChassis>& UAirsideSettings::ResolveTierDesignVehicles()
+const TMap<TObjectKey<URoadProfile>, FVehicle>& UAirsideSettings::ResolveTierDesignVehicles()
 {
 	AirsideSettingsTierCache::FCache& Cache = AirsideSettingsTierCache::Get();
 
@@ -172,7 +179,8 @@ const TMap<TObjectKey<URoadProfile>, FChassis>& UAirsideSettings::ResolveTierDes
 		{
 			// THE RIG ON WIDE (user ruling 2026-09-25): its lock radius, 370 / sin 40 = 576 uu
 			// against the bowser's 510, is what the Wide tier's corners are laid for.
-			Cache.Map.Add(TObjectKey<URoadProfile>(Wide), ResolveRigVehicle().Chassis);
+			// The WHOLE rig since 2026-09-25: its trailer is what a Wide bend's inside is widened for.
+			Cache.Map.Add(TObjectKey<URoadProfile>(Wide), ResolveRigVehicle());
 		}
 	}
 	Cache.Content = Content;
@@ -182,7 +190,7 @@ const TMap<TObjectKey<URoadProfile>, FChassis>& UAirsideSettings::ResolveTierDes
 
 FRoadDesignVehicles UAirsideSettings::ResolveRoadDesignVehicles()
 {
-	FRoadDesignVehicles Out(ResolveLargestServiceVehicle());
+	FRoadDesignVehicles Out(ResolveLargestServiceBody());
 	Out.PerProfile = ResolveTierDesignVehicles();
 	return Out;
 }

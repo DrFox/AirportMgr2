@@ -192,6 +192,28 @@ built level and its tests:**
   keep the quadratic (the lanes sit 210 and 285 uu off their inner edges, so no one circle fits);
   taxiway bends are untouched (authored for aircraft, `PreferredFilletRadius`); T and X junctions
   are untouched in this step.
+  **REVISED 2026-09-25 (same ruling) - step 2 of 2, the inside widened only by the measured
+  remainder.** The solver (`FRoadNetworkSolver::SolveNodeCuts`, `BendWidening`) drives the bend's
+  design vehicle round every concentric lane turn (`VehicleSweep::Drive`, the pursuit `Trace`
+  runs, split out so the widening and the router share it), puts every body point against the
+  inner edge as one length along it (arm, fillet, arm), and pushes that edge into the grass by the
+  deepest reach plus 25 uu (`VehicleFit::WidthMargin` 15 + the clearance march's 10), leaning back
+  1:4 either side. The arms are cut back past the fillet to hold it (a floor under the cut, capped
+  by the allowance like a taper's inset) and the rim replaces the fillet's arc in the junction
+  polygon (`FJunctionArm::RimToNext`), so the ribbon welds to the same shared cut vertices, bitwise
+  (`BendLanes.WeldExact`), and the fan paves it with the same bands. The lanes keep their arc and
+  reach their moved lane ends by straight leads (`GuidelineGeom::BendLane`, one construction for
+  the builder and the solver). The corner's design vehicle is the less demanding arm's, as its
+  fillet is: the rig on Wide, the bowser on Narrow and Standard - which leaves those tarmacs on no
+  bend, so they do not move. `FRoadDesignVehicles` carries whole vehicles now (`VehicleFor`), since
+  a chassis has no trailer to trace. Measured on the plain right angle: Wide cuts 1431 -> 1797 on
+  the arriving arm and 2418 on the leaving one (the trailer converges on its line for ~8 m after
+  the turn), the rig 247 -> 0 uu off the tarmac and passing within the margin of the new edge
+  (`BendLanes.WideBendCarriesTheRig`, `.WideningOnlyWhereNeeded`). **Where a short arm caps it the
+  rig still cuts in:** on the rig course the Wide lane's corners have a 30 m arm already cut to its
+  allowance, so the widening is capped there (traced 231 -> 253 -> 188 uu); the connector corners
+  with long arms go 225 -> 247 -> 0-13. Logged Verbose per solve (`LogRoadSolve`, "capped by its
+  arms' length"), since the snap solves nodes on every cursor move.
 - **The rig is refused at every dead-end U-turn, and this is a sizing decision, not a bug.**
   **(Ruled 2026-09-25, see the per-tier design vehicle note below: balloons stay bowser-sized;
   the rig turns at road ends once reversing exists.)**
@@ -431,9 +453,12 @@ across both lanes (a known gap from the road-lanes spec).
 - **The rig U-turns at road ends once reversing exists (step 2):** a three-point turn, not a
   bigger balloon (user ruling 2026-09-25). Until then every dead end refuses it - on its trailer
   folding since the reshape and the whole-route check (2026-09-25), on its lock before.
-- **The near-side overrun.** The rig's trailer cuts 2.0-3.4 m past the inner pavement edge on
-  near-side turns while its swept width still fits (§3, measured and bounded, not fixed).
-  Needs a decision: judge `VehicleFit` per side, or have the agent swing wide.
+- **The near-side overrun, narrowed (2026-09-25, bend lanes).** Fixed where the rig is the design
+  vehicle and the arms hold it: a Wide two-arm bend. Still open (a) on Narrow and Standard bends
+  and at every T/X junction, where the rig is not the design vehicle - the course's worst, 355 uu,
+  is a Narrow T out of the stem; (b) on a Wide bend whose arm is too short to hold the widening
+  (the course's Wide lane corners, 188 uu). Needs a decision for (a): judge `VehicleFit` per side,
+  have the agent swing wide, or widen T/X corners the same way; (b) is the segment length.
 - **`AAnimYard` draws no trailer.** The bench adopts one `ASkeletalMeshActor` per placed
   model and calls `SetVehicleAirframe`/`SetAirframe` with a single mesh; nothing in
   `AnimYard.cpp` wires a second, tow-carried mesh for a body-carrying link, so a rig or

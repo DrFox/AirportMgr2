@@ -223,7 +223,15 @@ void FJunctionSolver::SolveBoundary(const FJunctionInput& Input, FJunctionResult
 		}
 
 		ArcSamples.Reset();
-		RoadGeom::SampleArc(Corner, Input.ArcSegments, ArcSamples);
+		if (Input.Arms[Index].RimToNext.Num() > 0)
+		{
+			// A widened corner: its rim as the caller laid it, in place of the arc.
+			ArcSamples = Input.Arms[Index].RimToNext;
+		}
+		else
+		{
+			RoadGeom::SampleArc(Corner, Input.ArcSegments, ArcSamples);
+		}
 		for (const FVector2D& Sample : ArcSamples)
 		{
 			AddArcPoint(Sample);

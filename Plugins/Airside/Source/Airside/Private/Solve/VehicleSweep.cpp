@@ -167,20 +167,13 @@ void VehicleSweep::BodyCorners(const FBody& Body, const FVector2D& Fixed, const 
 	}
 }
 
-bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
-	TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles,
-	TArray<FVector2D>* OutBodyPoints)
+bool VehicleSweep::Drive(const FBody& Body, TArrayView<const FVector2D> Path,
+	TFunctionRef<void(const FCorners&)> Visit, TArray<FVector2D>* OutAxles)
 {
 	if (OutAxles != nullptr)
 	{
 		OutAxles->Reset();
 	}
-	if (OutBodyPoints != nullptr)
-	{
-		OutBodyPoints->Reset();
-	}
-	OutInner.Init(0.0, Path.Num());
-	OutOuter.Init(0.0, Path.Num());
 	if (Path.Num() < 2)
 	{
 		return true;
@@ -204,11 +197,6 @@ bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
 		Lead = Lead + Link.Length;
 	}
 	Lead = Lead + Body.FrontX + 200.0;
-
-	// Which side is the inside: the sign of the turn from start through middle to end.
-	const FVector2D Mid = Path[Path.Num() / 2];
-	const double Turn = FVector2D::CrossProduct(Mid - Path[0], Path.Last() - Mid);
-	const double InwardSign = Turn >= 0.0 ? 1.0 : -1.0;
 
 	TArray<FVector2D> Steps;
 	for (double D = Lead; D > 0.0; D -= Step)
@@ -257,11 +245,34 @@ bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
 		// The cab's corners and then every link's, from where the chain now IS - BodyCorners,
 		// which VehicleFit::JudgePlan puts on the whole route too (one list of corners, not two).
 		BodyCorners(Body, Fixed, Heading, Axles, Corners);
-		if (OutBodyPoints != nullptr)
-		{
-			OutBodyPoints->Append(Corners);
-		}
+		Visit(Corners);
+	}
+	return true;
+}
 
+bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
+	TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles)
+{
+	OutInner.Init(0.0, Path.Num());
+	OutOuter.Init(0.0, Path.Num());
+	if (Path.Num() < 2)
+	{
+		if (OutAxles != nullptr)
+		{
+			OutAxles->Reset();
+		}
+		return true;
+	}
+
+	// Which side is the inside: the sign of the turn from start through middle to end.
+	const FVector2D Mid = Path[Path.Num() / 2];
+	const double Turn = FVector2D::CrossProduct(Mid - Path[0], Path.Last() - Mid);
+	const double InwardSign = Turn >= 0.0 ? 1.0 : -1.0;
+
+	// THE DRIVE IS Drive's, and this only measures each pose's corners against Path: its reach
+	// toward the turn's centre and away from it, against the NEAREST SAMPLE.
+	return Drive(Body, Path, [&](const FCorners& Corners)
+	{
 		for (const FVector2D& Corner : Corners)
 		{
 			double Best = TNumericLimits<double>::Max();
@@ -297,6 +308,5 @@ bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
 				OutOuter[Sample] = FMath::Max(OutOuter[Sample], -Lateral);
 			}
 		}
-	}
-	return true;
+	}, OutAxles);
 }

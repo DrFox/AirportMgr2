@@ -1,8 +1,10 @@
 #include "Build/RoadNetworkSolver.h"
 
+#include "Build/BendWidening.h"
 #include "Build/ExitGeometry.h"
 
 #include "Model/Chassis.h"
+#include "Model/Vehicle.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadDesignVehicles.h"
 #include "Profiles/RoadProfile.h"
@@ -256,7 +258,13 @@ double FRoadNetworkSolver::ZeroRadiusCut(const URoadNetwork& Network, FRoadSegme
 	return Result.Arms.IsValidIndex(ArmIndex) ? Result.Arms[ArmIndex].CutDistance : 0.0;
 }
 
-bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIndex,
+namespace
+{
+/**
+ * SolveNodeCuts before the bend widening: the arms gathered, every corner's fillet fitted to the
+ * arms' allowance. What SolveNodeCuts was until 2026-09-25, moved here unchanged.
+ */
+bool FitNodeCuts(const URoadNetwork& Network, int32 NodeIndex,
 	int32 ArcSegments, FRoadNodeCuts& Out, const FRoadDesignVehicles* DesignVehicles)
 {
 	const TArray<FRoadNode>& Nodes = Network.GetNodes();
@@ -323,7 +331,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 		// when the segment is short (FJunctionArm::MaxCutDistance). Only a corner has a floor.
 		const double MinHere = Out.Input.Arms.Num() == 1 ? 0.0 : ZeroHere.Arms[ArmIndex].CutDistance;
 		const double MinFar = Segment
-			? ZeroRadiusCut(Network, SegmentId, Network.GetOtherEnd(SegmentId, NodeId), DesignVehicles)
+			? FRoadNetworkSolver::ZeroRadiusCut(Network, SegmentId, Network.GetOtherEnd(SegmentId, NodeId), DesignVehicles)
 			: 0.0;
 		const double Slack = Length - MinHere - MinFar;
 		if (Slack < 0.0)
@@ -428,6 +436,105 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 		Out.Result.bValid = false;
 	}
 
+	return true;
+}
+
+/**
+ * THE BEND'S INSIDE, WIDENED to what its design vehicle sweeps (BendWidening, user ruling
+ * 2026-09-25), on a fitted two-arm bend whose service-road lanes the builder lays concentric.
+ * The corner's design vehicle is the less demanding of the arms' - the one its fillet was taken
+ * for (FJunctionSolver takes the smaller radius) - so a Wide bend is widened for the rig and a
+ * Narrow or Standard one for the bowser, which leaves those tarmacs on no bend (measured).
+ * ENFORCED BY: Airside.Build.BendLanes.WideBendCarriesTheRig, .WideningOnlyWhereNeeded
+ */
+void WidenBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out, const FRoadDesignVehicles* DesignVehicles)
+{
+	if (!Out.Result.bValid || Out.Input.Arms.Num() != 2 || Out.ArmSegments.Num() != 2)
+	{
+		return;
+	}
+	const FRoadNodeId NodeId = Network.NodeIdAt(NodeIndex);
+	TArray<BendWidening::FLane> Lanes[2];
+	const URoadProfile* Profiles[2] = { nullptr, nullptr };
+	for (int32 Arm = 0; Arm < 2; ++Arm)
+	{
+		const FRoadSegment* Segment = Network.GetSegment(Out.ArmSegments[Arm]);
+		Profiles[Arm] = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+		if (Profiles[Arm] == nullptr)
+		{
+			return;
+		}
+		const bool bAtA = Segment->A == NodeId;
+		for (const FProfileGuideline& Guideline : Profiles[Arm]->Guidelines)
+		{
+			// Service-road lanes only: the builder lays a taxiway's corner as it always did.
+			if (Guideline.Class != ETraversalClass::GroundVehicle)
+			{
+				continue;
+			}
+			// A guideline's offset is to the left of its segment's A->B; the arm's frame is
+			// outgoing from this node, which is B->A at end B.
+			BendWidening::FLane& Lane = Lanes[Arm].AddDefaulted_GetRef();
+			Lane.Lateral = (bAtA ? 1.0 : -1.0) * Guideline.OffsetFor(Network.GetDriveSide());
+			Lane.bArrives = Guideline.ArrivesAt(bAtA);
+			Lane.bLeaves = Guideline.LeavesFrom(bAtA);
+		}
+	}
+	if (Lanes[0].Num() == 0 || Lanes[1].Num() == 0)
+	{
+		return;
+	}
+	auto VehicleOf = [DesignVehicles](const URoadProfile* Profile)
+	{
+		return DesignVehicles != nullptr ? DesignVehicles->VehicleFor(Profile) : Profile->ResolvedDesignBody();
+	};
+	const FVehicle First = VehicleOf(Profiles[0]);
+	const FVehicle Second = VehicleOf(Profiles[1]);
+	const FVehicle& Design = First.Chassis.TightestFollowableRadius() <= Second.Chassis.TightestFollowableRadius() ? First : Second;
+
+	BendWidening::FWidening Widening;
+	if (!BendWidening::Measure(Out.Input, Out.Result, Lanes, Design, Widening))
+	{
+		return;
+	}
+	// The arms cut back to hold it: a floor under the fillet's cut, capped by each arm's allowance
+	// like a taper's inset (FJunctionArm::MinCutDistance).
+	for (int32 Arm = 0; Arm < 2; ++Arm)
+	{
+		Out.Input.Arms[Arm].MinCutDistance = FMath::Max(Out.Input.Arms[Arm].MinCutDistance, Widening.NeededCut[Arm]);
+	}
+	Out.Result = FJunctionSolver::SolveCuts(Out.Input);
+	if (!Out.Result.bValid)
+	{
+		return;
+	}
+	TArray<FVector2D> Rim;
+	double Shortfall = 0.0;
+	BendWidening::Rim(Out.Input, Out.Result, Widening, Rim, Shortfall);
+	Out.Input.Arms[Widening.Corner].RimToNext = MoveTemp(Rim);
+	// A short arm caps the widening, and the design vehicle then still leaves the tarmac here:
+	// said once per solve, with what to draw. Verbose, not Warning: the cursor's snap solves nodes
+	// on every move (NodeClaims), and this is a property of the layout, not an event.
+	if (Shortfall > 1.0)
+	{
+		UE_LOG(LogRoadSolve, Verbose,
+			TEXT("Node %d: the bend's inside widening is capped by its arms' length - up to %.0f uu of it is missing, ")
+			TEXT("so its design vehicle (wheelbase %.0f) still leaves the tarmac there. Draw the arms longer."),
+			NodeIndex, Shortfall, Design.Chassis.Wheelbase());
+	}
+}
+}
+
+bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIndex,
+	int32 ArcSegments, FRoadNodeCuts& Out, const FRoadDesignVehicles* DesignVehicles)
+{
+	// THE FIT, then the widening: the widening is laid round the FITTED fillet, and only ever
+	// pushes a cut further out within the allowance the fit respected.
+	if (!FitNodeCuts(Network, NodeIndex, ArcSegments, Out, DesignVehicles))
+	{
+		return false;
+	}
+	WidenBend(Network, NodeIndex, Out, DesignVehicles);
 	return true;
 }
 

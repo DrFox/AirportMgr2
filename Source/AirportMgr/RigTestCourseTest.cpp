@@ -117,6 +117,8 @@ namespace RigCourseTest
 		/** Per vehicle slot. */
 		FWorst Swept[2];
 		FWorst PerSide[2];
+		/** PerSide again, per leg - the loop summary says where each vehicle leaves the tarmac, not only its worst. */
+		TMap<int32, double> PerSideByLeg[2];
 		FWorst Lane[2];
 		int32 TurnPoints = 0;
 		int32 LanePoints = 0;
@@ -245,6 +247,8 @@ namespace RigCourseTest
 				const double ClearOut = Edge->ClearOuterAt[Local];
 				++TurnPoints;
 
+				double& LegWorst = PerSideByLeg[Slot].FindOrAdd(Leg, -TNumericLimits<double>::Max());
+				LegWorst = FMath::Max(LegWorst, Reach >= 0.0 ? Reach - ClearIn : -Reach - ClearOut);
 				PerSide[Slot].Offer(Reach >= 0.0 ? Reach - ClearIn : -Reach - ClearOut,
 					Where + FString::Printf(TEXT(", sample %d: reach %.0f %s vs clear in %.0f / out %.0f"),
 						Local, FMath::Abs(Reach), Reach >= 0.0 ? TEXT("inward") : TEXT("outward"), ClearIn, ClearOut));
@@ -810,6 +814,20 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 			Course->GetRunnerForTest(V).Redirects, Continuity.Worst[V].Excess, *Continuity.Worst[V].Where,
 			Continuity.RelayWouldMove[V].Excess, *Continuity.RelayWouldMove[V].Where);
 	}
+	// THE LOOP SUMMARY PER VEHICLE, per leg: how far past its turn clearance each vehicle's tow
+	// reached (negative: that much to spare), with the leg's feature - which tier and which corner.
+	for (int32 V = 0; V < 2; ++V)
+	{
+		TArray<int32> LegsSeen;
+		Probe.PerSideByLeg[V].GetKeys(LegsSeen);
+		LegsSeen.Sort();
+		TArray<FString> Parts;
+		for (const int32 L : LegsSeen)
+		{
+			Parts.Add(FString::Printf(TEXT("%d (%s) %.0f"), L, *Waypoints[(L + 1) % Legs].Label, Probe.PerSideByLeg[V][L]));
+		}
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s per-side by leg, uu past the turn clearance: %s"), Names[V], *FString::Join(Parts, TEXT("; ")));
+	}
 	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicles overlapped on %d tick(s) in %d episode(s); worst penetration %.0f uu (%s)"),
 		Overlap.TicksOverlapping, Overlap.Episodes, Overlap.TicksOverlapping > 0 ? Overlap.Worst.Excess : 0.0, *Overlap.Worst.Where);
 	if (!TestTrue(TEXT("both vehicles completed a loop within the tick bound - no hang, no deadlock between them"),
@@ -869,20 +887,26 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("the utility's tow stays within the road's width on every lane (worst %.0f uu: %s)"),
 		Probe.Lane[1].Excess, *Probe.Lane[1].Where), Probe.Lane[1].Excess <= 10.0);
 	// PER SIDE, PINNED, NOT PASSED (measured 2026-09-25): the rig's trailer cuts 2-3.4 m past the
-	// INNER pavement edge on every near-side (right) turn, while its swept width fits - VehicleFit
+	// INNER pavement edge on near-side (right) turns, while its swept width fits - VehicleFit
 	// admits by width because a real driver swings wide, and the agent does not swing: it holds
 	// its lane line. The utility's short trailer stays on. A decision for the spec, not this
 	// course; when the agent learns to swing wide (or VehicleFit asks per side) the rig's line
 	// here goes red and is to be flipped.
+	// BEND LANES (2026-09-25): a bend's lanes are now arcs about its inner fillet and a Wide bend's
+	// inside is widened to the rig's sweep - where its arms can hold it. On this course they cannot
+	// everywhere: the Wide lane's corners have a 30 m arm already cut to its allowance, so the
+	// widening is capped there (traced 231 -> 188 uu, AirportMgr.RigCourse.BendCensus), and the
+	// rig is not the design vehicle of Narrow or Standard at all. The worst is still a Narrow T.
 	TestTrue(FString::Printf(TEXT("the utility's tow stays on the tarmac per side (worst %.0f uu: %s)"),
 		Probe.PerSide[1].Excess, *Probe.PerSide[1].Where), Probe.PerSide[1].Excess <= 10.0);
 	TestTrue(FString::Printf(TEXT("KNOWN GAP: the rig's trailer cuts in past the inner edge on near-side turns (worst %.0f uu: %s)"),
 		Probe.PerSide[0].Excess, *Probe.PerSide[0].Where), Probe.PerSide[0].Excess > 10.0);
 	// AND NO WORSE THAN MEASURED: the floor above only says the gap is still there, so a
 	// regression that put the trailer further off the pavement would pass it. The ceiling is the
-	// measurement - worst 342 uu at the east link's corner, 2026-09-25 - plus a little room.
-	TestTrue(FString::Printf(TEXT("KNOWN GAP, bounded: the rig's inner cut-in is no worse than the 3.4 m measured on 2026-09-25 (worst %.0f uu: %s)"),
-		Probe.PerSide[0].Excess, *Probe.PerSide[0].Where), Probe.PerSide[0].Excess <= 400.0);
+	// measurement plus a little room: worst 355 uu at tier 0's T junction, out of the stem (leg 4),
+	// after the bend-lane arcs and the Wide widening (2026-09-25; 342-358 before them).
+	TestTrue(FString::Printf(TEXT("KNOWN GAP, bounded: the rig's inner cut-in is no worse than the 355 uu measured after the bend widening, 2026-09-25 (worst %.0f uu: %s)"),
+		Probe.PerSide[0].Excess, *Probe.PerSide[0].Where), Probe.PerSide[0].Excess <= 375.0);
 	// The same cut-in shows on the LANE just before a near-side corner (measured 164 uu at the
 	// east link's stub when every leg began with the chain laid straight; 261 uu at tier 1's
 	// entry stub once the chain carried across waypoints, 2026-09-25): the trailer leaves the

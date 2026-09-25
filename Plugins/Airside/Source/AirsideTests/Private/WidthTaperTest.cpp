@@ -403,7 +403,7 @@ bool FWidthTaperSameWidthTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("both cuts are inset though the widths match (%.0f, %.0f)"), A->TrimB, B->TrimA), A->TrimB > 0.0 && B->TrimA > 0.0);
 	double Tightest = 0.0;
 	const int32 Pieces = TaperPieces(Step, Tightest);
-	const double Lock = UAirsideSettings::ResolveRoadDesignVehicles().Default.TightestFollowableRadius();
+	const double Lock = UAirsideSettings::ResolveRoadDesignVehicles().Default.Chassis.TightestFollowableRadius();
 	UE_LOG(LogTemp, Display, TEXT("WidthTaper.SameWidthOffsetLanes: insets %.0f + %.0f, %d piece(s), tightest %.1f vs lock %.1f"), A->TrimB, B->TrimA, Pieces, Tightest, Lock);
 	TestEqual(TEXT("each lane crosses on an S: two pieces each way"), Pieces, 4);
 	TestTrue(FString::Printf(TEXT("sized for the design vehicle (%.1f vs %.1f)"), Tightest, Lock), Tightest >= Lock);
@@ -435,7 +435,7 @@ bool FWidthTaperOneLaneTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("both cuts are inset (%.0f, %.0f)"), A->TrimB, B->TrimA), A->TrimB > 0.0 && B->TrimA > 0.0);
 	double Tightest = 0.0;
 	const int32 Pieces = TaperPieces(Step, Tightest);
-	const double Lock = UAirsideSettings::ResolveRoadDesignVehicles().Default.TightestFollowableRadius();
+	const double Lock = UAirsideSettings::ResolveRoadDesignVehicles().Default.Chassis.TightestFollowableRadius();
 	UE_LOG(LogTemp, Display, TEXT("WidthTaper.OneLaneMeetsTwo: insets %.0f + %.0f, %d piece(s), tightest %.1f vs lock %.1f"), A->TrimB, B->TrimA, Pieces, Tightest, Lock);
 	TestEqual(TEXT("onto each lane and back off the other: two S, four pieces"), Pieces, 4);
 	TestTrue(FString::Printf(TEXT("sized for the design vehicle (%.1f vs %.1f)"), Tightest, Lock), Tightest >= Lock);

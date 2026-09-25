@@ -55,6 +55,15 @@ struct FJunctionArm
 	 */
 	bool bContinuous = false;
 
+	/**
+	 * THE RIM BETWEEN THIS ARM'S LEFT CUT AND THE NEXT ARM'S RIGHT CUT, when not the corner's
+	 * fillet arc: a bend's inside widened to what its design vehicle sweeps (BendWidening,
+	 * 2026-09-25). Empty - every corner but a widened one - means the fillet's arc, sampled as
+	 * before. Points only BETWEEN the two cut vertices: those stay SolveCuts' own, shared
+	 * verbatim with the segments, so the weld is the same weld whatever runs between them.
+	 */
+	TArray<FVector2D> RimToNext;
+
 	/** Opaque caller tag, e.g. a packed FRoadSegmentId index. Never read by the solver. */
 	int32 UserData = INDEX_NONE;
 };

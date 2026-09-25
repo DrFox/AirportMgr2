@@ -6,6 +6,7 @@
 #include "RoadProfile.generated.h"
 
 struct FChassis;
+struct FVehicle;
 
 /**
  * Which authored cross-section a build gesture lays.
@@ -90,6 +91,21 @@ struct AIRSIDE_API FProfileGuideline
 
 	/** 0 means unlimited. */
 	UPROPERTY(EditAnywhere) double MaxWingspan = 0.0;
+
+	/**
+	 * Whether traffic on this guideline ARRIVES at its segment's end A (bAtA) or B, and whether
+	 * it LEAVES from it. ONE READING of Direction at a node, for the builder that pairs arriving
+	 * lanes with leaving ones and the solver that traces the same turns to widen a bend for them
+	 * (2026-09-25) - two copies of this would be two answers to which lane turns where.
+	 */
+	bool ArrivesAt(bool bAtA) const
+	{
+		return Direction == EGuidelineDir::Bidirectional || Direction == (bAtA ? EGuidelineDir::BToA : EGuidelineDir::AToB);
+	}
+	bool LeavesFrom(bool bAtA) const
+	{
+		return Direction == EGuidelineDir::Bidirectional || Direction == (bAtA ? EGuidelineDir::AToB : EGuidelineDir::BToA);
+	}
 };
 
 /**
@@ -215,6 +231,13 @@ public:
 
 	/** The design vehicle the two self-resolving answers above share: one lookup, one fallback. */
 	FChassis ResolvedDesignVehicle() const;
+
+	/**
+	 * The same design vehicle WITH ITS BODY, for the self-resolving path of a bend's widening
+	 * (FRoadNetworkSolver, when no FRoadDesignVehicles was handed down) - the tier's vehicle,
+	 * else the largest service vehicle's body.
+	 */
+	FVehicle ResolvedDesignBody() const;
 
 	/**
 	 * Segments with this profile PASS THROUGH a node rather than ending at it, so they are

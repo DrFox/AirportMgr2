@@ -626,6 +626,51 @@ bool GuidelineGeom::Arc(const FVector2D& From, const FVector2D& FromDir, const F
 	return true;
 }
 
+bool GuidelineGeom::BendLane(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+	const FVector2D& Centre, TArray<FArcPiece>& OutPieces)
+{
+	OutPieces.Reset();
+	const FVector2D InDir = FromDir.GetSafeNormal();
+	const FVector2D OutDir = ToDir.GetSafeNormal();
+	const double Turn = FVector2D::CrossProduct(InDir, OutDir);
+	// Round Centre: it lies on the side the turn bends toward.
+	if (FMath::Abs(Turn) < 1e-9 || Turn * FVector2D::CrossProduct(InDir, Centre - From) <= 0.0)
+	{
+		return false;
+	}
+	// The tangent points: Centre's feet on the two lane lines, ahead of From and behind To.
+	const double AheadIn = FVector2D::DotProduct(Centre - From, InDir);
+	const double BehindOut = FVector2D::DotProduct(To - Centre, OutDir);
+	if (AheadIn < -BendTangentTolerance || BehindOut < -BendTangentTolerance)
+	{
+		return false;
+	}
+	const bool bLeadIn = AheadIn > BendTangentTolerance;
+	const bool bLeadOut = BehindOut > BendTangentTolerance;
+	const FVector2D ArcFrom = bLeadIn ? From + InDir * AheadIn : From;
+	const FVector2D ArcTo = bLeadOut ? To - OutDir * BehindOut : To;
+	if (FMath::Abs(FVector2D::Distance(ArcFrom, Centre) - FVector2D::Distance(ArcTo, Centre)) > BendTangentTolerance)
+	{
+		return false;
+	}
+	TArray<FArcPiece> Round;
+	if (!Arc(ArcFrom, InDir, ArcTo, OutDir, Centre, BendArcPieceSweep, Round))
+	{
+		return false;
+	}
+	// A straight piece is spelled as the builder spells it: control on the midpoint (IsStraight).
+	if (bLeadIn)
+	{
+		OutPieces.Add({ ArcFrom, (From + ArcFrom) * 0.5 });
+	}
+	OutPieces.Append(Round);
+	if (bLeadOut)
+	{
+		OutPieces.Add({ To, (ArcTo + To) * 0.5 });
+	}
+	return true;
+}
+
 double GuidelineGeom::CornerRunFor(double Radius, double Interior)
 {
 	const double Half = Interior * 0.5;

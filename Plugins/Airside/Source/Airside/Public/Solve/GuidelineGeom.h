@@ -288,6 +288,24 @@ namespace GuidelineGeom
 	AIRSIDE_API bool LaneChange(const FVector2D& From, const FVector2D& To, const FVector2D& Travel,
 		FVector2D& OutControlIn, FVector2D& OutMid, FVector2D& OutControlOut);
 
+	/**
+	 * The most one quadratic of a bend lane's arc may sweep, radians: 22.5 degrees, so a right
+	 * angle is four pieces delivering cos(11.25) = 0.981 of the arc's radius (Arc, below). Two
+	 * pieces would deliver 0.924 and eight 0.995; four is where the loss is under the lane's own
+	 * width in 50 and the graph grows by three nodes per lane per bend. HERE, not in the builder,
+	 * because the solver lays the same arc to widen a bend for (BendWidening) - one figure.
+	 */
+	inline constexpr double BendArcPieceSweep = UE_DOUBLE_PI / 8.0;
+
+	/**
+	 * How far two lanes' distances from a bend's inner edge (or a lane end from its tangent point)
+	 * may differ, uu, for the lane to be laid concentric. Equal arms give the SAME solver value by
+	 * two float paths, so the spread is a rounding error; a real mismatch (a Narrow arm meeting a
+	 * Wide one: the lanes sit 210 and 285 uu off their inner edges) is tens of uu and keeps the
+	 * quadratic. Shared by the builder that lays the arc and the solver that widens for it.
+	 */
+	inline constexpr double BendTangentTolerance = 1.0;
+
 	/** One quadratic of an arc, in travel order: from the previous End (or the arc's From) to End. */
 	struct FArcPiece
 	{
@@ -316,6 +334,23 @@ namespace GuidelineGeom
 	 */
 	AIRSIDE_API bool Arc(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
 		const FVector2D& Centre, double MaxPieceSweep, TArray<FArcPiece>& OutPieces);
+
+	/**
+	 * A BEND LANE (2026-09-25): from the lane end From, travelling FromDir, to the lane end To,
+	 * leaving along ToDir, round Centre - straight on along the arriving lane to the tangent point
+	 * of the circle about Centre, Arc round it in BendArcPieceSweep pieces, straight on to To. The
+	 * straight leads are there when a lane end sits back from its tangent point: a bend whose
+	 * inside is widened cuts its arms back past the fillet (FRoadNetworkSolver), and the lane keeps
+	 * its arc. ONE CONSTRUCTION for the builder that lays it and the solver that widens the
+	 * pavement for the vehicle driving it.
+	 *
+	 * False, OutPieces empty, when no circle about Centre touches both lane lines (their distances
+	 * from Centre differ by more than BendTangentTolerance), when a tangent point lies BEHIND its
+	 * lane end, or when the turn does not go round Centre.
+	 * ENFORCED BY: Airside.Build.BendLanes.ConcentricWithPavement, .MixedWidthsKeepTheQuadratic
+	 */
+	AIRSIDE_API bool BendLane(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+		const FVector2D& Centre, TArray<FArcPiece>& OutPieces);
 
 	/**
 	 * Position and heading at Distance along a polyline, clamped to both ends.
