@@ -118,10 +118,9 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 	//    \         \         \     WQ at 90 deg off the end, XT at 45 deg, EZ short at 45 deg
 	//     Q         T         Z
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::NarrowRunway();
 	Runway->ExitLength = ExitLength;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 	const FRoadNodeId W = Net->AddNode(FVector2D(-40000.0, 0.0));
 	const FRoadNodeId X = Net->AddNode(FVector2D(0.0, 0.0));
@@ -368,10 +367,9 @@ bool FRunwayHoldingPositionsAreDerivedTest::RunTest(const FString& Parameters)
 	// ARCS OFF: the position is the junction's, not the arc's.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-		Runway->bContinuousThroughJunctions = true;
+		URoadProfile* Runway = TestProfiles::NarrowRunway();
 		Runway->ExitLength = 0.0;
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+		URoadProfile* Taxiway = TestProfiles::Taxiway();
 		const FRoadNodeId W = Net->AddNode(FVector2D(-40000.0, 0.0));
 		const FRoadNodeId X = Net->AddNode(FVector2D(0.0, 0.0));
 		const FRoadNodeId E = Net->AddNode(FVector2D(40000.0, 0.0));
@@ -438,9 +436,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRunwayExitArcOnPavementTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-	Runway->bContinuousThroughJunctions = true;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Runway = TestProfiles::NarrowRunway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 	//   W ===== X1 ===== X2 ===== E     three junctions, a 5500 uu stub at each
 	const FRoadNodeId W = Net->AddNode(FVector2D(-60000.0, 0.0));

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
@@ -95,7 +96,7 @@ bool FRunwayAdmissionTest::RunTest(const FString& Parameters)
 		RunwayAdmission::Check(*ShortNet, Short, Both, true).Why, ERunwayRefusal::Surface);
 
 	// Not a runway: admitted, because "no runway" is the planners' word and not this one's.
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 	const FRoadNodeId P = Net->AddNode(FVector2D(0.0, 50000.0));
 	const FRoadNodeId Q = Net->AddNode(FVector2D(10000.0, 50000.0));
 	const FRoadSegmentId Tx = Net->AddStraightSegment(P, Q, Taxiway);

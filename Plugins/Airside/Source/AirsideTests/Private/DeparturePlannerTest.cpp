@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "AirsideTestsLog.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -40,9 +41,8 @@ namespace
 	{
 		FDepartureAirport Out;
 		Out.Net = NewObject<URoadNetwork>(Outer);
-		URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-		Runway->bContinuousThroughJunctions = true;
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+		URoadProfile* Runway = TestProfiles::NarrowRunway();
+		URoadProfile* Taxiway = TestProfiles::Taxiway();
 		const FRoadNodeId W = Out.Net->AddNode(Out.WAt);
 		const FRoadNodeId X = Out.Net->AddNode(Out.XAt);
 		const FRoadNodeId E = Out.Net->AddNode(Out.EAt);
@@ -125,9 +125,8 @@ bool FDeparturePlannerBacktrackTest::RunTest(const FString& Parameters)
 	// A runway only 30000 long past X: the hairpin entry at X + 6000 leaves 24000, short of
 	// the Piper's roll with margin; the threshold at W leaves the whole 90000.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-	Runway->bContinuousThroughJunctions = true;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Runway = TestProfiles::NarrowRunway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 	const FVector2D WAt(-60000.0, 0.0), XAt(0.0, 0.0), EAt(30000.0, 0.0);
 	const FRoadNodeId W = Net->AddNode(WAt);
 	const FRoadNodeId X = Net->AddNode(XAt);

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Content/AirsideSettings.h"
@@ -16,7 +17,7 @@ namespace
 	/** A taxiway east-west and a service road north-south, sharing the node at the origin. */
 	void LayCrossing(URoadNetwork& Net, bool bDrawFarSideOfRoad)
 	{
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+		URoadProfile* Taxiway = TestProfiles::Taxiway();
 		URoadProfile* Road = URoadProfile::MakeServiceRoadTransient();
 		Net.DefaultProfile = Taxiway;
 

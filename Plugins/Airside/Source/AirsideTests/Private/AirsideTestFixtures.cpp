@@ -3,6 +3,7 @@
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
@@ -108,6 +109,22 @@ void TestGraph::Rebuild(URoadNetwork& Net)
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
 	FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
+}
+
+TestGraph::FCornerFixture TestGraph::Corner(URoadProfile* Profile, URoadProfile* SecondProfile,
+	const FVector2D& CornerAt, const FVector2D& FarAt)
+{
+	FCornerFixture Out;
+	Out.Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadNodeId West = Out.Net->AddNode(FVector2D(0.0, 0.0));
+	Out.Corner = Out.Net->AddNode(CornerAt);
+	const FRoadNodeId Far = Out.Net->AddNode(FarAt);
+	Out.First = Out.Net->AddStraightSegment(West, Out.Corner, Profile);
+	Out.Second = Out.Net->AddStraightSegment(Out.Corner, Far, SecondProfile != nullptr ? SecondProfile : Profile);
+	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
+	Out.Solved = FRoadNetworkSolver::SolveAll(*Out.Net, 12, &Designs);
+	FRoadGuidelineBuilder::Build(*Out.Net, Out.Solved, Designs);
+	return Out;
 }
 
 FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOptions& Options, URoadNetwork* ExistingNet)
@@ -373,6 +390,23 @@ URoadProfile* TestProfiles::Taxiway()
 	return URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
 }
 
+TArray<URoadProfile*> TestProfiles::ServiceTiers()
+{
+	TArray<URoadProfile*> Out;
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	// WideServiceTier + 1, not a bare 3: the guard NAMES why three tiers are required (Wide
+	// sits at index WideServiceTier, so the array needs one more slot than that index).
+	if (Content == nullptr || Content->ServiceRoadProfiles.Num() != UAirsideSettings::WideServiceTier + 1)
+	{
+		return Out;
+	}
+	for (const TSoftObjectPtr<URoadProfile>& Tier : Content->ServiceRoadProfiles)
+	{
+		Out.Add(Tier.LoadSynchronous());
+	}
+	return Out;
+}
+
 FCrossingFixture FCrossingFixture::Build(URoadNetwork& Net, bool bFarBar)
 {
 	FCrossingFixture Out;
@@ -413,10 +447,9 @@ FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand, double XDis
 	FExitArcAirport Out;
 	Out.XAt = FVector2D(-40000.0 + XDistance, 0.0);
 	Out.Net = NewObject<URoadNetwork>(Outer);
-	URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::NarrowRunway();
 	Runway->ExitLength = Out.ExitLength;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 	const FRoadNodeId W = Out.Net->AddNode(Out.Threshold);
 	const FRoadNodeId X = Out.Net->AddNode(Out.XAt);
 	const FRoadNodeId E = Out.Net->AddNode(FVector2D(FMath::Max(60000.0, Out.XAt.X + 40000.0), 0.0));
@@ -498,11 +531,11 @@ FGuideAnchor BareAnchor(const FVector2D& Origin)
  * runway is not a road kind - it is a segment placed through PlaceRunway with a runway
  * profile, which is what URoadNetwork::IsRunwaySegment then recognises.
  *
- * MinimumRunwayLength is dropped first: it defaults to 50000 uu and PlaceRunway refuses
+ * Minimum is dropped first: MinimumRunwayLength defaults to 50000 uu and PlaceRunway refuses
  * anything under it, so a test strip either lowers the bar or is half a kilometre long.
  * MeshFreshnessTest does exactly this, for exactly this reason.
  */
-bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To)
+bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To, double Minimum)
 {
 	// A NODE FIRST, PURELY TO BRING THE NETWORK INTO BEING. The facade creates URoadNetwork
 	// lazily inside PlaceNode and PlaceRunway does NOT - so a test whose first call is
@@ -512,11 +545,9 @@ bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D&
 	// for the same reason and says so.
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 
-	URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Profile->bContinuousThroughJunctions = true;
+	URoadProfile* Profile = TestProfiles::Runway();
 
-	// Defaults to 50000 uu, and PlaceRunway refuses anything under it.
-	Actor->MinimumRunwayLength = 100.0;
+	Actor->MinimumRunwayLength = Minimum;
 	return Actor->PlaceRunway(From, To, Profile);
 }
 

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/ExitGeometry.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Misc/AutomationTest.h"
@@ -25,8 +26,7 @@ bool FRunwayExitFlareTest::RunTest(const FString& Parameters)
 	constexpr double ExitLength = 6000.0;
 	constexpr double TaxiwayWidth = 2300.0;
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::NarrowRunway();
 	Runway->ExitLength = ExitLength;
 	URoadProfile* Taxiway = URoadProfile::MakeTransient(TaxiwayWidth, 1500.0, 230.0);
 

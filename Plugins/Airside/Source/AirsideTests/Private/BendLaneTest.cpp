@@ -1,8 +1,8 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
-#include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
@@ -21,20 +21,8 @@
 
 namespace BendLane
 {
-	TArray<URoadProfile*> Tiers()
-	{
-		TArray<URoadProfile*> Out;
-		const UAirsideContent* Content = UAirsideSettings::GetContent();
-		if (Content == nullptr || Content->ServiceRoadProfiles.Num() != 3)
-		{
-			return Out;
-		}
-		for (const TSoftObjectPtr<URoadProfile>& Tier : Content->ServiceRoadProfiles)
-		{
-			Out.Add(Tier.LoadSynchronous());
-		}
-		return Out;
-	}
+	/** #310: was its own copy, byte-identical to WidthTaperTest's and DesignVehicleTest's. */
+	TArray<URoadProfile*> Tiers() { return TestProfiles::ServiceTiers(); }
 
 	const TCHAR* const Names[3] = { TEXT("Narrow"), TEXT("Standard"), TEXT("Wide") };
 
@@ -97,27 +85,16 @@ namespace BendLane
 		return Chain.Path.Num() > 0 ? Sum / Chain.Path.Num() : 0.0;
 	}
 
-	/** A plain right angle, (0,0) -> (8000,0) -> (8000,8000), derived the production way. */
-	struct FBend
-	{
-		URoadNetwork* Net = nullptr;
-		FRoadSolveResult Solved;
-		FRoadNodeId Corner;
-	};
+	/** A plain right angle, (0,0) -> (8000,0) -> (8000,8000), derived the production way.
+	 *  #310: TestGraph::FCornerFixture at its default points - kept as its own name here
+	 *  since every call site in this file reads Bend.Corner, not a generic First/Second. */
+	using FBend = TestGraph::FCornerFixture;
 
+	/** #310: forwards to TestGraph::Corner, the fixture WidthTaperTest's Build shares - see
+	 *  its own comment on why the two were the same shape typed twice. */
 	FBend Build(URoadProfile* Profile, URoadProfile* NorthProfile = nullptr)
 	{
-		FBend Out;
-		Out.Net = NewObject<URoadNetwork>(GetTransientPackage());
-		const FRoadNodeId West = Out.Net->AddNode(FVector2D(0.0, 0.0));
-		Out.Corner = Out.Net->AddNode(FVector2D(8000.0, 0.0));
-		const FRoadNodeId North = Out.Net->AddNode(FVector2D(8000.0, 8000.0));
-		Out.Net->AddStraightSegment(West, Out.Corner, Profile);
-		Out.Net->AddStraightSegment(Out.Corner, North, NorthProfile != nullptr ? NorthProfile : Profile);
-		const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
-		Out.Solved = FRoadNetworkSolver::SolveAll(*Out.Net, 12, &Designs);
-		FRoadGuidelineBuilder::Build(*Out.Net, Out.Solved, Designs);
-		return Out;
+		return TestGraph::Corner(Profile, NorthProfile);
 	}
 }
 

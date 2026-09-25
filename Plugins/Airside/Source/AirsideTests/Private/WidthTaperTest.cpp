@@ -1,8 +1,8 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
-#include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
@@ -29,20 +29,11 @@
 
 namespace WidthTaper
 {
-	/** The three content tiers, narrow first, or empty when the set does not have them. */
+	/** The three content tiers, narrow first, or empty when the set does not have them.
+	 *  #310: was its own copy, byte-identical to BendLaneTest's and DesignVehicleTest's. */
 	TArray<URoadProfile*> Tiers()
 	{
-		TArray<URoadProfile*> Out;
-		const UAirsideContent* Content = UAirsideSettings::GetContent();
-		if (Content == nullptr || Content->ServiceRoadProfiles.Num() != 3)
-		{
-			return Out;
-		}
-		for (const TSoftObjectPtr<URoadProfile>& Tier : Content->ServiceRoadProfiles)
-		{
-			Out.Add(Tier.LoadSynchronous());
-		}
-		return Out;
+		return TestProfiles::ServiceTiers();
 	}
 
 	/** Narrow (0,0)->(6000,0), then Wide (6000,0)->(12000,0): one straight, one width change. */
@@ -55,18 +46,20 @@ namespace WidthTaper
 		FRoadSegmentId Wide;
 	};
 
+	/** #310: forwards to TestGraph::Corner at (6000,0)/(12000,0) - the straight width-step
+	 *  case of the same 3-node fixture BendLaneTest's right-angle Build shares. FStep keeps
+	 *  its own field names (Mid/Narrow/Wide) since every other call site in this file reads
+	 *  them, unlike BendLaneTest's Corner-only reads. */
 	FStep Build(URoadProfile* NarrowProfile, URoadProfile* WideProfile)
 	{
+		const TestGraph::FCornerFixture Fixture = TestGraph::Corner(
+			NarrowProfile, WideProfile, FVector2D(6000.0, 0.0), FVector2D(12000.0, 0.0));
 		FStep Out;
-		Out.Net = NewObject<URoadNetwork>(GetTransientPackage());
-		const FRoadNodeId West = Out.Net->AddNode(FVector2D(0.0, 0.0));
-		Out.Mid = Out.Net->AddNode(FVector2D(6000.0, 0.0));
-		const FRoadNodeId East = Out.Net->AddNode(FVector2D(12000.0, 0.0));
-		Out.Narrow = Out.Net->AddStraightSegment(West, Out.Mid, NarrowProfile);
-		Out.Wide = Out.Net->AddStraightSegment(Out.Mid, East, WideProfile);
-		const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
-		Out.Solved = FRoadNetworkSolver::SolveAll(*Out.Net, 12, &Designs);
-		FRoadGuidelineBuilder::Build(*Out.Net, Out.Solved, Designs);
+		Out.Net = Fixture.Net;
+		Out.Solved = Fixture.Solved;
+		Out.Mid = Fixture.Corner;
+		Out.Narrow = Fixture.First;
+		Out.Wide = Fixture.Second;
 		return Out;
 	}
 

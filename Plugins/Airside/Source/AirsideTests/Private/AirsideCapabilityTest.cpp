@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/AirsideCapability.h"
@@ -16,9 +17,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FAirsideCapabilityTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Net = NewObject<URoadNetwork>();
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Runway = TestProfiles::Runway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 	TestEqual(TEXT("an empty network has no runways"), AirsideCapability::Summarise(*Net).Runways.Num(), 0);
 

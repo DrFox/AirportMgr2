@@ -97,6 +97,14 @@
       18. No Acos in the Airside/AirportOps production modules (2026-09-24). acos(dot) is
           1.5e-8 rad wrong one ulp from +/-1, which refused a guided T junction as "too short
           to hold the corner"; RoadGeom::AngleBetween (atan2 of cross and dot) is the idiom.
+      19. The runway/taxiway profile triples are TestProfiles::Runway/NarrowRunway/Taxiway's
+          own numbers, nowhere else (issue #310). New sites kept typing
+          URoadProfile::MakeTransient(4500.0, 1500.0, 450.0) (or 1800/180, or 2300/230) after
+          TestProfiles existed to say the same thing - 28 of them across 12 files, some newer
+          than the helper itself. AirsideTestFixtures.cpp is the one legal definer; scoped to
+          AirsideTests only, because AirportOpsTests cannot reach it (it is a Private header -
+          see the header's own top comment) and has the SAME duplication under its own
+          literals, a separate finding (#310's PR body) that this rule does not cover.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -917,6 +925,32 @@ if (Test-Path $roadEntityHeader) {
     }
 }
 $ranRules.Add('roadentity-no-airframe-motion')
+
+# --- 19. Runway/taxiway profile triples are TestProfiles', nowhere else in AirsideTests -----
+# Issue #310: TestProfiles::Runway/NarrowRunway/Taxiway existed since #102 (f0714c80), and 28
+# non-fixture sites across 12 files kept retyping the same MakeTransient triple anyway - some
+# of them (EditToolTest, MeshFreshnessTest, RunwayDisconnectTest) newer than the helper itself.
+# AirsideTestFixtures.cpp is the one legal definer. Scoped to AirsideTests only: AirsideTests.h
+# is Private to that module (its own top comment), so AirportOpsTests cannot call TestProfiles
+# and its OWN copies of these triples (FlightBoardTest, FuelServiceTest, OfferGeneratorTest,
+# OpsRuntimeTest, OpsSaveTest) are a separate finding, reported but not fixed by #310 - moving
+# TestProfiles to a public header is a bigger seam than this issue's scope.
+#
+# ALL THREE ARGUMENTS, exactly paired (4500/1500/450, 1800/1500/180, 2300/1500/230): the 2-arg
+# MakeTransient(Width, LaneWidth) overload this codebase also uses (LeadInSweepTest,
+# RoadNetworkTest, RoadProfileTest, ...) takes the engine's own default ExitLength, which is
+# NOT what TestProfiles::Runway/NarrowRunway/Taxiway produce - matching on the first two
+# arguments alone flagged a dozen of those as false positives before this comment.
+$profileTriplePattern = 'MakeTransient\(\s*(4500\.0,\s*1500\.0,\s*450\.0|1800\.0,\s*1500\.0,\s*180\.0|2300\.0,\s*1500\.0,\s*230\.0)\s*\)'
+foreach ($file in Get-Sources $airsideTests @('.h', '.cpp')) {
+    if ($file.Name -eq 'AirsideTestFixtures.cpp') { continue }
+    foreach ($h in (Select-String -Path $file.FullName -Pattern $profileTriplePattern)) {
+        $t = $h.Line.Trim()
+        if ($t.StartsWith('//') -or $t.StartsWith('*') -or $t.StartsWith('/*')) { continue }
+        $failures.Add("profile-triple: $($file.FullName):$($h.LineNumber) retypes a TestProfiles triple; call TestProfiles::Runway/NarrowRunway/Taxiway instead: $t")
+    }
+}
+$ranRules.Add('profile-triple')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

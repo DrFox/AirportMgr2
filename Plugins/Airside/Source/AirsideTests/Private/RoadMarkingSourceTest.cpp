@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -189,8 +190,7 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 		{
 			// A RUNWAY, since 2026-09-07: a runway-holding position may protect nothing else,
 			// and the setter refuses a taxiway. Its own strip, far from the fixture's roads.
-			URoadProfile* RunwayProfile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-			RunwayProfile->bContinuousThroughJunctions = true;
+			URoadProfile* RunwayProfile = TestProfiles::Runway();
 			const FRoadNodeId StripA = Net->AddNode(FVector2D(300000.0, 300000.0));
 			const FRoadNodeId StripB = Net->AddNode(FVector2D(360000.0, 300000.0));
 			const FRoadSegmentId Protected = Net->AddStraightSegment(StripA, StripB, RunwayProfile);
