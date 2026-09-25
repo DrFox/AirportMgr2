@@ -11,7 +11,8 @@
 // back on the airframe/motion rebuild list #176 was written to get them off. Dropped both;
 // this header names neither FAirframe nor FAgentMotion, so nothing here required them.
 // Every file that used one directly now includes its own header (see git blame on this
-// line for the list). Check-Architecture rule 13 fails the build if either returns.
+// line for the list). Check-Architecture rule 19 (roadentity-no-airframe-motion) fails the
+// build if either returns.
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
