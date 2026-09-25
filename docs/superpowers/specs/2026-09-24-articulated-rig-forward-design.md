@@ -235,6 +235,13 @@ game; legs are progress markers:**
   (`Splice` + `FRouteFollower::Replace`: Travelled, Speed, Heading and the chain carry on).
   `RedirectAgent` was rejected for this: it restarts the follower from rest, the very stop being
   removed. It survives only as the fallback when a route runs out unjoined.
+- **Review of ed81410c:** `ExtendRoute` moves the goal through the same `ReleaseGoal`/`TakeGoal`
+  as `RedirectAgent` (stand wait cleared, departure re-armed or disarmed for the new end -
+  `ArmDepartureIfRunway` now disarms, which a redirect off a runway also lacked - the occupancy
+  revision bumped), warns when a tail does not continue the route, and trims the driven history
+  (`KeepBehind`, Travelled rebased) so an endless course's route stays bounded. The course
+  reports a sharp vertex AT a join; the only ones are the width step's jog, at its node's lane
+  end.
 - **Measured:** the rig's leg 0 now takes 12.1 s against a derived no-stop 11.8 s (it slows for
   the corner at its end); every waypoint is passed moving, at the speed profile's own limit
   where the profile slows it. One dispatch per vehicle, one extension per loop boundary.

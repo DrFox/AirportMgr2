@@ -766,6 +766,9 @@ public:
 	/** Arms a departure for the taxi currently under way. See FDepartureOrder. */
 	void ArmDeparture(const FRunwayEnd& End, double EntryOffset = 0.0);
 
+	/** Disarms it: the route no longer ends on the runway it was armed for (ArmDepartureIfRunway). */
+	void DisarmDeparture() { bDepartureArmed = false; DepartureOrder = FDepartureOrder(); }
+
 	/**
 	 * Sets GoalNode from a plan's own last step, or clears it when the plan has none.
 	 *

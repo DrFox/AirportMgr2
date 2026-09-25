@@ -384,6 +384,12 @@ FRigCourseWaypoint ARigTestCourse::StopAt(bool bReverse, int32 Position) const
 	return Stop;
 }
 
+int64 ARigTestCourse::LogKey(int32 Loop, int32 Slot) const
+{
+	// TWO HALVES PER LOOP: legs [0, N) for refusals and bypasses, N + stop for strandings.
+	return static_cast<int64>(Loop) * 2 * Waypoints.Num() + Slot;
+}
+
 int32 ARigTestCourse::LegAt(bool bReverse, int32 Position) const
 {
 	const int32 N = Waypoints.Num();
@@ -511,6 +517,53 @@ void ARigTestCourse::TickRunner(FRigCourseRunner& Runner, double DeltaSeconds)
 	}
 }
 
+double ARigTestCourse::HistoryToKeep(const FVehicle& Vehicle)
+{
+	// THE WHOLE VEHICLE BEHIND ITS STEERED AXLE, and room over: the chain's axles ride road the
+	// route must still name for the tow's clearance probe (RigTestCourseTest's FClearanceProbe
+	// searches a chain's length plus 5 m behind), and 10 m more so a trim never cuts under it.
+	double Behind = Vehicle.Chassis.Wheelbase() + FMath::Abs(Vehicle.BodyRearX);
+	for (const FTowLink& Link : Vehicle.Tow)
+	{
+		Behind += FMath::Abs(Link.HitchX) + Link.Length + Link.BodyRear + Link.BodyFront;
+	}
+	return Behind + 500.0 + 1000.0;
+}
+
+void ARigTestCourse::ReportSharpJoin(FRigCourseRunner& Runner, int32 Loop, const FRoutePlan& Head, const FRoutePlan& Tail, int32 IntoLeg)
+{
+	// THE JOIN ITSELF, not either side: a per-leg profile starts and ends AT the join, where a
+	// polyline's end vertex has only one span and cannot be sharp. So the check runs over a few
+	// samples either side of the weld and reports only a sharp vertex AT the weld.
+	if (Head.Polyline.Num() < 2 || Tail.Polyline.Num() < 2)
+	{
+		return;
+	}
+	TArray<FVector2D> Around;
+	for (int32 At = FMath::Max(0, Head.Polyline.Num() - 4); At < Head.Polyline.Num(); ++At)
+	{
+		Around.Add(Head.Polyline[At]);
+	}
+	const int32 JoinIndex = Around.Num() - 1;
+	for (int32 At = 1; At < FMath::Min(Tail.Polyline.Num(), 4); ++At)
+	{
+		Around.Add(Tail.Polyline[At]);
+	}
+	double JoinDistance = 0.0;
+	for (int32 At = 1; At <= JoinIndex; ++At)
+	{
+		JoinDistance += FVector2D::Distance(Around[At - 1], Around[At]);
+	}
+	FSpeedProfile Profile;
+	Profile.Build(Around, Vehicles[Runner.Slot].Chassis);
+	if (Profile.HasSharpVertex() && FMath::Abs(Profile.GetSharpestAt() - JoinDistance) < 1.0)
+	{
+		Runner.SharpJoinLegs.Add(IntoLeg);
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d: FSpeedProfile reports a sharp vertex at the join into leg %d (%s), %.0f deg - it will crawl there."),
+			*VehicleNames[Runner.Slot], Loop, IntoLeg, *Waypoints[(IntoLeg + 1) % Waypoints.Num()].Label, Profile.GetSharpestDegrees());
+	}
+}
+
 TArray<FRigLegResult>& ARigTestCourse::ResultsFor(FRigCourseRunner& Runner, int32 Loop)
 {
 	TArray<FRigLegResult>& Results = Runner.ResultsByLoop.FindOrAdd(Loop);
@@ -621,9 +674,9 @@ void ARigTestCourse::RecordBypass(FRigCourseRunner& Runner, int32 Loop, int32 Po
 	ResultsFor(Runner, Loop)[Leg].Outcome = ERigLegOutcome::Bypassed;
 	// ONCE PER LOOP, like a refusal: a Warning, because a leg that fits and is not driven is
 	// something the log reader must see to read the loop's "D/T legs driven" right.
-	if (!Runner.Logged.Contains(static_cast<int64>(Loop) * Waypoints.Num() + Leg))
+	if (!Runner.Logged.Contains(LogKey(Loop, Leg)))
 	{
-		Runner.Logged.Add(static_cast<int64>(Loop) * Waypoints.Num() + Leg);
+		Runner.Logged.Add(LogKey(Loop, Leg));
 		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d leg %d (%s) bypassed: fits, but %s."),
 			*VehicleNames[Runner.Slot], Loop, Leg, *LegLabel(Runner, Position), Why);
 	}
@@ -638,11 +691,11 @@ void ARigTestCourse::RecordRefusal(FRigCourseRunner& Runner, int32 Loop, int32 P
 	Result.Reason = Reason;
 
 	// ONCE PER LOOP: a no-hang exit re-plans the rest of its loop, and would otherwise say it twice.
-	if (Runner.Logged.Contains(static_cast<int64>(Loop) * Waypoints.Num() + Leg))
+	if (Runner.Logged.Contains(LogKey(Loop, Leg)))
 	{
 		return;
 	}
-	Runner.Logged.Add(static_cast<int64>(Loop) * Waypoints.Num() + Leg);
+	Runner.Logged.Add(LogKey(Loop, Leg));
 	UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d leg %d (%s) refused: %s"),
 		*VehicleNames[Runner.Slot], Loop, Leg, *Label, *Reason);
 
@@ -716,8 +769,14 @@ bool ARigTestCourse::PlanLoopRoute(FRigCourseRunner& Runner, int32 Loop, int32 F
 				// STRANDED, THE FALLBACK: nothing ahead is reachable from this lane end. The route
 				// ends here; when the vehicle runs out of it, ContinueRoute retires it and a fresh
 				// one starts at the next waypoint.
-				UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d stranded at the start of leg %d (%s): no later waypoint is reachable from here; the route ends here and a fresh vehicle takes over at the next waypoint."),
-					*Who, Loop, LegAt(Runner.bReverse, Position), *LegLabel(Runner, Position));
+				// ONCE PER LOOP, like a refusal: an extension retried and the from-rest path re-plan
+				// the same stretch.
+				if (!Runner.Logged.Contains(LogKey(Loop, Waypoints.Num() + Position)))
+				{
+					Runner.Logged.Add(LogKey(Loop, Waypoints.Num() + Position));
+					UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d stranded at the start of leg %d (%s): no later waypoint is reachable from here; the route ends here and a fresh vehicle takes over at the next waypoint."),
+						*Who, Loop, LegAt(Runner.bReverse, Position), *LegLabel(Runner, Position));
+				}
 				break;
 			}
 			// THE LEGS IT PASSES, each judged on its OWN plan: the loop's refusals are then exactly
@@ -749,6 +808,10 @@ bool ARigTestCourse::PlanLoopRoute(FRigCourseRunner& Runner, int32 Loop, int32 F
 			UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s loop %d: leg %d's plan does not join the route; the route ends before it."),
 				*Who, Loop, LegAt(Runner.bReverse, Target - 1));
 			break;
+		}
+		if (OutPlan.IsValid())
+		{
+			ReportSharpJoin(Runner, Loop, OutPlan, Leg, LegAt(Runner.bReverse, Target - 1));
 		}
 		OutPlan = Joined;
 
@@ -865,12 +928,27 @@ void ARigTestCourse::ContinueRoute(FRigCourseRunner& Runner, const FRoadAgent& A
 		// rest at the plan's first point, which is the stop at every loop boundary this change is
 		// here to remove. ExtendRoute keeps Travelled, Speed, Heading and the chain, so the new
 		// markers sit at the old route's length plus their own.
+		//
+		// AND THE DRIVEN HISTORY TRIMMED, so a course left running does not grow its route - or
+		// every per-tick walk over it - for ever: all but HistoryToKeep behind the vehicle, which
+		// covers the tow chain and the clearance probe's window. What was dropped comes off every
+		// distance this course keeps along the route.
 		const double JoinAt = Agent.PlanInProgress().Length;
-		if (bPlanned && NetworkActor->GetTraffic()->ExtendRoute(Runner.AgentId, Network, Tail))
+		double Dropped = 0.0;
+		// The join is judged BEFORE the extension (the live route is about to change under it) and
+		// reported only if the extension is made.
+		const FRoutePlan LiveBefore = Agent.PlanInProgress();
+		if (bPlanned && !bRefuseExtensionsForTest && NetworkActor->GetTraffic()->ExtendRoute(Runner.AgentId, Network, Tail,
+			HistoryToKeep(Vehicles[Runner.Slot]), &Dropped))
 		{
+			ReportSharpJoin(Runner, Loop, LiveBefore, Tail, LegAt(Runner.bReverse, Markers[0].Target - 1));
+			for (FRigLegMarker& Marker : Runner.Markers)
+			{
+				Marker.EndDistance -= Dropped;
+			}
 			for (FRigLegMarker& Marker : Markers)
 			{
-				Marker.EndDistance += JoinAt;
+				Marker.EndDistance += JoinAt - Dropped;
 				ResultsFor(Runner, Marker.Loop)[LegAt(Runner.bReverse, Marker.Target - 1)].AgentId = Runner.AgentId;
 			}
 			if (Runner.Markers.Num() == 0)
@@ -894,6 +972,13 @@ void ARigTestCourse::ContinueRoute(FRigCourseRunner& Runner, const FRoadAgent& A
 
 	// FROM REST: the route ran out. A stranding with nothing onward retires the vehicle and a
 	// fresh one takes the next waypoint; otherwise the same agent is redirected on, its chain kept.
+	//
+	// THE CHAIN CARRIES ON THROUGH THE REDIRECT: RedirectAgent's RestartTaxi re-seats the follower
+	// on the plan's first point - the lane end it has just stopped on - and leaves TowAxles, the
+	// fold and (for a tow) the cab's heading alone; StartDrive, which a redirect does not call, is
+	// where a chain is laid straight. So even the fallback does not re-lay the trailer.
+	// ENFORCED BY: AirportMgr.RigCourse.RanOutRestartsWithTheChain (extensions refused, every loop
+	// boundary taken from rest, one agent throughout, the chain never jumping)
 	if (!bPlanned)
 	{
 		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d: nothing drivable from waypoint %d; retired, and dispatched fresh at the next waypoint."),
@@ -988,6 +1073,11 @@ void ARigTestCourse::ArriveAt(FRigCourseRunner& Runner, int32 Stop)
 void ARigTestCourse::EndLoop(FRigCourseRunner& Runner, int32 Loop)
 {
 	Runner.LoopsCompleted = Loop;
+	// BOUNDED: the loop's once-per-loop keys are spent with it.
+	for (int32 Slot = 0; Slot < 2 * Waypoints.Num(); ++Slot)
+	{
+		Runner.Logged.Remove(LogKey(Loop, Slot));
+	}
 	const TArray<FRigLegResult> Results = ResultsFor(Runner, Loop);
 	Runner.ResultsByLoop.Remove(Loop);
 	int32 Driven = 0;

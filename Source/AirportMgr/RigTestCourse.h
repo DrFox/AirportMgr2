@@ -172,6 +172,9 @@ struct FRigCourseRunner
 	/** Continuations that had to restart from rest (RedirectAgent): the route ran out first. */
 	int32 Redirects = 0;
 
+	/** The legs a join with a sharp vertex AT the weld led into (FSpeedProfile), in order. */
+	TArray<int32> SharpJoinLegs;
+
 	/** The leg ends still ahead on the live route, in order. See FRigLegMarker. */
 	TArray<FRigLegMarker> Markers;
 
@@ -186,7 +189,10 @@ struct FRigCourseRunner
 	TMap<int32, TArray<FRigLegResult>> ResultsByLoop;
 	TArray<FRigLegResult> LastLoopResults;
 
-	/** (loop, leg) pairs already logged refused or bypassed: once per loop, however often a no-hang exit re-plans the rest of it. */
+	/**
+	 * (loop, leg) pairs already logged refused, bypassed or stranded: once per loop, however often
+	 * a no-hang exit or a retried extension re-plans the rest of it. A loop's keys go when it ends.
+	 */
 	TSet<int64> Logged;
 };
 
@@ -293,6 +299,12 @@ public:
 	 */
 	TFunction<bool(int32 Leg, int32 Slot, bool bDispatching, FRoutePlan& OutPlan)> PlanOverrideForTest;
 
+	/**
+	 * The fallback's test: every extension is treated as refused, so each route runs out and the
+	 * next is started from rest by RedirectAgent (ContinueRoute).
+	 */
+	bool bRefuseExtensionsForTest = false;
+
 	/** ConnectNodes calls refused while the course was laid. */
 	int32 GetRefusedConnectsForTest() const { return RefusedConnects; }
 
@@ -326,6 +338,15 @@ private:
 
 	/** Splices the next stretch onto the live route before it runs out; restarts from rest when it already has. */
 	void ContinueRoute(FRigCourseRunner& Runner, const FRoadAgent& Agent, bool bFromRest);
+
+	/** The key a (loop, leg or N + stop) once-per-loop log line is remembered under in Logged. */
+	int64 LogKey(int32 Loop, int32 Slot) const;
+
+	/** How much driven route to keep behind the vehicle when an extension trims it (the chain plus the probe's window). */
+	static double HistoryToKeep(const FVehicle& Vehicle);
+
+	/** Logs, and counts on Runner, a sharp vertex AT the weld between Head and Tail (per-leg profiles cannot see it). */
+	void ReportSharpJoin(FRigCourseRunner& Runner, int32 Loop, const FRoutePlan& Head, const FRoutePlan& Tail, int32 IntoLeg);
 
 	/** The results array for Loop, created on first use. */
 	TArray<FRigLegResult>& ResultsFor(FRigCourseRunner& Runner, int32 Loop);
