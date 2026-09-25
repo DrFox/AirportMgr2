@@ -118,6 +118,14 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane9.DA_Aircraft_Plane9"), TEXT("plane9"), 231600.0,
 		  TEXT("an A320 that needed as much runway as a 737-800 would erase the one field "
 			   "difference between the two Code C jets") },
+		// plane10's CEILING IS THE KING AIR's PUBLISHED TAKE-OFF LENGTH. Both are Code B
+		// turboprops; the Caravan is the one that stays on GRASS, and it must also ask less
+		// runway (740 m against 1,006) or paving and lengthening would buy the same thing.
+		// 100600 is build_plane5_type.py's REQUIREMENTS["takeoff_field_length"], typed here
+		// for the reason plane5's row gives.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane10.DA_Aircraft_Plane10"), TEXT("plane10"), 100600.0,
+		  TEXT("a Caravan that needed as much runway as a King Air would be a grass-strip "
+			   "type that only paved fields could take") },
 	};
 
 	for (const FPublished& Each : Published)

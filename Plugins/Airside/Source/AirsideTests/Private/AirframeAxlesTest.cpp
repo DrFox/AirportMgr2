@@ -175,6 +175,9 @@ static const TCHAR* const MeasuredTypes[] = {
 	// THE A320 IS THE ROW THAT BINDS CODE C'S NOSE. Its 508.4 uu nose overhang is what
 	// MaxNoseFwd is sized from, so this row is the one that goes red if a re-export grows it.
 	TEXT("/Game/Entities/DA_Aircraft_Plane9"),
+	// THE CARAVAN IS THE FIRST MEASURED CODE B SINGLE. Its 15.88 m span is over Code A's 15 m
+	// by 0.88, so this row is the one that goes red if a re-export trims the wing into A.
+	TEXT("/Game/Entities/DA_Aircraft_Plane10"),
 };
 
 /**
@@ -410,6 +413,9 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 			   "which would read VehicleTug and gate a Meridian behind the depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane2"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Twin Otter beta-ranges off a stand") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane10"), EPushbackNeed::SelfManoeuvre,
+		  TEXT("a Caravan reverses off a stand on its own prop - a grass-strip single gated "
+			   "behind the Pushback depot would be the class default talking, not the type") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Q400 turns out of a regional stand on its own props; the depot is the jets' tax") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane6"), EPushbackNeed::VehicleTug,
