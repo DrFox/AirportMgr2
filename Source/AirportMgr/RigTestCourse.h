@@ -10,6 +10,7 @@
 class ARoadNetworkActor;
 class IRoadEditTarget;
 class URoadNetwork;
+struct FRoadAgent;
 
 /**
  * What a course leg exercises. Plain, not a UENUM: it is carried on FRigCourseWaypoint, whose
@@ -90,23 +91,43 @@ struct FRigLegResult
 	ERigLegOutcome Outcome = ERigLegOutcome::NotRun;
 	/** Refusal text, as logged. Empty unless Refused. */
 	FString Reason;
-	/** Where the goal lane end was, and where the vehicle's chassis origin stopped (Driven only). */
+	/** Where the goal lane end was, and where the vehicle's chassis origin was as it passed it (Driven only). */
 	FVector2D GoalPosition = FVector2D::ZeroVector;
 	FVector2D EndPosition = FVector2D::ZeroVector;
 	/**
-	 * Plan length minus the distance travelled along it, uu, at arrival. THE ARRIVAL MEASURE:
-	 * the follower walks the STEERED axle along the line, so the chassis origin (the fixed
-	 * axle) stops a wheelbase short of the lane end - measured 370 uu for the rig, 149 for the
-	 * utility on 2026-09-25 - and a position check would test the wheelbase, not the arrival.
+	 * The leg's end marker minus the distance travelled along the route, uu, on the tick the
+	 * marker was passed - zero or a tick's travel BELOW zero, since the vehicle drives on
+	 * through it. THE ARRIVAL MEASURE: the follower walks the STEERED axle along the line, so
+	 * the chassis origin (the fixed axle) is a wheelbase behind the lane end - 370 uu for the
+	 * rig, 149 for the utility (2026-09-25) - and a position check would test the wheelbase.
 	 */
 	double DistanceLeft = 0.0;
+	/** Seconds from the previous marker (or the dispatch) to this one, and the speed it passed at, uu/s. */
+	double Elapsed = 0.0;
+	double PassSpeed = 0.0;
 	/** True if the agent was ever seen Reversing on this leg: the course has no reverse legs. */
 	bool bReversed = false;
-	/** The agent that drove it, or 0. Persistent: the same id drives leg after leg. */
+	/** The agent that drove it, or 0. Persistent: one agent drives the whole route, loop after loop. */
 	int32 AgentId = 0;
 	/** FSpeedProfile::GetSharpVertexCount over the leg's plan: instantaneous heading changes. */
 	int32 SharpVertexCount = 0;
 	double SharpestDegrees = 0.0;
+};
+
+/**
+ * One leg's end on a vehicle's live route - a PROGRESS MARKER, not a stop (spec §3 REVISED
+ * "one route per loop"). The loop's legs are joined into one route and driven without stopping;
+ * a leg is arrived when the agent's distance along that route passes EndDistance.
+ */
+struct FRigLegMarker
+{
+	/** The loop (1-based) and the runner's stops this marker covers: Position -> Target. */
+	int32 Loop = 1;
+	int32 Position = 0;
+	int32 Target = 0;
+	/** Along the agent's live plan, uu, and this leg's own length (for its timeout). */
+	double EndDistance = 0.0;
+	double Length = 0.0;
 };
 
 /**
@@ -124,17 +145,18 @@ struct FRigCourseRunner
 	/** Seconds still to wait before the first dispatch. */
 	double StartDelay = 0.0;
 
-	/** The stop it is at, or leaving, counted in its own order from 0 (the loop's start). */
+	/** The stop it last passed, counted in its own order from 0 (the loop's start). */
 	int32 Position = 0;
 
 	/**
-	 * The stop it is driving to. Position + 1, unless the next leg was refused and it was routed
-	 * on past it; never beyond the loop's end, so a loop's results are all its own.
+	 * The stop it is driving to: the next marker's. Position + 1, unless the next leg was
+	 * refused and it was routed on past it; never beyond the loop's end.
 	 */
 	int32 Target = 0;
 
 	/** Its agent, or 0 before the first dispatch and between a no-hang exit and the next. */
 	int32 AgentId = 0;
+	/** Seconds since the last marker (or the dispatch), and the next marker's allowance. */
 	double Elapsed = 0.0;
 	double Timeout = 0.0;
 	bool bReversed = false;
@@ -144,9 +166,28 @@ struct FRigCourseRunner
 	/** Agents spawned for it: 1 while it drives continuously, plus one per no-hang exit. */
 	int32 Dispatches = 0;
 
-	/** This loop's results and the last completed loop's, by FORWARD leg index in both directions. */
-	TArray<FRigLegResult> LoopResults;
+	/** Loop routes spliced onto the live one before it ran out (UAirsideTraffic::ExtendRoute). */
+	int32 Extensions = 0;
+
+	/** Continuations that had to restart from rest (RedirectAgent): the route ran out first. */
+	int32 Redirects = 0;
+
+	/** The leg ends still ahead on the live route, in order. See FRigLegMarker. */
+	TArray<FRigLegMarker> Markers;
+
+	/** Where the live route ends: the loop and the stop. A stop of N is that loop's end. */
+	int32 RouteEndLoop = 1;
+	int32 RouteEndStop = 0;
+
+	/** Set once an extension was tried for the current route end and could not be made, so it is not re-planned every tick. */
+	bool bExtendFailed = false;
+
+	/** Results per loop number (1-based), filled as legs are planned and passed; a loop's move to LastLoopResults at its end. */
+	TMap<int32, TArray<FRigLegResult>> ResultsByLoop;
 	TArray<FRigLegResult> LastLoopResults;
+
+	/** (loop, leg) pairs already logged refused or bypassed: once per loop, however often a no-hang exit re-plans the rest of it. */
+	TSet<int64> Logged;
 };
 
 /**
@@ -158,11 +199,14 @@ struct FRigCourseRunner
  * course runs headless in AirportMgr.RigCourse.OneLoopHeadless, and none of the silent-success
  * traps of editing a .umap headlessly apply.
  *
- * THE DRIVER (spec §3, REVISED 2026-09-25 "continuous"): both vehicles are out AT ONCE, each
- * with ONE persistent agent. The rig runs the waypoints forwards; the utility runs them in
- * reverse, starting UtilityStartDelay later. At each waypoint the arrived agent is REDIRECTED
- * onto its next leg rather than retired and respawned, so its tow chain carries on from where
- * it is instead of being re-laid straight. A refused leg is skipped by routing on to the next
+ * THE DRIVER (spec §3, REVISED 2026-09-25 "continuous" and "one route per loop"): both
+ * vehicles are out AT ONCE, each with ONE persistent agent, and each drives ONE ROUTE PER LOOP,
+ * as a job in the game drives one plan to a real destination: every leg is planned for its
+ * verdict, the admissible ones are joined with RouteSearch::Splice, and waypoints are progress
+ * markers along that route, never stops. Before the route runs out the next loop is spliced
+ * onto it (UAirsideTraffic::ExtendRoute), so the loop boundary is not a stop either. The rig
+ * runs the waypoints forwards; the utility runs them in reverse, starting UtilityStartDelay
+ * later. A refused leg is skipped by routing on to the next
  * waypoint the vehicle CAN reach from where it stands, and a leg into a stop with nothing
  * onward (a dead end it cannot turn in) is bypassed the same way before it is driven; a
  * vehicle that can reach nothing (stranded, the fallback), jack-knifes or sticks is retired
@@ -267,10 +311,27 @@ private:
 	void TickRunner(FRigCourseRunner& Runner, double DeltaSeconds);
 
 	/**
-	 * Sends Runner on from its current Position: redirects its agent onto the next leg it can
-	 * reach, or dispatches a fresh one when it has none. Records every leg it passes over.
+	 * Plans the stops from From to the end of Loop as ONE route - each leg judged on its own
+	 * plan (look-ahead, bypass, refusal, as the legs always were), the admissible ones joined
+	 * with RouteSearch::Splice. OutMarkers' EndDistance is along OutPlan. OutEndStop is where
+	 * the route ends: N, or earlier when a leg does not join or the vehicle is stranded. False
+	 * when not even the first leg could be planned. bHeadIsDispatch: the first leg is about to
+	 * be driven by a fresh agent, so a test override may be spent on it (PlanOverrideForTest).
 	 */
-	void SendOn(FRigCourseRunner& Runner);
+	bool PlanLoopRoute(FRigCourseRunner& Runner, int32 Loop, int32 From, bool bHeadIsDispatch,
+		FRoutePlan& OutPlan, TArray<FRigLegMarker>& OutMarkers, int32& OutEndStop);
+
+	/** Dispatches a fresh agent on a route from Runner's Position, or moves it on past a stop it is stranded at. */
+	void DispatchFresh(FRigCourseRunner& Runner);
+
+	/** Splices the next stretch onto the live route before it runs out; restarts from rest when it already has. */
+	void ContinueRoute(FRigCourseRunner& Runner, const FRoadAgent& Agent, bool bFromRest);
+
+	/** The results array for Loop, created on first use. */
+	TArray<FRigLegResult>& ResultsFor(FRigCourseRunner& Runner, int32 Loop);
+
+	/** Records a marker passed: the arrival log, the Driven result, and the loop's end when it is. */
+	void PassMarker(FRigCourseRunner& Runner, const FRoadAgent& Agent, const FRigLegMarker& Marker);
 
 	/** Plans the road between two stops with Slot's vehicle; false with Reason when it cannot. */
 	bool PlanBetween(const FRigCourseWaypoint& From, const FRigCourseWaypoint& To, int32 Slot,
@@ -286,18 +347,18 @@ private:
 	/** True when some later stop can be reached from Stop: false marks a trap to route past. */
 	bool HasOnward(const FRigCourseRunner& Runner, int32 Stop) const;
 
-	/** Records and logs Runner's leg at Position as fitting but not driven. */
-	void RecordBypass(FRigCourseRunner& Runner, int32 Position, const TCHAR* Why);
+	/** Records and logs Runner's leg at Position of Loop as fitting but not driven. */
+	void RecordBypass(FRigCourseRunner& Runner, int32 Loop, int32 Position, const TCHAR* Why);
 
-	/** Records and logs Runner's leg at Position as refused, and labels it on the road. */
-	void RecordRefusal(FRigCourseRunner& Runner, int32 Position, const FString& Reason);
+	/** Records and logs Runner's leg at Position of Loop as refused, and labels it on the road. */
+	void RecordRefusal(FRigCourseRunner& Runner, int32 Loop, int32 Position, const FString& Reason);
 
-	/** Ends Runner's drive with Outcome: retires its agent (if any) and moves it on one stop. */
+	/** Ends Runner's drive with Outcome: retires its agent and moves it on to the stop it was driving to. */
 	void AbandonDrive(FRigCourseRunner& Runner, ERigLegOutcome Outcome, const FString& Reason = FString());
 
-	/** Moves Runner's Position to Stop, ending the loop when Stop is the loop's end. */
+	/** Moves Runner's Position to Stop of its current loop, ending the loop when Stop is the loop's end. */
 	void ArriveAt(FRigCourseRunner& Runner, int32 Stop);
-	void EndLoop(FRigCourseRunner& Runner);
+	void EndLoop(FRigCourseRunner& Runner, int32 Loop);
 
 	/** What the log calls Runner's leg at Position: the forward leg's label, marked when reversed. */
 	FString LegLabel(const FRigCourseRunner& Runner, int32 Position) const;

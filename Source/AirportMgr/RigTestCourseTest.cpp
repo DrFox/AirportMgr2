@@ -129,6 +129,28 @@ namespace RigCourseTest
 		{
 			const FRoutePlan& Plan = Agent.PlanInProgress();
 			if (Plan.Polyline.Num() < 2 || Plan.Steps.Num() == 0) { return; }
+			// A WINDOW OF THE ROUTE round the agent, since a loop is one route (2026-09-25): the
+			// course passes some junctions twice a loop (into a stem and out), and a nearest span
+			// taken over the whole loop could be the OTHER pass. The tow reaches at most a chain's
+			// length behind the steered axle; a little ahead covers the cab's front.
+			double ChainBehind = Vehicle.Chassis.Wheelbase() + FMath::Abs(Vehicle.BodyRearX);
+			for (const FTowLink& Link : Vehicle.Tow)
+			{
+				ChainBehind += FMath::Abs(Link.HitchX) + Link.Length + Link.BodyRear + Link.BodyFront;
+			}
+			const double Lo = Agent.DistanceAlongPlan() - ChainBehind - 500.0;
+			const double Hi = Agent.DistanceAlongPlan() + 1000.0;
+			SpanLo = 0;
+			SpanHi = Plan.Polyline.Num() - 1;
+			double Walked = 0.0;
+			bool bLoSet = false;
+			for (int32 I = 0; I + 1 < Plan.Polyline.Num(); ++I)
+			{
+				const double Next = Walked + FVector2D::Distance(Plan.Polyline[I], Plan.Polyline[I + 1]);
+				if (!bLoSet && Next >= Lo) { SpanLo = I; bLoSet = true; }
+				if (Walked > Hi) { SpanHi = I; break; }
+				Walked = Next;
+			}
 			const TArray<FTowPose, TInlineAllocator<2>>& Poses = Agent.LastMotion.Tow;
 			for (int32 LinkIndex = 0; LinkIndex < Vehicle.Tow.Num() && LinkIndex < Poses.Num(); ++LinkIndex)
 			{
@@ -151,6 +173,10 @@ namespace RigCourseTest
 			}
 		}
 
+		/** The spans [SpanLo, SpanHi) of the plan Measure searches - see its window comment. */
+		int32 SpanLo = 0;
+		int32 SpanHi = 0;
+
 		void MeasurePoint(const URoadNetwork& Net, const FRoutePlan& Plan, const FVector2D& P,
 			int32 Leg, int32 Slot, const FString& What, int32 LinkIndex)
 		{
@@ -162,7 +188,7 @@ namespace RigCourseTest
 			int32 Span = 0;
 			double SpanT = 0.0;
 			double Best = TNumericLimits<double>::Max();
-			for (int32 I = 0; I + 1 < Line.Num(); ++I)
+			for (int32 I = SpanLo; I < SpanHi && I + 1 < Line.Num(); ++I)
 			{
 				const FVector2D AB = Line[I + 1] - Line[I];
 				const double LenSq = AB.SizeSquared();
@@ -170,8 +196,9 @@ namespace RigCourseTest
 				const double D = FVector2D::DistSquared(P, Line[I] + AB * FMath::Clamp(T, 0.0, 1.0));
 				if (D < Best) { Best = D; Span = I; SpanT = T; }
 			}
-			const int32 Last = Line.Num() - 1;
-			if ((Span == 0 && SpanT < 0.0) || (Span == Last - 1 && SpanT > 1.0))
+			// Behind the window's first span or past its last: road this search does not name.
+			if (Best == TNumericLimits<double>::Max() || (Span == SpanLo && SpanT < 0.0)
+				|| (Span == FMath::Min(SpanHi, Line.Num() - 1) - 1 && SpanT > 1.0))
 			{
 				return;
 			}
@@ -262,25 +289,44 @@ namespace RigCourseTest
 	}
 
 	/**
-	 * THE CHAIN ACROSS A WAYPOINT. A handover is a tick on which a runner's position moved on
-	 * while its agent stayed the same - the redirect. Over that tick and the next, no tow axle
-	 * may move further than one tow sub-step's travel (VehicleSweep::TraceStep): the vehicle is
-	 * at rest either side of it, so a larger jump is the chain being re-laid, not driven.
-	 * RelayWouldMove is the control: how far LayChainStraight would have moved the axles at the
-	 * same moment, so a pass is known to be able to fail.
+	 * THE CHAIN, CONTINUOUS FOR THE WHOLE RUN (one route per loop, 2026-09-25): on every tick
+	 * the same agent drives, no tow axle may move further than the cab's own fixed axle moved
+	 * plus one tow sub-step (VehicleSweep::TraceStep). A chain re-laid straight would jump by a
+	 * trailer's worth of swing; RelayWouldMove, taken as each waypoint is passed, says how far.
+	 *
+	 * AND THE WAYPOINTS ARE NOT STOPS: on the tick a runner's position moves on, the agent's
+	 * speed is recorded against its own speed profile's limit there.
 	 */
 	struct FContinuity
 	{
+		struct FPass
+		{
+			double Speed = 0.0;
+			/** The profile's limit where the agent is, and where it was a tick ago (the follower's speed is last tick's). */
+			double Limit = 0.0;
+			double LimitBehind = 0.0;
+			double Cap = 0.0;
+			/** Speeding up since the last tick, or held short by traffic arbitration - either leaves it below the limit. */
+			bool bAccelerating = false;
+			bool bHeld = false;
+			FString Where;
+		};
+		double PrevSpeed[2] = { 0.0, 0.0 };
+
 		int32 PrevAgent[2] = { 0, 0 };
 		int32 PrevPosition[2] = { 0, 0 };
 		int32 PrevLoops[2] = { 0, 0 };
 		TArray<FVector2D> PrevAxles[2];
 		FVector2D PrevAt[2] = { FVector2D::ZeroVector, FVector2D::ZeroVector };
 		double PrevHeading[2] = { 0.0, 0.0 };
-		int32 Window[2] = { 0, 0 };
 		int32 Handovers[2] = { 0, 0 };
 		FWorst Worst[2];
 		FWorst RelayWouldMove[2];
+		TArray<FPass> Passes[2];
+
+		/** The tick the slot's first agent was seen, and the tick it first passed a waypoint. */
+		int32 FirstSeen[2] = { INDEX_NONE, INDEX_NONE };
+		int32 FirstPass[2] = { INDEX_NONE, INDEX_NONE };
 
 		void Observe(const ARoadNetworkActor& Actor, const ARigTestCourse& Course, int32 Slot, int32 Tick)
 		{
@@ -291,16 +337,34 @@ namespace RigCourseTest
 				PrevAgent[Slot] = 0;
 				return;
 			}
+			if (FirstSeen[Slot] == INDEX_NONE)
+			{
+				FirstSeen[Slot] = Tick;
+			}
+			const FVehicle& Vehicle = Course.GetVehicles()[Slot];
 			const TArray<FVector2D>& Axles = Agent->TowAxles;
+			const bool bPosed = Agent->LastMotion.Tow.Num() == Axles.Num();
 			if (Runner.AgentId == PrevAgent[Slot] && PrevAxles[Slot].Num() == Axles.Num())
 			{
-				const bool bHandover = Runner.Position != PrevPosition[Slot] || Runner.LoopsCompleted != PrevLoops[Slot];
-				if (bHandover)
+				const bool bPassed = Runner.Position != PrevPosition[Slot] || Runner.LoopsCompleted != PrevLoops[Slot];
+				if (bPassed)
 				{
 					++Handovers[Slot];
-					Window[Slot] = 2;
-					// The control: the same chain laid straight behind the cab where it stopped.
-					const FVehicle& Vehicle = Course.GetVehicles()[Slot];
+					if (FirstPass[Slot] == INDEX_NONE)
+					{
+						FirstPass[Slot] = Tick;
+					}
+					FPass& Pass = Passes[Slot].AddDefaulted_GetRef();
+					Pass.Speed = Agent->Follower.Speed;
+					Pass.Limit = Agent->Follower.Profile.LimitAt(Agent->Follower.Travelled);
+					Pass.LimitBehind = Agent->Follower.Profile.LimitAt(
+						FMath::Max(0.0, Agent->Follower.Travelled - Agent->Follower.Speed * 0.05));
+					Pass.bAccelerating = Agent->Follower.Speed > PrevSpeed[Slot] + UE_KINDA_SMALL_NUMBER;
+					Pass.bHeld = Agent->GetStopWithin() < TNumericLimits<double>::Max();
+					Pass.Cap = Vehicle.Chassis.Ground.Taxi.SpeedCap;
+					Pass.Where = FString::Printf(TEXT("tick %d, loop %d, stop %d"), Tick, Runner.LoopsCompleted + 1, Runner.Position);
+
+					// The control: the same chain laid straight behind the cab where it was.
 					const FVector2D Forward(FMath::Cos(PrevHeading[Slot]), FMath::Sin(PrevHeading[Slot]));
 					TArray<FVector2D> Straight;
 					VehicleSweep::LayChainStraight(VehicleFit::BodyOf(Vehicle),
@@ -312,23 +376,25 @@ namespace RigCourseTest
 					}
 					RelayWouldMove[Slot].Offer(Relay, FString::Printf(TEXT("tick %d, position %d"), Tick, Runner.Position));
 				}
-				if (Window[Slot] > 0)
+				if (bPosed)
 				{
-					--Window[Slot];
+					// How far the axles moved beyond what the cab moved: the chain's own jump.
+					const double CabMoved = FVector2D::Distance(Agent->LastMotion.Position, PrevAt[Slot]);
 					double Moved = 0.0;
 					for (int32 I = 0; I < Axles.Num(); ++I)
 					{
 						Moved = FMath::Max(Moved, FVector2D::Distance(Axles[I], PrevAxles[Slot][I]));
 					}
-					Worst[Slot].Offer(Moved, FString::Printf(TEXT("tick %d, position %d"), Tick, Runner.Position));
+					Worst[Slot].Offer(Moved - CabMoved, FString::Printf(TEXT("tick %d, position %d"), Tick, Runner.Position));
 				}
 			}
+			PrevSpeed[Slot] = Agent->Follower.Speed;
 			PrevAgent[Slot] = Runner.AgentId;
 			PrevPosition[Slot] = Runner.Position;
 			PrevLoops[Slot] = Runner.LoopsCompleted;
 			PrevAxles[Slot] = Axles;
-			// The pose is only real once Advance has run: RestartTaxi leaves a bare fallback.
-			if (Agent->LastMotion.Tow.Num() == Axles.Num())
+			// The pose is only real once Advance has run: a restart leaves a bare fallback.
+			if (bPosed)
 			{
 				PrevAt[Slot] = Agent->LastMotion.Position;
 				PrevHeading[Slot] = Agent->LastMotion.Heading;
@@ -648,8 +714,9 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicle %d tow - swept worst %.0f uu over (%s); per-side worst %.0f uu (%s); lane worst %.0f uu (%s)"),
 			V, Probe.Swept[V].Excess, *Probe.Swept[V].Where, Probe.PerSide[V].Excess, *Probe.PerSide[V].Where,
 			Probe.Lane[V].Excess, *Probe.Lane[V].Where);
-		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicle %d chain - %d handover(s), %d agent(s) dispatched; worst axle move across a handover %.2f uu (%s); a re-lay would have moved it up to %.1f uu (%s)"),
-			V, Continuity.Handovers[V], Course->GetRunnerForTest(V).Dispatches, Continuity.Worst[V].Excess, *Continuity.Worst[V].Where,
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicle %d chain - %d waypoint(s) passed, %d agent(s) dispatched, %d route extension(s), %d restart(s) from rest; worst axle move beyond the cab's in one tick %.2f uu (%s); a re-lay would have moved it up to %.1f uu (%s)"),
+			V, Continuity.Handovers[V], Course->GetRunnerForTest(V).Dispatches, Course->GetRunnerForTest(V).Extensions,
+			Course->GetRunnerForTest(V).Redirects, Continuity.Worst[V].Excess, *Continuity.Worst[V].Where,
 			Continuity.RelayWouldMove[V].Excess, *Continuity.RelayWouldMove[V].Where);
 	}
 	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicles overlapped on %d tick(s) in %d episode(s); worst penetration %.0f uu (%s)"),
@@ -662,8 +729,8 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("no leg entered Reversing - the course has no reverse legs"), Spy.Containing(TEXT("Reversing")), 0);
 	TestEqual(TEXT("no leg timed out stuck"), Spy.Containing(TEXT("stuck")), 0);
 
-	// THE CHAIN IS CONTINUOUS ACROSS WAYPOINTS: one agent per vehicle for the whole loop,
-	// redirected at each stop, its axles moving no more than a sub-step over the handover. The
+	// THE CHAIN IS CONTINUOUS: one agent per vehicle for the whole run, one route per loop joined
+	// onto the next before it runs out, its axles never jumping beyond what the cab moved. The
 	// look-ahead keeps the rig out of the dead ends it cannot turn in, so nothing is stranded.
 	for (int32 V = 0; V < 2; ++V)
 	{
@@ -673,11 +740,17 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 			Course->GetRunnerForTest(V).Dispatches, 1);
 		int32 DrivenLegs = 0;
 		for (const ERigLegOutcome O : Outcome[V]) { DrivenLegs += O == ERigLegOutcome::Driven ? 1 : 0; }
-		TestTrue(FString::Printf(TEXT("%s: handovers were observed - the continuity check is not vacuous (%d)"), Names[V], Continuity.Handovers[V]),
+		TestTrue(FString::Printf(TEXT("%s: waypoints were passed - the continuity check is not vacuous (%d)"), Names[V], Continuity.Handovers[V]),
 			Continuity.Handovers[V] >= DrivenLegs - 1);
-		TestTrue(FString::Printf(TEXT("%s: no tow axle moved more than one sub-step (%.0f uu) across a handover (worst %.2f uu: %s) - the chain was not re-laid"),
+		TestTrue(FString::Printf(TEXT("%s: no tow axle ever moved more than one sub-step (%.0f uu) beyond the cab in a tick (worst %.2f uu: %s) - the chain was never re-laid"),
 			Names[V], VehicleSweep::TraceStep, Continuity.Worst[V].Excess, *Continuity.Worst[V].Where),
 			Continuity.Worst[V].Excess <= VehicleSweep::TraceStep);
+		// ONE ROUTE, JOINED LOOP TO LOOP: exactly one splice per loop boundary crossed or about
+		// to be, and never a restart from rest.
+		const FRigCourseRunner& Runner = Course->GetRunnerForTest(V);
+		TestTrue(FString::Printf(TEXT("%s: one route extension per loop boundary (%d extension(s), %d loop(s) done)"), Names[V], Runner.Extensions, Runner.LoopsCompleted),
+			Runner.Extensions >= Runner.LoopsCompleted && Runner.Extensions <= Runner.LoopsCompleted + 1);
+		TestEqual(FString::Printf(TEXT("%s: never restarted from rest"), Names[V]), Runner.Redirects, 0);
 	}
 
 	// THE TOW STAYED ON THE TARMAC. 10 uu is the builder's clearance march step (ClearanceStep):
@@ -741,8 +814,11 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 				// origin then sits one wheelbase back from the lane end, and no further.
 				const double Wheelbase = Vehicles[V].Chassis.Wheelbase();
 				TestTrue(What + TEXT(" drove its whole line to the waypoint's lane end"), R.DistanceLeft < 50.0);
-				TestTrue(What + TEXT(" and stopped with its fixed axle a wheelbase behind that lane end"),
-					FMath::Abs(FVector2D::Distance(R.EndPosition, R.GoalPosition) - Wheelbase) < 50.0);
+				// PASSED ON THE MOVE: the steered axle is up to a tick's travel past the lane end
+				// (-DistanceLeft) when the marker is seen, so the fixed axle is a wheelbase behind
+				// the lane end less that overshoot.
+				TestTrue(What + TEXT(" and passed it with its fixed axle a wheelbase behind that lane end"),
+					FMath::Abs(FVector2D::Distance(R.EndPosition, R.GoalPosition) - Wheelbase) < 50.0 + FMath::Abs(R.DistanceLeft));
 
 				// THE WIDTH-STEP DEFECT, PINNED (controller ruling 5): FSpeedProfile reports a
 				// sharp vertex on the one leg that crosses a mid-straight width change, and on no
@@ -773,6 +849,99 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 		TestEqual(FString::Printf(TEXT("%s: each bypassed leg was logged once in loop %d"), Names[V], Loop),
 			Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop %d leg "), Names[V], Loop), TEXT("bypassed:")), Bypasses);
 	}
+	return true;
+}
+
+// WAYPOINTS ARE NOT STOPS (spec §3 REVISED "one route per loop", 2026-09-25). The user saw the
+// rig brake to a halt at every waypoint: each leg was its own route, and FSpeedProfile brakes to
+// zero at a route's end. A job in the game drives one plan to a real destination; so does the
+// course now, and this is what says so.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigCourseWaypointsAreNotStopsTest,
+	"AirportMgr.RigCourse.WaypointsAreNotStops",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigCourseWaypointsAreNotStopsTest::RunTest(const FString& Parameters)
+{
+	using namespace RigCourseTest;
+
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
+	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	Course->BuildCourseForTest(*Actor);
+	const URoadNetwork& Net = *Actor->Network;
+	const TArray<FRigCourseWaypoint>& Waypoints = Course->GetWaypoints();
+	const FVehicle& Rig = Course->GetVehicles()[0];
+
+	FContinuity Continuity;
+	FObservers Watch;
+	Watch.Continuity = &Continuity;
+	RunUntil(*Actor, *Course, MaxTicks, [Course]() { return Course->LoopsCompletedByAllForTest() >= 1; }, Watch);
+	if (!TestTrue(TEXT("both vehicles completed a loop"), Course->LoopsCompletedByAllForTest() >= 1)) { return false; }
+
+	// EVERY WAYPOINT PASSED ON THE MOVE. The profile governs the speed there: never above its
+	// limit (as it stood a tick ago, the follower's speed being last tick's), and where the
+	// profile asks for a slowdown (a corner's approach, the width step's jog) AT that limit,
+	// give or take a tick of braking - unless the vehicle is still speeding up out of the last
+	// slowdown (the profile has no forward pass) or traffic arbitration is holding it short.
+	for (int32 V = 0; V < 2; ++V)
+	{
+		const FGroundRegime& Taxi = Course->GetVehicles()[V].Chassis.Ground.Taxi;
+		const double Tolerance = FMath::Max(Taxi.Accel, Taxi.Decel) * 0.05 + 1.0;
+		TestTrue(FString::Printf(TEXT("%s: waypoints were passed (%d)"), Names[V], Continuity.Passes[V].Num()),
+			Continuity.Passes[V].Num() >= 10);
+		for (const FContinuity::FPass& Pass : Continuity.Passes[V])
+		{
+			UE_LOG(LogTemp, Display, TEXT("RigCourse.WaypointsAreNotStops: %s at %s: %.0f uu/s, profile limit %.0f (a tick back %.0f), cap %.0f%s%s"),
+				Names[V], *Pass.Where, Pass.Speed, Pass.Limit, Pass.LimitBehind, Pass.Cap,
+				Pass.bAccelerating ? TEXT(", accelerating") : TEXT(""), Pass.bHeld ? TEXT(", held by traffic") : TEXT(""));
+			TestTrue(FString::Printf(TEXT("%s at %s: moving through the waypoint (%.0f uu/s), not stopped at it"), Names[V], *Pass.Where, Pass.Speed),
+				Pass.Speed > 1.0);
+			const double Governing = FMath::Max(Pass.Limit, Pass.LimitBehind);
+			TestTrue(FString::Printf(TEXT("%s at %s: never above the profile's limit (%.0f vs %.0f uu/s)"), Names[V], *Pass.Where, Pass.Speed, Governing),
+				Pass.Speed <= Governing + Tolerance);
+			if (Pass.Limit < Pass.Cap - 1.0 && !Pass.bAccelerating && !Pass.bHeld)
+			{
+				// The LOWER of the two limits: just past a crawl (the jog's vertex) the limit a tick
+				// ahead is already rising and no vehicle has that acceleration in one tick.
+				TestTrue(FString::Printf(TEXT("%s at %s: where the profile slows it, at the profile's limit (%.0f vs %.0f uu/s)"),
+					Names[V], *Pass.Where, Pass.Speed, FMath::Min(Pass.Limit, Pass.LimitBehind)),
+					Pass.Speed >= FMath::Min(Pass.Limit, Pass.LimitBehind) - Tolerance);
+			}
+		}
+	}
+
+	// LEG 0, THE 80 m STRAIGHT, AT THE NO-STOP TIME: from rest to the cap and on at it, derived
+	// from the rig's own figures - not rest-to-rest, which is what a leg that is its own route
+	// costs (measured 14.3 s for 68 m before this change).
+	FRoutePlan Leg0;
+	{
+		const FGuidelineNodeId Start = ARigTestCourse::ResolveWaypoint(Net, Waypoints[0]);
+		const FGuidelineNodeId Goal = ARigTestCourse::ResolveWaypoint(Net, Waypoints[1]);
+		FRouteQuery Query = FRouteQuery::For(ERouteErrand::PlayerIssued, Start, Goal, 0.0, ETraversalClass::GroundVehicle);
+		Query.WithVehicle(Rig);
+		Leg0 = RouteSearch::Find(Net, Query);
+	}
+	if (!TestTrue(TEXT("leg 0 plans for the rig"), Leg0.IsValid())) { return false; }
+	const FGroundRegime& Taxi = Rig.Chassis.Ground.Taxi;
+	const double Cap = Taxi.SpeedCap;
+	const double UpTo = Cap * Cap / (2.0 * Taxi.Accel);
+	const double Down = Cap * Cap / (2.0 * Taxi.Decel);
+	const double NoStop = Leg0.Length >= UpTo ? Cap / Taxi.Accel + (Leg0.Length - UpTo) / Cap : FMath::Sqrt(2.0 * Leg0.Length / Taxi.Accel);
+	// Rest to rest: a trapezium when the leg is long enough to reach the cap, else a triangle
+	// peaking at sqrt(2 L a d / (a + d)).
+	const double Peak = FMath::Sqrt(2.0 * Leg0.Length * Taxi.Accel * Taxi.Decel / (Taxi.Accel + Taxi.Decel));
+	const double RestToRest = Leg0.Length >= UpTo + Down
+		? Cap / Taxi.Accel + Cap / Taxi.Decel + (Leg0.Length - UpTo - Down) / Cap
+		: Peak / Taxi.Accel + Peak / Taxi.Decel;
+	const double Took = (Continuity.FirstPass[0] - Continuity.FirstSeen[0]) * 0.05;
+	UE_LOG(LogTemp, Display, TEXT("RigCourse.WaypointsAreNotStops: rig leg 0, %.0f m, took %.2f s; no-stop %.2f s, rest-to-rest %.2f s"),
+		Leg0.Length / 100.0, Took, NoStop, RestToRest);
+	TestTrue(FString::Printf(TEXT("the rig's leg 0 took about the no-stop time (%.2f s vs %.2f s ideal) - not rest-to-rest (%.2f s)"), Took, NoStop, RestToRest),
+		Took <= NoStop * 1.1 + 0.1 && Took >= NoStop * 0.9);
+	TestTrue(FString::Printf(TEXT("and clearly under rest-to-rest (%.2f s vs %.2f s)"), Took, RestToRest), Took < RestToRest - 1.0);
 	return true;
 }
 

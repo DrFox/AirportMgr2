@@ -2968,4 +2968,62 @@ bool FArrivalStandCountLogTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+/**
+ * A ROUTE EXTENDED UNDER A MOVING AGENT DOES NOT STOP IT (the rig test course, 2026-09-25):
+ * dispatched A->B, then B->C appended while it is still on its way to B. It must pass B
+ * without its speed ever reaching zero, keep the distance it had travelled, and park at C -
+ * where RedirectAgent from a parked agent restarts it from rest.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficExtendRouteKeepsMovingTest,
+	"Airside.Model.Traffic.ExtendRouteKeepsMoving",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficExtendRouteKeepsMovingTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 20000.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 40000.0, 0.0);
+	TestGraph::Join(*Net, A, B);
+	TestGraph::Join(*Net, B, C);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+		TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	for (int32 Tick = 0; Tick < 2000 && Traffic->FindAgent(Id)->Follower.Travelled < 5000.0; ++Tick)
+	{
+		Traffic->Advance(0.05, Net);
+	}
+	const double Before = Traffic->FindAgent(Id)->Follower.Travelled;
+	const double SpeedBefore = Traffic->FindAgent(Id)->Follower.Speed;
+	TestTrue(TEXT("under way before the extension"), SpeedBefore > 0.0);
+
+	const FRoutePlan Tail = M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft);
+	TestFalse(TEXT("a tail that does not start where the route ends is refused"),
+		Traffic->ExtendRoute(Id, Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft)));
+	if (!TestTrue(TEXT("the extension is accepted"), Traffic->ExtendRoute(Id, Net, Tail))) { return false; }
+	TestEqual(TEXT("the distance travelled survives the splice"), Traffic->FindAgent(Id)->Follower.Travelled, Before);
+	TestEqual(TEXT("and so does the speed"), Traffic->FindAgent(Id)->Follower.Speed, SpeedBefore);
+
+	double SlowestPastB = TNumericLimits<double>::Max();
+	for (int32 Tick = 0; Tick < 4000 && Traffic->FindAgent(Id)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Traffic->Advance(0.05, Net);
+		const FRoadAgent* Agent = Traffic->FindAgent(Id);
+		if (FMath::Abs(Agent->Follower.Travelled - 20000.0) < 2000.0)
+		{
+			SlowestPastB = FMath::Min(SlowestPastB, Agent->Follower.Speed);
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("it passed B without stopping (slowest %.0f uu/s within 20 m of it)"), SlowestPastB),
+		SlowestPastB > 0.5 * SpeedBefore);
+	TestEqual(TEXT("and parked at C, the extended goal"),
+		static_cast<int32>(Traffic->FindAgent(Id)->Phase), static_cast<int32>(EAgentPhase::Parked));
+	return true;
+}
+
+
 #endif

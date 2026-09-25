@@ -218,6 +218,27 @@ fillets are sized per width tier; dead-end balloons are NOT:**
 - **The course:** the rig bypasses all three dead-end stems (look-ahead), their U-turns refused
   on the lock-radius reason; its corners on Wide are laid for it.
 
+**REVISED 2026-09-25 ("one route per loop") - the course drives one route per loop, like the
+game; legs are progress markers:**
+
+- **Why:** the user saw the rig brake to a halt at every waypoint. Each leg was its own route,
+  and `FSpeedProfile` brakes to zero at a route's end (leg 0, 68 m, took 14.3 s - exactly
+  rest to rest). In the game a job dispatches ONE plan to a real destination and intermediate
+  road nodes stop nothing.
+- **How:** at each loop start every leg is still planned for its verdict (look-ahead, bypass,
+  refusal - unchanged); the admissible legs are joined into ONE `FRoutePlan` with the router's
+  own `RouteSearch::Splice`, and dispatched once. A leg is ARRIVED when the agent's distance
+  along that route passes the leg's end (`FRigLegMarker`); the arrival log, the per-leg timeout
+  (from the previous marker) and the per-leg sharp-vertex report keep their shape.
+- **Loop to loop:** within twice its stopping distance of the route's end, the next loop is
+  planned and spliced onto the LIVE route with the new `UGroundTraffic::ExtendRoute`
+  (`Splice` + `FRouteFollower::Replace`: Travelled, Speed, Heading and the chain carry on).
+  `RedirectAgent` was rejected for this: it restarts the follower from rest, the very stop being
+  removed. It survives only as the fallback when a route runs out unjoined.
+- **Measured:** the rig's leg 0 now takes 12.1 s against a derived no-stop 11.8 s (it slows for
+  the corner at its end); every waypoint is passed moving, at the speed profile's own limit
+  where the profile slows it. One dispatch per vehicle, one extension per loop boundary.
+
 ## 4. REVISED 2026-09-24: the tow is a CHAIN, and the utility + fuel trailer drives too
 
 User ruling (the same day, before Task 2): `AirportMgr2Models/utility1` now has `fuelTrailer1`,

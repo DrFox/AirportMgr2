@@ -347,6 +347,45 @@ bool UGroundTraffic::BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySe
 	return true;
 }
 
+bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Tail)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	FRoadAgent& Agent = Agents[Index];
+	const FRoutePlan& Live = Agent.Follower.Plan;
+	if (Agent.Phase != EAgentPhase::Taxiing || !Live.IsValid())
+	{
+		return false;
+	}
+	// EVERY STEP KEPT: the join is the live plan's end, so the agent is on the unchanged prefix
+	// and Replace's "Travelled survives" is exact.
+	const FRoutePlan Spliced = RouteSearch::Splice(Live, Live.Steps.Num(), Tail);
+	if (!Spliced.IsValid())
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("ExtendRoute %d refused: the tail does not start where the route ends"), AgentId);
+		return false;
+	}
+
+	// THE OLD GOAL FREES, THE NEW ONE IS CLAIMED - RedirectAgent's own order, for its reason.
+	if (Agent.GoalNode.IsSet())
+	{
+		Occupancy.Release(AgentId, FTrafficResource::OfNode(Agent.GoalNode));
+		bStandsMayHaveFreed = true;
+	}
+	const double WasLength = Live.Length;
+	Agent.Follower.Replace(Spliced, Agent.Chassis());
+	Agent.SetGoalFrom(Spliced);
+	if (Network != nullptr)
+	{
+		ClaimGoalNodeAtDispatch(Agent, AgentId, *Network);
+	}
+	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d route extended: %.0f uu on from %.0f"), AgentId, Tail.Length, WasLength);
+	return true;
+}
+
 bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
 {
 	const int32 Index = FindIndex(AgentId);

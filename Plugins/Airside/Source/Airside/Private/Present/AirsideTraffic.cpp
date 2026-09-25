@@ -231,6 +231,11 @@ bool UAirsideTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, 
 	return Model->RedirectAgent(AgentId, Network, Plan);
 }
 
+bool UAirsideTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Tail)
+{
+	return Model->ExtendRoute(AgentId, Network, Tail);
+}
+
 EDepartureRefusal UAirsideTraffic::DepartAgent(int32 AgentId, const URoadNetwork* Network)
 {
 	if (Network == nullptr)
