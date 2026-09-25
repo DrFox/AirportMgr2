@@ -746,4 +746,171 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+// (c) REVERSING -> TAXIING, issue #297's own handover. FAgentPushbackHandoverTest above pins
+// that the taxi inherits the PUSH's finishing heading; this pins the identical property for
+// the reverse leg, which is the property #297's contract mismatch broke. FReverseRun::Advance
+// used to compute the manoeuvre's TRUE final pose on its last frame and hand back false in
+// that SAME call, so FRoadAgent's resume - which assumes false means nothing moved, exactly
+// as it does for the push above - read LastMotion.Heading one frame stale and seeded the taxi
+// with it, having thrown the accurate final pose away.
+namespace
+{
+	/**
+	 * A quarter-circle reverse leg of the given radius, followed by a straight leg that drives
+	 * on in the direction the BODY faces at the end of the arc (tangent turned through 180
+	 * degrees) - not the direction the arc's own polyline was drawn in. That is what "the
+	 * heading carries across unchanged" means in RoadAgent.cpp's own comment on this handover:
+	 * a departure leg drawn along the arc's forward tangent would ask the follower to turn 180
+	 * degrees on the spot the instant it took over.
+	 *
+	 * OFFSET FROM THE ORIGIN, like PushbackEastArmPlan's fixture above - (0,0) is what this
+	 * project's recurring "posed at the world origin" failure looks like.
+	 */
+	FRoutePlan ReverseThenDriveOnPlan(double Radius, double ContinueLength,
+		FVector2D& OutArcEnd, double& OutArcEndHeading)
+	{
+		FRoutePlan Plan;
+		Plan.Result = ERouteResult::Found;
+
+		constexpr int32 Steps = 24;
+		const FVector2D Base(4000.0, 6000.0);
+		for (int32 At = 0; At <= Steps; ++At)
+		{
+			const double Theta = (UE_DOUBLE_HALF_PI * At) / Steps;
+			Plan.Polyline.Add(
+				Base + FVector2D(Radius * FMath::Sin(Theta), Radius * (1.0 - FMath::Cos(Theta))));
+		}
+
+		const int32 ArcEndVertex = Plan.Polyline.Num() - 1;
+		OutArcEnd = Plan.Polyline[ArcEndVertex];
+
+		// THE ARC'S OWN LAST SEGMENT, because that is what GuidelineGeom::PointAtDistance
+		// reports at exactly Travelled == its length - see its own loop, which walks segment
+		// by segment and stops on the one whose end is at or past Distance. FReverseRun::
+		// Advance faces the body along that tangent turned through 180 degrees.
+		const FVector2D LastSpan = Plan.Polyline[ArcEndVertex] - Plan.Polyline[ArcEndVertex - 1];
+		OutArcEndHeading = FMath::UnwindRadians(
+			FMath::Atan2(LastSpan.Y, LastSpan.X) + UE_DOUBLE_PI);
+
+		const double ArcLength = GuidelineGeom::PolylineLength(Plan.Polyline);
+
+		Plan.Polyline.Add(OutArcEnd
+			+ FVector2D(FMath::Cos(OutArcEndHeading), FMath::Sin(OutArcEndHeading)) * ContinueLength);
+		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
+
+		FRouteStep ReverseLeg;
+		ReverseLeg.bReverseLeg = true;
+		ReverseLeg.EndVertex = ArcEndVertex;
+		ReverseLeg.EndDistance = ArcLength;
+
+		FRouteStep DriveOn;
+		DriveOn.EndVertex = Plan.Polyline.Num() - 1;
+		DriveOn.EndDistance = Plan.Length;
+
+		Plan.Steps = { ReverseLeg, DriveOn };
+		return Plan;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAgentReverseHandoverTest,
+	"Airside.Model.AgentReverseHandover",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAgentReverseHandoverTest::RunTest(const FString& Parameters)
+{
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	if (!TestTrue(TEXT("the service vehicle steers on measured axles"), Truck.HasAxles()))
+	{
+		return false;
+	}
+
+	// COMFORTABLY INSIDE THE LOCK (50% of margin, well past the 5% FReverseTurnsTighterThan
+	// ForwardTest's own sibling arms at), so FReverseRun::Start's own refusal is not what is
+	// under test here - Airside.Model.EveryGroundVehicleBacksIntoItsBayWithoutCrabbing already
+	// covers that boundary.
+	const double Radius = Truck.TightestReversibleRadius() * 1.5;
+
+	FVector2D ArcEnd = FVector2D::ZeroVector;
+	double ArcEndHeading = 0.0;
+	const FRoutePlan Plan = ReverseThenDriveOnPlan(Radius, /*ContinueLength*/ 3000.0, ArcEnd, ArcEndHeading);
+
+	FVehicle Vehicle;
+	Vehicle.Chassis = Truck;
+
+	FRoadAgent Agent;
+	Agent.StartDrive(Plan, Vehicle);
+	Agent.ReverseSpeed = 400.0;
+
+	double LastReversingHeading = 0.0;
+	FVector2D LastReversingPosition = FVector2D::ZeroVector;
+	bool bSawReversing = false;
+	bool bHandedOver = false;
+
+	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
+	EAgentPhase Prev = Agent.Phase;
+	for (int32 Frame = 0; Frame < 20000; ++Frame)
+	{
+		Agent.Advance(1.0 / 60.0, Motion, Event);
+
+		// RECORDED WHEN Phase IS Reversing AFTER THE CALL, not before it - the tick that
+		// hands over also REPORTS Taxiing (Phase flips inside the same call that discovers
+		// the manoeuvre is done), so keying on the phase before the call would capture that
+		// same tick's TAXI pose and call it the reverse's own, hiding exactly the bug under
+		// test.
+		if (Agent.Phase == EAgentPhase::Reversing)
+		{
+			bSawReversing = true;
+			LastReversingHeading = Motion.Heading;
+			LastReversingPosition = Motion.Position;
+		}
+
+		if (Prev == EAgentPhase::Reversing && Agent.Phase != EAgentPhase::Reversing)
+		{
+			bHandedOver = Agent.Phase == EAgentPhase::Taxiing;
+			break;
+		}
+		Prev = Agent.Phase;
+	}
+
+	if (!TestTrue(TEXT("the agent actually reversed"), bSawReversing)) { return false; }
+	if (!TestTrue(TEXT("and handed over to the taxi"), bHandedOver)) { return false; }
+
+	// THE REGRESSION #297 PINS: the last pose reported WHILE Phase IS STILL Reversing must be
+	// the manoeuvre's true end, not short of it by whatever distance was left when the
+	// SECOND-to-last tick landed. Under the old contract, FReverseRun::Advance's final tick
+	// computed exactly this pose and then handed back false in that same call, which is also
+	// the call that flips Phase to Taxiing - so this loop's last SEEN Reversing tick was the
+	// one BEFORE it. Measured red against the pre-fix contract at ~0.07 deg / ~1.3 uu (however
+	// much of ArcLength happened to be left over when a 6.67 uu tick last landed short of it -
+	// not the tick's own full step, which would be the worst case rather than the typical one).
+	AddInfo(FString::Printf(
+		TEXT("last Reversing heading %.4f deg (want %.4f); position (%.2f, %.2f) vs arc end (%.2f, %.2f)"),
+		FMath::RadiansToDegrees(LastReversingHeading), FMath::RadiansToDegrees(ArcEndHeading),
+		LastReversingPosition.X, LastReversingPosition.Y, ArcEnd.X, ArcEnd.Y));
+
+	// TIGHT TOLERANCES, DELIBERATELY: the correct answer is the SAME closed-form arithmetic
+	// evaluated twice (once here, once inside GuidelineGeom::PointAtDistance on the identical
+	// Span.Polyline sub-array at the identical Distance), so it should agree to floating
+	// precision - a hundredth of a degree or a tenth of a uu is already generous, and both are
+	// comfortably below the ~0.07 deg / ~1.3 uu this test measures red against the old contract.
+	TestEqual(TEXT("the last Reversing frame reports the manoeuvre's true final heading"),
+		FMath::RadiansToDegrees(FMath::UnwindRadians(LastReversingHeading - ArcEndHeading)), 0.0, 0.01);
+	TestTrue(
+		*FString::Printf(TEXT("and its true final position (%.3f uu short of it)"),
+			FVector2D::Distance(LastReversingPosition, ArcEnd)),
+		FVector2D::Distance(LastReversingPosition, ArcEnd) < 0.1);
+
+	// AND THE TAXI PICKS UP FACING THAT SAME WAY - the property FAgentPushbackHandoverTest
+	// pins for the push (line ~617 above), asked here of the reverse leg's own handover.
+	TestEqual(TEXT("the follower inherits the heading the reverse finished on"),
+		FMath::Abs(FMath::RadiansToDegrees(
+			FMath::UnwindRadians(Agent.Follower.Heading - ArcEndHeading))),
+		0.0, 0.5);
+
+	return true;
+}
+
 #endif

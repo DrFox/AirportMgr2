@@ -220,7 +220,7 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 {
 	FFitVerdict Verdict;
 	Verdict.bWholeRoute = true;
-	if (!Vehicle.HasTrailer() || !InPlan.IsValid() || InPlan.Polyline.Num() < 2 || InPlan.Steps.Num() == 0)
+	if (!Vehicle.HasTrailer() || !InPlan.IsDrivable() || InPlan.Steps.Num() == 0)
 	{
 		return Verdict;
 	}

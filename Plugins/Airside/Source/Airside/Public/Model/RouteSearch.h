@@ -139,6 +139,24 @@ struct AIRSIDE_API FRoutePlan
 	bool IsValid() const { return Result == ERouteResult::Found; }
 
 	/**
+	 * Whether this plan is worth walking: found, with the two points a direction needs, and
+	 * long enough to divide a speed into a time by.
+	 *
+	 * THE SAME THREE-PART CHECK WAS SPELLED OUT SEPARATELY at FPushbackRun::Start,
+	 * FReverseRun::Start, FRouteFollower::HasArrived/Advance, VehicleFit::JudgePlan,
+	 * UGroundTraffic (three call sites) and FDeparturePlanner (two) - issue #297, "is this
+	 * plan drivable spelled ten ways". One of the ten had grown an extra `Length >
+	 * UE_KINDA_SMALL_NUMBER` guard the other nine lacked (FReverseRun::Start), which is
+	 * exactly how independently-copied checks drift: not wrong anywhere on its own, just
+	 * not the same rule everywhere it is asked. Folded in here rather than dropped, since a
+	 * zero-length "route" is not drivable at any of the ten sites.
+	 */
+	bool IsDrivable() const
+	{
+		return IsValid() && Polyline.Num() >= 2 && Length > UE_KINDA_SMALL_NUMBER;
+	}
+
+	/**
 	 * Which way the vehicle travels along each SPAN of Polyline - one entry per span, so
 	 * Polyline.Num() - 1 of them, Forward unless the step covering it is a bay's reverse leg.
 	 *

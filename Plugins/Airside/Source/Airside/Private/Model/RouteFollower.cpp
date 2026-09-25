@@ -84,7 +84,7 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FChassis& InChassis, 
 bool FRouteFollower::Advance(double DeltaSeconds, const FChassis& InChassis, double StopWithin,
 	FVector2D& OutPosition, double& OutHeading)
 {
-	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
+	if (!Plan.IsDrivable())
 	{
 		return false;
 	}
@@ -326,7 +326,7 @@ bool FRouteFollower::NextReverseLegRun(int32& OutFrom, int32& OutTo)
 
 bool FRouteFollower::HasArrived() const
 {
-	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
+	if (!Plan.IsDrivable())
 	{
 		// An agent that cannot move has, for every purpose the caller has, finished. The
 		// alternative is a cube that never despawns because it never got a route.
