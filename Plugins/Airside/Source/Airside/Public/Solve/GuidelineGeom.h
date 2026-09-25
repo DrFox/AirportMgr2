@@ -288,6 +288,35 @@ namespace GuidelineGeom
 	AIRSIDE_API bool LaneChange(const FVector2D& From, const FVector2D& To, const FVector2D& Travel,
 		FVector2D& OutControlIn, FVector2D& OutMid, FVector2D& OutControlOut);
 
+	/** One quadratic of an arc, in travel order: from the previous End (or the arc's From) to End. */
+	struct FArcPiece
+	{
+		FVector2D End = FVector2D::ZeroVector;
+		FVector2D Control = FVector2D::ZeroVector;
+	};
+
+	/**
+	 * A CIRCULAR ARC ABOUT Centre, AS QUADRATICS (bend lanes, 2026-09-25): from From, travelling
+	 * FromDir, to To, arriving along ToDir, in as few pieces as keep each one's sweep within
+	 * MaxPieceSweep radians. Each piece runs between two points of the circle with its control at
+	 * their tangents' crossing - the construction UTurnGeom lays its half circle with - so a piece
+	 * of sweep p delivers cos(p/2) of the radius at its apex (one quadratic across 90 degrees, what
+	 * a junction turn used to be, delivers 0.707).
+	 *
+	 * THE ENDS ARE THE CALLER'S, VERBATIM: the last End is To bit for bit (the builder joins it to
+	 * a lane end BY HANDLE), and the first and last controls sit on the lines through From along
+	 * FromDir and through To along ToDir, so the arc is tangent to the straights it joins however
+	 * far From and To are off the circle by rounding. The intermediate ends are on the circle of
+	 * the MEAN of From's and To's radii. The caller decides From and To ARE tangent points - that
+	 * FromDir is perpendicular to From - Centre - and this lays whatever it is given.
+	 *
+	 * False, OutPieces empty, when the two directions are parallel (no turn to lay) or a tangent
+	 * crossing degenerates.
+	 * ENFORCED BY: Airside.Build.BendLanes.ConcentricWithPavement (radius and tangency, per tier)
+	 */
+	AIRSIDE_API bool Arc(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+		const FVector2D& Centre, double MaxPieceSweep, TArray<FArcPiece>& OutPieces);
+
 	/**
 	 * Position and heading at Distance along a polyline, clamped to both ends.
 	 *

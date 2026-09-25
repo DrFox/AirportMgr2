@@ -180,7 +180,13 @@ namespace VehicleSweep
 	 * agent to. Optional (defaults null) because the one production caller
 	 * (VehicleFit::Judge, VehicleFit.cpp) only needs OutInner/OutOuter; a test comparing the
 	 * agent's own path against Trace's is the reason the parameter exists at all.
+	 *
+	 * OutBodyPoints, when given, receives EVERY body corner at every step - lead-in and lead-out
+	 * included, whether or not it projects onto Path - for a caller that asks where the body
+	 * went against the pavement itself rather than against Path's clearances: the bend lanes'
+	 * swept-path measure (Testing/BendProbe.h), the pavement the inside of a bend is widened to.
 	 */
 	AIRSIDE_API bool Trace(const FBody& Body, TArrayView<const FVector2D> Path,
-		TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles = nullptr);
+		TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles = nullptr,
+		TArray<FVector2D>* OutBodyPoints = nullptr);
 }

@@ -578,6 +578,54 @@ bool GuidelineGeom::LaneChange(const FVector2D& From, const FVector2D& To, const
 	return true;
 }
 
+bool GuidelineGeom::Arc(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+	const FVector2D& Centre, double MaxPieceSweep, TArray<FArcPiece>& OutPieces)
+{
+	OutPieces.Reset();
+	const FVector2D InDir = FromDir.GetSafeNormal();
+	const FVector2D OutDir = ToDir.GetSafeNormal();
+	const double Turn = FVector2D::CrossProduct(InDir, OutDir);
+	if (FMath::Abs(Turn) < 1e-9 || MaxPieceSweep <= 0.0)
+	{
+		return false;
+	}
+	const double Sign = Turn > 0.0 ? 1.0 : -1.0;
+	const double Radius = 0.5 * (FVector2D::Distance(From, Centre) + FVector2D::Distance(To, Centre));
+	const double Start = FMath::Atan2(From.Y - Centre.Y, From.X - Centre.X);
+	const double Finish = FMath::Atan2(To.Y - Centre.Y, To.X - Centre.X);
+	// The sweep in the direction of travel: counter-clockwise for a left turn, so in (0, 2 pi).
+	double Sweep = (Finish - Start) * Sign;
+	while (Sweep <= 0.0) { Sweep += 2.0 * UE_DOUBLE_PI; }
+	while (Sweep > 2.0 * UE_DOUBLE_PI) { Sweep -= 2.0 * UE_DOUBLE_PI; }
+	const int32 Count = FMath::Max(1, FMath::CeilToInt32(Sweep / MaxPieceSweep - 1e-9));
+	const double Step = Sign * Sweep / Count;
+
+	// Each piece's two ends and their travel directions; its control is where the two tangent
+	// lines cross. From and To keep the caller's directions, so the lanes stay tangent exactly.
+	FVector2D PrevAt = From;
+	FVector2D PrevDir = InDir;
+	for (int32 Piece = 1; Piece <= Count; ++Piece)
+	{
+		const bool bLast = Piece == Count;
+		const double Angle = Start + Step * Piece;
+		const FVector2D Radial(FMath::Cos(Angle), FMath::Sin(Angle));
+		const FVector2D At = bLast ? To : Centre + Radial * Radius;
+		// Travelling counter-clockwise the tangent is the radial turned left; clockwise, right.
+		const FVector2D Dir = bLast ? OutDir : FVector2D(-Radial.Y, Radial.X) * Sign;
+		const double Cross = FVector2D::CrossProduct(PrevDir, Dir);
+		if (FMath::Abs(Cross) < 1e-12)
+		{
+			OutPieces.Reset();
+			return false;
+		}
+		const double Along = FVector2D::CrossProduct(At - PrevAt, Dir) / Cross;
+		OutPieces.Add({ At, PrevAt + PrevDir * Along });
+		PrevAt = At;
+		PrevDir = Dir;
+	}
+	return true;
+}
+
 double GuidelineGeom::CornerRunFor(double Radius, double Interior)
 {
 	const double Half = Interior * 0.5;

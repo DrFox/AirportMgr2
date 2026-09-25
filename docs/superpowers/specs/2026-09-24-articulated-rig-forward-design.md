@@ -170,6 +170,28 @@ built level and its tests:**
   clearance per side while the agent holds its lane, or should the agent swing wide on a
   near-side turn to keep the cut inside its own lane? Either changes gating or steering
   behaviour outside this step's scope.
+  **REVISED 2026-09-25 ("bend lanes follow the pavement concentrically; inside widened only by
+  the measured remainder", user-approved) - step 1 of 2, the lanes.** At a two-arm bend of one
+  width, each service-road lane's turn is now an ARC about the inner fillet's centre, at the
+  lane's own distance from the inner edge, laid as quadratics of at most 22.5 degrees each
+  (`GuidelineGeom::Arc`) and sampled once like any edge. The lane ends were already that circle's
+  tangent points (the cut is the inner fillet's tangent), so nothing moves at the lane ends.
+  Measured on a plain right angle per tier (`Airside.Build.BendLanes.*`), before -> after:
+  inner lane 726 -> 1006, 743 -> 1031, 853 -> 1183 uu; outer lane 938 -> 1301, 991 -> 1374,
+  1171 -> 1624 (Narrow, Standard, Wide). **Not concentric with the OUTER edge, and why:** both
+  fillets are the tier's one radius (816 / 816 / 921), so their centres sit a road width apart on
+  each axis and no circle is concentric with both. About the outer centre the lanes would use the
+  outside of the bend - and turn at 306 / 606 (Narrow), 231 / 581 (Standard), 186 / 636 (Wide),
+  below both design vehicles' locks; the ruling forbids a tighter turn, so that reading STOPPED on
+  measurement. The unused band outside a bend is the outer fillet being the same radius as the
+  inner (R, not R + width), not the lanes. **What the arc did NOT do:** the rig's trailer still
+  leaves the inner edge - 340 -> 358 (Narrow), 309 -> 328 (Standard), 225 -> 247 (Wide) uu,
+  traced (`BendProbe`, `VehicleSweep::Trace`) - a little worse, because the one quadratic bulged
+  62 uu off the inner edge at its apex and the arc keeps the straights' own distance throughout.
+  The bowser and the utility stay on the tarmac on every tier, before and after. Mixed-width bends
+  keep the quadratic (the lanes sit 210 and 285 uu off their inner edges, so no one circle fits);
+  taxiway bends are untouched (authored for aircraft, `PreferredFilletRadius`); T and X junctions
+  are untouched in this step.
 - **The rig is refused at every dead-end U-turn, and this is a sizing decision, not a bug.**
   **(Ruled 2026-09-25, see the per-tier design vehicle note below: balloons stay bowser-sized;
   the rig turns at road ends once reversing exists.)**

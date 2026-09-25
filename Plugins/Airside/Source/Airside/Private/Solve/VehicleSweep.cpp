@@ -168,11 +168,16 @@ void VehicleSweep::BodyCorners(const FBody& Body, const FVector2D& Fixed, const 
 }
 
 bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
-	TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles)
+	TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles,
+	TArray<FVector2D>* OutBodyPoints)
 {
 	if (OutAxles != nullptr)
 	{
 		OutAxles->Reset();
+	}
+	if (OutBodyPoints != nullptr)
+	{
+		OutBodyPoints->Reset();
 	}
 	OutInner.Init(0.0, Path.Num());
 	OutOuter.Init(0.0, Path.Num());
@@ -252,6 +257,10 @@ bool VehicleSweep::Trace(const FBody& Body, TArrayView<const FVector2D> Path,
 		// The cab's corners and then every link's, from where the chain now IS - BodyCorners,
 		// which VehicleFit::JudgePlan puts on the whole route too (one list of corners, not two).
 		BodyCorners(Body, Fixed, Heading, Axles, Corners);
+		if (OutBodyPoints != nullptr)
+		{
+			OutBodyPoints->Append(Corners);
+		}
 
 		for (const FVector2D& Corner : Corners)
 		{

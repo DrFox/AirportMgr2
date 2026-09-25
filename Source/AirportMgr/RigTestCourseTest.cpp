@@ -19,6 +19,9 @@
 #include "Solve/GuidelineGeom.h"
 #include "Solve/VehicleSweep.h"
 #include "Testing/AirsideTestWorld.h"
+#include "Testing/BendProbe.h"
+#include "Build/RoadNetworkSolver.h"
+#include "Profiles/RoadDesignVehicles.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -1347,6 +1350,70 @@ bool FRigCourseJackknifeIsRetiredTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("leg 1 was driven by that fresh agent"),
 		static_cast<int32>(Course->LastLoopResultsForTest(0)[1].Outcome), static_cast<int32>(ERigLegOutcome::Driven));
 	TestEqual(TEXT("no leg was left to time out instead"), Spy.Containing(TEXT("stuck")), 0);
+	return true;
+}
+
+// THE COURSE'S BENDS, MEASURED (bend lanes, 2026-09-25): every two-arm corner's fillets, each lane
+// turn's radius, and how far each vehicle leaves the tarmac driving it - traced by the router's
+// own pursuit (VehicleSweep::Trace) against the pavement polygons. A census for the report and for
+// the pins in OneLoopHeadless; it asserts only that it measured something.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigCourseBendCensusTest,
+	"AirportMgr.RigCourse.BendCensus",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigCourseBendCensusTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
+	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	Course->BuildCourseForTest(*Actor);
+	const URoadNetwork& Net = *Actor->Network;
+	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
+	// Re-solved as the presenter solves it (same arc count, same vehicles): the cuts it writes back
+	// are the ones already there.
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Actor->Network, 12, &Designs);
+	const TArray<FVehicle>& Vehicles = Course->GetVehicles();
+	const BendProbe::FPavement Pavement = BendProbe::PavementAll(Net, Solved);
+	int32 Bends = 0;
+	for (int32 Index = 0; Index < Net.GetNodes().Num(); ++Index)
+	{
+		const FRoadNode& Node = Net.GetNodes()[Index];
+		if (!Node.bAlive || Node.Incident.Num() != 2) { continue; }
+		const FRoadNodeId NodeId = Net.NodeIdAt(Index);
+		RoadGeom::FFillet Inner, Outer;
+		if (!BendProbe::Fillets(Solved, NodeId, Inner, Outer)) { continue; }
+		++Bends;
+		const FJunctionResult& Junction = Solved.NodeResults[Index];
+		double Widths[2] = { 0.0, 0.0 };
+		for (int32 Arm = 0; Arm < 2; ++Arm)
+		{
+			const FRoadSegment* Seg = Net.GetSegment(Node.Incident[Arm]);
+			const URoadProfile* Profile = Seg != nullptr ? Net.ProfileFor(*Seg) : nullptr;
+			Widths[Arm] = Profile != nullptr ? Profile->GetTotalWidth() : 0.0;
+		}
+		UE_LOG(LogTemp, Display, TEXT("CourseBend node %d at (%.0f, %.0f): widths %.0f / %.0f; inner fillet R %.0f, outer fillet R %.0f; cuts %.0f / %.0f"),
+			Index, Node.Position.X, Node.Position.Y, Widths[0], Widths[1], Inner.Radius, Outer.Radius,
+			Junction.Arms[0].CutDistance, Junction.Arms[1].CutDistance);
+		for (const BendProbe::FTurnChain& Turn : BendProbe::TurnsAt(Net, NodeId))
+		{
+			const FVector2D Mid = Turn.Path[Turn.Path.Num() / 2];
+			const bool bLeft = FVector2D::CrossProduct(Mid - Turn.Path[0], Turn.Path.Last() - Mid) > 0.0;
+			double AboutMin = TNumericLimits<double>::Max(), AboutMax = 0.0;
+			BendProbe::RadiusAbout(Turn, Inner.Centre, AboutMin, AboutMax);
+			FString Line = FString::Printf(TEXT("CourseBend node %d %s turn: %d piece(s), MinRadius %.0f, about the inner fillet's centre %.0f..%.0f"),
+				Index, bLeft ? TEXT("left") : TEXT("right"), Turn.Pieces.Num(), Turn.MinRadius, AboutMin, AboutMax);
+			for (int32 V = 0; V < Vehicles.Num(); ++V)
+			{
+				const BendProbe::FOverrun Off = BendProbe::Overrun(Turn, Vehicles[V], Pavement);
+				Line += FString::Printf(TEXT("; vehicle %d off inner %.0f outer %.0f"), V, Off.Inner, Off.Outer);
+			}
+			UE_LOG(LogTemp, Display, TEXT("%s"), *Line);
+		}
+	}
+	TestTrue(FString::Printf(TEXT("the course has bends to measure (%d)"), Bends), Bends > 0);
 	return true;
 }
 
