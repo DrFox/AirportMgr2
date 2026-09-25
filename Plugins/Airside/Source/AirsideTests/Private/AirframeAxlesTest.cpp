@@ -178,6 +178,10 @@ static const TCHAR* const MeasuredTypes[] = {
 	// THE CARAVAN IS THE FIRST MEASURED CODE B SINGLE. Its 15.88 m span is over Code A's 15 m
 	// by 0.88, so this row is the one that goes red if a re-export trims the wing into A.
 	TEXT("/Game/Entities/DA_Aircraft_Plane10"),
+	// THE CHEROKEE IS THE FIRST ROW EXPORTED OFF-LEVEL: 5.02 deg nose-up on its gear. Its
+	// footprint is a plan shadow of a pitched mesh, and this row is what says the pipeline
+	// measures such a mesh the same way it measures a level one.
+	TEXT("/Game/Entities/DA_Aircraft_Plane12"),
 };
 
 /**
@@ -416,6 +420,9 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane10"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Caravan reverses off a stand on its own prop - a grass-strip single gated "
 			   "behind the Pushback depot would be the class default talking, not the type") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane12"), EPushbackNeed::SelfManoeuvre,
+		  TEXT("a Cherokee is hand-towed off a stand - the class default would gate a "
+			   "four-seat trainer behind the Pushback depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Q400 turns out of a regional stand on its own props; the depot is the jets' tax") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane6"), EPushbackNeed::VehicleTug,

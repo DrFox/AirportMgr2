@@ -1,6 +1,3 @@
 {
-  "enabledPlugins": {
-    "unreal-engine-skills-for-claude-code@claude-plugins-official": true
-  },
   "enableAllProjectMcpServers": true
 }

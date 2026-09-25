@@ -61,6 +61,11 @@ NEEDS = {
         "a Caravan reverses off a stand on its own prop - the PT6's reverse pitch - and the "
         "class default of VehicleTug would gate a grass-strip single behind the depot",
     ),
+    "/Game/Entities/DA_Aircraft_Plane12": (
+        unreal.PushbackNeed.SELF_MANOEUVRE,
+        "a Cherokee is pulled off a stand by hand with a tow bar on the nosewheel - plane1's "
+        "reason, and the class default of VehicleTug would gate a trainer behind the depot",
+    ),
     "/Game/Entities/DA_Aircraft_Plane3": (
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "a Q400 turns out of a regional stand on its own props; the depot is the jets' tax",
