@@ -217,4 +217,51 @@ bool FPushbackStraightOutTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackDepartReleasesStandTest,
+	"Airside.Model.PushbackDepartReleasesStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackDepartReleasesStandTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #295: DepartAgent's push branch used to re-spell TakeGoal's three calls
+	// (SetGoalFrom/ArmDepartureIfRunway/ClaimGoalNodeAtDispatch) by hand and never called
+	// ReleaseGoal first - the one thing RedirectAgent and ExtendRoute already do before
+	// TakeGoal. The stand the aeroplane is LEAVING stayed claimed against it for the rest of
+	// the session, so a waiter re-offered stands (ReofferStands) could never be sent there
+	// even after the aeroplane had climbed away and gone.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+
+	// Taxied in from the runway, so it parks facing SOUTH with its way out behind it - a push
+	// is needed, which is the branch DepartAgent's goal-change duplicate lived in.
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("an aircraft parks facing away from its way out"), Id > 0))
+	{
+		return false;
+	}
+	if (!TestEqual(TEXT("the stand is held by the parked aircraft"),
+		Traffic->HolderOfNode(G.A), Id))
+	{
+		return false;
+	}
+
+	const EDepartureRefusal Why = Traffic->DepartAgent(Id, *Net);
+	if (!TestEqual(FString::Printf(TEXT("the push is cleared (%d)"), static_cast<int32>(Why)),
+		Why, EDepartureRefusal::None))
+	{
+		return false;
+	}
+	TestEqual(TEXT("into the manoeuvre"), Traffic->FindAgent(Id)->Phase, EAgentPhase::Manoeuvring);
+
+	// THE OLD STAND IS FREE THE INSTANT THE PUSH IS GRANTED - between ticks, the same window
+	// ReleaseGoal documents for RedirectAgent/ExtendRoute, not something a re-offer pass has
+	// to wait a frame to discover.
+	TestEqual(TEXT("the stand it just left is no longer held by anyone"),
+		Traffic->HolderOfNode(G.A), 0);
+
+	return true;
+}
+
 #endif

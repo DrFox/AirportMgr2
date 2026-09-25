@@ -778,9 +778,14 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	// THE GOAL IS THE TAXI OUT'S, not the push's. The claim pass reserves the node an agent is
 	// heading FOR, and a push that claimed its own end would have the aeroplane reserving a
 	// patch of taxiway as though it were a stand. What it is going to is the runway.
-	Agent.SetGoalFrom(Push.TaxiOutRoute);
-	ArmDepartureIfRunway(Agent, &Network, Push.TaxiOutRoute);
-	ClaimGoalNodeAtDispatch(Agent, AgentId, Network);
+	//
+	// ReleaseGoal THEN TakeGoal (issue #295), not a hand-spelled copy of TakeGoal's three
+	// calls: this used to re-type SetGoalFrom/ArmDepartureIfRunway/ClaimGoalNodeAtDispatch here
+	// and never called ReleaseGoal at all, so a departing aeroplane kept its OWN stand's node
+	// claimed against the re-offer pass for the rest of the session - the exact drift
+	// RedirectAgent and ExtendRoute already avoid by sharing this same pair.
+	ReleaseGoal(Agent, AgentId);
+	TakeGoal(Agent, AgentId, &Network, Push.TaxiOutRoute);
 
 	// THE NEED IS NAMED even though nothing branches on it yet. Slice 1 pushes all three the
 	// same way and nobody is doing the pushing, so this line is the only place the gap between
@@ -791,9 +796,8 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		*UEnum::GetValueAsString(Own.PushbackNeed));
 
 	OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
-	// #169: the push claims the taxi-out goal node (ClaimGoalNodeAtDispatch, above) in this
-	// same call.
-	++OccupancyRevisionCount;
+	// #169: the occupancy revision was bumped in TakeGoal, with the claim - unconditional,
+	// unlike the broadcast above. See RedirectAgent's own copy of this comment.
 	return EDepartureRefusal::None;
 }
 
