@@ -83,7 +83,7 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	TestEqual(TEXT("the marking network solved"), Solved.FailedNodes, 0);
 
-	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Gate = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(25000.0, 25000.0), UE_DOUBLE_PI);
@@ -244,7 +244,7 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 
 		const FRoadSolveResult DualSolved = FRoadNetworkSolver::SolveAll(*Divided);
 		TestEqual(TEXT("the two-lane surface solved"), DualSolved.FailedNodes, 0);
-		FRoadGuidelineBuilder::Build(*Divided, DualSolved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Divided, DualSolved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		int32 FromThisSurface = 0;
 		int32 Forward = 0;

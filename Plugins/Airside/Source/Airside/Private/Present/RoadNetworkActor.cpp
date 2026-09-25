@@ -170,6 +170,7 @@ void ARoadNetworkActor::RefreshResolvedContentCacheIfDirty()
 	ResolvedApronMaterialCache = ResolveApronMaterial();
 	ResolvedRubberMaterialCache = ResolveRubberMaterial();
 	ResolvedGhostMaterialCache = ResolveGhostMaterial();
+	ResolvedTierDesignVehiclesCache = UAirsideSettings::ResolveTierDesignVehicles();
 
 	ResolvedRunwayMaterialsCache.SetNum(RunwayMaterialSlotCount);
 	ResolvedRunwayMaterialsCache[RunwayMaterialSlot(ERunwaySurface::Grass)] = ResolveRunwayMaterial(ERunwaySurface::Grass);
@@ -201,11 +202,14 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	// CONTENT LOOKUP"), so there is nothing the cache below would save it; what matters is
 	// that it runs ONCE HERE rather than once per arm/per ordered arm pair/twice per link
 	// further down the pipeline, which is what URoadSurfacePresenter::Rebuild now relies on.
-	Settings.LargestServiceVehicle = UAirsideSettings::ResolveLargestServiceVehicle();
+	Settings.DesignVehicles = FRoadDesignVehicles(UAirsideSettings::ResolveLargestServiceBody());
 
 	// THE EXPENSIVE HALF, CACHED - see RefreshResolvedContentCacheIfDirty and
 	// bResolvedContentDirty's own comments.
 	RefreshResolvedContentCacheIfDirty();
+	// THE TIERS' DESIGN VEHICLES, from the cache: ResolveTierDesignVehicles reads the content
+	// set (a LoadSynchronous of the Wide profile), which is the expensive half this cache holds.
+	Settings.DesignVehicles.PerProfile = ResolvedTierDesignVehiclesCache;
 	Settings.SurfaceMaterial = ResolvedSurfaceMaterialCache;
 	Settings.ApronMaterial = ResolvedApronMaterialCache;
 	Settings.RubberMaterial = ResolvedRubberMaterialCache;

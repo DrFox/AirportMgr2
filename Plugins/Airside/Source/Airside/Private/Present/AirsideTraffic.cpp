@@ -134,17 +134,49 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 		const double Length = Model->Rules.FootprintFor(Agent->Class);
 		const FVector Box(Length, Length * 0.5, Length * 0.5);
 
+		// WHICH LOOK is UAirsideSettings' call, not this branch's: ResolveVehicleViewFor picks
+		// it by the vehicle's TypeCode, so the rig wears truckCab1 and a truck the fuel truck,
+		// and nothing here names a vehicle or an asset.
+		const FVehicle* Vehicle = Agent->AsVehicle();
+		const FResolvedTowView Look = Vehicle != nullptr
+			? UAirsideSettings::ResolveVehicleViewFor(*Vehicle) : FResolvedTowView();
+
 		// RIGGED FIRST, STATIC SECOND. A vehicle with a skeleton has wheels that turn and
 		// steer; one without is a body that slides. Asking for the rigged one and falling
 		// back leaves the choice in the content set rather than in this branch.
-		const FResolvedAgentView Vehicle = UAirsideSettings::ResolveVehicleView();
-		if (Vehicle.Mesh != nullptr)
+		if (Look.Cab.Mesh != nullptr)
 		{
-			View->SetVehicleAirframe(Vehicle.Mesh, Vehicle.AnimClass, Box);
+			View->SetVehicleAirframe(Look.Cab.Mesh, Look.Cab.AnimClass, Box);
 		}
 		else
 		{
 			View->SetVehicleBody(UAirsideSettings::ResolveVehicleMesh(), Box);
+		}
+
+		// THE TOW: one mesh per BODY-carrying link. Look.Links answers Vehicle->Tow index for
+		// index (FResolvedTowView's contract), and two lists that must agree are checked here,
+		// where they are consumed: a mismatch would stand trailer meshes on the wrong poses.
+		if (Vehicle != nullptr && Vehicle->HasTrailer())
+		{
+			if (Look.Links.Num() != Vehicle->Tow.Num())
+			{
+				UE_LOG(LogAirsideTraffic, Warning,
+					TEXT("Agent %d (%s): %d tow links but a look for %d; the tow is not drawn."),
+					AgentId, *Vehicle->TypeCode.ToString(), Vehicle->Tow.Num(), Look.Links.Num());
+			}
+			else
+			{
+				for (int32 Link = 0; Link < Vehicle->Tow.Num(); ++Link)
+				{
+					// A bar has no body to draw; it swings the NEXT link's front axle instead.
+					if (Vehicle->Tow[Link].IsBar())
+					{
+						continue;
+					}
+					const int32 TowbarLink = (Link > 0 && Vehicle->Tow[Link - 1].IsBar()) ? Link - 1 : INDEX_NONE;
+					View->SetVehicleTrailer(Link, Look.Links[Link].Mesh, Look.Links[Link].AnimClass, TowbarLink);
+				}
+			}
 		}
 	}
 
@@ -197,6 +229,12 @@ bool UAirsideTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 bool UAirsideTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
 {
 	return Model->RedirectAgent(AgentId, Network, Plan);
+}
+
+bool UAirsideTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Tail,
+	double KeepBehind, double* OutDropped)
+{
+	return Model->ExtendRoute(AgentId, Network, Tail, KeepBehind, OutDropped);
 }
 
 EDepartureRefusal UAirsideTraffic::DepartAgent(int32 AgentId, const URoadNetwork* Network)

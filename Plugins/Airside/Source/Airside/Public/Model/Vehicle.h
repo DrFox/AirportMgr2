@@ -19,27 +19,51 @@
 #include "Vehicle.generated.h"
 
 /**
- * A semi-trailer, when a vehicle pulls one (spec 2026-09-23 §6). Measured from the model, uu.
- * KingpinToAxle == 0 means NO TRAILER - a rigid vehicle - which is the default, so every
- * vehicle assembled before trailers existed stays rigid without being told.
+ * ONE LINK OF A TOW, when a vehicle pulls one (spec 2026-09-23 §6; a CHAIN since the revision
+ * of 2026-09-24, §4). Measured from the model, uu.
+ *
+ * WAS FTrailer, ONE SEMI-TRAILER, until the drawbar fuel trailer arrived: a towbar pivoting on
+ * a steered front axle, then a body on a fixed rear one - two pursuits, not one. A semi-trailer
+ * is the one-link case, a drawbar trailer two links, a baggage train N, and one walk steps all
+ * of them (VehicleSweep::StepChain), so the router and the driver cannot disagree about any.
+ *
+ * AN EMPTY CHAIN MEANS NO TRAILER - a rigid vehicle - which is the default, so every vehicle
+ * assembled before trailers existed stays rigid without being told. (FTrailer said the same
+ * with KingpinToAxle == 0.)
  */
 USTRUCT(BlueprintType)
-struct AIRSIDE_API FTrailer
+struct AIRSIDE_API FTowLink
 {
 	GENERATED_BODY()
 
-	/** Where the kingpin sits on the TRACTOR, ahead of its fixed axle. */
-	UPROPERTY(EditAnywhere) double KingpinX = 0.0;
+	/**
+	 * Where this link couples, along the PREVIOUS body from that body's fixed axle - the
+	 * tractor's for link 0. Positive ahead, NEGATIVE BEHIND: a fifth wheel sits ahead of the
+	 * drive axle (+57.3 on the rig), a drawbar eye behind the rear axle (about -91). Was
+	 * FTrailer::KingpinX.
+	 */
+	UPROPERTY(EditAnywhere) double HitchX = 0.0;
 
-	/** Kingpin to the trailer's own axle (tandem centre). Zero: no trailer. */
-	UPROPERTY(EditAnywhere) double KingpinToAxle = 0.0;
+	/** Hitch to this link's own axle (tandem centre). Was FTrailer::KingpinToAxle. */
+	UPROPERTY(EditAnywhere) double Length = 0.0;
 
-	/** How far the trailer's body reaches ahead of the kingpin, and behind its axle. */
-	UPROPERTY(EditAnywhere) double FrontAheadOfKingpin = 0.0;
-	UPROPERTY(EditAnywhere) double RearBehindAxle = 0.0;
+	/**
+	 * How far the link's body reaches ahead of the HITCH, and behind its axle. Were
+	 * FTrailer::FrontAheadOfKingpin and RearBehindAxle. Both zero is a BAR - a towbar, which
+	 * sweeps its width between hitch and axle and nothing more.
+	 */
+	UPROPERTY(EditAnywhere) double BodyFront = 0.0;
+	UPROPERTY(EditAnywhere) double BodyRear = 0.0;
 
 	/** Body width, mirrors excluded. */
 	UPROPERTY(EditAnywhere) double Width = 0.0;
+
+	/**
+	 * A towbar: no body of its own, so nothing to draw for it. NAMED rather than tested inline
+	 * at each site, because the view asks it twice - to skip a mesh, and to find the bar that
+	 * swings a drawbar body's front axle (UAirsideTraffic::SpawnView).
+	 */
+	bool IsBar() const { return BodyFront == 0.0 && BodyRear == 0.0; }
 };
 
 /**
@@ -72,11 +96,22 @@ struct AIRSIDE_API FVehicle
 	UPROPERTY(EditAnywhere) double BodyFrontX = 0.0;
 	UPROPERTY(EditAnywhere) double BodyRearX = 0.0;
 
-	/** The semi-trailer, if any. See FTrailer: rigid by default. */
-	UPROPERTY(EditAnywhere) FTrailer Trailer;
+	/**
+	 * What it pulls, link by link from the tractor back, if anything. See FTowLink: empty, and
+	 * so rigid, by default.
+	 */
+	UPROPERTY(EditAnywhere) TArray<FTowLink> Tow;
 
-	bool HasTrailer() const { return Trailer.KingpinToAxle > 0.0; }
+	bool HasTrailer() const { return Tow.Num() > 0; }
 
 	/** The widest part of the vehicle - what a lane must take. */
-	double WidestBody() const { return FMath::Max(BodyWidth, HasTrailer() ? Trailer.Width : 0.0); }
+	double WidestBody() const
+	{
+		double Widest = BodyWidth;
+		for (const FTowLink& Link : Tow)
+		{
+			Widest = FMath::Max(Widest, Link.Width);
+		}
+		return Widest;
+	}
 };

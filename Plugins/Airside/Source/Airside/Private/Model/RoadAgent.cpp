@@ -1,6 +1,9 @@
 #include "Model/RoadAgent.h"
 
 #include "AirsideLog.h"
+#include "Model/VehicleFit.h"
+#include "Solve/GuidelineGeom.h"
+#include "Solve/VehicleSweep.h"
 
 void FRoadAgent::Refuse(int32 Step, const FTrafficResource& Resource, double NewStopWithin, int32 BlockerId)
 {
@@ -292,6 +295,24 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// doors the player sees disagree with the doors the model thinks it opened.
 	Motion.GearPose = GearPose();
 
+	// THE TOW, one pose per link, from the axles Advance stepped - placed on the cab's fixed
+	// axle by the same PoseChain Trace puts body corners with, so the view is shown the
+	// trailer the router gated. Empty for anything rigid.
+	if (TowAxles.Num() > 0 && Body == EAgentBody::Vehicle)
+	{
+		const FVector2D Forward(FMath::Cos(Heading), FMath::Sin(Heading));
+		TArray<VehicleSweep::FLinkPose, TInlineAllocator<2>> Poses;
+		VehicleSweep::PoseChain(VehicleFit::BodyOf(Vehicle), At + Forward * Chassis().FixedAxleX, Forward,
+			TowAxles, Poses);
+		for (const VehicleSweep::FLinkPose& Pose : Poses)
+		{
+			FTowPose& Out = Motion.Tow.AddDefaulted_GetRef();
+			Out.Hitch = Pose.Hitch;
+			Out.Axle = Pose.Axle;
+			Out.Heading = FMath::Atan2(Pose.Heading.Y, Pose.Heading.X);
+		}
+	}
+
 	return Motion;
 }
 
@@ -344,9 +365,92 @@ void FRoadAgent::StartDrive(const FRoutePlan& Plan, const FVehicle& InVehicle)
 	Body = EAgentBody::Vehicle;
 	Vehicle = InVehicle;
 	RestartTaxi(Plan);
+
+	// THE TOW SPAWNS STRAIGHT (spec §1), laid dead behind the cab where the follower starts
+	// it. HERE AND NOT IN RestartTaxi, which a redirect also calls: a rig re-routed mid-drive
+	// keeps its trailer where it is, angled as it was - re-laying it would snap the trailer
+	// straight in one frame. A new dispatch is a new vehicle on the ground, so it clears the
+	// fold too.
+	JackknifedLink = INDEX_NONE;
+	TowAxles.Reset();
+	if (Vehicle.HasTrailer())
+	{
+		// The steered axle's point on the line, which is what the follower seeded from - or,
+		// on a plan too short to have one, the fallback pose RestartTaxi already chose.
+		FVector2D Steered = LastMotion.Position;
+		double LineHeading = 0.0;
+		GuidelineGeom::PointAtDistance(Follower.Plan.Polyline, Follower.Travelled, Steered, LineHeading);
+		// VehicleFit::LayTow, which VehicleFit::JudgePlan lays the router's chain with too: the
+		// whole-route check starts its tow exactly where this one starts.
+		VehicleFit::LayTow(Vehicle, Steered, FVector2D(FMath::Cos(Follower.Heading), FMath::Sin(Follower.Heading)), TowAxles);
+	}
 }
 
-void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled)
+bool FRoadAgent::FollowAndTow(double DeltaSeconds, FVector2D& OutAt, double& OutHeading)
+{
+	// RIGID, OR NOTHING TO STEP: the one call it always was. Airside.Model.Tow.RigidHasNoTow
+	// holds this to the bare follower bitwise, long frames included.
+	if (TowAxles.Num() == 0)
+	{
+		return Follower.Advance(DeltaSeconds, Chassis(), StopWithin, OutAt, OutHeading);
+	}
+
+	// SUB-STEPS NO LONGER THAN TraceStep AT THE SPEED CAP, so the chain is never pulled
+	// further per step than the router's Trace pulls it: 10 uu over the rig's 1000 uu/s is
+	// 0.01 s, three or four per traffic sub-step (FTrafficRules::MaxSubstepSeconds, 1/30 s).
+	// SIZED BY TIME, not by this frame's distance, so a frame cut into sub-steps and the same
+	// time delivered as shorter frames walk identical sub-steps - Airside.Model.Tow.
+	// LongFrameIsSubStepped. The cab moves in the same loop, so each chain step is taken
+	// against where the cab actually is, never interpolated.
+	// VehicleFit::TowSubStepSeconds: the same sub-step VehicleFit::JudgePlan drives the route
+	// with before the router admits it.
+	const double Longest = VehicleFit::TowSubStepSeconds(Chassis());
+	// Less a hair, so an exact multiple of the sub-step (2 s / 0.01 s) is not rounded up to
+	// one spare step by the division's last bit - GroundTraffic's own LastStepsForTest trap.
+	const int32 Steps = FMath::Max(1, FMath::CeilToInt32(DeltaSeconds / Longest - UE_KINDA_SMALL_NUMBER));
+	const double Step = DeltaSeconds / Steps;
+
+	const VehicleSweep::FBody Towed = VehicleFit::BodyOf(Vehicle);
+	const double StartTravelled = Follower.Travelled;
+	bool bMoved = false;
+	for (int32 Index = 0; Index < Steps; ++Index)
+	{
+		// WHAT IS LEFT of the arbiter's allowance - see the declaration.
+		const double Left = StopWithin - (Follower.Travelled - StartTravelled);
+		if (!Follower.Advance(Step, Chassis(), Left, OutAt, OutHeading))
+		{
+			break;
+		}
+		bMoved = true;
+
+		// VehicleFit::StepTow - THE step VehicleFit::JudgePlan takes too, so the router's
+		// whole-route verdict is this loop's, run ahead of time.
+		int32 FoldedLink = INDEX_NONE;
+		double FoldRadians = 0.0;
+		if (!VehicleFit::StepTow(Towed, Chassis(), OutAt, OutHeading, TowAxles, FoldedLink, FoldRadians))
+		{
+			// STOPPED AND SAID SO, once: the next frames take the hold branch in Advance and
+			// never reach this again. A bug detector for forward driving (spec §1), so it is a
+			// Warning a human is meant to read, naming the link and where it folded.
+			JackknifedLink = FoldedLink;
+			Follower.Speed = 0.0;
+			UE_LOG(LogAirside, Warning, TEXT("Tow %s jack-knifed at link %d (%.0f,%.0f), angle %.0f deg"),
+				*TypeCode().ToString(), FoldedLink, TowAxles[FoldedLink].X, TowAxles[FoldedLink].Y,
+				FMath::RadiansToDegrees(FoldRadians));
+			break;
+		}
+
+		// ARRIVED: the follower would only hold the end pose from here, so the rest of the
+		// frame has nothing to step.
+		if (Follower.HasArrived())
+		{
+			break;
+		}
+	}
+	return bMoved;
+}
+
+void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled, TOptional<double> InitialHeading)
 {
 	// THE BODY OF WHAT StartTaxi USED TO BE, minus the one line that stored the airframe:
 	// the bundle is whatever the caller (StartTaxi, StartDrive, or a redirect keeping its own)
@@ -354,7 +458,7 @@ void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled)
 	Phase = EAgentPhase::Taxiing;
 	// InitialTravelled is non-zero for one caller: a vehicle rejoining its lane MID-EDGE after a
 	// drive-side flip (FPlanReResolver), which starts part-way along the plan's first step.
-	Follower.Start(Plan, Chassis(), 0.0, TOptional<double>(), InitialTravelled);
+	Follower.Start(Plan, Chassis(), 0.0, InitialHeading, InitialTravelled);
 
 	bEngineRunning = true;
 
@@ -578,12 +682,23 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			return true;
 		}
 
+		// A JACK-KNIFED TOW HOLDS WHERE IT FOLDED. Driving on would drag the folded link
+		// through the cab; the warning was logged once, at the fold (FollowAndTow). Speed is
+		// zeroed there too, so the wheels shown are still.
+		if (JackknifedLink != INDEX_NONE)
+		{
+			LastMotion = DescribeMotion(At, Heading);
+			OutMotion = LastMotion;
+			return true;
+		}
+
 		FVector2D FollowAt = At;
 		double FollowHeading = Heading;
 		// StopWithin, not the unbounded overload: arbitration is the ONE input into the one
 		// follower, and it defaults to unbounded, so an agent nobody has arbitrated for
-		// drives exactly as it did before M2.
-		if (Follower.Advance(DeltaSeconds, Chassis(), StopWithin, FollowAt, FollowHeading))
+		// drives exactly as it did before M2. FollowAndTow passes it straight through for
+		// anything rigid, and shares it out across the sub-steps for a tow.
+		if (FollowAndTow(DeltaSeconds, FollowAt, FollowHeading))
 		{
 			LastMotion = DescribeMotion(FollowAt, FollowHeading);
 			OutMotion = LastMotion;
@@ -729,7 +844,9 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// and a frame with no motion at all is the step the handover-continuity test catches.
 		FVector2D OnAt = At;
 		double OnHeading = LastMotion.Heading;
-		if (Follower.Advance(DeltaSeconds, Chassis(), StopWithin, OnAt, OnHeading))
+		// FollowAndTow and not the bare follower, for the same reason as the taxi branch: a tow
+		// driving on must be stepped with the cab from the first forward frame.
+		if (FollowAndTow(DeltaSeconds, OnAt, OnHeading))
 		{
 			LastMotion = DescribeMotion(OnAt, OnHeading);
 		}

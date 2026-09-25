@@ -106,7 +106,7 @@ FGuidelineNodeId TestGraph::NodeFor(const URoadNetwork& Net, FRoadSegmentId Segm
 void TestGraph::Rebuild(URoadNetwork& Net)
 {
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
-	FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
 }
 
@@ -176,7 +176,7 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 	if (Options.bDerived)
 	{
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 	}
 
 	// STANDS FACE EAST (heading 0) so their lead-in casts WEST and meets the taxiway - see
@@ -303,7 +303,7 @@ FTestAirport FTestAirport::BuildScale(const FAirframe& Airframe, int32 Seed, boo
 	if (bDerived)
 	{
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 	}
 
 	// 30 STANDS ALONG ROW 0 (nearest runway 1), NORTH of it, facing NORTH (heading +90 deg) so
@@ -425,7 +425,7 @@ FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand, double XDis
 	Out.RW2 = Out.Net->AddStraightSegment(X, E, Runway);
 	Out.XT = Out.Net->AddStraightSegment(X, T, Taxiway);
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-	FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 	if (bWithStand)
 	{
 		// Faces east (heading 0), so its lead-in casts WEST and meets the 45 degree

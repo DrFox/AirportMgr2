@@ -2,6 +2,7 @@
 
 #include "Content/AirsideSettings.h"
 #include "Model/Chassis.h"
+#include "Model/Vehicle.h"
 
 double URoadProfile::ResolvedFilletRadius() const
 {
@@ -13,17 +14,43 @@ double URoadProfile::ResolvedFilletRadius() const
 	//
 	// SELF-RESOLVING, for a caller that asks once and is not inside a hot loop - see the
 	// other overload for the one that is (issue #190).
-	return ResolvedFilletRadius(UAirsideSettings::ResolveLargestServiceVehicle());
+	// PER TIER since 2026-09-25: this profile's own design vehicle - the rig for the Wide
+	// service road, the largest rigid vehicle otherwise (UAirsideSettings::ResolveTierDesignVehicles).
+	// Looked up in the cached tier map, never by building an FRoadDesignVehicles per arm (a map
+	// copy) - see ResolveTierDesignVehicles' comment on who calls this how often.
+	return ResolvedFilletRadius(ResolvedDesignVehicle());
 }
 
-double URoadProfile::ResolvedFilletRadius(const FChassis& LargestServiceVehicle) const
+FChassis URoadProfile::ResolvedDesignVehicle() const
+{
+	// ResolvedDesignBody's vehicle, its chassis - one lookup and one fallback, not two copies
+	// (review of 75d3cbc0). The fallback body's chassis IS ResolveLargestServiceVehicle's
+	// (ResolveLargestServiceBody takes it from there), so the fillet is unchanged.
+	return ResolvedDesignBody().Chassis;
+}
+
+FVehicle URoadProfile::ResolvedDesignBody() const
+{
+	// THE ONE TIER LOOKUP AND FALLBACK every self-resolving answer reads (review of 5660420c):
+	// this profile's tier vehicle, else the largest rigid service vehicle.
+	const FVehicle* Tier = UAirsideSettings::ResolveTierDesignVehicles().Find(TObjectKey<URoadProfile>(this));
+	return Tier != nullptr ? *Tier : UAirsideSettings::ResolveLargestServiceBody();
+}
+
+double URoadProfile::ResolvedDesignRadius() const
+{
+	// The same vehicle as ResolvedFilletRadius() above, answering with the lock rather than a fillet.
+	return ResolvedDesignVehicle().TightestFollowableRadius();
+}
+
+double URoadProfile::ResolvedFilletRadius(const FChassis& DesignVehicle) const
 {
 	if (PreferredFilletRadius > 0.0)
 	{
 		return PreferredFilletRadius;
 	}
 
-	return LargestServiceVehicle.TightestFollowableRadius() * JunctionScalingMargin;
+	return DesignVehicle.TightestFollowableRadius() * JunctionScalingMargin;
 }
 
 double URoadProfile::GetTotalWidth() const

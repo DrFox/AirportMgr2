@@ -26,7 +26,7 @@ namespace TwoWayLane
 	void Derive(URoadNetwork& Net)
 	{
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
-		FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 	}
 
 	/** The one live segment edge of Seg running Dir. Null if there is not exactly one. */
@@ -315,7 +315,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTwoWayParallelLanesTest, "Airside.Build.TwoWay
 bool FTwoWayParallelLanesTest::RunTest(const FString& Parameters)
 {
 	// Review focus 5: straight through between lanes of different offset. The lane lines are
-	// parallel, so there is no intersection to use as a control - the chord midpoint is.
+	// parallel, so there is no intersection to use as a control. WAS the chord midpoint - one
+	// straight diagonal, kinked at both ends, and with both cuts on the node a 90 degree jog.
+	// CHANGED BY RULING (2026-09-25, "inset nodes and a curve between the two widths"): the cuts
+	// are inset and each lane crosses on an S, two pieces meeting mid-way. So each piece is
+	// TANGENT TO ITS OWN LANE at its lane end - its control on that lane's line, ahead of it -
+	// which is the property the chord never had. Airside.Build.WidthTaper.* measures the rest.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FRoadNodeId W = Net->AddNode(FVector2D(-20000.0, 0.0));
 	const FRoadNodeId Mid = Net->AddNode(FVector2D(0.0, 0.0));
@@ -325,6 +330,7 @@ bool FTwoWayParallelLanesTest::RunTest(const FString& Parameters)
 	Derive(*Net);
 
 	int32 Turns = 0;
+	int32 Tangent = 0;
 	for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
 	{
 		// Junction edges only: the dead-end balloons at the far ends carry no DerivedFrom either.
@@ -333,13 +339,18 @@ bool FTwoWayParallelLanesTest::RunTest(const FString& Parameters)
 		const FVector2D P = Pos(*Net, Edge.A);
 		const FVector2D Q = Pos(*Net, Edge.B);
 		const double Along = FVector2D::DotProduct(Edge.Control - P, (Q - P).GetSafeNormal());
-		const FVector2D Foot = P + (Q - P).GetSafeNormal() * Along;
-		TestTrue(TEXT("the control lies on the chord, so the path is straight"),
-			FVector2D::Distance(Foot, Edge.Control) < 1.0);
-		TestTrue(TEXT("and between the ends, never behind one"),
+		TestTrue(TEXT("the control is between the ends, never behind one - no loop back"),
 			Along >= 0.0 && Along <= FVector2D::Distance(P, Q));
+		// The lanes run along X: a piece leaving a lane end has its control at that end's Y, a
+		// piece arriving at one at the far end's Y. Exactly one of the two holds per piece.
+		const bool bLeavesTangent = FMath::Abs(Edge.Control.Y - P.Y) < 1e-6;
+		const bool bArrivesTangent = FMath::Abs(Edge.Control.Y - Q.Y) < 1e-6;
+		TestTrue(TEXT("each piece is tangent to the lane it leaves or joins - the S, not a chord"),
+			bLeavesTangent != bArrivesTangent);
+		Tangent += (bLeavesTangent != bArrivesTangent) ? 1 : 0;
 	}
-	TestEqual(TEXT("one through turn each way"), Turns, 2);
+	TestEqual(TEXT("one S each way: two pieces per lane"), Turns, 4);
+	TestEqual(TEXT("and every piece tangent to its lane"), Tangent, 4);
 	return true;
 }
 

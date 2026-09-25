@@ -1639,7 +1639,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("and it is Arriving, so nothing is following that route yet"), P->Phase, EAgentPhase::Arriving);
 
 			const FRoadSolveResult Again = FRoadNetworkSolver::SolveAll(*Net);
-			FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveLargestServiceVehicle());
+			FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveRoadDesignVehicles());
 			FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 			TestNull(TEXT("the builder freed the taxi-in route's first handle"), Net->GetGuidelineEdge(OldFirst));
 
@@ -2965,6 +2965,461 @@ bool FArrivalStandCountLogTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("only the one LIVE aircraft-role stand is counted - not the dead slot, ")
 		TEXT("not the depot"), Reported, 1);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A ROUTE EXTENDED UNDER A MOVING AGENT DOES NOT STOP IT (the rig test course, 2026-09-25):
+ * dispatched A->B, then B->C appended while it is still on its way to B, and C->D appended
+ * again while it is already BRAKING for C. It must pass B and C without its speed reaching
+ * zero, keep the distance it had travelled, and park at D - where RedirectAgent from a parked
+ * agent restarts it from rest. A refused extension changes nothing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficExtendRouteKeepsMovingTest,
+	"Airside.Model.Traffic.ExtendRouteKeepsMoving",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficExtendRouteKeepsMovingTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 20000.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 40000.0, 0.0);
+	const FGuidelineNodeId D = TestGraph::Node(*Net, 60000.0, 0.0);
+	TestGraph::Join(*Net, A, B);
+	TestGraph::Join(*Net, B, C);
+	TestGraph::Join(*Net, C, D);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FAirframe Airframe = TestAirframes::GroundOnly();
+	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+		Airframe, ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	for (int32 Tick = 0; Tick < 2000 && Traffic->FindAgent(Id)->Follower.Travelled < 5000.0; ++Tick)
+	{
+		Traffic->Advance(0.05, Net);
+	}
+	const double Before = Traffic->FindAgent(Id)->Follower.Travelled;
+	const double SpeedBefore = Traffic->FindAgent(Id)->Follower.Speed;
+	const double LengthBefore = Traffic->FindAgent(Id)->Follower.Plan.Length;
+	const uint32 RevisionBefore = Traffic->OccupancyRevision();
+	TestTrue(TEXT("under way before the extension"), SpeedBefore > 0.0);
+
+	// REFUSED, NOTHING CHANGED: a tail from A does not start where the route ends (B).
+	TestFalse(TEXT("a tail that does not start where the route ends is refused"),
+		Traffic->ExtendRoute(Id, Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft)));
+	TestEqual(TEXT("the refusal left the route as it was"), Traffic->FindAgent(Id)->Follower.Plan.Length, LengthBefore);
+	TestEqual(TEXT("and the distance travelled"), Traffic->FindAgent(Id)->Follower.Travelled, Before);
+	TestTrue(TEXT("and the goal"), Traffic->FindAgent(Id)->GoalNode == B);
+	TestEqual(TEXT("and bumped no occupancy revision"), Traffic->OccupancyRevision(), RevisionBefore);
+
+	if (!TestTrue(TEXT("the extension is accepted"), Traffic->ExtendRoute(Id, Net, M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft)))) { return false; }
+	TestEqual(TEXT("the distance travelled survives the splice"), Traffic->FindAgent(Id)->Follower.Travelled, Before);
+	TestEqual(TEXT("and so does the speed"), Traffic->FindAgent(Id)->Follower.Speed, SpeedBefore);
+	TestTrue(TEXT("the goal moved on to C"), Traffic->FindAgent(Id)->GoalNode == C);
+	TestTrue(TEXT("and the occupancy revision was bumped (#169): the goal changed"), Traffic->OccupancyRevision() != RevisionBefore);
+
+	// ON TO C, until it is BRAKING for C - then extend again. The rebuilt profile finds road
+	// ahead, so the braking stops and it drives on rather than halting and restarting.
+	const FGroundRegime& Taxi = Airframe.Chassis.Ground.Taxi;
+	const double Stopping = Taxi.SpeedCap * Taxi.SpeedCap / (2.0 * FMath::Max(Taxi.Decel, 1.0));
+	double PrevSpeed = Traffic->FindAgent(Id)->Follower.Speed;
+	bool bBraking = false;
+	for (int32 Tick = 0; Tick < 4000 && !bBraking; ++Tick)
+	{
+		Traffic->Advance(0.05, Net);
+		const FRoadAgent* Agent = Traffic->FindAgent(Id);
+		bBraking = Agent->Follower.Plan.Length - Agent->Follower.Travelled < Stopping && Agent->Follower.Speed < PrevSpeed - 1.0;
+		PrevSpeed = Agent->Follower.Speed;
+	}
+	if (!TestTrue(TEXT("it began braking for C"), bBraking)) { return false; }
+	const double SpeedWhileBraking = Traffic->FindAgent(Id)->Follower.Speed;
+	if (!TestTrue(TEXT("a second extension, while braking, is accepted"),
+		Traffic->ExtendRoute(Id, Net, M2TrafficRoute(*Net, C, D, ETraversalClass::Aircraft)))) { return false; }
+
+	double SlowestPastB = TNumericLimits<double>::Max();
+	double SlowestPastC = TNumericLimits<double>::Max();
+	for (int32 Tick = 0; Tick < 6000 && Traffic->FindAgent(Id)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Traffic->Advance(0.05, Net);
+		const FRoadAgent* Agent = Traffic->FindAgent(Id);
+		if (FMath::Abs(Agent->Follower.Travelled - 20000.0) < 2000.0) { SlowestPastB = FMath::Min(SlowestPastB, Agent->Follower.Speed); }
+		if (FMath::Abs(Agent->Follower.Travelled - 40000.0) < 2000.0) { SlowestPastC = FMath::Min(SlowestPastC, Agent->Follower.Speed); }
+	}
+	TestTrue(*FString::Printf(TEXT("it passed B without stopping (slowest %.0f uu/s within 20 m of it)"), SlowestPastB),
+		SlowestPastB > 0.5 * SpeedBefore);
+	TestTrue(*FString::Printf(TEXT("and C, though it was braking for it when extended (slowest %.0f uu/s, %.0f when extended)"), SlowestPastC, SpeedWhileBraking),
+		SlowestPastC > 0.5 * SpeedWhileBraking);
+	TestEqual(TEXT("and parked at D, the extended goal"),
+		static_cast<int32>(Traffic->FindAgent(Id)->Phase), static_cast<int32>(EAgentPhase::Parked));
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * AN EXTENSION MOVES THE GOAL THE WAY A REDIRECT DOES (review of ed81410c): through the same
+ * ReleaseGoal/TakeGoal. Three consequences, each a way the extended agent would otherwise act
+ * on the goal it no longer has: a route whose OLD end was a runway must not take off there; a
+ * new goal on a stand is claimed; an agent waiting for a stand is no longer waiting.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficExtendRouteMovesTheGoalTest,
+	"Airside.Model.Traffic.ExtendRouteMovesTheGoal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficExtendRouteMovesTheGoalTest::RunTest(const FString& Parameters)
+{
+	// 1. THE OLD END WAS A RUNWAY. TrafficDepartureReleaseTest's fixture: a taxiway guideline
+	// ending ON the runway at its split, which arms a departure; then extended off the runway.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Runway = TestProfiles::Runway();
+		const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
+		const FRoadNodeId RM = Net->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
+		Net->AddStraightSegment(RA, RM, Runway);
+		Net->AddStraightSegment(RM, RB, Runway);
+		const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, -20000.0);
+		const FGuidelineNodeId B = TestGraph::Node(*Net, 0.0, 0.0);
+		const FGuidelineNodeId C = TestGraph::Node(*Net, 0.0, 20000.0);
+		TestGraph::Join(*Net, A, B);
+		TestGraph::Join(*Net, B, C);
+
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+			TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
+		if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+		if (!TestTrue(TEXT("the route ends on the runway, so a departure is armed"), Traffic->FindAgent(Plane)->bDepartureArmed)) { return false; }
+		Traffic->Advance(0.05, Net);
+		if (!TestTrue(TEXT("extended across the runway to C"),
+			Traffic->ExtendRoute(Plane, Net, M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft)))) { return false; }
+		TestFalse(TEXT("the departure is disarmed: the route no longer ends on the runway"), Traffic->FindAgent(Plane)->bDepartureArmed);
+		TestEqual(TEXT("and it holds no runway chain for it"), Traffic->FindAgent(Plane)->DepartureRunway.Num(), 0);
+		bool bDeparted = false;
+		RunUntil(*Traffic, *Net, 600.0, [&]()
+		{
+			const FRoadAgent* P = Traffic->FindAgent(Plane);
+			bDeparted = bDeparted || (P != nullptr && P->Phase == EAgentPhase::Departing);
+			return P == nullptr || P->Phase == EAgentPhase::Parked;
+		});
+		TestFalse(TEXT("it never took off from the runway its OLD route ended on"), bDeparted);
+		const FRoadAgent* P = Traffic->FindAgent(Plane);
+		TestTrue(TEXT("it parked at C instead"), P != nullptr && P->Phase == EAgentPhase::Parked && P->GoalNode == C);
+	}
+
+	// 2 AND 3. A WAITER, EXTENDED ONTO A STAND. GroundTrafficTest's own awaiting-stand path: an
+	// arrival whose stands are removed lands and taxis on with bAwaitingStand set.
+	{
+		const FTestAirport Air = FTestAirport::Build(TestAirframes::Piper(), { .StandCount = 2 });
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Id = Traffic->DispatchArrival(*Air.Net, Air.Threshold, TestAirframes::Piper(), 1.0);
+		if (!TestTrue(TEXT("the arrival is dispatched"), Id > 0)) { return false; }
+		Traffic->Advance(0.05, Air.Net);
+		const FGuidelineNodeId Goal0 = Traffic->FindAgent(Id)->GoalNode;
+		const FEntityInstanceId Target = (Goal0 == Air.Pose(Air.Stands[0])) ? Air.Stands[0] : Air.Stands[1];
+		const FEntityInstanceId Spare = (Target == Air.Stands[0]) ? Air.Stands[1] : Air.Stands[0];
+		Air.Net->RemoveEntity(Target);
+		TestGraph::Rebuild(*Air.Net);
+		Traffic->OnGraphRebuilt(*Air.Net);
+		Air.Net->RemoveEntity(Spare);
+		TestGraph::Rebuild(*Air.Net);
+		Traffic->OnGraphRebuilt(*Air.Net);
+		if (!TestTrue(TEXT("it lands and taxis on, waiting for a stand"), RunUntil(*Traffic, *Air.Net, 600.0,
+			[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Taxiing && P->bAwaitingStand; })))
+		{
+			return false;
+		}
+		// A STAND APPEARS, and the waiter's route is extended onto it from where its route ends.
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+		const FEntityInstanceId Placed = Air.Net->PlaceEntity(Stand, Stand->Anchors, Air.ExitAt + FVector2D(9000.0, -10000.0), 0.0);
+		TestGraph::Rebuild(*Air.Net);
+		Traffic->OnGraphRebuilt(*Air.Net);
+		const FRoadAgent* Waiter = Traffic->FindAgent(Id);
+		if (!TestTrue(TEXT("still taxiing and waiting after the rebuild"), Waiter != nullptr && Waiter->Phase == EAgentPhase::Taxiing && Waiter->bAwaitingStand)) { return false; }
+		const FGuidelineNodeId From = Waiter->Follower.Plan.Steps.Num() > 0 ? Waiter->Follower.Plan.Steps.Last().To : Waiter->Follower.Plan.Start;
+		const FGuidelineNodeId StandPose = Air.Pose(Placed);
+		const FRoutePlan Tail = M2TrafficRoute(*Air.Net, From, StandPose, ETraversalClass::Aircraft);
+		if (!TestTrue(TEXT("a route from the waiter's route end to the new stand exists"), Tail.IsValid())) { return false; }
+		if (!TestTrue(TEXT("the extension onto the stand is accepted"), Traffic->ExtendRoute(Id, Air.Net, Tail))) { return false; }
+		TestFalse(TEXT("the waiter is no longer waiting - it has a stand to go to"), Traffic->FindAgent(Id)->bAwaitingStand);
+		int32 Holder = 0;
+		TestTrue(TEXT("and the new stand is claimed, for it"),
+			Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(StandPose), 0, &Holder) && Holder == Id);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * AN EXTENDED ROUTE DOES NOT GROW FOR EVER (review of ed81410c): KeepBehind trims the steps
+ * driven more than that far back, and Travelled is rebased by exactly what was dropped - so the
+ * agent is where it was, on the same line, and still parks at the far end.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficExtendRouteTrimsHistoryTest,
+	"Airside.Model.Traffic.ExtendRouteTrimsHistory",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficExtendRouteTrimsHistoryTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	TArray<FGuidelineNodeId> N;
+	for (int32 I = 0; I < 5; ++I)
+	{
+		N.Add(TestGraph::Node(*Net, I * 10000.0, 0.0));
+		if (I > 0) { TestGraph::Join(*Net, N[I - 1], N[I]); }
+	}
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, N[0], N[2], ETraversalClass::Aircraft),
+		TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	for (int32 Tick = 0; Tick < 4000 && Traffic->FindAgent(Id)->Follower.Travelled < 15000.0; ++Tick)
+	{
+		Traffic->Advance(0.05, Net);
+	}
+	const FVector2D At = Traffic->FindAgent(Id)->LastMotion.Position;
+	const double Travelled = Traffic->FindAgent(Id)->Follower.Travelled;
+	double Dropped = -1.0;
+	if (!TestTrue(TEXT("extended, keeping 20 m behind"), Traffic->ExtendRoute(Id, Net,
+		M2TrafficRoute(*Net, N[2], N[4], ETraversalClass::Aircraft), 2000.0, &Dropped))) { return false; }
+	TestEqual(TEXT("the first step, ending 50 m back, was dropped - and only it"), Dropped, 10000.0, 1.0);
+	TestEqual(TEXT("Travelled is rebased by exactly that"), Traffic->FindAgent(Id)->Follower.Travelled, Travelled - Dropped, 0.001);
+	TestEqual(TEXT("the route is the rest: 40 m minus 10 m"), Traffic->FindAgent(Id)->Follower.Plan.Length, 30000.0, 1.0);
+	Traffic->Advance(0.05, Net);
+	TestTrue(*FString::Printf(TEXT("and the agent is where it was, one tick on (moved %.1f uu)"),
+		FVector2D::Distance(Traffic->FindAgent(Id)->LastMotion.Position, At)),
+		FVector2D::Distance(Traffic->FindAgent(Id)->LastMotion.Position, At) < 100.0);
+	RunUntil(*Traffic, *Net, 600.0, [&]() { return Traffic->FindAgent(Id)->Phase == EAgentPhase::Parked; });
+	TestTrue(TEXT("and it parks at the extended end"),
+		Traffic->FindAgent(Id)->Phase == EAgentPhase::Parked && FVector2D::Distance(Traffic->FindAgent(Id)->LastMotion.Position, FVector2D(40000.0, 0.0)) < 1000.0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A REDIRECT OFF A RUNWAY DISARMS THE DEPARTURE (re-review of e19b187e). ArmDepartureIfRunway
+ * used to clear only the runway chain, leaving bDepartureArmed and its order: an aircraft armed
+ * for a take-off and redirected somewhere that is not a runway then took off on arriving there.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRedirectDisarmsDepartureTest,
+	"Airside.Model.Traffic.RedirectDisarmsDeparture",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRedirectDisarmsDepartureTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
+	const FRoadNodeId RM = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
+	Net->AddStraightSegment(RA, RM, Runway);
+	Net->AddStraightSegment(RM, RB, Runway);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 20000.0, -20000.0);
+	TestGraph::Join(*Net, A, B);
+	TestGraph::Join(*Net, A, C);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+		TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+	if (!TestTrue(TEXT("its route ends on the runway, so a departure is armed"), Traffic->FindAgent(Plane)->bDepartureArmed)) { return false; }
+	Traffic->Advance(0.05, Net);
+	if (!TestTrue(TEXT("redirected to C, off the runway"),
+		Traffic->RedirectAgent(Plane, Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft)))) { return false; }
+	TestFalse(TEXT("the departure is disarmed: the new route does not end on a runway"), Traffic->FindAgent(Plane)->bDepartureArmed);
+	bool bDeparted = false;
+	RunUntil(*Traffic, *Net, 600.0, [&]()
+	{
+		const FRoadAgent* P = Traffic->FindAgent(Plane);
+		bDeparted = bDeparted || (P != nullptr && P->Phase == EAgentPhase::Departing);
+		return P == nullptr || P->Phase == EAgentPhase::Parked;
+	});
+	TestFalse(TEXT("it never took off"), bDeparted);
+	const FRoadAgent* P = Traffic->FindAgent(Plane);
+	TestTrue(TEXT("it parked at C, its new goal"), P != nullptr && P->Phase == EAgentPhase::Parked && P->GoalNode == C);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// COINCIDENT TWINS SURVIVE A REBUILD (2026-09-25). At a straight-through road node whose arms
+// share a lane offset, the builder leaves two lane ends at ONE point joined by a zero-length turn
+// path. The re-resolve looked each step's end up by position; on a tie FindNearestNode takes the
+// later slot, so both steps named the same twin, no edge joined them, and the "failure" replanned
+// to the goal - which on the rig course cut three dead ends out of the utility's route. Built by
+// hand here as that pair: B1 and B2 at the same point, B2 the later slot, rebuilt in the same
+// order so the tie goes the same way.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRebuildCoincidentTwinsTest,
+	"Airside.Model.Traffic.RebuildCoincidentTwins",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRebuildCoincidentTwinsTest::RunTest(const FString& Parameters)
+{
+	struct FTwinGraph { FGuidelineNodeId A, B1, B2, C; };
+	auto Build = [](URoadNetwork& Net)
+	{
+		TArray<FGuidelineEdgeId> Edges;
+		for (int32 I = 0; I < Net.GetGuidelineEdges().Num(); ++I) { if (Net.GetGuidelineEdges()[I].bAlive) { Edges.Add(Net.GuidelineEdgeIdAt(I)); } }
+		for (const FGuidelineEdgeId& Id : Edges) { Net.RemoveGuidelineEdge(Id); }
+		for (int32 I = 0; I < Net.GetGuidelineNodes().Num(); ++I) { if (Net.GetGuidelineNodes()[I].bAlive) { Net.RemoveGuidelineNode(Net.GuidelineNodeIdAt(I)); } }
+		FTwinGraph G;
+		G.A = Net.AddGuidelineNode(FVector2D(0.0, 0.0));
+		G.B1 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0));
+		G.B2 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0));
+		G.C = Net.AddGuidelineNode(FVector2D(40000.0, 0.0));
+		TestGraph::Join(Net, G.A, G.B1);
+		TestGraph::Join(Net, G.B1, G.B2);   // the zero-length turn path
+		TestGraph::Join(Net, G.B2, G.C);
+		return G;
+	};
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FTwinGraph Was = Build(*Net);
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Was.A, Was.C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	TickUntil(*Traffic, *Net, 5.0, [](int32) { return true; });
+	const FRoadAgent* Agent = Traffic->FindAgent(Van);
+	if (!TestNotNull(TEXT("the van is out"), Agent)) { return false; }
+	if (!TestEqual(TEXT("the plan steps through BOTH twins: A->B1, B1->B2, B2->C"), Agent->Follower.Plan.Steps.Num(), 3)) { return false; }
+	TestTrue(TEXT("and the van is on the first step, ahead of the twins"), Agent->Follower.Travelled < Agent->Follower.Plan.Steps[0].EndDistance);
+	const double LengthWas = Agent->Follower.Plan.Length;
+
+	const FTwinGraph Now = Build(*Net);
+	TestTrue(TEXT("the rebuild gave every node a new handle"), Now.B1 != Was.B1 && Now.B2 != Was.B2);
+	// THE AMBIGUITY ITSELF: one position, one answer, two nodes that both hold it.
+	const FGuidelineNodeId Found = RouteSearch::FindNearestNode(*Net, FVector2D(20000.0, 0.0), ETraversalClass::GroundVehicle, 25.0);
+	TestTrue(TEXT("position alone names just one of the twins"), Found == Now.B1 || Found == Now.B2);
+	Traffic->OnGraphRebuilt(*Net);
+
+	const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();
+	TestEqual(TEXT("the van was re-resolved"), Summary.ReResolved, 1);
+	TestEqual(TEXT("and NOT replanned: nothing was lost, so nothing is searched - a replan to the goal drops via points"), Summary.Replanned, 0);
+	TestEqual(TEXT("nor truncated"), Summary.Truncated, 0);
+	Agent = Traffic->FindAgent(Van);
+	const FRoutePlan& Plan = Agent->Follower.Plan;
+	TestTrue(TEXT("step 0 ends at the FIRST twin, the one its edge reaches"), Plan.Steps[0].To == Now.B1);
+	TestTrue(TEXT("step 1 is the zero-length path to the second"), Plan.Steps[1].To == Now.B2);
+	TestTrue(TEXT("step 2 ends at C"), Plan.Steps[2].To == Now.C);
+	TestTrue(TEXT("the goal is C's new handle"), Agent->GoalNode == Now.C);
+	TestEqual(TEXT("the route's length is unchanged"), Plan.Length, LengthWas, 1e-9);
+	return true;
+}
+
+namespace TwinFixture
+{
+	/** A->B1, B1->B2 (zero length), and B2->C when bToC; B1 and B2 at one point. */
+	struct FTwins { FGuidelineNodeId A, B1, B2, C; };
+
+	/**
+	 * Swept and rebuilt the way FRoadGuidelineBuilder rebuilds: every node and edge removed and
+	 * re-added with new handles. bSwap adds B2's node before B1's, which is what decides the slot
+	 * order FindNearestNode breaks the positional tie by - so a test can make the lookup name
+	 * whichever twin it needs to be WRONG.
+	 */
+	FTwins Build(URoadNetwork& Net, bool bSwap, bool bToC)
+	{
+		TArray<FGuidelineEdgeId> Edges;
+		for (int32 I = 0; I < Net.GetGuidelineEdges().Num(); ++I) { if (Net.GetGuidelineEdges()[I].bAlive) { Edges.Add(Net.GuidelineEdgeIdAt(I)); } }
+		for (const FGuidelineEdgeId& Id : Edges) { Net.RemoveGuidelineEdge(Id); }
+		for (int32 I = 0; I < Net.GetGuidelineNodes().Num(); ++I) { if (Net.GetGuidelineNodes()[I].bAlive) { Net.RemoveGuidelineNode(Net.GuidelineNodeIdAt(I)); } }
+		FTwins G;
+		G.A = Net.AddGuidelineNode(FVector2D(0.0, 0.0));
+		if (bSwap) { G.B2 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0)); G.B1 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0)); }
+		else { G.B1 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0)); G.B2 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0)); }
+		G.C = Net.AddGuidelineNode(FVector2D(40000.0, 0.0));
+		TestGraph::Join(Net, G.A, G.B1);
+		TestGraph::Join(Net, G.B1, G.B2);
+		if (bToC) { TestGraph::Join(Net, G.B2, G.C); }
+		return G;
+	}
+}
+
+// THE FIRST STEP'S START MAY BE THE WRONG TWIN (review of 0277a642). An agent on step B2->C:
+// the node its step leaves from is found by position, and the lookup names B1. B1->C has no
+// edge, so the re-resolver must take B2 from B1's twins AND re-point Steps[FromStep-1].To at
+// it - every tick's StepFromNode reads that handle (crossing arm, tail claim, RankAt, replan
+// start). Run under both slot orders; the one where the lookup names B1 is the case.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRebuildTwinAtCurrentStepTest,
+	"Airside.Model.Traffic.RebuildTwinAtCurrentStep",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRebuildTwinAtCurrentStepTest::RunTest(const FString& Parameters)
+{
+	int32 Exercised = 0;
+	for (const bool bSwap : { false, true })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const TwinFixture::FTwins Was = TwinFixture::Build(*Net, bSwap, true);
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Was.A, Was.C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+		TickUntil(*Traffic, *Net, 120.0, [&](int32)
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Van);
+			return A != nullptr && A->Follower.Plan.Steps.Num() == 3 && A->Follower.Travelled <= A->Follower.Plan.Steps[1].EndDistance + 500.0;
+		});
+		const FRoadAgent* Agent = Traffic->FindAgent(Van);
+		if (!TestTrue(TEXT("the van is out on a three-step plan"), Agent != nullptr && Agent->Follower.Plan.Steps.Num() == 3)) { return false; }
+		if (!TestEqual(TEXT("and on step 2, B2->C"), UGroundTraffic::CurrentStep(Agent->Follower.Plan, Agent->Follower.Travelled), 2)) { return false; }
+
+		const TwinFixture::FTwins Now = TwinFixture::Build(*Net, bSwap, true);
+		if (RouteSearch::FindNearestNode(*Net, FVector2D(20000.0, 0.0), ETraversalClass::GroundVehicle, 25.0) != Now.B1)
+		{
+			continue;   // the lookup names the right twin under this order - not the case under test
+		}
+		++Exercised;
+		Traffic->OnGraphRebuilt(*Net);
+		const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();
+		TestEqual(TEXT("re-resolved, NOT replanned: nothing was lost"), Summary.Replanned, 0);
+		TestEqual(TEXT("nor truncated"), Summary.Truncated, 0);
+		Agent = Traffic->FindAgent(Van);
+		TestTrue(TEXT("the node the current step leaves from is re-pointed at B2, the twin its edge leaves - not the B1 the lookup named"),
+			UGroundTraffic::StepFromNode(Agent->Follower.Plan, 2) == Now.B2);
+		TestTrue(TEXT("and the step itself ends at C"), Agent->Follower.Plan.Steps[2].To == Now.C);
+	}
+	TestTrue(TEXT("one slot order made the lookup name the wrong twin - the case was exercised"), Exercised > 0);
+	return true;
+}
+
+// A ROUTE THAT ENDS AT A TWIN (review of 0277a642): A->B1->B2, goal B2. Every step re-resolves,
+// so the goal must be the LAST STEP'S END, chosen by the edge that reaches it - a position lookup
+// names B1, and every later replan would search to the wrong node.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRebuildGoalIsATwinTest,
+	"Airside.Model.Traffic.RebuildGoalIsATwin",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRebuildGoalIsATwinTest::RunTest(const FString& Parameters)
+{
+	int32 Exercised = 0;
+	for (const bool bSwap : { false, true })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const TwinFixture::FTwins Was = TwinFixture::Build(*Net, bSwap, false);
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Was.A, Was.B2, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+		TickUntil(*Traffic, *Net, 5.0, [](int32) { return true; });
+		const FRoadAgent* Agent = Traffic->FindAgent(Van);
+		if (!TestTrue(TEXT("the van is out, A->B1->B2"), Agent != nullptr && Agent->Follower.Plan.Steps.Num() == 2)) { return false; }
+
+		const TwinFixture::FTwins Now = TwinFixture::Build(*Net, bSwap, false);
+		if (RouteSearch::FindNearestNode(*Net, FVector2D(20000.0, 0.0), ETraversalClass::GroundVehicle, 25.0) != Now.B1)
+		{
+			continue;
+		}
+		++Exercised;
+		Traffic->OnGraphRebuilt(*Net);
+		TestEqual(TEXT("re-resolved, NOT replanned"), Traffic->GetLastRebuildSummaryForTest().Replanned, 0);
+		Agent = Traffic->FindAgent(Van);
+		TestTrue(TEXT("the last step ends at B2"), Agent->Follower.Plan.Steps.Last().To == Now.B2);
+		TestTrue(TEXT("and the goal is B2, the last step's end - not the B1 a position lookup names"), Agent->GoalNode == Now.B2);
+	}
+	TestTrue(TEXT("one slot order made the lookup name the wrong twin - the case was exercised"), Exercised > 0);
 	return true;
 }
 

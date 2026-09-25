@@ -351,6 +351,16 @@ public:
 	 *  to tell "retired at home" from "never dispatched". */
 	int32 TrucksGoingHomeForTest() const { return GoingHome.Num(); }
 
+	/**
+	 * Whether a route home found UNGATED (SendTruckHome's too-narrow fallback) may be driven:
+	 * yes, unless the truck tows something the route folds (VehicleFit::JudgePlan,
+	 * EFitRefusal::TrailerFolds) - a scuffed kerb is accepted, a jack-knife is not (review of
+	 * 9441ccf1). OutWhy, when given and the answer is no, names the fold. Static and public so
+	 * the rule is testable on a road that folds; the fuel fixture has none.
+	 */
+	static bool MayDriveUngated(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
+		FString* OutWhy = nullptr);
+
 	/** Puts a truck in GoingHome without running the traffic model - so OpsSave's tests can
 	 *  reach the leak OnBeforeRestore fixes without a full arrival-to-turnaround fixture,
 	 *  which FuelServiceTest.cpp already builds for the behavioural side of this class. */

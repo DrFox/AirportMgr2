@@ -404,7 +404,11 @@ def main():
         say("PASS %s still referenced by %s"
             % (MESH.split("/")[-1], ", ".join(sorted(r.split("/")[-1] for r in refs)) or "nothing"))
 
-    unreal.EditorAssetLibrary.save_asset(MESH, only_if_is_dirty=False)
+    # THE SKELETON TOO, not the mesh alone: reimport_pipeline updates the Skeleton asset, and a
+    # Skeleton left unsaved is the stale bone tree the next session re-merges and asks to save
+    # - see airside_import.save_mesh_and_skeleton.
+    if not airside_import.save_mesh_and_skeleton(MESH):
+        ok = False
 
     # A reimport regenerates plane3's materials and reassigns its slots, so the shared set
     # has to be rebuilt or the wing comes back wearing a private uber-graph.

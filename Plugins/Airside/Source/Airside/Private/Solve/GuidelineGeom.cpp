@@ -552,6 +552,371 @@ double GuidelineGeom::ShiftDeflectionFor(double Radius, double Shift, double& Ou
 	return Deflect;
 }
 
+double GuidelineGeom::LaneChangeLength(double Radius, double Shift)
+{
+	double Run = 0.0;
+	const double Deflect = ShiftDeflectionFor(Radius, Shift, Run);
+	return 2.0 * Run * (1.0 + FMath::Cos(Deflect));
+}
+
+bool GuidelineGeom::LaneChange(const FVector2D& From, const FVector2D& To, const FVector2D& Travel,
+	FVector2D& OutControlIn, FVector2D& OutMid, FVector2D& OutControlOut)
+{
+	const FVector2D Dir = Travel.GetSafeNormal();
+	const double Along = FVector2D::DotProduct(To - From, Dir);
+	const double Shift = FMath::Abs(FVector2D::CrossProduct(Dir, To - From));
+	if (Along <= 1.0 || Shift <= 1.0)
+	{
+		return false;
+	}
+	// tan(b/2) = Shift / Along, s = Shift / (2 sin b) - see the header.
+	const double Deflect = 2.0 * FMath::Atan2(Shift, Along);
+	const double Run = Shift / (2.0 * FMath::Sin(Deflect));
+	OutControlIn = From + Dir * Run;
+	OutMid = (From + To) * 0.5;
+	OutControlOut = To - Dir * Run;
+	return true;
+}
+
+bool GuidelineGeom::Arc(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+	const FVector2D& Centre, double MaxPieceSweep, TArray<FArcPiece>& OutPieces)
+{
+	OutPieces.Reset();
+	const FVector2D InDir = FromDir.GetSafeNormal();
+	const FVector2D OutDir = ToDir.GetSafeNormal();
+	const double Turn = FVector2D::CrossProduct(InDir, OutDir);
+	if (FMath::Abs(Turn) < 1e-9 || MaxPieceSweep <= 0.0)
+	{
+		return false;
+	}
+	const double Sign = Turn > 0.0 ? 1.0 : -1.0;
+	const double Radius = 0.5 * (FVector2D::Distance(From, Centre) + FVector2D::Distance(To, Centre));
+	const double Start = FMath::Atan2(From.Y - Centre.Y, From.X - Centre.X);
+	const double Finish = FMath::Atan2(To.Y - Centre.Y, To.X - Centre.X);
+	// The sweep in the direction of travel: counter-clockwise for a left turn, so in (0, 2 pi).
+	double Sweep = (Finish - Start) * Sign;
+	while (Sweep <= 0.0) { Sweep += 2.0 * UE_DOUBLE_PI; }
+	while (Sweep > 2.0 * UE_DOUBLE_PI) { Sweep -= 2.0 * UE_DOUBLE_PI; }
+	const int32 Count = FMath::Max(1, FMath::CeilToInt32(Sweep / MaxPieceSweep - 1e-9));
+	const double Step = Sign * Sweep / Count;
+
+	// Each piece's two ends and their travel directions; its control is where the two tangent
+	// lines cross. From and To keep the caller's directions, so the lanes stay tangent exactly.
+	FVector2D PrevAt = From;
+	FVector2D PrevDir = InDir;
+	for (int32 Piece = 1; Piece <= Count; ++Piece)
+	{
+		const bool bLast = Piece == Count;
+		const double Angle = Start + Step * Piece;
+		const FVector2D Radial(FMath::Cos(Angle), FMath::Sin(Angle));
+		const FVector2D At = bLast ? To : Centre + Radial * Radius;
+		// Travelling counter-clockwise the tangent is the radial turned left; clockwise, right.
+		const FVector2D Dir = bLast ? OutDir : FVector2D(-Radial.Y, Radial.X) * Sign;
+		const double Cross = FVector2D::CrossProduct(PrevDir, Dir);
+		if (FMath::Abs(Cross) < 1e-12)
+		{
+			OutPieces.Reset();
+			return false;
+		}
+		const double Along = FVector2D::CrossProduct(At - PrevAt, Dir) / Cross;
+		OutPieces.Add({ At, PrevAt + PrevDir * Along });
+		PrevAt = At;
+		PrevDir = Dir;
+	}
+	return true;
+}
+
+bool GuidelineGeom::BendLane(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+	const FVector2D& Centre, TArray<FArcPiece>& OutPieces)
+{
+	OutPieces.Reset();
+	const FVector2D InDir = FromDir.GetSafeNormal();
+	const FVector2D OutDir = ToDir.GetSafeNormal();
+	const double Turn = FVector2D::CrossProduct(InDir, OutDir);
+	// Round Centre: it lies on the side the turn bends toward.
+	if (FMath::Abs(Turn) < 1e-9 || Turn * FVector2D::CrossProduct(InDir, Centre - From) <= 0.0)
+	{
+		return false;
+	}
+	// The tangent points: Centre's feet on the two lane lines, ahead of From and behind To.
+	const double AheadIn = FVector2D::DotProduct(Centre - From, InDir);
+	const double BehindOut = FVector2D::DotProduct(To - Centre, OutDir);
+	if (AheadIn < -BendTangentTolerance || BehindOut < -BendTangentTolerance)
+	{
+		return false;
+	}
+	const bool bLeadIn = AheadIn > BendTangentTolerance;
+	const bool bLeadOut = BehindOut > BendTangentTolerance;
+	const FVector2D ArcFrom = bLeadIn ? From + InDir * AheadIn : From;
+	const FVector2D ArcTo = bLeadOut ? To - OutDir * BehindOut : To;
+	if (FMath::Abs(FVector2D::Distance(ArcFrom, Centre) - FVector2D::Distance(ArcTo, Centre)) > BendTangentTolerance)
+	{
+		return false;
+	}
+	TArray<FArcPiece> Round;
+	// THE LENGTH RULE, under the sweep ceiling - see BendPieceLength.
+	const double ArcRadius = FMath::Max(FVector2D::Distance(ArcFrom, Centre), 1.0);
+	if (!Arc(ArcFrom, InDir, ArcTo, OutDir, Centre, FMath::Min(BendArcPieceSweep, BendPieceLength / ArcRadius), Round))
+	{
+		return false;
+	}
+	// A straight piece is spelled as the builder spells it: control on the midpoint (IsStraight).
+	if (bLeadIn)
+	{
+		OutPieces.Add({ ArcFrom, (From + ArcFrom) * 0.5 });
+	}
+	OutPieces.Append(Round);
+	if (bLeadOut)
+	{
+		OutPieces.Add({ To, (ArcTo + To) * 0.5 });
+	}
+	return true;
+}
+
+double GuidelineGeom::RampProgress(double T)
+{
+	const double X = FMath::Clamp(T, 0.0, 1.0);
+	return X * X * X * (X * (X * 6.0 - 15.0) + 10.0);
+}
+
+double GuidelineGeom::RampOffset(double Station, double Total, double D0, double DMid, double D1, double LIn, double LOut,
+	double RoomIn, double RoomOut)
+{
+	const double In = FMath::Clamp(LIn, 0.0, Total);
+	const double Out = FMath::Clamp(LOut, 0.0, Total);
+	// On the arm, from the cut; else from the foot, round the arc (FRampedBend: never across the join).
+	const double InFrom = RampFitsArm(In, RoomIn) ? 0.0 : RoomIn;
+	const double OutTo = RampFitsArm(Out, RoomOut) ? Total : Total - RoomOut;
+	const double PIn = In > 0.0 ? RampProgress((Station - InFrom) / In) : 1.0;
+	const double POut = Out > 0.0 ? RampProgress((OutTo - Station) / Out) : 1.0;
+	return DMid + (D0 - DMid) * (1.0 - PIn) + (D1 - DMid) * (1.0 - POut);
+}
+
+namespace
+{
+	/** The ramped bend's base and clock, laid once (GuidelineGeom::FRampedBend). */
+	struct FRampedPath
+	{
+		GuidelineGeom::FRampedBend Bend;
+		FVector2D InDir, OutDir, NIn, NOut;
+		double RoomIn = 0.0, RoomOut = 0.0, AngleIn = 0.0, Sweep = 0.0;
+		double D0 = 0.0, D1 = 0.0;
+		double Own = 0.0, Stations = 0.0;
+
+		bool Lay(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+			const GuidelineGeom::FRampedBend& InBend)
+		{
+			Bend = InBend;
+			InDir = FromDir.GetSafeNormal();
+			OutDir = ToDir.GetSafeNormal();
+			const double Turn = FVector2D::CrossProduct(InDir, OutDir);
+			if (FMath::Abs(Turn) < 1e-9 || Turn * FVector2D::CrossProduct(InDir, Bend.Centre - From) <= 0.0 || Bend.Radius <= 1.0)
+			{
+				return false;
+			}
+			RoomIn = FVector2D::DotProduct(Bend.Centre - From, InDir);
+			RoomOut = FVector2D::DotProduct(To - Bend.Centre, OutDir);
+			if (RoomIn < -GuidelineGeom::BendTangentTolerance || RoomOut < -GuidelineGeom::BendTangentTolerance)
+			{
+				return false;
+			}
+			RoomIn = FMath::Max(RoomIn, 0.0);
+			RoomOut = FMath::Max(RoomOut, 0.0);
+			const FVector2D FootIn = From + InDir * RoomIn;
+			const FVector2D FootOut = To - OutDir * RoomOut;
+			NIn = (FootIn - Bend.Centre).GetSafeNormal();
+			NOut = (FootOut - Bend.Centre).GetSafeNormal();
+			D0 = FVector2D::Distance(FootIn, Bend.Centre) - Bend.Radius;
+			D1 = FVector2D::Distance(FootOut, Bend.Centre) - Bend.Radius;
+			AngleIn = FMath::Atan2(NIn.Y, NIn.X);
+			Sweep = FMath::UnwindRadians(FMath::Atan2(NOut.Y, NOut.X) - AngleIn);
+			if (Sweep * Turn < 0.0)
+			{
+				Sweep += Turn > 0.0 ? UE_DOUBLE_TWO_PI : -UE_DOUBLE_TWO_PI;
+			}
+			Own = RoomIn + FMath::Abs(Sweep) * Bend.Radius + RoomOut;
+			Stations = RoomIn + FMath::Abs(Sweep) * Bend.RefRadius + RoomOut;
+			return FMath::Min3(Bend.Radius + D0, Bend.Radius + D1, Bend.Radius + Bend.DMid) > 1.0;
+		}
+
+		/** The point at U along the base (0..Own). */
+		FVector2D At(double U) const
+		{
+			FVector2D Base, Normal;
+			double Station;
+			const double ArcOwn = FMath::Abs(Sweep) * Bend.Radius;
+			if (U <= RoomIn)
+			{
+				Normal = NIn;
+				Base = Bend.Centre + NIn * Bend.Radius - InDir * (RoomIn - U);
+				Station = U;
+			}
+			else if (U <= RoomIn + ArcOwn)
+			{
+				const double Fraction = (U - RoomIn) / FMath::Max(ArcOwn, 1e-9);
+				const double Angle = AngleIn + Sweep * Fraction;
+				Normal = FVector2D(FMath::Cos(Angle), FMath::Sin(Angle));
+				Base = Bend.Centre + Normal * Bend.Radius;
+				Station = RoomIn + FMath::Abs(Sweep) * Fraction * Bend.RefRadius;
+			}
+			else
+			{
+				const double Along = U - RoomIn - ArcOwn;
+				Normal = NOut;
+				Base = Bend.Centre + NOut * Bend.Radius + OutDir * Along;
+				Station = Stations - RoomOut + Along;
+			}
+			return Base + Normal * GuidelineGeom::RampOffset(Station, Stations, D0, Bend.DMid, D1, Bend.LIn, Bend.LOut, RoomIn, RoomOut);
+		}
+
+		/**
+		 * Where to sample: each of the three pieces - arm, arc, arm - on its own, evenly by the CURVE's
+		 * length (the offset makes it longer than the base's) no more than MaxStep apart and MaxSweep
+		 * round, so both feet of the centre are samples and the arc's ends are exact
+		 * (Airside.Build.BendLanes.OuterEdgeConcentric reads the foot).
+		 */
+		TArray<double> Samples(double MaxStep, double MaxSweep) const
+		{
+			constexpr int32 Fine = 128;
+			const double ArcOwn = FMath::Abs(Sweep) * Bend.Radius;
+			const double Ends[3] = { RoomIn, RoomIn + ArcOwn, Own };
+			TArray<double> Out;
+			Out.Add(0.0);
+			double Start = 0.0;
+			for (int32 Piece = 0; Piece < 3; ++Piece)
+			{
+				const double Length = Ends[Piece] - Start;
+				if (Length > 1e-6)
+				{
+					// The curve's length along this piece, tabulated finely enough to invert.
+					double Cumulative[Fine + 1];
+					Cumulative[0] = 0.0;
+					FVector2D Previous = At(Start);
+					for (int32 Step = 1; Step <= Fine; ++Step)
+					{
+						const FVector2D Next = At(Start + Length * Step / Fine);
+						Cumulative[Step] = Cumulative[Step - 1] + FVector2D::Distance(Previous, Next);
+						Previous = Next;
+					}
+					int32 Count = FMath::Max(1, FMath::CeilToInt32(Cumulative[Fine] / FMath::Max(MaxStep, 1.0) - 1e-9));
+					if (Piece == 1) { Count = FMath::Max(Count, FMath::CeilToInt32(FMath::Abs(Sweep) / FMath::Max(MaxSweep, 1e-3))); }
+					int32 Cell = 0;
+					for (int32 Step = 1; Step < Count; ++Step)
+					{
+						const double Want = Cumulative[Fine] * Step / Count;
+						while (Cell + 1 < Fine && Cumulative[Cell + 1] < Want) { ++Cell; }
+						const double Span = FMath::Max(Cumulative[Cell + 1] - Cumulative[Cell], 1e-12);
+						Out.Add(Start + Length * (Cell + (Want - Cumulative[Cell]) / Span) / Fine);
+					}
+					Out.Add(Ends[Piece]);
+				}
+				Start = Ends[Piece];
+			}
+			return Out;
+		}
+
+		/**
+		 * The travel direction at U, from the side Side says (+1 ahead, -1 behind): ONE-SIDED, so a
+		 * piece's end tangent is its own piece's and not smeared across a foot - where the arm meets
+		 * the arc a centred difference turned the straight piece's end a hair and it never laid.
+		 */
+		FVector2D TangentAt(double U, int32 Side) const
+		{
+			if (U <= 0.0 && Side > 0) { return InDir; }
+			if (U >= Own && Side < 0) { return OutDir; }
+			constexpr double H = 0.25;
+			const FVector2D Step = Side > 0 ? At(FMath::Min(U + H, Own)) - At(U) : At(U) - At(FMath::Max(U - H, 0.0));
+			return Step.IsNearlyZero() ? (Side > 0 ? InDir : OutDir) : Step.GetSafeNormal();
+		}
+	};
+}
+
+bool GuidelineGeom::SampleRampedBend(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+	const FRampedBend& Bend, double MaxStep, double MaxSweep, TArray<FVector2D>& OutPoints, TArray<FVector2D>* OutTangents)
+{
+	OutPoints.Reset();
+	if (OutTangents != nullptr) { OutTangents->Reset(); }
+	FRampedPath Path;
+	if (!Path.Lay(From, FromDir, To, ToDir, Bend))
+	{
+		return false;
+	}
+	const TArray<double> Us = Path.Samples(MaxStep, MaxSweep);
+	for (int32 Step = 0; Step < Us.Num(); ++Step)
+	{
+		// THE ENDS ARE THE CALLER'S BIT FOR BIT: the weld (edges) and the lane handles (lanes).
+		OutPoints.Add(Step == 0 ? From : Step + 1 == Us.Num() ? To : Path.At(Us[Step]));
+		if (OutTangents != nullptr) { OutTangents->Add(Path.TangentAt(Us[Step], Step + 1 == Us.Num() ? -1 : 1)); }
+	}
+	return OutPoints.Num() >= 2;
+}
+
+namespace
+{
+	/** A quadratic from A to B tangent to both directions, halved until its tangents cross ahead of it. */
+	void AddTangentPiece(const FRampedPath& Path, double UA, double UB, const FVector2D& A, const FVector2D& B,
+		int32 Depth, TArray<GuidelineGeom::FArcPiece>& Out)
+	{
+		const FVector2D TA = Path.TangentAt(UA, 1);
+		const FVector2D TB = Path.TangentAt(UB, -1);
+		const FVector2D Chord = B - A;
+		const double Length = Chord.Size();
+		const double Denominator = FVector2D::CrossProduct(TA, TB);
+		// Straight (both tangents along the chord): the builder's straight spelling, control mid-chord.
+		if (FMath::Abs(Denominator) < 1e-9 && FMath::Abs(FVector2D::CrossProduct(TA, Chord)) < 1e-3 * FMath::Max(Length, 1.0))
+		{
+			Out.Add({ B, (A + B) * 0.5 });
+			return;
+		}
+		if (FMath::Abs(Denominator) >= 1e-9)
+		{
+			const double AlongA = FVector2D::CrossProduct(Chord, TB) / Denominator;
+			const double AlongB = -FVector2D::CrossProduct(Chord, TA) / Denominator;
+			if (AlongA > 0.0 && AlongB > 0.0 && AlongA < Length && AlongB < Length)
+			{
+				Out.Add({ B, A + TA * AlongA });
+				return;
+			}
+		}
+		if (Depth < 6)
+		{
+			const double UM = (UA + UB) * 0.5;
+			const FVector2D M = Path.At(UM);
+			AddTangentPiece(Path, UA, UM, A, M, Depth + 1, Out);
+			AddTangentPiece(Path, UM, UB, M, B, Depth + 1, Out);
+			return;
+		}
+		// Beyond resolution: the Hermite average, as near both tangents as one control gets.
+		Out.Add({ B, ((A + TA * (Length * 0.5)) + (B - TB * (Length * 0.5))) * 0.5 });
+	}
+}
+
+bool GuidelineGeom::RampedBendLane(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+	const FRampedBend& Bend, TArray<FArcPiece>& OutPieces)
+{
+	OutPieces.Reset();
+	FRampedPath Path;
+	if (!Path.Lay(From, FromDir, To, ToDir, Bend))
+	{
+		return false;
+	}
+	const TArray<double> Us = Path.Samples(BendPieceLength, BendArcPieceSweep);
+	FVector2D Previous = From;
+	for (int32 Step = 1; Step < Us.Num(); ++Step)
+	{
+		const FVector2D Next = Step + 1 == Us.Num() ? To : Path.At(Us[Step]);
+		AddTangentPiece(Path, Us[Step - 1], Us[Step], Previous, Next, 0, OutPieces);
+		Previous = Next;
+	}
+	if (OutPieces.Num() == 0)
+	{
+		return false;
+	}
+	// THE LAST END IS To BIT FOR BIT - the builder joins it by handle.
+	OutPieces.Last().End = To;
+	return true;
+}
+
 double GuidelineGeom::CornerRunFor(double Radius, double Interior)
 {
 	const double Half = Interior * 0.5;

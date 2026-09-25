@@ -137,7 +137,11 @@ def main():
     if not bone_report(mesh, declared):
         ok = False
 
-    unreal.EditorAssetLibrary.save_asset(MESH, only_if_is_dirty=False)
+    # THE SKELETON TOO, not the mesh alone: reimport_pipeline updates the Skeleton asset, and a
+    # Skeleton left unsaved is the stale bone tree the next session re-merges and asks to save
+    # - see airside_import.save_mesh_and_skeleton.
+    if not airside_import.save_mesh_and_skeleton(MESH):
+        ok = False
 
     # A reimport regenerates the per-asset materials and reassigns every slot, so the shared
     # set is rebuilt and what it orphans is swept - in that order, or the sweep finds the

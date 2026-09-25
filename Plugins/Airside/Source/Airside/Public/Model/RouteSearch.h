@@ -5,6 +5,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RoadTraffic.h"
 #include "Model/SpeedProfile.h"
+#include "Model/VehicleFit.h"
 #include "RouteSearch.generated.h"
 
 struct FVehicle;
@@ -49,6 +50,11 @@ enum class ERouteResult : uint8
 	 * or a corner its swept path or its lock cannot take (VehicleFit, spec 2026-09-23 §6).
 	 * TooWide's twin, found the same way: an unconstrained retry after a failure. The plan's
 	 * RejectedEdge names where.
+	 *
+	 * ALSO, SINCE 2026-09-25, a route whose every edge fits but whose WHOLE drive folds a tow
+	 * (VehicleFit::JudgePlan), after RouteSearch::Find's bounded retries found no route that
+	 * holds it. Not a new value: the fix is the same kind - a gentler road, or a smaller vehicle
+	 * - and RejectedBy says which rule (TrailerFolds) and where.
 	 */
 	TooNarrow,
 };
@@ -120,6 +126,15 @@ struct AIRSIDE_API FRoutePlan
 	 * refusal can say WHERE ("the corner at ...") rather than only that. Unset otherwise.
 	 */
 	UPROPERTY() FGuidelineEdgeId RejectedEdge;
+
+	/**
+	 * On TooNarrow, WHY: the verdict that refused it, figures and all. Per edge (VehicleFit::
+	 * Judge on RejectedEdge), or - for a tow - the whole route (VehicleFit::JudgePlan, bWholeRoute
+	 * set): "trailer folds at guideline node 41 / (1200, -300), link 0, angle 91 deg". CARRIED
+	 * rather than re-judged by the caller, because a whole-route fold is a fact about a plan the
+	 * caller never sees - no edge on its own refuses it. Not a UPROPERTY: FFitVerdict is plain.
+	 */
+	FFitVerdict RejectedBy;
 
 	bool IsValid() const { return Result == ERouteResult::Found; }
 
@@ -275,6 +290,27 @@ struct AIRSIDE_API FRouteQuery
 	 * vehicle outlives it.
 	 */
 	const FVehicle* Vehicle = nullptr;
+
+	/**
+	 * The tow's LIVE chain, when the vehicle searching is already on the road with its trailer
+	 * angled: RouteSearch::Find's whole-route check starts from it instead of a straight lay
+	 * (VehicleFit::JudgePlan). Travelled is along the plan this search returns - a rejoin that
+	 * starts part-way along its first step sets it. Set by FPlanReResolver::QueryFor; unset,
+	 * the default, for a fresh dispatch. A splice's TAIL is not where the vehicle is, so
+	 * FPlanReResolver::SpliceReplan clears it for the search and judges the whole splice with it.
+	 */
+	TOptional<FTowSeed> TowSeed;
+
+	/**
+	 * A CALLER-OWNED memo of VehicleFit::Fits per edge, carried across Finds (review of
+	 * aa90eec2): a trace round every curve the search relaxes is most of what a vehicle's Find
+	 * costs - measured 2026-09-25, ~20 ms a Find for the rig on its course, 92 Finds on one tick.
+	 * The CALLER guarantees what the memo is keyed on and cannot see: the same Vehicle and the
+	 * same graph (URoadNetwork::GetGuidelineRevision). Null, the default: Find memoises within
+	 * itself only. Edge handles carry a generation, so a re-derived edge is a new key even so.
+	 * ENFORCED BY: AirportMgr.RigCourse.FitCacheDropsOnRebuild (the one owner, the rig course)
+	 */
+	TMap<FGuidelineEdgeId, bool>* FitCache = nullptr;
 
 	FRouteQuery& WithVehicle(const FVehicle& InVehicle)
 	{
@@ -447,6 +483,19 @@ namespace RouteSearch
 
 	/** Zeroes the counter above - see ResetNodeVisitCountForTest's own reason for existing. */
 	AIRSIDE_API void ResetSearchCallCountForTest();
+
+	/**
+	 * How many whole-route tow checks (VehicleFit::JudgePlan) Find has run since the last reset:
+	 * the measurement that a rigid vehicle or an aircraft is never judged this way (its routing
+	 * bit-identical to before the check existed), and that a tow's retries are bounded.
+	 */
+	AIRSIDE_API int32 TowCheckCountForTest();
+
+	/** Zeroes the counter above, and the seconds below. */
+	AIRSIDE_API void ResetTowCheckCountForTest();
+
+	/** Wall-clock seconds those checks took since the reset: the check's cost, per course loop. */
+	AIRSIDE_API double TowCheckSecondsForTest();
 
 	/**
 	 * The nearest guideline node to a world position that this class could actually use.
