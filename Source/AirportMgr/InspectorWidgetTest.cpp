@@ -196,4 +196,75 @@ bool FInspectorIdleTickSetsNoTextTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A PARKED AIRCRAFT COMPOSES NOTHING ON A REPEATED REFRESH - issue #309, one level upstream of
+ * FInspectorIdleTickSetsNoTextTest above. That test proves SetText adds no more calls; it
+ * does NOT prove the four Printfs and two NSLOCTEXT lookups that build the sentence SetText
+ * then compares stopped running - they used to run every Refresh regardless, gated only at the
+ * very end. This measures the earlier gate (FInspectorKey) directly, through
+ * ComposeCountForTest, rather than trusting that an unchanged SetText count means an unchanged
+ * compose count - which is exactly the assumption #187 shipped and #309 found false here.
+ *
+ * PARKED, not taxiing: a parked aircraft awaiting dispatch is the common idle case CLAUDE.md's
+ * "airside-speedprofile" note and this file's own FInspectorWidgetTest both drive to, and it is
+ * the scenario where heading/speed/altitude truly stop moving tick to tick - a taxiing aircraft
+ * would legitimately recompose every tick and this test would fail for the wrong reason.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorIdleTickComposesNoTextTest,
+	"AirportMgr.Inspector.IdleTickComposesNoText",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorIdleTickComposesNoTextTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	UWorld* World = TestWorld.World;
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(20000.0, 0.0), false);
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A; Edge.B = B;
+		Edge.Control = FVector2D(10000.0, 0.0);
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.bDerived = false;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(RouteSearch::Find(Net, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+
+	// RUN IT TO PARKED, same loop FInspectorWidgetTest uses, so heading/speed/altitude actually
+	// stop moving rather than merely being unobserved between two calls with no tick between.
+	for (int32 I = 0; I < 20000 && Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked; ++I) { Actor->Tick(1.0f / 30.0f); }
+	if (!TestEqual(TEXT("the agent parked"),
+		static_cast<uint8>(Actor->GetTraffic()->LastAgentPhaseForTest()), static_cast<uint8>(EAgentPhase::Parked))) { return false; }
+
+	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = Id;
+
+	// First Refresh composes - a real cost, not what this test measures.
+	Panel->Refresh(Actor, Sel);
+	const int32 Before = Panel->ComposeCountForTest();
+
+	for (int32 Tick = 0; Tick < 10; ++Tick)
+	{
+		Panel->Refresh(Actor, Sel);
+	}
+
+	TestEqual(TEXT("ten idle refreshes of a PARKED aircraft compose the sentence zero more "
+		"times - FInspectorKey read unchanged, so Refresh never reran the Printf/FString::Format "
+		"work SetTextCallCountForTest's own gate only compared the RESULT of"),
+		Panel->ComposeCountForTest(), Before);
+
+	return true;
+}
+
 #endif

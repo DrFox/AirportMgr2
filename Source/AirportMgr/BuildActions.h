@@ -34,10 +34,29 @@ struct FBuildActionContext
 	/** The road actor being built into, or null when the level has none. */
 	ARoadNetworkActor* Target = nullptr;
 
-	/** NOT explicit, on purpose - see the class comment on why every existing controller-
-	 *  holding call site (BuildBarWidget, InspectorWidget, the tests) must keep compiling
-	 *  unchanged, passing a bare ARoadBuildController& where this type is now expected. */
-	FBuildActionContext(ARoadBuildController& InController);
+	/**
+	 * EXPLICIT (issue #309, reversing #191's own ruling): the implicit conversion that ruling
+	 * asked for is exactly what let UBuildBarWidget::RefreshState build one FRESH context per
+	 * IsEnabled/IsActive call - `Action.IsEnabled(*C)` converts silently, invisibly, at every
+	 * one of ~35 actions' two calls, ~70 GetSubsystem lookups a tick (BuildActions.cpp:11-19)
+	 * for a context BuildActions.h itself said should be "resolved ONCE". Explicit forces every
+	 * call site that used to convert silently to say so, which is what turned up RefreshState
+	 * and PlotReadoutBarTest.cpp's Build->IsEnabled(*C) as the only two - see their own fixes.
+	 * TryRun already constructed one by name (FBuildActionContext Context(C);) so it needed no
+	 * change.
+	 */
+	explicit FBuildActionContext(ARoadBuildController& InController);
+
+	/**
+	 * How many contexts have been constructed since process start - the same idiom
+	 * UAirportMgrUISettings::ResolveCallCountForTest and FBuildSession::MakeContextCallCountForTest
+	 * use, and read the same way: a DELTA across N ticks, never an absolute count, since other
+	 * tests in the same run construct contexts too.
+	 */
+	static int32 ConstructCountForTest() { return ConstructCalls; }
+
+private:
+	static int32 ConstructCalls;
 };
 
 /** Where an action sits on the bar. Bar order is enum order. Count is a sentinel, never a

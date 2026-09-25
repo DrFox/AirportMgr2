@@ -163,7 +163,12 @@ void UOfferInboxWidget::PaintRows()
 		return;
 	}
 
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null
+	// PanelStyle is the base class's (issue #187) - resolved once in Initialize, before
+	// BuildOnce ever ran. This used to call UAirportMgrUISettings::ResolveStyle() (a
+	// TSoftObjectPtr::LoadSynchronous) itself, every tick NativeTick calls Refresh, which is
+	// every tick outright - issue #309, the regression #187 did not reach because this file
+	// was not one of the two it named.
+	const UUIStyle* Style = PanelStyle;
 
 	// The code-only path. Rebuilt when the COUNT changes rather than every tick: a rebuild
 	// every frame would drop a half-pressed button and churn the widget tree.

@@ -413,11 +413,24 @@ void UBuildBarWidget::RefreshState()
 	{
 		return;
 	}
+	RefreshStateFor(*C);
+}
+
+void UBuildBarWidget::RefreshStateFor(ARoadBuildController& C)
+{
 	// PanelStyle is the base class's (issue #187): this used to call ResolveStyle() - a
 	// TSoftObjectPtr::LoadSynchronous - here AND in RefreshBalance below, twice a tick, for a
 	// style that cannot change once BuildOnce has resolved it.
 	const UUIStyle* Style = PanelStyle;
 	const TConstArrayView<FBuildAction> Actions = BuildActions();
+
+	// ONE CONTEXT FOR THE WHOLE TICK (issue #309, FBuildActionContext::ConstructCountForTest
+	// pins the delta at 1): `Action.IsEnabled(*C)` / `Action.IsActive(*C)` used to convert `*C`
+	// through FBuildActionContext's own constructor - a GetSubsystem lookup - IMPLICITLY, once
+	// per call, ~70 times a tick over every entry's two questions. Making that constructor
+	// explicit (BuildActions.h) is what turned the silent conversion into a compile error here,
+	// which is how this loop found out it needed to build the context itself, once, instead.
+	FBuildActionContext Ctx(C);
 	for (UBuildBarEntry* Entry : Entries)
 	{
 		if (Entry == nullptr || Entry->Button == nullptr || !Actions.IsValidIndex(Entry->ActionIndex))
@@ -425,8 +438,8 @@ void UBuildBarWidget::RefreshState()
 			continue;
 		}
 		const FBuildAction& Action = Actions[Entry->ActionIndex];
-		const bool bEnabled = Action.IsEnabled(*C);
-		const bool bActive = bEnabled && Action.IsActive(*C);
+		const bool bEnabled = Action.IsEnabled(Ctx);
+		const bool bActive = bEnabled && Action.IsActive(Ctx);
 		Entry->Button->SetIsEnabled(bEnabled);
 
 		// ACCENT MEANS ARMED AND NOTHING ELSE. If a second thing takes it, the player loses

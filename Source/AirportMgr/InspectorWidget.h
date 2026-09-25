@@ -14,6 +14,51 @@ class UUIStyle;
 struct FAgentFacts;
 
 /**
+ * What Refresh needs to know has NOT changed to skip RECOMPOSING the aircraft Title/Facts/
+ * Status sentences - issue #309. Refresh used to run every Printf/FString::Format in the
+ * aircraft branch (four Printfs plus two NSLOCTEXT lookups) EVERY TICK regardless of whether
+ * the facts had moved, and only gated the resulting SetText call (see LastTitle/LastFacts/
+ * LastStatus) - so a parked aircraft awaiting dispatch rebuilt the same three sentences a tick
+ * for a SetText that then did nothing.
+ *
+ * ROUNDED, not raw: HeadingRounded/SpeedRounded/AltitudeRounded carry exactly the precision
+ * the composed sentence prints (see Refresh's own Printf specifiers), so two facts that would
+ * compose to the IDENTICAL string never miss this cheaper equality check first - the same
+ * reasoning LastTitle/LastFacts/LastStatus's own comment gives for comparing composed text
+ * over a bare (id, phase) key, one step earlier.
+ *
+ * Phase HOLDS F.Status (the exact string the Status line prints), not F.Phase (the enum): the
+ * whole point named in that same comment is that phase ALONE (Taxiing, Rolling) sits still for
+ * many seconds while heading/speed/altitude keep moving, so gating on the enum here would
+ * freeze this struct's equality while the sentence it stands for kept changing underneath it.
+ *
+ * AIRCRAFT ONLY, not the stand/depot branch: issue #309's evidence cites this file's aircraft
+ * composition (InspectorWidget.cpp:163-190, :198) and nothing about the stand branch, which
+ * composes far less per call (one Printf, no NSLOCTEXT sentence) and is not what was reported -
+ * gating it too would be scope the issue did not ask for.
+ */
+struct FInspectorKey
+{
+	int32 Id = INDEX_NONE;
+	FString Phase;
+	int32 HeadingRounded = 0;
+	int32 SpeedRounded = 0;
+	int32 AltitudeRounded = 0;
+	FString Destination;
+	bool bEngineRunning = false;
+	FString Fuel;
+
+	bool operator==(const FInspectorKey& Other) const
+	{
+		return Id == Other.Id && Phase == Other.Phase && HeadingRounded == Other.HeadingRounded
+			&& SpeedRounded == Other.SpeedRounded && AltitudeRounded == Other.AltitudeRounded
+			&& Destination == Other.Destination && bEngineRunning == Other.bEngineRunning
+			&& Fuel == Other.Fuel;
+	}
+	bool operator!=(const FInspectorKey& Other) const { return !(*this == Other); }
+};
+
+/**
  * The inspector: what the selected aircraft or stand is doing, and the verbs for it.
  *
  * The same recipe as UBuildBarWidget: a C++ base that builds a working panel with no asset,
@@ -73,6 +118,14 @@ public:
 	 *  idle tick (same selection, same facts) must add nothing to this. */
 	int32 SetTextCallCountForTest() const { return SetTextCalls; }
 
+	/** How many times Refresh actually RECOMPOSED the aircraft Title/Facts/Status sentences
+	 *  (the Printf/FString::Format work FInspectorKey gates), as opposed to how many times it
+	 *  was asked - issue #309, one level upstream of SetTextCallCountForTest: an idle tick on a
+	 *  PARKED aircraft (same selection, same rounded facts) must add nothing to this, even
+	 *  though the earlier SetText gate already read as flat by comparing the strings this
+	 *  count now stops building in the first place. */
+	int32 ComposeCountForTest() const { return ComposeCalls; }
+
 protected:
 	/** Builds the panel's chrome and binds its two verbs. See
 	 *  UAirportMgrPanelWidget::Initialize for why this runs from Initialize. */
@@ -110,6 +163,18 @@ private:
 
 	/** See SetTextCallCountForTest. */
 	int32 SetTextCalls = 0;
+
+	/** The aircraft facts the composed Title/Facts/Status were last built from - see
+	 *  FInspectorKey's own comment. Compared before Refresh does any Printf/FString::Format
+	 *  work, not after: this is the gate ONE STEP EARLIER than LastTitle/LastFacts/LastStatus. */
+	FInspectorKey LastComposedKey;
+
+	/** What Refresh composed last time FInspectorKey changed - reused verbatim on an unchanged
+	 *  tick rather than recomposed, which is the entire saving ComposeCountForTest measures. */
+	FString LastComposedTitle, LastComposedFacts, LastComposedStatus;
+
+	/** See ComposeCountForTest. */
+	int32 ComposeCalls = 0;
 
 	void EnsureSlots(const UUIStyle* Style);
 	void RunAction(int32 ActionIndex);

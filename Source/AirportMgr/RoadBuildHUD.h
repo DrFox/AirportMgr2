@@ -9,6 +9,7 @@
 
 class ARoadBuildController;
 class ARoadNetworkActor;
+class UUIStyle;
 
 /**
  * Draws the road graph, and rasterises whatever the active tool says it intends.
@@ -98,6 +99,7 @@ public:
 
 	ARoadBuildHUD();
 
+	virtual void BeginPlay() override;
 	virtual void DrawHUD() override;
 
 	// --- IToolPreviewSink, taking ROAD PLANE coordinates ------------------------------
@@ -165,6 +167,17 @@ private:
 	 */
 	TArray<FString> CachedPanelLines;
 	int32 CachedPanelLinesRevision = -1;
+
+	/**
+	 * Resolved once in BeginPlay, not by DrawPlotPanel - issue #309: DrawPlotPanel called
+	 * UAirportMgrUISettings::ResolveStyle() (a TSoftObjectPtr::LoadSynchronous) itself, every
+	 * frame it drew a tool's preview panel, for a style that cannot change once resolved - the
+	 * same shape #187 fixed on the panels, which this AHUD (not a UAirportMgrPanelWidget) had
+	 * no base class to inherit that fix from. The ResolveStyle() fallback at the one call site
+	 * below only covers a HUD asked to draw before BeginPlay has run, which a test constructing
+	 * one directly and calling DrawPlotPanel without BeginPlay could still do.
+	 */
+	const UUIStyle* CachedStyle = nullptr;
 
 	/** The controller this HUD belongs to, if it is the road build controller. */
 	ARoadBuildController* GetBuildController() const;

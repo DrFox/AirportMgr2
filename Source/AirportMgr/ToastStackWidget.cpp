@@ -27,10 +27,10 @@ void UToastStackWidget::BuildOnce(const UUIStyle& Style)
 	// UOpsRuntime would have made a save-game question out of a reading time.
 	Notifications = NewObject<UNotificationCentre>(this);
 
-	// Cached for TickFeed, which runs every frame: without this it called ResolveStyle() (a
-	// TMap lookup) and LoadSynchronous() three times (one per severity) EVERY TICK, for a
-	// widget that is on screen during every event burst - issue #186.
-	CachedStyle = &Style;
+	// The style itself is UAirportMgrPanelWidget::PanelStyle now (issue #309) - this class's
+	// own CachedStyle duplicated it. The icons still need their OWN cache: PanelStyle is a
+	// style ASSET, and Style.IconInfo/IconSuccess/IconWarning are separate soft references on
+	// it that TickFeed would otherwise LoadSynchronous() three times EVERY TICK - issue #186.
 	CachedIconInfo = Style.IconInfo.LoadSynchronous();
 	CachedIconSuccess = Style.IconSuccess.LoadSynchronous();
 	CachedIconWarning = Style.IconWarning.LoadSynchronous();
@@ -122,10 +122,10 @@ void UToastStackWidget::TickFeed(float RealDeltaSeconds)
 	// a HUMAN reads, so its lifetime belongs to the human and not to the simulation.
 	Notifications->Advance(RealDeltaSeconds);
 
-	// CachedStyle is set in BuildOnce, which UAirportMgrPanelWidget::Initialize guarantees
-	// runs before the first tick; the ResolveStyle() fallback only covers a test that drove
-	// TickFeed without going through Initialize.
-	SyncCards(CachedStyle != nullptr ? *CachedStyle : *UAirportMgrUISettings::ResolveStyle());
+	// PanelStyle is set in Initialize before BuildOnce ever runs (issue #309, was this class's
+	// own CachedStyle - see BuildOnce's comment); the ResolveStyle() fallback only covers a
+	// test that drove TickFeed without going through Initialize.
+	SyncCards(PanelStyle != nullptr ? *PanelStyle : *UAirportMgrUISettings::ResolveStyle());
 }
 
 FLinearColor UToastStackWidget::ColourFor(const UUIStyle& Style, ENotificationSeverity Severity)
