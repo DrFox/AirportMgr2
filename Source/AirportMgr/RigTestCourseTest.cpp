@@ -20,6 +20,7 @@
 #include "Solve/VehicleSweep.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Testing/BendProbe.h"
+#include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Profiles/RoadDesignVehicles.h"
 
@@ -1801,6 +1802,58 @@ bool FRigCourseEveryBendIsConcentricTest::RunTest(const FString& Parameters)
 		}
 	}
 	TestTrue(FString::Printf(TEXT("the course has bends to judge (%d)"), Solved.BendOuters.Num()), Applied >= 8);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigCourseBendsAreSmoothTest,
+	"AirportMgr.RigCourse.BendsAreSmooth",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigCourseBendsAreSmoothTest::RunTest(const FString& Parameters)
+{
+	// ONE SMOOTH SHAPE (user, PIE on 33d6f49b: "three variants"). At every two-arm road bend the
+	// inner edge, the outer edge and every lane are tangent-continuous from arm to arm - no kink
+	// over BendProbe::KinkThreshold, no edge tighter than TightestFraction of its inner arc - and
+	// every lane through a bend is laid by one density rule (GuidelineGeom::BendPieceLength).
+	// The per-tier fixture judges the same way: Airside.Build.BendLanes.EveryTierIsSmooth.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
+	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	Course->BuildCourseForTest(*Actor);
+	URoadNetwork& Net = *Actor->Network;
+	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net, 12, &Designs, EWideningTrace::Trace);
+	FRoadGuidelineBuilder::Build(Net, Solved, Designs);
+
+	int32 Bends = 0;
+	for (const FBendOuter& Bend : Solved.BendOuters)
+	{
+		const FJunctionResult* Junction = Solved.NodeResults.Find(Bend.NodeIndex);
+		if (!TestNotNull(TEXT("the bend's junction"), Junction) || Junction->Corners.Num() != 2) { continue; }
+		++Bends;
+		const BendProbe::FSmoothness S = BendProbe::MeasureSmoothness(Net, *Junction, Net.NodeIdAt(Bend.NodeIndex));
+		AddInfo(FString::Printf(TEXT("SMOOTHROW (%.0f, %.0f) | %s | inner kink %.1f at (%.0f, %.0f) | outer kink %.1f at (%.0f, %.0f) | tightest %.0f of arc %.0f | ramps %.0f / %.0f | lanes: %s"),
+			Bend.Position.X, Bend.Position.Y, *Bend.Tiers, S.InnerKink, S.InnerAt.X, S.InnerAt.Y, S.OuterKink, S.OuterAt.X, S.OuterAt.Y,
+			S.Tightest, Bend.InnerArcRadius, Bend.Ramp[0], Bend.Ramp[1], *S.LaneText));
+		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f) was laid as the smooth shape (%s)"), Bend.Position.X, Bend.Position.Y, *Bend.Reason),
+			Bend.bApplied);
+		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): the inner edge is smooth (kink %.1f deg at (%.0f, %.0f))"),
+			Bend.Position.X, Bend.Position.Y, S.InnerKink, S.InnerAt.X, S.InnerAt.Y), S.InnerKink <= BendProbe::KinkThreshold);
+		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): the outer edge is smooth (kink %.1f deg at (%.0f, %.0f))"),
+			Bend.Position.X, Bend.Position.Y, S.OuterKink, S.OuterAt.X, S.OuterAt.Y), S.OuterKink <= BendProbe::KinkThreshold);
+		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): no edge bends tighter than half its inner arc (%.0f uu at (%.0f, %.0f), arc %.0f)"),
+			Bend.Position.X, Bend.Position.Y, S.Tightest, S.TightAt.X, S.TightAt.Y, Bend.InnerArcRadius),
+			S.Tightest >= BendProbe::TightestFraction * Bend.InnerArcRadius - 1.0);
+		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): every lane is smooth (kink %.1f deg)"),
+			Bend.Position.X, Bend.Position.Y, S.LaneKink), S.LaneKink <= BendProbe::KinkThreshold);
+		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): lane pieces follow one length rule (%.0f - %.0f uu)"),
+			Bend.Position.X, Bend.Position.Y, S.ShortestStep, S.LongestStep),
+			S.Lanes > 0 && S.LongestStep <= GuidelineGeom::BendPieceLength + 1.0 && S.ShortestStep >= 0.5 * GuidelineGeom::BendPieceLength);
+	}
+	TestTrue(FString::Printf(TEXT("the course's bends were judged (%d)"), Bends), Bends >= 14);
 	return true;
 }
 

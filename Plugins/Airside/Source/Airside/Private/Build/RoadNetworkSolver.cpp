@@ -184,6 +184,40 @@ namespace
 			OutArmSegments.Add(SegmentId);
 		}
 
+		// A BEND RUNS AT ONE WIDTH, THE WIDER (2026-09-25): a two-arm service-road bend whose arms
+		// differ in width is solved as if both were the wider, so its fillets, its arcs and its lanes
+		// are one bend's; the narrower arm keeps its own ribbon width at its cut
+		// (FJunctionArm::CutHalfWidthLeft), and SmoothBend tapers between the two on the ARM, clear of
+		// the arc - where 33d6f49b creased the outer edge instead. The sides cross between the two
+		// arms' outgoing frames (one arm's left is the other's right round the bend).
+		// ENFORCED BY: AirportMgr.RigCourse.BendsAreSmooth (the width-step bends among the course's)
+		if (OutInput.Arms.Num() == 2 && !OutInput.Arms[0].bContinuous && !OutInput.Arms[1].bContinuous
+			&& !RoadGeom::IsStraightThrough(RoadGeom::AngleBetween(OutInput.Arms[0].Tangent, OutInput.Arms[1].Tangent)))
+		{
+			bool bRoads = true;
+			for (const FRoadSegmentId SegmentId : OutArmSegments)
+			{
+				const FRoadSegment* Segment = Network.GetSegment(SegmentId);
+				const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+				bRoads &= Profile != nullptr && Profile->Guidelines.ContainsByPredicate(
+					[](const FProfileGuideline& Line) { return Line.Class == ETraversalClass::GroundVehicle; });
+			}
+			FJunctionArm& A = OutInput.Arms[0];
+			FJunctionArm& B = OutInput.Arms[1];
+			if (bRoads && !FMath::IsNearlyEqual(A.HalfWidthLeft + A.HalfWidthRight, B.HalfWidthLeft + B.HalfWidthRight, 1.0e-6))
+			{
+				const double ALeft = A.HalfWidthLeft, ARight = A.HalfWidthRight;
+				const double BLeft = B.HalfWidthLeft, BRight = B.HalfWidthRight;
+				A.CutHalfWidthLeft = ALeft;
+				A.CutHalfWidthRight = ARight;
+				B.CutHalfWidthLeft = BLeft;
+				B.CutHalfWidthRight = BRight;
+				A.HalfWidthLeft = FMath::Max(ALeft, BRight);
+				A.HalfWidthRight = FMath::Max(ARight, BLeft);
+				B.HalfWidthLeft = FMath::Max(BLeft, ARight);
+				B.HalfWidthRight = FMath::Max(BRight, ALeft);
+			}
+		}
 		// THE WIDTH TAPER: both arms of a straight-through node inset by half of it - see
 	// WidthTaperLength. Continuous arms (a runway) are never cut, so never tapered.
 	if (OutInput.Arms.Num() == 2 && !OutInput.Arms[0].bContinuous && !OutInput.Arms[1].bContinuous
@@ -584,81 +618,59 @@ void WidenBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out,
 	}
 	BendWidening::FWidening Widening = Cached->Widening;
 
-	// The arms cut back to hold it: a floor under the fillet's cut, capped by each arm's allowance
-	// like a taper's inset (FJunctionArm::MinCutDistance).
-	for (int32 Arm = 0; Arm < 2; ++Arm)
-	{
-		Out.Input.Arms[Arm].MinCutDistance = FMath::Max(Out.Input.Arms[Arm].MinCutDistance, Widening.NeededCut[Arm]);
-	}
-	Out.Result = FJunctionSolver::SolveCuts(Out.Input);
-	if (!Out.Result.bValid)
-	{
-		return;
-	}
-	TArray<FVector2D> Rim;
-	double Shortfall = 0.0;
-	BendWidening::Rim(Out.Input, Out.Result, Widening, Rim, Shortfall);
-	Out.Input.Arms[Widening.Corner].RimToNext = MoveTemp(Rim);
-
-	// A SHORT ARM CAPS THE WIDENING, and the design vehicle then still leaves the tarmac here.
-	// Recorded, not logged: SolveAll says it once per Topology rebuild (the snap solves nodes on
-	// every cursor move, and a warning there would be one per move). The length named is the one
-	// whose allowance would hold the cut the widening needed: allowance = floor + SlackShare x slack.
-	if (Shortfall > 1.0)
-	{
-		for (int32 Arm = 0; Arm < 2; ++Arm)
-		{
-			const double Missing = Widening.NeededCut[Arm] - Out.Result.Arms[Arm].CutDistance;
-			const FRoadSegment* Segment = Network.GetSegment(Out.ArmSegments[Arm]);
-			if (Missing > 1.0 && Segment != nullptr && Missing / SlackShare > Out.Capped.LengthNeeded - Out.Capped.Length)
-			{
-				Out.Capped.NodeIndex = NodeIndex;
-				Out.Capped.Position = Out.Input.Position;
-				Out.Capped.Missing = Shortfall;
-				Out.Capped.Overrun = FMath::Max(0.0, Shortfall - BendWidening::Margin);
-				Out.Capped.Segment = Out.ArmSegments[Arm];
-				Out.Capped.Length = SegmentChordLength(Network, *Segment);
-				Out.Capped.LengthNeeded = Out.Capped.Length + Missing / SlackShare;
-			}
-		}
-	}
+	// CARRIED, NOT LAID: SmoothBend lays the inside as a curve from this profile - its depth and
+	// the S that holds it up each arm - and cuts the arms back for it (2026-09-25; the polygon rim
+	// this used to hand the boundary walk creased at every corner of its envelope).
+	Out.WideningCorner = Widening.Corner;
+	Out.WideningU = Widening.U;
+	Out.WideningW = Widening.W;
 }
 
+/** The rims' sample spacing, uu: fine and uniform, so the edge reads as the curve it is. */
+constexpr double RimSpacing = 40.0;
+
 /**
- * THE BEND'S OUTSIDE, CONCENTRIC WITH ITS LANES (user ruling 2026-09-25). The builder lays a
- * two-arm service-road bend's lanes as arcs about the INNER fillet's centre (BendLane, 4f874ec3);
- * the outer edge was the tier's fillet about its OWN centre, so a band of pavement outside the
- * outer lane was never driven. Now the outer rim is the arc about the same centre at the inner
- * fillet's radius plus the road width - a road width outside the inner edge everywhere round the
- * bend, as it is on the straights.
+ * ONE SMOOTH BEND (user, PIE on 33d6f49b: "three variants"). Every two-arm service-road bend is
+ * laid as ONE shape on both edges, GuidelineGeom::FRampedBend: the arm's line, the arc about the
+ * lanes' centre, the other arm's line - the inner edge at the inner fillet's radius, the outer at
+ * that plus the road width - each pushed off radially by a smoothly ramped offset:
  *
- * TANGENT TO BOTH ARMS BY CONSTRUCTION: the arms' outer edges run a road width outside their inner
- * edges, and the inner fillet's circle touches the inner edges, so the circle a road width larger
- * touches the outer edges - at the foot of the centre on each, the same distance along the arm as
- * the inner tangent point. Each arm's cut already sits there or further out (the inner fillet
- * pushed it there, the widening further), so the rim runs from the cut vertex straight along the
- * outer edge to that foot, round the arc, and back out to the other cut vertex.
+ *   inside:  by the widening's depth through the bend (0 where the trace asked for none);
+ *   both:    at a width step's narrower arm, by that arm's own edge's standing off the wide line.
  *
- * THE INNER FILLET'S RADIUS, NOT THE WIDENED INNER EDGE'S: the widening pushes the inside INTO THE
- * GRASS, toward the centre, for the trailer's cut; the lanes stay on their arcs. Measuring the
- * outside off the widened edge would pull it by the widening's depth into the outer lane - 272 uu
- * on the Wide tier, past the outer lane's centre line.
+ * So both edges and every lane share one centre and one ramp clock, and nothing creases: the ramp
+ * is smootherstep, its slope and curvature 0 where it meets the arm and where it reaches depth.
  *
- * WELD UNTOUCHED: the rim runs BETWEEN the solver's own cut vertices (FJunctionArm::RimToNext), so
- * the ribbons weld to it bitwise exactly as they did to the fillet arc. Two arms of one total width
- * only (the lanes' own condition is one width), service roads only (a taxiway's corner is authored
- * for aircraft), T and X junctions untouched.
- * ENFORCED BY: Airside.Build.BendLanes.OuterEdgeConcentric, .WeldExact
+ * A WIDTH STEP RUNS AT THE WIDER WIDTH through the bend: BuildNodeInput solved the corner as if
+ * both arms were the wider (FJunctionArm::CutHalfWidthLeft keeps the narrow ribbon's own cut), and
+ * the narrower arm's ramp is the width taper, OFF the bend on the arm where the arm holds it - where
+ * 33d6f49b creased it at the arc (27-35 degrees, measured).
+ *
+ * THE WIDENING IS A CURVE, NOT A POLYGON: the traced sweep (BendWidening::Measure, cached as
+ * before) sets how deep the inside goes (its deepest reach plus Margin, the whole arc) and how
+ * long each ramp must be for its lean to hold the envelope up each arm - searched, 25 uu at a
+ * time, against the traced profile.
+ *
+ * A SHORT ARM: the ramp wants the arm from the cut to the foot of the centre, and the arm's
+ * allowance may not hold it (the course's Wide lane corner: 1401 uu allowed, the fillet alone
+ * needs 1401). Then the ramp leans steeper to fit the room, down to its shortest (Taper, and no
+ * tighter than the inner arc); shorter than that, the arm runs on at its own width to the foot and
+ * the whole ramp lies on the arc from there (GuidelineGeom::FRampedBend says why never across the
+ * join) - still smooth. What that costs the widening's envelope is recorded as before (FCappedWidening). A straight across the cut line in
+ * its place - the first cut at this - measured a 90 degree crease (2026-09-25).
+ *
+ * WELD UNTOUCHED: every rim runs between the solver's own cut vertices (RimToNext), so the
+ * ribbons weld to it bitwise as they did to the fillet arc.
+ * ENFORCED BY: AirportMgr.RigCourse.BendsAreSmooth, Airside.Build.BendLanes.OuterEdgeConcentric, .WeldExact
  */
-void ConcentricOuterEdge(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out)
+void SmoothBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out)
 {
 	if (!Out.Result.bValid || Out.Input.Arms.Num() != 2 || Out.ArmSegments.Num() != 2 || Out.Result.Corners.Num() != 2)
 	{
 		return;
 	}
 	// A ROAD BEND: both arms service roads (a ground-vehicle lane) - a taxiway's corner is authored
-	// for aircraft and is not this rule's - and a corner under a half turn. Anything else is not a
-	// bend this rule is for, and is not recorded.
+	// for aircraft and is not this rule's - and a corner under a half turn.
 	const URoadProfile* Profiles[2] = { nullptr, nullptr };
 	for (int32 Arm = 0; Arm < 2; ++Arm)
 	{
@@ -689,11 +701,9 @@ void ConcentricOuterEdge(const URoadNetwork& Network, int32 NodeIndex, FRoadNode
 	Note.Position = Out.Input.Position;
 	Note.Tiers = FString::Printf(TEXT("%s / %s"), *Profiles[0]->GetName(), *Profiles[1]->GetName());
 	const int32 Outer = 1 - Inner;
-	const RoadGeom::FFillet& InnerFillet = Out.Result.Corners[Inner];
-	Note.InnerRadius = InnerFillet.Radius;
 	for (int32 Arm = 0; Arm < 2; ++Arm)
 	{
-		Note.Widths[Arm] = Out.Input.Arms[Arm].HalfWidthLeft + Out.Input.Arms[Arm].HalfWidthRight;
+		Note.Widths[Arm] = Profiles[Arm]->GetTotalWidth();
 	}
 	if (Out.Input.Arms[0].bContinuous || Out.Input.Arms[1].bContinuous)
 	{
@@ -703,70 +713,203 @@ void ConcentricOuterEdge(const URoadNetwork& Network, int32 NodeIndex, FRoadNode
 		return;
 	}
 
-	// THE ARC: about the inner fillet's centre - the lanes' - at its radius plus the WIDER arm's
-	// width. At a width step the two outer edges sit different distances from that centre, so no
-	// one circle touches both: sized for the wider, it touches the wider arm's outer edge and meets
-	// the narrower's where it crosses it, on the node's side of the foot (the first crossing coming
-	// round the bend), leaving a crease of acos(d / R) there. Sized for the narrower instead, it
-	// would run inside the wider arm's outer lane - the wider arm's pavement is the one that must
-	// hold, so the wider width it is, for either arm, arriving or leaving.
-	const FVector2D Centre = InnerFillet.Centre;
-	const double Radius = InnerFillet.Radius + FMath::Max(Note.Widths[0], Note.Widths[1]);
-	Note.OuterRadius = Radius;
+	const FVector2D Node = Out.Input.Position;
+	const FVector2D Centre = Out.Result.Corners[Inner].Centre;
+	const double InnerRadius = Out.Result.Corners[Inner].Radius;
+	// The width the bend runs at: the arms as solved (a width step's narrower arm is solved wide).
+	const double Width = FMath::Max(Out.Input.Arms[0].HalfWidthLeft + Out.Input.Arms[0].HalfWidthRight,
+		Out.Input.Arms[1].HalfWidthLeft + Out.Input.Arms[1].HalfWidthRight);
+	const double OuterRadius = InnerRadius + Width;
+	// THE RAMP CLOCK runs on the inner edge's base round the arc (GuidelineGeom::FRampedBend), so
+	// the lean and curvature rules below hold on the edge that turns tightest; every other curve of
+	// the bend is on a larger radius and ramps more gently. The centreline was tried first and
+	// leaned the inner edge 1.8x steeper than Taper where a ramp ran onto the arc (2026-09-25).
+	const double RefRadius = InnerRadius;
+	const double Sweep = UE_DOUBLE_PI - Out.Result.Corners[Inner].Theta;
+	const double ArcLength = InnerRadius * Sweep;
+	Note.InnerRadius = InnerRadius;
+	Note.OuterRadius = OuterRadius;
+	Note.RefRadius = RefRadius;
 
-	// Where the arc meets an arm's outer edge: the foot of the centre when the edge is a radius
-	// away (tangent), else the crossing nearer the node.
-	auto MeetEdge = [&Centre, Radius](const FRay2D& Edge, FVector2D& OutPoint) -> bool
+	// THE WIDENING, if the trace asked for one: its depth across the whole arc. U runs from the
+	// inner fillet's first tangent point (on arm Inner's LEFT edge), negative back up that arm;
+	// past the arc it is on arm Outer.
+	double Depth = 0.0;
+	for (const double W : Out.WideningW) { Depth = FMath::Max(Depth, W); }
+	// Under a uu is not a widening: the trace's own margin already covers it, and a ramp for it
+	// would cut the arms back past the fillet for nothing (Airside.Build.BendLanes.WideningOnlyWhereNeeded:
+	// the Narrow bend traced 0.2 uu, 2026-09-25).
+	const bool bWiden = Depth > 1.0 && Out.WideningCorner == Inner;
+	const double DMidInner = bWiden ? -Depth : 0.0;
+	if (InnerRadius + DMidInner <= 1.0)
 	{
-		const double Foot = FVector2D::DotProduct(Centre - Edge.Origin, Edge.Dir);
-		const FVector2D FootPoint = Edge.Origin + Edge.Dir * Foot;
-		const double Distance = FVector2D::Distance(FootPoint, Centre);
-		if (Distance > Radius + 1.0e-6)
+		Note.Reason = FString::Printf(TEXT("the widening (%.0f uu) is deeper than the inner radius (%.0f uu)"), Depth, InnerRadius);
+		return;
+	}
+	const double InnerArcRadius = InnerRadius + DMidInner;
+	Note.InnerArcRadius = InnerArcRadius;
+	// THE SHORTEST RAMP for a shift: no steeper than Taper, and bending no tighter than the inner
+	// arc itself - smootherstep's curvature peaks at 10/sqrt(3) x Shift / L^2, so L is at least
+	// sqrt(5.77 x Shift x InnerArcRadius). Where a ramp runs onto the arc the two curvatures add,
+	// and the inner edge is then nowhere tighter than half its arc's radius. Without the second
+	// term a 100 uu width step leant over 400 uu bent at 196 uu radius - a wiggle the eye reads
+	// as a crease though the tangent never breaks (measured 2026-09-25).
+	auto ShortestRamp = [InnerArcRadius](double Shift)
+	{
+		return FMath::Max(Shift / BendWidening::Taper, FMath::Sqrt(10.0 / FMath::Sqrt(3.0) * Shift * InnerArcRadius));
+	};
+
+	// PER ARM: the foot of the centre (where both arcs meet their lines), each edge's offset at the
+	// cut from the bend's lines (outward from the centre +), and the ramp that leans it onto them.
+	struct FArmRun
+	{
+		double Foot = 0.0;
+		double InnerEnd = 0.0;
+		double OuterEnd = 0.0;
+		double Shift = 0.0;
+		double Ramp = 0.0;
+	};
+	FArmRun Runs[2];
+	for (int32 Arm = 0; Arm < 2; ++Arm)
+	{
+		const FJunctionArm& In = Out.Input.Arms[Arm];
+		FArmRun& Run = Runs[Arm];
+		Run.Foot = FVector2D::DotProduct(Centre - Node, In.Tangent);
+		// The inner side is arm Inner's LEFT and arm Outer's RIGHT (corner i runs from arm i's left).
+		const bool bLeftInner = Arm == Inner;
+		const double SolvedInner = bLeftInner ? In.HalfWidthLeft : In.HalfWidthRight;
+		const double SolvedOuter = bLeftInner ? In.HalfWidthRight : In.HalfWidthLeft;
+		const double CutInner = bLeftInner ? (In.CutHalfWidthLeft >= 0.0 ? In.CutHalfWidthLeft : In.HalfWidthLeft)
+			: (In.CutHalfWidthRight >= 0.0 ? In.CutHalfWidthRight : In.HalfWidthRight);
+		const double CutOuter = bLeftInner ? (In.CutHalfWidthRight >= 0.0 ? In.CutHalfWidthRight : In.HalfWidthRight)
+			: (In.CutHalfWidthLeft >= 0.0 ? In.CutHalfWidthLeft : In.HalfWidthLeft);
+		// A narrower ribbon's inner edge stands further from the centre than the bend's, its outer nearer.
+		Run.InnerEnd = SolvedInner - CutInner;
+		Run.OuterEnd = CutOuter - SolvedOuter;
+		Run.Shift = FMath::Max(FMath::Abs(Run.InnerEnd - DMidInner), FMath::Abs(Run.OuterEnd));
+		Run.Ramp = Run.Shift > 0.0 ? ShortestRamp(Run.Shift) : 0.0;
+	}
+
+	// THE ENVELOPE: how far the design vehicle still leaves the tarmac, per arm's half of the inner
+	// edge, for ramps LIn / LOut on arms with Room uu between cut and foot. A trace sample beyond a
+	// cut is on the unwidened arm ribbon.
+	auto Deficits = [&](const double (&Ramp)[2], const double (&Room)[2], double (&OutWorst)[2])
+	{
+		OutWorst[0] = OutWorst[1] = 0.0;
+		const double Total = Room[Inner] + Sweep * RefRadius + Room[Outer];
+		for (int32 I = 0; I < Out.WideningU.Num(); ++I)
+		{
+			const double U = Out.WideningU[I];
+			const double Station = U < 0.0 ? Room[Inner] + U
+				: U <= ArcLength ? Room[Inner] + U / InnerRadius * RefRadius
+				: Room[Inner] + Sweep * RefRadius + (U - ArcLength);
+			const double Clamped = FMath::Clamp(Station, 0.0, Total);
+			const double Stands = -GuidelineGeom::RampOffset(Clamped, Total, Runs[Inner].InnerEnd, DMidInner,
+				Runs[Outer].InnerEnd, Ramp[Inner], Ramp[Outer], Room[Inner], Room[Outer]);
+			const int32 Side = Station < Total * 0.5 ? Inner : Outer;
+			OutWorst[Side] = FMath::Max(OutWorst[Side], Out.WideningW[I] - Stands);
+		}
+	};
+	if (bWiden)
+	{
+		// AND LONG ENOUGH TO HOLD THE TRACED ENVELOPE up each arm, the ramp ending at the foot (the
+		// cut is placed for it below): lengthened 25 uu at a time on whichever side still falls short.
+		double Ramp[2] = { Runs[0].Ramp, Runs[1].Ramp };
+		for (int32 Guard = 0; Guard < 800; ++Guard)
+		{
+			double Worst[2];
+			Deficits(Ramp, Ramp, Worst);
+			bool bGrew = false;
+			for (int32 Arm = 0; Arm < 2; ++Arm)
+			{
+				if (Worst[Arm] > 0.5 && Ramp[Arm] < 20000.0)
+				{
+					Ramp[Arm] += 25.0;
+					bGrew = true;
+				}
+			}
+			if (!bGrew) { break; }
+		}
+		Runs[0].Ramp = Ramp[0];
+		Runs[1].Ramp = Ramp[1];
+	}
+
+	// THE CUTS: at least the foot plus the ramp, within each arm's allowance.
+	for (int32 Arm = 0; Arm < 2; ++Arm)
+	{
+		FJunctionArm& In = Out.Input.Arms[Arm];
+		In.MinCutDistance = FMath::Max(In.MinCutDistance, Runs[Arm].Foot + Runs[Arm].Ramp);
+	}
+	Out.Result = FJunctionSolver::SolveCuts(Out.Input);
+	if (!Out.Result.bValid)
+	{
+		Note.Reason = TEXT("the arms could not be cut back to hold the bend's ramps");
+		return;
+	}
+
+	// A SHORT ARM: the ramp leans steeper to fit its room, down to ShortestRamp; shorter, it lies on the arc.
+	double Ramp[2];
+	double Room[2];
+	for (int32 Arm = 0; Arm < 2; ++Arm)
+	{
+		Room[Arm] = FMath::Max(0.0, Out.Result.Arms[Arm].CutDistance - Runs[Arm].Foot);
+		Ramp[Arm] = Room[Arm] + 1.0 >= Runs[Arm].Ramp ? Runs[Arm].Ramp : FMath::Max(Room[Arm], Runs[Arm].Shift > 0.0 ? ShortestRamp(Runs[Arm].Shift) : 0.0);
+		Note.Ramp[Arm] = Ramp[Arm];
+	}
+	if (bWiden)
+	{
+		// What the cap cost the envelope, recorded as before (SolveAll says it once per rebuild).
+		double Worst[2];
+		Deficits(Ramp, Room, Worst);
+		for (int32 Arm = 0; Arm < 2; ++Arm)
+		{
+			const double Missing = Runs[Arm].Foot + Runs[Arm].Ramp - Out.Result.Arms[Arm].CutDistance;
+			const FRoadSegment* Segment = Network.GetSegment(Out.ArmSegments[Arm]);
+			if (Missing > 1.0 && Worst[Arm] > 1.0 && Segment != nullptr
+				&& Missing / SlackShare > Out.Capped.LengthNeeded - Out.Capped.Length)
+			{
+				Out.Capped.NodeIndex = NodeIndex;
+				Out.Capped.Position = Node;
+				Out.Capped.Missing = Worst[Arm];
+				Out.Capped.Overrun = FMath::Max(0.0, Worst[Arm] - BendWidening::Margin);
+				Out.Capped.Segment = Out.ArmSegments[Arm];
+				Out.Capped.Length = SegmentChordLength(Network, *Segment);
+				Out.Capped.LengthNeeded = Out.Capped.Length + Missing / SlackShare;
+			}
+		}
+	}
+
+	// THE TWO RIMS. The inner corner runs from arm Inner's LEFT cut to arm Outer's RIGHT cut; the
+	// outer from arm Outer's LEFT cut to arm Inner's RIGHT cut. The cut vertices are the solver's
+	// own; the boundary walk adds them, so the rim is what lies between.
+	auto LayRim = [&](int32 FromArm, const FVector2D& FromCut, int32 ToArm, const FVector2D& ToCut, double Radius, double DMid)
+	{
+		GuidelineGeom::FRampedBend Bend;
+		Bend.Centre = Centre;
+		Bend.Radius = Radius;
+		Bend.DMid = DMid;
+		Bend.RefRadius = RefRadius;
+		Bend.LIn = Ramp[FromArm];
+		Bend.LOut = Ramp[ToArm];
+		TArray<FVector2D> Rim;
+		if (!GuidelineGeom::SampleRampedBend(FromCut, -Out.Input.Arms[FromArm].Tangent, ToCut, Out.Input.Arms[ToArm].Tangent,
+			Bend, RimSpacing, UE_DOUBLE_PI, Rim, nullptr) || Rim.Num() < 2)
 		{
 			return false;
 		}
-		const double Half = Distance >= Radius ? 0.0 : FMath::Sqrt(Radius * Radius - Distance * Distance);
-		if (Foot - Half < 0.0)
-		{
-			return false;
-		}
-		OutPoint = Half == 0.0 ? FootPoint : Edge.Origin + Edge.Dir * (Foot - Half);
+		Rim.RemoveAt(0);
+		Rim.Pop();
+		Out.Input.Arms[FromArm].RimToNext = MoveTemp(Rim);
 		return true;
 	};
-	// The outer corner runs from arm Outer's LEFT edge to arm Inner's RIGHT edge (corner i lies
-	// between arm i's left edge and arm i+1's right edge).
-	FVector2D Start, End;
-	if (!MeetEdge(FJunctionSolver::MakeLeftEdge(Out.Input, Outer), Start)
-		|| !MeetEdge(FJunctionSolver::MakeRightEdge(Out.Input, Inner), End))
+	if (!LayRim(Inner, Out.Result.Arms[Inner].LeftCut, Outer, Out.Result.Arms[Outer].RightCut, InnerRadius, DMidInner)
+		|| !LayRim(Outer, Out.Result.Arms[Outer].LeftCut, Inner, Out.Result.Arms[Inner].RightCut, OuterRadius, 0.0))
 	{
-		Note.Reason = TEXT("the outer arc meets an arm's outer edge behind the node");
+		Out.Input.Arms[0].RimToNext.Reset();
+		Out.Input.Arms[1].RimToNext.Reset();
+		Note.Reason = TEXT("the ramped edge does not hold round this corner (a foot of the centre behind a cut)");
 		return;
 	}
-	// The arc must end inside each arm's cut, or the rim would run past the cut vertex it joins.
-	const double StartAlong = FVector2D::DotProduct(Start - Out.Input.Position, Out.Input.Arms[Outer].Tangent);
-	const double EndAlong = FVector2D::DotProduct(End - Out.Input.Position, Out.Input.Arms[Inner].Tangent);
-	if (StartAlong > Out.Result.Arms[Outer].CutDistance + 1.0e-6 || EndAlong > Out.Result.Arms[Inner].CutDistance + 1.0e-6)
-	{
-		Note.Reason = FString::Printf(TEXT("the outer arc meets an arm beyond its cut (%.0f / %.0f uu vs cuts %.0f / %.0f)"),
-			StartAlong, EndAlong, Out.Result.Arms[Outer].CutDistance, Out.Result.Arms[Inner].CutDistance);
-		return;
-	}
-	const double StartAngle = FMath::Atan2(Start.Y - Centre.Y, Start.X - Centre.X);
-	const double Sweep = FMath::UnwindRadians(FMath::Atan2(End.Y - Centre.Y, End.X - Centre.X) - StartAngle);
-	// As finely as the inner fillet, scaled by the larger radius so a piece is no longer.
-	const int32 Pieces = FMath::Clamp(FMath::CeilToInt32(Out.Input.ArcSegments * Radius / FMath::Max(InnerFillet.Radius, 1.0)),
-		Out.Input.ArcSegments, 64);
-
-	TArray<FVector2D> Rim;
-	Rim.Reserve(Pieces + 1);
-	Rim.Add(Start);
-	for (int32 Piece = 1; Piece < Pieces; ++Piece)
-	{
-		const double Angle = StartAngle + Sweep * (static_cast<double>(Piece) / Pieces);
-		Rim.Add(Centre + FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)) * Radius);
-	}
-	Rim.Add(End);
-	Out.Input.Arms[Outer].RimToNext = MoveTemp(Rim);
 	Note.bApplied = true;
 }
 }
@@ -783,7 +926,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 		return false;
 	}
 	WidenBend(Network, NodeIndex, Out, DesignVehicles, Widening);
-	ConcentricOuterEdge(Network, NodeIndex, Out);
+	SmoothBend(Network, NodeIndex, Out);
 	return true;
 }
 

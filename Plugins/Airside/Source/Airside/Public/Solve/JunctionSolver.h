@@ -64,6 +64,16 @@ struct FJunctionArm
 	 */
 	TArray<FVector2D> RimToNext;
 
+	/**
+	 * THE RIBBON'S OWN HALF-WIDTHS AT THE CUT, when the corner is solved on wider ones: a two-arm
+	 * road bend whose arms differ in width is solved as if both were the wider (the bend runs at
+	 * one width, 2026-09-25), and the narrower arm's ribbon still ends at its own width - its cut
+	 * vertices are placed from these, and the caller's rim tapers from them to the wide edges.
+	 * Negative (the default) means "the same as HalfWidthLeft / HalfWidthRight".
+	 */
+	double CutHalfWidthLeft = -1.0;
+	double CutHalfWidthRight = -1.0;
+
 	/** Opaque caller tag, e.g. a packed FRoadSegmentId index. Never read by the solver. */
 	int32 UserData = INDEX_NONE;
 };

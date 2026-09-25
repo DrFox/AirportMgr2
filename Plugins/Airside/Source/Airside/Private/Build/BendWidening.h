@@ -17,8 +17,11 @@ struct FVehicle;
  * pursuit), every body point is put against the inner edge - the arm's straight edge, the fillet,
  * the other arm's straight edge, as one length u along it - and the edge is pushed out into the
  * grass by the deepest reach plus Margin at each u, with Taper either side so the widened edge
- * leans back onto the unwidened one instead of stepping. The arms are cut back far enough to hold
- * it, and the rim that replaces the fillet's arc is handed to FJunctionSolver::SolveBoundary.
+ * leans back onto the unwidened one instead of stepping. SmoothBend (RoadNetworkSolver.cpp) lays
+ * the inside from this profile as one smooth curve - the whole arc at the deepest reach, a ramp up
+ * each arm long enough to hold the rest - and cuts the arms back for it. The polygon rim this
+ * handed the boundary walk until 2026-09-25 creased at every corner of the envelope (13-22
+ * degrees on the rig course, measured).
  *
  * A PLAIN PATTERN, NOT A NEW SURFACE: the widened rim is the junction polygon's own boundary
  * between the same two cut vertices the fillet ran between, so the ribbon welds to it bitwise as
@@ -80,12 +83,4 @@ namespace BendWidening
 	bool Measure(const FJunctionInput& Input, const FJunctionResult& Result, const TArray<FLane> (&Lanes)[2],
 		const FVehicle& Body, FWidening& Out);
 
-	/**
-	 * The rim that replaces the inner fillet's arc, for the cuts Result now HAS (re-solved with
-	 * NeededCut as a floor, which the arms' allowance may have capped): InOut.W is clamped to lean
-	 * to nothing at each cut, and OutShortfall is how much of the envelope the cap cost - how far
-	 * the design vehicle will still leave the tarmac.
-	 */
-	void Rim(const FJunctionInput& Input, const FJunctionResult& Result, FWidening& InOut,
-		TArray<FVector2D>& OutRim, double& OutShortfall);
 }

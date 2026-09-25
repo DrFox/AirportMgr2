@@ -298,6 +298,16 @@ namespace GuidelineGeom
 	inline constexpr double BendArcPieceSweep = UE_DOUBLE_PI / 8.0;
 
 	/**
+	 * THE LENGTH RULE for a bend lane's curved pieces, uu (2026-09-25, "one density rule"): a lane
+	 * through a bend is laid in pieces no longer than this, whatever its tier or radius - so a Wide
+	 * bend's outer lane gets more nodes than a Narrow bend's inner one, in proportion. 300: every
+	 * course lane is then held to under 22.5 degrees a piece (BendArcPieceSweep, the fidelity
+	 * ceiling, still applied) on radii over 764 uu, which every road bend's lanes are.
+	 * ENFORCED BY: AirportMgr.RigCourse.BendsAreSmooth (mean curved piece length per lane)
+	 */
+	inline constexpr double BendPieceLength = 300.0;
+
+	/**
 	 * How far two lanes' distances from a bend's inner edge (or a lane end from its tangent point)
 	 * may differ, uu, for the lane to be laid concentric. Equal arms give the SAME solver value by
 	 * two float paths, so the spread is a rounding error; a real mismatch (a Narrow arm meeting a
@@ -346,11 +356,82 @@ namespace GuidelineGeom
 	 *
 	 * False, OutPieces empty, when no circle about Centre touches both lane lines (their distances
 	 * from Centre differ by more than BendTangentTolerance), when a tangent point lies BEHIND its
-	 * lane end, or when the turn does not go round Centre.
-	 * ENFORCED BY: Airside.Build.BendLanes.ConcentricWithPavement, .MixedWidthsKeepTheQuadratic
+	 * lane end, or when the turn does not go round Centre - a width step's lanes, which the builder
+	 * then lays with RampedBendLane.
+	 * ENFORCED BY: Airside.Build.BendLanes.ConcentricWithPavement, .EveryTierIsSmooth
 	 */
 	AIRSIDE_API bool BendLane(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
 		const FVector2D& Centre, TArray<FArcPiece>& OutPieces);
+
+	/**
+	 * ONE BEND SHAPE, EDGES AND LANES ALIKE (2026-09-25, user in PIE on 33d6f49b: "three variants").
+	 * A curve round a two-arm bend is its BASE - the line along the arriving arm, the arc about
+	 * Centre at Radius, the line along the leaving arm, tangent to each other - pushed off it
+	 * radially by an offset D (outward from Centre positive) that ramps smoothly between three
+	 * values: D at From (whatever the arriving end's own line stands off the base: a width step's
+	 * narrower arm), DMid through the bend (a widening's depth, negative, or 0) and D at To.
+	 *
+	 * THE RAMP IS ONE CLOCK FOR EVERY CURVE OF THE BEND: its position is a STATION - distance along
+	 * the arm, and angle x RefRadius on the arc - not each curve's own length, so an edge, its
+	 * partner and every lane between them are on the same fraction of their ramp at the same angle
+	 * and stay evenly spaced through it. LIn and LOut are the ramps' station lengths from each end.
+	 * Where the arm holds the ramp (from the cut to the foot of Centre) it lies there, ending before
+	 * the arc - a width step's taper OFF the bend; where it does not, the curve runs straight to the
+	 * foot and the whole ramp lies on the arc from there. NEVER ACROSS THE JOIN: a station advances
+	 * at 1 per uu on the arm but RefRadius / Radius on the arc, so a ramp still leaning at the foot
+	 * breaks every curve's tangent but the one at RefRadius - 4.2 degrees on a Standard / Wide
+	 * bend's outer edge, measured 2026-09-25.
+	 *
+	 * SMOOTHERSTEP, NOT THE LANE CHANGE'S TWO QUADRATICS: the ramp's curvature is continuous at
+	 * both of its ends and at its middle, so the curve's tangent turns evenly across every join -
+	 * the two-quadratic S (LaneChange) jumps its curvature at three points, and a steep one read
+	 * as a 3.5 degree crease on the course (measured 2026-09-25).
+	 */
+	struct FRampedBend
+	{
+		FVector2D Centre = FVector2D::ZeroVector;
+		double Radius = 0.0;
+		double DMid = 0.0;
+		double RefRadius = 0.0;
+		double LIn = 0.0;
+		double LOut = 0.0;
+	};
+
+	/** The ramp's 0..1 profile at T (smootherstep, clamped): value, slope and curvature 0 at both ends. */
+	AIRSIDE_API double RampProgress(double T);
+
+	/**
+	 * The radial offset at Station of Total: D0 at 0, D1 at Total, DMid between, each end's ramp
+	 * LIn / LOut long (clamped to Total; 0 = no ramp from that end), on the arm when it fits in
+	 * RoomIn / RoomOut (the station from the cut to the foot) and from the foot onward when it does
+	 * not - see FRampedBend. Overlapping ramps add, so a short bend's two ramps still meet smoothly.
+	 */
+	AIRSIDE_API double RampOffset(double Station, double Total, double D0, double DMid, double D1, double LIn, double LOut,
+		double RoomIn, double RoomOut);
+
+	/** Whether a ramp of Length fits its arm's Room (to 1 uu, so every curve of a bend agrees). */
+	inline bool RampFitsArm(double Length, double Room) { return Length <= Room + 1.0; }
+
+	/**
+	 * Samples the ramped bend from From (travelling FromDir) to To (leaving along ToDir): the points
+	 * about MaxStep apart along the curve and no more than MaxSweep of the arc apart, the first
+	 * exactly From and the last exactly To; OutTangents (optional) the unit travel direction at each.
+	 * False when the construction does not hold: Centre not inside the turn, a foot of Centre behind
+	 * an end, or the offset curve crossing the centre.
+	 */
+	AIRSIDE_API bool SampleRampedBend(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+		const FRampedBend& Bend, double MaxStep, double MaxSweep, TArray<FVector2D>& OutPoints, TArray<FVector2D>* OutTangents);
+
+	/**
+	 * A bend lane on the ramped bend, as quadratic pieces for the builder: sampled by THE LENGTH
+	 * RULE (BendPieceLength, under BendArcPieceSweep) and each piece's control on its two ends'
+	 * tangents' crossing, so the pieces meet tangent-continuous; a piece whose tangents do not
+	 * cross ahead of it (the ramp's inflection) is halved until they do. The last End is To
+	 * exactly. The width step's lanes use it: DMid 0, Radius the wider arm's lane line.
+	 * ENFORCED BY: AirportMgr.RigCourse.BendsAreSmooth, Airside.Build.BendLanes.EveryTierIsSmooth
+	 */
+	AIRSIDE_API bool RampedBendLane(const FVector2D& From, const FVector2D& FromDir, const FVector2D& To, const FVector2D& ToDir,
+		const FRampedBend& Bend, TArray<FArcPiece>& OutPieces);
 
 	/**
 	 * Position and heading at Distance along a polyline, clamped to both ends.

@@ -798,15 +798,16 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// on Wide, below both design vehicles' locks, where they turn at 726 / 938 and
 					// 853 / 1171 today (measured 2026-09-25). The ruling forbids a tighter turn.
 					// SINCE 2026-09-25 THE OUTER EDGE FOLLOWS: the solver lays the outside as the arc about
-					// this same centre at the inner radius plus the road width (ConcentricOuterEdge,
+					// this same centre at the inner radius plus the road width (SmoothBend,
 					// RoadNetworkSolver.cpp), so both edges and every lane now share the one centre.
 					//
 					// ONLY WHERE THE CONSTRUCTION HOLDS: two arms, a service-road lane on both (a
 					// taxiway's corner is authored for aircraft - PreferredFilletRadius - and stays as it
 					// was), and both lane ends on the same circle and at its tangent points. Arms of two
 					// widths put their lanes at different distances from the inner edge, so no one
-					// circle touches both: those keep the quadratic.
-					// ENFORCED BY: Airside.Build.BendLanes.ConcentricWithPavement, .NeverTighter, .MixedWidthsKeepTheQuadratic
+					// circle touches both: those RAMP onto the wider arm's circle (below). 33d6f49b kept
+					// the one quadratic there - "only one node around the corner", the user's variant (a).
+					// ENFORCED BY: Airside.Build.BendLanes.ConcentricWithPavement, .NeverTighter, .EveryTierIsSmooth
 					TArray<GuidelineGeom::FArcPiece> BendArc;
 					if (ArmSegments->Num() == 2 && Pair.Value.Corners.Num() == 2
 						&& Declared.Class == ETraversalClass::GroundVehicle && ToDeclared.Class == ETraversalClass::GroundVehicle)
@@ -831,6 +832,29 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 							// points (the solver cut the arms back to hold the widening) and are joined
 							// to the arc by straight leads.
 							GuidelineGeom::BendLane(PA, ArriveDir, PB, LeaveDir, Inside->Centre, BendArc);
+							// A WIDTH STEP RUNS AT THE WIDER WIDTH (2026-09-25): the narrower arm's lane end is
+							// off the circle the wider arm's touches, so it ramps onto it along the bend's own
+							// ramp clock - the one the solver laid both edges on (FBendOuter::Ramp), so the lanes
+							// stay evenly spaced between them through the taper (GuidelineGeom::RampedBendLane).
+							const double FromWidth = FromProfile->GetTotalWidth();
+							const double ToWidth = ToProfile->GetTotalWidth();
+							const FBendOuter* Bend = Solved.BendOuters.FindByPredicate(
+								[&Pair](const FBendOuter& Candidate) { return Candidate.NodeIndex == Pair.Key && Candidate.bApplied; });
+							const int32 FromArm = ArmSegments->IndexOfByKey(FromSeg);
+							const int32 ToArm = ArmSegments->IndexOfByKey(ToSeg);
+							if (BendArc.Num() == 0 && FromWidth != ToWidth && Bend != nullptr && FromArm != INDEX_NONE && ToArm != INDEX_NONE)
+							{
+								// The lanes' circle: the wider arm's lane line's distance from the centre.
+								const FVector2D Wide = FromWidth > ToWidth ? PA : PB;
+								const FVector2D WideDir = FromWidth > ToWidth ? ArriveDir : LeaveDir;
+								GuidelineGeom::FRampedBend Ramped;
+								Ramped.Centre = Inside->Centre;
+								Ramped.Radius = FMath::Abs(FVector2D::CrossProduct(Inside->Centre - Wide, WideDir));
+								Ramped.RefRadius = Bend->RefRadius;
+								Ramped.LIn = Bend->Ramp[FromArm];
+								Ramped.LOut = Bend->Ramp[ToArm];
+								GuidelineGeom::RampedBendLane(PA, ArriveDir, PB, LeaveDir, Ramped, BendArc);
+							}
 						}
 					}
 

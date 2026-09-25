@@ -367,6 +367,108 @@ namespace BendProbe
 		return Least;
 	}
 
+	/**
+	 * THE WORST TANGENT KINK along a polyline, degrees: at each vertex, how far its turn lies OUTSIDE
+	 * the range of its two neighbours' turns. Along a tangent-continuous curve sampled finer than its
+	 * features the turn varies smoothly, so each vertex's lies between its neighbours' and scores 0 -
+	 * an arc, a straight meeting an arc wherever the join falls between samples, a ramp's
+	 * inflection. A crease - two edges meeting at an angle with no curve between - turns more than
+	 * either neighbour by about its own angle and scores that. So it measures a break in the TANGENT,
+	 * not the curvature (TightestRadius does that) and not the sampling. The first version scored
+	 * the departure from the neighbours' MEAN, and read a curvature step as a kink - up to half a
+	 * step's turn, 1.4 degrees on a Narrow bend's plain arc at 40 uu (2026-09-25). Segments under
+	 * half a uu are merged, not measured.
+	 */
+	inline double TangentKinkDegrees(const TArray<FVector2D>& Polyline, FVector2D* OutWhere = nullptr)
+	{
+		TArray<FVector2D> P;
+		for (const FVector2D& Point : Polyline)
+		{
+			if (P.Num() == 0 || FVector2D::Distance(P.Last(), Point) > 0.5) { P.Add(Point); }
+		}
+		TArray<double> Turn;
+		TArray<FVector2D> At;
+		for (int32 I = 1; I + 1 < P.Num(); ++I)
+		{
+			const FVector2D A = (P[I] - P[I - 1]).GetSafeNormal();
+			const FVector2D B = (P[I + 1] - P[I]).GetSafeNormal();
+			Turn.Add(FMath::RadiansToDegrees(FMath::Atan2(A.X * B.Y - A.Y * B.X, FVector2D::DotProduct(A, B))));
+			At.Add(P[I]);
+		}
+		double Worst = 0.0;
+		for (int32 I = 0; I < Turn.Num(); ++I)
+		{
+			const double Before = I > 0 ? Turn[I - 1] : 0.0;
+			const double After = I + 1 < Turn.Num() ? Turn[I + 1] : 0.0;
+			const double Kink = FMath::Max3(0.0, Turn[I] - FMath::Max(Before, After), FMath::Min(Before, After) - Turn[I]);
+			if (Kink > Worst)
+			{
+				Worst = Kink;
+				if (OutWhere != nullptr) { *OutWhere = At[I]; }
+			}
+		}
+		return Worst;
+	}
+
+	/**
+	 * THE TIGHTEST LOCAL RADIUS along a polyline, uu: the smallest circle through three consecutive
+	 * vertices (collinear ones are skipped). Where TangentKinkDegrees judges the tangent, this judges
+	 * the curvature - a smooth wiggle has no kink and a small radius.
+	 */
+	inline double TightestRadius(const TArray<FVector2D>& Polyline, FVector2D* OutWhere = nullptr)
+	{
+		double Tightest = TNumericLimits<double>::Max();
+		for (int32 I = 1; I + 1 < Polyline.Num(); ++I)
+		{
+			const FVector2D A = Polyline[I - 1], B = Polyline[I], C = Polyline[I + 1];
+			const double Twice = FMath::Abs(FVector2D::CrossProduct(B - A, C - A));
+			if (Twice < 1e-6) { continue; }
+			const double Radius = FVector2D::Distance(A, B) * FVector2D::Distance(B, C) * FVector2D::Distance(C, A) / (2.0 * Twice);
+			if (Radius < Tightest)
+			{
+				Tightest = Radius;
+				if (OutWhere != nullptr) { *OutWhere = B; }
+			}
+		}
+		return Tightest;
+	}
+
+	/**
+	 * A two-arm junction's pavement edge round corner Corner (between arm Corner's LEFT cut and
+	 * arm Corner+1's RIGHT cut), led in and out by Lead uu of each arm's straight edge - so the
+	 * joins to the ribbons are judged with the rim. Empty when the rim does not hold both cuts.
+	 */
+	inline TArray<FVector2D> CornerEdge(const FJunctionResult& Junction, int32 Corner, double Lead = 300.0)
+	{
+		TArray<FVector2D> Out;
+		const int32 Rim = Junction.Boundary.Num() - 1;
+		const int32 ArmCount = Junction.Arms.Num();
+		if (Rim < 3 || !Junction.Arms.IsValidIndex(Corner)) { return Out; }
+		const FJunctionArmResult& From = Junction.Arms[Corner];
+		const FJunctionArmResult& To = Junction.Arms[(Corner + 1) % ArmCount];
+		auto TangentOf = [](const FJunctionArmResult& Arm)
+		{
+			const FVector2D N = (Arm.LeftCut - Arm.RightCut).GetSafeNormal();
+			return FVector2D(N.Y, -N.X);
+		};
+		int32 Start = INDEX_NONE;
+		int32 End = INDEX_NONE;
+		for (int32 I = 0; I < Rim; ++I)
+		{
+			if (Junction.Boundary[I] == From.LeftCut) { Start = I; }
+			if (Junction.Boundary[I] == To.RightCut) { End = I; }
+		}
+		if (Start == INDEX_NONE || End == INDEX_NONE) { return Out; }
+		Out.Add(From.LeftCut + TangentOf(From) * Lead);
+		for (int32 I = Start; ; I = (I + 1) % Rim)
+		{
+			Out.Add(Junction.Boundary[I]);
+			if (I == End) { break; }
+		}
+		Out.Add(To.RightCut + TangentOf(To) * Lead);
+		return Out;
+	}
+
 	/** Spread of a chain's samples' distances from Centre: max - min. 0 is concentric. */
 	inline void RadiusAbout(const FTurnChain& Chain, const FVector2D& Centre, double& OutMin, double& OutMax)
 	{
@@ -378,6 +480,104 @@ namespace BendProbe
 			OutMin = FMath::Min(OutMin, D);
 			OutMax = FMath::Max(OutMax, D);
 		}
+	}
+	/**
+	 * The tangent-kink ceiling for a bend's pavement edges and lanes, degrees (TangentKinkDegrees).
+	 * 1.5: a tangent-continuous curve scores ~0 however it is sampled, and the creases the user saw
+	 * on 33d6f49b - a width step's at the arc, a widening polygon's corners - score 13 to 35
+	 * (measured 2026-09-25).
+	 */
+	constexpr double KinkThreshold = 1.5;
+
+	/**
+	 * The tightest an edge may bend, as a fraction of its inner arc's radius (FBendOuter::
+	 * InnerArcRadius). One half: a ramp running onto the arc bends no tighter than the arc itself
+	 * (SmoothBend's ShortestRamp), so the two add to at most twice the arc's curvature. Catches the
+	 * smooth wiggle the kink cannot - a 100 uu step leant over 400 uu bent at 196 uu (2026-09-25).
+	 */
+	constexpr double TightestFraction = 0.5;
+
+	/** A lane chain with a straight lead of its own lanes either side, so the joins are judged too. */
+	inline TArray<FVector2D> LaneWithLeads(const URoadNetwork& Net, const FTurnChain& Chain, double Lead = 300.0)
+	{
+		TArray<FVector2D> Out;
+		FVector2D FarIn, FarOut;
+		if (Chain.Path.Num() == 0) { return Out; }
+		if (LaneAt(Net, Chain.From, FarIn)) { Out.Add(Chain.Path[0] + (FarIn - Chain.Path[0]).GetSafeNormal() * Lead); }
+		Out.Append(Chain.Path);
+		if (LaneAt(Net, Chain.To, FarOut)) { Out.Add(Chain.Path.Last() + (FarOut - Chain.Path.Last()).GetSafeNormal() * Lead); }
+		return Out;
+	}
+
+	/** One two-arm road bend's smoothness, measured - see MeasureSmoothness. */
+	struct FSmoothness
+	{
+		double InnerKink = 0.0;
+		double OuterKink = 0.0;
+		FVector2D InnerAt = FVector2D::ZeroVector;
+		FVector2D OuterAt = FVector2D::ZeroVector;
+		/** The tightest local radius of either edge, and where. */
+		double Tightest = TNumericLimits<double>::Max();
+		FVector2D TightAt = FVector2D::ZeroVector;
+		double LaneKink = 0.0;
+		int32 Lanes = 0;
+		/** The longest and shortest mean CURVED piece length over the bend's lanes (THE LENGTH RULE). */
+		double LongestStep = 0.0;
+		double ShortestStep = TNumericLimits<double>::Max();
+		/** Per lane: "N nodes (C curved) L uu, kink K; ". */
+		FString LaneText;
+
+		/** Whether it meets every rule: KinkThreshold, TightestFraction, BendPieceLength. */
+		bool Holds(double InnerArcRadius) const
+		{
+			return InnerKink <= KinkThreshold && OuterKink <= KinkThreshold && LaneKink <= KinkThreshold
+				&& Tightest >= TightestFraction * InnerArcRadius - 1.0
+				&& (Lanes == 0 || (LongestStep <= GuidelineGeom::BendPieceLength + 1.0 && ShortestStep >= 0.5 * GuidelineGeom::BendPieceLength));
+		}
+	};
+
+	/**
+	 * ONE SMOOTH SHAPE, measured at a two-arm bend (user, PIE on 33d6f49b: "three variants"): both
+	 * pavement edges from 300 uu up one arm to 300 uu down the other (CornerEdge), and every lane
+	 * turn with a lead of its lane either side. The course test and the per-tier fixture both judge
+	 * with this, so they cannot disagree about what smooth means.
+	 */
+	inline FSmoothness MeasureSmoothness(const URoadNetwork& Net, const FJunctionResult& Junction, FRoadNodeId Node)
+	{
+		FSmoothness Out;
+		if (Junction.Corners.Num() != 2) { return Out; }
+		const int32 Inner = Junction.Corners[0].Theta < UE_DOUBLE_PI ? 0 : 1;
+		const TArray<FVector2D> InnerEdge = CornerEdge(Junction, Inner);
+		const TArray<FVector2D> OuterEdge = CornerEdge(Junction, 1 - Inner);
+		Out.InnerKink = TangentKinkDegrees(InnerEdge, &Out.InnerAt);
+		Out.OuterKink = TangentKinkDegrees(OuterEdge, &Out.OuterAt);
+		FVector2D OuterTightAt;
+		const double InnerTight = TightestRadius(InnerEdge, &Out.TightAt);
+		const double OuterTight = TightestRadius(OuterEdge, &OuterTightAt);
+		Out.Tightest = FMath::Min(InnerTight, OuterTight);
+		if (OuterTight < InnerTight) { Out.TightAt = OuterTightAt; }
+		for (const FTurnChain& Chain : TurnsAt(Net, Node))
+		{
+			++Out.Lanes;
+			const double Kink = TangentKinkDegrees(LaneWithLeads(Net, Chain));
+			Out.LaneKink = FMath::Max(Out.LaneKink, Kink);
+			double Length = 0.0;
+			for (int32 I = 1; I < Chain.Path.Num(); ++I) { Length += FVector2D::Distance(Chain.Path[I - 1], Chain.Path[I]); }
+			int32 Curved = 0;
+			double CurvedLength = 0.0;
+			for (const FGuidelineEdgeId Id : Chain.Pieces)
+			{
+				const FGuidelineEdge* Piece = Net.GetGuidelineEdge(Id);
+				if (Piece != nullptr && Piece->MinRadius > 0.0) { ++Curved; CurvedLength += Piece->Length; }
+			}
+			if (Curved > 0)
+			{
+				Out.LongestStep = FMath::Max(Out.LongestStep, CurvedLength / Curved);
+				Out.ShortestStep = FMath::Min(Out.ShortestStep, CurvedLength / Curved);
+			}
+			Out.LaneText += FString::Printf(TEXT("%d nodes (%d curved) %.0f uu, kink %.1f; "), Chain.Pieces.Num() + 1, Curved, Length, Kink);
+		}
+		return Out;
 	}
 }
 

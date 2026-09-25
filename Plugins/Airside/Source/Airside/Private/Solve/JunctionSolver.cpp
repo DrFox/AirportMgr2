@@ -135,8 +135,12 @@ FJunctionResult FJunctionSolver::SolveCuts(const FJunctionInput& Input)
 		const FVector2D Normal = RoadGeom::PerpCCW(Arm.Tangent);
 		const FVector2D CutCentre = Input.Position + Arm.Tangent * Result.Arms[Index].CutDistance;
 
-		Result.Arms[Index].LeftCut  = CutCentre + Normal * FMath::Max(Arm.HalfWidthLeft, 0.0);
-		Result.Arms[Index].RightCut = CutCentre - Normal * FMath::Max(Arm.HalfWidthRight, 0.0);
+		// The ribbon's own half-widths when the corner was solved on wider ones - see
+		// FJunctionArm::CutHalfWidthLeft.
+		const double Left = Arm.CutHalfWidthLeft >= 0.0 ? Arm.CutHalfWidthLeft : Arm.HalfWidthLeft;
+		const double Right = Arm.CutHalfWidthRight >= 0.0 ? Arm.CutHalfWidthRight : Arm.HalfWidthRight;
+		Result.Arms[Index].LeftCut  = CutCentre + Normal * FMath::Max(Left, 0.0);
+		Result.Arms[Index].RightCut = CutCentre - Normal * FMath::Max(Right, 0.0);
 	}
 
 	return Result;

@@ -402,24 +402,47 @@ bool FBendLaneWeldTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBendLaneMixedTest, "Airside.Build.BendLanes.MixedWidthsKeepTheQuadratic",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBendLaneSmoothTest, "Airside.Build.BendLanes.EveryTierIsSmooth",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FBendLaneMixedTest::RunTest(const FString& Parameters)
+bool FBendLaneSmoothTest::RunTest(const FString& Parameters)
 {
-	// WHERE NO CIRCLE FITS, NOTHING CHANGES: a Narrow arm meeting a Wide one puts each lane at a
-	// different distance from the inner edge (210 and 285 uu), so no one circle about the fillet's
-	// centre touches both. The turns stay the one quadratic they were.
+	// ONE SMOOTH SHAPE PER TIER, AND ACROSS A WIDTH STEP (user, PIE on 33d6f49b: "three
+	// variants"). Every tier's right angle, and each mixed pair both ways round, judged as the rig
+	// course's bends are (BendProbe::MeasureSmoothness): both edges and every lane tangent-
+	// continuous, no edge tighter than half its inner arc, lanes laid by the one length rule.
+	// A WIDTH STEP'S LANES ARE A CURVE NOW, not the one quadratic cut to cut that 33d6f49b kept
+	// ("only one node around the corner") - they ramp onto the wide arm's circle on the bend's own
+	// ramp clock (GuidelineGeom::RampedBendLane), so each has more than two pieces.
 	using namespace BendLane;
 	const TArray<URoadProfile*> Profiles = Tiers();
 	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
 		Profiles.Num() == 3 && !Profiles.Contains(nullptr))) { return false; }
-	const FBend Bend = Build(Profiles[0], Profiles[2]);
-	const TArray<BendProbe::FTurnChain> Turns = BendProbe::TurnsAt(*Bend.Net, Bend.Corner);
-	TestEqual(TEXT("two lane turns at the mixed bend"), Turns.Num(), 2);
-	for (const BendProbe::FTurnChain& Turn : Turns)
+	const int32 Cases[][2] = { { 0, 0 }, { 1, 1 }, { 2, 2 }, { 0, 2 }, { 2, 0 }, { 1, 2 } };
+	for (const int32 (&Case)[2] : Cases)
 	{
-		TestEqual(TEXT("each is the one quadratic it was"), Turn.Pieces.Num(), 1);
+		const FString Name = FString::Printf(TEXT("%s -> %s"), Names[Case[0]], Names[Case[1]]);
+		const FBend Bend = Build(Profiles[Case[0]], Profiles[Case[1]]);
+		const FJunctionResult* Junction = Bend.Solved.NodeResults.Find(Bend.Corner.Index);
+		const FBendOuter* Note = Bend.Solved.BendOuters.FindByPredicate(
+			[&Bend](const FBendOuter& Candidate) { return Candidate.NodeIndex == Bend.Corner.Index; });
+		if (!TestTrue(FString::Printf(TEXT("%s: the bend solved and was laid as the smooth shape"), *Name),
+			Junction != nullptr && Note != nullptr && Note->bApplied)) { continue; }
+		const BendProbe::FSmoothness S = BendProbe::MeasureSmoothness(*Bend.Net, *Junction, Bend.Corner);
+		AddInfo(FString::Printf(TEXT("%s: inner kink %.2f, outer %.2f, tightest %.0f of arc %.0f, ramps %.0f / %.0f, lanes: %s"),
+			*Name, S.InnerKink, S.OuterKink, S.Tightest, Note->InnerArcRadius, Note->Ramp[0], Note->Ramp[1], *S.LaneText));
+		TestTrue(FString::Printf(TEXT("%s: the inner edge is smooth (kink %.2f deg)"), *Name, S.InnerKink), S.InnerKink <= BendProbe::KinkThreshold);
+		TestTrue(FString::Printf(TEXT("%s: the outer edge is smooth (kink %.2f deg)"), *Name, S.OuterKink), S.OuterKink <= BendProbe::KinkThreshold);
+		TestTrue(FString::Printf(TEXT("%s: no edge bends tighter than half its inner arc (%.0f of %.0f)"), *Name, S.Tightest, Note->InnerArcRadius),
+			S.Tightest >= BendProbe::TightestFraction * Note->InnerArcRadius - 1.0);
+		TestTrue(FString::Printf(TEXT("%s: every lane is smooth (kink %.2f deg)"), *Name, S.LaneKink), S.LaneKink <= BendProbe::KinkThreshold);
+		TestTrue(FString::Printf(TEXT("%s: two lanes, laid by one length rule (%.0f - %.0f uu)"), *Name, S.ShortestStep, S.LongestStep),
+			S.Lanes == 2 && S.LongestStep <= GuidelineGeom::BendPieceLength + 1.0 && S.ShortestStep >= 0.5 * GuidelineGeom::BendPieceLength);
+		for (const BendProbe::FTurnChain& Turn : BendProbe::TurnsAt(*Bend.Net, Bend.Corner))
+		{
+			TestTrue(FString::Printf(TEXT("%s: the lane turn is a curve in pieces, not one quadratic (%d)"), *Name, Turn.Pieces.Num()),
+				Turn.Pieces.Num() > 2);
+		}
 	}
 	return true;
 }

@@ -42,8 +42,8 @@ struct FCappedWidening
 };
 
 /**
- * A two-arm ROAD bend's outer edge (RoadNetworkSolver.cpp, ConcentricOuterEdge): laid concentric
- * with the lanes, or why not. One per service-road bend a solve saw; SolveAll logs each on a
+ * A two-arm ROAD bend's edges (RoadNetworkSolver.cpp, SmoothBend): laid as one smooth shape
+ * concentric with the lanes, or why not. One per service-road bend a solve saw; SolveAll logs each on a
  * Topology rebuild, a skip at Warning (re-review of d487f0da: the course showed three shapes and
  * the solver said nothing about the two that were not the rule).
  */
@@ -60,6 +60,15 @@ struct FBendOuter
 	double OuterRadius = 0.0;
 	/** The two arms' total widths; the arc is sized for the wider. */
 	double Widths[2] = { 0.0, 0.0 };
+	/** The inner edge's radius round the arc: the inner fillet's less any widening. */
+	double InnerArcRadius = 0.0;
+	/**
+	 * The bend's ramp clock (GuidelineGeom::FRampedBend), which the builder's width-step lanes
+	 * share with the edges so they stay evenly spaced through a taper: the reference radius (the
+	 * inner edge's base round the arc) and each arm's ramp station length, by arm index.
+	 */
+	double RefRadius = 0.0;
+	double Ramp[2] = { 0.0, 0.0 };
 };
 
 /** Every node's solved boundary, keyed by FRoadNodeId::Index. */
@@ -104,6 +113,14 @@ struct FRoadNodeCuts
 	FCappedWidening Capped;
 	/** Set when this node is a two-arm road bend (NodeIndex INDEX_NONE otherwise). */
 	FBendOuter Outer;
+	/**
+	 * The bend's traced inside widening, when it has one (WidenBend): the corner it is on and its
+	 * profile - W uu into the grass at U uu along the inner edge from the fillet's first tangent
+	 * point. The smooth bend (SmoothBend) lays the inside from it.
+	 */
+	int32 WideningCorner = INDEX_NONE;
+	TArray<double> WideningU;
+	TArray<double> WideningW;
 };
 
 /**
