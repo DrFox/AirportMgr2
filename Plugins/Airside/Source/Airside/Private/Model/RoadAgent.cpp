@@ -245,6 +245,17 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// its wheels spun on the spot - "they seem to rotate independent of speed, they just
 	// spin". Speed is what the last Advance actually covered. See FReverseRun::Speed.
 	case EAgentPhase::Reversing:   Motion.GroundSpeed = -Reverse.Speed;  break;
+	// ZERO BY WHAT THE PHASE IS, NOT BY WHAT THE FOLLOWER HAPPENS TO STILL HOLD - issue #289.
+	// Both Parked closing sites used to rely on Follower.Speed being hand-zeroed on the way
+	// in, and one of the two (a reverse leg ending with nothing left to drive) never touched
+	// it at all - the follower never ran on that stretch, so there was nothing to zero, and
+	// the stale motion handed back read whatever GroundSpeed the driving phase had reported
+	// on ITS last tick instead. See FRoadAgent::Park, which relies on this case rather than
+	// zeroing anything by hand. Gone is included for the same reason: nothing ever restarts
+	// the follower once a departure has cleared, so its last figure is not a fact about
+	// either resting phase.
+	case EAgentPhase::Parked:
+	case EAgentPhase::Gone:        Motion.GroundSpeed = 0.0; break;
 	default:                       Motion.GroundSpeed = Follower.Speed;  break;
 	}
 
@@ -745,21 +756,12 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 				// an engine that stopped the instant the wheels did would look like a
 				// stall - an arriving aircraft sits at the stand with the engine running
 				// while the chocks go in.
-				Phase = EAgentPhase::Parked;
+				//
+				// Park() DOES THE REST - see its own comment for why this used to be written
+				// out here AND at the reverse leg's own ending (issue #289), and for why
+				// Follower.Speed no longer needs zeroing by hand to keep the panel honest.
 				OutEvent = EAgentEvent::Parked;
-				ShutdownCountdown = ShutdownPause;
-
-				// ZEROED HERE: the Parked branch below never calls Follower.Advance again, so
-				// its Speed would otherwise sit at whatever the last taxiing tick left it at
-				// FOR EVER - and DescribeMotion reads exactly that field as GroundSpeed
-				// regardless of phase, so a parked aircraft would report itself still rolling.
-				Follower.Speed = 0.0;
-				// AND RE-DESCRIBED, so the motion this frame hands back agrees with the phase
-				// it just entered: the pose computed above carried the arriving speed, and a
-				// panel reading "Parked, 0.4 m/s" for one frame is the small version of the
-				// bug the zeroing above exists to stop (Airside.Model.InspectFacts caught it).
-				LastMotion = DescribeMotion(FollowAt, FollowHeading);
-				OutMotion = LastMotion;
+				Park(FollowAt, FollowHeading, OutMotion);
 				UE_LOG(LogAirsideTraffic, Log,
 					TEXT("Parked. Shutting down in %.0f s."), ShutdownCountdown);
 			}
@@ -808,11 +810,15 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			// THE REVERSE WAS THE LAST THING THE ROUTE DID. Nothing left to drive, so this is
 			// the same arrival the follower reports at the end of a taxi - taken here because
 			// the follower never ran on this stretch and so will never report it itself.
-			Phase = EAgentPhase::Parked;
+			//
+			// AT BackAt/BackHeading, NOT LastMotion - issue #289. FReverseRun::Advance writes
+			// its out-parameters before it checks arrival (see its own body), so they already
+			// hold THIS frame's rest pose even on the very call above that just returned
+			// false. Handing Park() the stale LastMotion here instead was the bug: it still
+			// carried Reversing's own GroundSpeed from the tick before, so a truck that had
+			// just backed to a stop reported itself parked and still rolling for one frame.
 			OutEvent = EAgentEvent::Parked;
-			ShutdownCountdown = ShutdownPause;
-			Follower.Speed = 0.0;
-			OutMotion = LastMotion;
+			Park(BackAt, BackHeading, OutMotion);
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Backed out; nothing further to drive."));
 			return true;
 		}
@@ -906,6 +912,30 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 	default:
 		return false;
 	}
+}
+
+void FRoadAgent::Park(const FVector2D& At, double Heading, FAgentMotion& OutMotion)
+{
+	Phase = EAgentPhase::Parked;
+	ShutdownCountdown = ShutdownPause;
+
+	// ZEROED HERE, ONCE, rather than relying on DescribeMotion's Parked/Gone case alone:
+	// SpeedAlongPlan() (TrafficClaims.cpp's stop-window arithmetic) and the tow seed copies
+	// (GroundTraffic.cpp, GroundTrafficRebuild.cpp) read Follower.Speed DIRECTLY, with no
+	// phase guard, so a parked agent with its follower left at taxi speed is readable as
+	// still taxiing by everything but the panel. This project has shipped exactly that
+	// regression before - a frozen follower speed read as real by a caller other than
+	// DescribeMotion - which is why both belts are kept rather than trusting the buckle.
+	Follower.Speed = 0.0;
+
+	// RE-DESCRIBED, so the motion this frame hands back agrees with the phase it just
+	// entered: (At, Heading) is this frame's own rest pose - see each call site for why it
+	// is never the same as LastMotion going in - and a panel reading "Parked, 0.4 m/s" for
+	// one frame is the bug this line exists to stop (Airside.Model.InspectFacts caught it).
+	// See this method's declaration for why it is written once, here, rather than at each
+	// closing site (issue #289).
+	LastMotion = DescribeMotion(At, Heading);
+	OutMotion = LastMotion;
 }
 
 bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMotion& OutMotion)

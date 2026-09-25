@@ -836,6 +836,31 @@ private:
 	bool FollowAndTow(double DeltaSeconds, FVector2D& OutAt, double& OutHeading);
 
 	/**
+	 * The ONE closing act of a route: Phase becomes Parked, the shutdown pause starts, and
+	 * the motion handed back is re-described from (At, Heading) so it agrees with the phase
+	 * just entered.
+	 *
+	 * WRITTEN ONCE HERE AFTER ISSUE #289. Both closing sites - a taxi arriving with no
+	 * departure armed, and a reverse leg that turns out to be the last thing the route has
+	 * left to drive - used to write Phase/ShutdownCountdown/the re-describe out by hand, and
+	 * one of the two (the reverse leg) skipped the re-describe: it handed back the stale
+	 * LastMotion from the driving phase's last tick instead, which still carried THAT
+	 * phase's own GroundSpeed. A panel reading "Parked, 0.4 m/s" for one frame is exactly the
+	 * bug the taxi-arrival copy of this code was written to stop (Airside.Model.InspectFacts
+	 * caught it originally); it came back on the OTHER path because there were two copies of
+	 * the ritual to keep in step instead of one. Airside.Model.RoadAgent.
+	 * ReverseLastLegParksAtRest pins the reverse-leg case.
+	 *
+	 * ZEROES Follower.Speed ONCE, HERE, rather than at each closing site as before: DescribeMotion's
+	 * own switch also answers zero for Parked/Gone directly (see there), but that only fixes what
+	 * the PANEL reads. SpeedAlongPlan() and the tow seed copies (GroundTraffic.cpp,
+	 * GroundTrafficRebuild.cpp) read Follower.Speed directly, with no phase guard, so a stale taxi
+	 * speed left in it is a fact a parked agent can still be caught telling other code - the shape
+	 * this project has shipped as a regression before.
+	 */
+	void Park(const FVector2D& At, double Heading, FAgentMotion& OutMotion);
+
+	/**
 	 * Checks whether the taxi has reached a reverse leg and, if so, drives the whole
 	 * handover: arms FReverseRun, or stops the agent and says why it refused. Split out of
 	 * Advance (issue #174 - Advance was 462 lines, and this block alone was over a hundred
