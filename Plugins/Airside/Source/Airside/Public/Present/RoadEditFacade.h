@@ -51,15 +51,17 @@ class IBuildPurse;
  * (bound to OnChanged in the constructor) does the reaching.
  *
  * NotifyChanged is the ONLY place that calls OnChanged.Broadcast() (issue #77). Every
- * scope-committing mutator EXCEPT MoveNode reaches it through CommitAndNotify, which pairs
- * an FRoadEditScope::Commit() with the notification so neither can happen without the
- * other. Undo, Redo and ClearNetwork call NotifyChanged directly instead, because none of
- * them fits that shape: Undo/Redo replace Network wholesale rather than mutating through a
- * scope, and ClearNetwork's own scope only records the pre-clear snapshot - the notify has
- * to wait until AFTER Owner.Network is replaced with the fresh one. MoveNode also calls
- * NotifyChanged directly, and on every successful call rather than once: a drag joins one
- * scope-free edit across many frames (BeginInteractiveEdit/EndInteractiveEdit), and needs a
- * rebuild each frame it actually moves, not only when the drag ends.
+ * scope-committing mutator reaches it through one of two doors: CommitAndNotify, which pairs
+ * an FRoadEditScope::Commit() with the notification so neither can happen without the other,
+ * or ApplyInteractiveMutation (issue #299) for the three mutators that join a drag already in
+ * progress instead of owning a plain scope - see that method's own comment for why a drag
+ * needs a door CommitAndNotify cannot be, and MoveNode/MoveApronCorner/MergeNodes's own call
+ * sites for how little of each is left once the shared shape moved out. Undo, Redo and
+ * ClearNetwork call NotifyChanged directly instead (the first two through AdoptNetwork, see
+ * its own comment), because none of them fits either shape: Undo/Redo/ClearNetwork replace
+ * Network wholesale rather than mutating through a scope, and ClearNetwork's own scope only
+ * records the pre-clear snapshot - the notify has to wait until AFTER Owner.Network is
+ * replaced with the fresh one.
  * SetIntermediateHoldingPosition now goes through CommitAndNotify too (issue #179) - it used
  * to commit WITHOUT notifying, on the reasoning that a holding position changes neither
  * pavement nor mesh, which stopped being true once FHoldingPositionMarkingBuilder started
@@ -70,22 +72,17 @@ class IBuildPurse;
  * comment for why Topology - the default, and every other scope-committing mutator's kind -
  * is actively wrong here, not merely more expensive than needed.
  *
- * MoveNode's (and MoveApronCorner's) PER-FRAME NOTIFY IS EChangeKind::Geometry, BUT ONLY
- * WHILE AN INTERACTIVE EDIT IS OPEN (issue #165, tightened by review follow-up, and again by
- * #190). Every earlier drag frame ran the full pipeline, guideline graph and anchor links and
- * plots and traffic included, at frame rate. Nothing about a slid position needs any of those
- * rebuilt until the drag actually stops moving nodes around, so EndInteractiveEdit(bKeep=true)
- * fires one EChangeKind::Topology notify of its own once the drag commits, and that single
- * notify is what catches the derived graph up - see its own comment. THE BARE-CALL TRAP: that
- * promise only holds while bInteractiveEditOpen is true at the moment of the notify - a call
- * with no EndInteractiveEdit coming (a bare `Actor->MoveNode(...)` that opens and closes its
- * own tiny history edit, with no surrounding BeginInteractiveEdit at all) notifies
- * EChangeKind::Topology instead, because nothing else will ever catch it up. See MoveNode's
- * own comment for the exact cases, and bInteractiveEditOpen's own comment for why this is no
- * longer `Use->IsEditing()` (#190): that test was always false in an editor world, where
- * HistoryForEdit() is a deliberate no-op, so every editor-mode drag frame notified Topology in
- * full and EndInteractiveEdit's own History-gated guard meant the derived graph was never
- * caught up either - the split applied to PIE only, for the whole time #165 existed.
+ * MoveNode's AND MoveApronCorner's PER-FRAME NOTIFY IS EChangeKind::Geometry, BUT ONLY WHILE
+ * AN INTERACTIVE EDIT IS OPEN (issue #165, tightened by review follow-up, #190, and folded
+ * into ApplyInteractiveMutation by #299) - see that method's own comment for the full
+ * bare-call-trap mechanics this class comment used to carry twice, byte-identical, once per
+ * mutator. In short: every earlier drag frame ran the full pipeline, guideline graph and
+ * anchor links and plots and traffic included, at frame rate; nothing about a slid position
+ * needs any of those rebuilt until the drag actually stops moving nodes around, so
+ * EndInteractiveEdit(bKeep=true) fires one EChangeKind::Topology notify of its own once the
+ * drag commits, and that single notify is what catches the derived graph up. MergeNodes
+ * shares the same helper but NOT this split - see ApplyInteractiveMutation's bChangesGraphShape
+ * for why a merge always notifies Topology, drag or no drag.
  *
  * ConnectGuidelines and DisconnectGuideline go through CommitAndNotify too, same as every
  * other scope-committing mutator above (issue #125). They used to open an FRoadEditScope and
@@ -327,18 +324,20 @@ private:
 
 	/**
 	 * THE single OnChanged.Broadcast() call site - see the class comment for exactly which
-	 * mutators call this directly (Undo, Redo, ClearNetwork, MoveNode) versus through
-	 * CommitAndNotify below, and which two currently call neither (issue #125).
+	 * mutators call this directly (Undo and Redo through AdoptNetwork, ClearNetwork) versus
+	 * through CommitAndNotify or ApplyInteractiveMutation below. Every scope-committing mutator
+	 * reaches one of those three; none call neither today (issue #125 closed the last two that
+	 * did, ConnectGuidelines and DisconnectGuideline).
 	 *
-	 * DEFAULTS TO Topology, which is every call site except MoveNode's per-frame notify
-	 * (issue #165) and SetIntermediateHoldingPosition's (issue #179): every OTHER scope-
-	 * committing mutator through CommitAndNotify changes the graph's shape, and so do
-	 * Undo/Redo/ClearNetwork (they replace Network wholesale) and MergeNodes (it removes a
-	 * node). MoveNode passes Geometry explicitly, because a drag frame moves a position and
-	 * nothing else - see its own call site. SetIntermediateHoldingPosition passes Markings
-	 * explicitly, through CommitAndNotify's own Kind parameter, because it moves nothing and
-	 * changes no shape either - see EChangeKind's own comment for why Topology's default
-	 * would be actively wrong there, not just wasteful.
+	 * DEFAULTS TO Topology, which is every call site except MoveNode/MoveApronCorner's
+	 * mid-drag notify (issue #165, now ApplyInteractiveMutation's bChangesGraphShape=false
+	 * path) and SetIntermediateHoldingPosition's (issue #179): every OTHER scope-committing
+	 * mutator through CommitAndNotify changes the graph's shape, and so do Undo/Redo/
+	 * ClearNetwork (they replace Network wholesale) and MergeNodes (it removes a node, so it
+	 * passes bChangesGraphShape=true to ApplyInteractiveMutation and always gets Topology).
+	 * SetIntermediateHoldingPosition passes Markings explicitly, through CommitAndNotify's own
+	 * Kind parameter, because it moves nothing and changes no shape either - see EChangeKind's
+	 * own comment for why Topology's default would be actively wrong there, not just wasteful.
 	 */
 	void NotifyChanged(EChangeKind Kind = EChangeKind::Topology);
 
@@ -403,11 +402,89 @@ private:
 
 	/**
 	 * Undo and Redo were the same six lines apart from which of URoadEditHistory's two
-	 * methods they called (#103): guard Network/History, run Step, adopt what it returns,
-	 * hide the ghost, NotifyChanged directly - NOT through CommitAndNotify, same as before -
-	 * see this class's comment on why those two mutators bypass it.
+	 * methods they called (#103): guard Network/History, run Step, adopt what it returns
+	 * through AdoptNetwork (#299) - NOT through CommitAndNotify or ApplyInteractiveMutation,
+	 * same as before - see this class's comment on why those two mutators bypass both.
 	 */
 	bool Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoadNetwork&)> Step);
+
+	/**
+	 * THE COMMON TAIL of every place this facade throws the live network away and takes a
+	 * REPLACEMENT rather than mutating it in place - spelled four times before issue #299 (a
+	 * regression of #103's own Travel, which only Undo/Redo ever joined): Travel itself
+	 * (Undo/Redo, adopting a Memento), the two RevertEdit sites (EndInteractiveEdit's
+	 * cannot-afford branch and ApplyInteractiveMutation's Verify-failure branch, each undoing a
+	 * whole open edit at once because AbandonEdit only drops the snapshot and does not put
+	 * anything back), and ClearNetwork (adopting a fresh, empty one). Byte for byte:
+	 * `Owner.Network = X; HideGhost(); NotifyChanged();`.
+	 *
+	 * HIDES THE GHOST because the preview may be describing a node that no longer exists in the
+	 * replacement, and its cache (IsGhostCacheHit) compares only the cursor and the start node -
+	 * neither of which a network swap changes, so a stale ghost would survive it and read as a
+	 * road that is there until the next mouse move proves otherwise.
+	 *
+	 * NOTIFIES Topology, NotifyChanged's own default - every caller here replaces the graph
+	 * wholesale, which is the largest shape change there is.
+	 */
+	void AdoptNetwork(URoadNetwork& NewNetwork);
+
+	/**
+	 * THE COMMON SHAPE MoveNode, MoveApronCorner and MergeNodes drifted into three copies of
+	 * (issue #299, a regression of #77 back): guard the network, join a drag ALREADY in
+	 * progress or open a tiny edit of its own, run Mutate, then Commit/Abandon/Revert and
+	 * notify - all of it byte-identical apart from the label and, in MergeNodes, a second
+	 * guard that had already drifted onto the first (`bOwnsEdit && Use != nullptr`, when
+	 * bOwnsEdit alone already implies Use is non-null).
+	 *
+	 * JOINS A DRAG ALREADY IN PROGRESS, so the whole drag is one undo step; on its own it is
+	 * one edit of its own. IsEditing is what tells the two apart - see BeginInteractiveEdit/
+	 * EndInteractiveEdit, which bracket a drag across many calls to this.
+	 *
+	 * MUTATE RETURNING FALSE MEANS NOTHING WAS TOUCHED, so ABANDON is right and Revert would be
+	 * wrong - see URoadEditHistory::RevertEdit on the distinction. No notify either: a refusal
+	 * changes nothing to rebuild for.
+	 *
+	 * VERIFY EXISTS FOR MergeNodes ALONE TODAY: MoveNode and MoveApronCorner judge their move
+	 * BEFORE calling this (their own guards refuse without mutating), so they pass none and
+	 * get the default, which always accepts. A merge cannot be judged until it exists -
+	 * RoadPlacement::NodeCornersFit reads a node's CURRENT arms, which do not exist as one set
+	 * until the merge has happened - so its Verify runs AFTER Mutate and, on a false answer,
+	 * REVERTS RATHER THAN REFUSES: AbandonEdit would leave the merged (and now un-cornerable)
+	 * graph standing with no undo step for it, where RevertEdit hands back the state the WHOLE
+	 * open edit started from - not merely this call's own slice of it, which is right when this
+	 * call joined a drag already in progress (drop-to-merge does exactly that). The revert is
+	 * unconditional on Use != nullptr, NOT gated on bOwnsEdit, for the same reason: a merge
+	 * that joined someone else's edit must still be able to unwind the whole thing.
+	 *
+	 * bChangesGraphShape SELECTS WHICH NOTIFY A SUCCESS GETS, and the two answers disagree on
+	 * purpose:
+	 *
+	 *   - false (MoveNode, MoveApronCorner): GEOMETRY ONLY WHILE AN INTERACTIVE EDIT IS STILL
+	 *     OPEN - THE BARE-CALL TRAP (review follow-up on #165). bInteractiveEditOpen true means
+	 *     this call joined a drag BeginInteractiveEdit started and EndInteractiveEdit has not
+	 *     yet closed - the ONLY case where something downstream (EndInteractiveEdit's own
+	 *     Topology notify) is guaranteed to catch the derived graph up later. Anything else has
+	 *     no EndInteractiveEdit coming and must do the whole job itself, Topology, right here: a
+	 *     BARE call (bOwnsEdit was true - this very call opened and closed its own tiny history
+	 *     edit, with no surrounding BeginInteractiveEdit at all) never set the flag in the first
+	 *     place. bInteractiveEditOpen, NOT `Use != nullptr && Use->IsEditing()` (issue #190) -
+	 *     that test was always false in an editor world, where HistoryForEdit() is a deliberate
+	 *     no-op (see its own comment), so an editor-mode drag notified Topology on every frame
+	 *     regardless of URoadBuildEdMode's own Begin/EndInteractiveEdit calls bracketing it
+	 *     exactly as PIE's do.
+	 *
+	 *   - true (MergeNodes): ALWAYS Topology, drag or no drag. A merge removes a node - the
+	 *     graph's SHAPE changed, not merely a position - and drop-to-merge runs from inside an
+	 *     already-open drag (FEditTool::OnDragEnd calls it before EndInteractiveEdit), so
+	 *     bInteractiveEditOpen reads true at exactly the moment a merge succeeds. Deferring to
+	 *     EndInteractiveEdit's catch-up the way a plain drag frame does would not be WRONG - the
+	 *     same Topology notify would still land, one call later - but it would fire TWICE (once
+	 *     here mislabelled Geometry, once more at EndInteractiveEdit), a second rebuild the
+	 *     graph's shape change does not owe.
+	 */
+	bool ApplyInteractiveMutation(const TCHAR* Label, TFunctionRef<bool(URoadNetwork&)> Mutate,
+		bool bChangesGraphShape = false,
+		TFunctionRef<bool(const URoadNetwork&)> Verify = [](const URoadNetwork&) { return true; });
 
 	/**
 	 * DeleteApron, DeleteEntity and DisconnectGuideline were the same shape apart from which
@@ -477,7 +554,8 @@ private:
 
 	/**
 	 * Whether MoveNode or MoveApronCorner actually moved something during the CURRENT
-	 * interactive edit - cleared in BeginInteractiveEdit, set by their own Geometry notify.
+	 * interactive edit - cleared in BeginInteractiveEdit, set by ApplyInteractiveMutation's
+	 * Geometry notify (issue #299 moved the setter off MoveNode/MoveApronCorner themselves).
 	 *
 	 * WHAT THIS GUARDS (issue #165 follow-up review). Before #165, every MoveNode/
 	 * MoveApronCorner notify ran the whole pipeline, so it did not matter whether the edit

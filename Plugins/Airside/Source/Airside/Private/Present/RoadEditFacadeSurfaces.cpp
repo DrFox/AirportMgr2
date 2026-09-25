@@ -45,13 +45,10 @@ bool URoadEditFacade::Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoad
 		return false;
 	}
 
-	// Adopted outright rather than copied: the history has already let go of it.
-	Owner.Network = Restored;
-
-	// The preview may be describing a node that no longer exists, and its cache compares
-	// only the cursor and the start node - neither of which an undo/redo changes.
-	Owner.HideGhost();
-	NotifyChanged();
+	// Adopted outright rather than copied: the history has already let go of it. See
+	// AdoptNetwork's own header comment (#299) for the hide-ghost-and-notify tail this shares
+	// with the two RevertEdit sites and ClearNetwork.
+	AdoptNetwork(*Restored);
 	return true;
 }
 
@@ -967,8 +964,10 @@ void URoadEditFacade::ClearNetwork()
 
 	// A fresh network rather than a drain: node removal bumps generations and prunes
 	// incident lists, and none of that bookkeeping is worth doing on the way to empty.
-	Owner.Network = NewObject<URoadNetwork>(&Owner);
-	NotifyChanged();
+	// AdoptNetwork (#299) is the same swap-and-notify tail Travel and the two RevertEdit
+	// sites use; HideGhost above already ran once, and AdoptNetwork's own call is harmless
+	// repeated.
+	AdoptNetwork(*NewObject<URoadNetwork>(&Owner));
 }
 
 FRoutePlan URoadEditFacade::FindRoute(

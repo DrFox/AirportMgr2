@@ -168,10 +168,14 @@ FString URoadEditHistory::PeekRedoLabel() const
 
 void URoadEditHistory::Clear()
 {
+	// ABANDON FIRST (issue #299), not a hand-rolled half of it. A pending edit still open when
+	// Clear runs used to leave PendingCharge/PendingQuote behind - this reset PendingSnapshot
+	// and PendingLabel but not those two - so a stale charge id would attach itself to
+	// whichever edit committed NEXT, reversing a charge that edit never made (see AbandonEdit's
+	// own comment on why the charge must go with the snapshot).
+	AbandonEdit();
 	UndoStack.Reset();
 	RedoStack.Reset();
-	PendingSnapshot = nullptr;
-	PendingLabel.Reset();
 }
 
 FRoadEditScope::FRoadEditScope(URoadEditHistory* InHistory, const URoadNetwork* InNetwork, const TCHAR* InLabel)
