@@ -301,6 +301,16 @@ struct AIRSIDE_API FRouteQuery
 	 */
 	TOptional<FTowSeed> TowSeed;
 
+	/**
+	 * A CALLER-OWNED memo of VehicleFit::Fits per edge, carried across Finds (review of
+	 * aa90eec2): a trace round every curve the search relaxes is most of what a vehicle's Find
+	 * costs - measured 2026-09-25, ~20 ms a Find for the rig on its course, 92 Finds on one tick.
+	 * The CALLER guarantees what the memo is keyed on and cannot see: the same Vehicle and the
+	 * same graph (URoadNetwork::GetGuidelineRevision). Null, the default: Find memoises within
+	 * itself only.
+	 */
+	TMap<FGuidelineEdgeId, bool>* FitCache = nullptr;
+
 	FRouteQuery& WithVehicle(const FVehicle& InVehicle)
 	{
 		Vehicle = &InVehicle;

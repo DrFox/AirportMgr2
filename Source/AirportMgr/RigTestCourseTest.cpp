@@ -1448,4 +1448,130 @@ bool FRigCourseBendCensusTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigCourseJoinThatFoldsIsCutTest,
+	"AirportMgr.RigCourse.JoinThatFoldsIsCut",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigCourseJoinThatFoldsIsCutTest::RunTest(const FString& Parameters)
+{
+	using namespace RigCourseTest;
+	// A JOIN THAT FOLDS IS CUT, NEVER HANDED ON (re-review of aa90eec2). No two legs of the course
+	// fold when joined, so the rig's first two legs are overridden with a fixture that does: leg 0
+	// two same-hand quarters (a U, which holds), leg 1 a third quarter (which holds on its own).
+	// Joined they are three quarters, which fold - PlanLoopRoute must end the route at leg 0's
+	// end (waypoint 1, mid-loop), not hand on the folding route.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
+	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	Course->BuildCourseForTest(*Actor);
+	URoadNetwork& Net = *Actor->Network;
+
+	// Hand-drawn, far off the course, authored so no rebuild sweeps them.
+	const double Leg = 830.0;
+	const FVector2D Origin(-200000.0, -200000.0);
+	auto Node = [&Net](const FVector2D& At) { return Net.AddGuidelineNode(At, /*bDerived=*/false); };
+	auto Join = [&Net](FGuidelineNodeId A, FGuidelineNodeId B, const FVector2D& Control)
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A;
+		Edge.B = B;
+		Edge.Control = Control;
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::AToB;
+		Edge.bDerived = false;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	};
+	const FGuidelineNodeId Start = Node(Origin + FVector2D(-4000.0, 0.0));
+	FGuidelineNodeId From = Node(Origin);
+	Join(Start, From, Origin + FVector2D(-2000.0, 0.0));
+	FVector2D At = Origin;
+	FVector2D Heading(1.0, 0.0);
+	TArray<FGuidelineNodeId> Ends;
+	for (int32 Quarter = 0; Quarter < 3; ++Quarter)
+	{
+		const FVector2D Side(-Heading.Y, Heading.X);
+		const FVector2D Control = At + Heading * Leg;
+		At = Control + Side * Leg;
+		Heading = Side;
+		const FGuidelineNodeId To = Node(At);
+		Join(From, To, Control);
+		Ends.Add(To);
+		From = To;
+	}
+	const FGuidelineNodeId Goal = Node(At + Heading * 4000.0);
+	Join(From, Goal, At + Heading * 2000.0);
+	auto Plan = [&Net](FGuidelineNodeId A, FGuidelineNodeId B)
+	{
+		return RouteSearch::Find(Net, FRouteQuery::For(ERouteErrand::GraphProbe, A, B, 0.0, ETraversalClass::GroundVehicle));
+	};
+	const FRoutePlan Leg0 = Plan(Start, Ends[1]);
+	const FRoutePlan Leg1 = Plan(Ends[1], Goal);
+	const FVehicle Rig = Course->GetVehicles()[0];
+	if (!TestTrue(TEXT("both fixture legs plan"), Leg0.IsValid() && Leg1.IsValid())) { return false; }
+	TestTrue(TEXT("leg 0, a U, holds the rig on its own"), VehicleFit::JudgePlan(Leg0, Rig, Net).Fits());
+	TestTrue(TEXT("leg 1, one quarter, holds the rig on its own"), VehicleFit::JudgePlan(Leg1, Rig, Net).Fits());
+
+	Course->PlanOverrideForTest = [&](int32 LegIndex, int32 Slot, bool, FRoutePlan& OutPlan)
+	{
+		if (Slot != 0 || LegIndex > 1) { return false; }
+		OutPlan = LegIndex == 0 ? Leg0 : Leg1;
+		return true;
+	};
+	FRoutePlan Route;
+	TArray<FRigLegMarker> Markers;
+	int32 EndStop = INDEX_NONE;
+	FWarningSpy Spy;
+	GLog->AddOutputDevice(&Spy);
+	const bool bPlanned = Course->PlanLoopRouteForTest(0, 0, Route, Markers, EndStop);
+	GLog->RemoveOutputDevice(&Spy);
+	Course->PlanOverrideForTest = nullptr;
+
+	TestTrue(TEXT("a route is planned"), bPlanned);
+	TestEqual(TEXT("it ends at leg 0's end - waypoint 1, mid-loop"), EndStop, 1);
+	TestEqual(TEXT("with one leg's marker"), Markers.Num(), 1);
+	TestEqual(TEXT("and exactly leg 0's road, the folding join cut off"), Route.Length, Leg0.Length, 0.01);
+	TestTrue(TEXT("the kept route holds the rig"), VehicleFit::JudgePlan(Route, Rig, Net).Fits());
+	TestTrue(TEXT("and the cut is said, with the fold"),
+		Spy.Containing(TEXT("the joined route folds the tow"), TEXT("trailer folds at guideline node")) == 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigCoursePlanCacheKnowsItsVehicleTest,
+	"AirportMgr.RigCourse.PlanCacheKnowsItsVehicle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigCoursePlanCacheKnowsItsVehicleTest::RunTest(const FString& Parameters)
+{
+	// A CACHED PLAN IS A FACT ABOUT A BODY, not a slot (re-review of aa90eec2): asked again, the
+	// same leg is answered from the cache; asked for a different vehicle in the same slot, it is
+	// planned afresh.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
+	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	Course->BuildCourseForTest(*Actor);
+
+	FRoutePlan Plan;
+	FString Reason;
+	const int32 Before = Course->GetPlanFindsForTest();
+	Course->PlanBetweenForTest(0, 1, 0, Plan, Reason);
+	TestEqual(TEXT("the first ask runs a Find"), Course->GetPlanFindsForTest(), Before + 1);
+	Course->PlanBetweenForTest(0, 1, 0, Plan, Reason);
+	TestEqual(TEXT("the same ask is answered from the cache"), Course->GetPlanFindsForTest(), Before + 1);
+
+	FVehicle Longer = Course->GetVehicles()[0];
+	Longer.Tow[0].Length += 100.0;
+	Course->SetVehicleForTest(0, Longer);
+	Course->PlanBetweenForTest(0, 1, 0, Plan, Reason);
+	TestEqual(TEXT("a different trailer in the same slot is planned afresh"), Course->GetPlanFindsForTest(), Before + 2);
+	TestNotEqual(TEXT("because the key is the vehicle's figures"),
+		ARigTestCourse::VehicleIdentity(Longer), ARigTestCourse::VehicleIdentity(UAirsideSettings::ResolveRigVehicle()));
+	return true;
+}
+
 #endif

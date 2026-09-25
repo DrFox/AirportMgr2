@@ -269,10 +269,38 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 	{
 		Reach += FMath::Abs(Link.HitchX) + Link.Length + Link.BodyFront + Link.BodyRear;
 	}
+	// WHICH VERTICES CAN BE JUDGED AT ALL - those of a step whose edge measured per-sample
+	// clearances on this sampling - as a running count, so a sub-step whose window holds none of
+	// them skips the corner projection outright (re-review of aa90eec2: most of a course route is
+	// straight lane, and projecting the body there only fed samples the tarmac loop below then
+	// ignores - the same verdict, measured cheaper). MeasuredBefore[V] counts measured vertices < V.
+	TArray<int32> MeasuredBefore;
 	if (bAnyClearance)
 	{
 		Left.Init(0.0, Plan.Polyline.Num());
 		Right.Init(0.0, Plan.Polyline.Num());
+		TArray<bool> Measured;
+		Measured.Init(false, Plan.Polyline.Num());
+		for (int32 StepIndex = 0; StepIndex < Plan.Steps.Num(); ++StepIndex)
+		{
+			const FRouteStep& Step = Plan.Steps[StepIndex];
+			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step.Edge);
+			const int32 StartVertex = StepIndex == 0 ? 0 : Plan.Steps[StepIndex - 1].EndVertex;
+			const int32 Count = Step.EndVertex - StartVertex + 1;
+			if (Edge != nullptr && Edge->ClearInnerAt.Num() == Count && Edge->ClearOuterAt.Num() == Count
+				&& Step.EndVertex < Plan.Polyline.Num())
+			{
+				for (int32 K = 0; K < Count; ++K)
+				{
+					Measured[StartVertex + K] = true;
+				}
+			}
+		}
+		MeasuredBefore.Init(0, Plan.Polyline.Num() + 1);
+		for (int32 Index = 0; Index < Plan.Polyline.Num(); ++Index)
+		{
+			MeasuredBefore[Index + 1] = MeasuredBefore[Index] + (Measured[Index] ? 1 : 0);
+		}
 	}
 	VertexAlong.Init(0.0, Plan.Polyline.Num());
 	for (int32 Index = 1; Index < Plan.Polyline.Num(); ++Index)
@@ -329,7 +357,7 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 		{
 			++Hi;
 		}
-		if (Hi <= Lo)
+		if (Hi <= Lo || MeasuredBefore[Hi + 1] == MeasuredBefore[Lo])
 		{
 			continue;
 		}

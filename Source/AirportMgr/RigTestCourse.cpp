@@ -625,6 +625,32 @@ void ARigTestCourse::PassMarker(FRigCourseRunner& Runner, const FRoadAgent& Agen
 		? LegTimeoutSeconds(Vehicles[Runner.Slot], Runner.Markers[0].Length, LegTimeoutFactor) : Runner.Timeout;
 }
 
+uint32 ARigTestCourse::VehicleIdentity(const FVehicle& Vehicle)
+{
+	uint32 Hash = GetTypeHash(Vehicle.TypeCode);
+	auto Mix = [&Hash](double Value) { Hash = HashCombine(Hash, GetTypeHash(Value)); };
+	Mix(Vehicle.BodyWidth);
+	Mix(Vehicle.BodyFrontX);
+	Mix(Vehicle.BodyRearX);
+	Mix(Vehicle.Chassis.SteerAxleX);
+	Mix(Vehicle.Chassis.FixedAxleX);
+	Mix(Vehicle.Chassis.Ground.MaxSteerDegrees);
+	// The speed figures too: the whole-route tow check drives the plan at them.
+	Mix(Vehicle.Chassis.Ground.Taxi.SpeedCap);
+	Mix(Vehicle.Chassis.Ground.Taxi.Accel);
+	Mix(Vehicle.Chassis.Ground.Taxi.Decel);
+	Mix(Vehicle.Chassis.Ground.MaxLateralAccelUu);
+	for (const FTowLink& Link : Vehicle.Tow)
+	{
+		Mix(Link.HitchX);
+		Mix(Link.Length);
+		Mix(Link.BodyFront);
+		Mix(Link.BodyRear);
+		Mix(Link.Width);
+	}
+	return HashCombine(Hash, GetTypeHash(Vehicle.Tow.Num()));
+}
+
 bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCourseWaypoint& To, int32 Slot,
 	FRoutePlan& OutPlan, FString& OutReason) const
 {
@@ -653,10 +679,12 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 	if (Network != PlanCacheNetwork.Get() || Revision != PlanCacheRevision)
 	{
 		PlanCache.Reset();
+		FitCaches.Reset();
 		PlanCacheNetwork = Network;
 		PlanCacheRevision = Revision;
 	}
-	const FPlanCacheKey Key{ Start, Goal, Slot };
+	const uint32 Identity = VehicleIdentity(Vehicles[Slot]);
+	const FPlanCacheKey Key{ Start, Goal, Identity };
 	if (const FCachedPlan* Hit = PlanCache.Find(Key))
 	{
 		OutPlan = Hit->Plan;
@@ -673,7 +701,14 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 	// stop being a fact about the body. The gate that matters is WithVehicle.
 	FRouteQuery Query = FRouteQuery::For(ERouteErrand::PlayerIssued, Start, Goal, 0.0, ETraversalClass::GroundVehicle);
 	Query.WithVehicle(Vehicles[Slot]);
+	// AND EACH EDGE'S FIT, per vehicle, dated with the plans above: most of a Find's cost is
+	// tracing the vehicle round curves, and every Find of the look-ahead asks the same curves.
+	Query.FitCache = &FitCaches.FindOrAdd(Identity);
+	const double FindBegan = FPlatformTime::Seconds();
 	OutPlan = RouteSearch::Find(*Network, Query);
+	++PlanFinds;
+	++TotalPlanFinds;
+	PlanFindMs += (FPlatformTime::Seconds() - FindBegan) * 1000.0;
 	if (!OutPlan.IsValid())
 	{
 		OutReason = DescribeRefusal(*Network, OutPlan, Slot);
@@ -763,13 +798,22 @@ bool ARigTestCourse::PlanLoopRoute(FRigCourseRunner& Runner, int32 Loop, int32 F
 	const FVehicle& Vehicle = Vehicles[Runner.Slot];
 	// THE HITCH, TIMED: this whole call runs on one tick - every leg's plan and every look-ahead.
 	const double PlanBegan = FPlatformTime::Seconds();
+	PlanFinds = 0;
+	PlanFindMs = 0.0;
+	JoinedJudgeMs = 0.0;
+	const int32 TowChecksBefore = RouteSearch::TowCheckCountForTest();
+	const double TowSecondsBefore = RouteSearch::TowCheckSecondsForTest();
 	ON_SCOPE_EXIT
 	{
 		const double Ms = (FPlatformTime::Seconds() - PlanBegan) * 1000.0;
 		WorstPlanMs = FMath::Max(WorstPlanMs, Ms);
 		TotalPlanMs += Ms;
 		++PlanCalls;
-		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s loop %d route from waypoint %d planned in %.1f ms."), *Who, Loop, From, Ms);
+		// WHERE IT WENT, so a hitch is a measurement and not a guess: the Finds the look-ahead ran
+		// (cache misses) and their time, the whole-route tow checks inside them, the joined judge.
+		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s loop %d route from waypoint %d planned in %.1f ms: %d Find(s) %.1f ms (%d tow check(s) %.1f ms), joined judge %.1f ms."),
+			*Who, Loop, From, Ms, PlanFinds, PlanFindMs, RouteSearch::TowCheckCountForTest() - TowChecksBefore,
+			(RouteSearch::TowCheckSecondsForTest() - TowSecondsBefore) * 1000.0, JoinedJudgeMs);
 	};
 	OutPlan = FRoutePlan();
 	OutMarkers.Reset();
@@ -907,21 +951,37 @@ bool ARigTestCourse::PlanLoopRoute(FRigCourseRunner& Runner, int32 Loop, int32 F
 	// the live chain, by UGroundTraffic::ExtendRoute. A route that folds is CUT at the last leg's
 	// end before the fold: the vehicle runs out there and plans on from rest, as for a leg that
 	// does not join.
-	// ENFORCED BY: Airside.Model.Tow.ExtendRouteJudgesTheJoin (the live re-judge); the cut itself
-	// is unpinned - no leg pair on this course folds when joined (none was cut, 2026-09-25).
+	// ENFORCED BY: AirportMgr.RigCourse.JoinThatFoldsIsCut (the cut, forced on a three-quarter
+	// fixture) and Airside.Model.Tow.ExtendRouteJudgesTheJoin (the live re-judge).
+	//
+	// CUT BY DISTANCE, NOT BY MATCHING A STEP END (re-review of aa90eec2): the kept leg is the last
+	// whose END lies strictly before the fold, and the plan keeps every step ending at or before
+	// that - so a marker that no step end equals exactly still cuts. Nothing before the fold to keep
+	// (it folds on the first leg) refuses the whole section, loudly: a folding route is never
+	// handed on uncut.
 	if (OutPlan.IsValid() && Vehicle.HasTrailer() && OutMarkers.Num() > 1)
 	{
+		const double JudgeBegan = FPlatformTime::Seconds();
 		const FFitVerdict Whole = VehicleFit::JudgePlan(OutPlan, Vehicle, *NetworkActor->GetNetwork());
+		JoinedJudgeMs += (FPlatformTime::Seconds() - JudgeBegan) * 1000.0;
 		if (Whole.Refusal == EFitRefusal::TrailerFolds)
 		{
-			int32 Keep = 0;
+			int32 Keep = INDEX_NONE;
 			while (Keep + 1 < OutMarkers.Num() && OutMarkers[Keep + 1].EndDistance < Whole.Along)
 			{
 				++Keep;
 			}
-			const double CutAt = OutMarkers[Keep].EndDistance;
-			const int32 LastStep = OutPlan.Steps.IndexOfByPredicate(
-				[CutAt](const FRouteStep& Step) { return FMath::IsNearlyEqual(Step.EndDistance, CutAt, 0.01); });
+			int32 LastStep = INDEX_NONE;
+			if (Keep != INDEX_NONE)
+			{
+				// A HAIR OF SLACK, not an equality: the marker's distance is the plan's length when
+				// its leg was joined, and the steps' are re-summed by Splice.
+				const double CutAt = OutMarkers[Keep].EndDistance + 0.01;
+				while (LastStep + 1 < OutPlan.Steps.Num() && OutPlan.Steps[LastStep + 1].EndDistance <= CutAt)
+				{
+					++LastStep;
+				}
+			}
 			if (LastStep != INDEX_NONE)
 			{
 				UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d: the joined route folds the tow (%s); it ends at waypoint %d and plans on from rest."),
@@ -929,6 +989,14 @@ bool ARigTestCourse::PlanLoopRoute(FRigCourseRunner& Runner, int32 Loop, int32 F
 				OutPlan = RouteSearch::Section(OutPlan, 0, LastStep);
 				OutMarkers.SetNum(Keep + 1);
 				OutEndStop = OutMarkers[Keep].Target;
+			}
+			else
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d: the joined route from waypoint %d folds the tow on its first leg (%s) and cannot be cut before it; this section is refused."),
+					*Who, Loop, From, *Whole.Describe());
+				OutPlan = FRoutePlan();
+				OutMarkers.Reset();
+				OutEndStop = From;
 			}
 		}
 	}

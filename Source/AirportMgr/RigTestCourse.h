@@ -321,6 +321,34 @@ public:
 	 */
 	bool bRefuseExtensionsForTest = false;
 
+	/** PlanLoopRoute for Slot's runner from stop From, in its current loop - the cut's test. */
+	bool PlanLoopRouteForTest(int32 Slot, int32 From, FRoutePlan& OutPlan, TArray<FRigLegMarker>& OutMarkers, int32& OutEndStop)
+	{
+		ResolveNetworkActor();
+		return PlanLoopRoute(Runners[Slot], Runners[Slot].LoopsCompleted + 1, From, false, OutPlan, OutMarkers, OutEndStop);
+	}
+
+	/** Swaps Slot's vehicle - the plan cache's vehicle-identity test. */
+	void SetVehicleForTest(int32 Slot, const FVehicle& Vehicle) { Vehicles[Slot] = Vehicle; }
+
+	/** PlanBetween's cache misses since BeginPlay: Finds actually run. */
+	int32 GetPlanFindsForTest() const { return TotalPlanFinds; }
+
+	/** PlanBetween, public for the cache test. */
+	bool PlanBetweenForTest(int32 FromStop, int32 ToStop, int32 Slot, FRoutePlan& OutPlan, FString& OutReason)
+	{
+		ResolveNetworkActor();
+		return PlanBetween(StopAt(false, FromStop), StopAt(false, ToStop), Slot, OutPlan, OutReason);
+	}
+
+	/**
+	 * What a cached plan is keyed on for its VEHICLE (re-review of aa90eec2): the type code and
+	 * every figure route search gates on - body, chassis, lock, each tow link. A slot is not an
+	 * identity: Vehicles is re-resolved by BuildCourse and a test may swap one.
+	 * ENFORCED BY: AirportMgr.RigCourse.PlanCacheKnowsItsVehicle
+	 */
+	static uint32 VehicleIdentity(const FVehicle& Vehicle);
+
 	/** ConnectNodes calls refused while the course was laid. */
 	int32 GetRefusedConnectsForTest() const { return RefusedConnects; }
 
@@ -444,11 +472,11 @@ private:
 	{
 		FGuidelineNodeId Start;
 		FGuidelineNodeId Goal;
-		int32 Slot = 0;
-		bool operator==(const FPlanCacheKey& Other) const { return Start == Other.Start && Goal == Other.Goal && Slot == Other.Slot; }
+		uint32 Vehicle = 0;
+		bool operator==(const FPlanCacheKey& Other) const { return Start == Other.Start && Goal == Other.Goal && Vehicle == Other.Vehicle; }
 		friend uint32 GetTypeHash(const FPlanCacheKey& Key)
 		{
-			return HashCombine(HashCombine(GetTypeHash(Key.Start), GetTypeHash(Key.Goal)), ::GetTypeHash(Key.Slot));
+			return HashCombine(HashCombine(GetTypeHash(Key.Start), GetTypeHash(Key.Goal)), ::GetTypeHash(Key.Vehicle));
 		}
 	};
 	struct FCachedPlan
@@ -457,8 +485,16 @@ private:
 		FString Reason;
 	};
 	mutable TMap<FPlanCacheKey, FCachedPlan> PlanCache;
+	/** Per vehicle identity, VehicleFit::Fits per edge (FRouteQuery::FitCache), cleared with PlanCache. */
+	mutable TMap<uint32, TMap<FGuidelineEdgeId, bool>> FitCaches;
+	mutable int32 TotalPlanFinds = 0;
 	mutable TWeakObjectPtr<const URoadNetwork> PlanCacheNetwork;
 	mutable uint32 PlanCacheRevision = 0;
+
+	/** Per PlanLoopRoute call, the breakdown its log line gives: PlanBetween's cache misses (Finds) and their ms, and the joined-route judge's ms. */
+	mutable int32 PlanFinds = 0;
+	mutable double PlanFindMs = 0.0;
+	double JoinedJudgeMs = 0.0;
 
 	/** See GetWorstPlanMsForTest. */
 	double WorstPlanMs = 0.0;

@@ -354,7 +354,11 @@ over the whole planned route, so it cannot send a tow where its trailer folds:**
   (`MaxTowDetourFactor`). FuelService's ungated way home is never driven by a tow it folds
   (`UFuelService::MayDriveUngated`). Fold refusals of a replan / rebuild re-resolve log at Log.
   The course caches `PlanBetween` per (start, goal, vehicle, graph revision): the rig's loop-boundary
-  plan fell from 2452 ms to 44 ms (the first, cold plan is still ~2.3 s).
+  plan fell from 2452 ms to 44 ms. The first, cold plan fell from ~2.45 s to 0.36-0.43 s once
+  route search memoised `VehicleFit::Fits` across the course's Finds (`FRouteQuery::FitCache`, per
+  vehicle identity and graph revision) and `JudgePlan` skipped the body projection where no edge
+  measured clearances; what remains is the look-ahead's 69 refused Finds from the three dead-end
+  stops, each a whole-route check that folds in the balloon.
 
 **REVISED 2026-09-25 ("one route per loop") - the course drives one route per loop, like the
 game; legs are progress markers:**
