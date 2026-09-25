@@ -3245,4 +3245,69 @@ bool FTrafficRedirectDisarmsDepartureTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+// COINCIDENT TWINS SURVIVE A REBUILD (2026-09-25). At a straight-through road node whose arms
+// share a lane offset, the builder leaves two lane ends at ONE point joined by a zero-length turn
+// path. The re-resolve looked each step's end up by position; on a tie FindNearestNode takes the
+// later slot, so both steps named the same twin, no edge joined them, and the "failure" replanned
+// to the goal - which on the rig course cut three dead ends out of the utility's route. Built by
+// hand here as that pair: B1 and B2 at the same point, B2 the later slot, rebuilt in the same
+// order so the tie goes the same way.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRebuildCoincidentTwinsTest,
+	"Airside.Model.Traffic.RebuildCoincidentTwins",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRebuildCoincidentTwinsTest::RunTest(const FString& Parameters)
+{
+	struct FTwinGraph { FGuidelineNodeId A, B1, B2, C; };
+	auto Build = [](URoadNetwork& Net)
+	{
+		TArray<FGuidelineEdgeId> Edges;
+		for (int32 I = 0; I < Net.GetGuidelineEdges().Num(); ++I) { if (Net.GetGuidelineEdges()[I].bAlive) { Edges.Add(Net.GuidelineEdgeIdAt(I)); } }
+		for (const FGuidelineEdgeId& Id : Edges) { Net.RemoveGuidelineEdge(Id); }
+		for (int32 I = 0; I < Net.GetGuidelineNodes().Num(); ++I) { if (Net.GetGuidelineNodes()[I].bAlive) { Net.RemoveGuidelineNode(Net.GuidelineNodeIdAt(I)); } }
+		FTwinGraph G;
+		G.A = Net.AddGuidelineNode(FVector2D(0.0, 0.0));
+		G.B1 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0));
+		G.B2 = Net.AddGuidelineNode(FVector2D(20000.0, 0.0));
+		G.C = Net.AddGuidelineNode(FVector2D(40000.0, 0.0));
+		TestGraph::Join(Net, G.A, G.B1);
+		TestGraph::Join(Net, G.B1, G.B2);   // the zero-length turn path
+		TestGraph::Join(Net, G.B2, G.C);
+		return G;
+	};
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FTwinGraph Was = Build(*Net);
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Was.A, Was.C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	TickUntil(*Traffic, *Net, 5.0, [](int32) { return true; });
+	const FRoadAgent* Agent = Traffic->FindAgent(Van);
+	if (!TestNotNull(TEXT("the van is out"), Agent)) { return false; }
+	if (!TestEqual(TEXT("the plan steps through BOTH twins: A->B1, B1->B2, B2->C"), Agent->Follower.Plan.Steps.Num(), 3)) { return false; }
+	TestTrue(TEXT("and the van is on the first step, ahead of the twins"), Agent->Follower.Travelled < Agent->Follower.Plan.Steps[0].EndDistance);
+	const double LengthWas = Agent->Follower.Plan.Length;
+
+	const FTwinGraph Now = Build(*Net);
+	TestTrue(TEXT("the rebuild gave every node a new handle"), Now.B1 != Was.B1 && Now.B2 != Was.B2);
+	// THE AMBIGUITY ITSELF: one position, one answer, two nodes that both hold it.
+	const FGuidelineNodeId Found = RouteSearch::FindNearestNode(*Net, FVector2D(20000.0, 0.0), ETraversalClass::GroundVehicle, 25.0);
+	TestTrue(TEXT("position alone names just one of the twins"), Found == Now.B1 || Found == Now.B2);
+	Traffic->OnGraphRebuilt(*Net);
+
+	const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();
+	TestEqual(TEXT("the van was re-resolved"), Summary.ReResolved, 1);
+	TestEqual(TEXT("and NOT replanned: nothing was lost, so nothing is searched - a replan to the goal drops via points"), Summary.Replanned, 0);
+	TestEqual(TEXT("nor truncated"), Summary.Truncated, 0);
+	Agent = Traffic->FindAgent(Van);
+	const FRoutePlan& Plan = Agent->Follower.Plan;
+	TestTrue(TEXT("step 0 ends at the FIRST twin, the one its edge reaches"), Plan.Steps[0].To == Now.B1);
+	TestTrue(TEXT("step 1 is the zero-length path to the second"), Plan.Steps[1].To == Now.B2);
+	TestTrue(TEXT("step 2 ends at C"), Plan.Steps[2].To == Now.C);
+	TestTrue(TEXT("the goal is C's new handle"), Agent->GoalNode == Now.C);
+	TestEqual(TEXT("the route's length is unchanged"), Plan.Length, LengthWas, 1e-9);
+	return true;
+}
+
 #endif

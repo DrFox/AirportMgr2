@@ -596,6 +596,68 @@ namespace RigCourseTest
 	constexpr int32 MaxTicks = 200000;
 
 	const TCHAR* const Names[2] = { TEXT("rig"), TEXT("utility") };
+
+	/**
+	 * A waypoint's lane end in world XY and HALF ITS LANE's width - one lane of the two-way
+	 * road it is arrived along. Resolved here from the network, independently of the course.
+	 */
+	bool LaneEndOf(const URoadNetwork& Net, const FRigCourseWaypoint& W, FVector2D& OutAt, double& OutHalfLane)
+	{
+		const FGuidelineNodeId Id = ARigTestCourse::ResolveWaypoint(Net, W);
+		const FGuidelineNode* Node = Id.IsSet() ? Net.GetGuidelineNode(Id) : nullptr;
+		const FRoadNode* RoadNode = Net.GetNode(W.Node);
+		if (Node == nullptr || RoadNode == nullptr) { return false; }
+		OutAt = Node->Position;
+		OutHalfLane = 0.0;
+		for (const FRoadSegmentId& SegId : RoadNode->Incident)
+		{
+			const FRoadSegment* Seg = Net.GetSegment(SegId);
+			const URoadProfile* Profile = Seg != nullptr ? Net.ProfileFor(*Seg) : nullptr;
+			if (Profile != nullptr && (Seg->A == W.From || Seg->B == W.From))
+			{
+				OutHalfLane = 0.25 * Profile->GetTotalWidth();
+			}
+		}
+		return OutHalfLane > 0.0;
+	}
+
+	/**
+	 * THE MARKERS ARE AT THEIR WAYPOINTS (2026-09-25). A marker is a distance along the route,
+	 * so a route that stops going where the marker was planned still "arrives" at every one:
+	 * the utility's log said each dead-end leg arrived while it drove past all three stems. So
+	 * for every DRIVEN leg of Slot's last loop - every waypoint not refused or routed past - both
+	 * the vehicle's steered axle as the marker fired and the live route's own point at the
+	 * marker's distance must be within the lane's half-width, plus the tick's overshoot and
+	 * 20 uu, of THAT waypoint's lane end.
+	 */
+	void CheckMarkersAtWaypoints(FAutomationTestBase& Test, const ARigTestCourse& Course, const URoadNetwork& Net, int32 V)
+	{
+		const TArray<FRigCourseWaypoint>& Waypoints = Course.GetWaypoints();
+		const int32 Legs = Waypoints.Num();
+		const TArray<FRigLegResult>& Results = Course.LastLoopResultsForTest(V);
+		int32 Checked = 0;
+		for (int32 L = 0; L < Legs && L < Results.Num(); ++L)
+		{
+			const FRigLegResult& R = Results[L];
+			if (R.Outcome != ERigLegOutcome::Driven) { continue; }
+			// Forwards, leg L ends at waypoint L + 1; reversed, the same node pair ends at L.
+			const FRigCourseWaypoint Arrived = V == 0 ? Waypoints[(L + 1) % Legs] : Reversed(Waypoints[L]);
+			FVector2D LaneEnd;
+			double HalfLane = 0.0;
+			const FString What = FString::Printf(TEXT("%s leg %d (%s%s)"), Names[V], L, *Waypoints[(L + 1) % Legs].Label,
+				V == 1 ? TEXT(", reversed") : TEXT(""));
+			if (!Test.TestTrue(What + TEXT(": its waypoint names a lane end"), LaneEndOf(Net, Arrived, LaneEnd, HalfLane))) { continue; }
+			const double Allowed = HalfLane + R.PassSpeed * TickSeconds + 20.0;
+			const double Vehicle = FVector2D::Distance(R.SteeredPosition, LaneEnd);
+			const double Route = FVector2D::Distance(R.RoutePosition, LaneEnd);
+			Test.TestTrue(FString::Printf(TEXT("%s: the steered axle was AT the waypoint's lane end when its marker fired (%.0f uu off, %.0f allowed; axle (%.0f, %.0f), lane end (%.0f, %.0f))"),
+				*What, Vehicle, Allowed, R.SteeredPosition.X, R.SteeredPosition.Y, LaneEnd.X, LaneEnd.Y), Vehicle <= Allowed);
+			Test.TestTrue(FString::Printf(TEXT("%s: the live route passes through the waypoint's lane end at the marker (%.0f uu off, %.0f allowed; route (%.0f, %.0f))"),
+				*What, Route, Allowed, R.RoutePosition.X, R.RoutePosition.Y), Route <= Allowed);
+			++Checked;
+		}
+		Test.TestTrue(FString::Printf(TEXT("%s: markers were checked against their waypoints - not vacuous (%d)"), Names[V], Checked), Checked >= 10);
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -888,6 +950,54 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 		for (const FRigLegResult& R : Results) { Bypasses += R.Outcome == ERigLegOutcome::Bypassed ? 1 : 0; }
 		TestEqual(FString::Printf(TEXT("%s: each bypassed leg was logged once in loop %d"), Names[V], Loop),
 			Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop %d leg "), Names[V], Loop), TEXT("bypassed:")), Bypasses);
+		CheckMarkersAtWaypoints(*this, *Course, Net, V);
+	}
+	return true;
+}
+
+// A REBUILD MID-LOOP KEEPS THE COURSE (2026-09-25). The user drew a road in PIE while both
+// vehicles were out; the utility then "cut across" and skipped every dead end in reverse,
+// while its log still reported each dead-end leg arrived. The log showed why: the graph
+// rebuild re-resolved the utility's spliced loop route, a step failed, and the replan went
+// straight to the route's END - dropping the stems, which are via points no search to the
+// end would choose. This places a lone node exactly where the user did, at the moment the
+// user did (the utility on the return road, ahead of tier 2's stem), and holds every marker
+// to its waypoint for the loop that follows.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigCourseRebuildKeepsTheCourseTest,
+	"AirportMgr.RigCourse.RebuildKeepsTheCourse",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigCourseRebuildKeepsTheCourseTest::RunTest(const FString& Parameters)
+{
+	using namespace RigCourseTest;
+
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
+	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	Course->BuildCourseForTest(*Actor);
+
+	// The utility past the width step and on the return road north (its stop 2) - where the
+	// PIE log had it when the node went down.
+	RunUntil(*Actor, *Course, MaxTicks, [Course]() { return Course->GetRunnerForTest(1).Position >= 2; });
+	if (!TestEqual(TEXT("the utility is on the return road, ahead of every stem"), Course->GetRunnerForTest(1).Position, 2)) { return false; }
+	FWarningSpy Spy;
+	GLog->AddOutputDevice(&Spy);
+	const int32 Placed = Actor->PlaceNode(FVector2D(-9186.0, 24654.0));
+	TestTrue(TEXT("the lone node was placed - the rebuild happened"), Placed != INDEX_NONE);
+
+	RunUntil(*Actor, *Course, MaxTicks, [Course]() { return Course->LoopsCompletedByAllForTest() >= 1; });
+	GLog->RemoveOutputDevice(&Spy);
+	// THE BOUNDARY ITSELF: nothing but the course may change the route its markers measure.
+	TestEqual(TEXT("neither vehicle's route was replanned under its markers by the rebuild"),
+		Spy.Containing(TEXT("replanned outside the course")), 0);
+	if (!TestTrue(TEXT("both vehicles completed a loop"), Course->LoopsCompletedByAllForTest() >= 1)) { return false; }
+	const URoadNetwork& Net = *Actor->Network;
+	for (int32 V = 0; V < 2; ++V)
+	{
+		CheckMarkersAtWaypoints(*this, *Course, Net, V);
 	}
 	return true;
 }

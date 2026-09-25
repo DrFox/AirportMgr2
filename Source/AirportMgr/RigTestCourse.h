@@ -102,6 +102,15 @@ struct FRigLegResult
 	 * rig, 149 for the utility (2026-09-25) - and a position check would test the wheelbase.
 	 */
 	double DistanceLeft = 0.0;
+	/**
+	 * WHERE, NOT HOW FAR (2026-09-25): the steered axle as the marker was passed, and the live
+	 * route's own point at the marker's distance. DistanceLeft alone cannot see a route that
+	 * no longer goes where the marker was planned - a rebuild's replan to the loop's end cut
+	 * three dead ends out of the utility's route while every marker still "arrived" by distance.
+	 * The test holds both to the waypoint's lane end.
+	 */
+	FVector2D SteeredPosition = FVector2D::ZeroVector;
+	FVector2D RoutePosition = FVector2D::ZeroVector;
 	/** Seconds from the previous marker (or the dispatch) to this one, and the speed it passed at, uu/s. */
 	double Elapsed = 0.0;
 	double PassSpeed = 0.0;
@@ -181,6 +190,13 @@ struct FRigCourseRunner
 	/** Where the live route ends: the loop and the stop. A stop of N is that loop's end. */
 	int32 RouteEndLoop = 1;
 	int32 RouteEndStop = 0;
+
+	/**
+	 * The live route's length as the course last made it (dispatch, extension or redirect), uu.
+	 * Anything else changing it - a rebuild's replan, a deadlock replan - moves the route under
+	 * markers that are distances along it, so TickRunner warns when it differs.
+	 */
+	double RouteLength = 0.0;
 
 	/** Set once an extension was tried for the current route end and could not be made, so it is not re-planned every tick. */
 	bool bExtendFailed = false;

@@ -15,6 +15,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "RoadBuildLog.h"
+#include "Solve/GuidelineGeom.h"
 #include "Tool/RoadEditTarget.h"
 
 // NAMED, NOT ANONYMOUS: this module is a unity build, and two files' anonymous helpers of one
@@ -478,6 +479,18 @@ void ARigTestCourse::TickRunner(FRigCourseRunner& Runner, double DeltaSeconds)
 		return;
 	}
 
+	// THE ROUTE UNDER THE MARKERS, CHANGED BY SOMEONE ELSE. A marker is a distance along the
+	// route the course planned; a replan by the traffic (a graph rebuild's re-resolve, a deadlock
+	// replan) re-routes from where the vehicle is to the route's END, and the markers after it
+	// then fire wherever that distance falls - which is how a rebuild once cut three dead ends
+	// out of the utility's route with every leg still logged "arrived" (2026-09-25).
+	if (Runner.RouteLength > 0.0 && FMath::Abs(Agent->PlanInProgress().Length - Runner.RouteLength) > 1.0)
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d: its live route was replanned outside the course (%.0f m -> %.0f m) - its markers no longer measure its waypoints."),
+			*Who, Loop, Runner.RouteLength / 100.0, Agent->PlanInProgress().Length / 100.0);
+		Runner.RouteLength = Agent->PlanInProgress().Length;
+	}
+
 	// THE MARKERS PASSED THIS TICK - more than one if a tick carried it past a short leg. A
 	// waypoint is a distance along the route, not a stop: nothing here slows the agent down.
 	Runner.Elapsed += DeltaSeconds;
@@ -585,6 +598,10 @@ void ARigTestCourse::PassMarker(FRigCourseRunner& Runner, const FRoadAgent& Agen
 		FRigLegResult& Result = ResultsFor(Runner, Marker.Loop)[Leg];
 		Result.Outcome = ERigLegOutcome::Driven;
 		Result.EndPosition = Agent.GroundPosition();
+		const FVector2D Facing(FMath::Cos(Agent.LastMotion.Heading), FMath::Sin(Agent.LastMotion.Heading));
+		Result.SteeredPosition = Agent.LastMotion.Position + Facing * Vehicles[Runner.Slot].Chassis.SteerAxleX;
+		double Unused = 0.0;
+		GuidelineGeom::PointAtDistance(Agent.PlanInProgress().Polyline, Marker.EndDistance, Result.RoutePosition, Unused);
 		Result.DistanceLeft = Marker.EndDistance - Travelled;
 		Result.Elapsed = Runner.Elapsed;
 		Result.PassSpeed = Agent.Follower.Speed;
@@ -891,6 +908,7 @@ void ARigTestCourse::DispatchFresh(FRigCourseRunner& Runner)
 	Runner.RouteEndLoop = Loop;
 	Runner.RouteEndStop = EndStop;
 	Runner.bExtendFailed = false;
+	Runner.RouteLength = Plan.Length;
 	Runner.Target = Runner.Markers[0].Target;
 	Runner.Elapsed = 0.0;
 	Runner.Timeout = LegTimeoutSeconds(Vehicles[Runner.Slot], Runner.Markers[0].Length, LegTimeoutFactor);
@@ -957,6 +975,11 @@ void ARigTestCourse::ContinueRoute(FRigCourseRunner& Runner, const FRoadAgent& A
 				Runner.Timeout = LegTimeoutSeconds(Vehicles[Runner.Slot], Markers[0].Length, LegTimeoutFactor);
 			}
 			Runner.Markers.Append(Markers);
+			// Re-read: ExtendRoute replaced the plan (and trimmed its history) in place.
+			if (const FRoadAgent* Extended = NetworkActor->GetGroundTraffic()->FindAgent(Runner.AgentId))
+			{
+				Runner.RouteLength = Extended->PlanInProgress().Length;
+			}
 			Runner.RouteEndLoop = Loop;
 			Runner.RouteEndStop = EndStop;
 			++Runner.Extensions;
@@ -999,6 +1022,7 @@ void ARigTestCourse::ContinueRoute(FRigCourseRunner& Runner, const FRoadAgent& A
 		return;
 	}
 	++Runner.Redirects;
+	Runner.RouteLength = Tail.Length;
 	Runner.Markers = MoveTemp(Markers);
 	Runner.RouteEndLoop = Loop;
 	Runner.RouteEndStop = EndStop;
