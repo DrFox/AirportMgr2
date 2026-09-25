@@ -106,6 +106,20 @@
     `FVector2D X; if (!Fill(X)) ...` is legitimate and appears ~60 times as out-params; the
     bug is ignoring the return value, which a regex cannot see. The rule lives in CLAUDE.md.
 
+    MUTATION CHECK (issue #291, run by hand - this script has no automation harness of its
+    own to assert these in): copy the tree to a scratch dir, then
+      (a) rename `struct AIRSIDE_API IBuildTool` in the copy's RoadBuildTool.h to anything
+          else and confirm rule 11c FAILS (`unconsumed-tool-verb: ... could not find`) instead
+          of silently passing every hook - this is the exact shape issue #291 reported: a
+          renamed or dropped struct made 11c a no-op with no failure.
+      (b) break the copy's own syntax (drop one closing brace anywhere) and confirm
+          Run-AirsideTests.ps1, pointed at the scratch copy via -Root, prints
+          "FAIL: Check-Architecture.ps1 does not parse" and STOPS before any editor starts -
+          not a silent zero exit code with no verdict line.
+    Both were exercised on 2026-09-25 against a scratch copy of this tree; see the PR body
+    for the pasted output. Neither is wired into CI because both require mutating a copy of
+    this very script, which the script cannot safely do to itself mid-run.
+
 .PARAMETER Root
     Project root (the directory holding AirportMgr.uproject). Defaults to this script's parent.
 #>
@@ -116,6 +130,26 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $failures = New-Object System.Collections.Generic.List[string]
+# Issue #291: the PASS banner used to be a hand-typed list of rule names, which can drift from
+# the rules that actually ran (solve-purity had silently fallen off it before anyone noticed -
+# fixed as a side effect of this list existing). Each rule section below appends its own name
+# right after it runs, so the banner is built from what ran, not from what someone remembered
+# to type when they last touched the banner.
+$ranRules = New-Object System.Collections.Generic.List[string]
+
+# Issue #291, rule 4's path-suffix fix: `-contains $file.Name` allow-lists by BARE FILE NAME
+# across the whole tree, so a same-named file dropped anywhere else (a second RoadNetworkActor.cpp
+# in a stray folder, say) is exempted along with the real one. A suffix match against the file's
+# full path, using an entry that names enough of the path to be unambiguous (e.g.
+# 'Private\Present\RoadNetworkActor.cpp', not just 'RoadNetworkActor.cpp'), closes that: a decoy
+# in a different directory no longer matches the suffix. Table entries below were widened to the
+# real current path of each file (confirmed by grep, one hit each on today's tree), so this is a
+# stricter check on the SAME files, not a behaviour change on today's tree.
+function Test-AllowedPathSuffix([System.IO.FileInfo] $File, [string] $Suffix) {
+    $full = $File.FullName.Replace('/', '\')
+    $want = '\' + $Suffix.Replace('/', '\')
+    return $full.EndsWith($want, [System.StringComparison]::OrdinalIgnoreCase)
+}
 
 $plugin      = Join-Path $Root 'Plugins\Airside\Source\Airside'
 $ops         = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'
@@ -169,6 +203,7 @@ foreach ($module in $modules) {
         }
     }
 }
+$ranRules.Add('include direction')
 
 # --- 1b. Cross-plugin direction: Airside never includes AirportOps ------------------------
 # AirportOps -> Airside is the only legal direction. A header from the ops plugin inside
@@ -183,6 +218,7 @@ foreach ($file in Get-Sources (Join-Path $Root 'Plugins\Airside\Source') @('.h',
         $failures.Add("cross-plugin: $($file.FullName):$($h.LineNumber) Airside must not reference AirportOps: $($h.Line.Trim())")
     }
 }
+$ranRules.Add('cross-plugin')
 
 # --- 1c. Runtime-vs-editor direction: Airside never includes or names AirsideEditor -------
 # Issue #191. The SAME shape as 1b above, mirrored: AirsideEditor -> Airside is the only legal
@@ -211,6 +247,7 @@ foreach ($file in Get-Sources $plugin @('.h', '.cpp')) {
         $failures.Add("editor-direction: $($file.FullName):$($h.LineNumber) Airside must not reference AirsideEditor: $($h.Line.Trim())")
     }
 }
+$ranRules.Add('editor direction')
 
 foreach ($half in 'Public', 'Private') {
     $dir = Join-Path $plugin (Join-Path $half 'Solve')
@@ -222,6 +259,10 @@ foreach ($half in 'Public', 'Private') {
         }
     }
 }
+# Issue #291's own PASS-banner audit found THIS rule missing from the hand-typed list below -
+# it had silently fallen off at some earlier edit and nothing noticed, which is exactly the
+# drift $ranRules exists to stop happening again.
+$ranRules.Add('solve-purity')
 
 # --- 2. Log category names unique within each module ------------------------------------
 foreach ($module in $logCategoryModules) {
@@ -239,6 +280,7 @@ foreach ($module in $logCategoryModules) {
         }
     }
 }
+$ranRules.Add('log categories')
 
 # --- 3. Stacked doc comments in headers -------------------------------------------------
 foreach ($tree in $trees) {
@@ -251,6 +293,7 @@ foreach ($tree in $trees) {
         }
     }
 }
+$ranRules.Add('doc comments')
 
 # --- 4. Allowed-callers table: each row's symbol resolves from ONE known set of files ---
 # Issue #255 generalises the single hard-coded Piper check (issue #30) into a table, because
@@ -262,12 +305,17 @@ foreach ($tree in $trees) {
 # itself). Comment lines are excluded (the same exemption rules 5-8 give a WHY comment that
 # NAMES the banned shape rather than being it) - RoadEditTarget.h, RunwayTool.h, PlotPresenter.h
 # and RoadNetworkActor.h all discuss these symbols by name in exactly that way.
+# Issue #291: every entry below names enough of its PATH to be unambiguous (checked with
+# Test-AllowedPathSuffix, not bare-name equality) - 'Private\Entities\AircraftType.cpp', not
+# 'AircraftType.cpp'. Confirmed by grep that each is still the file's real current location
+# (one hit apiece on today's tree), so this widens what the check can catch without moving
+# what it accepts today.
 $AllowedCallers = @(
     @{
         Name        = 'PiperMeridian fallback'
         Pattern     = '(?<![A-Za-z])PiperMeridian\w*\s*\('
-        ProdAllowed = @('AircraftType.h', 'AircraftType.cpp', 'AirsideSettings.cpp')
-        TestAllowed = @('AirsideTestFixtures.cpp')
+        ProdAllowed = @('Public\Entities\AircraftType.h', 'Private\Entities\AircraftType.cpp', 'Private\Content\AirsideSettings.cpp')
+        TestAllowed = @('Private\AirsideTestFixtures.cpp')
         ProdReason  = 'go through UAirsideSettings::ResolveDefaultAirframe'
         TestReason  = 'go through TestAirframes::Piper() (AirsideTestFixtures.h)'
     },
@@ -279,7 +327,7 @@ $AllowedCallers = @(
         # rather than narrowed to one fixture file.
         Name        = 'UAirsideSettings::ResolveDefaultAirframe'
         Pattern     = 'UAirsideSettings::ResolveDefaultAirframe\s*\('
-        ProdAllowed = @('AirsideSettings.h', 'AirsideSettings.cpp', 'RoadBuildController.cpp', 'OpsRuntime.cpp')
+        ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp', 'Source\AirportMgr\RoadBuildController.cpp', 'Private\Present\OpsRuntime.cpp')
         TestExempt  = $true
         ProdReason  = 'a new production caller resolves the default airframe a second way instead of taking it from context - route it through one of the rows above or extend this row and say why'
     },
@@ -288,7 +336,7 @@ $AllowedCallers = @(
         # be read; this is the one writable door, and it exists for test fixtures only.
         Name        = 'FRoadAgent::EditAirframeForTest'
         Pattern     = '\bEditAirframeForTest\s*\('
-        ProdAllowed = @('RoadAgent.h')
+        ProdAllowed = @('Public\Model\RoadAgent.h')
         TestExempt  = $true
         ProdReason  = 'start the agent through StartTaxi/StartArrival/StartPushback/StartDrive, which keep its body and bundle consistent'
     },
@@ -298,7 +346,7 @@ $AllowedCallers = @(
         # today the aircraft's stand choice. A vehicle caller must add the hook first.
         Name        = 'RouteSearch::FindToGoals'
         Pattern     = '\bFindToGoals\s*\('
-        ProdAllowed = @('RouteSearch.h', 'RouteSearch.cpp', 'ArrivalPlanner.cpp')
+        ProdAllowed = @('Public\Model\RouteSearch.h', 'Private\Model\RouteSearch.cpp', 'Private\Model\ArrivalPlanner.cpp')
         TestExempt  = $true
         ProdReason  = 'FindToGoals has no whole-route tow check (RouteSearch.cpp, Find); route a vehicle with Find, or add the hook'
     },
@@ -310,21 +358,21 @@ $AllowedCallers = @(
         # the other sanctioned caller, in the same Solve file.
         Name        = 'VehicleSweep::StepChain'
         Pattern     = '\bStepChain\s*\('
-        ProdAllowed = @('VehicleSweep.h', 'VehicleSweep.cpp', 'VehicleFit.cpp')
+        ProdAllowed = @('Public\Solve\VehicleSweep.h', 'Private\Solve\VehicleSweep.cpp', 'Private\Model\VehicleFit.cpp')
         TestExempt  = $true
         ProdReason  = 'step a tow through VehicleFit::StepTow, the one step the router (JudgePlan) and the agent (FollowAndTow) share'
     },
     @{
         Name        = 'DepotKitSpecs'
         Pattern     = 'DepotKitSpecs\s*\('
-        ProdAllowed = @('DepotKit.h', 'DepotKit.cpp', 'RoadNetworkActor.cpp')
+        ProdAllowed = @('Public\Build\DepotKit.h', 'Private\Build\DepotKit.cpp', 'Private\Present\RoadNetworkActor.cpp')
         TestExempt  = $true
         ProdReason  = 'go through ARoadNetworkActor::ResolveDepotKits (issue #181) - PlotPlaceTool.cpp and PlotPresenter.cpp both deliberately stopped calling this themselves'
     },
     @{
         Name        = 'RoadHeal::PlanNodeDeletion'
         Pattern     = 'RoadHeal::PlanNodeDeletion\s*\('
-        ProdAllowed = @('RoadHeal.h', 'RoadHeal.cpp', 'RoadEditFacade.cpp')
+        ProdAllowed = @('Public\Tool\RoadHeal.h', 'Private\Tool\RoadHeal.cpp', 'Private\Present\RoadEditFacade.cpp')
         TestExempt  = $true
         ProdReason  = "go through IRoadEditTarget::PlanNodeDeletion - URoadEditFacade is production's one wrapper"
     },
@@ -339,7 +387,7 @@ $AllowedCallers = @(
         # issue exists to stop shipping. Follow-up: route it through ARoadNetworkActor.
         Name        = 'UAirsideSettings::GetContent (outside Content/ and the actor)'
         Pattern     = 'UAirsideSettings::GetContent\s*\(\s*\)'
-        ProdAllowed = @('AirsideSettings.h', 'AirsideSettings.cpp', 'RoadNetworkActor.h', 'RoadNetworkActor.cpp', 'RoadJunctionGallery.cpp')
+        ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp', 'Public\Present\RoadNetworkActor.h', 'Private\Present\RoadNetworkActor.cpp', 'Private\Debug\RoadJunctionGallery.cpp')
         TestExempt  = $true
         ProdReason  = "go through Content/ or ARoadNetworkActor - see this row's own comment for the one pre-existing exception"
     }
@@ -353,8 +401,11 @@ foreach ($row in $AllowedCallers) {
             # directly is exactly this and is not the second-source-of-truth this row exists
             # to catch.
             $inTests = ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') -or ($file.Name -like '*Test.cpp')
-            if ($row.ProdAllowed -contains $file.Name) { continue }
-            if ($inTests -and $row.TestAllowed -and ($row.TestAllowed -contains $file.Name)) { continue }
+            # Issue #291: PATH SUFFIX, not bare-name equality - see Test-AllowedPathSuffix and
+            # the table comment above. A stray same-named file elsewhere in the tree no longer
+            # rides along with the real one just because Get-ChildItem happened to find it too.
+            if (($row.ProdAllowed | Where-Object { Test-AllowedPathSuffix $file $_ }).Count -gt 0) { continue }
+            if ($inTests -and $row.TestAllowed -and (($row.TestAllowed | Where-Object { Test-AllowedPathSuffix $file $_ }).Count -gt 0)) { continue }
             if ($inTests -and $row.TestExempt) { continue }
             $hits = Select-String -Path $file.FullName -Pattern $row.Pattern
             foreach ($h in $hits) {
@@ -365,6 +416,7 @@ foreach ($row in $AllowedCallers) {
         }
     }
 }
+$ranRules.Add('allowed callers')
 
 # --- 5. No hand-built slot-map handle outside RoadSlotMap.h -----------------------------
 # Three shapes a hand-built {index, generation} takes at a call site (#79, #173):
@@ -409,6 +461,7 @@ foreach ($tree in $trees) {
         }
     }
 }
+$ranRules.Add('hand-built handles')
 
 # --- 6. FRoadAgent invariant fields written only through their own mutators --------------
 # Issue #174. `[^=]` after the `=` excludes `==`/`!=`/`>=`/`<=` comparisons, which this
@@ -429,6 +482,7 @@ foreach ($tree in $trees) {
         }
     }
 }
+$ranRules.Add('agent field writes')
 
 # --- 7. No colour tokens in Tool/ ---------------------------------------------------------
 # Issue #191. Tool/ names a MEANING (EPreviewStyle) to IToolPreviewSink, never a colour - the
@@ -451,6 +505,7 @@ foreach ($module in $modules) {
         }
     }
 }
+$ranRules.Add('tool colour')
 
 # --- 8. No GetWorld/UWorld/GEngine in Model/ or Solve/ ------------------------------------
 # Issue #191. Model/ and Solve/ are the "plain UObjects, testable with NewObject and no
@@ -478,6 +533,7 @@ foreach ($module in $modules) {
         }
     }
 }
+$ranRules.Add('model/solve world-free')
 
 # --- 9. Every Test* assertion in a test module names a reason ----------------------------
 # Issue #191's review comment. FAutomationTestBase's TestTrue/TestEqual/TestNull/... all take
@@ -503,6 +559,7 @@ foreach ($module in $reasonModules) {
         }
     }
 }
+$ranRules.Add('assertion reasons')
 
 # --- 10. Any FOutputDevice subclass in a test module overrides CanBeUsedOnMultipleThreads --
 # Issue #216: an FOutputDevice that does not override this defaults to false, which UE 5.8's
@@ -541,6 +598,7 @@ foreach ($file in $outputDeviceFiles) {
         }
     }
 }
+$ranRules.Add('output-device spies')
 
 # --- 11. Declared but not consumed -------------------------------------------------------
 # Issue #255. All three sub-rules search this ONE list - built once, not per-symbol, because
@@ -605,9 +663,23 @@ foreach ($tree in $trees) {
 # ("virtual") or an out-of-line override definition ("ClassName::Method") - neither is a
 # driver reaching the hook, both are the interface restating its own name.
 $toolInterfaceFile = Join-Path $plugin 'Public\Tool\RoadBuildTool.h'
+if (-not (Test-Path $toolInterfaceFile)) {
+    # Same no-op-that-reads-as-pass shape as a dropped struct below, one level up: a renamed
+    # or deleted file, not just a renamed struct inside it, must not let this sub-rule vanish
+    # quietly - rules 15/16 fail this way already; 11c did not.
+    $failures.Add("unconsumed-tool-verb: $toolInterfaceFile is named by rule 11c but does not exist - update the rule, do not let it check nothing")
+}
 if (Test-Path $toolInterfaceFile) {
     $text = Get-Content -Raw -Path $toolInterfaceFile
     $structStart = $text.IndexOf('struct AIRSIDE_API IBuildTool')
+    # Issue #291: a renamed struct or a dropped AIRSIDE_API used to make this WHOLE sub-rule a
+    # silent no-op - $structStart -lt 0 fell through both branches below with nothing added to
+    # $failures, unlike rules 15/16 which FAIL when their named file goes missing. The file
+    # exists (the Test-Path above passed) but the one struct this rule knows how to read does
+    # not, which is exactly the shape a rename or an API-macro drop leaves behind.
+    if ($structStart -lt 0) {
+        $failures.Add("unconsumed-tool-verb: $toolInterfaceFile could not find 'struct AIRSIDE_API IBuildTool' - renamed, reworded or lost AIRSIDE_API; rule 11c cannot check any hook until this is fixed")
+    }
     if ($structStart -ge 0) {
         $braceOpen = $text.IndexOf('{', $structStart)
         $depth = 0
@@ -637,6 +709,7 @@ if (Test-Path $toolInterfaceFile) {
         }
     }
 }
+$ranRules.Add('unconsumed declarations')
 
 # --- 12. Comment-only facts (WARNING, not a failure) --------------------------------------
 # Issue #255: the five criticals of the 2026-09-21 review were all comments that had been
@@ -647,7 +720,12 @@ if (Test-Path $toolInterfaceFile) {
 # convention itself lives in CLAUDE.md's "Conventions"). A COUNT, not a failure - so today's
 # backlog is visible without breaking the build over comments that predate this rule - quoted
 # in the PR that adds this rule; promote the check to a failure once that count reaches zero.
-$commentFactPattern = 'the only (caller|file|place|site)|never (called|happens|runs)|no (edit|change) (is )?needed|nothing (else )?(reads|calls|binds)'
+#
+# Issue #291 widened the phrase list: the 2026-09-25 review found five more shapes stating the
+# same kind of unenforced fact that the original four verbs missed entirely - "checks all three
+# every run", "nothing here matches", "no other test", "every test in", "the one place its name
+# appears" - each read as a claim about coverage or uniqueness with nothing named to keep it true.
+$commentFactPattern = 'the only (caller|file|place|site)|never (called|happens|runs)|no (edit|change) (is )?needed|nothing (else )?(reads|calls|binds)|checks all three every run|nothing here matches|no other test|every test in|the one place its name appears'
 $commentFactWarnings = New-Object System.Collections.Generic.List[string]
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
@@ -698,6 +776,7 @@ foreach ($module in $modules) {
         }
     }
 }
+$ranRules.Add('graph-probe')
 
 # --- 14. A run's width comes from FKitSpec::RunWidthUu --------------------------------------
 # Five sites multiplied a module's width by a run length by hand until 2026-09-22 - the
@@ -725,6 +804,7 @@ foreach ($module in $modules) {
         }
     }
 }
+$ranRules.Add('run-width')
 
 # --- 15. Ground-only consumers take FChassis, never FAirframe ------------------------------
 # FChassis was split out of FAirframe on 2026-09-23 (Model/Chassis.h says why): a service
@@ -757,6 +837,7 @@ foreach ($rel in $chassisOnly) {
         $failures.Add("chassis-only: $($path):$($h.LineNumber) names FAirframe; a ground-only consumer takes FChassis (Model/Chassis.h): $t")
     }
 }
+$ranRules.Add('chassis-only')
 
 # --- 16. Turn paths never pair guidelines by index across arms -------------------------------
 # Until 2026-09-23 FRoadGuidelineBuilder paired guideline N of one arm with guideline N of the
@@ -773,6 +854,7 @@ if (-not (Test-Path $turnBuilder)) {
         $failures.Add("turn-index-pairing: $($turnBuilder):$line pairs turn-path guidelines by index; pair arriving lanes with leaving lanes instead")
     }
 }
+$ranRules.Add('turn-index-pairing')
 
 # --- 17. IsPlotted() is not "is a depot" ----------------------------------------------------
 # A stand can be plotted too (2026-09-23's "drawn stands" work), so the outline-means-depot
@@ -797,6 +879,7 @@ foreach ($tree in $trees) {
         }
     }
 }
+$ranRules.Add('is-plotted-not-depot')
 
 # --- 18. No Acos in production: the angle between two directions is RoadGeom::AngleBetween ---
 # 2026-09-24, samples/t-junctions.png. acos(dot) has a square-root singularity at +/-1: a dot one
@@ -815,11 +898,15 @@ foreach ($module in $modules) {
         }
     }
 }
+$ranRules.Add('no-acos')
 
 # --- Verdict -------------------------------------------------------------------------------
+# Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
+# missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two
+# lists cannot go out of sync again the way two independently-typed lists always eventually do.
 Write-Host "Check-Architecture: $($commentFactWarnings.Count) comment-only-fact warning(s) (rule 12; see Tools/Check-Architecture.ps1's own comment)." -ForegroundColor Yellow
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations, graph-probe, run-width, chassis-only, turn-index-pairing, is-plotted-not-depot, no-acos)' -ForegroundColor Green
+    Write-Host "Check-Architecture: PASS ($($ranRules -join ', '))" -ForegroundColor Green
     exit 0
 }
 
