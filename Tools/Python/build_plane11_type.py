@@ -67,15 +67,6 @@ MAIN_WHEELS_R = ("wheel_R1", "wheel_R2", "wheel_R3")
 # so this must describe the fan on screen; the class default of 3 would alias backwards.
 PROP_BLADE_COUNT = 22
 
-# IcaoCode.cpp's Code E row, as this script expects to find it. Checked every run so a
-# re-export that grows past its letter fails here, in the script that measured it. THE TAIL
-# BINDS: 6800 was the 777-300ER's measurement and this aeroplane's rudder reaches 6901.3 uu
-# aft of its nose gear, so E was raised to 6902 for it - see IcaoCode.cpp's MaxTailAft note.
-MAX_TAIL_AFT_E = 6902.0
-MAX_NOSE_FWD_E = 800.0
-MAX_SPAN_E = 6500.0
-
-
 def say(msg):
     unreal.log("MARKER: " + str(msg))
 
@@ -303,22 +294,6 @@ def set_regime(ground, name, values):
     ground.set_editor_property(name, regime)
 
 
-def check_letter(m):
-    """Code E, checked against the measurement rather than asserted - the three figures the
-    letters-row test pins, so a re-export that outgrows its row fails HERE first."""
-    span = m["footprint"]["wingspan"]
-    nose = m["footprint"]["nose_x"] - m["steer_axle_x"]
-    tail = -(m["footprint"]["tail_x"] - m["steer_axle_x"])
-    for label, got, limit in (("span", span, MAX_SPAN_E), ("nose", nose, MAX_NOSE_FWD_E),
-                              ("tail", tail, MAX_TAIL_AFT_E)):
-        if got > limit:
-            fail("%s measures %.1f uu against Code E's %.0f - raise the row in "
-                 "Solve/IcaoCode.cpp and this constant with it" % (label, got, limit))
-        else:
-            say("PASS %s %.1f uu is inside Code E's %.0f by %.1f" % (label, got, limit,
-                                                                     limit - got))
-
-
 def author_type():
     path = "%s/%s" % (TYPE_PATH, TYPE_NAME)
     asset = unreal.EditorAssetLibrary.load_asset(path)
@@ -356,7 +331,6 @@ def author_type():
     say("measured off the rig: steer axle %.1f, fixed axle %.1f uu (wheelbase %.1f), track %.1f"
         % (m["steer_axle_x"], m["fixed_axle_x"],
            abs(m["fixed_axle_x"] - m["steer_axle_x"]), m["main_gear_track"]))
-    check_letter(m)
     say("tightest followable radius %.0f uu (%.1f m) at %.0f degrees of lock"
         % (tightest_radius_uu(), tightest_radius_uu() / 100.0,
            STEERING["max_steer_degrees"]))

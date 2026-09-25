@@ -65,16 +65,6 @@ PROP = "fan_L"
 # mesh on screen; the class default of 3 would alias backwards.
 PROP_BLADE_COUNT = 20
 
-# IcaoCode.cpp's Code B row, as this script expects to find it. Checked every run so a
-# re-export that grows past its letter fails here, in the script that measured it.
-MAX_TAIL_AFT_B = 2000.0
-MAX_NOSE_FWD_B = 400.0
-MAX_SPAN_B = 2400.0
-# AND THE FLOOR - plane13's check, for plane10's reason: the span is 1591, 91 uu over Code A's
-# 1500, so a re-export that trimmed the winglets would quietly make this a Code A type.
-MIN_SPAN_B = 1500.0
-
-
 def say(msg):
     unreal.log("MARKER: " + str(msg))
 
@@ -280,28 +270,6 @@ def set_regime(ground, name, values):
     ground.set_editor_property(name, regime)
 
 
-def check_letter(m):
-    """Code B, checked against the measurement rather than asserted - the three figures the
-    letters-row test pins, plus the floor, so a re-export that leaves its row fails HERE first."""
-    span = m["footprint"]["wingspan"]
-    nose = m["footprint"]["nose_x"] - m["steer_axle_x"]
-    tail = -(m["footprint"]["tail_x"] - m["steer_axle_x"])
-    for label, got, limit in (("span", span, MAX_SPAN_B), ("nose", nose, MAX_NOSE_FWD_B),
-                              ("tail", tail, MAX_TAIL_AFT_B)):
-        if got > limit:
-            fail("%s measures %.1f uu against Code B's %.0f - raise the row in "
-                 "Solve/IcaoCode.cpp and this constant with it" % (label, got, limit))
-        else:
-            say("PASS %s %.1f uu is inside Code B's %.0f by %.1f" % (label, got, limit,
-                                                                     limit - got))
-    if span <= MIN_SPAN_B:
-        fail("span measures %.1f uu, inside Code A's %.0f - this is no longer a Code B type"
-             % (span, MIN_SPAN_B))
-    else:
-        say("PASS span %.1f uu is over Code A's %.0f by %.1f, so the letter is B"
-            % (span, MIN_SPAN_B, span - MIN_SPAN_B))
-
-
 def author_type():
     path = "%s/%s" % (TYPE_PATH, TYPE_NAME)
     asset = unreal.EditorAssetLibrary.load_asset(path)
@@ -339,7 +307,6 @@ def author_type():
     say("measured off the rig: steer axle %.1f, fixed axle %.1f uu (wheelbase %.1f), track %.1f"
         % (m["steer_axle_x"], m["fixed_axle_x"],
            abs(m["fixed_axle_x"] - m["steer_axle_x"]), m["main_gear_track"]))
-    check_letter(m)
     say("tightest followable radius %.0f uu (%.1f m) at %.0f degrees of lock"
         % (tightest_radius_uu(), tightest_radius_uu() / 100.0,
            STEERING["max_steer_degrees"]))

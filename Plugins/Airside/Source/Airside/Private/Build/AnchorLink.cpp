@@ -108,14 +108,14 @@ namespace
 		FLeadInSizing Out;
 		if (Instance.IsStand() && Instance.DesignWingspan > 0.0)
 		{
-			// Parse of a letter this program derived (LetterForWingspan is total), so it is
-			// always set - read through the TOptional anyway, per IcaoCode::Parse's own note.
-			if (const TOptional<EIcaoCode> Letter = IcaoCode::Parse(IcaoCode::LetterForWingspan(Instance.DesignWingspan)))
-			{
-				Out.MaxWingspan = IcaoCode::MaxWingspanForLetter(*Letter);
-				Out.Radius = IcaoCode::RadiusForLetter(*Letter);
-				return Out;
-			}
+			// CodeForWingspan, not Parse(LetterForWingspan(...)) - that FString round trip was
+			// typed at this site, StandMarkingBuilder's glyph letter and IcaoCode.cpp's own
+			// StandAdmits (#292); CodeForWingspan is the primitive all three share, and it is
+			// total over a positive span, so there is no TOptional left to read through.
+			const EIcaoCode Letter = IcaoCode::CodeForWingspan(Instance.DesignWingspan);
+			Out.MaxWingspan = IcaoCode::MaxWingspanForLetter(Letter);
+			Out.Radius = IcaoCode::RadiusForLetter(Letter);
+			return Out;
 		}
 		const UAircraftType* Design = Instance.Definition != nullptr ? Instance.Definition->DesignAircraft.Get() : nullptr;
 		Out.MaxWingspan = Design != nullptr ? Design->Footprint.Wingspan : 0.0;

@@ -61,12 +61,6 @@ GEAR_LEG = "maingear_L"
 PROP = "prop"
 SPINNER = "spinner"
 
-# IcaoCode.cpp's Code B row, as this script expects to find it. Checked every run so a
-# re-export that grows past its letter fails here, in the script that measured it.
-MAX_SPAN_B = 2400.0
-MAX_NOSE_FWD_B = 400.0
-MAX_TAIL_AFT_B = 2000.0
-
 # POH FIGURE 1-1, NOTE 6: minimum turning radius, pivot point to outboard wing tip strobe,
 # 33'-8" for 208B0404 and on. The earlier airframes' 32'-8 5/8" is not the one taken - a
 # current Grand Caravan is the later serial range.
@@ -320,29 +314,6 @@ def set_regime(ground, name, values):
     ground.set_editor_property(name, regime)
 
 
-def check_letter(m):
-    """Code B, checked against the measurement rather than asserted - the three figures the
-    letters-row test pins, so a re-export that outgrows its row fails HERE first."""
-    span = m["footprint"]["wingspan"]
-    nose = m["footprint"]["nose_x"] - m["steer_axle_x"]
-    tail = -(m["footprint"]["tail_x"] - m["steer_axle_x"])
-    for label, got, limit in (("span", span, MAX_SPAN_B), ("nose", nose, MAX_NOSE_FWD_B),
-                              ("tail", tail, MAX_TAIL_AFT_B)):
-        if got > limit:
-            fail("%s measures %.1f uu against Code B's %.0f - raise the row in "
-                 "Solve/IcaoCode.cpp and this constant with it" % (label, got, limit))
-        else:
-            say("PASS %s %.1f uu is inside Code B's %.0f by %.1f" % (label, got, limit,
-                                                                     limit - got))
-    # AND IT IS NOT CODE A: 15 m is the line. A span under it would make this a 172 with a
-    # bigger engine, and the letter would be wrong in the other direction.
-    if span < 1500.0:
-        fail("span %.1f uu is under Code A's 1500 - this type should be A, not B" % span)
-    else:
-        say("PASS span %.1f uu is over Code A's 1500, so B is the lowest letter it fits"
-            % span)
-
-
 def author_type():
     path = "%s/%s" % (TYPE_PATH, TYPE_NAME)
     asset = unreal.EditorAssetLibrary.load_asset(path)
@@ -380,7 +351,6 @@ def author_type():
     say("measured off the rig: steer axle %.1f, fixed axle %.1f uu (wheelbase %.1f), track %.1f"
         % (m["steer_axle_x"], m["fixed_axle_x"],
            abs(m["fixed_axle_x"] - m["steer_axle_x"]), m["main_gear_track"]))
-    check_letter(m)
 
     # THE MEASURED-AGAINST-PUBLISHED TABLE, printed every run - every figure on the right is
     # off POH figure 1-1 (inches converted), so this is the model against its drawing.

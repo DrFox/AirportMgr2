@@ -66,13 +66,6 @@ PROP = "fan_L"
 # allow a step too large by half and alias.
 PROP_BLADE_COUNT = 24
 
-# IcaoCode.cpp's Code C row, as this script expects to find it. Checked every run so a
-# re-export that grows past its letter fails here, in the script that measured it.
-MAX_TAIL_AFT_C = 3538.0
-MAX_NOSE_FWD_C = 509.0
-MAX_SPAN_C = 3600.0
-
-
 def say(msg):
     unreal.log("MARKER: " + str(msg))
 
@@ -266,22 +259,6 @@ def set_regime(ground, name, values):
     ground.set_editor_property(name, regime)
 
 
-def check_letter(m):
-    """Code C, checked against the measurement rather than asserted - the three figures the
-    letters-row test pins, so a re-export that outgrows its row fails HERE first."""
-    span = m["footprint"]["wingspan"]
-    nose = m["footprint"]["nose_x"] - m["steer_axle_x"]
-    tail = -(m["footprint"]["tail_x"] - m["steer_axle_x"])
-    for label, got, limit in (("span", span, MAX_SPAN_C), ("nose", nose, MAX_NOSE_FWD_C),
-                              ("tail", tail, MAX_TAIL_AFT_C)):
-        if got > limit:
-            fail("%s measures %.1f uu against Code C's %.0f - raise the row in "
-                 "Solve/IcaoCode.cpp and this constant with it" % (label, got, limit))
-        else:
-            say("PASS %s %.1f uu is inside Code C's %.0f by %.1f" % (label, got, limit,
-                                                                     limit - got))
-
-
 def author_type():
     path = "%s/%s" % (TYPE_PATH, TYPE_NAME)
     asset = unreal.EditorAssetLibrary.load_asset(path)
@@ -319,7 +296,6 @@ def author_type():
     say("measured off the rig: steer axle %.1f, fixed axle %.1f uu (wheelbase %.1f), track %.1f"
         % (m["steer_axle_x"], m["fixed_axle_x"],
            abs(m["fixed_axle_x"] - m["steer_axle_x"]), m["main_gear_track"]))
-    check_letter(m)
     say("tightest followable radius %.0f uu (%.1f m) at %.0f degrees of lock"
         % (tightest_radius_uu(), tightest_radius_uu() / 100.0,
            STEERING["max_steer_degrees"]))

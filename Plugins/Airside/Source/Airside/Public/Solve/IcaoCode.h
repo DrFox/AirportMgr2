@@ -71,8 +71,23 @@ namespace IcaoCode
 	AIRSIDE_API const TCHAR* ToLetter(EIcaoCode Code);
 
 	/**
-	 * The letter for a wingspan, uu: under 15 m is A, under 24 m B, under 36 m C, under
+	 * The code for a wingspan, uu: under 15 m is A, under 24 m B, under 36 m C, under
 	 * 52 m D, under 65 m E, anything wider F.
+	 *
+	 * THE PRIMITIVE, since 2026-09-25 (#292) - LetterForWingspan is built on this, not the
+	 * other way round. Three call sites (IcaoCode.cpp's own StandAdmits/StandRank,
+	 * AnchorLink.cpp's LeadInSizingFor, StandMarkingBuilder.cpp's glyph letter) used to get an
+	 * EIcaoCode by calling Parse(LetterForWingspan(Uu)) - an FString built and torn straight
+	 * back down, and StandAdmits runs it per candidate stand per arrival. This is TOTAL over
+	 * every WingspanUu (see the row loop's own fallback), so unlike Parse there is no
+	 * TOptional to thread through the caller: a wingspan always names a code, the way a
+	 * string typed by a human does not.
+	 */
+	AIRSIDE_API EIcaoCode CodeForWingspan(double WingspanUu);
+
+	/**
+	 * LetterForWingspan's own name, kept for a log line or a UI label - never for a lookup,
+	 * which is CodeForWingspan's job now. Equivalent to ToLetter(CodeForWingspan(WingspanUu)).
 	 */
 	AIRSIDE_API FString LetterForWingspan(double WingspanUu);
 

@@ -34,7 +34,8 @@ exists beside DA_Aircraft_Plane4 - the paper 737 lets stand layout and code clas
 reason about a 737 with no model. There is no paper 777 and there is no reason to add one:
 the paper types exist because they predate the models, and a new type that arrives WITH its
 model has nothing to be a placeholder for. IcaoCode's Code E row is therefore the first row
-in that table measured against an ASSET rather than a C++ builder - see MAX_TAIL_AFT_E below.
+in that table measured against an ASSET rather than a C++ builder - see author_type()'s span
+and tail_aft lines below, and Airside.Content.MeasuredTypesFitTheirLettersRow for the judging.
 """
 import math
 import os
@@ -103,20 +104,6 @@ PROP_BLADE_COUNT = 22
 # different aeroplane, and then this rig's doors stop 9 degrees from shut with nothing saying
 # why. Written down, and read back below.
 BAY_DOOR_CLOSED_ANGLE_DEGREES = 81.0
-
-# IcaoCode.cpp's Code E row, as this script expects to find it. See author_type(), which
-# checks the measured tail against it and says so either way.
-#
-# 6800 SINCE 2026-09-21, RAISED FROM 6700 FOR THIS AEROPLANE. plane6's tail reaches 6799.3 uu
-# aft of the nose-gear stop mark, so on the old figure a Code E stand would have laid its
-# ground geometry a metre inside the 777's own tail. Code E was an AUTHORED design value -
-# the row's own comment invites exactly this revision when a type arrives that exceeds it -
-# and it is now MEASURED, as Code C has been since the 737-800 was corrected on 2026-09-19.
-#
-# 6902 SINCE 2026-09-25: plane11's A350-1000 reaches 6901.3 uu and the row followed it. This
-# aeroplane is now 103 uu inside rather than tight against it.
-MAX_TAIL_AFT_E = 6902.0
-
 
 def say(msg):
     unreal.log("MARKER: " + str(msg))
@@ -475,31 +462,13 @@ def author_type():
         "track %.1f" % (m["steer_axle_x"], m["fixed_axle_x"],
                         abs(m["fixed_axle_x"] - m["steer_axle_x"]), m["main_gear_track"]))
 
-    # THE SPAN AGAINST THE LETTER'S CEILING, every run, because this type has 22 cm of it.
-    # Code E ends at 6500 uu; a re-export that grows the wing past that makes the authored
-    # letter a lie, and the symptom would be a 777 parking on a stand 1.5 m too narrow for it
-    # rather than anything visibly wrong with the model.
+    # SPAN AND TAIL, MEASURED AND WRITTEN - not judged here. Whether either still fits Code
+    # E's row is Airside.Content.MeasuredTypesFitTheirLettersRow's question, against the row
+    # in Solve/IcaoCode.cpp; this script's job stops at reporting what the export measures.
     span = m["footprint"]["wingspan"]
-    if span > 6500.0:
-        fail("the measured span is %.1f uu, past Code E's 6500 - this type is authored Code "
-             "E and is no longer one. Either the export grew or the letter is now F." % span)
-    else:
-        say("PASS span %.1f uu is inside Code E's 6500 by %.1f uu (%.2f m)"
-            % (span, 6500.0 - span, (6500.0 - span) / 100.0))
-
-    # AND THE TAIL AGAINST THE ROW THAT WAS RAISED FOR IT. See MAX_TAIL_AFT_E. This is the
-    # check that would catch the row being reverted, or this model's tail growing past the
-    # figure the row was raised to - either of which puts a Code E stand's ground geometry
-    # inside the aeroplane's own tail clearance.
+    say("span %.1f uu (%.2f m)" % (span, span / 100.0))
     tail_aft = -(m["footprint"]["tail_x"] - m["steer_axle_x"])
-    if tail_aft > MAX_TAIL_AFT_E:
-        fail("the tail reaches %.1f uu aft of the stop mark against IcaoCode's Code E row of "
-             "%.0f - a Code E stand would lay its GSE road inside this aeroplane. Raise the "
-             "row in Solve/IcaoCode.cpp and this constant with it."
-             % (tail_aft, MAX_TAIL_AFT_E))
-    else:
-        say("PASS the tail reaches %.1f uu aft of the stop mark, inside Code E's %.0f"
-            % (tail_aft, MAX_TAIL_AFT_E))
+    say("tail reaches %.1f uu aft of the stop mark" % tail_aft)
 
     # THE FIGURE THAT DECIDES WHETHER THIS TYPE CAN USE THE PLAYER'S TAXIWAYS, said out loud
     # because it is not otherwise visible anywhere: the rolling-steer law refuses a corner

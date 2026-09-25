@@ -81,17 +81,6 @@ WING_WHEELS_R = MAIN_WHEELS_R[:2]
 # allowed a step eight times too large and aliases backwards at any frame rate.
 PROP_BLADE_COUNT = 24
 
-# IcaoCode.cpp's Code F row, as this script expects to find it. Code F is AUTHORED, not
-# measured - the row's own comment says F "has no letter above it" - and this is the first
-# type that tests it. The A380 measures 6775 uu from its stop mark to its tail and 7975 uu of
-# span, inside both by 125 and 25 uu. The 25 cm of span margin is the same shape as the
-# 777's 22 cm under Code E: a real aeroplane built to the letter's limit.
-# 7000 SINCE 2026-09-25, UP FROM 6900: Code E rose to 6902 for plane11 and the column must
-# stay ordered. This aeroplane did not grow.
-MAX_TAIL_AFT_F = 7000.0
-MAX_SPAN_F = 8000.0
-
-
 def say(msg):
     unreal.log("MARKER: " + str(msg))
 
@@ -390,22 +379,13 @@ def author_type():
         "wing track %.1f" % (m["steer_axle_x"], m["fixed_axle_x"],
                              abs(m["fixed_axle_x"] - m["steer_axle_x"]), m["main_gear_track"]))
 
+    # SPAN AND TAIL, MEASURED AND WRITTEN - not judged here. Whether either still fits Code
+    # F's row is Airside.Content.MeasuredTypesFitTheirLettersRow's question, against the row
+    # in Solve/IcaoCode.cpp; this script's job stops at reporting what the export measures.
     span = m["footprint"]["wingspan"]
-    if span > MAX_SPAN_F:
-        fail("the measured span is %.1f uu, past Code F's %.0f - there is no letter above F."
-             % (span, MAX_SPAN_F))
-    else:
-        say("PASS span %.1f uu is inside Code F's %.0f by %.1f uu (%.2f m)"
-            % (span, MAX_SPAN_F, MAX_SPAN_F - span, (MAX_SPAN_F - span) / 100.0))
-
+    say("span %.1f uu (%.2f m)" % (span, span / 100.0))
     tail_aft = -(m["footprint"]["tail_x"] - m["steer_axle_x"])
-    if tail_aft > MAX_TAIL_AFT_F:
-        fail("the tail reaches %.1f uu aft of the stop mark against IcaoCode's Code F row of "
-             "%.0f - raise the row in Solve/IcaoCode.cpp and this constant with it."
-             % (tail_aft, MAX_TAIL_AFT_F))
-    else:
-        say("PASS the tail reaches %.1f uu aft of the stop mark, inside Code F's %.0f"
-            % (tail_aft, MAX_TAIL_AFT_F))
+    say("tail reaches %.1f uu aft of the stop mark" % tail_aft)
 
     # AGAINST AIRBUS'S OWN 32.66 m, AC 4-3-0. Said out loud because it is the one performance
     # figure here that the geometry DERIVES and the document also STATES, so a disagreement
