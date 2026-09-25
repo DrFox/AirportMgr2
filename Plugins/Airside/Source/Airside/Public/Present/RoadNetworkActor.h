@@ -23,6 +23,7 @@ class UAirsideTraffic;
 class UGroundTraffic;
 class UTyreSmoke;
 class UEntityDefinition;
+class UAirsideContent;
 enum class EAgentPhase : uint8;
 enum class EDepartureRefusal : uint8;
 
@@ -58,6 +59,13 @@ enum class EDepartureRefusal : uint8;
 // FRoadDeletionPlan (Tool/RoadHeal.h) is returned BY VALUE from PlanNodeDeletion, not held
 // by pointer, so issue #191's "if by pointer" condition for it does not apply here - it keeps
 // arriving complete, just via Tool/RoadEditTarget.h rather than a second direct include.
+//
+// UAirsideContent FORWARD DECLARED for the same reason as the others (issue #298): it names
+// ResolveOverrideOr's pointer-to-member parameter type (TSoftObjectPtr<T> UAirsideContent::*),
+// which a DECLARATION needs no more of than this - a pointer-to-member, like a plain pointer,
+// is a fixed-size fact about the class's layout the compiler does not need filled in to spell
+// its type. The complete type still arrives at the one place that dereferences it,
+// Content/AirsideContent.h in the .cpp.
 
 /**
  * Owns a road network and renders it as one batched dynamic mesh - the level-resident
@@ -1012,6 +1020,23 @@ private:
 	 *  materials into the cache above if, and only if, bResolvedContentDirty - see the
 	 *  cache's own comment. Called from MakeSurfaceSettings, which reads the cache after. */
 	void RefreshResolvedContentCacheIfDirty();
+
+	/**
+	 * The one shape ResolveSurfaceMaterial/ResolveApronMaterial/ResolveRubberMaterial/
+	 * ResolveTyreSmokeMaterial/ResolveGhostMaterial all had (issue #298): the authored override
+	 * if there is one, else the content set's soft pointer for the same thing, loaded
+	 * synchronously. Member names WHICH TSoftObjectPtr<T> field of UAirsideContent an override
+	 * replaces - a pointer to member rather than five copies of "if (X != nullptr) return X;
+	 * ... Content->X.LoadSynchronous()" that only ever differed in which two names they repeated.
+	 *
+	 * STATIC: UAirsideSettings::GetContent() takes no instance, and neither does anything else
+	 * this does - it stays a method of ARoadNetworkActor only so its five callers can name it
+	 * unqualified, the same reason MakeSurfaceComponent is private rather than a free function.
+	 * Defined in the .cpp: every instantiation (T = UMaterialInterface, today) happens in that
+	 * one translation unit, so the definition needs to be visible nowhere else.
+	 */
+	template<class T>
+	static T* ResolveOverrideOr(TObjectPtr<T> Override, TSoftObjectPtr<T> UAirsideContent::* Member);
 
 	/**
 	 * Constructor helper for the five CreateDefaultSubobject<UDynamicMeshComponent> blocks

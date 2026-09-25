@@ -447,39 +447,40 @@ ARoadNetworkActor* ARoadNetworkActor::FindOrCreate(UWorld* World)
 	return World->SpawnActor<ARoadNetworkActor>(FVector::ZeroVector, FRotator::ZeroRotator, Params);
 }
 
+// THE ONE SHAPE ALL FIVE BELOW SHARE (issue #298) - see the declaration's own comment. Explicit
+// specialisation is not needed: every call site below supplies T = UMaterialInterface, and the
+// compiler instantiates this once, here, the first time it is used.
+template<class T>
+T* ARoadNetworkActor::ResolveOverrideOr(TObjectPtr<T> Override, TSoftObjectPtr<T> UAirsideContent::* Member)
+{
+	if (Override != nullptr) { return Override; }
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? (Content->*Member).LoadSynchronous() : nullptr;
+}
+
 UMaterialInterface* ARoadNetworkActor::ResolveSurfaceMaterial() const
 {
-	if (SurfaceMaterial != nullptr) { return SurfaceMaterial; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->SurfaceMaterial.LoadSynchronous() : nullptr;
+	return ResolveOverrideOr(SurfaceMaterial, &UAirsideContent::SurfaceMaterial);
 }
 
 UMaterialInterface* ARoadNetworkActor::ResolveApronMaterial() const
 {
-	if (ApronMaterial != nullptr) { return ApronMaterial; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->ApronMaterial.LoadSynchronous() : nullptr;
+	return ResolveOverrideOr(ApronMaterial, &UAirsideContent::ApronMaterial);
 }
 
 UMaterialInterface* ARoadNetworkActor::ResolveRubberMaterial() const
 {
-	if (RubberMaterial != nullptr) { return RubberMaterial; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->RubberMaterial.LoadSynchronous() : nullptr;
+	return ResolveOverrideOr(RubberMaterial, &UAirsideContent::RubberMaterial);
 }
 
 UMaterialInterface* ARoadNetworkActor::ResolveTyreSmokeMaterial() const
 {
-	if (TyreSmokeMaterial != nullptr) { return TyreSmokeMaterial; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->TyreSmokeMaterial.LoadSynchronous() : nullptr;
+	return ResolveOverrideOr(TyreSmokeMaterial, &UAirsideContent::TyreSmokeMaterial);
 }
 
 UMaterialInterface* ARoadNetworkActor::ResolveGhostMaterial() const
 {
-	if (GhostMaterial != nullptr) { return GhostMaterial; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->GhostMaterial.LoadSynchronous() : nullptr;
+	return ResolveOverrideOr(GhostMaterial, &UAirsideContent::GhostMaterial);
 }
 
 URoadMaterialSet* ARoadNetworkActor::ResolveMaterialSet() const
