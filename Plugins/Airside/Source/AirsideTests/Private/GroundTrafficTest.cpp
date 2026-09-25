@@ -692,6 +692,62 @@ bool FTrafficArrivalReceivesReverseSpeedTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficAgentIndexSurvivesRetireTest,
+	"Airside.Model.Traffic.AgentIndexSurvivesRetire",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficAgentIndexSurvivesRetireTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #295: FindIndex/FindAgent moved from an O(N) Agents.IndexOfByPredicate scan to an
+	// id->index TMap (UGroundTraffic::AgentIndex), rebuilt WHOLESALE on every Admit/
+	// RetireAgent/AdvanceOnce-removal rather than maintained incrementally - see
+	// RebuildAgentIndex's own comment for why. This pins the one thing a rebuild has to get
+	// right: retiring the MIDDLE agent of three shifts the survivors' array slots, and the
+	// index has to move with them, not keep answering with the position an agent USED to hold.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	auto Lane = [&](double Y) { return TArray<FGuidelineNodeId>{
+		TestGraph::Node(*Net, -1000.0, Y), TestGraph::Node(*Net, 1000.0, Y) }; };
+	const TArray<FGuidelineNodeId> LaneA = Lane(0.0);
+	const TArray<FGuidelineNodeId> LaneB = Lane(20000.0);
+	const TArray<FGuidelineNodeId> LaneC = Lane(40000.0);
+	TestGraph::Join(*Net, LaneA[0], LaneA[1]);
+	TestGraph::Join(*Net, LaneB[0], LaneB[1]);
+	TestGraph::Join(*Net, LaneC[0], LaneC[1]);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 First = Traffic->DispatchAgent(Net,
+		M2TrafficRoute(*Net, LaneA[0], LaneA[1], ETraversalClass::GroundVehicle),
+		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Middle = Traffic->DispatchAgent(Net,
+		M2TrafficRoute(*Net, LaneB[0], LaneB[1], ETraversalClass::GroundVehicle),
+		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Last = Traffic->DispatchAgent(Net,
+		M2TrafficRoute(*Net, LaneC[0], LaneC[1], ETraversalClass::GroundVehicle),
+		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("all three admitted"), First > 0 && Middle > 0 && Last > 0))
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("retiring the middle agent succeeds"), Traffic->RetireAgent(Middle));
+
+	const FRoadAgent* FoundFirst = Traffic->FindAgent(First);
+	const FRoadAgent* FoundLast = Traffic->FindAgent(Last);
+	if (!TestNotNull(TEXT("the first survivor is still findable"), FoundFirst)
+		|| !TestNotNull(TEXT("the last survivor is still findable"), FoundLast))
+	{
+		return false;
+	}
+	TestEqual(TEXT("the first survivor still answers its own id, not a shifted neighbour's"),
+		FoundFirst->Id, First);
+	TestEqual(TEXT("the last survivor still answers its own id, not a shifted neighbour's"),
+		FoundLast->Id, Last);
+	TestNull(TEXT("the retired agent is gone"), Traffic->FindAgent(Middle));
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTrafficCrossingHoldsRunwayTest,
 	"Airside.Model.Traffic.CrossingHoldsRunway",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

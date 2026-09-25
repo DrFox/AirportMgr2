@@ -284,6 +284,7 @@ int32 UGroundTraffic::Admit(FRoadAgent&& Agent)
 	// Broadcast AFTER the add, so a listener that spawns the view can find the agent it is
 	// being told about - see UAirsideTraffic::SpawnView, which reads LastMotion off it.
 	OnAgentPhaseChanged.Broadcast(Id, EAgentPhase::Gone, Born);
+	RebuildAgentIndex();
 	// #169: a new agent's dispatch claims its goal node in this same call, before this
 	// function returns - see OccupancyRevision's own comment for why one bump per call
 	// covers every claim made inside it.
@@ -291,9 +292,20 @@ int32 UGroundTraffic::Admit(FRoadAgent&& Agent)
 	return Id;
 }
 
+void UGroundTraffic::RebuildAgentIndex()
+{
+	AgentIndex.Reset();
+	AgentIndex.Reserve(Agents.Num());
+	for (int32 Index = 0; Index < Agents.Num(); ++Index)
+	{
+		AgentIndex.Add(Agents[Index].Id, Index);
+	}
+}
+
 int32 UGroundTraffic::FindIndex(int32 AgentId) const
 {
-	return Agents.IndexOfByPredicate([AgentId](const FRoadAgent& A) { return A.Id == AgentId; });
+	const int32* Found = AgentIndex.Find(AgentId);
+	return Found != nullptr ? *Found : INDEX_NONE;
 }
 
 const FRoadAgent* UGroundTraffic::FindAgent(int32 AgentId) const
@@ -840,6 +852,11 @@ bool UGroundTraffic::RetireAgent(int32 AgentId)
 	}
 	const EAgentPhase Before = Agents[Index].Phase;
 	Agents.RemoveAt(Index);
+	// BEFORE THE BROADCAST BELOW, which can run a listener that calls back into FindIndex
+	// (RetireAgent is exactly the kind of call UFuelService::OnAgentPhase makes synchronously
+	// - see AdvanceOnce's own re-entrancy comment) - a stale index table would answer that
+	// call with an entry shifted or gone.
+	RebuildAgentIndex();
 
 	// The table outlives the agent unless somebody says so: a retired vehicle's reservations
 	// would block the junction it was standing in for the rest of the session.
@@ -862,6 +879,7 @@ void UGroundTraffic::ClearAgents()
 	}
 
 	Agents.Reset();
+	RebuildAgentIndex();
 	Occupancy.Clear();
 	// #169: AFTER Clear(), not folded into the loop above - the loop only announces; this is
 	// the point every claim actually goes.
@@ -996,6 +1014,9 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			Occupancy.ReleaseAll(Id);
 			bStandsMayHaveFreed = true;
 			Agents.RemoveAt(Index);
+			// BEFORE THE BROADCAST, same reason as RetireAgent's own call: a listener firing
+			// synchronously from it (UFuelService::OnAgentPhase) can call back into FindIndex.
+			RebuildAgentIndex();
 			// Broadcast AFTER the removal so a listener that asks GetAgentCount sees the
 			// agent already gone, which is what "To == Gone" promises.
 			OnAgentPhaseChanged.Broadcast(Id, Before, EAgentPhase::Gone);
@@ -1159,7 +1180,8 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	{
 		// CONTEXT IN PLACE OF FOUR POSITIONAL MEMBERS (issue #175) - Network, Rules, Occupancy
 		// and NodeReach were four of Resolve's own seven parameters; see Model/TrafficContext.h.
-		DeadlockResolver.Resolve(Agents, FTrafficContext{*Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds}, PlanReResolver);
+		DeadlockResolver.Resolve(Agents, AgentIndex,
+			FTrafficContext{*Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds}, PlanReResolver);
 	}
 
 	// LAST OF ALL: a waiter is sent to a stand only once everyone has claimed, moved and been

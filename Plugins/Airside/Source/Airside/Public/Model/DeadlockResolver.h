@@ -50,8 +50,25 @@ struct AIRSIDE_API FDeadlockResolver
 	 * names. PlanReResolver stays a separate parameter: it is a MECHANISM this calls into, not
 	 * data about the graph, and Model/TrafficContext.h's own comment says why a data bundle
 	 * and a behaviour are kept apart rather than merged into one "everything" struct.
+	 *
+	 * AgentIndex IS UGroundTraffic's OWN id->index map (issue #295), handed down rather than
+	 * rebuilt here: this struct has no registry of its own by design (see the header's own
+	 * comment on why UGroundTraffic keeps it), and passing the map turns every lookup this
+	 * function makes - including inside its own Sort comparators, called O(N log N) times per
+	 * cycle - into O(1) instead of the FindByPredicate scan each used to run per call.
 	 */
-	void Resolve(TArray<FRoadAgent>& Agents, const FTrafficContext& Context, FPlanReResolver& PlanReResolver);
+	void Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, int32>& AgentIndex,
+		const FTrafficContext& Context, FPlanReResolver& PlanReResolver);
+
+	/**
+	 * Stamps LastResolveAttempt = SimSeconds on every member of Cycle that AgentIndex can
+	 * still find - ONE FUNCTION replacing the two identical loops Resolve used to run, one in
+	 * the yield branch and one in the replan branch (issue #295). A cycle detected but not yet
+	 * due for a retry never reaches either, so the loops really were the same code twice, not
+	 * two things that happened to look alike.
+	 */
+	static void StampCycle(TArray<FRoadAgent>& Agents, const TArray<int32>& Cycle,
+		const TMap<int32, int32>& AgentIndex, double SimSeconds);
 
 	/**
 	 * Every cycle key (the lowest member id) this session has LOGGED. Its only reader is

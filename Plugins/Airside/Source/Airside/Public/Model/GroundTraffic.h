@@ -521,6 +521,27 @@ private:
 	/** Next id to hand out. Ids are per-session; 0 is never issued. */
 	UPROPERTY(Transient) int32 NextAgentId = 1;
 
+	/**
+	 * Id -> index into Agents, MAKING FindIndex O(1) (issue #295). FindIndex/FindAgent used to
+	 * be Agents.IndexOfByPredicate - an O(N) scan called from every dispatch, redirect and
+	 * extend, and FDeadlockResolver::Resolve ran the same scan again, unindexed, inside its
+	 * OWN Sort comparators (O(N log N) calls, each an O(N) scan: O(N^2 log N) for one cycle).
+	 *
+	 * REBUILT WHOLESALE ON EVERY Admit/RetireAgent/AdvanceOnce-removal, not maintained
+	 * incrementally: Agents.RemoveAt SHIFTS every later index, so an incremental update would
+	 * touch as many entries as a rebuild does, and a rebuild is simpler to get right under the
+	 * re-entrancy AdvanceOnce's own comment describes (a broadcast can retire a DIFFERENT agent
+	 * from inside this same call). Admission and retirement are rare next to the many lookups
+	 * a single tick makes, so the O(N) cost lands where it is cheap to pay it.
+	 *
+	 * Not a UPROPERTY: an index into a Transient array is not state a save would ever need,
+	 * the same reason ArbitrationOrder above is not one.
+	 */
+	TMap<int32, int32> AgentIndex;
+
+	/** Rebuilds AgentIndex from Agents. See AgentIndex's own comment for why wholesale. */
+	void RebuildAgentIndex();
+
 	UPROPERTY(Transient) FTrafficOccupancy Occupancy;
 
 	/**
