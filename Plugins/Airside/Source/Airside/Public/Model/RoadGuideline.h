@@ -167,6 +167,20 @@ struct AIRSIDE_API FGuidelineEdge
 	 * (VehicleSweep::Trace) and asks, at each one, whether the body's reach either side fits
 	 * the tarmac there - which a single minimum cannot answer, because a trailer cuts in late
 	 * and a turn is widest in the middle. Empty means unmeasured (as -1 above).
+	 *
+	 * PER-HALF FIELDS, with MinRadius/ClearInner/ClearOuter above and EndRefA/EndRefB below:
+	 * URoadNetwork::SplitGuidelineEdge's list of what does NOT survive a split unchanged,
+	 * because each describes the curve (or an end of it) rather than either whole piece:
+	 *   MinRadius, ClearInner, ClearOuter, ClearInnerAt, ClearOuterAt - measured over the
+	 *     ORIGINAL curve's samples; a re-sampled half has the same sample COUNT (a fixed
+	 *     subdivision) but different geometry, so a naive copy passes VehicleFit's
+	 *     Path.Num()-vs-Num() guard while judging the half against the whole curve's numbers
+	 *     (#288). Reset to the unmeasured defaults above, not re-measured: that needs
+	 *     FRoadGuidelineBuilder::MeasureTurn and the junction pavement polygon the original
+	 *     numbers were marched against, neither reachable from Model/.
+	 *   EndRefA / EndRefB - only the end that MOVED (onto the new split node) is cleared; the
+	 *     end that did not move keeps referring to what it always did.
+	 * ENFORCED BY: Airside.Model.GuidelineGraph's split-clearances case.
 	 */
 	UPROPERTY() TArray<float> ClearInnerAt;
 	UPROPERTY() TArray<float> ClearOuterAt;

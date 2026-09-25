@@ -269,6 +269,71 @@ bool FRoadGuidelineGraphTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// The per-sample clearances describe the WHOLE curve just split, not either half - and a
+	// curved half re-samples to the SAME point count as the original (GuidelineGeom::Sample is
+	// a fixed subdivision), so VehicleFit.cpp's Path.Num()-vs-ClearInnerAt.Num() guard cannot
+	// tell a genuinely re-measured half from one still carrying the whole curve's numbers
+	// copied wholesale onto a shorter piece (#288). Both halves must come back UNMEASURED -
+	// mark, not re-measure: re-measuring needs FRoadGuidelineBuilder::MeasureTurn and the
+	// junction pavement polygon the ORIGINAL numbers were marched against, and this function
+	// (Model/) must not depend on Build/ to get either. A later rebuild re-runs MeasureTurn on
+	// the new topology and fills them in properly; until then they gate nothing, same as any
+	// other unmeasured edge (FGuidelineEdge::ClearInner).
+	// ENFORCED BY: this test (Airside.Model.GuidelineGraph)
+	{
+		const FGuidelineNodeId CurveA = Net->AddGuidelineNode(FVector2D(0.0, 6000.0));
+		const FGuidelineNodeId CurveB = Net->AddGuidelineNode(FVector2D(1000.0, 6800.0));
+
+		FGuidelineEdge Turn;
+		Turn.A = CurveA;
+		Turn.B = CurveB;
+		Turn.Control = FVector2D(1000.0, 6000.0); // off the chord: a genuine turn, not a line
+		Turn.MinRadius = 850.0;
+		Turn.ClearInner = 120.0;
+		Turn.ClearOuter = 90.0;
+		Turn.ClearInnerAt.Init(120.0f, 16);
+		Turn.ClearOuterAt.Init(90.0f, 16);
+		Turn.EndRefA.Segment.Index = 3;
+		Turn.EndRefA.bEndA = true;
+		Turn.EndRefB.Segment.Index = 4;
+		Turn.EndRefB.bEndA = false;
+		const FGuidelineEdgeId TurnId = Net->AddGuidelineEdge(MoveTemp(Turn));
+
+		FGuidelineNodeId TurnMid;
+		FGuidelineEdgeId TurnHead, TurnTail;
+		const bool bTurnSplit =
+			Net->SplitGuidelineEdge(TurnId, 0.5, /*WeldTolerance=*/10.0, TurnMid, TurnHead, TurnTail);
+		TestTrue(TEXT("a turn path splits"), bTurnSplit);
+
+		const FGuidelineEdge* TurnHeadEdge = Net->GetGuidelineEdge(TurnHead);
+		const FGuidelineEdge* TurnTailEdge = Net->GetGuidelineEdge(TurnTail);
+		if (TestNotNull(TEXT("the head half resolves"), TurnHeadEdge) &&
+			TestNotNull(TEXT("the tail half resolves"), TurnTailEdge))
+		{
+			TestEqual(TEXT("head's per-sample inner clearance is unmeasured"),
+				TurnHeadEdge->ClearInnerAt.Num(), 0);
+			TestEqual(TEXT("head's per-sample outer clearance is unmeasured"),
+				TurnHeadEdge->ClearOuterAt.Num(), 0);
+			TestEqual(TEXT("tail's per-sample inner clearance is unmeasured"),
+				TurnTailEdge->ClearInnerAt.Num(), 0);
+			TestEqual(TEXT("tail's per-sample outer clearance is unmeasured"),
+				TurnTailEdge->ClearOuterAt.Num(), 0);
+			TestEqual(TEXT("head's scalar MinRadius is unmeasured"), TurnHeadEdge->MinRadius, 0.0);
+			TestEqual(TEXT("tail's scalar MinRadius is unmeasured"), TurnTailEdge->MinRadius, 0.0);
+			TestEqual(TEXT("head's scalar ClearInner is unmeasured"), TurnHeadEdge->ClearInner, -1.0);
+			TestEqual(TEXT("head's scalar ClearOuter is unmeasured"), TurnHeadEdge->ClearOuter, -1.0);
+			TestEqual(TEXT("tail's scalar ClearInner is unmeasured"), TurnTailEdge->ClearInner, -1.0);
+			TestEqual(TEXT("tail's scalar ClearOuter is unmeasured"), TurnTailEdge->ClearOuter, -1.0);
+
+			// EndRef is per-END, not per-half: only the end that moved (onto the new split
+			// node) is cleared - the end that did not move keeps referring to what it always did.
+			TestFalse(TEXT("head's EndRef at the split end is cleared"), TurnHeadEdge->EndRefB.IsSet());
+			TestTrue(TEXT("head's EndRef at the untouched end survives"), TurnHeadEdge->EndRefA.IsSet());
+			TestFalse(TEXT("tail's EndRef at the split end is cleared"), TurnTailEdge->EndRefA.IsSet());
+			TestTrue(TEXT("tail's EndRef at the untouched end survives"), TurnTailEdge->EndRefB.IsSet());
+		}
+	}
+
 	// Within tolerance of an endpoint, no split happens - the existing edge is handed back
 	// rather than being replaced by a zero-length stub nobody can see.
 	{
