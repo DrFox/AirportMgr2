@@ -1,5 +1,11 @@
 """Authors ABP_FuelTruck1's AnimGraph, and reads it back to prove it.
 
+SUPERSEDED 2026-09-25 BY Tools/wire_vehicle_anim.py fueltruck1, when the truck became the
+rigidCab1 bowser and its beacon got a channel (UAirsideAgentAnim::BeaconAngleDegrees). That
+script wires the same six bones the same way plus the beacon, from measured axes. RUNNING THIS
+ONE NOW DROPS THE BEACON. Kept because docs/2026-09-20-animgraph-authoring.md points at it as the
+worked example; its notes below are the history of the tripo truck.
+
   python Tools/wire_fueltruck_anim.py            # wires, compiles, saves, verifies
   python Tools/wire_fueltruck_anim.py --verify   # verifies only, changes nothing
 

@@ -27,6 +27,12 @@ namespace
 		{ EYardStage::SteerRight,  3.0 },
 		{ EYardStage::SteerCentre, 2.0 },
 		{ EYardStage::SlowToStop,  2.0 },
+		// STOPPED, AND BEFORE THE TAKE-OFF - a catering truck raises its box parked at a door,
+		// never rolling, and every aeroplane in the row sits still through it. Four seconds up
+		// so the scissor's arms can be read opening, three down. Added 2026-09-25 with the
+		// catering truck and the baggage cart, the first rigs with working parts.
+		{ EYardStage::BodyDeploy,  4.0 },
+		{ EYardStage::BodyStow,    3.0 },
 		{ EYardStage::TakeoffRoll, 3.0 },
 		{ EYardStage::Climb,       1.0 },
 		{ EYardStage::GearUp,      2.0 },
@@ -41,6 +47,7 @@ namespace
 		EYardChannel::Steer,
 		EYardChannel::GearCycle,
 		EYardChannel::EngineRPM,
+		EYardChannel::Body,
 	};
 
 	/**
@@ -141,6 +148,8 @@ const TCHAR* FYardMotion::StageName(EYardStage Stage)
 	case EYardStage::SteerRight:  return TEXT("steer right");
 	case EYardStage::SteerCentre: return TEXT("centre");
 	case EYardStage::SlowToStop:  return TEXT("slow to stop");
+	case EYardStage::BodyDeploy:  return TEXT("body deploy");
+	case EYardStage::BodyStow:    return TEXT("body stow");
 	case EYardStage::TakeoffRoll: return TEXT("take-off roll");
 	case EYardStage::Climb:       return TEXT("climb");
 	case EYardStage::GearUp:      return TEXT("gear up");
@@ -158,6 +167,7 @@ const TCHAR* FYardMotion::ChannelName(EYardChannel Channel)
 	case EYardChannel::Steer:       return TEXT("steer");
 	case EYardChannel::GearCycle:   return TEXT("gear");
 	case EYardChannel::EngineRPM:   return TEXT("prop RPM");
+	case EYardChannel::Body:        return TEXT("body");
 	}
 	return TEXT("?");
 }
@@ -191,6 +201,7 @@ void FYardMotion::Advance(double DeltaSeconds)
 		SteerDegrees = 0.0;
 		GearCycleFraction = 0.0;
 		EngineRPM = FMath::Lerp(0.0, IdleRPM, Alpha);
+		BodyFraction = 0.0;
 		bAirborne = false;
 		break;
 
@@ -199,6 +210,7 @@ void FYardMotion::Advance(double DeltaSeconds)
 		SteerDegrees = FMath::Lerp(0.0, -MaxSteerDegrees, Alpha);
 		GearCycleFraction = 0.0;
 		EngineRPM = IdleRPM;
+		BodyFraction = 0.0;
 		bAirborne = false;
 		break;
 
@@ -207,6 +219,7 @@ void FYardMotion::Advance(double DeltaSeconds)
 		SteerDegrees = FMath::Lerp(-MaxSteerDegrees, MaxSteerDegrees, Alpha);
 		GearCycleFraction = 0.0;
 		EngineRPM = IdleRPM;
+		BodyFraction = 0.0;
 		bAirborne = false;
 		break;
 
@@ -215,6 +228,7 @@ void FYardMotion::Advance(double DeltaSeconds)
 		SteerDegrees = FMath::Lerp(MaxSteerDegrees, 0.0, Alpha);
 		GearCycleFraction = 0.0;
 		EngineRPM = IdleRPM;
+		BodyFraction = 0.0;
 		bAirborne = false;
 		break;
 
@@ -223,6 +237,27 @@ void FYardMotion::Advance(double DeltaSeconds)
 		SteerDegrees = 0.0;
 		GearCycleFraction = 0.0;
 		EngineRPM = IdleRPM;
+		BodyFraction = 0.0;
+		bAirborne = false;
+		break;
+
+	case EYardStage::BodyDeploy:
+		GroundSpeed = 0.0;
+		SteerDegrees = 0.0;
+		GearCycleFraction = 0.0;
+		EngineRPM = IdleRPM;
+		BodyFraction = FMath::Lerp(0.0, 1.0, Alpha);
+		bAirborne = false;
+		break;
+
+	case EYardStage::BodyStow:
+		GroundSpeed = 0.0;
+		SteerDegrees = 0.0;
+		GearCycleFraction = 0.0;
+		EngineRPM = IdleRPM;
+		// THE REVERSE OF THE DEPLOY THROUGH THE SAME BodyPoseAt, so the platform comes in
+		// BEFORE the box goes down - the README's order, and the one it forbids breaking.
+		BodyFraction = FMath::Lerp(1.0, 0.0, Alpha);
 		bAirborne = false;
 		break;
 
@@ -231,6 +266,7 @@ void FYardMotion::Advance(double DeltaSeconds)
 		SteerDegrees = 0.0;
 		GearCycleFraction = 0.0;
 		EngineRPM = FMath::Lerp(IdleRPM, MaxRPM, Alpha);
+		BodyFraction = 0.0;
 		bAirborne = false;
 		break;
 
@@ -243,6 +279,7 @@ void FYardMotion::Advance(double DeltaSeconds)
 		// WheelSpinDownSeconds once this goes true, and that decay is the thing to watch - so
 		// it gets a stage to itself with the gear still down and the wheels still in plain
 		// sight, exactly as that property's comment argues happens in a real climb.
+		BodyFraction = 0.0;
 		bAirborne = true;
 		break;
 
@@ -251,6 +288,7 @@ void FYardMotion::Advance(double DeltaSeconds)
 		SteerDegrees = 0.0;
 		GearCycleFraction = FMath::Lerp(0.0, 1.0, Alpha);
 		EngineRPM = MaxRPM;
+		BodyFraction = 0.0;
 		bAirborne = true;
 		break;
 
@@ -263,6 +301,7 @@ void FYardMotion::Advance(double DeltaSeconds)
 		// most often wired backwards.
 		GearCycleFraction = FMath::Lerp(1.0, 0.0, Alpha);
 		EngineRPM = MaxRPM;
+		BodyFraction = 0.0;
 		bAirborne = true;
 		break;
 
@@ -271,6 +310,7 @@ void FYardMotion::Advance(double DeltaSeconds)
 		SteerDegrees = 0.0;
 		GearCycleFraction = 0.0;
 		EngineRPM = FMath::Lerp(MaxRPM, 0.0, Alpha);
+		BodyFraction = 0.0;
 		bAirborne = false;
 		break;
 	}
@@ -315,6 +355,7 @@ void FYardMotion::Scrub(EYardChannel Channel, double Delta)
 	case EYardChannel::Steer:       SteerDegrees = Next; break;
 	case EYardChannel::GearCycle:   GearCycleFraction = Next; break;
 	case EYardChannel::EngineRPM:   EngineRPM = Next; break;
+	case EYardChannel::Body:        BodyFraction = Next; break;
 	}
 }
 
@@ -386,6 +427,7 @@ void FYardMotion::Reset()
 	SteerDegrees = 0.0;
 	GearCycleFraction = 0.0;
 	EngineRPM = 0.0;
+	BodyFraction = 0.0;
 	bAirborne = false;
 	bPaused = false;
 	LoopTime = 0.0;
@@ -407,6 +449,7 @@ double FYardMotion::Value(EYardChannel Channel) const
 	case EYardChannel::Steer:       return SteerDegrees;
 	case EYardChannel::GearCycle:   return GearCycleFraction;
 	case EYardChannel::EngineRPM:   return EngineRPM;
+	case EYardChannel::Body:        return BodyFraction;
 	}
 	return 0.0;
 }
@@ -436,6 +479,11 @@ void FYardMotion::ChannelRange(EYardChannel Channel, double& OutMin, double& Out
 		OutMin = 0.0;
 		OutMax = MaxRPM;
 		return;
+
+	case EYardChannel::Body:
+		OutMin = 0.0;
+		OutMax = 1.0;
+		return;
 	}
 
 	OutMin = 0.0;
@@ -447,12 +495,14 @@ double FYardMotion::ChannelStep(EYardChannel Channel) const
 	// A HUNDREDTH OF EACH CHANNEL'S OWN RANGE, so one notch feels the same whichever channel
 	// the caret is on and no figure here has to be retuned when a tunable above changes. The
 	// gear is the exception: its range is 0..1 and a hundredth of a cycle is too fine to walk
-	// a three-second retraction with, so it gets a fiftieth.
+	// a three-second retraction with, so it gets a fiftieth. The body channel is 0..1 for the
+	// same reason and takes the same fiftieth.
 	double Min = 0.0;
 	double Max = 0.0;
 	ChannelRange(Channel, Min, Max);
 
-	const double Divisor = Channel == EYardChannel::GearCycle ? 50.0 : 100.0;
+	const double Divisor =
+		(Channel == EYardChannel::GearCycle || Channel == EYardChannel::Body) ? 50.0 : 100.0;
 	return (Max - Min) / Divisor;
 }
 
@@ -488,5 +538,24 @@ FAgentMotion FYardMotion::ToAgentMotion(const FGearPerformance& Gear) const
 		Motion.GearPose = Gear.FractionsAt(GearCycleFraction * Gear.CycleSeconds(), /*bRaising*/ true);
 	}
 
+	// UNGUARDED, unlike the gear: a rig with no working parts has zero travel for all three
+	// on its anim instance, so a non-zero fraction moves nothing. There is no FractionsAt-style
+	// don't-care branch here to protect anyone from.
+	Motion.BodyPose = BodyPoseAt(BodyFraction);
+
 	return Motion;
+}
+
+FBodyPose FYardMotion::BodyPoseAt(double InBodyFraction)
+{
+	const double W = FMath::Clamp(InBodyFraction, 0.0, 1.0);
+
+	FBodyPose Pose;
+	Pose.LiftFraction = FMath::Clamp(W / BodyLiftShare, 0.0, 1.0);
+
+	// NOT BEFORE THE LIFT IS DONE - see BodyLiftShare for the README rule this keeps.
+	// ENFORCED BY: AirportMgr.View.AnimYard.Motion.PlatformOnlyAtHeight
+	Pose.PlatformFraction = FMath::Clamp((W - BodyLiftShare) / (1.0 - BodyLiftShare), 0.0, 1.0);
+	Pose.TowbarRaisedFraction = W;
+	return Pose;
 }

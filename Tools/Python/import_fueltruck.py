@@ -32,7 +32,7 @@ import sys
 
 import unreal
 
-SOURCE = r"C:\repos\AirportMgr2Models\fueltruck1\export\fueltruck1.glb"
+SOURCE = r"C:\repos\AirportMgr2Models\rigidCab1\export\fueltruck1.glb"  # built in rigidCab1.blend since 2026-09-24
 
 MESH_DIR = "/Game/Vehicles/FuelTruck1"
 SKEL_NAME = "SK_FuelTruck1"

@@ -37,8 +37,10 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere) double AircraftFootprint = 1000.0;
 
 	/**
-	 * 620, which is fueltruck1's own length: 6.200 m, the one dimension that model's README
-	 * fixes exactly. It was 500, chosen before there was a truck to measure.
+	 * 669.5, which is fueltruck1's own length: 6.695 m, the rigidCab1 chassis at its drawn
+	 * wheelbase (rigidCab1/README.md, "overall length at default"). It was 500, chosen before
+	 * there was a truck to measure, and 620 for the Tripo truck the rigidCab1 bowser replaced
+	 * on 2026-09-25.
 	 *
 	 * IT HAS TO MATCH THE MESH, because UAirsideContent::VehicleMesh says the placeholder box
 	 * is sized from this figure so that "what is on screen is the length the arbiter actually
@@ -48,7 +50,7 @@ struct AIRSIDE_API FTrafficRules
 	 * 850 from 2026-09-15 to 2026-09-24, while the truck was enlarged to 8.5 m; back to 620
 	 * with it. Airside.Content.VehicleFootprintMatchesTheMesh is what caught both moves.
 	 */
-	UPROPERTY(EditAnywhere) double VehicleFootprint = 620.0;
+	UPROPERTY(EditAnywhere) double VehicleFootprint = 669.5;
 
 	/** Clear line kept ahead of the nose, beyond the braking distance, uu. */
 	UPROPERTY(EditAnywhere) double AircraftGap = 1500.0;

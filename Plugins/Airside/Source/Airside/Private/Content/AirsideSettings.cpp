@@ -192,11 +192,17 @@ FVehicle UAirsideSettings::ResolveDefaultVehicle()
 	// it is a spin about the rear axle. Reported from play on 2026-09-14: the truck drives up
 	// to the stand, stops, swings 90 degrees on the spot and drives off.
 	//
-	// fueltruck1 HAS been measured. Its rig puts steer_FL/FR at x = 360.7 uu and wheel_RL/RR
-	// at the origin, so the wheelbase is 3.607 m and the geometric law has real figures to
+	// fueltruck1 HAS been measured. Its rig puts steer_FL/FR at x = 355.0 uu and wheel_RL/RR
+	// at the origin, so the wheelbase is 3.55 m and the geometric law has real figures to
 	// work with.
 	//
-	// BACK TO 3.607 m ON 2026-09-24, with the truck back to its modelled 6.2 m. The 8.5 m
+	// 3.55 m SINCE 2026-09-25, THE rigidCab1 CHASSIS. The Tripo truck was replaced by a bowser
+	// body on rigidCab1 (a DAF LF class 4x2, wheelbase from its body-builder drawing NSEA606),
+	// built in rigidCab1.blend and reimported over SK_FuelTruck1. 5.7 cm shorter between the
+	// axles than the 3.607 below; DA_Vehicle_FuelTruck1 states the same figures and
+	// AirportMgr.Content.VehicleTypes.FuelTruckAgreesWithDispatch holds the two together.
+	//
+	// (History) BACK TO 3.607 m ON 2026-09-24, with the truck back to its modelled 6.2 m. The 8.5 m
 	// enlargement below was made to test crabbing, and uniform scaling took the width to
 	// 3.26 m over the tyres - wider than the 3 m road lane it drives in once roads had lanes
 	// and vehicles were gated on width. Shrunk as it was grown, uniformly, in the model.
@@ -220,7 +226,7 @@ FVehicle UAirsideSettings::ResolveDefaultVehicle()
 	// DECLARED, since the law stopped being inferred from these two numbers on
 	// 2026-09-15 - see ESteerLaw. A truck steers on a front axle; it does not pivot.
 	Van.Chassis.SteerLaw = ESteerLaw::RollingSteer;
-	Van.Chassis.SteerAxleX = 360.7;
+	Van.Chassis.SteerAxleX = 355.0;
 	Van.Chassis.FixedAxleX = 0.0;
 
 	// 45 degrees, written out rather than left at FGroundRegime's 60. The struct default is
@@ -234,18 +240,20 @@ FVehicle UAirsideSettings::ResolveDefaultVehicle()
 	// admitted, never for the one using it now. The fillet is DERIVED from the vehicle now
 	// (URoadProfile::ResolvedFilletRadius), so the lock can go back to what a rigid truck has.
 	//
-	// 45 on the 3.607 m wheelbase is a 5.10 m front-axle radius (it was 6.99 m at 8.5 m).
-	// Reversing is tighter still, Wheelbase / tan(lock) = 3.61 m, which is why a driver backs
-	// into a tight space rather than nosing in.
+	// 45 on the 3.55 m wheelbase is a 5.02 m front-axle radius (5.10 m at 3.607, 6.99 m at
+	// 8.5 m). Reversing is tighter still, Wheelbase / tan(lock) = 3.55 m, which is why a driver
+	// backs into a tight space rather than nosing in.
 	Van.Chassis.Ground.MaxSteerDegrees = 45.0;
 
-	// THE BODY, measured from fueltruck1.glb on 2026-09-24 after it went back to 6.2 m: 481.8
-	// ahead of the rear axle to the front bumper, 138.2 behind it, 237.4 over the body with the
-	// wing mirrors excluded (2.79 m with them). 620 overall, which is VehicleFootprint - see
-	// Airside.Model.VehicleBody, which holds the two together.
-	Van.BodyWidth = 237.4;
-	Van.BodyFrontX = 481.8;
-	Van.BodyRearX = -138.2;
+	// THE BODY, measured from rigidCab1/export/fueltruck1.glb on 2026-09-25 by
+	// build_vehicle_types.py: 482.5 ahead of the rear axle to the front bumper, 187.0 behind it
+	// to the frame end, 226.0 over the body with the wing mirrors excluded (2.80 m with them).
+	// 669.5 overall, which is VehicleFootprint - see Airside.Model.VehicleBody, which holds the
+	// two together. (It was 481.8 / 138.2 / 237.4 on the 6.2 m Tripo truck: the new chassis is
+	// 11 mm longer at the front, 49 cm longer behind, and 11 cm narrower.)
+	Van.BodyWidth = 226.0;
+	Van.BodyFrontX = 482.5;
+	Van.BodyRearX = -187.0;
 
 	// A TRUCK CANNOT FLY, AND NOW CANNOT EVEN BE ASKED TO. Until 2026-09-23 this was an
 	// FAirframe, and its climb and approach were zeroed here by hand because their struct

@@ -76,9 +76,21 @@ ROWS = [
     ]),
     ("Ground equipment", 500.0, [
         ("/Game/Vehicles/GPU1/SK_GPU1", "GPU1 (towed)"),
+        # THE CART BESIDE THE OTHER TOWED THING, and ahead of Utility1 because it is the
+        # narrower of the two (1.58 m against utility1's) - the row is spaced on width, so
+        # "small to large" reads across it on that axis.
+        ("/Game/Vehicles/BaggageCart1/SK_BaggageCart1", "BaggageCart1 (towed)"),
         ("/Game/Vehicles/Utility1/SK_Utility1", "Utility1"),
         ("/Game/Vehicles/Tug1/SK_Tug1", "Tug1 (Goldhofer D 620)"),
-        ("/Game/Vehicles/FuelTruck1/SK_FuelTruck1", "FuelTruck1"),
+        # THE TWO rigidCab1 BODIES SIDE BY SIDE, 2026-09-25: one chassis, cab and wheelbase,
+        # two jobs. Standing them together is what shows they ARE one chassis.
+        ("/Game/Vehicles/FuelTruck1/SK_FuelTruck1", "FuelTruck1 (rigidCab1 bowser)"),
+        ("/Game/Vehicles/Catering1/SK_Catering1", "Catering1 (high-loader)"),
+        # LAST AND LONGEST: 13.46 m, origin on its tri-axle's centre, so 9.26 m of it runs
+        # ahead of the row line toward the aircraft - still ~14 m clear of the 777's tail
+        # at the 100 m pitch below. Its tractor, truckCab1, arrives with
+        # feature/articulated-rig; until then it stands unhitched.
+        ("/Game/Vehicles/CurtainTrailer1/SK_CurtainTrailer1", "CurtainTrailer1 (towed)"),
     ]),
 ]
 

@@ -26,7 +26,7 @@ from airside_import import fail, say  # noqa: E402
 
 MESH = "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"
 FOLDER = "/Game/Vehicles/FuelTruck1"
-SOURCE = r"C:\repos\AirportMgr2Models\fueltruck1\export\fueltruck1.glb"
+SOURCE = r"C:\repos\AirportMgr2Models\rigidCab1\export\fueltruck1.glb"  # built in rigidCab1.blend since 2026-09-24
 
 # The pipeline this script authors, uses and deletes.
 PIPELINE_PATH = "/Game/Vehicles/FuelTruck1/PL_FuelTruck1_Reimport"
@@ -88,6 +88,20 @@ def main():
         return
     say("before: %d slot(s): %s" % (len(slot_names(mesh)), ", ".join(slot_names(mesh))))
 
+    # THE REIMPORT READS THE FILE THE ASSET REMEMBERS, NOT SOURCE. reimport_asset takes no
+    # path: it goes back to the asset's own AssetImportData, which on 2026-09-25 still named
+    # the Tripo export at fueltruck1/export/fueltruck1.glb - moved to tripo_6m2/ when the truck
+    # was rebuilt in rigidCab1.blend. So this script reported every check PASSED and left the
+    # 6.2 m Tripo mesh in place, bounds and all; editing SOURCE above had changed nothing but
+    # the material list it compared against. Repointed here, and the bounds are checked
+    # against the export below, so a reimport that changes nothing cannot pass again.
+    import_data = mesh.get_editor_property("asset_import_data")
+    remembered = import_data.get_first_filename() if import_data is not None else ""
+    say("the asset remembers its source as %s" % remembered)
+    if os.path.normcase(os.path.normpath(remembered)) != os.path.normcase(os.path.normpath(SOURCE)):
+        import_data.scripted_add_filename(SOURCE, 0, "")
+        say("repointed its source to %s (now %s)" % (SOURCE, import_data.get_first_filename()))
+
     manager = unreal.InterchangeManager.get_interchange_manager_scripted()
     params = unreal.ImportAssetParameters()
     params.is_automated = True
@@ -131,7 +145,31 @@ def main():
     if not bone_report(mesh, declared):
         ok = False
 
+    # THE GEOMETRY ITSELF, AGAINST THE EXPORT. Slots and bone names can all match while the
+    # vertices are the previous model's - which is exactly what shipped the first time. The
+    # export's X extent is the check: the Tripo truck was 620 uu, the rigidCab1 bowser 669.5.
+    size, _low = airside_import.source_extents_m(doc)
+    bounds = mesh.get_bounds()
+    got = bounds.box_extent.x * 2.0
+    want = size[0] * 100.0
+    if abs(got - want) > 1.0:
+        fail("the mesh is %.1f uu long and the export %.1f - the reimport did not take the new "
+             "geometry" % (got, want))
+        ok = False
+    else:
+        say("PASS the mesh is the export's length, %.1f uu" % got)
+
     unreal.EditorAssetLibrary.save_asset(MESH, only_if_is_dirty=False)
+
+    # AND THE SKELETON, SAVED BY NAME. It is a separate package that the reimport updates in
+    # memory (update_skeleton_reference_pose) and does not mark for saving - the Skeleton on
+    # disk still carried steer_F* at x 494.5, the 8.5 m truck's, on 2026-09-25, two reimports
+    # after that truck was retired. feature/articulated-rig met the same with SK_Utility1.
+    skeleton = mesh.get_editor_property("skeleton")
+    if skeleton is not None:
+        unreal.EditorAssetLibrary.save_asset(skeleton.get_path_name().split(".")[0],
+                                             only_if_is_dirty=False)
+        say("saved %s" % skeleton.get_name())
 
     # A reimport regenerates the per-asset materials and reassigns every slot, so the shared
     # set is rebuilt and what it orphans is swept - in that order, or the sweep finds the
