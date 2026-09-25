@@ -73,6 +73,11 @@ NEEDS = {
         "authored for the reason the Plane6 row gives: an unset field that agrees with the "
         "class default cannot be told from an asset nobody wrote",
     ),
+    "/Game/Entities/DA_Aircraft_Plane9": (
+        unreal.PushbackNeed.VEHICLE_TUG,
+        "the modelled A320 needs the tug its paper twin below does, and the two rows must "
+        "agree - authored rather than left to the class default for the Plane6 row's reason",
+    ),
     "/Game/Entities/DA_Aircraft_A320": (
         unreal.PushbackNeed.VEHICLE_TUG,
         "an A320 is what forces the Pushback depot",

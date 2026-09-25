@@ -110,6 +110,14 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		// The roll-against-published check below is real, as it is for plane6.
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane8.DA_Aircraft_Plane8"), TEXT("plane8"), 0.0,
 		  nullptr },
+		// plane9's CEILING IS THE 737-800's PUBLISHED TAKE-OFF LENGTH. The A320 and the 737
+		// share Code C and its stands; what tells them apart on the field is that the A320
+		// asks less runway (2,100 m against 2,316). Lose that and it is a 737 with a
+		// different nose. 231600 is build_plane4_type.py's REQUIREMENTS["takeoff_field_length"],
+		// typed here for the reason plane5's row gives.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane9.DA_Aircraft_Plane9"), TEXT("plane9"), 231600.0,
+		  TEXT("an A320 that needed as much runway as a 737-800 would erase the one field "
+			   "difference between the two Code C jets") },
 	};
 
 	for (const FPublished& Each : Published)

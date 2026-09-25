@@ -300,6 +300,28 @@ SPECS = [
              "ten bay doors. Every one carries a mesh; build_rig.py asserts it.",
     ),
     Spec(
+        key="plane9",
+        source=MODELS + r"\plane9\export\plane9.glb",
+        mesh_dir="/Game/Aircraft/Plane9",
+        skel_name="SK_Plane9",
+        # plane5's FOURTEEN JOINTS AND plane4's NAMES: one main wheel a side, so wheel_L /
+        # wheel_R, and the legs (maingear_L/_R, nosegear) are not named for the reason
+        # plane4's row gives - a leg's centre is not an axle.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, the CONTACT PATCH - plane6's ruling. This nose leg is raked too (axle at
+        # station 5.084, trunnion at 5.367), and build_export.py puts the origin under the
+        # tyre, station 5.084 on the ground.
+        origin_on="front",
+        note="Airbus A320-200 with sharklets. 37.57 m long, 35.49 m span, 11.88 m to the fin "
+             "tip against Airbus's published 37.57 / 35.80 / 11.76 - the span is the "
+             "drawing's, 0.9 % short, and still Code C either way. Origin on the NOSE gear. "
+             "Fourteen joints, plane5's set: the gear folds 86 degrees (solved against the "
+             "wing root, not 90) and BOTH bays have doors.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",
