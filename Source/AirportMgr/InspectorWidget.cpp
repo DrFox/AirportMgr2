@@ -185,14 +185,17 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		const double Shown = FMath::Abs(F.GroundSpeed);
 
 		// THE GATE, ONE LEVEL EARLIER THAN LastTitle/LastFacts/LastStatus (issue #309): built
-		// from the SAME rounding the Printf specifiers below use, so two facts that would
-		// compose to an identical sentence never fail this cheaper check first. See
-		// FInspectorKey's own comment for why Phase holds F.Status rather than F.Phase.
+		// from the FINEST rounding the Printf specifiers below use for each quantity, so two
+		// facts that would compose to an identical sentence never fail this cheaper check first.
+		// See FInspectorKey's own comment for why Phase holds F.Status rather than F.Phase, and
+		// why speed keys on tenths of m/s rather than the coarser whole-knot figure also printed
+		// below (PR #329 review: a change that moves the m/s decimal without moving the rounded
+		// knot integer was composing nothing, leaving the m/s line stale).
 		FInspectorKey Key;
 		Key.Id = F.Id;
 		Key.Phase = F.Status;
 		Key.HeadingRounded = FMath::RoundToInt(F.HeadingDegrees);
-		Key.SpeedRounded = FMath::RoundToInt(Shown / 100.0 * 1.94384);
+		Key.SpeedTenthsRounded = FMath::RoundToInt(Shown / 100.0 * 10.0);
 		Key.AltitudeRounded = FMath::RoundToInt(F.Altitude / 100.0);
 		Key.Destination = F.Destination;
 		Key.bEngineRunning = F.bEngineRunning;

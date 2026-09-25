@@ -5,6 +5,7 @@
 #include "Content/AirsideSettings.h"
 #include "InspectorWidget.h"
 #include "Misc/AutomationTest.h"
+#include "Model/InspectFacts.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
@@ -263,6 +264,63 @@ bool FInspectorIdleTickComposesNoTextTest::RunTest(const FString& Parameters)
 		"times - FInspectorKey read unchanged, so Refresh never reran the Printf/FString::Format "
 		"work SetTextCallCountForTest's own gate only compared the RESULT of"),
 		Panel->ComposeCountForTest(), Before);
+
+	return true;
+}
+
+/**
+ * A SUB-KNOT SPEED CHANGE STILL RECOMPOSES - PR #329 review, on FInspectorIdleTickComposesNoTextTest's
+ * own key. The Facts line prints speed TWICE from the same Shown value at two different
+ * precisions - m/s to one decimal (%.1f), knots to zero (%.0f) - and 1 kt is 0.514 m/s, finer
+ * than a whole knot, so FInspectorKey keying on the ROUNDED KNOT alone missed a real, displayed
+ * m/s change whenever it landed on the same knot: 5.0 -> 5.1 m/s both round to 10 kt. The key
+ * now uses SpeedTenthsRounded (tenths of m/s) for exactly this reason - see its own comment.
+ *
+ * PRECOMPUTED FACTS, not a simulated aircraft: this needs an EXACT, repeatable speed pair (5.0
+ * and 5.1 m/s, same rounded knot), which a real dispatch would take many idle ticks to happen
+ * upon by chance if it ever did - Refresh's own PrecomputedAgentFacts parameter exists for
+ * exactly this bypass (see its class comment), and no world state beyond a non-null Target is
+ * needed since the aircraft branch never touches Target when facts are precomputed.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorSubKnotSpeedChangeRecomposesTest,
+	"AirportMgr.Inspector.SubKnotSpeedChangeRecomposes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorSubKnotSpeedChangeRecomposesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+
+	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = 1;
+
+	FAgentFacts Facts;
+	Facts.Id = 1;
+	Facts.TypeName = TEXT("TestType");
+	Facts.HeadingDegrees = 90.0;
+	Facts.Altitude = 0.0;
+	Facts.Destination = TEXT("Stand 1");
+	Facts.Status = TEXT("Taxiing");
+	Facts.bEngineRunning = true;
+	Facts.bCanDepart = false;
+
+	// 500 uu/s = 5.0 m/s = 9.7192 kt, rounds to 10.
+	Facts.GroundSpeed = 500.0;
+	Panel->Refresh(Actor, Sel, &Facts);
+	const int32 Before = Panel->ComposeCountForTest();
+
+	// 510 uu/s = 5.1 m/s (a real, %.1f-visible change) = 9.913584 kt - STILL rounds to 10.
+	Facts.GroundSpeed = 510.0;
+	Panel->Refresh(Actor, Sel, &Facts);
+
+	TestEqual(TEXT("5.0 -> 5.1 m/s recomposes even though the rounded knot figure (10) did not "
+		"change - keying on whole knots alone would have left this at Before"),
+		Panel->ComposeCountForTest(), Before + 1);
 
 	return true;
 }
