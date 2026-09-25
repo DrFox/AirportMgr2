@@ -55,6 +55,13 @@ namespace IcaoCode
 			 * round number chosen to be safe: E is now as tight against its largest admitted
 			 * type as C is.
 			 *
+			 * AND 6902 SINCE 2026-09-25, FOR DA_Aircraft_Plane11, the A350-1000: its rudder
+			 * overhangs 6901.3 uu aft of the stop mark, a metre past the 777's tailcone -
+			 * the same measurement-plus-a-centimetre. That put E past F's AUTHORED 6900
+			 * (the A380 measures 6775), and IcaoCodeTest pins the column's ORDER, so F went
+			 * to 7000 with it: an authored value revised because a type exceeded the letter
+			 * below it, not because an A380 grew.
+			 *
 			 * IT WAS NOT A TEST THAT FOUND IT, AND THAT GAP IS WORTH KNOWING ABOUT.
 			 * Airside.Entities.EveryAirframeFitsItsLettersRow builds its cases from the C++
 			 * BUILDERS - A320, Build737, the Piper - and says so; a type that exists only as a
@@ -128,7 +135,9 @@ namespace IcaoCode
 			// Tools/Python/build_plane9_type.py checks the measurement against this every run.
 			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3538.0,  509.0,  -950.0, -2150.0, 600.0 },
 			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0, -1300.0, -3000.0, 600.0 },
-			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6800.0,  800.0, -1600.0, -3700.0, 600.0 },
+			// MaxTailAft 6902 SINCE 2026-09-25, UP FROM 6800, FOR plane11 - see MaxTailAft's note.
+			// Tools/Python/build_plane11_type.py checks the measurement against this every run.
+			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6902.0,  800.0, -1600.0, -3700.0, 600.0 },
 			// CODE F HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-23, and no figure moved.
 			// DA_Aircraft_Plane8, the A380-800, measures 6775 uu from its nose-gear stop mark
 			// to its tailcone and 7940 uu of wing (7975 across the wingtip fences) - inside
@@ -136,7 +145,9 @@ namespace IcaoCode
 			// to the letter" margin plane6 showed under E.
 			// The row stays as authored; Tools/Python/build_plane8_type.py checks both
 			// measurements against it every run and FAILS if a re-export grows past either.
-			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0,  900.0, -1900.0, -4300.0, 600.0 },
+			// MaxTailAft 7000 SINCE 2026-09-25, UP FROM 6900: E rose past it for plane11, and the
+			// column must stay ordered. The A380 is now 225 uu inside it, not 125.
+			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  7000.0,  900.0, -1900.0, -4300.0, 600.0 },
 		};
 
 		/**

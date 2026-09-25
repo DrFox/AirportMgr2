@@ -346,6 +346,28 @@ SPECS = [
              "so the type declares no gear cycle. One 3-blade prop the spinner rides.",
     ),
     Spec(
+        key="plane11",
+        source=MODELS + r"\plane11\export\plane11.glb",
+        mesh_dir="/Game/Aircraft/Plane11",
+        skel_name="SK_Plane11",
+        # plane9's MESH NAMES ON plane6's BOGIES: one wheel_L / wheel_R MESH a side, each
+        # holding a three-axle bogie's six tyres, skinned to wheel_L1..L3 / R1..R3. The mesh's
+        # box centre IS the bogie centre, which is the point plane6's row argues FChassis::
+        # FixedAxleX wants - so naming the two meshes measures what naming plane6's six did.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main bogies",
+        # NOSE GEAR, the CONTACT PATCH - plane6's ruling. build_export.py puts the origin
+        # under the nose tyre, station 4.637 on the ground.
+        origin_on="front",
+        note="Airbus A350-1000 (Trent XWB). 73.65 m long, 64.69 m span, 17.12 m to the fin "
+             "tip against Airbus's published 73.79 / 64.75 / 17.08 - Code E, 31 cm inside "
+             "its 65 m ceiling. Origin on the NOSE gear. Eighteen joints, plane6's set: two "
+             "three-axle bogies, four bay doors; the nose leg folds AFT (a modelling "
+             "departure from the real aeroplane, ruled in plane11/SPEC.md).",
+    ),
+    Spec(
         key="plane12",
         source=MODELS + r"\plane12\export\plane12.glb",
         mesh_dir="/Game/Aircraft/Plane12",

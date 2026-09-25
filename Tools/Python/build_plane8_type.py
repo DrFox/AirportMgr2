@@ -86,7 +86,9 @@ PROP_BLADE_COUNT = 24
 # type that tests it. The A380 measures 6775 uu from its stop mark to its tail and 7975 uu of
 # span, inside both by 125 and 25 uu. The 25 cm of span margin is the same shape as the
 # 777's 22 cm under Code E: a real aeroplane built to the letter's limit.
-MAX_TAIL_AFT_F = 6900.0
+# 7000 SINCE 2026-09-25, UP FROM 6900: Code E rose to 6902 for plane11 and the column must
+# stay ordered. This aeroplane did not grow.
+MAX_TAIL_AFT_F = 7000.0
 MAX_SPAN_F = 8000.0
 
 
