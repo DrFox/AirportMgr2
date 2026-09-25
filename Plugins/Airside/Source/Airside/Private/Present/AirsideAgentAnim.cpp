@@ -235,7 +235,14 @@ float UAirsideAgentAnim::WheelHubRadius(const FReferenceSkeleton& Skeleton, floa
 		}
 		// The HUB's height in the reference pose IS the radius: z = 0 is the contact plane.
 		const double Hub = FAnimationRuntime::GetComponentSpaceTransformRefPose(Skeleton, Bone).GetTranslation().Z;
-		return Hub > 0.0 ? static_cast<float>(Hub) : Fallback;
+		if (Hub > 0.0)
+		{
+			return static_cast<float>(Hub);
+		}
+		// TRY THE NEXT wheel* BONE rather than falling back at once (final-fix-brief item 2):
+		// a rig can carry more than one "wheel"-prefixed bone, and the first one found by bone
+		// index is not guaranteed to be a real, on-the-ground wheel - falling back on its say-so
+		// alone would silently drop every later bone that IS a genuine hub.
 	}
 	return Fallback;
 }

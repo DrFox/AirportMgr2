@@ -123,7 +123,12 @@ public:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
-	/** Lays the course on Target. Clears any course laid before. */
+	/**
+	 * Lays the course on Target. Resets THIS ACTOR's own bookkeeping (Waypoints, loop
+	 * results, refusal labels, the leg/slot/agent counters) and re-resolves Vehicles - it
+	 * does NOT remove any road geometry a previous call already placed on Target, so calling
+	 * it twice on the same Target lays a second course on top of the first.
+	 */
 	void BuildCourse(IRoadEditTarget& Target);
 
 	/** BuildCourse, named for the test that calls it without a BeginPlay. */
@@ -219,6 +224,8 @@ private:
 	 * and a bare Length/Cap would call a healthy truck stuck. Measured 2026-09-25: the slowest
 	 * healthy leg used 0.33 of it. An INSTANCE member, not a constant, only so a test can
 	 * shrink it and make the stuck exit fire; nothing else sets it.
+	 * ENFORCED BY: AirportMgr.RigCourse.StuckIsSkipped (RigTestCourseTest.cpp), which calls
+	 * SetLegTimeoutFactorForTest - the only setter - and goes red if a leg stops timing out.
 	 */
 	double LegTimeoutFactor = 3.0;
 

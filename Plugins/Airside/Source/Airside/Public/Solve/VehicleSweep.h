@@ -60,16 +60,21 @@ namespace VehicleSweep
 	 * Dot < 0 draws, named, so a tighter limit (a real trailer's ~70-80 degrees of body
 	 * clearance) is one edit here rather than a sign test somewhere else.
 	 */
-	constexpr double MaxHitchRadians = UE_HALF_PI;
+	constexpr double MaxHitchRadians = UE_DOUBLE_HALF_PI;
 
 	/**
-	 * How far the chain is stepped at a time, uu: Trace's step, and the longest the agent's
-	 * sub-step takes it (FRoadAgent's tow step divides this by the vehicle's speed cap).
+	 * The step Trace divides a turn into, uu, and the CEILING on the agent's own tow sub-step
+	 * (FRoadAgent's tow step turns this into a time step at the speed cap, TraceStep /
+	 * SpeedCap). NOT one number shared by construction: the agent's sub-step covers AT MOST
+	 * TraceStep of distance, and less whenever it is actually driving below its speed cap
+	 * (accelerating, braking, mid-corner) - so it is a second, finer discretisation of the
+	 * same pursuit, not a copy of Trace's own steps.
+	 * ENFORCED BY: Airside.Model.Tow.FollowerMatchesTraceForRig, which measures the two
+	 * discretisations against each other and bounds the difference at 5 uu, rather than
+	 * asserting they trace identical paths.
 	 *
-	 * ONE NUMBER FOR BOTH because the pursuit is FIRST-ORDER in its step: two walkers at
-	 * different step lengths trace measurably different trailer paths, and the router would
-	 * admit the rig on one while the driver drove the other. 10 uu: a tenth of the lane margin,
-	 * and the step the Python prototype that set the test figures used (2026-09-24).
+	 * 10 uu: a tenth of the lane margin, and the step the Python prototype that set the test
+	 * figures used (2026-09-24).
 	 */
 	constexpr double TraceStep = 10.0;
 
@@ -157,7 +162,9 @@ namespace VehicleSweep
 	 * its corners, so a drawbar trailer is gated exactly as the rig is. OutAxles, when given,
 	 * receives every link's axle at every step, link-major within a step (step i, link k at
 	 * i * Tow.Num() + k) - what Airside.Model.Tow.FollowerMatchesTraceForRig holds the driving
-	 * agent to. Nothing in production asks for it.
+	 * agent to. Optional (defaults null) because the one production caller
+	 * (VehicleFit::Judge, VehicleFit.cpp) only needs OutInner/OutOuter; a test comparing the
+	 * agent's own path against Trace's is the reason the parameter exists at all.
 	 */
 	AIRSIDE_API bool Trace(const FBody& Body, TArrayView<const FVector2D> Path,
 		TArray<double>& OutInner, TArray<double>& OutOuter, TArray<FVector2D>* OutAxles = nullptr);

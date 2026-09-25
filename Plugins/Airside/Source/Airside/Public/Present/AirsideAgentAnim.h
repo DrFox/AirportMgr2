@@ -126,10 +126,11 @@ public:
 	static float WheelAngleFromTravel(double TravelUu, float Radius);
 
 	/**
-	 * A vehicle rig's wheel radius, MEASURED: the reference-pose height of its first bone
-	 * named wheel* above the ground, since every vehicle mesh here sits with its tyres on
-	 * z = 0 (the import refuses one that does not - airside_import.report_bounds). Fallback
-	 * when the skeleton has no such bone, or it sits at or below the ground.
+	 * A vehicle rig's wheel radius, MEASURED: the reference-pose height of the first bone
+	 * named wheel* that sits ABOVE the ground, since every vehicle mesh here sits with its
+	 * tyres on z = 0 (the import refuses one that does not - airside_import.report_bounds).
+	 * A wheel*-named bone at or below the ground is skipped in favour of the next one, rather
+	 * than falling back at once - see the .cpp. Fallback when no such bone exists at all.
 	 *
 	 * STARTS WITH "wheel", not contains: truckCab1's fifth_wheel is a coupling socket, and a
 	 * substring match would measure the coupling plate as a tyre.

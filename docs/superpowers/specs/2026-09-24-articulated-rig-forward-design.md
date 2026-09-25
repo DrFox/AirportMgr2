@@ -74,12 +74,29 @@ The whole job is four sub-projects, each with its own spec -> plan -> build:
   MainWheelRadius)`, measuring the hub off the vehicle's own imported skeleton (falling back
   to `MainWheelRadius` only when the bone is absent), the same "measured, not typed" rule
   the rest of the fleet's geometry follows.
+  **REVISED 2026-09-25 (final-fix wave):** this is not new-vehicle-only - EVERY existing
+  ground vehicle's wheel spin changed the moment `WheelHubRadius` shipped, because every one
+  of them previously spun on `MainWheelRadius`'s class default (the Meridian aircraft's own
+  figure, ~21 uu), and now spins on its own measured hub instead. The fuel truck (bowser) is
+  the visible case: its hub sits well above 21 uu, so its wheels now turn about 2.5x SLOWER
+  than they did before this branch - and that slower rate is the correct one, not a
+  regression. `RigContentTest.cpp` pins the cab radius for `fueltruck1` and `truckCab1`
+  against their measured hub Z so a future change to either mesh or to `WheelHubRadius` is
+  caught here rather than only noticed by eye.
 - **Content:** `UAirsideSettings` resolves the rig's meshes and ABPs in one function, beside
   `ResolveRigVehicle()`. No asset path appears at a second site.
 - **Actor:** `ARoadAgentActor` gains an optional trailer skeletal-mesh component, created only
   when `HasTrailer()`. Each frame it is placed on the cab's kingpin world position at
   yaw = cab yaw + hitch angle. The actor READS the model's angle and never computes its own.
   Rigid vehicles are unchanged.
+  **REVISED 2026-09-25 (final-fix wave, checked against the code):** this is not what ships.
+  `ARoadAgentActor::TickComponent` (`RoadAgentActor.cpp`) places each body-carrying tow link's
+  mesh with `SetWorldLocationAndRotation(FVector(Pose.Axle.X, Pose.Axle.Y, ...),
+  FRotator(0, Pose.Heading, 0))` - its OWN AXLE (the tandem centre, which is the mesh's own
+  local origin - see `RigContentTest.cpp`) at its OWN heading, one call per link in the chain
+  (`TowViews`), not the cab's kingpin position or `cab yaw + hitch`. The chain generalisation
+  (spec §4) is what moved placement from "one trailer on the cab's coupling point" to "every
+  link on its own link pose"; the code was updated, this paragraph was not.
 
 ## 3. Test course and loop
 
@@ -134,7 +151,7 @@ built level and its tests:**
 - **The rig is refused at every dead-end U-turn, and this is a sizing decision, not a bug.**
   `UTurnGeom::Balloon`'s dead-end balloons are sized off
   `UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius()` - the bowser,
-  510 uu (5.1 m) forwards (`RoadGuidelineBuilder.cpp`'s own comment: "For the 6.2 m bowser
+  510 uu (5.1 m) forwards (`Chassis.h:406`'s own comment: "For the 6.2 m bowser
   that is 361 uu against 510"). The rig's own figure is `Wheelbase()/sin(lock)` = 370 uu /
   sin(40 deg) = 576 uu (5.8 m), so every dead end on this course refuses it by design - the
   balloon was never built to admit it. **Open, for the user:** widen every dead-end balloon
@@ -175,6 +192,10 @@ wheelbase is 2.21 m (from the model scripts; MEASURE from the glb, do not retype
 - **Actor:** a rig actor has a trailer component and a rigid one has none. After a tick, the
   trailer's world yaw == cab yaw + hitch, and its origin sits on the kingpin (57.3 uu ahead of
   the drive axle).
+  **REVISED 2026-09-25 (final-fix wave, checked against the code):** same correction as §2's
+  Actor bullet - the shipped placement is per-link, each mesh at its own `Pose.Axle` and
+  `Pose.Heading`, not at the cab's kingpin and `cab yaw + hitch`. See
+  `RoadAgentActor.cpp`'s `TickComponent`.
 - **Content:** both meshes and both ABPs resolve.
 - **Course (headless composition):** the course builds its feature count. One full loop at a
   fixed time step drives every leg `VehicleFit` admits and reports exactly the refused ones,
@@ -212,11 +233,15 @@ across both lanes (a known gap from the road-lanes spec).
   `ResolveDefaultVehicle`'s 45 degrees; utility1/SPEC.md's own "turning radius 115 in
   (2.921 m)" datasheet figure would resolve to about 27 degrees on the measured 1.493 m
   wheelbase if measured properly against the model, per that function's own comment.
-- **`fueltruck1.glb` is missing from the models repo at the path the AirportMgr2 import
-  scripts read.** `AirportMgr2Models/fueltruck1/export/` now holds only `MOVED.md`: since
-  2026-09-24 fueltruck1 is built inside `rigidCab1/rigidCab1.blend` and exported to
-  `rigidCab1/export/fueltruck1.glb`, but `import_fueltruck.py`, `reimport_fueltruck1.py` and
-  `build_fueltruck_anim.py` (in the `AirportMgr2` checkout, not this worktree) still point at
-  the old, now-empty path.
-- **The reverse chain (step 2).** Out of this step already (see "Out of this step"), restated
+- **The models moved (`MOVED.md`).** `AirportMgr2Models/fueltruck1/export/` now holds only
+  `MOVED.md`: since 2026-09-24 fueltruck1 is built inside `rigidCab1/rigidCab1.blend` and
+  exported to `rigidCab1/export/fueltruck1.glb`. This branch's own copies of
+  `import_fueltruck.py`, `reimport_fueltruck1.py` and `build_fueltruck_anim.py` (checked in
+  this worktree, `C:\repos\airportmgr-rig`) still point at the old, now-empty path.
+- **The reverse chain (step 2).** Reversing does not step the chain: `EAgentPhase::Reversing`
+  moves the fixed axle through `Reverse.Advance` alone, and nothing updates `TowAxles` while it
+  does, so a trailer's axle positions stay frozen for the whole reverse. The post-reverse
+  drive-on then calls `FollowAndTow` from those frozen axles against the cab's new (reversed)
+  position in one step - a jump `StepTrailer`'s `Dot < 0` fold guard could misread as a
+  jack-knife that never happened. Out of this step already (see "Out of this step"), restated
   here because it is the next of the four sub-projects "Where this sits" lists.

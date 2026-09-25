@@ -280,14 +280,14 @@ public:
 	TSoftObjectPtr<UStaticMesh> VehicleMesh;
 
 	/**
-	 * The chainlink fence's ï¿½60 mm line post. Base-centred, 245 cm tall, 1 unit = 1 cm once
+	 * The chainlink fence's Ø60 mm line post. Base-centred, 245 cm tall, 1 unit = 1 cm once
 	 * imported - see AirportMgr2Models/accessories/chainlink/README.md. Null falls back to a
 	 * scaled engine cube. Authored by Tools/Python/build_fence_content.py.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
 	TSoftObjectPtr<UStaticMesh> FenceLinePost;
 
-	/** The ï¿½90 mm corner and gate post - heavier instead of braced (README "Not here"). */
+	/** The Ø90 mm corner and gate post - heavier instead of braced (README "Not here"). */
 	UPROPERTY(EditAnywhere, Category = "Airside|Fence")
 	TSoftObjectPtr<UStaticMesh> FenceHeavyPost;
 
@@ -411,12 +411,11 @@ public:
 	/**
 	 * What drives UtilityTrailerMesh's four wheels. Null leaves it in its reference pose.
 	 *
-	 * DRIVES WHEEL SPIN ONLY, TODAY. steer_FL/FR and towbar_yaw are recognised bones with no
-	 * channel that fits them yet - UAirsideAgentAnim::SteerAngleDegrees is utility1's OWN front
-	 * wheel deflection (FRouteFollower::SteerDegrees), which has no meaning for a towed
-	 * trailer's own hitch geometry - so this ABP leaves them unwired rather than misusing it.
-	 * The angle source (the towbar link's own angle relative to the body it follows) is a
-	 * future channel - flagged for whichever task drives the drawbar trailer's motion.
+	 * WHEEL SPIN, PLUS THE TOWBAR ITSELF: steer_FL/FR and towbar_yaw are wired to
+	 * TowbarAngleDegrees as of 543a57a (ABP_FuelTrailer1) - the towbar link's own angle
+	 * relative to the body it follows, not utility1's own front wheel deflection
+	 * (UAirsideAgentAnim::SteerAngleDegrees, FRouteFollower::SteerDegrees, which has no
+	 * meaning for a towed trailer's own hitch geometry).
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftClassPtr<UAnimInstance> UtilityTrailerAnimClass;
