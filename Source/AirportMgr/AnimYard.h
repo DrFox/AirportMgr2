@@ -36,6 +36,16 @@ struct FYardRig
 
 	/** The vehicle fallback box, uu, full size and X forward. Ignored unless bIsVehicle. */
 	FVector BoxSizeUu = FVector(600.0, 250.0, 300.0);
+
+	/**
+	 * Its graph applies SteerAngleDegrees to something. False for a TOWED vehicle
+	 * (UVehicleType::bTowed): a baggage cart's turntable follows its towbar, not a steering
+	 * input of its own, and is deliberately left unwired until that angle exists - see
+	 * Tools/Python/build_vehicle_anims.py. A check that every rig steers must skip these rather
+	 * than fail them, and must not skip anything else.
+	 * ENFORCED BY: AirportMgr.Content.VehicleTypes.EveryTypeIsInTheYard (bSteers == !bTowed)
+	 */
+	bool bSteers = true;
 };
 
 /**

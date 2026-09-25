@@ -20,7 +20,11 @@ WHAT IS DELIBERATELY NOT HERE:
 
 - accessories/chainlink. Imported by build_fence_content.py instead: two static FBX posts and a
   texture pair, none of which this glTF vehicle table's machinery applies to.
-- baggageCart1, FuelDepot1, concepts. Concept art only; no export exists.
+- FuelDepot1, concepts. Concept art only; no export exists. (baggageCart1 was on this line
+  until 2026-09-25, when it gained an export and a row below.)
+- truckCab1, tankTrailer1, fuelTrailer1: feature/articulated-rig's import_rig.py and
+  import_fueltrailer1.py. rigidCab1 on its own: a bare chassis the bodies are built on, not a
+  vehicle anything dispatches.
 - boeing737-900/737.fbx. 10 KB, dated 2024, beside a .blend that is clearly the real work.
   A stub, not a model.
 """
@@ -322,6 +326,66 @@ SPECS = [
              "wing root, not 90) and BOTH bays have doors.",
     ),
     Spec(
+        key="plane10",
+        source=MODELS + r"\plane10\export\plane10.glb",
+        mesh_dir="/Game/Aircraft/Plane10",
+        skel_name="SK_Plane10",
+        # plane1's SIX JOINTS AND plane1's NAMES: root, prop, wheel_L/_R, nosewheel_steer,
+        # nosewheel. Fixed gear, so no leg is a bone; maingear_L/_R and nosegear are meshes,
+        # the last skinned to nosewheel_steer so the fork turns with the tyre.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, the contact patch - plane10/scripts/build_export.py's UE_ORIGIN is
+        # (0, NOSE_S, 0), the nose axle's station on the ground.
+        origin_on="front",
+        note="Cessna 208B Grand Caravan, cargo pod. 12.675 m long, 15.875 m span, 4.707 m "
+             "to the fin tip against the POH three-view's 12.675 / 15.875 / 4.712. Origin "
+             "on the NOSE gear. Six joints and FIXED gear, plane1's shape: nothing retracts, "
+             "so the type declares no gear cycle. One 3-blade prop the spinner rides.",
+    ),
+    Spec(
+        key="plane11",
+        source=MODELS + r"\plane11\export\plane11.glb",
+        mesh_dir="/Game/Aircraft/Plane11",
+        skel_name="SK_Plane11",
+        # plane9's MESH NAMES ON plane6's BOGIES: one wheel_L / wheel_R MESH a side, each
+        # holding a three-axle bogie's six tyres, skinned to wheel_L1..L3 / R1..R3. The mesh's
+        # box centre IS the bogie centre, which is the point plane6's row argues FChassis::
+        # FixedAxleX wants - so naming the two meshes measures what naming plane6's six did.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main bogies",
+        # NOSE GEAR, the CONTACT PATCH - plane6's ruling. build_export.py puts the origin
+        # under the nose tyre, station 4.637 on the ground.
+        origin_on="front",
+        note="Airbus A350-1000 (Trent XWB). 73.65 m long, 64.69 m span, 17.12 m to the fin "
+             "tip against Airbus's published 73.79 / 64.75 / 17.08 - Code E, 31 cm inside "
+             "its 65 m ceiling. Origin on the NOSE gear. Eighteen joints, plane6's set: two "
+             "three-axle bogies, four bay doors; the nose leg folds AFT (a modelling "
+             "departure from the real aeroplane, ruled in plane11/SPEC.md).",
+    ),
+    Spec(
+        key="plane12",
+        source=MODELS + r"\plane12\export\plane12.glb",
+        mesh_dir="/Game/Aircraft/Plane12",
+        skel_name="SK_Plane12",
+        # plane10's SIX JOINTS AND NAMES: root, prop, wheel_L/_R, nosewheel_steer, nosewheel.
+        # Fixed gear, so no leg is a bone.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, the contact patch - plane12/scripts/build_export.py's UE_ORIGIN.
+        origin_on="front",
+        note="Piper PA-28-180 Cherokee. 9.144 m span, 7.163 m along the reference line - "
+             "Piper's three-view to the millimetre. SITS 5.02 DEG NOSE-UP ON ITS GEAR, as "
+             "exported: both tyres meet the ground line, the fuselage is not level. Origin "
+             "on the NOSE gear. Six joints, fixed gear, one 2-blade prop.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",
@@ -365,6 +429,56 @@ SPECS = [
         # anything drives it.
         note="Ground power unit - a TOWED trailer, not a vehicle. The rig's drawbar_steer "
              "and drawbar_lift are its moving parts; the wheels only roll.",
+    ),
+    # THE rigidCab1 FAMILY'S SECOND BODY. catering1 has no export folder of its own - it is
+    # built inside rigidCab1/rigidCab1.blend beside fueltruck1 (catering1/README.md) - so its
+    # source is rigidCab1/export/. Its mesh node names carry the asset prefix, as fueltruck1's
+    # do.
+    Spec(
+        key="catering1",
+        source=MODELS + r"\rigidCab1\export\catering1.glb",
+        mesh_dir="/Game/Vehicles/Catering1",
+        skel_name="SK_Catering1",
+        front_nodes=["catering1_wheel_FL", "catering1_wheel_FR"],
+        rear_nodes=["catering1_wheel_RL", "catering1_wheel_RR"],
+        front_label="front axle",
+        rear_label="rear axle",
+        origin_on="rear",
+        note="Narrowbody catering high-loader on the rigidCab1 chassis: a 4.80 m box on a "
+             "two-stage scissor lift, floor 1.30 -> 4.00 m, and a platform that runs out "
+             "1.80 m. Carries two baked clips, Lift and Platform; Interchange brings them in "
+             "as AnimSequences beside the mesh.",
+    ),
+    Spec(
+        key="baggageCart1",
+        source=MODELS + r"\baggageCart1\export\baggageCart1.glb",
+        mesh_dir="/Game/Vehicles/BaggageCart1",
+        skel_name="SK_BaggageCart1",
+        front_nodes=VEHICLE_FRONT,
+        rear_nodes=VEHICLE_REAR,
+        front_label="front axle",
+        rear_label="rear axle",
+        origin_on="rear",
+        note="Covered baggage cart - TOWED, a turntable front axle on a towbar. Couples "
+             "tow_eye onto the tower's hitch at z 0.308 (baggageCart1/README.md).",
+    ),
+    # TOWED BY truckCab1, WHICH IS NOT ON THIS BRANCH - it arrives with feature/articulated-rig.
+    # Imported now because it is built in truckCab1's .blend and exported beside the tanker, and
+    # standing it in the yard needs nothing from the tractor.
+    Spec(
+        key="curtainTrailer1",
+        source=MODELS + r"\truckCab1\export\curtainTrailer1.glb",
+        mesh_dir="/Game/Vehicles/CurtainTrailer1",
+        skel_name="SK_CurtainTrailer1",
+        front_nodes=["curtainTrailer1_curtain_wheel_1L", "curtainTrailer1_curtain_wheel_1R"],
+        rear_nodes=["curtainTrailer1_curtain_wheel_3L", "curtainTrailer1_curtain_wheel_3R"],
+        front_label="first axle",
+        rear_label="third axle",
+        # THE TRI-AXLE'S CENTRE, which is neither labelled axle - wheel_2L/2R sit on it at
+        # x 0.0. Reported rather than asserted, as Spec's own docstring allows.
+        origin_on=None,
+        note="Curtain-side semi-trailer, tri-axle, kingpin 7.70 m ahead of the axle group's "
+             "centre. For truckCab1 (feature/articulated-rig).",
     ),
 ]
 

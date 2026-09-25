@@ -106,6 +106,10 @@ MASTER_PATH = "%s/%s" % (MAT_DIR, MASTER_NAME)
 OLD_DIR = "/Game/Aircraft/Materials"
 OLD_MASTER = "%s/M_Aircraft" % OLD_DIR
 
+# RESTORED 2026-09-25: feature/articulated-rig's merge of main dropped this line while glb_path
+# still reads it, so the script died with a NameError before scraping a single material.
+MODELS = r"C:\repos\AirportMgr2Models"
+
 # FLEET, PRETTY, MERGE_TOL and fleet_glb now come from airside_import - see the note there.
 # FLEET and MERGE_TOL lived here, with a second copy in verify_fleet_materials.py, until
 # plane1 was added to one and not the other; a THIRD copy of the glb path silently ignored

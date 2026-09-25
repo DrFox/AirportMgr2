@@ -6,11 +6,13 @@
 // not a new anchor or a new power setting. ARoadAgentActor takes just this now, instead of
 // the whole of RoadEntity.h.
 
-// Model/GearPose.h IS THE ONE HEADER THIS INCLUDES BEYOND CoreMinimal.h, and it was split out
-// of Airframe.h expressly so that stayed true - see its own header comment. A pose is what
-// the view needs; a performance is not.
+// Model/GearPose.h AND Model/BodyPose.h ARE THE ONLY HEADERS THIS INCLUDES BEYOND
+// CoreMinimal.h, and GearPose.h was split out of Airframe.h expressly so that stayed true -
+// see its own header comment. A pose is what the view needs; a performance is not. BodyPose.h
+// joined it on 2026-09-25 on the same terms: a pose, and nothing else.
 
 #include "CoreMinimal.h"
+#include "Model/BodyPose.h"
 #include "Model/GearPose.h"
 #include "AgentMotion.generated.h"
 
@@ -162,4 +164,13 @@ struct AIRSIDE_API FAgentMotion
 	 * either way.
 	 */
 	TArray<FTowPose, TInlineAllocator<2>> Tow;
+
+	/**
+	 * Where a ground vehicle's working parts have got to - lift, platform, towbar. See
+	 * FBodyPose, which says why it counts from the other end to FGearPose.
+	 *
+	 * A DEFAULT-CONSTRUCTED POSE IS STOWED, the bind pose of every vehicle rig, so an aircraft
+	 * and a vehicle that has no working parts both get the answer that moves no bone.
+	 */
+	UPROPERTY() FBodyPose BodyPose;
 };

@@ -175,6 +175,16 @@ static const TCHAR* const MeasuredTypes[] = {
 	// THE A320 IS THE ROW THAT BINDS CODE C'S NOSE. Its 508.4 uu nose overhang is what
 	// MaxNoseFwd is sized from, so this row is the one that goes red if a re-export grows it.
 	TEXT("/Game/Entities/DA_Aircraft_Plane9"),
+	// THE CARAVAN IS THE FIRST MEASURED CODE B SINGLE. Its 15.88 m span is over Code A's 15 m
+	// by 0.88, so this row is the one that goes red if a re-export trims the wing into A.
+	TEXT("/Game/Entities/DA_Aircraft_Plane10"),
+	// THE CHEROKEE IS THE FIRST ROW EXPORTED OFF-LEVEL: 5.02 deg nose-up on its gear. Its
+	// footprint is a plan shadow of a pitched mesh, and this row is what says the pipeline
+	// measures such a mesh the same way it measures a level one.
+	TEXT("/Game/Entities/DA_Aircraft_Plane12"),
+	// THE A350 IS THE ROW THAT BINDS CODE E'S TAIL. Its rudder at 6901.3 uu aft of the stop
+	// mark is what MaxTailAft 6902 is sized from, so this row goes red if a re-export grows it.
+	TEXT("/Game/Entities/DA_Aircraft_Plane11"),
 };
 
 /**
@@ -410,12 +420,20 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 			   "which would read VehicleTug and gate a Meridian behind the depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane2"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Twin Otter beta-ranges off a stand") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane10"), EPushbackNeed::SelfManoeuvre,
+		  TEXT("a Caravan reverses off a stand on its own prop - a grass-strip single gated "
+			   "behind the Pushback depot would be the class default talking, not the type") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane12"), EPushbackNeed::SelfManoeuvre,
+		  TEXT("a Cherokee is hand-towed off a stand - the class default would gate a "
+			   "four-seat trainer behind the Pushback depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Q400 turns out of a regional stand on its own props; the depot is the jets' tax") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane6"), EPushbackNeed::VehicleTug,
 		  TEXT("a 350 t 777-300ER is the far end of the same progression - and this row is "
 			   "the only thing distinguishing an asset authored VehicleTug from one nobody "
 			   "authored at all, since the class default says the same thing") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane11"), EPushbackNeed::VehicleTug,
+		  TEXT("a 319 t A350-1000 needs the tug the 777 beside it does") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane8"), EPushbackNeed::VehicleTug,
 		  TEXT("a 575 t A380 is the end of the progression - nothing heavier flies - and the "
 			   "row exists for the reason plane6's does: authored VehicleTug and default "

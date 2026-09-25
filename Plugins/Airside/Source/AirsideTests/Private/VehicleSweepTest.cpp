@@ -21,7 +21,7 @@ bool FVehicleBodyTest::RunTest(const FString& Parameters)
 	// pins VehicleFootprint to the mesh's length, and the body must be that same length.
 	TestEqual(TEXT("the bowser's body is as long as the footprint the mesh test pins"),
 		Bowser.BodyFrontX - Bowser.BodyRearX, FTrafficRules().VehicleFootprint, 5.0);
-	TestTrue(TEXT("and narrow enough for a 3 m Narrow lane, which is the point of the 6.2 m model"),
+	TestTrue(TEXT("and narrow enough for a 3 m Narrow lane, which is the point of the rigidCab1 bowser"),
 		Bowser.BodyWidth > 200.0 && Bowser.BodyWidth < 270.0);
 	TestFalse(TEXT("a bowser is rigid"), Bowser.HasTrailer());
 

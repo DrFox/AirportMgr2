@@ -18,6 +18,9 @@ enum class EYardChannel : uint8
 	Steer,
 	GearCycle,
 	EngineRPM,
+
+	/** A vehicle's working parts - lift, then platform; a towbar - see FYardMotion::BodyPoseAt. */
+	Body,
 };
 
 /**
@@ -54,6 +57,8 @@ enum class EYardStage : uint8
 	SteerRight,
 	SteerCentre,
 	SlowToStop,
+	BodyDeploy,
+	BodyStow,
 	TakeoffRoll,
 	Climb,
 	GearUp,
@@ -127,6 +132,16 @@ struct AIRPORTMGR_API FYardMotion
 
 	/** uu per second. Never negative here: the bench does not reverse. */
 	double GroundSpeed = 0.0;
+
+	/**
+	 * How far through deploying a vehicle's working parts, 0 stowed, 1 fully out.
+	 *
+	 * ONE CHANNEL FOR THREE FRACTIONS, for the reason GearCycleFraction is one channel for
+	 * three: dragging it walks the real ORDER - box up first, THEN the platform - rather than
+	 * letting a hand run the platform out of a box still sitting on the chassis. BodyPoseAt is
+	 * where the one becomes three.
+	 */
+	double BodyFraction = 0.0;
 
 	/** Nosewheel deflection, degrees, signed the way FAgentMotion::SteerAngleDegrees is. */
 	double SteerDegrees = 0.0;
@@ -269,4 +284,25 @@ struct AIRPORTMGR_API FYardMotion
 	 * FAgentMotion::GearDownFraction already makes between the model and the rig.
 	 */
 	FAgentMotion ToAgentMotion(const FGearPerformance& Gear) const;
+
+	/**
+	 * The share of the Body channel the lift takes; the platform runs in the rest.
+	 *
+	 * THE PLATFORM STARTS ONLY ONCE THE LIFT HAS FINISHED, which is what keeps it legal:
+	 * rigidCab1/README.md allows the platform out "only while floor >= 2.70 m", and the floor
+	 * passes 2.70 at about 62% of the Lift clip (frame ~50 of 80, floor 2.8). Sequencing it
+	 * after 100% clears that with room, and needs no second figure that would have to agree
+	 * with the clip.
+	 */
+	static constexpr double BodyLiftShare = 0.7;
+
+	/**
+	 * The working-parts pose at one Body channel value.
+	 *
+	 * Lift over the first BodyLiftShare, platform over the rest; the towbar over the whole
+	 * range, since a cart has nothing to sequence it against. Every rig reads the fractions
+	 * that apply to it and has zero travel for the others, so one channel serves the catering
+	 * truck and the baggage cart without the bench knowing which is which.
+	 */
+	static FBodyPose BodyPoseAt(double BodyFraction);
 };

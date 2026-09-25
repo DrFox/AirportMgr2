@@ -11,7 +11,7 @@ struct FYardRigEntry
 	TObjectPtr<USkeletalMesh> Mesh;
 	FYardRig Rig;
 
-	/** The asset that declared the pairing - a UAircraftType, or the content asset. */
+	/** The asset that declared the pairing - a UAircraftType, a UVehicleType, or the content asset. */
 	FString DeclaredBy;
 
 	/**
@@ -27,16 +27,16 @@ struct FYardRigEntry
  * Which Animation Blueprint drives which mesh, answered from the content the GAME uses.
  *
  * NO TABLE OF ITS OWN, deliberately. Every aircraft's mesh and Animation Blueprint are already
- * declared together on its UAircraftType, and the one rigged ground vehicle's on
- * UAirsideContent; a list here pairing them again would be a second source of truth for a fact
+ * declared together on its UAircraftType, and every ground vehicle's on its UVehicleType
+ * (since 2026-09-25; the dispatched truck's also on UAirsideContent); a list here pairing them again would be a second source of truth for a fact
  * the content already states, and Content/'s rule - one resolver per default - is the same
- * rule. The consequence is worth having: author DA_Aircraft_Plane8 and the bench shows it,
- * with no code change and no list to remember to edit.
+ * rule. The consequence is worth having: author DA_Aircraft_Plane8 or DA_Vehicle_Catering1 and
+ * the bench shows it, with no code change and no list to remember to edit.
  *
- * A MESH WITH NO ANSWER IS NOT AN ERROR. Three of the four ground vehicles have no Animation
- * Blueprint at all today - SK_GPU1, SK_Tug1 and SK_Utility1 are rigged in the .glb but nothing
- * in UAirsideAgentAnim produces what their beacons and booms would want. They stand still in
- * the yard, labelled, which is the honest report.
+ * A MESH WITH NO ANSWER IS NOT AN ERROR. SK_GPU1, SK_Tug1 and SK_Utility1 have no vehicle type
+ * and no Animation Blueprint on 2026-09-25 - rigged in the .glb, but not yet brought in with the
+ * catering truck, the baggage cart and the curtain trailer (utility1's is on
+ * feature/articulated-rig). They stand still in the yard, labelled, which is the honest report.
  */
 namespace AnimYardCatalogue
 {

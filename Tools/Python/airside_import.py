@@ -63,6 +63,9 @@ FLEET = {
     "plane7":     ("plane7",     "/Game/Aircraft/Plane7/SK_Plane7"),
     "plane8":     ("plane8",     "/Game/Aircraft/Plane8/SK_Plane8"),
     "plane9":     ("plane9",     "/Game/Aircraft/Plane9/SK_Plane9"),
+    "plane10":    ("plane10",    "/Game/Aircraft/Plane10/SK_Plane10"),
+    "plane11":    ("plane11",    "/Game/Aircraft/Plane11/SK_Plane11"),
+    "plane12":    ("plane12",    "/Game/Aircraft/Plane12/SK_Plane12"),
     "fueltruck1": ("fueltruck1", "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"),
     "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
     "tug1":       ("tug1",       "/Game/Vehicles/Tug1/SK_Tug1"),
@@ -78,15 +81,21 @@ FLEET = {
     # fueltrailer.py: "the towed asset is built by scripts inside the tower's file") - the same
     # folder mismatch tankTrailer1 has - see EXPORT_FOLDER below.
     "fuelTrailer1": ("fuelTrailer1", "/Game/Vehicles/FuelTrailer1/SK_FuelTrailer1"),
+    "catering1":  ("catering1",  "/Game/Vehicles/Catering1/SK_Catering1"),
+    "baggageCart1": ("baggageCart1", "/Game/Vehicles/BaggageCart1/SK_BaggageCart1"),
+    "curtainTrailer1": ("curtainTrailer1", "/Game/Vehicles/CurtainTrailer1/SK_CurtainTrailer1"),
 }
 
 # Asset folder name -> the name Content uses, for instance naming only.
 PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
           "plane5": "Plane5", "plane6": "Plane6", "plane7": "Plane7",
-          "plane8": "Plane8", "plane9": "Plane9",
+          "plane8": "Plane8", "plane9": "Plane9", "plane10": "Plane10",
+          "plane11": "Plane11", "plane12": "Plane12",
           "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1",
           "truckCab1": "TruckCab1", "tankTrailer1": "TankTrailer1",
-          "fuelTrailer1": "FuelTrailer1"}
+          "fuelTrailer1": "FuelTrailer1",
+          "catering1": "Catering1", "baggageCart1": "BaggageCart1",
+          "curtainTrailer1": "CurtainTrailer1"}
 
 # EXPORTS THAT DO NOT LIVE IN THEIR OWN KEY'S FOLDER. fueltruck1 has been built inside
 # rigidCab1/rigidCab1.blend since 2026-09-24 (fueltruck1/export/MOVED.md) and exports to
@@ -100,7 +109,10 @@ EXPORT_FOLDER = {"fueltruck1": "rigidCab1",
                  # main this was a second mechanism, a "folder/file" FLEET stem read by glb_path;
                  # one mapping, one reader (fleet_glb) is the rule - see CLAUDE.md "lists that
                  # must agree are one list".
-                 "tankTrailer1": "truckCab1", "fuelTrailer1": "utility1"}
+                 "tankTrailer1": "truckCab1", "fuelTrailer1": "utility1",
+                 # catering1 is the chassis' second body, built in the same .blend; the
+                 # curtain trailer is built in the tractor's (truckCab1/README.md).
+                 "catering1": "rigidCab1", "curtainTrailer1": "truckCab1"}
 
 
 def fleet_glb(models_root, key):

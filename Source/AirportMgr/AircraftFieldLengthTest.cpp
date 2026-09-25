@@ -110,6 +110,14 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		// The roll-against-published check below is real, as it is for plane6.
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane8.DA_Aircraft_Plane8"), TEXT("plane8"), 0.0,
 		  nullptr },
+		// plane11's CEILING IS THE 777-300ER's PUBLISHED TAKE-OFF LENGTH - plane9's argument
+		// one letter up. The A350-1000 and the 777 share Code E and its stands; what tells
+		// them apart on the field is that the A350 asks less runway (2,750 m against 3,120),
+		// so it is the widebody a field admits first. 312000 is build_plane6_type.py's
+		// REQUIREMENTS["takeoff_field_length"], typed here for the reason plane5's row gives.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane11.DA_Aircraft_Plane11"), TEXT("plane11"), 312000.0,
+		  TEXT("an A350-1000 that needed as much runway as a 777-300ER would erase the one "
+			   "field difference between the two Code E twins") },
 		// plane9's CEILING IS THE 737-800's PUBLISHED TAKE-OFF LENGTH. The A320 and the 737
 		// share Code C and its stands; what tells them apart on the field is that the A320
 		// asks less runway (2,100 m against 2,316). Lose that and it is a 737 with a
@@ -118,6 +126,20 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane9.DA_Aircraft_Plane9"), TEXT("plane9"), 231600.0,
 		  TEXT("an A320 that needed as much runway as a 737-800 would erase the one field "
 			   "difference between the two Code C jets") },
+		// plane10's CEILING IS THE KING AIR's PUBLISHED TAKE-OFF LENGTH. Both are Code B
+		// turboprops; the Caravan is the one that stays on GRASS, and it must also ask less
+		// runway (740 m against 1,006) or paving and lengthening would buy the same thing.
+		// 100600 is build_plane5_type.py's REQUIREMENTS["takeoff_field_length"], typed here
+		// for the reason plane5's row gives.
+		// plane12 CARRIES plane1's CEILING FOR plane1's REASON: a four-seat trainer that
+		// needed more runway than the Meridian would be wrong on its face. 50,000 clears it by
+		// 1,000 uu - thin, and the claim.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane12.DA_Aircraft_Plane12"), TEXT("plane12"), 51000.0,
+		  TEXT("a Cherokee that needed more runway than the Meridian would have a club "
+			   "trainer asking more of a field than a turboprop") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane10.DA_Aircraft_Plane10"), TEXT("plane10"), 100600.0,
+		  TEXT("a Caravan that needed as much runway as a King Air would be a grass-strip "
+			   "type that only paved fields could take") },
 	};
 
 	for (const FPublished& Each : Published)

@@ -5,33 +5,12 @@
 #include "Content/AirsideSettings.h"
 #include "Engine/SkeletalMesh.h"
 #include "Entities/AircraftType.h"
+#include "Entities/VehicleType.h"
 #include "Model/Airframe.h"
 
 void AnimYardCatalogue::EveryRig(TArray<FYardRigEntry>& Out)
 {
 	Out.Reset();
-
-	// THE ONE RIGGED VEHICLE. UAirsideContent declares its mesh and its Animation Blueprint
-	// side by side, which is the whole pairing - there is no vehicle equivalent of
-	// UAircraftType to enumerate, because there is exactly one.
-	const FResolvedAgentView Vehicle = UAirsideSettings::ResolveVehicleView();
-	if (Vehicle.Mesh != nullptr && Vehicle.AnimClass != nullptr)
-	{
-		FYardRigEntry Entry;
-		Entry.Mesh = Vehicle.Mesh;
-		Entry.Rig.AnimClass = Vehicle.AnimClass;
-		Entry.Rig.bIsVehicle = true;
-
-		// GEAR LEFT UNSET. A truck has none, and FGearPerformance::IsSet() being false is what
-		// makes FYardMotion::ToAgentMotion leave its gear fractions at the resting pose.
-		Entry.Rig.Gear = FGearPerformance();
-		Entry.bMeshDeclaredByItsType = true;
-
-		// BoxSizeUu IS LEFT AT ITS DEFAULT and never read: ARoadAgentActor::SetVehicleAirframe
-		// uses it only when Mesh is null, and this branch has just established it is not.
-		Entry.DeclaredBy = TEXT("UAirsideContent");
-		Out.Add(MoveTemp(Entry));
-	}
 
 	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
 		TEXT("AssetRegistry")).Get();
@@ -41,6 +20,69 @@ void AnimYardCatalogue::EveryRig(TArray<FYardRigEntry>& Out)
 	// unwaited registry answers with an empty list - which would look exactly like a project
 	// containing no aircraft, and would put the whole fleet in the yard undriven.
 	Registry.WaitForCompletion();
+
+	// EVERY VEHICLE TYPE, FIRST. Since 2026-09-25 a vehicle declares its mesh and its
+	// Animation Blueprint on a UVehicleType, as an aircraft does on a UAircraftType - so the
+	// yard shows a newly authored DA_Vehicle_* with no code change, which is the whole reason
+	// this catalogue keeps no table of its own.
+	//
+	// DIRECT, NOT THROUGH A RESOLVER. A vehicle type has no game-wide fallback mesh the way an
+	// aircraft type does (ResolveAgentView's AgentMesh), so there is nothing a resolver would
+	// add, and a type with no mesh or no graph is simply not a rig.
+	TArray<FAssetData> VehicleAssets;
+	Registry.GetAssetsByClass(UVehicleType::StaticClass()->GetClassPathName(), VehicleAssets);
+	for (const FAssetData& Data : VehicleAssets)
+	{
+		const UVehicleType* Type = Cast<UVehicleType>(Data.GetAsset());
+		if (Type == nullptr)
+		{
+			continue;
+		}
+		USkeletalMesh* Mesh = Type->Mesh.LoadSynchronous();
+		UClass* AnimClass = Type->AnimClass.LoadSynchronous();
+		if (Mesh == nullptr || AnimClass == nullptr)
+		{
+			continue;
+		}
+
+		FYardRigEntry Entry;
+		Entry.Mesh = Mesh;
+		Entry.Rig.AnimClass = AnimClass;
+		Entry.Rig.bIsVehicle = true;
+		// GEAR LEFT UNSET. A truck has none, and FGearPerformance::IsSet() being false is what
+		// makes FYardMotion::ToAgentMotion leave its gear fractions at the resting pose.
+		Entry.Rig.Gear = FGearPerformance();
+		Entry.Rig.bSteers = !Type->bTowed;
+		Entry.bMeshDeclaredByItsType = true;
+		Entry.DeclaredBy = Data.AssetName.ToString();
+		Out.Add(MoveTemp(Entry));
+	}
+
+	// THE CONTENT SET'S VEHICLE, ONLY IF NO TYPE ALREADY ANSWERED FOR ITS MESH. UAirsideContent
+	// still names the dispatched truck's mesh and graph (VehicleSkeletalMesh / VehicleAnimClass)
+	// because dispatch reads them; DA_Vehicle_FuelTruck1 names the same pair. The TYPE wins,
+	// on the rule the aircraft scan below states - the declarer that names a mesh is the one
+	// talking about it - and so the fuel truck is one subject in the yard, not two.
+	//
+	// KEPT AT ALL, rather than dropped now the type exists, so a project whose content set
+	// names a vehicle no type describes still shows it driven.
+	const FResolvedAgentView Vehicle = UAirsideSettings::ResolveVehicleView();
+	const bool bVehicleTyped = Vehicle.Mesh != nullptr && Out.ContainsByPredicate(
+		[&Vehicle](const FYardRigEntry& Entry) { return Entry.Mesh == Vehicle.Mesh; });
+	if (Vehicle.Mesh != nullptr && Vehicle.AnimClass != nullptr && !bVehicleTyped)
+	{
+		FYardRigEntry Entry;
+		Entry.Mesh = Vehicle.Mesh;
+		Entry.Rig.AnimClass = Vehicle.AnimClass;
+		Entry.Rig.bIsVehicle = true;
+		Entry.Rig.Gear = FGearPerformance();
+		Entry.bMeshDeclaredByItsType = true;
+
+		// BoxSizeUu IS LEFT AT ITS DEFAULT and never read: ARoadAgentActor::SetVehicleAirframe
+		// uses it only when Mesh is null, and this branch has just established it is not.
+		Entry.DeclaredBy = TEXT("UAirsideContent");
+		Out.Add(MoveTemp(Entry));
+	}
 
 	TArray<FAssetData> TypeAssets;
 	Registry.GetAssetsByClass(UAircraftType::StaticClass()->GetClassPathName(), TypeAssets);

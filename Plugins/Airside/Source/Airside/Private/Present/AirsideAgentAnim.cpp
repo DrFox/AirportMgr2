@@ -124,6 +124,28 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 
 	// See the header: a modelled blade at 2000 RPM strobes against a 60 Hz frame rate.
 	bPropIsDisc = RPM > PropDiscRPM;
+
+	// THE WORKING PARTS, COPIED AND SCALED - the model decided how far, and each rig's own
+	// measured travel says how far that is. Zero travels on every rig without the part, so
+	// an aircraft's graph never sees anything but zero here.
+	LiftClipTimeSeconds = TravelFromDeployedFraction(
+		static_cast<float>(Motion.BodyPose.LiftFraction), LiftClipLengthSeconds);
+	PlatformOffsetUu = TravelFromDeployedFraction(
+		static_cast<float>(Motion.BodyPose.PlatformFraction), PlatformTravelUu);
+	TowbarPitchDegrees = TravelFromDeployedFraction(
+		static_cast<float>(Motion.BodyPose.TowbarRaisedFraction), TowbarRaisedAngleDegrees);
+
+	// THE BEACON TURNS REGARDLESS OF THE MOTION - see BeaconAngleDegrees. RPM x 6 is degrees
+	// a second. No blade-repeat guard as the propeller has: 60 RPM is 6 degrees a frame at
+	// 60 fps, nowhere near the half-turn a single-lamp beacon would need to alias.
+	BeaconAngleDegrees = FMath::Fmod(BeaconAngleDegrees + BeaconRPM * 6.0f * DeltaSeconds, 360.0f);
+}
+
+float UAirsideAgentAnim::TravelFromDeployedFraction(float DeployedFraction, float Travel)
+{
+	// NO ONE-MINUS: FBodyPose counts from the stowed end, which is the bind pose. See the
+	// header for why this is not AngleFromRestFraction with a flag.
+	return FMath::Clamp(DeployedFraction, 0.0f, 1.0f) * Travel;
 }
 
 float UAirsideAgentAnim::WheelStepDegrees(float GroundSpeed, float Radius, bool bAirborne,

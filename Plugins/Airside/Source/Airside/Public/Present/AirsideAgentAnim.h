@@ -140,6 +140,21 @@ public:
 	static float WheelHubRadius(const FReferenceSkeleton& Skeleton, float Fallback);
 
 	/**
+	 * How far a working part has gone, from a DEPLOYED-END fraction and that rig's measured
+	 * travel - seconds into a clip, uu of slide, or degrees of swing. Zero is the bind pose.
+	 *
+	 * THE MIRROR OF AngleFromRestFraction AND DELIBERATELY NOT IT: FBodyPose counts from the
+	 * stowed end (see its header for why), so there is no one-minus here. Two functions with
+	 * two names is the point - the sign trap AngleFromRestFraction records was two ends of a
+	 * lerp swapped, and a shared helper with a flag is how that trap comes back.
+	 *
+	 * CLAMPED to 0..1 before it is multiplied. A lift clip evaluated past its end holds its
+	 * last key in UE, but a platform slid 110% of its travel leaves the box, and nothing a
+	 * writer could send should be able to pull a part off its rails.
+	 */
+	static float TravelFromDeployedFraction(float DeployedFraction, float Travel);
+
+	/**
 	 * Accumulated propeller rotation, degrees. Apply to the 'prop' bone.
 	 *
 	 * WRAPPED to 0..360 rather than allowed to run on: at 2000 RPM this gains 12,000 degrees
@@ -295,6 +310,45 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float TruckTiltAngleDegrees = 0.0f;
 
+	/**
+	 * Seconds into the rig's baked Lift clip. Drive a Sequence Evaluator's Explicit Time with
+	 * it - catering1's scissor lift is nine tracks of linked arms solved in Blender, which no
+	 * chain of Transform (Modify) Bone nodes should try to reproduce.
+	 *
+	 * A TIME RATHER THAN THE FRACTION, so the graph needs no arithmetic: the clip length is a
+	 * fact about the rig and lives in LiftClipLengthSeconds, beside the other measured travels.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float LiftClipTimeSeconds = 0.0f;
+
+	/**
+	 * How far the platform has slid out of the box, uu. Apply as a TRANSLATION on the
+	 * platform bone, added in Bone Space along its own run-out axis.
+	 *
+	 * A BONE NODE AND NOT THE BAKED Platform CLIP, because the clip's FIRST KEY IS WRONG:
+	 * read back from catering1.glb on 2026-09-25 it puts the platform 2.70 m below its rest
+	 * position at frame 0, and 0.20 m (its rest height) from frame 1 on. A one-axis slide is
+	 * exactly what Transform (Modify) Bone does, and it cannot inherit a key it does not read.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float PlatformOffsetUu = 0.0f;
+
+	/** How far the towbar is raised from level, degrees. Apply to the towbar (pitch) bone. */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float TowbarPitchDegrees = 0.0f;
+
+	/**
+	 * The rotating beacon's angle, degrees, 0..360. Apply to the beacon bone.
+	 *
+	 * NOT DERIVED FROM THE MOTION, which makes it the one angle here that is not: an airside
+	 * vehicle runs its beacon whenever it is on the apron, moving or parked. So it turns at
+	 * BeaconRPM from the moment the agent exists. wire_fueltruck_anim.py left the fuel truck's
+	 * beacon unwired for exactly this reason - "nothing in UAirsideAgentAnim produces one" -
+	 * and this is the something.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float BeaconAngleDegrees = 0.0f;
+
 	/** Speed over the ground, uu per second. Exposed so the graph can blend on it if wanted. */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float GroundSpeed = 0.0f;
@@ -395,6 +449,37 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Airside")
 	float TruckTiltedAngleDegrees = 0.0f;
+
+	/**
+	 * THE WORKING PARTS' TRAVELS, one per FBodyPose fraction. ZERO BY DEFAULT for the reason
+	 * TruckTiltedAngleDegrees is: most rigs have none of these parts, and a made-up default
+	 * would be an unmeasured number in the slot for a measured one. Each is set on the one
+	 * Animation Blueprint whose rig has the part, by the build_<model>_anim.py that made it.
+	 *
+	 * LiftClipLengthSeconds: the Lift clip's length. catering1's is 80 frames at 24 fps,
+	 * 3.333 s, read off the .glb's own keyframe times.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Airside", meta = (ClampMin = "0.0"))
+	float LiftClipLengthSeconds = 0.0f;
+
+	/** How far the platform runs out, uu. catering1's is 180 (rigidCab1/README.md: 1.80 m). */
+	UPROPERTY(EditDefaultsOnly, Category = "Airside", meta = (ClampMin = "0.0"))
+	float PlatformTravelUu = 0.0f;
+
+	/**
+	 * How far a towbar lifts to stow, degrees. baggageCart1/README.md leaves "the towbar's
+	 * raised/stowed pose to the game: pitch towbar up to about 70 degrees", so 70 is the
+	 * rigger's figure rather than one invented here.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Airside", meta = (ClampMin = "0.0"))
+	float TowbarRaisedAngleDegrees = 0.0f;
+
+	/**
+	 * How fast the beacon turns, RPM. Zero: no beacon. An amber rotating beacon is about 60 -
+	 * a flash a second, the rate a driver reads as a warning rather than a strobe.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Airside", meta = (ClampMin = "0.0"))
+	float BeaconRPM = 0.0f;
 
 	/**
 	 * How long the wheels take to spin down to a stop once airborne, seconds (#107 item 8).

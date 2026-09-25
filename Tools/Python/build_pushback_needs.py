@@ -56,6 +56,16 @@ NEEDS = {
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "a Twin Otter beta-ranges off a stand",
     ),
+    "/Game/Entities/DA_Aircraft_Plane10": (
+        unreal.PushbackNeed.SELF_MANOEUVRE,
+        "a Caravan reverses off a stand on its own prop - the PT6's reverse pitch - and the "
+        "class default of VehicleTug would gate a grass-strip single behind the depot",
+    ),
+    "/Game/Entities/DA_Aircraft_Plane12": (
+        unreal.PushbackNeed.SELF_MANOEUVRE,
+        "a Cherokee is pulled off a stand by hand with a tow bar on the nosewheel - plane1's "
+        "reason, and the class default of VehicleTug would gate a trainer behind the depot",
+    ),
     "/Game/Entities/DA_Aircraft_Plane3": (
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "a Q400 turns out of a regional stand on its own props; the depot is the jets' tax",
@@ -66,6 +76,11 @@ NEEDS = {
         "left to the class default on purpose: an unset field that happens to agree with the "
         "default is indistinguishable from an asset nobody authored, which is the point the "
         "Plane7 row already makes from the other side",
+    ),
+    "/Game/Entities/DA_Aircraft_Plane11": (
+        unreal.PushbackNeed.VEHICLE_TUG,
+        "a 319 t A350-1000 needs the tug the 777 beside it does - authored rather than left "
+        "to the class default for the Plane6 row's reason",
     ),
     "/Game/Entities/DA_Aircraft_Plane8": (
         unreal.PushbackNeed.VEHICLE_TUG,

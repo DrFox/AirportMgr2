@@ -43,11 +43,19 @@ ROWS = [
         # SMALLEST FIRST, so the row reads as the progression the header claims. plane1 goes
         # ahead of the Meridian because it is 2.1 m shorter and 2.1 m narrower - the first
         # entry that makes "small to large" true of the whole row rather than of most of it.
+        # THE CHEROKEE FIRST, ON SPAN: 9.14 m against the 172's 11.00 - the narrowest
+        # aeroplane in the game, so it opens the row.
+        ("/Game/Aircraft/Plane12/SK_Plane12", "Plane12 (PA-28-180 Cherokee)"),
         ("/Game/Aircraft/Plane1/SK_Plane1", "Plane1 (Cessna 172)"),
         # THE MERIDIAN, WHICH USED TO BE SK_PiperMeridian. plane7 replaced that placeholder on
         # 2026-09-21 and it is 0.31 m SHORTER than the download was, which changes nothing
         # about where it stands: the 172 is still 0.5 m shorter and 2.1 m narrower.
         ("/Game/Aircraft/Plane7/SK_Plane7", "Plane7 (PA-46 Meridian)"),
+        # THE CARAVAN BETWEEN THE MERIDIAN AND THE KING AIR, ON SPAN: 15.88 m against 13.11 and
+        # 17.69. Length does not agree (12.68 against the King Air's 14.00 - fine) and neither
+        # does height; span is what the row is sorted on. It is the first Code B aeroplane in
+        # the row, so the A/B line falls between it and the Meridian.
+        ("/Game/Aircraft/Plane10/SK_Plane10", "Plane10 (Grand Caravan)"),
         # AHEAD OF THE TWIN OTTER, and "smallest first" had to pick a dimension to be first
         # ON. It picks SPAN - 17.69 m against 19.75 - because span is what the row is read
         # for and what the Code letter turns on. Length agrees (14.00 against 15.77), so
@@ -66,6 +74,10 @@ ROWS = [
         # aeroplanes fitted 220 m and seven do not - and standing it beside the narrowbody is
         # most of the argument for keeping a yard at all. A Code E aeroplane next to a Code C
         # one says what "the airport has to be rebuilt" means in a way no figure does.
+        # THE A350 BEFORE THE 777, ON SPAN BY 9 CM: 64.69 m against 64.78, and 0.2 m shorter
+        # (73.65 against 73.88). Two Code E twins side by side, one per maker, is the point -
+        # and the A350's nose leg folding AFT where the 777's goes forward shows under G.
+        ("/Game/Aircraft/Plane11/SK_Plane11", "Plane11 (A350-1000)"),
         ("/Game/Aircraft/Plane6/SK_Plane6", "Plane6 (777-300ER)"),
         # THE A380 GOES AFTER THE 777, AND WHAT IT ADDS IS WIDTH: 79.75 m of span against
         # the 777's 64.78, and 15 m of fuselage the 777 does not have UNDER it - a second
@@ -76,9 +88,21 @@ ROWS = [
     ]),
     ("Ground equipment", 500.0, [
         ("/Game/Vehicles/GPU1/SK_GPU1", "GPU1 (towed)"),
+        # THE CART BESIDE THE OTHER TOWED THING, and ahead of Utility1 because it is the
+        # narrower of the two (1.58 m against utility1's) - the row is spaced on width, so
+        # "small to large" reads across it on that axis.
+        ("/Game/Vehicles/BaggageCart1/SK_BaggageCart1", "BaggageCart1 (towed)"),
         ("/Game/Vehicles/Utility1/SK_Utility1", "Utility1"),
         ("/Game/Vehicles/Tug1/SK_Tug1", "Tug1 (Goldhofer D 620)"),
-        ("/Game/Vehicles/FuelTruck1/SK_FuelTruck1", "FuelTruck1"),
+        # THE TWO rigidCab1 BODIES SIDE BY SIDE, 2026-09-25: one chassis, cab and wheelbase,
+        # two jobs. Standing them together is what shows they ARE one chassis.
+        ("/Game/Vehicles/FuelTruck1/SK_FuelTruck1", "FuelTruck1 (rigidCab1 bowser)"),
+        ("/Game/Vehicles/Catering1/SK_Catering1", "Catering1 (high-loader)"),
+        # LAST AND LONGEST: 13.46 m, origin on its tri-axle's centre, so 9.26 m of it runs
+        # ahead of the row line toward the aircraft - still ~14 m clear of the 777's tail
+        # at the 100 m pitch below. Its tractor, truckCab1, arrives with
+        # feature/articulated-rig; until then it stands unhitched.
+        ("/Game/Vehicles/CurtainTrailer1/SK_CurtainTrailer1", "CurtainTrailer1 (towed)"),
     ]),
 ]
 
@@ -110,8 +134,17 @@ ROW_PITCH_UU = 10000.0
 #
 # 450 m SINCE 2026-09-25, UP FROM 400, FOR plane9. The A320's 35.44 m and its 12 m gap take
 # the nine-aeroplane row from 355 to about 402 m - past 400. Span still binds.
+#
+# plane10, 2026-09-25, and 450 stands: the Caravan's 15.88 m and its 12 m gap take the row to
+# about 430 m. The next aeroplane of any span over ~8 m will not fit.
+#
+# 470 m SINCE 2026-09-25, UP FROM 450, FOR plane12 - the prediction above came true a day
+# early. The Cherokee's 9.14 m and its 12 m gap take the row to about 450 m, at the edge.
+#
+# 540 m SINCE 2026-09-25, UP FROM 470, FOR plane11. The A350's 64.69 m and its 12 m gap take
+# the row from about 450 m to about 527. Span still binds.
 FLOOR_X_M = 300.0
-FLOOR_Y_M = 450.0
+FLOOR_Y_M = 540.0
 
 # THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
 #
