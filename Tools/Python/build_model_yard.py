@@ -43,6 +43,9 @@ ROWS = [
         # SMALLEST FIRST, so the row reads as the progression the header claims. plane1 goes
         # ahead of the Meridian because it is 2.1 m shorter and 2.1 m narrower - the first
         # entry that makes "small to large" true of the whole row rather than of most of it.
+        # THE CHEROKEE FIRST, ON SPAN: 9.14 m against the 172's 11.00 - the narrowest
+        # aeroplane in the game, so it opens the row.
+        ("/Game/Aircraft/Plane12/SK_Plane12", "Plane12 (PA-28-180 Cherokee)"),
         ("/Game/Aircraft/Plane1/SK_Plane1", "Plane1 (Cessna 172)"),
         # THE MERIDIAN, WHICH USED TO BE SK_PiperMeridian. plane7 replaced that placeholder on
         # 2026-09-21 and it is 0.31 m SHORTER than the download was, which changes nothing
@@ -130,8 +133,11 @@ ROW_PITCH_UU = 10000.0
 #
 # plane10, 2026-09-25, and 450 stands: the Caravan's 15.88 m and its 12 m gap take the row to
 # about 430 m. The next aeroplane of any span over ~8 m will not fit.
+#
+# 470 m SINCE 2026-09-25, UP FROM 450, FOR plane12 - the prediction above came true a day
+# early. The Cherokee's 9.14 m and its 12 m gap take the row to about 450 m, at the edge.
 FLOOR_X_M = 300.0
-FLOOR_Y_M = 450.0
+FLOOR_Y_M = 470.0
 
 # THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
 #

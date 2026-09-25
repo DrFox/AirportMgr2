@@ -346,6 +346,24 @@ SPECS = [
              "so the type declares no gear cycle. One 3-blade prop the spinner rides.",
     ),
     Spec(
+        key="plane12",
+        source=MODELS + r"\plane12\export\plane12.glb",
+        mesh_dir="/Game/Aircraft/Plane12",
+        skel_name="SK_Plane12",
+        # plane10's SIX JOINTS AND NAMES: root, prop, wheel_L/_R, nosewheel_steer, nosewheel.
+        # Fixed gear, so no leg is a bone.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, the contact patch - plane12/scripts/build_export.py's UE_ORIGIN.
+        origin_on="front",
+        note="Piper PA-28-180 Cherokee. 9.144 m span, 7.163 m along the reference line - "
+             "Piper's three-view to the millimetre. SITS 5.02 DEG NOSE-UP ON ITS GEAR, as "
+             "exported: both tyres meet the ground line, the fuselage is not level. Origin "
+             "on the NOSE gear. Six joints, fixed gear, one 2-blade prop.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",

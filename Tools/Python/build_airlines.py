@@ -27,6 +27,7 @@ PLANE1 = "/Game/Entities/DA_Aircraft_Plane1.DA_Aircraft_Plane1"
 PLANE2 = "/Game/Entities/DA_Aircraft_Plane2.DA_Aircraft_Plane2"
 PLANE5 = "/Game/Entities/DA_Aircraft_Plane5.DA_Aircraft_Plane5"
 PLANE10 = "/Game/Entities/DA_Aircraft_Plane10.DA_Aircraft_Plane10"
+PLANE12 = "/Game/Entities/DA_Aircraft_Plane12.DA_Aircraft_Plane12"
 
 # name -> (display name, fleet asset paths, offers per game day)
 #
@@ -99,7 +100,11 @@ AIRLINES = {
     # only grass types were under 15 m (the 172, the Meridian) or the Twin Otter at 19.75 m;
     # the Caravan's 15.88 m sits between, on a 740 m grass field. What it adds is a Code B
     # type that widening alone admits, where the King Air needs paving too.
-    "DA_Airline_Cumbria": ("Cumbria Air", [PIPER, PLANE1, PLANE2, PLANE5, PLANE10], 4.0),
+    #
+    # 2026-09-25: THE CHEROKEE JOINS, AND LIKE THE 172 IT IS VARIETY, NOT A TIER. 500 m of
+    # grass, within 1% of the 172's 497; what it adds is the narrowest span in the game.
+    "DA_Airline_Cumbria": ("Cumbria Air", [PIPER, PLANE1, PLANE2, PLANE5, PLANE10, PLANE12],
+                           4.0),
 }
 
 

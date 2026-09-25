@@ -123,6 +123,12 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		// runway (740 m against 1,006) or paving and lengthening would buy the same thing.
 		// 100600 is build_plane5_type.py's REQUIREMENTS["takeoff_field_length"], typed here
 		// for the reason plane5's row gives.
+		// plane12 CARRIES plane1's CEILING FOR plane1's REASON: a four-seat trainer that
+		// needed more runway than the Meridian would be wrong on its face. 50,000 clears it by
+		// 1,000 uu - thin, and the claim.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane12.DA_Aircraft_Plane12"), TEXT("plane12"), 51000.0,
+		  TEXT("a Cherokee that needed more runway than the Meridian would have a club "
+			   "trainer asking more of a field than a turboprop") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane10.DA_Aircraft_Plane10"), TEXT("plane10"), 100600.0,
 		  TEXT("a Caravan that needed as much runway as a King Air would be a grass-strip "
 			   "type that only paved fields could take") },
