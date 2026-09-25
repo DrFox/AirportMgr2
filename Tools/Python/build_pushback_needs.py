@@ -82,6 +82,11 @@ NEEDS = {
         "a 319 t A350-1000 needs the tug the 777 beside it does - authored rather than left "
         "to the class default for the Plane6 row's reason",
     ),
+    "/Game/Entities/DA_Aircraft_Plane13": (
+        unreal.PushbackNeed.VEHICLE_TUG,
+        "a 124 t 757-300 needs the tug the 737 below it and the A350 above it both do - "
+        "authored rather than left to the class default for the Plane6 row's reason",
+    ),
     "/Game/Entities/DA_Aircraft_Plane8": (
         unreal.PushbackNeed.VEHICLE_TUG,
         "a 575 t A380 is the end of the progression - nothing heavier flies - and it is "

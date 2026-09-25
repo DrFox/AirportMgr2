@@ -386,6 +386,27 @@ SPECS = [
              "on the NOSE gear. Six joints, fixed gear, one 2-blade prop.",
     ),
     Spec(
+        key="plane13",
+        source=MODELS + r"\plane13\export\plane13.glb",
+        mesh_dir="/Game/Aircraft/Plane13",
+        skel_name="SK_Plane13",
+        # plane11's MESH NAMES ON A TWO-AXLE BOGIE: one wheel_L / wheel_R MESH a side, each
+        # holding a four-wheel bogie's tyres, skinned to wheel_L1..L2 / R1..R2. The mesh's box
+        # centre is the bogie centre - the point FChassis::FixedAxleX wants, plane6's argument.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main bogies",
+        # NOSE GEAR, the CONTACT PATCH - plane6's ruling. build_export.py puts the origin
+        # under the nose tyre, station 5.893 on the ground.
+        origin_on="front",
+        note="Boeing 757-300 (PW2037), the first Code D type. 54.72 m long, 38.05 m span, "
+             "13.45 m to the fin tip against Boeing's 3-view 54.43 / 38.05 / 13.56 - the "
+             "drawing's own side and top views disagree on the tail by 0.7 m (plane13/SPEC.md). "
+             "Origin on the NOSE gear. Sixteen joints: two two-axle bogies, four bay doors, "
+             "two fans; the nose leg folds FORWARD, as the real one does.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",

@@ -1,4 +1,4 @@
-"""Authors DA_Aircraft_Plane11 and sets ABP_Plane11's per-model defaults. Run headless:
+"""Authors DA_Aircraft_Plane13 and sets ABP_Plane13's per-model defaults. Run headless:
 
   UnrealEditor-Cmd.exe <project> -run=pythonscript -script=<this file> -unattended -nosplash -nopause
 
@@ -8,20 +8,22 @@ GEOMETRY IS MEASURED, PERFORMANCE IS PUBLISHED, as every build_plane<N>_type.py 
 a figure typed here is a second opinion about an object the export already answers for. The
 measuring half is shared - airside_import.part_bounds_uu.
 
-WHAT THIS TYPE IS FOR. plane6's 777-300ER made Code E a rung; the A350-1000 is the other half
-of it - plane9's argument one letter up: same letter, same stands, different aeroplanes. It is
-lighter (319 t against 351) and asks less runway (2,750 m against 3,120), so it is the Code E
-type a field can take BEFORE it can take the 777. AirportMgr.Content.FieldLengthsCoverTheRoll
-pins that as this row's ceiling.
+WHAT THIS TYPE IS FOR. It is the FIRST CODE D aeroplane, and the rung between C and E. Until
+it, a field went from the 737/A320's 36 m to the 777/A350's 65 m in one step; the 757-300's
+38.05 m wing is two metres too wide for a Code C stand, so it is the type that makes a Code D
+stand worth drawing. It must also ask less runway than the lighter Code E twin, the A350-1000
+(2,750 m) - otherwise a field could skip D entirely and nothing on the ladder would be lost.
+AirportMgr.Content.FieldLengthsCoverTheRoll pins that as this row's ceiling.
 
-THE SOURCE DRAWING IS ON DISK: plane11/concept/A350-1000.dwg (Airbus's own 3-view), and
-plane11/SPEC.md tabulates the model against it: 73.65 m long, 64.69 m span, 17.12 m high
-against the published 73.79 / 64.75 / 17.08.
+THE SOURCE DRAWING IS ON DISK: plane13/concept/757-300.dxf (Boeing's own 3-view), and
+plane13/SPEC.md tabulates the model against it: span 38.051 (38.05), length 54.72 (54.43 -
+the drawing's side and top views disagree on the tail by 0.7 m, and the model keeps the top
+view's), height 13.45 (13.56).
 
-THE PERFORMANCE FIGURES ARE NOT FROM A PRIMARY SOURCE ON DISK, unlike plane4's. No Airbus
-A350 Aircraft Characteristics PDF is in plane11/concept; the field lengths, speeds, tiller
-lock and fan speed below are commonly quoted figures, rounded in the conservative direction.
-Replace them from the AC document when it is to hand.
+THE PERFORMANCE FIGURES ARE NOT FROM A PRIMARY SOURCE ON DISK, as plane11's are not. No Boeing
+757 ACAP document is in plane13/concept; the field lengths, speeds, tiller lock and fan speed
+below are commonly quoted figures, rounded in the conservative direction. Replace them from
+Boeing D6-58327 (757 Airplane Characteristics) when it is to hand.
 """
 import json
 import math
@@ -37,43 +39,47 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from airside_import import part_bounds_uu, read_gltf  # noqa: E402
 
 TYPE_PATH = "/Game/Entities"
-TYPE_NAME = "DA_Aircraft_Plane11"
-ABP = "/Game/Aircraft/Plane11/ABP_Plane11"
+TYPE_NAME = "DA_Aircraft_Plane13"
+ABP = "/Game/Aircraft/Plane13/ABP_Plane13"
 # The ICAO type designator. ShortCode is a label, not a key.
-SHORT_CODE = "A35K"
-MESH = "/Game/Aircraft/Plane11/SK_Plane11"
+SHORT_CODE = "B753"
+MESH = "/Game/Aircraft/Plane13/SK_Plane13"
 
-MODELS = r"C:\repos\AirportMgr2Models\plane11"
-SOURCE = os.path.join(MODELS, "export", "plane11.glb")
+MODELS = r"C:\repos\AirportMgr2Models\plane13"
+SOURCE = os.path.join(MODELS, "export", "plane13.glb")
 RIG_MAP = os.path.join(MODELS, "scripts", "rig_map.json")
 
 # The parts this type is measured from, NAMED rather than assumed; a renamed part raises
-# rather than defaulting. The curved winglets are part of the wing object, so the span is
-# over them - the figure that decides the letter.
+# rather than defaulting. Plain tips, no winglets (SPEC.md): the span is the wing object's,
+# and it is the figure that decides the letter.
 WING = "wing"
 STABILISER = "stabiliser"
 GEAR_LEG = "maingear_L"
 # The MESH is honestly a fan; its BONE is prop_L so BONE_RULES' "prop" needle finds a driver.
 PROP = "fan_L"
 
-# THE SIX MAIN WHEEL BONES, AVERAGED - plane6's reason: the bogie's CENTRE is the point a
-# three-axle truck pivots about, which is what FChassis::FixedAxleX wants. Naming the middle
-# axle would be right today and silently wrong the day the bogie is re-spaced.
-MAIN_WHEELS_L = ("wheel_L1", "wheel_L2", "wheel_L3")
-MAIN_WHEELS_R = ("wheel_R1", "wheel_R2", "wheel_R3")
+# THE FOUR MAIN WHEEL BONES, AVERAGED - plane6's reason: the bogie's CENTRE is the point a
+# multi-axle truck pivots about, which is what FChassis::FixedAxleX wants. The 757's is the
+# fleet's first TWO-axle bogie, and the centre is between the axles, where no bone is.
+MAIN_WHEELS_L = ("wheel_L1", "wheel_L2")
+MAIN_WHEELS_R = ("wheel_R1", "wheel_R2")
 
-# TWENTY-TWO BLADES - the Trent XWB's, and plane11/scripts/build_fan.py arrays that many.
+# THIRTY-SIX BLADES - the PW2037's, and plane13/scripts/build_fan.py arrays that many.
 # UAirsideAgentAnim::PropStepDegrees resolves the frame rate against ONE BLADE REPEAT, 360/N,
 # so this must describe the fan on screen; the class default of 3 would alias backwards.
-PROP_BLADE_COUNT = 22
+PROP_BLADE_COUNT = 36
 
-# IcaoCode.cpp's Code E row, as this script expects to find it. Checked every run so a
-# re-export that grows past its letter fails here, in the script that measured it. THE TAIL
-# BINDS: 6800 was the 777-300ER's measurement and this aeroplane's rudder reaches 6901.3 uu
-# aft of its nose gear, so E was raised to 6902 for it - see IcaoCode.cpp's MaxTailAft note.
-MAX_TAIL_AFT_E = 6902.0
-MAX_NOSE_FWD_E = 800.0
-MAX_SPAN_E = 6500.0
+# IcaoCode.cpp's Code D row, as this script expects to find it - the first time that row has
+# had a modelled type to measure. Checked every run so a re-export that grows past its letter
+# fails here, in the script that measured it. Nothing binds: the 757-300 is inside all three
+# by a clear margin (the row was authored for aeroplanes up to 52 m and 55 m aft).
+MAX_TAIL_AFT_D = 5500.0
+MAX_NOSE_FWD_D = 700.0
+MAX_SPAN_D = 5200.0
+# AND THE FLOOR, which no other type script checks because no other type sits this close to
+# the letter below it: Code C's 3600. The span is 3805 - two metres over - and a re-export
+# that trimmed the wing past C's ceiling would quietly make a Code D type fit a Code C stand.
+MIN_SPAN_D = 3600.0
 
 
 def say(msg):
@@ -85,7 +91,7 @@ def fail(msg):
 
 
 def rig_angles():
-    """The per-type angles, from the file the rig proved them in - plane11/scripts/
+    """The per-type angles, from the file the rig proved them in - plane13/scripts/
     build_rig.py writes them after posing the solved fold. Read, not typed, so the ABP's
     angle and the model's cannot drift."""
     with open(RIG_MAP) as handle:
@@ -133,9 +139,10 @@ def measure():
 
 def axles_and_radius(leg_height):
     """(steer axle X, fixed axle X, main wheel radius, main gear track) in uu, off
-    SK_Plane11's reference pose - the BONES, which build_rig.py places on each wheel's
+    SK_Plane13's reference pose - the BONES, which build_rig.py places on each wheel's
     rotation axis, so the hub's height above the contact plane IS the radius. plane3's rule,
-    with plane6's six-wheel averaging and the three checks that make averaging safe.
+    with plane6's bogie averaging (over four wheels here) and the three checks that make
+    averaging safe.
     """
     mesh = unreal.EditorAssetLibrary.load_asset(MESH)
     if mesh is None:
@@ -150,7 +157,7 @@ def axles_and_radius(leg_height):
     wanted = ("nosewheel",) + MAIN_WHEELS_L + MAIN_WHEELS_R
     missing = [name for name in wanted if name not in at]
     if missing:
-        raise KeyError("SK_Plane11 has no %s bone(s) - the rig was renamed. Bones: %s"
+        raise KeyError("SK_Plane13 has no %s bone(s) - the rig was renamed. Bones: %s"
                        % (", ".join(missing), ", ".join(sorted(at))))
 
     left = [at[name] for name in MAIN_WHEELS_L]
@@ -164,19 +171,19 @@ def axles_and_radius(leg_height):
     radius = mean([v.z for v in both])
     track = abs(mean([v.y for v in left]) - mean([v.y for v in right]))
 
-    # A BOGIE IS THREE AXLES, SO ITS BONES MUST BE AT THREE STATIONS - three bones stacked on
-    # one x average to a right-looking wheelbase and roll three tyres through each other.
+    # A BOGIE IS TWO AXLES, SO ITS BONES MUST BE AT TWO STATIONS - two bones stacked on one
+    # x average to a right-looking wheelbase and roll two tyres through each other.
     stations = sorted(v.x for v in left)
     if stations[-1] - stations[0] < radius:
-        raise ValueError("the three left main wheel bones span %.1f uu, less than one "
-                         "wheel's %.1f uu radius - stacked on one station, not three axles"
+        raise ValueError("the two left main wheel bones span %.1f uu, less than one "
+                         "wheel's %.1f uu radius - stacked on one station, not two axles"
                          % (stations[-1] - stations[0], radius))
 
     # AND AT ONE HEIGHT, because they share a beam; a wheel off it is off the ground, and the
     # mean radius would average the error away.
     for name in MAIN_WHEELS_L + MAIN_WHEELS_R:
         if abs(at[name].z - radius) > 1.0:
-            raise ValueError("%s's hub is at z=%.1f against the bogies' mean %.1f - the six "
+            raise ValueError("%s's hub is at z=%.1f against the bogies' mean %.1f - the four "
                              "main wheels are not on one plane" % (name, at[name].z, radius))
 
     if track <= radius:
@@ -215,37 +222,40 @@ def tightest_radius_uu():
     return wheelbase / math.sin(math.radians(STEERING["max_steer_degrees"]))
 
 
-# --- Published (approximately - see the header) for the A350-1000, Trent XWB-97 -----------
+# --- Published (approximately - see the header) for the 757-300, PW2037 ---------------------
 #
 # Speeds are uu per second: 100 uu/s is 1 m/s, and a knot is 51.4 uu/s.
 GROUND = {
     # THE FLEET'S TAXI FIGURES, UNCHANGED - a taxi speed is a procedure, not a capability.
     "taxi":    dict(accel=100.0, decel=200.0, speed_cap=1000.0),   # 19 kn
-    # 230, A SHADE ABOVE THE 777's 220: 32 t lighter on similar thrust and a Vr about 15 kn
-    # lower. Still below the narrowbodies' 250.
-    "takeoff": dict(accel=230.0, decel=400.0, speed_cap=7710.0),   # Vr about 150 kn
-    "landing": dict(accel=100.0, decel=400.0, speed_cap=7453.0),   # Vref about 145 kn
+    # 240, BETWEEN THE A350's 230 AND THE NARROWBODIES' 250. The 757 is famously over-powered
+    # for its size, but the -300 is its heaviest stretch (124 t) on the PW2037, the lower-
+    # thrust engine, so it does not out-accelerate a 737-800.
+    "takeoff": dict(accel=240.0, decel=400.0, speed_cap=7453.0),   # Vr about 145 kn
+    "landing": dict(accel=100.0, decel=400.0, speed_cap=7196.0),   # Vref about 140 kn
 }
 
-# 70 DEGREES of tiller authority, the 777's figure. On the measured ~32.5 m wheelbase that is
-# about a 35 m tightest radius, the largest in the game beside the 777's; author_type() logs
-# it. 0.12 g, the 777's: a 300 t aeroplane on bogies is not cornered briskly.
+# 65 DEGREES of tiller authority, the figure commonly quoted for the 757. On the measured
+# ~22.4 m wheelbase that is about a 25 m tightest radius, between the 737's 16 and the A350's
+# 35; author_type() logs it. 0.14 g: between the narrowbodies' 0.15 and the widebodies' 0.12,
+# for an aeroplane between them in mass.
 STEERING = {
-    "max_steer_degrees": 70.0,
-    "max_lateral_accel_uu": 118.0,
+    "max_steer_degrees": 65.0,
+    "max_lateral_accel_uu": 137.0,
 }
 
 CLIMB = {
-    # 9 DEGREES, NOT THE 777-300ER's 8. As long an aeroplane, but not the type famous for
-    # tail strikes; plane4's and plane9's rotation.
-    "lift_angle_at_rotate_degrees": 9.0,
-    "climb_pitch_degrees": 11.0,
-    # 2.5 a second: between the -300ER's deliberate 2 and the narrowbodies' 3.
+    # 8 DEGREES, THE 777-300ER's, NOT THE NARROWBODIES' 9. The -300 is the 757 stretch that
+    # was given a tail skid for tail strikes - a long fuselage on short legs rotates less.
+    "lift_angle_at_rotate_degrees": 8.0,
+    # 12, the A320's: a 757 climbs steeply, which is most of what it is known for.
+    "climb_pitch_degrees": 12.0,
+    # 2.5 a second: a stretched fuselage rotated deliberately, as the A350's is.
     "rotate_rate_deg_per_sec": 2.5,
     "climb_speed": 12850.0,       # 250 kn below 10,000 ft
-    # 650 m, plane6's, for plane6's reason: a 16 s gear cycle on this climb finishes above
-    # 500 m. author_type() asserts the relation rather than trusting this comment.
-    "clear_altitude": 65000.0,
+    # 500 m, plane4's and plane9's: a 13 s gear cycle on this climb finishes near 440 m.
+    # author_type() asserts the relation rather than trusting this comment.
+    "clear_altitude": 50000.0,
 }
 
 APPROACH = {
@@ -256,21 +266,21 @@ APPROACH = {
 }
 
 ENGINE = {
-    # THE REAL FAN SPEED, about 2,700 rpm at 100 % N1 - a big fan turns slowly, as the GE90's
-    # 2,355 does. The VIEW caps what it draws (UAirsideAgentAnim::PropDisplayCapRPM).
-    "max_rpm": 2700.0,
-    # The 777's figures: the same class of fan.
-    "spool_up_seconds": 10.0,
-    "spool_down_seconds": 30.0,
+    # ABOUT 4,500 rpm AT 100 % N1 - a 2.0 m fan, between the CFM56's 5,000 and the Trent
+    # XWB's 2,700. The VIEW caps what it draws (UAirsideAgentAnim::PropDisplayCapRPM).
+    "max_rpm": 4500.0,
+    # Between the narrowbodies' 8/25 and the widebodies' 10/30.
+    "spool_up_seconds": 9.0,
+    "spool_down_seconds": 28.0,
 }
 
-# THE GEAR. plane6's cycle for plane6's reason: three-axle bogies into wells between the wing
-# box and the belly fairing, behind big doors.
+# THE GEAR. Four-wheel bogies folding inboard into the lower lobe (SPEC.md), with main and
+# nose doors: 10 s of travel, between the A320's 8 and the widebodies' 12, and 1.5 s of door.
 GEAR = {
-    "travel_seconds": 12.0,
-    "door_seconds": 2.0,
-    # ZERO: plane11/SPEC.md - "No bogie bone (the bogie stows untilted)". A non-zero figure
-    # would animate nothing and claim a part the mesh does not have. plane6's ruling.
+    "travel_seconds": 10.0,
+    "door_seconds": 1.5,
+    # ZERO: plane13/SPEC.md's rig has no truck bone, so the bogie stows untilted. A non-zero
+    # figure would animate nothing and claim a part the mesh does not have. plane6's ruling.
     "truck_tilt_seconds": 0.0,
     # About 295 ft - raising the gear is a pilot command, not a consequence of lift-off.
     "retract_above_height": 9000.0,
@@ -278,19 +288,18 @@ GEAR = {
     "extend_below_height": 15000.0,
 }
 
-# FIELD LENGTHS at MTOW, sea level, ISA, rounded UP to the nearest 50 m. AirportMgr.Content.
-# FieldLengthsCoverTheRoll asserts the model's roll fits under each, and that take-off stays
-# under plane6's 3,120 - the A350 is the Code E type a shorter runway admits.
-# THE TAKE-OFF FIGURE IS ALSO plane13's CEILING, typed into that test's row: the 757-300 must
-# ask less than this, so raising it loosens the Code D rung and lowering it may break it.
+# FIELD LENGTHS at MTOW, sea level, ISA, rounded UP to the nearest 50 m. The commonly quoted
+# 757-300 take-off figure is about 2,550 m on the higher-thrust engines; 2,650 allows for the
+# PW2037. AirportMgr.Content.FieldLengthsCoverTheRoll asserts the model's roll fits under each,
+# and that take-off stays under plane11's 2,750 - the first Code D rung has to come before E.
 REQUIREMENTS = {
-    "takeoff_field_length": 275000.0,   # 2,750 m
-    "landing_field_length": 210000.0,   # 2,100 m at max landing weight
+    "takeoff_field_length": 265000.0,   # 2,650 m
+    "landing_field_length": 180000.0,   # 1,800 m at max landing weight
 }
 
-# NINETY MINUTES, plane6's: ~370 seats through four doors, plus a long-haul turn's catering
-# and fuel uplift. A widebody occupies its stand long enough to be felt.
-TURNAROUND_SECONDS = 5400.0
+# FIFTY MINUTES: ~250 seats through two doors - more than the 737's forty for a third more
+# passengers down the same single aisle, far short of a widebody's ninety.
+TURNAROUND_SECONDS = 3000.0
 
 # PUSHBACK IS NOT SET HERE - Tools/Python/build_pushback_needs.py owns EPushbackNeed for
 # every type.
@@ -304,19 +313,25 @@ def set_regime(ground, name, values):
 
 
 def check_letter(m):
-    """Code E, checked against the measurement rather than asserted - the three figures the
-    letters-row test pins, so a re-export that outgrows its row fails HERE first."""
+    """Code D, checked against the measurement rather than asserted - the three figures the
+    letters-row test pins, plus the floor, so a re-export that leaves its row fails HERE first."""
     span = m["footprint"]["wingspan"]
     nose = m["footprint"]["nose_x"] - m["steer_axle_x"]
     tail = -(m["footprint"]["tail_x"] - m["steer_axle_x"])
-    for label, got, limit in (("span", span, MAX_SPAN_E), ("nose", nose, MAX_NOSE_FWD_E),
-                              ("tail", tail, MAX_TAIL_AFT_E)):
+    for label, got, limit in (("span", span, MAX_SPAN_D), ("nose", nose, MAX_NOSE_FWD_D),
+                              ("tail", tail, MAX_TAIL_AFT_D)):
         if got > limit:
-            fail("%s measures %.1f uu against Code E's %.0f - raise the row in "
+            fail("%s measures %.1f uu against Code D's %.0f - raise the row in "
                  "Solve/IcaoCode.cpp and this constant with it" % (label, got, limit))
         else:
-            say("PASS %s %.1f uu is inside Code E's %.0f by %.1f" % (label, got, limit,
+            say("PASS %s %.1f uu is inside Code D's %.0f by %.1f" % (label, got, limit,
                                                                      limit - got))
+    if span <= MIN_SPAN_D:
+        fail("span measures %.1f uu, inside Code C's %.0f - this is no longer a Code D type"
+             % (span, MIN_SPAN_D))
+    else:
+        say("PASS span %.1f uu is over Code C's %.0f by %.1f, so the letter is D"
+            % (span, MIN_SPAN_D, span - MIN_SPAN_D))
 
 
 def author_type():
@@ -330,9 +345,9 @@ def author_type():
         fail("could not create %s" % path)
         return None
 
-    asset.set_editor_property("code", unreal.Name("E"))
+    asset.set_editor_property("code", unreal.Name("D"))
     asset.set_editor_property("short_code", unreal.Name(SHORT_CODE))
-    asset.set_editor_property("display_name", unreal.Text("A350-1000"))
+    asset.set_editor_property("display_name", unreal.Text("757-300"))
 
     mesh = unreal.EditorAssetLibrary.load_asset(MESH)
     if mesh is None:
@@ -401,7 +416,7 @@ def author_type():
     requirements = asset.get_editor_property("requirements")
     for field, value in REQUIREMENTS.items():
         requirements.set_editor_property(field, value)
-    # TARMAC AND VISUAL, plane6's: the step from the 777 is not a different surface.
+    # TARMAC AND VISUAL, every jet's: the step from C to D is width, not a different surface.
     requirements.set_editor_property("minimum_surface", unreal.RunwaySurface.TARMAC)
     requirements.set_editor_property("approach_needed", unreal.RunwayApproach.VISUAL)
     asset.set_editor_property("requirements", requirements)
@@ -442,7 +457,7 @@ def set_anim_defaults():
         if abs(float(got) - float(value)) > 0.01:
             fail("ABP %s read back as %s, expected %s" % (prop, got, value))
         else:
-            say("PASS ABP_Plane11 %s = %s" % (prop, got))
+            say("PASS ABP_Plane13 %s = %s" % (prop, got))
 
 
 def verify(path):
@@ -473,7 +488,7 @@ def verify(path):
     else:
         say("PASS footprint wingspan %.1f uu (%.1f m)" % (span, span / 100.0))
 
-    for prop, want in (("short_code", SHORT_CODE), ("code", "E")):
+    for prop, want in (("short_code", SHORT_CODE), ("code", "D")):
         got = str(asset.get_editor_property(prop))
         if got != want:
             fail("%s read back as %s, expected %s" % (prop, got, want))
