@@ -12,8 +12,26 @@ WHY THIS EXISTS, given that import_plane2.py says materials are NOT authored her
 That note is right about what it was defending against: hand-typing base colours into Unreal
 is a second transcription of numbers that already live in Blender, and the two drift the
 first time the model is re-exported. Nothing below types a colour. Values are read out of the
-exported .glb, so Blender stays the single source of truth and a re-export followed by a
-re-run of this script propagates a change with no hand editing.
+exported .glb, so Blender stays the single source of truth for a look NOT YET ACCEPTED.
+
+THE CONTRACT CHANGED ON 2026-09-24 (task 3b, fix round 1) FOR A LOOK ALREADY ACCEPTED: an
+EXISTING shared MI_* instance's colour is now FROZEN by default, and a re-run does NOT
+propagate a change to it on its own. The incident: fuelTrailer1 joined the fleet, its own
+scraped "chassis"/"tyre"/"metal"/etc. values landed within MERGE_TOL of eleven EXISTING shared
+instances, and because a cluster's saved value was always whichever asset's export happened to
+be scraped FIRST (see collect()'s own comment - never an average), fuelTrailer1 silently became
+those eleven instances' new representative, nudging every OTHER vehicle wearing them by up to
+MERGE_TOL - and for the "body" look specifically renamed MI_Body_TruckCab1 to
+MI_Body_FuelTrailer1, which then read as unreferenced and got truckCab1's own untouched mesh
+re-saved to follow it. None of that was a deliberate recolour; it was a side effect of an
+unrelated import. See ensure_instance's own comment for the guard.
+
+A DELIBERATE recolour - the look was genuinely re-authored in Blender and the shared instance
+should follow - still needs no hand editing: name the look in REFRESH_LOOKS below for one run
+(it is read every time this script runs, by -script= or by airside_import.
+rebuild_fleet_materials()'s exec - both paths import this same module-level list, so no
+argument-passing mechanism was needed for either caller), let the rebuild run, then remove it.
+Leaving a look in REFRESH_LOOKS permanently is exactly the bug this contract exists to prevent.
 
 What changed is the requirement. Interchange's glTF pipeline delivered exactly what it was
 asked for, and it is unusable for three reasons:
@@ -88,10 +106,14 @@ MASTER_PATH = "%s/%s" % (MAT_DIR, MASTER_NAME)
 OLD_DIR = "/Game/Aircraft/Materials"
 OLD_MASTER = "%s/M_Aircraft" % OLD_DIR
 
+# RESTORED 2026-09-25: feature/articulated-rig's merge of main dropped this line while glb_path
+# still reads it, so the script died with a NameError before scraping a single material.
 MODELS = r"C:\repos\AirportMgr2Models"
-# FLEET, PRETTY and MERGE_TOL now come from airside_import - see the note there. They lived
-# here, with a second copy in verify_fleet_materials.py, until plane1 was added to one and
-# not the other.
+
+# FLEET, PRETTY, MERGE_TOL and fleet_glb now come from airside_import - see the note there.
+# FLEET and MERGE_TOL lived here, with a second copy in verify_fleet_materials.py, until
+# plane1 was added to one and not the other; a THIRD copy of the glb path silently ignored
+# where a towed asset's glb lives (now airside_import.EXPORT_FOLDER, read by fleet_glb).
 EXACT_TOL = 1e-6
 
 # Slot names in Content that a LATER export renamed. Interchange names a slot after the
@@ -108,6 +130,16 @@ EXACT_TOL = 1e-6
 SLOT_RENAMES = {
     "/Game/Aircraft/Plane3/SK_Plane3": {"plane3_metal": "plane3_strut"},
 }
+
+# THE OPT-IN FOR A DELIBERATE RECOLOUR - see the docstring's own "THE CONTRACT CHANGED ON
+# 2026-09-24" section. ensure_instance() below refuses to rewrite an EXISTING MI_* instance's
+# colour/metallic/roughness unless its LOOK NAME (the bare word, e.g. "chassis" or "body" -
+# not the instance name "MI_Chassis") is listed here. Name a look for ONE run to push a real
+# change through from whichever asset is now its representative, then remove it - a look left
+# here permanently means every future import can silently re-nudge it again, which is the
+# 2026-09-24 incident this whole contract exists to prevent. Empty by default: nothing here
+# has needed a deliberate recolour yet.
+REFRESH_LOOKS = set()
 
 
 def say(msg):
@@ -261,15 +293,64 @@ def ensure_master(two_sided):
     return master
 
 
-def ensure_instance(master, name, values):
+def existing_suffixed_name(look, assets):
+    """An existing MI_<Look>_<Pretty(asset)> that already names ONE OF `assets`, or None.
+
+    WHY THIS EXISTS (task 3b incident, 2026-09-24). A per-look cluster that does not cover the
+    WHOLE fleet is named after its LEAD - sorted(cluster["assets"])[0] - recomputed FRESH every
+    run. That is fine the day the cluster is born, and wrong every day after: fuelTrailer1
+    sorts alphabetically before truckCab1 and utility1 (capital 'T' < lowercase 't'), so the
+    moment it joined the existing {truckCab1, utility1} "body" cluster by VALUE, the lead
+    silently became fuelTrailer1 and MI_Body_TruckCab1 was renamed to MI_Body_FuelTrailer1 -
+    which the prune step then read as "MI_Body_TruckCab1 is no longer produced" and deleted,
+    and truckCab1's OWN mesh (never re-exported, never asked to change) was re-saved to follow
+    it. A cluster's identity should not depend on which of its CURRENT members happens to sort
+    first; it should depend on which one it was ALREADY NAMED FOR. So: before computing a fresh
+    name, ask whether ANY member of this cluster already has a file on disk under the name that
+    member would produce - and if so, that name wins, whoever the alphabetical lead is now.
+
+    Only ever REUSES a name; never invents one from an asset not in `assets`, so a genuinely
+    new cluster (no existing member) still gets instance_name's fresh, lead-based name.
+    """
+    camel = "".join(part.capitalize() for part in look.split("_"))
+    for asset in sorted(assets):
+        candidate = "MI_%s_%s" % (camel, PRETTY[asset])
+        if unreal.EditorAssetLibrary.does_asset_exist("%s/%s" % (MAT_DIR, candidate)):
+            return candidate
+    return None
+
+
+def ensure_instance(master, name, values, look):
+    """Create the instance if it is missing; otherwise leave its VALUE alone unless `look` is
+    in REFRESH_LOOKS - see that list's own comment and the docstring's "THE CONTRACT CHANGED ON
+    2026-09-24" section for why an existing instance is frozen by default and how to opt out of
+    that, deliberately, for one run.
+    """
     lib = unreal.MaterialEditingLibrary
     path = "%s/%s" % (MAT_DIR, name)
     old = "%s/%s" % (OLD_DIR, name)
     if (not unreal.EditorAssetLibrary.does_asset_exist(path)
             and unreal.EditorAssetLibrary.does_asset_exist(old)):
         unreal.EditorAssetLibrary.rename_asset(old, path)
+
     if unreal.EditorAssetLibrary.does_asset_exist(path):
         mi = unreal.EditorAssetLibrary.load_asset(path)
+        lib.set_material_instance_parent(mi, master)
+        if look not in REFRESH_LOOKS:
+            # CREATE-IF-MISSING, AND NOTHING ELSE, FOR AN ASSET THAT ALREADY EXISTS - task 3b's
+            # incident (2026-09-24), same root cause existing_suffixed_name's own comment
+            # records: a shared MI_* is the fleet's ACCEPTED LOOK for everything already
+            # wearing it, and re-deriving its value from whichever asset the CURRENT run's
+            # clustering happens to put first (never an average - see collect()'s own comment)
+            # silently nudges every OTHER vehicle's colour by up to MERGE_TOL every time a new
+            # asset joins its cluster. Parenting is still asserted above (cheap, and needed
+            # once if OLD_DIR migration just ran); the three VALUE parameters and the save
+            # below are SKIPPED - an existing instance's authored look is the one thing here
+            # that must be re-derived on PURPOSE (REFRESH_LOOKS), not as a side effect of some
+            # other asset's import.
+            return mi
+        say("REFRESH %s: '%s' is in REFRESH_LOOKS - rewriting its value from this run's own "
+            "representative" % (name, look))
     else:
         tools = unreal.AssetToolsHelpers.get_asset_tools()
         mi = tools.create_asset(name, MAT_DIR, unreal.MaterialInstanceConstant,
@@ -277,7 +358,10 @@ def ensure_instance(master, name, values):
         if mi is None:
             fail("create_asset returned None for %s" % path)
             return None
-    lib.set_material_instance_parent(mi, master)
+        lib.set_material_instance_parent(mi, master)
+
+    # REACHED BY TWO PATHS ONLY: a brand-new instance, or an existing one whose look opted into
+    # REFRESH_LOOKS above - never by an existing instance nothing asked to change.
     rgb, metallic, rough = values[0], values[1], values[2]
     lib.set_material_instance_vector_parameter_value(
         mi, "BaseColor", unreal.LinearColor(rgb[0], rgb[1], rgb[2], 1.0))
@@ -296,8 +380,9 @@ def remap(mesh_path, by_slot):
         say("%s absent; skipped" % mesh_path)
         return 0, []
     renames = SLOT_RENAMES.get(mesh_path, {})
+    original = mesh.get_editor_property("materials")
     out, moved, left, renamed = [], 0, [], []
-    for slot in mesh.get_editor_property("materials"):
+    for slot in original:
         slot_name = str(slot.material_slot_name)
         if slot_name in renames:
             renamed.append("%s->%s" % (slot_name, renames[slot_name]))
@@ -313,6 +398,30 @@ def remap(mesh_path, by_slot):
     if renamed:
         say("%s: slot(s) renamed to match the newer export: %s"
             % (mesh_path.split("/")[-1], ", ".join(renamed)))
+
+    # SAVE ONLY WHEN A SLOT ACTUALLY CHANGED, not unconditionally like this used to.
+    #
+    # THE INCIDENT THIS GUARDS AGAINST (2026-09-24): adding truckCab1/tankTrailer1 to FLEET
+    # meant re-running this across the WHOLE fleet (the established workflow -
+    # import_models.py's own tail does the same after every import), and the unconditional
+    # set_editor_property + save_asset below touched all 14 meshes and every pre-existing
+    # MI_* instance regardless of whether that particular asset's own slots changed - 36
+    # files of binary re-save noise landed in a PR whose only real content was two new
+    # assets, and had to be reverted by hand afterwards. set_editor_property on the materials
+    # TArray marks the package dirty even when the rebuilt array is VALUE-IDENTICAL to what
+    # was already there, and save_asset(only_if_is_dirty=False) writes regardless of
+    # dirtiness anyway - so nothing here previously distinguished "this mesh's slots changed"
+    # from "this mesh was merely visited by the loop". Comparing the rebuilt list against
+    # what was already on the mesh, index for index, is what makes that distinction; an
+    # untouched mesh is skipped and never dirtied at all.
+    changed = (len(out) != len(original) or any(
+        a.material_interface != b.material_interface
+        or str(a.material_slot_name) != str(b.material_slot_name)
+        for a, b in zip(out, original)))
+    if not changed:
+        say("%s: no slot changed; left untouched" % mesh_path.split("/")[-1])
+        return moved, left
+
     mesh.set_editor_property("materials", out)
     unreal.EditorAssetLibrary.save_asset(mesh_path, only_if_is_dirty=False)
     return moved, left
@@ -333,7 +442,13 @@ def run():
         for cluster in clusters:
             lead = sorted(cluster["assets"])[0]
             name = instance_name(look, lead, shared)
-            mi = ensure_instance(master, name, cluster["values"])
+            if not shared:
+                # KEEP A SUFFIXED CLUSTER'S EXISTING NAME STABLE - see existing_suffixed_name's
+                # own comment (task 3b, 2026-09-24). Only reached when NOT shared, because a
+                # shared (whole-fleet, one-cluster) look's name never depends on `lead` at all
+                # (instance_name's own branch) and so cannot be perturbed this way.
+                name = existing_suffixed_name(look, cluster["assets"]) or name
+            mi = ensure_instance(master, name, cluster["values"], look)
             if mi is None:
                 continue
             made.append(name)
@@ -387,4 +502,18 @@ def run():
     say("DONE")
 
 
-run()
+# GUARDED BY NAME, NOT BY "__main__" - and that distinction matters here. This is the one
+# script another script legitimately IMPORTS: airside_import.rebuild_fleet_materials() runs it
+# with `exec(compile(...), {"__name__": "__from_import__", ...})` specifically so it is NOT
+# "build_fleet_materials" (the name a plain `import build_fleet_materials` would set) - that
+# was already true before this guard existed, it just had nothing to distinguish itself from.
+# An unguarded run() at module scope meant `import build_fleet_materials` ALONE reran the FULL
+# fleet rebuild as a side effect of the import statement - which is exactly how a "read the
+# mesh's current slots" verification script silently re-touched all 14 fleet meshes and
+# recreated MI_Livery during Task 3's fix round, undoing a revert that had just been checked
+# clean. See remap()'s own comment for the rest of that incident. `!= "build_fleet_materials"`
+# (rather than `== "__main__"`) is what keeps BOTH the direct `-script=` invocation AND
+# rebuild_fleet_materials()'s exec working exactly as before, and only a bare Python import
+# inert.
+if __name__ != "build_fleet_materials":
+    run()

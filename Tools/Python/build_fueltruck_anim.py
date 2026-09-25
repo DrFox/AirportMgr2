@@ -29,7 +29,10 @@ and the two front steer bones take SteerAngleDegrees. The steer bones are the PA
 front roll bones, so the roll axis turns with the steering - wire the steer node before the
 wheel node it carries, and never the two onto one bone.
 
-THE BEACON IS NOT DRIVEN. It is rigged and it would want a steady spin, but nothing in
+THE BEACON IS DRIVEN SINCE 2026-09-25 - UAirsideAgentAnim::BeaconAngleDegrees, wired by
+Tools/wire_vehicle_anim.py from Tools/Python/build_vehicle_anims.py's plan, which also supersedes
+this script for the bowser's defaults. What follows was true of the Tripo truck: THE BEACON WAS
+NOT DRIVEN. It is rigged and it would want a steady spin, but nothing in
 UAirsideAgentAnim produces one: every angle there is derived from the agent's motion, and a
 beacon turns whether or not the truck is moving. Reported as unrecognised rather than quietly
 skipped, so the gap is a decision someone can see.
@@ -46,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from airside_anim import bone_plan, fail, joint_names, say  # noqa: E402
 
-SOURCE = r"C:\repos\AirportMgr2Models\fueltruck1\export\fueltruck1.glb"
+SOURCE = r"C:\repos\AirportMgr2Models\rigidCab1\export\fueltruck1.glb"  # built in rigidCab1.blend since 2026-09-24
 
 SKELETON = "/Game/Vehicles/FuelTruck1/SK_FuelTruck1_Skeleton"
 MESH = "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"

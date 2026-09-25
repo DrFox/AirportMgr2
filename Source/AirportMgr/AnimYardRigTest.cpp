@@ -166,7 +166,18 @@ bool FAnimYardEveryRigDrivesItsBonesTest::RunTest(const FString& Parameters)
 			"is red the graph is not applying WheelAngleDegrees to anything"), *Who),
 			ByWheels.Num() > 0);
 
-		// 3. THE STEERING, from the parked pose again so the two are measured against one datum.
+		// 3. THE STEERING - unless the rig is towed and so has no steering of its own to drive
+		// (FYardRig::bSteers). Skipped BY NAME in the log, so a rig that stopped steering by
+		// accident cannot hide here: only a UVehicleType marked bTowed takes this branch.
+		if (!Entry.Rig.bSteers)
+		{
+			AddInfo(FString::Printf(TEXT("%s: towed - its steering follows the tow, not "
+				"SteerAngleDegrees, so the steer checks do not apply"), *Who));
+			Agent->Destroy();
+			continue;
+		}
+
+		// From the parked pose again so the two are measured against one datum.
 		Bench.Reset();
 		Bench.SteerDegrees = Bench.MaxSteerDegrees;
 		Settle(*Agent, *Component, Bench.ToAgentMotion(Entry.Rig.Gear), 1.0 / 60.0);

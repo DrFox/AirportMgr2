@@ -668,4 +668,28 @@ bool FGearAnglesFollowTheFractionsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBodyTravelFollowsTheFractionTest,
+	"Airside.View.AgentAnim.BodyTravelFollowsTheFraction",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBodyTravelFollowsTheFractionTest::RunTest(const FString& Parameters)
+{
+	// THE OTHER END FROM THE GEAR. FBodyPose counts from the STOWED end, so zero is the bind
+	// pose and the travel scales up from it - no one-minus. The trap AngleFromRestFraction
+	// records was the two ends of a lerp swapped; this pins which end is which here.
+	TestEqual(TEXT("stowed is no travel"), UAirsideAgentAnim::TravelFromDeployedFraction(0.0f, 180.0f), 0.0f);
+	TestEqual(TEXT("deployed is the whole travel"), UAirsideAgentAnim::TravelFromDeployedFraction(1.0f, 180.0f), 180.0f);
+	TestEqual(TEXT("halfway is half"), UAirsideAgentAnim::TravelFromDeployedFraction(0.5f, 3.0f), 1.5f);
+
+	// CLAMPED: a writer that overshoots cannot slide the platform out of the box.
+	TestEqual(TEXT("past deployed holds at the end"), UAirsideAgentAnim::TravelFromDeployedFraction(1.4f, 180.0f), 180.0f);
+	TestEqual(TEXT("below stowed holds at rest"), UAirsideAgentAnim::TravelFromDeployedFraction(-0.3f, 180.0f), 0.0f);
+
+	// A RIG WITHOUT THE PART has zero travel, and then no fraction moves anything - which is
+	// what lets one yard channel run past every aeroplane in the row harmlessly.
+	TestEqual(TEXT("zero travel is zero whatever the fraction"), UAirsideAgentAnim::TravelFromDeployedFraction(1.0f, 0.0f), 0.0f);
+	return true;
+}
+
 #endif

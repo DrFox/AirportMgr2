@@ -143,6 +143,7 @@ bool FAnimYardMotionLoopWrapsToParkedTest::RunTest(const FString& Parameters)
 	Joins(TEXT("RPM"), JustBefore.EngineRPM, JustAfter.EngineRPM, JustBefore.MaxRPM / 2.0);
 	Joins(TEXT("steer"), JustBefore.SteerDegrees, JustAfter.SteerDegrees, JustBefore.MaxSteerDegrees);
 	Joins(TEXT("gear"), JustBefore.GearCycleFraction, JustAfter.GearCycleFraction, 1.0);
+	Joins(TEXT("body"), JustBefore.BodyFraction, JustAfter.BodyFraction, 1.0);
 
 	// AND THE STATE IT JOINS AT IS THE PARKED ONE. Two channels that merely AGREE across the
 	// wrap would also be satisfied by a loop that ended and began at full power; these say
@@ -508,6 +509,95 @@ bool FAnimYardScrubCancelsTheTravelTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and nothing carries the leg on afterwards"),
 		Motion.GearCycleFraction, Dragged, 1e-9);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnimYardMotionPlatformOnlyAtHeightTest,
+	"AirportMgr.View.AnimYard.Motion.PlatformOnlyAtHeight",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnimYardMotionPlatformOnlyAtHeightTest::RunTest(const FString& Parameters)
+{
+	// THE README'S ONE PROHIBITION. rigidCab1/README.md allows catering1's platform out "only
+	// while floor >= 2.70 m" - stowed any lower, it slides into the cab roof - and the Body
+	// channel is the only thing that ever runs it. So across the WHOLE channel, the platform
+	// may be out only with the box at full height. Swept, not sampled at the two ends, because
+	// the failure is an overlap in the middle: a lift share of 0.5 with a platform ramp
+	// starting at 0.4 passes both ends and puts the platform through the roof.
+	int32 PlatformOut = 0;
+	for (int32 Step = 0; Step <= 200; ++Step)
+	{
+		const double W = Step / 200.0;
+		const FBodyPose Pose = FYardMotion::BodyPoseAt(W);
+		if (Pose.PlatformFraction > 0.0)
+		{
+			++PlatformOut;
+			TestEqual(*FString::Printf(TEXT("at body %.3f the platform is %.3f out with the lift "
+				"at %.3f - it may only move with the box fully up"), W, Pose.PlatformFraction,
+				Pose.LiftFraction), Pose.LiftFraction, 1.0);
+		}
+	}
+
+	// AND IT DOES COME OUT. A BodyPoseAt that never moved the platform would pass the loop
+	// above by never entering it - the green-while-measuring-nothing case.
+	TestTrue(TEXT("the platform comes out somewhere on the channel"), PlatformOut > 0);
+
+	const FBodyPose Stowed = FYardMotion::BodyPoseAt(0.0);
+	TestEqual(TEXT("body 0 is stowed: lift"), Stowed.LiftFraction, 0.0);
+	TestEqual(TEXT("body 0 is stowed: platform"), Stowed.PlatformFraction, 0.0);
+	TestEqual(TEXT("body 0 is stowed: towbar"), Stowed.TowbarRaisedFraction, 0.0);
+
+	const FBodyPose Full = FYardMotion::BodyPoseAt(1.0);
+	TestEqual(TEXT("body 1 is fully out: lift"), Full.LiftFraction, 1.0);
+	TestEqual(TEXT("body 1 is fully out: platform"), Full.PlatformFraction, 1.0);
+	TestEqual(TEXT("body 1 is fully out: towbar"), Full.TowbarRaisedFraction, 1.0);
+
+	// OUT OF RANGE IS CLAMPED, so a scrub past an end cannot push a part off its rails.
+	TestEqual(TEXT("past 1 is still 1"), FYardMotion::BodyPoseAt(1.5).PlatformFraction, 1.0);
+	TestEqual(TEXT("below 0 is still 0"), FYardMotion::BodyPoseAt(-0.5).LiftFraction, 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnimYardMotionBodyMovesOnlyWhenStoppedTest,
+	"AirportMgr.View.AnimYard.Motion.BodyMovesOnlyWhenStopped",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnimYardMotionBodyMovesOnlyWhenStoppedTest::RunTest(const FString& Parameters)
+{
+	// A CATERING TRUCK DOES NOT DRIVE WITH ITS BOX UP. The loop's body stages sit between
+	// SlowToStop and TakeoffRoll so the whole row is parked through them; this pins that, so a
+	// stage reordered later cannot put a raised box on a rolling chassis without going red.
+	FYardMotion Motion;
+	const double Step = 1.0 / 60.0;
+	const int32 Frames = FMath::CeilToInt(FYardMotion::LoopSeconds() / Step);
+	double Highest = 0.0;
+	for (int32 Frame = 0; Frame < Frames; ++Frame)
+	{
+		Motion.Advance(Step);
+		Highest = FMath::Max(Highest, Motion.BodyFraction);
+		if (Motion.BodyFraction > 0.0)
+		{
+			TestEqual(*FString::Printf(TEXT("at %.2f s the body is %.2f out and the speed is "
+				"%.1f - the body only moves with the vehicle stopped"), Motion.LoopTime,
+				Motion.BodyFraction, Motion.GroundSpeed), Motion.GroundSpeed, 0.0);
+		}
+	}
+
+	// THE LOOP REACHES FULL DEPLOYMENT, within a frame's worth - otherwise the platform, which
+	// only starts at 70%, might never be shown at all.
+	TestTrue(*FString::Printf(TEXT("the loop deploys the body all the way (peak %.3f)"), Highest),
+		Highest >= 1.0 - Step / FYardMotion::SecondsOf(EYardStage::BodyDeploy) * 2.0);
+
+	// AND THE CHANNEL IS HANDED THROUGH TO THE AGENT - the one line in ToAgentMotion a later
+	// edit could drop without anything else noticing.
+	Motion.Reset();
+	Motion.bPaused = true;
+	Motion.BodyFraction = 1.0;
+	const FAgentMotion Agent = Motion.ToAgentMotion(FGearPerformance());
+	TestEqual(TEXT("ToAgentMotion carries the lift"), Agent.BodyPose.LiftFraction, 1.0);
+	TestEqual(TEXT("ToAgentMotion carries the platform"), Agent.BodyPose.PlatformFraction, 1.0);
 	return true;
 }
 

@@ -21,10 +21,16 @@ A new MCP session is opened per invocation; the server hands out the id in the
 Mcp-Session-Id header on initialize and expects it on every later request.
 """
 import json
+import os
 import sys
 import urllib.request
 
-URL = "http://localhost:8000/mcp"
+# AIRSIDE_MCP_PORT PICKS ANOTHER EDITOR. A worktree's editor can run beside the main
+# checkout's only on a second port - launch it with
+#   -ini:EditorPerProjectUserSettings:[/Script/ModelContextProtocolEngine.ModelContextProtocolSettings]:ServerPortNumber=8001
+# and set AIRSIDE_MCP_PORT=8001 for this script. Without it, a wiring run aimed at the
+# worktree lands on whichever editor holds 8000 and authors into the wrong checkout.
+URL = "http://localhost:%s/mcp" % os.environ.get("AIRSIDE_MCP_PORT", "8000")
 
 
 # Long enough for any interactive call, and NOT long enough for a big
