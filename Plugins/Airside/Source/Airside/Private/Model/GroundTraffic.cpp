@@ -72,9 +72,11 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 		return 0;
 	}
 
-	// FRoadAgent is world-free and cannot read the actor's UPROPERTY, so the pause is copied
-	// in here - the only time the two ever need to meet.
-	Agent.ShutdownPause = ShutdownPauseSeconds;
+	// FRoadAgent is world-free and cannot read the actor's UPROPERTY or the rules table for
+	// itself, so both are copied in here - the only time they ever need to meet. StampRules
+	// also stamps ReverseSpeed, which an arrival never reads today - see its own comment for
+	// why every admit path sets both figures regardless (issue #295).
+	Agent.StampRules(Rules, ShutdownPauseSeconds);
 	Agent.Class = ETraversalClass::Aircraft;
 	Agent.SetGoalFrom(Plan.TaxiIn);
 
@@ -181,15 +183,14 @@ int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 int32 UGroundTraffic::AdmitDispatched(FRoadAgent&& Agent, const URoadNetwork* Network,
 	const FRoutePlan& Plan, ETraversalClass Class, double ShutdownPauseSeconds)
 {
-	// FRoadAgent is world-free and cannot read the actor's UPROPERTY for itself, so the
-	// pause is copied in at dispatch - the only time the two ever need to meet.
-	Agent.ShutdownPause = ShutdownPauseSeconds;
-
-	// AND THE REVERSE SPEED, for the same reason and at the same moment: the agent arms its own
-	// back-out mid-taxi when its route reaches a bay's reverse leg, so it must already hold the
-	// figure by then. Zero would refuse every reverse leg and strand the vehicle at the service
-	// point, which is why this is stamped here rather than defaulted on the struct.
-	Agent.ReverseSpeed = Rules.ServiceReverseSpeed;
+	// FRoadAgent is world-free and cannot read the actor's UPROPERTY or the rules table for
+	// itself, so both figures are copied in at dispatch - the only time they ever need to
+	// meet. See FRoadAgent::StampRules for why one call sets both rather than one assignment
+	// per admit path (issue #295). THE REVERSE SPEED matters here in particular: the agent
+	// arms its own back-out mid-taxi when its route reaches a bay's reverse leg, so it must
+	// already hold the figure by then - zero would refuse every reverse leg and strand the
+	// vehicle at the service point.
+	Agent.StampRules(Rules, ShutdownPauseSeconds);
 	Agent.Class = Class;
 	Agent.SetGoalFrom(Plan);
 

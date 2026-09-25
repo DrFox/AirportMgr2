@@ -659,6 +659,39 @@ bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters
 
 // ---------------------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficArrivalReceivesReverseSpeedTest,
+	"Airside.Model.Traffic.ArrivalReceivesReverseSpeed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficArrivalReceivesReverseSpeedTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #295: DispatchArrival stamped ShutdownPause by hand and never ReverseSpeed, so an
+	// arrival was admitted holding the struct default (0.0) rather than Rules.ServiceReverseSpeed
+	// - "the copy that nobody set" (CLAUDE.md), invisible only because nothing an arrival does
+	// today reads the figure. FRoadAgent::StampRules is the fix: one call, from every admit
+	// path, that sets both ShutdownPause and ReverseSpeed together.
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTestAirport Fixture = FTestAirport::Build(Piper);
+	URoadNetwork* Net = Fixture.Net;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	const int32 Id = Traffic->DispatchArrival(*Net, Fixture.Threshold - FVector2D(1000.0, 0.0), Piper, 1.0);
+	if (!TestTrue(TEXT("the arrival is admitted"), Id > 0))
+	{
+		return false;
+	}
+	const FRoadAgent* Agent = Traffic->FindAgent(Id);
+	if (!TestNotNull(TEXT("and the agent is there"), Agent))
+	{
+		return false;
+	}
+	TestEqual(TEXT("it holds the rules' reverse speed, not the struct default"),
+		Agent->ReverseSpeed, Traffic->Rules.ServiceReverseSpeed);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTrafficCrossingHoldsRunwayTest,
 	"Airside.Model.Traffic.CrossingHoldsRunway",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

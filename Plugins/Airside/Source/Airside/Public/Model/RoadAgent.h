@@ -13,6 +13,7 @@
 #include "Model/RouteSearch.h"
 #include "Model/TakeoffRun.h"
 #include "Model/TrafficOccupancy.h"
+#include "Model/TrafficRules.h"
 #include "Model/Vehicle.h"
 #include "RoadAgent.generated.h"
 
@@ -770,6 +771,26 @@ public:
 
 	/** Disarms it: the route no longer ends on the runway it was armed for (ArmDepartureIfRunway). */
 	void DisarmDeparture() { bDepartureArmed = false; DepartureOrder = FDepartureOrder(); }
+
+	/**
+	 * Copies the rule figures every admit path must stamp before the agent's first tick:
+	 * ShutdownPause and ReverseSpeed. FRoadAgent is world-free and cannot read FTrafficRules
+	 * or ARoadNetworkActor's own UPROPERTY for itself, so whoever admits it copies both in -
+	 * see ReverseSpeed and ShutdownPause's own comments for why each is a copy rather than a
+	 * lookup.
+	 *
+	 * ONE CALL FOR BOTH FIGURES (issue #295), not one hand-written assignment per admit site:
+	 * DispatchArrival used to set ShutdownPause alone and AdmitDispatched set both, so an
+	 * arrival never received ReverseSpeed at all - harmless while nothing an arrival does
+	 * reads it, and exactly the "the copy that nobody set" shape CLAUDE.md warns about the
+	 * day something does read it. Every admit path calls this now, whether or not the figure
+	 * applies to what is being admitted - see Airside.Model.Traffic.ArrivalReceivesReverseSpeed.
+	 */
+	void StampRules(const FTrafficRules& Rules, double ShutdownPauseSeconds)
+	{
+		ShutdownPause = ShutdownPauseSeconds;
+		ReverseSpeed = Rules.ServiceReverseSpeed;
+	}
 
 	/**
 	 * Sets GoalNode from a plan's own last step, or clears it when the plan has none.
