@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadAgent.h"
 #include "Model/PushbackRun.h"
@@ -482,6 +483,93 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 		TEXT("Advance reads it live (gained %.2f uu/s over %.1f s, was accelerating at %.0f uu/s2)"),
 		Gained, MeasureTicks * Step, Agent.Chassis().Ground.Takeoff.Accel),
 		Gained < 1.0);
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Issue #289: the reverse-then-park handover skipped the motion re-describe. FRoadAgent::
+// Advance wrote the "Parked" ritual twice - once where a taxi arrives with no departure
+// armed (which re-describes LastMotion from the pose it just computed) and once where a
+// reverse leg is the LAST thing the route has left to drive (which did not, and handed back
+// the stale LastMotion from the frame BEFORE the reverse finished - still carrying
+// Reversing's own GroundSpeed). AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip and
+// Airside.Model.ReverseRun already drive a reverse leg to its end; neither reads OutMotion
+// on the exact tick the handover happens, which is the only tick this bug is visible on.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadAgentReverseLastLegParksAtRestTest,
+	"Airside.Model.RoadAgent.ReverseLastLegParksAtRest",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadAgentReverseLastLegParksAtRestTest::RunTest(const FString& Parameters)
+{
+	// A STRAIGHT REVERSE LEG AS THE WHOLE ROUTE: curvature zero, so any wheelbase clears
+	// FReverseRun::Start's radius and sharp-vertex checks, and nothing follows it - the
+	// "backed out; nothing further to drive" branch, not the "picks the taxi up again" one.
+	FRoutePlan Plan;
+	Plan.Result = ERouteResult::Found;
+	Plan.Polyline = { FVector2D(0.0, 0.0), FVector2D(-2000.0, 0.0) };
+	Plan.Length = 2000.0;
+	FRouteStep Step;
+	Step.EndDistance = Plan.Length;
+	// THE POLYLINE INDEX, NOT JUST THE DISTANCE: RouteSearch::Section reads EndVertex to cut
+	// the plan it hands FReverseRun::Start, and a step whose EndVertex is left at its default
+	// of 0 sections to an empty (zero-vertex) span - the plan looks valid but nothing is on
+	// it, which is a fixture bug this test tripped over rather than the thing under test.
+	Step.EndVertex = Plan.Polyline.Num() - 1;
+	Step.bReverseLeg = true;
+	Plan.Steps = { Step };
+
+	// THE LARGEST VEHICLE'S CHASSIS, as ServiceLinkTest's whole-route reverse test uses -
+	// StartDrive takes a whole FVehicle.
+	FVehicle Truck = UAirsideSettings::ResolveDefaultVehicle();
+	Truck.Chassis = UAirsideSettings::ResolveLargestServiceVehicle();
+
+	FRoadAgent Agent;
+	Agent.StartDrive(Plan, Truck);
+	Agent.Class = ETraversalClass::GroundVehicle;
+	Agent.ReverseSpeed = 100.0;
+
+	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
+
+	// ARM: the zero-second Advance TryArmReverseLeg makes on the tick it finds the leg -
+	// SpanStart is 0 for a whole-route reverse, so this is the very first call.
+	Agent.Advance(0.0, Motion, Event);
+	if (!TestEqual(TEXT("the whole-route reverse leg arms on the first tick"),
+		Agent.Phase, EAgentPhase::Reversing))
+	{
+		return false;
+	}
+
+	// DRIVE TO THE END, bounded, so a manoeuvre that never finishes fails as a test rather
+	// than hanging one.
+	int32 Ticks = 0;
+	while (Agent.Phase == EAgentPhase::Reversing && Ticks < 6000)
+	{
+		Agent.Advance(1.0 / 60.0, Motion, Event);
+		++Ticks;
+	}
+
+	if (!TestEqual(TEXT("backing out with nothing left to drive parks the agent"),
+		Agent.Phase, EAgentPhase::Parked))
+	{
+		return false;
+	}
+
+	// THE HANDOVER TICK ITSELF - Motion is whatever THAT call wrote to OutMotion, not a
+	// later one. Before the fix this was the previous tick's LastMotion, still carrying
+	// Reversing's own (nonzero) GroundSpeed; FRoadAgent::Park re-describes on the pose
+	// FReverseRun::Advance already wrote this same call (see Park's own comment for why
+	// that pose, and not the follower's, is the right one to read here).
+	TestEqual(TEXT("OutMotion.GroundSpeed reads zero on the handover frame, not Reverse's "
+		"own last speed"), Motion.GroundSpeed, 0.0);
+
+	// AND THE HEADING IS THE LINE'S: backing along -X the body faces +X throughout (see
+	// FReverseRun::Advance - the tangent turned through 180 degrees), so this also proves
+	// the pose was genuinely recomputed rather than merely zeroed in place.
+	TestEqual(TEXT("heading is the reverse line's own, read on the handover frame"),
+		FMath::Abs(FMath::RadiansToDegrees(FMath::UnwindRadians(Motion.Heading))), 0.0, 0.5);
 
 	return true;
 }
