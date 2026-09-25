@@ -822,7 +822,9 @@ bool URoadNetwork::SplitGuidelineEdge(FGuidelineEdgeId Edge, double T, double We
 
 	// Both halves inherit every field of Original - identity (DerivedFrom, StandGeometryOwner,
 	// ...) included - which is what keeps a split lane or taxiway recognisable as the same
-	// thing it was before. Only the endpoint and control that actually moved are overridden.
+	// thing it was before. Only the endpoint and control that actually moved, and the PER-HALF
+	// fields below (measured off the whole curve, now stale for either piece of it), are
+	// overridden.
 	FGuidelineEdge Head = Original;
 	Head.B = OutNode;
 	Head.Control = ControlLeft;
@@ -830,6 +832,41 @@ bool URoadNetwork::SplitGuidelineEdge(FGuidelineEdgeId Edge, double T, double We
 	FGuidelineEdge Tail = Original;
 	Tail.A = OutNode;
 	Tail.Control = ControlRight;
+
+	// The measured fields (MinRadius, ClearInner/Outer, ClearInnerAt/OuterAt) describe the
+	// WHOLE original curve, not either half - and a curved half re-samples to the SAME point
+	// count as the original (GuidelineGeom::Sample is a fixed subdivision), so a naive copy
+	// passes VehicleFit's Path.Num()-vs-ClearInnerAt.Num() guard while judging a half against
+	// the whole curve's numbers (#288). Mark unmeasured rather than re-measure: re-measuring
+	// needs FRoadGuidelineBuilder::MeasureTurn and the junction pavement polygon the ORIGINAL
+	// numbers were marched against, and this is Model/, which must not depend on Build/ to get
+	// either - and a rebuild does not close the gap on its own: it re-derives the turn path
+	// (MeasureTurn fills it in) and then FAnchorLink::Build splits it AGAIN, so a lead-in half
+	// is unmeasured after EVERY rebuild, not just until the next one. The halves stay
+	// unmeasured for as long as the split exists - VehicleFit says nothing for them rather
+	// than guessing; re-measuring them belongs to a Build/ pass after AnchorLink (a
+	// follow-up), not here. See the "PER-HALF FIELDS" comment beside FGuidelineEdge for the
+	// full list this mirrors.
+	const auto MarkUnmeasured = [](FGuidelineEdge& Half)
+	{
+		Half.MinRadius = 0.0;
+		Half.ClearInner = -1.0;
+		Half.ClearOuter = -1.0;
+		Half.ClearInnerAt.Reset();
+		Half.ClearOuterAt.Reset();
+	};
+	MarkUnmeasured(Head);
+	MarkUnmeasured(Tail);
+
+	// EndRefA/EndRefB name what a hand-authored end IS, not where it sits - Head's B and
+	// Tail's A now point at the new split node rather than at whatever Original's ref named,
+	// so those two must clear. The ends that did NOT move (Head's A, Tail's B) keep theirs.
+	// Unreachable today only because IsJoinable requires bDerived and EndRef is only ever set
+	// on a hand-authored (non-derived) edge - fixed anyway because SplitGuidelineEdge is a
+	// public API this project already calls from three sites, and a future fourth should not
+	// have to rediscover the same rule.
+	Head.EndRefB = FGuidelineEndRef();
+	Tail.EndRefA = FGuidelineEndRef();
 
 	RemoveGuidelineEdge(Edge);
 	OutHead = AddGuidelineEdge(MoveTemp(Head));
