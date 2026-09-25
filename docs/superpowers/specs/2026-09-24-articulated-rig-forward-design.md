@@ -253,8 +253,21 @@ fillets are sized per width tier; dead-end balloons are NOT:**
   to a fold; it was not committed. To land it, the whole-route tow trace must land first (the rig
   then refused on Jackknife, the bowser and utility on gentler curves); the patch is kept with the
   session's report.
+  **REVISED 2026-09-25 ("whole-route tow check" landed, then the reshape - LANDED):** with the
+  router following the trailer over the whole route (see the note below), the reshape went in as
+  measured - same footprint (1818 x 727 uu box, `UTurnGeom::FootprintFor`), 4 + `CirclePieces`
+  quadratics, the swing out laid by `GuidelineGeom::LaneChange` (the taper's S, one construction),
+  tightest 642 / 650 / 666 uu (Narrow / Standard / Wide), `Airside.Solve.UTurnBalloonFootprint`.
+  Every piece now clears the rig's 575.6 lock, and the whole-route check refuses the rig at all
+  three on its TRAILER: "trailer folds at guideline node N / (x, y), link 0, angle 90 deg" - the
+  rig does not turn in any balloon inside this footprint; it turns where its trailer holds, and
+  it holds in none. The bowser and the utility's drawbar train (judged whole-route too) turn at
+  every dead end. `Airside.Build.DesignVehicle.WideDeadEndRefusesRigUntilReversing` pins it: each
+  edge fits the rig alone, the whole route refuses it (`EFitRefusal::TrailerFolds`), and the agent
+  driven round the unjudged plan anyway jack-knifes - the refusal is the agent's.
 - **The course:** the rig bypasses all three dead-end stems (look-ahead), their U-turns refused
-  on the lock-radius reason; its corners on Wide are laid for it.
+  on the TRAILER-FOLD reason since 2026-09-25 (was the lock radius; `OneLoopHeadless` asserts the
+  reason); its corners on Wide are laid for it.
 
 **REVISED 2026-09-25 ("whole-route tow check", user-approved) - the router follows the trailer
 over the whole planned route, so it cannot send a tow where its trailer folds:**
@@ -394,7 +407,8 @@ across both lanes (a known gap from the road-lanes spec).
   LaneChange` lays nothing when the lane ends are within 1 uu along, so a segment too short to
   inset at all still gets the old straight diagonal. The capped-taper warning names the length.
 - **The rig U-turns at road ends once reversing exists (step 2):** a three-point turn, not a
-  bigger balloon (user ruling 2026-09-25). Until then every dead end refuses it on its lock.
+  bigger balloon (user ruling 2026-09-25). Until then every dead end refuses it - on its trailer
+  folding since the reshape and the whole-route check (2026-09-25), on its lock before.
 - **The near-side overrun.** The rig's trailer cuts 2.0-3.4 m past the inner pavement edge on
   near-side turns while its swept width still fits (§3, measured and bounded, not fixed).
   Needs a decision: judge `VehicleFit` per side, or have the agent swing wide.

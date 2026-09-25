@@ -945,6 +945,14 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 				}
 			}
 			Refusals += R.Outcome == ERigLegOutcome::Refused ? 1 : 0;
+			// THE REASON IS THE TRAILER, NOT THE LOCK (2026-09-25): the dead ends were reshaped
+			// within the bowser footprint and every piece now clears the rig's lock; what refuses
+			// it is the whole-route tow check - the trailer folds going round. Said in the refusal.
+			if (V == 0 && R.Outcome == ERigLegOutcome::Refused)
+			{
+				TestTrue(FString::Printf(TEXT("%s: refused because its trailer folds (%s)"), *What, *R.Reason),
+					R.Reason.Contains(TEXT("trailer folds at guideline node")));
+			}
 		}
 		// The width step's own expected outcome: DRIVEN, on the S, within the 3x allowance.
 		TestEqual(FString::Printf(TEXT("%s drives the Narrow->Wide mid-straight step"), Names[V]),

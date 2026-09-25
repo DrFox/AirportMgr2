@@ -544,7 +544,11 @@ namespace
 
 			const FGuidelineEdgeId Exclude = Verdict.Edge;
 			const bool bCanRetry = Attempt < MaxTowRetries && Exclude.IsSet() && !Excluded.Contains(Exclude);
-			UE_LOG(LogAirside, Log, TEXT("Route %d -> %d: %s refused on the whole route (attempt %d): %s%s"),
+			// VERBOSE: the search logs no per-edge refusal either - the caller that asked says why, with
+			// RejectedBy (the rig course's "refused: rig TooNarrow, trailer folds at ..."). At Log
+			// level this line was 219 a loop on the course (2026-09-25), its look-ahead probing the
+			// dead ends; the way round below, which changes where a vehicle goes, stays at Log.
+			UE_LOG(LogAirside, Verbose, TEXT("Route %d -> %d: %s refused on the whole route (attempt %d): %s%s"),
 				Query.Start.Index, Query.Goal.Index, *Who, Attempt + 1, *Verdict.Describe(),
 				bCanRetry ? *FString::Printf(TEXT("; retrying without guideline edge %d"), Exclude.Index) : TEXT(""));
 			if (!bCanRetry)

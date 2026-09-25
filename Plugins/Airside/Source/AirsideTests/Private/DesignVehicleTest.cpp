@@ -4,6 +4,8 @@
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
+#include "Model/AgentMotion.h"
+#include "Model/RoadAgent.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
@@ -70,9 +72,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDesignVehicleDeadEndTest, "Airside.Build.Desig
 bool FDesignVehicleDeadEndTest::RunTest(const FString& Parameters)
 {
 	// BALLOONS ARE NOT PER TIER, BY RULING (2026-09-25, "smaller, reverse later"): every tier's
-	// dead end is sized for the bowser, the Wide one included, and the rig is refused at all
-	// three on its lock until reversing (step 2) gives it a three-point turn. When that lands,
-	// the Wide line here is the one to flip.
+	// dead end is sized for the bowser, the Wide one included. RESHAPED THE SAME DAY within that
+	// footprint (Airside.Solve.UTurnBalloonFootprint): every piece now clears the rig's LOCK, and
+	// the whole-route tow check (VehicleFit::JudgePlan) is what refuses it - its trailer folds
+	// going round, on all three tiers. So the rig is still refused at every dead end until
+	// reversing (step 2) gives it a three-point turn; the reason moved from the lock to the fold.
+	// When reversing lands, the lines here are the ones to flip.
 	using namespace DesignVehicle;
 	const TArray<URoadProfile*> Profiles = Tiers();
 	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
@@ -81,6 +86,7 @@ bool FDesignVehicleDeadEndTest::RunTest(const FString& Parameters)
 	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
 	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
 	const FVehicle Bowser = UAirsideSettings::ResolveDefaultVehicle();
+	const FVehicle Utility = UAirsideSettings::ResolveUtilityTowVehicle();
 	const TCHAR* const Names[3] = { TEXT("Narrow"), TEXT("Standard"), TEXT("Wide") };
 
 	for (int32 Tier = 0; Tier < 3; ++Tier)
@@ -92,14 +98,48 @@ bool FDesignVehicleDeadEndTest::RunTest(const FString& Parameters)
 		// THE BOWSER, UNCHANGED: every tier's dead end turns it, as before any of this.
 		TestTrue(FString::Printf(TEXT("%s: the bowser turns at the dead end"), Names[Tier]),
 			RoundTheEnd(*Net, In, Back, Bowser).IsValid());
+		// AND THE UTILITY'S DRAWBAR TRAIN, now judged over the whole route like any tow: it holds.
+		const FRoutePlan UtilityPlan = RoundTheEnd(*Net, In, Back, Utility);
+		TestTrue(FString::Printf(TEXT("%s: the utility and its trailer turn at the dead end (%s)"), Names[Tier],
+			*UtilityPlan.RejectedBy.Describe()), UtilityPlan.IsValid());
 
+		// THE RIG: every piece fits it on its own now - the lock is no longer why...
+		FRouteQuery Bare = FRouteQuery::For(ERouteErrand::GraphProbe, In, Back, 0.0, ETraversalClass::GroundVehicle);
+		const FRoutePlan Unjudged = RouteSearch::Find(*Net, Bare);
+		if (!TestTrue(FString::Printf(TEXT("%s: the lanes and the balloon join up"), Names[Tier]), Unjudged.IsValid())) { continue; }
+		double Tightest = TNumericLimits<double>::Max();
+		bool bEveryEdgeFits = true;
+		for (const FRouteStep& Step : Unjudged.Steps)
+		{
+			const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Step.Edge);
+			bEveryEdgeFits &= Edge != nullptr && VehicleFit::Fits(*Edge, Rig, *Net);
+			if (Edge != nullptr && Edge->MinRadius > 0.0) { Tightest = FMath::Min(Tightest, Edge->MinRadius); }
+		}
+		TestTrue(FString::Printf(TEXT("%s: every edge round the end fits the rig on its own - tightest %.0f uu vs its %.0f lock"), Names[Tier],
+			Tightest, Rig.Chassis.TightestFollowableRadius()), bEveryEdgeFits);
+
+		// ...and the whole route refuses it: the trailer folds.
 		const FRoutePlan RigPlan = RoundTheEnd(*Net, In, Back, Rig);
+		AddInfo(FString::Printf(TEXT("%s: rig %s"), Names[Tier], *RigPlan.RejectedBy.Describe()));
 		TestFalse(FString::Printf(TEXT("%s: the rig is refused at the dead end until reversing exists"), Names[Tier]), RigPlan.IsValid());
-		const FGuidelineEdge* Rejected = RigPlan.RejectedEdge.IsSet() ? Net->GetGuidelineEdge(RigPlan.RejectedEdge) : nullptr;
-		if (!TestNotNull(FString::Printf(TEXT("%s: the refusal names the edge"), Names[Tier]), Rejected)) { continue; }
-		const FFitVerdict Verdict = VehicleFit::Judge(*Rejected, Rig, *Net);
-		TestEqual(FString::Printf(TEXT("%s: refused as tighter than the rig's lock (%s)"), Names[Tier], *Verdict.Describe()),
-			static_cast<int32>(Verdict.Refusal), static_cast<int32>(EFitRefusal::TighterThanLock));
+		TestEqual(FString::Printf(TEXT("%s: as a road it does not fit - TooNarrow"), Names[Tier]),
+			static_cast<int32>(RigPlan.Result), static_cast<int32>(ERouteResult::TooNarrow));
+		TestTrue(FString::Printf(TEXT("%s: on the whole route"), Names[Tier]), RigPlan.RejectedBy.bWholeRoute);
+		TestEqual(FString::Printf(TEXT("%s: because its trailer folds going round (%s)"), Names[Tier], *RigPlan.RejectedBy.Describe()),
+			static_cast<int32>(RigPlan.RejectedBy.Refusal), static_cast<int32>(EFitRefusal::TrailerFolds));
+
+		// THE REFUSAL IS THE AGENT'S (one evaluator, on the real balloon): dispatched round it
+		// anyway, the rig jack-knifes.
+		FRoadAgent Agent;
+		Agent.StartDrive(Unjudged, Rig);
+		FAgentMotion Motion;
+		EAgentEvent Event = EAgentEvent::None;
+		for (int32 Frame = 0; Frame < 30 * 600 && Event != EAgentEvent::Parked && Agent.GetJackknifedLink() == INDEX_NONE; ++Frame)
+		{
+			Agent.Advance(1.0 / 30.0, Motion, Event);
+		}
+		TestEqual(FString::Printf(TEXT("%s: driven round it anyway, the rig's trailer jack-knifes"), Names[Tier]),
+			Agent.GetJackknifedLink(), 0);
 	}
 	return true;
 }
