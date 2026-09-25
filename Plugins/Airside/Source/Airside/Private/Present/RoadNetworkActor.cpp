@@ -238,7 +238,16 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSetti
 	Settings.TexelsPerUnit = TexelsPerUnit;
 	Settings.RibbonSegments = RibbonSegments;
 	Settings.GhostZOffset = GhostZOffset;
-	Settings.GhostMaterial = ResolveGhostMaterial();
+
+	// THROUGH THE CACHE, NOT A FRESH ResolveGhostMaterial() (issue #298) - this used to call the
+	// resolver directly, which is a GetContent() plus a LoadSynchronous on every ghost cache
+	// MISS, i.e. once per frame of a drag (IsGhostCacheHit fails whenever the cursor position has
+	// moved, which on a drag is every frame). #190's whole point was that this pair of calls
+	// costs something and should run once per dirty mark, not once per frame; the ghost path
+	// re-grew the very cost that cache exists to remove by reading the resolver instead of the
+	// cache it fills. ENFORCED BY: Airside.Present.GhostDragDoesNotReresolveContent.
+	RefreshResolvedContentCacheIfDirty();
+	Settings.GhostMaterial = ResolvedGhostMaterialCache;
 
 	// THE KIND THE CLICK WILL ACTUALLY LAY, not always the taxiway. A ghost is a promise
 	// about what a click does, and a 23 m preview over a 6 m road is a promise the player
@@ -871,13 +880,18 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 {
 	// Asked FIRST, before anything is resolved: a still drag calls this every frame with an
 	// unchanged FromNodeIndex/SnapResult, and the cache already knows that without a Resolve*
-	// call. Only a validity flip on an otherwise-unchanged ghost costs one (GhostMaterial).
+	// call. Only a validity flip on an otherwise-unchanged ghost costs one (GhostMaterial) - and
+	// THROUGH THE CACHE, not a fresh ResolveGhostMaterial() (issue #298, same reasoning as
+	// MakeGhostSurfaceSettings): a validity flip is exactly as cheap as any other ghost frame
+	// should be, and RefreshResolvedContentCacheIfDirty() is a no-op whenever nothing invalidated
+	// it, which is every frame between two PostEditChangeProperty calls.
 	bool bValidityChanged = false;
 	if (Presenter->IsGhostCacheHit(Network, FromNodeIndex, SnapResult, bValid, bValidityChanged, Kind, WidthIndex))
 	{
 		if (bValidityChanged)
 		{
-			Presenter->SetGhostValidity(bValid, ResolveGhostMaterial());
+			RefreshResolvedContentCacheIfDirty();
+			Presenter->SetGhostValidity(bValid, ResolvedGhostMaterialCache);
 		}
 		return;
 	}
