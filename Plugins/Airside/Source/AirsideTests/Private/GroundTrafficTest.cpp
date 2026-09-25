@@ -3197,4 +3197,52 @@ bool FTrafficExtendRouteTrimsHistoryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+/**
+ * A REDIRECT OFF A RUNWAY DISARMS THE DEPARTURE (re-review of e19b187e). ArmDepartureIfRunway
+ * used to clear only the runway chain, leaving bDepartureArmed and its order: an aircraft armed
+ * for a take-off and redirected somewhere that is not a runway then took off on arriving there.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRedirectDisarmsDepartureTest,
+	"Airside.Model.Traffic.RedirectDisarmsDeparture",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRedirectDisarmsDepartureTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
+	const FRoadNodeId RM = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
+	Net->AddStraightSegment(RA, RM, Runway);
+	Net->AddStraightSegment(RM, RB, Runway);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 20000.0, -20000.0);
+	TestGraph::Join(*Net, A, B);
+	TestGraph::Join(*Net, A, C);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+		TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+	if (!TestTrue(TEXT("its route ends on the runway, so a departure is armed"), Traffic->FindAgent(Plane)->bDepartureArmed)) { return false; }
+	Traffic->Advance(0.05, Net);
+	if (!TestTrue(TEXT("redirected to C, off the runway"),
+		Traffic->RedirectAgent(Plane, Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft)))) { return false; }
+	TestFalse(TEXT("the departure is disarmed: the new route does not end on a runway"), Traffic->FindAgent(Plane)->bDepartureArmed);
+	bool bDeparted = false;
+	RunUntil(*Traffic, *Net, 600.0, [&]()
+	{
+		const FRoadAgent* P = Traffic->FindAgent(Plane);
+		bDeparted = bDeparted || (P != nullptr && P->Phase == EAgentPhase::Departing);
+		return P == nullptr || P->Phase == EAgentPhase::Parked;
+	});
+	TestFalse(TEXT("it never took off"), bDeparted);
+	const FRoadAgent* P = Traffic->FindAgent(Plane);
+	TestTrue(TEXT("it parked at C, its new goal"), P != nullptr && P->Phase == EAgentPhase::Parked && P->GoalNode == C);
+	return true;
+}
+
 #endif

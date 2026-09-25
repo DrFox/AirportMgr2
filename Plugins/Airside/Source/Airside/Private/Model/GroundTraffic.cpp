@@ -381,6 +381,12 @@ void UGroundTraffic::TakeGoal(FRoadAgent& Agent, int32 AgentId, const URoadNetwo
 	{
 		ClaimGoalNodeAtDispatch(Agent, AgentId, *Network);
 	}
+	// #169: UNCONDITIONAL - the old goal was freed (ReleaseGoal) and the new one claimed whether
+	// or not the agent's phase moves, and a Parked -> Taxiing redirect or an extension under a
+	// moving agent is the common case where it does not. HERE, with the claim, so no caller of
+	// the goal change can forget it; bumped before RedirectAgent's broadcast, so a listener
+	// reading the revision sees the goal it is being told about.
+	++OccupancyRevisionCount;
 }
 
 bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Tail,
@@ -487,8 +493,6 @@ bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, con
 	TakeGoal(Agent, AgentId, Network, Spliced);
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d route extended: %.0f uu on from %.0f, %.0f uu of driven route trimmed"),
 		AgentId, Tail.Length, WasLength, Dropped);
-	// #169, as in RedirectAgent: the old goal was freed and the new one claimed.
-	++OccupancyRevisionCount;
 	return true;
 }
 
@@ -617,10 +621,8 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	{
 		OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
 	}
-	// #169: UNCONDITIONAL, unlike the broadcast above - the old goal was freed and the new one
-	// claimed (ClaimGoalNodeAtDispatch, above) whether or not the phase itself moved, and a
-	// Parked -> Taxiing redirect is the common case where it does not.
-	++OccupancyRevisionCount;
+	// #169: the occupancy revision was bumped in TakeGoal, with the claim - unconditional, unlike
+	// the broadcast above.
 	return true;
 }
 

@@ -1055,6 +1055,50 @@ bool FRigCourseRanOutRestartsWithTheChainTest::RunTest(const FString& Parameters
 	Course->BuildCourseForTest(*Actor);
 	Course->bRefuseExtensionsForTest = true;
 
+	// THE FIRST RESTART, TICK BY TICK: the axles on the tick before the redirect and the tick
+	// after it, against the cab's own move over the same two ticks. A fallback that re-laid the
+	// chain straight moves a trailer's worth of swing here; one that kept it moves a sub-step.
+	// Bounded at about one and a half loops, so a fallback that never restarts fails, not hangs.
+	{
+		const int32 Cap = 6500;
+		int32 RedirectTick = INDEX_NONE;
+		TArray<FVector2D> AxlesBefore, AxlesAfter;
+		FVector2D CabBefore = FVector2D::ZeroVector, CabAfter = FVector2D::ZeroVector;
+		TArray<FVector2D> PrevAxles;
+		FVector2D PrevCab = FVector2D::ZeroVector;
+		for (int32 Tick = 0; Tick < Cap && (RedirectTick == INDEX_NONE || Tick <= RedirectTick + 5); ++Tick)
+		{
+			const int32 RedirectsBefore = Course->GetRunnerForTest(0).Redirects;
+			Actor->Tick(static_cast<float>(TickSeconds));
+			Course->Tick(static_cast<float>(TickSeconds));
+			const FRigCourseRunner& Rig = Course->GetRunnerForTest(0);
+			const FRoadAgent* Agent = Rig.AgentId != 0 ? Actor->GetGroundTraffic()->FindAgent(Rig.AgentId) : nullptr;
+			if (Agent == nullptr) { continue; }
+			if (RedirectTick == INDEX_NONE && Rig.Redirects > RedirectsBefore)
+			{
+				RedirectTick = Tick;
+				AxlesBefore = PrevAxles;
+				CabBefore = PrevCab;
+			}
+			if (RedirectTick != INDEX_NONE && Tick == RedirectTick + 1)
+			{
+				AxlesAfter = Agent->TowAxles;
+				CabAfter = Agent->LastMotion.Position;
+			}
+			PrevAxles = Agent->TowAxles;
+			PrevCab = Agent->LastMotion.Position;
+		}
+		if (!TestTrue(TEXT("the route ran out and the rig was restarted from rest within one and a half loops"), RedirectTick != INDEX_NONE)) { return false; }
+		if (!TestTrue(TEXT("the chain was seen either side of the restart"), AxlesBefore.Num() > 0 && AxlesBefore.Num() == AxlesAfter.Num())) { return false; }
+		const double CabMoved = FVector2D::Distance(CabBefore, CabAfter);
+		for (int32 I = 0; I < AxlesBefore.Num(); ++I)
+		{
+			const double Moved = FVector2D::Distance(AxlesBefore[I], AxlesAfter[I]);
+			TestTrue(FString::Printf(TEXT("across the first restart, link %d's axle moved %.2f uu - no more than the cab's %.2f plus a sub-step: the chain was not re-laid"),
+				I, Moved, CabMoved), Moved <= CabMoved + VehicleSweep::TraceStep);
+		}
+	}
+
 	FContinuity Continuity;
 	FObservers Watch;
 	Watch.Continuity = &Continuity;
