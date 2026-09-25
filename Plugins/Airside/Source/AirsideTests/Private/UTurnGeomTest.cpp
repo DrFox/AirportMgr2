@@ -69,11 +69,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUTurnBalloonFootprintTest, "Airside.Solve.UTur
 
 bool FUTurnBalloonFootprintTest::RunTest(const FString& Parameters)
 {
-	// SAME FOOTPRINT, GENTLER CURVES (user ruling 2026-09-25): a dead end stays the size of
-	// today's bowser balloon on every tier, and inside that box the curves are as gentle as it
-	// allows. Measured on GuidelineGeom's samples - the line that is driven - at the bowser's
-	// lock (510.1 uu, what the builder sizes every dead end for) and the three service tiers'
-	// half lane spacings (3, 3.5 and 4.5 m lanes).
+	// SAME FOOTPRINT, GENTLER CURVES (user ruling 2026-09-25): a dead end is the size of the
+	// bowser's balloon on every tier, and inside that box the curves are as gentle as it allows.
+	// Measured on GuidelineGeom's samples - the line that is driven - at the RESOLVED bowser's lock
+	// (what the builder sizes every dead end for) and the three service tiers' half lane spacings
+	// (3, 3.5 and 4.5 m lanes). THE FOOTPRINT FOLLOWS THE DESIGN VEHICLE (controller ruling
+	// 2026-09-25, on #279 moving the bowser onto rigidCab1: "size ground geometry for the largest
+	// vehicle admitted"): the box is derived from that lock here, never typed - the literal
+	// 1818 x 727 pinned the old mesh's 510.1 uu lock and went red on 502 (1789.5 x 715.8).
 	const double Bowser = UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius();
 	const double RigLock = UAirsideSettings::ResolveRigVehicle().Chassis.TightestFollowableRadius();
 	const FVector2D Axis(0.0, 1.0);
@@ -89,10 +92,20 @@ bool FUTurnBalloonFootprintTest::RunTest(const FString& Parameters)
 		AddInfo(FString::Printf(TEXT("%s: box %.1f past the ends x %.1f either side; balloon %.1f x %.1f, circle R %.1f, tightest %.1f uu"),
 			Tier.Name, Box.Reach, Box.HalfWidth, Drawn.Reach, Drawn.HalfWidth, Radius, Drawn.Tightest));
 
-		// THE BOX IS THE OLD BALLOON'S, frozen by the ruling - 1818 x 727 on every tier (the old
-		// search's R grows from the lock, which binds before any tier's spacing does).
-		TestEqual(FString::Printf(TEXT("%s: the ruled reach is the old balloon's 1818 uu"), Tier.Name), Box.Reach, 1818.0, 2.0);
-		TestEqual(FString::Printf(TEXT("%s: the ruled half-width is the old balloon's 727 uu"), Tier.Name), Box.HalfWidth, 727.0, 1.0);
+		// THE BOX IS THE OLD CONSTRUCTION'S, run on the bowser's lock: R grown 3% a step from the
+		// lock, which binds before any tier's spacing does - so the same box on every tier, as wide
+		// as R and HeightFactor + 1 of it long, and never narrower than the lock it was grown from.
+		AddInfo(FString::Printf(TEXT("%s: bowser lock %.1f, rig lock %.1f"), Tier.Name, Bowser, RigLock));
+		TestTrue(FString::Printf(TEXT("%s: the box is at least the bowser's lock wide (%.1f vs %.1f)"), Tier.Name, Box.HalfWidth, Bowser),
+			Box.HalfWidth >= Bowser);
+		TestTrue(FString::Printf(TEXT("%s: and grown from it, not from the tier (%.1f within 1.5x of %.1f)"), Tier.Name, Box.HalfWidth, Bowser),
+			Box.HalfWidth <= 1.5 * Bowser);
+		TestEqual(FString::Printf(TEXT("%s: the reach is (HeightFactor + 1) x the half-width"), Tier.Name),
+			Box.Reach, (UTurnGeom::HeightFactor + 1.0) * Box.HalfWidth, 0.01);
+		TestEqual(FString::Printf(TEXT("%s: the same box as the Narrow tier's - the lock binds, not the spacing"), Tier.Name),
+			Box.HalfWidth, UTurnGeom::FootprintFor(150.0, Bowser).HalfWidth, 0.01);
+		TestTrue(FString::Printf(TEXT("%s: the reshaped balloon's tightest piece clears the bowser's own lock (%.1f vs %.1f)"),
+			Tier.Name, Drawn.Tightest, Bowser), Drawn.Tightest > Bowser);
 		// NO LARGER ON EITHER AXIS: a quadratic bulges past its circle by a hair at mid-piece,
 		// which is why the circle's extremes are piece ENDS (CirclePieces is even).
 		TestTrue(FString::Printf(TEXT("%s: the balloon reaches no further than the box (%.1f vs %.1f)"), Tier.Name, Drawn.Reach, Box.Reach),

@@ -379,7 +379,13 @@ namespace RigCourseTest
 					const double Here = Agent->Follower.Travelled;
 					const double Window = Taxi.SpeedCap * Taxi.SpeedCap / (2.0 * FMath::Max(Taxi.Accel, 1.0));
 					Pass.Reach = Taxi.SpeedCap;
-					for (double Back = 0.0; Back <= Window && Here - Back >= 0.0; Back += 25.0)
+					// EVERY UU BEHIND, not every 25: a profile minimum can be one point wide - the course's
+					// R=138 crab dip is 201 uu/s at a single sample, 1000 either side - and a 25 uu grid
+					// that lands beside it starts the forward pass from a limit tens of uu/s higher. After
+					// the #279 merge moved the course by 66 uu the grid missed it by enough to read the rig
+					// 13 uu/s short at stop 7 (455 vs 468) while it was accelerating flat out from the dip
+					// (205 -> 455 at 5 uu/s a tick, measured 2026-09-25). 5000 steps a pass, ~40 passes.
+					for (double Back = 0.0; Back <= Window && Here - Back >= 0.0; Back += 1.0)
 					{
 						const double From = Agent->Follower.Profile.LimitAt(Here - Back);
 						Pass.Reach = FMath::Min(Pass.Reach, FMath::Sqrt(From * From + 2.0 * Taxi.Accel * Back));

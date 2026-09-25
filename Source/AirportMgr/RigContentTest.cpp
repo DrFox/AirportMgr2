@@ -125,7 +125,8 @@ bool FRigContentResolvesTest::RunTest(const FString& Parameters)
  * so it is testable against a skeleton alone").
  *
  * fueltruck1 (the bowser, ResolveVehicleView) is the visible case: its hub sits well above the
- * ~21 uu fallback, so its wheels now turn about 2.5x SLOWER than before this branch - see the
+ * ~21 uu fallback, so its wheels now turn about 1.8x SLOWER than before this branch (2.3x on the
+ * pre-#279 mesh, whose hub was 47.95) - see the
  * spec's REVISED note (2026-09-24-articulated-rig-forward-design.md section 2, "Animation").
  * truckCab1 is pinned alongside it since it is the other rig mesh WheelHubRadius now drives.
  */
@@ -155,7 +156,9 @@ bool FVehicleWheelHubRadiusPinnedTest::RunTest(const FString& Parameters)
 	// MEASURED 2026-09-25 off the imported skeletons - typed here, once, so a re-export or a
 	// change to WheelHubRadius itself is caught rather than only noticed by eye. A wrong guess
 	// here fails loudly with WheelHubRadius's actual measured output in the message (below).
-	constexpr float ExpectedFuelTruck1HubZ = 47.95f;
+	// fueltruck1 RE-PINNED 2026-09-25 (47.95 -> 38.40): #279 moved the bowser onto the rigidCab1
+	// model, a new mesh with its own, smaller wheels - the pin caught the swap, as it is meant to.
+	constexpr float ExpectedFuelTruck1HubZ = 38.40f;
 	constexpr float ExpectedTruckCab1HubZ = 53.80f;
 
 	const float FuelTruck1HubZ =
