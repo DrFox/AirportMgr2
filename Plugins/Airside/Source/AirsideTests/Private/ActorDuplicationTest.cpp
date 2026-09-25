@@ -6,6 +6,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideTraffic.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
