@@ -1,5 +1,6 @@
 #include "Tool/GuidelineOverlay.h"
 
+#include "Model/HoldingBarFrame.h"
 #include "Model/RoadNetwork.h"
 #include "Tool/RoadBuildTool.h"
 
@@ -59,66 +60,42 @@ void GuidelineOverlay::Draw(const URoadNetwork& Network, IToolPreviewSink& Sink)
 		// by comparing positions - two coincident nodes are legal in this graph.
 		const FGuidelineNodeId Self = Network.GuidelineNodeIdAt(Index);
 
-		// The direction of TRAVEL, not of the bar: CrossMark draws perpendicular to what it
-		// is given (see ARoadBuildHUD::CrossMark), which is what puts a hold bar across the
-		// taxiway rather than along it.
-		//
-		// THE NODE'S OWN SEGMENT FIRST, and only then whatever else is incident. A bar sits
-		// at a taxiway end AT A JUNCTION, so the node is usually joined to the runway's
-		// centreline by turn paths as well - and those run every which way. Taking
-		// Incident[0] would let the bar's angle depend on the order edges happened to be
-		// added, which is an implementation detail of the derivation and not a contract:
-		// the same airport rebuilt could rotate the bar. Origin.Segment names the road this
-		// node was derived FOR, which is the taxiway the aircraft is actually travelling
-		// along, so matching DerivedFrom against it picks the one edge whose direction the
-		// bar should be square to. Incident[0] remains the fallback for a node with no
-		// Origin (an anchor or pose node), which has no such segment to prefer.
-		FVector2D Along(1.0, 0.0);
-
-		// An explicit flag, not "Along still equals (1,0)": a real edge can point exactly
-		// along +X, and a sentinel a legitimate value can collide with is not a sentinel.
-		bool bHaveAny = false;
-		for (const FGuidelineEdgeId& Incident : Node.Incident)
+		// THE ONE EVALUATOR (issue #307). This used to derive its own "Along" from the
+		// guideline EDGE's chord to whichever node sat on the far end - hunting Node.Incident
+		// for one whose DerivedFrom matched Origin.Segment, falling back to the first usable
+		// edge otherwise - while FHoldingPositionMarkingBuilder derived its own "Toward" from
+		// the ROAD SEGMENT's tangent at Origin. A comment on the builder once claimed the two
+		// were "exactly" the same fallback. They were not: a chord and a tangent agree only
+		// on a straight, centred guideline, which is what every fixture drawn before #307
+		// happened to be, and diverge the moment the taxiway curves or its end is set back
+		// from the node along its own tangent (RoadGuidelineBuilder.cpp's SetBack, ~line
+		// 446). HoldingBarAt is now the only place either question is answered - see its own
+		// comment for the two branches (Origin's segment first, an incident edge otherwise)
+		// this loop used to duplicate, differently, from the builder.
+		// ENFORCED BY: Airside.Model.HoldingBarFrame, which draws this node's cross mark and
+		// asserts its Along is bitwise HoldingBarAt's Toward - red the day this loop, or the
+		// builder, answers the question a second way again.
+		const FHoldingBarFrame Frame = HoldingBarAt(Network, Self);
+		if (!Frame.IsSet())
 		{
-			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Incident);
-			if (Edge == nullptr)
-			{
-				continue;
-			}
-
-			const FGuidelineNode* Other = Network.GetGuidelineNode(Edge->A == Self ? Edge->B : Edge->A);
-			if (Other == nullptr)
-			{
-				continue;
-			}
-
-			// Normalize leaves Direction untouched and returns false on a degenerate edge,
-			// so a zero-length edge is skipped rather than adopted as a zero vector the HUD
-			// would then discard - honour the return, per CLAUDE.md.
-			FVector2D Direction = Other->Position - Node.Position;
-			if (!Direction.Normalize())
-			{
-				continue;
-			}
-
-			if (Node.Origin.IsSet() && Edge->DerivedFrom == Node.Origin.Segment)
-			{
-				Along = Direction;
-				break;
-			}
-
-			// Keep the FIRST usable edge as the fallback, but go on looking for the origin
-			// one - breaking here is what would have made insertion order the answer.
-			if (!bHaveAny)
-			{
-				Along = Direction;
-				bHaveAny = true;
-			}
+			// An isolated node has no bar to be across - the same skip
+			// FHoldingPositionMarkingBuilder::Build takes. This IS a behaviour change: before
+			// #307, a flagged node with no Origin and no usable incident edge still drew a
+			// cross mark facing an arbitrary default (1, 0), because Along only ever grew a
+			// value, never a "nothing to draw" signal. Nothing reachable through the tools
+			// that flag a node (FRoadGuidelineBuilder always gives a derived one an Origin;
+			// FHoldingPointTool only flags a node already on the graph) can produce one with
+			// zero incident edges, so this is believed unobservable in practice - noted here
+			// because CLAUDE.md's refactor contract asks for the diff to be owned, not missed.
+			continue;
 		}
 
 		// The style names the KIND: the runway pattern (two solid, two dashed) and the
 		// intermediate one (a single dashed line) are different markings on the ground.
-		Sink.CrossMark(Node.Position, Along,
+		// CrossMark draws perpendicular to what it is given (see ARoadBuildHUD::CrossMark),
+		// which is what puts a hold bar across the taxiway rather than along it - Frame.Toward
+		// is the direction of TRAVEL, not of the bar itself.
+		Sink.CrossMark(Node.Position, Frame.Toward,
 			Node.HoldingPosition == EHoldingPositionKind::Runway
 				? EPreviewStyle::RunwayHoldingPosition
 				: EPreviewStyle::IntermediateHoldingPosition);

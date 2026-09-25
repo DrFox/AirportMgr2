@@ -3,15 +3,12 @@
 #include "AirsideLog.h"
 
 #include "Build/MarkingQuads.h"
+#include "Model/HoldingBarFrame.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
-#include "Profiles/RoadProfile.h"
 
 namespace
 {
-	/** A taxiway with no profile to ask still gets a bar this wide. The standard taxiway. */
-	constexpr double MarkingFallbackWidth = URoadProfile::StandardTaxiwayWidth;
-
 	/**
 	 * One bar across the taxiway: solid, or dashed from one edge. Toward is the unit
 	 * direction from the node INTO the junction (the side the pattern sits on), Across its
@@ -53,49 +50,28 @@ int32 FHoldingPositionMarkingBuilder::Build(const URoadNetwork& Network, double 
 			continue;
 		}
 
-		// THE DIRECTION INTO THE JUNCTION, and the taxiway's width. Origin names the road
-		// this node was derived FOR - the taxiway the aircraft is travelling along - and
-		// GetOutgoingTangent points from that road's node OUT along the segment, so its
-		// negation points from the node into the junction. Incident[0] is the fallback for
-		// a node with no Origin, exactly as GuidelineOverlay falls back for the overlay bar.
-		FVector2D Toward = FVector2D::ZeroVector;
-		double HalfWidth = MarkingFallbackWidth * 0.5;
-		if (Node.Origin.IsSet())
-		{
-			if (const FRoadSegment* Segment = Network.GetSegment(Node.Origin.Segment))
-			{
-				const FRoadNodeId RoadNode = Node.Origin.bEndA ? Segment->A : Segment->B;
-				Toward = -Network.GetOutgoingTangent(Node.Origin.Segment, RoadNode).GetSafeNormal();
-				if (const URoadProfile* Profile = Network.ProfileFor(*Segment))
-				{
-					HalfWidth = FMath::Max(Profile->GetTotalWidth() * 0.5, LineWidth);
-				}
-			}
-		}
-		if (Toward.IsNearlyZero())
-		{
-			for (const FGuidelineEdgeId& EdgeId : Node.Incident)
-			{
-				const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
-				if (Edge == nullptr) { continue; }
-				const FGuidelineNodeId Self = Network.GuidelineNodeIdAt(Index);
-				const FGuidelineNodeId Other = (Edge->A == Self) ? Edge->B : Edge->A;
-				const FGuidelineNode* OtherNode = Network.GetGuidelineNode(Other);
-				if (OtherNode == nullptr) { continue; }
-				const FVector2D Away = (OtherNode->Position - Node.Position).GetSafeNormal();
-				if (!Away.IsNearlyZero())
-				{
-					Toward = -Away;
-					if (Edge->Width > 0.0) { HalfWidth = FMath::Max(Edge->Width * 0.5, LineWidth); }
-					break;
-				}
-			}
-		}
-		if (Toward.IsNearlyZero())
+		// THE DIRECTION INTO THE JUNCTION, and the taxiway's width - THE ONE EVALUATOR
+		// (issue #307). This used to derive Toward/Across itself (Origin's segment tangent
+		// first, an incident edge otherwise) and so, separately, did GuidelineOverlay for its
+		// cross-mark's Along - a comment here once claimed the two fallbacks were "exactly"
+		// the same, which held only for a straight, centred guideline and broke the moment
+		// one curved or its end was set back from the node (RoadGuidelineBuilder.cpp's
+		// SetBack). HoldingBarAt is now the only place either question is answered.
+		// ENFORCED BY: Airside.Model.HoldingBarFrame, which builds this node's bar and asserts
+		// its Toward/Across/HalfWidth are square to and no wider than HoldingBarAt's own
+		// frame - red the day this builder, or the overlay, answers the question a second way.
+		// The LineWidth floor stays HERE, not there: it exists so a quad never degenerates to
+		// zero thickness when a profile or edge declares no width, which is this builder's
+		// problem alone - the overlay draws no thickness at all (RoadBuildTool.h).
+		const FGuidelineNodeId NodeId = Network.GuidelineNodeIdAt(Index);
+		const FHoldingBarFrame Frame = HoldingBarAt(Network, NodeId);
+		if (!Frame.IsSet())
 		{
 			continue;   // an isolated node has no bar to be across
 		}
-		const FVector2D Across(-Toward.Y, Toward.X);
+		const FVector2D Toward = Frame.Toward;
+		const FVector2D Across = Frame.Across;
+		const double HalfWidth = FMath::Max(Frame.HalfWidth, LineWidth);
 
 		// WHAT THIS BAR IS ABOUT TO BE, before it is built. Reported from play as "the hold
 		// line doesnt cover the whol of the taxiway" (samples/issues.png), and five
