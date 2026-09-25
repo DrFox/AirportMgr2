@@ -8,10 +8,15 @@
 #include "Entities/EntityDefinition.h"
 #include "Profiles/RoadProfile.h"
 
-// ONE CONSTANT PER ARTICULATED VEHICLE: the code its Resolve*Vehicle stamps and the key
-// ResolveVehicleViewFor picks its look by. Two string literals would be two sources of truth,
-// and a rename of one would dress the rig as a fuel truck with nothing to say why. NAMED, not
-// anonymous, because the module is a unity build.
+// ONE CONSTANT PER ARTICULATED VEHICLE, for FVehicle::TypeCode - what the inspector, and the
+// dispatch log (AirsideTraffic.cpp), say this vehicle is. NAMED, not anonymous, because the
+// module is a unity build.
+//
+// NO LONGER A LOOK-UP KEY (#308). UAirsideSettings::ResolveVehicleViewFor used to branch on
+// this to choose ResolveRigView/ResolveUtilityTowView - a TypeCode ladder that grew by one
+// branch per vehicle added to dispatch. It now loads FVehicle::Mesh directly, which
+// ResolveRigVehicle/ResolveUtilityTowVehicle below fill themselves; these two constants are
+// left purely for the inspector's and the log's sake.
 namespace AirsideVehicleCodes
 {
 	static const TCHAR* const Rig = TEXT("RIG");
@@ -221,6 +226,21 @@ FVehicle UAirsideSettings::ResolveRigVehicle()
 	Trailer.BodyRear = 121.5;
 	Trailer.Width = 254.0;
 	Rig.Tow = { Trailer };
+
+	// THE LOOK, READ HERE RATHER THAN BY A SEPARATE ResolveRigView, since #308: the rig has no
+	// UVehicleType asset yet (#287), so the Mesh/AnimClass fields a real asset's Vehicle() would
+	// fill are named here instead, from UAirsideContent's RigCabMesh/RigCabAnimClass/
+	// RigTrailerMesh/RigTrailerAnimClass - the ONE place those four fields are read now that
+	// ResolveRigView only forwards to ResolveVehicleViewFor(ResolveRigVehicle()). RETIRE this
+	// block, and the four content fields, the day #287 gives the rig a DA_Vehicle_Rig1 asset
+	// whose own Vehicle() names them instead. Dated 2026-09-25.
+	if (const UAirsideContent* Content = GetContent())
+	{
+		Rig.Mesh = Content->RigCabMesh;
+		Rig.AnimClass = Content->RigCabAnimClass;
+		Rig.Tow[0].Mesh = Content->RigTrailerMesh;
+		Rig.Tow[0].AnimClass = Content->RigTrailerAnimClass;
+	}
 
 	// 40 degrees is ASSUMED - the model carries no lock, and 40-45 is a tractor unit's range.
 	// The lock allows 5.8 m at the steered axle. In a STEADY circle the trailer folds below
@@ -514,32 +534,12 @@ FResolvedAgentView UAirsideSettings::ResolveVehicleView()
 
 FResolvedTowView UAirsideSettings::ResolveRigView()
 {
-	const UAirsideContent* Content = GetContent();
-
-	FResolvedTowView View;
-	if (Content == nullptr)
-	{
-		return View;
-	}
-
-	View.Cab.Mesh = Content->RigCabMesh.LoadSynchronous();
-	if (View.Cab.Mesh != nullptr)
-	{
-		View.Cab.AnimClass = Content->RigCabAnimClass.LoadSynchronous();
-	}
-
-	// ONE ENTRY, MATCHING ResolveRigVehicle's OWN ONE-LINK Tow ARRAY - see FResolvedTowView's
-	// own comment for why the array exists at all rather than a bare FResolvedAgentView. A
-	// second rig link would need a second content field and a second entry here; nothing
-	// about the STRUCT would need to change, which is the property the sibling
-	// ResolveUtilityTowView (utility1 + fuelTrailer1, a two-link chain) relies on.
-	View.Links.SetNum(1);
-	View.Links[0].Mesh = Content->RigTrailerMesh.LoadSynchronous();
-	if (View.Links[0].Mesh != nullptr)
-	{
-		View.Links[0].AnimClass = Content->RigTrailerAnimClass.LoadSynchronous();
-	}
-	return View;
+	// A THIN WRAPPER SINCE #308. ResolveRigVehicle now names its own Mesh/AnimClass/Tow[].Mesh
+	// (see its own comment for where from, for now), so resolving them is
+	// ResolveVehicleViewFor's job like any other vehicle's. Kept as its own named function
+	// because RigActorTest and the content tests ask for "the rig's look" without wanting to
+	// reassemble ResolveRigVehicle() themselves.
+	return ResolveVehicleViewFor(ResolveRigVehicle());
 }
 
 FVehicle UAirsideSettings::ResolveUtilityTowVehicle()
@@ -602,6 +602,23 @@ FVehicle UAirsideSettings::ResolveUtilityTowVehicle()
 
 	Utility.Tow = { Towbar, Body };
 
+	// THE LOOK, FOR THE SAME REASON ResolveRigVehicle's own comment gives (#308/#287): utility1
+	// and fuelTrailer1 have no UVehicleType asset yet, so their Mesh/AnimClass are named here
+	// from UAirsideContent's UtilityMesh/UtilityAnimClass/UtilityTrailerMesh/
+	// UtilityTrailerAnimClass - the ONE place those four fields are read now that
+	// ResolveUtilityTowView only forwards to ResolveVehicleViewFor(ResolveUtilityTowVehicle()).
+	// Tow[0], the towbar, is left unnamed: fuelTrailer1 is one skinned asset covering the whole
+	// body (see UtilityTrailerMesh's own comment), so there is nothing for a second mesh to
+	// name. RETIRE this block, and the four content fields, when #287 gives utility1 a
+	// DA_Vehicle_UtilityTow1 asset whose own Vehicle() names them instead. Dated 2026-09-25.
+	if (const UAirsideContent* Content = GetContent())
+	{
+		Utility.Mesh = Content->UtilityMesh;
+		Utility.AnimClass = Content->UtilityAnimClass;
+		Utility.Tow[1].Mesh = Content->UtilityTrailerMesh;
+		Utility.Tow[1].AnimClass = Content->UtilityTrailerAnimClass;
+	}
+
 	// THE LOCK IS LEFT AT ResolveDefaultVehicle's 45 degrees, UNMEASURED for utility1 itself -
 	// unlike the rig's 40, nothing here has reason to override it: this task's own tests gate
 	// on the CHAIN's geometry (link count, link lengths against the skeleton), not on how
@@ -613,51 +630,49 @@ FVehicle UAirsideSettings::ResolveUtilityTowVehicle()
 
 FResolvedTowView UAirsideSettings::ResolveUtilityTowView()
 {
-	const UAirsideContent* Content = GetContent();
-
-	FResolvedTowView View;
-	if (Content == nullptr)
-	{
-		return View;
-	}
-
-	View.Cab.Mesh = Content->UtilityMesh.LoadSynchronous();
-	if (View.Cab.Mesh != nullptr)
-	{
-		View.Cab.AnimClass = Content->UtilityAnimClass.LoadSynchronous();
-	}
-
-	// TWO ENTRIES, MATCHING ResolveUtilityTowVehicle's OWN TWO-LINK Tow ARRAY. Links[0] (the
-	// towbar) is left at its default-constructed, empty FResolvedAgentView (Mesh == nullptr)
-	// ALWAYS - not merely when content names nothing - because fuelTrailer1 is ONE skinned
-	// asset covering the towbar, the turntable and the body together (there is no second mesh
-	// for a towbar-only entry to ever resolve to). Links[1] is where UtilityTrailerMesh and
-	// UtilityTrailerAnimClass actually land - see FResolvedTowView's own comment, which
-	// describes exactly this shape.
-	View.Links.SetNum(2);
-	View.Links[1].Mesh = Content->UtilityTrailerMesh.LoadSynchronous();
-	if (View.Links[1].Mesh != nullptr)
-	{
-		View.Links[1].AnimClass = Content->UtilityTrailerAnimClass.LoadSynchronous();
-	}
-	return View;
+	// SEE ResolveRigView's OWN COMMENT - the same wrapper, for the same reason: fuelTrailer1's
+	// Tow[0] (the towbar) resolves to an empty FResolvedAgentView here exactly as it always did,
+	// because ResolveUtilityTowVehicle never names a Mesh for it (see its own comment) and
+	// ResolveVehicleViewFor's per-link loop leaves an unnamed link's Mesh null.
+	return ResolveVehicleViewFor(ResolveUtilityTowVehicle());
 }
 
 FResolvedTowView UAirsideSettings::ResolveVehicleViewFor(const FVehicle& Vehicle)
 {
-	if (Vehicle.TypeCode == FName(AirsideVehicleCodes::Rig))
+	// LOAD WHAT THE VEHICLE NAMES, ELSE THE GAME-WIDE DEFAULT - ResolveAgentView's own shape,
+	// one level down. NO CODE BRANCH ANY MORE (#308): this used to be a TypeCode ladder
+	// ("if TypeCode == RIG, return ResolveRigView()...") that a THIRD site - beside the
+	// Resolve*Vehicle stamping the code and the content fields the ladder's target read - had
+	// to agree with. A vehicle now carries its own look (FVehicle::Mesh/AnimClass, and per Tow
+	// link), filled by UVehicleType::Vehicle() from an asset or by ResolveRigVehicle/
+	// ResolveUtilityTowVehicle from content for now, so this function does not need to know
+	// which vehicle it was handed, the same as ResolveAgentView does not need to know which
+	// aircraft.
+	FResolvedTowView View;
+	View.Cab.Mesh = Vehicle.Mesh.LoadSynchronous();
+	if (View.Cab.Mesh != nullptr)
 	{
-		return ResolveRigView();
+		View.Cab.AnimClass = Vehicle.AnimClass.LoadSynchronous();
 	}
-	if (Vehicle.TypeCode == FName(AirsideVehicleCodes::UtilityTow))
+	else
 	{
-		return ResolveUtilityTowView();
+		// NOTHING NAMED: the one vehicle look there has always been - so a vehicle that somehow
+		// carried a Tow with no look of its own shows its cab alone, and SpawnView's count check
+		// says so.
+		View.Cab = ResolveVehicleView();
 	}
 
-	// RIGID: the one vehicle look there has always been, and no links - so a vehicle that
-	// somehow carried a Tow with no look of its own shows its cab alone, and SpawnView's
-	// count check says so.
-	FResolvedTowView View;
-	View.Cab = ResolveVehicleView();
+	// ONE ENTRY PER TOW LINK, IN ORDER - FResolvedTowView's own contract. A link with no Mesh
+	// named (a bar, or one nobody has authored yet) resolves to an empty FResolvedAgentView
+	// rather than being left out of the array, so Links[i] always answers Tow[i].
+	View.Links.SetNum(Vehicle.Tow.Num());
+	for (int32 Link = 0; Link < Vehicle.Tow.Num(); ++Link)
+	{
+		View.Links[Link].Mesh = Vehicle.Tow[Link].Mesh.LoadSynchronous();
+		if (View.Links[Link].Mesh != nullptr)
+		{
+			View.Links[Link].AnimClass = Vehicle.Tow[Link].AnimClass.LoadSynchronous();
+		}
+	}
 	return View;
 }

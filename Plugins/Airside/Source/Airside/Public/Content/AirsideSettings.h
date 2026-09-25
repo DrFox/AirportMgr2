@@ -314,14 +314,9 @@ public:
 
 	/**
 	 * A service vehicle's RIGGED body and the graph that drives it, or an empty view when the
-	 * content set names none - in which case the caller falls back to ResolveVehicleMesh.
-	 *
-	 * THE SIBLING OF ResolveAgentView, and deliberately not a branch inside it: an aircraft
-	 * resolves its mesh from its own FAirframe FIRST and only then from the content set,
-	 * because a Twin Otter offered as a Meridian was a real defect. A vehicle has no such
-	 * per-type asset yet - ResolveDefaultVehicle hands every truck the same scaffolding
-	 * FAirframe - so there is nothing to prefer and adding the branch now would be inventing
-	 * a fallback order for a choice nobody makes.
+	 * content set names none - THE TERMINAL FALLBACK ResolveVehicleViewFor reaches for when a
+	 * vehicle names no Mesh of its own (FVehicle::Mesh null), exactly the role
+	 * UAirsideContent::AgentMesh plays inside ResolveAgentView, one level down.
 	 *
 	 * The anim class is taken WITHOUT a fallback to AgentAnimClass: an aircraft's graph
 	 * drives bones named prop and nosewheel_steer, and pointed at a truck it would find none
@@ -332,26 +327,11 @@ public:
 
 	/**
 	 * The articulated rig's view: truckCab1's mesh and ABP, plus tankTrailer1's for
-	 * ResolveRigVehicle's one Tow link - or an empty view for any link/asset the content set
-	 * does not name, matching ResolveVehicleView's null-safe shape.
+	 * ResolveRigVehicle's one Tow link - ResolveVehicleViewFor(ResolveRigVehicle()) exactly.
 	 *
-	 * A SEPARATE FUNCTION FROM ResolveVehicleView, for the reason ResolveRigVehicle is
-	 * separate from ResolveDefaultVehicle: the content diverges completely (two meshes, not
-	 * one) rather than being a second reading of the same field, so branching inside
-	 * ResolveVehicleView on HasTrailer() would make one function resolve two unrelated sets
-	 * of soft pointers - the "Content/ resolves every content default in exactly one
-	 * function" rule read the other way round.
-	 *
-	 * TAKES NO FVehicle, mirroring ResolveRigVehicle's own no-arg shape: the content it reads
-	 * (RigCabMesh/RigCabAnimClass/RigTrailerMesh/RigTrailerAnimClass on UAirsideContent) is
-	 * fixed to THIS rig, the way ResolveRigVehicle's figures are. FResolvedTowView::Links is
-	 * sized to ResolveRigVehicle's own Tow.Num() (one today), so a future second rig link
-	 * would need a second content field here and a second entry there, not a change to the
-	 * struct itself - see FResolvedTowView's own comment.
-	 *
-	 * A sibling ResolveUtilityTowView() for utility1 + fuelTrailer1's two-link chain (a bar,
-	 * then a body) would follow the same shape: its own content fields, its own function,
-	 * the same FResolvedTowView return type.
+	 * KEPT AS ITS OWN FUNCTION since #308 folded its content reads into ResolveRigVehicle
+	 * (see that function's own comment), because RigActorTest and the content tests ask for
+	 * "the rig's look" by name rather than reassembling ResolveRigVehicle() themselves.
 	 */
 	static FResolvedTowView ResolveRigView();
 
@@ -367,31 +347,36 @@ public:
 
 	/**
 	 * utility1's mesh and ABP, plus fuelTrailer1's for ResolveUtilityTowVehicle's two Tow
-	 * links - or an empty view for any mesh/ABP the content set does not name.
-	 *
-	 * A SEPARATE FUNCTION FROM ResolveRigView, for the reason ResolveRigView already gives for
-	 * being separate from ResolveVehicleView: the content diverges completely (utility1's and
-	 * fuelTrailer1's own soft pointers, not a second reading of RigCabMesh/RigTrailerMesh).
+	 * links - ResolveVehicleViewFor(ResolveUtilityTowVehicle()) exactly, kept as its own
+	 * function for the reason ResolveRigView gives.
 	 *
 	 * Links.Num() == 2, matching ResolveUtilityTowVehicle's own two-link Tow: Links[0] (the
-	 * towbar) resolves to an EMPTY FResolvedAgentView (Mesh == nullptr) always, because the
-	 * towbar carries no mesh of its own - fuelTrailer1 is ONE skinned asset covering both
-	 * links, and Links[1] is where it (and its ABP) actually resolves. See FResolvedTowView's
-	 * own comment: "a link with no body of its own... resolves to an EMPTY FResolvedAgentView
-	 * rather than being left out of the array" - written for exactly this vehicle.
+	 * towbar) resolves to an EMPTY FResolvedAgentView (Mesh == nullptr) always, because
+	 * ResolveUtilityTowVehicle never names a Mesh for it - fuelTrailer1 is ONE skinned asset
+	 * covering both links, and Links[1] is where it (and its ABP) actually resolves. See
+	 * FResolvedTowView's own comment: "a link with no body of its own... resolves to an EMPTY
+	 * FResolvedAgentView rather than being left out of the array" - written for exactly this
+	 * vehicle.
 	 */
 	static FResolvedTowView ResolveUtilityTowView();
 
 	/**
-	 * THE LOOK FOR THIS VEHICLE: its cab plus one entry per Tow link - ResolveRigView for the
-	 * rig, ResolveUtilityTowView for utility1 + fuelTrailer1, and for anything else
-	 * ResolveVehicleView as the Cab with no Links (rigid, as every truck was before).
+	 * THE LOOK FOR THIS VEHICLE: load what it names (FVehicle::Mesh/AnimClass, and per Tow
+	 * link), else ResolveVehicleView()'s game-wide default - exactly ResolveAgentView's own
+	 * shape, one level down, for the other kind of thing on the apron.
 	 *
-	 * THE ONE PLACE THE CHOICE IS MADE, by TypeCode - the code each Resolve*Vehicle above stamps,
-	 * from one constant per vehicle in this file - so the dresser (UAirsideTraffic::SpawnView)
-	 * names no vehicle and no asset. Keyed on the TypeCode rather than on the Tow's shape
-	 * because two vehicles may share a shape and not a look.
-	 * ENFORCED BY: Airside.Present.RigActor.TrailerOnItsLink (each vehicle's cab wears its own mesh).
+	 * NO CODE BRANCH ANY MORE (#308). This used to be a TypeCode ladder ("if TypeCode == RIG,
+	 * return ResolveRigView(); if == UTILITY, return ResolveUtilityTowView(); ...") - a THIRD
+	 * site, beside the Resolve*Vehicle that stamped the code and the content fields the
+	 * ladder's target read, that had to agree with both, and that grew by one branch, one
+	 * content-field pair and one ENFORCED BY test per vehicle added to dispatch.
+	 * UVehicleType::Vehicle() now fills a vehicle's own Mesh/AnimClass from an authored asset,
+	 * and ResolveRigVehicle/ResolveUtilityTowVehicle fill them from content for now (their own
+	 * comments say where from, and when to retire it) - so this function reads no TypeCode and
+	 * no vehicle name, the same as ResolveAgentView reads no aircraft type.
+	 * ENFORCED BY: Airside.Present.RigActor.TrailerOnItsLink (each vehicle's cab wears its own
+	 * mesh), AirportMgr.Content.VehicleTypes.ResolveViewNamesNoBranch (every UVehicleType with
+	 * a mesh resolves one here with nothing but its own Vehicle()).
 	 */
 	static FResolvedTowView ResolveVehicleViewFor(const FVehicle& Vehicle);
 };

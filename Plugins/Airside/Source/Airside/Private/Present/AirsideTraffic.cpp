@@ -134,9 +134,9 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 		const double Length = Model->Rules.FootprintFor(Agent->Class);
 		const FVector Box(Length, Length * 0.5, Length * 0.5);
 
-		// WHICH LOOK is UAirsideSettings' call, not this branch's: ResolveVehicleViewFor picks
-		// it by the vehicle's TypeCode, so the rig wears truckCab1 and a truck the fuel truck,
-		// and nothing here names a vehicle or an asset.
+		// WHICH LOOK is UAirsideSettings' call, not this branch's: ResolveVehicleViewFor loads
+		// what the vehicle itself names (FVehicle::Mesh, and Tow[].Mesh), so the rig wears
+		// truckCab1 and a truck the fuel truck, and nothing here names a vehicle or an asset.
 		const FVehicle* Vehicle = Agent->AsVehicle();
 		const FResolvedTowView Look = Vehicle != nullptr
 			? UAirsideSettings::ResolveVehicleViewFor(*Vehicle) : FResolvedTowView();

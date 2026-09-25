@@ -243,6 +243,54 @@ bool FVehicleTypesAxlesMatchTheMeshTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVehicleTypesResolveViewWithNoBranchTest,
+	"AirportMgr.Content.VehicleTypes.ResolveViewNamesNoBranch",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVehicleTypesResolveViewWithNoBranchTest::RunTest(const FString& Parameters)
+{
+	// THE PIN FOR #308: UAirsideSettings::ResolveVehicleViewFor used to be a TypeCode ladder
+	// naming two HARD-CODED vehicles (RIG, UTILITY); every other FVehicle - every UVehicleType
+	// asset here - fell through it to the rigid default and never wore its own mesh unless it
+	// happened to be the one fuel truck the ladder's fallback also drew. This asks
+	// ResolveVehicleViewFor for every authored type's own Vehicle() and checks it resolved
+	// THAT type's own mesh, with no TypeCode, no asset name and no branch anywhere on the path -
+	// the shape that would go red if the ladder ever came back for a fifth vehicle.
+	const TArray<const UVehicleType*> Types = EveryVehicleType();
+	if (!TestTrue(TEXT("at least one vehicle type to check"), Types.Num() > 0))
+	{
+		return false;
+	}
+
+	int32 Checked = 0;
+	for (const UVehicleType* Type : Types)
+	{
+		USkeletalMesh* Mesh = Type->Mesh.LoadSynchronous();
+		UClass* AnimClass = Type->AnimClass.LoadSynchronous();
+		if (Mesh == nullptr)
+		{
+			continue; // EveryTypeIsInTheYard already reports a type with no mesh
+		}
+		const FString Who = Type->GetName();
+
+		const FVehicle Vehicle = Type->Vehicle();
+		if (!TestEqual(*FString::Printf(TEXT("%s: Vehicle() carries its own Mesh"), *Who),
+			Vehicle.Mesh.LoadSynchronous(), Mesh))
+		{
+			continue;
+		}
+
+		const FResolvedTowView View = UAirsideSettings::ResolveVehicleViewFor(Vehicle);
+		TestEqual(*FString::Printf(TEXT("%s: resolves its own mesh"), *Who), View.Cab.Mesh.Get(), Mesh);
+		TestTrue(*FString::Printf(TEXT("%s: resolves its own Animation Blueprint"), *Who),
+			View.Cab.AnimClass == AnimClass);
+		++Checked;
+	}
+	TestTrue(TEXT("at least one type was actually checked"), Checked > 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVehicleTypesFuelTruckAgreesWithDispatchTest,
 	"AirportMgr.Content.VehicleTypes.FuelTruckAgreesWithDispatch",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
