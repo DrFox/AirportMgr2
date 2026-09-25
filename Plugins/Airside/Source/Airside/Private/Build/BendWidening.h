@@ -65,6 +65,8 @@ namespace BendWidening
 		/** The widening along the inner edge: at U[i] (uu from the fillet's first tangent point, negative back up the first arm), W[i] into the grass. */
 		TArray<double> U;
 		TArray<double> W;
+		/** How many lane turns were actually DRIVEN (the rest the steady-state envelope ruled out). */
+		int32 Drives = 0;
 	};
 
 	/**

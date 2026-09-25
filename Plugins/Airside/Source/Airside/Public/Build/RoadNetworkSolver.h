@@ -8,9 +8,45 @@ class URoadNetwork;
 struct FChassis;
 struct FRoadDesignVehicles;
 
+/**
+ * Whether a solve may DRIVE a bend's design vehicle to widen its inside (BendWidening), or only
+ * read what an earlier one traced. A PLAIN enum (nothing reflects it). Review of 75d3cbc0: the
+ * trace is milliseconds per bend, and the snap's claim, cut and reach queries run per cursor move
+ * and the ghost's solve per drag frame - so only a Topology rebuild traces, and everything else
+ * reads its answer, keyed by the bend's geometry.
+ * ENFORCED BY: Airside.Build.BendLanes.SnapAndDragDoNotTrace
+ */
+enum class EWideningTrace : uint8
+{
+	/** Trace any bend whose geometry or design vehicle the cache has not seen: a Topology rebuild. */
+	Trace,
+	/** Read the cache only; a bend it has not seen is laid unwidened until the next Topology rebuild. */
+	ReadCached
+};
+
+/**
+ * A bend whose inside widening a short arm capped (BendWidening): its design vehicle still leaves
+ * the tarmac there. Collected by the solve, said once per rebuild by SolveAll.
+ */
+struct FCappedWidening
+{
+	int32 NodeIndex = INDEX_NONE;
+	FVector2D Position = FVector2D::ZeroVector;
+	/** How much of the traced widening the cap cost, uu, and how far the vehicle still leaves the tarmac (that less the margin). */
+	double Missing = 0.0;
+	double Overrun = 0.0;
+	/** The capped arm's segment, its length, and the length that would hold the widening. */
+	FRoadSegmentId Segment;
+	double Length = 0.0;
+	double LengthNeeded = 0.0;
+};
+
 /** Every node's solved boundary, keyed by FRoadNodeId::Index. */
 struct FRoadSolveResult
 {
+	/** Bends whose widening a short arm capped - see FCappedWidening. */
+	TArray<FCappedWidening> CappedWidenings;
+
 	TMap<int32, FJunctionResult> NodeResults;
 
 	/**
@@ -40,6 +76,8 @@ struct FRoadNodeCuts
 	FJunctionInput Input;
 	FJunctionResult Result;
 	TArray<FRoadSegmentId> ArmSegments;
+	/** Set when this node's inside widening was capped by a short arm (NodeIndex INDEX_NONE otherwise). */
+	FCappedWidening Capped;
 };
 
 /**
@@ -70,7 +108,7 @@ public:
 	 * profile to resolve its own, exactly as before this parameter existed.
 	 */
 	static FRoadSolveResult SolveAll(URoadNetwork& Network, int32 ArcSegments = 12,
-		const FRoadDesignVehicles* DesignVehicles = nullptr);
+		const FRoadDesignVehicles* DesignVehicles = nullptr, EWideningTrace Widening = EWideningTrace::Trace);
 
 	/**
 	 * Solve ONE node's cut distances, writing nothing back to the model.
@@ -84,7 +122,12 @@ public:
 	 * a junction reaches and the distance the mesh actually paves cannot drift apart.
 	 */
 	static bool SolveNodeCuts(const URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
-		FRoadNodeCuts& Out, const FRoadDesignVehicles* DesignVehicles = nullptr);
+		FRoadNodeCuts& Out, const FRoadDesignVehicles* DesignVehicles = nullptr,
+		EWideningTrace Widening = EWideningTrace::ReadCached);
+
+	/** How many bend lane turns the widening has DRIVEN (VehicleSweep::Drive) since the reset - see EWideningTrace. */
+	static int32 WideningTraceCountForTest;
+	static void ResetWideningTraceCountForTest() { WideningTraceCountForTest = 0; }
 
 	/**
 	 * SolveAll's own per-node body, exposed for exactly ONE node: solve its cuts, solve its
@@ -105,7 +148,8 @@ public:
 	 * node it is not sure is still live without checking first.
 	 */
 	static void SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
-		FRoadSolveResult& InOutResult, const FRoadDesignVehicles* DesignVehicles = nullptr);
+		FRoadSolveResult& InOutResult, const FRoadDesignVehicles* DesignVehicles = nullptr,
+		EWideningTrace Widening = EWideningTrace::ReadCached);
 
 	/**
 	 * How far a node's pavement reaches from its centre, in uu. Zero when it has no arms.

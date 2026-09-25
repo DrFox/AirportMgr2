@@ -5,6 +5,8 @@
 
 #include "Model/Chassis.h"
 #include "Model/Vehicle.h"
+#include "Model/VehicleFit.h"
+#include "Solve/VehicleSweep.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadDesignVehicles.h"
 #include "Profiles/RoadProfile.h"
@@ -440,22 +442,80 @@ bool FitNodeCuts(const URoadNetwork& Network, int32 NodeIndex,
 }
 
 /**
+ * A bend's widening as last TRACED, keyed by everything the trace reads but the vehicle: the node,
+ * each arm's fitted geometry (tangent, widths, fillet, cut floor and allowance) and profile, and the
+ * drive side. EWideningTrace's cache: a Topology rebuild writes it, every other solve reads it.
+ */
+struct FWideningKey
+{
+	TArray<double> Numbers;
+	TArray<const void*> Profiles;
+
+	bool operator==(const FWideningKey& Other) const { return Numbers == Other.Numbers && Profiles == Other.Profiles; }
+};
+
+uint32 GetTypeHash(const FWideningKey& Key)
+{
+	return HashCombine(FCrc::MemCrc32(Key.Numbers.GetData(), Key.Numbers.Num() * sizeof(double)),
+		FCrc::MemCrc32(Key.Profiles.GetData(), Key.Profiles.Num() * sizeof(const void*)));
+}
+
+struct FCachedWidening
+{
+	bool bWidens = false;
+	BendWidening::FWidening Widening;
+	/** The design vehicle it was traced for, as VehicleSweep sees it - a changed vehicle re-traces on the next rebuild. */
+	uint32 BodyDigest = 0;
+};
+
+/**
+ * THE CACHE. Game-thread state, like every solve; bounded, since a key is a geometry and a drag
+ * mints new ones - emptied past this many entries (a network's bends were a few dozen on
+ * 2026-09-25), and the next Topology rebuild refills what is live.
+ */
+constexpr int32 MaxCachedWidenings = 4096;
+
+TMap<FWideningKey, FCachedWidening>& WideningCache()
+{
+	static TMap<FWideningKey, FCachedWidening> Cache;
+	return Cache;
+}
+
+uint32 BodyDigestOf(const FVehicle& Vehicle)
+{
+	const VehicleSweep::FBody Body = VehicleFit::BodyOf(Vehicle);
+	TArray<double> Numbers = { Body.Wheelbase, Body.Width, Body.FrontX, Body.RearX, Vehicle.Chassis.TightestFollowableRadius() };
+	for (const VehicleSweep::FLink& Link : Body.Tow)
+	{
+		Numbers.Append({ Link.HitchX, Link.Length, Link.BodyFront, Link.BodyRear, Link.Width });
+	}
+	return FCrc::MemCrc32(Numbers.GetData(), Numbers.Num() * sizeof(double));
+}
+
+/**
  * THE BEND'S INSIDE, WIDENED to what its design vehicle sweeps (BendWidening, user ruling
  * 2026-09-25), on a fitted two-arm bend whose service-road lanes the builder lays concentric.
  * The corner's design vehicle is the less demanding of the arms' - the one its fillet was taken
  * for (FJunctionSolver takes the smaller radius) - so a Wide bend is widened for the rig and a
  * Narrow or Standard one for the bowser, which leaves those tarmacs on no bend (measured).
- * ENFORCED BY: Airside.Build.BendLanes.WideBendCarriesTheRig, .WideningOnlyWhereNeeded
+ *
+ * TRACED ONLY WHEN Widening SAYS SO (review of 75d3cbc0): a Topology rebuild traces what the
+ * cache has not seen; the snap's queries and a drag frame's solves read it, and a bend it has not
+ * seen - one the drag is reshaping - is laid unwidened until the rebuild that ends the drag. They
+ * resolve no vehicle either: the self-resolving body lookup (#190) is the trace's alone.
+ * ENFORCED BY: Airside.Build.BendLanes.WideBendCarriesTheRig, .WideningOnlyWhereNeeded, .SnapAndDragDoNotTrace
  */
-void WidenBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out, const FRoadDesignVehicles* DesignVehicles)
+void WidenBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out, const FRoadDesignVehicles* DesignVehicles,
+	EWideningTrace Mode)
 {
 	if (!Out.Result.bValid || Out.Input.Arms.Num() != 2 || Out.ArmSegments.Num() != 2)
 	{
 		return;
 	}
 	const FRoadNodeId NodeId = Network.NodeIdAt(NodeIndex);
-	TArray<BendWidening::FLane> Lanes[2];
 	const URoadProfile* Profiles[2] = { nullptr, nullptr };
+	FWideningKey Key;
+	Key.Numbers = { Out.Input.Position.X, Out.Input.Position.Y, static_cast<double>(Network.GetDriveSide()) };
 	for (int32 Arm = 0; Arm < 2; ++Arm)
 	{
 		const FRoadSegment* Segment = Network.GetSegment(Out.ArmSegments[Arm]);
@@ -464,39 +524,66 @@ void WidenBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out,
 		{
 			return;
 		}
-		const bool bAtA = Segment->A == NodeId;
-		for (const FProfileGuideline& Guideline : Profiles[Arm]->Guidelines)
+		const FJunctionArm& In = Out.Input.Arms[Arm];
+		Key.Numbers.Append({ In.Tangent.X, In.Tangent.Y, In.HalfWidthLeft, In.HalfWidthRight, In.FilletRadius,
+			In.FilletRadiusToNext, In.MinCutDistance, In.MaxCutDistance, In.bContinuous ? 1.0 : 0.0,
+			Segment->A == NodeId ? 1.0 : 0.0 });
+		Key.Profiles.Add(Profiles[Arm]);
+	}
+
+	FCachedWidening* Cached = WideningCache().Find(Key);
+	if (Mode == EWideningTrace::Trace)
+	{
+		TArray<BendWidening::FLane> Lanes[2];
+		for (int32 Arm = 0; Arm < 2; ++Arm)
 		{
-			// Service-road lanes only: the builder lays a taxiway's corner as it always did.
-			if (Guideline.Class != ETraversalClass::GroundVehicle)
+			const bool bAtA = Network.GetSegment(Out.ArmSegments[Arm])->A == NodeId;
+			for (const FProfileGuideline& Guideline : Profiles[Arm]->Guidelines)
 			{
-				continue;
+				// Service-road lanes only: the builder lays a taxiway's corner as it always did.
+				if (Guideline.Class != ETraversalClass::GroundVehicle)
+				{
+					continue;
+				}
+				// A guideline's offset is to the left of its segment's A->B; the arm's frame is
+				// outgoing from this node, which is B->A at end B.
+				BendWidening::FLane& Lane = Lanes[Arm].AddDefaulted_GetRef();
+				Lane.Lateral = (bAtA ? 1.0 : -1.0) * Guideline.OffsetFor(Network.GetDriveSide());
+				Lane.bArrives = Guideline.ArrivesAt(bAtA);
+				Lane.bLeaves = Guideline.LeavesFrom(bAtA);
 			}
-			// A guideline's offset is to the left of its segment's A->B; the arm's frame is
-			// outgoing from this node, which is B->A at end B.
-			BendWidening::FLane& Lane = Lanes[Arm].AddDefaulted_GetRef();
-			Lane.Lateral = (bAtA ? 1.0 : -1.0) * Guideline.OffsetFor(Network.GetDriveSide());
-			Lane.bArrives = Guideline.ArrivesAt(bAtA);
-			Lane.bLeaves = Guideline.LeavesFrom(bAtA);
+		}
+		if (Lanes[0].Num() == 0 || Lanes[1].Num() == 0)
+		{
+			return;
+		}
+		auto VehicleOf = [DesignVehicles](const URoadProfile* Profile)
+		{
+			return DesignVehicles != nullptr ? DesignVehicles->VehicleFor(Profile) : Profile->ResolvedDesignBody();
+		};
+		const FVehicle First = VehicleOf(Profiles[0]);
+		const FVehicle Second = VehicleOf(Profiles[1]);
+		const FVehicle& Design = First.Chassis.TightestFollowableRadius() <= Second.Chassis.TightestFollowableRadius() ? First : Second;
+		const uint32 Digest = BodyDigestOf(Design);
+		if (Cached == nullptr || Cached->BodyDigest != Digest)
+		{
+			if (WideningCache().Num() >= MaxCachedWidenings)
+			{
+				WideningCache().Reset();
+			}
+			FCachedWidening Fresh;
+			Fresh.BodyDigest = Digest;
+			Fresh.bWidens = BendWidening::Measure(Out.Input, Out.Result, Lanes, Design, Fresh.Widening);
+			FRoadNetworkSolver::WideningTraceCountForTest += Fresh.Widening.Drives;
+			Cached = &WideningCache().Add(Key, MoveTemp(Fresh));
 		}
 	}
-	if (Lanes[0].Num() == 0 || Lanes[1].Num() == 0)
+	if (Cached == nullptr || !Cached->bWidens)
 	{
 		return;
 	}
-	auto VehicleOf = [DesignVehicles](const URoadProfile* Profile)
-	{
-		return DesignVehicles != nullptr ? DesignVehicles->VehicleFor(Profile) : Profile->ResolvedDesignBody();
-	};
-	const FVehicle First = VehicleOf(Profiles[0]);
-	const FVehicle Second = VehicleOf(Profiles[1]);
-	const FVehicle& Design = First.Chassis.TightestFollowableRadius() <= Second.Chassis.TightestFollowableRadius() ? First : Second;
+	BendWidening::FWidening Widening = Cached->Widening;
 
-	BendWidening::FWidening Widening;
-	if (!BendWidening::Measure(Out.Input, Out.Result, Lanes, Design, Widening))
-	{
-		return;
-	}
 	// The arms cut back to hold it: a floor under the fillet's cut, capped by each arm's allowance
 	// like a taper's inset (FJunctionArm::MinCutDistance).
 	for (int32 Arm = 0; Arm < 2; ++Arm)
@@ -512,21 +599,36 @@ void WidenBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out,
 	double Shortfall = 0.0;
 	BendWidening::Rim(Out.Input, Out.Result, Widening, Rim, Shortfall);
 	Out.Input.Arms[Widening.Corner].RimToNext = MoveTemp(Rim);
-	// A short arm caps the widening, and the design vehicle then still leaves the tarmac here:
-	// said once per solve, with what to draw. Verbose, not Warning: the cursor's snap solves nodes
-	// on every move (NodeClaims), and this is a property of the layout, not an event.
+
+	// A SHORT ARM CAPS THE WIDENING, and the design vehicle then still leaves the tarmac here.
+	// Recorded, not logged: SolveAll says it once per Topology rebuild (the snap solves nodes on
+	// every cursor move, and a warning there would be one per move). The length named is the one
+	// whose allowance would hold the cut the widening needed: allowance = floor + SlackShare x slack.
 	if (Shortfall > 1.0)
 	{
-		UE_LOG(LogRoadSolve, Verbose,
-			TEXT("Node %d: the bend's inside widening is capped by its arms' length - up to %.0f uu of it is missing, ")
-			TEXT("so its design vehicle (wheelbase %.0f) still leaves the tarmac there. Draw the arms longer."),
-			NodeIndex, Shortfall, Design.Chassis.Wheelbase());
+		for (int32 Arm = 0; Arm < 2; ++Arm)
+		{
+			const double Missing = Widening.NeededCut[Arm] - Out.Result.Arms[Arm].CutDistance;
+			const FRoadSegment* Segment = Network.GetSegment(Out.ArmSegments[Arm]);
+			if (Missing > 1.0 && Segment != nullptr && Missing / SlackShare > Out.Capped.LengthNeeded - Out.Capped.Length)
+			{
+				Out.Capped.NodeIndex = NodeIndex;
+				Out.Capped.Position = Out.Input.Position;
+				Out.Capped.Missing = Shortfall;
+				Out.Capped.Overrun = FMath::Max(0.0, Shortfall - BendWidening::Margin);
+				Out.Capped.Segment = Out.ArmSegments[Arm];
+				Out.Capped.Length = SegmentChordLength(Network, *Segment);
+				Out.Capped.LengthNeeded = Out.Capped.Length + Missing / SlackShare;
+			}
+		}
 	}
 }
 }
 
+int32 FRoadNetworkSolver::WideningTraceCountForTest = 0;
+
 bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIndex,
-	int32 ArcSegments, FRoadNodeCuts& Out, const FRoadDesignVehicles* DesignVehicles)
+	int32 ArcSegments, FRoadNodeCuts& Out, const FRoadDesignVehicles* DesignVehicles, EWideningTrace Widening)
 {
 	// THE FIT, then the widening: the widening is laid round the FITTED fillet, and only ever
 	// pushes a cut further out within the allowance the fit respected.
@@ -534,7 +636,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 	{
 		return false;
 	}
-	WidenBend(Network, NodeIndex, Out, DesignVehicles);
+	WidenBend(Network, NodeIndex, Out, DesignVehicles, Widening);
 	return true;
 }
 
@@ -650,7 +752,7 @@ double FRoadNetworkSolver::NodeReach(const URoadNetwork& Network, FRoadNodeId No
 }
 
 void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
-	FRoadSolveResult& InOutResult, const FRoadDesignVehicles* DesignVehicles)
+	FRoadSolveResult& InOutResult, const FRoadDesignVehicles* DesignVehicles, EWideningTrace Widening)
 {
 	const TArray<FRoadNode>& Nodes = Network.GetNodes();
 	if (!Nodes.IsValidIndex(NodeIndex))
@@ -671,9 +773,13 @@ void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, i
 	// so a tool asking how far this junction reaches gets the answer from the same
 	// code that decides where the pavement actually stops.
 	FRoadNodeCuts Cuts;
-	if (!SolveNodeCuts(Network, NodeIndex, ArcSegments, Cuts, DesignVehicles))
+	if (!SolveNodeCuts(Network, NodeIndex, ArcSegments, Cuts, DesignVehicles, Widening))
 	{
 		return;
+	}
+	if (Cuts.Capped.NodeIndex != INDEX_NONE)
+	{
+		InOutResult.CappedWidenings.Add(Cuts.Capped);
 	}
 
 	FJunctionInput& Input = Cuts.Input;
@@ -729,7 +835,7 @@ void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, i
 }
 
 FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSegments,
-	const FRoadDesignVehicles* DesignVehicles)
+	const FRoadDesignVehicles* DesignVehicles, EWideningTrace Widening)
 {
 	FRoadSolveResult Out;
 
@@ -740,7 +846,25 @@ FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSe
 	const int32 NodeCount = Network.GetNodes().Num();
 	for (int32 NodeIndex = 0; NodeIndex < NodeCount; ++NodeIndex)
 	{
-		SolveNodeInto(Network, NodeIndex, ArcSegments, Out, DesignVehicles);
+		SolveNodeInto(Network, NodeIndex, ArcSegments, Out, DesignVehicles, Widening);
+	}
+
+	// A CAPPED WIDENING, SAID ONCE PER REBUILD (review of 75d3cbc0): only a tracing solve - a
+	// Topology rebuild - says it, so a drag's Geometry frames and the snap's queries stay quiet.
+	// Named like the capped taper's warning (Airside.Build.WidthTaper.CappedTaperWarns): the bend,
+	// what its design vehicle still overruns, and the segment length that would hold the widening.
+	// ENFORCED BY: Airside.Build.BendLanes.CappedWideningWarns
+	if (Widening == EWideningTrace::Trace)
+	{
+		for (const FCappedWidening& Capped : Out.CappedWidenings)
+		{
+			UE_LOG(LogRoadSolve, Warning,
+				TEXT("Bend at (%.0f,%.0f): its inside widening is capped by a short arm - %.0f uu of it is missing, so its ")
+				TEXT("design vehicle still leaves the tarmac by about %.0f uu there. Segment %d is %.1f m long; draw it at ")
+				TEXT("least %.1f m long, plus its far junction's cut-back."),
+				Capped.Position.X, Capped.Position.Y, Capped.Missing, Capped.Overrun, Capped.Segment.Index,
+				Capped.Length / 100.0, Capped.LengthNeeded / 100.0);
+		}
 	}
 
 	return Out;

@@ -23,15 +23,16 @@ double URoadProfile::ResolvedFilletRadius() const
 
 FChassis URoadProfile::ResolvedDesignVehicle() const
 {
-	// THE ONE TIER LOOKUP AND FALLBACK both self-resolving answers read (review of 5660420c):
-	// this profile's tier vehicle, else the largest rigid service vehicle.
-	const FVehicle* Tier = UAirsideSettings::ResolveTierDesignVehicles().Find(TObjectKey<URoadProfile>(this));
-	return Tier != nullptr ? Tier->Chassis : UAirsideSettings::ResolveLargestServiceVehicle();
+	// ResolvedDesignBody's vehicle, its chassis - one lookup and one fallback, not two copies
+	// (review of 75d3cbc0). The fallback body's chassis IS ResolveLargestServiceVehicle's
+	// (ResolveLargestServiceBody takes it from there), so the fillet is unchanged.
+	return ResolvedDesignBody().Chassis;
 }
 
 FVehicle URoadProfile::ResolvedDesignBody() const
 {
-	// The same lookup and fallback as ResolvedDesignVehicle, answering with the whole vehicle.
+	// THE ONE TIER LOOKUP AND FALLBACK every self-resolving answer reads (review of 5660420c):
+	// this profile's tier vehicle, else the largest rigid service vehicle.
 	const FVehicle* Tier = UAirsideSettings::ResolveTierDesignVehicles().Find(TObjectKey<URoadProfile>(this));
 	return Tier != nullptr ? *Tier : UAirsideSettings::ResolveLargestServiceBody();
 }

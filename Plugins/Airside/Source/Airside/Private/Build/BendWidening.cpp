@@ -183,6 +183,19 @@ bool BendWidening::Measure(const FJunctionInput& Input, const FJunctionResult& R
 				{
 					continue;
 				}
+				// NOT DRIVEN WHERE IT CANNOT WIDEN (review of 75d3cbc0): VehicleSweep::Envelope is the
+				// STEADY-STATE reach toward the centre, which a 90 degree turn never settles into - an
+				// upper bound on what the drive would find. Held at the arc's tightest (a piece of
+				// BendArcPieceSweep delivers cos of half of it), a body that still keeps Margin off the
+				// inner edge needs nothing here: the bowser on every tier, measured 2026-09-25.
+				const double Off = From == Edge.K ? Edge.Half0 - In.Lateral : In.Lateral + Edge.Half1;
+				const VehicleSweep::FEnvelope Steady = VehicleSweep::Envelope(Swept,
+					(Edge.Radius + Off) * FMath::Cos(0.5 * GuidelineGeom::BendArcPieceSweep));
+				if (Steady.bHolds && Steady.Inner + Margin <= Off)
+				{
+					continue;
+				}
+				++Out.Drives;
 				// The driven line: a lane point behind PA (so Drive's lead-in runs down the lane, not
 				// along the arc's first chord), the turn as GuidelineGeom samples it, then the leaving lane.
 				TArray<FVector2D> Path;

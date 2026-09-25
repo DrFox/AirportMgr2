@@ -520,7 +520,10 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 	// every node it visits; without this, that ran UAirsideSettings::ResolveLargestServiceVehicle
 	// fresh each time, on every Geometry rebuild a drag frame produces as well as every Topology
 	// one.
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Network, 12, &Settings.DesignVehicles);
+	// A TOPOLOGY REBUILD TRACES the bends' widening (EWideningTrace); a drag's Geometry frame
+	// reads what the last one traced, so a drag never drives a vehicle per frame.
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Network, 12, &Settings.DesignVehicles,
+		Kind == EChangeKind::Topology ? EWideningTrace::Trace : EWideningTrace::ReadCached);
 
 	// TOPOLOGY ONLY, PAST HERE (issue #165). A Geometry change - a MoveNode or
 	// MoveApronCorner drag frame - moved positions and nothing else, so the graph's SHAPE is

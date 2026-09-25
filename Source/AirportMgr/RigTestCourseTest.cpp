@@ -796,10 +796,15 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 	Watch.Overlap = &Overlap;
 	GLog->AddOutputDevice(&Spy);
 	RouteSearch::ResetTowCheckCountForTest();
+	FRoadNetworkSolver::ResetWideningTraceCountForTest();
 	const int32 Ticks = RunUntil(*Actor, *Course, MaxTicks, [Course]() { return Course->LoopsCompletedByAllForTest() >= 1; }, Watch);
 	// THE WHOLE-ROUTE TOW CHECK'S COST, counted: the course plans per loop and per look-ahead, never per frame.
 	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %d route plan(s), worst %.1f ms, %.1f ms in all"),
 		Course->GetPlanCallsForTest(), Course->GetWorstPlanMsForTest(), Course->GetTotalPlanMsForTest());
+	// THE ROUTE PLANS DRIVE NO BEND (review of 75d3cbc0): the widening is traced on the course's
+	// Topology rebuild, before the loop, and the first cold plan is route search and its tow check.
+	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %d bend widening trace(s) during the loop"),
+		FRoadNetworkSolver::WideningTraceCountForTest);
 	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %d whole-route tow check(s) over the loop, %.1f ms in all"),
 		RouteSearch::TowCheckCountForTest(), RouteSearch::TowCheckSecondsForTest() * 1000.0);
 	GLog->RemoveOutputDevice(&Spy);

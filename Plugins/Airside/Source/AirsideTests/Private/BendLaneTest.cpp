@@ -336,6 +336,16 @@ bool FBendLaneWeldTest::RunTest(const FString& Parameters)
 	for (int32 Tier = 0; Tier < 3; ++Tier)
 	{
 		const FBend Bend = Build(Profiles[Tier]);
+		// THE WIDE FIXTURE IS WIDENED, or the weld measured below is the plain fillet's again.
+		if (Tier == UAirsideSettings::WideServiceTier)
+		{
+			RoadGeom::FFillet Inner, Outer;
+			const FJunctionResult* Junction = Bend.Solved.NodeResults.Find(Bend.Corner.Index);
+			const double FilletCut = BendProbe::Fillets(Bend.Solved, Bend.Corner, Inner, Outer) ? FilletCutOf(*Bend.Net, Bend.Corner, Inner) : 0.0;
+			TestTrue(FString::Printf(TEXT("Wide: the fixture is widened - an arm cut past the fillet (%.0f / %.0f vs %.0f)"),
+				Junction ? Junction->Arms[0].CutDistance : 0.0, Junction ? Junction->Arms[1].CutDistance : 0.0, FilletCut),
+				Junction != nullptr && FilletCut > 0.0 && FMath::Max(Junction->Arms[0].CutDistance, Junction->Arms[1].CutDistance) > FilletCut + 100.0);
+		}
 		FRoadMeshBuilder Builder(10.0);
 		Builder.Build(*Bend.Net, Bend.Solved, 3);
 		const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
@@ -540,6 +550,129 @@ bool FBendLaneWideningOnlyTest::RunTest(const FString& Parameters)
 		// 15 uu for the bins' own 25 uu resolution along the edge: a tight fit, not a generous one.
 		TestTrue(FString::Printf(TEXT("Wide: the rig passes within the margin of the widened edge, not far inside it (closest %.1f uu)"), Clearance),
 			Clearance > 0.0 && Clearance <= 25.0 + 15.0);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBendLaneSnapCostTest, "Airside.Build.BendLanes.SnapAndDragDoNotTrace",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBendLaneSnapCostTest::RunTest(const FString& Parameters)
+{
+	// THE WIDENING IS TRACED ON A TOPOLOGY REBUILD AND NOWHERE ELSE (review of 75d3cbc0): the
+	// snap's claims, cut and reach queries run per cursor move, and the ghost's two-node solve per
+	// drag frame. They read what the rebuild traced - so a cursor over a widened bend still sees
+	// its widened pavement - and never drive a vehicle themselves.
+	using namespace BendLane;
+	const TArray<URoadProfile*> Profiles = Tiers();
+	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
+		Profiles.Num() == 3 && !Profiles.Contains(nullptr))) { return false; }
+	for (int32 Tier = 0; Tier < 3; ++Tier)
+	{
+		const FBend Bend = Build(Profiles[Tier]);
+		const FRoadSegmentId Arm = Bend.Net->GetNode(Bend.Corner)->Incident[0];
+		FRoadNetworkSolver::ResetWideningTraceCountForTest();
+		constexpr int32 Moves = 50;
+		const double Began = FPlatformTime::Seconds();
+		for (int32 Move = 0; Move < Moves; ++Move)
+		{
+			// As RoadSnap asks it: self-resolving, no vehicles passed.
+			FRoadNetworkSolver::NodeClaims(*Bend.Net, Bend.Corner, FVector2D(7000.0 + Move * 10.0, 900.0));
+			FRoadNetworkSolver::ArmCutDistance(*Bend.Net, Arm, Bend.Corner);
+			FRoadNetworkSolver::NodeReach(*Bend.Net, Bend.Corner);
+		}
+		const double Ms = (FPlatformTime::Seconds() - Began) * 1000.0 / Moves;
+		UE_LOG(LogTemp, Display, TEXT("BendLanes: %s snap query cost %.3f ms per cursor move (claims + cut + reach)"), Names[Tier], Ms);
+		TestEqual(FString::Printf(TEXT("%s: no widening trace on %d cursor moves (%.3f ms each)"), Names[Tier], Moves, Ms),
+			FRoadNetworkSolver::WideningTraceCountForTest, 0);
+
+		// The ghost's per-drag-frame solve of the bend node, and a Geometry rebuild's.
+		FRoadSolveResult Ghost;
+		FRoadNetworkSolver::SolveNodeInto(*Bend.Net, Bend.Corner.Index, 12, Ghost);
+		FRoadNetworkSolver::SolveAll(*Bend.Net, 12, nullptr, EWideningTrace::ReadCached);
+		TestEqual(FString::Printf(TEXT("%s: no widening trace on a drag frame's solves"), Names[Tier]),
+			FRoadNetworkSolver::WideningTraceCountForTest, 0);
+		// And they see the widened pavement the rebuild laid: the same cuts.
+		const FJunctionResult* Laid = Bend.Solved.NodeResults.Find(Bend.Corner.Index);
+		const FJunctionResult* Seen = Ghost.NodeResults.Find(Bend.Corner.Index);
+		TestTrue(FString::Printf(TEXT("%s: the drag frame's solve reads the widened cuts the rebuild traced"), Names[Tier]),
+			Laid != nullptr && Seen != nullptr && Laid->Arms[0].CutDistance == Seen->Arms[0].CutDistance
+			&& Laid->Arms[1].CutDistance == Seen->Arms[1].CutDistance);
+	}
+	return true;
+}
+
+namespace BendLane
+{
+	/** LogRoadSolve warnings naming a capped widening. Unbuffered (CanBeUsedOnMultipleThreads), or the log thread delivers late. */
+	struct FCappedSpy : public FOutputDevice
+	{
+		TArray<FString> Lines;
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			if (Verbosity == ELogVerbosity::Warning && Category == FName(TEXT("LogRoadSolve")) && FString(V).Contains(TEXT("inside widening is capped")))
+			{
+				Lines.Add(FString(V));
+			}
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBendLaneCappedWarnsTest, "Airside.Build.BendLanes.CappedWideningWarns",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBendLaneCappedWarnsTest::RunTest(const FString& Parameters)
+{
+	// A CAPPED WIDENING SAYS SO, ONCE PER REBUILD (review of 75d3cbc0): a Wide bend whose north arm
+	// is a 25 m stub cannot be cut back far enough to hold the rig's widening, and the rig then
+	// still leaves the tarmac there - which the course's Wide corners did with nothing logged. A
+	// tracing solve (a Topology rebuild) names the bend, the overrun and the length to draw; a
+	// reading one (a drag frame) stays quiet.
+	using namespace BendLane;
+	const TArray<URoadProfile*> Profiles = Tiers();
+	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
+		Profiles.Num() == 3 && !Profiles.Contains(nullptr))) { return false; }
+	URoadProfile* Wide = Profiles[UAirsideSettings::WideServiceTier];
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadNodeId West = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId Corner = Net->AddNode(FVector2D(8000.0, 0.0));
+	Net->AddStraightSegment(West, Corner, Wide);
+	Net->AddStraightSegment(Corner, Net->AddNode(FVector2D(8000.0, 2500.0)), Wide);
+	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
+
+	FCappedSpy Spy;
+	GLog->AddOutputDevice(&Spy);
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net, 12, &Designs, EWideningTrace::Trace);
+	const int32 OnRebuild = Spy.Lines.Num();
+	FRoadNetworkSolver::SolveAll(*Net, 12, &Designs, EWideningTrace::ReadCached);
+	GLog->RemoveOutputDevice(&Spy);
+
+	TestEqual(TEXT("the capped bend is warned once on the rebuild that traced it"), OnRebuild, 1);
+	TestEqual(TEXT("and not again on a drag frame's solve"), Spy.Lines.Num(), 1);
+	TestEqual(TEXT("the solve reports the one capped bend"), Solved.CappedWidenings.Num(), 1);
+	if (Spy.Lines.Num() > 0)
+	{
+		AddInfo(Spy.Lines[0]);
+		TestTrue(TEXT("the warning names the bend and the length to draw"),
+			Spy.Lines[0].Contains(TEXT("Bend at (8000,0)")) && Spy.Lines[0].Contains(TEXT("at least")));
+	}
+	if (Solved.CappedWidenings.Num() == 1)
+	{
+		const FCappedWidening& Capped = Solved.CappedWidenings[0];
+		TestTrue(FString::Printf(TEXT("the length it names is longer than the stub (%.0f vs %.0f uu)"), Capped.LengthNeeded, Capped.Length),
+			Capped.LengthNeeded > Capped.Length && FMath::IsNearlyEqual(Capped.Length, 2500.0, 1.0));
+
+		// AND IT IS TRUE: the rig driven round the built bend still leaves the tarmac, by about what it says.
+		FRoadGuidelineBuilder::Build(*Net, Solved, Designs);
+		const BendProbe::FPavement Pavement = BendProbe::PavementAll(*Net, Solved);
+		double Worst = 0.0;
+		for (const BendProbe::FTurnChain& Turn : BendProbe::TurnsAt(*Net, Corner))
+		{
+			Worst = FMath::Max(Worst, BendProbe::Overrun(Turn, UAirsideSettings::ResolveRigVehicle(), Pavement).Inner);
+		}
+		TestTrue(FString::Printf(TEXT("the rig does still leave the tarmac there (%.0f uu; warned %.0f)"), Worst, Capped.Overrun),
+			Worst > 10.0 && Capped.Overrun > 10.0);
 	}
 	return true;
 }
