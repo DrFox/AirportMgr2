@@ -118,6 +118,15 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane11.DA_Aircraft_Plane11"), TEXT("plane11"), 312000.0,
 		  TEXT("an A350-1000 that needed as much runway as a 777-300ER would erase the one "
 			   "field difference between the two Code E twins") },
+		// plane13's CEILING IS THE A350-1000's PUBLISHED TAKE-OFF LENGTH, the first ceiling that
+		// measures a type against the LETTER ABOVE it. The 757-300 is the only Code D rung on
+		// the ladder; if it asked as much runway as the lighter Code E twin, a field could go
+		// straight from C to E and lose nothing by skipping D. 275000 is build_plane11_type.py's
+		// REQUIREMENTS["takeoff_field_length"], typed here for the reason plane5's row gives.
+		// 2,650 against 2,750 is thin, and that is the claim.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane13.DA_Aircraft_Plane13"), TEXT("plane13"), 275000.0,
+		  TEXT("a 757-300 that needed as much runway as an A350-1000 would make Code D a rung a "
+			   "field could skip") },
 		// plane9's CEILING IS THE 737-800's PUBLISHED TAKE-OFF LENGTH. The A320 and the 737
 		// share Code C and its stands; what tells them apart on the field is that the A320
 		// asks less runway (2,100 m against 2,316). Lose that and it is a 737 with a

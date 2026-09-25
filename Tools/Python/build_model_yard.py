@@ -69,6 +69,11 @@ ROWS = [
         # stands, and the A320's nose visibly further past its gear.
         ("/Game/Aircraft/Plane9/SK_Plane9", "Plane9 (A320-200)"),
         ("/Game/Aircraft/Plane4/SK_Plane4", "Plane4 (737-800W)"),
+        # THE 757 BETWEEN THE 737 AND THE A350, ON SPAN: 38.05 m against 35.79 and 64.69, and
+        # the only Code D aeroplane in the row, so the C/D line falls between it and the 737.
+        # Two metres of wing past a 737 is the whole difference a Code D stand buys; standing
+        # them side by side shows it, and shows 15 m more fuselage than the wing implies.
+        ("/Game/Aircraft/Plane13/SK_Plane13", "Plane13 (757-300)"),
         # THE 777 GOES LAST AND IT IS NOT CLOSE: 64.78 m of span against the 737's 35.79 and
         # 73.88 m of length against its 39.3. It is the reason the floor below grew - six
         # aeroplanes fitted 220 m and seven do not - and standing it beside the narrowbody is
@@ -143,8 +148,12 @@ ROW_PITCH_UU = 10000.0
 #
 # 540 m SINCE 2026-09-25, UP FROM 470, FOR plane11. The A350's 64.69 m and its 12 m gap take
 # the row from about 450 m to about 527. Span still binds.
+#
+# 600 m SINCE 2026-09-25, UP FROM 540, FOR plane13. The 757's 38.05 m and its 12 m gap take
+# the row from about 527 m to about 577. Span still binds; its 54.7 m length is inside the
+# 777's, which sets ROW_PITCH_UU.
 FLOOR_X_M = 300.0
-FLOOR_Y_M = 540.0
+FLOOR_Y_M = 600.0
 
 # THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
 #

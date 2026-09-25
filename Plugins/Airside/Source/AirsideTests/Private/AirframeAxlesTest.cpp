@@ -185,6 +185,10 @@ static const TCHAR* const MeasuredTypes[] = {
 	// THE A350 IS THE ROW THAT BINDS CODE E'S TAIL. Its rudder at 6901.3 uu aft of the stop
 	// mark is what MaxTailAft 6902 is sized from, so this row goes red if a re-export grows it.
 	TEXT("/Game/Entities/DA_Aircraft_Plane11"),
+	// THE 757-300 IS THE FIRST MEASURED CODE D TYPE, and the first row with a TWO-axle bogie.
+	// Its 38.05 m span is over Code C's 36 m by 2.05, so this row goes red if a re-export trims
+	// the wing into C - and until it, Code D's row had no modelled aeroplane to be checked by.
+	TEXT("/Game/Entities/DA_Aircraft_Plane13"),
 };
 
 /**
@@ -434,6 +438,8 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 			   "authored at all, since the class default says the same thing") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane11"), EPushbackNeed::VehicleTug,
 		  TEXT("a 319 t A350-1000 needs the tug the 777 beside it does") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane13"), EPushbackNeed::VehicleTug,
+		  TEXT("a 124 t 757-300 needs the tug the 737 below it and the A350 above it both do") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane8"), EPushbackNeed::VehicleTug,
 		  TEXT("a 575 t A380 is the end of the progression - nothing heavier flies - and the "
 			   "row exists for the reason plane6's does: authored VehicleTug and default "

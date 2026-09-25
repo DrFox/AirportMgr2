@@ -134,6 +134,11 @@ namespace IcaoCode
 			// same "built to the letter" call plane6 forced on Code E. Both still fit.
 			// Tools/Python/build_plane9_type.py checks the measurement against this every run.
 			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3538.0,  509.0,  -950.0, -2150.0, 600.0 },
+			// CODE D HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-25, and no figure moved.
+			// DA_Aircraft_Plane13, the 757-300, measures 4878 uu aft of its stop mark, 589 uu
+			// forward and 3805 uu of span - inside by 622, 111 and 1395. Loose, unlike C and E:
+			// the row was authored for aeroplanes up to 52 m and nothing that large is modelled.
+			// Tools/Python/build_plane13_type.py checks all three every run.
 			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0, -1300.0, -3000.0, 600.0 },
 			// MaxTailAft 6902 SINCE 2026-09-25, UP FROM 6800, FOR plane11 - see MaxTailAft's note.
 			// Tools/Python/build_plane11_type.py checks the measurement against this every run.
