@@ -99,6 +99,9 @@ namespace RigCourseTest
 	 * Unmeasured edges (the dead-end balloon, ruled over grass) are skipped, as VehicleFit skips
 	 * them. Points behind the plan's start or past its end are skipped: the tow trails back over
 	 * road the plan does not name - the previous leg's, since the chain carries across waypoints.
+	 * SO THOSE GO UNMEASURED: for the first trailer-length of each leg, the part of the tow still
+	 * on the previous leg's road is judged by nothing (it was judged, on that leg, until the
+	 * handover). A cut-in that only shows in that window would pass here.
 	 */
 	struct FClearanceProbe
 	{
@@ -570,6 +573,60 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 		Expected[1].Add(Fits(Net, Reversed(B), Reversed(A), Vehicles[1]));
 	}
 
+	// WHAT EACH LEG'S OUTCOME SHOULD BE, from the router alone: the look-ahead rule stated once
+	// here over Fits, not read back from the course. A vehicle drives a leg that fits into a stop
+	// it can leave; otherwise the leg is Refused (it does not fit) or Bypassed (it fits, but into
+	// a trap), and the vehicle routes from where it stands to the next stop it can reach AND
+	// leave, the legs in between judged on their own plans.
+	TArray<ERigLegOutcome> Outcome[2];
+	for (int32 V = 0; V < 2; ++V)
+	{
+		auto StopOf = [&Waypoints, Legs, V](int32 P)
+		{
+			P = ((P % Legs) + Legs) % Legs;
+			return V == 0 ? Waypoints[P] : Reversed(Waypoints[(Legs - P) % Legs]);
+		};
+		auto LegOf = [Legs, V](int32 P) { P = ((P % Legs) + Legs) % Legs; return V == 0 ? P : Legs - 1 - P; };
+		auto Onward = [&](int32 Stop)
+		{
+			for (int32 Later = Stop + 1; Later < Stop + Legs; ++Later)
+			{
+				if (Fits(Net, StopOf(Stop), StopOf(Later), Vehicles[V])) { return true; }
+			}
+			return false;
+		};
+		auto Own = [&](int32 P) { return Fits(Net, StopOf(P), StopOf(P + 1), Vehicles[V]); };
+		Outcome[V].Init(ERigLegOutcome::NotRun, Legs);
+		for (int32 P = 0; P < Legs;)
+		{
+			if (Own(P) && Onward(P + 1))
+			{
+				Outcome[V][LegOf(P)] = ERigLegOutcome::Driven;
+				++P;
+				continue;
+			}
+			int32 Target = INDEX_NONE;
+			for (int32 Stop = P + 2; Stop <= Legs && Target == INDEX_NONE; ++Stop)
+			{
+				Target = (Fits(Net, StopOf(P), StopOf(Stop), Vehicles[V]) && Onward(Stop)) ? Stop : INDEX_NONE;
+			}
+			if (!TestTrue(FString::Printf(TEXT("%s: the router leaves a way on from stop %d - no stranding is expected"), Names[V], P),
+				Target != INDEX_NONE)) { return false; }
+			for (int32 M = P; M < Target; ++M)
+			{
+				Outcome[V][LegOf(M)] = Own(M) ? ERigLegOutcome::Bypassed : ERigLegOutcome::Refused;
+			}
+			P = Target;
+		}
+		TArray<FString> Bypassed;
+		for (int32 L = 0; L < Legs; ++L)
+		{
+			if (Outcome[V][L] == ERigLegOutcome::Bypassed) { Bypassed.Add(FString::FromInt(L)); }
+		}
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s expected bypassed legs: %s"), Names[V],
+			Bypassed.Num() > 0 ? *FString::Join(Bypassed, TEXT(", ")) : TEXT("none"));
+	}
+
 	// BOTH VEHICLES AT ONCE until each has done one loop, at a fixed step, bounded so a hang -
 	// or a traffic deadlock between the two - fails rather than spins.
 	FWarningSpy Spy;
@@ -605,22 +662,23 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("no leg entered Reversing - the course has no reverse legs"), Spy.Containing(TEXT("Reversing")), 0);
 	TestEqual(TEXT("no leg timed out stuck"), Spy.Containing(TEXT("stuck")), 0);
 
-	// THE CHAIN IS CONTINUOUS ACROSS WAYPOINTS: one agent per vehicle, redirected at each one,
-	// its axles moving no more than a sub-step over the handover - except where the course had
-	// to dispatch fresh (a stranding: the rig at a dead end it cannot U-turn in).
+	// THE CHAIN IS CONTINUOUS ACROSS WAYPOINTS: one agent per vehicle for the whole loop,
+	// redirected at each stop, its axles moving no more than a sub-step over the handover. The
+	// look-ahead keeps the rig out of the dead ends it cannot turn in, so nothing is stranded.
 	for (int32 V = 0; V < 2; ++V)
 	{
-		const int32 Strandings = Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop"), Names[V]), TEXT("stranded"));
-		TestEqual(FString::Printf(TEXT("%s: one agent drove every leg, plus one fresh agent per stranding (%d) - never one per leg"), Names[V], Strandings),
-			Course->GetRunnerForTest(V).Dispatches, 1 + Strandings);
+		TestEqual(FString::Printf(TEXT("%s: never stranded - the look-ahead routes past every trap"), Names[V]),
+			Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop"), Names[V]), TEXT("stranded")), 0);
+		TestEqual(FString::Printf(TEXT("%s: ONE agent drove the whole run - never one per leg, never a respawn"), Names[V]),
+			Course->GetRunnerForTest(V).Dispatches, 1);
+		int32 DrivenLegs = 0;
+		for (const ERigLegOutcome O : Outcome[V]) { DrivenLegs += O == ERigLegOutcome::Driven ? 1 : 0; }
 		TestTrue(FString::Printf(TEXT("%s: handovers were observed - the continuity check is not vacuous (%d)"), Names[V], Continuity.Handovers[V]),
-			Continuity.Handovers[V] >= Legs - 1 - 2 * Strandings);
+			Continuity.Handovers[V] >= DrivenLegs - 1);
 		TestTrue(FString::Printf(TEXT("%s: no tow axle moved more than one sub-step (%.0f uu) across a handover (worst %.2f uu: %s) - the chain was not re-laid"),
 			Names[V], VehicleSweep::TraceStep, Continuity.Worst[V].Excess, *Continuity.Worst[V].Where),
 			Continuity.Worst[V].Excess <= VehicleSweep::TraceStep);
 	}
-	TestEqual(TEXT("the utility is never stranded - it fits every leg in its direction"),
-		Spy.Containing(TEXT("RigCourse: utility loop"), TEXT("stranded")), 0);
 
 	// THE TOW STAYED ON THE TARMAC. 10 uu is the builder's clearance march step (ClearanceStep):
 	// the measured clearance is short of the real edge by up to that much.
@@ -670,8 +728,10 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 			const FRigLegResult& R = Results[L];
 			const FString What = FString::Printf(TEXT("%s leg %d (%s%s)"), Names[V], L, *Waypoints[(L + 1) % Legs].Label,
 				V == 1 ? TEXT(", reversed") : TEXT(""));
-			TestTrue(What + TEXT(" was driven or refused"),
-				R.Outcome == ERigLegOutcome::Driven || R.Outcome == ERigLegOutcome::Refused);
+			TestTrue(What + TEXT(" was driven, refused or bypassed"),
+				R.Outcome == ERigLegOutcome::Driven || R.Outcome == ERigLegOutcome::Refused || R.Outcome == ERigLegOutcome::Bypassed);
+			TestEqual(What + TEXT(": the outcome the router's verdicts and the look-ahead rule give"),
+				static_cast<int32>(R.Outcome), static_cast<int32>(Outcome[V][L]));
 			TestEqual(What + TEXT(": refused exactly when the router refuses it with this body, in this direction"),
 				R.Outcome == ERigLegOutcome::Refused, !Expected[V][L]);
 			TestFalse(What + TEXT(" never reversed"), R.bReversed);
@@ -707,6 +767,11 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 		const int32 Loop = Course->LoopsCompletedForTest(V);
 		TestEqual(FString::Printf(TEXT("%s: each refusal was logged once in loop %d"), Names[V], Loop),
 			Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop %d leg "), Names[V], Loop), TEXT("refused:")), Refusals);
+		// AND EACH BYPASS: the route-on branch's own line, once per bypassed leg per loop.
+		int32 Bypasses = 0;
+		for (const FRigLegResult& R : Results) { Bypasses += R.Outcome == ERigLegOutcome::Bypassed ? 1 : 0; }
+		TestEqual(FString::Printf(TEXT("%s: each bypassed leg was logged once in loop %d"), Names[V], Loop),
+			Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop %d leg "), Names[V], Loop), TEXT("bypassed:")), Bypasses);
 	}
 	return true;
 }
@@ -777,11 +842,13 @@ bool FRigCourseJackknifeIsRetiredTest::RunTest(const FString& Parameters)
 	Course->BuildCourseForTest(*Actor);
 	// ONE-SHOT: the rig reaches leg 0 again at the start of its second loop, and a second fold
 	// there would be a second jack-knife line this test does not mean to count.
+	// SPENT ONLY BY A DISPATCH: the course also asks for leg 0's plan to JUDGE it (the look-ahead),
+	// and a one-shot spent there would hand the dispatch the router's plan instead.
 	TSharedRef<bool> bUsed = MakeShared<bool>(false);
-	Course->PlanOverrideForTest = [bUsed](int32 Leg, int32 Slot, FRoutePlan& OutPlan)
+	Course->PlanOverrideForTest = [bUsed](int32 Leg, int32 Slot, bool bDispatching, FRoutePlan& OutPlan)
 	{
 		if (Leg != 0 || Slot != 0 || *bUsed) { return false; }
-		*bUsed = true;
+		*bUsed = bDispatching;
 		OutPlan = FRoutePlan();
 		OutPlan.Result = ERouteResult::Found;
 		OutPlan.Polyline.Add(FVector2D(0.0, -4000.0));

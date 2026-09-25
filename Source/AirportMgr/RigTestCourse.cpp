@@ -535,16 +535,44 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 	return true;
 }
 
-bool ARigTestCourse::PlanOwnLeg(const FRigCourseRunner& Runner, int32 Position, FRoutePlan& OutPlan, FString& OutReason) const
+bool ARigTestCourse::PlanOwnLeg(const FRigCourseRunner& Runner, int32 Position, FRoutePlan& OutPlan, FString& OutReason,
+	bool bDispatching) const
 {
 	const int32 Leg = LegAt(Runner.bReverse, Position);
-	if (PlanOverrideForTest && PlanOverrideForTest(Leg, Runner.Slot, OutPlan))
+	if (PlanOverrideForTest && PlanOverrideForTest(Leg, Runner.Slot, bDispatching, OutPlan))
 	{
 		UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s leg %d (%s): plan overridden by the test."),
 			*VehicleNames[Runner.Slot], Leg, *LegLabel(Runner, Position));
 		return true;
 	}
 	return PlanBetween(StopAt(Runner.bReverse, Position), StopAt(Runner.bReverse, Position + 1), Runner.Slot, OutPlan, OutReason);
+}
+
+bool ARigTestCourse::HasOnward(const FRigCourseRunner& Runner, int32 Stop) const
+{
+	// ANY later stop, not only the next: a stop whose own next leg is refused but which can route
+	// on past it is no trap. A lap's worth, so a stop just before the loop's end looks into the next.
+	const FRigCourseWaypoint From = StopAt(Runner.bReverse, Stop);
+	for (int32 Later = Stop + 1; Later < Stop + Waypoints.Num(); ++Later)
+	{
+		FRoutePlan Unused;
+		FString Reason;
+		if (PlanBetween(From, StopAt(Runner.bReverse, Later), Runner.Slot, Unused, Reason))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void ARigTestCourse::RecordBypass(FRigCourseRunner& Runner, int32 Position, const TCHAR* Why)
+{
+	const int32 Leg = LegAt(Runner.bReverse, Position);
+	// ONCE PER LOOP, like a refusal: a Warning, because a leg that fits and is not driven is
+	// something the log reader must see to read the loop's "D/T legs driven" right.
+	UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d leg %d (%s) bypassed: fits, but %s."),
+		*VehicleNames[Runner.Slot], Runner.LoopsCompleted + 1, Leg, *LegLabel(Runner, Position), Why);
+	Runner.LoopResults[Leg].Outcome = ERigLegOutcome::Bypassed;
 }
 
 void ARigTestCourse::RecordRefusal(FRigCourseRunner& Runner, int32 Position, const FString& Reason)
@@ -593,21 +621,39 @@ void ARigTestCourse::SendOn(FRigCourseRunner& Runner)
 	// stop on (stranded), so a course that refuses everything still returns.
 	for (int32 Tries = 0; Tries < N; ++Tries)
 	{
+		// LOOK AHEAD ONE STOP: a stop with nothing onward that fits (the rig's view of a dead end it
+		// cannot U-turn in) is a trap - driving into it could only end in a stranding, a retire and
+		// a fresh chain laid back into a stem another vehicle may be U-turning in (the 173 uu
+		// overlap measured 2026-09-25). So the leg into a trap is BYPASSED, not driven: the vehicle
+		// routes from where it stands straight to the next stop it can reach AND leave.
 		FRoutePlan Plan;
 		FString Reason;
-		int32 Target = Runner.Position + 1;
-		if (!PlanOwnLeg(Runner, Runner.Position, Plan, Reason))
+		int32 Target = INDEX_NONE;
+		const bool bOwnFits = PlanOwnLeg(Runner, Runner.Position, Plan, Reason, false);
+		if (bOwnFits && HasOnward(Runner, Runner.Position + 1))
 		{
-			RecordRefusal(Runner, Runner.Position, Reason);
+			// The judging call above left any test override unspent; this one drives, so it may spend it.
+			PlanOwnLeg(Runner, Runner.Position, Plan, Reason, true);
+			Target = Runner.Position + 1;
+		}
+		else
+		{
+			if (bOwnFits)
+			{
+				RecordBypass(Runner, Runner.Position, TEXT("nothing onward fits from its end"));
+			}
+			else
+			{
+				RecordRefusal(Runner, Runner.Position, Reason);
+			}
 
-			// ROUTE ON, FROM WHERE IT IS: the next waypoint it CAN reach, up to the loop's end
-			// (so a loop's results are all its own). It does not stop for the refusal.
-			Target = INDEX_NONE;
+			// ROUTE ON, FROM WHERE IT IS: the next waypoint it CAN reach and leave, up to the loop's
+			// end (so a loop's results are all its own). It does not stop for the refusal.
 			const FRigCourseWaypoint From = StopAt(Runner.bReverse, Runner.Position);
 			for (int32 Stop = Runner.Position + 2; Stop <= N; ++Stop)
 			{
 				FString Unused;
-				if (PlanBetween(From, StopAt(Runner.bReverse, Stop), Runner.Slot, Plan, Unused))
+				if (PlanBetween(From, StopAt(Runner.bReverse, Stop), Runner.Slot, Plan, Unused) && HasOnward(Runner, Stop))
 				{
 					Target = Stop;
 					break;
@@ -615,9 +661,10 @@ void ARigTestCourse::SendOn(FRigCourseRunner& Runner)
 			}
 			if (Target == INDEX_NONE)
 			{
-				// STRANDED: nothing ahead is reachable from this lane end - the rig at a dead end
-				// it cannot U-turn in, which would need the reversing step. The only way on is a
-				// fresh vehicle at the next waypoint; its chain is laid straight there.
+				// STRANDED, THE FALLBACK: nothing ahead is reachable from this lane end. The look-ahead
+				// keeps a vehicle out of the traps it can see, so this is a vehicle that started in
+				// one (a fresh dispatch after a no-hang exit) or a course with no way on at all. The
+				// only way on is a fresh vehicle at the next waypoint; its chain is laid straight there.
 				UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d stranded at the start of leg %d (%s): no later waypoint is reachable from here; %s at the next waypoint."),
 					*Who, Runner.LoopsCompleted + 1, LegAt(Runner.bReverse, Runner.Position), *LegLabel(Runner, Runner.Position),
 					Runner.AgentId != 0 ? TEXT("retired, and dispatched fresh") : TEXT("dispatched fresh"));
@@ -636,9 +683,9 @@ void ARigTestCourse::SendOn(FRigCourseRunner& Runner)
 			{
 				FRoutePlan Own;
 				FString OwnReason;
-				if (PlanOwnLeg(Runner, Passed, Own, OwnReason))
+				if (PlanOwnLeg(Runner, Passed, Own, OwnReason, false))
 				{
-					Runner.LoopResults[LegAt(Runner.bReverse, Passed)].Outcome = ERigLegOutcome::Bypassed;
+					RecordBypass(Runner, Passed, TEXT("routed past"));
 				}
 				else
 				{
@@ -751,6 +798,8 @@ void ARigTestCourse::AbandonDrive(FRigCourseRunner& Runner, ERigLegOutcome Outco
 	Runner.bReversed = false;
 	if (Runner.AgentId != 0)
 	{
+		// Named on the result even for a routed-past drive, whose last leg had no agent recorded.
+		Result.AgentId = Runner.AgentId;
 		NetworkActor->GetTraffic()->RetireAgent(Runner.AgentId);
 		Runner.AgentId = 0;
 	}
@@ -774,6 +823,9 @@ void ARigTestCourse::EndLoop(FRigCourseRunner& Runner)
 	++Runner.LoopsCompleted;
 	int32 Driven = 0;
 	TArray<FString> Mine;
+	// Apart from the refusals: a bypassed leg FITS, and listing it under "refused" would say
+	// the road needs widening when it does not.
+	TArray<FString> Passed;
 	for (int32 L = 0; L < Waypoints.Num(); ++L)
 	{
 		const FRigLegResult& R = Runner.LoopResults[L];
@@ -782,15 +834,16 @@ void ARigTestCourse::EndLoop(FRigCourseRunner& Runner)
 		{
 		case ERigLegOutcome::Driven:     ++Driven; break;
 		case ERigLegOutcome::Refused:    Mine.Add(FString::Printf(TEXT("%d (%s)"), L, *Label)); break;
-		case ERigLegOutcome::Bypassed:   Mine.Add(FString::Printf(TEXT("%d (%s, bypassed)"), L, *Label)); break;
+		case ERigLegOutcome::Bypassed:   Passed.Add(FString::Printf(TEXT("%d (%s)"), L, *Label)); break;
 		case ERigLegOutcome::Jackknifed: Mine.Add(FString::Printf(TEXT("%d (%s, jack-knifed)"), L, *Label)); break;
 		case ERigLegOutcome::Stuck:      Mine.Add(FString::Printf(TEXT("%d (%s, stuck)"), L, *Label)); break;
 		default: break;
 		}
 	}
-	UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s loop %d - %d/%d legs driven; refused: %s"),
+	UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: %s loop %d - %d/%d legs driven; refused: %s; bypassed: %s"),
 		*VehicleNames[Runner.Slot], Runner.LoopsCompleted, Driven, Waypoints.Num(),
-		Mine.Num() > 0 ? *FString::Join(Mine, TEXT(", ")) : TEXT("none"));
+		Mine.Num() > 0 ? *FString::Join(Mine, TEXT(", ")) : TEXT("none"),
+		Passed.Num() > 0 ? *FString::Join(Passed, TEXT(", ")) : TEXT("none"));
 
 	Runner.LastLoopResults = Runner.LoopResults;
 	Runner.LoopResults.Reset();

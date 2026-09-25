@@ -532,7 +532,26 @@ bool FTowRedirectKeepsChainAndHeadingTest::RunTest(const FString& Parameters)
 		Next.Polyline.Add(FVector2D(X, 100.0));
 	}
 	Next.Length = GuidelineGeom::PolylineLength(Next.Polyline);
-	if (!TestTrue(TEXT("the redirect is accepted"), Traffic->RedirectAgent(Id, nullptr, Next))) { return false; }
+	// THE JOG IS 45 DEGREES AND THE RIG'S LOCK 40: RedirectAgent must SAY the kept pose does not
+	// fit the new line's start, rather than leave the slew to be found as a fold later.
+	struct FTrafficWarningSpy : public FOutputDevice
+	{
+		TArray<FString> Lines;
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			if (Category == FName(TEXT("LogAirsideTraffic")) && Verbosity == ELogVerbosity::Warning)
+			{
+				Lines.Add(FString(V));
+			}
+		}
+	} Spy;
+	GLog->AddOutputDevice(&Spy);
+	const bool bRedirected = Traffic->RedirectAgent(Id, nullptr, Next);
+	GLog->RemoveOutputDevice(&Spy);
+	if (!TestTrue(TEXT("the redirect is accepted"), bRedirected)) { return false; }
+	TestEqual(TEXT("RedirectAgent warned once that the new line starts beyond the rig's steer lock"),
+		Spy.Lines.FilterByPredicate([](const FString& L) { return L.Contains(TEXT("kept pose does not fit")); }).Num(), 1);
 
 	const FRoadAgent* Agent = Traffic->FindAgent(Id);
 	if (!TestEqual(TEXT("the chain is still one axle per link"), Agent->TowAxles.Num(), Before.Num())) { return false; }

@@ -163,8 +163,10 @@ struct FRigCourseRunner
  * reverse, starting UtilityStartDelay later. At each waypoint the arrived agent is REDIRECTED
  * onto its next leg rather than retired and respawned, so its tow chain carries on from where
  * it is instead of being re-laid straight. A refused leg is skipped by routing on to the next
- * waypoint the vehicle CAN reach from where it stands; a vehicle that can reach none
- * (stranded), jack-knifes or sticks is retired and dispatched fresh from its next waypoint.
+ * waypoint the vehicle CAN reach from where it stands, and a leg into a stop with nothing
+ * onward (a dead end it cannot turn in) is bypassed the same way before it is driven; a
+ * vehicle that can reach nothing (stranded, the fallback), jack-knifes or sticks is retired
+ * and dispatched fresh from its next waypoint.
  * The loop can never wait on an arrival that cannot come.
  */
 UCLASS()
@@ -241,9 +243,11 @@ public:
 	/**
 	 * Consulted BEFORE route search on every leg's own plan: return true having filled the plan
 	 * to drive that (forward leg, vehicle slot) on it instead. The jack-knife exit's test feeds a
-	 * hairpin the rig folds on, which no route search would ever hand out.
+	 * hairpin the rig folds on, which no route search would ever hand out. bDispatching is true
+	 * only for the call whose plan is then driven; the course also asks to JUDGE legs (look-ahead,
+	 * legs routed past), and a one-shot override spent there would never be driven.
 	 */
-	TFunction<bool(int32 Leg, int32 Slot, FRoutePlan& OutPlan)> PlanOverrideForTest;
+	TFunction<bool(int32 Leg, int32 Slot, bool bDispatching, FRoutePlan& OutPlan)> PlanOverrideForTest;
 
 	/** ConnectNodes calls refused while the course was laid. */
 	int32 GetRefusedConnectsForTest() const { return RefusedConnects; }
@@ -272,8 +276,18 @@ private:
 	bool PlanBetween(const FRigCourseWaypoint& From, const FRigCourseWaypoint& To, int32 Slot,
 		FRoutePlan& OutPlan, FString& OutReason) const;
 
-	/** Plans Runner's own leg at Position (the test override first); false with Reason when refused. */
-	bool PlanOwnLeg(const FRigCourseRunner& Runner, int32 Position, FRoutePlan& OutPlan, FString& OutReason) const;
+	/**
+	 * Plans Runner's own leg at Position (the test override first); false with Reason when refused.
+	 * bDispatching: the plan is about to be driven, not only judged - see PlanOverrideForTest.
+	 */
+	bool PlanOwnLeg(const FRigCourseRunner& Runner, int32 Position, FRoutePlan& OutPlan, FString& OutReason,
+		bool bDispatching) const;
+
+	/** True when some later stop can be reached from Stop: false marks a trap to route past. */
+	bool HasOnward(const FRigCourseRunner& Runner, int32 Stop) const;
+
+	/** Records and logs Runner's leg at Position as fitting but not driven. */
+	void RecordBypass(FRigCourseRunner& Runner, int32 Position, const TCHAR* Why);
 
 	/** Records and logs Runner's leg at Position as refused, and labels it on the road. */
 	void RecordRefusal(FRigCourseRunner& Runner, int32 Position, const FString& Reason);

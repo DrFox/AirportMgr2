@@ -407,6 +407,31 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// ENFORCED BY: Airside.Model.Tow.RedirectKeepsChainAndHeading
 	const TOptional<double> KeptHeading = Agent.TowAxles.Num() > 0
 		? TOptional<double>(Agent.Follower.Heading) : TOptional<double>();
+
+	// SAID, NOT SILENT, when the kept pose cannot drive the new line: a plan that starts beyond
+	// the steer lock of where the cab points, or somewhere other than where its steered axle
+	// stands, has the follower slew or jump and the chain fold a frame later - with nothing
+	// naming the redirect as the cause. The rig course always redirects from the lane end it
+	// stopped on; AirportOps' return-to-depot for a towing vehicle need not be so careful, and
+	// would otherwise inherit a silent fold.
+	if (KeptHeading.IsSet())
+	{
+		FVector2D Steered = FVector2D::ZeroVector;
+		double OldLineHeading = 0.0;
+		const bool bHasSteered = GuidelineGeom::PointAtDistance(Agent.Follower.Plan.Polyline, Agent.Follower.Travelled,
+			Steered, OldLineHeading);
+		FVector2D NewStart = FVector2D::ZeroVector;
+		double NewHeading = KeptHeading.GetValue();
+		GuidelineGeom::PointAtDistance(Plan.Polyline, 0.0, NewStart, NewHeading);
+		const double OffDegrees = FMath::Abs(FMath::RadiansToDegrees(FMath::UnwindRadians(NewHeading - KeptHeading.GetValue())));
+		const double LockDegrees = Agent.Chassis().Ground.MaxSteerDegrees;
+		const double StartGap = bHasSteered ? FVector2D::Distance(Steered, Plan.Polyline[0]) : 0.0;
+		if (OffDegrees > LockDegrees || StartGap > 1.0)
+		{
+			UE_LOG(LogAirsideTraffic, Warning, TEXT("RedirectAgent %d: the tow's kept pose does not fit the new line - start heading %.0f deg off the cab (lock %.0f), start %.0f uu from the steered axle; expect a slew or a fold."),
+				AgentId, OffDegrees, LockDegrees, StartGap);
+		}
+	}
 	Agent.RestartTaxi(Plan, 0.0, KeptHeading);
 
 	if (bWasRunning)
