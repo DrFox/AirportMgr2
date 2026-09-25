@@ -198,11 +198,22 @@ public:
 	 * see FRoadDesignVehicles): the Wide tier - ServiceRoadProfiles[WideServiceTier] - is
 	 * designed for the articulated rig (ResolveRigVehicle), and every other tier is left to the
 	 * default, the largest rigid service vehicle. Only the profiles that DIFFER from that default
-	 * are named. Reads the content set, so a caller in a rebuild caches it (ARoadNetworkActor's
-	 * resolved-content cache) rather than calling it per rebuild.
-	 * ENFORCED BY: Airside.Build.DesignVehicle.WideDeadEndAdmitsRig and its siblings
+	 * are named. Fillets only: see FRoadDesignVehicles for why balloons are not per tier.
+	 *
+	 * CACHED, and a REFERENCE to the cache (review 2026-09-25): URoadProfile's self-resolving
+	 * ResolvedFilletRadius asks this per arm, and the cursor's snap (RoadSnap's NodeClaims and
+	 * ArmCutDistance) and the ghost preview reach that per cursor move - resolving the content set,
+	 * loading the Wide profile and building the rig each time is the #190/#167 cost. Re-resolved
+	 * only when the content set or its Wide tier's asset changes.
+	 * ENFORCED BY: Airside.Build.DesignVehicle.TierResolvedOncePerContent
 	 */
-	static TMap<TObjectKey<URoadProfile>, FVehicle> ResolveTierDesignVehicles();
+	static const TMap<TObjectKey<URoadProfile>, FChassis>& ResolveTierDesignVehicles();
+
+	/** How many times ResolveTierDesignVehicles actually resolved (cache misses) - see its comment. */
+	static int32 ResolveTierDesignVehiclesCallCountForTest;
+
+	/** Empties that cache and zeroes its counter, so a test starts from a cold resolve. */
+	static void ResetTierDesignVehiclesCacheForTest();
 
 	/**
 	 * ResolveLargestServiceVehicle as the default, with ResolveTierDesignVehicles' exceptions:

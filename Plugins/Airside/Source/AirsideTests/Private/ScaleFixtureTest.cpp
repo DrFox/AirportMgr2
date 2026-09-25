@@ -209,7 +209,7 @@ bool FScaleCommittedEditCostTest::RunTest(const FString& Parameters)
 		URoadNetwork* Snapshot = NewObject<URoadNetwork>(GetTransientPackage());
 		FTestAirport::BuildScale(TestAirframes::Piper(), ScaleFixtureSeed, /*bDerived=*/false, Snapshot);
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Snapshot);
-		FRoadGuidelineBuilder::Build(*Snapshot, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Snapshot, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		TArray<FPendingLink> Pending;
 		TSet<FGuidelineNodeId> AnchorNodes;

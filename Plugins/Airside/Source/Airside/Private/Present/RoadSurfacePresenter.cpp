@@ -712,8 +712,10 @@ bool URoadSurfacePresenter::BuildGhostBuffers(URoadNetwork* Network, int32 FromN
 	// each of them, which AddGhostJunction's fan needs) and nothing writes them differently
 	// depending on which caller asked.
 	FRoadSolveResult Solved;
-	FRoadNetworkSolver::SolveNodeInto(*GhostNetwork, From.Index, 12, Solved);
-	FRoadNetworkSolver::SolveNodeInto(*GhostNetwork, To.Index, 12, Solved);
+	// THE REBUILD'S DESIGN VEHICLES, passed down (review 2026-09-25): this runs every ghost
+	// frame, and the self-resolving path would ask the content set per arm per frame.
+	FRoadNetworkSolver::SolveNodeInto(*GhostNetwork, From.Index, 12, Solved, &Settings.DesignVehicles);
+	FRoadNetworkSolver::SolveNodeInto(*GhostNetwork, To.Index, 12, Solved, &Settings.DesignVehicles);
 
 	// Only the NEW segment and the two junctions it reshapes. Drawing the whole ghost
 	// network would lay a translucent copy over every road already on screen, and the one

@@ -2,21 +2,22 @@
 
 #include "CoreMinimal.h"
 #include "Model/Chassis.h"
-#include "Model/Vehicle.h"
 #include "UObject/ObjectKey.h"
 
 class URoadProfile;
 
 /**
- * Which vehicle each road profile's TURNING geometry - its junction fillets and its dead-end
- * U-turn balloon - is designed for.
+ * Which vehicle each road profile's JUNCTION FILLETS are designed for.
  *
  * PER WIDTH TIER (user ruling 2026-09-25, spec 2026-09-24 §3 REVISED "per-tier design
- * vehicle"): the Wide service-road tier is designed for the articulated rig, Narrow and
- * Standard for the largest RIGID service vehicle (the bowser), as every road was before. One
- * chassis for every road forced a choice between oversizing every dead end for the rig and
- * never letting the rig turn at one; a tier is how the player already chooses how much road to
- * lay, so it is where the design vehicle is chosen too.
+ * vehicle"): the Wide service-road tier's corners are laid for the articulated rig, Narrow and
+ * Standard for the largest RIGID service vehicle (the bowser), as every road was before.
+ *
+ * FILLETS ONLY, NOT DEAD-END BALLOONS - BY RULING (the same day, "smaller, reverse later"): a
+ * balloon a rig can be driven round without folding its trailer reaches ~24 m past the road end,
+ * and the rig will turn at a road end with a three-point turn once reversing exists (step 2).
+ * So FRoadGuidelineBuilder sizes every balloon from Default, and the rig is refused at every
+ * dead end on its lock until then.
  *
  * WHICH TIER IS WHICH IS DECIDED IN ONE PLACE, UAirsideSettings::ResolveTierDesignVehicles.
  * This struct only carries the answer, resolved once per rebuild and handed down (issue #190),
@@ -28,33 +29,26 @@ struct AIRSIDE_API FRoadDesignVehicles
 	FChassis Default;
 
 	/**
-	 * The profiles designed for something other than Default, as a whole VEHICLE: a tow's dead
-	 * end is sized by its chain, not only its cab (VehicleFit::BalloonRadiusFor). TObjectKey, not
-	 * a raw pointer: a key compared after its profile was collected must not match a new object
-	 * at the same address.
+	 * The profiles designed for something other than Default. TObjectKey, not a raw pointer: a
+	 * key compared after its profile was collected must not match a new object at the same
+	 * address.
 	 */
-	TMap<TObjectKey<URoadProfile>, FVehicle> PerProfile;
+	TMap<TObjectKey<URoadProfile>, FChassis> PerProfile;
 
 	FRoadDesignVehicles() = default;
 
 	/**
-	 * UNIFORM: every profile designed for Chassis. IMPLICIT on purpose - it is what a caller that
-	 * names ONE vehicle has always meant (every test that hands the builder
-	 * UAirsideSettings::ResolveLargestServiceVehicle()), and those keep meaning it. Production
-	 * rebuilds pass UAirsideSettings::ResolveRoadDesignVehicles() instead.
+	 * UNIFORM: every profile designed for one chassis. EXPLICIT (review, 2026-09-25): when it was
+	 * implicit, every test that handed the builder ResolveLargestServiceVehicle() quietly laid its
+	 * Wide roads for the bowser while production laid them for the rig. A caller that means one
+	 * vehicle for every tier now has to say so; one that means production passes
+	 * UAirsideSettings::ResolveRoadDesignVehicles().
 	 */
-	FRoadDesignVehicles(const FChassis& Uniform) : Default(Uniform) {}
+	explicit FRoadDesignVehicles(const FChassis& Uniform) : Default(Uniform) {}
 
-	/** The chassis Profile's turns are sized for. Null (no profile) is Default. */
-	const FChassis& For(const URoadProfile* Profile) const
-	{
-		const FVehicle* Found = VehicleFor(Profile);
-		return Found != nullptr ? Found->Chassis : Default;
-	}
-
-	/** The whole design vehicle when Profile names one of its own, else null (Default is a chassis only). */
-	const FVehicle* VehicleFor(const URoadProfile* Profile) const
-	{
-		return Profile != nullptr ? PerProfile.Find(TObjectKey<URoadProfile>(Profile)) : nullptr;
-	}
+	/**
+	 * The chassis Profile's fillets are sized for. Null (no profile) is Default. Out of line:
+	 * the key needs URoadProfile complete, and this header only forward-declares it.
+	 */
+	const FChassis& For(const URoadProfile* Profile) const;
 };

@@ -27,8 +27,9 @@ struct AIRSIDE_API FRoadGuidelineBuilder
 	 * Edges with bDerived == false are left untouched, along with the nodes they need.
 	 *
 	 * DesignVehicles IS REQUIRED, not resolved in here - issue #190. Each profile's design
-	 * vehicle (FRoadDesignVehicles - per width tier since 2026-09-25) sizes that road's dead-end
-	 * balloon and the corner warning below. Every turn path
+	 * vehicle (FRoadDesignVehicles - per width tier since 2026-09-25) is what the corner warning
+	 * below measures against; every dead-end balloon uses its Default (see FRoadDesignVehicles
+	 * for the ruling). Every turn path
 	 * this builder lays warns against the same figure (a right-angle corner's takeable
 	 * radius), once per ordered arm pair, and used to call
 	 * UAirsideSettings::ResolveLargestServiceVehicle() fresh each time. Content/ is resolved

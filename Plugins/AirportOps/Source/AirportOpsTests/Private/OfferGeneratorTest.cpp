@@ -62,7 +62,7 @@ namespace
 		Net->AddStraightSegment(ExitNode, TaxiEnd, Taxiway);
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		// Facing east (heading 0), so its lead-in casts west onto the taxiway.
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();

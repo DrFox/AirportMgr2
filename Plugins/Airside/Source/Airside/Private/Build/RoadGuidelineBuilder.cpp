@@ -6,7 +6,6 @@
 #include "Model/Chassis.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
-#include "Model/VehicleFit.h"
 #include "Profiles/RoadDesignVehicles.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
@@ -570,10 +569,14 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		// taxiway, or a one-lane road) is skipped: its one line already runs both ways, and a
 		// balloon there would be a change nobody asked for.
 		//
-		// SIZED FOR THE ROAD'S DESIGN VEHICLE, the figure its fillets use - per width tier since
-		// 2026-09-25, so a Wide dead end turns the rig and a Narrow one the bowser, and no dead end
-		// is oversized for a vehicle its tier was never laid for - and laid over grass: the
-		// balloon reaches ~4x the lock radius past the road end (UTurnGeom.h).
+		// SIZED FOR THE LARGEST RIGID SERVICE VEHICLE ON EVERY TIER - DesignVehicles.Default, NOT
+		// the tier's own design vehicle the fillets use. By user ruling (2026-09-25, "smaller,
+		// reverse later"): a balloon the rig can be driven round without folding its trailer
+		// reaches ~24 m past the road end (measured), and the rig will turn at a road end with a
+		// three-point turn once reversing exists (step 2). Until then it is refused at every dead
+		// end on its lock. Laid over grass: the balloon reaches ~4x the lock radius past the road
+		// end (UTurnGeom.h).
+		// ENFORCED BY: Airside.Build.DesignVehicle.WideDeadEndRefusesRigUntilReversing
 		// ENFORCED BY: Airside.Build.TwoWay.DeadEnd, Airside.Solve.UTurnBalloon
 		if (ArmSegments->Num() == 1)
 		{
@@ -611,14 +614,8 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			const FVector2D OutAt = Network.GetGuidelineNode(*OutEnd)->Position;
 			// Out of the road, past the dead end.
 			const FVector2D Axis = -Network.GetOutgoingTangent(ArmSeg, NodeId).GetSafeNormal();
-			// A TOW'S BALLOON IS SIZED BY ITS CHAIN, a rigid vehicle's by its lock - see
-			// VehicleFit::BalloonRadiusFor, which traces the tow round the balloon it would lay.
-			const FVehicle* DesignTow = DesignVehicles.VehicleFor(Profile);
-			const double BalloonNeeds = DesignTow != nullptr
-				? VehicleFit::BalloonRadiusFor(*DesignTow, InAt, OutAt, Axis)
-				: DesignVehicles.For(Profile).TightestFollowableRadius();
 			const TArray<UTurnGeom::FPiece> Pieces =
-				UTurnGeom::Balloon(InAt, OutAt, Axis, BalloonNeeds);
+				UTurnGeom::Balloon(InAt, OutAt, Axis, DesignVehicles.Default.TightestFollowableRadius());
 			if (Pieces.Num() == 0)
 			{
 				UE_LOG(LogAirside, Warning, TEXT("Dead end at (%.0f,%.0f): no U-turn laid - its lane ends coincide"),

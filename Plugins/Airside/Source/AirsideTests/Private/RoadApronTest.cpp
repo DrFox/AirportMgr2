@@ -91,7 +91,7 @@ bool FRoadApronTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and no node"), ApronOnly->GetNodes().Num(), 0);
 
 		const FRoadSolveResult ApronSolved = FRoadNetworkSolver::SolveAll(*ApronOnly);
-		FRoadGuidelineBuilder::Build(*ApronOnly, ApronSolved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*ApronOnly, ApronSolved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		TestEqual(TEXT("the apron survives both passes"), ApronOnly->GetAprons().Num(), 1);
 		TestEqual(TEXT("the junction solver found nothing to solve"),

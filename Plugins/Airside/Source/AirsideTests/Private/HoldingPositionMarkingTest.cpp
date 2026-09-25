@@ -42,7 +42,7 @@ bool FHoldingPositionMarkingTest::RunTest(const FString& Parameters)
 	const FRoadNodeId X = Net->AddNode(FVector2D(60000.0, -20000.0));
 	const FRoadSegmentId Tx = Net->AddStraightSegment(E, X, Taxiway);
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 	const FGuidelineNodeId RunwayEnd = TestGraph::NodeFor(*Net, Tx, true);
 	const FGuidelineNodeId FarEnd = TestGraph::NodeFor(*Net, Tx, false);

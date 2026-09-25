@@ -15,7 +15,10 @@ double URoadProfile::ResolvedFilletRadius() const
 	// other overload for the one that is (issue #190).
 	// PER TIER since 2026-09-25: this profile's own design vehicle - the rig for the Wide
 	// service road, the largest rigid vehicle otherwise (UAirsideSettings::ResolveTierDesignVehicles).
-	return ResolvedFilletRadius(UAirsideSettings::ResolveRoadDesignVehicles().For(this));
+	// Looked up in the cached tier map, never by building an FRoadDesignVehicles per arm (a map
+	// copy) - see ResolveTierDesignVehicles' comment on who calls this how often.
+	const FChassis* Tier = UAirsideSettings::ResolveTierDesignVehicles().Find(TObjectKey<URoadProfile>(this));
+	return ResolvedFilletRadius(Tier != nullptr ? *Tier : UAirsideSettings::ResolveLargestServiceVehicle());
 }
 
 double URoadProfile::ResolvedFilletRadius(const FChassis& DesignVehicle) const

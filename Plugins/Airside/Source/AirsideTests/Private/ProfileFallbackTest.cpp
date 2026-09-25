@@ -189,7 +189,7 @@ bool FGuidelineProfileFallbackTest::RunTest(const FString& Parameters)
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	TestEqual(TEXT("every node solves"), Solved.FailedNodes, 0);
-	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 	// 1. THE MEASUREMENT. Each profile-less segment gets the centreline the fallback
 	//    declares, exactly as it gets the fallback's ribbon.
@@ -220,7 +220,7 @@ bool FGuidelineProfileFallbackTest::RunTest(const FString& Parameters)
 		const FRoadNodeId East = Net->AddNode(FVector2D(20000.0, 0.0));
 		const FRoadSegmentId Own = Net->AddStraightSegment(Centre, East, Narrow);
 		const FRoadSolveResult Again = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		const FGuidelineEdge* OwnLine = nullptr;
 		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())

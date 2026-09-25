@@ -26,7 +26,7 @@ namespace VehicleGating
 	void Derive(URoadNetwork& Net)
 	{
 		FRoadGuidelineBuilder::Build(Net, FRoadNetworkSolver::SolveAll(Net),
-			UAirsideSettings::ResolveLargestServiceVehicle());
+			UAirsideSettings::ResolveRoadDesignVehicles());
 	}
 
 	/** Straight road (0,0)->(30000,0); returns its A->B lane's ends. */

@@ -113,25 +113,71 @@ FChassis UAirsideSettings::ResolveLargestServiceVehicle()
 	return ResolveDefaultVehicle().Chassis;
 }
 
-TMap<TObjectKey<URoadProfile>, FVehicle> UAirsideSettings::ResolveTierDesignVehicles()
+namespace AirsideSettingsTierCache
 {
-	TMap<TObjectKey<URoadProfile>, FVehicle> Out;
+	/** What ResolveTierDesignVehicles last resolved, and from which content set and Wide asset. */
+	struct FCache
+	{
+		bool bValid = false;
+		TWeakObjectPtr<const UAirsideContent> Content;
+		FSoftObjectPath WidePath;
+		TMap<TObjectKey<URoadProfile>, FChassis> Map;
+	};
+
+	FCache& Get()
+	{
+		static FCache Cache;
+		return Cache;
+	}
+}
+
+int32 UAirsideSettings::ResolveTierDesignVehiclesCallCountForTest = 0;
+
+void UAirsideSettings::ResetTierDesignVehiclesCacheForTest()
+{
+	AirsideSettingsTierCache::Get() = AirsideSettingsTierCache::FCache();
+	ResolveTierDesignVehiclesCallCountForTest = 0;
+}
+
+const TMap<TObjectKey<URoadProfile>, FChassis>& UAirsideSettings::ResolveTierDesignVehicles()
+{
+	AirsideSettingsTierCache::FCache& Cache = AirsideSettingsTierCache::Get();
+
+	// THE CHEAP CHECK: the content set already in memory (Get, never a load) and the path its
+	// Wide tier names. Either changing - another set configured, the tier list re-authored -
+	// is a miss; nothing else in the answer can change while the editor runs (the rig's figures
+	// are code).
+	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
+	const UAirsideContent* InMemory = Settings != nullptr ? Settings->Content.Get() : nullptr;
+	if (Cache.bValid && InMemory != nullptr && Cache.Content.Get() == InMemory)
+	{
+		const bool bHasWide = InMemory->ServiceRoadProfiles.IsValidIndex(WideServiceTier);
+		const FSoftObjectPath WidePath = bHasWide ? InMemory->ServiceRoadProfiles[WideServiceTier].ToSoftObjectPath() : FSoftObjectPath();
+		if (WidePath == Cache.WidePath)
+		{
+			return Cache.Map;
+		}
+	}
+
+	++ResolveTierDesignVehiclesCallCountForTest;
+	Cache = AirsideSettingsTierCache::FCache();
 	const UAirsideContent* Content = GetContent();
 	// NO WIDE TIER, NO EXCEPTION: a content set with fewer tiers than Wide's index has nothing
 	// designed for the rig, and every road stays sized for the default - never the narrowest
 	// tier promoted to the rig's, which would oversize the one road a small set lays.
-	if (Content == nullptr || !Content->ServiceRoadProfiles.IsValidIndex(WideServiceTier))
+	if (Content != nullptr && Content->ServiceRoadProfiles.IsValidIndex(WideServiceTier))
 	{
-		return Out;
+		Cache.WidePath = Content->ServiceRoadProfiles[WideServiceTier].ToSoftObjectPath();
+		if (const URoadProfile* Wide = Content->ServiceRoadProfiles[WideServiceTier].LoadSynchronous())
+		{
+			// THE RIG ON WIDE (user ruling 2026-09-25): its lock radius, 370 / sin 40 = 576 uu
+			// against the bowser's 510, is what the Wide tier's corners are laid for.
+			Cache.Map.Add(TObjectKey<URoadProfile>(Wide), ResolveRigVehicle().Chassis);
+		}
 	}
-	if (const URoadProfile* Wide = Content->ServiceRoadProfiles[WideServiceTier].LoadSynchronous())
-	{
-		// THE RIG ON WIDE (user ruling 2026-09-25): its lock radius, 370 / sin 40 = 576 uu against
-		// the bowser's 510, is what the Wide tier's corners and dead ends are laid for, so the
-		// rig can turn at a Wide dead end and nowhere narrower.
-		Out.Add(TObjectKey<URoadProfile>(Wide), ResolveRigVehicle());
-	}
-	return Out;
+	Cache.Content = Content;
+	Cache.bValid = Content != nullptr;
+	return Cache.Map;
 }
 
 FRoadDesignVehicles UAirsideSettings::ResolveRoadDesignVehicles()

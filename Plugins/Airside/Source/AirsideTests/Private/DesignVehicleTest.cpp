@@ -4,8 +4,6 @@
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
-#include "Model/AgentMotion.h"
-#include "Model/RoadAgent.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
@@ -66,11 +64,15 @@ namespace DesignVehicle
 	}
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDesignVehicleWideDeadEndTest, "Airside.Build.DesignVehicle.WideDeadEndAdmitsRig",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDesignVehicleDeadEndTest, "Airside.Build.DesignVehicle.WideDeadEndRefusesRigUntilReversing",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FDesignVehicleWideDeadEndTest::RunTest(const FString& Parameters)
+bool FDesignVehicleDeadEndTest::RunTest(const FString& Parameters)
 {
+	// BALLOONS ARE NOT PER TIER, BY RULING (2026-09-25, "smaller, reverse later"): every tier's
+	// dead end is sized for the bowser, the Wide one included, and the rig is refused at all
+	// three on its lock until reversing (step 2) gives it a three-point turn. When that lands,
+	// the Wide line here is the one to flip.
 	using namespace DesignVehicle;
 	const TArray<URoadProfile*> Profiles = Tiers();
 	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
@@ -87,34 +89,12 @@ bool FDesignVehicleWideDeadEndTest::RunTest(const FString& Parameters)
 		const URoadNetwork* Net = DeadEnd(Profiles[Tier], Designs, In, Back);
 		if (!TestTrue(FString::Printf(TEXT("%s: the stub has both lanes"), Names[Tier]), In.IsSet() && Back.IsSet())) { continue; }
 
-		const FRoutePlan RigPlan = RoundTheEnd(*Net, In, Back, Rig);
-		const FRoutePlan BowserPlan = RoundTheEnd(*Net, In, Back, Bowser);
-		// THE BOWSER, UNCHANGED: every tier's dead end still turns it - Narrow and Standard are
-		// still laid for it, and Wide's larger balloon only has more room.
-		TestTrue(FString::Printf(TEXT("%s: the bowser turns at the dead end, as on every tier before"), Names[Tier]),
-			BowserPlan.IsValid());
+		// THE BOWSER, UNCHANGED: every tier's dead end turns it, as before any of this.
+		TestTrue(FString::Printf(TEXT("%s: the bowser turns at the dead end"), Names[Tier]),
+			RoundTheEnd(*Net, In, Back, Bowser).IsValid());
 
-		if (Tier == UAirsideSettings::WideServiceTier)
-		{
-			if (!TestTrue(TEXT("Wide: the rig is routed round the dead end - its tier is laid for it"), RigPlan.IsValid())) { continue; }
-			// AND DRIVES IT WITHOUT FOLDING: a balloon sized at the rig's bare lock was admitted by
-			// the router and folded the trailer on the agent (measured 2026-09-25) - the admission
-			// is only worth what the driving agent does with it.
-			FRoadAgent Agent;
-			Agent.StartDrive(RigPlan, Rig);
-			FAgentMotion Motion;
-			EAgentEvent Event;
-			for (int32 Frame = 0; Frame < 6000 && Agent.GetJackknifedLink() == INDEX_NONE && Agent.Phase != EAgentPhase::Parked; ++Frame)
-			{
-				Agent.Advance(0.05, Motion, Event);
-			}
-			TestEqual(TEXT("Wide: the rig's trailer never jack-knifed going round"), Agent.GetJackknifedLink(), static_cast<int32>(INDEX_NONE));
-			TestEqual(TEXT("Wide: and it got all the way round"), static_cast<int32>(Agent.Phase), static_cast<int32>(EAgentPhase::Parked));
-			continue;
-		}
-		// NARROW AND STANDARD STILL REFUSE THE RIG, and for the reason the course logged before
-		// the ruling: the balloon is tighter than its lock.
-		TestFalse(FString::Printf(TEXT("%s: the rig is still refused at the dead end"), Names[Tier]), RigPlan.IsValid());
+		const FRoutePlan RigPlan = RoundTheEnd(*Net, In, Back, Rig);
+		TestFalse(FString::Printf(TEXT("%s: the rig is refused at the dead end until reversing exists"), Names[Tier]), RigPlan.IsValid());
 		const FGuidelineEdge* Rejected = RigPlan.RejectedEdge.IsSet() ? Net->GetGuidelineEdge(RigPlan.RejectedEdge) : nullptr;
 		if (!TestNotNull(FString::Printf(TEXT("%s: the refusal names the edge"), Names[Tier]), Rejected)) { continue; }
 		const FFitVerdict Verdict = VehicleFit::Judge(*Rejected, Rig, *Net);
@@ -165,6 +145,49 @@ bool FDesignVehicleFilletTest::RunTest(const FString& Parameters)
 				Profile->ResolvedFilletRadius(), Profile->ResolvedFilletRadius(Bowser));
 		}
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDesignVehicleTierCacheTest, "Airside.Build.DesignVehicle.TierResolvedOncePerContent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDesignVehicleTierCacheTest::RunTest(const FString& Parameters)
+{
+	// THE SNAP AND GHOST PATHS, in the style of LargestServiceVehicleResolvedOncePerRebuild
+	// (issue #190): URoadProfile's self-resolving fillet asks the tier map per arm, and a cursor
+	// move asks it per arm of every node it tests. Resolving the content set, loading the Wide
+	// profile and building the rig each time is the #190/#167 cost; it must resolve ONCE.
+	using namespace DesignVehicle;
+	const TArray<URoadProfile*> Profiles = Tiers();
+	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
+		Profiles.Num() == 3 && !Profiles.Contains(nullptr))) { return false; }
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadNodeId Hub = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadSegmentId West = Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(-20000.0, 0.0)), Profiles[2]);
+	Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(20000.0, 0.0)), Profiles[2]);
+	Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(0.0, 20000.0)), Profiles[0]);
+
+	UAirsideSettings::ResetTierDesignVehiclesCacheForTest();
+	// SELF-RESOLVING, as RoadSnap and the debug gallery call it: no vehicles passed.
+	FRoadNetworkSolver::SolveAll(*Net);
+	for (int32 Move = 0; Move < 50; ++Move)
+	{
+		FRoadNetworkSolver::NodeClaims(*Net, Hub, FVector2D(Move * 10.0, 100.0));
+		FRoadNetworkSolver::ArmCutDistance(*Net, West, Hub);
+	}
+	TestEqual(TEXT("a solve and fifty cursor moves over a Wide junction resolve the tier map once"),
+		UAirsideSettings::ResolveTierDesignVehiclesCallCountForTest, 1);
+
+	// And the cached answer is the resolved one: the Wide arm's fillet is still the rig's.
+	TestEqual(TEXT("the cached tier map still lays the Wide fillet for the rig"),
+		Profiles[2]->ResolvedFilletRadius(), Profiles[2]->ResolvedFilletRadius(UAirsideSettings::ResolveRigVehicle().Chassis));
+	TestEqual(TEXT("and asking again did not resolve again"), UAirsideSettings::ResolveTierDesignVehiclesCallCountForTest, 1);
+
+	// A COLD CACHE RESOLVES AGAIN - the counter counts misses, not calls.
+	UAirsideSettings::ResetTierDesignVehiclesCacheForTest();
+	Profiles[2]->ResolvedFilletRadius();
+	TestEqual(TEXT("after a reset, one resolve"), UAirsideSettings::ResolveTierDesignVehiclesCallCountForTest, 1);
 	return true;
 }
 

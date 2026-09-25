@@ -51,7 +51,7 @@ namespace
 		Out.Net->AddStraightSegment(X, E, Runway);
 		Out.Net->AddStraightSegment(X, T, Taxiway);
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 		const FEntityInstanceId StandId = Out.Net->PlaceEntity(Stand, Stand->Anchors, Out.XAt + FVector2D(25000.0, -14000.0), 0.0);
 		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
@@ -137,7 +137,7 @@ bool FDeparturePlannerBacktrackTest::RunTest(const FString& Parameters)
 	Net->AddStraightSegment(X, E, Runway);
 	Net->AddStraightSegment(X, T, Taxiway);
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	Net->PlaceEntity(Stand, Stand->Anchors, XAt + FVector2D(25000.0, -14000.0), 0.0);
 	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());

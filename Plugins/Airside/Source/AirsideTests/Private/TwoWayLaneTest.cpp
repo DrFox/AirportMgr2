@@ -26,7 +26,7 @@ namespace TwoWayLane
 	void Derive(URoadNetwork& Net)
 	{
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
-		FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 	}
 
 	/** The one live segment edge of Seg running Dir. Null if there is not exactly one. */

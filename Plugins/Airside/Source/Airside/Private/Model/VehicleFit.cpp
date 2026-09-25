@@ -4,7 +4,6 @@
 #include "Model/RoadNetwork.h"
 #include "Model/Vehicle.h"
 #include "Solve/GuidelineGeom.h"
-#include "Solve/UTurnGeom.h"
 #include "Solve/VehicleSweep.h"
 
 VehicleSweep::FBody VehicleFit::BodyOf(const FVehicle& Vehicle)
@@ -118,56 +117,4 @@ FFitVerdict VehicleFit::Judge(const FGuidelineEdge& Edge, const FVehicle& Vehicl
 bool VehicleFit::Fits(const FGuidelineEdge& Edge, const FVehicle& Vehicle, const URoadNetwork& Network)
 {
 	return Judge(Edge, Vehicle, Network).Fits();
-}
-
-double VehicleFit::BalloonRadiusFor(const FVehicle& Vehicle, const FVector2D& InEnd, const FVector2D& OutEnd,
-	const FVector2D& Axis)
-{
-	const double Lock = Vehicle.Chassis.TightestFollowableRadius();
-	if (!Vehicle.HasTrailer() || Lock <= 0.0)
-	{
-		return Lock;
-	}
-	const VehicleSweep::FBody Body = BodyOf(Vehicle);
-	// A lead-in as long as the whole vehicle, so the chain starts the loop laid out behind it
-	// rather than folded against the first sample.
-	double Chain = Body.Wheelbase;
-	for (const VehicleSweep::FLink& Link : Body.Tow)
-	{
-		Chain += FMath::Abs(Link.HitchX) + Link.Length;
-	}
-	const FVector2D Along = Axis.GetSafeNormal();
-	double Needed = Lock;
-	for (int32 Step = 0; Step < 80; ++Step, Needed *= 1.03)
-	{
-		const TArray<UTurnGeom::FPiece> Pieces = UTurnGeom::Balloon(InEnd, OutEnd, Along, Needed);
-		if (Pieces.Num() == 0)
-		{
-			return Lock;
-		}
-		TArray<FVector2D> Path;
-		const int32 LeadSteps = FMath::Max(2, FMath::CeilToInt32(Chain / 100.0));
-		for (int32 Index = LeadSteps; Index > 0; --Index)
-		{
-			Path.Add(InEnd - Along * (Chain * Index / LeadSteps));
-		}
-		FVector2D From = InEnd;
-		for (const UTurnGeom::FPiece& Piece : Pieces)
-		{
-			TArray<FVector2D> Points;
-			GuidelineGeom::Sample(From, Piece.Control, Piece.End, Points);
-			if (Path.Num() > 0 && Points.Num() > 0 && Path.Last().Equals(Points[0]))
-			{
-				Points.RemoveAt(0);
-			}
-			Path.Append(Points);
-			From = Piece.End;
-		}
-		TArray<double> Inner, Outer;
-		if (VehicleSweep::Trace(Body, Path, Inner, Outer))
-		{
-			return Needed * TowBalloonMargin;
-		}
-	}
-	return Needed;
 }
