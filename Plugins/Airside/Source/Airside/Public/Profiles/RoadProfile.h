@@ -206,6 +206,14 @@ public:
 	double ResolvedFilletRadius(const FChassis& DesignVehicle) const;
 
 	/**
+	 * The tightest radius this profile's DESIGN VEHICLE can follow, uu - the same tier lookup
+	 * ResolvedFilletRadius() makes, for a caller that needs the lock itself rather than a fillet
+	 * scaled from it: the width taper (FRoadNetworkSolver), when no FRoadDesignVehicles was
+	 * handed down. Build/ may not reach UAirsideSettings itself (Check-Architecture rule 1).
+	 */
+	double ResolvedDesignRadius() const;
+
+	/**
 	 * Segments with this profile PASS THROUGH a node rather than ending at it, so they are
 	 * never trimmed and no junction polygon is paved over them. True for a runway.
 	 *

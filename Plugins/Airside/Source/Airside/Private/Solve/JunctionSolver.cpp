@@ -117,6 +117,12 @@ FJunctionResult FJunctionSolver::SolveCuts(const FJunctionInput& Input)
 				? 0.0 : Result.Corners[PrevIndex].ParamB;
 
 			Result.Arms[Index].CutDistance = FMath::Max3(FromLeft, FromRight, 0.0);
+
+			// A TAPER'S INSET, a floor the corners cannot see - see FJunctionArm::MinCutDistance.
+			// Capped by the arm's allowance like a dead end's cap, so a short segment gets a
+			// shorter taper, never crossed cuts.
+			Result.Arms[Index].CutDistance = FMath::Max(Result.Arms[Index].CutDistance,
+				FMath::Min(Input.Arms[Index].MinCutDistance, Input.Arms[Index].MaxCutDistance));
 		}
 
 		Result.bValid = true;

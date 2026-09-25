@@ -32,6 +32,16 @@ struct FJunctionArm
 	double MaxCutDistance = TNumericLimits<double>::Max();
 
 	/**
+	 * The nearest this arm's cut may sit to the node, uu - a FLOOR under whatever the corners
+	 * ask for, itself capped by MaxCutDistance. Zero by default. Set by the caller for a WIDTH
+	 * TAPER: at a straight-through node whose two arms differ in width, both cuts are inset so
+	 * the polygon between them is the taper, and the lanes have the room to change offset on
+	 * an S rather than a jog (FRoadNetworkSolver, FRoadGuidelineBuilder). Its cut vertices are
+	 * this arm's own, shared with the polygon exactly as every other cut is.
+	 */
+	double MinCutDistance = 0.0;
+
+	/**
 	 * This arm PASSES THROUGH the node rather than ending at it, so it is never trimmed.
 	 *
 	 * A runway is the case: its edges run unbroken past an exit, and the fillets belong to

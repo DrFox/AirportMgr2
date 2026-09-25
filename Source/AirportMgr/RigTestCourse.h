@@ -30,9 +30,9 @@ enum class ERigCourseFeature : uint8
 	DeadEnd,
 	/**
 	 * A width change on a STRAIGHT, at a degree-2 node: Narrow -> Wide mid-straight. Kept on
-	 * purpose (controller ruling 5, 2026-09-25) to pin a builder defect rather than lay round
-	 * it: the derived turn at such a node is a lane-offset jog with MinRadius 0 (unmeasured, so
-	 * not gated) that FSpeedProfile reports as a sharp vertex and crawls. Not one of the 3 x 5.
+	 * purpose (controller ruling 5, 2026-09-25): laid to pin a builder defect - the derived turn
+	 * was a lane-offset jog with MinRadius 0 that FSpeedProfile crawled - and kept now the
+	 * builder tapers it on an S, to hold that fix (no sharp vertex). Not one of the 3 x 5.
 	 */
 	WidthStep
 };

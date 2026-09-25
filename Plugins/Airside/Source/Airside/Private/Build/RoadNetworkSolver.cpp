@@ -6,6 +6,7 @@
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadDesignVehicles.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/GuidelineGeom.h"
 #include "Solve/JunctionSolver.h"
 #include "Solve/RoadGeom.h"
 
@@ -34,6 +35,97 @@ namespace
 	 * at exactly a half the cut centres would touch and the ribbon would have no length.
 	 */
 	constexpr double SlackShare = 0.45;
+
+	/**
+	 * A tenth of a percent over the design vehicle's lock, so the builder's re-derivation of the
+	 * S from the cut lines (atan, sin, a lerp of cut vertices) can never land its radius a
+	 * rounding under the lock VehicleFit compares it with. Not a design margin: the taper IS
+	 * sized for the lock.
+	 */
+	constexpr double TaperRadiusMargin = 1.001;
+
+	/**
+	 * THE WIDTH TAPER'S LENGTH, uu, at a straight-through node of two arms (user ruling
+	 * 2026-09-25: "inset nodes and a curve between the two widths"), or zero when the lanes do
+	 * not move. OutShift is the lateral step of the lane that moves furthest.
+	 *
+	 * Where a Narrow road meets a Wide one head on, each lane's offset steps (a quarter of the
+	 * width difference on a two-lane road: 75 uu Narrow -> Wide). Both cuts at the node, the
+	 * turn path between the lane ends was that step laid across NOTHING - a 90 degree jog,
+	 * MinRadius 0, crawled at steering speed. So both arms are cut back half this length and
+	 * the lane crosses the gap on an S: GuidelineGeom's own lane-change construction
+	 * (ShiftDeflectionFor, the one a stand's link to a parallel road uses), two quadratics of
+	 * tangent s deflecting by b, so the transition runs L = 2 s (1 + cos b) along and 2 s sin b
+	 * across. NOT the circular reverse curve's L = sqrt(4 R d - d^2): the lanes are quadratics,
+	 * and sizing them from a circle would be a second evaluator of the curve that is driven.
+	 * Worked, 2026-09-25: d 75 uu, R 576 (the rig, Wide's design vehicle) gives b 20.6 deg,
+	 * s 107, L 412 uu - against sqrt(4 R d - d^2) = 409 for the circle.
+	 *
+	 * THE WIDER ARM'S DESIGN VEHICLE sizes it (the brief's ruling): the taper is part of the wide
+	 * road, and a rig admitted to the Wide road must be able to follow onto it. A Narrow ->
+	 * Standard taper is therefore the bowser's, and the rig is refused there on its lock - where
+	 * before it was waved through the unmeasured jog and crawled.
+	 *
+	 * Lane positions from each profile's own offsets, in one frame across the node. Exact for a
+	 * symmetric profile, which every road profile is (a lane's cut-line point is its offset
+	 * along the arm's left); an asymmetric one would place its lanes a little off here and the
+	 * S would be sized for that - not wrong, since the builder lays it from where the ends are.
+	 */
+	double WidthTaperLength(const URoadNetwork& Network, FRoadNodeId NodeId, const FJunctionInput& Input,
+		const TArray<FRoadSegmentId>& ArmSegments, const FRoadDesignVehicles* DesignVehicles, double& OutShift)
+	{
+		OutShift = 0.0;
+		if (Input.Arms.Num() != 2 || ArmSegments.Num() != 2)
+		{
+			return 0.0;
+		}
+		const FVector2D Across = RoadGeom::PerpCCW(Input.Arms[0].Tangent);
+		TArray<double> Lanes[2];
+		const URoadProfile* Profiles[2] = { nullptr, nullptr };
+		for (int32 Arm = 0; Arm < 2; ++Arm)
+		{
+			const FRoadSegment* Segment = Network.GetSegment(ArmSegments[Arm]);
+			Profiles[Arm] = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+			if (Profiles[Arm] == nullptr)
+			{
+				return 0.0;
+			}
+			// A guideline's offset is to the left of its segment's A->B, whichever end this is.
+			const FVector2D AToB = Segment->A == NodeId ? Input.Arms[Arm].Tangent : -Input.Arms[Arm].Tangent;
+			const double Sign = FVector2D::DotProduct(RoadGeom::PerpCCW(AToB), Across) >= 0.0 ? 1.0 : -1.0;
+			for (const FProfileGuideline& Guideline : Profiles[Arm]->Guidelines)
+			{
+				Lanes[Arm].Add(Sign * Guideline.OffsetFor(Network.GetDriveSide()));
+			}
+		}
+		// Each lane pairs with the nearest lane across the node - the one the builder's turn path
+		// joins it to on a straight-through road.
+		for (const double From : Lanes[0])
+		{
+			double Nearest = TNumericLimits<double>::Max();
+			for (const double To : Lanes[1])
+			{
+				Nearest = FMath::Min(Nearest, FMath::Abs(From - To));
+			}
+			if (Nearest < TNumericLimits<double>::Max())
+			{
+				OutShift = FMath::Max(OutShift, Nearest);
+			}
+		}
+		// Under a uu the lanes meet: the ordinary zero-length through-turn, no taper.
+		if (OutShift <= 1.0)
+		{
+			OutShift = 0.0;
+			return 0.0;
+		}
+		const URoadProfile* Wider = Profiles[1]->GetTotalWidth() > Profiles[0]->GetTotalWidth() ? Profiles[1] : Profiles[0];
+		const double Radius = DesignVehicles != nullptr
+			? DesignVehicles->For(Wider).TightestFollowableRadius()
+			: Wider->ResolvedDesignRadius();
+		double Run = 0.0;
+		const double Deflect = GuidelineGeom::ShiftDeflectionFor(Radius * TaperRadiusMargin, OutShift, Run);
+		return 2.0 * Run * (1.0 + FMath::Cos(Deflect));
+	}
 
 	/**
 	 * One arm per live incident segment, in incidence order, with the profile's own widths
@@ -89,7 +181,20 @@ namespace
 			OutArmSegments.Add(SegmentId);
 		}
 
-		// THE FLARE. At a node where a taxiway meets a runway, the corner an exit arc sweeps
+		// THE WIDTH TAPER: both arms of a straight-through node inset by half of it - see
+	// WidthTaperLength. Continuous arms (a runway) are never cut, so never tapered.
+	if (OutInput.Arms.Num() == 2 && !OutInput.Arms[0].bContinuous && !OutInput.Arms[1].bContinuous
+		&& RoadGeom::IsStraightThrough(RoadGeom::AngleBetween(OutInput.Arms[0].Tangent, OutInput.Arms[1].Tangent)))
+	{
+		double Shift = 0.0;
+		const double Taper = WidthTaperLength(Network, NodeId, OutInput, OutArmSegments, DesignVehicles, Shift);
+		for (FJunctionArm& Arm : OutInput.Arms)
+		{
+			Arm.MinCutDistance = 0.5 * Taper;
+		}
+	}
+
+	// THE FLARE. At a node where a taxiway meets a runway, the corner an exit arc sweeps
 		// through gets a fillet that follows the arc - a taxiway's half width inside it -
 		// so the aircraft's wheels and wing are on pavement through the turn, not only its
 		// centreline (samples/runway2.png, 2026-09-07). ExitGeometry decides the arc's
@@ -139,6 +244,9 @@ double FRoadNetworkSolver::ZeroRadiusCut(const URoadNetwork& Network, FRoadSegme
 	{
 		Arm.FilletRadius = 0.0;
 		Arm.FilletRadiusToNext = 0.0;
+		// The floor is the CORNER's: a taper is fitted into the slack like a fillet, never
+		// allowed to fail a segment that is merely short (see SolveCuts' cap).
+		Arm.MinCutDistance = 0.0;
 	}
 	const FJunctionResult Result = FJunctionSolver::SolveCuts(Input);
 	if (!Result.bValid)
@@ -196,6 +304,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 	{
 		Arm.FilletRadius = 0.0;
 		Arm.FilletRadiusToNext = 0.0;
+		Arm.MinCutDistance = 0.0;   // as in ZeroRadiusCut: a taper takes slack, it is not a floor
 	}
 	const FJunctionResult ZeroHere = FJunctionSolver::SolveCuts(ZeroInput);
 	if (!ZeroHere.bValid)

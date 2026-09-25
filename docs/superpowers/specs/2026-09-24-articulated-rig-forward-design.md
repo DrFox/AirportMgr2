@@ -139,6 +139,21 @@ built level and its tests:**
   in the guideline builder - blending the lane offset over a transition length - not in the
   course; kept as a feature (controller ruling 5, 2026-09-25) rather than laid round, so the
   defect stays pinned until that fix lands. Open follow-up below.
+  **REVISED 2026-09-25 ("width taper", user ruling: inset nodes and a curve between the two
+  widths) - fixed in the builder.** At a straight-through node of two arms whose lanes sit at
+  different offsets, `FRoadNetworkSolver` insets both cuts by half a taper length
+  (`FJunctionArm::MinCutDistance`, capped by the arm's slack allowance so a short segment gets a
+  shorter taper, never a failed node); the polygon between the two cut lines IS the taper, paved
+  from the same cut vertices as the ribbons (bitwise weld, measured by
+  `Airside.Build.WidthTaper.SurfaceWelds`: every cut-line edge shared by exactly two triangles).
+  Each lane crosses on an S of two quadratics meeting mid-way - `GuidelineGeom`'s own lane change
+  (`ShiftDeflectionFor`): tangent s deflecting by b, L = 2 s (1 + cos b) along, 2 s sin b across -
+  sized for the WIDER tier's design vehicle. Narrow -> Wide: lane shift 75 uu, rig lock 576 uu,
+  taper 412 uu (206 each side), measured MinRadius 576.2 uu per piece; the circular reverse
+  curve's sqrt(4Rd - d^2) would say 409. The course keeps the feature; its expected result flipped
+  to no sharp vertex, and neither vehicle crawls there. Consequence to know: a Narrow -> Standard
+  taper is sized for the bowser, so the rig is now REFUSED on its lock there, where the unmeasured
+  jog used to wave it through to crawl.
 - **The rig's trailer has a known, bounded near-side overrun.** `RigTestCourseTest.cpp`
   measured 2026-09-25: on every near-side (right) turn the trailer cuts 2.0-3.4 m past the
   inner pavement edge while its swept WIDTH still fits - `VehicleFit` judges the swept
@@ -240,8 +255,8 @@ game; legs are progress markers:**
   `ArmDepartureIfRunway` now disarms, which a redirect off a runway also lacked - the occupancy
   revision bumped), warns when a tail does not continue the route, and trims the driven history
   (`KeepBehind`, Travelled rebased) so an endless course's route stays bounded. The course
-  reports a sharp vertex AT a join; the only ones are the width step's jog, at its node's lane
-  end.
+  reports a sharp vertex AT a join; the only ones were the width step's jog, at its node's lane
+  end - none since the width taper (§3).
 - **Measured:** the rig's leg 0 now takes 12.1 s against a derived no-stop 11.8 s (it slows for
   the corner at its end); every waypoint is passed moving, at the speed profile's own limit
   where the profile slows it. One dispatch per vehicle, one extension per loop boundary.
@@ -304,16 +319,13 @@ across both lanes (a known gap from the road-lanes spec).
 
 **ADDED 2026-09-25 (task 6), follow-ups found by the full build and not fixed here:**
 
-- **The width-step builder fix.** Blend the lane offset over a transition length in the
-  guideline builder so a Narrow -> Wide straight-through node stops producing a `MinRadius`-0
-  jog. Today it is pinned as a deliberate course feature (§3) rather than routed round.
 - **The rig U-turns at road ends once reversing exists (step 2):** a three-point turn, not a
   bigger balloon (user ruling 2026-09-25). Until then every dead end refuses it on its lock.
 - **One evaluator for a whole route's tow (a real gap, found 2026-09-25).** Two halves:
   (a) balloon edges carry no clearance data, so `VehicleFit::Judge` returns "fits" before it
   reaches `VehicleSweep::Trace` - the jack-knife check never runs on a balloon; (b) `Trace` lays
   the train straight at the start of EVERY edge, forgetting the hitch angle carried across
-  edges - S-bends, the width-step jog, and lead-ins all start the trailer straighter than it is.
+  edges - S-bends (the width taper's included), and lead-ins all start the trailer straighter than it is.
   Measured consequence: a rig-lock balloon was admitted and the agent folded on it. Proposed
   fix: trace the WHOLE found plan once, with the chain carried across edges, and reject the plan
   if it folds. Not implemented.

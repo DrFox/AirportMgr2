@@ -21,6 +21,13 @@ double URoadProfile::ResolvedFilletRadius() const
 	return ResolvedFilletRadius(Tier != nullptr ? *Tier : UAirsideSettings::ResolveLargestServiceVehicle());
 }
 
+double URoadProfile::ResolvedDesignRadius() const
+{
+	// The same lookup as ResolvedFilletRadius() above, answering with the lock rather than a fillet.
+	const FChassis* Tier = UAirsideSettings::ResolveTierDesignVehicles().Find(TObjectKey<URoadProfile>(this));
+	return (Tier != nullptr ? *Tier : UAirsideSettings::ResolveLargestServiceVehicle()).TightestFollowableRadius();
+}
+
 double URoadProfile::ResolvedFilletRadius(const FChassis& DesignVehicle) const
 {
 	if (PreferredFilletRadius > 0.0)

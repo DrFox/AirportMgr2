@@ -62,12 +62,13 @@ namespace RigCourse
 
 	// THE WIDTH STEP, on the return road's south straight: Narrow from the east corner to here,
 	// Wide from here on, so the leg that ends at the west corner crosses a Narrow -> Wide change
-	// at a straight-through node. KEPT TO PIN A BUILDER DEFECT (controller ruling 5,
-	// 2026-09-25): the derived turn there is a lane-offset jog, MinRadius 0 and unmeasured, so
-	// route search does not gate it, and FSpeedProfile reports a sharp vertex and crawls it.
-	// Measured before this was a feature: 55 s for the rig over a 69 m straight that takes 14 s
-	// without the step. The fix belongs in the guideline builder (blend the lane offset over a
-	// transition length), not here.
+	// at a straight-through node. KEPT AS A NAMED FEATURE (controller ruling 5, 2026-09-25): it
+	// was laid to pin a builder defect - the derived turn there was a lane-offset jog, MinRadius 0
+	// and unmeasured, so route search did not gate it, and FSpeedProfile reported a sharp vertex
+	// and crawled it (55 s for the rig over a 69 m straight that takes 14 s without the step).
+	// FIXED IN THE BUILDER the same day, where it belonged: both cuts are inset and each lane
+	// crosses the taper on an S sized for Wide's design vehicle, the rig (FRoadNetworkSolver's
+	// WidthTaperLength, 412 uu here). OneLoopHeadless now asserts NO sharp vertex on it.
 	constexpr double WidthStepX = LaneLength / 2.0;
 	constexpr int32 WidthStepFrom = 0;   // Narrow
 	constexpr int32 WidthStepTo = 2;     // Wide
@@ -252,7 +253,7 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 		Add(L.P4, L.P3, ExitNext[Tier], TurnFeature(P3 - P2, P4 - P3), nullptr);          // the corner at P3
 	}
 	// The return: to the width step's node, then ACROSS it to the west corner - so the one leg
-	// that drives the jog is the one labelled with it, and no other leg does.
+	// that drives the taper is the one labelled with it, and no other leg does.
 	auto AddReturn = [this, &Id](int32 Node, int32 From, int32 Next, ERigCourseFeature Feature, const TCHAR* Label)
 	{
 		FRigCourseWaypoint& W = Waypoints.AddDefaulted_GetRef();
@@ -840,8 +841,8 @@ bool ARigTestCourse::PlanLoopRoute(FRigCourseRunner& Runner, int32 Loop, int32 F
 
 			// THE CRAWL, REPORTED PER LEG, from the leg's own plan: FSpeedProfile is the
 			// drivability authority, and a sharp vertex is an instantaneous heading change it
-			// crawls at steering speed - the width step's jog, and nothing else on this course
-			// should have one (AirportMgr.RigCourse.OneLoopHeadless).
+			// crawls at steering speed. Nothing on this course should have one - the width step's
+			// jog was the last, until the builder tapered it (AirportMgr.RigCourse.OneLoopHeadless).
 			FSpeedProfile Profile;
 			Profile.Build(Leg.Polyline, Vehicle.Chassis);
 			Result.SharpVertexCount = Profile.GetSharpVertexCount();

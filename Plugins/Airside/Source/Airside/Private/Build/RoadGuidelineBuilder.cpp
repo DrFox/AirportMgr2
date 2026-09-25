@@ -529,6 +529,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 	// Turn paths: one edge per ordered pair of DISTINCT arms at each solved node.
 	int32 Balloons = 0;
+	int32 Tapers = 0;
 	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
 	{
 		const TArray<FRoadSegmentId>* ArmSegments = Solved.NodeArmSegments.Find(Pair.Key);
@@ -787,6 +788,43 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 						Turn.Control = bAhead ? Crossing : (PA + PB) * 0.5;
 					}
 
+					// A WIDTH TAPER IS DRIVEN ON AN S (user ruling 2026-09-25). At a straight-through
+					// node of two arms whose lanes sit at different offsets, the solver has inset
+					// both cuts (FRoadNetworkSolver's WidthTaperLength) and the lane ends face each
+					// other across the taper, parallel and a lane-offset step apart. One quadratic
+					// cannot join two parallel lines - the chord above was a straight diagonal with a
+					// kink at each end, and with the cuts at the node it was a 90 degree jog. So the
+					// turn is TWO edges meeting at the midpoint, GuidelineGeom's lane change: each a
+					// symmetric quadratic of tangent s deflecting by b, with tan(b/2) = across/along
+					// and 2 s sin b = across, so the pair runs exactly from end to end and is tangent
+					// to both lanes and to each other. Each is sampled once by GuidelineGeom like any
+					// edge, and measured like any turn - its MinRadius is what route search gates on.
+					// Only at a TWO-arm node: a through road's width change inside a larger junction
+					// keeps the chord, and is not this ruling's.
+					// ENFORCED BY: Airside.Build.WidthTaper.Drivable, Airside.Build.WidthTaper.LanesContinuous
+					bool bTaperS = false;
+					FVector2D TaperMid = FVector2D::ZeroVector;
+					FVector2D TaperControlOut = FVector2D::ZeroVector;
+					if (ArmSegments->Num() == 2
+						&& RoadGeom::IsStraightThrough(RoadGeom::AngleBetween(
+							Network.GetOutgoingTangent(FromSeg, NodeId), Network.GetOutgoingTangent(ToSeg, NodeId))))
+					{
+						const FVector2D PA = Network.GetGuidelineNode(Turn.A)->Position;
+						const FVector2D PB = Network.GetGuidelineNode(Turn.B)->Position;
+						const FVector2D Travel = -Network.GetOutgoingTangent(FromSeg, NodeId).GetSafeNormal();
+						const double Along = FVector2D::DotProduct(PB - PA, Travel);
+						const double Across = FMath::Abs(FVector2D::CrossProduct(Travel, PB - PA));
+						if (Along > 1.0 && Across > 1.0)
+						{
+							const double Deflect = 2.0 * FMath::Atan2(Across, Along);
+							const double Run = Across / (2.0 * FMath::Sin(Deflect));
+							TaperMid = (PA + PB) * 0.5;
+							Turn.Control = PA + Travel * Run;
+							TaperControlOut = PB - Travel * Run;
+							bTaperS = true;
+						}
+					}
+
 					// A turn is usable only by what BOTH arms admit - the same reasoning
 					// already applied to MaxWingspan below, which this previously
 					// contradicted one line up. Where the two arms carry different classes
@@ -813,79 +851,100 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 						(FromLimit <= 0.0) ? ToLimit :
 						(ToLimit   <= 0.0) ? FromLimit :
 						FMath::Min(FromLimit, ToLimit);
-					// ENFORCED BY: Airside.Build.TurnClearance
-					MeasureTurn(Turn, Network.GetGuidelineNode(Turn.A)->Position,
-						Network.GetGuidelineNode(Turn.B)->Position, Pavement);
-					Turn.bDerived = true;
-					// DerivedFrom stays unset: a turn path belongs to the junction, not to
-					// either segment, and that is how the two are told apart.
-
-					// WHAT THIS CORNER ACTUALLY HANDS A DRIVER, measured on the curve that is
-					// about to be added rather than inferred from the fillet that shaped it.
-					// Those are not the same number and the gap between them is where three
-					// sessions went:
-					//
-					//   the profile asks for a fillet;
-					//   FRoadNetworkSolver::SolveNodeCuts SCALES IT DOWN to fit the arms,
-					//     which is bounded by how long the player drew the segment;
-					//   and the quadratic laid across the survivors is tighter again by
-					//     1/sqrt(2) at a right angle.
-					//
-					// So a fillet that clears a truck's steering lock on paper routinely does
-					// not clear it here, and NO PROFILE VALUE CAN FIX IT once the arms are
-					// short - raising the request only gives the solver more to scale away.
-					// Reported from play 2026-09-15 as a truck that crabbed a corner, missed
-					// the junction and reversed; the route log said R=120 uu where the vehicle
-					// needed 699.
-					//
-					// A WARNING AND NOT A REFUSAL - HERE. Since 2026-09-24 route search DOES refuse
-					// this corner to any vehicle whose lock it beats (VehicleFit): the edge is still
-					// laid, so the graph stays connected and other vehicles still use it, but the
-					// truck that crabbed through it before is now sent another way or told "no road
-					// wide enough". Deliberate - crabbing was the defect this warning was written for.
-					//
-					// (Original reasoning, still true of the edge itself:) The corner is still the best this junction
-					// can do, and refusing to lay it would leave the network disconnected -
-					// which is worse than a slow corner and much harder to diagnose. What the
-					// player can act on is the segment length, so that is what this names.
+					// THE S IS TWO PIECES meeting at a node of their own; everything below - the
+					// measure, the lock warning, the add - is done to each piece alike.
+					TArray<FGuidelineEdge, TInlineAllocator<2>> Pieces;
+					if (bTaperS)
 					{
-						// ISSUE #190: DesignVehicles is the caller's, resolved once for the whole
-						// rebuild - see this function's own comment - not re-resolved per ordered
-						// arm pair the way this warning used to.
+						const FGuidelineNodeId Mid = Network.AddGuidelineNode(TaperMid);
+						FGuidelineEdge Second = Turn;
+						Turn.B = Mid;
+						Second.A = Mid;
+						Second.Control = TaperControlOut;
+						Pieces.Add(Turn);
+						Pieces.Add(Second);
+						++Tapers;
+					}
+					else
+					{
+						Pieces.Add(Turn);
+					}
+					for (FGuidelineEdge& Piece : Pieces)
+					{
+						// ENFORCED BY: Airside.Build.TurnClearance
+						MeasureTurn(Piece, Network.GetGuidelineNode(Piece.A)->Position,
+							Network.GetGuidelineNode(Piece.B)->Position, Pavement);
+						Piece.bDerived = true;
+						// DerivedFrom stays unset: a turn path belongs to the junction, not to
+						// either segment, and that is how the two are told apart.
+
+						// WHAT THIS CORNER ACTUALLY HANDS A DRIVER, measured on the curve that is
+						// about to be added rather than inferred from the fillet that shaped it.
+						// Those are not the same number and the gap between them is where three
+						// sessions went:
 						//
-						// THE LESS DEMANDING OF THE TWO ARMS' DESIGN VEHICLES: the corner's fillet
-						// is the smaller of the arms' (FJunctionSolver), so a Wide road meeting a
-						// Narrow one is laid for the bowser, and warning there against the rig
-						// would name a shortfall nobody designed that corner to meet.
-						const FChassis& FromDesign = DesignVehicles.For(FromProfile);
-						const FChassis& ToDesign = DesignVehicles.For(ToProfile);
-						const FChassis& LargestServiceVehicle =
-							FromDesign.TightestFollowableRadius() <= ToDesign.TightestFollowableRadius() ? FromDesign : ToDesign;
-						const double Needed = LargestServiceVehicle.TightestFollowableRadius();
-						if (Needed > 0.0)
+						//   the profile asks for a fillet;
+						//   FRoadNetworkSolver::SolveNodeCuts SCALES IT DOWN to fit the arms,
+						//     which is bounded by how long the player drew the segment;
+						//   and the quadratic laid across the survivors is tighter again by
+						//     1/sqrt(2) at a right angle.
+						//
+						// So a fillet that clears a truck's steering lock on paper routinely does
+						// not clear it here, and NO PROFILE VALUE CAN FIX IT once the arms are
+						// short - raising the request only gives the solver more to scale away.
+						// Reported from play 2026-09-15 as a truck that crabbed a corner, missed
+						// the junction and reversed; the route log said R=120 uu where the vehicle
+						// needed 699.
+						//
+						// A WARNING AND NOT A REFUSAL - HERE. Since 2026-09-24 route search DOES refuse
+						// this corner to any vehicle whose lock it beats (VehicleFit): the edge is still
+						// laid, so the graph stays connected and other vehicles still use it, but the
+						// truck that crabbed through it before is now sent another way or told "no road
+						// wide enough". Deliberate - crabbing was the defect this warning was written for.
+						//
+						// (Original reasoning, still true of the edge itself:) The corner is still the best this junction
+						// can do, and refusing to lay it would leave the network disconnected -
+						// which is worse than a slow corner and much harder to diagnose. What the
+						// player can act on is the segment length, so that is what this names.
 						{
-							const double Delivered = GuidelineGeom::TightestRadius(
-								Network.GetGuidelineNode(Turn.A)->Position,
-								Turn.Control,
-								Network.GetGuidelineNode(Turn.B)->Position);
-							if (Delivered < Needed)
+							// ISSUE #190: DesignVehicles is the caller's, resolved once for the whole
+							// rebuild - see this function's own comment - not re-resolved per ordered
+							// arm pair the way this warning used to.
+							//
+							// THE LESS DEMANDING OF THE TWO ARMS' DESIGN VEHICLES: the corner's fillet
+							// is the smaller of the arms' (FJunctionSolver), so a Wide road meeting a
+							// Narrow one is laid for the bowser, and warning there against the rig
+							// would name a shortfall nobody designed that corner to meet.
+							const FChassis& FromDesign = DesignVehicles.For(FromProfile);
+							const FChassis& ToDesign = DesignVehicles.For(ToProfile);
+							const FChassis& LargestServiceVehicle =
+								FromDesign.TightestFollowableRadius() <= ToDesign.TightestFollowableRadius() ? FromDesign : ToDesign;
+							const double Needed = LargestServiceVehicle.TightestFollowableRadius();
+							if (Needed > 0.0)
 							{
-								UE_LOG(LogAirside, Warning,
-									TEXT("Junction at (%.0f,%.0f): turn path radius %.0f uu, but the "
-									     "largest service vehicle needs %.0f (wheelbase %.0f, lock "
-									     "%.0f deg). The arms are cut back %.0f uu; a right-angle "
-									     "corner needs about %.0f, so the segments meeting here are "
-									     "too short. Draw them longer."),
-									Node->Position.X, Node->Position.Y, Delivered, Needed,
-									LargestServiceVehicle.Wheelbase(), LargestServiceVehicle.Ground.MaxSteerDegrees,
-									FVector2D::Distance(
-										Network.GetGuidelineNode(Turn.A)->Position, Turn.Control),
-									Needed * UE_DOUBLE_SQRT_2);
+								const double Delivered = GuidelineGeom::TightestRadius(
+									Network.GetGuidelineNode(Piece.A)->Position,
+									Piece.Control,
+									Network.GetGuidelineNode(Piece.B)->Position);
+								if (Delivered < Needed)
+								{
+									UE_LOG(LogAirside, Warning,
+										TEXT("Junction at (%.0f,%.0f): turn path radius %.0f uu, but the "
+										     "largest service vehicle needs %.0f (wheelbase %.0f, lock "
+										     "%.0f deg). The arms are cut back %.0f uu; a right-angle "
+										     "corner needs about %.0f, so the segments meeting here are "
+										     "too short. Draw them longer."),
+										Node->Position.X, Node->Position.Y, Delivered, Needed,
+										LargestServiceVehicle.Wheelbase(), LargestServiceVehicle.Ground.MaxSteerDegrees,
+										FVector2D::Distance(
+											Network.GetGuidelineNode(Piece.A)->Position, Piece.Control),
+										Needed * UE_DOUBLE_SQRT_2);
+								}
 							}
 						}
-					}
 
-					Network.AddGuidelineEdge(MoveTemp(Turn));
+						Network.AddGuidelineEdge(MoveTemp(Piece));
+					}
 				}
 			}
 		}
@@ -1137,9 +1196,9 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		UE_LOG(LogAirside, Log,
 			TEXT("Guidelines: %d nodes (%d holding-position), %d edges (%d hand-authored, %d turn paths), "
 				 "%d holding-position mark(s) on file, %d arm end(s) with no through path for their class, "
-				 "%d dead-end U-turn(s), drive %s"),
+				 "%d dead-end U-turn(s), %d width-taper S lane(s), drive %s"),
 			NodesAlive, HoldingPosition, EdgesAlive, Authored, TurnPaths,
-			Network.GetHoldingPositionMarks().Num(), DeadEnds, Balloons,
+			Network.GetHoldingPositionMarks().Num(), DeadEnds, Balloons, Tapers,
 			Network.GetDriveSide() == EDriveSide::Left ? TEXT("left") : TEXT("right"));
 	}
 }

@@ -835,17 +835,17 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 		TestTrue(FString::Printf(TEXT("%s: one route extension per loop boundary (%d extension(s), %d loop(s) done)"), Names[V], Runner.Extensions, Runner.LoopsCompleted),
 			Runner.Extensions >= Runner.LoopsCompleted && Runner.Extensions <= Runner.LoopsCompleted + 1);
 		TestEqual(FString::Printf(TEXT("%s: never restarted from rest"), Names[V]), Runner.Redirects, 0);
-		// SHARP JOINS ONLY AT THE WIDTH STEP: the known builder defect's lane-offset jog starts at
-		// the step node's lane end, which is where two legs are welded, so it shows at that join
-		// as well as inside the width-step leg (measured 90 deg, 2026-09-25). Anywhere else a
-		// sharp join is the route being rougher than its legs.
+		// NO SHARP JOIN ANYWHERE. Until 2026-09-25 the width step's lane-offset jog started at the
+		// step node's lane end, where two legs are welded, and showed at that join (90 deg). The
+		// builder now tapers the width on an S (Airside.Build.WidthTaper.*), so a sharp join
+		// anywhere is the route being rougher than its legs.
 		TArray<FString> Where;
 		for (const int32 IntoLeg : Runner.SharpJoinLegs)
 		{
 			Where.Add(FString::FromInt(IntoLeg));
-			TestTrue(FString::Printf(TEXT("%s: a sharp vertex at the join into leg %d is the width step's jog (legs %d-%d), not a new kink"),
-				Names[V], IntoLeg, WidthStepLeg - 1, WidthStepLeg + 1), FMath::Abs(IntoLeg - WidthStepLeg) <= 1);
 		}
+		TestEqual(FString::Printf(TEXT("%s: no sharp vertex at any join - the width step included (joins into legs: %s)"), Names[V],
+			Where.Num() > 0 ? *FString::Join(Where, TEXT(", ")) : TEXT("none")), Runner.SharpJoinLegs.Num(), 0);
 		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s sharp joins into legs: %s"), Names[V],
 			Where.Num() > 0 ? *FString::Join(Where, TEXT(", ")) : TEXT("none"));
 	}
@@ -886,10 +886,10 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 
 	for (int32 V = 0; V < Vehicles.Num(); ++V)
 	{
-		// THE JOG IS IN THE LEG THAT LEAVES THE STEP NODE. Forwards that is WidthStepLeg itself;
-		// in reverse the runner arrives at the step node BEFORE the jog, and the leg leaving it is
+		// THE TAPER IS IN THE LEG THAT LEAVES THE STEP NODE. Forwards that is WidthStepLeg itself;
+		// in reverse the runner arrives at the step node BEFORE the taper, and the leg leaving it is
 		// the node pair of the forward leg one earlier - a reversed leg turns at its other end.
-		const int32 JogLeg = V == 0 ? WidthStepLeg : (WidthStepLeg + Legs - 1) % Legs;
+		const int32 TaperLeg = V == 0 ? WidthStepLeg : (WidthStepLeg + Legs - 1) % Legs;
 		const TArray<FRigLegResult>& Results = Course->LastLoopResultsForTest(V);
 		if (!TestEqual(TEXT("a result per leg"), Results.Num(), Legs)) { return false; }
 		int32 Refusals = 0;
@@ -922,25 +922,29 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 				TestTrue(FString::Printf(TEXT("%s: and its fixed axle was a wheelbase behind the lane end, less the overshoot (%.1f vs %.1f uu)"),
 					*What, Behind, Wheelbase + R.DistanceLeft), FMath::Abs(Behind - (Wheelbase + R.DistanceLeft)) < 20.0);
 
-				// THE WIDTH-STEP DEFECT, PINNED (controller ruling 5): FSpeedProfile reports a
-				// sharp vertex on the one leg that crosses a mid-straight width change, and on no
-				// other - in either direction. When the builder blends the lane offset this goes
-				// red, on purpose.
-				if (L == JogLeg)
+				// THE WIDTH STEP, FLIPPED (was pinned by controller ruling 5 as the builder defect:
+				// a 90 degree jog FSpeedProfile crawled; this line asserted it was there). The
+				// builder tapers it on an S since 2026-09-25, so NO leg has a sharp vertex, the
+				// width-step leg included, in either direction.
+				TestEqual(What + (L == TaperLeg ? TEXT(": the width step tapers on an S - no sharp vertex") : TEXT(" has no sharp vertex")),
+					R.SharpVertexCount, 0);
+				// AND NEITHER VEHICLE CRAWLS THROUGH IT. The two legs either side of the step node
+				// (one ends at it, one leaves it) were passed at 39-44 uu/s on the jog - steering
+				// speed; on the S they pass at road speed. A quarter of the cap is far below any
+				// healthy pass on this course and far above a crawl.
+				if (L == WidthStepLeg || L == (WidthStepLeg + Legs - 1) % Legs)
 				{
-					TestTrue(What + TEXT(": the width step's jog is a sharp vertex FSpeedProfile crawls (known builder defect)"),
-						R.SharpVertexCount > 0);
-				}
-				else
-				{
-					TestEqual(What + TEXT(" has no sharp vertex - only the width step does"), R.SharpVertexCount, 0);
+					const double Cap = Vehicles[V].Chassis.Ground.Taxi.SpeedCap;
+					UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s passed at %.0f uu/s after %.1f s"), *What, R.PassSpeed, R.Elapsed);
+					TestTrue(FString::Printf(TEXT("%s: passed at road speed, not a crawl (%.0f uu/s, floor %.0f)"), *What, R.PassSpeed, 0.25 * Cap),
+						R.PassSpeed >= 0.25 * Cap);
 				}
 			}
 			Refusals += R.Outcome == ERigLegOutcome::Refused ? 1 : 0;
 		}
-		// The width step's own expected outcome: DRIVEN, crawling, within the 3x allowance.
-		TestEqual(FString::Printf(TEXT("%s drives the Narrow->Wide mid-straight step (crawling, not timed out)"), Names[V]),
-			static_cast<int32>(Results[JogLeg].Outcome), static_cast<int32>(ERigLegOutcome::Driven));
+		// The width step's own expected outcome: DRIVEN, on the S, within the 3x allowance.
+		TestEqual(FString::Printf(TEXT("%s drives the Narrow->Wide mid-straight step"), Names[V]),
+			static_cast<int32>(Results[TaperLeg].Outcome), static_cast<int32>(ERigLegOutcome::Driven));
 		// ONCE PER LOOP: counted in the loop these results are from, by the loop number in the line.
 		const int32 Loop = Course->LoopsCompletedForTest(V);
 		TestEqual(FString::Printf(TEXT("%s: each refusal was logged once in loop %d"), Names[V], Loop),
@@ -1055,7 +1059,7 @@ bool FRigCourseWaypointsAreNotStopsTest::RunTest(const FString& Parameters)
 				Pass.Speed <= Governing + Tolerance);
 			if (!Pass.bHeld)
 			{
-				// The LOWER of the two limits: just past a crawl (the jog's vertex) the limit a tick
+				// The LOWER of the two limits: just past a crawl (a slow corner's apex) the limit a tick
 				// ahead is already rising and no vehicle has that acceleration in one tick.
 				const double Expected = FMath::Min3(Pass.Limit, Pass.LimitBehind, Pass.Reach);
 				TestTrue(FString::Printf(TEXT("%s at %s: at the profile's speed (%.0f vs %.0f uu/s: limit %.0f, forward pass %.0f)"),
