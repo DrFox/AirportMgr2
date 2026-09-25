@@ -477,6 +477,35 @@ def drop_reimport_pipeline(path):
         unreal.EditorAssetLibrary.delete_asset(path)
 
 
+def save_mesh_and_skeleton(mesh_path):
+    """Saves a reimported skeletal mesh AND the Skeleton asset it points at. True when both saved.
+
+    THE SKELETON IS A SEPARATE PACKAGE, and reimport_pipeline's update_skeleton_reference_pose
+    writes to it - a new bone ADDS to it. Saving only the mesh left SK_Utility1_Skeleton on disk
+    without the 'hitch' bone reimport_utility1.py had just added (2026-09-25): the next editor
+    session merged the bone back in from the mesh on load, marked the Skeleton dirty and asked
+    the user to save it, and anything reading the .uasset saw the old tree. Every reimport_*.py
+    that uses reimport_pipeline and saved only MESH had this gap.
+    ENFORCED BY: AirportMgr.Content.SkeletonHoldsEveryMeshBone (every mesh bone is in the saved
+    Skeleton's reference skeleton, for the towing fleet's meshes)
+
+    Forced (only_if_is_dirty=False) for the reason save_everything gives.
+    """
+    ok = unreal.EditorAssetLibrary.save_asset(mesh_path, only_if_is_dirty=False)
+    mesh = unreal.EditorAssetLibrary.load_asset(mesh_path)
+    skeleton = mesh.get_editor_property("skeleton") if mesh is not None else None
+    if skeleton is None:
+        fail("%s has no skeleton to save" % mesh_path)
+        return False
+    skeleton_path = skeleton.get_path_name().split(".")[0]
+    if unreal.EditorAssetLibrary.save_asset(skeleton_path, only_if_is_dirty=False):
+        say("saved %s and its skeleton %s" % (mesh_path.split("/")[-1], skeleton_path.split("/")[-1]))
+    else:
+        fail("could not save %s's skeleton %s" % (mesh_path, skeleton_path))
+        ok = False
+    return ok
+
+
 def import_mesh(spec, pipeline_path):
     if not os.path.isfile(spec.source):
         fail("missing %s" % spec.source)
