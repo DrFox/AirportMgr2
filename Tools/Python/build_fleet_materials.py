@@ -75,7 +75,7 @@ import sys
 # rebuild_fleet_materials() exec's this file, because that exec passes one in.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from airside_import import FLEET, MERGE_TOL, PRETTY  # noqa: E402
+from airside_import import FLEET, MERGE_TOL, PRETTY, fleet_glb  # noqa: E402
 
 import unreal
 
@@ -119,7 +119,7 @@ def fail(msg):
 
 
 def glb_path(asset):
-    return os.path.join(MODELS, asset, "export", "%s.glb" % asset)
+    return fleet_glb(MODELS, asset)
 
 
 def gltf_materials(path):

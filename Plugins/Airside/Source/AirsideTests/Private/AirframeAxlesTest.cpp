@@ -172,6 +172,9 @@ static const TCHAR* const MeasuredTypes[] = {
 	// precisely so that LeftMainWheel below finds wheel_L1 the way it finds plane6's; the
 	// models repo names the MESHES by unit and the BONES by the game's rule, and says so.
 	TEXT("/Game/Entities/DA_Aircraft_Plane8"),
+	// THE A320 IS THE ROW THAT BINDS CODE C'S NOSE. Its 508.4 uu nose overhang is what
+	// MaxNoseFwd is sized from, so this row is the one that goes red if a re-export grows it.
+	TEXT("/Game/Entities/DA_Aircraft_Plane9"),
 };
 
 /**
@@ -417,6 +420,8 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		  TEXT("a 575 t A380 is the end of the progression - nothing heavier flies - and the "
 			   "row exists for the reason plane6's does: authored VehicleTug and default "
 			   "VehicleTug read the same, so only the table can tell them apart") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane9"), EPushbackNeed::VehicleTug,
+		  TEXT("the modelled A320 needs the tug its paper twin does - the two rows must agree") },
 		{ TEXT("/Game/Entities/DA_Aircraft_A320"),   EPushbackNeed::VehicleTug,
 		  TEXT("an A320 is what forces the Pushback depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_B738"),   EPushbackNeed::VehicleTug,

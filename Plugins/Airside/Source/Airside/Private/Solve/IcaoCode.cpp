@@ -70,7 +70,8 @@ namespace IcaoCode
 			 *
 			 * NOT NECESSARILY THE SAME AEROPLANE AS MaxTailAft, and Code C is the case that
 			 * proves it: the longest type is the 737-800, whose nose reaches only 409 forward
-			 * of its gear, while the A320 is shorter overall and reaches 507. A stand sized
+			 * of its gear, while the A320 is shorter overall and reaches 509 (measured off
+			 * DA_Aircraft_Plane9; the brochure says 507). A stand sized
 			 * from one aeroplane's pair would leave the other's nose outside the cleared area,
 			 * which is the same defect MaxTailAftForLetter's header describes from the other
 			 * end. So this is a MAXIMUM over the admitted types, not a second field of one
@@ -120,7 +121,12 @@ namespace IcaoCode
 		static const FRow Rows[] = {
 			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0,  1000.0,  300.0,   -50.0,  -700.0, 600.0 },
 			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0,  400.0,  -300.0, -1400.0, 600.0 },
-			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3538.0,  507.0,  -950.0, -2150.0, 600.0 },
+			// MaxNoseFwd 509 SINCE 2026-09-25, UP FROM 507, FOR plane9. The paper A320 (BuildA320)
+			// types the brochure's 5.07 m; DA_Aircraft_Plane9, traced off Airbus's own 3-view,
+			// measures 508.4 uu - 1.4 cm longer, which is the drawing's and left as it is, the
+			// same "built to the letter" call plane6 forced on Code E. Both still fit.
+			// Tools/Python/build_plane9_type.py checks the measurement against this every run.
+			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3538.0,  509.0,  -950.0, -2150.0, 600.0 },
 			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0, -1300.0, -3000.0, 600.0 },
 			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6800.0,  800.0, -1600.0, -3700.0, 600.0 },
 			// CODE F HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-23, and no figure moved.

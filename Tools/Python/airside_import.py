@@ -62,6 +62,7 @@ FLEET = {
     "plane6":     ("plane6",     "/Game/Aircraft/Plane6/SK_Plane6"),
     "plane7":     ("plane7",     "/Game/Aircraft/Plane7/SK_Plane7"),
     "plane8":     ("plane8",     "/Game/Aircraft/Plane8/SK_Plane8"),
+    "plane9":     ("plane9",     "/Game/Aircraft/Plane9/SK_Plane9"),
     "fueltruck1": ("fueltruck1", "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"),
     "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
     "tug1":       ("tug1",       "/Game/Vehicles/Tug1/SK_Tug1"),
@@ -71,8 +72,21 @@ FLEET = {
 # Asset folder name -> the name Content uses, for instance naming only.
 PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
           "plane5": "Plane5", "plane6": "Plane6", "plane7": "Plane7",
-          "plane8": "Plane8",
+          "plane8": "Plane8", "plane9": "Plane9",
           "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1"}
+
+# EXPORTS THAT DO NOT LIVE IN THEIR OWN KEY'S FOLDER. fueltruck1 has been built inside
+# rigidCab1/rigidCab1.blend since 2026-09-24 (fueltruck1/export/MOVED.md) and exports to
+# rigidCab1/export/. Until 2026-09-25 both fleet scripts rebuilt <key>/export/<key>.glb by
+# hand, so the move made the rebuild skip the truck, and with it gone the shared looks
+# re-clustered: MI_Livery_Plane1 was renamed MI_Livery and every mesh was resaved.
+EXPORT_FOLDER = {"fueltruck1": "rigidCab1"}
+
+
+def fleet_glb(models_root, key):
+    """The .glb a FLEET key is scraped from - the one path both fleet scripts read."""
+    folder = EXPORT_FOLDER.get(key, key)
+    return os.path.join(models_root, folder, "export", "%s.glb" % FLEET[key][0])
 
 # Below this two looks are the same colour written twice. The verifier may not check tighter
 # than the builder merges, or every merged look fails.

@@ -35,7 +35,7 @@ import sys
 # for the full note.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from airside_import import FLEET, MERGE_TOL  # noqa: E402
+from airside_import import FLEET, MERGE_TOL, fleet_glb  # noqa: E402
 
 import unreal
 
@@ -67,7 +67,7 @@ def fail(msg):
 
 
 def gltf_materials(asset):
-    path = os.path.join(MODELS, asset, "export", "%s.glb" % asset)
+    path = fleet_glb(MODELS, asset)
     out = {}
     with open(path, "rb") as handle:
         handle.read(12)
