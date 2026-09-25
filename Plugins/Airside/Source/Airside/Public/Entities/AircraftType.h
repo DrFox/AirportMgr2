@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "Model/Airframe.h"
 #include "Model/RoadEntity.h"
 #include "AircraftType.generated.h"
 

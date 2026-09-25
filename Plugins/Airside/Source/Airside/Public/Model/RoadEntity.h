@@ -6,14 +6,14 @@
 // rate or a wheel radius recompiled every one of the ~40 files that only wanted to know what
 // EServiceRole an anchor was.
 //
-// BOTH OF THE OTHER TWO ARE STILL INCLUDED HERE, so every existing includer of this one
-// header keeps compiling unchanged. Only the handful that need just one of the three -
-// RouteFollower, SpeedProfile, ArrivalPlanner, the *Run.h files, the view and anim classes -
-// now name the narrow header directly; see those headers for the split.
+// 2026-09-25 (#300): the #176 split left both of the other two included HERE ANYWAY, "so
+// every existing includer keeps compiling unchanged" - which silently put every includer
+// back on the airframe/motion rebuild list #176 was written to get them off. Dropped both;
+// this header names neither FAirframe nor FAgentMotion, so nothing here required them.
+// Every file that used one directly now includes its own header (see git blame on this
+// line for the list). Check-Architecture rule 13 fails the build if either returns.
 
 #include "CoreMinimal.h"
-#include "Model/AgentMotion.h"
-#include "Model/Airframe.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
 #include "RoadEntity.generated.h"

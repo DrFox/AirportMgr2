@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/Airframe.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadHandles.h"
 #include "UObject/Object.h"

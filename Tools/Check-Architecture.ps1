@@ -900,6 +900,24 @@ foreach ($module in $modules) {
 }
 $ranRules.Add('no-acos')
 
+# --- 19. RoadEntity.h must not include Airframe.h or AgentMotion.h -------------------------
+# Issue #300, a regression of #176: the split (#176) moved the airframe physics bundle and
+# FAgentMotion out of RoadEntity.h into their own headers, but left both #included from
+# RoadEntity.h anyway "so every existing includer keeps compiling unchanged" - which quietly
+# put every one of RoadEntity.h's ~40+ includers back on the airframe/motion rebuild list the
+# split existed to remove them from. RoadEntity.h names neither FAirframe nor FAgentMotion, so
+# nothing in it needs either header; a file that DOES name one includes it directly (or
+# forward-declares it where a pointer/reference suffices). This is a single-file check, not
+# the general include-direction table in rule 1, because the two headers are siblings within
+# Model/ and no directory boundary would catch this shape.
+$roadEntityHeader = Join-Path $Root 'Plugins\Airside\Source\Airside\Public\Model\RoadEntity.h'
+if (Test-Path $roadEntityHeader) {
+    foreach ($h in (Select-String -Path $roadEntityHeader -Pattern '#include\s+"Model/(Airframe|AgentMotion)\.h"')) {
+        $failures.Add("roadentity-no-airframe-motion: $($roadEntityHeader):$($h.LineNumber) RoadEntity.h must not include Airframe.h or AgentMotion.h (#300): $($h.Line.Trim())")
+    }
+}
+$ranRules.Add('roadentity-no-airframe-motion')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

@@ -1,6 +1,7 @@
 #include "Model/PushbackPlanner.h"
 
 #include "AirsideLog.h"
+#include "Model/Airframe.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"

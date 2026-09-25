@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Model/Airframe.h"
 #include "Model/Pricing.h"
 #include "Model/RoadEntity.h"
 

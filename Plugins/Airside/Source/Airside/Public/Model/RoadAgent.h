@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/AgentMotion.h"
+#include "Model/Airframe.h"
 #include "Model/LandingRun.h"
 #include "Model/PushbackRun.h"
 #include "Model/ReverseRun.h"
