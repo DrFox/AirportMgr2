@@ -67,6 +67,7 @@ FLEET = {
     "plane11":    ("plane11",    "/Game/Aircraft/Plane11/SK_Plane11"),
     "plane12":    ("plane12",    "/Game/Aircraft/Plane12/SK_Plane12"),
     "plane13":    ("plane13",    "/Game/Aircraft/Plane13/SK_Plane13"),
+    "plane14":    ("plane14",    "/Game/Aircraft/Plane14/SK_Plane14"),
     "fueltruck1": ("fueltruck1", "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"),
     "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
     "tug1":       ("tug1",       "/Game/Vehicles/Tug1/SK_Tug1"),
@@ -81,6 +82,7 @@ PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": 
           "plane5": "Plane5", "plane6": "Plane6", "plane7": "Plane7",
           "plane8": "Plane8", "plane9": "Plane9", "plane10": "Plane10",
           "plane11": "Plane11", "plane12": "Plane12", "plane13": "Plane13",
+          "plane14": "Plane14",
           "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1",
           "catering1": "Catering1", "baggageCart1": "BaggageCart1",
           "curtainTrailer1": "CurtainTrailer1"}

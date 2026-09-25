@@ -118,6 +118,13 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane11.DA_Aircraft_Plane11"), TEXT("plane11"), 312000.0,
 		  TEXT("an A350-1000 that needed as much runway as a 777-300ER would erase the one "
 			   "field difference between the two Code E twins") },
+		// plane14 CARRIES NO CEILING, plane3's case. The one comparison its character offers is
+		// the King Air beside it on Code B (1,006 m) - and the Phenom's 1,000 would clear that by
+		// six metres, a claim no tuning pass could be told apart from noise. What sets the jet
+		// apart is tarmac under Code C's runways, and this struct has no column for that. The
+		// roll-against-published check below is real.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane14.DA_Aircraft_Plane14"), TEXT("plane14"), 0.0,
+		  nullptr },
 		// plane13's CEILING IS THE A350-1000's PUBLISHED TAKE-OFF LENGTH, the first ceiling that
 		// measures a type against the LETTER ABOVE it. The 757-300 is the only Code D rung on
 		// the ladder; if it asked as much runway as the lighter Code E twin, a field could go

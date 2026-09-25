@@ -407,6 +407,23 @@ SPECS = [
              "two fans; the nose leg folds FORWARD, as the real one does.",
     ),
     Spec(
+        key="plane14",
+        source=MODELS + r"\plane14\export\plane14.glb",
+        mesh_dir="/Game/Aircraft/Plane14",
+        skel_name="SK_Plane14",
+        # plane9's NAMES AND SHAPE: one wheel_L / wheel_R mesh and bone a side, retracting.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, the contact patch - plane14/scripts/build_export.py's origin, s 1.779.
+        origin_on="front",
+        note="Embraer Phenom 300 (PW535E), the first business jet. 15.64 m long, 15.91 m "
+             "span, 4.90 m to the fin bullet against Embraer's 15.64 / 15.91 / 5.10 - Code B, "
+             "0.91 m over Code A. Origin on the NOSE gear. Twelve joints: retracting gear "
+             "(mains inboard, nose forward), clamshell nose doors, two 20-blade fans.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",

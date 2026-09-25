@@ -87,6 +87,12 @@ NEEDS = {
         "a 124 t 757-300 needs the tug the 737 below it and the A350 above it both do - "
         "authored rather than left to the class default for the Plane6 row's reason",
     ),
+    "/Game/Entities/DA_Aircraft_Plane14": (
+        unreal.PushbackNeed.VEHICLE_TUG,
+        "a Phenom 300 has no thrust reversers, so it cannot back off a stand on its own the way "
+        "the turboprops' reverse pitch lets them - it is towed, and the first jet a small field "
+        "takes is also what first asks it for a tug",
+    ),
     "/Game/Entities/DA_Aircraft_Plane8": (
         unreal.PushbackNeed.VEHICLE_TUG,
         "a 575 t A380 is the end of the progression - nothing heavier flies - and it is "
