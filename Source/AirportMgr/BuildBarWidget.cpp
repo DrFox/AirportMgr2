@@ -159,6 +159,20 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		SectionRow = WidgetTree->ConstructWidget<UWrapBox>(UWrapBox::StaticClass(), TEXT("ToolsRow"));
 		ToolsBorder->SetContent(SectionRow);
 
+		// THE POPOUT, UNDER THE TOOLS it belongs to, on the tools' own surface colour so it
+		// reads as their second line rather than a third bar. A vertical box: one line per axis,
+		// and a runway has three. Starts collapsed - RefreshVariantsFor shows it over a tool
+		// with choices - so a bar over the select tool is the height it always was.
+		UBorder* VariantBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("VariantBorder"));
+		VariantBorder->SetBrushColor(Style->Panel);
+		VariantBorder->SetPadding(FMargin(Style->SectionPadding, 0.0f, Style->SectionPadding, 6.0f));
+		Rows->AddChildToVerticalBox(VariantBorder);
+		if (VariantSection == nullptr)
+		{
+			VariantSection = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("VariantSection"));
+		}
+		VariantBorder->SetContent(VariantSection);
+
 		UE_LOG(LogBuildBar, Log, TEXT("No bar asset: building the code-only bar, %.0f uu tall"), Height);
 	}
 
@@ -250,6 +264,20 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 	{
 		Ensure(this->*Spec.Slot, *FString::Printf(TEXT("%sSection"), ActionSectionName(Spec.Section)), Spec.Section);
 	}
+
+	// AN ASSET WITHOUT THE POPOUT gets one appended to its root, and a warning naming it - the
+	// same answer Ensure gives a missing section, for the same reason: a designer's bar that
+	// silently lost the width row would be the log-line-only feedback this row replaced.
+	if (VariantSection == nullptr)
+	{
+		VariantSection = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("VariantSection"));
+		if (UPanelWidget* Root = Cast<UPanelWidget>(WidgetTree->RootWidget))
+		{
+			Root->AddChild(VariantSection);
+		}
+		UE_LOG(LogBuildBar, Warning, TEXT("Bar asset has no VariantSection; appended a plain one to the root"));
+	}
+	VariantSection->SetVisibility(ESlateVisibility::Collapsed);
 
 	if (ClockText == nullptr)
 	{
@@ -456,6 +484,9 @@ void UBuildBarWidget::RefreshStateFor(ARoadBuildController& C)
 		}
 	}
 
+	// THE POPOUT RIDES THE SAME TICK, and after the entries, because it answers the question
+	// they have just lit: which tool is live, and so which choices belong under it.
+	RefreshVariantsFor(C);
 }
 
 void UBuildBarWidget::RefreshClock()

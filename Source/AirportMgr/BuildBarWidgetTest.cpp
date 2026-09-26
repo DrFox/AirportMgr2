@@ -3,6 +3,9 @@
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
 #include "Misc/AutomationTest.h"
+#include "Model/RunwayFacts.h"
+#include "Present/RoadNetworkActor.h"
+#include "Tool/BuildSession.h"
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestWorld.h"
 #include "UIStyle.h"
@@ -227,6 +230,88 @@ bool FBarTickBuildsOneActionContextTest::RunTest(const FString& Parameters)
 		"IsEnabled and IsActive together"),
 		After - Before, 1);
 
+	return true;
+}
+
+namespace
+{
+	/** Registry index of the tool with this Id, or INDEX_NONE. VarRow prefix: unity build. */
+	int32 VarRowToolIndex(const TCHAR* Id)
+	{
+		for (int32 Index = 0; Index < ToolRegistry().Num(); ++Index)
+		{
+			if (ToolRegistry()[Index].Id == FName(Id)) { return Index; }
+		}
+		return INDEX_NONE;
+	}
+}
+
+/**
+ * THE VARIANT ROW FOLLOWS THE LIT TOOL - hidden over a tool with no choices, one button per
+ * option over one with them, rebuilt when the tool changes, and a click lands on the tool.
+ *
+ * AT THE COMPOSITION: a real controller and the bar's own refresh, so an unwired forwarder
+ * (controller -> session -> tool) or a row that never rebuilds reads red here even with every
+ * Airside.Tool.Variants test green. RefreshStateForTest for RefreshStateFor's own reason (#309).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVariantRowFollowsToolTest,
+	"AirportMgr.Actions.VariantRowFollowsTool",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVariantRowFollowsToolTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(TestWorld.Actor);
+	C->InitInputSystem();
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
+
+	const int32 Taxiways = TestWorld.Actor->GetWidthCount(ERoadKind::Taxiway);
+	const int32 Roads = TestWorld.Actor->GetWidthCount(ERoadKind::ServiceRoad);
+	if (!TestTrue(TEXT("the content set has taxiway and road widths, of different counts - or the "
+		"rebuild below proves nothing"), Taxiways > 1 && Roads > 1 && Taxiways != Roads))
+	{
+		return false;
+	}
+
+	C->SelectTool(VarRowToolIndex(TEXT("Select")));
+	Bar->RefreshStateForTest(*C);
+	TestFalse(TEXT("over the select tool the row is hidden"), Bar->IsVariantSectionVisibleForTest());
+	TestEqual(TEXT("and holds no buttons"), Bar->VariantButtonCountForTest(), 0);
+
+	C->SelectTool(VarRowToolIndex(TEXT("Taxiway")));
+	Bar->RefreshStateForTest(*C);
+	TestTrue(TEXT("over the taxiway tool the row shows"), Bar->IsVariantSectionVisibleForTest());
+	TestEqual(TEXT("one button per taxiway width"), Bar->VariantButtonCountForTest(), Taxiways);
+
+	C->SelectTool(VarRowToolIndex(TEXT("Road")));
+	Bar->RefreshStateForTest(*C);
+	TestEqual(TEXT("switching to the road tool REBUILDS the row to the road's widths"),
+		Bar->VariantButtonCountForTest(), Roads);
+
+	C->SelectTool(VarRowToolIndex(TEXT("Runway")));
+	Bar->RefreshStateForTest(*C);
+	TestEqual(TEXT("the runway gets a row each for width, surface and approach"),
+		Bar->VariantButtonCountForTest(),
+		TestWorld.Actor->GetRunwayProfileCount() + static_cast<int32>(ERunwaySurface::Count)
+			+ static_cast<int32>(ERunwayApproach::Count));
+
+	// A CLICK LANDS ON THE TOOL - through the bar, the controller and the session.
+	C->SelectTool(VarRowToolIndex(TEXT("Taxiway")));
+	Bar->RefreshStateForTest(*C);
+	// NOT WHAT IS ALREADY LIT: the level's default may light a preset, and picking that one
+	// would pass with the click going nowhere.
+	TArray<FToolVariantAxis> Axes;
+	C->GetActiveVariantAxes(Axes);
+	if (!TestEqual(TEXT("the taxiway has one row"), Axes.Num(), 1)) { return false; }
+	const int32 Pick = Axes[0].Current == 1 ? 2 : 1;
+	Bar->RunVariantFor(*C, 0, Pick);
+	C->GetActiveVariantAxes(Axes);
+	TestEqual(TEXT("the clicked width is now what is lit"), Axes[0].Current, Pick);
 	return true;
 }
 
