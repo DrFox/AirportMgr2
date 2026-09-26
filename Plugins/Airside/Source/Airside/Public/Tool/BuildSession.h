@@ -164,13 +164,27 @@ AIRSIDE_API TConstArrayView<FToolRegistration> ToolRegistry();
  * exception list this table exists to avoid. Folding a working pair in to match a broken trio
  * would be churn with no bug behind it.
  *
- * GUIDELINES IS ALSO NOT HERE, for a different reason: `RoadBuildEditorTool.cpp`'s
- * `DrawPersistentState` already ruled the editor viewport's guideline overlay ALWAYS ON, no
- * toggle - "a visibility change is not the place to take that on" - and PIE's own bDrawGuidelines
- * lives on ARoadBuildController as a UPROPERTY(EditAnywhere) designer default, not session state
- * a keypress flips the way EGestureMode does. Reaching it from FBuildSession would mean moving a
- * level-authorable knob into shared runtime state to make one table shape uniform, which is a
- * separate, larger change this issue's evidence never established a defect for.
+ * GUIDELINES IS ALSO NOT HERE, and NOT because PIE lacks a keypress for it the way Build/Cancel
+ * do - it has one: `bShowGuidelines` (ARoadBuildController.h, "Toggled by G"), flipped by
+ * `OnToggleGuidelines()`, bound to G as BuildActions.cpp's `aircraft.guidelines`. The reason it
+ * cannot join THIS table is where that flag LIVES: `bShowGuidelines` is a
+ * `UPROPERTY(EditAnywhere)` field on `ARoadBuildController`, a class in the AirportMgr GAME
+ * module - not on FBuildSession, which lives in Airside, the plugin `BuildVerbRegistry()` itself
+ * lives in specifically so both drivers can read it without either depending on the other's
+ * module (Airside must never depend on AirportMgr). An `Apply(FBuildSession&, ...)` entry has
+ * nothing to flip for this verb: the flag it would need to reach is not reachable from here,
+ * unlike Remove/Insert/Edit's EGestureMode, which the mode was moved ONTO the session for
+ * exactly this reason (see EGestureMode's own header comment).
+ *
+ * ALSO UNLIKE THE OTHER THREE, the editor's own guideline overlay
+ * (`RoadBuildEditorTool.cpp`'s `DrawPersistentState`) already has a deliberate, standing ruling
+ * against a toggle - "a visibility change is not the place to take that on" - drawn ALWAYS ON.
+ * So even a reachable flag would have nothing in the editor to drive; reaching it would mean
+ * EITHER moving `bShowGuidelines` onto FBuildSession the way EGestureMode was moved (a real
+ * option, but a separate change this issue's evidence never established a defect for and which
+ * would also mean reopening DrawPersistentState's own ruling) OR generalising this table's
+ * `Apply` beyond FBuildSession, which would blur the one property (both drivers, no cross-module
+ * dependency) that makes it safe to share at all.
  */
 struct FBuildVerbRegistration
 {
