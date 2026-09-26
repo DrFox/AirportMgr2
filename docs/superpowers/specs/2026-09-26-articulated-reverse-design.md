@@ -169,3 +169,32 @@ reverse's error figures.
 - Controller gains and look-ahead are found in the ArcTracked test, then fixed with the date.
 - Whether the utility's unmeasured 45 degree lock makes its 90 degree bay tighter than it
   really is (step 1 already flags the lock as unmeasured).
+
+## Implementation notes (2026-09-26, found while building)
+
+- **Mid-route reverse legs never armed.** `NextReverseLegRun` arms only while the steered axle is
+  AT the leg's start, and a follower crawling through the cusp stepped past it. Every reverse in
+  play before began its own route at 0. `FRoadAgent::FollowAndTow` now caps its allowance at the
+  next reverse leg's start (same input as arbitration).
+- **Start line error.** A tow that pulled past a corner stops with its trailer still settling (the
+  rig 30 uu off after a 50 m pull-past). `TowReverse` accepts up to `MaxStartLineError` (100 uu) at
+  the start and then `MaxLineError` (30) beyond where it started - reversing is non-minimum-phase.
+- **End pose: cab straight too.** The hitch reference eases to zero over the last look-ahead, so the
+  tow comes to rest in line (the rig held 2 deg of hitch to take out 3 uu otherwise).
+- **Bays must hold the whole vehicle.** The builder refuses a bay whose run from its junction lane end
+  to its end is under the design vehicle's chain + 200 uu (Wide corners take ~19 m of each arm); a
+  25 m bay left the rig's cab on the junction's turn path.
+- **Pull-past failure keeps the record** (not laid, logged) - an edit may lengthen the arm. Only a
+  dead node/arm drops it.
+- **`RedirectAgent` seats a tow's cab from its SHOWN pose** (`LastMotion`), projecting its steered axle
+  onto the new plan when it is not at the start - after a reverse the follower is stale.
+- **No tarmac check on the reverse itself:** no reverse edge measures per-sample clearances.
+- **Colours:** `FRoutePlan::DescribeRuns` / `UGroundTraffic::RemainingRouteRuns` (named runs, not
+  spans). The HUD looks test now counts `EPreviewStyle` by reflection, replacing the planned
+  `EveryPreviewStyleIsDrawn`.
+- **Yard layout** changed from section 4's outline: straight-bay stub 45 m, 40 m bays, spur 50 m below
+  NE (at 20 m the junctions squeezed the turns to 5.1 m, under the rig's 5.8 m lock), hammer stub
+  north. Legs to the straight bay route via the ring's start (the four dead-end balloons otherwise
+  exhaust the tow retries). Drawing: `docs/superpowers/plans/2026-09-26-rig-yard.png`.
+- **Open:** reverse edges carry no route-cost penalty (the yard is an island, so nothing detours
+  through a bay yet). The utility's lock is still unmeasured (45 deg).
