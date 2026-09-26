@@ -74,6 +74,16 @@ struct FJunctionArm
 	double CutHalfWidthLeft = -1.0;
 	double CutHalfWidthRight = -1.0;
 
+	/**
+	 * CutHalfWidthLeft/Right when solved (>= 0), else this arm's own HalfWidthLeft/Right -
+	 * "the ribbon this arm's cut is actually at", per CutHalfWidthLeft's own comment.
+	 * `CutHalfWidthLeft >= 0.0 ? CutHalfWidthLeft : HalfWidthLeft` was typed at
+	 * JunctionSolver.cpp's own cut-vertex placement and twice more in RoadNetworkSolver's
+	 * SmoothBend (once for the inner side, once for the outer).
+	 */
+	double CutHalfWidthLeftOrSolved() const { return CutHalfWidthLeft >= 0.0 ? CutHalfWidthLeft : HalfWidthLeft; }
+	double CutHalfWidthRightOrSolved() const { return CutHalfWidthRight >= 0.0 ? CutHalfWidthRight : HalfWidthRight; }
+
 	/** Opaque caller tag, e.g. a packed FRoadSegmentId index. Never read by the solver. */
 	int32 UserData = INDEX_NONE;
 };
@@ -116,6 +126,30 @@ struct FJunctionResult
 
 	/** Fan centre. Appended to Boundary by SolveBoundary. */
 	FVector2D Centre = FVector2D::ZeroVector;
+
+	/**
+	 * The corner between the two arms that has a real inside, at a two-arm junction - or
+	 * INDEX_NONE when this is not a two-arm junction, or its corner has no inside
+	 * (FFillet::IsRoundedCorner). Three callers (BendWidening::InnerEdgeOf,
+	 * FRoadNetworkSolver::SmoothBend, FRoadGuidelineBuilder::Build) found this the same
+	 * way, each with its own loop over Corners.
+	 */
+	int32 InnerCornerOfBend() const
+	{
+		if (Corners.Num() != 2)
+		{
+			return INDEX_NONE;
+		}
+		int32 Inner = INDEX_NONE;
+		for (int32 Index = 0; Index < 2; ++Index)
+		{
+			if (Corners[Index].IsRoundedCorner())
+			{
+				Inner = Index;
+			}
+		}
+		return Inner;
+	}
 };
 
 /**

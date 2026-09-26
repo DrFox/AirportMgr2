@@ -137,8 +137,8 @@ FJunctionResult FJunctionSolver::SolveCuts(const FJunctionInput& Input)
 
 		// The ribbon's own half-widths when the corner was solved on wider ones - see
 		// FJunctionArm::CutHalfWidthLeft.
-		const double Left = Arm.CutHalfWidthLeft >= 0.0 ? Arm.CutHalfWidthLeft : Arm.HalfWidthLeft;
-		const double Right = Arm.CutHalfWidthRight >= 0.0 ? Arm.CutHalfWidthRight : Arm.HalfWidthRight;
+		const double Left = Arm.CutHalfWidthLeftOrSolved();
+		const double Right = Arm.CutHalfWidthRightOrSolved();
 		Result.Arms[Index].LeftCut  = CutCentre + Normal * FMath::Max(Left, 0.0);
 		Result.Arms[Index].RightCut = CutCentre - Normal * FMath::Max(Right, 0.0);
 	}

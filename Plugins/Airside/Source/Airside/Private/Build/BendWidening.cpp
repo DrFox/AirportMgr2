@@ -82,14 +82,7 @@ namespace
 		{
 			return false;
 		}
-		for (int32 Index = 0; Index < 2; ++Index)
-		{
-			const RoadGeom::FFillet& Corner = Result.Corners[Index];
-			if (Corner.bValid && !Corner.bStraightThrough && Corner.Theta < UE_DOUBLE_PI && Corner.Radius > 0.0)
-			{
-				Out.K = Index;
-			}
-		}
+		Out.K = Result.InnerCornerOfBend();
 		if (Out.K == INDEX_NONE)
 		{
 			return false;

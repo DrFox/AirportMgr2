@@ -179,6 +179,17 @@ namespace RoadGeom
 
 		/** Parameter of T_B along edge B, from B.Origin. Equals ReachB + Distance. */
 		double ParamB = 0.0;
+
+		/**
+		 * True at a fillet with a real inside to it: solved at all, not the two edges run
+		 * straight into the corner (bStraightThrough), and turning less than a half turn -
+		 * a reflex corner's Theta lands at or past UE_DOUBLE_PI and has no "inside" either.
+		 * Three callers (BendWidening::InnerEdgeOf, FRoadNetworkSolver::SmoothBend,
+		 * FRoadGuidelineBuilder::Build) each spelled this out by hand to find the inner
+		 * corner of a two-arm bend; see FJunctionResult::InnerCornerOfBend for the corner
+		 * that owns it.
+		 */
+		bool IsRoundedCorner() const { return bValid && !bStraightThrough && Theta < UE_DOUBLE_PI && Radius > 0.0; }
 	};
 
 	/**

@@ -812,14 +812,8 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					if (ArmSegments->Num() == 2 && Pair.Value.Corners.Num() == 2
 						&& Declared.Class == ETraversalClass::GroundVehicle && ToDeclared.Class == ETraversalClass::GroundVehicle)
 					{
-						const RoadGeom::FFillet* Inside = nullptr;
-						for (const RoadGeom::FFillet& Corner : Pair.Value.Corners)
-						{
-							if (Corner.bValid && !Corner.bStraightThrough && Corner.Theta < UE_DOUBLE_PI && Corner.Radius > 0.0)
-							{
-								Inside = &Corner;
-							}
-						}
+						const int32 InsideIndex = Pair.Value.InnerCornerOfBend();
+						const RoadGeom::FFillet* Inside = InsideIndex != INDEX_NONE ? &Pair.Value.Corners[InsideIndex] : nullptr;
 						if (Inside != nullptr)
 						{
 							const FVector2D PA = Network.GetGuidelineNode(Turn.A)->Position;
