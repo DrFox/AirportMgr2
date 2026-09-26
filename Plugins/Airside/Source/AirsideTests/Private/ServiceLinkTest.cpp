@@ -79,17 +79,6 @@ namespace ServiceLinkFixture
 			FVector2D(BackX + Definition.RequiredExtent.Y, HalfWidth));
 	}
 
-	/**
-	 * Where a GSE road serving the shipping stand runs: 420 uu beyond its FAR edge, the one
-	 * opposite the taxiway (user 2026-09-26: service vehicles enter only there). The fixtures
-	 * that typed x = -5400 - 420 behind the old aft edge - read it here instead, so moving the
-	 * edge again moves them with it.
-	 */
-	double FarRoadX()
-	{
-		return StandGroundOf(*UEntityDefinition::MakeStandTransient()).Max.X + 420.0;
-	}
-
 	/** The forward-most declared entry of a stand - the far edge's contacts all share it. */
 	double FarEntryX(const UEntityDefinition& Stand)
 	{

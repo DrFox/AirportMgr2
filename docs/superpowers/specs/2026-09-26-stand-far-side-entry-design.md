@@ -37,10 +37,14 @@
 - **A/B tow: a longer straight in, not a pull-past (user, 2026-09-26).** The utility tow reached
   its service point with its trailer still bent (18.6 deg on A against a 3.0 deg turntable lock) and
   could not start the reverse. The serve leg's straight into each service point is now
-  `TowSettleChains` (2.0) x the design vehicle's chain length, and the same straight follows the
-  reverse corner so the solve ends on the lane's line; zero for a rigid vehicle, so C-F are
-  unchanged. It moves A/B's lane outboard: measured need A 4757 x 3374, B 4757 x 3950 against
-  floors 3500 x 3200 and 4400 x 3950 - reported for the user, not raised.
+  `TowSettleChains` (2.0) x the design vehicle's chain length; zero for a rigid vehicle, so C-F are
+  unchanged. It moves A/B's lane outboard (measured need 4757 wide).
+- **The same settle straight after the reverse corner** was PROPOSED by the implementer (the solve
+  ended 11.3 deg off the lane without it) and RATIFIED by the user 2026-09-26. Per bay it is capped
+  at the entrance edge, so no leg runs onto the taxiway-side ground (controller ruling).
+- **A/B widened (user, 2026-09-26):** width floors A 5000 x 3400, B 5000 x 3950 - set by the tow
+  lane (4757 + ~250), not the wingspan. `IcaoCode` Rows[] `TowLaneWidth`; the floor is
+  max(span derivation, tow lane). A and B now share a width floor; depth tells them apart.
 
 ## 1. Stand geometry
 

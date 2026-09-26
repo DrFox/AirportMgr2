@@ -359,16 +359,22 @@ bool FStandExtentClearsTheLargestAirframeAdmittedTest::RunTest(const FString& Pa
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 
-	// Nothing in the layout may sit inside the largest admitted airframe's tail clearance.
+	// Nothing in the layout may sit inside the largest admitted airframe - its [tail..nose] x
+	// [+-half-span] box. RE-DERIVED 2026-09-26: this asked only "behind the tail, or outboard",
+	// which was the whole question while every pose sat on the aft edge; with the poses on the
+	// far edge that clause could no longer fail, and the nose is the end they are near.
 	const double Aft = B738->Footprint.TailX;
+	const double Fwd = B738->Footprint.NoseX;
+	const double HalfSpan = B738->Footprint.Wingspan * 0.5;
 	for (const FServiceBay& Bay : Stand->ServiceBays)
 	{
 		for (const FVector2D& Pose : { Bay.ParkLocal, Bay.EntryLocal, Bay.ExitLocal })
 		{
 			TestTrue(
-				*FString::Printf(TEXT("bay '%s' pose (%.0f, %.0f) clears the longest tail at %.0f"),
-					*Bay.AnchorId.ToString(), Pose.X, Pose.Y, Aft),
-				Pose.X < Aft || FMath::Abs(Pose.Y) > B738->Footprint.Wingspan * 0.5);
+				*FString::Printf(TEXT("bay '%s' pose (%.0f, %.0f) is outside the longest airframe's box "
+					"x %.0f..%.0f, y +-%.0f"),
+					*Bay.AnchorId.ToString(), Pose.X, Pose.Y, Aft, Fwd, HalfSpan),
+				Pose.X < Aft || Pose.X > Fwd || FMath::Abs(Pose.Y) > HalfSpan);
 		}
 	}
 
@@ -589,6 +595,26 @@ bool FEveryBayContactIsOnTheFarEdgeTest::RunTest(const FString& Parameters)
 				Bay.ExitLocal.Equals(Bay.EntryLocal, 0.01));
 			TestTrue(*FString::Printf(TEXT("%s is more than Square from the taxiway edge at %.0f"), *Who, BackX),
 				Bay.EntryLocal.X - BackX > Square);
+		}
+
+		// AND NOTHING THEY DRIVE CROSSES BACK OVER THE ENTRANCE. The ground aft of BackX is the
+		// taxiway's (the entrance edge sits on its pavement edge), so a leg that dips behind it -
+		// Code A's hydrant reverse did, by 174 uu, when its settle straight ran out of stand -
+		// puts a service vehicle where a taxiing wing sweeps. Every SAMPLED point, not just the
+		// vertices, since a curve can bulge past a line its corners respect.
+		for (const FNamedLeg& Named : LegsOf(*Stand))
+		{
+			TArray<FVector2D> Sampled;
+			Named.Leg->Sample(Sampled);
+			double MinX = TNumericLimits<double>::Max();
+			for (const FVector2D& At : Sampled)
+			{
+				MinX = FMath::Min(MinX, At.X);
+			}
+			TestTrue(*FString::Printf(TEXT("Code %s %s stays inside the entrance edge (aft-most x %.0f, "
+				"edge %.0f) - service vehicles never use the taxiway-side ground"),
+				IcaoCode::ToLetter(StandLetter), *Named.What, MinX, BackX),
+				MinX >= BackX - 0.5);
 		}
 	}
 	return true;

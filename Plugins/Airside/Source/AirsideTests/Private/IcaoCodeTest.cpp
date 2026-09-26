@@ -95,23 +95,29 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	// the span band, plus twice the wingtip clearance, plus twice a service lane, plus the aft
 	// edge's own allowance - every letter, to the centimetre - so that is what is asserted, and
 	// the figures move together or the test fails.
-	struct FCase { EIcaoCode Code; const TCHAR* Letter; double Span; double Clearance; double AftEdge; };
+	//
+	// OR THE DESIGN VEHICLE'S LANE, WHERE THAT IS WIDER (user ruling 2026-09-26): A and B are laid
+	// for the utility tow, whose settled lane needs 4757 and is floored at 5000. The floor is the
+	// LARGER of the two, exactly - not a tolerance - and C-F carry no tow lane, so for them this
+	// is the span derivation it always was.
+	struct FCase { EIcaoCode Code; const TCHAR* Letter; double Span; double Clearance; double AftEdge; double TowLane; };
 	const FCase Cases[] = {
-		{ EIcaoCode::A, TEXT("A"), 1500.0, 300.0, 600.0 },
-		{ EIcaoCode::B, TEXT("B"), 2400.0, 300.0, 600.0 },
-		{ EIcaoCode::C, TEXT("C"), 3600.0, 450.0, 600.0 },
-		{ EIcaoCode::D, TEXT("D"), 5200.0, 750.0, 600.0 },
-		{ EIcaoCode::E, TEXT("E"), 6500.0, 750.0, 600.0 },
-		{ EIcaoCode::F, TEXT("F"), 8000.0, 750.0, 600.0 },
+		{ EIcaoCode::A, TEXT("A"), 1500.0, 300.0, 600.0, 5000.0 },
+		{ EIcaoCode::B, TEXT("B"), 2400.0, 300.0, 600.0, 5000.0 },
+		{ EIcaoCode::C, TEXT("C"), 3600.0, 450.0, 600.0, 0.0 },
+		{ EIcaoCode::D, TEXT("D"), 5200.0, 750.0, 600.0, 0.0 },
+		{ EIcaoCode::E, TEXT("E"), 6500.0, 750.0, 600.0, 0.0 },
+		{ EIcaoCode::F, TEXT("F"), 8000.0, 750.0, 600.0, 0.0 },
 	};
 
 	for (const FCase& Case : Cases)
 	{
+		const double Derived = Case.Span + 2.0 * (Case.Clearance + IcaoCode::ServiceLaneWidth()) + Case.AftEdge;
 		TestEqual(
-			*FString::Printf(TEXT("stand %s is its span, clearances, lanes and aft edge"),
-				Case.Letter),
+			*FString::Printf(TEXT("stand %s is the larger of its span, clearances, lanes and aft edge (%.0f) "
+				"and its tow lane (%.0f)"), Case.Letter, Derived, Case.TowLane),
 			IcaoCode::StandWidthForLetter(Case.Code),
-			Case.Span + 2.0 * (Case.Clearance + IcaoCode::ServiceLaneWidth()) + Case.AftEdge,
+			FMath::Max(Derived, Case.TowLane),
 			0.5);
 	}
 

@@ -108,6 +108,11 @@ namespace
 	 * its own radius: 522 uu of straight left it bent 18.6 degrees, 972 left 3.5 - about one
 	 * e-fold per 270 uu. Two chains (1150) lands near 1.8 degrees: inside the lock with room
 	 * for the solve. A rigid vehicle has no trailer to settle and is given none.
+	 *
+	 * ALSO SPENT AFTER THE REVERSE CORNER (proposed in implementation, ratified by the user
+	 * 2026-09-26), and there it rests on ONE measurement: with no straight after the corner the
+	 * solve ended 11.3 degrees off the lane. That bay's share may be shortened to the ground
+	 * left before the entrance edge - see Cleared in BuildStandTemplate.
 	 */
 	constexpr double TowSettleChains = 2.0;
 
@@ -306,11 +311,14 @@ void UEntityDefinition::BuildStandFor(
 	//
 	// ONE BAGGAGE BAY, NOT TWO, ruled 2026-09-17, and it unlocked the layout rather than merely
 	// simplifying it. The aft hold sat at -2400, ASTERN of the wing, which made it the aft-most
-	// thing any vehicle drove to - and the aft-most bay is the one whose serve leg has the least
-	// lane to finish its shift in, so it alone capped the aft-edge pitch at 879 uu when the road
-	// fillets wanted 911. With it gone, NOTHING on this side is astern of the wing: the aft-most
-	// service is the hydrant at -800 and the ceiling it leaves goes from 388 uu to about 1760.
-	// The constraint is not relieved, it is absent.
+	// thing any vehicle drove to - and while the contacts were on the aft edge (until
+	// 2026-09-26) the aft-most bay was the one whose serve leg had the least lane to finish its
+	// shift in, so it alone capped the aft-edge pitch at 879 uu when the road fillets wanted
+	// 911. With it gone, NOTHING on this side is astern of the wing: the aft-most service is the
+	// hydrant at -800 and the ceiling it leaves went from 388 uu to about 1760. Since the
+	// contacts moved to the FAR edge the least-lane bay is the FORWARD-most one instead - see
+	// BuildStandTemplate's ladder - and a hold astern of the wing would now simply be the bay
+	// with the MOST lane.
 	constexpr double RowY = 700.0;
 	const double PitX = WingFwd + PlantClearance;
 	const double HoldX = WingFwd + 600.0;
@@ -446,8 +454,8 @@ void UEntityDefinition::BuildStandTemplate(
 	// edge wanted: those were ROAD contacts, and the third Diagonal paid for the SPLIT each one
 	// makes in the road, which shortens the segment its neighbour's fillet works in. A branch
 	// splits nothing - every bay lays its own copy of the spur as its own edge - so this has
-	// only to keep the park poses apart, and at 2 x Diagonal the echelon is 488 uu between
-	// neighbours measured across the branches.
+	// only to keep the park poses apart, which 2 x Diagonal does - 495 uu for the truck, 208 for
+	// the utility tow (2026-09-26 figures; it follows the design vehicle's radius).
 	const double BranchPitch = 2.0 * Diagonal;
 
 	// A BAY PER ANCHOR A GROUND VEHICLE SERVICES FROM.
@@ -667,7 +675,17 @@ void UEntityDefinition::BuildStandTemplate(
 		// comes out of it bent the same way one driven round it does. Measured 2026-09-26 on
 		// the utility tow: with the corner's own run and no straight after it the solve ended
 		// 11.3 degrees off. Zero for a rigid vehicle, whose FReverseRun ends on the curve.
-		const FVector2D Cleared(Service.X - SquareBack - TowSettle, Lane);
+		//
+		// CAPPED AT THE ENTRANCE EDGE, per bay (controller ruling 2026-09-26): the ground aft of
+		// BackX is the taxiway's, and Code A's hydrant, 100 uu from a -1300 edge, would have
+		// cleared to -1474 on the full 1150. It keeps what the stand has - 976 there - which
+		// the whole-route judge still admits; a bay left with less than none clears at its
+		// corner and the test reports it.
+		// ENFORCED BY: Airside.Entities.EveryBayContactIsOnTheFarEdge,
+		// Airside.Entities.EveryTemplateLegIsDrivableByEveryVehicle
+		const double ReverseSettle =
+			FMath::Clamp(Service.X - SquareBack - BackX, 0.0, TowSettle);
+		const FVector2D Cleared(Service.X - SquareBack - ReverseSettle, Lane);
 		BuildLeg({ Service, FVector2D(Service.X, Lane), Cleared },
 			ReverseRadius, TEXT("reverse"), Bay.ReverseLeg);
 

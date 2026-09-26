@@ -36,7 +36,7 @@ namespace IcaoCode
 			 * check if a real layout looks wrong.
 			 *
 			 * RAISED PAST THOSE VALUES ON 2026-09-26, A-E (user ruling; F unchanged): A 2000 ->
-			 * 3200, B 3000 -> 3950, C 5500 -> 6500 (the published 55 m is now 65 m), D 7000 ->
+			 * 3200 (then 3400 with the A/B widening, same day), B 3000 -> 3950, C 5500 -> 6500 (the published 55 m is now 65 m), D 7000 ->
 			 * 8400, E 9000 -> 9500. Service vehicles now enter only by the far edge, so the
 			 * service lane lies in the slack AHEAD of the nose, and on the published depths that
 			 * slack was too short for a bay's serve leg to reach its lane forward of the service
@@ -77,6 +77,23 @@ namespace IcaoCode
 			 * layout actually reaches against the width this produces.
 			 */
 			double AftEdgeAllowance;
+
+			/**
+			 * The width a stand of this letter needs for its DESIGN VEHICLE's lane, uu, where
+			 * that is more than the span derivation gives - zero, and so no floor, where it is
+			 * not. See WidthOf, which takes the larger.
+			 *
+			 * A AND B ONLY, 5000 each (user ruling 2026-09-26). Their design vehicle is the
+			 * utility tow (UAirsideSettings::ResolveStandDesignVehicle), and a tow needs a
+			 * straight into each service point long enough for its trailer to settle before it
+			 * reverses, which pushes its lane outboard of where the span puts it:
+			 * UEntityDefinition::BuildStandTemplate measured both at 4757 wide, and 5000 is that
+			 * plus about 250 of margin. A's width is set by the tow lane now, not the wingspan
+			 * (derived 3500), and B's likewise (derived 4400) - so A and B share a width floor and
+			 * a stand's DEPTH is what tells them apart.
+			 * ENFORCED BY: Airside.Entities.StandLayoutEveryLetterBuilds
+			 */
+			double TowLaneWidth = 0.0;
 		};
 
 		// D and E deliberately share RunwayWidth (45 m serves both) - see MaxWingspanForWidth.
@@ -92,11 +109,11 @@ namespace IcaoCode
 		// carries their measured history now that it is theirs rather than this table's.
 		static const FRow Rows[] = {
 			{ .Letter = TEXT("A"), .MaxWingspan = 1500.0, .RunwayWidth = 1800.0, .StandTurnRadius = 1500.0,
-			  .WingtipClearance = 300.0, .StandDepth = 3200.0,
-			  .WingFwd = -50.0, .WingAft = -700.0, .AftEdgeAllowance = 600.0 },
+			  .WingtipClearance = 300.0, .StandDepth = 3400.0,
+			  .WingFwd = -50.0, .WingAft = -700.0, .AftEdgeAllowance = 600.0, .TowLaneWidth = 5000.0 },
 			{ .Letter = TEXT("B"), .MaxWingspan = 2400.0, .RunwayWidth = 2300.0, .StandTurnRadius = 2000.0,
 			  .WingtipClearance = 300.0, .StandDepth = 3950.0,
-			  .WingFwd = -300.0, .WingAft = -1400.0, .AftEdgeAllowance = 600.0 },
+			  .WingFwd = -300.0, .WingAft = -1400.0, .AftEdgeAllowance = 600.0, .TowLaneWidth = 5000.0 },
 			{ .Letter = TEXT("C"), .MaxWingspan = 3600.0, .RunwayWidth = 3000.0, .StandTurnRadius = 2500.0,
 			  .WingtipClearance = 450.0, .StandDepth = 6500.0,
 			  .WingFwd = -950.0, .WingAft = -2150.0, .AftEdgeAllowance = 600.0 },
@@ -187,14 +204,18 @@ namespace IcaoCode
 		/**
 		 * The NARROWEST stand a row admits, uu. The ONE place the derivation is written.
 		 *
+		 * THE LARGER OF THE SPAN DERIVATION AND THE ROW'S TowLaneWidth, since 2026-09-26: the
+		 * aeroplane decides it for C-F, the utility tow's lane for A and B - see that column.
+		 *
 		 * The lane is in it twice because there is one down each side: a vehicle cannot cross
 		 * under the aeroplane, so each side of the stand is reached and left on its own lane,
 		 * and a stand with room for only one of them has a serviceable side and a dead one.
 		 */
 		static double WidthOf(const FRow& Row)
 		{
-			return Row.MaxWingspan + 2.0 * (Row.WingtipClearance + IcaoCode::ServiceLaneWidth())
-				+ Row.AftEdgeAllowance;
+			return FMath::Max(Row.TowLaneWidth,
+				Row.MaxWingspan + 2.0 * (Row.WingtipClearance + IcaoCode::ServiceLaneWidth())
+					+ Row.AftEdgeAllowance);
 		}
 
 		/** The row after this one, or null at Code F. */

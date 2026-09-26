@@ -10,6 +10,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Testing/AirsideTestGraph.h"
+#include "StandFixture.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -161,9 +162,10 @@ bool FStandFuelAnchorJoinsRoadTest::RunTest(const FString& Parameters)
 	//
 	// AND SINCE 2026-09-26 IT RUNS AHEAD OF THE NOSE, on the FAR edge: service vehicles enter
 	// only by the edge opposite the taxiway, so the contacts sit Square inside the front edge
-	// (x 2512 for the 65 m Code C box) and a road at the old aft edge (-5400) joins nothing.
-	// 6 m beyond the front edge, the same kind of gap the aft road left.
-	LayNorthSouth(*Net, 3100.0, ETraversalClass::GroundVehicle, RoadWest, RoadEast);
+	// (the edge is at x 2512 for the 65 m Code C box) and a road at the old aft edge (-5400)
+	// joins nothing. ServiceLinkFixture::FarRoadX, the same 420 beyond the edge every
+	// ServiceLinkTest road uses.
+	LayNorthSouth(*Net, ServiceLinkFixture::FarRoadX(), ETraversalClass::GroundVehicle, RoadWest, RoadEast);
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	TestEqual(TEXT("a stand's pose is still an aircraft's"),
