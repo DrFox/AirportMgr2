@@ -117,6 +117,23 @@ namespace
 		Turn.ClearOuter = Outer;
 	}
 
+	// (SegmentIndex, which end, GuidelineIndex) -> the node that segment end terminates on.
+	//
+	// The junction loop reuses these handles rather than adding coincident nodes of its
+	// own. THAT is what connects the graph: this graph shares endpoints by handle, so two
+	// coincident-but-distinct nodes would satisfy every position check while leaving the
+	// turn paths as separate sticks nothing can route across.
+	//
+	// Packed into one integer rather than given a key struct, because a local struct needs
+	// a GetTypeHash that ADL can find, and hoisting one to file scope for a lookup this
+	// small is not worth it.
+	uint64 EndKey(int32 SegmentIndex, bool bEndA, int32 GuidelineIndex)
+	{
+		return (static_cast<uint64>(SegmentIndex) << 32)
+			 | (static_cast<uint64>(GuidelineIndex) << 1)
+			 | (bEndA ? 1ull : 0ull);
+	}
+
 	/** A live, hand-edited guideline already covering this segment's Nth declared guideline. */
 	FGuidelineEdgeId FindSparedEdge(const URoadNetwork& Network, FRoadSegmentId Segment, int32 Which)
 	{
@@ -132,6 +149,642 @@ namespace
 			}
 		}
 		return FGuidelineEdgeId();
+	}
+
+	/**
+	 * Splits a derived edge Length from one of its ends, exactly (de Casteljau; a runway's
+	 * derived guideline is a straight chord, so the pieces are straight too). Both pieces
+	 * keep the original's identity - DerivedFrom and index - which FindSparedEdge and the
+	 * route search already tolerate, because FAnchorLink::Build has split taxiways for
+	 * stand lead-ins this way since before there were exits. Returns the split node and
+	 * hands back the id of the piece on the FAR side, so the other end can be split next.
+	 */
+	FGuidelineNodeId SplitFromEnd(URoadNetwork& Network, FGuidelineEdgeId EdgeId, bool bFromA, double Length,
+		FGuidelineEdgeId& OutRest)
+	{
+		OutRest = EdgeId;
+		const FGuidelineEdge* Found = Network.GetGuidelineEdge(EdgeId);
+		if (Found == nullptr)
+		{
+			return FGuidelineNodeId();
+		}
+		const FVector2D PA = Network.GetGuidelineNode(Found->A)->Position;
+		const FVector2D PB = Network.GetGuidelineNode(Found->B)->Position;
+		const double Chord = FVector2D::Distance(PA, PB);
+		if (Chord <= Length || Chord <= 0.0)
+		{
+			return FGuidelineNodeId();
+		}
+		const double T = bFromA ? Length / Chord : 1.0 - Length / Chord;
+
+		// T is strictly inside (0,1) - Chord > Length was just checked - so this is never a
+		// snap to an existing endpoint; WeldTolerance is 0 rather than the LeadInWeldTolerance
+		// AnchorLink and StandLaneBuild use for their own, unrelated proximity joins.
+		FGuidelineNodeId Split;
+		FGuidelineEdgeId Head, Tail;
+		if (!Network.SplitGuidelineEdge(EdgeId, T, /*WeldTolerance=*/0.0, Split, Head, Tail))
+		{
+			return FGuidelineNodeId();
+		}
+		OutRest = bFromA ? Tail : Head;
+		return Split;
+	}
+
+	/**
+	 * EXIT ARCS. A continuous arm (a runway) is never cut, so its guideline ended ON the
+	 * node - and a turn path whose control point is the node was then a straight line from
+	 * the taxiway's cut point into the centreline, meeting it at the taxiway's angle with an
+	 * instantaneous heading change (samples/runwayexits.png, 2026-09-06). The taxiway-to-
+	 * taxiway turn at the same node was a proper arc, because BOTH its ends sat back from the
+	 * node. So: at a MIXED node - at least one continuous arm and at least one that is not -
+	 * the continuous arm's guideline is split ExitLength before the node and the turns attach
+	 * there, and the non-continuous arm's guideline ends ExitLength back from the node. The
+	 * same control-at-the-node quadratic then comes out tangent at both ends. See the runway
+	 * exit arcs spec (docs/superpowers/specs/2026-09-06-runway-exit-arcs-design.md).
+	 *
+	 * Fills SetBack (how far back from the node each mixed end's guideline should stop),
+	 * ContinuousEnds (which of those ends belong to the continuous arm, so it splits rather
+	 * than moves off the node), and ProtectedBy (every non-continuous end's holding runway,
+	 * for the holding-position re-apply pass to turn into a mark).
+	 */
+	void ComputeExitSetBacks(const URoadNetwork& Network, const FRoadSolveResult& Solved,
+		TMap<uint64, double>& SetBack, TSet<uint64>& ContinuousEnds, TMap<uint64, FRoadSegmentId>& ProtectedBy)
+	{
+		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+		{
+			const TArray<FRoadSegmentId>* ArmSegments = Solved.NodeArmSegments.Find(Pair.Key);
+			if (ArmSegments == nullptr || !Pair.Value.bValid
+				|| Pair.Value.Arms.Num() != ArmSegments->Num())
+			{
+				continue;
+			}
+			const FRoadNode* Node = Network.GetNodes().IsValidIndex(Pair.Key)
+				? &Network.GetNodes()[Pair.Key] : nullptr;
+			if (Node == nullptr || !Node->bAlive)
+			{
+				continue;
+			}
+			const FRoadNodeId NodeId = Network.NodeIdAt(Pair.Key);
+
+			int32 ContinuousArms = 0;
+			double ExitLength = 0.0;
+			FRoadSegmentId RunwayHere;
+			for (const FRoadSegmentId& ArmSeg : *ArmSegments)
+			{
+				const FRoadSegment* Arm = Network.GetSegment(ArmSeg);
+				const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
+				if (Profile != nullptr && Profile->bContinuousThroughJunctions)
+				{
+					++ContinuousArms;
+					if (!RunwayHere.IsSet())
+					{
+						// Any member of the chain will do - RunwayChain expands it when read.
+						RunwayHere = ArmSeg;
+					}
+					// The runway decides its exits. Two runways crossing a taxiway at one node
+					// would disagree only by profile; the longer wins, which is the safer arc.
+					ExitLength = FMath::Max(ExitLength, Profile->ExitLength);
+				}
+			}
+			if (ContinuousArms == 0 || ContinuousArms == ArmSegments->Num())
+			{
+				continue;
+			}
+
+			// ONE LENGTH PER NODE, so every arc at it is SYMMETRIC: the same tangent length on
+			// the runway side as on the taxiway side. An uneven quadratic - 60 m along the
+			// runway, 30 m down a stub taxiway - bunches its curvature at the short end and
+			// swings wide of the fillet on the way (samples/runway1.png, 2026-09-07). Decided in
+			// ExitGeometry, the one place, because the junction solver sizes the flare fillet
+			// from the same length and two copies of the rule would be two arcs.
+			const double NodeLength = ExitGeometry::NodeExitLength(Network, Pair.Key, *ArmSegments);
+			const FRoadSegment* RunwaySegment = Network.GetSegment(RunwayHere);
+			const URoadProfile* RunwayProfile = RunwaySegment ? Network.ProfileFor(*RunwaySegment) : nullptr;
+			const double RunwayHalfWidth = RunwayProfile ? RunwayProfile->GetTotalWidth() * 0.5 : 0.0;
+			const FVector2D RunwayAxis = Network.GetOutgoingTangent(RunwayHere, NodeId);
+
+			for (int32 ArmIndex = 0; ArmIndex < ArmSegments->Num(); ++ArmIndex)
+			{
+				const FRoadSegmentId ArmSeg = (*ArmSegments)[ArmIndex];
+				const FRoadSegment* Arm = Network.GetSegment(ArmSeg);
+				const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
+				if (Arm == nullptr || Profile == nullptr)
+				{
+					continue;
+				}
+				const bool bContinuous = Profile->bContinuousThroughJunctions;
+				const bool bEndA = (Arm->A == NodeId);
+				if (!bContinuous)
+				{
+					ProtectedBy.Add(EndKey(ArmSeg.Index, bEndA, 0), RunwayHere);
+				}
+				if (NodeLength <= 0.0)
+				{
+					// Arcs off (a profile authored without an exit length): the ends stay at
+					// their cut lines, and the holding positions recorded above are all this
+					// node derives.
+					continue;
+				}
+
+				double Length = NodeLength;
+				if (!bContinuous)
+				{
+					// NEVER ON THE RUNWAY SLAB, whatever the clamp says: the end sits at least
+					// where the taxiway's far edge clears the strip, so the holding position on
+					// it is off the asphalt. The floor used to be the pavement CUT, and the first
+					// clamp - measured on the chord between cuts - found nothing left of a 55 m
+					// stub and put the end a metre short of the junction inside the slab
+					// (samples/holdlines.png). The cut is no longer the measure because the
+					// flare fillet now follows the arc and can push the cut far down a shallow
+					// exit; the strip's own width is what the position must clear.
+					const double TaxiwayHalfWidth = Profile->GetTotalWidth() * 0.5;
+					const FVector2D Axis = Network.GetOutgoingTangent(ArmSeg, NodeId);
+					// Acute, folded from AngleBetween rather than acos(|dot|) - Check-Architecture rule 18.
+					const double AxisCrossing = RoadGeom::AngleBetween(Axis, RunwayAxis);
+					const double AxisAngle = FMath::Min(AxisCrossing, UE_DOUBLE_PI - AxisCrossing);
+					Length = FMath::Max(Length, ExitGeometry::TaxiwayEndFloor(RunwayHalfWidth, TaxiwayHalfWidth, AxisAngle));
+
+					// AND NEVER INSIDE THE FLARE: at least the pavement cut, which is where the
+					// ribbon begins at the taxiway's own width. Between the runway and that cut
+					// the flare fillet (PR #58) widens the pavement, and a holding position there
+					// is painted the taxiway's width across pavement that is wider - a bar that
+					// stops short of the edge (reported 2026-09-07). The cut is a FLOOR here,
+					// never the clamp it once was: a floor cannot put the end inside the slab,
+					// which is what the first cut-based clamp did to a 55 m stub. A stub shorter
+					// than its own cut is left at the slab floor and said so - its pavement is
+					// already degenerate (the mesh builder refuses crossed cuts).
+					const double Cut = bEndA ? Arm->TrimA : Arm->TrimB;
+					const FRoadNode* Far = Network.GetNode(bEndA ? Arm->B : Arm->A);
+					const FRoadNode* Near = Network.GetNode(NodeId);
+					const double ArmLength = (Far && Near) ? FVector2D::Distance(Far->Position, Near->Position) : 0.0;
+					if (Cut > Length && Cut < ArmLength - (bEndA ? Arm->TrimB : Arm->TrimA))
+					{
+						Length = Cut;
+					}
+					else if (Cut > Length)
+					{
+						UE_LOG(LogAirside, Warning,
+							TEXT("Taxiway segment %d is shorter than its own cut at the runway (%.0f uu of %.0f): ")
+							TEXT("its holding position stays at %.0f, inside the flare"),
+							ArmSeg.Index, ArmLength, Cut, Length);
+					}
+				}
+				if (Length <= 0.0)
+				{
+					continue;
+				}
+				const uint64 Key = EndKey(ArmSeg.Index, bEndA, 0);
+				SetBack.Add(Key, Length);
+				if (bContinuous)
+				{
+					ContinuousEnds.Add(Key);
+				}
+			}
+		}
+	}
+
+	/**
+	 * One derived guideline edge per (segment, declared guideline): the segment pass. A
+	 * hand-authored edge already covering one is spared (FindSparedEdge) and its endpoints
+	 * registered instead, so turn paths still attach to what the player drew. SetBack and
+	 * ContinuousEnds (ComputeExitSetBacks) move a mixed end's guideline back from the node
+	 * for its exit arc, or split it and record the split in Attach for a continuous arm.
+	 *
+	 * Fills Ends (every segment end's node, keyed by EndKey - the handle the turn-path pass
+	 * and the re-resolve/hold-mark passes below all share) and Attach.
+	 */
+	void DeriveSegmentGuidelines(URoadNetwork& Network, const TArray<FRoadSegment>& Segments,
+		const TMap<uint64, double>& SetBack, const TSet<uint64>& ContinuousEnds,
+		TMap<uint64, FGuidelineNodeId>& Ends, TMap<uint64, FGuidelineNodeId>& Attach)
+	{
+		for (int32 Index = 0; Index < Segments.Num(); ++Index)
+		{
+			const FRoadSegment& Segment = Segments[Index];
+			if (!Segment.bAlive || !Segment.bSolvedA || !Segment.bSolvedB)
+			{
+				continue;
+			}
+
+			const FRoadSegmentId SegmentId = Network.SegmentIdAt(Index);
+
+			// ProfileFor, NOT Segment.Profile - the THIRD reader to learn this. The solver and the
+			// mesh builder were pinned to the accessor when a reloaded level came back invisible;
+			// this builder was written afterwards and read the raw pointer, so the same reload
+			// came back PAVED but not ROUTABLE: every taxiway drawn, no centreline under any of
+			// them, every stand lead-in joining nothing, every arrival refused (M_Starter,
+			// 2026-09-06). The mesh hid the loss, which is why it survived two milestones.
+			const URoadProfile* Profile = Network.ProfileFor(Segment);
+			if (Profile == nullptr)
+			{
+				continue;
+			}
+
+			for (int32 Which = 0; Which < Profile->Guidelines.Num(); ++Which)
+			{
+				// A guideline the player edited survived the clear pass. Deriving over it would
+				// leave TWO guidelines on this segment - the player's, attached to nothing, and
+				// a fresh derived one that every turn path and every route would use instead.
+				// The edit would appear to have done nothing at all.
+				// A SPARED LANE IGNORES THE DRIVE SIDE (review of 2026-09-23, left as is): the
+				// player's hand-edited edge keeps the geometry they gave it, so after a flip the other
+				// lane is derived onto the positions it still occupies - two coincident lanes, running
+				// opposite ways. Anything that lets a player edit a road LANE in place must re-apply
+				// the drive side to it; connectors drawn between lanes re-resolve by identity and
+				// survive a flip (Airside.Build.TwoWay.SparedEdgeSurvivesFlip).
+				const FGuidelineEdgeId Spared = FindSparedEdge(Network, SegmentId, Which);
+				if (Spared.IsSet())
+				{
+					if (const FGuidelineEdge* SparedEdge = Network.GetGuidelineEdge(Spared))
+					{
+						// Register the player's OWN endpoints, so the turn paths below attach
+						// to their line instead of to one nothing can reach.
+						Ends.Add(EndKey(Index, true,  Which), SparedEdge->A);
+						Ends.Add(EndKey(Index, false, Which), SparedEdge->B);
+						continue;
+					}
+				}
+
+				const FProfileGuideline& Declared = Profile->Guidelines[Which];
+				// THE DRIVE SIDE IS APPLIED HERE AND NOWHERE ELSE (spec 2026-09-23 §2). Profiles
+				// are authored for right-hand traffic and OffsetFor mirrors them; Direction stays
+				// tied to A/B, so the lane that ran A->B on the right now runs A->B on the left.
+				// ENFORCED BY: Airside.Build.TwoWay.RouteKeepsSide
+				const double Alpha = AlphaForOffset(Profile, Declared.OffsetFor(Network.GetDriveSide()));
+
+				// End B's cut line is authored from B's point of view, so its left is this
+				// segment's right walking A to B - swapped exactly as AddSegment swaps it.
+				FVector2D AtA =
+					FRoadMeshBuilder::CutLinePoint(Segment.RightCutA, Segment.LeftCutA, Alpha);
+				FVector2D AtB =
+					FRoadMeshBuilder::CutLinePoint(Segment.LeftCutB, Segment.RightCutB, Alpha);
+
+				// A taxiway meeting a runway ends where its exit arc begins - ExitLength back
+				// from the node along its own tangent - not at its pavement cut. The end node
+				// keeps its Origin, so a holding-position mark keyed by this end lands on the arc's
+				// start. The continuous arm is NOT moved here: its guideline still ends on the
+				// node and is split below instead, so the runway stays one line through.
+				const uint64 KeyA = EndKey(Index, true, 0);
+				const uint64 KeyB = EndKey(Index, false, 0);
+				if (const double* Back = SetBack.Find(KeyA); Back && !ContinuousEnds.Contains(KeyA))
+				{
+					if (const FRoadNode* NodeA = Network.GetNode(Segment.A))
+					{
+						AtA = NodeA->Position
+							+ Network.GetOutgoingTangent(SegmentId, Segment.A).GetSafeNormal() * (*Back);
+					}
+				}
+				if (const double* Back = SetBack.Find(KeyB); Back && !ContinuousEnds.Contains(KeyB))
+				{
+					if (const FRoadNode* NodeB = Network.GetNode(Segment.B))
+					{
+						AtB = NodeB->Position
+							+ Network.GetOutgoingTangent(SegmentId, Segment.B).GetSafeNormal() * (*Back);
+					}
+				}
+
+				FGuidelineEdge Edge;
+				Edge.A = Network.AddGuidelineNode(AtA);
+				Edge.B = Network.AddGuidelineNode(AtB);
+
+				// Each end records WHICH end it is, so a hand-authored edge can name what it
+				// attached to rather than which slot happened to hold it. Handles do not
+				// survive a rebuild; this does. One whole FGuidelineEndRef per node through
+				// SetGuidelineNodeOrigin (#191), not three field writes through a raw pointer -
+				// a caller stopping between them used to be able to leave GuidelineIndex from
+				// the slot's previous life sitting beside a fresh Segment/bEndA.
+				FGuidelineEndRef OriginA;
+				OriginA.Segment = SegmentId;
+				OriginA.bEndA = true;
+				OriginA.GuidelineIndex = Which;
+				Network.SetGuidelineNodeOrigin(Edge.A, OriginA);
+
+				FGuidelineEndRef OriginB;
+				OriginB.Segment = SegmentId;
+				OriginB.bEndA = false;
+				OriginB.GuidelineIndex = Which;
+				Network.SetGuidelineNodeOrigin(Edge.B, OriginB);
+				Edge.Control = (AtA + AtB) * 0.5;
+				Edge.AllowedTraffic = FTrafficMask::Only(Declared.Class);
+				Edge.AllowedTraffic.Add(ETraversalClass::Emergency);
+				Edge.Direction = Declared.Direction;
+				Edge.Width = Declared.Width;
+				Edge.MaxWingspan = Declared.MaxWingspan;
+				Edge.DerivedFrom = SegmentId;
+				Edge.DerivedGuidelineIndex = Which;
+				Edge.bDerived = true;
+
+				Ends.Add(EndKey(Index, true,  Which), Edge.A);
+				Ends.Add(EndKey(Index, false, Which), Edge.B);
+
+				FGuidelineEdgeId EdgeId = Network.AddGuidelineEdge(MoveTemp(Edge));
+
+				// The runway side of the arc: split this half ExitLength from each mixed end and
+				// let the turns attach at the split. End A first, then B on whatever piece is
+				// now adjacent to B - two exits on one half must not split the same piece twice.
+				if (const double* Back = SetBack.Find(KeyA); Back && ContinuousEnds.Contains(KeyA))
+				{
+					FGuidelineEdgeId Rest;
+					const FGuidelineNodeId Split = SplitFromEnd(Network, EdgeId, /*bFromA=*/true, *Back, Rest);
+					if (Split.IsSet())
+					{
+						Attach.Add(EndKey(Index, true, Which), Split);
+						EdgeId = Rest;
+					}
+				}
+				if (const double* Back = SetBack.Find(KeyB); Back && ContinuousEnds.Contains(KeyB))
+				{
+					FGuidelineEdgeId Rest;
+					const FGuidelineNodeId Split = SplitFromEnd(Network, EdgeId, /*bFromA=*/false, *Back, Rest);
+					if (Split.IsSet())
+					{
+						Attach.Add(EndKey(Index, false, Which), Split);
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * A DEAD END TURNS VEHICLES ROUND (spec 2026-09-23 §4, ruled: an edge, no mesh). One-way
+	 * lanes would otherwise strand anything that drove into a stub. A bidirectional arm (a
+	 * taxiway, or a one-lane road) is skipped: its one line already runs both ways, and a
+	 * balloon there would be a change nobody asked for.
+	 *
+	 * SIZED FOR THE LARGEST RIGID SERVICE VEHICLE ON EVERY TIER - DesignVehicles.Default, NOT
+	 * the tier's own design vehicle the fillets use. By user ruling (2026-09-25, "smaller,
+	 * reverse later"): a balloon the rig can be driven round without folding its trailer
+	 * reaches ~24 m past the road end (measured), and the rig will turn at a road end with a
+	 * three-point turn once reversing exists (step 2). Until then it is refused at every dead
+	 * end on its lock. Laid over grass: the balloon reaches ~4x the lock radius past the road
+	 * end (UTurnGeom.h).
+	 * ENFORCED BY: Airside.Build.DesignVehicle.WideDeadEndRefusesRigUntilReversing
+	 * ENFORCED BY: Airside.Build.TwoWay.DeadEnd, Airside.Solve.UTurnBalloon
+	 *
+	 * Returns whether a balloon was actually added, so the caller's census count only ever
+	 * reflects one that is really there.
+	 */
+	bool TryBuildDeadEndBalloon(URoadNetwork& Network, const FRoadNode* Node, FRoadNodeId NodeId,
+		FRoadSegmentId ArmSeg, const FRoadDesignVehicles& DesignVehicles, const TMap<uint64, FGuidelineNodeId>& Ends)
+	{
+		const FRoadSegment* Arm = Network.GetSegment(ArmSeg);
+		const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
+		if (Arm == nullptr || Profile == nullptr)
+		{
+			return false;
+		}
+		const bool bAtA = (Arm->A == NodeId);
+		int32 InWhich = INDEX_NONE;
+		int32 OutWhich = INDEX_NONE;
+		for (int32 Which = 0; Which < Profile->Guidelines.Num(); ++Which)
+		{
+			const EGuidelineDir Dir = Profile->Guidelines[Which].Direction;
+			// The same arrive/leave reading the turn loop below applies per arm.
+			if ((bAtA && Dir == EGuidelineDir::BToA) || (!bAtA && Dir == EGuidelineDir::AToB))
+			{
+				InWhich = Which;
+			}
+			if ((bAtA && Dir == EGuidelineDir::AToB) || (!bAtA && Dir == EGuidelineDir::BToA))
+			{
+				OutWhich = Which;
+			}
+		}
+		const FGuidelineNodeId* InEnd = InWhich != INDEX_NONE ? Ends.Find(EndKey(ArmSeg.Index, bAtA, InWhich)) : nullptr;
+		const FGuidelineNodeId* OutEnd = OutWhich != INDEX_NONE ? Ends.Find(EndKey(ArmSeg.Index, bAtA, OutWhich)) : nullptr;
+		if (InEnd == nullptr || OutEnd == nullptr)
+		{
+			return false;
+		}
+
+		const FVector2D InAt = Network.GetGuidelineNode(*InEnd)->Position;
+		const FVector2D OutAt = Network.GetGuidelineNode(*OutEnd)->Position;
+		// Out of the road, past the dead end.
+		const FVector2D Axis = -Network.GetOutgoingTangent(ArmSeg, NodeId).GetSafeNormal();
+		const TArray<UTurnGeom::FPiece> Pieces =
+			UTurnGeom::Balloon(InAt, OutAt, Axis, DesignVehicles.Default.Chassis.TightestFollowableRadius());
+		if (Pieces.Num() == 0)
+		{
+			UE_LOG(LogAirside, Warning, TEXT("Dead end at (%.0f,%.0f): no U-turn laid - its lane ends coincide"),
+				Node->Position.X, Node->Position.Y);
+			return false;
+		}
+
+		const FProfileGuideline& InLine = Profile->Guidelines[InWhich];
+		const FProfileGuideline& OutLine = Profile->Guidelines[OutWhich];
+		FTrafficMask Mask = FTrafficMask::Only(InLine.Class);
+		Mask.Add(OutLine.Class);
+		Mask.Add(ETraversalClass::Emergency);
+
+		FGuidelineNodeId Prev = *InEnd;
+		for (int32 Index = 0; Index < Pieces.Num(); ++Index)
+		{
+			const bool bLast = Index == Pieces.Num() - 1;
+			const FGuidelineNodeId Next = bLast ? *OutEnd : Network.AddGuidelineNode(Pieces[Index].End);
+			FGuidelineEdge Loop;
+			Loop.A = Prev;
+			Loop.B = Next;
+			Loop.Control = Pieces[Index].Control;
+			Loop.AllowedTraffic = Mask;
+			Loop.Direction = EGuidelineDir::AToB;
+			Loop.Width = FMath::Min(InLine.Width, OutLine.Width);
+			// The LOCK is checked on a balloon; its clearances stay unmeasured (-1), because
+			// it lies over grass by ruling and has no pavement edge to measure to.
+			Loop.MinRadius = GuidelineGeom::TightestRadius(
+				Network.GetGuidelineNode(Prev)->Position, Loop.Control, Pieces[Index].End);
+			Loop.bDerived = true;
+			// DerivedFrom stays unset, like a turn path: the balloon belongs to the node.
+			Network.AddGuidelineEdge(MoveTemp(Loop));
+			Prev = Next;
+		}
+		return true;
+	}
+
+	/**
+	 * --- Re-resolve hand-authored edges ---
+	 *
+	 * A player's edge survived the clear pass, but the nodes it was drawn between are not
+	 * the nodes this derivation just made: AddGuidelineNode never deduplicates, so every
+	 * rebuild produces FRESH coincident nodes and the player's edge would keep pointing at
+	 * the old ones. It would still draw, and route nothing - breaking on a road edit that
+	 * had nothing to do with it.
+	 *
+	 * So an end that knows what it IS gets re-pointed at whatever now holds that identity.
+	 * Ends is the builder's own map, keyed exactly this way, and is simply no longer thrown
+	 * away.
+	 */
+	void ReResolveAuthoredEdges(URoadNetwork& Network, const TMap<uint64, FGuidelineNodeId>& Ends)
+	{
+		auto Resolve = [&Ends](const FGuidelineEndRef& Ref, FGuidelineNodeId& Out) -> bool
+		{
+			if (!Ref.IsSet())
+			{
+				// No identity recorded - a link between two anchor nodes, whose handles are
+				// stable already. Leave the end exactly where it is.
+				return true;
+			}
+
+			const FGuidelineNodeId* Found =
+				Ends.Find(EndKey(Ref.Segment.Index, Ref.bEndA, Ref.GuidelineIndex));
+			if (Found == nullptr)
+			{
+				return false;
+			}
+
+			Out = *Found;
+			return true;
+		};
+
+		TArray<FGuidelineEdgeId> Stranded;
+		const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
+		{
+			const FGuidelineEdge& Edge = Edges[Index];
+			if (!Edge.bAlive || Edge.bDerived)
+			{
+				continue;
+			}
+
+			const FGuidelineEdgeId Id = Network.GuidelineEdgeIdAt(Index);
+
+			FGuidelineNodeId NewA = Edge.A;
+			FGuidelineNodeId NewB = Edge.B;
+
+			if (!Resolve(Edge.EndRefA, NewA) || !Resolve(Edge.EndRefB, NewB))
+			{
+				// The road under an end is gone. Kill the link rather than leave one
+				// pointing at a road that no longer exists - a route across it would be a
+				// route across nothing.
+				Stranded.Add(Id);
+				continue;
+			}
+
+			if (NewA != Edge.A || NewB != Edge.B)
+			{
+				Network.RelinkGuidelineEdge(Id, NewA, NewB);
+			}
+		}
+
+		for (const FGuidelineEdgeId Id : Stranded)
+		{
+			Network.RemoveGuidelineEdge(Id);
+		}
+	}
+
+	/**
+	 * --- Re-apply holding-position marks ---
+	 *
+	 * The flag lives on a node and every derived node above is FRESH, so a bar the player
+	 * placed would vanish on the next road edit. The mark is stored by the same identity
+	 * a hand-authored edge stores its ends by, and resolved through the same Ends map -
+	 * one source (the mark), one cache (the flag), rebuilt together. Spec 2026-09-06 §6.
+	 */
+	void ReapplyHoldingPositionMarks(URoadNetwork& Network, const TArray<FRoadSegment>& Segments,
+		const TMap<uint64, FGuidelineNodeId>& Ends, const TMap<uint64, FRoadSegmentId>& ProtectedBy)
+	{
+		// The network owns this invariant, not the builder - it merely knows WHEN to ask.
+		// Pruning first also means the loop below cannot re-apply a mark whose runway has
+		// been deleted, which would put a bar on a node protecting nothing.
+		Network.PruneHoldingPositionMarks();
+
+		// CLEAR BEFORE DERIVING AND RE-APPLYING, because not every flagged node is fresh.
+		// Most derived nodes are made anew above and start unflagged, but a node the sweep
+		// SPARED, and every Origin-less node (an entity's pose or anchor - see
+		// FGuidelineNode::Origin), lives on with whatever it last had.
+		//
+		// Two rules, because the two kinds of node have DIFFERENT sources of truth:
+		//   - Origin set: the derivation (runway kind) or the MARK (intermediate kind) is
+		//     the source and the node is its cache, so it is cleared and rewritten below -
+		//     EXCEPT when this pass derived nothing for that end. Ends is fully populated by
+		//     now, so a missing EndKey is the "unsolved end" the re-apply loop deliberately
+		//     skips; clearing and then not rewriting would take the player's position away
+		//     over a transient derivation failure. Leave the cache alone and let the next
+		//     successful solve refresh it.
+		//   - Origin unset: no mark is ever stored, so the NODE is the source. A runway kind
+		//     there is cleared only when it names something that is no longer a live runway
+		//     - the one case the prune cannot reach; an intermediate kind is left alone.
+		{
+			const TArray<FGuidelineNode>& Live = Network.GetGuidelineNodes();
+			for (int32 Index = 0; Index < Live.Num(); ++Index)
+			{
+				if (!Live[Index].bAlive || Live[Index].HoldingPosition == EHoldingPositionKind::None)
+				{
+					continue;
+				}
+				const FGuidelineEndRef& Origin = Live[Index].Origin;
+				bool bClear = false;
+				if (Origin.IsSet())
+				{
+					bClear = Ends.Find(EndKey(Origin.Segment.Index, Origin.bEndA, Origin.GuidelineIndex)) != nullptr;
+				}
+				else
+				{
+					bClear = Live[Index].HoldingPosition == EHoldingPositionKind::Runway
+						&& !Network.IsRunwaySegment(Live[Index].HoldingPositionFor);
+				}
+				if (!bClear)
+				{
+					continue;
+				}
+				// Kind and For together through SetGuidelineNodeHoldingPosition (#191): the
+				// two fields must agree ("Runway iff HoldingPositionFor is set") and a raw
+				// pointer let this clear one without the other.
+				Network.SetGuidelineNodeHoldingPosition(
+					Network.GuidelineNodeIdAt(Index), EHoldingPositionKind::None, FRoadSegmentId());
+			}
+		}
+
+		// RUNWAY-HOLDING POSITIONS ARE DERIVED: every taxiway end at a runway, on every
+		// guideline of that end, protecting the strip it meets. Infrastructure, not a
+		// choice - a real one is painted at every such junction whether ATC ever says
+		// "hold short" there or not (spec 2026-09-07). Independent of ExitLength: with the
+		// arcs off the end sits at its cut line and is a holding position all the same.
+		for (const TPair<uint64, FRoadSegmentId>& Pair : ProtectedBy)
+		{
+			const int32 SegmentIndex = static_cast<int32>(Pair.Key >> 32);
+			const bool bEndA = (Pair.Key & 1ull) != 0;
+			const FRoadSegment* Arm = Segments.IsValidIndex(SegmentIndex) ? &Segments[SegmentIndex] : nullptr;
+			const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
+			if (Profile == nullptr)
+			{
+				continue;
+			}
+			for (int32 Which = 0; Which < Profile->Guidelines.Num(); ++Which)
+			{
+				const FGuidelineNodeId* End = Ends.Find(EndKey(SegmentIndex, bEndA, Which));
+				if (End == nullptr)
+				{
+					continue;
+				}
+				// SetGuidelineNodeHoldingPosition silently declines a dead node, same as the
+				// null check this replaced (#191).
+				Network.SetGuidelineNodeHoldingPosition(*End, EHoldingPositionKind::Runway, Pair.Value);
+			}
+		}
+
+		// INTERMEDIATE positions are the player's, re-applied from their marks.
+		for (const FHoldingPositionMark& Mark : Network.GetHoldingPositionMarks())
+		{
+			const FGuidelineNodeId* Found = Ends.Find(
+				EndKey(Mark.At.Segment.Index, Mark.At.bEndA, Mark.At.GuidelineIndex));
+			if (Found == nullptr)
+			{
+				// The segment is alive (prune said so) but derived nothing this pass - an
+				// unsolved end, or a profile that lost the guideline the mark named. Leave
+				// the mark: the next successful solve puts the position back, which is
+				// kinder than deleting a player's work over a transient derivation failure.
+				//
+				// The clear above skips this same case for the same reason - the two tests
+				// are the same lookup in the same map, so a flag is never cleared here only
+				// to be left unwritten there.
+				continue;
+			}
+			const FGuidelineNode* Node = Network.GetGuidelineNode(*Found);
+			// A mark on an end that has since become a runway end is out-ranked by the
+			// derivation: the junction decides, and the stale mark is harmless.
+			if (Node != nullptr && Node->HoldingPosition != EHoldingPositionKind::Runway)
+			{
+				Network.SetGuidelineNodeHoldingPosition(*Found, EHoldingPositionKind::Intermediate, FRoadSegmentId());
+			}
+		}
 	}
 }
 
@@ -170,37 +823,11 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 	// Running last is strictly safer: it is the only point at which every detachment this
 	// function performs has already happened.
 
-	// (SegmentIndex, which end, GuidelineIndex) -> the node that segment end terminates on.
-	//
-	// The junction loop reuses these handles rather than adding coincident nodes of its
-	// own. THAT is what connects the graph: this graph shares endpoints by handle, so two
-	// coincident-but-distinct nodes would satisfy every position check while leaving the
-	// turn paths as separate sticks nothing can route across.
-	//
-	// Packed into one integer rather than given a key struct, because a local struct needs
-	// a GetTypeHash that ADL can find, and hoisting one to file scope for a lookup this
-	// small is not worth it.
-	auto EndKey = [](int32 SegmentIndex, bool bEndA, int32 GuidelineIndex) -> uint64
-	{
-		return (static_cast<uint64>(SegmentIndex) << 32)
-			 | (static_cast<uint64>(GuidelineIndex) << 1)
-			 | (bEndA ? 1ull : 0ull);
-	};
-
 	TMap<uint64, FGuidelineNodeId> Ends;
 
 	const TArray<FRoadSegment>& Segments = Network.GetSegments();
 
-	// EXIT ARCS. A continuous arm (a runway) is never cut, so its guideline ended ON the
-	// node - and a turn path whose control point is the node was then a straight line from
-	// the taxiway's cut point into the centreline, meeting it at the taxiway's angle with an
-	// instantaneous heading change (samples/runwayexits.png, 2026-09-06). The taxiway-to-
-	// taxiway turn at the same node was a proper arc, because BOTH its ends sat back from the
-	// node. So: at a MIXED node - at least one continuous arm and at least one that is not -
-	// the continuous arm's guideline is split ExitLength before the node and the turns attach
-	// there, and the non-continuous arm's guideline ends ExitLength back from the node. The
-	// same control-at-the-node quadratic then comes out tangent at both ends. See the runway
-	// exit arcs spec (docs/superpowers/specs/2026-09-06-runway-exit-arcs-design.md).
+	// EXIT ARCS at MIXED nodes (a runway meeting a taxiway): ComputeExitSetBacks below.
 	//
 	// Keyed by segment end with guideline index 0: every guideline of one end shares the
 	// one set-back, which is a property of the junction, not of the lane.
@@ -213,320 +840,9 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 	// where its guideline ends (still the node, so the runway's own through-turn is intact).
 	TMap<uint64, FGuidelineNodeId> Attach;
 
-	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
-	{
-		const TArray<FRoadSegmentId>* ArmSegments = Solved.NodeArmSegments.Find(Pair.Key);
-		if (ArmSegments == nullptr || !Pair.Value.bValid
-			|| Pair.Value.Arms.Num() != ArmSegments->Num())
-		{
-			continue;
-		}
-		const FRoadNode* Node = Network.GetNodes().IsValidIndex(Pair.Key)
-			? &Network.GetNodes()[Pair.Key] : nullptr;
-		if (Node == nullptr || !Node->bAlive)
-		{
-			continue;
-		}
-		const FRoadNodeId NodeId = Network.NodeIdAt(Pair.Key);
+	ComputeExitSetBacks(Network, Solved, SetBack, ContinuousEnds, ProtectedBy);
 
-		int32 ContinuousArms = 0;
-		double ExitLength = 0.0;
-		FRoadSegmentId RunwayHere;
-		for (const FRoadSegmentId& ArmSeg : *ArmSegments)
-		{
-			const FRoadSegment* Arm = Network.GetSegment(ArmSeg);
-			const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
-			if (Profile != nullptr && Profile->bContinuousThroughJunctions)
-			{
-				++ContinuousArms;
-				if (!RunwayHere.IsSet())
-				{
-					// Any member of the chain will do - RunwayChain expands it when read.
-					RunwayHere = ArmSeg;
-				}
-				// The runway decides its exits. Two runways crossing a taxiway at one node
-				// would disagree only by profile; the longer wins, which is the safer arc.
-				ExitLength = FMath::Max(ExitLength, Profile->ExitLength);
-			}
-		}
-		if (ContinuousArms == 0 || ContinuousArms == ArmSegments->Num())
-		{
-			continue;
-		}
-
-		// ONE LENGTH PER NODE, so every arc at it is SYMMETRIC: the same tangent length on
-		// the runway side as on the taxiway side. An uneven quadratic - 60 m along the
-		// runway, 30 m down a stub taxiway - bunches its curvature at the short end and
-		// swings wide of the fillet on the way (samples/runway1.png, 2026-09-07). Decided in
-		// ExitGeometry, the one place, because the junction solver sizes the flare fillet
-		// from the same length and two copies of the rule would be two arcs.
-		const double NodeLength = ExitGeometry::NodeExitLength(Network, Pair.Key, *ArmSegments);
-		const FRoadSegment* RunwaySegment = Network.GetSegment(RunwayHere);
-		const URoadProfile* RunwayProfile = RunwaySegment ? Network.ProfileFor(*RunwaySegment) : nullptr;
-		const double RunwayHalfWidth = RunwayProfile ? RunwayProfile->GetTotalWidth() * 0.5 : 0.0;
-		const FVector2D RunwayAxis = Network.GetOutgoingTangent(RunwayHere, NodeId);
-
-		for (int32 ArmIndex = 0; ArmIndex < ArmSegments->Num(); ++ArmIndex)
-		{
-			const FRoadSegmentId ArmSeg = (*ArmSegments)[ArmIndex];
-			const FRoadSegment* Arm = Network.GetSegment(ArmSeg);
-			const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
-			if (Arm == nullptr || Profile == nullptr)
-			{
-				continue;
-			}
-			const bool bContinuous = Profile->bContinuousThroughJunctions;
-			const bool bEndA = (Arm->A == NodeId);
-			if (!bContinuous)
-			{
-				ProtectedBy.Add(EndKey(ArmSeg.Index, bEndA, 0), RunwayHere);
-			}
-			if (NodeLength <= 0.0)
-			{
-				// Arcs off (a profile authored without an exit length): the ends stay at
-				// their cut lines, and the holding positions recorded above are all this
-				// node derives.
-				continue;
-			}
-
-			double Length = NodeLength;
-			if (!bContinuous)
-			{
-				// NEVER ON THE RUNWAY SLAB, whatever the clamp says: the end sits at least
-				// where the taxiway's far edge clears the strip, so the holding position on
-				// it is off the asphalt. The floor used to be the pavement CUT, and the first
-				// clamp - measured on the chord between cuts - found nothing left of a 55 m
-				// stub and put the end a metre short of the junction inside the slab
-				// (samples/holdlines.png). The cut is no longer the measure because the
-				// flare fillet now follows the arc and can push the cut far down a shallow
-				// exit; the strip's own width is what the position must clear.
-				const double TaxiwayHalfWidth = Profile->GetTotalWidth() * 0.5;
-				const FVector2D Axis = Network.GetOutgoingTangent(ArmSeg, NodeId);
-				// Acute, folded from AngleBetween rather than acos(|dot|) - Check-Architecture rule 18.
-				const double AxisCrossing = RoadGeom::AngleBetween(Axis, RunwayAxis);
-				const double AxisAngle = FMath::Min(AxisCrossing, UE_DOUBLE_PI - AxisCrossing);
-				Length = FMath::Max(Length, ExitGeometry::TaxiwayEndFloor(RunwayHalfWidth, TaxiwayHalfWidth, AxisAngle));
-
-				// AND NEVER INSIDE THE FLARE: at least the pavement cut, which is where the
-				// ribbon begins at the taxiway's own width. Between the runway and that cut
-				// the flare fillet (PR #58) widens the pavement, and a holding position there
-				// is painted the taxiway's width across pavement that is wider - a bar that
-				// stops short of the edge (reported 2026-09-07). The cut is a FLOOR here,
-				// never the clamp it once was: a floor cannot put the end inside the slab,
-				// which is what the first cut-based clamp did to a 55 m stub. A stub shorter
-				// than its own cut is left at the slab floor and said so - its pavement is
-				// already degenerate (the mesh builder refuses crossed cuts).
-				const double Cut = bEndA ? Arm->TrimA : Arm->TrimB;
-				const FRoadNode* Far = Network.GetNode(bEndA ? Arm->B : Arm->A);
-				const FRoadNode* Near = Network.GetNode(NodeId);
-				const double ArmLength = (Far && Near) ? FVector2D::Distance(Far->Position, Near->Position) : 0.0;
-				if (Cut > Length && Cut < ArmLength - (bEndA ? Arm->TrimB : Arm->TrimA))
-				{
-					Length = Cut;
-				}
-				else if (Cut > Length)
-				{
-					UE_LOG(LogAirside, Warning,
-						TEXT("Taxiway segment %d is shorter than its own cut at the runway (%.0f uu of %.0f): ")
-						TEXT("its holding position stays at %.0f, inside the flare"),
-						ArmSeg.Index, ArmLength, Cut, Length);
-				}
-			}
-			if (Length <= 0.0)
-			{
-				continue;
-			}
-			const uint64 Key = EndKey(ArmSeg.Index, bEndA, 0);
-			SetBack.Add(Key, Length);
-			if (bContinuous)
-			{
-				ContinuousEnds.Add(Key);
-			}
-		}
-	}
-
-	// Splits a derived edge Length from one of its ends, exactly (de Casteljau; a runway's
-	// derived guideline is a straight chord, so the pieces are straight too). Both pieces
-	// keep the original's identity - DerivedFrom and index - which FindSparedEdge and the
-	// route search already tolerate, because FAnchorLink::Build has split taxiways for
-	// stand lead-ins this way since before there were exits. Returns the split node and
-	// hands back the id of the piece on the FAR side, so the other end can be split next.
-	auto SplitFromEnd = [&Network](FGuidelineEdgeId EdgeId, bool bFromA, double Length,
-		FGuidelineEdgeId& OutRest) -> FGuidelineNodeId
-	{
-		OutRest = EdgeId;
-		const FGuidelineEdge* Found = Network.GetGuidelineEdge(EdgeId);
-		if (Found == nullptr)
-		{
-			return FGuidelineNodeId();
-		}
-		const FVector2D PA = Network.GetGuidelineNode(Found->A)->Position;
-		const FVector2D PB = Network.GetGuidelineNode(Found->B)->Position;
-		const double Chord = FVector2D::Distance(PA, PB);
-		if (Chord <= Length || Chord <= 0.0)
-		{
-			return FGuidelineNodeId();
-		}
-		const double T = bFromA ? Length / Chord : 1.0 - Length / Chord;
-
-		// T is strictly inside (0,1) - Chord > Length was just checked - so this is never a
-		// snap to an existing endpoint; WeldTolerance is 0 rather than the LeadInWeldTolerance
-		// AnchorLink and StandLaneBuild use for their own, unrelated proximity joins.
-		FGuidelineNodeId Split;
-		FGuidelineEdgeId Head, Tail;
-		if (!Network.SplitGuidelineEdge(EdgeId, T, /*WeldTolerance=*/0.0, Split, Head, Tail))
-		{
-			return FGuidelineNodeId();
-		}
-		OutRest = bFromA ? Tail : Head;
-		return Split;
-	};
-
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
-	{
-		const FRoadSegment& Segment = Segments[Index];
-		if (!Segment.bAlive || !Segment.bSolvedA || !Segment.bSolvedB)
-		{
-			continue;
-		}
-
-		const FRoadSegmentId SegmentId = Network.SegmentIdAt(Index);
-
-		// ProfileFor, NOT Segment.Profile - the THIRD reader to learn this. The solver and the
-		// mesh builder were pinned to the accessor when a reloaded level came back invisible;
-		// this builder was written afterwards and read the raw pointer, so the same reload
-		// came back PAVED but not ROUTABLE: every taxiway drawn, no centreline under any of
-		// them, every stand lead-in joining nothing, every arrival refused (M_Starter,
-		// 2026-09-06). The mesh hid the loss, which is why it survived two milestones.
-		const URoadProfile* Profile = Network.ProfileFor(Segment);
-		if (Profile == nullptr)
-		{
-			continue;
-		}
-
-		for (int32 Which = 0; Which < Profile->Guidelines.Num(); ++Which)
-		{
-			// A guideline the player edited survived the clear pass. Deriving over it would
-			// leave TWO guidelines on this segment - the player's, attached to nothing, and
-			// a fresh derived one that every turn path and every route would use instead.
-			// The edit would appear to have done nothing at all.
-			// A SPARED LANE IGNORES THE DRIVE SIDE (review of 2026-09-23, left as is): the
-			// player's hand-edited edge keeps the geometry they gave it, so after a flip the other
-			// lane is derived onto the positions it still occupies - two coincident lanes, running
-			// opposite ways. Anything that lets a player edit a road LANE in place must re-apply
-			// the drive side to it; connectors drawn between lanes re-resolve by identity and
-			// survive a flip (Airside.Build.TwoWay.SparedEdgeSurvivesFlip).
-			const FGuidelineEdgeId Spared = FindSparedEdge(Network, SegmentId, Which);
-			if (Spared.IsSet())
-			{
-				if (const FGuidelineEdge* SparedEdge = Network.GetGuidelineEdge(Spared))
-				{
-					// Register the player's OWN endpoints, so the turn paths below attach
-					// to their line instead of to one nothing can reach.
-					Ends.Add(EndKey(Index, true,  Which), SparedEdge->A);
-					Ends.Add(EndKey(Index, false, Which), SparedEdge->B);
-					continue;
-				}
-			}
-
-			const FProfileGuideline& Declared = Profile->Guidelines[Which];
-			// THE DRIVE SIDE IS APPLIED HERE AND NOWHERE ELSE (spec 2026-09-23 §2). Profiles
-			// are authored for right-hand traffic and OffsetFor mirrors them; Direction stays
-			// tied to A/B, so the lane that ran A->B on the right now runs A->B on the left.
-			// ENFORCED BY: Airside.Build.TwoWay.RouteKeepsSide
-			const double Alpha = AlphaForOffset(Profile, Declared.OffsetFor(Network.GetDriveSide()));
-
-			// End B's cut line is authored from B's point of view, so its left is this
-			// segment's right walking A to B - swapped exactly as AddSegment swaps it.
-			FVector2D AtA =
-				FRoadMeshBuilder::CutLinePoint(Segment.RightCutA, Segment.LeftCutA, Alpha);
-			FVector2D AtB =
-				FRoadMeshBuilder::CutLinePoint(Segment.LeftCutB, Segment.RightCutB, Alpha);
-
-			// A taxiway meeting a runway ends where its exit arc begins - ExitLength back
-			// from the node along its own tangent - not at its pavement cut. The end node
-			// keeps its Origin, so a holding-position mark keyed by this end lands on the arc's
-			// start. The continuous arm is NOT moved here: its guideline still ends on the
-			// node and is split below instead, so the runway stays one line through.
-			const uint64 KeyA = EndKey(Index, true, 0);
-			const uint64 KeyB = EndKey(Index, false, 0);
-			if (const double* Back = SetBack.Find(KeyA); Back && !ContinuousEnds.Contains(KeyA))
-			{
-				if (const FRoadNode* NodeA = Network.GetNode(Segment.A))
-				{
-					AtA = NodeA->Position
-						+ Network.GetOutgoingTangent(SegmentId, Segment.A).GetSafeNormal() * (*Back);
-				}
-			}
-			if (const double* Back = SetBack.Find(KeyB); Back && !ContinuousEnds.Contains(KeyB))
-			{
-				if (const FRoadNode* NodeB = Network.GetNode(Segment.B))
-				{
-					AtB = NodeB->Position
-						+ Network.GetOutgoingTangent(SegmentId, Segment.B).GetSafeNormal() * (*Back);
-				}
-			}
-
-			FGuidelineEdge Edge;
-			Edge.A = Network.AddGuidelineNode(AtA);
-			Edge.B = Network.AddGuidelineNode(AtB);
-
-			// Each end records WHICH end it is, so a hand-authored edge can name what it
-			// attached to rather than which slot happened to hold it. Handles do not
-			// survive a rebuild; this does. One whole FGuidelineEndRef per node through
-			// SetGuidelineNodeOrigin (#191), not three field writes through a raw pointer -
-			// a caller stopping between them used to be able to leave GuidelineIndex from
-			// the slot's previous life sitting beside a fresh Segment/bEndA.
-			FGuidelineEndRef OriginA;
-			OriginA.Segment = SegmentId;
-			OriginA.bEndA = true;
-			OriginA.GuidelineIndex = Which;
-			Network.SetGuidelineNodeOrigin(Edge.A, OriginA);
-
-			FGuidelineEndRef OriginB;
-			OriginB.Segment = SegmentId;
-			OriginB.bEndA = false;
-			OriginB.GuidelineIndex = Which;
-			Network.SetGuidelineNodeOrigin(Edge.B, OriginB);
-			Edge.Control = (AtA + AtB) * 0.5;
-			Edge.AllowedTraffic = FTrafficMask::Only(Declared.Class);
-			Edge.AllowedTraffic.Add(ETraversalClass::Emergency);
-			Edge.Direction = Declared.Direction;
-			Edge.Width = Declared.Width;
-			Edge.MaxWingspan = Declared.MaxWingspan;
-			Edge.DerivedFrom = SegmentId;
-			Edge.DerivedGuidelineIndex = Which;
-			Edge.bDerived = true;
-
-			Ends.Add(EndKey(Index, true,  Which), Edge.A);
-			Ends.Add(EndKey(Index, false, Which), Edge.B);
-
-			FGuidelineEdgeId EdgeId = Network.AddGuidelineEdge(MoveTemp(Edge));
-
-			// The runway side of the arc: split this half ExitLength from each mixed end and
-			// let the turns attach at the split. End A first, then B on whatever piece is
-			// now adjacent to B - two exits on one half must not split the same piece twice.
-			if (const double* Back = SetBack.Find(KeyA); Back && ContinuousEnds.Contains(KeyA))
-			{
-				FGuidelineEdgeId Rest;
-				const FGuidelineNodeId Split = SplitFromEnd(EdgeId, /*bFromA=*/true, *Back, Rest);
-				if (Split.IsSet())
-				{
-					Attach.Add(EndKey(Index, true, Which), Split);
-					EdgeId = Rest;
-				}
-			}
-			if (const double* Back = SetBack.Find(KeyB); Back && ContinuousEnds.Contains(KeyB))
-			{
-				FGuidelineEdgeId Rest;
-				const FGuidelineNodeId Split = SplitFromEnd(EdgeId, /*bFromA=*/false, *Back, Rest);
-				if (Split.IsSet())
-				{
-					Attach.Add(EndKey(Index, false, Which), Split);
-				}
-			}
-		}
-	}
+	DeriveSegmentGuidelines(Network, Segments, SetBack, ContinuousEnds, Ends, Attach);
 
 	// Turn paths: one edge per ordered pair of DISTINCT arms at each solved node.
 	int32 Balloons = 0;
@@ -567,93 +883,15 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			}
 		}
 
-		// A DEAD END TURNS VEHICLES ROUND (spec 2026-09-23 §4, ruled: an edge, no mesh). One-way
-		// lanes would otherwise strand anything that drove into a stub. A bidirectional arm (a
-		// taxiway, or a one-lane road) is skipped: its one line already runs both ways, and a
-		// balloon there would be a change nobody asked for.
-		//
-		// SIZED FOR THE LARGEST RIGID SERVICE VEHICLE ON EVERY TIER - DesignVehicles.Default, NOT
-		// the tier's own design vehicle the fillets use. By user ruling (2026-09-25, "smaller,
-		// reverse later"): a balloon the rig can be driven round without folding its trailer
-		// reaches ~24 m past the road end (measured), and the rig will turn at a road end with a
-		// three-point turn once reversing exists (step 2). Until then it is refused at every dead
-		// end on its lock. Laid over grass: the balloon reaches ~4x the lock radius past the road
-		// end (UTurnGeom.h).
-		// ENFORCED BY: Airside.Build.DesignVehicle.WideDeadEndRefusesRigUntilReversing
-		// ENFORCED BY: Airside.Build.TwoWay.DeadEnd, Airside.Solve.UTurnBalloon
+		// A DEAD END TURNS VEHICLES ROUND, via TryBuildDeadEndBalloon - see its comment. A
+		// bidirectional arm (a taxiway, or a one-lane road) is skipped: its one line already
+		// runs both ways, and a balloon there would be a change nobody asked for.
 		if (ArmSegments->Num() == 1)
 		{
-			const FRoadSegmentId ArmSeg = (*ArmSegments)[0];
-			const FRoadSegment* Arm = Network.GetSegment(ArmSeg);
-			const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
-			if (Arm == nullptr || Profile == nullptr)
+			if (TryBuildDeadEndBalloon(Network, Node, NodeId, (*ArmSegments)[0], DesignVehicles, Ends))
 			{
-				continue;
+				++Balloons;
 			}
-			const bool bAtA = (Arm->A == NodeId);
-			int32 InWhich = INDEX_NONE;
-			int32 OutWhich = INDEX_NONE;
-			for (int32 Which = 0; Which < Profile->Guidelines.Num(); ++Which)
-			{
-				const EGuidelineDir Dir = Profile->Guidelines[Which].Direction;
-				// The same arrive/leave reading the turn loop below applies per arm.
-				if ((bAtA && Dir == EGuidelineDir::BToA) || (!bAtA && Dir == EGuidelineDir::AToB))
-				{
-					InWhich = Which;
-				}
-				if ((bAtA && Dir == EGuidelineDir::AToB) || (!bAtA && Dir == EGuidelineDir::BToA))
-				{
-					OutWhich = Which;
-				}
-			}
-			const FGuidelineNodeId* InEnd = InWhich != INDEX_NONE ? Ends.Find(EndKey(ArmSeg.Index, bAtA, InWhich)) : nullptr;
-			const FGuidelineNodeId* OutEnd = OutWhich != INDEX_NONE ? Ends.Find(EndKey(ArmSeg.Index, bAtA, OutWhich)) : nullptr;
-			if (InEnd == nullptr || OutEnd == nullptr)
-			{
-				continue;
-			}
-
-			const FVector2D InAt = Network.GetGuidelineNode(*InEnd)->Position;
-			const FVector2D OutAt = Network.GetGuidelineNode(*OutEnd)->Position;
-			// Out of the road, past the dead end.
-			const FVector2D Axis = -Network.GetOutgoingTangent(ArmSeg, NodeId).GetSafeNormal();
-			const TArray<UTurnGeom::FPiece> Pieces =
-				UTurnGeom::Balloon(InAt, OutAt, Axis, DesignVehicles.Default.Chassis.TightestFollowableRadius());
-			if (Pieces.Num() == 0)
-			{
-				UE_LOG(LogAirside, Warning, TEXT("Dead end at (%.0f,%.0f): no U-turn laid - its lane ends coincide"),
-					Node->Position.X, Node->Position.Y);
-				continue;
-			}
-
-			const FProfileGuideline& InLine = Profile->Guidelines[InWhich];
-			const FProfileGuideline& OutLine = Profile->Guidelines[OutWhich];
-			FTrafficMask Mask = FTrafficMask::Only(InLine.Class);
-			Mask.Add(OutLine.Class);
-			Mask.Add(ETraversalClass::Emergency);
-
-			FGuidelineNodeId Prev = *InEnd;
-			for (int32 Index = 0; Index < Pieces.Num(); ++Index)
-			{
-				const bool bLast = Index == Pieces.Num() - 1;
-				const FGuidelineNodeId Next = bLast ? *OutEnd : Network.AddGuidelineNode(Pieces[Index].End);
-				FGuidelineEdge Loop;
-				Loop.A = Prev;
-				Loop.B = Next;
-				Loop.Control = Pieces[Index].Control;
-				Loop.AllowedTraffic = Mask;
-				Loop.Direction = EGuidelineDir::AToB;
-				Loop.Width = FMath::Min(InLine.Width, OutLine.Width);
-				// The LOCK is checked on a balloon; its clearances stay unmeasured (-1), because
-				// it lies over grass by ruling and has no pavement edge to measure to.
-				Loop.MinRadius = GuidelineGeom::TightestRadius(
-					Network.GetGuidelineNode(Prev)->Position, Loop.Control, Pieces[Index].End);
-				Loop.bDerived = true;
-				// DerivedFrom stays unset, like a turn path: the balloon belongs to the node.
-				Network.AddGuidelineEdge(MoveTemp(Loop));
-				Prev = Next;
-			}
-			++Balloons;
 			continue;
 		}
 
@@ -1087,187 +1325,12 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		}
 	}
 
-	// --- Re-resolve hand-authored edges ------------------------------------------------
-	//
-	// A player's edge survived the clear pass, but the nodes it was drawn between are not
-	// the nodes this derivation just made: AddGuidelineNode never deduplicates, so every
-	// rebuild produces FRESH coincident nodes and the player's edge would keep pointing at
-	// the old ones. It would still draw, and route nothing - breaking on a road edit that
-	// had nothing to do with it.
-	//
-	// So an end that knows what it IS gets re-pointed at whatever now holds that identity.
-	// Ends is the builder's own map, keyed exactly this way, and is simply no longer thrown
-	// away.
-	{
-		auto Resolve = [&Ends, &EndKey](const FGuidelineEndRef& Ref, FGuidelineNodeId& Out) -> bool
-		{
-			if (!Ref.IsSet())
-			{
-				// No identity recorded - a link between two anchor nodes, whose handles are
-				// stable already. Leave the end exactly where it is.
-				return true;
-			}
-
-			const FGuidelineNodeId* Found =
-				Ends.Find(EndKey(Ref.Segment.Index, Ref.bEndA, Ref.GuidelineIndex));
-			if (Found == nullptr)
-			{
-				return false;
-			}
-
-			Out = *Found;
-			return true;
-		};
-
-		TArray<FGuidelineEdgeId> Stranded;
-		const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
-		for (int32 Index = 0; Index < Edges.Num(); ++Index)
-		{
-			const FGuidelineEdge& Edge = Edges[Index];
-			if (!Edge.bAlive || Edge.bDerived)
-			{
-				continue;
-			}
-
-			const FGuidelineEdgeId Id = Network.GuidelineEdgeIdAt(Index);
-
-			FGuidelineNodeId NewA = Edge.A;
-			FGuidelineNodeId NewB = Edge.B;
-
-			if (!Resolve(Edge.EndRefA, NewA) || !Resolve(Edge.EndRefB, NewB))
-			{
-				// The road under an end is gone. Kill the link rather than leave one
-				// pointing at a road that no longer exists - a route across it would be a
-				// route across nothing.
-				Stranded.Add(Id);
-				continue;
-			}
-
-			if (NewA != Edge.A || NewB != Edge.B)
-			{
-				Network.RelinkGuidelineEdge(Id, NewA, NewB);
-			}
-		}
-
-		for (const FGuidelineEdgeId Id : Stranded)
-		{
-			Network.RemoveGuidelineEdge(Id);
-		}
-	}
-
-	// --- Re-apply holding-position marks ------------------------------------------------------
-	//
-	// The flag lives on a node and every derived node above is FRESH, so a bar the player
-	// placed would vanish on the next road edit. The mark is stored by the same identity
-	// a hand-authored edge stores its ends by, and resolved through the same Ends map -
-	// one source (the mark), one cache (the flag), rebuilt together. Spec 2026-09-06 §6.
-	{
-		// The network owns this invariant, not the builder - it merely knows WHEN to ask.
-		// Pruning first also means the loop below cannot re-apply a mark whose runway has
-		// been deleted, which would put a bar on a node protecting nothing.
-		Network.PruneHoldingPositionMarks();
-
-		// CLEAR BEFORE DERIVING AND RE-APPLYING, because not every flagged node is fresh.
-		// Most derived nodes are made anew above and start unflagged, but a node the sweep
-		// SPARED, and every Origin-less node (an entity's pose or anchor - see
-		// FGuidelineNode::Origin), lives on with whatever it last had.
-		//
-		// Two rules, because the two kinds of node have DIFFERENT sources of truth:
-		//   - Origin set: the derivation (runway kind) or the MARK (intermediate kind) is
-		//     the source and the node is its cache, so it is cleared and rewritten below -
-		//     EXCEPT when this pass derived nothing for that end. Ends is fully populated by
-		//     now, so a missing EndKey is the "unsolved end" the re-apply loop deliberately
-		//     skips; clearing and then not rewriting would take the player's position away
-		//     over a transient derivation failure. Leave the cache alone and let the next
-		//     successful solve refresh it.
-		//   - Origin unset: no mark is ever stored, so the NODE is the source. A runway kind
-		//     there is cleared only when it names something that is no longer a live runway
-		//     - the one case the prune cannot reach; an intermediate kind is left alone.
-		{
-			const TArray<FGuidelineNode>& Live = Network.GetGuidelineNodes();
-			for (int32 Index = 0; Index < Live.Num(); ++Index)
-			{
-				if (!Live[Index].bAlive || Live[Index].HoldingPosition == EHoldingPositionKind::None)
-				{
-					continue;
-				}
-				const FGuidelineEndRef& Origin = Live[Index].Origin;
-				bool bClear = false;
-				if (Origin.IsSet())
-				{
-					bClear = Ends.Find(EndKey(Origin.Segment.Index, Origin.bEndA, Origin.GuidelineIndex)) != nullptr;
-				}
-				else
-				{
-					bClear = Live[Index].HoldingPosition == EHoldingPositionKind::Runway
-						&& !Network.IsRunwaySegment(Live[Index].HoldingPositionFor);
-				}
-				if (!bClear)
-				{
-					continue;
-				}
-				// Kind and For together through SetGuidelineNodeHoldingPosition (#191): the
-				// two fields must agree ("Runway iff HoldingPositionFor is set") and a raw
-				// pointer let this clear one without the other.
-				Network.SetGuidelineNodeHoldingPosition(
-					Network.GuidelineNodeIdAt(Index), EHoldingPositionKind::None, FRoadSegmentId());
-			}
-		}
-
-		// RUNWAY-HOLDING POSITIONS ARE DERIVED: every taxiway end at a runway, on every
-		// guideline of that end, protecting the strip it meets. Infrastructure, not a
-		// choice - a real one is painted at every such junction whether ATC ever says
-		// "hold short" there or not (spec 2026-09-07). Independent of ExitLength: with the
-		// arcs off the end sits at its cut line and is a holding position all the same.
-		for (const TPair<uint64, FRoadSegmentId>& Pair : ProtectedBy)
-		{
-			const int32 SegmentIndex = static_cast<int32>(Pair.Key >> 32);
-			const bool bEndA = (Pair.Key & 1ull) != 0;
-			const FRoadSegment* Arm = Segments.IsValidIndex(SegmentIndex) ? &Segments[SegmentIndex] : nullptr;
-			const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
-			if (Profile == nullptr)
-			{
-				continue;
-			}
-			for (int32 Which = 0; Which < Profile->Guidelines.Num(); ++Which)
-			{
-				const FGuidelineNodeId* End = Ends.Find(EndKey(SegmentIndex, bEndA, Which));
-				if (End == nullptr)
-				{
-					continue;
-				}
-				// SetGuidelineNodeHoldingPosition silently declines a dead node, same as the
-				// null check this replaced (#191).
-				Network.SetGuidelineNodeHoldingPosition(*End, EHoldingPositionKind::Runway, Pair.Value);
-			}
-		}
-
-		// INTERMEDIATE positions are the player's, re-applied from their marks.
-		for (const FHoldingPositionMark& Mark : Network.GetHoldingPositionMarks())
-		{
-			const FGuidelineNodeId* Found = Ends.Find(
-				EndKey(Mark.At.Segment.Index, Mark.At.bEndA, Mark.At.GuidelineIndex));
-			if (Found == nullptr)
-			{
-				// The segment is alive (prune said so) but derived nothing this pass - an
-				// unsolved end, or a profile that lost the guideline the mark named. Leave
-				// the mark: the next successful solve puts the position back, which is
-				// kinder than deleting a player's work over a transient derivation failure.
-				//
-				// The clear above skips this same case for the same reason - the two tests
-				// are the same lookup in the same map, so a flag is never cleared here only
-				// to be left unwritten there.
-				continue;
-			}
-			const FGuidelineNode* Node = Network.GetGuidelineNode(*Found);
-			// A mark on an end that has since become a runway end is out-ranked by the
-			// derivation: the junction decides, and the stale mark is harmless.
-			if (Node != nullptr && Node->HoldingPosition != EHoldingPositionKind::Runway)
-			{
-				Network.SetGuidelineNodeHoldingPosition(*Found, EHoldingPositionKind::Intermediate, FRoadSegmentId());
-			}
-		}
-	}
+	// Re-resolve hand-authored edges onto this rebuild's fresh nodes (ReResolveAuthoredEdges),
+	// then re-apply holding-position marks onto them (ReapplyHoldingPositionMarks) - see each
+	// function's comment. Order matters: marks are re-applied by the same Ends-keyed identity
+	// the re-resolve pass just used, onto nodes that pass has already made current.
+	ReResolveAuthoredEdges(Network, Ends);
+	ReapplyHoldingPositionMarks(Network, Segments, Ends, ProtectedBy);
 
 	// LAST, for the reason given where this used to live: every detachment above has now
 	// happened, so an idle derived node really is idle.
