@@ -993,6 +993,13 @@ private:
 	UPROPERTY() FVehicle Vehicle;
 
 	/**
+	 * Vehicle's one writer outside the Start* calls - figures only, no re-lay of the tow. For
+	 * UGroundTraffic::SetVehicleForTest (a friend), whose comment says why a test needs it.
+	 * False, and nothing written, for an aircraft.
+	 */
+	bool SetVehicleForTest(const FVehicle& InVehicle);
+
+	/**
 	 * Which link of the tow folded past VehicleSweep::MaxHitchRadians, or INDEX_NONE. Set by
 	 * FollowAndTow, cleared by StartDrive; while set the agent holds where it folded.
 	 *

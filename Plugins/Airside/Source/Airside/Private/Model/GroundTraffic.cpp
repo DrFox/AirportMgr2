@@ -407,6 +407,12 @@ bool UGroundTraffic::StrandForTest(int32 AgentId)
 	return true;
 }
 
+bool UGroundTraffic::SetVehicleForTest(int32 AgentId, const FVehicle& Vehicle)
+{
+	const int32 Index = FindIndex(AgentId);
+	return Index != INDEX_NONE && Agents[Index].SetVehicleForTest(Vehicle);
+}
+
 bool UGroundTraffic::BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySeed)
 {
 	const int32 Index = FindIndex(AgentId);

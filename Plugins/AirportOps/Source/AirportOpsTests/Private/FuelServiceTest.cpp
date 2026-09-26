@@ -11,13 +11,47 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RoutePolicy.h"
+#include "Model/RoutePlanCache.h"
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
 #include "Model/Vehicle.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
+#include "Solve/StandBox.h"
+#include "Present/AirsideTraffic.h"
+#include "Present/OpsRuntime.h"
+#include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestGraph.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+namespace FuelServiceTest
+{
+	/**
+	 * A stand of Letter, DRAWN at its letter's floor box with the stop mark on At, facing +X -
+	 * the shape the plot tool commits. The OUTLINE is what UFuelService::VehicleFor reads the
+	 * letter from, so a plop (which placement gives a Code C box whatever its template) would
+	 * not be an A stand to the service at all.
+	 */
+	FEntityInstanceId PlaceDrawnStand(URoadNetwork& Net, EIcaoCode Letter, const FVector2D& At)
+	{
+		UEntityDefinition* Def = UEntityDefinition::MakeStandTransient(Letter);
+		StandBox::FStandPose Pose;
+		Pose.Position = At;
+		Pose.Facing = FVector2D(1.0, 0.0);
+		FEntityPlacement Placement;
+		Placement.Definition = Def;
+		Placement.Anchors = Def->Anchors;
+		Placement.Position = At;
+		Placement.Heading = 0.0;
+		Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(Letter);
+		Placement.PoseRole = Def->PoseRole;
+		Placement.Trucks = Def->Trucks;
+		StandBox::BoxAt(Pose, Letter, IcaoCode::FloorEnvelopeForLetter(Letter), Placement.Outline);
+		return Net.PlaceEntity(Placement);
+	}
+}
 
 namespace
 {
@@ -112,6 +146,34 @@ namespace
 		/** West end of the road. Default reaches under the stand; see Build_RoadReachesDepotOnly. */
 		double RoadFromX = -20000.0;
 
+		/**
+		 * Draw the first stand as this letter's floor box (FuelServiceTest::PlaceDrawnStand)
+		 * rather than plop the shipping Code C stand. Unset by default: every older test here is
+		 * about the Code C stand, which placement gives a Code C outline.
+		 */
+		TOptional<EIcaoCode> StandLetter;
+
+		/**
+		 * Lay the service road NORTH-SOUTH, FarRoadClearance beyond the first stand's far edge,
+		 * with the depot east of it - instead of the east-west road to the south. Set before
+		 * Build.
+		 *
+		 * WHAT A FAR-SIDE STAND WANTS (spec 2026-09-26: service vehicles enter only by the far
+		 * edge). The south road still joins a stand's entries - the nearest point on it lies just
+		 * beyond the far edge's half-plane - but the lead-in then loops round behind the stand
+		 * and meets the lane from the wrong side, so the vehicle arrives facing the way it should
+		 * leave (measured 2026-09-26 on a Code A stand: a 180 degree cusp at the lane, which the
+		 * utility tow's trailer folds on and the router refuses). Off by default: every older
+		 * test here predates the far edge and is about something else.
+		 */
+		bool bFarEdgeRoad = false;
+
+		/** How far beyond the far edge the bFarEdgeRoad road runs - StandFixture.h's FarRoadX figure. */
+		static constexpr double FarRoadClearance = 420.0;
+
+		/** Where the bFarEdgeRoad road runs, x. Set by Build. */
+		double FarRoadX = 0.0;
+
 		void Build(bool bWithRoad, bool bWithDepot = true);
 
 		/**
@@ -202,16 +264,17 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	Clock = NewObject<USimClock>(GetTransientPackage());
 
 	// UOpsRuntime::Attach's job in production (#104) - a bare NewObject has no Present/ to
-	// set this, and an unset TruckVehicle means a truck dispatched with zero speed and
-	// acceleration, not the one every other caller of DispatchAgent gets.
-	Service->TruckVehicle = UAirsideSettings::ResolveDefaultVehicle();
+	// set this, and an unset vehicle table means a truck dispatched with zero speed and
+	// acceleration, not the one every other caller of DispatchAgent gets. THE SAME RESOLVE,
+	// through the same loop, so the fixture's letters get the vehicles the game's do.
+	Service->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
 
 	FGuidelineNodeId TaxiSouth, TaxiNorth;
 	LayLine(*Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
 		ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);
 	TaxiwayFarEnd = TaxiSouth;
 
-	if (bWithRoad)
+	if (bWithRoad && !bFarEdgeRoad)
 	{
 		FGuidelineNodeId RoadWest, RoadEast;
 		LayLine(*Net, FVector2D(RoadFromX, RoadY), FVector2D(20000.0, RoadY),
@@ -252,8 +315,30 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	}
 
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
-	Stand = Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 0.0), 0.0,
-		/*DesignWingspan=*/3600.0, StandDef->PoseRole, StandDef->Trucks);
+	if (StandLetter.IsSet())
+	{
+		Stand = FuelServiceTest::PlaceDrawnStand(*Net, *StandLetter, FVector2D(0.0, 0.0));
+	}
+	else
+	{
+		Stand = Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 0.0), 0.0,
+			/*DesignWingspan=*/3600.0, StandDef->PoseRole, StandDef->Trucks);
+	}
+
+	if (bWithRoad && bFarEdgeRoad)
+	{
+		// THE STAND'S OWN OUTLINE says where its far edge is: it faces +X, so the far edge is
+		// the outline's largest x, whatever the letter.
+		double FarEdge = -TNumericLimits<double>::Max();
+		for (const FVector2D& Corner : Net->GetEntity(Stand)->Outline)
+		{
+			FarEdge = FMath::Max(FarEdge, Corner.X);
+		}
+		FarRoadX = FarEdge + FarRoadClearance;
+		FGuidelineNodeId RoadSouth, RoadNorth;
+		LayLine(*Net, FVector2D(FarRoadX, -10000.0), FVector2D(FarRoadX, 10000.0),
+			ETraversalClass::GroundVehicle, RoadSouth, RoadNorth);
+	}
 
 	if (bSecondStand)
 	{
@@ -285,6 +370,15 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 			Placement.PoseRole = DepotDef->PoseRole;
 			Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank };
 			Depot = Net->PlaceEntity(Placement);
+		}
+		else if (bFarEdgeRoad)
+		{
+			// EAST of the far-edge road, facing +X, so its pose ray leaves toward -X and meets it
+			// the same 4000 uu away the south-road depot sits from its road - and well south of
+			// the stand, so the two lead-ins never share a stretch.
+			Depot = Net->PlaceEntity(DepotDef, DepotDef->Anchors,
+				FVector2D(FarRoadX + 4000.0, -6000.0),
+				0.0, 0.0, DepotDef->PoseRole, DepotDef->Trucks);
 		}
 		else
 		{
@@ -579,7 +673,12 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 	{
 		FFuelFixture Fixture;
 		Fixture.Build(/*bWithRoad=*/true);
-		Fixture.Service->TruckVehicle.BodyWidth = 2000.0;
+		// BOTH halves of the fixture stand's letter entry: a stand DRAWN for the 20 m body too, so
+		// the VehicleTooLarge guard (Sent larger than Design) does not answer first - this case
+		// is about the road.
+		FLetterFuelVehicles& Vehicles = Fixture.Service->VehiclesFor(EIcaoCode::C);
+		Vehicles.Design.BodyWidth = 2000.0;
+		Vehicles.Sent.BodyWidth = 2000.0;
 		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
 		Fixture.Advance(0.2);
 
@@ -963,13 +1062,14 @@ bool FFuelChooseDepotCachesRouteFindsTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the hydrant is joined"), Hydrant.IsSet())) { return false; }
 
 	RouteSearch::ResetSearchCallCountForTest();
-	const auto First = Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant);
+	const FLetterFuelVehicles& Vehicles = Fixture.Service->VehiclesFor(EIcaoCode::C);
+	const auto First = Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant, Vehicles);
 	if (!TestTrue(TEXT("the one depot is chosen"), First.Depot.IsSet())) { return false; }
 	TestEqual(TEXT("the first ask runs one Find"), RouteSearch::SearchCallCountForTest(), 1);
 
 	for (int32 Idle = 0; Idle < 5; ++Idle)
 	{
-		Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant);
+		Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant, Vehicles);
 	}
 	TestEqual(TEXT("5 more asks over an unchanged graph answer from the cache - no new Find"),
 		RouteSearch::SearchCallCountForTest(), 1);
@@ -1217,8 +1317,19 @@ bool FFuelTruckGetsHomeWhenTooNarrowTest::RunTest(const FString& Parameters)
 	const int32 TruckId = Fixture.Service->GetDemands()[0].TruckId;
 	if (!TestTrue(TEXT("a truck went out for it"), TruckId != 0)) { return false; }
 
-	// Out it went; now nothing on the airport fits it on the way back.
-	Fixture.Service->TruckVehicle.BodyWidth = 2000.0;
+	// Out it went; now nothing on the airport fits it on the way back. THE AGENT'S OWN VEHICLE,
+	// since 2026-09-26: the road home is searched for the vehicle that is actually out, not a
+	// service-wide field, so that is the one widened.
+	const FRoadAgent* Out = Fixture.Traffic->FindAgent(TruckId);
+	if (!TestTrue(TEXT("the truck is a vehicle"), Out != nullptr && Out->AsVehicle() != nullptr)) { return false; }
+	FVehicle Wide = *Out->AsVehicle();
+	Wide.BodyWidth = 2000.0;
+	TestTrue(TEXT("its vehicle is widened"), FGroundTrafficTestAccess(*Fixture.Traffic).SetVehicle(TruckId, Wide));
+
+	// THE WIDENING HAS TO REACH THE ROAD HOME, or the two assertions below pass on a truck that
+	// simply fitted: SendTruckHome's own "does not fit ... driving it anyway" line, exactly once.
+	AddExpectedMessagePlain(TEXT("does not fit the road home"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 1);
 	Fixture.Traffic->RetireAgent(Aircraft);
 	Fixture.Advance(0.2);
 
@@ -1291,6 +1402,273 @@ bool FFuelTowNeverDrivenHomeIntoAFoldTest::RunTest(const FString& Parameters)
 		}
 		TestTrue(TEXT("a rigid truck is always driven home ungated - nothing to fold"), UFuelService::MayDriveUngated(Plan, Bowser, *Net));
 	}
+	return true;
+}
+
+#endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+// FAR-SIDE ENTRY TASK 7 (spec 2026-09-26 section 2): each stand is served by its OWN letter's
+// design vehicle - the utility tow on A and B, the fuel truck from C - where one TruckVehicle
+// used to go everywhere.
+
+namespace FuelServiceTest
+{
+	/** The demand for Aircraft, or null. */
+	const FFuelDemand* DemandFor(const UFuelService& Service, int32 Aircraft)
+	{
+		for (const FFuelDemand& Each : Service.GetDemands())
+		{
+			if (Each.AircraftId == Aircraft) { return &Each; }
+		}
+		return nullptr;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTowServesCodeATest, "AirportOps.Fuel.TowServesCodeA",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelTowServesCodeATest::RunTest(const FString& Parameters)
+{
+	// END TO END ON A DRAWN CODE A STAND: the tow is sent, it is the WHOLE chain (cab plus
+	// trailer, laid by StartDrive), and the aircraft leaves fuelled - no "UNFUELLED" line, and
+	// no AddExpectedError, because nothing on the way is allowed to go wrong.
+	//
+	// NOT ASSERTED: the tow getting HOME. Measured 2026-09-26 on this fixture, its reverse off
+	// the service point is refused ("turntable bent 13.4 deg (the lock engages within 3.0)") and
+	// it stops there - a fact about the A template's approach leg and FTowReverseRun, not about
+	// dispatch, and reported rather than pinned here (far-side-entry task 7 report).
+	FFuelFixture Fixture;
+	Fixture.StandLetter = EIcaoCode::A;
+	Fixture.bFarEdgeRoad = true;
+	Fixture.TurnaroundSeconds = 1800.0;
+	Fixture.bWithRunway = true;
+	Fixture.Build(/*bWithRoad=*/true);
+
+	const FEntityInstance* Stand = Fixture.Net->GetEntity(Fixture.Stand);
+	if (!TestNotNull(TEXT("the A stand is placed"), Stand)) { return false; }
+	TestEqual(TEXT("and the service reads it as Code A"),
+		static_cast<int32>(UFuelService::LetterOfStand(*Stand)), static_cast<int32>(EIcaoCode::A));
+
+	const FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
+	if (!TestTrue(TEXT("the utility tow tows something - else this test measures a rigid truck"), Tow.HasTrailer()))
+	{
+		return false;
+	}
+
+	FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
+	GLog->AddOutputDevice(&Spy);
+
+	const int32 Aircraft = Fixture.ParkAircraft();
+	int32 TruckId = 0;
+	FName SentType;
+	bool bWholeChain = false;
+	const bool bDeparted = Aircraft != 0 && Fixture.AdvanceUntil([&]
+	{
+		if (const FFuelDemand* Demand = FuelServiceTest::DemandFor(*Fixture.Service, Aircraft))
+		{
+			TruckId = Demand->TruckId != 0 ? Demand->TruckId : TruckId;
+		}
+		if (const FRoadAgent* Truck = TruckId != 0 ? Fixture.Traffic->FindAgent(TruckId) : nullptr)
+		{
+			SentType = Truck->TypeCode();
+			const FVehicle* Vehicle = Truck->AsVehicle();
+			bWholeChain |= Vehicle != nullptr && Vehicle->HasTrailer()
+				&& Truck->TowAxles.Num() == Vehicle->Tow.Num();
+		}
+		const FRoadAgent* Plane = Fixture.Traffic->FindAgent(Aircraft);
+		return Plane == nullptr || Plane->Phase != EAgentPhase::Parked;
+	}, 900.0);
+
+	GLog->RemoveOutputDevice(&Spy);
+
+	if (!TestTrue(TEXT("an aircraft parked at the A stand"), Aircraft != 0)) { return false; }
+	TestTrue(TEXT("a vehicle was dispatched"), TruckId != 0);
+	TestEqual(TEXT("and it is the utility tow, A's design vehicle"), SentType, Tow.TypeCode);
+	TestTrue(TEXT("dispatched as the whole chain - one laid axle per tow link"), bWholeChain);
+	TestTrue(TEXT("and departed"), bDeparted);
+
+	// FROM THE LOG, not the demand's state: the Done state and the departure that drops the
+	// demand can fall in one Tick, so a per-step look at the state can miss Done entirely.
+	bool bDepartLine = false;
+	bool bFuelledLine = false;
+	for (const FString& Line : Spy.CapturedLines)
+	{
+		bFuelledLine |= Line.Contains(FString::Printf(TEXT("aircraft %d fuelled at stand"), Aircraft));
+		bDepartLine |= Line.Contains(TEXT("departs stand")) && Line.Contains(TEXT("after its turnaround"));
+		TestFalse(*FString::Printf(TEXT("never UNFUELLED: %s"), *Line), Line.Contains(TEXT("UNFUELLED")));
+	}
+	TestTrue(TEXT("the aircraft was fuelled"), bFuelledLine);
+	TestTrue(TEXT("the departure was logged as a normal one"), bDepartLine);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTruckServesCodeCTest, "AirportOps.Fuel.TruckServesCodeC",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelTruckServesCodeCTest::RunTest(const FString& Parameters)
+{
+	FFuelFixture Fixture;
+	Fixture.StandLetter = EIcaoCode::C;
+	Fixture.bFarEdgeRoad = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked at the C stand"), Aircraft != 0)) { return false; }
+	Fixture.Advance(0.2);
+
+	const FFuelDemand* Demand = FuelServiceTest::DemandFor(*Fixture.Service, Aircraft);
+	const FRoadAgent* Truck = Demand != nullptr ? Fixture.Traffic->FindAgent(Demand->TruckId) : nullptr;
+	if (!TestNotNull(TEXT("a vehicle is out for it"), Truck)) { return false; }
+
+	const FVehicle Design = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
+	TestEqual(TEXT("it is the fuel truck, C's design vehicle"), Truck->TypeCode(), Design.TypeCode);
+	TestNotEqual(TEXT("and not the tow"), Truck->TypeCode(), UAirsideSettings::ResolveUtilityTowVehicle().TypeCode);
+
+	// THE ROUTE CACHE KEYS ON THE VEHICLE'S FIGURES (RoutePlanCache::VehicleIdentity), so a tow
+	// and a truck asked from the same depot to the same hydrant must never share an entry -
+	// else the first one's plan would be driven by the other.
+	TestNotEqual(TEXT("the tow and the truck never share a route cache entry"),
+		RoutePlanCache::VehicleIdentity(UAirsideSettings::ResolveUtilityTowVehicle()),
+		RoutePlanCache::VehicleIdentity(Design));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelVehicleTooLargeRefusedTest, "AirportOps.Fuel.VehicleTooLargeRefused",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelVehicleTooLargeRefusedTest::RunTest(const FString& Parameters)
+{
+	// A DEPOT THAT WOULD SEND THE TRUCK TO AN A STAND. Unreachable in the game today - fleets
+	// are untyped, so Sent is always Design - and staged here by writing the table, which is
+	// exactly where a typed fleet will one day put a different vehicle.
+	FFuelFixture Fixture;
+	Fixture.StandLetter = EIcaoCode::A;
+	Fixture.bFarEdgeRoad = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.Service->VehiclesFor(EIcaoCode::A).Sent = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
+
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked at the A stand"), Aircraft != 0)) { return false; }
+	Fixture.Advance(0.2);
+
+	const FFuelDemand* Demand = FuelServiceTest::DemandFor(*Fixture.Service, Aircraft);
+	if (!TestNotNull(TEXT("it demanded fuel"), Demand)) { return false; }
+	TestEqual(TEXT("unserviceable"),
+		static_cast<int32>(Demand->State), static_cast<int32>(EFuelDemandState::Unserviceable));
+	TestEqual(TEXT("because the vehicle is larger than the stand was drawn for"),
+		static_cast<int32>(Demand->Why), static_cast<int32>(EFuelRefusal::VehicleTooLarge));
+	TestEqual(TEXT("and the card names the vehicle, not the road"),
+		Fixture.Service->DescribeAgent(Aircraft),
+		FString(TEXT("the depot's vehicle is too large for this stand")));
+	TestEqual(TEXT("no truck went out"), Demand->TruckId, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelRuntimeResolvesPerStandTest, "AirportOps.Fuel.RuntimeResolvesPerStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelRuntimeResolvesPerStandTest::RunTest(const FString& Parameters)
+{
+	// THE COMPOSITION SEAM: UOpsRuntime::Attach fills the table, the real tick loop dispatches.
+	// An A stand and a C stand side by side, one depot each, one aircraft each - two DIFFERENT
+	// vehicle types must come out. Fails if Attach resolves one fixed vehicle for every letter,
+	// or if dispatch reads one entry whatever the stand.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	URoadNetwork& Net = *Actor->Network;
+
+	// THE WORLD-FREE FIXTURE'S bFarEdgeRoad GEOMETRY, for two stands: the taxiway to the west,
+	// both stands facing +X off it (A at the origin, C 9000 north, clear of A's 5000 width), and
+	// one north-south road beyond BOTH far edges - C's is the deeper - with a depot east of it
+	// per stand, south of both, so neither aircraft has to wait for the other's truck.
+	FGuidelineNodeId TaxiSouth, TaxiNorth, RoadSouth, RoadNorth;
+	LayLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 20000.0),
+		ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);
+
+	const FEntityInstanceId StandA = FuelServiceTest::PlaceDrawnStand(Net, EIcaoCode::A, FVector2D(0.0, 0.0));
+	const FEntityInstanceId StandC = FuelServiceTest::PlaceDrawnStand(Net, EIcaoCode::C, FVector2D(0.0, 9000.0));
+	double FarEdge = -TNumericLimits<double>::Max();
+	for (const FEntityInstanceId Stand : { StandA, StandC })
+	{
+		for (const FVector2D& Corner : Net.GetEntity(Stand)->Outline)
+		{
+			FarEdge = FMath::Max(FarEdge, Corner.X);
+		}
+	}
+	const double RoadX = FarEdge + FFuelFixture::FarRoadClearance;
+	LayLine(Net, FVector2D(RoadX, -10000.0), FVector2D(RoadX, 20000.0),
+		ETraversalClass::GroundVehicle, RoadSouth, RoadNorth);
+
+	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+	for (const double Y : { -6000.0, -3000.0 })
+	{
+		Net.PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(RoadX + 4000.0, Y),
+			0.0, 0.0, DepotDef->PoseRole, DepotDef->Trucks);
+	}
+	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	if (!TestNotNull(TEXT("the runtime owns a fuel service"), Runtime->GetFuelService())) { return false; }
+	Runtime->Attach(Actor);
+
+	const FName Tow = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::A).TypeCode;
+	const FName Truck = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode;
+	if (!TestNotEqual(TEXT("A and C have different design vehicles, or this proves nothing"), Tow, Truck))
+	{
+		return false;
+	}
+
+	constexpr float Step = 1.0f / 30.0f;
+	TSet<FName> Sent;
+	auto TickAndWatch = [&]()
+	{
+		Actor->Tick(Step);
+		Runtime->Tick(Step);
+		for (const FRoadAgent& Agent : Actor->GetTraffic()->GetModel()->GetAgents())
+		{
+			if (Agent.Class == ETraversalClass::GroundVehicle)
+			{
+				Sent.Add(Agent.TypeCode());
+			}
+		}
+	};
+
+	// ONE AIRCRAFT AT A TIME onto the shared taxiway, so the second never meets the first on
+	// the lead-in: the second is dispatched once the first has parked and asked for fuel.
+	for (const FEntityInstanceId Stand : { StandA, StandC })
+	{
+		const int32 DemandsBefore = Runtime->GetFuelService()->GetDemands().Num();
+		const FRoutePlan Plan = TestGraph::Probe(Net, TaxiSouth, Net.GetEntity(Stand)->PoseNode, ETraversalClass::Aircraft);
+		if (!TestTrue(TEXT("the aircraft routes to its stand"), Plan.IsValid())) { return false; }
+		if (!TestTrue(TEXT("and dispatches"), Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultAirframe())))
+		{
+			return false;
+		}
+		for (int32 Tick = 0; Tick < 3600 && Runtime->GetFuelService()->GetDemands().Num() == DemandsBefore; ++Tick)
+		{
+			TickAndWatch();
+		}
+	}
+	for (int32 Tick = 0; Tick < 600 && Sent.Num() < 2; ++Tick)
+	{
+		TickAndWatch();
+	}
+
+	TestTrue(TEXT("the A stand was sent the tow"), Sent.Contains(Tow));
+	TestTrue(TEXT("the C stand was sent the truck"), Sent.Contains(Truck));
+	TestEqual(TEXT("the runtime's table answers A's stand with the tow"),
+		Runtime->GetFuelService()->VehicleFor(*Net.GetEntity(StandA)).TypeCode, Tow);
+	TestEqual(TEXT("and C's with the truck"),
+		Runtime->GetFuelService()->VehicleFor(*Net.GetEntity(StandC)).TypeCode, Truck);
 	return true;
 }
 

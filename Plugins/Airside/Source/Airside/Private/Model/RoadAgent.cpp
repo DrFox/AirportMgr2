@@ -373,6 +373,16 @@ void FRoadAgent::StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe)
 	RestartTaxi(Plan);
 }
 
+bool FRoadAgent::SetVehicleForTest(const FVehicle& InVehicle)
+{
+	if (Body != EAgentBody::Vehicle)
+	{
+		return false;
+	}
+	Vehicle = InVehicle;
+	return true;
+}
+
 void FRoadAgent::StartDrive(const FRoutePlan& Plan, const FVehicle& InVehicle)
 {
 	Body = EAgentBody::Vehicle;

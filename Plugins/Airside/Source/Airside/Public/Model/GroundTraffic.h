@@ -785,6 +785,15 @@ private:
 	 */
 	bool BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySeed);
 
+	/**
+	 * Swaps a Vehicle-bodied agent's FVehicle in place, figures only - no re-lay of its tow, no
+	 * re-plan. So a world-free test can make the vehicle ALREADY OUT no longer fit the road it
+	 * will be sent home on: UFuelService routes a truck home by the agent's own vehicle, and
+	 * that is set once, at dispatch. False for an unknown agent or an aircraft. Not public -
+	 * see FGroundTrafficTestAccess (#104).
+	 */
+	bool SetVehicleForTest(int32 AgentId, const FVehicle& Vehicle);
+
 public:
 	/** Route distance at which Step begins - the previous step's end, or 0. Public: FClaimPass,
 	 *  FDeadlockResolver and FPlanReResolver all read plan geometry through this and the two
@@ -816,6 +825,9 @@ struct FGroundTrafficTestAccess
 
 	/** See UGroundTraffic::StrandForTest's own comment. */
 	bool Strand(int32 AgentId) { return Traffic.StrandForTest(AgentId); }
+
+	/** See UGroundTraffic::SetVehicleForTest's own comment. */
+	bool SetVehicle(int32 AgentId, const FVehicle& Vehicle) { return Traffic.SetVehicleForTest(AgentId, Vehicle); }
 
 	/** See UGroundTraffic::BeginCrossingForTest's own comment. */
 	bool BeginCrossing(int32 AgentId, FRoadSegmentId RunwaySeed)

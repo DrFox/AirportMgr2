@@ -7,6 +7,7 @@
 #include "Model/RoutePlanCache.h"
 #include "Model/RouteSearch.h"
 #include "Model/Vehicle.h"
+#include "Solve/IcaoCode.h"
 #include "UObject/Object.h"
 
 class USimClock;
@@ -95,7 +96,43 @@ enum class EFuelRefusal : uint8
 	 * from depot" and send the player to look at a road that is already there. What they
 	 * actually need to do is build a pump in a bay.
 	 */
-	NoPump
+	NoPump,
+
+	/**
+	 * A depot is on a road with a pump and a truck, but the vehicle it would send is LARGER than
+	 * the stand was drawn for (VehicleFit::NoLargerThan against the letter's design vehicle,
+	 * spec 2026-09-26 section 2). A stand's lane legs are only proven drivable by its own design
+	 * vehicle and anything no larger, so sending a bigger one would strand it on a leg it
+	 * cannot take. ITS OWN REFUSAL AND NOT TooNarrow: nothing about the ROAD is wrong, and a
+	 * player widening one would fix nothing. UNREACHABLE TODAY, deliberately - fleets are
+	 * untyped counts, so a depot sends the design vehicle itself - and here so typed fleets
+	 * slot in behind a refusal that already exists.
+	 */
+	VehicleTooLarge
+};
+
+/**
+ * One ICAO letter's two fuel vehicles: what its stand was DRAWN for, and what a depot SENDS.
+ *
+ * TWO FIELDS, ONE STRUCT ("one struct per thing"): they are always read together - the guard in
+ * ChooseDepot compares them - and two parallel arrays would be two tables that could be filled
+ * in different breaths. EQUAL TODAY: depot fleets are untyped counts, so the vehicle sent is the
+ * most efficient that fits, which is the design vehicle itself (spec 2026-09-26 section 2). They
+ * part company only when typed fleets arrive, and Sent is the field that will change.
+ *
+ * Each an FVehicle, not an FAirframe with its climb zeroed - the single TruckVehicle this table
+ * replaced made that move on 2026-09-23 (see Model/Vehicle.h).
+ */
+USTRUCT()
+struct AIRPORTOPS_API FLetterFuelVehicles
+{
+	GENERATED_BODY()
+
+	/** What the letter's stand geometry is sized for - UAirsideSettings::ResolveStandDesignVehicle. */
+	UPROPERTY() FVehicle Design;
+
+	/** What a depot dispatches to a stand of this letter. Must be VehicleFit::NoLargerThan Design. */
+	UPROPERTY() FVehicle Sent;
 };
 
 /** One parked aircraft's fuel job. */
@@ -290,16 +327,37 @@ public:
 	 */
 	double DwellSecondsFor(const FEntityInstance& Depot) const;
 
+	/** How many ICAO letters the vehicle table holds, A-F. See VehiclesByLetter. */
+	static constexpr int32 LetterCount = 6;
+
 	/**
-	 * The truck's bundle - chassis and type code - dispatched with every fuel demand. An
-	 * FVehicle since 2026-09-23, not an FAirframe with its climb zeroed (see Model/Vehicle.h).
-	 *
-	 * Set from UAirsideSettings::ResolveDefaultVehicle() at attach, next to DwellSeconds
-	 * above - not resolved here at dispatch time. This is Model/, and reaching Content/ was
-	 * the only Model->Content edge in either plugin (#104): Present/ (UOpsRuntime) is where
-	 * every other content default gets resolved once and handed down.
+	 * Fill every letter's table entry from Resolve - Design and Sent both, since fleets are
+	 * untyped (FLetterFuelVehicles). Called ONCE, at attach, by UOpsRuntime with
+	 * UAirsideSettings::ResolveStandDesignVehicle, next to DwellSeconds above - not resolved
+	 * here at dispatch time. This is Model/, and reaching Content/ was the only Model->Content
+	 * edge in either plugin (#104): Present/ (UOpsRuntime) is where every other content default
+	 * gets resolved once and handed down. A TFunctionRef rather than the resolve itself for the
+	 * same reason, and so the world-free fixture fills the table through the one loop too.
 	 */
-	UPROPERTY() FVehicle TruckVehicle;
+	void ResolveVehicles(TFunctionRef<FVehicle(EIcaoCode)> Resolve);
+
+	/** One letter's entry. Mutable so a test can make the sent vehicle differ from the design. */
+	FLetterFuelVehicles& VehiclesFor(EIcaoCode Letter) { return VehiclesByLetter[static_cast<uint8>(Letter)]; }
+	const FLetterFuelVehicles& VehiclesFor(EIcaoCode Letter) const { return VehiclesByLetter[static_cast<uint8>(Letter)]; }
+
+	/**
+	 * The vehicle a depot sends to Stand: its outline's letter's Sent entry.
+	 *
+	 * THE OUTLINE'S LETTER (StandBox::LetterOf), not DesignWingspan's: the outline is what the
+	 * player drew and what the stand's definition was chosen from, the same reading
+	 * ARoadNetworkActor::RebindStandDefinitions makes. A stand whose outline reads as no letter
+	 * gets Code C's - the letter URoadNetwork::PlaceEntity gives every stand placed with no plot.
+	 * ENFORCED BY: Airside.Model.StandOutline.PointPlacedStandGetsOutline
+	 */
+	FVehicle VehicleFor(const FEntityInstance& Stand) const;
+
+	/** The letter VehicleFor reads Stand as - LetterOf(Outline), else C. See VehicleFor. */
+	static EIcaoCode LetterOfStand(const FEntityInstance& Stand);
 
 	/**
 	 * Every phase change in the traffic model - the events this class is driven by.
@@ -385,7 +443,8 @@ public:
 	 * FFuelBusyWaitSkipsChooseDepotTest already covers that skip on its own. The return type is
 	 * FDepotChoice, private below; auto lets a test hold one without naming it.
 	 */
-	auto ChooseDepotForTest(const URoadNetwork& Network, FGuidelineNodeId StandFuel) const { return ChooseDepot(Network, StandFuel); }
+	auto ChooseDepotForTest(const URoadNetwork& Network, FGuidelineNodeId StandFuel,
+		const FLetterFuelVehicles& Vehicles) const { return ChooseDepot(Network, StandFuel, Vehicles); }
 
 	/** See FleetRevision. For a test to assert a truck retiring/recalling actually moved it. */
 	uint32 GetFleetRevisionForTest() const { return FleetRevision; }
@@ -487,8 +546,15 @@ private:
 	 *
 	 * Reports Why in the order the spec fixes - NoDepot, NoRoad, StandUnjoined, NoRoute - so
 	 * the reason names the thing nearest the player's hand.
+	 *
+	 * Vehicles is the STAND's letter's entry: the route is searched for Vehicles.Sent, and a
+	 * depot whose Sent is larger than Vehicles.Design is refused VehicleTooLarge.
 	 */
-	FDepotChoice ChooseDepot(const URoadNetwork& Network, FGuidelineNodeId StandFuel) const;
+	FDepotChoice ChooseDepot(const URoadNetwork& Network, FGuidelineNodeId StandFuel,
+		const FLetterFuelVehicles& Vehicles) const;
+
+	/** VehiclesFor(LetterOfStand) for a stand by id; Code C's for a stand no longer there. */
+	const FLetterFuelVehicles& VehiclesForStand(const URoadNetwork& Network, FEntityInstanceId Stand) const;
 
 	/**
 	 * How many trucks this depot has out right now, counted off Demands and GoingHome.
@@ -532,4 +598,18 @@ private:
 	 * MUTABLE: ChooseDepot is const, same reason as ChooseDepotCallCountForTest above.
 	 */
 	mutable FRoutePlanCache RouteCache;
+
+	/**
+	 * The per-letter fuel vehicles, indexed by EIcaoCode - see ResolveVehicles for where they
+	 * are filled, and FLetterFuelVehicles for why each entry is two vehicles.
+	 *
+	 * A TABLE RESOLVED ONCE, NOT A RESOLVE PER DISPATCH (#104's rule, which the single
+	 * TruckVehicle this replaced also kept): one resolve per letter at attach, then a lookup.
+	 * TRANSIENT, where TruckVehicle was saved: it is a content default resolved every attach,
+	 * and a saved copy would pin the figures of whatever content the save was written under.
+	 *
+	 * A LITERAL 6, NOT LetterCount: UHT parses the dimension and a class constant is not
+	 * something it is promised to resolve. FuelService.cpp static_asserts the two agree.
+	 */
+	UPROPERTY(Transient) FLetterFuelVehicles VehiclesByLetter[6];
 };
