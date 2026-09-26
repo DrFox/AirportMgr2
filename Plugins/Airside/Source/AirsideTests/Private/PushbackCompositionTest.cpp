@@ -74,7 +74,7 @@ bool FAgentPushbackCompositionTest::RunTest(const FString& Parameters)
 
 	Actor->RebuildMesh();
 
-	if (Actor->ResolveStandDefinitionForTest() == nullptr)
+	if (Actor->ResolveStandDefinition() == nullptr)
 	{
 		// Reported rather than skipped silently: a test that quietly asserts nothing is worse
 		// than one that says why.
@@ -97,12 +97,12 @@ bool FAgentPushbackCompositionTest::RunTest(const FString& Parameters)
 
 	// Land and taxi in, the shape ArrivalDispatchTest uses for the same wait.
 	for (int32 Ticks = 0;
-		Ticks < 6000 && Actor->LastAgentPhaseForTest() != EAgentPhase::Parked; ++Ticks)
+		Ticks < 6000 && Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked; ++Ticks)
 	{
 		Actor->Tick(0.1f);
 	}
 	if (!TestEqual(TEXT("the arrival parks"),
-		Actor->LastAgentPhaseForTest(), EAgentPhase::Parked))
+		Actor->GetTraffic()->LastAgentPhaseForTest(), EAgentPhase::Parked))
 	{
 		return false;
 	}
@@ -131,7 +131,7 @@ bool FAgentPushbackCompositionTest::RunTest(const FString& Parameters)
 	int32 ManoeuvringTicks = 0;
 
 	for (int32 Ticks = 0;
-		Ticks < 6000 && Actor->LastAgentPhaseForTest() == EAgentPhase::Manoeuvring; ++Ticks)
+		Ticks < 6000 && Actor->GetTraffic()->LastAgentPhaseForTest() == EAgentPhase::Manoeuvring; ++Ticks)
 	{
 		Actor->Tick(0.1f);
 		++ManoeuvringTicks;

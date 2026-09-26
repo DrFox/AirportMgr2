@@ -386,20 +386,97 @@ int32 URoadEditFacade::PlaceNode(FVector2D Where)
 
 URoadProfile* URoadEditFacade::ResolveProfileFor(ERoadKind Kind, int32 WidthIndex)
 {
-	// FORWARDED SINCE 2026-09-20. The rule moved to ARoadNetworkActor::ResolveProfileFor, beside
-	// the Resolve* family it is composed of, so the guide anchor could ask it through
-	// IRoadEditTarget without this becoming a third copy - see that function's own comment.
-	return Actor().ResolveProfileFor(Kind, WidthIndex);
+	// EXTRACTED FROM ConnectNodes (below, this same class) SO THE GHOST AND THE CLICK CANNOT
+	// DISAGREE. The preview has to price what a click would actually lay, and a tool resolving
+	// the profile for itself would be a second answer to "which profile is this?" - the exact
+	// shape of bug the registry and the action table exist to prevent elsewhere. THE RULE ITSELF
+	// moved back here (issue #298) from ARoadNetworkActor, which now composes its own
+	// ResolveProfileFor by forwarding to this - see the header's own comment for the width rule.
+	//
+	// Until 2026-09-23 a service road ignored the index outright: it had one authored
+	// cross-section, and a TAXIWAY index reaching it would have laid 23 m for vans. The index is
+	// now resolved against the ROAD list (Owner.ResolveWidthProfile keys by kind), so it can
+	// only ever name a road tier.
+	ARoadNetworkActor& Owner = Actor();
+	URoadProfile* Chosen = nullptr;
+	if (WidthIndex != INDEX_NONE)
+	{
+		Chosen = Owner.ResolveWidthProfile(Kind, WidthIndex);
+	}
+	else if (Kind == ERoadKind::ServiceRoad)
+	{
+		Chosen = Owner.ResolveServiceRoadProfile();
+	}
+	if (Chosen == nullptr && Kind != ERoadKind::ServiceRoad)
+	{
+		// No index, or an index the content set cannot answer. Either way the level's own
+		// tuning is the honest fallback here - unlike the service road, a taxiway always has one.
+		Chosen = Owner.ResolveProfile();
+	}
+	return Chosen;
+}
+
+FBuildSessionTunables URoadEditFacade::MakeTunables(double ViewWorldWidth)
+{
+	ARoadNetworkActor& Owner = Actor();
+
+	// The corner-fit rule needs the width of the road about to be drawn, which only the
+	// actor's own profile resolver knows - refreshed on PlacementLimits itself, not just the
+	// Tunables copy, so PlanNodeDeletion (which reads PlacementLimits directly, not through
+	// here) judges a rejoin against the same width a click just did. NewRoadHalfWidth is
+	// deliberately not a UPROPERTY - see FRoadPlacementLimits - so this is a cache refresh, the
+	// same shape as RuntimeProfile, not a write to authored state.
+	if (const URoadProfile* ProfileForLimits = Owner.ResolveProfile())
+	{
+		Owner.PlacementLimits.NewRoadHalfWidth = ProfileForLimits->GetMaxHalfWidth();
+	}
+
+	FBuildSessionTunables Tunables;
+	Tunables.Snap = Owner.Snap;
+	Tunables.GuideSources = Owner.GuideSources;
+	Tunables.Limits = Owner.PlacementLimits;
+
+	// ViewWorldWidth > 0: the caller has no view-scale UPROPERTY of its own to read (the
+	// editor tool) and wants a radius that stays clickable at any zoom - the same 2% floor
+	// URoadBuildEditorTool::MakeContextAt used to compute for itself. 0: the caller (the
+	// runtime driver) has its own ToolPickRadius and overwrites this right after - see
+	// ARoadBuildController::MakeToolContext.
+	if (ViewWorldWidth > 0.0)
+	{
+		const double Floor = FMath::Max(150.0, ViewWorldWidth * 0.02);
+		Tunables.ToolPickRadius = Floor;
+
+		// A FLOOR ON THE AUTHORED VALUE, not an overwrite of it: the road-snap radii are
+		// per-airport now (ARoadNetworkActor::Snap, issue #93), and folding them down to a
+		// fixed 150/150 here would be a THIRD place they came from, on top of the level
+		// author's own choice and the class default. Without the floor, "has to be a screen
+		// distance, not a world one" - the reason MakeContextAt computed this at all - goes
+		// straight back to being sub-pixel at 20000 uu of view width: max() keeps whichever
+		// of the two is more generous, so a wide-open airport with untouched defaults still
+		// snaps by screen size, and an airport whose author widened NodeRadius past the
+		// floor keeps that choice.
+		Tunables.Snap.NodeRadius = FMath::Max(Tunables.Snap.NodeRadius, Floor);
+		Tunables.Snap.SegmentRadius = FMath::Max(Tunables.Snap.SegmentRadius, Floor);
+	}
+	else
+	{
+		Tunables.ToolPickRadius = FBuildSessionTunables().ToolPickRadius;
+	}
+
+	return Tunables;
 }
 
 FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
 	int32 WidthIndex) const
 {
 	const URoadNetwork* Network = Actor().Network;
-	// THROUGH THE ACTOR, not through this - ResolveProfileFor is non-const because
-	// ARoadNetworkActor::ResolveProfile lazily fills RuntimeProfile, a decision that header
-	// records deliberately. Actor() hands back a non-const reference from a const method, so a
-	// quote can ask the question without that decision having to be reversed for it.
+	// THROUGH THE ACTOR'S OWN FORWARDER, not this class's ResolveProfileFor directly - that
+	// method is non-const (it may reach Actor().ResolveProfile(), which lazily fills
+	// RuntimeProfile, a decision that method's own comment records deliberately), and this
+	// method is const. Actor() hands back a non-const reference from a const method, so a quote
+	// can still ask the question - through ARoadNetworkActor::ResolveProfileFor, which forwards
+	// straight back to THIS object's own (non-const) ResolveProfileFor above - without that
+	// decision having to be reversed for it.
 	const URoadProfile* Profile = Actor().ResolveProfileFor(Kind, WidthIndex);
 	if (Network == nullptr || Profile == nullptr || !Network->GetNodes().IsValidIndex(FromIndex))
 	{

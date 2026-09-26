@@ -19,6 +19,7 @@
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadEditFacade.h"
+#include "Present/StandDefinitionCache.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/StandBox.h"
@@ -130,6 +131,10 @@ ARoadNetworkActor::ARoadNetworkActor()
 	Traffic = CreateDefaultSubobject<UAirsideTraffic>(TEXT("Traffic"));
 	Smoke = CreateDefaultSubobject<UTyreSmoke>(TEXT("Smoke"));
 
+	// The per-letter stand Flyweights and the rebind step (issue #298) - same
+	// CreateDefaultSubobject/Transient/PostInitProperties re-point pattern as the three above.
+	StandDefinitions = CreateDefaultSubobject<UStandDefinitionCache>(TEXT("StandDefinitions"));
+
 	// Same idiom as OnChanged above: the facade must not reach past Network/History for
 	// anything else (#104), so FindRoute's vehicle-occupancy lookup asks this provider
 	// instead of Actor().GetTraffic()->GetModel() directly - wired here because this is the
@@ -238,7 +243,16 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSetti
 	Settings.TexelsPerUnit = TexelsPerUnit;
 	Settings.RibbonSegments = RibbonSegments;
 	Settings.GhostZOffset = GhostZOffset;
-	Settings.GhostMaterial = ResolveGhostMaterial();
+
+	// THROUGH THE CACHE, NOT A FRESH ResolveGhostMaterial() (issue #298) - this used to call the
+	// resolver directly, which is a GetContent() plus a LoadSynchronous on every ghost cache
+	// MISS, i.e. once per frame of a drag (IsGhostCacheHit fails whenever the cursor position has
+	// moved, which on a drag is every frame). #190's whole point was that this pair of calls
+	// costs something and should run once per dirty mark, not once per frame; the ghost path
+	// re-grew the very cost that cache exists to remove by reading the resolver instead of the
+	// cache it fills. ENFORCED BY: Airside.Present.GhostDragDoesNotReresolveContent.
+	RefreshResolvedContentCacheIfDirty();
+	Settings.GhostMaterial = ResolvedGhostMaterialCache;
 
 	// THE KIND THE CLICK WILL ACTUALLY LAY, not always the taxiway. A ghost is a promise
 	// about what a click does, and a 23 m preview over a 6 m road is a promise the player
@@ -287,7 +301,7 @@ void ARoadNetworkActor::PostInitProperties()
 	Facade = Cast<URoadEditFacade>(GetDefaultSubobjectByName(TEXT("Facade")));
 	Traffic = Cast<UAirsideTraffic>(GetDefaultSubobjectByName(TEXT("Traffic")));
 	Smoke = Cast<UTyreSmoke>(GetDefaultSubobjectByName(TEXT("Smoke")));
-
+	StandDefinitions = Cast<UStandDefinitionCache>(GetDefaultSubobjectByName(TEXT("StandDefinitions")));
 }
 
 #if WITH_EDITOR
@@ -303,16 +317,6 @@ void ARoadNetworkActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyCh
 	bResolvedContentDirty = true;
 }
 #endif
-
-UObject* ARoadNetworkActor::FacadeOuterForTest() const
-{
-	return Facade ? Facade->GetOuter() : nullptr;
-}
-
-UObject* ARoadNetworkActor::PresenterOuterForTest() const
-{
-	return Presenter ? Presenter->GetOuter() : nullptr;
-}
 
 void ARoadNetworkActor::PostRegisterAllComponents()
 {
@@ -448,39 +452,40 @@ ARoadNetworkActor* ARoadNetworkActor::FindOrCreate(UWorld* World)
 	return World->SpawnActor<ARoadNetworkActor>(FVector::ZeroVector, FRotator::ZeroRotator, Params);
 }
 
+// THE ONE SHAPE ALL FIVE BELOW SHARE (issue #298) - see the declaration's own comment. Explicit
+// specialisation is not needed: every call site below supplies T = UMaterialInterface, and the
+// compiler instantiates this once, here, the first time it is used.
+template<class T>
+T* ARoadNetworkActor::ResolveOverrideOr(TObjectPtr<T> Override, TSoftObjectPtr<T> UAirsideContent::* Member)
+{
+	if (Override != nullptr) { return Override; }
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? (Content->*Member).LoadSynchronous() : nullptr;
+}
+
 UMaterialInterface* ARoadNetworkActor::ResolveSurfaceMaterial() const
 {
-	if (SurfaceMaterial != nullptr) { return SurfaceMaterial; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->SurfaceMaterial.LoadSynchronous() : nullptr;
+	return ResolveOverrideOr(SurfaceMaterial, &UAirsideContent::SurfaceMaterial);
 }
 
 UMaterialInterface* ARoadNetworkActor::ResolveApronMaterial() const
 {
-	if (ApronMaterial != nullptr) { return ApronMaterial; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->ApronMaterial.LoadSynchronous() : nullptr;
+	return ResolveOverrideOr(ApronMaterial, &UAirsideContent::ApronMaterial);
 }
 
 UMaterialInterface* ARoadNetworkActor::ResolveRubberMaterial() const
 {
-	if (RubberMaterial != nullptr) { return RubberMaterial; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->RubberMaterial.LoadSynchronous() : nullptr;
+	return ResolveOverrideOr(RubberMaterial, &UAirsideContent::RubberMaterial);
 }
 
 UMaterialInterface* ARoadNetworkActor::ResolveTyreSmokeMaterial() const
 {
-	if (TyreSmokeMaterial != nullptr) { return TyreSmokeMaterial; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->TyreSmokeMaterial.LoadSynchronous() : nullptr;
+	return ResolveOverrideOr(TyreSmokeMaterial, &UAirsideContent::TyreSmokeMaterial);
 }
 
 UMaterialInterface* ARoadNetworkActor::ResolveGhostMaterial() const
 {
-	if (GhostMaterial != nullptr) { return GhostMaterial; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->GhostMaterial.LoadSynchronous() : nullptr;
+	return ResolveOverrideOr(GhostMaterial, &UAirsideContent::GhostMaterial);
 }
 
 URoadMaterialSet* ARoadNetworkActor::ResolveMaterialSet() const
@@ -536,107 +541,17 @@ UEntityDefinition* ARoadNetworkActor::ResolveStandDefinition() const
 
 UEntityDefinition* ARoadNetworkActor::ResolveStandDefinitionFor(EIcaoCode Letter) const
 {
-	// CODE C KEEPS ITS AUTHORED ASSET - see the header. Every other letter has none, so it
-	// falls through to the lazily-built cache below.
-	if (Letter == EIcaoCode::C)
-	{
-		return ResolveStandDefinition();
-	}
-
-	// FILLED THROUGH A const_cast, not a mutable member - see the header. LetterStandDefinitions
-	// is sized on first use rather than in the constructor, so an actor spawned before this
-	// task (or a saved level from before it) still starts with an empty array rather than six
-	// null-but-present slots nobody asked for.
-	ARoadNetworkActor* MutableThis = const_cast<ARoadNetworkActor*>(this);
-	const int32 Ordinal = static_cast<int32>(Letter);
-	if (MutableThis->LetterStandDefinitions.Num() <= Ordinal)
-	{
-		MutableThis->LetterStandDefinitions.SetNum(Ordinal + 1);
-	}
-
-	if (LetterStandDefinitions[Ordinal] == nullptr)
-	{
-		UEntityDefinition* Definition = UEntityDefinition::MakeStandTransient(Letter, MutableThis);
-
-		// NEVER SAVED - see LetterStandDefinitions. RF_Transient is what makes a level save
-		// write a stand's reference to this object as null (RebindStandDefinitions fills it
-		// back in on load) instead of serialising a frozen copy of the template beside it.
-		Definition->SetFlags(RF_Transient);
-
-		// THE ONE PLACE a per-letter design aircraft could be filled in, matching every other
-		// Resolve* here (CLAUDE.md's "Content/ resolves every content default in exactly one
-		// function") - see UAirsideSettings::ResolveLargestAircraftOfLetter's own header for
-		// why it returns null for every letter today rather than scanning for one.
-		Definition->DesignAircraft = UAirsideSettings::ResolveLargestAircraftOfLetter(Letter);
-
-		MutableThis->LetterStandDefinitions[Ordinal] = Definition;
-
-		if (!UEntityDefinition::FitsItsLetter(*Definition, Letter))
-		{
-			// LOGGED ONCE, HERE, ON THE CACHE MISS - not on every ResolveStandDefinitionFor
-			// call, which WhyStandRefused and PlaceStandInPlot both make per player action.
-			UE_LOG(LogRoadMesh, Warning,
-				TEXT("ResolveStandDefinitionFor: Code %s's own template does not fit its "
-					 "letter's floor - Code %s stands cannot be built yet."),
-				IcaoCode::ToLetter(Letter), IcaoCode::ToLetter(Letter));
-		}
-	}
-
-	// FITNESS IS CHECKED EVERY CALL, NOT CACHED AS A BOOL: the definition itself is what is
-	// cached (so a fit letter keeps returning the SAME object), and FitsItsLetter is cheap -
-	// two comparisons and a table lookup - so there is nothing worth a second cached field for.
-	return UEntityDefinition::FitsItsLetter(*LetterStandDefinitions[Ordinal], Letter)
-		? LetterStandDefinitions[Ordinal].Get()
-		: nullptr;
+	// FORWARDS TO StandDefinitions (issue #298) - see UStandDefinitionCache::
+	// ResolveStandDefinitionFor for the Flyweight cache, the const_cast this used to need and no
+	// longer does, and the null-when-it-does-not-fit-its-letter rule.
+	return StandDefinitions->ResolveStandDefinitionFor(Letter);
 }
 
 int32 ARoadNetworkActor::RebindStandDefinitions()
 {
-	if (Network == nullptr)
-	{
-		return 0;
-	}
-
-	int32 Rebound = 0;
-	const TArray<FEntityInstance>& Entities = Network->GetEntities();
-	for (int32 Index = 0; Index < Entities.Num(); ++Index)
-	{
-		const FEntityInstance& Entity = Entities[Index];
-		// ONE LINE, BOTH NAMES (Check-Architecture's is-plotted-not-depot rule): a stand with
-		// an outline. One without is a legacy stand EnsureStandOutlines has not reached yet -
-		// the callers run that first - and has no letter to read.
-		if (!Entity.bAlive || !(Entity.IsStand() && Entity.IsPlotted()))
-		{
-			continue;
-		}
-
-		// THE OUTLINE'S LETTER, not DesignWingspan's: the outline is what the player drew and
-		// what the definition was chosen from at commit (PlaceStandInPlot), so reading it back
-		// here resolves the SAME definition the commit did.
-		const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Entity.Outline);
-		UEntityDefinition* Definition = Letter.IsSet() ? ResolveStandDefinitionFor(*Letter) : nullptr;
-		if (Definition == nullptr)
-		{
-			// LEFT UNTOUCHED, not cleared: whatever it has is no worse than nothing, and a
-			// stand whose Definition is null already says "NOT reachable" in the Inspector.
-			UE_LOG(LogRoadMesh, Warning,
-				TEXT("RebindStandDefinitions: stand %d's outline reads as %s, which has no buildable "
-					 "definition - left as it was."),
-				Index, Letter.IsSet() ? *FString::Printf(TEXT("Code %s"), IcaoCode::ToLetter(*Letter)) : TEXT("no letter"));
-			continue;
-		}
-		if (Entity.Definition != Definition && Network->SetEntityDefinition(Network->EntityIdAt(Index), Definition))
-		{
-			++Rebound;
-		}
-	}
-
-	if (Rebound > 0)
-	{
-		UE_LOG(LogRoadMesh, Log,
-			TEXT("RebindStandDefinitions: %d stand(s) re-pointed at their letter's definition."), Rebound);
-	}
-	return Rebound;
+	// FORWARDS TO StandDefinitions (issue #298), handing over Network - which this actor owns,
+	// not the cache - see UStandDefinitionCache::RebindStandDefinitions for the walk itself.
+	return StandDefinitions->RebindStandDefinitions(Network);
 }
 
 UEntityDefinition* ARoadNetworkActor::ResolveFuelDepotDefinition() const
@@ -748,50 +663,11 @@ URoadProfile* ARoadNetworkActor::ResolveProfile()
 
 FBuildSessionTunables ARoadNetworkActor::MakeTunables(double ViewWorldWidth)
 {
-	// The corner-fit rule needs the width of the road about to be drawn, which only the
-	// actor's own profile resolver knows - refreshed on PlacementLimits itself, not just the
-	// Tunables copy, so URoadEditFacade::PlanNodeDeletion (which reads PlacementLimits
-	// directly, not through here) judges a rejoin against the same width a click just did.
-	// NewRoadHalfWidth is deliberately not a UPROPERTY - see FRoadPlacementLimits - so this
-	// is a cache refresh, the same shape as RuntimeProfile, not a write to authored state.
-	if (const URoadProfile* ProfileForLimits = ResolveProfile())
-	{
-		PlacementLimits.NewRoadHalfWidth = ProfileForLimits->GetMaxHalfWidth();
-	}
-
-	FBuildSessionTunables Tunables;
-	Tunables.Snap = Snap;
-	Tunables.GuideSources = GuideSources;
-	Tunables.Limits = PlacementLimits;
-
-	// ViewWorldWidth > 0: the caller has no view-scale UPROPERTY of its own to read (the
-	// editor tool) and wants a radius that stays clickable at any zoom - the same 2% floor
-	// URoadBuildEditorTool::MakeContextAt used to compute for itself. 0: the caller (the
-	// runtime driver) has its own ToolPickRadius and overwrites this right after - see
-	// ARoadBuildController::MakeToolContext.
-	if (ViewWorldWidth > 0.0)
-	{
-		const double Floor = FMath::Max(150.0, ViewWorldWidth * 0.02);
-		Tunables.ToolPickRadius = Floor;
-
-		// A FLOOR ON THE AUTHORED VALUE, not an overwrite of it: the road-snap radii are
-		// per-airport now (FRoadNetworkActor::Snap, issue #93), and folding them down to a
-		// fixed 150/150 here would be a THIRD place they came from, on top of the level
-		// author's own choice and the class default. Without the floor, "has to be a screen
-		// distance, not a world one" - the reason MakeContextAt computed this at all - goes
-		// straight back to being sub-pixel at 20000 uu of view width: max() keeps whichever
-		// of the two is more generous, so a wide-open airport with untouched defaults still
-		// snaps by screen size, and an airport whose author widened NodeRadius past the
-		// floor keeps that choice.
-		Tunables.Snap.NodeRadius = FMath::Max(Tunables.Snap.NodeRadius, Floor);
-		Tunables.Snap.SegmentRadius = FMath::Max(Tunables.Snap.SegmentRadius, Floor);
-	}
-	else
-	{
-		Tunables.ToolPickRadius = FBuildSessionTunables().ToolPickRadius;
-	}
-
-	return Tunables;
+	// FORWARDS TO Facade (issue #298) - see URoadEditFacade::MakeTunables for the bundle itself.
+	// Kept here at the same name/signature: see this method's own header comment for why a
+	// forwarder, not a repointed call site, is what the two drivers holding
+	// TObjectPtr<ARoadNetworkActor> need.
+	return Facade->MakeTunables(ViewWorldWidth);
 }
 
 void ARoadNetworkActor::RebuildMesh()
@@ -881,13 +757,18 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 {
 	// Asked FIRST, before anything is resolved: a still drag calls this every frame with an
 	// unchanged FromNodeIndex/SnapResult, and the cache already knows that without a Resolve*
-	// call. Only a validity flip on an otherwise-unchanged ghost costs one (GhostMaterial).
+	// call. Only a validity flip on an otherwise-unchanged ghost costs one (GhostMaterial) - and
+	// THROUGH THE CACHE, not a fresh ResolveGhostMaterial() (issue #298, same reasoning as
+	// MakeGhostSurfaceSettings): a validity flip is exactly as cheap as any other ghost frame
+	// should be, and RefreshResolvedContentCacheIfDirty() is a no-op whenever nothing invalidated
+	// it, which is every frame between two PostEditChangeProperty calls.
 	bool bValidityChanged = false;
 	if (Presenter->IsGhostCacheHit(Network, FromNodeIndex, SnapResult, bValid, bValidityChanged, Kind, WidthIndex))
 	{
 		if (bValidityChanged)
 		{
-			Presenter->SetGhostValidity(bValid, ResolveGhostMaterial());
+			RefreshResolvedContentCacheIfDirty();
+			Presenter->SetGhostValidity(bValid, ResolvedGhostMaterialCache);
 		}
 		return;
 	}
@@ -1023,16 +904,6 @@ ARoadAgentActor* ARoadNetworkActor::GetAgentView(int32 AgentId) const
 	return Traffic->GetAgentView(AgentId);
 }
 
-EAgentPhase ARoadNetworkActor::LastAgentPhaseForTest() const
-{
-	return Traffic->LastAgentPhaseForTest();
-}
-
-double ARoadNetworkActor::LastAgentTaxiSpeedCapForTest() const
-{
-	return Traffic->LastAgentTaxiSpeedCapForTest();
-}
-
 FRoutePlan ARoadNetworkActor::FindRoute(
 	FGuidelineNodeId Start, FGuidelineNodeId Goal, ETraversalClass Class, double Wingspan,
 	ERouteErrand Errand) const
@@ -1064,39 +935,9 @@ int32 ARoadNetworkActor::PlaceNode(FVector2D Where)
 
 URoadProfile* ARoadNetworkActor::ResolveProfileFor(ERoadKind Kind, int32 WidthIndex)
 {
-	// EXTRACTED FROM ConnectNodes SO THE GHOST AND THE CLICK CANNOT DISAGREE. The preview has
-	// to price what a click would actually lay, and a tool resolving the profile for itself
-	// would be a second answer to "which profile is this?" - the exact shape of bug the
-	// registry and the action table exist to prevent elsewhere.
-	//
-	// A CHOSEN WIDTH WINS OVER THE DEFAULT: WidthIndex names one of the content set's
-	// standard widths FOR THIS KIND (the tool cycles it on key-again), INDEX_NONE means
-	// "whatever this kind defaults to". The default for a taxiway is the ACTOR's own profile,
-	// which ResolveProfile keeps the content set out of on purpose - so a player who never
-	// touches the cycle lays exactly the road this level was tuned for. A service road's is
-	// ResolveServiceRoadProfile.
-	//
-	// Until 2026-09-23 a service road ignored the index outright: it had one authored
-	// cross-section, and a TAXIWAY index reaching it would have laid 23 m for vans. The index
-	// is now resolved against the ROAD list (ResolveWidthProfile keys by kind), so it can only
-	// ever name a road tier.
-	// ENFORCED BY: Airside.Present.RoadWidthResolution, Airside.Tool.TaxiwayWidth (section 4)
-	URoadProfile* Chosen = nullptr;
-	if (WidthIndex != INDEX_NONE)
-	{
-		Chosen = ResolveWidthProfile(Kind, WidthIndex);
-	}
-	else if (Kind == ERoadKind::ServiceRoad)
-	{
-		Chosen = ResolveServiceRoadProfile();
-	}
-	if (Chosen == nullptr && Kind != ERoadKind::ServiceRoad)
-	{
-		// No index, or an index the content set cannot answer. Either way the level's own
-		// tuning is the honest fallback here - unlike the service road, a taxiway always has one.
-		Chosen = ResolveProfile();
-	}
-	return Chosen;
+	// FORWARDS TO Facade (issue #298) - see URoadEditFacade::ResolveProfileFor for the width
+	// rule itself and URoadNetworkActor.h's own comment on why this forwarder still exists.
+	return Facade->ResolveProfileFor(Kind, WidthIndex);
 }
 
 bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind,

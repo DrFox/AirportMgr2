@@ -63,7 +63,7 @@ bool FServiceRoadToolTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("with no override, the content default lays the road"),
 		Actor->ConnectNodes(C, D, ERoadKind::ServiceRoad));
 	TestEqual(TEXT("and it is NOT the taxiway profile"),
-		Actor->Network->ProfileFor(Actor->Network->GetSegments()[2]) == Actor->ResolveProfileForTest(),
+		Actor->Network->ProfileFor(Actor->Network->GetSegments()[2]) == Actor->ResolveProfile(),
 		false);
 
 	// A REFUSAL, NOT A SILENT TAXIWAY, when there is no road profile ANYWHERE.

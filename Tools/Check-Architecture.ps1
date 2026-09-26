@@ -956,6 +956,50 @@ foreach ($file in Get-Sources $airsideTests @('.h', '.cpp')) {
 }
 $ranRules.Add('profile-triple')
 
+# --- 20. No new *ForTest( on ARoadNetworkActor - RoadNetworkActor.h has an EXPLICIT allow-list -
+# Issue #298, a regression of #80 (closed on 12 test-only members deleted/retargeted): the actor
+# grew SIX MORE pure forwarders back (LastAgentPhaseForTest, LastAgentTaxiSpeedCapForTest,
+# FacadeOuterForTest, PresenterOuterForTest, ResolveStandDefinitionForTest, ResolveProfileForTest)
+# between #80 closing and this issue's review finding them. #80 had no lint pinning the shrink it
+# made, so nothing caught the regrowth until a human review did, member by member, again. This
+# rule is that pin: the allow-list below is the full CLOSED set of *ForTest members #298 left on
+# this header (RebuildCountForTest and friends, each already justified at its own declaration -
+# GetTraffic()/GetPresenter()/GetEditFacade() exist precisely so a NEW one is never needed). A
+# real forwarder-shaped member here fails; growing the list back to fix the failure is the same
+# regression #298 fixed, done again in the lint instead of the header - the allow-list is meant
+# to SHRINK, not to grow to match whatever the header happens to declare today.
+#
+# DECLARATIONS ONLY, not calls: LayerComponentForTest's own body calls
+# GetPresenter()->GetLayerComponentForTest(Layer) - a different class's member, reached through
+# `->` - which this must not flag as a new member on THIS actor. The negative lookbehind excludes
+# any match preceded by `.` or `>` (i.e. reached through a member-access operator); a genuine
+# declaration's name is never preceded by either.
+$roadNetworkActorHeader = Join-Path $plugin 'Public\Present\RoadNetworkActor.h'
+$forTestAllowList = @(
+    'SetDeltaSmoothingForTest',
+    'MakeSurfaceSettingsForTest',
+    'RebuildCountForTest',
+    'TopologyRebuildCountForTest',
+    'LayerComponentForTest'
+)
+if (-not (Test-Path $roadNetworkActorHeader)) {
+    # Same no-op-that-reads-as-pass trap rules 11c/15/16 guard against: a rename must not let
+    # this rule silently check nothing.
+    $failures.Add("fortest-allowlist: $roadNetworkActorHeader is named by rule 19 but does not exist - update the rule, do not let it check nothing")
+}
+if (Test-Path $roadNetworkActorHeader) {
+    $text = Get-Content -Raw -Path $roadNetworkActorHeader
+    $lines = $text -split "`n"
+    foreach ($m in [regex]::Matches($text, '(?<![.>])\b(\w*ForTest)\s*\(')) {
+        $name = $m.Groups[1].Value
+        $line = ($text.Substring(0, $m.Index) -split "`n").Count
+        if ($lines[$line - 1].Trim() -match '^(//|/\*|\*)') { continue }
+        if ($forTestAllowList -contains $name) { continue }
+        $failures.Add("fortest-allowlist: $($roadNetworkActorHeader):$line $name( is a new *ForTest member on ARoadNetworkActor, not in the issue #298 allow-list - a test wants GetTraffic()/GetPresenter()/GetEditFacade()->... or an already-public Resolve*, not a new forwarder (see #80 and #298's own history above)")
+    }
+}
+$ranRules.Add('no-new-fortest-forwarders')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

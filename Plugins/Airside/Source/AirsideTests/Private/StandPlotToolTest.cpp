@@ -1277,14 +1277,14 @@ bool FStandPlotDrawnStandTakesAnArrivalTest::RunTest(const FString& Parameters)
 	// RUN TO COMPLETION, bounded as ArrivalDispatchTest's own loop is: 6000 * 0.1 s = 600
 	// simulated seconds, comfortably past the landing roll plus the taxi to the drawn stand.
 	int32 Ticks = 0;
-	while (Actor->LastAgentPhaseForTest() != EAgentPhase::Parked && Ticks < 6000)
+	while (Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked && Ticks < 6000)
 	{
 		Actor->Tick(0.1f);
 		++Ticks;
 	}
 	if (!TestEqual(FString::Printf(TEXT("the arrival parks within %d ticks (phase %d)"),
-		Ticks, static_cast<int32>(Actor->LastAgentPhaseForTest())),
-		Actor->LastAgentPhaseForTest(), EAgentPhase::Parked))
+		Ticks, static_cast<int32>(Actor->GetTraffic()->LastAgentPhaseForTest())),
+		Actor->GetTraffic()->LastAgentPhaseForTest(), EAgentPhase::Parked))
 	{
 		return false;
 	}

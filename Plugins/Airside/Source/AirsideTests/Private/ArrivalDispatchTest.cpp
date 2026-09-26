@@ -98,7 +98,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	// the exit search both read. Neither exists until something rebuilds.
 	Actor->RebuildMesh();
 
-	if (Actor->ResolveStandDefinitionForTest() == nullptr)
+	if (Actor->ResolveStandDefinition() == nullptr)
 	{
 		// Placing a stand needs an authored definition, and the content set is not loaded in
 		// a bare automation run. Reported rather than skipped silently: a test that quietly
@@ -164,15 +164,15 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	//    taxi from the runway exit to the stand at even a cautious ground speed.
 	{
 		int32 Ticks = 0;
-		while (Actor->LastAgentPhaseForTest() != EAgentPhase::Parked && Ticks < 6000)
+		while (Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked && Ticks < 6000)
 		{
 			Actor->Tick(0.1f);
 			++Ticks;
 		}
 
 		TestEqual(FString::Printf(TEXT("the arrival parks within %d ticks (phase %d)"),
-			Ticks, static_cast<int32>(Actor->LastAgentPhaseForTest())),
-			Actor->LastAgentPhaseForTest(), EAgentPhase::Parked);
+			Ticks, static_cast<int32>(Actor->GetTraffic()->LastAgentPhaseForTest())),
+			Actor->GetTraffic()->LastAgentPhaseForTest(), EAgentPhase::Parked);
 		TestEqual(TEXT("and it is still the only agent - parking does not spawn or drop one"),
 			Actor->GetAgentCount(), Before + 1);
 
@@ -186,7 +186,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 		// struct the taxi is actually driven by, through Tick rather than a direct call.
 		TestEqual(TEXT("the parked follower taxied on the airframe's own SpeedCap, not the ")
 			TEXT("FGroundPerformance struct default"),
-			Actor->LastAgentTaxiSpeedCapForTest(), 1234.0);
+			Actor->GetTraffic()->LastAgentTaxiSpeedCapForTest(), 1234.0);
 
 		// The seam: every handover the loop above drove was ANNOUNCED, in the order it
 		// happened, and the spawn was announced as Gone -> Arriving.

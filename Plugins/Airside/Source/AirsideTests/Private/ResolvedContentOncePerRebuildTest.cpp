@@ -7,7 +7,9 @@
 #include "Content/AirsideSettings.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
+#include "Present/RoadSurfacePresenter.h"
 #include "Profiles/RoadProfile.h"
+#include "Tool/RoadSnap.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -110,6 +112,77 @@ bool FResolvedContentCachedAcrossRebuildsTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("PostEditChangeProperty marks the cache dirty, so the next MakeSurfaceSettings resolves again"),
 		UAirsideSettings::GetContentCallCountForTest > 0);
 #endif
+
+	return true;
+}
+
+/**
+ * Issue #298: the resolved-content cache above is a MakeSurfaceSettings-only guarantee - the
+ * ghost path never went through it. ARoadNetworkActor::MakeGhostSurfaceSettings and the
+ * validity-flip branch of ::UpdateGhost both called ResolveGhostMaterial() directly, which is
+ * GetContent() plus a LoadSynchronous EVERY cache miss - once per frame of a mouse drag, since
+ * a drag's changing cursor position is exactly what makes IsGhostCacheHit return false every
+ * frame. #190's own cache existed to remove precisely this shape of call from the surface path;
+ * the ghost path re-grew it by bypassing the cache instead of sharing it.
+ *
+ * Two phases match the two uncached call sites: a moving cursor (RoadNetworkActor.cpp's
+ * MakeGhostSurfaceSettings, called on every cache MISS) and a held cursor whose validity flips
+ * (the SetGhostValidity branch of UpdateGhost, called on a cache HIT with bValidityChanged).
+ * Both must read ResolvedGhostMaterialCache after RefreshResolvedContentCacheIfDirty(), the same
+ * as every other Resolve* in MakeSurfaceSettings, rather than resolving fresh.
+ *
+ * KIND IS Taxiway, NOT ServiceRoad, ON PURPOSE: MakeGhostSurfaceSettings also resolves
+ * Settings.Profile through ResolveProfileFor, and a ServiceRoad ghost's profile comes from
+ * ResolveServiceRoadProfile - a SEPARATE, PRE-EXISTING GetContent() call this issue's two sites
+ * do not own and this test must not blame on them. A Taxiway ghost's profile is ResolveProfile,
+ * this actor's own on-demand fallback, which never calls GetContent - so GetContentCallCountForTest
+ * here measures only the material resolution these two sites are actually responsible for.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGhostDragDoesNotReresolveContentTest,
+	"Airside.Present.GhostDragDoesNotReresolveContent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGhostDragDoesNotReresolveContentTest::RunTest(const FString& Parameters)
+{
+	ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+
+	// WARM THE CACHE FIRST, the same way a real session would have by the time a drag starts:
+	// at least one MakeSurfaceSettings (RebuildMesh, on PlaceNode above) has already run.
+	Actor->MakeSurfaceSettingsForTest();
+	UAirsideSettings::ResetGetContentCallCountForTest();
+
+	// PHASE 1: A MOVING CURSOR, 20 FRAMES - a cache MISS every frame (IsGhostCacheHit compares
+	// the snap position), which is what a drag looks like and what MakeGhostSurfaceSettings pays
+	// for on every one of them today.
+	for (int32 Frame = 0; Frame < 20; ++Frame)
+	{
+		FRoadSnapResult Snap;
+		Snap.Kind = ERoadSnapKind::Free;
+		Snap.Position = FVector2D(2000.0 + Frame * 100.0, 2000.0);
+		Actor->UpdateGhost(A, Snap, /*bValid*/ true, ERoadKind::Taxiway, INDEX_NONE);
+	}
+	TestEqual(TEXT("20 frames of a moving ghost make zero GetContent calls - the resolved cache held"),
+		UAirsideSettings::GetContentCallCountForTest, 0);
+
+	// PHASE 2: A HELD CURSOR WHOSE VALIDITY FLIPS - a cache HIT every frame, but
+	// bValidityChanged true on each flip, which is what the OTHER uncached call
+	// (Presenter->SetGhostValidity(bValid, ResolveGhostMaterial())) pays for.
+	UAirsideSettings::ResetGetContentCallCountForTest();
+	FRoadSnapResult Held;
+	Held.Kind = ERoadSnapKind::Free;
+	Held.Position = FVector2D(9000.0, 9000.0);
+	bool bValid = true;
+	for (int32 Frame = 0; Frame < 20; ++Frame)
+	{
+		bValid = !bValid;
+		Actor->UpdateGhost(A, Held, bValid, ERoadKind::Taxiway, INDEX_NONE);
+	}
+	TestEqual(TEXT("20 validity flips over a held ghost make zero GetContent calls - the resolved cache held"),
+		UAirsideSettings::GetContentCallCountForTest, 0);
 
 	return true;
 }
