@@ -52,6 +52,16 @@ public:
 	virtual void OnReselect(const FToolContext& Context) override;
 
 	/**
+	 * Three rows, in OnReselect's modifier order so the row a modifier moves is the row at that
+	 * index: Width (plain), Surface (Shift), Approach (Ctrl). NO WIDTH ROW when the target has no
+	 * runway profiles - surface and approach are this tool's own enums and stay choosable.
+	 */
+	virtual void GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const override;
+
+	/** Sets the field the named row stands for. Axis is by Id, not index - see the .cpp. */
+	virtual bool SelectVariant(const FToolContext& Context, int32 Axis, int32 Option) override;
+
+	/**
 	 * The first threshold, once one is down - and a FREE START before that. See
 	 * IBuildTool::DescribeGuideAnchor.
 	 *
@@ -86,16 +96,20 @@ public:
 	 */
 	int32 WidthIndex = 0;
 
-	/** Steps to the next standard width, wrapping. Called from OnReselect. */
+	/** Steps to the next standard width, wrapping, through SelectVariant. Called from OnReselect. */
 	void NextWidth(const FToolContext& Context);
 
 	/** What the next runway is paved with and what approach it offers - the facts placement writes. */
 	ERunwaySurface Surface = ERunwaySurface::Tarmac;
 	ERunwayApproach Approach = ERunwayApproach::Visual;
 
-	/** Steps each scale, wrapping. */
-	void NextSurface();
-	void NextApproach();
+	/** Steps each scale, wrapping. Take the context now (2026-09-26) because the step goes
+	 *  through SelectVariant, which numbers rows against the target's width count. */
+	void NextSurface(const FToolContext& Context);
+	void NextApproach(const FToolContext& Context);
+
+	/** The row named AxisId, stepped one option on from what it lights, wrapping. */
+	void StepAxis(const FToolContext& Context, FName AxisId);
 
 	/** The facts the next placement writes, assembled from the two choices above. */
 	FRunwayFacts Facts() const;
