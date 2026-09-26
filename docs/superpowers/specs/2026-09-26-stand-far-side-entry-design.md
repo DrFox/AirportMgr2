@@ -27,6 +27,20 @@
   and reverse-in needs less room than drive-through (Chassis.h, the 2026-09-16 rethink).
 - A stand with no service road on its far edge is still placed, and is reported unserviceable
   until one is drawn.
+- **Depth floors raised (user, 2026-09-26, after Task 3 measured the mirror).** Far-edge entry
+  puts the service lane in the slack ahead of the nose, and on the published depths a bay's serve
+  leg could not reach its lane forward of the service point (the contact band folded on A-E). The
+  depths at which the band first opens were measured - A 2900, B 3650, C 6181, D 8093, E 9195 -
+  and the floors become those plus about 300: **A 3200, B 3950, C 6500 (was the published 55 m,
+  now 65 m), D 8400, E 9500**; F unchanged at 10000. Widths unchanged. Overrides "floor figures
+  unchanged" below, for depth only.
+- **A/B tow: a longer straight in, not a pull-past (user, 2026-09-26).** The utility tow reached
+  its service point with its trailer still bent (18.6 deg on A against a 3.0 deg turntable lock) and
+  could not start the reverse. The serve leg's straight into each service point is now
+  `TowSettleChains` (2.0) x the design vehicle's chain length, and the same straight follows the
+  reverse corner so the solve ends on the lane's line; zero for a rigid vehicle, so C-F are
+  unchanged. It moves A/B's lane outboard: measured need A 4757 x 3374, B 4757 x 3950 against
+  floors 3500 x 3200 and 4400 x 3950 - reported for the user, not raised.
 
 ## 1. Stand geometry
 

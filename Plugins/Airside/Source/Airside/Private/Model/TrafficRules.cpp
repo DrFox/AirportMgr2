@@ -6,6 +6,8 @@
 
 #include "Model/TrafficRules.h"
 
+#include "Model/Airframe.h"   // EPushbackNeed itself: reached only transitively before, which a unity blob
+                               // hid until 2026-09-26, when an adaptive build compiled this file alone
 #include "Model/RoadEntity.h"
 #include "Model/RoadTraffic.h"
 

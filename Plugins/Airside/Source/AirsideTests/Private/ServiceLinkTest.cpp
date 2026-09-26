@@ -16,6 +16,7 @@
 #include "Model/SpeedProfile.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
+#include "Solve/StandBox.h"
 #include "StandFixture.h"
 #include "Testing/AirsideTestGraph.h"
 
@@ -69,10 +70,35 @@ namespace ServiceLinkFixture
 			Definition.RequiredExtent.X, Definition.RequiredExtent.Y);
 		const TOptional<EIcaoCode> Code = IcaoCode::Parse(Letter);
 		check(Code.IsSet());
-		const double NoseFwd = IcaoCode::FloorEnvelopeForLetter(*Code).MaxNoseFwd;
+		// FROM THE ENTRANCE, since 2026-09-26: the box runs from EntranceSetback behind the stop
+		// mark (the taxiway side) to Depth beyond it, the far edge every contact now sits inside.
+		// It ran nose-back until then, which is where the old fixtures' aft roads came from.
+		const double BackX = -StandBox::EntranceSetback(*Code, IcaoCode::FloorEnvelopeForLetter(*Code));
 		const double HalfWidth = 0.5 * Definition.RequiredExtent.X;
-		return FBox2D(FVector2D(NoseFwd - Definition.RequiredExtent.Y, -HalfWidth),
-			FVector2D(NoseFwd, HalfWidth));
+		return FBox2D(FVector2D(BackX, -HalfWidth),
+			FVector2D(BackX + Definition.RequiredExtent.Y, HalfWidth));
+	}
+
+	/**
+	 * Where a GSE road serving the shipping stand runs: 420 uu beyond its FAR edge, the one
+	 * opposite the taxiway (user 2026-09-26: service vehicles enter only there). The fixtures
+	 * that typed x = -5400 - 420 behind the old aft edge - read it here instead, so moving the
+	 * edge again moves them with it.
+	 */
+	double FarRoadX()
+	{
+		return StandGroundOf(*UEntityDefinition::MakeStandTransient()).Max.X + 420.0;
+	}
+
+	/** The forward-most declared entry of a stand - the far edge's contacts all share it. */
+	double FarEntryX(const UEntityDefinition& Stand)
+	{
+		double FarX = -TNumericLimits<double>::Max();
+		for (const FServiceBay& Bay : Stand.ServiceBays)
+		{
+			FarX = FMath::Max(FarX, Bay.EntryLocal.X);
+		}
+		return FarX;
 	}
 
 	// ServiceLinkFixture::PlaceStand MOVED to StandFixture.h, 2026-09-16: StandLaneTest.cpp
@@ -306,8 +332,8 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 	// expect would work.
 	//
 	// THE LAYOUT IS NOT A CYCLE. Nothing may pass under a wing, so each side of a stand is its
-	// own dead end, and every way in is DECLARED - on the aft edge, where a GSE road runs
-	// behind a row of stands. Direction is now the whole of the question, and the old claim
+	// own dead end, and every way in is DECLARED - on the FAR edge since 2026-09-26 (the aft
+	// edge until then), where a GSE road runs past a row of stands' noses. Direction is now the whole of the question, and the old claim
 	// would pass only by finding a connection the design says should not exist.
 	//
 	// SO WHAT IS MEASURED IS THE RULE THE PLAYER MEETS: put a road where the stand says it may
@@ -320,21 +346,17 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 	constexpr double GapNear = 4500.0;
 	constexpr double GapFar = 20000.0;
 
-	// THE AFT EDGE IS READ OFF THE TEMPLATE, never typed. Every entry is authored there, so
+	// THE FAR EDGE IS READ OFF THE TEMPLATE, never typed. Every entry is authored there, so
 	// asking the bays where they are is the same question placement asks - and moving the
-	// entries moves this fixture with them.
-	double AftX = TNumericLimits<double>::Max();
-	for (const FServiceBay& Bay : Stand->ServiceBays)
-	{
-		AftX = FMath::Min(AftX, Bay.EntryLocal.X);
-	}
+	// entries moves this fixture with them, which it did on 2026-09-26 (aft edge -> far edge).
+	const double FarX = FarEntryX(*Stand);
 
-	// BEHIND THE STAND, which is where a road belongs.
+	// BEYOND THE FAR EDGE, which is where a road belongs.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FGuidelineNodeId Far;
 		const FGuidelineNodeId Near =
-			Lay(*Net, FVector2D(AftX - GapNear, -20000.0), FVector2D(AftX - GapNear, 20000.0),
+			Lay(*Net, FVector2D(FarX + GapNear, -20000.0), FVector2D(FarX + GapNear, 20000.0),
 				ETraversalClass::GroundVehicle, Far);
 
 		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
@@ -361,37 +383,38 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	// IN FRONT OF THE NOSE, at the same gap, WHERE A ROAD CANNOT SERVE IT. This is the case
-	// the old test would have called a pass: the road is near the stand, just not near
-	// anything the stand declared. A player who draws one there gets a refusal naming the
-	// entry rather than a stand that half works.
+	// BEHIND THE TAIL, on the taxiway side, at the same gap, WHERE A ROAD CANNOT SERVE IT.
+	// This is the case the old test would have called a pass: the road is near the stand, just
+	// not near anything the stand declared. A player who draws one there gets a refusal naming
+	// the entry rather than a stand that half works. It was ACROSS THE NOSE until 2026-09-26,
+	// when the entries moved to the far edge and the nose side became the served one.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FGuidelineNodeId Far;
-		const double NoseX = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C).MaxNoseFwd;
-		Lay(*Net, FVector2D(NoseX + GapNear, -20000.0), FVector2D(NoseX + GapNear, 20000.0),
+		const double TailSideX = StandGroundOf(*Stand).Min.X;
+		Lay(*Net, FVector2D(TailSideX - GapNear, -20000.0), FVector2D(TailSideX - GapNear, 20000.0),
 			ETraversalClass::GroundVehicle, Far);
 
 		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
-		TestFalse(TEXT("a road across the nose enters nothing - the entries are all aft"),
+		TestFalse(TEXT("a road behind the tail enters nothing - the entries are all on the far edge"),
 			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, TEXT("HydrantPit"))));
 	}
 
-	// AND BEHIND, BUT TOO FAR. The short radius is what keeps the rejected case rejected: at
+	// AND BEYOND THE FAR EDGE, BUT TOO FAR. The short radius is what keeps the rejected case rejected: at
 	// 200 m the nearest vehicle line is regularly the service road on the far side of a
 	// terminal, and the link would run straight through the building with nothing to report it.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FGuidelineNodeId Far;
-		Lay(*Net, FVector2D(AftX - GapFar, -20000.0), FVector2D(AftX - GapFar, 20000.0),
+		Lay(*Net, FVector2D(FarX + GapFar, -20000.0), FVector2D(FarX + GapFar, 20000.0),
 			ETraversalClass::GroundVehicle, Far);
 
 		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
-		TestFalse(TEXT("a road 200 m behind the stand does not reach it"),
+		TestFalse(TEXT("a road 200 m beyond the far edge does not reach it"),
 			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, TEXT("HydrantPit"))));
 	}
 
@@ -468,8 +491,9 @@ bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
 	// 420 uu behind the aft edge, which every stand in the row shares because they all face
-	// the same way.
-	constexpr double RoadX = -5400.0;
+	// the same way - BEYOND THE FAR EDGE since 2026-09-26, the nose side, where the entries
+	// moved (FarRoadX).
+	const double RoadX = FarRoadX();
 	FGuidelineNodeId RoadNorth;
 	const FGuidelineNodeId RoadSouth =
 		Lay(*Net, FVector2D(RoadX, -40000.0), FVector2D(RoadX, 40000.0),
@@ -749,12 +773,13 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 	// TWO GAPS, because the answer depends on the gap and one fixture could pass by luck. 4 m is
 	// as close as a player can draw a road to a stand; 54 m is a comfortable one.
 	//
-	// BEHIND THE AFT EDGE, which is the only place a road can serve a stand: every entry and
-	// every exit is authored there, and nothing may pass under a wing to reach the far side.
+	// BEYOND THE FAR EDGE (behind the aft edge until 2026-09-26), which is the only place a
+	// road can serve a stand: every entry and every exit is authored there, and nothing may
+	// pass under a wing to reach the other side.
 	for (const double Gap : { 400.0, 5400.0 })
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		const double RoadX = StandGround.Min.X - Gap;
+		const double RoadX = StandGround.Max.X + Gap;
 
 		// LONG, so the fillet is never clamped by the road running out - that is a different
 		// failure with a different fix, and mixing the two would leave neither measured.
@@ -875,7 +900,9 @@ bool FTruckDrivesTheWholeRouteToTheHydrantTest::RunTest(const FString& Parameter
 	//
 	// THE ASSERTIONS BELOW ARE UNCHANGED. This is the fixture put where the design says a road
 	// must be, not the question made easier.
-	constexpr double RoadX = -5400.0;
+	//
+	// AND ON THE FAR EDGE SINCE 2026-09-26, where the entries moved - see FarRoadX.
+	const double RoadX = FarRoadX();
 	FGuidelineNodeId RoadNorth;
 	const FGuidelineNodeId RoadSouth =
 		Lay(*Net, FVector2D(RoadX, -6000.0), FVector2D(RoadX, 6000.0),
@@ -959,8 +986,9 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 	//
 	// ALONG THE AFT EDGE since 2026-09-17, for the reason
 	// Airside.Model.Traffic.TruckDrivesTheWholeRouteToTheHydrant gives at its own fixture: with
-	// no way under a wing, a road alongside the stand can only reach the side it is on.
-	constexpr double RoadX = -5400.0;
+	// no way under a wing, a road alongside the stand can only reach the side it is on. On the
+	// far edge since 2026-09-26 - see FarRoadX.
+	const double RoadX = FarRoadX();
 	FGuidelineNodeId RoadNorth;
 	const FGuidelineNodeId RoadWest =
 		Lay(*Net, FVector2D(RoadX, -6000.0), FVector2D(RoadX, 6000.0),
@@ -1247,7 +1275,8 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 	// anything can drive it as one.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
-	constexpr double RoadX = -5400.0;
+	// On the far edge, where the entries are - see FarRoadX.
+	const double RoadX = FarRoadX();
 	FGuidelineNodeId RoadNorth;
 	const FGuidelineNodeId RoadSouth =
 		Lay(*Net, FVector2D(RoadX, -6000.0), FVector2D(RoadX, 6000.0),
@@ -1471,17 +1500,15 @@ bool FAnchorLinkResolvesEachPendingLinkOnceTest::RunTest(const FString& Paramete
 	// the Gather-side probe.
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 
-	double AftX = TNumericLimits<double>::Max();
-	for (const FServiceBay& Bay : Stand->ServiceBays)
-	{
-		AftX = FMath::Min(AftX, Bay.EntryLocal.X);
-	}
+	// BEYOND THE FAR EDGE, where the entries are since 2026-09-26 (it was the aft edge, and
+	// the old road would have run through the middle of the new stand).
+	const double FarX = FarEntryX(*Stand);
 	constexpr double GapNear = 4500.0;
 
 	auto LayFixture = [&](URoadNetwork& Net)
 	{
 		FGuidelineNodeId Far;
-		Lay(Net, FVector2D(AftX - GapNear, -20000.0), FVector2D(AftX - GapNear, 20000.0),
+		Lay(Net, FVector2D(FarX + GapNear, -20000.0), FVector2D(FarX + GapNear, 20000.0),
 			ETraversalClass::GroundVehicle, Far);
 		PlaceStand(Net, *Stand, FVector2D::ZeroVector, 0.0);
 	};
@@ -1541,17 +1568,15 @@ bool FAnchorLinkDoesNotRescanEveryGuidelineTest::RunTest(const FString& Paramete
 	// sample per decoy per link.
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 
-	double AftX = TNumericLimits<double>::Max();
-	for (const FServiceBay& Bay : Stand->ServiceBays)
-	{
-		AftX = FMath::Min(AftX, Bay.EntryLocal.X);
-	}
+	// BEYOND THE FAR EDGE, where the entries are since 2026-09-26 (it was the aft edge, and
+	// the old road would have run through the middle of the new stand).
+	const double FarX = FarEntryX(*Stand);
 	constexpr double GapNear = 4500.0;
 
 	auto LayFixture = [&](URoadNetwork& Net, int32 DecoyCount)
 	{
 		FGuidelineNodeId Far;
-		Lay(Net, FVector2D(AftX - GapNear, -20000.0), FVector2D(AftX - GapNear, 20000.0),
+		Lay(Net, FVector2D(FarX + GapNear, -20000.0), FVector2D(FarX + GapNear, 20000.0),
 			ETraversalClass::GroundVehicle, Far);
 
 		// FAR BEYOND EVERY REACH THIS FIXTURE'S LINKS USE - DefaultMaxLeadIn is 20000 uu, the

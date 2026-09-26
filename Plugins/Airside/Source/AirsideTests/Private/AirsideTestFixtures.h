@@ -21,6 +21,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RouteSearch.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/RoadBuildTool.h"
@@ -213,3 +214,28 @@ FGuidelineNodeId ExitArcNodeNear(const URoadNetwork& Net, const FVector2D& At, d
 
 /** An alive derived TURN PATH (no DerivedFrom) joining two nodes, either way round. */
 const FGuidelineEdge* ExitArcTurnBetween(const URoadNetwork& Net, FGuidelineNodeId P, FGuidelineNodeId Q);
+
+/**
+ * Hand-built route plans: polylines with their steps cut and flagged, and no edge handles.
+ *
+ * HOISTED OUT OF TowReverseAgentTest.cpp's BayPlan on 2026-09-26, when StandLayoutTest.cpp needed
+ * the same cut - a stand's four template legs chained into the one plan VehicleFit::JudgePlan
+ * judges a tow on. One cutter, so the two files cannot disagree about where a reverse step ends.
+ * No handles means JudgePlan sees no clearance data: the manoeuvre is the whole question.
+ */
+namespace TestPlans
+{
+	/** One run of a plan: its points, and whether the vehicle drives it BACKWARDS. */
+	struct FRun
+	{
+		TArray<FVector2D> Points;
+		bool bReverse = false;
+	};
+
+	/**
+	 * Runs welded end to start into one Found plan, one step per run. Each run after the first
+	 * drops its first point, which is the previous run's last (a duplicate is a zero-length span
+	 * FSpeedProfile has no heading for); an empty run adds no step.
+	 */
+	FRoutePlan Chain(const TArray<FRun>& Runs);
+}

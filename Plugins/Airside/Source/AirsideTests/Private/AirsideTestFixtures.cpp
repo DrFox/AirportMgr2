@@ -241,3 +241,33 @@ TArray<SnapGuide::FCandidate> ProposedBy(const IGuideSource& Source,
 	return Out;
 }
 }
+
+FRoutePlan TestPlans::Chain(const TArray<FRun>& Runs)
+{
+	FRoutePlan Plan;
+	Plan.Result = ERouteResult::Found;
+	double Along = 0.0;
+	for (const FRun& Run : Runs)
+	{
+		const int32 From = Plan.Polyline.IsEmpty() ? 0 : 1;
+		if (Run.Points.Num() <= From)
+		{
+			continue;
+		}
+		for (int32 K = From; K < Run.Points.Num(); ++K)
+		{
+			if (!Plan.Polyline.IsEmpty())
+			{
+				Along += FVector2D::Distance(Plan.Polyline.Last(), Run.Points[K]);
+			}
+			Plan.Polyline.Add(Run.Points[K]);
+		}
+		FRouteStep Step;
+		Step.EndVertex = Plan.Polyline.Num() - 1;
+		Step.EndDistance = Along;
+		Step.bReverseLeg = Run.bReverse;
+		Plan.Steps.Add(Step);
+	}
+	Plan.Length = Along;
+	return Plan;
+}
