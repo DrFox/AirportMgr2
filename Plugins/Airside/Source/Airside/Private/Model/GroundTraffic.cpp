@@ -280,11 +280,21 @@ int32 UGroundTraffic::Admit(FRoadAgent&& Agent)
 	const EAgentPhase Born = Agent.Phase;
 	const int32 Id = Agent.Id;
 	Agents.Add(MoveTemp(Agent));
-
-	// Broadcast AFTER the add, so a listener that spawns the view can find the agent it is
-	// being told about - see UAirsideTraffic::SpawnView, which reads LastMotion off it.
-	OnAgentPhaseChanged.Broadcast(Id, EAgentPhase::Gone, Born);
+	// BEFORE THE BROADCAST BELOW, same reason as RetireAgent's and AdvanceOnce's removal path
+	// (issue #295's O(1) lookup made this a real gap, not just a hypothetical one): a listener
+	// firing synchronously off it - UAirsideTraffic::SpawnView, which calls FindAgent(Id) to
+	// read LastMotion for the view's starting pose - used FindIndex's O(N) linear scan before
+	// #295, which always saw the just-added agent whether or not any table had caught up. The
+	// new AgentIndex map does not update itself with the array, so admitting an agent with the
+	// old ORDER (add, broadcast, THEN rebuild) answered that same FindAgent(Id) with nullptr -
+	// "Agent %d announced a phase change but is not in the model; no view spawned." on every
+	// single admit, caught by the whole Present/ suite rather than a unit test of this file.
 	RebuildAgentIndex();
+
+	// Broadcast AFTER the add AND the rebuild, so a listener that spawns the view can find the
+	// agent it is being told about - see UAirsideTraffic::SpawnView, which reads LastMotion
+	// off it.
+	OnAgentPhaseChanged.Broadcast(Id, EAgentPhase::Gone, Born);
 	// #169: a new agent's dispatch claims its goal node in this same call, before this
 	// function returns - see OccupancyRevision's own comment for why one bump per call
 	// covers every claim made inside it.
