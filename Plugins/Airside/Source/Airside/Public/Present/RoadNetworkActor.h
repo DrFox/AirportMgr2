@@ -349,6 +349,7 @@ public:
 	virtual IBuildPurse* GetPurse() const override;
 	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
 		int32 WidthIndex) const override;
+	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* RunwayProfile) const override;
 
 	/** Add a node at a world-space XY position. Returns its index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")

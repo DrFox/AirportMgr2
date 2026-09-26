@@ -315,6 +315,7 @@ public:
 	 */
 	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
 		int32 WidthIndex) const override;
+	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile) const override;
 
 	/** True when there is no purse (design time) or the purse says the player can pay. */
 	bool CanAfford(const FBuildQuote& Quote) const;

@@ -116,6 +116,16 @@ public:
 		int32 WidthIndex) const { return FBuildQuote(); }
 
 	/**
+	 * What a runway from From to To at Profile would cost - QuoteForConnect's reason, for
+	 * runways: PlaceRunway prices through this same function, so the ghost cannot quote one
+	 * strip while the click charges another. Free by default, as a target with no money is.
+	 */
+	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile) const
+	{
+		return FBuildQuote();
+	}
+
+	/**
 	 * The agents, read-only, for a tool that asks about them (Select). Model/, so Tool/ may
 	 * see it; the Present-layer UAirsideTraffic stays invisible here.
 	 *

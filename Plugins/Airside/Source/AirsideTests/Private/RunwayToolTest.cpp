@@ -3,6 +3,7 @@
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
+#include "Model/BuildPurse.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayFacts.h"
 #include "Present/RoadNetworkActor.h"
@@ -143,6 +144,102 @@ bool FRunwayProfileTargetTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the idle preview on an empty target says so rather than naming a width"),
 		EmptySink.Labels.Num() > 0 && EmptySink.Labels.Last().Contains(TEXT("no runway profile")));
 
+	return true;
+}
+
+namespace
+{
+	/** Collects labels AND styles, so "said red" can be asserted, not just "said something". */
+	struct FM2RwyStyledSink : IToolPreviewSink
+	{
+		TArray<TPair<FString, EPreviewStyle>> Labels;
+		int32 RefusedLines = 0;
+		int32 PendingLines = 0;
+		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle Style) override
+		{
+			(Style == EPreviewStyle::Refused ? RefusedLines : PendingLines)++;
+		}
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString& Text, EPreviewStyle Style) override { Labels.Emplace(Text, Style); }
+	};
+
+	/** A purse with a fixed balance that names the price in plain figures. */
+	struct FM2RwyPurse : IBuildPurse
+	{
+		double Balance = 0.0;
+		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount <= Balance; }
+		virtual int32 Charge(const FBuildQuote&) override { return 0; }
+		virtual void Reverse(int32) override {}
+		virtual void Credit(const FBuildQuote&) override {}
+		virtual FText Describe(const FBuildQuote& Quote) const override
+		{
+			return FText::FromString(FString::Printf(TEXT("cost %.0f"), Quote.BaseAmount));
+		}
+	};
+
+	/** Runway widths, a purse, and a runway quote of 1 per uu of length. */
+	struct FM2RwyPricedTarget : FFakeRunwayTarget
+	{
+		FM2RwyPurse* Purse = nullptr;
+		virtual IBuildPurse* GetPurse() const override { return Purse; }
+		virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile*) const override
+		{
+			FBuildQuote Quote;
+			Quote.BaseAmount = FVector2D::Distance(From, To);
+			return Quote;
+		}
+	};
+}
+
+/**
+ * THE PRICE BEFORE THE CLICK, for runways as for roads (RoadDrawTool's "THE PRICE BEFORE THE
+ * CLICK"). A player out of money used to drag a white strip, click, and get nothing - the
+ * refusal was a log line only, and read in PIE as "visual and precision runways don't create
+ * anything" (2026-09-26): the approach was a coincidence, the balance was the cause.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayPriceBeforeClickTest,
+	"Airside.Tool.RunwayPriceBeforeClick",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayPriceBeforeClickTest::RunTest(const FString& Parameters)
+{
+	FM2RwyPurse Purse;
+	FM2RwyPricedTarget Target;
+	Target.Purse = &Purse;
+	Target.Profiles = { URoadProfile::MakeTransient(1800.0, 1500.0) };
+
+	FToolContext Context;
+	Context.Target = &Target;
+	FRunwayTool Tool;
+	Context.Cursor = FVector2D(0.0, 0.0);
+	Tool.OnClick(Context);                        // the first threshold
+	Context.Cursor = FVector2D(60000.0, 0.0);     // a 600 m strip, quoted at 60000
+
+	auto PriceLabel = [](const FM2RwyStyledSink& Sink) -> const TPair<FString, EPreviewStyle>*
+	{
+		return Sink.Labels.FindByPredicate([](const TPair<FString, EPreviewStyle>& L) { return L.Key.Contains(TEXT("60000")); });
+	};
+
+	Purse.Balance = 100000.0;
+	FM2RwyStyledSink Rich;
+	Tool.BuildPreview(Context, Rich);
+	const TPair<FString, EPreviewStyle>* RichPrice = PriceLabel(Rich);
+	TestTrue(TEXT("an affordable strip names its price"), RichPrice != nullptr);
+	TestTrue(TEXT("in the pending style"), RichPrice != nullptr && RichPrice->Value == EPreviewStyle::Pending);
+	TestEqual(TEXT("and is drawn pending, not red"), Rich.RefusedLines, 0);
+
+	Purse.Balance = 1000.0;
+	FM2RwyStyledSink Broke;
+	Tool.BuildPreview(Context, Broke);
+	const TPair<FString, EPreviewStyle>* BrokePrice = PriceLabel(Broke);
+	TestTrue(TEXT("an unaffordable strip names its price"), BrokePrice != nullptr);
+	TestTrue(TEXT("in the refused style, saying it cannot be afforded"),
+		BrokePrice != nullptr && BrokePrice->Value == EPreviewStyle::Refused
+			&& BrokePrice->Key.Contains(TEXT("can't afford")));
+	TestTrue(TEXT("and the whole strip is drawn refused - red before the click, not nothing after it"),
+		Broke.RefusedLines > 0 && Broke.PendingLines == 0);
 	return true;
 }
 

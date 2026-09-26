@@ -1,6 +1,7 @@
 #include "Tool/RunwayTool.h"
 
 #include "AirsideLog.h"
+#include "Model/BuildPurse.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/RunwayDesignator.h"
 
@@ -324,7 +325,18 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 	const double Minimum = Context.Target != nullptr
 		? Context.Target->GetMinimumRunwayLength() : 0.0;
 	const bool bLongEnough = Length >= Minimum;
-	const EPreviewStyle Style = bLongEnough ? EPreviewStyle::Pending : EPreviewStyle::Refused;
+
+	// THE PRICE BEFORE THE CLICK - RoadDrawTool's rule, for runways. Until 2026-09-26 a strip the
+	// ledger would refuse was drawn exactly like one it would take, and the click then did
+	// nothing but write a log line; in PIE that read as "visual and precision runways don't
+	// build", the approach being whatever happened to be set when the money ran out. Priced
+	// through the TARGET, which PlaceRunway charges through too, so the two cannot disagree.
+	const IBuildPurse* Purse = Context.Target != nullptr ? Context.Target->GetPurse() : nullptr;
+	const FBuildQuote Quote = Purse != nullptr && Profile != nullptr
+		? Context.Target->QuoteForRunway(Threshold, Far, Profile) : FBuildQuote();
+	const bool bAffordable = Quote.IsFree() || Purse->CanAfford(Quote);
+
+	const EPreviewStyle Style = bLongEnough && bAffordable ? EPreviewStyle::Pending : EPreviewStyle::Refused;
 
 	Sink.Marker(Threshold, Style);
 	Sink.Marker(Far, Style);
@@ -364,6 +376,15 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 				Length / 100.0, Profile->GetTotalWidth() / 100.0,
 				RunwaySurfaceName(Surface), RunwayApproachName(Approach)),
 			Style);
+	}
+
+	// SAID, not only coloured: red alone cannot tell "too expensive" from any other refusal.
+	// The purse formats the money, so no currency symbol enters this plugin.
+	if (!Quote.IsFree())
+	{
+		const FString Price = Purse->Describe(Quote).ToString();
+		Sink.Label(Far + FVector2D(0.0, -Profile->GetTotalWidth()),
+			bAffordable ? Price : FString::Printf(TEXT("can't afford: %s"), *Price), Style);
 	}
 }
 

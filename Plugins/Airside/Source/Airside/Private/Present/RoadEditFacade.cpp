@@ -562,6 +562,11 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	return true;
 }
 
+FBuildQuote URoadEditFacade::QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile) const
+{
+	return Profile != nullptr ? BuildCost::ForSegment(*Profile, FVector2D::Distance(From, To)) : FBuildQuote();
+}
+
 bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts)
 {
 	ARoadNetworkActor& Owner = Actor();
@@ -594,7 +599,9 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	// costs a snapshot - the same rule ConnectNodes follows.
 	// Priced from the two ENDS the caller asked for, before anything is mutated - see
 	// ConnectNodes above for why the refusal cannot wait until commit.
-	const FBuildQuote Quote = BuildCost::ForSegment(*RunwayProfile, FVector2D::Distance(From, To));
+	// THROUGH QuoteForRunway, the function the runway tool's ghost prices with - one answer to
+	// "what does this strip cost", so the preview and the charge cannot drift.
+	const FBuildQuote Quote = QuoteForRunway(From, To, RunwayProfile);
 	if (!CanAfford(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceRunway refused: cannot afford %s"),
