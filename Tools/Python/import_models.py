@@ -441,6 +441,24 @@ SPECS = [
              "Six joints, fixed gear in spats, one 3-blade prop.",
     ),
     Spec(
+        key="plane16",
+        source=MODELS + r"\plane16\export\plane16.glb",
+        mesh_dir="/Game/Aircraft/Plane16",
+        skel_name="SK_Plane16",
+        # plane14's NAMES AND SHAPE: one wheel_L / wheel_R mesh and bone a side, retracting.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, the contact patch - plane16/scripts/build_export.py's origin, s 0.662.
+        origin_on="front",
+        note="Beechcraft Baron 58, the first piston twin. 11.53 m span, 9.09 m along the "
+             "reference line, 2.97 m tall - the published figures (plane16/SPEC.md). SITS "
+             "2.44 DEG NOSE-UP ON ITS GEAR, as exported. Origin on the NOSE gear. Sixteen "
+             "joints: retracting gear (mains forward, nose aft), six bay doors, two 3-blade "
+             "props.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",

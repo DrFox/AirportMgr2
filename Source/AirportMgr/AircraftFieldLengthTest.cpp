@@ -161,6 +161,13 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane15.DA_Aircraft_Plane15"), TEXT("plane15"), 74000.0,
 		  TEXT("an SR22 that needed as much runway as a Caravan would be a four-seat Code A "
 			   "single asking a Code B turboprop's field") },
+		// plane16's CEILING IS THE KING AIR's PUBLISHED TAKE-OFF LENGTH. The Baron is the twin a
+		// grass field takes before it is paved: if it asked as much runway as the King Air, the
+		// piston twin and the turboprop twin would be one rung. 100600 is aircraft/plane5.py's
+		// REQUIREMENTS["takeoff_field_length"], typed here for the reason plane5's row gives.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane16.DA_Aircraft_Plane16"), TEXT("plane16"), 100600.0,
+		  TEXT("a Baron that needed as much runway as a King Air would make the piston twin and "
+			   "the turboprop twin one rung") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane10.DA_Aircraft_Plane10"), TEXT("plane10"), 100600.0,
 		  TEXT("a Caravan that needed as much runway as a King Air would be a grass-strip "
 			   "type that only paved fields could take") },

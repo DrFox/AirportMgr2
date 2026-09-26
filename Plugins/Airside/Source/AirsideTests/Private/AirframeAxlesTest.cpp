@@ -196,6 +196,10 @@ static const TCHAR* const MeasuredTypes[] = {
 	// VERTICAL axis at the leg foot rather than about the raked leg, so this row is what says
 	// the steered-axle station is measured off the tyre, not off the strut.
 	TEXT("/Game/Entities/DA_Aircraft_Plane15"),
+	// THE BARON IS THE FIRST CODE A ROW WHOSE GEAR RETRACTS, and the second exported off-level
+	// (2.44 deg nose-up). Its axles are measured off the reference pose with the gear DOWN, so
+	// this row goes red if a re-export ships the rig posed mid-cycle.
+	TEXT("/Game/Entities/DA_Aircraft_Plane16"),
 };
 
 /**
@@ -440,6 +444,9 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane15"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("an SR22 is hand-towed off a stand - the class default would gate a four-seat "
 			   "single behind the Pushback depot") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane16"), EPushbackNeed::SelfManoeuvre,
+		  TEXT("a Baron turns out of a stand on differential power - the class default would "
+			   "gate a light twin behind the Pushback depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Q400 turns out of a regional stand on its own props; the depot is the jets' tax") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane6"), EPushbackNeed::VehicleTug,

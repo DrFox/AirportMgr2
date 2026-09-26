@@ -29,6 +29,7 @@ PLANE5 = "/Game/Entities/DA_Aircraft_Plane5.DA_Aircraft_Plane5"
 PLANE10 = "/Game/Entities/DA_Aircraft_Plane10.DA_Aircraft_Plane10"
 PLANE12 = "/Game/Entities/DA_Aircraft_Plane12.DA_Aircraft_Plane12"
 PLANE15 = "/Game/Entities/DA_Aircraft_Plane15.DA_Aircraft_Plane15"
+PLANE16 = "/Game/Entities/DA_Aircraft_Plane16.DA_Aircraft_Plane16"
 
 # name -> (display name, fleet asset paths, offers per game day)
 #
@@ -107,8 +108,12 @@ AIRLINES = {
     #
     # 2026-09-26: THE SR22 JOINS, VARIETY AGAIN. 570 m of grass - more than the 172 or the
     # Cherokee, because it lands faster, and still under the Caravan's 740.
+    #
+    # 2026-09-26: THE BARON JOINS, THE FIRST PISTON TWIN. 710 m of grass, under the Caravan's
+    # 740; what it adds is a twin on a Code A stand.
     "DA_Airline_Cumbria": ("Cumbria Air",
-                           [PIPER, PLANE1, PLANE2, PLANE5, PLANE10, PLANE12, PLANE15], 4.0),
+                           [PIPER, PLANE1, PLANE2, PLANE5, PLANE10, PLANE12, PLANE15, PLANE16],
+                           4.0),
 }
 
 

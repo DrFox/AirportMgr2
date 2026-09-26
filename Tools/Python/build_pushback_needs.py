@@ -73,6 +73,11 @@ NEEDS = {
         "plane1's reason, and the class default of VehicleTug would gate a four-seat single "
         "behind the depot",
     ),
+    "/Game/Entities/DA_Aircraft_Plane16": (
+        unreal.PushbackNeed.SELF_MANOEUVRE,
+        "a Baron turns out of a stand on differential power and brake, the Q400's reason one "
+        "size down - the class default of VehicleTug would gate a light twin behind the depot",
+    ),
     "/Game/Entities/DA_Aircraft_Plane3": (
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "a Q400 turns out of a regional stand on its own props; the depot is the jets' tax",

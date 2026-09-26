@@ -374,6 +374,13 @@ bool FAnimYardGearFoldsIntoTheAirframeTest::RunTest(const FString& Parameters)
 				TEXT("%s: %s rises when the gear stows - it moved %+.0f uu on Z, needed more "
 					"than %.0f. Zero here means the graph applied no gear angle at all."),
 				*Who, *Name, Rose, Floor), Rose > Floor);
+
+			// THE FORE-AFT TRAVEL, SAID RATHER THAN ASSERTED - the header's named gap. A rig
+			// whose legs fold forward or aft (plane5, plane16) passes the outboard check at
+			// either sign, so this line is what a human reads to see which way each wheel went:
+			// +X is toward the nose.
+			AddInfo(FString::Printf(TEXT("%s: %s stows %+.0f uu fore-aft (+ is forward), "
+				"%+.0f uu outboard, %+.0f uu up"), *Who, *Name, After.X - Before.X, Outboard, Rose));
 		}
 
 		TestTrue(*FString::Printf(TEXT("%s: its rig has wheel bones to measure - none found, so "
