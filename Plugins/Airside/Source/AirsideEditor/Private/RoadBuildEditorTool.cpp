@@ -64,10 +64,9 @@ namespace
 
 		virtual void Marker(const FVector2D& At, EPreviewStyle Style) override
 		{
-			// NO PDI is a supported caller now (issue #304): CollectPreviewLabels builds one of
-			// these with PDI=nullptr purely to run BuildPreview for its Label() calls, the same
-			// way DrawHUD already re-runs BuildReadout independently of Render's own call - see
-			// that function's header comment. Marker/Line/CrossMark below guard it for exactly
+			// NO PDI is a supported caller now (issue #304): CachePreviewLabelsForTest builds one
+			// of these with PDI=nullptr purely to run BuildPreview for its Label() calls headlessly
+			// - see that function's own comment. Marker/Line/CrossMark below guard it for exactly
 			// that caller; Render's own construction always has a real PDI (checked before this
 			// class is ever built there), so nothing changes for the 3D viewport.
 			if (PDI == nullptr)
@@ -127,18 +126,20 @@ namespace
 
 		/**
 		 * COLLECTS, no longer "deliberately nothing" (issue #304). A PrimitiveDrawInterface
-		 * still draws geometry, not text, so Render's own call site (a real PDI) never asks for
-		 * these back - but DrawHUD's FCanvas can draw text, and until now had no way to reach
-		 * what a tool's preview described here: every refusal reason ("too short: %.0f m",
-		 * WhyStandRefused, every guide description, the purse quote) existed only in PIE's
-		 * ARoadBuildHUD::Label. See URoadBuildEditorTool::CollectPreviewLabels for the caller.
+		 * still draws geometry, not text - Marker/Line/CrossMark above still need one - but
+		 * DrawHUD's FCanvas can draw text, and until now had no way to reach what a tool's
+		 * preview described here: every refusal reason ("too short: %.0f m", WhyStandRefused,
+		 * every guide description, the purse quote) existed only in PIE's ARoadBuildHUD::Label.
+		 * Render's own call - the one with a real PDI - reads CollectedLabels() straight back
+		 * afterwards and caches it on PendingLabels for DrawHUD; see Render's own comment.
 		 */
 		virtual void Label(const FVector2D& At, const FString& Text, EPreviewStyle Style) override
 		{
 			Labels.Add({ At, Text, Style });
 		}
 
-		/** What Label collected this call - see CollectPreviewLabels. */
+		/** What Label collected this call - read by Render (a real Sink) and
+		 *  CachePreviewLabelsForTest (a null-PDI one standing in for it). */
 		const TArray<FEditorPreviewLabel>& CollectedLabels() const { return Labels; }
 
 	private:
@@ -738,39 +739,62 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 
 	// Gated on a real hover. Before the first mouse move the session's LastPlaneHit is
 	// (0,0), and the idle marker was drawing a corner at the world origin.
+	//
+	// PendingLabels IS CACHED HERE, FROM THIS SAME CALL - review round 2 of issue #304. The
+	// first version of this fix ran a SECOND, independent Tool->BuildPreview from DrawHUD to
+	// collect labels, discarding what THIS call already produced into Sink - doubling the cost
+	// of every tool's preview every frame for text this Sink was going to describe anyway.
+	// FViewportPreviewSink::Label collects regardless of whether PDI is real, so the one call
+	// Render already makes (to draw markers/lines with a real PDI) is also the one that fills
+	// the cache DrawHUD reads - see CollectPreviewLabelTextForTest for how a headless test
+	// drives the identical single call without a live PDI.
 	if (bHoverValid)
 	{
 		Tool->BuildPreview(MakeHoverContext(), Sink);
+		PendingLabels = Sink.CollectedLabels();
 	}
-
+	else
+	{
+		PendingLabels.Reset();
+	}
 }
 
-void URoadBuildEditorTool::CollectPreviewLabels(TArray<FEditorPreviewLabel>& Out) const
+void URoadBuildEditorTool::CachePreviewLabelsForTest(IBuildTool& ActiveTool)
 {
-	Out.Reset();
-
-	IBuildTool* Tool = Sess().GetActiveTool();
-	if (Tool == nullptr || Target == nullptr || !bHoverValid)
+	// STANDS IN FOR Render's OWN CACHING (see that function's own comment on PendingLabels),
+	// same precedent as SetViewCentreDistanceForTest/HoverFrameContextForTest: a real
+	// IToolsContextRenderAPI/FPrimitiveDrawInterface needs a live viewport this headless harness
+	// does not have.
+	//
+	// TAKES ActiveTool EXPLICITLY, not Sess().GetActiveTool() - no production IBuildTool exposes
+	// a call count, so Airside.Editor.RenderCachesLabelsOnce passes a counting spy here instead,
+	// to measure that THIS is the only place BuildPreview runs and that reading the cache
+	// afterwards (CollectPreviewLabelTextForTest, standing in for DrawHUD) costs nothing further.
+	//
+	// NO PDI: PDI-dependent drawing does not matter for labels - FViewportPreviewSink's Marker/
+	// Line/CrossMark already null-guard it, so the SAME single BuildPreview call collects the
+	// SAME labels a real Render call would, whatever else it also draws.
+	if (!bHoverValid)
 	{
+		PendingLabels.Reset();
 		return;
 	}
 
-	// NO PDI: this call exists only for the TEXT a tool's preview describes, never for the
-	// markers/lines/cross-marks a PrimitiveDrawInterface draws - Render's own sink, with a real
-	// PDI, already draws those every frame. See FViewportPreviewSink's own null-guard comment.
-	FViewportPreviewSink Sink(nullptr, Target->SurfaceZ, FVector::ZeroVector, 0.0, 0.0);
-	Tool->BuildPreview(MakeHoverContext(), Sink);
-	Out = Sink.CollectedLabels();
+	FViewportPreviewSink Sink(nullptr, Target != nullptr ? Target->SurfaceZ : 0.0,
+		FVector::ZeroVector, 0.0, 0.0);
+	ActiveTool.BuildPreview(MakeHoverContext(), Sink);
+	PendingLabels = Sink.CollectedLabels();
 }
 
 TArray<FString> URoadBuildEditorTool::CollectPreviewLabelTextForTest() const
 {
-	TArray<FEditorPreviewLabel> Labels;
-	CollectPreviewLabels(Labels);
-
+	// READS THE CACHE ONLY - no BuildPreview call here any more (review round 2 of issue #304).
+	// This is DrawHUD's own half of the contract CachePreviewLabelsForTest's comment describes:
+	// whatever populated PendingLabels (Render, for real; CachePreviewLabelsForTest, in a test),
+	// this reads it back rather than asking the tool a second time.
 	TArray<FString> Out;
-	Out.Reserve(Labels.Num());
-	for (const FEditorPreviewLabel& Label : Labels)
+	Out.Reserve(PendingLabels.Num());
+	for (const FEditorPreviewLabel& Label : PendingLabels)
 	{
 		Out.Add(Label.Text);
 	}
@@ -787,7 +811,8 @@ void URoadBuildEditorTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* Rend
 	// in the editor while the runtime HUD had always shown them. Before #304,
 	// FViewportPreviewSink::Label was "deliberately nothing" for the identical reason and every
 	// refusal reason a tool describes - "too short: %.0f m", WhyStandRefused, every guide
-	// description - existed only in PIE; see CollectPreviewLabels below.
+	// description - existed only in PIE; see Render's own comment on PendingLabels, which this
+	// function only READS - it does not run BuildPreview a second time.
 	IBuildTool* Tool = Sess().GetActiveTool();
 	const FSceneView* SceneView = RenderAPI != nullptr ? RenderAPI->GetSceneView() : nullptr;
 	if (Tool == nullptr || Target == nullptr || Canvas == nullptr || SceneView == nullptr || !bHoverValid)
@@ -824,18 +849,13 @@ void URoadBuildEditorTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* Rend
 	}
 
 	// EVERY LABEL THE TOOL'S OWN PREVIEW DESCRIBES (issue #304) - "too short: %.0f m",
-	// WhyStandRefused, every guide description, the purse quote. A SEPARATE BuildPreview call
-	// from BuildReadout's just above, matching this function's own established shape: it
-	// already re-runs the tool's preview independently of Render's own call rather than
-	// sharing state across the two ITF callbacks (see this function's header comment on why
-	// there is no shared "top of frame" hook). Cheap to repeat since issue #303:
-	// MakeHoverContext() is cached on the session, so the only work actually redone is the
-	// tool's own BuildPreview body - the same cost this function's BuildReadout call above
-	// already pays a second time every frame.
-	TArray<FEditorPreviewLabel> Labels;
-	CollectPreviewLabels(Labels);
-
-	if (Lines.Num() == 0 && Labels.Num() == 0)
+	// WhyStandRefused, every guide description, the purse quote. READ FROM PendingLabels, NOT
+	// RE-COLLECTED: review round 2 of issue #304 found this function running a SECOND,
+	// independent Tool->BuildPreview here to gather them, discarding what Render's own call had
+	// already produced into its Sink - doubling every tool's preview cost every frame for text
+	// Render's Sink was going to describe anyway. See Render's own comment on PendingLabels;
+	// Airside.Editor.RenderCachesLabelsOnce is what actually counts the calls.
+	if (Lines.Num() == 0 && PendingLabels.Num() == 0)
 	{
 		return;
 	}
@@ -875,7 +895,7 @@ void URoadBuildEditorTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* Rend
 	// identical choice, projecting the label's own At rather than the readout's cursor. COLOURED
 	// BY STYLE, not the readout's flat white, the same palette FViewportPreviewSink's Marker/
 	// Line/CrossMark already draw the rest of the preview in.
-	for (const FEditorPreviewLabel& Label : Labels)
+	for (const FEditorPreviewLabel& Label : PendingLabels)
 	{
 		FVector2D LabelPixelPos;
 		if (!SceneView->WorldToPixel(FVector(Label.At, Target->SurfaceZ), LabelPixelPos))

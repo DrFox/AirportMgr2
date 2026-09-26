@@ -19,16 +19,17 @@
  *
  * COMPOSITION LEVEL, not FRunwayTool's own unit test (RunwayToolTest.cpp already pins the too-
  * short JUDGEMENT itself) - this drives the REAL `URoadBuildEditorTool` ITF callbacks
- * (OnClickPress/OnClickRelease/OnUpdateHover) the way a player's mouse actually would, and reads
- * back through `CollectPreviewLabelTextForTest` - the same "no live viewport" substitution
- * `SetViewCentreDistanceForTest`/`HoverFrameContextForTest` already use - rather than calling
- * `FRunwayTool::BuildPreview` directly, which would prove the tool's OWN logic but nothing about
- * whether the editor tool's DrawHUD ever asks for it.
+ * (OnClickPress/OnClickRelease/OnUpdateHover), then `CachePreviewLabelsForTest` standing in for
+ * Render (same "no live viewport" substitution `SetViewCentreDistanceForTest`/
+ * `HoverFrameContextForTest` already use), and reads back through `CollectPreviewLabelTextForTest`
+ * - rather than calling `FRunwayTool::BuildPreview` directly, which would prove the tool's OWN
+ * logic but nothing about whether the editor tool's DrawHUD ever asks for it.
  *
  * WRITTEN RED FIRST: before `FViewportPreviewSink` collected labels and
  * `CollectPreviewLabelTextForTest` existed, this test could not compile - the exact shape "a list
  * nothing consumes" takes when the list in question is a virtual call's return value rather than
- * a table.
+ * a table. `CachePreviewLabelsForTest` is review round 2's own seam - see
+ * `Airside.Editor.RenderCachesLabelsOnce` for what actually counts the calls it stands in for.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadBuildEditorToolPreviewLabelTest,
@@ -99,6 +100,17 @@ bool FRoadBuildEditorToolPreviewLabelTest::RunTest(const FString& Parameters)
 	// Context.GuidedCursor() as "Far" live, which is what makes the refusal visible before it
 	// is ever committed to.
 	Tool->OnUpdateHover(RayAt(FVector2D(100.0, 0.0)));
+
+	// STANDS IN FOR Render: the active tool the session actually picked (Runway, via
+	// RunwayIndex above), through the real GetActiveTool() rather than a spy - this test is
+	// about a real tool's real label reaching the editor, not about the call count
+	// Airside.Editor.RenderCachesLabelsOnce pins separately.
+	IBuildTool* ActiveTool = Tool->SessionForTest()->GetActiveTool();
+	if (!TestNotNull(TEXT("the runway tool is active"), ActiveTool))
+	{
+		return false;
+	}
+	Tool->CachePreviewLabelsForTest(*ActiveTool);
 
 	const TArray<FString> Labels = Tool->CollectPreviewLabelTextForTest();
 	bool bFoundTooShort = false;
