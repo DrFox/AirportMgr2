@@ -1,5 +1,5 @@
 """Authors ABP_Plane<N>'s AnimGraph and reads it back to prove it, for whichever key names one
-of the twelve aeroplanes wired this way - Issue #294's replacement for the twelve
+of the aeroplanes wired this way - Issue #294's replacement for the twelve
 wire_plane<N>_anim.py wrappers.
 
   python Tools/wire_plane_anim.py <key>            # wires, compiles, saves, verifies
@@ -19,7 +19,7 @@ wire_anim_lib.load_axis_plan() fills wire_anim_lib.Model.plan from that file rat
 a table in this one. What is left here is the one fact this script cannot derive from that
 file: the Blueprint's own package path.
 
-THE TWELVE KEYS, NOT FOURTEEN. plane1 and plane2 were wired by hand before this tooling
+EVERY KEY BUT TWO. plane1 and plane2 were wired by hand before this tooling
 existed and have no Saved/<key>_axis_plan.json waiting for them - see
 aircraft/plane1.py's/plane2.py's `wire_script=False` and build_aircraft_anim.py's own
 docstring. Naming either here fails before touching the editor, the same refusal
@@ -32,12 +32,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wire_anim_lib
 
-# THE TWELVE KEYS THIS SCRIPT WIRES. plane1 and plane2 are hand-wired (no axis plan is ever
-# written for them); plane4 is create_abp=False on the BUILD side only - its Blueprint already
-# exists but is wired exactly like the other eleven once build_aircraft_anim.py has measured
+# THE KEYS THIS SCRIPT WIRES - thirteen since plane15 joined on 2026-09-26. plane1 and plane2
+# are hand-wired (no axis plan is ever written for them); plane4 is create_abp=False on the BUILD side only - its Blueprint already
+# exists but is wired exactly like the rest once build_aircraft_anim.py has measured
 # its axes.
 KEYS = ("plane3", "plane4", "plane5", "plane6", "plane7", "plane8", "plane9", "plane10",
-        "plane11", "plane12", "plane13", "plane14")
+        "plane11", "plane12", "plane13", "plane14", "plane15")
 
 _KEY_PATTERN = re.compile(r"^plane(\d+)$")
 
@@ -61,7 +61,7 @@ def main(argv):
                  % ", ".join(KEYS))
     key = positional[0]
     if key not in KEYS:
-        sys.exit("%r is not one of the twelve wired aircraft.\n  keys: %s"
+        sys.exit("%r is not one of the wired aircraft.\n  keys: %s"
                  % (key, ", ".join(KEYS)))
 
     model = wire_anim_lib.Model(key, bp_path(key))

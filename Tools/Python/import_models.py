@@ -424,6 +424,23 @@ SPECS = [
              "(mains inboard, nose forward), clamshell nose doors, two 20-blade fans.",
     ),
     Spec(
+        key="plane15",
+        source=MODELS + r"\plane15\export\plane15.glb",
+        mesh_dir="/Game/Aircraft/Plane15",
+        skel_name="SK_Plane15",
+        # plane12's SIX JOINTS AND NAMES: root, prop, wheel_L/_R, nosewheel_steer, nosewheel.
+        # Fixed gear, so no leg is a bone; the spats ride the legs (mains) or the steer bone.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, the contact patch - plane15/scripts/build_export.py's UE_ORIGIN, s 0.854.
+        origin_on="front",
+        note="Cirrus SR22. 11.68 m span, 7.92 m long, 2.72 m tall - the published figures "
+             "(plane15/SPEC.md). LEVEL on its gear, unlike plane12. Origin on the NOSE gear. "
+             "Six joints, fixed gear in spats, one 3-blade prop.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",

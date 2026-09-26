@@ -192,6 +192,10 @@ static const TCHAR* const MeasuredTypes[] = {
 	// THE PHENOM 300 IS THE FIRST MEASURED CODE B JET. Its 15.91 m span is over Code A's 15 m
 	// by 0.91 across the winglets, so this row goes red if a re-export trims them into A.
 	TEXT("/Game/Entities/DA_Aircraft_Plane14"),
+	// THE SR22 IS THE FIRST ROW WHOSE NOSEWHEEL CASTERS: its steer bone turns about a
+	// VERTICAL axis at the leg foot rather than about the raked leg, so this row is what says
+	// the steered-axle station is measured off the tyre, not off the strut.
+	TEXT("/Game/Entities/DA_Aircraft_Plane15"),
 };
 
 /**
@@ -433,6 +437,9 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane12"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Cherokee is hand-towed off a stand - the class default would gate a "
 			   "four-seat trainer behind the Pushback depot") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane15"), EPushbackNeed::SelfManoeuvre,
+		  TEXT("an SR22 is hand-towed off a stand - the class default would gate a four-seat "
+			   "single behind the Pushback depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Q400 turns out of a regional stand on its own props; the depot is the jets' tax") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane6"), EPushbackNeed::VehicleTug,
