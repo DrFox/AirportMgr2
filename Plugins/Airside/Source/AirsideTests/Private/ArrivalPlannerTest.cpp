@@ -56,8 +56,7 @@ bool FArrivalPlannerRunwayTooShortTest::RunTest(const FString& Parameters)
 	const FRoadNodeId B = Network->AddNode(FVector2D(Needed * 0.4, 0.0));
 	Network->AddStraightSegment(A, B, Runway);
 
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
-	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+	TestGraph::Derive(*Network);
 
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, FVector2D::ZeroVector, Airframe);
 
@@ -267,8 +266,7 @@ bool FArrivalPlannerNoRouteToStandTest::RunTest(const FString& Parameters)
 	const FRoadNodeId TaxiEnd = Network->AddNode(ExitAt + FVector2D(0.0, -20000.0));
 	Network->AddStraightSegment(Exit, TaxiEnd, Taxiway);
 
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
-	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+	TestGraph::Derive(*Network);
 
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe);
 
@@ -327,9 +325,7 @@ bool FArrivalPlannerNoStandBigEnoughTest::RunTest(const FString& Parameters)
 	Network->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -10000.0), 0.0,
 		IcaoCode::DesignSpanForLetter(EIcaoCode::C), Stand->PoseRole, Stand->Trucks);
 
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
-	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
-	FAnchorLink::Build(*Network, UAirsideSettings::ResolveLargestServiceVehicle());
+	TestGraph::Rebuild(*Network);
 
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe);
 	TestEqual(TEXT("only too-small stands refuses NoStandBigEnough, not NoRouteToStand"),

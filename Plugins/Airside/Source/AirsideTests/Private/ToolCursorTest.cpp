@@ -92,8 +92,7 @@ bool FToolCursorTest::RunTest(const FString& Parameters)
 		// Solve and derive the guidelines, which is what RebuildMesh does before any of
 		// this is hoverable. Done directly, without RebuildMesh itself: this test needs no
 		// mesh, only the guideline graph it derives.
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Actor->Network);
-		FRoadGuidelineBuilder::Build(*Actor->Network, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Actor->Network);
 
 		// The guideline node nearest the junction, which is the one the player reaches for.
 		const TArray<FGuidelineNode>& Guidelines = Actor->Network->GetGuidelineNodes();

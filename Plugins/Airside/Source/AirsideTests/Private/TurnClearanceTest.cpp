@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Content/AirsideSettings.h"
@@ -23,8 +24,7 @@ namespace TurnClearance
 		Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(-30000.0, 0.0)), Profile);
 		Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(30000.0, 0.0)), Profile);
 		Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(0.0, 30000.0)), Profile);
-		FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net),
-			UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Net);
 		return Net;
 	}
 

@@ -70,8 +70,7 @@ namespace
 			return;
 		}
 
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Actor->Network);
-		FRoadGuidelineBuilder::Build(*Actor->Network, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Actor->Network);
 	}
 }
 

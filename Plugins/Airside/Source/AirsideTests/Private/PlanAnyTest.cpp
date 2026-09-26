@@ -52,8 +52,7 @@ namespace
 		Out.Net->AddStraightSegment(M, N, Runway);
 		Out.Net->AddStraightSegment(T, M, Taxiway);
 
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Out.Net);
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 		Out.Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(45000.0, -14000.0), 0.0);
 		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());

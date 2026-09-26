@@ -321,9 +321,7 @@ namespace WidthTaper
 		const FRoadNodeId East = Out.Net->AddNode(FVector2D(6000.0 + EastLength, 0.0));
 		Out.Narrow = Out.Net->AddStraightSegment(West, Out.Mid, WestProfile);
 		Out.Wide = Out.Net->AddStraightSegment(Out.Mid, East, EastProfile);
-		const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
-		Out.Solved = FRoadNetworkSolver::SolveAll(*Out.Net, 12, &Designs);
-		FRoadGuidelineBuilder::Build(*Out.Net, Out.Solved, Designs);
+		Out.Solved = TestGraph::Derive(*Out.Net);
 		return Out;
 	}
 

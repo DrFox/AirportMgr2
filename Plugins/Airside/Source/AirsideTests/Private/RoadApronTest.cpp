@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -90,8 +91,7 @@ bool FRoadApronTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("adding an apron adds no segment"), ApronOnly->GetSegments().Num(), 0);
 		TestEqual(TEXT("and no node"), ApronOnly->GetNodes().Num(), 0);
 
-		const FRoadSolveResult ApronSolved = FRoadNetworkSolver::SolveAll(*ApronOnly);
-		FRoadGuidelineBuilder::Build(*ApronOnly, ApronSolved, UAirsideSettings::ResolveRoadDesignVehicles());
+		const FRoadSolveResult ApronSolved = TestGraph::Derive(*ApronOnly);
 
 		TestEqual(TEXT("the apron survives both passes"), ApronOnly->GetAprons().Num(), 1);
 		TestEqual(TEXT("the junction solver found nothing to solve"),

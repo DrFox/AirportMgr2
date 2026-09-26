@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadMeshBuilder.h"
@@ -187,9 +188,8 @@ bool FGuidelineProfileFallbackTest::RunTest(const FString& Parameters)
 	const FRoadSegmentId Arm2 = Net->AddStraightSegment(Centre, North, nullptr);
 	Net->DefaultProfile = Fallback;
 
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
+	const FRoadSolveResult Solved = TestGraph::Derive(*Net);
 	TestEqual(TEXT("every node solves"), Solved.FailedNodes, 0);
-	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 	// 1. THE MEASUREMENT. Each profile-less segment gets the centreline the fallback
 	//    declares, exactly as it gets the fallback's ribbon.
@@ -219,8 +219,7 @@ bool FGuidelineProfileFallbackTest::RunTest(const FString& Parameters)
 		Narrow->Guidelines[0].Width = 500.0;
 		const FRoadNodeId East = Net->AddNode(FVector2D(20000.0, 0.0));
 		const FRoadSegmentId Own = Net->AddStraightSegment(Centre, East, Narrow);
-		const FRoadSolveResult Again = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Net);
 
 		const FGuidelineEdge* OwnLine = nullptr;
 		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())

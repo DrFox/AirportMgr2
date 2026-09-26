@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -29,8 +30,7 @@ namespace
 		const FRoadNodeId FarB = Net->AddNode(FVector2D(26000.0, 0.0));
 		Net->AddStraightSegment(FarA, FarB, Profile);
 
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Net);
 		return Net;
 	}
 
@@ -139,8 +139,7 @@ bool FGuidelineAuthoringTest::RunTest(const FString& Parameters)
 	// would pass a single-rebuild test and fail on the edit after that.
 	for (int32 Pass = 0; Pass < 2; ++Pass)
 	{
-		const FRoadSolveResult Again = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Net);
 	}
 
 	// The edge itself survives - this much the builder does promise.

@@ -104,10 +104,27 @@ FGuidelineNodeId TestGraph::NodeFor(const URoadNetwork& Net, FRoadSegmentId Segm
 	return FGuidelineNodeId();
 }
 
+FRoadSolveResult TestGraph::Derive(URoadNetwork& Net, const FRoadDesignVehicles* DesignVehicles, EWideningTrace Widening)
+{
+	// RESOLVE ONCE if the caller has not already: URoadSurfacePresenter::Rebuild resolves its
+	// own FRoadDesignVehicles and passes THE SAME instance to SolveAll and to
+	// FRoadGuidelineBuilder::Build (#190) - so a fixture that means the production sequence
+	// does the same, rather than SolveAll(nullptr) (each profile resolving its own) followed
+	// by a second, independent ResolveRoadDesignVehicles() for Build. The two happen to answer
+	// with the same figures today (URoadProfile::ResolvedDesignBody and
+	// UAirsideSettings::ResolveRoadDesignVehicles both read UAirsideSettings::
+	// ResolveTierDesignVehicles), but a caller that wants to PROVE that - as
+	// ResolvedContentOncePerRebuildTest does - passes its own nullptr through to SolveAll
+	// directly instead of coming through here.
+	const FRoadDesignVehicles Resolved = DesignVehicles != nullptr ? *DesignVehicles : UAirsideSettings::ResolveRoadDesignVehicles();
+	FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net, 12, &Resolved, Widening);
+	FRoadGuidelineBuilder::Build(Net, Solved, Resolved);
+	return Solved;
+}
+
 void TestGraph::Rebuild(URoadNetwork& Net)
 {
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
-	FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+	Derive(Net);
 	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
 }
 
@@ -121,9 +138,7 @@ TestGraph::FCornerFixture TestGraph::Corner(URoadProfile* Profile, URoadProfile*
 	const FRoadNodeId Far = Out.Net->AddNode(FarAt);
 	Out.First = Out.Net->AddStraightSegment(West, Out.Corner, Profile);
 	Out.Second = Out.Net->AddStraightSegment(Out.Corner, Far, SecondProfile != nullptr ? SecondProfile : Profile);
-	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
-	Out.Solved = FRoadNetworkSolver::SolveAll(*Out.Net, 12, &Designs);
-	FRoadGuidelineBuilder::Build(*Out.Net, Out.Solved, Designs);
+	Out.Solved = Derive(*Out.Net);
 	return Out;
 }
 
@@ -192,8 +207,7 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 
 	if (Options.bDerived)
 	{
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Out.Net);
 	}
 
 	// STANDS FACE EAST (heading 0) so their lead-in casts WEST and meets the taxiway - see
@@ -319,8 +333,7 @@ FTestAirport FTestAirport::BuildScale(const FAirframe& Airframe, int32 Seed, boo
 
 	if (bDerived)
 	{
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Out.Net);
 	}
 
 	// 30 STANDS ALONG ROW 0 (nearest runway 1), NORTH of it, facing NORTH (heading +90 deg) so
@@ -457,8 +470,7 @@ FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand, double XDis
 	Out.RW1 = Out.Net->AddStraightSegment(W, X, Runway);
 	Out.RW2 = Out.Net->AddStraightSegment(X, E, Runway);
 	Out.XT = Out.Net->AddStraightSegment(X, T, Taxiway);
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-	FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+	TestGraph::Derive(*Out.Net);
 	if (bWithStand)
 	{
 		// Faces east (heading 0), so its lead-in casts WEST and meets the 45 degree

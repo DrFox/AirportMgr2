@@ -108,8 +108,7 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	const FRoadSegmentId N2X = Net->AddStraightSegment(N2, X, Taxiway);    // the crossing's north arm
 
 	{
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Net);
 	}
 
 	// The bars the player placed: both arms at W, and both approaches to the crossing at X.

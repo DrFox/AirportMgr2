@@ -189,23 +189,6 @@ namespace TestProfiles
 	TArray<URoadProfile*> ServiceTiers();
 }
 
-/**
- * A taxiway crossing a runway: S -> H (near bar) -> X (on the strip's centreline) -> N, hand-
- * built with no DerivedFrom - the holding position at H is the only thing protecting the
- * runway, which is the point of every test that builds one. bFarBar adds a second bar past X
- * protecting the SAME strip, the way a real crossing is painted (one bar each side) -
- * Airside.Model.Traffic.CrossingHoldsRunway needs it to measure that the far bar does not
- * re-arm the crossing once passed. The far node itself is not returned: nothing downstream
- * of Build needs its handle, only that it exists.
- */
-struct FCrossingFixture
-{
-	FRoadSegmentId Strip;
-	FGuidelineNodeId S, H, X, N;
-
-	static FCrossingFixture Build(URoadNetwork& Net, bool bFarBar = false);
-};
-
 /** Options for FTestAirport::Build, defaulted to the single-exit, single-stand shape every
  *  site but the two named on FTestAirport itself used before #101. */
 struct FTestAirportOptions
@@ -326,6 +309,20 @@ namespace TestGraph
 	/** The guideline node the builder derived for one end of Segment, or unset. */
 	FGuidelineNodeId NodeFor(const URoadNetwork& Net, FRoadSegmentId Segment, bool bEndA);
 
+	/**
+	 * Solve and derive the guideline graph the PRODUCTION way: one FRoadDesignVehicles
+	 * resolved (or DesignVehicles, if a caller already has one) and passed to both SolveAll
+	 * and FRoadGuidelineBuilder::Build, the same "resolve once, hand it down" URoadSurfacePresenter
+	 * itself follows (#190) - not SolveAll(nullptr) then a second, independent
+	 * ResolveRoadDesignVehicles() call for Build, which is what every one of the ~45 inline
+	 * copies this replaces did instead (issue #311, regression of #101). Returns the solve
+	 * result for a caller that still reads it (BendOuters, NodeResults, FailedNodes, ...);
+	 * a caller that does not just discards it. Does NOT link stands - see Rebuild below,
+	 * built on this, for the fixture-wide facade sequence.
+	 */
+	FRoadSolveResult Derive(URoadNetwork& Net, const FRoadDesignVehicles* DesignVehicles = nullptr,
+		EWideningTrace Widening = EWideningTrace::Trace);
+
 	/** Solve, derive guidelines and re-link every entity: what the facade's RebuildMesh does. */
 	void Rebuild(URoadNetwork& Net);
 
@@ -351,6 +348,23 @@ namespace TestGraph
 	FCornerFixture Corner(URoadProfile* Profile, URoadProfile* SecondProfile = nullptr,
 		const FVector2D& CornerAt = FVector2D(8000.0, 0.0), const FVector2D& FarAt = FVector2D(8000.0, 8000.0));
 }
+
+/**
+ * A taxiway crossing a runway: S -> H (near bar) -> X (on the strip's centreline) -> N, hand-
+ * built with no DerivedFrom - the holding position at H is the only thing protecting the
+ * runway, which is the point of every test that builds one. bFarBar adds a second bar past X
+ * protecting the SAME strip, the way a real crossing is painted (one bar each side) -
+ * Airside.Model.Traffic.CrossingHoldsRunway needs it to measure that the far bar does not
+ * re-arm the crossing once passed. The far node itself is not returned: nothing downstream
+ * of Build needs its handle, only that it exists.
+ */
+struct FCrossingFixture
+{
+	FRoadSegmentId Strip;
+	FGuidelineNodeId S, H, X, N;
+
+	static FCrossingFixture Build(URoadNetwork& Net, bool bFarBar = false);
+};
 
 /**
  * A runway long enough for the Piper to stop before the exit, one 45 degree taxiway, and a

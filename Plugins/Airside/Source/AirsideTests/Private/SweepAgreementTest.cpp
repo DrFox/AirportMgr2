@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Content/AirsideSettings.h"
@@ -129,7 +130,7 @@ bool FMeasuredOnFollowerSamplesTest::RunTest(const FString& Parameters)
 	Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(-30000.0, 0.0)), Road);
 	Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(30000.0, 0.0)), Road);
 	Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(0.0, 30000.0)), Road);
-	FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net), UAirsideSettings::ResolveRoadDesignVehicles());
+	TestGraph::Derive(*Net);
 
 	int32 Checked = 0;
 	for (int32 Index = 0; Index < Net->GetGuidelineEdges().Num(); ++Index)
