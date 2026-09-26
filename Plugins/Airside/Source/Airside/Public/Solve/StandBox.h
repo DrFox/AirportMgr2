@@ -28,12 +28,26 @@ namespace StandBox
 	};
 
 	/**
+	 * How far in from the entrance edge, along Facing, the stop mark sits: the letter's tail
+	 * setback off the entrance PLUS its wingtip clearance, so a parked tail clears the
+	 * taxiway pavement by the same margin Annex 14 gives its wingtip, not laid flush against
+	 * it. Decided 2026-09-26 (far-side-entry spec): service vehicles now enter from the FAR
+	 * (nose-side) edge, so the slack that used to sit behind the tail moves ahead of the nose
+	 * instead, where the far-side entry needs the room.
+	 *
+	 * PoseFor and BoxAt both build off this ONE figure, so the stop mark and the box's own
+	 * back edge agree by construction.
+	 */
+	AIRSIDE_API double EntranceSetback(EIcaoCode Letter, const FLetterEnvelope& Envelope);
+
+	/**
 	 * The stop-mark pose for a stand entered along EntranceA->EntranceB, dragged Inward.
 	 *
-	 * THE TEMPLATE'S BACK EDGE (X = NoseFwd - Depth, the tail side) IS LAID ON THE ENTRANCE
-	 * EDGE, centred - see UEntityDefinition::BuildStandTemplate. So the stop mark sits
-	 * Depth - NoseFwd in from the entrance edge, along Inward: every metre the player drew
-	 * beyond the aircraft's own floor is apron past the nose, not room the airframe uses.
+	 * THE TAIL SITS EntranceSetback IN FROM THE ENTRANCE EDGE, not flush with the far edge -
+	 * see EntranceSetback above. So the stop mark sits EntranceSetback in from the entrance
+	 * edge's midpoint, along Inward, and every metre of Depth beyond EntranceSetback +
+	 * MaxNoseFwd is slack that lies AHEAD of the nose - the far edge carries the service
+	 * ground now, not the tail's own clearance.
 	 *
 	 * Inward need not be perpendicular to EntranceA-EntranceB or unit length; only its
 	 * direction is read (GetSafeNormal), so a freeform drag still yields a clean pose.

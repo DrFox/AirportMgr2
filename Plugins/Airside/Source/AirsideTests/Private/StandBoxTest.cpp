@@ -68,8 +68,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FStandBoxTailToEntranceTest::RunTest(const FString& Parameters)
 {
 	// THE NOSE POINTS AWAY FROM THE TAXIWAY: the pose's Facing is exactly Inward, and the
-	// stop mark sits Depth - NoseFwd along it from the entrance edge's midpoint - not the
-	// full depth, because the template's own nose overhang sits beyond the stop mark already.
+	// stop mark sits EntranceSetback (MaxTailAft + wingtip clearance) along it from the
+	// entrance edge's midpoint - since this task (far-side entry), the tail's own clearance
+	// off the entrance, not the old Depth - NoseFwd that put most of the depth's slack
+	// behind the tail.
 	const EIcaoCode Letter = EIcaoCode::C;
 	const FVector2D A(0.0, 0.0);
 	const FVector2D B(IcaoCode::StandWidthForLetter(Letter), 0.0);
@@ -79,10 +81,56 @@ bool FStandBoxTailToEntranceTest::RunTest(const FString& Parameters)
 	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
 	TestTrue(TEXT("Facing equals Inward"), Pose.Facing.Equals(Inward, 1e-9));
 
-	const double Expected = IcaoCode::StandDepthForLetter(Letter) - Envelope.MaxNoseFwd;
+	const double Expected = StandBox::EntranceSetback(Letter, Envelope);
 	const double Actual = FVector2D::DotProduct(Pose.Position - A, Inward);
-	TestTrue(TEXT("stop mark is Depth - NoseFwd in from the entrance, along Inward"),
+	TestTrue(TEXT("stop mark is EntranceSetback in from the entrance, along Inward"),
 		FMath::IsNearlyEqual(Actual, Expected, 0.01));
+
+	return true;
+}
+
+/**
+ * THE POSE AND FAR EDGE AGREE, PER LETTER (this task, far-side entry): the tail is pulled in
+ * to EntranceSetback = MaxTailAft + wingtip clearance from the entrance, never flush with the
+ * far edge, and the slack the far-side entry needs is left ahead of the nose instead - the
+ * far edge (Depth) still carries the service ground, now beyond the nose rather than the tail.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandBoxTailAtEntranceTest,
+	"Airside.Solve.StandBox.TailAtEntrance",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandBoxTailAtEntranceTest::RunTest(const FString& Parameters)
+{
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	{
+		const TCHAR* LetterName = IcaoCode::ToLetter(Letter);
+		const FVector2D A(0.0, 0.0);
+		const FVector2D B(IcaoCode::StandWidthForLetter(Letter), 0.0);
+		const FVector2D Inward(0.0, 1.0);
+		const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
+		const double Depth = IcaoCode::StandDepthForLetter(Letter);
+
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
+
+		const double ExpectedSetback = Envelope.MaxTailAft + IcaoCode::WingtipClearanceForLetter(Letter);
+		TestEqual(*FString::Printf(TEXT("%s stop mark sits MaxTailAft + clearance in from the entrance"), LetterName),
+			Pose.Position.Y, ExpectedSetback);
+
+		TArray<FVector2D> Corners;
+		StandBox::BoxAt(Pose, Letter, Envelope, Corners);
+		if (TestEqual(*FString::Printf(TEXT("%s box has four corners"), LetterName), Corners.Num(), 4))
+		{
+			TestEqual(*FString::Printf(TEXT("%s box's far edge sits at Depth"), LetterName), Corners[2].Y, Depth);
+			TestEqual(*FString::Printf(TEXT("%s box's far edge sits at Depth (other corner)"), LetterName), Corners[3].Y, Depth);
+		}
+
+		// SLACK AHEAD OF THE NOSE, THE WHOLE POINT OF THIS TASK: the nose sits short of the far
+		// edge, where the mirrored template (Task 3) will lay the far-side entry's service ground.
+		const double NoseY = Pose.Position.Y + Envelope.MaxNoseFwd;
+		TestTrue(*FString::Printf(TEXT("%s nose sits short of the far edge - slack lies ahead of it (nose %.1f, depth %.1f)"),
+			LetterName, NoseY, Depth), NoseY < Depth);
+	}
 
 	return true;
 }

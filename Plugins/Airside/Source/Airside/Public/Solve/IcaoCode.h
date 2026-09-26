@@ -202,6 +202,18 @@ namespace IcaoCode
 	AIRSIDE_API double MaxStandWidthForLetter(EIcaoCode Code);
 
 	/**
+	 * Wingtip clearance on a stand of this letter, uu - the gap ICAO wants between a parked
+	 * aeroplane's wingtip and anything beside it. See FRow::WingtipClearance for the figures'
+	 * own history.
+	 *
+	 * EXPOSED FOR StandBox::EntranceSetback, since this task (far-side entry): the setback
+	 * that keeps a parked tail clear of the entrance's taxiway pavement is this same
+	 * clearance, applied fore-aft off the tail instead of side-on off the wingtip. Every other
+	 * caller reaches it only through WidthOf here.
+	 */
+	AIRSIDE_API double WingtipClearanceForLetter(EIcaoCode Code);
+
+	/**
 	 * How wide a lane a service vehicle needs, uu - four metres, a service road's own lane.
 	 *
 	 * HERE RATHER THAN ON THE STAND BUILDER because the stand's minimum WIDTH is derived from
@@ -212,8 +224,9 @@ namespace IcaoCode
 	AIRSIDE_API double ServiceLaneWidth();
 
 	/**
-	 * How deep a stand of this letter is, uu - nose to the back of its GSE road. AUTHORED,
-	 * and the only figure here that is; see the row's comment for why no rule produces it.
+	 * How deep a stand of this letter is, uu: tail setback + aircraft + service ground ahead
+	 * of the nose - the entrance edge to the back of the GSE road. AUTHORED, and the only
+	 * figure here that is; see the row's comment for why no rule produces it.
 	 *
 	 * Takes the enum, as StandWidthForLetter does.
 	 */

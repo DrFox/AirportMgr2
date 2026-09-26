@@ -121,14 +121,15 @@ bool FStandPlotPlacesCodeCTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("heading faces Inward, away from the taxiway"),
 		FMath::IsNearlyEqual(Entity.Heading, ExpectedHeading, 1e-6));
 
-	// THE STOP MARK ITSELF: StandBox::PoseFor's own derivation - the template's tail is laid
-	// on the entrance edge, so the stop mark sits Depth - NoseFwd in from the entrance
-	// midpoint, along Inward (the nose end, not the tail, is what reaches inward).
+	// THE STOP MARK ITSELF: StandBox::PoseFor's own derivation - since the far-side-entry task,
+	// the tail sits EntranceSetback (MaxTailAft + wingtip clearance) in from the entrance
+	// midpoint, along Inward, not Depth - NoseFwd - the slack that used to sit behind the tail
+	// now lies ahead of the nose instead (StandBox::EntranceSetback).
 	const FVector2D EntranceMid = (A + B) * 0.5;
 	const double ExpectedOffset =
-		IcaoCode::StandDepthForLetter(EIcaoCode::C) - IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C).MaxNoseFwd;
+		StandBox::EntranceSetback(EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C));
 	const double ActualOffset = FVector2D::DotProduct(Entity.Position - EntranceMid, Inward);
-	TestTrue(TEXT("the stop mark sits Depth - NoseFwd in from the entrance, along Inward"),
+	TestTrue(TEXT("the stop mark sits EntranceSetback in from the entrance, along Inward"),
 		FMath::IsNearlyEqual(ActualOffset, ExpectedOffset, 1e-6));
 
 	const TOptional<EIcaoCode> OutlineLetter = StandBox::LetterOf(Rect);

@@ -4,17 +4,21 @@
 
 namespace StandBox
 {
+	double EntranceSetback(EIcaoCode Letter, const FLetterEnvelope& Envelope)
+	{
+		return Envelope.MaxTailAft + IcaoCode::WingtipClearanceForLetter(Letter);
+	}
+
 	FStandPose PoseFor(const FVector2D& EntranceA, const FVector2D& EntranceB,
 		const FVector2D& Inward, EIcaoCode Letter, const FLetterEnvelope& Envelope)
 	{
-		// THE TEMPLATE'S BACK EDGE (X = NoseFwd - Depth, the tail side) IS LAID ON THE ENTRANCE
-		// EDGE, centred - see UEntityDefinition::BuildStandTemplate. So the stop mark is
-		// Depth - NoseFwd in from it, and every metre the player drew beyond the floor is
-		// apron past the nose.
+		// THE TAIL SITS EntranceSetback IN FROM THE ENTRANCE EDGE, centred - see that
+		// function's own comment. Every metre of Depth beyond it and the nose overhang is
+		// slack the far-side entry spends AHEAD of the nose, not room the airframe uses.
 		FStandPose Pose;
 		Pose.Facing = Inward.GetSafeNormal();
 		Pose.Position = (EntranceA + EntranceB) * 0.5
-			+ Pose.Facing * (IcaoCode::StandDepthForLetter(Letter) - Envelope.MaxNoseFwd);
+			+ Pose.Facing * EntranceSetback(Letter, Envelope);
 		return Pose;
 	}
 
@@ -22,10 +26,9 @@ namespace StandBox
 		TArray<FVector2D>& OutCorners)
 	{
 		const double HalfWidth = 0.5 * IcaoCode::StandWidthForLetter(Letter);
-		const double NoseFwd = Envelope.MaxNoseFwd;
 		const double Depth = IcaoCode::StandDepthForLetter(Letter);
-		const FVector2D Back = Pose.Position - Pose.Facing * (Depth - NoseFwd);
-		const FVector2D Front = Pose.Position + Pose.Facing * NoseFwd;
+		const FVector2D Back = Pose.Position - Pose.Facing * EntranceSetback(Letter, Envelope);
+		const FVector2D Front = Back + Pose.Facing * Depth;
 		// -PerpCCW: entrance runs so that inward is on its LEFT, which is what makes the
 		// quad counter-clockwise (positive area) - the winding the pad triangulator needs.
 		const FVector2D Side = -RoadGeom::PerpCCW(Pose.Facing) * HalfWidth;

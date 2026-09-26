@@ -26,7 +26,8 @@ namespace IcaoCode
 			double WingtipClearance;
 
 			/**
-			 * How deep a stand of this letter is, uu - nose to the back of its GSE road.
+			 * How deep a stand of this letter is, uu: tail setback + aircraft + service
+			 * ground ahead of the nose, entrance edge to the back of the GSE road.
 			 *
 			 * AUTHORED, not derived, and it is the only figure here that is. Width follows
 			 * from span and clearance; depth follows from aircraft LENGTH and the room an
@@ -318,6 +319,11 @@ namespace IcaoCode
 		// UNBOUNDED AT THE TOP. Code F has no letter above it, so there is no width at which a
 		// stand stops being one - and a stand wider than any aeroplane needs is not an error.
 		return Above != nullptr ? WidthOf(*Above) : TNumericLimits<double>::Max();
+	}
+
+	double WingtipClearanceForLetter(EIcaoCode Code)
+	{
+		return RowFor(Code).WingtipClearance;
 	}
 
 	double StandDepthForLetter(EIcaoCode Code)
