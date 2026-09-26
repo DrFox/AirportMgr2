@@ -21,9 +21,11 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RouteSearch.h"
 
 class URoadProfile;
 struct FAirframe;
+struct FVehicle;
 
 /** Runway and taxiway profiles authored by hand, MakeTransient so no asset is touched. */
 namespace TestProfiles
@@ -210,6 +212,21 @@ namespace TestGraph
 	 */
 	AIRSIDE_API FCornerFixture Corner(URoadProfile* Profile, URoadProfile* SecondProfile = nullptr,
 		const FVector2D& CornerAt = FVector2D(8000.0, 0.0), const FVector2D& FarAt = FVector2D(8000.0, 8000.0));
+
+	/**
+	 * A GraphProbe route from A to B, through FRouteQuery::For rather than a hand-built
+	 * FRouteQuery - issue #312. FRouteQuery::For is the ONLY place that copies the resolved
+	 * FRoutePolicy::Avoidance into Query.AvoidRunways (RouteSearch.cpp's own comment on why:
+	 * "the table overwrites the field, rather than being set beside it"), and RunSearch's hot
+	 * loop reads AvoidRunways, never Policy. A caller that fills Start/Goal/Class/Errand by
+	 * hand and skips For() gets a query that always resolves the permissive
+	 * ERunwayAvoidance::None, silently, for every errand - the six-helper, 48-site bug this
+	 * function replaces. Vehicle null and Wingspan 0 match every GraphProbe call site's own
+	 * defaults before #312 (no gating, no span limit) - not new behaviour, the SAME query
+	 * those sites were already asking for, this time with AvoidRunways actually set.
+	 */
+	AIRSIDE_API FRoutePlan Probe(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B,
+		ETraversalClass Class, const FVehicle* Vehicle = nullptr, double Wingspan = 0.0);
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

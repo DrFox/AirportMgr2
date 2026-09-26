@@ -56,15 +56,11 @@ namespace TwoWayLane
 		return Found != nullptr ? Found->Position : FVector2D(NAN, NAN);
 	}
 
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways - see TestGraph::Probe's
+	// own comment for why that silently answered every errand with the permissive policy.
 	FRoutePlan Route(const URoadNetwork& Net, FGuidelineNodeId Start, FGuidelineNodeId Goal)
 	{
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = Start;
-		Query.Goal = Goal;
-		Query.Class = ETraversalClass::GroundVehicle;
-		return RouteSearch::Find(Net, Query);
+		return TestGraph::Probe(Net, Start, Goal, ETraversalClass::GroundVehicle);
 	}
 
 	/** A one-guideline, bidirectional vehicle road - the shape every service road had before

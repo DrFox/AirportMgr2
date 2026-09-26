@@ -1112,9 +1112,9 @@ bool FStandPlotRemoveNamesTheAircraftInUseTest::RunTest(const FString& Parameter
 		Edge.bDerived = false;
 		Actor->Network->AddGuidelineEdge(MoveTemp(Edge));
 	}
-	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = From; Q.Goal = Pose; Q.Class = ETraversalClass::Aircraft;
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 	if (!TestTrue(TEXT("an aircraft is sent to the stand"),
-		Actor->DispatchAgent(RouteSearch::Find(*Actor->Network, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+		Actor->DispatchAgent(TestGraph::Probe(*Actor->Network, From, Pose, ETraversalClass::Aircraft), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
 	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
 
 	FToolContext Remove = At(Actor, (Drawn[0] + Drawn[2]) * 0.5);

@@ -8,6 +8,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -49,10 +50,10 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 	InspJoin(*Net, B, Pose);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = Pose; Q.Class = ETraversalClass::Aircraft;
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 	FAirframe Piper = UAirsideSettings::ResolveDefaultAirframe();
 	Piper.TypeCode = TEXT("PA46");
-	const int32 Id = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), Piper, ETraversalClass::Aircraft, 1.0);
+	const int32 Id = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, Pose, ETraversalClass::Aircraft), Piper, ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
 
 	FAgentFacts Facts;

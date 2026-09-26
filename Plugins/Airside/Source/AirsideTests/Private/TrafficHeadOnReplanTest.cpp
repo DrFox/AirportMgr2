@@ -16,10 +16,11 @@
 
 namespace
 {
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways - see TestGraph::Probe's
+	// own comment for why that silently answered every errand with the permissive policy.
 	FRoutePlan M2HeadOnRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B)
 	{
-		FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
-		return RouteSearch::Find(Net, Q);
+		return TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft);
 	}
 
 	bool M2HeadOnUsesRunway(const URoadNetwork& Net, const FRoutePlan& Plan)

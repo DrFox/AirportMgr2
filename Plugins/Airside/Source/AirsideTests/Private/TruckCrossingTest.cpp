@@ -9,6 +9,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -50,15 +51,10 @@ bool FTruckCrossesTaxiwayTest::RunTest(const FString& Parameters)
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 	auto Route = [Net](FGuidelineNodeId Start, FGuidelineNodeId Goal, ETraversalClass Class)
 	{
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = Start;
-		Query.Goal = Goal;
-		Query.Class = Class;
-		return RouteSearch::Find(*Net, Query);
+		return TestGraph::Probe(*Net, Start, Goal, Class);
 	};
 
 	const FRoutePlan AircraftPlan = Route(West, East, ETraversalClass::Aircraft);

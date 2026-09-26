@@ -17,6 +17,7 @@
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
 #include "StandFixture.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -353,15 +354,10 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 
 			// AND A TRUCK CAN ACTUALLY GET THERE. Connectivity is the claim; a route is the
 			// proof, and "the search found nothing" would otherwise read like a broken search.
-			FRouteQuery Query;
-			Query.Errand = ERouteErrand::GraphProbe;
-			Query.Policy = FRoutePolicy::For(Query.Errand);
-			Query.Start = Near;
-			Query.Goal = Node;
-			Query.Class = ETraversalClass::GroundVehicle;
+			// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 			TestTrue(
 				*FString::Printf(TEXT("and a truck routes to '%s'"), *Bay.AnchorId.ToString()),
-				RouteSearch::Find(*Net, Query).IsValid());
+				TestGraph::Probe(*Net, Near, Node, ETraversalClass::GroundVehicle).IsValid());
 		}
 	}
 
@@ -497,26 +493,16 @@ bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
 		TestTrue(*FString::Printf(TEXT("stand %d's hydrant is on the road"), At),
 			Net->IsServiceNodeConnected(Hydrant));
 
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = RoadSouth;
-		Query.Goal = Hydrant;
-		Query.Class = ETraversalClass::GroundVehicle;
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 		TestTrue(*FString::Printf(TEXT("and a truck routes to stand %d"), At),
-			RouteSearch::Find(*Net, Query).IsValid());
+			TestGraph::Probe(*Net, RoadSouth, Hydrant, ETraversalClass::GroundVehicle).IsValid());
 	}
 
 	// EACH STAND GETS ITS OWN CONNECTION, which is what makes one road serving a row the
 	// normal case rather than a conflict.
-	FRouteQuery BetweenStands;
-	BetweenStands.Errand = ERouteErrand::GraphProbe;
-	BetweenStands.Policy = FRoutePolicy::For(BetweenStands.Errand);
-	BetweenStands.Start = AnchorNode(*Net, Row[0], TEXT("HydrantPit"));
-	BetweenStands.Goal = AnchorNode(*Net, Row.Last(), TEXT("HydrantPit"));
-	BetweenStands.Class = ETraversalClass::GroundVehicle;
 	TestTrue(TEXT("and a truck can go from the first stand to the last down the road"),
-		RouteSearch::Find(*Net, BetweenStands).IsValid());
+		TestGraph::Probe(*Net, AnchorNode(*Net, Row[0], TEXT("HydrantPit")),
+			AnchorNode(*Net, Row.Last(), TEXT("HydrantPit")), ETraversalClass::GroundVehicle).IsValid());
 	return true;
 }
 
@@ -899,14 +885,9 @@ bool FTruckDrivesTheWholeRouteToTheHydrantTest::RunTest(const FString& Parameter
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
-	FRouteQuery Query;
-	Query.Errand = ERouteErrand::GraphProbe;
-	Query.Policy = FRoutePolicy::For(Query.Errand);
-	Query.Start = RoadSouth;
-	Query.Goal = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
-	Query.Class = ETraversalClass::GroundVehicle;
-
-	const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	const FRoutePlan Plan = TestGraph::Probe(*Net, RoadSouth, AnchorNode(*Net, Placed, TEXT("HydrantPit")),
+		ETraversalClass::GroundVehicle);
 	if (!TestTrue(TEXT("a truck routes from the road to the hydrant"), Plan.IsValid())
 		|| Plan.Polyline.Num() < 2)
 	{
@@ -991,14 +972,9 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
-	FRouteQuery Query;
-	Query.Errand = ERouteErrand::GraphProbe;
-	Query.Policy = FRoutePolicy::For(Query.Errand);
-	Query.Start = RoadWest;
-	Query.Goal = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
-	Query.Class = ETraversalClass::GroundVehicle;
-
-	const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	const FGuidelineNodeId Hydrant = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
+	const FRoutePlan Plan = TestGraph::Probe(*Net, RoadWest, Hydrant, ETraversalClass::GroundVehicle);
 	if (!TestTrue(TEXT("a truck routes from the road to the hydrant"), Plan.IsValid())
 		|| Plan.Polyline.Num() < 2)
 	{
@@ -1031,7 +1007,7 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 	// the straight-line distance is generous - the lane is a detour by construction - and far
 	// short of anything that could be called a tour.
 	const FGuidelineNode* Start = Net->GetGuidelineNode(RoadWest);
-	const FGuidelineNode* Goal = Net->GetGuidelineNode(Query.Goal);
+	const FGuidelineNode* Goal = Net->GetGuidelineNode(Hydrant);
 	if (Start != nullptr && Goal != nullptr)
 	{
 		TestTrue(TEXT("and it is a short journey, not a tour of the airport"),
@@ -1287,14 +1263,8 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 		return false;
 	}
 
-	FRouteQuery Out;
-	Out.Errand = ERouteErrand::GraphProbe;
-	Out.Policy = FRoutePolicy::For(Out.Errand);
-	Out.Start = Hydrant;
-	Out.Goal = RoadSouth;
-	Out.Class = ETraversalClass::GroundVehicle;
-
-	const FRoutePlan Leaving = RouteSearch::Find(*Net, Out);
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	const FRoutePlan Leaving = TestGraph::Probe(*Net, Hydrant, RoadSouth, ETraversalClass::GroundVehicle);
 	if (!TestTrue(TEXT("a truck routes off the hydrant and back to the road"),
 			Leaving.IsValid() && Leaving.Steps.Num() > 0))
 	{

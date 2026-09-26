@@ -104,13 +104,9 @@ bool FDepotJoinsRoadTest::RunTest(const FString& Parameters)
 		// THE POINT: a truck can be routed off the depot. Before PoseRole the lead-in was
 		// cast as an AIRCRAFT unconditionally, found no aircraft guideline, and logged
 		// "joins nothing" on every rebuild for ever.
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = Pose;
-		Query.Goal = East;
-		Query.Class = ETraversalClass::GroundVehicle;
-		TestTrue(TEXT("a vehicle routes off the depot"), RouteSearch::Find(*Net, Query).IsValid());
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+		TestTrue(TEXT("a vehicle routes off the depot"),
+			TestGraph::Probe(*Net, Pose, East, ETraversalClass::GroundVehicle).IsValid());
 	}
 
 	// OFF ANY ROAD - a depot facing a TAXIWAY. Its class is refused by the edge's own mask,
@@ -189,21 +185,14 @@ bool FStandFuelAnchorJoinsRoadTest::RunTest(const FString& Parameters)
 	// A TRUCK CAN REACH IT. This node is the OUT plan's goal, so a stand whose fuel anchor
 	// is an island is a stand no fuel service can ever serve - and "the search found
 	// nothing" would otherwise be indistinguishable from a broken search.
-	FRouteQuery Query;
-	Query.Errand = ERouteErrand::GraphProbe;
-	Query.Policy = FRoutePolicy::For(Query.Errand);
-	Query.Start = RoadWest;
-	Query.Goal = Fuel->Node;
-	Query.Class = ETraversalClass::GroundVehicle;
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 	TestTrue(TEXT("a truck routes from the road to the hydrant"),
-		RouteSearch::Find(*Net, Query).IsValid());
+		TestGraph::Probe(*Net, RoadWest, Fuel->Node, ETraversalClass::GroundVehicle).IsValid());
 
 	// AND AN AIRCRAFT CANNOT. The lead-in carries FTrafficMask::Only(GroundVehicle) plus
 	// Emergency, so the hydrant is not somewhere an aeroplane can be sent by mistake.
-	Query.Start = TaxiSouth;
-	Query.Class = ETraversalClass::Aircraft;
 	TestFalse(TEXT("an aircraft cannot be routed to the hydrant"),
-		RouteSearch::Find(*Net, Query).IsValid());
+		TestGraph::Probe(*Net, TaxiSouth, Fuel->Node, ETraversalClass::Aircraft).IsValid());
 	return true;
 }
 

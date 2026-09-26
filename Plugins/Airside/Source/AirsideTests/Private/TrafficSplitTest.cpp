@@ -5,6 +5,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -201,13 +202,8 @@ bool FTrafficSplitPlanReResolverStandaloneTest::RunTest(const FString& Parameter
 		const FGuidelineEdgeId WestSouth = TrafficSplitJoin(*Network, West, South);
 		TrafficSplitJoin(*Network, South, East);
 
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = West;
-		Query.Goal = East;
-		Query.Class = ETraversalClass::Aircraft;
-		const FRoutePlan Plan = RouteSearch::Find(*Network, Query);
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+		const FRoutePlan Plan = TestGraph::Probe(*Network, West, East, ETraversalClass::Aircraft);
 		if (!TestTrue(TEXT("the diamond has a route to splice"), Plan.IsValid())
 			|| !TestEqual(TEXT("and it is the short way, via South"), Plan.Steps.Num() > 0 ? Plan.Steps[0].To : FGuidelineNodeId(), South))
 		{

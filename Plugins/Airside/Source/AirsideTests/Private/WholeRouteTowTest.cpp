@@ -124,15 +124,15 @@ namespace WholeRouteTowFixture
 		return Out;
 	}
 
+	// #312: already went through FRouteQuery::For, unlike the five other hand-built helpers
+	// the issue named - folded onto TestGraph::Probe anyway so the SAME wrapper answers every
+	// GraphProbe in the module. Kept as a local Route() rather than calling Probe direct at
+	// every site: this file's own default Class/Wingspan (GroundVehicle, unconstrained) are
+	// what nearly every call below wants, and Probe's own Class has no default to lean on.
 	FRoutePlan Route(const URoadNetwork& Net, FGuidelineNodeId From, FGuidelineNodeId To, const FVehicle* Vehicle,
 		ETraversalClass Class = ETraversalClass::GroundVehicle, double Wingspan = 0.0)
 	{
-		FRouteQuery Query = FRouteQuery::For(ERouteErrand::GraphProbe, From, To, Wingspan, Class);
-		if (Vehicle != nullptr)
-		{
-			Query.WithVehicle(*Vehicle);
-		}
-		return RouteSearch::Find(Net, Query);
+		return TestGraph::Probe(Net, From, To, Class, Vehicle, Wingspan);
 	}
 
 	/** The edge's own samples, as Judge traces them. */

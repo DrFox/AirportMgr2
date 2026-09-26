@@ -48,8 +48,8 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	// sweeps DERIVED guidelines, and a fixture that vanished mid-test would look like a
 	// broken forwarder.
 	TestGraph::Join(Net, A, B, { EGuidelineDir::Bidirectional, nullptr, false });
-	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::GroundVehicle;
-	const FRoutePlan Plan = RouteSearch::Find(Net, Q);
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	const FRoutePlan Plan = TestGraph::Probe(Net, A, B, ETraversalClass::GroundVehicle);
 	if (!TestTrue(TEXT("route found"), Plan.IsValid())) { return false; }
 
 	TArray<TPair<EAgentPhase, EAgentPhase>> Relayed;
@@ -207,7 +207,7 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 
 	int32 DupRelayed = 0;
 	DupTraffic->OnAgentPhaseChanged.AddLambda([&DupRelayed](int32, EAgentPhase, EAgentPhase) { ++DupRelayed; });
-	const FRoutePlan DupPlan = RouteSearch::Find(*Dup->Network, Q);
+	const FRoutePlan DupPlan = TestGraph::Probe(*Dup->Network, A, B, ETraversalClass::GroundVehicle);
 	if (TestTrue(TEXT("the duplicate's own graph still routes"), DupPlan.IsValid()))
 	{
 		TestTrue(TEXT("dispatch on the duplicate is accepted"), Dup->DispatchAgent(DupPlan, Van, ETraversalClass::GroundVehicle));

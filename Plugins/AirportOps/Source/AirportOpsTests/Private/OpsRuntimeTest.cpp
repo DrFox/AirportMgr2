@@ -78,8 +78,8 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		Edge.bDerived = false;
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 
-		FRouteQuery Query; Query.Errand = ERouteErrand::GraphProbe; Query.Policy = FRoutePolicy::For(Query.Errand); Query.Start = Start; Query.Goal = End; Query.Class = ETraversalClass::GroundVehicle;
-		const FRoutePlan Outbound = RouteSearch::Find(Net, Query);
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+		const FRoutePlan Outbound = TestGraph::Probe(Net, Start, End, ETraversalClass::GroundVehicle);
 		if (!TestTrue(TEXT("the leg routes"), Outbound.IsValid())) { return false; }
 
 		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();

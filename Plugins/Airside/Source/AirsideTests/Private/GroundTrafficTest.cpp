@@ -23,10 +23,11 @@
 
 namespace
 {
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways - see TestGraph::Probe's
+	// own comment for why that silently answered every errand with the permissive policy.
 	FRoutePlan M2TrafficRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B, ETraversalClass Class)
 	{
-		FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = Class;
-		return RouteSearch::Find(Net, Q);
+		return TestGraph::Probe(Net, A, B, Class);
 	}
 
 	/** The two named nodes a rebuilt A-B-C(-D) test graph keeps handles to. */

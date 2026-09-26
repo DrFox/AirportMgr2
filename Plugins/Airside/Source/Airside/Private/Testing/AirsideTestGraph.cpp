@@ -347,6 +347,17 @@ URoadProfile* TestProfiles::Taxiway()
 	return URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
 }
 
+FRoutePlan TestGraph::Probe(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B,
+	ETraversalClass Class, const FVehicle* Vehicle, double Wingspan)
+{
+	FRouteQuery Query = FRouteQuery::For(ERouteErrand::GraphProbe, A, B, Wingspan, Class);
+	if (Vehicle != nullptr)
+	{
+		Query.WithVehicle(*Vehicle);
+	}
+	return RouteSearch::Find(Net, Query);
+}
+
 TArray<URoadProfile*> TestProfiles::ServiceTiers()
 {
 	TArray<URoadProfile*> Out;

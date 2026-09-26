@@ -68,11 +68,12 @@ namespace VehicleGating
 		return Net;
 	}
 
+	// #312: already went through FRouteQuery::For, unlike the five other hand-built helpers
+	// the issue named - folded onto TestGraph::Probe anyway so the SAME wrapper answers every
+	// GraphProbe in the module, rather than two call sites of one pattern.
 	FRoutePlan Route(const URoadNetwork& Net, FGuidelineNodeId From, FGuidelineNodeId To, const FVehicle& Vehicle)
 	{
-		FRouteQuery Query = FRouteQuery::For(ERouteErrand::GraphProbe, From, To, 0.0, ETraversalClass::GroundVehicle);
-		Query.WithVehicle(Vehicle);
-		return RouteSearch::Find(Net, Query);
+		return TestGraph::Probe(Net, From, To, ETraversalClass::GroundVehicle, &Vehicle);
 	}
 }
 
