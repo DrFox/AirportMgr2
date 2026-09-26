@@ -240,8 +240,9 @@ namespace IcaoCode
 	 * THIS IS THE GAME MECHANIC, not a lookup. The player draws a stand polygon; its size
 	 * decides which aircraft may use it. Nobody picks a letter.
 	 *
-	 * BOTH DIMENSIONS, NEVER ONE. A 67 x 30 m stand is D-wide and nothing bigger than a
-	 * King Air fits in 30 m of depth, so it is a Code B. The answer is the largest letter
+	 * BOTH DIMENSIONS, NEVER ONE. A 67 x 40 m stand is D-wide and nothing bigger than a
+	 * King Air fits in 40 m of depth, so it is a Code B (30 m until the 2026-09-26 depth rise,
+	 * which now reads as no letter at all). The answer is the largest letter
 	 * whose width AND depth both fit, which is not the largest whose width fits.
 	 *
 	 * Empty is a real answer, not a failure: a stand smaller than Code A is refused at

@@ -173,23 +173,24 @@ bool FStandBoxNoLetterTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("20 x 20 m is smaller than any letter"), StandBox::LetterOf(TooSmall).IsSet());
 
 	// THE SPEC TABLE'S OWN EXAMPLE: a wide-but-shallow rect reads as the letter its DEPTH
-	// allows, not its width - 67 x 30 m is wide enough for Code D (81 m floor) but nowhere
+	// allows, not its width - 67 x 40 m is wide enough for Code D (81 m floor) but nowhere
 	// near deep enough, so it reads as whatever letter IcaoCode::LetterForStandSize actually
-	// gives a 30 m depth. Computed from the table rather than retyped, so this test cannot
+	// gives a 40 m depth. Computed from the table rather than retyped, so this test cannot
 	// drift from the table it is pinning.
 	const double WidthUu = 6700.0;
-	const double DepthUu = 3000.0;
+	// 40 m, not 30, since the 2026-09-26 depth rise put Code A's floor at 32 m.
+	const double DepthUu = 4000.0;
 	const TOptional<EIcaoCode> Expected = IcaoCode::Parse(IcaoCode::LetterForStandSize(WidthUu, DepthUu));
-	TestTrue(TEXT("67 x 30 m is wide-but-shallow and still gets a letter"), Expected.IsSet());
+	TestTrue(TEXT("67 x 40 m is wide-but-shallow and still gets a letter"), Expected.IsSet());
 
 	const TArray<FVector2D> WideButShallow = {
 		FVector2D(0.0, 0.0), FVector2D(WidthUu, 0.0), FVector2D(WidthUu, DepthUu), FVector2D(0.0, DepthUu)
 	};
 	const TOptional<EIcaoCode> Actual = StandBox::LetterOf(WideButShallow);
-	TestTrue(TEXT("67 x 30 m reads back a letter"), Actual.IsSet());
+	TestTrue(TEXT("67 x 40 m reads back a letter"), Actual.IsSet());
 	if (Expected.IsSet() && Actual.IsSet())
 	{
-		TestEqual(TEXT("67 x 30 m reads as the letter its DEPTH allows, not its width"),
+		TestEqual(TEXT("67 x 40 m reads as the letter its DEPTH allows, not its width"),
 			Actual.GetValue(), Expected.GetValue());
 	}
 

@@ -34,6 +34,16 @@ namespace IcaoCode
 			 * equipment area and a service road need, and no clean rule produces it. Standard
 			 * aerodrome design values, as the header says of the rest - the first thing to
 			 * check if a real layout looks wrong.
+			 *
+			 * RAISED PAST THOSE VALUES ON 2026-09-26, A-E (user ruling; F unchanged): A 2000 ->
+			 * 3200, B 3000 -> 3950, C 5500 -> 6500 (the published 55 m is now 65 m), D 7000 ->
+			 * 8400, E 9000 -> 9500. Service vehicles now enter only by the far edge, so the
+			 * service lane lies in the slack AHEAD of the nose, and on the published depths that
+			 * slack was too short for a bay's serve leg to reach its lane forward of the service
+			 * point. The depths at which UEntityDefinition::BuildStandTemplate's contact band
+			 * first opens were measured - A 2900, B 3650, C 6181, D 8093, E 9195 - and each floor
+			 * is that plus about 300 of margin. Widths are unchanged.
+			 * ENFORCED BY: Airside.Entities.StandLayoutEveryLetterBuilds
 			 */
 			double StandDepth;
 
@@ -82,19 +92,19 @@ namespace IcaoCode
 		// carries their measured history now that it is theirs rather than this table's.
 		static const FRow Rows[] = {
 			{ .Letter = TEXT("A"), .MaxWingspan = 1500.0, .RunwayWidth = 1800.0, .StandTurnRadius = 1500.0,
-			  .WingtipClearance = 300.0, .StandDepth = 2000.0,
+			  .WingtipClearance = 300.0, .StandDepth = 3200.0,
 			  .WingFwd = -50.0, .WingAft = -700.0, .AftEdgeAllowance = 600.0 },
 			{ .Letter = TEXT("B"), .MaxWingspan = 2400.0, .RunwayWidth = 2300.0, .StandTurnRadius = 2000.0,
-			  .WingtipClearance = 300.0, .StandDepth = 3000.0,
+			  .WingtipClearance = 300.0, .StandDepth = 3950.0,
 			  .WingFwd = -300.0, .WingAft = -1400.0, .AftEdgeAllowance = 600.0 },
 			{ .Letter = TEXT("C"), .MaxWingspan = 3600.0, .RunwayWidth = 3000.0, .StandTurnRadius = 2500.0,
-			  .WingtipClearance = 450.0, .StandDepth = 5500.0,
+			  .WingtipClearance = 450.0, .StandDepth = 6500.0,
 			  .WingFwd = -950.0, .WingAft = -2150.0, .AftEdgeAllowance = 600.0 },
 			{ .Letter = TEXT("D"), .MaxWingspan = 5200.0, .RunwayWidth = 4500.0, .StandTurnRadius = 4000.0,
-			  .WingtipClearance = 750.0, .StandDepth = 7000.0,
+			  .WingtipClearance = 750.0, .StandDepth = 8400.0,
 			  .WingFwd = -1300.0, .WingAft = -3000.0, .AftEdgeAllowance = 600.0 },
 			{ .Letter = TEXT("E"), .MaxWingspan = 6500.0, .RunwayWidth = 4500.0, .StandTurnRadius = 5000.0,
-			  .WingtipClearance = 750.0, .StandDepth = 9000.0,
+			  .WingtipClearance = 750.0, .StandDepth = 9500.0,
 			  .WingFwd = -1600.0, .WingAft = -3700.0, .AftEdgeAllowance = 600.0 },
 			{ .Letter = TEXT("F"), .MaxWingspan = 8000.0, .RunwayWidth = 6000.0, .StandTurnRadius = 6000.0,
 			  .WingtipClearance = 750.0, .StandDepth = 10000.0,
