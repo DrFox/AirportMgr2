@@ -72,9 +72,11 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 		return 0;
 	}
 
-	// FRoadAgent is world-free and cannot read the actor's UPROPERTY, so the pause is copied
-	// in here - the only time the two ever need to meet.
-	Agent.ShutdownPause = ShutdownPauseSeconds;
+	// FRoadAgent is world-free and cannot read the actor's UPROPERTY or the rules table for
+	// itself, so both are copied in here - the only time they ever need to meet. StampRules
+	// also stamps ReverseSpeed, which an arrival never reads today - see its own comment for
+	// why every admit path sets both figures regardless (issue #295).
+	Agent.StampRules(Rules, ShutdownPauseSeconds);
 	Agent.Class = ETraversalClass::Aircraft;
 	Agent.SetGoalFrom(Plan.TaxiIn);
 
@@ -181,15 +183,14 @@ int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 int32 UGroundTraffic::AdmitDispatched(FRoadAgent&& Agent, const URoadNetwork* Network,
 	const FRoutePlan& Plan, ETraversalClass Class, double ShutdownPauseSeconds)
 {
-	// FRoadAgent is world-free and cannot read the actor's UPROPERTY for itself, so the
-	// pause is copied in at dispatch - the only time the two ever need to meet.
-	Agent.ShutdownPause = ShutdownPauseSeconds;
-
-	// AND THE REVERSE SPEED, for the same reason and at the same moment: the agent arms its own
-	// back-out mid-taxi when its route reaches a bay's reverse leg, so it must already hold the
-	// figure by then. Zero would refuse every reverse leg and strand the vehicle at the service
-	// point, which is why this is stamped here rather than defaulted on the struct.
-	Agent.ReverseSpeed = Rules.ServiceReverseSpeed;
+	// FRoadAgent is world-free and cannot read the actor's UPROPERTY or the rules table for
+	// itself, so both figures are copied in at dispatch - the only time they ever need to
+	// meet. See FRoadAgent::StampRules for why one call sets both rather than one assignment
+	// per admit path (issue #295). THE REVERSE SPEED matters here in particular: the agent
+	// arms its own back-out mid-taxi when its route reaches a bay's reverse leg, so it must
+	// already hold the figure by then - zero would refuse every reverse leg and strand the
+	// vehicle at the service point.
+	Agent.StampRules(Rules, ShutdownPauseSeconds);
 	Agent.Class = Class;
 	Agent.SetGoalFrom(Plan);
 
@@ -216,8 +217,8 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 	// an EXISTING agent along a new plan: one that had been armed for a runway and is now sent
 	// to a stand would otherwise keep the old chain and hold that runway against everybody for
 	// the rest of the session - and, with the ARMING kept too (bDepartureArmed and its order,
-	// which this used to leave), take off on arriving at a stand. Disarmed with it.
-	Agent.DepartureRunway.Reset();
+	// which this used to leave), take off on arriving at a stand. DisarmDeparture clears
+	// DepartureRunway too now (issue #295) - the two were always reset together here.
 	Agent.DisarmDeparture();
 
 	// DOES THIS ROUTE END ON A RUNWAY? Asked here rather than by the tool, because the answer
@@ -265,7 +266,7 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 		// has exits, and a departure that held only the piece its taxi ended on would let a
 		// second aircraft line up on the same strip further down. Recorded now rather than
 		// looked up at the handover, because by then the graph may have been rebuilt.
-		Agent.DepartureRunway = Network->RunwayChain(End.Seed);
+		Agent.ArmDepartureRunway(Network->RunwayChain(End.Seed));
 
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Route ends on runway %s %.0f uu past the threshold: %.0f uu available, departure armed"),
@@ -275,13 +276,24 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 
 int32 UGroundTraffic::Admit(FRoadAgent&& Agent)
 {
-	Agent.Id = NextAgentId++;
+	Agent.AssignId(NextAgentId++);
 	const EAgentPhase Born = Agent.Phase;
 	const int32 Id = Agent.Id;
 	Agents.Add(MoveTemp(Agent));
+	// BEFORE THE BROADCAST BELOW, same reason as RetireAgent's and AdvanceOnce's removal path
+	// (issue #295's O(1) lookup made this a real gap, not just a hypothetical one): a listener
+	// firing synchronously off it - UAirsideTraffic::SpawnView, which calls FindAgent(Id) to
+	// read LastMotion for the view's starting pose - used FindIndex's O(N) linear scan before
+	// #295, which always saw the just-added agent whether or not any table had caught up. The
+	// new AgentIndex map does not update itself with the array, so admitting an agent with the
+	// old ORDER (add, broadcast, THEN rebuild) answered that same FindAgent(Id) with nullptr -
+	// "Agent %d announced a phase change but is not in the model; no view spawned." on every
+	// single admit, caught by the whole Present/ suite rather than a unit test of this file.
+	RebuildAgentIndex();
 
-	// Broadcast AFTER the add, so a listener that spawns the view can find the agent it is
-	// being told about - see UAirsideTraffic::SpawnView, which reads LastMotion off it.
+	// Broadcast AFTER the add AND the rebuild, so a listener that spawns the view can find the
+	// agent it is being told about - see UAirsideTraffic::SpawnView, which reads LastMotion
+	// off it.
 	OnAgentPhaseChanged.Broadcast(Id, EAgentPhase::Gone, Born);
 	// #169: a new agent's dispatch claims its goal node in this same call, before this
 	// function returns - see OccupancyRevision's own comment for why one bump per call
@@ -290,9 +302,30 @@ int32 UGroundTraffic::Admit(FRoadAgent&& Agent)
 	return Id;
 }
 
+void UGroundTraffic::RebuildAgentIndex() const
+{
+	AgentIndex.Reset();
+	AgentIndex.Reserve(Agents.Num());
+	for (int32 Index = 0; Index < Agents.Num(); ++Index)
+	{
+		AgentIndex.Add(Agents[Index].Id, Index);
+	}
+}
+
 int32 UGroundTraffic::FindIndex(int32 AgentId) const
 {
-	return Agents.IndexOfByPredicate([AgentId](const FRoadAgent& A) { return A.Id == AgentId; });
+	// STALE-CACHE GUARD (PR review on issue #295): AgentIndex is not a UPROPERTY (see its own
+	// comment), so a duplicated UGroundTraffic - PIE's level duplication - can start with a
+	// non-empty Agents and an empty AgentIndex, and every lookup afterwards would silently miss.
+	// A count mismatch is the cheap, unambiguous tell: the two can only agree by coincidence
+	// while the map is actually stale in exactly this way, so this costs one comparison on the
+	// fast path and a full rebuild only on the rare frame it disagrees.
+	if (AgentIndex.Num() != Agents.Num())
+	{
+		RebuildAgentIndex();
+	}
+	const int32* Found = AgentIndex.Find(AgentId);
+	return Found != nullptr ? *Found : INDEX_NONE;
 }
 
 const FRoadAgent* UGroundTraffic::FindAgent(int32 AgentId) const
@@ -510,7 +543,7 @@ bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, con
 	Agent.Follower.Replace(Spliced, Agent.Chassis());
 	// REBASED AFTER Replace, before any Advance: Replace resets the follower's walk cursor to the
 	// polyline's start, so the cursor and the rebased Travelled agree from the first step on.
-	Agent.Follower.Travelled -= Dropped;
+	Agent.RebaseTravelled(Dropped);
 	if (OutDropped != nullptr)
 	{
 		*OutDropped = Dropped;
@@ -550,7 +583,7 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// what RPM it actually had a moment ago, not the post-StartTaxi state that call is about
 	// to overwrite both with.
 	const bool bWasRunning = Agent.bEngineRunning;
-	const double PriorRPM = Agent.EngineRPM;
+	const double PriorRPM = Agent.GetEngineRPM();
 
 	// A TOW KEEPS ITS CAB'S HEADING through a redirect, as it keeps its chain (StartDrive: "a rig
 	// re-routed mid-drive keeps its trailer where it is, angled as it was"). The chain is stepped
@@ -620,7 +653,7 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		// spooled it back UP from zero - the same one-frame snap this fix exists to remove,
 		// only downward first. Restoring it here means AdvanceEngine picks up the ramp exactly
 		// where it actually was, whichever direction it was headed.
-		Agent.EngineRPM = PriorRPM;
+		Agent.RestoreEngineRPM(PriorRPM);
 	}
 
 	// Class is NOT re-derived: a van redirected is still a van. StartTaxi rewrites the
@@ -778,9 +811,14 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	// THE GOAL IS THE TAXI OUT'S, not the push's. The claim pass reserves the node an agent is
 	// heading FOR, and a push that claimed its own end would have the aeroplane reserving a
 	// patch of taxiway as though it were a stand. What it is going to is the runway.
-	Agent.SetGoalFrom(Push.TaxiOutRoute);
-	ArmDepartureIfRunway(Agent, &Network, Push.TaxiOutRoute);
-	ClaimGoalNodeAtDispatch(Agent, AgentId, Network);
+	//
+	// ReleaseGoal THEN TakeGoal (issue #295), not a hand-spelled copy of TakeGoal's three
+	// calls: this used to re-type SetGoalFrom/ArmDepartureIfRunway/ClaimGoalNodeAtDispatch here
+	// and never called ReleaseGoal at all, so a departing aeroplane kept its OWN stand's node
+	// claimed against the re-offer pass for the rest of the session - the exact drift
+	// RedirectAgent and ExtendRoute already avoid by sharing this same pair.
+	ReleaseGoal(Agent, AgentId);
+	TakeGoal(Agent, AgentId, &Network, Push.TaxiOutRoute);
 
 	// THE NEED IS NAMED even though nothing branches on it yet. Slice 1 pushes all three the
 	// same way and nobody is doing the pushing, so this line is the only place the gap between
@@ -791,9 +829,8 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		*UEnum::GetValueAsString(Own.PushbackNeed));
 
 	OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
-	// #169: the push claims the taxi-out goal node (ClaimGoalNodeAtDispatch, above) in this
-	// same call.
-	++OccupancyRevisionCount;
+	// #169: the occupancy revision was bumped in TakeGoal, with the claim - unconditional,
+	// unlike the broadcast above. See RedirectAgent's own copy of this comment.
 	return EDepartureRefusal::None;
 }
 
@@ -835,6 +872,11 @@ bool UGroundTraffic::RetireAgent(int32 AgentId)
 	}
 	const EAgentPhase Before = Agents[Index].Phase;
 	Agents.RemoveAt(Index);
+	// BEFORE THE BROADCAST BELOW, which can run a listener that calls back into FindIndex
+	// (RetireAgent is exactly the kind of call UFuelService::OnAgentPhase makes synchronously
+	// - see AdvanceOnce's own re-entrancy comment) - a stale index table would answer that
+	// call with an entry shifted or gone.
+	RebuildAgentIndex();
 
 	// The table outlives the agent unless somebody says so: a retired vehicle's reservations
 	// would block the junction it was standing in for the rest of the session.
@@ -857,6 +899,7 @@ void UGroundTraffic::ClearAgents()
 	}
 
 	Agents.Reset();
+	RebuildAgentIndex();
 	Occupancy.Clear();
 	// #169: AFTER Clear(), not folded into the loop above - the loop only announces; this is
 	// the point every claim actually goes.
@@ -991,6 +1034,9 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			Occupancy.ReleaseAll(Id);
 			bStandsMayHaveFreed = true;
 			Agents.RemoveAt(Index);
+			// BEFORE THE BROADCAST, same reason as RetireAgent's own call: a listener firing
+			// synchronously from it (UFuelService::OnAgentPhase) can call back into FindIndex.
+			RebuildAgentIndex();
 			// Broadcast AFTER the removal so a listener that asks GetAgentCount sees the
 			// agent already gone, which is what "To == Gone" promises.
 			OnAgentPhaseChanged.Broadcast(Id, Before, EAgentPhase::Gone);
@@ -1035,7 +1081,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			// frame. DepartureRunway comes off the AGENT rather than a fresh lookup, because
 			// by now the graph may have been rebuilt under it; it was recorded at dispatch
 			// for that reason.
-			Agent.HoldRunway(Agent.DepartureRunway);
+			Agent.HoldRunway(Agent.GetDepartureRunway());
 
 			// CLAIMED HERE AND NOT ON THE NEXT TICK'S non-Taxiing pass. A route that ends on
 			// a junction turn path carries no DerivedFrom, so nothing claimed the strip while
@@ -1154,7 +1200,8 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	{
 		// CONTEXT IN PLACE OF FOUR POSITIONAL MEMBERS (issue #175) - Network, Rules, Occupancy
 		// and NodeReach were four of Resolve's own seven parameters; see Model/TrafficContext.h.
-		DeadlockResolver.Resolve(Agents, FTrafficContext{*Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds}, PlanReResolver);
+		DeadlockResolver.Resolve(Agents, AgentIndex,
+			FTrafficContext{*Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds}, PlanReResolver);
 	}
 
 	// LAST OF ALL: a waiter is sent to a stand only once everyone has claimed, moved and been

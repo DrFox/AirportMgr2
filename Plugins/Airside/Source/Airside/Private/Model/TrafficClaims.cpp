@@ -88,7 +88,7 @@ void FClaimPass::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
 	// would feed Task 8's wait-for graph an edge out of an agent that is not waiting for
 	// anything, and a cycle through it would be a phantom nobody could resolve.
 	Agent.ClearArbitration();
-	Agent.LastOverlaps.Reset();
+	Agent.SetLastOverlaps({});
 
 	// MEMBER, NOT A LOCAL (issue #190) - see the header. Reset here, not left with whatever
 	// the previous non-Taxiing agent this pass built.
@@ -174,7 +174,7 @@ void FClaimPass::ReleaseForDeadPlan(FRoadAgent& Agent)
 	// so until they retire it.
 
 	Agent.ClearArbitration();
-	Agent.LastOverlaps.Reset();
+	Agent.SetLastOverlaps({});
 }
 
 double FClaimPass::CentreOf(const FRoadAgent& Agent)
@@ -831,7 +831,7 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 			// the FIRST refusal in route order, so an overlap that was not the first
 			// refusal never matched it and this Warning fired on every single tick for as
 			// long as the overlap lasted - which is how a log stops being read at all.
-			if (!Agent.LastOverlaps.Contains(Blocker.AgentId))
+			if (!Agent.GetLastOverlaps().Contains(Blocker.AgentId))
 			{
 				UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d overlaps agent %d on %s: both are standing on it"),
 					Agent.Id, Blocker.AgentId, *Want.Claim.Resource.Describe());
@@ -915,7 +915,7 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		// making this tick) but must go on claiming the ground the agent is standing on.
 	}
 
-	Agent.LastOverlaps = MoveTemp(OverlapsThisPass);
+	Agent.SetLastOverlaps(MoveTemp(OverlapsThisPass));
 	Table.ReleaseExcept(Agent.Id, Wanted);
 
 	if (!bHeld)

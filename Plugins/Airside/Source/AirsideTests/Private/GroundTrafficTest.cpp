@@ -303,7 +303,7 @@ bool FTrafficHeadOnStopsTest::RunTest(const FString& Parameters)
 	// it, so the count is that many windows plus the first. +/-1 because the fire instant is
 	// quantised to the 0.05 s tick and the last window may not have closed by the end of the
 	// run - not because the cadence is approximate.
-	const double StalledFor = FMath::Max(X->StalledSeconds, Y->StalledSeconds);
+	const double StalledFor = FMath::Max(X->GetStalledSeconds(), Y->GetStalledSeconds());
 	const double SinceFirst = FMath::Max(0.0, StalledFor - Traffic->Rules.StallSeconds);
 	const int32 Expected = FMath::FloorToInt32(SinceFirst / Traffic->Rules.RetrySeconds) + 1;
 	UE_LOG(LogAirsideTests, Log,
@@ -654,6 +654,95 @@ bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters
 			TestEqual(TEXT("and nothing was admitted for it"), Two->GetAgentCount(), 1);
 		}
 	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficArrivalReceivesReverseSpeedTest,
+	"Airside.Model.Traffic.ArrivalReceivesReverseSpeed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficArrivalReceivesReverseSpeedTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #295: DispatchArrival stamped ShutdownPause by hand and never ReverseSpeed, so an
+	// arrival was admitted holding the struct default (0.0) rather than Rules.ServiceReverseSpeed
+	// - "the copy that nobody set" (CLAUDE.md), invisible only because nothing an arrival does
+	// today reads the figure. FRoadAgent::StampRules is the fix: one call, from every admit
+	// path, that sets both ShutdownPause and ReverseSpeed together.
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTestAirport Fixture = FTestAirport::Build(Piper);
+	URoadNetwork* Net = Fixture.Net;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	const int32 Id = Traffic->DispatchArrival(*Net, Fixture.Threshold - FVector2D(1000.0, 0.0), Piper, 1.0);
+	if (!TestTrue(TEXT("the arrival is admitted"), Id > 0))
+	{
+		return false;
+	}
+	const FRoadAgent* Agent = Traffic->FindAgent(Id);
+	if (!TestNotNull(TEXT("and the agent is there"), Agent))
+	{
+		return false;
+	}
+	TestEqual(TEXT("it holds the rules' reverse speed, not the struct default"),
+		Agent->GetReverseSpeed(), Traffic->Rules.ServiceReverseSpeed);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficAgentIndexSurvivesRetireTest,
+	"Airside.Model.Traffic.AgentIndexSurvivesRetire",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficAgentIndexSurvivesRetireTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #295: FindIndex/FindAgent moved from an O(N) Agents.IndexOfByPredicate scan to an
+	// id->index TMap (UGroundTraffic::AgentIndex), rebuilt WHOLESALE on every Admit/
+	// RetireAgent/AdvanceOnce-removal rather than maintained incrementally - see
+	// RebuildAgentIndex's own comment for why. This pins the one thing a rebuild has to get
+	// right: retiring the MIDDLE agent of three shifts the survivors' array slots, and the
+	// index has to move with them, not keep answering with the position an agent USED to hold.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	auto Lane = [&](double Y) { return TArray<FGuidelineNodeId>{
+		TestGraph::Node(*Net, -1000.0, Y), TestGraph::Node(*Net, 1000.0, Y) }; };
+	const TArray<FGuidelineNodeId> LaneA = Lane(0.0);
+	const TArray<FGuidelineNodeId> LaneB = Lane(20000.0);
+	const TArray<FGuidelineNodeId> LaneC = Lane(40000.0);
+	TestGraph::Join(*Net, LaneA[0], LaneA[1]);
+	TestGraph::Join(*Net, LaneB[0], LaneB[1]);
+	TestGraph::Join(*Net, LaneC[0], LaneC[1]);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 First = Traffic->DispatchAgent(Net,
+		M2TrafficRoute(*Net, LaneA[0], LaneA[1], ETraversalClass::GroundVehicle),
+		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Middle = Traffic->DispatchAgent(Net,
+		M2TrafficRoute(*Net, LaneB[0], LaneB[1], ETraversalClass::GroundVehicle),
+		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Last = Traffic->DispatchAgent(Net,
+		M2TrafficRoute(*Net, LaneC[0], LaneC[1], ETraversalClass::GroundVehicle),
+		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("all three admitted"), First > 0 && Middle > 0 && Last > 0))
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("retiring the middle agent succeeds"), Traffic->RetireAgent(Middle));
+
+	const FRoadAgent* FoundFirst = Traffic->FindAgent(First);
+	const FRoadAgent* FoundLast = Traffic->FindAgent(Last);
+	if (!TestNotNull(TEXT("the first survivor is still findable"), FoundFirst)
+		|| !TestNotNull(TEXT("the last survivor is still findable"), FoundLast))
+	{
+		return false;
+	}
+	TestEqual(TEXT("the first survivor still answers its own id, not a shifted neighbour's"),
+		FoundFirst->Id, First);
+	TestEqual(TEXT("the last survivor still answers its own id, not a shifted neighbour's"),
+		FoundLast->Id, Last);
+	TestNull(TEXT("the retired agent is gone"), Traffic->FindAgent(Middle));
 	return true;
 }
 
@@ -1355,7 +1444,7 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 		UE_LOG(LogAirsideTests, Log,
 			TEXT("  agent %d: phase %s, %.0f of %.0f uu, waiting on %d, blocked step %d, stalled %.1f s"),
 			Agent.Id, *UEnum::GetValueAsString(Agent.Phase), Agent.Follower.Travelled,
-			Agent.Follower.Plan.Length, Agent.GetWaitingOn(), Agent.GetBlockedStep(), Agent.StalledSeconds);
+			Agent.Follower.Plan.Length, Agent.GetWaitingOn(), Agent.GetBlockedStep(), Agent.GetStalledSeconds());
 	}
 
 	TestEqual(TEXT("the lowest-ranked member that can turn goes round: the van, not the aircraft"), FirstResolved, V2);
@@ -2438,7 +2527,7 @@ bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the agent exists"), Cold != nullptr)) { return false; }
 	TestTrue(*FString::Printf(
 		TEXT("a plain dispatch still starts the engine cold, so a cold start still winds up (%.0f RPM)"),
-		Cold->EngineRPM), Cold->EngineRPM < AtSpeed);
+		Cold->GetEngineRPM()), Cold->GetEngineRPM() < AtSpeed);
 
 	if (!TestTrue(TEXT("the redirect is accepted"),
 		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, W, N, ETraversalClass::Aircraft))))
@@ -2451,7 +2540,7 @@ bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the agent survived the redirect"), Warm != nullptr)) { return false; }
 	TestTrue(*FString::Printf(
 		TEXT("but a redirect finds the engines already running at speed (%.0f RPM, want %.0f)"),
-		Warm->EngineRPM, AtSpeed), FMath::IsNearlyEqual(Warm->EngineRPM, AtSpeed, 0.01));
+		Warm->GetEngineRPM(), AtSpeed), FMath::IsNearlyEqual(Warm->GetEngineRPM(), AtSpeed, 0.01));
 	TestTrue(TEXT("and running"), Warm->bEngineRunning);
 	return true;
 }
@@ -2513,7 +2602,7 @@ bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
 	// throw away - see the assertion below and PR #134 review item 3.
 	const FRoadAgent* ShutDown = Traffic->FindAgent(Id);
 	if (!TestTrue(TEXT("the agent exists"), ShutDown != nullptr)) { return false; }
-	const double PreRedirectRPM = ShutDown->EngineRPM;
+	const double PreRedirectRPM = ShutDown->GetEngineRPM();
 	AddInfo(*FString::Printf(TEXT("shut down at %.0f RPM, still decaying"), PreRedirectRPM));
 
 	if (!TestTrue(TEXT("the redirect is accepted"),
@@ -2535,10 +2624,10 @@ bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the agent survived the redirect"), Redirected != nullptr)) { return false; }
 	TestTrue(*FString::Printf(
 		TEXT("a shut-down engine spools up rather than snapping to speed (%.0f RPM, cap %.0f)"),
-		Redirected->EngineRPM, AtSpeed), Redirected->EngineRPM < AtSpeed);
+		Redirected->GetEngineRPM(), AtSpeed), Redirected->GetEngineRPM() < AtSpeed);
 	TestTrue(*FString::Printf(
 		TEXT("and it never drops below where it already was (%.0f RPM, was %.0f)"),
-		Redirected->EngineRPM, PreRedirectRPM), Redirected->EngineRPM >= PreRedirectRPM);
+		Redirected->GetEngineRPM(), PreRedirectRPM), Redirected->GetEngineRPM() >= PreRedirectRPM);
 	TestTrue(TEXT("but it is running again, spooling up"), Redirected->bEngineRunning);
 	return true;
 }
@@ -3096,7 +3185,7 @@ bool FTrafficExtendRouteMovesTheGoalTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("extended across the runway to C"),
 			Traffic->ExtendRoute(Plane, Net, M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft)))) { return false; }
 		TestFalse(TEXT("the departure is disarmed: the route no longer ends on the runway"), Traffic->FindAgent(Plane)->bDepartureArmed);
-		TestEqual(TEXT("and it holds no runway chain for it"), Traffic->FindAgent(Plane)->DepartureRunway.Num(), 0);
+		TestEqual(TEXT("and it holds no runway chain for it"), Traffic->FindAgent(Plane)->GetDepartureRunway().Num(), 0);
 		bool bDeparted = false;
 		RunUntil(*Traffic, *Net, 600.0, [&]()
 		{
@@ -3420,6 +3509,53 @@ bool FTrafficRebuildGoalIsATwinTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("and the goal is B2, the last step's end - not the B1 a position lookup names"), Agent->GoalNode == Now.B2);
 	}
 	TestTrue(TEXT("one slot order made the lookup name the wrong twin - the case was exercised"), Exercised > 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * FindAgent SURVIVES A STALE AgentIndex.
+ *
+ * PR review on issue #295: AgentIndex is not a UPROPERTY (see its own comment in
+ * GroundTraffic.h) - a duplicated UGroundTraffic (PIE's level duplication) copies Agents, a
+ * reflected UPROPERTY, but this plain C++ member is invisible to DuplicateObject's property
+ * walk, so a duplicate starts with it default-constructed empty regardless of how many agents
+ * came along. Every FindAgent on the duplicate would silently miss until the next
+ * Admit/RetireAgent/AdvanceOnce-removal happened to rebuild it - which, for a level that admits
+ * nothing new, could be never.
+ *
+ * ClearAgentIndexForTest recreates exactly that shape (Agents keeps its entry, AgentIndex is
+ * emptied) without staging an actual PIE duplication, which nothing in this test module can
+ * drive headlessly. FindIndex's count-mismatch guard is what this pins.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficFindAgentSurvivesAStaleIndexTest,
+	"Airside.Model.Traffic.FindAgentSurvivesAStaleIndex",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficFindAgentSurvivesAStaleIndexTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 20000.0, 0.0);
+	TestGraph::Join(*Net, A, B);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::GroundVehicle),
+		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	if (!TestTrue(TEXT("found before the index is cleared"), Traffic->FindAgent(Id) != nullptr)) { return false; }
+
+	// THE FAULT INJECTED: Agents keeps its one entry, AgentIndex is emptied - exactly what a
+	// duplicate that skipped this plain C++ member looks like on its first lookup.
+	Traffic->ClearAgentIndexForTest();
+
+	const FRoadAgent* Found = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("FindAgent still resolves: the count mismatch rebuilds the index"), Found != nullptr))
+	{
+		return false;
+	}
+	TestEqual(TEXT("and the id it finds is the one dispatched"), Found->Id, Id);
 	return true;
 }
 

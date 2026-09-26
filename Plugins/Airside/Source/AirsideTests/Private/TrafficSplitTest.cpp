@@ -80,10 +80,10 @@ bool FTrafficSplitDeadlockResolverStandaloneTest::RunTest(const FString& Paramet
 	// path this test drives, so they are left at whatever Refuse is given here.
 	Agents[0].Id = 1;
 	Agents[0].Refuse(INDEX_NONE, FTrafficResource::OfNode(NodeX), TNumericLimits<double>::Max(), 2);
-	Agents[0].StalledSeconds = 10.0;
+	Agents[0].AccrueStall(10.0);
 	Agents[1].Id = 2;
 	Agents[1].Refuse(INDEX_NONE, FTrafficResource::OfNode(NodeY), TNumericLimits<double>::Max(), 1);
-	Agents[1].StalledSeconds = 10.0;
+	Agents[1].AccrueStall(10.0);
 
 	FTrafficRules Rules; // StallSeconds 3, RetrySeconds 5 - both agents are well past both.
 	FNodeReachCache Reach;
@@ -94,9 +94,17 @@ bool FTrafficSplitDeadlockResolverStandaloneTest::RunTest(const FString& Paramet
 	// CanReplanAtBlockedStep or any guideline lookup), so this only has to exist.
 	URoadNetwork* Network = NewObject<URoadNetwork>();
 
+	// A test builds its own id->index map here - see DeadlockResolver.h's own comment on why
+	// Resolve takes UGroundTraffic's registry rather than keeping one of its own (issue #295).
+	TMap<int32, int32> AgentIndex;
+	for (int32 Index = 0; Index < Agents.Num(); ++Index)
+	{
+		AgentIndex.Add(Agents[Index].Id, Index);
+	}
+
 	FDeadlockResolver Resolver;
-	Resolver.Resolve(Agents, FTrafficContext{*Network, Rules, Occupancy, Reach, Chains, /*SimSeconds=*/100.0},
-		PlanReResolver);
+	Resolver.Resolve(Agents, AgentIndex,
+		FTrafficContext{*Network, Rules, Occupancy, Reach, Chains, /*SimSeconds=*/100.0}, PlanReResolver);
 
 	TestEqual(TEXT("one cycle detected"), Resolver.CyclesSeen.Num(), 1);
 	TestEqual(TEXT("settled by a yield, not a replan"), Resolver.Yields, 1);

@@ -232,7 +232,7 @@ bool FRoadAgentParkedHandoverTest::RunTest(const FString& Parameters)
 	// the countdown actually reads this field rather than a hard-coded figure copied from
 	// the old Tick.
 	constexpr double Pause = 4.0;
-	Agent.ShutdownPause = Pause;
+	Agent.StampRules(FTrafficRules(), Pause);
 
 	constexpr double Step = 1.0 / 60.0;
 	constexpr int32 MaxTicks = 10000;
@@ -347,13 +347,13 @@ bool FRoadAgentInvariantMethodsTest::RunTest(const FString& Parameters)
 	// ClearArbitration: StopWithin, WaitingOn and BlockedStep reset; LastOverlaps is
 	// deliberately NOT touched - see the declaration - so a caller that just computed it
 	// this pass is not stomped by calling this afterwards.
-	Agent.LastOverlaps = { 9 };
+	Agent.SetLastOverlaps({ 9 });
 	Agent.ClearArbitration();
 	TestEqual(TEXT("ClearArbitration resets StopWithin to unbounded"),
 		Agent.GetStopWithin(), TNumericLimits<double>::Max());
 	TestEqual(TEXT("ClearArbitration resets WaitingOn"), Agent.GetWaitingOn(), 0);
 	TestEqual(TEXT("ClearArbitration resets BlockedStep"), Agent.GetBlockedStep(), INDEX_NONE);
-	TestEqual(TEXT("ClearArbitration leaves LastOverlaps alone"), Agent.LastOverlaps.Num(), 1);
+	TestEqual(TEXT("ClearArbitration leaves LastOverlaps alone"), Agent.GetLastOverlaps().Num(), 1);
 
 	// SetGoalFrom: the goal follows a plan's own last step.
 	FRoutePlan Plan = StraightPlan(FVector2D(0.0, 0.0), FVector2D(1000.0, 0.0));
@@ -387,9 +387,9 @@ bool FRoadAgentInvariantMethodsTest::RunTest(const FString& Parameters)
 	// AccrueStall/ResetStall: AdvanceOnce's own ternary used to write StalledSeconds by hand.
 	Agent.AccrueStall(2.5);
 	Agent.AccrueStall(1.5);
-	TestEqual(TEXT("AccrueStall adds to the clock"), Agent.StalledSeconds, 4.0);
+	TestEqual(TEXT("AccrueStall adds to the clock"), Agent.GetStalledSeconds(), 4.0);
 	Agent.ResetStall();
-	TestEqual(TEXT("ResetStall zeroes the clock"), Agent.StalledSeconds, 0.0);
+	TestEqual(TEXT("ResetStall zeroes the clock"), Agent.GetStalledSeconds(), 0.0);
 
 	// SetAwaitingStand/ClearAwaitingStand: "bAwaitingStand implies GoalNode set" is the
 	// invariant the review named as maintained only by convention - SetAwaitingStand takes
@@ -528,7 +528,10 @@ bool FRoadAgentReverseLastLegParksAtRestTest::RunTest(const FString& Parameters)
 	FRoadAgent Agent;
 	Agent.StartDrive(Plan, Truck);
 	Agent.Class = ETraversalClass::GroundVehicle;
-	Agent.ReverseSpeed = 100.0;
+	// ShutdownPause is private with no getter (issue #295) - this test does not care about
+	// it, so the second argument is just FRoadAgent's own default (RoadAgent.h's
+	// `ShutdownPause = 10.0`), not a fresh magic number.
+	{ FTrafficRules R; R.ServiceReverseSpeed = 100.0; Agent.StampRules(R, 10.0); }
 
 	FAgentMotion Motion;
 	EAgentEvent Event = EAgentEvent::None;
@@ -633,7 +636,7 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 	// while the tug pushes. Starting it at full RPM would be an aeroplane that was shut down
 	// one frame and at governed speed the next.
 	TestTrue(TEXT("the engine is running"), Agent.bEngineRunning);
-	TestEqual(TEXT("from cold"), Agent.EngineRPM, 0.0, 0.0001);
+	TestEqual(TEXT("from cold"), Agent.GetEngineRPM(), 0.0, 0.0001);
 
 	// AND IT IS POSED AT THE STAND, facing the way it parked, before any Advance at all -
 	// never at the world origin, and never facing out along the line it is standing on.
@@ -669,7 +672,7 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 		if (Event == EAgentEvent::PushedBack)
 		{
 			bPushedBack = true;
-			RPMAtHandover = Agent.EngineRPM;
+			RPMAtHandover = Agent.GetEngineRPM();
 			break;
 		}
 	}
@@ -740,7 +743,7 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 			Powerback.Advance(1.0 / 60.0, PowerMotion, PowerEvent);
 		}
 		TestTrue(TEXT("and moves once it has thrust"), Powerback.Pushback.Travelled > 0.0);
-		TestTrue(TEXT("by which time the propeller is turning"), Powerback.EngineRPM > 0.0);
+		TestTrue(TEXT("by which time the propeller is turning"), Powerback.GetEngineRPM() > 0.0);
 	}
 
 	return true;
@@ -841,7 +844,10 @@ bool FAgentReverseHandoverTest::RunTest(const FString& Parameters)
 
 	FRoadAgent Agent;
 	Agent.StartDrive(Plan, Vehicle);
-	Agent.ReverseSpeed = 400.0;
+	// ShutdownPause is private with no getter (issue #295) - this test does not care about
+	// it, so the second argument is just FRoadAgent's own default (RoadAgent.h's
+	// `ShutdownPause = 10.0`), not a fresh magic number.
+	{ FTrafficRules R; R.ServiceReverseSpeed = 400.0; Agent.StampRules(R, 10.0); }
 
 	double LastReversingHeading = 0.0;
 	FVector2D LastReversingPosition = FVector2D::ZeroVector;

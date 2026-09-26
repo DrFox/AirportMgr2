@@ -19,22 +19,43 @@
 
 namespace
 {
-	// FDeadlockResolver has no id->agent index of its own - UGroundTraffic keeps the
-	// registry (see GroundTraffic.h's file map) - so Resolve is handed the array directly
-	// and searches it exactly as UGroundTraffic::FindAgent/FindIndex do.
-	const FRoadAgent* FindAgentIn(const TArray<FRoadAgent>& Agents, int32 AgentId)
+	// FDeadlockResolver has no id->agent index of its OWN - UGroundTraffic keeps the registry
+	// (see GroundTraffic.h's file map) - but it is handed UGroundTraffic's map now (issue
+	// #295), rather than searching the array by predicate the way UGroundTraffic::FindAgent/
+	// FindIndex used to. See DeadlockResolver.h's own comment on Resolve's AgentIndex
+	// parameter for why: these three helpers, and the Sort comparators below that used to
+	// call the old FindByPredicate version of them directly, are where that scan was paid for
+	// most - once per comparison, and Sort makes O(N log N) of them per cycle.
+	const FRoadAgent* FindAgentIn(const TArray<FRoadAgent>& Agents, const TMap<int32, int32>& AgentIndex, int32 AgentId)
 	{
-		return Agents.FindByPredicate([AgentId](const FRoadAgent& A) { return A.Id == AgentId; });
+		const int32* Index = AgentIndex.Find(AgentId);
+		return Index != nullptr ? &Agents[*Index] : nullptr;
 	}
 
-	FRoadAgent* FindAgentIn(TArray<FRoadAgent>& Agents, int32 AgentId)
+	FRoadAgent* FindAgentIn(TArray<FRoadAgent>& Agents, const TMap<int32, int32>& AgentIndex, int32 AgentId)
 	{
-		return Agents.FindByPredicate([AgentId](const FRoadAgent& A) { return A.Id == AgentId; });
+		const int32* Index = AgentIndex.Find(AgentId);
+		return Index != nullptr ? &Agents[*Index] : nullptr;
 	}
 
-	int32 FindIndexIn(const TArray<FRoadAgent>& Agents, int32 AgentId)
+	int32 FindIndexIn(const TArray<FRoadAgent>& Agents, const TMap<int32, int32>& AgentIndex, int32 AgentId)
 	{
-		return Agents.IndexOfByPredicate([AgentId](const FRoadAgent& A) { return A.Id == AgentId; });
+		const int32* Index = AgentIndex.Find(AgentId);
+		return Index != nullptr ? *Index : INDEX_NONE;
+	}
+
+	/**
+	 * TraversalPriority of the id's agent, or 0 if AgentIndex cannot find it - the SAME
+	 * fallback the yield-order sort already used (ByYieldOrder's own lambda, below), now
+	 * shared with Candidates.Sort's comparator, which used to dereference FindAgentIn's
+	 * result UNCHECKED (issue #295's review). Nothing removes an agent mid-Resolve() today,
+	 * so the two comparators were never observed to differ - but a null-safe rank is one
+	 * fewer thing a future change to that invariant would have to remember to preserve here.
+	 */
+	int32 RankOf(const TArray<FRoadAgent>& Agents, const TMap<int32, int32>& AgentIndex, int32 AgentId)
+	{
+		const FRoadAgent* Agent = FindAgentIn(Agents, AgentIndex, AgentId);
+		return Agent != nullptr ? TraversalPriority(Agent->Class) : 0;
 	}
 
 	/**
@@ -48,18 +69,31 @@ namespace
 	 * string built in its own statement before the call is not one of those arguments, so it
 	 * paid for the Printf/+= regardless. See each call site's own IsSuppressed guard.
 	 */
-	FString JoinCycleMembers(const TArray<int32>& Cycle, const TArray<FRoadAgent>& Agents)
+	FString JoinCycleMembers(const TArray<int32>& Cycle, const TArray<FRoadAgent>& Agents, const TMap<int32, int32>& AgentIndex)
 	{
 		FString Out;
 		for (const int32 Id : Cycle)
 		{
-			if (FindIndexIn(Agents, Id) == INDEX_NONE)
+			if (FindIndexIn(Agents, AgentIndex, Id) == INDEX_NONE)
 			{
 				continue;
 			}
 			Out += Out.IsEmpty() ? FString::Printf(TEXT("%d"), Id) : FString::Printf(TEXT(", %d"), Id);
 		}
 		return Out;
+	}
+}
+
+void FDeadlockResolver::StampCycle(TArray<FRoadAgent>& Agents, const TArray<int32>& Cycle,
+	const TMap<int32, int32>& AgentIndex, double SimSeconds)
+{
+	for (const int32 Id : Cycle)
+	{
+		const int32* Index = AgentIndex.Find(Id);
+		if (Index != nullptr)
+		{
+			Agents[*Index].StampResolveAttempt(SimSeconds);
+		}
 	}
 }
 
@@ -120,8 +154,8 @@ bool FDeadlockResolver::CanReplanAtBlockedStep(const FRoadAgent& Agent, const UR
 		&& ToNode <= Rules.GapFor(Agent.Class) + Rules.FootprintFor(Agent.Class) * 0.5 + Excess;
 }
 
-void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContext& Context,
-	FPlanReResolver& PlanReResolver)
+void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, int32>& AgentIndex,
+	const FTrafficContext& Context, FPlanReResolver& PlanReResolver)
 {
 	// REBOUND TO THE OLD NAMES (issue #175), so the whole body below - written, and read,
 	// against Network/Rules/Occupancy/Reach/SimSeconds - is unchanged by the parameter object
@@ -143,7 +177,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 	Waiting.Reset();
 	for (const FRoadAgent& Agent : Agents)
 	{
-		if (Agent.StalledSeconds > Rules.StallSeconds && Agent.GetWaitingOn() != 0)
+		if (Agent.GetStalledSeconds() > Rules.StallSeconds && Agent.GetWaitingOn() != 0)
 		{
 			Waiting.Add(Agent.Id, Agent.GetWaitingOn());
 		}
@@ -225,8 +259,8 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 		bool bDue = false;
 		for (const int32 Id : Cycle)
 		{
-			const FRoadAgent* Member = FindAgentIn(Agents, Id);
-			bDue = bDue || (Member != nullptr && Member->LastResolveAttempt <= SimSeconds - Rules.RetrySeconds);
+			const FRoadAgent* Member = FindAgentIn(Agents, AgentIndex, Id);
+			bDue = bDue || (Member != nullptr && Member->GetLastResolveAttempt() <= SimSeconds - Rules.RetrySeconds);
 		}
 		if (!bDue)
 		{
@@ -266,7 +300,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 		bool bAllReservations = true;
 		for (const int32 Id : Cycle)
 		{
-			const FRoadAgent* Member = FindAgentIn(Agents, Id);
+			const FRoadAgent* Member = FindAgentIn(Agents, AgentIndex, Id);
 			const FTrafficClaim* Blocking = Member != nullptr
 				? Occupancy.FindClaim(Member->GetWaitingOn(), Member->GetBlockedResource()) : nullptr;
 			// A blocker nobody can find is treated as standing there: the replan path is the
@@ -278,24 +312,17 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 		if (bAllReservations && (LastYield == nullptr || *LastYield < SimSeconds - Rules.RetrySeconds))
 		{
 			TArray<int32> ByYieldOrder = Cycle;
-			ByYieldOrder.Sort([&Agents](const int32 A, const int32 B)
+			ByYieldOrder.Sort([&Agents, &AgentIndex](const int32 A, const int32 B)
 			{
-				const FRoadAgent* AgentA = FindAgentIn(Agents, A);
-				const FRoadAgent* AgentB = FindAgentIn(Agents, B);
-				const int32 RankA = AgentA ? TraversalPriority(AgentA->Class) : 0;
-				const int32 RankB = AgentB ? TraversalPriority(AgentB->Class) : 0;
+				const int32 RankA = RankOf(Agents, AgentIndex, A);
+				const int32 RankB = RankOf(Agents, AgentIndex, B);
 				return RankA != RankB ? RankA < RankB : A > B;
 			});
 			const int32 Yielder = ByYieldOrder[0];
 
-			for (const int32 Id : Cycle)
-			{
-				const int32 Index = FindIndexIn(Agents, Id);
-				if (Index != INDEX_NONE)
-				{
-					Agents[Index].LastResolveAttempt = SimSeconds;
-				}
-			}
+			// ONE FUNCTION, NOT A HAND-COPIED LOOP (issue #295) - see StampCycle's own comment;
+			// this is the twin of the identical loop the replan branch below runs.
+			StampCycle(Agents, Cycle, AgentIndex, SimSeconds);
 
 			Occupancy.ReleaseReservations(Yielder);
 			YieldedAt.Add(Key, SimSeconds);
@@ -304,8 +331,8 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 
 			// DEFERRED TO HERE, AND ONLY IF THE LINE WILL ACTUALLY PRINT (#190) - see
 			// JoinCycleMembers' own comment. Unlike that helper, this one keeps every Cycle id
-			// unconditionally: the stamping loop above has no FindAgentIn null-skip either, so
-			// neither did the concatenation it used to share a loop with.
+			// unconditionally: StampCycle's own skip is silent (a missing agent is simply not
+			// stamped), so neither did the concatenation it used to share a loop with.
 			if (!LogAirsideTraffic.IsSuppressed(ELogVerbosity::Log))
 			{
 				FString YieldMembers;
@@ -333,7 +360,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 		bool bAllAircraft = true;
 		for (const int32 Id : Cycle)
 		{
-			const FRoadAgent* Member = FindAgentIn(Agents, Id);
+			const FRoadAgent* Member = FindAgentIn(Agents, AgentIndex, Id);
 			if (Member == nullptr)
 			{
 				// A MEMBER NOBODY CAN FIND IS NOT AN AIRCRAFT. The flag raises the line to
@@ -365,25 +392,24 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 
 			Candidates.Add(Id);
 		}
-		Candidates.Sort([&Agents](const int32 A, const int32 B)
+		// RankOf, NOT A BARE FindAgentIn(...)->Class (issue #295's review): every id in
+		// Candidates was found once already, above, but Sort's own comparator used to redo the
+		// lookup UNCHECKED - the one place in this file that dereferenced FindAgentIn's result
+		// with no null test at all. RankOf is the same null-safe fallback ByYieldOrder's own
+		// comparator already used, so the two sorts stop disagreeing about what "no agent" ranks as.
+		Candidates.Sort([&Agents, &AgentIndex](const int32 A, const int32 B)
 		{
-			const int32 RankA = TraversalPriority(FindAgentIn(Agents, A)->Class);
-			const int32 RankB = TraversalPriority(FindAgentIn(Agents, B)->Class);
+			const int32 RankA = RankOf(Agents, AgentIndex, A);
+			const int32 RankB = RankOf(Agents, AgentIndex, B);
 			return RankA != RankB ? RankA < RankB : A > B;
 		});
 
 		// STAMPED ON EVERY MEMBER, WHATEVER HAPPENS NEXT, and before the replan rather than
 		// after it: the stamp is what schedules the next attempt, and a cycle whose replan
 		// fails must not be re-tried on the very next tick for ever. A successful replan
-		// clears the stalled member's clock anyway (see FPlanReResolver::ReplanAt).
-		for (const int32 Id : Cycle)
-		{
-			const int32 Index = FindIndexIn(Agents, Id);
-			if (Index != INDEX_NONE)
-			{
-				Agents[Index].LastResolveAttempt = SimSeconds;
-			}
-		}
+		// clears the stalled member's clock anyway (see FPlanReResolver::ReplanAt). See
+		// StampCycle - the twin of the yield branch's own call, above.
+		StampCycle(Agents, Cycle, AgentIndex, SimSeconds);
 
 		bool bResolved = false;
 		int32 Candidate = 0;
@@ -392,7 +418,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 			// READ BEFORE THE REPLAN, because ReplanAt rewrites the plan and clears
 			// BlockedStep - the ban would be read off the new plan otherwise, banning an edge
 			// of the route that was just chosen.
-			FRoadAgent* Turner = FindAgentIn(Agents, Id);
+			FRoadAgent* Turner = FindAgentIn(Agents, AgentIndex, Id);
 			const int32 Step = Turner->GetBlockedStep();
 			const FGuidelineEdgeId BannedEdge = Turner->Follower.Plan.Steps[Step].Edge;
 
@@ -426,7 +452,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 				if (!LogAirsideTraffic.IsSuppressed(ELogVerbosity::Warning))
 				{
 					UE_LOG(LogAirsideTraffic, Warning, TEXT("All-aircraft deadlock among agents [%s] resolved: agent %d replans"),
-						*JoinCycleMembers(Cycle, Agents), Candidate);
+						*JoinCycleMembers(Cycle, Agents, AgentIndex), Candidate);
 				}
 			}
 			else
@@ -434,7 +460,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 				if (!LogAirsideTraffic.IsSuppressed(ELogVerbosity::Log))
 				{
 					UE_LOG(LogAirsideTraffic, Log, TEXT("Deadlock among agents [%s] resolved: agent %d replans"),
-						*JoinCycleMembers(Cycle, Agents), Candidate);
+						*JoinCycleMembers(Cycle, Agents, AgentIndex), Candidate);
 				}
 			}
 		}
@@ -443,7 +469,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 			if (!LogAirsideTraffic.IsSuppressed(ELogVerbosity::Warning))
 			{
 				UE_LOG(LogAirsideTraffic, Warning, TEXT("%sDeadlock among agents [%s]: no member can turn; retrying in %.0f s"),
-					bAllAircraft ? TEXT("All-aircraft ") : TEXT(""), *JoinCycleMembers(Cycle, Agents), Rules.RetrySeconds);
+					bAllAircraft ? TEXT("All-aircraft ") : TEXT(""), *JoinCycleMembers(Cycle, Agents, AgentIndex), Rules.RetrySeconds);
 			}
 		}
 

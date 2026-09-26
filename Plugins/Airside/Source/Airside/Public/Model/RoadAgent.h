@@ -13,6 +13,7 @@
 #include "Model/RouteSearch.h"
 #include "Model/TakeoffRun.h"
 #include "Model/TrafficOccupancy.h"
+#include "Model/TrafficRules.h"
 #include "Model/Vehicle.h"
 #include "RoadAgent.generated.h"
 
@@ -290,12 +291,23 @@ struct AIRSIDE_API FRoadAgent
 	 */
 	UPROPERTY() FReverseRun Reverse;
 
+private:
 	/**
 	 * How fast this vehicle backs up, uu/s. Copied in at dispatch, like ShutdownPause, because
 	 * FRoadAgent is world-free and cannot read the rules for itself.
+	 *
+	 * PRIVATE, WRITTEN ONLY THROUGH StampRules (issue #295) - AdmitDispatched used to set this
+	 * by hand, and DispatchArrival never set it at all (see StampRules's own comment). A test
+	 * that needs a specific figure calls StampRules with an FTrafficRules of its own, the same
+	 * door production uses.
 	 */
 	UPROPERTY() double ReverseSpeed = 0.0;
 
+public:
+	/** Read-only outside StampRules - see ReverseSpeed's own comment. */
+	double GetReverseSpeed() const { return ReverseSpeed; }
+
+private:
 	/**
 	 * The step of Follower.Plan the taxi resumes at once the current reverse span ends, and
 	 * INDEX_NONE when the reverse is the last thing the route does.
@@ -308,9 +320,14 @@ struct AIRSIDE_API FRoadAgent
 	 *
 	 * So the remainder is CUT instead, with RouteSearch::Section, and the follower is given a
 	 * plan whose beginning is where it should start.
+	 *
+	 * PRIVATE (issue #295): written and read only inside RoadAgent.cpp (TryArmReverseLeg arms
+	 * it, Advance's reverse-handover branch consumes it), so no mutator is needed - the whole
+	 * point of #174's pattern is a door for the OUTSIDE writers this field never had.
 	 */
 	UPROPERTY() int32 ResumeStep = INDEX_NONE;
 
+public:
 	/**
 	 * RPM at or above which a powerback may begin. Copied from FTrafficRules at StartPushback
 	 * because this struct is world-free and cannot read the rules for itself - the same
@@ -384,10 +401,30 @@ struct AIRSIDE_API FRoadAgent
 	 */
 	UPROPERTY() bool bEngineRunning = false;
 
+private:
 	/** Where the propeller has actually got to, RPM. Trails bEngineRunning - see
 	 *  FEnginePerformance. Advanced by AdvanceEngine every frame, whichever phase is
-	 *  driving. */
+	 *  driving.
+	 *
+	 *  PRIVATE (issue #295): RedirectAgent used to read it into a local, restart the taxi (which
+	 *  resets it to zero as part of a cold start) and write the local back when the engine had
+	 *  not actually stopped - see RestoreEngineRPM's own comment for why that restore is now a
+	 *  named call instead of a bare field write. */
 	UPROPERTY() double EngineRPM = 0.0;
+
+public:
+	/** Read-only outside StartEngineAtSpeed/RestoreEngineRPM/AdvanceEngine - see EngineRPM's
+	 *  own comment. */
+	double GetEngineRPM() const { return EngineRPM; }
+
+	/**
+	 * Restores EngineRPM to a figure captured before a cold start overwrote it - RedirectAgent's
+	 * one caller, for an agent whose engine had not actually stopped (bEngineRunning false does
+	 * not mean the propeller has stopped turning; AdvanceEngine spools it down over
+	 * SpoolDownSeconds). See RedirectAgent's own comment for the fuller story; this is the door
+	 * that used to be a bare `Agent.EngineRPM = PriorRPM` (issue #295).
+	 */
+	void RestoreEngineRPM(double RPM) { EngineRPM = RPM; }
 
 	/**
 	 * Where the gear has got to. Advanced by AdvanceGear every frame, whichever phase is
@@ -409,18 +446,30 @@ struct AIRSIDE_API FRoadAgent
 	 */
 	UPROPERTY() double ShutdownCountdown = 0.0;
 
+private:
 	/**
 	 * How long the post-arrival pause runs, seconds. Copied from
 	 * ARoadNetworkActor::ShutdownPauseSeconds at dispatch, because this struct is world-free
 	 * and cannot read an actor's UPROPERTY for itself.
+	 *
+	 * PRIVATE, WRITTEN ONLY THROUGH StampRules (issue #295) - see ReverseSpeed's own comment;
+	 * the two are stamped together. No getter: nothing outside RoadAgent.cpp reads it today.
 	 */
 	UPROPERTY() double ShutdownPause = 10.0;
 
+public:
 	/**
 	 * What Advance last reported, kept so a frame where the driving phase DECLINES (no
 	 * route, or a polyline too short to have a direction) can hand back the same motion
 	 * rather than an unset FVector2D - which is how this project has twice put things at the
 	 * world origin. See Advance.
+	 *
+	 * LEFT PUBLIC (issue #295's review): the one external WRITE (GroundTrafficRebuild.cpp's
+	 * drive-side rejoin) goes through RebaseLastMotionPosition below, but a dozen-plus READ
+	 * call sites across InspectFacts.cpp, AirsideTraffic.cpp, TrafficClaims.cpp and
+	 * GroundTraffic(Rebuild).cpp would each need converting to a getter for no behaviour
+	 * change - the "more than ~10 sites" exception the brief for this issue allows. See the
+	 * PR body for the count.
 	 */
 	UPROPERTY() FAgentMotion LastMotion;
 
@@ -432,6 +481,15 @@ struct AIRSIDE_API FRoadAgent
 	 * reaching LastMotion.Position itself (#104).
 	 */
 	FVector2D GroundPosition() const { return LastMotion.Position; }
+
+	/**
+	 * Re-seats LastMotion.Position only, leaving Heading/Altitude/GroundSpeed/etc as they are -
+	 * FPlanReResolver::ReResolvePlan's rejoin-after-a-drive-side-flip case, where RestartTaxi's
+	 * own fallback pose (the new plan's first point) is wrong for a vehicle that is actually
+	 * part-way along it. NAMED rather than a bare `Agent.LastMotion.Position = At` (issue #295)
+	 * so the one external write of this field is a call, not a direct reach into it.
+	 */
+	void RebaseLastMotionPosition(const FVector2D& At) { LastMotion.Position = At; }
 
 	/**
 	 * Where each link of the vehicle's tow has its axle, road-plane XY - one per FTowLink, and
@@ -475,6 +533,18 @@ struct AIRSIDE_API FRoadAgent
 		return Phase == EAgentPhase::Manoeuvring ? Pushback.Speed : Follower.Speed;
 	}
 
+	/**
+	 * Rebases the follower's driven distance after a route's DRIVEN HISTORY is trimmed ahead of
+	 * it - ExtendRoute's own KeepBehind, which drops whole steps behind the agent and must move
+	 * Travelled back by exactly what they measured, or the follower's cursor and the trimmed
+	 * plan's own step distances disagree from the very first tick after the trim.
+	 *
+	 * A NAMED CALL, NOT `Agent.Follower.Travelled -= Dropped` AT THE CALL SITE (issue #295):
+	 * Follower is a public sub-phase struct FRoadAgent does not otherwise reach through by
+	 * hand, and this was the one place outside RoadAgent.cpp that did.
+	 */
+	void RebaseTravelled(double Dropped) { Follower.Travelled -= Dropped; }
+
 	/** True while a route-walking phase is driving: a taxi, or a push off a stand. The one
 	 *  question FClaimPass::Run, the rebuild and the deadlock resolver all used to spell as
 	 *  "Phase == Taxiing", which silently excluded the push. */
@@ -485,11 +555,32 @@ struct AIRSIDE_API FRoadAgent
 
 	/** Stable identity for the agent's lifetime, assigned by UGroundTraffic::Admit. 0 means
 	 *  unassigned and is never handed out. Was FAgentSlot::Id before the Mediator moved to
-	 *  Model/ and the slot struct went with the view pointer it existed to carry. */
+	 *  Model/ and the slot struct went with the view pointer it existed to carry.
+	 *
+	 *  LEFT PUBLIC, WITH AssignId AS ADMIT'S OWN DOOR (issue #295): a great many test fixtures
+	 *  build an FRoadAgent by hand and set this directly (a scripted scenario, not production
+	 *  discipline on itself - the same exemption issue #174's own fields give test modules), so
+	 *  privatising the field itself would touch far more than the one production writer this
+	 *  is really about. Admit uses AssignId; everything else keeps constructing test agents the
+	 *  way it always has. */
 	UPROPERTY() int32 Id = 0;
 
+	/** The one production door Id is assigned through - UGroundTraffic::Admit, and nowhere
+	 *  else. See Id's own comment for why the field stays public rather than gaining a friend.
+	 *  ENFORCED BY: Check-Architecture.ps1 rule 4 (allowed-callers, 'FRoadAgent::AssignId'
+	 *  row) - a second production caller fails it. */
+	void AssignId(int32 NewId) { Id = NewId; }
+
 	/** How this agent moves. Vehicles were dispatched with no class at all before M2, which
-	 *  is why priority could not be applied to them. */
+	 *  is why priority could not be applied to them.
+	 *
+	 *  LEFT PUBLIC (issue #295's review): set once, at birth, by DispatchArrival/AdmitDispatched
+	 *  - no partner field it must agree with, unlike the invariant pairs this issue's mutators
+	 *  protect - and read at dozens of sites (TraversalPriority(Agent.Class) alone, across the
+	 *  claim pass, the deadlock resolver and the rebuild) that a getter would not make any
+	 *  safer. Check-Architecture's generalised write-ban (this issue, item 5) allow-lists the
+	 *  two birth sites by name rather than the whole file, so a future direct write of any
+	 *  OTHER field in GroundTraffic.cpp still fails. */
 	UPROPERTY() ETraversalClass Class = ETraversalClass::Aircraft;
 
 	/** Where the current route is going, so a replan can aim at the same place. See
@@ -572,6 +663,7 @@ public:
 	 */
 	void ClearArbitration();
 
+private:
 	/**
 	 * Everyone this agent was reported as OVERLAPPING on the last claim pass - two bodies
 	 * standing on one node or one runway. Throttles that Warning to the transition.
@@ -583,12 +675,29 @@ public:
 	 * A LIST rather than the single last id, which was the second attempt: an agent can
 	 * overlap two things in one pass (its own node and the runway under it), and keeping
 	 * only the last let the other one re-log every tick. Never more than a few entries.
+	 *
+	 * PRIVATE, WRITTEN ONLY THROUGH SetLastOverlaps (issue #295) - FClaimPass::ApplyClaims
+	 * used to reach in and assign it directly.
 	 */
 	UPROPERTY() TArray<int32> LastOverlaps;
 
-	/** Seconds stopped with WaitingOn set. Deadlock detection looks once this passes the rule. */
+public:
+	/** Read-only outside SetLastOverlaps - see LastOverlaps' own comment. */
+	const TArray<int32>& GetLastOverlaps() const { return LastOverlaps; }
+
+	/** The one door LastOverlaps is written through - an empty array is the reset FClaimPass::
+	 *  HoldRunwayOnly/ReleaseForDeadPlan make; ApplyClaims's own end-of-pass call hands it this
+	 *  pass's real overlaps. ENFORCED BY: Check-Architecture.ps1 rule 6 (agent field writes) -
+	 *  FClaimPass is a friend and could otherwise reach in and assign the field directly. */
+	void SetLastOverlaps(TArray<int32> Overlaps) { LastOverlaps = MoveTemp(Overlaps); }
+
+private:
+	/** Seconds stopped with WaitingOn set. Deadlock detection looks once this passes the rule.
+	 *  PRIVATE, WITH AccrueStall/ResetStall AS THE ONLY WRITERS (issue #295 - the field was
+	 *  still public despite both mutators existing since issue #174). */
 	UPROPERTY() double StalledSeconds = 0.0;
 
+public:
 	/** Adds to the stall clock. AdvanceOnce's own ternary used to write this field by hand
 	 *  each tick (issue #174) - one arm of it is this call, the other is ResetStall. */
 	void AccrueStall(double DeltaSeconds) { StalledSeconds += DeltaSeconds; }
@@ -596,8 +705,26 @@ public:
 	/** Zeroes the stall clock: the wait stopped, whether it resolved or the agent left it. */
 	void ResetStall() { StalledSeconds = 0.0; }
 
-	/** SimSeconds of the last replan attempt by the deadlock resolver; -1e9 = never. */
+	/** Read-only outside AccrueStall/ResetStall - see StalledSeconds' own comment. */
+	double GetStalledSeconds() const { return StalledSeconds; }
+
+private:
+	/** SimSeconds of the last replan attempt by the deadlock resolver; -1e9 = never.
+	 *  PRIVATE, WRITTEN ONLY THROUGH StampResolveAttempt (issue #295) - FDeadlockResolver::
+	 *  StampCycle and OnGraphRebuilt's rebuild-time reset used to assign it directly. */
 	UPROPERTY() double LastResolveAttempt = -1.0e9;
+
+public:
+	/** Read-only outside StampResolveAttempt - see LastResolveAttempt's own comment. */
+	double GetLastResolveAttempt() const { return LastResolveAttempt; }
+
+	/** The one door LastResolveAttempt is written through - a deadlock retry's own stamp
+	 *  (FDeadlockResolver::StampCycle) or a rebuild's reset to "never" (OnGraphRebuilt, so an
+	 *  unresolvable jam does not wait out the rest of its retry window after the player has
+	 *  just built the fix for it). ENFORCED BY: Check-Architecture.ps1 rule 6 (agent field
+	 *  writes) and, unlike LastOverlaps, plain private access too - FDeadlockResolver is not
+	 *  a friend of FRoadAgent. */
+	void StampResolveAttempt(double SimSeconds) { LastResolveAttempt = SimSeconds; }
 
 	/** Runway segments this agent occupies in a phase that is not a taxi: an arrival from
 	 *  StartArrival until Vacated, a departure from the handover until Gone. */
@@ -611,8 +738,20 @@ public:
 	 *  Airborne handover (to nobody; the strip is simply free). */
 	void ReleaseRunway() { RunwayHeld.Reset(); }
 
-	/** The chain a taxi ending on a runway will hold once it becomes a departure. */
+private:
+	/** The chain a taxi ending on a runway will hold once it becomes a departure.
+	 *  PRIVATE, WRITTEN ONLY THROUGH ArmDepartureRunway/DisarmDeparture (issue #295) -
+	 *  ArmDepartureIfRunway used to assign and .Reset() it directly. */
 	UPROPERTY() TArray<FRoadSegmentId> DepartureRunway;
+
+public:
+	/** Read-only outside ArmDepartureRunway/DisarmDeparture - see DepartureRunway's own
+	 *  comment. */
+	const TArray<FRoadSegmentId>& GetDepartureRunway() const { return DepartureRunway; }
+
+	/** Arms the chain a departure will hold once the taxi that is heading for a runway reaches
+	 *  it - ArmDepartureIfRunway's one caller, alongside ArmDeparture itself. */
+	void ArmDepartureRunway(TArray<FRoadSegmentId> Chain) { DepartureRunway = MoveTemp(Chain); }
 
 	/**
 	 * Whether a runway crossing is current. Public read of the private CrossingPhase/
@@ -768,8 +907,38 @@ public:
 	/** Arms a departure for the taxi currently under way. See FDepartureOrder. */
 	void ArmDeparture(const FRunwayEnd& End, double EntryOffset = 0.0);
 
-	/** Disarms it: the route no longer ends on the runway it was armed for (ArmDepartureIfRunway). */
-	void DisarmDeparture() { bDepartureArmed = false; DepartureOrder = FDepartureOrder(); }
+	/** Disarms it: the route no longer ends on the runway it was armed for (ArmDepartureIfRunway).
+	 *  CLEARS DepartureRunway TOO (issue #295): an armed departure with no chain to hold, or a
+	 *  chain nobody is armed to take, is the same half-set state issue #174 already closed for
+	 *  the arbitration fields. ArmDepartureIfRunway used to reset both by hand - a mutator call
+	 *  plus a hand-written `.Reset()` beside it - which is exactly the shape that drifts; one
+	 *  call keeps the pair from coming apart again. */
+	void DisarmDeparture()
+	{
+		bDepartureArmed = false;
+		DepartureOrder = FDepartureOrder();
+		DepartureRunway.Reset();
+	}
+
+	/**
+	 * Copies the rule figures every admit path must stamp before the agent's first tick:
+	 * ShutdownPause and ReverseSpeed. FRoadAgent is world-free and cannot read FTrafficRules
+	 * or ARoadNetworkActor's own UPROPERTY for itself, so whoever admits it copies both in -
+	 * see ReverseSpeed and ShutdownPause's own comments for why each is a copy rather than a
+	 * lookup.
+	 *
+	 * ONE CALL FOR BOTH FIGURES (issue #295), not one hand-written assignment per admit site:
+	 * DispatchArrival used to set ShutdownPause alone and AdmitDispatched set both, so an
+	 * arrival never received ReverseSpeed at all - harmless while nothing an arrival does
+	 * reads it, and exactly the "the copy that nobody set" shape CLAUDE.md warns about the
+	 * day something does read it. Every admit path calls this now, whether or not the figure
+	 * applies to what is being admitted - see Airside.Model.Traffic.ArrivalReceivesReverseSpeed.
+	 */
+	void StampRules(const FTrafficRules& Rules, double ShutdownPauseSeconds)
+	{
+		ShutdownPause = ShutdownPauseSeconds;
+		ReverseSpeed = Rules.ServiceReverseSpeed;
+	}
 
 	/**
 	 * Sets GoalNode from a plan's own last step, or clears it when the plan has none.

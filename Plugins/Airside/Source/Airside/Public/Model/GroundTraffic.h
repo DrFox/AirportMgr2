@@ -431,6 +431,16 @@ public:
 	bool StandsMayHaveFreedForTest() const { return bStandsMayHaveFreed; }
 
 	/**
+	 * Empties AgentIndex WITHOUT touching Agents - the exact shape a duplicated UGroundTraffic
+	 * is in before its first lookup (see AgentIndex's own comment: DuplicateObject's property
+	 * walk never reaches a plain C++ member, so a copy starts with this default-constructed
+	 * empty regardless of how many agents came along with it). Airside.Model.Traffic.
+	 * FindAgentSurvivesAStaleIndex uses this to pin FindIndex's count-mismatch guard without
+	 * staging an actual PIE duplication, which nothing in this test module can drive headlessly.
+	 */
+	void ClearAgentIndexForTest() { AgentIndex.Reset(); }
+
+	/**
 	 * The table, writable, for a test that has to plant a claim no agent owns - the phantom
 	 * occupant Airside.Model.Traffic.BoxEntryFirstOnly parks on a node, or a runway held by
 	 * something the model has no agent for. Production code reaches the table only through
@@ -520,6 +530,37 @@ private:
 
 	/** Next id to hand out. Ids are per-session; 0 is never issued. */
 	UPROPERTY(Transient) int32 NextAgentId = 1;
+
+	/**
+	 * Id -> index into Agents, MAKING FindIndex O(1) (issue #295). FindIndex/FindAgent used to
+	 * be Agents.IndexOfByPredicate - an O(N) scan called from every dispatch, redirect and
+	 * extend, and FDeadlockResolver::Resolve ran the same scan again, unindexed, inside its
+	 * OWN Sort comparators (O(N log N) calls, each an O(N) scan: O(N^2 log N) for one cycle).
+	 *
+	 * REBUILT WHOLESALE ON EVERY Admit/RetireAgent/AdvanceOnce-removal, not maintained
+	 * incrementally: Agents.RemoveAt SHIFTS every later index, so an incremental update would
+	 * touch as many entries as a rebuild does, and a rebuild is simpler to get right under the
+	 * re-entrancy AdvanceOnce's own comment describes (a broadcast can retire a DIFFERENT agent
+	 * from inside this same call). Admission and retirement are rare next to the many lookups
+	 * a single tick makes, so the O(N) cost lands where it is cheap to pay it.
+	 *
+	 * Not a UPROPERTY: an index into a Transient array is not state a save would ever need,
+	 * the same reason ArbitrationOrder above is not one.
+	 *
+	 * MUTABLE, WITH FindIndex REBUILDING IT ON A COUNT MISMATCH (PR review on issue #295): a
+	 * duplicated UGroundTraffic (PIE's level duplication) copies Agents - a reflected UPROPERTY,
+	 * even though Transient - but this plain C++ member is invisible to DuplicateObject's
+	 * property walk, so a duplicate starts with it default-constructed empty regardless of how
+	 * many agents came along. Every FindAgent on the duplicate would silently miss until the
+	 * next Admit/RetireAgent/AdvanceOnce-removal happened to rebuild it - which, for a level
+	 * that admits nothing new, could be never. See FindIndex.
+	 */
+	mutable TMap<int32, int32> AgentIndex;
+
+	/** Rebuilds AgentIndex from Agents. See AgentIndex's own comment for why wholesale. Const
+	 *  (and AgentIndex mutable) because FindIndex, a const lookup, is what actually calls this
+	 *  on a stale-cache guard - the cache the agent lives in does not change, only the index. */
+	void RebuildAgentIndex() const;
 
 	UPROPERTY(Transient) FTrafficOccupancy Occupancy;
 
