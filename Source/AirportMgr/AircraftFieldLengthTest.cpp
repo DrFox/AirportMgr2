@@ -153,6 +153,14 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane12.DA_Aircraft_Plane12"), TEXT("plane12"), 51000.0,
 		  TEXT("a Cherokee that needed more runway than the Meridian would have a club "
 			   "trainer asking more of a field than a turboprop") },
+		// plane15's CEILING IS THE CARAVAN's PUBLISHED TAKE-OFF LENGTH, NOT THE MERIDIAN's. The
+		// SR22 does NOT beat the Meridian (570 m against 510) - it lands and rotates faster than
+		// the 172 or the Cherokee - so plane1's ceiling would be a false claim. What it must not
+		// do is ask as much as the Code B grass single above it. 74000 is aircraft/plane10.py's
+		// REQUIREMENTS["takeoff_field_length"], typed here for the reason plane5's row gives.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane15.DA_Aircraft_Plane15"), TEXT("plane15"), 74000.0,
+		  TEXT("an SR22 that needed as much runway as a Caravan would be a four-seat Code A "
+			   "single asking a Code B turboprop's field") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane10.DA_Aircraft_Plane10"), TEXT("plane10"), 100600.0,
 		  TEXT("a Caravan that needed as much runway as a King Air would be a grass-strip "
 			   "type that only paved fields could take") },

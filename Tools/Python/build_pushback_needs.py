@@ -67,6 +67,12 @@ NEEDS = {
         "a Cherokee is pulled off a stand by hand with a tow bar on the nosewheel - plane1's "
         "reason, and the class default of VehicleTug would gate a trainer behind the depot",
     ),
+    "/Game/Entities/DA_Aircraft_Plane15": (
+        unreal.PushbackNeed.SELF_MANOEUVRE,
+        "an SR22 is pulled off a stand by hand with a tow bar on its castering nosewheel - "
+        "plane1's reason, and the class default of VehicleTug would gate a four-seat single "
+        "behind the depot",
+    ),
     "/Game/Entities/DA_Aircraft_Plane3": (
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "a Q400 turns out of a regional stand on its own props; the depot is the jets' tax",

@@ -28,6 +28,7 @@ PLANE2 = "/Game/Entities/DA_Aircraft_Plane2.DA_Aircraft_Plane2"
 PLANE5 = "/Game/Entities/DA_Aircraft_Plane5.DA_Aircraft_Plane5"
 PLANE10 = "/Game/Entities/DA_Aircraft_Plane10.DA_Aircraft_Plane10"
 PLANE12 = "/Game/Entities/DA_Aircraft_Plane12.DA_Aircraft_Plane12"
+PLANE15 = "/Game/Entities/DA_Aircraft_Plane15.DA_Aircraft_Plane15"
 
 # name -> (display name, fleet asset paths, offers per game day)
 #
@@ -103,8 +104,11 @@ AIRLINES = {
     #
     # 2026-09-25: THE CHEROKEE JOINS, AND LIKE THE 172 IT IS VARIETY, NOT A TIER. 500 m of
     # grass, within 1% of the 172's 497; what it adds is the narrowest span in the game.
-    "DA_Airline_Cumbria": ("Cumbria Air", [PIPER, PLANE1, PLANE2, PLANE5, PLANE10, PLANE12],
-                           4.0),
+    #
+    # 2026-09-26: THE SR22 JOINS, VARIETY AGAIN. 570 m of grass - more than the 172 or the
+    # Cherokee, because it lands faster, and still under the Caravan's 740.
+    "DA_Airline_Cumbria": ("Cumbria Air",
+                           [PIPER, PLANE1, PLANE2, PLANE5, PLANE10, PLANE12, PLANE15], 4.0),
 }
 
 

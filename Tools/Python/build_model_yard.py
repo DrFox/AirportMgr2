@@ -47,6 +47,9 @@ ROWS = [
         # aeroplane in the game, so it opens the row.
         ("/Game/Aircraft/Plane12/SK_Plane12", "Plane12 (PA-28-180 Cherokee)"),
         ("/Game/Aircraft/Plane1/SK_Plane1", "Plane1 (Cessna 172)"),
+        # THE SR22 BETWEEN THE 172 AND THE MERIDIAN, ON SPAN: 11.68 m against 11.00 and 13.11.
+        # Length does not agree (7.92 against the 172's 8.28); span is what the row is sorted on.
+        ("/Game/Aircraft/Plane15/SK_Plane15", "Plane15 (Cirrus SR22)"),
         # THE MERIDIAN, WHICH USED TO BE SK_PiperMeridian. plane7 replaced that placeholder on
         # 2026-09-21 and it is 0.31 m SHORTER than the download was, which changes nothing
         # about where it stands: the 172 is still 0.5 m shorter and 2.1 m narrower.
@@ -159,6 +162,9 @@ ROW_PITCH_UU = 10000.0
 #
 # 640 m SINCE 2026-09-25, UP FROM 600, FOR plane14. The Phenom's 15.91 m and its 12 m gap take
 # the row from about 577 m to about 605 - past 600. Span still binds.
+#
+# STILL 640 m FOR plane15, 2026-09-26. The SR22's 11.68 m and its 12 m gap take the row from
+# about 605 m to about 629 - inside, with 11 m to spare. The next aeroplane will not fit.
 FLOOR_X_M = 300.0
 FLOOR_Y_M = 640.0
 
