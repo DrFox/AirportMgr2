@@ -759,6 +759,24 @@ public:
 	 */
 	bool SetGuidelineNodeHoldingPosition(FGuidelineNodeId Node, EHoldingPositionKind Kind, FRoadSegmentId For);
 
+	/**
+	 * Overwrite one guideline edge's PER-HALF measured fields together - MinRadius,
+	 * ClearInner, ClearOuter, ClearInnerAt, ClearOuterAt (FGuidelineEdge's own "PER-HALF
+	 * FIELDS" comment, the list SplitGuidelineEdge resets to unmeasured) - the one whole
+	 * fact this class's other narrow mutators above are all shaped like.
+	 *
+	 * PLAIN VALUES, NOT A Build/ STRUCT (issue #324): FRoadGuidelineBuilder::MeasureTurn and
+	 * the junction pavement polygon it needs are Build/-only, and Model/ must not include
+	 * Build/ to get either (Check-Architecture rule 1) - the same wall SplitGuidelineEdge's
+	 * own comment cites for why IT cannot re-measure. This mutator does not re-measure
+	 * anything itself; it only writes what a Build/-side caller (FAnchorLink::Join, once it
+	 * knows the pavement a split turn-path piece was cut from) already computed.
+	 *
+	 * False for a dead edge.
+	 */
+	bool SetGuidelineEdgeMeasurement(FGuidelineEdgeId Edge, double MinRadius, double ClearInner,
+		double ClearOuter, TArray<float> ClearInnerAt, TArray<float> ClearOuterAt);
+
 private:
 	/**
 	 * The outline half of EnsureStandOutlines' rule, shared with PlaceEntity(const

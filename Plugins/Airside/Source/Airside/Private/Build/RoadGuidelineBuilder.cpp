@@ -987,6 +987,11 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					FGuidelineEdge Turn;
 					Turn.A = *FromEnd;
 					Turn.B = *ToEnd;
+					// DerivedFrom's counterpart for a turn path (issue #324) - see its own
+					// comment. Set once, on this shared template, so every piece the ETurnShape
+					// switch below copies it into (a BendArc's interior pieces included) carries
+					// it, letting FAnchorLink::Join re-measure a split piece of ANY of them.
+					Turn.AtJunction = NodeId;
 
 					// Both arms' tangent lines meet AT the node, so the single control
 					// point they define is the node itself - which is precisely the
@@ -1295,4 +1300,57 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			Network.GetHoldingPositionMarks().Num(), DeadEnds, Balloons, Tapers, BendArcs,
 			Network.GetDriveSide() == EDriveSide::Left ? TEXT("left") : TEXT("right"));
 	}
+}
+
+void FRoadGuidelineBuilder::MeasureSplitHalf(URoadNetwork& Network, FGuidelineEdgeId Half,
+	const FRoadSolveResult& Solved, FRoadNodeId JunctionNode)
+{
+	const FGuidelineEdge* Existing = Network.GetGuidelineEdge(Half);
+	if (Existing == nullptr || Existing->DerivedFrom.IsSet() || !JunctionNode.IsSet())
+	{
+		// A lane's own split half (DerivedFrom set) carries no MeasureTurn contract at all -
+		// its Width gates it, same as before this function existed - and an unresolved node
+		// means the caller had nothing to measure against (see this function's own header
+		// comment on when that is legitimate).
+		return;
+	}
+
+	const FJunctionResult* Result = Solved.NodeResults.Find(JunctionNode.Index);
+	const TArray<FRoadSegmentId>* ArmSegments = Solved.NodeArmSegments.Find(JunctionNode.Index);
+	if (Result == nullptr || ArmSegments == nullptr || !Result->bValid)
+	{
+		return;
+	}
+
+	// THE SAME PAVEMENT CONSTRUCTION Build's own per-node loop uses above - the junction's
+	// boundary polygon (minus the fan centre SolveBoundary appends) plus every arm's ribbon.
+	FJunctionPavement Pavement;
+	if (Result->Boundary.Num() > 3)
+	{
+		Pavement.Polygon = Result->Boundary;
+		Pavement.Polygon.Pop();
+	}
+	for (const FRoadSegmentId& ArmSeg : *ArmSegments)
+	{
+		if (const FRoadSegment* Arm = Network.GetSegment(ArmSeg))
+		{
+			Pavement.Ribbons.Add({ Arm->LeftCutA, Arm->RightCutA, Arm->LeftCutB, Arm->RightCutB });
+		}
+	}
+
+	const FGuidelineNode* A = Network.GetGuidelineNode(Existing->A);
+	const FGuidelineNode* B = Network.GetGuidelineNode(Existing->B);
+	if (A == nullptr || B == nullptr)
+	{
+		return;
+	}
+
+	// A SCRATCH COPY, MEASURED IN PLACE, then written back through the one narrow mutator
+	// Model/ exposes for this whole fact (issue #324) - MeasureTurn takes an FGuidelineEdge&
+	// to mutate exactly as Build's own per-piece loop above does, and this is Build/'s own
+	// static, so there is no reason to duplicate its body for a five-field write instead.
+	FGuidelineEdge Scratch = *Existing;
+	MeasureTurn(Scratch, A->Position, B->Position, Pavement);
+	Network.SetGuidelineEdgeMeasurement(Half, Scratch.MinRadius, Scratch.ClearInner, Scratch.ClearOuter,
+		MoveTemp(Scratch.ClearInnerAt), MoveTemp(Scratch.ClearOuterAt));
 }

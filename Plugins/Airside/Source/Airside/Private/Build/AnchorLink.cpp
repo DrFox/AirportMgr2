@@ -2,6 +2,8 @@
 
 #include "AirsideLog.h"
 #include "Build/AnchorLinkFinder.h"
+#include "Build/RoadGuidelineBuilder.h"
+#include "Build/RoadNetworkSolver.h"
 #include "Build/StandLayoutBuild.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
@@ -553,7 +555,8 @@ FLinkHit FAnchorLink::Resolve(const URoadNetwork& Network, const FPendingLink& L
 }
 
 FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, const FLinkHit& Hit,
-	TSet<FGuidelineNodeId>& AnchorNodes, const FChassis& LargestServiceVehicle)
+	TSet<FGuidelineNodeId>& AnchorNodes, const FChassis& LargestServiceVehicle,
+	const FRoadSolveResult* Solved)
 {
 	const FGuidelineEdge* Found = Network.GetGuidelineEdge(Hit.Edge);
 	const FGuidelineNode* EndA = Found != nullptr ? Network.GetGuidelineNode(Found->A) : nullptr;
@@ -568,6 +571,14 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	const FGuidelineEdge Original = *Found;
 	const FVector2D PositionA = EndA->Position;
 	const FVector2D PositionB = EndB->Position;
+
+	// THE JUNCTION A SPLIT TURN PATH BELONGS TO (issue #324): FGuidelineEdge::AtJunction,
+	// DerivedFrom's counterpart for a turn path - see its own comment for why this reads it
+	// straight off Original rather than off either endpoint's FGuidelineNode::Origin (tried
+	// first and rejected: a BendArc's INTERIOR pieces have no Origin on either end, only the
+	// whole arc's outermost ones do, but every piece carries AtJunction alike). Unset for a
+	// lane split, which leaves JunctionNode unset too and MeasureSplitHalf below a no-op.
+	const FRoadNodeId JunctionNode = Original.AtJunction;
 
 	// THROUGH THE GRAPH AGAIN, 2026-09-16, and SAMPLED FIRST. A direct GuidelineGeom::Sample
 	// stood further down - the one deliberate exception to URoadNetwork::SampleGuideline being
@@ -716,6 +727,17 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 			return FGuidelineNodeId();
 		}
 
+		// RE-MEASURE BOTH HALVES OF A SPLIT TURN PATH (issue #324) - a no-op on a lane split
+		// (JunctionNode stays unset) or when Solved is null. Harmless on a WELD too: the weld
+		// case hands back the ORIGINAL, un-split edge as whichever of JoinHead/JoinTail is
+		// set, and re-measuring it against the same pavement it was already measured against
+		// reproduces the same numbers.
+		if (Solved != nullptr)
+		{
+			FRoadGuidelineBuilder::MeasureSplitHalf(Network, JoinHead, *Solved, JunctionNode);
+			FRoadGuidelineBuilder::MeasureSplitHalf(Network, JoinTail, *Solved, JunctionNode);
+		}
+
 		LeadEnd = JoinNode;
 	}
 	else
@@ -757,6 +779,17 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 			FwdNode, MiddleEdge, TailEdge))
 		{
 			return FGuidelineNodeId();
+		}
+
+		// RE-MEASURE ALL THREE PIECES OF A SPLIT TURN PATH (issue #324) - see the single-cut
+		// branch's own comment. THIS IS THE ONE CASE JunctionNode HAD TO BE CAPTURED BEFORE
+		// EITHER CUT: MiddleEdge's own two ends (BackNode, FwdNode) are both new nodes this
+		// split just added, with no Origin of their own to read a junction back off.
+		if (Solved != nullptr)
+		{
+			FRoadGuidelineBuilder::MeasureSplitHalf(Network, HeadEdge, *Solved, JunctionNode);
+			FRoadGuidelineBuilder::MeasureSplitHalf(Network, MiddleEdge, *Solved, JunctionNode);
+			FRoadGuidelineBuilder::MeasureSplitHalf(Network, TailEdge, *Solved, JunctionNode);
 		}
 
 		// The straight lead-in now stops short of the corner; the sweeps take over.
@@ -925,7 +958,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 }
 
 int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVehicle,
-	double MaxLeadIn, double ServiceLinkRadius)
+	double MaxLeadIn, double ServiceLinkRadius, const FRoadSolveResult* Solved)
 {
 	// Gathered up front, because joining one anchor adds and removes edges and an
 	// iteration over the graph must not be holding pointers into it while that happens.
@@ -994,7 +1027,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 		const FRoadSegmentId JoinedSegment = HitEdge ? HitEdge->DerivedFrom : FRoadSegmentId();
 		const int32 JoinedIndex = HitEdge ? HitEdge->DerivedGuidelineIndex : INDEX_NONE;
 
-		const FGuidelineNodeId LeadEnd = Join(Network, Link, Hit, AnchorNodes, LargestServiceVehicle);
+		const FGuidelineNodeId LeadEnd = Join(Network, Link, Hit, AnchorNodes, LargestServiceVehicle, Solved);
 		if (!LeadEnd.IsSet())
 		{
 			continue;
@@ -1019,7 +1052,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 			if (Sibling.IsSet())
 			{
 				FPendingLink Again = Link;
-				Join(Network, Again, Sibling, AnchorNodes, LargestServiceVehicle);
+				Join(Network, Again, Sibling, AnchorNodes, LargestServiceVehicle, Solved);
 			}
 		}
 

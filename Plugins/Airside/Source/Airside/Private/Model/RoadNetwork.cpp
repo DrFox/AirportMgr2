@@ -1036,6 +1036,22 @@ bool URoadNetwork::SetGuidelineNodeHoldingPosition(FGuidelineNodeId Node, EHoldi
 	return true;
 }
 
+bool URoadNetwork::SetGuidelineEdgeMeasurement(FGuidelineEdgeId Edge, double MinRadius, double ClearInner,
+	double ClearOuter, TArray<float> ClearInnerAt, TArray<float> ClearOuterAt)
+{
+	FGuidelineEdge* Found = GetGuidelineEdgeMutable(Edge);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->MinRadius = MinRadius;
+	Found->ClearInner = ClearInner;
+	Found->ClearOuter = ClearOuter;
+	Found->ClearInnerAt = MoveTemp(ClearInnerAt);
+	Found->ClearOuterAt = MoveTemp(ClearOuterAt);
+	return true;
+}
+
 bool FRoadNetworkTestAccess::MarkGuidelineEdgeEditedForTest(FGuidelineEdgeId Edge, double MaxWingspan)
 {
 	FGuidelineEdge* Found = Network.GetGuidelineEdgeMutable(Edge);

@@ -175,12 +175,24 @@ struct AIRSIDE_API FGuidelineEdge
 	 *     ORIGINAL curve's samples; a re-sampled half has the same sample COUNT (a fixed
 	 *     subdivision) but different geometry, so a naive copy passes VehicleFit's
 	 *     Path.Num()-vs-Num() guard while judging the half against the whole curve's numbers
-	 *     (#288). Reset to the unmeasured defaults above, not re-measured: that needs
-	 *     FRoadGuidelineBuilder::MeasureTurn and the junction pavement polygon the original
-	 *     numbers were marched against, neither reachable from Model/.
+	 *     (#288). Reset to the unmeasured defaults above BY THIS FUNCTION, not re-measured
+	 *     here: that needs FRoadGuidelineBuilder::MeasureTurn and the junction pavement
+	 *     polygon the original numbers were marched against, neither reachable from Model/.
+	 *     RE-MEASURED A MOMENT LATER, when the split is a turn path (#324, follow-up to
+	 *     #288): FAnchorLink::Join is the one caller that splits a turn path (a stand's
+	 *     lead-in landing on one), reads AtJunction below straight off the un-split edge
+	 *     (surviving the split unchanged, unlike the fields above - see AtJunction's own
+	 *     comment) and calls FRoadGuidelineBuilder::MeasureSplitHalf on each resulting piece
+	 *     right after, through URoadNetwork::SetGuidelineEdgeMeasurement - so the unmeasured
+	 *     state this function leaves is transient within that one call rather than surviving
+	 *     to the next VehicleFit::Judge. A split OUTSIDE FAnchorLink::Join (a test, or a lane
+	 *     split, which has no AtJunction to re-measure against) still leaves the halves
+	 *     unmeasured exactly as before - this function itself never re-measures.
 	 *   EndRefA / EndRefB - only the end that MOVED (onto the new split node) is cleared; the
 	 *     end that did not move keeps referring to what it always did.
-	 * ENFORCED BY: Airside.Model.GuidelineGraph's split-clearances case.
+	 * ENFORCED BY: Airside.Model.GuidelineGraph's split-clearances case (this function leaves
+	 * both halves unmeasured); Airside.Build.AnchorLinkReMeasuresSplitTurnPath (FAnchorLink::
+	 * Join's re-measure puts real numbers back before VehicleFit::Judge ever sees the split).
 	 */
 	UPROPERTY() TArray<float> ClearInnerAt;
 	UPROPERTY() TArray<float> ClearOuterAt;
@@ -197,6 +209,27 @@ struct AIRSIDE_API FGuidelineEdge
 	 * airport ends up with two guidelines where the player drew one.
 	 */
 	UPROPERTY() int32 DerivedGuidelineIndex = INDEX_NONE;
+
+	/**
+	 * DerivedFrom's COUNTERPART FOR A TURN PATH (issue #324): the road-graph junction node
+	 * this piece was laid at. Unset for a lane (DerivedFrom names it instead) and for a
+	 * dead-end balloon (laid over grass by ruling - TryBuildDeadEndBalloon never sets this,
+	 * because there is no pavement polygon to re-measure a split piece of one against).
+	 *
+	 * SET ONCE, ON THE SHARED Turn TEMPLATE, before FRoadGuidelineBuilder::Build splits it into
+	 * however many pieces its ETurnShape needs (Chord: one; TaperS: two; BendArc: several) -
+	 * every piece is a copy of that template, so EVERY piece carries it, including a BendArc's
+	 * INTERIOR pieces, whose own endpoints have no FGuidelineNode::Origin at all (that node is
+	 * a pure geometry waypoint the arc's own construction added, not a segment end). Origin
+	 * lookup was tried first and rejected for exactly that reason - it answers "which segment
+	 * end" a node was derived for, and a BendArc's interior split has no such end to ask.
+	 *
+	 * READ BY FAnchorLink::Join to re-measure a split piece (MeasureSplitHalf's own comment) -
+	 * needs no per-half handling in SplitGuidelineEdge unlike MinRadius/Clear* above: it names
+	 * WHICH JUNCTION, true of both halves alike, not a fact about the curve that trimming
+	 * invalidates.
+	 */
+	UPROPERTY() FRoadNodeId AtJunction;
 
 	/**
 	 * True while this edge is still owned by its surface and may be regenerated.
