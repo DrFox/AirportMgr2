@@ -1,17 +1,21 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Build/StandLayoutBuild.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ReverseRun.h"
 #include "Model/RoadEntity.h"
+#include "Model/RoadGuideline.h"
+#include "Model/RoadNetwork.h"
 #include "Model/SpeedProfile.h"
 #include "Model/Vehicle.h"
 #include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/StandBox.h"
+#include "StandFixture.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -615,6 +619,126 @@ bool FEveryBayContactIsOnTheFarEdgeTest::RunTest(const FString& Parameters)
 				"edge %.0f) - service vehicles never use the taxiway-side ground"),
 				IcaoCode::ToLetter(StandLetter), *Named.What, MinX, BackX),
 				MinX >= BackX - 0.5);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryBayEntryReachesItsServicePointTest,
+	"Airside.Entities.EveryBayEntryReachesItsServicePoint",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryBayEntryReachesItsServicePointTest::RunTest(const FString& Parameters)
+{
+	using namespace StandLayoutFixture;
+	using namespace ServiceLinkFixture;
+
+	// THE EQUIVALENCE InspectFacts::DescribeStand's bServiceable RELIES ON (review of task 5).
+	// It walks Network.IsServiceNodeConnected from each bay's SERVICE-POINT node (the resolved
+	// anchor - HydrantPit, BaggageHold, FixedGPU...), never from FServiceBay::EntryLocal's own
+	// node, because nothing in Model/ may read EntryLocal off Definition->ServiceBays (the
+	// Entities layer). That is correct only because StandLayoutBuild::LayLeg lays every bay as
+	// ONE CONTINUOUS stand-owned chain - Entry -> Park -> Service -> Cleared -> Exit - so a walk
+	// from either end reaches the other without ever crossing an unowned (road) edge. This pins
+	// that chain directly, over stand-owned edges only, for every letter and every bay: if a
+	// future layout ever forked into two chains that merely TOUCHED at the service point rather
+	// than one running through it, this goes red and names which bay broke.
+	for (const EIcaoCode StandLetter : AllLetters())
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
+		if (!TestNotNull(TEXT("a template"), Stand))
+		{
+			continue;
+		}
+
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+		FStandLayoutBuild::Build(*Net);
+
+		const FEntityInstance* Instance = Net->GetEntity(Placed);
+		if (!TestNotNull(*FString::Printf(TEXT("Code %s placed"), IcaoCode::ToLetter(StandLetter)), Instance))
+		{
+			continue;
+		}
+
+		for (const FServiceBay& Bay : Stand->ServiceBays)
+		{
+			const FString Who = FString::Printf(
+				TEXT("Code %s bay '%s'"), IcaoCode::ToLetter(StandLetter), *Bay.AnchorId.ToString());
+
+			FGuidelineNodeId ServiceNode;
+			for (const FResolvedAnchor& Resolved : Instance->ResolvedAnchors)
+			{
+				if (Resolved.Id == Bay.AnchorId) { ServiceNode = Resolved.Node; break; }
+			}
+			if (!TestTrue(*FString::Printf(TEXT("%s resolved its service point"), *Who), ServiceNode.IsSet()))
+			{
+				continue;
+			}
+
+			// THE ENTRY NODE, FOUND BY POSITION rather than handed back by name: nothing public
+			// returns a per-bay node (FStandLayoutBuild::FResult::Entries is one deduplicated
+			// array per STAND, since two bays share one side's contact). PlaceStand's heading
+			// and position are both zero here, so a bay's world position is its local one -
+			// the same trick StandLayoutBuild's own idempotent recovery path (NodeNear) uses.
+			FGuidelineNodeId EntryNode;
+			const TArray<FGuidelineNode>& Nodes = Net->GetGuidelineNodes();
+			for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+			{
+				const FGuidelineNodeId Id = Net->GuidelineNodeIdAt(Index);
+				if (Id.IsSet() && FVector2D::Distance(Nodes[Index].Position, Bay.EntryLocal) <= 1.0)
+				{
+					EntryNode = Id;
+					break;
+				}
+			}
+			if (!TestTrue(*FString::Printf(TEXT("%s's entry node exists in the graph"), *Who), EntryNode.IsSet()))
+			{
+				continue;
+			}
+
+			// BFS OVER STAND-OWNED EDGES ONLY, from the service point - deliberately NOT
+			// IsServiceNodeConnected, which stops at the FIRST unowned edge and answers a
+			// different question (does the lane reach a road at all, not does it reach its
+			// own entry).
+			TSet<FGuidelineNodeId> Seen;
+			TArray<FGuidelineNodeId> Frontier;
+			Seen.Add(ServiceNode);
+			Frontier.Add(ServiceNode);
+			bool bReachedEntry = ServiceNode == EntryNode;
+			while (Frontier.Num() > 0 && !bReachedEntry)
+			{
+				const FGuidelineNodeId At = Frontier.Pop();
+				const FGuidelineNode* Found = Net->GetGuidelineNode(At);
+				if (Found == nullptr)
+				{
+					continue;
+				}
+				for (const FGuidelineEdgeId Id : Found->Incident)
+				{
+					const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+					if (Edge == nullptr || !Edge->bAlive || Edge->StandGeometryOwner != Placed)
+					{
+						continue;
+					}
+					const FGuidelineNodeId Other = Edge->A == At ? Edge->B : Edge->A;
+					if (Other == EntryNode)
+					{
+						bReachedEntry = true;
+						break;
+					}
+					if (!Seen.Contains(Other))
+					{
+						Seen.Add(Other);
+						Frontier.Add(Other);
+					}
+				}
+			}
+
+			TestTrue(*FString::Printf(TEXT("%s: entry and service-point nodes share one stand-owned "
+				"chain, which is the fact InspectFacts::DescribeStand's bServiceable relies on"), *Who),
+				bReachedEntry);
 		}
 	}
 	return true;

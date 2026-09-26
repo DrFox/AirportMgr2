@@ -145,6 +145,16 @@ namespace InspectFacts
 		// Incident check bReachable already runs on the pose node, run here per anchor, is
 		// what tells "a laid bay" from "a declared fixture with none": a bay's own legs put
 		// edges on its node at PLACEMENT, before any road is ever drawn near it.
+		//
+		// WALKED FROM THE SERVICE POINT, NOT FROM FServiceBay::EntryLocal's OWN NODE - the
+		// same layering reason as above: EntryLocal lives on Definition->ServiceBays, and this
+		// is Model/. That reads the right answer only because StandLayoutBuild::LayLeg lays
+		// every bay as ONE CONTINUOUS stand-owned chain, Entry -> Park -> Service -> Cleared ->
+		// Exit, so a walk from the service point in the middle of that chain reaches the entry
+		// (and the road beyond it) without ever crossing an unowned edge first.
+		// ENFORCED BY: Airside.Entities.EveryBayEntryReachesItsServicePoint, which walks
+		// stand-owned edges only, from the service point to the entry, for every letter and
+		// bay - it goes red the day a layout ever stops running one chain through both.
 		int32 BayCount = 0;
 		bool bAllJoined = true;
 		for (const FResolvedAnchor& Anchor : E.ResolvedAnchors)

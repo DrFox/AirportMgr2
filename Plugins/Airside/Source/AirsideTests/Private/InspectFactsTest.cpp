@@ -30,10 +30,9 @@ namespace
 	/**
 	 * A straight GroundVehicle guideline standing in for a drawn service road - the shape
 	 * ServiceLinkTest.cpp's own ServiceLinkFixture::Lay builds for the same fixtures. NOT
-	 * shared from there: Lay is defined at file scope in that .cpp with no declaration in
-	 * StandFixture.h (only PlaceStand/FarEdgeX/FarRoadX are), so nothing outside that
-	 * translation unit can call it. A five-line local copy costs less than promoting a
-	 * helper for one more caller.
+	 * shared from there: StandFixture.h declares only PlaceStand/FarEdgeX/FarRoadX, and Lay
+	 * has no declaration to include - a five-line local copy here costs less than adding one
+	 * for a single further caller.
 	 */
 	void LayServiceRoad(URoadNetwork& Net, const FVector2D& From, const FVector2D& To)
 	{
