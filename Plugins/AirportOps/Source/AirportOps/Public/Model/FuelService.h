@@ -410,6 +410,10 @@ public:
 	 *  to tell "retired at home" from "never dispatched". */
 	int32 TrucksGoingHomeForTest() const { return GoingHome.Num(); }
 
+	/** TrucksOutFor, for a test to assert a depot got its truck back - not merely that the
+	 *  truck stopped being on its way (TrucksGoingHomeForTest). */
+	int32 TrucksOutForTest(FEntityInstanceId Depot) const { return TrucksOutFor(Depot); }
+
 	/**
 	 * Whether a route home found UNGATED (SendTruckHome's too-narrow fallback) may be driven:
 	 * yes, unless the truck tows something the route folds (VehicleFit::JudgePlan,

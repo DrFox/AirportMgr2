@@ -1433,13 +1433,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FFuelTowServesCodeATest::RunTest(const FString& Parameters)
 {
 	// END TO END ON A DRAWN CODE A STAND: the tow is sent, it is the WHOLE chain (cab plus
-	// trailer, laid by StartDrive), and the aircraft leaves fuelled - no "UNFUELLED" line, and
-	// no AddExpectedError, because nothing on the way is allowed to go wrong.
-	//
-	// NOT ASSERTED: the tow getting HOME. Measured 2026-09-26 on this fixture, its reverse off
-	// the service point is refused ("turntable bent 13.4 deg (the lock engages within 3.0)") and
-	// it stops there - a fact about the A template's approach leg and FTowReverseRun, not about
-	// dispatch, and reported rather than pinned here (far-side-entry task 7 report).
+	// trailer, laid by StartDrive), the aircraft leaves fuelled - no "UNFUELLED" line, and no
+	// AddExpectedError, because nothing on the way is allowed to go wrong - and the tow backs off
+	// the service point and gets HOME, freeing its depot. That last half failed on 4a16e9f6: the
+	// reverse was refused "turntable bent 13.4 deg (the lock engages within 3.0)" and the tow sat
+	// at the hydrant for the rest of the session, its depot one truck short (task 7 fix round 1).
 	FFuelFixture Fixture;
 	Fixture.StandLetter = EIcaoCode::A;
 	Fixture.bFarEdgeRoad = true;
@@ -1482,6 +1480,16 @@ bool FFuelTowServesCodeATest::RunTest(const FString& Parameters)
 		return Plane == nullptr || Plane->Phase != EAgentPhase::Parked;
 	}, 900.0);
 
+	// AND HOME: the only way a tow leaves the traffic model is being retired, and the spy below
+	// says which of the two retirements it was - home at the depot, or where it stands.
+	bool bSawReverse = false;
+	const bool bTowGone = TruckId != 0 && Fixture.AdvanceUntil([&]
+	{
+		const FRoadAgent* Truck = Fixture.Traffic->FindAgent(TruckId);
+		bSawReverse |= Truck != nullptr && Truck->Phase == EAgentPhase::Reversing;
+		return Truck == nullptr;
+	}, 600.0);
+
 	GLog->RemoveOutputDevice(&Spy);
 
 	if (!TestTrue(TEXT("an aircraft parked at the A stand"), Aircraft != 0)) { return false; }
@@ -1502,6 +1510,16 @@ bool FFuelTowServesCodeATest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("the aircraft was fuelled"), bFuelledLine);
 	TestTrue(TEXT("the departure was logged as a normal one"), bDepartLine);
+
+	bool bHomeLine = false;
+	for (const FString& Line : Spy.CapturedLines)
+	{
+		bHomeLine |= Line.Contains(FString::Printf(TEXT("truck %d home at depot"), TruckId));
+	}
+	TestTrue(TEXT("the tow backed off the service point"), bSawReverse);
+	TestTrue(TEXT("the tow left the traffic model"), bTowGone);
+	TestTrue(TEXT("by arriving home, not by being retired where it stands"), bHomeLine);
+	TestEqual(TEXT("its depot has every truck back"), Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
 	return true;
 }
 

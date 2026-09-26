@@ -691,6 +691,13 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		FVector2D NewStart = FVector2D::ZeroVector;
 		double NewHeading = KeptHeading.GetValue();
 		GuidelineGeom::PointAtDistance(Plan.Polyline, InitialTravelled, NewStart, NewHeading);
+		// A ROUTE THAT OPENS WITH A REVERSE LEG is backed along, so the cab should face AWAY from
+		// the line's direction: 180 degrees off is the fit there, not the misfit (task 7 fix round
+		// 1 - every stand service cycle's route home warned "expect a slew or a fold" and did neither).
+		if (Plan.Steps.Num() > 0 && Plan.Steps[0].bReverseLeg)
+		{
+			NewHeading += UE_DOUBLE_PI;
+		}
 		const double OffDegrees = FMath::Abs(FMath::RadiansToDegrees(FMath::UnwindRadians(NewHeading - KeptHeading.GetValue())));
 		const double LockDegrees = Agent.Chassis().Ground.MaxSteerDegrees;
 		if (OffDegrees > LockDegrees || StartGap > 1.0)

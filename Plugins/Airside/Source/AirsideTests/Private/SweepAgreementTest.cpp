@@ -587,3 +587,87 @@ bool FTowRedirectKeepsChainAndHeadingTest::RunTest(const FString& Parameters)
 }
 
 #endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTowRedirectIntoAReverseArmsFromTheCabTest, "Airside.Model.Tow.RedirectIntoAReverseArmsFromTheCab",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTowRedirectIntoAReverseArmsFromTheCabTest::RunTest(const FString& Parameters)
+{
+	// A STAND'S SERVICE CYCLE HANDS A PARKED TOW A ROUTE THAT OPENS WITH A REVERSE (the bay's
+	// reverse leg off the service point), and the tow must back along it from where its cab IS.
+	// Until task 7 fix round 1 (2026-09-27) it could not: RestartTaxi reset LastMotion to the
+	// plan's first point - the STEERED axle's spot - facing heading 0, and the redirect's own
+	// posing Advance armed FTowReverseRun from that pose. The fixed axle it solved from sat a
+	// wheelbase off and turned 90 degrees, so a chain parked straight read as a turntable bent
+	// 13.4 degrees and the reverse was refused - measured on the utility tow at a Code A hydrant.
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
+	if (!TestTrue(TEXT("the utility tow has a trailer"), Tow.HasTrailer())) { return false; }
+
+	// IN: straight down -Y onto the service point at the origin, so the chain parks dead straight.
+	FRoutePlan In;
+	In.Result = ERouteResult::Found;
+	for (double Y = 4000.0; Y >= 0.0; Y -= 100.0)
+	{
+		In.Polyline.Add(FVector2D(0.0, Y));
+	}
+	In.Length = GuidelineGeom::PolylineLength(In.Polyline);
+	const int32 Id = Traffic->DispatchAgent(nullptr, In, Tow, ETraversalClass::GroundVehicle, 0.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	for (int32 Tick = 0; Tick < 4000 && Traffic->FindAgent(Id)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Traffic->Advance(0.05, nullptr);
+	}
+	if (!TestEqual(TEXT("the tow parked on the service point"),
+		static_cast<int32>(Traffic->FindAgent(Id)->Phase), static_cast<int32>(EAgentPhase::Parked))) { return false; }
+	const FVector2D CabBefore = Traffic->FindAgent(Id)->LastMotion.Position;
+	const double HeadingBefore = Traffic->FindAgent(Id)->LastMotion.Heading;
+
+	// OUT: backwards up the line it came in on, flagged as a reverse leg - the bay's shape.
+	TArray<TestPlans::FRun> Runs;
+	TestPlans::FRun& Back = Runs.AddDefaulted_GetRef();
+	Back.bReverse = true;
+	for (double Y = 0.0; Y <= 1500.0; Y += 100.0)
+	{
+		Back.Points.Add(FVector2D(0.0, Y));
+	}
+	const FRoutePlan Out = TestPlans::Chain(Runs);
+	struct FTrafficWarningSpy : public FOutputDevice
+	{
+		int32 Count = 0;
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			Count += Category == FName(TEXT("LogAirsideTraffic")) && Verbosity == ELogVerbosity::Warning ? 1 : 0;
+		}
+	} Spy;
+	GLog->AddOutputDevice(&Spy);
+	const bool bRedirected = Traffic->RedirectAgent(Id, nullptr, Out);
+	GLog->RemoveOutputDevice(&Spy);
+	if (!TestTrue(TEXT("the redirect is accepted"), bRedirected)) { return false; }
+	TestEqual(TEXT("and not warned about: a cab facing away from a line it backs along is the fit, not a misfit"),
+		Spy.Count, 0);
+
+	const FRoadAgent* Agent = Traffic->FindAgent(Id);
+	TestEqual(TEXT("the reverse armed on the redirect's own posing frame"),
+		static_cast<int32>(Agent->Phase), static_cast<int32>(EAgentPhase::Reversing));
+	TestTrue(*FString::Printf(TEXT("from where the cab stood - it did not jump (%.1f uu)"),
+		FVector2D::Distance(Agent->LastMotion.Position, CabBefore)),
+		FVector2D::Distance(Agent->LastMotion.Position, CabBefore) < 1.0);
+	TestTrue(*FString::Printf(TEXT("facing the way it faced (%.2f deg off)"),
+		FMath::RadiansToDegrees(FMath::Abs(FMath::UnwindRadians(Agent->LastMotion.Heading - HeadingBefore)))),
+		FMath::Abs(FMath::UnwindRadians(Agent->LastMotion.Heading - HeadingBefore)) < 0.01);
+
+	// AND IT BACKS THE WHOLE LEG.
+	for (int32 Tick = 0; Tick < 2000 && Traffic->FindAgent(Id)->Phase == EAgentPhase::Reversing; ++Tick)
+	{
+		Traffic->Advance(0.05, nullptr);
+	}
+	TestTrue(*FString::Printf(TEXT("it backed up the line (cab at y %.0f)"), Traffic->FindAgent(Id)->LastMotion.Position.Y),
+		Traffic->FindAgent(Id)->LastMotion.Position.Y > 1000.0);
+	return true;
+}
+
+#endif

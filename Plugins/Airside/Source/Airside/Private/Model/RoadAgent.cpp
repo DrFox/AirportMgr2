@@ -512,8 +512,24 @@ void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled, TO
 	// The fallback pose, in case the first Advance's Follower.Advance declines (a plan too
 	// short to have a direction) - so the view still appears at the start of its route
 	// rather than at the origin. Overwritten the moment Advance succeeds.
+	//
+	// A KEPT POSE STAYS KEPT (task 7 fix round 1, 2026-09-27): a redirect that passes
+	// InitialHeading - a tow, keeping its cab and chain - keeps LastMotion's Position and that
+	// heading too, because the fallback is not only drawn. Advance reads LastMotion as the pose
+	// it starts from, and a route that OPENS with a reverse leg arms FTowReverseRun from it
+	// before the follower moves at all. The plan's first point is the STEERED axle's spot and
+	// heading 0 is east: arming there put the fixed axle a wheelbase off and turned, and a tow
+	// parked dead straight at a Code A hydrant read as "turntable bent 13.4 deg" and was
+	// stranded there. Everything else still falls back to the plan's start.
+	// ENFORCED BY: Airside.Model.Tow.RedirectIntoAReverseArmsFromTheCab
+	const FVector2D KeptPosition = LastMotion.Position;
 	LastMotion = FAgentMotion();
-	if (Plan.Polyline.Num() > 0)
+	if (InitialHeading.IsSet())
+	{
+		LastMotion.Position = KeptPosition;
+		LastMotion.Heading = InitialHeading.GetValue();
+	}
+	else if (Plan.Polyline.Num() > 0)
 	{
 		LastMotion.Position = Plan.Polyline[0];
 	}
