@@ -1275,7 +1275,12 @@ bool URoadNetwork::GiveStandOutlineIfMissing(FEntityInstance& Instance)
 	StandBox::FStandPose Pose;
 	Pose.Position = Instance.Position;
 	Pose.Facing = FVector2D(FMath::Cos(Instance.Heading), FMath::Sin(Instance.Heading));
-	StandBox::BoxAt(Pose, EIcaoCode::C, Instance.Outline);
+	// THE FLOOR, NOT THE FLEET-RESOLVED ENVELOPE (#292): Model/ may not include
+	// Content/AirsideSettings (Check-Architecture's include-direction rule), and this path
+	// exists to reproduce EXACTLY the pre-#292 numbers for a legacy stand nobody re-measured -
+	// using a figure the fleet has since raised would give this migration a DIFFERENT box than
+	// the one it has always given, which is the behaviour change a migration must not make.
+	StandBox::BoxAt(Pose, EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C), Instance.Outline);
 	return true;
 }
 

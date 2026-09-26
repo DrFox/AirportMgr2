@@ -37,7 +37,11 @@ namespace StandMarkingTest
 		const FVector2D A(EntranceX, 0.0);
 		const FVector2D B(EntranceX + Width, 0.0);
 		const FVector2D Inward(0.0, 1.0);
-		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter);
+		// THE FLOOR (#292): this file's own tests place stands with no content set configured
+		// (every automation test still is that way), so the floor IS the resolved envelope
+		// here - see FStandMarkingBuilder's own header for why the two must agree.
+		const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
 
 		FEntityPlacement Placement;
 		Placement.Definition = Definition;
@@ -45,7 +49,7 @@ namespace StandMarkingTest
 		Placement.Position = Pose.Position;
 		Placement.Heading = RoadGeom::Bearing(Pose.Facing);
 		Placement.PoseRole = Definition->PoseRole;
-		StandBox::BoxAt(Pose, Letter, Placement.Outline);
+		StandBox::BoxAt(Pose, Letter, Envelope, Placement.Outline);
 		Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(Letter);
 		return Net.PlaceEntity(Placement);
 	}
@@ -100,7 +104,7 @@ bool FStandMarkingPaintsOnePerStandTest::RunTest(const FString& Parameters)
 
 	FRoadMeshBuffers Buffers;
 	FStandMarkingCensus Census;
-	const int32 Painted = FStandMarkingBuilder::Build(*Net, 10.0, Buffers, &Census);
+	const int32 Painted = FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census);
 
 	TestEqual(TEXT("two stands painted, the depot excluded"), Painted, 2);
 	TestEqual(TEXT("one lead-in per stand"), Census.LeadIns, 2);
@@ -129,7 +133,7 @@ bool FStandMarkingGlyphSegmentsTest::RunTest(const FString& Parameters)
 		PlaceDrawnStand(*Net, Stand, EIcaoCode::C, 0.0);
 		FRoadMeshBuffers Buffers;
 		FStandMarkingCensus Census;
-		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, &Census);
+		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census);
 		TestEqual(TEXT("Code C paints a, d, e, f - 4 segments"), Census.LetterSegments, 4);
 	}
 	{
@@ -137,7 +141,7 @@ bool FStandMarkingGlyphSegmentsTest::RunTest(const FString& Parameters)
 		PlaceDrawnStand(*Net, Stand, EIcaoCode::E, 0.0);
 		FRoadMeshBuffers Buffers;
 		FStandMarkingCensus Census;
-		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, &Census);
+		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census);
 		TestEqual(TEXT("Code E paints a, d, e, f, g - 5 segments"), Census.LetterSegments, 5);
 	}
 	return true;
@@ -171,7 +175,7 @@ bool FStandMarkingUnknownWingspanTest::RunTest(const FString& Parameters)
 
 	FRoadMeshBuffers Buffers;
 	FStandMarkingCensus Census;
-	const int32 Painted = FStandMarkingBuilder::Build(*Net, 10.0, Buffers, &Census);
+	const int32 Painted = FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census);
 
 	TestEqual(TEXT("still painted"), Painted, 1);
 	TestEqual(TEXT("lead-in still painted"), Census.LeadIns, 1);
@@ -202,7 +206,7 @@ bool FStandMarkingLeadInEndsAtStopMarkTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the stand resolves"), Instance)) { return false; }
 
 	FRoadMeshBuffers Buffers;
-	const int32 Painted = FStandMarkingBuilder::Build(*Net, 10.0, Buffers);
+	const int32 Painted = FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor());
 	if (!TestEqual(TEXT("one stand painted"), Painted, 1)) { return false; }
 
 	// The lead-in is the FIRST quad MarkingQuads::AddQuad emits (4 consecutive vertices,
@@ -245,7 +249,7 @@ bool FStandMarkingQuadsFaceUpTest::RunTest(const FString& Parameters)
 	PlaceDrawnStand(*Net, Stand, EIcaoCode::E, 20000.0);
 
 	FRoadMeshBuffers Buffers;
-	const int32 Painted = FStandMarkingBuilder::Build(*Net, 10.0, Buffers);
+	const int32 Painted = FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor());
 	if (!TestEqual(TEXT("two stands painted"), Painted, 2)) { return false; }
 	if (!TestTrue(TEXT("some geometry to measure"), Buffers.Indices.Num() > 0)) { return false; }
 
@@ -284,7 +288,7 @@ bool FStandMarkingGlyphReadsUnmirroredTest::RunTest(const FString& Parameters)
 		const FEntityInstance* Instance = Net->GetEntity(PlaceDrawnStand(*Net, Stand, Letter, 0.0));
 		if (Instance == nullptr) { return false; }
 		FRoadMeshBuffers Buffers;
-		FStandMarkingBuilder::Build(*Net, 10.0, Buffers);
+		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor());
 		constexpr int32 FirstGlyphVertex = 8;
 		if (Buffers.Positions.Num() <= FirstGlyphVertex) { return false; }
 

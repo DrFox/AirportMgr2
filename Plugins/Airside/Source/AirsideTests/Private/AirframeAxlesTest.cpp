@@ -303,10 +303,18 @@ bool FMeasuredTypesFitTheirLettersRowTest::RunTest(const FString& Parameters)
 	// type. That gap was not theoretical - plane6's 777-300ER reaches 6799 uu aft of the stop
 	// mark against a Code E row authored at 6700, and nothing in the suite would have said so.
 	//
-	// WHAT GOES WRONG IF THIS IS RED. IcaoCode's row is what a STAND is laid out from - its
-	// width, its depth, its wingtip clearance and where its GSE road runs. A type larger than
-	// its letter admits parks with its tail, nose or wing over ground the layout treated as
-	// clear, and nothing on screen distinguishes that from a stand that is simply tight.
+	// WHAT GOES WRONG IF THIS IS RED. A stand is laid out from IcaoCode's row plus its letter's
+	// FLetterEnvelope (#292) - width, depth, wingtip clearance and GSE road from the row,
+	// tail/nose reach from the envelope. A type larger than its letter admits parks with its
+	// tail, nose or wing over ground the layout treated as clear, and nothing on screen
+	// distinguishes that from a stand that is simply tight.
+	//
+	// THE CONTRACT CHANGED SHAPE UNDER #292, NOT JUST ITS SOURCE. Before the split this
+	// asserted against IcaoCode's own authored row; now it asserts against
+	// UAirsideSettings::ResolveLetterEnvelope, which is a MAX over every loaded UAircraftType
+	// INCLUDING this one - so the tail/nose checks below are guaranteed to pass by
+	// EnvelopeFromFleet's own construction. See those checks' own comment for what still makes
+	// running them worthwhile.
 	//
 	// THE SAME FOUR CHECKS, DELIBERATELY, rather than a subset chosen because these types are
 	// modelled: tail, nose, span-to-letter and the wing band. The two tests are one rule
@@ -337,19 +345,29 @@ bool FMeasuredTypesFitTheirLettersRowTest::RunTest(const FString& Parameters)
 		const double Nose = Type->Footprint.NoseX - ToStopMark;
 		const double Tail = Type->Footprint.TailX - ToStopMark;
 
+		// THE ENVELOPE, NOT THE FLOOR (#292's own point 4): MaxTailAft/MaxNoseFwd are fleet
+		// figures now, RAISED past IcaoCode::FloorEnvelopeForLetter by every loaded
+		// UAircraftType including this one - so this assertion is guaranteed to pass by
+		// EnvelopeFromFleet's own construction (it takes a MAX over exactly this figure). It is
+		// still worth running: it catches the AssetRegistry scan failing to reach this asset at
+		// all (a class-path mismatch, a Code that fails to parse) or Parse disagreeing with a
+		// mistyped Code, either of which would leave Envelope silently AT the floor instead.
+		const FLetterEnvelope& Envelope = UAirsideSettings::ResolveLetterEnvelope(Code);
 		TestTrue(
-			*FString::Printf(TEXT("%s: its tail at %.0f is within code %s's %.0f"),
-				*Path, Tail, Letter, IcaoCode::MaxTailAftForLetter(Code)),
-			Tail >= -IcaoCode::MaxTailAftForLetter(Code));
+			*FString::Printf(TEXT("%s: its tail at %.0f is within code %s's envelope of %.0f"),
+				*Path, Tail, Letter, Envelope.MaxTailAft),
+			Tail >= -Envelope.MaxTailAft);
 		TestTrue(
-			*FString::Printf(TEXT("%s: its nose at %.0f is within code %s's %.0f"),
-				*Path, Nose, Letter, IcaoCode::MaxNoseFwdForLetter(Code)),
-			Nose <= IcaoCode::MaxNoseFwdForLetter(Code));
+			*FString::Printf(TEXT("%s: its nose at %.0f is within code %s's envelope of %.0f"),
+				*Path, Nose, Letter, Envelope.MaxNoseFwd),
+			Nose <= Envelope.MaxNoseFwd);
 		TestEqual(
 			*FString::Printf(TEXT("%s: its measured span of %.0f uu is code %s's, which is the "
 				"letter it is authored at"), *Path, Type->Footprint.Wingspan, Letter),
 			IcaoCode::LetterForWingspan(Type->Footprint.Wingspan), FString(Letter));
 
+		// THE WING BAND STAYS PLAIN IcaoCode:: - unaffected by #292's split. Solve/LetterEnvelope.h
+		// says why: FEntityFootprint carries no per-type figure to raise WingFwd/WingAft from.
 		const double WingLine = Type->Footprint.WingX - ToStopMark;
 		TestTrue(
 			*FString::Printf(TEXT("%s: its wing line at %.0f is inside code %s's %.0f .. %.0f"),
@@ -362,8 +380,8 @@ bool FMeasuredTypesFitTheirLettersRowTest::RunTest(const FString& Parameters)
 		// fails is "by how much", and re-deriving it means loading the asset by hand.
 		AddInfo(FString::Printf(
 			TEXT("%s is code %s: nose %.0f/%.0f, tail %.0f/%.0f, span %.0f, wing %.0f"),
-			*Path, Letter, Nose, IcaoCode::MaxNoseFwdForLetter(Code),
-			-Tail, IcaoCode::MaxTailAftForLetter(Code), Type->Footprint.Wingspan, WingLine));
+			*Path, Letter, Nose, Envelope.MaxNoseFwd,
+			-Tail, Envelope.MaxTailAft, Type->Footprint.Wingspan, WingLine));
 	}
 
 	return true;

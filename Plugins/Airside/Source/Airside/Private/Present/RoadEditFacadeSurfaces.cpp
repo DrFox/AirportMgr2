@@ -822,7 +822,11 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	}
 
 	const FVector2D Inward = PlotYard::InwardOf(Wound, A, B);
-	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, *Letter);
+	// THE COMMITTED FIGURE (#292): what the stand actually gets built at, unlike the ghost
+	// preview (FStandPlotTool::DescribeLetter), which cannot reach Content/ at all and uses
+	// the floor instead - see that function's own comment for the accepted gap between them.
+	const StandBox::FStandPose Pose =
+		StandBox::PoseFor(A, B, Inward, *Letter, UAirsideSettings::ResolveLetterEnvelope(*Letter));
 
 	// PRICED AND REFUSED BEFORE THE SCOPE OPENS - issue #193, the same ordering
 	// PlaceEntityInPlot uses. WhyStandRefused already ran this exact afford check (through the

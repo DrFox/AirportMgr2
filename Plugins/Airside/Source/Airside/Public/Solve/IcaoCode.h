@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 
+struct FLetterEnvelope;   // Solve/LetterEnvelope.h - FloorEnvelopeForLetter's return type only.
+
 /**
  * ICAO Annex 14 code letter, A through F.
  *
@@ -235,39 +237,28 @@ namespace IcaoCode
 	AIRSIDE_API FString LetterForStandSize(double WidthUu, double DepthUu);
 
 	/**
-	 * How far AFT of the nose-gear stop mark the longest airframe this letter admits reaches,
-	 * uu. Positive - it is a distance, and the geometry that uses it negates it.
+	 * FLetterEnvelope's AUTHORED FLOOR for Code - MaxTailAft and MaxNoseFwd exactly as they
+	 * read before #292 split them out of this file's Rows[] into FLetterEnvelope, with none of
+	 * the fleet raised past it. See Solve/LetterEnvelope.h for why those two fields (and only
+	 * those two) left this table, and IcaoCode.cpp for the per-letter measured history that used
+	 * to live on FRow's MaxTailAft/MaxNoseFwd members and now lives on this function's own row
+	 * table.
 	 *
-	 * THE ONE FIGURE A STAND'S GROUND GEOMETRY IS KEPT CLEAR OF, and it is per LETTER rather
-	 * than per named type on purpose. The stand's service geometry was sized from the A320's
-	 * tail at -3250 while DA_Aircraft_B738 parks on the same stand with its tail at -3538 -
-	 * 0.1 m of clearance where 3 m was intended. Sizing from a named aeroplane is what caused
-	 * that; sizing from the letter is the rule the taxiway widths and the service road fillet
-	 * already follow.
+	 * THE SEED, NOT THE ANSWER a stand is actually built from: UAirsideSettings::
+	 * ResolveLetterEnvelope raises MaxTailAft/MaxNoseFwd past this floor when a loaded
+	 * UAircraftType of Code reaches further, and every production stand-geometry caller
+	 * (StandBox::PoseFor/BoxAt, UEntityDefinition::BuildStandTemplate) takes THAT result, not
+	 * this one, by reference.
 	 *
-	 * Aft of the STOP MARK, not a length, because that is what a layout measured from the
-	 * nose-gear origin actually needs - a nose overhang differs by type and is not this
-	 * question. An airframe whose own origin is elsewhere (the Piper declares its main gear;
-	 * see FChassis::SteerAxleX) is measured about that origin instead, and is far inside any
-	 * of these figures.
-	 *
-	 * Takes the enum, as StandWidthForLetter does.
+	 * WHO CALLS THIS DIRECTLY, THEN: exactly the callers that cannot reach Content/ at all -
+	 * Model/RoadNetwork.cpp's legacy-stand outline migration (Check-Architecture's
+	 * include-direction rule bars Model/ from Content/) and FStandPlotTool's interactive ghost
+	 * preview (the same rule bars Tool/) - plus UAirsideSettings::ResolveLetterEnvelope itself,
+	 * which starts here before raising. Both accept the floor rather than the live fleet figure:
+	 * the migration path exists to reproduce EXACTLY the pre-#292 numbers for stands nobody
+	 * re-measured, and the preview is an approximation the player is not committing yet.
 	 */
-	AIRSIDE_API double MaxTailAftForLetter(EIcaoCode Code);
-
-	/**
-	 * How far FORWARD of the nose-gear stop mark the longest airframe this letter admits
-	 * reaches, uu. Positive.
-	 *
-	 * THE SIBLING OF MaxTailAftForLetter, and it exists because StandDepthForLetter is
-	 * measured NOSE to the back of the GSE road. Without the nose overhang there is no way to
-	 * turn that depth into the x the layout may actually use, and a layout would silently
-	 * gain the overhang as free room.
-	 *
-	 * Two figures rather than one length for the reason the aft one gives: the origin is the
-	 * nose GEAR, not the nose, and the overhang between them differs by type.
-	 */
-	AIRSIDE_API double MaxNoseFwdForLetter(EIcaoCode Code);
+	AIRSIDE_API FLetterEnvelope FloorEnvelopeForLetter(EIcaoCode Code);
 
 	/**
 	 * The WING KEEP-OUT for this letter: the fore-aft extent, uu about the nose-gear stop

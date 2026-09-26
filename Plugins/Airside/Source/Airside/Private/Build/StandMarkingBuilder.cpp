@@ -50,7 +50,8 @@ const uint8 FStandMarkingBuilder::GlyphSegments[6] = {
 	SegA | SegE | SegF | SegG,                 // F
 };
 
-int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out, FStandMarkingCensus* Census)
+int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out,
+	const FLetterEnvelopeTable& Envelopes, FStandMarkingCensus* Census)
 {
 	FStandMarkingCensus Local;
 	FStandMarkingCensus& C = Census != nullptr ? *Census : Local;
@@ -99,8 +100,13 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 		const FVector2D Right = RoadGeom::PerpCCW(Facing);
 
 		// StandBox::PoseFor's own derivation, run in reverse - see this class's header for
-		// why this reads the pose rather than Outline[0]/[1].
-		const double Distance = IcaoCode::StandDepthForLetter(DepthLetter) - IcaoCode::MaxNoseFwdForLetter(DepthLetter);
+		// why this reads the pose rather than Outline[0]/[1]. THE FLOOR, NOT Envelopes[C], for
+		// the unknown-letter case - see this function's own header on why it must match the
+		// migration's frozen figure rather than whatever the fleet has since raised Code C to.
+		const FLetterEnvelope& DepthEnvelope = GlyphLetter.IsSet()
+			? Envelopes[DepthLetter]
+			: IcaoCode::FloorEnvelopeForLetter(DepthLetter);
+		const double Distance = IcaoCode::StandDepthForLetter(DepthLetter) - DepthEnvelope.MaxNoseFwd;
 		const FVector2D EntranceMid = Entity.Position - Facing * Distance;
 
 		// LEAD-IN: entrance midpoint to the stop mark, along the heading, LeadInWidth wide.

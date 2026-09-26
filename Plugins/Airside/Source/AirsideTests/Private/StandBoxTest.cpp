@@ -25,9 +25,10 @@ bool FStandBoxRoundTripTest::RunTest(const FString& Parameters)
 		const FVector2D B(W, 0.0);
 		const FVector2D Inward(0.0, 1.0);
 
-		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter);
+		const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
 		TArray<FVector2D> Corners;
-		StandBox::BoxAt(Pose, Letter, Corners);
+		StandBox::BoxAt(Pose, Letter, Envelope, Corners);
 
 		const TCHAR* LetterName = IcaoCode::ToLetter(Letter);
 		TestEqual(*FString::Printf(TEXT("%s box has four corners"), LetterName), Corners.Num(), 4);
@@ -74,10 +75,11 @@ bool FStandBoxTailToEntranceTest::RunTest(const FString& Parameters)
 	const FVector2D B(IcaoCode::StandWidthForLetter(Letter), 0.0);
 	const FVector2D Inward(0.0, 1.0);
 
-	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter);
+	const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
+	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
 	TestTrue(TEXT("Facing equals Inward"), Pose.Facing.Equals(Inward, 1e-9));
 
-	const double Expected = IcaoCode::StandDepthForLetter(Letter) - IcaoCode::MaxNoseFwdForLetter(Letter);
+	const double Expected = IcaoCode::StandDepthForLetter(Letter) - Envelope.MaxNoseFwd;
 	const double Actual = FVector2D::DotProduct(Pose.Position - A, Inward);
 	TestTrue(TEXT("stop mark is Depth - NoseFwd in from the entrance, along Inward"),
 		FMath::IsNearlyEqual(Actual, Expected, 0.01));
@@ -99,7 +101,8 @@ bool FStandBoxFarSideTest::RunTest(const FString& Parameters)
 	const FVector2D B(0.0, 0.0);
 	const FVector2D Inward(0.0, -1.0);
 
-	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter);
+	const StandBox::FStandPose Pose =
+		StandBox::PoseFor(A, B, Inward, Letter, IcaoCode::FloorEnvelopeForLetter(Letter));
 	TestTrue(TEXT("Facing equals Inward"), Pose.Facing.Equals(Inward, 1e-9));
 	TestTrue(TEXT("Position.Y is negative - the pose sits below the taxiway"), Pose.Position.Y < 0.0);
 

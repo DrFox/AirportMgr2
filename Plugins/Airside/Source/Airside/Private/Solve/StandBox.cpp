@@ -5,7 +5,7 @@
 namespace StandBox
 {
 	FStandPose PoseFor(const FVector2D& EntranceA, const FVector2D& EntranceB,
-		const FVector2D& Inward, EIcaoCode Letter)
+		const FVector2D& Inward, EIcaoCode Letter, const FLetterEnvelope& Envelope)
 	{
 		// THE TEMPLATE'S BACK EDGE (X = NoseFwd - Depth, the tail side) IS LAID ON THE ENTRANCE
 		// EDGE, centred - see UEntityDefinition::BuildStandTemplate. So the stop mark is
@@ -14,14 +14,15 @@ namespace StandBox
 		FStandPose Pose;
 		Pose.Facing = Inward.GetSafeNormal();
 		Pose.Position = (EntranceA + EntranceB) * 0.5
-			+ Pose.Facing * (IcaoCode::StandDepthForLetter(Letter) - IcaoCode::MaxNoseFwdForLetter(Letter));
+			+ Pose.Facing * (IcaoCode::StandDepthForLetter(Letter) - Envelope.MaxNoseFwd);
 		return Pose;
 	}
 
-	void BoxAt(const FStandPose& Pose, EIcaoCode Letter, TArray<FVector2D>& OutCorners)
+	void BoxAt(const FStandPose& Pose, EIcaoCode Letter, const FLetterEnvelope& Envelope,
+		TArray<FVector2D>& OutCorners)
 	{
 		const double HalfWidth = 0.5 * IcaoCode::StandWidthForLetter(Letter);
-		const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(Letter);
+		const double NoseFwd = Envelope.MaxNoseFwd;
 		const double Depth = IcaoCode::StandDepthForLetter(Letter);
 		const FVector2D Back = Pose.Position - Pose.Facing * (Depth - NoseFwd);
 		const FVector2D Front = Pose.Position + Pose.Facing * NoseFwd;

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Solve/IcaoCode.h"
+#include "Solve/LetterEnvelope.h"
 
 /**
  * A drawn stand rectangle and the aircraft's stop-mark pose, as ONE geometry read both ways.
@@ -36,17 +37,27 @@ namespace StandBox
 	 *
 	 * Inward need not be perpendicular to EntranceA-EntranceB or unit length; only its
 	 * direction is read (GetSafeNormal), so a freeform drag still yields a clean pose.
+	 *
+	 * ENVELOPE BY REFERENCE, since #292: MaxNoseFwd used to be IcaoCode::MaxNoseFwdForLetter's
+	 * own lookup - now a fleet figure UAirsideSettings::ResolveLetterEnvelope raises past its
+	 * authored floor, so the caller resolves it once (per rebuild, or IcaoCode::
+	 * FloorEnvelopeForLetter where Content/ is unreachable - see that function's own comment)
+	 * and hands it in, rather than this Solve/ function reaching into Content/ itself.
 	 */
 	AIRSIDE_API FStandPose PoseFor(const FVector2D& EntranceA, const FVector2D& EntranceB,
-		const FVector2D& Inward, EIcaoCode Letter);
+		const FVector2D& Inward, EIcaoCode Letter, const FLetterEnvelope& Envelope);
 
 	/**
 	 * PoseFor's inverse: the four corners of the letter's box at this pose, entrance edge
 	 * first. OutCorners is entrance-A, entrance-B, then the two corners inward of them, so
 	 * the entrance edge is corners 0->1 and PolygonArea is POSITIVE - the winding the pad
 	 * triangulator needs.
+	 *
+	 * Envelope BY REFERENCE for PoseFor's own reason - MUST be the same envelope PoseFor built
+	 * this Pose from, or BoxAt's box will not agree with the pose's own derivation.
 	 */
-	AIRSIDE_API void BoxAt(const FStandPose& Pose, EIcaoCode Letter, TArray<FVector2D>& OutCorners);
+	AIRSIDE_API void BoxAt(const FStandPose& Pose, EIcaoCode Letter, const FLetterEnvelope& Envelope,
+		TArray<FVector2D>& OutCorners);
 
 	/** |Rect[1] - Rect[0]| - the entrance edge's own length, ROUNDED TO A WHOLE uu so a stand
 	 *  drawn exactly at a floor off the axes reads as that floor (see the .cpp). Rect

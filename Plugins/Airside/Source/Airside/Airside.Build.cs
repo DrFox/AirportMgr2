@@ -21,10 +21,12 @@ public class Airside : ModuleRules
 		// DynamicMeshSink.h, RoadJunctionGallery.h, RoadRebuildCensus.h) - no Public header
 		// needs the full type, so no consumer of Airside needs this dependency (issue #191).
 		//
-		// AssetRegistry (issue #293) is PRIVATE for the same shape: EveryAircraftType()'s
-		// scan is Testing/AirsideTestWorld.cpp's own implementation detail behind a
-		// TArray<UAircraftType*> the header already declares without naming FAssetData or
-		// IAssetRegistry - no consumer of Airside needs the module, only the function.
+		// AssetRegistry is PRIVATE for the same shape of reason, needed by two independent
+		// callers now: EveryAircraftType()'s scan (issue #293, Testing/AirsideTestWorld.cpp)
+		// and AirsideSettings.cpp's ResolveLetterEnvelopeTable (#292) - neither is named by a
+		// Public header (EveryAircraftType's own TArray<UAircraftType*> return type hides it,
+		// and no Public header names FAssetData or IAssetRegistry), so no consumer of Airside
+		// needs the module, only these two functions.
 		PrivateDependencyModuleNames.AddRange(new string[] { "GeometryFramework", "AssetRegistry" });
 	}
 }

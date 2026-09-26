@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Build/RoadMeshSink.h"
 #include "Solve/IcaoCode.h"
+#include "Solve/LetterEnvelope.h"
 
 class URoadNetwork;
 
@@ -72,7 +73,7 @@ struct AIRSIDE_API FStandMarkingBuilder
 	 * painted.
 	 *
 	 * For each alive entity with IsStand() && IsPlotted(): the entrance midpoint is derived
-	 * from the pose, Position - Facing * (StandDepthForLetter(L) - MaxNoseFwdForLetter(L)) -
+	 * from the pose, Position - Facing * (StandDepthForLetter(L) - Envelope(L).MaxNoseFwd) -
 	 * StandBox::PoseFor's own derivation run in reverse - rather than read from Outline[0..1],
 	 * because URoadEditFacade::PlaceStandInPlot reverses a clockwise outline (and swaps which
 	 * of its two ORIGINAL corners is "entrance A/B" to match), which moves the entrance edge
@@ -83,7 +84,16 @@ struct AIRSIDE_API FStandMarkingBuilder
 	 * what is painted; when it is unset (the DesignWingspan-0 case), no glyph is painted, but
 	 * the lead-in and stop bar still are - a stand with no known letter is still a stand an
 	 * arrival can be routed to.
+	 *
+	 * Envelopes, since #292: Build/ may not include Content/AirsideSettings (Check-Architecture's
+	 * include-direction rule), so the caller (Present/RoadSurfacePresenter.cpp) resolves
+	 * UAirsideSettings::ResolveLetterEnvelopeTable() ONCE per rebuild and hands it down, rather
+	 * than this loop reaching Content/ once per stand painted. A DesignWingspan-0 stand's
+	 * entrance is derived from IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C) instead of
+	 * Envelopes[C] - it must match the SAME figure Model/RoadNetwork.cpp's migration built that
+	 * stand's outline from (the floor, since Model/ cannot reach Content/ either), not whatever
+	 * the fleet has since raised Code C to.
 	 */
 	static int32 Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out,
-		FStandMarkingCensus* Census = nullptr);
+		const FLetterEnvelopeTable& Envelopes, FStandMarkingCensus* Census = nullptr);
 };

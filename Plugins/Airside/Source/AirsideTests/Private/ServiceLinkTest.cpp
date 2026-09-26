@@ -69,7 +69,7 @@ namespace ServiceLinkFixture
 			Definition.RequiredExtent.X, Definition.RequiredExtent.Y);
 		const TOptional<EIcaoCode> Code = IcaoCode::Parse(Letter);
 		check(Code.IsSet());
-		const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(*Code);
+		const double NoseFwd = IcaoCode::FloorEnvelopeForLetter(*Code).MaxNoseFwd;
 		const double HalfWidth = 0.5 * Definition.RequiredExtent.X;
 		return FBox2D(FVector2D(NoseFwd - Definition.RequiredExtent.Y, -HalfWidth),
 			FVector2D(NoseFwd, HalfWidth));
@@ -368,7 +368,7 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FGuidelineNodeId Far;
-		const double NoseX = IcaoCode::MaxNoseFwdForLetter(EIcaoCode::C);
+		const double NoseX = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C).MaxNoseFwd;
 		Lay(*Net, FVector2D(NoseX + GapNear, -20000.0), FVector2D(NoseX + GapNear, 20000.0),
 			ETraversalClass::GroundVehicle, Far);
 

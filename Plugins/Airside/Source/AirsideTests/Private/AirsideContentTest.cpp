@@ -3,7 +3,9 @@
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Content/FenceKit.h"
+#include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
+#include "Solve/IcaoCode.h"
 #include "Model/RunwayFacts.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialParameterCollection.h"
@@ -336,6 +338,70 @@ bool FAirsideContentFenceFadeWiredTest::RunTest(const FString& Parameters)
 	// the masked fade would put every post on Nanite's programmable raster path.
 	TestFalse(TEXT("the line post is not Nanite"), Kit.LinePost->IsNaniteEnabled());
 	TestFalse(TEXT("the heavy post is not Nanite"), Kit.HeavyPost->IsNaniteEnabled());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLetterEnvelopeRaisedByAFleetTypeTest,
+	"Airside.Content.LetterEnvelope.RaisedByAFleetType",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLetterEnvelopeRaisedByAFleetTypeTest::RunTest(const FString& Parameters)
+{
+	// THE PIN #292 EXISTS FOR: adding a UAircraftType with a longer tail raises its letter's
+	// envelope with NO C++ EDIT - the whole point of splitting MaxTailAft/MaxNoseFwd out of
+	// IcaoCode::Rows, where raising them meant retyping a row AND a Python MAX_TAIL_AFT_<letter>
+	// by hand (issue #292's own evidence, seven times over).
+	//
+	// AGAINST EnvelopeFromFleet DIRECTLY, NOT ResolveLetterEnvelope - the test seam
+	// EnvelopeFromFleet's own header names itself for: a synthetic in-memory UAircraftType
+	// (NewObject, never saved) exercises the raising rule with no .uasset for the
+	// AssetRegistry to discover, so this test is deterministic regardless of what the project's
+	// real DA_Aircraft_* assets happen to measure this week.
+	const EIcaoCode Letter = EIcaoCode::C;
+	const double Floor = IcaoCode::FloorEnvelopeForLetter(Letter).MaxTailAft;
+
+	// NOTHING TO RAISE IT: an empty fleet keeps the floor exactly - the letter this asset
+	// registry has never heard of yet.
+	{
+		const FLetterEnvelope Empty =
+			UAirsideSettings::EnvelopeFromFleet(Letter, TArrayView<UAircraftType* const>());
+		TestEqual(TEXT("with no fleet, the envelope is exactly the floor"), Empty.MaxTailAft, Floor, 0.01);
+	}
+
+	// A TYPE 1 UU LONGER THAN THE FLOOR RAISES IT BY EXACTLY THAT 1 UU - pinning the raising
+	// RULE (a max, not a replace, not a round-up), not merely "it changed".
+	UAircraftType* Longer = NewObject<UAircraftType>(GetTransientPackage());
+	Longer->Code = FName(IcaoCode::ToLetter(Letter));
+	Longer->SteerAxleX = 0.0;   // origin ON the nose-gear stop mark - see FChassis::SteerAxleX
+	Longer->Footprint.TailX = -(Floor + 1.0);   // 1 uu further aft than the floor admits
+
+	TArray<UAircraftType*> Fleet = { Longer };
+	const FLetterEnvelope Raised = UAirsideSettings::EnvelopeFromFleet(Letter, Fleet);
+	TestEqual(TEXT("the envelope rises by exactly the 1 uu the type exceeds the floor by"),
+		Raised.MaxTailAft, Floor + 1.0, 0.01);
+	TestEqual(TEXT("MaxNoseFwd is untouched - this type's nose does not exceed the floor"),
+		Raised.MaxNoseFwd, IcaoCode::FloorEnvelopeForLetter(Letter).MaxNoseFwd, 0.01);
+
+	// A SHORTER TYPE ALONGSIDE IT DOES NOT LOWER THE ENVELOPE - a MAX over the fleet, never an
+	// average or a last-write-wins.
+	UAircraftType* Shorter = NewObject<UAircraftType>(GetTransientPackage());
+	Shorter->Code = FName(IcaoCode::ToLetter(Letter));
+	Shorter->SteerAxleX = 0.0;
+	Shorter->Footprint.TailX = -(Floor - 500.0);
+	Fleet.Add(Shorter);
+	TestEqual(TEXT("a shorter type alongside the longer one does not lower the envelope"),
+		UAirsideSettings::EnvelopeFromFleet(Letter, Fleet).MaxTailAft, Floor + 1.0, 0.01);
+
+	// A DIFFERENT LETTER'S TYPE, HOWEVER LONG, NEVER TOUCHES THIS ONE'S ENVELOPE - the fleet is
+	// filtered by Code before it is compared, not blended across letters.
+	UAircraftType* WrongLetter = NewObject<UAircraftType>(GetTransientPackage());
+	WrongLetter->Code = FName(IcaoCode::ToLetter(EIcaoCode::F));
+	WrongLetter->Footprint.TailX = -50000.0;
+	Fleet.Add(WrongLetter);
+	TestEqual(TEXT("a Code F type does not raise Code C's envelope"),
+		UAirsideSettings::EnvelopeFromFleet(Letter, Fleet).MaxTailAft, Floor + 1.0, 0.01);
+
 	return true;
 }
 

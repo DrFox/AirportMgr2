@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Solve/IcaoCode.h"
+#include "Solve/LetterEnvelope.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -165,24 +166,39 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	// in the table, which is where a reader checks it against a real aerodrome.
 	TestEqual(TEXT("a Code C stand is 55 m deep"), IcaoCode::StandDepthForLetter(EIcaoCode::C), 5500.0, 0.5);
 
-	// AND HOW LONG AN AIRFRAME THE LETTER ADMITS, which is what a stand's ground geometry is
-	// kept clear of. Code C's figure is MEASURED - it is the 737-800's tail, the longest type
-	// this project ships - so it is pinned here against the same figure Build737 authors, and
-	// the two cannot drift without a test saying so. It was 3430 until 2026-09-19, when
-	// Build737 was found to be carrying the A320's nose overhang; correcting the nose to
-	// Boeing's 13 FT 5 IN moved the tail with it, because the tail is the nose less the
-	// published length. A test that pins a figure is only as good as the figure's source -
-	// this one held the two in step faithfully for months while both were wrong.
-	// The letters with no shipped type are
-	// authored design values and are asserted only for their ORDER, which is the one thing
-	// that must hold however the figures are revised.
+	// MaxTailAft's MEASURED PIN AND ITS ORDER-ACROSS-LETTERS CHECK MOVED TO
+	// Airside.Solve.IcaoCode.EnvelopeFloorOrderedByLetter below (#292's design point 4):
+	// MaxTailAft left this table for FLetterEnvelope, so the pin now reads
+	// IcaoCode::FloorEnvelopeForLetter rather than a member of FRow.
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLetterEnvelopeFloorOrderedByLetterTest,
+	"Airside.Solve.IcaoCode.EnvelopeFloorOrderedByLetter",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLetterEnvelopeFloorOrderedByLetterTest::RunTest(const FString& Parameters)
+{
+	// MOVED FROM FStandWidthIsDerivedFromClearanceTest BY #292 (design point 4): MaxTailAft
+	// left IcaoCode::Rows for FLetterEnvelope, so what used to be asserted against FRow's own
+	// member is asserted against IcaoCode::FloorEnvelopeForLetter instead - the SAME figures,
+	// unmoved by the split (see that function's own comment for the measured history).
+	//
+	// THE FLOOR, NOT UAirsideSettings::ResolveLetterEnvelope: this pins the AUTHORED table's
+	// own internal consistency - "however the figures are revised, admits-longer-than-the-
+	// letter-below-it must still hold" - which is a property of Solve/'s own data, not of
+	// whatever UAircraftType assets happen to be loaded when the suite runs. The fleet-raised
+	// figure is pinned separately, against synthetic types, by
+	// Airside.Content.LetterEnvelope.RaisedByAFleetType.
 	TestEqual(TEXT("Code C admits the 737-800's tail, and is measured from it"),
-		IcaoCode::MaxTailAftForLetter(EIcaoCode::C), 3538.0, 0.5);
+		IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C).MaxTailAft, 3538.0, 0.5);
 
 	double Previous = 0.0;
 	for (const EIcaoCode Code : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
-		const double Aft = IcaoCode::MaxTailAftForLetter(Code);
+		const double Aft = IcaoCode::FloorEnvelopeForLetter(Code).MaxTailAft;
 		TestTrue(
 			*FString::Printf(TEXT("%s admits a longer airframe than the letter below it (%.0f after %.0f)"),
 				IcaoCode::ToLetter(Code), Aft, Previous),
@@ -214,9 +230,10 @@ bool FWingKeepOutIsTheUnionOfAdmittedWingsTest::RunTest(const FString& Parameter
 			Letter, Aft, Fwd), Aft < Fwd);
 		TestTrue(*FString::Printf(TEXT("%s's wing is behind the stop mark (%.0f)"), Letter, Fwd),
 			Fwd < 0.0);
+		const double FloorTailAft = IcaoCode::FloorEnvelopeForLetter(Code).MaxTailAft;
 		TestTrue(*FString::Printf(TEXT("%s's wing is inside its own airframe (%.0f vs %.0f)"),
-			Letter, Aft, -IcaoCode::MaxTailAftForLetter(Code)),
-			Aft > -IcaoCode::MaxTailAftForLetter(Code));
+			Letter, Aft, -FloorTailAft),
+			Aft > -FloorTailAft);
 	}
 
 	// CONTAINMENT, at the corners that decide it. Code C's box is x in [-2150, -950] out to

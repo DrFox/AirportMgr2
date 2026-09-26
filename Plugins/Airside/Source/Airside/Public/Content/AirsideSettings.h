@@ -7,6 +7,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/Vehicle.h"
 #include "Profiles/RoadDesignVehicles.h"
+#include "Solve/LetterEnvelope.h"
 #include "AirsideSettings.generated.h"
 
 class UAirsideContent;
@@ -298,6 +299,58 @@ public:
 	 * Code C's own answer.
 	 */
 	static UAircraftType* ResolveLargestAircraftOfLetter(EIcaoCode Letter);
+
+	/**
+	 * Letter's FLEET ENVELOPE - MaxTailAft and MaxNoseFwd, the max over every LOADED
+	 * UAircraftType of this letter's measured figures, floored at IcaoCode::
+	 * FloorEnvelopeForLetter so a letter with nothing modelled (or nothing loaded, as every
+	 * automation test is) keeps today's authored numbers rather than 0.
+	 *
+	 * #292: these two used to be hand-retyped in every build_plane<N>_type.py alongside the
+	 * matching row in IcaoCode.cpp - MAX_TAIL_AFT_<letter>, "raise the row and this constant
+	 * with it" - each a second statement of the same figure the C++ builder already measured
+	 * onto the asset. Adding a type now edits no C++: the next resolve (this cache is cleared
+	 * only by ResetLetterEnvelopeCacheForTest, matching ResolveTierDesignVehicles' cache -
+	 * this project has no runtime asset-swap to invalidate for) sees it and raises the letter
+	 * it belongs to.
+	 *
+	 * A REFERENCE INTO THE CACHED TABLE, ResolveLetterEnvelopeTable() below - never rebuilt
+	 * per letter. Every production consumer (StandBox::PoseFor/BoxAt, UEntityDefinition::
+	 * BuildStandTemplate) takes the result BY REFERENCE, matching FRoadDesignVehicles' own
+	 * shape for the same "resolved once, threaded down" reason.
+	 */
+	static const FLetterEnvelope& ResolveLetterEnvelope(EIcaoCode Letter);
+
+	/**
+	 * All six letters at once - what Build/ (which the include-direction rule bars from
+	 * Content/AirsideSettings) receives as a plain parameter from a Present/ caller that
+	 * touches more than one letter in a single pass, such as FStandMarkingBuilder::Build
+	 * painting every stand on the level. See Solve/LetterEnvelope.h's own comment on
+	 * FLetterEnvelopeTable for why the table exists at all beside the single-letter accessor.
+	 */
+	static const FLetterEnvelopeTable& ResolveLetterEnvelopeTable();
+
+	/**
+	 * The raising rule alone, given the exact fleet to scan - ResolveLetterEnvelope's own test
+	 * seam. A test can pin "a longer tail raises the envelope" against synthetic in-memory
+	 * UAircraftType objects (NewObject, never saved) this way, without authoring a .uasset for
+	 * the AssetRegistry to discover - see AirsideContentTest.cpp's
+	 * Airside.Content.LetterEnvelope.RaisedByAFleetType. ResolveLetterEnvelope/
+	 * ResolveLetterEnvelopeTable are this function plus "which types" answered by the
+	 * AssetRegistry, cached.
+	 *
+	 * WingFwd/WingAft ARE NOT RAISED BY ANY ENTRY IN Fleet - see FLetterEnvelope's own header:
+	 * FEntityFootprint carries no per-type figure to compare a wing BAND's edges against, only
+	 * a single WingX line, so those two fields do not exist on FLetterEnvelope at all.
+	 */
+	static FLetterEnvelope EnvelopeFromFleet(EIcaoCode Letter, TArrayView<UAircraftType* const> Fleet);
+
+	/** How many times ResolveLetterEnvelope/Table has actually scanned the AssetRegistry
+	 *  (cache misses) - see ResolveLetterEnvelope's own comment. */
+	static int32 ResolveLetterEnvelopeCallCountForTest;
+
+	/** Empties the envelope cache and zeroes its counter, so a test starts from a cold resolve. */
+	static void ResetLetterEnvelopeCacheForTest();
 
 	/** A service vehicle's body mesh - the content default, or null with none configured. */
 	static UStaticMesh* ResolveVehicleMesh();

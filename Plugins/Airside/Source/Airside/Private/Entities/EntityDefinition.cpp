@@ -45,7 +45,8 @@ UEntityDefinition* UEntityDefinition::MakeStandTransient(EIcaoCode Letter, UObje
 	}
 
 	UEntityDefinition* Definition = NewObject<UEntityDefinition>(Outer);
-	BuildStandFor(Definition, Aircraft, Letter, UAirsideSettings::ResolveLargestServiceVehicle());
+	BuildStandFor(Definition, Aircraft, Letter, UAirsideSettings::ResolveLargestServiceVehicle(),
+		UAirsideSettings::ResolveLetterEnvelope(Letter));
 
 	return Definition;
 }
@@ -68,7 +69,8 @@ void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition, UAircraft
 	// the split exists: every shipping caller - the Python asset author, Blueprint, the tests
 	// that want the real stand - goes through here and gets the SAME vehicle, and only a test
 	// that is deliberately measuring the derivation names a different one.
-	BuildCodeCStandFor(Definition, Aircraft, UAirsideSettings::ResolveLargestServiceVehicle());
+	BuildCodeCStandFor(Definition, Aircraft, UAirsideSettings::ResolveLargestServiceVehicle(),
+		UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::C));
 }
 
 namespace
@@ -206,16 +208,18 @@ FRoutePlan FStandLeg::ToPlan() const
 }
 
 void UEntityDefinition::BuildCodeCStandFor(
-	UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest)
+	UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest,
+	const FLetterEnvelope& Envelope)
 {
 	// A ONE-LINE FORWARDER - see the header. The body used to live here with Letter pinned to
 	// C as a local const; it is now BuildStandFor's body with Letter a parameter, so this name
 	// keeps compiling for build_stand_asset.py and the tests that measure Code C's derivation.
-	BuildStandFor(Definition, Aircraft, EIcaoCode::C, Largest);
+	BuildStandFor(Definition, Aircraft, EIcaoCode::C, Largest, Envelope);
 }
 
 void UEntityDefinition::BuildStandFor(
-	UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FChassis& Largest)
+	UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FChassis& Largest,
+	const FLetterEnvelope& Envelope)
 {
 	if (Definition == nullptr)
 	{
@@ -330,20 +334,22 @@ void UEntityDefinition::BuildStandFor(
 	Definition->FootprintExtent = FVector2D::ZeroVector;   // the stand's extent IS its aircraft's
 	Definition->Trucks = 0;                          // nothing is based here; a depot has the fleet
 
-	BuildStandTemplate(*Definition, Letter, Largest);
+	BuildStandTemplate(*Definition, Letter, Largest, Envelope);
 }
 
 void UEntityDefinition::BuildStandTemplate(
-	UEntityDefinition& Definition, EIcaoCode Letter, const FChassis& Largest)
+	UEntityDefinition& Definition, EIcaoCode Letter, const FChassis& Largest,
+	const FLetterEnvelope& Envelope)
 {
 	// THE LAYOUT IS BUILT FOR THE FLOOR OF ITS LETTER'S BAND. 53 m to just under 75 is all
 	// Code C, and a template authored at a comfortable 60 would fail exactly where a player
 	// drew the smallest stand the rules allow. Every figure below therefore comes off IcaoCode,
-	// which reports the minimum.
+	// which reports the minimum. NoseFwd/TailAft come off Envelope instead, since #292: they are
+	// fleet figures now, not IcaoCode's - see Solve/LetterEnvelope.h.
 	const double Width = IcaoCode::StandWidthForLetter(Letter);
 	const double Depth = IcaoCode::StandDepthForLetter(Letter);
-	const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(Letter);
-	const double TailAft = IcaoCode::MaxTailAftForLetter(Letter);
+	const double NoseFwd = Envelope.MaxNoseFwd;
+	const double TailAft = Envelope.MaxTailAft;
 
 	// THE STAND BOX, in the definition's own local space. Depth is measured NOSE to the back of
 	// the GSE road, so the back edge is the nose overhang minus the depth and every bit of the

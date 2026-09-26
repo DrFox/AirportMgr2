@@ -1,5 +1,7 @@
 #include "Content/AirsideSettings.h"
 
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
 #include "Content/AirsideContent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
@@ -7,6 +9,7 @@
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
 
 // ONE CONSTANT PER ARTICULATED VEHICLE, for FVehicle::TypeCode - what the inspector, and the
 // dispatch log (AirsideTraffic.cpp), say this vehicle is. NAMED, not anonymous, because the
@@ -436,8 +439,129 @@ UAircraftType* UAirsideSettings::ResolveLargestAircraftOfLetter(EIcaoCode Letter
 	// DefaultAircraft soft pointer, not a table), and adding an AssetRegistry scan for one
 	// caller would be a second table by another name. Null for every letter until a real
 	// one is authored and this function is the one place that starts resolving it.
+	//
+	// #292 DID ADD AN ASSETREGISTRY SCAN TO THIS FILE (see ResolveLetterEnvelope below), but
+	// it answers a different question - "what are Letter's FIGURES", not "which ASSET is the
+	// biggest" - and never needs to hand back a UAircraftType* the caller could dereference.
+	// A future caller of THIS function still wants the actual asset (to draw it parked, say),
+	// which is the harder problem this function's header names; ResolveLetterEnvelope solves
+	// the narrower one.
 	(void)Letter;   // kept named for the caller and for when a real table lands
 	return nullptr;
+}
+
+int32 UAirsideSettings::ResolveLetterEnvelopeCallCountForTest = 0;
+
+namespace
+{
+	/** ResolveLetterEnvelope/Table's cache - every letter, resolved together since one
+	 *  AssetRegistry scan answers all six at once. See ResolveLetterEnvelope's own comment
+	 *  on why this is a plain lazy-once cache rather than ResolveTierDesignVehicles' own
+	 *  content-pointer invalidation: there is no single UAirsideContent driving this scan for
+	 *  that pattern to key off. */
+	struct FLetterEnvelopeCache
+	{
+		bool bValid = false;
+		FLetterEnvelopeTable Table;
+	};
+
+	FLetterEnvelopeCache& GetLetterEnvelopeCache()
+	{
+		static FLetterEnvelopeCache Cache;
+		return Cache;
+	}
+}
+
+void UAirsideSettings::ResetLetterEnvelopeCacheForTest()
+{
+	GetLetterEnvelopeCache() = FLetterEnvelopeCache();
+	ResolveLetterEnvelopeCallCountForTest = 0;
+}
+
+FLetterEnvelope UAirsideSettings::EnvelopeFromFleet(EIcaoCode Letter, TArrayView<UAircraftType* const> Fleet)
+{
+	// THE AUTHORED ROW IS THE FLOOR, NOT A DIFFERENT SEED - a letter with no modelled type, or
+	// an asset that fails to load or parse, keeps EXACTLY today's numbers rather than 0, which
+	// every caller through StandBox would otherwise read as "no clearance at all".
+	FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
+
+	for (UAircraftType* Type : Fleet)
+	{
+		if (Type == nullptr)
+		{
+			continue;
+		}
+
+		// PARSED, NOT TRUSTED - Code is an EditAnywhere FName a human can mistype, the same
+		// reason Airside.Content.MeasuredTypesFitTheirLettersRow parses rather than compares
+		// strings. A type of a DIFFERENT letter, or one that fails to parse at all, does not
+		// touch this letter's envelope.
+		const TOptional<EIcaoCode> Parsed = IcaoCode::Parse(Type->Code.ToString());
+		if (!Parsed.IsSet() || *Parsed != Letter)
+		{
+			continue;
+		}
+
+		// NOSE-GEAR COORDINATES, the same conversion Airside.Content.
+		// MeasuredTypesFitTheirLettersRow and Airside.Entities.EveryAirframeFitsItsLettersRow
+		// both apply before comparing a footprint against this same row.
+		const double ToStopMark = Type->SteerAxleX;
+		const double Nose = Type->Footprint.NoseX - ToStopMark;
+		const double Tail = Type->Footprint.TailX - ToStopMark;
+
+		Envelope.MaxTailAft = FMath::Max(Envelope.MaxTailAft, -Tail);
+		Envelope.MaxNoseFwd = FMath::Max(Envelope.MaxNoseFwd, Nose);
+	}
+
+	return Envelope;
+}
+
+const FLetterEnvelopeTable& UAirsideSettings::ResolveLetterEnvelopeTable()
+{
+	FLetterEnvelopeCache& Cache = GetLetterEnvelopeCache();
+	if (!Cache.bValid)
+	{
+		// COUNTED BEFORE ANYTHING ELSE - ResolveLargestServiceVehicleCallCountForTest's own
+		// reason: this is the one place a production caller should ever pay for the scan.
+		++ResolveLetterEnvelopeCallCountForTest;
+
+		// EVERY LOADED UAircraftType, ONCE, via the AssetRegistry - see ResolveLargestAircraftOfLetter's
+		// own header for why no in-content table exists to walk instead. bSearchSubClasses
+		// false: a UAircraftType subclass would be a second kind of type nothing else here
+		// treats specially, and this scan should not either without that being decided first.
+		TArray<FAssetData> Assets;
+		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+			TEXT("AssetRegistry")).Get();
+		// SYNCHRONOUS, because a scan that returns before the registry has finished its own
+		// startup discovery would silently under-count the fleet - a letter would read as
+		// having nothing modelled purely from being asked too early. A no-op once the registry
+		// is already caught up (IsSearchAllAssets() true, which it is by the time PIE or a
+		// test runs in the ordinary case).
+		Registry.SearchAllAssets(true);
+		Registry.GetAssetsByClass(UAircraftType::StaticClass()->GetClassPathName(), Assets, false);
+
+		TArray<UAircraftType*> Fleet;
+		Fleet.Reserve(Assets.Num());
+		for (const FAssetData& Asset : Assets)
+		{
+			if (UAircraftType* Type = Cast<UAircraftType>(Asset.GetAsset()))
+			{
+				Fleet.Add(Type);
+			}
+		}
+
+		for (uint8 Index = 0; Index < UE_ARRAY_COUNT(Cache.Table.Envelopes); ++Index)
+		{
+			Cache.Table.Envelopes[Index] = EnvelopeFromFleet(static_cast<EIcaoCode>(Index), Fleet);
+		}
+		Cache.bValid = true;
+	}
+	return Cache.Table;
+}
+
+const FLetterEnvelope& UAirsideSettings::ResolveLetterEnvelope(EIcaoCode Letter)
+{
+	return ResolveLetterEnvelopeTable()[Letter];
 }
 
 UStaticMesh* UAirsideSettings::ResolveVehicleMesh()
