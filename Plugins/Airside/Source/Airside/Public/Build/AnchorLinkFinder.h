@@ -78,6 +78,12 @@ struct FPendingLink
 	 * Outward normal of the one direction a link may be joined FROM - unset for every link but a
 	 * stand's declared entry (FAnchorLink::Gather's EntryLink lambda sets it to the stand's own
 	 * world forward, Instance.Heading, since every entry sits near the FAR end of that axis).
+	 * ENFORCED BY: Airside.Entities.DepotJoinsRoad, whose depot POSE link is exactly this
+	 * formula's other user - a depot facing +Y with its road at -Y - so the same HalfPlane
+	 * leaking onto a pose link refuses the very join that test requires. (Not
+	 * AircraftLeadInStillCastsARay: a Ray-kind link never reads HalfPlane at all - see
+	 * NearestJoinable, which only FProximityLinkFinder and FindSiblingLane call - so that test
+	 * cannot see this claim break.)
 	 *
 	 * A HALF-PLANE, NOT A RAY. A ray picks ONE line, and a service vehicle may still arrive along
 	 * the far road from either direction - the same reasoning that keeps every OTHER proximity

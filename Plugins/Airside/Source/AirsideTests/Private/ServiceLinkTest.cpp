@@ -534,6 +534,99 @@ bool FDeepStandFarRoadJoinsTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPartialJoinWarnsTest,
+	"Airside.Build.StandEntry.PartialJoinWarns",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPartialJoinWarnsTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE PARTIAL-JOIN BRANCH'S OWN TEST (review round 1 of task 4). A road that reaches only
+	// ONE side of the far edge - a corner stand, or one beside a road that stops short - leaves
+	// some of a stand's declared entries connected and others not, which FAnchorLink::Build now
+	// reports as a DIFFERENT line from "joins nothing at all".
+	//
+	// ONE CONTACT PER SIDE, not per anchor - see BuildStandTemplate's own comment: every
+	// starboard service (HydrantPit, BaggageHold) shares one entry position, and FixedGPU, the
+	// only port service, sits at another. A road that reaches only the starboard one leaves
+	// FixedGPU refused and the other two joined - the mix this test needs - read off the
+	// template rather than typed as a literal so it tracks the layout if it moves again.
+	//
+	// CODE F, NOT THE SHIPPING CODE C: Code C's two contacts sit only 4300 uu apart (2150 each
+	// side of centre), well inside ServiceLinkRadius (6500) of EACH OTHER - a short road at
+	// either contact reaches both regardless of length, so no fixture built on it could isolate
+	// one side. Code F's floor (10900 wide) spreads them past 9000 uu, comfortably past the
+	// reach a short road at one contact leaves the other outside of.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(EIcaoCode::F);
+
+	double StarboardY = 0.0;
+	double PortY = 0.0;
+	bool bHasStarboard = false;
+	bool bHasPort = false;
+	for (const FServiceBay& Bay : Stand->ServiceBays)
+	{
+		if (Bay.EntryLocal.Y >= 0.0) { StarboardY = Bay.EntryLocal.Y; bHasStarboard = true; }
+		else { PortY = Bay.EntryLocal.Y; bHasPort = true; }
+	}
+	if (!TestTrue(TEXT("the template has a service on each side"), bHasStarboard && bHasPort))
+	{
+		return false;
+	}
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FGuidelineNodeId Far;
+	const double FarSideX = StandGroundOf(*Stand).Max.X + 400.0;
+
+	// SHORT, AND CENTRED ON THE STARBOARD CONTACT ONLY: NearestOnPolyline clamps to a segment's
+	// own ends, so a point past them is measured from the end, not the infinite line - which is
+	// what keeps the port side out of reach without the road looking artificial. 1000, not the
+	// wider 3000 tried first: at Code F's own contact spacing (~8600 uu apart, measured below) a
+	// wider half-span left the port gap under 6500 and both sides joined - see the assertion
+	// right after this that pins the margin rather than assuming it.
+	constexpr double HalfSpan = 1000.0;
+	Lay(*Net, FVector2D(FarSideX, StarboardY - HalfSpan), FVector2D(FarSideX, StarboardY + HalfSpan),
+		ETraversalClass::GroundVehicle, Far);
+
+	// THE ASSUMPTION THIS FIXTURE RESTS ON, MEASURED RATHER THAN HOPED: the port contact must sit
+	// further from the segment's own near end than ServiceLinkRadius allows, or this would
+	// exercise the full-join path by accident and prove nothing about the partial one.
+	const double PortGap = FMath::Abs(PortY - (StarboardY - HalfSpan));
+	AddInfo(FString::Printf(TEXT("starboard Y=%.0f, port Y=%.0f, port-to-segment-end gap=%.0f uu (reach=%.0f)"),
+		StarboardY, PortY, PortGap, FAnchorLink::DefaultServiceLinkRadius));
+	if (!TestTrue(TEXT("the port contact is out of reach of the starboard-only road - if this "
+			"fails, the letter's floor moved and this fixture's letter needs revisiting"),
+			PortGap > FAnchorLink::DefaultServiceLinkRadius))
+	{
+		return false;
+	}
+
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+
+	// THE PARTIAL LINE, not the full-refusal one - see the assertions below for why Joined > 0
+	// here, which is what routes FAnchorLink::Build's post-loop report to this branch instead.
+	AddExpectedError(TEXT("service entrances joined a road"), EAutomationExpectedErrorFlags::Contains, 1);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	for (const FServiceBay& Bay : Stand->ServiceBays)
+	{
+		const bool bConnected =
+			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, *Bay.AnchorId.ToString()));
+		if (Bay.EntryLocal.Y >= 0.0)
+		{
+			TestTrue(*FString::Printf(TEXT("'%s' is connected to the starboard road"), *Bay.AnchorId.ToString()),
+				bConnected);
+		}
+		else
+		{
+			TestFalse(*FString::Printf(TEXT("'%s' is refused - the road never reaches port"), *Bay.AnchorId.ToString()),
+				bConnected);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandLaneDoesNotJoinItselfTest,
 	"Airside.Build.StandLaneDoesNotJoinItself",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
