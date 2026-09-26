@@ -86,6 +86,11 @@ Solve/Model first, failing test before fix.
 - PIE verification: A, B, C stands with far-edge roads; `Stand template 'A' ... needs` within
   floor; FuelService dispatches `UtilityTow` to A; screenshot of entry from the far edge.
 
+## Decided while user AFK (2026-09-26) - review
+
+- **Tail setback = MaxTailAft + the letter's wingtip clearance**, not flush with the entrance edge. The entrance edge sits at the taxiway pavement edge (PlotGesture kerb offset); a flush tail would sit under a taxiing wing.
+- **Stand entry links join only roads beyond the far edge** (half-plane on the proximity probe). Without it a Code A stand, 20 m deep, would still join a taxiway-side road within ServiceLinkRadius 65 m.
+
 ## Risks
 
 - A/B may still overflow with the tow's reverse radius - measured by the template log, not
