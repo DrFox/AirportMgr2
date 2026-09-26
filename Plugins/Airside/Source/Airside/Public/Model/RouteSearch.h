@@ -98,6 +98,13 @@ struct AIRSIDE_API FRouteStep
 	UPROPERTY() int32 EndVertex = 0;
 };
 
+/** One run of a route in one direction, for drawing (FRoutePlan::DescribeRuns). */
+struct FRouteRun
+{
+	TArray<FVector2D> Points;
+	bool bReverse = false;
+};
+
 /**
  * The answer to one route query: what to draw, what to drive, and why not.
  *
@@ -170,6 +177,14 @@ struct AIRSIDE_API FRoutePlan
 	 * that exist rather than a second evaluation of the curve.
 	 */
 	void DescribeSpanDirections(TArray<EDriveDirection>& Out) const;
+
+	/**
+	 * The polyline cut into runs of one direction - forward, or backing along a reverse leg -
+	 * each run's last point the next's first, for a view drawing each in its own style (spec
+	 * 2026-09-26 §5). Off DescribeSpanDirections, so it names the spans the follower walks.
+	 * ENFORCED BY: Airside.Tool.RouteSpansSplitAtReverse
+	 */
+	void DescribeRuns(TArray<FRouteRun>& Out) const;
 };
 
 namespace RouteSearch

@@ -54,6 +54,11 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// the graph's own orange, grey and blue node marks, so it has to be legible against all
 	// three at once.
 	case EPreviewStyle::Handle:                      return FLinearColor(0.8f, 0.4f, 1.0f);
+	// AMBER-ORANGE, warm against the cyan forward route it continues, and apart from the
+	// holding bars' yellower amber. A first guess (2026-09-26), the user's to judge in play.
+	case EPreviewStyle::ReverseRoute:                return FLinearColor(1.0f, 0.55f, 0.1f);
+	// The same hue dimmed, as Guideline is a dimmed Route: context, not intent.
+	case EPreviewStyle::ReverseGuideline:            return FLinearColor(0.6f, 0.4f, 0.15f);
 
 	// GraphOverlay's context styles - the same colours ARoadBuildHUD::DrawNodes/DrawStands
 	// used to wire to their own StubColour/EndColour/JunctionColour/StandColour/
@@ -159,6 +164,17 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 	case EPreviewStyle::Handle:
 		Look.RadiusScale = 0.6f;
 		Look.ThicknessScale = 1.5f;
+		break;
+
+	// EACH AT ITS FORWARD TWIN'S WEIGHT: the colour is the difference, so a route that turns
+	// amber part-way reads as one line changing meaning, not two lines of different importance.
+	case EPreviewStyle::ReverseRoute:
+		Look.ThicknessScale = 2.0f;
+		break;
+
+	case EPreviewStyle::ReverseGuideline:
+		Look.RadiusScale = 0.35f;
+		Look.ThicknessScale = 0.5f;
 		break;
 	}
 

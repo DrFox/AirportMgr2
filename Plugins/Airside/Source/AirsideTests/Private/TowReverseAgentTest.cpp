@@ -310,4 +310,23 @@ bool FTowJudgeReverseEdgeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRouteRunsSplitTest, "Airside.Tool.RouteRunsSplitAtReverse",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRouteRunsSplitTest::RunTest(const FString& Parameters)
+{
+	// THE ROUTE VIEW'S TWO STYLES (spec §5): approach, reverse, exit - three runs, forward then
+	// reverse then forward, each meeting the next end to end, together every vertex of the plan.
+	const FRoutePlan Plan = TowReverseAgentTest::BayPlan(1500.0);
+	TArray<FRouteRun> Runs;
+	Plan.DescribeRuns(Runs);
+	if (!TestEqual(TEXT("three runs"), Runs.Num(), 3)) { return false; }
+	TestTrue(TEXT("forward, reverse, forward"), !Runs[0].bReverse && Runs[1].bReverse && !Runs[2].bReverse);
+	TestTrue(TEXT("run 1 starts where run 0 ends"), Runs[0].Points.Last().Equals(Runs[1].Points[0], 0.01));
+	TestTrue(TEXT("run 2 starts where run 1 ends"), Runs[1].Points.Last().Equals(Runs[2].Points[0], 0.01));
+	TestEqual(TEXT("every vertex drawn once, the two joins twice"),
+		Runs[0].Points.Num() + Runs[1].Points.Num() + Runs[2].Points.Num(), Plan.Polyline.Num() + 2);
+	return true;
+}
+
 #endif

@@ -162,16 +162,17 @@ bool FRoadBuildHUDLooksTest::RunTest(const FString& Parameters)
 	ARoadBuildHUD* Hud = TestWorld.World->SpawnActor<ARoadBuildHUD>();
 	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
 
-	// EPreviewStyle is a plain 0-based enum ending at Handle - iterated the same way
-	// FBuildActionsRegistryTest walks EActionSection, rather than by reflection.
-	//
-	// THIS BOUND IS THE FIFTH LIST a new style has to appear in, and the only one nothing
-	// else would have caught: a value added after the old bound was simply not tested, so
-	// the constructor's seeding list could have missed it in silence. Adding a style means
-	// moving this line.
-	for (uint8 S = 0; S <= static_cast<uint8>(EPreviewStyle::Handle); ++S)
+	// COUNTED THROUGH REFLECTION since 2026-09-26, as FGestureModesAreExclusiveTest counts
+	// EGestureMode. This used to walk up to a literal last member (Handle) and its own comment
+	// called that bound "the fifth list a new style has to appear in, and the only one nothing
+	// else would have caught" - adding ReverseRoute/ReverseGuideline would have meant moving it,
+	// or leaving both untested in silence. Now a new style is checked the day it exists.
+	const UEnum* Enum = StaticEnum<EPreviewStyle>();
+	if (!TestNotNull(TEXT("EPreviewStyle is reflected, so this test can count it"), Enum)) { return false; }
+	// NumEnums() includes the generated _MAX sentinel, which is not a style.
+	for (int32 S = 0; S < Enum->NumEnums() - 1; ++S)
 	{
-		const EPreviewStyle Style = static_cast<EPreviewStyle>(S);
+		const EPreviewStyle Style = static_cast<EPreviewStyle>(Enum->GetValueByIndex(S));
 		const FPreviewLook& Look = Hud->LookForTest(Style);
 		TestTrue(*FString::Printf(TEXT("style %d has a positive radius scale"), S), Look.RadiusScale > 0.0f);
 		TestTrue(*FString::Printf(TEXT("style %d has a positive thickness scale"), S), Look.ThicknessScale > 0.0f);

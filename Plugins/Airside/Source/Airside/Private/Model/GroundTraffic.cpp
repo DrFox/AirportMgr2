@@ -352,6 +352,45 @@ const TArray<FVector2D>& UGroundTraffic::RemainingRoute(int32 AgentId) const
 	return Agent->Follower.Plan.Polyline;
 }
 
+TArray<FRouteRun> UGroundTraffic::RemainingRouteRuns(int32 AgentId) const
+{
+	TArray<FRouteRun> Runs;
+	const FRoadAgent* Agent = FindAgent(AgentId);
+	if (Agent == nullptr || (Agent->Phase != EAgentPhase::Taxiing && Agent->Phase != EAgentPhase::Reversing))
+	{
+		return Runs;
+	}
+	Agent->Follower.Plan.DescribeRuns(Runs);
+
+	// THE LIVE TOW REVERSE, drawn as solved: the first reverse run the steered axle has not
+	// passed is the one being backed along (the follower waits at its start - FollowAndTow's
+	// stop line), and its points become the leading axle's remaining path.
+	if (Agent->Phase == EAgentPhase::Reversing && Agent->TowReverse.IsArmed())
+	{
+		double Along = 0.0;
+		for (FRouteRun& Run : Runs)
+		{
+			if (Run.bReverse && Along + UE_KINDA_SMALL_NUMBER >= Agent->Follower.Travelled - 1.0)
+			{
+				Run.Points.Reset();
+				for (const TowReverse::FSample& Sample : Agent->TowReverse.Samples)
+				{
+					if (Sample.Along >= Agent->TowReverse.Along && Sample.Axles.Num() > 0)
+					{
+						Run.Points.Add(Sample.Axles.Last());
+					}
+				}
+				break;
+			}
+			for (int32 K = 1; K < Run.Points.Num(); ++K)
+			{
+				Along += FVector2D::Distance(Run.Points[K - 1], Run.Points[K]);
+			}
+		}
+	}
+	return Runs;
+}
+
 bool UGroundTraffic::StrandForTest(int32 AgentId)
 {
 	const int32 Index = FindIndex(AgentId);
