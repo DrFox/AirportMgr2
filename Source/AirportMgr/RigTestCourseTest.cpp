@@ -8,6 +8,8 @@
 #include "Model/RoadAgent.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Model/AgentMotion.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
@@ -1576,8 +1578,23 @@ bool FRigCoursePlanCacheKnowsItsVehicleTest::RunTest(const FString& Parameters)
 	Course->SetVehicleForTest(0, Longer);
 	Course->PlanBetweenForTest(0, 1, 0, Plan, Reason);
 	TestEqual(TEXT("a different trailer in the same slot is planned afresh"), Course->GetPlanFindsForTest(), Before + 2);
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
 	TestNotEqual(TEXT("because the key is the vehicle's figures"),
-		ARigTestCourse::VehicleIdentity(Longer), ARigTestCourse::VehicleIdentity(UAirsideSettings::ResolveRigVehicle()));
+		ARigTestCourse::VehicleIdentity(Longer), ARigTestCourse::VehicleIdentity(Rig));
+
+	// SAME EVERY OTHER FIGURE, DIFFERENT SteerLaw (PR #340 review): TightestFollowableRadius
+	// gates on EffectiveSteerLaw, not on any field varied above, so a vehicle identical
+	// everywhere else but declared Pivot instead of RollingSteer is a DIFFERENT gate on every
+	// edge (Pivot's lock is 0 and fits everywhere; RollingSteer's Wheelbase/sin(lock) can
+	// refuse) and must not share a cached plan or refusal with the RollingSteer one.
+	FVehicle SteersDifferently = Rig;
+	if (TestEqual(TEXT("the fixture rig steers by RollingSteer, so flipping it is a real change"),
+		Rig.Chassis.SteerLaw, ESteerLaw::RollingSteer))
+	{
+		SteersDifferently.Chassis.SteerLaw = ESteerLaw::Pivot;
+		TestNotEqual(TEXT("SteerLaw alone changes the identity"),
+			ARigTestCourse::VehicleIdentity(SteersDifferently), ARigTestCourse::VehicleIdentity(Rig));
+	}
 	return true;
 }
 
@@ -1846,20 +1863,54 @@ bool FRigCourseBendsAreSmoothTest::RunTest(const FString& Parameters)
 			S.Tightest, Bend.InnerArcRadius, Bend.Ramp[0], Bend.Ramp[1], *S.LaneText));
 		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f) was laid as the smooth shape (%s)"), Bend.Position.X, Bend.Position.Y, *Bend.Reason),
 			Bend.bApplied);
-		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): the inner edge is smooth (kink %.1f deg at (%.0f, %.0f))"),
-			Bend.Position.X, Bend.Position.Y, S.InnerKink, S.InnerAt.X, S.InnerAt.Y), S.InnerKink <= BendProbe::KinkThreshold);
-		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): the outer edge is smooth (kink %.1f deg at (%.0f, %.0f))"),
-			Bend.Position.X, Bend.Position.Y, S.OuterKink, S.OuterAt.X, S.OuterAt.Y), S.OuterKink <= BendProbe::KinkThreshold);
-		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): no edge bends tighter than half its inner arc (%.0f uu at (%.0f, %.0f), arc %.0f)"),
-			Bend.Position.X, Bend.Position.Y, S.Tightest, S.TightAt.X, S.TightAt.Y, Bend.InnerArcRadius),
-			S.Tightest >= BendProbe::TightestFraction * Bend.InnerArcRadius - 1.0);
-		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): every lane is smooth (kink %.1f deg)"),
-			Bend.Position.X, Bend.Position.Y, S.LaneKink), S.LaneKink <= BendProbe::KinkThreshold);
-		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): lane pieces follow one length rule (%.0f - %.0f uu)"),
-			Bend.Position.X, Bend.Position.Y, S.ShortestStep, S.LongestStep),
-			S.Lanes > 0 && S.LongestStep <= GuidelineGeom::BendPieceLength + 1.0 && S.ShortestStep >= 0.5 * GuidelineGeom::BendPieceLength);
+		// THE FIVE SHARED SHAPE RULES, held once in BendProbe::JudgeBend since #301 - the per-tier
+		// fixture judges the same way (Airside.Build.BendLanes.EveryTierIsSmooth) and used to
+		// repeat these five TestTrue calls verbatim. MinLanes 1: the course's tiers see a variable
+		// lane count, unlike the fixture's fixed two-arm bend.
+		BendProbe::JudgeBend(*this, FString::Printf(TEXT("bend (%.0f, %.0f)"), Bend.Position.X, Bend.Position.Y),
+			S, Bend.InnerArcRadius, /*MinLanes=*/1);
 	}
 	TestTrue(FString::Printf(TEXT("the course's bends were judged (%d)"), Bends), Bends >= 14);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigCourseLayoutJsonWrittenTest,
+	"AirportMgr.RigCourse.LayoutJsonWritten",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigCourseLayoutJsonWrittenTest::RunTest(const FString& Parameters)
+{
+	// #301: Tools/Python/build_rig_test_level.py used to retype FRigCourseLayout's constants and
+	// the course's own bounding box by hand off a code comment ("Recompute this block if that
+	// file's layout constants move"). THE SEAM this test pins: Lay()'s own JSON export, written
+	// to Saved/RigCourseLayout.json for the Python script to read instead. Goes red if ToJson
+	// stops naming a figure the script needs, or if nothing ever writes the file for it to read.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	const FRigCourseLayoutResult Result = FRigCourseLayout::Lay(*Actor);
+	if (!TestTrue(TEXT("the layout placed waypoints"), Result.Waypoints.Num() > 0)) { return false; }
+	if (!TestTrue(TEXT("the bounding box is real, not the untouched sentinel"),
+		Result.BoxMax.X > Result.BoxMin.X && Result.BoxMax.Y > Result.BoxMin.Y)) { return false; }
+
+	const FString Json = FRigCourseLayout::ToJson(Result);
+	// EVERY FIGURE THE PYTHON SCRIPT NAMES (build_rig_test_level.py's COURSE_MIN_X etc.): if one
+	// goes missing from the export, the script would silently keep reading whatever figure it
+	// last had, which is exactly the drift #301 found.
+	for (const TCHAR* Key : { TEXT("\"LaneStraight\""), TEXT("\"TierPitch\""), TEXT("\"BoxMinX\""),
+		TEXT("\"BoxMaxX\""), TEXT("\"BoxMinY\""), TEXT("\"BoxMaxY\""), TEXT("\"TierCount\"") })
+	{
+		TestTrue(FString::Printf(TEXT("the JSON names %s"), Key), Json.Contains(Key));
+	}
+
+	const FString Path = FPaths::ProjectSavedDir() / TEXT("RigCourseLayout.json");
+	if (!TestTrue(TEXT("the JSON writes to Saved/ - the Python script's own read path"),
+		FFileHelper::SaveStringToFile(Json, *Path))) { return false; }
+
+	FString ReadBack;
+	if (!TestTrue(TEXT("it reads back"), FFileHelper::LoadFileToString(ReadBack, *Path))) { return false; }
+	TestEqual(TEXT("bitwise the same JSON that was written"), ReadBack, Json);
 	return true;
 }
 

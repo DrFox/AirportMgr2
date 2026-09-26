@@ -123,6 +123,11 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 	// zero calls during idle ticks is measuring the real cost and not a proxy for it.
 	++ChooseDepotCallCountForTest;
 
+	// DATED WITH THE GRAPH (#301), same rule as ARigTestCourse::PlanBetween's identical cache:
+	// clears itself when Network or its guideline revision moved since the last call, so a
+	// stale route or edge-fit answer is never served. Cheap to call every time nothing changed.
+	RouteCache.EnsureFresh(Network);
+
 	FDepotChoice Result;
 	Result.Why = EFuelRefusal::NoDepot;
 
@@ -254,7 +259,23 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		// the refusal below can say so rather than "no road".
 		Query.WithVehicle(TruckVehicle);
 
-		const FRoutePlan Plan = RouteSearch::Find(Network, Query);
+		// CACHED PER (depot pose, stand hydrant, truck figures) (#301, the shape ARigTestCourse's
+		// identical cache had been carrying alone - see RoutePlanCache.h): the SAME pair is
+		// asked again the moment a DIFFERENT depot frees up (FleetRevision moves, the graph does
+		// not), and a refusal is as much a fact about the graph and the truck as a route is.
+		FRoutePlan Plan;
+		if (const FCachedRoutePlan* Hit = RouteCache.Lookup(Instance.PoseNode, StandFuel, TruckVehicle))
+		{
+			Plan = Hit->Plan;
+		}
+		else
+		{
+			// AND EACH EDGE'S FIT: most of a Find's cost is tracing the truck round every curve
+			// the search relaxes, which every depot's own Find asks about the same shared roads.
+			Query.FitCache = &RouteCache.FitCacheFor(TruckVehicle);
+			Plan = RouteSearch::Find(Network, Query);
+			RouteCache.Store(Instance.PoseNode, StandFuel, TruckVehicle, Plan, FString());
+		}
 		if (Plan.Result == ERouteResult::TooNarrow)
 		{
 			bAnyTooNarrow = true;

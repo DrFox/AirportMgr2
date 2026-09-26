@@ -19,143 +19,55 @@
 #include "Solve/GuidelineGeom.h"
 #include "Tool/RoadEditTarget.h"
 
-// NAMED, NOT ANONYMOUS: this module is a unity build, and two files' anonymous helpers of one
-// name collide once they share a blob.
-namespace RigCourse
+/** A lane-local point in world XY for Tier. */
+FVector2D FRigCourseLayout::LanePoint(int32 Tier, double X, double Y)
 {
-	// THE LAYOUT, uu (1 uu = 1 cm). One LANE per tier, drawn in lane-local coordinates entering
-	// at the origin heading +X (UE: +Y is to the driver's RIGHT):
-	//
-	//                 P3 -------------- P4   (exit, heading +X)
-	//                 |
-	//                 P2 ---- S  )  (T junction; stem east to a dead end, balloon past S)
-	//                 |
-	//   P0 ---------- P1
-	//   (entry)   80 m straight
-	//
-	// P1 turns +X to +Y: a RIGHT 90. P3 turns +Y to +X: a LEFT 90. The labels are computed
-	// from the geometry (TurnFeature), never typed, so this sketch cannot disagree with them.
-	constexpr double LaneStraight = 8000.0;   // P0 -> P1, the 80 m straight
-	constexpr double CornerRise   = 3000.0;   // P1 -> P2
-	constexpr double StemLength   = 3000.0;   // P2 -> S, the T's stem and the dead end
-	constexpr double UpperRise    = 3000.0;   // P2 -> P3
-	constexpr double ExitRun      = 6000.0;   // P3 -> P4
-	constexpr double LaneLength   = LaneStraight + ExitRun;   // 140 m
-	constexpr double LaneHeight   = CornerRise + UpperRise;   // 60 m
+	const bool bRotated = (Tier % 2) == 1;
+	const FVector2D Local = bRotated ? FVector2D(LaneLength - X, LaneHeight - Y) : FVector2D(X, Y);
+	return Local + FVector2D(0.0, TierPitch * Tier);
+}
 
-	// 60 m of CLEAR GROUND between lanes (the brief's figure), on top of a lane's own height:
-	// a lane is not a line, and the dead end's U-turn balloon reaches ~3.9x the bowser's lock
-	// (~27 m) past S (UTurnGeom::HeightFactor), which stays inside the lane's own band.
-	constexpr double TierGap   = 6000.0;
-	constexpr double TierPitch = LaneHeight + TierGap;
+/** Right or left from the turn In -> Out. UE is left-handed seen from above: +X to +Y is right. */
+ERigCourseFeature FRigCourseLayout::TurnFeature(const FVector2D& In, const FVector2D& Out)
+{
+	return FVector2D::CrossProduct(In, Out) > 0.0 ? ERigCourseFeature::Right90 : ERigCourseFeature::Left90;
+}
 
-	// Connectors: WIDE in the middle, so a join refuses as little as it can; the 20 m stub that
-	// meets a lane is in THAT LANE'S tier, so a lane's entry and exit are not width steps - the
-	// width step is ONE named feature of its own (WidthStepX below), not an accident of every
-	// join. Odd tiers are the lane ROTATED 180 degrees about its centre, so every lane is driven
-	// with the same turns in the same order (a serpentine), joined by an east link, a west link,
-	// and a return road round the outside.
-	constexpr double EastLinkX   = LaneLength + 2000.0;
-	constexpr double WestLinkX   = -3000.0;
-	constexpr double ReturnEastX = LaneLength + 6000.0;
-	constexpr double ReturnWestX = -5000.0;
-	constexpr double ReturnSouthY = -4000.0;
-
-	// THE WIDTH STEP, on the return road's south straight: Narrow from the east corner to here,
-	// Wide from here on, so the leg that ends at the west corner crosses a Narrow -> Wide change
-	// at a straight-through node. KEPT AS A NAMED FEATURE (controller ruling 5, 2026-09-25): it
-	// was laid to pin a builder defect - the derived turn there was a lane-offset jog, MinRadius 0
-	// and unmeasured, so route search did not gate it, and FSpeedProfile reported a sharp vertex
-	// and crawled it (55 s for the rig over a 69 m straight that takes 14 s without the step).
-	// FIXED IN THE BUILDER the same day, where it belonged: both cuts are inset and each lane
-	// crosses the taper on an S sized for Wide's design vehicle, the rig (FRoadNetworkSolver's
-	// WidthTaperLength, 412 uu here). OneLoopHeadless now asserts NO sharp vertex on it.
-	constexpr double WidthStepX = LaneLength / 2.0;
-	constexpr int32 WidthStepFrom = 0;   // Narrow
-	constexpr int32 WidthStepTo = 2;     // Wide
-
-	constexpr int32 TierCount = 3;
-	constexpr int32 ConnectorTier = 2;   // Wide
-	const TCHAR* const TierNames[TierCount] = { TEXT("Narrow"), TEXT("Standard"), TEXT("Wide") };
-
-	/** A lane-local point in world XY for Tier. */
-	FVector2D LanePoint(int32 Tier, double X, double Y)
+const TCHAR* FRigCourseLayout::FeatureText(ERigCourseFeature Feature)
+{
+	switch (Feature)
 	{
-		const bool bRotated = (Tier % 2) == 1;
-		const FVector2D Local = bRotated ? FVector2D(LaneLength - X, LaneHeight - Y) : FVector2D(X, Y);
-		return Local + FVector2D(0.0, TierPitch * Tier);
-	}
-
-	/** Right or left from the turn In -> Out. UE is left-handed seen from above: +X to +Y is right. */
-	ERigCourseFeature TurnFeature(const FVector2D& In, const FVector2D& Out)
-	{
-		return FVector2D::CrossProduct(In, Out) > 0.0 ? ERigCourseFeature::Right90 : ERigCourseFeature::Left90;
-	}
-
-	const TCHAR* FeatureText(ERigCourseFeature Feature)
-	{
-		switch (Feature)
-		{
-		case ERigCourseFeature::Straight:    return TEXT("straight 80 m");
-		case ERigCourseFeature::Right90:     return TEXT("right 90");
-		case ERigCourseFeature::Left90:      return TEXT("left 90");
-		case ERigCourseFeature::TeeJunction: return TEXT("T junction");
-		case ERigCourseFeature::DeadEnd:     return TEXT("dead end U-turn");
-		case ERigCourseFeature::WidthStep:   return TEXT("Narrow->Wide mid-straight");
-		default:                             return TEXT("connector");
-		}
+	case ERigCourseFeature::Straight:    return TEXT("straight 80 m");
+	case ERigCourseFeature::Right90:     return TEXT("right 90");
+	case ERigCourseFeature::Left90:      return TEXT("left 90");
+	case ERigCourseFeature::TeeJunction: return TEXT("T junction");
+	case ERigCourseFeature::DeadEnd:     return TEXT("dead end U-turn");
+	case ERigCourseFeature::WidthStep:   return TEXT("Narrow->Wide mid-straight");
+	default:                             return TEXT("connector");
 	}
 }
 
-ARigTestCourse::ARigTestCourse()
+const TCHAR* FRigCourseLayout::TierName(int32 Tier)
 {
-	PrimaryActorTick.bCanEverTick = true;
-	// The vehicles are NOT resolved here: a constructor also builds the CDO at module load,
-	// and the content resolvers read the content set - see BuildCourse.
+	static const TCHAR* const Names[TierCount] = { TEXT("Narrow"), TEXT("Standard"), TEXT("Wide") };
+	return Names[FMath::Clamp(Tier, 0, TierCount - 1)];
 }
 
-void ARigTestCourse::BeginPlay()
+FRigCourseLayoutResult FRigCourseLayout::Lay(IRoadEditTarget& Target)
 {
-	Super::BeginPlay();
-	if (ARoadNetworkActor* Actor = ResolveNetworkActor())
+	FRigCourseLayoutResult Result;
+	Result.BoxMin = FVector2D(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
+	Result.BoxMax = FVector2D(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
+
+	// EVERY PLACED NODE, TRACKED HERE (#301): the bounding box ToJson exports is measured off
+	// what Lay() actually places, never a hand re-derivation of the constants above - the shape
+	// Tools/Python/build_rig_test_level.py's own retyped comment used to be.
+	auto Place = [&Target, &Result](const FVector2D& Where) -> int32
 	{
-		BuildCourse(*Actor);
-	}
-	else
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: no ARoadNetworkActor in the level - nothing laid, nothing driven."));
-	}
-}
-
-ARoadNetworkActor* ARigTestCourse::ResolveNetworkActor()
-{
-	if (NetworkActor == nullptr)
-	{
-		NetworkActor = ARoadNetworkActor::Find(GetWorld());
-	}
-	return NetworkActor;
-}
-
-void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
-{
-	using namespace RigCourse;
-
-	Waypoints.Reset();
-	RefusalLabels.Reset();
-
-	Vehicles = { UAirsideSettings::ResolveRigVehicle(), UAirsideSettings::ResolveUtilityTowVehicle() };
-	VehicleNames = { TEXT("rig"), TEXT("utility") };
-
-	const int32 Widths = Target.GetWidthCount(ERoadKind::ServiceRoad);
-	if (Widths < TierCount)
-	{
-		// Laid anyway - ResolveWidthProfile clamps - but the tier names would then lie.
-		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: the content set has %d service-road tiers, the course expects %d."),
-			Widths, TierCount);
-	}
-
-	auto Place = [&Target](const FVector2D& Where) -> int32
-	{
+		Result.BoxMin.X = FMath::Min(Result.BoxMin.X, Where.X);
+		Result.BoxMin.Y = FMath::Min(Result.BoxMin.Y, Where.Y);
+		Result.BoxMax.X = FMath::Max(Result.BoxMax.X, Where.X);
+		Result.BoxMax.Y = FMath::Max(Result.BoxMax.Y, Where.Y);
 		return Target.PlaceNode(Where);
 	};
 	auto Id = [&Target](int32 Index)
@@ -164,14 +76,12 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 		Target.MakeLiveNodeId(Index, Out);
 		return Out;
 	};
-	int32 Laid = 0;
-	RefusedConnects = 0;
-	auto Connect = [this, &Target, &Laid](int32 A, int32 B, int32 Tier)
+	auto Connect = [&Target, &Result](int32 A, int32 B, int32 Tier)
 	{
-		if (Target.ConnectNodes(A, B, ERoadKind::ServiceRoad, Tier)) { ++Laid; }
+		if (Target.ConnectNodes(A, B, ERoadKind::ServiceRoad, Tier)) { ++Result.SegmentsLaid; }
 		else
 		{
-			++RefusedConnects;
+			++Result.SegmentsRefused;
 			UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: ConnectNodes(%d, %d, tier %d) refused."), A, B, Tier);
 		}
 	};
@@ -225,17 +135,17 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 	for (int32 Tier = 0; Tier < TierCount; ++Tier)
 	{
 		const FLaneNodes& L = Lanes[Tier];
-		const FString Name = TierNames[Tier];
-		auto Add = [this, &Id, &Name, Tier](int32 Node, int32 From, int32 Next, ERigCourseFeature Feature, const TCHAR* Detail)
+		const TCHAR* Name = TierName(Tier);
+		auto Add = [&Result, &Id, Name, Tier](int32 Node, int32 From, int32 Next, ERigCourseFeature Feature, const TCHAR* Detail)
 		{
-			FRigCourseWaypoint& W = Waypoints.AddDefaulted_GetRef();
+			FRigCourseWaypoint& W = Result.Waypoints.AddDefaulted_GetRef();
 			W.Node = Id(Node);
 			W.From = Id(From);
 			W.Next = Id(Next);
 			W.Tier = Tier;
 			W.Feature = Feature;
-			W.Label = FString::Printf(TEXT("%s, %s"), *Name,
-				Detail != nullptr ? Detail : RigCourse::FeatureText(Feature));
+			W.Label = FString::Printf(TEXT("%s, %s"), Name,
+				Detail != nullptr ? Detail : FeatureText(Feature));
 		};
 		const FVector2D P0 = LanePoint(Tier, 0.0, 0.0);
 		const FVector2D P1 = LanePoint(Tier, LaneStraight, 0.0);
@@ -255,9 +165,9 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 	}
 	// The return: to the width step's node, then ACROSS it to the west corner - so the one leg
 	// that drives the taper is the one labelled with it, and no other leg does.
-	auto AddReturn = [this, &Id](int32 Node, int32 From, int32 Next, ERigCourseFeature Feature, const TCHAR* Label)
+	auto AddReturn = [&Result, &Id](int32 Node, int32 From, int32 Next, ERigCourseFeature Feature, const TCHAR* Label)
 	{
-		FRigCourseWaypoint& W = Waypoints.AddDefaulted_GetRef();
+		FRigCourseWaypoint& W = Result.Waypoints.AddDefaulted_GetRef();
 		W.Node = Id(Node);
 		W.From = Id(From);
 		W.Next = Id(Next);
@@ -266,7 +176,86 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 		W.Label = Label;
 	};
 	AddReturn(Step, R1, R2, ERigCourseFeature::Connector, TEXT("return, to the width step"));
-	AddReturn(R2, Step, R3, ERigCourseFeature::WidthStep, RigCourse::FeatureText(ERigCourseFeature::WidthStep));
+	AddReturn(R2, Step, R3, ERigCourseFeature::WidthStep, FeatureText(ERigCourseFeature::WidthStep));
+
+	return Result;
+}
+
+FString FRigCourseLayout::ToJson(const FRigCourseLayoutResult& Result)
+{
+	// EVERY FIGURE build_rig_test_level.py used to retype by hand off a code comment (#301),
+	// plus the bounding box Lay() actually measured - so a Python re-run always reads THIS
+	// build's numbers, never a stale sketch. Flat and hand-formatted: this project has no JSON
+	// writer dependency to reach for, and the shape is fixed and small.
+	return FString::Printf(
+		TEXT("{")
+		TEXT("\"LaneStraight\":%.1f,\"CornerRise\":%.1f,\"StemLength\":%.1f,\"UpperRise\":%.1f,\"ExitRun\":%.1f,")
+		TEXT("\"LaneLength\":%.1f,\"LaneHeight\":%.1f,\"TierGap\":%.1f,\"TierPitch\":%.1f,")
+		TEXT("\"EastLinkX\":%.1f,\"WestLinkX\":%.1f,\"ReturnEastX\":%.1f,\"ReturnWestX\":%.1f,\"ReturnSouthY\":%.1f,")
+		TEXT("\"WidthStepX\":%.1f,\"WidthStepFrom\":%d,\"WidthStepTo\":%d,")
+		TEXT("\"TierCount\":%d,\"ConnectorTier\":%d,")
+		TEXT("\"BoxMinX\":%.1f,\"BoxMaxX\":%.1f,\"BoxMinY\":%.1f,\"BoxMaxY\":%.1f,")
+		TEXT("\"SegmentsLaid\":%d,\"SegmentsRefused\":%d,\"Waypoints\":%d")
+		TEXT("}"),
+		LaneStraight, CornerRise, StemLength, UpperRise, ExitRun,
+		LaneLength, LaneHeight, TierGap, TierPitch,
+		EastLinkX, WestLinkX, ReturnEastX, ReturnWestX, ReturnSouthY,
+		WidthStepX, WidthStepFrom, WidthStepTo,
+		TierCount, ConnectorTier,
+		Result.BoxMin.X, Result.BoxMax.X, Result.BoxMin.Y, Result.BoxMax.Y,
+		Result.SegmentsLaid, Result.SegmentsRefused, Result.Waypoints.Num());
+}
+
+ARigTestCourse::ARigTestCourse()
+{
+	PrimaryActorTick.bCanEverTick = true;
+	// The vehicles are NOT resolved here: a constructor also builds the CDO at module load,
+	// and the content resolvers read the content set - see BuildCourse.
+}
+
+void ARigTestCourse::BeginPlay()
+{
+	Super::BeginPlay();
+	if (ARoadNetworkActor* Actor = ResolveNetworkActor())
+	{
+		BuildCourse(*Actor);
+	}
+	else
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: no ARoadNetworkActor in the level - nothing laid, nothing driven."));
+	}
+}
+
+ARoadNetworkActor* ARigTestCourse::ResolveNetworkActor()
+{
+	if (NetworkActor == nullptr)
+	{
+		NetworkActor = ARoadNetworkActor::Find(GetWorld());
+	}
+	return NetworkActor;
+}
+
+void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
+{
+	Waypoints.Reset();
+	RefusalLabels.Reset();
+
+	Vehicles = { UAirsideSettings::ResolveRigVehicle(), UAirsideSettings::ResolveUtilityTowVehicle() };
+	VehicleNames = { TEXT("rig"), TEXT("utility") };
+
+	const int32 Widths = Target.GetWidthCount(ERoadKind::ServiceRoad);
+	if (Widths < FRigCourseLayout::TierCount)
+	{
+		// Laid anyway - ResolveWidthProfile clamps - but the tier names would then lie.
+		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: the content set has %d service-road tiers, the course expects %d."),
+			Widths, FRigCourseLayout::TierCount);
+	}
+
+	// THE GEOMETRY ITSELF (#301): FRigCourseLayout::Lay is a plain function, world-free but for
+	// Target - this actor's own job is the vehicles, the runners and the bookkeeping below.
+	FRigCourseLayoutResult Result = FRigCourseLayout::Lay(Target);
+	Waypoints = MoveTemp(Result.Waypoints);
+	RefusedConnects = Result.SegmentsRefused;
 
 	// THE RUNNERS: the rig forwards from the loop's start, the utility the other way from the
 	// same node, after UtilityStartDelay.
@@ -279,7 +268,7 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 		Runner.StartDelay = Runner.bReverse ? UtilityStartDelay : 0.0;
 	}
 	UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: course laid - %d segment(s) (%d refused), %d waypoint(s), %d feature(s), %d tier(s) of %d."),
-		Laid, RefusedConnects, Waypoints.Num(), FeatureCountForTest(), TierCount, Widths);
+		Result.SegmentsLaid, RefusedConnects, Waypoints.Num(), FeatureCountForTest(), FRigCourseLayout::TierCount, Widths);
 }
 
 int32 ARigTestCourse::FeatureCountForTest() const
@@ -627,28 +616,9 @@ void ARigTestCourse::PassMarker(FRigCourseRunner& Runner, const FRoadAgent& Agen
 
 uint32 ARigTestCourse::VehicleIdentity(const FVehicle& Vehicle)
 {
-	uint32 Hash = GetTypeHash(Vehicle.TypeCode);
-	auto Mix = [&Hash](double Value) { Hash = HashCombine(Hash, GetTypeHash(Value)); };
-	Mix(Vehicle.BodyWidth);
-	Mix(Vehicle.BodyFrontX);
-	Mix(Vehicle.BodyRearX);
-	Mix(Vehicle.Chassis.SteerAxleX);
-	Mix(Vehicle.Chassis.FixedAxleX);
-	Mix(Vehicle.Chassis.Ground.MaxSteerDegrees);
-	// The speed figures too: the whole-route tow check drives the plan at them.
-	Mix(Vehicle.Chassis.Ground.Taxi.SpeedCap);
-	Mix(Vehicle.Chassis.Ground.Taxi.Accel);
-	Mix(Vehicle.Chassis.Ground.Taxi.Decel);
-	Mix(Vehicle.Chassis.Ground.MaxLateralAccelUu);
-	for (const FTowLink& Link : Vehicle.Tow)
-	{
-		Mix(Link.HitchX);
-		Mix(Link.Length);
-		Mix(Link.BodyFront);
-		Mix(Link.BodyRear);
-		Mix(Link.Width);
-	}
-	return HashCombine(Hash, GetTypeHash(Vehicle.Tow.Num()));
+	// FORWARDS (#301): the figures-hash itself now lives in Airside/Model/RoutePlanCache.h,
+	// shared with FuelService::ChooseDepot. Kept at this name and signature - see the header.
+	return RoutePlanCache::VehicleIdentity(Vehicle);
 }
 
 bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCourseWaypoint& To, int32 Slot,
@@ -675,17 +645,11 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 	// AirportMgr.RigCourse.OneLoopHeadless's "route plan(s)" line for after. A refusal is cached
 	// too: it is as much a fact about the graph and the body as a route is. The vehicle is its
 	// slot: Vehicles is fixed once the course is laid.
-	const uint32 Revision = Network->GetGuidelineRevision();
-	if (Network != PlanCacheNetwork.Get() || Revision != PlanCacheRevision)
-	{
-		PlanCache.Reset();
-		FitCaches.Reset();
-		PlanCacheNetwork = Network;
-		PlanCacheRevision = Revision;
-	}
-	const uint32 Identity = VehicleIdentity(Vehicles[Slot]);
-	const FPlanCacheKey Key{ Start, Goal, Identity };
-	if (const FCachedPlan* Hit = PlanCache.Find(Key))
+	// FRoutePlanCache (#301): the cache itself moved to Airside/Model/RoutePlanCache.h, the one
+	// owner FuelService::ChooseDepot's identical cache now shares - this call site is unchanged
+	// in shape, only in which type owns the tables.
+	Cache.EnsureFresh(*Network);
+	if (const FCachedRoutePlan* Hit = Cache.Lookup(Start, Goal, Vehicles[Slot]))
 	{
 		OutPlan = Hit->Plan;
 		OutReason = Hit->Reason;
@@ -693,7 +657,7 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 	}
 	ON_SCOPE_EXIT
 	{
-		PlanCache.Add(Key, FCachedPlan{ OutPlan, OutReason });
+		Cache.Store(Start, Goal, Vehicles[Slot], OutPlan, OutReason);
 	};
 	// PlayerIssued, NOT VehicleToJob: the course is a tool asking for a route directly, and
 	// VehicleToJob requires the occupancy table - a congestion cost that, with the other vehicle
@@ -703,7 +667,7 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 	Query.WithVehicle(Vehicles[Slot]);
 	// AND EACH EDGE'S FIT, per vehicle, dated with the plans above: most of a Find's cost is
 	// tracing the vehicle round curves, and every Find of the look-ahead asks the same curves.
-	Query.FitCache = &FitCaches.FindOrAdd(Identity);
+	Query.FitCache = &Cache.FitCacheFor(Vehicles[Slot]);
 	const double FindBegan = FPlatformTime::Seconds();
 	OutPlan = RouteSearch::Find(*Network, Query);
 	++PlanFinds;
