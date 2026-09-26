@@ -1,8 +1,6 @@
 #include "CoreMinimal.h"
 #include "Content/AirsideSettings.h"
 #include "Build/AnchorLink.h"
-#include "Build/RoadGuidelineBuilder.h"
-#include "Build/RoadNetworkSolver.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/AirlineDefinition.h"
@@ -12,6 +10,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Profiles/RoadProfile.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -48,7 +47,7 @@ namespace
 
 		URoadProfile* Runway = URoadProfile::MakeTransient(RunwayWidth, 1500.0, 450.0);
 		Runway->bContinuousThroughJunctions = true;
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+		URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 		// SPLIT AT THE EXIT: a T-junction is what puts a guideline node on the centreline for
 		// RunwayExitNodes to find - see ArrivalDispatchTest.
@@ -61,8 +60,7 @@ namespace
 		const FRoadNodeId TaxiEnd = Net->AddNode(ExitAt + FVector2D(0.0, -20000.0));
 		Net->AddStraightSegment(ExitNode, TaxiEnd, Taxiway);
 
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+		TestGraph::Derive(*Net);
 
 		// Facing east (heading 0), so its lead-in casts west onto the taxiway.
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();

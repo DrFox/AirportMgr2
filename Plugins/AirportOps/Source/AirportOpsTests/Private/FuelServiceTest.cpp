@@ -15,6 +15,7 @@
 #include "Model/SimClock.h"
 #include "Model/Vehicle.h"
 #include "Profiles/RoadProfile.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -226,8 +227,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 		//
 		// NORTH of the taxiway's far end, so a departure taxis AWAY from the stand and the
 		// leaving is unmistakable on the phase.
-		URoadProfile* Strip = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Strip->bContinuousThroughJunctions = true;
+		URoadProfile* Strip = TestProfiles::Runway();
 		const FRoadNodeId West = Net->AddNode(FVector2D(-50000.0, 20000.0));
 		const FRoadNodeId Mid = Net->AddNode(FVector2D(-10000.0, 20000.0));
 		const FRoadNodeId East = Net->AddNode(FVector2D(50000.0, 20000.0));

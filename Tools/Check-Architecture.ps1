@@ -399,7 +399,12 @@ $AllowedCallers = @(
         # issue exists to stop shipping. Follow-up: route it through ARoadNetworkActor.
         Name        = 'UAirsideSettings::GetContent (outside Content/ and the actor)'
         Pattern     = 'UAirsideSettings::GetContent\s*\(\s*\)'
-        ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp', 'Public\Present\RoadNetworkActor.h', 'Private\Present\RoadNetworkActor.cpp', 'Private\Debug\RoadJunctionGallery.cpp')
+        # #311: Private\Testing\AirsideTestGraph.cpp is TestProfiles::ServiceTiers - a TEST
+        # fixture (the whole file behind WITH_DEV_AUTOMATION_TESTS, in the Public/Private
+        # Testing/ split #189 established) that happens to live inside the Airside module
+        # rather than AirsideTests, so $inTests's own '*Test.cpp' name match misses it - named
+        # here because the file itself is not, the same exemption every test caller gets.
+        ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp', 'Public\Present\RoadNetworkActor.h', 'Private\Present\RoadNetworkActor.cpp', 'Private\Debug\RoadJunctionGallery.cpp', 'Private\Testing\AirsideTestGraph.cpp')
         TestExempt  = $true
         ProdReason  = "go through Content/ or ARoadNetworkActor - see this row's own comment for the one pre-existing exception"
     },
@@ -945,15 +950,18 @@ if (Test-Path $roadEntityHeader) {
 }
 $ranRules.Add('roadentity-no-airframe-motion')
 
-# --- 19. Runway/taxiway profile triples are TestProfiles', nowhere else in AirsideTests -----
+# --- 19. Runway/taxiway profile triples are TestProfiles', nowhere else in AirsideTests or --
+#         AirportOpsTests
 # Issue #310: TestProfiles::Runway/NarrowRunway/Taxiway existed since #102 (f0714c80), and 28
 # non-fixture sites across 12 files kept retyping the same MakeTransient triple anyway - some
 # of them (EditToolTest, MeshFreshnessTest, RunwayDisconnectTest) newer than the helper itself.
-# AirsideTestFixtures.cpp is the one legal definer. Scoped to AirsideTests only: AirsideTests.h
-# is Private to that module (its own top comment), so AirportOpsTests cannot call TestProfiles
-# and its OWN copies of these triples (FlightBoardTest, FuelServiceTest, OfferGeneratorTest,
-# OpsRuntimeTest, OpsSaveTest) are a separate finding, reported but not fixed by #310 - moving
-# TestProfiles to a public header is a bigger seam than this issue's scope.
+# AirsideTestFixtures.cpp is the one legal definer. #310 scoped this to AirsideTests only:
+# TestProfiles then lived in AirsideTests/Private/AirsideTestFixtures.h, Private to that module,
+# so AirportOpsTests could not call it and its OWN copies of these triples (FlightBoardTest,
+# FuelServiceTest, OfferGeneratorTest, OpsRuntimeTest, OpsSaveTest) were reported but not fixed.
+# #311 moved TestProfiles to Airside/Public/Testing/AirsideTestGraph.h and migrated those five
+# files onto it, so the rule widens to AirportOpsTests too - the same "one legal definer"
+# reasoning, now with two modules that can each retype the triple instead of one.
 #
 # ALL THREE ARGUMENTS, exactly paired (4500/1500/450, 1800/1500/180, 2300/1500/230): the 2-arg
 # MakeTransient(Width, LaneWidth) overload this codebase also uses (LeadInSweepTest,
@@ -961,8 +969,8 @@ $ranRules.Add('roadentity-no-airframe-motion')
 # NOT what TestProfiles::Runway/NarrowRunway/Taxiway produce - matching on the first two
 # arguments alone flagged a dozen of those as false positives before this comment.
 $profileTriplePattern = 'MakeTransient\(\s*(4500\.0,\s*1500\.0,\s*450\.0|1800\.0,\s*1500\.0,\s*180\.0|2300\.0,\s*1500\.0,\s*230\.0)\s*\)'
-foreach ($file in Get-Sources $airsideTests @('.h', '.cpp')) {
-    if ($file.Name -eq 'AirsideTestFixtures.cpp') { continue }
+foreach ($file in (Get-Sources $airsideTests @('.h', '.cpp')) + (Get-Sources $opsTests @('.h', '.cpp'))) {
+    if ($file.Name -eq 'AirsideTestFixtures.cpp' -or $file.Name -eq 'AirsideTestGraph.cpp') { continue }
     foreach ($h in (Select-String -Path $file.FullName -Pattern $profileTriplePattern)) {
         $t = $h.Line.Trim()
         if ($t.StartsWith('//') -or $t.StartsWith('*') -or $t.StartsWith('/*')) { continue }

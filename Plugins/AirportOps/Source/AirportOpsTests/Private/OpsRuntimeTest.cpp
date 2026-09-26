@@ -21,6 +21,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
+#include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -49,8 +50,7 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 	// A RUNWAY, clear of the road above, so UFlightBoard::DefaultApproachFocus has a threshold
 	// to find - issue #105's follow-up comment on this test asks for exactly that, plus the
 	// offer schedule check below.
-	URoadProfile* RunwayProfile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	RunwayProfile->bContinuousThroughJunctions = true;
+	URoadProfile* RunwayProfile = TestProfiles::Runway();
 	Actor->MinimumRunwayLength = 100.0;   // short, deliberately - see MeshFreshnessTest's own comment
 	if (!TestTrue(TEXT("a runway is placed"),
 		Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), RunwayProfile)))

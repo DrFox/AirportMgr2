@@ -11,6 +11,7 @@
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
 #include "Profiles/RoadProfile.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -319,8 +320,7 @@ bool FFlightBoardDefaultApproachFocusTest::RunTest(const FString& Parameters)
 		UFlightBoard::DefaultApproachFocus(*Net, Focus));
 	TestEqual(TEXT("and OutFocus is left untouched on refusal"), Focus, FVector2D(999.0, 999.0));
 
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 
 	// The SHORTER runway, placed first.
 	const FRoadNodeId A0 = Net->AddNode(FVector2D(0.0, 0.0));
