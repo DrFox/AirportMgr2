@@ -8,8 +8,9 @@ creates the asset and resolves the rotation axes with the editor down, the wirin
 it with the editor up - and that is one restart, not a wall. See
 docs/2026-09-20-animgraph-authoring.md.
 
-EXTRACTED FROM wire_plane5_anim.py ON 2026-09-21, when plane7 needed it. That script was
-itself copied from wire_fueltruck_anim.py, so plane7 would have been the third near-identical
+EXTRACTED FROM plane5's own wiring script ON 2026-09-21 (since retired - see Issue #294),
+when plane7 needed it. That script was itself copied from wire_fueltruck_anim.py, so plane7
+would have been the third near-identical
 400 lines - and on the same day airside_anim.py was made out of four copies of the bone plan,
 a third copy of this was not defensible. Nothing here changed in the move except that five
 constants became a Model.

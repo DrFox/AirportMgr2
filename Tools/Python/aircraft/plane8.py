@@ -19,8 +19,8 @@ exact.
 
 THREE RIG FIGURES ARE READ FROM THE MODELS REPO, NOT TYPED. plane8/scripts/rig_map.json carries
 `retract_deg`, `truck_tilt_deg` and `door_close_deg` per bone, written by the same build_rig.py
-that proved each against build_gear.py's fold. Tools/wire_plane8_anim.py reads the same file for
-its multipliers, so the ABP's per-type angle and the graph's ratios cannot disagree.
+that proved each against build_gear.py's fold. `_anim_multiplier()` below reads the same file
+for its multipliers, so the ABP's per-type angle and the graph's ratios cannot disagree.
 
 THIS RIG'S rig_map.json HAS A DIFFERENT SHAPE FROM plane9's/plane11's/plane13's, because plane8
 genuinely has more than one gear unit and they do not: `retract_deg`/`truck_tilt_deg` are
@@ -117,8 +117,8 @@ PROP_BLADE_COUNT = 24
 def _anim_multiplier():
     """Per-bone gear/truck multipliers for Tools/wire_plane_anim.py's PLAN, read off THE SAME
     plane8/scripts/rig_map.json the ABP's `angles=RigMap` below reads - one file, read twice,
-    rather than a second copy of 90.0/54.72 typed into a wiring script the way
-    Tools/wire_plane8_anim.py used to (Issue #294).
+    rather than a second copy of 90.0/54.72 typed into plane8's own retired wiring script the
+    way it used to (Issue #294).
 
     THE A380 HAS THREE RETRACT ANGLES - nose forward 77.66, wing inboard 90.00, body aft
     54.72 - and UAirsideAgentAnim drives every `gear` bone from ONE GearRetractedAngleDegrees
@@ -195,13 +195,13 @@ def get_spec():
         gear=GEAR,
         angles=RigMap(
             RIG_MAP,
-            # THE WING'S 90, and the other units scale off it in wire_plane8_anim.py.
+            # THE WING'S 90, and the other units scale off it in `_anim_multiplier()` above.
             gear=lambda d: d["retract_deg"]["gear_wing_L"],
             door=lambda d: d["door_close_deg"],
             # THE BODY BOGIE'S 54.72; the wing bogies scale to 0 in the wiring.
             truck=lambda d: max(d["truck_tilt_deg"].values()),
-            note=lambda d: ("NOTE per-bone retract %s and truck tilt %s ride the wiring "
-                           "multipliers - see Tools/wire_plane8_anim.py"
+            note=lambda d: ("NOTE per-bone retract %s and truck tilt %s ride the "
+                           "anim_multiplier ratios - see `_anim_multiplier()` above"
                            % (d["retract_deg"], d["truck_tilt_deg"])),
         ),
         requirements=REQUIREMENTS,

@@ -10,12 +10,12 @@ NOTE those lines land in the log, not on stdout - the commandlet's stdout carrie
 LogInit and errors, so a run that looks silent has usually worked.
 
 ONE MECHANISM, FOURTEEN SPECS - Issue #294, `build_aircraft_type.py <key>`'s sibling for the
-same `aircraft/<key>.py` spec (Issue #290 / PR #334). build_plane1_anim.py through
-build_plane14_anim.py were 2,675 lines that were the same script fourteen times over: `run()`,
-`verify()`, the create-or-load asset dance and the "read the axis plan / print the mode notes"
-prose were byte-identical across all but two of the fleet, DRIVEN_BONES retyped what
-airside_anim.report_bone_plan(joint_names(SOURCE)) already computes a page below it, and one
-copy-paste survived unnoticed for a release: build_plane14_anim.py's RAKED was correctly ()
+same `aircraft/<key>.py` spec (Issue #290 / PR #334). The fourteen build_plane<N>_anim.py
+scripts this replaced (2,675 lines, since deleted) were the same script fourteen times over:
+`run()`, `verify()`, the create-or-load asset dance and the "read the axis plan / print the
+mode notes" prose were byte-identical across all but two of the fleet, DRIVEN_BONES retyped
+what airside_anim.report_bone_plan(joint_names(SOURCE)) already computes a page below it, and
+one copy-paste survived unnoticed for a release: plane14's own copy had RAKED correctly ()
 but its say() line insisted "ONE BONE IS RAKED ON PURPOSE" regardless, copied from plane9's or
 plane12's script and never re-typed when RAKED was.
 
@@ -44,7 +44,7 @@ steer bone, exactly as their retired wire_plane<N>_anim.py scripts typed by hand
 TWO AIRCRAFT ARE NOT LIKE THE OTHER TWELVE. plane1 and plane2 (`spec.wire_script = False`)
 were wired by hand in the editor before this tooling existed and carry no
 Tools/wire_<key>_anim.py counterpart at all - this script prints their bone plan for a human
-to wire and stops there, exactly as build_plane1_anim.py and build_plane2_anim.py did. plane4
+to wire and stops there, exactly as their own retired build_plane<N>_anim.py scripts did. plane4
 (`spec.create_abp = False`) predates the tooling in the OTHER direction: ABP_Plane4 was
 duplicated from ABP_Plane2 in the editor on 2026-09-19 and retargeted by hand, so this script
 measures an asset that must already exist rather than inventing an empty one that would point

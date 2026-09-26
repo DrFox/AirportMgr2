@@ -159,8 +159,8 @@ TURNAROUND_SECONDS = 600.0
 # per-frame step the animation may take before the disc aliases backwards.
 PROP_BLADE_COUNT = 2
 
-# THE MEASURED-AGAINST-PUBLISHED TABLE, PRINTED EVERY RUN, which is the habit build_plane4_type
-# .py's nose overhang argued for: a disagreement between the model and the real aeroplane is
+# THE MEASURED-AGAINST-PUBLISHED TABLE, PRINTED EVERY RUN, which is the habit plane4's own
+# nose overhang check argued for: a disagreement between the model and the real aeroplane is
 # worth SEEING each time rather than discovering. Nothing here compensates for one - the model
 # is the authority for everything the game draws, and a fudge factor would outlive the fix.
 PUBLISHED_TABLE = [
@@ -180,8 +180,8 @@ def _report(spec, m, say, fail):
 
 def _anim_report_extra(say):
     """plane1's OWN wiring finding, printed by build_aircraft_anim.py after the bone list -
-    see AircraftSpec.wire_script and .anim_report_extra. Carried over from
-    build_plane1_anim.py's report_plan() verbatim; it is a fact about THIS aeroplane's shipped
+    see AircraftSpec.wire_script and .anim_report_extra. Carried over from plane1's own
+    retired build script's report_plan() verbatim; it is a fact about THIS aeroplane's shipped
     graph, not something the shared mechanism could derive for every hand-wired asset."""
     say("")
     say("  TWO BONES, NEVER BOTH ONTO ONE: the steer bone is the nose wheel's PARENT.")
@@ -237,7 +237,7 @@ def get_spec():
         published_table_width=18,
         fixed_gear_suffix=", which is a 172",
         report_extra=_report,
-        # HAND-WIRED BEFORE THIS TOOLING EXISTED - no Tools/wire_plane1_anim.py, no measured
+        # HAND-WIRED BEFORE THIS TOOLING EXISTED - no per-key wiring script, no measured
         # axis plan. See AircraftSpec.wire_script and _anim_report_extra above.
         wire_script=False,
         anim_report_extra=_anim_report_extra,

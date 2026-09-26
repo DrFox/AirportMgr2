@@ -551,11 +551,11 @@ bool FGear737IsAuthoredAndTravelsTest::RunTest(const FString& Parameters)
 	// PAPER 737, which carries no mesh and never flies. Figures authored there would have
 	// been pinned by a green test and still absent from every aeroplane on the runway.
 	//
-	// DA_Aircraft_Plane4 is the one that flies, authored by Tools/Python/build_plane4_type.py
+	// DA_Aircraft_Plane4 is the one that flies, authored by `build_aircraft_type.py plane4`
 	// against SK_Plane4 - the only rig in the fleet with gear_* and door_nose_* bones.
 	UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
 		UAircraftType::StaticClass(), nullptr, TEXT("/Game/Entities/DA_Aircraft_Plane4")));
-	if (!TestNotNull(TEXT("DA_Aircraft_Plane4 loads - run build_plane4_type.py if not"), Type))
+	if (!TestNotNull(TEXT("DA_Aircraft_Plane4 loads - run 'build_aircraft_type.py plane4' if not"), Type))
 	{
 		return false;
 	}

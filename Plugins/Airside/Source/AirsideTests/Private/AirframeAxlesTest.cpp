@@ -164,7 +164,7 @@ static const TCHAR* const MeasuredTypes[] = {
 	// that type declared a deviation from it. plane7 conforms, so the half-run guard now
 	// covers every modelled aeroplane in the game rather than five of six. It is also the only
 	// row whose footprint is typed in C++ as well as authored - see
-	// Tools/Python/build_plane7_type.py, which checks the same four figures from the other
+	// `build_aircraft_type.py plane7`, which checks the same four figures from the other
 	// direction.
 	TEXT("/Game/Entities/DA_Aircraft_Plane7"),
 	// THE A380 IS THE SECOND BOGIE ROW AND THE FIRST WITH TWO UNITS A SIDE. Its rig numbers
@@ -206,7 +206,7 @@ static const TCHAR* const MeasuredTypes[] = {
  *
  * ANY OF THE BOGIE'S WHEELS WOULD DO for what the caller wants. The hub HEIGHT is the wheel
  * radius, and three wheels on one axle beam are at one height - which is itself asserted, on
- * the authoring side, by build_plane6_type.py's axles_and_radius. The lowest-numbered is
+ * the authoring side, by build_aircraft_type.py's axles_and_radius. The lowest-numbered is
  * taken so the choice is a rule rather than whatever the bone order happens to be, and
  * Tools/Python/airside_anim.axle_anchor picks by the same rule for the same reason.
  */

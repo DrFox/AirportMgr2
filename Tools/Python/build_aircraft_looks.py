@@ -20,10 +20,10 @@ DA_Airline_Cumbria's fleet, and deleting an asset something points at breaks the
 rather than updating it - build_airlines.py's own load-or-create carries the same warning.
 
 THE MERIDIAN'S ROW LEFT ON 2026-09-21, when plane7 replaced SM_PiperMeridian and
-DA_Aircraft_Piper was renamed to DA_Aircraft_Plane7. Tools/Python/build_plane7_type.py sets
+DA_Aircraft_Piper was renamed to DA_Aircraft_Plane7. build_aircraft_type.py plane7 sets
 that type's mesh and anim class along with everything else it authors, so a row here would
 be a second writer of one pair of fields - the "lists that must agree" failure, with the
-losing script being whichever ran last. The newer per-model build_plane<N>_type.py scripts
+losing script being whichever ran last. The per-model build_plane<N>_type.py scripts
 all own their own look for the same reason; what is left in this table is the two types that
 have no such script.
 

@@ -217,11 +217,12 @@ build_aircraft("DA_Aircraft_B738", unreal.AircraftType.build737)
 # field traffic, and what makes the jets a REASON to build a wider runway rather than a broken
 # inbox.
 #
-# It moved to Tools/Python/build_plane7_type.py on 2026-09-21, when plane7 replaced the
-# placeholder mesh and the asset was renamed to DA_Aircraft_Plane7. That script still calls
-# the same UAircraftType::BuildPiperMeridian this one did - one description, two consumers -
-# and additionally points the type at its mesh and rig, which this script has no business
-# knowing about. Two scripts authoring one asset is how the later run silently wins.
+# It moved to build_aircraft_type.py plane7 (aircraft/plane7.py's `cpp_builder`) on
+# 2026-09-21, when plane7 replaced the placeholder mesh and the asset was renamed to
+# DA_Aircraft_Plane7. That path still calls the same UAircraftType::BuildPiperMeridian this
+# one did - one description, two consumers - and additionally points the type at its mesh
+# and rig, which this script has no business knowing about. Two scripts authoring one asset
+# is how the later run silently wins.
 
 # The stand is sized for the A320, and draws it to show how it would be used. When aircraft
 # exist, occupancy replaces this with whatever is actually parked.

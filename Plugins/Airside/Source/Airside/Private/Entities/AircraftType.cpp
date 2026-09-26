@@ -193,7 +193,7 @@ void UAircraftType::Build737(UAircraftType* Type)
 	// gear is invisible to every one of those callers.
 	//
 	// The aeroplane that actually flies is DA_Aircraft_Plane4, authored by
-	// Tools/Python/build_plane4_type.py against SK_Plane4, and its FGearPerformance lives
+	// `build_aircraft_type.py plane4` against SK_Plane4, and its FGearPerformance lives
 	// there - the measured pipeline, one source of truth. Figures in both places would be two
 	// copies of one aeroplane's numbers, which is the drift this codebase keeps paying for:
 	// see build_fleet_materials.py, where `metal` meant chrome on one model and dull steel on
@@ -241,9 +241,9 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	// reason rather than an importer's accident: fueltruck1 is exported about the rear axle
 	// because that is what a front-steered truck pivots about.
 	//
-	// EVERY FIGURE BELOW IS MEASURED off plane7/export/plane7.glb, and Tools/Python/
-	// build_plane7_type.py takes the same measurements the same way onto DA_Aircraft_Plane7,
-	// so the drawn envelope and the drawn aeroplane cannot disagree.
+	// EVERY FIGURE BELOW IS MEASURED off plane7/export/plane7.glb, and
+	// `build_aircraft_type.py plane7` takes the same measurements the same way onto
+	// DA_Aircraft_Plane7, so the drawn envelope and the drawn aeroplane cannot disagree.
 	Type->Footprint.NoseX = 119.4;    // the spinner tip
 	Type->Footprint.TailX = -751.8;   // the fin trailing edge - 871.2 uu apart, the 8.712 m length
 	Type->Footprint.Wingspan = PiperMeridianWingspan();   // 43 ft 0 in, published, and the import asserts it

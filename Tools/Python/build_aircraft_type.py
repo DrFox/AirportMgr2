@@ -6,8 +6,9 @@ module under aircraft/. Run headless:
 
 Every result line is prefixed MARKER: so it can be grepped out of the log.
 
-ONE MECHANISM, FOURTEEN SPECS - Issue #290. build_plane1_type.py through build_plane14_type.py
-were 7,527 lines that were ~75% the same script fourteen times over: measure(), set_regime(),
+ONE MECHANISM, FOURTEEN SPECS - Issue #290. The fourteen build_plane<N>_type.py scripts this
+replaced (since deleted) were 7,527 lines that were ~75% the same script fourteen times over:
+measure(), set_regime(),
 the CLIMB/APPROACH/ENGINE/GEAR block loop, verify(), set_anim_defaults(), tightest_radius_uu()
 and run() were byte-identical across most of the fleet apart from an asset-path string, and the
 copies had already drifted where hand-copying missed a line - propeller_diameter authored but
@@ -42,7 +43,7 @@ plane13 has two axles; plane8 has five, spanning two gear units. `axles_and_radi
 whatever `main_wheels_l`/`main_wheels_r` name, for any N, rather than plane6-through-plane13
 each carrying their own copy of the averaging loop with N baked in.
 
-WHAT DID NOT MOVE HERE: build_plane7_type.py's replacement, `aircraft/plane7.py`, still routes
+WHAT DID NOT MOVE HERE: the retired plane7 type script's replacement, `aircraft/plane7.py`, still routes
 through `unreal.AircraftType.build_piper_meridian()` rather than through this file's typed-dict
 authoring path - the Meridian's figures live in C++ (`UAircraftType::BuildPiperMeridian`)
 because it is ALSO `UAirsideSettings::ResolveDefaultAirframe`'s fallback, and a second copy of
@@ -116,8 +117,8 @@ class RigMap:
     imposed on it.
 
     `note` is optional: plane8 alone reports the per-bone dicts a rig with more than one gear
-    unit actually carries, because wire_plane8_anim.py's per-bone multipliers are what makes
-    the single per-type angle correct for every bone - see aircraft/plane8.py.
+    unit actually carries, because its `anim_multiplier`'s per-bone ratios are what makes the
+    single per-type angle correct for every bone - see aircraft/plane8.py.
     """
 
     def __init__(self, path, gear, door, truck=None, note=None):
@@ -322,8 +323,9 @@ class AircraftSpec:
     # BONES DELIBERATELY NOT SQUARE TO THE AIRFRAME - resolve_axis's `raked` argument, carried
     # here so it is a fact about the aeroplane rather than a copy-paste risk in a build script.
     # Empty for nine of fourteen; plane6/plane8 name three, plane9/plane12 one. THE BUG THIS
-    # FIELD FIXES: build_plane14_anim.py's RAKED was correctly () (plane14's nosewheel_steer
-    # measures square) but its say() line read "ONE BONE IS RAKED ON PURPOSE" anyway - copied
+    # FIELD FIXES: plane14's retired build script had RAKED correctly () (plane14's
+    # nosewheel_steer measures square) but its say() line read "ONE BONE IS RAKED ON PURPOSE"
+    # anyway - copied
     # from plane9/plane12 and never re-typed. Deriving that line's wording from len(raked)
     # removes the possibility of the two disagreeing again.
     raked: Sequence[str] = ()
@@ -448,7 +450,7 @@ def axles_and_radius(spec, leg_height):
     """(steer axle X, fixed axle X, main wheel radius, main gear track) in uu, off the spec's
     own mesh reference pose.
 
-    THE BONE, NOT THE TYRE'S BOUNDING BOX, the rule build_plane3_type.py settled: the bone is a
+    THE BONE, NOT THE TYRE'S BOUNDING BOX, the rule plane3's retired type script settled: the bone is a
     STATEMENT about where the axle is - build_export.py/build_rig.py place each wheel's origin
     on its rotation axis so the thing can spin - and the hub's HEIGHT above the contact plane IS
     the radius. That z = 0 is the contact plane is not assumed: airside_import.report_bounds
@@ -649,8 +651,8 @@ def say_tightest_radius(spec, m, say):
 
 
 def say_published_table(spec, m, say):
-    """THE MEASURED-AGAINST-PUBLISHED TABLE, printed every run - the habit build_plane4_type.py
-    argued for: a disagreement between the model and a primary source is worth SEEING each
+    """THE MEASURED-AGAINST-PUBLISHED TABLE, printed every run - the habit plane4's retired
+    type script argued for: a disagreement between the model and a primary source is worth SEEING each
     time rather than discovering. One shared loop, driven by each spec's own rows, rather than
     plane1's/plane10's/plane12's three copies of the same print statement."""
     for label, getter, published_m in spec.published_table:

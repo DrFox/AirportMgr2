@@ -1,4 +1,5 @@
-"""What every build_<model>_anim.py needs and none of them should own a copy of.
+"""What build_aircraft_anim.py (and the vehicles' build_rig_anim.py/build_vehicle_anims.py)
+need and none of them should own a copy of.
 
 Imported from the editor's Python, so `import unreal` is available. THE SCRIPT'S OWN
 DIRECTORY IS NOT ON sys.path under -run=pythonscript - see import_models.py's header for the
@@ -7,9 +8,9 @@ full note - so every caller puts it there before importing this.
 WHY THIS FILE EXISTS, AND WHY IT IS NOT airside_import.py. Two promises made in two headers
 came due on the same model:
 
-  * build_plane1_anim.py: "the fourth model is the one that extracts rather than copies".
-    The fourth declined.
-  * build_plane5_anim.py, more specifically: "THE SIXTH MODEL SHOULD EXTRACT. Said here
+  * plane1's own script (since retired - see Issue #294): "the fourth model is the one that
+    extracts rather than copies". The fourth declined.
+  * plane5's own script, more specifically: "THE SIXTH MODEL SHOULD EXTRACT. Said here
     rather than in a commit message nobody greps: one bone_plan() in airside_import.py, four
     callers."
 
@@ -27,11 +28,13 @@ the axis resolver that plane7 would have made two of. The resolver was written f
 point, because the alternative was a second copy of two hundred lines on the same day the
 first duplication was being paid off.
 
-THE CALLERS KEEP THEIR OWN TABLES. A model's SOURCE, MESH, SKELETON, ABP name and
-DRIVEN_BONES are facts about that model and stay in that model's script, where somebody
-changing an export will be standing. What is here is the MECHANISM - every line of it was
-identical across the copies, and the two that were not identical had drifted rather than
-diverged on purpose.
+THE CALLERS KEEP THEIR OWN FACTS. A model's SOURCE, MESH and ABP name are facts about that
+model and stay in its own `aircraft/<key>.py` spec (or Tools/Python/build_rig_anim.py's own
+table, for the vehicles), where somebody changing an export will be standing. What is here is
+the MECHANISM - every line of it was identical across the copies, and the two that were not
+identical had drifted rather than diverged on purpose. DRIVEN_BONES stopped being one of the
+callers' own facts on 2026-09-26 (Issue #294): `driven_bone_plan()` below derives it, and its
+chain order, from the .glb itself.
 """
 import json
 import math
@@ -111,14 +114,14 @@ def bone_plan(names):
 
     THIS LIST MUST AGREE WITH UAirsideAgentAnim'S PROPERTY NAMES and there is no compiler to
     check it - see CLAUDE.md, "check where a list is CONSUMED". Since 2026-09-21 there IS a
-    checker one step down the pipeline: Tools/wire_plane<N>_anim.py --verify reads the compiled
-    graph back and fails on any bone whose driver disagrees.
+    checker one step down the pipeline: `Tools/wire_plane_anim.py <key> --verify` reads the
+    compiled graph back and fails on any bone whose driver disagrees.
 
-    THE FOUR COPIES HAD ALREADY DRIFTED, exactly the way build_plane1_anim.py predicted they
-    would: the gear and door rules landed in build_plane2_anim.py on 2026-09-19 and were typed
-    into plane1's copy separately. The reasons those copies carried are kept below, because
-    they are what the ORDERING rests on and the ordering is the only thing here that can be
-    wrong in a way nothing catches:
+    THE FOUR COPIES HAD ALREADY DRIFTED, exactly the way plane1's own script (since retired -
+    see Issue #294) predicted they would: the gear and door rules landed in plane2's script on
+    2026-09-19 and were typed into plane1's copy separately. The reasons those copies carried
+    are kept below, because they are what the ORDERING rests on and the ordering is the only
+    thing here that can be wrong in a way nothing catches:
 
       * STEER BEFORE WHEEL, and this one is load-bearing rather than merely disciplined: every
         aircraft rig here has a 'nosewheel_steer', which contains both needles. The wheel rule
@@ -220,11 +223,11 @@ def driven_bone_plan(source, excluded=()):
 
 def raked_line(raked):
     """The say() line reporting how many bones a rig deliberately rakes off-square - derived
-    from len(raked) rather than typed, which is Issue #294's fix for build_plane14_anim.py's
+    from len(raked) rather than typed, which is Issue #294's fix for plane14's OWN say-line
     lie: its RAKED tuple was correctly empty (plane14's nosewheel_steer measures square) but
-    its say() line read "ONE BONE IS RAKED ON PURPOSE" anyway, copied from plane9/plane12 and
-    never re-typed when RAKED was. A line computed from the data it describes cannot drift
-    from it a second time."""
+    its say() line read "ONE BONE IS RAKED ON PURPOSE" anyway, copied from plane9's/plane12's
+    and never re-typed when RAKED was. A line computed from the data it describes cannot
+    drift from it a second time."""
     if not raked:
         return "NO BONE IS RAKED."
     if len(raked) == 1:
@@ -237,13 +240,23 @@ def anim_multiplier_for(bone, variable, overrides):
     convention, unless `overrides` (an AircraftSpec's anim_multiplier) names this bone
     specifically.
 
-    THE CONVENTION, established across the whole fleet before plane8: -1.0 (the Blender/UE
-    handedness flip - see wire_plane6_anim.py's header for the measurement) on every
+    THE CONVENTION, established across the whole fleet before plane8: -1.0 on every
     travelling or spinning bone, and None (the raw angle, undriven) on the one bone whose
     variable is SteerAngleDegrees, because ABP_Plane2's shipped graph drives its steer bone
     with a plain GetSteerAngleDegrees() and no negation. plane8's five gear bones and four
     bogie bones do not fold by the fleet's one figure each - see aircraft/plane8.py - and are
     named in `overrides` instead of bending this rule to fit one rig.
+
+    THE -1 IS A MIRROR, NOT A SIGN CONVENTION, and it was MEASURED rather than argued -
+    plane6's retired wiring script recorded the probe (its own header is gone with it since
+    Issue #294; the finding is not): Blender is right-handed and UE is left-handed, so import
+    mirrors every bone-local rotation. Turning SK_Plane6's gear_L by its OWN authored +90
+    lifted wheel_L2 494 uu OUTBOARD - through the wing it retracts into - against
+    plane6/scripts/gear_pivots.json's own retracted pose, which says +90 about world +Y puts
+    the wheel 4.94 m up INBOARD. The probe was validated first against the one bone whose
+    direction is known correct on screen (with -1 the wheels roll FORWARD on every rig;
+    without it, backwards), and AirportMgr.View.AnimYard.GearFoldsIntoTheAirframe now pins the
+    fold direction so this cannot regress silently again.
     """
     if bone in overrides:
         return overrides[bone]

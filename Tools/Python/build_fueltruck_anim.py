@@ -7,8 +7,9 @@ Every result line is prefixed MARKER: so it can be grepped out of the log. NOTE 
 land in Saved/Logs/AirportMgr.log, not on stdout - the commandlet's stdout carries only
 LogInit and errors, so a run that looks silent has usually worked.
 
-THIS CREATES THE ASSET AND NOT ITS ANIMGRAPH, the same wall build_plane2_anim.py hit and for
-the same reason: the `unreal` Python module exposes no API for creating a node in a Blueprint
+THIS CREATES THE ASSET AND NOT ITS ANIMGRAPH, the same wall plane2's own script hit (since
+retired - see Issue #294) and for the same reason: the `unreal` Python module exposes no API
+for creating a node in a Blueprint
 graph or connecting two pins. So the parts that are easy to get WRONG and tedious to redo are
 done here - the parent class and the target skeleton - and the Transform (Modify) Bone nodes
 are a few minutes in the editor against the bone names this script prints.
@@ -20,8 +21,8 @@ It needs the editor RUNNING, which this commandlet needs closed - one restart be
 halves, run unattended end to end on 2026-09-20 against a graph that came out IDENTICAL to a
 hand-wired one. docs/2026-09-20-animgraph-authoring.md has the reachable set.
 
-THE BONE PLAN IS READ FROM THE .glb, not listed here, for the reason build_plane2_anim.py
-records: a hand-kept list of bones had already been wrong once, in a script whose whole job
+THE BONE PLAN IS READ FROM THE .glb, not listed here, for the reason plane2's own script
+recorded: a hand-kept list of bones had already been wrong once, in a script whose whole job
 is to tell someone which bones to wire. The export is the authority on its own rig.
 
 SIX DRIVEN BONES, WHICH IS MORE THAN ANY AIRCRAFT HERE. Four wheels take WheelAngleDegrees

@@ -125,8 +125,8 @@ def get_spec():
         turnaround_seconds=TURNAROUND_SECONDS,
         prop_blade_count=PROP_BLADE_COUNT,
         surface="TARMAC",
-        # NO BONE IS RAKED - build_plane14_anim.py's RAKED was always correctly empty, but its
-        # say() line insisted "ONE BONE IS RAKED ON PURPOSE" regardless, copied from
+        # NO BONE IS RAKED - this rig's retired build script's RAKED was always correctly
+        # empty, but its say() line insisted "ONE BONE IS RAKED ON PURPOSE" regardless, copied from
         # plane9's/plane12's script and never re-typed (Issue #294). nosewheel_steer measures
         # square on this rig; build_aircraft_anim.py's raked_line() derives the wording from
         # len(raked) so the two cannot disagree again.
