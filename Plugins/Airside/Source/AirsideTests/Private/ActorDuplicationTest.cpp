@@ -8,6 +8,7 @@
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
+#include "Present/StandDefinitionCache.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -47,6 +48,11 @@ bool FActorDuplicationTest::RunTest(const FString& Parameters)
 		Dup->GetPresenter() ? Dup->GetPresenter()->GetOuter() : nullptr, static_cast<UObject*>(Dup));
 	TestEqual(TEXT("the duplicate's traffic belongs to the duplicate"),
 		Dup->GetTraffic() ? Dup->GetTraffic()->GetOuter() : nullptr, static_cast<UObject*>(Dup));
+	// StandDefinitions (issue #298): the same Transient-plain-pointer PIE-duplication bug this
+	// whole test exists to pin - see UStandDefinitionCache's own header - so a NEW subobject
+	// gets the SAME assertion the three original ones do, not just a build that compiles.
+	TestEqual(TEXT("the duplicate's stand definition cache belongs to the duplicate"),
+		Dup->GetStandDefinitions() ? Dup->GetStandDefinitions()->GetOuter() : nullptr, static_cast<UObject*>(Dup));
 
 	if (!TestNotNull(TEXT("the duplicate has its own network"), Dup->Network.Get())) { return false; }
 	TestNotEqual(TEXT("which is a different object from the source's"), Dup->Network.Get(), Source->Network.Get());

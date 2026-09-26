@@ -289,6 +289,14 @@ public:
 	URoadEditFacade* GetEditFacade() const { return Facade; }
 
 	/**
+	 * The per-letter stand Flyweights and the rebind step - see UStandDefinitionCache. READ
+	 * ACCESS TO THE SUBOBJECT, not a forwarder per method, for exactly the reason GetPresenter
+	 * above gives (issue #298). Airside.Present.DuplicatedActorOwnsItsSubobjects reaches
+	 * through it the same way it already does for Facade/Presenter/Traffic.
+	 */
+	UStandDefinitionCache* GetStandDefinitions() const { return StandDefinitions; }
+
+	/**
 	 * Multiplier applied to every Tick's DeltaSeconds before it reaches Traffic. Set each
 	 * frame by AirportOps from the sim clock's SPEED (x0..x8), never from its day
 	 * compression - see USimClock's class comment for why the two are different numbers.
