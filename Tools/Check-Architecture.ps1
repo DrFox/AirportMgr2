@@ -114,6 +114,26 @@
           AirsideTests only, because AirportOpsTests cannot reach it (it is a Private header -
           see the header's own top comment) and has the SAME duplication under its own
           literals, a separate finding (#310's PR body) that this rule does not cover.
+      20. No new *ForTest( forwarder on ARoadNetworkActor outside RoadNetworkActor.h's own
+          explicit allow-list (issue #298).
+      21. AirsideVehicleCodes:: is never compared with ==/!= (issue #308's TypeCode ladder,
+          deleted, must not come back wearing a comparison).
+      22. FRouteQuery is hand-built (`FRouteQuery Var;`, no initialiser) only in
+          RouteSearch.cpp (issue #312). FRouteQuery::For is the one writer of AvoidRunways off
+          the resolved FRoutePolicy - the hot loop reads AvoidRunways, never Policy - so a
+          caller that fills a query by hand and skips For() gets the permissive
+          ERunwayAvoidance::None for every errand, silently: six test helpers and 48 call
+          sites did this before #312. Test modules are explicitly IN SCOPE, unlike rules 5/6 -
+          a test's query reaches the same RunSearch a production one does. Six sites are
+          allow-listed by (File, Var), each checked by hand: FuelService.cpp and
+          ArrivalPlanner.cpp/RoadEditFacadeSurfaces.cpp already set AvoidRunways correctly
+          by hand (the last two because FindToGoals takes a Goals ARRAY, so neither For() nor
+          Probe() fits); RoutePolicyTest.cpp deliberately builds a no-errand query to test its
+          own refusal; RouteSearchTest.cpp has the same FindToGoals shape as ArrivalPlanner.cpp;
+          RouteStepDistanceTest.cpp's FRouteRunwayAvoidanceTest sweeps AvoidRunways BY HAND,
+          decoupled from Policy, to test ERunwayAvoidance itself. The allow-list also fails if
+          an entry stops matching anything - the same "list drifted silently" failure rule 15
+          guards against.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -818,7 +838,11 @@ foreach ($tree in $trees) {
 #
 # Scoped to the two production modules the way rule 1 is: the test modules are its intended
 # home, and Tool/ is exempt because a tool asking "is there any way from here to there" is a
-# shape question with no agent behind it.
+# shape question with no agent behind it. Testing/ (issue #312's TestGraph::Probe) is exempt
+# for the same reason as Tool/, not because it sits under Airside/'s production module path:
+# WITH_DEV_AUTOMATION_TESTS-gated, AIRSIDE_API only so the OTHER test modules can reach it (see
+# AirsideTestGraph.h's own top comment), and its whole job is naming GraphProbe once so the 48
+# test call sites #312 fixed do not have to.
 #
 # QUALIFIED USES ONLY (ERouteErrand::GraphProbe), so the enumerator's own declaration and the
 # paragraphs explaining it in RoutePolicy.h are not mistaken for callers of it.
@@ -827,6 +851,7 @@ foreach ($module in $modules) {
         $dir = Join-Path $module $half
         foreach ($file in Get-Sources $dir @('.h', '.cpp')) {
             if ($file.FullName -like '*\Tool\*') { continue }
+            if ($file.FullName -like '*\Testing\*') { continue }
             # RoutePolicy.h/.cpp DECLARE the errand and write its row; naming it there is
             # the definition, not a use of it. Exempting the defining file by name rather
             # than exempting 'case' labels everywhere, so a production switch that tried to
@@ -1086,6 +1111,80 @@ foreach ($module in $modules) {
     }
 }
 $ranRules.Add('no-vehiclecode-compare')
+
+# --- 22. FRouteQuery constructed only in RouteSearch.cpp (issue #312) ----------------------
+# THE ONE WRITER of AvoidRunways off a resolved FRoutePolicy is FRouteQuery::For - see
+# RouteSearch.cpp's own comment on Query.AvoidRunways = Query.Policy.Avoidance. A caller that
+# builds `FRouteQuery Q;` by hand and fills Errand/Policy/Start/Goal/Class itself skips that
+# one line and gets the permissive ERunwayAvoidance::None for every errand, silently - the
+# six-helper, 48-site shape #312 found across the test suite (TestGraph::Probe, added by the
+# same PR, is the one legal wrapper for a test's plain GraphProbe query; FRouteQuery::For
+# directly for anything Probe's signature does not cover - a banned edge, a vehicle gate, a
+# tow seed, congestion).
+#
+# BARE DECLARATION ONLY (`FRouteQuery \w+;`, no initialiser) - `FRouteQuery Q = FRouteQuery::
+# For(...)` or `FRouteQuery Q = SomeOtherQuery;` already goes through the one writer or copies
+# a query that did, so neither trips this rule. Scoped to $trees, unlike rule 5's handle rule -
+# test modules are NOT exempt here, on the issue's own instruction: a test's query is fed to
+# the same RunSearch a production one is, so the same one-writer contract applies.
+#
+# THE ALLOW-LIST, one entry per (File, VarName), matching rule 6's "file AND field name" shape
+# rather than exempting a whole file: each remaining site was checked by hand (issue #312's PR)
+# and either already sets AvoidRunways correctly (FuelService.cpp, ArrivalPlanner.cpp,
+# RoadEditFacadeSurfaces.cpp, RouteSearchTest.cpp - the last two because FindToGoals takes a
+# GOALS ARRAY, not the one Goal either For() or Probe() needs) or deliberately builds an
+# incomplete or hand-swept query to test the refusal/sweep itself (RoutePolicyTest.cpp's
+# no-errand cases; RouteStepDistanceTest.cpp's FRouteRunwayAvoidanceTest, which sets
+# AvoidRunways BY HAND across several Finds precisely to test ERunwayAvoidance one layer under
+# the policy that normally chooses it - see that test's own comment). Any OTHER bare
+# `FRouteQuery Var;` in one of these files, or a second one of an already-listed (File, Var),
+# still fails - the allow-list is not a whole-file exemption.
+$routeQueryAllowList = @(
+    @{ File = 'Plugins\AirportOps\Source\AirportOps\Private\Model\FuelService.cpp'; Var = 'Query'; Count = 2 }
+    @{ File = 'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'; Var = 'Query'; Count = 1 }
+    @{ File = 'Plugins\Airside\Source\Airside\Private\Present\RoadEditFacadeSurfaces.cpp'; Var = 'Query'; Count = 1 }
+    @{ File = 'Plugins\Airside\Source\AirsideTests\Private\RoutePolicyTest.cpp'; Var = 'Q'; Count = 2 }
+    @{ File = 'Plugins\Airside\Source\AirsideTests\Private\RouteSearchTest.cpp'; Var = 'Query'; Count = 1 }
+    @{ File = 'Plugins\Airside\Source\AirsideTests\Private\RouteStepDistanceTest.cpp'; Var = 'Q'; Count = 1 }
+)
+$routeQueryAllowUsed = @{}
+$routeQueryPattern = 'FRouteQuery\s+(?<var>\w+);'
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
+        if ($file.Name -eq 'RouteSearch.cpp') { continue }
+        foreach ($h in (Select-String -Path $file.FullName -Pattern $routeQueryPattern)) {
+            $t = $h.Line.Trim()
+            if ($t -match '^(//|/\*|\*)') { continue }
+            $var = [regex]::Match($t, $routeQueryPattern).Groups['var'].Value
+            $entry = $routeQueryAllowList | Where-Object {
+                (Test-AllowedPathSuffix $file $_.File) -and $_.Var -eq $var
+            } | Select-Object -First 1
+            $key = "$($file.FullName)|$var"
+            if ($entry -ne $null -and ([int]$routeQueryAllowUsed[$key]) -lt $entry.Count) {
+                $routeQueryAllowUsed[$key] = [int]$routeQueryAllowUsed[$key] + 1
+                continue
+            }
+            $failures.Add("route-query-one-writer: $($file.FullName):$($h.LineNumber) hand-builds FRouteQuery $var outside RouteSearch.cpp - use TestGraph::Probe (tests) or FRouteQuery::For (anything else), the one writer of AvoidRunways off the resolved policy (issue #312): $t")
+        }
+    }
+}
+# THE ALLOW-LIST ITSELF DRIFTS, same failure mode rule 15's file-existence check guards - an
+# entry whose site was fixed properly (or renamed) since would sit here allowing nothing,
+# unnoticed, until a NEW hand-built query reused that Var name and rode through on the old
+# entry's remaining count. Any entry never matched at all is exactly that - walk the same
+# usage map the main loop populated (keyed "FullPath|Var"), by suffix, the way
+# Test-AllowedPathSuffix matches everywhere else in this script.
+foreach ($allowed in $routeQueryAllowList) {
+    $matchedAny = $false
+    foreach ($key in $routeQueryAllowUsed.Keys) {
+        $parts = $key -split '\|', 2
+        if ($parts[1] -eq $allowed.Var -and (Test-AllowedPathSuffix ([System.IO.FileInfo]$parts[0]) $allowed.File)) { $matchedAny = $true }
+    }
+    if (-not $matchedAny) {
+        $failures.Add("route-query-one-writer: allow-list entry $($allowed.File) / $($allowed.Var) matched nothing - the site was fixed, renamed or deleted; remove or update this entry so it cannot silently cover a future, unrelated hand-built query")
+    }
+}
+$ranRules.Add('route-query-one-writer')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
