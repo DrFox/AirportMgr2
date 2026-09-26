@@ -2,7 +2,12 @@
 
 #include "Solve/RoadGeom.h"
 
-namespace
+// IN namespace TowReverse, not anonymous: Airside is a UNITY build, and VehicleSweep.cpp and
+// UTurnGeom.cpp in the same blob have an anonymous Perp and a Step of their own - two anonymous
+// definitions of one name collide, and a global one trips C4459 on every local named Step. The
+// definitions below are TowReverse-qualified, so their bodies find these without a using-directive
+// (which would leak into the next file in the blob).
+namespace TowReverse
 {
 	FVector2D Perp(const FVector2D& V) { return FVector2D(-V.Y, V.X); }
 	FVector2D Dir(double Radians) { return FVector2D(FMath::Cos(Radians), FMath::Sin(Radians)); }
@@ -159,6 +164,7 @@ namespace
 		}
 	}
 }
+
 
 FString TowReverse::FSolution::Describe() const
 {

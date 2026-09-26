@@ -12,6 +12,7 @@
 #include "Model/RouteFollower.h"
 #include "Model/RouteSearch.h"
 #include "Model/TakeoffRun.h"
+#include "Model/TowReverseRun.h"
 #include "Model/TrafficOccupancy.h"
 #include "Model/TrafficRules.h"
 #include "Model/Vehicle.h"
@@ -290,6 +291,15 @@ struct AIRSIDE_API FRoadAgent
 	 * out of the plan with RouteSearch::Section, and picks the taxi up again afterwards.
 	 */
 	UPROPERTY() FReverseRun Reverse;
+
+	/**
+	 * The back-out a vehicle WITH A TRAILER is making, when Phase is Reversing (spec 2026-09-26).
+	 * Which of the two runs is live is Vehicle.HasTrailer() - the vehicle, not a flag - so there
+	 * is still one Reversing phase and every reader of it is unchanged. Rigid vehicles never arm
+	 * this; tows never arm Reverse.
+	 * ENFORCED BY: Airside.Model.TowReverse.RigidStillUsesReverseRun
+	 */
+	UPROPERTY() FTowReverseRun TowReverse;
 
 private:
 	/**
@@ -995,6 +1005,13 @@ private:
 	UPROPERTY() int32 JackknifedLink = INDEX_NONE;
 
 	/**
+	 * The last tow-reverse refusal logged, so a vehicle stalled at a reverse leg it cannot make
+	 * says why ONCE per reason rather than every tick it re-tries (TryArmReverseLeg re-tries each
+	 * tick, as the rigid arm always has). Cleared when a reverse arms.
+	 */
+	FString LastReverseRefusal;
+
+	/**
 	 * Follower.Advance, plus the tow. RIGID: exactly the one call it always was, so nothing
 	 * without a trailer moves differently. TOWING: the frame is cut into sub-steps no longer
 	 * than VehicleSweep::TraceStep at the vehicle's speed cap, and each sub-step moves the cab
@@ -1049,4 +1066,14 @@ private:
 	 * extraction only - see the PR for #174.
 	 */
 	bool TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMotion& OutMotion);
+
+	/**
+	 * TryArmReverseLeg's arm for a vehicle with a trailer (spec 2026-09-26 §2): solves the span
+	 * from the chain as it stands, refuses a solution whose end misses the remainder's line, and
+	 * otherwise enters Reversing posed on this frame. Same return contract as TryArmReverseLeg.
+	 */
+	bool TryArmTowReverse(const FRoutePlan& Span, int32 To, const FVector2D& At, double Heading, FAgentMotion& OutMotion);
+
+	/** The steered axle's distance along Remainder, for an origin/heading - a tow's drive-on after a reverse. */
+	double SteeredAxleAlong(const FRoutePlan& Remainder, const FVector2D& Origin, double Heading) const;
 };
