@@ -6,6 +6,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RouteSearch.h"
 #include "Solve/IcaoCode.h"
+#include "Solve/LetterEnvelope.h"
 #include "EntityDefinition.generated.h"
 
 class URoadNetwork;
@@ -390,9 +391,15 @@ public:
 	 * work generalised the body to every letter - kept, at this name, because
 	 * Tools/Python/build_stand_asset.py and the tests that prove Code C's derivation both
 	 * call it.
+	 *
+	 * Envelope BY REFERENCE, since #292, for the reason StandBox::PoseFor's header gives:
+	 * MaxTailAft/MaxNoseFwd are fleet figures now, resolved by the caller
+	 * (BuildCodeCStand's own UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::C) call) and
+	 * handed in rather than re-derived here - the same test-injection role Largest plays.
 	 */
 	static void BuildCodeCStandFor(
-		UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest);
+		UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest,
+		const FLetterEnvelope& Envelope);
 
 	/**
 	 * BuildCodeCStandFor's body, generalised to ANY ICAO letter: the plant, the lane and the
@@ -409,9 +416,12 @@ public:
 	 * A NULL AIRCRAFT IS SUPPORTED for every letter, same as BuildCodeCStandFor: only
 	 * DesignAircraft is set from it, and nothing else in this body or BuildStandTemplate
 	 * dereferences the pointer.
+	 *
+	 * Envelope BY REFERENCE - see BuildCodeCStandFor's own comment.
 	 */
 	static void BuildStandFor(
-		UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FChassis& Largest);
+		UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FChassis& Largest,
+		const FLetterEnvelope& Envelope);
 
 	/**
 	 * True when Stand's measured RequiredExtent both fits inside Letter's floor (width and
@@ -444,9 +454,14 @@ public:
 	 * TAKES THE ENUM, not a string: every caller of this function holds a compile-time letter
 	 * ("C" today, from BuildCodeCStandFor) rather than one read off a data asset, so there is
 	 * no authored content here for IcaoCode::Parse to fail on - see Solve/IcaoCode.h.
+	 *
+	 * Envelope BY REFERENCE - see BuildCodeCStandFor's own comment. This is where MaxTailAft
+	 * and MaxNoseFwd are actually READ (BuildStandFor's own body wants only WingFwd/WingAft,
+	 * which stayed plain IcaoCode:: functions - see Solve/LetterEnvelope.h for why).
 	 */
 	static void BuildStandTemplate(
-		UEntityDefinition& Definition, EIcaoCode Letter, const FChassis& Largest);
+		UEntityDefinition& Definition, EIcaoCode Letter, const FChassis& Largest,
+		const FLetterEnvelope& Envelope);
 
 	/**
 	 * Fill Definition with the fuel depot layout: a box on a service road, and one truck.

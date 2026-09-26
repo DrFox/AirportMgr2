@@ -290,8 +290,16 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 		Definition->DesignAircraft != nullptr ? Definition->DesignAircraft->Footprint.Wingspan : 0.0;
 	// PoseRole travels with DesignWingspan and for the same reason: this is the one caller
 	// allowed to see the definition, so it reads both and hands them down.
+	//
+	// THE RESOLVED ENVELOPE, EXPLICITLY (#292 review finding) - NOT PlaceEntity's own
+	// floor default. This is the LIVE point-placement gesture: a stand placed here with no
+	// drawn plot gets its Code C box from URoadNetwork::GiveStandOutlineIfMissing, and that
+	// box must match the SAME figure the ghost preview (FToolContext::Envelopes) and the
+	// drawn-stand commit path (PlaceStandInPlot, below) read, or the three disagree the
+	// moment a fleet type reaches past today's floor. See PlaceEntity's own header.
 	const FEntityInstanceId Placed = Net.PlaceEntity(Definition, Definition->Anchors, Where,
-		Heading, DesignWingspan, Definition->PoseRole, Definition->Trucks);
+		Heading, DesignWingspan, Definition->PoseRole, Definition->Trucks,
+		UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::C));
 	if (!Placed.IsSet())
 	{
 		return INDEX_NONE;
@@ -822,7 +830,11 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	}
 
 	const FVector2D Inward = PlotYard::InwardOf(Wound, A, B);
-	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, *Letter);
+	// THE COMMITTED FIGURE (#292): what the stand actually gets built at, unlike the ghost
+	// preview (FStandPlotTool::DescribeLetter), which cannot reach Content/ at all and uses
+	// the floor instead - see that function's own comment for the accepted gap between them.
+	const StandBox::FStandPose Pose =
+		StandBox::PoseFor(A, B, Inward, *Letter, UAirsideSettings::ResolveLetterEnvelope(*Letter));
 
 	// PRICED AND REFUSED BEFORE THE SCOPE OPENS - issue #193, the same ordering
 	// PlaceEntityInPlot uses. WhyStandRefused already ran this exact afford check (through the

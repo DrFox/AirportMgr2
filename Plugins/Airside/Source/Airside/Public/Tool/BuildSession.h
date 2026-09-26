@@ -238,6 +238,11 @@ struct FBuildSessionTunables
 	/** Shortest segment and tightest turn a click may build. */
 	FRoadPlacementLimits Limits;
 
+	/** Every letter's fleet envelope, copied straight onto FToolContext::Envelopes - see that
+	 *  field's own comment. URoadEditFacade::MakeTunables resolves it (#292 review finding),
+	 *  the same chokepoint Limits and Snap already go through. */
+	FLetterEnvelopeTable Envelopes;
+
 	/**
 	 * How close, in uu, the cursor counts as "on" something a tool is asking about.
 	 *
@@ -278,7 +283,8 @@ struct FBuildSessionTunables
 			&& Limits.MinSegmentLength == Other.Limits.MinSegmentLength
 			&& Limits.MinTurnDegrees == Other.Limits.MinTurnDegrees
 			&& Limits.NewRoadHalfWidth == Other.Limits.NewRoadHalfWidth
-			&& ToolPickRadius == Other.ToolPickRadius;
+			&& ToolPickRadius == Other.ToolPickRadius
+			&& Envelopes == Other.Envelopes;
 	}
 };
 

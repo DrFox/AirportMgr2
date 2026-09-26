@@ -1,6 +1,9 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "Misc/ScopeExit.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Content/AirsideSettings.h"
@@ -658,7 +661,10 @@ bool FStandPlotPreviewDrawsTheKeepOutTest::RunTest(const FString& Parameters)
 	TArray<FVector2D> Shown;
 	Tool.Rect(At(Actor, AnchorCursor), Shown);
 	const FVector2D Inward(0.0, 1.0);
-	const StandBox::FStandPose Pose = StandBox::PoseFor(Shown[0], Shown[1], Inward, EIcaoCode::C);
+	// THE FLOOR, MATCHING FStandPlotTool::DescribeLetter's OWN choice (#292: Tool/ cannot
+	// reach Content/) - this test reconstructs what the tool itself computed.
+	const StandBox::FStandPose Pose =
+		StandBox::PoseFor(Shown[0], Shown[1], Inward, EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C));
 	const FVector2D Left = RoadGeom::PerpCCW(Pose.Facing);
 	const double HalfSpan = 0.5 * IcaoCode::MaxWingspanForLetter(EIcaoCode::C);
 
@@ -1299,6 +1305,123 @@ bool FStandPlotDrawnStandTakesAnArrivalTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the agent's stand node is the drawn stand's own PoseNode - the seam from ")
 		TEXT("tool to admission is wired: a stand the tool builds is one the planner chooses"),
 		Agent->GoalNode == StandPose);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGhostCommitAndPointPlacedAgreeTest,
+	"Airside.Present.StandPlot.GhostCommitAndPointPlacedAgree",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGhostCommitAndPointPlacedAgreeTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	// THE #292 REVIEW'S CRITICAL FINDING: the ghost preview (FStandPlotTool::DescribeLetter),
+	// the drawn-stand commit (URoadEditFacade::PlaceStandInPlot) and the point-placement path
+	// (URoadEditFacade::PlaceEntity) used to agree only because IcaoCode::FloorEnvelopeForLetter
+	// equalled UAirsideSettings::ResolveLetterEnvelope for every letter - true of every letter
+	// until a fleet type reaches further than the floor, which this test forces with a
+	// synthetic asset (the same AssetCreated technique
+	// Airside.Content.LetterEnvelope.InvalidatesOnAssetChange uses), then checks all three
+	// still land on the SAME stop mark.
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+		TEXT("AssetRegistry")).Get();
+	const FLetterEnvelope FloorC = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C);
+
+	UPackage* ProbePackage = CreatePackage(
+		TEXT("/Temp/AirsideGhostCommitPointPlacedTest/DA_Aircraft_EnvelopeProbe"));
+	UAircraftType* Probe = NewObject<UAircraftType>(ProbePackage,
+		TEXT("DA_Aircraft_EnvelopeProbe"), RF_Public | RF_Standalone);
+	Probe->Code = FName(TEXT("C"));
+	Probe->SteerAxleX = 0.0;
+	Probe->Footprint.NoseX = FloorC.MaxNoseFwd + 3000.0;   // 30 m past what the floor admits
+	Probe->Footprint.TailX = -FloorC.MaxTailAft;            // unchanged - only NoseFwd moves
+
+	ON_SCOPE_EXIT
+	{
+		if (Probe->IsAsset())
+		{
+			Registry.AssetDeleted(Probe);
+		}
+		Probe->ClearFlags(RF_Public | RF_Standalone);
+		Probe->MarkAsGarbage();
+		UAirsideSettings::ResetLetterEnvelopeCacheForTest();
+	};
+
+	if (!TestTrue(TEXT("the probe registers as a real asset, or this test proves nothing"),
+		Probe->IsAsset()))
+	{
+		return false;
+	}
+	Registry.AssetCreated(Probe);
+
+	const FLetterEnvelope Raised = UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::C);
+	if (!TestTrue(TEXT("the probe actually raised Code C's MaxNoseFwd"),
+		Raised.MaxNoseFwd > FloorC.MaxNoseFwd + 2999.0))
+	{
+		return false;
+	}
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	// 1. THE GHOST. The tool's OWN clicks use the floor-based At() context (they never read
+	// Envelopes at all - only BuildPreview does), so only the final BuildPreview call needs
+	// Envelopes forced to the RAISED table - exactly what URoadEditFacade::MakeTunables ->
+	// FBuildSession::MakeContext hands a real session's FToolContext.
+	const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::C);
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a Code C stand locked"), DrawStand(Tool, Actor, Width, Depth)))
+	{
+		return false;
+	}
+
+	TArray<FVector2D> Shown;
+	Tool.Rect(At(Actor, AnchorCursor), Shown);
+	const FVector2D Inward(0.0, 1.0);
+	const StandBox::FStandPose ExpectedPose =
+		StandBox::PoseFor(Shown[0], Shown[1], Inward, EIcaoCode::C, Raised);
+
+	FToolContext RaisedContext = At(Actor, AnchorCursor);
+	RaisedContext.Envelopes = UAirsideSettings::ResolveLetterEnvelopeTable();
+	FStandPlotSink Sink;
+	Tool.BuildPreview(RaisedContext, Sink);
+	TestTrue(TEXT("the ghost's lead-in reaches the RAISED stop mark, not the floor's"),
+		Sink.TouchesIn(ExpectedPose.Position, EPreviewStyle::Pending));
+
+	// 2. THE DRAWN-STAND COMMIT: the SAME rectangle, placed for real.
+	IRoadEditTarget* Target = Actor;
+	const int32 Committed = Target->PlaceStandInPlot(Shown, Shown[0], Shown[1]);
+	if (!TestTrue(TEXT("the rectangle commits"), Committed != INDEX_NONE))
+	{
+		return false;
+	}
+	const FEntityInstance& CommittedEntity = Actor->Network->GetEntities()[Committed];
+	TestTrue(TEXT("the committed stand's stop mark matches the ghost's, not the floor's"),
+		CommittedEntity.Position.Equals(ExpectedPose.Position, 0.5));
+
+	// 3. THE POINT-PLACED PATH: a raw Code C stand with no drawn plot, far from the drawn
+	// stand and the taxiway above so nothing here refuses it for overlap.
+	const int32 PointPlaced =
+		Target->PlaceEntity(FVector2D(30000.0, 30000.0), 0.0, EPlaceableEntity::Stand);
+	if (!TestTrue(TEXT("the point-placed stand places"), PointPlaced != INDEX_NONE))
+	{
+		return false;
+	}
+	const FEntityInstance& PointEntity = Actor->Network->GetEntities()[PointPlaced];
+	StandBox::FStandPose PointPose;
+	PointPose.Position = PointEntity.Position;
+	PointPose.Facing = FVector2D(FMath::Cos(PointEntity.Heading), FMath::Sin(PointEntity.Heading));
+	TArray<FVector2D> ExpectedOutline;
+	StandBox::BoxAt(PointPose, EIcaoCode::C, Raised, ExpectedOutline);
+	TestTrue(TEXT("the point-placed stand's outline is the RAISED Code C box, not the floor's"),
+		PointEntity.Outline == ExpectedOutline);
 
 	return true;
 }

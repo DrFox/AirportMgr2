@@ -303,10 +303,19 @@ bool FMeasuredTypesFitTheirLettersRowTest::RunTest(const FString& Parameters)
 	// type. That gap was not theoretical - plane6's 777-300ER reaches 6799 uu aft of the stop
 	// mark against a Code E row authored at 6700, and nothing in the suite would have said so.
 	//
-	// WHAT GOES WRONG IF THIS IS RED. IcaoCode's row is what a STAND is laid out from - its
-	// width, its depth, its wingtip clearance and where its GSE road runs. A type larger than
-	// its letter admits parks with its tail, nose or wing over ground the layout treated as
-	// clear, and nothing on screen distinguishes that from a stand that is simply tight.
+	// WHAT GOES WRONG IF THIS IS RED. A stand is laid out from IcaoCode's row plus its letter's
+	// FLetterEnvelope (#292) - width, depth, wingtip clearance and GSE road from the row,
+	// tail/nose reach from the envelope. A type larger than its letter admits parks with its
+	// tail, nose or wing over ground the layout treated as clear, and nothing on screen
+	// distinguishes that from a stand that is simply tight.
+	//
+	// STILL THE AUTHORED ROW, NOT THE RESOLVED ENVELOPE, EVEN AFTER #292 SPLIT MaxTailAft/
+	// MaxNoseFwd OUT OF IT: judging this loop's tail/nose figures against UAirsideSettings::
+	// ResolveLetterEnvelope would be a tautology - EnvelopeFromFleet computes that as a MAX
+	// over exactly this fleet, so "does this type fit the envelope" is guaranteed true by
+	// construction (a review finding on #292's own PR). IcaoCode::FloorEnvelopeForLetter is
+	// what actually catches a type exceeding its letter, same as before the split; a separate
+	// pair of assertions below checks the resolved envelope never falls BELOW that floor.
 	//
 	// THE SAME FOUR CHECKS, DELIBERATELY, rather than a subset chosen because these types are
 	// modelled: tail, nose, span-to-letter and the wing band. The two tests are one rule
@@ -337,19 +346,44 @@ bool FMeasuredTypesFitTheirLettersRowTest::RunTest(const FString& Parameters)
 		const double Nose = Type->Footprint.NoseX - ToStopMark;
 		const double Tail = Type->Footprint.TailX - ToStopMark;
 
+		// THE FLOOR, NOT THE RESOLVED ENVELOPE (review finding on #292's own PR): judging a
+		// measured type against UAirsideSettings::ResolveLetterEnvelope is a TAUTOLOGY -
+		// EnvelopeFromFleet computes that figure as a MAX over exactly the fleet this loop
+		// walks, so "does this type fit the envelope" is guaranteed true by construction and
+		// catches nothing. IcaoCode::FloorEnvelopeForLetter is the AUTHORED row - unmoved by
+		// which assets happen to be loaded - and is what actually caught plane6 (777-300ER,
+		// 6799 uu against a Code E floor of 6700) and plane9/plane11 before this row existed.
+		const FLetterEnvelope Floor = IcaoCode::FloorEnvelopeForLetter(Code);
 		TestTrue(
-			*FString::Printf(TEXT("%s: its tail at %.0f is within code %s's %.0f"),
-				*Path, Tail, Letter, IcaoCode::MaxTailAftForLetter(Code)),
-			Tail >= -IcaoCode::MaxTailAftForLetter(Code));
+			*FString::Printf(TEXT("%s: its tail at %.0f is within code %s's floor of %.0f"),
+				*Path, Tail, Letter, Floor.MaxTailAft),
+			Tail >= -Floor.MaxTailAft);
 		TestTrue(
-			*FString::Printf(TEXT("%s: its nose at %.0f is within code %s's %.0f"),
-				*Path, Nose, Letter, IcaoCode::MaxNoseFwdForLetter(Code)),
-			Nose <= IcaoCode::MaxNoseFwdForLetter(Code));
+			*FString::Printf(TEXT("%s: its nose at %.0f is within code %s's floor of %.0f"),
+				*Path, Nose, Letter, Floor.MaxNoseFwd),
+			Nose <= Floor.MaxNoseFwd);
 		TestEqual(
 			*FString::Printf(TEXT("%s: its measured span of %.0f uu is code %s's, which is the "
 				"letter it is authored at"), *Path, Type->Footprint.Wingspan, Letter),
 			IcaoCode::LetterForWingspan(Type->Footprint.Wingspan), FString(Letter));
 
+		// SEPARATELY: the RESOLVED envelope must never sit BELOW the floor it was seeded from -
+		// EnvelopeFromFleet's own contract (a MAX, never a replace). This is the one assertion
+		// that actually exercises UAirsideSettings::ResolveLetterEnvelope's AssetRegistry scan
+		// end to end - if it silently failed to reach this asset (a class-path mismatch, a
+		// Code that fails to parse elsewhere) the resolved figure would still equal the floor
+		// exactly rather than fall below it, so this alone would not catch that; it catches the
+		// scan somehow LOWERING the answer, which EnvelopeFromFleet's shape says can never happen.
+		const FLetterEnvelope& Envelope = UAirsideSettings::ResolveLetterEnvelope(Code);
+		TestTrue(*FString::Printf(TEXT("%s: code %s's resolved MaxTailAft (%.0f) is never below its floor (%.0f)"),
+			*Path, Letter, Envelope.MaxTailAft, Floor.MaxTailAft),
+			Envelope.MaxTailAft >= Floor.MaxTailAft);
+		TestTrue(*FString::Printf(TEXT("%s: code %s's resolved MaxNoseFwd (%.0f) is never below its floor (%.0f)"),
+			*Path, Letter, Envelope.MaxNoseFwd, Floor.MaxNoseFwd),
+			Envelope.MaxNoseFwd >= Floor.MaxNoseFwd);
+
+		// THE WING BAND STAYS PLAIN IcaoCode:: - unaffected by #292's split. Solve/LetterEnvelope.h
+		// says why: FEntityFootprint carries no per-type figure to raise WingFwd/WingAft from.
 		const double WingLine = Type->Footprint.WingX - ToStopMark;
 		TestTrue(
 			*FString::Printf(TEXT("%s: its wing line at %.0f is inside code %s's %.0f .. %.0f"),
@@ -359,11 +393,12 @@ bool FMeasuredTypesFitTheirLettersRowTest::RunTest(const FString& Parameters)
 				&& WingLine <= IcaoCode::WingFwdForLetter(Code));
 
 		// SAID OUT LOUD WHETHER OR NOT IT PASSES, because the useful question when one of these
-		// fails is "by how much", and re-deriving it means loading the asset by hand.
+		// fails is "by how much", and re-deriving it means loading the asset by hand. Against
+		// the FLOOR, matching the assertions above it is reporting on.
 		AddInfo(FString::Printf(
 			TEXT("%s is code %s: nose %.0f/%.0f, tail %.0f/%.0f, span %.0f, wing %.0f"),
-			*Path, Letter, Nose, IcaoCode::MaxNoseFwdForLetter(Code),
-			-Tail, IcaoCode::MaxTailAftForLetter(Code), Type->Footprint.Wingspan, WingLine));
+			*Path, Letter, Nose, Floor.MaxNoseFwd,
+			-Tail, Floor.MaxTailAft, Type->Footprint.Wingspan, WingLine));
 	}
 
 	return true;

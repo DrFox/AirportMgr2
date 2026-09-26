@@ -7,6 +7,7 @@
 #include "Tool/SnapGuideChain.h"
 #include "Tool/ToolReadout.h"
 #include "Tool/Selection.h"
+#include "Solve/LetterEnvelope.h"
 #include "RoadBuildTool.generated.h"
 
 /**
@@ -117,6 +118,20 @@ struct FToolContext
 	FVector2D GuidedCursor() const { return Guide.bActive ? Guide.Point : Cursor; }
 
 	FRoadPlacementLimits Limits;
+
+	/**
+	 * Every ICAO letter's fleet envelope, resolved ONCE per frame and carried like Limits
+	 * above - #292 review finding. FStandPlotTool::DescribeLetter reads Envelopes[*Letter]
+	 * for its ghost preview instead of IcaoCode::FloorEnvelopeForLetter, because Tool/ may
+	 * not include Content/AirsideSettings (Check-Architecture's include-direction rule) to
+	 * ask UAirsideSettings::ResolveLetterEnvelope for itself. Populated by
+	 * FBuildSession::MakeContext from FBuildSessionTunables::Envelopes, which
+	 * URoadEditFacade::MakeTunables resolves - the SAME table the drawn-stand commit path
+	 * (RoadEditFacadeSurfaces.cpp) and the live point-placement path both read, so a ghost, a
+	 * committed drawn stand and a point-placed one agree about the same letter always, not
+	 * only while a fleet type has never raised one past its authored floor.
+	 */
+	FLetterEnvelopeTable Envelopes;
 
 	/**
 	 * How close, in uu, counts as "on" something - the same radius the snap chain uses.

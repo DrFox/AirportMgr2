@@ -15,6 +15,9 @@ public class AirsideTests : ModuleRules
 			"GeometryFramework",  // UDynamicMeshComponent - Airside's own dependency on it is
 			                      // now Private (issue #191); tests that construct one need it named here
 			"InputCore",          // EKeys, to assert WHICH key a registry entry claims
+			"AssetRegistry",      // #292: AirsideContentTest drives IAssetRegistry directly to
+			                      // prove UAirsideSettings::ResolveLetterEnvelopeTable's cache
+			                      // invalidation fires on a real AssetCreated notification
 			"Airside"
 		});
 	}

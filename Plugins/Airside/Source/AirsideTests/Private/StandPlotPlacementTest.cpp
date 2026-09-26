@@ -126,7 +126,7 @@ bool FStandPlotPlacesCodeCTest::RunTest(const FString& Parameters)
 	// midpoint, along Inward (the nose end, not the tail, is what reaches inward).
 	const FVector2D EntranceMid = (A + B) * 0.5;
 	const double ExpectedOffset =
-		IcaoCode::StandDepthForLetter(EIcaoCode::C) - IcaoCode::MaxNoseFwdForLetter(EIcaoCode::C);
+		IcaoCode::StandDepthForLetter(EIcaoCode::C) - IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C).MaxNoseFwd;
 	const double ActualOffset = FVector2D::DotProduct(Entity.Position - EntranceMid, Inward);
 	TestTrue(TEXT("the stop mark sits Depth - NoseFwd in from the entrance, along Inward"),
 		FMath::IsNearlyEqual(ActualOffset, ExpectedOffset, 1e-6));
@@ -473,7 +473,7 @@ bool FStandOutlineLegacyGetsCodeCBoxTest::RunTest(const FString& Parameters)
 	StandBox::FStandPose Pose;
 	Pose.Position = Entity->Position;
 	Pose.Facing = FVector2D(FMath::Cos(Entity->Heading), FMath::Sin(Entity->Heading));
-	StandBox::BoxAt(Pose, EIcaoCode::C, Expected);
+	StandBox::BoxAt(Pose, EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C), Expected);
 	TestTrue(TEXT("the outline is the Code C box at the stand's own pose"),
 		Entity->Outline == Expected);
 
@@ -533,7 +533,7 @@ bool FStandOutlinePointPlacedStandGetsOutlineTest::RunTest(const FString& Parame
 	StandBox::FStandPose Pose;
 	Pose.Position = Stand.Position;
 	Pose.Facing = FVector2D(FMath::Cos(Stand.Heading), FMath::Sin(Stand.Heading));
-	StandBox::BoxAt(Pose, EIcaoCode::C, Expected);
+	StandBox::BoxAt(Pose, EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C), Expected);
 	TestTrue(TEXT("its outline is the Code C box at its own pose"), Stand.Outline == Expected);
 
 	// A DEPOT PLACED THE SAME WAY STAYS OUTLINE-LESS - GiveStandOutlineIfMissing's IsStand()
@@ -576,14 +576,15 @@ bool FStandPlotLeadInSizedByLetterTest::RunTest(const FString& Parameters)
 
 		const FVector2D A(0.0, 0.0);
 		const FVector2D B(IcaoCode::StandWidthForLetter(EIcaoCode::F), 0.0);
-		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, FVector2D(0.0, 1.0), EIcaoCode::F);
+		const FLetterEnvelope FEnvelope = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::F);
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, FVector2D(0.0, 1.0), EIcaoCode::F, FEnvelope);
 		FEntityPlacement Placement;
 		Placement.Definition = FStand;
 		Placement.Anchors = FStand->Anchors;
 		Placement.Position = Pose.Position;
 		Placement.Heading = RoadGeom::Bearing(Pose.Facing);
 		Placement.PoseRole = FStand->PoseRole;
-		StandBox::BoxAt(Pose, EIcaoCode::F, Placement.Outline);
+		StandBox::BoxAt(Pose, EIcaoCode::F, FEnvelope, Placement.Outline);
 		Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(EIcaoCode::F);
 		const FEntityInstanceId Placed = Net->PlaceEntity(Placement);
 		const FEntityInstance* Stand = Net->GetEntity(Placed);

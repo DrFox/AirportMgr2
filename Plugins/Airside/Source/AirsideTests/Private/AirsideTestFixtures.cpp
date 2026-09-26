@@ -20,6 +20,13 @@ FToolContext TestTool::ContextAt(IRoadEditTarget& Target, const FVector2D& Where
 	Context.Target = &Target;
 	Context.SnapRadius = SnapRadius;
 
+	// THE FLOOR (#292 review finding): this builder is hand-assembled, not routed through
+	// FBuildSession::MakeContext, so nothing else resolves FToolContext::Envelopes for it. The
+	// floor is what every test in this module that draws a stand ghost already assumes -
+	// FloorEnvelopeForLetter equals ResolveLetterEnvelope for every letter with no fleet type
+	// modelled past it, which is every automation test's own content set (none).
+	Context.Envelopes = FLetterEnvelopeTable::Floor();
+
 	FRoadSnapResult Snap;
 	Snap.Kind = Kind;
 	Snap.Position = Where;

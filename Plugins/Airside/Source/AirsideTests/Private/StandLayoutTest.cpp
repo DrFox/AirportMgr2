@@ -267,7 +267,7 @@ bool FStandExtentClearsTheLargestAirframeAdmittedTest::RunTest(const FString& Pa
 	TestTrue(TEXT("the 737-800 really is the longer of the two"),
 		B738->Footprint.TailX < A320->Footprint.TailX);
 	TestTrue(TEXT("and the letter is sized for it, not for the design aircraft"),
-		IcaoCode::MaxTailAftForLetter(Letter) >= -B738->Footprint.TailX);
+		IcaoCode::FloorEnvelopeForLetter(Letter).MaxTailAft >= -B738->Footprint.TailX);
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 
@@ -338,8 +338,9 @@ bool FEveryAirframeFitsItsLettersRowTest::RunTest(const FString& Parameters)
 		}
 		const EIcaoCode Code = *ParsedCode;
 		const TCHAR* Letter = IcaoCode::ToLetter(Code);
-		const double TailAft = IcaoCode::MaxTailAftForLetter(Code);
-		const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(Code);
+		const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Code);
+		const double TailAft = Envelope.MaxTailAft;
+		const double NoseFwd = Envelope.MaxNoseFwd;
 
 		// CONVERTED TO NOSE-GEAR COORDINATES FIRST, because the row is stated about the stop
 		// mark and a footprint is stated about whatever origin its type declares. Zero means

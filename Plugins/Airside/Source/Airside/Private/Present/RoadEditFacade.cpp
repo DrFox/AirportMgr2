@@ -436,6 +436,13 @@ FBuildSessionTunables URoadEditFacade::MakeTunables(double ViewWorldWidth)
 	Tunables.GuideSources = Owner.GuideSources;
 	Tunables.Limits = Owner.PlacementLimits;
 
+	// RESOLVED HERE, THE ONE CHOKEPOINT BOTH DRIVERS READ (#292 review finding, same shape as
+	// Limits above): FStandPlotTool::DescribeLetter's ghost preview reads FToolContext::
+	// Envelopes rather than IcaoCode::FloorEnvelopeForLetter, so it agrees with the drawn-stand
+	// commit path and the live point-placement path, which both call UAirsideSettings::
+	// ResolveLetterEnvelope directly (Present/ may reach Content/; Tool/ may not).
+	Tunables.Envelopes = UAirsideSettings::ResolveLetterEnvelopeTable();
+
 	// ViewWorldWidth > 0: the caller has no view-scale UPROPERTY of its own to read (the
 	// editor tool) and wants a radius that stays clickable at any zoom - the same 2% floor
 	// URoadBuildEditorTool::MakeContextAt used to compute for itself. 0: the caller (the

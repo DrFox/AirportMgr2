@@ -1,5 +1,7 @@
 #include "Solve/IcaoCode.h"
 
+#include "Solve/LetterEnvelope.h"
+
 namespace IcaoCode
 {
 	namespace
@@ -33,64 +35,6 @@ namespace IcaoCode
 			 * check if a real layout looks wrong.
 			 */
 			double StandDepth;
-
-			/**
-			 * The longest airframe this letter admits, as uu AFT of the nose-gear stop mark.
-			 *
-			 * CODE C AND CODE E ARE MEASURED and the rest are authored. C is the 737-800's
-			 * tail at 3538, and IcaoCodeTest pins it against Build737's own figure so the two
-			 * cannot drift. The remaining letters are standard design values in the sense this
-			 * file's header gives for the rest of the table - revise one when a type arrives
-			 * that exceeds it.
-			 *
-			 * WAS 3430 UNTIL 2026-09-19, when Build737's footprint was found to be carrying
-			 * the A320's nose overhang - see that function. Correcting the nose moved the
-			 * tail with it, because the tail is the nose less the published overall length.
-			 *
-			 * CODE E WAS 6700 UNTIL 2026-09-21, and that revision is the one this paragraph
-			 * invited. DA_Aircraft_Plane6, the 777-300ER, measures 6799.3 uu from its
-			 * nose-gear stop mark to its tailcone - so at 6700 a Code E stand would have laid
-			 * its GSE road and its aft edge a metre INSIDE the aeroplane parked on it. Raised
-			 * to 6800, which is the measurement plus a centimetre of rounding rather than a
-			 * round number chosen to be safe: E is now as tight against its largest admitted
-			 * type as C is.
-			 *
-			 * AND 6902 SINCE 2026-09-25, FOR DA_Aircraft_Plane11, the A350-1000: its rudder
-			 * overhangs 6901.3 uu aft of the stop mark, a metre past the 777's tailcone -
-			 * the same measurement-plus-a-centimetre. That put E past F's AUTHORED 6900
-			 * (the A380 measures 6775), and IcaoCodeTest pins the column's ORDER, so F went
-			 * to 7000 with it: an authored value revised because a type exceeded the letter
-			 * below it, not because an A380 grew.
-			 *
-			 * IT WAS NOT A TEST THAT FOUND IT, AND THAT GAP IS WORTH KNOWING ABOUT.
-			 * Airside.Entities.EveryAirframeFitsItsLettersRow builds its cases from the C++
-			 * BUILDERS - A320, Build737, the Piper - and says so; a type that exists only as a
-			 * DA_Aircraft_* asset is invisible to it, and plane6 is such a type. The asset side
-			 * is covered by Airside.Content.MeasuredTypesFitTheirLettersRow instead, which
-			 * loads the DAs and asserts this same row. Two tests because there are two kinds
-			 * of type, not because one of them is redundant.
-			 */
-			double MaxTailAft;
-
-			/**
-			 * The GREATEST NOSE OVERHANG this letter admits, as uu FORWARD of the stop mark.
-			 *
-			 * NOT NECESSARILY THE SAME AEROPLANE AS MaxTailAft, and Code C is the case that
-			 * proves it: the longest type is the 737-800, whose nose reaches only 409 forward
-			 * of its gear, while the A320 is shorter overall and reaches 509 (measured off
-			 * DA_Aircraft_Plane9; the brochure says 507). A stand sized
-			 * from one aeroplane's pair would leave the other's nose outside the cleared area,
-			 * which is the same defect MaxTailAftForLetter's header describes from the other
-			 * end. So this is a MAXIMUM over the admitted types, not a second field of one
-			 * type's footprint.
-			 *
-			 * It read "the same airframe's nose... the 737-800's 520" until 2026-09-19, and
-			 * that 520 was the A320's figure rounded up and mislabelled. Correcting Build737
-			 * to its real 409 made the A320 the binding type here - which is why the number
-			 * barely moved while its REASON changed completely.
-			 * Airside.Entities.EveryAirframeFitsItsLettersRow is what enforces the maximum.
-			 */
-			double MaxNoseFwd;
 
 			/**
 			 * The fore-aft extent of every wing this letter admits, uu about the stop mark -
@@ -131,45 +75,102 @@ namespace IcaoCode
 		// exactly how a column got typed into the wrong slot unnoticed. A column is now named
 		// at its own value, so a misplaced figure is a compile error (wrong member) rather
 		// than a row that silently sizes a stand from the wrong figure.
+		//
+		// NINE COLUMNS, NOT ELEVEN, SINCE #292's SECOND STEP: MaxTailAft and MaxNoseFwd left this
+		// row for FLetterEnvelope - see Solve/LetterEnvelope.h and EnvelopeFloors below, which
+		// carries their measured history now that it is theirs rather than this table's.
 		static const FRow Rows[] = {
 			{ .Letter = TEXT("A"), .MaxWingspan = 1500.0, .RunwayWidth = 1800.0, .StandTurnRadius = 1500.0,
-			  .WingtipClearance = 300.0, .StandDepth = 2000.0, .MaxTailAft = 1000.0, .MaxNoseFwd = 300.0,
+			  .WingtipClearance = 300.0, .StandDepth = 2000.0,
 			  .WingFwd = -50.0, .WingAft = -700.0, .AftEdgeAllowance = 600.0 },
 			{ .Letter = TEXT("B"), .MaxWingspan = 2400.0, .RunwayWidth = 2300.0, .StandTurnRadius = 2000.0,
-			  .WingtipClearance = 300.0, .StandDepth = 3000.0, .MaxTailAft = 2000.0, .MaxNoseFwd = 400.0,
+			  .WingtipClearance = 300.0, .StandDepth = 3000.0,
 			  .WingFwd = -300.0, .WingAft = -1400.0, .AftEdgeAllowance = 600.0 },
-			// MaxNoseFwd 509 SINCE 2026-09-25, UP FROM 507, FOR plane9. The paper A320 (BuildA320)
-			// types the brochure's 5.07 m; DA_Aircraft_Plane9, traced off Airbus's own 3-view,
-			// measures 508.4 uu - 1.4 cm longer, which is the drawing's and left as it is, the
-			// same "built to the letter" call plane6 forced on Code E. Both still fit.
-			// ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
 			{ .Letter = TEXT("C"), .MaxWingspan = 3600.0, .RunwayWidth = 3000.0, .StandTurnRadius = 2500.0,
-			  .WingtipClearance = 450.0, .StandDepth = 5500.0, .MaxTailAft = 3538.0, .MaxNoseFwd = 509.0,
+			  .WingtipClearance = 450.0, .StandDepth = 5500.0,
 			  .WingFwd = -950.0, .WingAft = -2150.0, .AftEdgeAllowance = 600.0 },
-			// CODE D HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-25, and no figure moved.
-			// DA_Aircraft_Plane13, the 757-300, measures 4878 uu aft of its stop mark, 589 uu
-			// forward and 3805 uu of span - inside by 622, 111 and 1395. Loose, unlike C and E:
-			// the row was authored for aeroplanes up to 52 m and nothing that large is modelled.
-			// ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
 			{ .Letter = TEXT("D"), .MaxWingspan = 5200.0, .RunwayWidth = 4500.0, .StandTurnRadius = 4000.0,
-			  .WingtipClearance = 750.0, .StandDepth = 7000.0, .MaxTailAft = 5500.0, .MaxNoseFwd = 700.0,
+			  .WingtipClearance = 750.0, .StandDepth = 7000.0,
 			  .WingFwd = -1300.0, .WingAft = -3000.0, .AftEdgeAllowance = 600.0 },
-			// MaxTailAft 6902 SINCE 2026-09-25, UP FROM 6800, FOR plane11 - see MaxTailAft's note.
-			// ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
 			{ .Letter = TEXT("E"), .MaxWingspan = 6500.0, .RunwayWidth = 4500.0, .StandTurnRadius = 5000.0,
-			  .WingtipClearance = 750.0, .StandDepth = 9000.0, .MaxTailAft = 6902.0, .MaxNoseFwd = 800.0,
+			  .WingtipClearance = 750.0, .StandDepth = 9000.0,
 			  .WingFwd = -1600.0, .WingAft = -3700.0, .AftEdgeAllowance = 600.0 },
-			// CODE F HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-23, and no figure moved.
-			// DA_Aircraft_Plane8, the A380-800, measures 6775 uu from its nose-gear stop mark
-			// to its tailcone and 7940 uu of wing (7975 across the wingtip fences) - inside
-			// MaxTailAft by 125 uu and MaxWingspan by 25 even at the fences, the same "built
-			// to the letter" margin plane6 showed under E. The row stays as authored.
-			// ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
-			// MaxTailAft 7000 SINCE 2026-09-25, UP FROM 6900: E rose past it for plane11, and the
-			// column must stay ordered. The A380 is now 225 uu inside it, not 125.
 			{ .Letter = TEXT("F"), .MaxWingspan = 8000.0, .RunwayWidth = 6000.0, .StandTurnRadius = 6000.0,
-			  .WingtipClearance = 750.0, .StandDepth = 10000.0, .MaxTailAft = 7000.0, .MaxNoseFwd = 900.0,
+			  .WingtipClearance = 750.0, .StandDepth = 10000.0,
 			  .WingFwd = -1900.0, .WingAft = -4300.0, .AftEdgeAllowance = 600.0 },
+		};
+
+		/**
+		 * MaxTailAft and MaxNoseFwd's AUTHORED FLOOR per letter, uu - split from FRow above by
+		 * #292 because these two, unlike the rest of the row, are FLEET maxima:
+		 * UAirsideSettings::ResolveLetterEnvelope raises them past this floor when a loaded
+		 * UAircraftType of the letter reaches further, so the floor is what a letter with
+		 * nothing modelled - or nothing loaded, as every automation test and
+		 * IcaoCode::FloorEnvelopeForLetter's own Model/Tool callers are - keeps.
+		 *
+		 * THE FIGURES THEMSELVES ARE UNCHANGED BY THE SPLIT - copied here from FRow's old
+		 * MaxTailAft/MaxNoseFwd columns verbatim, with their history:
+		 *
+		 * CODE C AND CODE E WERE MEASURED before this floor existed, and both still are - C is
+		 * the 737-800's tail at 3538, and IcaoCodeTest pins it against Build737's own figure so
+		 * the two cannot drift. It was 3430 until 2026-09-19, when Build737 was found to be
+		 * carrying the A320's nose overhang; correcting the nose moved the tail with it, because
+		 * the tail is the nose less the published overall length. Code E was 6700 until
+		 * 2026-09-21: DA_Aircraft_Plane6, the 777-300ER, measures 6799.3 uu from its nose-gear
+		 * stop mark to its tailcone, so at 6700 a Code E stand would have laid its GSE road and
+		 * its aft edge a metre INSIDE the aeroplane parked on it. Raised to 6800 - the
+		 * measurement plus a centimetre of rounding, not a round number chosen to be safe.
+		 *
+		 * MaxNoseFwd's C WAS 509 SINCE 2026-09-25, UP FROM 507, FOR plane9. The paper A320
+		 * (BuildA320) types the brochure's 5.07 m; DA_Aircraft_Plane9, traced off Airbus's own
+		 * 3-view, measures 508.4 uu - 1.4 cm longer, which is the drawing's and left as it is,
+		 * the same "built to the letter" call plane6 forced on Code E. Both still fit.
+		 * ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
+		 *
+		 * CODE D HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-25, and no figure moved.
+		 * DA_Aircraft_Plane13, the 757-300, measures 4878 uu aft of its stop mark and 589 uu
+		 * forward - inside by 622 and 111. Loose, unlike C and E: the row was authored for
+		 * aeroplanes up to 52 m and nothing that large is modelled.
+		 * ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
+		 *
+		 * MaxTailAft's E WAS 6902 SINCE 2026-09-25, UP FROM 6800, FOR plane11: DA_Aircraft_Plane11,
+		 * the A350-1000, has its rudder overhang 6901.3 uu aft of the stop mark, a metre past the
+		 * 777's tailcone - the same measurement-plus-a-centimetre. That put E past F's AUTHORED
+		 * 6900 (the A380 measures 6775), and the column's ORDER must hold (now pinned by
+		 * Airside.Solve.IcaoCode.EnvelopeFloorOrderedByLetter - see #292), so F went to 7000 with
+		 * it: an authored value revised because a type exceeded the letter below it, not because
+		 * an A380 grew. ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
+		 *
+		 * CODE F HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-23, and no figure moved on its
+		 * own account. DA_Aircraft_Plane8, the A380-800, measures 6775 uu from its nose-gear stop
+		 * mark to its tailcone - 225 uu inside MaxTailAft's 7000 (originally 125 uu inside 6900,
+		 * before E's 2026-09-25 rise above forced F up with it).
+		 * ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
+		 *
+		 * IT WAS NOT A TEST THAT FOUND PLANE6'S GAP, AND THAT IS WORTH KNOWING ABOUT.
+		 * Airside.Entities.EveryAirframeFitsItsLettersRow builds its cases from the C++
+		 * BUILDERS - A320, Build737, the Piper - and says so; a type that exists only as a
+		 * DA_Aircraft_* asset is invisible to it, and plane6 is such a type. The asset side is
+		 * covered by Airside.Content.MeasuredTypesFitTheirLettersRow instead, which loads the DAs
+		 * and asserts this same floor (through UAirsideSettings::ResolveLetterEnvelope, since
+		 * #292 - it is guaranteed >= every asset's measurement by construction now, but the test
+		 * still catches the AssetRegistry scan failing to reach one, or Parse disagreeing with a
+		 * mistyped Code). Two tests because there are two kinds of type, not because one of them
+		 * is redundant.
+		 */
+		struct FEnvelopeFloorRow
+		{
+			double MaxTailAft;
+			double MaxNoseFwd;
+		};
+
+		static const FEnvelopeFloorRow EnvelopeFloors[] = {
+			/* A */ { 1000.0, 300.0 },
+			/* B */ { 2000.0, 400.0 },
+			/* C */ { 3538.0, 509.0 },
+			/* D */ { 5500.0, 700.0 },
+			/* E */ { 6902.0, 800.0 },
+			/* F */ { 7000.0, 900.0 },
 		};
 
 		/**
@@ -324,14 +325,16 @@ namespace IcaoCode
 		return RowFor(Code).StandDepth;
 	}
 
-	double MaxTailAftForLetter(EIcaoCode Code)
+	FLetterEnvelope FloorEnvelopeForLetter(EIcaoCode Code)
 	{
-		return RowFor(Code).MaxTailAft;
-	}
+		const int32 Index = static_cast<int32>(Code);
+		check(Index >= 0 && Index < UE_ARRAY_COUNT(EnvelopeFloors));
+		const FEnvelopeFloorRow& Row = EnvelopeFloors[Index];
 
-	double MaxNoseFwdForLetter(EIcaoCode Code)
-	{
-		return RowFor(Code).MaxNoseFwd;
+		FLetterEnvelope Envelope;
+		Envelope.MaxTailAft = Row.MaxTailAft;
+		Envelope.MaxNoseFwd = Row.MaxNoseFwd;
+		return Envelope;
 	}
 
 	double WingFwdForLetter(EIcaoCode Code)

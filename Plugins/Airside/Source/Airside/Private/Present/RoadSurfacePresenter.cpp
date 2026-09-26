@@ -11,6 +11,7 @@
 #include "Build/RunwayMarkingBuilder.h"
 #include "Build/StandMarkingBuilder.h"
 #include "Components/DynamicMeshComponent.h"
+#include "Content/AirsideSettings.h"
 #include "Debug/RoadRebuildCensus.h"
 #include "DrawDebugHelpers.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -428,11 +429,14 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	int32 HoldingPositionsPainted = 0;
 	int32 StandsPainted = 0;
 	FStandMarkingCensus StandCensus;
+	// RESOLVED ONCE PER REBUILD, not once per stand painted - #292's own rule for a Build/
+	// caller that touches more than one letter in a pass. See Solve/LetterEnvelope.h.
+	const FLetterEnvelopeTable Envelopes = UAirsideSettings::ResolveLetterEnvelopeTable();
 	const int32 Painted = RebuildLayer(ESurfaceLayer::HoldingPaint,
-		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus](FRoadMeshBuffers& OutBuffers)
+		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus, &Envelopes](FRoadMeshBuffers& OutBuffers)
 		{
 			HoldingPositionsPainted = FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, OutBuffers);
-			StandsPainted = FStandMarkingBuilder::Build(Network, MarkingZ, OutBuffers, &StandCensus);
+			StandsPainted = FStandMarkingBuilder::Build(Network, MarkingZ, OutBuffers, Envelopes, &StandCensus);
 			return HoldingPositionsPainted + StandsPainted;
 		},
 		Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
