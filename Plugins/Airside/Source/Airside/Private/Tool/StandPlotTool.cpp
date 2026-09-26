@@ -12,15 +12,23 @@
 namespace StandPlotRules
 {
 	/**
-	 * The depth quantum, uu - one metre.
+	 * The depth quantum, uu - HALF a metre, not a whole one.
 	 *
-	 * A METRE, NOT THE ENTRANCE'S 5 m STEP, because depth is what separates one letter from the
-	 * next and the table's depth floors sit on whole metres (IcaoCode's StandDepth column) - a
-	 * 5 m step would put some floors between two reachable depths, and the player could never
-	 * draw the smallest stand of that letter. Still quantised, so the readout's "Size" and the
-	 * committed outline agree to the metre with what the player read.
+	 * WAS 100 (a whole metre) until #355: the far-side-entry depth floors (IcaoCode's
+	 * StandDepth column) are no longer all whole metres - B's is 3950, half a metre past its
+	 * neighbours - so a whole-metre grid put B's floor exactly ON A ROUNDING MIDPOINT (3900 vs
+	 * 4000, both a half-quantum away). A diagonal-taxiway click's depth is a dot product of
+	 * rotated vectors, never bitwise 3950.0 even when the player drew exactly at the floor,
+	 * so which side of that midpoint it fell on was decided by sub-uu float noise rather than
+	 * by the player - and about half the time it rounded DOWN to 3900, a whole letter short of
+	 * B (Airside.Tool.StandPlot.DiagonalTaxiwayReadsItsLetter, 2026-09-26: Code B measured
+	 * "Code A" at every diagonal angle bar one). Half a metre is exact for every floor in the
+	 * table (3400, 3950, 6500, 8400, 9500, 10000 all divide by 50), so every floor now sits 25
+	 * uu clear of its nearest OTHER grid point - far more margin than any rotation's float error
+	 * - and still quantised, so the readout's "Size" and the committed outline agree with what
+	 * the player read.
 	 */
-	constexpr double DepthStepUu = 100.0;
+	constexpr double DepthStepUu = 50.0;
 }
 
 FText FStandPlotTool::GetDisplayName() const
