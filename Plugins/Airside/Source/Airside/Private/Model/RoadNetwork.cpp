@@ -1262,7 +1262,7 @@ void URoadNetwork::PostLoad()
 	EnsureStandOutlines();
 }
 
-bool URoadNetwork::GiveStandOutlineIfMissing(FEntityInstance& Instance)
+bool URoadNetwork::GiveStandOutlineIfMissing(FEntityInstance& Instance, const FLetterEnvelope& CodeCEnvelope)
 {
 	if (!Instance.IsStand() || Instance.Outline.Num() >= 3)
 	{
@@ -1275,17 +1275,25 @@ bool URoadNetwork::GiveStandOutlineIfMissing(FEntityInstance& Instance)
 	StandBox::FStandPose Pose;
 	Pose.Position = Instance.Position;
 	Pose.Facing = FVector2D(FMath::Cos(Instance.Heading), FMath::Sin(Instance.Heading));
-	// THE FLOOR, NOT THE FLEET-RESOLVED ENVELOPE (#292): Model/ may not include
-	// Content/AirsideSettings (Check-Architecture's include-direction rule), and this path
-	// exists to reproduce EXACTLY the pre-#292 numbers for a legacy stand nobody re-measured -
-	// using a figure the fleet has since raised would give this migration a DIFFERENT box than
-	// the one it has always given, which is the behaviour change a migration must not make.
-	StandBox::BoxAt(Pose, EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C), Instance.Outline);
+	// CodeCEnvelope IS THE CALLER'S CHOICE (#292 review finding), not always the floor: see
+	// this function's own header for why EnsureStandOutlines and PlaceEntity mean different
+	// things by "the" Code C envelope, and StandBox::BoxAt's header for why Envelope must be
+	// the SAME one the pose (if it came from PlaceEntity's live path) was built against.
+	StandBox::BoxAt(Pose, EIcaoCode::C, CodeCEnvelope, Instance.Outline);
 	return true;
 }
 
 int32 URoadNetwork::EnsureStandOutlines()
 {
+	// THE FLOOR, DELIBERATELY, NEVER THE FLEET-RESOLVED ENVELOPE (#292 review finding): this
+	// runs at PostLoad, on a level saved before a stand's outline was captured at placement at
+	// all, and its whole job is a MIGRATION - reproducing EXACTLY the pre-#292 box such a stand
+	// has always had. Model/ cannot reach Content/ to ask for the resolved figure anyway (see
+	// StandBox::PoseFor's header), but even if it could, using the fleet's CURRENT envelope
+	// here would make an old save's stand outline depend on which content happens to be loaded
+	// the day it loads - a migration whose output moves is not a migration.
+	const FLetterEnvelope CodeCFloor = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C);
+
 	int32 Changed = 0;
 	for (FEntityInstance& Instance : Entities)
 	{
@@ -1293,7 +1301,7 @@ int32 URoadNetwork::EnsureStandOutlines()
 		{
 			continue;
 		}
-		if (GiveStandOutlineIfMissing(Instance))
+		if (GiveStandOutlineIfMissing(Instance, CodeCFloor))
 		{
 			// See this function's own header comment on why the DesignWingspan write lives
 			// HERE and not in GiveStandOutlineIfMissing: only a stand old enough to have
@@ -1317,7 +1325,7 @@ int32 URoadNetwork::EnsureStandOutlines()
 FEntityInstanceId URoadNetwork::PlaceEntity(
 	UEntityDefinition* Definition, TConstArrayView<FEntityAnchor> Anchors,
 	const FVector2D& Position, double Heading, double DesignWingspan, EServiceRole PoseRole,
-	int32 Trucks)
+	int32 Trucks, const FLetterEnvelope& CodeCEnvelope)
 {
 	// A FORWARDER. The logic moved to the overload below when the plot and its modules
 	// became the fourth and fifth things a placement carries - see FEntityPlacement. Every
@@ -1330,10 +1338,10 @@ FEntityInstanceId URoadNetwork::PlaceEntity(
 	Placement.DesignWingspan = DesignWingspan;
 	Placement.PoseRole = PoseRole;
 	Placement.Trucks = Trucks;
-	return PlaceEntity(Placement);
+	return PlaceEntity(Placement, CodeCEnvelope);
 }
 
-FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement)
+FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, const FLetterEnvelope& CodeCEnvelope)
 {
 	if (Placement.Definition == nullptr)
 	{
@@ -1362,7 +1370,13 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement)
 	// forwards through the other overload into this one, so covering this one function covers
 	// both. A drawn stand's own Outline (>= 3 points already) and a depot (never IsStand())
 	// are both left exactly as given - see GiveStandOutlineIfMissing's guard.
-	GiveStandOutlineIfMissing(Instance);
+	//
+	// CodeCEnvelope IS THE CALLER'S: this overload's own default is the floor, purely so the
+	// ~thirty existing callers keep compiling (see the header) - URoadEditFacade::PlaceEntity,
+	// the one LIVE point-placement gesture, passes UAirsideSettings::ResolveLetterEnvelope
+	// explicitly instead, so this box matches the ghost preview and the drawn-stand commit
+	// path, which read the same resolved figure. See PlaceEntity's own header comment.
+	GiveStandOutlineIfMissing(Instance, CodeCEnvelope);
 
 	// DERIVED FROM THE SHEDS, not captured, whenever there are modules at all. A shed is a
 	// truck: the player's mix IS the fleet size, so a separately-stated count could only

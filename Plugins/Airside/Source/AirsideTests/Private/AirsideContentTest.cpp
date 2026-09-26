@@ -1,5 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Content/FenceKit.h"
@@ -401,6 +403,70 @@ bool FLetterEnvelopeRaisedByAFleetTypeTest::RunTest(const FString& Parameters)
 	Fleet.Add(WrongLetter);
 	TestEqual(TEXT("a Code F type does not raise Code C's envelope"),
 		UAirsideSettings::EnvelopeFromFleet(Letter, Fleet).MaxTailAft, Floor + 1.0, 0.01);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLetterEnvelopeInvalidatesOnAssetChangeTest,
+	"Airside.Content.LetterEnvelope.InvalidatesOnAssetChange",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLetterEnvelopeInvalidatesOnAssetChangeTest::RunTest(const FString& Parameters)
+{
+	// THE GAP #292's REVIEW FOUND: ResolveLetterEnvelopeTable's cache had no invalidation in
+	// production at all - a UAircraftType authored or re-measured after the FIRST resolve of a
+	// session stayed invisible until the editor restarted, exactly the class of stale-cache bug
+	// "a green test may measure nothing" warns about (nothing here would have failed without
+	// content changing mid-session, which no other test does). This drives the AssetRegistry
+	// the way the editor itself does on import - AssetCreated, not a direct cache call - so it
+	// proves BindLetterEnvelopeInvalidation's delegate actually fires, not merely that the cache
+	// CAN be cleared.
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+		TEXT("AssetRegistry")).Get();
+
+	const EIcaoCode Letter = EIcaoCode::A;
+	UAirsideSettings::ResetLetterEnvelopeCacheForTest();
+	const double FloorBefore = UAirsideSettings::ResolveLetterEnvelope(Letter).MaxTailAft;
+
+	// A REAL ASSET, NOT TRANSIENT: UObject::IsAsset() (what AssetCreated itself gates on)
+	// requires RF_Public and a package outer that is not the transient package - see that
+	// function's own implementation. GetTransientPackage() is what every OTHER UAircraftType
+	// fixture in this module uses precisely because it is NOT registered as an asset; this one
+	// test needs the opposite.
+	UPackage* ProbePackage = CreatePackage(TEXT("/Temp/AirsideLetterEnvelopeInvalidationTest/DA_Aircraft_EnvelopeProbe"));
+	UAircraftType* Probe = NewObject<UAircraftType>(ProbePackage,
+		TEXT("DA_Aircraft_EnvelopeProbe"), RF_Public | RF_Standalone);
+	Probe->Code = FName(IcaoCode::ToLetter(Letter));
+	Probe->SteerAxleX = 0.0;
+	Probe->Footprint.TailX = -(FloorBefore + 5000.0);   // absurdly further aft than any floor
+
+	// TEARDOWN RUNS REGARDLESS - a stray probe left registered, or a cache still pinned to its
+	// inflated figure, would corrupt every other test in this session that asks for Code A's
+	// envelope, this test's own early-outs included.
+	ON_SCOPE_EXIT
+	{
+		if (Probe->IsAsset())
+		{
+			Registry.AssetDeleted(Probe);
+		}
+		Probe->ClearFlags(RF_Public | RF_Standalone);
+		Probe->MarkAsGarbage();
+		UAirsideSettings::ResetLetterEnvelopeCacheForTest();
+	};
+
+	if (!TestTrue(TEXT("the probe registers as a real asset, or this test proves nothing"),
+		Probe->IsAsset()))
+	{
+		return false;
+	}
+
+	Registry.AssetCreated(Probe);
+
+	const double AfterAdd = UAirsideSettings::ResolveLetterEnvelope(Letter).MaxTailAft;
+	TestTrue(FString::Printf(TEXT("adding the probe raised Code A's envelope to %.0f with no "
+		"ResetLetterEnvelopeCacheForTest call (was %.0f)"), AfterAdd, FloorBefore),
+		AfterAdd >= FloorBefore + 5000.0 - 0.5);
 
 	return true;
 }

@@ -39,6 +39,15 @@ struct FLetterEnvelope
 
 	/** The greatest nose overhang this letter admits, uu forward of the stop mark. Positive. */
 	double MaxNoseFwd = 0.0;
+
+	/** Exact, not epsilon - both fields are either read straight off IcaoCode::
+	 *  FloorEnvelopeForLetter or MAX'd against a footprint figure, never accumulated in a way
+	 *  that could drift by rounding. Exists for FBuildSessionTunables::operator==, which
+	 *  FBuildSession's frame-context cache (#303) needs field-by-field. */
+	bool operator==(const FLetterEnvelope& Other) const
+	{
+		return MaxTailAft == Other.MaxTailAft && MaxNoseFwd == Other.MaxNoseFwd;
+	}
 };
 
 /**
@@ -59,6 +68,19 @@ struct AIRSIDE_API FLetterEnvelopeTable
 	const FLetterEnvelope& operator[](EIcaoCode Code) const
 	{
 		return Envelopes[static_cast<uint8>(Code)];
+	}
+
+	/** Field by field, FBuildSessionTunables::operator==' own reason. */
+	bool operator==(const FLetterEnvelopeTable& Other) const
+	{
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Envelopes); ++Index)
+		{
+			if (!(Envelopes[Index] == Other.Envelopes[Index]))
+			{
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**

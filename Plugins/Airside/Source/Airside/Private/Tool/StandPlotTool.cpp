@@ -142,14 +142,14 @@ void FStandPlotTool::DescribeLetter(const FToolContext& Context, TConstArrayView
 	// PlaceStandInPlot derives it with, so the keep-out and lead-in are drawn about the stop
 	// mark an arrival will actually stop on, not an impression of it.
 	//
-	// THE FLOOR, NOT THE FLEET-RESOLVED ENVELOPE (#292): Tool/ may not include Content/ at all
-	// (Check-Architecture's include-direction rule), so this ghost cannot ask
-	// UAirsideSettings::ResolveLetterEnvelope the way the commit path (RoadEditFacadeSurfaces.cpp)
-	// does. Accepted rather than worked around: the two agree exactly until a loaded
-	// UAircraftType raises MaxNoseFwd past today's floor, and even then the preview is an
-	// approximation of a stand the player has not committed yet, not the commit itself.
+	// Context.Envelopes, NOT IcaoCode::FloorEnvelopeForLetter (#292 review finding): Tool/ may
+	// not include Content/AirsideSettings itself (Check-Architecture's include-direction rule),
+	// but the SAME resolved table PlaceStandInPlot reads is threaded onto the context by
+	// URoadEditFacade::MakeTunables -> FBuildSession::MakeContext (see FToolContext::Envelopes'
+	// own comment), so the ghost, the drawn-stand commit and the point-placement path all read
+	// one figure - not three, agreeing only by coincidence while nothing has raised a letter yet.
 	const StandBox::FStandPose Pose =
-		StandBox::PoseFor(Shown[0], Shown[1], Inward, *Letter, IcaoCode::FloorEnvelopeForLetter(*Letter));
+		StandBox::PoseFor(Shown[0], Shown[1], Inward, *Letter, Context.Envelopes[*Letter]);
 	const FVector2D Left = RoadGeom::PerpCCW(Pose.Facing);
 	auto ToWorld = [&Pose, &Left](double X, double Y)
 	{

@@ -137,9 +137,9 @@ namespace IcaoCode
 		 * the A350-1000, has its rudder overhang 6901.3 uu aft of the stop mark, a metre past the
 		 * 777's tailcone - the same measurement-plus-a-centimetre. That put E past F's AUTHORED
 		 * 6900 (the A380 measures 6775), and the column's ORDER must hold (now pinned by
-		 * Airside.Content.LetterEnvelope.OrderedByLetter - see #292), so F went to 7000 with it:
-		 * an authored value revised because a type exceeded the letter below it, not because an
-		 * A380 grew. ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
+		 * Airside.Solve.IcaoCode.EnvelopeFloorOrderedByLetter - see #292), so F went to 7000 with
+		 * it: an authored value revised because a type exceeded the letter below it, not because
+		 * an A380 grew. ENFORCED BY: Airside.Content.MeasuredTypesFitTheirLettersRow
 		 *
 		 * CODE F HAS A TYPE TO MEASURE IT AGAINST SINCE 2026-09-23, and no figure moved on its
 		 * own account. DA_Aircraft_Plane8, the A380-800, measures 6775 uu from its nose-gear stop

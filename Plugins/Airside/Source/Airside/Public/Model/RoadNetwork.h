@@ -8,6 +8,8 @@
 #include "Model/RoadApron.h"
 #include "Model/RoadEntity.h"
 #include "Model/TrafficOccupancy.h"
+#include "Solve/IcaoCode.h"
+#include "Solve/LetterEnvelope.h"
 #include "RoadNetwork.generated.h"
 
 class URoadProfile;
@@ -538,11 +540,24 @@ public:
 	 *
 	 * Trucks is the third and last such capture - see FEntityInstance::Trucks for why a
 	 * fourth would become a struct instead.
+	 *
+	 * CodeCEnvelope DEFAULTS TO THE FLOOR (#292 review finding): a stand placed with no
+	 * drawn plot always gets a CODE C box (see GiveStandOutlineIfMissing), so this is the
+	 * envelope THAT box is built from. Defaulted so the ~thirty call sites below keep
+	 * compiling unchanged - almost all of them tests that want "a stand" and do not care
+	 * whether it matches today's fleet. THE ONE LIVE CALLER THAT MUST NOT ACCEPT THE
+	 * DEFAULT is URoadEditFacade::PlaceEntity (the point-placement gesture): it passes
+	 * UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::C) explicitly, so a point-placed
+	 * stand's box matches the SAME figure the ghost preview and the drawn-stand commit
+	 * path read - the three used to agree only because the floor equalled the resolved
+	 * envelope, which stops being true the moment a fleet type reaches further than the
+	 * floor. Pinned by Airside.Present.StandPlot.GhostCommitAndPointPlacedAgree.
 	 */
 	FEntityInstanceId PlaceEntity(UEntityDefinition* Definition,
 		TConstArrayView<FEntityAnchor> Anchors, const FVector2D& Position, double Heading,
 		double DesignWingspan = 0.0, EServiceRole PoseRole = EServiceRole::Aircraft,
-		int32 Trucks = 0);
+		int32 Trucks = 0,
+		const FLetterEnvelope& CodeCEnvelope = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C));
 
 	/**
 	 * Place from a full description, including a drawn plot and the modules filling it.
@@ -551,8 +566,14 @@ public:
 	 * way round - the refactor contract's rule that every interface stays reachable at its
 	 * old name, as a forwarder if the logic moved. Roughly thirty call sites use the old
 	 * form, almost all of them tests, and churning them is not this slice's work.
+	 *
+	 * CodeCEnvelope - see the overload above's own comment. Defaulted for the same reason:
+	 * a Placement that already carries a drawn Outline (>= 3 points) never reads it at all
+	 * (GiveStandOutlineIfMissing's own guard), so every caller that places a drawn stand or
+	 * a depot may ignore this parameter.
 	 */
-	FEntityInstanceId PlaceEntity(const FEntityPlacement& Placement);
+	FEntityInstanceId PlaceEntity(const FEntityPlacement& Placement,
+		const FLetterEnvelope& CodeCEnvelope = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C));
 
 	/**
 	 * Give every alive IsStand() entity with Outline.Num() < 3 the Code C box its pose
@@ -771,8 +792,17 @@ private:
 	 * stays out of the placement path. Static: it needs nothing from a live network, only the
 	 * instance handed to it, so both callers can use it on an FEntityInstance& they already
 	 * have without a redundant handle round trip.
+	 *
+	 * CodeCEnvelope IS REQUIRED, NOT DEFAULTED, unlike the PUBLIC PlaceEntity overloads above:
+	 * this is private with exactly two callers, both in this file, and both now state which
+	 * envelope they mean explicitly - EnsureStandOutlines passes IcaoCode::
+	 * FloorEnvelopeForLetter(EIcaoCode::C) (a deliberate migration freeze: a legacy stand's
+	 * outline must read back the SAME box today it always has, never a fleet-raised one), and
+	 * PlaceEntity(const FEntityPlacement&) forwards whatever ITS OWN CodeCEnvelope parameter
+	 * was handed (defaulted to the floor there only because most of its ~thirty callers do not
+	 * care - see that overload's comment).
 	 */
-	static bool GiveStandOutlineIfMissing(FEntityInstance& Instance);
+	static bool GiveStandOutlineIfMissing(FEntityInstance& Instance, const FLetterEnvelope& CodeCEnvelope);
 
 	void SortIncident(FRoadNodeId Node);
 

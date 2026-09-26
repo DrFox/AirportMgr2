@@ -458,10 +458,19 @@ namespace
 	 *  AssetRegistry scan answers all six at once. See ResolveLetterEnvelope's own comment
 	 *  on why this is a plain lazy-once cache rather than ResolveTierDesignVehicles' own
 	 *  content-pointer invalidation: there is no single UAirsideContent driving this scan for
-	 *  that pattern to key off. */
+	 *  that pattern to key off - INVALIDATED BY THE ASSET REGISTRY INSTEAD, see
+	 *  BindLetterEnvelopeInvalidation below (#292 review finding: this cache was never
+	 *  invalidated in production before, so a UAircraftType authored or re-measured after the
+	 *  first resolve of a session stayed invisible until the editor restarted). */
 	struct FLetterEnvelopeCache
 	{
 		bool bValid = false;
+
+		/** Bound ONCE per process, never unbound - see BindLetterEnvelopeInvalidation. Left
+		 *  true across ResetLetterEnvelopeCacheForTest so a test does not leak a second
+		 *  AddStatic subscriber onto the registry's delegate every time it resets. */
+		bool bDelegatesBound = false;
+
 		FLetterEnvelopeTable Table;
 	};
 
@@ -470,11 +479,56 @@ namespace
 		static FLetterEnvelopeCache Cache;
 		return Cache;
 	}
+
+	/** Any UAircraftType asset changing invalidates the WHOLE table rather than just its own
+	 *  letter - simpler than parsing Asset.Code out of the tag data to find which of the six
+	 *  it might raise or lower, and the next resolve is one AssetRegistry query plus six MAX
+	 *  loops either way, not per-frame. */
+	void OnAircraftTypeAssetChanged(const FAssetData& Asset)
+	{
+		if (Asset.AssetClassPath == UAircraftType::StaticClass()->GetClassPathName())
+		{
+			GetLetterEnvelopeCache().bValid = false;
+		}
+	}
+
+	/**
+	 * Subscribes OnAircraftTypeAssetChanged to the AssetRegistry ONCE, lazily, on the first
+	 * resolve of a session - so a UAircraftType authored, reimported or edited AFTER that
+	 * point is seen on the NEXT ResolveLetterEnvelope/Table call rather than requiring an
+	 * editor restart (#292 review finding). AddStatic, not a lambda: nothing here needs
+	 * capturing, and a free function is easy to reason about never double-firing through two
+	 * different closures.
+	 *
+	 * ENFORCED BY: Airside.Content.LetterEnvelope.InvalidatesOnAssetChange, which authors a
+	 * real (non-transient, RF_Public) in-memory UAircraftType and notifies the registry with
+	 * AssetCreated exactly as the editor does on import, then asserts the NEXT resolve sees it
+	 * with no ResetLetterEnvelopeCacheForTest call. OnAssetUpdated has no equally direct public
+	 * trigger to test the same way (it fires from the registry's own re-scan machinery, not a
+	 * single UObject* call like AssetCreated/AssetDeleted) - bound anyway, on the same
+	 * reasoning AssetCreated is, for the reimport/edit case that test cannot cheaply drive.
+	 */
+	void BindLetterEnvelopeInvalidation()
+	{
+		FLetterEnvelopeCache& Cache = GetLetterEnvelopeCache();
+		if (Cache.bDelegatesBound)
+		{
+			return;
+		}
+		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+			TEXT("AssetRegistry")).Get();
+		Registry.OnAssetAdded().AddStatic(&OnAircraftTypeAssetChanged);
+		Registry.OnAssetUpdated().AddStatic(&OnAircraftTypeAssetChanged);
+		Cache.bDelegatesBound = true;
+	}
 }
 
 void UAirsideSettings::ResetLetterEnvelopeCacheForTest()
 {
-	GetLetterEnvelopeCache() = FLetterEnvelopeCache();
+	FLetterEnvelopeCache& Cache = GetLetterEnvelopeCache();
+	Cache.bValid = false;
+	Cache.Table = FLetterEnvelopeTable();
+	// bDelegatesBound is DELIBERATELY NOT reset - see its own comment.
 	ResolveLetterEnvelopeCallCountForTest = 0;
 }
 
@@ -518,6 +572,11 @@ FLetterEnvelope UAirsideSettings::EnvelopeFromFleet(EIcaoCode Letter, TArrayView
 
 const FLetterEnvelopeTable& UAirsideSettings::ResolveLetterEnvelopeTable()
 {
+	// BOUND BEFORE THE VALIDITY CHECK, every call: cheap once bDelegatesBound is already true
+	// (a branch and a return), and it is what lets a fresh session's very FIRST resolve start
+	// listening before anything could invalidate it.
+	BindLetterEnvelopeInvalidation();
+
 	FLetterEnvelopeCache& Cache = GetLetterEnvelopeCache();
 	if (!Cache.bValid)
 	{
