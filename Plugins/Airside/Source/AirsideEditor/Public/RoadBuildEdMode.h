@@ -174,6 +174,18 @@ private:
 	void CommitActiveGesture();
 
 	/**
+	 * Enter/Insert/Remove's mapped command (issue #304): forwards Verb Index of
+	 * BuildVerbRegistry() to the active URoadBuildEditorTool's own ApplyVerb, the identical
+	 * cast-and-forward shape CancelActiveGesture/CommitActiveGesture already use for the two
+	 * verbs that predate this table.
+	 */
+	void ApplyVerb(int32 VerbIndex);
+
+	/** BuildVerbRegistry()[VerbIndex].IsActive(Session) - what lights the palette's toggle
+	 *  button, the way MapReselectAwareToolCommand's own IsChecked lights a tool button. */
+	bool IsVerbActive(int32 VerbIndex) const;
+
+	/**
 	 * Starts the tool at this registry index - or, when it is already running, RESELECTS it.
 	 *
 	 * Taking the index rather than the name because a reselect has to reach the session, and

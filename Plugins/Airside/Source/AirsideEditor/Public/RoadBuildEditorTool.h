@@ -153,6 +153,17 @@ public:
 	void CommitGesture();
 
 	/**
+	 * Runs Verb.Apply against the shared session at the last known cursor - the editor's own
+	 * door onto BuildVerbRegistry(), the same shape CancelGesture/CommitGesture already are for
+	 * the two verbs that predate it (issue #304). Called from URoadBuildEdMode's mapped
+	 * commands for Remove/Insert/Edit, which is what makes the sticky EGestureMode trio
+	 * reachable in the editor for the first time - GetActiveTool() already returns FEditTool the
+	 * moment the session's mode is Edit (FBuildSession::GetActiveTool's own comment), so nothing
+	 * else has to change for a drag or a merge to reach it once the mode itself does.
+	 */
+	void ApplyVerb(const FBuildVerbRegistration& Verb);
+
+	/**
 	 * Draws the graph that already exists - nodes by degree, stands by heading.
 	 *
 	 * The runtime HUD has always done this; the editor never did, which is why existing

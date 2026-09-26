@@ -13,6 +13,7 @@
 
 class URoadNetwork;
 class IRoadEditTarget;
+class FBuildSession;
 
 /**
  * What a gesture MEANS right now, across every tool. Exactly one of these is true.
@@ -137,6 +138,68 @@ struct FToolRegistration
  * table is built and no second owner that could be constructed in a different order.
  */
 AIRSIDE_API TConstArrayView<FToolRegistration> ToolRegistry();
+
+/**
+ * One verb that is not a tool: the sticky EGestureMode trio, Remove/Insert/Edit. Bundles what
+ * FRoadBuildEdModeCommands needs to register a UI_COMMAND (Id/Name/Tooltip/Key) with what runs
+ * it against the shared FBuildSession - ToolRegistry()'s own shape (Key/Id/Name/Tooltip plus a
+ * maker), applied to the other thing a key can mean besides picking a tool.
+ *
+ * ISSUE #304: `grep GestureMode AirsideEditor/Private/*.cpp` was 0 - nothing in the editor
+ * module ever called SetGestureMode/ToggleGestureMode, though BuildActions.cpp has carried
+ * Remove/Insert/Edit as bar rows since the mode was unified onto FBuildSession (EGestureMode's
+ * own header comment). This table is now the ONE list both BuildActions.cpp's three rows and
+ * FRoadBuildEdModeCommands::RegisterCommands's loop are built from, so a fourth sticky mode
+ * cannot be added to one and missed in the other - CLAUDE.md's "check where a list is
+ * CONSUMED, not where it is declared", the exact shape ToolRegistry() already closed for tools.
+ *
+ * BUILD AND CANCEL ARE DELIBERATELY NOT HERE, though the issue's own review named them beside
+ * these three. Both already have a correct, working command in BOTH drivers today
+ * (FRoadBuildEdModeCommands::Build/CancelGesture, BuildActions.cpp's edit.build) - there is no
+ * defect behind them to close. Cancel also has no ONE key to register: PIE binds it straight to
+ * right-click (ARoadBuildController::SetupInputComponent), never through BuildActions() at all,
+ * because the viewport's own context menu had already claimed right-click in the editor
+ * (FRoadBuildEdModeCommands::CancelGesture's own comment) - a single FKey field here cannot
+ * represent two drivers with two different gestures for the same verb without inventing the
+ * exception list this table exists to avoid. Folding a working pair in to match a broken trio
+ * would be churn with no bug behind it.
+ *
+ * GUIDELINES IS ALSO NOT HERE, for a different reason: `RoadBuildEditorTool.cpp`'s
+ * `DrawPersistentState` already ruled the editor viewport's guideline overlay ALWAYS ON, no
+ * toggle - "a visibility change is not the place to take that on" - and PIE's own bDrawGuidelines
+ * lives on ARoadBuildController as a UPROPERTY(EditAnywhere) designer default, not session state
+ * a keypress flips the way EGestureMode does. Reaching it from FBuildSession would mean moving a
+ * level-authorable knob into shared runtime state to make one table shape uniform, which is a
+ * separate, larger change this issue's evidence never established a defect for.
+ */
+struct FBuildVerbRegistration
+{
+	FKey Key;
+
+	/** STABLE, unlocalised - see FToolRegistration::Id for why this is the one field nothing
+	 *  localises: FUICommandInfo persists it to the editor's per-user keybindings ini. */
+	FName Id;
+
+	FText Name;
+	FText Tooltip;
+
+	/**
+	 * What pressing this verb does to the shared session, given the caller's own context - each
+	 * driver assembles an FToolContext its own way (a live mouse ray in PIE, a cached hover in
+	 * the editor), so a context is the one thing this table cannot build for a caller.
+	 */
+	TFunction<void(FBuildSession&, const FToolContext&)> Apply;
+
+	/** Lit on the bar, checked in the editor's palette: whether this verb is the session's
+	 *  current state right now. Needs only the session - GetGestureMode() answers all three. */
+	TFunction<bool(const FBuildSession&)> IsActive;
+
+	/** Greyed on the bar when false. Also needs only the session, the same way
+	 *  ARoadBuildController::ActiveToolHasEditHandles already reads nothing else. */
+	TFunction<bool(const FBuildSession&)> IsEnabled;
+};
+
+AIRSIDE_API TConstArrayView<FBuildVerbRegistration> BuildVerbRegistry();
 
 /**
  * The tunables a click is judged against, as one bundle rather than three separate

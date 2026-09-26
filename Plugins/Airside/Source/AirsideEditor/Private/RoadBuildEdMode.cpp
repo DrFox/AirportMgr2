@@ -185,6 +185,20 @@ void URoadBuildEdMode::BindCommands()
 		// keys are.
 		Toolkit->GetToolkitCommands()->MapAction(Commands.Build,
 			FExecuteAction::CreateUObject(this, &URoadBuildEdMode::CommitActiveGesture));
+
+		// ONE PER BuildVerbRegistry() ENTRY (issue #304) - Remove, Insert and Edit, the sticky
+		// EGestureMode trio `grep GestureMode AirsideEditor/Private/*.cpp` found NOWHERE in this
+		// module before now. TOGGLEBUTTON commands need an IsChecked too, unlike Cancel/Build's
+		// plain Button just above - IsVerbActive is what lights the palette entry the way
+		// MapReselectAwareToolCommand's own IsChecked lights a tool button.
+		const TArray<TSharedPtr<FUICommandInfo>> VerbCommands = Commands.VerbCommandsInOrder();
+		for (int32 Index = 0; Index < VerbCommands.Num(); ++Index)
+		{
+			Toolkit->GetToolkitCommands()->MapAction(VerbCommands[Index],
+				FExecuteAction::CreateUObject(this, &URoadBuildEdMode::ApplyVerb, Index),
+				FCanExecuteAction(),
+				FIsActionChecked::CreateUObject(this, &URoadBuildEdMode::IsVerbActive, Index));
+		}
 	}
 
 	// ToolCommandList itself is NOT bound to any more, tool keys or Escape: it is the list
@@ -321,6 +335,38 @@ void URoadBuildEdMode::CommitActiveGesture()
 			Tool->CommitGesture();
 		}
 	}
+}
+
+void URoadBuildEdMode::ApplyVerb(int32 VerbIndex)
+{
+	const TConstArrayView<FBuildVerbRegistration> Registry = BuildVerbRegistry();
+	if (!Registry.IsValidIndex(VerbIndex))
+	{
+		return;
+	}
+
+	// SAME CAST-AND-FORWARD as CancelActiveGesture/CommitActiveGesture just above: what the
+	// verb MEANS belongs to the shared tool (URoadBuildEditorTool::ApplyVerb), not to this
+	// mode, which only finds which instance is currently active.
+	if (UInteractiveToolManager* Manager = GetToolManager())
+	{
+		if (URoadBuildEditorTool* Tool = Cast<URoadBuildEditorTool>(
+			Manager->GetActiveTool(EToolSide::Mouse)))
+		{
+			Tool->ApplyVerb(Registry[VerbIndex]);
+		}
+	}
+}
+
+bool URoadBuildEdMode::IsVerbActive(int32 VerbIndex) const
+{
+	const TConstArrayView<FBuildVerbRegistration> Registry = BuildVerbRegistry();
+
+	// THE SESSION, not the active tool instance - Session.GetGestureMode() answers this
+	// whether or not a URoadBuildEditorTool happens to be active right now, the same reason
+	// GetSession() rather than a per-tool flag is what MapReselectAwareToolCommand's own
+	// IsChecked would read if a tool question, rather than a session one, were being asked.
+	return Registry.IsValidIndex(VerbIndex) && Registry[VerbIndex].IsActive(Session);
 }
 
 void URoadBuildEdMode::CreateToolkit()

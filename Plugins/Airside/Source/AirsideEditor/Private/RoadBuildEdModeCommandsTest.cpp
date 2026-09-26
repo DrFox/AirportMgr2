@@ -80,4 +80,63 @@ bool FRoadBuildEdModeCommandsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE TWIN OF FRoadBuildEdModeCommandsTest ABOVE, for BuildVerbRegistry() instead of
+ * ToolRegistry() - issue #304. VerbCommandsInOrder() is BUILT FROM BuildVerbRegistry() the
+ * identical way ToolCommandsInOrder() is built from ToolRegistry() (same MakeCommandInfo loop,
+ * same reason: a hand-typed second list can drift, and here there had never been a FIRST list at
+ * all - `grep GestureMode AirsideEditor/Private/*.cpp` was 0 before this.
+ *
+ * WRITTEN RED FIRST: before FRoadBuildEdModeCommands carried VerbCommands or RegisterCommands
+ * looped over BuildVerbRegistry(), this test did not compile - VerbCommandsInOrder() and
+ * BuildVerbRegistry() did not exist. That is this table's own version of "the list nothing
+ * consumes yet", the same failure mode ToolCommandsMatchRegistry's own comment describes for
+ * key 9 going unbound.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEdModeVerbCommandsTest,
+	"Airside.Editor.VerbCommandsMatchRegistry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEdModeVerbCommandsTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("the command set is registered"), FRoadBuildEdModeCommands::IsRegistered()))
+	{
+		return false;
+	}
+
+	const TArray<TSharedPtr<FUICommandInfo>> VerbCommands =
+		FRoadBuildEdModeCommands::Get().VerbCommandsInOrder();
+	const TConstArrayView<FBuildVerbRegistration> Registry = BuildVerbRegistry();
+
+	if (!TestEqual(TEXT("every registry verb has an editor command"),
+		VerbCommands.Num(), Registry.Num()))
+	{
+		return false;
+	}
+
+	for (int32 Index = 0; Index < Registry.Num(); ++Index)
+	{
+		const TSharedPtr<FUICommandInfo>& Command = VerbCommands[Index];
+		if (!TestTrue(*FString::Printf(TEXT("verb %d has a command"), Index), Command.IsValid()))
+		{
+			continue;
+		}
+
+		TestEqual(*FString::Printf(TEXT("verb %d's command names the registry's verb"), Index),
+			Command->GetLabel().ToString(), Registry[Index].Name.ToString());
+
+		// Remove/Insert are EKeys::Invalid - a HELD Ctrl/Shift, not a chord - so there is no
+		// key to compare there; only Edit (M) has one to check against drift.
+		if (Registry[Index].Key != EKeys::Invalid)
+		{
+			TestEqual(*FString::Printf(TEXT("verb %d is on the same key as at runtime"), Index),
+				Command->GetDefaultChord(EMultipleKeyBindingIndex::Primary).Key.GetFName(),
+				Registry[Index].Key.GetFName());
+		}
+	}
+
+	return true;
+}
+
 #endif

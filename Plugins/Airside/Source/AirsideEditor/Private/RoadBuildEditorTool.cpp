@@ -614,6 +614,31 @@ void URoadBuildEditorTool::CommitGesture()
 	Sess().InvalidateFrameContextCache();
 }
 
+void URoadBuildEditorTool::ApplyVerb(const FBuildVerbRegistration& Verb)
+{
+	if (Target == nullptr)
+	{
+		return;
+	}
+
+	// A TRANSACTION LIKE ANY OTHER EDIT, for the same reason CancelGesture's own comment gives:
+	// entering or leaving a mode DEACTIVATES whatever tool the session is leaving
+	// (FBuildSession::SetGestureMode calls Outgoing->OnDeactivate), and OnDeactivate can itself
+	// touch the graph - a draw tool mid-chain drops the node it stranded. Wrapping every path
+	// that can reach OnDeactivate, not only the ones that obviously place or remove something,
+	// is what CancelGesture already does and what this verb dispatch must match.
+	FScopedRoadBuildTransaction Transaction(LOCTEXT("RoadBuildVerb", "Road Build"), Target);
+
+	// THE EDITOR'S OWN DOOR ONTO BuildVerbRegistry() (issue #304): Remove/Insert/Edit reach
+	// FBuildSession::ToggleGestureMode through here, exactly the way CancelGesture/CommitGesture
+	// reach CancelActiveGesture/IBuildTool::OnCommit above. GetActiveTool() already returns
+	// FEditTool the instant the session's mode is Edit (FBuildSession::GetActiveTool's own
+	// comment), so no OTHER change makes a node drag or an apron-corner drag reachable here -
+	// this is the one missing door, not a second implementation of what is behind it.
+	Verb.Apply(Sess(), MakeHoverContext());
+	Sess().InvalidateFrameContextCache();
+}
+
 void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
 	IBuildTool* Tool = Sess().GetActiveTool();

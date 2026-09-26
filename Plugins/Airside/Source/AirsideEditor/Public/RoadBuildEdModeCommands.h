@@ -37,6 +37,15 @@ public:
 	TArray<TSharedPtr<FUICommandInfo>> ToolCommandsInOrder() const { return ToolCommands; }
 
 	/**
+	 * One command per BuildVerbRegistry() entry (Remove/Insert/Edit), in registry order - the
+	 * SAME shape ToolCommandsInOrder is, applied to the sticky EGestureMode trio issue #304
+	 * found unreachable in the editor (`grep GestureMode AirsideEditor/Private/*.cpp` was 0).
+	 * Airside.Editor.VerbCommandsMatchRegistry is the twin of
+	 * Airside.Editor.ToolCommandsMatchRegistry, guarding this list the same way.
+	 */
+	TArray<TSharedPtr<FUICommandInfo>> VerbCommandsInOrder() const { return VerbCommands; }
+
+	/**
 	 * Ends the gesture in progress - a road chain, a half-drawn apron.
 	 *
 	 * Exists because RIGHT-CLICK CANNOT DO THIS IN THE EDITOR. At runtime right-click
@@ -66,4 +75,7 @@ public:
 private:
 	/** See ToolCommandsInOrder's own comment for why this replaced nine named fields. */
 	TArray<TSharedPtr<FUICommandInfo>> ToolCommands;
+
+	/** See VerbCommandsInOrder's own comment. */
+	TArray<TSharedPtr<FUICommandInfo>> VerbCommands;
 };

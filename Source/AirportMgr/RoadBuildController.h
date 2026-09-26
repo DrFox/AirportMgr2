@@ -300,6 +300,23 @@ public:
 	void ToggleGestureMode(EGestureMode Mode);
 	EGestureMode GetGestureMode() const;
 
+	/**
+	 * Runs Verb.Apply against this controller's own session and a freshly-built context, then
+	 * invalidates the readout cache exactly as ToggleGestureMode above already does - issue
+	 * #304. BuildActions.cpp's generated Remove/Insert/Edit rows call this rather than each
+	 * growing its own controller forwarder the way ToggleGestureMode did, which is what lets a
+	 * fourth entry in BuildVerbRegistry() need no new method here at all.
+	 *
+	 * ToggleGestureMode(EGestureMode) KEEPS ITS OLD NAME AND CALLERS regardless - ClickModifierTest.cpp
+	 * calls it directly and continues to, per CLAUDE.md's refactor contract ("every reachable
+	 * entry point stays reachable at its old name").
+	 */
+	void ApplyVerb(const FBuildVerbRegistration& Verb);
+
+	/** The shared session, for BuildVerbRegistry()'s IsActive/IsEnabled predicates - both of
+	 *  which read nothing else. */
+	const FBuildSession& GetSession() const { return Session; }
+
 	/** Whether the committed graph's node rings belong on screen - see
 	 *  FBuildSession::WantsRoadNodesDrawn. Read by ARoadBuildHUD every frame. */
 	bool WantsRoadNodesDrawn() const;
