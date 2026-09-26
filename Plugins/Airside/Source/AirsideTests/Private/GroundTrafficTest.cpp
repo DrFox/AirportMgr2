@@ -3512,4 +3512,51 @@ bool FTrafficRebuildGoalIsATwinTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+/**
+ * FindAgent SURVIVES A STALE AgentIndex.
+ *
+ * PR review on issue #295: AgentIndex is not a UPROPERTY (see its own comment in
+ * GroundTraffic.h) - a duplicated UGroundTraffic (PIE's level duplication) copies Agents, a
+ * reflected UPROPERTY, but this plain C++ member is invisible to DuplicateObject's property
+ * walk, so a duplicate starts with it default-constructed empty regardless of how many agents
+ * came along. Every FindAgent on the duplicate would silently miss until the next
+ * Admit/RetireAgent/AdvanceOnce-removal happened to rebuild it - which, for a level that admits
+ * nothing new, could be never.
+ *
+ * ClearAgentIndexForTest recreates exactly that shape (Agents keeps its entry, AgentIndex is
+ * emptied) without staging an actual PIE duplication, which nothing in this test module can
+ * drive headlessly. FindIndex's count-mismatch guard is what this pins.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficFindAgentSurvivesAStaleIndexTest,
+	"Airside.Model.Traffic.FindAgentSurvivesAStaleIndex",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficFindAgentSurvivesAStaleIndexTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 20000.0, 0.0);
+	TestGraph::Join(*Net, A, B);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::GroundVehicle),
+		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	if (!TestTrue(TEXT("found before the index is cleared"), Traffic->FindAgent(Id) != nullptr)) { return false; }
+
+	// THE FAULT INJECTED: Agents keeps its one entry, AgentIndex is emptied - exactly what a
+	// duplicate that skipped this plain C++ member looks like on its first lookup.
+	Traffic->ClearAgentIndexForTest();
+
+	const FRoadAgent* Found = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("FindAgent still resolves: the count mismatch rebuilds the index"), Found != nullptr))
+	{
+		return false;
+	}
+	TestEqual(TEXT("and the id it finds is the one dispatched"), Found->Id, Id);
+	return true;
+}
+
 #endif

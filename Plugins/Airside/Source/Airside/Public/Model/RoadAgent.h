@@ -566,7 +566,9 @@ public:
 	UPROPERTY() int32 Id = 0;
 
 	/** The one production door Id is assigned through - UGroundTraffic::Admit, and nowhere
-	 *  else. See Id's own comment for why the field stays public rather than gaining a friend. */
+	 *  else. See Id's own comment for why the field stays public rather than gaining a friend.
+	 *  ENFORCED BY: Check-Architecture.ps1 rule 4 (allowed-callers, 'FRoadAgent::AssignId'
+	 *  row) - a second production caller fails it. */
 	void AssignId(int32 NewId) { Id = NewId; }
 
 	/** How this agent moves. Vehicles were dispatched with no class at all before M2, which
@@ -685,7 +687,8 @@ public:
 
 	/** The one door LastOverlaps is written through - an empty array is the reset FClaimPass::
 	 *  HoldRunwayOnly/ReleaseForDeadPlan make; ApplyClaims's own end-of-pass call hands it this
-	 *  pass's real overlaps. */
+	 *  pass's real overlaps. ENFORCED BY: Check-Architecture.ps1 rule 6 (agent field writes) -
+	 *  FClaimPass is a friend and could otherwise reach in and assign the field directly. */
 	void SetLastOverlaps(TArray<int32> Overlaps) { LastOverlaps = MoveTemp(Overlaps); }
 
 private:
@@ -718,7 +721,9 @@ public:
 	/** The one door LastResolveAttempt is written through - a deadlock retry's own stamp
 	 *  (FDeadlockResolver::StampCycle) or a rebuild's reset to "never" (OnGraphRebuilt, so an
 	 *  unresolvable jam does not wait out the rest of its retry window after the player has
-	 *  just built the fix for it). */
+	 *  just built the fix for it). ENFORCED BY: Check-Architecture.ps1 rule 6 (agent field
+	 *  writes) and, unlike LastOverlaps, plain private access too - FDeadlockResolver is not
+	 *  a friend of FRoadAgent. */
 	void StampResolveAttempt(double SimSeconds) { LastResolveAttempt = SimSeconds; }
 
 	/** Runway segments this agent occupies in a phase that is not a taxi: an arrival from
@@ -903,10 +908,11 @@ public:
 	void ArmDeparture(const FRunwayEnd& End, double EntryOffset = 0.0);
 
 	/** Disarms it: the route no longer ends on the runway it was armed for (ArmDepartureIfRunway).
-	 *  CLEARS DepartureRunway TOO (issue #295) - ArmDepartureIfRunway's only caller always reset
-	 *  both together (an armed departure with no chain to hold, or a chain nobody is armed to
-	 *  take, is the same half-set state issue #174 already closed for the arbitration fields);
-	 *  they are now one call instead of a mutator plus a hand-written `.Reset()` beside it. */
+	 *  CLEARS DepartureRunway TOO (issue #295): an armed departure with no chain to hold, or a
+	 *  chain nobody is armed to take, is the same half-set state issue #174 already closed for
+	 *  the arbitration fields. ArmDepartureIfRunway used to reset both by hand - a mutator call
+	 *  plus a hand-written `.Reset()` beside it - which is exactly the shape that drifts; one
+	 *  call keeps the pair from coming apart again. */
 	void DisarmDeparture()
 	{
 		bDepartureArmed = false;

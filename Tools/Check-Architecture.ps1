@@ -394,6 +394,19 @@ $AllowedCallers = @(
         ProdReason  = "go through IRoadEditTarget::PlanNodeDeletion - URoadEditFacade is production's one wrapper"
     },
     @{
+        # Issue #295's PR review: Id stays PUBLIC on FRoadAgent (a great many test fixtures set
+        # it by hand), so unlike the private-field mutators the generalised rule 6 already
+        # catches, nothing stopped a SECOND production site from writing Agent.Id directly - the
+        # "one production door" RoadAgent.h claims for AssignId was a comment, not a check, until
+        # this row. Confirmed by grep: GroundTraffic.cpp's Admit is the only call today, besides
+        # AssignId's own definition in RoadAgent.h.
+        Name        = 'FRoadAgent::AssignId'
+        Pattern     = '\bAssignId\s*\('
+        ProdAllowed = @('Public\Model\RoadAgent.h', 'Private\Model\GroundTraffic.cpp')
+        TestExempt  = $true
+        ProdReason  = "assign a new agent's id through UGroundTraffic::Admit, the one place NextAgentId is handed out"
+    },
+    @{
         # THE CLAIM ("outside Content/ and the actor") WENT FALSE ALREADY, same as issue #181's
         # RoadEditTarget.h comment on the runway-profile seam: #255's own grep for this row
         # found Private/Debug/RoadJunctionGallery.cpp:158 calling GetContent() directly, the
@@ -769,7 +782,12 @@ $ranRules.Add('unconsumed declarations')
 # same kind of unenforced fact that the original four verbs missed entirely - "checks all three
 # every run", "nothing here matches", "no other test", "every test in", "the one place its name
 # appears" - each read as a claim about coverage or uniqueness with nothing named to keep it true.
-$commentFactPattern = 'the only (caller|file|place|site)|never (called|happens|runs)|no (edit|change) (is )?needed|nothing (else )?(reads|calls|binds)|checks all three every run|nothing here matches|no other test|every test in|the one place its name appears'
+# Issue #295's PR review widened it again: "the only caller" required a leading "the", so
+# "ArmDepartureIfRunway's only caller" and "The one production door Id is assigned through ...
+# nowhere else" (RoadAgent.h) evaded it by wording alone while asserting the exact same kind of
+# fact. `only caller` (no leading "the"), `nowhere else` and `one (production )?door` close that
+# - the same generalisation rule 6 got from an enumerated field list to ANY field.
+$commentFactPattern = 'the only (caller|file|place|site)|only caller|nowhere else|one (production )?door|never (called|happens|runs)|no (edit|change) (is )?needed|nothing (else )?(reads|calls|binds)|checks all three every run|nothing here matches|no other test|every test in|the one place its name appears'
 $commentFactWarnings = New-Object System.Collections.Generic.List[string]
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.h', '.cpp')) {

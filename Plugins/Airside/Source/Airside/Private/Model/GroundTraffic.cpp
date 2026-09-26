@@ -302,7 +302,7 @@ int32 UGroundTraffic::Admit(FRoadAgent&& Agent)
 	return Id;
 }
 
-void UGroundTraffic::RebuildAgentIndex()
+void UGroundTraffic::RebuildAgentIndex() const
 {
 	AgentIndex.Reset();
 	AgentIndex.Reserve(Agents.Num());
@@ -314,6 +314,16 @@ void UGroundTraffic::RebuildAgentIndex()
 
 int32 UGroundTraffic::FindIndex(int32 AgentId) const
 {
+	// STALE-CACHE GUARD (PR review on issue #295): AgentIndex is not a UPROPERTY (see its own
+	// comment), so a duplicated UGroundTraffic - PIE's level duplication - can start with a
+	// non-empty Agents and an empty AgentIndex, and every lookup afterwards would silently miss.
+	// A count mismatch is the cheap, unambiguous tell: the two can only agree by coincidence
+	// while the map is actually stale in exactly this way, so this costs one comparison on the
+	// fast path and a full rebuild only on the rare frame it disagrees.
+	if (AgentIndex.Num() != Agents.Num())
+	{
+		RebuildAgentIndex();
+	}
 	const int32* Found = AgentIndex.Find(AgentId);
 	return Found != nullptr ? *Found : INDEX_NONE;
 }
