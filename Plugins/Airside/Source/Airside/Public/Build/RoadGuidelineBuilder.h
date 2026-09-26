@@ -52,10 +52,12 @@ struct AIRSIDE_API FRoadGuidelineBuilder
 	 * that failed there, or a caller with no solve at all - FAnchorLink::Build's Solved
 	 * parameter is optional for exactly this reason, issue #324); or Half no longer resolves.
 	 *
-	 * FAnchorLink::Join IS THE ONE CALLER (issue #324, follow-up to #288). #288 left every
-	 * split half unmeasured because re-measuring needs this builder's own MeasureTurn and the
-	 * junction pavement polygon, neither reachable from Model/ - so Join is where the gap
-	 * closes: it reads JunctionNode off FGuidelineEdge::AtJunction before it ever calls
+	 * WRITTEN FOR FAnchorLink::Join (issue #324, follow-up to #288), the one place a stand's
+	 * lead-in splits a turn path today - a second caller is welcome, not a layering violation,
+	 * since this is Build/ calling Build/. #288 left every split half unmeasured because
+	 * re-measuring needs this builder's own MeasureTurn and the junction pavement polygon,
+	 * neither reachable from Model/ - so Join is where the gap closes: it reads JunctionNode
+	 * off FGuidelineEdge::AtJunction before it ever calls
 	 * URoadNetwork::SplitGuidelineEdge, then calls this once per piece the split makes.
 	 * JunctionNode IS ITS OWN PARAMETER, rather than something this reads off Half itself,
 	 * because a piece cannot always carry AtJunction back out on its own ENDPOINTS the way an
