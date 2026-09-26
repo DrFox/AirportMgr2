@@ -34,16 +34,21 @@
          it. Test modules are exempt: their fixtures build handles for slots the production
          accessors have no reason to expose (a deliberately dead one, say), the way rule 4
          exempts AirsideTestFixtures.cpp for the same reason.
-      6. FRoadAgent's WaitingOn, BlockedStep, StalledSeconds, RunwayHeld, bAwaitingStand and
-         GoalNode are written only through their own mutators (Refuse, ClearArbitration,
-         AccrueStall/ResetStall, HoldRunway/ReleaseRunway, SetAwaitingStand/ClearAwaitingStand,
-         SetGoal/SetGoalFrom) outside RoadAgent.cpp. Issue #174: 27 direct writes at five call
-         sites had each grown its own copy of an invariant (bAwaitingStand implies GoalNode
-         set; WaitingOn != 0 implies BlockedStep >= 0), and one of them - GroundTrafficRebuild.
-         cpp's replan handover - was a hand-typed re-write of the exact triple ClearArbitration
-         was added for in issue #82. Test modules are exempt, the way rules 4 and 5 exempt
-         them: a scripted scenario sets up state, it does not enforce production discipline on
-         itself.
+      6. EVERY FRoadAgent field is written only through its own mutator outside RoadAgent.cpp -
+         generalised (issue #295) from #174's enumerated list (WaitingOn, BlockedStep,
+         StalledSeconds, RunwayHeld, bAwaitingStand, GoalNode) to ANY `Agent.<field> =` /
+         `Agents[i].<field> =`. The enumerated form only ever failed on a name someone
+         remembered to add to it, and #295 found nine MORE fields the #174 sweep missed
+         (ReverseSpeed, EngineRPM, ShutdownPause, LastResolveAttempt, DepartureRunway,
+         LastOverlaps, Follower.Travelled, LastMotion.Position) written by hand across four
+         files - the "lists that must agree are one list" rule CLAUDE.md names, applied to
+         itself. Class is left public (set once at birth, read at dozens of sites a getter
+         would not make safer) and is the one deliberate remainder: its two birth sites
+         (DispatchArrival, AdmitDispatched, both in GroundTraffic.cpp) are allow-listed by file
+         AND field name, not by exempting the file outright, so a future direct write of any
+         OTHER field in GroundTraffic.cpp still fails. Test modules are exempt, the way rules
+         4 and 5 exempt them: a scripted scenario sets up state, it does not enforce production
+         discipline on itself.
       7. No FColor/FLinearColor/FSlateColor/FSlateBrush token in Tool/ (Public or Private). Tool/
          describes intent to IToolPreviewSink by MEANING, never colour - see CLAUDE.md's
          Architecture section - and issue #191 found PreviewPalette's colour table, ring radii
@@ -490,12 +495,21 @@ foreach ($tree in $trees) {
 }
 $ranRules.Add('hand-built handles')
 
-# --- 6. FRoadAgent invariant fields written only through their own mutators --------------
-# Issue #174. `[^=]` after the `=` excludes `==`/`!=`/`>=`/`<=` comparisons, which this
-# pattern would otherwise also match (an assignment's `=` is a leading substring of all
-# four). RoadAgent.cpp itself is exempt - it is the one file allowed to write these fields,
-# being where Refuse/ClearArbitration/HoldRunway/etc. are defined.
-$agentFieldPattern = 'Agent\.(WaitingOn|BlockedStep|StalledSeconds|RunwayHeld|bAwaitingStand|GoalNode)\s*=[^=]'
+# --- 6. Every FRoadAgent field written only through its own mutator ----------------------
+# Generalised (issue #295) from #174's enumerated field list to ANY `Agent.<field> =` /
+# `Agents[i].<field> =` - see this rule's own comment above for why the enumerated form was
+# a list that had to agree with RoadAgent.h's field list and did not. `[^=]` after the `=`
+# excludes `==`/`!=`/`>=`/`<=` comparisons, which a bare `=` check would otherwise also match
+# (an assignment's `=` is a leading substring of all four). RoadAgent.cpp itself is exempt -
+# it is the one file allowed to write these fields, being where the mutators are defined.
+$agentFieldPattern = '(Agent|Agents\[[A-Za-z0-9_]+\])\.(?<field>\w+)\s*=[^=]'
+# THE ONE DELIBERATE REMAINDER (issue #295): Class stays PUBLIC on FRoadAgent (see its own
+# comment in RoadAgent.h) and is set directly at its two birth sites, both in
+# GroundTraffic.cpp (DispatchArrival, AdmitDispatched). Allow-listed BY FILE AND FIELD NAME,
+# not by exempting the file outright - a future direct write of any OTHER field in
+# GroundTraffic.cpp still fails this rule. A LISTED FILE THAT STOPS EXISTING, or a field name
+# that stops appearing there, is not this rule's problem to notice; it just stops matching.
+$agentFieldAllowlist = @{ 'GroundTraffic.cpp' = @('Class') }
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.cpp')) {
         if ($file.Name -eq 'RoadAgent.cpp') { continue }
@@ -505,7 +519,10 @@ foreach ($tree in $trees) {
             # A WHY comment naming the banned shape (this rule's own fix does, at
             # GroundTrafficRebuild.cpp) is not the shape itself - same exemption as rule 5.
             if ($h.Line.Trim().StartsWith('//')) { continue }
-            $failures.Add("agent-field-write: $($file.FullName):$($h.LineNumber) writes an FRoadAgent invariant field by hand; use its mutator (Refuse/ClearArbitration/HoldRunway/ReleaseRunway/AccrueStall/ResetStall/SetAwaitingStand/ClearAwaitingStand/SetGoal): $($h.Line.Trim())")
+            $field = [regex]::Match($h.Line, $agentFieldPattern).Groups['field'].Value
+            $allowedFields = $agentFieldAllowlist[$file.Name]
+            if ($allowedFields -and ($allowedFields -contains $field)) { continue }
+            $failures.Add("agent-field-write: $($file.FullName):$($h.LineNumber) writes FRoadAgent's $field by hand outside RoadAgent.cpp; add or use its mutator: $($h.Line.Trim())")
         }
     }
 }
