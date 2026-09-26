@@ -98,4 +98,9 @@ def get_spec():
         # header names. Left at their AircraftSpec defaults ({}), which the cpp_builder path
         # never reads for authoring (only the ground-regime read-back loop touches the asset's
         # OWN saved values, not this spec's).
+        pushback_need="SELF_MANOEUVRE",
+        pushback_reason=(
+            "the starter aeroplane reverses itself, so a new airport needs no depot"
+        ),
+        yard_label="Plane7 (PA-46 Meridian)",
     )

@@ -62,7 +62,7 @@ any merge that was not exact is reported, because the drift is worth fixing upst
 though it is invisible on screen.
 
 NOT THE PIPER, which ships real texture maps and hand-authored M_PiperMeridian/M_PiperGlass -
-a master of three constants has nothing to offer it. It is excluded by absence from FLEET
+a master of three constants has nothing to offer it. It is excluded by absence from fleet()
 rather than by a rule, so adding a textured asset stays a decision rather than an accident.
 
 PLANE1 USED TO BE EXCLUDED HERE TOO, "superseded by plane3 and not in Content", and the
@@ -93,7 +93,7 @@ import sys
 # rebuild_fleet_materials() exec's this file, because that exec passes one in.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from airside_import import FLEET, MERGE_TOL, PRETTY, fleet_glb  # noqa: E402
+from airside_import import MERGE_TOL, fleet, pretty_for, fleet_glb  # noqa: E402
 
 import unreal
 
@@ -110,10 +110,11 @@ OLD_MASTER = "%s/M_Aircraft" % OLD_DIR
 # still reads it, so the script died with a NameError before scraping a single material.
 MODELS = r"C:\repos\AirportMgr2Models"
 
-# FLEET, PRETTY, MERGE_TOL and fleet_glb now come from airside_import - see the note there.
-# FLEET and MERGE_TOL lived here, with a second copy in verify_fleet_materials.py, until
-# plane1 was added to one and not the other; a THIRD copy of the glb path silently ignored
-# where a towed asset's glb lives (now airside_import.EXPORT_FOLDER, read by fleet_glb).
+# fleet(), pretty_for, MERGE_TOL and fleet_glb now come from airside_import - see the note
+# there. FLEET and MERGE_TOL lived here, with a second copy in verify_fleet_materials.py,
+# until plane1 was added to one and not the other; a THIRD copy of the glb path silently
+# ignored where a towed asset's glb lives (now airside_import.EXPORT_FOLDER, read by
+# fleet_glb), and PRETTY was a FOURTH copy of the key set (issue #293).
 EXACT_TOL = 1e-6
 
 # Slot names in Content that a LATER export renamed. Interchange names a slot after the
@@ -199,13 +200,13 @@ def instance_name(look, cluster_lead, shared):
     """MI_Tyre when one cluster serves everybody; MI_Body_Plane2 when a look has several
     genuinely different values and the name alone can no longer identify one."""
     camel = "".join(part.capitalize() for part in look.split("_"))
-    return "MI_%s" % camel if shared else "MI_%s_%s" % (camel, PRETTY[cluster_lead])
+    return "MI_%s" % camel if shared else "MI_%s_%s" % (camel, pretty_for(cluster_lead))
 
 
 def collect():
     """look -> [cluster], each cluster = (values, [asset], [slot name], exact?)."""
     per_look, sided = {}, []
-    for asset in sorted(FLEET):
+    for asset in sorted(fleet()):
         path = glb_path(asset)
         if not os.path.exists(path):
             fail("%s missing - %s not scraped" % (path, asset))
@@ -314,7 +315,7 @@ def existing_suffixed_name(look, assets):
     """
     camel = "".join(part.capitalize() for part in look.split("_"))
     for asset in sorted(assets):
-        candidate = "MI_%s_%s" % (camel, PRETTY[asset])
+        candidate = "MI_%s_%s" % (camel, pretty_for(asset))
         if unreal.EditorAssetLibrary.does_asset_exist("%s/%s" % (MAT_DIR, candidate)):
             return candidate
     return None
@@ -401,7 +402,7 @@ def remap(mesh_path, by_slot):
 
     # SAVE ONLY WHEN A SLOT ACTUALLY CHANGED, not unconditionally like this used to.
     #
-    # THE INCIDENT THIS GUARDS AGAINST (2026-09-24): adding truckCab1/tankTrailer1 to FLEET
+    # THE INCIDENT THIS GUARDS AGAINST (2026-09-24): adding truckCab1/tankTrailer1 to fleet()
     # meant re-running this across the WHOLE fleet (the established workflow -
     # import_models.py's own tail does the same after every import), and the unconditional
     # set_editor_property + save_asset below touched all 14 meshes and every pre-existing
@@ -463,13 +464,13 @@ def run():
                 inexact.append((name, sorted(cluster["assets"])))
 
     total, orphans = 0, []
-    for asset, (_folder, mesh_path) in sorted(FLEET.items()):
+    for asset, (_folder, mesh_path) in sorted(fleet().items()):
         moved, left = remap(mesh_path, by_slot)
         total += moved
         say("%-14s %d slot(s) repointed%s"
             % (mesh_path.split("/")[-1], moved,
                "" if not left else "; left as imported: %s" % ", ".join(left)))
-    say("%d slot(s) repointed across %d asset(s)" % (total, len(FLEET)))
+    say("%d slot(s) repointed across %d asset(s)" % (total, len(fleet())))
 
     # Prune instances this run did not produce. Cluster NAMES move when the clustering
     # changes - MI_Metal_Plane3 became MI_Strut the moment plane3's chrome stopped being

@@ -26,96 +26,40 @@ check that survives the script is the automation test
 Airside.Content.PushbackNeedsAuthored, which loads each asset in a fresh editor and asserts
 the same table this file writes. If the two ever disagree, believe the test.
 
-THE ENTRIES BELOW ARE THE WHOLE LIST. A type absent from here loads with FAirframe's own
-default, which is VehicleTug - the conservative answer, because "needs a tug" of something
-that does not is a missing fee, while "reverses itself" of an A320 is an airport that never
-needs the depot.
+THE ENTRIES ARE NO LONGER TYPED HERE. Until issue #293 this file carried its own {path:
+(need, why)} table, one entry per modelled aeroplane, hand-kept in step with
+AirframeAxlesTest.cpp's Expected[] table (fourteen "why" strings written out twice) and
+silently missing plane4 and plane5 (neither had EVER been given a need in either language -
+found only once EveryAircraftType() iterated every type with a mesh instead of a hand list).
+Every modelled aeroplane's need and reason now live ONCE, on its own aircraft/<key>.py spec's
+`pushback_need`/`pushback_reason` (build_aircraft_type.all_keys() is the list this file
+iterates); this script's own job shrinks to WRITING what the spec says, and
+Airside.Content.PushbackNeedsAuthored reads the same fields back off the same specs to
+assert what actually landed, not a second copy of the table in C++.
 
-IT SAID "THE FIVE ENTRIES" UNTIL 2026-09-21 AND THERE WERE SIX, which is why it no longer
-says a number. A count in prose beside a list is a second statement of the list's length with
-nothing keeping the two in step, and it goes stale on the first addition - CLAUDE.md's rule
-about naming rather than counting, in the smallest possible form.
+A type absent from here (pushback_need left None on its spec, or a type with no spec at all
+- the two DA_Aircraft_* PAPER types below) loads with FAirframe's own default, which is
+VehicleTug - the conservative answer, because "needs a tug" of something that does not is a
+missing fee, while "reverses itself" of an A320 is an airport that never needs the depot.
 """
-import unreal
+import os
+import sys
 
-# type asset -> (need, why)
-#
-# The why is not decoration: it is the gameplay reason the value is what it is, and the
-# automation test asserts the same table with the same reasons as its failure messages.
-NEEDS = {
-    "/Game/Entities/DA_Aircraft_Plane1": (
-        unreal.PushbackNeed.SELF_MANOEUVRE,
-        "a 172 is pushed off a stand by one person leaning on the strut, and the class "
-        "default of VehicleTug would gate the smallest aeroplane in the game behind the "
-        "depot",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane7": (
-        unreal.PushbackNeed.SELF_MANOEUVRE,
-        "the starter aeroplane reverses itself, so a new airport needs no depot",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane2": (
-        unreal.PushbackNeed.SELF_MANOEUVRE,
-        "a Twin Otter beta-ranges off a stand",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane10": (
-        unreal.PushbackNeed.SELF_MANOEUVRE,
-        "a Caravan reverses off a stand on its own prop - the PT6's reverse pitch - and the "
-        "class default of VehicleTug would gate a grass-strip single behind the depot",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane12": (
-        unreal.PushbackNeed.SELF_MANOEUVRE,
-        "a Cherokee is pulled off a stand by hand with a tow bar on the nosewheel - plane1's "
-        "reason, and the class default of VehicleTug would gate a trainer behind the depot",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane15": (
-        unreal.PushbackNeed.SELF_MANOEUVRE,
-        "an SR22 is pulled off a stand by hand with a tow bar on its castering nosewheel - "
-        "plane1's reason, and the class default of VehicleTug would gate a four-seat single "
-        "behind the depot",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane16": (
-        unreal.PushbackNeed.SELF_MANOEUVRE,
-        "a Baron turns out of a stand on differential power and brake, the Q400's reason one "
-        "size down - the class default of VehicleTug would gate a light twin behind the depot",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane3": (
-        unreal.PushbackNeed.SELF_MANOEUVRE,
-        "a Q400 turns out of a regional stand on its own props; the depot is the jets' tax",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane6": (
-        unreal.PushbackNeed.VEHICLE_TUG,
-        "a 350 t 777-300ER is the far end of the same argument - and it is here rather than "
-        "left to the class default on purpose: an unset field that happens to agree with the "
-        "default is indistinguishable from an asset nobody authored, which is the point the "
-        "Plane7 row already makes from the other side",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane11": (
-        unreal.PushbackNeed.VEHICLE_TUG,
-        "a 319 t A350-1000 needs the tug the 777 beside it does - authored rather than left "
-        "to the class default for the Plane6 row's reason",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane13": (
-        unreal.PushbackNeed.VEHICLE_TUG,
-        "a 124 t 757-300 needs the tug the 737 below it and the A350 above it both do - "
-        "authored rather than left to the class default for the Plane6 row's reason",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane14": (
-        unreal.PushbackNeed.VEHICLE_TUG,
-        "a Phenom 300 has no thrust reversers, so it cannot back off a stand on its own the way "
-        "the turboprops' reverse pitch lets them - it is towed, and the first jet a small field "
-        "takes is also what first asks it for a tug",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane8": (
-        unreal.PushbackNeed.VEHICLE_TUG,
-        "a 575 t A380 is the end of the progression - nothing heavier flies - and it is "
-        "authored for the reason the Plane6 row gives: an unset field that agrees with the "
-        "class default cannot be told from an asset nobody wrote",
-    ),
-    "/Game/Entities/DA_Aircraft_Plane9": (
-        unreal.PushbackNeed.VEHICLE_TUG,
-        "the modelled A320 needs the tug its paper twin below does, and the two rows must "
-        "agree - authored rather than left to the class default for the Plane6 row's reason",
-    ),
+# THE SCRIPT'S OWN DIRECTORY IS NOT ON sys.path under -run=pythonscript - see
+# import_models.py's own note. Needed here (and not before) because this script now imports
+# build_aircraft_type to read every spec's pushback_need/pushback_reason rather than typing
+# its own copy of the fleet.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import unreal  # noqa: E402
+
+from build_aircraft_type import all_keys, spec_for  # noqa: E402
+
+# THE TWO PAPER TYPES ALONE. DA_Aircraft_A320 and DA_Aircraft_B738 carry no mesh and no
+# aircraft/<key>.py spec - EntityDefinition builds them in C++ - so there is no spec for
+# either to read a pushback_need off, and they stay a small hand-typed residual rather than
+# growing a second directory of paper-only specs for two entries.
+PAPER_NEEDS = {
     "/Game/Entities/DA_Aircraft_A320": (
         unreal.PushbackNeed.VEHICLE_TUG,
         "an A320 is what forces the Pushback depot",
@@ -160,13 +104,30 @@ def set_need(type_path, need, why):
     return True
 
 
+def _all_needs():
+    """PAPER_NEEDS plus every aircraft/<key>.py spec that has decided a pushback_need - the
+    ONE list this script writes from, built fresh each run rather than typed here so a new
+    spec (or a changed one) needs no edit to this file at all."""
+    needs = dict(PAPER_NEEDS)
+    for key in all_keys():
+        spec = spec_for(key)
+        if spec.pushback_need is None:
+            # NOT YET DECIDED, and left alone - the type keeps FAirframe's own VehicleTug
+            # default, exactly as an absent NEEDS entry always has.
+            continue
+        need = getattr(unreal.PushbackNeed, spec.pushback_need)
+        needs["/Game/Entities/%s" % spec.type_name] = (need, spec.pushback_reason)
+    return needs
+
+
 def run():
+    needs = _all_needs()
     done = 0
-    for type_path, (need, why) in sorted(NEEDS.items()):
+    for type_path, (need, why) in sorted(needs.items()):
         if set_need(type_path, need, why):
             done += 1
 
-    say("%d of %d aircraft type(s) given a pushback need" % (done, len(NEEDS)))
+    say("%d of %d aircraft type(s) given a pushback need" % (done, len(needs)))
     say("now run Airside.Content.PushbackNeedsAuthored - THAT is the evidence, not this line")
 
 

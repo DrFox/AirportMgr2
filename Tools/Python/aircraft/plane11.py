@@ -141,4 +141,10 @@ def get_spec():
         # band. resolve_axis fails a declared-raked bone that turns out square, so this list
         # stays honest.
         raked=(),
+        pushback_need="VEHICLE_TUG",
+        pushback_reason=(
+            "a 319 t A350-1000 needs the tug the 777 beside it does - authored rather than left to "
+            "the class default for the Plane6 row's reason"
+        ),
+        yard_label="Plane11 (A350-1000)",
     )

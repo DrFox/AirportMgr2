@@ -161,4 +161,9 @@ def get_spec():
         # read as a broken rig rather than as a tolerance. The answer then is to declare them
         # here, not to widen the bound.
         raked=(),
+        pushback_need="SELF_MANOEUVRE",
+        pushback_reason=(
+            "a Q400 turns out of a regional stand on its own props; the depot is the jets' tax"
+        ),
+        yard_label="Plane3 (Dash 8-Q400)",
     )

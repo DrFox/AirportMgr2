@@ -35,18 +35,18 @@ import sys
 # for the full note.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from airside_import import FLEET, MERGE_TOL, fleet_glb  # noqa: E402
+from airside_import import MERGE_TOL, fleet, fleet_glb  # noqa: E402
 
 import unreal
 
 MAT_DIR = "/Game/Materials/Fleet"
 MASTER_PATH = "%s/M_Fleet" % MAT_DIR
 OLD_DIR = "/Game/Aircraft/Materials"
-# FLEET, THE TOLERANCE AND fleet_glb COME FROM airside_import, and all three used to be typed
+# fleet(), THE TOLERANCE AND fleet_glb COME FROM airside_import, and all three used to be typed
 # or duplicated here - the old copy assumed folder == file, which is wrong for tankTrailer1 (see
 # airside_import.EXPORT_FOLDER).
 #
-# THE COPY WAS NOT HARMLESS. This file's FLEET listed plane2 onwards; when plane1 joined the
+# THE COPY WAS NOT HARMLESS. This file's own FLEET listed plane2 onwards; when plane1 joined the
 # BUILDER on 2026-09-19 it was not added here, so this script checked seven assets, printed
 # seven PASS lines and reported "DONE with 0 problem(s)" while the eighth went unexamined. A
 # verifier that silently skips what it does not know about is worse than no verifier, because
@@ -105,7 +105,7 @@ def run():
         fail("M_Fleet lacks bUsedWithSkeletalMesh - the fleet draws grey clay")
         problems += 1
 
-    for asset, (stem, mesh_path) in sorted(FLEET.items()):
+    for asset, (stem, mesh_path) in sorted(fleet().items()):
         source = gltf_materials(stem)
         mesh = unreal.EditorAssetLibrary.load_asset(mesh_path)
         if mesh is None:

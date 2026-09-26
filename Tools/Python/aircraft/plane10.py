@@ -181,4 +181,10 @@ def get_spec():
         # (0, 0, 1). A stale declaration fails both ways, so if a re-export rakes the bone,
         # resolve_axis says so and this tuple gains it.
         raked=(),
+        pushback_need="SELF_MANOEUVRE",
+        pushback_reason=(
+            "a Caravan reverses off a stand on its own prop - the PT6's reverse pitch - and the "
+            "class default of VehicleTug would gate a grass-strip single behind the depot"
+        ),
+        yard_label="Plane10 (Grand Caravan)",
     )

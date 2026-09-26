@@ -2,15 +2,53 @@
 #include "Content/AirsideSettings.h"
 #include "CoreMinimal.h"
 #include "Engine/SkeletalMesh.h"
+#include "Entities/AircraftType.h"
 #include "Misc/AutomationTest.h"
+#include "Testing/AirsideTestWorld.h"
 #include "UObject/Package.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+namespace
+{
+	/**
+	 * ONE MESH'S HALF OF FSkeletonHoldsEveryMeshBoneTest, factored out by issue #293 so the
+	 * towing fleet's four meshes and every aircraft type's mesh run the SAME check rather than
+	 * two copies that could drift the way MeasuredTypes/Published/Expected already had.
+	 */
+	void CheckSkeletonHoldsMeshBones(FAutomationTestBase& Test, const USkeletalMesh* Mesh)
+	{
+		if (!Test.TestNotNull(TEXT("the mesh resolves"), Mesh)) { return; }
+		const USkeleton* Skeleton = Mesh->GetSkeleton();
+		if (!Test.TestNotNull(*FString::Printf(TEXT("%s has a Skeleton"), *Mesh->GetName()), Skeleton)) { return; }
+
+		const FReferenceSkeleton& MeshBones = Mesh->GetRefSkeleton();
+		const FReferenceSkeleton& SkeletonBones = Skeleton->GetReferenceSkeleton();
+		TArray<FString> Missing;
+		for (int32 Bone = 0; Bone < MeshBones.GetRawBoneNum(); ++Bone)
+		{
+			const FName Name = MeshBones.GetBoneName(Bone);
+			if (SkeletonBones.FindBoneIndex(Name) == INDEX_NONE)
+			{
+				Missing.Add(Name.ToString());
+			}
+		}
+		Test.TestTrue(*FString::Printf(TEXT("every one of %s's %d bones is in %s's reference skeleton - missing: %s"),
+				*Mesh->GetName(), MeshBones.GetRawBoneNum(), *Skeleton->GetName(),
+				Missing.Num() > 0 ? *FString::Join(Missing, TEXT(", ")) : TEXT("none")),
+			Missing.Num() == 0);
+		Test.TestFalse(*FString::Printf(TEXT("%s's package is not dirty - the saved skeleton was not patched from the mesh on load"),
+				*Skeleton->GetName()),
+			Skeleton->GetPackage()->IsDirty());
+	}
+}
+
 /**
  * THE SAVED SKELETON HOLDS EVERY BONE ITS MESH HAS - for the towing fleet's four meshes
  * (SK_Utility1, SK_FuelTrailer1, SK_TruckCab1, SK_TankTrailer1), the ones whose coupling bones
- * (hitch, fifth_wheel, tow_eye) the tow chain reads.
+ * (hitch, fifth_wheel, tow_eye) the tow chain reads, AND for every UAircraftType with a mesh
+ * (issue #293's EveryAircraftType() - see Testing/AirsideTestWorld.h) - the same staleness a
+ * reimport can leave on ANY rig, not only the towing fleet's.
  *
  * WHY: a reimport that adds a bone writes it to the mesh AND to its USkeleton, which is a
  * separate package. reimport_utility1.py saved only the mesh, so SK_Utility1_Skeleton stayed on
@@ -26,7 +64,9 @@
  * the first would pass once any earlier test in the run had spawned the utility.
  *
  * IN THE GAME MODULE, beside RigContentTest: it reads /Game assets through the content set,
- * which Airside may not reach.
+ * which Airside may not reach (the towing fleet's Resolve*View calls do; EveryAircraftType()
+ * itself is a plugin-Public helper, not a /Game load, so it costs this file nothing to share it
+ * with AirframeAxlesTest.cpp - see that header's own note on why it lives where it does).
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSkeletonHoldsEveryMeshBoneTest,
@@ -53,28 +93,15 @@ bool FSkeletonHoldsEveryMeshBoneTest::RunTest(const FString& Parameters)
 
 	for (const USkeletalMesh* Mesh : Meshes)
 	{
-		if (!TestNotNull(TEXT("the mesh resolves"), Mesh)) { continue; }
-		const USkeleton* Skeleton = Mesh->GetSkeleton();
-		if (!TestNotNull(*FString::Printf(TEXT("%s has a Skeleton"), *Mesh->GetName()), Skeleton)) { continue; }
+		CheckSkeletonHoldsMeshBones(*this, Mesh);
+	}
 
-		const FReferenceSkeleton& MeshBones = Mesh->GetRefSkeleton();
-		const FReferenceSkeleton& SkeletonBones = Skeleton->GetReferenceSkeleton();
-		TArray<FString> Missing;
-		for (int32 Bone = 0; Bone < MeshBones.GetRawBoneNum(); ++Bone)
-		{
-			const FName Name = MeshBones.GetBoneName(Bone);
-			if (SkeletonBones.FindBoneIndex(Name) == INDEX_NONE)
-			{
-				Missing.Add(Name.ToString());
-			}
-		}
-		TestTrue(*FString::Printf(TEXT("every one of %s's %d bones is in %s's reference skeleton - missing: %s"),
-				*Mesh->GetName(), MeshBones.GetRawBoneNum(), *Skeleton->GetName(),
-				Missing.Num() > 0 ? *FString::Join(Missing, TEXT(", ")) : TEXT("none")),
-			Missing.Num() == 0);
-		TestFalse(*FString::Printf(TEXT("%s's package is not dirty - the saved skeleton was not patched from the mesh on load"),
-				*Skeleton->GetName()),
-			Skeleton->GetPackage()->IsDirty());
+	// EVERY AIRCRAFT TYPE'S MESH TOO - the same staleness this test was written for is not
+	// unique to the towing fleet, and nothing checked it for the sixteen aeroplane rigs until
+	// issue #293's coverage sweep asked EveryAircraftType() for the list.
+	for (const UAircraftType* Type : EveryAircraftType())
+	{
+		CheckSkeletonHoldsMeshBones(*this, Type->Mesh.LoadSynchronous());
 	}
 	return true;
 }

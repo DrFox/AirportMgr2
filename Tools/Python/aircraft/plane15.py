@@ -147,4 +147,11 @@ def get_spec():
         published_table=PUBLISHED_TABLE,
         published_table_label="SPEC.md's",
         report_extra=_report,
+        pushback_need="SELF_MANOEUVRE",
+        pushback_reason=(
+            "an SR22 is pulled off a stand by hand with a tow bar on its castering nosewheel - "
+            "plane1's reason, and the class default of VehicleTug would gate a four-seat single "
+            "behind the depot"
+        ),
+        yard_label="Plane15 (Cirrus SR22)",
     )

@@ -28,79 +28,34 @@ Dash 8 into a line of 3 m utility vehicles wastes most of the frame on gaps.
 
 Every result line is prefixed MARKER: so it can be grepped out of Saved/Logs/AirportMgr.log.
 """
-import unreal
+import os
+import sys
+
+# THE SCRIPT'S OWN DIRECTORY IS NOT ON sys.path under -run=pythonscript - see
+# import_models.py's own note. Needed here (and not before) because the Aircraft row and its
+# floor are now built from aircraft/<key>.py's specs (build_aircraft_type.all_keys()) rather
+# than a hand-ordered, hand-commented list.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import unreal  # noqa: E402
+
+import build_aircraft_type  # noqa: E402
 
 LEVEL = "/Game/Maps/M_ModelYard"
 
-# THE ROWS. Sorted small to large along +Y so the size progression reads as a progression;
-# each entry is (asset path, label).
+# THE AIRCRAFT ROW'S GAP, uu - twelve metres, unchanged since the row existed. The entries
+# themselves are no longer typed here; aircraft_row_entries() builds them fresh each run.
+AIRCRAFT_ROW_GAP_UU = 1200.0
+
+# THE ROWS. Each entry is (asset path, label); the Aircraft row is filled in by main() before
+# build_rows() runs, sorted by each model's own MEASURED span rather than hand-ordered - see
+# aircraft_row_entries(). The placeholder here is never itself passed to place_row().
 #
 # THE THREE ALREADY-IMPORTED MODELS ARE HERE TOO. They cost nothing to place and they are
 # the scale reference that makes the new four legible - a Dash 8 next to a Meridian says more
 # about both than either says alone.
 ROWS = [
-    ("Aircraft", 1200.0, [
-        # SMALLEST FIRST, so the row reads as the progression the header claims. plane1 goes
-        # ahead of the Meridian because it is 2.1 m shorter and 2.1 m narrower - the first
-        # entry that makes "small to large" true of the whole row rather than of most of it.
-        # THE CHEROKEE FIRST, ON SPAN: 9.14 m against the 172's 11.00 - the narrowest
-        # aeroplane in the game, so it opens the row.
-        ("/Game/Aircraft/Plane12/SK_Plane12", "Plane12 (PA-28-180 Cherokee)"),
-        ("/Game/Aircraft/Plane1/SK_Plane1", "Plane1 (Cessna 172)"),
-        # THE BARON BETWEEN THE 172 AND THE SR22, ON SPAN: 11.53 m against 11.00 and 11.68. The
-        # only twin among the singles, and longer than either (9.09 m), which the row shows.
-        ("/Game/Aircraft/Plane16/SK_Plane16", "Plane16 (Baron 58)"),
-        # THE SR22 BETWEEN THE 172 AND THE MERIDIAN, ON SPAN: 11.68 m against 11.00 and 13.11.
-        # Length does not agree (7.92 against the 172's 8.28); span is what the row is sorted on.
-        ("/Game/Aircraft/Plane15/SK_Plane15", "Plane15 (Cirrus SR22)"),
-        # THE MERIDIAN, WHICH USED TO BE SK_PiperMeridian. plane7 replaced that placeholder on
-        # 2026-09-21 and it is 0.31 m SHORTER than the download was, which changes nothing
-        # about where it stands: the 172 is still 0.5 m shorter and 2.1 m narrower.
-        ("/Game/Aircraft/Plane7/SK_Plane7", "Plane7 (PA-46 Meridian)"),
-        # THE CARAVAN BETWEEN THE MERIDIAN AND THE KING AIR, ON SPAN: 15.88 m against 13.11 and
-        # 17.69. Length does not agree (12.68 against the King Air's 14.00 - fine) and neither
-        # does height; span is what the row is sorted on. It is the first Code B aeroplane in
-        # the row, so the A/B line falls between it and the Meridian.
-        ("/Game/Aircraft/Plane10/SK_Plane10", "Plane10 (Grand Caravan)"),
-        # AHEAD OF THE TWIN OTTER, and "smallest first" had to pick a dimension to be first
-        # ON. It picks SPAN - 17.69 m against 19.75 - because span is what the row is read
-        # for and what the Code letter turns on. Length agrees (14.00 against 15.77), so
-        # nothing is traded away by choosing. These two are the fleet's only Code B pair and
-        # standing them together is most of the reason for placing this one at all.
-        # THE PHENOM BETWEEN THE CARAVAN AND THE KING AIR, ON SPAN: 15.91 m against 15.88 and
-        # 17.69 - three centimetres past the Caravan. The only jet among the propellers, and
-        # longer than either neighbour (15.64 m), which the row makes plain.
-        ("/Game/Aircraft/Plane14/SK_Plane14", "Plane14 (Phenom 300)"),
-        ("/Game/Aircraft/Plane5/SK_Plane5", "Plane5 (King Air 350i)"),
-        ("/Game/Aircraft/Plane2/SK_Plane2", "Plane2 (Twin Otter)"),
-        ("/Game/Aircraft/Plane3/SK_Plane3", "Plane3 (Dash 8-Q400)"),
-        # THE A320 BEFORE THE 737, ON SPAN: 35.44 m against 35.79 (length agrees, 37.57
-        # against 39.3). The two Code C jets side by side is the point - same letter, same
-        # stands, and the A320's nose visibly further past its gear.
-        ("/Game/Aircraft/Plane9/SK_Plane9", "Plane9 (A320-200)"),
-        ("/Game/Aircraft/Plane4/SK_Plane4", "Plane4 (737-800W)"),
-        # THE 757 BETWEEN THE 737 AND THE A350, ON SPAN: 38.05 m against 35.79 and 64.69, and
-        # the only Code D aeroplane in the row, so the C/D line falls between it and the 737.
-        # Two metres of wing past a 737 is the whole difference a Code D stand buys; standing
-        # them side by side shows it, and shows 15 m more fuselage than the wing implies.
-        ("/Game/Aircraft/Plane13/SK_Plane13", "Plane13 (757-300)"),
-        # THE 777 GOES LAST AND IT IS NOT CLOSE: 64.78 m of span against the 737's 35.79 and
-        # 73.88 m of length against its 39.3. It is the reason the floor below grew - six
-        # aeroplanes fitted 220 m and seven do not - and standing it beside the narrowbody is
-        # most of the argument for keeping a yard at all. A Code E aeroplane next to a Code C
-        # one says what "the airport has to be rebuilt" means in a way no figure does.
-        # THE A350 BEFORE THE 777, ON SPAN BY 9 CM: 64.69 m against 64.78, and 0.2 m shorter
-        # (73.65 against 73.88). Two Code E twins side by side, one per maker, is the point -
-        # and the A350's nose leg folding AFT where the 777's goes forward shows under G.
-        ("/Game/Aircraft/Plane11/SK_Plane11", "Plane11 (A350-1000)"),
-        ("/Game/Aircraft/Plane6/SK_Plane6", "Plane6 (777-300ER)"),
-        # THE A380 GOES AFTER THE 777, AND WHAT IT ADDS IS WIDTH: 79.75 m of span against
-        # the 777's 64.78, and 15 m of fuselage the 777 does not have UNDER it - a second
-        # deck. It is 1.2 m SHORTER than the 777 nose to tail, which standing them side by
-        # side makes plain in a way no figure does, and it is why the floor below grew
-        # again: eight aeroplanes and their gaps are 355 m across, past 300.
-        ("/Game/Aircraft/Plane8/SK_Plane8", "Plane8 (A380-800)"),
-    ]),
+    ("Aircraft", AIRCRAFT_ROW_GAP_UU, []),   # filled by main() - see aircraft_row_entries()
     ("Ground equipment", 500.0, [
         ("/Game/Vehicles/GPU1/SK_GPU1", "GPU1 (towed)"),
         # THE CART BESIDE THE OTHER TOWED THING, and ahead of Utility1 because it is the
@@ -135,44 +90,23 @@ ROW_PITCH_UU = 10000.0
 
 # The floor. /Engine/BasicShapes/Plane is 100 x 100 uu at scale 1, so these are metres x 1.
 #
-# 300 m SINCE 2026-09-21, UP FROM 220, AND IT IS THE SPAN THAT FORCED IT RATHER THAN THE
-# LENGTH. Six aeroplanes and their gaps came to 186 m across the aircraft row; plane6's
-# 64.78 m of wing takes it to 263, which at 220 m put a wingtip 21 m off the edge and the
-# aeroplane standing on the void. Worth re-checking on the next import: the row is centred on
-# Y = 0, so what matters is that the sum of the spans plus twelve metres per gap stays under
-# this figure. place_row prints that sum every run ("Aircraft: N model(s) over M m").
-#
-# 400 m SINCE 2026-09-23, UP FROM 300, FOR plane8. The seven-aeroplane row came to 263 m;
-# the A380's 79.75 m of wing and its 12 m gap take it to 355, which at 300 m put a wingtip
-# 27 m off the edge. The same re-check as last time, with the same answer: it is the span
-# that binds, and there is no letter above Code F for the next one to be wider than.
-#
-# 450 m SINCE 2026-09-25, UP FROM 400, FOR plane9. The A320's 35.44 m and its 12 m gap take
-# the nine-aeroplane row from 355 to about 402 m - past 400. Span still binds.
-#
-# plane10, 2026-09-25, and 450 stands: the Caravan's 15.88 m and its 12 m gap take the row to
-# about 430 m. The next aeroplane of any span over ~8 m will not fit.
-#
-# 470 m SINCE 2026-09-25, UP FROM 450, FOR plane12 - the prediction above came true a day
-# early. The Cherokee's 9.14 m and its 12 m gap take the row to about 450 m, at the edge.
-#
-# 540 m SINCE 2026-09-25, UP FROM 470, FOR plane11. The A350's 64.69 m and its 12 m gap take
-# the row from about 450 m to about 527. Span still binds.
-#
-# 600 m SINCE 2026-09-25, UP FROM 540, FOR plane13. The 757's 38.05 m and its 12 m gap take
-# the row from about 527 m to about 577. Span still binds; its 54.7 m length is inside the
-# 777's, which sets ROW_PITCH_UU.
-#
-# 640 m SINCE 2026-09-25, UP FROM 600, FOR plane14. The Phenom's 15.91 m and its 12 m gap take
-# the row from about 577 m to about 605 - past 600. Span still binds.
-#
-# STILL 640 m FOR plane15, 2026-09-26. The SR22's 11.68 m and its 12 m gap take the row from
-# about 605 m to about 629 - inside, with 11 m to spare. The next aeroplane will not fit.
-#
-# 680 m SINCE 2026-09-26, UP FROM 640, FOR plane16 - the prediction above came true the same
-# day. The Baron's 11.53 m and its 12 m gap take the row from about 629 m to about 653.
+# FLOOR_Y_M IS NO LONGER TYPED (issue #293). From 220 m in 2026-09-18 to 680 m in 2026-09-26
+# this figure was bumped nine times by hand, once per aeroplane joining the Aircraft row,
+# each bump a comment doing the same sum a machine can do exactly: the row is centred on
+# Y = 0, so what has to fit is the sum of every model's own measured span plus one
+# twelve-metre gap between each pair. main() now computes that sum itself, from the same
+# measured bounds place_row prints ("Aircraft: N model(s) over M m") - see
+# aircraft_row_span_uu() - and sets FLOOR_Y_M from it plus FLOOR_MARGIN_M of headroom, before
+# build_floor() runs. The nine-bump history is worth keeping as a record of WHY a computed
+# figure was worth building: every bump was the same arithmetic, done by hand, one aeroplane
+# late.
 FLOOR_X_M = 300.0
-FLOOR_Y_M = 680.0
+FLOOR_Y_M = 0.0   # set by main() before build_floor() - see aircraft_row_span_uu()
+
+# HEADROOM PAST THE AIRCRAFT ROW'S OWN MEASURED SPAN. The nine hand-typed bumps above margined
+# themselves by 11-30 m each time (a wingtip is not meant to sit exactly on the floor's edge),
+# so 30 m - the largest of those margins - is kept rather than trimmed to the smallest.
+FLOOR_MARGIN_M = 30.0
 
 # THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
 #
@@ -385,6 +319,46 @@ def bounds_of(mesh):
     size = unreal.Vector(extent.x * 2.0, extent.y * 2.0, extent.z * 2.0)
     low = unreal.Vector(origin.x - extent.x, origin.y - extent.y, origin.z - extent.z)
     return size, low
+
+
+def aircraft_row_entries():
+    """(asset path, label) for every aircraft/<key>.py spec whose mesh is imported, SORTED BY
+    ITS OWN MEASURED SPAN - issue #293's replacement for the row this file used to carry:
+    sixteen (path, label) tuples in a hand-picked order, each with a comment naming the two
+    spans either side of it to justify the placement. A re-export that changed a span used
+    to leave a stale comment; this reads the same bound place_row itself measures, so the
+    row re-sorts instead.
+
+    A KEY WITH NO IMPORTED MESH YET IS OMITTED, not failed - import_models.py's own docstring
+    already says a fresh checkout may not have run it, and failing here would fail the whole
+    yard for want of content rather than for a defect."""
+    sortable = []
+    for key in build_aircraft_type.all_keys():
+        spec = build_aircraft_type.spec_for(key)
+        mesh = unreal.EditorAssetLibrary.load_asset(spec.mesh)
+        if mesh is None or not isinstance(mesh, unreal.SkeletalMesh):
+            continue
+        size, _low = bounds_of(mesh)
+        sortable.append((size.y, spec.mesh, spec.yard_label or spec.display_name))
+    sortable.sort(key=lambda entry: entry[0])
+    return [(path, label) for _span, path, label in sortable]
+
+
+def aircraft_row_span_uu(entries, gap_uu):
+    """The total Y extent `entries` will occupy once place_row spaces them - each model's own
+    measured span plus one gap_uu between each pair, the same arithmetic place_row's own
+    `total` computes, called BEFORE build_floor() so FLOOR_Y_M can be sized from it rather
+    than bumped by hand (see FLOOR_Y_M's own comment)."""
+    if not entries:
+        return 0.0
+    total = 0.0
+    for path, _label in entries:
+        mesh = unreal.EditorAssetLibrary.load_asset(path)
+        if mesh is None:
+            continue
+        size, _low = bounds_of(mesh)
+        total += size.y + gap_uu
+    return total - gap_uu
 
 
 def place_row(name, row_x, gap_uu, entries):
@@ -616,6 +590,17 @@ def main():
         say("DONE")
         return
     build_lighting()
+
+    # THE AIRCRAFT ROW, MEASURED BEFORE THE FLOOR IS SIZED - see FLOOR_Y_M's own comment.
+    # ROWS[0] is a placeholder ("Aircraft", AIRCRAFT_ROW_GAP_UU, []) until this replaces it.
+    global FLOOR_Y_M
+    aircraft_entries = aircraft_row_entries()
+    aircraft_span_uu = aircraft_row_span_uu(aircraft_entries, AIRCRAFT_ROW_GAP_UU)
+    FLOOR_Y_M = aircraft_span_uu / 100.0 + FLOOR_MARGIN_M
+    say("Aircraft row: %d model(s) measured at %.0f m across; floor Y sized to %.0f m"
+        % (len(aircraft_entries), aircraft_span_uu / 100.0, FLOOR_Y_M))
+    ROWS[0] = ("Aircraft", AIRCRAFT_ROW_GAP_UU, aircraft_entries)
+
     build_floor()
     placed = build_rows()
     build_start()

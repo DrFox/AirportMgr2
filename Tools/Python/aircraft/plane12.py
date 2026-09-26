@@ -160,4 +160,10 @@ def get_spec():
         # a rigging fault. The prop is pitched the same 5.02 and stays inside the band. A
         # stale declaration fails both ways.
         raked=("nosewheel_steer",),
+        pushback_need="SELF_MANOEUVRE",
+        pushback_reason=(
+            "a Cherokee is pulled off a stand by hand with a tow bar on the nosewheel - plane1's "
+            "reason, and the class default of VehicleTug would gate a trainer behind the depot"
+        ),
+        yard_label="Plane12 (PA-28-180 Cherokee)",
     )

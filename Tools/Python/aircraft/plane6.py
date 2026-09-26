@@ -187,4 +187,12 @@ def get_spec():
         # is that the check reports their angle instead of refusing them, and would fail if
         # one of them were straightened without this list being updated.
         raked=("nosewheel_steer", "door_nose_L", "door_nose_R"),
+        pushback_need="VEHICLE_TUG",
+        pushback_reason=(
+            "a 350 t 777-300ER is the far end of the same argument - and it is here rather than "
+            "left to the class default on purpose: an unset field that happens to agree with the "
+            "default is indistinguishable from an asset nobody authored, which is the point the "
+            "Plane7 row already makes from the other side"
+        ),
+        yard_label="Plane6 (777-300ER)",
     )

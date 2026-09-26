@@ -137,4 +137,10 @@ def get_spec():
         # hinge here is (0, 0.998, -0.056), 3.2 degrees off level and inside resolve_axis's
         # square band. A stale declaration fails, so this list is checked both ways every run.
         raked=("nosewheel_steer",),
+        pushback_need="VEHICLE_TUG",
+        pushback_reason=(
+            "the modelled A320 needs the tug its paper twin below does, and the two rows must agree "
+            "- authored rather than left to the class default for the Plane6 row's reason"
+        ),
+        yard_label="Plane9 (A320-200)",
     )

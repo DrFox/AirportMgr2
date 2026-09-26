@@ -131,4 +131,11 @@ def get_spec():
         # square on this rig; build_aircraft_anim.py's raked_line() derives the wording from
         # len(raked) so the two cannot disagree again.
         raked=(),
+        pushback_need="VEHICLE_TUG",
+        pushback_reason=(
+            "a Phenom 300 has no thrust reversers, so it cannot back off a stand on its own the way "
+            "the turboprops' reverse pitch lets them - it is towed, and the first jet a small field "
+            "takes is also what first asks it for a tug"
+        ),
+        yard_label="Plane14 (Phenom 300)",
     )
