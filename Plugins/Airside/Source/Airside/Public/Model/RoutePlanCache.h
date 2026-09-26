@@ -17,11 +17,15 @@ namespace RoutePlanCache
 {
 	/**
 	 * What a cached plan is keyed on for its VEHICLE (re-review of aa90eec2): the type code and
-	 * every figure route search gates on - body, chassis, lock, each tow link, and the taxi
-	 * speed figures a whole-route tow check drives the plan at. Never an instance or a slot: a
-	 * caller may swap the body a key names (ARigTestCourse::SetVehicleForTest), so the key is
-	 * the figures themselves.
-	 * ENFORCED BY: AirportMgr.RigCourse.PlanCacheKnowsItsVehicle
+	 * every figure route search gates on - body, chassis (including EffectiveSteerLaw, NOT the
+	 * declared SteerLaw: PR #340 review - RollingSteer with no measured wheelbase gates like
+	 * Pivot, and two vehicles equal everywhere else but for that fallback must not share a
+	 * plan), lock, each tow link, and the taxi speed figures a whole-route tow check drives the
+	 * plan at. Never an instance or a slot: a caller may swap the body a key names
+	 * (ARigTestCourse::SetVehicleForTest), so the key is the figures themselves.
+	 * ENFORCED BY: AirportMgr.RigCourse.PlanCacheKnowsItsVehicle, which varies a tow-link figure
+	 * and (separately) EffectiveSteerLaw - the two fields review has found missing here before -
+	 * not a sweep of every figure this lists.
 	 */
 	AIRSIDE_API uint32 VehicleIdentity(const FVehicle& Vehicle);
 }
@@ -92,6 +96,16 @@ private:
 		}
 	};
 
+	/**
+	 * NO Errand/Class/Policy IN THIS KEY (PR #340 review): only (Start, Goal, Vehicle). Safe
+	 * ONLY because each owner (ARigTestCourse::PlanBetween, FuelService::ChooseDepot) builds
+	 * every FRouteQuery on this cache with the SAME fixed Errand/Class/Policy for the cache's
+	 * whole lifetime - never a parameter that could vary between two Lookups of the same
+	 * (Start, Goal, Vehicle). THE OWNER'S CONTRACT, not this struct's: an owner that ever asks
+	 * the same (Start, Goal, Vehicle) under two different errands, traversal classes or
+	 * policies must widen this key (or keep two FRoutePlanCache instances, one per shape) - a
+	 * shared key would answer the second ask with the first's plan.
+	 */
 	TMap<FKey, FCachedRoutePlan> Plans;
 	/** Per vehicle identity, VehicleFit::Fits per edge (FRouteQuery::FitCache), cleared with Plans. */
 	TMap<uint32, TMap<FGuidelineEdgeId, bool>> FitCaches;

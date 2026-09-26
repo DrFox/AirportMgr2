@@ -1578,8 +1578,23 @@ bool FRigCoursePlanCacheKnowsItsVehicleTest::RunTest(const FString& Parameters)
 	Course->SetVehicleForTest(0, Longer);
 	Course->PlanBetweenForTest(0, 1, 0, Plan, Reason);
 	TestEqual(TEXT("a different trailer in the same slot is planned afresh"), Course->GetPlanFindsForTest(), Before + 2);
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
 	TestNotEqual(TEXT("because the key is the vehicle's figures"),
-		ARigTestCourse::VehicleIdentity(Longer), ARigTestCourse::VehicleIdentity(UAirsideSettings::ResolveRigVehicle()));
+		ARigTestCourse::VehicleIdentity(Longer), ARigTestCourse::VehicleIdentity(Rig));
+
+	// SAME EVERY OTHER FIGURE, DIFFERENT SteerLaw (PR #340 review): TightestFollowableRadius
+	// gates on EffectiveSteerLaw, not on any field varied above, so a vehicle identical
+	// everywhere else but declared Pivot instead of RollingSteer is a DIFFERENT gate on every
+	// edge (Pivot's lock is 0 and fits everywhere; RollingSteer's Wheelbase/sin(lock) can
+	// refuse) and must not share a cached plan or refusal with the RollingSteer one.
+	FVehicle SteersDifferently = Rig;
+	if (TestEqual(TEXT("the fixture rig steers by RollingSteer, so flipping it is a real change"),
+		Rig.Chassis.SteerLaw, ESteerLaw::RollingSteer))
+	{
+		SteersDifferently.Chassis.SteerLaw = ESteerLaw::Pivot;
+		TestNotEqual(TEXT("SteerLaw alone changes the identity"),
+			ARigTestCourse::VehicleIdentity(SteersDifferently), ARigTestCourse::VehicleIdentity(Rig));
+	}
 	return true;
 }
 

@@ -15,6 +15,13 @@ namespace RoutePlanCache
 		Mix(Vehicle.Chassis.SteerAxleX);
 		Mix(Vehicle.Chassis.FixedAxleX);
 		Mix(Vehicle.Chassis.Ground.MaxSteerDegrees);
+		// EffectiveSteerLaw, NOT SteerLaw (review of #301): TightestFollowableRadius branches on
+		// it, and it folds in the HasAxles() fallback (RollingSteer with no measured wheelbase
+		// answers as Pivot) - two vehicles equal in every OTHER mixed field but differing here
+		// can be gated differently by VehicleFit::Judge (Pivot fits everywhere; RollingSteer's
+		// Wheelbase/sin(lock) can refuse), so a shared key here is a wrong cache hit, not a
+		// coincidence to ignore.
+		Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Vehicle.Chassis.EffectiveSteerLaw())));
 		// The speed figures too: the whole-route tow check drives the plan at them.
 		Mix(Vehicle.Chassis.Ground.Taxi.SpeedCap);
 		Mix(Vehicle.Chassis.Ground.Taxi.Accel);
