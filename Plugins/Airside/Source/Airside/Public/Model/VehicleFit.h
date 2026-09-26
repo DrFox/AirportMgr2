@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Solve/TowReverse.h"
 #include "Solve/VehicleSweep.h"
 
 struct FChassis;
@@ -31,7 +32,12 @@ enum class EFitRefusal : uint8
 	 * Jackknife above is ONE curve traced from a straight start; this is the fold that two
 	 * curves, or a balloon's pieces, add up to - which no per-edge verdict can see.
 	 */
-	TrailerFolds
+	TrailerFolds,
+	/**
+	 * A reverse leg the tow cannot back along, or whose end misses the line it drives out on -
+	 * TowReverse's refusal (spec 2026-09-26 §2), carried in FFitVerdict::Reason.
+	 */
+	ReverseUnsolvable
 };
 
 /**
@@ -67,6 +73,9 @@ struct AIRSIDE_API FFitVerdict
 	double Radians = 0.0;
 	FVector2D At = FVector2D::ZeroVector;
 	double Along = 0.0;
+
+	/** ReverseUnsolvable only: TowReverse's one-line reason (its figure, its limit, where). */
+	FString Reason;
 
 	bool Fits() const { return Refusal == EFitRefusal::None; }
 
@@ -189,12 +198,36 @@ namespace VehicleFit
 	 * along the plan at its heading and speed, the chain where the live one is - no straight lay.
 	 * ENFORCED BY: Airside.Model.Tow.WholeRouteSeededFromTheLiveChain
 	 *
-	 * A plan's REVERSE LEGS are not driven: the check stops at the first, as FRoadAgent hands
-	 * those to FReverseRun, which does not step the chain (spec Open: the reverse chain).
-	 * Rigid vehicles fit trivially; RouteSearch does not call this for them at all.
+	 * A plan's REVERSE LEGS are solved, not driven (2026-09-26): each run is handed to
+	 * TowReverse::Solve from the chain the forward section before it left - the call
+	 * FTowReverseRun::Start makes - and refused as ReverseUnsolvable if it fails or ends off the
+	 * line it drives out on. The forward section after it starts from the solved end, seeded.
+	 * Until 2026-09-26 the check stopped at the first reverse leg, because the agent froze the
+	 * chain there. Rigid vehicles fit trivially; RouteSearch does not call this for them at all.
+	 * ENFORCED BY: Airside.Model.Tow.WholeRouteJudgesTheReverse, .WholeRouteJudgesATrailingReverse
 	 */
 	AIRSIDE_API FFitVerdict JudgePlan(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
 		const FTowSeed* Seed = nullptr);
+
+	/**
+	 * How far, uu, a solved tow reverse's final steered axle lies off Remainder's line - the one
+	 * exit check FRoadAgent (at arm) and JudgePlan (ahead of time) both make, so the router never
+	 * admits a reverse the agent then refuses. OutAlong, when given, is the steered axle's distance
+	 * along Remainder: where the drive-on starts.
+	 */
+	AIRSIDE_API double TowReverseExitOffset(const TowReverse::FSample& End, const FChassis& Chassis, const FRoutePlan& Remainder,
+		double* OutAlong = nullptr);
+
+	/**
+	 * A vehicle laid dead straight, uu from its STEERED axle to its rearmost axle: the wheelbase,
+	 * then each link's (Length - HitchX). Where the rearmost axle sits behind a vehicle stopped with
+	 * its steered axle on a line's end - how far a reverse turn's pull-past must run (rig 1342,
+	 * utility 575, 2026-09-26). A rigid vehicle's is its wheelbase.
+	 */
+	AIRSIDE_API double ChainLength(const FVehicle& Vehicle);
+
+	/** The most a tow reverse's end may miss its exit line by, uu (spec 2026-09-26 §2). */
+	inline constexpr double TowReverseMaxExitOffset = 20.0;
 
 	/**
 	 * TEST ONLY: turns off JudgePlan's shortcut that skips projecting the body where no vertex in

@@ -7,6 +7,7 @@
 #include "Model/RouteSearch.h"
 #include "Model/Vehicle.h"
 #include "Solve/GuidelineGeom.h"
+#include "Solve/TowReverse.h"
 #include "Solve/VehicleSweep.h"
 
 VehicleSweep::FBody VehicleFit::BodyOf(const FVehicle& Vehicle)
@@ -48,6 +49,8 @@ FString FFitVerdict::Describe() const
 	case EFitRefusal::TrailerFolds:
 		return FString::Printf(TEXT("trailer folds at guideline node %d / (%.0f, %.0f), link %d, angle %.0f deg, %.1f m along the route"),
 			Node.Index, At.X, At.Y, Link, FMath::RadiansToDegrees(Radians), Along / 100.0);
+	case EFitRefusal::ReverseUnsolvable:
+		return FString::Printf(TEXT("cannot back along the reverse leg leaving guideline node %d: %s"), Node.Index, *Reason);
 	default:
 		return FString();
 	}
@@ -62,6 +65,14 @@ FFitVerdict VehicleFit::Judge(const FGuidelineEdge& Edge, const FVehicle& Vehicl
 		Verdict.Refusal = EFitRefusal::LaneTooNarrow;
 		Verdict.Needed = Widest + 2.0 * WidthMargin;
 		Verdict.Available = Edge.Width;
+		return Verdict;
+	}
+	// A REVERSE EDGE IS NOT JUDGED BY THE FORWARD LOCK OR A FORWARD TRACE: backing along it is a
+	// different manoeuvre with a different limit, and a tow's is judged over the whole reverse by
+	// JudgePlan (TowReverse). Width still applies - the body is as wide either way.
+	// ENFORCED BY: Airside.Model.Tow.JudgeSaysNothingForAReverseEdge
+	if (Edge.bReverseLeg)
+	{
 		return Verdict;
 	}
 	if (Edge.MinRadius <= 0.0)
@@ -247,31 +258,31 @@ namespace
 	constexpr double MaxJudgedPlanSeconds = 3600.0;
 }
 
-FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehicle, const URoadNetwork& Network,
-	const FTowSeed* Seed)
+namespace
+{
+	/** Where a judged forward section left the vehicle: the next section starts from exactly this. */
+	struct FTowEnd
+	{
+		FVector2D Origin = FVector2D::ZeroVector;
+		double Heading = 0.0;
+		double Speed = 0.0;
+		TArray<FVector2D> Axles;
+	};
+
+	/**
+	 * ONE FORWARD SECTION of a plan - no reverse leg inside it - driven as the agent drives it.
+	 * This was the whole of JudgePlan until 2026-09-26, when a plan with a reverse leg stopped
+	 * being judged only up to that leg; the body below is that function's, unchanged but for
+	 * OutEnd, which it fills so the reverse after it starts from where it actually stopped.
+	 */
+	FFitVerdict JudgeForwardSection(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
+		const FTowSeed* Seed, FTowEnd& OutEnd)
 {
 	FFitVerdict Verdict;
 	Verdict.bWholeRoute = true;
-	if (!Vehicle.HasTrailer() || !InPlan.IsDrivable() || InPlan.Steps.Num() == 0)
-	{
-		return Verdict;
-	}
-
-	// UP TO THE FIRST REVERSE LEG: the agent hands those to FReverseRun, which moves no chain.
-	const int32 FirstReverse = InPlan.Steps.IndexOfByPredicate([](const FRouteStep& Step) { return Step.bReverseLeg; });
-	if (FirstReverse == 0)
-	{
-		return Verdict;
-	}
-	FRoutePlan Cut;
-	if (FirstReverse != INDEX_NONE)
-	{
-		Cut = RouteSearch::Section(InPlan, 0, FirstReverse - 1);
-	}
-	const FRoutePlan& Plan = FirstReverse != INDEX_NONE ? Cut : InPlan;
 
 	const FChassis& Chassis = Vehicle.Chassis;
-	const VehicleSweep::FBody Body = BodyOf(Vehicle);
+	const VehicleSweep::FBody Body = VehicleFit::BodyOf(Vehicle);
 
 	// DISPATCHED AS StartDrive DISPATCHES: the follower from rest on the plan's first point,
 	// facing its line, the chain laid straight behind - once, here, and never again. OR, SEEDED,
@@ -290,7 +301,7 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 		FVector2D Steered = Plan.Polyline[0];
 		double LineHeading = 0.0;
 		GuidelineGeom::PointAtDistance(Plan.Polyline, Follower.Travelled, Steered, LineHeading);
-		LayTow(Vehicle, Steered, FVector2D(FMath::Cos(Follower.Heading), FMath::Sin(Follower.Heading)), Axles);
+		VehicleFit::LayTow(Vehicle, Steered, FVector2D(FMath::Cos(Follower.Heading), FMath::Sin(Follower.Heading)), Axles);
 	}
 
 	// THE CLEARANCE HALF, only where an edge on the plan has per-sample data to judge against:
@@ -351,13 +362,21 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 		VertexAlong[Index] = VertexAlong[Index - 1] + FVector2D::Distance(Plan.Polyline[Index - 1], Plan.Polyline[Index]);
 	}
 
-	const double Dt = TowSubStepSeconds(Chassis);
+	const double Dt = VehicleFit::TowSubStepSeconds(Chassis);
 	const int32 MaxSubSteps = FMath::CeilToInt32(MaxJudgedPlanSeconds / Dt);
 	int32 Lo = 0;
 	int32 Hi = 0;
 	VehicleSweep::FCorners Corners;
 	int32 SubStep = 0;
 	double WorstRadians = 0.0;
+	// WHERE IT STOPPED, for OutEnd - seeded with where it starts, for a section it never moves on.
+	FVector2D LastAt;
+	double LastHeading = Follower.Heading;
+	{
+		double LineHeading = 0.0;
+		GuidelineGeom::PointAtDistance(Plan.Polyline, Follower.Travelled, LastAt, LineHeading);
+		LastAt -= FVector2D(FMath::Cos(LastHeading), FMath::Sin(LastHeading)) * Chassis.SteerAxleX;
+	}
 	for (; SubStep < MaxSubSteps && !Follower.HasArrived(); ++SubStep)
 	{
 		FVector2D At;
@@ -366,9 +385,11 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 		{
 			break;
 		}
+		LastAt = At;
+		LastHeading = Heading;
 		int32 FoldedLink = INDEX_NONE;
 		double Radians = 0.0;
-		if (!StepTow(Body, Chassis, At, Heading, Axles, FoldedLink, Radians))
+		if (!VehicleFit::StepTow(Body, Chassis, At, Heading, Axles, FoldedLink, Radians))
 		{
 			Verdict.Refusal = EFitRefusal::TrailerFolds;
 			Verdict.Link = FoldedLink;
@@ -405,7 +426,7 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 			continue;
 		}
 		FVector2D Forward;
-		const FVector2D Fixed = FixedAxleAt(Chassis, At, Heading, Forward);
+		const FVector2D Fixed = VehicleFit::FixedAxleAt(Chassis, At, Heading, Forward);
 		VehicleSweep::BodyCorners(Body, Fixed, Forward, Axles, Corners);
 		for (const FVector2D& Corner : Corners)
 		{
@@ -446,6 +467,10 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 			}
 		}
 	}
+	OutEnd.Origin = LastAt;
+	OutEnd.Heading = LastHeading;
+	OutEnd.Speed = Follower.Speed;
+	OutEnd.Axles = Axles;
 	if (SubStep >= MaxSubSteps)
 	{
 		// Said, not swallowed: a check that gave up has judged nothing, and passing the plan
@@ -491,5 +516,170 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 			}
 		}
 	}
+	return Verdict;
+}
+}
+
+double VehicleFit::ChainLength(const FVehicle& Vehicle)
+{
+	double Length = Vehicle.Chassis.Wheelbase();
+	for (const FTowLink& Link : Vehicle.Tow)
+	{
+		Length += Link.Length - Link.HitchX;
+	}
+	return Length;
+}
+
+double VehicleFit::TowReverseExitOffset(const TowReverse::FSample& End, const FChassis& Chassis, const FRoutePlan& Remainder,
+	double* OutAlong)
+{
+	const FVector2D Steered = End.Fixed + FVector2D(FMath::Cos(End.Heading), FMath::Sin(End.Heading)) * Chassis.Wheelbase();
+	int32 Span = 0;
+	double Fraction = 0.0;
+	const double Off = GuidelineGeom::NearestOnPolyline(Remainder.Polyline, Steered, Span, Fraction);
+	if (OutAlong != nullptr)
+	{
+		double Along = 0.0;
+		for (int32 Index = 0; Index < Span && Index + 1 < Remainder.Polyline.Num(); ++Index)
+		{
+			Along += FVector2D::Distance(Remainder.Polyline[Index], Remainder.Polyline[Index + 1]);
+		}
+		if (Remainder.Polyline.IsValidIndex(Span + 1))
+		{
+			Along += Fraction * FVector2D::Distance(Remainder.Polyline[Span], Remainder.Polyline[Span + 1]);
+		}
+		*OutAlong = FMath::Clamp(Along, 0.0, Remainder.Length);
+	}
+	return Off;
+}
+
+FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehicle, const URoadNetwork& Network,
+	const FTowSeed* Seed)
+{
+	FFitVerdict Verdict;
+	Verdict.bWholeRoute = true;
+	if (!Vehicle.HasTrailer() || !InPlan.IsDrivable() || InPlan.Steps.Num() == 0)
+	{
+		return Verdict;
+	}
+
+	// SECTION BY SECTION (2026-09-26): forward, then any reverse run, then forward again - each
+	// forward section driven as the agent drives it, each reverse solved by the SAME TowReverse
+	// call FRoadAgent plays (FTowReverseRun::Start), from the chain the section before left. Until
+	// this, a plan was judged only up to its first reverse leg, because the agent froze the chain
+	// there; now the agent plays the chain, so the router can - and must - judge what it plays.
+	const FChassis& Chassis = Vehicle.Chassis;
+	double WorstRadians = 0.0;
+	TOptional<FTowEnd> End;
+	TArray<FVector2D> SeedAxles;
+	FTowSeed NextSeed;
+	const FTowSeed* SectionSeed = Seed;
+	int32 Next = 0;
+	while (InPlan.Steps.IsValidIndex(Next))
+	{
+		int32 FirstReverse = INDEX_NONE;
+		for (int32 Index = Next; Index < InPlan.Steps.Num(); ++Index)
+		{
+			if (InPlan.Steps[Index].bReverseLeg)
+			{
+				FirstReverse = Index;
+				break;
+			}
+		}
+
+		if (FirstReverse != Next)
+		{
+			const int32 LastForward = FirstReverse == INDEX_NONE ? InPlan.Steps.Num() - 1 : FirstReverse - 1;
+			const FRoutePlan Forward = Next == 0 && LastForward == InPlan.Steps.Num() - 1
+				? InPlan : RouteSearch::Section(InPlan, Next, LastForward);
+			FTowEnd SectionEnd;
+			const FFitVerdict Section = JudgeForwardSection(Forward, Vehicle, Network, SectionSeed, SectionEnd);
+			if (!Section.Fits())
+			{
+				return Section;
+			}
+			WorstRadians = FMath::Max(WorstRadians, Section.Radians);
+			End = MoveTemp(SectionEnd);
+		}
+		if (FirstReverse == INDEX_NONE)
+		{
+			break;
+		}
+
+		int32 RunEnd = FirstReverse;
+		while (InPlan.Steps.IsValidIndex(RunEnd + 1) && InPlan.Steps[RunEnd + 1].bReverseLeg)
+		{
+			++RunEnd;
+		}
+		if (!End.IsSet())
+		{
+			// A PLAN THAT OPENS WITH A REVERSE has no pose to solve it from - FTowSeed carries the
+			// chain but not where the cab is. Judged as before this change: not at all. No such
+			// plan reaches a tow today (2026-09-26): a reverse turn's leg always follows its
+			// approach, and stands send tows nowhere yet (step 3).
+			return Verdict;
+		}
+
+		TowReverse::FInput In;
+		In.Body = BodyOf(Vehicle);
+		In.MaxSteerRadians = FMath::DegreesToRadians(Chassis.Ground.MaxSteerDegrees);
+		const FRoutePlan Reverse = RouteSearch::Section(InPlan, FirstReverse, RunEnd);
+		In.Line = Reverse.Polyline;
+		FVector2D Forward;
+		In.Fixed = FixedAxleAt(Chassis, End->Origin, End->Heading, Forward);
+		In.Heading = End->Heading;
+		In.Axles = End->Axles;
+		const TowReverse::FSolution Solution = TowReverse::Solve(In);
+
+		const FRoutePlan Remainder = InPlan.Steps.IsValidIndex(RunEnd + 1)
+			? RouteSearch::Section(InPlan, RunEnd + 1, InPlan.Steps.Num() - 1) : FRoutePlan();
+		FString Reason;
+		double Along = 0.0;
+		if (!Solution.IsValid())
+		{
+			Reason = Solution.Describe();
+		}
+		else if (Remainder.IsValid())
+		{
+			// THE AGENT'S OWN EXIT CHECK (FRoadAgent::TryArmTowReverse), through the same function,
+			// so a route admitted here is never one the agent stalls on.
+			const double Off = TowReverseExitOffset(Solution.Samples.Last(), Chassis, Remainder, &Along);
+			if (Off > TowReverseMaxExitOffset)
+			{
+				Reason = FString::Printf(TEXT("the exit line misses the cab's steered axle by %.0f uu (limit %.0f)"),
+					Off, TowReverseMaxExitOffset);
+			}
+		}
+		if (!Reason.IsEmpty())
+		{
+			Verdict.Refusal = EFitRefusal::ReverseUnsolvable;
+			Verdict.Reason = Reason;
+			Verdict.At = Solution.Where;
+			Verdict.Along = FirstReverse == 0 ? 0.0 : InPlan.Steps[FirstReverse - 1].EndDistance;
+			NamePlanStep(InPlan, FirstReverse, Network, Verdict);
+			return Verdict;
+		}
+		// NO TARMAC CHECK ON THE REVERSE ITSELF: no reverse edge measures per-sample clearances
+		// (reverse turns lay none, stand legs are rigid-only) on 2026-09-26, so there is nothing to
+		// trace the samples against - the check forward sections make would say nothing here.
+		WorstRadians = FMath::Max(WorstRadians, Solution.WorstHitchRadians);
+		if (!Remainder.IsValid())
+		{
+			break;
+		}
+
+		// THE NEXT SECTION STARTS WHERE THE REVERSE ENDED, chain as solved, from rest - the seed a
+		// rejoin uses, so the forward judge needs nothing new.
+		SeedAxles.Reset();
+		SeedAxles.Append(Solution.Samples.Last().Axles.GetData(), Solution.Samples.Last().Axles.Num());
+		NextSeed.Axles = SeedAxles;
+		NextSeed.Heading = Solution.Samples.Last().Heading;
+		NextSeed.Speed = 0.0;
+		NextSeed.Travelled = Along;
+		SectionSeed = &NextSeed;
+		End.Reset();
+		Next = RunEnd + 1;
+	}
+	Verdict.Radians = WorstRadians;
 	return Verdict;
 }

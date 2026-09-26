@@ -173,7 +173,12 @@ void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 			const UGroundTraffic* Traffic = Context.Target->GetGroundTraffic();
 			if (Traffic != nullptr)
 			{
-				Sink.Polyline(Traffic->RemainingRoute(Context.Selection->Id), EPreviewStyle::Route);
+				// In RUNS, each in its meaning's style: cyan forward, amber where it backs up
+				// (spec 2026-09-26 §5).
+				for (const FRouteRun& Run : Traffic->RemainingRouteRuns(Context.Selection->Id))
+				{
+					Sink.Polyline(Run.Points, Run.bReverse ? EPreviewStyle::ReverseRoute : EPreviewStyle::Route);
+				}
 			}
 		}
 	}

@@ -1106,6 +1106,24 @@ FRoutePlan RouteSearch::Section(const FRoutePlan& Plan, int32 First, int32 Last)
 	return Out;
 }
 
+void FRoutePlan::DescribeRuns(TArray<FRouteRun>& Out) const
+{
+	Out.Reset();
+	TArray<EDriveDirection> Directions;
+	DescribeSpanDirections(Directions);
+	for (int32 Span = 0; Span < Directions.Num(); ++Span)
+	{
+		const bool bReverse = Directions[Span] == EDriveDirection::Reverse;
+		if (Out.Num() == 0 || Out.Last().bReverse != bReverse)
+		{
+			FRouteRun& Run = Out.AddDefaulted_GetRef();
+			Run.bReverse = bReverse;
+			Run.Points.Add(Polyline[Span]);
+		}
+		Out.Last().Points.Add(Polyline[Span + 1]);
+	}
+}
+
 void FRoutePlan::DescribeSpanDirections(TArray<EDriveDirection>& Out) const
 {
 	Out.Reset();

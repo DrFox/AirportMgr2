@@ -244,7 +244,9 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// truck held at a standstill by arbitration went on reporting a full metre a second and
 	// its wheels spun on the spot - "they seem to rotate independent of speed, they just
 	// spin". Speed is what the last Advance actually covered. See FReverseRun::Speed.
-	case EAgentPhase::Reversing:   Motion.GroundSpeed = -Reverse.Speed;  break;
+	// The TOW's run when the vehicle has a trailer - see TowReverse's declaration: the vehicle,
+	// not a flag, says which run is live.
+	case EAgentPhase::Reversing:   Motion.GroundSpeed = -(Vehicle.HasTrailer() ? TowReverse.Speed : Reverse.Speed); break;
 	// ZERO BY WHAT THE PHASE IS, NOT BY WHAT THE FOLLOWER HAPPENS TO STILL HOLD - issue #289.
 	// Both Parked closing sites used to rely on Follower.Speed being hand-zeroed on the way
 	// in, and one of the two (a reverse leg ending with nothing left to drive) never touched
@@ -281,7 +283,7 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// Each time, the struct that was moving the agent was not the struct being read. A fourth
 	// field added here should be asked which phase owns it before it is wired to the follower.
 	Motion.SteerAngleDegrees = Phase == EAgentPhase::Reversing
-		? Reverse.SteerDegrees : Follower.SteerDegrees;
+		? (Vehicle.HasTrailer() ? TowReverse.SteerDegrees : Reverse.SteerDegrees) : Follower.SteerDegrees;
 
 	// STATE, NOT SPEED. A stationary aircraft with its engine running is an aircraft with a
 	// turning propeller, which is what this used to get wrong.
@@ -401,9 +403,29 @@ bool FRoadAgent::FollowAndTow(double DeltaSeconds, FVector2D& OutAt, double& Out
 {
 	// RIGID, OR NOTHING TO STEP: the one call it always was. Airside.Model.Tow.RigidHasNoTow
 	// holds this to the bare follower bitwise, long frames included.
+	// THE NEXT REVERSE LEG IS A STOP LINE. TryArmReverseLeg arms a leg only while the steered axle
+	// is AT its start - NextReverseLegRun treats a start the follower has passed as behind it for
+	// good - and a follower crawling through the direction change at ProgressEpsilon still steps
+	// past it inside one sub-step. Nothing stopped it before 2026-09-26 because every reverse leg
+	// in play began its own route at distance 0 (a stand's service cycle hands the reverse over
+	// as a fresh route); a reverse turn's leg sits mid-route, and the follower drove it forwards
+	// round a 180 degree cusp, folding the trailer. So the allowance is capped at the leg's start,
+	// the same one input arbitration uses.
+	// ENFORCED BY: Airside.Model.TowReverse.RigidStillUsesReverseRun (a mid-route leg arms)
+	double Allowance = StopWithin;
+	{
+		int32 RunFrom = INDEX_NONE;
+		int32 RunTo = INDEX_NONE;
+		if (Follower.NextReverseLegRun(RunFrom, RunTo))
+		{
+			const double SpanStart = RunFrom == 0 ? 0.0 : Follower.Plan.Steps[RunFrom - 1].EndDistance;
+			Allowance = FMath::Min(Allowance, FMath::Max(0.0, SpanStart - Follower.Travelled));
+		}
+	}
+
 	if (TowAxles.Num() == 0)
 	{
-		return Follower.Advance(DeltaSeconds, Chassis(), StopWithin, OutAt, OutHeading);
+		return Follower.Advance(DeltaSeconds, Chassis(), Allowance, OutAt, OutHeading);
 	}
 
 	// SUB-STEPS NO LONGER THAN TraceStep AT THE SPEED CAP, so the chain is never pulled
@@ -427,7 +449,7 @@ bool FRoadAgent::FollowAndTow(double DeltaSeconds, FVector2D& OutAt, double& Out
 	for (int32 Index = 0; Index < Steps; ++Index)
 	{
 		// WHAT IS LEFT of the arbiter's allowance - see the declaration.
-		const double Left = StopWithin - (Follower.Travelled - StartTravelled);
+		const double Left = Allowance - (Follower.Travelled - StartTravelled);
 		if (!Follower.Advance(Step, Chassis(), Left, OutAt, OutHeading))
 		{
 			break;
@@ -776,7 +798,12 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// and walked rather than steered: a heading error going backwards GROWS.
 		FVector2D BackAt = At;
 		double BackHeading = Heading;
-		if (Reverse.Advance(DeltaSeconds, Chassis(), StopWithin, BackAt, BackHeading))
+		// A TOW PLAYS ITS SOLVED CHAIN, writing TowAxles every frame - the frozen trailer of step 1
+		// (spec 2026-09-24, "The reverse chain") ends here. A rigid vehicle is exactly as before.
+		const bool bTow = Vehicle.HasTrailer();
+		if (bTow
+			? TowReverse.Advance(DeltaSeconds, StopWithin, Vehicle, BackAt, BackHeading, TowAxles)
+			: Reverse.Advance(DeltaSeconds, Chassis(), StopWithin, BackAt, BackHeading))
 		{
 			LastMotion = DescribeMotion(BackAt, BackHeading);
 			OutMotion = LastMotion;
@@ -841,6 +868,17 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		//
 		// CLAMPED, so a remainder shorter than the vehicle cannot seek past its own end.
 		Follower.Travelled = FMath::Min(Chassis().Wheelbase(), Remainder.Length);
+
+		// A TOW'S STEERED AXLE IS WHERE THE PLAYBACK LEFT IT, measured onto the remainder rather
+		// than assumed a wheelbase in: the rigid rule above holds because a rigid reverse ends ON
+		// its line, and a tow's tractor ends wherever its hitch needed it. TryArmTowReverse
+		// refused the reverse up front if this lands off the exit line, so this is a measurement,
+		// never a snap. The chain is kept as the playback left it; the turntable lock releases on
+		// the first forward step, which steps both joints again.
+		if (bTow && TowReverse.Last() != nullptr)
+		{
+			VehicleFit::TowReverseExitOffset(*TowReverse.Last(), Chassis(), Remainder, &Follower.Travelled);
+		}
 
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Backed out; driving on (%.0f uu left)."),
 			Remainder.Length);
@@ -966,6 +1004,13 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 	}
 
 	const FRoutePlan Span = RouteSearch::Section(Follower.Plan, From, To);
+
+	// A VEHICLE WITH A TRAILER backs through TowReverse instead - solved from where its chain IS.
+	if (Vehicle.HasTrailer())
+	{
+		return TryArmTowReverse(Span, To, At, Heading, OutMotion);
+	}
+
 	if (Reverse.Start(Span, Chassis(), ReverseSpeed))
 	{
 		// WHERE THE TAXI PICKS UP, read before the phase changes because
@@ -1026,6 +1071,63 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 		TEXT("Reverse leg refused - %s cannot back along it. Stopping rather "
 		     "than driving it forwards."),
 		Chassis().HasAxles() ? TEXT("this vehicle") : TEXT("an unmeasured vehicle"));
+	Follower.Speed = 0.0;
+	OutMotion = LastMotion;
+	return true;
+}
+
+bool FRoadAgent::TryArmTowReverse(const FRoutePlan& Span, int32 To, const FVector2D& At, double Heading,
+	FAgentMotion& OutMotion)
+{
+	FString Reason;
+	TowReverse.Start(Span, Vehicle, At, Heading, TowAxles, ReverseSpeed, &Reason);
+
+	// THE EXIT MUST MEET THE CAB where the reverse leaves it (spec §2): the drive-on measures the
+	// steered axle onto the remainder, and a remainder laid somewhere else would be a snap. So it
+	// is checked here, before a frame plays, and refused like any other unsolvable reverse.
+	if (TowReverse.IsArmed() && Follower.Plan.Steps.IsValidIndex(To + 1))
+	{
+		// VehicleFit::TowReverseExitOffset - the check JudgePlan made before the router admitted
+		// this route, so a stall here means the route changed under the vehicle, not a disagreement.
+		const FRoutePlan Remainder = RouteSearch::Section(Follower.Plan, To + 1, Follower.Plan.Steps.Num() - 1);
+		const double Off = Remainder.IsValid() ? VehicleFit::TowReverseExitOffset(*TowReverse.Last(), Chassis(), Remainder) : 0.0;
+		if (Off > VehicleFit::TowReverseMaxExitOffset)
+		{
+			Reason = FString::Printf(TEXT("the exit line misses the cab's steered axle by %.0f uu (limit %.0f)"),
+				Off, VehicleFit::TowReverseMaxExitOffset);
+			TowReverse.Reset();
+		}
+	}
+
+	if (TowReverse.IsArmed())
+	{
+		ResumeStep = Follower.Plan.Steps.IsValidIndex(To + 1) ? To + 1 : INDEX_NONE;
+		Phase = EAgentPhase::Reversing;
+		// Zeroed for the reason the rigid arm gives: DescribeMotion must not read taxi speed.
+		Follower.Speed = 0.0;
+		LastReverseRefusal.Reset();
+
+		// POSED ON THE ARMING FRAME, as the rigid arm is: a zero-second Advance asks where the
+		// manoeuvre starts without moving it. The chain it writes is the measured chain snapped
+		// onto the locked line (TowReverse::TurntableLockDegrees).
+		FVector2D BackAt = At;
+		double BackHeading = Heading;
+		TowReverse.Advance(0.0, StopWithin, Vehicle, BackAt, BackHeading, TowAxles);
+		LastMotion = DescribeMotion(BackAt, BackHeading);
+		OutMotion = LastMotion;
+		UE_LOG(LogAirsideTraffic, Log, TEXT("Backing (tow %s): %.0f uu at %.0f uu/s - %s"),
+			*TypeCode().ToString(), Span.Length, ReverseSpeed, *Reason);
+		return true;
+	}
+
+	// REFUSED, AND SAID SO ONCE PER REASON - the stall is the defect's own report, as for the
+	// rigid arm, without a line every tick it re-tries.
+	if (Reason != LastReverseRefusal)
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("Reverse leg refused - tow %s cannot back along it: %s. Stopping rather than driving it forwards."),
+			*TypeCode().ToString(), *Reason);
+		LastReverseRefusal = Reason;
+	}
 	Follower.Speed = 0.0;
 	OutMotion = LastMotion;
 	return true;

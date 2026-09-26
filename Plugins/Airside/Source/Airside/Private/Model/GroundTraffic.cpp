@@ -352,6 +352,45 @@ const TArray<FVector2D>& UGroundTraffic::RemainingRoute(int32 AgentId) const
 	return Agent->Follower.Plan.Polyline;
 }
 
+TArray<FRouteRun> UGroundTraffic::RemainingRouteRuns(int32 AgentId) const
+{
+	TArray<FRouteRun> Runs;
+	const FRoadAgent* Agent = FindAgent(AgentId);
+	if (Agent == nullptr || (Agent->Phase != EAgentPhase::Taxiing && Agent->Phase != EAgentPhase::Reversing))
+	{
+		return Runs;
+	}
+	Agent->Follower.Plan.DescribeRuns(Runs);
+
+	// THE LIVE TOW REVERSE, drawn as solved: the first reverse run the steered axle has not
+	// passed is the one being backed along (the follower waits at its start - FollowAndTow's
+	// stop line), and its points become the leading axle's remaining path.
+	if (Agent->Phase == EAgentPhase::Reversing && Agent->TowReverse.IsArmed())
+	{
+		double Along = 0.0;
+		for (FRouteRun& Run : Runs)
+		{
+			if (Run.bReverse && Along + UE_KINDA_SMALL_NUMBER >= Agent->Follower.Travelled - 1.0)
+			{
+				Run.Points.Reset();
+				for (const TowReverse::FSample& Sample : Agent->TowReverse.Samples)
+				{
+					if (Sample.Along >= Agent->TowReverse.Along && Sample.Axles.Num() > 0)
+					{
+						Run.Points.Add(Sample.Axles.Last());
+					}
+				}
+				break;
+			}
+			for (int32 K = 1; K < Run.Points.Num(); ++K)
+			{
+				Along += FVector2D::Distance(Run.Points[K - 1], Run.Points[K]);
+			}
+		}
+	}
+	return Runs;
+}
+
 bool UGroundTraffic::StrandForTest(int32 AgentId)
 {
 	const int32 Index = FindIndex(AgentId);
@@ -596,8 +635,13 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// faces its new route at once, which Airside.Model.Traffic.RedirectPosesImmediatelyEvenPaused
 	// pins; the follower's slew then closes the gap for a tow, at its own rate.
 	// ENFORCED BY: Airside.Model.Tow.RedirectKeepsChainAndHeading
+	// THE POSE SHOWN, NOT THE FOLLOWER'S (2026-09-26): after a tow reverse the vehicle parks where
+	// FTowReverseRun left it, and the follower - which never ran during the reverse - still holds
+	// the pose it had at the reverse leg's start. LastMotion is where the cab actually is; for a
+	// tow that was taxiing the two are the same (DescribeMotion poses from the follower).
 	const TOptional<double> KeptHeading = Agent.TowAxles.Num() > 0
-		? TOptional<double>(Agent.Follower.Heading) : TOptional<double>();
+		? TOptional<double>(Agent.LastMotion.Heading) : TOptional<double>();
+	double InitialTravelled = 0.0;
 
 	// SAID, NOT SILENT, when the kept pose cannot drive the new line: a plan that starts beyond
 	// the steer lock of where the cab points, or somewhere other than where its steered axle
@@ -607,23 +651,49 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// would otherwise inherit a silent fold.
 	if (KeptHeading.IsSet())
 	{
-		FVector2D Steered = FVector2D::ZeroVector;
-		double OldLineHeading = 0.0;
-		const bool bHasSteered = GuidelineGeom::PointAtDistance(Agent.Follower.Plan.Polyline, Agent.Follower.Travelled,
-			Steered, OldLineHeading);
+		const FVector2D Steered = Agent.LastMotion.Position
+			+ FVector2D(FMath::Cos(KeptHeading.GetValue()), FMath::Sin(KeptHeading.GetValue())) * Agent.Chassis().SteerAxleX;
+		double StartGap = FVector2D::Distance(Steered, Plan.Polyline[0]);
+
+		// A CAB PART-WAY ALONG THE NEW LINE is seated where it is, not at the line's start. A tow
+		// that backed into a bay stops with its TRAILER axle on the bay end - where a route out of
+		// the bay starts - and its steered axle a chain's length up the exit; RestartTaxi at zero
+		// jumped the cab back onto the trailer (665 uu on the rig, M_RigTest yard, 2026-09-26) and
+		// folded it. Only when the steered axle is NOT at the start, so a redirect from the lane
+		// end a tow stopped on - every loop-course redirect - is exactly what it was.
+		// ENFORCED BY: AirportMgr.RigCourse.YardHeadless (every bay-to-bay redirect, the chain never jumping)
+		double ProjectedOff = -1.0;
+		if (StartGap > 1.0)
+		{
+			int32 Span = 0;
+			double Fraction = 0.0;
+			const double Off = GuidelineGeom::NearestOnPolyline(Plan.Polyline, Steered, Span, Fraction);
+			ProjectedOff = Off;
+			if (Off <= 1.0 + VehicleFit::TowReverseMaxExitOffset)
+			{
+				for (int32 K = 0; K < Span && K + 1 < Plan.Polyline.Num(); ++K)
+				{
+					InitialTravelled += FVector2D::Distance(Plan.Polyline[K], Plan.Polyline[K + 1]);
+				}
+				if (Plan.Polyline.IsValidIndex(Span + 1))
+				{
+					InitialTravelled += Fraction * FVector2D::Distance(Plan.Polyline[Span], Plan.Polyline[Span + 1]);
+				}
+				StartGap = Off;
+			}
+		}
 		FVector2D NewStart = FVector2D::ZeroVector;
 		double NewHeading = KeptHeading.GetValue();
-		GuidelineGeom::PointAtDistance(Plan.Polyline, 0.0, NewStart, NewHeading);
+		GuidelineGeom::PointAtDistance(Plan.Polyline, InitialTravelled, NewStart, NewHeading);
 		const double OffDegrees = FMath::Abs(FMath::RadiansToDegrees(FMath::UnwindRadians(NewHeading - KeptHeading.GetValue())));
 		const double LockDegrees = Agent.Chassis().Ground.MaxSteerDegrees;
-		const double StartGap = bHasSteered ? FVector2D::Distance(Steered, Plan.Polyline[0]) : 0.0;
 		if (OffDegrees > LockDegrees || StartGap > 1.0)
 		{
-			UE_LOG(LogAirsideTraffic, Warning, TEXT("RedirectAgent %d: the tow's kept pose does not fit the new line - start heading %.0f deg off the cab (lock %.0f), start %.0f uu from the steered axle; expect a slew or a fold."),
-				AgentId, OffDegrees, LockDegrees, StartGap);
+			UE_LOG(LogAirsideTraffic, Warning, TEXT("RedirectAgent %d: the tow's kept pose does not fit the new line - start heading %.0f deg off the cab (lock %.0f), start %.0f uu from the steered axle (%.0f uu off the line where it stands); expect a slew or a fold."),
+				AgentId, OffDegrees, LockDegrees, StartGap, ProjectedOff);
 		}
 	}
-	Agent.RestartTaxi(Plan, 0.0, KeptHeading);
+	Agent.RestartTaxi(Plan, InitialTravelled, KeptHeading);
 
 	if (bWasRunning)
 	{

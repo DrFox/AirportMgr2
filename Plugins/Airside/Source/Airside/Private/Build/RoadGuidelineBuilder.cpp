@@ -10,6 +10,7 @@
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadDesignVehicles.h"
 #include "Profiles/RoadProfile.h"
+#include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
 #include "Solve/UTurnGeom.h"
@@ -514,11 +515,12 @@ namespace
 	 * SIZED FOR THE LARGEST RIGID SERVICE VEHICLE ON EVERY TIER - DesignVehicles.Default, NOT
 	 * the tier's own design vehicle the fillets use. By user ruling (2026-09-25, "smaller,
 	 * reverse later"): a balloon the rig can be driven round without folding its trailer
-	 * reaches ~24 m past the road end (measured), and the rig will turn at a road end with a
-	 * three-point turn once reversing exists (step 2). Until then it is refused at every dead
-	 * end on its lock. Laid over grass: the balloon reaches ~4x the lock radius past the road
-	 * end (UTurnGeom.h).
-	 * ENFORCED BY: Airside.Build.DesignVehicle.WideDeadEndRefusesRigUntilReversing
+	 * reaches ~24 m past the road end (measured). The rig turns round with a HAMMERHEAD instead -
+	 * a reverse turn into a stub (FReverseTurn, ruled 2026-09-26, amending the three-point turn
+	 * the 2025 ruling expected) - so it is still refused at every balloon, on its trailer
+	 * folding, and that is the answer rather than a gap. Laid over grass: the balloon reaches
+	 * ~4x the lock radius past the road end (UTurnGeom.h).
+	 * ENFORCED BY: Airside.Build.DesignVehicle.WideDeadEndRefusesRig
 	 * ENFORCED BY: Airside.Build.TwoWay.DeadEnd, Airside.Solve.UTurnBalloon
 	 *
 	 * Returns whether a balloon was actually added, so the caller's census count only ever
@@ -597,6 +599,302 @@ namespace
 			Prev = Next;
 		}
 		return true;
+	}
+
+	/**
+	 * THE FILLET A REVERSE TURN IS LAID WITH, uu, before it is clamped to the room the two arms
+	 * give. 15 m: the radius a lorry driver backs a 13.6 m trailer round into a dock, and the
+	 * radius Airside.Solve.TowReverse.ArcTrackedWithinTolerance holds the rig to within 7 uu on
+	 * (2026-09-26). Tighter is the solver's to refuse, not this constant's to forbid.
+	 */
+	constexpr double ReverseFilletRadius = 1500.0;
+
+	/** The least fillet a reverse turn is laid with when the arms leave less room; below it, not laid. */
+	constexpr double MinReverseFilletRadius = 600.0;
+
+	/** uu of straight retrace the stopped vehicle's trailer axle is given beyond its chain, before the fillet. */
+	constexpr double ReversePullPastMargin = 200.0;
+
+	/** uu kept between the reversed vehicle's rear overhang and the end of the bay's lane. */
+	constexpr double ReverseEndMargin = 50.0;
+
+	/** Why a record failed: gone for good (drop it), or not laid THIS rebuild (keep it, an edit may fix it). */
+	enum class EReverseTurnFail : uint8 { None, Gone, NotLaid };
+
+	/** The segment of Node whose other end is Far, or unset. */
+	FRoadSegmentId ArmTowards(const URoadNetwork& Network, const FRoadNode& Node, FRoadNodeId NodeId, FRoadNodeId Far)
+	{
+		for (const FRoadSegmentId& Seg : Node.Incident)
+		{
+			if (Network.GetOtherEnd(Seg, NodeId) == Far)
+			{
+				return Seg;
+			}
+		}
+		return FRoadSegmentId();
+	}
+
+	/** Whether Segment's lane Which has a derived edge bowed more than 1 uu off its chord. */
+	bool LaneIsCurved(const URoadNetwork& Network, FRoadSegmentId Segment, int32 Which)
+	{
+		for (const FGuidelineEdge& Edge : Network.GetGuidelineEdges())
+		{
+			if (Edge.bAlive && Edge.bDerived && Edge.DerivedFrom == Segment && Edge.DerivedGuidelineIndex == Which)
+			{
+				const FGuidelineNode* A = Network.GetGuidelineNode(Edge.A);
+				const FGuidelineNode* B = Network.GetGuidelineNode(Edge.B);
+				if (A != nullptr && B != nullptr && FVector2D::Distance(Edge.Control, (A->Position + B->Position) * 0.5) > 1.0)
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * LAYS ONE REVERSE TURN (spec 2026-09-26 §3; FReverseTurn's header says what, this says how):
+	 * a chain of bReverseLeg edges from the pull-past lane end, back along that lane, round a
+	 * fillet onto the bay arm's lane towards Node, on to the bay's end; then one forward exit
+	 * edge from there back up that lane to its end at Node. Returns the bay-end node, or unset
+	 * with OutWhy and OutFail saying why.
+	 *
+	 * THE PULL-PAST IS CHECKED, NOT ASSUMED: the arm pulled past along must hold the design
+	 * vehicle's straight chain (steered axle to rearmost axle) plus ReversePullPastMargin before
+	 * the fillet starts, or the stopped vehicle's trailer is still in the junction's corner when
+	 * the reverse arms and TowReverse refuses it off the line. The design vehicle is the pull-past
+	 * arm's tier's (FRoadDesignVehicles::VehicleFor), the one its corners are laid for.
+	 */
+	FGuidelineNodeId LayReverseTurn(URoadNetwork& Network, const FReverseTurn& Turn, const FRoadDesignVehicles& DesignVehicles,
+		const TMap<uint64, FGuidelineNodeId>& Ends, FString& OutWhy, EReverseTurnFail& OutFail)
+	{
+		OutFail = EReverseTurnFail::Gone;
+		const FRoadNode* Node = Network.GetNode(Turn.Node);
+		if (Node == nullptr || !Node->bAlive)
+		{
+			OutWhy = TEXT("its junction has gone");
+			return FGuidelineNodeId();
+		}
+		const FRoadSegmentId SegA = ArmTowards(Network, *Node, Turn.Node, Turn.FromFar);
+		const FRoadSegmentId SegB = ArmTowards(Network, *Node, Turn.Node, Turn.IntoFar);
+		const FRoadSegment* ArmA = Network.GetSegment(SegA);
+		const FRoadSegment* ArmB = Network.GetSegment(SegB);
+		if (ArmA == nullptr || ArmB == nullptr || SegA == SegB)
+		{
+			OutWhy = TEXT("an arm it names has gone");
+			return FGuidelineNodeId();
+		}
+
+		OutFail = EReverseTurnFail::NotLaid;
+		const URoadProfile* ProfileA = Network.ProfileFor(*ArmA);
+		const URoadProfile* ProfileB = Network.ProfileFor(*ArmB);
+		if (ProfileA == nullptr || ProfileB == nullptr)
+		{
+			OutWhy = TEXT("an arm has no profile");
+			return FGuidelineNodeId();
+		}
+		// A: the lane LEAVING Node (the vehicle pulls past along it). B: the lane ARRIVING at Node
+		// (the vehicle backs in on it and drives out along it) - TryBuildDeadEndBalloon's reading.
+		const bool bNodeIsA_A = ArmA->A == Turn.Node;
+		const bool bNodeIsA_B = ArmB->A == Turn.Node;
+		int32 WhichA = INDEX_NONE;
+		int32 WhichB = INDEX_NONE;
+		for (int32 Which = 0; Which < ProfileA->Guidelines.Num(); ++Which)
+		{
+			const EGuidelineDir Dir = ProfileA->Guidelines[Which].Direction;
+			if ((bNodeIsA_A && Dir == EGuidelineDir::AToB) || (!bNodeIsA_A && Dir == EGuidelineDir::BToA))
+			{
+				WhichA = Which;
+			}
+		}
+		for (int32 Which = 0; Which < ProfileB->Guidelines.Num(); ++Which)
+		{
+			const EGuidelineDir Dir = ProfileB->Guidelines[Which].Direction;
+			if ((bNodeIsA_B && Dir == EGuidelineDir::BToA) || (!bNodeIsA_B && Dir == EGuidelineDir::AToB))
+			{
+				WhichB = Which;
+			}
+		}
+		const FGuidelineNodeId* StopEnd = WhichA != INDEX_NONE ? Ends.Find(EndKey(SegA.Index, !bNodeIsA_A, WhichA)) : nullptr;
+		const FGuidelineNodeId* ANearEnd = WhichA != INDEX_NONE ? Ends.Find(EndKey(SegA.Index, bNodeIsA_A, WhichA)) : nullptr;
+		const FGuidelineNodeId* BNearEnd = WhichB != INDEX_NONE ? Ends.Find(EndKey(SegB.Index, bNodeIsA_B, WhichB)) : nullptr;
+		const FGuidelineNodeId* BFarEnd = WhichB != INDEX_NONE ? Ends.Find(EndKey(SegB.Index, !bNodeIsA_B, WhichB)) : nullptr;
+		if (StopEnd == nullptr || ANearEnd == nullptr || BNearEnd == nullptr || BFarEnd == nullptr)
+		{
+			OutWhy = TEXT("an arm has no one-way lane each way (a bidirectional road backs along its own line)");
+			return FGuidelineNodeId();
+		}
+		// STRAIGHT ARMS ONLY: the retrace and the bay run are laid as straight lines between lane
+		// ends, so a bowed lane would put the reverse leg off the lane the vehicle actually drove.
+		if (LaneIsCurved(Network, SegA, WhichA) || LaneIsCurved(Network, SegB, WhichB))
+		{
+			OutWhy = TEXT("an arm is curved - reverse turns are laid on straight arms");
+			return FGuidelineNodeId();
+		}
+
+		const FVector2D Stop = Network.GetGuidelineNode(*StopEnd)->Position;
+		const FVector2D ANear = Network.GetGuidelineNode(*ANearEnd)->Position;
+		const FVector2D BNear = Network.GetGuidelineNode(*BNearEnd)->Position;
+		const FVector2D BFar = Network.GetGuidelineNode(*BFarEnd)->Position;
+		const FVector2D DirA = (ANear - Stop).GetSafeNormal();   // reverse travel along the pull-past lane
+		const FVector2D DirB = (BFar - BNear).GetSafeNormal();   // reverse travel into the bay
+
+		const FVehicle& Design = DesignVehicles.VehicleFor(ProfileA);
+		const double Chain = VehicleFit::ChainLength(Design);
+		const double Overhang = Design.Tow.Num() > 0 ? Design.Tow.Last().BodyRear : FMath::Abs(Design.BodyRearX);
+		const FVector2D End = BFar - DirB * (Overhang + ReverseEndMargin);
+		// THE BAY HOLDS THE WHOLE VEHICLE: backed in, its trailer axle on End, its steered axle a
+		// chain's length back up the bay - and that must still be on the bay's own lane, short of
+		// the lane end at the junction, or the exit (which runs up that lane) does not pass under
+		// the cab. Found on the M_RigTest yard (2026-09-26): a 25 m bay left the rig's cab 179 uu
+		// out on the junction's turn path and the drive-out folded the trailer.
+		const double BayRun = FVector2D::DotProduct(End - BNear, DirB);
+		if (BayRun < Chain + ReversePullPastMargin)
+		{
+			OutWhy = FString::Printf(TEXT("the bay holds %.0f uu from its junction to its end; the design vehicle needs %.0f (chain %.0f + %.0f) to back in whole"),
+				BayRun, Chain + ReversePullPastMargin, Chain, ReversePullPastMargin);
+			return FGuidelineNodeId();
+		}
+
+		const FProfileGuideline& LineA = ProfileA->Guidelines[WhichA];
+		const FProfileGuideline& LineB = ProfileB->Guidelines[WhichB];
+		FTrafficMask Mask = FTrafficMask::Only(LineA.Class);
+		Mask.Add(LineB.Class);
+		Mask.Add(ETraversalClass::Emergency);
+		const double Width = FMath::Min(LineA.Width, LineB.Width);
+		auto AddEdge = [&](FGuidelineNodeId From, FGuidelineNodeId To, const FVector2D& Control, bool bReverse)
+		{
+			FGuidelineEdge Edge;
+			Edge.A = From;
+			Edge.B = To;
+			Edge.Control = Control;
+			Edge.AllowedTraffic = Mask;
+			Edge.Direction = EGuidelineDir::AToB;
+			Edge.Width = Width;
+			// UNMEASURED ON PURPOSE: a reverse is judged over its whole length by TowReverse in
+			// VehicleFit::JudgePlan, and VehicleFit::Judge says nothing for a bReverseLeg edge.
+			Edge.MinRadius = 0.0;
+			Edge.bDerived = true;
+			Edge.bReverseLeg = bReverse;
+			Network.AddGuidelineEdge(MoveTemp(Edge));
+		};
+
+		const double Cross = FVector2D::CrossProduct(DirA, DirB);
+		const double Dot = FVector2D::DotProduct(DirA, DirB);
+		const double PullPast = FVector2D::Distance(Stop, ANear);
+		FGuidelineNodeId EndNode;
+		if (FMath::Abs(Cross) < FMath::Sin(FMath::DegreesToRadians(1.0)) && Dot > 0.0)
+		{
+			// OPPOSITE ARMS: a straight bay. The two lanes must be ONE line - the bay's lane
+			// towards Node continuing the pull-past lane - or the "straight" reverse would jog.
+			const double Offset = FMath::Abs(FVector2D::CrossProduct(DirA, BNear - Stop));
+			if (Offset > 1.0)
+			{
+				OutWhy = FString::Printf(TEXT("the arms are opposite but their lanes are %.0f uu out of line"), Offset);
+				return FGuidelineNodeId();
+			}
+			if (PullPast < Chain + ReversePullPastMargin)
+			{
+				OutWhy = FString::Printf(TEXT("pull-past %.0f uu < %.0f (the design vehicle's chain %.0f + %.0f)"),
+					PullPast, Chain + ReversePullPastMargin, Chain, ReversePullPastMargin);
+				return FGuidelineNodeId();
+			}
+			EndNode = Network.AddGuidelineNode(End);
+			AddEdge(*StopEnd, EndNode, (Stop + End) * 0.5, /*bReverse=*/true);
+		}
+		else
+		{
+			// A TURN: the two lane lines meet at Corner; the fillet's tangent points sit Tangent
+			// either side of it, R tan(theta/2), clamped so the pull-past before it still holds
+			// the chain and the bay after it still gives the trailer half a chain to settle.
+			const double Denominator = Cross;
+			if (FMath::Abs(Denominator) < UE_KINDA_SMALL_NUMBER)
+			{
+				OutWhy = TEXT("the arms' lanes are parallel and point apart");
+				return FGuidelineNodeId();
+			}
+			const double AlongA = FVector2D::CrossProduct(BNear - Stop, DirB) / Denominator;
+			const FVector2D Corner = Stop + DirA * AlongA;
+			const double Theta = RoadGeom::AngleBetween(DirA, DirB);
+			const double HalfTan = FMath::Tan(Theta * 0.5);
+			const double RoomA = AlongA - Chain - ReversePullPastMargin;
+			const double RoomB = FVector2D::DotProduct(End - Corner, DirB) - 0.5 * Chain;
+			const double Radius = FMath::Min(ReverseFilletRadius, FMath::Min(RoomA, RoomB) / FMath::Max(HalfTan, UE_KINDA_SMALL_NUMBER));
+			if (Radius < MinReverseFilletRadius)
+			{
+				OutWhy = FString::Printf(TEXT("no room for a fillet: R %.0f uu < %.0f (pull-past room %.0f, bay room %.0f uu, chain %.0f)"),
+					Radius, MinReverseFilletRadius, RoomA, RoomB, Chain);
+				return FGuidelineNodeId();
+			}
+			const double Tangent = Radius * HalfTan;
+			const FVector2D T1 = Corner - DirA * Tangent;
+			const FVector2D T2 = Corner + DirB * Tangent;
+			const FVector2D Normal = Cross > 0.0 ? FVector2D(-DirA.Y, DirA.X) : FVector2D(DirA.Y, -DirA.X);
+			const FVector2D Centre = T1 + Normal * Radius;
+			TArray<GuidelineGeom::FArcPiece> Pieces;
+			if (!GuidelineGeom::Arc(T1, DirA, T2, DirB, Centre, GuidelineGeom::BendArcPieceSweep, Pieces) || Pieces.Num() == 0)
+			{
+				OutWhy = TEXT("the fillet did not lay");
+				return FGuidelineNodeId();
+			}
+			const FGuidelineNodeId T1Node = Network.AddGuidelineNode(T1);
+			AddEdge(*StopEnd, T1Node, (Stop + T1) * 0.5, true);
+			FGuidelineNodeId Prev = T1Node;
+			for (const GuidelineGeom::FArcPiece& Piece : Pieces)
+			{
+				const FGuidelineNodeId Next = Network.AddGuidelineNode(Piece.End);
+				AddEdge(Prev, Next, Piece.Control, true);
+				Prev = Next;
+			}
+			EndNode = Network.AddGuidelineNode(End);
+			AddEdge(Prev, EndNode, (Pieces.Last().End + End) * 0.5, true);
+		}
+
+		// THE EXIT: forward from the bay end back up the lane it backed in on, to that lane's end
+		// at Node, where the junction's own turn paths take it on.
+		AddEdge(EndNode, *BNearEnd, (End + BNear) * 0.5, /*bReverse=*/false);
+		OutFail = EReverseTurnFail::None;
+		return EndNode;
+	}
+
+	/**
+	 * EVERY REVERSE TURN, laid; a record whose junction or arm has gone is dropped (logged), one
+	 * that merely could not be laid this time is kept (logged) - an edit may make room for it.
+	 * Returns how many were laid.
+	 */
+	int32 BuildReverseTurns(URoadNetwork& Network, const FRoadDesignVehicles& DesignVehicles,
+		const TMap<uint64, FGuidelineNodeId>& Ends)
+	{
+		TArray<FGuidelineNodeId> TurnEnds;
+		TArray<int32> Gone;
+		int32 Laid = 0;
+		const TArray<FReverseTurn> Turns = Network.GetReverseTurns();
+		for (int32 Index = 0; Index < Turns.Num(); ++Index)
+		{
+			FString Why;
+			EReverseTurnFail Fail = EReverseTurnFail::None;
+			const FGuidelineNodeId End = LayReverseTurn(Network, Turns[Index], DesignVehicles, Ends, Why, Fail);
+			TurnEnds.Add(End);
+			if (End.IsSet())
+			{
+				++Laid;
+				continue;
+			}
+			const FRoadNode* Node = Network.GetNode(Turns[Index].Node);
+			const FVector2D At = Node != nullptr ? Node->Position : FVector2D::ZeroVector;
+			UE_LOG(LogAirside, Warning, TEXT("Reverse turn %d at (%.0f,%.0f) %s: %s"), Index, At.X, At.Y,
+				Fail == EReverseTurnFail::Gone ? TEXT("dropped") : TEXT("not laid"), *Why);
+			if (Fail == EReverseTurnFail::Gone)
+			{
+				Gone.Add(Index);
+			}
+		}
+		Network.SetReverseTurnEnds(MoveTemp(TurnEnds));
+		for (int32 K = Gone.Num() - 1; K >= 0; --K)
+		{
+			Network.RemoveReverseTurnAt(Gone[K]);
+		}
+		return Laid;
 	}
 
 	/**
@@ -1228,6 +1526,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 	// then re-apply holding-position marks onto them (ReapplyHoldingPositionMarks) - see each
 	// function's comment. Order matters: marks are re-applied by the same Ends-keyed identity
 	// the re-resolve pass just used, onto nodes that pass has already made current.
+	// REVERSE TURNS, onto this rebuild's lane ends, before the orphan sweep below - their edges
+	// are what keep their new nodes from being swept.
+	const int32 ReverseTurnsLaid = BuildReverseTurns(Network, DesignVehicles, Ends);
+
 	ReResolveAuthoredEdges(Network, Ends);
 	ReapplyHoldingPositionMarks(Network, Segments, Ends, ProtectedBy);
 
@@ -1299,6 +1601,11 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			NodesAlive, HoldingPosition, EdgesAlive, Authored, TurnPaths,
 			Network.GetHoldingPositionMarks().Num(), DeadEnds, Balloons, Tapers, BendArcs,
 			Network.GetDriveSide() == EDriveSide::Left ? TEXT("left") : TEXT("right"));
+		// Its own line, and only when there are any: the census line above is grepped by tests.
+		if (Network.GetReverseTurns().Num() > 0)
+		{
+			UE_LOG(LogAirside, Log, TEXT("Reverse turns: %d laid of %d on file"), ReverseTurnsLaid, Network.GetReverseTurns().Num());
+		}
 	}
 }
 

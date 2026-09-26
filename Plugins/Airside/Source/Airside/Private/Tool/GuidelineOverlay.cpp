@@ -31,7 +31,9 @@ void GuidelineOverlay::Draw(const URoadNetwork& Network, IToolPreviewSink& Sink)
 			continue;
 		}
 
-		Sink.Polyline(Points, EPreviewStyle::Guideline);
+		// A REVERSE LEG IN ITS OWN CONTEXT STYLE, so the graph shows where reverse turns are
+		// before anything backs along one (spec 2026-09-26 §5).
+		Sink.Polyline(Points, Edges[Index].bReverseLeg ? EPreviewStyle::ReverseGuideline : EPreviewStyle::Guideline);
 	}
 
 	for (const FGuidelineNode& Node : Network.GetGuidelineNodes())

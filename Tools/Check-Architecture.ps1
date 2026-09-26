@@ -392,10 +392,12 @@ $AllowedCallers = @(
         # driven agent's fold are one fact only while both step the chain through
         # VehicleFit::StepTow; a second production caller of StepChain is a second evaluator,
         # the shape that let a balloon admit a rig that then jack-knifed. Trace (one curve) is
-        # the other sanctioned caller, in the same Solve file.
+        # the other sanctioned caller, in the same Solve file. TowReverse (2026-09-26) is the
+        # third: the ONE reverse stepper, whose samples FTowReverseRun plays and
+        # VehicleFit::JudgePlan judges - the same one-evaluator promise, going backwards.
         Name        = 'VehicleSweep::StepChain'
         Pattern     = '\bStepChain\s*\('
-        ProdAllowed = @('Public\Solve\VehicleSweep.h', 'Private\Solve\VehicleSweep.cpp', 'Private\Model\VehicleFit.cpp')
+        ProdAllowed = @('Public\Solve\VehicleSweep.h', 'Private\Solve\VehicleSweep.cpp', 'Private\Model\VehicleFit.cpp', 'Private\Solve\TowReverse.cpp')
         TestExempt  = $true
         ProdReason  = 'step a tow through VehicleFit::StepTow, the one step the router (JudgePlan) and the agent (FollowAndTow) share'
     },

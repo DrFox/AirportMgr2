@@ -166,6 +166,14 @@ public:
 	}
 
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) = 0;
+
+	/**
+	 * Lets vehicles back from the arm NodeIndex->FromFarIndex through NodeIndex into the arm
+	 * NodeIndex->IntoFarIndex (FReverseTurn, spec 2026-09-26 §3). Node indices, as ConnectNodes
+	 * takes. False, and nothing recorded, when a node is dead or either pair is not a road arm of
+	 * NodeIndex; whether the reverse leg can actually be LAID is the rebuild's, and it logs why not.
+	 */
+	virtual bool AddReverseTurn(int32 NodeIndex, int32 FromFarIndex, int32 IntoFarIndex) = 0;
 	/** Lays a runway with its surface and approach class written onto every segment of it. */
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) = 0;
 

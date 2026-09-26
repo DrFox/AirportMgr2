@@ -146,6 +146,7 @@ public:
 	virtual URoadProfile* ResolveWidthProfile(ERoadKind Kind, int32 Index) const override;
 	using IRoadEditTarget::ConnectNodes;
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
+	virtual bool AddReverseTurn(int32 NodeIndex, int32 FromFarIndex, int32 IntoFarIndex) override;
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) override;
 	using IRoadEditTarget::PlaceRunway;
 	virtual bool SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts) override;

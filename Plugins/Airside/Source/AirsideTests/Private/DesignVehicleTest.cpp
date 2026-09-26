@@ -54,7 +54,7 @@ namespace DesignVehicle
 	}
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDesignVehicleDeadEndTest, "Airside.Build.DesignVehicle.WideDeadEndRefusesRigUntilReversing",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDesignVehicleDeadEndTest, "Airside.Build.DesignVehicle.WideDeadEndRefusesRig",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FDesignVehicleDeadEndTest::RunTest(const FString& Parameters)
@@ -65,7 +65,8 @@ bool FDesignVehicleDeadEndTest::RunTest(const FString& Parameters)
 	// the whole-route tow check (VehicleFit::JudgePlan) is what refuses it - its trailer folds
 	// going round, on all three tiers. So the rig is still refused at every dead end until
 	// reversing (step 2) gives it a three-point turn; the reason moved from the lock to the fold.
-	// When reversing lands, the lines here are the ones to flip.
+	// REVERSING LANDED (2026-09-26) AND THESE LINES STAY: the rig turns round with a hammerhead
+	// (FReverseTurn), not in a balloon, by ruling - so a balloon refusing it is still right.
 	using namespace DesignVehicle;
 	const TArray<URoadProfile*> Profiles = Tiers();
 	if (!TestTrue(TEXT("the content set has its three service-road tiers, and they load"),
@@ -109,7 +110,7 @@ bool FDesignVehicleDeadEndTest::RunTest(const FString& Parameters)
 		// ...and the whole route refuses it: the trailer folds.
 		const FRoutePlan RigPlan = RoundTheEnd(*Net, In, Back, Rig);
 		AddInfo(FString::Printf(TEXT("%s: rig %s"), Names[Tier], *RigPlan.RejectedBy.Describe()));
-		TestFalse(FString::Printf(TEXT("%s: the rig is refused at the dead end until reversing exists"), Names[Tier]), RigPlan.IsValid());
+		TestFalse(FString::Printf(TEXT("%s: the rig is refused at the balloon - it turns with a hammerhead"), Names[Tier]), RigPlan.IsValid());
 		TestEqual(FString::Printf(TEXT("%s: as a road it does not fit - TooNarrow"), Names[Tier]),
 			static_cast<int32>(RigPlan.Result), static_cast<int32>(ERouteResult::TooNarrow));
 		TestTrue(FString::Printf(TEXT("%s: on the whole route"), Names[Tier]), RigPlan.RejectedBy.bWholeRoute);

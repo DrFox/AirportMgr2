@@ -426,6 +426,15 @@ public:
 	 */
 	const TArray<FVector2D>& RemainingRoute(int32 AgentId) const;
 
+	/**
+	 * RemainingRoute cut into forward and reverse runs (FRoutePlan::DescribeRuns), for the route
+	 * view's two styles (spec 2026-09-26 §5) - and answered while Reversing too, which
+	 * RemainingRoute is not. While a TOW is backing, the run it is backing along is the path its
+	 * solved trailer axle actually takes (FTowReverseRun's samples), not the raw leg: what is
+	 * drawn is what is driven. Empty for no such agent or one neither taxiing nor reversing.
+	 */
+	TArray<FRouteRun> RemainingRouteRuns(int32 AgentId) const;
+
 	/** True after a stand claim was released or a rebuild ran, until Advance's re-offer pass
 	 *  consumes it. For Airside.Model.Traffic.StandClaim. */
 	bool StandsMayHaveFreedForTest() const { return bStandsMayHaveFreed; }

@@ -328,6 +328,16 @@ enum class EPreviewStyle : uint8
 	 * a UENUM and renumbering it repoints any value already serialised against it.
 	 */
 	Handle,
+
+	/**
+	 * A route's REVERSE span: where the vehicle will back along a reverse leg (spec 2026-09-26
+	 * §5). Its own meaning beside Route, not a Route with a flag: the player reads "it backs up
+	 * here" off the colour, before any vehicle moves. At the end, for Handle's reason.
+	 */
+	ReverseRoute,
+
+	/** The guideline graph's reverse-leg edges - context, like Guideline, marking where reverse turns are. */
+	ReverseGuideline,
 };
 
 /**
