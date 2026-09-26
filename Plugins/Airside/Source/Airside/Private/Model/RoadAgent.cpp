@@ -875,9 +875,9 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// refused the reverse up front if this lands off the exit line, so this is a measurement,
 		// never a snap. The chain is kept as the playback left it; the turntable lock releases on
 		// the first forward step, which steps both joints again.
-		if (bTow)
+		if (bTow && TowReverse.Last() != nullptr)
 		{
-			Follower.Travelled = SteeredAxleAlong(Remainder, BackAt, BackHeading);
+			VehicleFit::TowReverseExitOffset(*TowReverse.Last(), Chassis(), Remainder, &Follower.Travelled);
 		}
 
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Backed out; driving on (%.0f uu left)."),
@@ -1076,37 +1076,6 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 	return true;
 }
 
-namespace RoadAgentTowReverse
-{
-	/** Distance along Polyline to the point nearest Query - samples, not the curve (GuidelineGeom's rule). */
-	double AlongPolyline(const TArray<FVector2D>& Polyline, const FVector2D& Query, double& OutOff)
-	{
-		int32 Span = 0;
-		double Fraction = 0.0;
-		OutOff = GuidelineGeom::NearestOnPolyline(Polyline, Query, Span, Fraction);
-		double Along = 0.0;
-		for (int32 Index = 0; Index < Span && Index + 1 < Polyline.Num(); ++Index)
-		{
-			Along += FVector2D::Distance(Polyline[Index], Polyline[Index + 1]);
-		}
-		if (Polyline.IsValidIndex(Span + 1))
-		{
-			Along += Fraction * FVector2D::Distance(Polyline[Span], Polyline[Span + 1]);
-		}
-		return Along;
-	}
-
-	/** uu the tow's final steered axle may sit off the exit line before a reverse is refused (spec §2). */
-	constexpr double MaxExitOffset = 20.0;
-}
-
-double FRoadAgent::SteeredAxleAlong(const FRoutePlan& Remainder, const FVector2D& Origin, double Heading) const
-{
-	const FVector2D Steered = Origin + FVector2D(FMath::Cos(Heading), FMath::Sin(Heading)) * Chassis().SteerAxleX;
-	double Off = 0.0;
-	return FMath::Clamp(RoadAgentTowReverse::AlongPolyline(Remainder.Polyline, Steered, Off), 0.0, Remainder.Length);
-}
-
 bool FRoadAgent::TryArmTowReverse(const FRoutePlan& Span, int32 To, const FVector2D& At, double Heading,
 	FAgentMotion& OutMotion)
 {
@@ -1118,15 +1087,14 @@ bool FRoadAgent::TryArmTowReverse(const FRoutePlan& Span, int32 To, const FVecto
 	// is checked here, before a frame plays, and refused like any other unsolvable reverse.
 	if (TowReverse.IsArmed() && Follower.Plan.Steps.IsValidIndex(To + 1))
 	{
+		// VehicleFit::TowReverseExitOffset - the check JudgePlan made before the router admitted
+		// this route, so a stall here means the route changed under the vehicle, not a disagreement.
 		const FRoutePlan Remainder = RouteSearch::Section(Follower.Plan, To + 1, Follower.Plan.Steps.Num() - 1);
-		const TowReverse::FSample& End = *TowReverse.Last();
-		const FVector2D Steered = End.Fixed + FVector2D(FMath::Cos(End.Heading), FMath::Sin(End.Heading)) * Chassis().Wheelbase();
-		double Off = 0.0;
-		RoadAgentTowReverse::AlongPolyline(Remainder.Polyline, Steered, Off);
-		if (Remainder.IsValid() && Off > RoadAgentTowReverse::MaxExitOffset)
+		const double Off = Remainder.IsValid() ? VehicleFit::TowReverseExitOffset(*TowReverse.Last(), Chassis(), Remainder) : 0.0;
+		if (Off > VehicleFit::TowReverseMaxExitOffset)
 		{
-			Reason = FString::Printf(TEXT("the exit line misses the cab's steered axle by %.0f uu (limit %.0f) at (%.0f,%.0f)"),
-				Off, RoadAgentTowReverse::MaxExitOffset, Steered.X, Steered.Y);
+			Reason = FString::Printf(TEXT("the exit line misses the cab's steered axle by %.0f uu (limit %.0f)"),
+				Off, VehicleFit::TowReverseMaxExitOffset);
 			TowReverse.Reset();
 		}
 	}

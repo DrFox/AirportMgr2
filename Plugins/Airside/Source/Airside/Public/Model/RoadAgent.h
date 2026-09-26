@@ -1073,7 +1073,4 @@ private:
 	 * otherwise enters Reversing posed on this frame. Same return contract as TryArmReverseLeg.
 	 */
 	bool TryArmTowReverse(const FRoutePlan& Span, int32 To, const FVector2D& At, double Heading, FAgentMotion& OutMotion);
-
-	/** The steered axle's distance along Remainder, for an origin/heading - a tow's drive-on after a reverse. */
-	double SteeredAxleAlong(const FRoutePlan& Remainder, const FVector2D& Origin, double Heading) const;
 };

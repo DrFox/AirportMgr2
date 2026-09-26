@@ -2,10 +2,13 @@
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/AgentMotion.h"
+#include "Model/RoadGuideline.h"
+#include "Model/RoadNetwork.h"
 #include "Model/RoadAgent.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficRules.h"
 #include "Model/Vehicle.h"
+#include "Model/VehicleFit.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -39,7 +42,7 @@ namespace TowReverseAgentTest
 	 * Approach east along y=0 to (6000,0); reverse west, then round R into a bay running +Y from
 	 * x = BayX; exit forwards south along x = BayX. Returns the plan with the middle step flagged.
 	 */
-	FRoutePlan BayPlan(double Radius)
+	FRoutePlan BayPlan(double Radius, bool bExit = true)
 	{
 		const double ArcStartX = 6000.0 - 1400.0 - 1000.0;
 		const double BayX = ArcStartX - Radius;
@@ -59,7 +62,10 @@ namespace TowReverseAgentTest
 		const int32 ApproachEnd = All.Num() - 1;
 		All.Append(Back.GetData() + 1, Back.Num() - 1);
 		const int32 BackEnd = All.Num() - 1;
-		All.Append(Exit.GetData() + 1, Exit.Num() - 1);
+		if (bExit)
+		{
+			All.Append(Exit.GetData() + 1, Exit.Num() - 1);
+		}
 		Plan.Polyline = All;
 		double Along = 0.0;
 		TArray<double> Distances = { 0.0 };
@@ -72,6 +78,10 @@ namespace TowReverseAgentTest
 		for (const TPair<int32, bool>& Cut : { TPair<int32, bool>(ApproachEnd, false), TPair<int32, bool>(BackEnd, true),
 			TPair<int32, bool>(All.Num() - 1, false) })
 		{
+			if (!Plan.Steps.IsEmpty() && Cut.Key <= Plan.Steps.Last().EndVertex)
+			{
+				continue;   // no exit: the reverse is the plan's last step
+			}
 			FRouteStep Step;
 			Step.EndVertex = Cut.Key;
 			Step.EndDistance = Distances[Cut.Key];
@@ -233,6 +243,70 @@ bool FTowReverseRigidTest::RunTest(const FString& Parameters)
 		}
 	}
 	TestTrue(TEXT("the bowser reversed"), bSawReverse);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTowWholeRouteReverseTest, "Airside.Model.Tow.WholeRouteJudgesTheReverse",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTowWholeRouteReverseTest::RunTest(const FString& Parameters)
+{
+	// THE ROUTER JUDGES WHAT THE AGENT PLAYS (spec §2): a bay both tows can back into is admitted,
+	// and the agent then drives the admitted route to the end without a refusal or a fold; a bay
+	// too tight is refused as ReverseUnsolvable, naming TowReverse's reason. Hand-built plans
+	// carry no edge handles, so no clearance is judged - the reverse is the whole question here.
+	URoadNetwork* Network = NewObject<URoadNetwork>();
+	for (const FVehicle& Vehicle : { UAirsideSettings::ResolveRigVehicle(), UAirsideSettings::ResolveUtilityTowVehicle() })
+	{
+		const FString Name = Vehicle.TypeCode.ToString();
+		const FRoutePlan Good = TowReverseAgentTest::BayPlan(1500.0);
+		const FFitVerdict Admitted = VehicleFit::JudgePlan(Good, Vehicle, *Network);
+		TestTrue(*(Name + TEXT(": R1500 bay admitted - ") + Admitted.Describe()), Admitted.Fits());
+
+		FRoadAgent Agent = TowReverseAgentTest::MakeAgent(Good, Vehicle);
+		TowReverseAgentTest::Drive(Agent);
+		TestEqual(*(Name + TEXT(": the agent drives the admitted route out")), Agent.Phase, EAgentPhase::Parked);
+		TestEqual(*(Name + TEXT(": without a fold")), Agent.GetJackknifedLink(), (int32)INDEX_NONE);
+	}
+	const FFitVerdict Refused = VehicleFit::JudgePlan(TowReverseAgentTest::BayPlan(250.0), UAirsideSettings::ResolveRigVehicle(), *Network);
+	TestEqual(TEXT("an R250 bay refused as a reverse"), Refused.Refusal, EFitRefusal::ReverseUnsolvable);
+	TestFalse(TEXT("the refusal carries TowReverse's reason"), Refused.Reason.IsEmpty());
+	TestTrue(*(TEXT("and says so: ") + Refused.Describe()), Refused.Describe().Contains(TEXT("reverse")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTowWholeRouteTrailingReverseTest, "Airside.Model.Tow.WholeRouteJudgesATrailingReverse",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTowWholeRouteTrailingReverseTest::RunTest(const FString& Parameters)
+{
+	// Review Focus 5: a route whose GOAL is the bay - the reverse is its last step, nothing after
+	// it. Judged (a tight one is still refused), and no index runs past the end.
+	URoadNetwork* Network = NewObject<URoadNetwork>();
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	TestTrue(TEXT("a trailing R1500 reverse is admitted"), VehicleFit::JudgePlan(TowReverseAgentTest::BayPlan(1500.0, false), Rig, *Network).Fits());
+	TestEqual(TEXT("a trailing R250 reverse is refused"),
+		VehicleFit::JudgePlan(TowReverseAgentTest::BayPlan(250.0, false), Rig, *Network).Refusal, EFitRefusal::ReverseUnsolvable);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTowJudgeReverseEdgeTest, "Airside.Model.Tow.JudgeSaysNothingForAReverseEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTowJudgeReverseEdgeTest::RunTest(const FString& Parameters)
+{
+	// A reverse edge with a tight measured radius is NOT refused on the forward lock - backing is
+	// judged by JudgePlan's solve. The same edge unflagged is refused, which is the control.
+	URoadNetwork* Network = NewObject<URoadNetwork>();
+	FGuidelineEdge Edge;
+	Edge.Width = 1000.0;
+	Edge.MinRadius = 50.0;
+	Edge.bReverseLeg = true;
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	TestTrue(TEXT("reverse edge: nothing said"), VehicleFit::Judge(Edge, Rig, *Network).Fits());
+	Edge.bReverseLeg = false;
+	TestEqual(TEXT("control: the same edge forwards is tighter than the lock"),
+		VehicleFit::Judge(Edge, Rig, *Network).Refusal, EFitRefusal::TighterThanLock);
 	return true;
 }
 
