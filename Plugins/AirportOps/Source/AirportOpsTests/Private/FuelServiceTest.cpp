@@ -946,6 +946,42 @@ bool FFuelBusyWaitSkipsChooseDepotTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelChooseDepotCachesRouteFindsTest, "AirportOps.Ops.FuelChooseDepotCachesRouteFinds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelChooseDepotCachesRouteFindsTest::RunTest(const FString& Parameters)
+{
+	// #301: FFuelBusyWaitSkipsChooseDepotTest above already proves the busy-wait keeps
+	// ChooseDepot from running AT ALL while nothing changes. This proves the OTHER half - when
+	// ChooseDepot DOES run again (a truck freeing up bumps FleetRevision every idle tick until
+	// THIS depot's own route is asked for again), it does not re-run RouteSearch::Find for a
+	// (depot, stand, truck) it has already answered on the same graph. ChooseDepotForTest calls
+	// the walk directly, so N repeats do not need N contrived FleetRevision bumps to get there -
+	// measured against RouteSearch::SearchCallCountForTest, a fact about the engine actually
+	// running, not a caller-owned counter a cache that is never consulted could still satisfy.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const FName AnchorId = Fixture.Net->FirstAnchorIdForRole(Fixture.Stand, EServiceRole::Fuel);
+	const FResolvedAnchor* Resolved = AnchorId.IsNone() ? nullptr : Fixture.Net->FindResolvedAnchor(Fixture.Stand, AnchorId);
+	if (!TestNotNull(TEXT("the stand's fuel anchor resolves"), Resolved)) { return false; }
+	const FGuidelineNodeId Hydrant = Resolved->Node;
+	if (!TestTrue(TEXT("the hydrant is joined"), Hydrant.IsSet())) { return false; }
+
+	RouteSearch::ResetSearchCallCountForTest();
+	const auto First = Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant);
+	if (!TestTrue(TEXT("the one depot is chosen"), First.Depot.IsSet())) { return false; }
+	TestEqual(TEXT("the first ask runs one Find"), RouteSearch::SearchCallCountForTest(), 1);
+
+	for (int32 Idle = 0; Idle < 5; ++Idle)
+	{
+		Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant);
+	}
+	TestEqual(TEXT("5 more asks over an unchanged graph answer from the cache - no new Find"),
+		RouteSearch::SearchCallCountForTest(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFuelBusyWaitReoffersOnceTest, "AirportOps.Ops.FuelBusyWaitReoffersOnce",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 

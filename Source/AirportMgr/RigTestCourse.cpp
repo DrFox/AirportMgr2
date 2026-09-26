@@ -627,28 +627,9 @@ void ARigTestCourse::PassMarker(FRigCourseRunner& Runner, const FRoadAgent& Agen
 
 uint32 ARigTestCourse::VehicleIdentity(const FVehicle& Vehicle)
 {
-	uint32 Hash = GetTypeHash(Vehicle.TypeCode);
-	auto Mix = [&Hash](double Value) { Hash = HashCombine(Hash, GetTypeHash(Value)); };
-	Mix(Vehicle.BodyWidth);
-	Mix(Vehicle.BodyFrontX);
-	Mix(Vehicle.BodyRearX);
-	Mix(Vehicle.Chassis.SteerAxleX);
-	Mix(Vehicle.Chassis.FixedAxleX);
-	Mix(Vehicle.Chassis.Ground.MaxSteerDegrees);
-	// The speed figures too: the whole-route tow check drives the plan at them.
-	Mix(Vehicle.Chassis.Ground.Taxi.SpeedCap);
-	Mix(Vehicle.Chassis.Ground.Taxi.Accel);
-	Mix(Vehicle.Chassis.Ground.Taxi.Decel);
-	Mix(Vehicle.Chassis.Ground.MaxLateralAccelUu);
-	for (const FTowLink& Link : Vehicle.Tow)
-	{
-		Mix(Link.HitchX);
-		Mix(Link.Length);
-		Mix(Link.BodyFront);
-		Mix(Link.BodyRear);
-		Mix(Link.Width);
-	}
-	return HashCombine(Hash, GetTypeHash(Vehicle.Tow.Num()));
+	// FORWARDS (#301): the figures-hash itself now lives in Airside/Model/RoutePlanCache.h,
+	// shared with FuelService::ChooseDepot. Kept at this name and signature - see the header.
+	return RoutePlanCache::VehicleIdentity(Vehicle);
 }
 
 bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCourseWaypoint& To, int32 Slot,
@@ -675,17 +656,11 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 	// AirportMgr.RigCourse.OneLoopHeadless's "route plan(s)" line for after. A refusal is cached
 	// too: it is as much a fact about the graph and the body as a route is. The vehicle is its
 	// slot: Vehicles is fixed once the course is laid.
-	const uint32 Revision = Network->GetGuidelineRevision();
-	if (Network != PlanCacheNetwork.Get() || Revision != PlanCacheRevision)
-	{
-		PlanCache.Reset();
-		FitCaches.Reset();
-		PlanCacheNetwork = Network;
-		PlanCacheRevision = Revision;
-	}
-	const uint32 Identity = VehicleIdentity(Vehicles[Slot]);
-	const FPlanCacheKey Key{ Start, Goal, Identity };
-	if (const FCachedPlan* Hit = PlanCache.Find(Key))
+	// FRoutePlanCache (#301): the cache itself moved to Airside/Model/RoutePlanCache.h, the one
+	// owner FuelService::ChooseDepot's identical cache now shares - this call site is unchanged
+	// in shape, only in which type owns the tables.
+	Cache.EnsureFresh(*Network);
+	if (const FCachedRoutePlan* Hit = Cache.Lookup(Start, Goal, Vehicles[Slot]))
 	{
 		OutPlan = Hit->Plan;
 		OutReason = Hit->Reason;
@@ -693,7 +668,7 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 	}
 	ON_SCOPE_EXIT
 	{
-		PlanCache.Add(Key, FCachedPlan{ OutPlan, OutReason });
+		Cache.Store(Start, Goal, Vehicles[Slot], OutPlan, OutReason);
 	};
 	// PlayerIssued, NOT VehicleToJob: the course is a tool asking for a route directly, and
 	// VehicleToJob requires the occupancy table - a congestion cost that, with the other vehicle
@@ -703,7 +678,7 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 	Query.WithVehicle(Vehicles[Slot]);
 	// AND EACH EDGE'S FIT, per vehicle, dated with the plans above: most of a Find's cost is
 	// tracing the vehicle round curves, and every Find of the look-ahead asks the same curves.
-	Query.FitCache = &FitCaches.FindOrAdd(Identity);
+	Query.FitCache = &Cache.FitCacheFor(Vehicles[Slot]);
 	const double FindBegan = FPlatformTime::Seconds();
 	OutPlan = RouteSearch::Find(*Network, Query);
 	++PlanFinds;

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Model/RoadHandles.h"
+#include "Model/RoutePlanCache.h"
 #include "Model/RouteSearch.h"
 #include "Model/Vehicle.h"
 #include "RigTestCourse.generated.h"
@@ -331,16 +332,11 @@ public:
 	/** Swaps Slot's vehicle - the plan cache's vehicle-identity test. */
 	void SetVehicleForTest(int32 Slot, const FVehicle& Vehicle) { Vehicles[Slot] = Vehicle; }
 
-	/** Every (edge, fits) the per-vehicle FitCaches hold - the staleness test reads them all. */
+	/** Every (edge, fits) the plan cache's per-vehicle fit tables hold - the staleness test
+	 *  reads them all. Forwards to FRoutePlanCache (#301): this actor no longer holds one. */
 	void ForEachFitCacheEntryForTest(TFunctionRef<void(FGuidelineEdgeId Edge, bool bFits)> Visit) const
 	{
-		for (const TPair<uint32, TMap<FGuidelineEdgeId, bool>>& Vehicle : FitCaches)
-		{
-			for (const TPair<FGuidelineEdgeId, bool>& Entry : Vehicle.Value)
-			{
-				Visit(Entry.Key, Entry.Value);
-			}
-		}
+		Cache.ForEachFitCacheEntryForTest(Visit);
 	}
 
 	/** PlanBetween's cache misses since BeginPlay: Finds actually run. */
@@ -354,9 +350,10 @@ public:
 	}
 
 	/**
-	 * What a cached plan is keyed on for its VEHICLE (re-review of aa90eec2): the type code and
-	 * every figure route search gates on - body, chassis, lock, each tow link. A slot is not an
-	 * identity: Vehicles is re-resolved by BuildCourse and a test may swap one.
+	 * What a cached plan is keyed on for its VEHICLE - forwards to RoutePlanCache::
+	 * VehicleIdentity (#301: lifted off this class into Airside/Model/RoutePlanCache.h, which
+	 * FuelService::ChooseDepot now shares). Kept at this name: the test above and
+	 * RigTestCourseTest.cpp's own PlanCacheKnowsItsVehicle both call it as ARigTestCourse's.
 	 * ENFORCED BY: AirportMgr.RigCourse.PlanCacheKnowsItsVehicle
 	 */
 	static uint32 VehicleIdentity(const FVehicle& Vehicle);
@@ -479,29 +476,13 @@ private:
 
 	int32 RefusedConnects = 0;
 
-	/** PlanBetween's answers - see its body. Mutable: a cache behind a const query. */
-	struct FPlanCacheKey
-	{
-		FGuidelineNodeId Start;
-		FGuidelineNodeId Goal;
-		uint32 Vehicle = 0;
-		bool operator==(const FPlanCacheKey& Other) const { return Start == Other.Start && Goal == Other.Goal && Vehicle == Other.Vehicle; }
-		friend uint32 GetTypeHash(const FPlanCacheKey& Key)
-		{
-			return HashCombine(HashCombine(GetTypeHash(Key.Start), GetTypeHash(Key.Goal)), ::GetTypeHash(Key.Vehicle));
-		}
-	};
-	struct FCachedPlan
-	{
-		FRoutePlan Plan;
-		FString Reason;
-	};
-	mutable TMap<FPlanCacheKey, FCachedPlan> PlanCache;
-	/** Per vehicle identity, VehicleFit::Fits per edge (FRouteQuery::FitCache), cleared with PlanCache. */
-	mutable TMap<uint32, TMap<FGuidelineEdgeId, bool>> FitCaches;
+	/**
+	 * PlanBetween's answers - see its body. Mutable: a cache behind a const query.
+	 * FRoutePlanCache (#301): lifted off this class into Airside/Model/RoutePlanCache.h, the
+	 * one owner FuelService::ChooseDepot now shares - see that header for the full contract.
+	 */
+	mutable FRoutePlanCache Cache;
 	mutable int32 TotalPlanFinds = 0;
-	mutable TWeakObjectPtr<const URoadNetwork> PlanCacheNetwork;
-	mutable uint32 PlanCacheRevision = 0;
 
 	/** Per PlanLoopRoute call, the breakdown its log line gives: PlanBetween's cache misses (Finds) and their ms, and the joined-route judge's ms. */
 	mutable int32 PlanFinds = 0;

@@ -4,6 +4,7 @@
 #include "Model/DeparturePlanner.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadHandles.h"
+#include "Model/RoutePlanCache.h"
 #include "Model/RouteSearch.h"
 #include "Model/Vehicle.h"
 #include "UObject/Object.h"
@@ -377,6 +378,15 @@ public:
 	int32 GetChooseDepotCallCountForTest() const { return ChooseDepotCallCountForTest; }
 	void ResetChooseDepotCallCountForTest() { ChooseDepotCallCountForTest = 0; }
 
+	/**
+	 * ChooseDepot, public for the route-plan-cache test (#301): calling it directly lets a test
+	 * repeat the SAME ask any number of times without contriving that many distinct
+	 * FleetRevision bumps to get past the busy-wait skip Tick's own Needed case applies -
+	 * FFuelBusyWaitSkipsChooseDepotTest already covers that skip on its own. The return type is
+	 * FDepotChoice, private below; auto lets a test hold one without naming it.
+	 */
+	auto ChooseDepotForTest(const URoadNetwork& Network, FGuidelineNodeId StandFuel) const { return ChooseDepot(Network, StandFuel); }
+
 	/** See FleetRevision. For a test to assert a truck retiring/recalling actually moved it. */
 	uint32 GetFleetRevisionForTest() const { return FleetRevision; }
 
@@ -512,4 +522,14 @@ private:
 
 	/** See GetChooseDepotCallCountForTest. */
 	mutable int32 ChooseDepotCallCountForTest = 0;
+
+	/**
+	 * ChooseDepot's per-(depot, stand, truck) route cache, dated by the graph's guideline
+	 * revision (#301: the shape ARigTestCourse's identical cache carried alone - see
+	 * Airside/Model/RoutePlanCache.h for the one owner both now share). ChooseDepot walks
+	 * every depot on every call the busy-wait above does not skip, and the same pair is asked
+	 * again the moment a DIFFERENT depot frees up (FleetRevision) with the graph unchanged.
+	 * MUTABLE: ChooseDepot is const, same reason as ChooseDepotCallCountForTest above.
+	 */
+	mutable FRoutePlanCache RouteCache;
 };
