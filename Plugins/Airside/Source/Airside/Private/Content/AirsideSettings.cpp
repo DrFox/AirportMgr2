@@ -17,6 +17,8 @@
 // branch per vehicle added to dispatch. It now loads FVehicle::Mesh directly, which
 // ResolveRigVehicle/ResolveUtilityTowVehicle below fill themselves; these two constants are
 // left purely for the inspector's and the log's sake.
+// ENFORCED BY: Check-Architecture's no-vehiclecode-compare rule (AirsideVehicleCodes:: banned
+// on either side of ==/!= anywhere - the ladder shape, not merely this one former call site).
 namespace AirsideVehicleCodes
 {
 	static const TCHAR* const Rig = TEXT("RIG");
@@ -234,6 +236,8 @@ FVehicle UAirsideSettings::ResolveRigVehicle()
 	// ResolveRigView only forwards to ResolveVehicleViewFor(ResolveRigVehicle()). RETIRE this
 	// block, and the four content fields, the day #287 gives the rig a DA_Vehicle_Rig1 asset
 	// whose own Vehicle() names them instead. Dated 2026-09-25.
+	// ENFORCED BY: Check-Architecture's RigUtilityLookContentFields allowed-callers row (a
+	// second reader of these four fields outside this file fails).
 	if (const UAirsideContent* Content = GetContent())
 	{
 		Rig.Mesh = Content->RigCabMesh;
@@ -611,6 +615,8 @@ FVehicle UAirsideSettings::ResolveUtilityTowVehicle()
 	// body (see UtilityTrailerMesh's own comment), so there is nothing for a second mesh to
 	// name. RETIRE this block, and the four content fields, when #287 gives utility1 a
 	// DA_Vehicle_UtilityTow1 asset whose own Vehicle() names them instead. Dated 2026-09-25.
+	// ENFORCED BY: Check-Architecture's RigUtilityLookContentFields allowed-callers row (a
+	// second reader of these four fields outside this file fails).
 	if (const UAirsideContent* Content = GetContent())
 	{
 		Utility.Mesh = Content->UtilityMesh;
