@@ -4,6 +4,7 @@
 #include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "BuildActions.h"
+#include "Tool/RoadBuildTool.h"
 #include "BuildBarWidget.generated.h"
 
 class UButton;
@@ -30,6 +31,26 @@ public:
 	UPROPERTY() TObjectPtr<UTextBlock> Label;
 	/** Null for the time controls, which are glyphs and carry no texture. */
 	UPROPERTY() TObjectPtr<UImage> Icon;
+	UPROPERTY() TWeakObjectPtr<UBuildBarWidget> Owner;
+
+	UFUNCTION() void HandleClicked();
+};
+
+/**
+ * One button on the variant row - an option of the lit tool (IBuildTool::GetVariantAxes).
+ * UBuildBarEntry's shape and its reason (a dynamic delegate binds only to a UFUNCTION); it
+ * holds the row and option INDEX the tool numbered them by, never a name to look up.
+ */
+UCLASS()
+class UBuildBarVariantEntry : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY() int32 Axis = INDEX_NONE;
+	UPROPERTY() int32 Option = INDEX_NONE;
+	UPROPERTY() TObjectPtr<UButton> Button;
+	UPROPERTY() TObjectPtr<UTextBlock> Label;
 	UPROPERTY() TWeakObjectPtr<UBuildBarWidget> Owner;
 
 	UFUNCTION() void HandleClicked();
@@ -97,6 +118,16 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> StatusRow;
 
 	/**
+	 * The popout: the lit tool's choices - a taxiway's widths, a runway's width, surface and
+	 * approach - one line each, under the tools. Collapsed over a tool with none.
+	 *
+	 * ITS CONTENTS COME FROM THE TOOL, like every section's come from BuildActions(): the row
+	 * is rebuilt from IBuildTool::GetVariantAxes whenever the lit tool or its option Ids change,
+	 * so there is no second list of widths here to fall out of step with the key cycle.
+	 */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> VariantSection;
+
+	/**
 	 * A FLOOR, not the height.
 	 *
 	 * The bar sizes itself from UUIStyle - two rows, a heading and a ButtonSize hit target -
@@ -108,6 +139,18 @@ public:
 
 	/** Runs an action by registry index on the owning controller. Called by entries. */
 	void RunAction(int32 ActionIndex);
+
+	/** Picks Option on the lit tool's row Axis, on the owning controller. Called by variant
+	 *  entries. */
+	void RunVariant(int32 Axis, int32 Option);
+
+	/** RunVariant's body given the controller - split for RefreshStateFor's reason (#309): in
+	 *  FAirsideTestWorld, Controller() is null, so a test clicking through RunVariant would
+	 *  measure the early return. The composition test calls this with its own controller. */
+	void RunVariantFor(ARoadBuildController& C, int32 Axis, int32 Option);
+
+	int32 VariantButtonCountForTest() const { return VariantEntries.Num(); }
+	bool IsVariantSectionVisibleForTest() const;
 
 	/**
 	 * How tall the two rows need to be for this style, before BarHeight's floor is applied.
@@ -202,6 +245,26 @@ private:
 	 * "zero constructions" - the wrong reason for the right number.
 	 */
 	void RefreshStateFor(ARoadBuildController& C);
+
+	/**
+	 * The variant row's per-tick half, called from RefreshStateFor: rebuild when the signature
+	 * changed, then light and enable. Lives in BuildBarVariants.cpp with the rest of the row.
+	 */
+	void RefreshVariantsFor(ARoadBuildController& C);
+
+	/** Clears the row and builds one line per axis. Only when the signature changed. */
+	void RebuildVariants(const TArray<FToolVariantAxis>& Axes);
+
+	UPROPERTY() TArray<TObjectPtr<UBuildBarVariantEntry>> VariantEntries;
+
+	/**
+	 * What the row was last built from: the lit tool's index, then each axis Id followed by its
+	 * option Ids. COMPARED BY NAME, NOT COUNT - CLAUDE.md's "lists that must agree check
+	 * identity": a taxiway and a road can both offer three widths, and a count-keyed row would
+	 * keep the taxiway's buttons over the road tool.
+	 */
+	TArray<FName> VariantSignature;
+
 	void RefreshClock();
 
 	/** The balance, and the landing-fee multiplier beside it. Called from the same tick. */

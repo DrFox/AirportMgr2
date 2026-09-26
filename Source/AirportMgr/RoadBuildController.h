@@ -217,6 +217,9 @@ public:
 	 */
 	FToolContext MakeToolContext() const;
 
+	/** A context carrying only Target - all a variant question reads. See the .cpp. */
+	FToolContext MakeVariantContext() const;
+
 	/**
 	 * This frame's context, built ONCE at the top of PlayerTick and read by CollectToolReadout,
 	 * Tick, and ARoadBuildHUD::DrawHUD (which runs after this frame's PlayerTick, over the
@@ -281,6 +284,12 @@ public:
 	 *  it - see FBuildSession::SelectTool. */
 	void SelectTool(int32 Index);
 	int32 GetActiveToolIndex() const;
+
+	/** The lit tool's variant rows, for the bar's popout - see FBuildSession::GetActiveVariantAxes. */
+	void GetActiveVariantAxes(TArray<FToolVariantAxis>& Out) const;
+
+	/** A bar click on a variant. Logs the pick, taken or refused, under LogRoadBuild. */
+	bool SelectActiveVariant(int32 Axis, int32 Option);
 
 	/** Drives RunActionForKey with a SYNTHETIC Ctrl flag, same precedent as PlayerTickForTest:
 	 *  a headless test has no viewport to hold a real key down, so OnActionKey's own

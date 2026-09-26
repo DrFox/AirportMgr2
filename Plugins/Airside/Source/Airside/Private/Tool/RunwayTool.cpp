@@ -1,6 +1,7 @@
 #include "Tool/RunwayTool.h"
 
 #include "AirsideLog.h"
+#include "Model/BuildPurse.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/RunwayDesignator.h"
 
@@ -54,24 +55,118 @@ void FRunwayTool::NextWidth(const FToolContext& Context)
 		return;
 	}
 
-	WidthIndex = (WidthIndex + 1) % Count;
-
-	// The width is otherwise visible ONLY in the drag preview, so a player who has not
-	// started a drag has no way to tell whether the key did anything. One line per press,
-	// naming the width in metres, is what makes "the key does nothing" answerable.
-	const URoadProfile* Profile = ProfileForWidth(Context);
-	UE_LOG(LogAirside, Log, TEXT("Runway width -> %d of %d, %.0f m"),
-		WidthIndex + 1, Count, Profile != nullptr ? Profile->GetTotalWidth() / 100.0 : 0.0);
+	StepAxis(Context, TEXT("Width"));
 }
 
-void FRunwayTool::NextSurface()
+void FRunwayTool::NextSurface(const FToolContext& Context)
 {
-	Surface = static_cast<ERunwaySurface>((static_cast<uint8>(Surface) + 1) % static_cast<uint8>(ERunwaySurface::Count));
+	StepAxis(Context, TEXT("Surface"));
 }
 
-void FRunwayTool::NextApproach()
+void FRunwayTool::NextApproach(const FToolContext& Context)
 {
-	Approach = static_cast<ERunwayApproach>((static_cast<uint8>(Approach) + 1) % static_cast<uint8>(ERunwayApproach::Count));
+	StepAxis(Context, TEXT("Approach"));
+}
+
+void FRunwayTool::StepAxis(const FToolContext& Context, FName AxisId)
+{
+	// THROUGH THE ROWS, BY ID, so the key walks the same list the bar draws and in its order.
+	TArray<FToolVariantAxis> Axes;
+	GetVariantAxes(Context, Axes);
+	const int32 Axis = Axes.IndexOfByPredicate([AxisId](const FToolVariantAxis& A) { return A.Id == AxisId; });
+	const int32 Next = Axis != INDEX_NONE ? NextEnabledVariant(Axes[Axis]) : INDEX_NONE;
+	if (Next == INDEX_NONE)
+	{
+		return;
+	}
+	SelectVariant(Context, Axis, Next);
+}
+
+void FRunwayTool::GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const
+{
+	const int32 WidthCount = Context.Target != nullptr ? Context.Target->GetRunwayProfileCount() : 0;
+	if (WidthCount > 0)
+	{
+		FToolVariantAxis& Width = Out.AddDefaulted_GetRef();
+		Width.Id = TEXT("Width");
+		Width.Label = LOCTEXT("RunwayAxisWidth", "Width");
+		// Clamped for ProfileForWidth's reason: the list is content, and may have shrunk under
+		// an index left from a longer one - the row must light the width that will be laid.
+		Width.Current = FMath::Clamp(WidthIndex, 0, WidthCount - 1);
+		for (int32 Index = 0; Index < WidthCount; ++Index)
+		{
+			const URoadProfile* Profile = Context.Target->ResolveRunwayProfile(Index);
+			const double Metres = Profile != nullptr ? Profile->GetTotalWidth() : 0.0;
+			FToolVariant& Option = Width.Options.AddDefaulted_GetRef();
+			Option.Id = FName(*FString::Printf(TEXT("W%d"), FMath::RoundToInt(Metres)));
+			Option.Label = VariantWidthLabel(Metres);
+		}
+	}
+
+	// THE ENUMS' OWN NAMES, from RunwayFacts.h - the same strings the drag readout prints, so
+	// the row and the readout cannot name one surface two ways.
+	FToolVariantAxis& SurfaceAxis = Out.AddDefaulted_GetRef();
+	SurfaceAxis.Id = TEXT("Surface");
+	SurfaceAxis.Label = LOCTEXT("RunwayAxisSurface", "Surface");
+	SurfaceAxis.Current = static_cast<int32>(Surface);
+	for (uint8 Each = 0; Each < static_cast<uint8>(ERunwaySurface::Count); ++Each)
+	{
+		const TCHAR* Name = RunwaySurfaceName(static_cast<ERunwaySurface>(Each));
+		FToolVariant& Option = SurfaceAxis.Options.AddDefaulted_GetRef();
+		Option.Id = Name;
+		Option.Label = FText::FromString(Name);
+	}
+
+	FToolVariantAxis& ApproachAxis = Out.AddDefaulted_GetRef();
+	ApproachAxis.Id = TEXT("Approach");
+	ApproachAxis.Label = LOCTEXT("RunwayAxisApproach", "Approach");
+	ApproachAxis.Current = static_cast<int32>(Approach);
+	for (uint8 Each = 0; Each < static_cast<uint8>(ERunwayApproach::Count); ++Each)
+	{
+		const TCHAR* Name = RunwayApproachName(static_cast<ERunwayApproach>(Each));
+		FToolVariant& Option = ApproachAxis.Options.AddDefaulted_GetRef();
+		Option.Id = Name;
+		Option.Label = FText::FromString(Name);
+	}
+}
+
+bool FRunwayTool::SelectVariant(const FToolContext& Context, int32 Axis, int32 Option)
+{
+	// ROWS ARE NUMBERED AS GetVariantAxes NUMBERED THEM, and that numbering shifts when there are
+	// no runway profiles (no Width row). Resolving the index to an Id through the same function
+	// is what keeps a click on "Surface" from setting the approach on an unconfigured project.
+	TArray<FToolVariantAxis> Axes;
+	GetVariantAxes(Context, Axes);
+	if (!Axes.IsValidIndex(Axis) || !Axes[Axis].Options.IsValidIndex(Option)
+		|| !Axes[Axis].Options[Option].bEnabled)
+	{
+		return false;
+	}
+
+	const FName Id = Axes[Axis].Id;
+	if (Id == TEXT("Width"))
+	{
+		WidthIndex = Option;
+
+		// The width is otherwise visible ONLY in the drag preview, so a player who has not
+		// started a drag has no way to tell whether the key did anything. One line per press,
+		// naming the width in metres, is what makes "the key does nothing" answerable. MOVED
+		// HERE from NextWidth so a bar click logs it too.
+		const URoadProfile* Profile = ProfileForWidth(Context);
+		UE_LOG(LogAirside, Log, TEXT("Runway width -> %d of %d, %.0f m"),
+			WidthIndex + 1, Axes[Axis].Options.Num(), Profile != nullptr ? Profile->GetTotalWidth() / 100.0 : 0.0);
+	}
+	else if (Id == TEXT("Surface"))
+	{
+		Surface = static_cast<ERunwaySurface>(Option);
+		UE_LOG(LogAirside, Log, TEXT("Runway surface -> %s"), RunwaySurfaceName(Surface));
+	}
+	else
+	{
+		Approach = static_cast<ERunwayApproach>(Option);
+		UE_LOG(LogAirside, Log, TEXT("Runway approach -> %s"), RunwayApproachName(Approach));
+	}
+	return true;
 }
 
 FRunwayFacts FRunwayTool::Facts() const
@@ -130,11 +225,11 @@ void FRunwayTool::OnReselect(const FToolContext& Context)
 	// both are held only because something must; neither is a gesture anyone makes.
 	if (Context.bRemoveModifier)
 	{
-		NextApproach();
+		NextApproach(Context);
 	}
 	else if (Context.bInsertModifier)
 	{
-		NextSurface();
+		NextSurface(Context);
 	}
 	else
 	{
@@ -230,7 +325,18 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 	const double Minimum = Context.Target != nullptr
 		? Context.Target->GetMinimumRunwayLength() : 0.0;
 	const bool bLongEnough = Length >= Minimum;
-	const EPreviewStyle Style = bLongEnough ? EPreviewStyle::Pending : EPreviewStyle::Refused;
+
+	// THE PRICE BEFORE THE CLICK - RoadDrawTool's rule, for runways. Until 2026-09-26 a strip the
+	// ledger would refuse was drawn exactly like one it would take, and the click then did
+	// nothing but write a log line; in PIE that read as "visual and precision runways don't
+	// build", the approach being whatever happened to be set when the money ran out. Priced
+	// through the TARGET, which PlaceRunway charges through too, so the two cannot disagree.
+	const IBuildPurse* Purse = Context.Target != nullptr ? Context.Target->GetPurse() : nullptr;
+	const FBuildQuote Quote = Purse != nullptr && Profile != nullptr
+		? Context.Target->QuoteForRunway(Threshold, Far, Profile) : FBuildQuote();
+	const bool bAffordable = Quote.IsFree() || Purse->CanAfford(Quote);
+
+	const EPreviewStyle Style = bLongEnough && bAffordable ? EPreviewStyle::Pending : EPreviewStyle::Refused;
 
 	Sink.Marker(Threshold, Style);
 	Sink.Marker(Far, Style);
@@ -270,6 +376,15 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 				Length / 100.0, Profile->GetTotalWidth() / 100.0,
 				RunwaySurfaceName(Surface), RunwayApproachName(Approach)),
 			Style);
+	}
+
+	// SAID, not only coloured: red alone cannot tell "too expensive" from any other refusal.
+	// The purse formats the money, so no currency symbol enters this plugin.
+	if (!Quote.IsFree())
+	{
+		const FString Price = Purse->Describe(Quote).ToString();
+		Sink.Label(Far + FVector2D(0.0, -Profile->GetTotalWidth()),
+			bAffordable ? Price : FString::Printf(TEXT("can't afford: %s"), *Price), Style);
 	}
 }
 

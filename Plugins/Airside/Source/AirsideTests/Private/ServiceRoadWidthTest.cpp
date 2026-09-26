@@ -63,10 +63,19 @@ bool FServiceRoadWidthTest::RunTest(const FString& Parameters)
 	{
 		FRoadDrawTool Tool(ERoadKind::ServiceRoad);
 		const FToolContext Context = TestTool::ContextAt(*Actor, FVector2D::ZeroVector);
+		// FROM WHAT IS LIT (2026-09-26): the road's default tier usually IS a content tier, so
+		// it lights, and the key steps on from it - see TaxiwayWidthTest block 2. The walk to
+		// the widest is then driven to index 2 rather than counted in presses.
+		TArray<FToolVariantAxis> Axes;
+		Tool.GetVariantAxes(Context, Axes);
+		const int32 Lit = Axes.Num() > 0 ? Axes[0].Current : INDEX_NONE;
 		Tool.OnReselect(Context);
-		TestEqual(TEXT("the first press picks the narrowest"), Tool.GetWidthIndex(), 0);
-		Tool.OnReselect(Context);
-		Tool.OnReselect(Context);
+		TestEqual(TEXT("the first press steps on from what is lit"), Tool.GetWidthIndex(),
+			Lit == INDEX_NONE ? 0 : (Lit + 1) % Count);
+		for (int32 Guard = 0; Guard < Count && Tool.GetWidthIndex() != 2; ++Guard)
+		{
+			Tool.OnReselect(Context);
+		}
 		TestEqual(TEXT("and walks to the widest"), Tool.GetWidthIndex(), 2);
 
 		const int32 Before = Actor->Network->GetSegments().Num();

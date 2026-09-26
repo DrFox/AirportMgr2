@@ -128,8 +128,23 @@ public:
 	int32 GetWidthIndex() const { return WidthIndex; }
 
 	/** Selecting this tool while it is already active cycles the taxiway width - the same
-	 *  gesture FRunwayTool::OnReselect gives runways. */
+	 *  gesture FRunwayTool::OnReselect gives runways. Steps from the LIT option, through
+	 *  SelectVariant, so the key and the bar's row walk one list. */
 	virtual void OnReselect(const FToolContext& Context) override;
+
+	/**
+	 * One axis, Width: the standard widths of this tool's kind, labelled in metres.
+	 *
+	 * LIGHTS THE LEVEL DEFAULT WITHOUT CHOOSING IT. While WidthIndex is unset the tool lays the
+	 * level's own tuning (see WidthIndex), so Current names the preset that tuning matches -
+	 * the same asset, else the same total width - and INDEX_NONE when it matches none. Writing
+	 * the match into WidthIndex instead would silently re-profile every level whose tuning is
+	 * off-list, the defect ARoadNetworkActor::ResolveProfile's comment records.
+	 */
+	virtual void GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const override;
+
+	/** Axis 0 only. Sets WidthIndex, and the live chain's copy of it - see OnReselect. */
+	virtual bool SelectVariant(const FToolContext& Context, int32 Axis, int32 Option) override;
 
 	/**
 	 * The node the chain is drawing FROM, and the direction of the segment already arriving

@@ -167,9 +167,11 @@ bool FEditHandlesReachTheContextTest::RunTest(const FString& Parameters)
 		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables, false, false).EditHandles
 			== EEditHandleKind::AirsideNode);
 
-	// THE LIT TOOL FILTERS, so switching it changes what is grabbable without leaving Edit.
+	// THE LIT TOOL FILTERS, so a different tool lit means different handles. Edit is re-entered
+	// after the switch since 2026-09-26: picking a tool drops to Build (FBuildSession::SelectTool).
 	Session.SelectTool(2);                       // Apron
-	TestTrue(TEXT("switching the lit tool switches the handle kind, with Edit still held"),
+	Session.SetGestureMode(EGestureMode::Edit);
+	TestTrue(TEXT("switching the lit tool switches the handle kind"),
 		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables, false, false).EditHandles
 			== EEditHandleKind::ApronCorner);
 
@@ -370,12 +372,13 @@ bool FEditHandlesAreDrawnForTheLitToolTest::RunTest(const FString& Parameters)
 
 	FBuildSession Session;
 	FBuildSessionTunables Tunables;
-	Session.SetGestureMode(EGestureMode::Edit);
 
 	// DRAWING IS THE HALF THAT MATTERS. A filter that computed the right set and drew
 	// nothing would leave the mode looking identical to having no handles at all - the
-	// failure IBuildTool::WantsFreeStartGuides records for guides.
+	// failure IBuildTool::WantsFreeStartGuides records for guides. Edit entered AFTER each
+	// pick: a tool switch drops to Build since 2026-09-26 (FBuildSession::SelectTool).
 	Session.SelectTool(1);                       // Taxiway
+	Session.SetGestureMode(EGestureMode::Edit);
 	{
 		FEditToolSink Sink;
 		Session.GetActiveTool()->BuildPreview(
@@ -385,6 +388,7 @@ bool FEditHandlesAreDrawnForTheLitToolTest::RunTest(const FString& Parameters)
 	}
 
 	Session.SelectTool(7);                       // Road (service road) - registry index 7
+	Session.SetGestureMode(EGestureMode::Edit);
 	{
 		FEditToolSink Sink;
 		Session.GetActiveTool()->BuildPreview(
@@ -838,12 +842,12 @@ bool FEditModeRemovalRespectsTheHandleFilterTest::RunTest(const FString& Paramet
 
 	FBuildSession Session;
 	FBuildSessionTunables Tunables;
-	Session.SetGestureMode(EGestureMode::Edit);
 
 	// TAXIWAY LIT, SERVICE-ROAD NODE UNDER THE CURSOR. The snap chain will name it happily -
 	// it knows nothing of the lit tool - so without the filter the removal would take a node
-	// this mode never drew a handle on.
+	// this mode never drew a handle on. Edit entered AFTER each pick (tool switch -> Build).
 	Session.SelectTool(1);                       // Taxiway
+	Session.SetGestureMode(EGestureMode::Edit);
 	Session.GetActiveTool()->OnClick(
 		Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, /*bRemove*/ true, false));
 	TestNotNull(TEXT("a node the lit tool exposes no handle for is not removable"),
@@ -852,6 +856,7 @@ bool FEditModeRemovalRespectsTheHandleFilterTest::RunTest(const FString& Paramet
 	// AND THE CONTROL: with Road lit it IS a handle, and the same click takes it. Without
 	// this, a removal broken everywhere would pass the assertion above.
 	Session.SelectTool(7);                       // Road
+	Session.SetGestureMode(EGestureMode::Edit);
 	Session.GetActiveTool()->OnClick(
 		Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, /*bRemove*/ true, false));
 	TestNull(TEXT("but the tool that does expose it can remove it"),

@@ -405,13 +405,110 @@ void FRoadDrawTool::OnReselect(const FToolContext& Context)
 		return;
 	}
 
-	// FROM THE LEVEL'S DEFAULT INTO THE LIST, then round it. INDEX_NONE is not a slot in
-	// the cycle - it is "whatever this level was tuned for" - so the first press picks the
-	// narrowest standard width rather than the one after some remembered position.
-	WidthIndex = WidthIndex == INDEX_NONE ? 0 : (WidthIndex + 1) % Count;
+	// FROM WHAT IS LIT, then round it. The bar's row shows the lit option, so the key steps on
+	// from THAT - a press that jumped back to the narrowest from a lit Code C would read as the
+	// row and the key disagreeing. Nothing lit (the level's tuning is off-list) starts at the
+	// narrowest, which is what the first press always did before the row existed.
+	TArray<FToolVariantAxis> Axes;
+	GetVariantAxes(Context, Axes);
+	const int32 Next = Axes.Num() > 0 ? NextEnabledVariant(Axes[0]) : INDEX_NONE;
+	if (Next == INDEX_NONE)
+	{
+		UE_LOG(LogAirside, Warning, TEXT("%s width unchanged: every width is locked"), What);
+		return;
+	}
+	SelectVariant(Context, 0, Next);
+}
+
+int32 NextEnabledVariant(const FToolVariantAxis& Axis)
+{
+	const int32 Count = Axis.Options.Num();
+	const int32 From = Axis.Current == INDEX_NONE ? -1 : Axis.Current;
+	for (int32 Step = 1; Step <= Count; ++Step)
+	{
+		const int32 Candidate = (From + Step) % Count;
+		if (Axis.Options[Candidate].bEnabled)
+		{
+			return Candidate;
+		}
+	}
+	return INDEX_NONE;
+}
+
+FText VariantWidthLabel(double TotalWidth)
+{
+	// ONE DECIMAL AT MOST: ICAO code B is 10.5 m and code C 15 m, and "15.0 m" beside "10.5 m"
+	// reads as a precision the rest of the row does not have.
+	FNumberFormattingOptions Metres;
+	Metres.MinimumFractionalDigits = 0;
+	Metres.MaximumFractionalDigits = 1;
+	return FText::Format(LOCTEXT("VariantWidthMetres", "{0} m"), FText::AsNumber(TotalWidth / 100.0, &Metres));
+}
+
+void FRoadDrawTool::GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const
+{
+	if (Context.Target == nullptr)
+	{
+		return;
+	}
+	const int32 Count = Context.Target->GetWidthCount(Kind);
+	if (Count <= 0)
+	{
+		// NO AXIS rather than an empty one: the row hides instead of drawing a heading over
+		// nothing. OnReselect's own branch says why in the log.
+		return;
+	}
+
+	// ONLY FOR THE MATCH, and only when nothing is chosen - see the header on why the default
+	// is lit but never written.
+	const URoadProfile* LevelDefault = WidthIndex == INDEX_NONE
+		? Context.Target->ResolveProfileFor(Kind, INDEX_NONE) : nullptr;
+
+	FToolVariantAxis& Axis = Out.AddDefaulted_GetRef();
+	Axis.Id = TEXT("Width");
+	Axis.Label = LOCTEXT("VariantAxisWidth", "Width");
+	Axis.Current = WidthIndex != INDEX_NONE ? FMath::Clamp(WidthIndex, 0, Count - 1) : INDEX_NONE;
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		const URoadProfile* Profile = Context.Target->ResolveWidthProfile(Kind, Index);
+		const double Width = Profile != nullptr ? Profile->GetTotalWidth() : 0.0;
+
+		FToolVariant& Option = Axis.Options.AddDefaulted_GetRef();
+		// BY WIDTH IN UU, not by index or asset name: stable across calls, distinct within a
+		// kind (the set is ordered narrow to wide, ServiceRoadWidth pins it), and a content edit
+		// that changes a width changes the Id, which is exactly when the row must rebuild.
+		Option.Id = FName(*FString::Printf(TEXT("W%d"), FMath::RoundToInt(Width)));
+		Option.Label = VariantWidthLabel(Width);
+
+		// SAME ASSET FIRST, SAME WIDTH SECOND. The level's tuning is often the content asset
+		// itself; when it is a copy tuned in the Details panel, its width is still the fact the
+		// player would recognise, and 0.5 uu is well under anything the ghost could draw.
+		if (Axis.Current == INDEX_NONE && LevelDefault != nullptr && Profile != nullptr
+			&& (Profile == LevelDefault || FMath::Abs(Width - LevelDefault->GetTotalWidth()) < 0.5))
+		{
+			Axis.Current = Index;
+		}
+	}
+}
+
+bool FRoadDrawTool::SelectVariant(const FToolContext& Context, int32 Axis, int32 Option)
+{
+	// THROUGH GetVariantAxes, virtually, so a lock is honoured wherever it was set - the row that
+	// greys a width and the pick that refuses it read one answer.
+	TArray<FToolVariantAxis> Axes;
+	GetVariantAxes(Context, Axes);
+	if (Axis != 0 || !Axes.IsValidIndex(0) || !Axes[0].Options.IsValidIndex(Option)
+		|| !Axes[0].Options[Option].bEnabled)
+	{
+		return false;
+	}
+	const int32 Count = Axes[0].Options.Num();
+	WidthIndex = Option;
 
 	// The width is otherwise visible only in the ghost, and only once a chain is started -
-	// so a player who has not clicked yet has no way to tell the key did anything.
+	// so a player who has not clicked yet has no way to tell the key did anything. MOVED HERE
+	// from OnReselect so a bar click logs the same line a key press does.
+	const TCHAR* What = Kind == ERoadKind::ServiceRoad ? TEXT("Road") : TEXT("Taxiway");
 	const URoadProfile* Profile = Context.Target->ResolveWidthProfile(Kind, WidthIndex);
 	UE_LOG(LogAirside, Log, TEXT("%s width -> %d of %d, %.1f m"),
 		What, WidthIndex + 1, Count, Profile != nullptr ? Profile->GetTotalWidth() / 100.0 : 0.0);
@@ -423,6 +520,7 @@ void FRoadDrawTool::OnReselect(const FToolContext& Context)
 	{
 		State->WidthIndex = WidthIndex;
 	}
+	return true;
 }
 
 void FRoadDrawTool::OnCancel(const FToolContext& Context)
