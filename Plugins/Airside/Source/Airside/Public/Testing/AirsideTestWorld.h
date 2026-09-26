@@ -196,6 +196,7 @@ struct FNullEditTarget : IRoadEditTarget
 	virtual bool ConnectNodes(int32, int32, ERoadKind, int32) override { return false; }
 	using IRoadEditTarget::ConnectNodes;
 	virtual int32 ConnectGuidelines(int32, int32) override { return INDEX_NONE; }
+	virtual bool AddReverseTurn(int32, int32, int32) override { return false; }
 	virtual bool PlaceRunway(FVector2D, FVector2D, URoadProfile*, const FRunwayFacts&) override { return false; }
 	using IRoadEditTarget::PlaceRunway;
 	virtual bool SetRunwayFacts(int32, const FRunwayFacts&) override { return false; }

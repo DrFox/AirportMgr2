@@ -114,7 +114,7 @@ bool FUTurnBalloonFootprintTest::RunTest(const FString& Parameters)
 			Drawn.HalfWidth <= Box.HalfWidth + 0.5);
 		// GENTLER: the old shape's tightest piece was 514 uu on every tier; the reshaped one
 		// clears even the rig's lock, so the rig is refused at a dead end on its TRAILER, not its
-		// lock (Airside.Build.DesignVehicle.WideDeadEndRefusesRigUntilReversing).
+		// lock (Airside.Build.DesignVehicle.WideDeadEndRefusesRig).
 		TestTrue(FString::Printf(TEXT("%s: the tightest piece (%.1f) clears the rig's %.1f lock"), Tier.Name, Drawn.Tightest, RigLock),
 			Drawn.Tightest > RigLock);
 	}

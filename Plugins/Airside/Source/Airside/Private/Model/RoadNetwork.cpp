@@ -406,6 +406,9 @@ void URoadNetwork::CopyFrom(const URoadNetwork& Source)
 	Aprons = Source.Aprons;
 	ApronFreeList = Source.ApronFreeList;
 
+	ReverseTurns = Source.ReverseTurns;
+	ReverseTurnEnds = Source.ReverseTurnEnds;
+
 	Entities = Source.Entities;
 	EntityFreeList = Source.EntityFreeList;
 
@@ -1250,6 +1253,18 @@ bool URoadNetwork::IsDepotJoined(const FEntityInstance& Entity) const
 {
 	const FGuidelineNode* Pose = GetGuidelineNode(Entity.PoseNode);
 	return Pose != nullptr && Pose->Incident.Num() > 0;
+}
+
+void URoadNetwork::RemoveReverseTurnAt(int32 Index)
+{
+	if (ReverseTurns.IsValidIndex(Index))
+	{
+		ReverseTurns.RemoveAt(Index);
+	}
+	if (ReverseTurnEnds.IsValidIndex(Index))
+	{
+		ReverseTurnEnds.RemoveAt(Index);
+	}
 }
 
 FApronId URoadNetwork::AddApron(FApronSurface&& Apron)

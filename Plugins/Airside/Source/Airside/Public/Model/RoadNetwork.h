@@ -7,6 +7,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadApron.h"
 #include "Model/RoadEntity.h"
+#include "Model/ReverseTurn.h"
 #include "Model/TrafficOccupancy.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/LetterEnvelope.h"
@@ -516,6 +517,29 @@ public:
 	/** The handle for a live slot index, for callers walking GetAprons() by index. Unset if dead. */
 	FApronId ApronIdAt(int32 Index) const;
 
+	// --- Reverse turns (spec 2026-09-26 §3) -----------------------------------------------
+	// A plain array, not a slot array with handles: nothing holds a reference to one record
+	// (the builder re-derives everything from the list on each rebuild), so a generation would
+	// guard nothing. Three records in the only layout that has any (the rig yard, 2026-09-26).
+
+	/** Records a reverse turn; the next guideline rebuild lays it. Returns its index. */
+	int32 AddReverseTurn(const FReverseTurn& Turn) { return ReverseTurns.Add(Turn); }
+	const TArray<FReverseTurn>& GetReverseTurns() const { return ReverseTurns; }
+	/** Drops a record - the builder's, when an arm it names has gone. */
+	void RemoveReverseTurnAt(int32 Index);
+
+	/**
+	 * Where record Index's reverse leg ENDS - the node a route to that bay goes to - as the last
+	 * rebuild laid it. Unset when the record was not laid (its reason was logged). Derived, so it
+	 * is re-written by every rebuild; handles do not survive one.
+	 */
+	FGuidelineNodeId GetReverseTurnEnd(int32 Index) const
+	{
+		return ReverseTurnEnds.IsValidIndex(Index) ? ReverseTurnEnds[Index] : FGuidelineNodeId();
+	}
+	/** The builder's: one entry per record, in record order. */
+	void SetReverseTurnEnds(TArray<FGuidelineNodeId>&& Ends) { ReverseTurnEnds = MoveTemp(Ends); }
+
 	// --- Entities --------------------------------------------------------------------
 
 	/**
@@ -886,6 +910,14 @@ private:
 
 	UPROPERTY() TArray<FApronSurface> Aprons;
 	UPROPERTY() TArray<int32>         ApronFreeList;
+
+	/** The permissions; persistent model data, like Aprons. */
+	UPROPERTY() TArray<FReverseTurn> ReverseTurns;
+	/**
+	 * DERIVED, one per record: reflected anyway so a PIE duplicate of the level carries it beside
+	 * the guideline graph it points into, rather than reading unset until the first rebuild.
+	 */
+	UPROPERTY() TArray<FGuidelineNodeId> ReverseTurnEnds;
 
 	UPROPERTY() TArray<FEntityInstance> Entities;
 	UPROPERTY() TArray<int32>           EntityFreeList;

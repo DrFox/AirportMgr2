@@ -676,6 +676,40 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Fac
 	return true;
 }
 
+bool URoadEditFacade::AddReverseTurn(int32 NodeIndex, int32 FromFarIndex, int32 IntoFarIndex)
+{
+	URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr)
+	{
+		return false;
+	}
+	FReverseTurn Turn;
+	Turn.Node = Network->NodeIdAt(NodeIndex);
+	Turn.FromFar = Network->NodeIdAt(FromFarIndex);
+	Turn.IntoFar = Network->NodeIdAt(IntoFarIndex);
+	const FRoadNode* Node = Network->GetNode(Turn.Node);
+	// BOTH PAIRS MUST BE ARMS OF THE NODE - refused here, where the caller can still be told,
+	// rather than recorded and dropped by the next rebuild with only a log line to show for it.
+	auto IsArm = [Network, Node, &Turn](FRoadNodeId Far)
+	{
+		return Node != nullptr && Node->Incident.ContainsByPredicate(
+			[Network, &Turn, Far](const FRoadSegmentId& Seg) { return Network->GetOtherEnd(Seg, Turn.Node) == Far; });
+	};
+	if (!Turn.Node.IsSet() || !Turn.FromFar.IsSet() || !Turn.IntoFar.IsSet() || Turn.FromFar == Turn.IntoFar
+		|| !IsArm(Turn.FromFar) || !IsArm(Turn.IntoFar))
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("AddReverseTurn refused: nodes %d / %d / %d are not a junction and two of its arms"),
+			NodeIndex, FromFarIndex, IntoFarIndex);
+		return false;
+	}
+
+	// FREE, like a guideline link: it lays no pavement, only lines on the road already there.
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("add reverse turn"));
+	Network->AddReverseTurn(Turn);
+	CommitAndNotify(Edit);
+	return true;
+}
+
 int32 URoadEditFacade::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 {
 	URoadNetwork* Network = Actor().Network;

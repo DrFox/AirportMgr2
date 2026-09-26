@@ -951,6 +951,11 @@ bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind K
 	return Facade->ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex);
 }
 
+bool ARoadNetworkActor::AddReverseTurn(int32 NodeIndex, int32 FromFarIndex, int32 IntoFarIndex)
+{
+	return Facade->AddReverseTurn(NodeIndex, FromFarIndex, IntoFarIndex);
+}
+
 int32 ARoadNetworkActor::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 {
 	return Facade->ConnectGuidelines(FromNodeIndex, ToNodeIndex);

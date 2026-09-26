@@ -363,6 +363,7 @@ public:
 	/** Link two GUIDELINE nodes by hand. Returns the new edge's index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
+	virtual bool AddReverseTurn(int32 NodeIndex, int32 FromFarIndex, int32 IntoFarIndex) override;
 
 	/**
 	 * Lays a runway from From to To in one edit, with its own profile and its facts.

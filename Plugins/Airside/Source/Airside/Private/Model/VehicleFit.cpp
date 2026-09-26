@@ -520,6 +520,16 @@ namespace
 }
 }
 
+double VehicleFit::ChainLength(const FVehicle& Vehicle)
+{
+	double Length = Vehicle.Chassis.Wheelbase();
+	for (const FTowLink& Link : Vehicle.Tow)
+	{
+		Length += Link.Length - Link.HitchX;
+	}
+	return Length;
+}
+
 double VehicleFit::TowReverseExitOffset(const TowReverse::FSample& End, const FChassis& Chassis, const FRoutePlan& Remainder,
 	double* OutAlong)
 {

@@ -218,6 +218,14 @@ namespace VehicleFit
 	AIRSIDE_API double TowReverseExitOffset(const TowReverse::FSample& End, const FChassis& Chassis, const FRoutePlan& Remainder,
 		double* OutAlong = nullptr);
 
+	/**
+	 * A vehicle laid dead straight, uu from its STEERED axle to its rearmost axle: the wheelbase,
+	 * then each link's (Length - HitchX). Where the rearmost axle sits behind a vehicle stopped with
+	 * its steered axle on a line's end - how far a reverse turn's pull-past must run (rig 1342,
+	 * utility 575, 2026-09-26). A rigid vehicle's is its wheelbase.
+	 */
+	AIRSIDE_API double ChainLength(const FVehicle& Vehicle);
+
 	/** The most a tow reverse's end may miss its exit line by, uu (spec 2026-09-26 §2). */
 	inline constexpr double TowReverseMaxExitOffset = 20.0;
 

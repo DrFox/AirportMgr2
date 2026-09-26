@@ -16,9 +16,10 @@ class URoadProfile;
  *
  * FILLETS ONLY, NOT DEAD-END BALLOONS - BY RULING (the same day, "smaller, reverse later"): a
  * balloon a rig can be driven round without folding its trailer reaches ~24 m past the road end,
- * and the rig will turn at a road end with a three-point turn once reversing exists (step 2).
+ * and the rig turns at a road end with a hammerhead - a reverse turn into a stub (FReverseTurn,
+ * ruled 2026-09-26) - rather than a three-point turn in the balloon, as first expected.
  * So FRoadGuidelineBuilder sizes every balloon from Default, and the rig is refused at every
- * dead end on its lock until then.
+ * balloon (on its trailer folding, since the whole-route check).
  *
  * WHICH TIER IS WHICH IS DECIDED IN ONE PLACE, UAirsideSettings::ResolveTierDesignVehicles.
  * This struct only carries the answer, resolved once per rebuild and handed down (issue #190),
