@@ -28,6 +28,8 @@ per-bone dicts here, keyed by leg name, where the other three's `angles` object 
 `RigMap` angle source below says where in THIS file each of the three angles lives, rather than
 forcing one shape onto a file that does not have it.
 """
+import json
+
 from build_aircraft_type import AircraftSpec, RigMap, say_span_and_tail, say_tightest_radius
 
 TYPE_NAME = "DA_Aircraft_Plane8"
@@ -112,6 +114,41 @@ TURNAROUND_SECONDS = 7200.0   # two hours: 525 seats on two decks through eight 
 PROP_BLADE_COUNT = 24
 
 
+def _anim_multiplier():
+    """Per-bone gear/truck multipliers for Tools/wire_plane_anim.py's PLAN, read off THE SAME
+    plane8/scripts/rig_map.json the ABP's `angles=RigMap` below reads - one file, read twice,
+    rather than a second copy of 90.0/54.72 typed into a wiring script the way
+    Tools/wire_plane8_anim.py used to (Issue #294).
+
+    THE A380 HAS THREE RETRACT ANGLES - nose forward 77.66, wing inboard 90.00, body aft
+    54.72 - and UAirsideAgentAnim drives every `gear` bone from ONE GearRetractedAngleDegrees
+    (the wing's 90, set on ABP_Plane8 by the `angles=RigMap` gear lambda below). The other
+    four legs take -1 TIMES THEIR OWN RATIO against that reference, so the angle the graph
+    applies - (1 - GearDownFraction) x 90 x ratio - is linear in the fraction and every leg
+    runs on the model's one cycle, arriving folded at its own solved angle exactly when the
+    wing gear arrives at 90.
+
+    THE SAME TRICK CARRIES TWO TRUCK ANGLES: the wing bogies tilt 0 and the body bogies
+    54.72 (the counter-rotation that lies them level in the bay). TruckTiltedAngleDegrees is
+    54.72 (the RigMap truck lambda's max()), so the body bogies take -1 and the wing bogies
+    take -1 x 0 / 54.72 - nothing - while staying in the chain and the axis plan, so a rig
+    that later gives them a real tilt changes one number here.
+
+    `or 0.0` TURNS -0.0 INTO 0.0. A wing bogie's -1 x 0 / 54.72 is IEEE negative zero, which
+    "%f" prints as "-0.000000" - and wire_anim_lib.verify compares the pin value it reads back
+    from the editor as a STRING, so a graph that is exactly right would fail on the sign of
+    nothing.
+    """
+    with open(RIG_MAP) as handle:
+        rig = json.load(handle)
+    gear_ref = rig["retract_deg"]["gear_wing_L"]
+    truck_ref = max(rig["truck_tilt_deg"].values())
+    gear = {bone: -1.0 * deg / gear_ref for bone, deg in rig["retract_deg"].items()}
+    truck = {bone: (-1.0 * deg / truck_ref) or 0.0
+             for bone, deg in rig["truck_tilt_deg"].items()}
+    return dict(gear, **truck)
+
+
 def _report(spec, m, say, fail):
     say_span_and_tail(spec, m, say)
     say_tightest_radius(spec, m, say)
@@ -172,4 +209,21 @@ def get_spec():
         prop_blade_count=PROP_BLADE_COUNT,
         surface="TARMAC",
         report_extra=_report,
+        # THE BONES THAT ARE DELIBERATELY NOT SQUARE TO THE AIRFRAME - plane6's three, for
+        # plane6's reasons, measured on this rig rather than assumed to carry over:
+        #
+        #   * nosewheel_steer - raked 12.3 degrees: the leg runs from the axle at station
+        #     4.972 up to the trunnion at 5.672, and a nose leg steers about its STRUT. Its
+        #     local axis is (0, 0.21, 0.98), 0.977 along UE's up - under resolve_axis's 0.99
+        #     line by design.
+        #   * door_nose_L / door_nose_R - the nose bay doors hinge on the line build_bays.py
+        #     FITS to the belly under a 4.2 m panel, which drops 0.75 m along its length; the
+        #     axis is (0, 0.989, -0.148), 8.5 degrees off level. Every OTHER door's fitted axis
+        #     is within 3.1 degrees of level and 0.9985 or better along UE's axis, which is
+        #     square.
+        #
+        # A stale declaration is how a guard stops guarding: resolve_axis FAILS a bone named
+        # here that turns out square, and one not named here that turns out raked.
+        raked=("nosewheel_steer", "door_nose_L", "door_nose_R"),
+        anim_multiplier=_anim_multiplier(),
     )

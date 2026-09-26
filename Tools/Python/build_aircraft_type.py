@@ -314,6 +314,55 @@ class AircraftSpec:
     # run a check says so instead of the mechanism silently growing a special case.
     skipped_checks: Dict[str, str] = field(default_factory=dict)
 
+    # --- Anim fields - Issue #294. build_aircraft_anim.py reads these off the SAME spec
+    # author_type() and set_anim_defaults() above already read, rather than a second spec
+    # directory: the rig facts (mesh, source, angles) do not change depending on which script
+    # is asking. See build_aircraft_anim.py's own module docstring for the mechanism.
+
+    # BONES DELIBERATELY NOT SQUARE TO THE AIRFRAME - resolve_axis's `raked` argument, carried
+    # here so it is a fact about the aeroplane rather than a copy-paste risk in a build script.
+    # Empty for nine of fourteen; plane6/plane8 name three, plane9/plane12 one. THE BUG THIS
+    # FIELD FIXES: build_plane14_anim.py's RAKED was correctly () (plane14's nosewheel_steer
+    # measures square) but its say() line read "ONE BONE IS RAKED ON PURPOSE" anyway - copied
+    # from plane9/plane12 and never re-typed. Deriving that line's wording from len(raked)
+    # removes the possibility of the two disagreeing again.
+    raked: Sequence[str] = ()
+
+    # BONES A BONE_RULES NEEDLE MATCHES BY A FALSE SUBSTRING, EXCLUDED FROM THE DRIVEN SET BY
+    # NAME - build_rig_anim.py's fifth_wheel/kingpin carve-out, modelled as data rather than a
+    # special case in BONE_RULES itself. Empty for every aircraft today; no aeroplane rig has
+    # hit this yet, and the field exists so the next one that does says so instead of
+    # driven_bone_plan() silently wiring a socket.
+    excluded: Sequence[str] = ()
+
+    # PER-BONE MULTIPLIER OVERRIDES, keyed by bone name - plane8's gear/truck ratios, read off
+    # plane8/scripts/rig_map.json rather than typed twice (see aircraft/plane8.py). Every OTHER
+    # aircraft leaves this empty and gets the fleet's plain convention: -1.0 (the Blender/UE
+    # handedness flip) on every travelling or spinning bone, None (undriven multiplier, i.e.
+    # the raw angle) on the one bone whose variable is SteerAngleDegrees. A bone named here
+    # takes ITS entry instead of the convention - see anim_multiplier_for().
+    anim_multiplier: Dict[str, float] = field(default_factory=dict)
+
+    # FALSE FOR plane1 AND plane2 ALONE: their AnimGraphs were wired by hand in the editor
+    # before this tooling existed and carry no Tools/wire_<key>_anim.py counterpart, so
+    # build_aircraft_anim.py prints the bone plan for a human to wire rather than measuring
+    # rotation axes or writing Saved/<key>_axis_plan.json - there is no wiring script waiting
+    # to read one. See aircraft/plane1.py, aircraft/plane2.py.
+    wire_script: bool = True
+
+    # FALSE FOR plane4 ALONE: ABP_Plane4 was duplicated from ABP_Plane2 in the editor on
+    # 2026-09-19 and retargeted by hand, days before this tooling existed. build_aircraft_anim.py
+    # measures an asset that must already exist for this key and fails loudly rather than
+    # inventing an empty one that would point DA_Aircraft_Plane4 at a Blueprint driving nothing.
+    create_abp: bool = True
+
+    # EXTRA PROSE PRINTED AFTER THE STANDARD BONE LIST, for the two hand-wired aircraft alone -
+    # plane1's disputed wiring order finding, which is a fact about THAT aeroplane's shipped
+    # graph and belongs in its own spec rather than in the shared mechanism. `None` for every
+    # other aircraft, `wire_script`-gated so it is only ever consulted where there is no wiring
+    # script to make the finding moot.
+    anim_report_extra: Optional[Callable] = None
+
     def __post_init__(self):
         self._measured = None
 

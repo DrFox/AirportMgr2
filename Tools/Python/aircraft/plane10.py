@@ -177,4 +177,8 @@ def get_spec():
         published_table=PUBLISHED_TABLE,
         published_table_label="the POH's",
         report_extra=_report,
+        # NOTHING IS RAKED. plane10's build_rig.py stands nosewheel_steer vertical, dir
+        # (0, 0, 1). A stale declaration fails both ways, so if a re-export rakes the bone,
+        # resolve_axis says so and this tuple gains it.
+        raked=(),
     )

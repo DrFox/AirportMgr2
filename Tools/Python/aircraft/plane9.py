@@ -128,4 +128,13 @@ def get_spec():
         turnaround_seconds=TURNAROUND_SECONDS,
         prop_blade_count=PROP_BLADE_COUNT,
         surface="TARMAC",
+        # THE ONE BONE THAT IS DELIBERATELY NOT SQUARE TO THE AIRFRAME, for plane6's reason: a
+        # nose leg steers about its STRUT, and this one is raked - rig_map.json puts
+        # nosewheel_steer's head on the axle at station 5.084 and its tail on the trunnion at
+        # 5.367, 1.9 m higher, which is 8.5 degrees off vertical.
+        #
+        # NOT the nose doors, although plane6's and plane8's are named: build_bays.py's fitted
+        # hinge here is (0, 0.998, -0.056), 3.2 degrees off level and inside resolve_axis's
+        # square band. A stale declaration fails, so this list is checked both ways every run.
+        raked=("nosewheel_steer",),
     )

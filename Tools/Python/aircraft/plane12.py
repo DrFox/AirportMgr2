@@ -154,4 +154,10 @@ def get_spec():
         published_table=PUBLISHED_TABLE,
         published_table_label="the drawing's",
         report_extra=_report,
+        # THE NOSE OLEO, MEASURED 8.7 DEG OFF VERTICAL in UE on 2026-09-25 - its drawn rake
+        # plus the aeroplane's 5.02 deg static pitch - just past resolve_axis's ~8 deg square
+        # band. plane6's ruling: a nose leg steers about its STRUT, so the rake is right, not
+        # a rigging fault. The prop is pitched the same 5.02 and stays inside the band. A
+        # stale declaration fails both ways.
+        raked=("nosewheel_steer",),
     )

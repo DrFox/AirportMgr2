@@ -178,6 +178,24 @@ def _report(spec, m, say, fail):
     say_published_table(spec, m, say)
 
 
+def _anim_report_extra(say):
+    """plane1's OWN wiring finding, printed by build_aircraft_anim.py after the bone list -
+    see AircraftSpec.wire_script and .anim_report_extra. Carried over from
+    build_plane1_anim.py's report_plan() verbatim; it is a fact about THIS aeroplane's shipped
+    graph, not something the shared mechanism could derive for every hand-wired asset."""
+    say("")
+    say("  TWO BONES, NEVER BOTH ONTO ONE: the steer bone is the nose wheel's PARENT.")
+    say("  ORDER IS DISPUTED AND THE ASSETS WIN. This line read 'wire nosewheel_steer")
+    say("  BEFORE nosewheel' until 2026-09-20, when a graph authored to it diffed against")
+    say("  ABP_Plane1 and ABP_Plane2 and found BOTH ship the reverse - steer LAST. The")
+    say("  engine backs the assets: FCSPose::SafeSetCSBoneTransforms refreshes children")
+    say("  already in component space, so steering the parent last carries the rolled")
+    say("  wheel with it. Wire steer AFTER nosewheel unless someone rules otherwise.")
+    say("")
+    say("  THEN RUN build_aircraft_type.py plane1, which needs this asset's generated class")
+    say("  to exist before it can point DA_Aircraft_Plane1 at it or set its wheel radius.")
+
+
 def get_spec():
     return AircraftSpec(
         key="plane1",
@@ -219,4 +237,8 @@ def get_spec():
         published_table_width=18,
         fixed_gear_suffix=", which is a 172",
         report_extra=_report,
+        # HAND-WIRED BEFORE THIS TOOLING EXISTED - no Tools/wire_plane1_anim.py, no measured
+        # axis plan. See AircraftSpec.wire_script and _anim_report_extra above.
+        wire_script=False,
+        anim_report_extra=_anim_report_extra,
     )

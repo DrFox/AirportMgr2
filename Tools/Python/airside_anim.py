@@ -183,6 +183,73 @@ def report_bone_plan(names):
     return unrecognised
 
 
+def driven_bone_plan(source, excluded=()):
+    """(bone, variable) for every joint bone_plan matches a rule to, in CHAIN ORDER, less any
+    name in `excluded` - Issue #294's replacement for the fourteen hand-typed DRIVEN_BONES
+    lists build_plane<N>_anim.py used to carry.
+
+    CHAIN ORDER, DERIVED RATHER THAN TYPED. joint_names() returns a .glb skin's joints in the
+    order Blender's exporter writes them, which is a PREORDER walk of the armature - a parent
+    is always visited before its whole subtree, because that is what "walk down from the
+    root, describing each node before its children" means. Reversing a preorder walk always
+    yields an ordering where every node comes after all of its own descendants (run the same
+    argument backwards: the parent that preceded its subtree in the original list follows it
+    in the reversed one), which is exactly wire_anim_lib's own rule - "a bone goes AFTER every
+    bone it is the PARENT of". Checked against all fourteen rigs' actual .glb joint arrays,
+    including plane8's three-deep bogie chains (gear > bogie > wheel) and plane6's/plane11's
+    three-axle bogies, before this replaced the fourteen typed lists: every one of them agrees
+    in MEMBERSHIP, and where the reversed order does not reproduce the exact permutation a
+    typed list was free to choose within one rank (props and doors hang unconstrained off
+    root, so their relative order was always arbitrary), the result is still a valid chain -
+    see this PR's harness table.
+
+    UNRECOGNISED JOINTS ARE DROPPED HERE rather than failed - report_bone_plan(), called
+    first by every caller, already prints and fails on them against the FULL, unfiltered
+    joint list; a second failure over the filtered one would be the same fact from two
+    functions.
+
+    `excluded` IS build_rig_anim.py's carve-out, by name: a bone whose name matches a
+    BONE_RULES needle as a false substring (that script's fifth_wheel/kingpin) is named here,
+    in the one spec that knows its rig is the exception, rather than teaching BONE_RULES a
+    rig's naming. No aircraft needs it today.
+    """
+    reversed_names = list(reversed(joint_names(source)))
+    return [(bone, variable) for bone, variable in bone_plan(reversed_names)
+            if not variable.startswith("?") and bone not in excluded]
+
+
+def raked_line(raked):
+    """The say() line reporting how many bones a rig deliberately rakes off-square - derived
+    from len(raked) rather than typed, which is Issue #294's fix for build_plane14_anim.py's
+    lie: its RAKED tuple was correctly empty (plane14's nosewheel_steer measures square) but
+    its say() line read "ONE BONE IS RAKED ON PURPOSE" anyway, copied from plane9/plane12 and
+    never re-typed when RAKED was. A line computed from the data it describes cannot drift
+    from it a second time."""
+    if not raked:
+        return "NO BONE IS RAKED."
+    if len(raked) == 1:
+        return "ONE BONE IS RAKED ON PURPOSE."
+    return "%s BONES ARE RAKED ON PURPOSE." % len(raked)
+
+
+def anim_multiplier_for(bone, variable, overrides):
+    """The multiplier Tools/wire_plane_anim.py's PLAN row takes for one bone - the fleet's
+    convention, unless `overrides` (an AircraftSpec's anim_multiplier) names this bone
+    specifically.
+
+    THE CONVENTION, established across the whole fleet before plane8: -1.0 (the Blender/UE
+    handedness flip - see wire_plane6_anim.py's header for the measurement) on every
+    travelling or spinning bone, and None (the raw angle, undriven) on the one bone whose
+    variable is SteerAngleDegrees, because ABP_Plane2's shipped graph drives its steer bone
+    with a plain GetSteerAngleDegrees() and no negation. plane8's five gear bones and four
+    bogie bones do not fold by the fleet's one figure each - see aircraft/plane8.py - and are
+    named in `overrides` instead of bending this rule to fit one rig.
+    """
+    if bone in overrides:
+        return overrides[bone]
+    return None if variable == "SteerAngleDegrees" else -1.0
+
+
 # ----------------------------------------------------------------------- the rotation axis
 
 
@@ -473,16 +540,18 @@ def axis_plan_path(key):
     return os.path.join(unreal.Paths.project_saved_dir(), "%s_axis_plan.json" % key)
 
 
-def write_axis_plan(key, mesh_path, resolved):
-    """Hand the resolved axes to Tools/wire_<key>_anim.py rather than making it type them.
+def write_axis_plan(key, mesh_path, rows):
+    """Hand the resolved graph - `rows` of (bone, variable, component, sign, multiplier), in
+    CHAIN ORDER - to Tools/wire_plane_anim.py rather than making it type any of it.
 
-    ONE LIST, WHICH IS CLAUDE.md'S RULE AND NOT A CONVENIENCE. The bone, its variable, its
-    rotator component and its sign are four columns of one table, and the first two are
-    knowable from the .glb while the last two are only knowable from the imported skeleton.
-    Split across two files they are two lists that must agree, with no compiler between them
-    and a failure mode - a part turning about the wrong axis - that looks like a modelling bug
-    rather than a wiring one. So the half that is MEASURED is written by the script that
-    measured it, and the wiring script refuses to run without it.
+    ONE LIST, WHICH IS CLAUDE.md'S RULE AND NOT A CONVENIENCE, and Issue #294 widened it: this
+    file used to carry only the component and sign resolve_axis() measures, while the bone,
+    its variable and its wiring multiplier lived a SECOND TIME in each Tools/wire_plane<N>_anim
+    .py's own hand-typed PLAN - two lists that had to agree, with no compiler between them and
+    a failure mode (a part driven by the wrong property, or turning about the wrong axis) that
+    looks like a modelling bug rather than a wiring one. Now every column of the row a wiring
+    run needs lives in the one file the build step writes, and Tools/wire_plane_anim.py reads
+    it whole rather than carrying a table of its own.
 
     IN Saved/ AND THEREFORE NOT COMMITTED, deliberately. It is derived, it is worthless against
     a different export, and a stale copy is exactly the "half-run pipeline" that
@@ -492,8 +561,9 @@ def write_axis_plan(key, mesh_path, resolved):
     path = axis_plan_path(key)
     payload = {
         "mesh": mesh_path,
-        "bones": [{"bone": bone, "component": component, "sign": sign}
-                  for bone, component, sign in resolved],
+        "bones": [{"bone": bone, "variable": variable, "component": component,
+                   "sign": sign, "multiplier": multiplier}
+                  for bone, variable, component, sign, multiplier in rows],
     }
     try:
         with open(path, "w") as handle:
@@ -501,4 +571,4 @@ def write_axis_plan(key, mesh_path, resolved):
     except IOError as exc:
         fail("could not write %s: %s" % (path, exc))
         return
-    say("wrote %s - Tools/wire_%s_anim.py reads its rotation axes from this" % (path, key))
+    say("wrote %s - Tools/wire_plane_anim.py %s reads its whole graph from this" % (path, key))

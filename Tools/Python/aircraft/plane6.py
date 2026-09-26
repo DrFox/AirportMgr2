@@ -163,4 +163,28 @@ def get_spec():
         prop_blade_count=PROP_BLADE_COUNT,
         surface="TARMAC",
         report_extra=_report,
+        # THE BONES THAT ARE DELIBERATELY NOT SQUARE TO THE AIRFRAME.
+        #
+        # resolve_axis asserts that every driven bone's rotation axis lies along one of UE's
+        # own axes, because on the six rigs before this one it did, and a bone the rigger
+        # failed to align is a change to look at. plane6 is the first aeroplane here where that
+        # premise is FALSE BY DESIGN, so the three exceptions are declared with their reasons
+        # rather than the guard being dropped off the other fourteen bones:
+        #
+        #   * nosewheel_steer - raked 12.4 degrees. The leg HAS to be raked to fold forward
+        #     past the nose cone (plane6/scripts/build_gear.py's header argues it), and a nose
+        #     leg steers about its STRUT rather than about the vertical. plane4's is vertical
+        #     and its steer bone is +Z; this one runs axle-to-trunnion. A steer bone forced
+        #     square would turn the wheel about a line the strut does not lie on, which reads
+        #     as the tyre scrubbing sideways.
+        #   * door_nose_L / door_nose_R - the nose bay doors hinge on the slanted line the
+        #     bay's own edge fits, because the bay is cut into a curving belly ahead of a raked
+        #     leg. A square hinge would swing them into the fuselage.
+        #
+        # SQUARENESS WAS NEVER A CORRECTNESS REQUIREMENT. A Transform (Modify) Bone in Bone
+        # Space turns a bone about its OWN axes, so the graph never asks what the world
+        # thinks. These three are wired exactly like the other fourteen; the only difference
+        # is that the check reports their angle instead of refusing them, and would fail if
+        # one of them were straightened without this list being updated.
+        raked=("nosewheel_steer", "door_nose_L", "door_nose_R"),
     )

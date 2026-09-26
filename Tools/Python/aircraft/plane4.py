@@ -164,4 +164,12 @@ def get_spec():
         prop_blade_count=PROP_BLADE_COUNT,
         surface="TARMAC",
         report_extra=_report,
+        # Nothing on this rig is deliberately off-axis - unlike plane6, whose raked nose leg
+        # and slanted bay hinges are named. Left empty and NOT omitted, so a rig that grows a
+        # raked bone has an obvious place to declare it rather than a check to weaken.
+        raked=(),
+        # ABP_Plane4 predates this tooling - duplicated from ABP_Plane2 in the editor on
+        # 2026-09-19 and retargeted by hand. build_aircraft_anim.py measures it rather than
+        # creating one, and fails loudly if it is missing. See AircraftSpec.create_abp.
+        create_abp=False,
     )

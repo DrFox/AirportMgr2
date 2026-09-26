@@ -140,4 +140,25 @@ def get_spec():
         requirements=REQUIREMENTS,
         turnaround_seconds=TURNAROUND_SECONDS,
         surface="TARMAC",
+        # NOTHING ON THIS RIG IS DECLARED RAKED, AND THE FIRST DRAFT OF THIS LINE GOT IT WRONG.
+        #
+        # plane3's door hinges ARE slightly off-axis - they are fitted to the bay edge they
+        # seal, and a fuselage belly curves - so all four were listed here on the strength of
+        # the axes gear_pivots.json publishes. Then they were measured against the threshold
+        # rather than against the word "raked":
+        #
+        #     door_main_L  axis (0, -0.99988, -0.01545)   0.89 deg off
+        #     door_nose_L  axis (0,  0.99117, -0.1326 )   7.62 deg off
+        #     resolve_axis's bound                        8.11 deg (squareness 0.99)
+        #
+        # Both are INSIDE it, so the strict check passes them unaided and a declaration would
+        # have failed as stale - which is exactly what resolve_axis's raked-but-square branch
+        # is for, and it caught this before the script was ever run. plane6's three bones at
+        # 11.8 and 12.4 degrees remain the only ones in the fleet that need naming.
+        #
+        # THE NOSE DOORS ARE HALF A DEGREE INSIDE THE BOUND, which is worth knowing: re-fit
+        # those hinges to a slightly deeper belly curve and they cross it, and the failure will
+        # read as a broken rig rather than as a tolerance. The answer then is to declare them
+        # here, not to widen the bound.
+        raked=(),
     )
