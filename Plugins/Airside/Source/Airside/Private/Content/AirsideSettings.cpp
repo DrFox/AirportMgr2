@@ -130,6 +130,17 @@ FVehicle UAirsideSettings::ResolveLargestServiceBody()
 	return Out;
 }
 
+FVehicle UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode Letter)
+{
+	// THE USER'S RULING 2026-09-26: A and B are sized for the utility tow, C through F for the
+	// fuel truck - see this function's own header comment for why it is a separate question from
+	// ResolveLargestServiceVehicle. static_cast, not operator<=: EIcaoCode is a plain enum
+	// (Solve/, CoreMinimal-only, no operator of its own) declared A..F in that order, so this is
+	// "at or before B" by declaration order rather than any numeric meaning of the letters.
+	return static_cast<uint8>(Letter) <= static_cast<uint8>(EIcaoCode::B)
+		? ResolveUtilityTowVehicle() : ResolveDefaultVehicle();
+}
+
 namespace AirsideSettingsTierCache
 {
 	/** What ResolveTierDesignVehicles last resolved, and from which content set and Wide asset. */

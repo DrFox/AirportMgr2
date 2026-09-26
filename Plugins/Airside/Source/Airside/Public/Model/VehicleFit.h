@@ -226,6 +226,48 @@ namespace VehicleFit
 	 */
 	AIRSIDE_API double ChainLength(const FVehicle& Vehicle);
 
+	/**
+	 * Whether A may serve wherever B was designed for: no wider (WidestBody), no wider a forward
+	 * or reverse turning circle (Chassis::TightestFollowableRadius, TightestReverseRadius below),
+	 * and no longer a chain (ChainLength) - every axis a stand's geometry is drawn against (spec
+	 * 2026-09-26 §1, "design vehicle per letter"). A smaller vehicle fitting a bigger stand is
+	 * inefficient but legal; the reverse is never true, which is why this is one AND of four
+	 * one-way comparisons rather than a single size ordering - two vehicles that differ (a wide,
+	 * tight-turning tug against a narrow, wide-turning rig) can fail it BOTH ways.
+	 */
+	AIRSIDE_API bool NoLargerThan(const FVehicle& A, const FVehicle& B);
+
+	/**
+	 * The tightest circle Vehicle can back around, uu. RIGID: Chassis::TightestReversibleRadius()
+	 * - L/tan(lock), pivoting about the fixed axle, that function's own case. TOWING: the LARGER
+	 * of that and the tightest arc whose steady-state hitch angle (TowReverse::SteadyHitchRadians,
+	 * on the REVERSE body - TowReverse::ReverseBody merges every joint after the first into one,
+	 * the turntable lock) stays inside TowReverseHitchMargin of TowReverse::CriticalHitchRadians -
+	 * the figure a stand's reverse leg is laid at (spec 2026-09-26 §2), tighter than the plain
+	 * rigid radius because a trailer's hitch folds before the tractor's own steering lock would
+	 * stop it turning.
+	 *
+	 * BISECTED, not solved closed-form: TowReverse::SteadyHitchRadians has no tidy inverse once
+	 * the hitch sits ahead of or behind the fixed axle (A != 0) - the same reason
+	 * TowReverse::CriticalHitchRadians scans rather than inverting. Monotone in R (checked against
+	 * the actual formula, not assumed): the steady hitch magnitude grows as R shrinks and falls to
+	 * zero as R grows without bound, so "hitch magnitude <= margin*critical" is false below some
+	 * threshold and true at and above it - exactly the shape bisection needs.
+	 */
+	AIRSIDE_API double TightestReverseRadius(const FVehicle& Vehicle);
+
+	/**
+	 * The margin TightestReverseRadius holds inside TowReverse::CriticalHitchRadians, as a share
+	 * of it. NAMED, NOT TUNED AGAINST A TEST: the steady state is the FLOOR a real controller
+	 * runs the reverse at - TowReverse::Solve's inner loop needs headroom past it to correct a
+	 * disturbance (an off-line start, a gust of wheel slip) without going critical, so laying a
+	 * stand's reverse leg exactly at the critical angle would leave nothing to correct with. 0.7
+	 * is a first figure, one notch more conservative than TowReverse::ReferenceShare's 0.8 (the
+	 * same idea one layer down, for Solve's own inner-loop reference) because this bounds what a
+	 * STAND is built to rather than what one solved reverse is allowed to reach.
+	 */
+	inline constexpr double TowReverseHitchMargin = 0.7;
+
 	/** The most a tow reverse's end may miss its exit line by, uu (spec 2026-09-26 §2). */
 	inline constexpr double TowReverseMaxExitOffset = 20.0;
 

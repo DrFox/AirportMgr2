@@ -530,6 +530,54 @@ double VehicleFit::ChainLength(const FVehicle& Vehicle)
 	return Length;
 }
 
+bool VehicleFit::NoLargerThan(const FVehicle& A, const FVehicle& B)
+{
+	return A.WidestBody() <= B.WidestBody()
+		&& A.Chassis.TightestFollowableRadius() <= B.Chassis.TightestFollowableRadius()
+		&& TightestReverseRadius(A) <= TightestReverseRadius(B)
+		&& ChainLength(A) <= ChainLength(B);
+}
+
+double VehicleFit::TightestReverseRadius(const FVehicle& Vehicle)
+{
+	const double Rigid = Vehicle.Chassis.TightestReversibleRadius();
+	if (!Vehicle.HasTrailer())
+	{
+		return Rigid;
+	}
+
+	const VehicleSweep::FBody Reverse = TowReverse::ReverseBody(BodyOf(Vehicle));
+	const double MaxSteerRadians = FMath::DegreesToRadians(Vehicle.Chassis.Ground.MaxSteerDegrees);
+	const double Limit = TowReverseHitchMargin * TowReverse::CriticalHitchRadians(Reverse, MaxSteerRadians);
+	auto HoldsMargin = [&Reverse, Limit](double R)
+	{
+		return FMath::Abs(TowReverse::SteadyHitchRadians(Reverse, 1.0 / R)) <= Limit;
+	};
+
+	// BISECT ON R, RIGID UP TO 100000 uu (a kilometre - no stand's bay is anywhere near this):
+	// Lo starts at the rigid floor (TightestReverseRadius can never be tighter than the tractor's
+	// own lock allows) and Hi wide enough that the hitch has settled near zero, so Hi holds the
+	// margin from the first iteration and Lo may or may not - either way the invariant "Hi holds,
+	// Lo is no looser than the answer" survives every step, and Hi never drops below Lo. 40
+	// halvings of a 100000 uu span land within a hundred-thousandth of a uu, far under anything
+	// this feeds into (VehicleFit::NoLargerThan, a stand's own layout figures).
+	double Lo = Rigid;
+	double Hi = 100000.0;
+	for (int32 Iteration = 0; Iteration < 40; ++Iteration)
+	{
+		const double Mid = 0.5 * (Lo + Hi);
+		if (HoldsMargin(Mid))
+		{
+			Hi = Mid;
+		}
+		else
+		{
+			Lo = Mid;
+		}
+	}
+	return FMath::Max(Rigid, Hi);
+}
+
 double VehicleFit::TowReverseExitOffset(const TowReverse::FSample& End, const FChassis& Chassis, const FRoutePlan& Remainder,
 	double* OutAlong)
 {
