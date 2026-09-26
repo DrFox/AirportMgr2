@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Build/AnchorLink.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
@@ -8,6 +9,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
+#include "StandFixture.h"
 #include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -24,11 +26,38 @@ namespace
 		Edge.bDerived = false;
 		return Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
+
+	/**
+	 * A straight GroundVehicle guideline standing in for a drawn service road - the shape
+	 * ServiceLinkTest.cpp's own ServiceLinkFixture::Lay builds for the same fixtures. NOT
+	 * shared from there: Lay is defined at file scope in that .cpp with no declaration in
+	 * StandFixture.h (only PlaceStand/FarEdgeX/FarRoadX are), so nothing outside that
+	 * translation unit can call it. A five-line local copy costs less than promoting a
+	 * helper for one more caller.
+	 */
+	void LayServiceRoad(URoadNetwork& Net, const FVector2D& From, const FVector2D& To)
+	{
+		const FGuidelineNodeId A = Net.AddGuidelineNode(From);
+		const FGuidelineNodeId B = Net.AddGuidelineNode(To);
+		FGuidelineEdge Edge;
+		Edge.A = A; Edge.B = B;
+		Edge.Control = (From + To) * 0.5;
+		Edge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
+		Edge.AllowedTraffic.Add(ETraversalClass::Emergency);
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.Width = 600.0;
+		Edge.bDerived = true;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FInspectFactsTest,
-	"Airside.Model.InspectFacts",
+	// A LEAF NAME, not the bare "Airside.Model.InspectFacts" this used to be: UE 5.8's
+	// automation tree drops a bare-named test's own RunTest, silently, the moment a dotted
+	// sibling (StandServiceableWithFarRoad et al, below) registers - it becomes a parent
+	// GROUP node instead of a leaf. See unreal-automation-test-tree-drops-bare-parent.
+	"Airside.Model.InspectFacts.AgentAndStandFacts",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FInspectFactsTest::RunTest(const FString& Parameters)
@@ -122,6 +151,118 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 	Traffic->RetireAgent(Id);
 	InspectFacts::DescribeStand(Traffic, *Net, StandId.Index, SF);
 	TestEqual(TEXT("no occupant once the agent is gone"), SF.OccupantAgent, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandServiceableWithFarRoadTest,
+	"Airside.Model.InspectFacts.StandServiceableWithFarRoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandServiceableWithFarRoadTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE SERVICEABLE CASE: a road at the far edge (Task 4's own FarRoadX, the shipping
+	// Code C stand) joins every declared bay entry, so bServiceable - and the inspector's
+	// new "Service road: joined" line - reads true.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	const double RoadX = FarRoadX();
+	LayServiceRoad(*Net, FVector2D(RoadX, -20000.0), FVector2D(RoadX, 20000.0));
+
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	FStandFacts SF;
+	if (!TestTrue(TEXT("the stand yields facts"),
+		InspectFacts::DescribeStand(nullptr, *Net, Placed.Index, SF))) { return false; }
+	TestTrue(TEXT("every declared bay entry joined the far-edge road"), SF.bServiceable);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandUnserviceableWithoutRoadTest,
+	"Airside.Model.InspectFacts.StandUnserviceableWithoutRoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandUnserviceableWithoutRoadTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE UNSERVICEABLE CASE: no road at all. A stand is still PLACED (spec 2026-09-26 -
+	// "still placed, and reported unserviceable until one is drawn"), so this asserts the
+	// FACT reads false rather than the placement being refused.
+	//
+	// NO FAnchorLink::Build CALL, deliberately: a service bay's lane is laid at placement
+	// (BuildStandTemplate), before any linking pass runs, so IsServiceNodeConnected already
+	// has an owned-only ring to walk with nothing to escape to - the same "no road" state
+	// AnchorLink::Build would leave it in, without that pass's "joins nothing" warnings.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+
+	FStandFacts SF;
+	if (!TestTrue(TEXT("the stand yields facts"),
+		InspectFacts::DescribeStand(nullptr, *Net, Placed.Index, SF))) { return false; }
+	TestFalse(TEXT("no bay entry joins anything with no road drawn"), SF.bServiceable);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPartiallyJoinedIsUnserviceableTest,
+	"Airside.Model.InspectFacts.StandPartiallyJoinedIsUnserviceable",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPartiallyJoinedIsUnserviceableTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE PARTIAL CASE (ruling, task 5): some declared entries joined, others not, must
+	// still read bServiceable false - "every", not "any". Code F's own two-sided fixture
+	// (FPartialJoinWarnsTest, ServiceLinkTest.cpp) is reused rather than invented: its
+	// starboard/port contacts sit far enough apart (>ServiceLinkRadius) that a short
+	// starboard-only road cannot reach port by accident - see that test's own measured-not-
+	// assumed comment for why Code C cannot isolate a side.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(EIcaoCode::F);
+
+	double StarboardY = 0.0;
+	bool bHasStarboard = false;
+	bool bHasPort = false;
+	for (const FServiceBay& Bay : Stand->ServiceBays)
+	{
+		if (Bay.EntryLocal.Y >= 0.0) { StarboardY = Bay.EntryLocal.Y; bHasStarboard = true; }
+		else { bHasPort = true; }
+	}
+	if (!TestTrue(TEXT("the template has a service on each side"), bHasStarboard && bHasPort))
+	{
+		return false;
+	}
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const double FarSideX = FarEdgeX(*Stand) + 400.0;
+
+	// SHORT AND CENTRED ON THE STARBOARD CONTACT ONLY - same 1000 uu half-span
+	// FPartialJoinWarnsTest measured, so it stays out of the port contact's reach.
+	constexpr double HalfSpan = 1000.0;
+	LayServiceRoad(*Net,
+		FVector2D(FarSideX, StarboardY - HalfSpan), FVector2D(FarSideX, StarboardY + HalfSpan));
+
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+
+	// THE PARTIAL LINE FIRES (Joined > 0, Refused > 0) - expected rather than merely
+	// tolerated, as ServiceLinkTest.cpp's own fixture does, so a silent change to the
+	// half-plane that stopped exercising the partial branch would show here as a missing
+	// expected error rather than a quietly-passing test.
+	AddExpectedError(TEXT("service entrances joined a road"), EAutomationExpectedErrorFlags::Contains, 1);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	FStandFacts SF;
+	if (!TestTrue(TEXT("the stand yields facts"),
+		InspectFacts::DescribeStand(nullptr, *Net, Placed.Index, SF))) { return false; }
+	TestFalse(TEXT("a partial join is still unserviceable - every entry, not any"), SF.bServiceable);
 	return true;
 }
 

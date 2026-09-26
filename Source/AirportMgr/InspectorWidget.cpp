@@ -258,13 +258,21 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			const FText Reachability = S.bReachable
 				? NSLOCTEXT("AirportMgr", "InspectorStandReachable", "Reachable by taxiway")
 				: NSLOCTEXT("AirportMgr", "InspectorStandUnreachable", "NOT reachable - no taxiway joins it");
+			// SERVICE ROAD, beside Reachability (far-side-entry spec §2): a stand is placed
+			// with no service road at all, so this NAMES THE FIX rather than refusing the
+			// stand - the same choice Reachability itself already made for a taxiway.
+			const FText ServiceRoad = S.bServiceable
+				? NSLOCTEXT("AirportMgr", "InspectorStandServiceable", "Service road: joined")
+				: NSLOCTEXT("AirportMgr", "InspectorStandUnserviceable",
+					"Service road: not joined - draw a service road along the far edge");
 			Facts = FString::Format(
-				*NSLOCTEXT("AirportMgr", "InspectorStandFacts", "Code {0} ({1} m span)\n{2} service anchors\n{3}").ToString(),
+				*NSLOCTEXT("AirportMgr", "InspectorStandFacts", "Code {0} ({1} m span)\n{2} service anchors\n{3}\n{4}").ToString(),
 				{
 					S.SizeClass,
 					FString::Printf(TEXT("%.0f"), S.DesignWingspan / 100.0),
 					FString::FromInt(S.AnchorCount),
 					Reachability.ToString(),
+					ServiceRoad.ToString(),
 				});
 			Status = S.OccupantAgent == 0
 				? NSLOCTEXT("AirportMgr", "InspectorStandEmpty", "Empty").ToString()

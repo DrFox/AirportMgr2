@@ -66,6 +66,20 @@ struct FStandFacts
 	bool bReachable = false;
 
 	/**
+	 * Every declared bay entry a service vehicle drives to is joined to a road - derived
+	 * like bReachable, and for the same reason: a stored flag would go stale the moment the
+	 * player edited the road that made it true.
+	 *
+	 * FALSE FOR A STAND WITH NO BAYS, deliberately not the vacuous true an empty "every"
+	 * would otherwise read as - a stand cannot be serviced through anchors it does not have.
+	 *
+	 * DECLARED, NOT DESCRIBED, since far-side entry (2026-09-26 spec): a stand is still
+	 * PLACED with no service road at all, so this is reported rather than refused, exactly
+	 * as bReachable already is for a depot with no road.
+	 */
+	bool bServiceable = false;
+
+	/**
 	 * What this entity's pose is FOR - see FEntityInstance::PoseRole. Aircraft is a stand;
 	 * anything else is a service installation, which the panel titles and describes
 	 * differently.
