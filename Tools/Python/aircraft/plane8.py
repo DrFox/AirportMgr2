@@ -226,4 +226,11 @@ def get_spec():
         # here that turns out square, and one not named here that turns out raked.
         raked=("nosewheel_steer", "door_nose_L", "door_nose_R"),
         anim_multiplier=_anim_multiplier(),
+        pushback_need="VEHICLE_TUG",
+        pushback_reason=(
+            "a 575 t A380 is the end of the progression - nothing heavier flies - and it is "
+            "authored for the reason the Plane6 row gives: an unset field that agrees with the "
+            "class default cannot be told from an asset nobody wrote"
+        ),
+        yard_label="Plane8 (A380-800)",
     )

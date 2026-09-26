@@ -241,4 +241,10 @@ def get_spec():
         # axis plan. See AircraftSpec.wire_script and _anim_report_extra above.
         wire_script=False,
         anim_report_extra=_anim_report_extra,
+        pushback_need="SELF_MANOEUVRE",
+        pushback_reason=(
+            "a 172 is pushed off a stand by one person leaning on the strut, and the class default "
+            "of VehicleTug would gate the smallest aeroplane in the game behind the depot"
+        ),
+        yard_label="Plane1 (Cessna 172)",
     )

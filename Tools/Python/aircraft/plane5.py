@@ -194,4 +194,12 @@ def get_spec():
         surface="TARMAC",
         field_lengths_suffix=" - S&D p6",
         report_extra=_report,
+        pushback_need="SELF_MANOEUVRE",
+        pushback_reason=(
+            "a King Air 350i beta-ranges off a stand on its PT6s' reverse pitch, plane10's Caravan "
+            "reasoning one size up. ABSENT FROM THIS TABLE UNTIL ISSUE #293's coverage sweep found "
+            "it, the same gap plane4's row closes - the class default of VehicleTug would otherwise "
+            "have silently gated a King Air behind the depot"
+        ),
+        yard_label="Plane5 (King Air 350i)",
     )

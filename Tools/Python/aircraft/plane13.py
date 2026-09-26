@@ -148,4 +148,10 @@ def get_spec():
         # resolve_axis fails a declared-raked bone that turns out square, so this list stays
         # honest.
         raked=(),
+        pushback_need="VEHICLE_TUG",
+        pushback_reason=(
+            "a 124 t 757-300 needs the tug the 737 below it and the A350 above it both do - "
+            "authored rather than left to the class default for the Plane6 row's reason"
+        ),
+        yard_label="Plane13 (757-300)",
     )

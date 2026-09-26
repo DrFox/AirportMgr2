@@ -365,6 +365,50 @@ class AircraftSpec:
     # script to make the finding moot.
     anim_report_extra: Optional[Callable] = None
 
+    # --- Fields added by issue #293 - ONE SPEC, SEVEN CONSUMERS -------------------------
+    #
+    # Adding plane15 used to touch import_models.py, build_pushback_needs.py,
+    # build_model_yard.py, airside_import.FLEET/PRETTY, AirframeAxlesTest.cpp's
+    # MeasuredTypes[], AircraftFieldLengthTest.cpp's Published[] and its own spec - eleven
+    # files across two languages, because none of the four Python consumers below ever read
+    # `aircraft/`'s own directory listing. These three fields are what a plane not yet in
+    # this file was missing; the consumers now iterate every aircraft/<key>.py via
+    # `all_keys()` and read these off each spec instead of hand-typing a fourth (or fifth)
+    # copy of the same fact.
+
+    # HOW THIS TYPE GETS OFF A STAND. A string, not unreal.PushbackNeed directly, for the
+    # reason `surface` above is a string: this module is imported by pure-Python callers
+    # (build_pushback_needs.py under -run=pythonscript is the only one that touches `unreal`
+    # for it) and a plain string needs no editor to construct. None means "not yet decided",
+    # which build_pushback_needs.py leaves alone - a type absent from ITS table loads with
+    # FAirframe's own default, VehicleTug, same as before this field existed.
+    pushback_need: Optional[str] = None   # "SELF_MANOEUVRE" | "VEHICLE_TUG" | None
+
+    # THE GAMEPLAY REASON, read once by build_pushback_needs.py (as a MARKER log line and a
+    # save) and once by Airside.Content.PushbackNeedsAuthored (as a failure message) - the
+    # same string in both places rather than the fourteen-reason duplicate issue #293 found
+    # (build_pushback_needs.py's own table beside AirframeAxlesTest.cpp:444's).
+    pushback_reason: str = ""
+
+    # THE MODEL YARD'S BENCH LABEL - build_model_yard.py's row, read off the spec rather than
+    # typed a second time in ROWS. "Plane15 (Cirrus SR22)" is the shape every aircraft in the
+    # yard already uses; the aeroplane row is now SORTED by each spec's own measured mesh
+    # span rather than hand-ordered, so a wrong sort is a stale export, not a stale comment.
+    yard_label: Optional[str] = None
+
+    # THE FLEET KEY airside_import.FLEET AND ITS NOW-DELETED PRETTY DICT held twice - :40-46's
+    # own "THIS USED TO BE TWO LISTS ... and they drifted" is about a DIFFERENT pair
+    # (build_fleet_materials/verify_fleet_materials), and PRETTY was a THIRD copy of the same
+    # key set. None defaults to this spec's own `key`; every aircraft today leaves it None,
+    # so the field exists for the aeroplane whose folder name and fleet key diverge, not
+    # because one has yet.
+    fleet_key: Optional[str] = None
+
+    # THE PRETTY NAME - "Plane15", not "plane15" - for instance naming only. None defaults to
+    # `key` with its first letter capitalised, which is every aircraft's value today; the
+    # field exists for the day one of them wants something else (a marketing name, a suffix).
+    fleet_pretty: Optional[str] = None
+
     def __post_init__(self):
         self._measured = None
 
@@ -387,6 +431,26 @@ def spec_for(key):
     fresh rather than a shared singleton."""
     module = importlib.import_module("aircraft.%s" % key)
     return module.get_spec()
+
+
+def all_keys():
+    """Every aircraft/<key>.py module's key, sorted (plane1 .. plane9, then plane10 ..
+    plane16 - shorter names first, which sorts a uniform "plane" prefix numerically without
+    parsing the trailing digits).
+
+    THE ONE LIST issue #293 asked for: import_models.py, build_pushback_needs.py,
+    build_model_yard.py and airside_import.FLEET all call this instead of naming every plane
+    by hand, so a sixteenth (or seventeenth) aircraft is one new aircraft/<key>.py file
+    rather than a hand-edit in four more. Reads the directory rather than importing every
+    module - a broken spec should fail loudly in the ONE script that asked for it, not in
+    every consumer that merely wanted the list of keys.
+    """
+    aircraft_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aircraft")
+    keys = [
+        name[:-3] for name in os.listdir(aircraft_dir)
+        if name.endswith(".py") and name != "__init__.py"
+    ]
+    return sorted(keys, key=lambda key: (len(key), key))
 
 
 # --- Measurement, generic over any spec's part names and wheel-bone groups ------------------
@@ -1111,5 +1175,24 @@ def _resolve_key_from_argv():
                      "'-script=Tools/Python/build_aircraft_type.py plane9'")
 
 
+def _wants_list():
+    """--list, checked the same two ways _resolve_key_from_argv checks for a key - a flag
+    dropped in sys.argv when the interpreter sees it, in the raw command line when UE's own
+    argv handling ate it instead. Issue #293: every consumer of `all_keys()` can be asked
+    for that same list from the shell, without importing this file, which is what a fresh
+    checkout wants when it is not sure the fleet still matches the Python and C++ figures a
+    reviewer quoted."""
+    if "--list" in sys.argv[1:]:
+        return True
+    try:
+        return "--list" in unreal.SystemLibrary.get_command_line()
+    except Exception:
+        return False
+
+
 if __name__ == "__main__":
-    run(_resolve_key_from_argv())
+    if _wants_list():
+        for key in all_keys():
+            say(key)
+    else:
+        run(_resolve_key_from_argv())

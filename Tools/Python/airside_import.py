@@ -52,24 +52,15 @@ _DUP_SUFFIX = re.compile(r"\.\d+$")
 # same; they are separate fields so a model whose export is named differently needs no
 # special case. The MODELS root itself stays in each script: it is a path, not a list, and
 # nothing has drifted between those copies.
-
-FLEET = {
-    "plane1":     ("plane1",     "/Game/Aircraft/Plane1/SK_Plane1"),
-    "plane2":     ("plane2",     "/Game/Aircraft/Plane2/SK_Plane2"),
-    "plane3":     ("plane3",     "/Game/Aircraft/Plane3/SK_Plane3"),
-    "plane4":     ("plane4",     "/Game/Aircraft/Plane4/SK_Plane4"),
-    "plane5":     ("plane5",     "/Game/Aircraft/Plane5/SK_Plane5"),
-    "plane6":     ("plane6",     "/Game/Aircraft/Plane6/SK_Plane6"),
-    "plane7":     ("plane7",     "/Game/Aircraft/Plane7/SK_Plane7"),
-    "plane8":     ("plane8",     "/Game/Aircraft/Plane8/SK_Plane8"),
-    "plane9":     ("plane9",     "/Game/Aircraft/Plane9/SK_Plane9"),
-    "plane10":    ("plane10",    "/Game/Aircraft/Plane10/SK_Plane10"),
-    "plane11":    ("plane11",    "/Game/Aircraft/Plane11/SK_Plane11"),
-    "plane12":    ("plane12",    "/Game/Aircraft/Plane12/SK_Plane12"),
-    "plane13":    ("plane13",    "/Game/Aircraft/Plane13/SK_Plane13"),
-    "plane14":    ("plane14",    "/Game/Aircraft/Plane14/SK_Plane14"),
-    "plane15":    ("plane15",    "/Game/Aircraft/Plane15/SK_Plane15"),
-    "plane16":    ("plane16",    "/Game/Aircraft/Plane16/SK_Plane16"),
+#
+# THE SIXTEEN AIRCRAFT ROWS ARE NO LONGER TYPED HERE (issue #293). They were a THIRD copy of
+# the same key set the docstring above already names two of (build_fleet_materials.py /
+# verify_fleet_materials.py's own former lists) - PRETTY, deleted below, was a fourth. fleet()
+# builds them from aircraft/<key>.py via build_aircraft_type.all_keys(), lazily: this module
+# is imported BY build_aircraft_type (part_bounds_uu, read_gltf below), so importing it back
+# at THIS module's own top level would be the circular import that fails on whichever of the
+# two loads second. The ground vehicles have no Python spec of their own yet and stay here.
+_VEHICLE_FLEET = {
     "fueltruck1": ("fueltruck1", "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"),
     "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
     "tug1":       ("tug1",       "/Game/Vehicles/Tug1/SK_Tug1"),
@@ -90,17 +81,47 @@ FLEET = {
     "curtainTrailer1": ("curtainTrailer1", "/Game/Vehicles/CurtainTrailer1/SK_CurtainTrailer1"),
 }
 
-# Asset folder name -> the name Content uses, for instance naming only.
-PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
-          "plane5": "Plane5", "plane6": "Plane6", "plane7": "Plane7",
-          "plane8": "Plane8", "plane9": "Plane9", "plane10": "Plane10",
-          "plane11": "Plane11", "plane12": "Plane12", "plane13": "Plane13",
-          "plane14": "Plane14", "plane15": "Plane15", "plane16": "Plane16",
-          "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1",
-          "truckCab1": "TruckCab1", "tankTrailer1": "TankTrailer1",
-          "fuelTrailer1": "FuelTrailer1",
-          "catering1": "Catering1", "baggageCart1": "BaggageCart1",
-          "curtainTrailer1": "CurtainTrailer1"}
+# Asset folder name -> the name Content uses, for instance naming only. Vehicles alone -
+# every aircraft's pretty name comes off its own spec's fleet_pretty (pretty_for() below),
+# because "fueltruck1" -> "FuelTruck1" is a camel-casing decision the lowercase key itself
+# cannot answer, where every aircraft key today is its own pretty name lower-cased exactly.
+_VEHICLE_PRETTY = {
+    "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1", "utility1": "Utility1",
+    "truckCab1": "TruckCab1", "tankTrailer1": "TankTrailer1",
+    "fuelTrailer1": "FuelTrailer1",
+    "catering1": "Catering1", "baggageCart1": "BaggageCart1",
+    "curtainTrailer1": "CurtainTrailer1",
+}
+
+_fleet_cache = None
+
+
+def fleet():
+    """key -> (glb stem, skeletal mesh path), for every model that wears M_Fleet - the ONE
+    list build_fleet_materials.py and verify_fleet_materials.py both read. Cached per
+    process: the directory scan and sixteen spec imports are cheap once, not sixteen times
+    per script run."""
+    global _fleet_cache
+    if _fleet_cache is None:
+        from build_aircraft_type import all_keys, spec_for
+        merged = {}
+        for key in all_keys():
+            spec = spec_for(key)
+            merged[spec.fleet_key or spec.key] = (spec.key, spec.mesh)
+        merged.update(_VEHICLE_FLEET)
+        _fleet_cache = merged
+    return _fleet_cache
+
+
+def pretty_for(key):
+    """The Content-facing name for a fleet() key - "Plane15", not "plane15" - for instance
+    naming only. Replaces the PRETTY dict issue #293 found as a fourth copy of FLEET's own
+    key set (:40-46 above is a DIFFERENT pair that already drifted once; PRETTY was next)."""
+    if key in _VEHICLE_PRETTY:
+        return _VEHICLE_PRETTY[key]
+    from build_aircraft_type import spec_for
+    spec = spec_for(key)
+    return spec.fleet_pretty or (key[0].upper() + key[1:])
 
 # EXPORTS THAT DO NOT LIVE IN THEIR OWN KEY'S FOLDER. fueltruck1 has been built inside
 # rigidCab1/rigidCab1.blend since 2026-09-24 (fueltruck1/export/MOVED.md) and exports to
@@ -121,9 +142,9 @@ EXPORT_FOLDER = {"fueltruck1": "rigidCab1",
 
 
 def fleet_glb(models_root, key):
-    """The .glb a FLEET key is scraped from - the one path both fleet scripts read."""
+    """The .glb a fleet() key is scraped from - the one path both fleet scripts read."""
     folder = EXPORT_FOLDER.get(key, key)
-    return os.path.join(models_root, folder, "export", "%s.glb" % FLEET[key][0])
+    return os.path.join(models_root, folder, "export", "%s.glb" % fleet()[key][0])
 
 # Below this two looks are the same colour written twice. The verifier may not check tighter
 # than the builder merges, or every merged look fails.

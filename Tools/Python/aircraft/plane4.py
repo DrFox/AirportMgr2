@@ -172,4 +172,12 @@ def get_spec():
         # 2026-09-19 and retargeted by hand. build_aircraft_anim.py measures it rather than
         # creating one, and fails loudly if it is missing. See AircraftSpec.create_abp.
         create_abp=False,
+        pushback_need="VEHICLE_TUG",
+        pushback_reason=(
+            "a 737-800 needs the tug its paper twin DA_Aircraft_B738 does, and the modelled A320 "
+            "beside it does too - a jet with no reverse-pitch prop, plane9's and plane14's "
+            "reasoning. ABSENT FROM THIS TABLE UNTIL ISSUE #293's coverage sweep found it - "
+            "EveryAircraftType() is what noticed, not a human re-reading the list"
+        ),
+        yard_label="Plane4 (737-800W)",
     )

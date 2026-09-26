@@ -154,4 +154,10 @@ def get_spec():
         published_table=PUBLISHED_TABLE,
         published_table_label="SPEC.md's",
         report_extra=_report,
+        pushback_need="SELF_MANOEUVRE",
+        pushback_reason=(
+            "a Baron turns out of a stand on differential power and brake, the Q400's reason one "
+            "size down - the class default of VehicleTug would gate a light twin behind the depot"
+        ),
+        yard_label="Plane16 (Baron 58)",
     )

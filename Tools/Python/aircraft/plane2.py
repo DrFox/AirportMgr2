@@ -129,4 +129,9 @@ def get_spec():
         # HAND-WIRED BEFORE THIS TOOLING EXISTED - no per-key wiring script, no measured
         # axis plan. See AircraftSpec.wire_script.
         wire_script=False,
+        pushback_need="SELF_MANOEUVRE",
+        pushback_reason=(
+            "a Twin Otter beta-ranges off a stand"
+        ),
+        yard_label="Plane2 (Twin Otter)",
     )
