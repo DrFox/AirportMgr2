@@ -293,21 +293,20 @@ bool FRoadBuildEditorToolLazyOwnSessionTest::RunTest(const FString& Parameters)
 }
 
 /**
- * ISSUE #185: the fuel depot's last stage, OnCommit, had no editor command at all. The
- * editor mode's command set was the nine tool commands (checked above by
- * ToolCommandsMatchRegistry) plus Cancel and nothing else - "list declared, consumer
- * missing" in its fourth form (see CLAUDE.md's "Check where a list is CONSUMED"): PIE has
- * always had edit.build on Enter reaching IBuildTool::OnCommit (BuildActions.cpp), and the
- * editor mode had no equivalent key at all, so a depot could be drawn there and never placed.
+ * ISSUE #185, EXTENDED BY ISSUE #304: the fuel depot's last stage, OnCommit, had no editor
+ * command at all, and the sticky EGestureMode trio (Remove/Insert/Edit) still had none as of
+ * #304 - "list declared, consumer missing" in its fourth and fifth forms (see CLAUDE.md's
+ * "Check where a list is CONSUMED"). PIE has always had these as bar rows (BuildActions.cpp),
+ * and the editor mode had no equivalent key for any of them, so a depot could be drawn and
+ * never placed, and FEditTool could never be reached at all.
  *
- * NAMES Build AND Cancel BY HAND rather than reading some third shared list, because there
- * is no table both drivers can see to build one from: AirsideEditor.Build.cs depends on
- * Airside only (the runtime plugin must never depend on the game), so this test cannot reach
- * across to Source/AirportMgr/BuildActions.cpp and enumerate PIE's own Edit section the way
- * ToolCommandsMatchRegistry enumerates ToolRegistry(), which lives in Airside where both
- * sides can see it. Cancel and Build are exactly the two non-tool verbs
- * FRoadBuildEdModeCommands hand-declares today; a third would be added to this same list by
- * hand, same as it would be added to that class.
+ * CANCEL AND BUILD ARE STILL NAMED BY HAND: they predate BuildVerbRegistry() and there is no
+ * defect behind them to close - see that struct's own header comment for why they are not
+ * registry entries. REMOVE/INSERT/EDIT NOW COME FROM THE REGISTRY, the same way
+ * ToolCommandsMatchRegistry enumerates ToolRegistry() - BuildVerbRegistry() lives in Airside,
+ * where both this test and BuildActions.cpp can see it, closing the gap the old comment here
+ * described (AirsideEditor.Build.cs cannot depend on Source/AirportMgr, so there used to be no
+ * shared list AT ALL for the sticky trio).
  *
  * THE SAME SEAM ToolCommandBindingSurvivesRegisterTool uses just above - CreateToolkit() for
  * a real FUICommandList without a live IToolkitHost, then ToolkitCommandsForTest() to read
@@ -347,11 +346,20 @@ bool FRoadBuildEdModeEditVerbTest::RunTest(const FString& Parameters)
 	}
 
 	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
-	const TArray<TPair<FString, TSharedPtr<FUICommandInfo>>> EditVerbs =
+	TArray<TPair<FString, TSharedPtr<FUICommandInfo>>> EditVerbs =
 	{
 		{ TEXT("Cancel"), Commands.CancelGesture },
 		{ TEXT("Build"),  Commands.Build },
 	};
+
+	// ISSUE #304: the registry's own verbs, added to the SAME list this test already walks
+	// rather than a second loop - a fourth check here is a fourth chance for the two to drift.
+	const TArray<TSharedPtr<FUICommandInfo>> VerbCommands = Commands.VerbCommandsInOrder();
+	const TConstArrayView<FBuildVerbRegistration> VerbRegistry = BuildVerbRegistry();
+	for (int32 Index = 0; Index < FMath::Min(VerbCommands.Num(), VerbRegistry.Num()); ++Index)
+	{
+		EditVerbs.Add({ VerbRegistry[Index].Id.ToString(), VerbCommands[Index] });
+	}
 
 	for (const TPair<FString, TSharedPtr<FUICommandInfo>>& Verb : EditVerbs)
 	{
@@ -362,8 +370,8 @@ bool FRoadBuildEdModeEditVerbTest::RunTest(const FString& Parameters)
 
 		// THE CONSUMED LIST, not the declared one - a command can exist and still never reach
 		// the toolkit if BindCommands forgets to MapAction it, which is precisely issue #185's
-		// shape before this PR: Build did not exist anywhere, so there was nothing here to
-		// find at all.
+		// shape before this PR (and #304's, for Remove/Insert/Edit): a verb existed and there
+		// was nothing here to find at all.
 		const FUIAction* Action = CommandList->GetActionForCommand(Verb.Value);
 		TestNotNull(*FString::Printf(TEXT("%s is bound on the toolkit list after BindCommands"),
 			*Verb.Key), Action);

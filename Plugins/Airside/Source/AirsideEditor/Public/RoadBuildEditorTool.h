@@ -12,6 +12,20 @@
 class ARoadNetworkActor;
 
 /**
+ * One label FViewportPreviewSink collected this frame - issue #304. A PrimitiveDrawInterface
+ * (Render's own sink) draws geometry, not text, so a tool's refusal reason used to have nowhere
+ * to land in the editor viewport at all (FViewportPreviewSink::Label was "deliberately
+ * nothing"), though PIE's ARoadBuildHUD has always drawn the identical call. See
+ * URoadBuildEditorTool::PendingLabels, the one place a frame's worth of these is cached.
+ */
+struct FEditorPreviewLabel
+{
+	FVector2D At = FVector2D::ZeroVector;
+	FString Text;
+	EPreviewStyle Style = EPreviewStyle::Pending;
+};
+
+/**
  * Makes one adapter around one build tool, named by its index into ToolRegistry() rather
  * than a `Kind` enum - see issue #33. A single builder class parameterised by index rather
  * than one per tool: what differs between them is one number, and one class per tool would
@@ -117,6 +131,29 @@ public:
 	 */
 	void HoverFrameContextForTest() const { MakeHoverContext(); }
 
+	/**
+	 * Stands in for what Render() does to populate PendingLabels every frame it actually runs -
+	 * same precedent as SetViewCentreDistanceForTest/HoverFrameContextForTest: a real
+	 * IToolsContextRenderAPI/FPrimitiveDrawInterface needs a live viewport this headless harness
+	 * does not have. Takes the active tool EXPLICITLY rather than through Sess().GetActiveTool(),
+	 * so a counting spy - no production IBuildTool exposes a BuildPreview call count -
+	 * can stand in for it; Airside.Editor.RenderCachesLabelsOnce is what actually counts,
+	 * proving DrawHUD's read of PendingLabels (CollectPreviewLabelTextForTest below) costs no
+	 * further calls - the bug review round 2 of issue #304 found (a SECOND, independent
+	 * BuildPreview running from DrawHUD every frame, discarding what Render's own call had
+	 * already produced).
+	 */
+	void CachePreviewLabelsForTest(IBuildTool& ActiveTool);
+
+	/**
+	 * The TEXT of every label DrawHUD would draw this frame, straight from PendingLabels -
+	 * issue #304's own composition test (a too-short runway drag must put "too short" in this
+	 * set) reads this after CachePreviewLabelsForTest (or a real Render) has filled the cache.
+	 * Positions and styles are deliberately left out: the point under test is that the text
+	 * REACHES the editor at all.
+	 */
+	TArray<FString> CollectPreviewLabelTextForTest() const;
+
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
@@ -151,6 +188,17 @@ public:
 	 * guard here would be a second copy of a rule the tool already owns.
 	 */
 	void CommitGesture();
+
+	/**
+	 * Runs Verb.Apply against the shared session at the last known cursor - the editor's own
+	 * door onto BuildVerbRegistry(), the same shape CancelGesture/CommitGesture already are for
+	 * the two verbs that predate it (issue #304). Called from URoadBuildEdMode's mapped
+	 * commands for Remove/Insert/Edit, which is what makes the sticky EGestureMode trio
+	 * reachable in the editor for the first time - GetActiveTool() already returns FEditTool the
+	 * moment the session's mode is Edit (FBuildSession::GetActiveTool's own comment), so nothing
+	 * else has to change for a drag or a merge to reach it once the mode itself does.
+	 */
+	void ApplyVerb(const FBuildVerbRegistration& Verb);
 
 	/**
 	 * Draws the graph that already exists - nodes by degree, stands by heading.
@@ -323,6 +371,17 @@ private:
 	 * FBuildSession's shared position has no equivalent of before the first mouse move.
 	 */
 	bool bHoverValid = false;
+
+	/**
+	 * What the active tool's own BuildPreview call described this frame, as text - issue #304
+	 * review round 2. FILLED BY Render (from the SAME BuildPreview call it already makes to
+	 * draw markers/lines - see Render's own comment), never by DrawHUD: a second, independent
+	 * BuildPreview from DrawHUD is exactly the doubled cost that comment fixes.
+	 * CachePreviewLabelsForTest fills it the identical way for a headless test that cannot call
+	 * Render for real. RESET, not left stale, whenever bHoverValid is false - see both fillers'
+	 * own bodies.
+	 */
+	TArray<FEditorPreviewLabel> PendingLabels;
 
 	/**
 	 * World width the viewport currently spans at the cursor, refreshed each Render.

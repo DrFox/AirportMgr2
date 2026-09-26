@@ -97,6 +97,59 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 	return TConstArrayView<FToolRegistration>(Registry);
 }
 
+TConstArrayView<FBuildVerbRegistration> BuildVerbRegistry()
+{
+	// A function-local static, like ToolRegistry() and for the same reason: built once, on
+	// first use, never mutated after - so handing out a view over it is safe from any thread
+	// that only reads. See FBuildVerbRegistration's own comment for why Build/Cancel/Guidelines
+	// are not entries here.
+	static const FBuildVerbRegistration Registry[] =
+	{
+		// NO KEY: Ctrl already means this while held (FBuildSession::MakeContext ORs the two).
+		// This entry is the STICKY form, for work that outlasts a comfortable reach - moved
+		// here from BuildActions.cpp's own hand-written row, unchanged in behaviour.
+		{ EKeys::Invalid, TEXT("Remove"), LOCTEXT("Remove", "Remove"),
+			LOCTEXT("RemoveTooltip", "Sticky: a gesture removes rather than builds, the same as holding Ctrl."),
+			[](FBuildSession& Session, const FToolContext& Context)
+			{
+				Session.ToggleGestureMode(EGestureMode::Remove, Context);
+			},
+			[](const FBuildSession& Session) { return Session.GetGestureMode() == EGestureMode::Remove; },
+			[](const FBuildSession&) { return true; } },
+
+		// NO KEY, for the same reason as Remove above: Shift already means this while held.
+		{ EKeys::Invalid, TEXT("Insert"), LOCTEXT("Insert", "Insert"),
+			LOCTEXT("InsertTooltip", "Sticky: a gesture inserts without starting anything, the same as holding Shift."),
+			[](FBuildSession& Session, const FToolContext& Context)
+			{
+				Session.ToggleGestureMode(EGestureMode::Insert, Context);
+			},
+			[](const FBuildSession& Session) { return Session.GetGestureMode() == EGestureMode::Insert; },
+			[](const FBuildSession&) { return true; } },
+
+		// EDIT IS THE ONE WITH A KEY, because it is the one you enter deliberately and stay in -
+		// M, not E (Q/E is camera turn, polled every frame in PIE's UpdateView), and mnemonic
+		// for move and merge. GREYED when the lit tool exposes no handles, so the bar (and, once
+		// wired, the editor palette) answers "why can I not edit this" rather than lighting over
+		// a mode that would do nothing at all - see FToolRegistration::EditHandles, the one list
+		// this reads instead of a second copy of which tools are editable.
+		{ EKeys::M, TEXT("EditMode"), LOCTEXT("EditMode", "Edit"),
+			LOCTEXT("EditModeTooltip", "Move placed nodes and apron corners. Greyed when the lit tool has none."),
+			[](FBuildSession& Session, const FToolContext& Context)
+			{
+				Session.ToggleGestureMode(EGestureMode::Edit, Context);
+			},
+			[](const FBuildSession& Session) { return Session.GetGestureMode() == EGestureMode::Edit; },
+			[](const FBuildSession& Session)
+			{
+				const TConstArrayView<FToolRegistration> Tools = ToolRegistry();
+				const int32 Index = Session.GetActiveToolIndex();
+				return Tools.IsValidIndex(Index) && Tools[Index].EditHandles != EEditHandleKind::None;
+			} },
+	};
+	return TConstArrayView<FBuildVerbRegistration>(Registry);
+}
+
 FBuildSession::FBuildSession()
 {
 	for (const FToolRegistration& Registration : ToolRegistry())

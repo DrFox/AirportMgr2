@@ -105,30 +105,25 @@ namespace
 		Out.Add(Make(TEXT("edit.build"), EActionSection::Edit, LOCTEXT("Build", "Build"), EKeys::Enter, false,
 			[](FBuildActionContext& Ctx) { Ctx.Controller.OnBuild(); }, Never,
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.GetToolReadout().bCommittable; }));
-		// THE THREE MODES, one row each and one toggle behind all three. They are mutually
-		// exclusive because they are one enum on the session, not because these three rows
-		// agree to be - see EGestureMode, and the report that made that necessary: Remove and
-		// Edit could both be lit, the bar drew both, and Edit silently won.
-		//
-		// REMOVE AND INSERT HAVE NO KEY because Ctrl and Shift already mean them while HELD.
-		// These rows are the sticky form, for work that outlasts a comfortable reach.
-		Out.Add(Make(TEXT("edit.remove"), EActionSection::Edit, LOCTEXT("Remove", "Remove"), EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGestureMode(EGestureMode::Remove); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.GetGestureMode() == EGestureMode::Remove; }, Always));
-		Out.Add(Make(TEXT("edit.insert"), EActionSection::Edit, LOCTEXT("Insert", "Insert"), EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGestureMode(EGestureMode::Insert); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.GetGestureMode() == EGestureMode::Insert; }, Always));
-
-		// EDIT IS THE ONE WITH A KEY, because it is the one you enter deliberately and stay
-		// in. M, not E: Q/E is camera turn, polled every frame in UpdateView. M is also the
-		// key a Cities player already has from Move It, and mnemonic for move and merge.
-		//
-		// GREYED when the lit tool exposes no handles, so the bar answers "why can I not edit
-		// this" instead of lighting over a mode that would do nothing at all.
-		Out.Add(Make(TEXT("edit.editmode"), EActionSection::Edit, LOCTEXT("EditMode", "Edit"), EKeys::M, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGestureMode(EGestureMode::Edit); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.GetGestureMode() == EGestureMode::Edit; },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.ActiveToolHasEditHandles(); }));
+		// THE THREE MODES, GENERATED FROM Airside's BuildVerbRegistry() (issue #304) rather
+		// than hand-typed here beside it - the same move ToolRegistry() already made for the
+		// Tools section above. Before this, FRoadBuildEdModeCommands had nothing for any of
+		// the three (`grep GestureMode AirsideEditor/Private/*.cpp` was 0) because there was no
+		// shared table an editor command loop could read the way it already read ToolRegistry() -
+		// only this hand-written trio, which the editor module cannot see (AirportMgr depends
+		// on Airside, never the other way). One row each and one toggle behind all three: they
+		// are mutually exclusive because they are one enum on the session, not because these
+		// rows agree to be - see EGestureMode, and the report that made that necessary: Remove
+		// and Edit could both be lit, the bar drew both, and Edit silently won.
+		for (int32 Index = 0; Index < BuildVerbRegistry().Num(); ++Index)
+		{
+			const FBuildVerbRegistration& Verb = BuildVerbRegistry()[Index];
+			Out.Add(Make(*FString::Printf(TEXT("edit.%s"), *Verb.Id.ToString().ToLower()),
+				EActionSection::Edit, Verb.Name, Verb.Key, false,
+				[Index](FBuildActionContext& Ctx) { Ctx.Controller.ApplyVerb(BuildVerbRegistry()[Index]); },
+				[Index](const FBuildActionContext& Ctx) { return BuildVerbRegistry()[Index].IsActive(Ctx.Controller.GetSession()); },
+				[Index](const FBuildActionContext& Ctx) { return BuildVerbRegistry()[Index].IsEnabled(Ctx.Controller.GetSession()); }));
+		}
 		Out.Add(Make(TEXT("edit.undo"), EActionSection::Edit, LOCTEXT("Undo", "Undo"), EKeys::Z, true,
 			[](FBuildActionContext& Ctx) { Ctx.Controller.OnUndo(); }, Never,
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanUndo(); }));

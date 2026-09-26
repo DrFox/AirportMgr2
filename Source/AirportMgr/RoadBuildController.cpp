@@ -691,6 +691,15 @@ void ARoadBuildController::ToggleGestureMode(EGestureMode Mode)
 	InvalidateToolReadoutCache();
 }
 
+void ARoadBuildController::ApplyVerb(const FBuildVerbRegistration& Verb)
+{
+	// SAME CONTEXT, SAME INVALIDATION as ToggleGestureMode just above - this is the generic
+	// door BuildVerbRegistry()'s own entries call through, rather than each verb growing a
+	// hand-written controller forwarder the way Remove/Insert/Edit used to (issue #304).
+	Verb.Apply(Session, MakeToolContext());
+	InvalidateToolReadoutCache();
+}
+
 EGestureMode ARoadBuildController::GetGestureMode() const
 {
 	return Session.GetGestureMode();
