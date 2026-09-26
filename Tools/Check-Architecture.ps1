@@ -87,9 +87,13 @@
           depot's yard (Airside.Present.PlotPresenter.StandOutlineIsNotADepot pins this at
           PlotPresenter.cpp's RebuildFrom). RoadEntity.h, RoadSurfacePresenter.cpp (pad
           paving - a stand wants a pad too), RoadEditFacadeSurfaces.cpp (FindEntityAt - a
-          ground pick is kind-neutral) and SelectTool.cpp (the selection highlight - a
-          plotted stand deserves the same polygon a plotted depot gets) are allow-listed
-          whole, each correctly kind-neutral by design. Everywhere else a bare IsPlotted()
+          ground pick is kind-neutral), SelectTool.cpp (the selection highlight - a
+          plotted stand deserves the same polygon a plotted depot gets) and StagedPlotTool.cpp
+          (issue #302: the Remove preview's IsMine(Entity) && Entity.IsPlotted(), one body
+          shared by the depot and stand tools, where IsMine IS the kind check - just made
+          through a virtual hook rather than spelled IsDepot()/IsStand() on the line itself)
+          are allow-listed whole, each correctly kind-neutral by design. Everywhere else a
+          bare IsPlotted()
           is the shape this rule exists to catch; a line that also names IsDepot() or
           IsStand() states the kind explicitly and is exempt (Controller ruling, 2026-09-23:
           later tasks write `IsStand() && IsPlotted()` outside these files and that must
@@ -874,7 +878,7 @@ $ranRules.Add('turn-index-pairing')
 # plotted depot) - see the rule's own comment above for why each one is safe. Every other file
 # in the tree may still call IsPlotted(), but ONLY on a line that also names IsDepot() or
 # IsStand() - stating the kind explicitly, not leaning on IsPlotted() to mean one.
-$isPlottedAllowFiles = @('RoadEntity.h', 'RoadSurfacePresenter.cpp', 'RoadEditFacadeSurfaces.cpp', 'SelectTool.cpp')
+$isPlottedAllowFiles = @('RoadEntity.h', 'RoadSurfacePresenter.cpp', 'RoadEditFacadeSurfaces.cpp', 'SelectTool.cpp', 'StagedPlotTool.cpp')
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
         if ($isPlottedAllowFiles -contains $file.Name) { continue }

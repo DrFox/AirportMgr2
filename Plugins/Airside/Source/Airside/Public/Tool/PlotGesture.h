@@ -85,6 +85,20 @@ namespace PlotGesture
 
 		/** Unit vector away from the road, on the side the cursor was when it anchored. */
 		FVector2D Inward = FVector2D(0.0, 1.0);
+
+		/**
+		 * THE SEARCH'S OWN ANSWER, carried out rather than thrown away - issue #302.
+		 * DescribeAnchors used to call AnchorAt for its "is there an anchor here" question and
+		 * then NearestRoad a second time for the segment and T it had just found, an O(segments)
+		 * search paid for twice on every Idle-stage hover frame. Road/AlongT/RoadA/RoadB are
+		 * exactly what NearestRoad and SegmentEnds resolved to reach Corner/Along/Inward above,
+		 * so a caller that also wants the road itself - not just where a plot would anchor on
+		 * it - reads it back here instead of asking the network again.
+		 */
+		FRoadSegmentId Road;
+		double AlongT = 0.0;
+		FVector2D RoadA = FVector2D::ZeroVector;
+		FVector2D RoadB = FVector2D::ZeroVector;
 	};
 
 	/**

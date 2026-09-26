@@ -15,22 +15,6 @@ FText FPlotPlaceTool::GetDisplayName() const
 	return LOCTEXT("FuelDepotTool", "Fuel depot");
 }
 
-int32 FPlotPlaceTool::PinnedCount() const
-{
-	// READ OFF THE STAGE so the two cannot disagree. A separate counter would be a second
-	// thing to keep in step with the stage machine, and the readout's "N/4" would be free to
-	// drift from what the gesture is actually doing.
-	switch (Stage)
-	{
-	case EPlotStage::Idle:     return 0;
-	case EPlotStage::Frontage: return 1;
-	case EPlotStage::CornerA:  return 2;
-	case EPlotStage::CornerB:  return 3;
-	case EPlotStage::Confirm:  return 4;
-	}
-	return 0;
-}
-
 bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
 	FGuideAnchor& Out) const
 {
@@ -42,7 +26,8 @@ bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditT
 	// frontage runs ALONG one in quantised 5 m steps - both are already constrained, and an
 	// angular guide over them would be a second opinion about where they may go, which is how
 	// two rules about one number come to disagree (see QuantisedFrontage's own comment).
-	if (Stage != EPlotStage::CornerA && Stage != EPlotStage::CornerB)
+	const int32 PinnedNow = PinnedCount();
+	if (PinnedNow != 2 && PinnedNow != 3)
 	{
 		return false;
 	}
@@ -57,7 +42,7 @@ bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditT
 	// being placed, the anchor while corner 3 is. Both measured against the SAME frontage
 	// direction, which is what makes the pair of clicks a rectangle rather than two unrelated
 	// right angles.
-	const bool bFarEnd = Stage == EPlotStage::CornerA;
+	const bool bFarEnd = PinnedNow == 2;
 	Out.Origin      = bFarEnd ? Corners[1] : Corners[0];
 	Out.ReferenceAt = bFarEnd ? Corners[0] : Corners[1];
 	Out.Reference   = Frontage.GetSafeNormal();
@@ -73,15 +58,14 @@ bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditT
 	Out.Point = EDragPoint::Boundary;
 
 	// THE CORNERS ALREADY PINNED, so the moving one can line up with them - "0 degrees to
-	// corner 3" (the 2026-09-17 request). ONLY AS FAR AS PinnedCount: entries past it are
+	// corner 3" (the 2026-09-17 request). ONLY AS FAR AS PinnedNow: entries past it are
 	// stale, and offering one would align the player against the PREVIOUS gesture's geometry,
 	// which is the bug Quad's own comment records having shipped once.
 	//
 	// THE CORNER BEING DRAGGED IS NOT IN THE LIST. A point cannot line up with itself: its
 	// own two lines pass through wherever the cursor is, so both would always be in tolerance
 	// and the guide would say "you are level with yourself" on every frame.
-	const int32 Pinned = PinnedCount();
-	for (int32 Index = 0; Index < Pinned && Index < 4; ++Index)
+	for (int32 Index = 0; Index < PinnedNow && Index < 4; ++Index)
 	{
 		// NUMBERED AS THE PLAYER COUNTS THEM - the readout says "Plot Points: 2/4", so corner
 		// 0 is "corner 1" on screen. A label naming a corner the bar does not is worse than
@@ -102,32 +86,32 @@ bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditT
 	return true;
 }
 
-void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQuad) const
+void FPlotPlaceTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutShape) const
 {
-	OutQuad.Reset();
+	OutShape.Reset();
 
-	const int32 Pinned = PinnedCount();
-	if (Pinned < 1)
+	const int32 PinnedNow = PinnedCount();
+	if (PinnedNow < 1)
 	{
 		return;
 	}
 
 	// Corner 0 is the anchor, pinned by the first click and never moving after.
-	OutQuad.Add(Corners[0]);
+	OutShape.Add(Corners[0]);
 
 	// Corner 1: the far end of the frontage. Along the road, quantised, and it may run EITHER
 	// WAY - a player who anchors and then changes their mind about direction should not have
 	// to cancel and start again.
 	FVector2D Far = Corners[1];
-	if (Pinned == 1)
+	if (PinnedNow == 1)
 	{
 		const double Reach = FVector2D::DotProduct(Context.Cursor - Corners[0], Along);
 		const double Sign = Reach < 0.0 ? -1.0 : 1.0;
 		Far = Corners[0] + Along * (Sign * PlotGesture::QuantisedFrontage(FMath::Abs(Reach)));
 	}
-	OutQuad.Add(Far);
+	OutShape.Add(Far);
 
-	if (Pinned < 2)
+	if (PinnedNow < 2)
 	{
 		return;
 	}
@@ -152,8 +136,8 @@ void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQua
 	// behind it slides back onto the frontage line, because concrete on the carriageway is a
 	// harder rule than an alignment aid. That is also why BuildPreview draws its guide line
 	// from the corner SHOWN here rather than from Guide.Point.
-	const FVector2D Back = Pinned == 2 ? InFront(Context.GuidedCursor()) : Corners[2];
-	OutQuad.Add(Back);
+	const FVector2D Back = PinnedNow == 2 ? InFront(Context.GuidedCursor()) : Corners[2];
+	OutShape.Add(Back);
 
 	// UNTIL IT IS REACHED, THE NEAR CORNER COMPLETES A PARALLELOGRAM. Two pinned corners then
 	// read as a finished shape the player adjusts, rather than one trailing off - and a
@@ -164,16 +148,35 @@ void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQua
 	// and drawing a stale corner is how a ghost shows the PREVIOUS gesture's geometry - the
 	// exact bug the old Depth member caused, which took a deliberate re-break to prove.
 	FVector2D Near = Corners[0] + (Back - Far);
-	if (Pinned == 3)
+	if (PinnedNow == 3)
 	{
 		// Guided like the corner before it, and against the same frontage - see Back above.
 		Near = InFront(Context.GuidedCursor());
 	}
-	else if (Pinned >= 4)
+	else if (PinnedNow >= 4)
 	{
 		Near = Corners[3];
 	}
-	OutQuad.Add(Near);
+	OutShape.Add(Near);
+}
+
+bool FPlotPlaceTool::CanCloseShape(TConstArrayView<FVector2D> Shown) const
+{
+	// LOAD-BEARING AGAIN as of 2026-09-17. While the back corners rode the frontage's own
+	// normal the quad could not fold and this could not fire - it was documented as
+	// unreachable, and a test written for it pinned a legal plot instead. Freeing the
+	// corners to move sideways brought the fold back: drag the last corner across the
+	// one before it and edge 3->0 crosses edge 1->2.
+	//
+	// What it protects is the ear-clipper downstream, which produces overlapping faces
+	// rather than an error when fed a crossed polygon. PlaceEntityInPlot asks the same
+	// question and keeps asking it: this is earlier, not instead.
+	return RoadGeom::IsSimplePolygon(Shown);
+}
+
+int32 FPlotPlaceTool::Place(const FToolContext& Context, const TArray<FVector2D>& Outline) const
+{
+	return Context.Target->PlaceEntityInPlot(Outline, Outline[0], Outline[1], Modules, Kind);
 }
 
 PlotYard::FReservation FPlotPlaceTool::ReservationFor(
@@ -191,7 +194,7 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 	// unauthored plot type would have drawn anyway.
 	//
 	// RESOLVED BEFORE THE MEMO IS CONSULTED, because it is part of the memo's own key - see
-	// FReservationMemo's comment.
+	// FReservationPayload's comment.
 	const UEntityDefinition* Definition =
 		Context.Target != nullptr ? Context.Target->GetEntityDefinition(Kind) : nullptr;
 	const EPlotLayout Layout =
@@ -213,10 +216,10 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 	// the built depot. IRoadEditTarget::ResolveDepotKits is the one place both now read it. A
 	// null Target (see the Context.Target guard on Definition above) leaves the specs empty
 	// rather than crashing - the same "no target, no content" answer GetEntityDefinition gives.
-	if (!Memo.bSpecsResolved)
+	if (!bSpecsResolved)
 	{
-		Memo.Specs = Context.Target != nullptr ? Context.Target->ResolveDepotKits() : TArray<PlotYard::FKitSpec>();
-		Memo.bSpecsResolved = true;
+		Specs = Context.Target != nullptr ? Context.Target->ResolveDepotKits() : TArray<PlotYard::FKitSpec>();
+		bSpecsResolved = true;
 	}
 
 	if (Outline.Num() < 4)
@@ -226,14 +229,12 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 
 	// THE MEMO HIT: the same four corners and the same layout as last time, so the packer
 	// already ran for this shape and running it again would answer a question already asked.
-	// EXACT EQUALITY, not a tolerance - Quad() either reproduces a pinned corner bit for bit
-	// or derives the moving one from the same cursor value MakeToolContext resolved, so two
-	// calls describing the same frame's shape compare equal without help.
-	if (Memo.bValid && Memo.Layout == Layout
-		&& Memo.Outline[0] == Outline[0] && Memo.Outline[1] == Outline[1]
-		&& Memo.Outline[2] == Outline[2] && Memo.Outline[3] == Outline[3])
+	// LAYOUT IS AN EXTRA KEY the base's TOutlineMemo does not know about (see
+	// FReservationPayload's own comment) - Matches() alone would call a plot memoised under one
+	// layout a hit for a different one.
+	if (Memo.Matches(Outline) && Memo.Payload.Layout == Layout)
 	{
-		return Memo.Reservation;
+		return Memo.Payload.Reservation;
 	}
 
 	// The pose the facade will store for this depot, so DepotYardSeed gives the yard that
@@ -247,309 +248,45 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 	Site.Gate = Pose;
 	Site.Seed = DepotYardSeed(Pose);
 
-	Memo.Reservation = PlotLayoutFor(Layout)->Solve(Site, Memo.Specs);
-	Memo.Outline[0] = Outline[0];
-	Memo.Outline[1] = Outline[1];
-	Memo.Outline[2] = Outline[2];
-	Memo.Outline[3] = Outline[3];
-	Memo.Layout = Layout;
-	Memo.bValid = true;
+	FReservationPayload Payload;
+	Payload.Layout = Layout;
+	Payload.Reservation = PlotLayoutFor(Layout)->Solve(Site, Specs);
+	Memo.Store(Outline, Payload);
 
 	// FOR TESTS ONLY, and only on the path that actually paid for a solve - see
 	// GetSolveCountForTest.
 	++SolveCountForTest;
 
-	return Memo.Reservation;
+	return Payload.Reservation;
 }
 
-int32 FPlotPlaceTool::PlotUnder(const FToolContext& Context)
+void FPlotPlaceTool::Describe(const FToolContext& Context, TConstArrayView<FVector2D> Shown,
+	IToolPreviewSink& Sink) const
 {
-	const URoadNetwork* Network = Context.Network();
-	if (Context.Target == nullptr || Network == nullptr)
-	{
-		return INDEX_NONE;
-	}
-	const int32 Under = Context.Target->FindEntityAt(Context.Cursor, Context.SnapRadius);
-	if (!Network->GetEntities().IsValidIndex(Under))
-	{
-		return INDEX_NONE;
-	}
-	// A PRE-PLOT DEPOT HAS NO GROUND to click, so FindEntityAt finds it the way it finds a
-	// stand - by its pose within the pick radius - and its fuel role is what says it is ours.
-	// KIND, NOT OUTLINE: IsDepot() alone is enough now that a stand can be plotted too - the
-	// old `IsPlotted() || PoseRole == Fuel` would have picked up a drawn stand here as well.
-	const FEntityInstance& Entity = Network->GetEntities()[Under];
-	return Entity.IsDepot() ? Under : INDEX_NONE;
-}
-
-void FPlotPlaceTool::OnClick(const FToolContext& Context)
-{
-	const URoadNetwork* Network = Context.Network();
-	if (Context.Target == nullptr || Network == nullptr)
-	{
-		return;
-	}
-
-	// REMOVE: the depot whose ground was clicked, and nothing else - no gesture is started or
-	// advanced. Until 2026-09-22 this tool ignored Remove entirely, so the bar's Remove button
-	// lit on the depot tool did nothing and a depot could only go by undo. DeleteEntity
-	// refunds through the purse and is one undo step, as a stand's removal is.
-	if (Context.bRemoveModifier)
-	{
-		const int32 Doomed = PlotUnder(Context);
-		if (Doomed != INDEX_NONE)
-		{
-			Context.Target->DeleteEntity(Doomed);
-		}
-		return;
-	}
-
-	switch (Stage)
-	{
-	case EPlotStage::Idle:
-	{
-		// THE SHARED FIRST CLICK - the grid, the side and the kerb offset all live in
-		// PlotGesture::AnchorAt, which the stand tool asks of a taxiway the same way this asks
-		// of a service road. See its own comments for each of the three.
-		PlotGesture::FAnchor Anchor;
-		if (!PlotGesture::AnchorAt(*Network, Context.Cursor, PlotGesture::IsServiceRoad, Anchor))
-		{
-			return;
-		}
-		Corners[0] = Anchor.Corner;
-		Along = Anchor.Along;
-		Inward = Anchor.Inward;
-
-		// A FRESH GESTURE, so any refusal the LAST one earned at commit is no longer about
-		// anything on screen - see bLastCommitRefused's own comment.
-		bLastCommitRefused = false;
-
-		Stage = EPlotStage::Frontage;
-		return;
-	}
-
-	case EPlotStage::Frontage:
-	{
-		// PINNED FROM WHAT WAS ON SCREEN, not recomputed. Quad() is what the ghost drew this
-		// frame, so a click can only ever pin the shape the player was looking at.
-		TArray<FVector2D> Shown;
-		Quad(Context, Shown);
-		if (Shown.Num() < 2)
-		{
-			return;
-		}
-		Corners[1] = Shown[1];
-		Stage = EPlotStage::CornerA;
-		return;
-	}
-
-	case EPlotStage::CornerA:
-	{
-		TArray<FVector2D> Shown;
-		Quad(Context, Shown);
-		if (Shown.Num() < 3)
-		{
-			return;
-		}
-		Corners[2] = Shown[2];
-		Stage = EPlotStage::CornerB;
-		return;
-	}
-
-	case EPlotStage::CornerB:
-	{
-		TArray<FVector2D> Shown;
-		Quad(Context, Shown);
-		if (Shown.Num() < 4)
-		{
-			return;
-		}
-
-		// REFUSED AT THE CLICK THAT WOULD MAKE IT, not at commit, so the player is never left
-		// holding a shape that cannot be built and can only escape by cancelling.
-		//
-		// LOAD-BEARING AGAIN as of 2026-09-17. While the back corners rode the frontage's
-		// normal the quad could not fold and this could not fire - it was documented as
-		// unreachable, and a test written for it pinned a legal plot instead. Freeing the
-		// corners to move sideways brought the fold back: drag the last corner across the
-		// one before it and edge 3->0 crosses edge 1->2.
-		//
-		// What it protects is the ear-clipper downstream, which produces overlapping faces
-		// rather than an error when fed a crossed polygon. PlaceEntityInPlot asks the same
-		// question and keeps asking it: this is earlier, not instead.
-		if (!RoadGeom::IsSimplePolygon(Shown))
-		{
-			return;
-		}
-		Corners[3] = Shown[3];
-		Stage = EPlotStage::Confirm;
-		return;
-	}
-
-	case EPlotStage::Confirm:
-		// NOTHING. The gesture is locked and the Build button is the only way on - a click
-		// that committed here would delete the review beat the staging exists for.
-		return;
-	}
-}
-
-void FPlotPlaceTool::OnCancel(const FToolContext& Context)
-{
-	// STEPPING BACK RE-OPENS THE GESTURE, so a refusal earned by the shape being left behind
-	// no longer describes anything the player can still commit.
-	bLastCommitRefused = false;
-
-	// ONE STAGE AT A TIME, the same answer the outline tool gives a misclick: binning the
-	// whole gesture is a harsher response than the mistake deserves.
-	switch (Stage)
-	{
-	case EPlotStage::Confirm:  Stage = EPlotStage::CornerB;  return;
-	case EPlotStage::CornerB:  Stage = EPlotStage::CornerA;  return;
-	case EPlotStage::CornerA:  Stage = EPlotStage::Frontage; return;
-	case EPlotStage::Frontage: Stage = EPlotStage::Idle;     return;
-	case EPlotStage::Idle:     return;
-	}
-}
-
-void FPlotPlaceTool::OnCommit(const FToolContext& Context)
-{
-	// EVERY STAGE BUT THE LAST IGNORES THIS. Build is a widget, not a stage of the gesture,
-	// so it is reachable whenever the bar is on screen - committing from Frontage would build a
-	// plot with no depth at all.
-	if (Stage != EPlotStage::Confirm || Context.Target == nullptr)
-	{
-		return;
-	}
-
-	TArray<FVector2D> Outline;
-	Quad(Context, Outline);
-	if (Outline.Num() < 4)
-	{
-		return;
-	}
-
-	// THE SAME QUAD THE GHOST DREW. Built from Quad() rather than rebuilt from a width and a
-	// depth, so what is committed cannot differ from what was on screen when Build was hit.
-	const int32 Placed =
-		Context.Target->PlaceEntityInPlot(Outline, Outline[0], Outline[1], Modules, Kind);
-
-	// HONOUR THE RETURN - issue #182. This used to fall through to Idle whatever
-	// PlaceEntityInPlot answered, so a plot the facade refused (its own reservation solve
-	// found nothing to place, or found no definition to place it from) vanished from the
-	// tool with only a log line the player never sees. INDEX_NONE now KEEPS the gesture in
-	// Confirm - the same shape stays on screen, and BuildReadout's next call warns through
-	// bLastCommitRefused. See that field's own comment on why this branch is a safety net
-	// rather than the ordinary path: Committable is judged by the SAME evaluator.
-	if (Placed == INDEX_NONE)
-	{
-		bLastCommitRefused = true;
-		return;
-	}
-
-	// BACK TO IDLE, ready for the next one. A tool that stayed in Confirm would let the
-	// player press Build twice and get two depots stacked on one plot.
-	Stage = EPlotStage::Idle;
-}
-
-void FPlotPlaceTool::OnDeactivate(const FToolContext& Context)
-{
-	// Discarded outright, like the outline tool's part-drawn shape: it exists only on this
-	// object, so nothing in the model has to be cleaned up.
-	Stage = EPlotStage::Idle;
-	bLastCommitRefused = false;
-}
-
-void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
-{
-	const URoadNetwork* Network = Context.Network();
-	if (Network == nullptr)
-	{
-		return;
-	}
-
-	// REMOVE shows what a click would take - the whole plot, outlined doomed - and none of
-	// the placement ghost, which would be offering to build while the click deletes.
-	if (Context.bRemoveModifier)
-	{
-		const int32 Doomed = PlotUnder(Context);
-		if (Doomed != INDEX_NONE)
-		{
-			const FEntityInstance& Entity = Network->GetEntities()[Doomed];
-			// Entity is already a depot here - PlotUnder only ever returns one - but the
-			// kind is named on this line too, not left implicit in the caller, so a reader
-			// (and Check-Architecture's IsPlotted rule) does not have to trust that at a
-			// distance: IsPlotted() alone decides plotted vs pre-plot, never depot vs stand.
-			if (Entity.IsDepot() && Entity.IsPlotted())
-			{
-				Sink.Polygon(Entity.Outline, EPreviewStyle::Doomed);
-			}
-			else
-			{
-				Sink.Marker(Entity.Position, EPreviewStyle::Doomed);
-			}
-			Sink.Label(Context.Cursor, TEXT("remove fuel depot"), EPreviewStyle::Doomed);
-		}
-		return;
-	}
-
-	if (Stage == EPlotStage::Idle)
-	{
-		// THE SAME GRID THE CLICK ANCHORS ON - PlotGesture::DescribeAnchors and AnchorAt are
-		// one rule written once, so the heavier dot is the anchor a click takes.
-		if (!PlotGesture::DescribeAnchors(*Network, Context.Cursor, PlotGesture::IsServiceRoad, Sink))
-		{
-			Sink.Label(Context.Cursor, TEXT("move near a service road"), EPreviewStyle::Refused);
-		}
-		return;
-	}
-
-	TArray<FVector2D> Shown;
-	Quad(Context, Shown);
-	if (Shown.Num() < 2)
-	{
-		return;
-	}
-
-	// A DOT PER CORNER ALREADY PLACED, so "Plot Points: 2/4" has something on the ground to
-	// count against rather than being a number the player has to take on trust.
-	const int32 Pinned = PinnedCount();
-	for (int32 I = 0; I < Pinned && I < Shown.Num(); ++I)
-	{
-		Sink.Marker(Shown[I], EPreviewStyle::Pinned);
-	}
-
-	// THE FRONTAGE IS PINNED FROM THE SECOND CLICK ON. At one corner it still follows the
-	// cursor, so it is drawn solid only once it has stopped moving.
-	Sink.Line(Shown[0], Shown[1],
-		Pinned >= 2 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
-
-	if (Shown.Num() < 4)
-	{
-		return;
-	}
+	const int32 PinnedNow = PinnedCount();
 
 	// The rest of the boundary. AN EDGE IS PINNED WHEN BOTH ITS ENDS ARE, and provisional
 	// the moment either is still under the cursor.
 	Sink.Line(Shown[1], Shown[2],
-		Pinned >= 3 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
+		PinnedNow >= 3 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
 	Sink.Line(Shown[2], Shown[3],
-		Pinned >= 4 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
+		PinnedNow >= 4 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
 	Sink.Line(Shown[3], Shown[0],
-		Pinned >= 4 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
+		PinnedNow >= 4 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
 
 	// THE DASHED LINE TO WHAT IT IS LINED UP WITH, and the label saying which - snap-guides
 	// design section 6, and the whole of what the request asked for: a ray along the guide
 	// direction would say "you are at 90 degrees", and this says WHICH edge you are square to.
 	//
-	// DRAWN FROM THE CORNER THE QUAD SHOWS, not from Guide.Point, because the InFront clamp
-	// in Quad may have moved it - a guide line that did not touch the shape would be pointing
-	// at nothing.
+	// DRAWN FROM THE CORNER THE SHAPE SHOWS, not from Guide.Point, because the InFront clamp
+	// in Shape() may have moved it - a guide line that did not touch the shape would be
+	// pointing at nothing.
 	//
 	// GATED ON THE MOVING CORNER, because Guide is only ever active while one of the two back
-	// corners is under the cursor (see DescribeGuideAnchor), and Shown[Pinned] IS that corner.
-	if (Context.Guide.bActive && (Pinned == 2 || Pinned == 3) && Shown.IsValidIndex(Pinned))
+	// corners is under the cursor (see DescribeGuideAnchor), and Shown[PinnedNow] IS that corner.
+	if (Context.Guide.bActive && (PinnedNow == 2 || PinnedNow == 3) && Shown.IsValidIndex(PinnedNow))
 	{
-		Sink.Guides(Context.Guide, Shown[Pinned]);
+		Sink.Guides(Context.Guide, Shown[PinnedNow]);
 	}
 
 	// CONTENTS AT THREE CORNERS, NOT TWO. With two pinned both back corners are unknown and
@@ -557,7 +294,7 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	// next two clicks break. With three, only one corner moves - and that is a promise the
 	// gesture can keep. Drawing them from the first click is what PIE called out on
 	// 2026-09-16; see the four-point gesture design doc.
-	if (Pinned < 3)
+	if (PinnedNow < 3)
 	{
 		return;
 	}
@@ -573,11 +310,10 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	// Drawing the real footprints is only honest because the seed matches: DepotYardSeed off
 	// the frontage midpoint is the Position the facade will store, so these outlines are the
 	// boxes Build puts down, not an impression of them.
-	// ReservationFor RESOLVES Memo.Specs AS A SIDE EFFECT (issue #180) - reading it back here
+	// ReservationFor RESOLVES Specs AS A SIDE EFFECT (issue #180) - reading it back here
 	// rather than calling DepotKitSpecs again is the second half of "once per solve, not per
 	// caller"; the first half is the memo hit above the case that made this call cheap.
 	const PlotYard::FReservation Reservation = ReservationFor(Context, Shown);
-	const TArray<PlotYard::FKitSpec>& Specs = Memo.Specs;
 
 	TArray<FVector2D> StandOutline;
 	for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
@@ -612,48 +348,9 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	}
 }
 
-void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink& Sink) const
+void FPlotPlaceTool::DescribeReadout(const FToolContext& Context, TConstArrayView<FVector2D> Shown,
+	IToolReadoutSink& Sink) const
 {
-	const URoadNetwork* Network = Context.Network();
-
-	// REMOVE ASKS A DIFFERENT QUESTION from placement, so it gets its own answer: the Idle
-	// readout's "move near a service road" would be advice about a gesture Remove never makes.
-	if (Context.bRemoveModifier)
-	{
-		if (PlotUnder(Context) == INDEX_NONE)
-		{
-			Sink.Warning(TEXT("Click a fuel depot to remove it"));
-		}
-		Sink.Committable(false);
-		return;
-	}
-
-	if (Stage == EPlotStage::Idle)
-	{
-		PlotGesture::FAnchor Unused;
-		if (Network == nullptr
-			|| !PlotGesture::AnchorAt(*Network, Context.Cursor, PlotGesture::IsServiceRoad, Unused))
-		{
-			// THE SAME QUESTION THE CLICK ASKS, so the warning cannot say "move near a
-			// service road" while a click would have anchored perfectly well.
-			Sink.Warning(TEXT("Move near a service road"));
-		}
-		Sink.Committable(false);
-		return;
-	}
-
-	TArray<FVector2D> Shown;
-	Quad(Context, Shown);
-	if (Shown.Num() < 2)
-	{
-		Sink.Committable(false);
-		return;
-	}
-
-	// FIRST, because it is the line that says where the player is in the gesture; every other
-	// fact is about a shape that may not be finished.
-	Sink.Fact(TEXT("Plot Points"), FString::Printf(TEXT("%d/4"), PinnedCount()));
-
 	// BAYS AND ROWS ARE GONE: a quadrilateral has neither, and a fact whose NAME survived its
 	// meaning is worse than one that was removed - the player reads a number describing a
 	// structure the plot does not have. Same reasoning that retired "Expansion slots".
@@ -662,10 +359,9 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 
 	// THE SAME SOLVER THE PRESENTER RUNS, and the same call the ghost above draws from - so
 	// the boxes on screen and the counts on the bar are one computation, not two that agree.
-	// LITERALLY ONE COMPUTATION as of #180: this and BuildPreview's own call both read
-	// Memo through ReservationFor, so a hover frame calling both pays for the packer once.
+	// LITERALLY ONE COMPUTATION as of #180: this and BuildPreview's own call both read the
+	// memo through ReservationFor, so a hover frame calling both pays for the packer once.
 	const PlotYard::FReservation Reservation = ReservationFor(Context, Shown);
-	const TArray<PlotYard::FKitSpec>& Specs = Memo.Specs;
 
 	// A LINE PER KIT, because "Room for 4" could only ever mean "4 of the sample footprint" -
 	// a number about a phantom tank rather than about anything the player can buy. These are
@@ -688,7 +384,7 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 	const bool bHasDefinition =
 		Context.Target != nullptr && Context.Target->GetEntityDefinition(Kind) != nullptr;
 
-	if (Stage == EPlotStage::Confirm)
+	if (IsConfirmed())
 	{
 		if (!bHasDefinition)
 		{
@@ -713,7 +409,7 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 		}
 	}
 
-	Sink.Committable(Stage == EPlotStage::Confirm && bHasDefinition && Total > 0);
+	Sink.Committable(IsConfirmed() && bHasDefinition && Total > 0);
 }
 
 #undef LOCTEXT_NAMESPACE
