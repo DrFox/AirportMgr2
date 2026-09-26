@@ -305,36 +305,12 @@ bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTa
 	// and none of them is "the" incoming one, so no reference is offered rather than an
 	// arbitrary one: a guide that squared to whichever segment happened to be stored first
 	// would change with an edit nobody connected to guides at all.
-	int32 Incident = 0;
-	FVector2D Along = FVector2D::ZeroVector;
-	FVector2D OtherEnd = FVector2D::ZeroVector;
-
-	const TArray<FRoadSegment>& Segments = Network->GetSegments();
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
-	{
-		const FRoadSegment& Segment = Segments[Index];
-		if (!Segment.bAlive || (Segment.A != FromId && Segment.B != FromId))
-		{
-			continue;
-		}
-
-		const FRoadNode* Far = Network->GetNode(Segment.A == FromId ? Segment.B : Segment.A);
-		if (Far == nullptr)
-		{
-			continue;
-		}
-
-		++Incident;
-		Along = (From->Position - Far->Position).GetSafeNormal();
-		OtherEnd = Far->Position;
-	}
-
-	if (Incident == 1 && !Along.IsNearlyZero())
-	{
-		Out.Reference = Along;
-		Out.ReferenceAt = OtherEnd;
-		Out.ReferenceName = TEXT("this road");
-	}
+	//
+	// THROUGH THE ONE FUNCTION now, issue #303: this used to walk every live segment in the
+	// network on every MakeContext to answer the identical question FEditTool's own drag anchor
+	// asks through FromId's own FRoadNode::Incident - an O(N) scan repeated for an O(degree)
+	// read. See RoadGuideAnchor::DescribeIncomingArm.
+	RoadGuideAnchor::DescribeIncomingArm(*Network, *From, FromId, Out);
 
 	RoadGuideAnchor::AddNodeCandidates(*Network, Out.Origin, Pending, Out);
 

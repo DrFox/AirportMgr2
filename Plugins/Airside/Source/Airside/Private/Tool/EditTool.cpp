@@ -394,22 +394,9 @@ bool FEditTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget
 	// EXACTLY ONE ARM GIVES A DIRECTION TO HOLD - the road this node ends. With two or more
 	// no arm is "the" one, and picking whichever is stored first would make the guide change
 	// with an edit nobody connected to guides at all: the same rule, and the same reason,
-	// FRoadDrawTool's own anchor gives about a junction.
-	if (Dragged.Incident.Num() == 1)
-	{
-		const FRoadNodeId Self = Network->NodeIdAt(Drag.Owner);
-		const FRoadNodeId Far = Network->GetOtherEnd(Dragged.Incident[0], Self);
-		if (const FRoadNode* Other = Network->GetNode(Far))
-		{
-			const FVector2D Along = (Dragged.Position - Other->Position).GetSafeNormal();
-			if (!Along.IsNearlyZero())
-			{
-				Out.Reference = Along;
-				Out.ReferenceAt = Other->Position;
-				Out.ReferenceName = TEXT("this road");
-			}
-		}
-	}
+	// FRoadDrawTool's own anchor gives about a junction - through the ONE function now, issue
+	// #303, rather than this tool's own copy of the same question.
+	RoadGuideAnchor::DescribeIncomingArm(*Network, Dragged, Network->NodeIdAt(Drag.Owner), Out);
 
 	// THE SHARED CANDIDATE LOOP, excluding the node in hand for the identical reason the
 	// chain excludes the one it extends from - see RoadGuideAnchor.

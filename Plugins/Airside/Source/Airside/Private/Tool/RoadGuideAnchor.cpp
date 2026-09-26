@@ -5,6 +5,34 @@
 #include "Solve/GuideArbiter.h"
 #include "Tool/RoadNaming.h"
 
+void RoadGuideAnchor::DescribeIncomingArm(const URoadNetwork& Network, const FRoadNode& Node,
+	FRoadNodeId NodeId, FGuideAnchor& Out)
+{
+	// EXACTLY ONE ARM GIVES A DIRECTION TO HOLD - see this function's own header comment for
+	// why more or fewer leaves Out untouched.
+	if (Node.Incident.Num() != 1)
+	{
+		return;
+	}
+
+	const FRoadNodeId Far = Network.GetOtherEnd(Node.Incident[0], NodeId);
+	const FRoadNode* Other = Network.GetNode(Far);
+	if (Other == nullptr)
+	{
+		return;
+	}
+
+	const FVector2D Along = (Node.Position - Other->Position).GetSafeNormal();
+	if (Along.IsNearlyZero())
+	{
+		return;
+	}
+
+	Out.Reference = Along;
+	Out.ReferenceAt = Other->Position;
+	Out.ReferenceName = TEXT("this road");
+}
+
 void RoadGuideAnchor::AddNodeCandidates(const URoadNetwork& InNetwork, const FVector2D& Origin,
 	int32 ExcludeIndex, FGuideAnchor& Out)
 {

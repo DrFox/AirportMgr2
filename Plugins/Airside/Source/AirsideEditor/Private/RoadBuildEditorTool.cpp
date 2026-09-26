@@ -229,6 +229,7 @@ void URoadBuildEditorTool::Shutdown(EToolShutdownType ShutdownType)
 	if (IBuildTool* Tool = Sess().GetActiveTool(); Tool != nullptr && Target != nullptr)
 	{
 		Tool->OnDeactivate(MakeHoverContext());
+		Sess().InvalidateFrameContextCache();
 	}
 
 	// A mid-drag transaction outlives OnClickDrag/OnClickRelease by design (see
@@ -253,6 +254,10 @@ void URoadBuildEditorTool::DeactivateOnUndo()
 	{
 		Tool->OnDeactivate(MakeHoverContext());
 	}
+
+	// The undo/redo that got here changed the graph by definition - the editor twin of
+	// ARoadBuildController::OnUndo/OnRedo's own invalidation.
+	Sess().InvalidateFrameContextCache();
 }
 
 ARoadNetworkActor* URoadBuildEditorTool::ResolveTarget() const
@@ -339,7 +344,15 @@ FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
 
 	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
 	// it rather than being folded into it.
-	return Sess().MakeContext(Target, Plane, Tunables, bRemoveHeld, bInsertHeld, bSuspendHeld);
+	//
+	// THROUGH THE SESSION'S CACHE, not a fresh MakeContext every time - issue #303. OnUpdateHover,
+	// Render and DrawHUD each funnel through this one function, and within one frame they ask it
+	// with the SAME plane hit (OnUpdateHover records it; Render/DrawHUD read it back via
+	// MakeHoverContext) and the same tunables/modifiers, so the whole snap + guide pipeline ran
+	// up to three times over for one cursor position before this. A key MISS - the cursor moved,
+	// the view zoomed, the lit tool changed - still rebuilds exactly as MakeContext always did;
+	// see FBuildSession::GetFrameContext.
+	return Sess().GetFrameContext(Target, Plane, Tunables, bRemoveHeld, bInsertHeld, bSuspendHeld);
 }
 
 void URoadBuildEditorTool::OnUpdateModifierState(int ModifierID, bool bIsOn)
@@ -432,6 +445,11 @@ void URoadBuildEditorTool::OnClickDrag(const FInputDeviceRay& DragPos)
 	}
 
 	Tool->OnDrag(MakeContext(DragPos));
+
+	// A drag step can move the graph (issue #303's cache has no other way to see it) with the
+	// cursor unmoved from the position that step itself just read - the same reasoning
+	// ARoadBuildController::UpdateDrag pairs with InvalidateToolReadoutCache.
+	Sess().InvalidateFrameContextCache();
 }
 
 void URoadBuildEditorTool::OnClickRelease(const FInputDeviceRay& ReleasePos)
@@ -453,6 +471,10 @@ void URoadBuildEditorTool::OnClickRelease(const FInputDeviceRay& ReleasePos)
 	{
 		Tool->OnDragEnd(MakeContext(ReleasePos));
 		DragTransaction.Reset();
+
+		// A drag end commits the graph the cache last saw mid-drag - see OnClickDrag's own
+		// invalidation for the same reasoning.
+		Sess().InvalidateFrameContextCache();
 		return;
 	}
 
@@ -460,6 +482,10 @@ void URoadBuildEditorTool::OnClickRelease(const FInputDeviceRay& ReleasePos)
 	// Ctrl+Z rather than part of whatever came before.
 	FScopedRoadBuildTransaction Transaction(LOCTEXT("RoadBuildClick", "Road Build"), Target);
 	Tool->OnClick(MakeContext(ReleasePos));
+
+	// A click can build or remove, exactly the class of change issue #303's cache cannot see on
+	// its own - the editor twin of ARoadBuildController::OnPrimaryReleased's own invalidation.
+	Sess().InvalidateFrameContextCache();
 }
 
 void URoadBuildEditorTool::OnTerminateDragSequence()
@@ -477,6 +503,10 @@ void URoadBuildEditorTool::OnTerminateDragSequence()
 		{
 			Tool->OnCancel(MakeHoverContext());
 		}
+
+		// A mid-drag cancel can un-build whatever the drag had staged - see OnClickDrag's own
+		// invalidation.
+		Sess().InvalidateFrameContextCache();
 	}
 
 	Gesture.Cancel();
@@ -554,6 +584,11 @@ void URoadBuildEditorTool::CancelGesture()
 	// lives, not which tool this instance speaks for.
 	Tool->OnCancel(MakeHoverContext());
 
+	// A cancel can heal a deletion it undoes or drop a part-drawn chain's stray node - either
+	// way the graph the cache last saw may no longer be current, exactly what
+	// ARoadBuildController::OnCancelGesture pairs with InvalidateToolReadoutCache for.
+	Sess().InvalidateFrameContextCache();
+
 	Gesture.Cancel();
 }
 
@@ -573,6 +608,10 @@ void URoadBuildEditorTool::CommitGesture()
 	// comment's "UNDO IS THE EDITOR'S").
 	FScopedRoadBuildTransaction Transaction(LOCTEXT("RoadBuildCommit", "Road Build"), Target);
 	Tool->OnCommit(MakeHoverContext());
+
+	// A commit places whatever the gesture staged - the editor twin of
+	// ARoadBuildController::OnBuild's own invalidation.
+	Sess().InvalidateFrameContextCache();
 }
 
 void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)

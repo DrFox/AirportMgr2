@@ -168,6 +168,41 @@ struct FBuildSessionTunables
 	 * ARoadBuildController::ToolPickRadius, whose comment this one keeps.
 	 */
 	double ToolPickRadius = 400.0;
+
+	/**
+	 * Field by field, like FBuildSession's own FFrameContextKey it exists for (issue #303):
+	 * GetFrameContext has to tell "the same tunables as last call" from "different", and every
+	 * field here feeds MakeContext's output directly - Snap sizes the chain, GuideSources gates
+	 * which columns the guide chain may propose, Limits is copied straight onto FToolContext -
+	 * so all of them have to agree, not just whichever happened to vary the day this was
+	 * written. No operator== on FRoadSnapSettings/FSnapGuideSettings/FRoadPlacementLimits
+	 * themselves to reuse: they are plain USTRUCTs with no reflection-based equality, and a
+	 * byte compare would read whatever padding a copy left behind.
+	 */
+	bool operator==(const FBuildSessionTunables& Other) const
+	{
+		return Snap.NodeRadius == Other.Snap.NodeRadius
+			&& Snap.SegmentRadius == Other.Snap.SegmentRadius
+			&& Snap.bSnapToSegments == Other.Snap.bSnapToSegments
+			&& Snap.MinSplitFromEndpoint == Other.Snap.MinSplitFromEndpoint
+			&& Snap.JunctionSnapFactor == Other.Snap.JunctionSnapFactor
+			&& GuideSources.bExtending == Other.GuideSources.bExtending
+			&& GuideSources.bLevelWith == Other.GuideSources.bLevelWith
+			&& GuideSources.bParallel == Other.GuideSources.bParallel
+			&& GuideSources.bCollinear == Other.GuideSources.bCollinear
+			&& GuideSources.bAngledFrom == Other.GuideSources.bAngledFrom
+			&& GuideSources.bMatchingGap == Other.GuideSources.bMatchingGap
+			&& GuideSources.bTaxiway == Other.GuideSources.bTaxiway
+			&& GuideSources.bServiceRoad == Other.GuideSources.bServiceRoad
+			&& GuideSources.bRunway == Other.GuideSources.bRunway
+			&& GuideSources.bApron == Other.GuideSources.bApron
+			&& GuideSources.bStand == Other.GuideSources.bStand
+			&& GuideSources.bWorld == Other.GuideSources.bWorld
+			&& Limits.MinSegmentLength == Other.Limits.MinSegmentLength
+			&& Limits.MinTurnDegrees == Other.Limits.MinTurnDegrees
+			&& Limits.NewRoadHalfWidth == Other.Limits.NewRoadHalfWidth
+			&& ToolPickRadius == Other.ToolPickRadius;
+	}
 };
 
 /**
@@ -307,6 +342,51 @@ public:
 		bool bSuspendGuides = false, int32 HoverAgent = 0) const;
 
 	/**
+	 * What MakeContext would return for these exact inputs, rebuilt only when they differ from
+	 * the last call THROUGH THIS FUNCTION - issue #303.
+	 *
+	 * BEFORE THIS, PIE alone had a "build once" convention: ARoadBuildController::PlayerTick
+	 * called MakeContext (through its own MakeToolContext) exactly once and shared the answer
+	 * with CollectToolReadout, Tick and the HUD (issue #167). The editor mode has no equivalent
+	 * "top of frame" hook - OnUpdateHover, Render and DrawHUD are three separate ITF callbacks
+	 * with no shared moment - so URoadBuildEditorTool::MakeContextAt ran the whole snap + guide
+	 * pipeline (a junction solve per live node outside its cheap-reject radius, then the guide
+	 * chain over every source) up to three times for one cursor position every frame. Keying
+	 * the cache on the ACTUAL inputs, rather than on which function called it, lets both drivers
+	 * share the one cache: two calls with the same key are the same question, whichever driver
+	 * or entry point asked it.
+	 *
+	 * A KEY MISS SIMPLY REBUILDS THROUGH MakeContext, so a moved cursor, a changed tunable, a
+	 * different modifier or a different active tool is never served a stale answer - only an
+	 * UNMOVED one gets cheaper. What the key CANNOT see is a network mutated with none of those
+	 * changing (a click landing exactly on the cached cursor position) - see
+	 * InvalidateFrameContextCache for how that gap is closed, the same way issue #190's
+	 * FToolReadoutKey needed one.
+	 */
+	const FToolContext& GetFrameContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
+		const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
+		bool bSuspendGuides = false, int32 HoverAgent = 0) const;
+
+	/**
+	 * Forces the next GetFrameContext to rebuild regardless of its key.
+	 *
+	 * EVERYTHING THAT CAN CHANGE WHAT A CONTEXT MEANS WITHOUT MOVING ITS INPUTS has to call
+	 * this - the same list ARoadBuildController::InvalidateToolReadoutCache already names for
+	 * issue #190's cache, extended here to a second one it now also clears: a click, a drag
+	 * step, a commit, a cancel, an undo or redo, a network cleared out from under the tool. A
+	 * tool or mode SWITCH is usually caught already - GetFrameContext's key includes
+	 * GetActiveTool() - except reselecting the tool already lit, which changes no pointer and
+	 * still drops a sticky Remove/Insert modifier; PIE's own SelectTool comment names that case.
+	 *
+	 * NINE HAND-PLACED CALLS ON THE PIE SIDE, one per site with no test that a tenth is not
+	 * missing - issue #303 leaves this exactly as risky as issue #190 already made it. Folding
+	 * every controller call through one invalidating wrapper (WithTool in the issue's own
+	 * wording) would make the list structural instead of hand-maintained; that is a separate
+	 * seam with its own test, deliberately not part of this change.
+	 */
+	void InvalidateFrameContextCache() const { bHasFrameContextCache = false; }
+
+	/**
 	 * Right click (or Escape, in the editor): step back out of whatever is part-drawn. With
 	 * nothing part-drawn in a build tool, put the tool down and return to Select (index 0).
 	 */
@@ -407,4 +487,53 @@ private:
 	/** See MakeContextCallCountForTest(). mutable for the same reason - MakeContext is const
 	 *  and this counts real work it did, not a decision. */
 	mutable int32 ContextBuildCountForTest = 0;
+
+	/**
+	 * Everything GetFrameContext's answer can depend on - issue #303, the frame-context twin of
+	 * ARoadBuildController::FToolReadoutKey.
+	 *
+	 * TARGET AND TOOL BY POINTER, deliberately: MakeContext reads GetActiveTool() itself (the
+	 * snap exclusion, EditHandles) rather than taking it as a parameter, so a tool or mode
+	 * switch that leaves every OTHER argument the same still has to miss the cache. Target is
+	 * an IRoadEditTarget*, not the URoadNetwork* underneath it, for the same reason MakeContext
+	 * itself takes one - a swapped target is a swapped network even when both currently hold
+	 * the same pointer value's contents.
+	 */
+	struct FFrameContextKey
+	{
+		const IRoadEditTarget* Target = nullptr;
+		const IBuildTool* Tool = nullptr;
+		FVector2D PlaneHit = FVector2D::ZeroVector;
+		FBuildSessionTunables Tunables;
+		bool bRemoveModifier = false;
+		bool bInsertModifier = false;
+		bool bSuspendGuides = false;
+		int32 HoverAgent = 0;
+
+		bool operator==(const FFrameContextKey& Other) const
+		{
+			return Target == Other.Target
+				&& Tool == Other.Tool
+				&& PlaneHit == Other.PlaneHit
+				&& Tunables == Other.Tunables
+				&& bRemoveModifier == Other.bRemoveModifier
+				&& bInsertModifier == Other.bInsertModifier
+				&& bSuspendGuides == Other.bSuspendGuides
+				&& HoverAgent == Other.HoverAgent;
+		}
+	};
+
+	/** Last frame's key, compared in GetFrameContext. Undefined content when
+	 *  bHasFrameContextCache is false - see that field. */
+	mutable FFrameContextKey LastFrameContextKey;
+
+	/** False before the first successful build and right after InvalidateFrameContextCache -
+	 *  same reason as ARoadBuildController::bHasReadoutKey: a fresh session or a just-
+	 *  invalidated one must rebuild rather than compare against a LastFrameContextKey that
+	 *  happens to read as a match by construction (every FVector2D defaults to zero). */
+	mutable bool bHasFrameContextCache = false;
+
+	/** See GetFrameContext(). mutable for the reason ContextBuildCountForTest is - MakeContext
+	 *  is const and this remembers real work it did, not a decision. */
+	mutable FToolContext CachedFrameContext;
 };
