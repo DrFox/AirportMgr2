@@ -388,6 +388,48 @@ struct IToolPreviewSink
 };
 
 /**
+ * One option a tool offers on one axis - "15 m" on a taxiway's width, "Concrete" on a
+ * runway's surface. See IBuildTool::GetVariantAxes.
+ *
+ * Id is what identity checks compare (the bar rebuilds when the Ids change, never on a
+ * count), so it is stable across calls and never localised. Label is what the player reads.
+ */
+struct FToolVariant
+{
+	FName Id;
+	FText Label;
+
+	/** A second line under the label, or empty. */
+	FText Detail;
+
+	/**
+	 * Whether the player may pick it. ALWAYS TRUE TODAY: this is the seam an unlock system
+	 * plugs into (docs/AirportManagerGDD.md's research tree), so a locked width greys out in
+	 * the row rather than vanishing from it, and SelectVariant refuses it on either gesture.
+	 */
+	bool bEnabled = true;
+};
+
+/** A width as a variant label - "10.5 m", "23 m". Shared by the road and runway tools so
+ *  the two rows cannot format one figure two ways. TotalWidth in uu (cm). */
+AIRSIDE_API FText VariantWidthLabel(double TotalWidth);
+
+/** One independent choice a tool offers, and which of its options is lit. */
+struct FToolVariantAxis
+{
+	FName Id;
+	FText Label;
+	TArray<FToolVariant> Options;
+
+	/**
+	 * The lit option, or INDEX_NONE for none. NONE IS A REAL ANSWER: a taxiway tool that has
+	 * not been told a width lays the level's own tuning, which need not be one of the presets -
+	 * see FRoadDrawTool::GetVariantAxes.
+	 */
+	int32 Current = INDEX_NONE;
+};
+
+/**
  * One selectable tool - Strategy, not State.
  *
  * Tools do NOT transition into one another: the player presses a number and picks one, so
@@ -456,6 +498,29 @@ struct AIRSIDE_API IBuildTool
 	 * that does nothing keeps every other tool as it was.
 	 */
 	virtual void OnReselect(const FToolContext& Context) {}
+
+	/**
+	 * The choices this tool offers - one axis per independent choice (a road's width; a
+	 * runway's width, surface and approach) - with the option each axis currently lights.
+	 *
+	 * ONE LIST, TWO GESTURES. The bar's variant row draws exactly this, and a tool that cycles
+	 * on OnReselect steps through exactly this, by calling SelectVariant on the next option.
+	 * Before it existed the cycle was the only gesture and nothing on screen said what it had
+	 * chosen; a bar with its own copy of the widths would have been a second list to keep in
+	 * agreement with the cycle, which is the shape CLAUDE.md's "lists that must agree are ONE
+	 * list" rules out.
+	 *
+	 * Silent by default, so the tools without choices (select, apron, stand...) report none and
+	 * the row hides. Out is appended to, never reset - the caller owns it.
+	 */
+	virtual void GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const {}
+
+	/**
+	 * Picks Option on Axis, as GetVariantAxes numbered them. False, and nothing changed, for an
+	 * axis or option that does not exist or an option that is not enabled - the bar can only
+	 * offer what the tool listed, but a stale row a tick behind a content change can still ask.
+	 */
+	virtual bool SelectVariant(const FToolContext& Context, int32 Axis, int32 Option) { return false; }
 
 	/**
 	 * Whether a guide may position this gesture's FIRST click.

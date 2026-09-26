@@ -107,20 +107,29 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 	}
 
 	// 2. RESELECTING CYCLES, wrapping at the end. Key-again is the runway tool's gesture
-	//    (FRunwayTool::OnReselect) and this is deliberately the same one.
+	//    (FRunwayTool::OnReselect) and this is deliberately the same one. IT STEPS FROM THE LIT
+	//    OPTION (2026-09-26, the variant row): the level's default may light a preset, and a
+	//    first press that jumped back to the narrowest would read as the row and the key
+	//    disagreeing. So the expectation is derived from what is lit, not assumed to be 0.
 	{
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
 		FToolContext Context = TestTool::ContextAt(*Actor, FVector2D::ZeroVector);
 
+		TArray<FToolVariantAxis> Axes;
+		Tool.GetVariantAxes(Context, Axes);
+		const int32 Lit = Axes.Num() > 0 ? Axes[0].Current : INDEX_NONE;
+		const int32 First = Lit == INDEX_NONE ? 0 : (Lit + 1) % Count;
+
 		Tool.OnReselect(Context);
-		TestEqual(TEXT("the first press picks the narrowest"), Tool.GetWidthIndex(), 0);
+		TestEqual(TEXT("the first press steps on from what is lit"), Tool.GetWidthIndex(), First);
 		for (int32 Press = 1; Press < Count; ++Press)
 		{
 			Tool.OnReselect(Context);
 		}
-		TestEqual(TEXT("and it walks the list to the end"), Tool.GetWidthIndex(), Count - 1);
+		TestEqual(TEXT("and a full lap of the list comes back round to one before it"),
+			Tool.GetWidthIndex(), (First + Count - 1) % Count);
 		Tool.OnReselect(Context);
-		TestEqual(TEXT("then wraps"), Tool.GetWidthIndex(), 0);
+		TestEqual(TEXT("then wraps to where it started"), Tool.GetWidthIndex(), First);
 	}
 
 	// 3. THE CHOSEN WIDTH REACHES THE ROAD. Without this the cycle is a counter that logs a
@@ -128,7 +137,9 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 	//    codebase has shipped three times.
 	{
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
-		Tool.OnReselect(TestTool::ContextAt(*Actor, FVector2D::ZeroVector));   // index 0
+		// A PICK, not a press: which index a press lands on now depends on what the level's
+		// default lights (block 2), and this block needs the narrowest specifically.
+		Tool.SelectVariant(TestTool::ContextAt(*Actor, FVector2D::ZeroVector), 0, 0);
 
 		const URoadProfile* Narrowest = Actor->ResolveWidthProfile(ERoadKind::Taxiway, 0);
 		if (!TestNotNull(TEXT("the narrowest profile loads"), Narrowest)) { return false; }
