@@ -12,6 +12,20 @@
 class ARoadNetworkActor;
 
 /**
+ * One label FViewportPreviewSink collected this frame - issue #304. A PrimitiveDrawInterface
+ * (Render's own sink) draws geometry, not text, so a tool's refusal reason used to have nowhere
+ * to land in the editor viewport at all (FViewportPreviewSink::Label was "deliberately
+ * nothing"), though PIE's ARoadBuildHUD has always drawn the identical call. See
+ * URoadBuildEditorTool::CollectPreviewLabels, the one place this is filled.
+ */
+struct FEditorPreviewLabel
+{
+	FVector2D At = FVector2D::ZeroVector;
+	FString Text;
+	EPreviewStyle Style = EPreviewStyle::Pending;
+};
+
+/**
  * Makes one adapter around one build tool, named by its index into ToolRegistry() rather
  * than a `Kind` enum - see issue #33. A single builder class parameterised by index rather
  * than one per tool: what differs between them is one number, and one class per tool would
@@ -116,6 +130,16 @@ public:
 	 * across all three without needing to fake UE's renderer.
 	 */
 	void HoverFrameContextForTest() const { MakeHoverContext(); }
+
+	/**
+	 * The TEXT of every label DrawHUD would draw this frame - issue #304's own composition
+	 * test (a too-short runway drag must put "too short" in this set), driven without a real
+	 * FCanvas/SceneView, same precedent as SetViewCentreDistanceForTest/HoverFrameContextForTest
+	 * standing in for what a live viewport would otherwise be needed for. Positions and styles
+	 * are deliberately left out: the point under test is that the text REACHES the editor at
+	 * all, which CollectPreviewLabels itself (called by both this and DrawHUD) is what proves.
+	 */
+	TArray<FString> CollectPreviewLabelTextForTest() const;
 
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
@@ -238,6 +262,17 @@ private:
 
 	/** The shared body of both: everything that follows from a plane position. */
 	FToolContext MakeContextAt(const FVector2D& Plane) const;
+
+	/**
+	 * Every label the active tool's preview describes, at the current hover - issue #304.
+	 * Runs BuildPreview a SECOND time, independent of Render's own call, with a sink built with
+	 * no PDI (Marker/Line/CrossMark no-op on it - see FViewportPreviewSink's own comment): the
+	 * same shape DrawHUD already re-runs BuildReadout in, rather than reusing Render's state
+	 * across two ITF callbacks with no shared "top of frame" hook (see that function's header
+	 * comment). Cheap since issue #303 - MakeHoverContext() is cached, so only the tool's own
+	 * BuildPreview body runs twice. Called from DrawHUD and from CollectPreviewLabelTextForTest.
+	 */
+	void CollectPreviewLabels(TArray<FEditorPreviewLabel>& Out) const;
 
 	/** The network actor in the editor world, created if the level has none. */
 	ARoadNetworkActor* ResolveTarget() const;

@@ -64,6 +64,17 @@ namespace
 
 		virtual void Marker(const FVector2D& At, EPreviewStyle Style) override
 		{
+			// NO PDI is a supported caller now (issue #304): CollectPreviewLabels builds one of
+			// these with PDI=nullptr purely to run BuildPreview for its Label() calls, the same
+			// way DrawHUD already re-runs BuildReadout independently of Render's own call - see
+			// that function's header comment. Marker/Line/CrossMark below guard it for exactly
+			// that caller; Render's own construction always has a real PDI (checked before this
+			// class is ever built there), so nothing changes for the 3D viewport.
+			if (PDI == nullptr)
+			{
+				return;
+			}
+
 			// A ring in WORLD units here, unlike the HUD's pixels: the viewport gives no
 			// screen size to work in, and a marker sized against the road at least stays
 			// meaningful when the camera moves.
@@ -87,6 +98,12 @@ namespace
 
 		virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle Style) override
 		{
+			// See Marker's own comment on the null guard.
+			if (PDI == nullptr)
+			{
+				return;
+			}
+
 			// bScreenSpace = TRUE. Thickness is otherwise WORLD units: 3 uu is 3 cm, a
 			// hairline over an airport, which is why these read as far thinner than the
 			// runtime HUD's pixel-width lines.
@@ -96,7 +113,8 @@ namespace
 
 		virtual void CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style) override
 		{
-			if (Along.IsNearlyZero())
+			// See Marker's own comment on the null guard.
+			if (PDI == nullptr || Along.IsNearlyZero())
 			{
 				return;
 			}
@@ -107,18 +125,28 @@ namespace
 				Colour(Style), SDPG_Foreground, 3.0f, 0.0f, true);
 		}
 
+		/**
+		 * COLLECTS, no longer "deliberately nothing" (issue #304). A PrimitiveDrawInterface
+		 * still draws geometry, not text, so Render's own call site (a real PDI) never asks for
+		 * these back - but DrawHUD's FCanvas can draw text, and until now had no way to reach
+		 * what a tool's preview described here: every refusal reason ("too short: %.0f m",
+		 * WhyStandRefused, every guide description, the purse quote) existed only in PIE's
+		 * ARoadBuildHUD::Label. See URoadBuildEditorTool::CollectPreviewLabels for the caller.
+		 */
 		virtual void Label(const FVector2D& At, const FString& Text, EPreviewStyle Style) override
 		{
-			// Deliberately nothing. A PrimitiveDrawInterface draws geometry, not text, and a
-			// refusal reason rendered as a squiggle is worse than one left to the log. The
-			// runtime HUD shows these; here the tool still refuses, it just says so quietly.
+			Labels.Add({ At, Text, Style });
 		}
+
+		/** What Label collected this call - see CollectPreviewLabels. */
+		const TArray<FEditorPreviewLabel>& CollectedLabels() const { return Labels; }
 
 	private:
 		FVector Lift(const FVector2D& Plane) const { return FVector(Plane.X, Plane.Y, PlaneZ); }
 		FVector Camera = FVector::ZeroVector;
 		double PerDistance = 0.0;
 		double FixedRadius = 0.0;
+		TArray<FEditorPreviewLabel> Labels;
 
 		/**
 		 * The SAME table ARoadBuildHUD seeds its UPROPERTYs from - see PreviewPalette.h.
@@ -717,15 +745,49 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 
 }
 
+void URoadBuildEditorTool::CollectPreviewLabels(TArray<FEditorPreviewLabel>& Out) const
+{
+	Out.Reset();
+
+	IBuildTool* Tool = Sess().GetActiveTool();
+	if (Tool == nullptr || Target == nullptr || !bHoverValid)
+	{
+		return;
+	}
+
+	// NO PDI: this call exists only for the TEXT a tool's preview describes, never for the
+	// markers/lines/cross-marks a PrimitiveDrawInterface draws - Render's own sink, with a real
+	// PDI, already draws those every frame. See FViewportPreviewSink's own null-guard comment.
+	FViewportPreviewSink Sink(nullptr, Target->SurfaceZ, FVector::ZeroVector, 0.0, 0.0);
+	Tool->BuildPreview(MakeHoverContext(), Sink);
+	Out = Sink.CollectedLabels();
+}
+
+TArray<FString> URoadBuildEditorTool::CollectPreviewLabelTextForTest() const
+{
+	TArray<FEditorPreviewLabel> Labels;
+	CollectPreviewLabels(Labels);
+
+	TArray<FString> Out;
+	Out.Reserve(Labels.Num());
+	for (const FEditorPreviewLabel& Label : Labels)
+	{
+		Out.Add(Label.Text);
+	}
+	return Out;
+}
+
 void URoadBuildEditorTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* RenderAPI)
 {
-	// SURFACES BuildReadout IN THE EDITOR (issue #185). Nothing here ever called it before -
-	// FViewportPreviewSink::Label is "deliberately nothing" because a PrimitiveDrawInterface
-	// draws geometry, not text, which is exactly why this uses DrawHUD's own FCanvas instead
-	// of Render's PDI: the same split ARoadBuildHUD keeps between its world-space ghost
-	// (DrawNodes/DrawStands) and its canvas panel (DrawPlotPanel). Without this, a fuel
-	// depot's bay counts, its warnings and whether it could even commit were invisible in the
-	// editor while the runtime HUD had always shown them.
+	// SURFACES BuildReadout IN THE EDITOR (issue #185), AND EVERY PREVIEW LABEL (issue #304) -
+	// PrimitiveDrawInterface draws geometry, not text, which is exactly why both use DrawHUD's
+	// own FCanvas instead of Render's PDI: the same split ARoadBuildHUD keeps between its
+	// world-space ghost (DrawNodes/DrawStands) and its canvas panel (DrawPlotPanel). Before
+	// #185, a fuel depot's bay counts, warnings and whether it could even commit were invisible
+	// in the editor while the runtime HUD had always shown them. Before #304,
+	// FViewportPreviewSink::Label was "deliberately nothing" for the identical reason and every
+	// refusal reason a tool describes - "too short: %.0f m", WhyStandRefused, every guide
+	// description - existed only in PIE; see CollectPreviewLabels below.
 	IBuildTool* Tool = Sess().GetActiveTool();
 	const FSceneView* SceneView = RenderAPI != nullptr ? RenderAPI->GetSceneView() : nullptr;
 	if (Tool == nullptr || Target == nullptr || Canvas == nullptr || SceneView == nullptr || !bHoverValid)
@@ -761,7 +823,19 @@ void URoadBuildEditorTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* Rend
 			: TEXT("Build"));
 	}
 
-	if (Lines.Num() == 0)
+	// EVERY LABEL THE TOOL'S OWN PREVIEW DESCRIBES (issue #304) - "too short: %.0f m",
+	// WhyStandRefused, every guide description, the purse quote. A SEPARATE BuildPreview call
+	// from BuildReadout's just above, matching this function's own established shape: it
+	// already re-runs the tool's preview independently of Render's own call rather than
+	// sharing state across the two ITF callbacks (see this function's header comment on why
+	// there is no shared "top of frame" hook). Cheap to repeat since issue #303:
+	// MakeHoverContext() is cached on the session, so the only work actually redone is the
+	// tool's own BuildPreview body - the same cost this function's BuildReadout call above
+	// already pays a second time every frame.
+	TArray<FEditorPreviewLabel> Labels;
+	CollectPreviewLabels(Labels);
+
+	if (Lines.Num() == 0 && Labels.Num() == 0)
 	{
 		return;
 	}
@@ -772,24 +846,45 @@ void URoadBuildEditorTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* Rend
 		return;
 	}
 
-	// THE SAME CURSOR THE GHOST IS DRAWN AT (LastPlaneHit), projected with the view's OWN
-	// camera rather than re-deriving one - RenderAPI->GetSceneView() is exactly what the
-	// engine's own tools use for this (UMeshInspectorTool::DrawHUD, MeshModelingToolsExp).
-	FVector2D PixelPos;
-	const FVector WorldPos(Sess().LastPlaneHit(), Target->SurfaceZ);
-	if (!SceneView->WorldToPixel(WorldPos, PixelPos))
+	// DPI-SCALED, like DrawShadowedString's every other caller in the engine: WorldToPixel
+	// returns a physical pixel from the scene view, and Canvas expects DPI-independent
+	// coordinates.
+	const float DPIScale = Canvas->GetDPIScale();
+
+	if (Lines.Num() > 0)
 	{
-		return;
+		// THE SAME CURSOR THE GHOST IS DRAWN AT (LastPlaneHit), projected with the view's OWN
+		// camera rather than re-deriving one - RenderAPI->GetSceneView() is exactly what the
+		// engine's own tools use for this (UMeshInspectorTool::DrawHUD, MeshModelingToolsExp).
+		FVector2D PixelPos;
+		const FVector WorldPos(Sess().LastPlaneHit(), Target->SurfaceZ);
+		if (SceneView->WorldToPixel(WorldPos, PixelPos))
+		{
+			float Y = static_cast<float>(PixelPos.Y) / DPIScale;
+			for (const FString& Line : Lines)
+			{
+				Canvas->DrawShadowedString(static_cast<float>(PixelPos.X) / DPIScale, Y, *Line, Font, FLinearColor::White);
+				Y += Font->GetMaxCharHeight();
+			}
+		}
 	}
 
-	// DPI-SCALED, like DrawShadowedString's every other caller in the engine: PixelPos is a
-	// physical pixel from the scene view, and Canvas expects DPI-independent coordinates.
-	const float DPIScale = Canvas->GetDPIScale();
-	float Y = static_cast<float>(PixelPos.Y) / DPIScale;
-	for (const FString& Line : Lines)
+	// EACH LABEL AT ITS OWN PLANE POSITION, not stacked with Lines above: a refusal reason
+	// belongs beside the point it describes (FRunwayTool::BuildPreview's Far threshold, say),
+	// which is not necessarily where the cursor sits - PIE's own ARoadBuildHUD::Label makes the
+	// identical choice, projecting the label's own At rather than the readout's cursor. COLOURED
+	// BY STYLE, not the readout's flat white, the same palette FViewportPreviewSink's Marker/
+	// Line/CrossMark already draw the rest of the preview in.
+	for (const FEditorPreviewLabel& Label : Labels)
 	{
-		Canvas->DrawShadowedString(static_cast<float>(PixelPos.X) / DPIScale, Y, *Line, Font, FLinearColor::White);
-		Y += Font->GetMaxCharHeight();
+		FVector2D LabelPixelPos;
+		if (!SceneView->WorldToPixel(FVector(Label.At, Target->SurfaceZ), LabelPixelPos))
+		{
+			continue;
+		}
+		Canvas->DrawShadowedString(static_cast<float>(LabelPixelPos.X) / DPIScale,
+			static_cast<float>(LabelPixelPos.Y) / DPIScale, *Label.Text, Font,
+			PreviewPalette::Default(Label.Style));
 	}
 }
 
