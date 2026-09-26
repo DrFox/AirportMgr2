@@ -75,7 +75,7 @@ FFitVerdict VehicleFit::Judge(const FGuidelineEdge& Edge, const FVehicle& Vehicl
 		// visible in `Mcp.py log`.
 		if (!Edge.DerivedFrom.IsSet())
 		{
-			UE_LOG(LogAirside, Verbose,
+			UE_LOG(LogAirsideTraffic, Verbose,
 				TEXT("VehicleFit::Judge says nothing for turn path %d->%d: MinRadius is 0 ")
 				TEXT("(a straight-through turn, or one not yet measured)"),
 				Edge.A.Index, Edge.B.Index);
@@ -99,7 +99,7 @@ FFitVerdict VehicleFit::Judge(const FGuidelineEdge& Edge, const FVehicle& Vehicl
 		// again, a split half nothing has re-measured yet (issue #324).
 		if (Widest > 0.0)
 		{
-			UE_LOG(LogAirside, Verbose,
+			UE_LOG(LogAirsideTraffic, Verbose,
 				TEXT("VehicleFit::Judge says nothing for edge %d->%d: MinRadius %.0f measured, ")
 				TEXT("but no per-sample clearance (a balloon over grass, or not yet re-measured)"),
 				Edge.A.Index, Edge.B.Index, Edge.MinRadius);
@@ -123,7 +123,7 @@ FFitVerdict VehicleFit::Judge(const FGuidelineEdge& Edge, const FVehicle& Vehicl
 		// SAY NOTHING RATHER THAN GUESS (the guard #288 added). Verbose, so this is visible in
 		// `Mcp.py log` beside the two guards above rather than only inferred from a route that
 		// quietly admitted something it should have refused.
-		UE_LOG(LogAirside, Verbose,
+		UE_LOG(LogAirsideTraffic, Verbose,
 			TEXT("VehicleFit::Judge says nothing for edge %d->%d: %d clearance sample(s) measured ")
 			TEXT("against %d path sample(s) (a different curve than the one this was measured on)"),
 			Edge.A.Index, Edge.B.Index, Edge.ClearInnerAt.Num(), Path.Num());

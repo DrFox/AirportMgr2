@@ -1351,6 +1351,8 @@ void FRoadGuidelineBuilder::MeasureSplitHalf(URoadNetwork& Network, FGuidelineEd
 	// static, so there is no reason to duplicate its body for a five-field write instead.
 	FGuidelineEdge Scratch = *Existing;
 	MeasureTurn(Scratch, A->Position, B->Position, Pavement);
+	// RETURN DISCARDED: false only means Half is dead, which Existing already ruled out above
+	// and nothing between there and here removes an edge to make happen.
 	Network.SetGuidelineEdgeMeasurement(Half, Scratch.MinRadius, Scratch.ClearInner, Scratch.ClearOuter,
 		MoveTemp(Scratch.ClearInnerAt), MoveTemp(Scratch.ClearOuterAt));
 }
