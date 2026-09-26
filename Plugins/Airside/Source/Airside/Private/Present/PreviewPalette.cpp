@@ -70,6 +70,12 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// Where the service vehicles park - a consequence of where the aircraft sits, not a
 	// thing that IS one (contrast StandPose).
 	case EPreviewStyle::ServiceAnchor:                return FLinearColor(0.9f, 0.6f, 0.2f);
+
+	// NEAR ServiceAnchor's amber-orange (both say "service ground here"), but distinct from it
+	// and from every other style in this table: a ghost stand's far edge is drawn beside its
+	// own Pinned/Provisional white sides in the SAME frame, so it has to read as its own thing
+	// rather than blend into the rectangle it is one edge of.
+	case EPreviewStyle::ServiceEdge:                 return FLinearColor(0.95f, 0.5f, 0.15f);
 	}
 
 	// Reached only if EPreviewStyle grew a value with no case above - not caught at compile
@@ -175,6 +181,13 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 	case EPreviewStyle::ReverseGuideline:
 		Look.RadiusScale = 0.35f;
 		Look.ThicknessScale = 0.5f;
+		break;
+
+	// THE SAME WEIGHT AS Pinned/Provisional (2.0): it is still one edge of the boundary the
+	// player is drawing, and a thinner far edge would read as less real than the other three
+	// rather than merely a different meaning.
+	case EPreviewStyle::ServiceEdge:
+		Look.ThicknessScale = 2.0f;
 		break;
 	}
 

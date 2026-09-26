@@ -326,11 +326,11 @@ bool FStandPlotUndoRemovesTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FStandPlotUnfitLetterRefusedTest,
-	"Airside.Present.StandPlot.UnfitLetterRefused",
+	FStandPlotEveryLetterBuildsTest,
+	"Airside.Present.StandPlot.EveryLetterBuilds",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FStandPlotUnfitLetterRefusedTest::RunTest(const FString& Parameters)
+bool FStandPlotEveryLetterBuildsTest::RunTest(const FString& Parameters)
 {
 	using namespace StandPlotPlacementTest;
 
@@ -341,35 +341,34 @@ bool FStandPlotUnfitLetterRefusedTest::RunTest(const FString& Parameters)
 
 	Actor->ClearNetwork();
 
-	// Task 1's own measured table (StandLayoutTest.cpp,
-	// Airside.Entities.StandLayoutEveryLetterReport): A and B DO NOT FIT their own floor,
-	// C through F FIT. This test names exactly the two that do not, so it fails loudly - not
-	// silently - the day a template changes what fits.
-	const EIcaoCode DoesNotFit[] = { EIcaoCode::A, EIcaoCode::B };
-	IRoadEditTarget* Target = Actor;
-
-	for (const EIcaoCode Letter : DoesNotFit)
+	// REPLACES FStandPlotUnfitLetterRefusedTest (task 6, far-side-entry spec): A and B used to
+	// be refused here because their bays were laid for the fuel truck - Task 1's own measured
+	// table named them the two that did not fit. Every letter now has its own DESIGN VEHICLE
+	// (UAirsideSettings::ResolveStandDesignVehicle: the utility tow for A/B, the fuel truck for
+	// C-F) and A/B's floors were widened for the tow's lane, so
+	// Airside.Entities.StandLayoutEveryLetterBuilds already pins every template fitting its own
+	// floor at the Model/ level - WhyStandRefused's "cannot be built yet" branch this test used
+	// to exercise is UNREACHABLE from here now, and asserting it would just pin a template that
+	// happens to still be too small rather than the placement path. This test asks the question
+	// one level up: the actor's own cache resolves a real UEntityDefinition for every letter, so
+	// nothing between the template and PlaceStandInPlot silently drops one.
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
-		FVector2D A, B;
-		const TArray<FVector2D> Rect = FloorRect(Letter, 1000.0 * (static_cast<double>(Letter) + 1.0), A, B);
-
-		const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
-		TestEqual(*FString::Printf(TEXT("Code %s's own floor is refused"), IcaoCode::ToLetter(Letter)),
-			Index, INDEX_NONE);
-
-		const FString Reason = Target->WhyStandRefused(Rect);
-		TestTrue(*FString::Printf(TEXT("Code %s's reason says it cannot be built yet"),
-				IcaoCode::ToLetter(Letter)),
-			Reason.Contains(TEXT("cannot be built yet")));
+		TestNotNull(*FString::Printf(TEXT("Code %s resolves a stand definition"), IcaoCode::ToLetter(Letter)),
+			Actor->ResolveStandDefinitionFor(Letter));
 	}
 
 	return true;
 }
 
 // FIX ROUND 1: PlacesCodeC alone only proves the one letter with an authored asset. D, E and
-// F all go through ResolveStandDefinitionFor's lazily-built cache instead (Task 1's table:
-// they FIT their own floor, unlike A and B) - this loop is the same round trip for each of
-// them, one stand per letter so none can overlap another.
+// F all go through ResolveStandDefinitionFor's lazily-built cache instead - this loop is the
+// same round trip for each of them, one stand per letter so none can overlap another.
+//
+// A AND B JOINED THE LOOP task 6 (far-side-entry spec): they used to be the two letters Task
+// 1's table named as not fitting their own floor - FStandPlotUnfitLetterRefusedTest pinned
+// that - and now fit like every other letter (their own design vehicle, a widened floor for
+// its lane), so the same round trip that already proves D/E/F proves them too.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotPlacesOtherLettersTest,
 	"Airside.Present.StandPlot.PlacesOtherLetters",
@@ -386,7 +385,7 @@ bool FStandPlotPlacesOtherLettersTest::RunTest(const FString& Parameters)
 
 	Actor->ClearNetwork();
 
-	const EIcaoCode Fits[] = { EIcaoCode::D, EIcaoCode::E, EIcaoCode::F };
+	const EIcaoCode Fits[] = { EIcaoCode::A, EIcaoCode::B, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F };
 	IRoadEditTarget* Target = Actor;
 
 	for (const EIcaoCode Letter : Fits)

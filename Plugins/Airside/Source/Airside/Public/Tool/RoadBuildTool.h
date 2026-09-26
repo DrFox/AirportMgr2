@@ -338,6 +338,18 @@ enum class EPreviewStyle : uint8
 
 	/** The guideline graph's reverse-leg edges - context, like Guideline, marking where reverse turns are. */
 	ReverseGuideline,
+
+	/**
+	 * A drawn stand's FAR edge - opposite the taxiway its entrance opens off, where a service
+	 * vehicle now enters and leaves (far-side-entry spec §2, task 6). NOT Pinned/Provisional:
+	 * those say whether the gesture has settled, which is a fact about the OTHER three edges
+	 * only - this edge means the same thing, service access, whether the depth is still being
+	 * dragged or locked, so it keeps its own style through both stages rather than borrowing
+	 * theirs. AT THE END, like Pinned/Provisional/Guide/Handle/ReverseRoute/ReverseGuideline
+	 * above and for the same reason: this is a UENUM and renumbering it repoints any value
+	 * already serialised against it.
+	 */
+	ServiceEdge,
 };
 
 /**

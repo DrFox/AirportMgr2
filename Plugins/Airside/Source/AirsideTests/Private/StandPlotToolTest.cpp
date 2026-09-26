@@ -174,6 +174,18 @@ namespace StandPlotToolFixture
 				return L.Style == Style && (L.From.Equals(Point, 1.0) || L.To.Equals(Point, 1.0));
 			});
 		}
+
+		/** Whether a line in Style runs exactly From->To - either endpoint order, since a sink
+		 *  MEANS the segment, not the direction it happened to be drawn in. */
+		bool HasSegment(const FVector2D& From, const FVector2D& To, EPreviewStyle Style) const
+		{
+			return Lines.ContainsByPredicate([&](const FLine& L)
+			{
+				return L.Style == Style
+					&& ((L.From.Equals(From, 1.0) && L.To.Equals(To, 1.0))
+						|| (L.From.Equals(To, 1.0) && L.To.Equals(From, 1.0)));
+			});
+		}
 	};
 }
 
@@ -696,6 +708,48 @@ bool FStandPlotPreviewDrawsTheKeepOutTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotDrawsServiceEdgeTest,
+	"Airside.Tool.StandPlot.DrawsServiceEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotDrawsServiceEdgeTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a Code C stand locked"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+
+	TArray<FVector2D> Shown;
+	Tool.Rect(At(Actor, AnchorCursor), Shown);
+	if (!TestEqual(TEXT("four corners"), Shown.Num(), 4)) { return false; }
+
+	FStandPlotSink Sink;
+	Tool.BuildPreview(At(Actor, AnchorCursor), Sink);
+
+	// THE FAR EDGE - opposite the taxiway the entrance edge (0->1) opens off, where service
+	// vehicles now enter and leave (far-side-entry spec §2). StandBox.h's own convention: the
+	// entrance edge is 0->1, then inward to 2 and 3, so the far edge is exactly 2->3.
+	TestTrue(TEXT("one ServiceEdge segment equal to outline corners 2->3"),
+		Sink.HasSegment(Shown[2], Shown[3], EPreviewStyle::ServiceEdge));
+
+	// EXACTLY ONE, not the rest of the rectangle relabelled: the entrance (0->1) and the two
+	// sides (1->2, 3->0) still mean Pinned/Provisional - only the far edge means ServiceEdge.
+	const int32 ServiceEdgeCount = Sink.Lines.FilterByPredicate(
+		[](const FStandPlotSink::FLine& L) { return L.Style == EPreviewStyle::ServiceEdge; }).Num();
+	TestEqual(TEXT("exactly one ServiceEdge segment"), ServiceEdgeCount, 1);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotZeroDepthClickStaysTest,
 	"Airside.Tool.StandPlot.ZeroDepthClickStays",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -780,10 +834,13 @@ bool FStandPlotDiagonalTaxiwayReadsItsLetterTest::RunTest(const FString& Paramet
 
 		// EVERY LETTER AT ITS EXACT FLOOR, from BOTH SIDES of the taxiway - the two sides wind the
 		// rectangle opposite ways, and the facade reverses one of them, measuring the OPPOSITE
-		// edge. A and B cannot be built yet, so for them only the readout's letter is asserted.
+		// edge. EVERY LETTER BUILDS since task 6 (far-side-entry spec): A and B used to be
+		// refused here (their bays were laid for the truck), so bBuildable is now always true
+		// rather than Letter >= EIcaoCode::C - kept as a named bool, not deleted outright, so a
+		// future letter that genuinely cannot build still has somewhere to say so.
 		for (EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 		{
-			const bool bBuildable = Letter >= EIcaoCode::C;
+			const bool bBuildable = true;
 			const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(Letter));
 			const double Depth = IcaoCode::StandDepthForLetter(Letter);
 			const FString Expected = FString(TEXT("Code ")) + IcaoCode::ToLetter(Letter);

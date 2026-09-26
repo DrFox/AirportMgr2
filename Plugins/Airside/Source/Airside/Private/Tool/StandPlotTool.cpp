@@ -213,15 +213,20 @@ void FStandPlotTool::Describe(const FToolContext& Context, TConstArrayView<FVect
 		return;
 	}
 
-	// The other three edges, provisional while the depth still follows the cursor. UNLIKE THE
-	// DEPOT'S THREE EDGES, one style covers all of them: a rectangle's fourth corner is
-	// MECHANICALLY DERIVED from the other three (Shape() above), never its own click, so it is
-	// exactly as settled as they are the moment the depth is pinned - it has no independent
-	// freedom the way the depot's own near corner does before its own fourth click.
+	// The two SIDE edges, provisional while the depth still follows the cursor. UNLIKE THE
+	// DEPOT'S THREE EDGES, one style covers both: a rectangle's fourth corner is MECHANICALLY
+	// DERIVED from the other three (Shape() above), never its own click, so it is exactly as
+	// settled as they are the moment the depth is pinned - it has no independent freedom the
+	// way the depot's own near corner does before its own fourth click.
 	const int32 PinnedNow = PinnedCount();
 	const EPreviewStyle Rest = PinnedNow >= 3 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional;
 	Sink.Line(Shown[1], Shown[2], Rest);
-	Sink.Line(Shown[2], Shown[3], Rest);
+
+	// THE FAR EDGE (2->3): opposite the taxiway the entrance (0->1) opens off, where a service
+	// vehicle now enters and leaves (far-side-entry spec §2). ServiceEdge, NOT Rest, because
+	// this edge's meaning is service access whether the depth is still being dragged or locked
+	// - unlike the two side edges, it is not ABOUT the gesture's own settledness.
+	Sink.Line(Shown[2], Shown[3], EPreviewStyle::ServiceEdge);
 	Sink.Line(Shown[3], Shown[0], Rest);
 
 	DescribeLetter(Context, Shown, Sink);
