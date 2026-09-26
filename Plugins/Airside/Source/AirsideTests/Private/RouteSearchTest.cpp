@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Model/Airframe.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteFollower.h"
@@ -187,7 +188,8 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 	// and landing on the goal - if cost and motion ever used different geometry, an agent
 	// would stop short of, or overshoot, the line it was shown.
 	{
-		FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+		FRoutePlan Plan = TestGraph::Probe(*Net, West, East, ETraversalClass::Aircraft);
 
 		FRouteFollower Follower;
 		// Every limit wide open: this asks whether the follower walks the SAME GEOMETRY the

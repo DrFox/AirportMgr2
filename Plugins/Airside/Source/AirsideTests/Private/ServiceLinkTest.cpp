@@ -973,8 +973,8 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
-	const FRoutePlan Plan = TestGraph::Probe(*Net, RoadWest, AnchorNode(*Net, Placed, TEXT("HydrantPit")),
-		ETraversalClass::GroundVehicle);
+	const FGuidelineNodeId Hydrant = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
+	const FRoutePlan Plan = TestGraph::Probe(*Net, RoadWest, Hydrant, ETraversalClass::GroundVehicle);
 	if (!TestTrue(TEXT("a truck routes from the road to the hydrant"), Plan.IsValid())
 		|| Plan.Polyline.Num() < 2)
 	{
@@ -1007,7 +1007,7 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 	// the straight-line distance is generous - the lane is a detour by construction - and far
 	// short of anything that could be called a tour.
 	const FGuidelineNode* Start = Net->GetGuidelineNode(RoadWest);
-	const FGuidelineNode* Goal = Net->GetGuidelineNode(Query.Goal);
+	const FGuidelineNode* Goal = Net->GetGuidelineNode(Hydrant);
 	if (Start != nullptr && Goal != nullptr)
 	{
 		TestTrue(TEXT("and it is a short journey, not a tour of the airport"),
