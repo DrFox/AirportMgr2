@@ -7,6 +7,7 @@
 
 #include "CoreMinimal.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/Vehicle.h"
@@ -578,6 +579,36 @@ namespace BendProbe
 			Out.LaneText += FString::Printf(TEXT("%d nodes (%d curved) %.0f uu, kink %.1f; "), Chain.Pieces.Num() + 1, Curved, Length, Kink);
 		}
 		return Out;
+	}
+
+	/**
+	 * THE SMOOTH-SHAPE ASSERTIONS, held once (#301): RigTestCourseTest's BendsAreSmooth and
+	 * BendLaneTest's EveryTierIsSmooth each ran these five TestTrue calls by hand, in step,
+	 * naming the same rules (KinkThreshold, TightestFraction, GuidelineGeom::BendPieceLength)
+	 * in two files a change to one had to remember to repeat in the other. Runs the SAME FIVE
+	 * checks either caller ran inline before, so a test's own assertion count is unchanged -
+	 * only the source is not duplicated.
+	 *
+	 * Label names which bend a failure is about ("bend (12000, 6000)", "Narrow -> Wide"), and
+	 * [MinLanes, MaxLanes] is the one thing that legitimately differs between the two callers:
+	 * the course's tiers see a variable lane count (>= 1) where a synthetic two-arm bend always
+	 * sees exactly two - everything else here is the shared rule.
+	 */
+	inline void JudgeBend(FAutomationTestBase& Test, const FString& Label, const FSmoothness& S,
+		double InnerArcRadius, int32 MinLanes, int32 MaxLanes = MAX_int32)
+	{
+		Test.TestTrue(FString::Printf(TEXT("%s: the inner edge is smooth (kink %.2f deg at (%.0f, %.0f))"),
+			*Label, S.InnerKink, S.InnerAt.X, S.InnerAt.Y), S.InnerKink <= KinkThreshold);
+		Test.TestTrue(FString::Printf(TEXT("%s: the outer edge is smooth (kink %.2f deg at (%.0f, %.0f))"),
+			*Label, S.OuterKink, S.OuterAt.X, S.OuterAt.Y), S.OuterKink <= KinkThreshold);
+		Test.TestTrue(FString::Printf(TEXT("%s: no edge bends tighter than half its inner arc (%.0f of %.0f)"),
+			*Label, S.Tightest, InnerArcRadius), S.Tightest >= TightestFraction * InnerArcRadius - 1.0);
+		Test.TestTrue(FString::Printf(TEXT("%s: every lane is smooth (kink %.2f deg)"), *Label, S.LaneKink),
+			S.LaneKink <= KinkThreshold);
+		Test.TestTrue(FString::Printf(TEXT("%s: %d lane(s), laid by one length rule (%.0f - %.0f uu)"),
+			*Label, S.Lanes, S.ShortestStep, S.LongestStep),
+			S.Lanes >= MinLanes && S.Lanes <= MaxLanes
+				&& S.LongestStep <= GuidelineGeom::BendPieceLength + 1.0 && S.ShortestStep >= 0.5 * GuidelineGeom::BendPieceLength);
 	}
 }
 

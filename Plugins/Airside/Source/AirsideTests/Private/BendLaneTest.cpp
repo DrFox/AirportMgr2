@@ -408,13 +408,11 @@ bool FBendLaneSmoothTest::RunTest(const FString& Parameters)
 		const BendProbe::FSmoothness S = BendProbe::MeasureSmoothness(*Bend.Net, *Junction, Bend.Corner);
 		AddInfo(FString::Printf(TEXT("%s: inner kink %.2f, outer %.2f, tightest %.0f of arc %.0f, ramps %.0f / %.0f, lanes: %s"),
 			*Name, S.InnerKink, S.OuterKink, S.Tightest, Note->InnerArcRadius, Note->Ramp[0], Note->Ramp[1], *S.LaneText));
-		TestTrue(FString::Printf(TEXT("%s: the inner edge is smooth (kink %.2f deg)"), *Name, S.InnerKink), S.InnerKink <= BendProbe::KinkThreshold);
-		TestTrue(FString::Printf(TEXT("%s: the outer edge is smooth (kink %.2f deg)"), *Name, S.OuterKink), S.OuterKink <= BendProbe::KinkThreshold);
-		TestTrue(FString::Printf(TEXT("%s: no edge bends tighter than half its inner arc (%.0f of %.0f)"), *Name, S.Tightest, Note->InnerArcRadius),
-			S.Tightest >= BendProbe::TightestFraction * Note->InnerArcRadius - 1.0);
-		TestTrue(FString::Printf(TEXT("%s: every lane is smooth (kink %.2f deg)"), *Name, S.LaneKink), S.LaneKink <= BendProbe::KinkThreshold);
-		TestTrue(FString::Printf(TEXT("%s: two lanes, laid by one length rule (%.0f - %.0f uu)"), *Name, S.ShortestStep, S.LongestStep),
-			S.Lanes == 2 && S.LongestStep <= GuidelineGeom::BendPieceLength + 1.0 && S.ShortestStep >= 0.5 * GuidelineGeom::BendPieceLength);
+		// THE FIVE SHARED SHAPE RULES, held once in BendProbe::JudgeBend since #301 - the rig
+		// course judges the same way (AirportMgr.RigCourse.BendsAreSmooth) and used to repeat
+		// these five TestTrue calls verbatim. MinLanes == MaxLanes == 2: this fixture is always a
+		// two-arm bend, unlike the course's variable-lane tiers.
+		BendProbe::JudgeBend(*this, Name, S, Note->InnerArcRadius, /*MinLanes=*/2, /*MaxLanes=*/2);
 		for (const BendProbe::FTurnChain& Turn : BendProbe::TurnsAt(*Bend.Net, Bend.Corner))
 		{
 			TestTrue(FString::Printf(TEXT("%s: the lane turn is a curve in pieces, not one quadratic (%d)"), *Name, Turn.Pieces.Num()),

@@ -1846,18 +1846,12 @@ bool FRigCourseBendsAreSmoothTest::RunTest(const FString& Parameters)
 			S.Tightest, Bend.InnerArcRadius, Bend.Ramp[0], Bend.Ramp[1], *S.LaneText));
 		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f) was laid as the smooth shape (%s)"), Bend.Position.X, Bend.Position.Y, *Bend.Reason),
 			Bend.bApplied);
-		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): the inner edge is smooth (kink %.1f deg at (%.0f, %.0f))"),
-			Bend.Position.X, Bend.Position.Y, S.InnerKink, S.InnerAt.X, S.InnerAt.Y), S.InnerKink <= BendProbe::KinkThreshold);
-		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): the outer edge is smooth (kink %.1f deg at (%.0f, %.0f))"),
-			Bend.Position.X, Bend.Position.Y, S.OuterKink, S.OuterAt.X, S.OuterAt.Y), S.OuterKink <= BendProbe::KinkThreshold);
-		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): no edge bends tighter than half its inner arc (%.0f uu at (%.0f, %.0f), arc %.0f)"),
-			Bend.Position.X, Bend.Position.Y, S.Tightest, S.TightAt.X, S.TightAt.Y, Bend.InnerArcRadius),
-			S.Tightest >= BendProbe::TightestFraction * Bend.InnerArcRadius - 1.0);
-		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): every lane is smooth (kink %.1f deg)"),
-			Bend.Position.X, Bend.Position.Y, S.LaneKink), S.LaneKink <= BendProbe::KinkThreshold);
-		TestTrue(FString::Printf(TEXT("bend (%.0f, %.0f): lane pieces follow one length rule (%.0f - %.0f uu)"),
-			Bend.Position.X, Bend.Position.Y, S.ShortestStep, S.LongestStep),
-			S.Lanes > 0 && S.LongestStep <= GuidelineGeom::BendPieceLength + 1.0 && S.ShortestStep >= 0.5 * GuidelineGeom::BendPieceLength);
+		// THE FIVE SHARED SHAPE RULES, held once in BendProbe::JudgeBend since #301 - the per-tier
+		// fixture judges the same way (Airside.Build.BendLanes.EveryTierIsSmooth) and used to
+		// repeat these five TestTrue calls verbatim. MinLanes 1: the course's tiers see a variable
+		// lane count, unlike the fixture's fixed two-arm bend.
+		BendProbe::JudgeBend(*this, FString::Printf(TEXT("bend (%.0f, %.0f)"), Bend.Position.X, Bend.Position.Y),
+			S, Bend.InnerArcRadius, /*MinLanes=*/1);
 	}
 	TestTrue(FString::Printf(TEXT("the course's bends were judged (%d)"), Bends), Bends >= 14);
 	return true;
