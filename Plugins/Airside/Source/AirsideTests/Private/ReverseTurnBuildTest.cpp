@@ -31,8 +31,8 @@ namespace ReverseTurnBuild
 
 	/**
 	 * A Wide T at the origin with a pull-past arm east to (PullPastLength,0) and one reverse turn
-	 * recorded from it. A 90 degree bay runs north to (0,3000), the approach from the west; a
-	 * straight bay (bStraight) runs OPPOSITE the pull-past, west to (-3000,0), so the approach
+	 * recorded from it. A 90 degree bay runs north to (0,4500), the approach from the west; a
+	 * straight bay (bStraight) runs OPPOSITE the pull-past, west to (-4500,0), so the approach
 	 * comes in from the south instead.
 	 */
 	FJunction Tee(double PullPastLength, bool bStraight)
@@ -43,7 +43,9 @@ namespace ReverseTurnBuild
 		Out.Net = NewObject<URoadNetwork>(GetTransientPackage());
 		Out.Node = Out.Net->AddNode(FVector2D::ZeroVector);
 		Out.PullPastFar = Out.Net->AddNode(FVector2D(PullPastLength, 0.0));
-		Out.BayFar = Out.Net->AddNode(bStraight ? FVector2D(-3000.0, 0.0) : FVector2D(0.0, 3000.0));
+		// 45 m BAYS: the Wide corners cut each arm back ~19 m, and the bay must hold the rig's chain
+		// beyond that (LayReverseTurn's bay check).
+		Out.BayFar = Out.Net->AddNode(bStraight ? FVector2D(-4500.0, 0.0) : FVector2D(0.0, 4500.0));
 		const FRoadNodeId Approach = Out.Net->AddNode(bStraight ? FVector2D(0.0, -4000.0) : FVector2D(-4000.0, 0.0));
 		Out.PullPast = Out.Net->AddStraightSegment(Out.Node, Out.PullPastFar, Wide);
 		Out.Bay = Out.Net->AddStraightSegment(Out.Node, Out.BayFar, Wide);
@@ -112,7 +114,7 @@ bool FReverseTurnEdgeTest::RunTest(const FString& Parameters)
 
 	// THE BAY END IS IN THE BAY: past the fillet, on the bay arm's side of the junction.
 	const FVector2D EndAt = J.Net->GetGuidelineNode(End)->Position;
-	TestTrue(FString::Printf(TEXT("the bay end (%.0f,%.0f) is up the bay arm"), EndAt.X, EndAt.Y), EndAt.Y > 2000.0 && FMath::Abs(EndAt.X) < 400.0);
+	TestTrue(FString::Printf(TEXT("the bay end (%.0f,%.0f) is up the bay arm"), EndAt.X, EndAt.Y), EndAt.Y > 3500.0 && FMath::Abs(EndAt.X) < 400.0);
 	return true;
 }
 
@@ -135,7 +137,7 @@ bool FReverseTurnStraightTest::RunTest(const FString& Parameters)
 		Worst = FMath::Max(Worst, FMath::Abs(Point.Y - In.Polyline[0].Y));
 	}
 	TestTrue(FString::Printf(TEXT("every vertex on the pull-past lane's line (worst %.3f uu off)"), Worst), Worst < 0.5);
-	TestTrue(TEXT("and it ends west of the junction, in the bay"), In.Polyline.Last().X < -2000.0);
+	TestTrue(TEXT("and it ends west of the junction, in the bay"), In.Polyline.Last().X < -3500.0);
 	return true;
 }
 
@@ -170,7 +172,9 @@ bool FReverseTurnRebuildTest::RunTest(const FString& Parameters)
 	// end handle it reports is the fresh one.
 	const ReverseTurnBuild::FJunction J = ReverseTurnBuild::Tee(4000.0, false);
 	if (!TestNotNull(TEXT("the content set has its service tiers"), J.Net)) { return false; }
-	const FVector2D Before = J.Net->GetGuidelineNode(J.Net->GetReverseTurnEnd(0))->Position;
+	const FGuidelineNode* First = J.Net->GetGuidelineNode(J.Net->GetReverseTurnEnd(0));
+	if (!TestNotNull(TEXT("laid on the first derivation"), First)) { return false; }
+	const FVector2D Before = First->Position;
 	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
 	TestGraph::Derive(*J.Net, &Designs);
 	TestGraph::Derive(*J.Net, &Designs);

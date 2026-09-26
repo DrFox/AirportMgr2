@@ -70,7 +70,7 @@ struct AIRSIDE_API FTowReverseRun
 	void Reset();
 
 private:
-	/** The sample at or before Along, walked forward only - playback never runs backwards. */
+	/** The sample at or before Along, walked forward only: Advance only ever adds to Along, and Start resets both. */
 	int32 Cursor = 0;
 
 	/** Writes the pose at Along, interpolated between the two samples that bracket it. */

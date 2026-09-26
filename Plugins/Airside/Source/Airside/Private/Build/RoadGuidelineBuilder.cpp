@@ -743,10 +743,16 @@ namespace
 		const double Chain = VehicleFit::ChainLength(Design);
 		const double Overhang = Design.Tow.Num() > 0 ? Design.Tow.Last().BodyRear : FMath::Abs(Design.BodyRearX);
 		const FVector2D End = BFar - DirB * (Overhang + ReverseEndMargin);
-		if (FVector2D::DotProduct(End - BNear, DirB) <= 0.0)
+		// THE BAY HOLDS THE WHOLE VEHICLE: backed in, its trailer axle on End, its steered axle a
+		// chain's length back up the bay - and that must still be on the bay's own lane, short of
+		// the lane end at the junction, or the exit (which runs up that lane) does not pass under
+		// the cab. Found on the M_RigTest yard (2026-09-26): a 25 m bay left the rig's cab 179 uu
+		// out on the junction's turn path and the drive-out folded the trailer.
+		const double BayRun = FVector2D::DotProduct(End - BNear, DirB);
+		if (BayRun < Chain + ReversePullPastMargin)
 		{
-			OutWhy = FString::Printf(TEXT("the bay arm is %.0f uu, shorter than the design vehicle's rear overhang"),
-				FVector2D::Distance(BNear, BFar));
+			OutWhy = FString::Printf(TEXT("the bay holds %.0f uu from its junction to its end; the design vehicle needs %.0f (chain %.0f + %.0f) to back in whole"),
+				BayRun, Chain + ReversePullPastMargin, Chain, ReversePullPastMargin);
 			return FGuidelineNodeId();
 		}
 

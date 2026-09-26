@@ -313,14 +313,16 @@ TowReverse::FSolution TowReverse::Solve(const FInput& In)
 	int32 Hint = 0;
 	double LineError = 0.0;
 	double Along = Line.Project(Axle[0], Hint, LineError);
-	if (LineError > MaxLineError)
+	if (LineError > MaxStartLineError)
 	{
 		Out.Refusal = ERefusal::OffLine;
 		Out.Figure = LineError;
-		Out.Limit = MaxLineError;
+		Out.Limit = MaxStartLineError;
 		Out.Where = Axle[0];
 		return Out;
 	}
+	// On the way: MaxLineError beyond where it started - see MaxLineError.
+	const double LineLimit = LineError + MaxLineError;
 
 	auto Record = [&](double SteerDegrees)
 	{
@@ -352,7 +354,12 @@ TowReverse::FSolution TowReverse::Solve(const FInput& In)
 		// Curvature in the travel sense; the trailer's FORWARD curvature is its negative, since
 		// travel runs against the way it faces.
 		const double KappaTrailer = -2.0 * FMath::Sin(Alpha) / Reach;
-		const double PhiRef = FMath::Clamp(SteadyHitchRadians(Reverse, KappaTrailer), -ReferenceShare * Critical, ReferenceShare * Critical);
+		// STRAIGHTEN UP AT THE END: over the last look-ahead the reference eases to zero, so the tow
+		// comes to rest in line - trailer AND cab - rather than holding a couple of degrees of hitch
+		// to take out the last few uu of lateral error (the rig did exactly that in the yard's
+		// 90 degree bay, 2026-09-26: 3 uu off, 2 deg of hitch). The end-pose limits still judge it.
+		const double Ease = FMath::Clamp((Line.Length - Along) / LookAhead, 0.0, 1.0);
+		const double PhiRef = Ease * FMath::Clamp(SteadyHitchRadians(Reverse, KappaTrailer), -ReferenceShare * Critical, ReferenceShare * Critical);
 
 		// INNER: the tractor curvature that makes dphi/dsigma = -Gain (phi - phiRef) exactly,
 		// from the kinematics in the header with sigma = -s. Clamped to the lock.
@@ -392,11 +399,11 @@ TowReverse::FSolution TowReverse::Solve(const FInput& In)
 
 		Along = Line.Project(Axle[0], Hint, LineError);
 		Out.WorstLineError = FMath::Max(Out.WorstLineError, LineError);
-		if (LineError > MaxLineError)
+		if (LineError > LineLimit)
 		{
 			Out.Refusal = ERefusal::OffLine;
 			Out.Figure = LineError;
-			Out.Limit = MaxLineError;
+			Out.Limit = LineLimit;
 			Out.Where = Axle[0];
 			Out.Samples.Reset();
 			return Out;

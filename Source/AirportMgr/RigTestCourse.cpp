@@ -235,13 +235,26 @@ ARoadNetworkActor* ARigTestCourse::ResolveNetworkActor()
 	return NetworkActor;
 }
 
-void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
+void ARigTestCourse::ResolveVehicles()
+{
+	Vehicles = { UAirsideSettings::ResolveRigVehicle(), UAirsideSettings::ResolveUtilityTowVehicle() };
+	VehicleNames = { TEXT("rig"), TEXT("utility") };
+}
+
+void ARigTestCourse::BuildYardOnlyForTest(IRoadEditTarget& Target)
+{
+	Waypoints.Reset();
+	Runners.Reset();
+	ResolveVehicles();
+	Yard.Build(Target, Vehicles.Num());
+}
+
+void ARigTestCourse::BuildCourse(IRoadEditTarget& Target, bool bWithYard)
 {
 	Waypoints.Reset();
 	RefusalLabels.Reset();
 
-	Vehicles = { UAirsideSettings::ResolveRigVehicle(), UAirsideSettings::ResolveUtilityTowVehicle() };
-	VehicleNames = { TEXT("rig"), TEXT("utility") };
+	ResolveVehicles();
 
 	const int32 Widths = Target.GetWidthCount(ERoadKind::ServiceRoad);
 	if (Widths < FRigCourseLayout::TierCount)
@@ -269,6 +282,12 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target)
 	}
 	UE_LOG(LogRoadBuild, Log, TEXT("RigCourse: course laid - %d segment(s) (%d refused), %d waypoint(s), %d feature(s), %d tier(s) of %d."),
 		Result.SegmentsLaid, RefusedConnects, Waypoints.Num(), FeatureCountForTest(), FRigCourseLayout::TierCount, Widths);
+
+	// THE YARD, beside it: its own island, its own runners (FRigYard).
+	if (bWithYard)
+	{
+		Yard.Build(Target, Vehicles.Num());
+	}
 }
 
 int32 ARigTestCourse::FeatureCountForTest() const
@@ -409,6 +428,10 @@ void ARigTestCourse::Tick(float DeltaSeconds)
 		{
 			TickRunner(Runner, DeltaSeconds);
 		}
+	}
+	if (Yard.IsBuilt() && ResolveNetworkActor() != nullptr)
+	{
+		Yard.Tick(*NetworkActor, Vehicles, VehicleNames, DeltaSeconds);
 	}
 	DrawRefusals();
 }

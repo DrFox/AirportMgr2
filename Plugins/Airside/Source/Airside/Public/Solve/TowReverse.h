@@ -135,8 +135,21 @@ namespace TowReverse
 
 	/** The lock engages within this of straight, and snaps the joint to straight as it does. */
 	inline constexpr double TurntableLockDegrees = 3.0;
-	/** uu the leading axle may stray from its line anywhere on the way. */
+	/**
+	 * uu the leading axle may stray from its line on the way, BEYOND where it started. Beyond, not
+	 * absolute: backing a trailer is non-minimum-phase - steering to correct an offset first swings
+	 * the trailer a little further off before it comes back - so a tow that starts 29 uu off (the
+	 * rig after the yard's straight-bay pull-past, 2026-09-26) touches 30 on its first metre and a
+	 * flat 30 refused a reverse that then converged.
+	 */
 	inline constexpr double MaxLineError = 30.0;
+	/**
+	 * uu off the line the leading axle may START. A tow that pulled past a corner stops with its
+	 * trailer still settling - the rig's was 30 uu off after a 50 m pull-past on the M_RigTest yard
+	 * (2026-09-26) - and backing converges from there; refusing it would demand a pull-past long
+	 * enough for a tractrix to settle to the millimetre.
+	 */
+	inline constexpr double MaxStartLineError = 100.0;
 	/** The end pose: the leading axle within this of the line's end, facing within MaxEndHeadingDegrees. */
 	inline constexpr double MaxEndPositionError = 20.0;
 	inline constexpr double MaxEndHeadingDegrees = 3.0;

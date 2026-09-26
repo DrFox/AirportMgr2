@@ -6,6 +6,7 @@
 #include "Model/RoutePlanCache.h"
 #include "Model/RouteSearch.h"
 #include "Model/Vehicle.h"
+#include "RigYard.h"
 #include "RigTestCourse.generated.h"
 
 class ARoadNetworkActor;
@@ -367,10 +368,21 @@ public:
 	 * previous call already placed on Target, nor retire agents a previous run left out, so
 	 * calling it twice on the same Target lays a second course on top of the first.
 	 */
-	void BuildCourse(IRoadEditTarget& Target);
+	void BuildCourse(IRoadEditTarget& Target, bool bWithYard = true);
 
-	/** BuildCourse, named for the test that calls it without a BeginPlay. */
-	void BuildCourseForTest(IRoadEditTarget& Target) { BuildCourse(Target); }
+	/**
+	 * BuildCourse, named for the test that calls it without a BeginPlay - WITHOUT THE YARD: the
+	 * loop's own tests pin the loop, and a second pair of agents reversing in the yard would be
+	 * cost and log noise in every one of them (AirportMgr.RigCourse.OneLoopHeadless counts log
+	 * lines). The yard's tests build it alone, through BuildYardOnlyForTest.
+	 */
+	void BuildCourseForTest(IRoadEditTarget& Target) { BuildCourse(Target, false); }
+
+	/** The reversing yard alone - no loop, no loop runners - for the yard's own tests. */
+	void BuildYardOnlyForTest(IRoadEditTarget& Target);
+
+	/** The yard, for its tests to read its runners. */
+	const FRigYard& GetYardForTest() const { return Yard; }
 
 	/** Legs per loop per vehicle: one per waypoint, the last wrapping to the first. */
 	int32 LegCountForTest() const { return Waypoints.Num(); }
@@ -495,6 +507,12 @@ public:
 	static constexpr double UtilityStartDelay = 20.0;
 
 private:
+	/** The reversing yard beside the loop (spec 2026-09-26 §4) - see FRigYard for why it is its own class. */
+	FRigYard Yard;
+
+	/** Vehicles and VehicleNames, resolved - the loop and the yard both drive them. */
+	void ResolveVehicles();
+
 	void TickRunner(FRigCourseRunner& Runner, double DeltaSeconds);
 
 	/**

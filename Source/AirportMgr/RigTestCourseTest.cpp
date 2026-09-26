@@ -19,6 +19,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
+#include "Solve/TowReverse.h"
 #include "Solve/VehicleSweep.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Testing/BendProbe.h"
@@ -1911,6 +1912,184 @@ bool FRigCourseLayoutJsonWrittenTest::RunTest(const FString& Parameters)
 	FString ReadBack;
 	if (!TestTrue(TEXT("it reads back"), FFileHelper::LoadFileToString(ReadBack, *Path))) { return false; }
 	TestEqual(TEXT("bitwise the same JSON that was written"), ReadBack, Json);
+	return true;
+}
+
+
+// THE REVERSING YARD (spec 2026-09-26 §4), alone - no loop - headless at the course's fixed step:
+// both tows go round the straight bay, the 90 degree bay and the hammerhead, and every one is a
+// real reverse that lands in its bay.
+namespace RigYardTest
+{
+	/** Every figure the yard promises for one runner's completed reverses. */
+	void CheckRunner(FAutomationTestBase& Test, const FRigYardRunner& Runner, const FString& Who, int32 AtLeast)
+	{
+		Test.TestTrue(*FString::Printf(TEXT("%s: %d reverse(s) completed (want %d)"), *Who, Runner.Completed.Num(), AtLeast),
+			Runner.Completed.Num() >= AtLeast);
+		TSet<uint8> Features;
+		for (const FRigYardReverse& Reverse : Runner.Completed)
+		{
+			const FString What = FString::Printf(TEXT("%s %s"), *Who, FRigYard::FeatureName(Reverse.Feature));
+			Features.Add(static_cast<uint8>(Reverse.Feature));
+			Test.TestTrue(*(What + TEXT(": it reversed in")), Reverse.bArmed);
+			Test.TestTrue(*FString::Printf(TEXT("%s: trailer axle %.1f uu from the bay end (<= %.0f)"), *What, Reverse.EndError,
+				TowReverse::MaxEndPositionError), Reverse.EndError <= TowReverse::MaxEndPositionError);
+			Test.TestTrue(*FString::Printf(TEXT("%s: trailer %.2f deg off the bay's line (<= %.0f)"), *What, Reverse.EndHeadingDegrees,
+				TowReverse::MaxEndHeadingDegrees), Reverse.EndHeadingDegrees <= TowReverse::MaxEndHeadingDegrees);
+			Test.AddInfo(FString::Printf(TEXT("%s: worst hitch %.0f deg, end %.1f uu / %.2f deg"), *What, Reverse.WorstHitchDegrees,
+				Reverse.EndError, Reverse.EndHeadingDegrees));
+		}
+		Test.TestTrue(*(Who + TEXT(": all three features")), Features.Num() == static_cast<int32>(ERigYardFeature::Count) || AtLeast < 3);
+		Test.TestEqual(*(Who + TEXT(": never jack-knifed")), Runner.Jackknifes, 0);
+		Test.TestEqual(*(Who + TEXT(": never refused")), Runner.Refusals, 0);
+		Test.TestEqual(*(Who + TEXT(": never stuck")), Runner.Stuck, 0);
+		Test.TestTrue(*FString::Printf(TEXT("%s: the chain never jumps (worst %.1f uu beyond a tick's travel)"), *Who, Runner.WorstAxleJump),
+			Runner.WorstAxleJump <= 0.0);
+	}
+
+	/**
+	 * Ticks the network and the course at the course's step until Done or MaxTicks pass. Its own,
+	 * not RigCourseTest::RunUntil: that observes the LOOP's runners, which a yard-only course has none of.
+	 */
+	void RunYard(ARoadNetworkActor& Actor, ARigTestCourse& Course, TFunctionRef<bool()> Done)
+	{
+		constexpr float Step = static_cast<float>(RigCourseTest::TickSeconds);
+		for (int32 Ticks = 0; Ticks < RigCourseTest::MaxTicks && !Done(); ++Ticks)
+		{
+			Actor.Tick(Step);
+			Course.Tick(Step);
+		}
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigYardHeadlessTest,
+	"AirportMgr.RigCourse.YardHeadless",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigYardHeadlessTest::RunTest(const FString& Parameters)
+{
+	using namespace RigCourseTest;
+
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
+	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	FWarningSpy Spy;
+	GLog->AddOutputDevice(&Spy);
+	Course->BuildYardOnlyForTest(*Actor);
+	const FRigYard& Yard = Course->GetYardForTest();
+	TestEqual(TEXT("every yard road laid"), Yard.GetSegmentsRefused(), 0);
+	if (!TestTrue(TEXT("all three reverse turns recorded"), Yard.IsBuilt())) { GLog->RemoveOutputDevice(&Spy); return false; }
+	for (int32 F = 0; F < static_cast<int32>(ERigYardFeature::Count); ++F)
+	{
+		TestTrue(*FString::Printf(TEXT("the %s was laid"), FRigYard::FeatureName(static_cast<ERigYardFeature>(F))),
+			Yard.GoalNode(*Actor->Network, static_cast<ERigYardFeature>(F)).IsSet());
+	}
+
+	RigYardTest::RunYard(*Actor, *Course, [&Yard]()
+	{
+		return Yard.GetRunner(0).Completed.Num() >= 3 && Yard.GetRunner(1).Completed.Num() >= 3;
+	});
+	GLog->RemoveOutputDevice(&Spy);
+	RigYardTest::CheckRunner(*this, Yard.GetRunner(0), TEXT("rig"), 3);
+	RigYardTest::CheckRunner(*this, Yard.GetRunner(1), TEXT("utility"), 3);
+	TestEqual(TEXT("no jack-knife warning"), Spy.Containing(TEXT("jack-knifed")), 0);
+	TestEqual(TEXT("no reverse turn failed to lay"), Spy.Containing(TEXT("Reverse turn")), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigYardRebuildTest,
+	"AirportMgr.RigCourse.YardSurvivesRebuild",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigYardRebuildTest::RunTest(const FString& Parameters)
+{
+	// Review Focus 3: A REBUILD WHILE THE RIG IS BACKING. Every guideline node is reallocated; the
+	// playback holds its own samples, the drive-on's remainder is re-resolved, and the yard's goal
+	// is found again by identity. The rig finishes that reverse and the next one.
+	using namespace RigCourseTest;
+
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
+	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	Course->BuildYardOnlyForTest(*Actor);
+	const FRigYard& Yard = Course->GetYardForTest();
+
+	RigYardTest::RunYard(*Actor, *Course, [Actor, &Yard]()
+	{
+		const FRoadAgent* Agent = Yard.GetRunner(0).AgentId != 0 ? Actor->GetGroundTraffic()->FindAgent(Yard.GetRunner(0).AgentId) : nullptr;
+		return Agent != nullptr && Agent->Phase == EAgentPhase::Reversing && Agent->TowReverse.Along > Agent->TowReverse.Samples[0].Along + 300.0;
+	});
+	const FRoadAgent* Backing = Actor->GetGroundTraffic()->FindAgent(Yard.GetRunner(0).AgentId);
+	if (!TestTrue(TEXT("the rig is backing into its first bay"), Backing != nullptr && Backing->Phase == EAgentPhase::Reversing)) { return false; }
+	const int32 Placed = Actor->PlaceNode(FVector2D(25000.0, -15000.0));
+	TestTrue(TEXT("a lone node was placed - the rebuild happened mid-reverse"), Placed != INDEX_NONE);
+
+	RigYardTest::RunYard(*Actor, *Course, [&Yard]() { return Yard.GetRunner(0).Completed.Num() >= 2; });
+	RigYardTest::CheckRunner(*this, Yard.GetRunner(0), TEXT("rig"), 2);
+	TestEqual(TEXT("one agent throughout - nothing was retired and redispatched"), Yard.GetRunner(0).Dispatches, 1);
+	return true;
+}
+
+
+// EVERY TURN A YARD RUNNER NEEDS ADMITS THE RIG DIRECTLY (2026-09-26). When the spur met the east
+// side 20 m below NE, the two junctions squeezed each other's corners to 5.1 m - under the rig's
+// 5.8 m lock - and the router sent it round U-turns in dead-end balloons, where its trailer folds.
+// For each turn, the rig's route must be the direct one: no longer than 1.5x the route with no
+// vehicle at all (which takes the turn whatever its radius).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigYardTurnsFitTest,
+	"AirportMgr.RigCourse.YardTurnsFitTheRig",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigYardTurnsFitTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
+	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	Course->BuildYardOnlyForTest(*Actor);
+	const URoadNetwork& Net = *Actor->Network;
+	auto NodeAt = [&Net](double X, double Y)
+	{
+		for (int32 I = 0; I < Net.GetNodes().Num(); ++I)
+		{
+			if (Net.GetNodes()[I].bAlive && Net.GetNodes()[I].Position.Equals(FVector2D(X, Y), 1.0)) { return Net.NodeIdAt(I); }
+		}
+		return FRoadNodeId();
+	};
+	using L = FRigYardLayout;
+	const FRoadNodeId NW = NodeAt(L::WestX, L::NorthY), P1 = NodeAt(L::P1X, L::NorthY), J = NodeAt(L::JX, L::NorthY);
+	const FRoadNodeId P2 = NodeAt(L::P2X, L::NorthY), NE = NodeAt(L::EastX, L::NorthY), Bay = NodeAt(L::JX, L::Bay90Y);
+	const FRoadNodeId S = NodeAt(L::EastX, L::SpurY), SE = NodeAt(L::EastX, L::SouthY), SW = NodeAt(L::WestX, L::SouthY);
+	const FRoadNodeId H = NodeAt(L::HX, L::SpurY), Hammer = NodeAt(L::HX, L::HammerY), W = NodeAt(L::StraightBayX, L::NorthY);
+	auto Lane = [&Net](FRoadNodeId Node, FRoadNodeId From) { FRigCourseWaypoint Way; Way.Node = Node; Way.From = From; return ARigTestCourse::ResolveWaypoint(Net, Way); };
+	struct FTurn { const TCHAR* Name; FGuidelineNodeId From, To; };
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	for (const FTurn& Turn : {
+		FTurn{ TEXT("west side north, east at NW"), Lane(NW, SW), Lane(P1, NW) },
+		FTurn{ TEXT("out of the straight bay, on east through NW"), Lane(NW, W), Lane(P1, NW) },
+		FTurn{ TEXT("out of the 90 degree bay, east at J"), Lane(J, Bay), Lane(P2, J) },
+		FTurn{ TEXT("round NE, south"), Lane(NE, P2), Lane(S, NE) },
+		FTurn{ TEXT("south side, east onto the spur at S"), Lane(S, NE), Lane(H, S) },
+		FTurn{ TEXT("out of the hammer stub, west at H"), Lane(H, Hammer), Lane(S, H) },
+		FTurn{ TEXT("off the spur, south at S"), Lane(S, H), Lane(SE, S) },
+		FTurn{ TEXT("round SE and SW, north"), Lane(SE, S), Lane(NW, SW) } })
+	{
+		if (!TestTrue(*FString::Printf(TEXT("%s: both lane ends resolve"), Turn.Name), Turn.From.IsSet() && Turn.To.IsSet())) { continue; }
+		const FRoutePlan Bare = RouteSearch::Find(Net, FRouteQuery::For(ERouteErrand::PlayerIssued, Turn.From, Turn.To, 0.0, ETraversalClass::GroundVehicle));
+		FRouteQuery WithRig = FRouteQuery::For(ERouteErrand::PlayerIssued, Turn.From, Turn.To, 0.0, ETraversalClass::GroundVehicle);
+		WithRig.WithVehicle(Rig);
+		const FRoutePlan Plan = RouteSearch::Find(Net, WithRig);
+		TestTrue(*FString::Printf(TEXT("%s: the rig's route %.0f uu is the direct one (%.0f uu) - %s"), Turn.Name, Plan.Length, Bare.Length,
+			*Plan.RejectedBy.Describe()), Plan.IsValid() && Bare.IsValid() && Plan.Length <= 1.5 * Bare.Length);
+	}
 	return true;
 }
 
