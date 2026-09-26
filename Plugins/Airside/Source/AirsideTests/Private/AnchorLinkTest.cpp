@@ -10,6 +10,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Solve/GuidelineGeom.h"
+#include "Solve/RoadGeom.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -238,6 +239,107 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and is reported as too wide, not unreachable"),
 			Refused.Result, ERouteResult::TooWide);
 	}
+
+	return true;
+}
+
+/**
+ * PoseSetbackFor (#306): Needs used to be CornerRunFor(radius, 90 deg) alone, assuming an
+ * unboundedly long road - so on a road short either side of the hit it recommended a setback
+ * that bought LeadRoom the corner never needed, since Behind/Ahead (a property of the ROAD, not
+ * of the pose) clamped Join's own Offset regardless. MeasureJoinRoom is now shared by both, so
+ * Needs is capped at what the road can actually hold and this setback is never one Join then
+ * fails to deliver on.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPoseSetbackRespectsShortRoadTest,
+	"Airside.Build.PoseSetbackRespectsShortRoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPoseSetbackRespectsShortRoadTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	// A STRAIGHT ROAD, GroundVehicle-only, with the pose's foot of perpendicular landing about
+	// 110 uu from its west end - Behind, in MeasureJoinRoom's own terms - comfortably short of
+	// what a square turn at the service lane radius asks for (hundreds of uu on the default
+	// resolved chassis).
+	const FGuidelineNodeId West = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId East = Net->AddGuidelineNode(FVector2D(5000.0, 0.0));
+	FGuidelineEdge Road;
+	Road.A = West;
+	Road.B = East;
+	Road.Control = FVector2D(2500.0, 0.0);
+	Road.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
+	Road.Direction = EGuidelineDir::Bidirectional;
+	Road.bDerived = true;
+	Net->AddGuidelineEdge(MoveTemp(Road));
+
+	// HAVE (600) IS DELIBERATELY LESS THAN THE OLD, UNCAPPED Needs (CornerRunFor of the default
+	// resolved chassis's lane radius at 90 deg, plus two weld tolerances - a few hundred uu more
+	// than 600) SO THE TWO ANSWERS DIFFER: the old code asked for real setback here, all of it
+	// spent on room a 5000 uu road with the hit 110 uu from its end could never actually grant.
+	const FVector2D At(110.0, 600.0);
+	const FVector2D Inward(0.0, 1.0);
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+
+	const double Setback = FAnchorLink::PoseSetbackFor(*Net, At, Inward, Truck,
+		FAnchorLink::DefaultServiceLinkRadius);
+	TestEqual(TEXT("no setback helps a corner this road cannot hold anyway"), Setback, 0.0);
+
+	// AND JOIN AGREES: placed at At (unmoved - Setback is 0), the depot's lead-in still joins,
+	// so this fixture is ROAD-LIMITED and not merely unreachable, and the sweep it lays measures
+	// TIGHTER than the vehicle's own lock - the road-limited case Setback correctly declined to
+	// chase. MEASURED ON THE GEOMETRY Join actually laid, never on a restatement of the formula
+	// (CLAUDE.md; commit 8be494c cost three sessions for measuring the figure asked instead).
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	const FEntityInstanceId Placed = Net->PlaceEntity(Depot, Depot->Anchors, At,
+		RoadGeom::Bearing(Inward), /*DesignWingspan=*/0.0, Depot->PoseRole, Depot->Trucks);
+
+	const int32 Joined = FAnchorLink::Build(*Net, Truck, FAnchorLink::DefaultMaxLeadIn,
+		FAnchorLink::DefaultServiceLinkRadius);
+	if (!TestTrue(TEXT("the depot's pose still joins the short road"), Joined >= 1))
+	{
+		return false;
+	}
+
+	const FEntityInstance* Instance = Net->GetEntity(Placed);
+	const FGuidelineNode* Pose = Instance != nullptr ? Net->GetGuidelineNode(Instance->PoseNode) : nullptr;
+	if (!TestTrue(TEXT("the pose has exactly one lead-in"), Pose != nullptr && Pose->Incident.Num() == 1))
+	{
+		return false;
+	}
+
+	const FGuidelineEdge* Lead = Net->GetGuidelineEdge(Pose->Incident[0]);
+	const FGuidelineNodeId LeadEndId = (Lead->A == Instance->PoseNode) ? Lead->B : Lead->A;
+	const FGuidelineNode* LeadEnd = Net->GetGuidelineNode(LeadEndId);
+	if (!TestTrue(TEXT("the lead-in's far end carries both sweeps"),
+			LeadEnd != nullptr && LeadEnd->Incident.Num() == 3))
+	{
+		return false;
+	}
+
+	double Tightest = TNumericLimits<double>::Max();
+	for (const FGuidelineEdgeId& Id : LeadEnd->Incident)
+	{
+		if (Id == Pose->Incident[0])
+		{
+			continue;
+		}
+		const FGuidelineEdge* Sweep = Net->GetGuidelineEdge(Id);
+		const FGuidelineNode* A = Sweep != nullptr ? Net->GetGuidelineNode(Sweep->A) : nullptr;
+		const FGuidelineNode* B = Sweep != nullptr ? Net->GetGuidelineNode(Sweep->B) : nullptr;
+		if (A != nullptr && B != nullptr)
+		{
+			Tightest = FMath::Min(Tightest,
+				GuidelineGeom::TightestRadius(A->Position, Sweep->Control, B->Position));
+		}
+	}
+
+	const double Lock = Truck.TightestFollowableRadius();
+	AddInfo(FString::Printf(TEXT("delivered %.1f uu against a %.1f uu lock"), Tightest, Lock));
+	TestTrue(TEXT("the delivered sweep is road-limited, tighter than the lock, not the full lane radius"),
+		Tightest < Lock);
 
 	return true;
 }

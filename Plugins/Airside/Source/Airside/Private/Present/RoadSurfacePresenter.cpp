@@ -2,6 +2,7 @@
 
 #include "AirsideLog.h"
 #include "Build/AnchorLink.h"
+#include "Build/DepotKit.h"
 #include "Build/HoldingPositionMarkingBuilder.h"
 #include "Build/RoadLaneMarkingBuilder.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -550,6 +551,13 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 		// yard approach for a vehicle that never uses one.
 		FAnchorLink::Build(Network, Settings.DesignVehicles.Default.Chassis, FAnchorLink::DefaultMaxLeadIn,
 			Settings.ServiceLinkRadius);
+
+		// THE FUEL-DEPOT MODULE CENSUS (#306): moved out of FAnchorLink::Build, which a depot's
+		// missing shed or pump has nothing to do with, and run from here instead - the same
+		// Topology census the anchor links above are part of, and for the same reason: it must
+		// say so again after every edit, not just once at placement (DepotKit::ReportIncomplete's
+		// own header comment).
+		DepotKit::ReportIncomplete(Network);
 	}
 
 	// THROUGH THE RESOLVED SETTING, never a raw property: an unset MaterialSet means "single

@@ -1,7 +1,9 @@
 #include "Build/DepotKit.h"
 
+#include "AirsideLog.h"
 #include "Content/AirsideContent.h"
 #include "Entities/PlotModuleKit.h"
+#include "Model/RoadNetwork.h"
 
 PlotYard::FFootprint DepotFootprint(EDepotModule Module, const UAirsideContent* Content)
 {
@@ -142,4 +144,41 @@ int32 DepotYardSeed(FVector2D Where)
 	const int32 X = FMath::RoundToInt(Where.X);
 	const int32 Y = FMath::RoundToInt(Where.Y);
 	return static_cast<int32>(HashCombine(GetTypeHash(X), GetTypeHash(Y)));
+}
+
+void DepotKit::ReportIncomplete(const URoadNetwork& Network)
+{
+	// MOVED VERBATIM FROM FAnchorLink::Build, 2026-09-26 (#306): a fuel-depot module census had
+	// nothing to do with joining lead-ins and was only ever run from inside that function
+	// because it was the last thing Topology touched Network with. See this function's own
+	// header comment for why it is called again from the presenter after every edit.
+	for (const FEntityInstance& Entity : Network.GetEntities())
+	{
+		if (!Entity.bAlive || Entity.Modules.Num() == 0)
+		{
+			continue;
+		}
+
+		int32 Sheds = 0;
+		int32 Pumps = 0;
+		for (const EDepotModule Module : Entity.Modules)
+		{
+			Sheds += Module == EDepotModule::Shed ? 1 : 0;
+			Pumps += Module == EDepotModule::Pump ? 1 : 0;
+		}
+
+		if (Sheds == 0)
+		{
+			UE_LOG(LogAirside, Warning,
+				TEXT("Fuel depot at (%.0f, %.0f): no shed, so no trucks. Build one in a bay."),
+				Entity.Position.X, Entity.Position.Y);
+		}
+		if (Pumps == 0)
+		{
+			UE_LOG(LogAirside, Warning,
+				TEXT("Fuel depot at (%.0f, %.0f): no pump, so nothing can be fuelled. "
+					 "Build one in a bay."),
+				Entity.Position.X, Entity.Position.Y);
+		}
+	}
 }

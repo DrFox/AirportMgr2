@@ -113,6 +113,93 @@ namespace
 
 		return OutAlongSegment >= 0.0 && OutAlongSegment <= 1.0;
 	}
+
+	/**
+	 * The nearest joinable guideline to Origin, within Reach: one loop shared by
+	 * FProximityLinkFinder::Find and FindSiblingLane (#306), each of which used to run its own
+	 * copy. The copy had drifted - it lacked CannotReachWithin's bounding-box pre-reject, so a
+	 * two-lane road's second-lane search paid for URoadNetwork::SampleGuideline on every OTHER
+	 * joinable edge in the airport, exactly the cost #177 spent a session removing from the
+	 * first lane's own search. Eligible is the ONLY thing that differs between the two callers -
+	 * FindSiblingLane additionally requires an edge derived from its road's segment at a
+	 * different lane index - so it is a predicate, not a second copy of the walk.
+	 *
+	 * ENFORCED BY: Airside.Build.TwoWay.SiblingLaneDoesNotRescanEveryGuideline, which measures
+	 * URoadNetwork::SampleGuidelineCallCountForTest on FindSiblingLane's own path with a crowd of
+	 * distant decoys and goes red if CannotReachWithin's call above is ever deleted from here.
+	 */
+	FLinkHit NearestJoinable(const URoadNetwork& Network, const FVector2D& Origin, double Reach,
+		TFunctionRef<bool(const FGuidelineEdge&)> Eligible)
+	{
+		FLinkHit Out;
+		double Best = Reach;
+
+		// Re-read each time: a previous link may have split the very guideline this one is
+		// about to hit, and it must see the halves rather than the edge that is gone.
+		const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
+		{
+			const FGuidelineEdge& Edge = Edges[Index];
+			if (!Eligible(Edge))
+			{
+				continue;
+			}
+
+			const FGuidelineNode* NodeA = Network.GetGuidelineNode(Edge.A);
+			const FGuidelineNode* NodeB = Network.GetGuidelineNode(Edge.B);
+			if (NodeA == nullptr || NodeB == nullptr)
+			{
+				continue;
+			}
+
+			// REJECTED BEFORE SAMPLING, for #177 - see CannotReachWithin. Best tightens as a
+			// nearer edge is found, so this gets MORE aggressive over the loop.
+			if (CannotReachWithin(Origin, *NodeA, Edge, *NodeB, Best))
+			{
+				continue;
+			}
+
+			// Network.GuidelineEdgeIdAt, not a hand-built handle (#79, #173).
+			const FGuidelineEdgeId Id = Network.GuidelineEdgeIdAt(Index);
+			TArray<FVector2D> Points;
+			if (!Network.SampleGuideline(Id, Points))
+			{
+				continue;
+			}
+
+			// PROXIMITY, ANY DIRECTION. A vehicle may genuinely arrive from any side, and an
+			// anchor's authored heading has no representation on screen for a player to aim by -
+			// so measuring a distance is the only rule either caller can actually satisfy.
+			int32 Span = 0;
+			double Fraction = 0.0;
+			const double Distance = GuidelineGeom::NearestOnPolyline(Points, Origin, Span, Fraction);
+			if (Distance <= FAnchorLink::LeadInWeldTolerance || Distance >= Best)
+			{
+				continue;
+			}
+
+			Best = Distance;
+			Out.Edge = Id;
+			Out.Param = GuidelineGeom::ParamAtSample(Span, Fraction, Points.Num());
+		}
+		return Out;
+	}
+}
+
+FPendingLink FPendingLink::For(FGuidelineNodeId Node, const FVector2D& At, const FVector2D& Dir,
+	ETraversalClass Class, double Radius, double StandWingspan,
+	double MaxLeadIn, double ServiceLinkRadius)
+{
+	FPendingLink Link;
+	Link.Node = Node;
+	Link.At = At;
+	Link.Dir = Dir;
+	Link.Class = Class;
+	Link.Kind = Class == ETraversalClass::Aircraft ? ELinkKind::Ray : ELinkKind::Proximity;
+	Link.MaxWingspan = Class == ETraversalClass::Aircraft ? StandWingspan : 0.0;
+	Link.Radius = Radius;
+	Link.Reach = Class == ETraversalClass::Aircraft ? MaxLeadIn : ServiceLinkRadius;
+	return Link;
 }
 
 bool FRayLinkFinder::Find(const URoadNetwork& Network, const FPendingLink& Link,
@@ -190,66 +277,11 @@ bool FRayLinkFinder::Find(const URoadNetwork& Network, const FPendingLink& Link,
 bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink& Link,
 	const TSet<FGuidelineNodeId>& AnchorNodes, FLinkHit& OutHit) const
 {
-	double Best = Link.Reach;
-	FGuidelineEdgeId BestEdge;
-	double BestParam = 0.0;
-
-	const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
-	for (int32 Index = 0; Index < Edges.Num(); ++Index)
-	{
-		const FGuidelineEdge& Edge = Edges[Index];
-		if (!IsJoinable(Edge, Link, AnchorNodes))
-		{
-			continue;
-		}
-
-		const FGuidelineNode* NodeA = Network.GetGuidelineNode(Edge.A);
-		const FGuidelineNode* NodeB = Network.GetGuidelineNode(Edge.B);
-		if (NodeA == nullptr || NodeB == nullptr)
-		{
-			continue;
-		}
-
-		// REJECTED BEFORE SAMPLING, for #177: this finder used to sample EVERY joinable edge
-		// in the network on EVERY call, so a stand's four declared entries each paid for a full
-		// scan of every taxiway and every other stand's lane on the airport, almost none of
-		// which could ever be within ServiceLinkRadius. See CannotReachWithin.
-		if (CannotReachWithin(Link.At, *NodeA, Edge, *NodeB, Best))
-		{
-			continue;
-		}
-
-		TArray<FVector2D> Points;
-		// Network.GuidelineEdgeIdAt, not a hand-built handle (#79, #173).
-		const FGuidelineEdgeId ThisId = Network.GuidelineEdgeIdAt(Index);
-		if (!Network.SampleGuideline(ThisId, Points))
-		{
-			continue;
-		}
-
-		// PROXIMITY, ANY DIRECTION. A vehicle may genuinely arrive from any side, and an
-		// anchor's authored heading has no representation on screen for a player to aim by -
-		// so measuring a distance is the only rule they can actually satisfy.
-		int32 Span = 0;
-		double Fraction = 0.0;
-		const double Distance = GuidelineGeom::NearestOnPolyline(Points, Link.At, Span, Fraction);
-		if (Distance <= FAnchorLink::LeadInWeldTolerance || Distance >= Best)
-		{
-			continue;
-		}
-
-		Best = Distance;
-		BestParam = GuidelineGeom::ParamAtSample(Span, Fraction, Points.Num());
-		BestEdge = ThisId;
-	}
-
-	if (!BestEdge.IsSet())
-	{
-		return false;
-	}
-	OutHit.Edge = BestEdge;
-	OutHit.Param = BestParam;
-	return true;
+	// NEAREST GUIDELINE OF THE LINK'S CLASS, ANY DIRECTION - see NearestJoinable. The only
+	// question this finder adds to the shared walk is eligibility.
+	OutHit = NearestJoinable(Network, Link.At, Link.Reach,
+		[&Link, &AnchorNodes](const FGuidelineEdge& Edge) { return IsJoinable(Edge, Link, AnchorNodes); });
+	return OutHit.IsSet();
 }
 
 // FLaneLinkFinder IS DELETED, 2026-09-16, and a deleted strategy needs an argument.
@@ -269,36 +301,15 @@ bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink&
 FLinkHit FindSiblingLane(const URoadNetwork& Network, const FPendingLink& Link,
 	const TSet<FGuidelineNodeId>& AnchorNodes, FRoadSegmentId Segment, int32 JoinedIndex)
 {
-	FLinkHit Out;
-	double Best = Link.Reach;
-	const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
-	for (int32 Index = 0; Index < Edges.Num(); ++Index)
-	{
-		const FGuidelineEdge& Edge = Edges[Index];
-		if (Edge.DerivedFrom != Segment || Edge.DerivedGuidelineIndex == JoinedIndex
-			|| !IsJoinable(Edge, Link, AnchorNodes))
+	// SAME WALK AS FProximityLinkFinder, plus one more eligibility clause: derived from the
+	// road this link already joined, at a different lane index. This copy used to keep its own
+	// loop with no CannotReachWithin call at all (#306) - see NearestJoinable's own comment.
+	return NearestJoinable(Network, Link.At, Link.Reach,
+		[&Link, &AnchorNodes, Segment, JoinedIndex](const FGuidelineEdge& Edge)
 		{
-			continue;
-		}
-		// Network.GuidelineEdgeIdAt, not a hand-built handle (#79, #173).
-		const FGuidelineEdgeId Id = Network.GuidelineEdgeIdAt(Index);
-		TArray<FVector2D> Points;
-		if (!Network.SampleGuideline(Id, Points))
-		{
-			continue;
-		}
-		int32 Span = 0;
-		double Fraction = 0.0;
-		const double Distance = GuidelineGeom::NearestOnPolyline(Points, Link.At, Span, Fraction);
-		if (Distance <= FAnchorLink::LeadInWeldTolerance || Distance >= Best)
-		{
-			continue;
-		}
-		Best = Distance;
-		Out.Edge = Id;
-		Out.Param = GuidelineGeom::ParamAtSample(Span, Fraction, Points.Num());
-	}
-	return Out;
+			return Edge.DerivedFrom == Segment && Edge.DerivedGuidelineIndex != JoinedIndex
+				&& IsJoinable(Edge, Link, AnchorNodes);
+		});
 }
 
 const ILinkFinder& LinkFinderFor(ELinkKind Kind)

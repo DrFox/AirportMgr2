@@ -1,10 +1,40 @@
 #include "Build/DepotKit.h"
+#include "AirsideLog.h"
 #include "Content/AirsideContent.h"
 #include "CoreMinimal.h"
+#include "Entities/EntityDefinition.h"
 #include "Entities/PlotModuleKit.h"
+#include "Logging/LogVerbosity.h"
 #include "Misc/AutomationTest.h"
+#include "Model/RoadEntity.h"
+#include "Model/RoadNetwork.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+namespace
+{
+	/**
+	 * Catches every LogAirside line at Warning verbosity - not FLogLineSpy (AirsideTestWorld.h),
+	 * which only ever matches ELogVerbosity::Log and would silently see nothing here.
+	 * CanBeUsedOnMultipleThreads override for the same reason FLogLineSpy's own comment gives
+	 * (issue #216): the dedicated log thread outlives a spy declared on the test's stack unless
+	 * this says otherwise.
+	 */
+	struct FWarningLogSpy : public FOutputDevice
+	{
+		TArray<FString> Lines;
+
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& InCategory) override
+		{
+			if (InCategory == FName(TEXT("LogAirside")) && Verbosity == ELogVerbosity::Warning)
+			{
+				Lines.Add(FString(V));
+			}
+		}
+	};
+}
 
 /**
  * A kit's figures win; no kit falls back to the grey-box table.
@@ -122,6 +152,67 @@ bool FDepotKitSpecsCoverEveryModuleTest::RunTest(const FString& Parameters)
 	// a count taken from Pump, which is exactly the bug this test exists to catch.
 	TestEqual(TEXT("one spec per real module, sized to the sentinel"),
 		Specs.Num(), static_cast<int32>(EDepotModule::Count));
+
+	return true;
+}
+
+/**
+ * DepotKit::ReportIncomplete (#306), MOVED here from FAnchorLink::Build. Pinned directly
+ * rather than through a whole Topology rebuild: a depot missing its shed or its pump warns,
+ * one placed with both stays quiet, and the two log lines are the ones FAnchorLink::Build
+ * used to print - verbatim is the refactor contract's own requirement for a moved UE_LOG.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotKitReportIncompleteTest,
+	"Airside.Build.DepotKitReportIncomplete",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotKitReportIncompleteTest::RunTest(const FString& Parameters)
+{
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+
+	// A TANK ONLY: neither module the warning names.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = FVector2D(500.0, -500.0);
+		Placement.PoseRole = Depot->PoseRole;
+		Placement.Modules = { EDepotModule::Tank };
+		Net->PlaceEntity(Placement);
+
+		FWarningLogSpy Spy;
+		GLog->AddOutputDevice(&Spy);
+		DepotKit::ReportIncomplete(*Net);
+		GLog->RemoveOutputDevice(&Spy);
+
+		const bool bSawShed = Spy.Lines.ContainsByPredicate(
+			[](const FString& Line) { return Line.Contains(TEXT("no shed, so no trucks")); });
+		const bool bSawPump = Spy.Lines.ContainsByPredicate(
+			[](const FString& Line) { return Line.Contains(TEXT("no pump, so nothing can be fuelled")); });
+		TestTrue(TEXT("a depot with no shed warns about it"), bSawShed);
+		TestTrue(TEXT("and, separately, about its missing pump"), bSawPump);
+	}
+
+	// BOTH MODULES: no warning has anything left to name.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = FVector2D(500.0, -500.0);
+		Placement.PoseRole = Depot->PoseRole;
+		Placement.Modules = { EDepotModule::Shed, EDepotModule::Pump };
+		Net->PlaceEntity(Placement);
+
+		FWarningLogSpy Spy;
+		GLog->AddOutputDevice(&Spy);
+		DepotKit::ReportIncomplete(*Net);
+		GLog->RemoveOutputDevice(&Spy);
+
+		TestEqual(TEXT("a complete depot warns about nothing"), Spy.Lines.Num(), 0);
+	}
 
 	return true;
 }

@@ -10,6 +10,7 @@
 #include "Model/RoadNetwork.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/IcaoCode.h"
+#include "Solve/LinkGeom.h"
 #include "Solve/RoadGeom.h"
 
 namespace
@@ -160,6 +161,11 @@ namespace
 	 * False when the node has no live lane edge on it at all, which is a lane laid by something
 	 * other than FStandLayoutBuild. The caller then falls back to the straight lead-in rather
 	 * than guessing a heading.
+	 *
+	 * THE GATHER ONLY, since 2026-09-26 (#306): the DECISION - which of the candidates below
+	 * wins, and why - is LinkGeom::ChooseDeparture now, a pure function over plain geometry that
+	 * has its own world-free test. This half stays here because walking Node->Incident needs the
+	 * graph, which Solve/ may not see.
 	 */
 	bool EntryDeparture(const URoadNetwork& Network, FGuidelineNodeId NodeId,
 		const FVector2D& Toward, FVector2D& OutAlong)
@@ -170,10 +176,7 @@ namespace
 			return false;
 		}
 
-		bool bFound = false;
-		bool bBestIsBend = false;
-		double BestToward = 0.0;
-		double BestRoom = 0.0;
+		TArray<LinkGeom::FDepartureCandidate> Candidates;
 		for (const FGuidelineEdgeId& Id : Node->Incident)
 		{
 			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Id);
@@ -217,28 +220,10 @@ namespace
 			// road, the lead-in was built leaving the entry in that direction, and it hairpinned
 			// back: measured as R=93 uu against a lock of 699, with five vertices turning
 			// instantly, the sharpest at 71 degrees.
-			for (const FVector2D& Along : { Leaving, -Leaving })
-			{
-				// THE ORDER OF THE THREE TESTS IS THE RULE ITSELF: toward the road first, then
-				// the corner side, then room. The second and third only ever decide a tie in
-				// the first, because the two senses' dot products are exact opposites.
-				const double Dot = FVector2D::DotProduct(Along, Toward);
-				const double Margin = Dot - BestToward;
-				const bool bBetter = !bFound
-					|| Margin > UE_DOUBLE_KINDA_SMALL_NUMBER
-					|| (FMath::Abs(Margin) <= UE_DOUBLE_KINDA_SMALL_NUMBER
-						&& (bBend != bBestIsBend ? bBend : Room > BestRoom));
-				if (bBetter)
-				{
-					OutAlong = Along;
-					BestRoom = Room;
-					BestToward = Dot;
-					bBestIsBend = bBend;
-					bFound = true;
-				}
-			}
+			Candidates.Add({ Leaving, bBend, Room });
+			Candidates.Add({ -Leaving, bBend, Room });
 		}
-		return bFound;
+		return LinkGeom::ChooseDeparture(Candidates, Toward, OutAlong);
 	}
 
 	/**
@@ -333,29 +318,13 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 			// ONE RAY, PARAMETERISED BY DIRECTION, because a taxi-through stand casts two and
 			// everything about them but the heading is identical. Written as a lambda rather
 			// than duplicated: two copies of this block would be two places to keep the
-			// wingspan limit, the reach and the strategy in step.
+			// wingspan limit, the reach and the strategy in step - and FPendingLink::For (#306)
+			// is that same step, kept once for every caller rather than once per lambda.
 			const auto AddPoseLink = [&](double Out)
 			{
-				FPendingLink Link;
-				Link.Node = Instance.PoseNode;
-				Link.At = Pose->Position;
-				Link.Dir = FVector2D(FMath::Cos(Out), FMath::Sin(Out));
-				Link.Class = TraversalForRole(Instance.PoseRole);
-
-				// THE STRATEGY, decided once here rather than re-derived at search time - see
-				// ELinkKind. Aircraft casts a ray along Dir; everything else measures proximity.
-				Link.Kind = Link.Class == ETraversalClass::Aircraft ? ELinkKind::Ray : ELinkKind::Proximity;
-
-				// A span limit on a line no wing uses could never bind - 0 is UNLIMITED (see
-				// FProfileGuideline::MaxWingspan), and the CLASS has already refused aircraft.
-				Link.MaxWingspan = Link.Class == ETraversalClass::Aircraft ? StandWingspan : 0.0;
-				Link.Radius = StandRadius;
-
-				// WHICH RULE, and therefore how far. An aircraft casts its painted line 200 m; a
-				// service pose - a depot's truck bay - measures 50 m in any direction, because a
-				// van is not following paint and the player has no way to see an authored heading.
-				Link.Reach = Link.Class == ETraversalClass::Aircraft ? MaxLeadIn : ServiceLinkRadius;
-				OutPending.Add(Link);
+				OutPending.Add(FPendingLink::For(Instance.PoseNode, Pose->Position,
+					FVector2D(FMath::Cos(Out), FMath::Sin(Out)), TraversalForRole(Instance.PoseRole),
+					StandRadius, StandWingspan, MaxLeadIn, ServiceLinkRadius));
 			};
 
 			AddPoseLink(Instance.Heading + UE_DOUBLE_PI);
@@ -437,16 +406,11 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 				continue;
 			}
 
-			FPendingLink Link;
-			Link.Node = Resolved.Node;
-			Link.At = Node->Position;
-			Link.Dir = FVector2D(FMath::Cos(Heading), FMath::Sin(Heading));
-			Link.Class = TraversalForRole(Declared->Role);
-			Link.Kind = Link.Class == ETraversalClass::Aircraft ? ELinkKind::Ray : ELinkKind::Proximity;
-			Link.MaxWingspan = Link.Class == ETraversalClass::Aircraft ? StandWingspan : 0.0;
-			Link.Radius = StandRadius;
-			Link.Reach = Link.Class == ETraversalClass::Aircraft ? MaxLeadIn : ServiceLinkRadius;
-			OutPending.Add(Link);
+			// FPendingLink::For (#306): the ray-vs-proximity strategy, the span cap and the
+			// reach all fall out of the anchor's own traversal class - see its own doc comment.
+			OutPending.Add(FPendingLink::For(Resolved.Node, Node->Position,
+				FVector2D(FMath::Cos(Heading), FMath::Sin(Heading)), TraversalForRole(Declared->Role),
+				StandRadius, StandWingspan, MaxLeadIn, ServiceLinkRadius));
 		}
 
 		// THE LANE'S OWN LINK TO A ROAD IS NOT CAST HERE. It leaves a DECLARED ENTRY, and every
@@ -497,26 +461,20 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		auto EntryLink = [&Declared, StandRadius, ServiceLinkRadius](
 			FGuidelineNodeId NodeId, const FVector2D& At)
 		{
-			FPendingLink Link;
-
-			// PROXIMITY, not a ray. A vehicle may genuinely arrive from any side, and the
+			// GroundVehicle, not a ray: a vehicle may genuinely arrive from any side, and the
 			// player has no authored heading to aim at - the same reasoning that governs every
 			// other service link, and the reason a declared entry needs no rule of its own.
-			Link.Kind = ELinkKind::Proximity;
-			Link.Node = NodeId;
-			Link.At = At;
-			Link.Class = ETraversalClass::GroundVehicle;
+			// FPendingLink::For (#306) turns that class alone into Proximity/no-span-cap/
+			// ServiceLinkRadius; MaxLeadIn is passed 0.0 because the Aircraft branch that would
+			// read it can never be taken here.
+			FPendingLink Link = FPendingLink::For(NodeId, At, FVector2D(1.0, 0.0),
+				ETraversalClass::GroundVehicle, StandRadius, /*StandWingspan=*/0.0,
+				/*MaxLeadIn=*/0.0, ServiceLinkRadius);
 
 			// WHICH STAND, which is what makes this a lane link: Join reads it to lay the
 			// lead-in along the lane, and Build reads it to report a stand that joined nothing
 			// once rather than once per entry.
 			Link.LaneOwner = Declared.Key;
-
-			// 0 is UNLIMITED (see FProfileGuideline::MaxWingspan). A span limit on a line no
-			// wing uses could never bind, and the class has already refused aircraft.
-			Link.MaxWingspan = 0.0;
-			Link.Radius = StandRadius;
-			Link.Reach = ServiceLinkRadius;
 			return Link;
 		};
 
@@ -619,96 +577,28 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// cut to make, and Hit.Edge is still the road this link resolved against.
 	//
 	// UP HERE because a link leaving a lane RE-AIMS along the road below, and needs the
-	// polyline to do it. Everything after measures against this same array.
+	// polyline to do it. Everything after measures against this same array, held in Approach
+	// (below) rather than in a local of its own.
 	TArray<FVector2D> Curve;
 	if (!Network.SampleGuideline(Hit.Edge, Curve))
 	{
 		return FGuidelineNodeId();
 	}
 
-	// WHERE THE LEAD-IN RAY STRIKES IS THE CORNER, NOT THE JOIN.
+	// WHICH SHAPE THE JOIN TAKES - StraightRay, Crossing or LaneChange - IS LinkGeom::Plan's
+	// DECISION NOW (#306, regression of #76). Join used to hide this as an if/else on
+	// Link.Kind, Link.LaneOwner.IsSet() and LaneRadius > 0.0, mutating Param/Corner/Dir/
+	// OutLaneControl/LaneRun in place with no name for which branch had run; see
+	// LinkGeom::Plan's own top comment (Solve/LinkGeom.cpp) for the full account (why the join
+	// has to MOVE off the search's own hit, why a road across a lane's end wants a different
+	// shape from one alongside it, and why EntryDeparture's
+	// DECISION half moved out from under this function while its GATHER half - which needs the
+	// graph - stayed).
 	//
-	// Joining here is what produced a hard turn: the ray meets the taxiway at whatever
-	// angle the stand happens to face, and a stand square to the taxiway makes it 90
-	// degrees. A curve cannot fix that in place - a quadratic's end tangents both point
-	// at its control, so being tangent to the lead-in AND to the taxiway would put the
-	// control exactly here, which is the straight line again. The join has to MOVE.
-	//
-	// MUTABLE, AND SO IS THE PARAM IT COMES FROM, for one caller: a link leaving a lane is the
-	// only one that re-aims. The finder answers "where is this road NEAREST me", which is the
-	// right question for an anchor casting at a taxiway and the WRONG one for a lane change -
-	// the nearest point is square abeam, and square abeam is the one place a transition has no
-	// room to turn in. See the lane block below.
-	double Param = Hit.Param;
-	FVector2D Corner = GuidelineGeom::Eval(PositionA, Original.Control, PositionB, Param);
-
-	// SET ONLY BY A LINK THAT LEAVES A STAND'S LANE - see the block below, which is the only
-	// writer. Everything else keeps the straight midpoint control, because a straight lead-in
-	// is what it is.
-	TOptional<FVector2D> OutLaneControl;
-
-	if (Link.Kind != ELinkKind::Ray)
-	{
-		// The direction the join actually needs. A service link has no ray of its own - it
-		// was found by DISTANCE - but the fillet and the two sweeps below are all written
-		// in terms of a direction of arrival, and this is it.
-		const FVector2D Toward = Corner - Link.At;
-		if (!Toward.IsNearlyZero())
-		{
-			Link.Dir = Toward.GetSafeNormal();
-		}
-	}
-
-	// A LINE JOINS A LANE ALONG IT, NOT ACROSS IT.
-	//
-	// A SQUARE-ON ENTRANCE IS A TIGHT TURN WE BUILT. However well the router is taught to avoid
-	// tight turns it can only choose among the ones that exist, and a lane whose entrances met
-	// the road at a right angle left exactly one tight option on every stand - which is the one
-	// it kept taking. Reported from play 2026-09-15, twice. So the control point goes a RUN
-	// along the lane's own heading at the entry and the lead-in LEAVES tangentially: a truck
-	// turning off the road drives down the lane, and there is no heading change at the junction
-	// at all. Which of the two headings, and how far, is EntryDeparture's business.
-	//
-	// THE OLD CONSTRUCTION SLID THE JOIN, because the ring's entrance was wherever the road
-	// came nearest and the join could be put anywhere. This one cannot slide - the entry is
-	// DECLARED - so it is the same triangle read the other way round: the declared node is the
-	// join, the control is the run ahead of it, and Dir is taken from the CONTROL rather than
-	// from the node, which is what keeps the fillet below tangent to this curve instead of to a
-	// chord the curve never follows.
-	//
-	// THE RADIUS IS THE INPUT, NOT THE RUN, and that is the correction of 2026-09-16.
-	// FStandLayoutBuild::TangentRunFor governed the run for one round - it is deleted, and
-	// StandLaneBuild.h says where its answer comes from now - and its 800 uu was measured
-	// against a SPUR's 1000-1400 uu gaps. A road is three to five times that, and the same 800
-	// delivered 40 uu of radius at 4 m and 67 at 54 against the 699.4 a real 8.5 m dispenser's
-	// steering lock demands. A curve tighter than the lock is untakeable AT ANY SPEED, which is
-	// the defect this whole piece of work exists to delete, so the figure cannot be a constant
-	// tuned against one gap.
-	//
-	// TWO SHAPES, AND WHICH ONE IS A QUESTION ABOUT THE ROAD, not a preference. A road drawn
-	// ALONGSIDE the stand is parallel to the lane and the two lines never meet, so the connector
-	// is a lane change: an S of two curves, sized by GuidelineGeom::ShiftDeflectionFor. A road
-	// drawn ACROSS the end of the stand CROSSES the lane's heading, and that wants the ordinary
-	// thing - run on to where they meet and round the corner. The crossing is preferred wherever
-	// it exists within this link's own reach and its corner fits in front of the entry, because
-	// it leaves the lead-in dead straight and gives BOTH sweeps their radius rather than one: an
-	// S has to slant onto the road, and turning the other way out of a slant is a U-turn that no
-	// geometry fixes. Tried the other way round first, and a road across the nose came out with
-	// a transition longer than the distance to the road and no link at all.
-	//
-	// PLUS A TENTH ON THE LOCK, measured rather than chosen. Sized at exactly the lock, the 4 m
-	// fixture came out at 707 uu against 699.4 - a 1% margin, and the weld tolerance the fillet
-	// gives up below is enough to eat it. A tenth is what the stand layout allows itself for the
-	// same reason, at UEntityDefinition::BuildCodeCStandFor's LegSlack.
-	//
-	// KEPT AFTERWARDS: LaneRadius is what the fillet at the road must deliver (see Offset), and
-	// LaneRun is the room the S has already spent along the lane (see LeadRoom).
-	// THE RADIUS THIS LINK OWES IS DECIDED BY WHAT DRIVES IT, not by whether it owns a lane.
-	//
-	// THE LOCK OF THE LARGEST VEHICLE ADMITTED, never the one driving now - the same call the
-	// lane's own corners are rounded by (FStandLayoutBuild::Build) and the same rule all this
-	// airport's ground geometry follows. An AIRCRAFT link keeps Link.Radius instead, which is
-	// the PAINTED radius of its lead-in line and is not what this is about.
+	// THE RADIUS THIS LINK OWES IS DECIDED BY WHAT DRIVES IT, not by whether it owns a lane -
+	// the lock of the LARGEST VEHICLE ADMITTED, never the one driving now, the same call the
+	// lane's own corners are rounded by (FStandLayoutBuild::Build). An AIRCRAFT link keeps
+	// Link.Radius instead, the PAINTED radius of its lead-in line.
 	//
 	// IT WAS LANE LINKS ALONE UNTIL 2026-09-17, and that left every other ground anchor link
 	// filleted at a Code C's painted 2500 uu - three and a half times what a truck's lock asks
@@ -716,7 +606,6 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// y = -1400 swept 2500 each way, split the road at y = +1100, and left the entry contact at
 	// +1906 only 796 uu of road where its own square corner wanted 1088. The entry was clamped
 	// to 563 against a lock of 699 by a fillet belonging to a vehicle that never drives it.
-	double LaneRun = 0.0;
 	double LaneRadius = 0.0;
 	if (Link.Class == ETraversalClass::GroundVehicle)
 	{
@@ -726,101 +615,45 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 		LaneRadius = ServiceLaneRadius(LargestServiceVehicle);
 	}
 
+	LinkGeom::FLinkApproach Approach;
+	Approach.PositionA = PositionA;
+	Approach.Control = Original.Control;
+	Approach.PositionB = PositionB;
+	Approach.Param = Hit.Param;
+	Approach.At = Link.At;
+	Approach.Dir = Link.Dir;
+	// THE DIRECTION THE JOIN ACTUALLY NEEDS, for every link that was found by DISTANCE rather
+	// than by RAY: a service link has no ray of its own, but the fillet and the two sweeps below
+	// are written in terms of a direction of arrival, and Plan derives it from Corner once this
+	// is set - see Solve/LinkGeom.h's FLinkApproach::bRecomputeDirFromCorner.
+	Approach.bRecomputeDirFromCorner = Link.Kind != ELinkKind::Ray;
+	Approach.LaneRadius = LaneRadius;
+	Approach.Reach = Link.Reach;
+	Approach.WeldTolerance = LeadInWeldTolerance;
+
 	if (Link.LaneOwner.IsSet() && LaneRadius > 0.0)
 	{
-		FVector2D Along = FVector2D::ZeroVector;
-		if (EntryDeparture(Network, Link.Node, Corner - Link.At, Along))
-		{
-			// WHERE THE LANE'S OWN HEADING MEETS THE ROAD, if it does at all. Parallel lines
-			// give a vanishing cross product and no crossing; a road BEHIND the entry gives a
-			// negative distance, which is not a crossing this link can use either.
-			const FVector2D RoadDir =
-				GuidelineGeom::Tangent(PositionA, Original.Control, PositionB, Param);
-			const double Converge = Along.X * RoadDir.Y - Along.Y * RoadDir.X;
-			const FVector2D ToRoad = Corner - Link.At;
-			const double MeetsAt = FMath::Abs(Converge) > UE_DOUBLE_KINDA_SMALL_NUMBER
-				? (ToRoad.X * RoadDir.Y - ToRoad.Y * RoadDir.X) / Converge
-				: -1.0;
-
-			// AND WHETHER ITS CORNER FITS IN FRONT OF THE ENTRY. The turn onto the road is the
-			// GENTLER of the two corners the connector makes with it - the one a truck joining
-			// the traffic takes - and CornerRunFor says how much run that needs.
-			// The ACUTE angle between the two lines, folded from AngleBetween's [0, pi] - rule 18.
-			const double Crossing = RoadGeom::AngleBetween(Along, RoadDir);
-			const double Turn = FMath::Min(Crossing, UE_DOUBLE_PI - Crossing);
-			const double Needs = GuidelineGeom::CornerRunFor(LaneRadius, UE_DOUBLE_PI - Turn);
-
-			// LINK.REACH IS DOING TWO JOBS HERE, and the second one is named so it is deliberate.
-			// Its first is the player's knob for how far a stand may sit from its road
-			// (ARoadNetworkActor::ServiceLinkRadius, and FAnchorLink::DefaultServiceLinkRadius).
-			// Its second is this: a crossing further off than a link may reach is a crossing
-			// this connector would have to run to along a line that is no longer the lane, so
-			// the lane change is the better shape. Raising the knob therefore widens the
-			// crossing branch as well as the search - which is right, since both answer "how far
-			// from its road may a stand be", but it is a coupling to know about rather than to
-			// discover. There is no second figure because a second figure is one more thing that
-			// can disagree with this one.
-			if (MeetsAt > 0.0 && MeetsAt <= Link.Reach && Needs + LeadInWeldTolerance <= MeetsAt)
-			{
-				// THE CROSSING. Re-asked of the road rather than taken from the tangent line, so
-				// the corner sits ON a road that bends; Dir then runs from the entry to it, and
-				// the lead-in is straight - which is tangent to the lane at the entry by
-				// construction, and needs no control point of its own to be so.
-				int32 Span = 0;
-				double Fraction = 0.0;
-				GuidelineGeom::NearestOnPolyline(Curve, Link.At + Along * MeetsAt, Span, Fraction);
-				Param = GuidelineGeom::ParamAtSample(Span, Fraction, Curve.Num());
-				Corner = GuidelineGeom::Eval(PositionA, Original.Control, PositionB, Param);
-
-				const FVector2D Out = Corner - Link.At;
-				if (!Out.IsNearlyZero())
-				{
-					Link.Dir = Out.GetSafeNormal();
-				}
-			}
-			else
-			{
-				// THE LANE CHANGE. The entry cannot simply run on to the road - it is beside it,
-				// not aimed at it - so the connector leaves at the deflection that clears the
-				// lock across this gap and meets the road at the same angle on the other side.
-				double Run = 0.0;
-				const double Deflect =
-					GuidelineGeom::ShiftDeflectionFor(LaneRadius, ToRoad.Size(), Run);
-				if (Run > LeadInWeldTolerance)
-				{
-					// WHICH WAY IT BENDS is which side the road is on, and the cross product
-					// says so: positive when the road lies to the left of the way this link
-					// leaves.
-					const double Side = FMath::Sign(Along.X * ToRoad.Y - Along.Y * ToRoad.X);
-					const FVector2D Turned =
-						Along.GetRotated(FMath::RadiansToDegrees(Deflect) * Side);
-
-					// AND THE ROAD IS MET WHERE THE TRANSITION ARRIVES, not where it is nearest.
-					// Both curves get the same tangent length, so the meeting point sits two
-					// runs along the aim - and re-asking the road for the point nearest THAT is
-					// what keeps this honest when the road bends or ends: the fillet below still
-					// works from a point on the road, and Dir is taken from the control
-					// afterwards so the lead-in stays tangent to whatever came back.
-					const FVector2D Control = Link.At + Along * Run;
-					const FVector2D Aim = Control + Turned * (2.0 * Run);
-
-					int32 Span = 0;
-					double Fraction = 0.0;
-					GuidelineGeom::NearestOnPolyline(Curve, Aim, Span, Fraction);
-					Param = GuidelineGeom::ParamAtSample(Span, Fraction, Curve.Num());
-					Corner = GuidelineGeom::Eval(PositionA, Original.Control, PositionB, Param);
-
-					const FVector2D Out = Corner - Control;
-					if (!Out.IsNearlyZero())
-					{
-						OutLaneControl = Control;
-						Link.Dir = Out.GetSafeNormal();
-						LaneRun = Run;
-					}
-				}
-			}
-		}
+		// EntryDeparture STILL NEEDS Toward, which is Corner - Link.At at the search's OWN hit -
+		// the same value Plan will separately compute once it runs; asking it here too, rather
+		// than threading Plan's own copy back out, is one extra Eval call against a Curve
+		// re-derivation of Plan's control flow, and this function already samples Curve once
+		// more than it would like (see the top of this function).
+		const FVector2D UnaimedCorner =
+			GuidelineGeom::Eval(PositionA, Original.Control, PositionB, Hit.Param);
+		Approach.bHasLaneAlong =
+			EntryDeparture(Network, Link.Node, UnaimedCorner - Link.At, Approach.Along);
 	}
+
+	Approach.Curve = Curve;
+	const LinkGeom::FLinkGeometry Planned = LinkGeom::Plan(Approach);
+
+	double Param = Planned.Param;
+	FVector2D Corner = Planned.Corner;
+	Link.Dir = Planned.Dir;
+	// SET ONLY ON LaneChange - see FLinkGeometry::Control's own comment. Everything else keeps
+	// the straight midpoint control, because a straight lead-in is what it is.
+	TOptional<FVector2D> OutLaneControl = Planned.Control;
+	double LaneRun = Planned.LaneRun;
 
 	const FVector2D TaxiDir =
 		GuidelineGeom::Tangent(PositionA, Original.Control, PositionB, Param);
@@ -853,29 +686,18 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	}
 
 	// It has to fit: on the lead-in, and on the taxiway BOTH ways, with a weld
-	// tolerance of room left over so no split produces a stub.
+	// tolerance of room left over so no split produces a stub - MeasureJoinRoom (#306), shared
+	// with PoseSetbackFor so the room asked for there is the room measured here.
 	//
 	// MEASURED FROM THE CONTROL WHEN THERE IS ONE, not from the node. LeadEnd is laid at
 	// Corner - Dir * Offset and Dir points from the control, so an Offset longer than THAT
 	// distance puts LeadEnd behind the control: the lead-in folds back on itself and the two
 	// sweeps leave from the wrong side of it. Measured from the node instead, a curved lead-in
-	// that swings wide reads as having more room than it has.
-	//
-	// AND THE TANGENT RUN IS SPENT ROOM. A curved lead-in has TWO legs - the run down the lane
-	// and the approach to the road - and a fillet that takes everything up to the weld
-	// tolerance leaves the second one a few uu long, which is a HOOK: the lead goes 313 uu out
-	// along the lane and doubles back 10. Measured on the suite's own fixture before this
-	// subtraction: 67 degrees of instant turn at the far end of a lead-in whose whole purpose
-	// is to have none. It only ever binds when the road is close - at 54 m the fillet asks for
-	// 2500 against 4590 of room - which is exactly where a hook was being built.
+	// that swings wide reads as having more room than it has. It only ever binds when the road
+	// is close - at 54 m the fillet asks for 2500 against 4590 of room - which is exactly where
+	// the hook MeasureJoinRoom's own comment describes was being built.
 	const FVector2D LeadFrom = OutLaneControl.IsSet() ? OutLaneControl.GetValue() : Link.At;
-	const double LeadRoom =
-		FVector2D::Distance(LeadFrom, Corner) - LeadInWeldTolerance - LaneRun;
-	const double TotalLength = GuidelineGeom::PolylineLength(Curve);
-	const double Behind = TotalLength * Param - LeadInWeldTolerance;
-	const double Ahead = TotalLength * (1.0 - Param) - LeadInWeldTolerance;
-
-	Offset = FMath::Min(Offset, FMath::Min(LeadRoom, FMath::Min(Behind, Ahead)));
+	Offset = FMath::Min(Offset, MeasureJoinRoom(Curve, Param, Corner, LeadFrom, LaneRun).Available());
 
 	FGuidelineNodeId LeadEnd;
 	TArray<FGuidelineNodeId> SweepEnds;
@@ -1234,81 +1056,81 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 			Joined, Pending.Num(), Unjoined);
 	}
 
-	// A PLOT THAT CANNOT WORK YET, warned rather than refused. A part-built depot is a
-	// legitimate state - the player may be about to add the missing module - so the census
-	// says what is missing and the placement still stands. This is the same habit as the
-	// unjoined-anchor warning above: name the thing the player would go and fix.
-	//
-	// HERE AND NOT AT PLACEMENT, because it must be said again after an EDIT. A depot built
-	// correctly and later reduced would otherwise have been warned about once, at a moment
-	// the player was not looking at it.
-	for (const FEntityInstance& Entity : Network.GetEntities())
-	{
-		if (!Entity.bAlive || Entity.Modules.Num() == 0)
-		{
-			continue;
-		}
-
-		int32 Sheds = 0;
-		int32 Pumps = 0;
-		for (const EDepotModule Module : Entity.Modules)
-		{
-			Sheds += Module == EDepotModule::Shed ? 1 : 0;
-			Pumps += Module == EDepotModule::Pump ? 1 : 0;
-		}
-
-		if (Sheds == 0)
-		{
-			UE_LOG(LogAirside, Warning,
-				TEXT("Fuel depot at (%.0f, %.0f): no shed, so no trucks. Build one in a bay."),
-				Entity.Position.X, Entity.Position.Y);
-		}
-		if (Pumps == 0)
-		{
-			UE_LOG(LogAirside, Warning,
-				TEXT("Fuel depot at (%.0f, %.0f): no pump, so nothing can be fuelled. "
-					 "Build one in a bay."),
-				Entity.Position.X, Entity.Position.Y);
-		}
-	}
+	// THE FUEL-DEPOT MODULE CENSUS MOVED OUT, 2026-09-26 (#306): it warned about a depot
+	// missing a shed or a pump, which is a fact about a PLOT's modules and has nothing to do
+	// with joining a lead-in - it only ever ran here because this was the last thing a Topology
+	// rebuild touched Network with. It is DepotKit::ReportIncomplete now, called from
+	// URoadSurfacePresenter::RebuildInternal's Topology branch right after this Build, so it
+	// still runs exactly once per rebuild and still runs again after every edit.
 
 	return Joined;
 }
 
 double FAnchorLink::ServiceLaneRadius(const FChassis& LargestServiceVehicle)
 {
-	// PLUS A TENTH ON THE LOCK, measured rather than chosen - see Join's own comment on the 4 m
-	// fixture that came out at 707 against 699.4 when sized at exactly the lock.
+	// PLUS A TENTH ON THE LOCK, measured rather than chosen. Sized at exactly the lock, the 4 m
+	// fixture came out at 707 uu against 699.4 - a 1% margin, and the weld tolerance the fillet
+	// gives up below is enough to eat it. A tenth is what the stand layout allows itself for the
+	// same reason, at UEntityDefinition::BuildCodeCStandFor's LegSlack.
 	constexpr double Slack = 1.1;
 	return LargestServiceVehicle.TightestFollowableRadius() * Slack;
+}
+
+FAnchorLink::FJoinRoom FAnchorLink::MeasureJoinRoom(const TArray<FVector2D>& Curve, double Param,
+	const FVector2D& Corner, const FVector2D& LeadFrom, double LaneRun)
+{
+	FJoinRoom Room;
+
+	// AND THE TANGENT RUN IS SPENT ROOM. A curved lead-in has TWO legs - the run down the lane
+	// and the approach to the road - and a fillet that takes everything up to the weld
+	// tolerance leaves the second one a few uu long, which is a HOOK: the lead goes 313 uu out
+	// along the lane and doubles back 10. Measured on the suite's own fixture before this
+	// subtraction: 67 degrees of instant turn at the far end of a lead-in whose whole purpose
+	// is to have none.
+	Room.LeadRoom = FVector2D::Distance(LeadFrom, Corner) - LeadInWeldTolerance - LaneRun;
+
+	const double TotalLength = GuidelineGeom::PolylineLength(Curve);
+	Room.Behind = TotalLength * Param - LeadInWeldTolerance;
+	Room.Ahead = TotalLength * (1.0 - Param) - LeadInWeldTolerance;
+	return Room;
 }
 
 double FAnchorLink::PoseSetbackFor(const URoadNetwork& Network, const FVector2D& At,
 	const FVector2D& Inward, const FChassis& LargestServiceVehicle, double ServiceLinkRadius)
 {
 	// THE LINK Gather WOULD MAKE for a service pose: found by proximity, within the service
-	// radius, for a ground vehicle.
-	FPendingLink Link;
-	Link.Kind = ELinkKind::Proximity;
-	Link.At = At;
-	Link.Class = ETraversalClass::GroundVehicle;
-	Link.Reach = ServiceLinkRadius;
+	// radius, for a ground vehicle - FPendingLink::For (#306), the same assembly Gather itself
+	// uses. Radius, StandWingspan and MaxLeadIn are unused off a probe that never reaches Join.
+	const FPendingLink Link = FPendingLink::For(FGuidelineNodeId(), At, FVector2D(1.0, 0.0),
+		ETraversalClass::GroundVehicle, /*Radius=*/2500.0, /*StandWingspan=*/0.0,
+		/*MaxLeadIn=*/0.0, ServiceLinkRadius);
 
 	const FLinkHit Hit = Resolve(Network, Link, TSet<FGuidelineNodeId>());
 	const FGuidelineEdge* Edge = Hit.IsSet() ? Network.GetGuidelineEdge(Hit.Edge) : nullptr;
 	const FGuidelineNode* A = Edge != nullptr ? Network.GetGuidelineNode(Edge->A) : nullptr;
 	const FGuidelineNode* B = Edge != nullptr ? Network.GetGuidelineNode(Edge->B) : nullptr;
-	if (A == nullptr || B == nullptr || Inward.IsNearlyZero())
+	TArray<FVector2D> Curve;
+	if (A == nullptr || B == nullptr || Inward.IsNearlyZero() || !Network.SampleGuideline(Hit.Edge, Curve))
 	{
 		return 0.0;
 	}
 
-	// THE ROOM Join WILL MEASURE: LeadRoom is the lead-in's length less a weld tolerance, and
-	// a square turn's fillet needs CornerRunFor of the lane radius. A second tolerance on top,
-	// so the fillet is never clamped by rounding alone.
 	const FVector2D Meets = GuidelineGeom::Eval(A->Position, Edge->Control, B->Position, Hit.Param);
-	const double Needs = GuidelineGeom::CornerRunFor(ServiceLaneRadius(LargestServiceVehicle),
-		UE_DOUBLE_HALF_PI) + 2.0 * LeadInWeldTolerance;
+
+	// THE ROOM JOIN WILL ACTUALLY MEASURE (#306), not an idealised square corner on an
+	// unboundedly long road. MeasureJoinRoom's Behind/Ahead are a property of THIS road's own
+	// length either side of the hit, and no setback moves them: Inward is square to the road by
+	// construction (this function's own header comment), so the point Resolve found does not
+	// move as At does. What setback buys is LeadRoom alone - so the corner run actually asked
+	// for is capped at what Behind and Ahead can hold, not at a raw CornerRunFor a short spur
+	// could never deliver. LeadFrom=Corner=Meets: this call is not asking about the lead-in's
+	// own length (Have, below, measures that directly), only about the road's.
+	const FJoinRoom RoadRoom = MeasureJoinRoom(Curve, Hit.Param, Meets, Meets);
+
+	// A SECOND TOLERANCE ON TOP, so the fillet is never clamped by rounding alone.
+	const double Needs = FMath::Min(
+		GuidelineGeom::CornerRunFor(ServiceLaneRadius(LargestServiceVehicle), UE_DOUBLE_HALF_PI),
+		FMath::Min(RoadRoom.Behind, RoadRoom.Ahead)) + 2.0 * LeadInWeldTolerance;
 
 	// ALONG INWARD ONLY: the part of the gap that setting back actually lengthens.
 	const double Have = FVector2D::DotProduct(At - Meets, Inward.GetSafeNormal());
