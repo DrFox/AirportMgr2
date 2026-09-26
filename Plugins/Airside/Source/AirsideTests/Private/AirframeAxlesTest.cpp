@@ -6,8 +6,11 @@
 #include "AnimationRuntime.h"
 #include "Engine/SkeletalMesh.h"
 #include "Model/GroundTraffic.h"
+#include "Model/LandingRun.h"
 #include "Model/RoadEntity.h"
+#include "Model/TakeoffRun.h"
 #include "Solve/IcaoCode.h"
+#include "Testing/AirsideTestWorld.h"
 #include "UObject/UObjectGlobals.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -133,74 +136,44 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-/**
- * Every aeroplane authored by a build_plane<N>_type.py - the ones whose figures are MEASURED
- * off an export rather than typed into a C++ builder.
- *
- * ONE LIST, BECAUSE TWO TESTS READ IT. FootprintMatchesTheMesh pins the authored figures
- * against the mesh they were measured from; MeasuredTypesFitTheirLettersRow pins them against
- * IcaoCode's table. Both are properties of the PIPELINE rather than of one aeroplane, so a
- * type that joined one list and not the other would be half-covered with nothing saying which
- * half - which is the failure CLAUDE.md names under "check where a list is CONSUMED", and
- * which airside_import.py's FLEET already records paying for once.
- *
- * NOT THE PAPER TYPES. DA_Aircraft_A320 and DA_Aircraft_B738 carry no mesh and are built in
- * C++, so there is nothing here to measure them against; Airside.Entities.
- * EveryAirframeFitsItsLettersRow covers those through their builders.
- */
-static const TCHAR* const MeasuredTypes[] = {
-	TEXT("/Game/Entities/DA_Aircraft_Plane1"),
-	TEXT("/Game/Entities/DA_Aircraft_Plane2"),
-	TEXT("/Game/Entities/DA_Aircraft_Plane3"),
-	TEXT("/Game/Entities/DA_Aircraft_Plane4"),
-	TEXT("/Game/Entities/DA_Aircraft_Plane5"),
-	// plane6 IS THE ROW THAT BROKE THE wheel_L LOOKUP BELOW, and it is here rather than
-	// excused because the half-run is exactly as available to a 777 as to a 172. A 777 main
-	// leg carries a three-axle bogie, so its rig names wheel_L1..L3 and has no bone called
-	// wheel_L at all - see LeftMainWheel.
-	TEXT("/Game/Entities/DA_Aircraft_Plane6"),
-	// THE MERIDIAN JOINS THE LIST, which it could not while its mesh was a placeholder
-	// imported about the main gear: the steered-axle check asserts the class convention, and
-	// that type declared a deviation from it. plane7 conforms, so the half-run guard now
-	// covers every modelled aeroplane in the game rather than five of six. It is also the only
-	// row whose footprint is typed in C++ as well as authored - see
-	// `build_aircraft_type.py plane7`, which checks the same four figures from the other
-	// direction.
-	TEXT("/Game/Entities/DA_Aircraft_Plane7"),
-	// THE A380 IS THE SECOND BOGIE ROW AND THE FIRST WITH TWO UNITS A SIDE. Its rig numbers
-	// the wheels per side - wheel_L1..L2 on the wing bogie, wheel_L3..L5 on the body bogie -
-	// precisely so that LeftMainWheel below finds wheel_L1 the way it finds plane6's; the
-	// models repo names the MESHES by unit and the BONES by the game's rule, and says so.
-	TEXT("/Game/Entities/DA_Aircraft_Plane8"),
-	// THE A320 IS THE ROW THAT BINDS CODE C'S NOSE. Its 508.4 uu nose overhang is what
-	// MaxNoseFwd is sized from, so this row is the one that goes red if a re-export grows it.
-	TEXT("/Game/Entities/DA_Aircraft_Plane9"),
-	// THE CARAVAN IS THE FIRST MEASURED CODE B SINGLE. Its 15.88 m span is over Code A's 15 m
-	// by 0.88, so this row is the one that goes red if a re-export trims the wing into A.
-	TEXT("/Game/Entities/DA_Aircraft_Plane10"),
-	// THE CHEROKEE IS THE FIRST ROW EXPORTED OFF-LEVEL: 5.02 deg nose-up on its gear. Its
-	// footprint is a plan shadow of a pitched mesh, and this row is what says the pipeline
-	// measures such a mesh the same way it measures a level one.
-	TEXT("/Game/Entities/DA_Aircraft_Plane12"),
-	// THE A350 IS THE ROW THAT BINDS CODE E'S TAIL. Its rudder at 6901.3 uu aft of the stop
-	// mark is what MaxTailAft 6902 is sized from, so this row goes red if a re-export grows it.
-	TEXT("/Game/Entities/DA_Aircraft_Plane11"),
-	// THE 757-300 IS THE FIRST MEASURED CODE D TYPE, and the first row with a TWO-axle bogie.
-	// Its 38.05 m span is over Code C's 36 m by 2.05, so this row goes red if a re-export trims
-	// the wing into C - and until it, Code D's row had no modelled aeroplane to be checked by.
-	TEXT("/Game/Entities/DA_Aircraft_Plane13"),
-	// THE PHENOM 300 IS THE FIRST MEASURED CODE B JET. Its 15.91 m span is over Code A's 15 m
-	// by 0.91 across the winglets, so this row goes red if a re-export trims them into A.
-	TEXT("/Game/Entities/DA_Aircraft_Plane14"),
-	// THE SR22 IS THE FIRST ROW WHOSE NOSEWHEEL CASTERS: its steer bone turns about a
-	// VERTICAL axis at the leg foot rather than about the raked leg, so this row is what says
-	// the steered-axle station is measured off the tyre, not off the strut.
-	TEXT("/Game/Entities/DA_Aircraft_Plane15"),
-	// THE BARON IS THE FIRST CODE A ROW WHOSE GEAR RETRACTS, and the second exported off-level
-	// (2.44 deg nose-up). Its axles are measured off the reference pose with the gear DOWN, so
-	// this row goes red if a re-export ships the rig posed mid-cycle.
-	TEXT("/Game/Entities/DA_Aircraft_Plane16"),
-};
+// MeasuredTypes[] LIVED HERE UNTIL ISSUE #293: sixteen hand-typed paths, each with a comment
+// naming the ONE FACT that justified including it. FootprintMatchesTheMesh,
+// MeasuredTypesFitTheirLettersRow, FieldLengthsCoverTheRoll and PushbackNeedsAuthored below
+// all now call EveryAircraftType() (Testing/AirsideTestWorld.h) instead - the asset registry
+// answers "every UAircraftType with a mesh" directly, so a new aeroplane needs no fifth hand
+// list to join, and the gap that cost this file its issue (Plane4 and Plane7 absent from
+// AircraftFieldLengthTest.cpp's table - see FieldLengthsCoverTheRoll below) cannot recur the
+// same way. A comment that only justified INCLUSION had nothing left to say once inclusion
+// stopped being a choice - but the FACTS those comments carried are kept here rather than
+// dropped, since several are what a numeric constant elsewhere (IcaoCode's, mostly) was
+// calibrated against:
+//
+//   - plane6 (777-300ER) is the first BOGIE rig: its main leg carries three axles, so its
+//     rig names wheel_L1..L3 and has no bone called wheel_L at all - see LeftMainWheel below.
+//   - plane7 (PA-46 Meridian) could not join a measured-figures list while its mesh was
+//     SM_PiperMeridian, a placeholder imported about the main gear rather than the nose; it
+//     declared a deviation from the steered-axle-is-the-origin convention that every other
+//     type conforms to. Replaced 2026-09-21.
+//   - plane8 (A380-800) is the second bogie rig and the first with TWO units a side: its
+//     rig numbers wheel_L1..L2 on the wing bogie, wheel_L3..L5 on the body bogie, so
+//     LeftMainWheel finds wheel_L1 the way it finds plane6's.
+//   - plane9 (A320-200) BINDS CODE C'S NOSE: its 508.4 uu nose overhang is what
+//     IcaoCode::MaxNoseFwdForLetter(Code C) is sized from.
+//   - plane10 (Grand Caravan) is the first measured Code B single: its 15.88 m span clears
+//     Code A's 15 m by 0.88.
+//   - plane11 (A350-1000) BINDS CODE E'S TAIL: its rudder at 6901.3 uu aft of the stop mark
+//     is what IcaoCode::MaxTailAftForLetter(Code E) 6902 is sized from.
+//   - plane12 (PA-28-180 Cherokee) is the first rig exported OFF-LEVEL, 5.02 deg nose-up on
+//     its gear - its footprint is a plan shadow of a pitched mesh.
+//   - plane13 (757-300) is the first measured Code D type and the first two-axle bogie: its
+//     38.05 m span clears Code C's 36 m by 2.05, and until it Code D had no modelled
+//     aeroplane to be checked by.
+//   - plane14 (Phenom 300) is the first measured Code B JET: its 15.91 m span clears Code
+//     A's 15 m by 0.91 across the winglets.
+//   - plane15 (Cirrus SR22) is the first rig whose NOSEWHEEL CASTERS: its steer bone turns
+//     about a vertical axis at the leg foot rather than about a raked leg.
+//   - plane16 (Baron 58) is the first Code A rig whose gear RETRACTS, and the second
+//     exported off-level (2.44 deg nose-up); its axles are measured with the gear DOWN.
 
 /**
  * The bone index of a rig's LEFT MAIN WHEEL, or INDEX_NONE.
@@ -251,18 +224,17 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 	// EVERY MEASURED TYPE, not just plane2. The half-run is a property of the PIPELINE, so
 	// the second aeroplane to go through it inherits the same exposure the moment it exists,
 	// and a test naming one asset would have gone on passing while the other drifted. The list
-	// is MeasuredTypes, shared with MeasuredTypesFitTheirLettersRow.
-	for (const TCHAR* Path : MeasuredTypes)
+	// is EveryAircraftType(), shared with MeasuredTypesFitTheirLettersRow.
+	for (UAircraftType* Type : EveryAircraftType())
 	{
-		UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
-			UAircraftType::StaticClass(), nullptr, Path));
-		if (!TestNotNull(*FString::Printf(TEXT("%s loads"), Path), Type))
-		{
-			continue;
-		}
+		// THE BARE PACKAGE PATH, not GetPathName()'s "/Game/.../DA_Aircraft_Plane1.
+		// DA_Aircraft_Plane1" - every literal path elsewhere in this file (Expected[],
+		// Judgement[], StaticLoadObject calls) is the bare form, and a mismatched suffix here
+		// would make the coverage Sets below never match anything they should.
+		const FString Path = Type->GetOutermost()->GetName();
 
 		USkeletalMesh* Mesh = Type->Mesh.LoadSynchronous();
-		if (!TestNotNull(*FString::Printf(TEXT("%s: the mesh it names loads"), Path), Mesh))
+		if (!TestNotNull(*FString::Printf(TEXT("%s: the mesh it names loads"), *Path), Mesh))
 		{
 			continue;
 		}
@@ -273,17 +245,17 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 
 		// A centimetre either way: both come from the same measurement, so anything larger is
 		// a pipeline that was not re-run rather than a rounding difference.
-		TestEqual(*FString::Printf(TEXT("%s: the authored nose matches the mesh"), Path),
+		TestEqual(*FString::Printf(TEXT("%s: the authored nose matches the mesh"), *Path),
 			Type->Footprint.NoseX, MeshNoseX, 1.0);
-		TestEqual(*FString::Printf(TEXT("%s: the authored tail matches the mesh"), Path),
+		TestEqual(*FString::Printf(TEXT("%s: the authored tail matches the mesh"), *Path),
 			Type->Footprint.TailX, MeshTailX, 1.0);
 
 		// AND THE ORIGIN IS THE NOSE GEAR, which is what makes the steered axle zero. A mesh
 		// re-exported about some other point would pass both checks above and still steer
 		// from the wrong end of the aeroplane.
 		TestEqual(*FString::Printf(TEXT("%s: the steered axle is the origin, per the class "
-			"convention"), Path), Type->SteerAxleX, 0.0, 1.0);
-		TestTrue(*FString::Printf(TEXT("%s: its mains are measured, aft of that origin"), Path),
+			"convention"), *Path), Type->SteerAxleX, 0.0, 1.0);
+		TestTrue(*FString::Printf(TEXT("%s: its mains are measured, aft of that origin"), *Path),
 			Type->FixedAxleX < -100.0);
 
 		// AND THE WHEEL THE ANIMATION SPINS IS THE WHEEL THE MODEL CARRIES. The radius is
@@ -303,12 +275,12 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 		const FReferenceSkeleton& Rig = Mesh->GetRefSkeleton();
 		const int32 LeftWheel = LeftMainWheel(Rig);
 		if (TestTrue(*FString::Printf(TEXT("%s: its rig has a left main wheel bone to "
-			"measure against"), Path), LeftWheel != INDEX_NONE))
+			"measure against"), *Path), LeftWheel != INDEX_NONE))
 		{
 			const double HubHeight = FAnimationRuntime::GetComponentSpaceTransformRefPose(
 				Rig, LeftWheel).GetTranslation().Z;
 			TestEqual(*FString::Printf(TEXT("%s: the authored main wheel radius is the "
-				"height of the hub the rig carries"), Path),
+				"height of the hub the rig carries"), *Path),
 				Type->MainWheelRadius, HubHeight, 0.5);
 		}
 	}
@@ -338,20 +310,15 @@ bool FMeasuredTypesFitTheirLettersRowTest::RunTest(const FString& Parameters)
 	// modelled: tail, nose, span-to-letter and the wing band. The two tests are one rule
 	// applied to two kinds of type, and a divergence between them would be a second rule
 	// nobody decided on.
-	for (const TCHAR* Path : MeasuredTypes)
+	for (UAircraftType* Type : EveryAircraftType())
 	{
-		UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
-			UAircraftType::StaticClass(), nullptr, Path));
-		if (!TestNotNull(*FString::Printf(TEXT("%s loads"), Path), Type))
-		{
-			continue;
-		}
+		const FString Path = Type->GetOutermost()->GetName();
 
 		// PARSED, NOT TRUSTED - UAircraftType::Code is an FName a human can edit, and a
 		// mistyped letter would otherwise have every figure below measured against Code C.
 		const TOptional<EIcaoCode> Parsed = IcaoCode::Parse(Type->Code.ToString());
 		if (!TestTrue(*FString::Printf(TEXT("%s: its Code '%s' is a recognised ICAO letter"),
-			Path, *Type->Code.ToString()), Parsed.IsSet()))
+			*Path, *Type->Code.ToString()), Parsed.IsSet()))
 		{
 			continue;
 		}
@@ -370,21 +337,21 @@ bool FMeasuredTypesFitTheirLettersRowTest::RunTest(const FString& Parameters)
 
 		TestTrue(
 			*FString::Printf(TEXT("%s: its tail at %.0f is within code %s's %.0f"),
-				Path, Tail, Letter, IcaoCode::MaxTailAftForLetter(Code)),
+				*Path, Tail, Letter, IcaoCode::MaxTailAftForLetter(Code)),
 			Tail >= -IcaoCode::MaxTailAftForLetter(Code));
 		TestTrue(
 			*FString::Printf(TEXT("%s: its nose at %.0f is within code %s's %.0f"),
-				Path, Nose, Letter, IcaoCode::MaxNoseFwdForLetter(Code)),
+				*Path, Nose, Letter, IcaoCode::MaxNoseFwdForLetter(Code)),
 			Nose <= IcaoCode::MaxNoseFwdForLetter(Code));
 		TestEqual(
 			*FString::Printf(TEXT("%s: its measured span of %.0f uu is code %s's, which is the "
-				"letter it is authored at"), Path, Type->Footprint.Wingspan, Letter),
+				"letter it is authored at"), *Path, Type->Footprint.Wingspan, Letter),
 			IcaoCode::LetterForWingspan(Type->Footprint.Wingspan), FString(Letter));
 
 		const double WingLine = Type->Footprint.WingX - ToStopMark;
 		TestTrue(
 			*FString::Printf(TEXT("%s: its wing line at %.0f is inside code %s's %.0f .. %.0f"),
-				Path, WingLine, Letter,
+				*Path, WingLine, Letter,
 				IcaoCode::WingAftForLetter(Code), IcaoCode::WingFwdForLetter(Code)),
 			WingLine >= IcaoCode::WingAftForLetter(Code)
 				&& WingLine <= IcaoCode::WingFwdForLetter(Code));
@@ -393,7 +360,7 @@ bool FMeasuredTypesFitTheirLettersRowTest::RunTest(const FString& Parameters)
 		// fails is "by how much", and re-deriving it means loading the asset by hand.
 		AddInfo(FString::Printf(
 			TEXT("%s is code %s: nose %.0f/%.0f, tail %.0f/%.0f, span %.0f, wing %.0f"),
-			Path, Letter, Nose, IcaoCode::MaxNoseFwdForLetter(Code),
+			*Path, Letter, Nose, IcaoCode::MaxNoseFwdForLetter(Code),
 			-Tail, IcaoCode::MaxTailAftForLetter(Code), Type->Footprint.Wingspan, WingLine));
 	}
 
@@ -416,64 +383,56 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 	// airport needs no Pushback depot at all; the airliners need a tug, so accepting one is
 	// what forces the building. That is the whole gameplay point of EPushbackNeed, and it is
 	// a content decision - which means nothing but a content test can defend it.
+	//
+	// THE REASONS ARE NOT HERE (issue #293). Every row below used to carry its own "Why" -
+	// fourteen strings that were also typed, verbatim, in build_pushback_needs.py's NEEDS
+	// table. build_pushback_needs.py's docstring already says which to believe if they ever
+	// disagreed; keeping BOTH copies meant a plane whose reasoning was edited in one place
+	// and not the other disagreed silently. The reason now lives once, in
+	// aircraft/<key>.py's pushback_need/pushback_reason - Type->PushbackNeed against Need
+	// below is the check that survives the authoring script; the WHY is Python's to carry.
 	struct FExpected
 	{
 		const TCHAR* Path;
 		EPushbackNeed Need;
-		const TCHAR* Why;
 	};
 
 	const FExpected Expected[] = {
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane1"), EPushbackNeed::SelfManoeuvre,
-		  TEXT("a 172 is pushed off a stand by one person leaning on the strut - and the "
-			   "class default is VehicleTug, so this row is the only thing standing between "
-			   "the smallest aeroplane in the game and the Pushback depot") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane7"), EPushbackNeed::SelfManoeuvre,
-		  TEXT("the starter aeroplane reverses itself, so a new airport needs no depot - and "
-			   "this row is what proves the 2026-09-21 RENAME of DA_Aircraft_Piper carried "
-			   "its authored values rather than quietly creating a fresh asset on defaults, "
-			   "which would read VehicleTug and gate a Meridian behind the depot") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane2"), EPushbackNeed::SelfManoeuvre,
-		  TEXT("a Twin Otter beta-ranges off a stand") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane10"), EPushbackNeed::SelfManoeuvre,
-		  TEXT("a Caravan reverses off a stand on its own prop - a grass-strip single gated "
-			   "behind the Pushback depot would be the class default talking, not the type") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane12"), EPushbackNeed::SelfManoeuvre,
-		  TEXT("a Cherokee is hand-towed off a stand - the class default would gate a "
-			   "four-seat trainer behind the Pushback depot") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane15"), EPushbackNeed::SelfManoeuvre,
-		  TEXT("an SR22 is hand-towed off a stand - the class default would gate a four-seat "
-			   "single behind the Pushback depot") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane16"), EPushbackNeed::SelfManoeuvre,
-		  TEXT("a Baron turns out of a stand on differential power - the class default would "
-			   "gate a light twin behind the Pushback depot") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), EPushbackNeed::SelfManoeuvre,
-		  TEXT("a Q400 turns out of a regional stand on its own props; the depot is the jets' tax") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane6"), EPushbackNeed::VehicleTug,
-		  TEXT("a 350 t 777-300ER is the far end of the same progression - and this row is "
-			   "the only thing distinguishing an asset authored VehicleTug from one nobody "
-			   "authored at all, since the class default says the same thing") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane11"), EPushbackNeed::VehicleTug,
-		  TEXT("a 319 t A350-1000 needs the tug the 777 beside it does") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane13"), EPushbackNeed::VehicleTug,
-		  TEXT("a 124 t 757-300 needs the tug the 737 below it and the A350 above it both do") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane14"), EPushbackNeed::VehicleTug,
-		  TEXT("a Phenom 300 has no thrust reversers, so unlike the turboprops it is towed off "
-			   "a stand") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane8"), EPushbackNeed::VehicleTug,
-		  TEXT("a 575 t A380 is the end of the progression - nothing heavier flies - and the "
-			   "row exists for the reason plane6's does: authored VehicleTug and default "
-			   "VehicleTug read the same, so only the table can tell them apart") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Plane9"), EPushbackNeed::VehicleTug,
-		  TEXT("the modelled A320 needs the tug its paper twin does - the two rows must agree") },
-		{ TEXT("/Game/Entities/DA_Aircraft_A320"),   EPushbackNeed::VehicleTug,
-		  TEXT("an A320 is what forces the Pushback depot") },
-		{ TEXT("/Game/Entities/DA_Aircraft_B738"),   EPushbackNeed::VehicleTug,
-		  TEXT("and so is a 737") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane1"), EPushbackNeed::SelfManoeuvre },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane2"), EPushbackNeed::SelfManoeuvre },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), EPushbackNeed::SelfManoeuvre },
+		// PLANE4 AND PLANE5 WERE ABSENT FROM THIS TABLE ENTIRELY UNTIL ISSUE #293's coverage
+		// sweep below found the gap - present in NEITHER this table nor
+		// build_pushback_needs.py's, so both a 737-800 and a King Air loaded on FAirframe's
+		// silent VehicleTug default with nothing asserting it was a decision. plane4
+		// (VehicleTug: a jet with no reverse-pitch prop, plane9's and plane14's reasoning)
+		// and plane5 (SelfManoeuvre: a King Air beta-ranges on its PT6s, plane10's Caravan
+		// reasoning one size up) are now authored - see aircraft/plane4.py, aircraft/plane5.py.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane4"), EPushbackNeed::VehicleTug },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane5"), EPushbackNeed::SelfManoeuvre },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane6"), EPushbackNeed::VehicleTug },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane7"), EPushbackNeed::SelfManoeuvre },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane8"), EPushbackNeed::VehicleTug },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane9"), EPushbackNeed::VehicleTug },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane10"), EPushbackNeed::SelfManoeuvre },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane11"), EPushbackNeed::VehicleTug },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane12"), EPushbackNeed::SelfManoeuvre },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane13"), EPushbackNeed::VehicleTug },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane14"), EPushbackNeed::VehicleTug },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane15"), EPushbackNeed::SelfManoeuvre },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane16"), EPushbackNeed::SelfManoeuvre },
+		// THE TWO PAPER TYPES. No aircraft/<key>.py spec exists for either - EntityDefinition
+		// builds them in C++ - so they stay hand-typed here and in build_pushback_needs.py's
+		// own small PAPER_NEEDS residual rather than growing a spec file for two entries.
+		{ TEXT("/Game/Entities/DA_Aircraft_A320"),   EPushbackNeed::VehicleTug },
+		{ TEXT("/Game/Entities/DA_Aircraft_B738"),   EPushbackNeed::VehicleTug },
 	};
 
+	TSet<FString> Covered;
 	for (const FExpected& Each : Expected)
 	{
+		Covered.Add(Each.Path);
+
 		UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
 			UAircraftType::StaticClass(), nullptr, Each.Path));
 		if (!TestNotNull(*FString::Printf(TEXT("%s loads"), Each.Path), Type))
@@ -481,12 +440,202 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 			continue;
 		}
 
-		TestEqual(Each.Why, Type->PushbackNeed, Each.Need);
+		TestEqual(*FString::Printf(TEXT("%s carries its authored pushback need - see "
+			"Tools/Python/aircraft for why"), Each.Path), Type->PushbackNeed, Each.Need);
 
 		// AND IT SURVIVES THE FLATTENING for this particular asset, not just for the
 		// hand-built type in AirframeAxles above: the game reads FAirframe, never the DA.
 		TestEqual(*FString::Printf(TEXT("%s carries it into the airframe"), Each.Path),
 			Type->Airframe().PushbackNeed, Each.Need);
+	}
+
+	// EVERY TYPE WITH A MESH HAS AN AUTHORED NEED - the coverage check plane4 and plane5's
+	// absence above proves was missing. Expected[] is typed rather than read off
+	// EveryAircraftType() (a C++ test may not import Python's pushback_need to get an
+	// independent gold value from), but its COVERAGE is checked against the registry: a
+	// seventeenth aeroplane with no row here fails this loop rather than passing silently
+	// the way plane4 and plane5 did.
+	for (const UAircraftType* Type : EveryAircraftType())
+	{
+		TestTrue(*FString::Printf(TEXT("%s has a row in this test's Expected[] table - a type "
+			"with a mesh and no authored pushback need is exactly the #293 gap"),
+			*Type->GetOutermost()->GetName()),
+			Covered.Contains(Type->GetOutermost()->GetName()));
+	}
+
+	return true;
+}
+
+/**
+ * The same relation Airside.Model.FieldLengthsCoverTheRoll pins (FieldLengthTest.cpp, for the
+ * default airframe and BuildPiperMeridian), for every /Game/Entities/DA_Aircraft_* content
+ * asset - MOVED HERE FROM Source/AirportMgr/AircraftFieldLengthTest.cpp by issue #293.
+ *
+ * THAT FILE'S OWN LAYERING CLAIM WAS FALSE, and issue #293 is what caught it: its header
+ * comment said "a plugin test that loaded [/Game assets] would point the dependency the
+ * wrong way; Check-Architecture.ps1 enforces that direction" - but `grep Game
+ * Check-Architecture.ps1` finds no such rule, and AirframeAxlesTest.cpp above (MeasuredTypes,
+ * Expected[]), GearCycleTest.cpp:557 and StarterMapProbeTest.cpp:41 all already load
+ * /Game/Entities/DA_Aircraft_* by path from this same plugin test module. A comment that
+ * states a fact about OTHER code with no lint or test enforcing it is exactly what
+ * CLAUDE.md's `// ENFORCED BY:` convention exists to catch, and this one enforced nothing -
+ * it was simply wrong, and one of the two false-claim finds this issue's fix asked for.
+ *
+ * A published field length SHORTER than the roll admits an aircraft to a strip it then runs
+ * off the end of - the published figure is what RunwayAdmission checks, and the roll is what
+ * actually moves the aeroplane. The landing distance is SIMULATED rather than closed-form -
+ * FLandingRun flies a probe down an unbounded runway - so it cannot be checked by arithmetic
+ * in the authoring scripts, only here against the model itself.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFieldLengthsCoverTheRollContentTest,
+	"Airside.Content.FieldLengthsCoverTheRoll",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFieldLengthsCoverTheRollContentTest::RunTest(const FString& Parameters)
+{
+	// THE ROLL CHECK RUNS FOR EVERY TYPE WITH A MESH, not a hand-picked twelve of sixteen.
+	// AircraftFieldLengthTest.cpp's own Published[] table was silently missing Plane4 and
+	// Plane7 - nobody had asked the roll-vs-published question of either - which is exactly
+	// the shape EveryAircraftType() closes: the asset registry, not a list a human keeps in
+	// step by hand.
+	for (UAircraftType* Type : EveryAircraftType())
+	{
+		const FString Path = Type->GetOutermost()->GetName();
+		const FAirframe Airframe = Type->Airframe();
+		const double Roll = FTakeoffRun::RequiredRoll(Airframe.Chassis.Ground, Airframe.Climb);
+		const double Landing =
+			FLandingRun::RequiredLandingDistance(Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach)
+			* FLandingRun::LandingMargin;
+
+		TestTrue(*FString::Printf(TEXT("%s publishes a take-off field length"), *Path),
+			Airframe.Requirements.TakeoffFieldLength > 0.0);
+		TestTrue(*FString::Printf(TEXT("%s publishes a landing field length"), *Path),
+			Airframe.Requirements.LandingFieldLength > 0.0);
+		TestTrue(*FString::Printf(
+			TEXT("%s: take-off roll %.0f uu fits the published %.0f uu"),
+			*Path, Roll, Airframe.Requirements.TakeoffFieldLength),
+			Roll <= Airframe.Requirements.TakeoffFieldLength);
+		TestTrue(*FString::Printf(
+			TEXT("%s: landing distance with margin %.0f uu fits the published %.0f uu"),
+			*Path, Landing, Airframe.Requirements.LandingFieldLength),
+			Landing <= Airframe.Requirements.LandingFieldLength);
+
+		// Said out loud whether or not it passes: these are the numbers a tuning pass moves,
+		// and finding them in the log beats re-deriving them.
+		AddInfo(FString::Printf(
+			TEXT("%s: roll %.0f uu against published %.0f; landing %.0f against %.0f"),
+			*Path, Roll, Airframe.Requirements.TakeoffFieldLength,
+			Landing, Airframe.Requirements.LandingFieldLength));
+	}
+
+	// THE JUDGEMENT ROWS - a fleet-progression CLAIM ("this type must ask less of a field
+	// than that one"), which is a game-design fact about a PAIR of aeroplanes and cannot come
+	// off the asset registry the way the roll check above does. Shrunk to {Path,
+	// CeilingTypePath, Why} (issue #293): the old table TYPED the sibling's published figure
+	// as a literal ("140200 is aircraft/plane3.py's REQUIREMENTS[...]"), which is exactly the
+	// kind of second copy that goes stale the day the sibling's own figure is tuned. This
+	// reads Requirements.TakeoffFieldLength off the live sibling asset instead.
+	struct FJudgement
+	{
+		const TCHAR* Path;
+		// nullptr: this type makes no ceiling claim - see Why for the reason.
+		const TCHAR* CeilingTypePath;
+		const TCHAR* Why;
+	};
+
+	const FJudgement Judgement[] = {
+		// plane1 CARRIES THE SAME CEILING AS plane2 FOR A DIFFERENT REASON. It is not a STOL
+		// aeroplane, but the LIGHTEST aeroplane in the game needing more runway than a
+		// turboprop would be wrong on its face.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane1"), TEXT("/Game/Entities/DA_Aircraft_Plane7"),
+		  TEXT("a Cessna 172 that needed more runway than the Meridian would have the "
+			   "lightest aeroplane in the game asking more of a field than a turboprop") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane2"), TEXT("/Game/Entities/DA_Aircraft_Plane7"),
+		  TEXT("a Twin Otter that needed more runway than the Meridian would be a STOL "
+			   "aeroplane in name only") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), nullptr, nullptr },
+		// PLANE4 IS A NEW ROW - issue #293's own finding. AircraftFieldLengthTest.cpp never
+		// named it at all, so nothing had ever asked whether the 737-800 fits its own roll,
+		// let alone whether anything should be shorter than it. It makes no independent
+		// ceiling claim today (nothing below it is meant to beat it, and plane9's row above
+		// is the one claim that uses ITS figure); the roll-vs-published loop above is what
+		// this row's existence was missing.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane4"), nullptr, nullptr },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane5"), TEXT("/Game/Entities/DA_Aircraft_Plane3"),
+		  TEXT("a King Air that needed as much runway as a Q400 would not be the rung between "
+			   "the Twin Otter and the Q400 - paving would admit nothing that lengthening had "
+			   "not already admitted") },
+		// plane6 CARRIES NO CEILING: the 777-300ER is the largest aeroplane in the game, so
+		// the honest claim runs the other way (it must ask MORE than the 737), and this
+		// struct has no column for a floor.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane6"), nullptr, nullptr },
+		// PLANE7 IS A NEW ROW TOO - the Meridian is the YARDSTICK plane1, plane2 and plane12
+		// are judged against, and nothing constrains it from above or below in turn.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane7"), nullptr, nullptr },
+		// plane8 CARRIES NO CEILING FOR A DIFFERENT REASON THAN plane6's: the A380's gameplay
+		// claim is width, and this struct has no column for width.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane8"), nullptr, nullptr },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane9"), TEXT("/Game/Entities/DA_Aircraft_Plane4"),
+		  TEXT("an A320 that needed as much runway as a 737-800 would erase the one field "
+			   "difference between the two Code C jets") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane10"), TEXT("/Game/Entities/DA_Aircraft_Plane5"),
+		  TEXT("a Caravan that needed as much runway as a King Air would be a grass-strip "
+			   "type that only paved fields could take") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane11"), TEXT("/Game/Entities/DA_Aircraft_Plane6"),
+		  TEXT("an A350-1000 that needed as much runway as a 777-300ER would erase the one "
+			   "field difference between the two Code E twins") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane12"), TEXT("/Game/Entities/DA_Aircraft_Plane7"),
+		  TEXT("a Cherokee that needed more runway than the Meridian would have a club "
+			   "trainer asking more of a field than a turboprop") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane13"), TEXT("/Game/Entities/DA_Aircraft_Plane11"),
+		  TEXT("a 757-300 that needed as much runway as an A350-1000 would make Code D a rung "
+			   "a field could skip") },
+		// plane14 CARRIES NO CEILING, plane3's case: the one comparison its character offers
+		// (the King Air on Code B) is a claim no tuning pass could be told apart from noise.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane14"), nullptr, nullptr },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane15"), TEXT("/Game/Entities/DA_Aircraft_Plane10"),
+		  TEXT("an SR22 that needed as much runway as a Caravan would be a four-seat Code A "
+			   "single asking a Code B turboprop's field") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane16"), TEXT("/Game/Entities/DA_Aircraft_Plane5"),
+		  TEXT("a Baron that needed as much runway as a King Air would make the piston twin "
+			   "and the turboprop twin one rung") },
+	};
+
+	TSet<FString> JudgementCovered;
+	for (const FJudgement& Each : Judgement)
+	{
+		JudgementCovered.Add(Each.Path);
+		if (Each.CeilingTypePath == nullptr)
+		{
+			continue;
+		}
+
+		UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
+			UAircraftType::StaticClass(), nullptr, Each.Path));
+		UAircraftType* Ceiling = Cast<UAircraftType>(StaticLoadObject(
+			UAircraftType::StaticClass(), nullptr, Each.CeilingTypePath));
+		if (!TestNotNull(*FString::Printf(TEXT("%s loads"), Each.Path), Type)
+			|| !TestNotNull(*FString::Printf(TEXT("%s's ceiling type %s loads"), Each.Path,
+				Each.CeilingTypePath), Ceiling))
+		{
+			continue;
+		}
+
+		TestTrue(Each.Why,
+			Type->Airframe().Requirements.TakeoffFieldLength
+				< Ceiling->Airframe().Requirements.TakeoffFieldLength);
+	}
+
+	// EVERY TYPE WITH A MESH HAS A JUDGEMENT ROW, even if that row's answer is "no ceiling
+	// claim" - the same coverage shape PushbackNeedsAuthored's Covered check enforces above,
+	// for the same reason: Plane4 and Plane7 were missing from this table's ancestor with
+	// nothing to notice.
+	for (const UAircraftType* Type : EveryAircraftType())
+	{
+		TestTrue(*FString::Printf(TEXT("%s has a row in this test's Judgement[] table"),
+			*Type->GetOutermost()->GetName()),
+			JudgementCovered.Contains(Type->GetOutermost()->GetName()));
 	}
 
 	return true;

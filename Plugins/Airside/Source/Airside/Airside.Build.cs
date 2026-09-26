@@ -20,6 +20,11 @@ public class Airside : ModuleRules
 		// names it holds a TObjectPtr behind a forward declaration (RoadNetworkActor.h,
 		// DynamicMeshSink.h, RoadJunctionGallery.h, RoadRebuildCensus.h) - no Public header
 		// needs the full type, so no consumer of Airside needs this dependency (issue #191).
-		PrivateDependencyModuleNames.AddRange(new string[] { "GeometryFramework" });
+		//
+		// AssetRegistry (issue #293) is PRIVATE for the same shape: EveryAircraftType()'s
+		// scan is Testing/AirsideTestWorld.cpp's own implementation detail behind a
+		// TArray<UAircraftType*> the header already declares without naming FAssetData or
+		// IAssetRegistry - no consumer of Airside needs the module, only the function.
+		PrivateDependencyModuleNames.AddRange(new string[] { "GeometryFramework", "AssetRegistry" });
 	}
 }

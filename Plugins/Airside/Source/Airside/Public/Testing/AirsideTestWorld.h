@@ -13,6 +13,8 @@
 #include "Present/RoadNetworkActor.h"
 #include "Tool/RoadEditTarget.h"
 
+class UAircraftType;
+
 /**
  * A world - and, by default, a network actor - to test through the composition root rather
  * than the model alone. RAII so a test that returns early (TestTrue(...) { return false; },
@@ -79,6 +81,38 @@ struct FAirsideTestWorld
 	FAirsideTestWorld(const FAirsideTestWorld&) = delete;
 	FAirsideTestWorld& operator=(const FAirsideTestWorld&) = delete;
 };
+
+/**
+ * Every UAircraftType asset in the project's registry THAT NAMES A MESH - the paper types
+ * (DA_Aircraft_A320, DA_Aircraft_B738) are built in C++ with no mesh to measure and are left
+ * out, the same exclusion AirframeAxlesTest.cpp's old MeasuredTypes[] list stated by naming
+ * only the modelled aeroplanes.
+ *
+ * ISSUE #293: MeasuredTypes[], AircraftFieldLengthTest.cpp's Published[] and
+ * PushbackNeedsAuthored's Expected[] were three hand-typed lists of "every aeroplane with a
+ * mesh", and the field-length one was short two rows (Plane4, Plane7) that nobody noticed
+ * because nothing counted the gap - see FootprintMatchesTheMesh, MeasuredTypesFitTheirLettersRow,
+ * PushbackNeedsAuthored and FieldLengthsCoverTheRoll in AirframeAxlesTest.cpp, and
+ * SkeletonHoldsEveryMeshBone in the game module, which all iterate this instead.
+ *
+ * Public here (not in AirsideTests) for the reason FAirsideTestWorld above is: AirportMgr's
+ * own content tests (SkeletonContentTest.cpp) need it too, and AirportMgr already depends on
+ * Airside, never the reverse.
+ *
+ * WaitForCompletion() IS CALLED: an unfinished asset-registry scan answers with nothing, and
+ * every caller below would then read an empty list as "nothing to check" rather than as a
+ * scan that had not run yet - AnimYardCatalogue and VehicleTypeContentTest.cpp's
+ * EveryVehicleType() both wait for the same reason.
+ *
+ * THE FLOOR IS A SANITY CHECK ON THE SCAN, NOT ON THE FLEET. Sixteen aeroplanes carry a mesh
+ * as this is written; twelve is a number comfortably below that, chosen so the NEXT aeroplane
+ * needs no edit here, but still catches an asset registry that answered with nothing (a
+ * broken scan, a content-less checkout that should have failed earlier) rather than "the
+ * fleet". ENFORCED BY: this function's own ensureAlwaysMsgf - every caller below reads
+ * Num() == 0 as "nothing to check" and would otherwise pass a silently empty scan with zero
+ * assertions run.
+ */
+AIRSIDE_API TArray<UAircraftType*> EveryAircraftType();
 
 /**
  * Captures every line logged to CATEGORY at exactly ELogVerbosity::Log while this spy is
