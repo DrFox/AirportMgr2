@@ -146,9 +146,22 @@ public:
 	/**
 	 * DesignVehicles IS OPTIONAL, and null means "resolve it yourself" - see
 	 * BuildNodeInput's own comment (issue #190). A caller mid-rebuild (URoadSurfacePresenter)
-	 * has already resolved it once and passes the answer down every arm of every node reads;
-	 * every other caller - every test in this plugin, the debug gallery - keeps asking each
-	 * profile to resolve its own, exactly as before this parameter existed.
+	 * has already resolved it once and passes the answer down every arm of every node reads.
+	 *
+	 * REVISED (#311): this used to claim every OTHER caller - every test, the debug gallery -
+	 * asks each profile to resolve its own, which was already false when written: BendLaneTest,
+	 * WidthTaperTest, DesignVehicleTest and TestGraph::Corner all resolved once and passed
+	 * &Designs through even then. What is true: TestGraph::Derive (the fixture path most
+	 * guideline-deriving tests in AirsideTests and AirportOpsTests go through since #311,
+	 * migrated off their own inline SolveAll+Build pairs) and URoadSurfacePresenter both resolve
+	 * once and hand the SAME FRoadDesignVehicles to SolveAll and to FRoadGuidelineBuilder::Build.
+	 * nullptr is for a caller that means the self-resolving path itself: the debug gallery
+	 * (RoadJunctionGallery), a solve with no guideline derive to agree with (RoadNetworkSolverTest,
+	 * the *Test files that measure FRoadMeshBuilder output alone, BendLaneTest's own
+	 * Trace/ReadCached measurements), and ResolvedContentOncePerRebuildTest, which passes nullptr
+	 * on purpose to PROVE the two paths still answer alike. ENFORCED BY:
+	 * Airside.Build.LargestServiceVehiclePassedDownMatchesSelfResolved (ResolvedContentOncePer
+	 * RebuildTest.cpp; compares the self-resolved and passed-down solves' mesh output bitwise).
 	 */
 	static FRoadSolveResult SolveAll(URoadNetwork& Network, int32 ArcSegments = 12,
 		const FRoadDesignVehicles* DesignVehicles = nullptr, EWideningTrace Widening = EWideningTrace::Trace);
