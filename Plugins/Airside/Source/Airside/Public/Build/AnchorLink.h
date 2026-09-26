@@ -5,6 +5,7 @@
 
 class URoadNetwork;
 struct FChassis;
+struct FRoadSolveResult;
 
 /**
  * Joins entity anchors to the guideline graph by casting each one's lead-in.
@@ -137,9 +138,18 @@ struct AIRSIDE_API FAnchorLink
 	 * connector must clear; the caller now resolves it once per rebuild and this Build hands
 	 * the same answer to every Join it calls, which is also why this file no longer includes
 	 * Content/AirsideSettings.h (Check-Architecture's Build->Content rule).
+	 *
+	 * Solved IS OPTIONAL (issue #324), unlike LargestServiceVehicle: it is the SAME
+	 * FRoadSolveResult FRoadGuidelineBuilder::Build was just handed, threaded down so Join can
+	 * re-measure a turn-path piece it splits (see Join's own comment) - null for every caller
+	 * that has no solve to offer (most of this module's own tests, which do not exercise a
+	 * lead-in landing on a junction turn path), in which case a split turn path stays
+	 * unmeasured exactly as it did before this issue, and nothing about this Build reports
+	 * that as a failure.
 	 */
 	static int32 Build(URoadNetwork& Network, const FChassis& LargestServiceVehicle,
-		double MaxLeadIn = DefaultMaxLeadIn, double ServiceLinkRadius = DefaultServiceLinkRadius);
+		double MaxLeadIn = DefaultMaxLeadIn, double ServiceLinkRadius = DefaultServiceLinkRadius,
+		const FRoadSolveResult* Solved = nullptr);
 
 	/**
 	 * Every anchor, pose and declared lane entry that has nothing joined yet, plus every node
@@ -175,9 +185,19 @@ struct AIRSIDE_API FAnchorLink
 	 * SplitGuidelineEdge call inside this Join fails - the hard join, or either half of the
 	 * two-cut sweep. Both are the same data-race-only case: every id Join splits was resolved
 	 * moments earlier by this same link's own Resolve.
+	 *
+	 * Solved, WHEN NOT NULL (issue #324): re-measures every piece Join's own split makes of a
+	 * TURN PATH (Hit.Edge's DerivedFrom unset - a lane split is untouched, its Width gates it
+	 * regardless), through FRoadGuidelineBuilder::MeasureSplitHalf. The junction is read BEFORE
+	 * the split ever runs, off Hit.Edge's own FGuidelineEdge::AtJunction (DerivedFrom's
+	 * counterpart for a turn path - see its own comment), because a piece cannot always
+	 * recover it afterwards from its ENDPOINTS: the two-cut sweep's middle piece ends with
+	 * neither end's FGuidelineNode::Origin set, both its ends being new nodes the split adds -
+	 * and a BendArc's interior pieces never had one to begin with.
 	 */
 	static FGuidelineNodeId Join(URoadNetwork& Network, FPendingLink& Link, const FLinkHit& Hit,
-		TSet<FGuidelineNodeId>& AnchorNodes, const FChassis& LargestServiceVehicle);
+		TSet<FGuidelineNodeId>& AnchorNodes, const FChassis& LargestServiceVehicle,
+		const FRoadSolveResult* Solved = nullptr);
 
 	/**
 	 * The radius a ground-vehicle link's curves are laid at: the largest service vehicle's lock

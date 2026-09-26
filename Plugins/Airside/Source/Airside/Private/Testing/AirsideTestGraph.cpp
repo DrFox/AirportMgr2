@@ -68,8 +68,13 @@ FRoadSolveResult TestGraph::Derive(URoadNetwork& Net, const FRoadDesignVehicles*
 
 void TestGraph::Rebuild(URoadNetwork& Net)
 {
-	Derive(Net);
-	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
+	// SOLVED, PASSED DOWN (issue #324) - matches URoadSurfacePresenter::RebuildInternal's own
+	// production sequence: without it, a fixture built through this facade could never
+	// reproduce a split turn path getting re-measured, only one built by hand around Derive
+	// and FAnchorLink::Build directly could.
+	const FRoadSolveResult Solved = Derive(Net);
+	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle(),
+		FAnchorLink::DefaultMaxLeadIn, FAnchorLink::DefaultServiceLinkRadius, &Solved);
 }
 
 TestGraph::FCornerFixture TestGraph::Corner(URoadProfile* Profile, URoadProfile* SecondProfile,

@@ -549,8 +549,11 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 		// service stands and live in depots. The rig has no stand or depot to go to yet (spec
 		// §"Out of this step", step 3); sizing every link's lane radius for it would widen every
 		// yard approach for a vehicle that never uses one.
+		// SOLVED, PASSED DOWN (issue #324): the same solve FRoadGuidelineBuilder::Build just
+		// derived the turn paths from, so Join can re-measure a piece it splits off one
+		// instead of leaving it unmeasured for every rebuild's lifetime (#288's own gap).
 		FAnchorLink::Build(Network, Settings.DesignVehicles.Default.Chassis, FAnchorLink::DefaultMaxLeadIn,
-			Settings.ServiceLinkRadius);
+			Settings.ServiceLinkRadius, &Solved);
 
 		// THE FUEL-DEPOT MODULE CENSUS (#306): moved out of FAnchorLink::Build, which a depot's
 		// missing shed or pump has nothing to do with, and run from here instead - the same

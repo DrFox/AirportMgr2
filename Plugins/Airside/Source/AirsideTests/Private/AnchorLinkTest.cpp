@@ -9,6 +9,8 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
+#include "Model/VehicleFit.h"
+#include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
 #include "Testing/AirsideTestGraph.h"
@@ -488,6 +490,173 @@ bool FGuidelineGeomTest::RunTest(const FString& Parameters)
 			Lane, Stub, LaneIndex, LaneFraction, RoadIndex, RoadFraction);
 		TestEqual(TEXT("end to end, 3000 apart"), Corner, 3000.0);
 		TestTrue(TEXT("at the lane's far end"), FMath::IsNearlyEqual(LaneFraction, 1.0, 1e-9));
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnchorLinkReMeasuresSplitTurnPathTest,
+	"Airside.Build.AnchorLinkReMeasuresSplitTurnPath",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnchorLinkReMeasuresSplitTurnPathTest::RunTest(const FString& Parameters)
+{
+	// Issue #324, follow-up to #288. #288 made URoadNetwork::SplitGuidelineEdge mark BOTH
+	// halves of ANY split guideline UNMEASURED (MinRadius/ClearInner/Outer/*At reset), because
+	// re-measuring needs FRoadGuidelineBuilder::MeasureTurn and the junction pavement polygon,
+	// neither reachable from Model/. FAnchorLink::Join is the one production caller that
+	// splits a JUNCTION TURN PATH - a stand's lead-in landing on one - and every derivation
+	// runs FRoadGuidelineBuilder::Build (MeasureTurn fills the turn path in) and THEN
+	// FAnchorLink::Build (splits it again), so before this fix a lead-in on a turn path left
+	// it unmeasured on EVERY rebuild: VehicleFit::Judge said nothing for a vehicle that could
+	// not actually take the turn, which a route search reads as "fits".
+
+	// A TIGHT 2 M FILLET - VehicleGatingTest's own "corner tighter than the cab can steer"
+	// shape - too tight for the rig's lock, so a CORRECTLY re-measured half still refuses it
+	// and an UNMEASURED one (the bug) silently admits it: the test tells the two apart by the
+	// verdict Judge hands back, not merely by whether the arrays are populated.
+	URoadProfile* Profile = URoadProfile::MakeServiceRoadTransient(300.0, 60.0, 200.0);
+	const TestGraph::FCornerFixture Bend = TestGraph::Corner(Profile);
+	const FChassis RigLock = UAirsideSettings::ResolveRigVehicle().Chassis;
+
+	// THE TIGHTEST measured piece, not merely the first found: a 2 m fillet on a corner this
+	// long lays a BendArc (issue #305) of SEVERAL pieces "concentric with the pavement's inner
+	// edge" rather than one single curve, and only the one at the bend's own apex is as tight
+	// as VehicleGatingTest's "the rig cannot steer round a 2 m corner" measured - an earlier
+	// piece nearer either straight leg is looser, and a split of ONE of those still passes the
+	// rig, unrelated to this issue.
+	const FGuidelineEdge* Turn = nullptr;
+	FGuidelineEdgeId TurnId;
+	{
+		const TArray<FGuidelineEdge>& Edges = Bend.Net->GetGuidelineEdges();
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
+		{
+			const FGuidelineEdge& Edge = Edges[Index];
+			if (Edge.bAlive && !Edge.DerivedFrom.IsSet() && Edge.MinRadius > 0.0 && Edge.ClearInnerAt.Num() > 0
+				&& (Turn == nullptr || Edge.MinRadius < Turn->MinRadius))
+			{
+				Turn = &Edge;
+				TurnId = Bend.Net->GuidelineEdgeIdAt(Index);
+			}
+		}
+	}
+	if (!TestNotNull(TEXT("the bend has a measured turn path"), Turn))
+	{
+		return false;
+	}
+	if (!TestTrue(TEXT("the fixture's tightest piece is actually too tight for the rig - the premise the rest of this test relies on"),
+			Turn->MinRadius < RigLock.TightestFollowableRadius()))
+	{
+		return false;
+	}
+	const int32 ExpectedSamples = Turn->ClearInnerAt.Num();
+	const FGuidelineNodeId TurnA = Turn->A;
+	const FGuidelineNodeId TurnB = Turn->B;
+
+	const FGuidelineNode* TurnANode = Bend.Net->GetGuidelineNode(TurnA);
+	const FGuidelineNode* TurnBNode = Bend.Net->GetGuidelineNode(TurnB);
+	if (!TestTrue(TEXT("the turn's ends resolve"), TurnANode != nullptr && TurnBNode != nullptr))
+	{
+		return false;
+	}
+	const FVector2D Mid = GuidelineGeom::Eval(TurnANode->Position, Turn->Control, TurnBNode->Position, 0.5);
+
+	// A NODE JUST OFF THE TURN'S OWN MIDPOINT - a straight lane stops short of the corner
+	// rather than running through it, so nothing else in this fixture can be nearer.
+	const FGuidelineNodeId PoseNode = Bend.Net->AddGuidelineNode(Mid + FVector2D(20.0, 20.0));
+	const FVector2D PoseAt = Bend.Net->GetGuidelineNode(PoseNode)->Position;
+
+	// BUILT BY HAND, NOT FPendingLink::For: For is a plain (non-AIRSIDE_API) struct member,
+	// unreachable across the module boundary from AirsideTests - this mirrors exactly what it
+	// would have assembled for a GroundVehicle link (Kind Proximity, no wingspan cap, Reach the
+	// service radius).
+	FPendingLink Link;
+	Link.Node = PoseNode;
+	Link.At = PoseAt;
+	Link.Dir = FVector2D(1.0, 0.0);
+	Link.Class = ETraversalClass::GroundVehicle;
+	Link.Kind = ELinkKind::Proximity;
+	Link.Radius = 2500.0;
+	Link.Reach = 500.0;
+
+	// A BEFORE SNAPSHOT OF EVERY ALIVE EDGE ID, not an endpoint-identity guess: TurnA/TurnB
+	// alone cannot tell a split piece from its NEIGHBOUR in a multi-piece turn (a BendArc lays
+	// several chained pieces sharing intermediate nodes - #305), so "touches TurnA or TurnB"
+	// catches an untouched neighbour too. A plain SET DIFFERENCE of edge ids across the one
+	// Join call has no such ambiguity: whatever is alive afterwards and was not alive before
+	// is something THIS call added, full stop.
+	TSet<FGuidelineEdgeId> BeforeJoin;
+	{
+		const TArray<FGuidelineEdge>& Edges = Bend.Net->GetGuidelineEdges();
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
+		{
+			if (Edges[Index].bAlive)
+			{
+				BeforeJoin.Add(Bend.Net->GuidelineEdgeIdAt(Index));
+			}
+		}
+	}
+
+	TSet<FGuidelineNodeId> AnchorNodes;
+	const FLinkHit Hit = FAnchorLink::Resolve(*Bend.Net, Link, AnchorNodes);
+	if (!TestTrue(TEXT("the link resolves onto the turn path itself"), Hit.IsSet() && Hit.Edge == TurnId))
+	{
+		return false;
+	}
+
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+
+	// SOLVED, PASSED DOWN - the fix. Every other Join call in this file passes none, which
+	// stays the pre-#324 behaviour (a split turn path left unmeasured); this is the one
+	// exercising the new parameter.
+	const FGuidelineNodeId LeadEnd =
+		FAnchorLink::Join(*Bend.Net, Link, Hit, AnchorNodes, RigLock, &Bend.Solved);
+	if (!TestTrue(TEXT("the join succeeds"), LeadEnd.IsSet()))
+	{
+		return false;
+	}
+
+	// EVERY NEW EDGE THIS ONE Join CALL ADDED, MINUS THE LEAD-IN ITSELF (the only new edge
+	// touching PoseNode - the sweeps, if any, run LeadEnd to a chain node instead and never
+	// touch PoseNode) - the split turn path's own surviving pieces, and nothing a neighbouring,
+	// untouched piece of the same multi-piece turn could be mistaken for.
+	TArray<const FGuidelineEdge*> NewPieces;
+	{
+		const TArray<FGuidelineEdge>& Edges = Bend.Net->GetGuidelineEdges();
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
+		{
+			const FGuidelineEdge& Edge = Edges[Index];
+			if (!Edge.bAlive || BeforeJoin.Contains(Bend.Net->GuidelineEdgeIdAt(Index)))
+			{
+				continue;
+			}
+			if (Edge.A == PoseNode || Edge.B == PoseNode)
+			{
+				continue;   // the lead-in
+			}
+			NewPieces.Add(&Edge);
+		}
+	}
+	if (!TestTrue(TEXT("the split actually left new pieces of the turn path to check"), NewPieces.Num() > 0))
+	{
+		return false;
+	}
+
+	// EACH ONE carries the whole curve's own sample count (#288's own guard, restated at the
+	// Build level) and still refuses the rig's lock: a symmetric bend's tightest point sits at
+	// the split, so a half re-measured on its own true curve is no looser than the whole was.
+	for (const FGuidelineEdge* Piece : NewPieces)
+	{
+		const FString Name = FString::Printf(TEXT("piece %d->%d"), Piece->A.Index, Piece->B.Index);
+		TestEqual(*FString::Printf(TEXT("%s carries the whole curve's sample count (inner)"), *Name),
+			Piece->ClearInnerAt.Num(), ExpectedSamples);
+		TestEqual(*FString::Printf(TEXT("%s carries the whole curve's sample count (outer)"), *Name),
+			Piece->ClearOuterAt.Num(), ExpectedSamples);
+
+		const FFitVerdict Verdict = VehicleFit::Judge(*Piece, Rig, *Bend.Net);
+		TestEqual(*FString::Printf(TEXT("%s refuses the rig's lock - a verdict, not the silent branch"), *Name),
+			static_cast<int32>(Verdict.Refusal), static_cast<int32>(EFitRefusal::TighterThanLock));
 	}
 
 	return true;

@@ -66,6 +66,20 @@ FFitVerdict VehicleFit::Judge(const FGuidelineEdge& Edge, const FVehicle& Vehicl
 	}
 	if (Edge.MinRadius <= 0.0)
 	{
+		// SAY NOTHING RATHER THAN GUESS. Verbose, and gated on a turn path (DerivedFrom unset
+		// - an ordinary lane's straight edges never carry a radius at all, and logging every
+		// one of THOSE would drown this in noise): a turn path at 0 is either a genuine
+		// straight-through (two continuous arms at one node - MeasureTurn's own "no inside to
+		// a straight line" case) or a split half FAnchorLink::Join has not yet re-measured
+		// (issue #324, follow-up to #288) - either way this is the case the issue asks to be
+		// visible in `Mcp.py log`.
+		if (!Edge.DerivedFrom.IsSet())
+		{
+			UE_LOG(LogAirsideTraffic, Verbose,
+				TEXT("VehicleFit::Judge says nothing for turn path %d->%d: MinRadius is 0 ")
+				TEXT("(a straight-through turn, or one not yet measured)"),
+				Edge.A.Index, Edge.B.Index);
+		}
 		return Verdict;
 	}
 
@@ -79,6 +93,17 @@ FFitVerdict VehicleFit::Judge(const FGuidelineEdge& Edge, const FVehicle& Vehicl
 	}
 	if (Widest <= 0.0 || Edge.ClearInnerAt.Num() == 0)
 	{
+		// SAY NOTHING RATHER THAN GUESS, same reasoning as above: a radius was measured (the
+		// branch just above let this one through) but no per-sample clearance was, which is
+		// either a dead-end balloon (ruled: over grass, no pavement edge to measure to) or,
+		// again, a split half nothing has re-measured yet (issue #324).
+		if (Widest > 0.0)
+		{
+			UE_LOG(LogAirsideTraffic, Verbose,
+				TEXT("VehicleFit::Judge says nothing for edge %d->%d: MinRadius %.0f measured, ")
+				TEXT("but no per-sample clearance (a balloon over grass, or not yet re-measured)"),
+				Edge.A.Index, Edge.B.Index, Edge.MinRadius);
+		}
 		return Verdict;
 	}
 
@@ -95,6 +120,13 @@ FFitVerdict VehicleFit::Judge(const FGuidelineEdge& Edge, const FVehicle& Vehicl
 	GuidelineGeom::Sample(A->Position, Edge.Control, B->Position, Path);
 	if (Path.Num() != Edge.ClearInnerAt.Num() || Path.Num() != Edge.ClearOuterAt.Num())
 	{
+		// SAY NOTHING RATHER THAN GUESS (the guard #288 added). Verbose, so this is visible in
+		// `Mcp.py log` beside the two guards above rather than only inferred from a route that
+		// quietly admitted something it should have refused.
+		UE_LOG(LogAirsideTraffic, Verbose,
+			TEXT("VehicleFit::Judge says nothing for edge %d->%d: %d clearance sample(s) measured ")
+			TEXT("against %d path sample(s) (a different curve than the one this was measured on)"),
+			Edge.A.Index, Edge.B.Index, Edge.ClearInnerAt.Num(), Path.Num());
 		return Verdict;   // measured against a different sampling: say nothing rather than guess
 	}
 
