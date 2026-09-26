@@ -258,18 +258,22 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 	// (its own stage), and cleared here rather than relied upon is cheaper to read than to prove.
 	InvalidateFrameContextCache();
 
-	// A STICKY BUILD MODIFIER WAS CHOSEN FOR THE TOOL IT WAS LIT UNDER, so picking another
-	// drops it - what stops a Remove left on from the road tool deleting the first stand the
-	// player clicks. Moved here from ARoadBuildController::SelectTool with the modes.
+	// PICKING A TOOL IS ASKING TO BUILD WITH IT, so every mode drops back to Build - what stops a
+	// Remove left on from the road tool deleting the first stand the player clicks. Moved here
+	// from ARoadBuildController::SelectTool with the modes.
 	//
-	// EDIT SURVIVES, and the difference is not an exception grudgingly carved out: Remove and
-	// Insert modify what a BUILD gesture does, and choosing a new build tool is choosing a new
-	// gesture, so the modifier belonged to the old one. Edit is not a build gesture at all -
-	// the lit tool only says which handles it exposes, so switching tools WHILE editing is the
-	// ordinary way to go from moving taxiway nodes to moving apron corners.
-	if (Mode == EGestureMode::Remove || Mode == EGestureMode::Insert)
+	// EDIT INCLUDED, since 2026-09-26. It used to survive a switch, on the argument that the lit
+	// tool only filters Edit's handles, so switching while editing went from taxiway nodes to
+	// apron corners. In play that read the other way: picking the fuel depot while Edit was on
+	// left the edit tool lit over a tool with no handles, and the depot could not be placed
+	// ("Bar: tool.fuel depot" then "Tool: Edit"). Re-entering Edit is one key (M); a tool that
+	// will not place is a dead end with no visible way out. Reselecting the LIT tool is not a
+	// switch and returns above, so the key pressed again to cycle a width keeps Edit.
+	// ENFORCED BY: AirportMgr.Actions.ClickModifier ("selecting a tool leaves Edit for Build").
+	if (Mode != EGestureMode::Build)
 	{
 		Mode = EGestureMode::Build;
+		UE_LOG(LogAirside, Log, TEXT("Gesture mode -> Build (tool switched)"));
 	}
 
 	// A build tool is modal over the airport, not over a thing in it: the selection closes

@@ -55,13 +55,21 @@ bool FClickModifierTest::RunTest(const FString& Parameters)
 		C->GetGestureMode(), EGestureMode::Build);
 	TestEqual(TEXT("and the tool changed"), C->GetActiveToolIndex(), 1);
 
-	// BUT EDIT SURVIVES A TOOL SWITCH, because the lit tool only says which handles Edit
-	// exposes - going from taxiway nodes to apron corners IS switching tools while editing.
+	// AND SO DOES EDIT (2026-09-26, reversing the rule that kept it). Picking a tool is asking
+	// to BUILD with it: Edit kept across a switch left the edit tool lit over the fuel depot,
+	// which has no handles, and the player picked a tool and could not place one - reported
+	// from play, the log reading "Bar: tool.fuel depot" then "Tool: Edit".
 	C->ToggleGestureMode(EGestureMode::Edit);
 	C->SelectTool(2);
-	TestEqual(TEXT("selecting a tool keeps Edit - it filters the handles rather than owning "
-				   "the gesture"), C->GetGestureMode(), EGestureMode::Edit);
+	TestEqual(TEXT("selecting a tool leaves Edit for Build - a picked tool places"),
+		C->GetGestureMode(), EGestureMode::Build);
 	TestEqual(TEXT("and that tool changed too"), C->GetActiveToolIndex(), 2);
+
+	// RESELECTING the lit tool is not a switch, and leaves the mode alone: the key pressed
+	// again cycles a width, and must not also drop the player out of Edit.
+	C->ToggleGestureMode(EGestureMode::Edit);
+	C->SelectTool(2);
+	TestEqual(TEXT("reselecting the lit tool keeps Edit"), C->GetGestureMode(), EGestureMode::Edit);
 
 	C->ToggleGestureMode(EGestureMode::Build);
 	C->SelectTool(99);
