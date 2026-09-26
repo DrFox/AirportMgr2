@@ -75,6 +75,23 @@ struct FPendingLink
 	FEntityInstanceId LaneOwner;
 
 	/**
+	 * Outward normal of the one direction a link may be joined FROM - unset for every link but a
+	 * stand's declared entry (FAnchorLink::Gather's EntryLink lambda sets it to the stand's own
+	 * world forward, Instance.Heading, since every entry sits near the FAR end of that axis).
+	 *
+	 * A HALF-PLANE, NOT A RAY. A ray picks ONE line, and a service vehicle may still arrive along
+	 * the far road from either direction - the same reasoning that keeps every OTHER proximity
+	 * link (an anchor with no lane, a pose, a depot) a distance search rather than a cast. What
+	 * the 2026-09-26 ruling refuses is not a DIRECTION of approach but a SIDE of the stand: a road
+	 * behind the tail, on the taxiway the entrance already opens onto, is refused however close it
+	 * lies, and a half-plane is the shape that says so while leaving both directions along the far
+	 * road open. NearestJoinable (AnchorLinkFinder.cpp) is where it is tested, against the hit
+	 * position it is about to accept, not against the search's own Origin - a hit is refused only
+	 * when it falls BEHIND the entry along this normal.
+	 */
+	TOptional<FVector2D> HalfPlane;
+
+	/**
 	 * Assembles a link from the ONE RULE every call site restated for itself (#306): Kind and
 	 * Reach and the aircraft span cap all fall out of Class alone - Ray and MaxLeadIn for an
 	 * aircraft, Proximity and ServiceLinkRadius for anything else - because the strategy IS the

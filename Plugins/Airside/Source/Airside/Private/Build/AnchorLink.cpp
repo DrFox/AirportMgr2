@@ -460,7 +460,7 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		// ONE STATEMENT OF WHAT AN ENTRY LINK IS, used by the probe below and by the link
 		// finally emitted. Written twice they could differ, and the probe would then be
 		// measuring something other than the link it decides.
-		auto EntryLink = [&Declared, StandRadius, ServiceLinkRadius](
+		auto EntryLink = [&Declared, StandRadius, ServiceLinkRadius, Instance](
 			FGuidelineNodeId NodeId, const FVector2D& At)
 		{
 			// GroundVehicle, not a ray: a vehicle may genuinely arrive from any side, and the
@@ -477,6 +477,16 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 			// lead-in along the lane, and Build reads it to report a stand that joined nothing
 			// once rather than once per entry.
 			Link.LaneOwner = Declared.Key;
+
+			// THE HALF-PLANE A DECLARED ENTRY MAY BE JOINED THROUGH (user 2026-09-26: service
+			// vehicles enter and leave ONLY by the far edge). Instance->Heading, not a per-entry
+			// heading - there is none - because stand-local +X IS the aircraft's own facing and
+			// every entry sits near the FAR end of that axis (FrontX - Square), so the world
+			// direction the stand faces is the direction beyond the far edge. A road behind the
+			// tail, on the taxiway side the entrance already opens onto, is refused however close
+			// it is drawn - see FPendingLink::HalfPlane's own comment for why this is a half-plane
+			// and not a second ray.
+			Link.HalfPlane = FVector2D(FMath::Cos(Instance->Heading), FMath::Sin(Instance->Heading));
 			return Link;
 		};
 
@@ -969,10 +979,21 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 	int32 Joined = 0;
 	int32 Unjoined = 0;
 
-	// WHICH STANDS GOT IN, and where the first entry that did not was, so a stand that joined
-	// nothing at all can be named once after the loop rather than four times inside it.
-	TSet<FEntityInstanceId> StandsJoined;
-	TMap<FEntityInstanceId, FVector2D> StandsRefused;
+	// PER-STAND ENTRY COUNTS, not just whether any got in (task 4, far-side-entry spec): a
+	// PARTIAL join - some declared entries reached a road, others did not - is a different fact
+	// from joining nothing at all, and wants a different line: the first names a service position
+	// the road cannot reach, the second says to move the road. ONE MAP, not a joined set beside a
+	// refused one, which is exactly the pair CLAUDE.md's "lists that must agree are one list"
+	// warns about - a stand present in both would have to be read as "some of each" by checking
+	// two containers instead of one counter.
+	struct FStandEntryTally
+	{
+		int32 Joined = 0;
+		int32 Refused = 0;
+		/** Where the first refused entry sat, for the "joins nothing at all" line below. */
+		FVector2D FirstRefusedAt = FVector2D::ZeroVector;
+	};
+	TMap<FEntityInstanceId, FStandEntryTally> StandEntries;
 
 	// MUTABLE, because a link found by PROXIMITY has no direction of its own until the search
 	// says which way the road lies, and one leaving a lane has none until the tangent run
@@ -1001,7 +1022,12 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 				// DEFERRED, not dropped - see FPendingLink::LaneOwner. Three declared entries
 				// of four finding no road is what a stand beside one service road looks like,
 				// and this is the line that makes the fourth reportable.
-				StandsRefused.FindOrAdd(Link.LaneOwner, Link.At);
+				FStandEntryTally& Tally = StandEntries.FindOrAdd(Link.LaneOwner);
+				if (Tally.Refused == 0)
+				{
+					Tally.FirstRefusedAt = Link.At;
+				}
+				++Tally.Refused;
 				continue;
 			}
 
@@ -1059,25 +1085,34 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 		++Joined;
 		if (Link.LaneOwner.IsSet())
 		{
-			StandsJoined.Add(Link.LaneOwner);
+			++StandEntries.FindOrAdd(Link.LaneOwner).Joined;
 		}
 	}
 
-	// THE STANDS THAT JOINED NOTHING AT ALL, one line each. Reported here because an entry is
-	// only known to be the last hope once every entry has been tried, and because the ORDER
-	// they were tried in must not decide whether the stand is reported.
-	for (const TPair<FEntityInstanceId, FVector2D>& Refused : StandsRefused)
+	// THE STANDS THAT JOINED NOTHING AT ALL, one line each, and the ones that joined SOME but not
+	// all, a different line for a different repair (task 4, far-side-entry spec: the half-plane
+	// can refuse one entry's own road while another entry of the same stand still reaches one -
+	// a corner stand, or one beside a road that stops short of its far side). Reported here
+	// because a stand is only known to have tried every entry once the whole pass has, and the
+	// ORDER they were tried in must not decide which line - if either - it gets.
+	for (const TPair<FEntityInstanceId, FStandEntryTally>& Tally : StandEntries)
 	{
-		if (StandsJoined.Contains(Refused.Key))
+		if (Tally.Value.Joined == 0)
 		{
-			continue;
+			++Unjoined;
+			UE_LOG(LogAirside, Warning,
+				TEXT("Service lane at (%.0f, %.0f) joins nothing: no derived vehicle guideline ")
+				TEXT("within %.0f uu in any direction, at any of its declared entries"),
+				Tally.Value.FirstRefusedAt.X, Tally.Value.FirstRefusedAt.Y, ServiceLinkRadius);
 		}
-
-		++Unjoined;
-		UE_LOG(LogAirside, Warning,
-			TEXT("Service lane at (%.0f, %.0f) joins nothing: no derived vehicle guideline ")
-			TEXT("within %.0f uu in any direction, at any of its declared entries"),
-			Refused.Value.X, Refused.Value.Y, ServiceLinkRadius);
+		else if (Tally.Value.Refused > 0)
+		{
+			const int32 Total = Tally.Value.Joined + Tally.Value.Refused;
+			UE_LOG(LogAirside, Warning,
+				TEXT("Stand %d: %d of %d service entrances joined a road - the rest have none ")
+				TEXT("beyond the far edge"),
+				Tally.Key.Index, Tally.Value.Joined, Total);
+		}
 	}
 
 	// One census line per pass, beside the guideline builder's: how many lead-ins were

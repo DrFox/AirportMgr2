@@ -411,6 +411,129 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTaxiwaySideRoadDoesNotJoinTest,
+	"Airside.Build.StandEntry.TaxiwaySideRoadDoesNotJoin",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiwaySideRoadDoesNotJoinTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE HALF-PLANE'S OWN TEST (task 4, far-side-entry spec). A road on the TAXIWAY side of the
+	// stand - the OLD strip every entry opened onto before the 2026-09-26 ruling moved them to the
+	// far edge - must join nothing, however close it is drawn.
+	//
+	// 400 uu, NOT StandIsEnteredWhereItDeclares' 4500: that test's "behind the tail" case sits
+	// Depth (6500 for Code C) plus 4500 uu from the entries - past ServiceLinkRadius (6500) on
+	// distance alone, so it never exercised the half-plane at all, only the reach. This one is
+	// well inside the reach, so a refusal here can only be the HALF-PLANE, not the radius.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FGuidelineNodeId Far;
+	const double TaxiwaySideX = StandGroundOf(*Stand).Min.X - 400.0;
+	Lay(*Net, FVector2D(TaxiwaySideX, -20000.0), FVector2D(TaxiwaySideX, 20000.0),
+		ETraversalClass::GroundVehicle, Far);
+
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+
+	// THE STAND'S OWN "JOINS NOTHING" LINE, expected rather than merely tolerated - this project's
+	// automation harness does not fail a test over a Warning by itself, so asserting it here is
+	// what actually proves the half-plane ran rather than silently finding nothing for some other
+	// reason. One line per stand (FAnchorLink::Build's post-loop report), not one per entry.
+	//
+	// "Service lane at", NOT THE SHORTER "joins nothing": this fixture's stand also has an
+	// aircraft pose and a Pedestrian anchor (PassengerDoor) with no guideline of their own class
+	// to find - a gap in the fixture, not in the feature under test - and both log an unrelated
+	// "Anchor at (...) joins nothing" line of their own. The lane's own line is the only one that
+	// starts this way. NO TRAILING "(": AddExpectedError's Contains match runs the text as a
+	// REGEX, and an unbalanced parenthesis is a malformed pattern that silently matches nothing -
+	// found the hard way when this line read "Service lane at (" and reported zero hits.
+	AddExpectedError(TEXT("Service lane at"), EAutomationExpectedErrorFlags::Contains, 1);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	// EVERY BAY, not just one - see StandIsEnteredWhereItDeclares for why a single-service check
+	// would pass with the whole other side connected by accident.
+	for (const FServiceBay& Bay : Stand->ServiceBays)
+	{
+		TestFalse(
+			*FString::Printf(TEXT("'%s' does not join a road on the taxiway side"), *Bay.AnchorId.ToString()),
+			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, *Bay.AnchorId.ToString())));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFarEdgeRoadJoinsTest,
+	"Airside.Build.StandEntry.FarEdgeRoadJoins",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFarEdgeRoadJoinsTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE HALF-PLANE'S OTHER HALF: a road beyond the far edge, where every entry actually opens,
+	// must still join every one of them - the ordinary case the taxiway-side refusal above must
+	// not break as collateral.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FGuidelineNodeId Far;
+	const double FarSideX = StandGroundOf(*Stand).Max.X + 400.0;
+	Lay(*Net, FVector2D(FarSideX, -20000.0), FVector2D(FarSideX, 20000.0),
+		ETraversalClass::GroundVehicle, Far);
+
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	for (const FServiceBay& Bay : Stand->ServiceBays)
+	{
+		TestTrue(
+			*FString::Printf(TEXT("'%s' joins the far-edge road"), *Bay.AnchorId.ToString()),
+			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, *Bay.AnchorId.ToString())));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeepStandFarRoadJoinsTest,
+	"Airside.Build.StandEntry.DeepStandFarRoadJoins",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDeepStandFarRoadJoinsTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// A DEEPER APRON BETWEEN THE FAR EDGE AND THE ROAD - standing in for a stand DRAWN 3000 uu
+	// past its letter's floor. BuildStandTemplate has no depth to draw one WITH: Depth is
+	// IcaoCode::StandDepthForLetter(Letter) alone, by design (see that function's own header),
+	// with no override a test can reach. So this measures the same claim - the lead-in still
+	// crosses the extra apron to reach a road 400 uu beyond it, rather than binding to the
+	// floor's own far edge - by widening the GAP on the floor stand instead of drawing a deeper
+	// box. 3000 + 400 uu plus the entries' own small inset from the floor's far edge is still
+	// comfortably inside ServiceLinkRadius (6500).
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FGuidelineNodeId Far;
+	constexpr double ExtraApron = 3000.0;
+	const double FarSideX = StandGroundOf(*Stand).Max.X + ExtraApron + 400.0;
+	Lay(*Net, FVector2D(FarSideX, -20000.0), FVector2D(FarSideX, 20000.0),
+		ETraversalClass::GroundVehicle, Far);
+
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	for (const FServiceBay& Bay : Stand->ServiceBays)
+	{
+		TestTrue(
+			*FString::Printf(TEXT("'%s' joins a road beyond the extra apron"), *Bay.AnchorId.ToString()),
+			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, *Bay.AnchorId.ToString())));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandLaneDoesNotJoinItselfTest,
 	"Airside.Build.StandLaneDoesNotJoinItself",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
