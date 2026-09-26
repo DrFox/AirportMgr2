@@ -465,4 +465,79 @@ bool FTwoWayAnchorBothLanesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTwoWaySiblingLaneDoesNotRescanEveryGuidelineTest,
+	"Airside.Build.TwoWay.SiblingLaneDoesNotRescanEveryGuideline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTwoWaySiblingLaneDoesNotRescanEveryGuidelineTest::RunTest(const FString& Parameters)
+{
+	// #306: FindSiblingLane kept its OWN copy of FProximityLinkFinder::Find's loop, and the
+	// copy never called CannotReachWithin - so the SECOND lane of every two-way road's anchor
+	// link paid for URoadNetwork::SampleGuideline on every OTHER joinable edge in the airport,
+	// the exact cost #177 spent a session removing from the FIRST lane's own search. Both
+	// finders now share AnchorLinkFinder.cpp's NearestJoinable, so this is
+	// Airside.Build.AnchorLinkDoesNotRescanEveryGuideline's own measurement, aimed at the
+	// sibling-lane path that test's single-lane fixture never reaches: FTwoWayAnchorBothLanesTest
+	// is the base fixture, with a crowd of decoy guidelines added AFTER the derive pass so they
+	// stand alongside the real two-lane road rather than being swept by it.
+	using namespace TwoWayLane;
+
+	auto LayFixture = [](URoadNetwork& Net, int32 DecoyCount)
+	{
+		const FRoadNodeId A = Net.AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId B = Net.AddNode(FVector2D(20000.0, 0.0));
+		Net.AddStraightSegment(A, B, URoadProfile::MakeServiceRoadTransient());
+
+		UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+		Net.PlaceEntity(Depot, Depot->Anchors, FVector2D(10000.0, 1000.0), UE_DOUBLE_PI * 0.5,
+			/*DesignWingspan=*/0.0, Depot->PoseRole, Depot->Trucks);
+
+		Derive(Net);
+
+		// FAR BEYOND EVERY REACH THIS FIXTURE'S LINK USES (DefaultServiceLinkRadius is 6500 uu),
+		// and added AFTER Derive so a second Topology rebuild sweeping every bDerived guideline
+		// is not what keeps them out of this run.
+		for (int32 Index = 0; Index < DecoyCount; ++Index)
+		{
+			const double OffsetY = 5000.0 * Index;
+			const FGuidelineNodeId DecoyA = Net.AddGuidelineNode(FVector2D(2000000.0, OffsetY));
+			const FGuidelineNodeId DecoyB = Net.AddGuidelineNode(FVector2D(2000000.0, OffsetY + 1000.0));
+			FGuidelineEdge Decoy;
+			Decoy.A = DecoyA;
+			Decoy.B = DecoyB;
+			Decoy.Control = (FVector2D(2000000.0, OffsetY) + FVector2D(2000000.0, OffsetY + 1000.0)) * 0.5;
+			Decoy.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
+			Decoy.Direction = EGuidelineDir::Bidirectional;
+			Decoy.bDerived = true;
+			Net.AddGuidelineEdge(MoveTemp(Decoy));
+		}
+	};
+
+	URoadNetwork* Bare = NewObject<URoadNetwork>(GetTransientPackage());
+	LayFixture(*Bare, 0);
+	const int32 BeforeBare = Bare->SampleGuidelineCallCountForTest();
+	FAnchorLink::Build(*Bare, UAirsideSettings::ResolveLargestServiceVehicle());
+	const int32 BareCost = Bare->SampleGuidelineCallCountForTest() - BeforeBare;
+
+	URoadNetwork* Crowded = NewObject<URoadNetwork>(GetTransientPackage());
+	constexpr int32 DecoyCount = 200;
+	LayFixture(*Crowded, DecoyCount);
+	const int32 BeforeCrowded = Crowded->SampleGuidelineCallCountForTest();
+	FAnchorLink::Build(*Crowded, UAirsideSettings::ResolveLargestServiceVehicle());
+	const int32 CrowdedCost = Crowded->SampleGuidelineCallCountForTest() - BeforeCrowded;
+
+	AddInfo(FString::Printf(TEXT("SampleGuideline calls: %d with no decoys, %d with %d of them"),
+		BareCost, CrowdedCost, DecoyCount));
+
+	// SAME GENEROUS MULTIPLE AS Airside.Build.AnchorLinkDoesNotRescanEveryGuideline: not one
+	// sample per decoy per link, which is what a NearestJoinable with no CannotReachWithin call
+	// would cost - low thousands against this bound.
+	TestTrue(
+		*FString::Printf(TEXT("%d distant decoys cost about the same as none (%d vs %d)"),
+			DecoyCount, CrowdedCost, BareCost),
+		CrowdedCost <= BareCost * 4 + 4);
+
+	return true;
+}
+
 #endif

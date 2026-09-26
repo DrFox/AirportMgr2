@@ -73,6 +73,26 @@ struct FPendingLink
 	 * anything, which is a stand no truck can ever be sent to.
 	 */
 	FEntityInstanceId LaneOwner;
+
+	/**
+	 * Assembles a link from the ONE RULE every call site restated for itself (#306): Kind and
+	 * Reach and the aircraft span cap all fall out of Class alone - Ray and MaxLeadIn for an
+	 * aircraft, Proximity and ServiceLinkRadius for anything else - because the strategy IS the
+	 * traversal class (see ELinkKind's own doc comment) and a service link's line has no wing
+	 * limit to enforce. FAnchorLink::Gather assembled this ternary four times over (a pose's
+	 * ray, an anchor's ray, a declared entry's proximity link, and PoseSetbackFor's probe-only
+	 * one) - one of them behind a comment claiming it was "written as a lambda rather than
+	 * duplicated", which was true of the OUTER shape and not of this inner one. A fifth call
+	 * site that got Reach backwards would silently cap an aircraft's lead-in at 6500 uu or let
+	 * a service van reach 200 m; this is the one place that can happen now.
+	 *
+	 * StandWingspan is 0 for every non-aircraft caller (Class has already refused the wing
+	 * limit) and MaxLeadIn is likewise unused off the Aircraft branch, so a caller with neither
+	 * in scope may pass 0.0 for both - see PoseSetbackFor's own call.
+	 */
+	static FPendingLink For(FGuidelineNodeId Node, const FVector2D& At, const FVector2D& Dir,
+		ETraversalClass Class, double Radius, double StandWingspan,
+		double MaxLeadIn, double ServiceLinkRadius);
 };
 
 /** What a finder found: which guideline (and where) a link should join. */

@@ -187,6 +187,40 @@ struct AIRSIDE_API FAnchorLink
 	static double ServiceLaneRadius(const FChassis& LargestServiceVehicle);
 
 	/**
+	 * How much room a join has to spend at one hit on a road, in uu of fillet run - the THREE
+	 * bounds Join clamps its Offset against, computed once (#306) so PoseSetbackFor can ask for
+	 * the room Join will actually measure instead of re-deriving its own, which had assumed a
+	 * square corner and an unboundedly long road: a pose set back far enough to satisfy LeadRoom
+	 * alone could still be joined on a SHORT road, where Behind or Ahead clamped the delivered
+	 * fillet no matter how generous the lead-in was.
+	 *
+	 * LeadRoom is how far the lead-in itself may run before the corner - the straight-line
+	 * distance from where it starts (LeadFrom: a lane change's control, or the anchor itself)
+	 * to Corner, less the weld tolerance and whatever a lane change already spent getting there
+	 * (LaneRun). Behind and Ahead are the arc length back along the road from the hit to each of
+	 * its own ends, less the same weld tolerance - a property of the ROAD, which no amount of
+	 * lead-in length changes.
+	 *
+	 * MEASURED FROM THE CONTROL WHEN THERE IS ONE, not from the node: a curved lead-in that
+	 * swings wide would otherwise read as having more room than it has, because Offset is later
+	 * spent back from Corner along Link.Dir, which points from the control.
+	 */
+	struct AIRSIDE_API FJoinRoom
+	{
+		double LeadRoom = 0.0;
+		double Behind = 0.0;
+		double Ahead = 0.0;
+
+		/** The least of the three, floored at zero: the OFFSET a join at this hit may spend. */
+		double Available() const { return FMath::Max(0.0, FMath::Min(LeadRoom, FMath::Min(Behind, Ahead))); }
+	};
+
+	/** See FJoinRoom. Curve is the road's own sampled polyline (URoadNetwork::SampleGuideline);
+	 *  Param is the hit's position along it; Corner and LeadFrom are Join's own local names. */
+	static FJoinRoom MeasureJoinRoom(const TArray<FVector2D>& Curve, double Param,
+		const FVector2D& Corner, const FVector2D& LeadFrom, double LaneRun = 0.0);
+
+	/**
 	 * How far to set a service pose back from At, along Inward, so that the link Build will lay
 	 * from it has room for a square turn onto its road at ServiceLaneRadius. Zero when it already
 	 * has, or when no road is in reach (Build will log that one).
@@ -199,6 +233,13 @@ struct AIRSIDE_API FAnchorLink
 	 * Join then had 300 uu to fit a square turn that wants CornerRunFor(769, 90 deg) = 1088, and
 	 * clamped the curve to R = 206 - "the fuel truck gets stuck turning out through the gate",
 	 * PIE 2026-09-22.
+	 *
+	 * CAPPED AT WHAT THE ROAD CAN HOLD, since 2026-09-26 (#306): the corner run asked for is
+	 * min(CornerRunFor(...), MeasureJoinRoom's Behind, Ahead), not the raw CornerRunFor a road
+	 * short either side of the hit could never deliver regardless of setback - Behind/Ahead are
+	 * a property of the road, not of At, so no setback moves them. Before this a pose beside a
+	 * short road was set back for a fillet the road could not hold, and Join's own Offset came
+	 * back short of what this function had promised.
 	 */
 	static double PoseSetbackFor(const URoadNetwork& Network, const FVector2D& At,
 		const FVector2D& Inward, const FChassis& LargestServiceVehicle, double ServiceLinkRadius);
