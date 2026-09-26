@@ -207,13 +207,8 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 	{
 		const FGuidelineNodeId WEnd = ExitArcNodeFor(*Net, RW1, true);
 		const FGuidelineNodeId EEnd = ExitArcNodeFor(*Net, RW2, false);
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = WEnd;
-		Query.Goal = EEnd;
-		Query.Class = ETraversalClass::Aircraft;
-		const FRoutePlan Through = RouteSearch::Find(*Net, Query);
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+		const FRoutePlan Through = TestGraph::Probe(*Net, WEnd, EEnd, ETraversalClass::Aircraft);
 		if (TestTrue(TEXT("the runway routes end to end"), Through.IsValid()))
 		{
 			bool bOnRunway = true;

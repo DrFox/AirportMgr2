@@ -1929,13 +1929,8 @@ bool FDepotTruckTurnsOutWithinItsLockTest::RunTest(const FString& Parameters)
 	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	for (const FGuidelineNodeId Goal : { West, East })
 	{
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = Depot->PoseNode;
-		Query.Goal = Goal;
-		Query.Class = ETraversalClass::GroundVehicle;
-		const FRoutePlan Plan = RouteSearch::Find(*Actor->Network, Query);
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+		const FRoutePlan Plan = TestGraph::Probe(*Actor->Network, Depot->PoseNode, Goal, ETraversalClass::GroundVehicle);
 		const TCHAR* Which = Goal == West ? TEXT("west") : TEXT("east");
 		if (!TestTrue(*FString::Printf(TEXT("the truck routes out of the depot to the %s"), Which),
 			Plan.IsValid() && Plan.Polyline.Num() >= 2))

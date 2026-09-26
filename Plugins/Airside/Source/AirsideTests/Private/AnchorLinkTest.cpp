@@ -11,6 +11,7 @@
 #include "Model/RouteSearch.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -89,14 +90,8 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the stop position now has exactly one lead-in"), Stop->Incident.Num(), 1);
 
 		// The point of the whole exercise: an aircraft can now be routed to the stand.
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = West;
-		Query.Goal = PoseNode;
-		Query.Class = ETraversalClass::Aircraft;
-
-		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+		const FRoutePlan Plan = TestGraph::Probe(*Net, West, PoseNode, ETraversalClass::Aircraft);
 		if (!TestTrue(TEXT("an aircraft can now route to the stand"), Plan.IsValid())
 			|| Plan.Steps.Num() == 0)
 		{
@@ -134,15 +129,9 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		// inferred from a node's degree, because through-traffic is the thing that actually
 		// matters and a correct-looking degree can still be a severed taxiway.
 		{
-			FRouteQuery Through;
-			Through.Errand = ERouteErrand::GraphProbe;
-			Through.Policy = FRoutePolicy::For(Through.Errand);
-			Through.Start = West;
-			Through.Goal = East;
-			Through.Class = ETraversalClass::Aircraft;
-
+			// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 			TestTrue(TEXT("traffic still passes the stand from end to end"),
-				RouteSearch::Find(*Net, Through).IsValid());
+				TestGraph::Probe(*Net, West, East, ETraversalClass::Aircraft).IsValid());
 		}
 	}
 
@@ -223,18 +212,14 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 			Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5);
 		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = West;
-		Query.Goal = Net->GetEntity(Placed)->PoseNode;
-		Query.Class = ETraversalClass::Aircraft;
-		Query.Wingspan = Stand->DesignAircraft->Footprint.Wingspan;
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+		const FGuidelineNodeId Pose = Net->GetEntity(Placed)->PoseNode;
+		TestTrue(TEXT("the stand's own design aircraft fits"),
+			TestGraph::Probe(*Net, West, Pose, ETraversalClass::Aircraft, nullptr,
+				Stand->DesignAircraft->Footprint.Wingspan).IsValid());
 
-		TestTrue(TEXT("the stand's own design aircraft fits"), RouteSearch::Find(*Net, Query).IsValid());
-
-		Query.Wingspan = Stand->DesignAircraft->Footprint.Wingspan * 2.0;
-		const FRoutePlan Refused = RouteSearch::Find(*Net, Query);
+		const FRoutePlan Refused = TestGraph::Probe(*Net, West, Pose, ETraversalClass::Aircraft, nullptr,
+			Stand->DesignAircraft->Footprint.Wingspan * 2.0);
 		TestFalse(TEXT("twice that does not"), Refused.IsValid());
 		TestEqual(TEXT("and is reported as too wide, not unreachable"),
 			Refused.Result, ERouteResult::TooWide);

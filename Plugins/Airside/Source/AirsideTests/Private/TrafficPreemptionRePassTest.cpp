@@ -10,15 +10,10 @@
 
 namespace
 {
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 	FRoutePlan PreemptionRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B, ETraversalClass Class)
 	{
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = A;
-		Query.Goal = B;
-		Query.Class = Class;
-		return RouteSearch::Find(Net, Query);
+		return TestGraph::Probe(Net, A, B, Class);
 	}
 }
 

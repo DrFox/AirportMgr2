@@ -82,8 +82,8 @@ bool FDepartAgentModelTest::RunTest(const FString& Parameters)
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 
 	// Taxi B -> A: parks at A, off the runway, engine shut down after the pause.
-	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = G.B; Q.Goal = G.A; Q.Class = ETraversalClass::Aircraft;
-	const int32 Id = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	const int32 Id = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, G.B, G.A, ETraversalClass::Aircraft), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
 
 	TestEqual(TEXT("a taxiing agent may not depart"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::NotParked);
@@ -146,8 +146,8 @@ bool FDepartAgentForwardersTest::RunTest(const FString& Parameters)
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	const FDepAgentGraph G = DepAgentBuild(*Actor->Network);
 
-	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = G.B; Q.Goal = G.A; Q.Class = ETraversalClass::Aircraft;
-	if (!TestTrue(TEXT("dispatched through the actor"), Actor->DispatchAgent(RouteSearch::Find(*Actor->Network, Q), TestAirframes::Piper()))) { return false; }
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	if (!TestTrue(TEXT("dispatched through the actor"), Actor->DispatchAgent(TestGraph::Probe(*Actor->Network, G.B, G.A, ETraversalClass::Aircraft), TestAirframes::Piper()))) { return false; }
 	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
 	TestNotNull(TEXT("the actor can name the agent's view by id"), Actor->GetAgentView(Id));
 	TestNull(TEXT("and returns null for an unknown id"), Actor->GetAgentView(Id + 9));

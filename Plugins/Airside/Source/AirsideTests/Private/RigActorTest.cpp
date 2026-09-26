@@ -42,13 +42,8 @@ namespace RigActorTest
 		Edge.bDerived = false;
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = A;
-		Query.Goal = B;
-		Query.Class = ETraversalClass::GroundVehicle;
-		return RouteSearch::Find(Net, Query);
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+		return TestGraph::Probe(Net, A, B, ETraversalClass::GroundVehicle);
 	}
 
 	/** Dispatches Vehicle on Plan and returns its view, or null. */

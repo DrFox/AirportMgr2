@@ -87,13 +87,8 @@ bool FDriveSideCompositionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("right-hand: the A->B lane is at +Y, screen-right of +X"),
 		DriveSideTest::ForwardLaneY(Net, Seg, &Start, &Goal) > 0.0);
 
-	FRouteQuery Query;
-	Query.Errand = ERouteErrand::GraphProbe;
-	Query.Policy = FRoutePolicy::For(Query.Errand);
-	Query.Start = Start;
-	Query.Goal = Goal;
-	Query.Class = ETraversalClass::GroundVehicle;
-	const FRoutePlan Plan = RouteSearch::Find(Net, Query);
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	const FRoutePlan Plan = TestGraph::Probe(Net, Start, Goal, ETraversalClass::GroundVehicle);
 	if (!TestTrue(TEXT("a route down the road"), Plan.IsValid())) { return false; }
 	if (!TestTrue(TEXT("a truck is dispatched"),
 		Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultVehicle(), ETraversalClass::GroundVehicle))) { return false; }

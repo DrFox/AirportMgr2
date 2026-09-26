@@ -48,8 +48,8 @@ bool FTrafficDepartureReleasesWhenAirborneTest::RunTest(const FString& Parameter
 	}
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
-	const int32 Plane = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, B, ETraversalClass::Aircraft), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 	if (!TestTrue(TEXT("the route ends on the runway, so the departure is armed"), Traffic->FindAgent(Plane)->bDepartureArmed)) { return false; }
 

@@ -17,6 +17,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
+#include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -89,13 +90,8 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	Runtime->Attach(Actor);
 
 	// Taxi an aircraft in to the stand.
-	FRouteQuery Query;
-	Query.Errand = ERouteErrand::GraphProbe;
-	Query.Policy = FRoutePolicy::For(Query.Errand);
-	Query.Start = TaxiSouth;
-	Query.Goal = Net.GetEntity(Stand)->PoseNode;
-	Query.Class = ETraversalClass::Aircraft;
-	const FRoutePlan Plan = RouteSearch::Find(Net, Query);
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	const FRoutePlan Plan = TestGraph::Probe(Net, TaxiSouth, Net.GetEntity(Stand)->PoseNode, ETraversalClass::Aircraft);
 	if (!TestTrue(TEXT("the aircraft routes to the stand"), Plan.IsValid())) { return false; }
 	if (!TestTrue(TEXT("and dispatches"),
 		Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultAirframe()))) { return false; }

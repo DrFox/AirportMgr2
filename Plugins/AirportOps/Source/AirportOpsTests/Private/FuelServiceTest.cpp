@@ -362,13 +362,8 @@ int32 FFuelFixture::ParkAircraft()
 
 int32 FFuelFixture::ParkAircraftAt(FGuidelineNodeId Pose)
 {
-	FRouteQuery Query;
-	Query.Errand = ERouteErrand::GraphProbe;
-	Query.Policy = FRoutePolicy::For(Query.Errand);
-	Query.Start = TaxiwayFarEnd;
-	Query.Goal = Pose;
-	Query.Class = ETraversalClass::Aircraft;
-	const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	const FRoutePlan Plan = TestGraph::Probe(*Net, TaxiwayFarEnd, Pose, ETraversalClass::Aircraft);
 	if (!Plan.IsValid())
 	{
 		return 0;

@@ -53,8 +53,8 @@ bool FStandClaimTest::RunTest(const FString& Parameters)
 
 	// Redirect elsewhere: the stand frees between ticks, and the model says stands may have freed.
 	const FGuidelineNodeId Other = (Goal == PoseA) ? PoseB : PoseA;
-	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = Goal; Q.Goal = Other; Q.Class = ETraversalClass::Aircraft;
-	const FRoutePlan ToOther = RouteSearch::Find(*A.Net, Q);
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	const FRoutePlan ToOther = TestGraph::Probe(*A.Net, Goal, Other, ETraversalClass::Aircraft);
 	if (!TestTrue(TEXT("a route between the stands exists"), ToOther.IsValid())) { return false; }
 	if (!TestTrue(TEXT("redirected"), Traffic->RedirectAgent(Id, A.Net, ToOther))) { return false; }
 	TestFalse(TEXT("the old stand is released at the redirect, not a tick later"),

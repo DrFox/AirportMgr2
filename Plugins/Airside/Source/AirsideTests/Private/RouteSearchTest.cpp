@@ -6,6 +6,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Solve/GuidelineGeom.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -65,15 +66,9 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 	const FGuidelineEdgeId WestSouth = Join(*Net, West, South);
 	Join(*Net, South, East);
 
-	FRouteQuery Query;
-	Query.Errand = ERouteErrand::GraphProbe;
-	Query.Policy = FRoutePolicy::For(Query.Errand);
-	Query.Start = West;
-	Query.Goal = East;
-	Query.Class = ETraversalClass::Aircraft;
-
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 	{
-		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+		const FRoutePlan Plan = TestGraph::Probe(*Net, West, East, ETraversalClass::Aircraft);
 		TestTrue(TEXT("a route is found across the diamond"), Plan.IsValid());
 		TestEqual(TEXT("it takes two edges"), Plan.Steps.Num(), 2);
 
@@ -108,21 +103,10 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		const FGuidelineNodeId B = OneWay->AddGuidelineNode(FVector2D(1000.0, 0.0));
 		Join(*OneWay, A, B, EGuidelineDir::AToB);
 
-		FRouteQuery Forward;
-		Forward.Errand = ERouteErrand::GraphProbe;
-		Forward.Policy = FRoutePolicy::For(Forward.Errand);
-		Forward.Start = A;
-		Forward.Goal = B;
-		Forward.Class = ETraversalClass::Aircraft;
-		TestTrue(TEXT("the one-way runs forwards"), RouteSearch::Find(*OneWay, Forward).IsValid());
+		// #312: was two hand-built FRouteQuery that skipped AvoidRunways.
+		TestTrue(TEXT("the one-way runs forwards"), TestGraph::Probe(*OneWay, A, B, ETraversalClass::Aircraft).IsValid());
 
-		FRouteQuery Back;
-		Back.Errand = ERouteErrand::GraphProbe;
-		Back.Policy = FRoutePolicy::For(Back.Errand);
-		Back.Start = B;
-		Back.Goal = A;
-		Back.Class = ETraversalClass::Aircraft;
-		const FRoutePlan Refused = RouteSearch::Find(*OneWay, Back);
+		const FRoutePlan Refused = TestGraph::Probe(*OneWay, B, A, ETraversalClass::Aircraft);
 		TestFalse(TEXT("and refuses backwards"), Refused.IsValid());
 		TestEqual(TEXT("reported as unreachable"), Refused.Result, ERouteResult::Unreachable);
 	}
@@ -136,18 +120,11 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		const FGuidelineNodeId B = Narrow->AddGuidelineNode(FVector2D(1000.0, 0.0));
 		Join(*Narrow, A, B, EGuidelineDir::Bidirectional, /*MaxWingspan=*/3600.0);
 
-		FRouteQuery Fits;
-		Fits.Errand = ERouteErrand::GraphProbe;
-		Fits.Policy = FRoutePolicy::For(Fits.Errand);
-		Fits.Start = A;
-		Fits.Goal = B;
-		Fits.Class = ETraversalClass::Aircraft;
-		Fits.Wingspan = 3600.0;
-		TestTrue(TEXT("a wingspan equal to the limit fits"), RouteSearch::Find(*Narrow, Fits).IsValid());
+		// #312: was two hand-built FRouteQuery that skipped AvoidRunways.
+		TestTrue(TEXT("a wingspan equal to the limit fits"),
+			TestGraph::Probe(*Narrow, A, B, ETraversalClass::Aircraft, nullptr, 3600.0).IsValid());
 
-		FRouteQuery TooBig = Fits;
-		TooBig.Wingspan = 6500.0;
-		const FRoutePlan Refused = RouteSearch::Find(*Narrow, TooBig);
+		const FRoutePlan Refused = TestGraph::Probe(*Narrow, A, B, ETraversalClass::Aircraft, nullptr, 6500.0);
 		TestFalse(TEXT("a widebody does not"), Refused.IsValid());
 		TestEqual(TEXT("and is told why"), Refused.Result, ERouteResult::TooWide);
 	}
@@ -165,14 +142,9 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		Edge.Control = FVector2D(500.0, 0.0);
 		Closed->AddGuidelineEdge(MoveTemp(Edge));
 
-		FRouteQuery Query2;
-		Query2.Errand = ERouteErrand::GraphProbe;
-		Query2.Policy = FRoutePolicy::For(Query2.Errand);
-		Query2.Start = A;
-		Query2.Goal = B;
-		Query2.Class = ETraversalClass::Aircraft;
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 		TestFalse(TEXT("a mask admitting nobody carries nobody"),
-			RouteSearch::Find(*Closed, Query2).IsValid());
+			TestGraph::Probe(*Closed, A, B, ETraversalClass::Aircraft).IsValid());
 	}
 
 	// Typed refusals, so the tool can say something better than "no".
@@ -181,22 +153,16 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		Dead.Index = 999;
 		Dead.Generation = 1;
 
-		FRouteQuery Bad;
-		Bad.Errand = ERouteErrand::GraphProbe;
-		Bad.Policy = FRoutePolicy::For(Bad.Errand);
-		Bad.Start = Dead;
-		Bad.Goal = East;
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways (Class defaulted to
+		// GroundVehicle here, since Bad never set it - kept explicit below).
 		TestEqual(TEXT("a dead start is NoStart"),
-			RouteSearch::Find(*Net, Bad).Result, ERouteResult::NoStart);
+			TestGraph::Probe(*Net, Dead, East, ETraversalClass::GroundVehicle).Result, ERouteResult::NoStart);
 
-		Bad.Start = West;
-		Bad.Goal = Dead;
 		TestEqual(TEXT("a dead goal is NoGoal"),
-			RouteSearch::Find(*Net, Bad).Result, ERouteResult::NoGoal);
+			TestGraph::Probe(*Net, West, Dead, ETraversalClass::GroundVehicle).Result, ERouteResult::NoGoal);
 
-		Bad.Goal = West;
 		TestEqual(TEXT("start equal to goal is SameNode"),
-			RouteSearch::Find(*Net, Bad).Result, ERouteResult::SameNode);
+			TestGraph::Probe(*Net, West, West, ETraversalClass::GroundVehicle).Result, ERouteResult::SameNode);
 	}
 
 	// Nearest-node picking, which is how the tool turns a click into a query. A node no
@@ -307,15 +273,9 @@ bool FRouteSearchEdgeCostCacheTest::RunTest(const FString& Parameters)
 		// only exhaust the reachable component trying.
 		const FGuidelineNodeId Goal = Net->AddGuidelineNode(FVector2D(9000.0, 9000.0));
 
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = Start;
-		Query.Goal = Goal;
-		Query.Class = ETraversalClass::Aircraft;
-
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 		const int32 Before = Net->SampleGuidelineCallCountForTest();
-		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+		const FRoutePlan Plan = TestGraph::Probe(*Net, Start, Goal, ETraversalClass::Aircraft);
 		const int32 After = Net->SampleGuidelineCallCountForTest();
 
 		TestEqual(TEXT("an unreachable goal is reported as such"), Plan.Result, ERouteResult::Unreachable);
@@ -338,15 +298,9 @@ bool FRouteSearchEdgeCostCacheTest::RunTest(const FString& Parameters)
 		Join(*Net, West, South);
 		Join(*Net, South, East);
 
-		FRouteQuery Query;
-		Query.Errand = ERouteErrand::GraphProbe;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.Start = West;
-		Query.Goal = East;
-		Query.Class = ETraversalClass::Aircraft;
-
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 		const int32 Before = Net->SampleGuidelineCallCountForTest();
-		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+		const FRoutePlan Plan = TestGraph::Probe(*Net, West, East, ETraversalClass::Aircraft);
 		const int32 After = Net->SampleGuidelineCallCountForTest();
 
 		if (!TestTrue(TEXT("a route is found"), Plan.IsValid())) { return false; }
@@ -499,9 +453,14 @@ bool FRouteSearchFindToGoalsTest::RunTest(const FString& Parameters)
 	Join(*Net, Start, Far);
 	Join(*Net, Start, Narrow, EGuidelineDir::Bidirectional, /*MaxWingspan=*/3600.0);
 
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways. Cannot use
+	// FRouteQuery::For or TestGraph::Probe - FindToGoals takes a Goals ARRAY, not the one
+	// Goal either takes - so AvoidRunways is set by hand here, the same shape
+	// ArrivalPlanner.cpp's own FindToGoals call is stuck with.
 	FRouteQuery Query;
 	Query.Errand = ERouteErrand::GraphProbe;
 	Query.Policy = FRoutePolicy::For(Query.Errand);
+	Query.AvoidRunways = Query.Policy.Avoidance;
 	Query.Start = Start;
 	Query.Class = ETraversalClass::Aircraft;
 	Query.Wingspan = 6500.0; // wider than Narrow's own edge admits

@@ -76,13 +76,8 @@ namespace
 			// possible search - no runway filter, no penalty, no occupancy term - so that a
 			// later change to any errand's row cannot silently move the budget numbers and
 			// be read as a performance regression.
-			FRouteQuery Query;
-			Query.Errand = ERouteErrand::GraphProbe;
-			Query.Policy = FRoutePolicy::For(Query.Errand);
-			Query.Start = TaxiEntry;
-			Query.Goal = Airport.Pose(Stand);
-			Query.Class = ETraversalClass::Aircraft;
-			const FRoutePlan Plan = RouteSearch::Find(Net, Query);
+			// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+			const FRoutePlan Plan = TestGraph::Probe(Net, TaxiEntry, Airport.Pose(Stand), ETraversalClass::Aircraft);
 			if (Plan.IsValid()
 				&& Traffic.DispatchAgent(&Net, Plan, TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0) != 0)
 			{

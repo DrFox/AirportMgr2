@@ -77,14 +77,8 @@ namespace
 	int32 PushbackParkFacing(UGroundTraffic& Traffic, URoadNetwork& Net,
 		FGuidelineNodeId From, FGuidelineNodeId To)
 	{
-		FRouteQuery Q;
-		Q.Errand = ERouteErrand::GraphProbe;
-		Q.Policy = FRoutePolicy::For(Q.Errand);
-		Q.Start = From;
-		Q.Goal = To;
-		Q.Class = ETraversalClass::Aircraft;
-
-		const int32 Id = Traffic.DispatchAgent(&Net, RouteSearch::Find(Net, Q),
+		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+		const int32 Id = Traffic.DispatchAgent(&Net, TestGraph::Probe(Net, From, To, ETraversalClass::Aircraft),
 			TestAirframes::Piper(), ETraversalClass::Aircraft, /*ShutdownPauseSeconds*/ 0.0);
 		if (Id <= 0)
 		{

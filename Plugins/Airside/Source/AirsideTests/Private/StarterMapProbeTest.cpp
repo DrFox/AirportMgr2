@@ -276,8 +276,8 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			int32 Reachable = 0;
 			for (const FGuidelineNodeId& Exit : Exits)
 			{
-				FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = Exit; Q.Goal = Stand.PoseNode; Q.Class = ETraversalClass::Aircraft;
-				Reachable += RouteSearch::Find(*Net, Q).IsValid() ? 1 : 0;
+				// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+				Reachable += TestGraph::Probe(*Net, Exit, Stand.PoseNode, ETraversalClass::Aircraft).IsValid() ? 1 : 0;
 			}
 			Reach = FString::Printf(TEXT("reachable from %d of %d runway nodes"), Reachable, Exits.Num());
 		}

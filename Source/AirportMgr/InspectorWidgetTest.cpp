@@ -12,6 +12,7 @@
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
+#include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/Selection.h"
 #include "UIStyle.h"
@@ -48,8 +49,8 @@ bool FInspectorWidgetTest::RunTest(const FString& Parameters)
 		Edge.bDerived = false;
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
-	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
-	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(RouteSearch::Find(Net, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
 	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
 
 	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(World, UInspectorWidget::StaticClass());
@@ -163,8 +164,8 @@ bool FInspectorIdleTickSetsNoTextTest::RunTest(const FString& Parameters)
 		Edge.bDerived = false;
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
-	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
-	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(RouteSearch::Find(Net, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
 	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
 
 	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(World, UInspectorWidget::StaticClass());
@@ -236,8 +237,8 @@ bool FInspectorIdleTickComposesNoTextTest::RunTest(const FString& Parameters)
 		Edge.bDerived = false;
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
-	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
-	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(RouteSearch::Find(Net, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
 	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
 
 	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(World, UInspectorWidget::StaticClass());

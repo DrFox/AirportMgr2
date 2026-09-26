@@ -47,10 +47,10 @@ bool FAgentRedirectTest::RunTest(const FString& Parameters)
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
 
-	FRouteQuery Out; Out.Errand = ERouteErrand::GraphProbe; Out.Policy = FRoutePolicy::For(Out.Errand); Out.Start = Start; Out.Goal = End; Out.Class = ETraversalClass::GroundVehicle;
-	FRouteQuery Back; Back.Errand = ERouteErrand::GraphProbe; Back.Policy = FRoutePolicy::For(Back.Errand); Back.Start = End; Back.Goal = Start; Back.Class = ETraversalClass::GroundVehicle;
-	const FRoutePlan Outbound = RouteSearch::Find(Net, Out);
-	const FRoutePlan Return = RouteSearch::Find(Net, Back);
+	// #312: was two hand-built FRouteQuery that skipped AvoidRunways - see TestGraph::Probe's
+	// own comment for why that silently answered every errand with the permissive policy.
+	const FRoutePlan Outbound = TestGraph::Probe(Net, Start, End, ETraversalClass::GroundVehicle);
+	const FRoutePlan Return = TestGraph::Probe(Net, End, Start, ETraversalClass::GroundVehicle);
 	if (!TestTrue(TEXT("both legs route"), Outbound.IsValid() && Return.IsValid())) { return false; }
 
 	UAirsideTraffic* Traffic = Actor->GetTraffic();
