@@ -14,36 +14,50 @@ to stand on, something to lay roads INTO, the course actor, and the game mode th
 its road-build keys and camera. Modelled on build_model_yard.py's build_bench()/verify()
 pattern - the same silent-success trap applies to a fresh level as to a re-authored one.
 
-THE FLOOR SIZE AND POSITION ARE READ OFF RigTestCourse.cpp's OWN CONSTANTS (RigCourse
-namespace), not eyeballed - see COURSE_EXTENTS_UU below for the derivation. If that file's
-layout constants change, re-derive this block from them; a floor that stops covering the
-course reads as "the road build failed" when it did not.
+THE FLOOR SIZE AND POSITION ARE READ OFF Saved/RigCourseLayout.json (#301), not retyped from a
+code comment. That file is FRigCourseLayout::ToJson's export, written by the automation test
+AirportMgr.RigCourse.LayoutJsonWritten - run it first:
+
+  pwsh -File Tools/Run-AirsideTests.ps1 -Filter AirportMgr.RigCourse.LayoutJsonWritten
+
+The JSON's bounding box is MEASURED off every node FRigCourseLayout::Lay actually placed, so it
+tracks the layout constants automatically; before #301 this block was hand re-derived from a
+comment in RigTestCourse.cpp and drifted the moment that file's figures moved without this one
+being re-typed to match - exactly the "lists that must agree are one list" trap.
 
 Every result line is prefixed MARKER: so it can be grepped out of Saved/Logs/AirportMgr.log.
 """
+import json
+import os
 import unreal
 
 LEVEL = "/Game/Maps/M_RigTest"
 
-# ---------------------------------------------------------------------------------------
-# COURSE EXTENTS, uu (1 uu = 1 cm), derived from Source/AirportMgr/RigTestCourse.cpp's
-# RigCourse namespace constants as of 2026-09-25. Recompute this block if that file's
-# layout constants move.
-#
-#   LaneStraight=8000  CornerRise=3000  StemLength=3000  UpperRise=3000  ExitRun=6000
-#   LaneLength = LaneStraight+ExitRun = 14000        (P0..P4, one lane, local X)
-#   LaneHeight = CornerRise+UpperRise = 6000         (one lane, local Y)
-#   TierGap=6000  TierPitch = LaneHeight+TierGap = 12000
-#   EastLinkX=16000  WestLinkX=-3000  ReturnEastX=20000  ReturnWestX=-5000  ReturnSouthY=-4000
-#
-# Walking every node BuildCourse places (three lanes at Tier*TierPitch, the east/west links,
-# the return road): X ranges ReturnWestX..ReturnEastX = -5000..20000; Y ranges
-# ReturnSouthY..(2*TierPitch+LaneHeight) = -4000..30000 (the top of tier 2's lane, R0's own Y).
-# So the course's own bounding box is 25000 x 34000 uu (250 x 340 m).
-COURSE_MIN_X = -5000.0
-COURSE_MAX_X = 20000.0
-COURSE_MIN_Y = -4000.0
-COURSE_MAX_Y = 30000.0
+# WRITTEN BY THE TEST, READ HERE - see the module docstring. Not a fallback default: a missing
+# or unreadable file is a build_network_and_course() precondition this script refuses rather
+# than guesses at, because guessing is exactly the retyped-comment bug #301 removed.
+_LAYOUT_JSON_PATH = os.path.join(unreal.Paths.project_saved_dir(), "RigCourseLayout.json")
+
+
+def _load_layout():
+    try:
+        with open(_LAYOUT_JSON_PATH, "r") as handle:
+            return json.load(handle)
+    except OSError as error:
+        unreal.log_error(
+            "MARKER: FAIL no %s - run "
+            "'pwsh -File Tools/Run-AirsideTests.ps1 -Filter "
+            "AirportMgr.RigCourse.LayoutJsonWritten' first, which writes it (%s)"
+            % (_LAYOUT_JSON_PATH, error))
+        raise
+
+
+_LAYOUT = _load_layout()
+
+COURSE_MIN_X = float(_LAYOUT["BoxMinX"])
+COURSE_MAX_X = float(_LAYOUT["BoxMaxX"])
+COURSE_MIN_Y = float(_LAYOUT["BoxMinY"])
+COURSE_MAX_Y = float(_LAYOUT["BoxMaxY"])
 
 # The floor is centred on the course's own centre, not on the world origin (unlike
 # build_model_yard.py's yard, which IS centred on the origin because nothing else pins its

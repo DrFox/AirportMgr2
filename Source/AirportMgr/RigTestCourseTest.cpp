@@ -8,6 +8,8 @@
 #include "Model/RoadAgent.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Model/AgentMotion.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
@@ -1854,6 +1856,46 @@ bool FRigCourseBendsAreSmoothTest::RunTest(const FString& Parameters)
 			S, Bend.InnerArcRadius, /*MinLanes=*/1);
 	}
 	TestTrue(FString::Printf(TEXT("the course's bends were judged (%d)"), Bends), Bends >= 14);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRigCourseLayoutJsonWrittenTest,
+	"AirportMgr.RigCourse.LayoutJsonWritten",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRigCourseLayoutJsonWrittenTest::RunTest(const FString& Parameters)
+{
+	// #301: Tools/Python/build_rig_test_level.py used to retype FRigCourseLayout's constants and
+	// the course's own bounding box by hand off a code comment ("Recompute this block if that
+	// file's layout constants move"). THE SEAM this test pins: Lay()'s own JSON export, written
+	// to Saved/RigCourseLayout.json for the Python script to read instead. Goes red if ToJson
+	// stops naming a figure the script needs, or if nothing ever writes the file for it to read.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
+	const FRigCourseLayoutResult Result = FRigCourseLayout::Lay(*Actor);
+	if (!TestTrue(TEXT("the layout placed waypoints"), Result.Waypoints.Num() > 0)) { return false; }
+	if (!TestTrue(TEXT("the bounding box is real, not the untouched sentinel"),
+		Result.BoxMax.X > Result.BoxMin.X && Result.BoxMax.Y > Result.BoxMin.Y)) { return false; }
+
+	const FString Json = FRigCourseLayout::ToJson(Result);
+	// EVERY FIGURE THE PYTHON SCRIPT NAMES (build_rig_test_level.py's COURSE_MIN_X etc.): if one
+	// goes missing from the export, the script would silently keep reading whatever figure it
+	// last had, which is exactly the drift #301 found.
+	for (const TCHAR* Key : { TEXT("\"LaneStraight\""), TEXT("\"TierPitch\""), TEXT("\"BoxMinX\""),
+		TEXT("\"BoxMaxX\""), TEXT("\"BoxMinY\""), TEXT("\"BoxMaxY\""), TEXT("\"TierCount\"") })
+	{
+		TestTrue(FString::Printf(TEXT("the JSON names %s"), Key), Json.Contains(Key));
+	}
+
+	const FString Path = FPaths::ProjectSavedDir() / TEXT("RigCourseLayout.json");
+	if (!TestTrue(TEXT("the JSON writes to Saved/ - the Python script's own read path"),
+		FFileHelper::SaveStringToFile(Json, *Path))) { return false; }
+
+	FString ReadBack;
+	if (!TestTrue(TEXT("it reads back"), FFileHelper::LoadFileToString(ReadBack, *Path))) { return false; }
+	TestEqual(TEXT("bitwise the same JSON that was written"), ReadBack, Json);
 	return true;
 }
 

@@ -213,6 +213,120 @@ struct FRigCourseRunner
 	TSet<int64> Logged;
 };
 
+/** Lay()'s whole answer: the road, and the bounding box it actually covers - one struct, not
+ *  four out-params, and not two things a caller could read out of step with each other. */
+struct FRigCourseLayoutResult
+{
+	TArray<FRigCourseWaypoint> Waypoints;
+	int32 SegmentsLaid = 0;
+	int32 SegmentsRefused = 0;
+	/** Every node Lay() placed, min and max - MEASURED, not hand re-derived from the constants
+	 *  below (see FRigCourseLayout::ToJson). */
+	FVector2D BoxMin = FVector2D::ZeroVector;
+	FVector2D BoxMax = FVector2D::ZeroVector;
+};
+
+/**
+ * THE COURSE'S GEOMETRY, factored out of ARigTestCourse (#301): a plain function that lays the
+ * course on an IRoadEditTarget and returns its waypoints - no actor, no vehicles, no runners.
+ * BuildCourse below adds those once this has laid the road.
+ *
+ * THE CONSTANTS LIVE HERE, IN ONE STRUCT, so Tools/Python/build_rig_test_level.py can read them
+ * off ToJson's export (a test writes it: AirportMgr.RigCourse.LayoutJsonWritten) instead of
+ * retyping the block by hand off a code comment, which is the shape #301 found - and drifts the
+ * moment this struct's own figures do, exactly as CLAUDE.md's "lists that must agree" warns.
+ *
+ * THE LAYOUT, uu (1 uu = 1 cm). One LANE per tier, drawn in lane-local coordinates entering at
+ * the origin heading +X (UE: +Y is to the driver's RIGHT):
+ *
+ *                 P3 -------------- P4   (exit, heading +X)
+ *                 |
+ *                 P2 ---- S  )  (T junction; stem east to a dead end, balloon past S)
+ *                 |
+ *   P0 ---------- P1
+ *   (entry)   80 m straight
+ *
+ * P1 turns +X to +Y: a RIGHT 90. P3 turns +Y to +X: a LEFT 90. The labels are computed from the
+ * geometry (TurnFeature), never typed, so this sketch cannot disagree with them.
+ */
+struct FRigCourseLayout
+{
+	static constexpr double LaneStraight = 8000.0;   // P0 -> P1, the 80 m straight
+	static constexpr double CornerRise   = 3000.0;   // P1 -> P2
+	static constexpr double StemLength   = 3000.0;   // P2 -> S, the T's stem and the dead end
+	static constexpr double UpperRise    = 3000.0;   // P2 -> P3
+	static constexpr double ExitRun      = 6000.0;   // P3 -> P4
+	static constexpr double LaneLength   = LaneStraight + ExitRun;   // 140 m
+	static constexpr double LaneHeight   = CornerRise + UpperRise;   // 60 m
+
+	/**
+	 * 60 m of CLEAR GROUND between lanes (the brief's figure), on top of a lane's own height: a
+	 * lane is not a line, and the dead end's U-turn balloon reaches ~3.9x the bowser's lock
+	 * (~27 m) past S (UTurnGeom::HeightFactor), which stays inside the lane's own band.
+	 */
+	static constexpr double TierGap   = 6000.0;
+	static constexpr double TierPitch = LaneHeight + TierGap;
+
+	/**
+	 * Connectors: WIDE in the middle, so a join refuses as little as it can; the 20 m stub that
+	 * meets a lane is in THAT LANE'S tier, so a lane's entry and exit are not width steps - the
+	 * width step is ONE named feature of its own (WidthStepX below), not an accident of every
+	 * join. Odd tiers are the lane ROTATED 180 degrees about its centre, so every lane is driven
+	 * with the same turns in the same order (a serpentine), joined by an east link, a west link,
+	 * and a return road round the outside.
+	 */
+	static constexpr double EastLinkX   = LaneLength + 2000.0;
+	static constexpr double WestLinkX   = -3000.0;
+	static constexpr double ReturnEastX = LaneLength + 6000.0;
+	static constexpr double ReturnWestX = -5000.0;
+	static constexpr double ReturnSouthY = -4000.0;
+
+	/**
+	 * THE WIDTH STEP, on the return road's south straight: Narrow from the east corner to here,
+	 * Wide from here on, so the leg that ends at the west corner crosses a Narrow -> Wide change
+	 * at a straight-through node. KEPT AS A NAMED FEATURE (controller ruling 5, 2026-09-25): it
+	 * was laid to pin a builder defect - the derived turn there was a lane-offset jog, MinRadius
+	 * 0 and unmeasured, so route search did not gate it, and FSpeedProfile reported a sharp
+	 * vertex and crawled it (55 s for the rig over a 69 m straight that takes 14 s without the
+	 * step). FIXED IN THE BUILDER the same day, where it belonged: both cuts are inset and each
+	 * lane crosses the taper on an S sized for Wide's design vehicle, the rig
+	 * (FRoadNetworkSolver's WidthTaperLength, 412 uu here). OneLoopHeadless now asserts NO sharp
+	 * vertex on it.
+	 */
+	static constexpr double WidthStepX = LaneLength / 2.0;
+	static constexpr int32 WidthStepFrom = 0;   // Narrow
+	static constexpr int32 WidthStepTo = 2;     // Wide
+
+	static constexpr int32 TierCount = 3;
+	static constexpr int32 ConnectorTier = 2;   // Wide
+
+	/** A lane-local point in world XY for Tier. */
+	static FVector2D LanePoint(int32 Tier, double X, double Y);
+
+	/** Right or left from the turn In -> Out. UE is left-handed seen from above: +X to +Y is right. */
+	static ERigCourseFeature TurnFeature(const FVector2D& In, const FVector2D& Out);
+
+	static const TCHAR* FeatureText(ERigCourseFeature Feature);
+
+	/** "Narrow" / "Standard" / "Wide", by Tier - the names ToJson and BuildCourse's log both use. */
+	static const TCHAR* TierName(int32 Tier);
+
+	/**
+	 * Lays the course's roads on Target and returns every waypoint, the segment counts and the
+	 * bounding box every placed node actually falls in. No vehicles, no runners, no actor state -
+	 * ARigTestCourse::BuildCourse adds those on top of this.
+	 */
+	static FRigCourseLayoutResult Lay(IRoadEditTarget& Target);
+
+	/**
+	 * Every constant above, and Result's bounding box, as JSON - COMPUTED, never hand
+	 * re-derived. Tools/Python/build_rig_test_level.py used to retype this block by hand off a
+	 * comment (#301); a test now writes this to Saved/RigCourseLayout.json
+	 * (AirportMgr.RigCourse.LayoutJsonWritten) so the Python script reads it instead.
+	 */
+	static FString ToJson(const FRigCourseLayoutResult& Result);
+};
+
 /**
  * A pre-laid road course that loops the articulated rig and the utility + fuel trailer over
  * every road feature at every service-road width tier, and says which legs each cannot fit
