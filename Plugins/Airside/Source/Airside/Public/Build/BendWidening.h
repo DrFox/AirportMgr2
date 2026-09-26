@@ -3,6 +3,12 @@
 #include "CoreMinimal.h"
 #include "Solve/JunctionSolver.h"
 
+// PUBLIC, NOT PRIVATE (moved here #305): AirsideTests is its own module and cannot see
+// Airside's Private/ headers however it depends on Airside, so a test asserting Measure's
+// Out.Corner against FJunctionResult::InnerCornerOfBend needs this include reachable from
+// there. Nothing else about the boundary changed - InnerEdgeOf itself stays file-static
+// in BendWidening.cpp, unreachable outside it.
+
 struct FVehicle;
 
 /**
@@ -80,7 +86,7 @@ namespace BendWidening
 	 * straight or invalid corner, no concentric lanes, a bodiless vehicle). Lanes[i] are
 	 * Input.Arms[i]'s. A turn that folds the tow is skipped: the router refuses it anyway.
 	 */
-	bool Measure(const FJunctionInput& Input, const FJunctionResult& Result, const TArray<FLane> (&Lanes)[2],
+	AIRSIDE_API bool Measure(const FJunctionInput& Input, const FJunctionResult& Result, const TArray<FLane> (&Lanes)[2],
 		const FVehicle& Body, FWidening& Out);
 
 }

@@ -301,6 +301,18 @@ public:
 	double GetMaxHalfWidth() const { return FMath::Max(GetHalfWidthLeft(), GetHalfWidthRight()); }
 
 	/**
+	 * Whether any of this profile's guidelines admits Class - "does this profile carry a
+	 * ground-vehicle lane at all", not which one. `Guidelines.ContainsByPredicate(...)`
+	 * with this same lambda was typed once at RoadNetworkSolver's width-step bend check
+	 * and once more at its SmoothBend twin (2026-09-25).
+	 */
+	bool CarriesClass(ETraversalClass ClassToFind) const
+	{
+		return Guidelines.ContainsByPredicate(
+			[ClassToFind](const FProfileGuideline& Line) { return Line.Class == ClassToFind; });
+	}
+
+	/**
 	 * Symmetric profile for tests and the debug gallery.
 	 *
 	 * ShoulderWidth > 0 produces shoulder | lane | shoulder, which is what the ground

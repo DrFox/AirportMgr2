@@ -199,8 +199,7 @@ namespace
 			{
 				const FRoadSegment* Segment = Network.GetSegment(SegmentId);
 				const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
-				bRoads &= Profile != nullptr && Profile->Guidelines.ContainsByPredicate(
-					[](const FProfileGuideline& Line) { return Line.Class == ETraversalClass::GroundVehicle; });
+				bRoads &= Profile != nullptr && Profile->CarriesClass(ETraversalClass::GroundVehicle);
 			}
 			FJunctionArm& A = OutInput.Arms[0];
 			FJunctionArm& B = OutInput.Arms[1];
@@ -676,21 +675,12 @@ void SmoothBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out
 	{
 		const FRoadSegment* Segment = Network.GetSegment(Out.ArmSegments[Arm]);
 		Profiles[Arm] = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
-		if (Profiles[Arm] == nullptr || !Profiles[Arm]->Guidelines.ContainsByPredicate(
-			[](const FProfileGuideline& Line) { return Line.Class == ETraversalClass::GroundVehicle; }))
+		if (Profiles[Arm] == nullptr || !Profiles[Arm]->CarriesClass(ETraversalClass::GroundVehicle))
 		{
 			return;
 		}
 	}
-	int32 Inner = INDEX_NONE;
-	for (int32 Corner = 0; Corner < 2; ++Corner)
-	{
-		const RoadGeom::FFillet& Fillet = Out.Result.Corners[Corner];
-		if (Fillet.bValid && !Fillet.bStraightThrough && Fillet.Theta < UE_DOUBLE_PI && Fillet.Radius > 0.0)
-		{
-			Inner = Corner;
-		}
-	}
+	const int32 Inner = Out.Result.InnerCornerOfBend();
 	if (Inner == INDEX_NONE)
 	{
 		return;   // straight through (or no corner at all): not a bend
@@ -779,10 +769,8 @@ void SmoothBend(const URoadNetwork& Network, int32 NodeIndex, FRoadNodeCuts& Out
 		const bool bLeftInner = Arm == Inner;
 		const double SolvedInner = bLeftInner ? In.HalfWidthLeft : In.HalfWidthRight;
 		const double SolvedOuter = bLeftInner ? In.HalfWidthRight : In.HalfWidthLeft;
-		const double CutInner = bLeftInner ? (In.CutHalfWidthLeft >= 0.0 ? In.CutHalfWidthLeft : In.HalfWidthLeft)
-			: (In.CutHalfWidthRight >= 0.0 ? In.CutHalfWidthRight : In.HalfWidthRight);
-		const double CutOuter = bLeftInner ? (In.CutHalfWidthRight >= 0.0 ? In.CutHalfWidthRight : In.HalfWidthRight)
-			: (In.CutHalfWidthLeft >= 0.0 ? In.CutHalfWidthLeft : In.HalfWidthLeft);
+		const double CutInner = bLeftInner ? In.CutHalfWidthLeftOrSolved() : In.CutHalfWidthRightOrSolved();
+		const double CutOuter = bLeftInner ? In.CutHalfWidthRightOrSolved() : In.CutHalfWidthLeftOrSolved();
 		// A narrower ribbon's inner edge stands further from the centre than the bend's, its outer nearer.
 		Run.InnerEnd = SolvedInner - CutInner;
 		Run.OuterEnd = CutOuter - SolvedOuter;
