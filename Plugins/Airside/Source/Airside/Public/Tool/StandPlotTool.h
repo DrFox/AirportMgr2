@@ -134,8 +134,11 @@ private:
 	 *
 	 * THE SAME MEMO SHAPE AS FPlotPlaceTool::ReservationFor, through the base's TOutlineMemo
 	 * (issue #302) - see that class's own comment on why the {bValid, Outline[4]} half is
-	 * shared rather than copied a second time. No extra key here: unlike the depot's Layout,
-	 * nothing else this tool reads can change what a fixed outline is refused for.
+	 * shared rather than copied a second time. NO EXTRA KEY HERE, unlike the depot's Layout:
+	 * IRoadEditTarget::WhyStandRefused's own signature takes the outline and nothing else
+	 * (TArrayView<const FVector2D>, no Layout-shaped second argument), so there is no second
+	 * input this memo could go stale against - a key answers a question only when the
+	 * function it caches has more than one thing to ask.
 	 */
 	FString RefusalFor(const FToolContext& Context, TConstArrayView<FVector2D> Shown) const;
 

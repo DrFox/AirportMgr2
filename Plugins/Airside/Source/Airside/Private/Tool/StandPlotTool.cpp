@@ -184,6 +184,19 @@ void FStandPlotTool::DescribeRemoveExtra(const FToolContext& Context, int32 Doom
 void FStandPlotTool::Describe(const FToolContext& Context, TConstArrayView<FVector2D> Shown,
 	IToolPreviewSink& Sink) const
 {
+	// THE ENTRANCE EDGE, pinned from the second click on, is drawn by the shared base
+	// (FStagedPlotTool::BuildPreview) before this hook is even called. ALONE WHILE IT IS
+	// BEING DRAGGED: at one pinned corner Shape() completes a zero-depth rectangle (Back =
+	// Far until Pinned reaches 2), which is not a shape yet - nothing past the entrance edge
+	// is drawn or asked about. Regression caught in PR #333 review: the base's own gate is
+	// `Shown.Num() < 4`, and Shape() always returns four points from one pinned corner on, so
+	// without this guard the degenerate rectangle reached DescribeLetter and WhyStandRefused a
+	// frame early and drew a "needs N m more depth" refusal the old tool never showed.
+	if (PinnedCount() < 2)
+	{
+		return;
+	}
+
 	// The other three edges, provisional while the depth still follows the cursor. UNLIKE THE
 	// DEPOT'S THREE EDGES, one style covers all of them: a rectangle's fourth corner is
 	// MECHANICALLY DERIVED from the other three (Shape() above), never its own click, so it is
@@ -199,11 +212,9 @@ void FStandPlotTool::Describe(const FToolContext& Context, TConstArrayView<FVect
 
 	// THE LETTER, OR WHY NOT, on the ground at the stand's centre - the same sentence the
 	// readout warns with, from the facade's one evaluator, so the ghost and the bar agree.
-	//
-	// ASKED HERE UNCONDITIONALLY, even at Entrance with a zero-depth rectangle - unlike
-	// DescribeReadout's own guard, which was already deliberately withheld until the depth is
-	// dragged (see that method). Both read the SAME memo, so asking here first at Entrance
-	// costs nothing extra once DescribeReadout goes on to ask again from Depth on.
+	// Reached only from Depth on (the guard above), the same stage DescribeReadout's own guard
+	// below withholds Why until - both read the SAME memo, so asking here first costs nothing
+	// extra once DescribeReadout goes on to ask again.
 	const FVector2D Centre = (Shown[0] + Shown[2]) * 0.5;
 	const FString Why = RefusalFor(Context, Shown);
 	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Shown);

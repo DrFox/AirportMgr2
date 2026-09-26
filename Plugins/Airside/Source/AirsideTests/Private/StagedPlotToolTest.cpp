@@ -88,6 +88,23 @@ namespace StagedPlotSeamFixture
 		virtual void Label(const FVector2D&, const FString&, EPreviewStyle) override {}
 	};
 
+	/** Counts lines and records every label's style - what tells an Entrance-stage preview
+	 *  (one edge, nothing past it) apart from a Depth-or-later one (a full rectangle, a
+	 *  letter or a refusal label). */
+	struct FLabelRecordingSink : IToolPreviewSink
+	{
+		int32 Lines = 0;
+		TArray<EPreviewStyle> LabelStyles;
+
+		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override { ++Lines; }
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString&, EPreviewStyle Style) override
+		{
+			LabelStyles.Add(Style);
+		}
+	};
+
 	/**
 	 * A target that lays no road of its own but REFUSES EVERY COMMIT - FNullEditTarget's own
 	 * PlaceEntityInPlot/PlaceStandInPlot defaults are already INDEX_NONE, so the only overrides
@@ -392,6 +409,63 @@ bool FStandPlotRefusalMemoIsSharedAcrossCallersTest::RunTest(const FString& Para
 	Tool.BuildReadout(Frame, SecondCollector);
 	TestEqual(TEXT("an unchanged shape runs no further ask"),
 		Tool.GetRefusalCountForTest() - After, 0);
+
+	return true;
+}
+
+/**
+ * THE ENTRANCE STAGE IS NOT A SHAPE YET - PR #333 review's regression finding. The OLD
+ * FStandPlotTool::BuildPreview gated the whole rest of the rectangle - the other three edges,
+ * DescribeLetter's keep-out and lead-in, and the letter-or-refusal label - behind
+ * `if (Pinned < 2) { return; }`, right after drawing the entrance edge alone: one pinned
+ * corner completes a ZERO-DEPTH rectangle (FStandPlotTool::Shape's Back = Far until Pinned
+ * reaches 2), which is not a shape worth asking WhyStandRefused about.
+ *
+ * THE REFACTOR DROPPED THAT GATE, not moved it: FStagedPlotTool::BuildPreview's own gate is
+ * `Shown.Num() < 4`, and Shape() always returns four points from one pinned corner on (the
+ * fourth is DERIVED, never clicked - see FStagedPlotTool::Corners's own comment), so nothing
+ * stopped Describe() from reaching DescribeLetter and WhyStandRefused a whole click early. This
+ * test pins the restored guard: at Entrance, exactly one line (the entrance edge, drawn by the
+ * shared base) and no label of any kind, and WhyStandRefused is not asked at all.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotEntranceStageAsksNoRefusalTest,
+	"Airside.Tool.StagedPlot.StandEntranceAsksNoRefusal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotEntranceStageAsksNoRefusalTest::RunTest(const FString& Parameters)
+{
+	using namespace StagedPlotSeamFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+	LayRoad(Actor, 0.0, ERoadKind::Taxiway);
+
+	FStandPlotTool Tool;
+	Tool.OnClick(OnRoad(*Actor, *Actor->Network, FVector2D(0.0, 1000.0)));
+	if (!TestEqual(TEXT("anchored, Entrance stage"), static_cast<int32>(Tool.GetStage()),
+		static_cast<int32>(EStandStage::Entrance)))
+	{
+		return false;
+	}
+
+	const FToolContext Frame = At(*Actor, FVector2D(3000.0, 1000.0));
+	const int32 Before = Tool.GetRefusalCountForTest();
+
+	FLabelRecordingSink Sink;
+	Tool.BuildPreview(Frame, Sink);
+
+	TestEqual(TEXT("only the entrance edge is drawn, not the rest of the rectangle"),
+		Sink.Lines, 1);
+	TestEqual(TEXT("no label of any kind - no refusal, no letter - while only the entrance "
+		"is pinned"), Sink.LabelStyles.Num(), 0);
+	TestEqual(TEXT("WhyStandRefused is not asked while only the entrance is pinned"),
+		Tool.GetRefusalCountForTest() - Before, 0);
 
 	return true;
 }
