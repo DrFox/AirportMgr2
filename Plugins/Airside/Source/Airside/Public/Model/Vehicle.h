@@ -18,6 +18,9 @@
 #include "Model/Chassis.h"
 #include "Vehicle.generated.h"
 
+class UAnimInstance;
+class USkeletalMesh;
+
 /**
  * ONE LINK OF A TOW, when a vehicle pulls one (spec 2026-09-23 §6; a CHAIN since the revision
  * of 2026-09-24, §4). Measured from the model, uu.
@@ -59,6 +62,21 @@ struct AIRSIDE_API FTowLink
 	UPROPERTY(EditAnywhere) double Width = 0.0;
 
 	/**
+	 * What this link LOOKS like - FVehicle::Mesh's sibling, PER LINK, since a tow's own body
+	 * (or a future second rig's) is a different mesh from its cab and from any other link.
+	 * Null for a bar (see IsBar): there is nothing of its own to draw, so nothing to name here.
+	 *
+	 * ADDED BY #308 to collapse UAirsideSettings::ResolveVehicleViewFor's TypeCode ladder: a
+	 * link authored on a UVehicleType (or filled by ResolveRigVehicle/ResolveUtilityTowVehicle
+	 * for now - see their own comments) names its own look here instead of a second function
+	 * having to read a separate content field for it.
+	 */
+	UPROPERTY(EditAnywhere) TSoftObjectPtr<USkeletalMesh> Mesh;
+
+	/** The anim Blueprint that drives Mesh. Null leaves the link in its reference pose. */
+	UPROPERTY(EditAnywhere) TSoftClassPtr<UAnimInstance> AnimClass;
+
+	/**
 	 * A towbar: no body of its own, so nothing to draw for it. NAMED rather than tested inline
 	 * at each site, because the view asks it twice - to skip a mesh, and to find the bar that
 	 * swings a drawbar body's front axle (UAirsideTraffic::SpawnView).
@@ -84,6 +102,24 @@ struct AIRSIDE_API FVehicle
 	 * agent carries no pointer to a type. NAME_None for a vehicle assembled by hand.
 	 */
 	UPROPERTY(EditAnywhere) FName TypeCode;
+
+	/**
+	 * What this vehicle LOOKS like - FAirframe::Mesh's sibling for the other kind of thing on
+	 * the apron. Null falls back to UAirsideSettings::ResolveVehicleView() - the game-wide
+	 * default vehicle look - exactly as an aircraft with no Mesh of its own falls back to
+	 * UAirsideContent::AgentMesh inside ResolveAgentView.
+	 *
+	 * ADDED BY #308, replacing a TypeCode STRING LADDER in
+	 * UAirsideSettings::ResolveVehicleViewFor ("if TypeCode == RIG, return ResolveRigView()...")
+	 * that grew by one branch, one content-field pair and one ENFORCED BY test per vehicle
+	 * added to dispatch. UVehicleType::Vehicle() fills this from an authored asset; the rig and
+	 * the utility tow (no asset yet, #287) fill it in code for now - see
+	 * UAirsideSettings::ResolveRigVehicle's own comment.
+	 */
+	UPROPERTY(EditAnywhere) TSoftObjectPtr<USkeletalMesh> Mesh;
+
+	/** The anim Blueprint that drives Mesh. Null leaves the vehicle in its reference pose. */
+	UPROPERTY(EditAnywhere) TSoftClassPtr<UAnimInstance> AnimClass;
 
 	/**
 	 * The body's footprint, uu, measured from the model (spec 2026-09-23 §6): width over the

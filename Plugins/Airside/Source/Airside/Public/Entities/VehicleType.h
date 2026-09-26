@@ -64,7 +64,9 @@ public:
 	 * type's axles to its skeleton, so a re-export that moves a wheel fails a test rather than
 	 * leaving a vehicle whose wheels and route disagree.
 	 *
-	 * TypeCode is NOT read from here; Vehicle() writes Code over it.
+	 * TypeCode, Mesh and AnimClass are NOT read from here; Vehicle() writes Code, Mesh and
+	 * AnimClass (this class's own top-level properties above) over Geometry's own copies of
+	 * them - a chassis measured off a mesh has no reason to name a DIFFERENT one.
 	 */
 	UPROPERTY(EditAnywhere) FVehicle Geometry;
 
@@ -77,15 +79,22 @@ public:
 	UPROPERTY(EditAnywhere) bool bTowed = false;
 
 	/**
-	 * The dispatchable figures, with the type's Code stamped on.
+	 * The dispatchable figures, with the type's Code, Mesh and AnimClass stamped on.
 	 *
 	 * ASSEMBLED ON DEMAND, as UAircraftType::Airframe() is, because Geometry is the authored
 	 * source of truth and a cached copy is a second place to drift.
+	 *
+	 * MESH AND ANIMCLASS STAMPED ON HERE, since #308, the same way Code is: UAircraftType::
+	 * Airframe() does the identical copy for FAirframe::Mesh/AnimClass, and it is what lets
+	 * UAirsideSettings::ResolveVehicleViewFor load a vehicle's own look with no branch on which
+	 * vehicle it was handed.
 	 */
 	FVehicle Vehicle() const
 	{
 		FVehicle Out = Geometry;
 		Out.TypeCode = Code;
+		Out.Mesh = Mesh;
+		Out.AnimClass = AnimClass;
 		return Out;
 	}
 };

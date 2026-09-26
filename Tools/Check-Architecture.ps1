@@ -402,6 +402,21 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp', 'Public\Present\RoadNetworkActor.h', 'Private\Present\RoadNetworkActor.cpp', 'Private\Debug\RoadJunctionGallery.cpp')
         TestExempt  = $true
         ProdReason  = "go through Content/ or ARoadNetworkActor - see this row's own comment for the one pre-existing exception"
+    },
+    @{
+        # RigUtilityLookContentFields (#308, review of PR #335). ResolveRigVehicle's and
+        # ResolveUtilityTowVehicle's own comments each claimed "the ONE place those four
+        # fields are read" with no marker checking it - a comment stating a fact about other
+        # code with nothing enforcing it, the shape #255 exists to close. These eight fields
+        # name the rig's and the utility tow's look ONLY until #287 gives them their own
+        # UVehicleType asset (see ResolveRigVehicle's/ResolveUtilityTowVehicle's own comments
+        # for the retirement date); a second reader before then is a second source of truth
+        # for what those two vehicles wear, same shape as the Piper fallback row above.
+        Name        = 'RigUtilityLookContentFields'
+        Pattern     = '(->|\.)\s*(RigCabMesh|RigTrailerMesh|RigCabAnimClass|RigTrailerAnimClass|UtilityMesh|UtilityTrailerMesh|UtilityAnimClass|UtilityTrailerAnimClass)\b'
+        ProdAllowed = @('Private\Content\AirsideSettings.cpp')
+        TestExempt  = $true
+        ProdReason  = 'read these off UAirsideContent only from ResolveRigVehicle/ResolveUtilityTowVehicle (AirsideSettings.cpp) - a second reader is a second source of truth for the rig/utility look until #287 retires the fields'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -999,6 +1014,35 @@ if (Test-Path $roadNetworkActorHeader) {
     }
 }
 $ranRules.Add('no-new-fortest-forwarders')
+
+# --- 21. AirsideVehicleCodes:: never compared with ==/!= ------------------------------------
+# Issue #308 (review of PR #335): AirsideVehicleCodes::Rig/UtilityTow used to be a LOOK-UP KEY -
+# UAirsideSettings::ResolveVehicleViewFor branched "if (Vehicle.TypeCode ==
+# FName(AirsideVehicleCodes::Rig)) return ResolveRigView(); ..." - the TypeCode ladder #308
+# deleted. The constants stay (FVehicle::TypeCode still names what the inspector and the
+# dispatch log say a vehicle is), but the banner comment above their declaration in
+# AirsideSettings.cpp claims "NO LONGER A LOOK-UP KEY" with nothing mechanical behind it.
+# Comparing AirsideVehicleCodes:: against anything with ==/!= IS the ladder shape coming back,
+# so it is banned outright rather than merely discouraged - a vehicle's look must come from its
+# own FVehicle::Mesh/Tow[].Mesh (see ResolveVehicleViewFor's own comment), never from a branch
+# on which constant its TypeCode equals. Two patterns: the constant on the LEFT of ==/!=, and on
+# the RIGHT (allowing for FName(...) wrapping either side, as the deleted ladder used).
+$vehicleCodeComparePatterns = @(
+    'AirsideVehicleCodes::\w+\s*\)?\s*(==|!=)',
+    '(==|!=)\s*(FName\s*\(\s*)?AirsideVehicleCodes::\w+'
+)
+foreach ($module in $modules) {
+    foreach ($file in Get-Sources $module @('.h', '.cpp')) {
+        foreach ($pattern in $vehicleCodeComparePatterns) {
+            foreach ($h in (Select-String -Path $file.FullName -Pattern $pattern)) {
+                $t = $h.Line.Trim()
+                if ($t -match '^(//|/\*|\*)') { continue }
+                $failures.Add("no-vehiclecode-compare: $($file.FullName):$($h.LineNumber) AirsideVehicleCodes:: compared with ==/!= - the TypeCode ladder #308 deleted; give the vehicle its own FVehicle::Mesh/Tow[].Mesh instead: $t")
+            }
+        }
+    }
+}
+$ranRules.Add('no-vehiclecode-compare')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
