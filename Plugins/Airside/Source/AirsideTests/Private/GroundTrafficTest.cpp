@@ -686,7 +686,7 @@ bool FTrafficArrivalReceivesReverseSpeedTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestEqual(TEXT("it holds the rules' reverse speed, not the struct default"),
-		Agent->ReverseSpeed, Traffic->Rules.ServiceReverseSpeed);
+		Agent->GetReverseSpeed(), Traffic->Rules.ServiceReverseSpeed);
 	return true;
 }
 
@@ -1444,7 +1444,7 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 		UE_LOG(LogAirsideTests, Log,
 			TEXT("  agent %d: phase %s, %.0f of %.0f uu, waiting on %d, blocked step %d, stalled %.1f s"),
 			Agent.Id, *UEnum::GetValueAsString(Agent.Phase), Agent.Follower.Travelled,
-			Agent.Follower.Plan.Length, Agent.GetWaitingOn(), Agent.GetBlockedStep(), Agent.StalledSeconds);
+			Agent.Follower.Plan.Length, Agent.GetWaitingOn(), Agent.GetBlockedStep(), Agent.GetStalledSeconds());
 	}
 
 	TestEqual(TEXT("the lowest-ranked member that can turn goes round: the van, not the aircraft"), FirstResolved, V2);

@@ -255,7 +255,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		// that may have added the edge out of it - the player has just built the bypass. Made
 		// to wait out the rest of its retry window, the jam would clear seconds after the fix
 		// rather than on the frame of it.
-		Agent.LastResolveAttempt = -1.0e9;
+		Agent.StampResolveAttempt(-1.0e9);
 
 		FRoutePlan* Plan = nullptr;
 		int32 FromStep = 0;
@@ -651,7 +651,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		const FGuidelineNodeId Goal = Agent.GoalNode;
 		Agent.RestartTaxi(Rejoined, Travelled);
 		// RestartTaxi's fallback pose is the plan's first point; the vehicle is part-way along.
-		Agent.LastMotion.Position = At;
+		Agent.RebaseLastMotionPosition(At);
 		Agent.SetGoal(Goal);
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d rejoined its side after the drive side flipped: %.0f uu to go"),
 			Agent.Id, Rejoined.Length - Travelled);

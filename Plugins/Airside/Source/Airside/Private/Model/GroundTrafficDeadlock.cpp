@@ -92,7 +92,7 @@ void FDeadlockResolver::StampCycle(TArray<FRoadAgent>& Agents, const TArray<int3
 		const int32* Index = AgentIndex.Find(Id);
 		if (Index != nullptr)
 		{
-			Agents[*Index].LastResolveAttempt = SimSeconds;
+			Agents[*Index].StampResolveAttempt(SimSeconds);
 		}
 	}
 }
@@ -177,7 +177,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 	Waiting.Reset();
 	for (const FRoadAgent& Agent : Agents)
 	{
-		if (Agent.StalledSeconds > Rules.StallSeconds && Agent.GetWaitingOn() != 0)
+		if (Agent.GetStalledSeconds() > Rules.StallSeconds && Agent.GetWaitingOn() != 0)
 		{
 			Waiting.Add(Agent.Id, Agent.GetWaitingOn());
 		}
@@ -260,7 +260,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 		for (const int32 Id : Cycle)
 		{
 			const FRoadAgent* Member = FindAgentIn(Agents, AgentIndex, Id);
-			bDue = bDue || (Member != nullptr && Member->LastResolveAttempt <= SimSeconds - Rules.RetrySeconds);
+			bDue = bDue || (Member != nullptr && Member->GetLastResolveAttempt() <= SimSeconds - Rules.RetrySeconds);
 		}
 		if (!bDue)
 		{

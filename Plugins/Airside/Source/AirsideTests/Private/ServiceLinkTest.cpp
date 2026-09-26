@@ -1393,7 +1393,9 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 	FRoadAgent Agent;
 	Agent.StartDrive(Leaving, Truck);
 	Agent.Class = ETraversalClass::GroundVehicle;
-	Agent.ReverseSpeed = 100.0;
+	// ReverseSpeed is private, stamped only through StampRules (issue #295) - ShutdownPause
+	// is irrelevant here, so the second argument is just FRoadAgent's own default (10.0).
+	{ FTrafficRules R; R.ServiceReverseSpeed = 100.0; Agent.StampRules(R, 10.0); }
 
 	FAgentMotion Motion;
 	EAgentEvent Event = EAgentEvent::None;

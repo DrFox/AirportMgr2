@@ -217,8 +217,8 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 	// an EXISTING agent along a new plan: one that had been armed for a runway and is now sent
 	// to a stand would otherwise keep the old chain and hold that runway against everybody for
 	// the rest of the session - and, with the ARMING kept too (bDepartureArmed and its order,
-	// which this used to leave), take off on arriving at a stand. Disarmed with it.
-	Agent.DepartureRunway.Reset();
+	// which this used to leave), take off on arriving at a stand. DisarmDeparture clears
+	// DepartureRunway too now (issue #295) - the two were always reset together here.
 	Agent.DisarmDeparture();
 
 	// DOES THIS ROUTE END ON A RUNWAY? Asked here rather than by the tool, because the answer
@@ -266,7 +266,7 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 		// has exits, and a departure that held only the piece its taxi ended on would let a
 		// second aircraft line up on the same strip further down. Recorded now rather than
 		// looked up at the handover, because by then the graph may have been rebuilt.
-		Agent.DepartureRunway = Network->RunwayChain(End.Seed);
+		Agent.ArmDepartureRunway(Network->RunwayChain(End.Seed));
 
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Route ends on runway %s %.0f uu past the threshold: %.0f uu available, departure armed"),
@@ -276,7 +276,7 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 
 int32 UGroundTraffic::Admit(FRoadAgent&& Agent)
 {
-	Agent.Id = NextAgentId++;
+	Agent.AssignId(NextAgentId++);
 	const EAgentPhase Born = Agent.Phase;
 	const int32 Id = Agent.Id;
 	Agents.Add(MoveTemp(Agent));
@@ -523,7 +523,7 @@ bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, con
 	Agent.Follower.Replace(Spliced, Agent.Chassis());
 	// REBASED AFTER Replace, before any Advance: Replace resets the follower's walk cursor to the
 	// polyline's start, so the cursor and the rebased Travelled agree from the first step on.
-	Agent.Follower.Travelled -= Dropped;
+	Agent.RebaseTravelled(Dropped);
 	if (OutDropped != nullptr)
 	{
 		*OutDropped = Dropped;
@@ -563,7 +563,7 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// what RPM it actually had a moment ago, not the post-StartTaxi state that call is about
 	// to overwrite both with.
 	const bool bWasRunning = Agent.bEngineRunning;
-	const double PriorRPM = Agent.EngineRPM;
+	const double PriorRPM = Agent.GetEngineRPM();
 
 	// A TOW KEEPS ITS CAB'S HEADING through a redirect, as it keeps its chain (StartDrive: "a rig
 	// re-routed mid-drive keeps its trailer where it is, angled as it was"). The chain is stepped
@@ -633,7 +633,7 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		// spooled it back UP from zero - the same one-frame snap this fix exists to remove,
 		// only downward first. Restoring it here means AdvanceEngine picks up the ramp exactly
 		// where it actually was, whichever direction it was headed.
-		Agent.EngineRPM = PriorRPM;
+		Agent.RestoreEngineRPM(PriorRPM);
 	}
 
 	// Class is NOT re-derived: a van redirected is still a van. StartTaxi rewrites the
@@ -1061,7 +1061,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			// frame. DepartureRunway comes off the AGENT rather than a fresh lookup, because
 			// by now the graph may have been rebuilt under it; it was recorded at dispatch
 			// for that reason.
-			Agent.HoldRunway(Agent.DepartureRunway);
+			Agent.HoldRunway(Agent.GetDepartureRunway());
 
 			// CLAIMED HERE AND NOT ON THE NEXT TICK'S non-Taxiing pass. A route that ends on
 			// a junction turn path carries no DerivedFrom, so nothing claimed the strip while
