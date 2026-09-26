@@ -303,7 +303,7 @@ bool FTrafficHeadOnStopsTest::RunTest(const FString& Parameters)
 	// it, so the count is that many windows plus the first. +/-1 because the fire instant is
 	// quantised to the 0.05 s tick and the last window may not have closed by the end of the
 	// run - not because the cadence is approximate.
-	const double StalledFor = FMath::Max(X->StalledSeconds, Y->StalledSeconds);
+	const double StalledFor = FMath::Max(X->GetStalledSeconds(), Y->GetStalledSeconds());
 	const double SinceFirst = FMath::Max(0.0, StalledFor - Traffic->Rules.StallSeconds);
 	const int32 Expected = FMath::FloorToInt32(SinceFirst / Traffic->Rules.RetrySeconds) + 1;
 	UE_LOG(LogAirsideTests, Log,
@@ -2527,7 +2527,7 @@ bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the agent exists"), Cold != nullptr)) { return false; }
 	TestTrue(*FString::Printf(
 		TEXT("a plain dispatch still starts the engine cold, so a cold start still winds up (%.0f RPM)"),
-		Cold->EngineRPM), Cold->EngineRPM < AtSpeed);
+		Cold->GetEngineRPM()), Cold->GetEngineRPM() < AtSpeed);
 
 	if (!TestTrue(TEXT("the redirect is accepted"),
 		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, W, N, ETraversalClass::Aircraft))))
@@ -2540,7 +2540,7 @@ bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the agent survived the redirect"), Warm != nullptr)) { return false; }
 	TestTrue(*FString::Printf(
 		TEXT("but a redirect finds the engines already running at speed (%.0f RPM, want %.0f)"),
-		Warm->EngineRPM, AtSpeed), FMath::IsNearlyEqual(Warm->EngineRPM, AtSpeed, 0.01));
+		Warm->GetEngineRPM(), AtSpeed), FMath::IsNearlyEqual(Warm->GetEngineRPM(), AtSpeed, 0.01));
 	TestTrue(TEXT("and running"), Warm->bEngineRunning);
 	return true;
 }
@@ -2602,7 +2602,7 @@ bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
 	// throw away - see the assertion below and PR #134 review item 3.
 	const FRoadAgent* ShutDown = Traffic->FindAgent(Id);
 	if (!TestTrue(TEXT("the agent exists"), ShutDown != nullptr)) { return false; }
-	const double PreRedirectRPM = ShutDown->EngineRPM;
+	const double PreRedirectRPM = ShutDown->GetEngineRPM();
 	AddInfo(*FString::Printf(TEXT("shut down at %.0f RPM, still decaying"), PreRedirectRPM));
 
 	if (!TestTrue(TEXT("the redirect is accepted"),
@@ -2624,10 +2624,10 @@ bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the agent survived the redirect"), Redirected != nullptr)) { return false; }
 	TestTrue(*FString::Printf(
 		TEXT("a shut-down engine spools up rather than snapping to speed (%.0f RPM, cap %.0f)"),
-		Redirected->EngineRPM, AtSpeed), Redirected->EngineRPM < AtSpeed);
+		Redirected->GetEngineRPM(), AtSpeed), Redirected->GetEngineRPM() < AtSpeed);
 	TestTrue(*FString::Printf(
 		TEXT("and it never drops below where it already was (%.0f RPM, was %.0f)"),
-		Redirected->EngineRPM, PreRedirectRPM), Redirected->EngineRPM >= PreRedirectRPM);
+		Redirected->GetEngineRPM(), PreRedirectRPM), Redirected->GetEngineRPM() >= PreRedirectRPM);
 	TestTrue(TEXT("but it is running again, spooling up"), Redirected->bEngineRunning);
 	return true;
 }
@@ -3185,7 +3185,7 @@ bool FTrafficExtendRouteMovesTheGoalTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("extended across the runway to C"),
 			Traffic->ExtendRoute(Plane, Net, M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft)))) { return false; }
 		TestFalse(TEXT("the departure is disarmed: the route no longer ends on the runway"), Traffic->FindAgent(Plane)->bDepartureArmed);
-		TestEqual(TEXT("and it holds no runway chain for it"), Traffic->FindAgent(Plane)->DepartureRunway.Num(), 0);
+		TestEqual(TEXT("and it holds no runway chain for it"), Traffic->FindAgent(Plane)->GetDepartureRunway().Num(), 0);
 		bool bDeparted = false;
 		RunUntil(*Traffic, *Net, 600.0, [&]()
 		{
