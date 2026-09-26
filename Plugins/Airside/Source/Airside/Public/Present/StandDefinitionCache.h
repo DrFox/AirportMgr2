@@ -61,18 +61,24 @@ public:
 	 * this cache ever creates findable from the cache alone.
 	 *
 	 * NULL, LOGGED ONCE PER LETTER, when the built template does not fit its own letter's floor -
-	 * UEntityDefinition::FitsItsLetter, and Task 1's measured table: A and B do not fit today, C
-	 * through F do. A caller refuses on null; WhyStandRefused is what turns that into "Code X
-	 * stands cannot be built yet" for the player.
+	 * UEntityDefinition::FitsItsLetter. A GUARD, not a live case: Task 1 measured A and B NOT
+	 * fitting, and task 6 (2026-09-26, far-side-entry spec) gave every letter its own design
+	 * vehicle so all six fit now - this null stays reachable for a future template or floor
+	 * regression rather than being removed with the bug it once caught. A caller refuses on
+	 * null; WhyStandRefused is what turns that into "Code X stands cannot be built yet" for the
+	 * player.
+	 * ENFORCED BY: Airside.Present.StandPlot.EveryLetterBuilds
 	 */
 	UEntityDefinition* ResolveStandDefinitionFor(EIcaoCode Letter);
 
 	/**
 	 * Re-point every live, plotted stand in Network at the one its OUTLINE's letter resolves to
 	 * (ResolveStandDefinitionFor(StandBox::LetterOf(Outline))) - Code C to the actor's authored
-	 * asset, D/E/F to this cache. Returns how many changed; logs the count, and a Warning naming
-	 * each stand whose outline reads as no letter, or as one with no buildable definition (A/B
-	 * today), which is left exactly as it was.
+	 * asset, every other letter (A, B, D, E, F all build as of task 6, 2026-09-26) to this
+	 * cache. Returns how many changed; logs the count, and a Warning naming each stand whose
+	 * outline reads as no letter, or as one with no buildable definition - a template or floor
+	 * regression, per ResolveStandDefinitionFor's own guard, not a letter that is expected to be
+	 * missing today - which is left exactly as it was.
 	 *
 	 * CALLED WHEREVER A NETWORK IS (RE)LOADED, because the per-letter definitions are never
 	 * saved (LetterStandDefinitions): from ARoadNetworkActor::PostRegisterAllComponents, which

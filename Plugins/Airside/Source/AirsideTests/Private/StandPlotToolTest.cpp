@@ -360,6 +360,37 @@ bool FStandPlotLetterAtThresholdsTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotFloorsAreOnTheDepthQuantumTest,
+	"Airside.Tool.StandPlot.FloorsAreOnTheDepthQuantum",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotFloorsAreOnTheDepthQuantumTest::RunTest(const FString& Parameters)
+{
+	// FIX ROUND 1 on this task's own review: StandPlotRules::DepthStepUu's own comment claims
+	// every IcaoCode depth floor divides by it - a claim about a DIFFERENT file with nothing
+	// here to catch it drifting, exactly the shape CLAUDE.md's "a comment is not a contract"
+	// warns against. This is that enforcement: read the SAME DepthStepUu the tool quantises
+	// by (declared in StandPlotTool.h since this fix, not a second literal), not a value typed
+	// here a second time.
+	//
+	// WIDTH FLOORS ARE NOT CHECKED: PlotGesture's frontage grid (Min 1500, Step 500) already
+	// does not land on most letters' width floors - ReachableWidthAtLeast's own header says so
+	// ("the frontage moves in steps, so a letter's exact floor width is usually not reachable")
+	// - so the tool never promises a player can drag to an EXACT width floor the way DEPTH's
+	// StandPlotRules::DepthStepUu promises for depth. There is no width contract for this test
+	// to enforce.
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	{
+		const double Depth = IcaoCode::StandDepthForLetter(Letter);
+		const double Steps = Depth / StandPlotRules::DepthStepUu;
+		TestEqual(*FString::Printf(TEXT("Code %s's depth floor (%.0f) is a whole multiple of the %.0f uu depth quantum"),
+				IcaoCode::ToLetter(Letter), Depth, StandPlotRules::DepthStepUu),
+			Steps, FMath::RoundToDouble(Steps), 1e-6);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotTooSmallNotCommittableTest,
 	"Airside.Tool.StandPlot.TooSmallNotCommittable",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
