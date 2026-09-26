@@ -39,9 +39,15 @@ LinkGeom::FLinkGeometry LinkGeom::Plan(const FLinkApproach& Approach)
 {
 	FLinkGeometry Out;
 
-	// WHERE THE LEAD-IN RAY STRIKES IS THE CORNER, NOT THE JOIN - see FAnchorLink::Join's own
-	// top comment for why the join has to MOVE off this point rather than land on it. Every
-	// shape below starts from here and some move it again.
+	// WHERE THE LEAD-IN RAY STRIKES IS THE CORNER, NOT THE JOIN.
+	//
+	// Joining here is what produced a hard turn: the ray meets the taxiway at whatever
+	// angle the stand happens to face, and a stand square to the taxiway makes it 90
+	// degrees. A curve cannot fix that in place - a quadratic's end tangents both point
+	// at its control, so being tangent to the lead-in AND to the taxiway would put the
+	// control exactly here, which is the straight line again. The join has to MOVE.
+	//
+	// Every shape below starts from here and some move it again.
 	Out.Param = Approach.Param;
 	Out.Corner = GuidelineGeom::Eval(Approach.PositionA, Approach.Control, Approach.PositionB, Out.Param);
 	Out.Dir = Approach.Dir;
@@ -64,6 +70,13 @@ LinkGeom::FLinkGeometry LinkGeom::Plan(const FLinkApproach& Approach)
 	// tight turns it can only choose among the ones that exist, and a lane whose entrances met
 	// the road at a right angle left exactly one tight option on every stand - which is the one
 	// it kept taking. Reported from play 2026-09-15, twice.
+	//
+	// THE OLD CONSTRUCTION SLID THE JOIN, because the ring's entrance was wherever the road
+	// came nearest and the join could be put anywhere. This one cannot slide - the entry is
+	// DECLARED - so it is the same triangle read the other way round: the declared node is the
+	// join, the control is the run ahead of it, and Dir is taken from the CONTROL rather than
+	// from the node, which is what keeps the fillet below tangent to this curve instead of to a
+	// chord the curve never follows.
 	//
 	// TWO SHAPES, AND WHICH ONE IS A QUESTION ABOUT THE ROAD, not a preference. A road drawn
 	// ALONGSIDE the stand is parallel to the lane and the two lines never meet, so the connector

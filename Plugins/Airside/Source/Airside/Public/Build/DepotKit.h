@@ -87,7 +87,7 @@ namespace DepotKit
 	 * CALLED AGAIN AFTER EVERY EDIT, not just at placement, because a depot built correctly
 	 * and later reduced would otherwise have been warned about once, at a moment the player
 	 * was not looking at it - see URoadSurfacePresenter::RebuildInternal's Topology branch,
-	 * the one caller, for where "again" means.
+	 * which calls it after every rebuild, for where "again" means.
 	 */
 	AIRSIDE_API void ReportIncomplete(const URoadNetwork& Network);
 }

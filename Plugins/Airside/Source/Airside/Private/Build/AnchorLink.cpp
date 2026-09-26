@@ -588,9 +588,10 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// WHICH SHAPE THE JOIN TAKES - StraightRay, Crossing or LaneChange - IS LinkGeom::Plan's
 	// DECISION NOW (#306, regression of #76). Join used to hide this as an if/else on
 	// Link.Kind, Link.LaneOwner.IsSet() and LaneRadius > 0.0, mutating Param/Corner/Dir/
-	// OutLaneControl/LaneRun in place with no name for which branch had run; see Solve/LinkGeom.h
-	// for the full account (why the join has to MOVE off the search's own hit, why a road across
-	// a lane's end wants a different shape from one alongside it, and why EntryDeparture's
+	// OutLaneControl/LaneRun in place with no name for which branch had run; see
+	// LinkGeom::Plan's own top comment (Solve/LinkGeom.cpp) for the full account (why the join
+	// has to MOVE off the search's own hit, why a road across a lane's end wants a different
+	// shape from one alongside it, and why EntryDeparture's
 	// DECISION half moved out from under this function while its GATHER half - which needs the
 	// graph - stayed).
 	//
@@ -598,6 +599,13 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// the lock of the LARGEST VEHICLE ADMITTED, never the one driving now, the same call the
 	// lane's own corners are rounded by (FStandLayoutBuild::Build). An AIRCRAFT link keeps
 	// Link.Radius instead, the PAINTED radius of its lead-in line.
+	//
+	// IT WAS LANE LINKS ALONE UNTIL 2026-09-17, and that left every other ground anchor link
+	// filleted at a Code C's painted 2500 uu - three and a half times what a truck's lock asks
+	// for. Harmless by itself, and not harmless BESIDE A STAND'S ENTRY: TugStand's link at
+	// y = -1400 swept 2500 each way, split the road at y = +1100, and left the entry contact at
+	// +1906 only 796 uu of road where its own square corner wanted 1088. The entry was clamped
+	// to 563 against a lock of 699 by a fillet belonging to a vehicle that never drives it.
 	double LaneRadius = 0.0;
 	if (Link.Class == ETraversalClass::GroundVehicle)
 	{
@@ -1060,8 +1068,10 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 
 double FAnchorLink::ServiceLaneRadius(const FChassis& LargestServiceVehicle)
 {
-	// PLUS A TENTH ON THE LOCK, measured rather than chosen - see Join's own comment on the 4 m
-	// fixture that came out at 707 against 699.4 when sized at exactly the lock.
+	// PLUS A TENTH ON THE LOCK, measured rather than chosen. Sized at exactly the lock, the 4 m
+	// fixture came out at 707 uu against 699.4 - a 1% margin, and the weld tolerance the fillet
+	// gives up below is enough to eat it. A tenth is what the stand layout allows itself for the
+	// same reason, at UEntityDefinition::BuildCodeCStandFor's LegSlack.
 	constexpr double Slack = 1.1;
 	return LargestServiceVehicle.TightestFollowableRadius() * Slack;
 }
