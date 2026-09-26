@@ -1054,10 +1054,8 @@ bool FStandPlotAnchorsSurviveRebuildsTest::RunTest(const FString& Parameters)
 
 	// Twice, because the sweep only bites on a rebuild that finds nodes from a previous
 	// one - a single pass would leave the interesting case untested.
-	const FRoadSolveResult First = FRoadNetworkSolver::SolveAll(*Actor->Network);
-	FRoadGuidelineBuilder::Build(*Actor->Network, First, UAirsideSettings::ResolveRoadDesignVehicles());
-	const FRoadSolveResult Second = FRoadNetworkSolver::SolveAll(*Actor->Network);
-	FRoadGuidelineBuilder::Build(*Actor->Network, Second, UAirsideSettings::ResolveRoadDesignVehicles());
+	TestGraph::Derive(*Actor->Network);
+	TestGraph::Derive(*Actor->Network);
 
 	for (int32 Index = 0; Index < Anchors.Num(); ++Index)
 	{

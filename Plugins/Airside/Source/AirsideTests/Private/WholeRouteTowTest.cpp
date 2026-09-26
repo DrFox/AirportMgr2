@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Content/AirsideSettings.h"
@@ -707,8 +708,7 @@ bool FWholeRouteShortcutTest::RunTest(const FString& Parameters)
 		const FRoadSegmentId West = Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(-30000.0, 0.0)), Narrow);
 		Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(30000.0, 0.0)), Narrow);
 		const FRoadSegmentId North = Net->AddStraightSegment(Hub, Net->AddNode(FVector2D(0.0, 30000.0)), Narrow);
-		const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
-		FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net, 12, &Designs), Designs);
+		TestGraph::Derive(*Net);
 		FGuidelineNodeId From, To;
 		for (const FGuidelineEdge& E : Net->GetGuidelineEdges())
 		{

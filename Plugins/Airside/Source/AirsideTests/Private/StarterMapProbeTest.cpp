@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "AirsideTestsLog.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -72,8 +73,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	UE_LOG(LogAirsideTests, Log, TEXT("PROBE saved level: %d live segments, %d entities, %d holding-position marks; guideline graph AS SAVED: %d nodes, %d edges (%d hand-authored)"),
 		SegmentsAlive, Net->GetEntities().Num(), Net->GetHoldingPositionMarks().Num(), GuidelineNodesSaved, GuidelineEdgesSaved, AuthoredEdgesSaved);
 
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+	const FRoadSolveResult Solved = TestGraph::Derive(*Net);
 	const int32 Joined = FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	int32 GuidelineNodes = 0, GuidelineEdges = 0, AuthoredEdges = 0, HoldingPositionNodes = 0;

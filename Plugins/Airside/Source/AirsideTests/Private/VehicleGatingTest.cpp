@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Content/AirsideContent.h"
@@ -25,8 +26,9 @@ namespace VehicleGating
 {
 	void Derive(URoadNetwork& Net)
 	{
-		FRoadGuidelineBuilder::Build(Net, FRoadNetworkSolver::SolveAll(Net),
-			UAirsideSettings::ResolveRoadDesignVehicles());
+		// #311: this WAS its own SolveAll+Build pair, the exact shape TestGraph::Derive
+		// now holds once; kept as a local wrapper for VehicleGating::Derive's one qualified caller.
+		TestGraph::Derive(Net);
 	}
 
 	/** Straight road (0,0)->(30000,0); returns its A->B lane's ends. */

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -25,10 +26,8 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 	const FRoadSegmentId ToEast = Net->AddStraightSegment(Centre, East,  Profile);
 	Net->AddStraightSegment(Centre, North, Profile);
 
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
+	const FRoadSolveResult Solved = TestGraph::Derive(*Net);
 	TestEqual(TEXT("every node solved"), Solved.FailedNodes, 0);
-
-	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 	// One edge per segment per declared guideline. The taxiway profile declares one, and
 	// there are two segments, so exactly two edges carry a DerivedFrom naming a segment.
@@ -128,10 +127,8 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		const FRoadSegmentId Eastward = Offset->AddStraightSegment(Hub, Away, OffsetProfile);
 		Offset->AddStraightSegment(Hub, Side, OffsetProfile);
 
-		const FRoadSolveResult OffsetSolved = FRoadNetworkSolver::SolveAll(*Offset);
+		const FRoadSolveResult OffsetSolved = TestGraph::Derive(*Offset);
 		TestEqual(TEXT("the off-centre network solved"), OffsetSolved.FailedNodes, 0);
-
-		FRoadGuidelineBuilder::Build(*Offset, OffsetSolved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		// Eastward runs +X, so the segment's left is +Y. A guideline 175uu left of centre
 		// sits at roughly y = +175 at BOTH ends.
@@ -213,10 +210,8 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		Tee->AddStraightSegment(Hub, Tee->AddNode(FVector2D(-12000.0,     0.0)), TeeProfile);
 		Tee->AddStraightSegment(Hub, Tee->AddNode(FVector2D(     0.0, 12000.0)), TeeProfile);
 
-		const FRoadSolveResult TeeSolved = FRoadNetworkSolver::SolveAll(*Tee);
+		const FRoadSolveResult TeeSolved = TestGraph::Derive(*Tee);
 		TestEqual(TEXT("the tee solved"), TeeSolved.FailedNodes, 0);
-
-		FRoadGuidelineBuilder::Build(*Tee, TeeSolved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		int32 TeeTurns = 0;
 		for (const FGuidelineEdge& Edge : Tee->GetGuidelineEdges())
@@ -358,10 +353,8 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		Span->AddStraightSegment(SpanHub, SpanEast,  Unlimited);
 		Span->AddStraightSegment(SpanHub, SpanNorth, Limited);
 
-		const FRoadSolveResult SpanSolved = FRoadNetworkSolver::SolveAll(*Span);
+		const FRoadSolveResult SpanSolved = TestGraph::Derive(*Span);
 		TestEqual(TEXT("the wingspan network solved"), SpanSolved.FailedNodes, 0);
-
-		FRoadGuidelineBuilder::Build(*Span, SpanSolved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		int32 SpanTurns = 0;
 		for (const FGuidelineEdge& Edge : Span->GetGuidelineEdges())
@@ -416,10 +409,8 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		OneWay->AddStraightSegment(Hub, FreeA, TwoWay);
 		OneWay->AddStraightSegment(Hub, FreeB, TwoWay);
 
-		const FRoadSolveResult OneWaySolved = FRoadNetworkSolver::SolveAll(*OneWay);
+		const FRoadSolveResult OneWaySolved = TestGraph::Derive(*OneWay);
 		TestEqual(TEXT("the one-way network solved"), OneWaySolved.FailedNodes, 0);
-
-		FRoadGuidelineBuilder::Build(*OneWay, OneWaySolved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		// The hub's guideline node for the outbound arm's A end. Turn paths carry no
 		// DerivedFrom, so they are told apart from segment edges that way.
@@ -481,10 +472,8 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		Mixed->AddStraightSegment(Cross, Mixed->AddNode(FVector2D(-12000.0, 0.0)), AirProfile);
 		Mixed->AddStraightSegment(Cross, Mixed->AddNode(FVector2D(0.0, 12000.0)), RoadProfile);
 
-		const FRoadSolveResult MixedSolved = FRoadNetworkSolver::SolveAll(*Mixed);
+		const FRoadSolveResult MixedSolved = TestGraph::Derive(*Mixed);
 		TestEqual(TEXT("the mixed-class network solved"), MixedSolved.FailedNodes, 0);
-
-		FRoadGuidelineBuilder::Build(*Mixed, MixedSolved, UAirsideSettings::ResolveRoadDesignVehicles());
 
 		// EXACT counts, not "> 0". Three arms - two aircraft, one ground vehicle - give six
 		// ordered pairs: two aircraft-to-aircraft, and four crossing between classes. A

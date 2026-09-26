@@ -56,7 +56,7 @@ bool FRoadCrossesTaxiwayTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	LayCrossing(*Net, /*bDrawFarSideOfRoad=*/true);
-	FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net), UAirsideSettings::ResolveRoadDesignVehicles());
+	TestGraph::Derive(*Net);
 
 	// THE WHOLE CROSSING RULE, and it is already in the builder: Turn.AllowedTraffic is
 	// FromMask & ToMask, so a turn between arms of different classes keeps only Emergency.
@@ -106,7 +106,7 @@ bool FRoadEndsAgainstTaxiwayTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	LayCrossing(*Net, /*bDrawFarSideOfRoad=*/false);
-	FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net), UAirsideSettings::ResolveRoadDesignVehicles());
+	TestGraph::Derive(*Net);
 
 	// A road dead-ending against a taxiway's side: the only arm of its own class at that
 	// node is itself, so there is nothing to turn INTO and the junction derives no vehicle

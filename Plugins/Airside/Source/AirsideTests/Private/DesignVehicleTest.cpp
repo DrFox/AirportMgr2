@@ -35,7 +35,7 @@ namespace DesignVehicle
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		const FRoadSegmentId Seg = Net->AddStraightSegment(
 			Net->AddNode(FVector2D(0.0, 0.0)), Net->AddNode(FVector2D(3000.0, 0.0)), Profile);
-		FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net, 12, &Designs), Designs);
+		TestGraph::Derive(*Net, &Designs);
 		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
 		{
 			if (!Edge.bAlive || Edge.DerivedFrom != Seg) { continue; }

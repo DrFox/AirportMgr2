@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -25,8 +26,10 @@ namespace TwoWayLane
 {
 	void Derive(URoadNetwork& Net)
 	{
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
-		FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+		// #311: this WAS its own SolveAll+Build pair, the exact shape TestGraph::Derive
+		// now holds once; kept as a local wrapper because every call site in this file
+		// says the bare, unqualified `Derive(Net)`.
+		TestGraph::Derive(Net);
 	}
 
 	/** The one live segment edge of Seg running Dir. Null if there is not exactly one. */

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/AnchorLink.h"
@@ -75,9 +76,7 @@ namespace
 		// how the stand faces, so the ray runs north to the taxiway.
 		Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, -9000.0), UE_DOUBLE_PI * 0.5 + UE_DOUBLE_PI);
 
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
-		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+		TestGraph::Rebuild(*Net);
 		return Net;
 	}
 

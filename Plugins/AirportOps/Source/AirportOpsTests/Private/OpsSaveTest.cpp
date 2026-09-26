@@ -8,6 +8,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Profiles/RoadProfile.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -24,8 +25,7 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 	// profile object alive across capture and restore under a stable name in the transient
 	// package, and assert the restored segments point back at it - which is exactly what
 	// FObjectAndNameAsStringProxyArchive does for an object it can find by path.
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	Runway->Rename(TEXT("OpsSaveTest_RunwayProfile"), GetTransientPackage());
 
 	URoadNetwork* Source = NewObject<URoadNetwork>();
