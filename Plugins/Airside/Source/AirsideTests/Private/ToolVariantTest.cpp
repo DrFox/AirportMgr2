@@ -7,6 +7,7 @@
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RunwayTool.h"
 #include "Model/RunwayFacts.h"
+#include "Present/RoadNetworkActor.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -254,6 +255,55 @@ bool FTvRunwayTest::RunTest(const FString& Parameters)
 	const TArray<FToolVariantAxis> EmptyAxes = TvAxes(EmptyTool, EmptyContext);
 	TestTrue(TEXT("no profiles: surface and approach only"),
 		EmptyAxes.Num() == 2 && EmptyAxes[0].Id == FName(TEXT("Surface")));
+	return true;
+}
+
+/**
+ * THE SESSION FORWARDS TO WHATEVER IS LIT - the seam both drivers reach the row through. Fails
+ * if the forwarder is unwired (no axes) or points at the wrong tool (a pick that does not land).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTvSessionTest,
+	"Airside.Tool.Variants.Session",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTvSessionTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	const int32 Count = Actor->GetWidthCount(ERoadKind::Taxiway);
+	if (!TestTrue(TEXT("the content set has taxiway widths"), Count > 1)) { return false; }
+
+	int32 Taxiway = INDEX_NONE;
+	for (int32 Index = 0; Index < ToolRegistry().Num(); ++Index)
+	{
+		if (ToolRegistry()[Index].Id == FName(TEXT("Taxiway"))) { Taxiway = Index; }
+	}
+	if (!TestTrue(TEXT("the registry has a Taxiway tool"), Taxiway != INDEX_NONE)) { return false; }
+
+	FToolContext Context;
+	Context.Target = Actor;
+	FBuildSession Session;
+	Session.SelectTool(Taxiway, Context);
+
+	TArray<FToolVariantAxis> Axes;
+	Session.GetActiveVariantAxes(Context, Axes);
+	if (!TestEqual(TEXT("the lit taxiway tool's one row reaches the session"), Axes.Num(), 1)) { return false; }
+	TestEqual(TEXT("with every content width"), Axes[0].Options.Num(), Count);
+
+	TestTrue(TEXT("a pick through the session is accepted"), Session.SelectActiveVariant(Context, 0, 1));
+	const FRoadDrawTool* Tool = static_cast<const FRoadDrawTool*>(Session.GetActiveTool());
+	TestEqual(TEXT("and lands on the lit tool"), Tool->GetWidthIndex(), 1);
+
+	// EDIT MODE SUPPRESSES THE TOOL (FBuildSession::GetActiveTool), and the row with it: the edit
+	// tool has nothing to choose, so a width row lit over it would pick for a tool not in use.
+	Session.ToggleGestureMode(EGestureMode::Edit, Context);
+	Axes.Reset();
+	Session.GetActiveVariantAxes(Context, Axes);
+	TestEqual(TEXT("in edit mode there is no row"), Axes.Num(), 0);
+	TestFalse(TEXT("and no pick lands"), Session.SelectActiveVariant(Context, 0, 0));
 	return true;
 }
 

@@ -311,6 +311,16 @@ public:
 	int32 GetActiveToolIndex() const { return ActiveTool; }
 
 	/**
+	 * The active tool's variant rows (IBuildTool::GetVariantAxes), Out reset first. THROUGH
+	 * GetActiveTool, so Edit mode - which swaps in the edit tool - shows no row: a width picked
+	 * there would be for a tool not in use.
+	 */
+	void GetActiveVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const;
+
+	/** IBuildTool::SelectVariant on the active tool. False with no tool, or as it refuses. */
+	bool SelectActiveVariant(const FToolContext& Context, int32 Axis, int32 Option);
+
+	/**
 	 * Whether the committed graph's node rings belong on screen right now.
 	 *
 	 * ON THE SESSION so both drivers agree - the HUD and the editor viewport drew this from

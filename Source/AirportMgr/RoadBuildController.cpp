@@ -673,6 +673,35 @@ int32 ARoadBuildController::GetActiveToolIndex() const
 	return Session.GetActiveToolIndex();
 }
 
+FToolContext ARoadBuildController::MakeVariantContext() const
+{
+	// THE TARGET AND NOTHING ELSE, not MakeToolContext: the bar polls this every tick, and a
+	// variant answer reads only the target's content lists - running the snap pipeline for it
+	// would pay a cursor trace per frame for fields nothing here reads.
+	FToolContext Context;
+	Context.Target = Target;
+	return Context;
+}
+
+void ARoadBuildController::GetActiveVariantAxes(TArray<FToolVariantAxis>& Out) const
+{
+	Session.GetActiveVariantAxes(MakeVariantContext(), Out);
+}
+
+bool ARoadBuildController::SelectActiveVariant(int32 Axis, int32 Option)
+{
+	const bool bTook = Session.SelectActiveVariant(MakeVariantContext(), Axis, Option);
+	const IBuildTool* Active = Session.GetActiveTool();
+	UE_LOG(LogRoadBuild, Log, TEXT("Variant: %s row %d -> option %d (%s)"),
+		Active != nullptr ? *Active->GetDisplayName().ToString() : TEXT("no tool"),
+		Axis, Option, bTook ? TEXT("taken") : TEXT("refused"));
+
+	// The readout names the width a click would lay; a pick that changed it must not leave the
+	// cached sentence reading the old one - InvalidateToolReadoutCache's own reason, again.
+	InvalidateToolReadoutCache();
+	return bTook;
+}
+
 int32 ARoadBuildController::MakeContextCallCountForTest() const
 {
 	return Session.MakeContextCallCountForTest();

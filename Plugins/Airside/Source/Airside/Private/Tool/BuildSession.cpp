@@ -172,6 +172,21 @@ IBuildTool* FBuildSession::GetActiveTool() const
 	return Tools.IsValidIndex(ActiveTool) ? Tools[ActiveTool].Get() : nullptr;
 }
 
+void FBuildSession::GetActiveVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const
+{
+	Out.Reset();
+	if (const IBuildTool* Tool = GetActiveTool())
+	{
+		Tool->GetVariantAxes(Context, Out);
+	}
+}
+
+bool FBuildSession::SelectActiveVariant(const FToolContext& Context, int32 Axis, int32 Option)
+{
+	IBuildTool* Tool = GetActiveTool();
+	return Tool != nullptr && Tool->SelectVariant(Context, Axis, Option);
+}
+
 void FBuildSession::SetGestureMode(EGestureMode InMode, const FToolContext& DeactivateContext)
 {
 	if (InMode == Mode)
