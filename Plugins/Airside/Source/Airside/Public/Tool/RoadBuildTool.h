@@ -430,6 +430,14 @@ struct FToolVariantAxis
 };
 
 /**
+ * The option a key press moves Axis to: the first ENABLED one after Current, wrapping, from the
+ * start when nothing is lit - or INDEX_NONE when none is enabled. ONE STEP RULE for every tool
+ * that cycles, so a lock is stepped over the same way everywhere; stepping blindly onto it would
+ * be refused by SelectVariant and leave the key stuck on the option before it for good.
+ */
+AIRSIDE_API int32 NextEnabledVariant(const FToolVariantAxis& Axis);
+
+/**
  * One selectable tool - Strategy, not State.
  *
  * Tools do NOT transition into one another: the player presses a number and picks one, so

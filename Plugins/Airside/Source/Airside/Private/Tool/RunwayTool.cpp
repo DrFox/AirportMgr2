@@ -73,12 +73,12 @@ void FRunwayTool::StepAxis(const FToolContext& Context, FName AxisId)
 	TArray<FToolVariantAxis> Axes;
 	GetVariantAxes(Context, Axes);
 	const int32 Axis = Axes.IndexOfByPredicate([AxisId](const FToolVariantAxis& A) { return A.Id == AxisId; });
-	if (Axis == INDEX_NONE || Axes[Axis].Options.Num() == 0)
+	const int32 Next = Axis != INDEX_NONE ? NextEnabledVariant(Axes[Axis]) : INDEX_NONE;
+	if (Next == INDEX_NONE)
 	{
 		return;
 	}
-	const int32 Count = Axes[Axis].Options.Num();
-	SelectVariant(Context, Axis, (FMath::Max(Axes[Axis].Current, 0) + 1) % Count);
+	SelectVariant(Context, Axis, Next);
 }
 
 void FRunwayTool::GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const

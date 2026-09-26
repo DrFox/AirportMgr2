@@ -258,6 +258,78 @@ bool FTvRunwayTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace
+{
+	/** A road tool with its middle width LOCKED - the unlock seam, before any unlock system. */
+	struct FTvLockedRoadTool : FRoadDrawTool
+	{
+		FTvLockedRoadTool() : FRoadDrawTool(ERoadKind::Taxiway) {}
+		virtual void GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const override
+		{
+			FRoadDrawTool::GetVariantAxes(Context, Out);
+			if (Out.Num() > 0 && Out[0].Options.Num() > 1) { Out[0].Options[1].bEnabled = false; }
+		}
+	};
+
+	/** A runway tool with Concrete LOCKED. */
+	struct FTvLockedRunwayTool : FRunwayTool
+	{
+		virtual void GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const override
+		{
+			FRunwayTool::GetVariantAxes(Context, Out);
+			for (FToolVariantAxis& Axis : Out)
+			{
+				if (Axis.Id == FName(TEXT("Surface")))
+				{
+					Axis.Options[static_cast<int32>(ERunwaySurface::Concrete)].bEnabled = false;
+				}
+			}
+		}
+	};
+}
+
+/**
+ * A LOCKED OPTION IS REFUSED BY A CLICK AND STEPPED OVER BY THE KEY - FToolVariant::bEnabled's
+ * promise, on both tools. Without the skip, a key landing on a lock would be refused and never
+ * move again: the cycle stuck on the option before it, forever.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTvLockedOptionTest,
+	"Airside.Tool.Variants.LockedOption",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTvLockedOptionTest::RunTest(const FString& Parameters)
+{
+	FTvWidthTarget Target;
+	Target.Widths = {
+		URoadProfile::MakeTransient(1050.0, 1500.0),
+		URoadProfile::MakeTransient(1500.0, 1500.0),
+		URoadProfile::MakeTransient(2300.0, 1500.0),
+	};
+	FToolContext Context;
+	Context.Target = &Target;
+
+	FTvLockedRoadTool Road;
+	TestFalse(TEXT("a click on the locked width is refused"), Road.SelectVariant(Context, 0, 1));
+	TestEqual(TEXT("and chose nothing"), Road.GetWidthIndex(), INDEX_NONE);
+	Road.OnReselect(Context);
+	TestEqual(TEXT("the key from nothing lit takes the first"), Road.GetWidthIndex(), 0);
+	Road.OnReselect(Context);
+	TestEqual(TEXT("and steps OVER the locked width"), Road.GetWidthIndex(), 2);
+
+	FTvRunwayTarget RunwayTarget;
+	RunwayTarget.Profiles = { URoadProfile::MakeTransient(2300.0, 1500.0) };
+	FToolContext RunwayContext;
+	RunwayContext.Target = &RunwayTarget;
+	FTvLockedRunwayTool Runway;
+	FToolContext Shift = RunwayContext;
+	Shift.bInsertModifier = true;
+	Runway.OnReselect(Shift);
+	TestEqual(TEXT("Shift steps from tarmac over locked concrete to reinforced"),
+		Runway.Surface, ERunwaySurface::Reinforced);
+	return true;
+}
+
 /**
  * THE SESSION FORWARDS TO WHATEVER IS LIT - the seam both drivers reach the row through. Fails
  * if the forwarder is unwired (no axes) or points at the wrong tool (a pick that does not land).

@@ -411,8 +411,28 @@ void FRoadDrawTool::OnReselect(const FToolContext& Context)
 	// narrowest, which is what the first press always did before the row existed.
 	TArray<FToolVariantAxis> Axes;
 	GetVariantAxes(Context, Axes);
-	const int32 Lit = Axes.Num() > 0 ? Axes[0].Current : INDEX_NONE;
-	SelectVariant(Context, 0, Lit == INDEX_NONE ? 0 : (Lit + 1) % Count);
+	const int32 Next = Axes.Num() > 0 ? NextEnabledVariant(Axes[0]) : INDEX_NONE;
+	if (Next == INDEX_NONE)
+	{
+		UE_LOG(LogAirside, Warning, TEXT("%s width unchanged: every width is locked"), What);
+		return;
+	}
+	SelectVariant(Context, 0, Next);
+}
+
+int32 NextEnabledVariant(const FToolVariantAxis& Axis)
+{
+	const int32 Count = Axis.Options.Num();
+	const int32 From = Axis.Current == INDEX_NONE ? -1 : Axis.Current;
+	for (int32 Step = 1; Step <= Count; ++Step)
+	{
+		const int32 Candidate = (From + Step) % Count;
+		if (Axis.Options[Candidate].bEnabled)
+		{
+			return Candidate;
+		}
+	}
+	return INDEX_NONE;
 }
 
 FText VariantWidthLabel(double TotalWidth)
@@ -473,11 +493,16 @@ void FRoadDrawTool::GetVariantAxes(const FToolContext& Context, TArray<FToolVari
 
 bool FRoadDrawTool::SelectVariant(const FToolContext& Context, int32 Axis, int32 Option)
 {
-	const int32 Count = Context.Target != nullptr ? Context.Target->GetWidthCount(Kind) : 0;
-	if (Axis != 0 || Option < 0 || Option >= Count)
+	// THROUGH GetVariantAxes, virtually, so a lock is honoured wherever it was set - the row that
+	// greys a width and the pick that refuses it read one answer.
+	TArray<FToolVariantAxis> Axes;
+	GetVariantAxes(Context, Axes);
+	if (Axis != 0 || !Axes.IsValidIndex(0) || !Axes[0].Options.IsValidIndex(Option)
+		|| !Axes[0].Options[Option].bEnabled)
 	{
 		return false;
 	}
+	const int32 Count = Axes[0].Options.Num();
 	WidthIndex = Option;
 
 	// The width is otherwise visible only in the ghost, and only once a chain is started -
