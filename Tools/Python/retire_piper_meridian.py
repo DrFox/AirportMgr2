@@ -2,12 +2,13 @@
 
   UnrealEditor-Cmd.exe <project> -run=pythonscript -script=<this file> -unattended -nosplash -nopause
 
-RUN THIS LAST. Tools/Python/import_models.py must have imported plane7, build_plane7_anim.py
-and Tools/wire_plane7_anim.py must have made ABP_Plane7, build_plane7_type.py must have
-renamed DA_Aircraft_Piper - that rename is what carries DA_Airline_Cumbria's fleet across
-without being touched here - and build_model_yard.py must have re-laid the yard, or the map
-still references the mesh and this refuses to delete it. Every result line is prefixed
-MARKER: so it can be grepped out of the log.
+RUN THIS LAST. Tools/Python/import_models.py must have imported plane7,
+`build_aircraft_anim.py plane7` and `wire_plane_anim.py plane7` must have made ABP_Plane7,
+`build_aircraft_type.py plane7` must have renamed DA_Aircraft_Piper - that rename is what
+carries DA_Airline_Cumbria's fleet across without being touched here - and
+build_model_yard.py must have re-laid the yard, or the map still references the mesh and
+this refuses to delete it. Every result line is prefixed MARKER: so it can be grepped out
+of the log.
 
 WHAT WAS BEING RETIRED. Content/Aircraft/PiperMeridian held the project's first aeroplane: a
 downloaded PA-46 baked to 19,418 triangles with a 2048 BaseColor/Normal/MetallicRoughness
@@ -78,8 +79,8 @@ def repoint_content_set():
     mesh = unreal.EditorAssetLibrary.load_asset(MESH)
     abp = unreal.EditorAssetLibrary.load_asset(ABP)
     if mesh is None or abp is None:
-        fail("%s or %s is missing - run import_models.py and build_plane7_anim.py first"
-             % (MESH, ABP))
+        fail("%s or %s is missing - run import_models.py and "
+             "'build_aircraft_anim.py plane7' first" % (MESH, ABP))
         return False
     if abp.generated_class() is None:
         fail("%s has no generated class; wire and compile it before running this" % ABP)

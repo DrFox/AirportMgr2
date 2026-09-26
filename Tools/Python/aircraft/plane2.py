@@ -126,4 +126,7 @@ def get_spec():
         prop_blade_count=PROP_BLADE_COUNT,
         surface="GRASS",   # the type's whole point is strips that are neither paved nor lit.
         angles=None,
+        # HAND-WIRED BEFORE THIS TOOLING EXISTED - no per-key wiring script, no measured
+        # axis plan. See AircraftSpec.wire_script.
+        wire_script=False,
     )

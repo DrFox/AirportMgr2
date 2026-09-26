@@ -35,7 +35,7 @@ THE PART NAMES CHANGED IN THE SAME ROUND and this script is the first reader of 
 the nose tyre went wheel_front_1 -> nosewheel, the fork wheel_front -> nosegear, and the main
 leg wheelstrut -> maingear. The first was the only mesh in the fleet not named after its own
 bone; the other two put a part that is not a tyre in the tyre's namespace. import_models.py's
-Spec and build_plane1_type.py's GEAR_LEG moved with them.
+Spec and aircraft/plane1.py's (build_aircraft_type.py's) GEAR_LEG moved with them.
 """
 import os
 import sys
@@ -57,8 +57,8 @@ PIPELINE_PATH = "/Game/Aircraft/Plane1/PL_Plane1_Reimport"
 # MEASURED OFF THE EXPORT AND THEN WRITTEN DOWN, not guessed from the names. The one worth
 # stating is `nosegear`: the FORK rides nosewheel_steer and not nosewheel, because it turns
 # with the steering and does not roll. Put it on nosewheel and the whole leg spins about the
-# axle like a broken castor - the same failure build_plane2_anim.py's rule ordering exists to
-# prevent, in geometry rather than in an animation variable.
+# axle like a broken castor - the same failure airside_anim.BONE_RULES' STEER-BEFORE-WHEEL
+# ordering exists to prevent, in geometry rather than in an animation variable.
 #
 # `maingear` rides root because a 172's gear is welded on. That is an assertion about a FIXED
 # part, and it is here rather than assumed: a leg that started riding a wheel bone would be

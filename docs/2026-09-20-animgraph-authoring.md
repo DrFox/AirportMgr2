@@ -10,7 +10,7 @@ run in and FALSE of the engine, and it cost the project every AnimGraph being ha
 
 | Step | Reachable? | How |
 |---|---|---|
-| Create the AnimBlueprint asset for a skeleton | YES | `unreal.AnimBlueprintFactory` + `AssetTools.create_asset`, headless. Already what `build_plane1_anim.py` does. |
+| Create the AnimBlueprint asset for a skeleton | YES | `unreal.AnimBlueprintFactory` + `AssetTools.create_asset`, headless. Already what `build_aircraft_anim.py plane1` does. |
 | Duplicate an existing ABP as a template | YES | `AssetTools.duplicate` over MCP. Carries the SOURCE skeleton - fine for a variant, wrong for a new rig. |
 | Add the float variables the graph is driven by | YES | `BlueprintTools.add_variable` |
 | Create a Transform (Modify) Bone node | YES | `BlueprintTools.create_node` |

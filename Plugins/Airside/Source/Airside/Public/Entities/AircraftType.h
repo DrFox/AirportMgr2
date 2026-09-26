@@ -215,7 +215,7 @@ public:
 		// DERIVED, not authored: two numbers that must agree are one number. The footprint
 		// already says where the nose and tail are, so the centre is arithmetic - and an
 		// authored copy would drift the first time a mesh was re-exported, which is exactly
-		// how the four position figures in build_plane2_type.py went stale.
+		// how the four position figures in plane2's own spec went stale.
 		Out.Chassis.BodyCentreX = (Footprint.NoseX + Footprint.TailX) * 0.5;
 		Out.Requirements = Requirements;
 		// ShortCode, falling back to Code. Assigning Code alone was the defect: it is the
@@ -273,7 +273,7 @@ public:
 	 * plane7 replaced it, exported about the nose gear like the rest of the fleet, and the
 	 * .cpp records what the change cost and recovered.
 	 *
-	 * THE FIGURES ARE MEASURED OFF SK_Plane7 and Tools/Python/build_plane7_type.py re-measures
+	 * THE FIGURES ARE MEASURED OFF SK_Plane7 and `build_aircraft_type.py plane7` re-measures
 	 * them every run and FAILS on a disagreement, which is how a C++ footprint is kept honest
 	 * about a mesh it cannot see.
 	 */

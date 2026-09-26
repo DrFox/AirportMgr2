@@ -1,4 +1,5 @@
-"""What every build_<model>_anim.py needs and none of them should own a copy of.
+"""What build_aircraft_anim.py (and the vehicles' build_rig_anim.py/build_vehicle_anims.py)
+need and none of them should own a copy of.
 
 Imported from the editor's Python, so `import unreal` is available. THE SCRIPT'S OWN
 DIRECTORY IS NOT ON sys.path under -run=pythonscript - see import_models.py's header for the
@@ -7,9 +8,9 @@ full note - so every caller puts it there before importing this.
 WHY THIS FILE EXISTS, AND WHY IT IS NOT airside_import.py. Two promises made in two headers
 came due on the same model:
 
-  * build_plane1_anim.py: "the fourth model is the one that extracts rather than copies".
-    The fourth declined.
-  * build_plane5_anim.py, more specifically: "THE SIXTH MODEL SHOULD EXTRACT. Said here
+  * plane1's own script (since retired - see Issue #294): "the fourth model is the one that
+    extracts rather than copies". The fourth declined.
+  * plane5's own script, more specifically: "THE SIXTH MODEL SHOULD EXTRACT. Said here
     rather than in a commit message nobody greps: one bone_plan() in airside_import.py, four
     callers."
 
@@ -27,11 +28,13 @@ the axis resolver that plane7 would have made two of. The resolver was written f
 point, because the alternative was a second copy of two hundred lines on the same day the
 first duplication was being paid off.
 
-THE CALLERS KEEP THEIR OWN TABLES. A model's SOURCE, MESH, SKELETON, ABP name and
-DRIVEN_BONES are facts about that model and stay in that model's script, where somebody
-changing an export will be standing. What is here is the MECHANISM - every line of it was
-identical across the copies, and the two that were not identical had drifted rather than
-diverged on purpose.
+THE CALLERS KEEP THEIR OWN FACTS. A model's SOURCE, MESH and ABP name are facts about that
+model and stay in its own `aircraft/<key>.py` spec (or Tools/Python/build_rig_anim.py's own
+table, for the vehicles), where somebody changing an export will be standing. What is here is
+the MECHANISM - every line of it was identical across the copies, and the two that were not
+identical had drifted rather than diverged on purpose. DRIVEN_BONES stopped being one of the
+callers' own facts on 2026-09-26 (Issue #294): `driven_bone_plan()` below derives it, and its
+chain order, from the .glb itself.
 """
 import json
 import math
@@ -111,14 +114,14 @@ def bone_plan(names):
 
     THIS LIST MUST AGREE WITH UAirsideAgentAnim'S PROPERTY NAMES and there is no compiler to
     check it - see CLAUDE.md, "check where a list is CONSUMED". Since 2026-09-21 there IS a
-    checker one step down the pipeline: Tools/wire_plane<N>_anim.py --verify reads the compiled
-    graph back and fails on any bone whose driver disagrees.
+    checker one step down the pipeline: `Tools/wire_plane_anim.py <key> --verify` reads the
+    compiled graph back and fails on any bone whose driver disagrees.
 
-    THE FOUR COPIES HAD ALREADY DRIFTED, exactly the way build_plane1_anim.py predicted they
-    would: the gear and door rules landed in build_plane2_anim.py on 2026-09-19 and were typed
-    into plane1's copy separately. The reasons those copies carried are kept below, because
-    they are what the ORDERING rests on and the ordering is the only thing here that can be
-    wrong in a way nothing catches:
+    THE FOUR COPIES HAD ALREADY DRIFTED, exactly the way plane1's own script (since retired -
+    see Issue #294) predicted they would: the gear and door rules landed in plane2's script on
+    2026-09-19 and were typed into plane1's copy separately. The reasons those copies carried
+    are kept below, because they are what the ORDERING rests on and the ordering is the only
+    thing here that can be wrong in a way nothing catches:
 
       * STEER BEFORE WHEEL, and this one is load-bearing rather than merely disciplined: every
         aircraft rig here has a 'nosewheel_steer', which contains both needles. The wheel rule
@@ -181,6 +184,83 @@ def report_bone_plan(names):
         if variable.startswith("?"):
             unrecognised += 1
     return unrecognised
+
+
+def driven_bone_plan(source, excluded=()):
+    """(bone, variable) for every joint bone_plan matches a rule to, in CHAIN ORDER, less any
+    name in `excluded` - Issue #294's replacement for the fourteen hand-typed DRIVEN_BONES
+    lists build_plane<N>_anim.py used to carry.
+
+    CHAIN ORDER, DERIVED RATHER THAN TYPED. joint_names() returns a .glb skin's joints in the
+    order Blender's exporter writes them, which is a PREORDER walk of the armature - a parent
+    is always visited before its whole subtree, because that is what "walk down from the
+    root, describing each node before its children" means. Reversing a preorder walk always
+    yields an ordering where every node comes after all of its own descendants (run the same
+    argument backwards: the parent that preceded its subtree in the original list follows it
+    in the reversed one), which is exactly wire_anim_lib's own rule - "a bone goes AFTER every
+    bone it is the PARENT of". Checked against all fourteen rigs' actual .glb joint arrays,
+    including plane8's three-deep bogie chains (gear > bogie > wheel) and plane6's/plane11's
+    three-axle bogies, before this replaced the fourteen typed lists: every one of them agrees
+    in MEMBERSHIP, and where the reversed order does not reproduce the exact permutation a
+    typed list was free to choose within one rank (props and doors hang unconstrained off
+    root, so their relative order was always arbitrary), the result is still a valid chain -
+    see this PR's harness table.
+
+    UNRECOGNISED JOINTS ARE DROPPED HERE rather than failed - report_bone_plan(), called
+    first by every caller, already prints and fails on them against the FULL, unfiltered
+    joint list; a second failure over the filtered one would be the same fact from two
+    functions.
+
+    `excluded` IS build_rig_anim.py's carve-out, by name: a bone whose name matches a
+    BONE_RULES needle as a false substring (that script's fifth_wheel/kingpin) is named here,
+    in the one spec that knows its rig is the exception, rather than teaching BONE_RULES a
+    rig's naming. No aircraft needs it today.
+    """
+    reversed_names = list(reversed(joint_names(source)))
+    return [(bone, variable) for bone, variable in bone_plan(reversed_names)
+            if not variable.startswith("?") and bone not in excluded]
+
+
+def raked_line(raked):
+    """The say() line reporting how many bones a rig deliberately rakes off-square - derived
+    from len(raked) rather than typed, which is Issue #294's fix for plane14's OWN say-line
+    lie: its RAKED tuple was correctly empty (plane14's nosewheel_steer measures square) but
+    its say() line read "ONE BONE IS RAKED ON PURPOSE" anyway, copied from plane9's/plane12's
+    and never re-typed when RAKED was. A line computed from the data it describes cannot
+    drift from it a second time."""
+    if not raked:
+        return "NO BONE IS RAKED."
+    if len(raked) == 1:
+        return "ONE BONE IS RAKED ON PURPOSE."
+    return "%s BONES ARE RAKED ON PURPOSE." % len(raked)
+
+
+def anim_multiplier_for(bone, variable, overrides):
+    """The multiplier Tools/wire_plane_anim.py's PLAN row takes for one bone - the fleet's
+    convention, unless `overrides` (an AircraftSpec's anim_multiplier) names this bone
+    specifically.
+
+    THE CONVENTION, established across the whole fleet before plane8: -1.0 on every
+    travelling or spinning bone, and None (the raw angle, undriven) on the one bone whose
+    variable is SteerAngleDegrees, because ABP_Plane2's shipped graph drives its steer bone
+    with a plain GetSteerAngleDegrees() and no negation. plane8's five gear bones and four
+    bogie bones do not fold by the fleet's one figure each - see aircraft/plane8.py - and are
+    named in `overrides` instead of bending this rule to fit one rig.
+
+    THE -1 IS A MIRROR, NOT A SIGN CONVENTION, and it was MEASURED rather than argued -
+    plane6's retired wiring script recorded the probe (its own header is gone with it since
+    Issue #294; the finding is not): Blender is right-handed and UE is left-handed, so import
+    mirrors every bone-local rotation. Turning SK_Plane6's gear_L by its OWN authored +90
+    lifted wheel_L2 494 uu OUTBOARD - through the wing it retracts into - against
+    plane6/scripts/gear_pivots.json's own retracted pose, which says +90 about world +Y puts
+    the wheel 4.94 m up INBOARD. The probe was validated first against the one bone whose
+    direction is known correct on screen (with -1 the wheels roll FORWARD on every rig;
+    without it, backwards), and AirportMgr.View.AnimYard.GearFoldsIntoTheAirframe now pins the
+    fold direction so this cannot regress silently again.
+    """
+    if bone in overrides:
+        return overrides[bone]
+    return None if variable == "SteerAngleDegrees" else -1.0
 
 
 # ----------------------------------------------------------------------- the rotation axis
@@ -473,16 +553,18 @@ def axis_plan_path(key):
     return os.path.join(unreal.Paths.project_saved_dir(), "%s_axis_plan.json" % key)
 
 
-def write_axis_plan(key, mesh_path, resolved):
-    """Hand the resolved axes to Tools/wire_<key>_anim.py rather than making it type them.
+def write_axis_plan(key, mesh_path, rows):
+    """Hand the resolved graph - `rows` of (bone, variable, component, sign, multiplier), in
+    CHAIN ORDER - to Tools/wire_plane_anim.py rather than making it type any of it.
 
-    ONE LIST, WHICH IS CLAUDE.md'S RULE AND NOT A CONVENIENCE. The bone, its variable, its
-    rotator component and its sign are four columns of one table, and the first two are
-    knowable from the .glb while the last two are only knowable from the imported skeleton.
-    Split across two files they are two lists that must agree, with no compiler between them
-    and a failure mode - a part turning about the wrong axis - that looks like a modelling bug
-    rather than a wiring one. So the half that is MEASURED is written by the script that
-    measured it, and the wiring script refuses to run without it.
+    ONE LIST, WHICH IS CLAUDE.md'S RULE AND NOT A CONVENIENCE, and Issue #294 widened it: this
+    file used to carry only the component and sign resolve_axis() measures, while the bone,
+    its variable and its wiring multiplier lived a SECOND TIME in each Tools/wire_plane<N>_anim
+    .py's own hand-typed PLAN - two lists that had to agree, with no compiler between them and
+    a failure mode (a part driven by the wrong property, or turning about the wrong axis) that
+    looks like a modelling bug rather than a wiring one. Now every column of the row a wiring
+    run needs lives in the one file the build step writes, and Tools/wire_plane_anim.py reads
+    it whole rather than carrying a table of its own.
 
     IN Saved/ AND THEREFORE NOT COMMITTED, deliberately. It is derived, it is worthless against
     a different export, and a stale copy is exactly the "half-run pipeline" that
@@ -492,8 +574,9 @@ def write_axis_plan(key, mesh_path, resolved):
     path = axis_plan_path(key)
     payload = {
         "mesh": mesh_path,
-        "bones": [{"bone": bone, "component": component, "sign": sign}
-                  for bone, component, sign in resolved],
+        "bones": [{"bone": bone, "variable": variable, "component": component,
+                   "sign": sign, "multiplier": multiplier}
+                  for bone, variable, component, sign, multiplier in rows],
     }
     try:
         with open(path, "w") as handle:
@@ -501,4 +584,4 @@ def write_axis_plan(key, mesh_path, resolved):
     except IOError as exc:
         fail("could not write %s: %s" % (path, exc))
         return
-    say("wrote %s - Tools/wire_%s_anim.py reads its rotation axes from this" % (path, key))
+    say("wrote %s - Tools/wire_plane_anim.py %s reads its whole graph from this" % (path, key))

@@ -8,8 +8,9 @@ creates the asset and resolves the rotation axes with the editor down, the wirin
 it with the editor up - and that is one restart, not a wall. See
 docs/2026-09-20-animgraph-authoring.md.
 
-EXTRACTED FROM wire_plane5_anim.py ON 2026-09-21, when plane7 needed it. That script was
-itself copied from wire_fueltruck_anim.py, so plane7 would have been the third near-identical
+EXTRACTED FROM plane5's own wiring script ON 2026-09-21 (since retired - see Issue #294),
+when plane7 needed it. That script was itself copied from wire_fueltruck_anim.py, so plane7
+would have been the third near-identical
 400 lines - and on the same day airside_anim.py was made out of four copies of the bone plan,
 a third copy of this was not defensible. Nothing here changed in the move except that five
 constants became a Model.
@@ -20,14 +21,16 @@ hand-verified asset for tidiness alone - and it is the worked example
 docs/2026-09-20-animgraph-authoring.md points at, which is a reason to leave it legible
 standing on its own.
 
-THE PLAN IS HALF READ FROM A FILE, AND THAT IS THE POINT
---------------------------------------------------------
-A Model's plan carries the bone, its variable and its multiplier. It does NOT carry the
-rotator component or the sign, because those are facts about the IMPORTED SKELETON and this
-script cannot see one. Tools/Python/build_<model>_anim.py measures them off the mesh's
-reference pose - each bone's own local axes resolved into component space, matched against
-build_rig.py's stated bone contract - and writes Saved/<model>_axis_plan.json. This refuses
-to run without that file.
+THE PLAN USED TO BE HALF READ FROM A FILE; NOW IT IS WHOLLY READ FROM ONE
+--------------------------------------------------------------------------
+Until Issue #294, a Model's plan (bone, variable, multiplier) was typed by hand into each
+Tools/wire_plane<N>_anim.py, and only the rotator component and sign - facts about the
+IMPORTED SKELETON this script cannot see - came from Saved/<model>_axis_plan.json.
+Tools/Python/build_aircraft_anim.py now derives the bone/variable/multiplier columns too (see
+airside_anim.driven_bone_plan() and anim_multiplier_for()) and writes the WHOLE row into that
+file, so Tools/wire_plane_anim.py - the twelve wrapper scripts' replacement - carries no
+per-aircraft table at all; load_axis_plan() below fills `model.plan` from it. This refuses to
+run without that file.
 
 WHY THAT IS WORTH THE INDIRECTION. Every wiring script before plane5 hard-codes "Yaw, in Bone
 Space" for every bone, on the strength of wire_fueltruck_anim.py's note that "the rigger
@@ -42,8 +45,9 @@ THE FOUR DECISIONS THIS SCRIPT OWNS
 ORDER: a bone comes AFTER every bone it is the PARENT of. FCSPose::SafeSetCSBoneTransforms
 exists to "refresh any Children they have that has been previously converted to Component
 Space", so rotating the parent last takes the already-rotated child with it. ABP_Plane1 and
-ABP_Plane2 both ship that order for nosewheel_steer, and each Model's plan records what the
-build_*_anim.py scripts printed instead until 2026-09-20.
+ABP_Plane2 both ship that order for nosewheel_steer. Since Issue #294 the order is DERIVED,
+not typed - see driven_bone_plan()'s own docstring for how reversing the .glb's own joint
+order always yields a valid one.
 
   THE RULE BINDS TWICE ON A RETRACTING RIG. plane1 and the fuel truck have one parent/child
   pair each (steer over wheel). plane5 and plane7 have a three-deep chain -
@@ -79,10 +83,17 @@ class Model(object):
 
     key       the models-repo folder name; names Saved/<key>_axis_plan.json and the client
     bp_path   the Anim Blueprint's package path
-    plan      (bone, variable, multiplier) in CHAIN ORDER, source first; None drives directly
+    plan      (bone, variable, multiplier) in CHAIN ORDER, source first; None drives directly.
+              NOT PASSED IN, since Issue #294 - load_axis_plan() fills it from
+              Saved/<key>_axis_plan.json, which Tools/Python/build_aircraft_anim.py now writes
+              whole (bone, variable AND multiplier, not only the component and sign it used
+              to). `plan` is still accepted as a constructor argument, kept for
+              Tools/wire_vehicle_anim.py's throwaway Model(key, bp_path, []) - it never calls
+              load_axis_plan on that instance - and is otherwise unused; the fleet's
+              wire_plane_anim.py callers pass only key and bp_path.
     """
 
-    def __init__(self, key, bp_path, plan):
+    def __init__(self, key, bp_path, plan=None):
         self.key = key
         self.bp_path = bp_path
         self.plan = plan
@@ -107,10 +118,17 @@ PIN_OF_COMPONENT = {"Roll": "Roll", "Pitch": "Pitch", "Yaw": "Yaw"}
 
 
 def load_axis_plan(model):
-    """{bone: (component, sign)}, measured by Tools/Python/build_<model>_anim.py.
+    """{bone: (component, sign)}, measured by Tools/Python/build_aircraft_anim.py <model.key>.
 
     A MISSING FILE IS A CLEAR MESSAGE AND NOT A DEFAULT. Defaulting to Yaw here would wire a
     plausible graph off an assumption this script exists to stop making.
+
+    FILLS model.plan AS A SIDE EFFECT, since Issue #294. The JSON row now carries the whole
+    graph - bone, variable AND multiplier, not only the component and sign resolve_axis()
+    measures - because Tools/wire_plane_anim.py no longer carries a per-aircraft PLAN of its
+    own for this to join against; it reads the whole thing from here. CHAIN ORDER is the
+    file's own row order, not re-sorted here - see driven_bone_plan()'s docstring for why the
+    build step's order is already valid.
     """
     if not os.path.exists(model.axis_plan):
         sys.exit(
@@ -118,19 +136,13 @@ def load_axis_plan(model):
             "The rotation axes are MEASURED off the mesh's reference pose, not assumed.\n"
             "Close the editor and run:\n"
             "  UnrealEditor-Cmd.exe <project> -run=pythonscript "
-            "-script=Tools/Python/build_%s_anim.py -unattended -nosplash -nopause\n"
+            "-script=Tools/Python/build_aircraft_anim.py -unattended -nosplash -nopause %s\n"
             "then reopen it and run this again." % (model.axis_plan, model.key))
     with open(model.axis_plan) as handle:
         payload = json.load(handle)
-    axes = {row["bone"]: (row["component"], row["sign"]) for row in payload["bones"]}
-
-    missing = [bone for bone, _, _ in model.plan if bone not in axes]
-    if missing:
-        sys.exit("%s resolves no axis for: %s\n"
-                 "That commandlet FAILS a bone whose rig disagrees with build_rig.py's bone "
-                 "contract, so this is a rig to look at rather than a file to patch."
-                 % (model.axis_plan, ", ".join(missing)))
-    return axes
+    rows = payload["bones"]
+    model.plan = [(row["bone"], row["variable"], row["multiplier"]) for row in rows]
+    return {row["bone"]: (row["component"], row["sign"]) for row in rows}
 
 
 # Sent to ProgrammaticToolset as ONE call. Doing it from here instead would be ~200 MCP round

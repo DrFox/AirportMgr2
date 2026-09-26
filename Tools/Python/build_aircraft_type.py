@@ -6,8 +6,9 @@ module under aircraft/. Run headless:
 
 Every result line is prefixed MARKER: so it can be grepped out of the log.
 
-ONE MECHANISM, FOURTEEN SPECS - Issue #290. build_plane1_type.py through build_plane14_type.py
-were 7,527 lines that were ~75% the same script fourteen times over: measure(), set_regime(),
+ONE MECHANISM, FOURTEEN SPECS - Issue #290. The fourteen build_plane<N>_type.py scripts this
+replaced (since deleted) were 7,527 lines that were ~75% the same script fourteen times over:
+measure(), set_regime(),
 the CLIMB/APPROACH/ENGINE/GEAR block loop, verify(), set_anim_defaults(), tightest_radius_uu()
 and run() were byte-identical across most of the fleet apart from an asset-path string, and the
 copies had already drifted where hand-copying missed a line - propeller_diameter authored but
@@ -42,7 +43,7 @@ plane13 has two axles; plane8 has five, spanning two gear units. `axles_and_radi
 whatever `main_wheels_l`/`main_wheels_r` name, for any N, rather than plane6-through-plane13
 each carrying their own copy of the averaging loop with N baked in.
 
-WHAT DID NOT MOVE HERE: build_plane7_type.py's replacement, `aircraft/plane7.py`, still routes
+WHAT DID NOT MOVE HERE: the retired plane7 type script's replacement, `aircraft/plane7.py`, still routes
 through `unreal.AircraftType.build_piper_meridian()` rather than through this file's typed-dict
 authoring path - the Meridian's figures live in C++ (`UAircraftType::BuildPiperMeridian`)
 because it is ALSO `UAirsideSettings::ResolveDefaultAirframe`'s fallback, and a second copy of
@@ -116,8 +117,8 @@ class RigMap:
     imposed on it.
 
     `note` is optional: plane8 alone reports the per-bone dicts a rig with more than one gear
-    unit actually carries, because wire_plane8_anim.py's per-bone multipliers are what makes
-    the single per-type angle correct for every bone - see aircraft/plane8.py.
+    unit actually carries, because its `anim_multiplier`'s per-bone ratios are what makes the
+    single per-type angle correct for every bone - see aircraft/plane8.py.
     """
 
     def __init__(self, path, gear, door, truck=None, note=None):
@@ -314,6 +315,56 @@ class AircraftSpec:
     # run a check says so instead of the mechanism silently growing a special case.
     skipped_checks: Dict[str, str] = field(default_factory=dict)
 
+    # --- Anim fields - Issue #294. build_aircraft_anim.py reads these off the SAME spec
+    # author_type() and set_anim_defaults() above already read, rather than a second spec
+    # directory: the rig facts (mesh, source, angles) do not change depending on which script
+    # is asking. See build_aircraft_anim.py's own module docstring for the mechanism.
+
+    # BONES DELIBERATELY NOT SQUARE TO THE AIRFRAME - resolve_axis's `raked` argument, carried
+    # here so it is a fact about the aeroplane rather than a copy-paste risk in a build script.
+    # Empty for nine of fourteen; plane6/plane8 name three, plane9/plane12 one. THE BUG THIS
+    # FIELD FIXES: plane14's retired build script had RAKED correctly () (plane14's
+    # nosewheel_steer measures square) but its say() line read "ONE BONE IS RAKED ON PURPOSE"
+    # anyway - copied
+    # from plane9/plane12 and never re-typed. Deriving that line's wording from len(raked)
+    # removes the possibility of the two disagreeing again.
+    raked: Sequence[str] = ()
+
+    # BONES A BONE_RULES NEEDLE MATCHES BY A FALSE SUBSTRING, EXCLUDED FROM THE DRIVEN SET BY
+    # NAME - build_rig_anim.py's fifth_wheel/kingpin carve-out, modelled as data rather than a
+    # special case in BONE_RULES itself. Empty for every aircraft today; no aeroplane rig has
+    # hit this yet, and the field exists so the next one that does says so instead of
+    # driven_bone_plan() silently wiring a socket.
+    excluded: Sequence[str] = ()
+
+    # PER-BONE MULTIPLIER OVERRIDES, keyed by bone name - plane8's gear/truck ratios, read off
+    # plane8/scripts/rig_map.json rather than typed twice (see aircraft/plane8.py). Every OTHER
+    # aircraft leaves this empty and gets the fleet's plain convention: -1.0 (the Blender/UE
+    # handedness flip) on every travelling or spinning bone, None (undriven multiplier, i.e.
+    # the raw angle) on the one bone whose variable is SteerAngleDegrees. A bone named here
+    # takes ITS entry instead of the convention - see anim_multiplier_for().
+    anim_multiplier: Dict[str, float] = field(default_factory=dict)
+
+    # FALSE FOR plane1 AND plane2 ALONE: their AnimGraphs were wired by hand in the editor
+    # before this tooling existed and carry no Tools/wire_<key>_anim.py counterpart, so
+    # build_aircraft_anim.py prints the bone plan for a human to wire rather than measuring
+    # rotation axes or writing Saved/<key>_axis_plan.json - there is no wiring script waiting
+    # to read one. See aircraft/plane1.py, aircraft/plane2.py.
+    wire_script: bool = True
+
+    # FALSE FOR plane4 ALONE: ABP_Plane4 was duplicated from ABP_Plane2 in the editor on
+    # 2026-09-19 and retargeted by hand, days before this tooling existed. build_aircraft_anim.py
+    # measures an asset that must already exist for this key and fails loudly rather than
+    # inventing an empty one that would point DA_Aircraft_Plane4 at a Blueprint driving nothing.
+    create_abp: bool = True
+
+    # EXTRA PROSE PRINTED AFTER THE STANDARD BONE LIST, for the two hand-wired aircraft alone -
+    # plane1's disputed wiring order finding, which is a fact about THAT aeroplane's shipped
+    # graph and belongs in its own spec rather than in the shared mechanism. `None` for every
+    # other aircraft, `wire_script`-gated so it is only ever consulted where there is no wiring
+    # script to make the finding moot.
+    anim_report_extra: Optional[Callable] = None
+
     def __post_init__(self):
         self._measured = None
 
@@ -399,7 +450,7 @@ def axles_and_radius(spec, leg_height):
     """(steer axle X, fixed axle X, main wheel radius, main gear track) in uu, off the spec's
     own mesh reference pose.
 
-    THE BONE, NOT THE TYRE'S BOUNDING BOX, the rule build_plane3_type.py settled: the bone is a
+    THE BONE, NOT THE TYRE'S BOUNDING BOX, the rule plane3's retired type script settled: the bone is a
     STATEMENT about where the axle is - build_export.py/build_rig.py place each wheel's origin
     on its rotation axis so the thing can spin - and the hub's HEIGHT above the contact plane IS
     the radius. That z = 0 is the contact plane is not assumed: airside_import.report_bounds
@@ -600,8 +651,8 @@ def say_tightest_radius(spec, m, say):
 
 
 def say_published_table(spec, m, say):
-    """THE MEASURED-AGAINST-PUBLISHED TABLE, printed every run - the habit build_plane4_type.py
-    argued for: a disagreement between the model and a primary source is worth SEEING each
+    """THE MEASURED-AGAINST-PUBLISHED TABLE, printed every run - the habit plane4's retired
+    type script argued for: a disagreement between the model and a primary source is worth SEEING each
     time rather than discovering. One shared loop, driven by each spec's own rows, rather than
     plane1's/plane10's/plane12's three copies of the same print statement."""
     for label, getter, published_m in spec.published_table:

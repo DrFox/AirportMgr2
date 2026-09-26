@@ -86,8 +86,8 @@ SPECS = [
         #   * ONE `wheel` bone drove BOTH mains, and it sat at y +137.0 - the right wheel's
         #     outer FACE, not either axle. Rolling it would have swung the left wheel through
         #     a 2.54 m arc. Split into wheel_L/wheel_R on the axles at y -+127.0, which is
-        #     what plane2, plane3 and plane4 have and what build_plane1_type.py reads to get
-        #     the track. With one bone there is no track to measure.
+        #     what plane2, plane3 and plane4 have and what build_aircraft_type.py plane1
+        #     reads to get the track. With one bone there is no track to measure.
         #   * `nosewheel` sat at y +12.0 against a tyre centred on y 0.0 and only -+7.4 wide,
         #     so the steering axis was outside the wheel it steers.
         #   * The wing and the tailplane were inside `fuselage`, leaving nothing for the

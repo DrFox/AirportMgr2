@@ -263,10 +263,10 @@ def part_bounds_uu(doc):
     which the exporter adds and removes as objects are duplicated - do not decide whether a
     part is found.
 
-    HERE RATHER THAN IN EACH build_*_type.py, since 2026-09-18: build_plane2_type.py carried
-    this as a private copy, and plane3 authoring would have made a second one. Two readers of
-    the same file format that disagree about the axis swap is a bug nobody would see until an
-    aircraft's envelope pointed the wrong way.
+    HERE RATHER THAN IN EACH build_plane<N>_type.py, since 2026-09-18: plane2's own script
+    carried this as a private copy, and plane3 authoring would have made a second one. Two
+    readers of the same file format that disagree about the axis swap is a bug nobody would
+    see until an aircraft's envelope pointed the wrong way.
     """
     accessors = doc.get("accessors", [])
     meshes = doc.get("meshes", [])

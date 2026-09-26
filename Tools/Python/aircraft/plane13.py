@@ -141,4 +141,11 @@ def get_spec():
         turnaround_seconds=TURNAROUND_SECONDS,
         prop_blade_count=PROP_BLADE_COUNT,
         surface="TARMAC",
+        # NO BONE IS DELIBERATELY RAKED, plane11's case. rig_map.json puts nosewheel_steer's
+        # head (axle) and tail (trunnion) at stations 5.8928 and 5.8293 over 2.51 m of height -
+        # 1.45 degrees off vertical - and the nose doors' hinge falls 1.7 degrees over its
+        # 2.2 m. Both are inside resolve_axis's square band (0.99, about 8 degrees).
+        # resolve_axis fails a declared-raked bone that turns out square, so this list stays
+        # honest.
+        raked=(),
     )

@@ -80,7 +80,7 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		// buys nothing - paving would admit nothing that lengthening had not already admitted,
 		// and the type would be a Q400 that carries eleven people.
 		//
-		// 140200 is build_plane3_type.py's REQUIREMENTS["takeoff_field_length"]. Typed here
+		// 140200 is aircraft/plane3.py's REQUIREMENTS["takeoff_field_length"]. Typed here
 		// because a test may not import a Python table; if plane3's figure moves, this fails
 		// and says so, which is the behaviour wanted from a second copy that cannot be avoided.
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane5.DA_Aircraft_Plane5"), TEXT("plane5"), 140200.0,
@@ -113,7 +113,7 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		// plane11's CEILING IS THE 777-300ER's PUBLISHED TAKE-OFF LENGTH - plane9's argument
 		// one letter up. The A350-1000 and the 777 share Code E and its stands; what tells
 		// them apart on the field is that the A350 asks less runway (2,750 m against 3,120),
-		// so it is the widebody a field admits first. 312000 is build_plane6_type.py's
+		// so it is the widebody a field admits first. 312000 is aircraft/plane6.py's
 		// REQUIREMENTS["takeoff_field_length"], typed here for the reason plane5's row gives.
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane11.DA_Aircraft_Plane11"), TEXT("plane11"), 312000.0,
 		  TEXT("an A350-1000 that needed as much runway as a 777-300ER would erase the one "
@@ -128,7 +128,7 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		// plane13's CEILING IS THE A350-1000's PUBLISHED TAKE-OFF LENGTH, the first ceiling that
 		// measures a type against the LETTER ABOVE it. The 757-300 is the only Code D rung on
 		// the ladder; if it asked as much runway as the lighter Code E twin, a field could go
-		// straight from C to E and lose nothing by skipping D. 275000 is build_plane11_type.py's
+		// straight from C to E and lose nothing by skipping D. 275000 is aircraft/plane11.py's
 		// REQUIREMENTS["takeoff_field_length"], typed here for the reason plane5's row gives.
 		// 2,650 against 2,750 is thin, and that is the claim.
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane13.DA_Aircraft_Plane13"), TEXT("plane13"), 275000.0,
@@ -137,7 +137,7 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		// plane9's CEILING IS THE 737-800's PUBLISHED TAKE-OFF LENGTH. The A320 and the 737
 		// share Code C and its stands; what tells them apart on the field is that the A320
 		// asks less runway (2,100 m against 2,316). Lose that and it is a 737 with a
-		// different nose. 231600 is build_plane4_type.py's REQUIREMENTS["takeoff_field_length"],
+		// different nose. 231600 is aircraft/plane4.py's REQUIREMENTS["takeoff_field_length"],
 		// typed here for the reason plane5's row gives.
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane9.DA_Aircraft_Plane9"), TEXT("plane9"), 231600.0,
 		  TEXT("an A320 that needed as much runway as a 737-800 would erase the one field "
@@ -145,7 +145,7 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		// plane10's CEILING IS THE KING AIR's PUBLISHED TAKE-OFF LENGTH. Both are Code B
 		// turboprops; the Caravan is the one that stays on GRASS, and it must also ask less
 		// runway (740 m against 1,006) or paving and lengthening would buy the same thing.
-		// 100600 is build_plane5_type.py's REQUIREMENTS["takeoff_field_length"], typed here
+		// 100600 is aircraft/plane5.py's REQUIREMENTS["takeoff_field_length"], typed here
 		// for the reason plane5's row gives.
 		// plane12 CARRIES plane1's CEILING FOR plane1's REASON: a four-seat trainer that
 		// needed more runway than the Meridian would be wrong on its face. 50,000 clears it by
