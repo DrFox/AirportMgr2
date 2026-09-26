@@ -4,6 +4,7 @@
 #include "Build/ExitGeometry.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Build/TurnShape.h"
 #include "Model/Chassis.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -1018,125 +1019,13 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 						Turn.Control = bAhead ? Crossing : (PA + PB) * 0.5;
 					}
 
-					// A BEND'S LANES FOLLOW ITS PAVEMENT (user ruling 2026-09-25). At a two-arm bend the
-					// quadratic above runs cut to cut with its control on the lane lines' crossing -
-					// one quadratic across the corner's whole sweep, which delivers only cos(sweep/2) of
-					// the arc it approximates (0.707 at a right angle: 726 uu on a Narrow inner lane
-					// whose arc is 1026) and bulges off it by 62 uu at the apex. The cut is the inner
-					// fillet's tangent point (or, where the solver widened the inside, further out along
-					// the arm), so each lane line touches a circle about that fillet's centre at the
-					// lane's own distance from the inner edge - the lane concentric with the pavement's
-					// inside. So the turn is that arc, laid in pieces (GuidelineGeom::BendLane), each
-					// sampled once like any edge.
-					//
-					// CONCENTRIC WITH THE INNER EDGE, NOT THE OUTER, and not by preference: the two
-					// fillets have the SAME radius, so their centres sit a road width apart on each axis
-					// and no circle is concentric with both. About the outer fillet's centre the lanes
-					// would use the outside of the bend - and turn at 306 / 606 uu on Narrow, 186 / 636
-					// on Wide, below both design vehicles' locks, where they turn at 726 / 938 and
-					// 853 / 1171 today (measured 2026-09-25). The ruling forbids a tighter turn.
-					// SINCE 2026-09-25 THE OUTER EDGE FOLLOWS: the solver lays the outside as the arc about
-					// this same centre at the inner radius plus the road width (SmoothBend,
-					// RoadNetworkSolver.cpp), so both edges and every lane now share the one centre.
-					//
-					// ONLY WHERE THE CONSTRUCTION HOLDS: two arms, a service-road lane on both (a
-					// taxiway's corner is authored for aircraft - PreferredFilletRadius - and stays as it
-					// was), and both lane ends on the same circle and at its tangent points. Arms of two
-					// widths put their lanes at different distances from the inner edge, so no one
-					// circle touches both: those RAMP onto the wider arm's circle (below). 33d6f49b kept
-					// the one quadratic there - "only one node around the corner", the user's variant (a).
-					// ENFORCED BY: Airside.Build.BendLanes.ConcentricWithPavement, .NeverTighter, .EveryTierIsSmooth
-					TArray<GuidelineGeom::FArcPiece> BendArc;
-					if (ArmSegments->Num() == 2 && Pair.Value.Corners.Num() == 2
-						&& Declared.Class == ETraversalClass::GroundVehicle && ToDeclared.Class == ETraversalClass::GroundVehicle)
-					{
-						const int32 InsideIndex = Pair.Value.InnerCornerOfBend();
-						const RoadGeom::FFillet* Inside = InsideIndex != INDEX_NONE ? &Pair.Value.Corners[InsideIndex] : nullptr;
-						if (Inside != nullptr)
-						{
-							const FVector2D PA = Network.GetGuidelineNode(Turn.A)->Position;
-							const FVector2D PB = Network.GetGuidelineNode(Turn.B)->Position;
-							const FVector2D ArriveDir = -Network.GetOutgoingTangent(FromSeg, NodeId).GetSafeNormal();
-							const FVector2D LeaveDir = Network.GetOutgoingTangent(ToSeg, NodeId).GetSafeNormal();
-							// GuidelineGeom::BendLane refuses what the construction cannot hold: lanes at
-							// two distances from the edge, a tangent point behind a lane end, a turn not
-							// round this corner. A widened bend's lane ends sit back from their tangent
-							// points (the solver cut the arms back to hold the widening) and are joined
-							// to the arc by straight leads.
-							GuidelineGeom::BendLane(PA, ArriveDir, PB, LeaveDir, Inside->Centre, BendArc);
-							// A WIDTH STEP RUNS AT THE WIDER WIDTH (2026-09-25): the narrower arm's lane end is
-							// off the circle the wider arm's touches, so it ramps onto it along the bend's own
-							// ramp clock - the one the solver laid both edges on (FBendOuter::Ramp), so the lanes
-							// stay evenly spaced between them through the taper (GuidelineGeom::RampedBendLane).
-							const double FromWidth = FromProfile->GetTotalWidth();
-							const double ToWidth = ToProfile->GetTotalWidth();
-							const FBendOuter* Bend = Solved.BendOuters.FindByPredicate(
-								[&Pair](const FBendOuter& Candidate) { return Candidate.NodeIndex == Pair.Key && Candidate.bApplied; });
-							const int32 FromArm = ArmSegments->IndexOfByKey(FromSeg);
-							const int32 ToArm = ArmSegments->IndexOfByKey(ToSeg);
-							if (BendArc.Num() == 0 && FromWidth != ToWidth && Bend != nullptr && FromArm != INDEX_NONE && ToArm != INDEX_NONE)
-							{
-								// The lanes' circle: the wider arm's lane line's distance from the centre.
-								const FVector2D Wide = FromWidth > ToWidth ? PA : PB;
-								const FVector2D WideDir = FromWidth > ToWidth ? ArriveDir : LeaveDir;
-								GuidelineGeom::FRampedBend Ramped;
-								Ramped.Centre = Inside->Centre;
-								Ramped.Radius = FMath::Abs(FVector2D::CrossProduct(Inside->Centre - Wide, WideDir));
-								Ramped.RefRadius = Bend->RefRadius;
-								Ramped.LIn = Bend->Ramp[FromArm];
-								Ramped.LOut = Bend->Ramp[ToArm];
-								GuidelineGeom::RampedBendLane(PA, ArriveDir, PB, LeaveDir, Ramped, BendArc);
-							}
-						}
-					}
-
-					// A WIDTH TAPER IS DRIVEN ON AN S (user ruling 2026-09-25). At a straight-through
-					// node of two arms whose lanes sit at different offsets, the solver has inset
-					// both cuts (FRoadNetworkSolver's WidthTaperLength) and the lane ends face each
-					// other across the taper, parallel and a lane-offset step apart. One quadratic
-					// cannot join two parallel lines - the chord above was a straight diagonal with a
-					// kink at each end, and with the cuts at the node it was a 90 degree jog. So the
-					// turn is TWO edges meeting at the midpoint, GuidelineGeom's lane change: each a
-					// symmetric quadratic of tangent s deflecting by b, with tan(b/2) = across/along
-					// and 2 s sin b = across, so the pair runs exactly from end to end and is tangent
-					// to both lanes and to each other. Each is sampled once by GuidelineGeom like any
-					// edge, and measured like any turn - its MinRadius is what route search gates on.
-					// Only at a TWO-arm node: a through road's width change inside a larger junction
-					// keeps the chord, and is not this ruling's.
-					// THE TRIGGER IS "THE LANES ARE OFFSET", NOT "THE WIDTHS DIFFER" - intended: what
-					// the S removes is a lateral step in the LINE, whatever made it. So a same-width
-					// profile change whose lanes sit at other offsets tapers too, and so does a
-					// one-lane bidirectional road meeting a two-lane one (its centreline steps a
-					// quarter-width onto each lane).
-					// ENFORCED BY: Airside.Build.WidthTaper.SameWidthOffsetLanes, Airside.Build.WidthTaper.OneLaneMeetsTwo
-					// ENFORCED BY: Airside.Build.WidthTaper.Drivable, Airside.Build.WidthTaper.LanesContinuous
-					bool bTaperS = false;
-					FVector2D TaperMid = FVector2D::ZeroVector;
-					FVector2D TaperControlOut = FVector2D::ZeroVector;
-					FVector2D TaperFrom = FVector2D::ZeroVector;
-					FVector2D TaperTo = FVector2D::ZeroVector;
-					FVector2D TaperTravel = FVector2D::ZeroVector;
-					if (ArmSegments->Num() == 2
-						&& RoadGeom::IsStraightThrough(RoadGeom::AngleBetween(
-							Network.GetOutgoingTangent(FromSeg, NodeId), Network.GetOutgoingTangent(ToSeg, NodeId))))
-					{
-						// GuidelineGeom's ONE lane-change construction, the same the solver sized
-						// the inset with (LaneChangeLength). Along <= 1 uu (a taper capped to
-						// nothing) leaves the chord - see the spec's Open list.
-						const FVector2D Travel = -Network.GetOutgoingTangent(FromSeg, NodeId).GetSafeNormal();
-						FVector2D ControlIn, Mid, ControlOut;
-						if (GuidelineGeom::LaneChange(Network.GetGuidelineNode(Turn.A)->Position,
-							Network.GetGuidelineNode(Turn.B)->Position, Travel, ControlIn, Mid, ControlOut))
-						{
-							TaperMid = Mid;
-							TaperFrom = Network.GetGuidelineNode(Turn.A)->Position;
-							TaperTo = Network.GetGuidelineNode(Turn.B)->Position;
-							TaperTravel = Travel;
-							Turn.Control = ControlIn;
-							TaperControlOut = ControlOut;
-							bTaperS = true;
-						}
-					}
+					// THE TURN'S SHAPE, DECIDED ONCE (issue #305): a bend's arc concentric with the
+					// pavement's inner edge, a width taper's S, or the plain chord - see
+					// ClassifyTurn's own comment (Build/TurnShape.h) for the construction and the
+					// rulings behind each. It also sets Turn.Control for the TaperS case (its own
+					// ControlIn), exactly as the inline construction this replaced did.
+					const FTurnGeometry TurnGeom = ClassifyTurn(Network, Solved, Pair.Value, Pair.Key, NodeId,
+						*ArmSegments, FromSeg, ToSeg, FromProfile, ToProfile, Declared.Class, ToDeclared.Class, Turn);
 
 					// A turn is usable only by what BOTH arms admit - the same reasoning
 					// already applied to MaxWingspan below, which this previously
@@ -1168,37 +1057,42 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// BendArcPieceSweep of its turn; everything below - the measure, the lock warning,
 					// the add - is done to each piece alike.
 					TArray<FGuidelineEdge, TInlineAllocator<4>> Pieces;
-					if (BendArc.Num() > 0)
+					switch (TurnGeom.Shape)
+					{
+					case ETurnShape::BendArc:
 					{
 						// THE BEND'S ARC, piece by piece; its last End is Turn.B's position verbatim,
 						// and the last piece joins that node BY HANDLE.
 						const FGuidelineNodeId Last = Turn.B;
 						FGuidelineNodeId Prev = Turn.A;
-						for (int32 Index = 0; Index < BendArc.Num(); ++Index)
+						for (int32 Index = 0; Index < TurnGeom.BendArc.Num(); ++Index)
 						{
 							FGuidelineEdge Piece = Turn;
 							Piece.A = Prev;
-							Piece.B = Index + 1 == BendArc.Num() ? Last : Network.AddGuidelineNode(BendArc[Index].End);
-							Piece.Control = BendArc[Index].Control;
+							Piece.B = Index + 1 == TurnGeom.BendArc.Num() ? Last : Network.AddGuidelineNode(TurnGeom.BendArc[Index].End);
+							Piece.Control = TurnGeom.BendArc[Index].Control;
 							Pieces.Add(Piece);
 							Prev = Piece.B;
 						}
 						++BendArcs;
+						break;
 					}
-					else if (bTaperS)
+					case ETurnShape::TaperS:
 					{
-						const FGuidelineNodeId Mid = Network.AddGuidelineNode(TaperMid);
+						const FGuidelineNodeId Mid = Network.AddGuidelineNode(TurnGeom.TaperMid);
 						FGuidelineEdge Second = Turn;
 						Turn.B = Mid;
 						Second.A = Mid;
-						Second.Control = TaperControlOut;
+						Second.Control = TurnGeom.TaperControlOut;
 						Pieces.Add(Turn);
 						Pieces.Add(Second);
 						++Tapers;
+						break;
 					}
-					else
-					{
+					case ETurnShape::Chord:
+					default:
 						Pieces.Add(Turn);
+						break;
 					}
 					for (FGuidelineEdge& Piece : Pieces)
 					{
@@ -1259,7 +1153,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 							// "right-angle corner" text below names the wrong fix. Said here with the
 							// vehicle, the length the S needed and the segment length that holds it.
 							// ENFORCED BY: Airside.Build.WidthTaper.CappedTaperWarns
-							if (bTaperS)
+							if (TurnGeom.Shape == ETurnShape::TaperS)
 							{
 								const FChassis& Sizing = FromProfile->GetTotalWidth() >= ToProfile->GetTotalWidth() ? FromDesign : ToDesign;
 								const double SizingRadius = Sizing.TightestFollowableRadius();
@@ -1269,8 +1163,8 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 								// Once per S: both pieces are the same curve mirrored.
 								if (SizingRadius > 0.0 && Delivered < SizingRadius && &Piece == &Pieces[0])
 								{
-									const double Shift = FMath::Abs(FVector2D::CrossProduct(TaperTravel, TaperTo - TaperFrom));
-									const double Have = FVector2D::DotProduct(TaperTo - TaperFrom, TaperTravel);
+									const double Shift = FMath::Abs(FVector2D::CrossProduct(TurnGeom.TaperTravel, TurnGeom.TaperTo - TurnGeom.TaperFrom));
+									const double Have = FVector2D::DotProduct(TurnGeom.TaperTo - TurnGeom.TaperFrom, TurnGeom.TaperTravel);
 									const double NeedLength = GuidelineGeom::LaneChangeLength(SizingRadius, Shift);
 									UE_LOG(LogAirside, Warning,
 										TEXT("Width taper at (%.0f,%.0f): its S-curve radius is %.0f uu, but the vehicle "
@@ -1286,7 +1180,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 							// A BEND'S ARC WARNS ONCE, from its first piece, on its tightest piece's radius
 							// and the cut-back its lane ends sit at (Turn.Control, the lane lines' crossing
 							// - each piece's own control is only its slice of the arc).
-							else if (Needed > 0.0 && (BendArc.Num() == 0 || &Piece == &Pieces[0]))
+							else if (Needed > 0.0 && (TurnGeom.Shape != ETurnShape::BendArc || &Piece == &Pieces[0]))
 							{
 								double Delivered = GuidelineGeom::TightestRadius(
 									Network.GetGuidelineNode(Piece.A)->Position,
@@ -1294,7 +1188,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 									Network.GetGuidelineNode(Piece.B)->Position);
 								for (const FGuidelineEdge& Other : Pieces)
 								{
-									if (BendArc.Num() > 0)
+									if (TurnGeom.Shape == ETurnShape::BendArc)
 									{
 										Delivered = FMath::Min(Delivered, GuidelineGeom::TightestRadius(
 											Network.GetGuidelineNode(Other.A)->Position, Other.Control,
@@ -1312,7 +1206,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 										Node->Position.X, Node->Position.Y, Delivered, Needed,
 										LargestServiceVehicle.Wheelbase(), LargestServiceVehicle.Ground.MaxSteerDegrees,
 										FVector2D::Distance(
-											Network.GetGuidelineNode(Piece.A)->Position, BendArc.Num() > 0 ? Turn.Control : Piece.Control),
+											Network.GetGuidelineNode(Piece.A)->Position, TurnGeom.Shape == ETurnShape::BendArc ? Turn.Control : Piece.Control),
 										Needed * UE_DOUBLE_SQRT_2);
 								}
 							}
