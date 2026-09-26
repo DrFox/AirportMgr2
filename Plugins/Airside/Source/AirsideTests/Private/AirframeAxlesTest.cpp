@@ -5,6 +5,8 @@
 #include "Misc/AutomationTest.h"
 #include "AnimationRuntime.h"
 #include "Engine/SkeletalMesh.h"
+#include "HAL/FileManager.h"
+#include "Misc/Paths.h"
 #include "Model/GroundTraffic.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadEntity.h"
@@ -637,6 +639,98 @@ bool FFieldLengthsCoverTheRollContentTest::RunTest(const FString& Parameters)
 			*Type->GetOutermost()->GetName()),
 			JudgementCovered.Contains(Type->GetOutermost()->GetName()));
 	}
+
+	return true;
+}
+
+/**
+ * ISSUE #293's OWN PIN: "number of UAircraftType assets with a mesh == number of spec
+ * files". Every test above checks that the registry and a C++ table AGREE where they
+ * overlap - MeasuredTypesFitTheirLettersRow, PushbackNeedsAuthored and
+ * FieldLengthsCoverTheRoll all iterate EveryAircraftType() and would silently pass a
+ * registry with FEWER entries than the fleet actually has, the same shape that let Plane4
+ * and Plane7 go unchecked for as long as they did. This is the other direction: a spec with
+ * no imported asset yet, or an asset nobody wrote a spec for, is caught by NEITHER of those
+ * tests, and this is what catches it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryMeshedTypeHasASpecTest,
+	"Airside.Content.EveryMeshedTypeHasASpec",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryMeshedTypeHasASpecTest::RunTest(const FString& Parameters)
+{
+	// THE EXPECTED ASSET NAME IS A CONVENTION, TYPED HERE, NOT A READ OFF THE SPEC.
+	// build_pushback_needs.py can afford to read spec.type_name because it runs IN Python;
+	// this test cannot import a Python table (the same rule FieldLengthsCoverTheRoll's
+	// Judgement[] rows above already state), so it hard-codes the naming convention every
+	// one of the sixteen aircraft/<key>.py files follows today - grep TYPE_NAME
+	// aircraft/plane*.py: aircraft/planeN.py always declares TYPE_NAME =
+	// "DA_Aircraft_PlaneN". This is the SAME transform build_aircraft_type.py's
+	// fleet_pretty defaults to (key[0].upper() + key[1:]) - not a coincidence, a convention
+	// this test now holds rather than assumes: a spec file that broke it would fail HERE.
+	const FString AircraftDir = FPaths::ProjectDir() / TEXT("Tools/Python/aircraft");
+	TArray<FString> Files;
+	IFileManager::Get().FindFiles(Files, *AircraftDir, TEXT(".py"));
+
+	TSet<FString> ExpectedAssets;
+	for (const FString& File : Files)
+	{
+		const FString Stem = FPaths::GetBaseFilename(File);
+		// __init__.py IS THE PACKAGE, NOT A SPEC. A LEADING UNDERSCORE IS A HELPER MODULE -
+		// none exist today, and the exclusion is here so the first one does not silently
+		// count as a seventeenth aeroplane.
+		if (Stem.IsEmpty() || Stem.StartsWith(TEXT("_")))
+		{
+			continue;
+		}
+		ExpectedAssets.Add(FString::Printf(TEXT("/Game/Entities/DA_Aircraft_%s%s"),
+			*Stem.Left(1).ToUpper(), *Stem.Mid(1)));
+	}
+
+	// A FLOOR OF ITS OWN, so an empty or missing aircraft/ directory (a checkout problem,
+	// not a fleet problem) fails loudly here rather than as a silent 0 == 0 below.
+	if (!TestTrue(*FString::Printf(TEXT("found aircraft/*.py spec files under %s"), *AircraftDir),
+		ExpectedAssets.Num() > 0))
+	{
+		return false;
+	}
+
+	TSet<FString> ActualAssets;
+	for (const UAircraftType* Type : EveryAircraftType())
+	{
+		ActualAssets.Add(Type->GetOutermost()->GetName());
+	}
+
+	TestEqual(TEXT("the number of UAircraftType assets with a mesh equals the number of "
+		"aircraft/*.py spec files - issue #293's own Pin"),
+		ActualAssets.Num(), ExpectedAssets.Num());
+
+	TArray<FString> SpecsWithNoAsset;
+	for (const FString& Expected : ExpectedAssets)
+	{
+		if (!ActualAssets.Contains(Expected))
+		{
+			SpecsWithNoAsset.Add(Expected);
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("every spec file has a matching UAircraftType asset with "
+		"a mesh - missing: %s"), SpecsWithNoAsset.Num() > 0
+			? *FString::Join(SpecsWithNoAsset, TEXT(", ")) : TEXT("none")),
+		SpecsWithNoAsset.Num() == 0);
+
+	TArray<FString> AssetsWithNoSpec;
+	for (const FString& Actual : ActualAssets)
+	{
+		if (!ExpectedAssets.Contains(Actual))
+		{
+			AssetsWithNoSpec.Add(Actual);
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("every UAircraftType asset with a mesh has a matching "
+		"aircraft/*.py spec file - unmatched: %s"), AssetsWithNoSpec.Num() > 0
+			? *FString::Join(AssetsWithNoSpec, TEXT(", ")) : TEXT("none")),
+		AssetsWithNoSpec.Num() == 0);
 
 	return true;
 }
