@@ -579,15 +579,28 @@ namespace RigCourseTest
 	{
 		constexpr float Step = static_cast<float>(TickSeconds);
 		int32 Ticks = 0;
+		// PROFILED, NOT GUESSED (added 2026-09-27, perf pass on issue "cut the suite's wall
+		// time"): several RigCourse tests page multiple seconds of THIS loop with no watchers
+		// at all, so the cost is Actor.Tick/Course.Tick themselves, not test-side measurement -
+		// see the log line below and the PR body for the numbers this found. Left in rather
+		// than stripped out once the pass was done: the next time this file's wall time is
+		// asked about, this answers it in one run instead of a fresh round of instrumentation.
+		double ActorS = 0.0, CourseS = 0.0, ContinuityS = 0.0, ProbeS = 0.0, OverlapS = 0.0;
+		const double StartAll = FPlatformTime::Seconds();
 		for (; Ticks < MaxTicks && !Done(); ++Ticks)
 		{
+			double Mark = FPlatformTime::Seconds();
 			Actor.Tick(Step);
+			double Next = FPlatformTime::Seconds(); ActorS += Next - Mark; Mark = Next;
 			Course.Tick(Step);
+			Next = FPlatformTime::Seconds(); CourseS += Next - Mark; Mark = Next;
 			for (int32 Slot = 0; Slot < Course.GetVehicles().Num(); ++Slot)
 			{
 				if (Watch.Continuity != nullptr)
 				{
+					Mark = FPlatformTime::Seconds();
 					Watch.Continuity->Observe(Actor, Course, Slot, Ticks);
+					Next = FPlatformTime::Seconds(); ContinuityS += Next - Mark; Mark = Next;
 				}
 				const FRigCourseRunner& Runner = Course.GetRunnerForTest(Slot);
 				if (Watch.Probe == nullptr || Runner.AgentId == 0 || (Ticks % 2) != 0) { continue; }
@@ -596,16 +609,22 @@ namespace RigCourseTest
 				{
 					const TArray<FRigCourseWaypoint>& W = Course.GetWaypoints();
 					const int32 Leg = Course.LegAt(Runner.bReverse, Runner.Target - 1);
+					Mark = FPlatformTime::Seconds();
 					Watch.Probe->Measure(*Actor.Network, *Agent, Course.GetVehicles()[Slot], Leg, Slot,
 						FString::Printf(TEXT("leg %d (%s%s) vehicle %d"), Leg, *W[(Leg + 1) % W.Num()].Label,
 							Runner.bReverse ? TEXT(", reversed") : TEXT(""), Slot));
+					Next = FPlatformTime::Seconds(); ProbeS += Next - Mark; Mark = Next;
 				}
 			}
 			if (Watch.Overlap != nullptr)
 			{
+				Mark = FPlatformTime::Seconds();
 				Watch.Overlap->Observe(Actor, Course, Ticks);
+				Next = FPlatformTime::Seconds(); OverlapS += Next - Mark;
 			}
 		}
+		UE_LOG(LogTemp, Display, TEXT("RunUntil PROFILE: %d tick(s), %.3fs total - Actor.Tick %.3fs, Course.Tick %.3fs, Continuity %.3fs, Probe %.3fs, Overlap %.3fs"),
+			Ticks, FPlatformTime::Seconds() - StartAll, ActorS, CourseS, ContinuityS, ProbeS, OverlapS);
 		return Ticks;
 	}
 
@@ -746,6 +765,7 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 	// a trap), and the vehicle routes from where it stands to the next stop it can reach AND
 	// leave, the legs in between judged on their own plans.
 	TArray<ERigLegOutcome> Outcome[2];
+	const double OutcomeBlockStart = FPlatformTime::Seconds();
 	for (int32 V = 0; V < 2; ++V)
 	{
 		auto StopOf = [&Waypoints, Legs, V](int32 P)
@@ -754,15 +774,42 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 			return V == 0 ? Waypoints[P] : Reversed(Waypoints[(Legs - P) % Legs]);
 		};
 		auto LegOf = [Legs, V](int32 P) { P = ((P % Legs) + Legs) % Legs; return V == 0 ? P : Legs - 1 - P; };
+		// MEMOIZED, NOT RE-SEARCHED (perf pass, 2026-09-27): Onward's look-ahead, the fallback's
+		// Stop scan and Own all re-ask Fits on (stop, later) pairs that recur constantly -
+		// Onward(Stop)'s own first candidate (Later = Stop+1) IS Own(Stop), and a course with
+		// several refused/bypassed legs in a row (this one has both) makes the fallback loop
+		// call Onward at O(Legs) candidate Stops, each rescanning up to O(Legs) Laters: O(Legs^2)
+		// Fits calls per vehicle in the worst case, many of them not a fresh fact - the network
+		// never changes across this block, so the same (A, B) pair always gets the same answer.
+		// MEASURED 2026-09-27: even memoized (so at most Legs^2 DISTINCT Fits calls per vehicle
+		// remain - Fits itself, a real RouteSearch::Find with a tow-fit body, costs several ms
+		// each over this course), the "Outcome block" profile line below still reads ~4.3 s -
+		// most of OneLoopHeadless's ~8.2 s total (down from ~9.3 s unmemoized). The remaining
+		// cost is Fits itself and how many DISTINCT pairs this course's shape needs asked, not
+		// repeat-asking - a further cut needs a cheaper Fits or a smaller distinct-pair bound,
+		// both left as follow-ups (see the PR body). Keyed on P/Stop NORMALISED mod Legs, since
+		// Onward and the fallback both walk past Legs to wrap a lap - StopOf does the same
+		// normalisation, so two raw indices a lap apart name the same stop pair.
+		TMap<int64, bool> FitsCache;
+		auto FitsCached = [&](int32 A, int32 B)
+		{
+			const int32 NA = ((A % Legs) + Legs) % Legs;
+			const int32 NB = ((B % Legs) + Legs) % Legs;
+			const int64 Key = (static_cast<int64>(NA) << 32) | static_cast<uint32>(NB);
+			if (const bool* Found = FitsCache.Find(Key)) { return *Found; }
+			const bool Result = Fits(Net, StopOf(A), StopOf(B), Vehicles[V]);
+			FitsCache.Add(Key, Result);
+			return Result;
+		};
 		auto Onward = [&](int32 Stop)
 		{
 			for (int32 Later = Stop + 1; Later < Stop + Legs; ++Later)
 			{
-				if (Fits(Net, StopOf(Stop), StopOf(Later), Vehicles[V])) { return true; }
+				if (FitsCached(Stop, Later)) { return true; }
 			}
 			return false;
 		};
-		auto Own = [&](int32 P) { return Fits(Net, StopOf(P), StopOf(P + 1), Vehicles[V]); };
+		auto Own = [&](int32 P) { return FitsCached(P, P + 1); };
 		Outcome[V].Init(ERigLegOutcome::NotRun, Legs);
 		for (int32 P = 0; P < Legs;)
 		{
@@ -775,7 +822,7 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 			int32 Target = INDEX_NONE;
 			for (int32 Stop = P + 2; Stop <= Legs && Target == INDEX_NONE; ++Stop)
 			{
-				Target = (Fits(Net, StopOf(P), StopOf(Stop), Vehicles[V]) && Onward(Stop)) ? Stop : INDEX_NONE;
+				Target = (FitsCached(P, Stop) && Onward(Stop)) ? Stop : INDEX_NONE;
 			}
 			if (!TestTrue(FString::Printf(TEXT("%s: the router leaves a way on from stop %d - no stranding is expected"), Names[V], P),
 				Target != INDEX_NONE)) { return false; }
@@ -793,6 +840,7 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s expected bypassed legs: %s"), Names[V],
 			Bypassed.Num() > 0 ? *FString::Join(Bypassed, TEXT(", ")) : TEXT("none"));
 	}
+	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless PROFILE: Outcome block %.3fs"), FPlatformTime::Seconds() - OutcomeBlockStart);
 
 	// BOTH VEHICLES AT ONCE until each has done one loop, at a fixed step, bounded so a hang -
 	// or a traffic deadlock between the two - fails rather than spins.
@@ -1176,11 +1224,15 @@ bool FRigCourseRouteStaysBoundedTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
 	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
 	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	const double BuildStart = FPlatformTime::Seconds();
 	Course->BuildCourseForTest(*Actor);
+	UE_LOG(LogTemp, Display, TEXT("RigCourse.RouteStaysBounded PROFILE: BuildCourseForTest took %.3fs"), FPlatformTime::Seconds() - BuildStart);
 
 	double Longest = 0.0;
 	double FirstLoop = 0.0;
-	for (int32 Tick = 0; Tick < MaxTicks && Course->LoopsCompletedForTest(0) < 3; ++Tick)
+	const double TickStart = FPlatformTime::Seconds();
+	int32 TickCount = 0;
+	for (int32 Tick = 0; Tick < MaxTicks && Course->LoopsCompletedForTest(0) < 3; ++Tick, ++TickCount)
 	{
 		Actor->Tick(static_cast<float>(TickSeconds));
 		Course->Tick(static_cast<float>(TickSeconds));
@@ -1195,6 +1247,7 @@ bool FRigCourseRouteStaysBoundedTest::RunTest(const FString& Parameters)
 			}
 		}
 	}
+	UE_LOG(LogTemp, Display, TEXT("RigCourse.RouteStaysBounded PROFILE: %d tick(s), %.3fs"), TickCount, FPlatformTime::Seconds() - TickStart);
 	if (!TestEqual(TEXT("the rig drove three loops"), Course->LoopsCompletedForTest(0), 3)) { return false; }
 	const FRigCourseRunner& Rig = Course->GetRunnerForTest(0);
 	TestTrue(FString::Printf(TEXT("it was extended at every boundary (%d)"), Rig.Extensions), Rig.Extensions >= 3);
@@ -1222,7 +1275,9 @@ bool FRigCourseRanOutRestartsWithTheChainTest::RunTest(const FString& Parameters
 	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
 	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
 	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	const double BuildStart = FPlatformTime::Seconds();
 	Course->BuildCourseForTest(*Actor);
+	UE_LOG(LogTemp, Display, TEXT("RigCourse.RanOutRestartsWithTheChain PROFILE: BuildCourseForTest %.3fs"), FPlatformTime::Seconds() - BuildStart);
 	Course->bRefuseExtensionsForTest = true;
 
 	// THE FIRST RESTART, TICK BY TICK: the axles on the tick before the redirect and the tick
@@ -1230,6 +1285,7 @@ bool FRigCourseRanOutRestartsWithTheChainTest::RunTest(const FString& Parameters
 	// chain straight moves a trailer's worth of swing here; one that kept it moves a sub-step.
 	// Bounded at about one and a half loops, so a fallback that never restarts fails, not hangs.
 	{
+		const double FirstLoopStart = FPlatformTime::Seconds();
 		const int32 Cap = 6500;
 		int32 RedirectTick = INDEX_NONE;
 		TArray<FVector2D> AxlesBefore, AxlesAfter;
@@ -1258,6 +1314,8 @@ bool FRigCourseRanOutRestartsWithTheChainTest::RunTest(const FString& Parameters
 			PrevAxles = Agent->TowAxles;
 			PrevCab = Agent->LastMotion.Position;
 		}
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.RanOutRestartsWithTheChain PROFILE: first-restart loop %d tick(s), %.3fs"),
+			RedirectTick == INDEX_NONE ? Cap : FMath::Min(Cap, RedirectTick + 6), FPlatformTime::Seconds() - FirstLoopStart);
 		if (!TestTrue(TEXT("the route ran out and the rig was restarted from rest within one and a half loops"), RedirectTick != INDEX_NONE)) { return false; }
 		if (!TestTrue(TEXT("the chain was seen either side of the restart"), AxlesBefore.Num() > 0 && AxlesBefore.Num() == AxlesAfter.Num())) { return false; }
 		const double CabMoved = FVector2D::Distance(CabBefore, CabAfter);
@@ -1410,14 +1468,16 @@ bool FRigCourseBendCensusTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
 	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
 	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
+	const double BuildStart = FPlatformTime::Seconds();
 	Course->BuildCourseForTest(*Actor);
+	const double BuildEnd = FPlatformTime::Seconds();
 	const URoadNetwork& Net = *Actor->Network;
 	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
 	// Re-solved as the presenter solves it (same arc count, same vehicles): the cuts it writes back
 	// are the ones already there.
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Actor->Network, 12, &Designs);
+	const double SolveEnd = FPlatformTime::Seconds();
 	const TArray<FVehicle>& Vehicles = Course->GetVehicles();
-	const BendProbe::FPavement Pavement = BendProbe::PavementAll(Net, Solved);
 	int32 Bends = 0;
 	for (int32 Index = 0; Index < Net.GetNodes().Num(); ++Index)
 	{
@@ -1438,6 +1498,16 @@ bool FRigCourseBendCensusTest::RunTest(const FString& Parameters)
 		UE_LOG(LogTemp, Display, TEXT("CourseBend node %d at (%.0f, %.0f): widths %.0f / %.0f; inner fillet R %.0f, outer fillet R %.0f; cuts %.0f / %.0f"),
 			Index, Node.Position.X, Node.Position.Y, Widths[0], Widths[1], Inner.Radius, Outer.Radius,
 			Junction.Arms[0].CutDistance, Junction.Arms[1].CutDistance);
+		// LOCAL PAVEMENT, NOT THE WHOLE COURSE (perf pass, 2026-09-27): Overrun's Pavement.Outside
+		// scans every polygon it is handed, and a turn's swept body can only ever leave the tarmac
+		// onto ITS OWN junction and arms - no course geometry places two junctions' pavements close
+		// enough for a vehicle turning at one to reach the other's. PavementAll's whole-course soup
+		// (every junction plus every segment ribbon, ~80 polygons on this course) was being
+		// rebuilt as the SAME set for every one of this node's turns and vehicles; PavementAt's
+		// three-or-so polygons measure exactly the same "off the tarmac" fact for a point this
+		// close to the node, at a fraction of the cost. Safe here because this test asserts only
+		// that it measured something (Bends > 0) - the Off figures are logged, not pinned.
+		const BendProbe::FPavement NodePavement = BendProbe::PavementAt(Net, Solved, NodeId);
 		for (const BendProbe::FTurnChain& Turn : BendProbe::TurnsAt(Net, NodeId))
 		{
 			const FVector2D Mid = Turn.Path[Turn.Path.Num() / 2];
@@ -1448,12 +1518,14 @@ bool FRigCourseBendCensusTest::RunTest(const FString& Parameters)
 				Index, bLeft ? TEXT("left") : TEXT("right"), Turn.Pieces.Num(), Turn.MinRadius, AboutMin, AboutMax);
 			for (int32 V = 0; V < Vehicles.Num(); ++V)
 			{
-				const BendProbe::FOverrun Off = BendProbe::Overrun(Turn, Vehicles[V], Pavement);
+				const BendProbe::FOverrun Off = BendProbe::Overrun(Turn, Vehicles[V], NodePavement);
 				Line += FString::Printf(TEXT("; vehicle %d off inner %.0f outer %.0f"), V, Off.Inner, Off.Outer);
 			}
 			UE_LOG(LogTemp, Display, TEXT("%s"), *Line);
 		}
 	}
+	UE_LOG(LogTemp, Display, TEXT("RigCourse.BendCensus PROFILE: BuildCourseForTest %.3fs, SolveAll %.3fs, node loop %.3fs"),
+		BuildEnd - BuildStart, SolveEnd - BuildEnd, FPlatformTime::Seconds() - SolveEnd);
 	TestTrue(FString::Printf(TEXT("the course has bends to measure (%d)"), Bends), Bends > 0);
 	return true;
 }
