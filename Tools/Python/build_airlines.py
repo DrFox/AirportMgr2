@@ -30,6 +30,7 @@ PLANE10 = "/Game/Entities/DA_Aircraft_Plane10.DA_Aircraft_Plane10"
 PLANE12 = "/Game/Entities/DA_Aircraft_Plane12.DA_Aircraft_Plane12"
 PLANE15 = "/Game/Entities/DA_Aircraft_Plane15.DA_Aircraft_Plane15"
 PLANE16 = "/Game/Entities/DA_Aircraft_Plane16.DA_Aircraft_Plane16"
+PLANE17 = "/Game/Entities/DA_Aircraft_Plane17.DA_Aircraft_Plane17"
 
 # name -> (display name, fleet asset paths, offers per game day)
 #
@@ -111,8 +112,12 @@ AIRLINES = {
     #
     # 2026-09-26: THE BARON JOINS, THE FIRST PISTON TWIN. 710 m of grass, under the Caravan's
     # 740; what it adds is a twin on a Code A stand.
+    #
+    # 2026-09-27: THE SENECA JOINS, THE SECOND PISTON TWIN. 500 m of grass, under the Baron's
+    # 710; the twin a short strip can take.
     "DA_Airline_Cumbria": ("Cumbria Air",
-                           [PIPER, PLANE1, PLANE2, PLANE5, PLANE10, PLANE12, PLANE15, PLANE16],
+                           [PIPER, PLANE1, PLANE2, PLANE5, PLANE10, PLANE12, PLANE15, PLANE16,
+                            PLANE17],
                            4.0),
 }
 

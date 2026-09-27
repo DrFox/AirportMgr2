@@ -459,6 +459,23 @@ SPECS = [
              "props.",
     ),
     Spec(
+        key="plane17",
+        source=MODELS + r"\plane17\export\plane17.glb",
+        mesh_dir="/Game/Aircraft/Plane17",
+        skel_name="SK_Plane17",
+        # plane16's NAMES AND SHAPE: one wheel_L / wheel_R mesh and bone a side, retracting.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, the contact patch - plane17/scripts/build_export.py's origin, s 1.254.
+        origin_on="front",
+        note="Piper PA-34-200 Seneca I, the second piston twin. 11.85 m span, 8.71 m long, "
+             "3.02 m tall - Piper's dimensioned three-view (plane17/SPEC.md). LEVEL on its "
+             "gear. Origin on the NOSE gear. Twelve joints: retracting gear (mains inboard, "
+             "nose forward), two nose clamshells, two counter-rotating 2-blade props.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",
