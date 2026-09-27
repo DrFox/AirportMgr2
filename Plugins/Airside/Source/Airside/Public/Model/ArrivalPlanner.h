@@ -58,6 +58,14 @@ enum class EArrivalRefusal : uint8
 	 *  differs: draw a bigger stand, not a taxiway. FArrivalPlan::AircraftWingspan names the
 	 *  letter needed. */
 	NoStandBigEnough,
+
+	/** Stands exist and at least one is big enough, but every big-enough one is paved too
+	 *  weakly for this aircraft. The player's fix: pave a stand, not draw a bigger one. */
+	NoStandPavedEnough,
+
+	/** A stand is big enough and paved enough, but a service this aircraft needs cannot work on
+	 *  its pavement. Unreachable until StandAdmission::PavementAdmitsRole restricts a role. */
+	NoStandServiceable,
 };
 
 /**

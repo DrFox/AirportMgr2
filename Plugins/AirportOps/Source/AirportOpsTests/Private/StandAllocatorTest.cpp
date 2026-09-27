@@ -232,4 +232,41 @@ bool FStandAllocatorNeverReservesADepotTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// STAND ADMISSION'S RULE, NOW THIS ALLOCATOR'S TOO (shared-pavement Task 9): admission moved
+// from the raw IcaoCode::StandAdmits size check to StandAdmission::Judge, the one rule
+// ArrivalPlanner::ChooseStand also calls - so a stand this allocator holds for a flight is
+// never one ChooseStand would refuse the same aircraft at touchdown for its pavement either,
+// not only its letter.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandAllocatorSkipsAGrassStandForATarmacFlightTest,
+	"AirportOps.Model.StandAllocator.SkipsAGrassStandForATarmacFlight",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandAllocatorSkipsAGrassStandForATarmacFlightTest::RunTest(const FString& Parameters)
+{
+	// TWO STANDS OF THE SAME SIZE, so a rank tie would first-found-win the grass one if
+	// admission still read size alone - the fixing edit is what stops that.
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId GrassId = Network->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 0.0), 0.0,
+		3600.0, Stand->PoseRole, Stand->Trucks);
+	const FEntityInstanceId TarmacId = Network->PlaceEntity(Stand, Stand->Anchors, FVector2D(20000.0, 0.0), 0.0,
+		3600.0, Stand->PoseRole, Stand->Trucks);
+	FRoadNetworkTestAccess Access(*Network);
+	Access.SetEntityPavementForTest(GrassId, EPavement::Grass);
+	Access.SetEntityPavementForTest(TarmacId, EPavement::Tarmac);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	UStandAllocator* Allocator = NewObject<UStandAllocator>();
+	UFlight* Flight = FlightNeeding(3400.0, 1);
+	Flight->Airframe.MinimumPavement = EPavement::Tarmac;
+
+	if (!TestTrue(TEXT("a flight needing tarmac is still reserved a stand"),
+		Allocator->Reserve(*Traffic, *Network, *Flight))) { return false; }
+	const FEntityInstance* Chosen = Network->GetEntity(Flight->Stand);
+	TestTrue(TEXT("the tarmac stand, not the grass one of its own size"),
+		Chosen != nullptr && Chosen->Pavement == EPavement::Tarmac);
+	return true;
+}
+
 #endif

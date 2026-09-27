@@ -346,6 +346,64 @@ bool FArrivalPlannerNoStandBigEnoughTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------------------
+// (f2) shared-pavement Task 9: THROUGH THE PLANNER, not the judge - an arrival whose only
+// stand is big enough but grass is told to PAVE it, not to draw a bigger stand and not to
+// build a taxiway that already reaches it.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalPlannerNoStandPavedEnoughTest,
+	"Airside.Model.ArrivalPlanner.NoStandPavedEnough",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalPlannerNoStandPavedEnoughTest::RunTest(const FString& Parameters)
+{
+	// NoStandBigEnough's OWN SETUP, copied verbatim: only the stand's pavement and the
+	// airframe's need differ, so this is the SAME network with only the one input
+	// StandAdmission::Judge checks first - the surface - now wrong.
+	FAirframe Airframe = TestAirframes::Piper();
+	const double Needed = FLandingRun::RequiredLandingDistance(
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+	const double RunwayLength = Needed * 1.5;
+
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
+
+	if (!TestTrue(TEXT("the runway profile has a centre guideline to declare a limit on"),
+		Runway->Guidelines.Num() > 0)) { return false; }
+	Runway->Guidelines[0].MaxWingspan = IcaoCode::MaxWingspanForLetter(EIcaoCode::F);
+
+	const FVector2D ThresholdAt(0.0, 0.0);
+	const FVector2D ExitAt(RunwayLength * 0.8, 0.0);
+	const FRoadNodeId Threshold = Network->AddNode(ThresholdAt);
+	const FRoadNodeId Exit = Network->AddNode(ExitAt);
+	const FRoadNodeId Far = Network->AddNode(FVector2D(RunwayLength, 0.0));
+	Network->AddStraightSegment(Threshold, Exit, Runway);
+	Network->AddStraightSegment(Exit, Far, Runway);
+	const FRoadNodeId TaxiEnd = Network->AddNode(ExitAt + FVector2D(0.0, -20000.0));
+	Network->AddStraightSegment(Exit, TaxiEnd, Taxiway);
+
+	// ONE CODE C STAND beside the taxiway, big enough for this aircraft - LAID ON GRASS, the
+	// one fact under test. Airframe.MinimumPavement follows below, set to Tarmac.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId StandId = Network->PlaceEntity(Stand, Stand->Anchors,
+		ExitAt + FVector2D(9000.0, -10000.0), 0.0, IcaoCode::DesignSpanForLetter(EIcaoCode::C),
+		Stand->PoseRole, Stand->Trucks);
+	FRoadNetworkTestAccess(*Network).SetEntityPavementForTest(StandId, EPavement::Grass);
+	Airframe.MinimumPavement = EPavement::Tarmac;
+
+	TestGraph::Rebuild(*Network);
+
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe, nullptr);
+	TestEqual(TEXT("refused for pavement, not size or route"), Plan.Why, EArrivalRefusal::NoStandPavedEnough);
+
+	const FString Sentence = ArrivalPlanner::DescribeRefusal(Plan);
+	TestTrue(FString::Printf(TEXT("the refusal says to pave, not build: '%s'"), *Sentence),
+		Sentence.Contains(TEXT("pave")));
+	TestFalse(TEXT("and does not send them to build a taxiway"), Sentence.Contains(TEXT("route")));
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
 // (g) NotAdmitted: the runway is there, long enough and free, but this aircraft may not
 // use it. Refused BEFORE occupancy and exits, with the admission decision on the plan and
 // the surface named in the sentence - the reason an aircraft is turned away must be the

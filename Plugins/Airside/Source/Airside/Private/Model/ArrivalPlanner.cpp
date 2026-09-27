@@ -4,31 +4,53 @@
 #include "Model/LandingRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
+#include "Model/StandAdmission.h"
 #include "Model/TrafficOccupancy.h"
 #include "Solve/IcaoCode.h"
 
 namespace
 {
 	/**
-	 * Stands exist, and not one of them admits Airframe - size alone, reachable or not.
+	 * Stands exist, and not one of them admits Airframe - surface, size or service, reachable
+	 * or not - and if any refusal is fixable, which ONE fix to report.
 	 *
-	 * EVERY STAND, NOT THE REACHABLE ONES ChooseStand counts: a too-small stand's lead-in
-	 * carries its letter's span limit (FAnchorLink's one rule, final review I5), so to a
-	 * widebody it is not reachable at all and ChooseStand's own too-small tally never sees it.
-	 * The same IsStandCandidate filter and the same StandAdmits rule, so this cannot disagree
-	 * with ChooseStand about what a stand is or what fits it - only about whether reach
-	 * matters, which for "draw a bigger stand" it does not.
+	 * EVERY STAND, NOT THE REACHABLE ONES ChooseStand counts: a too-small (or unpaved) stand's
+	 * lead-in carries its letter's span limit (FAnchorLink's one rule, final review I5), so to
+	 * a widebody it is not reachable at all and ChooseStand's own tallies never see it. The
+	 * same IsStandCandidate filter and the same StandAdmission::Judge rule, so this cannot
+	 * disagree with ChooseStand about what a stand is or what fits it - only about whether
+	 * reach matters, which for "draw a bigger stand" or "pave a stand" it does not.
+	 *
+	 * PRIORITY ACROSS STANDS, not per-stand precedence (Judge already orders Surface, TooSmall,
+	 * Service within one stand): Service wins if ANY stand was refused only for a service - the
+	 * more specific, more actionable report; else Surface if ANY stand is big enough at all
+	 * (StandAdmits true regardless of its own pavement) - paving one would fix it; else every
+	 * stand really is too small, whatever it is paved with.
 	 */
-	bool EveryStandTooSmall(const URoadNetwork& Network, const FAirframe& Airframe)
+	EStandRefusal WhyEveryStandRefused(const URoadNetwork& Network, const FAirframe& Airframe)
 	{
 		int32 Stands = 0;
+		bool bSawServiceOnly = false;
+		bool bSawBigEnough = false;
 		for (const FEntityInstance& Stand : Network.GetEntities())
 		{
 			if (!Stand.IsStandCandidate()) { continue; }
 			++Stands;
-			if (IcaoCode::StandAdmits(Stand.DesignWingspan, Airframe.Wingspan)) { return false; }
+			const FStandAdmission Admission = StandAdmission::Judge(Stand, Airframe);
+			if (Admission.IsAdmitted()) { return EStandRefusal::None; }
+			if (Admission.Why == EStandRefusal::Service) { bSawServiceOnly = true; }
+			if (IcaoCode::StandAdmits(Stand.DesignWingspan, Airframe.Wingspan)) { bSawBigEnough = true; }
 		}
-		return Stands > 0;
+		if (Stands == 0)
+		{
+			// No stands at all is not "every stand refused" - the caller's NoRouteToStand/
+			// NoFreeStand fallback is the right word for that, exactly as EveryStandTooSmall's
+			// Stands > 0 guard read before this generalised it.
+			return EStandRefusal::None;
+		}
+		if (bSawServiceOnly) { return EStandRefusal::Service; }
+		if (bSawBigEnough) { return EStandRefusal::Surface; }
+		return EStandRefusal::TooSmall;
 	}
 }
 
@@ -43,28 +65,34 @@ namespace ArrivalPlanner
 		// calls; PoseRole captured at placement) - in
 		// FEntityInstance ENUMERATION ORDER. The tie-break below ("first minimum wins")
 		// depends on Candidates keeping GetEntities()'s own order, exactly as the old
-		// per-stand loop implicitly did by walking it directly. CandidateSpan is kept
-		// parallel by construction (same filter, same push, same index) rather than
-		// recomputed from Candidates afterwards, so the two arrays cannot disagree about
-		// which stand is which.
+		// per-stand loop implicitly did by walking it directly. CandidateSpan and CandidateStand
+		// are kept parallel by construction (same filter, same push, same index) rather than
+		// recomputed from Candidates afterwards, so the arrays cannot disagree about which stand
+		// is which. CandidateStand is StandAdmission::Judge's own argument - added beside
+		// CandidateSpan rather than replacing it, since the log line below still reads the span
+		// directly for its Code-letter text.
 		TArray<FGuidelineNodeId> Candidates;
 		TArray<double> CandidateSpan;
+		TArray<const FEntityInstance*> CandidateStand;
 		Candidates.Reserve(Network.GetEntities().Num());
 		CandidateSpan.Reserve(Network.GetEntities().Num());
+		CandidateStand.Reserve(Network.GetEntities().Num());
 		for (const FEntityInstance& Stand : Network.GetEntities())
 		{
 			if (Stand.IsStandCandidate())
 			{
 				Candidates.Add(Stand.PoseNode);
 				CandidateSpan.Add(Stand.DesignWingspan);
+				CandidateStand.Add(&Stand);
 			}
 		}
 
-		// ADMISSION AND RANK BOTH COME FROM IcaoCode::StandAdmits/StandRank - the ONE rule
-		// UStandAllocator::Reserve also calls, so a legacy stand's captured DesignWingspan
-		// and an aircraft's Wingspan are always compared by LETTER, in exactly one place, never
-		// against each other as raw doubles here or anywhere else. See those functions' own
-		// comments for unknown-admits-anything and the wider-than-F refusal.
+		// RANK STILL COMES FROM IcaoCode::StandRank - the ONE rule UStandAllocator::Reserve
+		// also calls, so a legacy stand's captured DesignWingspan and an aircraft's Wingspan
+		// are always compared by LETTER, in exactly one place, never against each other as raw
+		// doubles here or anywhere else. ADMISSION now comes from StandAdmission::Judge, the
+		// one rule that also asks pavement and service - see its own comment for why surface
+		// beats size.
 
 		// Built by hand rather than FRouteQuery::For: that factory also takes a Goal, and
 		// there isn't ONE here - FindToGoals takes the whole Candidates set instead of a
@@ -97,7 +125,7 @@ namespace ArrivalPlanner
 		double BestLength = TNumericLimits<double>::Max();
 		int32 BestRank = TNumericLimits<int32>::Max();
 		bool bSawHeld = false;
-		int32 TooSmallCount = 0;
+		int32 RefusedCount[4] = {}; // indexed by EStandRefusal - None's slot never increments
 		int32 HeldCount = 0;
 		for (int32 Index = 0; Index < Candidates.Num(); ++Index)
 		{
@@ -105,17 +133,19 @@ namespace ArrivalPlanner
 			{
 				continue;
 			}
-			// Asked BEFORE Held: size is a property of the ground, not of the traffic on it, so
-			// a stand too small for this aircraft is never counted as "held" in the sense that
-			// word reports to the player (wait, or build another - see NoFreeStand's wording).
-			// IcaoCode::StandAdmits is where "unknown admits anything" and "wider than F is
-			// never admitted" both live - see its own comment.
-			if (!IcaoCode::StandAdmits(CandidateSpan[Index], Airframe.Wingspan))
+			// Asked BEFORE Held: surface, size and service are properties of the ground, not of
+			// the traffic on it, so a stand this aircraft cannot use at all is never counted as
+			// "held" in the sense that word reports to the player (wait, or build another - see
+			// NoFreeStand's wording). StandAdmission::Judge is the ONE rule - surface, then
+			// size (IcaoCode::StandAdmits' "unknown admits anything" and "wider than F is never
+			// admitted"), then service - UStandAllocator::Reserve also calls.
+			const FStandAdmission Admission = StandAdmission::Judge(*CandidateStand[Index], Airframe);
+			if (!Admission.IsAdmitted())
 			{
-				++TooSmallCount;
+				++RefusedCount[static_cast<uint8>(Admission.Why)];
 				continue;
 			}
-			// Held is asked AFTER reachability (and size), so bSawHeld means "a stand this
+			// Held is asked AFTER reachability (and admission), so bSawHeld means "a stand this
 			// aircraft could have used" - the only reading under which NoFreeStand is the
 			// right word.
 			if (Occupancy != nullptr && Occupancy->IsHeld(FTrafficResource::OfNode(Candidates[Index]), ExcludingAgent))
@@ -146,14 +176,14 @@ namespace ArrivalPlanner
 		if (bOutSawHeld != nullptr) { *bOutSawHeld = bSawHeld; }
 
 		// ONE LINE PER CALL, winner or refusal alike - "ChooseStand: span %.1f m -> node %d
-		// (Code %s); %d too small, %d held" is CLAUDE.md's own "pressing 7 does nothing"
-		// discipline applied here: a refusal with no line saying WHY (too small vs. held vs.
-		// simply unreachable) is what cost the runway-length bug a whole session. Code %s is
-		// the WINNING stand's own letter when one was found (a known span - an unmeasured
-		// winner reports "?", since 0 has no letter), else the aircraft's OWN letter for
-		// context on a refusal (also "?" for an airframe with no known span, or one wider
-		// than MaxWingspanForLetter(F) admits - LetterForWingspan has nothing useful to say
-		// about either). Reading the letter back off LetterForWingspan rather than the Rank
+		// (Code %s); %d too small, %d held, %d unpaved" is CLAUDE.md's own "pressing 7 does
+		// nothing" discipline applied here: a refusal with no line saying WHY (too small vs.
+		// unpaved vs. held vs. simply unreachable) is what cost the runway-length bug a whole
+		// session. Code %s is the WINNING stand's own letter when one was found (a known span -
+		// an unmeasured winner reports "?", since 0 has no letter), else the aircraft's OWN
+		// letter for context on a refusal (also "?" for an airframe with no known span, or one
+		// wider than MaxWingspanForLetter(F) admits - LetterForWingspan has nothing useful to
+		// say about either). Reading the letter back off LetterForWingspan rather than the Rank
 		// ordinal above keeps this presentation-only - it duplicates no admission decision.
 		FString CodeText = TEXT("?");
 		if (BestIndex != INDEX_NONE && CandidateSpan[BestIndex] > 0.0)
@@ -165,9 +195,11 @@ namespace ArrivalPlanner
 		{
 			CodeText = IcaoCode::LetterForWingspan(Airframe.Wingspan);
 		}
+		const int32 TooSmallCount = RefusedCount[static_cast<uint8>(EStandRefusal::TooSmall)];
+		const int32 UnpavedCount = RefusedCount[static_cast<uint8>(EStandRefusal::Surface)];
 		UE_LOG(LogAirside, Log,
-			TEXT("ChooseStand: span %.1f m -> node %d (Code %s); %d too small, %d held"),
-			Airframe.Wingspan / 100.0, Best.Index, *CodeText, TooSmallCount, HeldCount);
+			TEXT("ChooseStand: span %.1f m -> node %d (Code %s); %d too small, %d held, %d unpaved"),
+			Airframe.Wingspan / 100.0, Best.Index, *CodeText, TooSmallCount, HeldCount, UnpavedCount);
 
 		return Best;
 	}
@@ -320,16 +352,29 @@ namespace ArrivalPlanner
 
 		if (!Out.TaxiIn.IsValid())
 		{
-			// Three refusals for three fixes: every stand too small means draw a bigger one; no
-			// stand reachable at all means build a taxiway; every reachable stand held means
-			// wait, or build a stand. SIZE FIRST, because it is a fact about the ground that no
-			// taxiway or waiting changes - and it used to fall through to NoRouteToStand, sending
-			// the player to build a taxiway that already reached every stand (final review I6).
-			// Held cannot also be true then: a stand is only counted held once it has admitted.
-			if (EveryStandTooSmall(Network, Airframe))
+			// Four refusals for four fixes: every stand too small means draw a bigger one; every
+			// stand paved too weakly means pave one; every stand serviceable-blocked means fix
+			// the service, not the stand; no stand reachable at all means build a taxiway; every
+			// reachable stand held means wait, or build a stand. SURFACE, SIZE, SERVICE, in that
+			// order (WhyEveryStandRefused's own priority - see its comment), because each is a
+			// fact about the ground that no taxiway or waiting changes - and admission used to
+			// fall through to NoRouteToStand, sending the player to build a taxiway that already
+			// reached every stand (final review I6). Held cannot also be true then: a stand is
+			// only counted held once it has admitted.
+			switch (WhyEveryStandRefused(Network, Airframe))
 			{
+			case EStandRefusal::TooSmall:
 				Out.Why = EArrivalRefusal::NoStandBigEnough;
 				return Out;
+			case EStandRefusal::Surface:
+				Out.Why = EArrivalRefusal::NoStandPavedEnough;
+				return Out;
+			case EStandRefusal::Service:
+				Out.Why = EArrivalRefusal::NoStandServiceable;
+				return Out;
+			case EStandRefusal::None:
+			default:
+				break;
 			}
 			Out.Why = bSawHeldStand ? EArrivalRefusal::NoFreeStand : EArrivalRefusal::NoRouteToStand;
 			return Out;
@@ -395,6 +440,12 @@ namespace ArrivalPlanner
 			}
 			return TEXT("Arrival refused: every stand is too small for this aircraft. Draw a bigger stand.");
 
+		case EArrivalRefusal::NoStandPavedEnough:
+			return TEXT("Arrival refused: no stand is paved for this aircraft - pave one.");
+
+		case EArrivalRefusal::NoStandServiceable:
+			return TEXT("Arrival refused: no stand can be serviced on its pavement.");
+
 		case EArrivalRefusal::None:
 		default:
 			return FString();
@@ -432,9 +483,10 @@ namespace ArrivalPlanner
 			return FString::Printf(TEXT("Arrival refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
 
 		default:
-			// NoRunway, RunwayOccupied, NoFreeStand and None carry no figures, so their
-			// wording is the reason-only overload's and is not repeated here. NoStandBigEnough
-			// is worded there too, handed the plan's own span so it can name the letter.
+			// NoRunway, RunwayOccupied, NoFreeStand, NoStandPavedEnough, NoStandServiceable and
+			// None carry no figures, so their wording is the reason-only overload's and is not
+			// repeated here. NoStandBigEnough is worded there too, handed the plan's own span so
+			// it can name the letter.
 			return DescribeRefusal(Plan.Why, Plan.AircraftWingspan);
 		}
 	}

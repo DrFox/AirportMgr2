@@ -5,6 +5,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Model/StandAdmission.h"
 #include "Solve/IcaoCode.h"
 
 bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight)
@@ -18,13 +19,13 @@ bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 	}
 
 	FEntityInstanceId Best;
-	// RANK, NOT THE RAW SPAN: IcaoCode::StandRank/StandAdmits are the ONE rule ArrivalPlanner::
-	// ChooseStand also calls (drawn-stands admission fix round 1) - a legacy stand's captured
-	// DesignWingspan is compared by LETTER, never against Wingspan as a raw double, so a stand
-	// this allocator holds for a flight is never one ChooseStand would have refused it at
-	// touchdown. "First fit by size, smallest that admits" (see this class's own header
-	// comment) is unchanged - only what "smallest" and "admits" are measured BY moved to the
-	// shared table.
+	// ADMISSION IS StandAdmission::Judge - the ONE rule ArrivalPlanner::ChooseStand also calls
+	// (surface, then size via IcaoCode::StandAdmits, then service), so a stand this allocator
+	// holds for a flight is never one ChooseStand would have refused it at touchdown - not for
+	// its letter, and not for grass under a jet either. RANKING STAYS IcaoCode::StandRank: a
+	// legacy stand's captured DesignWingspan is compared by LETTER, never against Wingspan as a
+	// raw double. "First fit by size, smallest that admits" (see this class's own header
+	// comment) is unchanged - only what "admits" is measured BY moved to the shared rule.
 	int32 BestRank = TNumericLimits<int32>::Max();
 
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
@@ -35,7 +36,7 @@ bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 		// line used to read bAlive + PoseNode alone, with no kind check, and StandAdmits' "0 span
 		// admits anything" then handed a fuel depot (whose DesignWingspan is 0) to any airliner
 		// as the smallest "stand" on the field (final review C1).
-		if (!Stand.IsStandCandidate() || !IcaoCode::StandAdmits(Stand.DesignWingspan, Wingspan))
+		if (!Stand.IsStandCandidate() || !StandAdmission::Judge(Stand, Flight.Airframe).IsAdmitted())
 		{
 			continue;
 		}
