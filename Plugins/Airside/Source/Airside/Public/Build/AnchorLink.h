@@ -95,7 +95,7 @@ struct AIRSIDE_API FAnchorLink
 	 *
 	 * The DEFAULT only. The live figure is level-authored on
 	 * ARoadNetworkActor::ServiceLinkRadius, because it is per-airport gameplay tuning rather
-	 * than a content default - the same distinction FTrafficRules records. M_Starter authors
+	 * than a content default - the same distinction FTrafficRules records. M_Test authors
 	 * no value for it, so the placed actor takes this one; a level that HAS authored one keeps
 	 * what it authored, and its stands stop reaching their roads until it is raised by hand.
 	 *

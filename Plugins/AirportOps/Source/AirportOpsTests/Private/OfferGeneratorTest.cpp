@@ -79,12 +79,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FOfferGeneratorWidthTest::RunTest(const FString& Parameters)
 {
-	// THE BUG OF 2026-09-11, pinned. M_Starter's runway is 15 m wide and admits a 15 m
+	// THE BUG OF 2026-09-11, pinned. M_Test's runway is 15 m wide and admits a 15 m
 	// wingspan; every offer was an A320 at 35.8 m, so every Accept in the inbox was greyed
 	// out and the player had no way to tell why. The old filter asked FAirsideCapability,
 	// which knows the runway's LENGTH and the stands, and nothing about RunwayAdmission.
 	const FAirframe Airliner = Needing(0.0, 3580.0);
-	URoadNetwork* Narrow = FieldWith(1800.0, Airliner);   // an 18 m strip, as M_Starter has
+	URoadNetwork* Narrow = FieldWith(1800.0, Airliner);   // an 18 m strip, as M_Test has
 
 	EArrivalRefusal Why = EArrivalRefusal::None;
 	TestFalse(TEXT("an airliner is not offered a strip too narrow for its wingspan"),

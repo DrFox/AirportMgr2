@@ -1825,7 +1825,7 @@ bool FPlotToolRemovesADepotTest::RunTest(const FString& Parameters)
 		Actor->Network->GetEntities().IsValidIndex(Depot) && Actor->Network->GetEntities()[Depot].bAlive);
 	TestEqual(TEXT("and starts no plot gesture either"), Tool.PinnedCount(), 0);
 
-	// A PRE-PLOT DEPOT - fuel role, no outline - the format M_Starter still held on 2026-09-22.
+	// A PRE-PLOT DEPOT - fuel role, no outline - the format M_Test still held on 2026-09-22.
 	// It has no ground to click, so it is taken at its pose, like a stand; before this it could
 	// not be removed by any tool.
 	UEntityDefinition* Legacy = UEntityDefinition::MakeFuelDepotTransient();

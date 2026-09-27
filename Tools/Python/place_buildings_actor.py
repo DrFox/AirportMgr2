@@ -1,4 +1,4 @@
-"""Places AAirsideBuildingsActor in M_Starter, bound to its road network. Run headless:
+"""Places AAirsideBuildingsActor in M_Test, bound to its road network. Run headless:
 
   UnrealEditor-Cmd.exe <project> -run=pythonscript -script=<this file> -unattended -nosplash -nopause
 
@@ -7,7 +7,7 @@ Saved/Logs/AirportMgr.log.
 
 WHY IT IS PLACED AND NOT ONLY SPAWNED: the drivers FindOrCreate one, but outside the build
 mode the editor viewport shows the level as saved - and a depot with no buildings actor is
-invisible there. THE RESAVE IS THE SECOND POINT: M_Starter was saved with the road network's
+invisible there. THE RESAVE IS THE SECOND POINT: M_Test was saved with the road network's
 old PlotBoxes component, which ARoadNetworkActor now sweeps on registration; saving after the
 sweep drops it from disk.
 
@@ -15,7 +15,7 @@ Idempotent, like place_sun_driver.py: an existing buildings actor is replaced, n
 """
 import unreal
 
-LEVEL = "/Game/Maps/M_Starter"
+LEVEL = "/Game/Maps/M_Test"
 
 
 def say(msg):

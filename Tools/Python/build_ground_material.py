@@ -91,7 +91,7 @@ import unreal
 OUT_DIR = "/Game/Environment"
 MAT_NAME = "M_Ground"
 MI_NAME = "MI_Ground"
-LEVEL = "/Game/Maps/M_Starter"
+LEVEL = "/Game/Maps/M_Test"
 
 # THE LANDSCAPE IS ASSIGNED MI_Ground, NOT M_Ground, and that is the whole point of this
 # revision. A Material is compiled shader code: changing a constant in it costs a recompile,

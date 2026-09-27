@@ -21,7 +21,7 @@ exactly as build_stand_asset.py did when the asset was first created, and
 
 OWNERSHIP MOVED HERE FROM build_stand_asset.py, which authored DA_Aircraft_Piper as one of three
 aircraft it needed to size a stand. Its reason for the asset existing at all is worth carrying
-rather than losing: M_Starter's runway is 15 m wide and admits a 15 m wingspan, so neither Code
+rather than losing: M_Test's runway is 15 m wide and admits a 15 m wingspan, so neither Code
 C type can ever land there and every offer was refused at the gate. A light type an airline can
 actually list is what gives a GA field traffic - and what makes the jets a REASON to build a
 wider runway rather than a broken inbox.

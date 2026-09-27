@@ -1,4 +1,4 @@
-"""Sets M_Starter's lighting for the stylised art direction and adds the post-process
+"""Sets M_Test's lighting for the stylised art direction and adds the post-process
 volume. Run headless:
 
   UnrealEditor-Cmd.exe <project> -run=pythonscript -script=<this file> -unattended -nosplash -nopause
@@ -23,7 +23,7 @@ off disk would prove nothing.
 """
 import unreal
 
-LEVEL = "/Game/Maps/M_Starter"
+LEVEL = "/Game/Maps/M_Test"
 
 # The locked exposure, in EV100, or None to leave auto-exposure alone.
 #

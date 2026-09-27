@@ -39,11 +39,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 {
-	const FString MapPath = TEXT("/Game/Maps/M_Starter");
+	const FString MapPath = TEXT("/Game/Maps/M_Test");
 	UPackage* Package = LoadPackage(nullptr, *MapPath, LOAD_None);
 	if (Package == nullptr)
 	{
-		AddInfo(TEXT("M_Starter not loadable in this run - nothing to probe."));
+		AddInfo(TEXT("M_Test not loadable in this run - nothing to probe."));
 		return true;
 	}
 
@@ -58,7 +58,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	}
 	if (Saved == nullptr)
 	{
-		AddInfo(TEXT("M_Starter holds no road network with segments - nothing to probe."));
+		AddInfo(TEXT("M_Test holds no road network with segments - nothing to probe."));
 		return true;
 	}
 
@@ -295,7 +295,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	// no occupancy is the same question the inbox asks, so this cannot drift from it.
 	// EVERY AUTHORED TYPE, loaded from the registry - not TObjectIterator, which sees only
 	// what happens to be in memory. The first version of this probe reported on the A320
-	// alone, because M_Starter's stand references it and nothing had pulled the others in;
+	// alone, because M_Test's stand references it and nothing had pulled the others in;
 	// "which aircraft can this field take" answered for one aircraft is not an answer.
 	TArray<FAssetData> TypeAssets;
 	FAssetRegistryModule& Registry =
