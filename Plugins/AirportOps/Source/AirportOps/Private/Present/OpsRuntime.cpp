@@ -114,6 +114,11 @@ void UOpsRuntime::GenerateOffer()
 		Offer->Id, *Offer->AirlineName.ToString(), *Offer->TypeName.ToString(), Offer->ArrivesAt);
 }
 
+FVehicle UOpsRuntime::StandDesignVehicleOf(const FEntityInstance& Stand)
+{
+	return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UFuelService::LetterOfStand(Stand));
+}
+
 void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 {
 	Detach();
@@ -159,10 +164,30 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 			Scenario->FuelDwellSeconds, Scenario->StartingBalance);
 	}
 
-	// TruckVehicle resolved HERE, once, not by FuelService at every dispatch (#104): this is
-	// Present/, where every other content default gets resolved, and Model/ has no business
-	// reaching Content/ for it.
-	FuelService->TruckVehicle = UAirsideSettings::ResolveDefaultVehicle();
+	// EVERY LETTER'S FUEL VEHICLE resolved HERE, once, into FuelService's table - not by
+	// FuelService at every dispatch (#104): this is Present/, where every other content default
+	// gets resolved, and Model/ has no business reaching Content/ for it. One table and not one
+	// truck since 2026-09-26 (far-side-entry spec): A and B stands are sized for the utility tow,
+	// C to F for the fuel truck, so a single vehicle would send a truck onto an A stand's lane
+	// that only the tow was proven to drive.
+	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand
+	FuelService->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
+	// AND WHAT EACH STAND WAS BUILT FOR, read off its own definition when the guard asks - see
+	// UFuelService::DesignVehicleOf for why the read is handed down rather than made there.
+	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A sent the truck still reads as tow-built)
+	FuelService->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
+	{
+		// READ BACK OFF THE TABLE, every letter, rather than a banner typed beside the resolve:
+		// the line then says what dispatch will actually send.
+		FString PerLetter;
+		for (int32 Index = 0; Index < UFuelService::LetterCount; ++Index)
+		{
+			const EIcaoCode Letter = static_cast<EIcaoCode>(Index);
+			PerLetter += FString::Printf(TEXT("%s %s  "), IcaoCode::ToLetter(Letter),
+				*FuelService->VehiclesFor(Letter).TypeCode.ToString());
+		}
+		UE_LOG(LogAirportOps, Log, TEXT("Fuel vehicles by stand letter: %s"), *PerLetter.TrimEnd());
+	}
 
 	// THE MONEY, wired in one breath like the scenario figures above, so none of these is the
 	// one somebody forgot to connect. Each of the three posts to the ledger for its own part of

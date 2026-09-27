@@ -407,6 +407,12 @@ bool UGroundTraffic::StrandForTest(int32 AgentId)
 	return true;
 }
 
+bool UGroundTraffic::SetVehicleForTest(int32 AgentId, const FVehicle& Vehicle)
+{
+	const int32 Index = FindIndex(AgentId);
+	return Index != INDEX_NONE && Agents[Index].SetVehicleForTest(Vehicle);
+}
+
 bool UGroundTraffic::BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySeed)
 {
 	const int32 Index = FindIndex(AgentId);
@@ -563,6 +569,7 @@ bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, con
 		Seed.Heading = Agent.Follower.Heading;
 		Seed.Speed = Agent.Follower.Speed;
 		Seed.Travelled = Agent.Follower.Travelled - Dropped;
+		Seed.Origin = Agent.LastMotion.Position;
 		const FFitVerdict Whole = VehicleFit::JudgePlan(Spliced, *Vehicle, *Network, &Seed);
 		if (Whole.Refusal == EFitRefusal::TrailerFolds)
 		{
@@ -590,6 +597,84 @@ bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, con
 	TakeGoal(Agent, AgentId, Network, Spliced);
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d route extended: %.0f uu on from %.0f, %.0f uu of driven route trimmed"),
 		AgentId, Tail.Length, WasLength, Dropped);
+	return true;
+}
+
+bool UGroundTraffic::RerouteAgent(int32 AgentId, const URoadNetwork* Network, int32 KeepSteps, const FRoutePlan& Tail)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	FRoadAgent& Agent = Agents[Index];
+	const FRoutePlan& Live = Agent.Follower.Plan;
+	if (Agent.Phase != EAgentPhase::Taxiing || !Live.IsValid())
+	{
+		return false;
+	}
+	// GROUND VEHICLES ONLY - see the header. The one caller (UFuelService::SendTruckHome) sends
+	// vehicles; the guard is what keeps an aircraft's runway and departure arming off this path.
+	if (Agent.AsVehicle() == nullptr)
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("RerouteAgent %d refused: not a ground vehicle"), AgentId);
+		return false;
+	}
+
+	// NEVER BEHIND THE AGENT - see ReplanAt's identical guard, and the header.
+	const int32 OnStep = CurrentStep(Live, Agent.Follower.Travelled);
+	if (KeepSteps <= OnStep || KeepSteps > Live.Steps.Num())
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("RerouteAgent %d refused: keeping %d step(s) would cut the step the agent is on (%d)"),
+			AgentId, KeepSteps, OnStep);
+		return false;
+	}
+
+	const FRoutePlan Spliced = RouteSearch::Splice(Live, KeepSteps, Tail);
+	if (!Spliced.IsValid())
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("RerouteAgent %d refused: the new route does not start where step %d ends"),
+			AgentId, KeepSteps - 1);
+		return false;
+	}
+
+	// THE SPLICE JUDGED WHOLE, FROM THE LIVE CHAIN - ExtendRoute's check, and the reverse too: a
+	// route home from a service point opens its tail with the bay's reverse leg, which only the
+	// chain the kept prefix leaves can solve. Refused, like a failed search, before anything moves -
+	// and at LOG level, as SpliceReplan's is: a caller tries the next node on (UFuelService::
+	// SendTruckHome), so a refusal here is an answer to a question, not a fault.
+	if (const FVehicle* Vehicle = Agent.AsVehicle();
+		Vehicle != nullptr && Vehicle->HasTrailer() && Agent.TowAxles.Num() == Vehicle->Tow.Num()
+		&& Agent.GetJackknifedLink() == INDEX_NONE && Network != nullptr)
+	{
+		FTowSeed Seed;
+		Seed.Axles = Agent.TowAxles;
+		// LastMotion's heading, with its position - FPlanReResolver::QueryFor's reason.
+		Seed.Heading = Agent.LastMotion.Heading;
+		Seed.Speed = Agent.Follower.Speed;
+		Seed.Travelled = Agent.Follower.Travelled;
+		Seed.Origin = Agent.LastMotion.Position;
+		const FFitVerdict Whole = VehicleFit::JudgePlan(Spliced, *Vehicle, *Network, &Seed);
+		if (Whole.Refusal == EFitRefusal::TrailerFolds || Whole.Refusal == EFitRefusal::ReverseUnsolvable)
+		{
+			UE_LOG(LogAirsideTraffic, Log, TEXT("RerouteAgent %d refused: the new route does not hold the %s's tow (%s)"),
+				AgentId, *Vehicle->TypeCode.ToString(), *Whole.Describe());
+			return false;
+		}
+	}
+
+	// THE GOAL MOVES THROUGH ReleaseGoal/TakeGoal, as in RedirectAgent and ExtendRoute; the
+	// follower keeps driving through Replace; and ReplanAt's bookkeeping for a route that changed
+	// under a moving agent - see FPlanReResolver::ReplanAt for why each of the three is needed.
+	ReleaseGoal(Agent, AgentId);
+	const double WasRemaining = Live.Length - Agent.Follower.Travelled;
+	Agent.Follower.Replace(Spliced, Agent.Chassis());
+	Occupancy.ReleaseReservations(AgentId);
+	Agent.ClearArbitration();
+	Agent.ResetStall();
+	TakeGoal(Agent, AgentId, Network, Spliced);
+	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d re-routed after step %d: %.0f uu to go, was %.0f"),
+		AgentId, KeepSteps - 1, Spliced.Length - Agent.Follower.Travelled, WasRemaining);
 	return true;
 }
 
@@ -685,6 +770,13 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		FVector2D NewStart = FVector2D::ZeroVector;
 		double NewHeading = KeptHeading.GetValue();
 		GuidelineGeom::PointAtDistance(Plan.Polyline, InitialTravelled, NewStart, NewHeading);
+		// A ROUTE THAT OPENS WITH A REVERSE LEG is backed along, so the cab should face AWAY from
+		// the line's direction: 180 degrees off is the fit there, not the misfit (2026-09-27
+		// - every stand service cycle's route home warned "expect a slew or a fold" and did neither).
+		if (Plan.Steps.Num() > 0 && Plan.Steps[0].bReverseLeg)
+		{
+			NewHeading += UE_DOUBLE_PI;
+		}
 		const double OffDegrees = FMath::Abs(FMath::RadiansToDegrees(FMath::UnwindRadians(NewHeading - KeptHeading.GetValue())));
 		const double LockDegrees = Agent.Chassis().Ground.MaxSteerDegrees;
 		if (OffDegrees > LockDegrees || StartGap > 1.0)

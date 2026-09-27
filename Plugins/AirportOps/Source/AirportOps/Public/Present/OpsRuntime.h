@@ -15,6 +15,8 @@ class UOfferGenerator;
 class ULedger;
 class UPricing;
 struct FAirframe;
+struct FEntityInstance;
+struct FVehicle;
 enum class EAgentPhase : uint8;
 enum class EArrivalRefusal : uint8;
 
@@ -64,6 +66,14 @@ public:
 	UPricing* GetPricing() const { return Pricing; }
 
 	ARoadNetworkActor* GetTarget() const { return Target; }
+
+	/**
+	 * What Stand was built for: UAirsideSettings::ResolveStandDesignVehicleOf on its definition and
+	 * its outline's letter. The ONE reader Attach hands UFuelService::DesignVehicleOf, and the one
+	 * the world-free fuel fixture hands it too, so the two cannot read a stand differently. A
+	 * forwarder, not logic - the reading lives in Content/.
+	 */
+	static FVehicle StandDesignVehicleOf(const FEntityInstance& Stand);
 
 	/** Binds to the actor's traffic delegates. Safe to call again with a new actor (unbinds the old). */
 	void Attach(ARoadNetworkActor* Actor);

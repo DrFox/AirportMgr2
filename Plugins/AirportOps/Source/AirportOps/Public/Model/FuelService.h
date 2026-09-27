@@ -7,6 +7,7 @@
 #include "Model/RoutePlanCache.h"
 #include "Model/RouteSearch.h"
 #include "Model/Vehicle.h"
+#include "Solve/IcaoCode.h"
 #include "UObject/Object.h"
 
 class USimClock;
@@ -95,7 +96,20 @@ enum class EFuelRefusal : uint8
 	 * from depot" and send the player to look at a road that is already there. What they
 	 * actually need to do is build a pump in a bay.
 	 */
-	NoPump
+	NoPump,
+
+	/**
+	 * A depot is on a road with a pump and a truck, but the vehicle it would send is LARGER than
+	 * the stand was built for (VehicleFit::NoLargerThan against the vehicle its definition's lanes
+	 * were proven for, UEntityDefinition::DesignVehicle - spec 2026-09-26 section 2). A stand's
+	 * lane legs are only proven drivable by that vehicle and anything no larger, so sending a
+	 * bigger one would strand it on a leg it cannot take. ITS OWN REFUSAL AND NOT TooNarrow:
+	 * nothing about the ROAD is wrong, and a player widening one would fix nothing. It fires when
+	 * the per-letter table sends something larger than the definition was built for - a stand
+	 * authored for the tow while the table sends the truck.
+	 * ENFORCED BY: AirportOps.Fuel.VehicleTooLargeRefused
+	 */
+	VehicleTooLarge
 };
 
 /** One parked aircraft's fuel job. */
@@ -290,16 +304,51 @@ public:
 	 */
 	double DwellSecondsFor(const FEntityInstance& Depot) const;
 
+	/** How many ICAO letters the vehicle table holds, A-F. See VehiclesByLetter. */
+	static constexpr int32 LetterCount = 6;
+
 	/**
-	 * The truck's bundle - chassis and type code - dispatched with every fuel demand. An
-	 * FVehicle since 2026-09-23, not an FAirframe with its climb zeroed (see Model/Vehicle.h).
-	 *
-	 * Set from UAirsideSettings::ResolveDefaultVehicle() at attach, next to DwellSeconds
-	 * above - not resolved here at dispatch time. This is Model/, and reaching Content/ was
-	 * the only Model->Content edge in either plugin (#104): Present/ (UOpsRuntime) is where
-	 * every other content default gets resolved once and handed down.
+	 * Fill every letter's table entry - the vehicle a depot SENDS to a stand of that letter -
+	 * from Resolve. UOpsRuntime::Attach fills it with UAirsideSettings::ResolveStandDesignVehicle,
+	 * next to DwellSeconds above; nothing on the dispatch path resolves content, and cannot: this
+	 * is Model/, and reaching Content/ was the only Model->Content edge in either plugin (#104).
+	 * A TFunctionRef rather than the resolve itself for the same reason, and so the world-free
+	 * fixture fills the table through the one loop too.
+	 * ENFORCED BY: Check-Architecture's include-direction rule (Model/ may not include Content/),
+	 * and AirportOps.Fuel.RuntimeResolvesPerStand (red if Attach leaves one vehicle for all).
 	 */
-	UPROPERTY() FVehicle TruckVehicle;
+	void ResolveVehicles(TFunctionRef<FVehicle(EIcaoCode)> Resolve);
+
+	/** One letter's entry. Mutable so a test can make a letter send something else. */
+	FVehicle& VehiclesFor(EIcaoCode Letter) { return VehiclesByLetter[static_cast<uint8>(Letter)]; }
+	const FVehicle& VehiclesFor(EIcaoCode Letter) const { return VehiclesByLetter[static_cast<uint8>(Letter)]; }
+
+	/**
+	 * What Stand's lanes were proven drivable by - UEntityDefinition::DesignVehicle, read by
+	 * whoever set it (UOpsRuntime::Attach, through UAirsideSettings::ResolveStandDesignVehicleOf): this layer may not dereference a
+	 * UEntityDefinition, so the read is handed in, the same way ResolveVehicles' resolve is.
+	 * UNSET in a bare NewObject, and then DesignVehicleFor answers the vehicle the table sends,
+	 * so the VehicleTooLarge guard cannot fire on a service nothing has attached.
+	 * ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A's table entry made the truck, the runtime still reads A's stand as tow-built)
+	 */
+	TFunction<FVehicle(const FEntityInstance&)> DesignVehicleOf;
+
+	/** DesignVehicleOf(Stand), or VehicleFor(Stand) with nothing set. See DesignVehicleOf. */
+	FVehicle DesignVehicleFor(const FEntityInstance& Stand) const;
+
+	/**
+	 * The vehicle a depot sends to Stand: its outline's letter's table entry.
+	 *
+	 * THE OUTLINE'S LETTER (StandBox::LetterOf), not DesignWingspan's: the outline is what the
+	 * player drew and what the stand's definition was chosen from, the same reading
+	 * ARoadNetworkActor::RebindStandDefinitions makes. A stand whose outline reads as no letter
+	 * gets Code C's - the letter URoadNetwork::PlaceEntity gives every stand placed with no plot.
+	 * ENFORCED BY: Airside.Model.StandOutline.PointPlacedStandGetsOutline
+	 */
+	FVehicle VehicleFor(const FEntityInstance& Stand) const;
+
+	/** The letter VehicleFor reads Stand as - LetterOf(Outline), else C. See VehicleFor. */
+	static EIcaoCode LetterOfStand(const FEntityInstance& Stand);
 
 	/**
 	 * Every phase change in the traffic model - the events this class is driven by.
@@ -352,15 +401,21 @@ public:
 	 *  to tell "retired at home" from "never dispatched". */
 	int32 TrucksGoingHomeForTest() const { return GoingHome.Num(); }
 
+	/** TrucksOutFor, for a test to assert a depot got its truck back - not merely that the
+	 *  truck stopped being on its way (TrucksGoingHomeForTest). */
+	int32 TrucksOutForTest(FEntityInstanceId Depot) const { return TrucksOutFor(Depot); }
+
 	/**
 	 * Whether a route home found UNGATED (SendTruckHome's too-narrow fallback) may be driven:
 	 * yes, unless the truck tows something the route folds (VehicleFit::JudgePlan,
 	 * EFitRefusal::TrailerFolds) - a scuffed kerb is accepted, a jack-knife is not (review of
 	 * 9441ccf1). OutWhy, when given and the answer is no, names the fold. Static and public so
-	 * the rule is testable on a road that folds; the fuel fixture has none.
+	 * the rule is testable on a road that folds; the fuel fixture has none. Seed is the live
+	 * chain and cab (SendTruckHome's), so a route home opening with a reverse is solved from
+	 * where the tow is; a reverse it cannot back is refused like a fold.
 	 */
 	static bool MayDriveUngated(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
-		FString* OutWhy = nullptr);
+		FString* OutWhy = nullptr, const FTowSeed* Seed = nullptr);
 
 	/** Puts a truck in GoingHome without running the traffic model - so OpsSave's tests can
 	 *  reach the leak OnBeforeRestore fixes without a full arrival-to-turnaround fixture,
@@ -385,7 +440,8 @@ public:
 	 * FFuelBusyWaitSkipsChooseDepotTest already covers that skip on its own. The return type is
 	 * FDepotChoice, private below; auto lets a test hold one without naming it.
 	 */
-	auto ChooseDepotForTest(const URoadNetwork& Network, FGuidelineNodeId StandFuel) const { return ChooseDepot(Network, StandFuel); }
+	auto ChooseDepotForTest(const URoadNetwork& Network, FGuidelineNodeId StandFuel,
+		const FVehicle& Sent, const FVehicle& Design) const { return ChooseDepot(Network, StandFuel, Sent, Design); }
 
 	/** See FleetRevision. For a test to assert a truck retiring/recalling actually moved it. */
 	uint32 GetFleetRevisionForTest() const { return FleetRevision; }
@@ -487,8 +543,13 @@ private:
 	 *
 	 * Reports Why in the order the spec fixes - NoDepot, NoRoad, StandUnjoined, NoRoute - so
 	 * the reason names the thing nearest the player's hand.
+	 *
+	 * Sent is what the stand's letter sends (VehicleFor) and the route is searched for it; Design
+	 * is what the stand was built for (DesignVehicleFor), and a Sent larger than it is refused
+	 * VehicleTooLarge.
 	 */
-	FDepotChoice ChooseDepot(const URoadNetwork& Network, FGuidelineNodeId StandFuel) const;
+	FDepotChoice ChooseDepot(const URoadNetwork& Network, FGuidelineNodeId StandFuel,
+		const FVehicle& Sent, const FVehicle& Design) const;
 
 	/**
 	 * How many trucks this depot has out right now, counted off Demands and GoingHome.
@@ -532,4 +593,21 @@ private:
 	 * MUTABLE: ChooseDepot is const, same reason as ChooseDepotCallCountForTest above.
 	 */
 	mutable FRoutePlanCache RouteCache;
+
+	/**
+	 * The per-letter fuel vehicle a depot sends, indexed by EIcaoCode - see ResolveVehicles for
+	 * where it is filled. ONE vehicle per letter: what the stand was BUILT for is a fact about
+	 * its definition (UEntityDefinition::DesignVehicle), not a second column here that could
+	 * disagree with it. An FVehicle, not an FAirframe with its climb zeroed - the single
+	 * TruckVehicle this replaced made that move on 2026-09-23 (see Model/Vehicle.h).
+	 *
+	 * A TABLE RESOLVED ONCE, NOT A RESOLVE PER DISPATCH (#104's rule, which the single
+	 * TruckVehicle this replaced also kept): one resolve per letter at attach, then a lookup.
+	 * TRANSIENT, where TruckVehicle was saved: it is a content default resolved every attach,
+	 * and a saved copy would pin the figures of whatever content the save was written under.
+	 *
+	 * A LITERAL 6, NOT LetterCount: UHT parses the dimension and a class constant is not
+	 * something it is promised to resolve. FuelService.cpp static_asserts the two agree.
+	 */
+	UPROPERTY(Transient) FVehicle VehiclesByLetter[6];
 };

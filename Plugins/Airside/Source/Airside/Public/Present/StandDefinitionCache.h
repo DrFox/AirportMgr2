@@ -61,18 +61,24 @@ public:
 	 * this cache ever creates findable from the cache alone.
 	 *
 	 * NULL, LOGGED ONCE PER LETTER, when the built template does not fit its own letter's floor -
-	 * UEntityDefinition::FitsItsLetter, and Task 1's measured table: A and B do not fit today, C
-	 * through F do. A caller refuses on null; WhyStandRefused is what turns that into "Code X
-	 * stands cannot be built yet" for the player.
+	 * UEntityDefinition::FitsItsLetter. A GUARD, not a live case: the first measurement found A and B NOT
+	 * fitting, and the far-side-entry work (2026-09-26) gave every letter its own design
+	 * vehicle so all six fit now - this null stays reachable for a future template or floor
+	 * regression rather than being removed with the bug it once caught. A caller refuses on
+	 * null; WhyStandRefused is what turns that into "Code X stands cannot be built yet" for the
+	 * player.
+	 * ENFORCED BY: Airside.Present.StandPlot.EveryLetterBuilds
 	 */
 	UEntityDefinition* ResolveStandDefinitionFor(EIcaoCode Letter);
 
 	/**
 	 * Re-point every live, plotted stand in Network at the one its OUTLINE's letter resolves to
 	 * (ResolveStandDefinitionFor(StandBox::LetterOf(Outline))) - Code C to the actor's authored
-	 * asset, D/E/F to this cache. Returns how many changed; logs the count, and a Warning naming
-	 * each stand whose outline reads as no letter, or as one with no buildable definition (A/B
-	 * today), which is left exactly as it was.
+	 * asset, every other letter (A, B, D, E, F all build as of 2026-09-26) to this
+	 * cache. Returns how many changed; logs the count, and a Warning naming each stand whose
+	 * outline reads as no letter, or as one with no buildable definition - a template or floor
+	 * regression, per ResolveStandDefinitionFor's own guard, not a letter that is expected to be
+	 * missing today - which is left exactly as it was.
 	 *
 	 * CALLED WHEREVER A NETWORK IS (RE)LOADED, because the per-letter definitions are never
 	 * saved (LetterStandDefinitions): from ARoadNetworkActor::PostRegisterAllComponents, which
@@ -87,6 +93,15 @@ public:
 	 * SetEntityDefinition, a pure pointer write.
 	 * ENFORCED BY: AirportOps.Present.RuntimeLoad.DrawnStandSurvivesLoad,
 	 * Airside.Present.StandPlot.RebindsAfterLevelLoad.
+	 *
+	 * AND THE POSE IS RE-DERIVED FROM THE OUTLINE (spec §1, since 2026-09-27): StandBox::PoseFor
+	 * for the letter the outline reads as now, at the fleet-resolved envelope - the rule
+	 * PlaceStandInPlot commits by. A stand whose stop mark or anchors disagree with that, beyond
+	 * a centimetre, is moved through URoadNetwork::RePoseStand and logged by name; a save made
+	 * before the 2026-09-26 geometry change is the case (its stop mark sat Depth - MaxNoseFwd in
+	 * from the entrance), and a stand placed today re-derives its own pose and is left alone. Not
+	 * counted in the return, which stays "how many re-pointed".
+	 * ENFORCED BY: Airside.Present.StandPlot.OldPoseRederivedOnLoad
 	 */
 	int32 RebindStandDefinitions(URoadNetwork* Network);
 

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/AgentMotion.h"
@@ -56,39 +57,14 @@ namespace TowReverseAgentTest
 		AddStraight(Back, Back.Last(), End);
 		AddStraight(Exit, End, FVector2D(BayX, -3000.0));
 
-		FRoutePlan Plan;
-		Plan.Result = ERouteResult::Found;
-		TArray<FVector2D> All = Approach;
-		const int32 ApproachEnd = All.Num() - 1;
-		All.Append(Back.GetData() + 1, Back.Num() - 1);
-		const int32 BackEnd = All.Num() - 1;
+		// THE CUT IS TestPlans::Chain's (AirsideTestFixtures.h), shared with StandLayoutTest.cpp
+		// since 2026-09-26. No exit makes the reverse the plan's last step.
+		TArray<TestPlans::FRun> Runs = { { Approach, false }, { Back, true } };
 		if (bExit)
 		{
-			All.Append(Exit.GetData() + 1, Exit.Num() - 1);
+			Runs.Add({ Exit, false });
 		}
-		Plan.Polyline = All;
-		double Along = 0.0;
-		TArray<double> Distances = { 0.0 };
-		for (int32 K = 1; K < All.Num(); ++K)
-		{
-			Along += FVector2D::Distance(All[K - 1], All[K]);
-			Distances.Add(Along);
-		}
-		Plan.Length = Along;
-		for (const TPair<int32, bool>& Cut : { TPair<int32, bool>(ApproachEnd, false), TPair<int32, bool>(BackEnd, true),
-			TPair<int32, bool>(All.Num() - 1, false) })
-		{
-			if (!Plan.Steps.IsEmpty() && Cut.Key <= Plan.Steps.Last().EndVertex)
-			{
-				continue;   // no exit: the reverse is the plan's last step
-			}
-			FRouteStep Step;
-			Step.EndVertex = Cut.Key;
-			Step.EndDistance = Distances[Cut.Key];
-			Step.bReverseLeg = Cut.Value;
-			Plan.Steps.Add(Step);
-		}
-		return Plan;
+		return TestPlans::Chain(Runs);
 	}
 
 	struct FFrame

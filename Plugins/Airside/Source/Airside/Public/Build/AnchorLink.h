@@ -119,6 +119,14 @@ struct AIRSIDE_API FAnchorLink
 	static constexpr double LeadInWeldTolerance = 10.0;
 
 	/**
+	 * How far SHORT of a stand's drawn far edge a road's nearest point may lie and still count as
+	 * beyond it - see FPendingLink::HalfPlaneOffset. One uu, because StandBox::WidthOf/DepthOf
+	 * round a drawn stand to a whole uu, so a road drawn exactly on the edge can measure that far
+	 * inside it; anything further in is a road on the stand's own ground or alongside it.
+	 */
+	static constexpr double FarEdgeTolerance = 1.0;
+
+	/**
 	 * Lays every service lane, then casts or measures every unjoined lead-in. Returns how
 	 * many joined.
 	 *

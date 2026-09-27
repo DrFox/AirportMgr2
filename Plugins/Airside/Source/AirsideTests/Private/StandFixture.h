@@ -5,6 +5,8 @@
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Solve/IcaoCode.h"
+#include "Solve/StandBox.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -29,6 +31,31 @@ namespace ServiceLinkFixture
 		return Net.PlaceEntity(&Stand, Stand.Anchors, At, Heading,
 			Stand.DesignAircraft != nullptr ? Stand.DesignAircraft->Footprint.Wingspan : 0.0,
 			Stand.PoseRole, Stand.Trucks);
+	}
+
+	/**
+	 * The FAR edge of a stand template, local x: EntranceSetback behind the stop mark plus the
+	 * depth it measured. Every service contact sits just inside it since 2026-09-26 (user:
+	 * service vehicles enter only by the edge opposite the taxiway).
+	 */
+	inline double FarEdgeX(const UEntityDefinition& Stand)
+	{
+		const TOptional<EIcaoCode> Code = IcaoCode::Parse(
+			IcaoCode::LetterForStandSize(Stand.RequiredExtent.X, Stand.RequiredExtent.Y));
+		check(Code.IsSet());
+		return -StandBox::EntranceSetback(*Code, IcaoCode::FloorEnvelopeForLetter(*Code))
+			+ Stand.RequiredExtent.Y;
+	}
+
+	/**
+	 * Where a GSE road serving the shipping stand runs: 420 uu beyond its FAR edge. The fixtures
+	 * that typed x = -5400 - 420 behind the old aft edge - read it here instead, so moving the
+	 * edge again moves them with it. SHARED, so ServiceLinkTest and FuelDepotAnchorTest cannot
+	 * lay their roads by two different rules.
+	 */
+	inline double FarRoadX()
+	{
+		return FarEdgeX(*UEntityDefinition::MakeStandTransient()) + 420.0;
 	}
 }
 

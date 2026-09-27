@@ -6,6 +6,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/RoadGeom.h"
+#include "Solve/StandBox.h"
 
 namespace
 {
@@ -106,7 +107,7 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 		const FLetterEnvelope& DepthEnvelope = GlyphLetter.IsSet()
 			? Envelopes[DepthLetter]
 			: IcaoCode::FloorEnvelopeForLetter(DepthLetter);
-		const double Distance = IcaoCode::StandDepthForLetter(DepthLetter) - DepthEnvelope.MaxNoseFwd;
+		const double Distance = StandBox::EntranceSetback(DepthLetter, DepthEnvelope);
 		const FVector2D EntranceMid = Entity.Position - Facing * Distance;
 
 		// LEAD-IN: entrance midpoint to the stop mark, along the heading, LeadInWidth wide.

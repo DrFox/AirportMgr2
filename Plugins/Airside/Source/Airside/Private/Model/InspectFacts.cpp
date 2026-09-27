@@ -129,6 +129,52 @@ namespace InspectFacts
 		// already guarantees (#104).
 		const FGuidelineNode* Node = Network.GetGuidelineNode(E.PoseNode);
 		Out.bReachable = Node != nullptr && Node->Incident.Num() > 0;
+
+		// EVERY DECLARED BAY ENTRY, walked off ResolvedAnchors rather than
+		// Definition->ServiceBays: this is Model/, which must not dereference the Entities
+		// layer (see RoadEntity.h's own comment on FEntityInstance::Definition), so the only
+		// way to tell "a bay a vehicle drives to" from the pose and from a walked-to
+		// (Pedestrian) fixture is the Role each anchor already captured, through the same
+		// TraversalForRole a stand's own service links were cast with (AnchorLink.cpp).
+		//
+		// ROLE ALONE IS NOT ENOUGH. A GroundVehicle-role anchor with no matching FServiceBay
+		// (AnchorLink.cpp's own "has no service bay on a stand that has a layout" warning -
+		// a content gap, e.g. an authored TugStand fixture BuildStandTemplate never gave a
+		// bay to) never gets a lane laid at all and sits with no edge, forever - found the
+		// hard way when it forced bServiceable false on a fully-joined stand. The same
+		// Incident check bReachable already runs on the pose node, run here per anchor, is
+		// what tells "a laid bay" from "a declared fixture with none": a bay's own legs put
+		// edges on its node at PLACEMENT, before any road is ever drawn near it.
+		//
+		// WALKED FROM THE SERVICE POINT, NOT FROM FServiceBay::EntryLocal's OWN NODE - the
+		// same layering reason as above: EntryLocal lives on Definition->ServiceBays, and this
+		// is Model/. That reads the right answer only because StandLayoutBuild::LayLeg lays
+		// every bay as ONE CONTINUOUS stand-owned chain, Entry -> Park -> Service -> Cleared ->
+		// Exit, so a walk from the service point in the middle of that chain reaches the entry
+		// (and the road beyond it) without ever crossing an unowned edge first.
+		// ENFORCED BY: Airside.Entities.EveryBayEntryReachesItsServicePoint, which walks
+		// stand-owned edges only, from the service point to the entry, for every letter and
+		// bay - it goes red the day a layout ever stops running one chain through both.
+		int32 BayCount = 0;
+		bool bAllJoined = true;
+		for (const FResolvedAnchor& Anchor : E.ResolvedAnchors)
+		{
+			if (TraversalForRole(Anchor.Role) != ETraversalClass::GroundVehicle)
+			{
+				continue;
+			}
+			const FGuidelineNode* BayNode = Network.GetGuidelineNode(Anchor.Node);
+			if (BayNode == nullptr || BayNode->Incident.Num() == 0)
+			{
+				continue;
+			}
+			++BayCount;
+			bAllJoined &= Network.IsServiceNodeConnected(Anchor.Node);
+		}
+		// FALSE FOR NO BAYS: see FStandFacts::bServiceable - "every" over an empty set would
+		// otherwise read as trivially true.
+		Out.bServiceable = BayCount > 0 && bAllJoined;
+
 		Out.OccupantAgent = 0;
 		Out.bOccupantParked = false;
 		if (Traffic != nullptr && E.PoseNode.IsSet())

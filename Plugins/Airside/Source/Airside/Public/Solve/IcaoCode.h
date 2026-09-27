@@ -198,8 +198,28 @@ namespace IcaoCode
 	 * The widest letter has no letter above it, so its maximum is unbounded and this reports
 	 * DBL_MAX. A stand wider than any aeroplane needs is not an error - see the ruling that a
 	 * small airframe on a large stand is fine.
+	 *
+	 * CODE A'S BAND IS EMPTY since 2026-09-26: A and B share a width floor (5000, set by the
+	 * utility tow's lane, not by either span - see the spec's Decisions), so
+	 * MaxStandWidthForLetter(A) == StandWidthForLetter(A) and no width reads as A on its own. A
+	 * is told from B by DEPTH (3400 against 3950): LetterForStandSize takes the largest letter
+	 * both dimensions fit, so a 5000-wide stand under 3950 deep is an A. The bands still tile -
+	 * an empty band is a width owned by no letter only if it has non-zero extent.
+	 * ENFORCED BY: Airside.Solve.StandWidthIsDerivedFromClearance (the A-band assertions)
 	 */
 	AIRSIDE_API double MaxStandWidthForLetter(EIcaoCode Code);
+
+	/**
+	 * Wingtip clearance on a stand of this letter, uu - the gap ICAO wants between a parked
+	 * aeroplane's wingtip and anything beside it. See FRow::WingtipClearance for the figures'
+	 * own history.
+	 *
+	 * EXPOSED FOR StandBox::EntranceSetback, since this task (far-side entry): the setback
+	 * that keeps a parked tail clear of the entrance's taxiway pavement is this same
+	 * clearance, applied fore-aft off the tail instead of side-on off the wingtip. Every other
+	 * caller reaches it only through WidthOf here.
+	 */
+	AIRSIDE_API double WingtipClearanceForLetter(EIcaoCode Code);
 
 	/**
 	 * How wide a lane a service vehicle needs, uu - four metres, a service road's own lane.
@@ -212,8 +232,9 @@ namespace IcaoCode
 	AIRSIDE_API double ServiceLaneWidth();
 
 	/**
-	 * How deep a stand of this letter is, uu - nose to the back of its GSE road. AUTHORED,
-	 * and the only figure here that is; see the row's comment for why no rule produces it.
+	 * How deep a stand of this letter is, uu: tail setback + aircraft + service ground ahead
+	 * of the nose - the entrance edge to the back of the GSE road. AUTHORED, and the only
+	 * figure here that is; see the row's comment for why no rule produces it.
 	 *
 	 * Takes the enum, as StandWidthForLetter does.
 	 */
@@ -227,8 +248,9 @@ namespace IcaoCode
 	 * THIS IS THE GAME MECHANIC, not a lookup. The player draws a stand polygon; its size
 	 * decides which aircraft may use it. Nobody picks a letter.
 	 *
-	 * BOTH DIMENSIONS, NEVER ONE. A 67 x 30 m stand is D-wide and nothing bigger than a
-	 * King Air fits in 30 m of depth, so it is a Code B. The answer is the largest letter
+	 * BOTH DIMENSIONS, NEVER ONE. A 67 x 40 m stand is D-wide and nothing bigger than a
+	 * King Air fits in 40 m of depth, so it is a Code B (30 m until the 2026-09-26 depth rise,
+	 * which now reads as no letter at all). The answer is the largest letter
 	 * whose width AND depth both fit, which is not the largest whose width fits.
 	 *
 	 * Empty is a real answer, not a failure: a stand smaller than Code A is refused at

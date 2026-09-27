@@ -5,11 +5,13 @@
 #include "Entities/AircraftType.h"
 #include "Model/RoadEntity.h"
 #include "Model/RouteSearch.h"
+#include "Model/Vehicle.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/LetterEnvelope.h"
 #include "EntityDefinition.generated.h"
 
 class URoadNetwork;
+struct FVehicle;
 
 /**
  * Which authored installation a placement gesture drops.
@@ -248,6 +250,19 @@ public:
 	UPROPERTY(VisibleAnywhere) FVector2D RequiredExtent = FVector2D::ZeroVector;
 
 	/**
+	 * The vehicle ServiceBays' lanes were laid for and proven drivable by - BuildStandTemplate's
+	 * Design argument, stored as it was built, so a service asking "may this vehicle serve here"
+	 * (VehicleFit::NoLargerThan against it) asks THIS definition and not a resolve that could have
+	 * moved on since (2026-09-27: a per-letter table beside it held the same fact twice).
+	 *
+	 * COMPUTED, like ServiceBays and RequiredExtent, never authored. An asset saved before this
+	 * field existed loads it empty (TypeCode None); UAirsideSettings::ResolveStandDesignVehicleOf falls back to
+	 * the letter's resolve then, and says so.
+	 * ENFORCED BY: AirportOps.Fuel.StandDesignVehicleFallsBackWhenUnauthored
+	 */
+	UPROPERTY(VisibleAnywhere) FVehicle DesignVehicle;
+
+	/**
 	 * What the ground here can provide at all, whether from fixed plant or from equipment
 	 * that drives up.
 	 *
@@ -385,7 +400,10 @@ public:
 	 * EXISTS FOR THE TEST that proves the derivation is a derivation. Given a longer vehicle
 	 * the equipment boxes must move outward; asked of the shipping vehicle alone, that
 	 * assertion would pass just as well against a hand-typed figure, which is exactly what
-	 * this change removes. BuildCodeCStand forwards with ResolveLargestServiceVehicle().
+	 * this change removes. BuildCodeCStand forwards with ResolveStandDesignVehicle(C).
+	 *
+	 * A WHOLE FVehicle, not a chassis, since 2026-09-26: a tow's reverse radius is its trailer's
+	 * (VehicleFit::TightestReverseRadius), which a chassis alone cannot answer.
 	 *
 	 * A ONE-LINE FORWARDER onto BuildStandFor(..., EIcaoCode::C, ...) since the drawn-stand
 	 * work generalised the body to every letter - kept, at this name, because
@@ -395,10 +413,10 @@ public:
 	 * Envelope BY REFERENCE, since #292, for the reason StandBox::PoseFor's header gives:
 	 * MaxTailAft/MaxNoseFwd are fleet figures now, resolved by the caller
 	 * (BuildCodeCStand's own UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::C) call) and
-	 * handed in rather than re-derived here - the same test-injection role Largest plays.
+	 * handed in rather than re-derived here - the same test-injection role Design plays.
 	 */
 	static void BuildCodeCStandFor(
-		UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest,
+		UEntityDefinition* Definition, UAircraftType* Aircraft, const FVehicle& Design,
 		const FLetterEnvelope& Envelope);
 
 	/**
@@ -420,7 +438,7 @@ public:
 	 * Envelope BY REFERENCE - see BuildCodeCStandFor's own comment.
 	 */
 	static void BuildStandFor(
-		UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FChassis& Largest,
+		UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FVehicle& Design,
 		const FLetterEnvelope& Envelope);
 
 	/**
@@ -441,7 +459,13 @@ public:
 
 	/**
 	 * Lay the layout template - entry, staging rank, a bay per service anchor, and the legs
-	 * between them - for a stand of this ICAO code Letter, sized for Largest.
+	 * between them - for a stand of this ICAO code Letter, sized for Design, the letter's own
+	 * design vehicle (UAirsideSettings::ResolveStandDesignVehicle).
+	 *
+	 * EVERY CONTACT IS ON THE FAR EDGE, the one opposite the taxiway (user 2026-09-26): the box
+	 * runs from the entrance, StandBox::EntranceSetback behind the stop mark, to Depth beyond
+	 * it, and each bay's entry sits Square inside that front edge facing aft.
+	 * ENFORCED BY: Airside.Entities.EveryBayContactIsOnTheFarEdge
 	 *
 	 * SEPARATE FROM BuildCodeCStandFor, and not merely extracted from it: the anchors above
 	 * are Code C's plant, and this is the RULE that turns any letter's anchors into a
@@ -460,7 +484,7 @@ public:
 	 * which stayed plain IcaoCode:: functions - see Solve/LetterEnvelope.h for why).
 	 */
 	static void BuildStandTemplate(
-		UEntityDefinition& Definition, EIcaoCode Letter, const FChassis& Largest,
+		UEntityDefinition& Definition, EIcaoCode Letter, const FVehicle& Design,
 		const FLetterEnvelope& Envelope);
 
 	/**

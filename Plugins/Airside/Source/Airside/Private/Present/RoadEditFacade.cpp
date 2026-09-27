@@ -443,6 +443,14 @@ FBuildSessionTunables URoadEditFacade::MakeTunables(double ViewWorldWidth)
 	// ResolveLetterEnvelope directly (Present/ may reach Content/; Tool/ may not).
 	Tunables.Envelopes = UAirsideSettings::ResolveLetterEnvelopeTable();
 
+	// THE SERVICE ROAD'S HALF-WIDTH, through the actor's one resolver for its profile (user
+	// ruling 2026-09-27): the plot ghost's ServiceEdge line sits this far out past a stand's far
+	// edge - see FToolContext::ServiceRoadHalfWidth. No profile resolved leaves it 0, on the edge.
+	if (const URoadProfile* ServiceRoad = Owner.ResolveServiceRoadProfile())
+	{
+		Tunables.ServiceRoadHalfWidth = ServiceRoad->GetMaxHalfWidth();
+	}
+
 	// ViewWorldWidth > 0: the caller has no view-scale UPROPERTY of its own to read (the
 	// editor tool) and wants a radius that stays clickable at any zoom - the same 2% floor
 	// URoadBuildEditorTool::MakeContextAt used to compute for itself. 0: the caller (the

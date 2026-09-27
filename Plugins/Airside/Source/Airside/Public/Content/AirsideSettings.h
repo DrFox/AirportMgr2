@@ -205,6 +205,30 @@ public:
 	static FVehicle ResolveLargestServiceBody();
 
 	/**
+	 * What a STAND is sized for, by its own letter (user ruling 2026-09-26): the largest vehicle
+	 * that letter admits at all - the utility tow for A and B, the fuel truck from C up.
+	 *
+	 * A SEPARATE FUNCTION FROM ResolveLargestServiceVehicle, and beside it for that reason: the
+	 * two ask different questions and answer them differently once a second vehicle exists.
+	 * ResolveLargestServiceVehicle asks what every SERVICE ROAD must be able to turn - one road
+	 * carries every letter's traffic, so it is sized for the largest vehicle that will EVER drive
+	 * on it. This asks what ONE LETTER's own stand is sized for, which is smaller for A and B -
+	 * merging the two would either widen an A stand's geometry to the truck's for no reason, or
+	 * narrow a service road to whatever the smallest letter using it that day needs.
+	 */
+	static FVehicle ResolveStandDesignVehicle(EIcaoCode Letter);
+
+	/**
+	 * What a PLACED stand's lanes were built for: its definition's own DesignVehicle, the vehicle
+	 * BuildStandTemplate laid them for. A definition that does not carry one - an asset saved
+	 * before the field existed, or none at all - falls back to ResolveStandDesignVehicle(Letter)
+	 * and logs a Warning once per definition, because the answer is then a guess about how the
+	 * stand was built rather than a fact read off it (2026-09-27).
+	 * ENFORCED BY: AirportOps.Fuel.StandDesignVehicleFallsBackWhenUnauthored
+	 */
+	static FVehicle ResolveStandDesignVehicleOf(const UEntityDefinition* Definition, EIcaoCode Letter);
+
+	/**
 	 * THE ONE PLACE a service-road width tier names its design vehicle (user ruling 2026-09-25,
 	 * see FRoadDesignVehicles): the Wide tier - ServiceRoadProfiles[WideServiceTier] - is
 	 * designed for the articulated rig (ResolveRigVehicle), and every other tier is left to the

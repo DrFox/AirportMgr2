@@ -530,6 +530,54 @@ double VehicleFit::ChainLength(const FVehicle& Vehicle)
 	return Length;
 }
 
+bool VehicleFit::NoLargerThan(const FVehicle& A, const FVehicle& B)
+{
+	return A.WidestBody() <= B.WidestBody()
+		&& A.Chassis.TightestFollowableRadius() <= B.Chassis.TightestFollowableRadius()
+		&& TightestReverseRadius(A) <= TightestReverseRadius(B)
+		&& ChainLength(A) <= ChainLength(B);
+}
+
+double VehicleFit::TightestReverseRadius(const FVehicle& Vehicle)
+{
+	const double Rigid = Vehicle.Chassis.TightestReversibleRadius();
+	if (!Vehicle.HasTrailer())
+	{
+		return Rigid;
+	}
+
+	const VehicleSweep::FBody Reverse = TowReverse::ReverseBody(BodyOf(Vehicle));
+	const double MaxSteerRadians = FMath::DegreesToRadians(Vehicle.Chassis.Ground.MaxSteerDegrees);
+	const double Limit = TowReverseHitchMargin * TowReverse::CriticalHitchRadians(Reverse, MaxSteerRadians);
+	auto HoldsMargin = [&Reverse, Limit](double R)
+	{
+		return FMath::Abs(TowReverse::SteadyHitchRadians(Reverse, 1.0 / R)) <= Limit;
+	};
+
+	// BISECT ON R, RIGID UP TO 100000 uu (a kilometre - no stand's bay is anywhere near this):
+	// Lo starts at the rigid floor (TightestReverseRadius can never be tighter than the tractor's
+	// own lock allows) and Hi wide enough that the hitch has settled near zero, so Hi holds the
+	// margin from the first iteration and Lo may or may not - either way the invariant "Hi holds,
+	// Lo is no looser than the answer" survives every step, and Hi never drops below Lo. 40
+	// halvings of a 100000 uu span land within a hundred-thousandth of a uu, far under anything
+	// this feeds into (VehicleFit::NoLargerThan, a stand's own layout figures).
+	double Lo = Rigid;
+	double Hi = 100000.0;
+	for (int32 Iteration = 0; Iteration < 40; ++Iteration)
+	{
+		const double Mid = 0.5 * (Lo + Hi);
+		if (HoldsMargin(Mid))
+		{
+			Hi = Mid;
+		}
+		else
+		{
+			Lo = Mid;
+		}
+	}
+	return FMath::Max(Rigid, Hi);
+}
+
 double VehicleFit::TowReverseExitOffset(const TowReverse::FSample& End, const FChassis& Chassis, const FRoutePlan& Remainder,
 	double* OutAlong)
 {
@@ -613,11 +661,25 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 		}
 		if (!End.IsSet())
 		{
-			// A PLAN THAT OPENS WITH A REVERSE has no pose to solve it from - FTowSeed carries the
-			// chain but not where the cab is. Judged as before this change: not at all. No such
-			// plan reaches a tow today (2026-09-26): a reverse turn's leg always follows its
-			// approach, and stands send tows nowhere yet (step 3).
-			return Verdict;
+			// A PLAN THAT OPENS WITH A REVERSE - a stand's route home off its service point, which
+			// the utility tow has driven since 2026-09-26 - is solved from where the LIVE cab is:
+			// FTowSeed::Origin, the pose FRoadAgent arms FTowReverseRun from. This branch used to
+			// pass such a plan unjudged ("not at all"), and a route home the router admitted was
+			// refused at the hydrant ("turntable bent 13.4 deg") and the tow stranded there (fixed
+			// 2026-09-27). Without a seed there is nothing to solve from, so it is REFUSED, not
+			// guessed: a chain laid straight would be a different truck.
+			if (Seed == nullptr || !Seed->Origin.IsSet() || Seed->Axles.Num() != Vehicle.Tow.Num())
+			{
+				Verdict.Refusal = EFitRefusal::ReverseUnsolvable;
+				Verdict.Reason = TEXT("the route opens with a reverse and no live cab pose was given to solve it from");
+				NamePlanStep(InPlan, FirstReverse, Network, Verdict);
+				return Verdict;
+			}
+			FTowEnd& Seeded = End.Emplace();
+			Seeded.Origin = Seed->Origin.GetValue();
+			Seeded.Heading = Seed->Heading;
+			Seeded.Speed = Seed->Speed;
+			Seeded.Axles.Append(Seed->Axles.GetData(), Seed->Axles.Num());
 		}
 
 		TowReverse::FInput In;

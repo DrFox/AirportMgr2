@@ -203,6 +203,37 @@ public:
 		double KeepBehind = -1.0, double* OutDropped = nullptr);
 
 	/**
+	 * GROUND VEHICLES ONLY: an aircraft is refused (false, logged) - its route changes go through
+	 * RedirectAgent and ReplanAt, which own its runway and stand claims.
+	 *
+	 * Sends a MOVING agent somewhere NEW without stopping it: the live plan's first KeepSteps
+	 * steps, spliced with Tail (RouteSearch::Splice), handed to the follower with Replace - so
+	 * Travelled, Speed, Heading and a tow's chain all carry on - and the goal moved to Tail's end
+	 * through the same two calls RedirectAgent and ExtendRoute use (ReleaseGoal, TakeGoal).
+	 *
+	 * FOR A JOB CALLED OFF MID-DRIVE (final review, 2026-09-27): a fuel vehicle whose aircraft
+	 * leaves before it arrives. RedirectAgent is a dispatch - it restarts the vehicle at the new
+	 * plan's FIRST point, so a route home searched from anywhere but where the vehicle is put it
+	 * there in one frame. ReplanAt keeps the goal; ExtendRoute keeps every step. This keeps the
+	 * steps up to a node ahead of the agent and changes the goal - ReplanAt's splice with a new
+	 * destination, and ReplanAt's bookkeeping: reservations for the route that no longer exists
+	 * released, the arbitration fields and the stall clock cleared.
+	 *
+	 * KeepSteps MUST KEEP THE STEP THE AGENT IS ON (KeepSteps > CurrentStep), for ReplanAt's
+	 * reason: Travelled survives, so a splice behind the agent re-maps it onto other geometry and
+	 * it teleports. Tail must start where step KeepSteps - 1 ends.
+	 *
+	 * FALSE AND NOTHING CHANGED for an unknown or not-Taxiing agent, a KeepSteps that is not
+	 * ahead of it, a Tail that does not join, or - for a tow - a spliced route that does not
+	 * hold its trailer, judged WHOLE from the live chain (VehicleFit::JudgePlan): a tail searched
+	 * from a straight lay can still fold a trailer the kept prefix has swung, and a reverse in it
+	 * is solved from the chain the prefix leaves, which only the whole route knows.
+	 * ENFORCED BY: AirportOps.Fuel.TowRecalledMidRouteGetsHome,
+	 * AirportOps.Fuel.TruckRecalledMidRouteGetsHome
+	 */
+	bool RerouteAgent(int32 AgentId, const URoadNetwork* Network, int32 KeepSteps, const FRoutePlan& Tail);
+
+	/**
 	 * Sends a PARKED agent to whichever runway gives the shortest admitted taxi, with the
 	 * take-off armed - the inspector's Depart button. Anything not Parked is refused as
 	 * NotParked: a taxiing aircraft has a plan, an arriving one is not on the ground, a
@@ -785,6 +816,15 @@ private:
 	 */
 	bool BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySeed);
 
+	/**
+	 * Swaps a Vehicle-bodied agent's FVehicle in place, figures only - no re-lay of its tow, no
+	 * re-plan. So a world-free test can make the vehicle ALREADY OUT no longer fit the road it
+	 * will be sent home on: UFuelService routes a truck home by the agent's own vehicle, and
+	 * that is set once, at dispatch. False for an unknown agent or an aircraft. Not public -
+	 * see FGroundTrafficTestAccess (#104).
+	 */
+	bool SetVehicleForTest(int32 AgentId, const FVehicle& Vehicle);
+
 public:
 	/** Route distance at which Step begins - the previous step's end, or 0. Public: FClaimPass,
 	 *  FDeadlockResolver and FPlanReResolver all read plan geometry through this and the two
@@ -816,6 +856,9 @@ struct FGroundTrafficTestAccess
 
 	/** See UGroundTraffic::StrandForTest's own comment. */
 	bool Strand(int32 AgentId) { return Traffic.StrandForTest(AgentId); }
+
+	/** See UGroundTraffic::SetVehicleForTest's own comment. */
+	bool SetVehicle(int32 AgentId, const FVehicle& Vehicle) { return Traffic.SetVehicleForTest(AgentId, Vehicle); }
 
 	/** See UGroundTraffic::BeginCrossingForTest's own comment. */
 	bool BeginCrossing(int32 AgentId, FRoadSegmentId RunwaySeed)

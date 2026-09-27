@@ -748,3 +748,80 @@ bool FWholeRouteShortcutTest::RunTest(const FString& Parameters)
 }
 
 #endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTowWholeRouteSolvesAnOpeningReverseFromTheSeedTest,
+	"Airside.Model.Tow.WholeRouteSolvesAnOpeningReverseFromTheSeed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTowWholeRouteSolvesAnOpeningReverseFromTheSeedTest::RunTest(const FString& Parameters)
+{
+	// A ROUTE THAT OPENS WITH A REVERSE - a stand's route home off its service point - used to be
+	// passed UNJUDGED (JudgePlan's "not at all" branch): the router admitted the utility tow's
+	// route home off a Code A hydrant and the tow was stranded there when the reverse would not
+	// arm (fixed 2026-09-27). It is now solved from the seed's cab pose, which is where
+	// FTowReverseRun arms from, and refused without one.
+	const FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	// PARKED FOR REAL, by the agent's own driving - so the seed is a chain the agent left, not
+	// one this test laid.
+	FRoutePlan In;
+	In.Result = ERouteResult::Found;
+	for (double Y = 4000.0; Y >= 0.0; Y -= 100.0)
+	{
+		In.Polyline.Add(FVector2D(0.0, Y));
+	}
+	In.Length = GuidelineGeom::PolylineLength(In.Polyline);
+	const int32 Id = Traffic->DispatchAgent(nullptr, In, Tow, ETraversalClass::GroundVehicle, 0.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	for (int32 Tick = 0; Tick < 4000 && Traffic->FindAgent(Id)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Traffic->Advance(0.05, nullptr);
+	}
+	const FRoadAgent* Parked = Traffic->FindAgent(Id);
+	if (!TestEqual(TEXT("parked"), static_cast<int32>(Parked->Phase), static_cast<int32>(EAgentPhase::Parked))) { return false; }
+
+	// BACK up the line, then forward away down a side road: reverse first, as a bay's route home.
+	TArray<TestPlans::FRun> Runs;
+	TestPlans::FRun& Back = Runs.AddDefaulted_GetRef();
+	Back.bReverse = true;
+	for (double Y = 0.0; Y <= 1500.0; Y += 100.0)
+	{
+		Back.Points.Add(FVector2D(0.0, Y));
+	}
+	TestPlans::FRun& Away = Runs.AddDefaulted_GetRef();
+	for (double Y = 1500.0; Y >= -3000.0; Y -= 100.0)
+	{
+		Away.Points.Add(FVector2D(0.0, Y));
+	}
+	const FRoutePlan Home = TestPlans::Chain(Runs);
+
+	const FFitVerdict Unseeded = VehicleFit::JudgePlan(Home, Tow, *Network);
+	TestEqual(TEXT("unseeded, an opening reverse is refused - not passed unjudged"),
+		static_cast<int32>(Unseeded.Refusal), static_cast<int32>(EFitRefusal::ReverseUnsolvable));
+
+	FTowSeed Seed;
+	Seed.Axles = Parked->TowAxles;
+	Seed.Heading = Parked->LastMotion.Heading;
+	Seed.Origin = Parked->LastMotion.Position;
+	const FFitVerdict Live = VehicleFit::JudgePlan(Home, Tow, *Network, &Seed);
+	TestTrue(*FString::Printf(TEXT("seeded from where the tow is parked, it is solved and admitted - %s"), *Live.Describe()),
+		Live.Fits());
+
+	// THE POSE THE AGENT USED TO ARM FROM (RestartTaxi's old fallback: the steered axle's spot,
+	// heading 0), so this judge is shown to measure the pose and not merely to have one.
+	FTowSeed Wrong = Seed;
+	Wrong.Origin = Home.Polyline[0];
+	Wrong.Heading = 0.0;
+	const FFitVerdict Bent = VehicleFit::JudgePlan(Home, Tow, *Network, &Wrong);
+	TestEqual(TEXT("from the wrong cab pose the same reverse is refused"),
+		static_cast<int32>(Bent.Refusal), static_cast<int32>(EFitRefusal::ReverseUnsolvable));
+	TestTrue(*FString::Printf(TEXT("for the turntable the runtime refused on - %s"), *Bent.Describe()),
+		Bent.Describe().Contains(TEXT("turntable bent")));
+	return true;
+}
+
+#endif

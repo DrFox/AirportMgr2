@@ -1,13 +1,21 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Build/StandLayoutBuild.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ReverseRun.h"
 #include "Model/RoadEntity.h"
+#include "Model/RoadGuideline.h"
+#include "Model/RoadNetwork.h"
 #include "Model/SpeedProfile.h"
+#include "Model/Vehicle.h"
+#include "Model/VehicleFit.h"
+#include "Solve/GuidelineGeom.h"
 #include "Solve/IcaoCode.h"
+#include "Solve/StandBox.h"
+#include "StandFixture.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -34,6 +42,107 @@ namespace StandLayoutFixture
 			Out.Add({ Who + TEXT(" serve"), &Bay.ServeLeg, false });
 			Out.Add({ Who + TEXT(" reverse"), &Bay.ReverseLeg, true });
 			Out.Add({ Who + TEXT(" depart"), &Bay.DepartLeg, false });
+		}
+		return Out;
+	}
+
+	/** A whole-route verdict, beside the plan it was reached on. */
+	struct FVerdictAndPlan
+	{
+		FFitVerdict Verdict;
+		FRoutePlan Plan;
+	};
+
+	/**
+	 * One bay's four legs, chained into the plan a tow drives through it (arrive, serve,
+	 * reverse flagged, depart) and judged by VehicleFit::JudgePlan - the router's own whole-route
+	 * check, which solves the reverse from the chain the serve leg left.
+	 */
+	inline FVerdictAndPlan JudgeBay(const FServiceBay& Bay, const FVehicle& Vehicle, const URoadNetwork& Network)
+	{
+		TArray<TestPlans::FRun> Runs;
+		const TPair<const FStandLeg*, bool> Legs[] = {
+			{ &Bay.ArriveLeg, false }, { &Bay.ServeLeg, false }, { &Bay.ReverseLeg, true }, { &Bay.DepartLeg, false } };
+		for (const TPair<const FStandLeg*, bool>& Leg : Legs)
+		{
+			TestPlans::FRun& Run = Runs.AddDefaulted_GetRef();
+			Leg.Key->Sample(Run.Points);
+			Run.bReverse = Leg.Value;
+		}
+		FVerdictAndPlan Out;
+		Out.Plan = TestPlans::Chain(Runs);
+		Out.Verdict = VehicleFit::JudgePlan(Out.Plan, Vehicle, Network);
+		return Out;
+	}
+
+	/**
+	 * JudgeBay with a LEAD-IN in front of the bay: a road straight along the far edge, then a
+	 * square turn at Radius onto the entry's own heading, ending on the entry. bFromPort picks
+	 * which way along the road it comes, since the turn's hand decides which way the trailer
+	 * swings.
+	 *
+	 * WHY: JudgeBay alone starts the tow STRAIGHT at the entry, and no tow arrives that way - it
+	 * has just turned off the road. Measured on the utility tow reaching a Code A entry off a
+	 * far-edge road (AirportOps.Fuel.TowServesCodeA, 2026-09-27): turntable 35.7 deg in the
+	 * corner and still 12.9 at the entry. A square turn at the design vehicle's own template
+	 * radius (LegSlack times its tightest) is the tightest a road join lays for it, so it bends
+	 * the chain at least as hard as a real lead-in does.
+	 */
+	inline FVerdictAndPlan JudgeBayArrivingBent(const FServiceBay& Bay, const FVehicle& Vehicle,
+		const URoadNetwork& Network, double Radius, bool bFromPort)
+	{
+		const FVector2D Entry = Bay.EntryLocal;
+		const FVector2D Heading(FMath::Cos(Bay.EntryHeading), FMath::Sin(Bay.EntryHeading));
+		// THE TURN'S CENTRE, on the inside: left of the final heading for a turn that ends
+		// turning left (arriving from port), right of it for the other hand.
+		const FVector2D Left(-Heading.Y, Heading.X);
+		const double Hand = bFromPort ? 1.0 : -1.0;
+		const FVector2D Centre = Entry + Left * Hand * Radius;
+		TArray<TestPlans::FRun> Runs;
+		TestPlans::FRun& Road = Runs.AddDefaulted_GetRef();
+		// Back along the entry heading by R from the centre is the arc's start; the road runs
+		// into it along the final heading's perpendicular.
+		const FVector2D ArcStart = Centre - Heading * Radius;
+		const FVector2D Along = -Left * Hand;   // the direction of travel on the road
+		for (double D = 3000.0; D > 0.0; D -= 100.0)
+		{
+			Road.Points.Add(ArcStart - Along * D);
+		}
+		TestPlans::FRun& Turn = Road;
+		constexpr int32 Samples = 36;
+		const FVector2D From = ArcStart - Centre;
+		for (int32 K = 0; K <= Samples; ++K)
+		{
+			const double A = Hand * UE_DOUBLE_HALF_PI * K / Samples;
+			const FVector2D R(From.X * FMath::Cos(A) - From.Y * FMath::Sin(A), From.X * FMath::Sin(A) + From.Y * FMath::Cos(A));
+			Turn.Points.Add(Centre + R);
+		}
+		const TPair<const FStandLeg*, bool> Legs[] = {
+			{ &Bay.ArriveLeg, false }, { &Bay.ServeLeg, false }, { &Bay.ReverseLeg, true }, { &Bay.DepartLeg, false } };
+		for (const TPair<const FStandLeg*, bool>& Leg : Legs)
+		{
+			TestPlans::FRun& Run = Runs.AddDefaulted_GetRef();
+			Leg.Key->Sample(Run.Points);
+			Run.bReverse = Leg.Value;
+		}
+		// THE ROAD AND THE BAY'S ARRIVE LEG ARE ONE FORWARD RUN in play (no reverse between
+		// them), so they are one run here: the chain carries its bend straight into the arrive leg.
+		Runs[0].Points.Pop();
+		Runs[0].Points.Append(Runs[1].Points);
+		Runs.RemoveAt(1);
+		FVerdictAndPlan Out;
+		Out.Plan = TestPlans::Chain(Runs);
+		Out.Verdict = VehicleFit::JudgePlan(Out.Plan, Vehicle, Network);
+		return Out;
+	}
+
+	/** Every letter the drawn-stand tool offers, A to F, in declaration order. */
+	inline TArray<EIcaoCode> AllLetters()
+	{
+		TArray<EIcaoCode> Out;
+		for (int32 Index = 0; Index <= static_cast<int32>(EIcaoCode::F); ++Index)
+		{
+			Out.Add(static_cast<EIcaoCode>(Index));
 		}
 		return Out;
 	}
@@ -143,52 +252,155 @@ bool FEveryTemplateLegIsDrivableByEveryVehicleTest::RunTest(const FString& Param
 	// ASKED OF THE AUTHORITIES, never re-derived: forward legs of FSpeedProfile, reverse legs
 	// of FReverseRun::Start, which already refuses what it cannot hold. Restating a JUDGEMENT
 	// in a test is what let four attempts ship green and crab in PIE.
-	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	//
+	// PER LETTER, BY ITS DESIGN VEHICLE AND EVERY VEHICLE NO LARGER (user 2026-09-26): each
+	// letter's template is laid for UAirsideSettings::ResolveStandDesignVehicle(Letter), and a
+	// smaller vehicle may serve it too. "Smaller" is VehicleFit::NoLargerThan, strict on all four
+	// axes - so the tow (chain 575) is NOT smaller than the truck (355) and is not asked to drive
+	// a C-F stand here. A TOW is judged through VehicleFit::JudgePlan over the whole bay - arrive,
+	// serve, reverse, depart - because a trailer's fold is a property of the chain it arrives
+	// with, which no one leg on its own can show.
+	const TArray<FVehicle> Fleet = {
+		UAirsideSettings::ResolveUtilityTowVehicle(), UAirsideSettings::ResolveDefaultVehicle() };
+	URoadNetwork* Network = NewObject<URoadNetwork>();
 
-	TArray<TPair<FString, FChassis>> Fleet;
-	Fleet.Emplace(TEXT("default vehicle"), UAirsideSettings::ResolveDefaultVehicle().Chassis);
-	const FChassis Largest = UAirsideSettings::ResolveLargestServiceVehicle();
-	if (!FMath::IsNearlyEqual(Largest.Wheelbase(), Fleet[0].Value.Wheelbase(), 0.01))
+	for (const EIcaoCode StandLetter : AllLetters())
 	{
-		Fleet.Emplace(TEXT("largest service vehicle"), Largest);
-	}
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
+		const FVehicle Design = UAirsideSettings::ResolveStandDesignVehicle(StandLetter);
 
-	for (const TPair<FString, FChassis>& Vehicle : Fleet)
-	{
-		for (const FNamedLeg& Named : LegsOf(*Stand))
+		for (const FVehicle& Vehicle : Fleet)
 		{
-			const FRoutePlan Plan = Named.Leg->ToPlan();
-			const FString Who = FString::Printf(TEXT("%s: %s"), *Vehicle.Key, *Named.What);
-
-			if (!TestTrue(*FString::Printf(TEXT("%s is a usable plan"), *Who), Plan.IsValid()))
+			if (!VehicleFit::NoLargerThan(Vehicle, Design))
 			{
 				continue;
 			}
+			const FString Vehicular = FString::Printf(TEXT("Code %s, %s"),
+				IcaoCode::ToLetter(StandLetter), *Vehicle.TypeCode.ToString());
+			const bool bTow = !Vehicle.Tow.IsEmpty();
 
-			if (Named.bReverse)
+			for (const FNamedLeg& Named : LegsOf(*Stand))
 			{
-				// ASKED OF THE MANOEUVRE ITSELF, not of a profile built here. FReverseRun::Start
-				// is what will actually arm it in play, and it refuses a curve it cannot hold
-				// AND a sharp vertex, separately. Anything else is a second evaluator.
-				FReverseRun Run;
-				TestTrue(*FString::Printf(TEXT("%s arms as a reverse"), *Who),
-					Run.Start(Plan, Vehicle.Value, /*InReverseSpeed=*/100.0));
-				continue;
+				const FRoutePlan Plan = Named.Leg->ToPlan();
+				const FString Who = FString::Printf(TEXT("%s: %s"), *Vehicular, *Named.What);
+
+				if (!TestTrue(*FString::Printf(TEXT("%s is a usable plan"), *Who), Plan.IsValid()))
+				{
+					continue;
+				}
+
+				if (Named.bReverse)
+				{
+					// ASKED OF THE MANOEUVRE ITSELF, not of a profile built here. FReverseRun::Start
+					// is what will actually arm it in play, and it refuses a curve it cannot hold
+					// AND a sharp vertex, separately. Anything else is a second evaluator. A tow's
+					// reverse is FTowReverseRun's instead, judged below with the rest of its bay.
+					if (!bTow)
+					{
+						FReverseRun Run;
+						TestTrue(*FString::Printf(TEXT("%s arms as a reverse"), *Who),
+							Run.Start(Plan, Vehicle.Chassis, /*InReverseSpeed=*/100.0));
+					}
+					continue;
+				}
+
+				FSpeedProfile Profile;
+				Profile.Build(Plan.Polyline, Vehicle.Chassis, EDriveDirection::Forward);
+				TestFalse(
+					*FString::Printf(TEXT("%s holds the forward limit (tightest %.0f at %.0f)"),
+						*Who, Profile.GetTightestRadius(), Profile.GetTightestAt()),
+					Profile.WasTighterThanLock());
+				TestFalse(
+					*FString::Printf(TEXT("%s has no instant turn (sharpest %.0f deg)"),
+						*Who, Profile.GetSharpestDegrees()),
+					Profile.HasSharpVertex());
 			}
 
-			FSpeedProfile Profile;
-			Profile.Build(Plan.Polyline, Vehicle.Value, EDriveDirection::Forward);
-			TestFalse(
-				*FString::Printf(TEXT("%s holds the forward limit (tightest %.0f at %.0f)"),
-					*Who, Profile.GetTightestRadius(), Profile.GetTightestAt()),
-				Profile.WasTighterThanLock());
-			TestFalse(
-				*FString::Printf(TEXT("%s has no instant turn (sharpest %.0f deg)"),
-					*Who, Profile.GetSharpestDegrees()),
-				Profile.HasSharpVertex());
+			if (!bTow)
+			{
+				continue;
+			}
+			for (const FServiceBay& Bay : Stand->ServiceBays)
+			{
+				const FVerdictAndPlan Judged = JudgeBay(Bay, Vehicle, *Network);
+				TestTrue(*FString::Printf(TEXT("%s: bay '%s' is admitted whole - %s"), *Vehicular,
+					*Bay.AnchorId.ToString(), *Judged.Verdict.Describe()), Judged.Verdict.Fits());
+			}
+		}
+
+		// A MEASUREMENT, NOT AN ASSERTION (controller ruling 2026-09-26): whether the tow could
+		// serve a C stand anyway. NoLargerThan says it may not be sent; this says whether the
+		// ground would have held it, for the PR to report.
+		if (StandLetter == EIcaoCode::C)
+		{
+			for (const FServiceBay& Bay : Stand->ServiceBays)
+			{
+				const FFitVerdict Measured = JudgeBay(Bay, Fleet[0], *Network).Verdict;
+				AddInfo(FString::Printf(TEXT("MEASURED tow on Code C bay '%s': fits %d - %s"),
+					*Bay.AnchorId.ToString(), Measured.Fits() ? 1 : 0, *Measured.Describe()));
+			}
 		}
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryBayHoldsATowArrivingBentTest,
+	"Airside.Entities.EveryBayHoldsATowArrivingBent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryBayHoldsATowArrivingBentTest::RunTest(const FString& Parameters)
+{
+	using namespace StandLayoutFixture;
+
+	// EveryTemplateLegIsDrivableByEveryVehicle's whole-bay check, from a REALISTIC arrival: the
+	// tow has just turned off the far-edge road, both ways round, so its chain reaches the entry
+	// bent (see JudgeBayArrivingBent for the figures that justify the lead-in). The bay's settle
+	// straight must still bring the turntable inside TowReverse's 3 degree lock before the
+	// reverse, or the route home off the service point strands the tow - found 2026-09-27.
+	const TArray<FVehicle> Fleet = {
+		UAirsideSettings::ResolveUtilityTowVehicle(), UAirsideSettings::ResolveDefaultVehicle() };
+	URoadNetwork* Network = NewObject<URoadNetwork>();
+	int32 Judged = 0;
+	double WorstLeadIn = 0.0;
+	for (const EIcaoCode StandLetter : AllLetters())
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
+		const FVehicle Design = UAirsideSettings::ResolveStandDesignVehicle(StandLetter);
+		const double Radius = 1.1 * Design.Chassis.TightestFollowableRadius();
+		for (const FVehicle& Vehicle : Fleet)
+		{
+			if (Vehicle.Tow.IsEmpty() || !VehicleFit::NoLargerThan(Vehicle, Design))
+			{
+				continue;
+			}
+			for (const FServiceBay& Bay : Stand->ServiceBays)
+			{
+				for (const bool bFromPort : { true, false })
+				{
+					const FVerdictAndPlan Out = JudgeBayArrivingBent(Bay, Vehicle, *Network, Radius, bFromPort);
+					++Judged;
+					// THE LEAD-IN ON ITS OWN - the road's 30 points and the turn's 36 before the entry, the plan's
+					// first 66 - for the worst hitch it leaves: what makes this more than JudgeBay's
+					// straight start.
+					TArray<TestPlans::FRun> LeadIn;
+					LeadIn.AddDefaulted_GetRef().Points.Append(Out.Plan.Polyline.GetData(), 66);
+					WorstLeadIn = FMath::Max(WorstLeadIn,
+						VehicleFit::JudgePlan(TestPlans::Chain(LeadIn), Vehicle, *Network).Radians);
+					TestTrue(*FString::Printf(TEXT("Code %s, %s: bay '%s' arriving off the road from %s is admitted whole - %s (worst hitch %.1f deg)"),
+						IcaoCode::ToLetter(StandLetter), *Vehicle.TypeCode.ToString(), *Bay.AnchorId.ToString(),
+						bFromPort ? TEXT("port") : TEXT("starboard"), *Out.Verdict.Describe(),
+						FMath::RadiansToDegrees(Out.Verdict.Radians)), Out.Verdict.Fits());
+				}
+			}
+		}
+	}
+	AddInfo(FString::Printf(TEXT("MEASURED: %d tow bay arrival(s) judged; the lead-in bent the chain up to %.1f deg"),
+		Judged, FMath::RadiansToDegrees(WorstLeadIn)));
+	TestTrue(TEXT("NOT VACUOUS: some tow bay was judged"), Judged > 0);
+	TestTrue(*FString::Printf(TEXT("NOT VACUOUS: the lead-in really bends the chain (worst %.1f deg before the bay)"),
+		FMath::RadiansToDegrees(WorstLeadIn)), FMath::RadiansToDegrees(WorstLeadIn) > 10.0);
 	return true;
 }
 
@@ -271,16 +483,22 @@ bool FStandExtentClearsTheLargestAirframeAdmittedTest::RunTest(const FString& Pa
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 
-	// Nothing in the layout may sit inside the largest admitted airframe's tail clearance.
+	// Nothing in the layout may sit inside the largest admitted airframe - its [tail..nose] x
+	// [+-half-span] box. RE-DERIVED 2026-09-26: this asked only "behind the tail, or outboard",
+	// which was the whole question while every pose sat on the aft edge; with the poses on the
+	// far edge that clause could no longer fail, and the nose is the end they are near.
 	const double Aft = B738->Footprint.TailX;
+	const double Fwd = B738->Footprint.NoseX;
+	const double HalfSpan = B738->Footprint.Wingspan * 0.5;
 	for (const FServiceBay& Bay : Stand->ServiceBays)
 	{
 		for (const FVector2D& Pose : { Bay.ParkLocal, Bay.EntryLocal, Bay.ExitLocal })
 		{
 			TestTrue(
-				*FString::Printf(TEXT("bay '%s' pose (%.0f, %.0f) clears the longest tail at %.0f"),
-					*Bay.AnchorId.ToString(), Pose.X, Pose.Y, Aft),
-				Pose.X < Aft || FMath::Abs(Pose.Y) > B738->Footprint.Wingspan * 0.5);
+				*FString::Printf(TEXT("bay '%s' pose (%.0f, %.0f) is outside the longest airframe's box "
+					"x %.0f..%.0f, y +-%.0f"),
+					*Bay.AnchorId.ToString(), Pose.X, Pose.Y, Aft, Fwd, HalfSpan),
+				Pose.X < Aft || Pose.X > Fwd || FMath::Abs(Pose.Y) > HalfSpan);
 		}
 	}
 
@@ -421,6 +639,288 @@ bool FStandLayoutEveryLetterReportTest::RunTest(const FString& Parameters)
 	// C IS THE SHIPPING STAND and must keep fitting, whatever the others do.
 	TestTrue(TEXT("Code C fits its floor"),
 		UEntityDefinition::FitsItsLetter(*UEntityDefinition::MakeStandTransient(EIcaoCode::C), EIcaoCode::C));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandLayoutEveryLetterBuildsTest,
+	"Airside.Entities.StandLayoutEveryLetterBuilds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandLayoutEveryLetterBuildsTest::RunTest(const FString& Parameters)
+{
+	using namespace StandLayoutFixture;
+
+	// EVERY LETTER BUILDS (user 2026-09-26), where StandLayoutEveryLetterReport only recorded
+	// which did. A/B were refused because their bays were laid for the truck; each letter is now
+	// laid for its own design vehicle. A failure carries both figures, so the log is the evidence
+	// a floor is too small - the floors are the user's to change, not this test's.
+	for (const EIcaoCode StandLetter : AllLetters())
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
+		if (!TestNotNull(TEXT("a template"), Stand))
+		{
+			return false;
+		}
+		if (!UEntityDefinition::FitsItsLetter(*Stand, StandLetter))
+		{
+			AddError(FString::Printf(TEXT("Code %s's template needs %.0f x %.0f against its floor %.0f x %.0f"),
+				IcaoCode::ToLetter(StandLetter), Stand->RequiredExtent.X, Stand->RequiredExtent.Y,
+				IcaoCode::StandWidthForLetter(StandLetter), IcaoCode::StandDepthForLetter(StandLetter)));
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryBayContactIsOnTheFarEdgeTest,
+	"Airside.Entities.EveryBayContactIsOnTheFarEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryBayContactIsOnTheFarEdgeTest::RunTest(const FString& Parameters)
+{
+	using namespace StandLayoutFixture;
+
+	// SERVICE VEHICLES ENTER ONLY BY THE EDGE OPPOSITE THE TAXIWAY (user 2026-09-26). The box
+	// runs from the entrance - EntranceSetback behind the stop mark, on the taxiway - to the far
+	// edge Depth beyond it; every contact sits Square inside the FAR edge, facing aft, so the
+	// service road is drawn beyond the nose and never between the stand and the taxiway.
+	//
+	// Square IS RESTATED HERE, as a position and not a judgement: the template's LegSlack (1.1)
+	// times the design vehicle's right-angle corner run. A contact that drifted from it is one
+	// FAnchorLink's lead-in corner no longer has its run for.
+	for (const EIcaoCode StandLetter : AllLetters())
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
+		const FLetterEnvelope& Envelope = UAirsideSettings::ResolveLetterEnvelope(StandLetter);
+		const FVehicle Design = UAirsideSettings::ResolveStandDesignVehicle(StandLetter);
+		const double BackX = -StandBox::EntranceSetback(StandLetter, Envelope);
+		const double FrontX = BackX + IcaoCode::StandDepthForLetter(StandLetter);
+		const double Square = 1.1 * GuidelineGeom::CornerRunFor(
+			Design.Chassis.TightestFollowableRadius(), UE_DOUBLE_HALF_PI);
+
+		if (!TestTrue(*FString::Printf(TEXT("Code %s has bays"), IcaoCode::ToLetter(StandLetter)),
+			Stand->ServiceBays.Num() > 0))
+		{
+			continue;
+		}
+		for (const FServiceBay& Bay : Stand->ServiceBays)
+		{
+			const FString Who = FString::Printf(TEXT("Code %s bay '%s' entry (%.0f, %.0f)"),
+				IcaoCode::ToLetter(StandLetter), *Bay.AnchorId.ToString(), Bay.EntryLocal.X, Bay.EntryLocal.Y);
+			TestTrue(*FString::Printf(TEXT("%s sits Square inside the far edge at %.0f - service vehicles "
+				"enter only by the edge opposite the taxiway (user 2026-09-26)"), *Who, FrontX - Square),
+				FMath::IsNearlyEqual(Bay.EntryLocal.X, FrontX - Square, 1.0));
+			TestTrue(*FString::Printf(TEXT("%s faces aft, into the stand from the far edge"), *Who),
+				FMath::IsNearlyEqual(Bay.EntryHeading, UE_DOUBLE_PI, 1e-6));
+			TestTrue(*FString::Printf(TEXT("%s leaves facing the far edge"), *Who),
+				FMath::IsNearlyEqual(Bay.ExitHeading, 0.0, 1e-6));
+			TestTrue(*FString::Printf(TEXT("%s is also its exit - one contact per side"), *Who),
+				Bay.ExitLocal.Equals(Bay.EntryLocal, 0.01));
+			TestTrue(*FString::Printf(TEXT("%s is more than Square from the taxiway edge at %.0f"), *Who, BackX),
+				Bay.EntryLocal.X - BackX > Square);
+		}
+
+		// AND NOTHING THEY DRIVE CROSSES BACK OVER THE ENTRANCE. The ground aft of BackX is the
+		// taxiway's (the entrance edge sits on its pavement edge), so a leg that dips behind it -
+		// Code A's hydrant reverse did, by 174 uu, when its settle straight ran out of stand -
+		// puts a service vehicle where a taxiing wing sweeps. Every SAMPLED point, not just the
+		// vertices, since a curve can bulge past a line its corners respect.
+		for (const FNamedLeg& Named : LegsOf(*Stand))
+		{
+			TArray<FVector2D> Sampled;
+			Named.Leg->Sample(Sampled);
+			double MinX = TNumericLimits<double>::Max();
+			for (const FVector2D& At : Sampled)
+			{
+				MinX = FMath::Min(MinX, At.X);
+			}
+			TestTrue(*FString::Printf(TEXT("Code %s %s stays inside the entrance edge (aft-most x %.0f, "
+				"edge %.0f) - service vehicles never use the taxiway-side ground"),
+				IcaoCode::ToLetter(StandLetter), *Named.What, MinX, BackX),
+				MinX >= BackX - 0.5);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryBayEntryReachesItsServicePointTest,
+	"Airside.Entities.EveryBayEntryReachesItsServicePoint",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryBayEntryReachesItsServicePointTest::RunTest(const FString& Parameters)
+{
+	using namespace StandLayoutFixture;
+	using namespace ServiceLinkFixture;
+
+	// THE EQUIVALENCE InspectFacts::DescribeStand's bServiceable RELIES ON (review, 2026-09-26).
+	// It walks Network.IsServiceNodeConnected from each bay's SERVICE-POINT node (the resolved
+	// anchor - HydrantPit, BaggageHold, FixedGPU...), never from FServiceBay::EntryLocal's own
+	// node, because nothing in Model/ may read EntryLocal off Definition->ServiceBays (the
+	// Entities layer). That is correct only because StandLayoutBuild::LayLeg lays every bay as
+	// ONE CONTINUOUS stand-owned chain - Entry -> Park -> Service -> Cleared -> Exit - so a walk
+	// from either end reaches the other without ever crossing an unowned (road) edge. This pins
+	// that chain directly, over stand-owned edges only, for every letter and every bay: if a
+	// future layout ever forked into two chains that merely TOUCHED at the service point rather
+	// than one running through it, this goes red and names which bay broke.
+	for (const EIcaoCode StandLetter : AllLetters())
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
+		if (!TestNotNull(TEXT("a template"), Stand))
+		{
+			continue;
+		}
+
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+		FStandLayoutBuild::Build(*Net);
+
+		const FEntityInstance* Instance = Net->GetEntity(Placed);
+		if (!TestNotNull(*FString::Printf(TEXT("Code %s placed"), IcaoCode::ToLetter(StandLetter)), Instance))
+		{
+			continue;
+		}
+
+		for (const FServiceBay& Bay : Stand->ServiceBays)
+		{
+			const FString Who = FString::Printf(
+				TEXT("Code %s bay '%s'"), IcaoCode::ToLetter(StandLetter), *Bay.AnchorId.ToString());
+
+			FGuidelineNodeId ServiceNode;
+			for (const FResolvedAnchor& Resolved : Instance->ResolvedAnchors)
+			{
+				if (Resolved.Id == Bay.AnchorId) { ServiceNode = Resolved.Node; break; }
+			}
+			if (!TestTrue(*FString::Printf(TEXT("%s resolved its service point"), *Who), ServiceNode.IsSet()))
+			{
+				continue;
+			}
+
+			// THE ENTRY NODE, FOUND BY POSITION rather than handed back by name: nothing public
+			// returns a per-bay node (FStandLayoutBuild::FResult::Entries is one deduplicated
+			// array per STAND, since two bays share one side's contact). PlaceStand's heading
+			// and position are both zero here, so a bay's world position is its local one -
+			// the same trick StandLayoutBuild's own idempotent recovery path (NodeNear) uses.
+			FGuidelineNodeId EntryNode;
+			const TArray<FGuidelineNode>& Nodes = Net->GetGuidelineNodes();
+			for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+			{
+				const FGuidelineNodeId Id = Net->GuidelineNodeIdAt(Index);
+				if (Id.IsSet() && FVector2D::Distance(Nodes[Index].Position, Bay.EntryLocal) <= 1.0)
+				{
+					EntryNode = Id;
+					break;
+				}
+			}
+			if (!TestTrue(*FString::Printf(TEXT("%s's entry node exists in the graph"), *Who), EntryNode.IsSet()))
+			{
+				continue;
+			}
+
+			// BFS OVER STAND-OWNED EDGES ONLY, from the service point - deliberately NOT
+			// IsServiceNodeConnected, which stops at the FIRST unowned edge and answers a
+			// different question (does the lane reach a road at all, not does it reach its
+			// own entry).
+			TSet<FGuidelineNodeId> Seen;
+			TArray<FGuidelineNodeId> Frontier;
+			Seen.Add(ServiceNode);
+			Frontier.Add(ServiceNode);
+			bool bReachedEntry = ServiceNode == EntryNode;
+			while (Frontier.Num() > 0 && !bReachedEntry)
+			{
+				const FGuidelineNodeId At = Frontier.Pop();
+				const FGuidelineNode* Found = Net->GetGuidelineNode(At);
+				if (Found == nullptr)
+				{
+					continue;
+				}
+				for (const FGuidelineEdgeId Id : Found->Incident)
+				{
+					const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+					if (Edge == nullptr || !Edge->bAlive || Edge->StandGeometryOwner != Placed)
+					{
+						continue;
+					}
+					const FGuidelineNodeId Other = Edge->A == At ? Edge->B : Edge->A;
+					if (Other == EntryNode)
+					{
+						bReachedEntry = true;
+						break;
+					}
+					if (!Seen.Contains(Other))
+					{
+						Seen.Add(Other);
+						Frontier.Add(Other);
+					}
+				}
+			}
+
+			TestTrue(*FString::Printf(TEXT("%s: entry and service-point nodes share one stand-owned "
+				"chain, which is the fact InspectFacts::DescribeStand's bServiceable relies on"), *Who),
+				bReachedEntry);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShippedCodeCStandMatchesTheBuilderTest,
+	"Airside.Entities.ShippedCodeCStandMatchesTheBuilder",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FShippedCodeCStandMatchesTheBuilderTest::RunTest(const FString& Parameters)
+{
+	// THE GAME PLOPS THE ASSET; EVERY OTHER C TEST MEASURES THE TRANSIENT (final review,
+	// 2026-09-27). DA_Stand_CodeC is a SAVED copy of what BuildCodeCStand laid the day it was
+	// authored, and every change to the template since - the far-side bays of 2026-09-26 among
+	// them - reaches a player only when the asset is re-authored. So the shipped bays are held
+	// against the builder as it is now: an asset left behind by a template change goes red here,
+	// not as a stand in PIE whose bays sit where the tests say they do not.
+	const UEntityDefinition* Shipped =
+		LoadObject<UEntityDefinition>(nullptr, TEXT("/Game/Entities/DA_Stand_CodeC.DA_Stand_CodeC"));
+	if (!TestNotNull(TEXT("DA_Stand_CodeC loads"), Shipped))
+	{
+		return false;
+	}
+
+	// THE SAME AIRCRAFT the asset carries, so the one thing compared is the layout itself.
+	UEntityDefinition* Built = NewObject<UEntityDefinition>(GetTransientPackage());
+	UEntityDefinition::BuildCodeCStand(Built, Shipped->DesignAircraft);
+
+	TestEqual(TEXT("the shipped stand's design vehicle is the one the builder lays C for"),
+		Shipped->DesignVehicle.TypeCode, Built->DesignVehicle.TypeCode);
+	TestTrue(*FString::Printf(TEXT("the shipped extent (%.0f x %.0f) is the builder's (%.0f x %.0f)"),
+			Shipped->RequiredExtent.X, Shipped->RequiredExtent.Y, Built->RequiredExtent.X, Built->RequiredExtent.Y),
+		Shipped->RequiredExtent.Equals(Built->RequiredExtent, 0.5));
+	if (!TestEqual(TEXT("as many bays as the builder lays"), Shipped->ServiceBays.Num(), Built->ServiceBays.Num()))
+	{
+		return false;
+	}
+
+	// BY ANCHOR, never by index - see FResolvedAnchor for why position in an array is not identity.
+	for (const FServiceBay& Want : Built->ServiceBays)
+	{
+		const FServiceBay* Have = Shipped->ServiceBays.FindByPredicate(
+			[&Want](const FServiceBay& Bay) { return Bay.AnchorId == Want.AnchorId; });
+		if (!TestNotNull(*FString::Printf(TEXT("the shipped stand has a bay for '%s'"), *Want.AnchorId.ToString()), Have))
+		{
+			continue;
+		}
+		const FString Who = Want.AnchorId.ToString();
+		TestTrue(*FString::Printf(TEXT("'%s' entry at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who,
+				Have->EntryLocal.X, Have->EntryLocal.Y, Want.EntryLocal.X, Want.EntryLocal.Y),
+			Have->EntryLocal.Equals(Want.EntryLocal, 0.5));
+		TestTrue(*FString::Printf(TEXT("'%s' exit at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who,
+				Have->ExitLocal.X, Have->ExitLocal.Y, Want.ExitLocal.X, Want.ExitLocal.Y),
+			Have->ExitLocal.Equals(Want.ExitLocal, 0.5));
+		TestTrue(*FString::Printf(TEXT("'%s' park at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who,
+				Have->ParkLocal.X, Have->ParkLocal.Y, Want.ParkLocal.X, Want.ParkLocal.Y),
+			Have->ParkLocal.Equals(Want.ParkLocal, 0.5));
+		TestEqual(*FString::Printf(TEXT("'%s' entry heading"), *Who), Have->EntryHeading, Want.EntryHeading, 1.0e-6);
+		TestEqual(*FString::Printf(TEXT("'%s' exit heading"), *Who), Have->ExitHeading, Want.ExitHeading, 1.0e-6);
+		TestEqual(*FString::Printf(TEXT("'%s' park heading"), *Who), Have->ParkHeading, Want.ParkHeading, 1.0e-6);
+	}
 	return true;
 }
 

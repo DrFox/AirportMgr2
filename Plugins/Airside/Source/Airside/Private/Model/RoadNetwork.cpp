@@ -1322,7 +1322,15 @@ int32 URoadNetwork::EnsureStandOutlines()
 	// has always had. Model/ cannot reach Content/ to ask for the resolved figure anyway (see
 	// StandBox::PoseFor's header), but even if it could, using the fleet's CURRENT envelope
 	// here would make an old save's stand outline depend on which content happens to be loaded
-	// the day it loads - a migration whose output moves is not a migration.
+	// the day it loads, and a migration whose output drifts with content is not a migration.
+	//
+	// ITS OUTPUT DID MOVE ONCE, ON PURPOSE (2026-09-26, far-side entry): StandBox::BoxAt builds
+	// the box off EntranceSetback, so the same saved pose now gets a box whose entrance sits
+	// MaxTailAft + wingtip clearance behind the stop mark rather than Depth - MaxNoseFwd - a
+	// legacy stand's box moved away from its taxiway by the difference. That is a change of the
+	// GEOMETRY RULE, made once in code and the same for every load, which is what this paragraph
+	// allows; what it forbids is output that varies with the content loaded. The stop mark is
+	// then re-derived from this box on load (UStandDefinitionCache::RebindStandDefinitions).
 	const FLetterEnvelope CodeCFloor = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C);
 
 	int32 Changed = 0;
@@ -1457,9 +1465,7 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, c
 	{
 		// Local to world. Rotating by the entity's heading is what makes an anchor mean
 		// "off the aircraft's left wing" rather than "somewhere north of here".
-		const FVector2D World(
-			Placement.Position.X + Anchor.LocalPosition.X * Cos - Anchor.LocalPosition.Y * Sin,
-			Placement.Position.Y + Anchor.LocalPosition.X * Sin + Anchor.LocalPosition.Y * Cos);
+		const FVector2D World = Anchor.WorldAt(Placement.Position, Placement.Heading);
 
 		// NON-DERIVED. See the header: an anchor node has no incident edges until a
 		// guideline is drawn to it, so a derived one would be swept by the next rebuild
@@ -1673,6 +1679,77 @@ bool URoadNetwork::SetEntityDefinition(FEntityInstanceId Entity, UEntityDefiniti
 	}
 
 	Instance->Definition = Definition;
+	return true;
+}
+
+bool URoadNetwork::SetStandDesignWingspan(FEntityInstanceId Entity, double DesignWingspan)
+{
+	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr || !Instance->IsStand())
+	{
+		return false;
+	}
+	Instance->DesignWingspan = DesignWingspan;
+	return true;
+}
+
+bool URoadNetwork::RePoseStand(FEntityInstanceId Entity, const FVector2D& Position, double Heading,
+	TConstArrayView<FEntityAnchor> Anchors)
+{
+	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr || !Instance->IsStand())
+	{
+		return false;
+	}
+
+	Instance->Position = Position;
+	Instance->Heading = Heading;
+
+	// THE POSE NODE MOVES AND KEEPS ITS HANDLE - see the header. Its edges go: they were the
+	// lead-in to where the stop mark used to be, and the rebuild casts a new one.
+	if (FGuidelineNode* Pose = GetGuidelineNodeMutable(Instance->PoseNode))
+	{
+		const TArray<FGuidelineEdgeId> Doomed = Pose->Incident;
+		for (const FGuidelineEdgeId Edge : Doomed)
+		{
+			RemoveGuidelineEdge(Edge);
+		}
+		// RE-READ after the removals, which touch the node array's incidence lists.
+		if (FGuidelineNode* Moved = GetGuidelineNodeMutable(Instance->PoseNode))
+		{
+			Moved->Position = Position;
+		}
+	}
+
+	// THE ANCHORS, RE-CAPTURED WHOLE, by the same local-to-world rule PlaceEntity uses. Copied out
+	// first: removing a node does not touch Entities, but the list is about to be rebuilt.
+	const TArray<FResolvedAnchor> Old = MoveTemp(Instance->ResolvedAnchors);
+	Instance->ResolvedAnchors.Reset();
+	for (const FResolvedAnchor& Gone : Old)
+	{
+		RemoveGuidelineNode(Gone.Node);
+	}
+
+	TArray<FResolvedAnchor> Fresh;
+	Fresh.Reserve(Anchors.Num());
+	for (const FEntityAnchor& Anchor : Anchors)
+	{
+		const FVector2D World = Anchor.WorldAt(Position, Heading);
+		FResolvedAnchor Resolved;
+		Resolved.Id = Anchor.Id;
+		Resolved.Node = AddGuidelineNode(World, /*bDerived=*/false);
+		Resolved.LocalHeading = Anchor.LocalHeading;
+		Resolved.Role = Anchor.Role;
+		Fresh.Add(Resolved);
+	}
+
+	// RE-FOUND, NOT HELD: AddGuidelineNode grows the node array, not Entities, but the instance is
+	// looked up again rather than trusting a pointer across four kinds of mutation.
+	if (FEntityInstance* Again = RoadSlot::Get<FEntityInstanceId>(Entities, Entity))
+	{
+		Again->ResolvedAnchors = MoveTemp(Fresh);
+	}
+	++GuidelineRevision;
 	return true;
 }
 

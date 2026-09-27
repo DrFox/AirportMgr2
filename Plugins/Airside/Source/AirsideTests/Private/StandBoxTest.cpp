@@ -68,8 +68,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FStandBoxTailToEntranceTest::RunTest(const FString& Parameters)
 {
 	// THE NOSE POINTS AWAY FROM THE TAXIWAY: the pose's Facing is exactly Inward, and the
-	// stop mark sits Depth - NoseFwd along it from the entrance edge's midpoint - not the
-	// full depth, because the template's own nose overhang sits beyond the stop mark already.
+	// stop mark sits EntranceSetback (MaxTailAft + wingtip clearance) along it from the
+	// entrance edge's midpoint - since this task (far-side entry), the tail's own clearance
+	// off the entrance, not the old Depth - NoseFwd that put most of the depth's slack
+	// behind the tail.
 	const EIcaoCode Letter = EIcaoCode::C;
 	const FVector2D A(0.0, 0.0);
 	const FVector2D B(IcaoCode::StandWidthForLetter(Letter), 0.0);
@@ -79,10 +81,56 @@ bool FStandBoxTailToEntranceTest::RunTest(const FString& Parameters)
 	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
 	TestTrue(TEXT("Facing equals Inward"), Pose.Facing.Equals(Inward, 1e-9));
 
-	const double Expected = IcaoCode::StandDepthForLetter(Letter) - Envelope.MaxNoseFwd;
+	const double Expected = StandBox::EntranceSetback(Letter, Envelope);
 	const double Actual = FVector2D::DotProduct(Pose.Position - A, Inward);
-	TestTrue(TEXT("stop mark is Depth - NoseFwd in from the entrance, along Inward"),
+	TestTrue(TEXT("stop mark is EntranceSetback in from the entrance, along Inward"),
 		FMath::IsNearlyEqual(Actual, Expected, 0.01));
+
+	return true;
+}
+
+/**
+ * THE POSE AND FAR EDGE AGREE, PER LETTER (this task, far-side entry): the tail is pulled in
+ * to EntranceSetback = MaxTailAft + wingtip clearance from the entrance, never flush with the
+ * far edge, and the slack the far-side entry needs is left ahead of the nose instead - the
+ * far edge (Depth) still carries the service ground, now beyond the nose rather than the tail.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandBoxTailAtEntranceTest,
+	"Airside.Solve.StandBox.TailAtEntrance",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandBoxTailAtEntranceTest::RunTest(const FString& Parameters)
+{
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	{
+		const TCHAR* LetterName = IcaoCode::ToLetter(Letter);
+		const FVector2D A(0.0, 0.0);
+		const FVector2D B(IcaoCode::StandWidthForLetter(Letter), 0.0);
+		const FVector2D Inward(0.0, 1.0);
+		const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
+		const double Depth = IcaoCode::StandDepthForLetter(Letter);
+
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
+
+		const double ExpectedSetback = Envelope.MaxTailAft + IcaoCode::WingtipClearanceForLetter(Letter);
+		TestEqual(*FString::Printf(TEXT("%s stop mark sits MaxTailAft + clearance in from the entrance"), LetterName),
+			Pose.Position.Y, ExpectedSetback);
+
+		TArray<FVector2D> Corners;
+		StandBox::BoxAt(Pose, Letter, Envelope, Corners);
+		if (TestEqual(*FString::Printf(TEXT("%s box has four corners"), LetterName), Corners.Num(), 4))
+		{
+			TestEqual(*FString::Printf(TEXT("%s box's far edge sits at Depth"), LetterName), Corners[2].Y, Depth);
+			TestEqual(*FString::Printf(TEXT("%s box's far edge sits at Depth (other corner)"), LetterName), Corners[3].Y, Depth);
+		}
+
+		// SLACK AHEAD OF THE NOSE, THE WHOLE POINT OF THIS TASK: the nose sits short of the far
+		// edge, where the mirrored template lays the far-side entry's service ground.
+		const double NoseY = Pose.Position.Y + Envelope.MaxNoseFwd;
+		TestTrue(*FString::Printf(TEXT("%s nose sits short of the far edge - slack lies ahead of it (nose %.1f, depth %.1f)"),
+			LetterName, NoseY, Depth), NoseY < Depth);
+	}
 
 	return true;
 }
@@ -125,23 +173,24 @@ bool FStandBoxNoLetterTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("20 x 20 m is smaller than any letter"), StandBox::LetterOf(TooSmall).IsSet());
 
 	// THE SPEC TABLE'S OWN EXAMPLE: a wide-but-shallow rect reads as the letter its DEPTH
-	// allows, not its width - 67 x 30 m is wide enough for Code D (81 m floor) but nowhere
+	// allows, not its width - 67 x 40 m is wide enough for Code D (81 m floor) but nowhere
 	// near deep enough, so it reads as whatever letter IcaoCode::LetterForStandSize actually
-	// gives a 30 m depth. Computed from the table rather than retyped, so this test cannot
+	// gives a 40 m depth. Computed from the table rather than retyped, so this test cannot
 	// drift from the table it is pinning.
 	const double WidthUu = 6700.0;
-	const double DepthUu = 3000.0;
+	// 40 m, not 30, since the 2026-09-26 depth rise put Code A's floor at 32 m.
+	const double DepthUu = 4000.0;
 	const TOptional<EIcaoCode> Expected = IcaoCode::Parse(IcaoCode::LetterForStandSize(WidthUu, DepthUu));
-	TestTrue(TEXT("67 x 30 m is wide-but-shallow and still gets a letter"), Expected.IsSet());
+	TestTrue(TEXT("67 x 40 m is wide-but-shallow and still gets a letter"), Expected.IsSet());
 
 	const TArray<FVector2D> WideButShallow = {
 		FVector2D(0.0, 0.0), FVector2D(WidthUu, 0.0), FVector2D(WidthUu, DepthUu), FVector2D(0.0, DepthUu)
 	};
 	const TOptional<EIcaoCode> Actual = StandBox::LetterOf(WideButShallow);
-	TestTrue(TEXT("67 x 30 m reads back a letter"), Actual.IsSet());
+	TestTrue(TEXT("67 x 40 m reads back a letter"), Actual.IsSet());
 	if (Expected.IsSet() && Actual.IsSet())
 	{
-		TestEqual(TEXT("67 x 30 m reads as the letter its DEPTH allows, not its width"),
+		TestEqual(TEXT("67 x 40 m reads as the letter its DEPTH allows, not its width"),
 			Actual.GetValue(), Expected.GetValue());
 	}
 

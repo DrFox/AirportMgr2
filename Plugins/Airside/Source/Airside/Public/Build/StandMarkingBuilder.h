@@ -73,7 +73,7 @@ struct AIRSIDE_API FStandMarkingBuilder
 	 * painted.
 	 *
 	 * For each alive entity with IsStand() && IsPlotted(): the entrance midpoint is derived
-	 * from the pose, Position - Facing * (StandDepthForLetter(L) - Envelope(L).MaxNoseFwd) -
+	 * from the pose, Position - Facing * StandBox::EntranceSetback(L, Envelope(L)) -
 	 * StandBox::PoseFor's own derivation run in reverse - rather than read from Outline[0..1],
 	 * because URoadEditFacade::PlaceStandInPlot reverses a clockwise outline (and swaps which
 	 * of its two ORIGINAL corners is "entrance A/B" to match), which moves the entrance edge

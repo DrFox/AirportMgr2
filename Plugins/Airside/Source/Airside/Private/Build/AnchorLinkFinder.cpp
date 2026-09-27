@@ -129,6 +129,7 @@ namespace
 	 * distant decoys and goes red if CannotReachWithin's call above is ever deleted from here.
 	 */
 	FLinkHit NearestJoinable(const URoadNetwork& Network, const FVector2D& Origin, double Reach,
+		const TOptional<FVector2D>& HalfPlane, double HalfPlaneOffset,
 		TFunctionRef<bool(const FGuidelineEdge&)> Eligible)
 	{
 		FLinkHit Out;
@@ -176,6 +177,23 @@ namespace
 			if (Distance <= FAnchorLink::LeadInWeldTolerance || Distance >= Best)
 			{
 				continue;
+			}
+
+			// THE HALF-PLANE (far-side-entry spec, 2026-09-26): refuse a hit short of the stand's
+			// FAR EDGE along its forward direction, even though it is the nearest thing on the
+			// graph - see FPendingLink::HalfPlane's own comment for why this is a half-plane and
+			// not a second ray, and HalfPlaneOffset's for why its boundary is the far-edge line
+			// and not the entry (a road alongside was decided by float noise there, 2026-09-27).
+			// Span/Fraction are already the nearest point's own coordinates, so lerping them is
+			// cheaper than a second NearestOnPolyline against the accepted edge.
+			if (HalfPlane.IsSet())
+			{
+				const FVector2D HitPos = FMath::Lerp(Points[Span], Points[Span + 1], Fraction);
+				if (FVector2D::DotProduct(HitPos - Origin, *HalfPlane)
+					< HalfPlaneOffset - FAnchorLink::FarEdgeTolerance)
+				{
+					continue;
+				}
 			}
 
 			Best = Distance;
@@ -279,7 +297,7 @@ bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink&
 {
 	// NEAREST GUIDELINE OF THE LINK'S CLASS, ANY DIRECTION - see NearestJoinable. The only
 	// question this finder adds to the shared walk is eligibility.
-	OutHit = NearestJoinable(Network, Link.At, Link.Reach,
+	OutHit = NearestJoinable(Network, Link.At, Link.Reach, Link.HalfPlane, Link.HalfPlaneOffset,
 		[&Link, &AnchorNodes](const FGuidelineEdge& Edge) { return IsJoinable(Edge, Link, AnchorNodes); });
 	return OutHit.IsSet();
 }
@@ -304,7 +322,12 @@ FLinkHit FindSiblingLane(const URoadNetwork& Network, const FPendingLink& Link,
 	// SAME WALK AS FProximityLinkFinder, plus one more eligibility clause: derived from the
 	// road this link already joined, at a different lane index. This copy used to keep its own
 	// loop with no CannotReachWithin call at all (#306) - see NearestJoinable's own comment.
-	return NearestJoinable(Network, Link.At, Link.Reach,
+	//
+	// Link.HalfPlane CARRIES OVER TOO, deliberately: the second lane of a two-lane road a declared
+	// entry just joined is subject to the same "not behind the tail" rule as the first, and Build
+	// copies the whole Link (FPendingLink Again = Link) before calling this, so there is nothing
+	// separate to set.
+	return NearestJoinable(Network, Link.At, Link.Reach, Link.HalfPlane, Link.HalfPlaneOffset,
 		[&Link, &AnchorNodes, Segment, JoinedIndex](const FGuidelineEdge& Edge)
 		{
 			return Edge.DerivedFrom == Segment && Edge.DerivedGuidelineIndex != JoinedIndex

@@ -130,6 +130,38 @@ FVehicle UAirsideSettings::ResolveLargestServiceBody()
 	return Out;
 }
 
+FVehicle UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode Letter)
+{
+	// THE USER'S RULING 2026-09-26: A and B are sized for the utility tow, C through F for the
+	// fuel truck - see this function's own header comment for why it is a separate question from
+	// ResolveLargestServiceVehicle. A plain <=: EIcaoCode is an enum class, and the built-in
+	// comparison of two values of one scoped enum needs no cast (corrected 2026-09-27 - this read
+	// "a plain enum with no operator" and cast both sides). It is declared A..F in that order, so
+	// this is "at or before B" by declaration order rather than any numeric meaning of the letters.
+	return Letter <= EIcaoCode::B ? ResolveUtilityTowVehicle() : ResolveDefaultVehicle();
+}
+
+FVehicle UAirsideSettings::ResolveStandDesignVehicleOf(const UEntityDefinition* Definition, EIcaoCode Letter)
+{
+	if (Definition != nullptr && !Definition->DesignVehicle.TypeCode.IsNone())
+	{
+		return Definition->DesignVehicle;
+	}
+
+	// ONCE PER DEFINITION, by path: a fuel service asks this for every offer to every stand, and
+	// a line per ask would bury the one that says which asset wants re-authoring.
+	static TSet<FString> Warned;
+	const FString Who = Definition != nullptr ? Definition->GetPathName() : FString(TEXT("(no definition)"));
+	if (!Warned.Contains(Who))
+	{
+		Warned.Add(Who);
+		UE_LOG(LogAirsideContent, Warning,
+			TEXT("Stand definition %s carries no DesignVehicle (saved before the field existed?); assuming Code %s's, %s. Re-author it (Tools/Python/build_stand_asset.py)."),
+			*Who, IcaoCode::ToLetter(Letter), *ResolveStandDesignVehicle(Letter).TypeCode.ToString());
+	}
+	return ResolveStandDesignVehicle(Letter);
+}
+
 namespace AirsideSettingsTierCache
 {
 	/** What ResolveTierDesignVehicles last resolved, and from which content set and Wide asset. */

@@ -15,6 +15,7 @@
 #include "Model/VehicleFit.h"
 #include "Model/SimClock.h"
 #include "Solve/GuidelineGeom.h"
+#include "Solve/StandBox.h"
 
 namespace
 {
@@ -50,11 +51,44 @@ namespace
 		// in the text - a number that has to agree with an asset is a number that drifts.
 		case EFuelRefusal::StandUnjoined: return TEXT("no road within reach of the stand's entrances");
 		case EFuelRefusal::NoRoute:       return TEXT("no road from depot");
-		case EFuelRefusal::TooNarrow:     return TEXT("no road wide enough for the fuel truck");
+		case EFuelRefusal::TooNarrow:     return TEXT("no road wide enough for the fuel vehicle");
 		case EFuelRefusal::NoPump:        return TEXT("depot has no pump");
+		// THE VEHICLE, NOT THE ROAD OR THE STAND: the fix is a depot with a smaller vehicle,
+		// which is why this does not share TooNarrow's text.
+		case EFuelRefusal::VehicleTooLarge: return TEXT("the depot's vehicle is too large for this stand");
 		default:                          return TEXT("unserviceable");
 		}
 	}
+}
+
+// The literal VehiclesByLetter[6] in the header, which UHT has to parse, against the enum.
+static_assert(static_cast<int32>(EIcaoCode::F) + 1 == UFuelService::LetterCount,
+	"one fuel vehicle table entry per ICAO letter");
+
+void UFuelService::ResolveVehicles(TFunctionRef<FVehicle(EIcaoCode)> Resolve)
+{
+	for (int32 Index = 0; Index < LetterCount; ++Index)
+	{
+		// Fleets are untyped counts, so what a depot sends a letter is the most efficient vehicle
+		// that fits it - its design vehicle, which is what UOpsRuntime resolves here.
+		VehiclesByLetter[Index] = Resolve(static_cast<EIcaoCode>(Index));
+	}
+}
+
+EIcaoCode UFuelService::LetterOfStand(const FEntityInstance& Stand)
+{
+	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Stand.Outline);
+	return Letter.IsSet() ? *Letter : EIcaoCode::C;
+}
+
+FVehicle UFuelService::VehicleFor(const FEntityInstance& Stand) const
+{
+	return VehiclesFor(LetterOfStand(Stand));
+}
+
+FVehicle UFuelService::DesignVehicleFor(const FEntityInstance& Stand) const
+{
+	return DesignVehicleOf ? DesignVehicleOf(Stand) : VehicleFor(Stand);
 }
 
 FFuelDemand* UFuelService::FindByAircraft(int32 AircraftId)
@@ -113,7 +147,7 @@ int32 UFuelService::TrucksOutFor(FEntityInstanceId Depot) const
 }
 
 UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network,
-	FGuidelineNodeId StandFuel) const
+	FGuidelineNodeId StandFuel, const FVehicle& Sent, const FVehicle& Design) const
 {
 	// THE ORDER OF THESE TESTS IS THE SPEC'S, and it is the order of the player's hand: no
 	// depot at all is a building to place, a depot off the road is a road to draw, and only
@@ -146,6 +180,9 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 
 	/** A depot skipped for want of a pump - see the NoPump branch below. */
 	bool bAnyPumplessDepot = false;
+
+	/** A depot skipped because what it sends is larger than the stand - see VehicleTooLarge. */
+	bool bAnyVehicleTooLarge = false;
 
 	// JOINED, NOT MERELY RESOLVED - and since the service loop, not merely INCIDENT either.
 	//
@@ -208,6 +245,18 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 			continue;
 		}
 
+		// NO LARGER THAN THE STAND WAS BUILT FOR (spec 2026-09-26 section 2): the stand's lane
+		// legs are proven drivable by its definition's design vehicle and anything
+		// VehicleFit::NoLargerThan it, and nothing else. PER DEPOT, not once per call, although
+		// every depot sends the same today (fleets are untyped): a typed fleet makes Sent a fact
+		// about THIS depot, and this is where it will be asked. Before busy, so a depot whose
+		// vehicle can never serve this stand is not waited on as though it might.
+		if (!VehicleFit::NoLargerThan(Sent, Design))
+		{
+			bAnyVehicleTooLarge = true;
+			continue;
+		}
+
 		if (TrucksOutFor(DepotId) >= Instance.Trucks)
 		{
 			// BUSY, NOT BROKEN. A demand whose only depot is out on another job is Needed and
@@ -257,14 +306,14 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		// THE TRUCK THAT WILL DRIVE IT, so a depot is only chosen over road that truck fits
 		// (spec 2026-09-23 §6). A depot reachable only over too-narrow road is remembered, so
 		// the refusal below can say so rather than "no road".
-		Query.WithVehicle(TruckVehicle);
+		Query.WithVehicle(Sent);
 
 		// CACHED PER (depot pose, stand hydrant, truck figures) (#301, the shape ARigTestCourse's
 		// identical cache had been carrying alone - see RoutePlanCache.h): the SAME pair is
 		// asked again the moment a DIFFERENT depot frees up (FleetRevision moves, the graph does
 		// not), and a refusal is as much a fact about the graph and the truck as a route is.
 		FRoutePlan Plan;
-		if (const FCachedRoutePlan* Hit = RouteCache.Lookup(Instance.PoseNode, StandFuel, TruckVehicle))
+		if (const FCachedRoutePlan* Hit = RouteCache.Lookup(Instance.PoseNode, StandFuel, Sent))
 		{
 			Plan = Hit->Plan;
 		}
@@ -272,9 +321,9 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		{
 			// AND EACH EDGE'S FIT: most of a Find's cost is tracing the truck round every curve
 			// the search relaxes, which every depot's own Find asks about the same shared roads.
-			Query.FitCache = &RouteCache.FitCacheFor(TruckVehicle);
+			Query.FitCache = &RouteCache.FitCacheFor(Sent);
 			Plan = RouteSearch::Find(Network, Query);
-			RouteCache.Store(Instance.PoseNode, StandFuel, TruckVehicle, Plan, FString());
+			RouteCache.Store(Instance.PoseNode, StandFuel, Sent, Plan, FString());
 		}
 		if (Plan.Result == ERouteResult::TooNarrow)
 		{
@@ -315,6 +364,15 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		// branch below was added to stop.
 		Result.Why = EFuelRefusal::NoPump;
 	}
+	else if (bAnyVehicleTooLarge)
+	{
+		// AFTER NoPump, BEFORE busy: a depot with no pump would not be sending anything at all,
+		// so the pump is the nearer fix; and a vehicle that can never fit is not a wait.
+		Result.Why = EFuelRefusal::VehicleTooLarge;
+		UE_LOG(LogAirportOps, Warning,
+			TEXT("Fuel: %s is larger than the %s this stand was built for; no depot can serve it"),
+			*Sent.TypeCode.ToString(), *Design.TypeCode.ToString());
+	}
 	else if (bAnyBusyDepot)
 	{
 		// NOTHING IS WRONG - WAIT. None keeps the demand Needed and re-offered every tick,
@@ -331,7 +389,7 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		Result.Why = EFuelRefusal::TooNarrow;
 		UE_LOG(LogAirportOps, Warning,
 			TEXT("Fuel: no road wide enough for %s from any depot - the first edge it does not fit is guideline edge %d"),
-			*TruckVehicle.TypeCode.ToString(), NarrowAt.Index);
+			*Sent.TypeCode.ToString(), NarrowAt.Index);
 	}
 	else
 	{
@@ -358,14 +416,16 @@ void UFuelService::PostServiceFee(double Now, const FAirframe& Airframe)
 }
 
 bool UFuelService::MayDriveUngated(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
-	FString* OutWhy)
+	FString* OutWhy, const FTowSeed* Seed)
 {
 	if (!Vehicle.HasTrailer())
 	{
 		return true;
 	}
-	const FFitVerdict Whole = VehicleFit::JudgePlan(Plan, Vehicle, Network);
-	if (Whole.Refusal != EFitRefusal::TrailerFolds)
+	// A REVERSE IT CANNOT BACK is refused with the fold (2026-09-27): the tow would stall
+	// at the service point holding the node, which is the jack-knife's cost under another name.
+	const FFitVerdict Whole = VehicleFit::JudgePlan(Plan, Vehicle, Network, Seed);
+	if (Whole.Refusal != EFitRefusal::TrailerFolds && Whole.Refusal != EFitRefusal::ReverseUnsolvable)
 	{
 		return true;
 	}
@@ -390,12 +450,18 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		return;
 	}
 
-	FRoutePlan Plan;
-	if (Home != nullptr)
+	// THE AGENT'S OWN VEHICLE, copied before anything below can move the agent array: the one
+	// that is actually out. Not re-read from the table by the stand's letter - a truck already
+	// dispatched is that truck until it is home, whatever the table says now.
+	const FVehicle OwnVehicle = Truck->AsVehicle() != nullptr ? *Truck->AsVehicle() : FVehicle();
+
+	// THE ROAD HOME'S QUERY, from Start: one statement for the two places a truck turns for home -
+	// the service point it is parked at, below, and a node ahead of it on the road, just after.
+	auto HomeQuery = [&Traffic, TruckId, &OwnVehicle](FGuidelineNodeId Start, FGuidelineNodeId Goal)
 	{
 		FRouteQuery Query;
-		Query.Start = Truck->GoalNode;
-		Query.Goal = Home->PoseNode;
+		Query.Start = Start;
+		Query.Goal = Goal;
 		Query.Class = ETraversalClass::GroundVehicle;
 		Query.Errand = ERouteErrand::VehicleToJob;
 		Query.Policy = FRoutePolicy::For(Query.Errand);
@@ -406,8 +472,106 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		// there rather than into the back of it. The flicker argument covers a WINNER being
 		// re-picked every tick, which a committed route is not.
 		Query.WithCongestion(Traffic.GetOccupancy(), TruckId, Traffic.Rules.CongestionWeight);
-		Query.WithVehicle(TruckVehicle);
+		Query.WithVehicle(OwnVehicle);
 		Query.RunwayPenalty = Traffic.Rules.RunwayPenalty;
+		return Query;
+	};
+
+	// A TRUCK STILL ON ITS WAY OUT (final review, 2026-09-27): its aircraft left, or was deleted,
+	// before it got there. The search used to start from its GOAL regardless - the service point,
+	// where the route home opens with the bay's reverse leg - and RedirectAgent then started the
+	// truck on that route's first point: a rigid truck jumped to the hydrant, and the tow's reverse
+	// was solved from a cab still out on the road (ReverseUnsolvable, "retired where it stands").
+	//
+	// SO IT TURNS WHERE IT IS: the route home is searched from the node at the END of the step it
+	// is driving - ReplanAt's splice point, ahead of it - and spliced on through RerouteAgent, which
+	// keeps it moving and judges a tow's whole new route from the live chain. The tail is searched
+	// UNSEEDED, as FPlanReResolver::SpliceReplan's is: it starts where the chain is not yet. When
+	// that turn does not hold - a tow arriving at a junction cannot always take a hard turn back
+	// (measured 2026-09-27: a 90 degree fold at the far road's junction) - the next node on is
+	// tried, and so on up the route: each is one search, once per recall, at most one per step
+	// left - 15 steps depot to hydrant on the fuel fixture's A and C stands (measured 2026-09-27,
+	// AirportOps.Fuel.*RecalledMidRouteGetsHome's "recalled on step" line); the tow took 5.
+	//
+	// ON ITS LAST STEP, OR WHEN NO TURN HOLDS, IT FINISHES THE LEG and turns for home from the
+	// service point, the normal cycle's own path (OnAgentPhase, below, on its arrival): the last
+	// step ends AT the service point, so a turn from its end is the route home from there anyway,
+	// and only the chain that arrives can solve its reverse. Better the rest of the way out than a
+	// retirement.
+	// ENFORCED BY: AirportOps.Fuel.TowRecalledMidRouteGetsHome,
+	// AirportOps.Fuel.TruckRecalledMidRouteGetsHome, AirportOps.Fuel.TowRecalledOnItsLastLegGetsHome
+	if (Home != nullptr && Truck->Phase == EAgentPhase::Taxiing && Truck->Follower.Plan.IsValid())
+	{
+		// COPIED, because a successful RerouteAgent replaces the plan this would otherwise alias.
+		const FRoutePlan Out = Truck->Follower.Plan;
+		const FGuidelineNodeId OutGoal = Truck->GoalNode;
+		const int32 FirstKeep = UGroundTraffic::CurrentStep(Out, Truck->Follower.Travelled) + 1;
+		bool bSaidNarrow = false;
+		for (int32 KeepSteps = FirstKeep; KeepSteps < Out.Steps.Num(); ++KeepSteps)
+		{
+			const FGuidelineNodeId TurnAt = UGroundTraffic::StepFromNode(Out, KeepSteps);
+			if (TurnAt == OutGoal)
+			{
+				break;
+			}
+			FRouteQuery Query = HomeQuery(TurnAt, Home->PoseNode);
+			FRoutePlan Tail = RouteSearch::Find(Network, Query);
+			// HOME EVEN IF IT DOES NOT FIT, for the parked path's reason below, and SAID the same
+			// way - once per recall, not once per node tried; RerouteAgent's own whole-route judge
+			// is what keeps a fold off the road.
+			if (Tail.Result == ERouteResult::TooNarrow)
+			{
+				if (!bSaidNarrow)
+				{
+					bSaidNarrow = true;
+					UE_LOG(LogAirportOps, Warning,
+						TEXT("Fuel: truck %d does not fit the road home to depot %d (%s, guideline edge %d); driving it anyway"),
+						TruckId, Depot.Index, *Tail.RejectedBy.Describe(), Tail.RejectedEdge.Index);
+				}
+				Query.Vehicle = nullptr;
+				Tail = RouteSearch::Find(Network, Query);
+			}
+			if (Tail.IsValid() && Traffic.RerouteAgent(TruckId, &Network, KeepSteps, Tail))
+			{
+				GoingHome.Add(TruckId, Depot);
+				UE_LOG(LogAirportOps, Log, TEXT("Fuel: truck %d turns for home to depot %d at guideline node %d, on the road"),
+					TruckId, Depot.Index, TurnAt.Index);
+				return;
+			}
+		}
+		// STILL OUT, SO STILL COUNTED: GoingHome is what TrucksOutFor reads once the demand is gone.
+		GoingHome.Add(TruckId, Depot);
+		UE_LOG(LogAirportOps, Log,
+			TEXT("Fuel: truck %d finishes its leg to the service point and turns for home to depot %d there"),
+			TruckId, Depot.Index);
+		return;
+	}
+
+	FRoutePlan Plan;
+	if (Home != nullptr)
+	{
+		FRouteQuery Query = HomeQuery(Truck->GoalNode, Home->PoseNode);
+
+		// JUDGED FROM THE LIVE CHAIN AND CAB (2026-09-27): the route home off a stand
+		// OPENS with the bay's reverse leg, and VehicleFit::JudgePlan solves that reverse from
+		// where the tow is parked - its axles, its heading and its cab (FTowSeed::Origin), the
+		// pose FTowReverseRun will arm from - so a route the router admits is one the tow can back
+		// along. Unseeded, JudgePlan refuses a reverse-first plan outright.
+		// ENFORCED BY: AirportOps.Fuel.TowServesCodeA (the tow gets home)
+		if (OwnVehicle.HasTrailer() && Truck->TowAxles.Num() == OwnVehicle.Tow.Num())
+		{
+			const FVector2D Steered = Truck->LastMotion.Position
+				+ FVector2D(FMath::Cos(Truck->LastMotion.Heading), FMath::Sin(Truck->LastMotion.Heading)) * OwnVehicle.Chassis.SteerAxleX;
+			const FGuidelineNode* StartNode = Network.GetGuidelineNode(Query.Start);
+			FTowSeed& Seed = Query.TowSeed.Emplace();
+			Seed.Axles = Truck->TowAxles;
+			Seed.Heading = Truck->LastMotion.Heading;
+			Seed.Speed = 0.0;
+			// HOW FAR ALONG THE ROUTE THE STEERED AXLE ALREADY IS - zero at a service point, where
+			// it parked on the node the route starts from; RigYard's reading of the same thing.
+			Seed.Travelled = StartNode != nullptr ? FVector2D::Distance(StartNode->Position, Steered) : 0.0;
+			Seed.Origin = Truck->LastMotion.Position;
+		}
 		Plan = RouteSearch::Find(Network, Query);
 
 		// HOME EVEN IF IT DOES NOT FIT (review of 2026-09-24). The way out was chosen for a
@@ -421,7 +585,8 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		// a corner scuffs a kerb; a trailer past square is a jack-knife, and the agent stops dead
 		// where it folds, holding the road. So a TOW's ungated route is judged whole
 		// (VehicleFit::JudgePlan, the router's own check) and, if it folds, not driven: the truck
-		// is retired below, with the fold named. Rigid trucks - every truck today - are unchanged.
+		// is retired below, with the fold named. Rigid trucks are unchanged; the utility tow that
+		// serves A and B stands since 2026-09-26 is the first tow this actually judges.
 		// ENFORCED BY: AirportOps.Ops.FuelTowNeverDrivenHomeIntoAFold
 		if (Plan.Result == ERouteResult::TooNarrow)
 		{
@@ -431,7 +596,7 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 			Query.Vehicle = nullptr;
 			Plan = RouteSearch::Find(Network, Query);
 			FString Why;
-			if (Plan.IsValid() && !MayDriveUngated(Plan, TruckVehicle, Network, &Why))
+			if (Plan.IsValid() && !MayDriveUngated(Plan, OwnVehicle, Network, &Why, Query.TowSeed.GetPtrOrNull()))
 			{
 				UE_LOG(LogAirportOps, Warning,
 					TEXT("Fuel: truck %d's ungated road home to depot %d does not hold its tow either (%s); not driven"),
@@ -523,6 +688,15 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 			// that has been waiting on every depot being busy is worth re-offering the
 			// instant one of them stops being busy, not thirty times a second until then.
 			++FleetRevision;
+		}
+		else if (Depot != nullptr)
+		{
+			// RECALLED ON ITS LAST LEG, AND NOW AT THE SERVICE POINT - see SendTruckHome's
+			// on-the-road branch: it finished the leg rather than turn where no turn held, and
+			// turns for home from here, parked, by the ordinary cycle's own path.
+			// ENFORCED BY: AirportOps.Fuel.TowRecalledOnItsLastLegGetsHome
+			const FEntityInstanceId HomeId = *Home;
+			SendTruckHome(Traffic, Network, AgentId, HomeId);
 		}
 		return;
 	}
@@ -633,7 +807,15 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 			}
 
 			const FGuidelineNodeId Hydrant = FuelAnchorOf(Network, Demand.Stand);
-			const FDepotChoice Choice = ChooseDepot(Network, Hydrant);
+			// THE STAND'S OWN LETTER'S VEHICLE (spec 2026-09-26 section 2): an A stand's lane is
+			// drawn for the utility tow and a C stand's for the truck, so the one vehicle this
+			// used to send everywhere was wrong for every stand but one kind. A STAND DELETED
+			// UNDER ITS DEMAND is asked as Code C's, like an outline reading as no letter - the
+			// aircraft's own leaving drops the demand a moment later.
+			const FEntityInstance* StandInstance = Network.GetEntity(Demand.Stand);
+			const FVehicle Sent = StandInstance != nullptr ? VehicleFor(*StandInstance) : VehiclesFor(EIcaoCode::C);
+			const FVehicle Design = StandInstance != nullptr ? DesignVehicleFor(*StandInstance) : Sent;
+			const FDepotChoice Choice = ChooseDepot(Network, Hydrant, Sent, Design);
 
 			if (!Choice.Depot.IsSet())
 			{
@@ -698,11 +880,14 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 					GuidelineGeom::PolylineLength(Choice.Plan.Polyline), Choice.Plan.Polyline.Num(), *Path);
 			}
 
-			// ShutdownPause 0 - see TruckShutdownPause. TruckVehicle is set once at attach
-			// (UOpsRuntime::Attach), not resolved here - this is Model/, and Content/ was the
-			// only edge from Model/ to Content/ in either plugin (#104).
+			// ShutdownPause 0 - see TruckShutdownPause. The vehicle table is filled once at attach
+			// (UOpsRuntime::Attach -> ResolveVehicles), not resolved here - this is Model/, and
+			// Content/ was the only edge from Model/ to Content/ in either plugin (#104). A TOW IS
+			// DISPATCHED WHOLE by this same call: FRoadAgent::StartDrive lays one axle per tow
+			// link, and the agent arms FTowReverseRun on a reverse leg because its vehicle has a
+			// trailer - nothing here has to know which kind it sent.
 			const int32 TruckId = Traffic.DispatchAgent(&Network, Choice.Plan,
-				TruckVehicle, ETraversalClass::GroundVehicle,
+				Sent, ETraversalClass::GroundVehicle,
 				TruckShutdownPause);
 			if (TruckId == 0)
 			{
@@ -719,8 +904,9 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 			Demand.TruckId = TruckId;
 			Demand.Depot = Choice.Depot;
 			UE_LOG(LogAirportOps, Log,
-				TEXT("Fuel: depot %d sends truck %d to stand %d for aircraft %d (%.0f uu)"),
-				Choice.Depot.Index, TruckId, Demand.Stand.Index, Demand.AircraftId, Choice.Plan.Length);
+				TEXT("Fuel: depot %d sends truck %d (%s) to stand %d for aircraft %d (%.0f uu)"),
+				Choice.Depot.Index, TruckId, *Sent.TypeCode.ToString(), Demand.Stand.Index,
+				Demand.AircraftId, Choice.Plan.Length);
 			break;
 		}
 

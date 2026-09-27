@@ -3,9 +3,12 @@
 #include "AirsideLog.h"
 #include "Content/AirsideSettings.h"
 #include "Model/RoadNetwork.h"
+#include "Model/Vehicle.h"
+#include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/RoadGeom.h"
+#include "Solve/StandBox.h"
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient()
 {
@@ -45,7 +48,12 @@ UEntityDefinition* UEntityDefinition::MakeStandTransient(EIcaoCode Letter, UObje
 	}
 
 	UEntityDefinition* Definition = NewObject<UEntityDefinition>(Outer);
-	BuildStandFor(Definition, Aircraft, Letter, UAirsideSettings::ResolveLargestServiceVehicle(),
+	//
+	// ITS OWN LETTER'S DESIGN VEHICLE, since 2026-09-26 - the utility tow for A and B, the truck
+	// from C up (UAirsideSettings::ResolveStandDesignVehicle). Until then every letter was laid
+	// for the truck, whose corner runs are fixed per vehicle rather than per letter, and A and B
+	// could not hold them.
+	BuildStandFor(Definition, Aircraft, Letter, UAirsideSettings::ResolveStandDesignVehicle(Letter),
 		UAirsideSettings::ResolveLetterEnvelope(Letter));
 
 	return Definition;
@@ -69,7 +77,11 @@ void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition, UAircraft
 	// the split exists: every shipping caller - the Python asset author, Blueprint, the tests
 	// that want the real stand - goes through here and gets the SAME vehicle, and only a test
 	// that is deliberately measuring the derivation names a different one.
-	BuildCodeCStandFor(Definition, Aircraft, UAirsideSettings::ResolveLargestServiceVehicle(),
+	//
+	// THE LETTER'S DESIGN VEHICLE, not the largest service vehicle, since 2026-09-26 - the same
+	// ResolveStandDesignVehicle the other letters use, which for C is still the truck. One rule
+	// for all six, so C cannot drift from the drawn letters.
+	BuildCodeCStandFor(Definition, Aircraft, UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C),
 		UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::C));
 }
 
@@ -84,6 +96,25 @@ namespace
 	 * coincidence. Every run below is this times what the arithmetic demands.
 	 */
 	constexpr double LegSlack = 1.1;
+
+	/**
+	 * How many of a TOW's chain lengths (VehicleFit::ChainLength) of straight it needs into its
+	 * service point before it can reverse out - user ruling 2026-09-26: a longer straight in,
+	 * not a pull-past.
+	 *
+	 * A TRAILER STRAIGHTENS BEHIND ITS TRACTOR ROUGHLY EXPONENTIALLY with distance driven, and
+	 * the reverse refuses to start until the turntable is inside its 3.0 degree lock
+	 * (TowReverse). Measured 2026-09-26 on the utility tow (chain 575) off a square corner at
+	 * its own radius: 522 uu of straight left it bent 18.6 degrees, 972 left 3.5 - about one
+	 * e-fold per 270 uu. Two chains (1150) lands near 1.8 degrees: inside the lock with room
+	 * for the solve. A rigid vehicle has no trailer to settle and is given none.
+	 *
+	 * ALSO SPENT AFTER THE REVERSE CORNER (proposed in implementation, ratified by the user
+	 * 2026-09-26), and there it rests on ONE measurement: with no straight after the corner the
+	 * solve ended 11.3 degrees off the lane. That bay's share may be shortened to the ground
+	 * left before the entrance edge - see Cleared in BuildStandTemplate.
+	 */
+	constexpr double TowSettleChains = 2.0;
 
 	/**
 	 * Turn a polyline of corner VERTICES into the chain of quadratics that rounds it.
@@ -208,17 +239,17 @@ FRoutePlan FStandLeg::ToPlan() const
 }
 
 void UEntityDefinition::BuildCodeCStandFor(
-	UEntityDefinition* Definition, UAircraftType* Aircraft, const FChassis& Largest,
+	UEntityDefinition* Definition, UAircraftType* Aircraft, const FVehicle& Design,
 	const FLetterEnvelope& Envelope)
 {
 	// A ONE-LINE FORWARDER - see the header. The body used to live here with Letter pinned to
 	// C as a local const; it is now BuildStandFor's body with Letter a parameter, so this name
 	// keeps compiling for build_stand_asset.py and the tests that measure Code C's derivation.
-	BuildStandFor(Definition, Aircraft, EIcaoCode::C, Largest, Envelope);
+	BuildStandFor(Definition, Aircraft, EIcaoCode::C, Design, Envelope);
 }
 
 void UEntityDefinition::BuildStandFor(
-	UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FChassis& Largest,
+	UEntityDefinition* Definition, UAircraftType* Aircraft, EIcaoCode Letter, const FVehicle& Design,
 	const FLetterEnvelope& Envelope)
 {
 	if (Definition == nullptr)
@@ -280,11 +311,14 @@ void UEntityDefinition::BuildStandFor(
 	//
 	// ONE BAGGAGE BAY, NOT TWO, ruled 2026-09-17, and it unlocked the layout rather than merely
 	// simplifying it. The aft hold sat at -2400, ASTERN of the wing, which made it the aft-most
-	// thing any vehicle drove to - and the aft-most bay is the one whose serve leg has the least
-	// lane to finish its shift in, so it alone capped the aft-edge pitch at 879 uu when the road
-	// fillets wanted 911. With it gone, NOTHING on this side is astern of the wing: the aft-most
-	// service is the hydrant at -800 and the ceiling it leaves goes from 388 uu to about 1760.
-	// The constraint is not relieved, it is absent.
+	// thing any vehicle drove to - and while the contacts were on the aft edge (until
+	// 2026-09-26) the aft-most bay was the one whose serve leg had the least lane to finish its
+	// shift in, so it alone capped the aft-edge pitch at 879 uu when the road fillets wanted
+	// 911. With it gone, NOTHING on this side is astern of the wing: the aft-most service is the
+	// hydrant at -800 and the ceiling it leaves went from 388 uu to about 1760. Since the
+	// contacts moved to the FAR edge the least-lane bay is the FORWARD-most one instead - see
+	// BuildStandTemplate's ladder - and a hold astern of the wing would now simply be the bay
+	// with the MOST lane.
 	constexpr double RowY = 700.0;
 	const double PitX = WingFwd + PlantClearance;
 	const double HoldX = WingFwd + 600.0;
@@ -314,10 +348,12 @@ void UEntityDefinition::BuildStandFor(
 	// service an aeroplane from a parking bay; it couples at the nose gear and pushes, which is
 	// FPushbackRun's business and already modelled. Forward and to port, abeam the nose.
 	//
-	// NOT AHEAD OF THE NOSE, which is where a tug really waits, because that is outside the
-	// stand: a Code C stand is 55 m deep measured from the nose and the airframe fills 39.5 m
-	// of it with every bit of the slack behind. Recorded rather than hidden - holding the tug
-	// on the stand wants either a deeper letter or a tug dispatched from the apron.
+	// NOT AHEAD OF THE NOSE, which is where a tug really waits. Written when a Code C stand was
+	// 55 m deep with every bit of the slack behind the tail, so ahead of the nose was outside
+	// the stand. Since 2026-09-26 it is 65 m with the slack AHEAD of the nose - but that slack
+	// is the service lane's now, the far-edge contacts and their spurs, so a tug parked there
+	// would sit on the road in. Recorded rather than hidden - holding the tug on the stand
+	// still wants either more depth or a tug dispatched from the apron.
 	AddFixture(TEXT("TugStand"), 350.0, -1400.0, 180.0, EServiceRole::Tug);
 
 	// What this stand can provide at all. A contact stand does the lot.
@@ -334,38 +370,53 @@ void UEntityDefinition::BuildStandFor(
 	Definition->FootprintExtent = FVector2D::ZeroVector;   // the stand's extent IS its aircraft's
 	Definition->Trucks = 0;                          // nothing is based here; a depot has the fleet
 
-	BuildStandTemplate(*Definition, Letter, Largest, Envelope);
+	BuildStandTemplate(*Definition, Letter, Design, Envelope);
 }
 
 void UEntityDefinition::BuildStandTemplate(
-	UEntityDefinition& Definition, EIcaoCode Letter, const FChassis& Largest,
+	UEntityDefinition& Definition, EIcaoCode Letter, const FVehicle& Design,
 	const FLetterEnvelope& Envelope)
 {
 	// THE LAYOUT IS BUILT FOR THE FLOOR OF ITS LETTER'S BAND. 53 m to just under 75 is all
 	// Code C, and a template authored at a comfortable 60 would fail exactly where a player
 	// drew the smallest stand the rules allow. Every figure below therefore comes off IcaoCode,
 	// which reports the minimum. NoseFwd/TailAft come off Envelope instead, since #292: they are
-	// fleet figures now, not IcaoCode's - see Solve/LetterEnvelope.h.
+	// fleet figures now, not IcaoCode's - see Solve/LetterEnvelope.h. TailAft is read through
+	// StandBox::EntranceSetback since 2026-09-26, below.
 	const double Width = IcaoCode::StandWidthForLetter(Letter);
 	const double Depth = IcaoCode::StandDepthForLetter(Letter);
 	const double NoseFwd = Envelope.MaxNoseFwd;
-	const double TailAft = Envelope.MaxTailAft;
 
-	// THE STAND BOX, in the definition's own local space. Depth is measured NOSE to the back of
-	// the GSE road, so the back edge is the nose overhang minus the depth and every bit of the
-	// slack is behind the aeroplane.
+	// WHAT EVERY LANE BELOW IS LAID FOR, kept with them - see DesignVehicle.
+	Definition.DesignVehicle = Design;
+
+	// THE STAND BOX, in the definition's own local space. The back edge is the ENTRANCE, on the
+	// taxiway, EntranceSetback behind the stop mark - the ONE figure StandBox::PoseFor places the
+	// stop mark by, so the template and the placed box agree by construction - and the front
+	// edge is Depth beyond it, so every bit of the slack lies AHEAD of the nose.
+	//
+	// IT WAS THE OTHER WAY ROUND UNTIL 2026-09-26: the box ran from the nose back, the slack sat
+	// behind the tail, and every contact sat just inside the entrance - on the taxiway side. The
+	// user ruled that service vehicles enter and leave ONLY by the far edge, opposite the
+	// taxiway, because a taxiway-side contact forced every service road into the strip between
+	// the stand and the taxiway, which nothing checked and a taxiing wing sweeps.
 	const double HalfWidth = 0.5 * Width;
-	const double BackX = NoseFwd - Depth;
+	const double BackX = -StandBox::EntranceSetback(Letter, Envelope);
+	const double FrontX = BackX + Depth;
 
-	// The two limits, resolved once. Forward is L/sin(lock) and reverse L/tan(lock) - about 30%
-	// tighter, because a reversing vehicle pivots about its FIXED axle.
-	const double Radius = Largest.TightestFollowableRadius();
-	const double ReverseRadius = Largest.TightestReversibleRadius();
+	// The two limits, resolved once, off the LETTER'S DESIGN VEHICLE (ResolveStandDesignVehicle,
+	// user 2026-09-26) - the largest vehicle the letter admits, not the largest there is.
+	// Forward is L/sin(lock) and reverse L/tan(lock) - about 30% tighter, because a reversing
+	// vehicle pivots about its FIXED axle; a tow's reverse is VehicleFit::TightestReverseRadius's
+	// larger figure, where its trailer's steady hitch angle stays clear of the fold.
+	const double Radius = Design.Chassis.TightestFollowableRadius();
+	const double ReverseRadius = VehicleFit::TightestReverseRadius(Design);
 
 	// THE LANE DOWN EACH SIDE, outboard of the wingtip because nothing may pass under a wing.
 	// Its own width is what the stand's minimum width was derived from, so this sits exactly
 	// inside the boundary with the letter's wingtip clearance between it and the aeroplane.
-	const double LaneY = HalfWidth - 0.5 * IcaoCode::ServiceLaneWidth();
+	// A TOW'S lane may sit further out than this - see TowSettle below.
+	const double BoundaryLaneY = HalfWidth - 0.5 * IcaoCode::ServiceLaneWidth();
 
 	// WHAT EACH KIND OF CORNER COSTS, resolved once and spent everywhere below. A right angle
 	// is 1.414 R of run on EACH arm; 45 degrees is 0.448 R, which is why the parking slots are
@@ -389,7 +440,7 @@ void UEntityDefinition::BuildStandTemplate(
 	//
 	// 90 DEGREES IS THE ONLY HEADING THAT COSTS THE SAME BOTH WAYS, Square either side, so it
 	// is the only one a two-way road can use. What a square corner needs is Square of STRAIGHT
-	// on the stand side, and that cannot come from the gap between the road and the back edge
+	// on the stand side, and that cannot come from the gap between the road and the front edge
 	// because the PLAYER chooses that gap - 4 m is legal. It comes from the spur instead: the
 	// contact leads into a straight at least Square long before its first bend, so the corner
 	// has its run at any gap, including none.
@@ -406,8 +457,8 @@ void UEntityDefinition::BuildStandTemplate(
 	// edge wanted: those were ROAD contacts, and the third Diagonal paid for the SPLIT each one
 	// makes in the road, which shortens the segment its neighbour's fillet works in. A branch
 	// splits nothing - every bay lays its own copy of the spur as its own edge - so this has
-	// only to keep the park poses apart, and at 2 x Diagonal the echelon is 488 uu between
-	// neighbours measured across the branches.
+	// only to keep the park poses apart, which 2 x Diagonal does - 495 uu for the truck, 208 for
+	// the utility tow (2026-09-26 figures; it follows the design vehicle's radius).
 	const double BranchPitch = 2.0 * Diagonal;
 
 	// A BAY PER ANCHOR A GROUND VEHICLE SERVICES FROM.
@@ -430,9 +481,11 @@ void UEntityDefinition::BuildStandTemplate(
 		}
 	}
 
-	// STARBOARD BEFORE PORT, AND AFT-MOST FIRST WITHIN A SIDE. The side ordering is what keeps
-	// one ladder's nodes in one run rather than interleaved; the aft-most ordering is what
-	// gives the bay with the least lane the entry that reaches the lane soonest.
+	// STARBOARD BEFORE PORT, AND FORWARD-MOST FIRST WITHIN A SIDE. The side ordering is what
+	// keeps one ladder's nodes in one run rather than interleaved; the forward-most ordering is
+	// what gives the bay with the least lane the entry that reaches the lane soonest. It was
+	// AFT-most first until 2026-09-26, when the contacts moved from the back edge to the front:
+	// the bay nearest its contact is now the forward-most one, so the order mirrored with them.
 	Serviced.Sort([](const FEntityAnchor& A, const FEntityAnchor& B)
 		{
 			const bool bStarboardA = A.LocalPosition.Y >= 0.0;
@@ -441,24 +494,47 @@ void UEntityDefinition::BuildStandTemplate(
 			{
 				return bStarboardA;
 			}
-			return A.LocalPosition.X < B.LocalPosition.X;
+			return A.LocalPosition.X > B.LocalPosition.X;
 		});
+
+	// A TOW'S STRAIGHT INTO ITS SERVICE POINT, and the lane pushed out to give it one - see
+	// TowSettleChains. The straight into a service point runs from the lane's square corner
+	// inboard to the fixture, so it is (lane - fixture - Square) long and only moving the lane
+	// OUTBOARD lengthens it: the fixtures are placed off the wing (2026-09-17) and the lane is
+	// the outermost thing on the stand. So a tow's lane sits at whichever is further out, the
+	// boundary's or the settle's, and a stand that needs the second is WIDER than its floor -
+	// RequiredExtent measures it below, FitsItsLetter judges it, and the floors stay the user's.
+	// Zero for a rigid design vehicle, so the truck's C-F layouts are exactly what they were.
+	const double TowSettle =
+		Design.Tow.IsEmpty() ? 0.0 : TowSettleChains * VehicleFit::ChainLength(Design);
+	double SettleLaneY = 0.0;
+	for (const FEntityAnchor* Anchor : Serviced)
+	{
+		SettleLaneY = FMath::Max(SettleLaneY, FMath::Abs(Anchor->LocalPosition.Y) + TowSettle + Square);
+	}
+	const double LaneY = TowSettle > 0.0 ? FMath::Max(BoundaryLaneY, SettleLaneY) : BoundaryLaneY;
 
 	// HOW FAR OUTBOARD THE TWO CONTACTS SIT, DERIVED FROM THE SERVICES THEY FEED.
 	//
 	// SQUEEZED FROM BOTH ENDS, like everything else on this stand. Too far inboard and a bay's
-	// 45 degree branch meets its lane too far FORWARD: the meeting has to land Diagonal + Square
+	// 45 degree branch meets its lane too far AFT: the meeting has to land Diagonal + Square
 	// short of that bay's turn-in, or the two corners overlap and neither delivers its radius.
 	// Too far outboard and the branch has no room to reach the lane at all.
 	//
 	// THE MEETING POINT DOES NOT DEPEND ON ParkRun, which is what makes this solvable in one
 	// pass rather than two. The park pose sits ParkRun along the branch, and the branch then has
 	// (LaneY - ContactMag - ParkRun) of outboard left to run; the two cancel, and the meeting
-	// lands at BranchX + (LaneY - ContactMag) wherever along the branch the pose is put.
+	// lands at BranchX - (LaneY - ContactMag) wherever along the branch the pose is put.
 	//
-	// PER SLOT, NEVER PER STAND. A bay further down its side's ladder branches further forward,
-	// so it meets its lane further forward too - the FORWARD-most bay on a side is the binding
-	// one, not the aft-most, and checking only one of them is a bug this file has already had.
+	// PER SLOT, NEVER PER STAND. A bay further down its side's ladder branches further aft, so
+	// it meets its lane further aft too - the AFT-most bay on a side is the binding one, not the
+	// forward-most, and checking only one of them is a bug this file has already had.
+	//
+	// MIRRORED 2026-09-26 with the contacts, and the SIGN FLIPPED WITH IT: the ladder now runs
+	// aft from the front edge, so the meeting BranchX - (LaneY - ContactMag) must land at least
+	// Diagonal + Square FORWARD of the service point, which solves to ContactMag >= LaneY -
+	// BranchX + ServiceX + Diagonal + Square. It was LaneY + BranchX - ServiceX + ..., the same
+	// inequality read along +X.
 	double ContactFloor = 0.5 * ContactSpan;
 	const FEntityAnchor* Binding = nullptr;
 	{
@@ -467,9 +543,9 @@ void UEntityDefinition::BuildStandTemplate(
 		for (const FEntityAnchor* Anchor : Serviced)
 		{
 			const int32 At = Anchor->LocalPosition.Y >= 0.0 ? StarboardAt++ : PortAt++;
-			const double BranchX = BackX + Square + Diagonal + At * BranchPitch;
+			const double BranchX = FrontX - Square - Diagonal - At * BranchPitch;
 			const double Wants =
-				LaneY + BranchX - Anchor->LocalPosition.X + Diagonal + Square;
+				LaneY - BranchX + Anchor->LocalPosition.X + Diagonal + Square;
 			if (Wants > ContactFloor)
 			{
 				ContactFloor = Wants;
@@ -489,13 +565,21 @@ void UEntityDefinition::BuildStandTemplate(
 		// NOT SILENTLY WRONG. The layout is still laid - a shape somebody has to fix is more use
 		// than no shape - but no contact position serves every bay, and the drivability test will
 		// report the fold with its figure.
+		//
+		// AND THE DEPTH THAT WOULD OPEN IT, since 2026-09-26: every Wants above falls one for one
+		// as the front edge moves out, so a fold a bay binds is closed by Depth + (floor -
+		// ceiling). That is the figure a floor decision needs - the RequiredExtent of a folded
+		// layout measures the fold, not the stand. A floor the span sets (no Binding) is a width
+		// problem depth cannot fix, and says so with a zero.
+		const double DepthToOpen = Binding != nullptr ? Depth + (ContactFloor - ContactCeiling) : 0.0;
 		UE_LOG(LogAirside, Warning,
 			TEXT("Stand template '%s': no legal road contact - '%s' at %.0f wants it at least "
 			     "%.0f outboard and the branch run allows at most %.0f. That bay's serve leg will "
-			     "fold."),
+			     "fold; a depth of %.0f (floor %.0f) would open the band."),
 			IcaoCode::ToLetter(Letter),
 			Binding != nullptr ? *Binding->Id.ToString() : TEXT("?"),
-			Binding != nullptr ? Binding->LocalPosition.X : 0.0, ContactFloor, ContactCeiling);
+			Binding != nullptr ? Binding->LocalPosition.X : 0.0, ContactFloor, ContactCeiling,
+			DepthToOpen, Depth);
 	}
 
 	// THE MIDPOINT OF EACH BAND, so neither end is the one that fails first.
@@ -527,10 +611,12 @@ void UEntityDefinition::BuildStandTemplate(
 		// take turns over it is ClaimServiceBay's job rather than the geometry's.
 		//
 		// STRAIGHT IN AND STRAIGHT OUT, because the heading is exactly what the road corner is
-		// measured against. Square to the back edge is square to a road drawn behind it, and that
-		// is the only heading a vehicle can reach from either direction for the same price.
+		// measured against. Square to the front edge is square to a road drawn ahead of the nose,
+		// and that is the only heading a vehicle can reach from either direction for the same
+		// price. IN IS AFT (heading PI) and OUT IS FORWARD (0) since 2026-09-26, when the contact
+		// moved from the back edge to the front - see the box above.
 		//
-		// AND THE POSE SITS Square INSIDE THE BACK EDGE, not on it, which is the part that makes
+		// AND THE POSE SITS Square INSIDE THE FRONT EDGE, not on it, which is the part that makes
 		// the heading pay off. FAnchorLink measures the corner's stand-side arm from where the
 		// entry's own line crosses the road TO THE ENTRY NODE - see the MeetsAt test in Join -
 		// so a pose on the boundary offers that corner nothing but the gap, and the gap belongs
@@ -544,28 +630,29 @@ void UEntityDefinition::BuildStandTemplate(
 		// depends on how close somebody drew a road.
 		const double Contact = Side * ContactMag;
 
-		Bay.EntryLocal = FVector2D(BackX + Square, Contact);
-		Bay.EntryHeading = 0.0;
+		Bay.EntryLocal = FVector2D(FrontX - Square, Contact);
+		Bay.EntryHeading = UE_DOUBLE_PI;
 		Bay.ExitLocal = Bay.EntryLocal;
-		Bay.ExitHeading = UE_DOUBLE_PI;
+		Bay.ExitHeading = 0.0;
 
-		// WHERE THIS BAY LEAVES THE SPUR, Diagonal on from the contact - that being the 45
+		// WHERE THIS BAY LEAVES THE SPUR, Diagonal on (aft) from the contact - that being the 45
 		// degree corner's own arm, and the only run between the two that belongs to the stand.
-		const double BranchX = BackX + Square + Diagonal + Slot * BranchPitch;
+		const double BranchX = FrontX - Square - Diagonal - Slot * BranchPitch;
 
-		// THE SLOT, at 45 degrees on its branch, pointing forward and outboard so the vehicle
-		// parks already aimed at the lane it will leave along.
-		Bay.ParkLocal = FVector2D(BranchX + ParkRun, Contact + Side * ParkRun);
-		Bay.ParkHeading = Side * 0.25 * UE_DOUBLE_PI;
+		// THE SLOT, at 45 degrees on its branch, pointing aft and outboard so the vehicle parks
+		// already aimed at the lane it will leave along - 0.75 pi, the mirror of the 0.25 pi it
+		// was while the ladder ran forward from the back edge.
+		Bay.ParkLocal = FVector2D(BranchX - ParkRun, Contact + Side * ParkRun);
+		Bay.ParkHeading = Side * 0.75 * UE_DOUBLE_PI;
 
 		// ARRIVE: square in off the road, then 45 degrees onto this bay's branch. The straight
 		// between them is what gives the ROAD's corner its run, which is why it is Square long
-		// before any of this bends - the gap behind the stand belongs to the player and cannot
+		// before any of this bends - the gap ahead of the stand belongs to the player and cannot
 		// be relied on for a single uu of it.
 		BuildLeg({ Bay.EntryLocal, FVector2D(BranchX, Contact), Bay.ParkLocal },
 			Radius, TEXT("arrive"), Bay.ArriveLeg);
 
-		// SERVE: out along the 45 to the lane, forward to abeam the service point, then square
+		// SERVE: out along the 45 to the lane, aft to abeam the service point, then square
 		// inboard to it. The turn inboard is where the wing would be if the fixture were not
 		// placed clear of it - see BuildCodeCStandFor, and the test that measures it.
 		// SIGNED, NEVER AN ABSOLUTE. How far the park pose has to move OUTBOARD to reach its
@@ -576,29 +663,46 @@ void UEntityDefinition::BuildStandTemplate(
 		const double Diagonalise = (Lane - Bay.ParkLocal.Y) * Side;
 		BuildLeg({
 			Bay.ParkLocal,
-			FVector2D(Bay.ParkLocal.X + Diagonalise, Lane),
+			FVector2D(Bay.ParkLocal.X - Diagonalise, Lane),
 			FVector2D(Service.X, Lane),
 			Service }, Radius, TEXT("serve"), Bay.ServeLeg);
 
-		// REVERSE: straight out to the lane and square onto it, backwards. The vehicle ends
-		// facing the way it came, which is what makes this the turn-round - it drives away
-		// forwards without ever retracing this curve, so the curve only has to satisfy the
+		// REVERSE: straight out to the lane and square onto it, backwards - AFT along it since
+		// 2026-09-26, so the vehicle ends facing forward, toward the front-edge contact. The
+		// vehicle ends facing the way it came, which is what makes this the turn-round - it drives
+		// away forwards without ever retracing this curve, so the curve only has to satisfy the
 		// REVERSE limit and the 30% that buys is not spent on a path that works both ways.
-		const FVector2D Cleared(Service.X + SquareBack, Lane);
+		//
+		// AND FOR A TOW, THE SETTLE AGAIN AFTER THE CORNER: TowReverse::Solve has to END the
+		// reverse on the lane's line, inside 3 degrees, and a trailer backed round a corner
+		// comes out of it bent the same way one driven round it does. Measured 2026-09-26 on
+		// the utility tow: with the corner's own run and no straight after it the solve ended
+		// 11.3 degrees off. Zero for a rigid vehicle, whose FReverseRun ends on the curve.
+		//
+		// CAPPED AT THE ENTRANCE EDGE, per bay (controller ruling 2026-09-26): the ground aft of
+		// BackX is the taxiway's, and Code A's hydrant, 100 uu from a -1300 edge, would have
+		// cleared to -1474 on the full 1150. It keeps what the stand has - 976 there - which
+		// the whole-route judge still admits; a bay left with less than none clears at its
+		// corner and the test reports it.
+		// ENFORCED BY: Airside.Entities.EveryBayContactIsOnTheFarEdge,
+		// Airside.Entities.EveryTemplateLegIsDrivableByEveryVehicle
+		const double ReverseSettle =
+			FMath::Clamp(Service.X - SquareBack - BackX, 0.0, TowSettle);
+		const FVector2D Cleared(Service.X - SquareBack - ReverseSettle, Lane);
 		BuildLeg({ Service, FVector2D(Service.X, Lane), Cleared },
 			ReverseRadius, TEXT("reverse"), Bay.ReverseLeg);
 
-		// DEPART: back down the lane, then 45 degrees inboard onto the contact spur, so the
-		// vehicle reaches the back edge already square to the road and leaves by the same corner
+		// DEPART: back up the lane, then 45 degrees inboard onto the contact spur, so the
+		// vehicle reaches the front edge already square to the road and leaves by the same corner
 		// it arrived through, mirrored.
 		//
 		// THE SHIFT VERTEX IS SET, NOT CHOSEN. The final straight has to carry Square for the
 		// road's corner plus Diagonal for this one, and a 45 degree shift costs one of x for every
-		// one of y - so the vertex sits exactly that far forward, plus the shift itself.
+		// one of y - so the vertex sits exactly that far aft of the contact, plus the shift itself.
 		const double Shift = LaneY - ContactMag;
-		const double ShiftVertex = BackX + Square + Diagonal + Shift;
+		const double ShiftVertex = FrontX - Square - Diagonal - Shift;
 		BuildLeg({ Cleared, FVector2D(ShiftVertex, Lane),
-			FVector2D(ShiftVertex - Shift, Contact), Bay.ExitLocal },
+			FVector2D(ShiftVertex + Shift, Contact), Bay.ExitLocal },
 			Radius, TEXT("depart"), Bay.DepartLeg);
 
 		Definition.ServiceBays.Add(MoveTemp(Bay));
@@ -606,11 +710,18 @@ void UEntityDefinition::BuildStandTemplate(
 
 	// WHAT THE LAYOUT ACTUALLY NEEDS, measured off every point of every leg - never typed, and
 	// never off the DESIGN aircraft. Width is the greater of the paint's own reach and the
-	// airframe the LETTER admits with its wingtip clearance; depth likewise runs from that
-	// airframe's nose to the aft-most thing laid.
-	double MinX = -TailAft;
+	// airframe the LETTER admits with its wingtip clearance; depth likewise runs from the
+	// entrance to the forward-most thing laid, or that airframe's nose if it reaches further.
+	//
+	// FROM THE ENTRANCE, NOT THE TAIL, since 2026-09-26: the setback is the letter's wingtip
+	// clearance between a parked tail and the taxiway, and ground the stand needs as surely as
+	// the tail itself - a stand measured from the tail would read a letter smaller than it is.
+	double MinX = BackX;
 	double MaxX = NoseFwd;
-	double MaxAbsY = 0.5 * Width;
+	//
+	// AND THE LANE'S OWN OUTER HALF, which no leg point reaches: a tow's lane can sit outboard
+	// of the boundary's (see TowSettle), and then the stand is as wide as that lane's far side.
+	double MaxAbsY = FMath::Max(0.5 * Width, LaneY + 0.5 * IcaoCode::ServiceLaneWidth());
 	auto Cover = [&MinX, &MaxX, &MaxAbsY](const FVector2D& At)
 	{
 		MinX = FMath::Min(MinX, At.X);
@@ -619,12 +730,12 @@ void UEntityDefinition::BuildStandTemplate(
 	};
 	for (const FServiceBay& Bay : Definition.ServiceBays)
 	{
-		// THE RUN IN FRONT OF THE CONTACT IS GROUND THE LAYOUT NEEDS, though no leg is laid
-		// across it. The contact pose sits Square inside the back edge precisely so the road's
-		// corner has that run, and FAnchorLink lays the lead-in over it - so it is used, it is
-		// this stand's, and a stand claiming only as far back as its first leg measures a Code
-		// C's depth as a Code B's.
-		Cover(FVector2D(Bay.EntryLocal.X - Square, Bay.EntryLocal.Y));
+		// THE RUN BEYOND THE CONTACT IS GROUND THE LAYOUT NEEDS, though no leg is laid across
+		// it. The contact pose sits Square inside the front edge precisely so the road's corner
+		// has that run, and FAnchorLink lays the lead-in over it - so it is used, it is this
+		// stand's, and a stand claiming only as far forward as its first leg measures a Code C's
+		// depth as a Code B's.
+		Cover(FVector2D(Bay.EntryLocal.X + Square, Bay.EntryLocal.Y));
 
 		for (const FStandLeg* Leg : { &Bay.ArriveLeg, &Bay.ServeLeg, &Bay.ReverseLeg, &Bay.DepartLeg })
 		{
@@ -642,12 +753,13 @@ void UEntityDefinition::BuildStandTemplate(
 	// READ THESE RATHER THAN TRUST THEM. The poses are written from the geometry and the
 	// figures they imply are what say whether that geometry was right.
 	UE_LOG(LogAirside, Log,
-		TEXT("Stand template '%s': box %.0f x %.0f (x %.0f..%.0f), radius fwd %.1f rev %.1f, "
-		     "corner square %.0f diagonal %.0f back %.0f, lane y %.0f, branch pitch %.0f, "
+		TEXT("Stand template '%s': design vehicle %s, box %.0f x %.0f (x %.0f..%.0f), radius fwd %.1f rev %.1f, "
+		     "corner square %.0f diagonal %.0f back %.0f, lane y %.0f (tow settle %.0f), branch pitch %.0f, "
 		     "contact y %.0f (band %.0f..%.0f), park run %.0f (band %.0f..%.0f), %d bay(s), "
 		     "needs %.0f x %.0f"),
-		IcaoCode::ToLetter(Letter), Width, Depth, BackX, NoseFwd, Radius, ReverseRadius,
-		Square, Diagonal, SquareBack, LaneY, BranchPitch,
+		IcaoCode::ToLetter(Letter), *Design.TypeCode.ToString(), Width, Depth, BackX, FrontX,
+		Radius, ReverseRadius,
+		Square, Diagonal, SquareBack, LaneY, TowSettle, BranchPitch,
 		ContactMag, ContactFloor, ContactCeiling,
 		ParkRun, ParkRunFloor, ParkRunCeiling,
 		Definition.ServiceBays.Num(), Definition.RequiredExtent.X, Definition.RequiredExtent.Y);

@@ -29,7 +29,7 @@ ARoadBuildHUD::ARoadBuildHUD()
 		EPreviewStyle::NodeThrough, EPreviewStyle::NodeJunction, EPreviewStyle::StandPose,
 		EPreviewStyle::ServiceAnchor, EPreviewStyle::Pinned, EPreviewStyle::Provisional,
 		EPreviewStyle::Guide, EPreviewStyle::Handle, EPreviewStyle::ReverseRoute,
-		EPreviewStyle::ReverseGuideline })
+		EPreviewStyle::ReverseGuideline, EPreviewStyle::ServiceEdge })
 	{
 		Looks.Add(Style, PreviewPalette::DefaultLook(Style));
 	}

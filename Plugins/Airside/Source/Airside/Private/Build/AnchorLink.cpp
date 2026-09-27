@@ -457,11 +457,45 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		// painted line's own.
 		const double StandRadius = LeadInSizingFor(*Instance).Radius;
 
+		// THE DRAWN FAR EDGE, off the outline the player drew (final review, 2026-09-27) - the
+		// edge the road's near kerb is laid on (the plot ghost's ServiceEdge line sits the road's
+		// half-width beyond it, where the road's centre goes - user ruling 2026-09-27). Measured along
+		// the stand's facing from its stop mark, as the outline's furthest and nearest corners,
+		// so no winding or corner order is assumed.
+		//
+		// TWO THINGS HANG OFF IT. The half-plane's boundary (FPendingLink::HalfPlaneOffset): a
+		// road must lie beyond this line, not merely ahead of the entry, or a road alongside is
+		// decided by rounding. And the reach: the bays are the TEMPLATE's, a corner run inside
+		// the template's front, so a stand drawn deeper than its template puts that much more
+		// stand between every entry and the road at its drawn edge - ServiceLinkRadius grows by
+		// exactly the extra depth (controller ruling: drawn depth is not capped).
+		//
+		// NO OUTLINE, NO EXTRA: a stand is given one at placement (GiveStandOutlineIfMissing),
+		// so this is a guard, and the boundary falls back to the entry itself.
+		const FVector2D StandFacing(FMath::Cos(Instance->Heading), FMath::Sin(Instance->Heading));
+		// ONE LINE, BOTH NAMES (Check-Architecture's is-plotted-not-depot rule): a stand with an
+		// outline - every entry's owner is a stand, but an outline alone never says so.
+		const bool bHasFarEdge = Instance->IsStand() && Instance->IsPlotted();
+		double FarAlong = 0.0;
+		double ExtraDepth = 0.0;
+		if (bHasFarEdge)
+		{
+			double NearAlong = TNumericLimits<double>::Max();
+			FarAlong = -TNumericLimits<double>::Max();
+			for (const FVector2D& Corner : Instance->Outline)
+			{
+				const double Along = FVector2D::DotProduct(Corner - Instance->Position, StandFacing);
+				NearAlong = FMath::Min(NearAlong, Along);
+				FarAlong = FMath::Max(FarAlong, Along);
+			}
+			ExtraDepth = FMath::Max(0.0, (FarAlong - NearAlong) - Instance->Definition->RequiredExtent.Y);
+		}
+
 		// ONE STATEMENT OF WHAT AN ENTRY LINK IS, used by the probe below and by the link
 		// finally emitted. Written twice they could differ, and the probe would then be
 		// measuring something other than the link it decides.
-		auto EntryLink = [&Declared, StandRadius, ServiceLinkRadius](
-			FGuidelineNodeId NodeId, const FVector2D& At)
+		auto EntryLink = [&Declared, StandRadius, ServiceLinkRadius, Instance, StandFacing, FarAlong,
+			ExtraDepth, bHasFarEdge](FGuidelineNodeId NodeId, const FVector2D& At)
 		{
 			// GroundVehicle, not a ray: a vehicle may genuinely arrive from any side, and the
 			// player has no authored heading to aim at - the same reasoning that governs every
@@ -477,6 +511,28 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 			// lead-in along the lane, and Build reads it to report a stand that joined nothing
 			// once rather than once per entry.
 			Link.LaneOwner = Declared.Key;
+
+			// THE HALF-PLANE A DECLARED ENTRY MAY BE JOINED THROUGH (user 2026-09-26: service
+			// vehicles enter and leave ONLY by the far edge). Instance->Heading, not a per-entry
+			// heading - there is none - because stand-local +X IS the aircraft's own facing and
+			// every entry sits near the FAR end of that axis (FrontX - Square), so the world
+			// direction the stand faces is the direction beyond the far edge. A road behind the
+			// tail, on the taxiway side the entrance already opens onto, is refused however close
+			// it is drawn - see FPendingLink::HalfPlane's own comment for why this is a half-plane
+			// and not a second ray.
+			Link.HalfPlane = StandFacing;
+
+			// ITS BOUNDARY AT THE DRAWN FAR EDGE, and the reach grown by the depth drawn past the
+			// template - see FarAlong above. Clamped at zero so an entry is never offered a road
+			// BEHIND itself, which the boundary through the entry always refused.
+			// ENFORCED BY: Airside.Build.StandEntry.SideRoadAlongsideJoinsNothing,
+			// Airside.Build.StandEntry.DrawnDeepStandJoinsItsFarEdge
+			if (bHasFarEdge)
+			{
+				Link.HalfPlaneOffset =
+					FMath::Max(0.0, FarAlong - FVector2D::DotProduct(At - Instance->Position, StandFacing));
+			}
+			Link.Reach += ExtraDepth;
 			return Link;
 		};
 
@@ -492,11 +548,13 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		// because a cycle offered entries on all four sides of a stand, and a road alongside
 		// could be "in reach" of the far ones, whose connectors would then run the whole depth
 		// of the stand across the lane's own crossings. The layout declares entries only where
-		// a road is meant to meet it - all on the aft edge - and the user's ruling of
+		// a road is meant to meet it - all on the far edge since 2026-09-26, the aft edge before
+		// it - and the user's ruling of
 		// 2026-09-17 is that EVERY service bay gets its own way in, so that a vehicle never
 		// threads past a parked one. Refusing all but the nearest is exactly the behaviour that
-		// ruling forbids. What bounds a connector now is ServiceLinkRadius alone, which is the
-		// question actually being asked: is a road within reach of THIS entry.
+		// ruling forbids. What bounds a connector now is ServiceLinkRadius (grown by any depth
+		// drawn past the template, 2026-09-27 - see ExtraDepth above), which is the question
+		// actually being asked: is a road within reach of THIS entry.
 		//
 		// ONE LOOP, NOT TWO, since #177. There used to be a first pass that called Resolve for
 		// EVERY declared node - including one already joined by hand, which this loop's
@@ -617,13 +675,25 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// y = -1400 swept 2500 each way, split the road at y = +1100, and left the entry contact at
 	// +1906 only 796 uu of road where its own square corner wanted 1088. The entry was clamped
 	// to 563 against a lock of 699 by a fillet belonging to a vehicle that never drives it.
+	//
+	// A STAND'S ENTRY LINK IS DRIVEN BY THAT STAND'S DESIGN VEHICLE (2026-09-27): its bays were
+	// laid for it and it is what the fuel service sends (UFuelService's per-letter table), so the
+	// largest vehicle ADMITTED to that link is the stand's own - the utility tow on A and B, whose
+	// lock is less than half the truck's. Filleting an A stand's entries for the truck laid curves
+	// no vehicle on them needed and warned "a truck will cut that corner" on stands no truck
+	// serves. Every other link, and a definition saved before DesignVehicle existed (TypeCode
+	// None), keeps the caller's largest vehicle.
+	const FEntityInstance* LaneStand = Link.LaneOwner.IsSet() ? Network.GetEntity(Link.LaneOwner) : nullptr;
+	const FChassis& Drives = LaneStand != nullptr && LaneStand->Definition != nullptr
+			&& !LaneStand->Definition->DesignVehicle.TypeCode.IsNone()
+		? LaneStand->Definition->DesignVehicle.Chassis : LargestServiceVehicle;
 	double LaneRadius = 0.0;
 	if (Link.Class == ETraversalClass::GroundVehicle)
 	{
 		// ISSUE #190: the caller's resolved vehicle, not a fresh resolve - this ran twice
 		// per link (here and at the warning below) before Build started passing one down.
 		// The tenth of slack is ServiceLaneRadius's, shared with PoseSetbackFor.
-		LaneRadius = ServiceLaneRadius(LargestServiceVehicle);
+		LaneRadius = ServiceLaneRadius(Drives);
 	}
 
 	LinkGeom::FLinkApproach Approach;
@@ -933,7 +1003,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// the merge, never the crossing's turn-back, whose figure the gap does not move - see the
 	// sweep loop above for the measurement and for why a line naming the gap would be a lie
 	// about it.
-	if (const double Lock = LargestServiceVehicle.TightestFollowableRadius();
+	if (const double Lock = Drives.TightestFollowableRadius();
 		LaneRadius > 0.0 && Lock > 0.0 && Tightest < Lock)
 	{
 		UE_LOG(LogAirside, Warning,
@@ -969,10 +1039,21 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 	int32 Joined = 0;
 	int32 Unjoined = 0;
 
-	// WHICH STANDS GOT IN, and where the first entry that did not was, so a stand that joined
-	// nothing at all can be named once after the loop rather than four times inside it.
-	TSet<FEntityInstanceId> StandsJoined;
-	TMap<FEntityInstanceId, FVector2D> StandsRefused;
+	// PER-STAND ENTRY COUNTS, not just whether any got in (far-side-entry spec, 2026-09-26): a
+	// PARTIAL join - some declared entries reached a road, others did not - is a different fact
+	// from joining nothing at all, and wants a different line: the first names a service position
+	// the road cannot reach, the second says to move the road. ONE MAP, not a joined set beside a
+	// refused one, which is exactly the pair CLAUDE.md's "lists that must agree are one list"
+	// warns about - a stand present in both would have to be read as "some of each" by checking
+	// two containers instead of one counter.
+	struct FStandEntryTally
+	{
+		int32 Joined = 0;
+		int32 Refused = 0;
+		/** Where the first refused entry sat, for the "joins nothing at all" line below. */
+		FVector2D FirstRefusedAt = FVector2D::ZeroVector;
+	};
+	TMap<FEntityInstanceId, FStandEntryTally> StandEntries;
 
 	// MUTABLE, because a link found by PROXIMITY has no direction of its own until the search
 	// says which way the road lies, and one leaving a lane has none until the tangent run
@@ -1001,7 +1082,12 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 				// DEFERRED, not dropped - see FPendingLink::LaneOwner. Three declared entries
 				// of four finding no road is what a stand beside one service road looks like,
 				// and this is the line that makes the fourth reportable.
-				StandsRefused.FindOrAdd(Link.LaneOwner, Link.At);
+				FStandEntryTally& Tally = StandEntries.FindOrAdd(Link.LaneOwner);
+				if (Tally.Refused == 0)
+				{
+					Tally.FirstRefusedAt = Link.At;
+				}
+				++Tally.Refused;
 				continue;
 			}
 
@@ -1059,25 +1145,34 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 		++Joined;
 		if (Link.LaneOwner.IsSet())
 		{
-			StandsJoined.Add(Link.LaneOwner);
+			++StandEntries.FindOrAdd(Link.LaneOwner).Joined;
 		}
 	}
 
-	// THE STANDS THAT JOINED NOTHING AT ALL, one line each. Reported here because an entry is
-	// only known to be the last hope once every entry has been tried, and because the ORDER
-	// they were tried in must not decide whether the stand is reported.
-	for (const TPair<FEntityInstanceId, FVector2D>& Refused : StandsRefused)
+	// THE STANDS THAT JOINED NOTHING AT ALL, one line each, and the ones that joined SOME but not
+	// all, a different line for a different repair (far-side-entry spec, 2026-09-26: the half-plane
+	// can refuse one entry's own road while another entry of the same stand still reaches one -
+	// a corner stand, or one beside a road that stops short of its far side). Reported here
+	// because a stand is only known to have tried every entry once the whole pass has, and the
+	// ORDER they were tried in must not decide which line - if either - it gets.
+	for (const TPair<FEntityInstanceId, FStandEntryTally>& Tally : StandEntries)
 	{
-		if (StandsJoined.Contains(Refused.Key))
+		if (Tally.Value.Joined == 0)
 		{
-			continue;
+			++Unjoined;
+			UE_LOG(LogAirside, Warning,
+				TEXT("Service lane at (%.0f, %.0f) joins nothing: no derived vehicle guideline ")
+				TEXT("within %.0f uu in any direction, at any of its declared entries"),
+				Tally.Value.FirstRefusedAt.X, Tally.Value.FirstRefusedAt.Y, ServiceLinkRadius);
 		}
-
-		++Unjoined;
-		UE_LOG(LogAirside, Warning,
-			TEXT("Service lane at (%.0f, %.0f) joins nothing: no derived vehicle guideline ")
-			TEXT("within %.0f uu in any direction, at any of its declared entries"),
-			Refused.Value.X, Refused.Value.Y, ServiceLinkRadius);
+		else if (Tally.Value.Refused > 0)
+		{
+			const int32 Total = Tally.Value.Joined + Tally.Value.Refused;
+			UE_LOG(LogAirside, Warning,
+				TEXT("Stand %d: %d of %d service entrances joined a road - the rest have none ")
+				TEXT("beyond the far edge"),
+				Tally.Key.Index, Tally.Value.Joined, Total);
+		}
 	}
 
 	// One census line per pass, beside the guideline builder's: how many lead-ins were

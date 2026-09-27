@@ -19,6 +19,15 @@ bool FPlanReResolver::SpliceReplan(const URoadNetwork& Network, const FRouteQuer
 {
 	// THE TAIL IS SEARCHED UNSEEDED: it starts at a node ahead of the vehicle, where its chain
 	// is not yet - the live chain belongs to the WHOLE splice, judged just below.
+	//
+	// SO A TOW SPLICED AT A REVERSE LEG'S START IS REFUSED (since 2026-09-26): its tail opens with
+	// the reverse, and VehicleFit::JudgePlan refuses a reverse-first plan with no cab to solve it
+	// from (ReverseUnsolvable) rather than passing it unjudged. The replan then fails and the tow
+	// keeps the route it had, which is safe. Traced 2026-09-27, not pinned by a test: a stand's
+	// route OUT has no reverse leg and its route home opens with one (a Reversing agent, which
+	// ReplanAt refuses), so neither reaches this; the Taxiing routes with a reverse past their
+	// first step are the rig course's and a recalled tow's (UGroundTraffic::RerouteAgent), and a
+	// deadlock splice exactly at that reverse is where a refusal here would first be seen.
 	FRouteQuery TailQuery = Query;
 	TailQuery.TowSeed.Reset();
 	const FRoutePlan Tail = RouteSearch::Find(Network, TailQuery);
@@ -373,9 +382,16 @@ FRouteQuery FPlanReResolver::QueryFor(ERouteErrand Errand, FGuidelineNodeId Star
 		{
 			FTowSeed& Seed = Query.TowSeed.Emplace();
 			Seed.Axles = Agent.TowAxles;
-			Seed.Heading = Agent.Follower.Heading;
+			// THE CAB'S HEADING AS SHOWN (LastMotion), not the follower's - the pair Origin below
+			// is read from, and what UFuelService::SendTruckHome and ARigYard seed with (aligned
+			// 2026-09-27). The two agree while a tow drives forward; after a tow reverse the
+			// follower, which did not run during it, still holds the pose it had at the reverse's
+			// start (see RedirectAgent's own note), so only LastMotion describes the cab there.
+			Seed.Heading = Agent.LastMotion.Heading;
 			Seed.Speed = Agent.Follower.Speed;
 			Seed.Travelled = Agent.Follower.Travelled;
+			// AND THE CAB, for a route that opens with a reverse - see FTowSeed::Origin.
+			Seed.Origin = Agent.LastMotion.Position;
 		}
 	}
 	return Query;

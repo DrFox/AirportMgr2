@@ -174,6 +174,18 @@ namespace StandPlotToolFixture
 				return L.Style == Style && (L.From.Equals(Point, 1.0) || L.To.Equals(Point, 1.0));
 			});
 		}
+
+		/** Whether a line in Style runs exactly From->To - either endpoint order, since a sink
+		 *  MEANS the segment, not the direction it happened to be drawn in. */
+		bool HasSegment(const FVector2D& From, const FVector2D& To, EPreviewStyle Style) const
+		{
+			return Lines.ContainsByPredicate([&](const FLine& L)
+			{
+				return L.Style == Style
+					&& ((L.From.Equals(From, 1.0) && L.To.Equals(To, 1.0))
+						|| (L.From.Equals(To, 1.0) && L.To.Equals(From, 1.0)));
+			});
+		}
 	};
 }
 
@@ -343,6 +355,37 @@ bool FStandPlotLetterAtThresholdsTest::RunTest(const FString& Parameters)
 				FactOf(Readout, TEXT("Stand Points")), FString(TEXT("3/3")));
 			TestTrue(TEXT("and a buildable letter lights Build"), Readout.bCommittable);
 		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotFloorsAreOnTheDepthQuantumTest,
+	"Airside.Tool.StandPlot.FloorsAreOnTheDepthQuantum",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotFloorsAreOnTheDepthQuantumTest::RunTest(const FString& Parameters)
+{
+	// FIX ROUND 1 on this task's own review: StandPlotRules::DepthStepUu's own comment claims
+	// every IcaoCode depth floor divides by it - a claim about a DIFFERENT file with nothing
+	// here to catch it drifting, exactly the shape CLAUDE.md's "a comment is not a contract"
+	// warns against. This is that enforcement: read the SAME DepthStepUu the tool quantises
+	// by (declared in StandPlotTool.h since this fix, not a second literal), not a value typed
+	// here a second time.
+	//
+	// WIDTH FLOORS ARE NOT CHECKED: PlotGesture's frontage grid (Min 1500, Step 500) already
+	// does not land on most letters' width floors - ReachableWidthAtLeast's own header says so
+	// ("the frontage moves in steps, so a letter's exact floor width is usually not reachable")
+	// - so the tool never promises a player can drag to an EXACT width floor the way DEPTH's
+	// StandPlotRules::DepthStepUu promises for depth. There is no width contract for this test
+	// to enforce.
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	{
+		const double Depth = IcaoCode::StandDepthForLetter(Letter);
+		const double Steps = Depth / StandPlotRules::DepthStepUu;
+		TestEqual(*FString::Printf(TEXT("Code %s's depth floor (%.0f) is a whole multiple of the %.0f uu depth quantum"),
+				IcaoCode::ToLetter(Letter), Depth, StandPlotRules::DepthStepUu),
+			Steps, FMath::RoundToDouble(Steps), 1e-6);
 	}
 	return true;
 }
@@ -696,6 +739,60 @@ bool FStandPlotPreviewDrawsTheKeepOutTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotDrawsServiceEdgeTest,
+	"Airside.Tool.StandPlot.DrawsServiceEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotDrawsServiceEdgeTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a Code C stand locked"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+
+	TArray<FVector2D> Shown;
+	Tool.Rect(At(Actor, AnchorCursor), Shown);
+	if (!TestEqual(TEXT("four corners"), Shown.Num(), 4)) { return false; }
+
+	// THE SERVICE ROAD'S HALF-WIDTH, off the actor's own resolver - the one URoadEditFacade::
+	// MakeTunables reads for a live context. Set here because TestTool::ContextAt is hand-built.
+	const URoadProfile* ServiceRoad = Actor->ResolveServiceRoadProfile();
+	if (!TestNotNull(TEXT("a service road profile resolves"), ServiceRoad)) { return false; }
+	const double HalfWidth = ServiceRoad->GetMaxHalfWidth();
+	if (!TestTrue(TEXT("with a width"), HalfWidth > 0.0)) { return false; }
+	FToolContext Context = At(Actor, AnchorCursor);
+	Context.ServiceRoadHalfWidth = HalfWidth;
+
+	FStandPlotSink Sink;
+	Tool.BuildPreview(Context, Sink);
+
+	// THE FAR EDGE - opposite the taxiway the entrance edge (0->1) opens off, where service
+	// vehicles now enter and leave (far-side-entry spec §2). StandBox.h's own convention: the
+	// entrance edge is 0->1, then inward to 2 and 3, so the far edge is exactly 2->3 - and the
+	// line is that edge moved OUT by the road's half-width (user ruling 2026-09-27): the player
+	// draws the road's CENTRE on this line, so its near kerb lies on the far edge.
+	const FVector2D Out = (Shown[2] - Shown[1]).GetSafeNormal() * HalfWidth;
+	TestTrue(*FString::Printf(TEXT("one ServiceEdge segment: corners 2->3 moved out %.0f uu - the player draws the road's centre on this line"), HalfWidth),
+		Sink.HasSegment(Shown[2] + Out, Shown[3] + Out, EPreviewStyle::ServiceEdge));
+
+	// EXACTLY ONE, not the rest of the rectangle relabelled: the entrance (0->1) and the two
+	// sides (1->2, 3->0) still mean Pinned/Provisional - only the far edge means ServiceEdge.
+	const int32 ServiceEdgeCount = Sink.Lines.FilterByPredicate(
+		[](const FStandPlotSink::FLine& L) { return L.Style == EPreviewStyle::ServiceEdge; }).Num();
+	TestEqual(TEXT("exactly one ServiceEdge segment"), ServiceEdgeCount, 1);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotZeroDepthClickStaysTest,
 	"Airside.Tool.StandPlot.ZeroDepthClickStays",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -780,10 +877,13 @@ bool FStandPlotDiagonalTaxiwayReadsItsLetterTest::RunTest(const FString& Paramet
 
 		// EVERY LETTER AT ITS EXACT FLOOR, from BOTH SIDES of the taxiway - the two sides wind the
 		// rectangle opposite ways, and the facade reverses one of them, measuring the OPPOSITE
-		// edge. A and B cannot be built yet, so for them only the readout's letter is asserted.
+		// edge. EVERY LETTER BUILDS since 2026-09-26 (far-side-entry spec): A and B used to be
+		// refused here (their bays were laid for the truck), so bBuildable is now always true
+		// rather than Letter >= EIcaoCode::C - kept as a named bool, not deleted outright, so a
+		// future letter that genuinely cannot build still has somewhere to say so.
 		for (EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 		{
-			const bool bBuildable = Letter >= EIcaoCode::C;
+			const bool bBuildable = true;
 			const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(Letter));
 			const double Depth = IcaoCode::StandDepthForLetter(Letter);
 			const FString Expected = FString(TEXT("Code ")) + IcaoCode::ToLetter(Letter);
