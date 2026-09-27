@@ -100,9 +100,11 @@ namespace Pavement
   grepping the resaved .uassets for `MinimumPavement`, with a control.
 - **One scale, per-buildable offer.** The grass branch's reason for a two-step enum - the road
   tool must not offer a concrete service road - becomes data: `URoadProfile::AllowedPavements`
-  and `UEntityDefinition::AllowedPavements` (`TArray<EPavement>`, empty = all four). The tool's
-  surface row steps through that list. Road and taxiway profiles author `{Tarmac, Grass}`;
-  runway profiles and stand definitions leave it empty. A setter asked for a pavement the
+  (`TArray<EPavement>`, empty = all four). The tool's surface row steps through that list. Road
+  and taxiway profiles author `{Tarmac, Grass}`; runway profiles leave it empty. Stands offer
+  all four and carry no list (their definitions are transient, one per letter - nothing to
+  author it on; YAGNI until a stand kind needs fewer). All three tools build the row through
+  one helper, `Pavement::AppendAxis`. A setter asked for a pavement the
   buildable does not offer refuses and logs, never clamps.
 
 ## 3. Stand admission - `Model/StandAdmission.h`
@@ -159,10 +161,11 @@ namespace StandAdmission
   letter, B; below B's floor it answers empty, as below A's did.
 - **The size gate** (`RoadEditFacadeSurfaces.cpp:665`, today `EIcaoCode::A`'s floor) reads
   `IcaoCode::SmallestStandLetter()` (= `StandLetterFor(A)`), not a literal letter.
-- **Row A's stand columns go** (`StandDepth`, `TowLaneWidth`, `AftEdgeAllowance`, `WingFwd`,
-  `WingAft`) - figures nothing can read are the drift the table's own header warns about. If the
-  designated-initialiser struct makes a column mandatory, it becomes `TOptional` or the row
-  gains `bHasStands = false`; the plan picks after reading `FRow`. A stand for an A aircraft is
+- **Row A's stand-SIZE columns go** (`StandDepth`, `TowLaneWidth`, `AftEdgeAllowance`) -
+  figures nothing can read are the drift the table's own header warns about. Omitted from the
+  designated initialiser they are 0, and `StandDepth > 0` is the row's "has stands" test
+  (`HasStands(Row)`, one helper). `StandTurnRadius`, `WingFwd` and `WingAft` STAY: they describe
+  the aircraft's geometry and are read for A aircraft by AnchorLink and the envelope floors. A stand for an A aircraft is
   B's stand, sized and served for the utility tow exactly as B's is today.
 - **Admission is unchanged in shape:** an A aircraft on a B stand is a small airframe on a
   larger stand, which is already admitted (`StandAdmits` compares by letter, smaller passes).
