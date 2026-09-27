@@ -268,6 +268,26 @@ namespace
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::MatchingGap); },
 			Always));
 
+		// THE WORLD GRID: one button that CYCLES, not three - the design's ruling (2026-09-27),
+		// and why it needs a caption that follows state. Lit while any step is on. In the Snap
+		// section because it is a way of aligning, not a thing to align against. No key, by the
+		// rule above.
+		{
+			FBuildAction Grid = Make(TEXT("snap.grid"), EActionSection::Snap, LOCTEXT("SnapGrid", "Grid"),
+				EKeys::Invalid, false,
+				[](FBuildActionContext& Ctx) { Ctx.Controller.CycleGridStep(); },
+				[](const FBuildActionContext& Ctx) { return Ctx.Controller.GetGridStepUu() > 0.0; },
+				Always);
+			Grid.DynamicLabel = [](const FBuildActionContext& Ctx)
+			{
+				const double Step = Ctx.Controller.GetGridStepUu();
+				return Step > 0.0
+					? FText::Format(LOCTEXT("SnapGridOn", "Grid: {0} m"), FText::AsNumber(FMath::RoundToInt(Step / 100.0)))
+					: LOCTEXT("SnapGridOff", "Grid: off");
+			};
+			Out.Add(MoveTemp(Grid));
+		}
+
 		// THE SECOND AXIS. Before 2026-09-20 these sat in the same list as the rows above, which
 		// is why "Runway" read as a source you could switch off for every relation and was not -
 		// see SnapGuide::EReference.

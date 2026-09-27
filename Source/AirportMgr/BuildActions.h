@@ -107,6 +107,13 @@ struct FBuildAction
 	TFunction<bool(const FBuildActionContext&)> IsEnabled;
 
 	/**
+	 * A caption that follows state - "Grid: 5 m" - or unset for the fixed Label. Read by the bar
+	 * every tick beside IsActive. Label stays the fixed name (tooltips, the log, the tests' id
+	 * lookups); this only changes what the button reads.
+	 */
+	TFunction<FText(const FBuildActionContext&)> DynamicLabel;
+
+	/**
 	 * The ONE door: checks IsEnabled, logs "<Via>: <Id>" on LogRoadBuild, then Execute - so
 	 * the bar, the inspector and every key press leave the same one line when they actually
 	 * fire, and none of them can fire a disabled action by forgetting the check. Returns

@@ -193,6 +193,15 @@ public:
 	/** Whether that column is lit. */
 	bool IsGuideReferenceOn(SnapGuide::EReference Reference) const;
 
+	/**
+	 * Off -> 1 m -> 5 m -> 10 m -> Off: the Grid button. Same ownership rule as the two above -
+	 * the step lives on the airport's FSnapGuideSettings. Logs "Grid step -> <n>".
+	 */
+	void CycleGridStep();
+
+	/** The airport's grid step in uu, 0 when off or when there is no airport. */
+	double GetGridStepUu() const;
+
 	/** The tool the number keys selected, or null before BeginPlay has built them. */
 	IBuildTool* GetActiveTool() const;
 

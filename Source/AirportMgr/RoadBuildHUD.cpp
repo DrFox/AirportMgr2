@@ -8,6 +8,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "BuildActions.h"
 #include "RoadBuildController.h"
+#include "Tool/GridOverlay.h"
 #include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
 #include "Present/PreviewPalette.h"
@@ -29,7 +30,8 @@ ARoadBuildHUD::ARoadBuildHUD()
 		EPreviewStyle::NodeThrough, EPreviewStyle::NodeJunction, EPreviewStyle::StandPose,
 		EPreviewStyle::ServiceAnchor, EPreviewStyle::Pinned, EPreviewStyle::Provisional,
 		EPreviewStyle::Guide, EPreviewStyle::Handle, EPreviewStyle::ReverseRoute,
-		EPreviewStyle::ReverseGuideline, EPreviewStyle::ServiceEdge })
+		EPreviewStyle::ReverseGuideline, EPreviewStyle::ServiceEdge,
+		EPreviewStyle::GridMinor, EPreviewStyle::GridMajor })
 	{
 		Looks.Add(Style, PreviewPalette::DefaultLook(Style));
 	}
@@ -129,6 +131,10 @@ void ARoadBuildHUD::DrawHUD()
 		// part of this comment predates #167 and still holds, just from a shared frame context
 		// instead of a locally built one.
 		const FToolContext& Context = Controller->GetFrameContext();
+
+		// THE GRID UNDER THE GESTURE, from the same frame context - see GridOverlay on why it is
+		// gated on the context and drawn by the driver rather than any tool.
+		GridOverlay::Describe(Context, *this);
 		Tool->BuildPreview(Context, *this);
 
 		// The tool name and the clock moved to UBuildBarWidget; this class draws only in

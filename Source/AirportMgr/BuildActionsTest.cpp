@@ -340,4 +340,26 @@ bool FBuildActionsEditModeIsInTheOneListTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE GRID BUTTON: one cycling toggle in the Snap section, bar-only, with a caption that follows
+ * the step. Its behaviour (the cycle, the figures) is Airside.Tool.GridSnap.CycleAndFigures; this
+ * pins that the player has a button to reach it at all.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGridButtonIsInTheRegistryTest,
+	"AirportMgr.Actions.GridButtonIsInTheRegistry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGridButtonIsInTheRegistryTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Action = FindAction(FName(TEXT("snap.grid")));
+	if (!TestNotNull(TEXT("snap.grid is registered"), Action)) { return false; }
+	TestEqual(TEXT("in the Snap section"), Action->Section, EActionSection::Snap);
+	TestFalse(TEXT("bar-only: no key, by the snap toggles' NO KEYS rule"), Action->Key.IsValid());
+	TestTrue(TEXT("can be executed"), static_cast<bool>(Action->Execute));
+	TestTrue(TEXT("reports whether it is lit"), static_cast<bool>(Action->IsActive));
+	TestTrue(TEXT("has a caption that follows the step"), static_cast<bool>(Action->DynamicLabel));
+	return true;
+}
+
 #endif

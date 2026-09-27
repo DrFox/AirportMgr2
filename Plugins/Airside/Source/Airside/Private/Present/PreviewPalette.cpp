@@ -76,6 +76,13 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// own Pinned/Provisional white sides in the SAME frame, so it has to read as its own thing
 	// rather than blend into the rectangle it is one edge of.
 	case EPreviewStyle::ServiceEdge:                 return FLinearColor(0.95f, 0.5f, 0.15f);
+
+	// GREY AND PART-TRANSPARENT: hundreds of pieces under every gesture must read as graph
+	// paper, not geometry. DIM IN RGB AS WELL AS ALPHA because neither sink is shown to honour
+	// alpha on a line (the editor's PDI may not), and a white line drawn opaque would be the
+	// loudest thing on screen. Unjudged in PIE as of 2026-09-27.
+	case EPreviewStyle::GridMinor:                   return FLinearColor(0.55f, 0.58f, 0.55f, 0.35f);
+	case EPreviewStyle::GridMajor:                   return FLinearColor(0.8f, 0.83f, 0.8f, 0.5f);
 	}
 
 	// Reached only if EPreviewStyle grew a value with no case above - not caught at compile
@@ -189,6 +196,12 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 	// rather than merely a different meaning.
 	case EPreviewStyle::ServiceEdge:
 		Look.ThicknessScale = 2.0f;
+		break;
+
+	// Hairlines: context, like Guideline's weight.
+	case EPreviewStyle::GridMinor:
+	case EPreviewStyle::GridMajor:
+		Look.ThicknessScale = 0.5f;
 		break;
 	}
 

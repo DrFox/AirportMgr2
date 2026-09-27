@@ -117,6 +117,20 @@ struct FToolContext
 	 */
 	FVector2D GuidedCursor() const { return Guide.bActive ? Guide.Point : Cursor; }
 
+	/**
+	 * The world grid's pitch THIS FRAME, uu - 0 whenever the grid does not apply to what the
+	 * active tool is doing: grid off, Alt held, or a tool (or a stage of one) that consults
+	 * neither the guide chain nor IBuildTool::SnapsToGrid. Set by FBuildSession::MakeContext.
+	 *
+	 * ONE FIELD FOR BOTH CONSUMERS: the plot tools quantise their own anchor and frontage by it,
+	 * and GridOverlay draws only when it is non-zero, so the overlay cannot show a grid the point
+	 * is not landing on. The chain reads the setting itself, from the same tunables.
+	 */
+	double GridStepUu = 0.0;
+
+	/** How far round the build point the overlay draws, uu. 0 exactly when GridStepUu is. */
+	double GridOverlayRadiusUu = 0.0;
+
 	FRoadPlacementLimits Limits;
 
 	/**
@@ -369,6 +383,14 @@ enum class EPreviewStyle : uint8
 	 * already serialised against it.
 	 */
 	ServiceEdge,
+
+	/**
+	 * The world grid's overlay round the build point (GridOverlay) - background, fainter than
+	 * any gesture drawn over it. Two meanings, not one with a weight: every fifth line is
+	 * GridMajor so a 1 m grid can be counted in fives. At the end, for ServiceEdge's reason.
+	 */
+	GridMinor,
+	GridMajor,
 };
 
 /**
@@ -624,6 +646,20 @@ struct AIRSIDE_API IBuildTool
 	 * refuse a dead slot.
 	 */
 	virtual int32 GetSnapExclusion() const { return INDEX_NONE; }
+
+	/**
+	 * Whether this tool quantises its point on the world grid ITSELF, right now, outside the
+	 * guide chain - the plot tools' anchor and frontage clicks, which search for a road rather
+	 * than take a guided cursor (see FStagedPlotTool).
+	 *
+	 * FALSE BY DEFAULT because the chain already covers every tool that describes a guide
+	 * anchor: FBuildSession::MakeContext sets FToolContext::GridStepUu when EITHER the chain ran
+	 * or this says yes. A tool that answers neither gets no grid and no overlay, which is right
+	 * for Select, and is what keeps the overlay from promising a grid nothing lands on.
+	 *
+	 * TAKES NO CONTEXT for DescribeGuideAnchor's reason: it is read while that context is built.
+	 */
+	virtual bool SnapsToGrid() const { return false; }
 
 	/**
 	 * What this tool is dragging, and against what, for the guide chain. False means "no

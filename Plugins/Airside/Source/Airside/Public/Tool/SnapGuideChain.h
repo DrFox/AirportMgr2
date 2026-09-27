@@ -702,6 +702,14 @@ public:
 		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const;
 
 	/**
+	 * The world grid applied to an arbitrated result - precedence A of the world-grid-snap
+	 * design, see the .cpp. PUBLIC AND STATIC because FBuildSession::MakeContext needs it for an
+	 * airport with no network yet, where there is nothing for Resolve to arbitrate but the grid
+	 * still applies to the first click. One rule, two callers, no second copy.
+	 */
+	static void ApplyGrid(SnapGuide::FResult& Result, const FVector2D& Cursor, double StepUu);
+
+	/**
 	 * Every source's candidates, arbitrated, with Previous carrying the flicker rule.
 	 *
 	 * Previous is the caller's business to store: FBuildSession holds it, because

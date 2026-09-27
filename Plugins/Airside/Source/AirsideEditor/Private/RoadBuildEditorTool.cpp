@@ -18,6 +18,7 @@
 #include "ScopedTransaction.h"
 #include "SceneManagement.h"
 #include "Solve/RoadGeom.h"
+#include "Tool/GridOverlay.h"
 #include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
 #include "Present/PreviewPalette.h"
@@ -773,7 +774,11 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 	// drives the identical single call without a live PDI.
 	if (bHoverValid)
 	{
-		Tool->BuildPreview(MakeHoverContext(), Sink);
+		// ONE CONTEXT FOR BOTH, so the grid drawn is the grid the ghost is landing on. The grid
+		// first, under the gesture - see GridOverlay; the PIE HUD makes the same two calls.
+		const FToolContext HoverContext = MakeHoverContext();
+		GridOverlay::Describe(HoverContext, Sink);
+		Tool->BuildPreview(HoverContext, Sink);
 		PendingLabels = Sink.CollectedLabels();
 	}
 	else

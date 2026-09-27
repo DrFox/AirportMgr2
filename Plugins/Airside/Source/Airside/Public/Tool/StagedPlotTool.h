@@ -56,6 +56,13 @@ public:
 	 */
 	int32 PinnedCount() const { return Pinned; }
 
+	/**
+	 * THE ANCHOR AND FRONTAGE CLICKS quantise on the world grid themselves - they search for a
+	 * road (PlotGesture::AnchorAt) and run along it, so no guide anchor describes them. Later
+	 * stages are guided and the chain applies the grid there. See IBuildTool::SnapsToGrid.
+	 */
+	virtual bool SnapsToGrid() const override { return Pinned < 2; }
+
 protected:
 	explicit FStagedPlotTool(int32 InMaxPinned) : MaxPinned(InMaxPinned) {}
 

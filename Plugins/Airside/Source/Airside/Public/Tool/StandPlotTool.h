@@ -159,6 +159,10 @@ protected:
 
 	virtual void Shape(const FToolContext& Context, TArray<FVector2D>& OutShape) const override;
 	virtual bool CanCloseShape(TConstArrayView<FVector2D> Shown) const override;
+
+	/** The depth drag's guide anchor - see the .cpp. Public in the base; overridden here. */
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+		FGuideAnchor& Out) const override;
 	virtual int32 Place(const FToolContext& Context, const TArray<FVector2D>& Outline) const override;
 	virtual void Describe(const FToolContext& Context, TConstArrayView<FVector2D> Shown,
 		IToolPreviewSink& Sink) const override;

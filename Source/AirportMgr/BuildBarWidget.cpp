@@ -479,6 +479,10 @@ void UBuildBarWidget::RefreshStateFor(ARoadBuildController& C)
 		// cream glyph would disappear, so the armed button draws its contents in PanelDark.
 		const FLinearColor Content = bActive ? Style->PanelDark : (bEnabled ? Style->Text : Style->TextMuted);
 		Entry->Label->SetColorAndOpacity(FSlateColor(Content));
+		if (Action.DynamicLabel)
+		{
+			Entry->Label->SetText(Action.DynamicLabel(Ctx));
+		}
 		if (Entry->Icon != nullptr)
 		{
 			Entry->Icon->SetColorAndOpacity(Content);

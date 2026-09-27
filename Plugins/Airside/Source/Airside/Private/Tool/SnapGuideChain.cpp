@@ -5,6 +5,7 @@
 #include "Model/RoadApron.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Solve/GridSnap.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/RoadNaming.h"
 #include "Tool/SnapGuideLabel.h"
@@ -1173,5 +1174,44 @@ SnapGuide::FResult FSnapGuideChain::Resolve(const URoadNetwork& Network,
 		Winner.Description = SnapGuide::Describe(Network, Anchor, Winner.Label);
 	}
 
+	// THE WORLD GRID, LAST. See ApplyGrid.
+	ApplyGrid(Result, Cursor, Enabled.GridStepUu());
+
 	return Result;
+}
+
+void FSnapGuideChain::ApplyGrid(SnapGuide::FResult& Result, const FVector2D& Cursor, double StepUu)
+{
+	// THE WORLD GRID, APPLIED LAST - precedence A of the world-grid-snap design: road snap (resolved
+	// before this, and preferred by every tool that reads one) > guides > grid.
+	//   - No winner: the nearest grid point. The result goes ACTIVE with no winners, which every
+	//     consumer already handles - they draw Winners (none) and move to Point.
+	//   - One winner: slide along its line to the nearest grid crossing, so "on the neighbour's
+	//     edge, at a round metre" holds both.
+	//   - Two winners: their crossing is the point; moving it would break both labels.
+	//
+	// AFTER ARBITRATE, NOT AS A SOURCE. A grid line proposed as a candidate would compete in
+	// the hysteresis and take one of the two per-fit winner slots from a real guide - the grid
+	// beating a neighbour's alignment, which is the reverse of the ruling.
+	//
+	// Previous keeps only Winners for hysteresis (see Arbitrate), so a grid point held as
+	// Result.Point is never mistaken for a guide next frame.
+	if (StepUu > 0.0)
+	{
+		if (Result.Winners.Num() == 0)
+		{
+			Result.bActive = true;
+			Result.Point = GridSnap::Quantise(Cursor, StepUu);
+		}
+		else if (Result.Winners.Num() == 1)
+		{
+			// Out-parameter honoured: a refusal (degenerate direction) keeps the guide's point.
+			FVector2D OnGrid = Result.Point;
+			if (GridSnap::NearestCrossingAlong(Result.Winners[0].Through, Result.Winners[0].Direction,
+				Result.Point, StepUu, OnGrid))
+			{
+				Result.Point = OnGrid;
+			}
+		}
+	}
 }
