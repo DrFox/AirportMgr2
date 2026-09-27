@@ -168,6 +168,7 @@ public:
 	 * { Tarmac, Grass } (authored 2026-09-27), and Fill / FillTwoWayRoad lay the same list so
 	 * a transient profile and a re-authored asset agree with them. TARMAC FIRST, as #356's row
 	 * had it.
+	 * ENFORCED BY: Airside.Content.RoadProfilesOfferTarmacAndGrass
 	 */
 	UPROPERTY(EditAnywhere, Category = "Surface") TArray<EPavement> AllowedPavements;
 

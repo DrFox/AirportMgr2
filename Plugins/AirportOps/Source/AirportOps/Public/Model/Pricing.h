@@ -109,6 +109,7 @@ public:
 	/**
 	 * What one of Airside's quoted lines actually costs - ULedger::PriceOf calls this once per
 	 * FBuildLine, so BaseAmount here is a single line's Amount(), never a whole quote's.
+	 * ENFORCED BY: AirportOps.Model.LedgerPricesPerLine
 	 *
 	 * Source is the URoadProfile or UEntityDefinition being placed, and is UNUSED TODAY - it is
 	 * how an M4 research discount aimed at taxiways will key on the asset itself rather than on

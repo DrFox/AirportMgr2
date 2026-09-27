@@ -125,9 +125,11 @@ public:
 	/**
 	 * One "Surface" row of all four pavements, lit on the one the next Build lays - built by
 	 * Pavement::AppendAxis, as the runway's and the road's rows are, so the three cannot name
-	 * or order the scale differently. EVERY STEP OFFERED (an empty Allowed list): a stand's
-	 * pavement is meant to limit what it admits (StandAdmission, Task 9 of this plan), never
-	 * whether it may be built.
+	 * or order the scale differently.
+	 * ENFORCED BY: Airside.Tool.StandPlot.SurfaceRowPlacesItsPavement (this row),
+	 * Airside.Tool.Variants.RoadSurfaceRowOffersTheProfileList, Airside.Tool.Variants.Runway
+	 * EVERY STEP OFFERED (an empty Allowed list): a stand's pavement is meant to limit what it
+	 * admits (StandAdmission, Task 9 of this plan), never whether it may be built.
 	 */
 	virtual void GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const override;
 

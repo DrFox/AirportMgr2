@@ -13,8 +13,11 @@ namespace Pavement
 {
 	/**
 	 * The "Surface" variant row, for every tool that lays ground - runway, road, stand. ONE
-	 * BUILDER so the three rows cannot name or order the scale differently. Current is lit
-	 * by its index in Offered(Allowed); a Current the list does not offer lights nothing
+	 * BUILDER so the three rows cannot name or order the scale differently.
+	 * ENFORCED BY: Airside.Tool.Variants.RoadSurfaceRowOffersTheProfileList (the builder),
+	 * Airside.Tool.Variants.Runway, Airside.Tool.Variants.RoadSurface and
+	 * Airside.Tool.StandPlot.SurfaceRowPlacesItsPavement (each tool's row)
+	 * Current is lit by its index in Offered(Allowed); a Current the list does not offer lights nothing
 	 * (INDEX_NONE) rather than a neighbour.
 	 *
 	 * THE ENUM'S OWN NAMES, from Model/Pavement.h (Pavement::Name) - the same strings the

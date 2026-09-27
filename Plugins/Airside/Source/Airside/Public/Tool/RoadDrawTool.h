@@ -147,6 +147,8 @@ public:
 	 * when the content set declares none. Surface: the kind's profile's AllowedPavements
 	 * (tarmac and grass on every road and taxiway profile), always present, since it needs no
 	 * width profiles - built by Pavement::AppendAxis, as FRunwayTool's Surface row is.
+	 * ENFORCED BY: Airside.Content.RoadProfilesOfferTarmacAndGrass (every profile's list),
+	 * Airside.Tool.Variants.RoadSurfaceRowOffersTheProfileList (the row reads it)
 	 *
 	 * LIGHTS THE LEVEL DEFAULT WITHOUT CHOOSING IT. While WidthIndex is unset the tool lays the
 	 * level's own tuning (see WidthIndex), so Current names the preset that tuning matches -

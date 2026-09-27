@@ -22,10 +22,13 @@ bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 	// ADMISSION IS StandAdmission::Judge - the ONE rule ArrivalPlanner::ChooseStand also calls
 	// (surface, then size via IcaoCode::StandAdmits, then service), so a stand this allocator
 	// holds for a flight is never one ChooseStand would have refused it at touchdown - not for
-	// its letter, and not for grass under a jet either. RANKING STAYS IcaoCode::StandRank: a
-	// legacy stand's captured DesignWingspan is compared by LETTER, never against Wingspan as a
-	// raw double. "First fit by size, smallest that admits" (see this class's own header
-	// comment) is unchanged - only what "admits" is measured BY moved to the shared rule.
+	// its letter, and not for grass under a jet either.
+	// ENFORCED BY: Check-Architecture rule 4 row 'IcaoCode::StandAdmits' (only StandAdmission
+	// may ask size alone), AirportOps.Model.StandAllocator.SkipsAGrassStandForATarmacFlight
+	// RANKING STAYS IcaoCode::StandRank: a legacy stand's captured DesignWingspan is compared
+	// by LETTER, never against Wingspan as a raw double. "First fit by size, smallest that
+	// admits" (see this class's own header comment) is unchanged - only what "admits" is
+	// measured BY moved to the shared rule.
 	int32 BestRank = TNumericLimits<int32>::Max();
 
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();

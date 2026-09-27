@@ -94,8 +94,10 @@ namespace Pavement
 	/**
 	 * What building or owning a thing on P costs, as a multiple of its authored rate - build AND
 	 * upkeep, for every buildable. THE ONE TABLE; FBuildLine::Amount and BuildCost's upkeep are
-	 * its only readers. First guesses 2026-09-27: grass is levelled ground and seed, no base
-	 * course; concrete and reinforced carry heavier slabs.
+	 * its only readers.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'Pavement::RateFactor'
+	 * First guesses 2026-09-27: grass is levelled ground and seed, no base course; concrete
+	 * and reinforced carry heavier slabs.
 	 *
 	 * A FACTOR ON THE PROFILE, not a second set of rates: the profile is the cross-section and
 	 * is shared by grass and tarmac roads of one width (see FRoadSegment::Surface), so rates
@@ -103,7 +105,6 @@ namespace Pavement
 	 * the one place both the quote and the upkeep read. (Moved from BuildCost::GrassRateFactor,
 	 * #356's, when ERoadSurface folded into EPavement.)
 	 * ENFORCED BY: Airside.Build.GrassRoadCost (quote and upkeep both at the factor)
-	 * ENFORCED BY: Check-Architecture rule 4 row 'Pavement::RateFactor'
 	 */
 	AIRSIDE_API double RateFactor(EPavement P);
 }

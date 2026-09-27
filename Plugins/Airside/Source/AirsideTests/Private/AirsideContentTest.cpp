@@ -9,6 +9,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Solve/IcaoCode.h"
 #include "Model/RunwayFacts.h"
+#include "Profiles/RoadProfile.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialParameterCollection.h"
 #include "MaterialCachedData.h"
@@ -520,6 +521,43 @@ bool FAircraftMinimumPavementMigratedTest::RunTest(const FString&)
 		}
 	}
 	TestEqual(TEXT("every baseline type loaded - a moved asset would otherwise skip silently"), Seen, Before.Num());
+	return true;
+}
+
+/**
+ * EVERY ROAD AND TAXIWAY PROFILE THE CONTENT SET RESOLVES OFFERS { Tarmac, Grass }, in that
+ * order - the fact RoadProfile.h's AllowedPavements, RoadDrawTool.h's Surface row and
+ * RouteSearch's TaxiwayPavementCeiling all state. AGAINST THE REAL DA_AirsideContent: the
+ * lists are authored data (build_road_profiles.py), and an asset re-authored with concrete, or
+ * left empty (empty means ALL FOUR), would pass every test that builds a transient profile.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadProfilesOfferTarmacAndGrassTest,
+	"Airside.Content.RoadProfilesOfferTarmacAndGrass",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadProfilesOfferTarmacAndGrassTest::RunTest(const FString& Parameters)
+{
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (!TestNotNull(TEXT("the project's content set loads"), Content)) { return false; }
+
+	const TArray<EPavement> Expected = { EPavement::Tarmac, EPavement::Grass };
+	auto CheckList = [this, &Expected](const TArray<TSoftObjectPtr<URoadProfile>>& List, const TCHAR* Kind)
+	{
+		int32 Seen = 0;
+		for (const TSoftObjectPtr<URoadProfile>& Soft : List)
+		{
+			const URoadProfile* Profile = Soft.LoadSynchronous();
+			if (!TestNotNull(*FString::Printf(TEXT("%s profile %s loads"), Kind, *Soft.ToString()), Profile)) { continue; }
+			++Seen;
+			TestTrue(*FString::Printf(TEXT("%s offers exactly tarmac then grass"), *Profile->GetName()),
+				Profile->AllowedPavements == Expected);
+		}
+		// A list that resolved nothing would pass the loop above vacuously.
+		TestTrue(*FString::Printf(TEXT("the content set names at least one %s profile"), Kind), Seen > 0);
+	};
+	CheckList(Content->TaxiwayProfiles, TEXT("taxiway"));
+	CheckList(Content->ServiceRoadProfiles, TEXT("service road"));
 	return true;
 }
 
