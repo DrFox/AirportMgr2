@@ -1162,6 +1162,7 @@ ARoadBuildController::FToolReadoutKey ARoadBuildController::MakeReadoutKey(
 	Key.bGuideActive = Context.Guide.bActive;
 	Key.GuidePoint = Context.Guide.Point;
 	Key.EditHandles = Context.EditHandles;
+	Key.GridStepUu = Context.GridStepUu;
 	return Key;
 }
 

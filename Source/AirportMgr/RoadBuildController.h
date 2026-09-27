@@ -746,6 +746,10 @@ private:
 		FVector2D GuidePoint = FVector2D::ZeroVector;
 		EEditHandleKind EditHandles = EEditHandleKind::None;
 
+		/** The grid step: pressing Grid changes the readout (a plot's frontage, its letter)
+		 *  with the cursor sitting still - review, 2026-09-27. */
+		double GridStepUu = 0.0;
+
 		bool operator==(const FToolReadoutKey& Other) const
 		{
 			return Tool == Other.Tool
@@ -755,7 +759,8 @@ private:
 				&& SnapSegment == Other.SnapSegment
 				&& bGuideActive == Other.bGuideActive
 				&& GuidePoint == Other.GuidePoint
-				&& EditHandles == Other.EditHandles;
+				&& EditHandles == Other.EditHandles
+				&& GridStepUu == Other.GridStepUu;
 		}
 	};
 

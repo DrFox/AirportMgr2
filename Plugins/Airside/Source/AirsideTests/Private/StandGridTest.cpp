@@ -11,6 +11,7 @@
 #include "Tool/RoadEditTarget.h"
 #include "Tool/SnapGuideSettings.h"
 #include "Tool/StandPlotTool.h"
+#include "Solve/GuideArbiter.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -260,26 +261,91 @@ bool FStandGridAnchorPhaseTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-/** A crossing past the segment's end refuses the anchor - it never places a plot off the road. */
+/**
+ * NEAR A SEGMENT'S END THE ANCHOR TAKES THE LAST LINE ON THE ROAD rather than refusing (review,
+ * 2026-09-27), and a segment shorter than a step, holding no line, refuses.
+ */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FStandGridAnchorPastEndTest,
-	"Airside.Tool.StandGrid.AnchorPastEndRefused",
+	FStandGridAnchorNearEndTest,
+	"Airside.Tool.StandGrid.AnchorNearEndStaysOnRoad",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FStandGridAnchorPastEndTest::RunTest(const FString& Parameters)
+bool FStandGridAnchorNearEndTest::RunTest(const FString& Parameters)
 {
 	StandGridFixture::FStandSession S;
 	if (!TestTrue(TEXT("stand tool"), StandGridFixture::Begin(S, EGridStep::Off))) { return false; }
 	StandGridFixture::LayTaxiway(S.TestWorld.Actor, FVector2D(0.0, 0.0), FVector2D(9700.0, 0.0));
+	StandGridFixture::LayTaxiway(S.TestWorld.Actor, FVector2D(100.0, 5000.0), FVector2D(900.0, 5000.0));
 
 	const URoadNetwork& Network = *S.TestWorld.Actor->Network;
 	auto Taxiways = [](const URoadNetwork& N, FRoadSegmentId Id) { return PlotGesture::IsTaxiway(N, Id); };
-	const FVector2D PastTheEnd(9900.0, 1000.0);
 
 	PlotGesture::FAnchor Anchor;
-	TestTrue(TEXT("control: grid off, the end is in reach"), PlotGesture::AnchorAt(Network, PastTheEnd, Taxiways, Anchor));
-	TestFalse(TEXT("10 m grid: the nearest crossing (X = 10000) is past the end (9700) - refused"),
-		PlotGesture::AnchorAt(Network, PastTheEnd, Taxiways, Anchor, 1000.0));
+	if (!TestTrue(TEXT("10 m grid: the nearest line (10000) is past the end, the anchor still takes one"),
+		PlotGesture::AnchorAt(Network, FVector2D(9900.0, 1000.0), Taxiways, Anchor, 1000.0))) { return false; }
+	TestTrue(TEXT("the last line on the road, X = 9000"), FMath::IsNearlyEqual(Anchor.Corner.X, 9000.0, 1e-6));
+
+	TestFalse(TEXT("an 8 m segment between two 10 m lines has no anchor"),
+		PlotGesture::AnchorAt(Network, FVector2D(500.0, 6000.0), Taxiways, Anchor, 1000.0));
+	return true;
+}
+
+/**
+ * GRID ON KEEPS THE FRONTAGE FLOOR: a cursor a few metres from the anchor, which used to round
+ * to the anchor's own line and pin a zero-length entrance (review, 2026-09-27).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandGridFrontageFloorTest,
+	"Airside.Tool.StandGrid.FrontageKeepsItsFloor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandGridFrontageFloorTest::RunTest(const FString& Parameters)
+{
+	StandGridFixture::FStandSession S;
+	if (!TestTrue(TEXT("stand tool, 5 m"), StandGridFixture::Begin(S, EGridStep::FiveMetres))) { return false; }
+	StandGridFixture::LayTaxiway(S.TestWorld.Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0));
+
+	S.Click(FVector2D(1000.0, 1000.0));
+	const FVector2D Anchor = S.Corner(0, FVector2D(1000.0, 1000.0));
+	for (const double Reach : { 100.0, -100.0, 0.0 })
+	{
+		const FVector2D Far = S.Corner(1, Anchor + FVector2D(Reach, 0.0));
+		TestTrue(*FString::Printf(TEXT("reach %.0f: entrance at least the floor (%.0f)"), Reach, FMath::Abs(Far.X - Anchor.X)),
+			FMath::Abs(Far.X - Anchor.X) >= PlotGesture::MinFrontageUu - 1e-6);
+		TestTrue(*FString::Printf(TEXT("reach %.0f: and on a world line"), Reach), StandGridFixture::IsOnGridLine(Far.X, 500.0));
+	}
+	return true;
+}
+
+/**
+ * GRID OFF, THE DEPTH IGNORES ANGULAR GUIDES. A cursor 3 degrees off the entrance line is within
+ * "along the entrance"'s angular tolerance; followed, it projected the depth to zero (review,
+ * 2026-09-27). The depth must be the raw 0.5 m step, as before the stand had a guide anchor.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandGridDepthIgnoresAngularTest,
+	"Airside.Tool.StandGrid.DepthIgnoresAngularGuides",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandGridDepthIgnoresAngularTest::RunTest(const FString& Parameters)
+{
+	StandGridFixture::FStandSession S;
+	if (!TestTrue(TEXT("stand tool, off"), StandGridFixture::Begin(S, EGridStep::Off))) { return false; }
+	S.Tunables.GuideSources.bExtending = true;
+	S.Tunables.GuideSources.bParallel = true;
+	S.Tunables.GuideSources.bWorld = true;
+	StandGridFixture::LayTaxiway(S.TestWorld.Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0));
+
+	S.Click(FVector2D(1000.0, 1000.0));
+	const FVector2D Anchor = S.Corner(0, FVector2D(1000.0, 1000.0));
+	const double Width = StandGridFixture::CodeCWidth();
+	S.Click(Anchor + FVector2D(Width, 0.0));
+	const FVector2D Far = S.Corner(1, Anchor);
+
+	const FVector2D Cursor = Far + FVector2D(2000.0, 100.0);
+	TestTrue(TEXT("precondition: an angular guide holds here"), S.At(Cursor).Guide.Of(SnapGuide::EFit::Angular) != nullptr);
+	const double Depth = S.Corner(2, Cursor).Y - Far.Y;
+	TestTrue(*FString::Printf(TEXT("depth is the cursor's 1 m, not zero (%.3f)"), Depth), FMath::IsNearlyEqual(Depth, 100.0, 1e-6));
 	return true;
 }
 

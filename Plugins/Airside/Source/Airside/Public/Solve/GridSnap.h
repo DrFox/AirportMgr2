@@ -39,6 +39,15 @@ namespace GridSnap
 	AIRSIDE_API bool NearestCrossingAlong(const FVector2D& Origin, const FVector2D& Direction,
 		const FVector2D& Near, double StepUu, FVector2D& Out);
 
+	/**
+	 * NearestCrossingAlong limited to t in [TMin, TMax] along the unit direction - the nearest
+	 * crossing to Near's foot that lies inside the range, or false (Out untouched) when the range
+	 * holds none. What a plot needs: an anchor must stay on its segment and a frontage must be at
+	 * least the minimum, and rounding to the unrestricted nearest broke both (review, 2026-09-27).
+	 */
+	AIRSIDE_API bool NearestCrossingInRange(const FVector2D& Origin, const FVector2D& Direction,
+		const FVector2D& Near, double StepUu, double TMin, double TMax, FVector2D& Out);
+
 	/** One drawable stretch of a grid line. */
 	struct FPiece
 	{

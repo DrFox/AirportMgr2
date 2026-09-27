@@ -67,6 +67,31 @@ bool FGridSnapCrossingAlongTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/** THE RANGE-LIMITED CROSSING: an anchor on its segment, a frontage at least its floor. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGridSnapCrossingInRangeTest,
+	"Airside.Solve.GridSnap.CrossingInRange",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGridSnapCrossingInRangeTest::RunTest(const FString& Parameters)
+{
+	FVector2D Out(7.0, 7.0);
+	// Foot at 9900 on [0, 9700] at a 10 m step: the unrestricted nearest is 10000, past the end.
+	TestTrue(TEXT("a crossing inside the range exists"),
+		GridSnap::NearestCrossingInRange(FVector2D::ZeroVector, FVector2D(1.0, 0.0), FVector2D(9900.0, 50.0), 1000.0, 0.0, 9700.0, Out));
+	TestTrue(TEXT("the last line on the range, not the nearer one past it"), FMath::IsNearlyEqual(Out.X, 9000.0, 1e-6));
+
+	// Foot at 200 with a floor of 1500: the nearest crossing at least 1500 along.
+	TestTrue(TEXT("a floor"), GridSnap::NearestCrossingInRange(FVector2D(30.0, 0.0), FVector2D(1.0, 0.0), FVector2D(230.0, 0.0), 500.0, 1500.0, 1e12, Out));
+	TestTrue(TEXT("first line at or beyond the floor (X = 1530 -> line 2000)"), FMath::IsNearlyEqual(Out.X, 2000.0, 1e-6));
+
+	const FVector2D Before = Out;
+	TestFalse(TEXT("a range between two lines holds none"),
+		GridSnap::NearestCrossingInRange(FVector2D(100.0, 0.0), FVector2D(1.0, 0.0), FVector2D(400.0, 0.0), 1000.0, 0.0, 800.0, Out));
+	TestEqual(TEXT("refusal leaves Out untouched"), Out, Before);
+	return true;
+}
+
 /**
  * THE OVERLAY'S PIECES: inside the disc, one cell long at most, majors every fifth line.
  */

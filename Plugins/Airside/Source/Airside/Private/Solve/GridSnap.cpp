@@ -58,6 +58,57 @@ namespace GridSnap
 		return true;
 	}
 
+	bool NearestCrossingInRange(const FVector2D& Origin, const FVector2D& Direction,
+		const FVector2D& Near, double StepUu, double TMin, double TMax, FVector2D& Out)
+	{
+		const FVector2D Unit = Direction.GetSafeNormal();
+		if (StepUu <= 0.0 || Unit.IsZero() || TMin > TMax)
+		{
+			return false;
+		}
+
+		const double Foot = FVector2D::DotProduct(Near - Origin, Unit);
+		const double Clamped = FMath::Clamp(Foot, TMin, TMax);
+		constexpr double ParallelEpsilon = 1e-9;
+
+		// PER FAMILY, THE TWO LINES EITHER SIDE OF THE CLAMPED FOOT. If the clamped foot is in
+		// range, the nearest in-range crossing of a family is one of those two; if neither is in
+		// range, the whole range lies between two consecutive lines of that family and it has
+		// none to offer.
+		bool bFound = false;
+		double BestT = 0.0;
+		for (int32 Axis = 0; Axis < 2; ++Axis)
+		{
+			const double Component = Axis == 0 ? Unit.X : Unit.Y;
+			if (FMath::Abs(Component) <= ParallelEpsilon)
+			{
+				continue;
+			}
+			const double Start = Axis == 0 ? Origin.X : Origin.Y;
+			const double K = (Start + Clamped * Component) / StepUu;
+			for (const double Line : { FMath::FloorToDouble(K), FMath::CeilToDouble(K) })
+			{
+				const double T = (Line * StepUu - Start) / Component;
+				if (T < TMin || T > TMax)
+				{
+					continue;
+				}
+				if (!bFound || FMath::Abs(T - Foot) < FMath::Abs(BestT - Foot))
+				{
+					BestT = T;
+					bFound = true;
+				}
+			}
+		}
+
+		if (!bFound)
+		{
+			return false;
+		}
+		Out = Origin + Unit * BestT;
+		return true;
+	}
+
 	void PiecesInDisc(const FVector2D& Centre, double RadiusUu, double StepUu, TArray<FPiece>& Out)
 	{
 		Out.Reset();

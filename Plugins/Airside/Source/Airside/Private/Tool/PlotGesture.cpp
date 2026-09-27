@@ -95,22 +95,6 @@ namespace PlotGesture
 	 * used to mean the plot's step as well - one number doing two jobs, which is how a plot
 	 * could be drawn narrower than anything that could stand in it.
 	 */
-	FVector2D FrontageEnd(const FVector2D& Anchor, const FVector2D& Along,
-		const FVector2D& Cursor, double GridStepUu)
-	{
-		if (GridStepUu > 0.0)
-		{
-			FVector2D OnGrid = Anchor;
-			if (GridSnap::NearestCrossingAlong(Anchor, Along, Cursor, GridStepUu, OnGrid))
-			{
-				return OnGrid;
-			}
-		}
-		const double Reach = FVector2D::DotProduct(Cursor - Anchor, Along);
-		const double Sign = Reach < 0.0 ? -1.0 : 1.0;
-		return Anchor + Along * (Sign * QuantisedFrontage(FMath::Abs(Reach)));
-	}
-
 	double QuantisedFrontage(double Raw)
 	{
 		if (Raw <= MinFrontageUu)
@@ -119,6 +103,29 @@ namespace PlotGesture
 		}
 		const double Steps = FMath::RoundToDouble((Raw - MinFrontageUu) / FrontageStepUu);
 		return MinFrontageUu + Steps * FrontageStepUu;
+	}
+
+	FVector2D FrontageEnd(const FVector2D& Anchor, const FVector2D& Along,
+		const FVector2D& Cursor, double GridStepUu)
+	{
+		const double Reach = FVector2D::DotProduct(Cursor - Anchor, Along);
+		const double Sign = Reach < 0.0 ? -1.0 : 1.0;
+		if (GridStepUu > 0.0)
+		{
+			// NO SHORTER THAN MinFrontageUu, the floor QuantisedFrontage keeps - a crossing
+			// within half a step of the anchor used to pin a zero-length entrance, after which
+			// the stand had no entrance direction to guide or grid its depth by (review,
+			// 2026-09-27). Either way along, as the stepped frontage runs.
+			constexpr double Unbounded = 1e12;
+			const double TMin = Sign > 0.0 ? MinFrontageUu : -Unbounded;
+			const double TMax = Sign > 0.0 ? Unbounded : -MinFrontageUu;
+			FVector2D OnGrid = Anchor;
+			if (GridSnap::NearestCrossingInRange(Anchor, Along, Cursor, GridStepUu, TMin, TMax, OnGrid))
+			{
+				return OnGrid;
+			}
+		}
+		return Anchor + Along * (Sign * QuantisedFrontage(FMath::Abs(Reach)));
 	}
 
 	/**
@@ -275,13 +282,12 @@ namespace PlotGesture
 		{
 			const FVector2D KerbStart = Anchor.Corner - Anchor.Along * FVector2D::DotProduct(
 				Anchor.Corner - RoadA, Anchor.Along);
+			// THE NEAREST CROSSING ON THE SEGMENT, not the nearest anywhere: a cursor beside a
+			// segment's end whose nearest line falls just past it takes the last line on the
+			// road instead of refusing (review, 2026-09-27). Refused only when the segment is
+			// shorter than a step and holds no line at all.
 			FVector2D OnGrid = Anchor.Corner;
-			if (!GridSnap::NearestCrossingAlong(KerbStart, Anchor.Along, Cursor, GridStepUu, OnGrid))
-			{
-				return false;
-			}
-			const double AlongKerb = FVector2D::DotProduct(OnGrid - KerbStart, Anchor.Along);
-			if (AlongKerb < 0.0 || AlongKerb > Length)
+			if (!GridSnap::NearestCrossingInRange(KerbStart, Anchor.Along, Cursor, GridStepUu, 0.0, Length, OnGrid))
 			{
 				return false;
 			}

@@ -17,6 +17,41 @@
 // review): a test enforcing every IcaoCode floor against the quantum needs to read the same
 // declaration the tool quantises by, not a second literal.
 
+namespace StandPlotGuide
+{
+	/**
+	 * The winner the depth obeys: a POSITIONAL guide (EFit::Perpendicular) running PARALLEL to
+	 * the entrance - a neighbouring stand's back edge. Null otherwise.
+	 *
+	 * BOTH TESTS, from review on 2026-09-27. Angular winners ("along the entrance", "north")
+	 * fix a direction the depth does not have - one near the entrance line projected the depth
+	 * to zero. A positional line ACROSS the entrance (a neighbour's side edge on the edge being
+	 * dragged) fixes nothing about depth, and took it as a raw cursor projection with no step.
+	 *
+	 * NAMESPACED, not anonymous: a unity build, and "BackEdgeGuide" is a name a second file
+	 * could choose.
+	 */
+	const SnapGuide::FCandidate* BackEdgeGuide(const FToolContext& Context, const FVector2D& Inward)
+	{
+		if (!Context.Guide.bActive)
+		{
+			return nullptr;
+		}
+		// Parallel to the entrance = square to Inward. 1e-3 is ~0.06 degrees: the neighbour's
+		// edge came from the same kind of taxiway-aligned rectangle, not a hand-drawn line.
+		constexpr double SquareEpsilon = 1e-3;
+		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
+		{
+			if (Winner.Fit == SnapGuide::EFit::Perpendicular
+				&& FMath::Abs(FVector2D::DotProduct(Winner.Direction.GetSafeNormal(), Inward)) < SquareEpsilon)
+			{
+				return &Winner;
+			}
+		}
+		return nullptr;
+	}
+}
+
 FText FStandPlotTool::GetDisplayName() const
 {
 	// Must match the registry's own Name for key 3 - Airside.Tool.BuildSession asserts the
@@ -74,8 +109,13 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 		//   3. Today's 0.5 m step.
 		// The chain's own grid point (a no-winner Guide.Point) is NOT used for 2: it rounds both
 		// axes, and on a diagonal taxiway its projection onto Inward is no grid crossing at all.
+		// Rule 1 is StandPlotGuide::BackEdgeGuide - a positional winner PARALLEL to the entrance.
+		//
+		// RULES 2 AND 3 READ THE RAW CURSOR, exactly as the tool did before it had a guide
+		// anchor: every other winner is angular or runs across the entrance, and following one
+		// moves the depth for a reason that is not about depth (see BackEdgeGuide).
 		double Depth = 0.0;
-		if (Context.Guide.bActive && Context.Guide.Of(SnapGuide::EFit::Perpendicular) != nullptr)
+		if (StandPlotGuide::BackEdgeGuide(Context, Inward) != nullptr)
 		{
 			Depth = FMath::Max(0.0, FVector2D::DotProduct(Context.GuidedCursor() - Anchor, Inward));
 		}
@@ -87,7 +127,7 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 		else
 		{
 			const double Raw = FMath::Max(0.0,
-				FVector2D::DotProduct(Context.GuidedCursor() - Anchor, Inward));
+				FVector2D::DotProduct(Context.Cursor - Anchor, Inward));
 			Depth = FMath::RoundToDouble(Raw / StandPlotRules::DepthStepUu) * StandPlotRules::DepthStepUu;
 		}
 		Back = Far + Inward * Depth;
@@ -302,9 +342,19 @@ void FStandPlotTool::Describe(const FToolContext& Context, TConstArrayView<FVect
 	// WHAT THE DEPTH IS LINED UP WITH, while it is being dragged - the consumer of
 	// DescribeGuideAnchor above. Without it the guide is computed and never seen, the shape of
 	// the bug IBuildTool::WantsFreeStartGuides records. From the back corner the shape shows.
-	if (PinnedNow == 2 && Context.Guide.bActive)
+	//
+	// THE BACK-EDGE WINNER ONLY: it is the one the depth obeys (BackEdgeGuide), and a dashed
+	// "north" or "45 degrees to the taxiway" beside a shape it does not move is a label that lies.
+	if (PinnedNow == 2)
 	{
-		Sink.Guides(Context.Guide, Shown[2]);
+		if (const SnapGuide::FCandidate* BackEdge = StandPlotGuide::BackEdgeGuide(Context, Inward))
+		{
+			SnapGuide::FResult Obeyed;
+			Obeyed.bActive = true;
+			Obeyed.Winners.Add(*BackEdge);
+			Obeyed.Point = Context.Guide.Point;
+			Sink.Guides(Obeyed, Shown[2]);
+		}
 	}
 
 	DescribeLetter(Context, Shown, Sink);
