@@ -182,6 +182,7 @@ bool FRigYard::PlanTo(const URoadNetwork& Network, FGuidelineNodeId From, ERigYa
 		Seed.Heading = Parked->LastMotion.Heading;
 		Seed.Speed = 0.0;
 		Seed.Travelled = Start != nullptr ? FVector2D::Distance(Start->Position, Steered) : 0.0;
+		Seed.Origin = Parked->LastMotion.Position;
 		Query.TowSeed = Seed;
 	}
 	OutPlan = RouteSearch::Find(Network, Query);

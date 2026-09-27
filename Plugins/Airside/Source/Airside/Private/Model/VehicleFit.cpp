@@ -661,11 +661,25 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 		}
 		if (!End.IsSet())
 		{
-			// A PLAN THAT OPENS WITH A REVERSE has no pose to solve it from - FTowSeed carries the
-			// chain but not where the cab is. Judged as before this change: not at all. No such
-			// plan reaches a tow today (2026-09-26): a reverse turn's leg always follows its
-			// approach, and stands send tows nowhere yet (step 3).
-			return Verdict;
+			// A PLAN THAT OPENS WITH A REVERSE - a stand's route home off its service point, which
+			// the utility tow has driven since 2026-09-26 - is solved from where the LIVE cab is:
+			// FTowSeed::Origin, the pose FRoadAgent arms FTowReverseRun from. This branch used to
+			// pass such a plan unjudged ("not at all"), and a route home the router admitted was
+			// refused at the hydrant ("turntable bent 13.4 deg") and the tow stranded there (task 7
+			// fix round 1). Without a seed there is nothing to solve from, so it is REFUSED, not
+			// guessed: a chain laid straight would be a different truck.
+			if (Seed == nullptr || !Seed->Origin.IsSet() || Seed->Axles.Num() != Vehicle.Tow.Num())
+			{
+				Verdict.Refusal = EFitRefusal::ReverseUnsolvable;
+				Verdict.Reason = TEXT("the route opens with a reverse and no live cab pose was given to solve it from");
+				NamePlanStep(InPlan, FirstReverse, Network, Verdict);
+				return Verdict;
+			}
+			FTowEnd& Seeded = End.Emplace();
+			Seeded.Origin = Seed->Origin.GetValue();
+			Seeded.Heading = Seed->Heading;
+			Seeded.Speed = Seed->Speed;
+			Seeded.Axles.Append(Seed->Axles.GetData(), Seed->Axles.Num());
 		}
 
 		TowReverse::FInput In;

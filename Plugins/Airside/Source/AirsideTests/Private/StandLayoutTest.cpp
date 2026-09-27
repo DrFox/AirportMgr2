@@ -75,6 +75,67 @@ namespace StandLayoutFixture
 		return Out;
 	}
 
+	/**
+	 * JudgeBay with a LEAD-IN in front of the bay: a road straight along the far edge, then a
+	 * square turn at Radius onto the entry's own heading, ending on the entry. bFromPort picks
+	 * which way along the road it comes, since the turn's hand decides which way the trailer
+	 * swings.
+	 *
+	 * WHY: JudgeBay alone starts the tow STRAIGHT at the entry, and no tow arrives that way - it
+	 * has just turned off the road. Measured on the utility tow reaching a Code A entry off a
+	 * far-edge road (AirportOps.Fuel.TowServesCodeA, 2026-09-27): turntable 35.7 deg in the
+	 * corner and still 12.9 at the entry. A square turn at the design vehicle's own template
+	 * radius (LegSlack times its tightest) is the tightest a road join lays for it, so it bends
+	 * the chain at least as hard as a real lead-in does.
+	 */
+	inline FVerdictAndPlan JudgeBayArrivingBent(const FServiceBay& Bay, const FVehicle& Vehicle,
+		const URoadNetwork& Network, double Radius, bool bFromPort)
+	{
+		const FVector2D Entry = Bay.EntryLocal;
+		const FVector2D Heading(FMath::Cos(Bay.EntryHeading), FMath::Sin(Bay.EntryHeading));
+		// THE TURN'S CENTRE, on the inside: left of the final heading for a turn that ends
+		// turning left (arriving from port), right of it for the other hand.
+		const FVector2D Left(-Heading.Y, Heading.X);
+		const double Hand = bFromPort ? 1.0 : -1.0;
+		const FVector2D Centre = Entry + Left * Hand * Radius;
+		TArray<TestPlans::FRun> Runs;
+		TestPlans::FRun& Road = Runs.AddDefaulted_GetRef();
+		// Back along the entry heading by R from the centre is the arc's start; the road runs
+		// into it along the final heading's perpendicular.
+		const FVector2D ArcStart = Centre - Heading * Radius;
+		const FVector2D Along = -Left * Hand;   // the direction of travel on the road
+		for (double D = 3000.0; D > 0.0; D -= 100.0)
+		{
+			Road.Points.Add(ArcStart - Along * D);
+		}
+		TestPlans::FRun& Turn = Road;
+		constexpr int32 Samples = 36;
+		const FVector2D From = ArcStart - Centre;
+		for (int32 K = 0; K <= Samples; ++K)
+		{
+			const double A = Hand * UE_DOUBLE_HALF_PI * K / Samples;
+			const FVector2D R(From.X * FMath::Cos(A) - From.Y * FMath::Sin(A), From.X * FMath::Sin(A) + From.Y * FMath::Cos(A));
+			Turn.Points.Add(Centre + R);
+		}
+		const TPair<const FStandLeg*, bool> Legs[] = {
+			{ &Bay.ArriveLeg, false }, { &Bay.ServeLeg, false }, { &Bay.ReverseLeg, true }, { &Bay.DepartLeg, false } };
+		for (const TPair<const FStandLeg*, bool>& Leg : Legs)
+		{
+			TestPlans::FRun& Run = Runs.AddDefaulted_GetRef();
+			Leg.Key->Sample(Run.Points);
+			Run.bReverse = Leg.Value;
+		}
+		// THE ROAD AND THE BAY'S ARRIVE LEG ARE ONE FORWARD RUN in play (no reverse between
+		// them), so they are one run here: the chain carries its bend straight into the arrive leg.
+		Runs[0].Points.Pop();
+		Runs[0].Points.Append(Runs[1].Points);
+		Runs.RemoveAt(1);
+		FVerdictAndPlan Out;
+		Out.Plan = TestPlans::Chain(Runs);
+		Out.Verdict = VehicleFit::JudgePlan(Out.Plan, Vehicle, Network);
+		return Out;
+	}
+
 	/** Every letter the drawn-stand tool offers, A to F, in declaration order. */
 	inline TArray<EIcaoCode> AllLetters()
 	{
@@ -281,6 +342,65 @@ bool FEveryTemplateLegIsDrivableByEveryVehicleTest::RunTest(const FString& Param
 		}
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryBayHoldsATowArrivingBentTest,
+	"Airside.Entities.EveryBayHoldsATowArrivingBent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryBayHoldsATowArrivingBentTest::RunTest(const FString& Parameters)
+{
+	using namespace StandLayoutFixture;
+
+	// EveryTemplateLegIsDrivableByEveryVehicle's whole-bay check, from a REALISTIC arrival: the
+	// tow has just turned off the far-edge road, both ways round, so its chain reaches the entry
+	// bent (see JudgeBayArrivingBent for the figures that justify the lead-in). The bay's settle
+	// straight must still bring the turntable inside TowReverse's 3 degree lock before the
+	// reverse, or the route home off the service point strands the tow - task 7 fix round 1.
+	const TArray<FVehicle> Fleet = {
+		UAirsideSettings::ResolveUtilityTowVehicle(), UAirsideSettings::ResolveDefaultVehicle() };
+	URoadNetwork* Network = NewObject<URoadNetwork>();
+	int32 Judged = 0;
+	double WorstLeadIn = 0.0;
+	for (const EIcaoCode StandLetter : AllLetters())
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
+		const FVehicle Design = UAirsideSettings::ResolveStandDesignVehicle(StandLetter);
+		const double Radius = 1.1 * Design.Chassis.TightestFollowableRadius();
+		for (const FVehicle& Vehicle : Fleet)
+		{
+			if (Vehicle.Tow.IsEmpty() || !VehicleFit::NoLargerThan(Vehicle, Design))
+			{
+				continue;
+			}
+			for (const FServiceBay& Bay : Stand->ServiceBays)
+			{
+				for (const bool bFromPort : { true, false })
+				{
+					const FVerdictAndPlan Out = JudgeBayArrivingBent(Bay, Vehicle, *Network, Radius, bFromPort);
+					++Judged;
+					// THE LEAD-IN ON ITS OWN - the road's 29 points and the turn's 37, the plan's
+					// first 66 - for the worst hitch it leaves: what makes this more than JudgeBay's
+					// straight start.
+					TArray<TestPlans::FRun> LeadIn;
+					LeadIn.AddDefaulted_GetRef().Points.Append(Out.Plan.Polyline.GetData(), 66);
+					WorstLeadIn = FMath::Max(WorstLeadIn,
+						VehicleFit::JudgePlan(TestPlans::Chain(LeadIn), Vehicle, *Network).Radians);
+					TestTrue(*FString::Printf(TEXT("Code %s, %s: bay '%s' arriving off the road from %s is admitted whole - %s (worst hitch %.1f deg)"),
+						IcaoCode::ToLetter(StandLetter), *Vehicle.TypeCode.ToString(), *Bay.AnchorId.ToString(),
+						bFromPort ? TEXT("port") : TEXT("starboard"), *Out.Verdict.Describe(),
+						FMath::RadiansToDegrees(Out.Verdict.Radians)), Out.Verdict.Fits());
+				}
+			}
+		}
+	}
+	AddInfo(FString::Printf(TEXT("MEASURED: %d tow bay arrival(s) judged; the lead-in bent the chain up to %.1f deg"),
+		Judged, FMath::RadiansToDegrees(WorstLeadIn)));
+	TestTrue(TEXT("NOT VACUOUS: some tow bay was judged"), Judged > 0);
+	TestTrue(*FString::Printf(TEXT("NOT VACUOUS: the lead-in really bends the chain (worst %.1f deg before the bay)"),
+		FMath::RadiansToDegrees(WorstLeadIn)), FMath::RadiansToDegrees(WorstLeadIn) > 10.0);
 	return true;
 }
 

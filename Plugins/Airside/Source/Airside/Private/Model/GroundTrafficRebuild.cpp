@@ -376,6 +376,8 @@ FRouteQuery FPlanReResolver::QueryFor(ERouteErrand Errand, FGuidelineNodeId Star
 			Seed.Heading = Agent.Follower.Heading;
 			Seed.Speed = Agent.Follower.Speed;
 			Seed.Travelled = Agent.Follower.Travelled;
+			// AND THE CAB, for a route that opens with a reverse - see FTowSeed::Origin.
+			Seed.Origin = Agent.LastMotion.Position;
 		}
 	}
 	return Query;

@@ -569,6 +569,7 @@ bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, con
 		Seed.Heading = Agent.Follower.Heading;
 		Seed.Speed = Agent.Follower.Speed;
 		Seed.Travelled = Agent.Follower.Travelled - Dropped;
+		Seed.Origin = Agent.LastMotion.Position;
 		const FFitVerdict Whole = VehicleFit::JudgePlan(Spliced, *Vehicle, *Network, &Seed);
 		if (Whole.Refusal == EFitRefusal::TrailerFolds)
 		{

@@ -100,6 +100,16 @@ struct FTowSeed
 	double Heading = 0.0;
 	double Speed = 0.0;
 	double Travelled = 0.0;
+
+	/**
+	 * Where the cab's body ORIGIN is - FRoadAgent::LastMotion.Position, the pose FTowReverseRun
+	 * arms from. Needed only by a plan that OPENS with a reverse leg (a stand's route home off
+	 * its service point), which has no forward section before it to say where the cab stopped;
+	 * JudgePlan refuses such a plan without it rather than passing it unjudged (task 7 fix round
+	 * 1, 2026-09-27 - the "not at all" branch let a stranding reverse through).
+	 * ENFORCED BY: Airside.Model.Tow.WholeRouteSolvesAnOpeningReverseFromTheSeed
+	 */
+	TOptional<FVector2D> Origin;
 };
 
 /**
@@ -204,7 +214,10 @@ namespace VehicleFit
 	 * line it drives out on. The forward section after it starts from the solved end, seeded.
 	 * Until 2026-09-26 the check stopped at the first reverse leg, because the agent froze the
 	 * chain there. Rigid vehicles fit trivially; RouteSearch does not call this for them at all.
-	 * ENFORCED BY: Airside.Model.Tow.WholeRouteJudgesTheReverse, .WholeRouteJudgesATrailingReverse
+	 * A plan that OPENS with a reverse is solved from Seed's cab pose (FTowSeed::Origin), and
+	 * refused ReverseUnsolvable without one - there is nothing else to solve it from.
+	 * ENFORCED BY: Airside.Model.Tow.WholeRouteJudgesTheReverse, .WholeRouteJudgesATrailingReverse,
+	 * .WholeRouteSolvesAnOpeningReverseFromTheSeed
 	 */
 	AIRSIDE_API FFitVerdict JudgePlan(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
 		const FTowSeed* Seed = nullptr);

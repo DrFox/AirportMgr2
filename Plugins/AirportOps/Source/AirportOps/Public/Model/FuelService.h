@@ -419,10 +419,12 @@ public:
 	 * yes, unless the truck tows something the route folds (VehicleFit::JudgePlan,
 	 * EFitRefusal::TrailerFolds) - a scuffed kerb is accepted, a jack-knife is not (review of
 	 * 9441ccf1). OutWhy, when given and the answer is no, names the fold. Static and public so
-	 * the rule is testable on a road that folds; the fuel fixture has none.
+	 * the rule is testable on a road that folds; the fuel fixture has none. Seed is the live
+	 * chain and cab (SendTruckHome's), so a route home opening with a reverse is solved from
+	 * where the tow is; a reverse it cannot back is refused like a fold.
 	 */
 	static bool MayDriveUngated(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
-		FString* OutWhy = nullptr);
+		FString* OutWhy = nullptr, const FTowSeed* Seed = nullptr);
 
 	/** Puts a truck in GoingHome without running the traffic model - so OpsSave's tests can
 	 *  reach the leak OnBeforeRestore fixes without a full arrival-to-turnaround fixture,

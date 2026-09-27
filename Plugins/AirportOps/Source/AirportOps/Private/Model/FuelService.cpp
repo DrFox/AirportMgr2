@@ -424,14 +424,16 @@ void UFuelService::PostServiceFee(double Now, const FAirframe& Airframe)
 }
 
 bool UFuelService::MayDriveUngated(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
-	FString* OutWhy)
+	FString* OutWhy, const FTowSeed* Seed)
 {
 	if (!Vehicle.HasTrailer())
 	{
 		return true;
 	}
-	const FFitVerdict Whole = VehicleFit::JudgePlan(Plan, Vehicle, Network);
-	if (Whole.Refusal != EFitRefusal::TrailerFolds)
+	// A REVERSE IT CANNOT BACK is refused with the fold (task 7 fix round 1): the tow would stall
+	// at the service point holding the node, which is the jack-knife's cost under another name.
+	const FFitVerdict Whole = VehicleFit::JudgePlan(Plan, Vehicle, Network, Seed);
+	if (Whole.Refusal != EFitRefusal::TrailerFolds && Whole.Refusal != EFitRefusal::ReverseUnsolvable)
 	{
 		return true;
 	}
@@ -479,6 +481,27 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		Query.WithCongestion(Traffic.GetOccupancy(), TruckId, Traffic.Rules.CongestionWeight);
 		Query.WithVehicle(OwnVehicle);
 		Query.RunwayPenalty = Traffic.Rules.RunwayPenalty;
+
+		// JUDGED FROM THE LIVE CHAIN AND CAB (task 7 fix round 1): the route home off a stand
+		// OPENS with the bay's reverse leg, and VehicleFit::JudgePlan solves that reverse from
+		// where the tow is parked - its axles, its heading and its cab (FTowSeed::Origin), the
+		// pose FTowReverseRun will arm from - so a route the router admits is one the tow can back
+		// along. Unseeded, JudgePlan refuses a reverse-first plan outright.
+		// ENFORCED BY: AirportOps.Fuel.TowServesCodeA (the tow gets home)
+		if (OwnVehicle.HasTrailer() && Truck->TowAxles.Num() == OwnVehicle.Tow.Num())
+		{
+			const FVector2D Steered = Truck->LastMotion.Position
+				+ FVector2D(FMath::Cos(Truck->LastMotion.Heading), FMath::Sin(Truck->LastMotion.Heading)) * OwnVehicle.Chassis.SteerAxleX;
+			const FGuidelineNode* StartNode = Network.GetGuidelineNode(Query.Start);
+			FTowSeed& Seed = Query.TowSeed.Emplace();
+			Seed.Axles = Truck->TowAxles;
+			Seed.Heading = Truck->LastMotion.Heading;
+			Seed.Speed = 0.0;
+			// HOW FAR ALONG THE ROUTE THE STEERED AXLE ALREADY IS - zero at a service point, where
+			// it parked on the node the route starts from; RigYard's reading of the same thing.
+			Seed.Travelled = StartNode != nullptr ? FVector2D::Distance(StartNode->Position, Steered) : 0.0;
+			Seed.Origin = Truck->LastMotion.Position;
+		}
 		Plan = RouteSearch::Find(Network, Query);
 
 		// HOME EVEN IF IT DOES NOT FIT (review of 2026-09-24). The way out was chosen for a
@@ -503,7 +526,7 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 			Query.Vehicle = nullptr;
 			Plan = RouteSearch::Find(Network, Query);
 			FString Why;
-			if (Plan.IsValid() && !MayDriveUngated(Plan, OwnVehicle, Network, &Why))
+			if (Plan.IsValid() && !MayDriveUngated(Plan, OwnVehicle, Network, &Why, Query.TowSeed.GetPtrOrNull()))
 			{
 				UE_LOG(LogAirportOps, Warning,
 					TEXT("Fuel: truck %d's ungated road home to depot %d does not hold its tow either (%s); not driven"),
