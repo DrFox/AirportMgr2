@@ -63,6 +63,7 @@ FRigCourseLayoutResult FRigCourseLayout::Lay(IRoadEditTarget& Target)
 	// the full Topology pipeline, ~1.7 s a course on 2026-09-27. SAFE because nothing below
 	// reads derived state - MakeLiveNodeId is a model handle, not a guideline one; the
 	// waypoints are resolved against the guideline graph per leg, long after this returns.
+	// ENFORCED BY: AirportMgr.RigCourse.BatchedLayMatchesUnbatched (bitwise-equal derived graph).
 	FRoadRebuildBatch Batch(Target);
 
 	// EVERY PLACED NODE, TRACKED HERE (#301): the bounding box ToJson exports is measured off

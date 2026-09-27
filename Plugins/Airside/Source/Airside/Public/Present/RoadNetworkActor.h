@@ -501,8 +501,8 @@ public:
 	/** Close it. bKeep false abandons the snapshot, leaving no undo step. */
 	virtual void EndInteractiveEdit(bool bKeep) override;
 
-	/** Fold every rebuild until the matching End into one. Forwards to the facade - see
-	 *  FRoadRebuildBatch, the only intended caller, and URoadEditFacade for the semantics. */
+	/** Fold every rebuild until the matching End into one. Forwards to the facade. Call
+	 *  through FRoadRebuildBatch; URoadEditFacade's class comment has the semantics. */
 	virtual void BeginRebuildBatch() override;
 	virtual void EndRebuildBatch() override;
 
