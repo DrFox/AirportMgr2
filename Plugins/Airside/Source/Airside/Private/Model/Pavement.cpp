@@ -33,4 +33,33 @@ namespace Pavement
 		default:                return 2;
 		}
 	}
+
+	FPavementCheck Judge(EPavement Have, EPavement Need)
+	{
+		FPavementCheck Out;
+		Out.Have = Have;
+		Out.Need = Need;
+		return Out;
+	}
+
+	FString Describe(const FPavementCheck& Check)
+	{
+		return Check.Passes() ? FString()
+			: FString::Printf(TEXT("the surface is %s; this aircraft needs %s"), Name(Check.Have), Name(Check.Need));
+	}
+
+	double RateFactor(EPavement P)
+	{
+		switch (P)
+		{
+		case EPavement::Grass:      return 0.4;
+		case EPavement::Tarmac:     return 1.0;
+		case EPavement::Concrete:   return 1.4;
+		case EPavement::Reinforced: return 1.8;
+		default:                    break;
+		}
+		// An out-of-range byte from a bad save: bill at the authored rate rather than at zero,
+		// because a zero factor would build anything for free.
+		return 1.0;
+	}
 }

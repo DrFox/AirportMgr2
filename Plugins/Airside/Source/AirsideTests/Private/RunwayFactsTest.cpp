@@ -77,4 +77,49 @@ bool FRunwayFactsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPavementOrderIsStrengthTest, "Airside.Model.Pavement.OrderIsStrength",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FPavementOrderIsStrengthTest::RunTest(const FString&)
+{
+	// ALL SIXTEEN PAIRS, because the rule is the ordering itself: a hand-picked pair or two
+	// would pass against a Judge that special-cased grass.
+	for (uint8 Have = 0; Have < static_cast<uint8>(EPavement::Count); ++Have)
+	{
+		for (uint8 Need = 0; Need < static_cast<uint8>(EPavement::Count); ++Need)
+		{
+			const FPavementCheck Check = Pavement::Judge(static_cast<EPavement>(Have), static_cast<EPavement>(Need));
+			TestEqual(FString::Printf(TEXT("%s ground, %s needed: passes iff strong enough"),
+				Pavement::Name(static_cast<EPavement>(Have)), Pavement::Name(static_cast<EPavement>(Need))),
+				Check.Passes(), Have >= Need);
+			TestEqual(TEXT("and a passing check has no sentence"), Check.Passes(), Pavement::Describe(Check).IsEmpty());
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPavementDescribeMatchesRunwaySentenceTest, "Airside.Model.Pavement.DescribeMatchesRunwaySentence",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FPavementDescribeMatchesRunwaySentenceTest::RunTest(const FString&)
+{
+	// BYTE-IDENTICAL to the sentence RunwayAdmission::Describe printed before the check moved
+	// here (captured from main 2026-09-27) - the move must not change what the player reads.
+	TestEqual(TEXT("the runway's refusal sentence survives the move"),
+		Pavement::Describe(Pavement::Judge(EPavement::Grass, EPavement::Tarmac)),
+		FString(TEXT("the surface is grass; this aircraft needs tarmac")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPavementRateFactorTest, "Airside.Model.Pavement.RateFactor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FPavementRateFactorTest::RunTest(const FString&)
+{
+	// TARMAC IS 1 so every price authored before pavement mattered is unchanged; the others
+	// are the spec's first guesses and ordered like the scale - stronger costs more.
+	TestEqual(TEXT("grass"), Pavement::RateFactor(EPavement::Grass), 0.4);
+	TestEqual(TEXT("tarmac is the authored rate itself"), Pavement::RateFactor(EPavement::Tarmac), 1.0);
+	TestEqual(TEXT("concrete"), Pavement::RateFactor(EPavement::Concrete), 1.4);
+	TestEqual(TEXT("reinforced"), Pavement::RateFactor(EPavement::Reinforced), 1.8);
+	return true;
+}
+
 #endif

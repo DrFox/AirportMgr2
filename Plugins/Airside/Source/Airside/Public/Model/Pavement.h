@@ -49,3 +49,43 @@ namespace Pavement
 	 */
 	AIRSIDE_API int32 MaterialSlot(EPavement P);
 }
+
+/**
+ * One pavement comparison with the two figures it was made from, so the sentence can be
+ * written from the decision - FRunwayAdmission's rule for Describe.
+ *
+ * A VALUE OBJECT, the one piece runway and stand admission share (spec 2026-09-27 §1). A
+ * Specification chain of rule objects was rejected: each refusal carries different figures
+ * for its sentence, USTRUCT plans cannot hold polymorphic rules, and two facilities with six
+ * rules did not pay for it. Revisit at a third facility.
+ */
+USTRUCT()
+struct AIRSIDE_API FPavementCheck
+{
+	GENERATED_BODY()
+
+	/** The ground's. */
+	UPROPERTY() EPavement Have = EPavement::Tarmac;
+
+	/** The weakest the aircraft may use. */
+	UPROPERTY() EPavement Need = EPavement::Grass;
+
+	bool Passes() const { return Have >= Need; }
+};
+
+namespace Pavement
+{
+	AIRSIDE_API FPavementCheck Judge(EPavement Have, EPavement Need);
+
+	/** "the surface is grass; this aircraft needs tarmac". Empty when the check passes. */
+	AIRSIDE_API FString Describe(const FPavementCheck& Check);
+
+	/**
+	 * What building or owning a thing on P costs, as a multiple of its authored rate - build AND
+	 * upkeep, for every buildable. THE ONE TABLE; FBuildLine::Amount and BuildCost's upkeep are
+	 * its only readers. First guesses 2026-09-27: grass is levelled ground and seed, no base
+	 * course; concrete and reinforced carry heavier slabs.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'Pavement::RateFactor'
+	 */
+	AIRSIDE_API double RateFactor(EPavement P);
+}

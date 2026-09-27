@@ -33,9 +33,11 @@ namespace RunwayAdmission
 			: Airframe.Requirements.TakeoffFieldLength;
 		Out.Wingspan = Airframe.Wingspan;
 		Out.MaxWingspan = MaxWingspan;
+		Out.Pavement = Pavement::Judge(Facts.Surface, Airframe.Requirements.MinimumSurface);
 
-		// Both scales are ORDERED enums (see RunwayFacts.h), so "weaker than" is <.
-		if (Facts.Surface < Airframe.Requirements.MinimumSurface)
+		// Both scales are ORDERED enums (see RunwayFacts.h), so "weaker than" is checked with
+		// FPavementCheck::Passes for the surface and < for the approach.
+		if (!Out.Pavement.Passes())
 		{
 			Out.Why = ERunwayRefusal::Surface;
 		}
@@ -102,9 +104,7 @@ namespace RunwayAdmission
 		switch (Admission.Why)
 		{
 		case ERunwayRefusal::Surface:
-			return FString::Printf(TEXT("the surface is %s; this aircraft needs %s"),
-				Pavement::Name(Admission.Facts.Surface),
-				Pavement::Name(Admission.Required.MinimumSurface));
+			return Pavement::Describe(Admission.Pavement);
 
 		case ERunwayRefusal::Approach:
 			return FString::Printf(TEXT("the approach is %s; this aircraft needs %s"),

@@ -40,6 +40,9 @@ struct AIRSIDE_API FRunwayAdmission
 	/** What the runway is. */
 	UPROPERTY() FRunwayFacts Facts;
 
+	/** The surface comparison - see FPavementCheck. Written by Judge whatever the verdict. */
+	UPROPERTY() FPavementCheck Pavement;
+
 	/** What the aircraft needed of it. */
 	UPROPERTY() FRunwayRequirements Required;
 
