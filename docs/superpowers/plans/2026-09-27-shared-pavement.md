@@ -23,6 +23,10 @@
 - Commit messages: concise, end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - `// ENFORCED BY:` on any new comment claiming a fact about other code, naming the test or lint rule.
 
+## Open Decisions
+
+- **Task 8 Step 7 - grass stand pads need a multi-material apron layer** (found 2026-09-27 auditing #356): pads draw on the one-material apron layer, grass roads by material slot. Recommended: the apron layer resolves slots through the road layer's existing `EffectiveMaterialSet`; tarmac pads and bare aprons unchanged. Alternative: pads move onto the road layer (loses `ApronZOffset`, so a pad over a road z-fights). Needs the user's yes before Task 8 Step 7 runs; Tasks 0-7 do not depend on it.
+
 ## Review Focus
 
 1. **A demolish refund after the line change.** `Credit` must scrap per line at today's price; a stand's pad line (null Source) must still refund. Test in Task 5.
@@ -37,15 +41,15 @@
 
 **Files:** none changed; notes go in the PR body draft `C:\Users\daren\AppData\Local\Temp\claude\C--repos-AirportMgr2\ed7bce6f-53ee-4b2b-99f5-23014a349e5e\scratchpad\pavement-baseline.md`.
 
-- [ ] **Step 1: Confirm the grass branch is on main.**
+- [x] **Step 1: Confirm the grass branch is on main.** DONE 2026-09-27: `f20add83` (#356).
   Run: `git -C C:\repos\airportmgr2-shared-pavement fetch origin; git -C C:\repos\airportmgr2-shared-pavement log origin/main --oneline -20`
   Expected: a commit merging `feature/road-grass-surface`. If absent, STOP - this plan does not start before it lands (user ruling 2026-09-27).
 
-- [ ] **Step 2: Rebase.**
+- [x] **Step 2: Rebase.** DONE 2026-09-27, clean.
   Run: `git -C C:\repos\airportmgr2-shared-pavement rebase origin/main`
   Expected: clean (this branch holds only docs).
 
-- [ ] **Step 3: Record what the grass branch actually shipped.** The plan below was written against its UNCOMMITTED 2026-09-27 state. Grep and write into the baseline file:
+- [x] **Step 3: Record what the grass branch actually shipped.** DONE 2026-09-27 - findings are Task 4's table; grass is drawn by MATERIAL SLOT (`SurfaceSlotFor` -> the grass runway slot), which decides Task 8 Step 7. The plan below was written against its UNCOMMITTED 2026-09-27 state. Grep and write into the baseline file:
   ```
   grep -rn "enum class ERoadSurface" -A8 Plugins/Airside/Source/Airside/Public
   grep -rn "ERoadSurface Surface\|\bSurface\b.*ERoadSurface" Plugins/Airside/Source/Airside/Public/Model/RoadSegment*.h Plugins/Airside/Source/Airside/Public/Model/RoadNetwork.h
@@ -321,7 +325,7 @@
 
 **Files:**
 - Modify: `Public/Model/RunwayFacts.h:88-108` (`FRunwayRequirements`), `Public/Model/Airframe.h:504-505`, `Public/Entities/AircraftType.h:171-177,201-225`, `Private/Entities/AircraftType.cpp:481-502`, `Private/Model/RunwayAdmission.cpp`, `Config/DefaultEngine.ini`
-- Modify: every `Requirements.MinimumSurface` user from `grep -rn "MinimumSurface" Plugins Source`
+- Modify: every `Requirements.MinimumSurface` user from `grep -rn "MinimumSurface" Plugins Source` - since #356 that includes the five `NeedsSurface(...Requirements.MinimumSurface)` sites (ArrivalPlanner, DeparturePlanner x2, PushbackPlanner, GroundTrafficRebuild), which Task 4 then retypes
 - Modify (assets): the nine `Content/Entities/DA_Aircraft_*.uasset` that store it
 - Test: `Plugins/Airside/Source/AirsideTests/Private/AirsideContentTest.cpp`
 
@@ -412,17 +416,36 @@
 
 ---
 
-### Task 4: Fold the grass branch's `ERoadSurface` into `EPavement`
+### Task 4: Fold #356's `ERoadSurface` into `EPavement`, and give its three pavement rules the shared concepts
 
-**Files:** as recorded in Task 0 Step 3. On the 2026-09-27 uncommitted state: `Public/Model/RunwayFacts.h` (`ERoadSurface`, `RoadSurfacePavement`, `RoadSurfaceName`), `Private/Model/RunwayFacts.cpp`, `FRoadSegment::Surface`, `URoadNetwork::IsGrassRoad`/`SetSegmentSurface`, `Build/BuildCost.h/.cpp` (`GrassRateFactor`, `SurfaceRateFactor`), `Tool/RoadDrawTool.*` (the surface row), `Profiles/RoadProfile.h`.
-- Modify: `Config/DefaultEngine.ini`
-- Test: the grass branch's own tests (whatever `grep -rln "ERoadSurface" Plugins/*/Source/*Tests` lists) plus `ToolVariantTest.cpp`
+#356 (`f20add83`, merged 2026-09-27) shipped grass roads and taxiways. Its audit against this plan's concepts (recorded 2026-09-27, Task 0 Step 3) found five places that must change, and they are this task. The first is the second enum. The other four are each a pavement rule written on the side of that enum, which the fold would otherwise leave as a hand-mapped special case:
+
+| #356 shipped | Concept it breaks | Becomes |
+|---|---|---|
+| `ERoadSurface { Tarmac, Grass }` + `RoadSurfacePavement` + `RoadSurfaceName` (`RunwayFacts.h/.cpp`) | one scale | `EPavement` on `FRoadSegment::Surface`; the mapping and the name function are deleted |
+| **Route gate** (`RouteSearch.cpp`): `Query.MinimumSurface > RoadSurfacePavement(Grass) && IsGrassRoad(...)` | one comparison (`FPavementCheck`) | `!Pavement::Judge(Network.PavementOf(Edge->DerivedFrom), Query.MinimumPavement).Passes()` - a third comparison site that only knew grass would silently pass a jet down a future weak surface |
+| `FRouteQuery::MinimumSurface`/`NeedsSurface(ERunwaySurface)`, fed `Airframe.Requirements.MinimumSurface` at 5 sites (Arrival, Departure x2, Pushback, GroundTrafficRebuild) | the need lives on the aircraft (Task 3) | `FRouteQuery::MinimumPavement`/`NeedsPavement(EPavement)`, fed `Airframe.MinimumPavement` |
+| **Mesh slot** (`RoadMeshBuilder.cpp`, `SurfaceSlotFor`): runway -> `RunwaySlotName(facts)`; grass road -> `RunwaySlotName(RoadSurfacePavement(Grass))`; else `NAME_None` | one pavement answer (`URoadNetwork::PavementOf`, added here rather than Task 6) | runway or non-tarmac road -> `URoadMaterialSet::RunwaySlotName(Network.PavementOf(Segment))`; tarmac road -> `NAME_None` (profile's own bands, unchanged) |
+| **Junction "paved wins"** (`RoadMeshBuilder.cpp`): `bPaved = !IsGrassRoad(Arm)` | the scale is ordered | unchanged in behaviour. The rule is "grass loses", not "strongest wins" (a runway always counts as paved whatever it is surfaced with, #356's ruling), so it stays a grass test and says why |
+| `GrassRateFactor`/`SurfaceRateFactor(ERoadSurface)` (`BuildCost.h/.cpp`) | one factor site | `Pavement::RateFactor` inline until Task 5's lines take it (marked; see Step 5) |
+| `ConnectNodes`/`QuoteForConnect(..., ERoadSurface)` + tarmac overload (`RoadEditTarget.h`), `FRoadDeletionPlan::HealSurface`, road tool's `Surface` state (`RoadDrawTool.*`) | one scale | same shapes, typed `EPavement`; the non-virtual tarmac overload stays (#356's choice, and a non-virtual overload is not the default-argument-on-a-virtual trap Task 8 avoids) |
+
+**Files:**
+- Modify: `Public/Model/RunwayFacts.h`, `Private/Model/RunwayFacts.cpp`, `Public/Model/RoadNode.h` (`FRoadSegment::Surface`), `Public/Model/RoadNetwork.h`, `Private/Model/RoadNetwork.cpp`, `Public/Model/RouteSearch.h`, `Private/Model/RouteSearch.cpp`, `Private/Model/ArrivalPlanner.cpp`, `Private/Model/DeparturePlanner.cpp`, `Private/Model/PushbackPlanner.cpp`, `Private/Model/GroundTrafficRebuild.cpp`, `Public/Build/RoadMeshBuilder.h`, `Private/Build/RoadMeshBuilder.cpp`, `Private/Build/RoadLaneMarkingBuilder.cpp`, `Public/Build/BuildCost.h`, `Private/Build/BuildCost.cpp`, `Public/Tool/RoadEditTarget.h`, `Public/Tool/RoadHeal.h`, `Private/Tool/RoadHeal.cpp`, `Public/Tool/RoadDrawTool.h`, `Private/Tool/RoadDrawTool.cpp`, `Public/Present/RoadEditFacade.h`, `Private/Present/RoadEditFacade.cpp`, `Public/Present/RoadNetworkActor.h`, `Private/Present/RoadNetworkActor.cpp`, `Public/Testing/AirsideTestWorld.h`, `Profiles/RoadProfile.h`, `Config/DefaultEngine.ini`
+- Create: `Public/Tool/PavementAxis.h`, `Private/Tool/PavementAxis.cpp`
+- Test: `AirsideTests/Private/RoadSurfaceTest.cpp` (#356's six tests: `Airside.Tool.Variants.RoadSurface`, `Airside.Present.GrassRoadLaid`, `Airside.Build.GrassRoadCost`, `Airside.Build.GrassRoadSlots`, `Airside.Build.GrassRoadUnpainted`, `Airside.Model.RouteGrassGate`), `ToolVariantTest.cpp`, `TaxiwayWidthTest.cpp`, `Source/AirportMgr/BuildBarWidgetTest.cpp`
 
 **Interfaces:**
-- Consumes: `EPavement`, `Pavement::Name` (Task 1)
-- Produces: `FRoadSegment::Surface` typed `EPavement` (default `Tarmac`); `UPROPERTY(EditAnywhere) TArray<EPavement> AllowedPavements;` on `URoadProfile` (empty = all four); `namespace Pavement { void AppendAxis(TArray<FToolVariantAxis>& Out, EPavement Current, TConstArrayView<EPavement> Allowed); TArray<EPavement> Offered(TConstArrayView<EPavement> Allowed); }` in a Tool-side header `Public/Tool/PavementAxis.h` (Tool/ may see Model/; Model/ must not see `FToolVariantAxis`).
+- Consumes: `EPavement`, `Pavement::Name`, `FPavementCheck`, `Pavement::Judge` (Tasks 1-2); `FAirframe::MinimumPavement` (Task 3)
+- Produces:
+  - `FRoadSegment::Surface : EPavement = EPavement::Tarmac`
+  - `EPavement URoadNetwork::PavementOf(FRoadSegmentId Segment) const` - runway: `RunwayFactsFor(Segment).Surface`; live road: `Segment.Surface`; dead/unknown: `Tarmac`. THE one answer to "what is this segment paved with"; `IsGrassRoad` becomes `!IsRunwaySegment(S) && PavementOf(S) == EPavement::Grass`
+  - `FRouteQuery::MinimumPavement : EPavement = EPavement::Grass`, `FRouteQuery& NeedsPavement(EPavement)`
+  - `UPROPERTY(EditAnywhere) TArray<EPavement> AllowedPavements;` on `URoadProfile` (empty = all four)
+  - `namespace Pavement { TArray<EPavement> Offered(TConstArrayView<EPavement> Allowed); void AppendAxis(TArray<FToolVariantAxis>& Out, EPavement Current, TConstArrayView<EPavement> Allowed); }` in `Tool/PavementAxis.h` (Tool/ may see Model/; Model/ must not see `FToolVariantAxis`)
+  - `bool URoadNetwork::SetSegmentSurface(FRoadSegmentId, EPavement)` - refuses (false, logs `SetSegmentSurface refused: %s is not offered by profile %s`) a pavement not in `Pavement::Offered(Profile->AllowedPavements)`, as well as the runway/dead refusals #356 already has
 
-- [ ] **Step 1: Write the failing test** in `ToolVariantTest.cpp`:
+- [ ] **Step 1: Write the failing tests.** In `ToolVariantTest.cpp`:
   ```cpp
   IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadSurfaceRowOffersTheProfileListTest, "Airside.Tool.Variant.RoadSurfaceRowOffersTheProfileList",
       EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -435,7 +458,7 @@
       Pavement::AppendAxis(Axes, EPavement::Tarmac, RoadList);
       TestEqual(TEXT("one row"), Axes.Num(), 1);
       TestEqual(TEXT("with exactly the profile's two options"), Axes[0].Options.Num(), 2);
-      TestEqual(TEXT("in the profile's order"), Axes[0].Options[1].Id, FName(TEXT("grass")));
+      TestEqual(TEXT("in the profile's order - tarmac first, as #356's row had it"), Axes[0].Options[1].Id, FName(TEXT("grass")));
 
       TArray<FToolVariantAxis> All;
       Pavement::AppendAxis(All, EPavement::Tarmac, {});
@@ -444,8 +467,20 @@
       return true;
   }
   ```
-- [ ] **Step 2: Build; run it.** Expected: compile FAILURE (`Pavement::AppendAxis`).
-- [ ] **Step 3: Implement `Tool/PavementAxis.h/.cpp`**:
+  In `RoadSurfaceTest.cpp`, beside `Airside.Model.RouteGrassGate` (read its fixture; reuse it):
+  ```cpp
+  // THE GATE IS THE SHARED COMPARISON, not a grass special case: a taxiway whose pavement is
+  // below the aircraft's need is refused whatever that pavement is. #356's gate tested
+  // "IsGrassRoad" and would have passed a concrete-needing jet down a tarmac taxiway.
+  // <RouteGrassGate's fixture, taxiway left TARMAC, airframe MinimumPavement = Concrete>
+  TestFalse(TEXT("a concrete-needing jet is refused a tarmac taxiway"), /* the fixture's route result */ .IsValid());
+  // <same fixture, MinimumPavement = Tarmac>
+  TestTrue(TEXT("and a tarmac-needing one is not"), /* same */ .IsValid());
+  ```
+  Replace the `<...>` / `/* */` with `RouteGrassGate`'s own setup and query, copied - only the pavement values differ.
+  AND the second assertion is a behaviour change #356's gate did not have: before, only grass gated. It is right (a jet needing concrete cannot taxi on tarmac any more than it can land on it), but it is new, and every existing fleet type's `MinimumPavement` must be checked against the taxiways the starter map lays (Step 6).
+- [ ] **Step 2: Build; run `-Filter Airside.Tool.Variant` and `-Filter Airside.Model.RouteGrassGate`.** Expected: compile FAILURE (`Pavement::AppendAxis`, `MinimumPavement` on `FRouteQuery`).
+- [ ] **Step 3: `Tool/PavementAxis.h/.cpp`.**
   ```cpp
   namespace Pavement
   {
@@ -461,12 +496,42 @@
       AIRSIDE_API void AppendAxis(TArray<FToolVariantAxis>& Out, EPavement Current, TConstArrayView<EPavement> Allowed);
   }
   ```
-  Body: `Offered` returns `Allowed` or `{Grass, Tarmac, Concrete, Reinforced}`; `AppendAxis` adds one axis `Id = "Surface"`, `Label = LOCTEXT(..., "Surface")`, one option per offered pavement with `Id = Pavement::Name(P)`, `Label = FText::FromString(Pavement::Name(P))`, `Current = Offered.IndexOfByKey(Current)`. Move `FRunwayTool::GetVariantAxes`'s surface block (RunwayTool.cpp:103-114) onto `Pavement::AppendAxis(Out, Surface, {})`, keeping its "THE ENUMS' OWN NAMES" comment on the helper.
-- [ ] **Step 4: Fold `ERoadSurface`.** Delete the enum, `RoadSurfacePavement`, `RoadSurfaceName`; `FRoadSegment::Surface` becomes `EPavement Surface = EPavement::Tarmac;`; `IsGrassRoad` compares with `EPavement::Grass`; `SetSegmentSurface(FRoadSegmentId, EPavement)` refuses (returns false, logs `SetSegmentSurface refused: %s is not offered by profile %s`) a pavement not in `Pavement::Offered(Profile->AllowedPavements)`. The road tool's surface row calls `Pavement::AppendAxis(Out, Surface, Profile->AllowedPavements)`. Road and taxiway profile assets (`grep -rl "URoadProfile" Content/Profiles` or wherever the grass branch authored them) get `AllowedPavements = {Tarmac, Grass}`; runway profiles stay empty.
-  - SAVED DATA: `ERoadSurface` had `Tarmac=0, Grass=1`; `EPavement` has `Grass=0, Tarmac=1`. An enum redirect would map by NAME (`ValueChanges` not needed since names match), and UE serialises UENUM properties by name, so `+EnumRedirects=(OldName="/Script/Airside.ERoadSurface",NewName="/Script/Airside.EPavement")` is correct. Add it, then verify: load M_Starter (StarterMapProbeTest) and any level the grass branch saved a grass road into, and assert the grass road still reads `EPavement::Grass` - add that assertion to the grass branch's own level/probe test if it has one; if it has none, say so in the PR.
-  - `BuildCost::GrassRateFactor` and `SurfaceRateFactor` are DELETED here; their callers are rewritten in Task 6. Until then, leave `ForSegment`'s pavement parameter typed `EPavement` and multiply by `Pavement::RateFactor` inline, marked `// TASK 6 moves this into FBuildLine::Amount` (removed in Task 6).
-- [ ] **Step 5: Build; run `-Filter Airside.Tool` and the grass branch's tests (by the filter Task 0 recorded).** Expected: pass.
-- [ ] **Step 6: Commit.** `refactor(pavement): road surfaces use EPavement; one surface row for every tool`
+  `Offered` returns `Allowed` or `{Grass, Tarmac, Concrete, Reinforced}`. `AppendAxis` adds one axis, `Id = "Surface"` (the Id both #353's popout and #356's Shift+key look up), `Label = LOCTEXT("VariantAxisSurface", "Surface")`, one option per offered pavement (`Id = Pavement::Name(P)`, `Label = FText::FromString(Pavement::Name(P))`), `Current = Offered.IndexOfByKey(Current)`. Move BOTH existing row builders onto it, each keeping its "THE ENUM'S OWN NAMES" comment on the helper once: `FRunwayTool::GetVariantAxes` (RunwayTool.cpp:103-114) -> `Pavement::AppendAxis(Out, Surface, {})`; `FRoadDrawTool::GetVariantAxes` (RoadDrawTool.cpp:478-490) -> `Pavement::AppendAxis(Out, Surface, Profile->AllowedPavements)`. `FRoadDrawTool::SelectVariant` (RoadDrawTool.cpp:550-558) maps `Option` through `Pavement::Offered(Profile->AllowedPavements)[Option]` instead of `static_cast<ERoadSurface>(Option)` - an index into the offered list, never into the enum.
+- [ ] **Step 4: The fold.** Delete `ERoadSurface`, `RoadSurfacePavement`, `RoadSurfaceName` from `RunwayFacts.h/.cpp`; every caller (#356's list above) takes `EPavement` / `Pavement::Name`. Add `URoadNetwork::PavementOf` and rewrite `IsGrassRoad` on it (Interfaces). `SurfaceSlotFor` becomes:
+  ```cpp
+  // A FACT ON THE SEGMENT decides its whole width's slot unless it is a tarmac road, whose
+  // bands name their own - the path every taxiway and road has always taken. ONE PAVEMENT
+  // ANSWER (PavementOf) for runway and road alike: #356 asked the runway's facts and the
+  // road's surface separately, and mapped grass across by hand. Grass keeps the grass
+  // runway's slot, so a grass taxiway meeting a grass strip is one field (#356's ruling).
+  const EPavement P = Network.PavementOf(Segment);
+  return Network.IsRunwaySegment(Segment) || P != EPavement::Tarmac
+      ? URoadMaterialSet::RunwaySlotName(P)
+      : NAME_None;
+  ```
+  Keep #356's "EVERY BAND takes it, kerbs and run-offs included" and "M_RunwayGrass already paints no centreline" comments. `RoadLaneMarkingBuilder.cpp`'s no-paint-on-grass test stays `IsGrassRoad`. The junction's `bPaved = !IsGrassRoad(ArmSegment)` stays, with one added line on its comment: `Not "strongest pavement wins" - a runway is paved whatever its surface (above), so the rule is "grass loses".` The route gate:
+  ```cpp
+  // GROUND TOO WEAK for the traveller, by the SAME comparison runway and stand admission use
+  // (FPavementCheck) - not a grass test: #356 gated grass only, which would have passed a jet
+  // needing concrete down a tarmac taxiway. Asked only when the query needs more than grass,
+  // so a vehicle's or a grass-capable aircraft's search never pays the lookup. <keep #356's
+  // turn-path and Find-retry sentences>
+  if (Query.MinimumPavement > EPavement::Grass && Edge->DerivedFrom.IsSet()
+      && !Network.IsRunwaySegment(Edge->DerivedFrom)
+      && !Pavement::Judge(Network.PavementOf(Edge->DerivedFrom), Query.MinimumPavement).Passes())
+  {
+      return;
+  }
+  ```
+  (`!IsRunwaySegment`: #356's "RUNWAYS ARE NOT JUDGED HERE - a strip's surface is RunwayAdmission's" stays true.) `FRouteQuery::MinimumSurface`/`NeedsSurface` become `MinimumPavement`/`NeedsPavement(EPavement)`, their doc comment kept and its "compared on the runway scale through RoadSurfacePavement" sentence replaced by "compared with FPavementCheck, the rule RunwayAdmission and StandAdmission share". The five callers pass `Airframe.MinimumPavement` (GroundTrafficRebuild: `Airframe->MinimumPavement`).
+  - `URoadProfile` gains `AllowedPavements` (doc comment: the reason #356 made a two-step enum, now data; empty = all four, which is what runway profiles leave). Author `{Tarmac, Grass}` on every road and taxiway profile asset (`grep -rl "RoadProfile" Content --include=*.uasset` for the list; set through the same headless authoring path the profiles were made with, force-save, verify each with a byte count of `AllowedPavements`, and a runway profile as the control that must NOT gain it). `SetSegmentSurface` gains the offered-list refusal.
+  - `GrassRateFactor` and `SurfaceRateFactor` are deleted; `ForSegment`'s pavement parameter becomes `EPavement` and multiplies by `Pavement::RateFactor` inline, marked `// Task 5 of the shared-pavement plan moves this into FBuildLine::Amount`. #356's "A FACTOR ON THE PROFILE, not a second set of rates" paragraph moves onto `Pavement::RateFactor`'s header - it is the reason the table is a factor.
+  - SAVED DATA: `ERoadSurface` was `Tarmac=0, Grass=1`; `EPavement` is `Grass=0, Tarmac=1`. UENUM properties serialise by NAME, and the names match, so the redirect is enough: `+EnumRedirects=(OldName="/Script/Airside.ERoadSurface",NewName="/Script/Airside.EPavement")`. #356 shipped 2026-09-27, so a level holding a saved grass road may exist; Step 6 proves the redirect on one.
+- [ ] **Step 5: Build; run `-Filter Airside.Tool`, `-Filter Airside.Build.GrassRoad`, `-Filter Airside.Present.GrassRoadLaid`, `-Filter Airside.Model.RouteGrassGate`, `-Filter Airside.Model`, and `-Filter AirportMgr` (BuildBarWidgetTest).** Expected: all pass, #356's six included, and the two new tests.
+- [ ] **Step 6: Prove saved grass survives, and the gate's widening strands nothing.**
+  - `grep -l "ERoadSurface" Content -r --include=*.umap`. For each hit (if none, lay one: open the worktree editor, draw a grass taxiway on M_ModelYard, save, close), load it after the build and log each segment's `PavementOf` - add the line to `Airside.Present.GrassRoadLaid`'s level variant if it has one, else a one-off `StarterMapProbe`-style assertion. Expected: the grass road reads `grass`.
+  - The widened gate: list every fleet type's `MinimumPavement` (Task 0 baseline) above `Tarmac`. For each, confirm M_Starter's taxiways are at least that strong, or record in the PR that such a type can no longer taxi there and why that is correct. No such type is expected on 2026-09-27 (the fleet's needs were grass or tarmac); the check is that the baseline says so.
+- [ ] **Step 7: Commit.** `refactor(pavement): #356's road surfaces join the one scale - PavementOf, shared gate, one surface row`
 
 ---
 
@@ -781,7 +846,7 @@
   ```
   (`IsStand()` - check the exact predicate name in `RoadEntity.h`; a depot's plot is NOT billed here, it has its own kit upkeep.)
 - [ ] **Step 6: Tool.** `FStandPlotTool` gains `EPavement Pavement = EPavement::Tarmac;`, `GetVariantAxes` -> `Pavement::AppendAxis(Out, Pavement, {})`, `SelectVariant(Axis 0, Option)` sets `Pavement = Pavement::Offered({})[Option]` (refuse out-of-range), and its `WhyStandRefused` / `PlaceStandInPlot` calls pass `Pavement`. The tool's per-outline refusal memo (`StandPlotTool.h:160-170`) must key on the pavement too, or a row change leaves a stale "cannot afford" - add it to the memo key and say so in the memo's comment.
-- [ ] **Step 7: Look.** The pad is drawn in the apron layer (`RoadSurfacePresenter.cpp:353-358`, `Builder.AddApron(Entity.Outline)`). Use the mechanism Task 0 Step 3 recorded for how a grass ROAD is drawn: add `AddApron(const TArray<FVector2D>& Outline, EPavement Pavement)` to `FRoadMeshBuilder` that writes the same attribute the grass road writes, and pass `Entity.Pavement`. If grass roads are drawn by a material section rather than an attribute, the pad needs the apron layer split per pavement instead - that is larger; STOP and report to the user before building it (memory `prefers-manual-editor-steps-over-fragile-automation`: propose the split and its cost).
+- [ ] **Step 7: Look.** DECIDED BY #356'S MECHANISM (2026-09-27 audit): a grass road is drawn by MATERIAL SLOT - `FRoadMeshBuilder::SurfaceSlotFor` hands the whole width the grass runway's slot, resolved through the road layer's `URoadMaterialSet` (`URoadSurfacePresenter::EffectiveMaterialSet`, which already carries the four `RunwaySlotName` slots). The apron layer, where pads are drawn (`RoadSurfacePresenter.cpp:343-372`), is ONE material through `RebuildLayer`. So a grass pad needs the apron layer to take slots: `FRoadMeshBuilder::AddApron(const TArray<FVector2D>& Outline, FName Slot)` tags the polygon's triangles with `Slot` the way the road builder tags bands, and the apron layer's build resolves slots through the same `EffectiveMaterialSet` the road layer uses - `NAME_None` (tarmac pads, bare aprons) keeping today's `Settings.ApronMaterial`. The pad passes `Entity.Pavement == EPavement::Tarmac ? NAME_None : URoadMaterialSet::RunwaySlotName(Entity.Pavement)` - the same rule Task 4 gave `SurfaceSlotFor`, so a grass stand beside a grass taxiway is one field. APPROVAL NEEDED before this step (asked 2026-09-27; see the plan's Open Decisions). Test: `Airside.Build.StandPadSlots` in `RoadSurfaceTest.cpp`, modelled on `Airside.Build.GrassRoadSlots` - a grass pad's triangles carry the grass slot, a tarmac pad's carry none.
 - [ ] **Step 8: Build; run `-Filter Airside.Present`, `-Filter Airside.Tool.Stand`, `-Filter Airside.Build`.** Expected: pass.
 - [ ] **Step 9: Look at it.** In an editor on this worktree (memory `worktree-editor-mcp-port`: `-ini ServerPortNumber=8001` + `AIRSIDE_MCP_PORT`), draw a grass and a tarmac B stand side by side; `python Tools/Mcp.py shot pads.png`. Expected: the grass pad reads as grass. Attach the shot to the PR.
 - [ ] **Step 10: Commit.** `feat(stands): a stand has a pavement - placed, priced, billed by area, drawn`
