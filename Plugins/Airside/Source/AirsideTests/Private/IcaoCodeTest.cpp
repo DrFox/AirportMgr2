@@ -140,6 +140,18 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Code F has no ceiling - nothing is too wide to be a stand"),
 		IcaoCode::MaxStandWidthForLetter(EIcaoCode::F) > 1.0e9);
 
+	// CODE A'S WIDTH BAND IS EMPTY, deliberately (2026-09-26): A and B share the tow lane's width
+	// floor, so depth alone tells them apart. Pinned so a floor change that reopened the band - or
+	// pushed A wider than B - is seen here rather than as a stand reading the wrong letter.
+	TestEqual(TEXT("A's ceiling is A's own floor - A and B share a width, depth decides"),
+		IcaoCode::MaxStandWidthForLetter(EIcaoCode::A), IcaoCode::StandWidthForLetter(EIcaoCode::A), 0.5);
+	TestEqual(TEXT("so the widest-A-deep stand still reads as A"),
+		IcaoCode::LetterForStandSize(IcaoCode::StandWidthForLetter(EIcaoCode::A), IcaoCode::StandDepthForLetter(EIcaoCode::A)),
+		FString(TEXT("A")));
+	TestEqual(TEXT("and the same width at B's depth reads as B"),
+		IcaoCode::LetterForStandSize(IcaoCode::StandWidthForLetter(EIcaoCode::A), IcaoCode::StandDepthForLetter(EIcaoCode::B)),
+		FString(TEXT("B")));
+
 	// AND THE MIRROR. A stand's SIZE decides which airframes may use it, which is the mechanic:
 	// a player who drags a bigger stand gets bigger aircraft as a consequence.
 	//

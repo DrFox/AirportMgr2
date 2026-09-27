@@ -1322,7 +1322,15 @@ int32 URoadNetwork::EnsureStandOutlines()
 	// has always had. Model/ cannot reach Content/ to ask for the resolved figure anyway (see
 	// StandBox::PoseFor's header), but even if it could, using the fleet's CURRENT envelope
 	// here would make an old save's stand outline depend on which content happens to be loaded
-	// the day it loads - a migration whose output moves is not a migration.
+	// the day it loads, and a migration whose output drifts with content is not a migration.
+	//
+	// ITS OUTPUT DID MOVE ONCE, ON PURPOSE (2026-09-26, far-side entry): StandBox::BoxAt builds
+	// the box off EntranceSetback, so the same saved pose now gets a box whose entrance sits
+	// MaxTailAft + wingtip clearance behind the stop mark rather than Depth - MaxNoseFwd - a
+	// legacy stand's box moved away from its taxiway by the difference. That is a change of the
+	// GEOMETRY RULE, made once in code and the same for every load, which is what this paragraph
+	// allows; what it forbids is output that varies with the content loaded. The stop mark is
+	// then re-derived from this box on load (UStandDefinitionCache::RebindStandDefinitions).
 	const FLetterEnvelope CodeCFloor = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C);
 
 	int32 Changed = 0;

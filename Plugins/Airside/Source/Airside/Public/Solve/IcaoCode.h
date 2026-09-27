@@ -198,6 +198,14 @@ namespace IcaoCode
 	 * The widest letter has no letter above it, so its maximum is unbounded and this reports
 	 * DBL_MAX. A stand wider than any aeroplane needs is not an error - see the ruling that a
 	 * small airframe on a large stand is fine.
+	 *
+	 * CODE A'S BAND IS EMPTY since 2026-09-26: A and B share a width floor (5000, set by the
+	 * utility tow's lane, not by either span - see the spec's Decisions), so
+	 * MaxStandWidthForLetter(A) == StandWidthForLetter(A) and no width reads as A on its own. A
+	 * is told from B by DEPTH (3400 against 3950): LetterForStandSize takes the largest letter
+	 * both dimensions fit, so a 5000-wide stand under 3950 deep is an A. The bands still tile -
+	 * an empty band is a width owned by no letter only if it has non-zero extent.
+	 * ENFORCED BY: Airside.Solve.StandWidthIsDerivedFromClearance (the A-band assertions)
 	 */
 	AIRSIDE_API double MaxStandWidthForLetter(EIcaoCode Code);
 

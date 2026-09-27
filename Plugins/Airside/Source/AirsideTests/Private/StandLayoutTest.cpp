@@ -864,4 +864,64 @@ bool FEveryBayEntryReachesItsServicePointTest::RunTest(const FString& Parameters
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShippedCodeCStandMatchesTheBuilderTest,
+	"Airside.Entities.ShippedCodeCStandMatchesTheBuilder",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FShippedCodeCStandMatchesTheBuilderTest::RunTest(const FString& Parameters)
+{
+	// THE GAME PLOPS THE ASSET; EVERY OTHER C TEST MEASURES THE TRANSIENT (final review,
+	// 2026-09-27). DA_Stand_CodeC is a SAVED copy of what BuildCodeCStand laid the day it was
+	// authored, and every change to the template since - the far-side bays of 2026-09-26 among
+	// them - reaches a player only when the asset is re-authored. So the shipped bays are held
+	// against the builder as it is now: an asset left behind by a template change goes red here,
+	// not as a stand in PIE whose bays sit where the tests say they do not.
+	const UEntityDefinition* Shipped =
+		LoadObject<UEntityDefinition>(nullptr, TEXT("/Game/Entities/DA_Stand_CodeC.DA_Stand_CodeC"));
+	if (!TestNotNull(TEXT("DA_Stand_CodeC loads"), Shipped))
+	{
+		return false;
+	}
+
+	// THE SAME AIRCRAFT the asset carries, so the one thing compared is the layout itself.
+	UEntityDefinition* Built = NewObject<UEntityDefinition>(GetTransientPackage());
+	UEntityDefinition::BuildCodeCStand(Built, Shipped->DesignAircraft);
+
+	TestEqual(TEXT("the shipped stand's design vehicle is the one the builder lays C for"),
+		Shipped->DesignVehicle.TypeCode, Built->DesignVehicle.TypeCode);
+	TestTrue(*FString::Printf(TEXT("the shipped extent (%.0f x %.0f) is the builder's (%.0f x %.0f)"),
+			Shipped->RequiredExtent.X, Shipped->RequiredExtent.Y, Built->RequiredExtent.X, Built->RequiredExtent.Y),
+		Shipped->RequiredExtent.Equals(Built->RequiredExtent, 0.5));
+	if (!TestEqual(TEXT("as many bays as the builder lays"), Shipped->ServiceBays.Num(), Built->ServiceBays.Num()))
+	{
+		return false;
+	}
+
+	// BY ANCHOR, never by index - see FResolvedAnchor for why position in an array is not identity.
+	for (const FServiceBay& Want : Built->ServiceBays)
+	{
+		const FServiceBay* Have = Shipped->ServiceBays.FindByPredicate(
+			[&Want](const FServiceBay& Bay) { return Bay.AnchorId == Want.AnchorId; });
+		if (!TestNotNull(*FString::Printf(TEXT("the shipped stand has a bay for '%s'"), *Want.AnchorId.ToString()), Have))
+		{
+			continue;
+		}
+		const FString Who = Want.AnchorId.ToString();
+		TestTrue(*FString::Printf(TEXT("'%s' entry at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who,
+				Have->EntryLocal.X, Have->EntryLocal.Y, Want.EntryLocal.X, Want.EntryLocal.Y),
+			Have->EntryLocal.Equals(Want.EntryLocal, 0.5));
+		TestTrue(*FString::Printf(TEXT("'%s' exit at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who,
+				Have->ExitLocal.X, Have->ExitLocal.Y, Want.ExitLocal.X, Want.ExitLocal.Y),
+			Have->ExitLocal.Equals(Want.ExitLocal, 0.5));
+		TestTrue(*FString::Printf(TEXT("'%s' park at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who,
+				Have->ParkLocal.X, Have->ParkLocal.Y, Want.ParkLocal.X, Want.ParkLocal.Y),
+			Have->ParkLocal.Equals(Want.ParkLocal, 0.5));
+		TestEqual(*FString::Printf(TEXT("'%s' entry heading"), *Who), Have->EntryHeading, Want.EntryHeading, 1.0e-6);
+		TestEqual(*FString::Printf(TEXT("'%s' exit heading"), *Who), Have->ExitHeading, Want.ExitHeading, 1.0e-6);
+		TestEqual(*FString::Printf(TEXT("'%s' park heading"), *Who), Have->ParkHeading, Want.ParkHeading, 1.0e-6);
+	}
+	return true;
+}
+
 #endif
