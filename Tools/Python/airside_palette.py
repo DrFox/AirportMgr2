@@ -53,6 +53,18 @@ TAXIWAY_ASPHALT = "#5A6165"
 APRON_CONCRETE = "#8E8D84"
 CONCRETE_HIGHLIGHT = "#A5A49A"
 
+# --- Plot paint (2026-09-27, zoomed-out readability) ------------------------------------
+# A fuel depot's pad: a pale slab inside a red hazard band, so the plot reads as fuel at max
+# zoom without any UI (samples/fuel-pad-options.png, option 1). Selected in M_ApronConcrete by
+# the apron vertex's UV1.X paint tag - see FRoadMeshBuilder::EApronPaint.
+#
+# COOLER THAN THEY LOOK ON PURPOSE. The grade and sun warm everything: APRON_CONCRETE renders
+# #A69274 (tan) and TAXIWAY_ASPHALT #686255, measured from samples/fuel-built.png. These are
+# the mock-up's on-screen targets (#C8C3B4 slab, #B8382E band) divided by that measured
+# per-channel shift - a first guess, to be re-measured from a screenshot, not a finding.
+FUEL_SLAB = "#AEB9C4"
+HAZARD_BAND = "#9D3634"
+
 # --- Terrain & ground (sampled from the concept sheet) -----------------------------------
 GRASS_MOWN = "#7D8E47"
 GRASS_ROUGH = "#748546"

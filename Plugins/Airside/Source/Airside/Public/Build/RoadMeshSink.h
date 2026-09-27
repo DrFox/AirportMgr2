@@ -16,7 +16,12 @@ struct FRoadMeshBuffers
 	 */
 	TArray<FVector2f> UV0;
 
-	/** X = lateral offset across the profile in uu, Y = distance along the centreline in uu. */
+	/**
+	 * X = lateral offset across the profile in uu, Y = distance along the centreline in uu.
+	 *
+	 * ON AN APRON, X is instead a paint tag (FRoadMeshBuilder::EApronPaint) and Y is zero:
+	 * a polygon has no centreline, and M_ApronConcrete reads X as which paint it is.
+	 */
 	TArray<FVector2f> UV1;
 
 	/**
@@ -58,6 +63,26 @@ struct FRoadMeshBuffers
 	 * that nothing this small is ever rasterised, whatever the scale.
 	 */
 	static constexpr double MinSliverArea = 1e-6;
+
+	/**
+	 * Other's triangles after this one's, indices rebased. NO WELDING across the join: that
+	 * is the point, for surfaces that meet without being one surface - each apron paint is
+	 * triangulated by its own builder so a vertex never carries two paints' tags.
+	 */
+	void Append(const FRoadMeshBuffers& Other)
+	{
+		const int32 Base = Positions.Num();
+		Positions.Append(Other.Positions);
+		UV0.Append(Other.UV0);
+		UV1.Append(Other.UV1);
+		UV2.Append(Other.UV2);
+		Indices.Reserve(Indices.Num() + Other.Indices.Num());
+		for (const int32 Index : Other.Indices)
+		{
+			Indices.Add(Base + Index);
+		}
+		MaterialIDs.Append(Other.MaterialIDs);
+	}
 
 	/**
 	 * One triangle from three ALREADY-APPENDED vertex indices A, B, C - guards degenerate

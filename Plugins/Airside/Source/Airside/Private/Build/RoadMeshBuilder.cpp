@@ -703,12 +703,13 @@ void FRoadMeshBuilder::AddApron(const FApronSurface& Apron)
 	AddApron(Apron.Outline);
 }
 
-void FRoadMeshBuilder::AddApron(const TArray<FVector2D>& Outline)
+void FRoadMeshBuilder::AddApron(const TArray<FVector2D>& Outline, EApronPaint Paint)
 {
 	if (Outline.Num() < 3)
 	{
 		return;
 	}
+	const FVector2f PaintUV1(static_cast<float>(Paint), 0.0f);
 
 	// The engine's ear-clipping triangulator. The junction solver's apex fan cannot be
 	// reused here: it needs a polygon every rim vertex can see, and an apron following a
@@ -721,9 +722,9 @@ void FRoadMeshBuilder::AddApron(const TArray<FVector2D>& Outline)
 	Corners.Reserve(Outline.Num());
 	for (const FVector2D& Corner : Outline)
 	{
-		// UV1 zero, and UV2 carrying no junction blend with the reserved channel at one -
-		// the same values a segment far from any junction would hold.
-		Corners.Add(WeldVertex(Corner, FVector2f(0.0f, 0.0f), FVector2f(0.0f, 1.0f)));
+		// UV1 the paint tag (zero for concrete), and UV2 carrying no junction blend with the
+		// reserved channel at one - the same values a segment far from any junction would hold.
+		Corners.Add(WeldVertex(Corner, PaintUV1, FVector2f(0.0f, 1.0f)));
 	}
 
 	for (const UE::Geometry::FIndex3i& Triangle : Triangles)
@@ -736,6 +737,38 @@ void FRoadMeshBuilder::AddApron(const TArray<FVector2D>& Outline)
 			// FApronSurface::SurfaceMaterialSlot stays unread until that follow-up.
 			AddTriangle(Corners[Triangle.A], Corners[Triangle.B], Corners[Triangle.C], 0);
 		}
+	}
+}
+
+void FRoadMeshBuilder::AddApronRing(TConstArrayView<FVector2D> Outer, TConstArrayView<FVector2D> Inner,
+	EApronPaint Paint)
+{
+	const int32 Count = Outer.Num();
+	if (Count < 3 || Inner.Num() != Count)
+	{
+		return;
+	}
+	const FVector2f PaintUV1(static_cast<float>(Paint), 0.0f);
+	const FVector2f NoBlend(0.0f, 1.0f);
+
+	TArray<int32> OuterIds;
+	TArray<int32> InnerIds;
+	OuterIds.Reserve(Count);
+	InnerIds.Reserve(Count);
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		OuterIds.Add(WeldVertex(Outer[Index], PaintUV1, NoBlend));
+		InnerIds.Add(WeldVertex(Inner[Index], PaintUV1, NoBlend));
+	}
+
+	// Two triangles per edge, (O_i, O_i+1, I_i+1) and (O_i, I_i+1, I_i). Inner lies on the
+	// interior side of every edge, so both are wound as Outer is - the same winding the ear
+	// clipper gives the slab (bOrientAsHoleFill false), and AddTriangle turns both up.
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		const int32 Next = (Index + 1) % Count;
+		AddTriangle(OuterIds[Index], OuterIds[Next], InnerIds[Next], 0);
+		AddTriangle(OuterIds[Index], InnerIds[Next], InnerIds[Index], 0);
 	}
 }
 
