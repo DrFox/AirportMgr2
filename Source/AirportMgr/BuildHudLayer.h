@@ -7,11 +7,12 @@ class UBuildBarWidget;
 class UInspectorWidget;
 class UOfferInboxWidget;
 class ULedgerPanelWidget;
+class ULandAircraftPanelWidget;
 class UToastStackWidget;
 class APlayerController;
 
 /**
- * Owns the five HUD widgets a build driver shows, and the one recipe that creates each of
+ * Owns the six HUD widgets a build driver shows, and the one recipe that creates each of
  * them the same way - see CreateConfiguredWidget.
  *
  * Pulled out of ARoadBuildController by issue #94: BeginPlay repeated "the configured
@@ -68,6 +69,14 @@ public:
 	/** Where the money went. Hidden until the player asks - see ULedgerPanelWidget. */
 	UPROPERTY(Transient)
 	TObjectPtr<ULedgerPanelWidget> LedgerPanel;
+
+	/** The Land panel's Blueprint class; null means the plain C++ panel, as above. */
+	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
+	TSubclassOf<ULandAircraftPanelWidget> LandPanelClass;
+
+	/** Key 7's aircraft chooser. Hidden until asked for - see ULandAircraftPanelWidget. */
+	UPROPERTY(Transient)
+	TObjectPtr<ULandAircraftPanelWidget> LandPanel;
 
 	/** The toast stack's Blueprint class; null means the plain C++ stack, as above. */
 	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")

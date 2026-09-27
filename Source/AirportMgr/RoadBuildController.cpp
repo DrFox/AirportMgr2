@@ -3,6 +3,7 @@
 #include "BuildActions.h"
 #include "BuildCameraComponent.h"
 #include "BuildHudLayer.h"
+#include "LandAircraftPanelWidget.h"
 #include "LedgerPanelWidget.h"
 #include "Components/InputComponent.h"
 #include "Content/AirsideSettings.h"
@@ -84,7 +85,7 @@ void ARoadBuildController::BeginPlay()
 	Mode.SetHideCursorDuringCapture(false);
 	SetInputMode(Mode);
 
-	// The four HUD widgets - see UBuildHudLayer::CreateAll for the recipe and the Z-orders.
+	// The six HUD widgets - see UBuildHudLayer::CreateAll for the recipe and the Z-orders.
 	Hud->CreateAll(*this);
 
 	// The key list is GENERATED from the same registry SetupInputComponent binds from and
@@ -230,8 +231,12 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ARoadBuildController::ZoomOut);
 }
 
-void ARoadBuildController::LandAircraftNearViewFocus()
+void ARoadBuildController::LandAircraftNearViewFocus(const UAircraftType* Type)
 {
+	// Recorded BEFORE the Target check, so the Land panel's composition test - a world with no
+	// network to land on - can still see which type the click asked for.
+	LastLandRequest = Type;
+
 	if (Target == nullptr)
 	{
 		return;
@@ -245,14 +250,14 @@ void ARoadBuildController::LandAircraftNearViewFocus()
 	// screen.
 	const FVector2D Focus = BuildCameraComp->ViewFocus();
 
-	// UNLESS A TYPE IS CONFIGURED FOR THE KEY. That override exists so a particular aeroplane
-	// can be put on the runway without waiting for the board to offer one, and it is read HERE
-	// and nowhere else - offers and their arrivals still resolve their own type, so this
-	// cannot become the game's behaviour by being forgotten. Resolved to an FAirframe (the
-	// shape every dispatch already takes, issue #29) once, so BOTH paths below - through the
-	// board and the no-runtime fallback - honour it the same way the single pre-split method
-	// used to.
-	const UAircraftType* Configured = LandAircraftType.LoadSynchronous();
+	// UNLESS THE PANEL CHOSE A TYPE. That choice exists so a particular aeroplane can be put on
+	// the runway without waiting for the board to offer one, and it is read HERE and nowhere
+	// else - offers and their arrivals still resolve their own type, so this cannot become the
+	// game's behaviour by being forgotten. It was DefaultGame.ini's LandAircraftType until
+	// 2026-09-27; see the header. Resolved to an FAirframe (the shape every dispatch already
+	// takes, issue #29) once, so BOTH paths below - through the board and the no-runtime
+	// fallback - honour it the same way the single pre-split method used to.
+	const UAircraftType* Configured = Type;
 	const FAirframe Override = Configured != nullptr ? Configured->Airframe() : FAirframe();
 
 	// THROUGH THE BOARD WHEN THERE IS ONE, so the aeroplane belongs to a flight the rest of
@@ -267,7 +272,7 @@ void ARoadBuildController::LandAircraftNearViewFocus()
 	// No runtime: the editor mode, which has no game instance and so no board - LandNear needs
 	// one to reach FlightBoard through, so the direct dispatch this used to fall back to when
 	// UOpsRuntimeSubsystem::Get failed stays here, the one path LandNear cannot cover. Still
-	// honours the configured override, same as the pre-split method did.
+	// honours the chosen type, same as the pre-split method did.
 	//
 	// DispatchArrival has already logged which runway, which exit and which stand it chose,
 	// or why it declined.
@@ -832,6 +837,26 @@ void ARoadBuildController::ToggleLedger()
 bool ARoadBuildController::IsLedgerShowing() const
 {
 	return Hud != nullptr && Hud->LedgerPanel != nullptr && Hud->LedgerPanel->IsShowing();
+}
+
+void ARoadBuildController::ToggleLandPanel()
+{
+	if (Hud != nullptr && Hud->LandPanel != nullptr)
+	{
+		Hud->LandPanel->Toggle();
+		UE_LOG(LogRoadBuild, Log, TEXT("Land panel %s"),
+			Hud->LandPanel->IsShowing() ? TEXT("opened") : TEXT("closed"));
+	}
+}
+
+bool ARoadBuildController::IsLandPanelShowing() const
+{
+	return Hud != nullptr && Hud->LandPanel != nullptr && Hud->LandPanel->IsShowing();
+}
+
+FVector2D ARoadBuildController::GetViewFocus() const
+{
+	return BuildCameraComp != nullptr ? BuildCameraComp->ViewFocus() : FVector2D::ZeroVector;
 }
 
 bool ARoadBuildController::IsPaused() const

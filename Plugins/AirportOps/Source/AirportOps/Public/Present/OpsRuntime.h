@@ -106,9 +106,9 @@ public:
 	 *
 	 * Override is the one airframe the caller insists on, or null to resolve the content
 	 * default the airport would otherwise land - see UAirsideSettings::ResolveDefaultAirframe.
-	 * The CALLER still owns deciding whether an override applies (ARoadBuildController::
-	 * LandAircraftType is its own Config UPROPERTY, a testing-only override on the driver, not
-	 * a fact about the airport) - this only decides what happens once one is or is not given.
+	 * The CALLER still owns deciding whether an override applies (the driver's Land panel
+	 * passes the type the player picked - a choice on the driver, not a fact about the
+	 * airport) - this only decides what happens once one is or is not given.
 	 *
 	 * Returns EArrivalRefusal::NoRunway when there is no attached network to check a runway
 	 * against at all (Target null, or its Network or ground traffic not yet built), and

@@ -448,15 +448,15 @@ EArrivalRefusal UOpsRuntime::LandNear(const FVector2D& Focus, const FAirframe* O
 	// ResolveDefaultAirframe.
 	//
 	// UNLESS THE CALLER PASSED ONE. Override exists so a particular aeroplane can be put on the
-	// runway without waiting for the board to offer one - ARoadBuildController::LandAircraftType
-	// is the one place that override is configured and read, and it stays there: it is a
-	// testing-only Config UPROPERTY on the driver, not a fact about the airport this class owns.
+	// runway without waiting for the board to offer one - the driver's Land panel is the one
+	// place that choice is made (ARoadBuildController::LandAircraftNearViewFocus's argument,
+	// DefaultGame.ini's LandAircraftType until 2026-09-27), and it stays there: a player's pick
+	// on the driver, not a fact about the airport this class owns.
 	const FAirframe Airframe = Override != nullptr ? *Override : UAirsideSettings::ResolveDefaultAirframe();
 	if (Override != nullptr)
 	{
 		UE_LOG(LogAirportOps, Log,
-			TEXT("Land: using the configured test type (%s) rather than the default - clear ")
-			TEXT("LandAircraftType in DefaultGame.ini to restore it"),
+			TEXT("Land: using the chosen type (%s) rather than the default"),
 			*Airframe.TypeCode.ToString());
 	}
 	else
