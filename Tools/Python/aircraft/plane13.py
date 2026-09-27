@@ -86,12 +86,12 @@ GEAR = {
     "extend_below_height": 15000.0,
 }
 
-# The commonly quoted 757-300 take-off figure is about 2,550 m on the higher-thrust engines;
-# 2,650 allows for the PW2037. Must stay under plane11's 2,750 - the first Code D rung has to
-# come before E.
+# MODEL ROLL x 1.1 since 2026-09-27 - see build_aircraft_type.py, "FIELD LENGTHS ARE THE MODEL'S".
+# Published was 2,650 m (2,550 commonly quoted, plus room for the PW2037). Must stay under
+# plane11's take-off figure - the first Code D rung has to come before E.
 REQUIREMENTS = {
-    "takeoff_field_length": 265000.0,   # 2,650 m
-    "landing_field_length": 180000.0,   # 1,800 m at max landing weight
+    "takeoff_field_length": 155000.0,   # 1550 m = model roll 1408 m x 1.1; published 2,650 m
+    "landing_field_length": 112000.0,   # 1120 m = model landing x1.25 1012 m x 1.1; published 1,800 m at max landing weight
 }
 
 TURNAROUND_SECONDS = 3000.0   # fifty minutes: ~250 seats through two doors

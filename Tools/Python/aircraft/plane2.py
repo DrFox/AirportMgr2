@@ -75,13 +75,12 @@ ENGINE = {
     "spool_down_seconds": 9.0,
 }
 
-# PUBLISHED FIELD LENGTHS, and they may never be shorter than the roll the model computes. The
-# take-off roll these figures produce is about 17,800 uu (178 m), from FTakeoffRun::RequiredRoll.
-# The values are the real aeroplane's: 1,200 ft to fifty feet on take-off and 1,050 ft landing -
-# against the Meridian's 510 m and 400 m, the short field the type is famous for.
+# MODEL ROLL x 1.1 since 2026-09-27 - see build_aircraft_type.py, "FIELD LENGTHS ARE THE MODEL'S".
+# Still the shortest field in the game, as the real aeroplane's 1,200 ft to fifty feet is: the
+# model rolls it in 178 m. The 290 m landing is what MinimumRunwayLength's 300 m floor is under.
 REQUIREMENTS = {
-    "takeoff_field_length": 36600.0,   # 366 m
-    "landing_field_length": 32000.0,   # 320 m
+    "takeoff_field_length": 20000.0,   # 200 m = model roll 178 m x 1.1; published 366 m
+    "landing_field_length": 29000.0,   # 290 m = model landing x1.25 262 m x 1.1; published 320 m
 }
 
 TURNAROUND_SECONDS = 900.0   # a 19-seat commuter turns in fifteen minutes, not thirty

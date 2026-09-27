@@ -15,7 +15,9 @@ copies had already drifted where hand-copying missed a line - propeller_diameter
 never read back on nine of fourteen, tailplane_span checked on four, the ground surface/approach
 PASS line dropped from the three newest scripts, plane2's fixed gear never asserted, plane4's
 gear-cycle-vs-clear-altitude check never added. GEOMETRY IS MEASURED, PERFORMANCE IS PUBLISHED
-remains true of every aircraft here; only the SCRIPT that says so is now one script.
+remains true of every aircraft here - EXCEPT THE FIELD LENGTHS, which since 2026-09-27 are the
+model's own (see "FIELD LENGTHS ARE THE MODEL'S" below); only the SCRIPT that says so is now one
+script.
 
 WHAT LIVES WHERE. This file is the MECHANISM: it knows how to read a .glb's part bounds, walk a
 skeleton's reference pose, average a wheel-bone group into an axle, drive the six performance
@@ -815,6 +817,17 @@ def _author_via_dicts(spec):
             say("PASS the %.0f s gear cycle finishes at about %.0f uu, below the %.0f uu the "
                 "agent is cleared at" % (cycle, top, clear))
 
+    # FIELD LENGTHS ARE THE MODEL'S (2026-09-27), not the published ones each spec's inline
+    # comment still quotes. Each is Airside.Content.FieldLengthsCoverTheRoll's logged model figure
+    # - FTakeoffRun::RequiredRoll for take-off, FLandingRun::RequiredLandingDistance x
+    # LandingMargin for landing - times 1.1, rounded UP to 10 m. The published figures were
+    # certified distances (engine failure, a 1.67 landing factor) or totals over a 50 ft obstacle,
+    # and aircraft in this game fly neither: they took off and landed in 50-75% of the runway the
+    # admission demanded. 1.1 is a cushion, not a safety case - the test's floor is the model
+    # itself. Two figures sit ABOVE model x 1.1, raised to keep a fleet-ladder row (a type that
+    # must ask less than another): the Meridian's take-off (AircraftType.cpp) and the King Air's
+    # (plane5.py). A change to GROUND/CLIMB/APPROACH moves the roll, so re-read the test's log
+    # line and redo the figure; the test goes red if the roll ever outgrows it.
     requirements = asset.get_editor_property("requirements")
     for field_name, value in spec.requirements.items():
         requirements.set_editor_property(field_name, value)

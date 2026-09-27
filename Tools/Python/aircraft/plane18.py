@@ -98,8 +98,8 @@ GEAR = {
 }
 
 REQUIREMENTS = {
-    "takeoff_field_length": 130000.0,   # 1,300 m at MTOW
-    "landing_field_length": 105000.0,   # 1,050 m, ~1,030 quoted, rounded up
+    "takeoff_field_length": 97000.0,   # 970 m = model roll 880 m x 1.1; published 1,300 m at MTOW
+    "landing_field_length": 78000.0,   # 780 m = model landing x1.25 704 m x 1.1; published 1,050 m, ~1,030 quoted, rounded up
 }
 
 TURNAROUND_SECONDS = 1200.0   # 34 seats through one forward airstair door: twenty minutes

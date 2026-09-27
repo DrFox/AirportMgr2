@@ -198,8 +198,8 @@ FGuideAnchor BareAnchor(const FVector2D& Origin)
  * runway is not a road kind - it is a segment placed through PlaceRunway with a runway
  * profile, which is what URoadNetwork::IsRunwaySegment then recognises.
  *
- * Minimum is dropped first: MinimumRunwayLength defaults to 50000 uu and PlaceRunway refuses
- * anything under it, so a test strip either lowers the bar or is half a kilometre long.
+ * Minimum is dropped first: MinimumRunwayLength defaults to 30000 uu (50000 until 2026-09-27)
+ * and PlaceRunway refuses anything under it, so a test strip either lowers the bar or is 300 m long.
  * MeshFreshnessTest does exactly this, for exactly this reason.
  */
 bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To, double Minimum)

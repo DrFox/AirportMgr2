@@ -4,8 +4,8 @@ GEOMETRY IS MEASURED, PERFORMANCE IS PUBLISHED, as every aircraft in this packag
 
 WHAT THIS TYPE IS FOR. plane6's 777 was the first Code E aeroplane and the argument that an
 airport has to be REBUILT rather than extended. This is Code F - the last letter there is - and
-what it adds is not a longer runway (its take-off field length is SHORTER than the 777's) but
-WIDTH: 79.75 m of span against the 777's 64.78, 7.4 m of fuselage, 80 m stands, 25 m taxiways. A
+what it adds is mainly WIDTH (its published take-off field length is shorter than the 777's,
+though the game's model-derived one is not - see REQUIREMENTS): 79.75 m of span against the 777's 64.78, 7.4 m of fuselage, 80 m stands, 25 m taxiways. A
 Code F stand is the largest thing the game can lay, and this is the one aeroplane that needs it.
 
 THE PRIMARY SOURCE IS ON DISK FOR EVERYTHING, AND THAT IS NEW. plane6's header records that
@@ -101,11 +101,14 @@ GEAR = {
     "extend_below_height": 15000.0,
 }
 
-# THE TAKE-OFF FIELD LENGTH IS SHORTER THAN THE 777-300ER's 3,120 m, which is the whole reason
-# this type's gameplay claim is WIDTH rather than length.
+# MODEL ROLL x 1.1 since 2026-09-27 - see build_aircraft_type.py, "FIELD LENGTHS ARE THE MODEL'S".
+# NO LONGER SHORTER THAN THE 777's. Published, it was (~3,000 m against 3,120), and that was the
+# whole reason this type's claim was WIDTH rather than length. The model's roll puts it ABOVE the
+# 777 (2,390 m against 2,200), from the lower thrust-to-weight in GROUND's take-off accel (180
+# against 220). No ladder row pins the old order; it asks for both now.
 REQUIREMENTS = {
-    "takeoff_field_length": 300000.0,   # ~3,000 m at 575 t, AC 3-3-1
-    "landing_field_length": 205000.0,   # ~2,050 m at 395 t, AC 3-4-1
+    "takeoff_field_length": 239000.0,   # 2390 m = model roll 2171 m x 1.1; published ~3,000 m at 575 t, AC 3-3-1
+    "landing_field_length": 109000.0,   # 1090 m = model landing x1.25 984 m x 1.1; published ~2,050 m at 395 t, AC 3-4-1
 }
 
 TURNAROUND_SECONDS = 7200.0   # two hours: 525 seats on two decks through eight doors

@@ -97,8 +97,8 @@ GEAR = {
 }
 
 REQUIREMENTS = {
-    "takeoff_field_length": 50000.0,   # 500 m, ~1,600 ft over 50 ft rounded up
-    "landing_field_length": 58000.0,   # 580 m, ~1,900 ft over 50 ft rounded up
+    "takeoff_field_length": 43000.0,   # 430 m = model roll 387 m x 1.1; published 500 m, ~1,600 ft over 50 ft rounded up
+    "landing_field_length": 44000.0,   # 440 m = model landing x1.25 399 m x 1.1; published 580 m, ~1,900 ft over 50 ft rounded up
 }
 
 TURNAROUND_SECONDS = 720.0   # plane16's: six seats, front door and aft door, plus fuel

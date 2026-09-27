@@ -83,8 +83,8 @@ ENGINE = {
 }
 
 REQUIREMENTS = {
-    "takeoff_field_length": 74000.0,   # 740 m, 2,420 ft rounded up
-    "landing_field_length": 54000.0,   # 540 m, 1,740 ft rounded up
+    "takeoff_field_length": 56000.0,   # 560 m = model roll 506 m x 1.1; published 740 m, 2,420 ft rounded up
+    "landing_field_length": 37000.0,   # 370 m = model landing x1.25 329 m x 1.1; published 540 m, 1,740 ft rounded up
 }
 
 TURNAROUND_SECONDS = 720.0   # twelve minutes, plane5's: between the 172's ten and the Otter's 15

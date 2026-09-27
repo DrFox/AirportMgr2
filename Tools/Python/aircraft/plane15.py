@@ -86,8 +86,8 @@ ENGINE = {
 }
 
 REQUIREMENTS = {
-    "takeoff_field_length": 57000.0,   # 570 m, 1,868 ft over 50 ft rounded up
-    "landing_field_length": 71000.0,   # 710 m, 2,325 ft over 50 ft rounded up
+    "takeoff_field_length": 43000.0,   # 430 m = model roll 384 m x 1.1; published 570 m, 1,868 ft over 50 ft rounded up
+    "landing_field_length": 39000.0,   # 390 m = model landing x1.25 354 m x 1.1; published 710 m, 2,325 ft over 50 ft rounded up
 }
 
 TURNAROUND_SECONDS = 600.0   # four seats, two gull-wing doors: ten minutes, plane1's

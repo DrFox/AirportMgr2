@@ -103,8 +103,8 @@ GEAR = {
 }
 
 REQUIREMENTS = {
-    "takeoff_field_length": 312000.0,   # 3,120 m - more than double the Q400's
-    "landing_field_length": 186000.0,   # 1,860 m at max landing weight
+    "takeoff_field_length": 220000.0,   # 2200 m = model roll 1992 m x 1.1; published 3,120 m - more than double the Q400's
+    "landing_field_length": 126000.0,   # 1260 m = model landing x1.25 1137 m x 1.1; published 1,860 m at max landing weight
 }
 
 TURNAROUND_SECONDS = 5400.0   # ninety minutes: 396 seats through four doors, plus long-haul turn

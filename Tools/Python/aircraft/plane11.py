@@ -84,8 +84,8 @@ GEAR = {
 
 # ALSO plane13's CEILING, typed into that test's row: the 757-300 must ask less than this.
 REQUIREMENTS = {
-    "takeoff_field_length": 275000.0,   # 2,750 m
-    "landing_field_length": 210000.0,   # 2,100 m at max landing weight
+    "takeoff_field_length": 175000.0,   # 1750 m = model roll 1585 m x 1.1; published 2,750 m
+    "landing_field_length": 119000.0,   # 1190 m = model landing x1.25 1081 m x 1.1; published 2,100 m at max landing weight
 }
 
 TURNAROUND_SECONDS = 5400.0   # ninety minutes, plane6's: ~370 seats through four doors
