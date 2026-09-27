@@ -5,6 +5,7 @@
 #include "Entities/AircraftType.h"
 #include "Model/RoadEntity.h"
 #include "Model/RouteSearch.h"
+#include "Model/Vehicle.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/LetterEnvelope.h"
 #include "EntityDefinition.generated.h"
@@ -247,6 +248,19 @@ public:
 	 * is the whole reason StandWidthForLetter derives width rather than storing it.
 	 */
 	UPROPERTY(VisibleAnywhere) FVector2D RequiredExtent = FVector2D::ZeroVector;
+
+	/**
+	 * The vehicle ServiceBays' lanes were laid for and proven drivable by - BuildStandTemplate's
+	 * Design argument, stored as it was built, so a service asking "may this vehicle serve here"
+	 * (VehicleFit::NoLargerThan against it) asks THIS definition and not a resolve that could have
+	 * moved on since (task 7 fix round 1: a per-letter table beside it held the same fact twice).
+	 *
+	 * COMPUTED, like ServiceBays and RequiredExtent, never authored. An asset saved before this
+	 * field existed loads it empty (TypeCode None); UAirsideSettings::ResolveStandDesignVehicleOf falls back to
+	 * the letter's resolve then, and says so.
+	 * ENFORCED BY: AirportOps.Fuel.StandDesignVehicleFallsBackWhenUnauthored
+	 */
+	UPROPERTY(VisibleAnywhere) FVehicle DesignVehicle;
 
 	/**
 	 * What the ground here can provide at all, whether from fixed plant or from equipment

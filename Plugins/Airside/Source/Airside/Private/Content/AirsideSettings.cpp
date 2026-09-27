@@ -141,6 +141,27 @@ FVehicle UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode Letter)
 		? ResolveUtilityTowVehicle() : ResolveDefaultVehicle();
 }
 
+FVehicle UAirsideSettings::ResolveStandDesignVehicleOf(const UEntityDefinition* Definition, EIcaoCode Letter)
+{
+	if (Definition != nullptr && !Definition->DesignVehicle.TypeCode.IsNone())
+	{
+		return Definition->DesignVehicle;
+	}
+
+	// ONCE PER DEFINITION, by path: a fuel service asks this for every offer to every stand, and
+	// a line per ask would bury the one that says which asset wants re-authoring.
+	static TSet<FString> Warned;
+	const FString Who = Definition != nullptr ? Definition->GetPathName() : FString(TEXT("(no definition)"));
+	if (!Warned.Contains(Who))
+	{
+		Warned.Add(Who);
+		UE_LOG(LogAirsideContent, Warning,
+			TEXT("Stand definition %s carries no DesignVehicle (saved before the field existed?); assuming Code %s's, %s. Re-author it (Tools/Python/build_stand_asset.py)."),
+			*Who, IcaoCode::ToLetter(Letter), *ResolveStandDesignVehicle(Letter).TypeCode.ToString());
+	}
+	return ResolveStandDesignVehicle(Letter);
+}
+
 namespace AirsideSettingsTierCache
 {
 	/** What ResolveTierDesignVehicles last resolved, and from which content set and Wide asset. */

@@ -387,6 +387,9 @@ void UEntityDefinition::BuildStandTemplate(
 	const double Depth = IcaoCode::StandDepthForLetter(Letter);
 	const double NoseFwd = Envelope.MaxNoseFwd;
 
+	// WHAT EVERY LANE BELOW IS LAID FOR, kept with them - see DesignVehicle.
+	Definition.DesignVehicle = Design;
+
 	// THE STAND BOX, in the definition's own local space. The back edge is the ENTRANCE, on the
 	// taxiway, EntranceSetback behind the stop mark - the ONE figure StandBox::PoseFor places the
 	// stop mark by, so the template and the placed box agree by construction - and the front

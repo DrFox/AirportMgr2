@@ -219,6 +219,16 @@ public:
 	static FVehicle ResolveStandDesignVehicle(EIcaoCode Letter);
 
 	/**
+	 * What a PLACED stand's lanes were built for: its definition's own DesignVehicle, the vehicle
+	 * BuildStandTemplate laid them for. A definition that does not carry one - an asset saved
+	 * before the field existed, or none at all - falls back to ResolveStandDesignVehicle(Letter)
+	 * and logs a Warning once per definition, because the answer is then a guess about how the
+	 * stand was built rather than a fact read off it (task 7 fix round 1).
+	 * ENFORCED BY: AirportOps.Fuel.StandDesignVehicleFallsBackWhenUnauthored
+	 */
+	static FVehicle ResolveStandDesignVehicleOf(const UEntityDefinition* Definition, EIcaoCode Letter);
+
+	/**
 	 * THE ONE PLACE a service-road width tier names its design vehicle (user ruling 2026-09-25,
 	 * see FRoadDesignVehicles): the Wide tier - ServiceRoadProfiles[WideServiceTier] - is
 	 * designed for the articulated rig (ResolveRigVehicle), and every other tier is left to the

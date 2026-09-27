@@ -167,6 +167,12 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// that only the tow was proven to drive.
 	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand
 	FuelService->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
+	// AND WHAT EACH STAND WAS BUILT FOR, read off its own definition when the guard asks - see
+	// UFuelService::DesignVehicleOf for why the read is handed down rather than made there.
+	FuelService->DesignVehicleOf = [](const FEntityInstance& Stand)
+	{
+		return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UFuelService::LetterOfStand(Stand));
+	};
 	{
 		// READ BACK OFF THE TABLE, every letter, rather than a banner typed beside the resolve:
 		// the line then says what dispatch will actually send.
@@ -175,7 +181,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		{
 			const EIcaoCode Letter = static_cast<EIcaoCode>(Index);
 			PerLetter += FString::Printf(TEXT("%s %s  "), IcaoCode::ToLetter(Letter),
-				*FuelService->VehiclesFor(Letter).Sent.TypeCode.ToString());
+				*FuelService->VehiclesFor(Letter).TypeCode.ToString());
 		}
 		UE_LOG(LogAirportOps, Log, TEXT("Fuel vehicles by stand letter: %s"), *PerLetter.TrimEnd());
 	}

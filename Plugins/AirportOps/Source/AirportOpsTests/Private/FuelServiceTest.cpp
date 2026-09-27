@@ -268,6 +268,10 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	// acceleration, not the one every other caller of DispatchAgent gets. THE SAME RESOLVE,
 	// through the same loop, so the fixture's letters get the vehicles the game's do.
 	Service->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
+	Service->DesignVehicleOf = [](const FEntityInstance& Stand)
+	{
+		return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UFuelService::LetterOfStand(Stand));
+	};
 
 	FGuidelineNodeId TaxiSouth, TaxiNorth;
 	LayLine(*Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
@@ -673,12 +677,13 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 	{
 		FFuelFixture Fixture;
 		Fixture.Build(/*bWithRoad=*/true);
-		// BOTH halves of the fixture stand's letter entry: a stand DRAWN for the 20 m body too, so
-		// the VehicleTooLarge guard (Sent larger than Design) does not answer first - this case
-		// is about the road.
-		FLetterFuelVehicles& Vehicles = Fixture.Service->VehiclesFor(EIcaoCode::C);
-		Vehicles.Design.BodyWidth = 2000.0;
-		Vehicles.Sent.BodyWidth = 2000.0;
+		// THE LETTER SENDS the 20 m body, and the stand is read as BUILT for it too, so the
+		// VehicleTooLarge guard (sent larger than built-for) does not answer first - this case is
+		// about the road.
+		FVehicle& Sent = Fixture.Service->VehiclesFor(EIcaoCode::C);
+		Sent.BodyWidth = 2000.0;
+		const FVehicle Wide = Sent;
+		Fixture.Service->DesignVehicleOf = [Wide](const FEntityInstance&) { return Wide; };
 		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
 		Fixture.Advance(0.2);
 
@@ -688,7 +693,7 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 			static_cast<int32>(EFuelRefusal::TooNarrow));
 		TestEqual(TEXT("and the card says the road is too narrow, not missing"),
 			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
-			FString(TEXT("no road wide enough for the fuel truck")));
+			FString(TEXT("no road wide enough for the fuel vehicle")));
 	}
 
 	// A DEPOT WITH NO PUMP. On a road, with a truck, and still unable to fuel - so the
@@ -1062,14 +1067,14 @@ bool FFuelChooseDepotCachesRouteFindsTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the hydrant is joined"), Hydrant.IsSet())) { return false; }
 
 	RouteSearch::ResetSearchCallCountForTest();
-	const FLetterFuelVehicles& Vehicles = Fixture.Service->VehiclesFor(EIcaoCode::C);
-	const auto First = Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant, Vehicles);
+	const FVehicle& Vehicle = Fixture.Service->VehiclesFor(EIcaoCode::C);
+	const auto First = Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant, Vehicle, Vehicle);
 	if (!TestTrue(TEXT("the one depot is chosen"), First.Depot.IsSet())) { return false; }
 	TestEqual(TEXT("the first ask runs one Find"), RouteSearch::SearchCallCountForTest(), 1);
 
 	for (int32 Idle = 0; Idle < 5; ++Idle)
 	{
-		Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant, Vehicles);
+		Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant, Vehicle, Vehicle);
 	}
 	TestEqual(TEXT("5 more asks over an unchanged graph answer from the cache - no new Find"),
 		RouteSearch::SearchCallCountForTest(), 1);
@@ -1560,14 +1565,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFuelVehicleTooLargeRefusedTest::RunTest(const FString& Parameters)
 {
-	// A DEPOT THAT WOULD SEND THE TRUCK TO AN A STAND. Unreachable in the game today - fleets
-	// are untyped, so Sent is always Design - and staged here by writing the table, which is
-	// exactly where a typed fleet will one day put a different vehicle.
+	// A TABLE THAT SENDS THE TRUCK TO CODE A STANDS, against an A stand whose definition was built
+	// for the tow (UEntityDefinition::DesignVehicle, read through the production reader the
+	// fixture wires as UOpsRuntime does). The truck is not NoLargerThan the tow, so the guard fires.
 	FFuelFixture Fixture;
 	Fixture.StandLetter = EIcaoCode::A;
 	Fixture.bFarEdgeRoad = true;
 	Fixture.Build(/*bWithRoad=*/true);
-	Fixture.Service->VehiclesFor(EIcaoCode::A).Sent = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
+	Fixture.Service->VehiclesFor(EIcaoCode::A) = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
+	TestEqual(TEXT("the A stand's definition says it was built for the tow"),
+		Fixture.Service->DesignVehicleFor(*Fixture.Net->GetEntity(Fixture.Stand)).TypeCode,
+		UAirsideSettings::ResolveUtilityTowVehicle().TypeCode);
 
 	const int32 Aircraft = Fixture.ParkAircraft();
 	if (!TestTrue(TEXT("an aircraft parked at the A stand"), Aircraft != 0)) { return false; }
@@ -1687,6 +1695,51 @@ bool FFuelRuntimeResolvesPerStandTest::RunTest(const FString& Parameters)
 		Runtime->GetFuelService()->VehicleFor(*Net.GetEntity(StandA)).TypeCode, Tow);
 	TestEqual(TEXT("and C's with the truck"),
 		Runtime->GetFuelService()->VehicleFor(*Net.GetEntity(StandC)).TypeCode, Truck);
+	TestEqual(TEXT("and the runtime wired the built-for read: A's stand was built for the tow"),
+		Runtime->GetFuelService()->DesignVehicleFor(*Net.GetEntity(StandA)).TypeCode, Tow);
+	return true;
+}
+
+#endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelStandDesignVehicleFallsBackTest, "AirportOps.Fuel.StandDesignVehicleFallsBackWhenUnauthored",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelStandDesignVehicleFallsBackTest::RunTest(const FString& Parameters)
+{
+	// A DEFINITION THAT CARRIES ITS DESIGN VEHICLE answers with it, silently; one saved before
+	// UEntityDefinition::DesignVehicle existed (TypeCode None) answers with its letter's resolve
+	// and says so - the shape of a DA_Stand_CodeC not yet re-authored.
+	UEntityDefinition* Built = UEntityDefinition::MakeStandTransient(EIcaoCode::A);
+	TestEqual(TEXT("a built A template carries the tow"), Built->DesignVehicle.TypeCode,
+		UAirsideSettings::ResolveUtilityTowVehicle().TypeCode);
+	TestEqual(TEXT("and the reader returns it"),
+		UAirsideSettings::ResolveStandDesignVehicleOf(Built, EIcaoCode::C).TypeCode,
+		UAirsideSettings::ResolveUtilityTowVehicle().TypeCode);
+
+	UEntityDefinition* Legacy = UEntityDefinition::MakeStandTransient(EIcaoCode::C);
+	Legacy->DesignVehicle = FVehicle();
+	AddExpectedMessagePlain(TEXT("carries no DesignVehicle"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 1);
+	TestEqual(TEXT("an unauthored definition falls back to its letter's design vehicle"),
+		UAirsideSettings::ResolveStandDesignVehicleOf(Legacy, EIcaoCode::C).TypeCode,
+		UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode);
+	TestEqual(TEXT("and warns once per definition, not once per ask"),
+		UAirsideSettings::ResolveStandDesignVehicleOf(Legacy, EIcaoCode::C).TypeCode,
+		UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode);
+
+	// THE SHIPPED ASSET IS NOT THE LEGACY CASE: DA_Stand_CodeC was re-authored with
+	// build_stand_asset.py when the field arrived (task 7 fix round 1), so the one stand a player
+	// can plop carries the vehicle its bays were built for and never takes the fallback.
+	const UEntityDefinition* Shipped = LoadObject<UEntityDefinition>(nullptr, TEXT("/Game/Entities/DA_Stand_CodeC.DA_Stand_CodeC"));
+	if (TestNotNull(TEXT("DA_Stand_CodeC loads"), Shipped))
+	{
+		TestEqual(TEXT("and carries Code C's design vehicle, authored rather than assumed"),
+			Shipped->DesignVehicle.TypeCode, UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode);
+	}
 	return true;
 }
 

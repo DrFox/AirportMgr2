@@ -51,7 +51,7 @@ namespace
 		// in the text - a number that has to agree with an asset is a number that drifts.
 		case EFuelRefusal::StandUnjoined: return TEXT("no road within reach of the stand's entrances");
 		case EFuelRefusal::NoRoute:       return TEXT("no road from depot");
-		case EFuelRefusal::TooNarrow:     return TEXT("no road wide enough for the fuel truck");
+		case EFuelRefusal::TooNarrow:     return TEXT("no road wide enough for the fuel vehicle");
 		case EFuelRefusal::NoPump:        return TEXT("depot has no pump");
 		// THE VEHICLE, NOT THE ROAD OR THE STAND: the fix is a depot with a smaller vehicle,
 		// which is why this does not share TooNarrow's text.
@@ -69,12 +69,9 @@ void UFuelService::ResolveVehicles(TFunctionRef<FVehicle(EIcaoCode)> Resolve)
 {
 	for (int32 Index = 0; Index < LetterCount; ++Index)
 	{
-		const EIcaoCode Letter = static_cast<EIcaoCode>(Index);
-		const FVehicle Design = Resolve(Letter);
-		// SENT = DESIGN: fleets are untyped counts, so the vehicle a depot sends is the most
-		// efficient that fits, and that is the design vehicle - see FLetterFuelVehicles.
-		VehiclesByLetter[Index].Design = Design;
-		VehiclesByLetter[Index].Sent = Design;
+		// Fleets are untyped counts, so what a depot sends a letter is the most efficient vehicle
+		// that fits it - its design vehicle, which is what UOpsRuntime resolves here.
+		VehiclesByLetter[Index] = Resolve(static_cast<EIcaoCode>(Index));
 	}
 }
 
@@ -86,17 +83,12 @@ EIcaoCode UFuelService::LetterOfStand(const FEntityInstance& Stand)
 
 FVehicle UFuelService::VehicleFor(const FEntityInstance& Stand) const
 {
-	return VehiclesFor(LetterOfStand(Stand)).Sent;
+	return VehiclesFor(LetterOfStand(Stand));
 }
 
-const FLetterFuelVehicles& UFuelService::VehiclesForStand(const URoadNetwork& Network,
-	FEntityInstanceId Stand) const
+FVehicle UFuelService::DesignVehicleFor(const FEntityInstance& Stand) const
 {
-	// A STAND DELETED UNDER ITS DEMAND still gets asked once before the aircraft's own leaving
-	// drops the demand; Code C's entry, like an outline that reads as no letter, rather than a
-	// null the caller would have to test.
-	const FEntityInstance* Instance = Network.GetEntity(Stand);
-	return VehiclesFor(Instance != nullptr ? LetterOfStand(*Instance) : EIcaoCode::C);
+	return DesignVehicleOf ? DesignVehicleOf(Stand) : VehicleFor(Stand);
 }
 
 FFuelDemand* UFuelService::FindByAircraft(int32 AircraftId)
@@ -155,7 +147,7 @@ int32 UFuelService::TrucksOutFor(FEntityInstanceId Depot) const
 }
 
 UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network,
-	FGuidelineNodeId StandFuel, const FLetterFuelVehicles& Vehicles) const
+	FGuidelineNodeId StandFuel, const FVehicle& Sent, const FVehicle& Design) const
 {
 	// THE ORDER OF THESE TESTS IS THE SPEC'S, and it is the order of the player's hand: no
 	// depot at all is a building to place, a depot off the road is a road to draw, and only
@@ -253,13 +245,13 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 			continue;
 		}
 
-		// NO LARGER THAN THE STAND WAS DRAWN FOR (spec 2026-09-26 section 2): the stand's lane
-		// legs are proven drivable by its design vehicle and anything VehicleFit::NoLargerThan
-		// it, and nothing else. PER DEPOT, not once per call, although the answer is the same for
-		// every depot today (fleets are untyped, Sent == Design): a typed fleet makes Sent a fact
+		// NO LARGER THAN THE STAND WAS BUILT FOR (spec 2026-09-26 section 2): the stand's lane
+		// legs are proven drivable by its definition's design vehicle and anything
+		// VehicleFit::NoLargerThan it, and nothing else. PER DEPOT, not once per call, although
+		// every depot sends the same today (fleets are untyped): a typed fleet makes Sent a fact
 		// about THIS depot, and this is where it will be asked. Before busy, so a depot whose
 		// vehicle can never serve this stand is not waited on as though it might.
-		if (!VehicleFit::NoLargerThan(Vehicles.Sent, Vehicles.Design))
+		if (!VehicleFit::NoLargerThan(Sent, Design))
 		{
 			bAnyVehicleTooLarge = true;
 			continue;
@@ -314,14 +306,14 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		// THE TRUCK THAT WILL DRIVE IT, so a depot is only chosen over road that truck fits
 		// (spec 2026-09-23 §6). A depot reachable only over too-narrow road is remembered, so
 		// the refusal below can say so rather than "no road".
-		Query.WithVehicle(Vehicles.Sent);
+		Query.WithVehicle(Sent);
 
 		// CACHED PER (depot pose, stand hydrant, truck figures) (#301, the shape ARigTestCourse's
 		// identical cache had been carrying alone - see RoutePlanCache.h): the SAME pair is
 		// asked again the moment a DIFFERENT depot frees up (FleetRevision moves, the graph does
 		// not), and a refusal is as much a fact about the graph and the truck as a route is.
 		FRoutePlan Plan;
-		if (const FCachedRoutePlan* Hit = RouteCache.Lookup(Instance.PoseNode, StandFuel, Vehicles.Sent))
+		if (const FCachedRoutePlan* Hit = RouteCache.Lookup(Instance.PoseNode, StandFuel, Sent))
 		{
 			Plan = Hit->Plan;
 		}
@@ -329,9 +321,9 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		{
 			// AND EACH EDGE'S FIT: most of a Find's cost is tracing the truck round every curve
 			// the search relaxes, which every depot's own Find asks about the same shared roads.
-			Query.FitCache = &RouteCache.FitCacheFor(Vehicles.Sent);
+			Query.FitCache = &RouteCache.FitCacheFor(Sent);
 			Plan = RouteSearch::Find(Network, Query);
-			RouteCache.Store(Instance.PoseNode, StandFuel, Vehicles.Sent, Plan, FString());
+			RouteCache.Store(Instance.PoseNode, StandFuel, Sent, Plan, FString());
 		}
 		if (Plan.Result == ERouteResult::TooNarrow)
 		{
@@ -378,8 +370,8 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		// so the pump is the nearer fix; and a vehicle that can never fit is not a wait.
 		Result.Why = EFuelRefusal::VehicleTooLarge;
 		UE_LOG(LogAirportOps, Warning,
-			TEXT("Fuel: %s is larger than the %s this stand was drawn for; no depot can serve it"),
-			*Vehicles.Sent.TypeCode.ToString(), *Vehicles.Design.TypeCode.ToString());
+			TEXT("Fuel: %s is larger than the %s this stand was built for; no depot can serve it"),
+			*Sent.TypeCode.ToString(), *Design.TypeCode.ToString());
 	}
 	else if (bAnyBusyDepot)
 	{
@@ -397,7 +389,7 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		Result.Why = EFuelRefusal::TooNarrow;
 		UE_LOG(LogAirportOps, Warning,
 			TEXT("Fuel: no road wide enough for %s from any depot - the first edge it does not fit is guideline edge %d"),
-			*Vehicles.Sent.TypeCode.ToString(), NarrowAt.Index);
+			*Sent.TypeCode.ToString(), NarrowAt.Index);
 	}
 	else
 	{
@@ -728,11 +720,15 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 			}
 
 			const FGuidelineNodeId Hydrant = FuelAnchorOf(Network, Demand.Stand);
-			// THE STAND'S OWN LETTER'S VEHICLES (spec 2026-09-26 section 2): an A stand's lane is
+			// THE STAND'S OWN LETTER'S VEHICLE (spec 2026-09-26 section 2): an A stand's lane is
 			// drawn for the utility tow and a C stand's for the truck, so the one vehicle this
-			// used to send everywhere was wrong for every stand but one kind.
-			const FLetterFuelVehicles& Vehicles = VehiclesForStand(Network, Demand.Stand);
-			const FDepotChoice Choice = ChooseDepot(Network, Hydrant, Vehicles);
+			// used to send everywhere was wrong for every stand but one kind. A STAND DELETED
+			// UNDER ITS DEMAND is asked as Code C's, like an outline reading as no letter - the
+			// aircraft's own leaving drops the demand a moment later.
+			const FEntityInstance* StandInstance = Network.GetEntity(Demand.Stand);
+			const FVehicle Sent = StandInstance != nullptr ? VehicleFor(*StandInstance) : VehiclesFor(EIcaoCode::C);
+			const FVehicle Design = StandInstance != nullptr ? DesignVehicleFor(*StandInstance) : Sent;
+			const FDepotChoice Choice = ChooseDepot(Network, Hydrant, Sent, Design);
 
 			if (!Choice.Depot.IsSet())
 			{
@@ -804,7 +800,7 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 			// link, and the agent arms FTowReverseRun on a reverse leg because its vehicle has a
 			// trailer - nothing here has to know which kind it sent.
 			const int32 TruckId = Traffic.DispatchAgent(&Network, Choice.Plan,
-				Vehicles.Sent, ETraversalClass::GroundVehicle,
+				Sent, ETraversalClass::GroundVehicle,
 				TruckShutdownPause);
 			if (TruckId == 0)
 			{
@@ -822,7 +818,7 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 			Demand.Depot = Choice.Depot;
 			UE_LOG(LogAirportOps, Log,
 				TEXT("Fuel: depot %d sends truck %d (%s) to stand %d for aircraft %d (%.0f uu)"),
-				Choice.Depot.Index, TruckId, *Vehicles.Sent.TypeCode.ToString(), Demand.Stand.Index,
+				Choice.Depot.Index, TruckId, *Sent.TypeCode.ToString(), Demand.Stand.Index,
 				Demand.AircraftId, Choice.Plan.Length);
 			break;
 		}
