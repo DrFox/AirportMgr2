@@ -123,8 +123,9 @@ bool FLandingRun::Begin(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 	// The approach attitude is the angle the wing needs at Vref, LESS the descent angle: the
 	// aircraft is flying nose-high relative to its flight path while the flight path itself
 	// points down. Derived, so the nose sits where the speed says rather than where a number
-	// typed into a details panel says.
-	Pitch = InClimb.RequiredAngleAt(Speed, InGround.Takeoff.SpeedCap) - InApproach.GlideslopeDegrees;
+	// typed into a details panel says. The LANDING-flap angle at Vref, not the take-off one
+	// scaled to it - see FApproachPerformance::LandingLiftAngleDegrees for the A380 it sank.
+	Pitch = InApproach.RequiredAngleAt(Speed, InGround.Landing.SpeedCap) - InApproach.GlideslopeDegrees;
 
 	Phase = ELandingPhase::Approach;
 
@@ -147,9 +148,8 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 	}
 
 	const FGroundPerformance& Ground = InAirframe.Chassis.Ground;
-	const FClimbPerformance& Climb = InAirframe.Climb;
 	const FApproachPerformance& Approach = InAirframe.Approach;
-	const double Vr = Ground.Takeoff.SpeedCap;
+	const double Vref = Ground.Landing.SpeedCap;
 
 	switch (Phase)
 	{
@@ -187,7 +187,7 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 		// Bounded at both ends. Never steeper than the approach, or entering the flare would
 		// command a PUSH; never gentler than the touchdown path, or the aircraft would ease
 		// asymptotically toward the runway and never reach it.
-		const double Required = Climb.RequiredAngleAt(Speed, Vr);
+		const double Required = Approach.RequiredAngleAt(Speed, Vref);
 
 		const double ApproachSink =
 			Speed * FMath::Sin(FMath::DegreesToRadians(Approach.GlideslopeDegrees));
@@ -212,10 +212,26 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 		// climb uses, with the same two terms. Taken from the ACTUAL attitude, not the wanted
 		// one, so an aircraft whose nose cannot keep up sinks faster than commanded. That
 		// coupling is what keeps touchdown a consequence rather than a decision.
-		const double Gamma = FMath::DegreesToRadians(Pitch - Required);
+		//
+		// CLAMPED AT VERTICAL. A wing that needs far more angle than the nose can give is
+		// stalled, and a stalled aircraft falls - but Pitch - Required is unbounded, and past
+		// -90 deg sin() wraps it back towards level flight, so a slow enough flare HOVERED.
+		const double Gamma = FMath::DegreesToRadians(FMath::Clamp(Pitch - Required, -90.0, 90.0));
 
 		Altitude += Speed * FMath::Sin(Gamma) * DeltaSeconds;
 		Travelled += Speed * FMath::Cos(Gamma) * DeltaSeconds;
+
+		// OUT OF SPEED IS ON THE GROUND. With no airspeed the wing holds nothing, and the
+		// integration above would leave the aircraft parked in the air for ever - which made
+		// RequiredLandingDistance return 0, and a zero landing distance admits every runway
+		// (Airside.Model.StalledFlareStillLands). Only an airframe with no real Vref gets
+		// here: the paper 737's 19 kn default did, 2026-09-27.
+		// ENFORCED BY: Airside.Content.EveryTypeFlaresOntoTheRunway (every shipped type lands
+		// inside the rubber, which a stall at zero speed could not).
+		if (Speed <= 0.0)
+		{
+			Altitude = 0.0;
+		}
 
 		if (Altitude <= 0.0)
 		{

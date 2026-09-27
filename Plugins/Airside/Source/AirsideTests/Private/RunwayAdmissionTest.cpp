@@ -29,12 +29,27 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRunwayAdmissionTest::RunTest(const FString& Parameters)
 {
 	// A 1000 m, 23 m tarmac visual runway and the Piper: grass-capable, visual, 510 m /
-	// 400 m field lengths, 13 m span. Every refusal below is one fact moved past what it needs.
+	// 470 m field lengths, 13 m span. Every refusal below is one fact moved past what it needs.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FRoadSegmentId RW = MakeRunway(*Net, 100000.0, 2300.0);
+	constexpr double StripLength = 100000.0;
+	const FRoadSegmentId RW = MakeRunway(*Net, StripLength, 2300.0);
 	const FAirframe Piper = UAirsideSettings::ResolveDefaultAirframe();
-	TestEqual(TEXT("the fixture's Piper publishes a landing field length"), Piper.Requirements.LandingFieldLength, 40000.0);
-	TestEqual(TEXT("and a take-off field length"), Piper.Requirements.TakeoffFieldLength, 51000.0);
+
+	// READ FROM THE ONE SOURCE, NOT TYPED. This pinned 40000 as a literal until 2026-09-27,
+	// and went red when the Meridian's landing figure moved to 47000 for a reason that had
+	// nothing to do with admission - a second copy of the figure, not a test of it.
+	// PiperType, not Piper(): the bare FAirframe fixture carries no Requirements at all.
+	const FRunwayRequirements Authored = TestAirframes::PiperType()->Airframe().Requirements;
+	TestEqual(TEXT("the fixture's Piper publishes BuildPiperMeridian's landing field length"),
+		Piper.Requirements.LandingFieldLength, Authored.LandingFieldLength);
+	TestEqual(TEXT("and its take-off field length"),
+		Piper.Requirements.TakeoffFieldLength, Authored.TakeoffFieldLength);
+	// What the admissions below actually rely on: both figures fit this strip, so a refusal
+	// is the one fact each case moves, never the length by accident.
+	TestTrue(FString::Printf(TEXT("both field lengths (%.0f / %.0f) fit the %.0f uu strip"),
+		Authored.TakeoffFieldLength, Authored.LandingFieldLength, StripLength),
+		Authored.TakeoffFieldLength > 0.0 && Authored.LandingFieldLength > 0.0
+			&& Authored.TakeoffFieldLength <= StripLength && Authored.LandingFieldLength <= StripLength);
 
 	TestEqual(TEXT("the Piper is admitted to a tarmac visual runway"),
 		RunwayAdmission::Check(*Net, RW, Piper, true).Why, ERunwayRefusal::None);
