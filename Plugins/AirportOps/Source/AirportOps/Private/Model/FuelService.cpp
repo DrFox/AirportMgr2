@@ -455,12 +455,13 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 	// dispatched is that truck until it is home, whatever the table says now.
 	const FVehicle OwnVehicle = Truck->AsVehicle() != nullptr ? *Truck->AsVehicle() : FVehicle();
 
-	FRoutePlan Plan;
-	if (Home != nullptr)
+	// THE ROAD HOME'S QUERY, from Start: one statement for the two places a truck turns for home -
+	// the service point it is parked at, below, and a node ahead of it on the road, just after.
+	auto HomeQuery = [&Traffic, TruckId, &OwnVehicle](FGuidelineNodeId Start, FGuidelineNodeId Goal)
 	{
 		FRouteQuery Query;
-		Query.Start = Truck->GoalNode;
-		Query.Goal = Home->PoseNode;
+		Query.Start = Start;
+		Query.Goal = Goal;
 		Query.Class = ETraversalClass::GroundVehicle;
 		Query.Errand = ERouteErrand::VehicleToJob;
 		Query.Policy = FRoutePolicy::For(Query.Errand);
@@ -473,8 +474,84 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		Query.WithCongestion(Traffic.GetOccupancy(), TruckId, Traffic.Rules.CongestionWeight);
 		Query.WithVehicle(OwnVehicle);
 		Query.RunwayPenalty = Traffic.Rules.RunwayPenalty;
+		return Query;
+	};
 
-		// JUDGED FROM THE LIVE CHAIN AND CAB (task 7 fix round 1): the route home off a stand
+	// A TRUCK STILL ON ITS WAY OUT (final review, 2026-09-27): its aircraft left, or was deleted,
+	// before it got there. The search used to start from its GOAL regardless - the service point,
+	// where the route home opens with the bay's reverse leg - and RedirectAgent then started the
+	// truck on that route's first point: a rigid truck jumped to the hydrant, and the tow's reverse
+	// was solved from a cab still out on the road (ReverseUnsolvable, "retired where it stands").
+	//
+	// SO IT TURNS WHERE IT IS: the route home is searched from the node at the END of the step it
+	// is driving - ReplanAt's splice point, ahead of it - and spliced on through RerouteAgent, which
+	// keeps it moving and judges a tow's whole new route from the live chain. The tail is searched
+	// UNSEEDED, as FPlanReResolver::SpliceReplan's is: it starts where the chain is not yet. When
+	// that turn does not hold - a tow arriving at a junction cannot always take a hard turn back
+	// (measured 2026-09-27: a 90 degree fold at the far road's junction) - the next node on is
+	// tried, and so on up the route: each is one search, once per recall, over a route of a few
+	// dozen steps at most.
+	//
+	// ON ITS LAST STEP, OR WHEN NO TURN HOLDS, IT FINISHES THE LEG and turns for home from the
+	// service point, the normal cycle's own path (OnAgentPhase, below, on its arrival): the last
+	// step ends AT the service point, so a turn from its end is the route home from there anyway,
+	// and only the chain that arrives can solve its reverse. Better the rest of the way out than a
+	// retirement.
+	// ENFORCED BY: AirportOps.Fuel.TowRecalledMidRouteGetsHome,
+	// AirportOps.Fuel.TruckRecalledMidRouteGetsHome, AirportOps.Fuel.TowRecalledOnItsLastLegGetsHome
+	if (Home != nullptr && Truck->Phase == EAgentPhase::Taxiing && Truck->Follower.Plan.IsValid())
+	{
+		// COPIED, because a successful RerouteAgent replaces the plan this would otherwise alias.
+		const FRoutePlan Out = Truck->Follower.Plan;
+		const FGuidelineNodeId OutGoal = Truck->GoalNode;
+		const int32 FirstKeep = UGroundTraffic::CurrentStep(Out, Truck->Follower.Travelled) + 1;
+		bool bSaidNarrow = false;
+		for (int32 KeepSteps = FirstKeep; KeepSteps < Out.Steps.Num(); ++KeepSteps)
+		{
+			const FGuidelineNodeId TurnAt = UGroundTraffic::StepFromNode(Out, KeepSteps);
+			if (TurnAt == OutGoal)
+			{
+				break;
+			}
+			FRouteQuery Query = HomeQuery(TurnAt, Home->PoseNode);
+			FRoutePlan Tail = RouteSearch::Find(Network, Query);
+			// HOME EVEN IF IT DOES NOT FIT, for the parked path's reason below, and SAID the same
+			// way - once per recall, not once per node tried; RerouteAgent's own whole-route judge
+			// is what keeps a fold off the road.
+			if (Tail.Result == ERouteResult::TooNarrow)
+			{
+				if (!bSaidNarrow)
+				{
+					bSaidNarrow = true;
+					UE_LOG(LogAirportOps, Warning,
+						TEXT("Fuel: truck %d does not fit the road home to depot %d (%s, guideline edge %d); driving it anyway"),
+						TruckId, Depot.Index, *Tail.RejectedBy.Describe(), Tail.RejectedEdge.Index);
+				}
+				Query.Vehicle = nullptr;
+				Tail = RouteSearch::Find(Network, Query);
+			}
+			if (Tail.IsValid() && Traffic.RerouteAgent(TruckId, &Network, KeepSteps, Tail))
+			{
+				GoingHome.Add(TruckId, Depot);
+				UE_LOG(LogAirportOps, Log, TEXT("Fuel: truck %d turns for home to depot %d at guideline node %d, on the road"),
+					TruckId, Depot.Index, TurnAt.Index);
+				return;
+			}
+		}
+		// STILL OUT, SO STILL COUNTED: GoingHome is what TrucksOutFor reads once the demand is gone.
+		GoingHome.Add(TruckId, Depot);
+		UE_LOG(LogAirportOps, Log,
+			TEXT("Fuel: truck %d finishes its leg to the service point and turns for home to depot %d there"),
+			TruckId, Depot.Index);
+		return;
+	}
+
+	FRoutePlan Plan;
+	if (Home != nullptr)
+	{
+		FRouteQuery Query = HomeQuery(Truck->GoalNode, Home->PoseNode);
+
+		// JUDGED FROM THE LIVE CHAIN AND CAB (2026-09-27): the route home off a stand
 		// OPENS with the bay's reverse leg, and VehicleFit::JudgePlan solves that reverse from
 		// where the tow is parked - its axles, its heading and its cab (FTowSeed::Origin), the
 		// pose FTowReverseRun will arm from - so a route the router admits is one the tow can back
@@ -610,6 +687,15 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 			// that has been waiting on every depot being busy is worth re-offering the
 			// instant one of them stops being busy, not thirty times a second until then.
 			++FleetRevision;
+		}
+		else if (Depot != nullptr)
+		{
+			// RECALLED ON ITS LAST LEG, AND NOW AT THE SERVICE POINT - see SendTruckHome's
+			// on-the-road branch: it finished the leg rather than turn where no turn held, and
+			// turns for home from here, parked, by the ordinary cycle's own path.
+			// ENFORCED BY: AirportOps.Fuel.TowRecalledOnItsLastLegGetsHome
+			const FEntityInstanceId HomeId = *Home;
+			SendTruckHome(Traffic, Network, AgentId, HomeId);
 		}
 		return;
 	}

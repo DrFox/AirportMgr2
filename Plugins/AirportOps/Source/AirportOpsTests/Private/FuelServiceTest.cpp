@@ -1498,101 +1498,239 @@ namespace FuelServiceTest
 	}
 }
 
+namespace FuelServiceTest
+{
+	/**
+	 * END TO END ON A DRAWN STAND OF Letter, served by the utility tow: the tow is sent, it is the
+	 * WHOLE chain (cab plus trailer, laid by StartDrive), the aircraft leaves fuelled - no
+	 * "UNFUELLED" line, and no AddExpectedError, because nothing on the way is allowed to go wrong -
+	 * and the tow backs off the service point and gets HOME, freeing its depot. That last half
+	 * failed on 4a16e9f6: the reverse was refused "turntable bent 13.4 deg (the lock engages within
+	 * 3.0)" and the tow sat at the hydrant for the rest of the session, its depot one truck short
+	 * (fixed 2026-09-26).
+	 *
+	 * ONE BODY FOR A AND B (final review, 2026-09-27): both letters are laid for the tow, but B's
+	 * bays are its own template - deeper, so the lane and legs differ - and nothing drove one end
+	 * to end.
+	 */
+	bool TowServesLetter(FAutomationTestBase& Test, EIcaoCode Letter)
+	{
+		const TCHAR* Code = IcaoCode::ToLetter(Letter);
+		FFuelFixture Fixture;
+		Fixture.StandLetter = Letter;
+		Fixture.bFarEdgeRoad = true;
+		Fixture.TurnaroundSeconds = 1800.0;
+		Fixture.bWithRunway = true;
+		Fixture.Build(/*bWithRoad=*/true);
+
+		const FEntityInstance* Stand = Fixture.Net->GetEntity(Fixture.Stand);
+		if (!Test.TestNotNull(*FString::Printf(TEXT("the %s stand is placed"), Code), Stand)) { return false; }
+		Test.TestEqual(*FString::Printf(TEXT("and the service reads it as Code %s"), Code),
+			static_cast<int32>(UFuelService::LetterOfStand(*Stand)), static_cast<int32>(Letter));
+
+		const FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
+		if (!Test.TestTrue(TEXT("the utility tow tows something - else this test measures a rigid truck"), Tow.HasTrailer()))
+		{
+			return false;
+		}
+
+		FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
+		GLog->AddOutputDevice(&Spy);
+
+		const int32 Aircraft = Fixture.ParkAircraft();
+		int32 TruckId = 0;
+		FName SentType;
+		bool bWholeChain = false;
+		const bool bDeparted = Aircraft != 0 && Fixture.AdvanceUntil([&]
+		{
+			if (const FFuelDemand* Demand = DemandFor(*Fixture.Service, Aircraft))
+			{
+				TruckId = Demand->TruckId != 0 ? Demand->TruckId : TruckId;
+			}
+			if (const FRoadAgent* Truck = TruckId != 0 ? Fixture.Traffic->FindAgent(TruckId) : nullptr)
+			{
+				SentType = Truck->TypeCode();
+				const FVehicle* Vehicle = Truck->AsVehicle();
+				bWholeChain |= Vehicle != nullptr && Vehicle->HasTrailer()
+					&& Truck->TowAxles.Num() == Vehicle->Tow.Num();
+			}
+			const FRoadAgent* Plane = Fixture.Traffic->FindAgent(Aircraft);
+			return Plane == nullptr || Plane->Phase != EAgentPhase::Parked;
+		}, 900.0);
+
+		// AND HOME: the only way a tow leaves the traffic model is being retired, and the spy below
+		// says which of the two retirements it was - home at the depot, or where it stands.
+		bool bSawReverse = false;
+		const bool bTowGone = TruckId != 0 && Fixture.AdvanceUntil([&]
+		{
+			const FRoadAgent* Truck = Fixture.Traffic->FindAgent(TruckId);
+			bSawReverse |= Truck != nullptr && Truck->Phase == EAgentPhase::Reversing;
+			return Truck == nullptr;
+		}, 600.0);
+
+		GLog->RemoveOutputDevice(&Spy);
+
+		if (!Test.TestTrue(*FString::Printf(TEXT("an aircraft parked at the %s stand"), Code), Aircraft != 0)) { return false; }
+		Test.TestTrue(TEXT("a vehicle was dispatched"), TruckId != 0);
+		Test.TestEqual(*FString::Printf(TEXT("and it is the utility tow, %s's design vehicle"), Code), SentType, Tow.TypeCode);
+		Test.TestTrue(TEXT("dispatched as the whole chain - one laid axle per tow link"), bWholeChain);
+		Test.TestTrue(TEXT("and departed"), bDeparted);
+
+		// FROM THE LOG, not the demand's state: the Done state and the departure that drops the
+		// demand can fall in one Tick, so a per-step look at the state can miss Done entirely.
+		bool bDepartLine = false;
+		bool bFuelledLine = false;
+		for (const FString& Line : Spy.CapturedLines)
+		{
+			bFuelledLine |= Line.Contains(FString::Printf(TEXT("aircraft %d fuelled at stand"), Aircraft));
+			bDepartLine |= Line.Contains(TEXT("departs stand")) && Line.Contains(TEXT("after its turnaround"));
+			Test.TestFalse(*FString::Printf(TEXT("never UNFUELLED: %s"), *Line), Line.Contains(TEXT("UNFUELLED")));
+		}
+		Test.TestTrue(TEXT("the aircraft was fuelled"), bFuelledLine);
+		Test.TestTrue(TEXT("the departure was logged as a normal one"), bDepartLine);
+
+		bool bHomeLine = false;
+		for (const FString& Line : Spy.CapturedLines)
+		{
+			bHomeLine |= Line.Contains(FString::Printf(TEXT("truck %d home at depot"), TruckId));
+		}
+		Test.TestTrue(TEXT("the tow backed off the service point"), bSawReverse);
+		Test.TestTrue(TEXT("the tow left the traffic model"), bTowGone);
+		Test.TestTrue(TEXT("by arriving home, not by being retired where it stands"), bHomeLine);
+		Test.TestEqual(TEXT("its depot has every truck back"), Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
+		return true;
+	}
+
+	/**
+	 * A VEHICLE RECALLED MID-ROUTE gets home (final review, 2026-09-27). The aircraft is retired
+	 * ~2 s after the vehicle is dispatched, so the recall reaches it on the road, not parked at the
+	 * service point. SendTruckHome searched home from the SERVICE POINT regardless - a route that
+	 * opens with the bay's reverse leg, solved from a cab out on the road - and the redirect then
+	 * started the vehicle on that route's first point: ReverseUnsolvable and "retired where it
+	 * stands" for the tow, a jump to the hydrant for a rigid truck.
+	 *
+	 * bOnLastLeg recalls it instead on the step that ENDS at the service point, where there is no
+	 * node ahead to turn at: it finishes the leg and turns for home from there, parked.
+	 */
+	bool RecalledMidRouteGetsHome(FAutomationTestBase& Test, EIcaoCode Letter, bool bOnLastLeg = false)
+	{
+		const TCHAR* Code = IcaoCode::ToLetter(Letter);
+		FFuelFixture Fixture;
+		Fixture.StandLetter = Letter;
+		Fixture.bFarEdgeRoad = true;
+		Fixture.TurnaroundSeconds = 1800.0;
+		Fixture.Build(/*bWithRoad=*/true);
+
+		FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
+		GLog->AddOutputDevice(&Spy);
+
+		const int32 Aircraft = Fixture.ParkAircraft();
+		int32 TruckId = 0;
+		const bool bSent = Aircraft != 0 && Fixture.AdvanceUntil([&]
+		{
+			const FFuelDemand* Demand = DemandFor(*Fixture.Service, Aircraft);
+			TruckId = Demand != nullptr ? Demand->TruckId : 0;
+			return TruckId != 0;
+		}, 60.0);
+
+		// TWO SECONDS OUT, then the aircraft goes - the recall must find the vehicle on the road.
+		// Or, for the last leg, on the step into the service point.
+		if (bOnLastLeg)
+		{
+			Fixture.AdvanceUntil([&]
+			{
+				const FRoadAgent* Driving = Fixture.Traffic->FindAgent(TruckId);
+				return Driving != nullptr && Driving->Phase == EAgentPhase::Taxiing
+					&& UGroundTraffic::CurrentStep(Driving->Follower.Plan, Driving->Follower.Travelled)
+						== Driving->Follower.Plan.Steps.Num() - 1;
+			}, 120.0);
+		}
+		else
+		{
+			Fixture.Advance(2.0);
+		}
+		const FRoadAgent* Out = TruckId != 0 ? Fixture.Traffic->FindAgent(TruckId) : nullptr;
+		const bool bMidRoute = Out != nullptr && Out->Phase == EAgentPhase::Taxiing;
+		Fixture.Traffic->RetireAgent(Aircraft);
+
+		const bool bGone = TruckId != 0 && Fixture.AdvanceUntil([&]
+		{
+			return Fixture.Traffic->FindAgent(TruckId) == nullptr;
+		}, 600.0);
+
+		GLog->RemoveOutputDevice(&Spy);
+
+		if (!Test.TestTrue(*FString::Printf(TEXT("Code %s: a vehicle was sent"), Code), bSent)) { return false; }
+		Test.TestTrue(*FString::Printf(TEXT("Code %s: the premise - it was still driving when the aircraft went"), Code), bMidRoute);
+
+		// THE HOME LINE IS WHAT TELLS THE TWO RETIREMENTS APART. "Retired where it stands" is a
+		// Warning, and FLogLineSpy captures Log verbosity only - asserting its absence would pass
+		// with it printed (it did, on the RED run of 2026-09-27).
+		bool bHomeLine = false;
+		for (const FString& Line : Spy.CapturedLines)
+		{
+			bHomeLine |= Line.Contains(FString::Printf(TEXT("truck %d home at depot"), TruckId));
+		}
+		Test.TestTrue(*FString::Printf(TEXT("Code %s: the vehicle left the traffic model"), Code), bGone);
+		Test.TestTrue(*FString::Printf(TEXT("Code %s: by arriving home"), Code), bHomeLine);
+		Test.TestEqual(*FString::Printf(TEXT("Code %s: its depot has every truck back"), Code),
+			Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
+		// 60 uu IN A THIRTIETH - see TruckNeverTeleportsOnItsRoundTrip for the figure.
+		Test.TestTrue(*FString::Printf(TEXT("Code %s: no body ever teleports (worst %.1f uu, agent %d, t=%.1f s, (%.0f,%.0f) -> (%.0f,%.0f))"),
+				Code, Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt,
+				Fixture.WorstJumpFrom.X, Fixture.WorstJumpFrom.Y, Fixture.WorstJumpTo.X, Fixture.WorstJumpTo.Y),
+			Fixture.WorstJump < 60.0);
+		return true;
+	}
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFuelTowServesCodeATest, "AirportOps.Fuel.TowServesCodeA",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FFuelTowServesCodeATest::RunTest(const FString& Parameters)
 {
-	// END TO END ON A DRAWN CODE A STAND: the tow is sent, it is the WHOLE chain (cab plus
-	// trailer, laid by StartDrive), the aircraft leaves fuelled - no "UNFUELLED" line, and no
-	// AddExpectedError, because nothing on the way is allowed to go wrong - and the tow backs off
-	// the service point and gets HOME, freeing its depot. That last half failed on 4a16e9f6: the
-	// reverse was refused "turntable bent 13.4 deg (the lock engages within 3.0)" and the tow sat
-	// at the hydrant for the rest of the session, its depot one truck short (task 7 fix round 1).
-	FFuelFixture Fixture;
-	Fixture.StandLetter = EIcaoCode::A;
-	Fixture.bFarEdgeRoad = true;
-	Fixture.TurnaroundSeconds = 1800.0;
-	Fixture.bWithRunway = true;
-	Fixture.Build(/*bWithRoad=*/true);
+	return FuelServiceTest::TowServesLetter(*this, EIcaoCode::A);
+}
 
-	const FEntityInstance* Stand = Fixture.Net->GetEntity(Fixture.Stand);
-	if (!TestNotNull(TEXT("the A stand is placed"), Stand)) { return false; }
-	TestEqual(TEXT("and the service reads it as Code A"),
-		static_cast<int32>(UFuelService::LetterOfStand(*Stand)), static_cast<int32>(EIcaoCode::A));
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTowServesCodeBTest, "AirportOps.Fuel.TowServesCodeB",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-	const FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
-	if (!TestTrue(TEXT("the utility tow tows something - else this test measures a rigid truck"), Tow.HasTrailer()))
-	{
-		return false;
-	}
+bool FFuelTowServesCodeBTest::RunTest(const FString& Parameters)
+{
+	return FuelServiceTest::TowServesLetter(*this, EIcaoCode::B);
+}
 
-	FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
-	GLog->AddOutputDevice(&Spy);
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTowRecalledMidRouteGetsHomeTest, "AirportOps.Fuel.TowRecalledMidRouteGetsHome",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-	const int32 Aircraft = Fixture.ParkAircraft();
-	int32 TruckId = 0;
-	FName SentType;
-	bool bWholeChain = false;
-	const bool bDeparted = Aircraft != 0 && Fixture.AdvanceUntil([&]
-	{
-		if (const FFuelDemand* Demand = FuelServiceTest::DemandFor(*Fixture.Service, Aircraft))
-		{
-			TruckId = Demand->TruckId != 0 ? Demand->TruckId : TruckId;
-		}
-		if (const FRoadAgent* Truck = TruckId != 0 ? Fixture.Traffic->FindAgent(TruckId) : nullptr)
-		{
-			SentType = Truck->TypeCode();
-			const FVehicle* Vehicle = Truck->AsVehicle();
-			bWholeChain |= Vehicle != nullptr && Vehicle->HasTrailer()
-				&& Truck->TowAxles.Num() == Vehicle->Tow.Num();
-		}
-		const FRoadAgent* Plane = Fixture.Traffic->FindAgent(Aircraft);
-		return Plane == nullptr || Plane->Phase != EAgentPhase::Parked;
-	}, 900.0);
+bool FFuelTowRecalledMidRouteGetsHomeTest::RunTest(const FString& Parameters)
+{
+	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::A);
+}
 
-	// AND HOME: the only way a tow leaves the traffic model is being retired, and the spy below
-	// says which of the two retirements it was - home at the depot, or where it stands.
-	bool bSawReverse = false;
-	const bool bTowGone = TruckId != 0 && Fixture.AdvanceUntil([&]
-	{
-		const FRoadAgent* Truck = Fixture.Traffic->FindAgent(TruckId);
-		bSawReverse |= Truck != nullptr && Truck->Phase == EAgentPhase::Reversing;
-		return Truck == nullptr;
-	}, 600.0);
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTruckRecalledMidRouteGetsHomeTest, "AirportOps.Fuel.TruckRecalledMidRouteGetsHome",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-	GLog->RemoveOutputDevice(&Spy);
+bool FFuelTruckRecalledMidRouteGetsHomeTest::RunTest(const FString& Parameters)
+{
+	// THE RIGID TRUCK, on C: no chain to fold, but the same search from the service point and the
+	// same redirect onto that route's first point - a jump to the hydrant.
+	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::C);
+}
 
-	if (!TestTrue(TEXT("an aircraft parked at the A stand"), Aircraft != 0)) { return false; }
-	TestTrue(TEXT("a vehicle was dispatched"), TruckId != 0);
-	TestEqual(TEXT("and it is the utility tow, A's design vehicle"), SentType, Tow.TypeCode);
-	TestTrue(TEXT("dispatched as the whole chain - one laid axle per tow link"), bWholeChain);
-	TestTrue(TEXT("and departed"), bDeparted);
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTowRecalledOnItsLastLegGetsHomeTest, "AirportOps.Fuel.TowRecalledOnItsLastLegGetsHome",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-	// FROM THE LOG, not the demand's state: the Done state and the departure that drops the
-	// demand can fall in one Tick, so a per-step look at the state can miss Done entirely.
-	bool bDepartLine = false;
-	bool bFuelledLine = false;
-	for (const FString& Line : Spy.CapturedLines)
-	{
-		bFuelledLine |= Line.Contains(FString::Printf(TEXT("aircraft %d fuelled at stand"), Aircraft));
-		bDepartLine |= Line.Contains(TEXT("departs stand")) && Line.Contains(TEXT("after its turnaround"));
-		TestFalse(*FString::Printf(TEXT("never UNFUELLED: %s"), *Line), Line.Contains(TEXT("UNFUELLED")));
-	}
-	TestTrue(TEXT("the aircraft was fuelled"), bFuelledLine);
-	TestTrue(TEXT("the departure was logged as a normal one"), bDepartLine);
-
-	bool bHomeLine = false;
-	for (const FString& Line : Spy.CapturedLines)
-	{
-		bHomeLine |= Line.Contains(FString::Printf(TEXT("truck %d home at depot"), TruckId));
-	}
-	TestTrue(TEXT("the tow backed off the service point"), bSawReverse);
-	TestTrue(TEXT("the tow left the traffic model"), bTowGone);
-	TestTrue(TEXT("by arriving home, not by being retired where it stands"), bHomeLine);
-	TestEqual(TEXT("its depot has every truck back"), Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
-	return true;
+bool FFuelTowRecalledOnItsLastLegGetsHomeTest::RunTest(const FString& Parameters)
+{
+	// NO NODE AHEAD TO TURN AT: the step it is on ends at the service point. It finishes the leg,
+	// parks, and backs off by the ordinary cycle - UFuelService::OnAgentPhase's recalled branch.
+	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::A, /*bOnLastLeg=*/true);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(

@@ -600,6 +600,77 @@ bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, con
 	return true;
 }
 
+bool UGroundTraffic::RerouteAgent(int32 AgentId, const URoadNetwork* Network, int32 KeepSteps, const FRoutePlan& Tail)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	FRoadAgent& Agent = Agents[Index];
+	const FRoutePlan& Live = Agent.Follower.Plan;
+	if (Agent.Phase != EAgentPhase::Taxiing || !Live.IsValid())
+	{
+		return false;
+	}
+
+	// NEVER BEHIND THE AGENT - see ReplanAt's identical guard, and the header.
+	const int32 OnStep = CurrentStep(Live, Agent.Follower.Travelled);
+	if (KeepSteps <= OnStep || KeepSteps > Live.Steps.Num())
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("RerouteAgent %d refused: keeping %d step(s) would cut the step the agent is on (%d)"),
+			AgentId, KeepSteps, OnStep);
+		return false;
+	}
+
+	const FRoutePlan Spliced = RouteSearch::Splice(Live, KeepSteps, Tail);
+	if (!Spliced.IsValid())
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("RerouteAgent %d refused: the new route does not start where step %d ends"),
+			AgentId, KeepSteps - 1);
+		return false;
+	}
+
+	// THE SPLICE JUDGED WHOLE, FROM THE LIVE CHAIN - ExtendRoute's check, and the reverse too: a
+	// route home from a service point opens its tail with the bay's reverse leg, which only the
+	// chain the kept prefix leaves can solve. Refused, like a failed search, before anything moves -
+	// and at LOG level, as SpliceReplan's is: a caller tries the next node on (UFuelService::
+	// SendTruckHome), so a refusal here is an answer to a question, not a fault.
+	if (const FVehicle* Vehicle = Agent.AsVehicle();
+		Vehicle != nullptr && Vehicle->HasTrailer() && Agent.TowAxles.Num() == Vehicle->Tow.Num()
+		&& Agent.GetJackknifedLink() == INDEX_NONE && Network != nullptr)
+	{
+		FTowSeed Seed;
+		Seed.Axles = Agent.TowAxles;
+		// LastMotion's heading, with its position - FPlanReResolver::QueryFor's reason.
+		Seed.Heading = Agent.LastMotion.Heading;
+		Seed.Speed = Agent.Follower.Speed;
+		Seed.Travelled = Agent.Follower.Travelled;
+		Seed.Origin = Agent.LastMotion.Position;
+		const FFitVerdict Whole = VehicleFit::JudgePlan(Spliced, *Vehicle, *Network, &Seed);
+		if (Whole.Refusal == EFitRefusal::TrailerFolds || Whole.Refusal == EFitRefusal::ReverseUnsolvable)
+		{
+			UE_LOG(LogAirsideTraffic, Log, TEXT("RerouteAgent %d refused: the new route does not hold the %s's tow (%s)"),
+				AgentId, *Vehicle->TypeCode.ToString(), *Whole.Describe());
+			return false;
+		}
+	}
+
+	// THE GOAL MOVES THROUGH ReleaseGoal/TakeGoal, as in RedirectAgent and ExtendRoute; the
+	// follower keeps driving through Replace; and ReplanAt's bookkeeping for a route that changed
+	// under a moving agent - see FPlanReResolver::ReplanAt for why each of the three is needed.
+	ReleaseGoal(Agent, AgentId);
+	const double WasRemaining = Live.Length - Agent.Follower.Travelled;
+	Agent.Follower.Replace(Spliced, Agent.Chassis());
+	Occupancy.ReleaseReservations(AgentId);
+	Agent.ClearArbitration();
+	Agent.ResetStall();
+	TakeGoal(Agent, AgentId, Network, Spliced);
+	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d re-routed after step %d: %.0f uu to go, was %.0f"),
+		AgentId, KeepSteps - 1, Spliced.Length - Agent.Follower.Travelled, WasRemaining);
+	return true;
+}
+
 bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
 {
 	const int32 Index = FindIndex(AgentId);

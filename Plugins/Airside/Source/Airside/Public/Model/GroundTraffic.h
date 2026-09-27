@@ -203,6 +203,34 @@ public:
 		double KeepBehind = -1.0, double* OutDropped = nullptr);
 
 	/**
+	 * Sends a MOVING agent somewhere NEW without stopping it: the live plan's first KeepSteps
+	 * steps, spliced with Tail (RouteSearch::Splice), handed to the follower with Replace - so
+	 * Travelled, Speed, Heading and a tow's chain all carry on - and the goal moved to Tail's end
+	 * through the same two calls RedirectAgent and ExtendRoute use (ReleaseGoal, TakeGoal).
+	 *
+	 * FOR A JOB CALLED OFF MID-DRIVE (final review, 2026-09-27): a fuel vehicle whose aircraft
+	 * leaves before it arrives. RedirectAgent is a dispatch - it restarts the vehicle at the new
+	 * plan's FIRST point, so a route home searched from anywhere but where the vehicle is put it
+	 * there in one frame. ReplanAt keeps the goal; ExtendRoute keeps every step. This keeps the
+	 * steps up to a node ahead of the agent and changes the goal - ReplanAt's splice with a new
+	 * destination, and ReplanAt's bookkeeping: reservations for the route that no longer exists
+	 * released, the arbitration fields and the stall clock cleared.
+	 *
+	 * KeepSteps MUST KEEP THE STEP THE AGENT IS ON (KeepSteps > CurrentStep), for ReplanAt's
+	 * reason: Travelled survives, so a splice behind the agent re-maps it onto other geometry and
+	 * it teleports. Tail must start where step KeepSteps - 1 ends.
+	 *
+	 * FALSE AND NOTHING CHANGED for an unknown or not-Taxiing agent, a KeepSteps that is not
+	 * ahead of it, a Tail that does not join, or - for a tow - a spliced route that does not
+	 * hold its trailer, judged WHOLE from the live chain (VehicleFit::JudgePlan): a tail searched
+	 * from a straight lay can still fold a trailer the kept prefix has swung, and a reverse in it
+	 * is solved from the chain the prefix leaves, which only the whole route knows.
+	 * ENFORCED BY: AirportOps.Fuel.TowRecalledMidRouteGetsHome,
+	 * AirportOps.Fuel.TruckRecalledMidRouteGetsHome
+	 */
+	bool RerouteAgent(int32 AgentId, const URoadNetwork* Network, int32 KeepSteps, const FRoutePlan& Tail);
+
+	/**
 	 * Sends a PARKED agent to whichever runway gives the shortest admitted taxi, with the
 	 * take-off armed - the inspector's Depart button. Anything not Parked is refused as
 	 * NotParked: a taxiing aircraft has a plan, an arriving one is not on the ground, a
