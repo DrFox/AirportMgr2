@@ -24,9 +24,14 @@ namespace MarkingQuads
 	 * call any more (review of #103): AppendTriangleUp drops a degenerate or sliver one,
 	 * which a marking too small or too thin to rasterise can now hit exactly like any other
 	 * geometry the builders emit.
+	 *
+	 * MaterialID is the slot the quad draws with - 0, the layer's own material, unless a
+	 * builder paints more than one colour on its layer (FStandMarkingBuilder's EStandPaint,
+	 * resolved to ids by its caller so no builder names a colour).
 	 */
 	inline void AddQuad(FRoadMeshBuffers& Out, double Z,
-		const FVector2D& P0, const FVector2D& P1, const FVector2D& P2, const FVector2D& P3)
+		const FVector2D& P0, const FVector2D& P1, const FVector2D& P2, const FVector2D& P3,
+		int32 MaterialID = 0)
 	{
 		const int32 Base = Out.Positions.Num();
 		FVector2D Corners[4] = { P0, P1, P2, P3 };
@@ -58,8 +63,8 @@ namespace MarkingQuads
 			Out.UV2.Add(FVector2f(0.f, 1.f));
 		}
 		// (0,1,2) and (0,2,3) counter-clockwise; AppendTriangleUp applies its own flip.
-		Out.AppendTriangleUp(Base + 0, Base + 1, Base + 2, 0);
-		Out.AppendTriangleUp(Base + 0, Base + 2, Base + 3, 0);
+		Out.AppendTriangleUp(Base + 0, Base + 1, Base + 2, MaterialID);
+		Out.AppendTriangleUp(Base + 0, Base + 2, Base + 3, MaterialID);
 	}
 
 	/**
@@ -69,12 +74,13 @@ namespace MarkingQuads
 	 */
 	inline void AddRect(FRoadMeshBuffers& Out, double Z, const FVector2D& Origin,
 		const FVector2D& Along, const FVector2D& Across,
-		double Along0, double Along1, double Across0, double Across1)
+		double Along0, double Along1, double Across0, double Across1, int32 MaterialID = 0)
 	{
 		AddQuad(Out, Z,
 			Origin + Along * Along0 + Across * Across0,
 			Origin + Along * Along1 + Across * Across0,
 			Origin + Along * Along1 + Across * Across1,
-			Origin + Along * Along0 + Across * Across1);
+			Origin + Along * Along0 + Across * Across1,
+			MaterialID);
 	}
 }

@@ -21,6 +21,7 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class FRoadMeshBuilder;
 struct FRoadSolveResult;
+enum class EStandPaint : uint8;
 
 /**
  * Which dynamic-mesh component a built surface belongs to. Replaces this presenter's five
@@ -326,6 +327,17 @@ public:
 	 *  layer itself rather than trusting the builder was asked to run. */
 	int32 HoldingPaintTriangleCountForTest() const;
 
+	/** The material set the last RebuildMarkings handed the paint layer, for tests: see MarkingMaterialSet. */
+	const URoadMaterialSet* MarkingMaterialSetForTest() const { return MarkingSet; }
+
+	/**
+	 * THE ONE PLACE a stand paint's MEANING becomes a material slot name, and so a colour.
+	 * FStandMarkingBuilder tags quads with EStandPaint and never names a colour; the paint
+	 * layer's set (MarkingMaterialSet) declares these same names.
+	 * ENFORCED BY: Airside.Present.StandMarking.PaintSlotsResolve
+	 */
+	static FName StandPaintSlot(EStandPaint Paint);
+
 	/** The material set the last Rebuild handed the mesh, for tests: see EffectiveMaterialSet. */
 	const URoadMaterialSet* EffectiveMaterialSetForTest() const { return EffectiveSet; }
 
@@ -394,8 +406,9 @@ private:
 	 * call sites instead of inside this shared one.
 	 *
 	 * MaterialSet, when set, skins the layer per material id and Material is unused, exactly
-	 * FDynamicMeshSink's own precedence - only the apron layer passes one (ApronMaterialSet),
-	 * since a stand's pad has a pavement (shared-pavement Task 8). Null is the single-material
+	 * FDynamicMeshSink's own precedence - the apron layer passes one (ApronMaterialSet), since a
+	 * stand's pad has a pavement (shared-pavement Task 8), and so does the HoldingPaint layer
+	 * (MarkingMaterialSet), since stand paint has colours (task 13). Null is the single-material
 	 * layer every other caller has always been. No default: each call site says which it is.
 	 */
 	int32 RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int32(FRoadMeshBuffers&)> BuildFn,
@@ -483,6 +496,16 @@ private:
 	/** The runway paint's material instance: SurfaceMaterial with MarkingColor white. Cached like GhostMID. */
 	UMaterialInstanceDynamic* RunwayMarkingMaterialInstance(UMaterialInterface* SurfaceMaterialBase);
 
+	/** SurfaceMaterial with MarkingColor the stand paint red, cached on RunwayMarkingMaterialInstance's rule. */
+	UMaterialInstanceDynamic* RedPaintMaterialInstance(UMaterialInterface* SurfaceMaterialBase);
+
+	/**
+	 * The HoldingPaint layer's material set: slot 0 the road material (holding bars and stand
+	 * guidance, yellow as ever), then white and red MIDs of it - the slots StandPaintSlot names.
+	 * Rebuilt in place per call, like ApronMaterialSet.
+	 */
+	const URoadMaterialSet* MarkingMaterialSet(const FSurfaceSettings& Settings);
+
 	/** Append a solved node's fan to Builder, if that node solved at all. */
 	void AddGhostJunction(FRoadMeshBuilder& Builder, const FRoadSolveResult& Solved, int32 NodeIndex) const;
 
@@ -514,6 +537,12 @@ private:
 
 	/** See RunwayMarkingMaterialInstance. */
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> RunwayMarkingMID;
+
+	/** See MarkingMaterialSet. Transient for EffectiveSet's reason. */
+	UPROPERTY(Transient) TObjectPtr<URoadMaterialSet> MarkingSet;
+
+	/** See RedPaintMaterialInstance. */
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> RedPaintMID;
 
 	/**
 	 * The hypothetical graph the ghost is solved against.

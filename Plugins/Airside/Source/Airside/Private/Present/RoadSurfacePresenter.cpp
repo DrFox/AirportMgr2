@@ -433,6 +433,85 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 	}
 }
 
+namespace StandPaintSlots
+{
+	/**
+	 * The paint layer's three slot names, spelled once: StandPaintSlot maps meanings onto them
+	 * and MarkingMaterialSet declares them, and a name typed at both sites is a name that
+	 * drifts (URoadMaterialSet::RunwaySlotName's own rule).
+	 */
+	const FName Guidance(TEXT("PaintGuidance"));
+	const FName White(TEXT("PaintWhite"));
+	const FName Red(TEXT("PaintRed"));
+
+	/**
+	 * THE STAND PAINT RED, in ONE place: an equipment-restraint red, darker than pure red so
+	 * it reads as paint on concrete rather than a UI highlight. MarkingColor goes through the
+	 * road material's paint path exactly as the yellow and the runway white do, so this is a
+	 * base colour, not an emissive. Picked 2026-09-27, unjudged in PIE.
+	 */
+	const FLinearColor RedPaint(0.60f, 0.05f, 0.04f);
+}
+
+FName URoadSurfacePresenter::StandPaintSlot(EStandPaint Paint)
+{
+	// No `default:` - a new EStandPaint without a case is a compile warning here, and
+	// Airside.Present.StandMarking.PaintSlotsResolve walks every value.
+	switch (Paint)
+	{
+	case EStandPaint::Guidance:   return StandPaintSlots::Guidance;
+	case EStandPaint::Boundary:   return StandPaintSlots::White;
+	case EStandPaint::Restraint:  return StandPaintSlots::Red;
+	case EStandPaint::HatchMark:  return StandPaintSlots::Red;
+	case EStandPaint::HatchSpace: return StandPaintSlots::White;
+	case EStandPaint::Count:      break;
+	}
+	return StandPaintSlots::Guidance;
+}
+
+UMaterialInstanceDynamic* URoadSurfacePresenter::RedPaintMaterialInstance(UMaterialInterface* SurfaceMaterialBase)
+{
+	// RE-CREATED WHEN THE BASE MOVES - RunwayMarkingMaterialInstance's own rule (issue #193),
+	// for its reason: a cache that only checks "is there one yet" keeps the old skin after
+	// SurfaceMaterial is edited.
+	if (SurfaceMaterialBase != nullptr && (RedPaintMID == nullptr || RedPaintMID->Parent != SurfaceMaterialBase))
+	{
+		RedPaintMID = UMaterialInstanceDynamic::Create(SurfaceMaterialBase, this);
+		RedPaintMID->SetVectorParameterValue(RoadMaterialParams::MarkingColor, StandPaintSlots::RedPaint);
+	}
+	return RedPaintMID;
+}
+
+const URoadMaterialSet* URoadSurfacePresenter::MarkingMaterialSet(const FSurfaceSettings& Settings)
+{
+	if (MarkingSet == nullptr)
+	{
+		MarkingSet = NewObject<URoadMaterialSet>(this, NAME_None, RF_Transient);
+	}
+	MarkingSet->Slots.Reset();
+
+	// SLOT 0 IS THE LAYER'S OWN MATERIAL, the road's, exactly the single material this layer
+	// drew with before stand paint had colours - so every holding bar (id 0, MarkingQuads::
+	// AddQuad's default) is untouched. The two colours are MIDs of that same material, the
+	// runway's white one reused rather than made twice.
+	FRoadMaterialSlot Guidance;
+	Guidance.Name = StandPaintSlots::Guidance;
+	Guidance.Material = Settings.SurfaceMaterial;
+	MarkingSet->Slots.Add(Guidance);
+
+	FRoadMaterialSlot White;
+	White.Name = StandPaintSlots::White;
+	White.Material = RunwayMarkingMaterialInstance(Settings.SurfaceMaterial);
+	MarkingSet->Slots.Add(White);
+
+	FRoadMaterialSlot Red;
+	Red.Name = StandPaintSlots::Red;
+	Red.Material = RedPaintMaterialInstance(Settings.SurfaceMaterial);
+	MarkingSet->Slots.Add(Red);
+
+	return MarkingSet;
+}
+
 void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings)
 {
 	// Half a unit ABOVE the road, so the paint wins the depth test against the pavement it
@@ -443,7 +522,9 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	FRoadMeshBuffers Buffers;
 	// THE ROAD'S OWN MATERIAL, on purpose: every vertex carries UV1 = 0, which M_RoadSurface
 	// reads as "on the centreline" and paints MarkingColor across the whole quad. See
-	// FHoldingPositionMarkingBuilder for why that is the paint wanted and not a defect.
+	// FHoldingPositionMarkingBuilder for why that is the paint wanted and not a defect. Since
+	// task 13 it is slot 0 of a SET (MarkingMaterialSet) whose other slots are MIDs of the same
+	// material with MarkingColor white and red - the stand's boundary, restraint line and hatch.
 	//
 	// STAND PAINT SHARES THIS LAYER (task 8): a drawn stand's lead-in, stop bar and letter are
 	// the same solid-MarkingColor quad, so a second component would only be a second material
@@ -458,14 +539,35 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	// RESOLVED ONCE PER REBUILD, not once per stand painted - #292's own rule for a Build/
 	// caller that touches more than one letter in a pass. See Solve/LetterEnvelope.h.
 	const FLetterEnvelopeTable Envelopes = UAirsideSettings::ResolveLetterEnvelopeTable();
+
+	// PAINT BY MEANING (task 13): the builder tags each stand quad with an EStandPaint and this
+	// resolves each to its slot's id, once per rebuild. An unresolved one would draw on slot 0 -
+	// yellow where white or red was meant - so it is counted and said, never silently folded.
+	// ENFORCED BY: Airside.Present.StandMarking.PaintSlotsResolve
+	const URoadMaterialSet* Materials = MarkingMaterialSet(Settings);
+	FStandPaintIds PaintIds;
+	int32 UnresolvedPaints = 0;
+	for (int32 Index = 0; Index < static_cast<int32>(EStandPaint::Count); ++Index)
+	{
+		const int32 Id = Materials->IndexOf(StandPaintSlot(static_cast<EStandPaint>(Index)));
+		UnresolvedPaints += Id == INDEX_NONE ? 1 : 0;
+		PaintIds.Ids[Index] = FMath::Max(Id, 0);
+	}
+	if (UnresolvedPaints > 0)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("Stand paint: %d meaning(s) name a slot the marking set does not declare - drawn with slot 0"),
+			UnresolvedPaints);
+	}
+
 	const int32 Painted = RebuildLayer(ESurfaceLayer::HoldingPaint,
-		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus, &Envelopes](FRoadMeshBuffers& OutBuffers)
+		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus, &Envelopes, &PaintIds](FRoadMeshBuffers& OutBuffers)
 		{
 			HoldingPositionsPainted = FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, OutBuffers);
-			StandsPainted = FStandMarkingBuilder::Build(Network, MarkingZ, OutBuffers, Envelopes, &StandCensus);
+			StandsPainted = FStandMarkingBuilder::Build(Network, MarkingZ, OutBuffers, Envelopes, &StandCensus, PaintIds);
 			return HoldingPositionsPainted + StandsPainted;
 		},
-		Settings.SurfaceMaterial, nullptr, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
+		Settings.SurfaceMaterial, Materials, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
 	if (Painted == INDEX_NONE)
 	{
 		return;

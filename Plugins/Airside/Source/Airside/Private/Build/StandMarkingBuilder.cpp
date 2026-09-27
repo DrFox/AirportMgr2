@@ -52,7 +52,7 @@ const uint8 FStandMarkingBuilder::GlyphSegments[6] = {
 };
 
 int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out,
-	const FLetterEnvelopeTable& Envelopes, FStandMarkingCensus* Census)
+	const FLetterEnvelopeTable& Envelopes, FStandMarkingCensus* Census, const FStandPaintIds& PaintIds)
 {
 	FStandMarkingCensus Local;
 	FStandMarkingCensus& C = Census != nullptr ? *Census : Local;
@@ -112,12 +112,13 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 
 		// LEAD-IN: entrance midpoint to the stop mark, along the heading, LeadInWidth wide.
 		MarkingQuads::AddRect(Out, Z, EntranceMid, Facing, Right,
-			0.0, Distance, -LeadInWidth * 0.5, LeadInWidth * 0.5);
+			0.0, Distance, -LeadInWidth * 0.5, LeadInWidth * 0.5, PaintIds[EStandPaint::Guidance]);
 		++C.LeadIns;
 
 		// STOP BAR: across the heading, centred ON the stop mark (Entity.Position).
 		MarkingQuads::AddRect(Out, Z, Entity.Position, Facing, Right,
-			-StopBarWidth * 0.5, StopBarWidth * 0.5, -StopBarLength * 0.5, StopBarLength * 0.5);
+			-StopBarWidth * 0.5, StopBarWidth * 0.5, -StopBarLength * 0.5, StopBarLength * 0.5,
+			PaintIds[EStandPaint::Guidance]);
 		++C.StopBars;
 
 		// LETTER: seven-segment strokes, centred GlyphInset inside the entrance. "Up" is
@@ -135,7 +136,7 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 					continue;
 				}
 				MarkingQuads::AddRect(Out, Z, GlyphCenter, Right, Facing,
-					Segment.XMin, Segment.XMax, Segment.YMin, Segment.YMax);
+					Segment.XMin, Segment.XMax, Segment.YMin, Segment.YMax, PaintIds[EStandPaint::Guidance]);
 				++C.LetterSegments;
 			}
 		}

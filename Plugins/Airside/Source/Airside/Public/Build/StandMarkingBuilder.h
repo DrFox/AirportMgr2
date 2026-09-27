@@ -7,6 +7,38 @@
 
 class URoadNetwork;
 
+/**
+ * What a piece of stand paint MEANS - never what colour it is. Build/ describes intent, the
+ * same discipline Tool/ keeps with IToolPreviewSink; URoadSurfacePresenter::StandPaintSlot is
+ * the ONE place a meaning becomes a material slot (and so a colour).
+ */
+enum class EStandPaint : uint8
+{
+	/** Where the aircraft goes: lead-in, stop bar, the stand letter. */
+	Guidance,
+	/** The edge of the stand's ground. */
+	Boundary,
+	/** The equipment restraint line round the parked aircraft's envelope. */
+	Restraint,
+	/** The marked stripes of vehicle-only ground's hatch. */
+	HatchMark,
+	/** The stripes between them. */
+	HatchSpace,
+	Count
+};
+
+/**
+ * The material id each EStandPaint's triangles carry, filled by the caller from its material
+ * set. All 0 by default, so a caller with no set - every Build/ test before paint had meanings -
+ * paints everything on slot 0 exactly as before.
+ */
+struct FStandPaintIds
+{
+	int32 Ids[static_cast<int32>(EStandPaint::Count)] = {};
+
+	int32 operator[](EStandPaint Paint) const { return Ids[static_cast<int32>(Paint)]; }
+};
+
 /** How many of each stand marking one Build painted, for the log line and the tests. */
 struct AIRSIDE_API FStandMarkingCensus
 {
@@ -95,5 +127,6 @@ struct AIRSIDE_API FStandMarkingBuilder
 	 * the fleet has since raised Code C to.
 	 */
 	static int32 Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out,
-		const FLetterEnvelopeTable& Envelopes, FStandMarkingCensus* Census = nullptr);
+		const FLetterEnvelopeTable& Envelopes, FStandMarkingCensus* Census = nullptr,
+		const FStandPaintIds& PaintIds = FStandPaintIds());
 };

@@ -12,6 +12,12 @@
 #include "Solve/StandBox.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/RoadEditTarget.h"
+#include "Components/DynamicMeshComponent.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Present/RoadSurfacePresenter.h"
+#include "Profiles/RoadMaterialSet.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -363,6 +369,130 @@ bool FStandMarkingPaintsAfterPlacementTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("placing a stand paints it with no other edit in between - the same wiring "
 		"issue #179 proved for the holding-position toggle"), After > Before);
 
+	return true;
+}
+
+/**
+ * THE PAINT CARRIES ITS MEANING, NOT A COLOUR: every triangle the builder emits takes the
+ * material id the caller mapped its EStandPaint to. Ids chosen here to be distinct and non-zero,
+ * so a quad that ignored the table (id 0, AddQuad's default) cannot pass.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingPaintCarriesItsMeaningIdTest,
+	"Airside.Build.StandMarking.PaintCarriesItsMeaningId",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingPaintCarriesItsMeaningIdTest::RunTest(const FString& Parameters)
+{
+	using namespace StandMarkingTest;
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	PlaceDrawnStand(*Net, UEntityDefinition::MakeStandTransient(), EIcaoCode::C, 0.0);
+
+	FStandPaintIds Ids;
+	for (int32 Paint = 0; Paint < static_cast<int32>(EStandPaint::Count); ++Paint)
+	{
+		Ids.Ids[Paint] = 10 + Paint;
+	}
+	FRoadMeshBuffers Buffers;
+	FStandMarkingCensus Census;
+	FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census, Ids);
+	if (!TestTrue(TEXT("something painted"), Buffers.MaterialIDs.Num() > 0)) { return false; }
+
+	TSet<int32> Seen(Buffers.MaterialIDs);
+	for (const int32 Id : Seen)
+	{
+		TestTrue(FString::Printf(TEXT("id %d is one the table handed in"), Id), Id >= 10 && Id < 10 + static_cast<int32>(EStandPaint::Count));
+	}
+	TestTrue(TEXT("the lead-in, stop bar and letter are Guidance"), Seen.Contains(Ids[EStandPaint::Guidance]));
+	return true;
+}
+
+/**
+ * EVERY STAND PAINT RESOLVES ON THE BUILT COMPONENT (memory: an unresolved slot renders the
+ * floor checker, silently). Modelled on Airside.Build.StandPadSlots: a real B stand through the
+ * facade, the real rebuild, then the HoldingPaint component read back - each EStandPaint's slot
+ * is declared, its id holds a material that is not the engine default, Guidance is slot 0 (the
+ * road material the holding bars always had), and the two paint colours are MIDs of that
+ * material with MarkingColor white and red.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingPaintSlotsResolveTest,
+	"Airside.Present.StandMarking.PaintSlotsResolve",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingPaintSlotsResolveTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	IRoadEditTarget* Target = Actor;
+	const TArray<FVector2D> Pad = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+	if (!TestTrue(TEXT("a B stand is placed"), Target->PlaceStandInPlot(Pad, Pad[0], Pad[1], EPavement::Tarmac) != INDEX_NONE)) { return false; }
+	Actor->RebuildMesh();
+
+	URoadSurfacePresenter* Presenter = Actor->GetPresenter();
+	UDynamicMeshComponent* Paint = Presenter != nullptr ? Presenter->GetLayerComponentForTest(ESurfaceLayer::HoldingPaint) : nullptr;
+	const URoadMaterialSet* Set = Presenter != nullptr ? Presenter->MarkingMaterialSetForTest() : nullptr;
+	if (!TestNotNull(TEXT("a paint component"), Paint) || !TestNotNull(TEXT("a marking material set"), Set)) { return false; }
+	TestEqual(TEXT("the component holds one material per declared slot - else the proxy draws everything as slot 0"),
+		Paint->GetNumMaterials(), Set->Slots.Num());
+
+	UMaterialInterface* Floor = UMaterial::GetDefaultMaterial(MD_Surface);
+	UMaterialInterface* Road = Paint->GetMaterial(0);
+	auto ColourAt = [&](int32 Id, FLinearColor& Out) -> bool
+	{
+		const UMaterialInstanceDynamic* MID = Cast<UMaterialInstanceDynamic>(Paint->GetMaterial(Id));
+		return MID != nullptr && MID->Parent == Road
+			&& MID->GetVectorParameterValue(FHashedMaterialParameterInfo(TEXT("MarkingColor")), Out);
+	};
+
+	for (int32 Index = 0; Index < static_cast<int32>(EStandPaint::Count); ++Index)
+	{
+		const EStandPaint P = static_cast<EStandPaint>(Index);
+		const FName SlotName = URoadSurfacePresenter::StandPaintSlot(P);
+		const int32 Id = Set->IndexOf(SlotName);
+		if (!TestTrue(FString::Printf(TEXT("paint %d's slot %s is declared"), Index, *SlotName.ToString()), Id != INDEX_NONE)) { continue; }
+		UMaterialInterface* Mat = Paint->GetMaterial(Id);
+		TestTrue(FString::Printf(TEXT("paint %d draws with a real material, not the floor checker"), Index), Mat != nullptr && Mat != Floor);
+
+		FLinearColor Colour;
+		switch (P)
+		{
+		case EStandPaint::Guidance:
+			TestEqual(TEXT("Guidance is slot 0, the road material the holding bars always had"), Id, 0);
+			break;
+		case EStandPaint::Boundary:
+		case EStandPaint::HatchSpace:
+			if (TestTrue(FString::Printf(TEXT("paint %d is a MarkingColor MID of the road material"), Index), ColourAt(Id, Colour)))
+			{
+				TestTrue(FString::Printf(TEXT("paint %d is white"), Index), Colour.Equals(FLinearColor::White));
+			}
+			break;
+		case EStandPaint::Restraint:
+		case EStandPaint::HatchMark:
+			if (TestTrue(FString::Printf(TEXT("paint %d is a MarkingColor MID of the road material"), Index), ColourAt(Id, Colour)))
+			{
+				TestTrue(FString::Printf(TEXT("paint %d is red (%s)"), Index, *Colour.ToString()), Colour.R > 5.0f * Colour.G && Colour.R > 5.0f * Colour.B);
+			}
+			break;
+		default:
+			AddError(TEXT("an EStandPaint with no expectation here - add one"));
+		}
+	}
+
+	// Every triangle's id is one the component can draw: an id >= NumMaterials is dropped by
+	// the proxy with nothing logged.
+	const UE::Geometry::FDynamicMesh3& Mesh = Paint->GetDynamicMesh()->GetMeshRef();
+	const UE::Geometry::FDynamicMeshMaterialAttribute* MeshIds = Mesh.HasAttributes() ? Mesh.Attributes()->GetMaterialID() : nullptr;
+	if (!TestNotNull(TEXT("the paint mesh carries material ids"), MeshIds)) { return false; }
+	TSet<int32> Seen;
+	for (const int32 Tri : Mesh.TriangleIndicesItr()) { Seen.Add(MeshIds->GetValue(Tri)); }
+	for (const int32 Id : Seen)
+	{
+		TestTrue(FString::Printf(TEXT("mesh id %d has a material"), Id), Id >= 0 && Id < Paint->GetNumMaterials());
+	}
 	return true;
 }
 
