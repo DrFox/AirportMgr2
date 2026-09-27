@@ -81,11 +81,12 @@ bool FTvRoadWidthTest::RunTest(const FString& Parameters)
 	FToolContext Context;
 	Context.Target = &Target;
 
-	// 1. ONE AXIS, ONE BUTTON PER WIDTH, labelled in metres.
+	// 1. WIDTH FIRST, ONE BUTTON PER WIDTH, labelled in metres - then the surface row
+	//    (Airside.Tool.Variants.RoadSurface covers that one).
 	{
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
 		const TArray<FToolVariantAxis> Axes = TvAxes(Tool, Context);
-		if (!TestEqual(TEXT("a taxiway offers one choice, its width"), Axes.Num(), 1)) { return false; }
+		if (!TestEqual(TEXT("a taxiway offers two choices, width and surface"), Axes.Num(), 2)) { return false; }
 		TestEqual(TEXT("the axis is Width"), Axes[0].Id, FName(TEXT("Width")));
 		if (!TestEqual(TEXT("one option per standard width"), Axes[0].Options.Num(), 3)) { return false; }
 		TestEqual(TEXT("labelled by width"), Axes[0].Options[0].Label.ToString(), FString(TEXT("10.5 m")));
@@ -121,7 +122,7 @@ bool FTvRoadWidthTest::RunTest(const FString& Parameters)
 
 		TestFalse(TEXT("past the end is refused"), Tool.SelectVariant(Context, 0, 3));
 		TestFalse(TEXT("a negative option is refused"), Tool.SelectVariant(Context, 0, -1));
-		TestFalse(TEXT("an axis the tool does not have is refused"), Tool.SelectVariant(Context, 1, 0));
+		TestFalse(TEXT("an axis the tool does not have is refused"), Tool.SelectVariant(Context, 2, 0));
 		TestEqual(TEXT("none of them moved the width"), Tool.GetWidthIndex(), 2);
 	}
 
@@ -143,19 +144,22 @@ bool FTvRoadWidthTest::RunTest(const FString& Parameters)
 		OneContext.Target = &One;
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
 		const TArray<FToolVariantAxis> Axes = TvAxes(Tool, OneContext);
-		TestTrue(TEXT("one width is one option"), Axes.Num() == 1 && Axes[0].Options.Num() == 1);
+		TestTrue(TEXT("one width is one option"), Axes.Num() == 2 && Axes[0].Options.Num() == 1);
 		Tool.OnReselect(OneContext);
 		Tool.OnReselect(OneContext);
 		TestEqual(TEXT("and cycling one option stays on it"), Tool.GetWidthIndex(), 0);
 	}
 
-	// 7. NO WIDTHS, NO AXIS - the row hides rather than showing an empty strip.
+	// 7. NO WIDTHS, NO WIDTH ROW - it hides rather than showing an empty strip. The surface row
+	//    stays: it is the tool's own enum and needs no content.
 	{
 		FTvWidthTarget Empty;
 		FToolContext EmptyContext;
 		EmptyContext.Target = &Empty;
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
-		TestEqual(TEXT("an empty content set offers no choice"), TvAxes(Tool, EmptyContext).Num(), 0);
+		const TArray<FToolVariantAxis> EmptyAxes = TvAxes(Tool, EmptyContext);
+		TestTrue(TEXT("an empty content set offers only the surface"),
+			EmptyAxes.Num() == 1 && EmptyAxes[0].Id == FName(TEXT("Surface")));
 	}
 
 	// 8. A TOOL WITH NOTHING TO CHOOSE says so - the base's silence, reached through the registry.
@@ -362,7 +366,7 @@ bool FTvSessionTest::RunTest(const FString& Parameters)
 
 	TArray<FToolVariantAxis> Axes;
 	Session.GetActiveVariantAxes(Context, Axes);
-	if (!TestEqual(TEXT("the lit taxiway tool's one row reaches the session"), Axes.Num(), 1)) { return false; }
+	if (!TestEqual(TEXT("the lit taxiway tool's two rows reach the session"), Axes.Num(), 2)) { return false; }
 	TestEqual(TEXT("with every content width"), Axes[0].Options.Num(), Count);
 
 	TestTrue(TEXT("a pick through the session is accepted"), Session.SelectActiveVariant(Context, 0, 1));

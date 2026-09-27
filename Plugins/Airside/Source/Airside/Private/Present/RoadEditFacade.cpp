@@ -209,7 +209,9 @@ FBuildQuote URoadEditFacade::QuoteForSegment(int32 SegmentIndex) const
 	{
 		return FBuildQuote();
 	}
-	return BuildCost::ForSegment(*Profile, BuildCost::SegmentLengthUu(*Network, Segment));
+	// THE SEGMENT'S OWN SURFACE: a refund at the tarmac rate for a grass road would pay back
+	// more than it cost, and delete-and-redraw would print money.
+	return BuildCost::ForSegment(*Profile, BuildCost::SegmentLengthUu(*Network, Segment), Segment.Surface);
 }
 
 FBuildQuote URoadEditFacade::QuoteForAllPavement() const
@@ -482,7 +484,7 @@ FBuildSessionTunables URoadEditFacade::MakeTunables(double ViewWorldWidth)
 }
 
 FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-	int32 WidthIndex) const
+	int32 WidthIndex, ERoadSurface Surface) const
 {
 	const URoadNetwork* Network = Actor().Network;
 	// THROUGH THE ACTOR'S OWN FORWARDER, not this class's ResolveProfileFor directly - that
@@ -498,10 +500,11 @@ FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoa
 		return FBuildQuote();
 	}
 	return BuildCost::ForSegment(*Profile,
-		FVector2D::Distance(Network->GetNodes()[FromIndex].Position, To));
+		FVector2D::Distance(Network->GetNodes()[FromIndex].Position, To), Surface);
 }
 
-bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex)
+bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
+	ERoadSurface Surface)
 {
 	if (FromIndex == ToIndex)
 	{
@@ -549,7 +552,7 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	// CommitPurchase's own comment.
 	const FBuildQuote Quote = BuildCost::ForSegment(*Chosen,
 		FVector2D::Distance(Owner.Network->GetNodes()[From.Index].Position,
-			Owner.Network->GetNodes()[To.Index].Position));
+			Owner.Network->GetNodes()[To.Index].Position), Surface);
 	if (!CanAfford(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("ConnectNodes refused: cannot afford %s"),
@@ -572,7 +575,12 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 		return false;
 	}
 
-	UE_LOG(LogRoadMesh, Log, TEXT("Segment %d connected: node %d -> node %d"), Segment.Index, FromIndex, ToIndex);
+	// INSIDE THE SCOPE, before the commit, so the surface is part of the one undo step and
+	// the rebuild the commit fires already sees grass - see IRoadEditTarget::ConnectNodes.
+	Owner.Network->SetSegmentSurface(Segment, Surface);
+
+	UE_LOG(LogRoadMesh, Log, TEXT("Segment %d connected: node %d -> node %d, %s"),
+		Segment.Index, FromIndex, ToIndex, RoadSurfaceName(Surface));
 	CommitPurchase(Edit, Quote);
 	return true;
 }
@@ -1496,11 +1504,18 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 			? Plan.HealProfile.Get()
 			: Owner.ResolveProfile();
 
-		if (!Owner.Network->AddStraightSegment(Stranded, Plan.Anchor, Relay).IsSet())
+		const FRoadSegmentId Healed = Owner.Network->AddStraightSegment(Stranded, Plan.Anchor, Relay);
+		if (!Healed.IsSet())
 		{
 			UE_LOG(LogRoadMesh, Error,
 				TEXT("DeleteNode healed only partly: node %d could not rejoin %d"),
 				Stranded.Index, Plan.Anchor.Index);
+		}
+		else if (Plan.HealSurface != ERoadSurface::Tarmac)
+		{
+			// THE PLAN'S SURFACE with the plan's profile - see FRoadDeletionPlan::HealSurface.
+			// Refused quietly on a runway relay, whose ground is its facts'.
+			Owner.Network->SetSegmentSurface(Healed, Plan.HealSurface);
 		}
 	}
 

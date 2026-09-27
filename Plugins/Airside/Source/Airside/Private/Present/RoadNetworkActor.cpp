@@ -923,9 +923,9 @@ IBuildPurse* ARoadNetworkActor::GetPurse() const
 }
 
 FBuildQuote ARoadNetworkActor::QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-	int32 WidthIndex) const
+	int32 WidthIndex, ERoadSurface Surface) const
 {
-	return Facade->QuoteForConnect(FromIndex, To, Kind, WidthIndex);
+	return Facade->QuoteForConnect(FromIndex, To, Kind, WidthIndex, Surface);
 }
 
 FBuildQuote ARoadNetworkActor::QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* RunwayProfile) const
@@ -948,7 +948,13 @@ URoadProfile* ARoadNetworkActor::ResolveProfileFor(ERoadKind Kind, int32 WidthIn
 bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind,
 	int32 WidthIndex)
 {
-	return Facade->ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex);
+	return ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, ERoadSurface::Tarmac);
+}
+
+bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind,
+	int32 WidthIndex, ERoadSurface Surface)
+{
+	return Facade->ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, Surface);
 }
 
 bool ARoadNetworkActor::AddReverseTurn(int32 NodeIndex, int32 FromFarIndex, int32 IntoFarIndex)

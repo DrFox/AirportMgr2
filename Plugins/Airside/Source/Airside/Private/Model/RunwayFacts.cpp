@@ -31,6 +31,18 @@ int32 RunwayMaterialSlot(ERunwaySurface Surface)
 	}
 }
 
+ERunwaySurface RoadSurfacePavement(ERoadSurface Surface)
+{
+	return Surface == ERoadSurface::Grass ? ERunwaySurface::Grass : ERunwaySurface::Tarmac;
+}
+
+const TCHAR* RoadSurfaceName(ERoadSurface Surface)
+{
+	// THROUGH THE RUNWAY SPELLING, so "grass" in a taxiway log line and in a runway refusal
+	// are one string rather than two that happen to match.
+	return RunwaySurfaceName(RoadSurfacePavement(Surface));
+}
+
 const TCHAR* RunwayApproachName(ERunwayApproach Approach)
 {
 	switch (Approach)

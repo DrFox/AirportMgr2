@@ -44,6 +44,18 @@ struct AIRSIDE_API FRoadSegment
 	 */
 	UPROPERTY() FRunwayFacts Runway;
 
+	/**
+	 * What a TAXIWAY OR SERVICE ROAD is laid on. A runway ignores it - its surface is
+	 * Runway.Surface above, the strip's, and URoadNetwork::IsGrassRoad asks IsRunwaySegment
+	 * first so a runway can never be read as a grass road.
+	 *
+	 * Here, not on the profile, for FRunwayFacts' reason: the profile is the cross-section and
+	 * is shared by every road of that width, so grass on the profile would double the width
+	 * assets. Set by URoadEditFacade::ConnectNodes; URoadNetwork::SplitSegment copies it onto
+	 * both halves and a node-deletion heal lays the arm's own.
+	 */
+	UPROPERTY() ERoadSurface Surface = ERoadSurface::Tarmac;
+
 	/** Written ONLY by FRoadNetworkSolver, through URoadNetwork::WriteSegmentEndSolve (#191) -
 	 *  not a raw pointer, so this and the cut vertices below cannot land out of step with
 	 *  bSolvedA/B. Distance from each end at which the segment is cut. */

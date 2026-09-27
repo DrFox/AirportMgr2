@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoutePolicy.h"
+#include "Model/RunwayFacts.h"
 #include "Model/RoadTraffic.h"
 #include "Model/SpeedProfile.h"
 #include "Model/VehicleFit.h"
@@ -263,6 +264,22 @@ struct AIRSIDE_API FRouteQuery
 	UPROPERTY() double Wingspan = 0.0;
 
 	/**
+	 * The weakest ground this traveller may taxi on - an aircraft's
+	 * FRunwayRequirements::MinimumSurface, set through NeedsSurface. A GRASS road or taxiway
+	 * weaker than it is refused (URoadNetwork::IsGrassRoad, compared on the runway scale
+	 * through RoadSurfacePavement, so a taxiway and a runway are judged by one ordering).
+	 *
+	 * GRASS, THE DEFAULT, GATES NOTHING: every vehicle and every query made before grass
+	 * roads existed. NOT LIFTED by Find's unconstrained retry - that retry exists to tell
+	 * "too big" from "not connected", and a jet refused a grass taxiway is neither; lifting it
+	 * would report TooWide for an aircraft whose wings fit.
+	 *
+	 * RUNWAYS ARE NOT JUDGED HERE: a strip's surface is RunwayAdmission's, which also knows
+	 * length and approach. This gates taxiing only.
+	 */
+	UPROPERTY() ERunwaySurface MinimumSurface = ERunwaySurface::Grass;
+
+	/**
 	 * An edge the search may not use. Set by a deadlock replan to forbid the edge the agent
 	 * was refused. One edge, not a set: the resolver bans exactly the thing it is stuck on
 	 * and lets the occupancy cost steer round the rest.
@@ -348,6 +365,13 @@ struct AIRSIDE_API FRouteQuery
 	FRouteQuery& WithVehicle(const FVehicle& InVehicle)
 	{
 		Vehicle = &InVehicle;
+		return *this;
+	}
+
+	/** Chainable: see MinimumSurface. Pass the airframe's Requirements.MinimumSurface. */
+	FRouteQuery& NeedsSurface(ERunwaySurface InMinimumSurface)
+	{
+		MinimumSurface = InMinimumSurface;
 		return *this;
 	}
 

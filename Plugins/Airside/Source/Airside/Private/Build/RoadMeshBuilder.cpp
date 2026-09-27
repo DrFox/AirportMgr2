@@ -44,14 +44,26 @@ FRoadMeshBuilder::FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit,
 {
 }
 
-FName FRoadMeshBuilder::RunwaySlotFor(const URoadNetwork& Network, FRoadSegmentId Segment)
+FName FRoadMeshBuilder::SurfaceSlotFor(const URoadNetwork& Network, FRoadSegmentId Segment)
 {
-	// NAME_None for anything that is not a runway, which is what leaves FromProfile
-	// reading the profile's own band names - the path every taxiway and road has always
-	// taken. Only a runway's pavement is decided by a fact on the segment.
-	return Network.IsRunwaySegment(Segment)
-		? URoadMaterialSet::RunwaySlotName(Network.RunwayFactsFor(Segment).Surface)
-		: NAME_None;
+	// NAME_None for a tarmac taxiway or road, which is what leaves FromProfile reading the
+	// profile's own band names - the path every one of them has always taken. A runway's
+	// pavement is decided by its facts, and a grass road's by its Surface.
+	if (Network.IsRunwaySegment(Segment))
+	{
+		return URoadMaterialSet::RunwaySlotName(Network.RunwayFactsFor(Segment).Surface);
+	}
+
+	// THE GRASS RUNWAY'S SLOT, not a slot of its own: one grass material, so a grass taxiway
+	// meeting a grass strip is one field, and M_RunwayGrass already paints no centreline
+	// (build_runway_materials.py, CentrelineWidth 0) - the "no paint on grass" rule for the
+	// material line comes free. EVERY BAND takes it, kerbs and run-offs included: a grass road
+	// has no kerb to draw.
+	if (Network.IsGrassRoad(Segment))
+	{
+		return URoadMaterialSet::RunwaySlotName(RoadSurfacePavement(ERoadSurface::Grass));
+	}
+	return NAME_None;
 }
 
 void FRoadMeshBuilder::JunctionSlots(const URoadNetwork& Network,
@@ -64,6 +76,7 @@ void FRoadMeshBuilder::JunctionSlots(const URoadNetwork& Network,
 	double WidestTotal = -1.0;
 	int32 WidestIndex = MAX_int32;
 	FRoadSegmentId WidestId;
+	bool bWidestPaved = false;
 
 	for (const FRoadSegmentId ArmSegment : ArmSegments)
 	{
@@ -76,18 +89,28 @@ void FRoadMeshBuilder::JunctionSlots(const URoadNetwork& Network,
 
 		const double Total = ArmProfile->GetTotalWidth();
 
+		// PAVED WINS, before width (ruled 2026-09-27): a grass taxiway joining a tarmac one
+		// leaves the junction tarmac, whichever is wider, and only an all-grass junction is
+		// grass. The wider-grass case would otherwise lay a green patch across the paved
+		// road's own line. A RUNWAY counts as paved whatever it is surfaced with - it is
+		// continuous through its junctions (below), and a grass strip crossing a tarmac
+		// taxiway stays the strip, exactly as it did before road surfaces existed.
+		const bool bPaved = !Network.IsGrassRoad(ArmSegment);
+
 		// Ties broken by the LOWEST segment id, not by arm order. Arm order comes from the
 		// solver's boundary walk, which depends on incident-edge angles - so two equally
 		// wide arms would otherwise skin the junction differently depending on which
 		// direction the roads were drawn in.
-		const bool bBetter = (Total > WidestTotal)
-			|| (Total == WidestTotal && ArmSegment.Index < WidestIndex);
+		const bool bBetter = (bPaved && !bWidestPaved)
+			|| (bPaved == bWidestPaved
+				&& ((Total > WidestTotal) || (Total == WidestTotal && ArmSegment.Index < WidestIndex)));
 
 		if (bBetter)
 		{
 			Widest = ArmProfile;
 			WidestTotal = Total;
 			WidestIndex = ArmSegment.Index;
+			bWidestPaved = bPaved;
 			WidestId = ArmSegment;
 		}
 	}
@@ -100,7 +123,7 @@ void FRoadMeshBuilder::JunctionSlots(const URoadNetwork& Network,
 	// The dominant arm paves the junction, and if that arm is a runway the junction is
 	// runway pavement: a runway is continuous THROUGH its junctions (the profile flag says
 	// so), so the crossing must read as the strip, not as the taxiway that joins it.
-	const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(Widest, Materials, RunwaySlotFor(Network, WidestId));
+	const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(Widest, Materials, SurfaceSlotFor(Network, WidestId));
 
 	// Band 0 is the rightmost, which is an OUTER band - the strip runs along the rim.
 	OutStripSlot = Bands.SlotForBand(0);
@@ -192,7 +215,7 @@ TArray<FVector2D> FRoadMeshBuilder::BuildRimWithBandPoints(const URoadNetwork& N
 			const URoadProfile* ArmProfile =
 				ArmSegment ? Network.ProfileFor(*ArmSegment) : nullptr;
 			const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(ArmProfile, Materials,
-				RunwaySlotFor(Network, ArmSegments[ArmIndex]));
+				SurfaceSlotFor(Network, ArmSegments[ArmIndex]));
 
 			// Interior boundaries only: 0 and 1 are the cut vertices already in the rim.
 			for (int32 Boundary = 1; Boundary + 1 < Bands.Alphas.Num(); ++Boundary)
@@ -465,7 +488,7 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 
 	// A runway's bands take the slot its SURFACE names, whatever the profile's bands say -
 	// see FRoadProfileBands::FromProfile's SlotOverride. The facts live on the segment.
-	const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(SegProfile, Materials, RunwaySlotFor(Network, SegmentId));
+	const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(SegProfile, Materials, SurfaceSlotFor(Network, SegmentId));
 	const int32 RailCount = Bands.Alphas.Num();
 
 	// Rails[Boundary][Step]. Boundary 0 is the right edge and the last is the left, so the

@@ -286,12 +286,14 @@ bool FVariantRowFollowsToolTest::RunTest(const FString& Parameters)
 	C->SelectTool(VarRowToolIndex(TEXT("Taxiway")));
 	Bar->RefreshStateForTest(*C);
 	TestTrue(TEXT("over the taxiway tool the row shows"), Bar->IsVariantSectionVisibleForTest());
-	TestEqual(TEXT("one button per taxiway width"), Bar->VariantButtonCountForTest(), Taxiways);
+	const int32 Surfaces = static_cast<int32>(ERoadSurface::Count);
+	TestEqual(TEXT("one button per taxiway width, and one per surface"), Bar->VariantButtonCountForTest(),
+		Taxiways + Surfaces);
 
 	C->SelectTool(VarRowToolIndex(TEXT("Road")));
 	Bar->RefreshStateForTest(*C);
 	TestEqual(TEXT("switching to the road tool REBUILDS the row to the road's widths"),
-		Bar->VariantButtonCountForTest(), Roads);
+		Bar->VariantButtonCountForTest(), Roads + Surfaces);
 
 	C->SelectTool(VarRowToolIndex(TEXT("Runway")));
 	Bar->RefreshStateForTest(*C);
@@ -307,7 +309,7 @@ bool FVariantRowFollowsToolTest::RunTest(const FString& Parameters)
 	// would pass with the click going nowhere.
 	TArray<FToolVariantAxis> Axes;
 	C->GetActiveVariantAxes(Axes);
-	if (!TestEqual(TEXT("the taxiway has one row"), Axes.Num(), 1)) { return false; }
+	if (!TestEqual(TEXT("the taxiway has two rows, width and surface"), Axes.Num(), 2)) { return false; }
 	const int32 Pick = Axes[0].Current == 1 ? 2 : 1;
 	Bar->RunVariantFor(*C, 0, Pick);
 	C->GetActiveVariantAxes(Axes);

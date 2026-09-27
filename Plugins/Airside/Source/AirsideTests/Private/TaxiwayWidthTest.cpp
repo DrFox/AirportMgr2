@@ -35,7 +35,7 @@ namespace
 		int32 Connects = 0;
 
 		virtual int32 PlaceNode(FVector2D) override { return Connects; }
-		virtual bool ConnectNodes(int32, int32, ERoadKind, int32 WidthIndex) override
+		virtual bool ConnectNodes(int32, int32, ERoadKind, int32 WidthIndex, ERoadSurface) override
 		{
 			LastConnectWidth = WidthIndex;
 			++Connects;

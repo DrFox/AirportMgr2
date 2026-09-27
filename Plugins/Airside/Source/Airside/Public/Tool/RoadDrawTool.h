@@ -41,6 +41,10 @@ struct IRoadDrawState
 	 * through this pointer. Kind is fixed at construction and never needs reaching.
 	 */
 	int32 WidthIndex = INDEX_NONE;
+
+	/** What this state's next click lays the road on - WidthIndex's twin, for the same reason:
+	 *  picking grass mid-chain has to reach the part-drawn state. See FRoadDrawTool::Surface. */
+	ERoadSurface Surface = ERoadSurface::Tarmac;
 };
 
 /** Nothing part-drawn. A click puts down the start of a road. */
@@ -49,8 +53,9 @@ class FRoadIdleState : public IRoadDrawState
 public:
 	/** Kind is carried by the STATE as well as by the tool because a state builds its own
 	 *  successor, and the successor must lay the same cross-section this one started. */
-	explicit FRoadIdleState(ERoadKind InKind = ERoadKind::Taxiway, int32 InWidthIndex = INDEX_NONE)
-		: Kind(InKind) { WidthIndex = InWidthIndex; }
+	explicit FRoadIdleState(ERoadKind InKind = ERoadKind::Taxiway, int32 InWidthIndex = INDEX_NONE,
+		ERoadSurface InSurface = ERoadSurface::Tarmac)
+		: Kind(InKind) { WidthIndex = InWidthIndex; Surface = InSurface; }
 
 	virtual TUniquePtr<IRoadDrawState> OnClick(const FToolContext& Context) override;
 	virtual TUniquePtr<IRoadDrawState> OnCancel(const FToolContext& Context) override;
@@ -71,8 +76,8 @@ class FRoadChainingState : public IRoadDrawState
 {
 public:
 	FRoadChainingState(int32 InFrom, bool bInCreated, ERoadKind InKind = ERoadKind::Taxiway,
-		int32 InWidthIndex = INDEX_NONE)
-		: From(InFrom), bCreated(bInCreated), Kind(InKind) { WidthIndex = InWidthIndex; }
+		int32 InWidthIndex = INDEX_NONE, ERoadSurface InSurface = ERoadSurface::Tarmac)
+		: From(InFrom), bCreated(bInCreated), Kind(InKind) { WidthIndex = InWidthIndex; Surface = InSurface; }
 
 	virtual TUniquePtr<IRoadDrawState> OnClick(const FToolContext& Context) override;
 	virtual TUniquePtr<IRoadDrawState> OnCancel(const FToolContext& Context) override;
@@ -127,13 +132,19 @@ public:
 	/** Which standard width the next click lays, or INDEX_NONE for the level's default. */
 	int32 GetWidthIndex() const { return WidthIndex; }
 
+	/** What the next click lays the road on. */
+	ERoadSurface GetSurface() const { return Surface; }
+
 	/** Selecting this tool while it is already active cycles the taxiway width - the same
 	 *  gesture FRunwayTool::OnReselect gives runways. Steps from the LIT option, through
-	 *  SelectVariant, so the key and the bar's row walk one list. */
+	 *  SelectVariant, so the key and the bar's row walk one list. WITH THE INSERT MODIFIER
+	 *  (Shift) it steps the surface instead - the modifier FRunwayTool gives its own surface. */
 	virtual void OnReselect(const FToolContext& Context) override;
 
 	/**
-	 * One axis, Width: the standard widths of this tool's kind, labelled in metres.
+	 * Two axes. Width: the standard widths of this tool's kind, labelled in metres - absent
+	 * when the content set declares none. Surface: tarmac or grass, always present, since it is
+	 * this tool's own enum and needs no content (FRunwayTool's Surface row, the same way).
 	 *
 	 * LIGHTS THE LEVEL DEFAULT WITHOUT CHOOSING IT. While WidthIndex is unset the tool lays the
 	 * level's own tuning (see WidthIndex), so Current names the preset that tuning matches -
@@ -143,7 +154,8 @@ public:
 	 */
 	virtual void GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const override;
 
-	/** Axis 0 only. Sets WidthIndex, and the live chain's copy of it - see OnReselect. */
+	/** Sets the field the row stands for - WidthIndex or Surface, and the live chain's copy of
+	 *  it. BY THE ROW'S Id, not its index: with no width profiles Surface is row 0. */
 	virtual bool SelectVariant(const FToolContext& Context, int32 Axis, int32 Option) override;
 
 	/**
@@ -198,4 +210,17 @@ private:
 	 * the list by kind, so a road's index can only name a road tier.
 	 */
 	int32 WidthIndex = INDEX_NONE;
+
+	/**
+	 * What the next click lays the road on - FRoadSegment::Surface. ON THE TOOL for
+	 * WidthIndex's reason, and STARTS TARMAC so a player who never touches the row lays what
+	 * every road before the row was.
+	 */
+	ERoadSurface Surface = ERoadSurface::Tarmac;
+
+	/** The Width row, or nothing when the content set declares no widths for Kind. */
+	void AddWidthAxis(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const;
+
+	/** The row named AxisId, one enabled option on from what it lights - FRunwayTool::StepAxis. */
+	void StepAxis(const FToolContext& Context, FName AxisId, const TCHAR* What);
 };

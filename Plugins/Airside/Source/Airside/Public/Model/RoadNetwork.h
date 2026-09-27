@@ -212,6 +212,19 @@ public:
 	 */
 	bool IsRunwaySegment(FRoadSegmentId Segment) const;
 
+	/**
+	 * A live taxiway or service road laid on grass. False for a runway whatever its Surface
+	 * field says - see FRoadSegment::Surface. The one spelling the mesh, the paint and route
+	 * search ask, so the three cannot disagree about which ground is grass.
+	 */
+	bool IsGrassRoad(FRoadSegmentId Segment) const;
+
+	/**
+	 * Write a road or taxiway's surface. False, and nothing written, for a dead slot or a
+	 * runway - a strip's surface is SetRunwayFacts', chain-wide.
+	 */
+	bool SetSegmentSurface(FRoadSegmentId Segment, ERoadSurface Surface);
+
 	// --- Runway reads: forwarders. See Model/RunwayQuery.h for what each answers and why -
 	// the repository grew a second responsibility deriving these from its own graph, so the
 	// logic moved beside IsRunwaySegment/ProfileFor's callers rather than living inside the
