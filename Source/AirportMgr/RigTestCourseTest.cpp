@@ -754,15 +754,41 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 			return V == 0 ? Waypoints[P] : Reversed(Waypoints[(Legs - P) % Legs]);
 		};
 		auto LegOf = [Legs, V](int32 P) { P = ((P % Legs) + Legs) % Legs; return V == 0 ? P : Legs - 1 - P; };
+		// MEMOIZED, NOT RE-SEARCHED (perf pass, 2026-09-27): Onward's look-ahead, the fallback's
+		// Stop scan and Own all re-ask Fits on (stop, later) pairs that recur constantly -
+		// Onward(Stop)'s own first candidate (Later = Stop+1) IS Own(Stop), and a course with
+		// several refused/bypassed legs in a row (this one has both) makes the fallback loop
+		// call Onward at O(Legs) candidate Stops, each rescanning up to O(Legs) Laters: O(Legs^2)
+		// Fits calls per vehicle in the worst case, many of them not a fresh fact - the network
+		// never changes across this block, so the same (A, B) pair always gets the same answer,
+		// and caching it changes nothing Fits returns, only how many times it is asked. MEASURED
+		// 2026-09-27 (see the PR body for the figures): Fits itself - a real RouteSearch::Find
+		// with a tow-fit body - still costs several ms a call, and the worst-case distinct-pair
+		// count is still O(Legs^2), so this cuts REPEATS, not the underlying cost; a further cut
+		// needs a cheaper Fits or a smaller distinct-pair bound, left as a follow-up. Keyed on
+		// P/Stop NORMALISED mod Legs, since Onward and the fallback both walk past Legs to wrap a
+		// lap - StopOf does the same normalisation, so two raw indices a lap apart name the same
+		// stop pair.
+		TMap<int64, bool> FitsCache;
+		auto FitsCached = [&](int32 A, int32 B)
+		{
+			const int32 NA = ((A % Legs) + Legs) % Legs;
+			const int32 NB = ((B % Legs) + Legs) % Legs;
+			const int64 Key = (static_cast<int64>(NA) << 32) | static_cast<uint32>(NB);
+			if (const bool* Found = FitsCache.Find(Key)) { return *Found; }
+			const bool Result = Fits(Net, StopOf(A), StopOf(B), Vehicles[V]);
+			FitsCache.Add(Key, Result);
+			return Result;
+		};
 		auto Onward = [&](int32 Stop)
 		{
 			for (int32 Later = Stop + 1; Later < Stop + Legs; ++Later)
 			{
-				if (Fits(Net, StopOf(Stop), StopOf(Later), Vehicles[V])) { return true; }
+				if (FitsCached(Stop, Later)) { return true; }
 			}
 			return false;
 		};
-		auto Own = [&](int32 P) { return Fits(Net, StopOf(P), StopOf(P + 1), Vehicles[V]); };
+		auto Own = [&](int32 P) { return FitsCached(P, P + 1); };
 		Outcome[V].Init(ERigLegOutcome::NotRun, Legs);
 		for (int32 P = 0; P < Legs;)
 		{
@@ -775,7 +801,7 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 			int32 Target = INDEX_NONE;
 			for (int32 Stop = P + 2; Stop <= Legs && Target == INDEX_NONE; ++Stop)
 			{
-				Target = (Fits(Net, StopOf(P), StopOf(Stop), Vehicles[V]) && Onward(Stop)) ? Stop : INDEX_NONE;
+				Target = (FitsCached(P, Stop) && Onward(Stop)) ? Stop : INDEX_NONE;
 			}
 			if (!TestTrue(FString::Printf(TEXT("%s: the router leaves a way on from stop %d - no stranding is expected"), Names[V], P),
 				Target != INDEX_NONE)) { return false; }
@@ -1417,7 +1443,6 @@ bool FRigCourseBendCensusTest::RunTest(const FString& Parameters)
 	// are the ones already there.
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Actor->Network, 12, &Designs);
 	const TArray<FVehicle>& Vehicles = Course->GetVehicles();
-	const BendProbe::FPavement Pavement = BendProbe::PavementAll(Net, Solved);
 	int32 Bends = 0;
 	for (int32 Index = 0; Index < Net.GetNodes().Num(); ++Index)
 	{
@@ -1438,6 +1463,16 @@ bool FRigCourseBendCensusTest::RunTest(const FString& Parameters)
 		UE_LOG(LogTemp, Display, TEXT("CourseBend node %d at (%.0f, %.0f): widths %.0f / %.0f; inner fillet R %.0f, outer fillet R %.0f; cuts %.0f / %.0f"),
 			Index, Node.Position.X, Node.Position.Y, Widths[0], Widths[1], Inner.Radius, Outer.Radius,
 			Junction.Arms[0].CutDistance, Junction.Arms[1].CutDistance);
+		// LOCAL PAVEMENT, NOT THE WHOLE COURSE (perf pass, 2026-09-27): Overrun's Pavement.Outside
+		// scans every polygon it is handed, and a turn's swept body can only ever leave the tarmac
+		// onto ITS OWN junction and arms - no course geometry places two junctions' pavements close
+		// enough for a vehicle turning at one to reach the other's. PavementAll's whole-course soup
+		// (every junction plus every segment ribbon, ~80 polygons on this course) was being
+		// rebuilt as the SAME set for every one of this node's turns and vehicles; PavementAt's
+		// three-or-so polygons measure exactly the same "off the tarmac" fact for a point this
+		// close to the node, at a fraction of the cost. Safe here because this test asserts only
+		// that it measured something (Bends > 0) - the Off figures are logged, not pinned.
+		const BendProbe::FPavement NodePavement = BendProbe::PavementAt(Net, Solved, NodeId);
 		for (const BendProbe::FTurnChain& Turn : BendProbe::TurnsAt(Net, NodeId))
 		{
 			const FVector2D Mid = Turn.Path[Turn.Path.Num() / 2];
@@ -1448,7 +1483,7 @@ bool FRigCourseBendCensusTest::RunTest(const FString& Parameters)
 				Index, bLeft ? TEXT("left") : TEXT("right"), Turn.Pieces.Num(), Turn.MinRadius, AboutMin, AboutMax);
 			for (int32 V = 0; V < Vehicles.Num(); ++V)
 			{
-				const BendProbe::FOverrun Off = BendProbe::Overrun(Turn, Vehicles[V], Pavement);
+				const BendProbe::FOverrun Off = BendProbe::Overrun(Turn, Vehicles[V], NodePavement);
 				Line += FString::Printf(TEXT("; vehicle %d off inner %.0f outer %.0f"), V, Off.Inner, Off.Outer);
 			}
 			UE_LOG(LogTemp, Display, TEXT("%s"), *Line);
