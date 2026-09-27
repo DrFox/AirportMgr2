@@ -655,7 +655,12 @@ bool FStandLayoutEveryLetterBuildsTest::RunTest(const FString& Parameters)
 	// which did. A/B were refused because their bays were laid for the truck; each letter is now
 	// laid for its own design vehicle. A failure carries both figures, so the log is the evidence
 	// a floor is too small - the floors are the user's to change, not this test's.
-	for (const EIcaoCode StandLetter : AllLetters())
+	//
+	// NOT AllLetters() - CODE A DROPPED (2026-09-27 merge): FitsItsLetter(_, A) can never be true
+	// any more (LetterForStandSize never answers "A" - see IcaoCode.h's StandLetterFor), so A's
+	// own case here would be a permanent, expected failure rather than a floor to fix. B's case
+	// already covers the geometry A's template now shares.
+	for (const EIcaoCode StandLetter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
 		if (!TestNotNull(TEXT("a template"), Stand))

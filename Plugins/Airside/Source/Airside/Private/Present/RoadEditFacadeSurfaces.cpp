@@ -645,16 +645,17 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) co
 		return TEXT("the outline crosses itself");
 	}
 
-	// SIZE, MEASURED AGAINST CODE A'S OWN FLOOR - not the rectangle's own resolved letter,
-	// because there is no resolved letter yet for anything smaller than A's floor: that is
-	// exactly the condition StandBox::LetterOf is unset under (IcaoCode::LetterForStandSize's
-	// "too small for any letter"). A's floor is the smallest of the six, so this is the one
+	// SIZE, MEASURED AGAINST THE SMALLEST STAND LETTER'S OWN FLOOR (IcaoCode::SmallestStandLetter
+	// - Code B, since Code A merged into it, 2026-09-27) - not the rectangle's own resolved
+	// letter, because there is no resolved letter yet for anything smaller than that floor: that
+	// is exactly the condition StandBox::LetterOf is unset under (IcaoCode::LetterForStandSize's
+	// "too small for any letter"). It is the floor of the smallest of the six, so this is the one
 	// gate that ever refuses for size, and it must run before LetterOf is asked to read a box
 	// too small for it to name.
 	const double Width = StandBox::WidthOf(Outline);
 	const double Depth = StandBox::DepthOf(Outline);
-	const double FloorWidth = IcaoCode::StandWidthForLetter(EIcaoCode::A);
-	const double FloorDepth = IcaoCode::StandDepthForLetter(EIcaoCode::A);
+	const double FloorWidth = IcaoCode::StandWidthForLetter(IcaoCode::SmallestStandLetter());
+	const double FloorDepth = IcaoCode::StandDepthForLetter(IcaoCode::SmallestStandLetter());
 	if (Width < FloorWidth || Depth < FloorDepth)
 	{
 		// TWO INDEPENDENT DEFICITS, NAMED SEPARATELY, so a drag that is both narrow and

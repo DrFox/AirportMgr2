@@ -304,7 +304,11 @@ bool FStandPlotLetterAtThresholdsTest::RunTest(const FString& Parameters)
 	// of it. The letter must change EXACTLY there - the threshold is IcaoCode's, so a tool that
 	// kept its own table, or measured a different rectangle than it drew, lands on the wrong
 	// side of one of these twelve.
-	for (EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	//
+	// CODE A DROPPED (2026-09-27 merge): a rectangle at A's floor is B's floor now
+	// (IcaoCode::StandLetterFor), so the case would just duplicate B's - see
+	// Airside.Solve.StandWidthIsDerivedFromClearance for the alias itself.
+	for (EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
 		const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(Letter));
 		const double Depth = IcaoCode::StandDepthForLetter(Letter);
@@ -379,7 +383,10 @@ bool FStandPlotFloorsAreOnTheDepthQuantumTest::RunTest(const FString& Parameters
 	// - so the tool never promises a player can drag to an EXACT width floor the way DEPTH's
 	// StandPlotRules::DepthStepUu promises for depth. There is no width contract for this test
 	// to enforce.
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	//
+	// CODE A DROPPED (2026-09-27 merge): StandDepthForLetter(A) reads B's own depth now
+	// (IcaoCode::StandLetterFor), so its case here would be B's, twice.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
 		const double Depth = IcaoCode::StandDepthForLetter(Letter);
 		const double Steps = Depth / StandPlotRules::DepthStepUu;
@@ -881,7 +888,10 @@ bool FStandPlotDiagonalTaxiwayReadsItsLetterTest::RunTest(const FString& Paramet
 		// refused here (their bays were laid for the truck), so bBuildable is now always true
 		// rather than Letter >= EIcaoCode::C - kept as a named bool, not deleted outright, so a
 		// future letter that genuinely cannot build still has somewhere to say so.
-		for (EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+		//
+		// CODE A DROPPED (2026-09-27 merge): a rectangle at A's floor reads back as B now
+		// (IcaoCode::StandLetterFor), so its case here would duplicate B's.
+		for (EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 		{
 			const bool bBuildable = true;
 			const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(Letter));

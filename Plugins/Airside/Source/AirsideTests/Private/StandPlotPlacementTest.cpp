@@ -180,6 +180,35 @@ bool FStandPlotRefusesTooSmallTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotRefusesOldCodeADepthTest,
+	"Airside.Present.StandPlot.RefusesOldCodeADepth",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotRefusesOldCodeADepthTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+
+	// A DRAG THAT WAS A CODE A STAND (50 x 36 m) is now refused, and the refusal names DEPTH -
+	// the dimension that is short - so the player is not left guessing (Review Focus 4). 50 m of
+	// width clears B's own 5000 uu floor (A and B always shared it); 3600 uu of depth falls short
+	// of B's 3950 uu floor - the gap the 2026-09-27 merge opened where the old Code A rectangle
+	// used to read as its own letter.
+	const TArray<FVector2D> OldA = { {0,0}, {5000,0}, {5000,3600}, {0,3600} };
+	IRoadEditTarget* Target = Actor;
+	const FString Why = Target->WhyStandRefused(OldA);   // signature from Task 8; until then (Outline)
+	TestTrue(TEXT("refused"), !Why.IsEmpty());
+	TestTrue(TEXT("for depth"), Why.Contains(TEXT("deep")) || Why.Contains(TEXT("depth")));
+	TestFalse(TEXT("and not for width, which is enough"), Why.Contains(TEXT("wide")) || Why.Contains(TEXT("width")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotRefusesOverlapTest,
 	"Airside.Present.StandPlot.RefusesOverlap",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -358,7 +387,12 @@ bool FStandPlotEveryLetterBuildsTest::RunTest(const FString& Parameters)
 	// happens to still be too small rather than the placement path. This test asks the question
 	// one level up: the actor's own cache resolves a real UEntityDefinition for every letter, so
 	// nothing between the template and PlaceStandInPlot silently drops one.
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	//
+	// CODE A DROPPED (2026-09-27 merge): ResolveStandDefinitionFor(A) is unreachable now by
+	// construction - LetterOf never answers A any more, so FitsItsLetter(_, A) can never be true
+	// (see IcaoCode.h's StandLetterFor) and this cache returns null for A on every call. Left
+	// unreachable rather than special-cased, per the merge's own ruling.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
 		TestNotNull(*FString::Printf(TEXT("Code %s resolves a stand definition"), IcaoCode::ToLetter(Letter)),
 			Actor->ResolveStandDefinitionFor(Letter));
@@ -375,6 +409,10 @@ bool FStandPlotEveryLetterBuildsTest::RunTest(const FString& Parameters)
 // first measured table named as not fitting their own floor - FStandPlotUnfitLetterRefusedTest pinned
 // that - and now fit like every other letter (their own design vehicle, a widened floor for
 // its lane), so the same round trip that already proves D/E/F proves them too.
+//
+// A DROPPED FROM THE LOOP AGAIN, 2026-09-27 (merge into B): the loop's own assertion is that a
+// stand drawn at Letter's floor reads BACK as Letter, and a rectangle at A's floor now reads as
+// B (IcaoCode::StandLetterFor) - that is B's case already in this same array, not a second one.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotPlacesOtherLettersTest,
 	"Airside.Present.StandPlot.PlacesOtherLetters",
@@ -391,7 +429,7 @@ bool FStandPlotPlacesOtherLettersTest::RunTest(const FString& Parameters)
 
 	Actor->ClearNetwork();
 
-	const EIcaoCode Fits[] = { EIcaoCode::A, EIcaoCode::B, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F };
+	const EIcaoCode Fits[] = { EIcaoCode::B, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F };
 	IRoadEditTarget* Target = Actor;
 
 	for (const EIcaoCode Letter : Fits)
@@ -1031,8 +1069,11 @@ bool FStandPlotRoadAlongTheServiceEdgeJoinsTheNearLaneTest::RunTest(const FStrin
 {
 	using namespace StandPlotPlacementTest;
 
-	// A AND C: laid for the tow and the truck, whose entries sit different corner runs inside.
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	// B AND C: laid for the tow and the truck, whose entries sit different corner runs inside.
+	// WAS A AND C, moved to B by the 2026-09-27 merge - A's own floor rectangle reads back as B
+	// now (IcaoCode::StandLetterFor), so drawing "at A's floor" here would have quietly built
+	// and labelled a B stand anyway; B says so honestly.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C })
 	{
 		const TCHAR* Code = IcaoCode::ToLetter(Letter);
 		FAirsideTestWorld LetterWorld;
@@ -1093,7 +1134,9 @@ bool FStandPlotRoadOnTheFarEdgeIsTheKnownCrossingCaseTest::RunTest(const FString
 {
 	using namespace StandPlotPlacementTest;
 
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	// WAS A AND C, moved to B by the 2026-09-27 merge - see
+	// FStandPlotRoadAlongTheServiceEdgeJoinsTheNearLaneTest's own note.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C })
 	{
 		const TCHAR* Code = IcaoCode::ToLetter(Letter);
 		FAirsideTestWorld LetterWorld;

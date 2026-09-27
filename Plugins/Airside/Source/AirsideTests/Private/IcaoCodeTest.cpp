@@ -123,8 +123,14 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 
 	// THE BANDS TILE. A width belonging to no letter, or to two, is what a stored maximum
 	// beside the next row's minimum would eventually produce; derived, one letter's ceiling IS
-	// the next one's floor, and every width above Code A's floor has exactly one answer.
-	const EIcaoCode Ladder[] = { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E };
+	// the next one's floor, and every width above the smallest stand letter's floor has exactly
+	// one answer.
+	//
+	// A DROPPED FROM THE LADDER (2026-09-27 merge): A and B are now ONE tile, not two adjacent
+	// ones - MaxStandWidthForLetter(A) reads B's own ceiling (C's floor), not "the next letter's
+	// (B's) floor" this loop asserts, so A is no longer a tile EDGE for it to walk. The alias
+	// itself ("A's stand width IS B's") is asserted below instead.
+	const EIcaoCode Ladder[] = { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E };
 	for (const EIcaoCode Code : Ladder)
 	{
 		// The enum's own ordinal gives "the next letter" now that FString::Chr(Letter[0] + 1)
@@ -140,17 +146,21 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Code F has no ceiling - nothing is too wide to be a stand"),
 		IcaoCode::MaxStandWidthForLetter(EIcaoCode::F) > 1.0e9);
 
-	// CODE A'S WIDTH BAND IS EMPTY, deliberately (2026-09-26): A and B share the tow lane's width
-	// floor, so depth alone tells them apart. Pinned so a floor change that reopened the band - or
-	// pushed A wider than B - is seen here rather than as a stand reading the wrong letter.
-	TestEqual(TEXT("A's ceiling is A's own floor - A and B share a width, depth decides"),
-		IcaoCode::MaxStandWidthForLetter(EIcaoCode::A), IcaoCode::StandWidthForLetter(EIcaoCode::A), 0.5);
-	TestEqual(TEXT("so the widest-A-deep stand still reads as A"),
-		IcaoCode::LetterForStandSize(IcaoCode::StandWidthForLetter(EIcaoCode::A), IcaoCode::StandDepthForLetter(EIcaoCode::A)),
-		FString(TEXT("A")));
-	TestEqual(TEXT("and the same width at B's depth reads as B"),
-		IcaoCode::LetterForStandSize(IcaoCode::StandWidthForLetter(EIcaoCode::A), IcaoCode::StandDepthForLetter(EIcaoCode::B)),
-		FString(TEXT("B")));
+	// A MERGED INTO B (user, 2026-09-27): the difference between them was 5.5 m of depth, which
+	// no player chose on purpose; the choice at the small end is now the SURFACE. No rectangle
+	// reads as A, at any width - A stays an AIRCRAFT letter only.
+	TestEqual(TEXT("an A aircraft parks on a B stand"), IcaoCode::StandLetterFor(EIcaoCode::A), EIcaoCode::B);
+	TestEqual(TEXT("every other letter parks on its own"), IcaoCode::StandLetterFor(EIcaoCode::D), EIcaoCode::D);
+	TestEqual(TEXT("the smallest stand is B's"), IcaoCode::SmallestStandLetter(), EIcaoCode::B);
+	const double BW = IcaoCode::StandWidthForLetter(EIcaoCode::B);
+	const double BD = IcaoCode::StandDepthForLetter(EIcaoCode::B);
+	for (const double Width : { BW, BW + 500.0, IcaoCode::StandWidthForLetter(EIcaoCode::C) - 1.0 })
+	{
+		TestEqual(FString::Printf(TEXT("%.0f wide at B's depth is B"), Width), IcaoCode::LetterForStandSize(Width, BD), FString(TEXT("B")));
+		TestEqual(FString::Printf(TEXT("%.0f wide one uu under B's depth is no stand - once A's"), Width),
+			IcaoCode::LetterForStandSize(Width, BD - 1.0), FString());
+	}
+	TestEqual(TEXT("A's stand width IS B's, through the alias"), IcaoCode::StandWidthForLetter(EIcaoCode::A), BW);
 
 	// AND THE MIRROR. A stand's SIZE decides which airframes may use it, which is the mechanic:
 	// a player who drags a bigger stand gets bigger aircraft as a consequence.

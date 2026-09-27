@@ -17,7 +17,11 @@ bool FStandBoxRoundTripTest::RunTest(const FString& Parameters)
 	// be exact inverses of each other, so every letter's own floor-sized entrance must round
 	// trip to the exact corners the letter's width/depth imply, and LetterOf on those corners
 	// must name the same letter again.
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	//
+	// CODE A DROPPED (2026-09-27 merge): its width/depth read B's own figures now
+	// (IcaoCode::StandLetterFor), so a box built "at A's floor" reads back as B, not A - this
+	// test is about a letter reading back as ITSELF, which A can no longer do.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
 		const double W = IcaoCode::StandWidthForLetter(Letter);
 		const double D = IcaoCode::StandDepthForLetter(Letter);

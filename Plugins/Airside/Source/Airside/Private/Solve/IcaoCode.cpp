@@ -108,9 +108,12 @@ namespace IcaoCode
 		// row for FLetterEnvelope - see Solve/LetterEnvelope.h and EnvelopeFloors below, which
 		// carries their measured history now that it is theirs rather than this table's.
 		static const FRow Rows[] = {
+			// NO STANDS OF ITS OWN since 2026-09-27 - an A aircraft parks on B's (StandLetterFor).
+			// Its size columns are omitted, not zeroed by hand, so HasStands reads the table
+			// rather than a flag.
 			{ .Letter = TEXT("A"), .MaxWingspan = 1500.0, .RunwayWidth = 1800.0, .StandTurnRadius = 1500.0,
-			  .WingtipClearance = 300.0, .StandDepth = 3400.0,
-			  .WingFwd = -50.0, .WingAft = -700.0, .AftEdgeAllowance = 600.0, .TowLaneWidth = 5000.0 },
+			  .WingtipClearance = 300.0,
+			  .WingFwd = -50.0, .WingAft = -700.0 },
 			{ .Letter = TEXT("B"), .MaxWingspan = 2400.0, .RunwayWidth = 2300.0, .StandTurnRadius = 2000.0,
 			  .WingtipClearance = 300.0, .StandDepth = 3950.0,
 			  .WingFwd = -300.0, .WingAft = -1400.0, .AftEdgeAllowance = 600.0, .TowLaneWidth = 5000.0 },
@@ -205,7 +208,10 @@ namespace IcaoCode
 		 * The NARROWEST stand a row admits, uu. The ONE place the derivation is written.
 		 *
 		 * THE LARGER OF THE SPAN DERIVATION AND THE ROW'S TowLaneWidth, since 2026-09-26: the
-		 * aeroplane decides it for C-F, the utility tow's lane for A and B - see that column.
+		 * aeroplane decides it for C-F, the utility tow's lane for B - see that column. NOT A,
+		 * since the 2026-09-27 merge: row A carries no TowLaneWidth of its own any more (nor is
+		 * it ever asked to - StandWidthForLetter/MaxStandWidthForLetter read RowFor(StandLetterFor
+		 * (Code)), so Code A's question lands on this same row through the alias instead).
 		 *
 		 * The lane is in it twice because there is one down each side: a vehicle cannot cross
 		 * under the aeroplane, so each side of the stand is reached and left on its own lane,
@@ -241,6 +247,9 @@ namespace IcaoCode
 			check(Index >= 0 && Index < UE_ARRAY_COUNT(Rows));
 			return Rows[Index];
 		}
+
+		/** A row sizes stands only if it has a stand depth - see row A. */
+		static bool HasStands(const FRow& Row) { return Row.StandDepth > 0.0; }
 	}
 
 	TOptional<EIcaoCode> Parse(const FString& Letter)
@@ -338,14 +347,25 @@ namespace IcaoCode
 		return 400.0;
 	}
 
+	EIcaoCode StandLetterFor(EIcaoCode Code)
+	{
+		// THE ONE ALIAS - see the header. A parks on B's ground now; every other letter is itself.
+		return Code == EIcaoCode::A ? EIcaoCode::B : Code;
+	}
+
+	EIcaoCode SmallestStandLetter()
+	{
+		return StandLetterFor(EIcaoCode::A);
+	}
+
 	double StandWidthForLetter(EIcaoCode Code)
 	{
-		return WidthOf(RowFor(Code));
+		return WidthOf(RowFor(StandLetterFor(Code)));
 	}
 
 	double MaxStandWidthForLetter(EIcaoCode Code)
 	{
-		const FRow* Above = RowAbove(RowFor(Code));
+		const FRow* Above = RowAbove(RowFor(StandLetterFor(Code)));
 
 		// UNBOUNDED AT THE TOP. Code F has no letter above it, so there is no width at which a
 		// stand stops being one - and a stand wider than any aeroplane needs is not an error.
@@ -359,7 +379,7 @@ namespace IcaoCode
 
 	double StandDepthForLetter(EIcaoCode Code)
 	{
-		return RowFor(Code).StandDepth;
+		return RowFor(StandLetterFor(Code)).StandDepth;
 	}
 
 	FLetterEnvelope FloorEnvelopeForLetter(EIcaoCode Code)
@@ -450,13 +470,14 @@ namespace IcaoCode
 		for (int32 Index = UE_ARRAY_COUNT(Rows) - 1; Index >= 0; --Index)
 		{
 			const FRow& Row = Rows[Index];
+			if (!HasStands(Row)) { continue; }   // Smaller than the smallest stand letter.
 			if (WidthUu >= WidthOf(Row) && DepthUu >= Row.StandDepth)
 			{
 				return Row.Letter;
 			}
 		}
-		// Smaller than Code A in one dimension or both. Empty, not "A": see the header for
-		// why a letter here would admit an aircraft to a space it does not fit.
+		// Smaller than the smallest stand letter. Empty, not a letter: see the header for why a
+		// letter here would admit an aircraft to a space it does not fit.
 		return FString();
 	}
 
