@@ -45,7 +45,7 @@ class URoadEditFacade;
  * to match - the view rig, the watch rig, four widget classes (a fifth, the ledger panel,
  * joined later), a testing override and placement. The camera (both rigs, CreateBuildCamera,
  * UpdateView, ZoomBy, ToggleWatchAgent's mechanics) is now UBuildCameraComponent, a subobject;
- * the five HUD widgets are UBuildHudLayer, a subobject. What remains here is INPUT (binding
+ * the six HUD widgets are UBuildHudLayer, a subobject. What remains here is INPUT (binding
  * keys, reading them, the click/drag/release gesture), SESSION AND TARGET (which tool is
  * active, which actor is being built into), and forwarding - every public method
  * BuildActions() or Blueprint could already call keeps its name, whether the work happens
@@ -103,23 +103,13 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|View")
 	bool bShowGuidelines = true;
 
-	/**
-	 * What key 7 lands. Null lands the content set's default; DefaultGame.ini currently sets
-	 * this to a specific test type (issue #191 fixed this comment - it used to call null "the
-	 * shipping state", which stopped being true the moment a project .ini line set it).
-	 *
-	 * A TESTING OVERRIDE, and deliberately shaped so it cannot quietly become the game's
-	 * behaviour: it is consulted by the Land key and by nothing else, so offers, dispatch and
-	 * every arrival that comes from the flight board still resolve their own type. What it
-	 * buys is not having to wait for an offer to see a particular aeroplane on the runway.
-	 *
-	 * CONFIG, so setting it is one line in DefaultGame.ini and unsetting it is deleting that
-	 * line - no rebuild either way. The log says which type the key used every time, so a
-	 * forgotten override reads as a line in the log rather than as the wrong aircraft
-	 * mysteriously landing.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Airside|Testing")
-	TSoftObjectPtr<UAircraftType> LandAircraftType;
+	// LandAircraftType WAS HERE until 2026-09-27: a Config override naming the one type key 7
+	// landed (DefaultGame.ini set it to the 737). Its reason - "not having to wait for an offer
+	// to see a particular aeroplane on the runway" - is now the Land panel's whole job, and
+	// with key 7 opening the panel nothing read it any more; a setting nothing consumes is the
+	// shape CLAUDE.md's "check where a list is CONSUMED" names. Removed, not kept dead. The
+	// panel's choice reaches LandAircraftNearViewFocus as its argument instead - still read
+	// there and nowhere else, so offers and their arrivals still resolve their own type.
 
 	/**
 	 * Furthest a click may place a node, as a MULTIPLE of the active camera's own distance.
@@ -371,6 +361,20 @@ public:
 
 	/** Whether the ledger panel is open, so the bar's button can light itself. */
 	bool IsLedgerShowing() const;
+
+	/** Open or close the Land panel. The aircraft.land action's verb (key 7). */
+	void ToggleLandPanel();
+
+	/** Whether the Land panel is open, so the bar's Land button can light itself. */
+	bool IsLandPanelShowing() const;
+
+	/** Where the build view is looking, on the road plane - forwards to the camera component.
+	 *  The Land panel judges its rows against the runway nearest this, as the landing does. */
+	FVector2D GetViewFocus() const;
+
+	/** The type the last LandAircraftNearViewFocus call was asked for - the Land panel's
+	 *  composition test reads it, since a headless world has no runway to land on. */
+	const UAircraftType* GetLastLandRequestForTest() const { return LastLandRequest.Get(); }
 	bool IsPaused() const;
 
 	void StepSpeed(int32 Delta);
@@ -394,10 +398,13 @@ public:
 	 *
 	 * A THIN FORWARDER as of issue #191: resolving which airframe lands and driving it through
 	 * the flight board are now UOpsRuntime::LandNear's job (Present/ of AirportOps, which
-	 * already owns the board) - this supplies the view focus, the configured test override if
-	 * any, and the one path LandNear cannot cover: the editor mode's no-runtime direct dispatch.
+	 * already owns the board) - this supplies the view focus, the chosen type if any, and the
+	 * one path LandNear cannot cover: the editor mode's no-runtime direct dispatch.
+	 *
+	 * Type is the Land panel's choice (2026-09-27); null lands the content default. Called
+	 * from the panel's rows, no longer from key 7, which opens the panel.
 	 */
-	void LandAircraftNearViewFocus();
+	void LandAircraftNearViewFocus(const UAircraftType* Type = nullptr);
 
 	void OnClearNetwork();
 	void OnUndo();
@@ -617,7 +624,7 @@ private:
 	TObjectPtr<UBuildCameraComponent> BuildCameraComp;
 
 	/**
-	 * The five HUD widgets and their configured classes - see UBuildHudLayer's own comment.
+	 * The six HUD widgets and their configured classes - see UBuildHudLayer's own comment.
 	 * A UObject, not a component: it owns no transform and ticks nothing, so it costs
 	 * nothing more than a UPROPERTY pointer to hold it. CreateDefaultSubobject rather than
 	 * NewObject - the same call as BuildCameraComp's above works for any UObject subobject,
@@ -653,6 +660,9 @@ private:
 	mutable bool bRunwayCacheValid = false;
 	mutable bool bRunwayCache = false;
 	mutable int32 RunwayRecomputeCountForTest = 0;
+
+	/** See GetLastLandRequestForTest. Weak: a content asset, owned by nothing here. */
+	TWeakObjectPtr<const UAircraftType> LastLandRequest;
 
 	/** Which facade bRunwayCacheValid is bound to - see BindRunwayCacheInvalidation. Compared
 	 *  by pointer so a Target swap (BeginPlay found a different actor than SetTargetForTest

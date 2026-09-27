@@ -136,7 +136,10 @@ namespace
 
 		// --- Aircraft ---
 		Out.Add(Make(TEXT("aircraft.land"), EActionSection::Aircraft, LOCTEXT("Land", "Land"), EKeys::Seven, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.LandAircraftNearViewFocus(); }, Never,
+			// OPENS THE PANEL rather than landing a default (2026-09-27): the panel's rows are
+			// what land now, each its own type - see ULandAircraftPanelWidget.
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleLandPanel(); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsLandPanelShowing(); },
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.HasRunway(); }));
 		Out.Add(Make(TEXT("aircraft.guidelines"), EActionSection::Aircraft, LOCTEXT("Guidelines", "Guidelines"), EKeys::G, false,
 			[](FBuildActionContext& Ctx) { Ctx.Controller.OnToggleGuidelines(); },
