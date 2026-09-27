@@ -316,14 +316,16 @@ struct AIRSIDE_API FGearPerformance
 /**
  * Flying an approach: the descent, the flare, and the moment it stops flying.
  *
- * THE MIRROR OF FClimbPerformance, and it shares that struct's one number rather than
- * restating it. A departure rotates because the angle the wing NEEDS falls as the square of
- * speed while the nose comes up, so the two cross and the aircraft leaves. A landing is the
- * same crossing run backwards: speed bleeds off in the flare, so the required angle RISES,
- * the nose comes up to chase it, and when it can no longer keep up the aircraft settles.
+ * THE MIRROR OF FClimbPerformance, with the same law and its own number. A departure rotates
+ * because the angle the wing NEEDS falls as the square of speed while the nose comes up, so
+ * the two cross and the aircraft leaves. A landing is the same crossing run backwards: speed
+ * bleeds off in the flare, so the required angle RISES, the nose comes up to chase it, and
+ * when it can no longer keep up the aircraft settles.
  *
  * That is why touchdown is not declared here at an altitude or a stopwatch reading, any more
- * than lift-off is in FTakeoffRun. Both fall out of FClimbPerformance::RequiredAngleAt.
+ * than lift-off is in FTakeoffRun. Lift-off falls out of FClimbPerformance::RequiredAngleAt,
+ * touchdown out of this struct's RequiredAngleAt - the same square law, calibrated for
+ * landing flap. It used to share the climb's calibration; see LandingLiftAngleDegrees.
  */
 USTRUCT(BlueprintType)
 struct AIRSIDE_API FApproachPerformance
@@ -413,12 +415,47 @@ struct AIRSIDE_API FApproachPerformance
 	 */
 	UPROPERTY(EditAnywhere) double MaxFlarePitchDegrees = 11.0;
 
+	/**
+	 * The angle the wing needs at Vref in LANDING configuration, degrees - flaps out.
+	 *
+	 *     required(V) = this * (Vref / V)^2
+	 *
+	 * NOT FClimbPerformance::LiftAngleAtRotateDegrees scaled to Vref, which is what the
+	 * landing used until 2026-09-27. That figure is calibrated at Vr with TAKE-OFF flap; a
+	 * landing wing carries more flap and needs less angle for the same lift, which is why a
+	 * real airliner flies final 2-3 deg nose-up rather than rotating onto it. Scaled by
+	 * (Vr/Vref)^2 the take-off figure overstated it for every type, and for the A380 -
+	 * 10 x (8121/7093)^2 = 13.1 deg - it overran MaxFlarePitchDegrees before the flare began:
+	 * the nose sat on the cap, the path never came up, and it hit the runway 17 m past the
+	 * threshold at nearly Vref. Airside.Content.EveryTypeFlaresOntoTheRunway pins the fix
+	 * for every type in the registry.
+	 *
+	 * 5 puts a 3-degree final at 2 deg nose-up and the touchdown in the 4-8 range, one figure
+	 * for the fleet (2026-09-27). Per-type only if a type's final attitude is ever judged
+	 * wrong on screen; a default that is right for all eighteen needs no eighteen copies.
+	 */
+	UPROPERTY(EditAnywhere) double LandingLiftAngleDegrees = 5.0;
+
+	/**
+	 * The angle this wing needs at V, landing configuration, degrees. The flare's mirror of
+	 * FClimbPerformance::RequiredAngleAt; Vref is passed in because it belongs to the landing
+	 * ground regime (FGroundRegime::SpeedCap), exactly as Vr is passed to the climb's.
+	 */
+	double RequiredAngleAt(double Speed, double Vref) const
+	{
+		if (Speed <= 0.0)
+		{
+			return LandingLiftAngleDegrees;
+		}
+		return LandingLiftAngleDegrees * FMath::Square(Vref / Speed);
+	}
+
 	/** False when nothing was authored, so a caller can decline rather than fly a nonsense. */
 	bool IsSet() const
 	{
 		return GlideslopeDegrees > 0.0 && FinalAltitude > 0.0 && FlareHeight > 0.0
 			&& FlareRateDegPerSec > 0.0 && FlareDecel > 0.0
-			&& FlareTimeConstantSeconds > 0.0;
+			&& FlareTimeConstantSeconds > 0.0 && LandingLiftAngleDegrees > 0.0;
 	}
 
 	/** Horizontal distance from joining the approach to the threshold, uu. */

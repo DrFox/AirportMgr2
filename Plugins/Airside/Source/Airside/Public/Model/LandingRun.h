@@ -36,8 +36,9 @@ enum class ELandingPhase : uint8
  * arrival can be flown in a loop with no world. See Airside.Model.LandingRun.
  *
  * TOUCHDOWN IS NOT DECLARED, it falls out of the flare - the exact mirror of lift-off falling
- * out of the rotation. See FApproachPerformance for the symmetry, and note that both ends of
- * it are the same function, FClimbPerformance::RequiredAngleAt.
+ * out of the rotation. See FApproachPerformance for the symmetry: both ends are the same
+ * square law, FClimbPerformance::RequiredAngleAt calibrated at Vr for take-off flap and
+ * FApproachPerformance::RequiredAngleAt at Vref for landing flap.
  */
 USTRUCT()
 struct AIRSIDE_API FLandingRun

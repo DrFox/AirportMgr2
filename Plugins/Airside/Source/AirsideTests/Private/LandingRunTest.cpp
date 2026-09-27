@@ -2,7 +2,9 @@
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RunwayMarkingBuilder.h"
+#include "Entities/AircraftType.h"
 #include "Model/LandingRun.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -141,8 +143,9 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 
 		// The nose sits where the SPEED puts it. On approach the wing needs its angle and
 		// the flight path points down, so the attitude is the difference - a shallow nose-up.
+		// The LANDING-flap angle at Vref, not the climb's scaled to it (2026-09-27).
 		const double Expected =
-			Climb.RequiredAngleAt(Ground.Landing.SpeedCap, Ground.Takeoff.SpeedCap)
+			Approach.RequiredAngleAt(Ground.Landing.SpeedCap, Ground.Landing.SpeedCap)
 			- Approach.GlideslopeDegrees;
 		TestEqual(TEXT("with the attitude its speed and slope imply"), Run.Pitch, Expected, 1.0e-9);
 	}
@@ -360,6 +363,138 @@ bool FLandingTouchdownEdgeTest::RunTest(const FString& Parameters)
 		TEXT("touchdown at %.0f uu is inside the rubber, which runs %.0f to %.0f"),
 		EdgeAt, B::RubberStart, B::RubberEnd),
 		EdgeAt >= B::RubberStart && EdgeAt <= B::RubberEnd);
+	return true;
+}
+
+/**
+ * A FLARE THAT RUNS OUT OF SPEED STILL LANDS - it does not hover.
+ *
+ * FOUND 2026-09-27 by the paper 737 (UAircraftType::Build737), which authors no Landing
+ * regime and so flies at FGroundRegime's default SpeedCap, 1000 uu/s - about 19 kn. Once the
+ * flare used the landing-flap angle instead of a take-off one scaled past 400 deg, that
+ * speed bled to zero in the air: the required angle overran the cap, Pitch - Required went
+ * past -90 and sin() wrapped it back towards level, and at zero speed nothing moved at all.
+ * RequiredLandingDistance then returned 0 - and a zero landing distance ADMITS EVERY RUNWAY,
+ * which is the one answer that probe must never give. StandPlot.DrawnStandTakesAnArrival
+ * went red on it because FTestAirport sized a zero-length strip.
+ *
+ * Asked of the paper 737's Ground WITH ITS LANDING SPEED PINNED to that default, so it keeps
+ * measuring the guard if Build737 ever gains real landing figures. The Piper with the same
+ * Vref was tried first and landed - its lower flare height gets it down before the speed
+ * runs out - so it measured nothing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandingStalledFlareStillLandsTest,
+	"Airside.Model.StalledFlareStillLands",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandingStalledFlareStillLandsTest::RunTest(const FString& Parameters)
+{
+	UAircraftType* Type = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::Build737(Type);
+	FAirframe Airframe = Type->Airframe();
+	Airframe.Chassis.Ground.Landing.SpeedCap = 1000.0;
+
+	FLandingRun Run;
+	if (!TestTrue(TEXT("the arrival arms"), Run.Start(LandingEndOfLength(1.0e9), Airframe)))
+	{
+		return false;
+	}
+	const FLandingTrace Trace = FlyLanding(Run, Airframe);
+	TestTrue(FString::Printf(TEXT("a 19 kn flare still reaches the ground (flew %.0f s)"), Trace.Seconds),
+		Trace.bReachedGround);
+	TestTrue(TEXT("and vacates, rather than hovering until the step limit"), Trace.bVacated);
+
+	const double Needed = FLandingRun::RequiredLandingDistance(
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach);
+	TestTrue(FString::Printf(TEXT("the landing distance is positive (%.0f uu) - zero would admit every runway"), Needed),
+		Needed > 0.0);
+	return true;
+}
+
+/**
+ * EVERY TYPE FLARES ONTO THE RUNWAY - not just the Piper the two suites above fly.
+ *
+ * THE A380 DID NOT, and nothing noticed (2026-09-27). Its wing was asked for the angle it
+ * needs at Vr in TAKE-OFF configuration, scaled up to Vref: 10 x (8121/7093)^2 = 13.1 deg,
+ * over MaxFlarePitchDegrees' 11. So the nose sat on the cap for the whole flare, the flight
+ * path never came up, and it touched down 17 m past the threshold at 6824 uu/s - nearly
+ * Vref. Its landing distance came out shorter than the A320's, which is how it was found.
+ * The 737, A350 and 777 were touching down at 9.7-10.9 deg, within a degree of the same
+ * cap; a real airliner lands at about 4-6.
+ *
+ * Asked of every UAircraftType asset the registry holds (EveryAircraftType), so a new type
+ * cannot join without flying this. Four shapes, each the bug from a different side:
+ *   - the approach attitude is an airliner's, not a take-off rotation's;
+ *   - the flare ARRESTS the sink, so the aircraft held itself off rather than being caught;
+ *   - the nose never reached the tailstrike cap, which is where "caught" happens;
+ *   - touchdown is inside the painted rubber, the window FRunwayMarkingBuilder draws.
+ *
+ * NOT under Airside.Model.LandingRun - see TouchdownEdge's comment about bare-named parents.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryTypeFlaresOntoTheRunwayTest,
+	"Airside.Content.EveryTypeFlaresOntoTheRunway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryTypeFlaresOntoTheRunwayTest::RunTest(const FString& Parameters)
+{
+	const TArray<UAircraftType*> Types = EveryAircraftType();
+	// Eighteen on 2026-09-27. An empty registry would pass every assertion below vacuously.
+	if (!TestTrue(TEXT("the asset registry holds aircraft types to fly"), Types.Num() > 0))
+	{
+		return false;
+	}
+
+	// A REAL AIRLINER FLIES FINAL 2-5 DEG NOSE-UP. Six allows for a slow light aircraft; the
+	// A380 was at 10.1, which is a rotation, not an approach.
+	constexpr double MaxApproachPitch = 6.0;
+	// A degree of room under the cap at touchdown. The cap is a tailstrike limit that
+	// "should not normally bind" (FApproachPerformance::MaxFlarePitchDegrees); an aircraft
+	// within a hair of it was being held up by the clamp, not by its wing. Before the fix the
+	// jets sat 0.0-0.2 under it; after, the tightest is the Meridian, 6.7 against its
+	// authored 8 (2026-09-27). Two degrees was tried first and failed the Meridian on a margin that
+	// was never the bug.
+	constexpr double CapRoom = 1.0;
+
+	using B = FRunwayMarkingBuilder;
+	for (UAircraftType* Type : Types)
+	{
+		const FString Name = Type->GetOutermost()->GetName();
+		const FAirframe Airframe = Type->Airframe();
+
+		FLandingRun Run;
+		if (!TestTrue(*FString::Printf(TEXT("%s: the arrival arms"), *Name),
+			Run.Start(LandingEndOfLength(1.0e9), Airframe)))
+		{
+			continue;
+		}
+		const double ApproachPitch = Run.Pitch;
+		const FLandingTrace Trace = FlyLanding(Run, Airframe);
+		if (!TestTrue(*FString::Printf(TEXT("%s: it reaches the ground"), *Name), Trace.bReachedGround))
+		{
+			continue;
+		}
+
+		TestTrue(*FString::Printf(TEXT("%s: approach attitude %.1f deg is an airliner's, at most %.0f"),
+			*Name, ApproachPitch, MaxApproachPitch),
+			ApproachPitch <= MaxApproachPitch);
+		TestTrue(*FString::Printf(TEXT("%s: the flare arrests the sink - %.0f uu/s at touchdown against %.0f on approach"),
+			*Name, Trace.TouchdownSinkRate, Trace.ApproachSinkRate),
+			Trace.TouchdownSinkRate < Trace.ApproachSinkRate * 0.5);
+		TestTrue(*FString::Printf(TEXT("%s: touchdown at %.1f deg nose-up, clear of the %.0f deg tailstrike cap"),
+			*Name, Trace.TouchdownPitch, Airframe.Approach.MaxFlarePitchDegrees),
+			Trace.TouchdownPitch <= Airframe.Approach.MaxFlarePitchDegrees - CapRoom);
+		TestTrue(*FString::Printf(TEXT("%s: touchdown %.0f uu past the threshold, inside the rubber %.0f-%.0f"),
+			*Name, Trace.TouchdownAt, B::RubberStart, B::RubberEnd),
+			Trace.TouchdownAt >= B::RubberStart && Trace.TouchdownAt <= B::RubberEnd);
+
+		// Said whether or not it passes: these are the figures a tuning pass moves.
+		AddInfo(FString::Printf(
+			TEXT("%s: approach %.1f deg; touchdown %.0f uu at %.0f uu/s, %.1f deg; vacated %.0f"),
+			*Name, ApproachPitch, Trace.TouchdownAt, Trace.TouchdownSpeed, Trace.TouchdownPitch,
+			Trace.VacatedAt));
+	}
 	return true;
 }
 
