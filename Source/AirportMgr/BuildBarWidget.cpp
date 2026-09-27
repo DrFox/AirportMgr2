@@ -124,6 +124,7 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		// pinned to one line's height would have turned clipping at the right-hand edge into
 		// clipping at the bottom, which is the same bug lying down.
 		BarSlot->SetAutoSize(true);
+		BarBorderWidget = Border;
 
 		// THE FLOOR SURVIVES AS A MINIMUM. BarHeight and BarHeightFor stop being THE height
 		// and become the least it may be, which is what they were always for - see BarHeight's
@@ -615,6 +616,18 @@ FVector2D UBuildBarWidget::SectionRowSizeForTest(float AvailableWidth) const
 	Slate->MarkPrepassAsDirty();
 	Slate->SlatePrepass(1.0f);
 	return FVector2D(Slate->GetDesiredSize());
+}
+
+float UBuildBarWidget::LiveHeight() const
+{
+	const float Floor = PanelStyle != nullptr
+		? FMath::Max(static_cast<float>(BarHeight), BarHeightFor(*PanelStyle))
+		: static_cast<float>(BarHeight);
+	// DESIRED, not cached geometry: the slot is auto-sized, so the canvas gives the strip exactly
+	// what it asks for, and the desired size is ready after the prepass - a frame before the
+	// arranged geometry would be. Zero means no prepass has run yet.
+	const float Measured = BarBorderWidget != nullptr ? static_cast<float>(BarBorderWidget->GetDesiredSize().Y) : 0.0f;
+	return Measured > 0.0f ? Measured : Floor;
 }
 
 float UBuildBarWidget::BarReservedHeightForTest(float AvailableWidth) const

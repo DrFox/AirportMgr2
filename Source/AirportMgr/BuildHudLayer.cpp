@@ -41,4 +41,13 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 		TEXT("Land panel"), TEXT("LandPanelClass"));
 	ToastStack = CreateConfiguredWidget<UToastStackWidget>(Owner, ToastStackClass, 2,
 		TEXT("Toast stack"), TEXT("ToastStackClass"));
+	WireDocking();
+}
+
+void UBuildHudLayer::WireDocking()
+{
+	if (Inspector != nullptr)
+	{
+		Inspector->DockAbove(BuildBar);
+	}
 }

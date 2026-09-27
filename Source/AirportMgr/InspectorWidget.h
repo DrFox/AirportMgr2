@@ -8,6 +8,7 @@
 
 class ARoadBuildController;
 class ARoadNetworkActor;
+class UBuildBarWidget;
 class UButton;
 class UTextBlock;
 class UUIStyle;
@@ -100,8 +101,40 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> FollowButton;
 
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double PanelWidth = 300.0;
-	/** Distance above the bottom edge, so it clears the build bar. */
-	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double BottomOffset = 72.0;
+
+	/**
+	 * Gap between the card's bottom and the bar's TOP EDGE, wherever that edge is this frame.
+	 *
+	 * WAS BottomOffset = 72, a distance above the SCREEN's bottom (until 2026-09-27) - and the
+	 * code-only bar is 118 uu tall before it grows, so the card sat over the bar's left-hand
+	 * sections and hid them. Measured from the bar instead (see DockAbove), so the card rides
+	 * up and down as the bar grows and shrinks and never covers it.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double BarGap = 12.0;
+
+	/**
+	 * Keep the card's bottom BarGap above Bar's top edge from now on, re-measured every tick.
+	 * UBuildHudLayer::WireDocking calls this with its own bar. Null undocks: the card then sits
+	 * BarGap above the screen's bottom edge.
+	 */
+	void DockAbove(UBuildBarWidget* Bar);
+
+	/**
+	 * Captions the Follow button "Unfollow" while bFollowing, its action's own label otherwise
+	 * (2026-09-27: the same word for both states left the player guessing which one pressing
+	 * it would give). NativeTick calls it with the controller's IsWatchingAgent; public so a
+	 * headless test, which has no camera to watch with, can drive it.
+	 */
+	void ShowFollowing(bool bFollowing);
+
+	/** The Follow button's caption as it reads now. */
+	FString FollowCaptionForTest() const;
+
+	/** The card's distance above the screen's bottom edge, as its slot has it now. */
+	double CardClearanceForTest() const;
+	/** What NativeTick does to the card's position each frame, without the rest of the tick. */
+	void UpdateDockForTest() { UpdateDock(); }
+	const UBuildBarWidget* DockedBarForTest() const { return DockBar; }
 
 	/**
 	 * Re-reads the facts for Selection over Target and repaints. What NativeTick calls with
@@ -186,8 +219,15 @@ private:
 	/** See ComposeCountForTest. */
 	int32 ComposeCalls = 0;
 
+	/** The bar the card docks above - see DockAbove. */
+	UPROPERTY() TObjectPtr<UBuildBarWidget> DockBar;
+
+	/** The clearance last written to the card's slot, so an unchanged bar writes nothing. */
+	double DockedClearance = -1.0;
+
 	void EnsureSlots(const UUIStyle* Style);
 	void RunAction(int32 ActionIndex);
+	void UpdateDock();
 
 	UFUNCTION() void HandleDepart();
 	UFUNCTION() void HandleFollow();

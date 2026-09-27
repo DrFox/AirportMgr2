@@ -2,6 +2,7 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "BuildActions.h"
+#include "BuildBarWidget.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/CanvasPanel.h"
@@ -54,9 +55,10 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 
 	// Code-built chrome only where the asset gave none - the same skeleton the offer inbox
 	// uses (EnsureCardRoot, issue #90). A bottom-left card: title, facts, status, then the two
-	// verbs in a row.
+	// verbs in a row. Its height above the bottom is UpdateDock's, every tick - this is only
+	// where it starts.
 	UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("InspectorCard"),
-		FAnchors(0.0f, 1.0f, 0.0f, 1.0f), FVector2D(0.0, 1.0), FVector2D(12.0, -BottomOffset), true));
+		FAnchors(0.0f, 1.0f, 0.0f, 1.0f), FVector2D(0.0, 1.0), FVector2D(12.0, -BarGap), true));
 	if (Column != nullptr)
 	{
 		UE_LOG(LogInspector, Log, TEXT("No inspector asset: building the code-only panel"));
@@ -113,9 +115,46 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex, nullptr);
 }
 
+void UInspectorWidget::DockAbove(UBuildBarWidget* Bar)
+{
+	DockBar = Bar;
+	DockedClearance = -1.0;
+	UpdateDock();
+	UE_LOG(LogInspector, Log, TEXT("Inspector: %s"),
+		Bar != nullptr ? TEXT("docked above the build bar") : TEXT("undocked - no bar to sit on"));
+}
+
+void UInspectorWidget::UpdateDock()
+{
+	UCanvasPanelSlot* CardSlot = CardWidget != nullptr ? Cast<UCanvasPanelSlot>(CardWidget->Slot) : nullptr;
+	if (CardSlot == nullptr)
+	{
+		// A Blueprint that put its card somewhere other than a canvas has laid itself out;
+		// there is no slot position to move.
+		return;
+	}
+	const double Clearance = (DockBar != nullptr ? DockBar->LiveHeight() : 0.0) + BarGap;
+	if (Clearance == DockedClearance)
+	{
+		return;
+	}
+	DockedClearance = Clearance;
+	const FVector2D At = CardSlot->GetPosition();
+	CardSlot->SetPosition(FVector2D(At.X, -Clearance));
+}
+
+double UInspectorWidget::CardClearanceForTest() const
+{
+	const UCanvasPanelSlot* CardSlot = CardWidget != nullptr ? Cast<UCanvasPanelSlot>(CardWidget->Slot) : nullptr;
+	return CardSlot != nullptr ? -CardSlot->GetPosition().Y : 0.0;
+}
+
 void UInspectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+	// BEFORE Refresh, which may show the card this frame: it should appear already clear of
+	// a bar that grew to make room for the Selection section on the same click.
+	UpdateDock();
 	if (const ARoadBuildController* C = Controller())
 	{
 		// The controller already computed this frame's FAgentFacts for the bar's
@@ -124,7 +163,37 @@ void UInspectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 		FAgentFacts Facts;
 		const bool bHaveFacts = C->SelectedAgentFactsThisFrame(Facts);
 		Refresh(C->GetTarget(), C->GetSelection(), bHaveFacts ? &Facts : nullptr);
+		ShowFollowing(C->IsWatchingAgent());
 	}
+}
+
+void UInspectorWidget::ShowFollowing(bool bFollowing)
+{
+	// FOUND THROUGH THE BUTTON, not held: EnsureSlots builds the caption as the button's only
+	// content, and a Blueprint whose Follow button holds something else simply keeps its own.
+	UTextBlock* Caption = FollowButton != nullptr ? Cast<UTextBlock>(FollowButton->GetContent()) : nullptr;
+	const TConstArrayView<FBuildAction> Actions = BuildActions();
+	if (Caption == nullptr || !Actions.IsValidIndex(FollowActionIndex))
+	{
+		return;
+	}
+	// The resting word stays the action's Label, so the bar and this button still say the
+	// same thing whenever nothing is being followed.
+	const FText Wanted = bFollowing
+		? NSLOCTEXT("AirportMgr", "InspectorUnfollow", "Unfollow")
+		: Actions[FollowActionIndex].Label;
+	// Compared first: SetText has no early-out of its own (see Refresh's gate), and this runs
+	// every tick.
+	if (!Caption->GetText().EqualTo(Wanted))
+	{
+		Caption->SetText(Wanted);
+	}
+}
+
+FString UInspectorWidget::FollowCaptionForTest() const
+{
+	const UTextBlock* Caption = FollowButton != nullptr ? Cast<UTextBlock>(FollowButton->GetContent()) : nullptr;
+	return Caption != nullptr ? Caption->GetText().ToString() : FString();
 }
 
 void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection& Selection,
