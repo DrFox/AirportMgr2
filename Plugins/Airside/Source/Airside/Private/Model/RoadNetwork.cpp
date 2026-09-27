@@ -1682,6 +1682,17 @@ bool URoadNetwork::SetEntityDefinition(FEntityInstanceId Entity, UEntityDefiniti
 	return true;
 }
 
+bool URoadNetwork::SetStandDesignWingspan(FEntityInstanceId Entity, double DesignWingspan)
+{
+	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr || !Instance->IsStand())
+	{
+		return false;
+	}
+	Instance->DesignWingspan = DesignWingspan;
+	return true;
+}
+
 bool URoadNetwork::RePoseStand(FEntityInstanceId Entity, const FVector2D& Position, double Heading,
 	TConstArrayView<FEntityAnchor> Anchors)
 {

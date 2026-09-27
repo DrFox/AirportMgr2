@@ -771,6 +771,19 @@ public:
 	bool RePoseStand(FEntityInstanceId Entity, const FVector2D& Position, double Heading,
 		TConstArrayView<FEntityAnchor> Anchors);
 
+	/**
+	 * Overwrite a STAND's captured DesignWingspan. False, and nothing changed, for a dead entity
+	 * or one that is not a stand.
+	 *
+	 * THE LETTER A STAND ADMITS BY (re-review, 2026-09-27): UStandAllocator, ArrivalPlanner, the
+	 * inspector, the marking and the lead-in sizing all read this span, never the outline. So when
+	 * a load re-reads an outline as a different letter (UStandDefinitionCache::
+	 * RebindStandDefinitions), the span has to follow, or a C box re-posed as B goes on admitting
+	 * and painting a C. A value write, for PlaceEntity's no-Entities/ reason.
+	 * ENFORCED BY: Airside.Present.StandPlot.OldPoseRederivedOnLoad
+	 */
+	bool SetStandDesignWingspan(FEntityInstanceId Entity, double DesignWingspan);
+
 	// --- Narrow mutators replacing the raw *Mutable accessors (#191) -------------------
 	// GetSegmentMutable, GetGuidelineEdgeMutable and GetGuidelineNodeMutable used to be
 	// public, which let a caller write one field of a multi-field fact and leave the rest

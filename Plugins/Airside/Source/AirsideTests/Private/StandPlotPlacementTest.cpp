@@ -825,6 +825,16 @@ bool FStandPlotOldPoseRederivedOnLoadTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("facing unchanged - the outline did not turn"),
 		FMath::IsNearlyEqual(Loaded->Heading, RoadGeom::Bearing(Expected.Facing), 1.0e-9));
 
+	// AND ITS LETTER FOR ADMISSION (re-review, 2026-09-27): the captured DesignWingspan is what
+	// UStandAllocator, ArrivalPlanner, the inspector and the marking read, and it was left at C's -
+	// a stand drawn and re-posed as B went on admitting, labelling and painting a C.
+	TestEqual(TEXT("the captured span reads as Code B, the letter an allocator sees"),
+		IcaoCode::CodeForWingspan(Loaded->DesignWingspan), EIcaoCode::B);
+	TestFalse(TEXT("so a Code C airframe is refused there (IcaoCode::StandAdmits, the allocator's test)"),
+		IcaoCode::StandAdmits(Loaded->DesignWingspan, IcaoCode::DesignSpanForLetter(EIcaoCode::C)));
+	TestTrue(TEXT("and a Code B airframe is still admitted"),
+		IcaoCode::StandAdmits(Loaded->DesignWingspan, IcaoCode::DesignSpanForLetter(EIcaoCode::B)));
+
 	const FGuidelineNode* PoseNode = Actor->Network->GetGuidelineNode(Loaded->PoseNode);
 	TestTrue(TEXT("the pose node moved with it - it is what an arrival is routed to"),
 		PoseNode != nullptr && PoseNode->Position.Equals(Loaded->Position, 0.01));

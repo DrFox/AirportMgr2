@@ -196,6 +196,22 @@ int32 UStandDefinitionCache::RebindStandDefinitions(URoadNetwork* Network)
 		// not re-read after SetEntityDefinition: that writes the pointer alone, and what is read
 		// below is the outline and the pose.
 		// ENFORCED BY: Airside.Present.StandPlot.OldPoseRederivedOnLoad
+		// THE SPAN FOLLOWS THE LETTER (re-review, 2026-09-27), re-posed or not: every admission,
+		// label and marking reads DesignWingspan, so an outline that reads as a new letter has to
+		// carry that letter's span. Keyed on the LETTER the span reads as, not on the value, so a
+		// stand whose span is some other figure inside its own letter's band keeps it. Zero is
+		// "never measured" (a raw fixture) and is left alone, as StandMarkingBuilder leaves it.
+		// The log reads the old span off Entity (a reference) before the write replaces it.
+		// ENFORCED BY: Airside.Present.StandPlot.OldPoseRederivedOnLoad
+		if (Entity.DesignWingspan > 0.0 && IcaoCode::CodeForWingspan(Entity.DesignWingspan) != *Letter)
+		{
+			const double Span = IcaoCode::DesignSpanForLetter(*Letter);
+			UE_LOG(LogRoadMesh, Log,
+				TEXT("RebindStandDefinitions: stand %d's outline reads as Code %s; its design span %.0f -> %.0f."),
+				Index, IcaoCode::ToLetter(*Letter), Entity.DesignWingspan, Span);
+			Network->SetStandDesignWingspan(EntityId, Span);
+		}
+
 		const StandBox::FStandPose Pose = StandDefinitionCacheLocal::PoseFromOutline(Entity, *Letter);
 		if (!StandDefinitionCacheLocal::StandMatchesPose(*Network, EntityId, Entity, Pose, *Definition))
 		{
