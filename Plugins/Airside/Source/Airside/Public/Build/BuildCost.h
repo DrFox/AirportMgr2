@@ -37,6 +37,7 @@ namespace BuildCost
 	 * per surface would mean a rate per profile per surface authored by hand. 0.4 is a first
 	 * guess (2026-09-27): levelled ground and seed, no base course or binder. Tune it here, in
 	 * the one place both the quote and the upkeep read.
+	 * ENFORCED BY: Airside.Build.GrassRoadCost (quote and upkeep both at the factor)
 	 */
 	inline constexpr double GrassRateFactor = 0.4;
 

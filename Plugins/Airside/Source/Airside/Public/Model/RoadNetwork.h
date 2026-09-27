@@ -216,6 +216,8 @@ public:
 	 * A live taxiway or service road laid on grass. False for a runway whatever its Surface
 	 * field says - see FRoadSegment::Surface. The one spelling the mesh, the paint and route
 	 * search ask, so the three cannot disagree about which ground is grass.
+	 * ENFORCED BY: Airside.Build.GrassRoadSlots, Airside.Build.GrassRoadUnpainted,
+	 * Airside.Model.RouteGrassGate (each goes red if its reader stops asking)
 	 */
 	bool IsGrassRoad(FRoadSegmentId Segment) const;
 

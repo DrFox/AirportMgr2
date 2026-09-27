@@ -271,7 +271,7 @@ namespace
 			// GROUND TOO WEAK for the traveller: a grass road or taxiway under an aircraft that
 			// needs pavement. Asked only when the query needs more than grass, so a vehicle's or a
 			// grass-capable aircraft's search never pays the lookup. A turn path has no
-			// DerivedFrom and is not judged - it is reached only through the lanes that are.
+			// DerivedFrom and is not judged; the grass lanes either side of it are.
 			// See FRouteQuery::MinimumSurface on why Find's size retry does not lift this.
 			if (Query.MinimumSurface > RoadSurfacePavement(ERoadSurface::Grass)
 				&& Edge->DerivedFrom.IsSet() && Network.IsGrassRoad(Edge->DerivedFrom))

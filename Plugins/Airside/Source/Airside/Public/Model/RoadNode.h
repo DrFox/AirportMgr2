@@ -53,6 +53,7 @@ struct AIRSIDE_API FRoadSegment
 	 * is shared by every road of that width, so grass on the profile would double the width
 	 * assets. Set by URoadEditFacade::ConnectNodes; URoadNetwork::SplitSegment copies it onto
 	 * both halves and a node-deletion heal lays the arm's own.
+	 * ENFORCED BY: Airside.Present.GrassRoadLaid (lay, split and heal, through the actor)
 	 */
 	UPROPERTY() ERoadSurface Surface = ERoadSurface::Tarmac;
 
