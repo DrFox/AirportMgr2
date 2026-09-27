@@ -553,7 +553,9 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	// reason below: URoadNetwork::SetSegmentSurface would refuse it only after
 	// AddStraightSegment, leaving a tarmac road charged at Surface's rate. The tool's row is
 	// built from the same list, so this is reached only by a caller that skipped the row.
-	// ENFORCED BY: Airside.Present.GrassRoadLaid (a row pick of grass connects, no refusal)
+	// ENFORCED BY: Airside.Present.BuildPurseConnectRefusesUnofferedPavement (concrete on a
+	// taxiway: refused, nothing laid, nothing charged); Airside.Present.GrassRoadLaid (a row
+	// pick of grass connects, no refusal)
 	if (Chosen != nullptr && !Pavement::Offered(Chosen->AllowedPavements).Contains(Surface))
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectNodes refused: %s is not offered by profile %s"),

@@ -7,7 +7,9 @@
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "Misc/ScopeExit.h"
 #include "Model/BuildPurse.h"
+#include "Model/Pavement.h"
 #include "Tool/RoadBuildTool.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
@@ -118,6 +120,43 @@ bool FBuildPurseRefusesTest::RunTest(const FString& Parameters)
 	// would distinguish that from a build that worked.
 	TestEqual(TEXT("no segment was left behind by the refusal"),
 		World.Actor->GetNetwork()->GetSegments().Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildPurseConnectRefusesUnofferedPavementTest,
+	"Airside.Present.BuildPurseConnectRefusesUnofferedPavement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildPurseConnectRefusesUnofferedPavementTest::RunTest(const FString& Parameters)
+{
+	// THE GUARD BEFORE THE PRICE (URoadEditFacade::ConnectNodes): a taxiway profile offers
+	// tarmac and grass, so a caller that skipped the tool's row and asked for concrete must be
+	// refused BEFORE AddStraightSegment - SetSegmentSurface's own refusal would come after it,
+	// leaving a tarmac taxiway built and charged at concrete's rate. Through the actor, with
+	// money on the purse, so the only thing that can refuse it is the pavement guard.
+	FRecordingPurse Purse; // before the world - the facade holds a raw pointer to it
+	FAirsideTestWorld World;
+	PriceTheTaxiway(*World.Actor);
+	World.Actor->GetEditFacade()->SetPurse(&Purse);
+	ON_SCOPE_EXIT { World.Actor->GetEditFacade()->SetPurse(nullptr); };
+	const double FundsBefore = Purse.Funds;
+
+	const int32 A = World.Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = World.Actor->PlaceNode(FVector2D(10000.0, 0.0));
+
+	AddExpectedMessage(TEXT("ConnectNodes refused: concrete is not offered by profile"),
+		EAutomationExpectedMessageFlags::Contains, 1);
+	TestFalse(TEXT("a concrete taxiway, which its profile does not offer, is refused"),
+		World.Actor->ConnectNodes(A, B, ERoadKind::Taxiway, INDEX_NONE, EPavement::Concrete));
+	TestEqual(TEXT("no segment was laid"), World.Actor->GetNetwork()->GetSegments().Num(), 0);
+	TestEqual(TEXT("nothing was charged"), Purse.Charges.Num(), 0);
+	TestEqual(TEXT("and the balance is untouched"), Purse.Funds, FundsBefore, 1e-9);
+
+	// THE CONTROL: the same click on an offered pavement builds, so the refusal above is the
+	// pavement's and not a broken fixture's.
+	TestTrue(TEXT("the same taxiway on grass, which is offered, is laid"),
+		World.Actor->ConnectNodes(A, B, ERoadKind::Taxiway, INDEX_NONE, EPavement::Grass));
 	return true;
 }
 
