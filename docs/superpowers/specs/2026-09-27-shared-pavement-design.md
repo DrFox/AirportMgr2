@@ -1,6 +1,6 @@
 # Shared pavement: one surface scale, stand admission, priced lines
 
-2026-09-27. Status: design agreed in conversation, awaiting spec review.
+2026-09-27. Status: spec approved 2026-09-27; open questions answered.
 
 ## Problem
 
@@ -33,6 +33,11 @@
 - **Services on grass:** every role works on every pavement today. Leave a consumed hook, not
   a restriction.
 - **Existing stands:** none but the one on `M_Starter`, which is deleted. No stand migration.
+- **Stand pad upkeep is billed by area and pavement** (was: the definition's flat
+  `UpkeepPerDay` only). "Per type" read as per PAVEMENT type - see §4.
+- **Code A stands merge into B.** The smallest stand is B's floor, 50 x 39.5 m; what used to be
+  the A/B choice is now the surface choice. Code A remains an AIRCRAFT letter (wingspan,
+  runway width) - see §3a.
 - **HELD:** build proposals (each tool builds an `FXxxProposal` with `Quote()` and the click
   places that same proposal, retiring `QuoteForConnect`/`QuoteForRunway` from
   `IRoadEditTarget`). Not in this change. The priced line below is its prerequisite and
@@ -144,6 +149,31 @@ namespace StandAdmission
 - `RunwayAdmission::Judge`'s Surface branch becomes `Pavement::Judge`, and its `Describe` case
   forwards to `Pavement::Describe`. `ERunwayRefusal` is unchanged.
 
+## 3a. Code A stands merge into B
+
+- **`IcaoCode::StandLetterFor(EIcaoCode Aircraft)`** - the ONE alias: A -> B, every other
+  letter unchanged. "The stand letter an aircraft of this letter parks on." Every stand-size
+  question an aircraft letter asks goes through it (`StandWidthForLetter`,
+  `StandDepthForLetter`, `MaxStandWidthForLetter`, `ResolveStandDefinitionFor`).
+- **`LetterForStandSize` never answers A.** Its backwards walk stops at the smallest STAND
+  letter, B; below B's floor it answers empty, as below A's did.
+- **The size gate** (`RoadEditFacadeSurfaces.cpp:665`, today `EIcaoCode::A`'s floor) reads
+  `IcaoCode::SmallestStandLetter()` (= `StandLetterFor(A)`), not a literal letter.
+- **Row A's stand columns go** (`StandDepth`, `TowLaneWidth`, `AftEdgeAllowance`, `WingFwd`,
+  `WingAft`) - figures nothing can read are the drift the table's own header warns about. If the
+  designated-initialiser struct makes a column mandatory, it becomes `TOptional` or the row
+  gains `bHasStands = false`; the plan picks after reading `FRow`. A stand for an A aircraft is
+  B's stand, sized and served for the utility tow exactly as B's is today.
+- **Admission is unchanged in shape:** an A aircraft on a B stand is a small airframe on a
+  larger stand, which is already admitted (`StandAdmits` compares by letter, smaller passes).
+- **Tests:** the A-band assertions in `Airside.Solve.StandWidthIsDerivedFromClearance`
+  (IcaoCode.h's `ENFORCED BY`) are rewritten to assert the merge: `LetterForStandSize` returns
+  B at B's floor and empty just under it, for every width; no rectangle reads as A. Every other
+  test naming an A stand (`StandBoxTest`, `StandDesignVehicleTest`, `StandPlotPlacementTest`,
+  `StandPlotToolTest`, `ServiceLinkTest`, `AirsideContentTest`, `StarterMapProbeTest`) is moved
+  to B or deleted if it only duplicated B's case - each named in the PR.
+- `IcaoCode.h`'s "CODE A'S BAND IS EMPTY" paragraph is replaced by the merge's reason and date.
+
 ## 4. Priced lines - `Model/BuildPurse.h`
 
 ```cpp
@@ -178,6 +208,11 @@ struct FBuildQuote
 - **Upkeep reads the same factor.** `DailyUpkeep` multiplies each segment's upkeep by
   `Pavement::RateFactor` of its pavement - a runway's `FRunwayFacts::Surface`, a road's
   segment pavement - so build and upkeep cannot disagree (BuildCost.h's rule).
+- **A stand's pad enters upkeep:** `PolygonAreaSquareMetres(Stand.Outline) x
+  ApronRatePerSquareMetrePerDay x RateFactor(Stand.Pavement)`, beside the definition's flat
+  `UpkeepPerDay` (kept - it is the stand's equipment, not its ground). The same area function
+  the pad's build line used, so the two cannot measure one pad differently. A bare apron has no
+  pavement and bills at factor 1, as today.
 - **Pricing stays kind-blind.** `ULedger` prices per line:
   `Sum(Pricing->PriceOfBuild(Line.Amount(), Line.Source))`, and the same for `ScrapValue`.
   `UPricing`'s signature is unchanged. A stand's pad line now reaches pricing with its own
@@ -217,6 +252,8 @@ struct FBuildQuote
 - `Airside.Build.BuildCost.FactorOnEveryKind` - grass segment, grass runway, grass stand pad
   each price at 0.4 of tarmac; a building line ignores pavement.
 - `Airside.Build.BuildCost.UpkeepUsesBuildFactor` - grass runway upkeep is 0.4 of tarmac.
+- `Airside.Build.BuildCost.StandPadUpkeepByArea` - two stands of one letter, one grass, one
+  tarmac, same outline: pad upkeep differs by exactly the factor; doubling the area doubles it.
 - `Airside.Build.BuildCost.TarmacPricesUnchanged` - figures captured from main for a road,
   a runway and a stand.
 - `AirportOps.Ledger.PricesPerLine` - a two-line quote charges the sum of per-line prices.
@@ -241,7 +278,4 @@ references them - checked by grep of Content before deleting; forwarders added i
 
 ## Open questions
 
-1. Should a stand's pad area enter `DailyUpkeep` (at the apron rate x pavement factor), so a
-   grass stand is also cheaper to own?
-2. A and B still differ only by 5.5 m of depth. Merge their floors, or leave them now that
-   surface gives the small end a real choice?
+None. (2026-09-27: pad upkeep by area and pavement - §4; A merged into B - §3a.)
