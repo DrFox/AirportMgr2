@@ -209,9 +209,11 @@ FBuildQuote URoadEditFacade::QuoteForSegment(int32 SegmentIndex) const
 	{
 		return FBuildQuote();
 	}
-	// THE SEGMENT'S OWN SURFACE: a refund at the tarmac rate for a grass road would pay back
-	// more than it cost, and delete-and-redraw would print money.
-	return BuildCost::ForSegment(*Profile, BuildCost::SegmentLengthUu(*Network, Segment), Segment.Surface);
+	// PavementOf, not Segment.Surface: a runway's ground is FRunwayFacts', and reading the
+	// field directly would refund a grass RUNWAY at the tarmac rate - the same over-refund
+	// Segment.Surface alone would give a grass road, and delete-and-redraw would print money.
+	return BuildCost::ForSegment(*Profile, BuildCost::SegmentLengthUu(*Network, Segment),
+		Network->PavementOf(Network->SegmentIdAt(SegmentIndex)));
 }
 
 FBuildQuote URoadEditFacade::QuoteForAllPavement() const
@@ -596,9 +598,11 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	return true;
 }
 
-FBuildQuote URoadEditFacade::QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile) const
+FBuildQuote URoadEditFacade::QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile,
+	EPavement Pavement) const
 {
-	return Profile != nullptr ? BuildCost::ForSegment(*Profile, FVector2D::Distance(From, To)) : FBuildQuote();
+	return Profile != nullptr
+		? BuildCost::ForSegment(*Profile, FVector2D::Distance(From, To), Pavement) : FBuildQuote();
 }
 
 bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts)
@@ -634,8 +638,9 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	// Priced from the two ENDS the caller asked for, before anything is mutated - see
 	// ConnectNodes above for why the refusal cannot wait until commit.
 	// THROUGH QuoteForRunway, the function the runway tool's ghost prices with - one answer to
-	// "what does this strip cost", so the preview and the charge cannot drift.
-	const FBuildQuote Quote = QuoteForRunway(From, To, RunwayProfile);
+	// "what does this strip cost", so the preview and the charge cannot drift. Priced at
+	// Facts.Surface - the runway's ground is FRunwayFacts', not the profile's.
+	const FBuildQuote Quote = QuoteForRunway(From, To, RunwayProfile, Facts.Surface);
 	if (!CanAfford(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceRunway refused: cannot afford %s"),
@@ -1084,6 +1089,11 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 		// it is priced as a single line at rate 1 with the difference itself as Quantity - the
 		// first segment met stands in as Source, for a discount to key on only; the AMOUNT is
 		// the true difference whichever segment that is.
+		// PAVEMENT UNSET ON PURPOSE: After and PavementValueAtDragStart are both already at
+		// their own segments' factors (QuoteForAllPavement's lines each carry their own
+		// Pavement), so RawDelta is a difference of two ALREADY-FACTORED totals. Setting a
+		// Pavement here would apply Pavement::RateFactor a second time to a figure that has
+		// already paid it once.
 		FBuildQuote Delta;
 		Delta.Lines.Add({ After.Lines.IsValidIndex(0) ? After.Lines[0].Source : nullptr,
 			EBuildUnit::Each, FMath::Abs(RawDelta), 1.0, {} });

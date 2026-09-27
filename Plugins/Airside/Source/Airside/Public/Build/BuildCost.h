@@ -31,8 +31,9 @@ namespace BuildCost
 
 	/** LengthUu of pavement at Profile's rate, one line on Surface - Pavement::RateFactor is
 	 *  applied by FBuildLine::Amount, not here (the factor table and why it is a factor live
-	 *  with it; #356's GrassRateFactor folded into it). A runway passes nothing and is priced
-	 *  as tarmac: its surface is FRunwayFacts', and runway pricing ignores it today. */
+	 *  with it; #356's GrassRateFactor folded into it). A runway's Surface is FRunwayFacts',
+	 *  not this parameter's default - QuoteForRunway passes Facts.Surface through explicitly,
+	 *  so a caller that omits it is asking for tarmac on purpose, not by the runway's nature. */
 	AIRSIDE_API FBuildQuote ForSegment(const URoadProfile& Profile, double LengthUu,
 		EPavement Surface = EPavement::Tarmac);
 

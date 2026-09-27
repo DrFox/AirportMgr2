@@ -183,7 +183,7 @@ namespace
 	{
 		FM2RwyPurse* Purse = nullptr;
 		virtual IBuildPurse* GetPurse() const override { return Purse; }
-		virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile*) const override
+		virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile*, EPavement) const override
 		{
 			FBuildQuote Quote;
 			Quote.Lines.Add({ nullptr, EBuildUnit::Each, FVector2D::Distance(From, To), 1.0, {} });

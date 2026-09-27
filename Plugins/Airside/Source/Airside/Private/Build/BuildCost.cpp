@@ -107,8 +107,10 @@ double BuildCost::DailyUpkeep(const URoadNetwork& Network, double ApronRatePerSq
 {
 	double Total = 0.0;
 
-	for (const FRoadSegment& Segment : Network.GetSegments())
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
+		const FRoadSegment& Segment = Segments[Index];
 		if (!Segment.bAlive)
 		{
 			continue;
@@ -120,9 +122,12 @@ double BuildCost::DailyUpkeep(const URoadNetwork& Network, double ApronRatePerSq
 		if (const URoadProfile* Profile = Network.ProfileFor(Segment))
 		{
 			// THE SAME FACTOR THE BUILD QUOTE PAID - see Pavement::RateFactor's own note on why
-			// the two must agree. A runway's Surface is never written, so it bills as tarmac.
+			// the two must agree. PavementOf, not Segment.Surface: it is the one answer for a
+			// runway (RunwayFactsFor's Surface) and a road (the segment's own) alike, so a grass
+			// runway upkeeps at the grass factor rather than the tarmac it defaults its own
+			// unused Surface field to.
 			Total += MetresFromUu(SegmentLengthUu(Network, Segment)) * Profile->UpkeepPerMetrePerDay
-				* Pavement::RateFactor(Segment.Surface);
+				* Pavement::RateFactor(Network.PavementOf(Network.SegmentIdAt(Index)));
 		}
 	}
 

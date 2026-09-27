@@ -119,11 +119,17 @@ public:
 		int32 WidthIndex, EPavement Surface) const { return FBuildQuote(); }
 
 	/**
-	 * What a runway from From to To at Profile would cost - QuoteForConnect's reason, for
-	 * runways: PlaceRunway prices through this same function, so the ghost cannot quote one
-	 * strip while the click charges another. Free by default, as a target with no money is.
+	 * What a runway from From to To at Profile, surfaced with Pavement, would cost -
+	 * QuoteForConnect's reason, for runways: PlaceRunway prices through this same function, so
+	 * the ghost cannot quote one strip while the click charges another. Free by default, as a
+	 * target with no money is.
+	 *
+	 * Pavement AS THE TOOL'S CHOSEN SURFACE, not the profile's - a runway's ground is
+	 * FRunwayFacts', not the profile's, and the tool names it (FRunwayTool::Surface) before the
+	 * strip exists to read it back from.
 	 */
-	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile) const
+	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile,
+		EPavement Pavement) const
 	{
 		return FBuildQuote();
 	}

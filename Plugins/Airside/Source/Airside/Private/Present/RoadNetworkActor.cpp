@@ -928,9 +928,10 @@ FBuildQuote ARoadNetworkActor::QuoteForConnect(int32 FromIndex, FVector2D To, ER
 	return Facade->QuoteForConnect(FromIndex, To, Kind, WidthIndex, Surface);
 }
 
-FBuildQuote ARoadNetworkActor::QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* RunwayProfile) const
+FBuildQuote ARoadNetworkActor::QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* RunwayProfile,
+	EPavement Pavement) const
 {
-	return Facade->QuoteForRunway(From, To, RunwayProfile);
+	return Facade->QuoteForRunway(From, To, RunwayProfile, Pavement);
 }
 
 int32 ARoadNetworkActor::PlaceNode(FVector2D Where)

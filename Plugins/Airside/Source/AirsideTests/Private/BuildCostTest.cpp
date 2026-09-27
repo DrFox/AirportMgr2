@@ -151,4 +151,51 @@ bool FBuildCostQuoteIsItsLinesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildCostFactorOnEveryKindTest,
+	"Airside.Build.BuildCostFactorOnEveryKind",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildCostFactorOnEveryKindTest::RunTest(const FString& Parameters)
+{
+	// EVERY KIND THAT LIES ON GROUND takes the factor, and a building does not - the point of
+	// applying it in FBuildLine::Amount rather than per kind.
+	const URoadProfile& Taxi = *TestProfiles::Taxiway();
+	const TArray<FVector2D> Pad = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+	TestEqual(TEXT("grass taxiway is 0.4 of tarmac"),
+		BuildCost::ForSegment(Taxi, 50000.0, EPavement::Grass).BaseAmount(),
+		0.4 * BuildCost::ForSegment(Taxi, 50000.0, EPavement::Tarmac).BaseAmount(), 1e-6);
+	TestEqual(TEXT("a grass stand pad is 0.4 of a tarmac one"),
+		BuildCost::ForApron(Pad, 10.0, EPavement::Grass).BaseAmount(),
+		0.4 * BuildCost::ForApron(Pad, 10.0, EPavement::Tarmac).BaseAmount(), 1e-6);
+	TestEqual(TEXT("a bare apron has no pavement and bills at the rate itself"),
+		BuildCost::ForApron(Pad, 10.0, {}).BaseAmount(), BuildCost::ForApron(Pad, 10.0, EPavement::Tarmac).BaseAmount(), 1e-6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildCostUpkeepUsesBuildFactorTest,
+	"Airside.Build.BuildCostUpkeepUsesBuildFactor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildCostUpkeepUsesBuildFactorTest::RunTest(const FString& Parameters)
+{
+	// A RUNWAY'S PAVEMENT IS ITS FACTS', a road's is its segment's (Review Focus 2). Two
+	// networks, identical but for one fact each: upkeep must move by exactly the factor.
+	auto UpkeepOf = [](bool bRunway, EPavement P)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Profile = bRunway ? TestProfiles::Runway() : TestProfiles::Taxiway();
+		Profile->UpkeepPerMetrePerDay = 1.0;              // non-zero, or the ratio proves nothing
+		const FRoadSegmentId S = Net->AddStraightSegment(Net->AddNode({0,0}), Net->AddNode({100000,0}), Profile);
+		if (bRunway) { FRunwayFacts F; F.Surface = P; Net->SetRunwayFacts(S, F); }
+		else         { Net->SetSegmentSurface(S, P); }
+		return BuildCost::DailyUpkeep(*Net, 0.0);
+	};
+	TestEqual(TEXT("grass runway upkeep is 0.4 of tarmac"), UpkeepOf(true, EPavement::Grass), 0.4 * UpkeepOf(true, EPavement::Tarmac), 1e-6);
+	TestEqual(TEXT("grass taxiway upkeep is 0.4 of tarmac"), UpkeepOf(false, EPavement::Grass), 0.4 * UpkeepOf(false, EPavement::Tarmac), 1e-6);
+	TestTrue(TEXT("and upkeep is not zero, or the ratio proves nothing"), UpkeepOf(true, EPavement::Tarmac) > 0.0);
+	return true;
+}
+
 #endif

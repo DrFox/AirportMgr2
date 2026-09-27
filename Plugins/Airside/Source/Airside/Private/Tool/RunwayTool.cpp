@@ -325,7 +325,7 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 	// through the TARGET, which PlaceRunway charges through too, so the two cannot disagree.
 	const IBuildPurse* Purse = Context.Target != nullptr ? Context.Target->GetPurse() : nullptr;
 	const FBuildQuote Quote = Purse != nullptr && Profile != nullptr
-		? Context.Target->QuoteForRunway(Threshold, Far, Profile) : FBuildQuote();
+		? Context.Target->QuoteForRunway(Threshold, Far, Profile, Surface) : FBuildQuote();
 	const bool bAffordable = Quote.IsFree() || Purse->CanAfford(Quote);
 
 	const EPreviewStyle Style = bLongEnough && bAffordable ? EPreviewStyle::Pending : EPreviewStyle::Refused;
