@@ -275,9 +275,6 @@ references them - checked by grep of Content before deleting; forwarders added i
 
 - Build proposals (HELD, above).
 - Restricting any service role on grass (hook only).
-- A stand pad's UPKEEP: today a stand bills only `UEntityDefinition::UpkeepPerDay`, not its pad
-  area, so a grass stand is cheaper to build and the same to run. Unchanged here; see question 1.
-- Merging the A and B stand floors (question 2).
 
 ## Open questions
 

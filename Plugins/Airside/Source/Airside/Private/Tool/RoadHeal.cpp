@@ -113,7 +113,10 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 			if (const FRoadSegment* Arm = Network.GetSegment(Incident))
 			{
 				HealProfile = Arm->Profile;
-				HealSurface = Arm->Surface;
+				// THROUGH PavementOf, the one answer (RoadNode.h's Surface comment), not the raw
+				// field - but a runway arm keeps Tarmac: PavementOf would give the strip's own
+				// facts, and a runway's Surface field is never written (see bRunwayThrough below).
+				HealSurface = Network.IsRunwaySegment(Incident) ? EPavement::Tarmac : Network.PavementOf(Incident);
 			}
 		}
 

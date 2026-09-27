@@ -386,7 +386,7 @@ public:
 	 * PlaceStandInPlot's commit both ask this rather than keeping their own opinions, so a
 	 * preview can never approve what the commit refuses, or the reverse. See
 	 * URoadEditFacade::WhyStandRefused for the refusal order (self-crossing, too small
-	 * against Code A's own floor, an unfit letter, an overlap, a taxiway through the
+	 * against the smallest stand letter's floor, an unfit letter, an overlap, a taxiway through the
 	 * interior, then afford) and why each check is winding-independent, so this may be
 	 * asked of Outline exactly as drawn, before any CCW correction.
 	 *

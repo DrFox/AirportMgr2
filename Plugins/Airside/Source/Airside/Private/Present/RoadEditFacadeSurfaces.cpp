@@ -681,7 +681,7 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline, EP
 	}
 
 	// THE LETTER THE DRAWN BOX READS AS. Guaranteed set past the size gate above (the same
-	// "smaller than Code A's floor" condition both check), but read back through the
+	// "smaller than the smallest stand letter's floor" condition both check), but read back through the
 	// TOptional rather than GetValue()'d blind, so a future change to either rule fails loud
 	// here instead of asserting on a box neither gate actually refused.
 	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Outline);
@@ -811,7 +811,8 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 
 	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Wound);
 	// GUARANTEED SET: WhyStandRefused's size gate above already refused anything smaller
-	// than Code A's floor, which is the same condition LetterOf is unset under, and
+	// than the smallest stand letter's floor (IcaoCode::SmallestStandLetter), which is the
+	// same condition LetterOf is unset under, and
 	// reversing a rectangle's winding does not change the lengths LetterOf measures. NOT
 	// because opposite edges of a rectangle are equal - in floats they are not, and the
 	// reversed outline's edge 0->1 is the drawn rectangle's far edge - but because
