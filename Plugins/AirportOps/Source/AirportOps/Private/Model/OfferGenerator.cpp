@@ -24,7 +24,9 @@ bool UOfferGenerator::IsPermanentRefusal(EArrivalRefusal Why)
 
 	// These need the player to BUILD something. NoRunway, RunwayTooShort, NotAdmitted,
 	// NoExit, NoRouteToStand, NoStandBigEnough (a bigger stand - so no airline is offered an
-	// A380 until an F stand exists, which is the drawn-stands spec's own promise).
+	// A380 until an F stand exists, which is the drawn-stands spec's own promise),
+	// NoStandPavedEnough (pave a stand) and NoStandServiceable (fix the service, not the
+	// stand) - shared-pavement Task 9's two new refusals, neither of which clears on its own.
 	default:
 		return true;
 	}

@@ -24,8 +24,13 @@ namespace
 	 * PRIORITY ACROSS STANDS, not per-stand precedence (Judge already orders Surface, TooSmall,
 	 * Service within one stand): Service wins if ANY stand was refused only for a service - the
 	 * more specific, more actionable report; else Surface if ANY stand is big enough at all
-	 * (StandAdmits true regardless of its own pavement) - paving one would fix it; else every
-	 * stand really is too small, whatever it is paved with.
+	 * (Admission.bPassesSize, regardless of its own pavement) - paving one would fix it; else
+	 * every stand really is too small, whatever it is paved with.
+	 *
+	 * READS Admission.bPassesSize RATHER THAN CALLING IcaoCode::StandAdmits ITSELF: the
+	 * call-site rule (Check-Architecture rule 4 row 'IcaoCode::StandAdmits', StandAdmission.cpp's
+	 * own ENFORCED BY comment) confines that call to IcaoCode.cpp and StandAdmission.cpp, so a
+	 * second opinion here would both violate it and risk drifting from Judge's own answer.
 	 */
 	EStandRefusal WhyEveryStandRefused(const URoadNetwork& Network, const FAirframe& Airframe)
 	{
@@ -39,7 +44,7 @@ namespace
 			const FStandAdmission Admission = StandAdmission::Judge(Stand, Airframe);
 			if (Admission.IsAdmitted()) { return EStandRefusal::None; }
 			if (Admission.Why == EStandRefusal::Service) { bSawServiceOnly = true; }
-			if (IcaoCode::StandAdmits(Stand.DesignWingspan, Airframe.Wingspan)) { bSawBigEnough = true; }
+			if (Admission.bPassesSize) { bSawBigEnough = true; }
 		}
 		if (Stands == 0)
 		{

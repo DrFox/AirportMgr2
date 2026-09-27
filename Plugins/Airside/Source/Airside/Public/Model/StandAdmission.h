@@ -6,7 +6,6 @@
 #include "StandAdmission.generated.h"
 
 struct FAirframe;
-struct FEntityInstance;
 
 /** Why a stand may not admit an aircraft. None means it may. */
 UENUM()
@@ -44,6 +43,15 @@ struct AIRSIDE_API FStandAdmission
 	/** The stand's own design span and the aircraft's wingspan, uu - TooSmall's figures. */
 	UPROPERTY() double StandDesignSpan = 0.0;
 	UPROPERTY() double Wingspan = 0.0;
+
+	/**
+	 * Whether IcaoCode::StandAdmits alone would admit this stand, computed UNCONDITIONALLY -
+	 * true whenever size alone admits, independent of Why. Lets an aggregate (ArrivalPlanner::
+	 * WhyEveryStandRefused) ask "would paving fix this" without re-asking IcaoCode::StandAdmits
+	 * itself, which the call-site rule (Check-Architecture rule 4 row 'IcaoCode::StandAdmits')
+	 * confines to IcaoCode.cpp and this file.
+	 */
+	UPROPERTY() bool bPassesSize = false;
 
 	/** Which service was refused, when Why == Service. Meaningless otherwise. */
 	UPROPERTY() EServiceRole RefusedRole = EServiceRole::Aircraft;

@@ -19,16 +19,24 @@ namespace StandAdmission
 		Out.StandDesignSpan = Stand.DesignWingspan;
 		Out.Wingspan = Airframe.Wingspan;
 
+		// COMPUTED UNCONDITIONALLY, not only when reached by the Why chain below: an aggregate
+		// over many stands (ArrivalPlanner::WhyEveryStandRefused) needs to know "would this
+		// stand admit by size alone" even for a stand refused earlier, at Surface - and the ONE
+		// place allowed to ask IcaoCode::StandAdmits in production is this file (Check-
+		// Architecture rule 4 row 'IcaoCode::StandAdmits'), so the aggregate reads this field
+		// rather than calling it a second time itself.
+		// IcaoCode::StandAdmits CALLED, not re-implemented - its "unknown admits anything" and
+		// "wider than F is never admitted" live there. ENFORCED BY: Check-Architecture rule 4 row
+		// 'IcaoCode::StandAdmits'
+		Out.bPassesSize = IcaoCode::StandAdmits(Stand.DesignWingspan, Airframe.Wingspan);
+
 		// SURFACE, SIZE, SERVICE - first wins. Surface first for RunwayAdmission's reason: it is
 		// the fact a player cannot fix by drawing the stand bigger.
 		if (!Out.Pavement.Passes())
 		{
 			Out.Why = EStandRefusal::Surface;
 		}
-		// IcaoCode::StandAdmits CALLED, not re-implemented - its "unknown admits anything" and
-		// "wider than F is never admitted" live there. ENFORCED BY: Check-Architecture rule 4 row
-		// 'IcaoCode::StandAdmits'
-		else if (!IcaoCode::StandAdmits(Stand.DesignWingspan, Airframe.Wingspan))
+		else if (!Out.bPassesSize)
 		{
 			Out.Why = EStandRefusal::TooSmall;
 		}

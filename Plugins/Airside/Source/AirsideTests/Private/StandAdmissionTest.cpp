@@ -42,15 +42,23 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStandAdmissionSurfaceBeatsSizeTest, "Airside.M
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FStandAdmissionSurfaceBeatsSizeTest::RunTest(const FString&)
 {
-	// FIRST REFUSAL WINS, surface first - runway admission's order and reason: drawing the
+	// FIRST REFUSAL WINS, surface first - runway admission's own order and reason: drawing the
 	// stand bigger does not fix its pavement.
 	FAirframe Heavy = UAirsideSettings::ResolveDefaultAirframe();
 	Heavy.Wingspan = 7980.0;
 	Heavy.MinimumPavement = EPavement::Concrete;
-	TestEqual(TEXT("too small AND too soft reports surface"),
-		StandAdmission::Judge(StandOf(EIcaoCode::B, EPavement::Grass), Heavy).Why, EStandRefusal::Surface);
+	const FStandAdmission TooSmallAndSoft = StandAdmission::Judge(StandOf(EIcaoCode::B, EPavement::Grass), Heavy);
+	TestEqual(TEXT("too small AND too soft reports surface"), TooSmallAndSoft.Why, EStandRefusal::Surface);
+	TestFalse(TEXT("and bPassesSize says it would still be too small if paved"), TooSmallAndSoft.bPassesSize);
 	TestEqual(TEXT("too small on the right pavement reports size"),
 		StandAdmission::Judge(StandOf(EIcaoCode::B, EPavement::Concrete), Heavy).Why, EStandRefusal::TooSmall);
+
+	// BIG ENOUGH BUT SOFT: bPassesSize is what lets ArrivalPlanner::WhyEveryStandRefused tell
+	// "pave one" (this case) from "every stand is too small" (the case above) without asking
+	// IcaoCode::StandAdmits a second time itself.
+	const FStandAdmission BigEnoughButSoft = StandAdmission::Judge(StandOf(EIcaoCode::F, EPavement::Grass), Heavy);
+	TestEqual(TEXT("big enough but soft still reports surface"), BigEnoughButSoft.Why, EStandRefusal::Surface);
+	TestTrue(TEXT("and bPassesSize says paving would fix it"), BigEnoughButSoft.bPassesSize);
 	return true;
 }
 
