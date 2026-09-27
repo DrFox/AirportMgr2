@@ -19,12 +19,9 @@ enum class EStandPaint : uint8
 	Guidance,
 	/** The edge of the stand's ground. */
 	Boundary,
-	/** The equipment restraint line round the parked aircraft's envelope. */
-	Restraint,
-	/** The marked stripes of vehicle-only ground's hatch. */
-	HatchMark,
-	/** The stripes between them. */
-	HatchSpace,
+	// Restraint and the two hatch meanings were removed 2026-09-27: the user judged the red
+	// line and the red/white hatch over the vehicle ground "awful" in PIE and asked for the
+	// white edge and the taxi line with its stop line only.
 	Count
 };
 
@@ -48,31 +45,15 @@ struct AIRSIDE_API FStandMarkingCensus
 	int32 LetterSegments = 0;
 	/** One per edge of the drawn outline. */
 	int32 BoundaryEdges = 0;
-	/**
-	 * Four per stand: entrance, both sides, nose - for every stand whose outline is the one its
-	 * pose was derived from, which is every placement path (drawn, point-placed, migrated). True
-	 * again since R21 (review of task 13): the nose side used to fall off the far edge, silently,
-	 * whenever the fleet's envelope reached past a shallow stand; FrameFor now clamps the box's
-	 * forward edge to the ground inside the boundary, so the nose side lands on the stand (and
-	 * Build warns). A HAND-SET outline that disagrees with the pose - 2026-09-27, only the test
-	 * fixtures StandOutlineIsNotADepot (a 15 x 8 m outline on a C pose, 1 side) and
-	 * RoadLinesUpWithAPlotEdge / RoadRunsParallelToAPlotEdge (3 sides) - can still clip sides
-	 * away; every vertex stays on the ground either way.
-	 * ENFORCED BY: Airside.Build.StandMarking.ShallowStandClampsTheNoseSide, Airside.Build.StandMarking.PaintStaysInsideOutline
-	 */
-	int32 RestraintSides = 0;
-	/** Hatch stripe pieces actually emitted, both kinds, after clipping to their zones. */
-	int32 HatchStripes = 0;
 };
 
 /**
  * A stand's PAINT FRAME: local x from the entrance edge along Facing (toward the nose and the
  * far edge), local y along Right = PerpCCW(Facing), the reader's right - see Build() for why that
- * sign. And the RESTRAINT BOX in it: the ground the parked aircraft owns, whose interior is
- * RestraintAft < x < RestraintForward, |y| < RestraintHalfWidth.
+ * sign.
  *
- * PUBLIC so the tests measure paint and the real vehicle layout against the SAME box the builder
- * paints, rather than a second derivation of it that could agree with itself and not the paint.
+ * PUBLIC so the tests measure paint against the SAME frame the builder paints in, rather than a
+ * second derivation of it that could agree with itself and not the paint.
  */
 struct AIRSIDE_API FStandPaintFrame
 {
@@ -83,17 +64,9 @@ struct AIRSIDE_API FStandPaintFrame
 	/** The letter painted - unset for a stand whose DesignWingspan was never captured. */
 	TOptional<EIcaoCode> GlyphLetter;
 
-	/** Entrance edge to the stop mark, uu - StandBox::EntranceSetback. */
+	/** Entrance edge to the stop mark, uu, read off the outline - StandBox::EntranceSetback only on
+	 *  a floor-sized stand, since the pose is measured from the far edge (2026-09-27). */
 	double Setback = 0.0;
-
-	double RestraintHalfWidth = 0.0;
-	double RestraintForward = 0.0;
-	double RestraintAft = 0.0;
-
-	/** RestraintForward before R21's clamp: where the fleet's envelope says the box should end. */
-	double EnvelopeForward = 0.0;
-	/** The stand is too shallow for its letter's fleet, and RestraintForward was pulled in to fit. */
-	bool bForwardClamped = false;
 
 	/**
 	 * The drawn outline in this frame, wound counter-clockwise, and the same outline inset by the
@@ -110,22 +83,15 @@ struct AIRSIDE_API FStandPaintFrame
 		const FVector2D D = World - EntranceMid;
 		return FVector2D(FVector2D::DotProduct(D, Facing), FVector2D::DotProduct(D, Right));
 	}
-	/** Strictly inside the restraint box, by more than Tolerance. */
-	bool InRestraintInterior(const FVector2D& World, double Tolerance) const
-	{
-		const FVector2D P = ToLocal(World);
-		return P.X > RestraintAft + Tolerance && P.X < RestraintForward - Tolerance
-			&& FMath::Abs(P.Y) < RestraintHalfWidth - Tolerance;
-	}
 };
 
 /**
  * The PAINT of a drawn stand: a lead-in line from the entrance to the stop mark, a stop bar
  * across the heading at the stop mark, and the stand's code letter as seven-segment strokes -
- * and since task 13 (2026-09-27, "white lines for the outer edge, paint in the no go zones for
- * the aircraft and the stop lines") a white boundary just inside the outline, a red restraint
- * line round the aircraft's box (FStandPaintFrame), and a red-and-white 45 degree hatch over all
- * the vehicle-only ground outside it. Each quad names its EStandPaint; the caller picks colours -
+ * and a white boundary just inside the outline (2026-09-27, "just go with a white line around
+ * the edge and the taxi line up the middle with stopping lines on it"; a red restraint line and
+ * a red/white hatch tried the same day were removed). Each quad names its EStandPaint; the
+ * caller picks colours -
  * quads through the same builder idiom as FHoldingPositionMarkingBuilder and
  * FRunwayMarkingBuilder (MarkingQuads::AddQuad/AddRect, UV1 = 0 solid).
  *
@@ -152,15 +118,13 @@ struct AIRSIDE_API FStandPaintFrame
  */
 struct AIRSIDE_API FStandMarkingBuilder
 {
-	/** Stand boundary line width, uu (20 cm), painted just inside the drawn outline. */
-	static constexpr double BoundaryWidth = 20.0;
-	/** Restraint line width, uu (20 cm). */
-	static constexpr double RestraintWidth = 20.0;
-	/** Hatch stripe width, uu (50 cm, measured square to the stripe), at 45 degrees. */
-	static constexpr double HatchStripeWidth = 50.0;
+	/** Stand boundary line width, uu (40 cm), painted just inside the drawn outline. 40, not the
+	 *  20 first tried: 20 cm did not read from the build camera (PIE, 2026-09-27). */
+	static constexpr double BoundaryWidth = 40.0;
 
-	/** Lead-in line width, uu (15 cm). */
-	static constexpr double LeadInWidth = 15.0;
+	/** Lead-in (taxi line) width, uu (30 cm) - wider than a real stand's 15 cm for the build
+	 *  camera, BoundaryWidth's reason. */
+	static constexpr double LeadInWidth = 30.0;
 	/** Stop bar: along the heading (40 cm) by across it (6 m), uu. 6 m since task 13, up from 3:
 	 *  with the overlay's stop and pose rings gone the bar IS the stop mark, and the user asked
 	 *  for one bar, bigger, rather than a bar per aircraft type. */
@@ -185,10 +149,8 @@ struct AIRSIDE_API FStandMarkingBuilder
 	static const uint8 GlyphSegments[6];
 
 	/**
-	 * Entity's paint frame and restraint box, or false when Entity is not a live drawn stand.
-	 * The letter, envelope and setback are Build()'s own derivation - see Build's header - and
-	 * the box's figures are the SAME ones that size the stand (IcaoCode: MaxWingspan,
-	 * WingtipClearance; the envelope's MaxNoseFwd), for the stand's own letter (StandLetterFor).
+	 * Entity's paint frame, or false when Entity is not a live drawn stand. The letter and
+	 * setback are Build()'s own derivation - see Build's header.
 	 */
 	static bool FrameFor(const FEntityInstance& Entity, const FLetterEnvelopeTable& Envelopes, FStandPaintFrame& Out);
 
@@ -197,12 +159,13 @@ struct AIRSIDE_API FStandMarkingBuilder
 	 * plane at Z. Returns how many stands were painted; Census, when given, says what was
 	 * painted.
 	 *
-	 * For each alive entity with IsStand() && IsPlotted(): the entrance midpoint is derived
-	 * from the pose, Position - Facing * StandBox::EntranceSetback(L, Envelope(L)) -
-	 * StandBox::PoseFor's own derivation run in reverse - rather than read from Outline[0..1],
-	 * because URoadEditFacade::PlaceStandInPlot reverses a clockwise outline (and swaps which
-	 * of its two ORIGINAL corners is "entrance A/B" to match), which moves the entrance edge
-	 * off indices 0->1 of the STORED array; the pose needs no winding assumption at all. L is
+	 * For each alive entity with IsStand() && IsPlotted(): the entrance midpoint is the
+	 * outline's rearmost reach along the pose's Facing, centred on the pose - measured, not
+	 * read from Outline[0..1], because URoadEditFacade::PlaceStandInPlot reverses a clockwise
+	 * outline (and swaps which of its two ORIGINAL corners is "entrance A/B" to match), which
+	 * moves the entrance edge off indices 0->1 of the STORED array. NOT derived from the pose
+	 * since 2026-09-27: StandBox::PoseFor now measures the pose from the far edge, so the
+	 * entrance-to-stop distance varies with the depth drawn. L is
 	 * the letter LetterForWingspan(DesignWingspan) reads back, or Code C - the same fallback
 	 * a migrated legacy stand's outline was built with (see StandBox::BoxAt at load) - when
 	 * DesignWingspan is 0 (a raw-model fixture stand nobody measured). That letter is also

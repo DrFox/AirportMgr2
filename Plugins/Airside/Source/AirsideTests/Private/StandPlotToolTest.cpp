@@ -715,7 +715,7 @@ bool FStandPlotPreviewDrawsTheKeepOutTest::RunTest(const FString& Parameters)
 	// THE FLOOR, MATCHING FStandPlotTool::DescribeLetter's OWN choice (#292: Tool/ cannot
 	// reach Content/) - this test reconstructs what the tool itself computed.
 	const StandBox::FStandPose Pose =
-		StandBox::PoseFor(Shown[0], Shown[1], Inward, EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C));
+		StandBox::PoseFor(Shown[0], Shown[1], Inward, Shown, EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C));
 	const FVector2D Left = RoadGeom::PerpCCW(Pose.Facing);
 	const double HalfSpan = 0.5 * IcaoCode::MaxWingspanForLetter(EIcaoCode::C);
 
@@ -1497,7 +1497,7 @@ bool FGhostCommitAndPointPlacedAgreeTest::RunTest(const FString& Parameters)
 	Tool.Rect(At(Actor, AnchorCursor), Shown);
 	const FVector2D Inward(0.0, 1.0);
 	const StandBox::FStandPose ExpectedPose =
-		StandBox::PoseFor(Shown[0], Shown[1], Inward, EIcaoCode::C, Raised);
+		StandBox::PoseFor(Shown[0], Shown[1], Inward, Shown, EIcaoCode::C, Raised);
 
 	FToolContext RaisedContext = At(Actor, AnchorCursor);
 	RaisedContext.Envelopes = UAirsideSettings::ResolveLetterEnvelopeTable();

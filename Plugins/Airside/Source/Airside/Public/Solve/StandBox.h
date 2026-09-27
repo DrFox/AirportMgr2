@@ -41,13 +41,28 @@ namespace StandBox
 	AIRSIDE_API double EntranceSetback(EIcaoCode Letter, const FLetterEnvelope& Envelope);
 
 	/**
-	 * The stop-mark pose for a stand entered along EntranceA->EntranceB, dragged Inward.
+	 * How far in from the FAR edge (the one furthest from the taxiway), along Facing, the stop
+	 * mark sits: the letter's floor depth less EntranceSetback, i.e. the nose overhang plus
+	 * the service ground ahead of it on a floor-sized stand. PoseFor measures from here.
+	 */
+	AIRSIDE_API double FarSetback(EIcaoCode Letter, const FLetterEnvelope& Envelope);
+
+	/**
+	 * The stop-mark pose for a stand entered along EntranceA->EntranceB, dragged Inward, whose
+	 * drawn corners are Outline (any winding, any start corner).
 	 *
-	 * THE TAIL SITS EntranceSetback IN FROM THE ENTRANCE EDGE, not flush with the far edge -
-	 * see EntranceSetback above. So the stop mark sits EntranceSetback in from the entrance
-	 * edge's midpoint, along Inward, and every metre of Depth beyond EntranceSetback +
-	 * MaxNoseFwd is slack that lies AHEAD of the nose - the far edge carries the service
-	 * ground now, not the tail's own clearance.
+	 * MEASURED FROM THE FAR EDGE since 2026-09-27 (user: "the measurements should be taken
+	 * from the other end of the stand ... so the aircraft uses all of the depth of the stand
+	 * and the service points and vehicle routes should also be the same"). The stop mark sits
+	 * FarSetback in from the outline's furthest reach along Inward, centred on the entrance.
+	 * The stand's service template, service points and far-edge road contacts are placed
+	 * relative to this pose, so on a stand drawn deeper than its floor they land on the drawn
+	 * far edge and the extra depth lies behind the tail. Was: EntranceSetback in from the
+	 * entrance (the 2026-09-26 far-side-entry ruling), which left a deep stand's extra depth as
+	 * dead ground ahead of the nose and its far-edge contacts short of the far edge. At exactly
+	 * the floor depth the two measurements coincide, so a floor-sized stand has not moved.
+	 * An Outline of fewer than three points is read as the letter's floor depth.
+	 * ENFORCED BY: Airside.Solve.StandBox.MeasuredFromTheFarEdge
 	 *
 	 * Inward need not be perpendicular to EntranceA-EntranceB or unit length; only its
 	 * direction is read (GetSafeNormal), so a freeform drag still yields a clean pose.
@@ -59,7 +74,8 @@ namespace StandBox
 	 * and hands it in, rather than this Solve/ function reaching into Content/ itself.
 	 */
 	AIRSIDE_API FStandPose PoseFor(const FVector2D& EntranceA, const FVector2D& EntranceB,
-		const FVector2D& Inward, EIcaoCode Letter, const FLetterEnvelope& Envelope);
+		const FVector2D& Inward, TArrayView<const FVector2D> Outline, EIcaoCode Letter,
+		const FLetterEnvelope& Envelope);
 
 	/**
 	 * PoseFor's inverse: the four corners of the letter's box at this pose, entrance edge

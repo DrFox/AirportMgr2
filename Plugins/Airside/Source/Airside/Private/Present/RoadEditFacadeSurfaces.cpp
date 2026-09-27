@@ -841,7 +841,7 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	// preview (FStandPlotTool::DescribeLetter), which cannot reach Content/ at all and uses
 	// the floor instead - see that function's own comment for the accepted gap between them.
 	const StandBox::FStandPose Pose =
-		StandBox::PoseFor(A, B, Inward, *Letter, UAirsideSettings::ResolveLetterEnvelope(*Letter));
+		StandBox::PoseFor(A, B, Inward, Wound, *Letter, UAirsideSettings::ResolveLetterEnvelope(*Letter));
 
 	// PRICED AND REFUSED BEFORE THE SCOPE OPENS - issue #193, the same ordering
 	// PlaceEntityInPlot uses. WhyStandRefused already ran this exact afford check (through the

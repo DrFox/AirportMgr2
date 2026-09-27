@@ -50,7 +50,15 @@
 
 ## 1. Stand geometry
 
-- **The box's slack moves ahead of the nose.** The entrance edge stays on the taxiway, but the
+- **REVISED 2026-09-27 (user): measured from the FAR edge.** "the measurements should be taken
+  from the other end of the stand, the one furthest away from the taxiline so the aircraft uses
+  all of the depth of the stand and the service points and vehicle routes should also be the
+  same." `StandBox::PoseFor` now takes the outline and puts the stop mark
+  `FarSetback = StandDepth(L) - EntranceSetback(L)` in from the outline's furthest reach, so a
+  stand drawn deeper than its floor keeps its service ground and far-edge contacts on the drawn
+  far edge, and the extra depth lies behind the tail. At the floor depth nothing moves. The
+  bullet below is the superseded ruling, kept for its reasoning.
+- ~~**The box's slack moves ahead of the nose.**~~ The entrance edge stays on the taxiway, but the
   tail now sits just inside it: template `BackX = -MaxTailAft`, front edge `BackX + Depth`.
   `StandBox::PoseFor` puts the stop mark `MaxTailAft` in from the entrance midpoint;
   `BoxAt` inverts it. `StandMarkingBuilder`'s entrance midpoint and `StandPlotTool`'s preview

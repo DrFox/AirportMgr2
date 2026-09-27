@@ -438,21 +438,14 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 namespace StandPaintSlots
 {
 	/**
-	 * The paint layer's three slot names, spelled once: StandPaintSlot maps meanings onto them
+	 * The paint layer's two slot names, spelled once: StandPaintSlot maps meanings onto them
 	 * and MarkingMaterialSet declares them, and a name typed at both sites is a name that
 	 * drifts (URoadMaterialSet::RunwaySlotName's own rule).
 	 */
 	const FName Guidance(TEXT("PaintGuidance"));
 	const FName White(TEXT("PaintWhite"));
-	const FName Red(TEXT("PaintRed"));
-
-	/**
-	 * THE STAND PAINT RED, in ONE place: an equipment-restraint red, darker than pure red so
-	 * it reads as paint on concrete rather than a UI highlight. MarkingColor goes through the
-	 * road material's paint path exactly as the yellow and the runway white do, so this is a
-	 * base colour, not an emissive. Picked 2026-09-27, unjudged in PIE.
-	 */
-	const FLinearColor RedPaint(0.60f, 0.05f, 0.04f);
+	// PaintRed and its colour went 2026-09-27 with the restraint line and hatch the user
+	// judged awful in PIE; the stand keeps the white edge and the yellow guidance only.
 }
 
 FName URoadSurfacePresenter::StandPaintSlot(EStandPaint Paint)
@@ -463,25 +456,9 @@ FName URoadSurfacePresenter::StandPaintSlot(EStandPaint Paint)
 	{
 	case EStandPaint::Guidance:   return StandPaintSlots::Guidance;
 	case EStandPaint::Boundary:   return StandPaintSlots::White;
-	case EStandPaint::Restraint:  return StandPaintSlots::Red;
-	case EStandPaint::HatchMark:  return StandPaintSlots::Red;
-	case EStandPaint::HatchSpace: return StandPaintSlots::White;
 	case EStandPaint::Count:      break;
 	}
 	return StandPaintSlots::Guidance;
-}
-
-UMaterialInstanceDynamic* URoadSurfacePresenter::RedPaintMaterialInstance(UMaterialInterface* SurfaceMaterialBase)
-{
-	// RE-CREATED WHEN THE BASE MOVES - RunwayMarkingMaterialInstance's own rule (issue #193),
-	// for its reason: a cache that only checks "is there one yet" keeps the old skin after
-	// SurfaceMaterial is edited.
-	if (SurfaceMaterialBase != nullptr && (RedPaintMID == nullptr || RedPaintMID->Parent != SurfaceMaterialBase))
-	{
-		RedPaintMID = UMaterialInstanceDynamic::Create(SurfaceMaterialBase, this);
-		RedPaintMID->SetVectorParameterValue(RoadMaterialParams::MarkingColor, StandPaintSlots::RedPaint);
-	}
-	return RedPaintMID;
 }
 
 const URoadMaterialSet* URoadSurfacePresenter::MarkingMaterialSet(const FSurfaceSettings& Settings)
@@ -494,8 +471,8 @@ const URoadMaterialSet* URoadSurfacePresenter::MarkingMaterialSet(const FSurface
 
 	// SLOT 0 IS THE LAYER'S OWN MATERIAL, the road's, exactly the single material this layer
 	// drew with before stand paint had colours - so every holding bar (id 0, MarkingQuads::
-	// AddQuad's default) is untouched. The two colours are MIDs of that same material, the
-	// runway's white one reused rather than made twice.
+	// AddQuad's default) is untouched. The white is a MID of that same material - the runway's
+	// white one, reused rather than made twice.
 	FRoadMaterialSlot Guidance;
 	Guidance.Name = StandPaintSlots::Guidance;
 	Guidance.Material = Settings.SurfaceMaterial;
@@ -505,11 +482,6 @@ const URoadMaterialSet* URoadSurfacePresenter::MarkingMaterialSet(const FSurface
 	White.Name = StandPaintSlots::White;
 	White.Material = RunwayMarkingMaterialInstance(Settings.SurfaceMaterial);
 	MarkingSet->Slots.Add(White);
-
-	FRoadMaterialSlot Red;
-	Red.Name = StandPaintSlots::Red;
-	Red.Material = RedPaintMaterialInstance(Settings.SurfaceMaterial);
-	MarkingSet->Slots.Add(Red);
 
 	return MarkingSet;
 }
@@ -591,9 +563,9 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	{
 		UE_LOG(LogRoadMesh, Log,
 			TEXT("Holding positions: %d painted, %d stand(s), %d triangle(s) at Z=%.1f - stand paint: ")
-			TEXT("%d boundary edge(s), %d restraint side(s), %d hatch stripe(s)"),
+			TEXT("%d boundary edge(s), %d lead-in(s), %d stop bar(s)"),
 			HoldingPositionsPainted, StandsPainted, Buffers.Indices.Num() / 3, MarkingZ,
-			StandCensus.BoundaryEdges, StandCensus.RestraintSides, StandCensus.HatchStripes);
+			StandCensus.BoundaryEdges, StandCensus.LeadIns, StandCensus.StopBars);
 	}
 }
 

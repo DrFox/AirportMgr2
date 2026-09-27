@@ -30,7 +30,7 @@ bool FStandBoxRoundTripTest::RunTest(const FString& Parameters)
 		const FVector2D Inward(0.0, 1.0);
 
 		const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
-		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, {}, Letter, Envelope);
 		TArray<FVector2D> Corners;
 		StandBox::BoxAt(Pose, Letter, Envelope, Corners);
 
@@ -65,6 +65,43 @@ bool FStandBoxRoundTripTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandBoxMeasuredFromTheFarEdgeTest,
+	"Airside.Solve.StandBox.MeasuredFromTheFarEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandBoxMeasuredFromTheFarEdgeTest::RunTest(const FString& Parameters)
+{
+	// THE AIRCRAFT USES THE WHOLE DEPTH (user, 2026-09-27): a stand drawn deeper than its
+	// letter's floor parks its aircraft FarSetback in from the FAR edge, so the extra depth
+	// lies behind the tail, toward the taxiway, and the service ground and far-edge contacts
+	// stay at the drawn far edge. At the floor depth the pose is exactly where it always was.
+	const EIcaoCode Letter = EIcaoCode::C;
+	const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
+	const double W = IcaoCode::StandWidthForLetter(Letter);
+	const double Floor = IcaoCode::StandDepthForLetter(Letter);
+	const FVector2D Inward(0.0, 1.0);
+
+	for (const double Extra : { 0.0, 1500.0 })
+	{
+		const double D = Floor + Extra;
+		// Wound CLOCKWISE on purpose: which corner comes first must not matter.
+		const TArray<FVector2D> Outline = { {0.0, 0.0}, {0.0, D}, {W, D}, {W, 0.0} };
+		const StandBox::FStandPose Pose = StandBox::PoseFor({0.0, 0.0}, {W, 0.0}, Inward, Outline, Letter, Envelope);
+		TestEqual(FString::Printf(TEXT("%.0f uu deep: stop mark is FarSetback in from the far edge"), D),
+			D - Pose.Position.Y, StandBox::FarSetback(Letter, Envelope), 0.01);
+		TestEqual(FString::Printf(TEXT("%.0f uu deep: centred across the entrance"), D), Pose.Position.X, 0.5 * W, 0.01);
+	}
+
+	// FLOOR DEPTH IS UNCHANGED: the two measurements coincide there, so a floor-sized stand
+	// placed before this change stands exactly where it did.
+	const TArray<FVector2D> FloorBox = { {0.0, 0.0}, {W, 0.0}, {W, Floor}, {0.0, Floor} };
+	const StandBox::FStandPose AtFloor = StandBox::PoseFor({0.0, 0.0}, {W, 0.0}, Inward, FloorBox, Letter, Envelope);
+	TestEqual(TEXT("at the floor the stop mark is still EntranceSetback from the entrance"),
+		AtFloor.Position.Y, StandBox::EntranceSetback(Letter, Envelope), 0.01);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandBoxTailToEntranceTest,
 	"Airside.Solve.StandBox.TailToEntrance",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -82,7 +119,7 @@ bool FStandBoxTailToEntranceTest::RunTest(const FString& Parameters)
 	const FVector2D Inward(0.0, 1.0);
 
 	const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
-	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
+	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, {}, Letter, Envelope);
 	TestTrue(TEXT("Facing equals Inward"), Pose.Facing.Equals(Inward, 1e-9));
 
 	const double Expected = StandBox::EntranceSetback(Letter, Envelope);
@@ -115,7 +152,7 @@ bool FStandBoxTailAtEntranceTest::RunTest(const FString& Parameters)
 		const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
 		const double Depth = IcaoCode::StandDepthForLetter(Letter);
 
-		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, {}, Letter, Envelope);
 
 		const double ExpectedSetback = Envelope.MaxTailAft + IcaoCode::WingtipClearanceForLetter(Letter);
 		TestEqual(*FString::Printf(TEXT("%s stop mark sits MaxTailAft + clearance in from the entrance"), LetterName),
@@ -154,7 +191,7 @@ bool FStandBoxFarSideTest::RunTest(const FString& Parameters)
 	const FVector2D Inward(0.0, -1.0);
 
 	const StandBox::FStandPose Pose =
-		StandBox::PoseFor(A, B, Inward, Letter, IcaoCode::FloorEnvelopeForLetter(Letter));
+		StandBox::PoseFor(A, B, Inward, {}, Letter, IcaoCode::FloorEnvelopeForLetter(Letter));
 	TestTrue(TEXT("Facing equals Inward"), Pose.Facing.Equals(Inward, 1e-9));
 	TestTrue(TEXT("Position.Y is negative - the pose sits below the taxiway"), Pose.Position.Y < 0.0);
 

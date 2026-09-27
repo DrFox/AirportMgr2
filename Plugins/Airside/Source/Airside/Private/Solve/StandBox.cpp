@@ -9,16 +9,32 @@ namespace StandBox
 		return Envelope.MaxTailAft + IcaoCode::WingtipClearanceForLetter(Letter);
 	}
 
-	FStandPose PoseFor(const FVector2D& EntranceA, const FVector2D& EntranceB,
-		const FVector2D& Inward, EIcaoCode Letter, const FLetterEnvelope& Envelope)
+	double FarSetback(EIcaoCode Letter, const FLetterEnvelope& Envelope)
 	{
-		// THE TAIL SITS EntranceSetback IN FROM THE ENTRANCE EDGE, centred - see that
-		// function's own comment. Every metre of Depth beyond it and the nose overhang is
-		// slack the far-side entry spends AHEAD of the nose, not room the airframe uses.
+		return IcaoCode::StandDepthForLetter(Letter) - EntranceSetback(Letter, Envelope);
+	}
+
+	FStandPose PoseFor(const FVector2D& EntranceA, const FVector2D& EntranceB,
+		const FVector2D& Inward, TArrayView<const FVector2D> Outline, EIcaoCode Letter,
+		const FLetterEnvelope& Envelope)
+	{
+		// FarSetback IN FROM THE FAR EDGE, centred on the entrance - see the declaration for
+		// why the far edge and not the entrance. The far edge is the outline's furthest reach
+		// along Facing, MEASURED rather than read from a corner index, because the facade
+		// reverses a clockwise outline and so no index is reliably "the far corner".
 		FStandPose Pose;
 		Pose.Facing = Inward.GetSafeNormal();
-		Pose.Position = (EntranceA + EntranceB) * 0.5
-			+ Pose.Facing * EntranceSetback(Letter, Envelope);
+		const FVector2D EntranceMid = (EntranceA + EntranceB) * 0.5;
+		double Reach = IcaoCode::StandDepthForLetter(Letter);
+		if (Outline.Num() >= 3)
+		{
+			Reach = -DBL_MAX;
+			for (const FVector2D& Corner : Outline)
+			{
+				Reach = FMath::Max(Reach, FVector2D::DotProduct(Corner - EntranceMid, Pose.Facing));
+			}
+		}
+		Pose.Position = EntranceMid + Pose.Facing * (Reach - FarSetback(Letter, Envelope));
 		return Pose;
 	}
 

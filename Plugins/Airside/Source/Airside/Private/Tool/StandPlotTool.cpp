@@ -163,7 +163,7 @@ void FStandPlotTool::DescribeLetter(const FToolContext& Context, TConstArrayView
 	// own comment), so the ghost, the drawn-stand commit and the point-placement path all read
 	// one figure - not three, agreeing only by coincidence while nothing has raised a letter yet.
 	const StandBox::FStandPose Pose =
-		StandBox::PoseFor(Shown[0], Shown[1], Inward, *Letter, Context.Envelopes[*Letter]);
+		StandBox::PoseFor(Shown[0], Shown[1], Inward, Shown, *Letter, Context.Envelopes[*Letter]);
 	const FVector2D Left = RoadGeom::PerpCCW(Pose.Facing);
 	auto ToWorld = [&Pose, &Left](double X, double Y)
 	{

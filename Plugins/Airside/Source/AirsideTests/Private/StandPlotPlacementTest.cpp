@@ -624,7 +624,7 @@ bool FStandPlotLeadInSizedByLetterTest::RunTest(const FString& Parameters)
 		const FVector2D A(0.0, 0.0);
 		const FVector2D B(IcaoCode::StandWidthForLetter(EIcaoCode::F), 0.0);
 		const FLetterEnvelope FEnvelope = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::F);
-		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, FVector2D(0.0, 1.0), EIcaoCode::F, FEnvelope);
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, FVector2D(0.0, 1.0), {}, EIcaoCode::F, FEnvelope);
 		FEntityPlacement Placement;
 		Placement.Definition = FStand;
 		Placement.Anchors = FStand->Anchors;
@@ -861,7 +861,7 @@ bool FStandPlotOldPoseRederivedOnLoadTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("rebound to Code B's definition"), Loaded->Definition.Get() == BDefinition && BDefinition != nullptr);
 
 	const StandBox::FStandPose Expected = StandBox::PoseFor(Outline[0], Outline[1],
-		PlotYard::InwardOf(Outline, Outline[0], Outline[1]), EIcaoCode::B,
+		PlotYard::InwardOf(Outline, Outline[0], Outline[1]), Outline, EIcaoCode::B,
 		UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::B));
 	TestTrue(*FString::Printf(TEXT("the pose is B's PoseFor off the outline: (%.1f, %.1f), expected (%.1f, %.1f)"),
 			Loaded->Position.X, Loaded->Position.Y, Expected.Position.X, Expected.Position.Y),

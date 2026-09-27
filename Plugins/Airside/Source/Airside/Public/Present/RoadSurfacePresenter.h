@@ -496,8 +496,6 @@ private:
 	/** The runway paint's material instance: SurfaceMaterial with MarkingColor white. Cached like GhostMID. */
 	UMaterialInstanceDynamic* RunwayMarkingMaterialInstance(UMaterialInterface* SurfaceMaterialBase);
 
-	/** SurfaceMaterial with MarkingColor the stand paint red, cached on RunwayMarkingMaterialInstance's rule. */
-	UMaterialInstanceDynamic* RedPaintMaterialInstance(UMaterialInterface* SurfaceMaterialBase);
 
 	/**
 	 * The HoldingPaint layer's material set: slot 0 the road material (holding bars and stand
@@ -541,8 +539,6 @@ private:
 	/** See MarkingMaterialSet. Transient for EffectiveSet's reason. */
 	UPROPERTY(Transient) TObjectPtr<URoadMaterialSet> MarkingSet;
 
-	/** See RedPaintMaterialInstance. */
-	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> RedPaintMID;
 
 	/**
 	 * The hypothetical graph the ghost is solved against.

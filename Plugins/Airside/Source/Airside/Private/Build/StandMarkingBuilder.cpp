@@ -169,47 +169,36 @@ bool FStandMarkingBuilder::FrameFor(const FEntityInstance& Entity, const FLetter
 	// bar below are symmetric about the heading too, so only the glyph could show it.
 	const FVector2D Right = RoadGeom::PerpCCW(Facing);
 
-	// StandBox::PoseFor's own derivation, run in reverse - see this class's header for
-	// why this reads the pose rather than Outline[0]/[1]. THE FLOOR, NOT Envelopes[C], for
-	// the unknown-letter case - see Build's own header on why it must match the
-	// migration's frozen figure rather than whatever the fleet has since raised Code C to.
-	const FLetterEnvelope& DepthEnvelope = GlyphLetter.IsSet()
-		? Envelopes[DepthLetter]
-		: IcaoCode::FloorEnvelopeForLetter(DepthLetter);
-	const double Distance = StandBox::EntranceSetback(DepthLetter, DepthEnvelope);
-	const FVector2D EntranceMid = Entity.Position - Facing * Distance;
-
 	Out.GlyphLetter = GlyphLetter;
 	Out.Facing = Facing;
 	Out.Right = Right;
-	Out.Setback = Distance;
-	Out.EntranceMid = EntranceMid;
 
-	// THE RESTRAINT BOX - an EQUIPMENT RESTRAINT line in the real-world sense (controller
-	// ruling R19, 2026-09-27): ground service vehicles wait OUTSIDE it until the aircraft has
-	// stopped, then cross it to service. So a serve leg reaching a service point abeam the
-	// fuselage crosses it by design; a park bay, lane, spur or contact never does.
-	// ENFORCED BY: Airside.Present.StandMarking.LayoutClearsTheRestraintBox
-	//
-	// THE FIGURES THAT SIZE THE STAND, not new ones: across, the letter's widest span plus its
-	// wingtip clearance - the first two terms of IcaoCode's WidthOf - and forward, the stop mark
-	// plus the fleet's longest nose (the envelope PoseFor was given) plus the same clearance. For
-	// the STAND letter (StandLetterFor), since an A airframe parks on B's ground. Aft, the box
-	// ends at the stand's entrance, inside the boundary line and its own entrance side: the tail's
-	// clearance is the setback's business, to the taxiway beyond.
-	const EIcaoCode StandLetter = IcaoCode::StandLetterFor(DepthLetter);
-	const double Clearance = IcaoCode::WingtipClearanceForLetter(StandLetter);
-	Out.RestraintHalfWidth = 0.5 * IcaoCode::MaxWingspanForLetter(StandLetter) + Clearance;
-	Out.RestraintForward = Distance + DepthEnvelope.MaxNoseFwd + Clearance;
-	Out.RestraintAft = BoundaryWidth + RestraintWidth;
+	// THE ENTRANCE IS READ OFF THE OUTLINE, not derived from the pose, since 2026-09-27: the
+	// pose is now measured from the FAR edge (StandBox::PoseFor), so on a stand drawn deeper
+	// than its floor the entrance is further behind the stop mark than EntranceSetback, and only
+	// the outline knows by how much. The entrance is the outline's rearmost reach along Facing,
+	// measured rather than read from a corner index for PoseFor's own reason - the facade
+	// reverses a clockwise outline. Centred across on the pose, which PoseFor centres on the
+	// entrance. An outline of under three corners (a stand nobody drew) falls back to the
+	// floor figure its migrated box was built with - Code C's floor for an unknown letter.
+	double Behind = -StandBox::EntranceSetback(DepthLetter, GlyphLetter.IsSet()
+		? Envelopes[DepthLetter] : IcaoCode::FloorEnvelopeForLetter(DepthLetter));
+	if (Entity.Outline.Num() >= 3)
+	{
+		Behind = DBL_MAX;
+		for (const FVector2D& Corner : Entity.Outline)
+		{
+			Behind = FMath::Min(Behind, FVector2D::DotProduct(Corner - Entity.Position, Facing));
+		}
+	}
+	Out.Setback = -Behind;
+	Out.EntranceMid = Entity.Position + Facing * Behind;
 
 	// THE STAND'S GROUND, in the paint frame: the drawn outline, wound counter-clockwise (the
 	// frame is a rotation, so winding survives the change), and the same outline inset by the
 	// boundary line - the MITRED inset, so a corner of the inner edge sits exactly on both
-	// edges' inset lines. Everything painted inside the boundary is clipped to the inner one,
-	// which is what keeps the hatch "just inside the white line" on any outline the player
-	// drew, not only the floor rectangle of its letter. HERE rather than in Build since R21,
-	// because the box's forward clamp below is measured against it.
+	// edges' inset lines. The lead-in is clipped to the inner one, so no paint starts off the
+	// stand or under the white line.
 	Out.Ground.Reset();
 	for (const FVector2D& Corner : Entity.Outline)
 	{
@@ -222,7 +211,6 @@ bool FStandMarkingBuilder::FrameFor(const FEntityInstance& Entity, const FLetter
 	const int32 Corners = Out.Ground.Num();
 	Out.Inner.Reset();
 	Out.XMin = DBL_MAX; Out.XMax = -DBL_MAX; Out.YMin = DBL_MAX; Out.YMax = -DBL_MAX;
-	double InnerFar = -DBL_MAX;
 	for (int32 Index = 0; Index < Corners; ++Index)
 	{
 		const FVector2D& Prev = Out.Ground[(Index + Corners - 1) % Corners];
@@ -233,24 +221,8 @@ bool FStandMarkingBuilder::FrameFor(const FEntityInstance& Entity, const FLetter
 		const FVector2D InNext = RoadGeom::PerpCCW((Next - Here).GetSafeNormal());
 		const double Join = 1.0 + FVector2D::DotProduct(InPrev, InNext);
 		Out.Inner.Add(Join > UE_KINDA_SMALL_NUMBER ? Here + (InPrev + InNext) * (BoundaryWidth / Join) : Here);
-		InnerFar = FMath::Max(InnerFar, Out.Inner.Last().X);
 		Out.XMin = FMath::Min(Out.XMin, Here.X); Out.XMax = FMath::Max(Out.XMax, Here.X);
 		Out.YMin = FMath::Min(Out.YMin, Here.Y); Out.YMax = FMath::Max(Out.YMax, Here.Y);
-	}
-
-	// R21: CLAMPED TO THE FAR EDGE, never dropped. A fleet whose longest nose reaches past a
-	// shallow stand (a raised Code C in GhostCommitAndPointPlacedAgree reached 7947 uu on a
-	// 6500 uu stand; Code E's floor stand has 298 uu of slack) used to push the nose side off
-	// the ground, where the clip removed it without a word - a three-sided box and no hatch.
-	// The box's forward side now sits on the inner far edge instead, the strip ahead of it is
-	// then empty (which is correct: there is no ground there), and Build warns, because a stand
-	// too shallow for its fleet is a layout fact the player should hear about.
-	// ENFORCED BY: Airside.Build.StandMarking.ShallowStandClampsTheNoseSide
-	Out.EnvelopeForward = Out.RestraintForward;
-	Out.bForwardClamped = Corners >= 3 && Out.RestraintForward + RestraintWidth > InnerFar;
-	if (Out.bForwardClamped)
-	{
-		Out.RestraintForward = FMath::Max(InnerFar - RestraintWidth, Out.RestraintAft);
 	}
 	return true;
 }
@@ -263,9 +235,8 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 	C = FStandMarkingCensus();
 
 	int32 Painted = 0;
-	for (int32 EntityIndex = 0; EntityIndex < Network.GetEntities().Num(); ++EntityIndex)
+	for (const FEntityInstance& Entity : Network.GetEntities())
 	{
-		const FEntityInstance& Entity = Network.GetEntities()[EntityIndex];
 
 		// FrameFor's false IS the alive/stand/plotted test (its own ONE LINE, BOTH NAMES check),
 		// honoured rather than repeated here - a second copy is a second place to drift.
@@ -306,15 +277,12 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 			return true;
 		};
 
-		// LEAD-IN: from just inside the entrance to the stop mark, along the heading, LeadInWidth
-		// wide. It STARTS AT RestraintAft, past the boundary line and the restraint box's entrance
-		// side, since task 13, not at the entrance edge itself: every stand paint lies at the same
-		// MarkingZ, so a yellow quad over the white and red ones would z-fight where they cross.
-		// Its far end - the one a pilot reads - is where it always was.
-		// CLIPPED TO THE GROUND like every other stand paint (review of task 13): on an outline
-		// that does not sit where the pose implies, the entrance end could otherwise start off the
-		// stand.
-		C.LeadIns += Emit(LocalRect(Frame.RestraintAft, Distance, -LeadInWidth * 0.5, LeadInWidth * 0.5),
+		// LEAD-IN: the taxi line up the middle, from just inside the entrance to the stop mark,
+		// LeadInWidth wide. It STARTS INSIDE THE WHITE LINE, not at the entrance edge itself: every
+		// stand paint lies at the same MarkingZ, so a yellow quad over the white one would z-fight
+		// where they cross. CLIPPED TO THE GROUND, so on an outline that does not sit where the
+		// pose implies the entrance end cannot start off the stand.
+		C.LeadIns += Emit(LocalRect(BoundaryWidth, Distance, -LeadInWidth * 0.5, LeadInWidth * 0.5),
 			EStandPaint::Guidance) ? 1 : 0;
 
 		// STOP BAR: across the heading, centred ON the stop mark (Entity.Position).
@@ -357,73 +325,15 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 			++C.BoundaryEdges;
 		}
 
-		// RESTRAINT: the red line round the aircraft's box, just OUTSIDE its interior (see
-		// FrameFor for what the box is and why vehicles may cross it). Four sides, closed - the
-		// entrance side against the boundary line, which the lead-in now starts beyond - and
-		// butted, not overlapped, at the corners: the entrance and nose sides run the full
-		// width, the two long sides between them.
-		// ONE LINE PER STAND PER REBUILD (R21) - see FrameFor's clamp. A Warning because nothing
-		// else says a stand is too shallow for the aircraft its letter admits.
-		if (Frame.bForwardClamped)
-		{
-			UE_LOG(LogRoadMesh, Warning,
-				TEXT("Stand %d (Code %s): aircraft envelope reaches %.0f uu, stand is %.0f uu deep - nose restraint ")
-				TEXT("clamped to the far edge; the stand is too shallow for the fleet"),
-				EntityIndex, GlyphLetter.IsSet() ? IcaoCode::ToLetter(*GlyphLetter) : TEXT("unknown"),
-				Frame.EnvelopeForward + RestraintWidth, Frame.XMax - Frame.XMin);
-		}
-
-		const double H = Frame.RestraintHalfWidth;
-		const double Fwd = Frame.RestraintForward;
-		const double Aft = Frame.RestraintAft;
-		const double Outer = H + RestraintWidth;
-		C.RestraintSides += Emit(LocalRect(BoundaryWidth, Aft, -Outer, Outer), EStandPaint::Restraint) ? 1 : 0;
-		C.RestraintSides += Emit(LocalRect(Fwd, Fwd + RestraintWidth, -Outer, Outer), EStandPaint::Restraint) ? 1 : 0;
-		C.RestraintSides += Emit(LocalRect(Aft, Fwd, H, Outer), EStandPaint::Restraint) ? 1 : 0;
-		C.RestraintSides += Emit(LocalRect(Aft, Fwd, -Outer, -H), EStandPaint::Restraint) ? 1 : 0;
-
-		// HATCH: ALL the vehicle-only ground (controller ruling R20) - each side from the red
-		// line out to the white one, the length of the box, and the whole strip ahead of it to the
-		// far edge. DERIVED FROM THE OUTLINE AND THE BOX, never from a lane width: on a B stand
-		// the tow lane sits 21-25 m out, not the 15-19 m that "restraint + ServiceLaneWidth" gave
-		// (task 13's probe), because B's width is its tow lane's, not its span's.
-		// ENFORCED BY: Airside.Present.StandMarking.LayoutLiesOnHatch
-		//
-		// Stripes at 45 degrees, HatchStripeWidth wide, alternating HatchMark and HatchSpace by
-		// the stripe's index along x + y - ONE index across all three zones, so a stripe runs on
-		// unbroken where a side zone meets the strip ahead.
-		const double Stride = HatchStripeWidth * UE_DOUBLE_SQRT_2;
-		const FPaintPoly Zones[3] = {
-			LocalRect(Frame.XMin, Fwd + RestraintWidth, Outer, Frame.YMax),
-			LocalRect(Frame.XMin, Fwd + RestraintWidth, Frame.YMin, -Outer),
-			LocalRect(Fwd + RestraintWidth, Frame.XMax, Frame.YMin, Frame.YMax),
-		};
-		for (const FPaintPoly& Zone : Zones)
-		{
-			const double UMin = Zone[0].X + Zone[0].Y;
-			const double UMax = Zone[2].X + Zone[2].Y;
-			if (UMax <= UMin)
-			{
-				continue;
-			}
-			for (int64 Stripe = FMath::FloorToInt64(UMin / Stride); Stripe * Stride < UMax; ++Stripe)
-			{
-				FPaintPoly Piece = Zone;
-				ClipHalfPlane(Piece, FVector2D(-1.0, -1.0), -Stripe * Stride);
-				ClipHalfPlane(Piece, FVector2D(1.0, 1.0), (Stripe + 1) * Stride);
-				const EStandPaint Paint = (Stripe % 2 == 0) ? EStandPaint::HatchMark : EStandPaint::HatchSpace;
-				C.HatchStripes += (Piece.Num() >= 3 && Emit(MoveTemp(Piece), Paint)) ? 1 : 0;
-			}
-		}
-
 		// A LOG LINE IS A FEATURE (CLAUDE.md, "Diagnosing") - one per stand, once per surface
-		// rebuild, so a report of missing or misplaced stand paint is one grep away. The box's
-		// figures appended since task 13, so "the red line is in the wrong place" is one grep too.
+		// rebuild, so a report of missing or misplaced stand paint is one grep away. The setback
+		// since 2026-09-27, when the pose moved to the far edge: "the aircraft stops in the wrong
+		// place" is then one grep too - it is the entrance-to-stop-mark distance actually painted.
 		UE_LOG(LogAirside, Log,
-			TEXT("StandPaint: stand at (%.0f, %.0f), letter %s, entrance (%.0f, %.0f), restraint +-%.0f to %.0f"),
+			TEXT("StandPaint: stand at (%.0f, %.0f), letter %s, entrance (%.0f, %.0f), setback %.0f of %.0f deep"),
 			Entity.Position.X, Entity.Position.Y,
 			GlyphLetter.IsSet() ? IcaoCode::ToLetter(*GlyphLetter) : TEXT("unknown"),
-			EntranceMid.X, EntranceMid.Y, H, Fwd);
+			EntranceMid.X, EntranceMid.Y, Distance, Frame.XMax - Frame.XMin);
 
 		++Painted;
 	}
