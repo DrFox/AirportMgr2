@@ -501,6 +501,11 @@ public:
 	/** Close it. bKeep false abandons the snapshot, leaving no undo step. */
 	virtual void EndInteractiveEdit(bool bKeep) override;
 
+	/** Fold every rebuild until the matching End into one. Forwards to the facade - see
+	 *  FRoadRebuildBatch, the only intended caller, and URoadEditFacade for the semantics. */
+	virtual void BeginRebuildBatch() override;
+	virtual void EndRebuildBatch() override;
+
 	/** What deleting NodeIndex would do, without doing any of it. For the overlay. */
 	virtual FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const override;
 

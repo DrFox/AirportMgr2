@@ -18,6 +18,12 @@ bool FRigYardLayout::Lay(IRoadEditTarget& Target, TArray<FReverseTurn>& OutTurns
 	OutTurns.Reset();
 	OutSegmentsLaid = 0;
 	OutRefused = 0;
+
+	// ONE REBUILD FOR THE YARD, as FRigCourseLayout::Lay does for the loop - see its comment.
+	// Nothing below reads derived state: AddReverseTurn judges the node's MODEL arms, and the
+	// reverse-turn ends are resolved per leg (FRigYard::GoalNode), after the batch has closed.
+	FRoadRebuildBatch Batch(Target);
+
 	auto Place = [&Target](double X, double Y) { return Target.PlaceNode(FVector2D(X, Y)); };
 	auto Id = [&Target](int32 Index)
 	{

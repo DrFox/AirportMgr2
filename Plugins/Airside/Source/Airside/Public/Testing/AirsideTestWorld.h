@@ -211,6 +211,8 @@ struct FNullEditTarget : IRoadEditTarget
 	virtual bool MergeNodes(int32, int32) override { return false; }
 	virtual void BeginInteractiveEdit(const FString&) override {}
 	virtual void EndInteractiveEdit(bool) override {}
+	virtual void BeginRebuildBatch() override {}
+	virtual void EndRebuildBatch() override {}
 	virtual FRoadDeletionPlan PlanNodeDeletion(int32) const override { return FRoadDeletionPlan(); }
 	virtual int32 AddApron(const TArray<FVector2D>&) override { return INDEX_NONE; }
 	virtual bool DeleteApron(int32) override { return false; }

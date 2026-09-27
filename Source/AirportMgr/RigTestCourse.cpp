@@ -59,6 +59,12 @@ FRigCourseLayoutResult FRigCourseLayout::Lay(IRoadEditTarget& Target)
 	Result.BoxMin = FVector2D(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
 	Result.BoxMax = FVector2D(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
 
+	// ONE REBUILD FOR THE WHOLE COURSE, not one per PlaceNode/ConnectNodes: ~35 edits each ran
+	// the full Topology pipeline, ~1.7 s a course on 2026-09-27. SAFE because nothing below
+	// reads derived state - MakeLiveNodeId is a model handle, not a guideline one; the
+	// waypoints are resolved against the guideline graph per leg, long after this returns.
+	FRoadRebuildBatch Batch(Target);
+
 	// EVERY PLACED NODE, TRACKED HERE (#301): the bounding box ToJson exports is measured off
 	// what Lay() actually places, never a hand re-derivation of the constants above - the shape
 	// Tools/Python/build_rig_test_level.py's own retyped comment used to be.
@@ -255,6 +261,11 @@ void ARigTestCourse::BuildCourse(IRoadEditTarget& Target, bool bWithYard)
 	RefusalLabels.Reset();
 
 	ResolveVehicles();
+
+	// ONE REBUILD FOR THE LOOP AND THE YARD TOGETHER. Each Lay opens its own batch too; this
+	// outer one makes them nest, so the two islands cost one rebuild between them, not two.
+	// Nothing in this function reads derived state (the runners plan per leg, on Tick).
+	FRoadRebuildBatch Batch(Target);
 
 	const int32 Widths = Target.GetWidthCount(ERoadKind::ServiceRoad);
 	if (Widths < FRigCourseLayout::TierCount)
