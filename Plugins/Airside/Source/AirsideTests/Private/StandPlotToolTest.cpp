@@ -762,14 +762,26 @@ bool FStandPlotDrawsServiceEdgeTest::RunTest(const FString& Parameters)
 	Tool.Rect(At(Actor, AnchorCursor), Shown);
 	if (!TestEqual(TEXT("four corners"), Shown.Num(), 4)) { return false; }
 
+	// THE SERVICE ROAD'S HALF-WIDTH, off the actor's own resolver - the one URoadEditFacade::
+	// MakeTunables reads for a live context. Set here because TestTool::ContextAt is hand-built.
+	const URoadProfile* ServiceRoad = Actor->ResolveServiceRoadProfile();
+	if (!TestNotNull(TEXT("a service road profile resolves"), ServiceRoad)) { return false; }
+	const double HalfWidth = ServiceRoad->GetMaxHalfWidth();
+	if (!TestTrue(TEXT("with a width"), HalfWidth > 0.0)) { return false; }
+	FToolContext Context = At(Actor, AnchorCursor);
+	Context.ServiceRoadHalfWidth = HalfWidth;
+
 	FStandPlotSink Sink;
-	Tool.BuildPreview(At(Actor, AnchorCursor), Sink);
+	Tool.BuildPreview(Context, Sink);
 
 	// THE FAR EDGE - opposite the taxiway the entrance edge (0->1) opens off, where service
 	// vehicles now enter and leave (far-side-entry spec §2). StandBox.h's own convention: the
-	// entrance edge is 0->1, then inward to 2 and 3, so the far edge is exactly 2->3.
-	TestTrue(TEXT("one ServiceEdge segment equal to outline corners 2->3"),
-		Sink.HasSegment(Shown[2], Shown[3], EPreviewStyle::ServiceEdge));
+	// entrance edge is 0->1, then inward to 2 and 3, so the far edge is exactly 2->3 - and the
+	// line is that edge moved OUT by the road's half-width (user ruling 2026-09-27): the player
+	// draws the road's CENTRE on this line, so its near kerb lies on the far edge.
+	const FVector2D Out = (Shown[2] - Shown[1]).GetSafeNormal() * HalfWidth;
+	TestTrue(*FString::Printf(TEXT("one ServiceEdge segment: corners 2->3 moved out %.0f uu - the player draws the road's centre on this line"), HalfWidth),
+		Sink.HasSegment(Shown[2] + Out, Shown[3] + Out, EPreviewStyle::ServiceEdge));
 
 	// EXACTLY ONE, not the rest of the rectangle relabelled: the entrance (0->1) and the two
 	// sides (1->2, 3->0) still mean Pinned/Provisional - only the far edge means ServiceEdge.

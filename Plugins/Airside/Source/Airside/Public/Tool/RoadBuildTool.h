@@ -134,6 +134,18 @@ struct FToolContext
 	FLetterEnvelopeTable Envelopes;
 
 	/**
+	 * The default service road's half-width, uu - how far OUT past a drawn stand's far edge the
+	 * plot ghost lays its ServiceEdge line (user ruling 2026-09-27, "kerb on the edge"): the line
+	 * marks where the road's CENTRE goes, so the road's near kerb lies on the far edge and its
+	 * near lane a lane-offset beyond it, where the stand's entries expect a road (a corner run
+	 * inside the edge). Carried like Envelopes, for the same reason: Tool/ may not reach Content/
+	 * or the actor's profile resolver. Populated by FBuildSession::MakeContext from
+	 * FBuildSessionTunables::ServiceRoadHalfWidth. Zero - a hand-built context, or no service
+	 * road profile resolved - draws the line on the far edge itself.
+	 */
+	double ServiceRoadHalfWidth = 0.0;
+
+	/**
 	 * How close, in uu, counts as "on" something - the same radius the snap chain uses.
 	 *
 	 * Carried so a tool that has to decide whether the cursor is back on a point it placed
@@ -341,7 +353,9 @@ enum class EPreviewStyle : uint8
 
 	/**
 	 * A drawn stand's FAR edge - opposite the taxiway its entrance opens off, where a service
-	 * vehicle now enters and leaves (far-side-entry spec §2, 2026-09-26). NOT Pinned/Provisional:
+	 * vehicle now enters and leaves (far-side-entry spec §2, 2026-09-26) - drawn since 2026-09-27
+	 * the service road's half-width OUT past that edge, where the player puts the road's centre
+	 * (FToolContext::ServiceRoadHalfWidth). NOT Pinned/Provisional:
 	 * those say whether the gesture has settled, which is a fact about the OTHER three edges
 	 * only - this edge means the same thing, service access, whether the depth is still being
 	 * dragged or locked, so it keeps its own style through both stages rather than borrowing

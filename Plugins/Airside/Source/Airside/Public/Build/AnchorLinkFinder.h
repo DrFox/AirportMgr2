@@ -106,8 +106,9 @@ struct FPendingLink
 	 * THE BOUNDARY USED TO RUN THROUGH THE ENTRY ITSELF, and that decided a road ALONGSIDE the
 	 * stand by float noise (final review, 2026-09-27): a side road parallel to the stand's facing
 	 * has its nearest point level with the entry, so the dot product NearestJoinable tested was
-	 * +-1e-10 and the entry joined it or not by rounding. At the far-edge line - the edge the ghost
-	 * draws as ServiceEdge - the same road sits a whole corner run short of the boundary and is
+	 * +-1e-10 and the entry joined it or not by rounding. At the far-edge line - where the road's
+	 * near kerb goes, the ghost's ServiceEdge line marking its centre a half-width beyond - the
+	 * same road sits a whole corner run short of the boundary and is
 	 * refused however it rounds. A hit is accepted at or beyond it, less
 	 * FAnchorLink::FarEdgeTolerance.
 	 * ENFORCED BY: Airside.Build.StandEntry.SideRoadAlongsideJoinsNothing,

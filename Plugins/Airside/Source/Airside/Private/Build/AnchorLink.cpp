@@ -458,7 +458,8 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		const double StandRadius = LeadInSizingFor(*Instance).Radius;
 
 		// THE DRAWN FAR EDGE, off the outline the player drew (final review, 2026-09-27) - the
-		// edge the plot tool's ghost marks ServiceEdge and invites a road along. Measured along
+		// edge the road's near kerb is laid on (the plot ghost's ServiceEdge line sits the road's
+		// half-width beyond it, where the road's centre goes - user ruling 2026-09-27). Measured along
 		// the stand's facing from its stop mark, as the outline's furthest and nearest corners,
 		// so no winding or corner order is assumed.
 		//

@@ -313,6 +313,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	Context.Selection = &Selection;
 	Context.Limits = Tunables.Limits;
 	Context.Envelopes = Tunables.Envelopes;
+	Context.ServiceRoadHalfWidth = Tunables.ServiceRoadHalfWidth;
 	Context.SnapRadius = Tunables.ToolPickRadius;
 	// THE STICKY MODE ORS WITH THE HELD KEY. The bar's Remove button and a held Ctrl mean
 	// the same thing to a tool, and either lights the same button - the arrangement

@@ -208,7 +208,16 @@ void FStandPlotTool::Describe(const FToolContext& Context, TConstArrayView<FVect
 	// vehicle now enters and leaves (far-side-entry spec §2). ServiceEdge, NOT Rest, because
 	// this edge's meaning is service access whether the depth is still being dragged or locked
 	// - unlike the two side edges, it is not ABOUT the gesture's own settledness.
-	Sink.Line(Shown[2], Shown[3], EPreviewStyle::ServiceEdge);
+	//
+	// OFFSET OUT BY THE SERVICE ROAD'S HALF-WIDTH (user ruling 2026-09-27, "kerb on the edge"):
+	// the line marks where the player draws the road's CENTRE, so its near kerb lies on the far
+	// edge. Drawn on the edge itself, it invited a road whose near lane sat 150 uu INSIDE the
+	// stand - short of the corner run every entry is inset by, so a C truck hard-joined the near
+	// lane and the other entries crossed it to the far one (measured 2026-09-27). Outward is the
+	// side edge's own direction, 1->2, which runs from the entrance to the far edge.
+	const FVector2D Outward = (Shown[2] - Shown[1]).GetSafeNormal();
+	const FVector2D Out = Outward * Context.ServiceRoadHalfWidth;
+	Sink.Line(Shown[2] + Out, Shown[3] + Out, EPreviewStyle::ServiceEdge);
 	Sink.Line(Shown[3], Shown[0], Rest);
 
 	DescribeLetter(Context, Shown, Sink);

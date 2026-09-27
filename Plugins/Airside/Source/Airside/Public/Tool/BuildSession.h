@@ -243,6 +243,10 @@ struct FBuildSessionTunables
 	 *  the same chokepoint Limits and Snap already go through. */
 	FLetterEnvelopeTable Envelopes;
 
+	/** The default service road's half-width, copied straight onto FToolContext::
+	 *  ServiceRoadHalfWidth - see that field. URoadEditFacade::MakeTunables resolves it. */
+	double ServiceRoadHalfWidth = 0.0;
+
 	/**
 	 * How close, in uu, the cursor counts as "on" something a tool is asking about.
 	 *
@@ -284,7 +288,8 @@ struct FBuildSessionTunables
 			&& Limits.MinTurnDegrees == Other.Limits.MinTurnDegrees
 			&& Limits.NewRoadHalfWidth == Other.Limits.NewRoadHalfWidth
 			&& ToolPickRadius == Other.ToolPickRadius
-			&& Envelopes == Other.Envelopes;
+			&& Envelopes == Other.Envelopes
+			&& ServiceRoadHalfWidth == Other.ServiceRoadHalfWidth;
 	}
 };
 
