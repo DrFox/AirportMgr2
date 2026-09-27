@@ -674,13 +674,25 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// y = -1400 swept 2500 each way, split the road at y = +1100, and left the entry contact at
 	// +1906 only 796 uu of road where its own square corner wanted 1088. The entry was clamped
 	// to 563 against a lock of 699 by a fillet belonging to a vehicle that never drives it.
+	//
+	// A STAND'S ENTRY LINK IS DRIVEN BY THAT STAND'S DESIGN VEHICLE (2026-09-27): its bays were
+	// laid for it and it is what the fuel service sends (UFuelService's per-letter table), so the
+	// largest vehicle ADMITTED to that link is the stand's own - the utility tow on A and B, whose
+	// lock is less than half the truck's. Filleting an A stand's entries for the truck laid curves
+	// no vehicle on them needed and warned "a truck will cut that corner" on stands no truck
+	// serves. Every other link, and a definition saved before DesignVehicle existed (TypeCode
+	// None), keeps the caller's largest vehicle.
+	const FEntityInstance* LaneStand = Link.LaneOwner.IsSet() ? Network.GetEntity(Link.LaneOwner) : nullptr;
+	const FChassis& Drives = LaneStand != nullptr && LaneStand->Definition != nullptr
+			&& !LaneStand->Definition->DesignVehicle.TypeCode.IsNone()
+		? LaneStand->Definition->DesignVehicle.Chassis : LargestServiceVehicle;
 	double LaneRadius = 0.0;
 	if (Link.Class == ETraversalClass::GroundVehicle)
 	{
 		// ISSUE #190: the caller's resolved vehicle, not a fresh resolve - this ran twice
 		// per link (here and at the warning below) before Build started passing one down.
 		// The tenth of slack is ServiceLaneRadius's, shared with PoseSetbackFor.
-		LaneRadius = ServiceLaneRadius(LargestServiceVehicle);
+		LaneRadius = ServiceLaneRadius(Drives);
 	}
 
 	LinkGeom::FLinkApproach Approach;
@@ -990,7 +1002,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// the merge, never the crossing's turn-back, whose figure the gap does not move - see the
 	// sweep loop above for the measurement and for why a line naming the gap would be a lie
 	// about it.
-	if (const double Lock = LargestServiceVehicle.TightestFollowableRadius();
+	if (const double Lock = Drives.TightestFollowableRadius();
 		LaneRadius > 0.0 && Lock > 0.0 && Tightest < Lock)
 	{
 		UE_LOG(LogAirside, Warning,
