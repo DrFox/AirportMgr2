@@ -46,7 +46,16 @@ void GraphOverlay::DescribeStands(const URoadNetwork& Network, IToolPreviewSink&
 		// rather than stored, because they belong to whatever is PARKED here - today the
 		// type the stand was sized for, tomorrow whatever actually occupies it - and a
 		// stored copy would be a claim about an aircraft that has not arrived.
-		StandPreview::DescribeBody(Entity.Definition, Entity.Position, Entity.Heading, Sink);
+		//
+		// NOT FOR A PLOTTED INSTALLATION. A depot's body is only its FootprintExtent box - 4 x
+		// 8 m CENTRED ON THE POSE, which is its road connection - so on a drawn depot it was an
+		// amber rectangle straddling the gate (reported 2026-09-27). The plot the player drew
+		// IS the footprint; the box is a second opinion from before plots existed. A
+		// point-placed depot keeps it, because there it is the only geometry the thing has.
+		if (Entity.IsStand() || !Entity.IsPlotted())
+		{
+			StandPreview::DescribeBody(Entity.Definition, Entity.Position, Entity.Heading, Sink);
+		}
 
 		// The stop mark and the committed-pose ring are an AIRCRAFT's: where its nose gear
 		// stops, and which way it faces. A service installation's pose is its road connection
