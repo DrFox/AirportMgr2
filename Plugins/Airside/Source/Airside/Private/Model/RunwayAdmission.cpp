@@ -6,9 +6,11 @@
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
 
-// RunwaySurfaceName/RunwayApproachName moved to RunwayFacts.cpp (#103) - declared in
-// RunwayFacts.h beside the enums they name, which is where their definition belongs too.
-// RunwayMaterialSlot (issue #105 item 4) lives there too, for the same reason.
+// RunwayApproachName moved to RunwayFacts.cpp (#103) - declared in RunwayFacts.h beside the
+// enum it names, which is where its definition belongs too. Pavement::Name and
+// Pavement::MaterialSlot made the same move again, to Pavement.h/.cpp (2026-09-27; were
+// RunwaySurfaceName in RunwayFacts.cpp and RunwayMaterialSlot per issue #105 item 4), when
+// EPavement became the one scale for every buildable rather than a runway-only enum.
 
 namespace RunwayAdmission
 {
@@ -31,9 +33,11 @@ namespace RunwayAdmission
 			: Airframe.Requirements.TakeoffFieldLength;
 		Out.Wingspan = Airframe.Wingspan;
 		Out.MaxWingspan = MaxWingspan;
+		Out.Pavement = Pavement::Judge(Facts.Surface, Airframe.MinimumPavement);
 
-		// Both scales are ORDERED enums (see RunwayFacts.h), so "weaker than" is <.
-		if (Facts.Surface < Airframe.Requirements.MinimumSurface)
+		// Both scales are ORDERED enums (see RunwayFacts.h), so "weaker than" is checked with
+		// FPavementCheck::Passes for the surface and < for the approach.
+		if (!Out.Pavement.Passes())
 		{
 			Out.Why = ERunwayRefusal::Surface;
 		}
@@ -100,9 +104,7 @@ namespace RunwayAdmission
 		switch (Admission.Why)
 		{
 		case ERunwayRefusal::Surface:
-			return FString::Printf(TEXT("the surface is %s; this aircraft needs %s"),
-				RunwaySurfaceName(Admission.Facts.Surface),
-				RunwaySurfaceName(Admission.Required.MinimumSurface));
+			return Pavement::Describe(Admission.Pavement);
 
 		case ERunwayRefusal::Approach:
 			return FString::Printf(TEXT("the approach is %s; this aircraft needs %s"),

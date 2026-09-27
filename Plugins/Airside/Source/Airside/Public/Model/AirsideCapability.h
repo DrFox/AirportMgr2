@@ -3,6 +3,9 @@
 #include "CoreMinimal.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadHandles.h"
+// FRunwayEnd. Was reached through whatever the unity blob included first - adaptive unity
+// compiled this header alone on 2026-09-27 and it did not stand on its own.
+#include "Model/RunwayFacts.h"
 #include "AirsideCapability.generated.h"
 
 class URoadNetwork;
@@ -29,6 +32,8 @@ struct AIRSIDE_API FStandSummary
 
 	UPROPERTY() FEntityInstanceId Entity;
 	UPROPERTY() double DesignWingspan = 0.0;
+	/** The pad's pavement, copied from FEntityInstance::Pavement beside DesignWingspan. */
+	UPROPERTY() EPavement Pavement = EPavement::Tarmac;
 	UPROPERTY() TArray<EServiceRole> AnchorRoles;
 };
 

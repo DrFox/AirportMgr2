@@ -86,7 +86,7 @@ public:
 
 	/**
 	 * What a runway's pavement looks like, by its surface fact - see FRunwayFacts. Indexed by
-	 * RunwayMaterialSlot(Surface), which is the ONE place Reinforced aliases to Concrete's
+	 * Pavement::MaterialSlot(Surface), which is the ONE place Reinforced aliases to Concrete's
 	 * slot - replacing the switch that used to live in ResolveRunwayMaterial AND the
 	 * array-of-struct RoadSurfacePresenter.cpp built from three named properties here.
 	 *

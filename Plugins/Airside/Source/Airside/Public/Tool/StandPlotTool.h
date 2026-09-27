@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/Pavement.h"
 #include "Tool/PlotGesture.h"
 #include "Tool/RoadBuildTool.h"
 #include "Tool/StagedPlotTool.h"
@@ -121,6 +122,21 @@ public:
 	 */
 	int32 GetRefusalCountForTest() const { return RefusalCountForTest; }
 
+	/**
+	 * One "Surface" row of all four pavements, lit on the one the next Build lays - built by
+	 * Pavement::AppendAxis, as the runway's and the road's rows are, so the three cannot name
+	 * or order the scale differently.
+	 * ENFORCED BY: Airside.Tool.StandPlot.SurfaceRowPlacesItsPavement (this row),
+	 * Airside.Tool.Variants.RoadSurfaceRowOffersTheProfileList, Airside.Tool.Variants.Runway
+	 * EVERY STEP OFFERED (an empty Allowed list): a stand's pavement is meant to limit what it
+	 * admits (StandAdmission, Task 9 of this plan), never whether it may be built.
+	 */
+	virtual void GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const override;
+
+	/** Axis 0 only: Option is an index into Pavement::Offered({}), the list the row was built
+	 *  from. False, and nothing changed, for any other axis or an option past the row. */
+	virtual bool SelectVariant(const FToolContext& Context, int32 Axis, int32 Option) override;
+
 protected:
 	virtual bool Filter(const URoadNetwork& Network, FRoadSegmentId Id) const override
 	{
@@ -157,19 +173,31 @@ private:
 		IToolPreviewSink& Sink) const;
 
 	/**
-	 * WhyStandRefused for Shown, asked of the facade at most once per distinct shape.
+	 * WhyStandRefused for Shown, asked of the facade at most once per distinct shape AND
+	 * pavement.
 	 *
 	 * THE SAME MEMO SHAPE AS FPlotPlaceTool::ReservationFor, through the base's TOutlineMemo
 	 * (issue #302) - see that class's own comment on why the {bValid, Outline[4]} half is
-	 * shared rather than copied a second time. NO EXTRA KEY HERE, unlike the depot's Layout:
-	 * IRoadEditTarget::WhyStandRefused's own signature takes the outline and nothing else
-	 * (TArrayView<const FVector2D>, no Layout-shaped second argument), so there is no second
-	 * input this memo could go stale against - a key answers a question only when the
-	 * function it caches has more than one thing to ask.
+	 * shared rather than copied a second time. PAVEMENT IS AN EXTRA KEY, as the depot's Layout
+	 * is, since shared-pavement Task 8: IRoadEditTarget::WhyStandRefused now takes the pad's
+	 * pavement too, and its afford gate prices it - a memo keyed on the outline alone would
+	 * keep showing the previous row's "cannot afford" after a Surface pick. (It had no second
+	 * key before, because the function it caches had nothing else to ask.)
+	 * ENFORCED BY: Airside.Tool.StandPlot.SurfaceChangeReasksRefusal
 	 */
 	FString RefusalFor(const FToolContext& Context, TConstArrayView<FVector2D> Shown) const;
 
-	mutable TOutlineMemo<FString> RefusalMemo;
+	/** The memo's payload: the refusal, and the pavement it was asked for - see RefusalFor. */
+	struct FRefusalPayload
+	{
+		EPavement Pavement = EPavement::Tarmac;
+		FString Why;
+	};
+	mutable TOutlineMemo<FRefusalPayload> RefusalMemo;
+
+	/** What the next Build paves the pad with - the Surface row's pick. Tarmac, what every
+	 *  stand was drawn with before the row existed. */
+	EPavement Pavement = EPavement::Tarmac;
 
 	/** Bumped only on an actual ask - a cache hit must not move it. See GetRefusalCountForTest. */
 	mutable int32 RefusalCountForTest = 0;

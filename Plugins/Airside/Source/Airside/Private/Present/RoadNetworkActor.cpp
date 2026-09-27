@@ -177,10 +177,10 @@ void ARoadNetworkActor::RefreshResolvedContentCacheIfDirty()
 	ResolvedGhostMaterialCache = ResolveGhostMaterial();
 	ResolvedTierDesignVehiclesCache = UAirsideSettings::ResolveTierDesignVehicles();
 
-	ResolvedRunwayMaterialsCache.SetNum(RunwayMaterialSlotCount);
-	ResolvedRunwayMaterialsCache[RunwayMaterialSlot(ERunwaySurface::Grass)] = ResolveRunwayMaterial(ERunwaySurface::Grass);
-	ResolvedRunwayMaterialsCache[RunwayMaterialSlot(ERunwaySurface::Tarmac)] = ResolveRunwayMaterial(ERunwaySurface::Tarmac);
-	ResolvedRunwayMaterialsCache[RunwayMaterialSlot(ERunwaySurface::Concrete)] = ResolveRunwayMaterial(ERunwaySurface::Concrete);
+	ResolvedRunwayMaterialsCache.SetNum(PavementMaterialSlotCount);
+	ResolvedRunwayMaterialsCache[Pavement::MaterialSlot(EPavement::Grass)] = ResolveRunwayMaterial(EPavement::Grass);
+	ResolvedRunwayMaterialsCache[Pavement::MaterialSlot(EPavement::Tarmac)] = ResolveRunwayMaterial(EPavement::Tarmac);
+	ResolvedRunwayMaterialsCache[Pavement::MaterialSlot(EPavement::Concrete)] = ResolveRunwayMaterial(EPavement::Concrete);
 
 	// CLEARED LAST, so a crash or an early return above never leaves this actor believing a
 	// half-filled cache is complete.
@@ -219,9 +219,9 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	Settings.ApronMaterial = ResolvedApronMaterialCache;
 	Settings.RubberMaterial = ResolvedRubberMaterialCache;
 	Settings.GhostMaterial = ResolvedGhostMaterialCache;
-	if (ResolvedRunwayMaterialsCache.Num() == RunwayMaterialSlotCount)
+	if (ResolvedRunwayMaterialsCache.Num() == PavementMaterialSlotCount)
 	{
-		for (int32 Slot = 0; Slot < RunwayMaterialSlotCount; ++Slot)
+		for (int32 Slot = 0; Slot < PavementMaterialSlotCount; ++Slot)
 		{
 			Settings.RunwayMaterials[Slot] = ResolvedRunwayMaterialsCache[Slot];
 		}
@@ -503,16 +503,16 @@ URoadMaterialSet* ARoadNetworkActor::ResolveMaterialSet() const
 	return MaterialSet;
 }
 
-UMaterialInterface* ARoadNetworkActor::ResolveRunwayMaterial(ERunwaySurface Surface) const
+UMaterialInterface* ARoadNetworkActor::ResolveRunwayMaterial(EPavement Surface) const
 {
 	const UAirsideContent* Content = UAirsideSettings::GetContent();
 	if (Content == nullptr)
 	{
 		return nullptr;
 	}
-	// RunwayMaterialSlot is the ONE place Reinforced aliases to Concrete's slot - see its
+	// Pavement::MaterialSlot is the ONE place Reinforced aliases to Concrete's slot - see its
 	// own declaration's comment. An unauthored (short) array reads as every slot null.
-	const int32 Slot = RunwayMaterialSlot(Surface);
+	const int32 Slot = Pavement::MaterialSlot(Surface);
 	return Content->RunwayMaterials.IsValidIndex(Slot) ? Content->RunwayMaterials[Slot].LoadSynchronous() : nullptr;
 }
 
@@ -923,14 +923,15 @@ IBuildPurse* ARoadNetworkActor::GetPurse() const
 }
 
 FBuildQuote ARoadNetworkActor::QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-	int32 WidthIndex, ERoadSurface Surface) const
+	int32 WidthIndex, EPavement Surface) const
 {
 	return Facade->QuoteForConnect(FromIndex, To, Kind, WidthIndex, Surface);
 }
 
-FBuildQuote ARoadNetworkActor::QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* RunwayProfile) const
+FBuildQuote ARoadNetworkActor::QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* RunwayProfile,
+	EPavement Pavement) const
 {
-	return Facade->QuoteForRunway(From, To, RunwayProfile);
+	return Facade->QuoteForRunway(From, To, RunwayProfile, Pavement);
 }
 
 int32 ARoadNetworkActor::PlaceNode(FVector2D Where)
@@ -948,11 +949,11 @@ URoadProfile* ARoadNetworkActor::ResolveProfileFor(ERoadKind Kind, int32 WidthIn
 bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind,
 	int32 WidthIndex)
 {
-	return ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, ERoadSurface::Tarmac);
+	return ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, EPavement::Tarmac);
 }
 
 bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind,
-	int32 WidthIndex, ERoadSurface Surface)
+	int32 WidthIndex, EPavement Surface)
 {
 	return Facade->ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, Surface);
 }
@@ -1092,14 +1093,14 @@ int32 ARoadNetworkActor::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 }
 
 int32 ARoadNetworkActor::PlaceStandInPlot(const TArray<FVector2D>& Outline,
-	FVector2D EntranceA, FVector2D EntranceB)
+	FVector2D EntranceA, FVector2D EntranceB, EPavement Pavement)
 {
-	return Facade->PlaceStandInPlot(Outline, EntranceA, EntranceB);
+	return Facade->PlaceStandInPlot(Outline, EntranceA, EntranceB, Pavement);
 }
 
-FString ARoadNetworkActor::WhyStandRefused(TArrayView<const FVector2D> Outline) const
+FString ARoadNetworkActor::WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const
 {
-	return Facade->WhyStandRefused(Outline);
+	return Facade->WhyStandRefused(Outline, Pavement);
 }
 
 bool ARoadNetworkActor::DeleteEntity(int32 EntityIndex)

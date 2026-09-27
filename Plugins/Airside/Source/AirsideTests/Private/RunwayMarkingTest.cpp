@@ -26,7 +26,7 @@ namespace
 		return Net;
 	}
 
-	FRunwayFacts Facts(ERunwaySurface Surface, ERunwayApproach Approach)
+	FRunwayFacts Facts(EPavement Surface, ERunwayApproach Approach)
 	{
 		FRunwayFacts Out;
 		Out.Surface = Surface;
@@ -89,7 +89,7 @@ bool FRunwayMarkingsPrecision45Test::RunTest(const FString& Parameters)
 	constexpr double Length = 200000.0;
 	constexpr double Width = 4500.0;
 	constexpr double Z = 10.5;
-	URoadNetwork* Net = MakeRunwayNetwork(Length, Width, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Precision));
+	URoadNetwork* Net = MakeRunwayNetwork(Length, Width, Facts(EPavement::Tarmac, ERunwayApproach::Precision));
 
 	FRoadMeshBuffers Buffers;
 	FRunwayMarkingCensus Census;
@@ -243,7 +243,7 @@ bool FRunwayMarkingsByWidthTest::RunTest(const FString& Parameters)
 	const FCase Cases[] = { { 1800.0, 4, 45.0 }, { 2300.0, 6, 45.0 }, { 3000.0, 8, 45.0 }, { 6000.0, 16, 90.0 } };
 	for (const FCase& Case : Cases)
 	{
-		URoadNetwork* Net = MakeRunwayNetwork(200000.0, Case.Width, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Precision));
+		URoadNetwork* Net = MakeRunwayNetwork(200000.0, Case.Width, Facts(EPavement::Tarmac, ERunwayApproach::Precision));
 		FRoadMeshBuffers Buffers;
 		FRunwayMarkingCensus Census;
 		B::Build(*Net, 0.0, Buffers, &Census);
@@ -269,7 +269,7 @@ bool FRunwayMarkingsByApproachTest::RunTest(const FString& Parameters)
 {
 	auto Paint = [](ERunwayApproach Approach)
 	{
-		URoadNetwork* Net = MakeRunwayNetwork(200000.0, 4500.0, Facts(ERunwaySurface::Concrete, Approach));
+		URoadNetwork* Net = MakeRunwayNetwork(200000.0, 4500.0, Facts(EPavement::Concrete, Approach));
 		FRoadMeshBuffers Buffers;
 		FRunwayMarkingCensus Census;
 		B::Build(*Net, 0.0, Buffers, &Census);
@@ -315,13 +315,13 @@ bool FRunwayMarkingsGrassTest::RunTest(const FString& Parameters)
 	constexpr double Length = 200000.0;
 	constexpr double Width = 3000.0;
 
-	URoadNetwork* Turf = MakeRunwayNetwork(Length, Width, Facts(ERunwaySurface::Grass, ERunwayApproach::Precision));
+	URoadNetwork* Turf = MakeRunwayNetwork(Length, Width, Facts(EPavement::Grass, ERunwayApproach::Precision));
 	FRoadMeshBuffers GrassBuffers;
 	FRunwayMarkingCensus Grass;
 	TestEqual(TEXT("one grass runway painted"), B::Build(*Turf, 0.0, GrassBuffers, &Grass), 1);
 
 	// THE CONTROL: the same strip, paved.
-	URoadNetwork* Paved = MakeRunwayNetwork(Length, Width, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Precision));
+	URoadNetwork* Paved = MakeRunwayNetwork(Length, Width, Facts(EPavement::Tarmac, ERunwayApproach::Precision));
 	FRoadMeshBuffers PavedBuffers;
 	FRunwayMarkingCensus Tarmac;
 	TestEqual(TEXT("one tarmac runway painted"), B::Build(*Paved, 0.0, PavedBuffers, &Tarmac), 1);
@@ -368,7 +368,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRunwayMarkingsShortPrecisionTest::RunTest(const FString& Parameters)
 {
 	constexpr double Length = 60000.0;
-	URoadNetwork* Net = MakeRunwayNetwork(Length, 3000.0, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Precision));
+	URoadNetwork* Net = MakeRunwayNetwork(Length, 3000.0, Facts(EPavement::Tarmac, ERunwayApproach::Precision));
 	FRoadMeshBuffers Buffers;
 	FRunwayMarkingCensus Census;
 	B::Build(*Net, 0.0, Buffers, &Census);
@@ -408,7 +408,7 @@ bool FRunwayRubberTest::RunTest(const FString& Parameters)
 	constexpr double Length = 200000.0;
 	constexpr double Width = 4500.0;
 	constexpr double Z = 10.25;
-	URoadNetwork* Net = MakeRunwayNetwork(Length, Width, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Precision));
+	URoadNetwork* Net = MakeRunwayNetwork(Length, Width, Facts(EPavement::Tarmac, ERunwayApproach::Precision));
 
 	FRoadMeshBuffers Rubber;
 	FRunwayMarkingCensus Census;
@@ -487,7 +487,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FRunwayRubberGrassTest::RunTest(const FString& Parameters)
 {
-	URoadNetwork* Grass = MakeRunwayNetwork(200000.0, 4500.0, Facts(ERunwaySurface::Grass, ERunwayApproach::Visual));
+	URoadNetwork* Grass = MakeRunwayNetwork(200000.0, 4500.0, Facts(EPavement::Grass, ERunwayApproach::Visual));
 	FRoadMeshBuffers Rubber;
 	FRunwayMarkingCensus Census;
 	B::BuildRubber(*Grass, 0.0, Rubber, &Census);
@@ -495,7 +495,7 @@ bool FRunwayRubberGrassTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and no geometry at all"), Rubber.Positions.Num(), 0);
 
 	// THE CONTROL. Identical runway, tarmac instead of grass.
-	URoadNetwork* Paved = MakeRunwayNetwork(200000.0, 4500.0, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Visual));
+	URoadNetwork* Paved = MakeRunwayNetwork(200000.0, 4500.0, Facts(EPavement::Tarmac, ERunwayApproach::Visual));
 	FRoadMeshBuffers PavedRubber;
 	FRunwayMarkingCensus PavedCensus;
 	B::BuildRubber(*Paved, 0.0, PavedRubber, &PavedCensus);
@@ -525,7 +525,7 @@ bool FRunwayRubberShortTest::RunTest(const FString& Parameters)
 	// 600 m: RubberEnd is 472.5 m, so a full-length band would run well past the 300 m
 	// midpoint and into the far end's.
 	constexpr double Length = 60000.0;
-	URoadNetwork* Net = MakeRunwayNetwork(Length, 3000.0, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Precision));
+	URoadNetwork* Net = MakeRunwayNetwork(Length, 3000.0, Facts(EPavement::Tarmac, ERunwayApproach::Precision));
 	FRoadMeshBuffers Rubber;
 	FRunwayMarkingCensus Census;
 	B::BuildRubber(*Net, 0.0, Rubber, &Census);

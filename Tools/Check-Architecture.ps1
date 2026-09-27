@@ -462,6 +462,43 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Content\AirsideSettings.cpp')
         TestExempt  = $true
         ProdReason  = 'read these off UAirsideContent only from ResolveRigVehicle/ResolveUtilityTowVehicle (AirsideSettings.cpp) - a second reader is a second source of truth for the rig/utility look until #287 retires the fields'
+    },
+    @{
+        # ONE FACTOR SITE (2026-09-27, shared pavement): the pavement factor meets a rate in
+        # FBuildLine::Amount and in BuildCost's upkeep, nowhere else - a factor per buildable
+        # kind is how roads came to be cheaper on grass while runways were not.
+        Name        = 'Pavement::RateFactor'
+        Pattern     = '\bRateFactor\s*\('
+        ProdAllowed = @('Public\Model\Pavement.h', 'Private\Model\Pavement.cpp', 'Private\Model\BuildPurse.cpp', 'Private\Build\BuildCost.cpp')
+        TestExempt  = $true
+        ProdReason  = 'price through a FBuildLine (BuildCost::For*), which applies the factor once'
+    },
+    @{
+        # ONE STAND ADMISSION (2026-09-27): size alone admitted an A380 to a grass F stand.
+        Name        = 'IcaoCode::StandAdmits'
+        Pattern     = '\bStandAdmits\s*\('
+        ProdAllowed = @('Public\Solve\IcaoCode.h', 'Private\Solve\IcaoCode.cpp', 'Private\Model\StandAdmission.cpp')
+        TestExempt  = $true
+        ProdReason  = 'admit a stand through StandAdmission::Judge, which also checks its pavement and services'
+    },
+    @{
+        # ONE SERVICE-ON-PAVEMENT RULE (2026-09-27, shared-pavement final review): Judge is the
+        # only consumer, so restricting a role on grass is one body to change - a second caller
+        # would be a second place the restriction has to reach.
+        Name        = 'StandAdmission::PavementAdmitsRole'
+        Pattern     = '\bPavementAdmitsRole\s*\('
+        ProdAllowed = @('Public\Model\StandAdmission.h', 'Private\Model\StandAdmission.cpp')
+        TestExempt  = $true
+        ProdReason  = 'ask StandAdmission::Judge, which consumes it with the stand''s surface and size'
+    },
+    @{
+        # ONE SIZE GATE (2026-09-27): the smallest stand letter's floor is read by
+        # WhyStandRefused's size gate only; a second reader is a second opinion on 'too small'.
+        Name        = 'IcaoCode::SmallestStandLetter'
+        Pattern     = '\bSmallestStandLetter\s*\('
+        ProdAllowed = @('Public\Solve\IcaoCode.h', 'Private\Solve\IcaoCode.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp')
+        TestExempt  = $true
+        ProdReason  = 'refuse a too-small stand through URoadEditFacade::WhyStandRefused, the one size gate'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -1187,6 +1224,25 @@ foreach ($allowed in $routeQueryAllowList) {
     }
 }
 $ranRules.Add('route-query-one-writer')
+
+# --- 23. One pavement scale: no second surface enum ------------------------------------------
+# 2026-09-27, shared pavement: ERoadSurface was a second surface enum beside ERunwaySurface,
+# mapped onto it by hand, so a road's grass and a runway's grass were two values that happened
+# to agree. EPavement in Model/Pavement.h is the one scale; a buildable that offers fewer steps
+# says so with a list (URoadProfile::AllowedPavements), not a new enum.
+foreach ($module in $modules) {
+    foreach ($file in Get-Sources $module @('.h')) {
+        foreach ($h in (Select-String -Path $file.FullName -Pattern '\benum\s+class\s+E\w*(Surface|Pavement)\b')) {
+            if ($file.FullName -like '*\Public\Model\Pavement.h') { continue }
+            # FWantedClaim::ESurface (TrafficClaims) names a traffic-claim KIND (runway edge /
+            # holding position), not a ground surface - the pattern's \bESurface\b still matches
+            # its bare name, so it is excluded by name rather than by path.
+            if ($h.Line -match '\bESurface\b') { continue }
+            $failures.Add("one-pavement-scale: $($file.FullName):$($h.LineNumber) declares a second surface scale; use EPavement and an allowed list: $($h.Line.Trim())")
+        }
+    }
+}
+$ranRules.Add('one-pavement-scale')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

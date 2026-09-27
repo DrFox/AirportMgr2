@@ -9,6 +9,7 @@
 
 class URoadNetwork;
 class URoadMaterialSet;
+struct FEntityInstance;
 
 /**
  * Accumulates junction fans and segment ribbons into one welded triangle soup.
@@ -132,19 +133,55 @@ public:
 	 * triangulator: two evaluators of the same polygon would drift on exactly the concave
 	 * shapes a freeform gesture produces, and the pad would disagree with the plot the
 	 * player drew. The overload above forwards to this one.
+	 *
+	 * Slot TAGS EVERY TRIANGLE, the way SurfaceSlotFor's slot tags a band: NAME_None is id 0,
+	 * the apron layer's own material (URoadSurfacePresenter::ApronMaterialSet puts it there);
+	 * a name resolves through this builder's Materials, and one it does not declare falls back
+	 * to 0 and is counted (GetUnresolvedApronSlots) rather than drawn with a guess. NO DEFAULT,
+	 * for AddTriangle's own reason: a forgotten slot must not compile into tarmac.
 	 */
-	void AddApron(const TArray<FVector2D>& Outline, EApronPaint Paint = EApronPaint::Concrete);
+	void AddApron(const TArray<FVector2D>& Outline, FName Slot, EApronPaint Paint = EApronPaint::Concrete);
 
 	/**
 	 * The ring between Outer and Inner - a painted band inside an outline, two triangles per
 	 * edge, wound as Outer is (PolygonInset::Inset keeps winding and vertex order, which is
-	 * what lets edge i pair with edge i).
+	 * what lets edge i pair with edge i). Slot as AddApron's: stated, resolved once.
 	 *
 	 * A DIFFERENT BUILDER INSTANCE from the slab it surrounds: the two share Inner's
 	 * positions, and a welded vertex would carry one paint's tag into the other's triangles.
 	 * Nothing if the two do not have the same corner count.
 	 */
-	void AddApronRing(TConstArrayView<FVector2D> Outer, TConstArrayView<FVector2D> Inner, EApronPaint Paint);
+	void AddApronRing(TConstArrayView<FVector2D> Outer, TConstArrayView<FVector2D> Inner, FName Slot,
+		EApronPaint Paint);
+
+	/**
+	 * Every live apron and every plotted entity's pad on Network, into this builder - the
+	 * apron layer's whole content, returned as a surface count. HERE, not in the presenter's
+	 * lambda it moved out of (shared-pavement Task 8), so Airside.Build.StandPadSlots measures
+	 * the loop the presenter actually runs rather than a copy of it.
+	 *
+	 * A depot's painted slab and band (#358) are built here too, on two builders of their own
+	 * (see the body for why) appended to this one's buffers - so call this LAST on a builder:
+	 * appended vertices are not in the weld map, and a later AddApron would not weld to them.
+	 */
+	int32 AddNetworkAprons(const URoadNetwork& Network);
+
+	/**
+	 * The slot a plotted entity's pad is drawn with: the grass runway's slot for a grass pad
+	 * (any non-tarmac pavement's runway slot), NAME_None for tarmac. THE SAME RULE SurfaceSlotFor
+	 * gives a road, so a grass stand beside a grass taxiway is one field. Read off the entity
+	 * whatever its kind: an entity left at FEntityInstance::Pavement's Tarmac default keeps
+	 * the apron material.
+	 * ENFORCED BY: Airside.Build.StandPadSlots
+	 */
+	static FName PadSlotFor(const FEntityInstance& Entity);
+
+	/** How many AddApron slots named something Materials does not declare - see AddApron. */
+	int32 GetUnresolvedApronSlots() const { return UnresolvedApronSlots; }
+
+	/** Triangles AddNetworkAprons painted as depot slab and hazard band - the apron log line's figures. */
+	int32 GetDepotSlabTriangles() const { return DepotSlabTriangles; }
+	int32 GetDepotBandTriangles() const { return DepotBandTriangles; }
 
 	void Emit(IRoadMeshSink& Sink) const;
 
@@ -191,7 +228,7 @@ private:
 
 	/**
 	 * The material slot a segment's whole width takes when a FACT on the segment decides it -
-	 * a runway's surface, or a grass road's - or NAME_None for a tarmac road or taxiway, whose
+	 * URoadNetwork::PavementOf, for a runway or any road not on tarmac - or NAME_None for a tarmac road or taxiway, whose
 	 * bands name their own. The one place the builder asks; the ribbon, the junction rim and
 	 * the junction fan all go through it. Was RunwaySlotFor until grass roads existed.
 	 */
@@ -220,9 +257,22 @@ private:
 		const FJunctionResult& Junction, const TArray<FRoadSegmentId>& ArmSegments,
 		int32 RimCount) const;
 
+	/**
+	 * AddApron's slot resolution, shared with AddApronRing: NAME_None is id 0 without a
+	 * lookup; an undeclared name is counted in UnresolvedApronSlots and falls back to 0.
+	 */
+	int32 ResolveApronSlot(FName Slot);
+
 	double ZHeight;
 	double TexelsPerUnit;
 	const URoadMaterialSet* Materials = nullptr;
 	FRoadMeshBuffers Buffers;
 	TMap<FVector2D, int32> WeldMap;
+
+	/** See GetUnresolvedApronSlots. */
+	int32 UnresolvedApronSlots = 0;
+
+	/** See GetDepotSlabTriangles. */
+	int32 DepotSlabTriangles = 0;
+	int32 DepotBandTriangles = 0;
 };

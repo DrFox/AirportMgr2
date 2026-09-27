@@ -15,6 +15,7 @@
 // build if either returns.
 
 #include "CoreMinimal.h"
+#include "Model/Pavement.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
 #include "RoadEntity.generated.h"
@@ -247,6 +248,14 @@ struct AIRSIDE_API FEntityInstance
 	UPROPERTY() double DesignWingspan = 0.0;
 
 	/**
+	 * What this stand's pad is paved with - admission (StandAdmission), price and upkeep read
+	 * it. Captured at placement from the stand tool's surface row. Tarmac for every non-stand
+	 * entity and for anything saved before 2026-09-27, which is the pavement they were drawn
+	 * with.
+	 */
+	UPROPERTY() EPavement Pavement = EPavement::Tarmac;
+
+	/**
 	 * The entity's OWN pose as a guideline node - for a stand, the nose gear stop.
 	 *
 	 * Not an anchor, and deliberately not in the array above. An anchor is a FIXTURE: a
@@ -390,6 +399,10 @@ struct AIRSIDE_API FEntityPlacement
 	double Heading = 0.0;
 
 	double DesignWingspan = 0.0;
+
+	/** The stand's pad - see FEntityInstance::Pavement. Tarmac for everything else. */
+	EPavement Pavement = EPavement::Tarmac;
+
 	EServiceRole PoseRole = EServiceRole::Aircraft;
 
 	/** Only read when Modules is empty. See the struct comment. */

@@ -64,5 +64,5 @@ public:
 	 * same three names on the set it hands the builder, and a name typed at both sites
 	 * is a name that drifts.
 	 */
-	static FName RunwaySlotName(ERunwaySurface Surface);
+	static FName RunwaySlotName(EPavement Surface);
 };

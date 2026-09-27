@@ -32,7 +32,7 @@ namespace
 		Ledger->Open(500000.0);
 
 		FBuildQuote Taxiway;
-		Taxiway.BaseAmount = 30000.0;
+		Taxiway.Lines.Add({ nullptr, EBuildUnit::Each, 30000.0, 1.0, {} });
 		Taxiway.What = FText::FromString(TEXT("Taxiway"));
 
 		// A build, a day passing, an aeroplane paying, and a demolition - four of the six

@@ -192,22 +192,46 @@ namespace IcaoCode
 	 *
 	 * NOT A COLUMN, and that is the whole point: a stored maximum would have to agree with the
 	 * next row's minimum, and the day the two disagreed there would be a width belonging to no
-	 * letter, or to two. Derived, the bands TILE: every width from Code A's floor upward has
-	 * exactly one letter, and LetterForStandSize needs no second test.
+	 * letter, or to two. Derived, the bands TILE: every width from the smallest stand letter's
+	 * floor upward has exactly one letter, and LetterForStandSize needs no second test.
 	 *
 	 * The widest letter has no letter above it, so its maximum is unbounded and this reports
 	 * DBL_MAX. A stand wider than any aeroplane needs is not an error - see the ruling that a
 	 * small airframe on a large stand is fine.
 	 *
-	 * CODE A'S BAND IS EMPTY since 2026-09-26: A and B share a width floor (5000, set by the
-	 * utility tow's lane, not by either span - see the spec's Decisions), so
-	 * MaxStandWidthForLetter(A) == StandWidthForLetter(A) and no width reads as A on its own. A
-	 * is told from B by DEPTH (3400 against 3950): LetterForStandSize takes the largest letter
-	 * both dimensions fit, so a 5000-wide stand under 3950 deep is an A. The bands still tile -
-	 * an empty band is a width owned by no letter only if it has non-zero extent.
+	 * A MERGED INTO B since 2026-09-27 (user ruling: "merge a into b. The difference between
+	 * them will only be the surface"). The band this comment used to describe as EMPTY - A and B
+	 * sharing a width floor and being told apart only by 550 uu of depth nobody chose on purpose -
+	 * is gone along with A's own row: StandLetterFor(A) == B, so this function (and
+	 * StandWidthForLetter, StandDepthForLetter) read Code B's figures for Code A too, and no
+	 * rectangle, at any width or depth, reads back as Code A any more - LetterForStandSize skips
+	 * row A outright (HasStands). A stays an AIRCRAFT letter regardless (DesignSpanForLetter,
+	 * WingFwdForLetter/WingAftForLetter, RadiusForLetter all still read row A unaliased): an A
+	 * airframe still parks, on a B stand now, which is what the eventual pavement split prices.
 	 * ENFORCED BY: Airside.Solve.StandWidthIsDerivedFromClearance (the A-band assertions)
 	 */
 	AIRSIDE_API double MaxStandWidthForLetter(EIcaoCode Code);
+
+	/**
+	 * THE ONE ALIAS: which letter's OWN STAND Code actually parks on - identity for every letter
+	 * but A, which reads as B since the 2026-09-27 merge (see MaxStandWidthForLetter's own
+	 * comment). StandWidthForLetter, MaxStandWidthForLetter and StandDepthForLetter all read
+	 * RowFor(StandLetterFor(Code)) rather than RowFor(Code) directly, so every stand-SIZE
+	 * question answers through this alias; RadiusForLetter, WingFwdForLetter/WingAftForLetter and
+	 * FloorEnvelopeForLetter do NOT - an A aircraft is still its own AIRCRAFT, with its own
+	 * wingspan band and wing keep-out, even though it parks on B's ground.
+	 * ENFORCED BY: Airside.Solve.StandWidthIsDerivedFromClearance (the A-band assertions)
+	 */
+	AIRSIDE_API EIcaoCode StandLetterFor(EIcaoCode Code);
+
+	/**
+	 * The smallest letter that still has a stand of its own - StandLetterFor(EIcaoCode::A), which
+	 * is EIcaoCode::B now that A's row is empty. Named rather than spelled out at each call site
+	 * (RoadEditFacadeSurfaces.cpp's size gate is the one production caller) so a future letter
+	 * losing its own stand moves this one place, not every place that used to assume A.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'IcaoCode::SmallestStandLetter'
+	 */
+	AIRSIDE_API EIcaoCode SmallestStandLetter();
 
 	/**
 	 * Wingtip clearance on a stand of this letter, uu - the gap ICAO wants between a parked

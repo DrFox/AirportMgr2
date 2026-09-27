@@ -5,6 +5,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RunwayFacts.h"
 #include "Present/RoadNetworkActor.h"
+#include "Profiles/RoadProfile.h"
 #include "Tool/BuildSession.h"
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestWorld.h"
@@ -286,7 +287,13 @@ bool FVariantRowFollowsToolTest::RunTest(const FString& Parameters)
 	C->SelectTool(VarRowToolIndex(TEXT("Taxiway")));
 	Bar->RefreshStateForTest(*C);
 	TestTrue(TEXT("over the taxiway tool the row shows"), Bar->IsVariantSectionVisibleForTest());
-	const int32 Surfaces = static_cast<int32>(ERoadSurface::Count);
+	// THE PROFILE'S LIST, not an enum's count: every road and taxiway profile offers tarmac and
+	// grass (URoadProfile::AllowedPavements, authored 2026-09-27). Read off the profile the
+	// click would lay, so a content edit to the list moves this figure with it.
+	const URoadProfile* TaxiwayDefault = TestWorld.Actor->ResolveProfileFor(ERoadKind::Taxiway, INDEX_NONE);
+	if (!TestNotNull(TEXT("the taxiway tool resolves a profile"), TaxiwayDefault)) { return false; }
+	const int32 Surfaces = TaxiwayDefault->AllowedPavements.Num();
+	TestEqual(TEXT("which offers the two road pavements"), Surfaces, 2);
 	TestEqual(TEXT("one button per taxiway width, and one per surface"), Bar->VariantButtonCountForTest(),
 		Taxiways + Surfaces);
 
@@ -299,7 +306,7 @@ bool FVariantRowFollowsToolTest::RunTest(const FString& Parameters)
 	Bar->RefreshStateForTest(*C);
 	TestEqual(TEXT("the runway gets a row each for width, surface and approach"),
 		Bar->VariantButtonCountForTest(),
-		TestWorld.Actor->GetRunwayProfileCount() + static_cast<int32>(ERunwaySurface::Count)
+		TestWorld.Actor->GetRunwayProfileCount() + static_cast<int32>(EPavement::Count)
 			+ static_cast<int32>(ERunwayApproach::Count));
 
 	// A CLICK LANDS ON THE TOOL - through the bar, the controller and the session.

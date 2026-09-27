@@ -29,6 +29,16 @@ namespace
 	/** See RouteSearch::TowCheckCountForTest. Bumped once per VehicleFit::JudgePlan Find runs. */
 	int32 GTowCheckCountForTest = 0;
 
+	/**
+	 * The strongest pavement any road or taxiway profile may offer - the ceiling the taxiing
+	 * gate clamps an aircraft's need to (see the gate). Tarmac on 2026-09-27: every road and
+	 * taxiway profile carries { Tarmac, Grass }. A profile that one day offers concrete raises
+	 * this with it, or a concrete taxiway would be judged as tarmac.
+	 * ENFORCED BY: Airside.Content.RoadProfilesOfferTarmacAndGrass (goes red if any road or
+	 * taxiway profile offers more), Airside.Model.RoutePavementGate
+	 */
+	constexpr EPavement TaxiwayPavementCeiling = EPavement::Tarmac;
+
 	/** See RouteSearch::TowCheckSecondsForTest: wall-clock seconds spent in those checks. */
 	double GTowCheckSecondsForTest = 0.0;
 
@@ -268,13 +278,25 @@ namespace
 				return;
 			}
 
-			// GROUND TOO WEAK for the traveller: a grass road or taxiway under an aircraft that
-			// needs pavement. Asked only when the query needs more than grass, so a vehicle's or a
-			// grass-capable aircraft's search never pays the lookup. A turn path has no
-			// DerivedFrom and is not judged; the grass lanes either side of it are.
-			// See FRouteQuery::MinimumSurface on why Find's size retry does not lift this.
-			if (Query.MinimumSurface > RoadSurfacePavement(ERoadSurface::Grass)
-				&& Edge->DerivedFrom.IsSet() && Network.IsGrassRoad(Edge->DerivedFrom))
+			// GROUND TOO WEAK for the traveller, by the SAME comparison runway and stand admission
+			// use (FPavementCheck) - not a grass test: #356 gated grass only, which would have
+			// passed a jet needing concrete down a tarmac taxiway. Asked only when the query needs
+			// more than grass, so a vehicle's or a grass-capable aircraft's search never pays the
+			// lookup. A turn path has no DerivedFrom and is not judged; the lanes either side of
+			// it are. RUNWAYS ARE NOT JUDGED HERE (!IsRunwaySegment) - a strip's surface is
+			// RunwayAdmission's. See FRouteQuery::MinimumPavement on why Find's size retry does
+			// not lift this.
+			//
+			// THE NEED IS CLAMPED TO WHAT A TAXIWAY CAN OFFER (R12, final review), TaxiwayPavementCeiling:
+			// real heavies taxi on asphalt, and RoadProfile.h's AllowedPavements says why no road
+			// or taxiway offers concrete - nothing rolls on one that grass and tarmac do not
+			// already tell apart. Unclamped, a Concrete-needing type could never reach a stand
+			// and was told to "build a taxiway" that no tool can build. Runway and stand
+			// admission keep the full need; only taxiing is clamped.
+			if (Query.MinimumPavement > EPavement::Grass && Edge->DerivedFrom.IsSet()
+				&& !Network.IsRunwaySegment(Edge->DerivedFrom)
+				&& !Pavement::Judge(Network.PavementOf(Edge->DerivedFrom),
+					FMath::Min(Query.MinimumPavement, TaxiwayPavementCeiling)).Passes())
 			{
 				return;
 			}

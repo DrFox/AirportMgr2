@@ -759,7 +759,7 @@ namespace
 		// silently skips its own notify when the facts already match (see its "already so, but
 		// no edit" comment), which would wrongly pass this row for the wrong reason.
 		FRunwayFacts Facts;
-		Facts.Surface = ERunwaySurface::Concrete;
+		Facts.Surface = EPavement::Concrete;
 		Facts.Approach = ERunwayApproach::Precision;
 
 		const int32 RebuildsBefore = Actor->RebuildCountForTest();

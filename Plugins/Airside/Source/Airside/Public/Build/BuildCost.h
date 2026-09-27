@@ -29,31 +29,29 @@ namespace BuildCost
 	/** Straight between the segment's two nodes, uu. Zero if either end is not live. */
 	AIRSIDE_API double SegmentLengthUu(const URoadNetwork& Network, const FRoadSegment& Segment);
 
-	/**
-	 * What grass costs as a fraction of the profile's own rate - build and upkeep alike.
-	 *
-	 * A FACTOR ON THE PROFILE, not a second set of rates: the profile is the cross-section and
-	 * is shared by grass and tarmac roads of one width (see FRoadSegment::Surface), so rates
-	 * per surface would mean a rate per profile per surface authored by hand. 0.4 is a first
-	 * guess (2026-09-27): levelled ground and seed, no base course or binder. Tune it here, in
-	 * the one place both the quote and the upkeep read.
-	 * ENFORCED BY: Airside.Build.GrassRoadCost (quote and upkeep both at the factor)
-	 */
-	inline constexpr double GrassRateFactor = 0.4;
-
-	/** Profile's rate for a road laid on Surface - GrassRateFactor applied, or the rate itself. */
-	AIRSIDE_API double SurfaceRateFactor(ERoadSurface Surface);
-
-	/** LengthUu of pavement at Profile's rate, on Surface. A runway passes nothing and is
-	 *  priced as tarmac: its surface is FRunwayFacts', and runway pricing ignores it today. */
+	/** LengthUu of pavement at Profile's rate, one line on Surface - Pavement::RateFactor is
+	 *  applied by FBuildLine::Amount, not here (the factor table and why it is a factor live
+	 *  with it; #356's GrassRateFactor folded into it). A runway's Surface is FRunwayFacts',
+	 *  not this parameter's default - QuoteForRunway passes Facts.Surface through explicitly,
+	 *  so a caller that omits it is asking for tarmac on purpose, not by the runway's nature. */
 	AIRSIDE_API FBuildQuote ForSegment(const URoadProfile& Profile, double LengthUu,
-		ERoadSurface Surface = ERoadSurface::Tarmac);
+		EPavement Surface = EPavement::Tarmac);
 
-	/** One placed thing - a stand, a depot - at its definition's rate. */
+	/** One placed thing - a stand, a depot - at its definition's rate. No pavement of its own -
+	 *  see FBuildLine::Pavement. */
 	AIRSIDE_API FBuildQuote ForEntity(const UEntityDefinition& Definition);
 
-	/** The polygon's area at RatePerSquareMetre. Winding-independent - see the .cpp. */
-	AIRSIDE_API FBuildQuote ForApron(TConstArrayView<FVector2D> Outline, double RatePerSquareMetre);
+	/** The polygon's area at RatePerSquareMetre, on Surface if it has one. Winding-independent -
+	 *  see the .cpp. */
+	AIRSIDE_API FBuildQuote ForApron(TConstArrayView<FVector2D> Outline, double RatePerSquareMetre,
+		TOptional<EPavement> Surface);
+
+	/**
+	 * Two quotes as one: A's lines then B's, appended - the shape PlaceEntityInPlot and
+	 * QuoteStand both used to hand-sum before this existed (issue #193, fix round 1). What
+	 * becomes "{A} + {B}".
+	 */
+	AIRSIDE_API FBuildQuote Combine(FBuildQuote A, const FBuildQuote& B);
 
 	/**
 	 * One day of owning everything currently standing, at the authored rates.
@@ -62,6 +60,11 @@ namespace BuildCost
 	 * the figure honest: a running total maintained by every mutator would be a second source
 	 * of truth about what exists, and the mutator that forgot to update it would be invisible
 	 * until the upkeep bill drifted away from the airport.
+	 *
+	 * A STAND IS TWO TERMS: its definition's flat UpkeepPerDay (the equipment) plus its pad's
+	 * area at ApronRatePerSquareMetrePerDay times its pavement's factor (2026-09-27). A depot's
+	 * plot is not a pad and bills no area term.
+	 * ENFORCED BY: Airside.Build.BuildCostStandPadUpkeepByArea
 	 */
 	AIRSIDE_API double DailyUpkeep(const URoadNetwork& Network,
 		double ApronRatePerSquareMetrePerDay);

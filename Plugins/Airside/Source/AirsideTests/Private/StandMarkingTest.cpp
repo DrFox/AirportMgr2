@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/StandMarkingBuilder.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/MeshNormals.h"
@@ -12,6 +13,16 @@
 #include "Solve/StandBox.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/RoadEditTarget.h"
+#include "Content/AirsideSettings.h"
+#include "Entities/AircraftType.h"
+#include "Model/RoadGuideline.h"
+#include "Solve/GuidelineGeom.h"
+#include "Components/DynamicMeshComponent.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Present/RoadSurfacePresenter.h"
+#include "Profiles/RoadMaterialSet.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -41,7 +52,7 @@ namespace StandMarkingTest
 		// (every automation test still is that way), so the floor IS the resolved envelope
 		// here - see FStandMarkingBuilder's own header for why the two must agree.
 		const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
-		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, Envelope);
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, {}, Letter, Envelope);
 
 		FEntityPlacement Placement;
 		Placement.Definition = Definition;
@@ -52,6 +63,133 @@ namespace StandMarkingTest
 		StandBox::BoxAt(Pose, Letter, Envelope, Placement.Outline);
 		Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(Letter);
 		return Net.PlaceEntity(Placement);
+	}
+
+	/**
+	 * A drawn stand on ANY rectangle: entrance edge from Origin along Bearing (radians), Width
+	 * long, dragged Depth inward (PerpCCW of the entrance direction - PlaceDrawnStand's own
+	 * sense). Pose from StandBox::PoseFor at the floor envelope, outline the rectangle itself
+	 * rather than BoxAt's floor box, so a larger-than-floor stand keeps its drawn size.
+	 */
+	const FEntityInstance* PlaceDrawnRect(URoadNetwork& Net, UEntityDefinition* Definition, EIcaoCode Letter,
+		const FVector2D& Origin, double Bearing, double Width, double Depth)
+	{
+		const FVector2D Along(FMath::Cos(Bearing), FMath::Sin(Bearing));
+		const FVector2D Inward = RoadGeom::PerpCCW(Along);
+		const FVector2D A = Origin;
+		const FVector2D B = Origin + Along * Width;
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, {}, Letter, IcaoCode::FloorEnvelopeForLetter(Letter));
+		FEntityPlacement Placement;
+		Placement.Definition = Definition;
+		Placement.Anchors = Definition->Anchors;
+		Placement.Position = Pose.Position;
+		Placement.Heading = RoadGeom::Bearing(Pose.Facing);
+		Placement.PoseRole = Definition->PoseRole;
+		Placement.Outline = { A, B, B + Inward * Depth, A + Inward * Depth };
+		Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(Letter);
+		return Net.GetEntity(Net.PlaceEntity(Placement));
+	}
+
+	/**
+	 * The stands the paint-bounds tests measure, one per Case: the floor box of four letters, a B
+	 * rotated to 135 degrees (no axis to hide behind), and a C drawn 12 m wider and 15 m deeper
+	 * than its floor, so the hatch has to follow the DRAWN edge, not the letter's. Each case sits
+	 * 40 m from the last, so no box reaches a neighbour.
+	 */
+	constexpr int32 PaintBoundsCases = 6;
+	const FEntityInstance* PlacePaintBoundsCase(URoadNetwork& Net, int32 Case, FString& OutName)
+	{
+		const FVector2D Origin(Case * 40000.0, 0.0);
+		if (Case < 4)
+		{
+			const EIcaoCode Floors[4] = { EIcaoCode::B, EIcaoCode::C, EIcaoCode::E, EIcaoCode::F };
+			const EIcaoCode Letter = Floors[Case];
+			OutName = FString::Printf(TEXT("Code %s floor"), IcaoCode::ToLetter(Letter));
+			return PlaceDrawnRect(Net, UEntityDefinition::MakeStandTransient(Letter), Letter, Origin, 0.0,
+				IcaoCode::StandWidthForLetter(Letter), IcaoCode::StandDepthForLetter(Letter));
+		}
+		if (Case == 4)
+		{
+			OutName = TEXT("Code B at 135 degrees");
+			return PlaceDrawnRect(Net, UEntityDefinition::MakeStandTransient(EIcaoCode::B), EIcaoCode::B, Origin,
+				FMath::DegreesToRadians(135.0), IcaoCode::StandWidthForLetter(EIcaoCode::B), IcaoCode::StandDepthForLetter(EIcaoCode::B));
+		}
+		OutName = TEXT("Code C larger than its floor");
+		return PlaceDrawnRect(Net, UEntityDefinition::MakeStandTransient(EIcaoCode::C), EIcaoCode::C, Origin, 0.0,
+			IcaoCode::StandWidthForLetter(EIcaoCode::C) + 1200.0, IcaoCode::StandDepthForLetter(EIcaoCode::C) + 1500.0);
+	}
+
+	/** Every EStandPaint on its own id (its index), so a test can tell the paints apart. */
+	FStandPaintIds DistinctIds()
+	{
+		FStandPaintIds Ids;
+		for (int32 Paint = 0; Paint < static_cast<int32>(EStandPaint::Count); ++Paint)
+		{
+			Ids.Ids[Paint] = Paint;
+		}
+		return Ids;
+	}
+
+	/** P inside (or within Tolerance of) the convex Outline, either winding. */
+	bool InConvex(const TArray<FVector2D>& Outline, const FVector2D& P, double Tolerance)
+	{
+		double Twice = 0.0;
+		for (int32 I = 0; I < Outline.Num(); ++I)
+		{
+			Twice += FVector2D::CrossProduct(Outline[I], Outline[(I + 1) % Outline.Num()]);
+		}
+		const double Sign = Twice >= 0.0 ? 1.0 : -1.0;
+		for (int32 I = 0; I < Outline.Num(); ++I)
+		{
+			const FVector2D Edge = Outline[(I + 1) % Outline.Num()] - Outline[I];
+			if (Sign * FVector2D::CrossProduct(Edge, P - Outline[I]) / Edge.Size() < -Tolerance) { return false; }
+		}
+		return true;
+	}
+
+	/**
+	 * A real B stand through the facade and the real rebuild, so FStandLayoutBuild has laid its
+	 * service layout - Airside.Build.StandPadSlots' own fixture shape. Null on failure.
+	 */
+	const FEntityInstance* PlaceRealBStand(FAutomationTestBase& Test, FAirsideTestWorld& World, FEntityInstanceId& OutId)
+	{
+		ARoadNetworkActor* Actor = World.Actor;
+		if (!Test.TestNotNull(TEXT("actor constructed"), Actor)) { return nullptr; }
+		Actor->ClearNetwork();
+		IRoadEditTarget* Target = Actor;
+		const TArray<FVector2D> Pad = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+		if (!Test.TestTrue(TEXT("a B stand is placed"), Target->PlaceStandInPlot(Pad, Pad[0], Pad[1], EPavement::Tarmac) != INDEX_NONE)) { return nullptr; }
+		Actor->RebuildMesh();
+		const URoadNetwork& Net = *Actor->Network;
+		for (int32 Index = 0; Index < Net.GetEntities().Num(); ++Index)
+		{
+			if (Net.GetEntities()[Index].bAlive && Net.GetEntities()[Index].IsStand())
+			{
+				OutId = Net.EntityIdAt(Index);
+				return &Net.GetEntities()[Index];
+			}
+		}
+		Test.AddError(TEXT("no stand in the network after placement"));
+		return nullptr;
+	}
+
+	/**
+	 * The nodes of the stand's SERVICE POINTS - the anchors its definition lays a bay for - read
+	 * from the layout's own data (UEntityDefinition::ServiceBays' AnchorId -> the instance's
+	 * resolved anchor), never from where they happen to be.
+	 */
+	TSet<FGuidelineNodeId> ServicePointNodes(const FEntityInstance& Stand)
+	{
+		TSet<FGuidelineNodeId> Out;
+		if (Stand.Definition == nullptr) { return Out; }
+		for (const FServiceBay& Bay : Stand.Definition->ServiceBays)
+		{
+			for (const FResolvedAnchor& Anchor : Stand.ResolvedAnchors)
+			{
+				if (Anchor.Id == Bay.AnchorId) { Out.Add(Anchor.Node); }
+			}
+		}
+		return Out;
 	}
 
 	/** Every triangle in Buffers faces up, measured the way every winding test in this
@@ -288,9 +426,14 @@ bool FStandMarkingGlyphReadsUnmirroredTest::RunTest(const FString& Parameters)
 		const FEntityInstance* Instance = Net->GetEntity(PlaceDrawnStand(*Net, Stand, Letter, 0.0));
 		if (Instance == nullptr) { return false; }
 		FRoadMeshBuffers Buffers;
-		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor());
+		FStandMarkingCensus Census;
+		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census);
 		constexpr int32 FirstGlyphVertex = 8;
-		if (Buffers.Positions.Num() <= FirstGlyphVertex) { return false; }
+		// BOUNDED TO THE GLYPH'S OWN QUADS - four vertices per segment, read off the census -
+		// since task 13 painted the boundary, restraint line and hatch AFTER the letter. Reading
+		// to the end of the buffer would average a whole stand's symmetric paint into the mean.
+		const int32 EndGlyphVertex = FirstGlyphVertex + Census.LetterSegments * 4;
+		if (Census.LetterSegments == 0 || Buffers.Positions.Num() < EndGlyphVertex) { return false; }
 
 		const FVector2D Facing(FMath::Cos(Instance->Heading), FMath::Sin(Instance->Heading));
 		const FVector2D ReaderRight = RoadGeom::PerpCCW(Facing);
@@ -299,12 +442,12 @@ bool FStandMarkingGlyphReadsUnmirroredTest::RunTest(const FString& Parameters)
 		const FVector2D GlyphCentre = EntranceMid + Facing * FStandMarkingBuilder::GlyphInset;
 
 		double Sum = 0.0;
-		for (int32 Index = FirstGlyphVertex; Index < Buffers.Positions.Num(); ++Index)
+		for (int32 Index = FirstGlyphVertex; Index < EndGlyphVertex; ++Index)
 		{
 			const FVector3d& V = Buffers.Positions[Index];
 			Sum += FVector2D::DotProduct(FVector2D(V.X, V.Y) - GlyphCentre, ReaderRight);
 		}
-		OutMean = Sum / (Buffers.Positions.Num() - FirstGlyphVertex);
+		OutMean = Sum / (EndGlyphVertex - FirstGlyphVertex);
 		return true;
 	};
 
@@ -356,13 +499,173 @@ bool FStandMarkingPaintsAfterPlacementTest::RunTest(const FString& Parameters)
 	const FVector2D A(0.0, 1000.0);
 	const FVector2D B(Width, 1000.0);
 	const TArray<FVector2D> Rect = { A, B, FVector2D(Width, 1000.0 + Depth), FVector2D(0.0, 1000.0 + Depth) };
-	const int32 Placed = Target->PlaceStandInPlot(Rect, A, B);
+	const int32 Placed = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 	if (!TestTrue(TEXT("the stand is placed"), Placed != INDEX_NONE)) { return false; }
 
 	const int32 After = Actor->GetPresenter()->HoldingPaintTriangleCountForTest();
 	TestTrue(TEXT("placing a stand paints it with no other edit in between - the same wiring "
 		"issue #179 proved for the holding-position toggle"), After > Before);
 
+	return true;
+}
+
+/**
+ * THE PAINT CARRIES ITS MEANING, NOT A COLOUR: every triangle the builder emits takes the
+ * material id the caller mapped its EStandPaint to. Ids chosen here to be distinct and non-zero,
+ * so a quad that ignored the table (id 0, AddQuad's default) cannot pass.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingPaintCarriesItsMeaningIdTest,
+	"Airside.Build.StandMarking.PaintCarriesItsMeaningId",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingPaintCarriesItsMeaningIdTest::RunTest(const FString& Parameters)
+{
+	using namespace StandMarkingTest;
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	PlaceDrawnStand(*Net, UEntityDefinition::MakeStandTransient(), EIcaoCode::C, 0.0);
+
+	FStandPaintIds Ids;
+	for (int32 Paint = 0; Paint < static_cast<int32>(EStandPaint::Count); ++Paint)
+	{
+		Ids.Ids[Paint] = 10 + Paint;
+	}
+	FRoadMeshBuffers Buffers;
+	FStandMarkingCensus Census;
+	FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census, Ids);
+	if (!TestTrue(TEXT("something painted"), Buffers.MaterialIDs.Num() > 0)) { return false; }
+
+	TSet<int32> Seen(Buffers.MaterialIDs);
+	for (const int32 Id : Seen)
+	{
+		TestTrue(FString::Printf(TEXT("id %d is one the table handed in"), Id), Id >= 10 && Id < 10 + static_cast<int32>(EStandPaint::Count));
+	}
+	TestTrue(TEXT("the lead-in, stop bar and letter are Guidance"), Seen.Contains(Ids[EStandPaint::Guidance]));
+	return true;
+}
+
+/**
+ * EVERY STAND PAINT RESOLVES ON THE BUILT COMPONENT (memory: an unresolved slot renders the
+ * floor checker, silently). Modelled on Airside.Build.StandPadSlots: a real B stand through the
+ * facade, the real rebuild, then the HoldingPaint component read back - each EStandPaint's slot
+ * is declared, its id holds a material that is not the engine default, Guidance is slot 0 (the
+ * road material the holding bars always had), and the two paint colours are MIDs of that
+ * material with MarkingColor white and red.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingPaintSlotsResolveTest,
+	"Airside.Present.StandMarking.PaintSlotsResolve",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingPaintSlotsResolveTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	IRoadEditTarget* Target = Actor;
+	const TArray<FVector2D> Pad = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+	if (!TestTrue(TEXT("a B stand is placed"), Target->PlaceStandInPlot(Pad, Pad[0], Pad[1], EPavement::Tarmac) != INDEX_NONE)) { return false; }
+	Actor->RebuildMesh();
+
+	URoadSurfacePresenter* Presenter = Actor->GetPresenter();
+	UDynamicMeshComponent* Paint = Presenter != nullptr ? Presenter->GetLayerComponentForTest(ESurfaceLayer::HoldingPaint) : nullptr;
+	const URoadMaterialSet* Set = Presenter != nullptr ? Presenter->MarkingMaterialSetForTest() : nullptr;
+	if (!TestNotNull(TEXT("a paint component"), Paint) || !TestNotNull(TEXT("a marking material set"), Set)) { return false; }
+	TestEqual(TEXT("the component holds one material per declared slot - else the proxy draws everything as slot 0"),
+		Paint->GetNumMaterials(), Set->Slots.Num());
+
+	UMaterialInterface* Floor = UMaterial::GetDefaultMaterial(MD_Surface);
+	UMaterialInterface* Road = Paint->GetMaterial(0);
+	auto ColourAt = [&](int32 Id, FLinearColor& Out) -> bool
+	{
+		const UMaterialInstanceDynamic* MID = Cast<UMaterialInstanceDynamic>(Paint->GetMaterial(Id));
+		return MID != nullptr && MID->Parent == Road
+			&& MID->GetVectorParameterValue(FHashedMaterialParameterInfo(TEXT("MarkingColor")), Out);
+	};
+
+	for (int32 Index = 0; Index < static_cast<int32>(EStandPaint::Count); ++Index)
+	{
+		const EStandPaint P = static_cast<EStandPaint>(Index);
+		const FName SlotName = URoadSurfacePresenter::StandPaintSlot(P);
+		const int32 Id = Set->IndexOf(SlotName);
+		if (!TestTrue(FString::Printf(TEXT("paint %d's slot %s is declared"), Index, *SlotName.ToString()), Id != INDEX_NONE)) { continue; }
+		UMaterialInterface* Mat = Paint->GetMaterial(Id);
+		TestTrue(FString::Printf(TEXT("paint %d draws with a real material, not the floor checker"), Index), Mat != nullptr && Mat != Floor);
+
+		FLinearColor Colour;
+		switch (P)
+		{
+		case EStandPaint::Guidance:
+			TestEqual(TEXT("Guidance is slot 0, the road material the holding bars always had"), Id, 0);
+			break;
+		case EStandPaint::Boundary:
+			if (TestTrue(FString::Printf(TEXT("paint %d is a MarkingColor MID of the road material"), Index), ColourAt(Id, Colour)))
+			{
+				TestTrue(FString::Printf(TEXT("paint %d is white"), Index), Colour.Equals(FLinearColor::White));
+			}
+			break;
+		default:
+			AddError(TEXT("an EStandPaint with no expectation here - add one"));
+		}
+	}
+
+	// Every triangle's id is one the component can draw: an id >= NumMaterials is dropped by
+	// the proxy with nothing logged.
+	const UE::Geometry::FDynamicMesh3& Mesh = Paint->GetDynamicMesh()->GetMeshRef();
+	const UE::Geometry::FDynamicMeshMaterialAttribute* MeshIds = Mesh.HasAttributes() ? Mesh.Attributes()->GetMaterialID() : nullptr;
+	if (!TestNotNull(TEXT("the paint mesh carries material ids"), MeshIds)) { return false; }
+	TSet<int32> Seen;
+	for (const int32 Tri : Mesh.TriangleIndicesItr()) { Seen.Add(MeshIds->GetValue(Tri)); }
+	for (const int32 Id : Seen)
+	{
+		TestTrue(FString::Printf(TEXT("mesh id %d has a material"), Id), Id >= 0 && Id < Paint->GetNumMaterials());
+	}
+	// And the stand's paint actually USES every slot - yellow guidance, white boundary - so a
+	// builder that dropped every quad onto slot 0 cannot pass on the set alone.
+	for (const EStandPaint P : { EStandPaint::Guidance, EStandPaint::Boundary })
+	{
+		TestTrue(FString::Printf(TEXT("the painted mesh carries paint %d's slot"), static_cast<int32>(P)),
+			Seen.Contains(Set->IndexOf(URoadSurfacePresenter::StandPaintSlot(P))));
+	}
+	return true;
+}
+
+/**
+ * EVERY PAINTED VERTEX LIES ON THE STAND (task 13): boundary and guidance all inside the drawn
+ * outline, 1 uu of tolerance - paint that ran off the pad would lie on the
+ * taxiway or a neighbour's ground. Three letters, so a figure right for one width is not enough.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingPaintStaysInsideOutlineTest,
+	"Airside.Build.StandMarking.PaintStaysInsideOutline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingPaintStaysInsideOutlineTest::RunTest(const FString& Parameters)
+{
+	using namespace StandMarkingTest;
+	// ONE STAND PER NETWORK, so the buffers measured are that stand's paint alone.
+	TArray<FString> Names;
+	Names.SetNum(PaintBoundsCases);
+	for (int32 Case = 0; Case < PaintBoundsCases; ++Case)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FEntityInstance* Stand = PlacePaintBoundsCase(*Net, Case, Names[Case]);
+		if (!TestNotNull(*FString::Printf(TEXT("%s resolves"), *Names[Case]), Stand)) { continue; }
+		FRoadMeshBuffers Buffers;
+		FStandMarkingCensus Census;
+		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census, DistinctIds());
+		TestTrue(FString::Printf(TEXT("%s painted a boundary edge per outline edge, a lead-in and a stop bar (%d, %d, %d)"), *Names[Case],
+			Census.BoundaryEdges, Census.LeadIns, Census.StopBars),
+			Census.BoundaryEdges == Stand->Outline.Num() && Census.LeadIns == 1 && Census.StopBars == 1);
+		int32 Outside = 0;
+		for (const FVector3d& V : Buffers.Positions)
+		{
+			Outside += InConvex(Stand->Outline, FVector2D(V.X, V.Y), 1.0) ? 0 : 1;
+		}
+		TestEqual(FString::Printf(TEXT("%s: no painted vertex off the stand"), *Names[Case]), Outside, 0);
+	}
 	return true;
 }
 

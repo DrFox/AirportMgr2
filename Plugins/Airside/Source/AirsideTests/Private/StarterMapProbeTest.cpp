@@ -241,7 +241,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			const FRunwayAdmission Takeoff = RunwayAdmission::Check(*Net, Id, Airframe, false);
 			UE_LOG(LogAirsideTests, Log, TEXT("PROBE runway %s from segment %d: %d segment(s), %.0f uu long, %.0f uu wide, %s, %s approach; default airframe landing: %s; take-off: %s"),
 				*RunwayDesignator::ToPairText(ChainEnd.Direction), Index, Chain.Num(), ChainEnd.Length, Profile ? Profile->GetTotalWidth() : 0.0,
-				RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach),
+				Pavement::Name(Facts.Surface), RunwayApproachName(Facts.Approach),
 				*(Landing.IsAdmitted() ? FString(TEXT("admitted")) : RunwayAdmission::Describe(Landing)),
 				*(Takeoff.IsAdmitted() ? FString(TEXT("admitted")) : RunwayAdmission::Describe(Takeoff)));
 		}

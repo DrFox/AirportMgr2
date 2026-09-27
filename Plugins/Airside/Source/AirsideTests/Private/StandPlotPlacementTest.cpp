@@ -2,15 +2,18 @@
 #include "AirsideTestFixtures.h"
 #include "Build/AnchorLink.h"
 #include "Build/AnchorLinkFinder.h"
+#include "Build/BuildCost.h"
 #include "Build/StandLayoutBuild.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/InspectFacts.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
@@ -112,7 +115,7 @@ bool FStandPlotPlacesCodeCTest::RunTest(const FString& Parameters)
 	const FVector2D Inward(0.0, 1.0);
 
 	IRoadEditTarget* Target = Actor;
-	const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+	const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 	if (!TestTrue(TEXT("a Code C floor rect beside the taxiway is placed"), Index != INDEX_NONE))
 	{
 		return false;
@@ -170,11 +173,40 @@ bool FStandPlotRefusesTooSmallTest::RunTest(const FString& Parameters)
 		FVector2D(2000.0, 2000.0), FVector2D(0.0, 2000.0) };
 
 	IRoadEditTarget* Target = Actor;
-	const int32 Index = Target->PlaceStandInPlot(Rect, Rect[0], Rect[1]);
+	const int32 Index = Target->PlaceStandInPlot(Rect, Rect[0], Rect[1], EPavement::Tarmac);
 	TestEqual(TEXT("a 20x20m rect is refused"), Index, INDEX_NONE);
 
-	const FString Reason = Target->WhyStandRefused(Rect);
+	const FString Reason = Target->WhyStandRefused(Rect, EPavement::Tarmac);
 	TestTrue(TEXT("the reason names the missing width"), Reason.Contains(TEXT("more width")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotRefusesOldCodeADepthTest,
+	"Airside.Present.StandPlot.RefusesOldCodeADepth",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotRefusesOldCodeADepthTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+
+	// A DRAG THAT WAS A CODE A STAND (50 x 36 m) is now refused, and the refusal names DEPTH -
+	// the dimension that is short - so the player is not left guessing (Review Focus 4). 50 m of
+	// width clears B's own 5000 uu floor (A and B always shared it); 3600 uu of depth falls short
+	// of B's 3950 uu floor - the gap the 2026-09-27 merge opened where the old Code A rectangle
+	// used to read as its own letter.
+	const TArray<FVector2D> OldA = { {0,0}, {5000,0}, {5000,3600}, {0,3600} };
+	IRoadEditTarget* Target = Actor;
+	const FString Why = Target->WhyStandRefused(OldA, EPavement::Tarmac);   // signature from Task 8; until then (Outline)
+	TestTrue(TEXT("refused"), !Why.IsEmpty());
+	TestTrue(TEXT("for depth"), Why.Contains(TEXT("deep")) || Why.Contains(TEXT("depth")));
+	TestFalse(TEXT("and not for width, which is enough"), Why.Contains(TEXT("wide")) || Why.Contains(TEXT("width")));
 
 	return true;
 }
@@ -200,7 +232,7 @@ bool FStandPlotRefusesOverlapTest::RunTest(const FString& Parameters)
 	FVector2D A, B;
 	const TArray<FVector2D> First = FloorRect(EIcaoCode::C, 1000.0, A, B);
 	IRoadEditTarget* Target = Actor;
-	const int32 FirstIndex = Target->PlaceStandInPlot(First, A, B);
+	const int32 FirstIndex = Target->PlaceStandInPlot(First, A, B, EPavement::Tarmac);
 	if (!TestTrue(TEXT("the first stand is placed"), FirstIndex != INDEX_NONE)) { return false; }
 
 	// Shifted half a width over - well short of clearing the first rectangle, so the two
@@ -212,10 +244,10 @@ bool FStandPlotRefusesOverlapTest::RunTest(const FString& Parameters)
 	SecondA.X += Width * 0.5;
 	SecondB.X += Width * 0.5;
 
-	const int32 SecondIndex = Target->PlaceStandInPlot(Second, SecondA, SecondB);
+	const int32 SecondIndex = Target->PlaceStandInPlot(Second, SecondA, SecondB, EPavement::Tarmac);
 	TestEqual(TEXT("the overlapping second stand is refused"), SecondIndex, INDEX_NONE);
 
-	const FString Reason = Target->WhyStandRefused(Second);
+	const FString Reason = Target->WhyStandRefused(Second, EPavement::Tarmac);
 	TestTrue(TEXT("the reason names the overlap"), Reason.Contains(TEXT("overlaps stand")));
 
 	return true;
@@ -251,7 +283,7 @@ bool FStandPlotAllowsServiceRoadInBackStripTest::RunTest(const FString& Paramete
 	const int32 EastIndex = Target->PlaceNode(East);
 	Target->ConnectNodes(WestIndex, EastIndex, ERoadKind::ServiceRoad, INDEX_NONE);
 
-	const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+	const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 	TestTrue(TEXT("the stand is placed despite the service road crossing its interior"),
 		Index != INDEX_NONE);
 
@@ -289,10 +321,10 @@ bool FStandPlotRefusesTaxiwayThroughInteriorTest::RunTest(const FString& Paramet
 	const int32 EastIndex = Target->PlaceNode(East);
 	Target->ConnectNodes(WestIndex, EastIndex, ERoadKind::Taxiway, INDEX_NONE);
 
-	const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+	const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 	TestEqual(TEXT("a taxiway through the interior refuses the stand"), Index, INDEX_NONE);
 
-	const FString Reason = Target->WhyStandRefused(Rect);
+	const FString Reason = Target->WhyStandRefused(Rect, EPavement::Tarmac);
 	TestTrue(TEXT("the reason names the taxiway"), Reason.Contains(TEXT("a taxiway crosses")));
 
 	return true;
@@ -319,7 +351,7 @@ bool FStandPlotUndoRemovesTest::RunTest(const FString& Parameters)
 	FVector2D A, B;
 	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::C, 1000.0, A, B);
 	IRoadEditTarget* Target = Actor;
-	const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+	const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 	if (!TestTrue(TEXT("the stand is placed"), Index != INDEX_NONE)) { return false; }
 	if (!TestEqual(TEXT("one live stand before undo"), LiveStandCount(Actor), 1)) { return false; }
 
@@ -358,7 +390,12 @@ bool FStandPlotEveryLetterBuildsTest::RunTest(const FString& Parameters)
 	// happens to still be too small rather than the placement path. This test asks the question
 	// one level up: the actor's own cache resolves a real UEntityDefinition for every letter, so
 	// nothing between the template and PlaceStandInPlot silently drops one.
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	//
+	// CODE A DROPPED (2026-09-27 merge): ResolveStandDefinitionFor(A) is unreachable now by
+	// construction - LetterOf never answers A any more, so FitsItsLetter(_, A) can never be true
+	// (see IcaoCode.h's StandLetterFor) and this cache returns null for A on every call. Left
+	// unreachable rather than special-cased, per the merge's own ruling.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
 		TestNotNull(*FString::Printf(TEXT("Code %s resolves a stand definition"), IcaoCode::ToLetter(Letter)),
 			Actor->ResolveStandDefinitionFor(Letter));
@@ -375,6 +412,10 @@ bool FStandPlotEveryLetterBuildsTest::RunTest(const FString& Parameters)
 // first measured table named as not fitting their own floor - FStandPlotUnfitLetterRefusedTest pinned
 // that - and now fit like every other letter (their own design vehicle, a widened floor for
 // its lane), so the same round trip that already proves D/E/F proves them too.
+//
+// A DROPPED FROM THE LOOP AGAIN, 2026-09-27 (merge into B): the loop's own assertion is that a
+// stand drawn at Letter's floor reads BACK as Letter, and a rectangle at A's floor now reads as
+// B (IcaoCode::StandLetterFor) - that is B's case already in this same array, not a second one.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotPlacesOtherLettersTest,
 	"Airside.Present.StandPlot.PlacesOtherLetters",
@@ -391,7 +432,7 @@ bool FStandPlotPlacesOtherLettersTest::RunTest(const FString& Parameters)
 
 	Actor->ClearNetwork();
 
-	const EIcaoCode Fits[] = { EIcaoCode::A, EIcaoCode::B, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F };
+	const EIcaoCode Fits[] = { EIcaoCode::B, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F };
 	IRoadEditTarget* Target = Actor;
 
 	for (const EIcaoCode Letter : Fits)
@@ -402,7 +443,7 @@ bool FStandPlotPlacesOtherLettersTest::RunTest(const FString& Parameters)
 		const TArray<FVector2D> Rect =
 			FloorRect(Letter, 20000.0 * (static_cast<double>(Letter) + 1.0), A, B);
 
-		const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+		const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 		if (!TestTrue(*FString::Printf(TEXT("Code %s's own floor is placed"), IcaoCode::ToLetter(Letter)),
 				Index != INDEX_NONE))
 		{
@@ -583,7 +624,7 @@ bool FStandPlotLeadInSizedByLetterTest::RunTest(const FString& Parameters)
 		const FVector2D A(0.0, 0.0);
 		const FVector2D B(IcaoCode::StandWidthForLetter(EIcaoCode::F), 0.0);
 		const FLetterEnvelope FEnvelope = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::F);
-		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, FVector2D(0.0, 1.0), EIcaoCode::F, FEnvelope);
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, FVector2D(0.0, 1.0), {}, EIcaoCode::F, FEnvelope);
 		FEntityPlacement Placement;
 		Placement.Definition = FStand;
 		Placement.Anchors = FStand->Anchors;
@@ -628,7 +669,7 @@ bool FStandPlotLeadInSizedByLetterTest::RunTest(const FString& Parameters)
 
 		FVector2D A, B;
 		const TArray<FVector2D> Rect = FloorRect(EIcaoCode::F, 1000.0, A, B);
-		const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+		const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 		if (!TestTrue(TEXT("a Code F floor rect beside the taxiway is placed"), Index != INDEX_NONE)) { return false; }
 		Actor->RebuildMesh();
 		const FGuidelineNodeId StandPose = Actor->Network->GetEntities()[Index].PoseNode;
@@ -682,7 +723,7 @@ bool FStandPlotDepotRefusesStandOverlapTest::RunTest(const FString& Parameters)
 	FVector2D A, B;
 	const TArray<FVector2D> Stand = FloorRect(EIcaoCode::C, 1000.0, A, B);
 	IRoadEditTarget* Target = Actor;
-	if (!TestTrue(TEXT("a Code C stand is placed"), Target->PlaceStandInPlot(Stand, A, B) != INDEX_NONE)) { return false; }
+	if (!TestTrue(TEXT("a Code C stand is placed"), Target->PlaceStandInPlot(Stand, A, B, EPavement::Tarmac) != INDEX_NONE)) { return false; }
 
 	// A 30 x 24 m plot - DepotIsPickedByItsGround's own - with its frontage on Y = FrontY.
 	const auto Plot = [](double X0, double FrontY)
@@ -733,7 +774,7 @@ bool FStandPlotRebindsAfterLevelLoadTest::RunTest(const FString& Parameters)
 	FVector2D A, B;
 	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::D, 1000.0, A, B);
 	IRoadEditTarget* Target = Actor;
-	const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+	const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 	if (!TestTrue(TEXT("a Code D stand is placed"), Index != INDEX_NONE)) { return false; }
 	const FEntityInstanceId Id = Actor->Network->EntityIdAt(Index);
 
@@ -820,7 +861,7 @@ bool FStandPlotOldPoseRederivedOnLoadTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("rebound to Code B's definition"), Loaded->Definition.Get() == BDefinition && BDefinition != nullptr);
 
 	const StandBox::FStandPose Expected = StandBox::PoseFor(Outline[0], Outline[1],
-		PlotYard::InwardOf(Outline, Outline[0], Outline[1]), EIcaoCode::B,
+		PlotYard::InwardOf(Outline, Outline[0], Outline[1]), Outline, EIcaoCode::B,
 		UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::B));
 	TestTrue(*FString::Printf(TEXT("the pose is B's PoseFor off the outline: (%.1f, %.1f), expected (%.1f, %.1f)"),
 			Loaded->Position.X, Loaded->Position.Y, Expected.Position.X, Expected.Position.Y),
@@ -923,7 +964,7 @@ namespace StandPlotPlacementTest
 		FVector2D A, B;
 		const TArray<FVector2D> Rect = FloorRect(Letter, 1000.0, A, B);
 		IRoadEditTarget* Target = Actor;
-		const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+		const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 		if (!Test.TestTrue(TEXT("the stand is placed"), Index != INDEX_NONE)) { return false; }
 		Out.Stand = Actor->Network->EntityIdAt(Index);
 
@@ -1031,8 +1072,11 @@ bool FStandPlotRoadAlongTheServiceEdgeJoinsTheNearLaneTest::RunTest(const FStrin
 {
 	using namespace StandPlotPlacementTest;
 
-	// A AND C: laid for the tow and the truck, whose entries sit different corner runs inside.
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	// B AND C: laid for the tow and the truck, whose entries sit different corner runs inside.
+	// WAS A AND C, moved to B by the 2026-09-27 merge - A's own floor rectangle reads back as B
+	// now (IcaoCode::StandLetterFor), so drawing "at A's floor" here would have quietly built
+	// and labelled a B stand anyway; B says so honestly.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C })
 	{
 		const TCHAR* Code = IcaoCode::ToLetter(Letter);
 		FAirsideTestWorld LetterWorld;
@@ -1093,7 +1137,9 @@ bool FStandPlotRoadOnTheFarEdgeIsTheKnownCrossingCaseTest::RunTest(const FString
 {
 	using namespace StandPlotPlacementTest;
 
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	// WAS A AND C, moved to B by the 2026-09-27 merge - see
+	// FStandPlotRoadAlongTheServiceEdgeJoinsTheNearLaneTest's own note.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C })
 	{
 		const TCHAR* Code = IcaoCode::ToLetter(Letter);
 		FAirsideTestWorld LetterWorld;
@@ -1128,6 +1174,119 @@ bool FStandPlotRoadOnTheFarEdgeIsTheKnownCrossingCaseTest::RunTest(const FString
 			TestTrue(*FString::Printf(TEXT("Code %s: still serviceable"), Code), Facts.bServiceable);
 		}
 	}
+	return true;
+}
+
+namespace StandPlotPlacementTest
+{
+	/**
+	 * A purse holding exactly Funds - enough for one quote and not a unit more. A FAKE AND NOT
+	 * ULedger for BuildPurseTest's reason: ULedger lives in AirportOps, which this module may
+	 * not see, and what is measured here is the facade's afford gate, not a ledger's arithmetic.
+	 */
+	struct FExactFundsPurse : IBuildPurse
+	{
+		double Funds = 0.0;
+
+		/** Every quote Credit was handed, summed at BaseAmount - the facade's refund QUOTE.
+		 *  RefundFraction is ULedger's (per line, at its Pricing), out of this module's reach. */
+		double Credited = 0.0;
+
+		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Funds; }
+		virtual int32 Charge(const FBuildQuote& Quote) override { Funds -= Quote.BaseAmount(); return 1; }
+		virtual void Reverse(int32) override {}
+		virtual void Credit(const FBuildQuote& Quote) override { Credited += Quote.BaseAmount(); }
+		virtual FText Describe(const FBuildQuote& Quote) const override { return FText::AsNumber(Quote.BaseAmount()); }
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotAffordsWithTheChosenPavementTest,
+	"Airside.Present.StandPlot.AffordsWithTheChosenPavement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotAffordsWithTheChosenPavementTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	// DECLARED BEFORE THE WORLD, so it outlives the facade that holds a raw pointer to it.
+	FExactFundsPurse Purse;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("the actor has an edit facade"), Facade)) { return false; }
+
+	// THE PAVEMENT THE TOOL CHOSE is the pavement placed, priced and afforded (Review Focus 5):
+	// with exactly enough money for a grass stand, the afford gate must pass for grass and
+	// refuse tarmac, or the ghost would say "cannot afford" for a click that would have paid.
+	const TArray<FVector2D> B = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+	const UEntityDefinition* Definition = Actor->ResolveStandDefinitionFor(EIcaoCode::B);
+	if (!TestNotNull(TEXT("a Code B stand definition resolves"), Definition)) { return false; }
+	const double GrassPrice = Facade->QuoteStand(*Definition, B, EPavement::Grass).BaseAmount();
+	const double TarmacPrice = Facade->QuoteStand(*Definition, B, EPavement::Tarmac).BaseAmount();
+	if (!TestTrue(TEXT("the premise: grass is cheaper than tarmac, or the gate below proves nothing"),
+		GrassPrice < TarmacPrice)) { return false; }
+
+	Purse.Funds = GrassPrice;
+	Facade->SetPurse(&Purse);
+	ON_SCOPE_EXIT { Facade->SetPurse(nullptr); };
+
+	TestTrue(TEXT("grass is affordable"), Facade->WhyStandRefused(B, EPavement::Grass).IsEmpty());
+	TestTrue(TEXT("tarmac is not"), Facade->WhyStandRefused(B, EPavement::Tarmac).Contains(TEXT("afford")));
+	const int32 Placed = Facade->PlaceStandInPlot(B, B[0], B[1], EPavement::Grass);
+	if (!TestTrue(TEXT("the grass stand is placed"), Placed != INDEX_NONE)) { return false; }
+	TestEqual(TEXT("and the placed stand is grass"), Actor->Network->GetEntities()[Placed].Pavement, EPavement::Grass);
+	TestEqual(TEXT("and it was charged the grass price, to the unit"), Purse.Funds, 0.0, 1e-6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotDemolishRefundsThePadTest,
+	"Airside.Present.StandPlot.DemolishRefundsThePad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotDemolishRefundsThePadTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	// R11 (shared-pavement final review): DeleteEntity quoted the definition alone, so a drawn
+	// stand refunded its equipment and kept the pad it was charged for. Through the ACTOR'S
+	// facade, placed and demolished the way the tools do, so this goes red if DeleteEntity's
+	// quote drops the pad line - not a hand-built quote asserted against itself.
+	FExactFundsPurse Purse; // before the world - the facade holds a raw pointer to it
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("the actor has an edit facade"), Facade)) { return false; }
+
+	const TArray<FVector2D> B = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+	const UEntityDefinition* Definition = Actor->ResolveStandDefinitionFor(EIcaoCode::B);
+	if (!TestNotNull(TEXT("a Code B stand definition resolves"), Definition)) { return false; }
+	const double EntityPrice = BuildCost::ForEntity(*Definition).BaseAmount();
+	const double TarmacPad = Facade->QuoteStand(*Definition, B, EPavement::Tarmac).BaseAmount() - EntityPrice;
+	if (!TestTrue(TEXT("the premise: a pad costs something, or a refund without it looks the same"),
+		TarmacPad > 0.0)) { return false; }
+
+	Purse.Funds = 1.0e12;
+	Facade->SetPurse(&Purse);
+	ON_SCOPE_EXIT { Facade->SetPurse(nullptr); };
+
+	const int32 Placed = Facade->PlaceStandInPlot(B, B[0], B[1], EPavement::Grass);
+	if (!TestTrue(TEXT("the grass stand is placed"), Placed != INDEX_NONE)) { return false; }
+	if (!TestTrue(TEXT("and demolished"), Facade->DeleteEntity(Placed))) { return false; }
+
+	// The QUOTE the ledger scraps, entity plus the pad at grass's 0.4 - ULedger::Credit then
+	// applies RefundFraction to every line, the pad's (null source) included.
+	TestEqual(TEXT("the demolition credits the equipment AND the grass pad (entity + 0.4 x tarmac pad)"),
+		Purse.Credited, EntityPrice + 0.4 * TarmacPad, 1e-6);
 	return true;
 }
 

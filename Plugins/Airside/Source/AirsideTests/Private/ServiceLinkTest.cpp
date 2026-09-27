@@ -971,9 +971,11 @@ bool FSideRoadAlongsideJoinsNothingTest::RunTest(const FString& Parameters)
 	// A ROAD ALONGSIDE THE STAND, running parallel to its facing and on past the far edge, is not
 	// a road beyond the far edge (final review, 2026-09-27). Its nearest point to every entry is
 	// level with that entry, so the half-plane that used to run through the entry itself decided
-	// it by the sign of a 1e-10 dot product. A and C because they are laid for different design
+	// it by the sign of a 1e-10 dot product. B and C because they are laid for different design
 	// vehicles (the tow and the truck), so their entries sit different distances in from the edge.
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	// WAS A AND C, moved to B by the 2026-09-27 merge: A no longer has stand geometry of its own
+	// (IcaoCode::StandLetterFor), so MakeStandTransient(A) now builds B's box under an A label.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C })
 	{
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(Letter);
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
@@ -1020,7 +1022,9 @@ bool FFarRoadWinsOverSideRoadTest::RunTest(const FString& Parameters)
 	// BOTH ROADS, and the side one NEARER: 100 uu off the side edge against a far road 1500 uu
 	// beyond the far edge. Nearest-wins would take the side road for the entries on its side;
 	// only the far-edge line sends every entry to the far road.
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	// WAS A AND C, moved to B by the 2026-09-27 merge - see FSideRoadAlongsideJoinsNothingTest's
+	// own note.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C })
 	{
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(Letter);
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
@@ -1077,7 +1081,9 @@ bool FDrawnDeepStandJoinsItsFarEdgeTest::RunTest(const FString& Parameters)
 	// ServiceLinkRadius (6500) that road was out of reach of every entry. Drawn depth is not
 	// capped (controller ruling): the entry's reach grows by the extra depth instead.
 	constexpr double ExtraDepth = 8000.0;
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	// WAS A AND C, moved to B by the 2026-09-27 merge - see FSideRoadAlongsideJoinsNothingTest's
+	// own note.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C })
 	{
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(Letter);
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());

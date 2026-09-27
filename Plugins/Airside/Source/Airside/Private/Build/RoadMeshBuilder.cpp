@@ -5,9 +5,11 @@
 #include "Build/RoadProfileBands.h"
 #include "CompGeom/PolygonTriangulation.h"
 #include "IndexTypes.h"
+#include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/PolygonInset.h"
 
 namespace
 {
@@ -46,24 +48,21 @@ FRoadMeshBuilder::FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit,
 
 FName FRoadMeshBuilder::SurfaceSlotFor(const URoadNetwork& Network, FRoadSegmentId Segment)
 {
-	// NAME_None for a tarmac taxiway or road, which is what leaves FromProfile reading the
-	// profile's own band names - the path every one of them has always taken. A runway's
-	// pavement is decided by its facts, and a grass road's by its Surface.
-	if (Network.IsRunwaySegment(Segment))
-	{
-		return URoadMaterialSet::RunwaySlotName(Network.RunwayFactsFor(Segment).Surface);
-	}
-
-	// THE GRASS RUNWAY'S SLOT, not a slot of its own: one grass material, so a grass taxiway
-	// meeting a grass strip is one field, and M_RunwayGrass already paints no centreline
-	// (build_runway_materials.py, CentrelineWidth 0) - the "no paint on grass" rule for the
-	// material line comes free. EVERY BAND takes it, kerbs and run-offs included: a grass road
-	// has no kerb to draw.
-	if (Network.IsGrassRoad(Segment))
-	{
-		return URoadMaterialSet::RunwaySlotName(RoadSurfacePavement(ERoadSurface::Grass));
-	}
-	return NAME_None;
+	// A FACT ON THE SEGMENT decides its whole width's slot unless it is a tarmac road, whose
+	// bands name their own - NAME_None leaves FromProfile reading the profile's band names, the
+	// path every taxiway and road has always taken. ONE PAVEMENT ANSWER (PavementOf) for
+	// runway and road alike: #356 asked the runway's facts and the road's surface separately,
+	// and mapped grass across by hand.
+	//
+	// THE GRASS RUNWAY'S SLOT for a grass road, not a slot of its own: one grass material, so a
+	// grass taxiway meeting a grass strip is one field (#356's ruling), and M_RunwayGrass
+	// already paints no centreline (build_runway_materials.py, CentrelineWidth 0) - the "no
+	// paint on grass" rule for the material line comes free. EVERY BAND takes it, kerbs and
+	// run-offs included: a grass road has no kerb to draw.
+	const EPavement P = Network.PavementOf(Segment);
+	return Network.IsRunwaySegment(Segment) || P != EPavement::Tarmac
+		? URoadMaterialSet::RunwaySlotName(P)
+		: NAME_None;
 }
 
 void FRoadMeshBuilder::JunctionSlots(const URoadNetwork& Network,
@@ -95,6 +94,8 @@ void FRoadMeshBuilder::JunctionSlots(const URoadNetwork& Network,
 		// road's own line. A RUNWAY counts as paved whatever it is surfaced with - it is
 		// continuous through its junctions (below), and a grass strip crossing a tarmac
 		// taxiway stays the strip, exactly as it did before road surfaces existed.
+		// Not "strongest pavement wins" - a runway is paved whatever its surface (above), so the
+		// rule is "grass loses".
 		const bool bPaved = !Network.IsGrassRoad(ArmSegment);
 
 		// Ties broken by the LOWEST segment id, not by arm order. Arm order comes from the
@@ -696,20 +697,42 @@ void FRoadMeshBuilder::Build(const URoadNetwork& Network, const FRoadSolveResult
 	}
 }
 
+int32 FRoadMeshBuilder::ResolveApronSlot(FName Slot)
+{
+	// NAME_None is id 0 without a lookup: slot 0 is the layer's own material by the apron
+	// set's construction (URoadSurfacePresenter::ApronMaterialSet).
+	if (Slot.IsNone())
+	{
+		return 0;
+	}
+	const int32 Found = Materials != nullptr ? Materials->IndexOf(Slot) : INDEX_NONE;
+	if (Found == INDEX_NONE)
+	{
+		++UnresolvedApronSlots;
+		return 0;
+	}
+	return Found;
+}
+
 void FRoadMeshBuilder::AddApron(const FApronSurface& Apron)
 {
 	// A forwarder. SurfaceMaterialSlot stays unread here, as the slot-0 comment below
-	// already records, so the struct carries nothing this needs beyond its outline.
-	AddApron(Apron.Outline);
+	// already records, so the struct carries nothing this needs beyond its outline - and
+	// NAME_None, the apron layer's own material, is what a bare apron has always drawn with.
+	AddApron(Apron.Outline, NAME_None);
 }
 
-void FRoadMeshBuilder::AddApron(const TArray<FVector2D>& Outline, EApronPaint Paint)
+void FRoadMeshBuilder::AddApron(const TArray<FVector2D>& Outline, FName Slot, EApronPaint Paint)
 {
 	if (Outline.Num() < 3)
 	{
 		return;
 	}
 	const FVector2f PaintUV1(static_cast<float>(Paint), 0.0f);
+
+	// RESOLVED ONCE PER POLYGON, not per triangle - FRoadProfileBands::FromProfile's own
+	// SlotOverride shape (ResolveApronSlot).
+	const int32 MaterialId = ResolveApronSlot(Slot);
 
 	// The engine's ear-clipping triangulator. The junction solver's apex fan cannot be
 	// reused here: it needs a polygon every rim vertex can see, and an apron following a
@@ -732,16 +755,17 @@ void FRoadMeshBuilder::AddApron(const TArray<FVector2D>& Outline, EApronPaint Pa
 		if (Corners.IsValidIndex(Triangle.A) && Corners.IsValidIndex(Triangle.B)
 			&& Corners.IsValidIndex(Triangle.C))
 		{
-			// Slot 0 STATED, not defaulted. Aprons are out of scope for per-band
-			// materials - they render on their own component with one ApronMaterial - and
-			// FApronSurface::SurfaceMaterialSlot stays unread until that follow-up.
-			AddTriangle(Corners[Triangle.A], Corners[Triangle.B], Corners[Triangle.C], 0);
+			// The slot STATED, not defaulted - resolved above. Aprons are still out of scope
+			// for per-band materials, and FApronSurface::SurfaceMaterialSlot stays unread
+			// until that follow-up; only a stand's pad names a slot (PadSlotFor), since
+			// shared-pavement Task 8.
+			AddTriangle(Corners[Triangle.A], Corners[Triangle.B], Corners[Triangle.C], MaterialId);
 		}
 	}
 }
 
 void FRoadMeshBuilder::AddApronRing(TConstArrayView<FVector2D> Outer, TConstArrayView<FVector2D> Inner,
-	EApronPaint Paint)
+	FName Slot, EApronPaint Paint)
 {
 	const int32 Count = Outer.Num();
 	if (Count < 3 || Inner.Num() != Count)
@@ -749,6 +773,7 @@ void FRoadMeshBuilder::AddApronRing(TConstArrayView<FVector2D> Outer, TConstArra
 		return;
 	}
 	const FVector2f PaintUV1(static_cast<float>(Paint), 0.0f);
+	const int32 MaterialId = ResolveApronSlot(Slot);
 	const FVector2f NoBlend(0.0f, 1.0f);
 
 	TArray<int32> OuterIds;
@@ -767,9 +792,82 @@ void FRoadMeshBuilder::AddApronRing(TConstArrayView<FVector2D> Outer, TConstArra
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		const int32 Next = (Index + 1) % Count;
-		AddTriangle(OuterIds[Index], OuterIds[Next], InnerIds[Next], 0);
-		AddTriangle(OuterIds[Index], InnerIds[Next], InnerIds[Index], 0);
+		AddTriangle(OuterIds[Index], OuterIds[Next], InnerIds[Next], MaterialId);
+		AddTriangle(OuterIds[Index], InnerIds[Next], InnerIds[Index], MaterialId);
 	}
+}
+
+int32 FRoadMeshBuilder::AddNetworkAprons(const URoadNetwork& Network)
+{
+	int32 Count = 0;
+	for (const FApronSurface& Apron : Network.GetAprons())
+	{
+		if (Apron.bAlive)
+		{
+			AddApron(Apron);
+			++Count;
+		}
+	}
+
+	// A PLOTTED INSTALLATION'S PAD IS PAVEMENT, and it is the polygon the player
+	// drew - not new geometry. Through the SAME builder and the same triangulator
+	// the aprons above use, on the same component and the same Z, so a depot's pad
+	// and the apron it abuts are one surface rather than two that must agree.
+	//
+	// The pad's painted lines are deliberately NOT here. The white and yellow lines
+	// on the concept sheet mark the truck's path off the pad, and that path is the
+	// pose's lead-in, which the guideline graph already computes and draws. Painting
+	// them into the mesh would be a second evaluator of where the truck drives -
+	// they would agree at one rotation and visibly disagree at every other.
+	//
+	// A DEPOT'S PAD IS PAINTED (2026-09-27, zoomed-out readability): a pale slab inside
+	// a red hazard band, so the plot reads as fuel at max zoom with no UI. ONE BUILDER
+	// PER PAINT, appended below without welding: the slab and band share the inset's
+	// positions, and FRoadMeshBuilder welds by position, first writer wins - one
+	// builder would hand the band's tag to the slab's corners and blend them. A pad
+	// too small for the band keeps the slab alone rather than a band crossing itself.
+	// Both take this builder's Z, texel scale and Materials, so their slots resolve alike,
+	// and the depot's own PadSlotFor (Tarmac for every non-stand entity) as their slot.
+	FRoadMeshBuilder SlabBuilder(ZHeight, TexelsPerUnit, Materials);
+	FRoadMeshBuilder BandBuilder(ZHeight, TexelsPerUnit, Materials);
+	for (const FEntityInstance& Entity : Network.GetEntities())
+	{
+		if (!Entity.bAlive || Entity.Outline.Num() < 3)
+		{
+			continue;
+		}
+		++Count;
+		const FName Slot = PadSlotFor(Entity);
+		if (!Entity.IsDepot())
+		{
+			AddApron(Entity.Outline, Slot);
+			continue;
+		}
+		TArray<FVector2D> Inner;
+		if (PolygonInset::Inset(Entity.Outline, HazardBandUu, Inner))
+		{
+			SlabBuilder.AddApron(Inner, Slot, EApronPaint::FuelSlab);
+			BandBuilder.AddApronRing(Entity.Outline, Inner, Slot, EApronPaint::HazardBand);
+		}
+		else
+		{
+			SlabBuilder.AddApron(Entity.Outline, Slot, EApronPaint::FuelSlab);
+		}
+	}
+	DepotSlabTriangles = SlabBuilder.GetBuffers().Indices.Num() / 3;
+	DepotBandTriangles = BandBuilder.GetBuffers().Indices.Num() / 3;
+	UnresolvedApronSlots += SlabBuilder.GetUnresolvedApronSlots() + BandBuilder.GetUnresolvedApronSlots();
+	Buffers.Append(SlabBuilder.GetBuffers());
+	Buffers.Append(BandBuilder.GetBuffers());
+	return Count;
+}
+
+FName FRoadMeshBuilder::PadSlotFor(const FEntityInstance& Entity)
+{
+	// SurfaceSlotFor's rule for a road, applied to a pad - see this function's header.
+	return Entity.Pavement != EPavement::Tarmac
+		? URoadMaterialSet::RunwaySlotName(Entity.Pavement)
+		: NAME_None;
 }
 
 void FRoadMeshBuilder::Emit(IRoadMeshSink& Sink) const

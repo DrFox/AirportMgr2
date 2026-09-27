@@ -247,7 +247,7 @@ bool FOpsRuntimeDetachClearsPurseTest::RunTest(const FString& Parameters)
 	TestNull(TEXT("Detach clears the purse"), Facade->GetPurse());
 
 	FBuildQuote Quote;
-	Quote.BaseAmount = 100.0;
+	Quote.Lines.Add({ nullptr, EBuildUnit::Each, 100.0, 1.0, {} });
 	TestTrue(TEXT("with no purse, CanAfford treats it as free"), Facade->CanAfford(Quote));
 	TestEqual(TEXT("and never dereferences the detached purse to decide that"),
 		Spy.CanAffordCalls, 0);
@@ -392,7 +392,7 @@ bool FOpsRuntimeDrawnStandSurvivesLoadTest::RunTest(const FString& Parameters)
 		const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::D);
 		const FVector2D A(0.0, 1000.0), B(Width, 1000.0);
 		const TArray<FVector2D> Rect = { A, B, FVector2D(Width, 1000.0 + Depth), FVector2D(0.0, 1000.0 + Depth) };
-		const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+		const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 		if (!TestTrue(TEXT("a Code D stand is drawn"), Index != INDEX_NONE)) { return false; }
 		Actor->RebuildMesh();
 

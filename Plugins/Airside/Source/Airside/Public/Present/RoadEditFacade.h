@@ -140,7 +140,7 @@ public:
 
 	virtual int32 PlaceNode(FVector2D Where) override;
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
-		ERoadSurface Surface) override;
+		EPavement Surface) override;
 
 	/** Forwarded to the actor, which owns the content lookup - see IRoadEditTarget. */
 	virtual int32 GetWidthCount(ERoadKind Kind) const override;
@@ -195,8 +195,24 @@ public:
 		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) override;
 	using IRoadEditTarget::PlaceStand;
 	virtual int32 PlaceStandInPlot(const TArray<FVector2D>& Outline,
-		FVector2D EntranceA, FVector2D EntranceB) override;
-	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline) const override;
+		FVector2D EntranceA, FVector2D EntranceB, EPavement Pavement) override;
+	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const override;
+
+	/**
+	 * The one quote a drawn stand is priced at: BuildCost::ForEntity(Definition) plus the pad
+	 * it sits on (QuoteForApron(Outline, Pavement)), combined into one "{0} + {1}" What text -
+	 * the same shape QuoteForApron's own callers in PlaceEntityInPlot already sum by hand,
+	 * pulled out here because WhyStandRefused's afford gate and PlaceStandInPlot's charge both
+	 * need EXACTLY this figure and had drifted into two slightly different copies of it (fix
+	 * round 1 on this task's own review).
+	 *
+	 * PUBLIC since shared-pavement Task 8 (was private): a query with no side effect, and the
+	 * afford test (Airside.Present.StandPlot.AffordsWithTheChosenPavement) must open a purse
+	 * at exactly this figure - a second pricing of the pad in the test is the drift this
+	 * function exists to remove.
+	 */
+	FBuildQuote QuoteStand(const UEntityDefinition& Definition,
+		TArrayView<const FVector2D> Outline, EPavement Pavement) const;
 	virtual bool DeleteEntity(int32 EntityIndex) override;
 	virtual int32 FindEntityAt(FVector2D Where, double Radius) const override;
 	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity Kind) const override;
@@ -316,8 +332,9 @@ public:
 	 * resolve the profile for itself.
 	 */
 	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-		int32 WidthIndex, ERoadSurface Surface) const override;
-	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile) const override;
+		int32 WidthIndex, EPavement Surface) const override;
+	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile,
+		EPavement Pavement) const override;
 
 	/** True when there is no purse (design time) or the purse says the player can pay. */
 	bool CanAfford(const FBuildQuote& Quote) const;
@@ -433,8 +450,10 @@ private:
 	 */
 	FBuildQuote QuoteForAllPavement() const;
 
-	/** What an apron outline is worth today, at the settings' rate. */
-	FBuildQuote QuoteForApron(TConstArrayView<FVector2D> Outline) const;
+	/** What an apron outline is worth today, at the settings' rate, paved with Pavement - unset
+	 *  for a bare apron or a depot's plot, which have no pavement of their own (BuildCost::ForApron
+	 *  bills an unset line at the rate itself). No default, for ForApron's own reason. */
+	FBuildQuote QuoteForApron(TConstArrayView<FVector2D> Outline, TOptional<EPavement> Pavement) const;
 
 	/**
 	 * Undo and Redo were the same six lines apart from which of URoadEditHistory's two
@@ -553,17 +572,6 @@ private:
 	 */
 	PlotYard::FReservation ReserveForPlot(TArrayView<const FVector2D> Outline,
 		FVector2D FrontageA, FVector2D FrontageB, EPlaceableEntity Kind) const;
-
-	/**
-	 * The one quote a drawn stand is priced at: BuildCost::ForEntity(Definition) plus the pad
-	 * it sits on (QuoteForApron(Outline)), combined into one "{0} + {1}" What text - the same
-	 * shape QuoteForApron's own callers in PlaceEntityInPlot already sum by hand, pulled out
-	 * here because WhyStandRefused's afford gate and PlaceStandInPlot's charge both need
-	 * EXACTLY this figure and had drifted into two slightly different copies of it (fix round
-	 * 1 on this task's own review).
-	 */
-	FBuildQuote QuoteStand(const UEntityDefinition& Definition,
-		TArrayView<const FVector2D> Outline) const;
 
 	IBuildPurse* Purse = nullptr;
 

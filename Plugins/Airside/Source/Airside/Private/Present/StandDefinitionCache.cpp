@@ -46,7 +46,7 @@ namespace StandDefinitionCacheLocal
 		}
 		const FVector2D A = Outline[Entrance];
 		const FVector2D B = Outline[(Entrance + 1) % Outline.Num()];
-		return StandBox::PoseFor(A, B, PlotYard::InwardOf(Outline, A, B), Letter,
+		return StandBox::PoseFor(A, B, PlotYard::InwardOf(Outline, A, B), Outline, Letter,
 			UAirsideSettings::ResolveLetterEnvelope(Letter));
 	}
 

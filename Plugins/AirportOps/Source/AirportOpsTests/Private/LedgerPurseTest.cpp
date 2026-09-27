@@ -21,7 +21,7 @@ namespace
 	FBuildQuote QuoteOf(double Amount)
 	{
 		FBuildQuote Quote;
-		Quote.BaseAmount = Amount;
+		Quote.Lines.Add({ nullptr, EBuildUnit::Each, Amount, 1.0, {} });
 		Quote.What = FText::FromString(TEXT("Taxiway"));
 		return Quote;
 	}
@@ -119,6 +119,31 @@ bool FLedgerDatesItsEntriesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a build is dated by the game clock, not left at zero"),
 		Ledger->Entries()[0].At, Clock->Now(), 1e-9);
 	TestTrue(TEXT("and that is a real time of day, not the epoch"), Clock->Now() > 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLedgerPricesPerLineTest,
+	"AirportOps.Model.LedgerPricesPerLine",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLedgerPricesPerLineTest::RunTest(const FString& Parameters)
+{
+	// PER LINE, BOTH WAYS: a charge is the sum of each line's price, and a demolish is the sum
+	// of each line's scrap - the pad line (null source) included, or a demolished stand would
+	// refund only its equipment. (Review Focus 1.)
+	UPricing* Pricing = nullptr;
+	ULedger* Ledger = PurseWith(100000.0, Pricing);
+	FBuildQuote Quote;
+	Quote.Lines.Add({ nullptr, EBuildUnit::Each, 1.0, 1000.0, {} });
+	Quote.Lines.Add({ nullptr, EBuildUnit::SquareMetre, 100.0, 10.0, EPavement::Grass });
+	const double Before = Ledger->Balance();
+	Ledger->Charge(Quote);
+	TestEqual(TEXT("charged 1000 + 100 x 10 x 0.4"), Before - Ledger->Balance(), 1400.0);
+	const double AfterCharge = Ledger->Balance();
+	Ledger->Credit(Quote);
+	TestEqual(TEXT("scrap is the refund fraction of the same sum"), Ledger->Balance() - AfterCharge,
+		1400.0 * Pricing->RefundFraction);
 	return true;
 }
 

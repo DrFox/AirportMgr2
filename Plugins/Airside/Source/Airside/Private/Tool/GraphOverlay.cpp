@@ -37,15 +37,15 @@ void GraphOverlay::DescribeStands(const URoadNetwork& Network, IToolPreviewSink&
 
 		// The body FIRST - the SAME call a placement tool's own preview makes, so a placed
 		// stand and an aimed one read as one object. See StandPreview.h for why this used to
-		// be two, and why the stop mark is split off below.
+		// be two, and why the stop mark, service points and fixtures are Describe's alone.
 		//
 		// The footprint matters because a stand aimed 180 degrees out looks identical to a
 		// correct one until something tries to taxi onto it - the heading has to be
 		// unmistakable, which is the whole reason StandPreview draws the aircraft rather
-		// than a single point at the stop. Its service points are recomputed on every call
-		// rather than stored, because they belong to whatever is PARKED here - today the
-		// type the stand was sized for, tomorrow whatever actually occupies it - and a
-		// stored copy would be a claim about an aircraft that has not arrived.
+		// than a single point at the stop. It is recomputed on every call rather than
+		// stored, because it belongs to whatever is PARKED here - today the type the stand
+		// was sized for, tomorrow whatever actually occupies it - and a stored copy would be
+		// a claim about an aircraft that has not arrived.
 		//
 		// NOT FOR A PLOTTED INSTALLATION. A depot's body is only its FootprintExtent box - 4 x
 		// 8 m CENTRED ON THE POSE, which is its road connection - so on a drawn depot it was an
@@ -57,27 +57,19 @@ void GraphOverlay::DescribeStands(const URoadNetwork& Network, IToolPreviewSink&
 			StandPreview::DescribeBody(Entity.Definition, Entity.Position, Entity.Heading, Sink);
 		}
 
-		// The stop mark and the committed-pose ring are an AIRCRAFT's: where its nose gear
-		// stops, and which way it faces. A service installation's pose is its road connection
-		// instead, and both rings there read, zoomed out, as unexplained circles on the road
-		// (a fuel depot, 2026-09-27). Keyed on the instance's captured PoseRole (IsStand)
-		// rather than "has a design aircraft", because PoseRole is the field that says whose
-		// pose this is.
-		if (Entity.IsStand())
-		{
-			Sink.Marker(Entity.Position, EPreviewStyle::Pending);
+		// NO STOP MARK AND NO POSE RING, for any kind, since 2026-09-27. They were an
+		// AIRCRAFT's - where its nose gear stops (Pending) and a second ring at a different
+		// radius saying which pose was committed (StandPose) - and a depot lost both first, as
+		// unexplained circles on the road. A stand lost them when its stop became PAINT
+		// (FStandMarkingBuilder's stop bar, 6 m across): the ground now says where to stop, at
+		// every zoom and with the overlay off, so two rings on top of it only said it again.
+		// The heading they helped read is still unmistakable from the footprint above.
+		// ENFORCED BY: Airside.Tool.StandOverlayMarkers, Airside.Tool.DepotOverlayMarkers
 
-			// THEN the committed-pose marker, AFTER the stop mark rather than before it, and
-			// at a DIFFERENT radius from it (see ARoadBuildHUD::Marker's StandPose case). Two
-			// rings at the same radius at this EXACT position would simply overdraw one
-			// another regardless of which runs second, which is what made this marker
-			// invisible against the stop mark it was meant to be told apart from. Order still
-			// matters for a sink with no radius-per-style logic of its own - the editor
-			// viewport draws every style at one size (see FViewportPreviewSink::Marker) - and
-			// there this is the one that legitimately wins, because it is the one drawn last.
-			Sink.Marker(Entity.Position, EPreviewStyle::StandPose);
-		}
-
+		// ONE small ServiceAnchor ring per resolved anchor and nothing else there - the
+		// fixture and service-point marks that used to sit concentric with it are
+		// StandPreview::Describe's (aiming only) now; see StandPreview.h.
+		//
 		// The RESOLVED anchors - guideline nodes a vehicle will actually route to - read
 		// from the INSTANCE rather than recomputed from the definition, same as the HUD
 		// always did: the definition's local positions transformed again would be a second

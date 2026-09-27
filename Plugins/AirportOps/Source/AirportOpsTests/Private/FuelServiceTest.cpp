@@ -1509,9 +1509,11 @@ namespace FuelServiceTest
 	 * 3.0)" and the tow sat at the hydrant for the rest of the session, its depot one truck short
 	 * (fixed 2026-09-27).
 	 *
-	 * ONE BODY FOR A AND B (final review, 2026-09-27): both letters are laid for the tow, but B's
-	 * bays are its own template - deeper, so the lane and legs differ - and nothing drove one end
-	 * to end.
+	 * ONE BODY, MEANT FOR EITHER LETTER THE TOW SERVES (final review, 2026-09-27) - A and B were
+	 * both laid for the tow, and this ran once per letter. A's own case is gone (2026-09-27
+	 * merge, Task 7 of the shared-pavement plan): a stand drawn "at A's floor" reads back as
+	 * Code B now (IcaoCode::StandLetterFor), so only TowServesCodeB calls this any more - see
+	 * that test's own deletion note where TowServesCodeA used to be.
 	 */
 	bool TowServesLetter(FAutomationTestBase& Test, EIcaoCode Letter)
 	{
@@ -1691,14 +1693,11 @@ namespace FuelServiceTest
 	}
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelTowServesCodeATest, "AirportOps.Fuel.TowServesCodeA",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FFuelTowServesCodeATest::RunTest(const FString& Parameters)
-{
-	return FuelServiceTest::TowServesLetter(*this, EIcaoCode::A);
-}
+// AirportOps.Fuel.TowServesCodeA IS DELETED (2026-09-27 merge, Task 7 of the shared-pavement
+// plan): a stand drawn "at A's floor" reads back as Code B now (IcaoCode::StandLetterFor), so
+// TowServesLetter(*this, EIcaoCode::A) failed its own "reads it as Code A" assertion and, once
+// that is fixed, exercises exactly the geometry TowServesCodeB already does - a duplicate, not a
+// second case. See IcaoCode.h's own comment on the alias for the ruling this follows.
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFuelTowServesCodeBTest, "AirportOps.Fuel.TowServesCodeB",
@@ -1715,7 +1714,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFuelTowRecalledMidRouteGetsHomeTest::RunTest(const FString& Parameters)
 {
-	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::A);
+	// WAS CODE A (review fix round 1, 2026-09-27 merge): built at Letter=A this drew a hybrid
+	// box - B's pad size through IcaoCode::StandLetterFor, but A's own unaliased envelope for
+	// StandBox::EntranceSetback (MaxTailAft 1000 against B's 2000) - a shape no player can draw
+	// any more. B is still the tow's letter (UAirsideSettings::ResolveStandDesignVehicle keys
+	// Letter <= B to it, same as A did), so this keeps testing the tow, on a real box.
+	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::B);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -1737,7 +1741,10 @@ bool FFuelTowRecalledOnItsLastLegGetsHomeTest::RunTest(const FString& Parameters
 {
 	// NO NODE AHEAD TO TURN AT: the step it is on ends at the service point. It finishes the leg,
 	// parks, and backs off by the ordinary cycle - UFuelService::OnAgentPhase's recalled branch.
-	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::A, /*bOnLastLeg=*/true);
+	//
+	// WAS CODE A (review fix round 1, 2026-09-27 merge) - see
+	// FFuelTowRecalledMidRouteGetsHomeTest's own note; B is still the tow's letter.
+	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::B, /*bOnLastLeg=*/true);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -1777,20 +1784,24 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFuelVehicleTooLargeRefusedTest::RunTest(const FString& Parameters)
 {
-	// A TABLE THAT SENDS THE TRUCK TO CODE A STANDS, against an A stand whose definition was built
+	// A TABLE THAT SENDS THE TRUCK TO CODE B STANDS, against a B stand whose definition was built
 	// for the tow (UEntityDefinition::DesignVehicle, read through the production reader the
 	// fixture wires as UOpsRuntime does). The truck is not NoLargerThan the tow, so the guard fires.
+	//
+	// WAS CODE A (2026-09-27 merge): a stand drawn "at A's floor" now reads back as Code B
+	// (IcaoCode::StandLetterFor), so a table entry keyed on A was never consulted for it any
+	// more - the premise this test measures needs the key the stand actually reads as.
 	FFuelFixture Fixture;
-	Fixture.StandLetter = EIcaoCode::A;
+	Fixture.StandLetter = EIcaoCode::B;
 	Fixture.bFarEdgeRoad = true;
 	Fixture.Build(/*bWithRoad=*/true);
-	Fixture.Service->VehiclesFor(EIcaoCode::A) = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
-	TestEqual(TEXT("the A stand's definition says it was built for the tow"),
+	Fixture.Service->VehiclesFor(EIcaoCode::B) = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
+	TestEqual(TEXT("the B stand's definition says it was built for the tow"),
 		Fixture.Service->DesignVehicleFor(*Fixture.Net->GetEntity(Fixture.Stand)).TypeCode,
 		UAirsideSettings::ResolveUtilityTowVehicle().TypeCode);
 
 	const int32 Aircraft = Fixture.ParkAircraft();
-	if (!TestTrue(TEXT("an aircraft parked at the A stand"), Aircraft != 0)) { return false; }
+	if (!TestTrue(TEXT("an aircraft parked at the B stand"), Aircraft != 0)) { return false; }
 	Fixture.Advance(0.2);
 
 	const FFuelDemand* Demand = FuelServiceTest::DemandFor(*Fixture.Service, Aircraft);

@@ -168,13 +168,13 @@ namespace
 	struct FM2RwyPurse : IBuildPurse
 	{
 		double Balance = 0.0;
-		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount <= Balance; }
+		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Balance; }
 		virtual int32 Charge(const FBuildQuote&) override { return 0; }
 		virtual void Reverse(int32) override {}
 		virtual void Credit(const FBuildQuote&) override {}
 		virtual FText Describe(const FBuildQuote& Quote) const override
 		{
-			return FText::FromString(FString::Printf(TEXT("cost %.0f"), Quote.BaseAmount));
+			return FText::FromString(FString::Printf(TEXT("cost %.0f"), Quote.BaseAmount()));
 		}
 	};
 
@@ -183,10 +183,10 @@ namespace
 	{
 		FM2RwyPurse* Purse = nullptr;
 		virtual IBuildPurse* GetPurse() const override { return Purse; }
-		virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile*) const override
+		virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile*, EPavement) const override
 		{
 			FBuildQuote Quote;
-			Quote.BaseAmount = FVector2D::Distance(From, To);
+			Quote.Lines.Add({ nullptr, EBuildUnit::Each, FVector2D::Distance(From, To), 1.0, {} });
 			return Quote;
 		}
 	};
@@ -281,7 +281,7 @@ bool FRunwayToolTest::RunTest(const FString& Parameters)
 	FRunwayTool* Tool = static_cast<FRunwayTool*>(Session.GetActiveTool());
 	if (!TestNotNull(TEXT("the runway tool is active"), Tool)) { return false; }
 	TestEqual(TEXT("it starts on the first width"), Tool->WidthIndex, 0);
-	TestEqual(TEXT("tarmac"), Tool->Surface, ERunwaySurface::Tarmac);
+	TestEqual(TEXT("tarmac"), Tool->Surface, EPavement::Tarmac);
 	TestEqual(TEXT("visual"), Tool->Approach, ERunwayApproach::Visual);
 
 	Session.SelectTool(RunwayIndex, Plain);
@@ -290,7 +290,7 @@ bool FRunwayToolTest::RunTest(const FString& Parameters)
 	FToolContext Insert = Plain;
 	Insert.bInsertModifier = true;
 	Session.SelectTool(RunwayIndex, Insert);
-	TestEqual(TEXT("Shift+6 cycles the surface"), Tool->Surface, ERunwaySurface::Concrete);
+	TestEqual(TEXT("Shift+6 cycles the surface"), Tool->Surface, EPavement::Concrete);
 	TestEqual(TEXT("and leaves the width alone"), Tool->WidthIndex, 1);
 
 	FToolContext Remove = Plain;
@@ -322,14 +322,14 @@ bool FRunwayToolTest::RunTest(const FString& Parameters)
 	const int32 Placed = M2RwyFirstRunwaySegment(*Net);
 	if (!TestTrue(TEXT("a runway was placed"), Placed != INDEX_NONE)) { return false; }
 	const FRoadSegment& Segment = Net->GetSegments()[Placed];
-	TestEqual(TEXT("with the tool's surface on it"), Segment.Runway.Surface, ERunwaySurface::Concrete);
+	TestEqual(TEXT("with the tool's surface on it"), Segment.Runway.Surface, EPavement::Concrete);
 	TestEqual(TEXT("and the tool's approach"), Segment.Runway.Approach, ERunwayApproach::NonPrecision);
 	TestEqual(TEXT("and the tool's width"), Segment.Profile->GetTotalWidth(), Content->RunwayProfiles[1].LoadSynchronous()->GetTotalWidth());
 
 	// 3. RECLASSIFYING THROUGH THE ACTOR is one undoable edit over the whole chain.
 	Actor->SplitSegment(Placed, FVector2D(75000.0, 0.0));
 	FRunwayFacts Grass;
-	Grass.Surface = ERunwaySurface::Grass;
+	Grass.Surface = EPavement::Grass;
 	Grass.Approach = ERunwayApproach::Visual;
 	const int32 AnyHalf = M2RwyFirstRunwaySegment(*Actor->GetNetwork());
 	if (!TestTrue(TEXT("the split left a runway segment"), AnyHalf != INDEX_NONE)) { return false; }
@@ -339,13 +339,13 @@ bool FRunwayToolTest::RunTest(const FString& Parameters)
 	{
 		if (!S.bAlive || S.Profile == nullptr || !S.Profile->bContinuousThroughJunctions) { continue; }
 		++RunwaySegments;
-		TestEqual(TEXT("every segment of the strip is grass"), S.Runway.Surface, ERunwaySurface::Grass);
+		TestEqual(TEXT("every segment of the strip is grass"), S.Runway.Surface, EPavement::Grass);
 	}
 	TestEqual(TEXT("both halves were seen"), RunwaySegments, 2);
 	TestTrue(TEXT("setting the same facts again is true and no edit"), Actor->SetRunwayFacts(AnyHalf, Grass));
 	TestTrue(TEXT("undo"), Actor->Undo());
 	TestEqual(TEXT("takes the whole strip back to concrete"),
-		Actor->GetNetwork()->GetSegments()[AnyHalf].Runway.Surface, ERunwaySurface::Concrete);
+		Actor->GetNetwork()->GetSegments()[AnyHalf].Runway.Surface, EPavement::Concrete);
 
 	// A taxiway is refused, and the refusal does not cost an undo step.
 	const int32 TaxiA = Actor->PlaceNode(FVector2D(0.0, 50000.0));

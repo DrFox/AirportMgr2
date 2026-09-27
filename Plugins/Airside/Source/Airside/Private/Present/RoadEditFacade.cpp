@@ -209,9 +209,11 @@ FBuildQuote URoadEditFacade::QuoteForSegment(int32 SegmentIndex) const
 	{
 		return FBuildQuote();
 	}
-	// THE SEGMENT'S OWN SURFACE: a refund at the tarmac rate for a grass road would pay back
-	// more than it cost, and delete-and-redraw would print money.
-	return BuildCost::ForSegment(*Profile, BuildCost::SegmentLengthUu(*Network, Segment), Segment.Surface);
+	// PavementOf, not Segment.Surface: a runway's ground is FRunwayFacts', and reading the
+	// field directly would refund a grass RUNWAY at the tarmac rate - the same over-refund
+	// Segment.Surface alone would give a grass road, and delete-and-redraw would print money.
+	return BuildCost::ForSegment(*Profile, BuildCost::SegmentLengthUu(*Network, Segment),
+		Network->PavementOf(Network->SegmentIdAt(SegmentIndex)));
 }
 
 FBuildQuote URoadEditFacade::QuoteForAllPavement() const
@@ -230,23 +232,24 @@ FBuildQuote URoadEditFacade::QuoteForAllPavement() const
 			continue;
 		}
 		const FBuildQuote Each = QuoteForSegment(Index);
-		Total.BaseAmount += Each.BaseAmount;
-		if (!Total.Source.IsValid())
-		{
-			// The first profile met stands in for the lot, for discounts only - the AMOUNT is
-			// the true sum whichever one it is.
-			Total.Source = Each.Source;
-		}
+		// EVERY SEGMENT'S OWN LINE, kept rather than folded into one total: a discount keyed on
+		// one profile must not also discount a neighbour segment laid from a different one -
+		// see FBuildLine::Source.
+		Total.Lines.Append(Each.Lines);
 	}
 	Total.What = NSLOCTEXT("BuildCost", "MovedPavement", "Moved pavement");
 	return Total;
 }
 
-FBuildQuote URoadEditFacade::QuoteForApron(TConstArrayView<FVector2D> Outline) const
+FBuildQuote URoadEditFacade::QuoteForApron(TConstArrayView<FVector2D> Outline,
+	TOptional<EPavement> Pavement) const
 {
 	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
+	// NO PAVEMENT for a bare apron: FApronSurface carries no EPavement of its own (RoadApron.h's
+	// own comment), so its callers pass it unset and it quotes at its authored rate. A stand's
+	// pad passes its own (QuoteStand) since shared-pavement Task 8.
 	return BuildCost::ForApron(Outline,
-		Settings != nullptr ? Settings->ApronCostPerSquareMetre : 0.0);
+		Settings != nullptr ? Settings->ApronCostPerSquareMetre : 0.0, Pavement);
 }
 
 void URoadEditFacade::CommitPurchase(FRoadEditScope& Edit, const FBuildQuote& Quote)
@@ -484,7 +487,7 @@ FBuildSessionTunables URoadEditFacade::MakeTunables(double ViewWorldWidth)
 }
 
 FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-	int32 WidthIndex, ERoadSurface Surface) const
+	int32 WidthIndex, EPavement Surface) const
 {
 	const URoadNetwork* Network = Actor().Network;
 	// THROUGH THE ACTOR'S OWN FORWARDER, not this class's ResolveProfileFor directly - that
@@ -504,7 +507,7 @@ FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoa
 }
 
 bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
-	ERoadSurface Surface)
+	EPavement Surface)
 {
 	if (FromIndex == ToIndex)
 	{
@@ -546,6 +549,20 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 		return false;
 	}
 
+	// A SURFACE THE PROFILE DOES NOT OFFER is refused here, before the scope, for the price's
+	// reason below: URoadNetwork::SetSegmentSurface would refuse it only after
+	// AddStraightSegment, leaving a tarmac road charged at Surface's rate. The tool's row is
+	// built from the same list, so this is reached only by a caller that skipped the row.
+	// ENFORCED BY: Airside.Present.BuildPurseConnectRefusesUnofferedPavement (concrete on a
+	// taxiway: refused, nothing laid, nothing charged); Airside.Present.GrassRoadLaid (a row
+	// pick of grass connects, no refusal)
+	if (Chosen != nullptr && !Pavement::Offered(Chosen->AllowedPavements).Contains(Surface))
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectNodes refused: %s is not offered by profile %s"),
+			Pavement::Name(Surface), *Chosen->GetName());
+		return false;
+	}
+
 	// PRICED AND REFUSED BEFORE THE SCOPE, not at commit. An FRoadEditScope that is not
 	// committed discards its undo snapshot but does NOT roll the network back, so a refusal
 	// after AddStraightSegment would leave the taxiway built and unpaid for - see
@@ -580,14 +597,16 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	Owner.Network->SetSegmentSurface(Segment, Surface);
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Segment %d connected: node %d -> node %d, %s"),
-		Segment.Index, FromIndex, ToIndex, RoadSurfaceName(Surface));
+		Segment.Index, FromIndex, ToIndex, Pavement::Name(Surface));
 	CommitPurchase(Edit, Quote);
 	return true;
 }
 
-FBuildQuote URoadEditFacade::QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile) const
+FBuildQuote URoadEditFacade::QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile,
+	EPavement Pavement) const
 {
-	return Profile != nullptr ? BuildCost::ForSegment(*Profile, FVector2D::Distance(From, To)) : FBuildQuote();
+	return Profile != nullptr
+		? BuildCost::ForSegment(*Profile, FVector2D::Distance(From, To), Pavement) : FBuildQuote();
 }
 
 bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts)
@@ -623,8 +642,9 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	// Priced from the two ENDS the caller asked for, before anything is mutated - see
 	// ConnectNodes above for why the refusal cannot wait until commit.
 	// THROUGH QuoteForRunway, the function the runway tool's ghost prices with - one answer to
-	// "what does this strip cost", so the preview and the charge cannot drift.
-	const FBuildQuote Quote = QuoteForRunway(From, To, RunwayProfile);
+	// "what does this strip cost", so the preview and the charge cannot drift. Priced at
+	// Facts.Surface - the runway's ground is FRunwayFacts', not the profile's.
+	const FBuildQuote Quote = QuoteForRunway(From, To, RunwayProfile, Facts.Surface);
 	if (!CanAfford(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceRunway refused: cannot afford %s"),
@@ -658,7 +678,7 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Runway %s placed, %.0f uu long, %.0f uu wide, %s, %s approach"),
 		*RunwayDesignator::ToPairText(To - From), Length, RunwayProfile->GetTotalWidth(),
-		RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach));
+		Pavement::Name(Facts.Surface), RunwayApproachName(Facts.Approach));
 	return true;
 }
 
@@ -688,7 +708,7 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Fac
 	CommitAndNotify(Edit);
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Runway at segment %d reclassified: %s, %s approach (the whole strip)"),
-		SegmentIndex, RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach));
+		SegmentIndex, Pavement::Name(Facts.Surface), RunwayApproachName(Facts.Approach));
 	return true;
 }
 
@@ -999,7 +1019,7 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 	// WHAT THE PAVEMENT WAS WORTH BEFORE THE DRAG. Without this the cost model has a hole big
 	// enough to drive through: build ten metres of taxiway, drag its end two kilometres, and
 	// the extra pavement is free - MoveNode creates no segment, so nothing else charges for it.
-	PavementValueAtDragStart = QuoteForAllPavement().BaseAmount;
+	PavementValueAtDragStart = QuoteForAllPavement().BaseAmount();
 
 	// A FRESH EDIT HAS MOVED NOTHING YET - see the field's own comment for what
 	// EndInteractiveEdit does with this.
@@ -1064,12 +1084,26 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 		// pavement is a purchase; one that shortened it is a disposal, and is credited at scrap
 		// value rather than refunded in full - otherwise dragging a taxiway long and short again
 		// would be a loop that returns more than it costs.
-		FBuildQuote Delta = QuoteForAllPavement();
-		const double After = Delta.BaseAmount;
-		Delta.BaseAmount = After - PavementValueAtDragStart;
+		const FBuildQuote After = QuoteForAllPavement();
+		const double RawDelta = After.BaseAmount() - PavementValueAtDragStart;
 		PavementValueAtDragStart = 0.0;
 
-		if (Delta.BaseAmount > 0.0 && !CanAfford(Delta))
+		// ONE SYNTHETIC LINE, not the network's own segment lines: the delta is a NET figure
+		// across the WHOLE network (QuoteForAllPavement's own comment), not one buildable, so
+		// it is priced as a single line at rate 1 with the difference itself as Quantity - the
+		// first segment met stands in as Source, for a discount to key on only; the AMOUNT is
+		// the true difference whichever segment that is.
+		// PAVEMENT UNSET ON PURPOSE: After and PavementValueAtDragStart are both already at
+		// their own segments' factors (QuoteForAllPavement's lines each carry their own
+		// Pavement), so RawDelta is a difference of two ALREADY-FACTORED totals. Setting a
+		// Pavement here would apply Pavement::RateFactor a second time to a figure that has
+		// already paid it once.
+		FBuildQuote Delta;
+		Delta.Lines.Add({ After.Lines.IsValidIndex(0) ? After.Lines[0].Source : nullptr,
+			EBuildUnit::Each, FMath::Abs(RawDelta), 1.0, {} });
+		Delta.What = After.What;
+
+		if (RawDelta > 0.0 && !CanAfford(Delta))
 		{
 			// REVERTED, NOT ABANDONED. The node has already moved on every frame of the drag, so
 			// dropping the snapshot would leave the longer taxiway standing and unpaid for. This is
@@ -1082,19 +1116,18 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 				AdoptNetwork(*Reverted);
 			}
 			UE_LOG(LogRoadMesh, Log,
-				TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount);
+				TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount());
 			return;
 		}
 
 		if (Purse != nullptr)
 		{
-			if (Delta.BaseAmount > 0.0)
+			if (RawDelta > 0.0)
 			{
 				History->SetPendingCharge(Purse->Charge(Delta), Delta);
 			}
-			else if (Delta.BaseAmount < 0.0)
+			else if (RawDelta < 0.0)
 			{
-				Delta.BaseAmount = -Delta.BaseAmount;
 				Purse->Credit(Delta);
 			}
 		}
@@ -1460,12 +1493,11 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 	{
 		const int32 Incident = DoomedArm.Index;
 		const FBuildQuote Each = QuoteForSegment(Incident);
-		Quote.BaseAmount += Each.BaseAmount;
-		if (!Quote.Source.IsValid())
+		// EVERY ARM'S OWN LINE, kept rather than folded into one total - a junction of two
+		// widths is priced on each arm's own profile, never on a stand-in for the lot.
+		Quote.Lines.Append(Each.Lines);
+		if (Quote.What.IsEmpty())
 		{
-			// The first profile met stands for the lot. A junction of two widths is priced on
-			// one of them for discount purposes only - the AMOUNT is the true sum either way.
-			Quote.Source = Each.Source;
 			Quote.What = Each.What;
 		}
 	}
@@ -1511,7 +1543,7 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 				TEXT("DeleteNode healed only partly: node %d could not rejoin %d"),
 				Stranded.Index, Plan.Anchor.Index);
 		}
-		else if (Plan.HealSurface != ERoadSurface::Tarmac)
+		else if (Plan.HealSurface != EPavement::Tarmac)
 		{
 			// THE PLAN'S SURFACE with the plan's profile - see FRoadDeletionPlan::HealSurface.
 			// Refused quietly on a runway relay, whose ground is its facts'.

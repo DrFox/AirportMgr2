@@ -46,8 +46,17 @@ struct AIRSIDE_API FRoadSegment
 
 	/**
 	 * What a TAXIWAY OR SERVICE ROAD is laid on. A runway ignores it - its surface is
-	 * Runway.Surface above, the strip's, and URoadNetwork::IsGrassRoad asks IsRunwaySegment
-	 * first so a runway can never be read as a grass road.
+	 * Runway.Surface above, the strip's, and URoadNetwork::PavementOf asks IsRunwaySegment
+	 * first so a runway can never be read by this field. Read it through PavementOf, the one
+	 * answer to "what is this segment paved with".
+	 *
+	 * ON THE ONE SCALE (EPavement) since 2026-09-27; was #356's two-step ERoadSurface. Which
+	 * steps a road may take is URoadProfile::AllowedPavements, not a narrower enum. SAVED DATA:
+	 * ERoadSurface was Tarmac=0, Grass=1 and EPavement is Grass=0, Tarmac=1, but a UENUM
+	 * property serialises by NAME and the names match, so DefaultEngine.ini's EnumRedirects
+	 * entry is all an old level needs.
+	 * ENFORCED BY: Airside.Model.RoadSurfaceSavedByName (a grass segment written under the
+	 * old enum's name loads as grass)
 	 *
 	 * Here, not on the profile, for FRunwayFacts' reason: the profile is the cross-section and
 	 * is shared by every road of that width, so grass on the profile would double the width
@@ -55,7 +64,7 @@ struct AIRSIDE_API FRoadSegment
 	 * both halves and a node-deletion heal lays the arm's own.
 	 * ENFORCED BY: Airside.Present.GrassRoadLaid (lay, split and heal, through the actor)
 	 */
-	UPROPERTY() ERoadSurface Surface = ERoadSurface::Tarmac;
+	UPROPERTY() EPavement Surface = EPavement::Tarmac;
 
 	/** Written ONLY by FRoadNetworkSolver, through URoadNetwork::WriteSegmentEndSolve (#191) -
 	 *  not a raw pointer, so this and the cut vertices below cannot land out of step with

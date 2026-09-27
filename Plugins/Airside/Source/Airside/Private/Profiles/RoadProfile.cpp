@@ -89,6 +89,16 @@ URoadProfile* URoadProfile::MakeTransient(double TotalWidth, double FilletRadius
 	return Profile;
 }
 
+namespace
+{
+	/**
+	 * What a road or taxiway may be laid on - URoadProfile::AllowedPavements' value for both
+	 * fills, typed once so the taxiway and the service road cannot drift apart. Tarmac first,
+	 * the row's order and #356's.
+	 */
+	const EPavement RoadPavements[] = { EPavement::Tarmac, EPavement::Grass };
+}
+
 void URoadProfile::Fill(URoadProfile* Profile, double TotalWidth, double FilletRadius,
 	double ShoulderWidth)
 {
@@ -99,6 +109,7 @@ void URoadProfile::Fill(URoadProfile* Profile, double TotalWidth, double FilletR
 
 	Profile->Bands.Reset();
 	Profile->Guidelines.Reset();
+	Profile->AllowedPavements = TArray<EPavement>(RoadPavements, UE_ARRAY_COUNT(RoadPavements));
 
 	// Clamped so two shoulders can never exceed the road: a lane of zero or negative
 	// width would put the band boundaries out of order and invert the ribbon.
@@ -164,6 +175,7 @@ void URoadProfile::FillTwoWayRoad(URoadProfile* Profile, double LaneWidth, doubl
 
 	Profile->Bands.Reset();
 	Profile->Guidelines.Reset();
+	Profile->AllowedPavements = TArray<EPavement>(RoadPavements, UE_ARRAY_COUNT(RoadPavements));
 
 	// Clamped for the reason Fill clamps its shoulder: a band of zero or negative width
 	// would put the band boundaries out of order and invert the ribbon.

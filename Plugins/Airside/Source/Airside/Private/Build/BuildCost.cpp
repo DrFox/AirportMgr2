@@ -37,17 +37,10 @@ double BuildCost::SegmentLengthUu(const URoadNetwork& Network, const FRoadSegmen
 	return FVector2D::Distance(A.Position, B.Position);
 }
 
-double BuildCost::SurfaceRateFactor(ERoadSurface Surface)
-{
-	return Surface == ERoadSurface::Grass ? GrassRateFactor : 1.0;
-}
-
-FBuildQuote BuildCost::ForSegment(const URoadProfile& Profile, double LengthUu, ERoadSurface Surface)
+FBuildQuote BuildCost::ForSegment(const URoadProfile& Profile, double LengthUu, EPavement Surface)
 {
 	FBuildQuote Quote;
-	Quote.BaseAmount = FMath::Max(0.0, MetresFromUu(LengthUu)) * Profile.CostPerMetre
-		* SurfaceRateFactor(Surface);
-	Quote.Source = &Profile;
+	Quote.Lines.Add({ &Profile, EBuildUnit::Metre, MetresFromUu(LengthUu), Profile.CostPerMetre, Surface });
 	Quote.What = FText::Format(
 		NSLOCTEXT("BuildCost", "PavementOf", "{0}, {1} m"),
 		FText::FromString(Profile.GetName()),
@@ -58,8 +51,7 @@ FBuildQuote BuildCost::ForSegment(const URoadProfile& Profile, double LengthUu, 
 FBuildQuote BuildCost::ForEntity(const UEntityDefinition& Definition)
 {
 	FBuildQuote Quote;
-	Quote.BaseAmount = Definition.PlacementCost;
-	Quote.Source = &Definition;
+	Quote.Lines.Add({ &Definition, EBuildUnit::Each, 1.0, Definition.PlacementCost, {} });
 	Quote.What = FText::FromString(Definition.GetName());
 	return Quote;
 }
@@ -87,28 +79,38 @@ double BuildCost::PolygonAreaSquareMetres(TConstArrayView<FVector2D> Outline)
 	return FMath::Abs(Twice) * 0.5 / (UuPerMetre * UuPerMetre);
 }
 
-FBuildQuote BuildCost::ForApron(TConstArrayView<FVector2D> Outline, double RatePerSquareMetre)
+FBuildQuote BuildCost::ForApron(TConstArrayView<FVector2D> Outline, double RatePerSquareMetre,
+	TOptional<EPavement> Surface)
 {
 	const double AreaSquareMetres = PolygonAreaSquareMetres(Outline);
 
 	FBuildQuote Quote;
-	Quote.BaseAmount = AreaSquareMetres * RatePerSquareMetre;
-
 	// NO SOURCE ASSET, and that is forced rather than an oversight: FApronSurface is an outline
 	// and a material slot name, because bands and lanes are meaningless for a polygon
 	// (RoadApron.h). So an apron discount cannot key on an asset the way a taxiway's can, and
 	// UPricing sees a null Source here. Named so nobody later reads the null as a bug.
+	Quote.Lines.Add({ nullptr, EBuildUnit::SquareMetre, AreaSquareMetres, RatePerSquareMetre, Surface });
+
 	Quote.What = FText::Format(NSLOCTEXT("BuildCost", "ApronOf", "Apron, {0} m²"),
 		FText::AsNumber(FMath::RoundToInt(AreaSquareMetres)));
 	return Quote;
+}
+
+FBuildQuote BuildCost::Combine(FBuildQuote A, const FBuildQuote& B)
+{
+	A.Lines.Append(B.Lines);
+	A.What = FText::Format(NSLOCTEXT("BuildCost", "Combine", "{0} + {1}"), A.What, B.What);
+	return A;
 }
 
 double BuildCost::DailyUpkeep(const URoadNetwork& Network, double ApronRatePerSquareMetrePerDay)
 {
 	double Total = 0.0;
 
-	for (const FRoadSegment& Segment : Network.GetSegments())
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
+		const FRoadSegment& Segment = Segments[Index];
 		if (!Segment.bAlive)
 		{
 			continue;
@@ -119,10 +121,13 @@ double BuildCost::DailyUpkeep(const URoadNetwork& Network, double ApronRatePerSq
 		// mistake in different directions.
 		if (const URoadProfile* Profile = Network.ProfileFor(Segment))
 		{
-			// THE SAME FACTOR THE BUILD QUOTE PAID - see BuildCost.h's own note on why the two
-			// must agree. A runway's Surface is never written, so it bills as tarmac.
+			// THE SAME FACTOR THE BUILD QUOTE PAID - see Pavement::RateFactor's own note on why
+			// the two must agree. PavementOf, not Segment.Surface: it is the one answer for a
+			// runway (RunwayFactsFor's Surface) and a road (the segment's own) alike, so a grass
+			// runway upkeeps at the grass factor rather than the tarmac it defaults its own
+			// unused Surface field to.
 			Total += MetresFromUu(SegmentLengthUu(Network, Segment)) * Profile->UpkeepPerMetrePerDay
-				* SurfaceRateFactor(Segment.Surface);
+				* Pavement::RateFactor(Network.PavementOf(Network.SegmentIdAt(Index)));
 		}
 	}
 
@@ -131,6 +136,17 @@ double BuildCost::DailyUpkeep(const URoadNetwork& Network, double ApronRatePerSq
 		if (Entity.bAlive && Entity.Definition != nullptr)
 		{
 			Total += Entity.Definition->UpkeepPerDay;
+		}
+
+		// A STAND'S GROUND, by area and pavement (user, 2026-09-27), beside its definition's flat
+		// figure - that one is the equipment, this is the pad. PolygonAreaSquareMetres, the same
+		// measure the pad's build line used, so the two cannot measure one pad differently.
+		// IsStand(), NOT IsPlotted(): a depot's plot is billed through its kit's own upkeep.
+		// ENFORCED BY: Airside.Build.BuildCostStandPadUpkeepByArea (its depot case)
+		if (Entity.bAlive && Entity.IsStand() && Entity.Outline.Num() >= 3)
+		{
+			Total += PolygonAreaSquareMetres(Entity.Outline) * ApronRatePerSquareMetrePerDay
+				* Pavement::RateFactor(Entity.Pavement);
 		}
 	}
 

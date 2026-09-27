@@ -107,13 +107,13 @@ bool FPlanAnyAdmissionTest::RunTest(const FString& Parameters)
 
 	// Make the near strip grass and demand tarmac: PlanAny must go to the far one.
 	FRunwayFacts Grass;
-	Grass.Surface = ERunwaySurface::Grass;
+	Grass.Surface = EPavement::Grass;
 	A.Net->SetRunwayFacts(A.LongSeed, Grass);
 	FRunwayFacts Tarmac;
-	Tarmac.Surface = ERunwaySurface::Tarmac;
+	Tarmac.Surface = EPavement::Tarmac;
 	A.Net->SetRunwayFacts(A.ShortSeed, Tarmac);
 	FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
-	Airframe.Requirements.MinimumSurface = ERunwaySurface::Tarmac;
+	Airframe.MinimumPavement = EPavement::Tarmac;
 
 	const FDeparturePlan Plan = DeparturePlanner::PlanAny(*A.Net, A.StandNode, Airframe, ETraversalClass::Aircraft);
 	UE_LOG(LogAirsideTests, Log, TEXT("PlanAny (near strip refused): %s"), *DeparturePlanner::Describe(Plan));

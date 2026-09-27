@@ -68,7 +68,7 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 
 	// FROM THE SAME ARM AS HealProfile, so a healed grass taxiway is not relaid as tarmac -
 	// the cross-section and the ground it is laid on are one road's, not two picks.
-	ERoadSurface HealSurface = ERoadSurface::Tarmac;
+	EPavement HealSurface = EPavement::Tarmac;
 
 	// A RUNWAY ARM IS NEVER TAKEN BY DELETING SOMETHING ATTACHED TO IT. Counted before the
 	// loop because it decides what that loop may doom - see FRoadDeletionPlan::bKeepTarget.
@@ -113,7 +113,10 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 			if (const FRoadSegment* Arm = Network.GetSegment(Incident))
 			{
 				HealProfile = Arm->Profile;
-				HealSurface = Arm->Surface;
+				// THROUGH PavementOf, the one answer (RoadNode.h's Surface comment), not the raw
+				// field - but a runway arm keeps Tarmac: PavementOf would give the strip's own
+				// facts, and a runway's Surface field is never written (see bRunwayThrough below).
+				HealSurface = Network.IsRunwaySegment(Incident) ? EPavement::Tarmac : Network.PavementOf(Incident);
 			}
 		}
 
@@ -191,7 +194,7 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 		// runway at all, since URoadNetwork::IsRunwaySegment reads exactly that.
 		HealProfile = RunwayProfile;
 		// A runway's own Surface field is never written - its ground is Runway.Surface.
-		HealSurface = ERoadSurface::Tarmac;
+		HealSurface = EPavement::Tarmac;
 	}
 
 	if (Neighbours.Num() <= 1)

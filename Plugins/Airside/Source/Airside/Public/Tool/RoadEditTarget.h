@@ -116,14 +116,20 @@ public:
 	 * so a quote that ignored it would promise the player one price and charge another.
 	 */
 	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-		int32 WidthIndex, ERoadSurface Surface) const { return FBuildQuote(); }
+		int32 WidthIndex, EPavement Surface) const { return FBuildQuote(); }
 
 	/**
-	 * What a runway from From to To at Profile would cost - QuoteForConnect's reason, for
-	 * runways: PlaceRunway prices through this same function, so the ghost cannot quote one
-	 * strip while the click charges another. Free by default, as a target with no money is.
+	 * What a runway from From to To at Profile, surfaced with Pavement, would cost -
+	 * QuoteForConnect's reason, for runways: PlaceRunway prices through this same function, so
+	 * the ghost cannot quote one strip while the click charges another. Free by default, as a
+	 * target with no money is.
+	 *
+	 * Pavement AS THE TOOL'S CHOSEN SURFACE, not the profile's - a runway's ground is
+	 * FRunwayFacts', not the profile's, and the tool names it (FRunwayTool::Surface) before the
+	 * strip exists to read it back from.
 	 */
-	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile) const
+	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile,
+		EPavement Pavement) const
 	{
 		return FBuildQuote();
 	}
@@ -157,12 +163,12 @@ public:
 	 * undo steps for one click, and a road that briefly existed as tarmac to every rebuild.
 	 */
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
-		ERoadSurface Surface) = 0;
+		EPavement Surface) = 0;
 
 	/** Tarmac - what every caller before the surface row meant. */
 	bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex)
 	{
-		return ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, ERoadSurface::Tarmac);
+		return ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, EPavement::Tarmac);
 	}
 
 	/** The kind's default width - what every caller before the width cycle meant. */
@@ -365,9 +371,13 @@ public:
 	 *
 	 * Returns the entity index, or INDEX_NONE - WhyStandRefused names why, and the facade
 	 * logs it.
+	 *
+	 * Pavement is the pad's (the stand tool's Surface row), captured onto the instance and
+	 * priced into the charge. NO DEFAULT ARGUMENT: a default on a virtual binds by the
+	 * caller's static type, and a forgotten caller would place tarmac without a word.
 	 */
 	virtual int32 PlaceStandInPlot(const TArray<FVector2D>& Outline,
-		FVector2D EntranceA, FVector2D EntranceB) = 0;
+		FVector2D EntranceA, FVector2D EntranceB, EPavement Pavement) = 0;
 
 	/**
 	 * Why a drawn rectangle cannot become a stand - empty means it can.
@@ -376,11 +386,15 @@ public:
 	 * PlaceStandInPlot's commit both ask this rather than keeping their own opinions, so a
 	 * preview can never approve what the commit refuses, or the reverse. See
 	 * URoadEditFacade::WhyStandRefused for the refusal order (self-crossing, too small
-	 * against Code A's own floor, an unfit letter, an overlap, a taxiway through the
+	 * against the smallest stand letter's floor, an unfit letter, an overlap, a taxiway through the
 	 * interior, then afford) and why each check is winding-independent, so this may be
 	 * asked of Outline exactly as drawn, before any CCW correction.
+	 *
+	 * Pavement is the pad the commit would lay - the afford gate prices it, so the readout
+	 * and the Build click agree on what a grass stand costs. No default, for
+	 * PlaceStandInPlot's reason.
 	 */
-	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline) const = 0;
+	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const = 0;
 
 	virtual bool DeleteEntity(int32 EntityIndex) = 0;
 

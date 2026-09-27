@@ -289,10 +289,15 @@ enum class EPreviewStyle : uint8
 	/**
 	 * A placed entity's own committed pose - the thing it IS, not Pending's "a gesture would
 	 * put one here". StandPreview::Describe marks the same position again as Pending,
-	 * because that call is shared with an in-progress placement; GraphOverlay draws THIS
+	 * because that call is shared with an in-progress placement; GraphOverlay drew THIS
 	 * marker afterwards and at a different radius (see ARoadBuildHUD::Marker's StandPose
 	 * case) so the two remain distinguishable on screen instead of one ring simply
 	 * overdrawing the other.
+	 *
+	 * NO EMITTER SINCE 2026-09-27: GraphOverlay stopped drawing it when a stand's stop mark
+	 * became paint (FStandMarkingBuilder's stop bar). Kept, with its look, rather than removed
+	 * from this enum and every palette/HUD list that must agree with it, for a pose marker that
+	 * is wanted again (a selected stand, say).
 	 */
 	StandPose,
 

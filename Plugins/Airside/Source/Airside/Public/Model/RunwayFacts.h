@@ -1,43 +1,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/Pavement.h"
 #include "Model/RoadHandles.h"
 #include "RunwayFacts.generated.h"
-
-/**
- * What a runway is paved with. ORDERED: strength as well as look, so an aircraft names
- * the weakest surface it may use and admission compares with <.
- *
- * Pavement strength is the surface scale itself rather than a separate PCN figure
- * (spec 2026-09-07 §1): four steps is what a player can read off the ground, and a
- * classification number would be a second axis nothing in the game varies independently.
- */
-UENUM(BlueprintType)
-enum class ERunwaySurface : uint8
-{
-	Grass,
-	Tarmac,
-	Concrete,
-	Reinforced,
-	/** Sentinel, never a real surface - sizes tables and % cycling instead of retyping 4. */
-	Count UMETA(Hidden),
-};
-
-/** How many runway material slots there are - Grass/Tarmac/Concrete, Reinforced aliased in
- *  by RunwayMaterialSlot below. The one figure UAirsideContent::RunwayMaterials (a TArray,
- *  sized at runtime) and FSurfaceSettings::RunwayMaterials (a fixed C array, sized at compile
- *  time) both size against - see the static_assert at the latter's declaration. */
-inline constexpr int32 RunwayMaterialSlotCount = 3;
-
-/**
- * Which of the THREE runway material slots (Grass/Tarmac/Concrete) a surface draws with.
- * Reinforced has no slot of its own - it is concrete with a stronger rating, and the
- * difference shows in the details panel and in what may land there, not on the ground (spec
- * 2026-09-07 §8) - so this is the ONE place that alias happens. Everything downstream
- * (UAirsideContent::RunwayMaterials, FSurfaceSettings::RunwayMaterials) indexes by this,
- * never by ERunwaySurface directly.
- */
-AIRSIDE_API int32 RunwayMaterialSlot(ERunwaySurface Surface);
 
 /**
  * What the approach aids support. ORDERED: an aircraft names the least it needs.
@@ -73,7 +39,7 @@ struct AIRSIDE_API FRunwayFacts
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere) ERunwaySurface Surface = ERunwaySurface::Tarmac;
+	UPROPERTY(EditAnywhere) EPavement Surface = EPavement::Tarmac;
 	UPROPERTY(EditAnywhere) ERunwayApproach Approach = ERunwayApproach::Visual;
 
 	bool operator==(const FRunwayFacts& Other) const
@@ -98,9 +64,6 @@ struct AIRSIDE_API FRunwayRequirements
 {
 	GENERATED_BODY()
 
-	/** The weakest surface this aircraft may use. */
-	UPROPERTY(EditAnywhere) ERunwaySurface MinimumSurface = ERunwaySurface::Grass;
-
 	/** The least approach it needs. Visual means any runway. */
 	UPROPERTY(EditAnywhere) ERunwayApproach ApproachNeeded = ERunwayApproach::Visual;
 
@@ -112,39 +75,11 @@ struct AIRSIDE_API FRunwayRequirements
 };
 
 /**
- * The words for the two scales, lower case, for a refusal sentence or a tool label.
- * One spelling each, here, so the admission text and the runway tool's bar agree.
+ * The approach scale's word, lower case, for a refusal sentence or a tool label. One
+ * spelling, here, so the admission text and the runway tool's bar agree. The pavement
+ * scale's word is Pavement::Name (Model/Pavement.h) - moved there with the enum.
  */
-AIRSIDE_API const TCHAR* RunwaySurfaceName(ERunwaySurface Surface);
 AIRSIDE_API const TCHAR* RunwayApproachName(ERunwayApproach Approach);
-
-/**
- * What a TAXIWAY OR SERVICE ROAD is laid on - FRoadSegment::Surface. Two steps where a runway
- * has four: concrete and reinforced pavement are a runway's strength classes, and nothing
- * rolls on a road or taxiway that grass and tarmac do not already tell apart.
- *
- * NOT ERunwaySurface reused, because that would offer Concrete and Reinforced on the road
- * tool's row and every consumer would have to decide what a concrete service road means.
- * NOT A SEPARATE SCALE either: RoadSurfacePavement maps it onto ERunwaySurface, so an
- * aircraft's MinimumSurface is compared against a taxiway with the same < admission uses on a
- * runway - one ordering, not two that could disagree about whether grass is weaker.
- *
- * TARMAC FIRST so the zero value, and every segment saved before this existed, is tarmac.
- */
-UENUM(BlueprintType)
-enum class ERoadSurface : uint8
-{
-	Tarmac,
-	Grass,
-	/** Sentinel, never a real surface - sizes the tool's row and % cycling. */
-	Count UMETA(Hidden),
-};
-
-/** The runway scale's step for a road surface - see ERoadSurface on why there is one scale. */
-AIRSIDE_API ERunwaySurface RoadSurfacePavement(ERoadSurface Surface);
-
-/** Lower case, for a log line or the tool's row - RunwaySurfaceName's spelling of the same step. */
-AIRSIDE_API const TCHAR* RoadSurfaceName(ERoadSurface Surface);
 
 /**
  * One end of a runway strip: the threshold an aircraft crosses it at, the direction it

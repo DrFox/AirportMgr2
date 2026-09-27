@@ -4,6 +4,7 @@
 #include "Model/BuildPurse.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/RunwayDesignator.h"
+#include "Tool/PavementAxis.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
@@ -103,19 +104,9 @@ void FRunwayTool::GetVariantAxes(const FToolContext& Context, TArray<FToolVarian
 		}
 	}
 
-	// THE ENUMS' OWN NAMES, from RunwayFacts.h - the same strings the drag readout prints, so
-	// the row and the readout cannot name one surface two ways.
-	FToolVariantAxis& SurfaceAxis = Out.AddDefaulted_GetRef();
-	SurfaceAxis.Id = TEXT("Surface");
-	SurfaceAxis.Label = LOCTEXT("RunwayAxisSurface", "Surface");
-	SurfaceAxis.Current = static_cast<int32>(Surface);
-	for (uint8 Each = 0; Each < static_cast<uint8>(ERunwaySurface::Count); ++Each)
-	{
-		const TCHAR* Name = RunwaySurfaceName(static_cast<ERunwaySurface>(Each));
-		FToolVariant& Option = SurfaceAxis.Options.AddDefaulted_GetRef();
-		Option.Id = Name;
-		Option.Label = FText::FromString(Name);
-	}
+	// ALL FOUR (an empty list): a runway may be laid on any step of the scale. The row's names
+	// and order are Pavement::AppendAxis's, shared with the road tool - see its comment.
+	Pavement::AppendAxis(Out, Surface, {});
 
 	FToolVariantAxis& ApproachAxis = Out.AddDefaulted_GetRef();
 	ApproachAxis.Id = TEXT("Approach");
@@ -158,8 +149,9 @@ bool FRunwayTool::SelectVariant(const FToolContext& Context, int32 Axis, int32 O
 	}
 	else if (Id == TEXT("Surface"))
 	{
-		Surface = static_cast<ERunwaySurface>(Option);
-		UE_LOG(LogAirside, Log, TEXT("Runway surface -> %s"), RunwaySurfaceName(Surface));
+		// AN INDEX INTO THE OFFERED LIST, never into the enum - the row AppendAxis built.
+		Surface = Pavement::Offered({})[Option];
+		UE_LOG(LogAirside, Log, TEXT("Runway surface -> %s"), Pavement::Name(Surface));
 	}
 	else
 	{
@@ -303,7 +295,7 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 			// committed - "45 m, concrete, precision".
 			Sink.Label(Context.GuidedCursor(),
 				FString::Printf(TEXT("%.0f m, %s, %s"), Profile->GetTotalWidth() / 100.0,
-					RunwaySurfaceName(Surface), RunwayApproachName(Approach)),
+					Pavement::Name(Surface), RunwayApproachName(Approach)),
 				EPreviewStyle::Pending);
 		}
 		else
@@ -333,7 +325,7 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 	// through the TARGET, which PlaceRunway charges through too, so the two cannot disagree.
 	const IBuildPurse* Purse = Context.Target != nullptr ? Context.Target->GetPurse() : nullptr;
 	const FBuildQuote Quote = Purse != nullptr && Profile != nullptr
-		? Context.Target->QuoteForRunway(Threshold, Far, Profile) : FBuildQuote();
+		? Context.Target->QuoteForRunway(Threshold, Far, Profile, Surface) : FBuildQuote();
 	const bool bAffordable = Quote.IsFree() || Purse->CanAfford(Quote);
 
 	const EPreviewStyle Style = bLongEnough && bAffordable ? EPreviewStyle::Pending : EPreviewStyle::Refused;
@@ -374,7 +366,7 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 			FString::Printf(TEXT("%s  %.0f x %.0f m, %s, %s"),
 				*RunwayDesignator::ToPairText(Along),
 				Length / 100.0, Profile->GetTotalWidth() / 100.0,
-				RunwaySurfaceName(Surface), RunwayApproachName(Approach)),
+				Pavement::Name(Surface), RunwayApproachName(Approach)),
 			Style);
 	}
 

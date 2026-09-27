@@ -5,6 +5,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Model/RoadGuideline.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/GraphOverlay.h"
 #include "Tool/RoadBuildTool.h"
@@ -158,29 +159,28 @@ bool FGraphOverlayTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("one marker per junction node"), Sink.CountMarkers(EPreviewStyle::NodeJunction), ExpectedJunction);
 	}
 
-	// 2. A placed entity gets its own committed-pose marker, its resolved anchors each get
-	//    a ServiceAnchor marker, AND StandPreview::DescribeBody still ran - Snap/Heal from the
-	//    definition's fixtures - plus Pending for a stand's stop mark (drawn by GraphOverlay
-	//    itself since 2026-09-27, for stands only). Missing any of the three would
-	//    mean GraphOverlay reimplemented (or dropped) part of what StandPreview already
-	//    does, which is the exact duplication issue #95 was filed against.
+	// 2. A placed stand gets ONE ServiceAnchor marker per resolved anchor and its design
+	//    aircraft's footprint (Snap lines, from StandPreview::DescribeBody) - and nothing
+	//    else since 2026-09-27: the stop mark and pose ring left for the painted stop bar,
+	//    and the fixtures, their Heal lines and the service-point Pending rings left because
+	//    all three sat concentric with the anchor ring and read as one target of three
+	//    circles (user report). Missing the footprint would mean GraphOverlay stopped calling
+	//    DescribeBody, the duplication issue #95 was filed against.
 	{
 		FGraphSink Sink;
 		GraphOverlay::Describe(Network, Sink);
 
-		TestEqual(TEXT("one StandPose marker per placed entity"),
-			Sink.CountMarkers(EPreviewStyle::StandPose), AliveEntities);
+		TestEqual(TEXT("no StandPose ring - the painted stop bar shows the stop now"),
+			Sink.CountMarkers(EPreviewStyle::StandPose), 0);
 		TestEqual(TEXT("one ServiceAnchor marker per resolved anchor"),
 			Sink.CountMarkers(EPreviewStyle::ServiceAnchor), ExpectedAnchors);
-		TestTrue(TEXT("StandPreview::Describe drew the definition's fixtures as Snap"),
-			Sink.CountMarkers(EPreviewStyle::Snap) >= ExpectedAnchors);
-		TestTrue(TEXT("StandPreview::Describe drew a Heal line per fixture"),
-			Sink.CountLines(EPreviewStyle::Heal) >= ExpectedAnchors);
-		// AT LEAST one per entity, not exactly: MakeStandTransient's design aircraft also
-		// gets a Pending marker per service point (fuel, catering, ...) from the SAME call,
-		// which is fine - the count only has to prove the stop mark is among them.
-		TestTrue(TEXT("StandPreview::Describe drew at least the Pending stop mark"),
-			Sink.CountMarkers(EPreviewStyle::Pending) >= AliveEntities);
+		TestEqual(TEXT("no fixture Snap markers - concentric with the anchor ring"),
+			Sink.CountMarkers(EPreviewStyle::Snap), 0);
+		TestEqual(TEXT("no Heal lines to the fixtures"), Sink.CountLines(EPreviewStyle::Heal), 0);
+		TestEqual(TEXT("no Pending at all - neither the stop mark nor the service points"),
+			Sink.CountMarkers(EPreviewStyle::Pending), 0);
+		TestTrue(TEXT("StandPreview::DescribeBody still drew the design aircraft's footprint"),
+			Sink.CountLines(EPreviewStyle::Snap) > 0);
 	}
 
 	// 3. DescribeNodes/DescribeStands stay INDEPENDENT - ARoadBuildHUD gates them on
@@ -203,8 +203,8 @@ bool FGraphOverlayTest::RunTest(const FString& Parameters)
 		FGraphSink StandsOnly;
 		GraphOverlay::DescribeStands(Network, StandsOnly);
 
-		TestTrue(TEXT("DescribeStands alone draws StandPose"),
-			StandsOnly.CountMarkers(EPreviewStyle::StandPose) > 0);
+		TestTrue(TEXT("DescribeStands alone draws the footprint"),
+			StandsOnly.CountLines(EPreviewStyle::Snap) > 0);
 		TestTrue(TEXT("DescribeStands alone draws ServiceAnchor"),
 			StandsOnly.CountMarkers(EPreviewStyle::ServiceAnchor) > 0);
 		TestEqual(TEXT("DescribeStands alone draws no node style"),
@@ -245,8 +245,10 @@ bool FDepotOverlayMarkersTest::RunTest(const FString& Parameters)
 {
 	// A placed fuel depot drew an aircraft's stop mark and pose ring at its road connection -
 	// two circles on the road that, zoomed out, nobody could name (2026-09-27). Its pose is a
-	// truck's, not a nose gear's, so the overlay draws neither there. A stand beside it still
-	// gets both, so this cannot pass by the overlay simply dropping the rings for everyone.
+	// truck's, not a nose gear's, so the overlay draws neither there. A stand beside it used to
+	// still get both, which kept this from passing by dropping the rings for everyone; since
+	// the stand's own rings went too (2026-09-27, painted stop bar - see
+	// Airside.Tool.StandOverlayMarkers), the stand beside it is proved present by its footprint.
 	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
@@ -298,18 +300,85 @@ bool FDepotOverlayMarkersTest::RunTest(const FString& Parameters)
 		FGraphSink Sink;
 		GraphOverlay::DescribeStands(*Network, Sink);
 
-		TestEqual(TEXT("the stand still draws its pose ring, and only the stand does"),
-			Sink.CountMarkers(EPreviewStyle::StandPose), 1);
-		// The stand's design aircraft adds a Pending per service point from the same call, so
-		// the stop mark is proved against that count, read from the aircraft, not typed here.
-		const UAircraftType* Design = Stand->DesignAircraft.Get();
-		if (TestNotNull(TEXT("the stand has a design aircraft"), Design))
-		{
-			TestEqual(TEXT("and exactly one stop mark beyond its service points"),
-				Sink.CountMarkers(EPreviewStyle::Pending), Design->ServicePoints.Num() + 1);
-		}
+		// Since 2026-09-27 a stand draws no rings at its pose either - its painted stop bar
+		// shows the stop - so what proves the overlay still reaches the stand is its footprint.
+		TestEqual(TEXT("the stand draws no pose ring either"), Sink.CountMarkers(EPreviewStyle::StandPose), 0);
+		TestEqual(TEXT("nor any stop mark or service-point ring"), Sink.CountMarkers(EPreviewStyle::Pending), 0);
+		TestTrue(TEXT("but the stand still draws its aircraft footprint beyond the depot's four sides"),
+			Sink.CountLines(EPreviewStyle::Snap) > 4);
 	}
 
+	return true;
+}
+
+/**
+ * THE STAND OVERLAY, MEASURED BY POSITION (2026-09-27, user report: "remove the circles from the
+ * centre of the stand ... the debug lines to the service points ... only need to be one small
+ * circle each rather than the concentric"). A count per style cannot see concentricity, so this
+ * records WHERE each marker lands: nothing at the pose, and exactly one marker of any style at
+ * each resolved anchor's node.
+ */
+namespace StandOverlayMarkersTest
+{
+	struct FPlacedSink : public IToolPreviewSink
+	{
+		TArray<TPair<FVector2D, EPreviewStyle>> Markers;
+		int32 HealLines = 0;
+		int32 SnapLines = 0;
+
+		virtual void Marker(const FVector2D& At, EPreviewStyle Style) override { Markers.Emplace(At, Style); }
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle Style) override
+		{
+			if (Style == EPreviewStyle::Heal) { ++HealLines; }
+			if (Style == EPreviewStyle::Snap) { ++SnapLines; }
+		}
+		virtual void CrossMark(const FVector2D& At, const FVector2D&, EPreviewStyle Style) override { Markers.Emplace(At, Style); }
+		virtual void Label(const FVector2D&, const FString&, EPreviewStyle) override {}
+
+		int32 MarkersNear(const FVector2D& At) const
+		{
+			int32 Count = 0;
+			for (const TPair<FVector2D, EPreviewStyle>& M : Markers)
+			{
+				if (FVector2D::Distance(M.Key, At) <= 1.0) { ++Count; }
+			}
+			return Count;
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandOverlayMarkersTest,
+	"Airside.Tool.StandOverlayMarkers",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandOverlayMarkersTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	if (!TestNotNull(TEXT("a network"), Network) || !TestNotNull(TEXT("a stand definition"), Stand)) { return false; }
+	Network->PlaceEntity(Stand, Stand->Anchors, FVector2D(9000.0, 9000.0), 0.0);
+	const FEntityInstance& Placed = Network->GetEntities()[0];
+	if (!TestTrue(TEXT("the stand resolved anchors to measure"), Placed.ResolvedAnchors.Num() >= 4)) { return false; }
+
+	StandOverlayMarkersTest::FPlacedSink Sink;
+	GraphOverlay::DescribeStands(*Network, Sink);
+
+	TestEqual(TEXT("no marker of any style at the stand's pose - the painted stop bar shows the stop"),
+		Sink.MarkersNear(Placed.Position), 0);
+	TestEqual(TEXT("no Heal line from the pose to a fixture"), Sink.HealLines, 0);
+	TestTrue(TEXT("the design aircraft's footprint is still drawn"), Sink.SnapLines > 0);
+
+	int32 Anchors = 0;
+	for (const FResolvedAnchor& Anchor : Placed.ResolvedAnchors)
+	{
+		const FGuidelineNode* Node = Network->GetGuidelineNode(Anchor.Node);
+		if (Node == nullptr) { continue; }
+		++Anchors;
+		TestEqual(FString::Printf(TEXT("exactly one marker at anchor %s - one small circle, not concentric rings"),
+			*Anchor.Id.ToString()), Sink.MarkersNear(Node->Position), 1);
+	}
+	TestEqual(TEXT("and every marker drawn is one of those anchor rings"), Sink.Markers.Num(), Anchors);
 	return true;
 }
 

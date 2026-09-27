@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/BuildSession.h"
+#include "Tool/PavementAxis.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RunwayTool.h"
@@ -213,18 +214,18 @@ bool FTvRunwayTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("row 2 is Approach - the Ctrl cycle"), Axes[2].Id, FName(TEXT("Approach")));
 	TestEqual(TEXT("one width option per profile"), Axes[0].Options.Num(), 3);
 	TestEqual(TEXT("labelled in metres, as the road row is"), Axes[0].Options[1].Label.ToString(), FString(TEXT("30 m")));
-	TestEqual(TEXT("every surface"), Axes[1].Options.Num(), static_cast<int32>(ERunwaySurface::Count));
+	TestEqual(TEXT("every surface"), Axes[1].Options.Num(), static_cast<int32>(EPavement::Count));
 	TestEqual(TEXT("every approach"), Axes[2].Options.Num(), static_cast<int32>(ERunwayApproach::Count));
-	TestEqual(TEXT("surfaces are named by RunwaySurfaceName, the one source"),
-		Axes[1].Options[static_cast<int32>(ERunwaySurface::Concrete)].Label.ToString(),
-		FString(RunwaySurfaceName(ERunwaySurface::Concrete)));
+	TestEqual(TEXT("surfaces are named by Pavement::Name, the one source"),
+		Axes[1].Options[static_cast<int32>(EPavement::Concrete)].Label.ToString(),
+		FString(Pavement::Name(EPavement::Concrete)));
 	TestEqual(TEXT("lit width is the first"), Axes[0].Current, 0);
-	TestEqual(TEXT("lit surface is tarmac"), Axes[1].Current, static_cast<int32>(ERunwaySurface::Tarmac));
+	TestEqual(TEXT("lit surface is tarmac"), Axes[1].Current, static_cast<int32>(EPavement::Tarmac));
 	TestEqual(TEXT("lit approach is visual"), Axes[2].Current, static_cast<int32>(ERunwayApproach::Visual));
 
 	TestTrue(TEXT("a surface pick is accepted"),
-		Tool.SelectVariant(Context, 1, static_cast<int32>(ERunwaySurface::Concrete)));
-	TestEqual(TEXT("and sets the surface"), Tool.Surface, ERunwaySurface::Concrete);
+		Tool.SelectVariant(Context, 1, static_cast<int32>(EPavement::Concrete)));
+	TestEqual(TEXT("and sets the surface"), Tool.Surface, EPavement::Concrete);
 	TestEqual(TEXT("and leaves the width"), Tool.WidthIndex, 0);
 	TestTrue(TEXT("an approach pick is accepted"),
 		Tool.SelectVariant(Context, 2, static_cast<int32>(ERunwayApproach::Precision)));
@@ -233,8 +234,8 @@ bool FTvRunwayTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and sets the width"), Tool.WidthIndex, 2);
 	TestFalse(TEXT("a fourth row does not exist"), Tool.SelectVariant(Context, 3, 0));
 	TestFalse(TEXT("a surface past the sentinel is refused"),
-		Tool.SelectVariant(Context, 1, static_cast<int32>(ERunwaySurface::Count)));
-	TestEqual(TEXT("and changed nothing"), Tool.Surface, ERunwaySurface::Concrete);
+		Tool.SelectVariant(Context, 1, static_cast<int32>(EPavement::Count)));
+	TestEqual(TEXT("and changed nothing"), Tool.Surface, EPavement::Concrete);
 
 	// THE KEY WALKS THE SAME ROWS: plain the width, Shift (insert) the surface, Ctrl (remove)
 	// the approach - each wrapping, each leaving the other two alone.
@@ -243,7 +244,7 @@ bool FTvRunwayTest::RunTest(const FString& Parameters)
 	FToolContext Shift = Context;
 	Shift.bInsertModifier = true;
 	Tool.OnReselect(Shift);
-	TestEqual(TEXT("Shift: the next surface"), Tool.Surface, ERunwaySurface::Reinforced);
+	TestEqual(TEXT("Shift: the next surface"), Tool.Surface, EPavement::Reinforced);
 	FToolContext Ctrl = Context;
 	Ctrl.bRemoveModifier = true;
 	Tool.OnReselect(Ctrl);
@@ -285,7 +286,7 @@ namespace
 			{
 				if (Axis.Id == FName(TEXT("Surface")))
 				{
-					Axis.Options[static_cast<int32>(ERunwaySurface::Concrete)].bEnabled = false;
+					Axis.Options[static_cast<int32>(EPavement::Concrete)].bEnabled = false;
 				}
 			}
 		}
@@ -330,7 +331,7 @@ bool FTvLockedOptionTest::RunTest(const FString& Parameters)
 	Shift.bInsertModifier = true;
 	Runway.OnReselect(Shift);
 	TestEqual(TEXT("Shift steps from tarmac over locked concrete to reinforced"),
-		Runway.Surface, ERunwaySurface::Reinforced);
+		Runway.Surface, EPavement::Reinforced);
 	return true;
 }
 
@@ -380,6 +381,35 @@ bool FTvSessionTest::RunTest(const FString& Parameters)
 	Session.GetActiveVariantAxes(Context, Axes);
 	TestEqual(TEXT("in edit mode there is no row"), Axes.Num(), 0);
 	TestFalse(TEXT("and no pick lands"), Session.SelectActiveVariant(Context, 0, 0));
+	return true;
+}
+
+/**
+ * ONE SURFACE-ROW BUILDER, reading the profile's list - world-free. Fails if the row offers
+ * the enum rather than the list, reorders it, or lights Current by its enum value rather than
+ * by its place in what was offered.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadSurfaceRowOffersTheProfileListTest,
+	"Airside.Tool.Variants.RoadSurfaceRowOffersTheProfileList",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadSurfaceRowOffersTheProfileListTest::RunTest(const FString& Parameters)
+{
+	// THE PROFILE'S LIST, NOT A SECOND ENUM: the reason ERoadSurface existed - a road tool
+	// must not offer a concrete service road - is now data on the profile.
+	TArray<FToolVariantAxis> Axes;
+	const EPavement RoadList[] = { EPavement::Tarmac, EPavement::Grass };
+	Pavement::AppendAxis(Axes, EPavement::Tarmac, RoadList);
+	if (!TestEqual(TEXT("one row"), Axes.Num(), 1)) { return false; }
+	if (!TestEqual(TEXT("with exactly the profile's two options"), Axes[0].Options.Num(), 2)) { return false; }
+	TestEqual(TEXT("in the profile's order - tarmac first, as #356's row had it"), Axes[0].Options[1].Id, FName(TEXT("grass")));
+
+	TArray<FToolVariantAxis> All;
+	Pavement::AppendAxis(All, EPavement::Tarmac, {});
+	if (!TestEqual(TEXT("still one row"), All.Num(), 1)) { return false; }
+	TestEqual(TEXT("an empty list offers all four - runways and stands"), All[0].Options.Num(), 4);
+	TestEqual(TEXT("and lights the current one by its place in the OFFERED list"), All[0].Current, 1);
 	return true;
 }
 

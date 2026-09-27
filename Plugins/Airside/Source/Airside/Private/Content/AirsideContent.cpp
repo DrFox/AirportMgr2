@@ -13,21 +13,21 @@ void UAirsideContent::PostLoad()
 	// asset that already has some RunwayMaterials authored (a partial re-author, or one made
 	// after this migration first ran and got saved back) is never clobbered by a leftover
 	// deprecated value nothing ever cleared.
-	if (RunwayMaterials.Num() < RunwayMaterialSlotCount)
+	if (RunwayMaterials.Num() < PavementMaterialSlotCount)
 	{
-		RunwayMaterials.SetNum(RunwayMaterialSlotCount);
+		RunwayMaterials.SetNum(PavementMaterialSlotCount);
 	}
 
-	auto Migrate = [this](ERunwaySurface Surface, const TSoftObjectPtr<UMaterialInterface>& Deprecated)
+	auto Migrate = [this](EPavement Surface, const TSoftObjectPtr<UMaterialInterface>& Deprecated)
 	{
 		if (!Deprecated.IsNull())
 		{
-			RunwayMaterials[RunwayMaterialSlot(Surface)] = Deprecated;
+			RunwayMaterials[Pavement::MaterialSlot(Surface)] = Deprecated;
 		}
 	};
-	Migrate(ERunwaySurface::Grass, RunwayGrassMaterial_DEPRECATED);
-	Migrate(ERunwaySurface::Tarmac, RunwayTarmacMaterial_DEPRECATED);
-	Migrate(ERunwaySurface::Concrete, RunwayConcreteMaterial_DEPRECATED);
+	Migrate(EPavement::Grass, RunwayGrassMaterial_DEPRECATED);
+	Migrate(EPavement::Tarmac, RunwayTarmacMaterial_DEPRECATED);
+	Migrate(EPavement::Concrete, RunwayConcreteMaterial_DEPRECATED);
 
 	// MIGRATED, NOT RESAVED (issue #192 item 1): an asset authored before Placeables existed
 	// still has its bytes under DefaultStand / DefaultFuelDepot - meta = (DeprecatedProperty)

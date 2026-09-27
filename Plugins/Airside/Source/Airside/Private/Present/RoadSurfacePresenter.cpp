@@ -20,7 +20,6 @@
 #include "Present/DynamicMeshSink.h"
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
-#include "Solve/PolygonInset.h"
 
 /**
  * The material parameter names this presenter drives, named once rather than retyped as a
@@ -63,7 +62,8 @@ UDynamicMeshComponent* URoadSurfacePresenter::GetLayerComponent(ESurfaceLayer La
 }
 
 int32 URoadSurfacePresenter::RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int32(FRoadMeshBuffers&)> BuildFn,
-	UMaterialInterface* Material, bool bUseConstantColour, FRoadMeshBuffers& OutBuffers, bool bQuiet)
+	UMaterialInterface* Material, const URoadMaterialSet* MaterialSet, bool bUseConstantColour,
+	FRoadMeshBuffers& OutBuffers, bool bQuiet)
 {
 	UDynamicMeshComponent* Component = GetLayerComponent(Layer);
 	if (Component == nullptr)
@@ -73,7 +73,7 @@ int32 URoadSurfacePresenter::RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int3
 
 	const int32 Count = BuildFn(OutBuffers);
 
-	FDynamicMeshSink Sink(Component, Material, bUseConstantColour, nullptr, bQuiet);
+	FDynamicMeshSink Sink(Component, Material, bUseConstantColour, MaterialSet, bQuiet);
 	Sink.Accept(OutBuffers);
 	Component->SetVisibility(Count > 0);
 	return Count;
@@ -169,11 +169,11 @@ const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfa
 	// authored set that already declares one of these names keeps its own binding: the
 	// name resolves to the earlier index, and the appended copy is never reached.
 	//
-	// Grass/Tarmac/Concrete ONLY - Reinforced has no slot of its own; RunwayMaterialSlot is
+	// Grass/Tarmac/Concrete ONLY - Reinforced has no slot of its own; Pavement::MaterialSlot is
 	// where that alias happens, and Settings.RunwayMaterials is already indexed by it.
-	const ERunwaySurface RunwaySurfacesBySlot[] = { ERunwaySurface::Grass, ERunwaySurface::Tarmac, ERunwaySurface::Concrete };
-	static_assert(UE_ARRAY_COUNT(RunwaySurfacesBySlot) == RunwayMaterialSlotCount,
-		"One entry per runway material slot - see RunwayMaterialSlotCount's own comment");
+	const EPavement RunwaySurfacesBySlot[] = { EPavement::Grass, EPavement::Tarmac, EPavement::Concrete };
+	static_assert(UE_ARRAY_COUNT(RunwaySurfacesBySlot) == PavementMaterialSlotCount,
+		"One entry per runway material slot - see PavementMaterialSlotCount's own comment");
 	for (int32 Slot = 0; Slot < UE_ARRAY_COUNT(RunwaySurfacesBySlot); ++Slot)
 	{
 		FRoadMaterialSlot MatSlot;
@@ -182,6 +182,32 @@ const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfa
 		EffectiveSet->Slots.Add(MatSlot);
 	}
 	return EffectiveSet;
+}
+
+const URoadMaterialSet* URoadSurfacePresenter::ApronMaterialSet(const FSurfaceSettings& Settings)
+{
+	// RE-ASKED, not cached from the road pass: EffectiveMaterialSet is a pure function of
+	// Settings, rebuilt in place, so asking it again here costs a few slots and cannot hand
+	// the apron layer a table the road layer did not also get.
+	const URoadMaterialSet* Road = EffectiveMaterialSet(Settings);
+
+	if (ApronSet == nullptr)
+	{
+		ApronSet = NewObject<URoadMaterialSet>(this, NAME_None, RF_Transient);
+	}
+	ApronSet->Slots.Reset();
+
+	// Slot 0, the layer's own - the same fallback the single-material call used to pass.
+	FRoadMaterialSlot Own;
+	Own.Name = TEXT("Apron");
+	Own.Material = Settings.ApronMaterial != nullptr ? Settings.ApronMaterial : Settings.SurfaceMaterial;
+	ApronSet->Slots.Add(Own);
+
+	if (Road != nullptr)
+	{
+		ApronSet->Slots.Append(Road->Slots);
+	}
+	return ApronSet;
 }
 
 UMaterialInstanceDynamic* URoadSurfacePresenter::RunwayMarkingMaterialInstance(UMaterialInterface* SurfaceMaterialBase)
@@ -211,7 +237,9 @@ void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const F
 	// Checked BEFORE RunwayMarkingMaterialInstance below, not left to RebuildLayer's own
 	// check: that call lazily creates and caches a UMaterialInstanceDynamic, a real
 	// allocation this function must not make on an actor with no runway-paint component to
-	// use it on (see LayerComponents' own comment for when that is a supported state).
+	// use it on (see LayerComponents' own comment for when that is a supported state). The
+	// same white MID is SHARED with the stand paint since task 13 (MarkingMaterialSet), which
+	// makes it under the same rule for its own layer - see RebuildMarkings' own guard.
 	if (GetLayerComponent(ESurfaceLayer::RunwayPaint) == nullptr)
 	{
 		return;
@@ -241,7 +269,7 @@ void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const F
 			LaneDashes = FRoadLaneMarkingBuilder::Build(Network, MarkingZ, OutBuffers, &LaneSegments);
 			return RunwayCount + LaneDashes;
 		},
-		Material != nullptr ? Material : Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers,
+		Material != nullptr ? Material : Settings.SurfaceMaterial, nullptr, Settings.bUseConstantVertexColour, Buffers,
 		Settings.bQuiet);
 	if (Painted == INDEX_NONE)
 	{
@@ -294,7 +322,7 @@ void URoadSurfacePresenter::RebuildRunwayRubber(URoadNetwork& Network, const FSu
 			// rather than leaving the previous build on screen.
 			return bHasMaterial ? FRunwayMarkingBuilder::BuildRubber(Network, RubberZ, OutBuffers, &Census) : 0;
 		},
-		Settings.RubberMaterial, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
+		Settings.RubberMaterial, nullptr, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
 	if (Runways == INDEX_NONE)
 	{
 		return;
@@ -326,65 +354,27 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 	// vertex cannot weld to it. The two surfaces meet; they are not one surface.
 	const double ApronZ = GetApronSurfaceZ(Settings.SurfaceZ, Settings.ApronZOffset);
 
+	// PER SLOT since shared-pavement Task 8: a stand's pad is drawn with its pavement (see
+	// ApronMaterialSet), everything else on slot 0 exactly as before.
+	const URoadMaterialSet* Materials = ApronMaterialSet(Settings);
+
 	FRoadMeshBuffers Buffers;
+	int32 UnresolvedSlots = 0;
 	int32 SlabTriangles = 0;
 	int32 BandTriangles = 0;
 	const int32 Built = RebuildLayer(ESurfaceLayer::Apron,
-		[&Network, ApronZ, &Settings, &SlabTriangles, &BandTriangles](FRoadMeshBuffers& OutBuffers)
+		[&Network, ApronZ, &Settings, Materials, &UnresolvedSlots, &SlabTriangles, &BandTriangles](FRoadMeshBuffers& OutBuffers)
 		{
-			FRoadMeshBuilder Builder(ApronZ, Settings.TexelsPerUnit);
-			int32 Count = 0;
-			for (const FApronSurface& Apron : Network.GetAprons())
-			{
-				if (Apron.bAlive)
-				{
-					Builder.AddApron(Apron);
-					++Count;
-				}
-			}
+			FRoadMeshBuilder Builder(ApronZ, Settings.TexelsPerUnit, Materials);
 
-			// A PLOTTED INSTALLATION'S PAD IS PAVEMENT, and it is the polygon the player
-			// drew - not new geometry. Through the SAME builder and the same triangulator
-			// the aprons above use, on the same component and the same Z, so a depot's pad
-			// and the apron it abuts are one surface rather than two that must agree.
-			//
-			// The pad's painted lines are deliberately NOT here. The white and yellow lines
-			// on the concept sheet mark the truck's path off the pad, and that path is the
-			// pose's lead-in, which the guideline graph already computes and draws. Painting
-			// them into the mesh would be a second evaluator of where the truck drives -
-			// they would agree at one rotation and visibly disagree at every other.
-			//
-			// A DEPOT'S PAD IS PAINTED (2026-09-27, zoomed-out readability): a pale slab inside
-			// a red hazard band, so the plot reads as fuel at max zoom with no UI. ONE BUILDER
-			// PER PAINT, appended below without welding: the slab and band share the inset's
-			// positions, and FRoadMeshBuilder welds by position, first writer wins - one
-			// builder would hand the band's tag to the slab's corners and blend them. A pad
-			// too small for the band keeps the slab alone rather than a band crossing itself.
-			FRoadMeshBuilder SlabBuilder(ApronZ, Settings.TexelsPerUnit);
-			FRoadMeshBuilder BandBuilder(ApronZ, Settings.TexelsPerUnit);
-			for (const FEntityInstance& Entity : Network.GetEntities())
-			{
-				if (!Entity.bAlive || Entity.Outline.Num() < 3)
-				{
-					continue;
-				}
-				++Count;
-				if (!Entity.IsDepot())
-				{
-					Builder.AddApron(Entity.Outline);
-					continue;
-				}
-				TArray<FVector2D> Inner;
-				if (PolygonInset::Inset(Entity.Outline, FRoadMeshBuilder::HazardBandUu, Inner))
-				{
-					SlabBuilder.AddApron(Inner, FRoadMeshBuilder::EApronPaint::FuelSlab);
-					BandBuilder.AddApronRing(Entity.Outline, Inner, FRoadMeshBuilder::EApronPaint::HazardBand);
-				}
-				else
-				{
-					SlabBuilder.AddApron(Entity.Outline, FRoadMeshBuilder::EApronPaint::FuelSlab);
-				}
-			}
+			// Aprons, then every plotted entity's pad - FRoadMeshBuilder::AddNetworkAprons,
+			// where the loop (and its reasons) moved so Airside.Build.StandPadSlots measures it.
+			// A depot's painted slab and band (#358) are built there too and already appended.
+			const int32 Count = Builder.AddNetworkAprons(Network);
+			UnresolvedSlots = Builder.GetUnresolvedApronSlots();
+			SlabTriangles = Builder.GetDepotSlabTriangles();
+			BandTriangles = Builder.GetDepotBandTriangles();
+
 			// A COPY, not the zero-copy const& this held before issue #81: Builder is scoped
 			// to this lambda, and GetBuffers() returns a const& into IT, which stops existing
 			// the moment this lambda returns - MoveTemp cannot turn that into a move either,
@@ -394,17 +384,24 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 			// copy at this one boundary is the price of routing aprons through RebuildLayer
 			// too. One apron rebuild's worth of vertices, not a hot path.
 			OutBuffers = Builder.GetBuffers();
-			OutBuffers.Append(SlabBuilder.GetBuffers());
-			OutBuffers.Append(BandBuilder.GetBuffers());
-			SlabTriangles = SlabBuilder.GetBuffers().Indices.Num() / 3;
-			BandTriangles = BandBuilder.GetBuffers().Indices.Num() / 3;
 			return Count;
 		},
-		Settings.ApronMaterial != nullptr ? Settings.ApronMaterial : Settings.SurfaceMaterial,
+		Settings.ApronMaterial != nullptr ? Settings.ApronMaterial : Settings.SurfaceMaterial, Materials,
 		Settings.bUseConstantApronColour, Buffers, Settings.bQuiet);
 	if (Built == INDEX_NONE)
 	{
 		return;
+	}
+
+	// NOT QUIETED: a pad naming a slot the set lacks draws with the apron material instead of
+	// its own pavement, which looks exactly like a grass stand that was never grass. Every
+	// runway slot is appended by EffectiveMaterialSet, so this should never print.
+	// ENFORCED BY: Airside.Build.StandPadSlots (a grass pad resolves on the actor)
+	if (UnresolvedSlots > 0)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("Aprons: %d pad(s) named a pavement slot the apron set does not declare - drawn with the apron material"),
+			UnresolvedSlots);
 	}
 
 	// Reported rather than inferred. An apron that is built and never seen, and one that
@@ -438,6 +435,57 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 	}
 }
 
+namespace StandPaintSlots
+{
+	/**
+	 * The paint layer's two slot names, spelled once: StandPaintSlot maps meanings onto them
+	 * and MarkingMaterialSet declares them, and a name typed at both sites is a name that
+	 * drifts (URoadMaterialSet::RunwaySlotName's own rule).
+	 */
+	const FName Guidance(TEXT("PaintGuidance"));
+	const FName White(TEXT("PaintWhite"));
+	// PaintRed and its colour went 2026-09-27 with the restraint line and hatch the user
+	// judged awful in PIE; the stand keeps the white edge and the yellow guidance only.
+}
+
+FName URoadSurfacePresenter::StandPaintSlot(EStandPaint Paint)
+{
+	// No `default:` - a new EStandPaint without a case is a compile warning here, and
+	// Airside.Present.StandMarking.PaintSlotsResolve walks every value.
+	switch (Paint)
+	{
+	case EStandPaint::Guidance:   return StandPaintSlots::Guidance;
+	case EStandPaint::Boundary:   return StandPaintSlots::White;
+	case EStandPaint::Count:      break;
+	}
+	return StandPaintSlots::Guidance;
+}
+
+const URoadMaterialSet* URoadSurfacePresenter::MarkingMaterialSet(const FSurfaceSettings& Settings)
+{
+	if (MarkingSet == nullptr)
+	{
+		MarkingSet = NewObject<URoadMaterialSet>(this, NAME_None, RF_Transient);
+	}
+	MarkingSet->Slots.Reset();
+
+	// SLOT 0 IS THE LAYER'S OWN MATERIAL, the road's, exactly the single material this layer
+	// drew with before stand paint had colours - so every holding bar (id 0, MarkingQuads::
+	// AddQuad's default) is untouched. The white is a MID of that same material - the runway's
+	// white one, reused rather than made twice.
+	FRoadMaterialSlot Guidance;
+	Guidance.Name = StandPaintSlots::Guidance;
+	Guidance.Material = Settings.SurfaceMaterial;
+	MarkingSet->Slots.Add(Guidance);
+
+	FRoadMaterialSlot White;
+	White.Name = StandPaintSlots::White;
+	White.Material = RunwayMarkingMaterialInstance(Settings.SurfaceMaterial);
+	MarkingSet->Slots.Add(White);
+
+	return MarkingSet;
+}
+
 void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings)
 {
 	// Half a unit ABOVE the road, so the paint wins the depth test against the pavement it
@@ -445,10 +493,20 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	// GetApronSurfaceZ), so above the road is above everything. See GetMarkingZ.
 	const double MarkingZ = GetMarkingZ(Settings.SurfaceZ);
 
+	// Checked BEFORE MarkingMaterialSet below, RebuildRunwayMarkings' own rule: that call
+	// creates the white and red MIDs, allocations an actor with no paint component to use them
+	// on must not make (review of task 13).
+	if (GetLayerComponent(ESurfaceLayer::HoldingPaint) == nullptr)
+	{
+		return;
+	}
+
 	FRoadMeshBuffers Buffers;
 	// THE ROAD'S OWN MATERIAL, on purpose: every vertex carries UV1 = 0, which M_RoadSurface
 	// reads as "on the centreline" and paints MarkingColor across the whole quad. See
-	// FHoldingPositionMarkingBuilder for why that is the paint wanted and not a defect.
+	// FHoldingPositionMarkingBuilder for why that is the paint wanted and not a defect. Since
+	// task 13 it is slot 0 of a SET (MarkingMaterialSet) whose other slots are MIDs of the same
+	// material with MarkingColor white and red - the stand's boundary, restraint line and hatch.
 	//
 	// STAND PAINT SHARES THIS LAYER (task 8): a drawn stand's lead-in, stop bar and letter are
 	// the same solid-MarkingColor quad, so a second component would only be a second material
@@ -463,14 +521,35 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	// RESOLVED ONCE PER REBUILD, not once per stand painted - #292's own rule for a Build/
 	// caller that touches more than one letter in a pass. See Solve/LetterEnvelope.h.
 	const FLetterEnvelopeTable Envelopes = UAirsideSettings::ResolveLetterEnvelopeTable();
+
+	// PAINT BY MEANING (task 13): the builder tags each stand quad with an EStandPaint and this
+	// resolves each to its slot's id, once per rebuild. An unresolved one would draw on slot 0 -
+	// yellow where white or red was meant - so it is counted and said, never silently folded.
+	// ENFORCED BY: Airside.Present.StandMarking.PaintSlotsResolve
+	const URoadMaterialSet* Materials = MarkingMaterialSet(Settings);
+	FStandPaintIds PaintIds;
+	int32 UnresolvedPaints = 0;
+	for (int32 Index = 0; Index < static_cast<int32>(EStandPaint::Count); ++Index)
+	{
+		const int32 Id = Materials->IndexOf(StandPaintSlot(static_cast<EStandPaint>(Index)));
+		UnresolvedPaints += Id == INDEX_NONE ? 1 : 0;
+		PaintIds.Ids[Index] = FMath::Max(Id, 0);
+	}
+	if (UnresolvedPaints > 0)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("Stand paint: %d meaning(s) name a slot the marking set does not declare - drawn with slot 0"),
+			UnresolvedPaints);
+	}
+
 	const int32 Painted = RebuildLayer(ESurfaceLayer::HoldingPaint,
-		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus, &Envelopes](FRoadMeshBuffers& OutBuffers)
+		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus, &Envelopes, &PaintIds](FRoadMeshBuffers& OutBuffers)
 		{
 			HoldingPositionsPainted = FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, OutBuffers);
-			StandsPainted = FStandMarkingBuilder::Build(Network, MarkingZ, OutBuffers, Envelopes, &StandCensus);
+			StandsPainted = FStandMarkingBuilder::Build(Network, MarkingZ, OutBuffers, Envelopes, &StandCensus, PaintIds);
 			return HoldingPositionsPainted + StandsPainted;
 		},
-		Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
+		Settings.SurfaceMaterial, Materials, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
 	if (Painted == INDEX_NONE)
 	{
 		return;
@@ -483,8 +562,10 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	if (!Settings.bQuiet)
 	{
 		UE_LOG(LogRoadMesh, Log,
-			TEXT("Holding positions: %d painted, %d stand(s), %d triangle(s) at Z=%.1f"),
-			HoldingPositionsPainted, StandsPainted, Buffers.Indices.Num() / 3, MarkingZ);
+			TEXT("Holding positions: %d painted, %d stand(s), %d triangle(s) at Z=%.1f - stand paint: ")
+			TEXT("%d boundary edge(s), %d lead-in(s), %d stop bar(s)"),
+			HoldingPositionsPainted, StandsPainted, Buffers.Indices.Num() / 3, MarkingZ,
+			StandCensus.BoundaryEdges, StandCensus.LeadIns, StandCensus.StopBars);
 	}
 }
 

@@ -11,12 +11,30 @@
 #include "Model/RoadNode.h"
 #include "Solve/GuideArbiter.h"
 #include "Tool/RoadHeal.h"
+#include "Tool/PavementAxis.h"
 #include "Tool/RoadNaming.h"
+#include "Profiles/RoadProfile.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
 namespace
 {
+	/**
+	 * The pavements the profile a click would lay offers - URoadProfile::AllowedPavements, the
+	 * data ERoadSurface's two steps became. THE SAME PROFILE the ghost and ConnectNodes resolve
+	 * (IRoadEditTarget::ResolveProfileFor), so the row cannot offer a surface the network then
+	 * refuses. No profile at all reads as empty, Pavement::Offered's "all four" - reached only by
+	 * a fake target: ConnectNodes refuses a road with no profile, and a taxiway falls back to the
+	 * actor's RuntimeProfile, which Fill gives the road list.
+	 * ENFORCED BY: Airside.Present.GrassRoadLaid (the row's grass reaches the laid segment)
+	 */
+	TConstArrayView<EPavement> RoadAllowedPavements(const FToolContext& Context, ERoadKind Kind, int32 WidthIndex)
+	{
+		const URoadProfile* Profile = Context.Target != nullptr
+			? Context.Target->ResolveProfileFor(Kind, WidthIndex) : nullptr;
+		return Profile != nullptr ? TConstArrayView<EPavement>(Profile->AllowedPavements) : TConstArrayView<EPavement>();
+	}
+
 	/**
 	 * The snap as this tool should ACT on it: its position moved onto the guide when the chain
 	 * claimed nothing.
@@ -392,8 +410,8 @@ void FRoadDrawTool::OnReselect(const FToolContext& Context)
 	}
 
 	// SHIFT STEPS THE SURFACE, the modifier FRunwayTool::OnReselect gives its own surface, so the
-	// two tools answer one gesture one way. BEFORE the width count: the surface is this tool's
-	// own enum and needs no content, so a project with no width profiles can still pick grass.
+	// two tools answer one gesture one way. BEFORE the width count: the surface needs no width
+	// profiles (only the kind's own profile's list), so a project with none can still pick grass.
 	if (Context.bInsertModifier)
 	{
 		StepAxis(Context, TEXT("Surface"), What);
@@ -474,20 +492,11 @@ void FRoadDrawTool::GetVariantAxes(const FToolContext& Context, TArray<FToolVari
 	}
 	AddWidthAxis(Context, Out);
 
-	// SURFACE ALWAYS, after Width: this tool's own enum, choosable with or without width
-	// profiles. THE ENUM'S OWN NAMES (RoadSurfaceName), the spelling the connect log line uses,
-	// so the row and the log cannot name one surface two ways.
-	FToolVariantAxis& SurfaceAxis = Out.AddDefaulted_GetRef();
-	SurfaceAxis.Id = TEXT("Surface");
-	SurfaceAxis.Label = LOCTEXT("VariantAxisSurface", "Surface");
-	SurfaceAxis.Current = static_cast<int32>(Surface);
-	for (uint8 Each = 0; Each < static_cast<uint8>(ERoadSurface::Count); ++Each)
-	{
-		const TCHAR* Name = RoadSurfaceName(static_cast<ERoadSurface>(Each));
-		FToolVariant& Option = SurfaceAxis.Options.AddDefaulted_GetRef();
-		Option.Id = Name;
-		Option.Label = FText::FromString(Name);
-	}
+	// SURFACE ALWAYS, after Width: choosable with or without width profiles, from THE
+	// PROFILE'S LIST (RoadAllowedPavements) - a road tool must not offer a concrete service
+	// road, the reason #356 gave roads a two-step enum, now data on the profile. Names and
+	// order are Pavement::AppendAxis's, shared with the runway row - see its comment.
+	Pavement::AppendAxis(Out, Surface, RoadAllowedPavements(Context, Kind, WidthIndex));
 }
 
 void FRoadDrawTool::AddWidthAxis(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const
@@ -549,8 +558,10 @@ bool FRoadDrawTool::SelectVariant(const FToolContext& Context, int32 Axis, int32
 	// BY THE ROW'S Id - see StepAxis on why an index cannot say which row it is.
 	if (Axes[Axis].Id == TEXT("Surface"))
 	{
-		Surface = static_cast<ERoadSurface>(Option);
-		UE_LOG(LogAirside, Log, TEXT("%s surface -> %s"), What, RoadSurfaceName(Surface));
+		// AN INDEX INTO THE OFFERED LIST, never into the enum - the row AppendAxis built, from
+		// the same profile's list, so Option is in range (checked against Axes above).
+		Surface = Pavement::Offered(RoadAllowedPavements(Context, Kind, WidthIndex))[Option];
+		UE_LOG(LogAirside, Log, TEXT("%s surface -> %s"), What, Pavement::Name(Surface));
 
 		// The part-drawn chain hears it too, for WidthIndex's reason below.
 		if (State.IsValid())

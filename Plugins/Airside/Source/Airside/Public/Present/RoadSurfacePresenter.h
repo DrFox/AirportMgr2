@@ -21,6 +21,7 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class FRoadMeshBuilder;
 struct FRoadSolveResult;
+enum class EStandPaint : uint8;
 
 /**
  * Which dynamic-mesh component a built surface belongs to. Replaces this presenter's five
@@ -139,17 +140,17 @@ public:
 
 		/**
 		 * Already resolved - see ARoadNetworkActor::ResolveRunwayMaterial. What a runway's
-		 * bands are skinned with, indexed by RunwayMaterialSlot(Surface); null falls back to
+		 * bands are skinned with, indexed by Pavement::MaterialSlot(Surface); null falls back to
 		 * SurfaceMaterial. Raw pointers in an array rather than a set, because MaterialSet
 		 * may legitimately be null (the single-material road) and these must still reach the
 		 * mesh - see EffectiveMaterialSet. A plain C array, not TStaticArray: this struct is
 		 * not UPROPERTY-reflected, so either works, and a fixed array needs no include.
 		 *
-		 * Sized off RunwayMaterialSlotCount, not a literal 3 - see the static_assert right
+		 * Sized off PavementMaterialSlotCount, not a literal 3 - see the static_assert right
 		 * below (PR #137 review): a change to that constant with nothing checking this array
 		 * against it is exactly the second-truths bug this project keeps a rule against.
 		 */
-		UMaterialInterface* RunwayMaterials[RunwayMaterialSlotCount] = {};
+		UMaterialInterface* RunwayMaterials[PavementMaterialSlotCount] = {};
 
 		/** Already resolved - see ARoadNetworkActor::ResolveProfile. */
 		URoadProfile* Profile = nullptr;
@@ -326,6 +327,17 @@ public:
 	 *  layer itself rather than trusting the builder was asked to run. */
 	int32 HoldingPaintTriangleCountForTest() const;
 
+	/** The material set the last RebuildMarkings handed the paint layer, for tests: see MarkingMaterialSet. */
+	const URoadMaterialSet* MarkingMaterialSetForTest() const { return MarkingSet; }
+
+	/**
+	 * THE ONE PLACE a stand paint's MEANING becomes a material slot name, and so a colour.
+	 * FStandMarkingBuilder tags quads with EStandPaint and never names a colour; the paint
+	 * layer's set (MarkingMaterialSet) declares these same names.
+	 * ENFORCED BY: Airside.Present.StandMarking.PaintSlotsResolve
+	 */
+	static FName StandPaintSlot(EStandPaint Paint);
+
 	/** The material set the last Rebuild handed the mesh, for tests: see EffectiveMaterialSet. */
 	const URoadMaterialSet* EffectiveMaterialSetForTest() const { return EffectiveSet; }
 
@@ -392,9 +404,16 @@ private:
 	 * function constructs, since every caller already has it on hand in its own Settings and
 	 * passing it through here is one parameter rather than a sink built at each of the four
 	 * call sites instead of inside this shared one.
+	 *
+	 * MaterialSet, when set, skins the layer per material id and Material is unused, exactly
+	 * FDynamicMeshSink's own precedence - the apron layer passes one (ApronMaterialSet), since a
+	 * stand's pad has a pavement (shared-pavement Task 8), and so does the HoldingPaint layer
+	 * (MarkingMaterialSet), since stand paint has colours (task 13). Null is the single-material
+	 * layer every other caller has always been. No default: each call site says which it is.
 	 */
 	int32 RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int32(FRoadMeshBuffers&)> BuildFn,
-		UMaterialInterface* Material, bool bUseConstantColour, FRoadMeshBuffers& OutBuffers, bool bQuiet);
+		UMaterialInterface* Material, const URoadMaterialSet* MaterialSet, bool bUseConstantColour,
+		FRoadMeshBuffers& OutBuffers, bool bQuiet);
 
 	/** Half a unit above the road, so paint wins the depth test against the pavement it lies
 	 *  on - shared by RebuildMarkings and RebuildRunwayMarkings, which used to compute this
@@ -462,8 +481,28 @@ private:
 	 */
 	const URoadMaterialSet* EffectiveMaterialSet(const FSurfaceSettings& Settings);
 
+	/**
+	 * The apron layer's set: slot 0 is the layer's own material (ApronMaterial, else
+	 * SurfaceMaterial - what the layer has always drawn with), FOLLOWED BY every slot of
+	 * EffectiveMaterialSet unchanged. So a tarmac pad or bare apron (FRoadMeshBuilder::AddApron's
+	 * NAME_None, id 0) looks as it always did, and a grass pad's slot name resolves to the SAME
+	 * grass material the road layer's grass slot has - one material table, prefixed, not a
+	 * second one that could bind grass differently. Every slot resolves to a material
+	 * (URoadMaterialSet::ResolveMaterials fills a null), so no pad draws the floor checker.
+	 * ENFORCED BY: Airside.Build.StandPadSlots
+	 */
+	const URoadMaterialSet* ApronMaterialSet(const FSurfaceSettings& Settings);
+
 	/** The runway paint's material instance: SurfaceMaterial with MarkingColor white. Cached like GhostMID. */
 	UMaterialInstanceDynamic* RunwayMarkingMaterialInstance(UMaterialInterface* SurfaceMaterialBase);
+
+
+	/**
+	 * The HoldingPaint layer's material set: slot 0 the road material (holding bars and stand
+	 * guidance, yellow as ever), then white and red MIDs of it - the slots StandPaintSlot names.
+	 * Rebuilt in place per call, like ApronMaterialSet.
+	 */
+	const URoadMaterialSet* MarkingMaterialSet(const FSurfaceSettings& Settings);
 
 	/** Append a solved node's fan to Builder, if that node solved at all. */
 	void AddGhostJunction(FRoadMeshBuilder& Builder, const FRoadSolveResult& Solved, int32 NodeIndex) const;
@@ -491,8 +530,15 @@ private:
 	/** See EffectiveMaterialSet. Transient: composed from resolved settings on every rebuild. */
 	UPROPERTY(Transient) TObjectPtr<URoadMaterialSet> EffectiveSet;
 
+	/** See ApronMaterialSet. Transient for EffectiveSet's reason. */
+	UPROPERTY(Transient) TObjectPtr<URoadMaterialSet> ApronSet;
+
 	/** See RunwayMarkingMaterialInstance. */
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> RunwayMarkingMID;
+
+	/** See MarkingMaterialSet. Transient for EffectiveSet's reason. */
+	UPROPERTY(Transient) TObjectPtr<URoadMaterialSet> MarkingSet;
+
 
 	/**
 	 * The hypothetical graph the ghost is solved against.

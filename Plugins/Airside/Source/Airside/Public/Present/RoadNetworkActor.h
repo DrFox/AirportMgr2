@@ -348,8 +348,9 @@ public:
 	 */
 	virtual IBuildPurse* GetPurse() const override;
 	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-		int32 WidthIndex, ERoadSurface Surface) const override;
-	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* RunwayProfile) const override;
+		int32 WidthIndex, EPavement Surface) const override;
+	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* RunwayProfile,
+		EPavement Pavement) const override;
 
 	/** Add a node at a world-space XY position. Returns its index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -365,7 +366,7 @@ public:
 	 * that already calls it compiling, as tarmac (CLAUDE.md's refactor contract).
 	 */
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
-		ERoadSurface Surface) override;
+		EPavement Surface) override;
 	using IRoadEditTarget::ConnectNodes;
 
 	/** Link two GUIDELINE nodes by hand. Returns the new edge's index, or INDEX_NONE. */
@@ -587,10 +588,10 @@ public:
 	/** Forwards to the facade, like every other IRoadEditTarget member - see
 	 *  URoadEditFacade::PlaceStandInPlot. */
 	virtual int32 PlaceStandInPlot(const TArray<FVector2D>& Outline,
-		FVector2D EntranceA, FVector2D EntranceB) override;
+		FVector2D EntranceA, FVector2D EntranceB, EPavement Pavement) override;
 
 	/** Forwards to the facade - see URoadEditFacade::WhyStandRefused. */
-	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline) const override;
+	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const override;
 
 	/** Remove a placed entity, and the anchor nodes it owns. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -1009,7 +1010,7 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ResolvedRubberMaterialCache;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ResolvedGhostMaterialCache;
 
-	/** Indexed by RunwayMaterialSlot(Surface), exactly like FSurfaceSettings::RunwayMaterials -
+	/** Indexed by Pavement::MaterialSlot(Surface), exactly like FSurfaceSettings::RunwayMaterials -
 	 *  a TArray rather than that struct's fixed C array because UPROPERTY reflection (what
 	 *  keeps the garbage collector tracing these) has no fixed-array support for TObjectPtr. */
 	UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInterface>> ResolvedRunwayMaterialsCache;
@@ -1252,7 +1253,7 @@ public:
 	 * markings. Null when the content set names none: the presenter then falls back to
 	 * the surface material, and the runway draws as a road.
 	 */
-	UMaterialInterface* ResolveRunwayMaterial(ERunwaySurface Surface) const;
+	UMaterialInterface* ResolveRunwayMaterial(EPavement Surface) const;
 
 	/**
 	 * AUTHORED INPUT, READ AND NEVER WRITTEN save for the on-demand fallback cache - see

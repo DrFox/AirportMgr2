@@ -24,6 +24,7 @@
 #include "Solve/RoadGeom.h"
 #include "Solve/StandBox.h"
 #include "Tool/BuildSession.h"
+#include "Tool/PavementAxis.h"
 #include "Tool/PlotGesture.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/StandPlotTool.h"
@@ -304,7 +305,11 @@ bool FStandPlotLetterAtThresholdsTest::RunTest(const FString& Parameters)
 	// of it. The letter must change EXACTLY there - the threshold is IcaoCode's, so a tool that
 	// kept its own table, or measured a different rectangle than it drew, lands on the wrong
 	// side of one of these twelve.
-	for (EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	//
+	// CODE A DROPPED (2026-09-27 merge): a rectangle at A's floor is B's floor now
+	// (IcaoCode::StandLetterFor), so the case would just duplicate B's - see
+	// Airside.Solve.StandWidthIsDerivedFromClearance for the alias itself.
+	for (EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
 		const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(Letter));
 		const double Depth = IcaoCode::StandDepthForLetter(Letter);
@@ -379,7 +384,10 @@ bool FStandPlotFloorsAreOnTheDepthQuantumTest::RunTest(const FString& Parameters
 	// - so the tool never promises a player can drag to an EXACT width floor the way DEPTH's
 	// StandPlotRules::DepthStepUu promises for depth. There is no width contract for this test
 	// to enforce.
-	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	//
+	// CODE A DROPPED (2026-09-27 merge): StandDepthForLetter(A) reads B's own depth now
+	// (IcaoCode::StandLetterFor), so its case here would be B's, twice.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
 		const double Depth = IcaoCode::StandDepthForLetter(Letter);
 		const double Steps = Depth / StandPlotRules::DepthStepUu;
@@ -421,7 +429,7 @@ bool FStandPlotTooSmallNotCommittableTest::RunTest(const FString& Parameters)
 	// own, so the bar and the refusal at commit can never disagree.
 	TArray<FVector2D> Shown;
 	Tool.Rect(At(Actor, AnchorCursor), Shown);
-	const FString Why = static_cast<IRoadEditTarget*>(Actor)->WhyStandRefused(Shown);
+	const FString Why = static_cast<IRoadEditTarget*>(Actor)->WhyStandRefused(Shown, EPavement::Tarmac);
 	TestTrue(TEXT("the facade refuses it for size"), Why.Contains(TEXT("more")));
 	TestTrue(TEXT("and the readout's warning is that same sentence"), Readout.Warnings.Contains(Why));
 
@@ -547,7 +555,7 @@ bool FStandPlotFlushNeighboursBothPlaceTest::RunTest(const FString& Parameters)
 	TArray<FVector2D> Overlapping = First;
 	for (FVector2D& Corner : Overlapping) { Corner += FVector2D(Width - 100.0, 0.0); }
 	IRoadEditTarget* Target = Actor;
-	const FString Why = Target->WhyStandRefused(Overlapping);
+	const FString Why = Target->WhyStandRefused(Overlapping, EPavement::Tarmac);
 	TestTrue(FString::Printf(TEXT("a stand overlapping its neighbour by 1 m is refused ('%s')"), *Why),
 		Why.Contains(TEXT("overlaps")));
 	return true;
@@ -707,7 +715,7 @@ bool FStandPlotPreviewDrawsTheKeepOutTest::RunTest(const FString& Parameters)
 	// THE FLOOR, MATCHING FStandPlotTool::DescribeLetter's OWN choice (#292: Tool/ cannot
 	// reach Content/) - this test reconstructs what the tool itself computed.
 	const StandBox::FStandPose Pose =
-		StandBox::PoseFor(Shown[0], Shown[1], Inward, EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C));
+		StandBox::PoseFor(Shown[0], Shown[1], Inward, Shown, EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C));
 	const FVector2D Left = RoadGeom::PerpCCW(Pose.Facing);
 	const double HalfSpan = 0.5 * IcaoCode::MaxWingspanForLetter(EIcaoCode::C);
 
@@ -881,7 +889,10 @@ bool FStandPlotDiagonalTaxiwayReadsItsLetterTest::RunTest(const FString& Paramet
 		// refused here (their bays were laid for the truck), so bBuildable is now always true
 		// rather than Letter >= EIcaoCode::C - kept as a named bool, not deleted outright, so a
 		// future letter that genuinely cannot build still has somewhere to say so.
-		for (EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+		//
+		// CODE A DROPPED (2026-09-27 merge): a rectangle at A's floor reads back as B now
+		// (IcaoCode::StandLetterFor), so its case here would duplicate B's.
+		for (EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 		{
 			const bool bBuildable = true;
 			const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(Letter));
@@ -1486,7 +1497,7 @@ bool FGhostCommitAndPointPlacedAgreeTest::RunTest(const FString& Parameters)
 	Tool.Rect(At(Actor, AnchorCursor), Shown);
 	const FVector2D Inward(0.0, 1.0);
 	const StandBox::FStandPose ExpectedPose =
-		StandBox::PoseFor(Shown[0], Shown[1], Inward, EIcaoCode::C, Raised);
+		StandBox::PoseFor(Shown[0], Shown[1], Inward, Shown, EIcaoCode::C, Raised);
 
 	FToolContext RaisedContext = At(Actor, AnchorCursor);
 	RaisedContext.Envelopes = UAirsideSettings::ResolveLetterEnvelopeTable();
@@ -1497,7 +1508,7 @@ bool FGhostCommitAndPointPlacedAgreeTest::RunTest(const FString& Parameters)
 
 	// 2. THE DRAWN-STAND COMMIT: the SAME rectangle, placed for real.
 	IRoadEditTarget* Target = Actor;
-	const int32 Committed = Target->PlaceStandInPlot(Shown, Shown[0], Shown[1]);
+	const int32 Committed = Target->PlaceStandInPlot(Shown, Shown[0], Shown[1], EPavement::Tarmac);
 	if (!TestTrue(TEXT("the rectangle commits"), Committed != INDEX_NONE))
 	{
 		return false;
@@ -1523,6 +1534,99 @@ bool FGhostCommitAndPointPlacedAgreeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the point-placed stand's outline is the RAISED Code C box, not the floor's"),
 		PointEntity.Outline == ExpectedOutline);
 
+	return true;
+}
+
+/**
+ * THE STAND TOOL'S SURFACE ROW (shared-pavement Task 8): one "Surface" row of all four, lit on
+ * tarmac, and the option picked on it is the pavement the Build click places - measured on the
+ * placed entity through the real actor, not on a recorded argument, so a facade that dropped
+ * the parameter would fail here too.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotSurfaceRowPlacesItsPavementTest,
+	"Airside.Tool.StandPlot.SurfaceRowPlacesItsPavement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotSurfaceRowPlacesItsPavementTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	FStandPlotTool Tool;
+	TArray<FToolVariantAxis> Axes;
+	Tool.GetVariantAxes(At(Actor, AnchorCursor), Axes);
+	if (!TestEqual(TEXT("the stand tool offers exactly one row"), Axes.Num(), 1)) { return false; }
+	TestEqual(TEXT("and it is the Surface row"), Axes[0].Id, FName(TEXT("Surface")));
+	TestEqual(TEXT("of all four pavements"), Axes[0].Options.Num(), 4);
+	TestEqual(TEXT("lit on tarmac, what every stand was paved with before the row"),
+		Axes[0].Current, Pavement::Offered({}).IndexOfByKey(EPavement::Tarmac));
+
+	const int32 GrassOption = Pavement::Offered({}).IndexOfByKey(EPavement::Grass);
+	TestTrue(TEXT("grass is picked"), Tool.SelectVariant(At(Actor, AnchorCursor), 0, GrassOption));
+	TestFalse(TEXT("an option past the row is refused"), Tool.SelectVariant(At(Actor, AnchorCursor), 0, 4));
+	TestFalse(TEXT("and so is a row that does not exist"), Tool.SelectVariant(At(Actor, AnchorCursor), 1, 0));
+	Axes.Reset();
+	Tool.GetVariantAxes(At(Actor, AnchorCursor), Axes);
+	TestEqual(TEXT("the row now lights grass"), Axes.Num() == 1 ? Axes[0].Current : INDEX_NONE, GrassOption);
+
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	if (!TestTrue(TEXT("a Code C stand reaches Confirm"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+	Tool.OnCommit(At(Actor, AnchorCursor));
+	if (!TestEqual(TEXT("Build places exactly one stand"), LiveStands(Actor), 1)) { return false; }
+
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (Entity.bAlive && Entity.IsStand())
+		{
+			TestEqual(TEXT("the placed stand is paved with what the row picked"), Entity.Pavement, EPavement::Grass);
+		}
+	}
+	return true;
+}
+
+/**
+ * THE REFUSAL MEMO KEYS ON THE PAVEMENT (brief Step 6): the same locked rectangle asked again
+ * after a Surface pick must reach the facade again, or a row change would leave the readout
+ * showing the previous pavement's "cannot afford". Counted through GetRefusalCountForTest, the
+ * probe StagedPlotToolTest already counts the memo by.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotSurfaceChangeReasksRefusalTest,
+	"Airside.Tool.StandPlot.SurfaceChangeReasksRefusal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotSurfaceChangeReasksRefusalTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a Code C stand reaches Confirm"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+
+	ReadoutOf(Tool, At(Actor, AnchorCursor));
+	const int32 AfterFirst = Tool.GetRefusalCountForTest();
+	ReadoutOf(Tool, At(Actor, AnchorCursor));
+	TestEqual(TEXT("the control: the same shape and pavement is answered from the memo"),
+		Tool.GetRefusalCountForTest(), AfterFirst);
+
+	Tool.SelectVariant(At(Actor, AnchorCursor), 0, Pavement::Offered({}).IndexOfByKey(EPavement::Grass));
+	ReadoutOf(Tool, At(Actor, AnchorCursor));
+	TestEqual(TEXT("the same shape on a new pavement is asked again"),
+		Tool.GetRefusalCountForTest(), AfterFirst + 1);
 	return true;
 }
 

@@ -124,7 +124,7 @@ FRoadNodeId URoadNetwork::SplitSegment(FRoadSegmentId Doomed, const FVector2D& A
 	const FRoadNodeId KeepB = Segment->B;
 	URoadProfile* KeepProfile = Segment->Profile;
 	const FRunwayFacts KeepFacts = Segment->Runway;
-	const ERoadSurface KeepSurface = Segment->Surface;
+	const EPavement KeepSurface = Segment->Surface;
 	const FVector2D PositionA = EndA->Position;
 	const FVector2D PositionB = EndB->Position;
 
@@ -454,21 +454,40 @@ bool URoadNetwork::IsRunwaySegment(FRoadSegmentId Segment) const
 	return Profile != nullptr && Profile->bContinuousThroughJunctions;
 }
 
-bool URoadNetwork::IsGrassRoad(FRoadSegmentId Segment) const
+EPavement URoadNetwork::PavementOf(FRoadSegmentId Segment) const
 {
+	const FRoadSegment* Found = GetSegment(Segment);
+	if (Found == nullptr || !Found->bAlive)
+	{
+		return EPavement::Tarmac;
+	}
 	// RUNWAY FIRST: a runway's surface is Runway.Surface, and its own Surface field is the
 	// default nothing wrote. Asking the field alone would be right today only because no path
 	// writes it on a runway.
-	const FRoadSegment* Found = GetSegment(Segment);
-	return Found != nullptr && Found->bAlive && Found->Surface == ERoadSurface::Grass
-		&& !IsRunwaySegment(Segment);
+	return IsRunwaySegment(Segment) ? RunwayFactsFor(Segment).Surface : Found->Surface;
 }
 
-bool URoadNetwork::SetSegmentSurface(FRoadSegmentId Segment, ERoadSurface Surface)
+bool URoadNetwork::IsGrassRoad(FRoadSegmentId Segment) const
+{
+	return !IsRunwaySegment(Segment) && PavementOf(Segment) == EPavement::Grass;
+}
+
+bool URoadNetwork::SetSegmentSurface(FRoadSegmentId Segment, EPavement Surface)
 {
 	FRoadSegment* Found = GetSegmentMutable(Segment);
 	if (Found == nullptr || !Found->bAlive || IsRunwaySegment(Segment))
 	{
+		return false;
+	}
+	// THE PROFILE'S LIST, the one the road tool's row offers: a concrete service road is
+	// refused here as well as never offered there. Said out loud because a caller that got
+	// false has otherwise laid a tarmac road with nothing to say why.
+	const URoadProfile* Profile = ProfileFor(*Found);
+	if (!Pavement::Offered(Profile != nullptr ? TConstArrayView<EPavement>(Profile->AllowedPavements)
+			: TConstArrayView<EPavement>()).Contains(Surface))
+	{
+		UE_LOG(LogAirside, Warning, TEXT("SetSegmentSurface refused: %s is not offered by profile %s"),
+			Pavement::Name(Surface), *GetNameSafe(Profile));
 		return false;
 	}
 	Found->Surface = Surface;
@@ -1116,6 +1135,17 @@ bool FRoadNetworkTestAccess::SetEntityOutlineForTest(FEntityInstanceId Entity, T
 	return true;
 }
 
+bool FRoadNetworkTestAccess::SetEntityPavementForTest(FEntityInstanceId Entity, EPavement Pavement)
+{
+	FEntityInstance* Found = Network.GetEntityMutable(Entity);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->Pavement = Pavement;
+	return true;
+}
+
 void URoadNetwork::PruneHoldingPositionMarks()
 {
 	HoldingPositionMarks.RemoveAll([this](const FHoldingPositionMark& Mark)
@@ -1421,6 +1451,7 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, c
 	Instance.Heading = Placement.Heading;
 	Instance.Definition = Placement.Definition;
 	Instance.DesignWingspan = Placement.DesignWingspan;
+	Instance.Pavement = Placement.Pavement;
 
 	// Captured for the same Model/-must-not-see-Entities/ reason as DesignWingspan, and read
 	// by FAnchorLink to decide which class of guideline the pose's lead-in may join.

@@ -55,13 +55,13 @@ bool FRunwayAdmissionTest::RunTest(const FString& Parameters)
 		RunwayAdmission::Check(*Net, RW, Piper, true).Why, ERunwayRefusal::None);
 
 	FRunwayFacts Grass;
-	Grass.Surface = ERunwaySurface::Grass;
+	Grass.Surface = EPavement::Grass;
 	Net->SetRunwayFacts(RW, Grass);
 	TestEqual(TEXT("and to grass, because it needs only grass"),
 		RunwayAdmission::Check(*Net, RW, Piper, true).Why, ERunwayRefusal::None);
 
 	FAirframe NeedsTarmac = Piper;
-	NeedsTarmac.Requirements.MinimumSurface = ERunwaySurface::Tarmac;
+	NeedsTarmac.MinimumPavement = EPavement::Tarmac;
 	const FRunwayAdmission BySurface = RunwayAdmission::Check(*Net, RW, NeedsTarmac, true);
 	TestEqual(TEXT("an aircraft needing tarmac is refused grass by SURFACE"), BySurface.Why, ERunwayRefusal::Surface);
 	TestTrue(TEXT("and the sentence names the surface it found"), RunwayAdmission::Describe(BySurface).Contains(TEXT("grass")));
