@@ -176,6 +176,8 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 //     about a vertical axis at the leg foot rather than about a raked leg.
 //   - plane16 (Baron 58) is the first Code A rig whose gear RETRACTS, and the second
 //     exported off-level (2.44 deg nose-up); its axles are measured with the gear DOWN.
+//   - plane17 (Seneca I) is the first rig whose main gear folds INBOARD on a Code A wing,
+//     and the first with COUNTER-ROTATING props (prop_R mirrored, wired +1 against -1).
 
 /**
  * The bone index of a rig's LEFT MAIN WHEEL, or INDEX_NONE.
@@ -458,6 +460,7 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane14"), EPushbackNeed::VehicleTug },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane15"), EPushbackNeed::SelfManoeuvre },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane16"), EPushbackNeed::SelfManoeuvre },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane17"), EPushbackNeed::SelfManoeuvre },
 		// THE TWO PAPER TYPES. No aircraft/<key>.py spec exists for either - EntityDefinition
 		// builds them in C++ - so they stay hand-typed here and in build_pushback_needs.py's
 		// own small PAPER_NEEDS residual rather than growing a spec file for two entries.
@@ -637,6 +640,9 @@ bool FFieldLengthsCoverTheRollContentTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane16"), TEXT("/Game/Entities/DA_Aircraft_Plane5"),
 		  TEXT("a Baron that needed as much runway as a King Air would make the piston twin "
 			   "and the turboprop twin one rung") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane17"), TEXT("/Game/Entities/DA_Aircraft_Plane16"),
+		  TEXT("a Seneca I that needed as much runway as a Baron would erase the one field "
+			   "difference between the light twin and the heavy one") },
 	};
 
 	TSet<FString> JudgementCovered;
