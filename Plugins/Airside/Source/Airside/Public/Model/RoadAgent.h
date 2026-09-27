@@ -384,10 +384,17 @@ public:
 	/** The hold's "no route yet" line has been said - see bTaxiOutHoldSaid. */
 	void MarkTaxiOutHoldSaid() { bTaxiOutHoldSaid = true; }
 
-	/** Pushed back, and waiting for a taxi-out it can drive - see bTaxiOutStale. */
+	/** A new taxi out, restarted from where a TAXIING aeroplane holds - the taxi-complete
+	 *  guard's hold (RoadAgent.cpp). Keeps its pose, heading and engine spool. */
+	void ResumeTaxiOut(const FRoutePlan& Route);
+
+	/** Waiting for a way to the runway it can drive - see bTaxiOutStale. At the end of a push,
+	 *  or where a stranded taxi out left it. */
 	bool IsHoldingForTaxiOut() const
 	{
-		return Phase == EAgentPhase::Manoeuvring && bTaxiOutStale && Pushback.HasArrived();
+		return bTaxiOutStale
+			&& ((Phase == EAgentPhase::Manoeuvring && Pushback.HasArrived())
+				|| (Phase == EAgentPhase::Taxiing && Follower.HasArrived()));
 	}
 
 	/** What to fly once the current taxi ends, if anything. See FDepartureOrder. */

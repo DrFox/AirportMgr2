@@ -1198,12 +1198,27 @@ void UGroundTraffic::ReplanHeldTaxiOuts(const URoadNetwork& Network)
 			}
 			Route.Length += Leg;
 		}
-		Agent.AdoptTaxiOut(Route);
+		// AT THE END OF A PUSH the handover starts it; A TAXIING aeroplane that held where a
+		// stranded route left it restarts on it now, clear of the claims and queue position
+		// the dead route held - the drive-side rejoin's same three releases.
+		if (Agent.Phase == EAgentPhase::Manoeuvring)
+		{
+			Agent.AdoptTaxiOut(Route);
+		}
+		else
+		{
+			Occupancy.ReleaseReservations(Agent.Id);
+			Occupancy.ReleaseGuidelineClaimsOf(Agent.Id);
+			Agent.ClearArbitration();
+			Agent.ResetStall();
+			Agent.ResumeTaxiOut(Route);
+		}
 		// THE GOAL AND THE ARMING, as DepartAgent takes them - ReleaseGoal then TakeGoal.
 		ReleaseGoal(Agent, Agent.Id);
 		TakeGoal(Agent, Agent.Id, &Network, Route);
-		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: taxi-out planned again from where its push ended (%.0f uu join): %s"),
-			Agent.Id, Leg, *DeparturePlanner::Describe(Plan));
+		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: way to the runway planned again from where it %s (%.0f uu join): %s"),
+			Agent.Id, Agent.Phase == EAgentPhase::Manoeuvring ? TEXT("was pushed back to") : TEXT("held on the taxiway"),
+			Leg, *DeparturePlanner::Describe(Plan));
 	}
 }
 

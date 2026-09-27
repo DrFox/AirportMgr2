@@ -389,7 +389,11 @@ bool FPushbackStrandedTaxiOutReplansTest::RunTest(const FString& Parameters)
 	double WorstJump = 0.0;
 	bool bDeparted = false;
 	int32 DeadAtHandover = INDEX_NONE;   // dead lines in the route it taxis on, read once
-	for (int32 Tick = 0; Tick < 30 * 300 && Traffic->FindAgent(Id) != nullptr; ++Tick)
+	// AND ONE SECOND INTO THE ROLL: the take-off places the aeroplane on its entry on the first
+	// frame it rolls - see TaxiingDepartureStrandedDoesNotJump, which found this test stopped a
+	// frame too early to see the jump.
+	int32 RollFrames = 0;
+	for (int32 Tick = 0; Tick < 30 * 300 && Traffic->FindAgent(Id) != nullptr && RollFrames < 30; ++Tick)
 	{
 		Traffic->Advance(1.0 / 30.0, Net);
 		const FRoadAgent* Now = Traffic->FindAgent(Id);
@@ -409,11 +413,84 @@ bool FPushbackStrandedTaxiOutReplansTest::RunTest(const FString& Parameters)
 				DeadAtHandover += Net->GetGuidelineEdge(Step.Edge) == nullptr ? 1 : 0;
 			}
 		}
-		if (Now->Phase == EAgentPhase::Departing) { bDeparted = true; break; }
+		if (Now->Phase == EAgentPhase::Departing) { bDeparted = true; ++RollFrames; }
 	}
 	TestEqual(TEXT("it taxis out on live lines only - none the edit removed"), DeadAtHandover, 0);
 	TestTrue(FString::Printf(TEXT("it never jumps: worst frame-to-frame move %.0f uu"), WorstJump), WorstJump < 200.0);
 	TestTrue(TEXT("and it reaches the runway and rolls"), bDeparted);
+	return true;
+}
+
+/**
+ * A TAXIING DEPARTURE STRANDED BY AN EDIT DOES NOT JUMP TO THE RUNWAY.
+ *
+ * REPORTED FROM PLAY, 2026-09-27, after both fixes above: the re-planned taxi-out was being
+ * driven when a third drag moved the node its current step starts from. The route stranded -
+ * "stop where you are" - but a stranded route counts as ARRIVED, and the taxi-complete
+ * handover then started the armed take-off at the armed entry, wherever the aeroplane was:
+ * "Taxi complete; rolling for departure" on the rebuild's own frame, and a jump to the runway.
+ * The take-off now starts only AT its entry; anywhere else the aeroplane holds, and a new way
+ * to the runway is planned from where it stands.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTaxiingDepartureStrandedDoesNotJumpTest,
+	"Airside.Model.TaxiingDepartureStrandedDoesNotJump",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiingDepartureStrandedDoesNotJumpTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
+	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None))
+	{
+		return false;
+	}
+
+	// TAXIING OUT, PAST J: the push ends at E, the taxi out runs E -> J -> B. Past J the current
+	// step is J -> B, so moving J strands the route under the wheels.
+	auto PastJ = [&]()
+	{
+		const FRoadAgent* A = Traffic->FindAgent(Id);
+		return A != nullptr && A->Phase == EAgentPhase::Taxiing && A->LastMotion.Position.X < 1000.0
+			&& A->LastMotion.Position.Y > -9000.0;
+	};
+	for (int32 Tick = 0; Tick < 30 * 300 && !PastJ(); ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestTrue(TEXT("taxiing out, past the junction"), PastJ())) { return false; }
+
+	Net->RemoveGuidelineNode(G.J);
+	const FGuidelineNodeId J2 = TestGraph::Node(*Net, 0.0, -10500.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, G.A, J2, Options);
+	TestGraph::Join(*Net, J2, G.B, Options);
+	TestGraph::Join(*Net, J2, G.E, Options);
+	FVector2D Last = Traffic->FindAgent(Id)->LastMotion.Position;
+	Traffic->OnGraphRebuilt(*Net);
+
+	double WorstJump = 0.0;
+	bool bDeparted = false;
+	// ONE SECOND INTO THE ROLL TOO: the take-off puts the aeroplane at its entry on the first
+	// frame it ROLLS, the frame after the phase says Departing - a first version stopped at the
+	// phase change and passed on the code that jumped (2026-09-27). A second of roll from
+	// taxi speed is well under 200 uu a frame.
+	int32 RollFrames = 0;
+	for (int32 Tick = 0; Tick < 30 * 300 && Traffic->FindAgent(Id) != nullptr && RollFrames < 30; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+		const FRoadAgent* Now = Traffic->FindAgent(Id);
+		if (Now == nullptr) { break; }
+		WorstJump = FMath::Max(WorstJump, FVector2D::Distance(Last, Now->LastMotion.Position));
+		Last = Now->LastMotion.Position;
+		if (Now->Phase == EAgentPhase::Departing) { bDeparted = true; ++RollFrames; }
+	}
+	TestTrue(FString::Printf(TEXT("it never jumps: worst frame-to-frame move %.0f uu"), WorstJump), WorstJump < 200.0);
+	TestTrue(TEXT("and it still reaches the runway and rolls"), bDeparted);
 	return true;
 }
 
