@@ -202,6 +202,56 @@ bool FStandMarkingBuilder::FrameFor(const FEntityInstance& Entity, const FLetter
 	Out.RestraintHalfWidth = 0.5 * IcaoCode::MaxWingspanForLetter(StandLetter) + Clearance;
 	Out.RestraintForward = Distance + DepthEnvelope.MaxNoseFwd + Clearance;
 	Out.RestraintAft = BoundaryWidth + RestraintWidth;
+
+	// THE STAND'S GROUND, in the paint frame: the drawn outline, wound counter-clockwise (the
+	// frame is a rotation, so winding survives the change), and the same outline inset by the
+	// boundary line - the MITRED inset, so a corner of the inner edge sits exactly on both
+	// edges' inset lines. Everything painted inside the boundary is clipped to the inner one,
+	// which is what keeps the hatch "just inside the white line" on any outline the player
+	// drew, not only the floor rectangle of its letter. HERE rather than in Build since R21,
+	// because the box's forward clamp below is measured against it.
+	Out.Ground.Reset();
+	for (const FVector2D& Corner : Entity.Outline)
+	{
+		Out.Ground.Add(Out.ToLocal(Corner));
+	}
+	if (TwiceSignedArea(Out.Ground) < 0.0)
+	{
+		Algo::Reverse(Out.Ground);
+	}
+	const int32 Corners = Out.Ground.Num();
+	Out.Inner.Reset();
+	Out.XMin = DBL_MAX; Out.XMax = -DBL_MAX; Out.YMin = DBL_MAX; Out.YMax = -DBL_MAX;
+	double InnerFar = -DBL_MAX;
+	for (int32 Index = 0; Index < Corners; ++Index)
+	{
+		const FVector2D& Prev = Out.Ground[(Index + Corners - 1) % Corners];
+		const FVector2D& Here = Out.Ground[Index];
+		const FVector2D& Next = Out.Ground[(Index + 1) % Corners];
+		// Inward = left of each edge, for a counter-clockwise polygon.
+		const FVector2D InPrev = RoadGeom::PerpCCW((Here - Prev).GetSafeNormal());
+		const FVector2D InNext = RoadGeom::PerpCCW((Next - Here).GetSafeNormal());
+		const double Join = 1.0 + FVector2D::DotProduct(InPrev, InNext);
+		Out.Inner.Add(Join > UE_KINDA_SMALL_NUMBER ? Here + (InPrev + InNext) * (BoundaryWidth / Join) : Here);
+		InnerFar = FMath::Max(InnerFar, Out.Inner.Last().X);
+		Out.XMin = FMath::Min(Out.XMin, Here.X); Out.XMax = FMath::Max(Out.XMax, Here.X);
+		Out.YMin = FMath::Min(Out.YMin, Here.Y); Out.YMax = FMath::Max(Out.YMax, Here.Y);
+	}
+
+	// R21: CLAMPED TO THE FAR EDGE, never dropped. A fleet whose longest nose reaches past a
+	// shallow stand (a raised Code C in GhostCommitAndPointPlacedAgree reached 7947 uu on a
+	// 6500 uu stand; Code E's floor stand has 298 uu of slack) used to push the nose side off
+	// the ground, where the clip removed it without a word - a three-sided box and no hatch.
+	// The box's forward side now sits on the inner far edge instead, the strip ahead of it is
+	// then empty (which is correct: there is no ground there), and Build warns, because a stand
+	// too shallow for its fleet is a layout fact the player should hear about.
+	// ENFORCED BY: Airside.Build.StandMarking.ShallowStandClampsTheNoseSide
+	Out.EnvelopeForward = Out.RestraintForward;
+	Out.bForwardClamped = Corners >= 3 && Out.RestraintForward + RestraintWidth > InnerFar;
+	if (Out.bForwardClamped)
+	{
+		Out.RestraintForward = FMath::Max(InnerFar - RestraintWidth, Out.RestraintAft);
+	}
 	return true;
 }
 
@@ -213,31 +263,59 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 	C = FStandMarkingCensus();
 
 	int32 Painted = 0;
-	for (const FEntityInstance& Entity : Network.GetEntities())
+	for (int32 EntityIndex = 0; EntityIndex < Network.GetEntities().Num(); ++EntityIndex)
 	{
-		// ONE LINE, BOTH NAMES (Check-Architecture's is-plotted-not-depot rule) - see
-		// RoadEntity.h's own warning against reading IsPlotted() alone.
-		if (!Entity.bAlive || !(Entity.IsStand() && Entity.IsPlotted()))
+		const FEntityInstance& Entity = Network.GetEntities()[EntityIndex];
+
+		// FrameFor's false IS the alive/stand/plotted test (its own ONE LINE, BOTH NAMES check),
+		// honoured rather than repeated here - a second copy is a second place to drift.
+		FStandPaintFrame Frame;
+		if (!FrameFor(Entity, Envelopes, Frame))
 		{
 			continue;
 		}
-
-		FStandPaintFrame Frame;
-		FrameFor(Entity, Envelopes, Frame);
 		const TOptional<EIcaoCode>& GlyphLetter = Frame.GlyphLetter;
 		const FVector2D& Facing = Frame.Facing;
 		const FVector2D& Right = Frame.Right;
 		const FVector2D& EntranceMid = Frame.EntranceMid;
 		const double Distance = Frame.Setback;
 
+		// Clip a zone to the ground inside the boundary line and emit it, in the frame. True when
+		// something was left to paint.
+		auto Emit = [&](FPaintPoly Poly, EStandPaint Paint) -> bool
+		{
+			for (int32 Index = 0; Index < Frame.Inner.Num() && Poly.Num() >= 3; ++Index)
+			{
+				const FVector2D& A = Frame.Inner[Index];
+				const FVector2D Edge = Frame.Inner[(Index + 1) % Frame.Inner.Num()] - A;
+				// Keep the left of A->B: Dot((Edge.Y, -Edge.X), P - A) <= 0.
+				const FVector2D N(Edge.Y, -Edge.X);
+				ClipHalfPlane(Poly, N, FVector2D::DotProduct(N, A));
+			}
+			DropDegenerateCorners(Poly);
+			if (Poly.Num() < 3 || FMath::Abs(TwiceSignedArea(Poly)) < 2.0)
+			{
+				return false;
+			}
+			TArray<FVector2D, TInlineAllocator<12>> World;
+			for (const FVector2D& P : Poly)
+			{
+				World.Add(Frame.ToWorld(P.X, P.Y));
+			}
+			MarkingQuads::AddConvexPolygon(Out, Z, World, PaintIds[Paint]);
+			return true;
+		};
+
 		// LEAD-IN: from just inside the entrance to the stop mark, along the heading, LeadInWidth
 		// wide. It STARTS AT RestraintAft, past the boundary line and the restraint box's entrance
 		// side, since task 13, not at the entrance edge itself: every stand paint lies at the same
 		// MarkingZ, so a yellow quad over the white and red ones would z-fight where they cross.
 		// Its far end - the one a pilot reads - is where it always was.
-		MarkingQuads::AddRect(Out, Z, EntranceMid, Facing, Right,
-			Frame.RestraintAft, Distance, -LeadInWidth * 0.5, LeadInWidth * 0.5, PaintIds[EStandPaint::Guidance]);
-		++C.LeadIns;
+		// CLIPPED TO THE GROUND like every other stand paint (review of task 13): on an outline
+		// that does not sit where the pose implies, the entrance end could otherwise start off the
+		// stand.
+		C.LeadIns += Emit(LocalRect(Frame.RestraintAft, Distance, -LeadInWidth * 0.5, LeadInWidth * 0.5),
+			EStandPaint::Guidance) ? 1 : 0;
 
 		// STOP BAR: across the heading, centred ON the stop mark (Entity.Position).
 		MarkingQuads::AddRect(Out, Z, Entity.Position, Facing, Right,
@@ -265,69 +343,13 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 			}
 		}
 
-		// THE STAND'S GROUND, in the paint frame: the drawn outline, wound counter-clockwise (the
-		// frame is a rotation, so winding survives the change), and the same outline inset by the
-		// boundary line - the MITRED inset, so a corner of the inner edge sits exactly on both
-		// edges' inset lines. Everything painted below the boundary is clipped to the inner one,
-		// which is what keeps the hatch "just inside the white line" on any outline the player
-		// drew, not only the floor rectangle of its letter.
-		FPaintPoly Ground;
-		for (const FVector2D& Corner : Entity.Outline)
-		{
-			Ground.Add(Frame.ToLocal(Corner));
-		}
-		if (TwiceSignedArea(Ground) < 0.0)
-		{
-			Algo::Reverse(Ground);
-		}
-		const int32 Corners = Ground.Num();
-		FPaintPoly Inner;
-		double XMin = DBL_MAX, XMax = -DBL_MAX, YMin = DBL_MAX, YMax = -DBL_MAX;
-		for (int32 Index = 0; Index < Corners; ++Index)
-		{
-			const FVector2D& Prev = Ground[(Index + Corners - 1) % Corners];
-			const FVector2D& Here = Ground[Index];
-			const FVector2D& Next = Ground[(Index + 1) % Corners];
-			// Inward = left of each edge, for a counter-clockwise polygon.
-			const FVector2D InPrev = RoadGeom::PerpCCW((Here - Prev).GetSafeNormal());
-			const FVector2D InNext = RoadGeom::PerpCCW((Next - Here).GetSafeNormal());
-			const double Join = 1.0 + FVector2D::DotProduct(InPrev, InNext);
-			Inner.Add(Join > UE_KINDA_SMALL_NUMBER ? Here + (InPrev + InNext) * (BoundaryWidth / Join) : Here);
-			XMin = FMath::Min(XMin, Here.X); XMax = FMath::Max(XMax, Here.X);
-			YMin = FMath::Min(YMin, Here.Y); YMax = FMath::Max(YMax, Here.Y);
-		}
-
-		// Clip a zone to the ground inside the boundary line and emit it, in the frame. True when
-		// something was left to paint.
-		auto Emit = [&](FPaintPoly Poly, EStandPaint Paint) -> bool
-		{
-			for (int32 Index = 0; Index < Corners && Poly.Num() >= 3; ++Index)
-			{
-				const FVector2D& A = Inner[Index];
-				const FVector2D Edge = Inner[(Index + 1) % Corners] - A;
-				// Keep the left of A->B: Dot((Edge.Y, -Edge.X), P - A) <= 0.
-				const FVector2D N(Edge.Y, -Edge.X);
-				ClipHalfPlane(Poly, N, FVector2D::DotProduct(N, A));
-			}
-			DropDegenerateCorners(Poly);
-			if (Poly.Num() < 3 || FMath::Abs(TwiceSignedArea(Poly)) < 2.0)
-			{
-				return false;
-			}
-			TArray<FVector2D, TInlineAllocator<12>> World;
-			for (const FVector2D& P : Poly)
-			{
-				World.Add(Frame.ToWorld(P.X, P.Y));
-			}
-			MarkingQuads::AddConvexPolygon(Out, Z, World, PaintIds[Paint]);
-			return true;
-		};
-
 		// BOUNDARY: a white line just inside the drawn outline, every edge - outer edge to its
 		// mitred inner one, so the corners close without overlap.
-		for (int32 Index = 0; Index < Corners; ++Index)
+		const TArray<FVector2D>& Ground = Frame.Ground;
+		const TArray<FVector2D>& Inner = Frame.Inner;
+		for (int32 Index = 0; Index < Ground.Num(); ++Index)
 		{
-			const int32 NextIndex = (Index + 1) % Corners;
+			const int32 NextIndex = (Index + 1) % Ground.Num();
 			MarkingQuads::AddQuad(Out, Z,
 				Frame.ToWorld(Ground[Index].X, Ground[Index].Y), Frame.ToWorld(Ground[NextIndex].X, Ground[NextIndex].Y),
 				Frame.ToWorld(Inner[NextIndex].X, Inner[NextIndex].Y), Frame.ToWorld(Inner[Index].X, Inner[Index].Y),
@@ -340,6 +362,17 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 		// entrance side against the boundary line, which the lead-in now starts beyond - and
 		// butted, not overlapped, at the corners: the entrance and nose sides run the full
 		// width, the two long sides between them.
+		// ONE LINE PER STAND PER REBUILD (R21) - see FrameFor's clamp. A Warning because nothing
+		// else says a stand is too shallow for the aircraft its letter admits.
+		if (Frame.bForwardClamped)
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("Stand %d (Code %s): aircraft envelope reaches %.0f uu, stand is %.0f uu deep - nose restraint ")
+				TEXT("clamped to the far edge; the stand is too shallow for the fleet"),
+				EntityIndex, GlyphLetter.IsSet() ? IcaoCode::ToLetter(*GlyphLetter) : TEXT("unknown"),
+				Frame.EnvelopeForward + RestraintWidth, Frame.XMax - Frame.XMin);
+		}
+
 		const double H = Frame.RestraintHalfWidth;
 		const double Fwd = Frame.RestraintForward;
 		const double Aft = Frame.RestraintAft;
@@ -361,9 +394,9 @@ int32 FStandMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMe
 		// unbroken where a side zone meets the strip ahead.
 		const double Stride = HatchStripeWidth * UE_DOUBLE_SQRT_2;
 		const FPaintPoly Zones[3] = {
-			LocalRect(XMin, Fwd + RestraintWidth, Outer, YMax),
-			LocalRect(XMin, Fwd + RestraintWidth, YMin, -Outer),
-			LocalRect(Fwd + RestraintWidth, XMax, YMin, YMax),
+			LocalRect(Frame.XMin, Fwd + RestraintWidth, Outer, Frame.YMax),
+			LocalRect(Frame.XMin, Fwd + RestraintWidth, Frame.YMin, -Outer),
+			LocalRect(Fwd + RestraintWidth, Frame.XMax, Frame.YMin, Frame.YMax),
 		};
 		for (const FPaintPoly& Zone : Zones)
 		{

@@ -237,7 +237,9 @@ void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const F
 	// Checked BEFORE RunwayMarkingMaterialInstance below, not left to RebuildLayer's own
 	// check: that call lazily creates and caches a UMaterialInstanceDynamic, a real
 	// allocation this function must not make on an actor with no runway-paint component to
-	// use it on (see LayerComponents' own comment for when that is a supported state).
+	// use it on (see LayerComponents' own comment for when that is a supported state). The
+	// same white MID is SHARED with the stand paint since task 13 (MarkingMaterialSet), which
+	// makes it under the same rule for its own layer - see RebuildMarkings' own guard.
 	if (GetLayerComponent(ESurfaceLayer::RunwayPaint) == nullptr)
 	{
 		return;
@@ -518,6 +520,14 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	// lies on - the road is the highest surface here (the apron sits below it, see
 	// GetApronSurfaceZ), so above the road is above everything. See GetMarkingZ.
 	const double MarkingZ = GetMarkingZ(Settings.SurfaceZ);
+
+	// Checked BEFORE MarkingMaterialSet below, RebuildRunwayMarkings' own rule: that call
+	// creates the white and red MIDs, allocations an actor with no paint component to use them
+	// on must not make (review of task 13).
+	if (GetLayerComponent(ESurfaceLayer::HoldingPaint) == nullptr)
+	{
+		return;
+	}
 
 	FRoadMeshBuffers Buffers;
 	// THE ROAD'S OWN MATERIAL, on purpose: every vertex carries UV1 = 0, which M_RoadSurface

@@ -65,6 +65,60 @@ namespace StandMarkingTest
 		return Net.PlaceEntity(Placement);
 	}
 
+	/**
+	 * A drawn stand on ANY rectangle: entrance edge from Origin along Bearing (radians), Width
+	 * long, dragged Depth inward (PerpCCW of the entrance direction - PlaceDrawnStand's own
+	 * sense). Pose from StandBox::PoseFor at the floor envelope, outline the rectangle itself
+	 * rather than BoxAt's floor box, so a larger-than-floor stand keeps its drawn size.
+	 */
+	const FEntityInstance* PlaceDrawnRect(URoadNetwork& Net, UEntityDefinition* Definition, EIcaoCode Letter,
+		const FVector2D& Origin, double Bearing, double Width, double Depth)
+	{
+		const FVector2D Along(FMath::Cos(Bearing), FMath::Sin(Bearing));
+		const FVector2D Inward = RoadGeom::PerpCCW(Along);
+		const FVector2D A = Origin;
+		const FVector2D B = Origin + Along * Width;
+		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, Letter, IcaoCode::FloorEnvelopeForLetter(Letter));
+		FEntityPlacement Placement;
+		Placement.Definition = Definition;
+		Placement.Anchors = Definition->Anchors;
+		Placement.Position = Pose.Position;
+		Placement.Heading = RoadGeom::Bearing(Pose.Facing);
+		Placement.PoseRole = Definition->PoseRole;
+		Placement.Outline = { A, B, B + Inward * Depth, A + Inward * Depth };
+		Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(Letter);
+		return Net.GetEntity(Net.PlaceEntity(Placement));
+	}
+
+	/**
+	 * The stands the paint-bounds tests measure, one per Case: the floor box of four letters, a B
+	 * rotated to 135 degrees (no axis to hide behind), and a C drawn 12 m wider and 15 m deeper
+	 * than its floor, so the hatch has to follow the DRAWN edge, not the letter's. Each case sits
+	 * 40 m from the last, so no box reaches a neighbour.
+	 */
+	constexpr int32 PaintBoundsCases = 6;
+	const FEntityInstance* PlacePaintBoundsCase(URoadNetwork& Net, int32 Case, FString& OutName)
+	{
+		const FVector2D Origin(Case * 40000.0, 0.0);
+		if (Case < 4)
+		{
+			const EIcaoCode Floors[4] = { EIcaoCode::B, EIcaoCode::C, EIcaoCode::E, EIcaoCode::F };
+			const EIcaoCode Letter = Floors[Case];
+			OutName = FString::Printf(TEXT("Code %s floor"), IcaoCode::ToLetter(Letter));
+			return PlaceDrawnRect(Net, UEntityDefinition::MakeStandTransient(Letter), Letter, Origin, 0.0,
+				IcaoCode::StandWidthForLetter(Letter), IcaoCode::StandDepthForLetter(Letter));
+		}
+		if (Case == 4)
+		{
+			OutName = TEXT("Code B at 135 degrees");
+			return PlaceDrawnRect(Net, UEntityDefinition::MakeStandTransient(EIcaoCode::B), EIcaoCode::B, Origin,
+				FMath::DegreesToRadians(135.0), IcaoCode::StandWidthForLetter(EIcaoCode::B), IcaoCode::StandDepthForLetter(EIcaoCode::B));
+		}
+		OutName = TEXT("Code C larger than its floor");
+		return PlaceDrawnRect(Net, UEntityDefinition::MakeStandTransient(EIcaoCode::C), EIcaoCode::C, Origin, 0.0,
+			IcaoCode::StandWidthForLetter(EIcaoCode::C) + 1200.0, IcaoCode::StandDepthForLetter(EIcaoCode::C) + 1500.0);
+	}
+
 	/** Every EStandPaint on its own id (its index), so a test can tell the paints apart. */
 	FStandPaintIds DistinctIds()
 	{
@@ -641,22 +695,26 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FStandMarkingPaintStaysInsideOutlineTest::RunTest(const FString& Parameters)
 {
 	using namespace StandMarkingTest;
-	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::E })
+	// ONE STAND PER NETWORK, so the buffers measured are that stand's paint alone.
+	TArray<FString> Names;
+	Names.SetNum(PaintBoundsCases);
+	for (int32 Case = 0; Case < PaintBoundsCases; ++Case)
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		const FEntityInstance* Stand = Net->GetEntity(PlaceDrawnStand(*Net, UEntityDefinition::MakeStandTransient(Letter), Letter, 0.0));
-		if (!TestNotNull(TEXT("the stand resolves"), Stand)) { return false; }
+		const FEntityInstance* Stand = PlacePaintBoundsCase(*Net, Case, Names[Case]);
+		if (!TestNotNull(*FString::Printf(TEXT("%s resolves"), *Names[Case]), Stand)) { continue; }
 		FRoadMeshBuffers Buffers;
 		FStandMarkingCensus Census;
 		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census, DistinctIds());
-		TestTrue(FString::Printf(TEXT("Code %s painted boundary, restraint and hatch"), IcaoCode::ToLetter(Letter)),
+		TestTrue(FString::Printf(TEXT("%s painted boundary, four restraint sides and hatch (%d, %d, %d)"), *Names[Case],
+			Census.BoundaryEdges, Census.RestraintSides, Census.HatchStripes),
 			Census.BoundaryEdges == Stand->Outline.Num() && Census.RestraintSides == 4 && Census.HatchStripes > 0);
 		int32 Outside = 0;
 		for (const FVector3d& V : Buffers.Positions)
 		{
 			Outside += InConvex(Stand->Outline, FVector2D(V.X, V.Y), 1.0) ? 0 : 1;
 		}
-		TestEqual(FString::Printf(TEXT("Code %s: no painted vertex off the stand"), IcaoCode::ToLetter(Letter)), Outside, 0);
+		TestEqual(FString::Printf(TEXT("%s: no painted vertex off the stand"), *Names[Case]), Outside, 0);
 	}
 	return true;
 }
@@ -770,27 +828,52 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FStandMarkingHatchClearsTheRestraintBoxTest::RunTest(const FString& Parameters)
 {
 	using namespace StandMarkingTest;
-	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::F })
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	TArray<FString> Names;
+	Names.SetNum(PaintBoundsCases);
+	for (int32 Case = 0; Case < PaintBoundsCases; ++Case)
 	{
-		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		const FEntityInstance* Stand = Net->GetEntity(PlaceDrawnStand(*Net, UEntityDefinition::MakeStandTransient(Letter), Letter, 0.0));
-		FStandPaintFrame Frame;
-		if (!TestNotNull(TEXT("the stand resolves"), Stand)
-			|| !TestTrue(TEXT("a frame"), FStandMarkingBuilder::FrameFor(*Stand, FLetterEnvelopeTable::Floor(), Frame))) { return false; }
-		FRoadMeshBuffers Buffers;
-		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), nullptr, DistinctIds());
-		int32 Marks = 0, Spaces = 0, Inside = 0;
-		for (const FPaintTriangle& T : TrianglesOf(Buffers))
+		PlacePaintBoundsCase(*Net, Case, Names[Case]);
+	}
+	// Re-read after every placement - PlaceEntity may grow the entity array under the pointers.
+	TArray<const FEntityInstance*> Stands;
+	for (int32 Case = 0; Case < PaintBoundsCases; ++Case)
+	{
+		Stands.Add(Net->GetEntity(Net->EntityIdAt(Case)));
+	}
+	// All stands in one build; each hatch triangle is judged against EVERY stand's box, which is
+	// stricter than its own - the stands are 40 m apart, so no box reaches a neighbour.
+	FRoadMeshBuffers Buffers;
+	FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), nullptr, DistinctIds());
+	TArray<FStandPaintFrame> Frames;
+	for (int32 Case = 0; Case < Stands.Num(); ++Case)
+	{
+		FStandPaintFrame& Frame = Frames.AddDefaulted_GetRef();
+		if (!TestTrue(FString::Printf(TEXT("%s has a frame"), *Names[Case]),
+			Stands[Case] != nullptr && FStandMarkingBuilder::FrameFor(*Stands[Case], FLetterEnvelopeTable::Floor(), Frame))) { return false; }
+	}
+	TArray<int32> Marks, Spaces, Inside;
+	Marks.Init(0, Stands.Num()); Spaces.Init(0, Stands.Num()); Inside.Init(0, Stands.Num());
+	for (const FPaintTriangle& T : TrianglesOf(Buffers))
+	{
+		if (!IsHatch(T.Id)) { continue; }
+		for (int32 Case = 0; Case < Stands.Num(); ++Case)
 		{
-			if (!IsHatch(T.Id)) { continue; }
-			(T.Id == static_cast<int32>(EStandPaint::HatchMark) ? Marks : Spaces)++;
+			if (InConvex(Stands[Case]->Outline, (T.A + T.B + T.C) / 3.0, 1.0))
+			{
+				(T.Id == static_cast<int32>(EStandPaint::HatchMark) ? Marks : Spaces)[Case]++;
+			}
 			for (const FVector2D& P : { T.A, T.B, T.C, (T.A + T.B) * 0.5, (T.B + T.C) * 0.5, (T.C + T.A) * 0.5, (T.A + T.B + T.C) / 3.0 })
 			{
-				Inside += Frame.InRestraintInterior(P, 0.01) ? 1 : 0;
+				Inside[Case] += Frames[Case].InRestraintInterior(P, 0.01) ? 1 : 0;
 			}
 		}
-		TestTrue(FString::Printf(TEXT("Code %s: both kinds of stripe painted (%d, %d)"), IcaoCode::ToLetter(Letter), Marks, Spaces), Marks > 0 && Spaces > 0);
-		TestEqual(FString::Printf(TEXT("Code %s: no hatch inside the restraint box"), IcaoCode::ToLetter(Letter)), Inside, 0);
+	}
+	for (int32 Case = 0; Case < Stands.Num(); ++Case)
+	{
+		TestTrue(FString::Printf(TEXT("%s: both kinds of stripe painted (%d, %d)"), *Names[Case], Marks[Case], Spaces[Case]),
+			Marks[Case] > 0 && Spaces[Case] > 0);
+		TestEqual(FString::Printf(TEXT("%s: no hatch inside the restraint box"), *Names[Case]), Inside[Case], 0);
 	}
 	return true;
 }
@@ -909,6 +992,74 @@ bool FStandMarkingLayoutLiesOnHatchTest::RunTest(const FString& Parameters)
 		}
 	}
 	TestEqual(FString::Printf(TEXT("every one of %d lane/park-bay nodes lies on hatched ground"), Nodes.Num()), Off, 0);
+	return true;
+}
+
+/**
+ * R21: A STAND TOO SHALLOW FOR ITS FLEET STILL PAINTS A CLOSED RED BOX. GhostCommitAndPoint-
+ * PlacedAgree's technique, without the asset: Code C's envelope raised 30 m past its floor nose,
+ * so the box's forward edge would land 30 m beyond a floor-depth C stand's far edge. The nose side
+ * is clamped onto the inner far edge (four sides, not three), nothing is hatched ahead of the box
+ * because there is no ground there, and the builder says so once.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingShallowStandClampsTheNoseSideTest,
+	"Airside.Build.StandMarking.ShallowStandClampsTheNoseSide",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingShallowStandClampsTheNoseSideTest::RunTest(const FString& Parameters)
+{
+	using namespace StandMarkingTest;
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FEntityInstance* Stand = Net->GetEntity(PlaceDrawnStand(*Net, UEntityDefinition::MakeStandTransient(), EIcaoCode::C, 0.0));
+	if (!TestNotNull(TEXT("the stand resolves"), Stand)) { return false; }
+
+	FLetterEnvelopeTable Raised = FLetterEnvelopeTable::Floor();
+	Raised.Envelopes[static_cast<uint8>(EIcaoCode::C)].MaxNoseFwd += 3000.0;
+
+	FStandPaintFrame Frame;
+	if (!TestTrue(TEXT("a frame"), FStandMarkingBuilder::FrameFor(*Stand, Raised, Frame))) { return false; }
+	if (!TestTrue(FString::Printf(TEXT("the premise: the envelope (%.0f) reaches past the stand (%.0f deep)"),
+		Frame.EnvelopeForward, Frame.XMax - Frame.XMin), Frame.bForwardClamped)) { return false; }
+
+	AddExpectedMessage(TEXT("nose restraint clamped to the far edge"), EAutomationExpectedMessageFlags::Contains, 1);
+	FRoadMeshBuffers Buffers;
+	FStandMarkingCensus Census;
+	FStandMarkingBuilder::Build(*Net, 10.0, Buffers, Raised, &Census, DistinctIds());
+
+	TestEqual(TEXT("four restraint sides - the nose side clamped, not dropped"), Census.RestraintSides, 4);
+
+	double InnerFar = -DBL_MAX;
+	for (const FVector2D& P : Frame.Inner) { InnerFar = FMath::Max(InnerFar, P.X); }
+	double RedFar = -DBL_MAX;
+	int32 HatchAhead = 0;
+	int32 NoseSide = 0;
+	for (const FPaintTriangle& T : TrianglesOf(Buffers))
+	{
+		// The NOSE side itself, not the two long sides running up to the far edge: a red
+		// triangle across the centreline in the last RestraintWidth before the inner far edge.
+		const FVector2D Centroid = Frame.ToLocal((T.A + T.B + T.C) / 3.0);
+		if (T.Id == static_cast<int32>(EStandPaint::Restraint) && FMath::Abs(Centroid.Y) < Frame.RestraintHalfWidth
+			&& Centroid.X > Frame.RestraintForward - 0.01)
+		{
+			++NoseSide;
+		}
+		for (const FVector2D& W : { T.A, T.B, T.C })
+		{
+			const FVector2D P = Frame.ToLocal(W);
+			if (T.Id == static_cast<int32>(EStandPaint::Restraint)) { RedFar = FMath::Max(RedFar, P.X); }
+		}
+		// AHEAD of the nose side, not merely level with it: the side hatch rightly runs on beside
+		// the nose line itself (x up to Forward + RestraintWidth, outboard of it).
+		if (IsHatch(T.Id) && Frame.ToLocal((T.A + T.B + T.C) / 3.0).X > Frame.RestraintForward + FStandMarkingBuilder::RestraintWidth)
+		{
+			++HatchAhead;
+		}
+	}
+	TestTrue(FString::Printf(TEXT("the nose side lies on the inner far edge (red reaches %.2f, inner edge %.2f)"), RedFar, InnerFar),
+		FMath::Abs(RedFar - InnerFar) < 0.01);
+	TestTrue(TEXT("and it is the nose side that sits there, across the centreline"), NoseSide > 0);
+	TestEqual(TEXT("no hatch stripe ahead of the box - there is no ground there"), HatchAhead, 0);
 	return true;
 }
 

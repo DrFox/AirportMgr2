@@ -48,7 +48,18 @@ struct AIRSIDE_API FStandMarkingCensus
 	int32 LetterSegments = 0;
 	/** One per edge of the drawn outline. */
 	int32 BoundaryEdges = 0;
-	/** Four per stand: entrance, both sides, nose. */
+	/**
+	 * Four per stand: entrance, both sides, nose - for every stand whose outline is the one its
+	 * pose was derived from, which is every placement path (drawn, point-placed, migrated). True
+	 * again since R21 (review of task 13): the nose side used to fall off the far edge, silently,
+	 * whenever the fleet's envelope reached past a shallow stand; FrameFor now clamps the box's
+	 * forward edge to the ground inside the boundary, so the nose side lands on the stand (and
+	 * Build warns). A HAND-SET outline that disagrees with the pose - 2026-09-27, only the test
+	 * fixtures StandOutlineIsNotADepot (a 15 x 8 m outline on a C pose, 1 side) and
+	 * RoadLinesUpWithAPlotEdge / RoadRunsParallelToAPlotEdge (3 sides) - can still clip sides
+	 * away; every vertex stays on the ground either way.
+	 * ENFORCED BY: Airside.Build.StandMarking.ShallowStandClampsTheNoseSide, Airside.Build.StandMarking.PaintStaysInsideOutline
+	 */
 	int32 RestraintSides = 0;
 	/** Hatch stripe pieces actually emitted, both kinds, after clipping to their zones. */
 	int32 HatchStripes = 0;
@@ -78,6 +89,20 @@ struct AIRSIDE_API FStandPaintFrame
 	double RestraintHalfWidth = 0.0;
 	double RestraintForward = 0.0;
 	double RestraintAft = 0.0;
+
+	/** RestraintForward before R21's clamp: where the fleet's envelope says the box should end. */
+	double EnvelopeForward = 0.0;
+	/** The stand is too shallow for its letter's fleet, and RestraintForward was pulled in to fit. */
+	bool bForwardClamped = false;
+
+	/**
+	 * The drawn outline in this frame, wound counter-clockwise, and the same outline inset by the
+	 * boundary line (mitred) - the ground every non-boundary paint is clipped to.
+	 */
+	TArray<FVector2D> Ground;
+	TArray<FVector2D> Inner;
+	/** Ground's extents in this frame. */
+	double XMin = 0.0, XMax = 0.0, YMin = 0.0, YMax = 0.0;
 
 	FVector2D ToWorld(double X, double Y) const { return EntranceMid + Facing * X + Right * Y; }
 	FVector2D ToLocal(const FVector2D& World) const
