@@ -203,6 +203,9 @@ public:
 		double KeepBehind = -1.0, double* OutDropped = nullptr);
 
 	/**
+	 * GROUND VEHICLES ONLY: an aircraft is refused (false, logged) - its route changes go through
+	 * RedirectAgent and ReplanAt, which own its runway and stand claims.
+	 *
 	 * Sends a MOVING agent somewhere NEW without stopping it: the live plan's first KeepSteps
 	 * steps, spliced with Tail (RouteSearch::Splice), handed to the follower with Replace - so
 	 * Travelled, Speed, Heading and a tow's chain all carry on - and the goal moved to Tail's end

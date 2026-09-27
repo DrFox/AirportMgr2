@@ -1507,7 +1507,7 @@ namespace FuelServiceTest
 	 * and the tow backs off the service point and gets HOME, freeing its depot. That last half
 	 * failed on 4a16e9f6: the reverse was refused "turntable bent 13.4 deg (the lock engages within
 	 * 3.0)" and the tow sat at the hydrant for the rest of the session, its depot one truck short
-	 * (fixed 2026-09-26).
+	 * (fixed 2026-09-27).
 	 *
 	 * ONE BODY FOR A AND B (final review, 2026-09-27): both letters are laid for the tow, but B's
 	 * bays are its own template - deeper, so the lane and legs differ - and nothing drove one end
@@ -1651,6 +1651,13 @@ namespace FuelServiceTest
 		}
 		const FRoadAgent* Out = TruckId != 0 ? Fixture.Traffic->FindAgent(TruckId) : nullptr;
 		const bool bMidRoute = Out != nullptr && Out->Phase == EAgentPhase::Taxiing;
+		// THE ROUTE'S LENGTH IN STEPS, logged: SendTruckHome tries one search per node ahead, and
+		// its comment quotes this figure as the bound.
+		if (Out != nullptr)
+		{
+			Test.AddInfo(FString::Printf(TEXT("Code %s: recalled on step %d of %d"), Code,
+				UGroundTraffic::CurrentStep(Out->Follower.Plan, Out->Follower.Travelled), Out->Follower.Plan.Steps.Num()));
+		}
 		Fixture.Traffic->RetireAgent(Aircraft);
 
 		const bool bGone = TruckId != 0 && Fixture.AdvanceUntil([&]

@@ -613,6 +613,13 @@ bool UGroundTraffic::RerouteAgent(int32 AgentId, const URoadNetwork* Network, in
 	{
 		return false;
 	}
+	// GROUND VEHICLES ONLY - see the header. The one caller (UFuelService::SendTruckHome) sends
+	// vehicles; the guard is what keeps an aircraft's runway and departure arming off this path.
+	if (Agent.AsVehicle() == nullptr)
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("RerouteAgent %d refused: not a ground vehicle"), AgentId);
+		return false;
+	}
 
 	// NEVER BEHIND THE AGENT - see ReplanAt's identical guard, and the header.
 	const int32 OnStep = CurrentStep(Live, Agent.Follower.Travelled);

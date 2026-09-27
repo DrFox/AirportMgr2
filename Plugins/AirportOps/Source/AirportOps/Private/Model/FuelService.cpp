@@ -489,8 +489,9 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 	// UNSEEDED, as FPlanReResolver::SpliceReplan's is: it starts where the chain is not yet. When
 	// that turn does not hold - a tow arriving at a junction cannot always take a hard turn back
 	// (measured 2026-09-27: a 90 degree fold at the far road's junction) - the next node on is
-	// tried, and so on up the route: each is one search, once per recall, over a route of a few
-	// dozen steps at most.
+	// tried, and so on up the route: each is one search, once per recall, at most one per step
+	// left - 15 steps depot to hydrant on the fuel fixture's A and C stands (measured 2026-09-27,
+	// AirportOps.Fuel.*RecalledMidRouteGetsHome's "recalled on step" line); the tow took 5.
 	//
 	// ON ITS LAST STEP, OR WHEN NO TURN HOLDS, IT FINISHES THE LEG and turns for home from the
 	// service point, the normal cycle's own path (OnAgentPhase, below, on its arrival): the last
