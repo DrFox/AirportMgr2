@@ -219,6 +219,11 @@ public:
 		Out.Chassis.MainGearTrack = MainGearTrack;
 		Out.Chassis.FixedAxleX = FixedAxleX;
 
+		// EVERY AEROPLANE, NOT AUTHORED PER TYPE: parking square on the stand is what a pilot
+		// does whatever they fly, and a per-type knob would be one more thing a new type's
+		// asset could leave at the default. Only the LAST turn - see EFinalTurnAxle.
+		Out.Chassis.FinalTurnAxle = EFinalTurnAxle::Fixed;
+
 		// DERIVED, not authored: two numbers that must agree are one number. The footprint
 		// already says where the nose and tail are, so the centre is arithmetic - and an
 		// authored copy would drift the first time a mesh was re-exported, which is exactly

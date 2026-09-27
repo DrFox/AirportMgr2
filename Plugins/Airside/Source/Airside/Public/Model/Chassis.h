@@ -63,6 +63,37 @@ enum class ESteerLaw : uint8
 };
 
 /**
+ * Which axle rides the painted line through a route's FINAL turn - the pilot's choice
+ * between tracking the line with the nose and JUDGEMENTAL OVERSTEER.
+ *
+ * WHY THE LAST TURN IS DIFFERENT. With the steered axle on the line the heading trails the
+ * line by asin(L/R) at the end of a curve and only decays as e^(-s/L) along the straight
+ * after it. A 32.5 m A380 wheelbase through a 60 m Code F lead-in leaves 33 degrees at the
+ * end of the arc and still 3-6 degrees at the stop mark on a 50-75 m straight (simulated
+ * 2026-09-27). A TIGHTER LINE WAS TRIED ON PAPER AND REJECTED: it frees straight but
+ * starts it further off - 40 m left more error at the same straight than 60 m did.
+ *
+ * With the FIXED axle on the line the heading IS the line's tangent at the mains, so the
+ * aircraft is square the moment the mains reach the straight. The nose swings outside the
+ * curve to do it - the "overshoot the line and turn in tighter" a pilot flies onto a stand.
+ * It also needs LESS lock than nose tracking for the same line: atan(L/R), not asin(L/R).
+ *
+ * THE FINAL TURN ONLY. Everywhere else the nose holds the line, and fillets are sized for
+ * it, exactly as real aerodromes are designed for "cockpit over centreline" and oversteer
+ * only where a bend needs it. ENFORCED BY: Airside.Model.NoseGearTracks,
+ * Airside.Model.FinalTurnShortStraightFallsBack
+ */
+UENUM()
+enum class EFinalTurnAxle : uint8
+{
+	/** The nose gear holds the line all the way in; the heading lags out of the last turn. */
+	Steered,
+
+	/** The main gear holds the line through the last turn; parks square. See FRouteFollower::FinalTurn. */
+	Fixed
+};
+
+/**
  * One POWER SETTING: what the airframe does when it is being flown a particular way.
  *
  * Taxi, take-off and landing are three different machines as far as motion is concerned -
@@ -319,6 +350,17 @@ struct AIRSIDE_API FChassis
 	 * to have been filled in. See ESteerLaw for the bug that inference caused.
 	 */
 	UPROPERTY(EditAnywhere) ESteerLaw SteerLaw = ESteerLaw::Pivot;
+
+	/**
+	 * Which axle holds the line through the route's LAST turn - see EFinalTurnAxle.
+	 *
+	 * STEERED BY DEFAULT, which is every route this game drove before 2026-09-27 and every
+	 * vehicle's still. UAircraftType::Airframe() sets Fixed for every aeroplane - ENFORCED BY:
+	 * Airside.Model.FinalTurnAircraftTypeParksSquare - because the stand
+	 * lead-in is the last turn of an arrival, and it is the one turn where the heading at the
+	 * END is what the player judges - an A380 left 6 degrees off its stand reads as a bug.
+	 */
+	UPROPERTY(EditAnywhere) EFinalTurnAxle FinalTurnAxle = EFinalTurnAxle::Steered;
 
 	/**
 	 * True when the axle figures can actually support the rolling-steer law.

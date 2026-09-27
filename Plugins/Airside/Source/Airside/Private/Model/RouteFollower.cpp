@@ -1,5 +1,7 @@
 #include "Model/RouteFollower.h"
 
+#include "AirsideLog.h"
+
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
 
@@ -34,6 +36,12 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FChassis& InChassis, 
 	// airframe into ~3800 lines/s at 60 fps across a busy apron. Start runs once per dispatch,
 	// which is the granularity the warning actually wants.
 	WarnIfSteerLawUnsupported(InChassis);
+
+	// WHICH AXLE TAKES THE LAST TURN, decided once per plan - see ArmFinalTurn. A dispatch
+	// is never mid-handover, so nothing from a previous route is kept.
+	FinalTurnHandoverOffset = FVector2D::ZeroVector;
+	FinalTurnHandoverHeading = 0.0;
+	ArmFinalTurn(InChassis, false);
 
 	// The whole route costed before the first frame. See FSpeedProfile: once braking is
 	// limited, a corner discovered by arriving at it is already twenty-five metres too late.
@@ -105,6 +113,9 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FChassis& InChassis, dou
 	// a wheelbase short, which Airside.Model.AuthoredStopPointsDoNotMove caught.
 	const double StopAt = FMath::Min(Plan.Length, Travelled + FMath::Max(0.0, StopWithin));
 
+	// Kept for the fixed-axle law, which reads the steering off how far the mains rolled.
+	const double WasTravelled = Travelled;
+
 	// Clamped rather than allowed to run on, so a long frame - a hitch, or a breakpoint -
 	// leaves the agent at its destination instead of somewhere past the end of the world.
 	//
@@ -127,6 +138,92 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FChassis& InChassis, dou
 	{
 		return false;
 	}
+
+	// WHICH AXLE HOLDS THE LINE, and so which law turns the body this frame - see
+	// EFinalTurnAxle. The nose law is every frame of every route but the last turn of an
+	// aircraft's, and was the whole of this block until 2026-09-27; it moved into
+	// SteerNoseOnLine unchanged, with its reasoning, so the two laws read side by side.
+	const bool bMainsHold = FinalTurnFrom >= 0.0 && Travelled >= FinalTurnFrom
+		&& InChassis.EffectiveSteerLaw() == ESteerLaw::RollingSteer;
+	if (bMainsHold && WasTravelled < FinalTurnFrom)
+	{
+		// THE HANDOVER FRAME: what the nose law left, measured against what the fixed-axle law
+		// wants, so HoldFinalTurn can decay the difference out - see FinalTurnHandoverOffset.
+		//
+		// MEASURED AT LAST FRAME'S POSE, WasTravelled, not at this frame's Travelled: that is
+		// the last pose the nose law actually produced (the nose ON the line, at the Heading it
+		// left), and HoldFinalTurn's decay is keyed to FinalTurnFrom, so the offset is carried
+		// forward to that point by the same e^(-s/L). Measured at Travelled instead, the first
+		// frame decayed only the part of the frame past FinalTurnFrom and the nosewheel dipped
+		// 1.8 degrees for a frame (Airside.Model.FinalTurnHandoverIsSmooth).
+		const double L = InChassis.Wheelbase();
+		FVector2D NoseWas = FVector2D::ZeroVector;
+		FVector2D MainsWanted = FVector2D::ZeroVector;
+		double Unused = 0.0;
+		GuidelineGeom::PointAtDistance(Plan.Polyline, WasTravelled, NoseWas, Unused);
+		GuidelineGeom::PointAtDistance(Plan.Polyline, FMath::Max(0.0, WasTravelled - L), MainsWanted, Unused);
+		const double CarriedTo = FMath::Exp(-(FinalTurnFrom - WasTravelled) / L);
+		FinalTurnHandoverOffset = (RoadGeom::TrailPoint(NoseWas, Heading, -L) - MainsWanted) * CarriedTo;
+		FinalTurnHandoverHeading = FMath::UnwindRadians(
+			Heading - FinalTurnHeadingAt(WasTravelled - L, L * FinalTurnHalfWindowOfWheelbase)) * CarriedTo;
+		UE_LOG(LogAirsideTraffic, Log,
+			TEXT("Final turn: main gear takes the line at %.0f uu, %.2f deg and %.1f uu off it at the handover."),
+			Travelled, FMath::RadiansToDegrees(FinalTurnHandoverHeading), FinalTurnHandoverOffset.Size());
+	}
+	const double Crab = bMainsHold
+		? HoldFinalTurn(DeltaSeconds, InChassis, WasTravelled, OutPosition)
+		: SteerNoseOnLine(DeltaSeconds, InChassis, LineHeading);
+
+	// TWO THINGS DECIDE THE TARGET SPEED, and they have different jobs.
+	//
+	// The PROFILE is the plan: it knows what is coming and is the only reason the aircraft
+	// is ever slow BEFORE a corner rather than after it. It is also the only one that can
+	// bring the aircraft to a stop, at the destination.
+	//
+	// The CRAB TERM is the feedback: it reacts to the line the aircraft is actually being
+	// given. It should almost never bind - if the profile has done its job the crab stays
+	// near zero on anything but a genuine corner - but it is what makes "the nose stays
+	// within CrabAtMinSpeedDegrees of the line" a property of this loop rather than a
+	// prediction that happens to come true. A plan alone would have nothing to notice with.
+	//
+	// It floors at MinSteeringSpeed and the profile does not, which is what lets the aircraft
+	// creep through a turn but still stop when it has arrived.
+	const double Slowing = 1.0 - FMath::Clamp(Crab / CrabAtMinSpeedDegrees, 0.0, 1.0);
+	// THREE-WAY, not two. MinSteeringSpeed is the airframe's physics and may legitimately be
+	// zero - a truck can stop with the wheel turned - so the solver's own epsilon has to sit
+	// beside it or this loop has nothing to climb out of. See FRouteFollower::ProgressEpsilon.
+	const double CrabLimit = FMath::Max3(
+		Ground.MinSteeringSpeed, ProgressEpsilon, Ground.Taxi.SpeedCap * Slowing);
+
+	// The THIRD cap: what the stop point permits. sqrt(2 a s), the braking curve, so the
+	// agent arrives at the stop at rest having braked at the rate it actually has - the
+	// profile already does this for corners and the destination; this does it for whatever
+	// the arbiter put in the way this tick. Zero distance is zero speed, which is a stop.
+	const double StopCap = FMath::Sqrt(2.0 * Ground.Taxi.Decel * FMath::Max(0.0, StopAt - Travelled));
+
+	const double Target = FMath::Min3(Profile.LimitAt(Travelled), CrabLimit, StopCap);
+
+	// AND THE TARGET IS APPROACHED, NOT TAKEN. Speed used to be assigned outright, so
+	// meeting a corner cost 920 uu/s in a single frame - 552 m/s2, fifty-six g. Thrust and
+	// brakes are separate figures because they are not equal: wheel brakes beat a propeller.
+	Speed = Target > Speed
+		? FMath::Min(Target, Speed + Ground.Taxi.Accel * DeltaSeconds)
+		: FMath::Max(Target, Speed - Ground.Taxi.Decel * DeltaSeconds);
+
+	// WHAT THE CALLER GETS IS THE ORIGIN, unchanged in meaning from before this law existed:
+	// ARoadAgentActor::SetPose puts it on the ground, stands compose against it, and claims
+	// derive the body centre from it. OutPosition is the STEERED AXLE under both laws - on
+	// the line under the nose law, outside it under HoldFinalTurn - and on every conforming
+	// airframe the axle and the origin are the same point: TrailPoint then returns
+	// OutPosition untouched rather than nudging it by a rounding error.
+	OutPosition = RoadGeom::TrailPoint(OutPosition, Heading, -InChassis.SteerAxleX);
+	OutHeading = Heading;
+	return true;
+}
+
+double FRouteFollower::SteerNoseOnLine(double DeltaSeconds, const FChassis& InChassis, double LineHeading)
+{
+	const FGroundPerformance& Ground = InChassis.Ground;
 
 	const double Error = FMath::UnwindRadians(LineHeading - Heading);
 
@@ -192,54 +289,276 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FChassis& InChassis, dou
 	// a seventh of the speed. What genuinely cannot be tracked is only the error the lock
 	// itself cannot absorb, and on a corner too tight for the lock that is exactly what
 	// grows - so the crab term still does its job where it should.
-	const double Crab = InChassis.EffectiveSteerLaw() == ESteerLaw::RollingSteer
+	return InChassis.EffectiveSteerLaw() == ESteerLaw::RollingSteer
 		? FMath::RadiansToDegrees(FMath::Max(0.0, FMath::Abs(Error) - Lock))
 		: FMath::RadiansToDegrees(FMath::Abs(Error - Step));
+}
 
-	// TWO THINGS DECIDE THE TARGET SPEED, and they have different jobs.
-	//
-	// The PROFILE is the plan: it knows what is coming and is the only reason the aircraft
-	// is ever slow BEFORE a corner rather than after it. It is also the only one that can
-	// bring the aircraft to a stop, at the destination.
-	//
-	// The CRAB TERM is the feedback: it reacts to the line the aircraft is actually being
-	// given. It should almost never bind - if the profile has done its job the crab stays
-	// near zero on anything but a genuine corner - but it is what makes "the nose stays
-	// within CrabAtMinSpeedDegrees of the line" a property of this loop rather than a
-	// prediction that happens to come true. A plan alone would have nothing to notice with.
-	//
-	// It floors at MinSteeringSpeed and the profile does not, which is what lets the aircraft
-	// creep through a turn but still stop when it has arrived.
-	const double Slowing = 1.0 - FMath::Clamp(Crab / CrabAtMinSpeedDegrees, 0.0, 1.0);
-	// THREE-WAY, not two. MinSteeringSpeed is the airframe's physics and may legitimately be
-	// zero - a truck can stop with the wheel turned - so the solver's own epsilon has to sit
-	// beside it or this loop has nothing to climb out of. See FRouteFollower::ProgressEpsilon.
-	const double CrabLimit = FMath::Max3(
-		Ground.MinSteeringSpeed, ProgressEpsilon, Ground.Taxi.SpeedCap * Slowing);
+double FRouteFollower::HoldFinalTurn(double DeltaSeconds, const FChassis& InChassis, double WasTravelled,
+	FVector2D& OutSteerAxle)
+{
+	// THE MAINS ON THE LINE, THE NOSE WHERE THAT PUTS IT. Closed form rather than integrated:
+	// a fixed axle that rolls along a path without slipping points along the path, so the
+	// heading is the line's own direction at the mains and there is no state to drift. See
+	// EFinalTurnAxle for why the last turn is flown this way.
+	const double L = InChassis.Wheelbase();
+	const double MainsAt = Travelled - L;
+	const double LineHeadingAtMains = FinalTurnHeadingAt(MainsAt, L * FinalTurnHalfWindowOfWheelbase);
 
-	// The THIRD cap: what the stop point permits. sqrt(2 a s), the braking curve, so the
-	// agent arrives at the stop at rest having braked at the rate it actually has - the
-	// profile already does this for corners and the destination; this does it for whatever
-	// the arbiter put in the way this tick. Zero distance is zero speed, which is a stop.
-	const double StopCap = FMath::Sqrt(2.0 * Ground.Taxi.Decel * FMath::Max(0.0, StopAt - Travelled));
+	// UNHINTED, unlike Advance's own walk: CursorVertex checkpoints TRAVELLED's walk, and the
+	// mains are a wheelbase behind it, so the hint would have to walk backwards. Paid only
+	// through the last turn, on a polyline of ~50-100 points (2026-09-27).
+	FVector2D MainsOnLine = FVector2D::ZeroVector;
+	double Unused = 0.0;
+	GuidelineGeom::PointAtDistance(Plan.Polyline, FMath::Max(0.0, MainsAt), MainsOnLine, Unused);
 
-	const double Target = FMath::Min3(Profile.LimitAt(Travelled), CrabLimit, StopCap);
+	// THE HANDOVER, decayed out over a wheelbase - see FinalTurnHandoverOffset. Measured from
+	// FinalTurnFrom, not re-measured per frame, so the decay is a function of distance alone.
+	const double Decay = FMath::Exp(-FMath::Max(0.0, Travelled - FinalTurnFrom) / L);
+	const FVector2D Mains = MainsOnLine + FinalTurnHandoverOffset * Decay;
+	const double NewHeading = LineHeadingAtMains + FinalTurnHandoverHeading * Decay;
 
-	// AND THE TARGET IS APPROACHED, NOT TAKEN. Speed used to be assigned outright, so
-	// meeting a corner cost 920 uu/s in a single frame - 552 m/s2, fifty-six g. Thrust and
-	// brakes are separate figures because they are not equal: wheel brakes beat a propeller.
-	Speed = Target > Speed
-		? FMath::Min(Target, Speed + Ground.Taxi.Accel * DeltaSeconds)
-		: FMath::Max(Target, Speed - Ground.Taxi.Decel * DeltaSeconds);
+	// THE STEERING THAT TURNED IT, read back off the motion: a fixed axle that yaws dh over ds
+	// of rolling is being steered at atan(L dh/ds). Held over a frame that rolled nothing, so a
+	// parked aircraft keeps its last wheel angle rather than a 0/0.
+	const double Turned = FMath::UnwindRadians(NewHeading - Heading);
+	const double Rolled = Travelled - WasTravelled;
+	if (Rolled > UE_KINDA_SMALL_NUMBER)
+	{
+		SteerDegrees = FMath::RadiansToDegrees(FMath::Atan(L * Turned / Rolled));
+	}
+	YawRateDegPerSec = DeltaSeconds > 0.0 ? FMath::RadiansToDegrees(Turned) / DeltaSeconds : 0.0;
+	Heading = NewHeading;
 
-	// WHAT THE CALLER GETS IS THE ORIGIN, unchanged in meaning from before this law existed:
-	// ARoadAgentActor::SetPose puts it on the ground, stands compose against it, and claims
-	// derive the body centre from it. The STEERED AXLE is what rides the line, and on every
-	// conforming airframe those are the same point - TrailPoint then returns OutPosition
-	// untouched rather than nudging it by a rounding error.
-	OutPosition = RoadGeom::TrailPoint(OutPosition, Heading, -InChassis.SteerAxleX);
-	OutHeading = Heading;
-	return true;
+	OutSteerAxle = RoadGeom::TrailPoint(Mains, Heading, L);
+
+	// THE CRAB, in the nose law's own terms: only what the lock cannot absorb. ArmFinalTurn
+	// refuses a turn that needs more, so this is zero on every turn it arms - it is kept so the
+	// speed loop below still has its feedback if that check and this law ever disagree.
+	// ENFORCED BY: Airside.Model.FinalTurnParksSquare (steering stays inside the lock)
+	return FMath::Max(0.0, FMath::Abs(SteerDegrees) - FMath::Max(0.0, InChassis.Ground.MaxSteerDegrees));
+}
+
+double FRouteFollower::FinalTurnHeadingAt(double MainsAt, double HalfWindow) const
+{
+	const TArray<FVector2D>& Points = Plan.Polyline;
+	if (HalfWindow <= UE_KINDA_SMALL_NUMBER)
+	{
+		FVector2D Unused = FVector2D::ZeroVector;
+		double Tangent = 0.0;
+		GuidelineGeom::PointAtDistance(Points, FMath::Clamp(MainsAt, 0.0, Plan.Length), Unused, Tangent);
+		return Tangent;
+	}
+
+	// EXACT PER SPAN, not sampled: each span has one direction, so its share of the average is
+	// that direction times the triangle's area over the span - which has a closed form. A
+	// sampled average would bring back, in smaller steps, the vertex-crossing jumps this
+	// function exists to remove. Beyond either end of the line the end span's direction
+	// carries on, as a straight would.
+	const double Lo = MainsAt - HalfWindow;
+	const double Hi = MainsAt + HalfWindow;
+	const double TwoH2 = 2.0 * HalfWindow * HalfWindow;
+	const auto Weight = [&](double X)
+	{
+		X = FMath::Clamp(X, Lo, Hi);
+		return X <= MainsAt ? FMath::Square(X - Lo) / TwoH2 : 1.0 - FMath::Square(Hi - X) / TwoH2;
+	};
+
+	// Unwound against the first direction met, so a window across the +/-PI seam averages
+	// the short way round.
+	TOptional<double> Reference;
+	double Sum = 0.0;
+	double Walked = 0.0;
+	const int32 Spans = Points.Num() - 1;
+	for (int32 Span = 0; Span < Spans && Walked <= Hi; ++Span)
+	{
+		const FVector2D Along = Points[Span + 1] - Points[Span];
+		const double Length = Along.Size();
+		const double A = Span == 0 ? Lo - 1.0 : Walked;
+		const double B = Span == Spans - 1 ? Hi + 1.0 : Walked + Length;
+		Walked += Length;
+		if (Length <= UE_KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+		const double Share = Weight(B) - Weight(A);
+		if (Share <= 0.0)
+		{
+			continue;
+		}
+		const double Direction = FMath::Atan2(Along.Y, Along.X);
+		if (!Reference.IsSet())
+		{
+			Reference = Direction;
+		}
+		Sum += Share * FMath::UnwindRadians(Direction - Reference.GetValue());
+	}
+	return Reference.Get(0.0) + Sum;
+}
+
+void FRouteFollower::ArmFinalTurn(const FChassis& InChassis, bool bKeepIfDriving)
+{
+	const double Was = FinalTurnFrom;
+	const bool bWasDriving = bKeepIfDriving && Was >= 0.0 && Travelled >= Was;
+	FinalTurnFrom = -1.0;
+
+	// SILENT FOR STEERED: it is the default, and a line per dispatch saying so would bury the
+	// aircraft's.
+	if (InChassis.FinalTurnAxle != EFinalTurnAxle::Fixed)
+	{
+		return;
+	}
+
+	const auto Refuse = [&](const FString& Why)
+	{
+		UE_LOG(LogAirsideTraffic, Log, TEXT("Final turn: nose gear holds the line to the stop - %s."), *Why);
+	};
+
+	if (InChassis.EffectiveSteerLaw() != ESteerLaw::RollingSteer)
+	{
+		Refuse(TEXT("no wheelbase to steer about"));
+		return;
+	}
+
+	const TArray<FVector2D>& Points = Plan.Polyline;
+	const int32 Spans = Points.Num() - 1;
+	if (!Plan.IsDrivable() || Spans < 2)
+	{
+		return;
+	}
+
+	const double L = InChassis.Wheelbase();
+	const double HalfWindow = L * FinalTurnHalfWindowOfWheelbase;
+
+	// A STRAIGHT IS A RUN WHOSE SPANS STAY WITHIN HALF A DEGREE OF ONE ANOTHER. Cumulative
+	// against one reference span, not span to span: a gentle curve sampled finely turns less
+	// than that at every vertex and is still a curve.
+	constexpr double StraightTolerance = UE_DOUBLE_PI / 360.0;
+
+	TArray<double> SpanHeading;
+	TArray<double> VertexDistance;
+	SpanHeading.SetNum(Spans);
+	VertexDistance.SetNum(Spans + 1);
+	VertexDistance[0] = 0.0;
+	for (int32 Span = 0; Span < Spans; ++Span)
+	{
+		const FVector2D Along = Points[Span + 1] - Points[Span];
+		SpanHeading[Span] = Along.SizeSquared() > UE_KINDA_SMALL_NUMBER || Span == 0
+			? FMath::Atan2(Along.Y, Along.X) : SpanHeading[Span - 1];
+		VertexDistance[Span + 1] = VertexDistance[Span] + Along.Size();
+	}
+	const auto Within = [&](int32 Span, double Reference)
+	{
+		return FMath::Abs(FMath::UnwindRadians(SpanHeading[Span] - Reference)) <= StraightTolerance;
+	};
+
+	// THE FINAL STRAIGHT: back from the stop while the spans hold the last one's heading.
+	int32 FinalFrom = Spans - 1;
+	while (FinalFrom > 0 && Within(FinalFrom - 1, SpanHeading[Spans - 1]))
+	{
+		--FinalFrom;
+	}
+	if (FinalFrom == 0)
+	{
+		return;   // Straight in: nothing to square, and the nose law is already exact.
+	}
+
+	// LONG ENOUGH TO FINISH ON. The mains stop a wheelbase behind the nose, and the heading
+	// is averaged half a window beyond them; both must be on the straight or the aircraft stops with
+	// the curve still in its heading - and with its nose off the line, short of the mark.
+	const double FinalStraight = Plan.Length - VertexDistance[FinalFrom];
+	const double Need = L + HalfWindow;
+	if (FinalStraight < Need)
+	{
+		Refuse(FString::Printf(TEXT("final straight %.0f uu is shorter than wheelbase %.0f plus half-window %.0f"),
+			FinalStraight, L, HalfWindow));
+		return;
+	}
+
+	// THE TURN'S START: the latest vertex with a straight of Need behind it. The mains hand
+	// over while still on that straight, so the handover is continuous and the only thing the
+	// blend has to absorb is what an EARLIER turn left in the heading. A scan per candidate,
+	// quadratic in the worst case, on ~50-100 points once per dispatch (2026-09-27).
+	int32 Enter = INDEX_NONE;
+	for (int32 Vertex = FinalFrom - 1; Vertex >= 1 && Enter == INDEX_NONE; --Vertex)
+	{
+		const double Reference = SpanHeading[Vertex - 1];
+		int32 Back = Vertex - 1;
+		while (Back > 0 && Within(Back - 1, Reference))
+		{
+			--Back;
+		}
+		if (VertexDistance[Vertex] - VertexDistance[Back] >= Need)
+		{
+			Enter = Vertex;
+		}
+	}
+	if (Enter == INDEX_NONE)
+	{
+		Refuse(FString::Printf(TEXT("no straight of %.0f uu before the last turn to hand over on"), Need));
+		return;
+	}
+
+	// FORWARD ONLY: a reverse leg is FReverseRun's to drive, never this follower's, and a
+	// turn backed round is not a turn onto a stand.
+	TArray<EDriveDirection> Directions;
+	Plan.DescribeSpanDirections(Directions);
+	for (int32 Span = Enter - 1; Span < Directions.Num(); ++Span)
+	{
+		if (Directions[Span] != EDriveDirection::Forward)
+		{
+			Refuse(TEXT("the last turn is part of a reverse leg"));
+			return;
+		}
+	}
+
+	// WITHIN THE LOCK, or the law would crab - measured on the heading it will actually fly,
+	// easing and all, every 25 uu of the mains' travel from the handover to the stop.
+	constexpr double SampleStep = 25.0;
+	const double From = VertexDistance[Enter];
+	double PeakSteer = 0.0;
+	double Previous = FinalTurnHeadingAt(From - L, HalfWindow);
+	for (double MainsAt = From - L + SampleStep; MainsAt <= Plan.Length - L; MainsAt += SampleStep)
+	{
+		const double Here = FinalTurnHeadingAt(MainsAt, HalfWindow);
+		PeakSteer = FMath::Max(PeakSteer, FMath::RadiansToDegrees(
+			FMath::Atan(L * FMath::Abs(FMath::UnwindRadians(Here - Previous)) / SampleStep)));
+		Previous = Here;
+	}
+	if (PeakSteer > InChassis.Ground.MaxSteerDegrees)
+	{
+		Refuse(FString::Printf(TEXT("the mains would need %.1f deg of steering against %.0f of lock"),
+			PeakSteer, InChassis.Ground.MaxSteerDegrees));
+		return;
+	}
+
+	// ALREADY IN THE TURN. A replan that keeps the same turn keeps its law; anything else past
+	// the handover point stays on the nose, since starting the fixed-axle law mid-turn is the
+	// jump the blend exists to avoid, only larger.
+	if (Travelled > From && !(bWasDriving && FMath::IsNearlyEqual(Was, From, 1.0)))
+	{
+		if (bWasDriving)
+		{
+			UE_LOG(LogAirsideTraffic, Warning,
+				TEXT("Final turn: a replan moved the last turn from %.0f to %.0f uu while the mains held it; the nose takes the line back."),
+				Was, From);
+		}
+		else
+		{
+			Refuse(FString::Printf(TEXT("already %.0f uu past the handover at %.0f"), Travelled - From, From));
+		}
+		return;
+	}
+
+	FinalTurnFrom = From;
+	if (!bWasDriving)
+	{
+		UE_LOG(LogAirsideTraffic, Log,
+			TEXT("Final turn: main gear holds the line from %.0f uu of %.0f - %.0f deg turn, final straight %.0f, wheelbase %.0f, peak steer %.1f of %.0f deg lock."),
+			From, Plan.Length,
+			FMath::RadiansToDegrees(FMath::Abs(FMath::UnwindRadians(SpanHeading[Spans - 1] - SpanHeading[Enter - 1]))),
+			FinalStraight, L, PeakSteer, InChassis.Ground.MaxSteerDegrees);
+	}
 }
 
 void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FChassis& InChassis)
@@ -263,6 +582,10 @@ void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FChassis& InChassi
 	// forward past whatever the splice already drove, exactly as the per-tick scan this
 	// replaces would re-discover on its very next call.
 	RebuildReverseLegSteps();
+
+	// RE-ARMED WITH THE PLAN, keeping the fixed-axle law if it is already driving the same
+	// turn - a splice ahead of the aircraft must not drop its nose back onto the line.
+	ArmFinalTurn(InChassis, true);
 	{
 		// PER SPAN, because a route may contain a bay's reverse leg and judging that by the
 		// forward limit refuses a manoeuvre that is legal - see FSpeedProfile's overload. The
