@@ -16,6 +16,10 @@ namespace
 		TMap<EPreviewStyle, int32> Markers;
 		TMap<EPreviewStyle, int32> Lines;
 		TArray<FString> Labels;
+		/** Where and how each of Labels was asked for, index for index - a readout's place and
+		 *  colour are half of what it says. */
+		TArray<FVector2D> LabelAt;
+		TArray<EPreviewStyle> LabelStyle;
 
 		virtual void Marker(const FVector2D& At, EPreviewStyle Style) override
 		{
@@ -32,6 +36,13 @@ namespace
 		virtual void Label(const FVector2D& At, const FString& Text, EPreviewStyle Style) override
 		{
 			Labels.Add(Text);
+			LabelAt.Add(At);
+			LabelStyle.Add(Style);
+		}
+
+		int32 FindLabel(const FString& Text) const
+		{
+			return Labels.IndexOfByKey(Text);
 		}
 
 		int32 CountMarkers(EPreviewStyle Style) const
@@ -303,6 +314,98 @@ bool FRoadDrawToolTest::RunTest(const FString& Parameters)
 			Doomed.CountMarkers(EPreviewStyle::Doomed) > 0);
 		TestTrue(TEXT("and the road that goes with it"),
 			Doomed.CountLines(EPreviewStyle::Doomed) > 0);
+	}
+
+	return true;
+}
+
+// NAMED DISTINCTLY, not Airside.Tool.RoadDraw.Length: a dotted child drops its bare-named
+// parent from the automation tree, and only the run count would notice.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadDrawLengthReadoutTest,
+	"Airside.Tool.RoadDrawLengthReadout",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadDrawLengthReadoutTest::RunTest(const FString& Parameters)
+{
+	// Reported 2026-09-27: the runway preview says how long the strip is, taxiways and roads
+	// said nothing, so the player measured a taxiway by eye against a runway's number.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// Both kinds, because both run FRoadChainingState and the report named both.
+	for (const ERoadKind Kind : { ERoadKind::Taxiway, ERoadKind::ServiceRoad })
+	{
+		const TCHAR* Name = Kind == ERoadKind::ServiceRoad ? TEXT("road") : TEXT("taxiway");
+
+		{
+			Actor->ClearNetwork();
+			FRoadDrawTool Tool(Kind);
+			Tool.OnClick(AtGround(Actor, FVector2D(0.0, 0.0)));
+
+			FCountingPreviewSink Sink;
+			Tool.BuildPreview(AtGround(Actor, FVector2D(8500.0, 0.0)), Sink);
+
+			const int32 At = Sink.FindLabel(TEXT("85 m"));
+			if (TestTrue(FString::Printf(TEXT("%s: the ghost says its length in metres (%s)"), Name,
+					*FString::Join(Sink.Labels, TEXT(" | "))), At != INDEX_NONE))
+			{
+				// Mid-segment, so it never sits on the price or refusal at the cursor end.
+				TestTrue(FString::Printf(TEXT("%s: at the segment's midpoint"), Name),
+					Sink.LabelAt[At].Equals(FVector2D(4250.0, 0.0), 1.0));
+				TestEqual(FString::Printf(TEXT("%s: in the ghost's own style"), Name),
+					Sink.LabelStyle[At], EPreviewStyle::Pending);
+			}
+		}
+
+		// A refused segment STILL says its length - "how long is it" matters most when the
+		// answer is "too short", which is exactly what the runway's refusal says too.
+		{
+			Actor->ClearNetwork();
+			FRoadDrawTool Tool(Kind);
+			Tool.OnClick(AtGround(Actor, FVector2D(0.0, 0.0)));
+
+			FCountingPreviewSink Sink;
+			Tool.BuildPreview(AtGround(Actor, FVector2D(200.0, 0.0)), Sink);
+
+			const int32 At = Sink.FindLabel(TEXT("2 m"));
+			if (TestTrue(FString::Printf(TEXT("%s: a too-short ghost still says its length (%s)"), Name,
+					*FString::Join(Sink.Labels, TEXT(" | "))), At != INDEX_NONE))
+			{
+				TestEqual(FString::Printf(TEXT("%s: coloured as refused, like the ghost"), Name),
+					Sink.LabelStyle[At], EPreviewStyle::Refused);
+			}
+		}
+
+		// The length of what the click BUILDS: with a snap guide active the click commits the
+		// guide's point (ResolveToNode -> RoadGuidedSnap), not the raw cursor.
+		{
+			Actor->ClearNetwork();
+			FRoadDrawTool Tool(Kind);
+			Tool.OnClick(AtGround(Actor, FVector2D(0.0, 0.0)));
+
+			FToolContext Guided = AtGround(Actor, FVector2D(4000.0, 300.0));
+			Guided.Guide.bActive = true;
+			Guided.Guide.Point = FVector2D(5000.0, 0.0);
+
+			FCountingPreviewSink Sink;
+			Tool.BuildPreview(Guided, Sink);
+
+			TestTrue(FString::Printf(TEXT("%s: the length follows the guide, not the cursor (%s)"), Name,
+				*FString::Join(Sink.Labels, TEXT(" | "))), Sink.FindLabel(TEXT("50 m")) != INDEX_NONE);
+		}
+
+		// Nothing to measure yet: an idle tool has no segment, so no length.
+		{
+			Actor->ClearNetwork();
+			FRoadDrawTool Tool(Kind);
+			FCountingPreviewSink Sink;
+			Tool.BuildPreview(AtGround(Actor, FVector2D(4000.0, 0.0)), Sink);
+			TestFalse(FString::Printf(TEXT("%s: an idle tool shows no length"), Name),
+				Sink.Labels.ContainsByPredicate([](const FString& L) { return L.EndsWith(TEXT(" m")); }));
+		}
 	}
 
 	return true;
