@@ -331,11 +331,11 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
 	{
 		// THE PLOT COMPONENTS THIS ACTOR NO LONGER OWNS, swept by name. Until 2026-09-22 they
-		// were default subobjects here, and M_Starter.umap was saved with one. Deleting the
+		// were default subobjects here, and M_Test.umap was saved with one. Deleting the
 		// UPROPERTY does not delete the saved component: AActor::ResetOwnedComponents collects
 		// components by OUTER, so the orphan still registers and renders whatever instances it
 		// was saved with - stale grey boxes over a depot the buildings actor is also drawing.
-		// Kept until every level has been resaved; place_buildings_actor.py resaves M_Starter.
+		// Kept until every level has been resaved; place_buildings_actor.py resaves M_Test.
 		for (UInstancedStaticMeshComponent* Stale :
 			TInlineComponentArray<UInstancedStaticMeshComponent*>(this))
 		{

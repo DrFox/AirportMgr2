@@ -13,7 +13,7 @@ components over half the ground, and typing 24x24 components gives 576 over twic
 """
 import unreal
 
-LEVEL = "/Game/Maps/M_Starter"
+LEVEL = "/Game/Maps/M_Test"
 
 EXPECTED_COMPONENTS = 144
 EXPECTED_SCALE_XY = 200.0

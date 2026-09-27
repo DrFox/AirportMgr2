@@ -136,7 +136,7 @@ protected:
 	 * DEPOTS ONLY: this is the depot tool, and Remove lit on it removes depots. A stand under
 	 * the cursor is the stand tool's to remove, where the player can see it is one. A depot is
 	 * a plotted entity, OR a fuel-role entity with no outline - the format depots were placed
-	 * in before plots, still saved in M_Starter on 2026-09-22 and otherwise unremovable.
+	 * in before plots, still saved in M_Test on 2026-09-22 and otherwise unremovable.
 	 *
 	 * KIND, NOT OUTLINE: IsDepot() alone is enough now that a stand can be plotted too - the
 	 * old `IsPlotted() || PoseRole == Fuel` would have picked up a drawn stand here as well.

@@ -160,7 +160,7 @@ bool FProfileFallbackTest::RunTest(const FString& Parameters)
  * Segment.Profile itself, so a level the player built in the editor, saved and reloaded
  * came back with every taxiway PAVED and none of them ROUTABLE: 16 segments, 2 derived
  * centrelines (the runways, whose profile is an asset), 42 stand lead-ins joining nothing,
- * and every arrival refused for "no route to a stand" (M_Starter, 2026-09-06). The mesh
+ * and every arrival refused for "no route to a stand" (M_Test, 2026-09-06). The mesh
  * had hidden the loss - the road looked right, so nobody asked whether the line under it
  * was there.
  *

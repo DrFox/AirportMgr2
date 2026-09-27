@@ -28,7 +28,7 @@ Re-running RE-AUTHORS IN PLACE, and needs the editor CLOSED: a running editor ho
 
 IN PLACE, not delete-and-recreate, since 2026-09-07. Deleting was tried and cannot work here:
 an asset another LOADED asset references is held open by that reference inside the commandlet
-itself - DA_Stand_CodeC names DA_Aircraft_A320 as its design aircraft, and M_Starter names
+itself - DA_Stand_CodeC names DA_Aircraft_A320 as its design aircraft, and M_Test names
 DA_Stand_CodeC - so a re-run deleted the aircraft in memory, could not recreate it, and
 skipped the stand that depended on it. Deleting the .uasset files from disk instead would
 break the level's reference to them, which is worse.
@@ -211,7 +211,7 @@ airbus = build_aircraft("DA_Aircraft_A320", unreal.AircraftType.build_a320)
 build_aircraft("DA_Aircraft_B738", unreal.AircraftType.build737)
 
 # THE MERIDIAN IS NO LONGER BUILT HERE. It was, from 2026-09-11, as DA_Aircraft_Piper - and
-# for a reason worth keeping legible even though the call has moved: M_Starter's runway is
+# for a reason worth keeping legible even though the call has moved: M_Test's runway is
 # 15 m wide and admits a 15 m wingspan, so neither Code C type can ever land there and every
 # offer was refused at the gate. A light type an airline can actually list is what gives a GA
 # field traffic, and what makes the jets a REASON to build a wider runway rather than a broken

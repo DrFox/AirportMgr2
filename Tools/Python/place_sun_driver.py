@@ -1,4 +1,4 @@
-"""Places ASunDriver in M_Starter and points it at the level's sun. Run headless:
+"""Places ASunDriver in M_Test and points it at the level's sun. Run headless:
 
   UnrealEditor-Cmd.exe <project> -run=pythonscript -script=<this file> -unattended -nosplash -nopause
 
@@ -14,7 +14,7 @@ would fight the first for the same light.
 """
 import unreal
 
-LEVEL = "/Game/Maps/M_Starter"
+LEVEL = "/Game/Maps/M_Test"
 
 
 def say(msg):

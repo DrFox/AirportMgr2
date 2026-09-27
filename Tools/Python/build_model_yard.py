@@ -9,7 +9,7 @@ without complaint and writing nothing. This script RELOADS AND COUNTS what it wr
 exactly that reason - a headless level edit that reports success and writes nothing is the
 known failure mode here.
 
-WHY A SEPARATE MAP AND NOT M_STARTER. M_Starter is the level the game loads, with the road
+WHY A SEPARATE MAP AND NOT M_TEST. M_Test is the level the game loads, with the road
 network actor, the sun driver and the stand entities in it; parking seven display models in
 it makes them part of the airport, which is not what they are yet. A yard is somewhere to
 LOOK at them. Nothing else references this map, so it can be deleted the day each model has
@@ -17,7 +17,7 @@ a real home.
 
 IT IS ALSO THE ANIMATION BENCH. build_bench() places an AAnimYard and sets the level's game
 mode override, which together make every rigged model in here MOVE - the demo loop on entry,
-and any channel draggable by hand. That is a second reason the yard is not M_Starter: the
+and any channel draggable by hand. That is a second reason the yard is not M_Test: the
 bench drives ten rigs in lockstep from one set of made-up numbers, which is exactly what the
 airport must never do.
 
@@ -130,7 +130,7 @@ FLOOR_MESH = "/Engine/BasicShapes/Plane"
 
 # LIGHTING COPIED FROM build_environment.py, not invented, so the models are judged under the
 # light the game actually puts on them. If those values change there, they should change here
-# - the two are not wired together, because M_Starter's are applied to a level that already
+# - the two are not wired together, because M_Test's are applied to a level that already
 # exists and these author a level from nothing.
 SUN_PITCH = -42.0
 SUN_YAW = 150.0
@@ -149,7 +149,7 @@ SUN_INTENSITY = 2.487
 FOG_DENSITY = 0.005
 FOG_HEIGHT_FALLOFF = 0.2
 
-# EXPOSURE IS LEFT ON AUTO, and this deviates from M_Starter deliberately. build_environment.py
+# EXPOSURE IS LEFT ON AUTO, and this deviates from M_Test deliberately. build_environment.py
 # records that locking it at a wrong EV100 rendered the entire viewport BLACK, and that a
 # black frame is indistinguishable from the sun, sky or atmosphere being broken. Its 1.75 was
 # MEASURED against a landscape of grass; this yard's floor is grey plastic with a different

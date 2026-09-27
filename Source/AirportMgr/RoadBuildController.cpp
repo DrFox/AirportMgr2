@@ -60,7 +60,7 @@ void ARoadBuildController::BeginPlay()
 		return;
 	}
 
-	// THE BUILDINGS, found or spawned for this play session. M_Starter has one placed, so this
+	// THE BUILDINGS, found or spawned for this play session. M_Test has one placed, so this
 	// normally finds it; spawning covers a level that predates the split, where the depots
 	// would otherwise be invisible in play and present in the editor.
 	Buildings = AAirsideBuildingsActor::FindOrCreate(GetWorld(), Target);
