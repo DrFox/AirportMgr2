@@ -82,34 +82,6 @@ struct AIRSIDE_API FRunwayRequirements
 AIRSIDE_API const TCHAR* RunwayApproachName(ERunwayApproach Approach);
 
 /**
- * What a TAXIWAY OR SERVICE ROAD is laid on - FRoadSegment::Surface. Two steps where a runway
- * has four: concrete and reinforced pavement are a runway's strength classes, and nothing
- * rolls on a road or taxiway that grass and tarmac do not already tell apart.
- *
- * NOT EPavement reused, because that would offer Concrete and Reinforced on the road
- * tool's row and every consumer would have to decide what a concrete service road means.
- * NOT A SEPARATE SCALE either: RoadSurfacePavement maps it onto EPavement, so an
- * aircraft's MinimumSurface is compared against a taxiway with the same < admission uses on a
- * runway - one ordering, not two that could disagree about whether grass is weaker.
- *
- * TARMAC FIRST so the zero value, and every segment saved before this existed, is tarmac.
- */
-UENUM(BlueprintType)
-enum class ERoadSurface : uint8
-{
-	Tarmac,
-	Grass,
-	/** Sentinel, never a real surface - sizes the tool's row and % cycling. */
-	Count UMETA(Hidden),
-};
-
-/** The pavement scale's step for a road surface - see ERoadSurface on why there is one scale. */
-AIRSIDE_API EPavement RoadSurfacePavement(ERoadSurface Surface);
-
-/** Lower case, for a log line or the tool's row - Pavement::Name's spelling of the same step. */
-AIRSIDE_API const TCHAR* RoadSurfaceName(ERoadSurface Surface);
-
-/**
  * One end of a runway strip: the threshold an aircraft crosses it at, the direction it
  * points from there, how much strip lies beyond, and the segment the query actually named
  * or landed nearest.

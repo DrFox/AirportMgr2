@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "Model/Pavement.h"
 #include "Model/RoadTraffic.h"
 #include "RoadProfile.generated.h"
 
@@ -152,6 +153,23 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0")) double CostPerMetre = 0.0;
 	UPROPERTY(EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0")) double UpkeepPerMetrePerDay = 0.0;
+
+	/**
+	 * Which pavements a segment of this profile may be laid on - the road tool's Surface row
+	 * (Pavement::AppendAxis) and URoadNetwork::SetSegmentSurface's refusal both read it through
+	 * Pavement::Offered. EMPTY MEANS ALL FOUR, which is what runway profiles leave.
+	 *
+	 * THE REASON #356 MADE A TWO-STEP ENUM, NOW DATA: ERoadSurface { Tarmac, Grass } existed so
+	 * the road tool could not offer a concrete service road, and concrete and reinforced are a
+	 * runway's strength classes - nothing rolls on a road or taxiway that grass and tarmac do
+	 * not already tell apart. A second enum made that rule a second scale every consumer had to
+	 * map across; a list on the profile keeps one scale (EPavement) and lets a future apron
+	 * road offer concrete by editing an asset. Every road and taxiway profile asset carries
+	 * { Tarmac, Grass } (authored 2026-09-27), and Fill / FillTwoWayRoad lay the same list so
+	 * a transient profile and a re-authored asset agree with them. TARMAC FIRST, as #356's row
+	 * had it.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Surface") TArray<EPavement> AllowedPavements;
 
 	UPROPERTY(EditAnywhere) TArray<FProfileBand> Bands;
 	UPROPERTY(EditAnywhere) TArray<FProfileGuideline> Guidelines;

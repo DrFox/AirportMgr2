@@ -923,7 +923,7 @@ IBuildPurse* ARoadNetworkActor::GetPurse() const
 }
 
 FBuildQuote ARoadNetworkActor::QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-	int32 WidthIndex, ERoadSurface Surface) const
+	int32 WidthIndex, EPavement Surface) const
 {
 	return Facade->QuoteForConnect(FromIndex, To, Kind, WidthIndex, Surface);
 }
@@ -948,11 +948,11 @@ URoadProfile* ARoadNetworkActor::ResolveProfileFor(ERoadKind Kind, int32 WidthIn
 bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind,
 	int32 WidthIndex)
 {
-	return ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, ERoadSurface::Tarmac);
+	return ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, EPavement::Tarmac);
 }
 
 bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind,
-	int32 WidthIndex, ERoadSurface Surface)
+	int32 WidthIndex, EPavement Surface)
 {
 	return Facade->ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, Surface);
 }

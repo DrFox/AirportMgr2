@@ -193,7 +193,7 @@ struct FNullEditTarget : IRoadEditTarget
 {
 	virtual const URoadNetwork* GetNetwork() const override { return nullptr; }
 	virtual int32 PlaceNode(FVector2D) override { return INDEX_NONE; }
-	virtual bool ConnectNodes(int32, int32, ERoadKind, int32, ERoadSurface) override { return false; }
+	virtual bool ConnectNodes(int32, int32, ERoadKind, int32, EPavement) override { return false; }
 	using IRoadEditTarget::ConnectNodes;
 	virtual int32 ConnectGuidelines(int32, int32) override { return INDEX_NONE; }
 	virtual bool AddReverseTurn(int32, int32, int32) override { return false; }

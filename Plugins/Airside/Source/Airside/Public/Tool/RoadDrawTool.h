@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/Pavement.h"
 #include "Tool/RoadBuildTool.h"
 
 /**
@@ -44,7 +45,7 @@ struct IRoadDrawState
 
 	/** What this state's next click lays the road on - WidthIndex's twin, for the same reason:
 	 *  picking grass mid-chain has to reach the part-drawn state. See FRoadDrawTool::Surface. */
-	ERoadSurface Surface = ERoadSurface::Tarmac;
+	EPavement Surface = EPavement::Tarmac;
 };
 
 /** Nothing part-drawn. A click puts down the start of a road. */
@@ -54,7 +55,7 @@ public:
 	/** Kind is carried by the STATE as well as by the tool because a state builds its own
 	 *  successor, and the successor must lay the same cross-section this one started. */
 	explicit FRoadIdleState(ERoadKind InKind = ERoadKind::Taxiway, int32 InWidthIndex = INDEX_NONE,
-		ERoadSurface InSurface = ERoadSurface::Tarmac)
+		EPavement InSurface = EPavement::Tarmac)
 		: Kind(InKind) { WidthIndex = InWidthIndex; Surface = InSurface; }
 
 	virtual TUniquePtr<IRoadDrawState> OnClick(const FToolContext& Context) override;
@@ -76,7 +77,7 @@ class FRoadChainingState : public IRoadDrawState
 {
 public:
 	FRoadChainingState(int32 InFrom, bool bInCreated, ERoadKind InKind = ERoadKind::Taxiway,
-		int32 InWidthIndex = INDEX_NONE, ERoadSurface InSurface = ERoadSurface::Tarmac)
+		int32 InWidthIndex = INDEX_NONE, EPavement InSurface = EPavement::Tarmac)
 		: From(InFrom), bCreated(bInCreated), Kind(InKind) { WidthIndex = InWidthIndex; Surface = InSurface; }
 
 	virtual TUniquePtr<IRoadDrawState> OnClick(const FToolContext& Context) override;
@@ -133,7 +134,7 @@ public:
 	int32 GetWidthIndex() const { return WidthIndex; }
 
 	/** What the next click lays the road on. */
-	ERoadSurface GetSurface() const { return Surface; }
+	EPavement GetSurface() const { return Surface; }
 
 	/** Selecting this tool while it is already active cycles the taxiway width - the same
 	 *  gesture FRunwayTool::OnReselect gives runways. Steps from the LIT option, through
@@ -143,8 +144,9 @@ public:
 
 	/**
 	 * Two axes. Width: the standard widths of this tool's kind, labelled in metres - absent
-	 * when the content set declares none. Surface: tarmac or grass, always present, since it is
-	 * this tool's own enum and needs no content (FRunwayTool's Surface row, the same way).
+	 * when the content set declares none. Surface: the kind's profile's AllowedPavements
+	 * (tarmac and grass on every road and taxiway profile), always present, since it needs no
+	 * width profiles - built by Pavement::AppendAxis, as FRunwayTool's Surface row is.
 	 *
 	 * LIGHTS THE LEVEL DEFAULT WITHOUT CHOOSING IT. While WidthIndex is unset the tool lays the
 	 * level's own tuning (see WidthIndex), so Current names the preset that tuning matches -
@@ -216,7 +218,7 @@ private:
 	 * WidthIndex's reason, and STARTS TARMAC so a player who never touches the row lays what
 	 * every road before the row was.
 	 */
-	ERoadSurface Surface = ERoadSurface::Tarmac;
+	EPavement Surface = EPavement::Tarmac;
 
 	/** The Width row, or nothing when the content set declares no widths for Kind. */
 	void AddWidthAxis(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const;

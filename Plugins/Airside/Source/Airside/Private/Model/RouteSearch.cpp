@@ -268,13 +268,17 @@ namespace
 				return;
 			}
 
-			// GROUND TOO WEAK for the traveller: a grass road or taxiway under an aircraft that
-			// needs pavement. Asked only when the query needs more than grass, so a vehicle's or a
-			// grass-capable aircraft's search never pays the lookup. A turn path has no
-			// DerivedFrom and is not judged; the grass lanes either side of it are.
-			// See FRouteQuery::MinimumSurface on why Find's size retry does not lift this.
-			if (Query.MinimumSurface > RoadSurfacePavement(ERoadSurface::Grass)
-				&& Edge->DerivedFrom.IsSet() && Network.IsGrassRoad(Edge->DerivedFrom))
+			// GROUND TOO WEAK for the traveller, by the SAME comparison runway and stand admission
+			// use (FPavementCheck) - not a grass test: #356 gated grass only, which would have
+			// passed a jet needing concrete down a tarmac taxiway. Asked only when the query needs
+			// more than grass, so a vehicle's or a grass-capable aircraft's search never pays the
+			// lookup. A turn path has no DerivedFrom and is not judged; the lanes either side of
+			// it are. RUNWAYS ARE NOT JUDGED HERE (!IsRunwaySegment) - a strip's surface is
+			// RunwayAdmission's. See FRouteQuery::MinimumPavement on why Find's size retry does
+			// not lift this.
+			if (Query.MinimumPavement > EPavement::Grass && Edge->DerivedFrom.IsSet()
+				&& !Network.IsRunwaySegment(Edge->DerivedFrom)
+				&& !Pavement::Judge(Network.PavementOf(Edge->DerivedFrom), Query.MinimumPavement).Passes())
 			{
 				return;
 			}

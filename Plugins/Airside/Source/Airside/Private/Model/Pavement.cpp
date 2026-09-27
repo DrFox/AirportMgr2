@@ -21,6 +21,22 @@ namespace Pavement
 		return TEXT("unknown");
 	}
 
+	TArray<EPavement> Offered(TConstArrayView<EPavement> Allowed)
+	{
+		if (Allowed.Num() > 0)
+		{
+			return TArray<EPavement>(Allowed);
+		}
+		// ALL FOUR IN SCALE ORDER, from the enum rather than typed, so a fifth step is offered
+		// by the runway row without anyone remembering this list.
+		TArray<EPavement> All;
+		for (uint8 Each = 0; Each < static_cast<uint8>(EPavement::Count); ++Each)
+		{
+			All.Add(static_cast<EPavement>(Each));
+		}
+		return All;
+	}
+
 	int32 MaterialSlot(EPavement P)
 	{
 		switch (P)

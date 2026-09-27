@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/BuildSession.h"
+#include "Tool/PavementAxis.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RunwayTool.h"
@@ -380,6 +381,35 @@ bool FTvSessionTest::RunTest(const FString& Parameters)
 	Session.GetActiveVariantAxes(Context, Axes);
 	TestEqual(TEXT("in edit mode there is no row"), Axes.Num(), 0);
 	TestFalse(TEXT("and no pick lands"), Session.SelectActiveVariant(Context, 0, 0));
+	return true;
+}
+
+/**
+ * ONE SURFACE-ROW BUILDER, reading the profile's list - world-free. Fails if the row offers
+ * the enum rather than the list, reorders it, or lights Current by its enum value rather than
+ * by its place in what was offered.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadSurfaceRowOffersTheProfileListTest,
+	"Airside.Tool.Variants.RoadSurfaceRowOffersTheProfileList",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadSurfaceRowOffersTheProfileListTest::RunTest(const FString& Parameters)
+{
+	// THE PROFILE'S LIST, NOT A SECOND ENUM: the reason ERoadSurface existed - a road tool
+	// must not offer a concrete service road - is now data on the profile.
+	TArray<FToolVariantAxis> Axes;
+	const EPavement RoadList[] = { EPavement::Tarmac, EPavement::Grass };
+	Pavement::AppendAxis(Axes, EPavement::Tarmac, RoadList);
+	if (!TestEqual(TEXT("one row"), Axes.Num(), 1)) { return false; }
+	if (!TestEqual(TEXT("with exactly the profile's two options"), Axes[0].Options.Num(), 2)) { return false; }
+	TestEqual(TEXT("in the profile's order - tarmac first, as #356's row had it"), Axes[0].Options[1].Id, FName(TEXT("grass")));
+
+	TArray<FToolVariantAxis> All;
+	Pavement::AppendAxis(All, EPavement::Tarmac, {});
+	if (!TestEqual(TEXT("still one row"), All.Num(), 1)) { return false; }
+	TestEqual(TEXT("an empty list offers all four - runways and stands"), All[0].Options.Num(), 4);
+	TestEqual(TEXT("and lights the current one by its place in the OFFERED list"), All[0].Current, 1);
 	return true;
 }
 

@@ -484,7 +484,7 @@ FBuildSessionTunables URoadEditFacade::MakeTunables(double ViewWorldWidth)
 }
 
 FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-	int32 WidthIndex, ERoadSurface Surface) const
+	int32 WidthIndex, EPavement Surface) const
 {
 	const URoadNetwork* Network = Actor().Network;
 	// THROUGH THE ACTOR'S OWN FORWARDER, not this class's ResolveProfileFor directly - that
@@ -504,7 +504,7 @@ FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoa
 }
 
 bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
-	ERoadSurface Surface)
+	EPavement Surface)
 {
 	if (FromIndex == ToIndex)
 	{
@@ -546,6 +546,18 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 		return false;
 	}
 
+	// A SURFACE THE PROFILE DOES NOT OFFER is refused here, before the scope, for the price's
+	// reason below: URoadNetwork::SetSegmentSurface would refuse it only after
+	// AddStraightSegment, leaving a tarmac road charged at Surface's rate. The tool's row is
+	// built from the same list, so this is reached only by a caller that skipped the row.
+	// ENFORCED BY: Airside.Present.GrassRoadLaid (a row pick of grass connects, no refusal)
+	if (Chosen != nullptr && !Pavement::Offered(Chosen->AllowedPavements).Contains(Surface))
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectNodes refused: %s is not offered by profile %s"),
+			Pavement::Name(Surface), *Chosen->GetName());
+		return false;
+	}
+
 	// PRICED AND REFUSED BEFORE THE SCOPE, not at commit. An FRoadEditScope that is not
 	// committed discards its undo snapshot but does NOT roll the network back, so a refusal
 	// after AddStraightSegment would leave the taxiway built and unpaid for - see
@@ -580,7 +592,7 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	Owner.Network->SetSegmentSurface(Segment, Surface);
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Segment %d connected: node %d -> node %d, %s"),
-		Segment.Index, FromIndex, ToIndex, RoadSurfaceName(Surface));
+		Segment.Index, FromIndex, ToIndex, Pavement::Name(Surface));
 	CommitPurchase(Edit, Quote);
 	return true;
 }
@@ -1511,7 +1523,7 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 				TEXT("DeleteNode healed only partly: node %d could not rejoin %d"),
 				Stranded.Index, Plan.Anchor.Index);
 		}
-		else if (Plan.HealSurface != ERoadSurface::Tarmac)
+		else if (Plan.HealSurface != EPavement::Tarmac)
 		{
 			// THE PLAN'S SURFACE with the plan's profile - see FRoadDeletionPlan::HealSurface.
 			// Refused quietly on a runway relay, whose ground is its facts'.

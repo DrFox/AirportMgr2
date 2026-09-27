@@ -265,19 +265,19 @@ struct AIRSIDE_API FRouteQuery
 
 	/**
 	 * The weakest ground this traveller may taxi on - an aircraft's FAirframe::MinimumPavement
-	 * (moved off FRunwayRequirements 2026-09-27), set through NeedsSurface. A GRASS road or taxiway
-	 * weaker than it is refused (URoadNetwork::IsGrassRoad, compared on the runway scale
-	 * through RoadSurfacePavement, so a taxiway and a runway are judged by one ordering).
+	 * (moved off FRunwayRequirements 2026-09-27), set through NeedsPavement. A road or taxiway
+	 * weaker than it is refused (URoadNetwork::PavementOf, compared with FPavementCheck, the
+	 * rule RunwayAdmission and StandAdmission share) - whatever that pavement is, not only grass.
 	 *
 	 * GRASS, THE DEFAULT, GATES NOTHING: every vehicle and every query made before grass
 	 * roads existed. NOT LIFTED by Find's unconstrained retry - that retry exists to tell
-	 * "too big" from "not connected", and a jet refused a grass taxiway is neither; lifting it
+	 * "too big" from "not connected", and a jet refused a weak taxiway is neither; lifting it
 	 * would report TooWide for an aircraft whose wings fit.
 	 *
 	 * RUNWAYS ARE NOT JUDGED HERE: a strip's surface is RunwayAdmission's, which also knows
 	 * length and approach. This gates taxiing only.
 	 */
-	UPROPERTY() EPavement MinimumSurface = EPavement::Grass;
+	UPROPERTY() EPavement MinimumPavement = EPavement::Grass;
 
 	/**
 	 * An edge the search may not use. Set by a deadlock replan to forbid the edge the agent
@@ -368,10 +368,10 @@ struct AIRSIDE_API FRouteQuery
 		return *this;
 	}
 
-	/** Chainable: see MinimumSurface. Pass the airframe's MinimumPavement. */
-	FRouteQuery& NeedsSurface(EPavement InMinimumSurface)
+	/** Chainable: see MinimumPavement. Pass the airframe's MinimumPavement. */
+	FRouteQuery& NeedsPavement(EPavement InMinimumPavement)
 	{
-		MinimumSurface = InMinimumSurface;
+		MinimumPavement = InMinimumPavement;
 		return *this;
 	}
 

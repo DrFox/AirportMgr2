@@ -82,7 +82,7 @@ struct FRoadDeletionPlan
 
 	/** What the healed road is laid on, taken from the same arm as HealProfile - a grass
 	 *  taxiway healed as tarmac would admit the aircraft its grass kept off. */
-	ERoadSurface HealSurface = ERoadSurface::Tarmac;
+	EPavement HealSurface = EPavement::Tarmac;
 };
 
 /**

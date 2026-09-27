@@ -191,7 +191,7 @@ private:
 
 	/**
 	 * The material slot a segment's whole width takes when a FACT on the segment decides it -
-	 * a runway's surface, or a grass road's - or NAME_None for a tarmac road or taxiway, whose
+	 * URoadNetwork::PavementOf, for a runway or any road not on tarmac - or NAME_None for a tarmac road or taxiway, whose
 	 * bands name their own. The one place the builder asks; the ribbon, the junction rim and
 	 * the junction fan all go through it. Was RunwaySlotFor until grass roads existed.
 	 */

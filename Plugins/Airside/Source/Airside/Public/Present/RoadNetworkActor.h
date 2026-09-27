@@ -348,7 +348,7 @@ public:
 	 */
 	virtual IBuildPurse* GetPurse() const override;
 	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-		int32 WidthIndex, ERoadSurface Surface) const override;
+		int32 WidthIndex, EPavement Surface) const override;
 	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* RunwayProfile) const override;
 
 	/** Add a node at a world-space XY position. Returns its index, or INDEX_NONE. */
@@ -365,7 +365,7 @@ public:
 	 * that already calls it compiling, as tarmac (CLAUDE.md's refactor contract).
 	 */
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
-		ERoadSurface Surface) override;
+		EPavement Surface) override;
 	using IRoadEditTarget::ConnectNodes;
 
 	/** Link two GUIDELINE nodes by hand. Returns the new edge's index, or INDEX_NONE. */

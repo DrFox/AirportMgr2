@@ -337,6 +337,8 @@ URoadProfile* TestProfiles::Runway()
 {
 	URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
 	Profile->bContinuousThroughJunctions = true;
+	// EMPTY, as every runway profile asset leaves it (all four) - Fill laid the road list.
+	Profile->AllowedPavements.Reset();
 	return Profile;
 }
 
@@ -344,6 +346,8 @@ URoadProfile* TestProfiles::NarrowRunway()
 {
 	URoadProfile* Profile = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
 	Profile->bContinuousThroughJunctions = true;
+	// EMPTY, as every runway profile asset leaves it (all four) - Fill laid the road list.
+	Profile->AllowedPavements.Reset();
 	return Profile;
 }
 

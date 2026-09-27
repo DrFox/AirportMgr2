@@ -7,19 +7,8 @@
 // RunwaySurfaceName and RunwayMaterialSlot made a further move, to Pavement::Name and
 // Pavement::MaterialSlot in Pavement.h/.cpp, when ERunwaySurface became EPavement
 // (2026-09-27-shared-pavement) - RunwayApproachName has no such second scale to share with
-// roads and stands, so it stays here.
-
-EPavement RoadSurfacePavement(ERoadSurface Surface)
-{
-	return Surface == ERoadSurface::Grass ? EPavement::Grass : EPavement::Tarmac;
-}
-
-const TCHAR* RoadSurfaceName(ERoadSurface Surface)
-{
-	// THROUGH THE PAVEMENT SPELLING, so "grass" in a taxiway log line and in a runway refusal
-	// are one string rather than two that happen to match.
-	return Pavement::Name(RoadSurfacePavement(Surface));
-}
+// roads and stands, so it stays here. RoadSurfacePavement and RoadSurfaceName (#356's) went
+// with ERoadSurface when road surfaces joined EPavement: Pavement::Name spells both now.
 
 const TCHAR* RunwayApproachName(ERunwayApproach Approach)
 {

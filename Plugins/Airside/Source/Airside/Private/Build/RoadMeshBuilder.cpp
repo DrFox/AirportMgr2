@@ -46,24 +46,21 @@ FRoadMeshBuilder::FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit,
 
 FName FRoadMeshBuilder::SurfaceSlotFor(const URoadNetwork& Network, FRoadSegmentId Segment)
 {
-	// NAME_None for a tarmac taxiway or road, which is what leaves FromProfile reading the
-	// profile's own band names - the path every one of them has always taken. A runway's
-	// pavement is decided by its facts, and a grass road's by its Surface.
-	if (Network.IsRunwaySegment(Segment))
-	{
-		return URoadMaterialSet::RunwaySlotName(Network.RunwayFactsFor(Segment).Surface);
-	}
-
-	// THE GRASS RUNWAY'S SLOT, not a slot of its own: one grass material, so a grass taxiway
-	// meeting a grass strip is one field, and M_RunwayGrass already paints no centreline
-	// (build_runway_materials.py, CentrelineWidth 0) - the "no paint on grass" rule for the
-	// material line comes free. EVERY BAND takes it, kerbs and run-offs included: a grass road
-	// has no kerb to draw.
-	if (Network.IsGrassRoad(Segment))
-	{
-		return URoadMaterialSet::RunwaySlotName(RoadSurfacePavement(ERoadSurface::Grass));
-	}
-	return NAME_None;
+	// A FACT ON THE SEGMENT decides its whole width's slot unless it is a tarmac road, whose
+	// bands name their own - NAME_None leaves FromProfile reading the profile's band names, the
+	// path every taxiway and road has always taken. ONE PAVEMENT ANSWER (PavementOf) for
+	// runway and road alike: #356 asked the runway's facts and the road's surface separately,
+	// and mapped grass across by hand.
+	//
+	// THE GRASS RUNWAY'S SLOT for a grass road, not a slot of its own: one grass material, so a
+	// grass taxiway meeting a grass strip is one field (#356's ruling), and M_RunwayGrass
+	// already paints no centreline (build_runway_materials.py, CentrelineWidth 0) - the "no
+	// paint on grass" rule for the material line comes free. EVERY BAND takes it, kerbs and
+	// run-offs included: a grass road has no kerb to draw.
+	const EPavement P = Network.PavementOf(Segment);
+	return Network.IsRunwaySegment(Segment) || P != EPavement::Tarmac
+		? URoadMaterialSet::RunwaySlotName(P)
+		: NAME_None;
 }
 
 void FRoadMeshBuilder::JunctionSlots(const URoadNetwork& Network,
@@ -95,6 +92,8 @@ void FRoadMeshBuilder::JunctionSlots(const URoadNetwork& Network,
 		// road's own line. A RUNWAY counts as paved whatever it is surfaced with - it is
 		// continuous through its junctions (below), and a grass strip crossing a tarmac
 		// taxiway stays the strip, exactly as it did before road surfaces existed.
+		// Not "strongest pavement wins" - a runway is paved whatever its surface (above), so the
+		// rule is "grass loses".
 		const bool bPaved = !Network.IsGrassRoad(ArmSegment);
 
 		// Ties broken by the LOWEST segment id, not by arm order. Arm order comes from the

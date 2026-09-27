@@ -37,16 +37,12 @@ double BuildCost::SegmentLengthUu(const URoadNetwork& Network, const FRoadSegmen
 	return FVector2D::Distance(A.Position, B.Position);
 }
 
-double BuildCost::SurfaceRateFactor(ERoadSurface Surface)
-{
-	return Surface == ERoadSurface::Grass ? GrassRateFactor : 1.0;
-}
-
-FBuildQuote BuildCost::ForSegment(const URoadProfile& Profile, double LengthUu, ERoadSurface Surface)
+FBuildQuote BuildCost::ForSegment(const URoadProfile& Profile, double LengthUu, EPavement Surface)
 {
 	FBuildQuote Quote;
+	// Task 5 of the shared-pavement plan moves this into FBuildLine::Amount
 	Quote.BaseAmount = FMath::Max(0.0, MetresFromUu(LengthUu)) * Profile.CostPerMetre
-		* SurfaceRateFactor(Surface);
+		* Pavement::RateFactor(Surface);
 	Quote.Source = &Profile;
 	Quote.What = FText::Format(
 		NSLOCTEXT("BuildCost", "PavementOf", "{0}, {1} m"),
@@ -119,10 +115,10 @@ double BuildCost::DailyUpkeep(const URoadNetwork& Network, double ApronRatePerSq
 		// mistake in different directions.
 		if (const URoadProfile* Profile = Network.ProfileFor(Segment))
 		{
-			// THE SAME FACTOR THE BUILD QUOTE PAID - see BuildCost.h's own note on why the two
-			// must agree. A runway's Surface is never written, so it bills as tarmac.
+			// THE SAME FACTOR THE BUILD QUOTE PAID - see Pavement::RateFactor's own note on why
+			// the two must agree. A runway's Surface is never written, so it bills as tarmac.
 			Total += MetresFromUu(SegmentLengthUu(Network, Segment)) * Profile->UpkeepPerMetrePerDay
-				* SurfaceRateFactor(Segment.Surface);
+				* Pavement::RateFactor(Segment.Surface);
 		}
 	}
 

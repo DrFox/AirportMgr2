@@ -40,6 +40,17 @@ namespace Pavement
 	AIRSIDE_API const TCHAR* Name(EPavement P);
 
 	/**
+	 * Allowed as given, or all four when empty - the one reading of "empty means all"
+	 * (URoadProfile::AllowedPavements). HERE IN Model/, not beside Pavement::AppendAxis in
+	 * Tool/PavementAxis.h: URoadNetwork::SetSegmentSurface refuses by it, and Model/ may not
+	 * see Tool/. The row and the refusal read one list, so a pick the row offered is never
+	 * one the network then refuses.
+	 * ENFORCED BY: Airside.Present.GrassRoadLaid (grass picked on the row is laid, through the
+	 * actor), Airside.Model.RoutePavementGate (concrete, which the row omits, is refused)
+	 */
+	AIRSIDE_API TArray<EPavement> Offered(TConstArrayView<EPavement> Allowed);
+
+	/**
 	 * Which of the THREE pavement material slots (Grass/Tarmac/Concrete) a pavement draws
 	 * with. Reinforced has no slot of its own - it is concrete with a stronger rating, and
 	 * the difference shows in the details panel and in what may land there, not on the
@@ -85,6 +96,13 @@ namespace Pavement
 	 * upkeep, for every buildable. THE ONE TABLE; FBuildLine::Amount and BuildCost's upkeep are
 	 * its only readers. First guesses 2026-09-27: grass is levelled ground and seed, no base
 	 * course; concrete and reinforced carry heavier slabs.
+	 *
+	 * A FACTOR ON THE PROFILE, not a second set of rates: the profile is the cross-section and
+	 * is shared by grass and tarmac roads of one width (see FRoadSegment::Surface), so rates
+	 * per surface would mean a rate per profile per surface authored by hand. Tune it here, in
+	 * the one place both the quote and the upkeep read. (Moved from BuildCost::GrassRateFactor,
+	 * #356's, when ERoadSurface folded into EPavement.)
+	 * ENFORCED BY: Airside.Build.GrassRoadCost (quote and upkeep both at the factor)
 	 * ENFORCED BY: Check-Architecture rule 4 row 'Pavement::RateFactor'
 	 */
 	AIRSIDE_API double RateFactor(EPavement P);

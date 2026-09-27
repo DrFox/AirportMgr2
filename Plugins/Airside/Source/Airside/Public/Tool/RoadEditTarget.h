@@ -116,7 +116,7 @@ public:
 	 * so a quote that ignored it would promise the player one price and charge another.
 	 */
 	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-		int32 WidthIndex, ERoadSurface Surface) const { return FBuildQuote(); }
+		int32 WidthIndex, EPavement Surface) const { return FBuildQuote(); }
 
 	/**
 	 * What a runway from From to To at Profile would cost - QuoteForConnect's reason, for
@@ -157,12 +157,12 @@ public:
 	 * undo steps for one click, and a road that briefly existed as tarmac to every rebuild.
 	 */
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
-		ERoadSurface Surface) = 0;
+		EPavement Surface) = 0;
 
 	/** Tarmac - what every caller before the surface row meant. */
 	bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex)
 	{
-		return ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, ERoadSurface::Tarmac);
+		return ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex, EPavement::Tarmac);
 	}
 
 	/** The kind's default width - what every caller before the width cycle meant. */
