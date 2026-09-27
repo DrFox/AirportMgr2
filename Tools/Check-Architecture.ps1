@@ -1274,6 +1274,38 @@ else {
 }
 $ranRules.Add('testworld-fanout')
 
+# --- 25. FRoadRebuildBatch is a NAMED STACK LOCAL -------------------------------------------
+# The batch's whole contract is its scope (Tool/RoadEditTarget.h): N edits, one rebuild at the
+# close. Two shapes break it and a regex sees both:
+#   - AN UNNAMED TEMPORARY, `FRoadRebuildBatch(Target);` or `FRoadRebuildBatch{Target};` - it
+#     opens and closes on the same line, batches nothing, and compiles (the [[nodiscard]] on the
+#     constructor is only a warning).
+#   - A BATCH HELD PAST ONE CALL - by pointer, reference, smart pointer or template argument
+#     (`FRoadRebuildBatch*`, `FRoadRebuildBatch&`, `<FRoadRebuildBatch>`): a batch that outlives
+#     the function that opened it spans frames, and every frame in between draws a stale graph.
+# WHAT NO REGEX SEES, said here rather than pretended: a bulk edit that never opens a batch at
+# all. FRigCourseLayout::Lay lays thirty-odd edits through ONE lambda call site, so counting
+# PlaceNode/ConnectNodes sites per file sees one; "a loop of mutators" is a control-flow fact.
+# That shape is pinned by AirportMgr.RigCourse.BatchedLayMatchesUnbatched's one-rebuild count
+# instead. The declaring header is exempt - it names the type's own constructor and deleted copy.
+$batchPatterns = @(
+    '(^|[^\w~:])FRoadRebuildBatch\s*[\(\{]',
+    'FRoadRebuildBatch\s*[\*&>]'
+)
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
+        if (Test-AllowedPathSuffix $file 'Public\Tool\RoadEditTarget.h') { continue }
+        foreach ($pattern in $batchPatterns) {
+            foreach ($h in (Select-String -Path $file.FullName -Pattern $pattern)) {
+                $t = $h.Line.Trim()
+                if ($t -match '^(//|/\*|\*)') { continue }
+                $failures.Add("rebuild-batch-is-a-local: $($file.FullName):$($h.LineNumber) FRoadRebuildBatch used as a temporary or held past its scope - declare it as a named local, ``FRoadRebuildBatch Batch(Target);``, so it closes where the bulk edit ends: $t")
+            }
+        }
+    }
+}
+$ranRules.Add('rebuild-batch-is-a-local')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

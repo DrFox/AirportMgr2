@@ -95,6 +95,52 @@ class IBuildPurse;
  * RebuildMesh() after a successful edit - a split-brain that let one call site (a REFUSED
  * ConnectNodes in FRoadChainingState::OnClick) rebuild for nothing while real edits elsewhere
  * occasionally got no rebuild at all if a caller forgot.
+ *
+ * REBUILD BATCHES (BeginRebuildBatch/EndRebuildBatch, driven by FRoadRebuildBatch in
+ * Tool/RoadEditTarget.h). Pattern: deferred notification with coalescing - the "suspend
+ * layout" shape - applied at NotifyChanged, the one door above, so no mutator changes and none
+ * can opt out. While RebuildBatchDepth > 0, NotifyChanged RECORDS its kind
+ * (CombineChangeKinds into PendingBatchKind) instead of broadcasting; closing the OUTERMOST
+ * batch broadcasts once, with the combined kind, back through NotifyChanged - so OnChanged
+ * still has one call site. Nesting is counted; an inner close does nothing but decrement. A
+ * batch that recorded nothing (every mutation refused) broadcasts nothing, the same as those
+ * refusals would have unbatched. Why it exists: FRigCourseLayout::Lay's ~35 PlaceNode/
+ * ConnectNodes each ran the full Topology pipeline, ~1.7 s a course, and 14 tests lay one.
+ * How it meets the rest of this class:
+ *
+ *   - UNDO SCOPES ARE UNTOUCHED. Each mutator in a batch still opens and commits its own
+ *     FRoadEditScope, so N mutations are N undo steps. A batch defers REBUILDS, not
+ *     history: the Memento snapshots the model, never derived state, so no snapshot differs.
+ *     Grouping a bulk edit into one undo step is a different feature (a composite edit on
+ *     URoadEditHistory), deliberately not smuggled in here.
+ *   - INTERACTIVE EDITS CANNOT BEGIN INSIDE A BATCH. A batch is synchronous - one call on
+ *     one frame - and a drag spans frames, repainting Geometry every one of them;
+ *     BeginInteractiveEdit inside a batch would freeze the pavement under the cursor until
+ *     some later close. So it logs an Error and REFUSES (bInteractiveEditOpen stays false,
+ *     EndInteractiveEdit then no-ops, and any MoveNode in between is a bare call that
+ *     notifies Topology into the batch - see ApplyInteractiveMutation's bare-call trap).
+ *     THE OTHER NESTING IS LEGAL: a batch opened while a drag is already open folds that
+ *     frame's notifies and closes before the frame ends; the drag's own EndInteractiveEdit
+ *     catch-up is untouched, because bGeometryChangedDuringEdit is still set where it was.
+ *   - MergeNodes' ALWAYS-Topology RULE HOLDS: it is the KIND a merge records, and
+ *     CombineChangeKinds never weakens a Topology.
+ *   - RevertEdit / AdoptNetwork / Undo / Redo / ClearNetwork IN A BATCH: the network is
+ *     swapped at once (the model is never deferred), the notify is folded like any other,
+ *     and the close rebuilds from whatever Network is THEN - derived state is a function of
+ *     the current network alone, never of the path to it.
+ *   - DERIVED STATE IS STALE UNTIL THE CLOSE. ConnectGuidelines, DisconnectGuideline and
+ *     SetIntermediateHoldingPosition index the GUIDELINE graph, and FindRoute searches it:
+ *     in a batch that has deferred a rebuild they would act on a graph that no longer
+ *     matches the model, so each logs a Warning via WarnIfDerivedStale (behaviour otherwise
+ *     unchanged - a bulk edit that needs them closes its batch first). SetDriveSide's lane
+ *     census log line reads the stale graph the same way.
+ *   - RebuildMesh() IS NOT DEFERRED. It reaches the actor's RebuildMeshForChange directly,
+ *     not through NotifyChanged, and stays an explicit "rebuild now" - the escape hatch for a
+ *     caller that must read derived state mid-batch, at the cost of one rebuild. The
+ *     pending kind survives it, so the close still rebuilds.
+ *   - EVERY OnChanged LISTENER SEES THE FOLDED NOTIFY, not only the actor:
+ *     ARoadBuildController's runway cache is invalidated once, at the close, which is
+ *     correct because nothing can read it between two lines of one synchronous call.
  */
 UCLASS()
 class AIRSIDE_API URoadEditFacade : public UObject, public IRoadEditTarget
@@ -171,6 +217,13 @@ public:
 	virtual bool MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVector2D To) override;
 	virtual void BeginInteractiveEdit(const FString& Label) override;
 	virtual void EndInteractiveEdit(bool bKeep) override;
+
+	/** See the class comment's REBUILD BATCHES. Use FRoadRebuildBatch rather than these. */
+	virtual void BeginRebuildBatch() override;
+	virtual void EndRebuildBatch() override;
+
+	/** True between the outermost BeginRebuildBatch and its matching End. */
+	bool IsRebuildBatchOpen() const { return RebuildBatchDepth > 0; }
 
 	/**
 	 * CACHED on (NodeIndex, Network's EditRevision) (#166). RoadHeal::PlanNodeDeletion
@@ -391,6 +444,11 @@ private:
 	 * SetIntermediateHoldingPosition passes Markings explicitly, through CommitAndNotify's own
 	 * Kind parameter, because it moves nothing and changes no shape either - see EChangeKind's
 	 * own comment for why Topology's default would be actively wrong there, not just wasteful.
+	 *
+	 * INSIDE A REBUILD BATCH this records Kind instead of broadcasting, and EndRebuildBatch's
+	 * outermost close calls back in here with the combined kind once depth is zero - see the
+	 * class comment's REBUILD BATCHES. Here and not in each door above, so no mutator can
+	 * forget to defer.
 	 */
 	void NotifyChanged(EChangeKind Kind = EChangeKind::Topology);
 
@@ -638,6 +696,31 @@ private:
 	 * EndInteractiveEdit bracket, so the split applies wherever a drag does.
 	 */
 	bool bInteractiveEditOpen = false;
+
+	/**
+	 * How many rebuild batches are open - see the class comment's REBUILD BATCHES. A COUNT,
+	 * not a bool: ARigTestCourse::BuildCourse (game module) opens one around the loop AND the
+	 * yard, and each of their Lay()s opens its own, so a bool would close at the first inner
+	 * guard and rebuild twice.
+	 */
+	int32 RebuildBatchDepth = 0;
+
+	/**
+	 * The combined kind of every notify an open batch has folded (CombineChangeKinds), unset
+	 * when it has folded none - a TOptional rather than a kind plus a bool, since the two could
+	 * otherwise disagree about whether a rebuild is owed.
+	 */
+	TOptional<EChangeKind> PendingBatchKind;
+
+	/** How many notifies the open batch has folded, for the close's log line only. */
+	int32 FoldedNotifyCount = 0;
+
+	/**
+	 * Warn that Who is about to read the guideline graph while a batch has deferred the rebuild
+	 * that would bring it up to date - see the class comment's REBUILD BATCHES. Silent outside a
+	 * batch, and inside one that has folded nothing yet (the graph is still current then).
+	 */
+	void WarnIfDerivedStale(const TCHAR* Who) const;
 
 	/**
 	 * The actor this facade edits, found through Outer rather than stored a second time.

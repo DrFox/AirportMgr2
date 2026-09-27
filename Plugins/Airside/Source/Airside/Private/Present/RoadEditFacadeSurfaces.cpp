@@ -1019,6 +1019,8 @@ FRoutePlan URoadEditFacade::FindRoute(
 	FGuidelineNodeId Start, FGuidelineNodeId Goal, ETraversalClass Class, double Wingspan,
 	ERouteErrand Errand) const
 {
+	// Searches the GUIDELINE graph - stale inside a batch that deferred its rebuild.
+	WarnIfDerivedStale(TEXT("FindRoute"));
 	const URoadNetwork* Network = GetNetwork();
 	if (Network == nullptr)
 	{

@@ -1058,6 +1058,16 @@ void ARoadNetworkActor::EndInteractiveEdit(bool bKeep)
 	Facade->EndInteractiveEdit(bKeep);
 }
 
+void ARoadNetworkActor::BeginRebuildBatch()
+{
+	Facade->BeginRebuildBatch();
+}
+
+void ARoadNetworkActor::EndRebuildBatch()
+{
+	Facade->EndRebuildBatch();
+}
+
 FRoadDeletionPlan ARoadNetworkActor::PlanNodeDeletion(int32 NodeIndex) const
 {
 	return Facade->PlanNodeDeletion(NodeIndex);

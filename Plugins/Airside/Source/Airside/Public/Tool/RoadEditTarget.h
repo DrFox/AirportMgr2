@@ -61,6 +61,26 @@ enum class EChangeKind : uint8
 };
 
 /**
+ * The one rebuild that covers two notifies - what a REBUILD BATCH (FRoadRebuildBatch, below)
+ * records in place of each notify it folds.
+ *
+ * NOT std::max ON THE ENUM ORDER, although that is what it reads like for every pair but one:
+ * Geometry and Markings are DISJOINT, not ranked. Geometry's rebuild (RebuildSurfaceOnly)
+ * skips the holding paint; Markings' (RebuildMarkingsOnly) skips the surface - so a batch that
+ * saw one of each owes BOTH, and the only single rebuild that does both is Topology (which
+ * repaints the surface, and re-derives the graph and re-applies holding marks before painting
+ * them - FRoadGuidelineBuilder's ReapplyHoldingPositionMarks). Any pair naming Topology is
+ * Topology, because Topology is a superset of the other two. Same kind twice is that kind.
+ *
+ * World-free and inline so Airside.Present.RebuildBatch can pin the table on its own, below
+ * the composition it also tests.
+ */
+inline EChangeKind CombineChangeKinds(EChangeKind A, EChangeKind B)
+{
+	return A == B ? A : EChangeKind::Topology;
+}
+
+/**
  * The facade a tool edits through, seen only as the calls a tool makes.
  *
  * Pattern: Facade (ARoadNetworkActor) exposed to Strategy (the IBuildTool family) through
@@ -312,6 +332,21 @@ public:
 	virtual bool MergeNodes(int32 KeepIndex, int32 AbsorbIndex) = 0;
 	virtual void BeginInteractiveEdit(const FString& Label) = 0;
 	virtual void EndInteractiveEdit(bool bKeep) = 0;
+
+	/**
+	 * Open / close a REBUILD BATCH: every change notify between the two is folded into ONE
+	 * derived rebuild when the OUTERMOST batch closes. Counted, so batches nest. Call through
+	 * FRoadRebuildBatch below, never by hand - a Begin whose End an early return skipped
+	 * would defer every rebuild in the level forever. See URoadEditFacade's class comment for
+	 * the semantics, and how a batch meets drags, undo, MergeNodes and RevertEdit.
+	 *
+	 * PURE, not a no-op default the way GetPurse is: a target that silently ignored a batch
+	 * would still be CORRECT (it just rebuilds N times), which is exactly why nobody would
+	 * notice it forgot - the compiler asks every implementer to decide instead.
+	 */
+	virtual void BeginRebuildBatch() = 0;
+	virtual void EndRebuildBatch() = 0;
+
 	virtual FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const = 0;
 
 	// --- Aprons ----------------------------------------------------------------------------
@@ -493,4 +528,42 @@ public:
 	}
 
 	virtual void RebuildMesh() = 0;
+};
+
+/**
+ * N mutations, ONE derived rebuild: opens a rebuild batch on Target for this scope's lifetime
+ * (IRoadEditTarget::BeginRebuildBatch/EndRebuildBatch). For a bulk edit laid in one synchronous
+ * call - FRigCourseLayout::Lay placed ~35 segments one ConnectNodes at a time, each running the
+ * whole solve + guideline + anchor + plots + traffic pipeline, ~1.7 s a course (2026-09-27).
+ *
+ * Pattern: RAII scope guard (the FScopeLock shape), so an early return still closes the batch.
+ * A STACK LOCAL, NAMED: `FRoadRebuildBatch(Target);` is a temporary that closes on the same
+ * line, batching nothing - [[nodiscard]] warns on it and Check-Architecture's rule 25 fails
+ * it, along with any batch held by pointer or as a member (a batch that outlives one call
+ * would span frames, and every frame in between would draw a stale graph).
+ *
+ * DERIVED STATE IS STALE WHILE IT IS OPEN, BY DESIGN: the guideline graph, anchor links,
+ * plots, traffic routes and meshes still describe the network as it was when the batch
+ * opened. Read the MODEL (nodes, segments, reverse turns) freely; read nothing derived until
+ * the guard is gone. See URoadEditFacade's class comment for the mutators that read derived
+ * state themselves, and warn if called in a batch that has deferred a rebuild.
+ */
+class FRoadRebuildBatch
+{
+public:
+	[[nodiscard]] explicit FRoadRebuildBatch(IRoadEditTarget& InTarget) : Target(InTarget)
+	{
+		Target.BeginRebuildBatch();
+	}
+
+	~FRoadRebuildBatch()
+	{
+		Target.EndRebuildBatch();
+	}
+
+	FRoadRebuildBatch(const FRoadRebuildBatch&) = delete;
+	FRoadRebuildBatch& operator=(const FRoadRebuildBatch&) = delete;
+
+private:
+	IRoadEditTarget& Target;
 };

@@ -186,7 +186,63 @@ bool URoadEditFacade::MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) cons
 
 void URoadEditFacade::NotifyChanged(EChangeKind Kind)
 {
+	// FOLDED, NOT BROADCAST, WHILE A BATCH IS OPEN - see the class comment's REBUILD BATCHES.
+	if (RebuildBatchDepth > 0)
+	{
+		PendingBatchKind = PendingBatchKind.IsSet() ? CombineChangeKinds(*PendingBatchKind, Kind) : Kind;
+		++FoldedNotifyCount;
+		return;
+	}
 	OnChanged.Broadcast(Kind);
+}
+
+void URoadEditFacade::BeginRebuildBatch()
+{
+	++RebuildBatchDepth;
+}
+
+void URoadEditFacade::EndRebuildBatch()
+{
+	// UNMATCHED IS A CALLER BUG, and only reachable by calling this by hand - FRoadRebuildBatch
+	// pairs the two. Refused rather than letting the depth go negative, which would make the
+	// NEXT batch's close fire at depth -1 -> 0 one Begin early.
+	if (RebuildBatchDepth <= 0)
+	{
+		UE_LOG(LogRoadMesh, Error, TEXT("EndRebuildBatch with no batch open - ignored (use FRoadRebuildBatch, not the raw calls)"));
+		return;
+	}
+	if (--RebuildBatchDepth > 0)
+	{
+		return;
+	}
+
+	// THE OUTERMOST CLOSE: one notify, through NotifyChanged (depth is zero now, so it
+	// broadcasts), keeping OnChanged.Broadcast's single call site. Nothing folded, nothing owed.
+	if (!PendingBatchKind.IsSet())
+	{
+		return;
+	}
+	const EChangeKind Kind = *PendingBatchKind;
+	const int32 Folded = FoldedNotifyCount;
+	PendingBatchKind.Reset();
+	FoldedNotifyCount = 0;
+	// Logged, so "did the bulk edit rebuild, and as what" is one grep, the way every other
+	// mutator's success line answers it for a single edit.
+	UE_LOG(LogRoadMesh, Log, TEXT("Rebuild batch closed: %d notify(s) folded into one %s rebuild"),
+		Folded, Kind == EChangeKind::Topology ? TEXT("Topology")
+			: Kind == EChangeKind::Geometry ? TEXT("Geometry") : TEXT("Markings"));
+	NotifyChanged(Kind);
+}
+
+void URoadEditFacade::WarnIfDerivedStale(const TCHAR* Who) const
+{
+	if (RebuildBatchDepth > 0 && PendingBatchKind.IsSet())
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("%s inside a rebuild batch that has deferred a rebuild: the guideline graph it reads ")
+			TEXT("predates the batch's own edits - close the batch first (see URoadEditFacade's REBUILD BATCHES)"),
+			Who);
+	}
 }
 
 bool URoadEditFacade::CanAfford(const FBuildQuote& Quote) const
@@ -748,6 +804,8 @@ bool URoadEditFacade::AddReverseTurn(int32 NodeIndex, int32 FromFarIndex, int32 
 
 int32 URoadEditFacade::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 {
+	// Indexes the GUIDELINE graph - stale inside a batch that deferred its rebuild.
+	WarnIfDerivedStale(TEXT("ConnectGuidelines"));
 	URoadNetwork* Network = Actor().Network;
 	if (Network == nullptr)
 	{
@@ -828,6 +886,8 @@ int32 URoadEditFacade::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 
 bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 {
+	// Indexes the GUIDELINE graph - stale inside a batch that deferred its rebuild.
+	WarnIfDerivedStale(TEXT("DisconnectGuideline"));
 	URoadNetwork* Network = Actor().Network;
 	const FGuidelineEdgeId Id = Network != nullptr ? Network->GuidelineEdgeIdAt(EdgeIndex) : FGuidelineEdgeId();
 	if (!Id.IsSet())
@@ -886,6 +946,8 @@ bool URoadEditFacade::SetDriveSide(EDriveSide Side)
 
 bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 {
+	// Indexes the GUIDELINE graph - stale inside a batch that deferred its rebuild.
+	WarnIfDerivedStale(TEXT("SetIntermediateHoldingPosition"));
 	URoadNetwork* Network = Actor().Network;
 	if (Network == nullptr)
 	{
@@ -1009,6 +1071,18 @@ int32 URoadEditFacade::SplitSegment(int32 SegmentIndex, FVector2D At)
 
 void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 {
+	// REFUSED INSIDE A REBUILD BATCH - see the class comment's REBUILD BATCHES: a drag spans
+	// frames and repaints every one, a batch is one synchronous call. Refused BEFORE any field
+	// is touched, so bInteractiveEditOpen stays false and the matching EndInteractiveEdit
+	// no-ops on its own guard.
+	if (RebuildBatchDepth > 0)
+	{
+		UE_LOG(LogRoadMesh, Error,
+			TEXT("BeginInteractiveEdit('%s') refused: a rebuild batch is open, and a drag cannot live inside one"),
+			*Label);
+		return;
+	}
+
 	URoadEditHistory* Use = HistoryForEdit();
 	URoadNetwork* Network = Actor().Network;
 	if (Network != nullptr && Use != nullptr && !Use->IsEditing())
