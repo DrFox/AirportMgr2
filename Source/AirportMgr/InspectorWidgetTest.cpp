@@ -385,4 +385,28 @@ bool FInspectorDocksAboveTheBarTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorFollowSaysUnfollowTest,
+	"AirportMgr.Inspector.FollowSaysUnfollowWhileFollowing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorFollowSaysUnfollowTest::RunTest(const FString& Parameters)
+{
+	// THE BUTTON NAMES WHAT PRESSING IT WILL DO: "Unfollow" while the camera rides the
+	// aircraft, the action's own label otherwise - so the bar and the panel agree at rest.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+	const FBuildAction* Follow = FindAction(FName(TEXT("selection.follow")));
+	if (!TestNotNull(TEXT("Follow is in the one action list"), Follow)) { return false; }
+
+	TestEqual(TEXT("at rest it reads as the action does"), Panel->FollowCaptionForTest(), Follow->Label.ToString());
+	Panel->ShowFollowing(true);
+	TestEqual(TEXT("while following it offers to stop"), Panel->FollowCaptionForTest(), FString(TEXT("Unfollow")));
+	Panel->ShowFollowing(false);
+	TestEqual(TEXT("and goes back when following ends"), Panel->FollowCaptionForTest(), Follow->Label.ToString());
+	return true;
+}
+
 #endif

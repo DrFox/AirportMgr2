@@ -119,6 +119,17 @@ public:
 	 */
 	void DockAbove(UBuildBarWidget* Bar);
 
+	/**
+	 * Captions the Follow button "Unfollow" while bFollowing, its action's own label otherwise
+	 * (2026-09-27: the same word for both states left the player guessing which one pressing
+	 * it would give). NativeTick calls it with the controller's IsWatchingAgent; public so a
+	 * headless test, which has no camera to watch with, can drive it.
+	 */
+	void ShowFollowing(bool bFollowing);
+
+	/** The Follow button's caption as it reads now. */
+	FString FollowCaptionForTest() const;
+
 	/** The card's distance above the screen's bottom edge, as its slot has it now. */
 	double CardClearanceForTest() const;
 	/** What NativeTick does to the card's position each frame, without the rest of the tick. */

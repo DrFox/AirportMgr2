@@ -163,7 +163,37 @@ void UInspectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 		FAgentFacts Facts;
 		const bool bHaveFacts = C->SelectedAgentFactsThisFrame(Facts);
 		Refresh(C->GetTarget(), C->GetSelection(), bHaveFacts ? &Facts : nullptr);
+		ShowFollowing(C->IsWatchingAgent());
 	}
+}
+
+void UInspectorWidget::ShowFollowing(bool bFollowing)
+{
+	// FOUND THROUGH THE BUTTON, not held: EnsureSlots builds the caption as the button's only
+	// content, and a Blueprint whose Follow button holds something else simply keeps its own.
+	UTextBlock* Caption = FollowButton != nullptr ? Cast<UTextBlock>(FollowButton->GetContent()) : nullptr;
+	const TConstArrayView<FBuildAction> Actions = BuildActions();
+	if (Caption == nullptr || !Actions.IsValidIndex(FollowActionIndex))
+	{
+		return;
+	}
+	// The resting word stays the action's Label, so the bar and this button still say the
+	// same thing whenever nothing is being followed.
+	const FText Wanted = bFollowing
+		? NSLOCTEXT("AirportMgr", "InspectorUnfollow", "Unfollow")
+		: Actions[FollowActionIndex].Label;
+	// Compared first: SetText has no early-out of its own (see Refresh's gate), and this runs
+	// every tick.
+	if (!Caption->GetText().EqualTo(Wanted))
+	{
+		Caption->SetText(Wanted);
+	}
+}
+
+FString UInspectorWidget::FollowCaptionForTest() const
+{
+	const UTextBlock* Caption = FollowButton != nullptr ? Cast<UTextBlock>(FollowButton->GetContent()) : nullptr;
+	return Caption != nullptr ? Caption->GetText().ToString() : FString();
 }
 
 void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection& Selection,
