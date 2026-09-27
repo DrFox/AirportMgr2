@@ -222,12 +222,27 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 	FRoadNodeId FromId;
 	if (Context.Network() != nullptr && Context.Target->MakeLiveNodeId(From, FromId))
 	{
+		// THE GUIDED POINT, once, for every readout below: it is what ResolveToNode commits,
+		// so the length, the refusal and the price all describe the segment a click builds.
+		const FRoadSnapResult Guided = RoadGuidedSnap(Context);
+		const FVector2D Start = NodePosition(Context, From);
 		const ERoadPlacement Judgement =
-			RoadPlacement::Validate(*Context.Network(), FromId, RoadGuidedSnap(Context),
-				Context.Limits);
+			RoadPlacement::Validate(*Context.Network(), FromId, Guided, Context.Limits);
+
+		// THE LENGTH, as the runway's preview has always said its own (reported 2026-09-27:
+		// taxiways and roads said nothing). Mid-segment so it never sits on the refusal or the
+		// price at the cursor end, and shown when refused too - "how long is it" matters most
+		// when the answer is "too short". Straight distance is exact: a segment is a chord.
+		const double Length = FVector2D::Distance(Start, Guided.Position);
+		if (Length > 0.0)
+		{
+			Sink.Label((Start + Guided.Position) * 0.5, FString::Printf(TEXT("%.0f m"), Length / 100.0),
+				Judgement == ERoadPlacement::Valid ? EPreviewStyle::Pending : EPreviewStyle::Refused);
+		}
+
 		if (Judgement != ERoadPlacement::Valid)
 		{
-			Sink.Label(RoadGuidedSnap(Context).Position, RoadPlacement::Describe(Judgement),
+			Sink.Label(Guided.Position, RoadPlacement::Describe(Judgement),
 				EPreviewStyle::Refused);
 		}
 		else if (const IBuildPurse* Purse = Context.Target->GetPurse())
@@ -235,12 +250,14 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 			// THE PRICE BEFORE THE CLICK. NO NEW SINK MESSAGE: Label already exists and
 			// EPreviewStyle::Refused already means "something the gesture cannot do, with the
 			// reason" - which is exactly what an unaffordable road is. The purse formats the
-			// money, so no currency symbol ever enters this plugin.
+			// money, so no currency symbol ever enters this plugin. Quoted at the GUIDED point:
+			// it read the raw Snap.Position until 2026-09-27, pricing a different length from the
+			// one the click builds whenever a snap guide was active.
 			const FBuildQuote Quote = Context.Target->QuoteForConnect(
-				From, Context.Snap.Position, Kind, WidthIndex, Surface);
+				From, Guided.Position, Kind, WidthIndex, Surface);
 			if (!Quote.IsFree())
 			{
-				Sink.Label(Context.Snap.Position, Purse->Describe(Quote).ToString(),
+				Sink.Label(Guided.Position, Purse->Describe(Quote).ToString(),
 					Purse->CanAfford(Quote) ? EPreviewStyle::Pending : EPreviewStyle::Refused);
 			}
 		}
