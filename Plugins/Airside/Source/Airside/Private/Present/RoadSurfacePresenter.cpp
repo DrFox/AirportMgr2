@@ -580,8 +580,10 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	if (!Settings.bQuiet)
 	{
 		UE_LOG(LogRoadMesh, Log,
-			TEXT("Holding positions: %d painted, %d stand(s), %d triangle(s) at Z=%.1f"),
-			HoldingPositionsPainted, StandsPainted, Buffers.Indices.Num() / 3, MarkingZ);
+			TEXT("Holding positions: %d painted, %d stand(s), %d triangle(s) at Z=%.1f - stand paint: ")
+			TEXT("%d boundary edge(s), %d restraint side(s), %d hatch stripe(s)"),
+			HoldingPositionsPainted, StandsPainted, Buffers.Indices.Num() / 3, MarkingZ,
+			StandCensus.BoundaryEdges, StandCensus.RestraintSides, StandCensus.HatchStripes);
 	}
 }
 

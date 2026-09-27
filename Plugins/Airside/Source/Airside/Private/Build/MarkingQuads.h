@@ -68,6 +68,44 @@ namespace MarkingQuads
 	}
 
 	/**
+	 * A convex polygon, either winding, as a fan - for paint CLIPPED to a zone (a stand's hatch
+	 * stripe, a restraint side cut by the boundary), whose corner count is whatever the clip
+	 * left. AddQuad's measured winding rule, applied once to the whole polygon: the signed area
+	 * decides which way round the vertices go in, so every fan triangle faces up. Fewer than
+	 * three points emits nothing.
+	 */
+	inline void AddConvexPolygon(FRoadMeshBuffers& Out, double Z, TConstArrayView<FVector2D> Points,
+		int32 MaterialID = 0)
+	{
+		const int32 Count = Points.Num();
+		if (Count < 3)
+		{
+			return;
+		}
+		double TwiceArea = 0.0;
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			const FVector2D& A = Points[Index];
+			const FVector2D& B = Points[(Index + 1) % Count];
+			TwiceArea += A.X * B.Y - B.X * A.Y;
+		}
+		const int32 Base = Out.Positions.Num();
+		for (int32 Step = 0; Step < Count; ++Step)
+		{
+			const FVector2D& P = Points[TwiceArea < 0.0 ? Count - 1 - Step : Step];
+			Out.Positions.Add(FVector3d(P.X, P.Y, Z));
+			Out.UV0.Add(FVector2f(0.f, 0.f));
+			// Lateral 0: solid MarkingColor, as AddQuad's own comment explains.
+			Out.UV1.Add(FVector2f(0.f, 0.f));
+			Out.UV2.Add(FVector2f(0.f, 1.f));
+		}
+		for (int32 Index = 1; Index + 1 < Count; ++Index)
+		{
+			Out.AppendTriangleUp(Base, Base + Index, Base + Index + 1, MaterialID);
+		}
+	}
+
+	/**
 	 * An axis-aligned rectangle in a runway's frame: Along is the unit direction down the
 	 * strip, Across its perpendicular; [Along0, Along1] and [Across0, Across1] are the
 	 * extents from Origin. The shape every runway marking but a glyph stroke is.

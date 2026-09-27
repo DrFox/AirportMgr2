@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/StandMarkingBuilder.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/MeshNormals.h"
@@ -12,6 +13,10 @@
 #include "Solve/StandBox.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/RoadEditTarget.h"
+#include "Content/AirsideSettings.h"
+#include "Entities/AircraftType.h"
+#include "Model/RoadGuideline.h"
+#include "Solve/GuidelineGeom.h"
 #include "Components/DynamicMeshComponent.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "Materials/Material.h"
@@ -58,6 +63,121 @@ namespace StandMarkingTest
 		StandBox::BoxAt(Pose, Letter, Envelope, Placement.Outline);
 		Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(Letter);
 		return Net.PlaceEntity(Placement);
+	}
+
+	/** Every EStandPaint on its own id (its index), so a test can tell the paints apart. */
+	FStandPaintIds DistinctIds()
+	{
+		FStandPaintIds Ids;
+		for (int32 Paint = 0; Paint < static_cast<int32>(EStandPaint::Count); ++Paint)
+		{
+			Ids.Ids[Paint] = Paint;
+		}
+		return Ids;
+	}
+
+	struct FPaintTriangle
+	{
+		FVector2D A, B, C;
+		int32 Id = 0;
+	};
+
+	/** Buffers' triangles in plan, each with its material id. */
+	TArray<FPaintTriangle> TrianglesOf(const FRoadMeshBuffers& Buffers)
+	{
+		TArray<FPaintTriangle> Out;
+		for (int32 T = 0; T * 3 + 2 < Buffers.Indices.Num(); ++T)
+		{
+			auto At = [&](int32 K) { const FVector3d& V = Buffers.Positions[Buffers.Indices[T * 3 + K]]; return FVector2D(V.X, V.Y); };
+			Out.Add({ At(0), At(1), At(2), Buffers.MaterialIDs.IsValidIndex(T) ? Buffers.MaterialIDs[T] : -1 });
+		}
+		return Out;
+	}
+
+	bool IsHatch(int32 Id)
+	{
+		return Id == static_cast<int32>(EStandPaint::HatchMark) || Id == static_cast<int32>(EStandPaint::HatchSpace);
+	}
+
+	/** P inside (or within Tolerance of) triangle T, either winding. */
+	bool InTriangle(const FPaintTriangle& T, const FVector2D& P, double Tolerance)
+	{
+		const FVector2D Corners[3] = { T.A, T.B, T.C };
+		const double Area = FVector2D::CrossProduct(T.B - T.A, T.C - T.A);
+		const double Sign = Area >= 0.0 ? 1.0 : -1.0;
+		for (int32 K = 0; K < 3; ++K)
+		{
+			const FVector2D& E0 = Corners[K];
+			const FVector2D& E1 = Corners[(K + 1) % 3];
+			const FVector2D Edge = E1 - E0;
+			const double Len = Edge.Size();
+			if (Len <= 0.0) { return false; }
+			// Signed distance of P from the edge, positive inside.
+			if (Sign * FVector2D::CrossProduct(Edge, P - E0) / Len < -Tolerance) { return false; }
+		}
+		return true;
+	}
+
+	/** P inside (or within Tolerance of) the convex Outline, either winding. */
+	bool InConvex(const TArray<FVector2D>& Outline, const FVector2D& P, double Tolerance)
+	{
+		double Twice = 0.0;
+		for (int32 I = 0; I < Outline.Num(); ++I)
+		{
+			Twice += FVector2D::CrossProduct(Outline[I], Outline[(I + 1) % Outline.Num()]);
+		}
+		const double Sign = Twice >= 0.0 ? 1.0 : -1.0;
+		for (int32 I = 0; I < Outline.Num(); ++I)
+		{
+			const FVector2D Edge = Outline[(I + 1) % Outline.Num()] - Outline[I];
+			if (Sign * FVector2D::CrossProduct(Edge, P - Outline[I]) / Edge.Size() < -Tolerance) { return false; }
+		}
+		return true;
+	}
+
+	/**
+	 * A real B stand through the facade and the real rebuild, so FStandLayoutBuild has laid its
+	 * service layout - Airside.Build.StandPadSlots' own fixture shape. Null on failure.
+	 */
+	const FEntityInstance* PlaceRealBStand(FAutomationTestBase& Test, FAirsideTestWorld& World, FEntityInstanceId& OutId)
+	{
+		ARoadNetworkActor* Actor = World.Actor;
+		if (!Test.TestNotNull(TEXT("actor constructed"), Actor)) { return nullptr; }
+		Actor->ClearNetwork();
+		IRoadEditTarget* Target = Actor;
+		const TArray<FVector2D> Pad = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+		if (!Test.TestTrue(TEXT("a B stand is placed"), Target->PlaceStandInPlot(Pad, Pad[0], Pad[1], EPavement::Tarmac) != INDEX_NONE)) { return nullptr; }
+		Actor->RebuildMesh();
+		const URoadNetwork& Net = *Actor->Network;
+		for (int32 Index = 0; Index < Net.GetEntities().Num(); ++Index)
+		{
+			if (Net.GetEntities()[Index].bAlive && Net.GetEntities()[Index].IsStand())
+			{
+				OutId = Net.EntityIdAt(Index);
+				return &Net.GetEntities()[Index];
+			}
+		}
+		Test.AddError(TEXT("no stand in the network after placement"));
+		return nullptr;
+	}
+
+	/**
+	 * The nodes of the stand's SERVICE POINTS - the anchors its definition lays a bay for - read
+	 * from the layout's own data (UEntityDefinition::ServiceBays' AnchorId -> the instance's
+	 * resolved anchor), never from where they happen to be.
+	 */
+	TSet<FGuidelineNodeId> ServicePointNodes(const FEntityInstance& Stand)
+	{
+		TSet<FGuidelineNodeId> Out;
+		if (Stand.Definition == nullptr) { return Out; }
+		for (const FServiceBay& Bay : Stand.Definition->ServiceBays)
+		{
+			for (const FResolvedAnchor& Anchor : Stand.ResolvedAnchors)
+			{
+				if (Anchor.Id == Bay.AnchorId) { Out.Add(Anchor.Node); }
+			}
+		}
+		return Out;
 	}
 
 	/** Every triangle in Buffers faces up, measured the way every winding test in this
@@ -294,9 +414,14 @@ bool FStandMarkingGlyphReadsUnmirroredTest::RunTest(const FString& Parameters)
 		const FEntityInstance* Instance = Net->GetEntity(PlaceDrawnStand(*Net, Stand, Letter, 0.0));
 		if (Instance == nullptr) { return false; }
 		FRoadMeshBuffers Buffers;
-		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor());
+		FStandMarkingCensus Census;
+		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census);
 		constexpr int32 FirstGlyphVertex = 8;
-		if (Buffers.Positions.Num() <= FirstGlyphVertex) { return false; }
+		// BOUNDED TO THE GLYPH'S OWN QUADS - four vertices per segment, read off the census -
+		// since task 13 painted the boundary, restraint line and hatch AFTER the letter. Reading
+		// to the end of the buffer would average a whole stand's symmetric paint into the mean.
+		const int32 EndGlyphVertex = FirstGlyphVertex + Census.LetterSegments * 4;
+		if (Census.LetterSegments == 0 || Buffers.Positions.Num() < EndGlyphVertex) { return false; }
 
 		const FVector2D Facing(FMath::Cos(Instance->Heading), FMath::Sin(Instance->Heading));
 		const FVector2D ReaderRight = RoadGeom::PerpCCW(Facing);
@@ -305,12 +430,12 @@ bool FStandMarkingGlyphReadsUnmirroredTest::RunTest(const FString& Parameters)
 		const FVector2D GlyphCentre = EntranceMid + Facing * FStandMarkingBuilder::GlyphInset;
 
 		double Sum = 0.0;
-		for (int32 Index = FirstGlyphVertex; Index < Buffers.Positions.Num(); ++Index)
+		for (int32 Index = FirstGlyphVertex; Index < EndGlyphVertex; ++Index)
 		{
 			const FVector3d& V = Buffers.Positions[Index];
 			Sum += FVector2D::DotProduct(FVector2D(V.X, V.Y) - GlyphCentre, ReaderRight);
 		}
-		OutMean = Sum / (Buffers.Positions.Num() - FirstGlyphVertex);
+		OutMean = Sum / (EndGlyphVertex - FirstGlyphVertex);
 		return true;
 	};
 
@@ -493,6 +618,297 @@ bool FStandMarkingPaintSlotsResolveTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(FString::Printf(TEXT("mesh id %d has a material"), Id), Id >= 0 && Id < Paint->GetNumMaterials());
 	}
+	// And the stand's paint actually USES every slot - yellow guidance, white boundary, red
+	// restraint - so a builder that dropped every quad onto slot 0 cannot pass on the set alone.
+	for (const EStandPaint P : { EStandPaint::Guidance, EStandPaint::Boundary, EStandPaint::Restraint })
+	{
+		TestTrue(FString::Printf(TEXT("the painted mesh carries paint %d's slot"), static_cast<int32>(P)),
+			Seen.Contains(Set->IndexOf(URoadSurfacePresenter::StandPaintSlot(P))));
+	}
+	return true;
+}
+
+/**
+ * EVERY PAINTED VERTEX LIES ON THE STAND (task 13): boundary, restraint, hatch and guidance all
+ * inside the drawn outline, 1 uu of tolerance - paint that ran off the pad would lie on the
+ * taxiway or a neighbour's ground. Three letters, so a figure right for one width is not enough.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingPaintStaysInsideOutlineTest,
+	"Airside.Build.StandMarking.PaintStaysInsideOutline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingPaintStaysInsideOutlineTest::RunTest(const FString& Parameters)
+{
+	using namespace StandMarkingTest;
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::E })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FEntityInstance* Stand = Net->GetEntity(PlaceDrawnStand(*Net, UEntityDefinition::MakeStandTransient(Letter), Letter, 0.0));
+		if (!TestNotNull(TEXT("the stand resolves"), Stand)) { return false; }
+		FRoadMeshBuffers Buffers;
+		FStandMarkingCensus Census;
+		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), &Census, DistinctIds());
+		TestTrue(FString::Printf(TEXT("Code %s painted boundary, restraint and hatch"), IcaoCode::ToLetter(Letter)),
+			Census.BoundaryEdges == Stand->Outline.Num() && Census.RestraintSides == 4 && Census.HatchStripes > 0);
+		int32 Outside = 0;
+		for (const FVector3d& V : Buffers.Positions)
+		{
+			Outside += InConvex(Stand->Outline, FVector2D(V.X, V.Y), 1.0) ? 0 : 1;
+		}
+		TestEqual(FString::Printf(TEXT("Code %s: no painted vertex off the stand"), IcaoCode::ToLetter(Letter)), Outside, 0);
+	}
+	return true;
+}
+
+/**
+ * THE RED BOX HOLDS THE AIRCRAFT: each C++-built airframe's own footprint (UAircraftType::
+ * BuildFootprintLines - the type's data, not the envelope figures the box is built from), grown
+ * by its stand letter's wingtip clearance sideways and ahead of the nose, lies inside the box's
+ * interior on a stand of its letter - and the PAINTED red line encloses that interior on all four
+ * sides without entering it. Aft, the footprint itself must clear the box's entrance side: the
+ * aft clearance is the setback's, to the taxiway beyond the stand.
+ *
+ * THE BUILDERS, NOT THE ASSETS - Airside.Entities.EveryAirframeFitsItsLettersRow's reason: a test
+ * may not load content, so D, E and F (DA_Aircraft_* only) are measured by the box's derivation
+ * alone. The Piper is Code A and parks on B's ground (StandLetterFor), which this covers too.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingRestraintHoldsTheAircraftTest,
+	"Airside.Build.StandMarking.RestraintHoldsTheAircraft",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingRestraintHoldsTheAircraftTest::RunTest(const FString& Parameters)
+{
+	using namespace StandMarkingTest;
+	struct FCase { const TCHAR* What; UAircraftType* (*Make)(); };
+	const FCase Cases[] = {
+		{ TEXT("A320"), []() { UAircraftType* T = NewObject<UAircraftType>(GetTransientPackage()); UAircraftType::BuildA320(T); return T; } },
+		{ TEXT("737-800"), []() { UAircraftType* T = NewObject<UAircraftType>(GetTransientPackage()); UAircraftType::Build737(T); return T; } },
+		{ TEXT("Piper Meridian"), &TestAirframes::PiperType },
+	};
+	for (const FCase& Case : Cases)
+	{
+		UAircraftType* Type = Case.Make();
+		const TOptional<EIcaoCode> Code = IcaoCode::Parse(Type->Code.ToString());
+		if (!TestTrue(FString::Printf(TEXT("%s has a letter"), Case.What), Code.IsSet())) { continue; }
+		const EIcaoCode Letter = IcaoCode::StandLetterFor(*Code);
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FEntityInstance* Stand = Net->GetEntity(PlaceDrawnStand(*Net, UEntityDefinition::MakeStandTransient(Letter), Letter, 0.0));
+		FStandPaintFrame Frame;
+		if (!TestNotNull(TEXT("the stand resolves"), Stand)
+			|| !TestTrue(TEXT("the stand has a paint frame"), FStandMarkingBuilder::FrameFor(*Stand, FLetterEnvelopeTable::Floor(), Frame))) { return false; }
+		const double Clearance = IcaoCode::WingtipClearanceForLetter(Letter);
+
+		TArray<FVector2D> Lines;
+		UAircraftType::BuildFootprintLines(Type->Footprint, Lines);
+		if (!TestTrue(TEXT("a footprint to measure"), Lines.Num() > 0)) { return false; }
+		double WorstSide = -DBL_MAX, WorstNose = -DBL_MAX, WorstTail = DBL_MAX;
+		for (const FVector2D& Raw : Lines)
+		{
+			// To nose-gear coordinates first (SteerAxleX - EveryAirframeFitsItsLettersRow's own
+			// conversion), then pose-local (x forward, y to PerpCCW) to the frame's own.
+			const FVector2D Local(Raw.X - Type->SteerAxleX, Raw.Y);
+			const FVector2D P = Frame.ToLocal(Stand->Position + Frame.Facing * Local.X + Frame.Right * Local.Y);
+			WorstSide = FMath::Max(WorstSide, FMath::Abs(P.Y) + Clearance);
+			WorstNose = FMath::Max(WorstNose, P.X + Clearance);
+			WorstTail = FMath::Min(WorstTail, P.X);
+		}
+		TestTrue(FString::Printf(TEXT("%s: wingtip + clearance %.0f within the box's half-width %.0f"), Case.What, WorstSide, Frame.RestraintHalfWidth),
+			WorstSide <= Frame.RestraintHalfWidth + 0.01);
+		TestTrue(FString::Printf(TEXT("%s: nose + clearance %.0f within the box's forward side %.0f"), Case.What, WorstNose, Frame.RestraintForward),
+			WorstNose <= Frame.RestraintForward + 0.01);
+		TestTrue(FString::Printf(TEXT("%s: tail %.0f ahead of the box's entrance side %.0f"), Case.What, WorstTail, Frame.RestraintAft),
+			WorstTail >= Frame.RestraintAft - 0.01);
+	}
+
+	// The PAINT agrees with the frame, every stand letter: no red vertex inside the interior,
+	// and red reaching out to each of the four sides.
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	{
+		const TCHAR* Name = IcaoCode::ToLetter(Letter);
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FEntityInstance* Stand = Net->GetEntity(PlaceDrawnStand(*Net, UEntityDefinition::MakeStandTransient(Letter), Letter, 0.0));
+		FStandPaintFrame Frame;
+		if (!TestNotNull(TEXT("the stand resolves"), Stand)
+			|| !TestTrue(TEXT("a frame"), FStandMarkingBuilder::FrameFor(*Stand, FLetterEnvelopeTable::Floor(), Frame))) { return false; }
+		FRoadMeshBuffers Buffers;
+		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), nullptr, DistinctIds());
+		double MinX = DBL_MAX, MaxX = -DBL_MAX, MinY = DBL_MAX, MaxY = -DBL_MAX;
+		int32 Inside = 0, Red = 0;
+		for (const FPaintTriangle& T : TrianglesOf(Buffers))
+		{
+			if (T.Id != static_cast<int32>(EStandPaint::Restraint)) { continue; }
+			for (const FVector2D& W : { T.A, T.B, T.C })
+			{
+				const FVector2D P = Frame.ToLocal(W);
+				++Red;
+				Inside += Frame.InRestraintInterior(W, 0.01) ? 1 : 0;
+				MinX = FMath::Min(MinX, P.X); MaxX = FMath::Max(MaxX, P.X);
+				MinY = FMath::Min(MinY, P.Y); MaxY = FMath::Max(MaxY, P.Y);
+			}
+		}
+		if (!TestTrue(FString::Printf(TEXT("Code %s: a red line was painted"), Name), Red > 0)) { continue; }
+		TestEqual(FString::Printf(TEXT("Code %s: no red vertex inside the box it marks"), Name), Inside, 0);
+		TestTrue(FString::Printf(TEXT("Code %s: the red line encloses the box (x %.0f..%.0f, y %.0f..%.0f)"), Name, MinX, MaxX, MinY, MaxY),
+			MinX <= Frame.RestraintAft && MaxX >= Frame.RestraintForward
+				&& MinY <= -Frame.RestraintHalfWidth && MaxY >= Frame.RestraintHalfWidth);
+	}
+	return true;
+}
+
+/**
+ * NO HATCH INSIDE THE RED BOX (R20): hatch is vehicle-only ground, and the box is the aircraft's.
+ * Every hatch vertex, edge midpoint and centroid lies outside the box interior - a thin stripe
+ * cannot overlap the box without one of those landing inside it. Both stripe kinds painted.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingHatchClearsTheRestraintBoxTest,
+	"Airside.Build.StandMarking.HatchClearsTheRestraintBox",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingHatchClearsTheRestraintBoxTest::RunTest(const FString& Parameters)
+{
+	using namespace StandMarkingTest;
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::F })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FEntityInstance* Stand = Net->GetEntity(PlaceDrawnStand(*Net, UEntityDefinition::MakeStandTransient(Letter), Letter, 0.0));
+		FStandPaintFrame Frame;
+		if (!TestNotNull(TEXT("the stand resolves"), Stand)
+			|| !TestTrue(TEXT("a frame"), FStandMarkingBuilder::FrameFor(*Stand, FLetterEnvelopeTable::Floor(), Frame))) { return false; }
+		FRoadMeshBuffers Buffers;
+		FStandMarkingBuilder::Build(*Net, 10.0, Buffers, FLetterEnvelopeTable::Floor(), nullptr, DistinctIds());
+		int32 Marks = 0, Spaces = 0, Inside = 0;
+		for (const FPaintTriangle& T : TrianglesOf(Buffers))
+		{
+			if (!IsHatch(T.Id)) { continue; }
+			(T.Id == static_cast<int32>(EStandPaint::HatchMark) ? Marks : Spaces)++;
+			for (const FVector2D& P : { T.A, T.B, T.C, (T.A + T.B) * 0.5, (T.B + T.C) * 0.5, (T.C + T.A) * 0.5, (T.A + T.B + T.C) / 3.0 })
+			{
+				Inside += Frame.InRestraintInterior(P, 0.01) ? 1 : 0;
+			}
+		}
+		TestTrue(FString::Printf(TEXT("Code %s: both kinds of stripe painted (%d, %d)"), IcaoCode::ToLetter(Letter), Marks, Spaces), Marks > 0 && Spaces > 0);
+		TestEqual(FString::Printf(TEXT("Code %s: no hatch inside the restraint box"), IcaoCode::ToLetter(Letter)), Inside, 0);
+	}
+	return true;
+}
+
+/**
+ * LAYOUT AGREEMENT (R19): the paint measured against the REAL vehicle paths. A B stand through
+ * the facade, FStandLayoutBuild's own layout, sampled with GuidelineGeom::Sample - the one
+ * evaluator the follower walks. The red line is an EQUIPMENT RESTRAINT line: vehicles wait
+ * outside it and cross it only to service the parked aircraft. So every edge of the layout lies
+ * outside the box interior - park bays, lanes, spurs, contacts, departs - EXCEPT an edge that
+ * starts or ends at a service point, identified by the layout's own data (ServicePointNodes), and
+ * at least one such edge must exist or the exemption is measuring nothing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingLayoutClearsTheRestraintBoxTest,
+	"Airside.Present.StandMarking.LayoutClearsTheRestraintBox",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingLayoutClearsTheRestraintBoxTest::RunTest(const FString& Parameters)
+{
+	using namespace StandMarkingTest;
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	FEntityInstanceId StandId;
+	const FEntityInstance* Stand = PlaceRealBStand(*this, TestWorld, StandId);
+	if (Stand == nullptr) { return false; }
+	const URoadNetwork& Net = *TestWorld.Actor->Network;
+
+	FStandPaintFrame Frame;
+	if (!TestTrue(TEXT("a frame"), FStandMarkingBuilder::FrameFor(*Stand, UAirsideSettings::ResolveLetterEnvelopeTable(), Frame))) { return false; }
+	const TSet<FGuidelineNodeId> ServicePoints = ServicePointNodes(*Stand);
+	if (!TestTrue(TEXT("the stand has service points with bays"), ServicePoints.Num() > 0)) { return false; }
+
+	int32 Edges = 0, Exempt = 0, Inside = 0;
+	for (const FGuidelineEdge& Edge : Net.GetGuidelineEdges())
+	{
+		if (!Edge.bAlive || !(Edge.StandGeometryOwner == StandId)) { continue; }
+		++Edges;
+		if (ServicePoints.Contains(Edge.A) || ServicePoints.Contains(Edge.B))
+		{
+			++Exempt;
+			continue;
+		}
+		const FGuidelineNode* A = Net.GetGuidelineNode(Edge.A);
+		const FGuidelineNode* B = Net.GetGuidelineNode(Edge.B);
+		if (A == nullptr || B == nullptr) { continue; }
+		TArray<FVector2D> Samples;
+		GuidelineGeom::Sample(A->Position, Edge.Control, B->Position, Samples);
+		for (const FVector2D& P : Samples)
+		{
+			if (Frame.InRestraintInterior(P, 0.01))
+			{
+				++Inside;
+				const FVector2D L = Frame.ToLocal(P);
+				AddInfo(FString::Printf(TEXT("inside the box: x=%.0f y=%.0f%s"), L.X, L.Y, Edge.bReverseLeg ? TEXT(" (reverse)") : TEXT("")));
+			}
+		}
+	}
+	TestTrue(FString::Printf(TEXT("the stand laid a layout (%d edges)"), Edges), Edges > 0);
+	TestTrue(FString::Printf(TEXT("the service-point exemption is not vacuous (%d edges)"), Exempt), Exempt > 0);
+	TestEqual(TEXT("no park bay, lane, spur, contact or depart sample inside the restraint box"), Inside, 0);
+	return true;
+}
+
+/**
+ * THE HATCH IS WHERE THE VEHICLES ARE (R20): every node of the real layout that is not a service
+ * point - lane, park bay, spur, contact - lies on a hatched triangle of the paint the builder lays
+ * on that same network. A hatch band derived from a lane-width constant sat 6 m inboard of the
+ * lane on a B stand (task 13's first probe); this measures the band against the lane itself.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandMarkingLayoutLiesOnHatchTest,
+	"Airside.Present.StandMarking.LayoutLiesOnHatch",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandMarkingLayoutLiesOnHatchTest::RunTest(const FString& Parameters)
+{
+	using namespace StandMarkingTest;
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	FEntityInstanceId StandId;
+	const FEntityInstance* Stand = PlaceRealBStand(*this, TestWorld, StandId);
+	if (Stand == nullptr) { return false; }
+	const URoadNetwork& Net = *TestWorld.Actor->Network;
+
+	FRoadMeshBuffers Buffers;
+	FStandMarkingBuilder::Build(Net, 10.0, Buffers, UAirsideSettings::ResolveLetterEnvelopeTable(), nullptr, DistinctIds());
+	TArray<FPaintTriangle> Hatch = TrianglesOf(Buffers).FilterByPredicate([](const FPaintTriangle& T) { return IsHatch(T.Id); });
+	if (!TestTrue(TEXT("hatch was painted"), Hatch.Num() > 0)) { return false; }
+
+	FStandPaintFrame Frame;
+	FStandMarkingBuilder::FrameFor(*Stand, UAirsideSettings::ResolveLetterEnvelopeTable(), Frame);
+	const TSet<FGuidelineNodeId> ServicePoints = ServicePointNodes(*Stand);
+	TSet<FGuidelineNodeId> Nodes;
+	for (const FGuidelineEdge& Edge : Net.GetGuidelineEdges())
+	{
+		if (!Edge.bAlive || !(Edge.StandGeometryOwner == StandId)) { continue; }
+		for (const FGuidelineNodeId& Id : { Edge.A, Edge.B })
+		{
+			if (!ServicePoints.Contains(Id)) { Nodes.Add(Id); }
+		}
+	}
+	if (!TestTrue(TEXT("layout nodes to measure"), Nodes.Num() > 0)) { return false; }
+
+	int32 Off = 0;
+	for (const FGuidelineNodeId& Id : Nodes)
+	{
+		const FGuidelineNode* Node = Net.GetGuidelineNode(Id);
+		if (Node == nullptr) { continue; }
+		const bool bOn = Hatch.ContainsByPredicate([&](const FPaintTriangle& T) { return InTriangle(T, Node->Position, 1.0); });
+		if (!bOn)
+		{
+			++Off;
+			const FVector2D L = Frame.ToLocal(Node->Position);
+			AddInfo(FString::Printf(TEXT("off the hatch: x=%.0f y=%.0f"), L.X, L.Y));
+		}
+	}
+	TestEqual(FString::Printf(TEXT("every one of %d lane/park-bay nodes lies on hatched ground"), Nodes.Num()), Off, 0);
 	return true;
 }
 

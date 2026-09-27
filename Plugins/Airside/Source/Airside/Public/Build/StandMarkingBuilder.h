@@ -6,6 +6,7 @@
 #include "Solve/LetterEnvelope.h"
 
 class URoadNetwork;
+struct FEntityInstance;
 
 /**
  * What a piece of stand paint MEANS - never what colour it is. Build/ describes intent, the
@@ -45,11 +46,61 @@ struct AIRSIDE_API FStandMarkingCensus
 	int32 LeadIns = 0;
 	int32 StopBars = 0;
 	int32 LetterSegments = 0;
+	/** One per edge of the drawn outline. */
+	int32 BoundaryEdges = 0;
+	/** Four per stand: entrance, both sides, nose. */
+	int32 RestraintSides = 0;
+	/** Hatch stripe pieces actually emitted, both kinds, after clipping to their zones. */
+	int32 HatchStripes = 0;
+};
+
+/**
+ * A stand's PAINT FRAME: local x from the entrance edge along Facing (toward the nose and the
+ * far edge), local y along Right = PerpCCW(Facing), the reader's right - see Build() for why that
+ * sign. And the RESTRAINT BOX in it: the ground the parked aircraft owns, whose interior is
+ * RestraintAft < x < RestraintForward, |y| < RestraintHalfWidth.
+ *
+ * PUBLIC so the tests measure paint and the real vehicle layout against the SAME box the builder
+ * paints, rather than a second derivation of it that could agree with itself and not the paint.
+ */
+struct AIRSIDE_API FStandPaintFrame
+{
+	FVector2D EntranceMid = FVector2D::ZeroVector;
+	FVector2D Facing = FVector2D(1.0, 0.0);
+	FVector2D Right = FVector2D(0.0, 1.0);
+
+	/** The letter painted - unset for a stand whose DesignWingspan was never captured. */
+	TOptional<EIcaoCode> GlyphLetter;
+
+	/** Entrance edge to the stop mark, uu - StandBox::EntranceSetback. */
+	double Setback = 0.0;
+
+	double RestraintHalfWidth = 0.0;
+	double RestraintForward = 0.0;
+	double RestraintAft = 0.0;
+
+	FVector2D ToWorld(double X, double Y) const { return EntranceMid + Facing * X + Right * Y; }
+	FVector2D ToLocal(const FVector2D& World) const
+	{
+		const FVector2D D = World - EntranceMid;
+		return FVector2D(FVector2D::DotProduct(D, Facing), FVector2D::DotProduct(D, Right));
+	}
+	/** Strictly inside the restraint box, by more than Tolerance. */
+	bool InRestraintInterior(const FVector2D& World, double Tolerance) const
+	{
+		const FVector2D P = ToLocal(World);
+		return P.X > RestraintAft + Tolerance && P.X < RestraintForward - Tolerance
+			&& FMath::Abs(P.Y) < RestraintHalfWidth - Tolerance;
+	}
 };
 
 /**
  * The PAINT of a drawn stand: a lead-in line from the entrance to the stop mark, a stop bar
  * across the heading at the stop mark, and the stand's code letter as seven-segment strokes -
+ * and since task 13 (2026-09-27, "white lines for the outer edge, paint in the no go zones for
+ * the aircraft and the stop lines") a white boundary just inside the outline, a red restraint
+ * line round the aircraft's box (FStandPaintFrame), and a red-and-white 45 degree hatch over all
+ * the vehicle-only ground outside it. Each quad names its EStandPaint; the caller picks colours -
  * quads through the same builder idiom as FHoldingPositionMarkingBuilder and
  * FRunwayMarkingBuilder (MarkingQuads::AddQuad/AddRect, UV1 = 0 solid).
  *
@@ -76,11 +127,20 @@ struct AIRSIDE_API FStandMarkingCensus
  */
 struct AIRSIDE_API FStandMarkingBuilder
 {
+	/** Stand boundary line width, uu (20 cm), painted just inside the drawn outline. */
+	static constexpr double BoundaryWidth = 20.0;
+	/** Restraint line width, uu (20 cm). */
+	static constexpr double RestraintWidth = 20.0;
+	/** Hatch stripe width, uu (50 cm, measured square to the stripe), at 45 degrees. */
+	static constexpr double HatchStripeWidth = 50.0;
+
 	/** Lead-in line width, uu (15 cm). */
 	static constexpr double LeadInWidth = 15.0;
-	/** Stop bar: across the heading (40 cm) by along it (3 m), uu. */
+	/** Stop bar: along the heading (40 cm) by across it (6 m), uu. 6 m since task 13, up from 3:
+	 *  with the overlay's stop and pose rings gone the bar IS the stop mark, and the user asked
+	 *  for one bar, bigger, rather than a bar per aircraft type. */
 	static constexpr double StopBarWidth = 40.0;
-	static constexpr double StopBarLength = 300.0;
+	static constexpr double StopBarLength = 600.0;
 
 	/** Letter glyph: 3 m tall, 30 cm stroke, uu. Width is this builder's own choice - the
 	 *  brief specifies height and stroke only - picked for a digit-like 2:3 aspect. */
@@ -98,6 +158,14 @@ struct AIRSIDE_API FStandMarkingBuilder
 	 * indistinguishable from 8, upper-case D from 0).
 	 */
 	static const uint8 GlyphSegments[6];
+
+	/**
+	 * Entity's paint frame and restraint box, or false when Entity is not a live drawn stand.
+	 * The letter, envelope and setback are Build()'s own derivation - see Build's header - and
+	 * the box's figures are the SAME ones that size the stand (IcaoCode: MaxWingspan,
+	 * WingtipClearance; the envelope's MaxNoseFwd), for the stand's own letter (StandLetterFor).
+	 */
+	static bool FrameFor(const FEntityInstance& Entity, const FLetterEnvelopeTable& Envelopes, FStandPaintFrame& Out);
 
 	/**
 	 * Append the markings of every drawn (plotted) stand in Network to Out, in the road
