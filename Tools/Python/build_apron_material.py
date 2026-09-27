@@ -22,10 +22,17 @@ tone in low-frequency patches, and a fine value-only grain. Warm concrete agains
 taxiway's cool asphalt grey - see airside_palette for the hexes and for the luminance ratios
 between the surfaces, which are the thing actually being specified there.
 
-ONE DELIBERATE DEPARTURE FROM M_RoadSurface SURVIVES: NO UV1. That material reads UV1 for
-its centreline, and an apron's UV1 is zero at every vertex because lateral offset and
-distance along a centreline mean nothing for a polygon. Sampling it would paint the whole
-apron as one enormous centre marking - not a marking, a bug that happens to be visible.
+ONE DELIBERATE DEPARTURE FROM M_RoadSurface SURVIVES: UV1 IS NOT A CENTRELINE HERE. That
+material reads UV1 for its centreline, and lateral offset and distance along a centreline
+mean nothing for a polygon. Sampling it that way would paint the whole apron as one
+enormous centre marking - not a marking, a bug that happens to be visible.
+
+SINCE 2026-09-27 UV1.X IS A PAINT TAG instead (FRoadMeshBuilder::EApronPaint): 0 concrete,
+1 fuel slab, 2 hazard band. Plain aprons and stands stay 0, so they are unchanged. A tag,
+not a colour, so the C++ names what a surface IS and this graph alone decides how it looks.
+Each paint is triangulated by its own builder, so a tag is constant across every triangle
+and never blends; the masks below still threshold at the midpoints so an interpolated value
+could not produce a third colour.
 
 TWO FACTS KEPT FROM THE IMPORT MACHINERY, because they apply to any texture this material
 samples:
@@ -164,9 +171,48 @@ def build_apron_material():
     grain = nodes.value_grain(
         lib, material, noise_texture, grain_size, grain_amount, -2900, -100)
 
+    # --- Plot paint, by UV1.X tag --------------------------------------------------------
+    # Wear stays on the concrete only: the slab and band are fresh paint on purpose, and a
+    # flat panel is what reads at max zoom. The grain below still runs over all three.
+    slab_colour = nodes.vector(lib, material, "FuelSlabColour", palette.FUEL_SLAB, -2000, -900)
+    band_colour = nodes.vector(lib, material, "HazardBandColour", palette.HAZARD_BAND, -2000, -1040)
+
+    paint_uv = lib.create_material_expression(
+        material, unreal.MaterialExpressionTextureCoordinate, -2200, -1200)
+    paint_uv.set_editor_property("coordinate_index", 1)
+    paint_tag = lib.create_material_expression(
+        material, unreal.MaterialExpressionComponentMask, -2050, -1200)
+    paint_tag.set_editor_property("r", True)
+    paint_tag.set_editor_property("g", False)
+    paint_tag.set_editor_property("b", False)
+    paint_tag.set_editor_property("a", False)
+    lib.connect_material_expressions(paint_uv, "", paint_tag, "")
+
+    # Tag >= 0.5 is painted at all; tag >= 1.5 is the band. Step at the midpoints rather
+    # than saturate(tag), so a stray 0.3 is concrete rather than a 30% tint.
+    is_painted = lib.create_material_expression(
+        material, unreal.MaterialExpressionStep, -1850, -1200)
+    is_painted.set_editor_property("const_y", 0.5)
+    lib.connect_material_expressions(paint_tag, "", is_painted, "X")
+    is_band = lib.create_material_expression(
+        material, unreal.MaterialExpressionStep, -1850, -1100)
+    is_band.set_editor_property("const_y", 1.5)
+    lib.connect_material_expressions(paint_tag, "", is_band, "X")
+
+    slabbed = lib.create_material_expression(
+        material, unreal.MaterialExpressionLinearInterpolate, -1450, -900)
+    lib.connect_material_expressions(weathered, "", slabbed, "A")
+    lib.connect_material_expressions(slab_colour, "", slabbed, "B")
+    lib.connect_material_expressions(is_painted, "", slabbed, "Alpha")
+    painted = lib.create_material_expression(
+        material, unreal.MaterialExpressionLinearInterpolate, -1400, -750)
+    lib.connect_material_expressions(slabbed, "", painted, "A")
+    lib.connect_material_expressions(band_colour, "", painted, "B")
+    lib.connect_material_expressions(is_band, "", painted, "Alpha")
+
     surface = lib.create_material_expression(
         material, unreal.MaterialExpressionMultiply, -1300, -500)
-    lib.connect_material_expressions(weathered, "", surface, "A")
+    lib.connect_material_expressions(painted, "", surface, "A")
     lib.connect_material_expressions(grain, "", surface, "B")
 
     lib.connect_material_property(surface, "", unreal.MaterialProperty.MP_BASE_COLOR)

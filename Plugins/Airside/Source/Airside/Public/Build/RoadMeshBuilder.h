@@ -98,10 +98,32 @@ public:
 	 * Aprons belong on their own builder INSTANCE, though, so their vertices cannot weld to
 	 * a road's. The two surfaces meet; they are not one surface.
 	 *
-	 * UV1 is zero throughout: lateral offset and distance along a centreline are meaningless
-	 * for a polygon, and a made-up value would be sampled by any material that reads them.
+	 * UV1.Y is zero throughout: distance along a centreline is meaningless for a polygon.
+	 * UV1.X is the paint tag (EApronPaint), Concrete for an FApronSurface.
 	 */
 	void AddApron(const FApronSurface& Apron);
+
+	/**
+	 * Which paint an apron triangle wears - a MEANING, written to UV1.X, never a colour.
+	 * M_ApronConcrete maps it to a palette row (build_apron_material.py), so C++ says what a
+	 * surface IS and the material alone says how it looks.
+	 *
+	 * VALUES ARE THE TAG - append only, and the material's thresholds sit at the midpoints
+	 * (0.5, 1.5). Concrete is 0 so every apron built before tags existed means concrete.
+	 */
+	enum class EApronPaint : uint8
+	{
+		Concrete = 0,
+		FuelSlab = 1,
+		HazardBand = 2,
+	};
+
+	/**
+	 * How wide a fuel depot's hazard band is, in uu (2026-09-27). 1 m: about 4 px at max zoom
+	 * on the build camera, measured from samples/fuel-built.png - the width the mock-up read
+	 * at. Real bund paint is narrower; this is option 1's exaggeration, not a survey figure.
+	 */
+	static constexpr double HazardBandUu = 100.0;
 
 	/**
 	 * The same pavement from a bare polygon, for a surface that is not an FApronSurface.
@@ -111,7 +133,18 @@ public:
 	 * shapes a freeform gesture produces, and the pad would disagree with the plot the
 	 * player drew. The overload above forwards to this one.
 	 */
-	void AddApron(const TArray<FVector2D>& Outline);
+	void AddApron(const TArray<FVector2D>& Outline, EApronPaint Paint = EApronPaint::Concrete);
+
+	/**
+	 * The ring between Outer and Inner - a painted band inside an outline, two triangles per
+	 * edge, wound as Outer is (PolygonInset::Inset keeps winding and vertex order, which is
+	 * what lets edge i pair with edge i).
+	 *
+	 * A DIFFERENT BUILDER INSTANCE from the slab it surrounds: the two share Inner's
+	 * positions, and a welded vertex would carry one paint's tag into the other's triangles.
+	 * Nothing if the two do not have the same corner count.
+	 */
+	void AddApronRing(TConstArrayView<FVector2D> Outer, TConstArrayView<FVector2D> Inner, EApronPaint Paint);
 
 	void Emit(IRoadMeshSink& Sink) const;
 
