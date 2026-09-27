@@ -124,6 +124,7 @@ FRoadNodeId URoadNetwork::SplitSegment(FRoadSegmentId Doomed, const FVector2D& A
 	const FRoadNodeId KeepB = Segment->B;
 	URoadProfile* KeepProfile = Segment->Profile;
 	const FRunwayFacts KeepFacts = Segment->Runway;
+	const ERoadSurface KeepSurface = Segment->Surface;
 	const FVector2D PositionA = EndA->Position;
 	const FVector2D PositionB = EndB->Position;
 
@@ -161,11 +162,15 @@ FRoadNodeId URoadNetwork::SplitSegment(FRoadSegmentId Doomed, const FVector2D& A
 	// the chain is the two new segments and nothing else remembers what the doomed one
 	// said; without this, every exit added to a precision runway demoted the far half to
 	// the default and repainted it visual.
+	//
+	// THE ROAD SURFACE LIKEWISE: an exit cut into a grass taxiway would otherwise pave both
+	// halves, and the aircraft the grass kept off it would route straight down them.
 	for (const FRoadSegmentId& Half : { First, Second })
 	{
 		if (FRoadSegment* Fresh = GetSegmentMutable(Half))
 		{
 			Fresh->Runway = KeepFacts;
+			Fresh->Surface = KeepSurface;
 		}
 	}
 
@@ -447,6 +452,27 @@ bool URoadNetwork::IsRunwaySegment(FRoadSegmentId Segment) const
 	}
 	const URoadProfile* Profile = ProfileFor(*Found);
 	return Profile != nullptr && Profile->bContinuousThroughJunctions;
+}
+
+bool URoadNetwork::IsGrassRoad(FRoadSegmentId Segment) const
+{
+	// RUNWAY FIRST: a runway's surface is Runway.Surface, and its own Surface field is the
+	// default nothing wrote. Asking the field alone would be right today only because no path
+	// writes it on a runway.
+	const FRoadSegment* Found = GetSegment(Segment);
+	return Found != nullptr && Found->bAlive && Found->Surface == ERoadSurface::Grass
+		&& !IsRunwaySegment(Segment);
+}
+
+bool URoadNetwork::SetSegmentSurface(FRoadSegmentId Segment, ERoadSurface Surface)
+{
+	FRoadSegment* Found = GetSegmentMutable(Segment);
+	if (Found == nullptr || !Found->bAlive || IsRunwaySegment(Segment))
+	{
+		return false;
+	}
+	Found->Surface = Surface;
+	return true;
 }
 
 bool URoadNetwork::IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId Seed,

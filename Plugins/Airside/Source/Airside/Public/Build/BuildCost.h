@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/BuildPurse.h"
+#include "Model/RunwayFacts.h"
 
 class URoadProfile;
 class UEntityDefinition;
@@ -28,8 +29,25 @@ namespace BuildCost
 	/** Straight between the segment's two nodes, uu. Zero if either end is not live. */
 	AIRSIDE_API double SegmentLengthUu(const URoadNetwork& Network, const FRoadSegment& Segment);
 
-	/** LengthUu of pavement at Profile's rate. */
-	AIRSIDE_API FBuildQuote ForSegment(const URoadProfile& Profile, double LengthUu);
+	/**
+	 * What grass costs as a fraction of the profile's own rate - build and upkeep alike.
+	 *
+	 * A FACTOR ON THE PROFILE, not a second set of rates: the profile is the cross-section and
+	 * is shared by grass and tarmac roads of one width (see FRoadSegment::Surface), so rates
+	 * per surface would mean a rate per profile per surface authored by hand. 0.4 is a first
+	 * guess (2026-09-27): levelled ground and seed, no base course or binder. Tune it here, in
+	 * the one place both the quote and the upkeep read.
+	 * ENFORCED BY: Airside.Build.GrassRoadCost (quote and upkeep both at the factor)
+	 */
+	inline constexpr double GrassRateFactor = 0.4;
+
+	/** Profile's rate for a road laid on Surface - GrassRateFactor applied, or the rate itself. */
+	AIRSIDE_API double SurfaceRateFactor(ERoadSurface Surface);
+
+	/** LengthUu of pavement at Profile's rate, on Surface. A runway passes nothing and is
+	 *  priced as tarmac: its surface is FRunwayFacts', and runway pricing ignores it today. */
+	AIRSIDE_API FBuildQuote ForSegment(const URoadProfile& Profile, double LengthUu,
+		ERoadSurface Surface = ERoadSurface::Tarmac);
 
 	/** One placed thing - a stand, a depot - at its definition's rate. */
 	AIRSIDE_API FBuildQuote ForEntity(const UEntityDefinition& Definition);

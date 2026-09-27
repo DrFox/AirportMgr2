@@ -25,9 +25,19 @@ int32 FRoadLaneMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoa
 {
 	int32 Dashes = 0;
 	int32 Segments = 0;
-	for (const FRoadSegment& Segment : Network.GetSegments())
+	const TArray<FRoadSegment>& All = Network.GetSegments();
+	for (int32 Index = 0; Index < All.Num(); ++Index)
 	{
+		const FRoadSegment& Segment = All[Index];
 		if (!Segment.bAlive || !Segment.bSolvedA || !Segment.bSolvedB)
+		{
+			continue;
+		}
+
+		// NO PAINT ON GRASS (ruled 2026-09-27): a grass track has no carriageway to divide, and
+		// white dashes laid on the field read as a road the ground does not show. Skipped quietly -
+		// it is the rule, not a defect, unlike the curved-segment skip below.
+		if (Network.IsGrassRoad(Network.SegmentIdAt(Index)))
 		{
 			continue;
 		}

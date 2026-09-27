@@ -64,8 +64,10 @@ namespace DeparturePlanner
 			// mean - a normal entry may never touch a strip, a backtrack exists to - and
 			// naming the errand is what puts that difference in the one table rather than
 			// in two arguments at two call sites.
+			// NeedsSurface: a jet is not planned down a grass taxiway (FRouteQuery::MinimumSurface).
 			return RouteSearch::Find(Network,
-				FRouteQuery::For(Errand, Start, Candidate, Airframe.Wingspan, Class));
+				FRouteQuery::For(Errand, Start, Candidate, Airframe.Wingspan, Class)
+					.NeedsSurface(Airframe.Requirements.MinimumSurface));
 		};
 
 		auto Accept = [&](const FRoutePlan& Route, FGuidelineNodeId Candidate, double Offset, bool bBacktrack)

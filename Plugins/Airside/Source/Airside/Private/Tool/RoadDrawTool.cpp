@@ -98,7 +98,7 @@ TUniquePtr<IRoadDrawState> FRoadIdleState::OnClick(const FToolContext& Context)
 
 	// No RebuildMesh() here any more - PlaceNode/SplitSegment, whichever ResolveToNode just
 	// called, now notify the facade's own OnChanged on commit (issue #77).
-	return MakeUnique<FRoadChainingState>(Started, bCreated, Kind, WidthIndex);
+	return MakeUnique<FRoadChainingState>(Started, bCreated, Kind, WidthIndex, Surface);
 }
 
 TUniquePtr<IRoadDrawState> FRoadIdleState::OnCancel(const FToolContext& Context)
@@ -136,7 +136,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 		{
 			UE_LOG(LogAirside, Warning,
 				TEXT("Road chaining from node %d refused: the target's network is null although the node is live"), From);
-			return MakeUnique<FRoadIdleState>(Kind, WidthIndex);
+			return MakeUnique<FRoadIdleState>(Kind, WidthIndex, Surface);
 		}
 		const ERoadPlacement Judgement =
 			RoadPlacement::Validate(*Network, FromId, RoadGuidedSnap(Context), Context.Limits);
@@ -153,14 +153,14 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 		return nullptr;
 	}
 
-	if (To != From && !Context.Target->ConnectNodes(From, To, Kind, WidthIndex))
+	if (To != From && !Context.Target->ConnectNodes(From, To, Kind, WidthIndex, Surface))
 	{
 		// The facade already logged why. Drop the chain rather than leaving the player
 		// clicking against a connection that will not form. NO RebuildMesh() here any more -
 		// it used to cover the node or split ResolveToNode just made a few lines up, which
 		// notifies on its OWN commit now (PlaceNode/SplitSegment, issue #77); the refused
 		// ConnectNodes itself changed nothing further that needs showing.
-		return MakeUnique<FRoadIdleState>(Kind, WidthIndex);
+		return MakeUnique<FRoadIdleState>(Kind, WidthIndex, Surface);
 	}
 
 	// No RebuildMesh() here either - ResolveToNode and ConnectNodes each notify the facade's
@@ -168,7 +168,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 
 	// Chain on from the node just reached, so a road is drawn click by click rather than
 	// a pair of clicks per segment.
-	return MakeUnique<FRoadChainingState>(To, bNextCreated, Kind, WidthIndex);
+	return MakeUnique<FRoadChainingState>(To, bNextCreated, Kind, WidthIndex, Surface);
 }
 
 TUniquePtr<IRoadDrawState> FRoadChainingState::OnCancel(const FToolContext& Context)
@@ -187,7 +187,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnCancel(const FToolContext& Cont
 		}
 	}
 
-	return MakeUnique<FRoadIdleState>(Kind, WidthIndex);
+	return MakeUnique<FRoadIdleState>(Kind, WidthIndex, Surface);
 }
 
 void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
@@ -219,7 +219,7 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 			// reason" - which is exactly what an unaffordable road is. The purse formats the
 			// money, so no currency symbol ever enters this plugin.
 			const FBuildQuote Quote = Context.Target->QuoteForConnect(
-				From, Context.Snap.Position, Kind, WidthIndex);
+				From, Context.Snap.Position, Kind, WidthIndex, Surface);
 			if (!Quote.IsFree())
 			{
 				Sink.Label(Context.Snap.Position, Purse->Describe(Quote).ToString(),
@@ -334,7 +334,7 @@ void FRoadDrawTool::Remove(const FToolContext& Context)
 	// WITH THIS TOOL'S OWN KIND. Dropping to a default-constructed idle state would silently
 	// put the Road tool back into taxiway mode after a Ctrl+click removal, and the next
 	// click would lay a 23 m aircraft lane where the player was drawing a road.
-	State = MakeUnique<FRoadIdleState>(Kind, WidthIndex);
+	State = MakeUnique<FRoadIdleState>(Kind, WidthIndex, Surface);
 }
 
 void FRoadDrawTool::OnClick(const FToolContext& Context)
@@ -391,6 +391,15 @@ void FRoadDrawTool::OnReselect(const FToolContext& Context)
 		return;
 	}
 
+	// SHIFT STEPS THE SURFACE, the modifier FRunwayTool::OnReselect gives its own surface, so the
+	// two tools answer one gesture one way. BEFORE the width count: the surface is this tool's
+	// own enum and needs no content, so a project with no width profiles can still pick grass.
+	if (Context.bInsertModifier)
+	{
+		StepAxis(Context, TEXT("Surface"), What);
+		return;
+	}
+
 	const int32 Count = Context.Target->GetWidthCount(Kind);
 	if (Count <= 0)
 	{
@@ -409,15 +418,27 @@ void FRoadDrawTool::OnReselect(const FToolContext& Context)
 	// from THAT - a press that jumped back to the narrowest from a lit Code C would read as the
 	// row and the key disagreeing. Nothing lit (the level's tuning is off-list) starts at the
 	// narrowest, which is what the first press always did before the row existed.
+	StepAxis(Context, TEXT("Width"), What);
+}
+
+void FRoadDrawTool::StepAxis(const FToolContext& Context, FName AxisId, const TCHAR* What)
+{
+	// BY Id, not by row index, because the Width row is absent when the content set declares no
+	// widths and Surface then becomes row 0 - FRunwayTool::StepAxis resolves its rows the same
+	// way for the same reason.
 	TArray<FToolVariantAxis> Axes;
 	GetVariantAxes(Context, Axes);
-	const int32 Next = Axes.Num() > 0 ? NextEnabledVariant(Axes[0]) : INDEX_NONE;
+	const int32 Axis = Axes.IndexOfByPredicate([AxisId](const FToolVariantAxis& A) { return A.Id == AxisId; });
+	const int32 Next = Axis != INDEX_NONE ? NextEnabledVariant(Axes[Axis]) : INDEX_NONE;
 	if (Next == INDEX_NONE)
 	{
-		UE_LOG(LogAirside, Warning, TEXT("%s width unchanged: every width is locked"), What);
+		// "every width is locked" for the width row, word for word what this line said before
+		// the surface row existed - the log is what "the key does nothing" is diagnosed from.
+		const FString Lower = AxisId.ToString().ToLower();
+		UE_LOG(LogAirside, Warning, TEXT("%s %s unchanged: every %s is locked"), What, *Lower, *Lower);
 		return;
 	}
-	SelectVariant(Context, 0, Next);
+	SelectVariant(Context, Axis, Next);
 }
 
 int32 NextEnabledVariant(const FToolVariantAxis& Axis)
@@ -451,6 +472,26 @@ void FRoadDrawTool::GetVariantAxes(const FToolContext& Context, TArray<FToolVari
 	{
 		return;
 	}
+	AddWidthAxis(Context, Out);
+
+	// SURFACE ALWAYS, after Width: this tool's own enum, choosable with or without width
+	// profiles. THE ENUM'S OWN NAMES (RoadSurfaceName), the spelling the connect log line uses,
+	// so the row and the log cannot name one surface two ways.
+	FToolVariantAxis& SurfaceAxis = Out.AddDefaulted_GetRef();
+	SurfaceAxis.Id = TEXT("Surface");
+	SurfaceAxis.Label = LOCTEXT("VariantAxisSurface", "Surface");
+	SurfaceAxis.Current = static_cast<int32>(Surface);
+	for (uint8 Each = 0; Each < static_cast<uint8>(ERoadSurface::Count); ++Each)
+	{
+		const TCHAR* Name = RoadSurfaceName(static_cast<ERoadSurface>(Each));
+		FToolVariant& Option = SurfaceAxis.Options.AddDefaulted_GetRef();
+		Option.Id = Name;
+		Option.Label = FText::FromString(Name);
+	}
+}
+
+void FRoadDrawTool::AddWidthAxis(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const
+{
 	const int32 Count = Context.Target->GetWidthCount(Kind);
 	if (Count <= 0)
 	{
@@ -497,18 +538,34 @@ bool FRoadDrawTool::SelectVariant(const FToolContext& Context, int32 Axis, int32
 	// greys a width and the pick that refuses it read one answer.
 	TArray<FToolVariantAxis> Axes;
 	GetVariantAxes(Context, Axes);
-	if (Axis != 0 || !Axes.IsValidIndex(0) || !Axes[0].Options.IsValidIndex(Option)
-		|| !Axes[0].Options[Option].bEnabled)
+	if (!Axes.IsValidIndex(Axis) || !Axes[Axis].Options.IsValidIndex(Option)
+		|| !Axes[Axis].Options[Option].bEnabled)
 	{
 		return false;
 	}
-	const int32 Count = Axes[0].Options.Num();
+
+	const TCHAR* What = Kind == ERoadKind::ServiceRoad ? TEXT("Road") : TEXT("Taxiway");
+
+	// BY THE ROW'S Id - see StepAxis on why an index cannot say which row it is.
+	if (Axes[Axis].Id == TEXT("Surface"))
+	{
+		Surface = static_cast<ERoadSurface>(Option);
+		UE_LOG(LogAirside, Log, TEXT("%s surface -> %s"), What, RoadSurfaceName(Surface));
+
+		// The part-drawn chain hears it too, for WidthIndex's reason below.
+		if (State.IsValid())
+		{
+			State->Surface = Surface;
+		}
+		return true;
+	}
+
+	const int32 Count = Axes[Axis].Options.Num();
 	WidthIndex = Option;
 
 	// The width is otherwise visible only in the ghost, and only once a chain is started -
 	// so a player who has not clicked yet has no way to tell the key did anything. MOVED HERE
 	// from OnReselect so a bar click logs the same line a key press does.
-	const TCHAR* What = Kind == ERoadKind::ServiceRoad ? TEXT("Road") : TEXT("Taxiway");
 	const URoadProfile* Profile = Context.Target->ResolveWidthProfile(Kind, WidthIndex);
 	UE_LOG(LogAirside, Log, TEXT("%s width -> %d of %d, %.1f m"),
 		What, WidthIndex + 1, Count, Profile != nullptr ? Profile->GetTotalWidth() / 100.0 : 0.0);
@@ -582,7 +639,7 @@ void FRoadDrawTool::OnDeactivate(const FToolContext& Context)
 	// and reappears - unfinished and un-cancellable by anything outside a click - next time
 	// this tool is picked.
 	OnCancel(Context);
-	State = MakeUnique<FRoadIdleState>(Kind, WidthIndex);
+	State = MakeUnique<FRoadIdleState>(Kind, WidthIndex, Surface);
 
 	if (Context.Target != nullptr)
 	{

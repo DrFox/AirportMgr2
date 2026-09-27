@@ -139,7 +139,8 @@ public:
 	virtual const URoadNetwork* GetNetwork() const override;
 
 	virtual int32 PlaceNode(FVector2D Where) override;
-	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex) override;
+	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
+		ERoadSurface Surface) override;
 
 	/** Forwarded to the actor, which owns the content lookup - see IRoadEditTarget. */
 	virtual int32 GetWidthCount(ERoadKind Kind) const override;
@@ -315,7 +316,7 @@ public:
 	 * resolve the profile for itself.
 	 */
 	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
-		int32 WidthIndex) const override;
+		int32 WidthIndex, ERoadSurface Surface) const override;
 	virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile* Profile) const override;
 
 	/** True when there is no purse (design time) or the purse says the player can pay. */

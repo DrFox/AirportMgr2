@@ -371,6 +371,12 @@ FRouteQuery FPlanReResolver::QueryFor(ERouteErrand Errand, FGuidelineNodeId Star
 	const FRoadAgent& Agent)
 {
 	FRouteQuery Query = FRouteQuery::For(Errand, Start, Goal, Agent.Wingspan(), Agent.Class);
+	// A RE-ROUTE KEEPS THE PAVEMENT RULE its first plan had - otherwise a jet diverted by an
+	// edit or a deadlock could be sent down the grass taxiway its dispatch refused.
+	if (const FAirframe* Airframe = Agent.AsAircraft())
+	{
+		Query.NeedsSurface(Airframe->Requirements.MinimumSurface);
+	}
 	if (const FVehicle* Vehicle = Agent.AsVehicle())
 	{
 		Query.WithVehicle(*Vehicle);

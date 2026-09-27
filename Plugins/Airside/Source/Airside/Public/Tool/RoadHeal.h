@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Model/RunwayFacts.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadPlacement.h"
 
@@ -78,6 +79,10 @@ struct FRoadDeletionPlan
 	 * as before.
 	 */
 	TObjectPtr<URoadProfile> HealProfile;
+
+	/** What the healed road is laid on, taken from the same arm as HealProfile - a grass
+	 *  taxiway healed as tarmac would admit the aircraft its grass kept off. */
+	ERoadSurface HealSurface = ERoadSurface::Tarmac;
 };
 
 /**

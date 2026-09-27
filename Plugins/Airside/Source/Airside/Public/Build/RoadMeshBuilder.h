@@ -144,8 +144,9 @@ private:
 	void AddTriangle(int32 A, int32 B, int32 C, int32 MaterialID);
 
 	/**
-	 * The junction's slots, taken from its WIDEST arm: greatest total width, ties broken
-	 * by lowest segment id so the choice is deterministic.
+	 * The junction's slots, taken from its WIDEST PAVED arm: any arm not on grass beats every
+	 * grass arm, then greatest total width, ties broken by lowest segment id so the choice is
+	 * deterministic. An all-grass junction takes its widest grass arm.
 	 *
 	 * A junction is one continuous annulus plus one fan, and its arms may carry different
 	 * profiles, so one arm has to win. The dominant road paves the junction; a junction
@@ -156,11 +157,12 @@ private:
 		int32& OutStripSlot, int32& OutFanSlot) const;
 
 	/**
-	 * The material slot a runway segment's whole width takes, from its surface fact, or
-	 * NAME_None for anything that is not a runway. The one place the builder asks; the
-	 * ribbon, the junction rim and the junction fan all go through it.
+	 * The material slot a segment's whole width takes when a FACT on the segment decides it -
+	 * a runway's surface, or a grass road's - or NAME_None for a tarmac road or taxiway, whose
+	 * bands name their own. The one place the builder asks; the ribbon, the junction rim and
+	 * the junction fan all go through it. Was RunwaySlotFor until grass roads existed.
 	 */
-	static FName RunwaySlotFor(const URoadNetwork& Network, FRoadSegmentId Segment);
+	static FName SurfaceSlotFor(const URoadNetwork& Network, FRoadSegmentId Segment);
 
 	/**
 	 * Junction.Boundary[0..RimCount) with each arm's INTERIOR band points inserted along its
