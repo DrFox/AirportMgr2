@@ -192,10 +192,86 @@ struct AIRSIDE_API FRouteFollower
 	 */
 	bool NextReverseLegRun(int32& OutFrom, int32& OutTo);
 
+	/**
+	 * Route distance at which the MAIN GEAR takes over the line for the last turn - where
+	 * the nose reaches that turn - or negative when the nose holds it all the way in. See
+	 * EFinalTurnAxle for why, and ArmFinalTurn for when it is refused.
+	 *
+	 * TRAVELLED KEEPS ITS MEANING PAST THIS POINT, near enough: it becomes the mains' own
+	 * distance plus the wheelbase, which is the nose's distance on every straight - so it is
+	 * exact on the approach, exact at the stop mark, and a few centimetres long on the arc,
+	 * where the nose is off the line anyway. Every reader of Travelled (the stop point, the
+	 * claims, HasArrived) keeps working without a conversion.
+	 * ENFORCED BY: Airside.Model.FinalTurnParksSquare (the nose stops on the stop mark)
+	 *
+	 * A UPROPERTY, unlike the cursor above: it is not memoisation of a walk but the answer to
+	 * "which law is driving", and a duplicated agent that lost it would snap its nose back
+	 * onto the line mid-turn.
+	 */
+	UPROPERTY() double FinalTurnFrom = -1.0;
+
+	/**
+	 * What the body was doing at the handover that the fixed-axle law is not, decayed out
+	 * over the next wheelbase of travel: the mains' offset from the line, and the heading's
+	 * from the averaged line.
+	 *
+	 * WHY A BLEND AND NOT A SNAP. The nose law leaves the heading lagging any earlier turn by
+	 * e^(-s/L), so a turn only a wheelbase or two before this one hands over a body several
+	 * degrees off the line with its mains a metre inside it. Placing the mains on the line in
+	 * one frame is that metre in a frame. e^(-s/L) is the decay the nose law itself would
+	 * have given, so the blend rolls rather than slides.
+	 * ENFORCED BY: Airside.Model.FinalTurnHandoverIsSmooth
+	 */
+	UPROPERTY() FVector2D FinalTurnHandoverOffset = FVector2D::ZeroVector;
+	UPROPERTY() double FinalTurnHandoverHeading = 0.0;
+
+	/**
+	 * Half the window the fixed-axle heading is averaged over, as a fraction of the wheelbase.
+	 *
+	 * THE EASING. The heading is the line's direction averaged over [s - h, s + h] about the
+	 * mains with a TRIANGULAR weight, rather than the tangent at them: on an arc the two agree,
+	 * and across a straight-to-arc join the average winds the steering on over 2h of travel
+	 * instead of in the one frame the tangent's curvature jumps. What it costs is a slip at
+	 * each end of the arc of about h / 6R radians - 1.3 degrees on a Code F lead-in (h = 811,
+	 * R = 6000) - while the steering winds on over 16 m, two seconds at the speed an A380
+	 * takes that bend (2026-09-27).
+	 *
+	 * TRIANGULAR, NOT A TWO-POINT CHORD, which was tried first: a chord's rate of turn JUMPS
+	 * each time one end crosses a vertex of the sampled line, and on a 48-sample Code F arc
+	 * that threw the nosewheel 3.3 degrees in a frame, over and over. The triangle's rate is
+	 * continuous however the line is sampled. Airside.Model.FinalTurnParksSquare's per-frame
+	 * steering limit is what caught it.
+	 */
+	static constexpr double FinalTurnHalfWindowOfWheelbase = 0.25;
+
 private:
 	/** Fills ReverseLegSteps from Plan.Steps and resets ReverseLegCursor to 0. Called from
 	 *  Start and Replace only - see ReverseLegSteps's own comment for why it lives there. */
 	void RebuildReverseLegSteps();
+
+	/**
+	 * Sets FinalTurnFrom for Plan, or clears it with the reason logged. Called from Start and
+	 * Replace, where Plan changes. bKeepIfDriving: a replan while the mains ALREADY hold the
+	 * line keeps that law if the new plan still has the same turn - dropping it would put the
+	 * nose back on the line in one frame, a jump of up to a metre.
+	 */
+	void ArmFinalTurn(const FChassis& InChassis, bool bKeepIfDriving);
+
+	/**
+	 * The nose law: the steered axle on the line, the heading slewed toward it. Returns the
+	 * crab, degrees, for the speed loop. Advance's own body until 2026-09-27.
+	 */
+	double SteerNoseOnLine(double DeltaSeconds, const FChassis& InChassis, double LineHeading);
+
+	/**
+	 * The fixed-axle law, for the last turn: the mains on the line, the heading the line's eased direction, the
+	 * steered axle written to OutSteerAxle. Returns the crab, as SteerNoseOnLine does.
+	 */
+	double HoldFinalTurn(double DeltaSeconds, const FChassis& InChassis, double WasTravelled,
+		FVector2D& OutSteerAxle);
+
+	/** The fixed-axle heading at route distance MainsAt - see FinalTurnHalfWindowOfWheelbase. */
+	double FinalTurnHeadingAt(double MainsAt, double HalfWindow) const;
 
 public:
 	void Start(const FRoutePlan& InPlan, const FChassis& InChassis, double InitialSpeed = 0.0,

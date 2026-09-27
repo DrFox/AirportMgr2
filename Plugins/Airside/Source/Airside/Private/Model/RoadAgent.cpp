@@ -810,8 +810,21 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 				// Follower.Speed no longer needs zeroing by hand to keep the panel honest.
 				OutEvent = EAgentEvent::Parked;
 				Park(FollowAt, FollowHeading, OutMotion);
+
+				// HOW SQUARE IT PARKED, against the line's own last span - which IS the stand's
+				// axis, since the lead-in runs straight to the stop mark. The number the A380
+				// report (2026-09-27) had to be argued from a screenshot for. Turned about for a
+				// span backed along, or a truck that reversed into its bay reads 180 off.
+				const TArray<FVector2D>& Line = Follower.Plan.Polyline;
+				const FVector2D LastSpan = Line.Num() >= 2 ? Line.Last() - Line.Last(1) : FVector2D::ZeroVector;
+				TArray<EDriveDirection> Directions;
+				Follower.Plan.DescribeSpanDirections(Directions);
+				const double Facing = FMath::Atan2(LastSpan.Y, LastSpan.X)
+					+ (Directions.Num() > 0 && Directions.Last() == EDriveDirection::Reverse ? UE_DOUBLE_PI : 0.0);
 				UE_LOG(LogAirsideTraffic, Log,
-					TEXT("Parked. Shutting down in %.0f s."), ShutdownCountdown);
+					TEXT("Parked %.2f deg off the line's final heading (last turn on the %s gear). Shutting down in %.0f s."),
+					FMath::RadiansToDegrees(FMath::Abs(FMath::UnwindRadians(FollowHeading - Facing))),
+					Follower.FinalTurnFrom >= 0.0 ? TEXT("main") : TEXT("nose"), ShutdownCountdown);
 			}
 		}
 

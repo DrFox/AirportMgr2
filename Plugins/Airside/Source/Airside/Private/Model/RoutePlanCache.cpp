@@ -22,6 +22,9 @@ namespace RoutePlanCache
 		// Wheelbase/sin(lock) can refuse), so a shared key here is a wrong cache hit, not a
 		// coincidence to ignore.
 		Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Vehicle.Chassis.EffectiveSteerLaw())));
+		// Which axle takes the last turn: the whole-route tow check drives the plan with a real
+		// FRouteFollower, and the two laws put the body in different places through that turn.
+		Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Vehicle.Chassis.FinalTurnAxle)));
 		// The speed figures too: the whole-route tow check drives the plan at them.
 		Mix(Vehicle.Chassis.Ground.Taxi.SpeedCap);
 		Mix(Vehicle.Chassis.Ground.Taxi.Accel);
