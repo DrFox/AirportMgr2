@@ -107,7 +107,8 @@ public:
 	double DemandFactor() const;
 
 	/**
-	 * What Airside's quoted base amount actually costs.
+	 * What one of Airside's quoted lines actually costs - ULedger::PriceOf calls this once per
+	 * FBuildLine, so BaseAmount here is a single line's Amount(), never a whole quote's.
 	 *
 	 * Source is the URoadProfile or UEntityDefinition being placed, and is UNUSED TODAY - it is
 	 * how an M4 research discount aimed at taxiways will key on the asset itself rather than on
@@ -117,7 +118,8 @@ public:
 	 */
 	double PriceOfBuild(double BaseAmount, const UObject* Source) const;
 
-	/** What tearing it out gives back: RefundFraction of today's price. */
+	/** What tearing one line out gives back: RefundFraction of today's price - see
+	 *  PriceOfBuild on BaseAmount being one line's Amount(). */
 	double ScrapValue(double BaseAmount, const UObject* Source) const;
 
 	/** The ONLY place money becomes text, so no currency symbol ever reaches Airside. */

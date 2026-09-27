@@ -514,17 +514,12 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// so a plotted depot was free while the identical stand placed with PlaceEntity was paid
 	// for, and undo's money accounting never saw the plot at all. Two quotes, one for the
 	// entity and one for the pad it sits on (the same rate AddApron charges, at the WOUND
-	// outline QuoteForApron already reasons about), summed the way QuoteForAllPavement and
-	// DeleteNode's own doomed-segment total already sum several FBuildQuotes into one -
-	// there is no third pricing mechanism to invent here, only this file's existing two.
+	// outline QuoteForApron already reasons about), combined through BuildCost::Combine - the
+	// one place this two-quote sum is built, rather than a second hand-summed copy of it.
 	// CanAfford runs BEFORE Net.PlaceEntity below for the same reason PlaceEntity's own quote
 	// does: an abandoned FRoadEditScope drops the undo SNAPSHOT, not the mutation, so a
 	// refusal after the entity is placed would leave it built and unpaid for.
-	FBuildQuote Quote = BuildCost::ForEntity(*Definition);
-	const FBuildQuote ApronQuote = QuoteForApron(Wound);
-	Quote.BaseAmount += ApronQuote.BaseAmount;
-	Quote.What = FText::Format(NSLOCTEXT("BuildCost", "DepotPlusPad", "{0} + {1}"),
-		Quote.What, ApronQuote.What);
+	const FBuildQuote Quote = BuildCost::Combine(BuildCost::ForEntity(*Definition), QuoteForApron(Wound));
 	if (!CanAfford(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceEntityInPlot refused: cannot afford %s"),
@@ -634,13 +629,9 @@ FBuildQuote URoadEditFacade::QuoteStand(const UEntityDefinition& Definition,
 	// by hand, and had already drifted (WhyStandRefused summed BaseAmount but never combined
 	// the "{0} + {1}" What text PlaceStandInPlot's own copy carried) - the same "two solvers,
 	// free to disagree" shape issue #182 closed for the plot reservation itself, reopened here
-	// in a smaller way. Mirrors PlaceEntityInPlot's own two-quote sum exactly.
-	FBuildQuote Quote = BuildCost::ForEntity(Definition);
-	const FBuildQuote ApronQuote = QuoteForApron(Outline);
-	Quote.BaseAmount += ApronQuote.BaseAmount;
-	Quote.What = FText::Format(NSLOCTEXT("BuildCost", "StandPlusPad", "{0} + {1}"),
-		Quote.What, ApronQuote.What);
-	return Quote;
+	// in a smaller way. Mirrors PlaceEntityInPlot's own two-quote sum exactly - both now go
+	// through BuildCost::Combine rather than each hand-summing BaseAmount.
+	return BuildCost::Combine(BuildCost::ForEntity(Definition), QuoteForApron(Outline));
 }
 
 FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) const

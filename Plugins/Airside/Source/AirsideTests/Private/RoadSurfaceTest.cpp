@@ -254,7 +254,7 @@ bool FRsGrassRoadLaidTest::RunTest(const FString& Parameters)
 	const int32 From = Actor->PlaceNode(FVector2D(0.0, 20000.0));
 	const FBuildQuote Tarmac = Actor->QuoteForConnect(From, FVector2D(10000.0, 20000.0), ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac);
 	const FBuildQuote Grass = Actor->QuoteForConnect(From, FVector2D(10000.0, 20000.0), ERoadKind::Taxiway, INDEX_NONE, EPavement::Grass);
-	TestEqual(TEXT("grass quotes at the grass factor of tarmac"), Grass.BaseAmount, Tarmac.BaseAmount * Pavement::RateFactor(EPavement::Grass), 1e-6);
+	TestEqual(TEXT("grass quotes at the grass factor of tarmac"), Grass.BaseAmount(), Tarmac.BaseAmount() * Pavement::RateFactor(EPavement::Grass), 1e-6);
 	return true;
 }
 
@@ -273,8 +273,8 @@ bool FRsGrassCostTest::RunTest(const FString& Parameters)
 	Profile->CostPerMetre = 100.0;
 	Profile->UpkeepPerMetrePerDay = 2.0;
 
-	const double Tarmac = BuildCost::ForSegment(*Profile, 10000.0).BaseAmount;
-	const double Grass = BuildCost::ForSegment(*Profile, 10000.0, EPavement::Grass).BaseAmount;
+	const double Tarmac = BuildCost::ForSegment(*Profile, 10000.0).BaseAmount();
+	const double Grass = BuildCost::ForSegment(*Profile, 10000.0, EPavement::Grass).BaseAmount();
 	TestEqual(TEXT("100 m of tarmac at 100 a metre"), Tarmac, 10000.0, 1e-6);
 	TestEqual(TEXT("the same on grass costs the grass factor of it"), Grass, 10000.0 * Pavement::RateFactor(EPavement::Grass), 1e-6);
 	TestTrue(TEXT("and the factor is a discount"), Pavement::RateFactor(EPavement::Grass) < 1.0);

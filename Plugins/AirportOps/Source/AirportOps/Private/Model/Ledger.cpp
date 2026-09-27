@@ -144,9 +144,14 @@ double ULedger::NowOrZero() const
 
 double ULedger::PriceOf(const FBuildQuote& Quote) const
 {
-	return Pricing != nullptr
-		? Pricing->PriceOfBuild(Quote.BaseAmount, Quote.Source.Get())
-		: Quote.BaseAmount;
+	// PER LINE, so a discount keyed on one line's source never discounts the ground beside
+	// it - see FBuildLine. UPricing is unchanged: it still prices an amount for a source.
+	double Price = 0.0;
+	for (const FBuildLine& Line : Quote.Lines)
+	{
+		Price += Pricing != nullptr ? Pricing->PriceOfBuild(Line.Amount(), Line.Source.Get()) : Line.Amount();
+	}
+	return Price;
 }
 
 bool ULedger::CanAfford(const FBuildQuote& Quote) const
@@ -192,10 +197,14 @@ void ULedger::Reverse(int32 ChargeId)
 void ULedger::Credit(const FBuildQuote& Quote)
 {
 	// SCRAP VALUE AT TODAY'S PRICE, not what was paid - see IBuildPurse::Credit for why the
-	// ledger is never asked to remember what each segment cost.
-	const double Scrap = Pricing != nullptr
-		? Pricing->ScrapValue(Quote.BaseAmount, Quote.Source.Get())
-		: 0.0;
+	// ledger is never asked to remember what each segment cost. PER LINE, same reason as
+	// PriceOf: the pad's line (null source) is scrapped too, or a demolished stand would
+	// refund only its equipment.
+	double Scrap = 0.0;
+	for (const FBuildLine& Line : Quote.Lines)
+	{
+		Scrap += Pricing != nullptr ? Pricing->ScrapValue(Line.Amount(), Line.Source.Get()) : 0.0;
+	}
 	if (Scrap <= 0.0)
 	{
 		return;

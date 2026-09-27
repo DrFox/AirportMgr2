@@ -1,6 +1,63 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/Pavement.h"
+
+/** What a build line's Quantity counts: metres of profile, square metres of ground, or one thing. */
+enum class EBuildUnit : uint8
+{
+	Metre,
+	SquareMetre,
+	Each,
+};
+
+/**
+ * One priced quantity: so many metres of a profile, square metres of ground, or one placed
+ * thing, at its authored rate, on its pavement.
+ *
+ * WHY LINES (spec 2026-09-27 §4): a pavement factor applied per buildable kind is a factor
+ * that the next kind forgets. Every buildable is lines; Amount is the ONE place the factor
+ * meets a rate, so a grass road, runway and stand pad are cheaper with no kind-specific code.
+ * ENFORCED BY: Check-Architecture rule 4 row 'Pavement::RateFactor'
+ */
+struct FBuildLine
+{
+	/**
+	 * The URoadProfile or UEntityDefinition being placed - NOT a parallel enum of build kinds.
+	 *
+	 * A research discount aimed at taxiways keys on the asset ITSELF, so there is no second
+	 * list to keep in agreement with EPlaceableEntity - the "lists that must agree" failure
+	 * this codebase has shipped three times. Weak rather than raw because a quote crosses a
+	 * plugin boundary to be priced, and an asset unloaded in between would leave a raw pointer
+	 * pointing at nothing with no way to tell.
+	 */
+	TWeakObjectPtr<const UObject> Source;
+
+	/** What Quantity counts - see EBuildUnit. */
+	EBuildUnit Unit = EBuildUnit::Each;
+
+	/** How much of Unit this line is: metres, square metres, or 1.0 for a single placed thing. */
+	double Quantity = 0.0;
+
+	/** The authored rate per Unit, before any pavement factor. */
+	double RatePerUnit = 0.0;
+
+	/** Set when this line lays pavement; unset for a placed thing with no ground of its own. */
+	TOptional<EPavement> Pavement;
+
+	/**
+	 * Quantity * RatePerUnit, at Pavement's rate factor if this line carries one - the ONE
+	 * place a pavement factor meets a rate, so a grass line and a tarmac line differ only in
+	 * Pavement, never in code.
+	 *
+	 * CLAMPED AT ZERO. A NEGATIVE CHARGE PAYS THE PLAYER TO BUILD - BuildCost::ForApron's
+	 * signed shoelace sum is negative for one of the two windings a real outline can be drawn
+	 * in, and any other quantity that ever comes back negative would print money the same way.
+	 * The clamp lives here once, so every kind is covered without each caller remembering its
+	 * own guard.
+	 */
+	AIRSIDE_API double Amount() const;
+};
 
 /**
  * What one build or demolition is worth, at the AUTHORED rate.
@@ -15,21 +72,14 @@
  */
 struct FBuildQuote
 {
-	double BaseAmount = 0.0;
-
-	/**
-	 * The URoadProfile or UEntityDefinition being placed - NOT a parallel enum of build kinds.
-	 *
-	 * A research discount aimed at taxiways keys on the asset ITSELF, so there is no second
-	 * list to keep in agreement with EPlaceableEntity - the "lists that must agree" failure
-	 * this codebase has shipped three times. Weak rather than raw because a quote crosses a
-	 * plugin boundary to be priced, and an asset unloaded in between would leave a raw pointer
-	 * pointing at nothing with no way to tell.
-	 */
-	TWeakObjectPtr<const UObject> Source;
+	/** Every priced part of this build - a stand is its equipment plus its pad, as two lines. */
+	TArray<FBuildLine> Lines;
 
 	/** "Taxiway, 500 m". What the ghost prints beside the price. */
 	FText What;
+
+	/** The sum of every line's Amount() - see FBuildLine. */
+	AIRSIDE_API double BaseAmount() const;
 
 	/**
 	 * A quote for nothing: an edit that moves no pavement.
@@ -38,7 +88,7 @@ struct FBuildQuote
 	 * surface and destroy none. They go through the FREE door rather than being charged zero,
 	 * so "this costs nothing" is a decision someone made rather than an arithmetic accident.
 	 */
-	bool IsFree() const { return BaseAmount <= 0.0; }
+	bool IsFree() const { return BaseAmount() <= 0.0; }
 };
 
 /**

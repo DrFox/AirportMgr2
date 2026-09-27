@@ -247,7 +247,7 @@ bool FOpsRuntimeDetachClearsPurseTest::RunTest(const FString& Parameters)
 	TestNull(TEXT("Detach clears the purse"), Facade->GetPurse());
 
 	FBuildQuote Quote;
-	Quote.BaseAmount = 100.0;
+	Quote.Lines.Add({ nullptr, EBuildUnit::Each, 100.0, 1.0, {} });
 	TestTrue(TEXT("with no purse, CanAfford treats it as free"), Facade->CanAfford(Quote));
 	TestEqual(TEXT("and never dereferences the detached purse to decide that"),
 		Spy.CanAffordCalls, 0);

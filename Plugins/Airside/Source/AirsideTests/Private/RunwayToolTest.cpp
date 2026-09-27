@@ -168,13 +168,13 @@ namespace
 	struct FM2RwyPurse : IBuildPurse
 	{
 		double Balance = 0.0;
-		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount <= Balance; }
+		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Balance; }
 		virtual int32 Charge(const FBuildQuote&) override { return 0; }
 		virtual void Reverse(int32) override {}
 		virtual void Credit(const FBuildQuote&) override {}
 		virtual FText Describe(const FBuildQuote& Quote) const override
 		{
-			return FText::FromString(FString::Printf(TEXT("cost %.0f"), Quote.BaseAmount));
+			return FText::FromString(FString::Printf(TEXT("cost %.0f"), Quote.BaseAmount()));
 		}
 	};
 
@@ -186,7 +186,7 @@ namespace
 		virtual FBuildQuote QuoteForRunway(FVector2D From, FVector2D To, const URoadProfile*) const override
 		{
 			FBuildQuote Quote;
-			Quote.BaseAmount = FVector2D::Distance(From, To);
+			Quote.Lines.Add({ nullptr, EBuildUnit::Each, FVector2D::Distance(From, To), 1.0, {} });
 			return Quote;
 		}
 	};

@@ -40,10 +40,7 @@ double BuildCost::SegmentLengthUu(const URoadNetwork& Network, const FRoadSegmen
 FBuildQuote BuildCost::ForSegment(const URoadProfile& Profile, double LengthUu, EPavement Surface)
 {
 	FBuildQuote Quote;
-	// Task 5 of the shared-pavement plan moves this into FBuildLine::Amount
-	Quote.BaseAmount = FMath::Max(0.0, MetresFromUu(LengthUu)) * Profile.CostPerMetre
-		* Pavement::RateFactor(Surface);
-	Quote.Source = &Profile;
+	Quote.Lines.Add({ &Profile, EBuildUnit::Metre, MetresFromUu(LengthUu), Profile.CostPerMetre, Surface });
 	Quote.What = FText::Format(
 		NSLOCTEXT("BuildCost", "PavementOf", "{0}, {1} m"),
 		FText::FromString(Profile.GetName()),
@@ -54,8 +51,7 @@ FBuildQuote BuildCost::ForSegment(const URoadProfile& Profile, double LengthUu, 
 FBuildQuote BuildCost::ForEntity(const UEntityDefinition& Definition)
 {
 	FBuildQuote Quote;
-	Quote.BaseAmount = Definition.PlacementCost;
-	Quote.Source = &Definition;
+	Quote.Lines.Add({ &Definition, EBuildUnit::Each, 1.0, Definition.PlacementCost, {} });
 	Quote.What = FText::FromString(Definition.GetName());
 	return Quote;
 }
@@ -83,20 +79,28 @@ double BuildCost::PolygonAreaSquareMetres(TConstArrayView<FVector2D> Outline)
 	return FMath::Abs(Twice) * 0.5 / (UuPerMetre * UuPerMetre);
 }
 
-FBuildQuote BuildCost::ForApron(TConstArrayView<FVector2D> Outline, double RatePerSquareMetre)
+FBuildQuote BuildCost::ForApron(TConstArrayView<FVector2D> Outline, double RatePerSquareMetre,
+	TOptional<EPavement> Surface)
 {
 	const double AreaSquareMetres = PolygonAreaSquareMetres(Outline);
 
 	FBuildQuote Quote;
-	Quote.BaseAmount = AreaSquareMetres * RatePerSquareMetre;
-
 	// NO SOURCE ASSET, and that is forced rather than an oversight: FApronSurface is an outline
 	// and a material slot name, because bands and lanes are meaningless for a polygon
 	// (RoadApron.h). So an apron discount cannot key on an asset the way a taxiway's can, and
 	// UPricing sees a null Source here. Named so nobody later reads the null as a bug.
+	Quote.Lines.Add({ nullptr, EBuildUnit::SquareMetre, AreaSquareMetres, RatePerSquareMetre, Surface });
+
 	Quote.What = FText::Format(NSLOCTEXT("BuildCost", "ApronOf", "Apron, {0} m²"),
 		FText::AsNumber(FMath::RoundToInt(AreaSquareMetres)));
 	return Quote;
+}
+
+FBuildQuote BuildCost::Combine(FBuildQuote A, const FBuildQuote& B)
+{
+	A.Lines.Append(B.Lines);
+	A.What = FText::Format(NSLOCTEXT("BuildCost", "Combine", "{0} + {1}"), A.What, B.What);
+	return A;
 }
 
 double BuildCost::DailyUpkeep(const URoadNetwork& Network, double ApronRatePerSquareMetrePerDay)

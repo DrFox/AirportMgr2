@@ -29,18 +29,28 @@ namespace BuildCost
 	/** Straight between the segment's two nodes, uu. Zero if either end is not live. */
 	AIRSIDE_API double SegmentLengthUu(const URoadNetwork& Network, const FRoadSegment& Segment);
 
-	/** LengthUu of pavement at Profile's rate, on Surface - Pavement::RateFactor applied (the
-	 *  factor table and why it is a factor live there; #356's GrassRateFactor folded into it).
-	 *  A runway passes nothing and is priced as tarmac: its surface is FRunwayFacts', and
-	 *  runway pricing ignores it today. */
+	/** LengthUu of pavement at Profile's rate, one line on Surface - Pavement::RateFactor is
+	 *  applied by FBuildLine::Amount, not here (the factor table and why it is a factor live
+	 *  with it; #356's GrassRateFactor folded into it). A runway passes nothing and is priced
+	 *  as tarmac: its surface is FRunwayFacts', and runway pricing ignores it today. */
 	AIRSIDE_API FBuildQuote ForSegment(const URoadProfile& Profile, double LengthUu,
 		EPavement Surface = EPavement::Tarmac);
 
-	/** One placed thing - a stand, a depot - at its definition's rate. */
+	/** One placed thing - a stand, a depot - at its definition's rate. No pavement of its own -
+	 *  see FBuildLine::Pavement. */
 	AIRSIDE_API FBuildQuote ForEntity(const UEntityDefinition& Definition);
 
-	/** The polygon's area at RatePerSquareMetre. Winding-independent - see the .cpp. */
-	AIRSIDE_API FBuildQuote ForApron(TConstArrayView<FVector2D> Outline, double RatePerSquareMetre);
+	/** The polygon's area at RatePerSquareMetre, on Surface if it has one. Winding-independent -
+	 *  see the .cpp. */
+	AIRSIDE_API FBuildQuote ForApron(TConstArrayView<FVector2D> Outline, double RatePerSquareMetre,
+		TOptional<EPavement> Surface);
+
+	/**
+	 * Two quotes as one: A's lines then B's, appended - the shape PlaceEntityInPlot and
+	 * QuoteStand both used to hand-sum before this existed (issue #193, fix round 1). What
+	 * becomes "{A} + {B}".
+	 */
+	AIRSIDE_API FBuildQuote Combine(FBuildQuote A, const FBuildQuote& B);
 
 	/**
 	 * One day of owning everything currently standing, at the authored rates.

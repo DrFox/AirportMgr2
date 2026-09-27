@@ -34,23 +34,23 @@ namespace
 
 		virtual bool CanAfford(const FBuildQuote& Quote) const override
 		{
-			return Quote.BaseAmount <= Funds;
+			return Quote.BaseAmount() <= Funds;
 		}
 
 		virtual int32 Charge(const FBuildQuote& Quote) override
 		{
-			Funds -= Quote.BaseAmount;
-			Charges.Add(Quote.BaseAmount);
+			Funds -= Quote.BaseAmount();
+			Charges.Add(Quote.BaseAmount());
 			return NextId++;
 		}
 
 		virtual void Reverse(int32 ChargeId) override { Reversed.Add(ChargeId); }
 
-		virtual void Credit(const FBuildQuote& Quote) override { Credits.Add(Quote.BaseAmount); }
+		virtual void Credit(const FBuildQuote& Quote) override { Credits.Add(Quote.BaseAmount()); }
 
 		virtual FText Describe(const FBuildQuote& Quote) const override
 		{
-			return FText::AsNumber(Quote.BaseAmount);
+			return FText::AsNumber(Quote.BaseAmount());
 		}
 	};
 

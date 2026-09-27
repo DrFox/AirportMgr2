@@ -230,13 +230,10 @@ FBuildQuote URoadEditFacade::QuoteForAllPavement() const
 			continue;
 		}
 		const FBuildQuote Each = QuoteForSegment(Index);
-		Total.BaseAmount += Each.BaseAmount;
-		if (!Total.Source.IsValid())
-		{
-			// The first profile met stands in for the lot, for discounts only - the AMOUNT is
-			// the true sum whichever one it is.
-			Total.Source = Each.Source;
-		}
+		// EVERY SEGMENT'S OWN LINE, kept rather than folded into one total: a discount keyed on
+		// one profile must not also discount a neighbour segment laid from a different one -
+		// see FBuildLine::Source.
+		Total.Lines.Append(Each.Lines);
 	}
 	Total.What = NSLOCTEXT("BuildCost", "MovedPavement", "Moved pavement");
 	return Total;
@@ -245,8 +242,10 @@ FBuildQuote URoadEditFacade::QuoteForAllPavement() const
 FBuildQuote URoadEditFacade::QuoteForApron(TConstArrayView<FVector2D> Outline) const
 {
 	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
+	// NO PAVEMENT YET: FApronSurface carries no EPavement of its own (RoadApron.h's own
+	// comment) - an apron always quotes at its authored rate until a later task gives it one.
 	return BuildCost::ForApron(Outline,
-		Settings != nullptr ? Settings->ApronCostPerSquareMetre : 0.0);
+		Settings != nullptr ? Settings->ApronCostPerSquareMetre : 0.0, {});
 }
 
 void URoadEditFacade::CommitPurchase(FRoadEditScope& Edit, const FBuildQuote& Quote)
@@ -1011,7 +1010,7 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 	// WHAT THE PAVEMENT WAS WORTH BEFORE THE DRAG. Without this the cost model has a hole big
 	// enough to drive through: build ten metres of taxiway, drag its end two kilometres, and
 	// the extra pavement is free - MoveNode creates no segment, so nothing else charges for it.
-	PavementValueAtDragStart = QuoteForAllPavement().BaseAmount;
+	PavementValueAtDragStart = QuoteForAllPavement().BaseAmount();
 
 	// A FRESH EDIT HAS MOVED NOTHING YET - see the field's own comment for what
 	// EndInteractiveEdit does with this.
@@ -1076,12 +1075,21 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 		// pavement is a purchase; one that shortened it is a disposal, and is credited at scrap
 		// value rather than refunded in full - otherwise dragging a taxiway long and short again
 		// would be a loop that returns more than it costs.
-		FBuildQuote Delta = QuoteForAllPavement();
-		const double After = Delta.BaseAmount;
-		Delta.BaseAmount = After - PavementValueAtDragStart;
+		const FBuildQuote After = QuoteForAllPavement();
+		const double RawDelta = After.BaseAmount() - PavementValueAtDragStart;
 		PavementValueAtDragStart = 0.0;
 
-		if (Delta.BaseAmount > 0.0 && !CanAfford(Delta))
+		// ONE SYNTHETIC LINE, not the network's own segment lines: the delta is a NET figure
+		// across the WHOLE network (QuoteForAllPavement's own comment), not one buildable, so
+		// it is priced as a single line at rate 1 with the difference itself as Quantity - the
+		// first segment met stands in as Source, for a discount to key on only; the AMOUNT is
+		// the true difference whichever segment that is.
+		FBuildQuote Delta;
+		Delta.Lines.Add({ After.Lines.IsValidIndex(0) ? After.Lines[0].Source : nullptr,
+			EBuildUnit::Each, FMath::Abs(RawDelta), 1.0, {} });
+		Delta.What = After.What;
+
+		if (RawDelta > 0.0 && !CanAfford(Delta))
 		{
 			// REVERTED, NOT ABANDONED. The node has already moved on every frame of the drag, so
 			// dropping the snapshot would leave the longer taxiway standing and unpaid for. This is
@@ -1094,19 +1102,18 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 				AdoptNetwork(*Reverted);
 			}
 			UE_LOG(LogRoadMesh, Log,
-				TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount);
+				TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount());
 			return;
 		}
 
 		if (Purse != nullptr)
 		{
-			if (Delta.BaseAmount > 0.0)
+			if (RawDelta > 0.0)
 			{
 				History->SetPendingCharge(Purse->Charge(Delta), Delta);
 			}
-			else if (Delta.BaseAmount < 0.0)
+			else if (RawDelta < 0.0)
 			{
-				Delta.BaseAmount = -Delta.BaseAmount;
 				Purse->Credit(Delta);
 			}
 		}
@@ -1472,12 +1479,11 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 	{
 		const int32 Incident = DoomedArm.Index;
 		const FBuildQuote Each = QuoteForSegment(Incident);
-		Quote.BaseAmount += Each.BaseAmount;
-		if (!Quote.Source.IsValid())
+		// EVERY ARM'S OWN LINE, kept rather than folded into one total - a junction of two
+		// widths is priced on each arm's own profile, never on a stand-in for the lot.
+		Quote.Lines.Append(Each.Lines);
+		if (Quote.What.IsEmpty())
 		{
-			// The first profile met stands for the lot. A junction of two widths is priced on
-			// one of them for discount purposes only - the AMOUNT is the true sum either way.
-			Quote.Source = Each.Source;
 			Quote.What = Each.What;
 		}
 	}
