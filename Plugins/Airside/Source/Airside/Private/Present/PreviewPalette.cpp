@@ -155,9 +155,10 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 		break;
 
 	// DELIBERATELY not NodeRingRadius (1.0) - see ARoadBuildHUD::Marker's old comment on
-	// this exact number, moved here: GraphOverlay::DescribeStands draws this AFTER
+	// this exact number, moved here: GraphOverlay::DescribeStands drew this AFTER
 	// StandPreview::Describe's own Pending mark at the same position, and a ring at the same
-	// radius would just overdraw it instead of sitting visibly alongside it.
+	// radius would just overdraw it instead of sitting visibly alongside it. Nothing emits
+	// StandPose since 2026-09-27 (see its enum comment); the look is kept for when one does.
 	case EPreviewStyle::StandPose:
 		Look.RadiusScale = 2.2f;
 		Look.ThicknessScale = GraphThicknessScale;

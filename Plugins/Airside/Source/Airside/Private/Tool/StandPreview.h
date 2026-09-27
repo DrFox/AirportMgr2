@@ -19,17 +19,28 @@ struct IToolPreviewSink;
  */
 namespace StandPreview
 {
-	/** DescribeBody, then the stop mark at At - what a placement tool aims with. */
+	/**
+	 * DescribeBody, then the aiming aids - the design aircraft's service points, the
+	 * definition's fixtures with a Heal line back to At - then the stop mark at At: what a
+	 * placement tool aims with. NO PRODUCTION CALLER on 2026-09-27 (kept, not deleted, for the
+	 * placement ghost it was written for).
+	 */
 	AIRSIDE_API void Describe(const UEntityDefinition* Definition, const FVector2D& At,
 		double Heading, IToolPreviewSink& Sink);
 
 	/**
-	 * Everything EXCEPT the stop mark: design aircraft, service points, footprint box, fixtures.
+	 * The installation's OUTLINE only: the design aircraft's footprint lines, or the footprint
+	 * box of something that is not an aeroplane. Not the stop mark, the service points or the
+	 * fixtures - Describe adds those.
 	 *
 	 * Split out for GraphOverlay, which draws PLACED installations all the time, at every zoom.
 	 * While aiming, the stop mark is the cursor - the thing being positioned - so the tool keeps
 	 * it for every kind. Once placed it is an aircraft's nose stop, and on a fuel depot it was a
 	 * pair of rings on the road that nobody could name (2026-09-27, zoomed-out readability).
+	 * The service points and fixtures left on the same day: once placed, each sits exactly on
+	 * the resolved anchor GraphOverlay rings as ServiceAnchor, and three concentric rings plus
+	 * a Heal line per service point read as debug, not as a stand.
+	 * ENFORCED BY: Airside.Tool.StandOverlayMarkers
 	 */
 	AIRSIDE_API void DescribeBody(const UEntityDefinition* Definition, const FVector2D& At,
 		double Heading, IToolPreviewSink& Sink);

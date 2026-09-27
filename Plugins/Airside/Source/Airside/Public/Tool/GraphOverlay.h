@@ -44,13 +44,13 @@ namespace GraphOverlay
 	/**
 	 * Every placed, alive entity, in ROAD PLANE coordinates naming a meaning.
 	 *
-	 * Footprint, service points and fixtures come from StandPreview::Describe - the SAME
-	 * function a placement tool's own preview calls, so a placed stand and an in-progress
-	 * one read as the same object rather than the two this was filed to fix. Each RESOLVED
-	 * anchor (the guideline node a vehicle will actually route to, not the definition's
-	 * local offset StandPreview also draws) becomes EPreviewStyle::ServiceAnchor. See the
-	 * .cpp for why the entity's own EPreviewStyle::StandPose marker is emitted AFTER that
-	 * call rather than before it.
+	 * The footprint comes from StandPreview::DescribeBody - the SAME function a placement
+	 * tool's own preview calls, so a placed stand and an in-progress one read as the same
+	 * object rather than the two this was filed to fix. Each RESOLVED anchor (the guideline
+	 * node a vehicle will actually route to) becomes ONE EPreviewStyle::ServiceAnchor marker.
+	 * No stop mark, no EPreviewStyle::StandPose ring and no fixture marks since 2026-09-27 -
+	 * the stand's paint shows its stop, and the fixture marks sat concentric with the anchor
+	 * ring. See the .cpp.
 	 */
 	AIRSIDE_API void DescribeStands(const URoadNetwork& Network, IToolPreviewSink& Sink);
 

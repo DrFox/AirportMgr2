@@ -10,6 +10,46 @@ void StandPreview::Describe(const UEntityDefinition* Definition, const FVector2D
 {
 	DescribeBody(Definition, At, Heading, Sink);
 
+	// THE AIMING AIDS - service points, fixtures and the Heal line back to the pose - HERE, not
+	// in DescribeBody, since 2026-09-27. On a PLACED stand each of them sat concentric with the
+	// overlay's ServiceAnchor ring (the resolved anchor IS the fixture's position), so the user
+	// saw three rings and a debug line per service point where one small circle says it all.
+	// While aiming there is no resolved anchor yet, so these are the only marks saying where
+	// the services will land.
+	if (Definition != nullptr)
+	{
+		const double Cos = FMath::Cos(Heading);
+		const double Sin = FMath::Sin(Heading);
+		// The same local-to-world transform PlaceEntity uses - DescribeBody's own, repeated
+		// rather than shared because it is two lines and a shared helper would be a third
+		// public name in this namespace for them.
+		auto ToWorld = [&At, Cos, Sin](const FVector2D& Local)
+		{
+			return FVector2D(
+				At.X + Local.X * Cos - Local.Y * Sin,
+				At.Y + Local.X * Sin + Local.Y * Cos);
+		};
+
+		// Where THIS type needs each service. A different type on the same stand puts these
+		// somewhere else, which is the entire reason they live on the aircraft.
+		if (const UAircraftType* Design = Definition->DesignAircraft.Get())
+		{
+			for (const FEntityAnchor& Point : Design->ServicePoints)
+			{
+				Sink.Marker(ToWorld(Point.LocalPosition), EPreviewStyle::Pending);
+			}
+		}
+
+		// The stand's own fixtures: plant dug into the concrete, which stay put whatever parks
+		// on them. Drawn with a line back to the stop mark so they read as belonging to it.
+		for (const FEntityAnchor& Fixture : Definition->Anchors)
+		{
+			const FVector2D World = ToWorld(Fixture.LocalPosition);
+			Sink.Marker(World, EPreviewStyle::Snap);
+			Sink.Line(At, World, EPreviewStyle::Heal);
+		}
+	}
+
 	// The stop mark itself - the thing actually being positioned. Not after a null
 	// definition: DescribeBody already drew Refused there, and a Pending ring on top would
 	// say there was something to place after all.
@@ -53,12 +93,6 @@ void StandPreview::DescribeBody(const UEntityDefinition* Definition, const FVect
 			Sink.Line(ToWorld(Outline[Index]), ToWorld(Outline[Index + 1]), EPreviewStyle::Snap);
 		}
 
-		// Where THIS type needs each service. A different type on the same stand puts these
-		// somewhere else, which is the entire reason they live on the aircraft.
-		for (const FEntityAnchor& Point : Design->ServicePoints)
-		{
-			Sink.Marker(ToWorld(Point.LocalPosition), EPreviewStyle::Pending);
-		}
 	}
 
 	// THE INSTALLATION'S OWN BOX, for something that is not an aeroplane. A stand leaves
@@ -74,14 +108,5 @@ void StandPreview::DescribeBody(const UEntityDefinition* Definition, const FVect
 			ToWorld(FVector2D(-Extent.X, -Extent.Y)),
 			ToWorld(FVector2D(-Extent.X, +Extent.Y)) };
 		Sink.Polygon(Corners, EPreviewStyle::Snap);
-	}
-
-	// The stand's own fixtures: plant dug into the concrete, which stay put whatever parks
-	// on them. Drawn with a line back to the stop mark so they read as belonging to it.
-	for (const FEntityAnchor& Fixture : Definition->Anchors)
-	{
-		const FVector2D World = ToWorld(Fixture.LocalPosition);
-		Sink.Marker(World, EPreviewStyle::Snap);
-		Sink.Line(At, World, EPreviewStyle::Heal);
 	}
 }
