@@ -114,6 +114,11 @@ void UOpsRuntime::GenerateOffer()
 		Offer->Id, *Offer->AirlineName.ToString(), *Offer->TypeName.ToString(), Offer->ArrivesAt);
 }
 
+FVehicle UOpsRuntime::StandDesignVehicleOf(const FEntityInstance& Stand)
+{
+	return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UFuelService::LetterOfStand(Stand));
+}
+
 void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 {
 	Detach();
@@ -169,10 +174,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	FuelService->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
 	// AND WHAT EACH STAND WAS BUILT FOR, read off its own definition when the guard asks - see
 	// UFuelService::DesignVehicleOf for why the read is handed down rather than made there.
-	FuelService->DesignVehicleOf = [](const FEntityInstance& Stand)
-	{
-		return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UFuelService::LetterOfStand(Stand));
-	};
+	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A sent the truck still reads as tow-built)
+	FuelService->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
 	{
 		// READ BACK OFF THE TABLE, every letter, rather than a banner typed beside the resolve:
 		// the line then says what dispatch will actually send.

@@ -268,10 +268,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	// acceleration, not the one every other caller of DispatchAgent gets. THE SAME RESOLVE,
 	// through the same loop, so the fixture's letters get the vehicles the game's do.
 	Service->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
-	Service->DesignVehicleOf = [](const FEntityInstance& Stand)
-	{
-		return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UFuelService::LetterOfStand(Stand));
-	};
+	Service->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
 
 	FGuidelineNodeId TaxiSouth, TaxiNorth;
 	LayLine(*Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
@@ -1695,7 +1692,12 @@ bool FFuelRuntimeResolvesPerStandTest::RunTest(const FString& Parameters)
 		Runtime->GetFuelService()->VehicleFor(*Net.GetEntity(StandA)).TypeCode, Tow);
 	TestEqual(TEXT("and C's with the truck"),
 		Runtime->GetFuelService()->VehicleFor(*Net.GetEntity(StandC)).TypeCode, Truck);
-	TestEqual(TEXT("and the runtime wired the built-for read: A's stand was built for the tow"),
+	// THE BUILT-FOR READ IS WIRED, and measured so it can tell: with A's table entry made the
+	// truck, an unwired DesignVehicleOf falls back to what the table sends (the truck), while the
+	// wired one still reads A's definition (the tow) - the fact the VehicleTooLarge guard compares
+	// against. Asking with the table left alone could not tell the two apart: both answer tow.
+	Runtime->GetFuelService()->VehiclesFor(EIcaoCode::A) = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
+	TestEqual(TEXT("the runtime wired the built-for read: A's stand, sent the truck, was still built for the tow"),
 		Runtime->GetFuelService()->DesignVehicleFor(*Net.GetEntity(StandA)).TypeCode, Tow);
 	return true;
 }

@@ -329,7 +329,7 @@ public:
 	 * UEntityDefinition, so the read is handed in, the same way ResolveVehicles' resolve is.
 	 * UNSET in a bare NewObject, and then DesignVehicleFor answers the vehicle the table sends,
 	 * so the VehicleTooLarge guard cannot fire on a service nothing has attached.
-	 * ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (the runtime's answers A's stand the tow)
+	 * ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A's table entry made the truck, the runtime still reads A's stand as tow-built)
 	 */
 	TFunction<FVehicle(const FEntityInstance&)> DesignVehicleOf;
 

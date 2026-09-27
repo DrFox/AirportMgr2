@@ -381,7 +381,7 @@ bool FEveryBayHoldsATowArrivingBentTest::RunTest(const FString& Parameters)
 				{
 					const FVerdictAndPlan Out = JudgeBayArrivingBent(Bay, Vehicle, *Network, Radius, bFromPort);
 					++Judged;
-					// THE LEAD-IN ON ITS OWN - the road's 29 points and the turn's 37, the plan's
+					// THE LEAD-IN ON ITS OWN - the road's 30 points and the turn's 36 before the entry, the plan's
 					// first 66 - for the worst hitch it leaves: what makes this more than JudgeBay's
 					// straight start.
 					TArray<TestPlans::FRun> LeadIn;
