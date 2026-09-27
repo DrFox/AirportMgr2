@@ -480,6 +480,25 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Solve\IcaoCode.h', 'Private\Solve\IcaoCode.cpp', 'Private\Model\StandAdmission.cpp')
         TestExempt  = $true
         ProdReason  = 'admit a stand through StandAdmission::Judge, which also checks its pavement and services'
+    },
+    @{
+        # ONE SERVICE-ON-PAVEMENT RULE (2026-09-27, shared-pavement final review): Judge is the
+        # only consumer, so restricting a role on grass is one body to change - a second caller
+        # would be a second place the restriction has to reach.
+        Name        = 'StandAdmission::PavementAdmitsRole'
+        Pattern     = '\bPavementAdmitsRole\s*\('
+        ProdAllowed = @('Public\Model\StandAdmission.h', 'Private\Model\StandAdmission.cpp')
+        TestExempt  = $true
+        ProdReason  = 'ask StandAdmission::Judge, which consumes it with the stand''s surface and size'
+    },
+    @{
+        # ONE SIZE GATE (2026-09-27): the smallest stand letter's floor is read by
+        # WhyStandRefused's size gate only; a second reader is a second opinion on 'too small'.
+        Name        = 'IcaoCode::SmallestStandLetter'
+        Pattern     = '\bSmallestStandLetter\s*\('
+        ProdAllowed = @('Public\Solve\IcaoCode.h', 'Private\Solve\IcaoCode.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp')
+        TestExempt  = $true
+        ProdReason  = 'refuse a too-small stand through URoadEditFacade::WhyStandRefused, the one size gate'
     }
 )
 foreach ($row in $AllowedCallers) {

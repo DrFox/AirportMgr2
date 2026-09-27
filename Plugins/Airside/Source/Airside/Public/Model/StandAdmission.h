@@ -93,6 +93,7 @@ namespace StandAdmission
 	 * May a service of Role work on a pad of P? Consumed by Judge, not by any caller directly,
 	 * so restricting a role on grass later is one function body to change, not a new call
 	 * site at every stand-admission caller.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'StandAdmission::PavementAdmitsRole'
 	 *
 	 * EVERY SERVICE WORKS ON EVERY PAVEMENT TODAY (ruling, user, 2026-09-27) - there is no
 	 * rule yet that a fuel bowser needs concrete a baggage cart does not. PINNED by

@@ -229,6 +229,7 @@ namespace IcaoCode
 	 * is EIcaoCode::B now that A's row is empty. Named rather than spelled out at each call site
 	 * (RoadEditFacadeSurfaces.cpp's size gate is the one production caller) so a future letter
 	 * losing its own stand moves this one place, not every place that used to assume A.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'IcaoCode::SmallestStandLetter'
 	 */
 	AIRSIDE_API EIcaoCode SmallestStandLetter();
 
