@@ -268,6 +268,12 @@ void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes,
 	FencePostsInto = InFence.Posts;
 	FenceHeavyPostsInto = InFence.HeavyPosts;
 	FenceFabricInto = InFence.Fabric;
+
+	// A component handed in after SetGhostsVisible ran would otherwise keep its own default.
+	if (GhostBoxes != nullptr)
+	{
+		GhostBoxes->SetVisibility(bGhostsVisible);
+	}
 }
 
 int32 UPlotPresenter::GetInstanceCount() const
@@ -304,6 +310,27 @@ bool UPlotPresenter::GetMeshInstanceTransformForTest(const UStaticMesh* Mesh, bo
 	return (*Found)->GetInstanceTransform(Index, OutTransform, /*bWorldSpace=*/true);
 }
 
+void UPlotPresenter::SetGhostsVisible(bool bVisible)
+{
+	if (bVisible == bGhostsVisible)
+	{
+		return;
+	}
+	bGhostsVisible = bVisible;
+	if (GhostBoxes != nullptr)
+	{
+		GhostBoxes->SetVisibility(bVisible);
+	}
+	for (const auto& Entry : GhostMeshPool)
+	{
+		if (IsValid(Entry.Value))
+		{
+			Entry.Value->SetVisibility(bVisible);
+		}
+	}
+	UE_LOG(LogAirside, Log, TEXT("Plots: ghost bays %s"), bVisible ? TEXT("shown") : TEXT("hidden"));
+}
+
 UInstancedStaticMeshComponent* UPlotPresenter::PoolFor(UStaticMesh* Mesh, bool bGhost)
 {
 	if (Mesh == nullptr || MeshParent == nullptr || MeshParent->GetOwner() == nullptr)
@@ -331,6 +358,10 @@ UInstancedStaticMeshComponent* UPlotPresenter::PoolFor(UStaticMesh* Mesh, bool b
 	if (bGhost && GhostBoxes != nullptr)
 	{
 		ApplyGhostMaterial(*Made, GhostBoxes->GetMaterial(0));
+	}
+	if (bGhost)
+	{
+		Made->SetVisibility(bGhostsVisible);
 	}
 	if (Owner->GetWorld() != nullptr)
 	{

@@ -20,6 +20,7 @@
 #include "Present/DynamicMeshSink.h"
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/PolygonInset.h"
 
 /**
  * The material parameter names this presenter drives, named once rather than retyped as a
@@ -326,8 +327,10 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 	const double ApronZ = GetApronSurfaceZ(Settings.SurfaceZ, Settings.ApronZOffset);
 
 	FRoadMeshBuffers Buffers;
+	int32 SlabTriangles = 0;
+	int32 BandTriangles = 0;
 	const int32 Built = RebuildLayer(ESurfaceLayer::Apron,
-		[&Network, ApronZ, &Settings](FRoadMeshBuffers& OutBuffers)
+		[&Network, ApronZ, &Settings, &SlabTriangles, &BandTriangles](FRoadMeshBuffers& OutBuffers)
 		{
 			FRoadMeshBuilder Builder(ApronZ, Settings.TexelsPerUnit);
 			int32 Count = 0;
@@ -350,12 +353,36 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 			// pose's lead-in, which the guideline graph already computes and draws. Painting
 			// them into the mesh would be a second evaluator of where the truck drives -
 			// they would agree at one rotation and visibly disagree at every other.
+			//
+			// A DEPOT'S PAD IS PAINTED (2026-09-27, zoomed-out readability): a pale slab inside
+			// a red hazard band, so the plot reads as fuel at max zoom with no UI. ONE BUILDER
+			// PER PAINT, appended below without welding: the slab and band share the inset's
+			// positions, and FRoadMeshBuilder welds by position, first writer wins - one
+			// builder would hand the band's tag to the slab's corners and blend them. A pad
+			// too small for the band keeps the slab alone rather than a band crossing itself.
+			FRoadMeshBuilder SlabBuilder(ApronZ, Settings.TexelsPerUnit);
+			FRoadMeshBuilder BandBuilder(ApronZ, Settings.TexelsPerUnit);
 			for (const FEntityInstance& Entity : Network.GetEntities())
 			{
-				if (Entity.bAlive && Entity.Outline.Num() >= 3)
+				if (!Entity.bAlive || Entity.Outline.Num() < 3)
+				{
+					continue;
+				}
+				++Count;
+				if (!Entity.IsDepot())
 				{
 					Builder.AddApron(Entity.Outline);
-					++Count;
+					continue;
+				}
+				TArray<FVector2D> Inner;
+				if (PolygonInset::Inset(Entity.Outline, FRoadMeshBuilder::HazardBandUu, Inner))
+				{
+					SlabBuilder.AddApron(Inner, FRoadMeshBuilder::EApronPaint::FuelSlab);
+					BandBuilder.AddApronRing(Entity.Outline, Inner, FRoadMeshBuilder::EApronPaint::HazardBand);
+				}
+				else
+				{
+					SlabBuilder.AddApron(Entity.Outline, FRoadMeshBuilder::EApronPaint::FuelSlab);
 				}
 			}
 			// A COPY, not the zero-copy const& this held before issue #81: Builder is scoped
@@ -367,6 +394,10 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 			// copy at this one boundary is the price of routing aprons through RebuildLayer
 			// too. One apron rebuild's worth of vertices, not a hot path.
 			OutBuffers = Builder.GetBuffers();
+			OutBuffers.Append(SlabBuilder.GetBuffers());
+			OutBuffers.Append(BandBuilder.GetBuffers());
+			SlabTriangles = SlabBuilder.GetBuffers().Indices.Num() / 3;
+			BandTriangles = BandBuilder.GetBuffers().Indices.Num() / 3;
 			return Count;
 		},
 		Settings.ApronMaterial != nullptr ? Settings.ApronMaterial : Settings.SurfaceMaterial,
@@ -384,8 +415,8 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 	if (!Settings.bQuiet)
 	{
 		UE_LOG(LogRoadMesh, Log,
-			TEXT("Aprons: %d surface(s), %d triangle(s) at Z=%.1f, material %s%s"),
-			Built, Buffers.Indices.Num() / 3, ApronZ,
+			TEXT("Aprons: %d surface(s), %d triangle(s) at Z=%.1f (depot paint: %d slab, %d band), material %s%s"),
+			Built, Buffers.Indices.Num() / 3, ApronZ, SlabTriangles, BandTriangles,
 			Settings.ApronMaterial != nullptr ? *Settings.ApronMaterial->GetName() : TEXT("<fallback>"),
 			Settings.bUseConstantApronColour ? TEXT(" (CONSTANT COLOUR - material overridden)") : TEXT(""));
 	}

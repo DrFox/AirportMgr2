@@ -938,4 +938,58 @@ bool FStandOutlineIsNotADepotTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * Ghost bays hide and show on request, without losing the capacity they describe.
+ *
+ * THE REPORTED DEFECT (2026-09-27): a built depot's unbought bays drew cyan in normal play,
+ * and zoomed out they read as the depot itself. Hidden BEFORE the first rebuild on purpose:
+ * that is the case where PoolFor makes the ghost component after the request, and a
+ * component that ignored the stored answer would appear mid-play.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPresenterHidesGhostBaysOnRequestTest,
+	"Airside.Present.PlotPresenterHidesGhostBaysOnRequest",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPresenterHidesGhostBaysOnRequestTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	UStaticMesh* Cap = PartsTestMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	UStaticMesh* Bay = PartsTestMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	if (!TestTrue(TEXT("presenter, depot and both stand-in meshes"),
+		Plots != nullptr && Depot != nullptr && Cap != nullptr && Bay != nullptr)) { return false; }
+
+	TestTrue(TEXT("ghosts are visible by default - a level with no driver is being designed"),
+		Plots->AreGhostsVisible());
+
+	Actor->ClearNetwork();
+	PlacePartsDepot(Actor, Depot, { EDepotModule::Shed });
+	TArray<PlotYard::FKitSpec> Specs;
+	TArray<FDepotModuleLook> Looks;
+	PartsTestKit(Cap, Bay, Specs, Looks);
+
+	Plots->SetGhostsVisible(false);
+	Plots->RebuildFrom(*Actor->Network, Specs, FFenceKit(), Looks);
+
+	const UInstancedStaticMeshComponent* Ghost = Plots->GetMeshComponentForTest(Bay, true);
+	const UInstancedStaticMeshComponent* Built = Plots->GetMeshComponentForTest(Bay, false);
+	if (!TestTrue(TEXT("the rebuild made a ghost bay and a built bay"),
+		Ghost != nullptr && Built != nullptr)) { return false; }
+	TestFalse(TEXT("a ghost component made AFTER the request is born hidden"), Ghost->IsVisible());
+	TestTrue(TEXT("the bought bay is not touched"), Built->IsVisible());
+	TestTrue(TEXT("hidden is not empty - the capacity is still counted"),
+		Plots->GetMeshInstanceCountForTest(Bay, true) >= 1 && Plots->GetGhostCount() >= 1);
+
+	Plots->RebuildFrom(*Actor->Network, Specs, FFenceKit(), Looks);
+	TestFalse(TEXT("a rebuild does not bring them back"), Ghost->IsVisible());
+
+	Plots->SetGhostsVisible(true);
+	TestTrue(TEXT("and asking for them shows them again"), Ghost->IsVisible());
+	return true;
+}
+
 #endif

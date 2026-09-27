@@ -265,8 +265,31 @@ bool FDepotOverlayMarkersTest::RunTest(const FString& Parameters)
 
 		TestEqual(TEXT("a placed depot draws no aircraft stop mark"), Sink.CountMarkers(EPreviewStyle::Pending), 0);
 		TestEqual(TEXT("a placed depot draws no aircraft pose ring"), Sink.CountMarkers(EPreviewStyle::StandPose), 0);
-		// Its footprint box still draws: the circles were the complaint, not the plot outline.
-		TestEqual(TEXT("but its footprint box still draws, four sides"), Sink.CountLines(EPreviewStyle::Snap), 4);
+		// A POINT-PLACED depot keeps its footprint box: with no plot it is the only geometry
+		// the thing has.
+		TestEqual(TEXT("a point-placed depot still draws its footprint box, four sides"),
+			Sink.CountLines(EPreviewStyle::Snap), 4);
+	}
+
+	// A DRAWN depot does not. Its box is centred on the pose - the road connection - so on a
+	// plot it was an amber rectangle straddling the gate (reported 2026-09-27), and the plot
+	// the player drew already says how big the depot is.
+	{
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = FVector2D(-20000.0, 1000.0);
+		Placement.Heading = UE_DOUBLE_HALF_PI;
+		Placement.PoseRole = EServiceRole::Fuel;
+		Placement.Outline = { FVector2D(-21000.0, 0.0), FVector2D(-19000.0, 0.0),
+		                      FVector2D(-19000.0, 2400.0), FVector2D(-21000.0, 2400.0) };
+		Network->PlaceEntity(Placement);
+
+		FGraphSink Sink;
+		GraphOverlay::DescribeStands(*Network, Sink);
+		TestEqual(TEXT("a drawn depot adds no footprint box - still only the point-placed one's four sides"),
+			Sink.CountLines(EPreviewStyle::Snap), 4);
+		TestEqual(TEXT("and no stop mark either"), Sink.CountMarkers(EPreviewStyle::Pending), 0);
 	}
 
 	Network->PlaceEntity(Stand, Stand->Anchors, FVector2D(9000.0, 9000.0), 0.0);

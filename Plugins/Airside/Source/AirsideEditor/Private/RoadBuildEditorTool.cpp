@@ -12,6 +12,7 @@
 #include "InteractiveToolManager.h"
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideBuildingsActor.h"
+#include "Present/PlotPresenter.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildEdModeCommands.h"
 #include "ScopedTransaction.h"
@@ -221,6 +222,11 @@ void URoadBuildEditorTool::Setup()
 	SelectContext.bInsertModifier = bInsertHeld;
 	Sess().SelectTool(ToolIndex, SelectContext);
 
+	// GHOST BAYS FOLLOW THE LIT TOOL, asked of the session like the node rings in Render. At
+	// Setup rather than every frame, unlike ARoadBuildController::PlayerTick: here the lit
+	// tool only changes by a new tool instance being set up, so this IS every change.
+	SetPlotGhostsVisible(Sess().WantsPlotGhostsDrawn());
+
 	UE_LOG(LogAirsideEditor, Log, TEXT("Airside ed tool active: %s, target %s"),
 		Sess().GetActiveTool() != nullptr ? *Sess().GetActiveTool()->GetDisplayName().ToString() : TEXT("NONE"),
 		Target != nullptr ? *Target->GetName() : TEXT("NONE"));
@@ -250,6 +256,18 @@ void URoadBuildEditorTool::Setup()
 	AddInputBehavior(Hover);
 }
 
+void URoadBuildEditorTool::SetPlotGhostsVisible(bool bVisible) const
+{
+	const UWorld* World = GetToolManager() != nullptr ? GetToolManager()->GetWorld() : nullptr;
+	if (AAirsideBuildingsActor* Buildings = AAirsideBuildingsActor::Find(World))
+	{
+		if (UPlotPresenter* Plots = Buildings->GetPlotPresenter())
+		{
+			Plots->SetGhostsVisible(bVisible);
+		}
+	}
+}
+
 void URoadBuildEditorTool::Shutdown(EToolShutdownType ShutdownType)
 {
 	// Leaving the tool abandons whatever it had part-drawn, exactly as switching tools does
@@ -271,6 +289,11 @@ void URoadBuildEditorTool::Shutdown(EToolShutdownType ShutdownType)
 		DragTransaction->Cancel();
 		DragTransaction.Reset();
 	}
+
+	// BACK TO VISIBLE on the way out: a level with no Road Build tool active is being
+	// designed, and UPlotPresenter's default says so. The next tool's Setup, if any, sets its
+	// own answer straight after.
+	SetPlotGhostsVisible(true);
 
 	UInteractiveTool::Shutdown(ShutdownType);
 }

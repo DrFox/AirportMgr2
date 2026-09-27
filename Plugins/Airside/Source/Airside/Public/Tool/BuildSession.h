@@ -122,6 +122,17 @@ struct FToolRegistration
 	 * this field exists to avoid.
 	 */
 	bool bShowsRoadNodes = false;
+
+	/**
+	 * Whether placed plots' GHOST BAYS - reserved capacity nobody has bought - are drawn while
+	 * this tool is lit.
+	 *
+	 * OFF BY DEFAULT for bShowsRoadNodes' reason: reported from play (2026-09-27) as cyan
+	 * boxes that, zoomed out, read as the depot itself. TRUE ONLY ON THE FUEL DEPOT TOOL, the
+	 * one place capacity means anything until a building edit mode can buy a bay. That mode
+	 * sets this too when it exists.
+	 */
+	bool bShowsPlotGhosts = false;
 };
 
 /**
@@ -349,6 +360,20 @@ public:
 		}
 		const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
 		return Registry.IsValidIndex(ActiveTool) && Registry[ActiveTool].bShowsRoadNodes;
+	}
+
+	/**
+	 * Whether placed plots' ghost bays belong on screen right now - the lit tool's
+	 * FToolRegistration::bShowsPlotGhosts, whatever the mode. ON THE SESSION for
+	 * WantsRoadNodesDrawn's reason: both drivers ask here, so they cannot disagree.
+	 *
+	 * NO EDIT EXCEPTION, unlike the rings: Edit moves nodes and apron corners, and nothing in
+	 * it touches a plot (the depot tool registers EEditHandleKind::None).
+	 */
+	bool WantsPlotGhostsDrawn() const
+	{
+		const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+		return Registry.IsValidIndex(ActiveTool) && Registry[ActiveTool].bShowsPlotGhosts;
 	}
 
 	/** The one sticky mode. A session opens in Build: a mode that survived construction

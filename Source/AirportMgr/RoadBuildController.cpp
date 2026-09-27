@@ -22,6 +22,7 @@
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/AirsideBuildingsActor.h"
+#include "Present/PlotPresenter.h"
 #include "Present/RoadNetworkActor.h"
 #include "SceneView.h"
 #include "Solve/RoadGeom.h"
@@ -62,7 +63,7 @@ void ARoadBuildController::BeginPlay()
 	// THE BUILDINGS, found or spawned for this play session. M_Starter has one placed, so this
 	// normally finds it; spawning covers a level that predates the split, where the depots
 	// would otherwise be invisible in play and present in the editor.
-	AAirsideBuildingsActor::FindOrCreate(GetWorld(), Target);
+	Buildings = AAirsideBuildingsActor::FindOrCreate(GetWorld(), Target);
 
 	// See HasRunway's own comment: the cache this subscribes to invalidate is issue #187.
 	BindRunwayCacheInvalidation();
@@ -734,6 +735,11 @@ EGestureMode ARoadBuildController::GetGestureMode() const
 	return Session.GetGestureMode();
 }
 
+void ARoadBuildController::SetBuildingsForTest(AAirsideBuildingsActor* InBuildings)
+{
+	Buildings = InBuildings;
+}
+
 bool ARoadBuildController::WantsRoadNodesDrawn() const
 {
 	return Session.WantsRoadNodesDrawn();
@@ -1011,6 +1017,18 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	// BEFORE THE TARGET GUARD, so a frame with no road actor clears the bar instead of
 	// leaving the last gesture's bay count sitting on it forever.
 	CollectToolReadout();
+
+	// GHOST BAYS FOLLOW THE LIT TOOL. Polled once a frame rather than pushed from SelectTool
+	// and each mode change: the node rings are asked every frame by the HUD, and a push at
+	// each change site is the "every list must agree" shape this project keeps shipping one
+	// site short. SetGhostsVisible is a no-op unless the answer changed.
+	if (AAirsideBuildingsActor* Found = Buildings.Get())
+	{
+		if (UPlotPresenter* Plots = Found->GetPlotPresenter())
+		{
+			Plots->SetGhostsVisible(Session.WantsPlotGhostsDrawn());
+		}
+	}
 
 	if (Target == nullptr)
 	{
