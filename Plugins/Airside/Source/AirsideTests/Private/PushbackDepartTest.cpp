@@ -258,4 +258,71 @@ bool FPushbackDepartReleasesStandTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A REBUILD DURING A PUSH RE-RESOLVES THE TAXI OUT TOO, not only the push.
+ *
+ * REPORTED FROM PLAY, 2026-09-27: the player dragged a runway's end junction while an SR22 was
+ * pushing back. The release rebuild re-resolved the PUSH route ("1 agents re-resolved, 0
+ * replanned") - but FRoadAgent::TaxiOutPlan, the route the follower takes over when the push
+ * ends, was never looked at, and the aeroplane taxied out along lines that no longer existed.
+ * TaxiOutPlan is TaxiInPlan's mirror (its own comment says so), and TaxiInPlan IS re-resolved
+ * for an arriving aircraft; this is the same treatment for the other one.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackRebuildReResolvesTaxiOutTest,
+	"Airside.Model.PushbackRebuildReResolvesTaxiOut",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackRebuildReResolvesTaxiOutTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+
+	// Parked facing south from B -> A, so leaving means a push onto E, then E -> J -> B.
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
+	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)
+		|| !TestEqual(TEXT("into the manoeuvre"), Traffic->FindAgent(Id)->Phase, EAgentPhase::Manoeuvring))
+	{
+		return false;
+	}
+
+	// MID-PUSH, THE TAXI-OUT'S LAST LINE IS REDRAWN: J -> B removed, a bypass J -> K -> B laid.
+	FGuidelineEdgeId JB;
+	for (int32 Index = 0; Index < Net->GetGuidelineEdges().Num(); ++Index)
+	{
+		const FGuidelineEdge& Edge = Net->GetGuidelineEdges()[Index];
+		if (Edge.bAlive && ((Edge.A == G.J && Edge.B == G.B) || (Edge.A == G.B && Edge.B == G.J)))
+		{
+			JB.Index = Index;
+			JB.Generation = Edge.Generation;
+		}
+	}
+	if (!TestTrue(TEXT("the J-B line exists to redraw"), JB.IsSet())) { return false; }
+	Net->RemoveGuidelineEdge(JB);
+	const FGuidelineNodeId K = TestGraph::Node(*Net, -8000.0, -5000.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, G.J, K, Options);
+	TestGraph::Join(*Net, K, G.B, Options);
+	Traffic->OnGraphRebuilt(*Net);
+
+	const FRoadAgent* Agent = Traffic->FindAgent(Id);
+	if (!TestNotNull(TEXT("still there"), Agent)) { return false; }
+	TestEqual(TEXT("still pushing - the push itself was untouched"), Agent->Phase, EAgentPhase::Manoeuvring);
+	int32 Dead = 0;
+	for (const FRouteStep& Step : Agent->TaxiOutPlan.Steps)
+	{
+		Dead += Net->GetGuidelineEdge(Step.Edge) == nullptr ? 1 : 0;
+	}
+	TestEqual(TEXT("the taxi out names no dead line"), Dead, 0);
+	const bool bViaK = Agent->TaxiOutPlan.Polyline.ContainsByPredicate([](const FVector2D& P)
+	{
+		return FVector2D::Distance(P, FVector2D(-8000.0, -5000.0)) < 100.0;
+	});
+	TestTrue(TEXT("and it goes by the bypass the player drew"), bViaK);
+	return true;
+}
+
 #endif

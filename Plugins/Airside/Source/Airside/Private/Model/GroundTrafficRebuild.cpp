@@ -331,6 +331,29 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		case FPlanReResolver::EReResolve::Stranded:  ++Stranded;  break;
 		case FPlanReResolver::EReResolve::Intact:    break;
 		}
+
+		// AND THE TAXI OUT A PUSH WILL HAND OVER TO (2026-09-27). The push plan above is the
+		// short lead-in; FRoadAgent::TaxiOutPlan is the route the follower takes over when the
+		// push ends, and it was never re-resolved - so an aeroplane pushed back while the
+		// player redrew its way out taxied along lines that no longer existed
+		// (Airside.Model.PushbackRebuildReResolvesTaxiOut). FROM 0, as TaxiInPlan is: not a
+		// metre of it has been driven. AFTER the push, because re-resolving the push points
+		// the goal at the push's end, and the taxi out's own re-resolve points it back at the
+		// runway entry, which is the goal DepartAgent gave it.
+		if (Agent.Phase == EAgentPhase::Manoeuvring && Agent.TaxiOutPlan.IsValid())
+		{
+			switch (PlanReResolver.ReResolvePlan(Agent, Agent.TaxiOutPlan, 0, Context, NodeIndex))
+			{
+			case FPlanReResolver::EReResolve::Replanned: ++Replanned; break;
+			case FPlanReResolver::EReResolve::Truncated: ++Truncated; break;
+			case FPlanReResolver::EReResolve::Stranded:  ++Stranded;  break;
+			case FPlanReResolver::EReResolve::Intact:    break;
+			}
+			// RE-ARMED FROM THE ROUTE AS IT NOW ENDS: the entry, its offset and the strip's
+			// length were measured when the push began, and the rebuild may have moved all
+			// three. ArmDepartureIfRunway disarms first, so this is safe to repeat.
+			ArmDepartureIfRunway(Agent, &Network, Agent.TaxiOutPlan);
+		}
 	}
 
 	// THE GUIDELINE CLAIMS ONLY - NOT Clear(), which would take the runway holds with them.
