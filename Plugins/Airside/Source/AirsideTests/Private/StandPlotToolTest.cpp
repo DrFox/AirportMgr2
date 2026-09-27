@@ -865,7 +865,7 @@ bool FStandPlotDiagonalTaxiwayReadsItsLetterTest::RunTest(const FString& Paramet
 
 		// EVERY LETTER AT ITS EXACT FLOOR, from BOTH SIDES of the taxiway - the two sides wind the
 		// rectangle opposite ways, and the facade reverses one of them, measuring the OPPOSITE
-		// edge. EVERY LETTER BUILDS since task 6 (far-side-entry spec): A and B used to be
+		// edge. EVERY LETTER BUILDS since 2026-09-26 (far-side-entry spec): A and B used to be
 		// refused here (their bays were laid for the truck), so bBuildable is now always true
 		// rather than Letter >= EIcaoCode::C - kept as a named bool, not deleted outright, so a
 		// future letter that genuinely cannot build still has somewhere to say so.

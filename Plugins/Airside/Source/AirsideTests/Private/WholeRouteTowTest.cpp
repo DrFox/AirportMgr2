@@ -760,7 +760,7 @@ bool FTowWholeRouteSolvesAnOpeningReverseFromTheSeedTest::RunTest(const FString&
 	// A ROUTE THAT OPENS WITH A REVERSE - a stand's route home off its service point - used to be
 	// passed UNJUDGED (JudgePlan's "not at all" branch): the router admitted the utility tow's
 	// route home off a Code A hydrant and the tow was stranded there when the reverse would not
-	// arm (task 7 fix round 1). It is now solved from the seed's cab pose, which is where
+	// arm (fixed 2026-09-27). It is now solved from the seed's cab pose, which is where
 	// FTowReverseRun arms from, and refused without one.
 	const FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
 	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());

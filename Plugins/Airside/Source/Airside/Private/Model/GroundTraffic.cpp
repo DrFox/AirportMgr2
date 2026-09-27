@@ -764,8 +764,8 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		double NewHeading = KeptHeading.GetValue();
 		GuidelineGeom::PointAtDistance(Plan.Polyline, InitialTravelled, NewStart, NewHeading);
 		// A ROUTE THAT OPENS WITH A REVERSE LEG is backed along, so the cab should face AWAY from
-		// the line's direction: 180 degrees off is the fit there, not the misfit (task 7 fix round
-		// 1 - every stand service cycle's route home warned "expect a slew or a fold" and did neither).
+		// the line's direction: 180 degrees off is the fit there, not the misfit (2026-09-27
+		// - every stand service cycle's route home warned "expect a slew or a fold" and did neither).
 		if (Plan.Steps.Num() > 0 && Plan.Steps[0].bReverseLeg)
 		{
 			NewHeading += UE_DOUBLE_PI;

@@ -126,7 +126,7 @@ bool FStandBoxTailAtEntranceTest::RunTest(const FString& Parameters)
 		}
 
 		// SLACK AHEAD OF THE NOSE, THE WHOLE POINT OF THIS TASK: the nose sits short of the far
-		// edge, where the mirrored template (Task 3) will lay the far-side entry's service ground.
+		// edge, where the mirrored template lays the far-side entry's service ground.
 		const double NoseY = Pose.Position.Y + Envelope.MaxNoseFwd;
 		TestTrue(*FString::Printf(TEXT("%s nose sits short of the far edge - slack lies ahead of it (nose %.1f, depth %.1f)"),
 			LetterName, NoseY, Depth), NoseY < Depth);

@@ -344,8 +344,8 @@ bool FStandPlotEveryLetterBuildsTest::RunTest(const FString& Parameters)
 
 	Actor->ClearNetwork();
 
-	// REPLACES FStandPlotUnfitLetterRefusedTest (task 6, far-side-entry spec): A and B used to
-	// be refused here because their bays were laid for the fuel truck - Task 1's own measured
+	// REPLACES FStandPlotUnfitLetterRefusedTest (far-side-entry spec, 2026-09-26): A and B used to
+	// be refused here because their bays were laid for the fuel truck - the first measured
 	// table named them the two that did not fit. Every letter now has its own DESIGN VEHICLE
 	// (UAirsideSettings::ResolveStandDesignVehicle: the utility tow for A/B, the fuel truck for
 	// C-F) and A/B's floors were widened for the tow's lane, so
@@ -368,8 +368,8 @@ bool FStandPlotEveryLetterBuildsTest::RunTest(const FString& Parameters)
 // F all go through ResolveStandDefinitionFor's lazily-built cache instead - this loop is the
 // same round trip for each of them, one stand per letter so none can overlap another.
 //
-// A AND B JOINED THE LOOP task 6 (far-side-entry spec): they used to be the two letters Task
-// 1's table named as not fitting their own floor - FStandPlotUnfitLetterRefusedTest pinned
+// A AND B JOINED THE LOOP 2026-09-26 (far-side-entry spec): they used to be the two letters the
+// first measured table named as not fitting their own floor - FStandPlotUnfitLetterRefusedTest pinned
 // that - and now fit like every other letter (their own design vehicle, a widened floor for
 // its lane), so the same round trip that already proves D/E/F proves them too.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(

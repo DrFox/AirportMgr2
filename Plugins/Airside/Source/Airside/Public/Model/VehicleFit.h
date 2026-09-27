@@ -105,8 +105,8 @@ struct FTowSeed
 	 * Where the cab's body ORIGIN is - FRoadAgent::LastMotion.Position, the pose FTowReverseRun
 	 * arms from. Needed only by a plan that OPENS with a reverse leg (a stand's route home off
 	 * its service point), which has no forward section before it to say where the cab stopped;
-	 * JudgePlan refuses such a plan without it rather than passing it unjudged (task 7 fix round
-	 * 1, 2026-09-27 - the "not at all" branch let a stranding reverse through).
+	 * JudgePlan refuses such a plan without it rather than passing it unjudged (2026-09-27
+	 * - the "not at all" branch let a stranding reverse through).
 	 * ENFORCED BY: Airside.Model.Tow.WholeRouteSolvesAnOpeningReverseFromTheSeed
 	 */
 	TOptional<FVector2D> Origin;

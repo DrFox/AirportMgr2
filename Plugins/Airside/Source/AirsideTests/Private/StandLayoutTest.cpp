@@ -358,7 +358,7 @@ bool FEveryBayHoldsATowArrivingBentTest::RunTest(const FString& Parameters)
 	// tow has just turned off the far-edge road, both ways round, so its chain reaches the entry
 	// bent (see JudgeBayArrivingBent for the figures that justify the lead-in). The bay's settle
 	// straight must still bring the turntable inside TowReverse's 3 degree lock before the
-	// reverse, or the route home off the service point strands the tow - task 7 fix round 1.
+	// reverse, or the route home off the service point strands the tow - found 2026-09-27.
 	const TArray<FVehicle> Fleet = {
 		UAirsideSettings::ResolveUtilityTowVehicle(), UAirsideSettings::ResolveDefaultVehicle() };
 	URoadNetwork* Network = NewObject<URoadNetwork>();
@@ -754,7 +754,7 @@ bool FEveryBayEntryReachesItsServicePointTest::RunTest(const FString& Parameters
 	using namespace StandLayoutFixture;
 	using namespace ServiceLinkFixture;
 
-	// THE EQUIVALENCE InspectFacts::DescribeStand's bServiceable RELIES ON (review of task 5).
+	// THE EQUIVALENCE InspectFacts::DescribeStand's bServiceable RELIES ON (review, 2026-09-26).
 	// It walks Network.IsServiceNodeConnected from each bay's SERVICE-POINT node (the resolved
 	// anchor - HydrantPit, BaggageHold, FixedGPU...), never from FServiceBay::EntryLocal's own
 	// node, because nothing in Model/ may read EntryLocal off Definition->ServiceBays (the

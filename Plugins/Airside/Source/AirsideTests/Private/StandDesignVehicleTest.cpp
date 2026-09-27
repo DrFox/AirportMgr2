@@ -9,14 +9,14 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-// PER-LETTER STAND DESIGN VEHICLE (spec 2026-09-26 §1, task 1): what a stand's own geometry is
+// PER-LETTER STAND DESIGN VEHICLE (spec 2026-09-26 §1): what a stand's own geometry is
 // sized for, by its letter - the utility tow for A/B, the fuel truck from C up - and the two
 // VehicleFit helpers a stand's layout compares vehicles with: NoLargerThan (may a smaller
 // vehicle serve a bigger stand) and TightestReverseRadius (how tight a tow may back).
 //
 // FVehicleNoLargerThanTest DOES NOT MATCH THE DESIGN DOC'S PREDICTION - see its own comment
-// and task-1-report.md. Left in, pinning the measured fact, rather than adjusted to force the
-// doc's guess true.
+// and the spec's §3, which records the ruling (2026-09-26). Left in, pinning the measured
+// fact, rather than adjusted to force the doc's guess true.
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStandDesignVehiclePerLetterTest,
 	"Airside.Content.StandDesignVehicle.PerLetter",
@@ -44,7 +44,7 @@ bool FVehicleNoLargerThanTest::RunTest(const FString& Parameters)
 {
 	// MEASURED, NOT ASSUMED (2026-09-26 design doc §2 predicted "NoLargerThan orders tow <
 	// truck"; it does not, for these authored figures, and this test PINS THE FACT rather than
-	// forcing the prediction - see task-1-report.md for the discovery and the open question it
+	// forcing the prediction - see the spec's §3 for the ruling that keeps it strict, and what it
 	// leaves). The tow is narrower (WidestBody 172.6 vs 226.0) and turns tighter both forward
 	// (211 vs 502) and backward (272 vs 355), but its drawbar combination reaches 575 uu from
 	// steered axle to rearmost axle (ChainLength - the reverse pull-past a route needs) against

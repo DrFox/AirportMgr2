@@ -9,7 +9,7 @@
 
 #define LOCTEXT_NAMESPACE "Airside"
 
-// StandPlotRules::DepthStepUu moved to StandPlotTool.h (fix round 1 on this task's own
+// StandPlotRules::DepthStepUu moved to StandPlotTool.h (2026-09-26, on its own
 // review): a test enforcing every IcaoCode floor against the quantum needs to read the same
 // declaration the tool quantises by, not a second literal.
 

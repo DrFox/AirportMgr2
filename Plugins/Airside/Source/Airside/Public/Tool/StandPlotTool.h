@@ -10,7 +10,7 @@ namespace StandPlotRules
 	/**
 	 * The depth quantum, uu - HALF a metre, not a whole one.
 	 *
-	 * WAS 100 (a whole metre) until #355: the far-side-entry depth floors (IcaoCode's
+	 * WAS 100 (a whole metre) until 2026-09-26: the far-side-entry depth floors (IcaoCode's
 	 * StandDepth column) are no longer all whole metres - B's is 3950, half a metre past its
 	 * neighbours - so a whole-metre grid put B's floor exactly ON A ROUNDING MIDPOINT (3900 vs
 	 * 4000, both a half-quantum away). A diagonal-taxiway click's depth is a dot product of
@@ -24,7 +24,7 @@ namespace StandPlotRules
 	 * - and still quantised, so the readout's "Size" and the committed outline agree with what
 	 * the player read.
 	 *
-	 * DECLARED HERE, NOT IN THE .cpp, since fix round 1 on this task's own review: a test that
+	 * DECLARED HERE, NOT IN THE .cpp, since its review of 2026-09-26: a test that
 	 * checks every IcaoCode floor divides by this quantum needs to read the SAME figure the
 	 * tool quantises by, not a second literal that could silently drift from it.
 	 * ENFORCED BY: Airside.Tool.StandPlot.FloorsAreOnTheDepthQuantum

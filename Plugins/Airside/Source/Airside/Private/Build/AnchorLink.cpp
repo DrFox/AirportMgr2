@@ -1038,7 +1038,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 	int32 Joined = 0;
 	int32 Unjoined = 0;
 
-	// PER-STAND ENTRY COUNTS, not just whether any got in (task 4, far-side-entry spec): a
+	// PER-STAND ENTRY COUNTS, not just whether any got in (far-side-entry spec, 2026-09-26): a
 	// PARTIAL join - some declared entries reached a road, others did not - is a different fact
 	// from joining nothing at all, and wants a different line: the first names a service position
 	// the road cannot reach, the second says to move the road. ONE MAP, not a joined set beside a
@@ -1149,7 +1149,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 	}
 
 	// THE STANDS THAT JOINED NOTHING AT ALL, one line each, and the ones that joined SOME but not
-	// all, a different line for a different repair (task 4, far-side-entry spec: the half-plane
+	// all, a different line for a different repair (far-side-entry spec, 2026-09-26: the half-plane
 	// can refuse one entry's own road while another entry of the same stand still reaches one -
 	// a corner stand, or one beside a road that stops short of its far side). Reported here
 	// because a stand is only known to have tried every entry once the whole pass has, and the

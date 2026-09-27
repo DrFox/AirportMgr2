@@ -422,7 +422,7 @@ bool UFuelService::MayDriveUngated(const FRoutePlan& Plan, const FVehicle& Vehic
 	{
 		return true;
 	}
-	// A REVERSE IT CANNOT BACK is refused with the fold (task 7 fix round 1): the tow would stall
+	// A REVERSE IT CANNOT BACK is refused with the fold (2026-09-27): the tow would stall
 	// at the service point holding the node, which is the jack-knife's cost under another name.
 	const FFitVerdict Whole = VehicleFit::JudgePlan(Plan, Vehicle, Network, Seed);
 	if (Whole.Refusal != EFitRefusal::TrailerFolds && Whole.Refusal != EFitRefusal::ReverseUnsolvable)

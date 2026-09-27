@@ -223,7 +223,7 @@ public:
 	 * BuildStandTemplate laid them for. A definition that does not carry one - an asset saved
 	 * before the field existed, or none at all - falls back to ResolveStandDesignVehicle(Letter)
 	 * and logs a Warning once per definition, because the answer is then a guess about how the
-	 * stand was built rather than a fact read off it (task 7 fix round 1).
+	 * stand was built rather than a fact read off it (2026-09-27).
 	 * ENFORCED BY: AirportOps.Fuel.StandDesignVehicleFallsBackWhenUnauthored
 	 */
 	static FVehicle ResolveStandDesignVehicleOf(const UEntityDefinition* Definition, EIcaoCode Letter);

@@ -513,7 +513,7 @@ void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled, TO
 	// short to have a direction) - so the view still appears at the start of its route
 	// rather than at the origin. Overwritten the moment Advance succeeds.
 	//
-	// A KEPT POSE STAYS KEPT (task 7 fix round 1, 2026-09-27): a redirect that passes
+	// A KEPT POSE STAYS KEPT (2026-09-27): a redirect that passes
 	// InitialHeading - a tow, keeping its cab and chain - keeps LastMotion's Position and that
 	// heading too, because the fallback is not only drawn. Advance reads LastMotion as the pose
 	// it starts from, and a route that OPENS with a reverse leg arms FTowReverseRun from it

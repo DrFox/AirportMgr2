@@ -597,7 +597,7 @@ bool FTowRedirectIntoAReverseArmsFromTheCabTest::RunTest(const FString& Paramete
 {
 	// A STAND'S SERVICE CYCLE HANDS A PARKED TOW A ROUTE THAT OPENS WITH A REVERSE (the bay's
 	// reverse leg off the service point), and the tow must back along it from where its cab IS.
-	// Until task 7 fix round 1 (2026-09-27) it could not: RestartTaxi reset LastMotion to the
+	// Until 2026-09-27 it could not: RestartTaxi reset LastMotion to the
 	// plan's first point - the STEERED axle's spot - facing heading 0, and the redirect's own
 	// posing Advance armed FTowReverseRun from that pose. The fixed axle it solved from sat a
 	// wheelbase off and turned 90 degrees, so a chain parked straight read as a turntable bent

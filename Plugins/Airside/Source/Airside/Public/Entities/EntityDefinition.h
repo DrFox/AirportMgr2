@@ -253,7 +253,7 @@ public:
 	 * The vehicle ServiceBays' lanes were laid for and proven drivable by - BuildStandTemplate's
 	 * Design argument, stored as it was built, so a service asking "may this vehicle serve here"
 	 * (VehicleFit::NoLargerThan against it) asks THIS definition and not a resolve that could have
-	 * moved on since (task 7 fix round 1: a per-letter table beside it held the same fact twice).
+	 * moved on since (2026-09-27: a per-letter table beside it held the same fact twice).
 	 *
 	 * COMPUTED, like ServiceBays and RequiredExtent, never authored. An asset saved before this
 	 * field existed loads it empty (TypeCode None); UAirsideSettings::ResolveStandDesignVehicleOf falls back to

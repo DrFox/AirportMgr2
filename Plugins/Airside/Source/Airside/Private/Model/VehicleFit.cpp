@@ -665,8 +665,8 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 			// the utility tow has driven since 2026-09-26 - is solved from where the LIVE cab is:
 			// FTowSeed::Origin, the pose FRoadAgent arms FTowReverseRun from. This branch used to
 			// pass such a plan unjudged ("not at all"), and a route home the router admitted was
-			// refused at the hydrant ("turntable bent 13.4 deg") and the tow stranded there (task 7
-			// fix round 1). Without a seed there is nothing to solve from, so it is REFUSED, not
+			// refused at the hydrant ("turntable bent 13.4 deg") and the tow stranded there (fixed
+			// 2026-09-27). Without a seed there is nothing to solve from, so it is REFUSED, not
 			// guessed: a chain laid straight would be a different truck.
 			if (Seed == nullptr || !Seed->Origin.IsSet() || Seed->Axles.Num() != Vehicle.Tow.Num())
 			{

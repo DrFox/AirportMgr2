@@ -693,8 +693,8 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) co
 	}
 
 	// THE LETTER'S OWN TEMPLATE, RESOLVED AND MEASURED - a GUARD, not a live refusal: every
-	// letter builds as of 2026-09-26 (task 6, far-side-entry spec - each has its own design
-	// vehicle now, not one truck's bays for all six). Task 1's own finding was that A and B did
+	// letter builds as of 2026-09-26 (far-side-entry spec - each has its own design
+	// vehicle now, not one truck's bays for all six). The day's first measurement found that A and B did
 	// NOT fit their floor; this branch is what caught that, and it stays so a future template
 	// or floor regression is refused loudly here rather than silently building something too
 	// small. ResolveStandDefinitionFor is the one place the answer is cached and logged; this

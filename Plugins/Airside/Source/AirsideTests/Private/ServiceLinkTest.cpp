@@ -420,7 +420,7 @@ bool FTaxiwaySideRoadDoesNotJoinTest::RunTest(const FString& Parameters)
 {
 	using namespace ServiceLinkFixture;
 
-	// THE HALF-PLANE'S OWN TEST (task 4, far-side-entry spec). A road on the TAXIWAY side of the
+	// THE HALF-PLANE'S OWN TEST (far-side-entry spec, 2026-09-26). A road on the TAXIWAY side of the
 	// stand - the OLD strip every entry opened onto before the 2026-09-26 ruling moved them to the
 	// far edge - must join nothing, however close it is drawn.
 	//
@@ -543,7 +543,7 @@ bool FPartialJoinWarnsTest::RunTest(const FString& Parameters)
 {
 	using namespace ServiceLinkFixture;
 
-	// THE PARTIAL-JOIN BRANCH'S OWN TEST (review round 1 of task 4). A road that reaches only
+	// THE PARTIAL-JOIN BRANCH'S OWN TEST (review, 2026-09-26). A road that reaches only
 	// ONE side of the far edge - a corner stand, or one beside a road that stops short - leaves
 	// some of a stand's declared entries connected and others not, which FAnchorLink::Build now
 	// reports as a DIFFERENT line from "joins nothing at all".

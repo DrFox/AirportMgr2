@@ -1942,7 +1942,7 @@ bool FFuelStandDesignVehicleFallsBackTest::RunTest(const FString& Parameters)
 		UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode);
 
 	// THE SHIPPED ASSET IS NOT THE LEGACY CASE: DA_Stand_CodeC was re-authored with
-	// build_stand_asset.py when the field arrived (task 7 fix round 1), so the one stand a player
+	// build_stand_asset.py when the field arrived (2026-09-27), so the one stand a player
 	// can plop carries the vehicle its bays were built for and never takes the fallback.
 	const UEntityDefinition* Shipped = LoadObject<UEntityDefinition>(nullptr, TEXT("/Game/Entities/DA_Stand_CodeC.DA_Stand_CodeC"));
 	if (TestNotNull(TEXT("DA_Stand_CodeC loads"), Shipped))

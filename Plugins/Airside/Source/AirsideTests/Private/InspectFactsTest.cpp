@@ -162,7 +162,7 @@ bool FStandServiceableWithFarRoadTest::RunTest(const FString& Parameters)
 {
 	using namespace ServiceLinkFixture;
 
-	// THE SERVICEABLE CASE: a road at the far edge (Task 4's own FarRoadX, the shipping
+	// THE SERVICEABLE CASE: a road at the far edge (StandFixture.h's FarRoadX, the shipping
 	// Code C stand) joins every declared bay entry, so bServiceable - and the inspector's
 	// new "Service road: joined" line - reads true.
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
@@ -219,7 +219,7 @@ bool FStandPartiallyJoinedIsUnserviceableTest::RunTest(const FString& Parameters
 {
 	using namespace ServiceLinkFixture;
 
-	// THE PARTIAL CASE (ruling, task 5): some declared entries joined, others not, must
+	// THE PARTIAL CASE (ruling, 2026-09-26): some declared entries joined, others not, must
 	// still read bServiceable false - "every", not "any". Code F's own two-sided fixture
 	// (FPartialJoinWarnsTest, ServiceLinkTest.cpp) is reused rather than invented: its
 	// starboard/port contacts sit far enough apart (>ServiceLinkRadius) that a short

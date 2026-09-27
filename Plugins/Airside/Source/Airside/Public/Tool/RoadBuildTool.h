@@ -341,7 +341,7 @@ enum class EPreviewStyle : uint8
 
 	/**
 	 * A drawn stand's FAR edge - opposite the taxiway its entrance opens off, where a service
-	 * vehicle now enters and leaves (far-side-entry spec §2, task 6). NOT Pinned/Provisional:
+	 * vehicle now enters and leaves (far-side-entry spec §2, 2026-09-26). NOT Pinned/Provisional:
 	 * those say whether the gesture has settled, which is a fact about the OTHER three edges
 	 * only - this edge means the same thing, service access, whether the depth is still being
 	 * dragged or locked, so it keeps its own style through both stages rather than borrowing

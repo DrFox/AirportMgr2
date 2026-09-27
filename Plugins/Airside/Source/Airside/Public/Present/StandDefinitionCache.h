@@ -61,8 +61,8 @@ public:
 	 * this cache ever creates findable from the cache alone.
 	 *
 	 * NULL, LOGGED ONCE PER LETTER, when the built template does not fit its own letter's floor -
-	 * UEntityDefinition::FitsItsLetter. A GUARD, not a live case: Task 1 measured A and B NOT
-	 * fitting, and task 6 (2026-09-26, far-side-entry spec) gave every letter its own design
+	 * UEntityDefinition::FitsItsLetter. A GUARD, not a live case: the first measurement found A and B NOT
+	 * fitting, and the far-side-entry work (2026-09-26) gave every letter its own design
 	 * vehicle so all six fit now - this null stays reachable for a future template or floor
 	 * regression rather than being removed with the bug it once caught. A caller refuses on
 	 * null; WhyStandRefused is what turns that into "Code X stands cannot be built yet" for the
@@ -74,7 +74,7 @@ public:
 	/**
 	 * Re-point every live, plotted stand in Network at the one its OUTLINE's letter resolves to
 	 * (ResolveStandDefinitionFor(StandBox::LetterOf(Outline))) - Code C to the actor's authored
-	 * asset, every other letter (A, B, D, E, F all build as of task 6, 2026-09-26) to this
+	 * asset, every other letter (A, B, D, E, F all build as of 2026-09-26) to this
 	 * cache. Returns how many changed; logs the count, and a Warning naming each stand whose
 	 * outline reads as no letter, or as one with no buildable definition - a template or floor
 	 * regression, per ResolveStandDefinitionFor's own guard, not a letter that is expected to be
