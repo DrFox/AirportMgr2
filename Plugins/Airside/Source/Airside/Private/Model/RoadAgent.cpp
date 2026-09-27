@@ -535,6 +535,19 @@ void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled, TO
 	}
 }
 
+void FRoadAgent::MarkTaxiOutStale()
+{
+	bTaxiOutStale = true;
+	bTaxiOutHoldSaid = false;
+}
+
+void FRoadAgent::AdoptTaxiOut(const FRoutePlan& Route)
+{
+	TaxiOutPlan = Route;
+	bTaxiOutStale = false;
+	bTaxiOutHoldSaid = false;
+}
+
 bool FRoadAgent::StartPushback(const FRoutePlan& PushPlan, const FRoutePlan& InTaxiOutPlan,
 	const FAirframe& InAirframe, double PushSpeed, double PushAccel, double ThrustRPM)
 {
@@ -712,6 +725,22 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			//
 			// Follower.Start AND NOT StartTaxi, which writes EngineRPM = 0.0 from cold and
 			// would undo the spool the push has been running - see StartPushback.
+			// ONLY A TAXI OUT THAT BEGINS HERE. The two agree exactly when the push ran as
+			// planned (above); a rebuild during the push can leave the taxi out stranded, or
+			// starting somewhere else, and starting it anyway put the aeroplane on its first
+			// point - a jump across the airfield (2026-09-27). HOLD at the end of the push
+			// instead, still Manoeuvring and at rest, until UGroundTraffic::ReplanHeldTaxiOuts
+			// supplies a route from here. 10 uu: the planned case is exact, so this only ever
+			// has to tell exact from wrong.
+			constexpr double HandoverToleranceUu = 10.0;
+			if (bTaxiOutStale || !TaxiOutPlan.IsValid() || TaxiOutPlan.Polyline.Num() == 0
+				|| FVector2D::Distance(TaxiOutPlan.Polyline[0], PushAt) > HandoverToleranceUu)
+			{
+				bTaxiOutStale = true;
+				LastMotion = DescribeMotion(PushAt, PushHeading);
+				OutMotion = LastMotion;
+				return true;
+			}
 			Phase = EAgentPhase::Taxiing;
 			OutEvent = EAgentEvent::PushedBack;
 			Follower.Start(TaxiOutPlan, Chassis(), 0.0, Pushback.Heading);

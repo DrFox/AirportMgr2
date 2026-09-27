@@ -1143,6 +1143,70 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 	}
 }
 
+void UGroundTraffic::ReplanHeldTaxiOuts(const URoadNetwork& Network)
+{
+	if (Network.AreGuidelinesBehindRoad())
+	{
+		return;
+	}
+	// HOW FAR THE JOIN LEG MAY REACH, uu: 30 m. It is driven in a straight line over whatever
+	// lies between, so it is for a push that ended a few metres off a line the player moved,
+	// not for an aeroplane the edit left in a field - that one holds until a line reaches it.
+	constexpr double TaxiOutJoinRadiusUu = 3000.0;
+
+	for (FRoadAgent& Agent : Agents)
+	{
+		if (!Agent.IsHoldingForTaxiOut())
+		{
+			continue;
+		}
+		const FAirframe* Aircraft = Agent.AsAircraft();
+		if (Aircraft == nullptr)
+		{
+			continue;
+		}
+		const FVector2D Here = Agent.LastMotion.Position;
+		const FGuidelineNodeId From = RouteSearch::FindNearestNode(Network, Here, Agent.Class, TaxiOutJoinRadiusUu);
+		FDeparturePlan Plan;
+		if (From.IsSet())
+		{
+			Plan = DeparturePlanner::PlanAny(Network, From, *Aircraft, Agent.Class);
+		}
+		if (!From.IsSet() || !Plan.IsValid() || Plan.Route.Polyline.Num() == 0)
+		{
+			if (!Agent.bTaxiOutHoldSaid)
+			{
+				UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d holds where its push ended: %s"), Agent.Id,
+					From.IsSet() ? *DeparturePlanner::Describe(Plan) : TEXT("no taxi line within 30 m"));
+				Agent.MarkTaxiOutHoldSaid();
+			}
+			continue;
+		}
+
+		// THE JOIN: the route starts at a node; the aeroplane is where its push ended. A leg
+		// from here to that node is prepended so the follower drives it - the handover checks
+		// the route begins HERE, and a route that began at the node would be a jump.
+		FRoutePlan Route = Plan.Route;
+		const double Leg = FVector2D::Distance(Here, Route.Polyline[0]);
+		if (Leg > 1.0)
+		{
+			Route.Polyline.Insert(Here, 0);
+			for (FRouteStep& Step : Route.Steps)
+			{
+				++Step.EndVertex;
+				Step.EndDistance += Leg;
+			}
+			Route.Length += Leg;
+		}
+		Agent.AdoptTaxiOut(Route);
+		// THE GOAL AND THE ARMING, as DepartAgent takes them - ReleaseGoal then TakeGoal.
+		ReleaseGoal(Agent, Agent.Id);
+		TakeGoal(Agent, Agent.Id, &Network, Route);
+		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: taxi-out planned again from where its push ended (%.0f uu join): %s"),
+			Agent.Id, Leg, *DeparturePlanner::Describe(Plan));
+	}
+}
+
 void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Network)
 {
 	SimSeconds += DeltaSeconds;
@@ -1155,6 +1219,8 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	if (Network != nullptr)
 	{
 		Arbitrate(*Network);
+		// BEFORE THE AGENTS MOVE, so a taxi out planned here is handed over this same frame.
+		ReplanHeldTaxiOuts(*Network);
 	}
 
 	// ONE INSTANCE FOR THE HANDOVER CLAIM BELOW (issue #84): the only FClaimPass call in this

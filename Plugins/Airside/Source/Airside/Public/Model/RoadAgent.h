@@ -361,6 +361,35 @@ public:
 	 */
 	UPROPERTY() FRoutePlan TaxiOutPlan;
 
+	/**
+	 * TaxiOutPlan can no longer be driven from where the push ends: a rebuild stranded it, or
+	 * it does not begin where the aeroplane stands. The push-end handover then HOLDS instead of
+	 * starting it, and UGroundTraffic::ReplanHeldTaxiOuts plans a new one from where the push
+	 * actually ended (2026-09-27: a stranded taxi-out was started anyway, and the aeroplane
+	 * jumped to where the old runway began - Airside.Model.PushbackStrandedTaxiOutReplans).
+	 * Session state, like the rest of a manoeuvre - not saved.
+	 */
+	bool bTaxiOutStale = false;
+
+	/** The hold's "no route yet" line has been said - one line for a hold that lasts minutes. */
+	bool bTaxiOutHoldSaid = false;
+
+	/** The taxi out cannot be driven from where the push ends - see bTaxiOutStale. Its hold
+	 *  line is to be said afresh. The rebuild calls this for a stranded taxi out. */
+	void MarkTaxiOutStale();
+
+	/** A new taxi out, beginning where the aeroplane stands - UGroundTraffic::ReplanHeldTaxiOuts. */
+	void AdoptTaxiOut(const FRoutePlan& Route);
+
+	/** The hold's "no route yet" line has been said - see bTaxiOutHoldSaid. */
+	void MarkTaxiOutHoldSaid() { bTaxiOutHoldSaid = true; }
+
+	/** Pushed back, and waiting for a taxi-out it can drive - see bTaxiOutStale. */
+	bool IsHoldingForTaxiOut() const
+	{
+		return Phase == EAgentPhase::Manoeuvring && bTaxiOutStale && Pushback.HasArrived();
+	}
+
 	/** What to fly once the current taxi ends, if anything. See FDepartureOrder. */
 	UPROPERTY() FDepartureOrder DepartureOrder;
 

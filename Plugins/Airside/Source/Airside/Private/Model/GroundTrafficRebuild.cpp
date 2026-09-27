@@ -340,19 +340,33 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		// metre of it has been driven. AFTER the push, because re-resolving the push points
 		// the goal at the push's end, and the taxi out's own re-resolve points it back at the
 		// runway entry, which is the goal DepartAgent gave it.
-		if (Agent.Phase == EAgentPhase::Manoeuvring && Agent.TaxiOutPlan.IsValid())
+		//
+		// NOT IN THE SUMMARY'S COUNTS, which are one per AGENT (Considered, above): counting a
+		// second route per pushing aeroplane made "re-resolved" go negative (2026-09-27). Said
+		// on its own line instead, when it did not survive.
+		if (Agent.Phase == EAgentPhase::Manoeuvring && Agent.TaxiOutPlan.IsValid() && !Agent.bTaxiOutStale)
 		{
-			switch (PlanReResolver.ReResolvePlan(Agent, Agent.TaxiOutPlan, 0, Context, NodeIndex))
+			const FPlanReResolver::EReResolve TaxiOut =
+				PlanReResolver.ReResolvePlan(Agent, Agent.TaxiOutPlan, 0, Context, NodeIndex);
+			if (TaxiOut == FPlanReResolver::EReResolve::Stranded || TaxiOut == FPlanReResolver::EReResolve::Truncated)
 			{
-			case FPlanReResolver::EReResolve::Replanned: ++Replanned; break;
-			case FPlanReResolver::EReResolve::Truncated: ++Truncated; break;
-			case FPlanReResolver::EReResolve::Stranded:  ++Stranded;  break;
-			case FPlanReResolver::EReResolve::Intact:    break;
+				// A ROUTE NOT YET STARTED IS PLANNED AGAIN, not stopped on: stranding means "stop
+				// where you are", which is right for the step under the wheels and wrong for one
+				// the aeroplane has not reached. And NEVER ARMED FROM: its end is the old runway
+				// entry, which is where the aeroplane went when this was armed anyway.
+				Agent.MarkTaxiOutStale();
+				Agent.DisarmDeparture();
+				UE_LOG(LogAirsideTraffic, Log,
+					TEXT("Agent %d: its taxi-out did not survive the rebuild; it will be planned again where the push ends"),
+					Agent.Id);
 			}
-			// RE-ARMED FROM THE ROUTE AS IT NOW ENDS: the entry, its offset and the strip's
-			// length were measured when the push began, and the rebuild may have moved all
-			// three. ArmDepartureIfRunway disarms first, so this is safe to repeat.
-			ArmDepartureIfRunway(Agent, &Network, Agent.TaxiOutPlan);
+			else
+			{
+				// RE-ARMED FROM THE ROUTE AS IT NOW ENDS: the entry, its offset and the strip's
+				// length were measured when the push began, and the rebuild may have moved all
+				// three. ArmDepartureIfRunway disarms first, so this is safe to repeat.
+				ArmDepartureIfRunway(Agent, &Network, Agent.TaxiOutPlan);
+			}
 		}
 	}
 
