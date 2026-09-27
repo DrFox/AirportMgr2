@@ -4,7 +4,36 @@
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "Engine/Engine.h"
 #include "Entities/AircraftType.h"
+#include "Present/AirsideBuildingsActor.h"
+#include "Present/RoadNetworkActor.h"
+
+// FAirsideTestWorld's constructor and destructor: moved out of the header 2026-09-27 so
+// SpawnActor<ARoadNetworkActor>() and SpawnActor<AAirsideBuildingsActor>() - templates that
+// need both types complete at the point of instantiation - stop forcing Present/
+// RoadNetworkActor.h (and its own fan-out) onto every TU that includes AirsideTestWorld.h
+// through AirsideTestFixtures.h, whether or not that test ever touches the actor. See the
+// header's own comment on the forward declarations this leaves behind.
+FAirsideTestWorld::FAirsideTestWorld(bool bSpawnActor, EWorldType::Type WorldType)
+{
+	World = UWorld::CreateWorld(WorldType, false);
+	if (World == nullptr) { return; }
+	FWorldContext& Context = GEngine->CreateNewWorldContext(WorldType);
+	Context.SetCurrentWorld(World);
+	if (bSpawnActor)
+	{
+		Actor = World->SpawnActor<ARoadNetworkActor>();
+		Buildings = World->SpawnActor<AAirsideBuildingsActor>();
+	}
+}
+
+FAirsideTestWorld::~FAirsideTestWorld()
+{
+	if (World == nullptr) { return; }
+	GEngine->DestroyWorldContext(World);
+	World->DestroyWorld(false);
+}
 
 TArray<UAircraftType*> EveryAircraftType()
 {

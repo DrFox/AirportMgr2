@@ -1244,6 +1244,36 @@ foreach ($module in $modules) {
 }
 $ranRules.Add('one-pavement-scale')
 
+# --- 24. AirsideTestWorld.h names ARoadNetworkActor/AAirsideBuildingsActor only as forward
+# declarations, never a direct #include of either's header (2026-09-27, the header-fanout PR).
+# FAirsideTestWorld's constructor used to be INLINE and called SpawnActor<ARoadNetworkActor>()
+# / SpawnActor<AAirsideBuildingsActor>() - templates that need T complete at the point of
+# instantiation, which pulled Present/RoadNetworkActor.h (a header that itself drags in
+# RoadSurfacePresenter, BuildSession, RoadEditTarget and the rest - see that header's own long
+# comment) into every one of the 120+ TUs that reach this header through
+# AirsideTestFixtures.h, whether or not the test ever touched the actor. Measured before/after
+# with Tools/HeaderFanout.py: RoadNetworkActor.h's transitive fan-out fell from 174 to 104
+# .cpp files, AirsideBuildingsActor.h's from (not separately measured before, since it rode
+# in alongside RoadNetworkActor.h) to 11, once the constructor and destructor moved out of
+# line to AirsideTestWorld.cpp, the one TU that still needs both complete types. A future
+# convenience include of either header back into AirsideTestWorld.h would silently re-widen
+# every one of those TUs' rebuild set the same way - this rule is what fails the build instead
+# of that regression riding along unnoticed the way the Piper fallback and the hand-built
+# handle each did before their own rules existed (see rules 4 and 5's history).
+$airsideTestWorldHeader = Join-Path $plugin 'Public\Testing\AirsideTestWorld.h'
+if (-not (Test-Path $airsideTestWorldHeader)) {
+    # Same no-op-that-reads-as-pass trap rules 11c/15/19/20 guard against: a rename or move
+    # must not let this rule silently check nothing.
+    $failures.Add("testworld-fanout: $airsideTestWorldHeader is named by rule 24 but does not exist - update the rule, do not let it check nothing")
+}
+else {
+    $hits = Select-String -Path $airsideTestWorldHeader -Pattern '#include\s+"(Present/RoadNetworkActor\.h|Present/AirsideBuildingsActor\.h)"'
+    foreach ($h in $hits) {
+        $failures.Add("testworld-fanout: $($airsideTestWorldHeader):$($h.LineNumber) AirsideTestWorld.h must forward-declare ARoadNetworkActor/AAirsideBuildingsActor, not include their headers - the constructor and destructor bodies belong in AirsideTestWorld.cpp (2026-09-27 fan-out cut): $($h.Line.Trim())")
+    }
+}
+$ranRules.Add('testworld-fanout')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two
