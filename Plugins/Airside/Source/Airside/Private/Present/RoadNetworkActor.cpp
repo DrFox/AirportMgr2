@@ -1093,14 +1093,14 @@ int32 ARoadNetworkActor::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 }
 
 int32 ARoadNetworkActor::PlaceStandInPlot(const TArray<FVector2D>& Outline,
-	FVector2D EntranceA, FVector2D EntranceB)
+	FVector2D EntranceA, FVector2D EntranceB, EPavement Pavement)
 {
-	return Facade->PlaceStandInPlot(Outline, EntranceA, EntranceB);
+	return Facade->PlaceStandInPlot(Outline, EntranceA, EntranceB, Pavement);
 }
 
-FString ARoadNetworkActor::WhyStandRefused(TArrayView<const FVector2D> Outline) const
+FString ARoadNetworkActor::WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const
 {
-	return Facade->WhyStandRefused(Outline);
+	return Facade->WhyStandRefused(Outline, Pavement);
 }
 
 bool ARoadNetworkActor::DeleteEntity(int32 EntityIndex)

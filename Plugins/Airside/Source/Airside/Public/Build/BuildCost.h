@@ -60,6 +60,11 @@ namespace BuildCost
 	 * the figure honest: a running total maintained by every mutator would be a second source
 	 * of truth about what exists, and the mutator that forgot to update it would be invisible
 	 * until the upkeep bill drifted away from the airport.
+	 *
+	 * A STAND IS TWO TERMS: its definition's flat UpkeepPerDay (the equipment) plus its pad's
+	 * area at ApronRatePerSquareMetrePerDay times its pavement's factor (2026-09-27). A depot's
+	 * plot is not a pad and bills no area term.
+	 * ENFORCED BY: Airside.Build.BuildCostStandPadUpkeepByArea
 	 */
 	AIRSIDE_API double DailyUpkeep(const URoadNetwork& Network,
 		double ApronRatePerSquareMetrePerDay);

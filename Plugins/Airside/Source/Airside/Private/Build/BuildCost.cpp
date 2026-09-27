@@ -137,6 +137,17 @@ double BuildCost::DailyUpkeep(const URoadNetwork& Network, double ApronRatePerSq
 		{
 			Total += Entity.Definition->UpkeepPerDay;
 		}
+
+		// A STAND'S GROUND, by area and pavement (user, 2026-09-27), beside its definition's flat
+		// figure - that one is the equipment, this is the pad. PolygonAreaSquareMetres, the same
+		// measure the pad's build line used, so the two cannot measure one pad differently.
+		// IsStand(), NOT IsPlotted(): a depot's plot is billed through its kit's own upkeep.
+		// ENFORCED BY: Airside.Build.BuildCostStandPadUpkeepByArea (its depot case)
+		if (Entity.bAlive && Entity.IsStand() && Entity.Outline.Num() >= 3)
+		{
+			Total += PolygonAreaSquareMetres(Entity.Outline) * ApronRatePerSquareMetrePerDay
+				* Pavement::RateFactor(Entity.Pavement);
+		}
 	}
 
 	for (const FApronSurface& Apron : Network.GetAprons())

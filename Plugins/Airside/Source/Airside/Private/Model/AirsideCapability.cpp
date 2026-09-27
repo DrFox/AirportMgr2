@@ -65,6 +65,7 @@ FAirsideCapability AirsideCapability::Summarise(const URoadNetwork& Network)
 		FStandSummary S;
 		S.Entity = Network.EntityIdAt(Index);
 		S.DesignWingspan = E.DesignWingspan;
+		S.Pavement = E.Pavement;
 		for (const FResolvedAnchor& Anchor : E.ResolvedAnchors)
 		{
 			S.AnchorRoles.AddUnique(Anchor.Role);

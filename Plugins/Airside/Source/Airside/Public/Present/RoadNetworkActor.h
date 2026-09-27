@@ -588,10 +588,10 @@ public:
 	/** Forwards to the facade, like every other IRoadEditTarget member - see
 	 *  URoadEditFacade::PlaceStandInPlot. */
 	virtual int32 PlaceStandInPlot(const TArray<FVector2D>& Outline,
-		FVector2D EntranceA, FVector2D EntranceB) override;
+		FVector2D EntranceA, FVector2D EntranceB, EPavement Pavement) override;
 
 	/** Forwards to the facade - see URoadEditFacade::WhyStandRefused. */
-	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline) const override;
+	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const override;
 
 	/** Remove a placed entity, and the anchor nodes it owns. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")

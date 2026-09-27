@@ -371,9 +371,13 @@ public:
 	 *
 	 * Returns the entity index, or INDEX_NONE - WhyStandRefused names why, and the facade
 	 * logs it.
+	 *
+	 * Pavement is the pad's (the stand tool's Surface row), captured onto the instance and
+	 * priced into the charge. NO DEFAULT ARGUMENT: a default on a virtual binds by the
+	 * caller's static type, and a forgotten caller would place tarmac without a word.
 	 */
 	virtual int32 PlaceStandInPlot(const TArray<FVector2D>& Outline,
-		FVector2D EntranceA, FVector2D EntranceB) = 0;
+		FVector2D EntranceA, FVector2D EntranceB, EPavement Pavement) = 0;
 
 	/**
 	 * Why a drawn rectangle cannot become a stand - empty means it can.
@@ -385,8 +389,12 @@ public:
 	 * against Code A's own floor, an unfit letter, an overlap, a taxiway through the
 	 * interior, then afford) and why each check is winding-independent, so this may be
 	 * asked of Outline exactly as drawn, before any CCW correction.
+	 *
+	 * Pavement is the pad the commit would lay - the afford gate prices it, so the readout
+	 * and the Build click agree on what a grass stand costs. No default, for
+	 * PlaceStandInPlot's reason.
 	 */
-	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline) const = 0;
+	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const = 0;
 
 	virtual bool DeleteEntity(int32 EntityIndex) = 0;
 

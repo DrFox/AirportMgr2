@@ -20,7 +20,6 @@
 #include "Present/DynamicMeshSink.h"
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
-#include "Solve/PolygonInset.h"
 
 /**
  * The material parameter names this presenter drives, named once rather than retyped as a
@@ -63,7 +62,8 @@ UDynamicMeshComponent* URoadSurfacePresenter::GetLayerComponent(ESurfaceLayer La
 }
 
 int32 URoadSurfacePresenter::RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int32(FRoadMeshBuffers&)> BuildFn,
-	UMaterialInterface* Material, bool bUseConstantColour, FRoadMeshBuffers& OutBuffers, bool bQuiet)
+	UMaterialInterface* Material, const URoadMaterialSet* MaterialSet, bool bUseConstantColour,
+	FRoadMeshBuffers& OutBuffers, bool bQuiet)
 {
 	UDynamicMeshComponent* Component = GetLayerComponent(Layer);
 	if (Component == nullptr)
@@ -73,7 +73,7 @@ int32 URoadSurfacePresenter::RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int3
 
 	const int32 Count = BuildFn(OutBuffers);
 
-	FDynamicMeshSink Sink(Component, Material, bUseConstantColour, nullptr, bQuiet);
+	FDynamicMeshSink Sink(Component, Material, bUseConstantColour, MaterialSet, bQuiet);
 	Sink.Accept(OutBuffers);
 	Component->SetVisibility(Count > 0);
 	return Count;
@@ -184,6 +184,32 @@ const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfa
 	return EffectiveSet;
 }
 
+const URoadMaterialSet* URoadSurfacePresenter::ApronMaterialSet(const FSurfaceSettings& Settings)
+{
+	// RE-ASKED, not cached from the road pass: EffectiveMaterialSet is a pure function of
+	// Settings, rebuilt in place, so asking it again here costs a few slots and cannot hand
+	// the apron layer a table the road layer did not also get.
+	const URoadMaterialSet* Road = EffectiveMaterialSet(Settings);
+
+	if (ApronSet == nullptr)
+	{
+		ApronSet = NewObject<URoadMaterialSet>(this, NAME_None, RF_Transient);
+	}
+	ApronSet->Slots.Reset();
+
+	// Slot 0, the layer's own - the same fallback the single-material call used to pass.
+	FRoadMaterialSlot Own;
+	Own.Name = TEXT("Apron");
+	Own.Material = Settings.ApronMaterial != nullptr ? Settings.ApronMaterial : Settings.SurfaceMaterial;
+	ApronSet->Slots.Add(Own);
+
+	if (Road != nullptr)
+	{
+		ApronSet->Slots.Append(Road->Slots);
+	}
+	return ApronSet;
+}
+
 UMaterialInstanceDynamic* URoadSurfacePresenter::RunwayMarkingMaterialInstance(UMaterialInterface* SurfaceMaterialBase)
 {
 	// RE-CREATED WHEN THE BASE MOVES, not just when there is none yet (issue #193). "Created
@@ -241,7 +267,7 @@ void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const F
 			LaneDashes = FRoadLaneMarkingBuilder::Build(Network, MarkingZ, OutBuffers, &LaneSegments);
 			return RunwayCount + LaneDashes;
 		},
-		Material != nullptr ? Material : Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers,
+		Material != nullptr ? Material : Settings.SurfaceMaterial, nullptr, Settings.bUseConstantVertexColour, Buffers,
 		Settings.bQuiet);
 	if (Painted == INDEX_NONE)
 	{
@@ -294,7 +320,7 @@ void URoadSurfacePresenter::RebuildRunwayRubber(URoadNetwork& Network, const FSu
 			// rather than leaving the previous build on screen.
 			return bHasMaterial ? FRunwayMarkingBuilder::BuildRubber(Network, RubberZ, OutBuffers, &Census) : 0;
 		},
-		Settings.RubberMaterial, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
+		Settings.RubberMaterial, nullptr, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
 	if (Runways == INDEX_NONE)
 	{
 		return;
@@ -326,65 +352,27 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 	// vertex cannot weld to it. The two surfaces meet; they are not one surface.
 	const double ApronZ = GetApronSurfaceZ(Settings.SurfaceZ, Settings.ApronZOffset);
 
+	// PER SLOT since shared-pavement Task 8: a stand's pad is drawn with its pavement (see
+	// ApronMaterialSet), everything else on slot 0 exactly as before.
+	const URoadMaterialSet* Materials = ApronMaterialSet(Settings);
+
 	FRoadMeshBuffers Buffers;
+	int32 UnresolvedSlots = 0;
 	int32 SlabTriangles = 0;
 	int32 BandTriangles = 0;
 	const int32 Built = RebuildLayer(ESurfaceLayer::Apron,
-		[&Network, ApronZ, &Settings, &SlabTriangles, &BandTriangles](FRoadMeshBuffers& OutBuffers)
+		[&Network, ApronZ, &Settings, Materials, &UnresolvedSlots, &SlabTriangles, &BandTriangles](FRoadMeshBuffers& OutBuffers)
 		{
-			FRoadMeshBuilder Builder(ApronZ, Settings.TexelsPerUnit);
-			int32 Count = 0;
-			for (const FApronSurface& Apron : Network.GetAprons())
-			{
-				if (Apron.bAlive)
-				{
-					Builder.AddApron(Apron);
-					++Count;
-				}
-			}
+			FRoadMeshBuilder Builder(ApronZ, Settings.TexelsPerUnit, Materials);
 
-			// A PLOTTED INSTALLATION'S PAD IS PAVEMENT, and it is the polygon the player
-			// drew - not new geometry. Through the SAME builder and the same triangulator
-			// the aprons above use, on the same component and the same Z, so a depot's pad
-			// and the apron it abuts are one surface rather than two that must agree.
-			//
-			// The pad's painted lines are deliberately NOT here. The white and yellow lines
-			// on the concept sheet mark the truck's path off the pad, and that path is the
-			// pose's lead-in, which the guideline graph already computes and draws. Painting
-			// them into the mesh would be a second evaluator of where the truck drives -
-			// they would agree at one rotation and visibly disagree at every other.
-			//
-			// A DEPOT'S PAD IS PAINTED (2026-09-27, zoomed-out readability): a pale slab inside
-			// a red hazard band, so the plot reads as fuel at max zoom with no UI. ONE BUILDER
-			// PER PAINT, appended below without welding: the slab and band share the inset's
-			// positions, and FRoadMeshBuilder welds by position, first writer wins - one
-			// builder would hand the band's tag to the slab's corners and blend them. A pad
-			// too small for the band keeps the slab alone rather than a band crossing itself.
-			FRoadMeshBuilder SlabBuilder(ApronZ, Settings.TexelsPerUnit);
-			FRoadMeshBuilder BandBuilder(ApronZ, Settings.TexelsPerUnit);
-			for (const FEntityInstance& Entity : Network.GetEntities())
-			{
-				if (!Entity.bAlive || Entity.Outline.Num() < 3)
-				{
-					continue;
-				}
-				++Count;
-				if (!Entity.IsDepot())
-				{
-					Builder.AddApron(Entity.Outline);
-					continue;
-				}
-				TArray<FVector2D> Inner;
-				if (PolygonInset::Inset(Entity.Outline, FRoadMeshBuilder::HazardBandUu, Inner))
-				{
-					SlabBuilder.AddApron(Inner, FRoadMeshBuilder::EApronPaint::FuelSlab);
-					BandBuilder.AddApronRing(Entity.Outline, Inner, FRoadMeshBuilder::EApronPaint::HazardBand);
-				}
-				else
-				{
-					SlabBuilder.AddApron(Entity.Outline, FRoadMeshBuilder::EApronPaint::FuelSlab);
-				}
-			}
+			// Aprons, then every plotted entity's pad - FRoadMeshBuilder::AddNetworkAprons,
+			// where the loop (and its reasons) moved so Airside.Build.StandPadSlots measures it.
+			// A depot's painted slab and band (#358) are built there too and already appended.
+			const int32 Count = Builder.AddNetworkAprons(Network);
+			UnresolvedSlots = Builder.GetUnresolvedApronSlots();
+			SlabTriangles = Builder.GetDepotSlabTriangles();
+			BandTriangles = Builder.GetDepotBandTriangles();
+
 			// A COPY, not the zero-copy const& this held before issue #81: Builder is scoped
 			// to this lambda, and GetBuffers() returns a const& into IT, which stops existing
 			// the moment this lambda returns - MoveTemp cannot turn that into a move either,
@@ -394,17 +382,24 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 			// copy at this one boundary is the price of routing aprons through RebuildLayer
 			// too. One apron rebuild's worth of vertices, not a hot path.
 			OutBuffers = Builder.GetBuffers();
-			OutBuffers.Append(SlabBuilder.GetBuffers());
-			OutBuffers.Append(BandBuilder.GetBuffers());
-			SlabTriangles = SlabBuilder.GetBuffers().Indices.Num() / 3;
-			BandTriangles = BandBuilder.GetBuffers().Indices.Num() / 3;
 			return Count;
 		},
-		Settings.ApronMaterial != nullptr ? Settings.ApronMaterial : Settings.SurfaceMaterial,
+		Settings.ApronMaterial != nullptr ? Settings.ApronMaterial : Settings.SurfaceMaterial, Materials,
 		Settings.bUseConstantApronColour, Buffers, Settings.bQuiet);
 	if (Built == INDEX_NONE)
 	{
 		return;
+	}
+
+	// NOT QUIETED: a pad naming a slot the set lacks draws with the apron material instead of
+	// its own pavement, which looks exactly like a grass stand that was never grass. Every
+	// runway slot is appended by EffectiveMaterialSet, so this should never print.
+	// ENFORCED BY: Airside.Build.StandPadSlots (a grass pad resolves on the actor)
+	if (UnresolvedSlots > 0)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("Aprons: %d pad(s) named a pavement slot the apron set does not declare - drawn with the apron material"),
+			UnresolvedSlots);
 	}
 
 	// Reported rather than inferred. An apron that is built and never seen, and one that
@@ -470,7 +465,7 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 			StandsPainted = FStandMarkingBuilder::Build(Network, MarkingZ, OutBuffers, Envelopes, &StandCensus);
 			return HoldingPositionsPainted + StandsPainted;
 		},
-		Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
+		Settings.SurfaceMaterial, nullptr, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
 	if (Painted == INDEX_NONE)
 	{
 		return;

@@ -152,7 +152,7 @@ int32 URoadEditFacade::AddApron(const TArray<FVector2D>& Outline)
 	// shape drawn the other way - see BuildCost::PolygonAreaSquareMetres, which takes the
 	// absolute area for that reason. Refused before the scope: an abandoned scope drops the
 	// undo snapshot but does not roll the model back.
-	const FBuildQuote Quote = QuoteForApron(Surface.Outline);
+	const FBuildQuote Quote = QuoteForApron(Surface.Outline, {});
 	if (!CanAfford(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("AddApron refused: cannot afford %s"), *Quote.What.ToString());
@@ -202,7 +202,7 @@ bool URoadEditFacade::DeleteApron(int32 ApronIndex)
 	const FApronId Doomed = Network != nullptr ? Network->ApronIdAt(ApronIndex) : FApronId();
 	// Quoted from the outline while the apron is still there to measure.
 	const FApronSurface* Surface = Doomed.IsSet() ? Network->GetApron(Doomed) : nullptr;
-	const FBuildQuote Quote = Surface != nullptr ? QuoteForApron(Surface->Outline) : FBuildQuote();
+	const FBuildQuote Quote = Surface != nullptr ? QuoteForApron(Surface->Outline, {}) : FBuildQuote();
 
 	return DeleteSlot(Doomed.IsSet(), TEXT("delete apron"),
 		[Doomed](URoadNetwork& Net) { return Net.RemoveApron(Doomed); }, Quote);
@@ -519,7 +519,9 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// CanAfford runs BEFORE Net.PlaceEntity below for the same reason PlaceEntity's own quote
 	// does: an abandoned FRoadEditScope drops the undo SNAPSHOT, not the mutation, so a
 	// refusal after the entity is placed would leave it built and unpaid for.
-	const FBuildQuote Quote = BuildCost::Combine(BuildCost::ForEntity(*Definition), QuoteForApron(Wound));
+	// UNSET PAVEMENT: a depot's plot is not a stand's pad - it quotes at the apron's own rate,
+	// as it did before stands had a pavement.
+	const FBuildQuote Quote = BuildCost::Combine(BuildCost::ForEntity(*Definition), QuoteForApron(Wound, {}));
 	if (!CanAfford(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceEntityInPlot refused: cannot afford %s"),
@@ -622,7 +624,7 @@ namespace
 }
 
 FBuildQuote URoadEditFacade::QuoteStand(const UEntityDefinition& Definition,
-	TArrayView<const FVector2D> Outline) const
+	TArrayView<const FVector2D> Outline, EPavement Pavement) const
 {
 	// THE ONE PLACE THIS QUOTE IS BUILT - fix round 1 on this task's own review: WhyStandRefused's
 	// afford gate and PlaceStandInPlot's charge used to each compute the entity-plus-pad total
@@ -631,10 +633,14 @@ FBuildQuote URoadEditFacade::QuoteStand(const UEntityDefinition& Definition,
 	// free to disagree" shape issue #182 closed for the plot reservation itself, reopened here
 	// in a smaller way. Mirrors PlaceEntityInPlot's own two-quote sum exactly - both now go
 	// through BuildCost::Combine rather than each hand-summing BaseAmount.
-	return BuildCost::Combine(BuildCost::ForEntity(Definition), QuoteForApron(Outline));
+	//
+	// THE PAD'S PAVEMENT on the apron line, since shared-pavement Task 8 - the factor
+	// FBuildLine::Amount applies, so a grass pad is priced at 0.4 of tarmac and the entity line
+	// (the equipment) is untouched.
+	return BuildCost::Combine(BuildCost::ForEntity(Definition), QuoteForApron(Outline, Pavement));
 }
 
-FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) const
+FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const
 {
 	// SELF-CROSSING FIRST, AND GUARDS THE MALFORMED CASE TOO - StandBox::WidthOf/DepthOf
 	// below do not check Outline.Num() themselves (Solve/StandBox.h's own note), and every
@@ -757,8 +763,11 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) co
 	// quote is built - see its own comment for why this used to be a second, drifted copy of
 	// PlaceStandInPlot's own pricing. Winding does not change the quote (BuildCost::ForApron
 	// reasons about area magnitude), so this may be asked of Outline exactly as given.
+	// THE PAVEMENT IS PRICED HERE: the gates above read the outline alone, so every pavement
+	// passes or fails them alike. Turning an aircraft away from a grass pad is stand
+	// admission's job (StandAdmission, Task 9 of this plan), not the build gate's.
 	const UEntityDefinition* Definition = Actor().ResolveStandDefinitionFor(*Letter);
-	const FBuildQuote Quote = QuoteStand(*Definition, Outline);
+	const FBuildQuote Quote = QuoteStand(*Definition, Outline, Pavement);
 	if (!CanAfford(Quote))
 	{
 		return FString::Printf(TEXT("cannot afford %s"), *Quote.What.ToString());
@@ -768,7 +777,7 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline) co
 }
 
 int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
-	FVector2D EntranceA, FVector2D EntranceB)
+	FVector2D EntranceA, FVector2D EntranceB, EPavement Pavement)
 {
 	ARoadNetworkActor& Owner = Actor();
 
@@ -776,7 +785,7 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	// tool's own readout would ask, so a commit here can never approve what the readout just
 	// refused, or the reverse. Asked of Outline BEFORE the CCW correction below, because
 	// every check inside it is winding-independent - see WhyStandRefused's own header.
-	const FString Refusal = WhyStandRefused(Outline);
+	const FString Refusal = WhyStandRefused(Outline, Pavement);
 	if (!Refusal.IsEmpty())
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("PlaceStandInPlot refused: %s"), *Refusal);
@@ -838,7 +847,7 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	// SAME QuoteStand this calls) as its own last gate, but its answer is not carried forward
 	// (it returns a string, not a quote), so the charge itself is computed fresh here, on the
 	// wound outline this call actually places.
-	const FBuildQuote Quote = QuoteStand(*Definition, Wound);
+	const FBuildQuote Quote = QuoteStand(*Definition, Wound, Pavement);
 	if (!CanAfford(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceStandInPlot refused: cannot afford %s"),
@@ -864,6 +873,10 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	// must be the letter it was actually drawn to.
 	Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(*Letter);
 
+	// THE PAD AS PRICED - the same Pavement the quote above charged for, captured onto the
+	// instance so upkeep (BuildCost::DailyUpkeep) and the apron layer's slot read what was paid.
+	Placement.Pavement = Pavement;
+
 	const FEntityInstanceId Placed = Net.PlaceEntity(Placement);
 	if (!Placed.IsSet())
 	{
@@ -880,9 +893,9 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 
 	CommitPurchase(Edit, Quote);
 
-	UE_LOG(LogRoadMesh, Log, TEXT("PlaceStandInPlot: Code %s stand, %.0f x %.0f m"),
+	UE_LOG(LogRoadMesh, Log, TEXT("PlaceStandInPlot: Code %s stand, %.0f x %.0f m, pavement %s"),
 		IcaoCode::ToLetter(*Letter),
-		StandBox::WidthOf(Wound) / 100.0, StandBox::DepthOf(Wound) / 100.0);
+		StandBox::WidthOf(Wound) / 100.0, StandBox::DepthOf(Wound) / 100.0, Pavement::Name(Pavement));
 
 	return Placed.Index;
 }

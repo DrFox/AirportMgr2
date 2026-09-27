@@ -356,7 +356,7 @@ bool FStandMarkingPaintsAfterPlacementTest::RunTest(const FString& Parameters)
 	const FVector2D A(0.0, 1000.0);
 	const FVector2D B(Width, 1000.0);
 	const TArray<FVector2D> Rect = { A, B, FVector2D(Width, 1000.0 + Depth), FVector2D(0.0, 1000.0 + Depth) };
-	const int32 Placed = Target->PlaceStandInPlot(Rect, A, B);
+	const int32 Placed = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 	if (!TestTrue(TEXT("the stand is placed"), Placed != INDEX_NONE)) { return false; }
 
 	const int32 After = Actor->GetPresenter()->HoldingPaintTriangleCountForTest();

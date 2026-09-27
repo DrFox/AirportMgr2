@@ -4,13 +4,21 @@
 #include "Build/RoadLaneMarkingBuilder.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Components/DynamicMeshComponent.h"
+#include "DynamicMesh/DynamicMesh3.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
+#include "Entities/EntityDefinition.h"
+#include "Materials/Material.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
 #include "Model/RunwayFacts.h"
 #include "Present/RoadNetworkActor.h"
+#include "Present/RoadSurfacePresenter.h"
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
+#include "StandFixture.h"
+#include "Testing/AirsideTestWorld.h"
 #include "Tool/RoadDrawTool.h"
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
@@ -563,6 +571,111 @@ bool FRsRoadSurfaceSavedByNameTest::RunTest(const FString& Parameters)
 	if (!OldBytes("ERoadSurface::Tarmac", Tarmac)) { return false; }
 	TestEqual(TEXT("CONTROL: the old tarmac spelling loads as tarmac, so the patched value is what is read"),
 		Load(Tarmac, EPavement::Grass), EPavement::Tarmac);
+	return true;
+}
+
+/**
+ * A STAND'S PAD IS DRAWN WITH ITS PAVEMENT (shared-pavement Task 8, Step 7): a grass pad's
+ * triangles carry the grass runway's slot - the one SurfaceSlotFor gives a grass road, so a
+ * grass stand beside a grass taxiway is one field - and a tarmac pad's and a bare apron's carry
+ * slot 0, the apron layer's own material, exactly as before stands had a pavement.
+ *
+ * TWO LEVELS. The builder half measures the rule on FRoadMeshBuilder::AddNetworkAprons, the
+ * loop the presenter runs; the actor half measures the WIRING - that the apron component was
+ * handed a material per slot and the grass pad's id resolves to the same material the road
+ * layer's grass slot has, not the floor checker a UDynamicMeshComponent shows for a missing one.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRsStandPadSlotsTest,
+	"Airside.Build.StandPadSlots",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRsStandPadSlotsTest::RunTest(const FString& Parameters)
+{
+	const FName GrassName = URoadMaterialSet::RunwaySlotName(EPavement::Grass);
+
+	// --- 1. THE BUILDER: each pad takes its own pavement's slot -------------------------------
+	{
+		URoadMaterialSet* Set = URoadMaterialSet::MakeTransient({
+			TEXT("Apron"),
+			URoadMaterialSet::RunwaySlotName(EPavement::Grass),
+			URoadMaterialSet::RunwaySlotName(EPavement::Tarmac),
+			URoadMaterialSet::RunwaySlotName(EPavement::Concrete) });
+		const int32 GrassSlot = Set->IndexOf(GrassName);
+		if (!TestTrue(TEXT("the premise: grass is not slot 0"), GrassSlot > 0)) { return false; }
+
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		UEntityDefinition* Def = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
+		auto PlacePad = [&](double X, EPavement P)
+		{
+			const FEntityInstanceId Id = ServiceLinkFixture::PlaceStand(*Net, *Def, FVector2D(X, 0.0), 0.0);
+			FRoadNetworkTestAccess Access(*Net);
+			Access.SetEntityOutlineForTest(Id, { {X,0}, {X + 5000,0}, {X + 5000,3950}, {X,3950} });
+			Access.SetEntityPavementForTest(Id, P);
+		};
+		PlacePad(0.0, EPavement::Grass);        // x in [0, 5000]
+		PlacePad(20000.0, EPavement::Tarmac);   // x in [20000, 25000]
+		FApronSurface Bare;
+		Bare.Outline = { {40000,0}, {45000,0}, {45000,4000}, {40000,4000} };
+		Net->AddApron(MoveTemp(Bare));          // x in [40000, 45000]
+
+		FRoadMeshBuilder Builder(10.0, 512.0, Set);
+		TestEqual(TEXT("two pads and an apron are built"), Builder.AddNetworkAprons(*Net), 3);
+
+		TSet<int32> GrassPad, TarmacPad, BareApron;
+		const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
+		for (int32 Triangle = 0; Triangle * 3 + 2 < Buffers.Indices.Num(); ++Triangle)
+		{
+			const double X = (Buffers.Positions[Buffers.Indices[Triangle * 3]].X
+				+ Buffers.Positions[Buffers.Indices[Triangle * 3 + 1]].X
+				+ Buffers.Positions[Buffers.Indices[Triangle * 3 + 2]].X) / 3.0;
+			const int32 Id = Buffers.MaterialIDs.IsValidIndex(Triangle) ? Buffers.MaterialIDs[Triangle] : -1;
+			(X < 10000.0 ? GrassPad : X < 30000.0 ? TarmacPad : BareApron).Add(Id);
+		}
+		TestTrue(TEXT("a grass pad's triangles all carry the grass slot"),
+			GrassPad.Num() == 1 && GrassPad.Contains(GrassSlot));
+		TestTrue(TEXT("a tarmac pad's carry slot 0, the apron material it always had"),
+			TarmacPad.Num() == 1 && TarmacPad.Contains(0));
+		TestTrue(TEXT("and so does a bare apron"), BareApron.Num() == 1 && BareApron.Contains(0));
+	}
+
+	// --- 2. THE ACTOR: the apron component resolves every slot it was handed ---------------
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	UMaterialInterface* ApronMat = UMaterial::GetDefaultMaterial(MD_PostProcess);
+	Actor->ApronMaterial = ApronMat;
+	Actor->ClearNetwork();
+
+	IRoadEditTarget* Target = Actor;
+	const TArray<FVector2D> Pad = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+	if (!TestTrue(TEXT("a grass B stand is placed"),
+		Target->PlaceStandInPlot(Pad, Pad[0], Pad[1], EPavement::Grass) != INDEX_NONE)) { return false; }
+	Actor->RebuildMesh();
+
+	URoadSurfacePresenter* Presenter = Actor->GetPresenter();
+	UDynamicMeshComponent* Apron = Presenter != nullptr ? Presenter->GetLayerComponentForTest(ESurfaceLayer::Apron) : nullptr;
+	const URoadMaterialSet* Road = Presenter != nullptr ? Presenter->EffectiveMaterialSetForTest() : nullptr;
+	if (!TestNotNull(TEXT("an apron component"), Apron) || !TestNotNull(TEXT("a road material set"), Road)) { return false; }
+
+	const UE::Geometry::FDynamicMesh3& Mesh = Apron->GetDynamicMesh()->GetMeshRef();
+	const UE::Geometry::FDynamicMeshMaterialAttribute* Ids =
+		Mesh.HasAttributes() ? Mesh.Attributes()->GetMaterialID() : nullptr;
+	if (!TestNotNull(TEXT("the apron mesh carries material ids"), Ids)) { return false; }
+	TSet<int32> Seen;
+	for (const int32 Tri : Mesh.TriangleIndicesItr()) { Seen.Add(Ids->GetValue(Tri)); }
+	if (!TestEqual(TEXT("the grass pad is one slot"), Seen.Num(), 1)) { return false; }
+	const int32 PadId = *Seen.CreateConstIterator();
+
+	TArray<UMaterialInterface*> RoadMaterials;
+	Road->ResolveMaterials(RoadMaterials);
+	const int32 RoadGrass = Road->IndexOf(GrassName);
+	if (!TestTrue(TEXT("the road layer has a grass slot"), RoadMaterials.IsValidIndex(RoadGrass))) { return false; }
+	TestTrue(TEXT("the pad is not on slot 0"), PadId != 0);
+	TestEqual(TEXT("the grass pad draws with the road layer's own grass material - one table, not two"),
+		Apron->GetMaterial(PadId), RoadMaterials[RoadGrass]);
+	TestEqual(TEXT("and slot 0 is still the apron material"), Apron->GetMaterial(0), ApronMat);
 	return true;
 }
 

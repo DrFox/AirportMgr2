@@ -1,11 +1,13 @@
 #include "Tool/StandPlotTool.h"
 
+#include "AirsideLog.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/RoadGeom.h"
 #include "Solve/StandBox.h"
+#include "Tool/PavementAxis.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
@@ -97,19 +99,41 @@ int32 FStandPlotTool::Place(const FToolContext& Context, const TArray<FVector2D>
 {
 	// THE SAME RECTANGLE THE GHOST DREW, entrance edge 0->1 as StandBox reads it. The facade
 	// asks WhyStandRefused again and derives the pose from the letter the box reads as - the
-	// tool states the ground, never the pose.
-	return Context.Target->PlaceStandInPlot(Outline, Outline[0], Outline[1]);
+	// tool states the ground, never the pose. The PAVEMENT is the tool's to state - the row's
+	// pick - and the facade prices and captures exactly that.
+	return Context.Target->PlaceStandInPlot(Outline, Outline[0], Outline[1], Pavement);
+}
+
+void FStandPlotTool::GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const
+{
+	// ALL FOUR (an empty list), as the runway's row - see this function's header.
+	Pavement::AppendAxis(Out, Pavement, {});
+}
+
+bool FStandPlotTool::SelectVariant(const FToolContext& Context, int32 Axis, int32 Option)
+{
+	// AN INDEX INTO THE OFFERED LIST, never into the enum - the row AppendAxis built, the same
+	// mapping FRunwayTool::SelectVariant makes.
+	const TArray<EPavement> Offered = Pavement::Offered({});
+	if (Axis != 0 || !Offered.IsValidIndex(Option))
+	{
+		return false;
+	}
+	Pavement = Offered[Option];
+	UE_LOG(LogAirside, Log, TEXT("Stand surface -> %s"), Pavement::Name(Pavement));
+	return true;
 }
 
 FString FStandPlotTool::RefusalFor(const FToolContext& Context, TConstArrayView<FVector2D> Shown) const
 {
-	if (RefusalMemo.Matches(Shown))
+	// PAVEMENT IS PART OF THE KEY - see RefusalMemo's own comment.
+	if (RefusalMemo.Matches(Shown) && RefusalMemo.Payload.Pavement == Pavement)
 	{
-		return RefusalMemo.Payload;
+		return RefusalMemo.Payload.Why;
 	}
 
-	const FString Why = Context.Target != nullptr ? Context.Target->WhyStandRefused(Shown) : FString();
-	RefusalMemo.Store(Shown, Why);
+	const FString Why = Context.Target != nullptr ? Context.Target->WhyStandRefused(Shown, Pavement) : FString();
+	RefusalMemo.Store(Shown, FRefusalPayload{ Pavement, Why });
 
 	// FOR TESTS ONLY, and only on the path that actually paid for the ask - see
 	// GetRefusalCountForTest.

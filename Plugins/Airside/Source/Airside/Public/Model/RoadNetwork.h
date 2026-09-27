@@ -1054,6 +1054,11 @@ struct AIRSIDE_API FRoadNetworkTestAccess
 	 *  draw one. False for a dead entity. */
 	bool SetEntityOutlineForTest(FEntityInstanceId Entity, TArray<FVector2D> Outline);
 
+	/** Write Pavement directly onto an already-placed entity - a stand's pad upkeep and its
+	 *  apron-layer slot measured without the stand tool (Airside.Build.BuildCostStandPadUpkeepByArea,
+	 *  Airside.Build.StandPadSlots). False for a dead entity. */
+	bool SetEntityPavementForTest(FEntityInstanceId Entity, EPavement Pavement);
+
 private:
 	URoadNetwork& Network;
 };

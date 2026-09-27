@@ -1135,6 +1135,17 @@ bool FRoadNetworkTestAccess::SetEntityOutlineForTest(FEntityInstanceId Entity, T
 	return true;
 }
 
+bool FRoadNetworkTestAccess::SetEntityPavementForTest(FEntityInstanceId Entity, EPavement Pavement)
+{
+	FEntityInstance* Found = Network.GetEntityMutable(Entity);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->Pavement = Pavement;
+	return true;
+}
+
 void URoadNetwork::PruneHoldingPositionMarks()
 {
 	HoldingPositionMarks.RemoveAll([this](const FHoldingPositionMark& Mark)
@@ -1440,6 +1451,7 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, c
 	Instance.Heading = Placement.Heading;
 	Instance.Definition = Placement.Definition;
 	Instance.DesignWingspan = Placement.DesignWingspan;
+	Instance.Pavement = Placement.Pavement;
 
 	// Captured for the same Model/-must-not-see-Entities/ reason as DesignWingspan, and read
 	// by FAnchorLink to decide which class of guideline the pose's lead-in may join.

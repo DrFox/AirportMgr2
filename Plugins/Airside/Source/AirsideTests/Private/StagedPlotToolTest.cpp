@@ -144,7 +144,7 @@ namespace StagedPlotSeamFixture
 		 *  Committable false for an unrelated reason before Place() is ever asked. Empty here
 		 *  says the shape itself is fine, so the forced PlaceStandInPlot refusal below is the
 		 *  ONLY reason the commit fails. */
-		virtual FString WhyStandRefused(TArrayView<const FVector2D>) const override { return FString(); }
+		virtual FString WhyStandRefused(TArrayView<const FVector2D>, EPavement) const override { return FString(); }
 	};
 }
 

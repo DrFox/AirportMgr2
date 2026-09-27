@@ -392,9 +392,15 @@ private:
 	 * function constructs, since every caller already has it on hand in its own Settings and
 	 * passing it through here is one parameter rather than a sink built at each of the four
 	 * call sites instead of inside this shared one.
+	 *
+	 * MaterialSet, when set, skins the layer per material id and Material is unused, exactly
+	 * FDynamicMeshSink's own precedence - only the apron layer passes one (ApronMaterialSet),
+	 * since a stand's pad has a pavement (shared-pavement Task 8). Null is the single-material
+	 * layer every other caller has always been. No default: each call site says which it is.
 	 */
 	int32 RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int32(FRoadMeshBuffers&)> BuildFn,
-		UMaterialInterface* Material, bool bUseConstantColour, FRoadMeshBuffers& OutBuffers, bool bQuiet);
+		UMaterialInterface* Material, const URoadMaterialSet* MaterialSet, bool bUseConstantColour,
+		FRoadMeshBuffers& OutBuffers, bool bQuiet);
 
 	/** Half a unit above the road, so paint wins the depth test against the pavement it lies
 	 *  on - shared by RebuildMarkings and RebuildRunwayMarkings, which used to compute this
@@ -462,6 +468,18 @@ private:
 	 */
 	const URoadMaterialSet* EffectiveMaterialSet(const FSurfaceSettings& Settings);
 
+	/**
+	 * The apron layer's set: slot 0 is the layer's own material (ApronMaterial, else
+	 * SurfaceMaterial - what the layer has always drawn with), FOLLOWED BY every slot of
+	 * EffectiveMaterialSet unchanged. So a tarmac pad or bare apron (FRoadMeshBuilder::AddApron's
+	 * NAME_None, id 0) looks as it always did, and a grass pad's slot name resolves to the SAME
+	 * grass material the road layer's grass slot has - one material table, prefixed, not a
+	 * second one that could bind grass differently. Every slot resolves to a material
+	 * (URoadMaterialSet::ResolveMaterials fills a null), so no pad draws the floor checker.
+	 * ENFORCED BY: Airside.Build.StandPadSlots
+	 */
+	const URoadMaterialSet* ApronMaterialSet(const FSurfaceSettings& Settings);
+
 	/** The runway paint's material instance: SurfaceMaterial with MarkingColor white. Cached like GhostMID. */
 	UMaterialInstanceDynamic* RunwayMarkingMaterialInstance(UMaterialInterface* SurfaceMaterialBase);
 
@@ -490,6 +508,9 @@ private:
 
 	/** See EffectiveMaterialSet. Transient: composed from resolved settings on every rebuild. */
 	UPROPERTY(Transient) TObjectPtr<URoadMaterialSet> EffectiveSet;
+
+	/** See ApronMaterialSet. Transient for EffectiveSet's reason. */
+	UPROPERTY(Transient) TObjectPtr<URoadMaterialSet> ApronSet;
 
 	/** See RunwayMarkingMaterialInstance. */
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> RunwayMarkingMID;

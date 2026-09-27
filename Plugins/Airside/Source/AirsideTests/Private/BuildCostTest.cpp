@@ -5,7 +5,9 @@
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Profiles/RoadProfile.h"
+#include "Model/RoadNetwork.h"
 #include "Solve/IcaoCode.h"
+#include "StandFixture.h"
 #include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -195,6 +197,44 @@ bool FBuildCostUpkeepUsesBuildFactorTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("grass runway upkeep is 0.4 of tarmac"), UpkeepOf(true, EPavement::Grass), 0.4 * UpkeepOf(true, EPavement::Tarmac), 1e-6);
 	TestEqual(TEXT("grass taxiway upkeep is 0.4 of tarmac"), UpkeepOf(false, EPavement::Grass), 0.4 * UpkeepOf(false, EPavement::Tarmac), 1e-6);
 	TestTrue(TEXT("and upkeep is not zero, or the ratio proves nothing"), UpkeepOf(true, EPavement::Tarmac) > 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildCostStandPadUpkeepByAreaTest,
+	"Airside.Build.BuildCostStandPadUpkeepByArea",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildCostStandPadUpkeepByAreaTest::RunTest(const FString& Parameters)
+{
+	// A STAND'S GROUND IS BILLED BY AREA AND PAVEMENT (user, 2026-09-27) - before, only its
+	// definition's flat UpkeepPerDay, so a grass stand was cheaper to build and the same to own.
+	auto PadUpkeep = [](double Depth, EPavement P)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		UEntityDefinition* Def = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
+		Def->UpkeepPerDay = 0.0;   // isolate the pad's term
+		const FEntityInstanceId Id = ServiceLinkFixture::PlaceStand(*Net, *Def, FVector2D::ZeroVector, 0.0);
+		FRoadNetworkTestAccess Access(*Net);
+		Access.SetEntityOutlineForTest(Id, { {0,0}, {5000,0}, {5000,Depth}, {0,Depth} });
+		Access.SetEntityPavementForTest(Id, P);
+		return BuildCost::DailyUpkeep(*Net, 1.0);
+	};
+	TestEqual(TEXT("grass pad upkeep is 0.4 of tarmac"), PadUpkeep(3950.0, EPavement::Grass), 0.4 * PadUpkeep(3950.0, EPavement::Tarmac), 1e-6);
+	TestEqual(TEXT("double the area, double the upkeep"), PadUpkeep(7900.0, EPavement::Tarmac), 2.0 * PadUpkeep(3950.0, EPavement::Tarmac), 1e-6);
+	TestEqual(TEXT("1975 m2 at rate 1 and factor 1"), PadUpkeep(3950.0, EPavement::Tarmac), 50.0 * 39.5, 1e-6);
+
+	// A DEPOT'S PLOT IS NOT A STAND'S PAD - its ground is billed through its kit's own upkeep,
+	// so the same outline on a depot adds nothing here.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+		Depot->UpkeepPerDay = 0.0;
+		const FEntityInstanceId Id = Net->PlaceEntity(Depot, Depot->Anchors, FVector2D::ZeroVector, 0.0,
+			0.0, Depot->PoseRole, Depot->Trucks);
+		FRoadNetworkTestAccess(*Net).SetEntityOutlineForTest(Id, { {0,0}, {5000,0}, {5000,3950}, {0,3950} });
+		TestEqual(TEXT("a depot's plot bills no pad upkeep"), BuildCost::DailyUpkeep(*Net, 1.0), 0.0, 1e-9);
+	}
 	return true;
 }
 

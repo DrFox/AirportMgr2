@@ -241,13 +241,15 @@ FBuildQuote URoadEditFacade::QuoteForAllPavement() const
 	return Total;
 }
 
-FBuildQuote URoadEditFacade::QuoteForApron(TConstArrayView<FVector2D> Outline) const
+FBuildQuote URoadEditFacade::QuoteForApron(TConstArrayView<FVector2D> Outline,
+	TOptional<EPavement> Pavement) const
 {
 	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
-	// NO PAVEMENT YET: FApronSurface carries no EPavement of its own (RoadApron.h's own
-	// comment) - an apron always quotes at its authored rate until a later task gives it one.
+	// NO PAVEMENT for a bare apron: FApronSurface carries no EPavement of its own (RoadApron.h's
+	// own comment), so its callers pass it unset and it quotes at its authored rate. A stand's
+	// pad passes its own (QuoteStand) since shared-pavement Task 8.
 	return BuildCost::ForApron(Outline,
-		Settings != nullptr ? Settings->ApronCostPerSquareMetre : 0.0, {});
+		Settings != nullptr ? Settings->ApronCostPerSquareMetre : 0.0, Pavement);
 }
 
 void URoadEditFacade::CommitPurchase(FRoadEditScope& Edit, const FBuildQuote& Quote)
