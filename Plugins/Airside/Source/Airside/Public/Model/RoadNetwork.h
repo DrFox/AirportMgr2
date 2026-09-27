@@ -740,10 +740,36 @@ public:
 	 * A PURE POINTER WRITE, which is all Model/ may do with a UEntityDefinition (forward
 	 * declared; never dereferenced here). ARoadNetworkActor::RebindStandDefinitions is the
 	 * caller: a drawn D/E/F stand's definition is never saved, so every load re-points it.
-	 * Anchors and trucks are NOT re-captured - a rebind lands on the definition the stand was
-	 * committed from, whose anchors the saved ResolvedAnchors already are.
+	 * Anchors and trucks are NOT re-captured here - a rebind that lands on the definition the
+	 * stand was committed from finds its anchors already in the saved ResolvedAnchors. One that
+	 * lands on ANOTHER letter's (an old save whose outline reads differently now) re-captures
+	 * them through RePoseStand, below.
 	 */
 	bool SetEntityDefinition(FEntityInstanceId Entity, UEntityDefinition* Definition);
+
+	/**
+	 * Move a STAND to a new stop-mark pose and re-capture its anchors from Anchors, in place.
+	 * False, and nothing changed, for a dead entity or one that is not a stand.
+	 *
+	 * FOR AN OLD SAVE (spec 2026-09-26 §1; final review 2026-09-27). A stand keeps its outline
+	 * across a change of geometry, and its pose is re-derived from that outline on load -
+	 * UStandDefinitionCache::RebindStandDefinitions decides the pose with StandBox::PoseFor and
+	 * calls this. Its anchors move with it and are re-captured whole: the outline may read as a
+	 * different letter now, and that letter's fixtures sit elsewhere in the stand.
+	 *
+	 * THE HANDLES: PoseNode is KEPT and moved (FindEntityIndexByPoseNode and anything holding the
+	 * stand's pose stay valid); each old anchor node is REMOVED, with every edge on it, and a new
+	 * one added per anchor - the edges were a lead-in or a bay leg, derived, and the rebuild that
+	 * follows a rebind lays them again off the new pose. Edges on the pose node are removed for
+	 * the same reason: a lead-in drawn to where the stop mark was is a line to nowhere.
+	 *
+	 * Values, not a UEntityDefinition, so Model/ never reads the Entities layer - see PlaceEntity.
+	 * A stand's pose node sits ON its stop mark (no FEntityPlacement::PoseSetbackUu - that is a
+	 * depot's), which is why this refuses anything but a stand.
+	 * ENFORCED BY: Airside.Present.StandPlot.OldPoseRederivedOnLoad
+	 */
+	bool RePoseStand(FEntityInstanceId Entity, const FVector2D& Position, double Heading,
+		TConstArrayView<FEntityAnchor> Anchors);
 
 	// --- Narrow mutators replacing the raw *Mutable accessors (#191) -------------------
 	// GetSegmentMutable, GetGuidelineEdgeMutable and GetGuidelineNodeMutable used to be

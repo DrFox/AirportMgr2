@@ -2,6 +2,8 @@
 #include "AirsideTestFixtures.h"
 #include "Build/AnchorLink.h"
 #include "Build/AnchorLinkFinder.h"
+#include "Build/StandLayoutBuild.h"
+#include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
@@ -10,6 +12,7 @@
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Solve/IcaoCode.h"
+#include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 #include "Solve/StandBox.h"
 #include "Tool/RoadEditTarget.h"
@@ -747,6 +750,116 @@ bool FStandPlotRebindsAfterLevelLoadTest::RunTest(const FString& Parameters)
 	const FGuidelineNode* Pose = Actor->Network->GetGuidelineNode(Loaded->PoseNode);
 	TestTrue(TEXT("BEFORE the rebuild - its lead-in is joined, so the Inspector says reachable"),
 		Pose != nullptr && Pose->Incident.Num() > 0);
+	return true;
+}
+
+/**
+ * AN OLD SAVE'S STAND IS RE-POSED ON LOAD (spec §1; final review, 2026-09-27). A Code C stand
+ * drawn at the old 55 m floor, saved with the stop mark where that geometry put it (Depth -
+ * MaxNoseFwd in from the entrance), now reads as Code B: the depth floors rose on 2026-09-26. The
+ * rebind re-pointed it at B's definition but left the old pose, so B's bays - laid off the pose -
+ * sat 1100 uu beyond the drawn far edge. What a load must do is re-derive the pose from the
+ * outline with PoseFor, for the letter the outline reads as NOW.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotOldPoseRederivedOnLoadTest,
+	"Airside.Present.StandPlot.OldPoseRederivedOnLoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotOldPoseRederivedOnLoadTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	LayTaxiway(Actor, 0.0);
+
+	// THE OLD SAVE: C's width, the old 55 m depth, entrance on y = 1000 dragged +Y.
+	constexpr double EntranceY = 1000.0;
+	constexpr double Width = 5900.0;
+	constexpr double OldDepth = 5500.0;
+	const TArray<FVector2D> Outline = {
+		FVector2D(0.0, EntranceY), FVector2D(Width, EntranceY),
+		FVector2D(Width, EntranceY + OldDepth), FVector2D(0.0, EntranceY + OldDepth) };
+	if (!TestEqual(TEXT("the premise: the old 55 m C box reads as Code B now"),
+			StandBox::LetterOf(Outline).Get(EIcaoCode::F), EIcaoCode::B))
+	{
+		return false;
+	}
+
+	UEntityDefinition* OldDefinition = Actor->ResolveStandDefinitionFor(EIcaoCode::C);
+	if (!TestNotNull(TEXT("Code C has a definition"), OldDefinition)) { return false; }
+	const FVector2D Facing(0.0, 1.0);
+	FEntityPlacement Placement;
+	Placement.Definition = OldDefinition;
+	Placement.Anchors = OldDefinition->Anchors;
+	// THE OLD STOP MARK, the nose MaxNoseFwd short of the far edge - where the pre-2026-09-26
+	// PoseFor put it.
+	Placement.Position = FVector2D(0.5 * Width, EntranceY)
+		+ Facing * (OldDepth - IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C).MaxNoseFwd);
+	Placement.Heading = RoadGeom::Bearing(Facing);
+	Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(EIcaoCode::C);
+	Placement.PoseRole = OldDefinition->PoseRole;
+	Placement.Trucks = OldDefinition->Trucks;
+	Placement.Outline = Outline;
+	const FEntityInstanceId Id = Actor->Network->PlaceEntity(Placement);
+	if (!TestTrue(TEXT("the old stand is in the model"), Id.IsSet())) { return false; }
+
+	// THE LOAD PATH - see RebindsAfterLevelLoad.
+	Actor->ReregisterAllComponents();
+
+	const FEntityInstance* Loaded = Actor->Network->GetEntity(Id);
+	if (!TestNotNull(TEXT("the stand is still there"), Loaded)) { return false; }
+	UEntityDefinition* BDefinition = Actor->ResolveStandDefinitionFor(EIcaoCode::B);
+	TestTrue(TEXT("rebound to Code B's definition"), Loaded->Definition.Get() == BDefinition && BDefinition != nullptr);
+
+	const StandBox::FStandPose Expected = StandBox::PoseFor(Outline[0], Outline[1],
+		PlotYard::InwardOf(Outline, Outline[0], Outline[1]), EIcaoCode::B,
+		UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::B));
+	TestTrue(*FString::Printf(TEXT("the pose is B's PoseFor off the outline: (%.1f, %.1f), expected (%.1f, %.1f)"),
+			Loaded->Position.X, Loaded->Position.Y, Expected.Position.X, Expected.Position.Y),
+		Loaded->Position.Equals(Expected.Position, 0.01));
+	TestTrue(TEXT("facing unchanged - the outline did not turn"),
+		FMath::IsNearlyEqual(Loaded->Heading, RoadGeom::Bearing(Expected.Facing), 1.0e-9));
+
+	const FGuidelineNode* PoseNode = Actor->Network->GetGuidelineNode(Loaded->PoseNode);
+	TestTrue(TEXT("the pose node moved with it - it is what an arrival is routed to"),
+		PoseNode != nullptr && PoseNode->Position.Equals(Loaded->Position, 0.01));
+
+	// B'S ANCHORS, at B's offsets from the new pose: the rebind re-captures them, because C's sit
+	// where C's wing band put them.
+	if (BDefinition != nullptr)
+	{
+		const double Cos = FMath::Cos(Loaded->Heading);
+		const double Sin = FMath::Sin(Loaded->Heading);
+		for (const FEntityAnchor& Anchor : BDefinition->Anchors)
+		{
+			const FVector2D World(
+				Loaded->Position.X + Anchor.LocalPosition.X * Cos - Anchor.LocalPosition.Y * Sin,
+				Loaded->Position.Y + Anchor.LocalPosition.X * Sin + Anchor.LocalPosition.Y * Cos);
+			const FGuidelineNode* Node = Actor->Network->GetAnchorNode(Id, Anchor.Id);
+			TestTrue(*FString::Printf(TEXT("anchor '%s' sits at B's offset (%.0f, %.0f)"),
+					*Anchor.Id.ToString(), World.X, World.Y),
+				Node != nullptr && Node->Position.Equals(World, 0.01));
+		}
+	}
+
+	// AND THE BAYS THE REBUILD LAID ARE INSIDE WHAT WAS DRAWN - the symptom the player saw.
+	const FStandLayoutBuild::FResult Built = FStandLayoutBuild::Build(*Actor->Network);
+	const TArray<FGuidelineNodeId>* Entries = Built.Entries.Find(Id);
+	if (TestTrue(TEXT("the stand's bays are laid"), Entries != nullptr && Entries->Num() > 0))
+	{
+		for (const FGuidelineNodeId& Entry : *Entries)
+		{
+			const FGuidelineNode* Node = Actor->Network->GetGuidelineNode(Entry);
+			TestTrue(*FString::Printf(TEXT("entry %d at (%.0f, %.0f) is inside the drawn outline"),
+					Entry.Index, Node != nullptr ? Node->Position.X : 0.0, Node != nullptr ? Node->Position.Y : 0.0),
+				Node != nullptr && RoadGeom::PointInPolygon(Outline, Node->Position));
+		}
+	}
 	return true;
 }
 

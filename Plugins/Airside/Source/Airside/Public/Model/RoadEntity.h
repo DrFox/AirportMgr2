@@ -130,6 +130,24 @@ struct AIRSIDE_API FEntityAnchor
 	UPROPERTY(EditAnywhere) double LocalHeading = 0.0;
 
 	UPROPERTY(EditAnywhere) EServiceRole Role = EServiceRole::Aircraft;
+
+	/**
+	 * Where this anchor lands for an entity posed at Position, Heading: LocalPosition rotated by
+	 * the heading - which is what makes an anchor mean "off the aircraft's left wing" rather than
+	 * "somewhere north of here" - then offset. ONE RULE (2026-09-27) for placement
+	 * (URoadNetwork::PlaceEntity), a re-pose on load (URoadNetwork::RePoseStand) and the check that
+	 * decides whether a load needs one (UStandDefinitionCache::RebindStandDefinitions): three
+	 * copies of the rotation would put a stand's fixtures somewhere its placement never did the
+	 * day one of them drifted.
+	 */
+	FVector2D WorldAt(const FVector2D& Position, double Heading) const
+	{
+		const double Cos = FMath::Cos(Heading);
+		const double Sin = FMath::Sin(Heading);
+		return FVector2D(
+			Position.X + LocalPosition.X * Cos - LocalPosition.Y * Sin,
+			Position.Y + LocalPosition.X * Sin + LocalPosition.Y * Cos);
+	}
 };
 
 /**

@@ -93,6 +93,15 @@ public:
 	 * SetEntityDefinition, a pure pointer write.
 	 * ENFORCED BY: AirportOps.Present.RuntimeLoad.DrawnStandSurvivesLoad,
 	 * Airside.Present.StandPlot.RebindsAfterLevelLoad.
+	 *
+	 * AND THE POSE IS RE-DERIVED FROM THE OUTLINE (spec §1, since 2026-09-27): StandBox::PoseFor
+	 * for the letter the outline reads as now, at the fleet-resolved envelope - the rule
+	 * PlaceStandInPlot commits by. A stand whose stop mark or anchors disagree with that, beyond
+	 * a centimetre, is moved through URoadNetwork::RePoseStand and logged by name; a save made
+	 * before the 2026-09-26 geometry change is the case (its stop mark sat Depth - MaxNoseFwd in
+	 * from the entrance), and a stand placed today re-derives its own pose and is left alone. Not
+	 * counted in the return, which stays "how many re-pointed".
+	 * ENFORCED BY: Airside.Present.StandPlot.OldPoseRederivedOnLoad
 	 */
 	int32 RebindStandDefinitions(URoadNetwork* Network);
 
