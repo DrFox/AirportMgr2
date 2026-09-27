@@ -457,11 +457,44 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		// painted line's own.
 		const double StandRadius = LeadInSizingFor(*Instance).Radius;
 
+		// THE DRAWN FAR EDGE, off the outline the player drew (final review, 2026-09-27) - the
+		// edge the plot tool's ghost marks ServiceEdge and invites a road along. Measured along
+		// the stand's facing from its stop mark, as the outline's furthest and nearest corners,
+		// so no winding or corner order is assumed.
+		//
+		// TWO THINGS HANG OFF IT. The half-plane's boundary (FPendingLink::HalfPlaneOffset): a
+		// road must lie beyond this line, not merely ahead of the entry, or a road alongside is
+		// decided by rounding. And the reach: the bays are the TEMPLATE's, a corner run inside
+		// the template's front, so a stand drawn deeper than its template puts that much more
+		// stand between every entry and the road at its drawn edge - ServiceLinkRadius grows by
+		// exactly the extra depth (controller ruling: drawn depth is not capped).
+		//
+		// NO OUTLINE, NO EXTRA: a stand is given one at placement (GiveStandOutlineIfMissing),
+		// so this is a guard, and the boundary falls back to the entry itself.
+		const FVector2D StandFacing(FMath::Cos(Instance->Heading), FMath::Sin(Instance->Heading));
+		// ONE LINE, BOTH NAMES (Check-Architecture's is-plotted-not-depot rule): a stand with an
+		// outline - every entry's owner is a stand, but an outline alone never says so.
+		const bool bHasFarEdge = Instance->IsStand() && Instance->IsPlotted();
+		double FarAlong = 0.0;
+		double ExtraDepth = 0.0;
+		if (bHasFarEdge)
+		{
+			double NearAlong = TNumericLimits<double>::Max();
+			FarAlong = -TNumericLimits<double>::Max();
+			for (const FVector2D& Corner : Instance->Outline)
+			{
+				const double Along = FVector2D::DotProduct(Corner - Instance->Position, StandFacing);
+				NearAlong = FMath::Min(NearAlong, Along);
+				FarAlong = FMath::Max(FarAlong, Along);
+			}
+			ExtraDepth = FMath::Max(0.0, (FarAlong - NearAlong) - Instance->Definition->RequiredExtent.Y);
+		}
+
 		// ONE STATEMENT OF WHAT AN ENTRY LINK IS, used by the probe below and by the link
 		// finally emitted. Written twice they could differ, and the probe would then be
 		// measuring something other than the link it decides.
-		auto EntryLink = [&Declared, StandRadius, ServiceLinkRadius, Instance](
-			FGuidelineNodeId NodeId, const FVector2D& At)
+		auto EntryLink = [&Declared, StandRadius, ServiceLinkRadius, Instance, StandFacing, FarAlong,
+			ExtraDepth, bHasFarEdge](FGuidelineNodeId NodeId, const FVector2D& At)
 		{
 			// GroundVehicle, not a ray: a vehicle may genuinely arrive from any side, and the
 			// player has no authored heading to aim at - the same reasoning that governs every
@@ -486,7 +519,19 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 			// tail, on the taxiway side the entrance already opens onto, is refused however close
 			// it is drawn - see FPendingLink::HalfPlane's own comment for why this is a half-plane
 			// and not a second ray.
-			Link.HalfPlane = FVector2D(FMath::Cos(Instance->Heading), FMath::Sin(Instance->Heading));
+			Link.HalfPlane = StandFacing;
+
+			// ITS BOUNDARY AT THE DRAWN FAR EDGE, and the reach grown by the depth drawn past the
+			// template - see FarAlong above. Clamped at zero so an entry is never offered a road
+			// BEHIND itself, which the boundary through the entry always refused.
+			// ENFORCED BY: Airside.Build.StandEntry.SideRoadAlongsideJoinsNothing,
+			// Airside.Build.StandEntry.DrawnDeepStandJoinsItsFarEdge
+			if (bHasFarEdge)
+			{
+				Link.HalfPlaneOffset =
+					FMath::Max(0.0, FarAlong - FVector2D::DotProduct(At - Instance->Position, StandFacing));
+			}
+			Link.Reach += ExtraDepth;
 			return Link;
 		};
 
@@ -502,11 +547,13 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		// because a cycle offered entries on all four sides of a stand, and a road alongside
 		// could be "in reach" of the far ones, whose connectors would then run the whole depth
 		// of the stand across the lane's own crossings. The layout declares entries only where
-		// a road is meant to meet it - all on the aft edge - and the user's ruling of
+		// a road is meant to meet it - all on the far edge since 2026-09-26, the aft edge before
+		// it - and the user's ruling of
 		// 2026-09-17 is that EVERY service bay gets its own way in, so that a vehicle never
 		// threads past a parked one. Refusing all but the nearest is exactly the behaviour that
-		// ruling forbids. What bounds a connector now is ServiceLinkRadius alone, which is the
-		// question actually being asked: is a road within reach of THIS entry.
+		// ruling forbids. What bounds a connector now is ServiceLinkRadius (grown by any depth
+		// drawn past the template, 2026-09-27 - see ExtraDepth above), which is the question
+		// actually being asked: is a road within reach of THIS entry.
 		//
 		// ONE LOOP, NOT TWO, since #177. There used to be a first pass that called Resolve for
 		// EVERY declared node - including one already joined by hand, which this loop's

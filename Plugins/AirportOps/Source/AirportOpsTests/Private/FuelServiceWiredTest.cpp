@@ -73,13 +73,41 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	FGuidelineNodeId TaxiSouth, TaxiNorth, RoadWest, RoadEast;
 	LayFuelLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
 		ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);
-	LayFuelLine(Net, FVector2D(-20000.0, RoadY), FVector2D(20000.0, RoadY),
-		ETraversalClass::GroundVehicle, RoadWest, RoadEast);
 
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
 	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
 	const FEntityInstanceId Stand = Net.PlaceEntity(StandDef, StandDef->Anchors,
 		FVector2D(0.0, 0.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
+
+	// THE ROAD SOUTH, AND A SPUR UP THE STAND'S FAR EDGE - FFuelFixture::LaySouthRoad's shape and
+	// reason (2026-09-27): a road running alongside a stand does not serve it, so the service road
+	// meets the far edge. The spur leaves the road at a node the road shares, so a truck can turn.
+	double FarEdge = -TNumericLimits<double>::Max();
+	for (const FVector2D& Corner : Net.GetEntity(Stand)->Outline)
+	{
+		FarEdge = FMath::Max(FarEdge, Corner.X);
+	}
+	const double SpurX = FarEdge + 420.0;
+	FGuidelineNodeId SpurFoot, SpurHead;
+	LayFuelLine(Net, FVector2D(SpurX, RoadY), FVector2D(SpurX, 10000.0),
+		ETraversalClass::GroundVehicle, SpurFoot, SpurHead);
+	auto Join = [&Net](FGuidelineNodeId A, FGuidelineNodeId B)
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A;
+		Edge.B = B;
+		Edge.Control = (Net.GetGuidelineNode(A)->Position + Net.GetGuidelineNode(B)->Position) * 0.5;
+		Edge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
+		Edge.AllowedTraffic.Add(ETraversalClass::Emergency);
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.Width = 600.0;
+		Edge.bDerived = true;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	};
+	RoadWest = Net.AddGuidelineNode(FVector2D(-20000.0, RoadY));
+	RoadEast = Net.AddGuidelineNode(FVector2D(20000.0, RoadY));
+	Join(RoadWest, SpurFoot);
+	Join(SpurFoot, RoadEast);
 	const FEntityInstanceId Depot = Net.PlaceEntity(DepotDef, DepotDef->Anchors,
 		FVector2D(12000.0, RoadY + 4000.0), UE_DOUBLE_PI * 0.5, 0.0, DepotDef->PoseRole,
 		DepotDef->Trucks);

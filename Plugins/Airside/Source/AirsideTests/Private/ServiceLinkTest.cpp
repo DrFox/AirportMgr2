@@ -7,6 +7,7 @@
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Model/InspectFacts.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -504,14 +505,14 @@ bool FDeepStandFarRoadJoinsTest::RunTest(const FString& Parameters)
 {
 	using namespace ServiceLinkFixture;
 
-	// A DEEPER APRON BETWEEN THE FAR EDGE AND THE ROAD - standing in for a stand DRAWN 3000 uu
-	// past its letter's floor. BuildStandTemplate has no depth to draw one WITH: Depth is
-	// IcaoCode::StandDepthForLetter(Letter) alone, by design (see that function's own header),
-	// with no override a test can reach. So this measures the same claim - the lead-in still
-	// crosses the extra apron to reach a road 400 uu beyond it, rather than binding to the
-	// floor's own far edge - by widening the GAP on the floor stand instead of drawing a deeper
-	// box. 3000 + 400 uu plus the entries' own small inset from the floor's far edge is still
-	// comfortably inside ServiceLinkRadius (6500).
+	// A WIDER GAP BETWEEN A FLOOR STAND'S FAR EDGE AND ITS ROAD - 3000 uu of apron the player
+	// left unpaved, then the road 400 uu beyond it. WEAKER THAN ITS NAME since 2026-09-27: it
+	// was written to stand in for a stand DRAWN deeper than its floor, when no fixture drew one,
+	// and it never could - the far edge here is the floor's, so the half-plane and the reach see
+	// an ordinary stand and a long gap. 3000 + 400 uu plus the entries' own inset from the far
+	// edge is inside ServiceLinkRadius (6500) on distance alone. The DRAWN-deep case, where the
+	// entries sit a whole extra depth inside the drawn far edge, is
+	// Airside.Build.StandEntry.DrawnDeepStandJoinsItsFarEdge below.
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
@@ -923,6 +924,186 @@ namespace ServiceLinkFixture
 		}
 		return GuidelineGeom::TightestRadius(A->Position, Edge->Control, B->Position);
 	}
+}
+
+namespace ServiceLinkFixture
+{
+	/**
+	 * A stand of Letter DRAWN the way the plot tool commits one: stop mark at the origin facing
+	 * +X, its outline StandBox::BoxAt's box for the letter - pushed ExtraDepth further out at the
+	 * far edge, for a stand drawn deeper than its floor. Writes the drawn far edge's x.
+	 *
+	 * THE RESOLVED ENVELOPE, not the floor: PlaceStandInPlot poses a stand with
+	 * UAirsideSettings::ResolveLetterEnvelope and MakeStandTransient lays its template with the
+	 * same, so the outline and the bays agree about where the entrance is. PlaceStand above gives
+	 * every stand a FLOOR Code C box whatever its template, which is not what a drawn A is.
+	 */
+	FEntityInstanceId PlaceDrawnStand(URoadNetwork& Net, UEntityDefinition& Stand, EIcaoCode Letter,
+		double ExtraDepth, double& OutFarEdgeX)
+	{
+		StandBox::FStandPose Pose;
+		FEntityPlacement Placement;
+		Placement.Definition = &Stand;
+		Placement.Anchors = Stand.Anchors;
+		Placement.Position = Pose.Position;
+		Placement.Heading = 0.0;
+		Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(Letter);
+		Placement.PoseRole = Stand.PoseRole;
+		Placement.Trucks = Stand.Trucks;
+		StandBox::BoxAt(Pose, Letter, UAirsideSettings::ResolveLetterEnvelope(Letter), Placement.Outline);
+		// Corners 2 and 3 are the far edge - see BoxAt's own header.
+		Placement.Outline[2].X += ExtraDepth;
+		Placement.Outline[3].X += ExtraDepth;
+		OutFarEdgeX = Placement.Outline[2].X;
+		return Net.PlaceEntity(Placement);
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSideRoadAlongsideJoinsNothingTest,
+	"Airside.Build.StandEntry.SideRoadAlongsideJoinsNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSideRoadAlongsideJoinsNothingTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// A ROAD ALONGSIDE THE STAND, running parallel to its facing and on past the far edge, is not
+	// a road beyond the far edge (final review, 2026-09-27). Its nearest point to every entry is
+	// level with that entry, so the half-plane that used to run through the entry itself decided
+	// it by the sign of a 1e-10 dot product. A and C because they are laid for different design
+	// vehicles (the tow and the truck), so their entries sit different distances in from the edge.
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(Letter);
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		double FarEdgeX = 0.0;
+		const FEntityInstanceId Placed = PlaceDrawnStand(*Net, *Stand, Letter, 0.0, FarEdgeX);
+
+		// 400 uu OUTSIDE THE DRAWN SIDE EDGE, from behind the entrance to well past the far edge -
+		// inside ServiceLinkRadius of every entry, so a refusal here is the half-plane, not the reach.
+		const double SideY = 0.5 * IcaoCode::StandWidthForLetter(Letter) + 400.0;
+		FGuidelineNodeId End;
+		Lay(*Net, FVector2D(-20000.0, SideY), FVector2D(FarEdgeX + 4000.0, SideY),
+			ETraversalClass::GroundVehicle, End);
+
+		// "Service lane at", the stand's own joins-nothing line - see TaxiwaySideRoadDoesNotJoin for
+		// why this and not the shorter text. Proves the half-plane ran rather than nothing looked.
+		AddExpectedError(TEXT("Service lane at"), EAutomationExpectedErrorFlags::Contains, 1);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+		for (const FServiceBay& Bay : Stand->ServiceBays)
+		{
+			TestFalse(*FString::Printf(TEXT("Code %s: '%s' does not join a road alongside"),
+					IcaoCode::ToLetter(Letter), *Bay.AnchorId.ToString()),
+				Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, *Bay.AnchorId.ToString())));
+		}
+		FStandFacts Facts;
+		if (TestTrue(TEXT("the stand describes"), InspectFacts::DescribeStand(nullptr, *Net, Placed.Index, Facts)))
+		{
+			TestFalse(*FString::Printf(TEXT("Code %s with only a side road is not serviceable"), IcaoCode::ToLetter(Letter)),
+				Facts.bServiceable);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFarRoadWinsOverSideRoadTest,
+	"Airside.Build.StandEntry.FarRoadWinsOverSideRoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFarRoadWinsOverSideRoadTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// BOTH ROADS, and the side one NEARER: 100 uu off the side edge against a far road 1500 uu
+	// beyond the far edge. Nearest-wins would take the side road for the entries on its side;
+	// only the far-edge line sends every entry to the far road.
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(Letter);
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		double FarEdgeX = 0.0;
+		const FEntityInstanceId Placed = PlaceDrawnStand(*Net, *Stand, Letter, 0.0, FarEdgeX);
+
+		const double SideY = 0.5 * IcaoCode::StandWidthForLetter(Letter) + 100.0;
+		FGuidelineNodeId End;
+		Lay(*Net, FVector2D(-20000.0, SideY), FVector2D(FarEdgeX + 4000.0, SideY),
+			ETraversalClass::GroundVehicle, End);
+		const double FarRoadX = FarEdgeX + 1500.0;
+		Lay(*Net, FVector2D(FarRoadX, -20000.0), FVector2D(FarRoadX, 20000.0),
+			ETraversalClass::GroundVehicle, End);
+
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+		for (const FServiceBay& Bay : Stand->ServiceBays)
+		{
+			TestTrue(*FString::Printf(TEXT("Code %s: '%s' is joined"), IcaoCode::ToLetter(Letter), *Bay.AnchorId.ToString()),
+				Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, *Bay.AnchorId.ToString())));
+		}
+
+		// WHICH ROAD, off the lead-in as laid: its road end lies beyond the far edge, not beside it.
+		for (const FGuidelineNodeId& Entry : EntriesOf(*Net, Placed))
+		{
+			const TArray<FGuidelineEdgeId> Link = LinkEdgesAt(*Net, Entry);
+			const FGuidelineEdge* Lead = Link.Num() > 0 ? Net->GetGuidelineEdge(Link[0]) : nullptr;
+			const FGuidelineNode* RoadEnd = Lead != nullptr
+				? Net->GetGuidelineNode(Lead->A == Entry ? Lead->B : Lead->A) : nullptr;
+			if (!TestNotNull(*FString::Printf(TEXT("Code %s: entry %d has a lead-in"), IcaoCode::ToLetter(Letter), Entry.Index), RoadEnd))
+			{
+				continue;
+			}
+			TestTrue(*FString::Printf(TEXT("Code %s: entry %d's lead-in ends at (%.0f, %.0f), beyond the far edge x = %.0f"),
+					IcaoCode::ToLetter(Letter), Entry.Index, RoadEnd->Position.X, RoadEnd->Position.Y, FarEdgeX),
+				RoadEnd->Position.X > FarEdgeX);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDrawnDeepStandJoinsItsFarEdgeTest,
+	"Airside.Build.StandEntry.DrawnDeepStandJoinsItsFarEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDrawnDeepStandJoinsItsFarEdgeTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// A STAND DRAWN 80 m DEEPER THAN ITS FLOOR (final review, 2026-09-27). Its bays are the
+	// template's, sitting a corner run inside the TEMPLATE's front - 8000 uu short of the edge the
+	// player drew - and the plot tool invites the road at the drawn edge. With a flat
+	// ServiceLinkRadius (6500) that road was out of reach of every entry. Drawn depth is not
+	// capped (controller ruling): the entry's reach grows by the extra depth instead.
+	constexpr double ExtraDepth = 8000.0;
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(Letter);
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		double FarEdgeX = 0.0;
+		const FEntityInstanceId Placed = PlaceDrawnStand(*Net, *Stand, Letter, ExtraDepth, FarEdgeX);
+
+		const double FarRoadX = FarEdgeX + 400.0;
+		FGuidelineNodeId End;
+		Lay(*Net, FVector2D(FarRoadX, -20000.0), FVector2D(FarRoadX, 20000.0),
+			ETraversalClass::GroundVehicle, End);
+
+		// THE PREMISE, measured: without the grown reach the road is out of it.
+		TestTrue(*FString::Printf(TEXT("Code %s: the road (x = %.0f) is beyond a flat reach of the entries (x = %.0f)"),
+				IcaoCode::ToLetter(Letter), FarRoadX, FarEntryX(*Stand)),
+			FarRoadX - FarEntryX(*Stand) > FAnchorLink::DefaultServiceLinkRadius);
+
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+		for (const FServiceBay& Bay : Stand->ServiceBays)
+		{
+			TestTrue(*FString::Printf(TEXT("Code %s drawn %.0f deep: '%s' joins the road at its drawn far edge"),
+					IcaoCode::ToLetter(Letter), IcaoCode::StandDepthForLetter(Letter) + ExtraDepth, *Bay.AnchorId.ToString()),
+				Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, *Bay.AnchorId.ToString())));
+		}
+	}
+	return true;
 }
 
 // ServiceLaneEntersOnEverySideWithinReach IS DELETED, 2026-09-17, and what it covered is

@@ -92,10 +92,28 @@ struct FPendingLink
 	 * behind the tail, on the taxiway the entrance already opens onto, is refused however close it
 	 * lies, and a half-plane is the shape that says so while leaving both directions along the far
 	 * road open. NearestJoinable (AnchorLinkFinder.cpp) is where it is tested, against the hit
-	 * position it is about to accept, not against the search's own Origin - a hit is refused only
-	 * when it falls BEHIND the entry along this normal.
+	 * position it is about to accept, not against the search's own Origin - a hit is refused when
+	 * it falls short of the stand's far edge along this normal (HalfPlaneOffset, below; it was
+	 * "behind the entry" until 2026-09-27).
 	 */
 	TOptional<FVector2D> HalfPlane;
+
+	/**
+	 * How far AHEAD of At, along HalfPlane, the half-plane's own boundary lies - the stand's drawn
+	 * FAR EDGE, which is where a road the entry may join has to be. Zero (the boundary through At
+	 * itself) for every link with no HalfPlane.
+	 *
+	 * THE BOUNDARY USED TO RUN THROUGH THE ENTRY ITSELF, and that decided a road ALONGSIDE the
+	 * stand by float noise (final review, 2026-09-27): a side road parallel to the stand's facing
+	 * has its nearest point level with the entry, so the dot product NearestJoinable tested was
+	 * +-1e-10 and the entry joined it or not by rounding. At the far-edge line - the edge the ghost
+	 * draws as ServiceEdge - the same road sits a whole corner run short of the boundary and is
+	 * refused however it rounds. A hit is accepted at or beyond it, less
+	 * FAnchorLink::FarEdgeTolerance.
+	 * ENFORCED BY: Airside.Build.StandEntry.SideRoadAlongsideJoinsNothing,
+	 * Airside.Build.StandEntry.FarRoadWinsOverSideRoad
+	 */
+	double HalfPlaneOffset = 0.0;
 
 	/**
 	 * Assembles a link from the ONE RULE every call site restated for itself (#306): Kind and

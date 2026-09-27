@@ -140,6 +140,10 @@ namespace
 		 * road point is 8000 uu from the nearer stand's entries, well outside the reach, while
 		 * the depot's pose at (12000, -2000) is 2000 from the road. See
 		 * Build_RoadReachesDepotOnly.
+		 *
+		 * THE ROAD NO LONGER SERVES A STAND BY ITSELF (2026-09-27): it runs alongside, and a side
+		 * road joins nothing. LaySouthRoad lays a spur up each stand's far edge from it, and the
+		 * figures above now bound only which stands get one.
 		 */
 		double RoadY = -4000.0;
 
@@ -159,12 +163,13 @@ namespace
 		 * Build.
 		 *
 		 * WHAT A FAR-SIDE STAND WANTS (spec 2026-09-26: service vehicles enter only by the far
-		 * edge). The south road still joins a stand's entries - the nearest point on it lies just
-		 * beyond the far edge's half-plane - but the lead-in then loops round behind the stand
-		 * and meets the lane from the wrong side, so the vehicle arrives facing the way it should
-		 * leave (measured 2026-09-26 on a Code A stand: a 180 degree cusp at the lane, which the
-		 * utility tow's trailer folds on and the router refuses). Off by default: every older
-		 * test here predates the far edge and is about something else.
+		 * edge). The south road used to join a stand's entries too - its nearest point sat level
+		 * with them, on the half-plane's old boundary - but the lead-in then looped round behind
+		 * the stand and met the lane from the wrong side, so the vehicle arrived facing the way it
+		 * should leave (measured 2026-09-26 on a Code A stand: a 180 degree cusp at the lane, which
+		 * the utility tow's trailer folds on and the router refuses). Since 2026-09-27 a side road
+		 * joins nothing and the south road is given a far-edge spur (LaySouthRoad). Off by
+		 * default: every older test here predates the far edge and is about something else.
 		 */
 		bool bFarEdgeRoad = false;
 
@@ -186,6 +191,21 @@ namespace
 		 */
 		void Build_RoadReachesDepotOnly();
 		void JoinRoad();
+
+		/**
+		 * The east-west service road at RoadY from FromX to x = 20000, WITH A SPUR north along
+		 * each placed stand's far edge (FarRoadClearance beyond it) that the road reaches.
+		 *
+		 * THE SPUR IS WHAT JOINS THE STAND (2026-09-27). A road running south of a stand facing +X
+		 * runs ALONGSIDE it, parallel to its facing, and its nearest point to every entry is level
+		 * with that entry. Until the half-plane's boundary moved to the far edge that nearest point
+		 * was accepted by float noise, and every older test here was served through it; the final
+		 * review ruled that a side road does not serve a stand (Airside.Build.StandEntry.
+		 * SideRoadAlongsideJoinsNothing). So the road meets the far edge the way a player's must,
+		 * and the tests keep meaning what they meant: a road that reaches the stand, or does not.
+		 * A stand whose spur would lie west of FromX gets none - Build_RoadReachesDepotOnly's case.
+		 */
+		void LaySouthRoad(double FromX);
 		int32 ParkAircraft();
 
 		/** ParkAircraft, at a named stand's pose. */
@@ -275,13 +295,6 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 		ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);
 	TaxiwayFarEnd = TaxiSouth;
 
-	if (bWithRoad && !bFarEdgeRoad)
-	{
-		FGuidelineNodeId RoadWest, RoadEast;
-		LayLine(*Net, FVector2D(RoadFromX, RoadY), FVector2D(20000.0, RoadY),
-			ETraversalClass::GroundVehicle, RoadWest, RoadEast);
-	}
-
 	if (bWithRunway)
 	{
 		// THE SAME RECIPE Airside.Model.Traffic.DepartAgent uses - PAVEMENT split at the
@@ -349,6 +362,12 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 		// 20 000 uu aircraft cap.
 		Stand2 = Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(6000.0, 0.0), 0.0,
 			/*DesignWingspan=*/3600.0, StandDef->PoseRole, StandDef->Trucks);
+	}
+
+	// AFTER THE STANDS, because the spurs are laid along their far edges - see LaySouthRoad.
+	if (bWithRoad && !bFarEdgeRoad)
+	{
+		LaySouthRoad(RoadFromX);
 	}
 
 	if (bWithDepot)
@@ -444,10 +463,61 @@ void FFuelFixture::Build_RoadReachesDepotOnly()
 
 void FFuelFixture::JoinRoad()
 {
-	FGuidelineNodeId RoadWest, RoadEast;
-	LayLine(*Net, FVector2D(-20000.0, RoadY), FVector2D(20000.0, RoadY),
-		ETraversalClass::GroundVehicle, RoadWest, RoadEast);
+	LaySouthRoad(-20000.0);
 	RunAnchorLinks();
+}
+
+void FFuelFixture::LaySouthRoad(double FromX)
+{
+	// EACH STAND'S FAR EDGE off its own outline, as the bFarEdgeRoad road finds it: the stands
+	// face +X, so it is the outline's largest x.
+	TArray<double> SpurXs;
+	for (const FEntityInstanceId& Each : { Stand, Stand2 })
+	{
+		const FEntityInstance* Placed = Each.IsSet() ? Net->GetEntity(Each) : nullptr;
+		if (Placed == nullptr)
+		{
+			continue;
+		}
+		double FarEdge = -TNumericLimits<double>::Max();
+		for (const FVector2D& Corner : Placed->Outline)
+		{
+			FarEdge = FMath::Max(FarEdge, Corner.X);
+		}
+		const double SpurX = FarEdge + FarRoadClearance;
+		if (SpurX > FromX)
+		{
+			SpurXs.Add(SpurX);
+		}
+	}
+	SpurXs.Sort();
+
+	// ONE NODE PER JOIN, shared by the road either side of it and the spur, so the truck can turn
+	// off the road onto the spur - LayLine's fresh nodes would leave three lines that only touch.
+	auto Edge = [this](FGuidelineNodeId A, FGuidelineNodeId B)
+	{
+		const FGuidelineNode* NodeA = Net->GetGuidelineNode(A);
+		const FGuidelineNode* NodeB = Net->GetGuidelineNode(B);
+		FGuidelineEdge Line;
+		Line.A = A;
+		Line.B = B;
+		Line.Control = (NodeA->Position + NodeB->Position) * 0.5;
+		Line.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
+		Line.AllowedTraffic.Add(ETraversalClass::Emergency);
+		Line.Direction = EGuidelineDir::Bidirectional;
+		Line.Width = 600.0;
+		Line.bDerived = true;
+		Net->AddGuidelineEdge(MoveTemp(Line));
+	};
+	FGuidelineNodeId West = Net->AddGuidelineNode(FVector2D(FromX, RoadY));
+	for (const double SpurX : SpurXs)
+	{
+		const FGuidelineNodeId Join = Net->AddGuidelineNode(FVector2D(SpurX, RoadY));
+		Edge(West, Join);
+		Edge(Join, Net->AddGuidelineNode(FVector2D(SpurX, 10000.0)));
+		West = Join;
+	}
+	Edge(West, Net->AddGuidelineNode(FVector2D(20000.0, RoadY)));
 }
 
 int32 FFuelFixture::ParkAircraft()
