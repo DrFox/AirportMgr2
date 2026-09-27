@@ -7,14 +7,17 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/InspectFacts.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
+#include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 #include "Solve/StandBox.h"
+#include "Testing/AirsideTestWorld.h"
 #include "Tool/RoadEditTarget.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -868,6 +871,261 @@ bool FStandPlotOldPoseRederivedOnLoadTest::RunTest(const FString& Parameters)
 			TestTrue(*FString::Printf(TEXT("entry %d at (%.0f, %.0f) is inside the drawn outline"),
 					Entry.Index, Node != nullptr ? Node->Position.X : 0.0, Node != nullptr ? Node->Position.Y : 0.0),
 				Node != nullptr && RoadGeom::PointInPolygon(Outline, Node->Position));
+		}
+	}
+	return true;
+}
+
+namespace StandPlotPlacementTest
+{
+	/** FLogLineSpy for WARNINGS: the base keeps Log verbosity only, and the corner warning this
+	 *  file asserts on is a Warning. Deriving keeps the base's unbuffered override (#216). */
+	struct FWarningLineSpy : public FLogLineSpy
+	{
+		explicit FWarningLineSpy(FName InCategory) : FLogLineSpy(InCategory) {}
+
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& InCategory) override
+		{
+			if (InCategory == Category && Verbosity == ELogVerbosity::Warning)
+			{
+				++Count;
+				CapturedLines.Add(FString(V));
+			}
+		}
+	};
+
+	/** One lead-in off a declared entry, as laid: where its sweeps meet the road, how far toward
+	 *  the far lane any of it reaches, and whether it is a HARD join (no sweeps - its end sits on
+	 *  the road itself, which Join's no-room branch makes). */
+	struct FLeadIn
+	{
+		TArray<double> SweepEndYs;
+		double Deepest = -TNumericLimits<double>::Max();
+		bool bHardJoin = false;
+	};
+
+	/** A stand drawn at Letter's floor off a taxiway at y = 0, entrance on y = 1000 facing +Y, and
+	 *  a real two-lane SERVICE ROAD laid through the facade along X with its centre at RoadY. */
+	struct FStandAndRoad
+	{
+		FEntityInstanceId Stand;
+		double FarEdgeY = 0.0;
+		double HalfWidth = 0.0;
+		TArray<double> LaneYs;
+		TMap<int32, TArray<FLeadIn>> LeadsByEntry;
+	};
+
+	bool BuildStandAndRoad(FAutomationTestBase& Test, ARoadNetworkActor* Actor, EIcaoCode Letter,
+		TFunctionRef<double(double FarEdgeY, double HalfWidth)> RoadYFor, FStandAndRoad& Out)
+	{
+		Actor->ClearNetwork();
+		LayTaxiway(Actor, 0.0);
+		FVector2D A, B;
+		const TArray<FVector2D> Rect = FloorRect(Letter, 1000.0, A, B);
+		IRoadEditTarget* Target = Actor;
+		const int32 Index = Target->PlaceStandInPlot(Rect, A, B);
+		if (!Test.TestTrue(TEXT("the stand is placed"), Index != INDEX_NONE)) { return false; }
+		Out.Stand = Actor->Network->EntityIdAt(Index);
+
+		// THE GAME'S OWN SERVICE ROAD PROFILE, through the actor's one resolver - the one
+		// URoadEditFacade::MakeTunables hands the plot ghost for its ServiceEdge offset.
+		const URoadProfile* Profile = Actor->ResolveServiceRoadProfile();
+		if (!Test.TestNotNull(TEXT("a service road profile resolves"), Profile)) { return false; }
+		Out.HalfWidth = Profile->GetMaxHalfWidth();
+		Out.FarEdgeY = 1000.0 + IcaoCode::StandDepthForLetter(Letter);
+		const double RoadY = RoadYFor(Out.FarEdgeY, Out.HalfWidth);
+		const int32 West = Target->PlaceNode(FVector2D(-12000.0, RoadY));
+		const int32 East = Target->PlaceNode(FVector2D(12000.0, RoadY));
+		if (!Test.TestTrue(TEXT("a service road connects"), Target->ConnectNodes(West, East, ERoadKind::ServiceRoad))) { return false; }
+
+		URoadNetwork& Net = *Actor->Network;
+		const FRoadSegmentId Road = Net.SegmentIdAt(Net.GetSegments().Num() - 1);
+		for (const FGuidelineEdge& Edge : Net.GetGuidelineEdges())
+		{
+			const FGuidelineNode* NodeA = Edge.bAlive ? Net.GetGuidelineNode(Edge.A) : nullptr;
+			if (NodeA != nullptr && Edge.DerivedFrom == Road)
+			{
+				bool bKnown = false;
+				for (const double Y : Out.LaneYs) { bKnown |= FMath::IsNearlyEqual(Y, NodeA->Position.Y, 1.0); }
+				if (!bKnown) { Out.LaneYs.Add(NodeA->Position.Y); }
+			}
+		}
+		Out.LaneYs.Sort();
+		Test.AddInfo(FString::Printf(TEXT("Code %s: far edge y %.0f, road half-width %.0f, road centre y %.0f, lanes %s"),
+			IcaoCode::ToLetter(Letter), Out.FarEdgeY, Out.HalfWidth, RoadY,
+			*FString::JoinBy(Out.LaneYs, TEXT(", "), [](double Y) { return FString::Printf(TEXT("%.0f"), Y); })));
+
+		const FStandLayoutBuild::FResult Built = FStandLayoutBuild::Build(Net);
+		const TArray<FGuidelineNodeId>* Entries = Built.Entries.Find(Out.Stand);
+		if (!Test.TestTrue(TEXT("the stand's bays are laid"), Entries != nullptr && Entries->Num() > 0)) { return false; }
+
+		// A LINK IS UNOWNED AND UNDERIVED - neither the stand's layout nor a road's lane.
+		auto Unowned = [&Net](FGuidelineEdgeId EdgeId)
+		{
+			const FGuidelineEdge* Edge = Net.GetGuidelineEdge(EdgeId);
+			return Edge != nullptr && Edge->bAlive && !Edge->StandGeometryOwner.IsSet() && !Edge->DerivedFrom.IsSet();
+		};
+		for (const FGuidelineNodeId& Entry : *Entries)
+		{
+			TArray<FLeadIn>& Leads = Out.LeadsByEntry.Add(Entry.Index);
+			for (const FGuidelineEdgeId& LeadId : Net.GetGuidelineNode(Entry)->Incident)
+			{
+				if (!Unowned(LeadId)) { continue; }
+				const FGuidelineEdge* LeadEdge = Net.GetGuidelineEdge(LeadId);
+				const FGuidelineNodeId LeadEndId = LeadEdge->A == Entry ? LeadEdge->B : LeadEdge->A;
+				FLeadIn Lead;
+				TArray<FGuidelineEdgeId> Link = { LeadId };
+				for (const FGuidelineEdgeId& EdgeId : Net.GetGuidelineNode(LeadEndId)->Incident)
+				{
+					if (EdgeId != LeadId && Unowned(EdgeId)) { Link.Add(EdgeId); }
+				}
+				// NO SWEEPS: the lead-in's end is ON the road - the hard join.
+				Lead.bHardJoin = Link.Num() == 1;
+				if (Lead.bHardJoin)
+				{
+					Lead.SweepEndYs.Add(Net.GetGuidelineNode(LeadEndId)->Position.Y);
+				}
+				for (const FGuidelineEdgeId& EdgeId : Link)
+				{
+					TArray<FVector2D> Points;
+					Net.SampleGuideline(EdgeId, Points);
+					for (const FVector2D& Point : Points) { Lead.Deepest = FMath::Max(Lead.Deepest, Point.Y); }
+					if (EdgeId == LeadId) { continue; }
+					const FGuidelineEdge* Sweep = Net.GetGuidelineEdge(EdgeId);
+					Lead.SweepEndYs.Add(Net.GetGuidelineNode(Sweep->A == LeadEndId ? Sweep->B : Sweep->A)->Position.Y);
+				}
+				Leads.Add(Lead);
+			}
+		}
+		return true;
+	}
+
+	bool AllOn(const FLeadIn& Lead, double LaneY)
+	{
+		for (const double Y : Lead.SweepEndYs) { if (!FMath::IsNearlyEqual(Y, LaneY, 1.0)) { return false; } }
+		return Lead.SweepEndYs.Num() > 0;
+	}
+}
+
+/**
+ * A REAL SERVICE ROAD, CENTRED ON THE GHOST'S ServiceEdge LINE (user ruling 2026-09-27, "kerb on
+ * the edge"). The line sits the road's half-width out past the far edge, so the road's near kerb
+ * lies on the edge and its near lane a lane-offset beyond it - where every entry, a corner run
+ * inside the edge, has the whole run it was inset for. Laid through the facade with the content
+ * profile: two lanes, not the bare guideline every older entry test lays.
+ *
+ * Every entry joins the NEAR lane through a swept lead-in (not a hard join, which locks the lane -
+ * a known issue, see RoadOnTheFarEdgeIsTheKnownCrossingCase) that never enters the far lane, and
+ * no link logs the "cut that corner" warning.
+ *
+ * AND A SECOND LEAD-IN PER ENTRY, ACCEPTED: FAnchorLink::Build joins the sibling lane too (spec
+ * 2026-09-23 §5, Airside.Build.TwoWay.AnchorBothLanes), and that one crosses the near lane - the
+ * known gap Build's own comment records. What is held is that the NEAREST join is the near lane.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotRoadAlongTheServiceEdgeJoinsTheNearLaneTest,
+	"Airside.Present.StandPlot.RoadAlongTheServiceEdgeJoinsTheNearLane",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotRoadAlongTheServiceEdgeJoinsTheNearLaneTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	// A AND C: laid for the tow and the truck, whose entries sit different corner runs inside.
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	{
+		const TCHAR* Code = IcaoCode::ToLetter(Letter);
+		FAirsideTestWorld LetterWorld;
+		if (!TestNotNull(TEXT("a world"), LetterWorld.World)) { return false; }
+		if (!TestNotNull(TEXT("actor constructed"), LetterWorld.Actor)) { return false; }
+
+		FWarningLineSpy Corner(FName(TEXT("LogAirside")));
+		GLog->AddOutputDevice(&Corner);
+		FStandAndRoad Laid;
+		const bool bBuilt = BuildStandAndRoad(*this, LetterWorld.Actor, Letter,
+			[](double FarEdgeY, double HalfWidth) { return FarEdgeY + HalfWidth; }, Laid);
+		GLog->RemoveOutputDevice(&Corner);
+		if (!bBuilt || !TestEqual(TEXT("the service road is two lanes"), Laid.LaneYs.Num(), 2)) { continue; }
+		const double NearLaneY = Laid.LaneYs[0];
+		const double Between = 0.5 * (Laid.LaneYs[0] + Laid.LaneYs[1]);
+		TestTrue(*FString::Printf(TEXT("Code %s: the road's near kerb is on the far edge, not inside the stand"), Code),
+			FMath::IsNearlyEqual(Between - Laid.HalfWidth, Laid.FarEdgeY, 1.0));
+
+		for (const TPair<int32, TArray<FLeadIn>>& Entry : Laid.LeadsByEntry)
+		{
+			bool bNearAndSwept = false;
+			for (const FLeadIn& Lead : Entry.Value)
+			{
+				TestFalse(*FString::Printf(TEXT("Code %s: entry %d has no hard join - a hard join locks its lane"), Code, Entry.Key),
+					Lead.bHardJoin);
+				bNearAndSwept |= !Lead.bHardJoin && AllOn(Lead, NearLaneY) && Lead.Deepest <= Between;
+			}
+			TestTrue(*FString::Printf(TEXT("Code %s: entry %d joins the NEAR lane (y %.0f) through a sweep that never enters the far lane (split at y %.0f)"),
+				Code, Entry.Key, NearLaneY, Between), bNearAndSwept);
+		}
+
+		// THE CONTROL: the spy hears LogAirside warnings at all - the TugStand fixture's "has no
+		// service bay" line is logged by every link pass - so its silence on corners is a finding.
+		bool bHeardTugStand = false;
+		for (const FString& Line : Corner.CapturedLines) { bHeardTugStand |= Line.Contains(TEXT("TugStand")); }
+		TestTrue(*FString::Printf(TEXT("Code %s: the warning spy hears LogAirside (TugStand's own line)"), Code), bHeardTugStand);
+		for (const FString& Line : Corner.CapturedLines)
+		{
+			TestFalse(*FString::Printf(TEXT("Code %s: no link cuts a corner: %s"), Code, *Line), Line.Contains(TEXT("cut that corner")));
+		}
+	}
+	return true;
+}
+
+/**
+ * THE KNOWN CROSSING CASE (user ruling 2026-09-27): a two-lane road centred ON the far edge
+ * itself, which the ghost no longer invites. Its near lane sits a lane-offset INSIDE the far edge,
+ * so the half-plane refuses it and every entry joins the FAR lane across it - a truck turning in
+ * across the near lane. Kept to show what that road does, not to endorse it: the stand is still
+ * serviceable, and every lead-in lands on the far lane.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotRoadOnTheFarEdgeIsTheKnownCrossingCaseTest,
+	"Airside.Present.StandPlot.RoadOnTheFarEdgeIsTheKnownCrossingCase",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotRoadOnTheFarEdgeIsTheKnownCrossingCaseTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::C })
+	{
+		const TCHAR* Code = IcaoCode::ToLetter(Letter);
+		FAirsideTestWorld LetterWorld;
+		if (!TestNotNull(TEXT("a world"), LetterWorld.World)) { return false; }
+		if (!TestNotNull(TEXT("actor constructed"), LetterWorld.Actor)) { return false; }
+
+		FStandAndRoad Laid;
+		if (!BuildStandAndRoad(*this, LetterWorld.Actor, Letter,
+				[](double FarEdgeY, double) { return FarEdgeY; }, Laid)
+			|| !TestEqual(TEXT("the service road is two lanes"), Laid.LaneYs.Num(), 2))
+		{
+			continue;
+		}
+		const double FarLaneY = Laid.LaneYs[1];
+		TestTrue(*FString::Printf(TEXT("Code %s: the premise - the near lane (y %.0f) is inside the far edge (y %.0f)"),
+			Code, Laid.LaneYs[0], Laid.FarEdgeY), Laid.LaneYs[0] < Laid.FarEdgeY);
+
+		for (const TPair<int32, TArray<FLeadIn>>& Entry : Laid.LeadsByEntry)
+		{
+			TestTrue(*FString::Printf(TEXT("Code %s: entry %d is joined"), Code, Entry.Key), Entry.Value.Num() > 0);
+			for (const FLeadIn& Lead : Entry.Value)
+			{
+				TestTrue(*FString::Printf(TEXT("Code %s: entry %d joins only the FAR lane (y %.0f)"), Code, Entry.Key, FarLaneY),
+					AllOn(Lead, FarLaneY));
+			}
+		}
+
+		FStandFacts Facts;
+		if (TestTrue(TEXT("the stand describes"),
+				InspectFacts::DescribeStand(nullptr, *LetterWorld.Actor->Network, Laid.Stand.Index, Facts)))
+		{
+			TestTrue(*FString::Printf(TEXT("Code %s: still serviceable"), Code), Facts.bServiceable);
 		}
 	}
 	return true;
