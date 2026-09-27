@@ -32,13 +32,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wire_anim_lib
 
-# THE KEYS THIS SCRIPT WIRES - fifteen since plane17 joined on 2026-09-27. plane1 and plane2
+# THE KEYS THIS SCRIPT WIRES - sixteen since plane18 joined on 2026-09-27. plane1 and plane2
 # are hand-wired (no axis plan is ever written for them); plane4 is create_abp=False on the BUILD side only - its Blueprint already
 # exists but is wired exactly like the rest once build_aircraft_anim.py has measured
 # its axes.
 KEYS = ("plane3", "plane4", "plane5", "plane6", "plane7", "plane8", "plane9", "plane10",
         "plane11", "plane12", "plane13", "plane14", "plane15",
-        "plane16", "plane17")
+        "plane16", "plane17", "plane18")
 
 _KEY_PATTERN = re.compile(r"^plane(\d+)$")
 

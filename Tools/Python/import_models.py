@@ -476,6 +476,24 @@ SPECS = [
              "nose forward), two nose clamshells, two counter-rotating 2-blade props.",
     ),
     Spec(
+        key="plane18",
+        source=MODELS + r"\plane18\export\plane18.glb",
+        mesh_dir="/Game/Aircraft/Plane18",
+        skel_name="SK_Plane18",
+        # plane17's NAMES AND SHAPE: one wheel_L / wheel_R mesh and bone a side (each mesh is
+        # the DUAL pair, one axle), retracting.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, the contact patch - plane18/scripts/build_export.py's origin, s 2.05.
+        origin_on="front",
+        note="Saab 340B, the regional turboprop. 21.44 m span, 19.74 m long, 6.98 m tall - "
+             "hand-traced side and top views (plane18/SPEC.md). LEVEL on its gear. Origin on "
+             "the NOSE gear. Sixteen joints: retracting gear (mains and nose forward), four "
+             "main bay doors, two nose clamshells, two co-rotating 4-blade props.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",

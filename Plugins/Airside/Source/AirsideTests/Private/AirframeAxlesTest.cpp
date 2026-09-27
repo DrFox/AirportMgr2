@@ -461,6 +461,7 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane15"), EPushbackNeed::SelfManoeuvre },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane16"), EPushbackNeed::SelfManoeuvre },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane17"), EPushbackNeed::SelfManoeuvre },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane18"), EPushbackNeed::SelfManoeuvre },
 		// THE TWO PAPER TYPES. No aircraft/<key>.py spec exists for either - EntityDefinition
 		// builds them in C++ - so they stay hand-typed here and in build_pushback_needs.py's
 		// own small PAPER_NEEDS residual rather than growing a spec file for two entries.
@@ -643,6 +644,9 @@ bool FFieldLengthsCoverTheRollContentTest::RunTest(const FString& Parameters)
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane17"), TEXT("/Game/Entities/DA_Aircraft_Plane16"),
 		  TEXT("a Seneca I that needed as much runway as a Baron would erase the one field "
 			   "difference between the light twin and the heavy one") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane18"), TEXT("/Game/Entities/DA_Aircraft_Plane3"),
+		  TEXT("a Saab 340 that needed as much runway as a Q400 would make the Code B airliner "
+			   "a type only a Code C field could take") },
 	};
 
 	TSet<FString> JudgementCovered;
