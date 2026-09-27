@@ -35,9 +35,9 @@ void GraphOverlay::DescribeStands(const URoadNetwork& Network, IToolPreviewSink&
 			continue;
 		}
 
-		// The full description FIRST - the SAME call a placement tool's own preview makes,
-		// so a placed stand and an aimed one read as one object. See StandPreview.h for why
-		// this used to be two.
+		// The body FIRST - the SAME call a placement tool's own preview makes, so a placed
+		// stand and an aimed one read as one object. See StandPreview.h for why this used to
+		// be two, and why the stop mark is split off below.
 		//
 		// The footprint matters because a stand aimed 180 degrees out looks identical to a
 		// correct one until something tries to taxi onto it - the heading has to be
@@ -46,18 +46,28 @@ void GraphOverlay::DescribeStands(const URoadNetwork& Network, IToolPreviewSink&
 		// rather than stored, because they belong to whatever is PARKED here - today the
 		// type the stand was sized for, tomorrow whatever actually occupies it - and a
 		// stored copy would be a claim about an aircraft that has not arrived.
-		StandPreview::Describe(Entity.Definition, Entity.Position, Entity.Heading, Sink);
+		StandPreview::DescribeBody(Entity.Definition, Entity.Position, Entity.Heading, Sink);
 
-		// THEN the committed-pose marker, AFTER StandPreview rather than before it, and at a
-		// DIFFERENT radius from its own (see ARoadBuildHUD::Marker's StandPose case).
-		// StandPreview's own last call is Sink.Marker(Entity.Position, Pending) at this
-		// EXACT position - two rings at the same radius drawn there would simply overdraw
-		// one another regardless of which runs second, which is what made this marker
-		// invisible against the stop mark it was meant to be told apart from. Order still
-		// matters for a sink with no radius-per-style logic of its own - the editor
-		// viewport draws every style at one size (see FViewportPreviewSink::Marker) - and
-		// there this is the one that legitimately wins, because it is the one drawn last.
-		Sink.Marker(Entity.Position, EPreviewStyle::StandPose);
+		// The stop mark and the committed-pose ring are an AIRCRAFT's: where its nose gear
+		// stops, and which way it faces. A service installation's pose is its road connection
+		// instead, and both rings there read, zoomed out, as unexplained circles on the road
+		// (a fuel depot, 2026-09-27). Keyed on the instance's captured PoseRole (IsStand)
+		// rather than "has a design aircraft", because PoseRole is the field that says whose
+		// pose this is.
+		if (Entity.IsStand())
+		{
+			Sink.Marker(Entity.Position, EPreviewStyle::Pending);
+
+			// THEN the committed-pose marker, AFTER the stop mark rather than before it, and
+			// at a DIFFERENT radius from it (see ARoadBuildHUD::Marker's StandPose case). Two
+			// rings at the same radius at this EXACT position would simply overdraw one
+			// another regardless of which runs second, which is what made this marker
+			// invisible against the stop mark it was meant to be told apart from. Order still
+			// matters for a sink with no radius-per-style logic of its own - the editor
+			// viewport draws every style at one size (see FViewportPreviewSink::Marker) - and
+			// there this is the one that legitimately wins, because it is the one drawn last.
+			Sink.Marker(Entity.Position, EPreviewStyle::StandPose);
+		}
 
 		// The RESOLVED anchors - guideline nodes a vehicle will actually route to - read
 		// from the INSTANCE rather than recomputed from the definition, same as the HUD
