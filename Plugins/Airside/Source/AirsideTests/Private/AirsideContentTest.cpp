@@ -471,4 +471,56 @@ bool FLetterEnvelopeInvalidatesOnAssetChangeTest::RunTest(const FString& Paramet
 	return true;
 }
 
+/**
+ * PINS THE MIGRATION (2026-09-27): MinimumSurface moved off FRunwayRequirements onto
+ * UAircraftType::MinimumPavement (spec 2026-09-27-shared-pavement, Task 3). The Before map is
+ * every value the fleet held BEFORE the move, captured from main at f20add83 (Task 0's
+ * BASELINE log). A migration that silently reset every type to grass would admit an airliner
+ * to a grass strip and pass every test that only checks the Piper - so all 18 are pinned here,
+ * grass ones included: they pin that the migration did not INVENT a need either.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAircraftMinimumPavementMigratedTest, "Airside.Content.AircraftMinimumPavementMigrated",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAircraftMinimumPavementMigratedTest::RunTest(const FString&)
+{
+	// THE VALUES EACH ASSET HELD BEFORE THE FIELD MOVED, captured from main 2026-09-27
+	// (Task 0). A migration that silently reset every type to grass would admit an airliner
+	// to a grass strip and pass every test that only checks the Piper.
+	const TMap<FString, EPavement> Before = {
+		{ TEXT("DA_Aircraft_A320"), EPavement::Grass },
+		{ TEXT("DA_Aircraft_B738"), EPavement::Grass },
+		{ TEXT("DA_Aircraft_Plane1"), EPavement::Grass },
+		{ TEXT("DA_Aircraft_Plane2"), EPavement::Grass },
+		{ TEXT("DA_Aircraft_Plane3"), EPavement::Tarmac },
+		{ TEXT("DA_Aircraft_Plane4"), EPavement::Tarmac },
+		{ TEXT("DA_Aircraft_Plane5"), EPavement::Tarmac },
+		{ TEXT("DA_Aircraft_Plane6"), EPavement::Tarmac },
+		{ TEXT("DA_Aircraft_Plane7"), EPavement::Grass },
+		{ TEXT("DA_Aircraft_Plane8"), EPavement::Tarmac },
+		{ TEXT("DA_Aircraft_Plane9"), EPavement::Tarmac },
+		{ TEXT("DA_Aircraft_Plane10"), EPavement::Grass },
+		{ TEXT("DA_Aircraft_Plane11"), EPavement::Tarmac },
+		{ TEXT("DA_Aircraft_Plane12"), EPavement::Grass },
+		{ TEXT("DA_Aircraft_Plane13"), EPavement::Tarmac },
+		{ TEXT("DA_Aircraft_Plane14"), EPavement::Tarmac },
+		{ TEXT("DA_Aircraft_Plane15"), EPavement::Grass },
+		{ TEXT("DA_Aircraft_Plane16"), EPavement::Grass },
+	};
+	int32 Seen = 0;
+	for (const TPair<FString, EPavement>& Row : Before)
+	{
+		const UAircraftType* Type = LoadObject<UAircraftType>(nullptr,
+			*FString::Printf(TEXT("/Game/Entities/%s.%s"), *Row.Key, *Row.Key));
+		if (const EPavement* Expected = Type != nullptr ? &Row.Value : nullptr)
+		{
+			++Seen;
+			TestEqual(FString::Printf(TEXT("%s keeps the pavement it needed"), *Type->GetName()),
+				Type->MinimumPavement, *Expected);
+			TestEqual(TEXT("and carries it into the airframe admission reads"), Type->Airframe().MinimumPavement, *Expected);
+		}
+	}
+	TestEqual(TEXT("every baseline type loaded - a moved asset would otherwise skip silently"), Seen, Before.Num());
+	return true;
+}
+
 #endif

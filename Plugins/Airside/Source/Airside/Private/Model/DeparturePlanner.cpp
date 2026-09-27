@@ -67,7 +67,7 @@ namespace DeparturePlanner
 			// NeedsSurface: a jet is not planned down a grass taxiway (FRouteQuery::MinimumSurface).
 			return RouteSearch::Find(Network,
 				FRouteQuery::For(Errand, Start, Candidate, Airframe.Wingspan, Class)
-					.NeedsSurface(Airframe.Requirements.MinimumSurface));
+					.NeedsSurface(Airframe.MinimumPavement));
 		};
 
 		auto Accept = [&](const FRoutePlan& Route, FGuidelineNodeId Candidate, double Offset, bool bBacktrack)

@@ -375,7 +375,7 @@ FRouteQuery FPlanReResolver::QueryFor(ERouteErrand Errand, FGuidelineNodeId Star
 	// edit or a deadlock could be sent down the grass taxiway its dispatch refused.
 	if (const FAirframe* Airframe = Agent.AsAircraft())
 	{
-		Query.NeedsSurface(Airframe->Requirements.MinimumSurface);
+		Query.NeedsSurface(Airframe->MinimumPavement);
 	}
 	if (const FVehicle* Vehicle = Agent.AsVehicle())
 	{

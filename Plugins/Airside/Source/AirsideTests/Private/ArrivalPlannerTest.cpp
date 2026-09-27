@@ -370,7 +370,7 @@ bool FArrivalPlannerNotAdmittedTest::RunTest(const FString& Parameters)
 	const FArrivalPlan OnGrass = ArrivalPlanner::Plan(*A.Net, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
 	TestTrue(FString::Printf(TEXT("the Piper may land on grass: %s"), *ArrivalPlanner::DescribeRefusal(OnGrass)), OnGrass.IsValid());
 
-	Airframe.Requirements.MinimumSurface = EPavement::Tarmac;
+	Airframe.MinimumPavement = EPavement::Tarmac;
 	const FArrivalPlan Refused = ArrivalPlanner::Plan(*A.Net, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
 	TestEqual(TEXT("an aircraft needing tarmac is refused the grass strip as NotAdmitted"), Refused.Why, EArrivalRefusal::NotAdmitted);
 	TestEqual(TEXT("with the admission's own reason on the plan"), Refused.Admission.Why, ERunwayRefusal::Surface);

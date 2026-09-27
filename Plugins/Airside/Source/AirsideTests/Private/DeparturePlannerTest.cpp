@@ -246,7 +246,7 @@ bool FDeparturePlannerNotAdmittedTest::RunTest(const FString& Parameters)
 	const FDeparturePlan OnGrass = DeparturePlanner::Plan(*A.Net, A.StandNode, A.EAt - FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
 	TestTrue(FString::Printf(TEXT("the Piper may depart from grass: %s"), *DeparturePlanner::Describe(OnGrass)), OnGrass.IsValid());
 
-	Airframe.Requirements.MinimumSurface = EPavement::Tarmac;
+	Airframe.MinimumPavement = EPavement::Tarmac;
 	const FDeparturePlan Refused = DeparturePlanner::Plan(*A.Net, A.StandNode, A.EAt - FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
 	TestEqual(TEXT("an aircraft needing tarmac is refused the grass strip as NotAdmitted"), Refused.Why, EDepartureRefusal::NotAdmitted);
 	TestEqual(TEXT("with the admission's own reason on the plan"), Refused.Admission.Why, ERunwayRefusal::Surface);

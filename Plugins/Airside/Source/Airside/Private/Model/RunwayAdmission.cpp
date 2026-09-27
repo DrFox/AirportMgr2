@@ -33,7 +33,7 @@ namespace RunwayAdmission
 			: Airframe.Requirements.TakeoffFieldLength;
 		Out.Wingspan = Airframe.Wingspan;
 		Out.MaxWingspan = MaxWingspan;
-		Out.Pavement = Pavement::Judge(Facts.Surface, Airframe.Requirements.MinimumSurface);
+		Out.Pavement = Pavement::Judge(Facts.Surface, Airframe.MinimumPavement);
 
 		// Both scales are ORDERED enums (see RunwayFacts.h), so "weaker than" is checked with
 		// FPavementCheck::Passes for the surface and < for the approach.

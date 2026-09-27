@@ -113,7 +113,7 @@ bool FPlanAnyAdmissionTest::RunTest(const FString& Parameters)
 	Tarmac.Surface = EPavement::Tarmac;
 	A.Net->SetRunwayFacts(A.ShortSeed, Tarmac);
 	FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
-	Airframe.Requirements.MinimumSurface = EPavement::Tarmac;
+	Airframe.MinimumPavement = EPavement::Tarmac;
 
 	const FDeparturePlan Plan = DeparturePlanner::PlanAny(*A.Net, A.StandNode, Airframe, ETraversalClass::Aircraft);
 	UE_LOG(LogAirsideTests, Log, TEXT("PlanAny (near strip refused): %s"), *DeparturePlanner::Describe(Plan));

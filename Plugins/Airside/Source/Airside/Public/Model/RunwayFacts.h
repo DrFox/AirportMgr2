@@ -64,9 +64,6 @@ struct AIRSIDE_API FRunwayRequirements
 {
 	GENERATED_BODY()
 
-	/** The weakest surface this aircraft may use. */
-	UPROPERTY(EditAnywhere) EPavement MinimumSurface = EPavement::Grass;
-
 	/** The least approach it needs. Visual means any runway. */
 	UPROPERTY(EditAnywhere) ERunwayApproach ApproachNeeded = ERunwayApproach::Visual;
 

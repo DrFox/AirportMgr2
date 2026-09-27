@@ -177,6 +177,13 @@ public:
 	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;
 
 	/**
+	 * The weakest pavement this type may use - runway AND stand (spec 2026-09-27). Left
+	 * FRunwayRequirements because a stand check reading a field named for runways is the
+	 * drift this moved to stop.
+	 */
+	UPROPERTY(EditAnywhere) EPavement MinimumPavement = EPavement::Grass;
+
+	/**
 	 * How long this type occupies a stand, in GAME seconds - see FAirframe::TurnaroundSeconds
 	 * for which clock and why, and for why it travels in the bundle rather than being read
 	 * from here by the service that needs it.
@@ -218,6 +225,7 @@ public:
 		// how the four position figures in plane2's own spec went stale.
 		Out.Chassis.BodyCentreX = (Footprint.NoseX + Footprint.TailX) * 0.5;
 		Out.Requirements = Requirements;
+		Out.MinimumPavement = MinimumPavement;
 		// ShortCode, falling back to Code. Assigning Code alone was the defect: it is the
 		// aerodrome letter, so TypeCode could not tell an A320 from a 737.
 		Out.TypeCode = ShortCode.IsNone() ? Code : ShortCode;

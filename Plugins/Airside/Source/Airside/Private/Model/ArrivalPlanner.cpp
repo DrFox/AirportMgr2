@@ -80,7 +80,7 @@ namespace ArrivalPlanner
 		Query.Start = From;
 		Query.Class = ETraversalClass::Aircraft;
 		Query.Wingspan = Airframe.Wingspan;
-		Query.NeedsSurface(Airframe.Requirements.MinimumSurface);
+		Query.NeedsSurface(Airframe.MinimumPavement);
 		Query.Errand = ERouteErrand::ArrivalTaxiIn;
 		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.AvoidRunways = Query.Policy.Avoidance;

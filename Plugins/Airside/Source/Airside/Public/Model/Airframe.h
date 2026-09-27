@@ -505,6 +505,13 @@ struct AIRSIDE_API FAirframe
 	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;
 
 	/**
+	 * The weakest pavement this airframe may use - runway AND stand (spec 2026-09-27). See
+	 * UAircraftType::MinimumPavement for why it left FRunwayRequirements; copied in here for
+	 * the same reason Requirements is here - the admission check holds an FAirframe alone.
+	 */
+	UPROPERTY(EditAnywhere) EPavement MinimumPavement = EPavement::Grass;
+
+	/**
 	 * The type's short code - "PA46", "DHC6" - for anything that has to SAY what this is.
 	 * NAME_None for an airframe assembled by hand (tests, the Piper fallback). Here rather
 	 * than looked up from the UAircraftType at display time because Model/ may not see

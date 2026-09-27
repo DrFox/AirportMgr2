@@ -173,7 +173,7 @@ FPushbackPlan PushbackPlanner::Plan(const URoadNetwork& Network, FGuidelineNodeI
 	for (const FGuidelineNodeId Goal : Along)
 	{
 		FRouteQuery Query = FRouteQuery::For(ERouteErrand::PushbackClear, PoseNode, Goal, Airframe.Wingspan, Class);
-		Query.NeedsSurface(Airframe.Requirements.MinimumSurface);
+		Query.NeedsSurface(Airframe.MinimumPavement);
 		Query.BannedEdge = Taken;
 
 		const FRoutePlan Candidate = RouteSearch::Find(Network, Query);
@@ -207,7 +207,7 @@ FPushbackPlan PushbackPlanner::Plan(const URoadNetwork& Network, FGuidelineNodeI
 	// long taxi that let an aeroplane drive down the strip, which is the bug the table was
 	// built for.
 	const FRouteQuery Onward = FRouteQuery::For(ERouteErrand::PushbackTaxiOut, PushEnd, Goal, Airframe.Wingspan, Class)
-		.NeedsSurface(Airframe.Requirements.MinimumSurface);
+		.NeedsSurface(Airframe.MinimumPavement);
 	Out.TaxiOutRoute = RouteSearch::Find(Network, Onward);
 	if (!Out.TaxiOutRoute.IsValid())
 	{

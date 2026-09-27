@@ -290,6 +290,10 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	Type->Approach = PiperMeridianApproach();
 	Type->Engine = PiperMeridianEngine();
 	Type->Requirements = PiperMeridianRequirements();
+
+	// A turboprop single operates off grass strips routinely; nothing about the type
+	// needs pavement or approach aids, so it may use ANY runway this project can build.
+	Type->MinimumPavement = EPavement::Grass;
 }
 
 FClimbPerformance UAircraftType::PiperMeridianClimb()
@@ -482,9 +486,8 @@ FRunwayRequirements UAircraftType::PiperMeridianRequirements()
 {
 	FRunwayRequirements Requirements;
 
-	// A turboprop single operates off grass strips routinely; nothing about the type
-	// needs pavement or approach aids, so it may use ANY runway this project can build.
-	Requirements.MinimumSurface = EPavement::Grass;
+	// Approach aids only here now - MinimumPavement moved to the type itself (2026-09-27),
+	// set beside Requirements in BuildPiperMeridian.
 	Requirements.ApproachNeeded = ERunwayApproach::Visual;
 
 	// GROUND ROLLS, not the 50 ft figures (2026-09-07, revised the same day). The POH's

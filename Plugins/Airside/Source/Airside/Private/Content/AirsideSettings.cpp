@@ -103,6 +103,13 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 	// must carry the Piper's too, or admission would judge the same aircraft by 0 m field
 	// lengths (no claim) with content unloaded and by 800 m with it loaded.
 	Piper.Requirements = UAircraftType::PiperMeridianRequirements();
+
+	// Same rule as Wingspan and Requirements: the content branch reads Type->MinimumPavement
+	// (now BuildPiperMeridian's, not PiperMeridianRequirements' - it moved off the runway
+	// struct 2026-09-27), so the fallback must carry the Piper's too, or admission would judge
+	// the same aircraft off a grass strip with content unloaded and by whatever a differently
+	// authored default said with it loaded.
+	Piper.MinimumPavement = EPavement::Grass;
 	return Piper;
 }
 

@@ -264,8 +264,8 @@ struct AIRSIDE_API FRouteQuery
 	UPROPERTY() double Wingspan = 0.0;
 
 	/**
-	 * The weakest ground this traveller may taxi on - an aircraft's
-	 * FRunwayRequirements::MinimumSurface, set through NeedsSurface. A GRASS road or taxiway
+	 * The weakest ground this traveller may taxi on - an aircraft's FAirframe::MinimumPavement
+	 * (moved off FRunwayRequirements 2026-09-27), set through NeedsSurface. A GRASS road or taxiway
 	 * weaker than it is refused (URoadNetwork::IsGrassRoad, compared on the runway scale
 	 * through RoadSurfacePavement, so a taxiway and a runway are judged by one ordering).
 	 *
@@ -368,7 +368,7 @@ struct AIRSIDE_API FRouteQuery
 		return *this;
 	}
 
-	/** Chainable: see MinimumSurface. Pass the airframe's Requirements.MinimumSurface. */
+	/** Chainable: see MinimumSurface. Pass the airframe's MinimumPavement. */
 	FRouteQuery& NeedsSurface(EPavement InMinimumSurface)
 	{
 		MinimumSurface = InMinimumSurface;
