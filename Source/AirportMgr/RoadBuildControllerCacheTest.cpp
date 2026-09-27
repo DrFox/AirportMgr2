@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestWorld.h"
 

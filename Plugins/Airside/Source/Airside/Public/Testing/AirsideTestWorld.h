@@ -7,13 +7,23 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "CoreMinimal.h"
-#include "Engine/Engine.h"
 #include "Engine/World.h"
-#include "Present/AirsideBuildingsActor.h"
-#include "Present/RoadNetworkActor.h"
 #include "Tool/RoadEditTarget.h"
 
 class UAircraftType;
+
+// ARoadNetworkActor AND AAirsideBuildingsActor FORWARD DECLARED, NOT INCLUDED (this header's
+// own fan-out cut, 2026-09-27): FAirsideTestWorld held both only behind bare pointers here,
+// but its constructor used to be INLINE and called SpawnActor<T>() on each - a template that
+// needs T complete at the point of instantiation, which pulled Present/RoadNetworkActor.h
+// (and everything IT drags in - see that header's own long comment) into every one of the
+// 120+ TUs that include this header via AirsideTestFixtures.h, whether or not the test ever
+// touches the actor. Moving the constructor and destructor bodies out of line to
+// AirsideTestWorld.cpp - the one TU that still needs both complete types - is what makes the
+// forward declaration hold. ENFORCED BY: Check-Architecture.ps1's fan-out rule, which fails
+// the build if this header regains a direct #include of either Present/ actor header.
+class ARoadNetworkActor;
+class AAirsideBuildingsActor;
 
 /**
  * A world - and, by default, a network actor - to test through the composition root rather
@@ -43,7 +53,7 @@ class UAircraftType;
  * URoadBuildEdMode::GetWorld() returns in the real editor - nothing FindOrCreate or GetWorld's
  * override reads branches on it, so this is cosmetic fidelity, not a functional requirement.
  */
-struct FAirsideTestWorld
+struct AIRSIDE_API FAirsideTestWorld
 {
 	UWorld* World = nullptr;
 
@@ -58,25 +68,11 @@ struct FAirsideTestWorld
 	 */
 	AAirsideBuildingsActor* Buildings = nullptr;
 
-	explicit FAirsideTestWorld(bool bSpawnActor = true, EWorldType::Type WorldType = EWorldType::Game)
-	{
-		World = UWorld::CreateWorld(WorldType, false);
-		if (World == nullptr) { return; }
-		FWorldContext& Context = GEngine->CreateNewWorldContext(WorldType);
-		Context.SetCurrentWorld(World);
-		if (bSpawnActor)
-		{
-			Actor = World->SpawnActor<ARoadNetworkActor>();
-			Buildings = World->SpawnActor<AAirsideBuildingsActor>();
-		}
-	}
-
-	~FAirsideTestWorld()
-	{
-		if (World == nullptr) { return; }
-		GEngine->DestroyWorldContext(World);
-		World->DestroyWorld(false);
-	}
+	/** Bodies live in AirsideTestWorld.cpp, not here - see this header's own comment on why
+	 *  ARoadNetworkActor and AAirsideBuildingsActor are forward-declared above: an inline
+	 *  SpawnActor<T>() needs T complete at every includer, and only the .cpp needs that now. */
+	explicit FAirsideTestWorld(bool bSpawnActor = true, EWorldType::Type WorldType = EWorldType::Game);
+	~FAirsideTestWorld();
 
 	FAirsideTestWorld(const FAirsideTestWorld&) = delete;
 	FAirsideTestWorld& operator=(const FAirsideTestWorld&) = delete;
