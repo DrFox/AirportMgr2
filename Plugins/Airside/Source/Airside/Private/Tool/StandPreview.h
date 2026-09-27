@@ -19,6 +19,18 @@ struct IToolPreviewSink;
  */
 namespace StandPreview
 {
+	/** DescribeBody, then the stop mark at At - what a placement tool aims with. */
 	AIRSIDE_API void Describe(const UEntityDefinition* Definition, const FVector2D& At,
+		double Heading, IToolPreviewSink& Sink);
+
+	/**
+	 * Everything EXCEPT the stop mark: design aircraft, service points, footprint box, fixtures.
+	 *
+	 * Split out for GraphOverlay, which draws PLACED installations all the time, at every zoom.
+	 * While aiming, the stop mark is the cursor - the thing being positioned - so the tool keeps
+	 * it for every kind. Once placed it is an aircraft's nose stop, and on a fuel depot it was a
+	 * pair of rings on the road that nobody could name (2026-09-27, zoomed-out readability).
+	 */
+	AIRSIDE_API void DescribeBody(const UEntityDefinition* Definition, const FVector2D& At,
 		double Heading, IToolPreviewSink& Sink);
 }

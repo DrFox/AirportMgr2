@@ -8,6 +8,20 @@
 void StandPreview::Describe(const UEntityDefinition* Definition, const FVector2D& At,
 	double Heading, IToolPreviewSink& Sink)
 {
+	DescribeBody(Definition, At, Heading, Sink);
+
+	// The stop mark itself - the thing actually being positioned. Not after a null
+	// definition: DescribeBody already drew Refused there, and a Pending ring on top would
+	// say there was something to place after all.
+	if (Definition != nullptr)
+	{
+		Sink.Marker(At, EPreviewStyle::Pending);
+	}
+}
+
+void StandPreview::DescribeBody(const UEntityDefinition* Definition, const FVector2D& At,
+	double Heading, IToolPreviewSink& Sink)
+{
 	if (Definition == nullptr)
 	{
 		// NOT "no stand definition": this function now describes any installation, and naming
@@ -70,7 +84,4 @@ void StandPreview::Describe(const UEntityDefinition* Definition, const FVector2D
 		Sink.Marker(World, EPreviewStyle::Snap);
 		Sink.Line(At, World, EPreviewStyle::Heal);
 	}
-
-	// The stop mark itself - the thing actually being positioned.
-	Sink.Marker(At, EPreviewStyle::Pending);
 }

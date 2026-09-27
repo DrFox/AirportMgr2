@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
@@ -158,8 +159,9 @@ bool FGraphOverlayTest::RunTest(const FString& Parameters)
 	}
 
 	// 2. A placed entity gets its own committed-pose marker, its resolved anchors each get
-	//    a ServiceAnchor marker, AND StandPreview::Describe still ran - Snap/Heal from the
-	//    definition's fixtures, Pending for the stop mark. Missing any of the three would
+	//    a ServiceAnchor marker, AND StandPreview::DescribeBody still ran - Snap/Heal from the
+	//    definition's fixtures - plus Pending for a stand's stop mark (drawn by GraphOverlay
+	//    itself since 2026-09-27, for stands only). Missing any of the three would
 	//    mean GraphOverlay reimplemented (or dropped) part of what StandPreview already
 	//    does, which is the exact duplication issue #95 was filed against.
 	{
@@ -227,6 +229,62 @@ bool FGraphOverlayTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("no other node marker grew to compensate"),
 			After.CountMarkers(EPreviewStyle::NodeThrough) == Before.CountMarkers(EPreviewStyle::NodeThrough)
 				&& After.CountMarkers(EPreviewStyle::NodeJunction) == Before.CountMarkers(EPreviewStyle::NodeJunction));
+	}
+
+	return true;
+}
+
+// Named apart from Airside.Tool.GraphOverlay rather than as a dotted child of it: UE's test
+// tree drops a bare-named test once a child exists under its name.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotOverlayMarkersTest,
+	"Airside.Tool.DepotOverlayMarkers",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotOverlayMarkersTest::RunTest(const FString& Parameters)
+{
+	// A placed fuel depot drew an aircraft's stop mark and pose ring at its road connection -
+	// two circles on the road that, zoomed out, nobody could name (2026-09-27). Its pose is a
+	// truck's, not a nose gear's, so the overlay draws neither there. A stand beside it still
+	// gets both, so this cannot pass by the overlay simply dropping the rings for everyone.
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	if (!TestNotNull(TEXT("a network"), Network) || !TestNotNull(TEXT("a depot definition"), Depot)
+		|| !TestNotNull(TEXT("a stand definition"), Stand))
+	{
+		return false;
+	}
+
+	Network->PlaceEntity(Depot, Depot->Anchors, FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5,
+		/*DesignWingspan=*/0.0, Depot->PoseRole, Depot->Trucks);
+
+	{
+		FGraphSink Sink;
+		GraphOverlay::DescribeStands(*Network, Sink);
+
+		TestEqual(TEXT("a placed depot draws no aircraft stop mark"), Sink.CountMarkers(EPreviewStyle::Pending), 0);
+		TestEqual(TEXT("a placed depot draws no aircraft pose ring"), Sink.CountMarkers(EPreviewStyle::StandPose), 0);
+		// Its footprint box still draws: the circles were the complaint, not the plot outline.
+		TestEqual(TEXT("but its footprint box still draws, four sides"), Sink.CountLines(EPreviewStyle::Snap), 4);
+	}
+
+	Network->PlaceEntity(Stand, Stand->Anchors, FVector2D(9000.0, 9000.0), 0.0);
+
+	{
+		FGraphSink Sink;
+		GraphOverlay::DescribeStands(*Network, Sink);
+
+		TestEqual(TEXT("the stand still draws its pose ring, and only the stand does"),
+			Sink.CountMarkers(EPreviewStyle::StandPose), 1);
+		// The stand's design aircraft adds a Pending per service point from the same call, so
+		// the stop mark is proved against that count, read from the aircraft, not typed here.
+		const UAircraftType* Design = Stand->DesignAircraft.Get();
+		if (TestNotNull(TEXT("the stand has a design aircraft"), Design))
+		{
+			TestEqual(TEXT("and exactly one stop mark beyond its service points"),
+				Sink.CountMarkers(EPreviewStyle::Pending), Design->ServicePoints.Num() + 1);
+		}
 	}
 
 	return true;
