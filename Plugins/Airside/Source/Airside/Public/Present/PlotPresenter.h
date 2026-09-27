@@ -135,6 +135,19 @@ public:
 	int32 GetGhostCount() const { return Ghosts; }
 
 	/**
+	 * Show or hide every ghost bay - GhostBoxes and each pooled ghost component - without a
+	 * rebuild. A no-op when nothing changes, because both drivers call it every frame.
+	 *
+	 * VISIBILITY, NOT AN EMPTY REBUILD: GetGhostCount and the ghost instance counts still
+	 * describe the plot's capacity while hidden, which is a fact about the yard rather than
+	 * about what the camera is shown. Hidden in normal play because, zoomed out, the cyan
+	 * boxes read as the building itself (2026-09-27, fuel depot readability); shown while a
+	 * building tool is lit, where capacity is the point. See FBuildSession::WantsPlotGhostsDrawn.
+	 */
+	void SetGhostsVisible(bool bVisible);
+	bool AreGhostsVisible() const { return bGhostsVisible; }
+
+	/**
 	 * For tests: one instance's transform, false if there is no such instance.
 	 *
 	 * The component itself is private on ARoadNetworkActor, and widening it so a test can
@@ -193,6 +206,14 @@ private:
 	 */
 	UPROPERTY(Transient) TMap<TObjectPtr<UStaticMesh>, TObjectPtr<UInstancedStaticMeshComponent>> MeshPool;
 	UPROPERTY(Transient) TMap<TObjectPtr<UStaticMesh>, TObjectPtr<UInstancedStaticMeshComponent>> GhostMeshPool;
+
+	/**
+	 * What SetGhostsVisible last asked for. VISIBLE BY DEFAULT so a level with no driver
+	 * running - the editor outside Road Build mode - shows the capacity it is being designed
+	 * with. PoolFor applies it to a ghost component made later, or a new mesh's ghosts would
+	 * appear in the middle of play.
+	 */
+	bool bGhostsVisible = true;
 
 	/** The pooled component drawing Mesh, made on first use; null with no MeshParent. */
 	UInstancedStaticMeshComponent* PoolFor(UStaticMesh* Mesh, bool bGhost);

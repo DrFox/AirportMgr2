@@ -16,6 +16,7 @@
 #include "Tool/Selection.h"
 #include "RoadBuildController.generated.h"
 
+class AAirsideBuildingsActor;
 class ARoadNetworkActor;
 class UAircraftType;
 class UOpsRuntime;
@@ -268,6 +269,10 @@ public:
 	/** Points this instance at InTarget without going through BeginPlay's level search - same
 	 *  precedent as PlayerTickForTest, for a test that has no level to search. */
 	void SetTargetForTest(ARoadNetworkActor* InTarget) { Target = InTarget; BindRunwayCacheInvalidation(); }
+
+	/** The buildings actor BeginPlay would have found beside Target - SetTargetForTest's
+	 *  precedent, so a test can watch PlayerTick push ghost visibility at it. */
+	void SetBuildingsForTest(AAirsideBuildingsActor* InBuildings);
 
 	/** How many FToolContexts FBuildSession has actually built, for the composition test
 	 *  above: PlayerTickForTest brackets a tick with this to count contexts built DURING it,
@@ -624,6 +629,10 @@ private:
 
 	/** Resolved once on BeginPlay; the first ARoadNetworkActor in the level. */
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
+
+	/** The buildings actor found or spawned beside Target on BeginPlay. Weak: the level owns
+	 *  it, and this only pushes ghost visibility at it - see PlayerTick. */
+	TWeakObjectPtr<AAirsideBuildingsActor> Buildings;
 
 	/**
 	 * The tools, which one is active, and the snap/placement rules a click is judged

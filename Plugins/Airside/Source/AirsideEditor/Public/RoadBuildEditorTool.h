@@ -273,6 +273,10 @@ private:
 	 */
 	FToolContext MakeHoverContext() const;
 
+	/** Push ghost-bay visibility at the level's buildings actor, if there is one - see
+	 *  FBuildSession::WantsPlotGhostsDrawn. */
+	void SetPlotGhostsVisible(bool bVisible) const;
+
 	/** The shared body of both: everything that follows from a plane position. */
 	FToolContext MakeContextAt(const FVector2D& Plane) const;
 

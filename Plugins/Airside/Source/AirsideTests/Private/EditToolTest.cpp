@@ -989,6 +989,85 @@ bool FRoadNodesStandDownOutsideTheRoadToolsTest::RunTest(const FString& Paramete
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotGhostVisibilityIsDeclaredForEveryRegistryEntryTest,
+	"Airside.Tool.PlotGhostVisibilityIsDeclaredForEveryRegistryEntry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotGhostVisibilityIsDeclaredForEveryRegistryEntryTest::RunTest(const FString& Parameters)
+{
+	// NAMES, NOT COUNTS, for the node-visibility test's reason above. Only the depot tool
+	// wants ghost bays: they are a plot's unbought capacity, and until a building edit mode
+	// can buy one, placing a depot is the only time that capacity is the question.
+	const TMap<FName, bool> Expected = {
+		{ TEXT("Select"),          false },   // normal operations: cyan boxes read as the building
+		{ TEXT("Taxiway"),         false },
+		{ TEXT("Apron"),           false },
+		{ TEXT("Stand"),           false },   // a stand has no bays
+		{ TEXT("Guideline"),       false },
+		{ TEXT("Runway"),          false },
+		{ TEXT("HoldingPosition"), false },
+		{ TEXT("Road"),            false },
+		{ TEXT("FuelDepot"),       true  },
+	};
+
+	for (const FToolRegistration& Entry : ToolRegistry())
+	{
+		const bool* Want = Expected.Find(Entry.Id);
+		if (Want == nullptr)
+		{
+			AddError(FString::Printf(
+				TEXT("registry entry '%s' is not named in this test - a new tool must say "
+					 "whether plot ghost bays belong on screen under it"), *Entry.Id.ToString()));
+			continue;
+		}
+		TestEqual(*FString::Printf(TEXT("'%s' declares the ghost visibility this test expects"),
+			*Entry.Id.ToString()), Entry.bShowsPlotGhosts, *Want);
+	}
+	TestEqual(TEXT("and the table holds no entry beyond the ones named here"),
+		ToolRegistry().Num(), Expected.Num());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotGhostsStandDownOutsideTheDepotToolTest,
+	"Airside.Tool.PlotGhostsStandDownOutsideTheDepotTool",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotGhostsStandDownOutsideTheDepotToolTest::RunTest(const FString& Parameters)
+{
+	// THE REPORTED DEFECT (2026-09-27): a built depot's unbought bays drew cyan in normal
+	// play, and zoomed out they read as the depot itself.
+	int32 DepotIndex = INDEX_NONE;
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	for (int32 Index = 0; Index < Registry.Num(); ++Index)
+	{
+		if (Registry[Index].Id == FName(TEXT("FuelDepot")))
+		{
+			DepotIndex = Index;
+		}
+	}
+	if (!TestNotEqual(TEXT("the registry has a fuel depot tool"), DepotIndex, int32(INDEX_NONE)))
+	{
+		return false;
+	}
+
+	FBuildSession Session;
+	TestFalse(TEXT("a fresh session - normal operations - draws no ghost bays"),
+		Session.WantsPlotGhostsDrawn());
+
+	Session.SelectTool(DepotIndex);
+	TestTrue(TEXT("the fuel depot tool does"), Session.WantsPlotGhostsDrawn());
+
+	Session.SetGestureMode(EGestureMode::Remove);
+	TestTrue(TEXT("in Remove too - the depot tool is still the one lit"),
+		Session.WantsPlotGhostsDrawn());
+
+	Session.SelectTool(0);                       // Select
+	TestFalse(TEXT("and going back to Select puts them away"), Session.WantsPlotGhostsDrawn());
+	return true;
+}
+
 namespace
 {
 	/** A straight runway with one taxiway exit partway along it, which is the shape the

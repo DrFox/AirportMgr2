@@ -92,7 +92,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		{ EKeys::Zero,  TEXT("FuelDepot"), LOCTEXT("FuelDepot", "Fuel depot"),
 			LOCTEXT("FuelDepotTooltip", "Place a fuel depot: click a service road to anchor it, drag along the road for width, away from it for depth, then press Build."),
 			[] { return MakeUnique<FPlotPlaceTool>(EPlaceableEntity::FuelDepot); },
-			EEditHandleKind::None },
+			EEditHandleKind::None, /*bShowsRoadNodes*/ false, /*bShowsPlotGhosts*/ true },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }
