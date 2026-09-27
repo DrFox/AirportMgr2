@@ -322,7 +322,8 @@ bool FArrivalPlannerNoStandBigEnoughTest::RunTest(const FString& Parameters)
 	// ONE CODE C STAND beside the taxiway, facing east so its lead-in casts west onto it -
 	// FTestAirport's own stand pose, but with a MEASURED span: a 0 would admit anything.
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-	Network->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -10000.0), 0.0,
+	const FEntityInstanceId StandId = Network->PlaceEntity(Stand, Stand->Anchors,
+		ExitAt + FVector2D(9000.0, -10000.0), 0.0,
 		IcaoCode::DesignSpanForLetter(EIcaoCode::C), Stand->PoseRole, Stand->Trucks);
 
 	TestGraph::Rebuild(*Network);
@@ -335,6 +336,19 @@ bool FArrivalPlannerNoStandBigEnoughTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("the refusal names the letter the player must build: '%s'"), *Sentence),
 		Sentence.Contains(TEXT("Code F")));
 	TestFalse(TEXT("and does not send them to build a taxiway"), Sentence.Contains(TEXT("route")));
+	TestTrue(FString::Printf(TEXT("a tarmac stand's pavement would do, so no pavement is named: '%s'"), *Sentence),
+		Sentence.EndsWith(TEXT("Draw a bigger stand.")));
+
+	// SMALL AND TOO SOFT (R13): the only stand is grass and this aircraft needs tarmac. Still
+	// NoStandBigEnough - paving it would not fix it - but a bigger stand drawn on grass would
+	// refuse again for its surface, so the sentence says what to draw it on.
+	FRoadNetworkTestAccess(*Network).SetEntityPavementForTest(StandId, EPavement::Grass);
+	Airframe.MinimumPavement = EPavement::Tarmac;
+	const FArrivalPlan Soft = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe);
+	TestEqual(TEXT("small and soft is still refused for size"), Soft.Why, EArrivalRefusal::NoStandBigEnough);
+	const FString SoftSentence = ArrivalPlanner::DescribeRefusal(Soft);
+	TestTrue(FString::Printf(TEXT("and names the pavement the bigger stand needs: '%s'"), *SoftSentence),
+		SoftSentence.EndsWith(TEXT("Draw a bigger stand on tarmac or stronger.")));
 
 	// THE INBOX AND THE TOAST SEE ONLY THE REASON (see DescribeRefusal's two overloads); the
 	// inbox has the flight's airframe, so it can still name the letter.
@@ -400,6 +414,13 @@ bool FArrivalPlannerNoStandPavedEnoughTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("the refusal says to pave, not build: '%s'"), *Sentence),
 		Sentence.Contains(TEXT("pave")));
 	TestFalse(TEXT("and does not send them to build a taxiway"), Sentence.Contains(TEXT("route")));
+
+	// R13: THE PAVEMENT IS NAMED, from the stand admission the plan carries - "pave one" alone
+	// left the player guessing with what. Pinned whole, so a reworded sentence is a decision.
+	TestEqual(TEXT("the plan carries the refusing stand's pavement check"),
+		Plan.StandRefusal.Pavement.Need, EPavement::Tarmac);
+	TestEqual(TEXT("and the sentence names what it needs"), Sentence,
+		FString(TEXT("Arrival refused: no stand is paved for this aircraft - it needs tarmac or stronger; draw one on tarmac.")));
 	return true;
 }
 

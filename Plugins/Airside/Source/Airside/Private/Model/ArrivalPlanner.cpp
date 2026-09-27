@@ -31,20 +31,31 @@ namespace
 	 * call-site rule (Check-Architecture rule 4 row 'IcaoCode::StandAdmits', StandAdmission.cpp's
 	 * own ENFORCED BY comment) confines that call to IcaoCode.cpp and StandAdmission.cpp, so a
 	 * second opinion here would both violate it and risk drifting from Judge's own answer.
+	 *
+	 * OutSpeaker is the ONE stand admission the refusal is worded from (R13, final review):
+	 * the first service-only refusal for Service, the first big-enough stand for Surface (the
+	 * one paving would fix), and for TooSmall the first stand whose pavement passes - else the
+	 * first stand, so "draw a bigger stand" adds "on tarmac" only when no stand's pavement
+	 * would have done either. Untouched (admitted) when this returns None.
 	 */
-	EStandRefusal WhyEveryStandRefused(const URoadNetwork& Network, const FAirframe& Airframe)
+	EStandRefusal WhyEveryStandRefused(const URoadNetwork& Network, const FAirframe& Airframe,
+		FStandAdmission& OutSpeaker)
 	{
 		int32 Stands = 0;
-		bool bSawServiceOnly = false;
-		bool bSawBigEnough = false;
+		TOptional<FStandAdmission> FirstServiceOnly;
+		TOptional<FStandAdmission> FirstBigEnough;
+		TOptional<FStandAdmission> FirstPavedEnough;
+		TOptional<FStandAdmission> First;
 		for (const FEntityInstance& Stand : Network.GetEntities())
 		{
 			if (!Stand.IsStandCandidate()) { continue; }
 			++Stands;
 			const FStandAdmission Admission = StandAdmission::Judge(Stand, Airframe);
 			if (Admission.IsAdmitted()) { return EStandRefusal::None; }
-			if (Admission.Why == EStandRefusal::Service) { bSawServiceOnly = true; }
-			if (Admission.bPassesSize) { bSawBigEnough = true; }
+			if (!First.IsSet()) { First = Admission; }
+			if (Admission.Why == EStandRefusal::Service && !FirstServiceOnly.IsSet()) { FirstServiceOnly = Admission; }
+			if (Admission.bPassesSize && !FirstBigEnough.IsSet()) { FirstBigEnough = Admission; }
+			if (Admission.Pavement.Passes() && !FirstPavedEnough.IsSet()) { FirstPavedEnough = Admission; }
 		}
 		if (Stands == 0)
 		{
@@ -53,9 +64,50 @@ namespace
 			// Stands > 0 guard read before this generalised it.
 			return EStandRefusal::None;
 		}
-		if (bSawServiceOnly) { return EStandRefusal::Service; }
-		if (bSawBigEnough) { return EStandRefusal::Surface; }
+		if (FirstServiceOnly.IsSet()) { OutSpeaker = *FirstServiceOnly; return EStandRefusal::Service; }
+		if (FirstBigEnough.IsSet()) { OutSpeaker = *FirstBigEnough; return EStandRefusal::Surface; }
+		OutSpeaker = FirstPavedEnough.IsSet() ? *FirstPavedEnough : *First;
 		return EStandRefusal::TooSmall;
+	}
+
+	/**
+	 * "tarmac or stronger", or just the name at the top of the scale - "reinforced or
+	 * stronger" would promise a pavement that does not exist.
+	 */
+	FString PavementOrStronger(EPavement Need)
+	{
+		return Need == EPavement::Reinforced
+			? FString(Pavement::Name(Need))
+			: FString::Printf(TEXT("%s or stronger"), Pavement::Name(Need));
+	}
+
+	/**
+	 * NoStandBigEnough's sentence, with or without the pavement the new stand must be drawn
+	 * on. ONE BODY for both DescribeRefusal overloads, so the plan's figures only ever ADD a
+	 * clause to the reason-only wording rather than retyping it. OnPavement empty: none.
+	 */
+	FString BiggerStandSentence(double AircraftWingspan, const FString& OnPavement)
+	{
+		// THE LETTER IS THE LEVER - the player draws stands by letter, so "too small" alone
+		// leaves them guessing how big. Named only for a span the table can name: wider
+		// than Code F is a span no stand can ever be drawn for, and saying "Code F" there
+		// would send them to build one that still refuses it - nor is its pavement worth naming.
+		if (AircraftWingspan > IcaoCode::MaxWingspanForLetter(EIcaoCode::F))
+		{
+			return FString::Printf(
+				TEXT("Arrival refused: a %.1f m wingspan is wider than any stand can be built for."),
+				AircraftWingspan / 100.0);
+		}
+		const FString On = OnPavement.IsEmpty() ? FString() : FString::Printf(TEXT(" on %s"), *OnPavement);
+		if (AircraftWingspan > 0.0)
+		{
+			return FString::Printf(
+				TEXT("Arrival refused: this aircraft needs a Code %s stand, and none on the field is ")
+				TEXT("big enough. Draw a bigger stand%s."),
+				*IcaoCode::LetterForWingspan(AircraftWingspan), *On);
+		}
+		return FString::Printf(
+			TEXT("Arrival refused: every stand is too small for this aircraft. Draw a bigger stand%s."), *On);
 	}
 }
 
@@ -360,13 +412,15 @@ namespace ArrivalPlanner
 			// Four refusals for four fixes: every stand too small means draw a bigger one; every
 			// stand paved too weakly means pave one; every stand serviceable-blocked means fix
 			// the service, not the stand; no stand reachable at all means build a taxiway; every
-			// reachable stand held means wait, or build a stand. SURFACE, SIZE, SERVICE, in that
-			// order (WhyEveryStandRefused's own priority - see its comment), because each is a
-			// fact about the ground that no taxiway or waiting changes - and admission used to
-			// fall through to NoRouteToStand, sending the player to build a taxiway that already
-			// reached every stand (final review I6). Held cannot also be true then: a stand is
-			// only counted held once it has admitted.
-			switch (WhyEveryStandRefused(Network, Airframe))
+			// reachable stand held means wait, or build a stand. The three stand refusals are
+			// asked BEFORE reach and held, and among themselves SERVICE, then SURFACE, then SIZE
+			// (WhyEveryStandRefused's priority ACROSS stands - see its comment; Judge's own
+			// per-stand order is the other way round), because each is a fact about the ground
+			// that no taxiway or waiting changes - and admission used to fall through to
+			// NoRouteToStand, sending the player to build a taxiway that already reached every
+			// stand (final review I6). Held cannot also be true then: a stand is only counted
+			// held once it has admitted.
+			switch (WhyEveryStandRefused(Network, Airframe, Out.StandRefusal))
 			{
 			case EStandRefusal::TooSmall:
 				Out.Why = EArrivalRefusal::NoStandBigEnough;
@@ -426,24 +480,9 @@ namespace ArrivalPlanner
 			return TEXT("Arrival refused: this aircraft is not admitted to that runway.");
 
 		case EArrivalRefusal::NoStandBigEnough:
-			// THE LETTER IS THE LEVER - the player draws stands by letter, so "too small" alone
-			// leaves them guessing how big. Named only for a span the table can name: wider
-			// than Code F is a span no stand can ever be drawn for, and saying "Code F" there
-			// would send them to build one that still refuses it.
-			if (AircraftWingspan > IcaoCode::MaxWingspanForLetter(EIcaoCode::F))
-			{
-				return FString::Printf(
-					TEXT("Arrival refused: a %.1f m wingspan is wider than any stand can be built for."),
-					AircraftWingspan / 100.0);
-			}
-			if (AircraftWingspan > 0.0)
-			{
-				return FString::Printf(
-					TEXT("Arrival refused: this aircraft needs a Code %s stand, and none on the field is ")
-					TEXT("big enough. Draw a bigger stand."),
-					*IcaoCode::LetterForWingspan(AircraftWingspan));
-			}
-			return TEXT("Arrival refused: every stand is too small for this aircraft. Draw a bigger stand.");
+			// BiggerStandSentence carries the letter rule. No pavement clause here: the reason
+			// alone does not say what the stands are paved with.
+			return BiggerStandSentence(AircraftWingspan, FString());
 
 		case EArrivalRefusal::NoStandPavedEnough:
 			return TEXT("Arrival refused: no stand is paved for this aircraft - pave one.");
@@ -487,11 +526,30 @@ namespace ArrivalPlanner
 		case EArrivalRefusal::NotAdmitted:
 			return FString::Printf(TEXT("Arrival refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
 
+		// THE STAND REFUSALS NAME THE PAVEMENT from the admission that spoke for them (R13,
+		// spec 2026-09-27 §3: the plan's refusal text reaches the stand's own decision) - "pave
+		// one" alone left the player guessing with what. The reason-only overload keeps the
+		// pavement-free wording: a listener on the bus has no admission to read.
+		case EArrivalRefusal::NoStandPavedEnough:
+			return FString::Printf(
+				TEXT("Arrival refused: no stand is paved for this aircraft - it needs %s; draw one on %s."),
+				*PavementOrStronger(Plan.StandRefusal.Pavement.Need), Pavement::Name(Plan.StandRefusal.Pavement.Need));
+
+		case EArrivalRefusal::NoStandBigEnough:
+			// A stand too small AND too soft: the bigger one must be drawn on the stronger
+			// pavement too, or it refuses again for its surface. Only when no stand's pavement
+			// would have done (WhyEveryStandRefused's speaker choice); the span names the letter.
+			return BiggerStandSentence(Plan.AircraftWingspan,
+				Plan.StandRefusal.Why != EStandRefusal::None && !Plan.StandRefusal.Pavement.Passes()
+					? PavementOrStronger(Plan.StandRefusal.Pavement.Need) : FString());
+
+		case EArrivalRefusal::NoStandServiceable:
+			return FString::Printf(TEXT("Arrival refused: no stand can be serviced on its pavement - %s."),
+				*StandAdmission::Describe(Plan.StandRefusal));
+
 		default:
-			// NoRunway, RunwayOccupied, NoFreeStand, NoStandPavedEnough, NoStandServiceable and
-			// None carry no figures, so their wording is the reason-only overload's and is not
-			// repeated here. NoStandBigEnough is worded there too, handed the plan's own span so
-			// it can name the letter.
+			// NoRunway, RunwayOccupied, NoFreeStand and None carry no figures, so their wording
+			// is the reason-only overload's and is not repeated here.
 			return DescribeRefusal(Plan.Why, Plan.AircraftWingspan);
 		}
 	}

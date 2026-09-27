@@ -5,6 +5,7 @@
 #include "Model/RoadHandles.h"
 #include "Model/RouteSearch.h"
 #include "Model/RunwayAdmission.h"
+#include "Model/StandAdmission.h"
 #include "ArrivalPlanner.generated.h"
 
 class URoadNetwork;
@@ -116,6 +117,14 @@ struct AIRSIDE_API FArrivalPlan
 	 * the same reason Needed is carried for RunwayTooShort's figures.
 	 */
 	UPROPERTY() double AircraftWingspan = 0.0;
+
+	/**
+	 * The one stand admission a stand refusal (NoStandBigEnough, NoStandPavedEnough,
+	 * NoStandServiceable) is worded from - its pavement check names what to pave with. Carried
+	 * as Admission is for NotAdmitted, so DescribeRefusal writes from the decision instead of
+	 * re-deriving it. Default (admitted) for every other Why; see WhyEveryStandRefused.
+	 */
+	UPROPERTY() FStandAdmission StandRefusal;
 
 	/**
 	 * None means every step above succeeded and every other field is meaningful.
