@@ -831,11 +831,15 @@ def _author_via_dicts(spec):
     requirements = asset.get_editor_property("requirements")
     for field_name, value in spec.requirements.items():
         requirements.set_editor_property(field_name, value)
-    requirements.set_editor_property(
-        "minimum_surface",
-        unreal.RunwaySurface.GRASS if spec.surface == "GRASS" else unreal.RunwaySurface.TARMAC)
     requirements.set_editor_property("approach_needed", unreal.RunwayApproach.VISUAL)
     asset.set_editor_property("requirements", requirements)
+    # ON THE TYPE, NOT THE REQUIREMENTS, since #363 moved FRunwayRequirements::MinimumSurface to
+    # UAircraftType::MinimumPavement (a stand reads it too). #363 did not carry this script with
+    # it, so every re-author threw on the old field until 2026-09-27;
+    # Airside.Content.AircraftMinimumPavementMigrated pins the values this writes.
+    asset.set_editor_property(
+        "minimum_pavement",
+        unreal.Pavement.GRASS if spec.surface == "GRASS" else unreal.Pavement.TARMAC)
 
     # PUSHBACK IS NOT SET HERE - Tools/Python/build_pushback_needs.py owns EPushbackNeed for
     # every type; see verify()'s NOTE line, which reports it rather than re-authoring it.
@@ -1007,7 +1011,7 @@ def verify(spec, path):
     # was simply not carried into the three newest scripts (plane9, plane11, plane13) or
     # plane14; nothing about those four aeroplanes' requirements needed it dropped.
     say("PASS surface %s, approach %s"
-        % (requirements.get_editor_property("minimum_surface"),
+        % (asset.get_editor_property("minimum_pavement"),
            requirements.get_editor_property("approach_needed")))
 
     if spec.gear is None:
