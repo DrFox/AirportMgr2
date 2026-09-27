@@ -31,6 +31,7 @@ PLANE12 = "/Game/Entities/DA_Aircraft_Plane12.DA_Aircraft_Plane12"
 PLANE15 = "/Game/Entities/DA_Aircraft_Plane15.DA_Aircraft_Plane15"
 PLANE16 = "/Game/Entities/DA_Aircraft_Plane16.DA_Aircraft_Plane16"
 PLANE17 = "/Game/Entities/DA_Aircraft_Plane17.DA_Aircraft_Plane17"
+PLANE18 = "/Game/Entities/DA_Aircraft_Plane18.DA_Aircraft_Plane18"
 
 # name -> (display name, fleet asset paths, offers per game day)
 #
@@ -115,9 +116,14 @@ AIRLINES = {
     #
     # 2026-09-27: THE SENECA JOINS, THE SECOND PISTON TWIN. 500 m of grass, under the Baron's
     # 710; the twin a short strip can take.
+    #
+    # 2026-09-27: THE SAAB 340 JOINS, THE SECOND PAVED TYPE AND THE FIRST AIRLINER. 1,300 m of
+    # tarmac, over the King Air's 1,006 and under the Q400's 1,402 - and Code B, so a paved
+    # field that took the King Air takes it by LENGTHENING alone, with no widening. On this
+    # airline for the King Air's reason above: a second operator is a second thing to balance.
     "DA_Airline_Cumbria": ("Cumbria Air",
                            [PIPER, PLANE1, PLANE2, PLANE5, PLANE10, PLANE12, PLANE15, PLANE16,
-                            PLANE17],
+                            PLANE17, PLANE18],
                            4.0),
 }
 
