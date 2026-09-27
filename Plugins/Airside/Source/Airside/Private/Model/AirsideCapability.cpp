@@ -26,9 +26,9 @@ namespace
 	}
 }
 
-FAirsideCapability AirsideCapability::Summarise(const URoadNetwork& Network)
+TArray<FRunwaySummary> AirsideCapability::SummariseRunways(const URoadNetwork& Network)
 {
-	FAirsideCapability Out;
+	TArray<FRunwaySummary> Runways;
 
 	const TArray<FRoadSegment>& Segments = Network.GetSegments();
 	for (const FRoadSegment& Segment : Segments)
@@ -47,15 +47,23 @@ FAirsideCapability AirsideCapability::Summarise(const URoadNetwork& Network)
 		if (!Network.RunwayExtentAt(A->Position, End)) { continue; }
 		const FVector2D FarEnd = End.FarEnd();
 
-		const bool bKnown = Out.Runways.ContainsByPredicate(
+		const bool bKnown = Runways.ContainsByPredicate(
 			[&](const FRunwaySummary& R) { return SameStrip(R, End.Threshold, FarEnd); });
 		if (bKnown) { continue; }
 
 		FRunwaySummary R;
 		R.End = End;
 		R.Profile = Profile;
-		Out.Runways.Add(R);
+		Runways.Add(R);
 	}
+	return Runways;
+}
+
+FAirsideCapability AirsideCapability::Summarise(const URoadNetwork& Network)
+{
+	FAirsideCapability Out;
+	// The runway walk is SummariseRunways, so CheckArrival and this agree on what one runway is.
+	Out.Runways = SummariseRunways(Network);
 
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)

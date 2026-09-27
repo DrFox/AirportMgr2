@@ -665,6 +665,15 @@ private:
 	FGraphRebuildSummary LastRebuild;
 
 	/**
+	 * The departure verdict last LOGGED per aircraft, empty once it departed. DepartAgent is
+	 * retried every tick by UFuelService until it succeeds - so lengthening a runway releases
+	 * the aircraft - and a refusal logged per call wrote one line 14,944 times in three
+	 * minutes (2026-09-27, Airside.Model.Traffic.DepartRefusalSaidOnce). A session log gate,
+	 * not state - not a UPROPERTY, not saved.
+	 */
+	TMap<int32, FString> LastDepartVerdict;
+
+	/**
 	 * The drive side the last OnGraphRebuilt saw, so the next can tell a flip from any other
 	 * edit (FTrafficContext::bLanesMirrored). Unset until the first rebuild. Not a UPROPERTY:
 	 * it describes what this session's agents were planned against, not saved state.

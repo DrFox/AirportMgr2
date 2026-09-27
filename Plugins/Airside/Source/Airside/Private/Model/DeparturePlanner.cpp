@@ -35,7 +35,13 @@ namespace DeparturePlanner
 			Out.Why = EDepartureRefusal::NoPerformance;
 			return Out;
 		}
-		Out.Needed = FTakeoffRun::RequiredRoll(Airframe.Chassis.Ground, Airframe.Climb);
+		// THE FIELD LENGTH, NOT JUST THE ROLL, where one is published: admission judged the
+		// whole strip against it, and an entry that left only the roll let an SR22 admitted to
+		// a 430 m strip leave from 44 m in with 386 m to go (2026-09-27,
+		// Airside.Model.DeparturePlanner.EntryLeavesTheFieldLength). The roll stays the floor
+		// for a type with no published figure.
+		Out.Needed = FMath::Max(FTakeoffRun::RequiredRoll(Airframe.Chassis.Ground, Airframe.Climb),
+			Airframe.Requirements.TakeoffFieldLength);
 
 		// Every strip node from the threshold, nearest first. MinDistance 0: a node AT the
 		// threshold is the backtrack's goal, and the first one past it with enough runway
@@ -134,6 +140,16 @@ namespace DeparturePlanner
 		// re-deriving that walk here would be a second enumerator to keep in step.
 		const FAirsideCapability Cap = AirsideCapability::Summarise(Network);
 
+		// NOT ON A GRAPH MID-EDIT - see EDepartureRefusal::GraphBeingEdited. PlanAny, not Plan:
+		// it is the entry DepartAgent uses, and refusing per runway would report the last
+		// runway's reason for a fact about the whole graph.
+		if (Network.AreGuidelinesBehindRoad())
+		{
+			FDeparturePlan Waiting;
+			Waiting.Why = EDepartureRefusal::GraphBeingEdited;
+			return Waiting;
+		}
+
 		FDeparturePlan Best;
 		Best.Why = EDepartureRefusal::NoRunway;
 		bool bHaveRefusal = false;
@@ -175,6 +191,7 @@ namespace DeparturePlanner
 		case EDepartureRefusal::NotAdmitted:
 			return FString::Printf(TEXT("Departure refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
 		case EDepartureRefusal::NotParked:  return TEXT("Departure refused: the aircraft is not parked.");
+		case EDepartureRefusal::GraphBeingEdited: return TEXT("Departure waiting: the airport is being edited.");
 		case EDepartureRefusal::None:
 			return FString::Printf(TEXT("Departure: %s entry %.0f uu past the threshold, %.0f uu available of %.0f, %.0f needed, taxiing %.0f uu."),
 				Plan.bBacktrack ? TEXT("backtrack to the") : TEXT("intersection"),

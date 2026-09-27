@@ -7,6 +7,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/DeparturePlanner.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
@@ -456,6 +457,67 @@ bool FArrivalPlannerNotAdmittedTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and the chain it was refused for"), Refused.RunwayChain.Num(), 3);
 	const FString Sentence = ArrivalPlanner::DescribeRefusal(Refused);
 	TestTrue(FString::Printf(TEXT("the sentence names the surface: %s"), *Sentence), Sentence.Contains(TEXT("grass")));
+	return true;
+}
+
+/**
+ * NO ROUTE IS PLANNED ON A GRAPH THE GEOMETRY HAS MOVED AWAY FROM.
+ *
+ * REPORTED FROM PLAY, 2026-09-27: the player grabbed the node joining a taxiway to a runway's
+ * end and dragged it to lengthen the runway. 0.65 s into the drag the runway measured long
+ * enough, a parked SR22's per-tick departure retry succeeded, and its route was searched over
+ * the guideline graph as it was BEFORE the drag - a drag rebuilds geometry only
+ * (URoadSurfacePresenter, issue #165) and derives the graph on release. On release the rebuild
+ * re-resolved that route rather than replanning it, so the aircraft left the new taxiway and
+ * joined the runway where its end used to be. Both planners now refuse while the derived graph
+ * is behind the road it was derived from; the refusal is transient, so the retry goes on
+ * release, on the graph the player can see.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalPlannerNoPlanMidEditTest,
+	"Airside.Model.NoPlanOnAGraphMidEdit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalPlannerNoPlanMidEditTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = TestAirframes::Piper();
+	const FTestAirport Airport = FTestAirport::Build(Airframe);
+	URoadNetwork& Net = *Airport.Net;
+	const FArrivalPlan Before = ArrivalPlanner::Plan(Net, Airport.Threshold, Airframe, nullptr);
+	if (!TestTrue(FString::Printf(TEXT("the derived airport plans an arrival: %s"),
+		*ArrivalPlanner::DescribeRefusal(Before)), Before.IsValid()))
+	{
+		return false;
+	}
+	TestFalse(TEXT("a freshly derived graph is not behind its road"), Net.AreGuidelinesBehindRoad());
+
+	// ONE DRAG FRAME: a road node moved, nothing re-derived - exactly what a Geometry change does.
+	FRoadNodeId Moved;
+	for (int32 Index = 0; Index < Net.GetNodes().Num() && !Moved.IsSet(); ++Index)
+	{
+		Moved = Net.NodeIdAt(Index);
+	}
+	const FRoadNode* Node = Net.GetNode(Moved);
+	if (!TestNotNull(TEXT("a road node to drag"), Node)) { return false; }
+	Net.SetNodePosition(Moved, Node->Position + FVector2D(0.0, 10.0));
+	TestTrue(TEXT("mid-drag, the graph is behind the road"), Net.AreGuidelinesBehindRoad());
+
+	const FArrivalPlan During = ArrivalPlanner::Plan(Net, Airport.Threshold, Airframe, nullptr);
+	TestEqual(TEXT("an arrival is refused mid-edit"), During.Why, EArrivalRefusal::GraphBeingEdited);
+	FGuidelineNodeId AnyNode;
+	for (int32 Index = 0; Index < Net.GetGuidelineNodes().Num() && !AnyNode.IsSet(); ++Index)
+	{
+		if (Net.GetGuidelineNodes()[Index].bAlive) { AnyNode = Net.GuidelineNodeIdAt(Index); }
+	}
+	TestEqual(TEXT("and so is a departure"),
+		DeparturePlanner::PlanAny(Net, AnyNode, Airframe, ETraversalClass::Aircraft).Why,
+		EDepartureRefusal::GraphBeingEdited);
+
+	// RELEASE: the graph is derived again, and planning resumes on it.
+	TestGraph::Derive(Net);
+	TestFalse(TEXT("re-derived, the graph is current again"), Net.AreGuidelinesBehindRoad());
+	TestNotEqual(TEXT("and an arrival is no longer refused for the edit"),
+		ArrivalPlanner::Plan(Net, Airport.Threshold, Airframe, nullptr).Why, EArrivalRefusal::GraphBeingEdited);
 	return true;
 }
 

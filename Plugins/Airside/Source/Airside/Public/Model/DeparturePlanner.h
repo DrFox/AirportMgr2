@@ -41,6 +41,16 @@ enum class EDepartureRefusal : uint8
 	 * back on reversing down the departure's own arm was rejected.
 	 */
 	NoPushbackRoute,
+
+	/**
+	 * The guideline graph is behind the road it was derived from - a node is mid-drag, and a
+	 * drag rebuilds geometry only (URoadSurfacePresenter, #165), deriving the graph on release.
+	 * A route searched now would follow lines the player has already moved (2026-09-27: an
+	 * SR22 joined the runway where its end used to be). TRANSIENT: it clears on release, and
+	 * a retry then plans on the graph the player sees. Appended LAST so saved values keep
+	 * their meaning. See URoadNetwork::AreGuidelinesBehindRoad.
+	 */
+	GraphBeingEdited,
 };
 
 /**

@@ -122,6 +122,24 @@ public:
 	 */
 	uint32 GetEditRevision() const { return EditRevision; }
 
+	/**
+	 * The DERIVED guideline graph is behind the road: FRoadGuidelineBuilder::Build ran at least
+	 * once and a node or segment has changed since. True for a drag's duration - a drag
+	 * rebuilds geometry only (#165) - and the planners refuse while it holds, so no route is
+	 * searched over lines the player has already moved (2026-09-27; Airside.Model.
+	 * NoPlanOnAGraphMidEdit). FALSE for a graph never derived: a hand-authored test graph has
+	 * no road to be behind. Session state, like EditRevision - a duplicate or a load starts
+	 * "never derived" and the first rebuild stamps it.
+	 */
+	bool AreGuidelinesBehindRoad() const
+	{
+		return GuidelinesDerivedAt != MAX_uint32 && GuidelinesDerivedAt != EditRevision;
+	}
+
+	/** Stamps the current EditRevision as the one the guideline graph was derived from.
+	 *  FRoadGuidelineBuilder::Build's last act - see AreGuidelinesBehindRoad. */
+	void MarkGuidelinesDerived() { GuidelinesDerivedAt = EditRevision; }
+
 	/** Which side of a two-lane road traffic keeps to. See EDriveSide. */
 	EDriveSide GetDriveSide() const { return DriveSide; }
 
@@ -961,6 +979,9 @@ private:
 
 	/** See GetEditRevision. Plain, not a UPROPERTY - a session clock, not state. */
 	uint32 EditRevision = 0;
+
+	/** See AreGuidelinesBehindRoad. MAX_uint32 = never derived. Plain, like EditRevision. */
+	uint32 GuidelinesDerivedAt = MAX_uint32;
 
 	/**
 	 * A UPROPERTY, so it saves with the airport and undo's DuplicateObject snapshot carries

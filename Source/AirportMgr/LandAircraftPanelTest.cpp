@@ -138,6 +138,27 @@ bool FLandChoicesGreyWhatTheRunwayRefusesTest::RunTest(const FString& Parameters
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandChoicesGreyWhatCannotLeaveTest,
+	"AirportMgr.UI.LandChoicesGreyWhatCannotLeave",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandChoicesGreyWhatCannotLeaveTest::RunTest(const FString& Parameters)
+{
+	// THE REPORTED STRIP, 404 m: the SR22 lands in 390 m but needs 430 m to leave (2026-09-27).
+	// Greyed, with the departure named - not offered as a click that strands the aircraft.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	LandPanelMakeRunway(*Net, 40366.0, 2300.0);
+	const TArray<FLandChoice> Choices =
+		LandChoices::Build(Net, FVector2D::ZeroVector, LandChoices::EveryMeshedType());
+	const FLandChoice* Sr22 = LandPanelFind(Choices, TEXT("DA_Aircraft_Plane15"));
+	if (!TestNotNull(TEXT("the SR22 is listed"), Sr22)) { return false; }
+	TestFalse(TEXT("the SR22 cannot land where it cannot take off again"), Sr22->bAdmitted);
+	TestTrue(FString::Printf(TEXT("and the row says it is the take-off: \"%s\""), *Sr22->Refusal),
+		Sr22->Refusal.Contains(TEXT("take off")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FLandPanelRowLandsItsTypeTest,
 	"AirportMgr.UI.LandPanelRowLandsItsType",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

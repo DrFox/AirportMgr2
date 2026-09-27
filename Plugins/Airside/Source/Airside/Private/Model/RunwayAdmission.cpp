@@ -1,6 +1,7 @@
 #include "Model/RunwayAdmission.h"
 
 #include "Model/Airframe.h"
+#include "Model/AirsideCapability.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
@@ -99,8 +100,54 @@ namespace RunwayAdmission
 		return Judge(Network.RunwayFactsFor(Seed), Length, MaxWingspan, Airframe, bLanding);
 	}
 
+	FRunwayAdmission CheckArrival(const URoadNetwork& Network, FRoadSegmentId LandingSeed,
+		const FAirframe& Airframe)
+	{
+		const FRunwayAdmission Landing = Check(Network, LandingSeed, Airframe, /*bLanding=*/true);
+		if (!Landing.IsAdmitted())
+		{
+			return Landing;
+		}
+
+		// Every runway, not just the landing one - see the header. The list is
+		// AirsideCapability's, the one definition of "one runway" (a strip split by exits is
+		// one), not a second walk of the segments here.
+		FRunwayAdmission Longest;
+		bool bAny = false;
+		for (const FRunwaySummary& Runway : AirsideCapability::SummariseRunways(Network))
+		{
+			const FRunwayAdmission Departure = Check(Network, Runway.End.Seed, Airframe, /*bLanding=*/false);
+			if (Departure.IsAdmitted())
+			{
+				return Landing;
+			}
+			if (!bAny || Departure.RunwayLength > Longest.RunwayLength)
+			{
+				Longest = Departure;
+				bAny = true;
+			}
+		}
+		// Unreachable with a runway to land on, which is itself a runway - kept rather than
+		// asserted, so a network the summary cannot see still answers with the landing.
+		if (!bAny)
+		{
+			return Landing;
+		}
+		Longest.bForDeparture = true;
+		return Longest;
+	}
+
 	FString Describe(const FRunwayAdmission& Admission)
 	{
+		// SAID AS THE DEPARTURE when it is one: "the runway is 40366 uu" alone would read as a
+		// landing refusal, and the landing fitted.
+		if (Admission.bForDeparture && !Admission.IsAdmitted())
+		{
+			FRunwayAdmission AsDeparture = Admission;
+			AsDeparture.bForDeparture = false;
+			return FString::Printf(TEXT("it could not take off again - %s"), *Describe(AsDeparture));
+		}
+
 		switch (Admission.Why)
 		{
 		case ERunwayRefusal::Surface:

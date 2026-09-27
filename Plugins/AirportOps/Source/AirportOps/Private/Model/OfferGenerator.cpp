@@ -20,6 +20,7 @@ bool UOfferGenerator::IsPermanentRefusal(EArrivalRefusal Why)
 	// it lands, and the row shows the live reason meanwhile.
 	case EArrivalRefusal::RunwayOccupied:
 	case EArrivalRefusal::NoFreeStand:
+	case EArrivalRefusal::GraphBeingEdited:  // clears when the player lets go of the node
 		return false;
 
 	// These need the player to BUILD something. NoRunway, RunwayTooShort, NotAdmitted,

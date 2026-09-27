@@ -67,6 +67,16 @@ enum class EArrivalRefusal : uint8
 	/** A stand is big enough and paved enough, but a service this aircraft needs cannot work on
 	 *  its pavement. Unreachable until StandAdmission::PavementAdmitsRole restricts a role. */
 	NoStandServiceable,
+
+	/**
+	 * The guideline graph is behind the road it was derived from - a node is mid-drag, and a
+	 * drag rebuilds geometry only (URoadSurfacePresenter, #165), deriving the graph on release.
+	 * A route searched now would follow lines the player has already moved (2026-09-27: an
+	 * SR22 joined the runway where its end used to be). TRANSIENT: it clears on release, and
+	 * a retry then plans on the graph the player sees. Appended LAST so saved values keep
+	 * their meaning. See URoadNetwork::AreGuidelinesBehindRoad.
+	 */
+	GraphBeingEdited,
 };
 
 /**

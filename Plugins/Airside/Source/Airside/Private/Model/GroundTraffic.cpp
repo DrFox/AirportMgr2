@@ -875,7 +875,15 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	// From where it PARKED - its goal node - not from its polyline position: the search is
 	// over the graph and the pose node is the graph's name for this stand.
 	const FDeparturePlan Plan = DeparturePlanner::PlanAny(Network, Agent.GoalNode, *Aircraft, Agent.Class);
-	UE_LOG(LogAirsideTraffic, Log, TEXT("DepartAgent %d: %s"), AgentId, *DeparturePlanner::Describe(Plan));
+	// SAID ON A CHANGE, not per call - see LastDepartVerdict. A success is always said, and
+	// clears the gate so a later refusal of the same aircraft is said again.
+	const FString Verdict = DeparturePlanner::Describe(Plan);
+	FString& LastSaid = LastDepartVerdict.FindOrAdd(AgentId);
+	if (Plan.IsValid() || LastSaid != Verdict)
+	{
+		UE_LOG(LogAirsideTraffic, Log, TEXT("DepartAgent %d: %s"), AgentId, *Verdict);
+	}
+	LastSaid = Plan.IsValid() ? FString() : Verdict;
 	if (!Plan.IsValid())
 	{
 		return Plan.Why;

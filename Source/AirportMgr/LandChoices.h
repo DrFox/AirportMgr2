@@ -45,7 +45,7 @@ namespace LandChoices
 	 * a landing near Near would use.
 	 *
 	 * THE RUNWAY NEAREST Near, AND ONLY THAT ONE - URoadNetwork::NearestRunwayThreshold then
-	 * RunwayAdmission::Check, the two calls ArrivalPlanner::Plan makes, in its order. The
+	 * RunwayAdmission::CheckArrival, the two calls ArrivalPlanner::Plan makes, in its order. The
 	 * planner does NOT fall back to another runway when that one refuses (checked 2026-09-27,
 	 * ArrivalPlanner.cpp step 1), so a panel that greyed only what NO runway admits would
 	 * offer clicks the game then refuses. Near is the view focus, the point the click lands at.

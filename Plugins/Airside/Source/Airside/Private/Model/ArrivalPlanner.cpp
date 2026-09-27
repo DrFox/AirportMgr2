@@ -267,6 +267,14 @@ namespace ArrivalPlanner
 		FArrivalPlan Out;
 		Out.AircraftWingspan = Airframe.Wingspan;
 
+		// 0. NOT ON A GRAPH MID-EDIT - see EArrivalRefusal::GraphBeingEdited. First, because
+		//    every step below reads the guideline graph, and the one it would read is stale.
+		if (Network.AreGuidelinesBehindRoad())
+		{
+			Out.Why = EArrivalRefusal::GraphBeingEdited;
+			return Out;
+		}
+
 		// 1. WHICH RUNWAY. Nearest threshold to the query point, which is the user's own choice
 		//    of rule - there is no wind model, so nothing else could decide it.
 		if (!Network.NearestRunwayThreshold(Near, Out.End))
@@ -281,7 +289,10 @@ namespace ArrivalPlanner
 		//     width, in that order - before occupancy, because occupancy clears on its own
 		//     and this never does: M3's sequencer will queue on RunwayOccupied, and it must
 		//     not queue an airliner behind a Piper for a grass strip it can never land on.
-		Out.Admission = RunwayAdmission::Check(Network, Out.End.Seed, Airframe, true);
+		//
+		//     AND MAY IT LEAVE AGAIN - CheckArrival, not Check (2026-09-27): a landing that fits
+		//     on a strip no runway can take the departure from strands the aircraft on its stand.
+		Out.Admission = RunwayAdmission::CheckArrival(Network, Out.End.Seed, Airframe);
 		if (!Out.Admission.IsAdmitted())
 		{
 			Out.Why = EArrivalRefusal::NotAdmitted;
@@ -489,6 +500,9 @@ namespace ArrivalPlanner
 
 		case EArrivalRefusal::NoStandServiceable:
 			return TEXT("Arrival refused: no stand can be serviced on its pavement.");
+
+		case EArrivalRefusal::GraphBeingEdited:
+			return TEXT("Arrival waiting: the airport is being edited.");
 
 		case EArrivalRefusal::None:
 		default:

@@ -64,4 +64,8 @@ namespace AirsideCapability
 	 * already does is the only definition of "one runway" in the codebase.
 	 */
 	AIRSIDE_API FAirsideCapability Summarise(const URoadNetwork& Network);
+
+	/** Summarise's runway half alone - the same walk, without the stands. What
+	 *  RunwayAdmission::CheckArrival asks, once per arrival admission. */
+	AIRSIDE_API TArray<FRunwaySummary> SummariseRunways(const URoadNetwork& Network);
 }

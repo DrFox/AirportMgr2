@@ -109,6 +109,53 @@ bool FDeparturePlannerIntersectionTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * AN ENTRY MUST LEAVE THE FIELD LENGTH, not merely the roll.
+ *
+ * REPORTED FROM PLAY, 2026-09-27: an SR22 (430 m field length, 384 m roll) was refused a 404 m
+ * strip; the player dragged the runway to 430 m and it departed - from an intersection 44 m in,
+ * with 386 m left, because admission judged the whole strip against the field length and the
+ * entry search judged what was LEFT against the bare roll. Two figures for one question, and the
+ * looser one chose the entry. The entry now needs what admission needs, so a strip that only
+ * just admits the aircraft is used from its threshold.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeparturePlannerEntryLeavesTheFieldLengthTest,
+	"Airside.Model.DeparturePlanner.EntryLeavesTheFieldLength",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDeparturePlannerEntryLeavesTheFieldLengthTest::RunTest(const FString& Parameters)
+{
+	FDepartureAirport A = BuildDepartureAirport(GetTransientPackage());
+	if (!TestTrue(TEXT("the stand is linked"), A.StandNode.IsSet())) { return false; }
+	const FVector2D Near = A.EAt - FVector2D(1000.0, 0.0);
+	FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+
+	// The baseline: the Intersection test's entry, and what it leaves.
+	const FDeparturePlan Baseline = DeparturePlanner::Plan(*A.Net, A.StandNode, Near, Airframe, ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("the baseline is an intersection departure"), Baseline.IsValid() && !Baseline.bBacktrack))
+	{
+		return false;
+	}
+
+	// A field length just past what that entry leaves, but inside the whole strip - so the
+	// aircraft is ADMITTED and the intersection is no longer enough.
+	Airframe.Requirements.TakeoffFieldLength = Baseline.Available + 1000.0;
+	if (!TestTrue(TEXT("the strip still admits that field length"), Airframe.Requirements.TakeoffFieldLength <= Baseline.End.Length))
+	{
+		return false;
+	}
+	const FDeparturePlan Plan = DeparturePlanner::Plan(*A.Net, A.StandNode, Near, Airframe, ETraversalClass::Aircraft);
+	if (!TestTrue(FString::Printf(TEXT("still departs: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
+	TestTrue(FString::Printf(TEXT("from an entry leaving the field length: %.0f uu ahead, %.0f required"),
+		Plan.Available, Airframe.Requirements.TakeoffFieldLength),
+		Plan.Available >= Airframe.Requirements.TakeoffFieldLength);
+	TestTrue(TEXT("so not the intersection that left too little"), Plan.EntryOffset < Baseline.EntryOffset);
+	TestTrue(FString::Printf(TEXT("and it says the field length is what it needed (%.0f)"), Plan.Needed),
+		Plan.Needed >= Airframe.Requirements.TakeoffFieldLength);
+	return true;
+}
+
+/**
  * A BACKTRACK when nothing else will do. Asked to depart EASTBOUND from W, the only forward
  * entry from this taxiway is the hairpin onto the E side of X, which leaves 34000 uu -
  * enough for the Piper, so make the runway short enough that it is not: then the planner
