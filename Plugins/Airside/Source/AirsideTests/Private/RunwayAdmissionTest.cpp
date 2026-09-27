@@ -2,6 +2,7 @@
 #include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayAdmission.h"
 #include "Profiles/RoadProfile.h"
@@ -117,6 +118,72 @@ bool FRunwayAdmissionTest::RunTest(const FString& Parameters)
 	const FRoadSegmentId Tx = Net->AddStraightSegment(P, Q, Taxiway);
 	TestEqual(TEXT("a taxiway is not refused - it is not a runway, which is a different answer"),
 		RunwayAdmission::Check(*Net, Tx, NeedsTarmac, true).Why, ERunwayRefusal::None);
+	return true;
+}
+
+/**
+ * AN ARRIVAL IS ADMITTED ONLY WHERE IT CAN LEAVE.
+ *
+ * REPORTED FROM PLAY, 2026-09-27: an SR22 landed on a 404 m strip and then refused to depart,
+ * logging "the runway is 40366 uu; this aircraft's field length is 43000" every frame. Once
+ * field lengths became the model's roll x 1.1, landing asked less than take-off for most
+ * types (the SR22: 390 m in, 430 m out), and the landing check judged only the landing.
+ *
+ * THE DEPARTURE MAY USE ANY RUNWAY, because DeparturePlanner::PlanAny skips a refused one
+ * (Airside.Model.DeparturePlanner.PlanAny.SkipsRefusedRunway) - so a short landing strip
+ * beside a long departure one is still an airport the type can use.
+ *
+ * NOT NAMED Airside.Model.RunwayAdmission.Something - the suite above has that bare name, and
+ * a dotted child would silently drop it from the automation tree.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalAdmitsOnlyWhatCanLeaveTest,
+	"Airside.Model.ArrivalAdmitsOnlyWhatCanLeave",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalAdmitsOnlyWhatCanLeaveTest::RunTest(const FString& Parameters)
+{
+	// The reported strip and the SR22's figures (plane15.py).
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadSegmentId Strip = MakeRunway(*Net, 40366.0, 2300.0);
+	FAirframe Sr22 = TestAirframes::Piper();
+	Sr22.Requirements.LandingFieldLength = 39000.0;
+	Sr22.Requirements.TakeoffFieldLength = 43000.0;
+
+	TestTrue(TEXT("the landing alone fits - 390 m on 404 m, which is how it got in"),
+		RunwayAdmission::Check(*Net, Strip, Sr22, true).IsAdmitted());
+
+	const FRunwayAdmission Arrival = RunwayAdmission::CheckArrival(*Net, Strip, Sr22);
+	TestEqual(TEXT("but the arrival is refused, because no runway takes it out again"),
+		Arrival.Why, ERunwayRefusal::TooShort);
+	TestTrue(TEXT("and the verdict says it is about leaving"), Arrival.bForDeparture);
+	TestEqual(TEXT("judged against the take-off figure"), Arrival.FieldLength, 43000.0);
+	TestTrue(FString::Printf(TEXT("in words that say so: \"%s\""), *RunwayAdmission::Describe(Arrival)),
+		RunwayAdmission::Describe(Arrival).Contains(TEXT("take off")));
+
+	// THROUGH THE PLANNER, the seam offers, the board and the Land key all share: a plan that
+	// still asked the landing-only check would pass everything above.
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Net, FVector2D::ZeroVector, Sr22, nullptr);
+	TestEqual(TEXT("the arrival planner refuses it as not admitted"), Plan.Why, EArrivalRefusal::NotAdmitted);
+	TestTrue(FString::Printf(TEXT("and its sentence names the departure: \"%s\""), *ArrivalPlanner::DescribeRefusal(Plan)),
+		ArrivalPlanner::DescribeRefusal(Plan).Contains(TEXT("take off")));
+
+	// A LONG DEPARTURE RUNWAY ELSEWHERE admits it - land short, leave long.
+	const FRoadNodeId FarA = Net->AddNode(FVector2D(0.0, 300000.0));
+	const FRoadNodeId FarB = Net->AddNode(FVector2D(60000.0, 300000.0));
+	Net->AddStraightSegment(FarA, FarB, TestProfiles::NarrowRunway());
+	const FRunwayAdmission WithLong = RunwayAdmission::CheckArrival(*Net, Strip, Sr22);
+	TestTrue(FString::Printf(TEXT("with a 600 m runway to leave from, the 404 m landing is admitted (%s)"),
+		*RunwayAdmission::Describe(WithLong)), WithLong.IsAdmitted());
+	TestFalse(TEXT("and carries no departure verdict"), WithLong.bForDeparture);
+
+	// A LANDING REFUSAL IS STILL THE LANDING'S: the departure is asked only once the landing fits.
+	FAirframe TooLongIn = Sr22;
+	TooLongIn.Requirements.LandingFieldLength = 50000.0;
+	const FRunwayAdmission In = RunwayAdmission::CheckArrival(*Net, Strip, TooLongIn);
+	TestEqual(TEXT("a landing that does not fit is refused for the landing"), In.Why, ERunwayRefusal::TooShort);
+	TestFalse(TEXT("not for the departure"), In.bForDeparture);
+	TestEqual(TEXT("against the landing figure"), In.FieldLength, 50000.0);
 	return true;
 }
 

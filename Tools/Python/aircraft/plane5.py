@@ -8,7 +8,8 @@ grass, 497 m), plane2 (a Twin Otter, grass, 366 m but 19.75 m of span), plane3 (
 1,402 m) and plane4 (a 737, tarmac, 2,316 m). Between the Twin Otter and the Q400 the player's
 next capability was a THOUSAND-metre tarmac runway, bought in one jump. The King Air asks for
 tarmac and 1,006 m, which splits that jump in two - it is the first type in the game whose
-requirement is a SURFACE rather than a length: it needs 2.7 times LESS runway than the Q400 and
+requirement is a SURFACE rather than a length: it needs well under the Q400's runway (1.8x less
+in the game's figures, 2.7x published) and
 the same surface. Widening no longer helps; paving does.
 
 Code B on a 17.69 m span, and the only Code B in the fleet besides the Twin Otter.
@@ -117,9 +118,12 @@ GEAR = {
     "extend_below_height": 15000.0,
 }
 
+# MODEL ROLL x 1.1 since 2026-09-27 - see build_aircraft_type.py, "FIELD LENGTHS ARE THE MODEL'S".
+# TAKE-OFF RAISED to 580 m from the 540 that model roll 487 m x 1.1 gives: the Caravan (560) and
+# the Baron (570) must ask less than the King Air - their ladder rows in FieldLengthsCoverTheRoll.
 REQUIREMENTS = {
-    "takeoff_field_length": 100600.0,   # 1,006 m, 3,300 ft at MTOW, flaps approach
-    "landing_field_length": 82100.0,    # 821 m, 2,692 ft at max landing weight, no reverse
+    "takeoff_field_length": 58000.0,   # 580 m, RAISED - see above; published 1,006 m, 3,300 ft at MTOW, flaps approach
+    "landing_field_length": 63000.0,   # 630 m = model landing x1.25 571 m x 1.1; published 821 m, 2,692 ft at max landing weight, no reverse
 }
 
 TURNAROUND_SECONDS = 720.0   # twelve minutes: eleven seats through one airstair door

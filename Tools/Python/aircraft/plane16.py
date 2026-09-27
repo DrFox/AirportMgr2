@@ -93,8 +93,8 @@ GEAR = {
 }
 
 REQUIREMENTS = {
-    "takeoff_field_length": 71000.0,   # 710 m, 2,300 ft over 50 ft rounded up
-    "landing_field_length": 77000.0,   # 770 m, 2,500 ft over 50 ft rounded up
+    "takeoff_field_length": 57000.0,   # 570 m = model roll 517 m x 1.1; published 710 m, 2,300 ft over 50 ft rounded up
+    "landing_field_length": 56000.0,   # 560 m = model landing x1.25 505 m x 1.1; published 770 m, 2,500 ft over 50 ft rounded up
 }
 
 TURNAROUND_SECONDS = 720.0   # six seats through a front door and the aft double door, plus fuel

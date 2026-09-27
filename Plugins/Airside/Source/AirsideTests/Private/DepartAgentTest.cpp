@@ -145,6 +145,12 @@ bool FDepartAgentForwardersTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	const FDepAgentGraph G = DepAgentBuild(*Actor->Network);
+	// THE HAND-AUTHORED GRAPH IS THIS FIXTURE'S GRAPH. PlaceNode's rebuild derived (and stamped)
+	// the network before DepAgentBuild wrote the runway and its lines straight onto it, so by
+	// URoadNetwork::AreGuidelinesBehindRoad the graph is behind the road and both planners would
+	// wait for a release that never comes (2026-09-27). Stamped current, because the lines this
+	// test means ARE the ones it just authored - the model test above never derives at all.
+	Actor->Network->MarkGuidelinesDerived();
 
 	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 	if (!TestTrue(TEXT("dispatched through the actor"), Actor->DispatchAgent(TestGraph::Probe(*Actor->Network, G.B, G.A, ETraversalClass::Aircraft), TestAirframes::Piper()))) { return false; }
@@ -159,6 +165,54 @@ bool FDepartAgentForwardersTest::RunTest(const FString& Parameters)
 	for (int32 I = 0; I < 20000 && Actor->GetAgentCount() > 0; ++I) { Actor->Tick(1.0f / 30.0f); }
 	TestEqual(TEXT("the agent departed and was dropped"), Actor->GetAgentCount(), 0);
 	TestNull(TEXT("and its view went with it"), Actor->GetAgentView(Id));
+	return true;
+}
+
+/**
+ * A REFUSED DEPARTURE IS SAID ONCE, not every time it is asked.
+ *
+ * REPORTED FROM PLAY, 2026-09-27: an SR22 that could not take off wrote "DepartAgent 1:
+ * Departure refused: the runway is 40366 uu; this aircraft's field length is 43000" 14,944
+ * times in three minutes. UFuelService retries the departure every tick until it succeeds -
+ * rightly, so lengthening the runway releases the aircraft - and quiets its OWN line on an
+ * unchanged reason; the planner's verdict one level down was logged on every call.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepartAgentRefusalSaidOnceTest,
+	"Airside.Model.Traffic.DepartRefusalSaidOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepartAgentRefusalSaidOnceTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FDepAgentGraph G = DepAgentBuild(*Net);
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	// A take-off figure no strip here meets (the fixture's runway is 1 km), so every departure
+	// is refused for the same reason. Dispatched as a taxi, not an arrival, so the arrival's
+	// own can-it-leave check does not stop it reaching the stand.
+	FAirframe CannotLeave = TestAirframes::Piper();
+	CannotLeave.Requirements.TakeoffFieldLength = 1.0e7;
+	const int32 Id = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, G.B, G.A, ETraversalClass::Aircraft),
+		CannotLeave, ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	for (int32 I = 0; I < 20000 && Traffic->FindAgent(Id)->Phase != EAgentPhase::Parked; ++I) { Traffic->Advance(1.0 / 30.0, Net); }
+	if (!TestEqual(TEXT("parked"), Traffic->FindAgent(Id)->Phase, EAgentPhase::Parked)) { return false; }
+
+	FLogLineSpy Spy(FName(TEXT("LogAirsideTraffic")));
+	GLog->AddOutputDevice(&Spy);
+	int32 Refused = 0;
+	for (int32 Try = 0; Try < 5; ++Try)
+	{
+		Refused += Traffic->DepartAgent(Id, *Net) != EDepartureRefusal::None ? 1 : 0;
+	}
+	GLog->RemoveOutputDevice(&Spy);
+
+	TestEqual(TEXT("all five tries are refused"), Refused, 5);
+	const FString Prefix = FString::Printf(TEXT("DepartAgent %d: Departure refused"), Id);
+	const int32 Said = Spy.CapturedLines.FilterByPredicate(
+		[&Prefix](const FString& Line) { return Line.StartsWith(Prefix); }).Num();
+	TestEqual(FString::Printf(TEXT("but the refusal is logged once, not five times (%d)"), Said), Said, 1);
 	return true;
 }
 

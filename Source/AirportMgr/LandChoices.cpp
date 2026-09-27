@@ -42,8 +42,11 @@ namespace
 	{
 		if (Admission.Why == ERunwayRefusal::TooShort)
 		{
-			return FString::Printf(TEXT("too short: needs %.0f m, runway %.0f m"),
-				Admission.FieldLength / 100.0, Admission.RunwayLength / 100.0);
+			const double NeedM = Admission.FieldLength / 100.0;
+			const double HaveM = Admission.RunwayLength / 100.0;
+			return Admission.bForDeparture
+				? FString::Printf(TEXT("could not take off again: needs %.0f m, longest runway %.0f m"), NeedM, HaveM)
+				: FString::Printf(TEXT("too short: needs %.0f m, runway %.0f m"), NeedM, HaveM);
 		}
 		return RunwayAdmission::Describe(Admission);
 	}
@@ -75,8 +78,9 @@ TArray<FLandChoice> LandChoices::Build(const URoadNetwork* Network, const FVecto
 		}
 		else
 		{
+			// CheckArrival, the planner's own question: it must be able to leave, too.
 			const FRunwayAdmission Admission =
-				RunwayAdmission::Check(*Network, End.Seed, Type->Airframe(), /*bLanding=*/true);
+				RunwayAdmission::CheckArrival(*Network, End.Seed, Type->Airframe());
 			Choice.bAdmitted = Admission.Why == ERunwayRefusal::None;
 			if (!Choice.bAdmitted)
 			{

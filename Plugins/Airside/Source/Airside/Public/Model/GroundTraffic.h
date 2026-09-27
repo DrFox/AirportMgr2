@@ -665,6 +665,15 @@ private:
 	FGraphRebuildSummary LastRebuild;
 
 	/**
+	 * The departure verdict last LOGGED per aircraft, empty once it departed. DepartAgent is
+	 * retried every tick by UFuelService until it succeeds - so lengthening a runway releases
+	 * the aircraft - and a refusal logged per call wrote one line 14,944 times in three
+	 * minutes (2026-09-27, Airside.Model.Traffic.DepartRefusalSaidOnce). A session log gate,
+	 * not state - not a UPROPERTY, not saved.
+	 */
+	TMap<int32, FString> LastDepartVerdict;
+
+	/**
 	 * The drive side the last OnGraphRebuilt saw, so the next can tell a flip from any other
 	 * edit (FTrafficContext::bLanesMirrored). Unset until the first rebuild. Not a UPROPERTY:
 	 * it describes what this session's agents were planned against, not saved state.
@@ -731,6 +740,17 @@ private:
 	 * agent per frame to close a one-frame window.
 	 */
 	void Arbitrate(const URoadNetwork& Network);
+
+	/**
+	 * Every aeroplane holding at the end of a push for a taxi out it can drive (see
+	 * FRoadAgent::bTaxiOutStale) is given one: DeparturePlanner::PlanAny from the live node
+	 * nearest where it stands, joined to it by a short leg so it DRIVES there rather than
+	 * appearing there, and re-armed from the new route's end. None found: it keeps holding,
+	 * said once, and is asked again every tick - so the player's fix releases it, the user's
+	 * ruling for this case (2026-09-27). Not while the graph is mid-edit: the route must be on
+	 * the lines the player is about to see.
+	 */
+	void ReplanHeldTaxiOuts(const URoadNetwork& Network);
 
 	/** One bounded step. Advance splits a long frame into these - see FTrafficRules::MaxSubstepSeconds. */
 	void AdvanceOnce(double DeltaSeconds, const URoadNetwork* Network);

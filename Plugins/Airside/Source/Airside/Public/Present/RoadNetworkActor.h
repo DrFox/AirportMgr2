@@ -390,15 +390,20 @@ public:
 	virtual bool SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts) override;
 
 	/**
-	 * The shortest thing that may be called a runway, in uu. 500 m.
+	 * The shortest thing that may be called a runway, in uu. 300 m.
 	 *
 	 * Not an aviation rule - real minima depend on the aircraft - but a floor that separates
-	 * a runway from a slip of the mouse. A Meridian needs about 700 m at sea level. Stays on
-	 * the actor: it is level-authored, and the facade only reads it (see
-	 * URoadEditFacade::GetMinimumRunwayLength).
+	 * a runway from a slip of the mouse. Stays on the actor: it is level-authored, and the
+	 * facade only reads it (see URoadEditFacade::GetMinimumRunwayLength).
+	 *
+	 * 300, DOWN FROM 500 on 2026-09-27, when every type's field length became its model roll
+	 * x 1.1: four types then asked for under 500 m, so 500 was a floor no aircraft needed and
+	 * the short-field types' figures could never be tested by a runway short enough to matter.
+	 * 300 sits just above the shortest ask, the Twin Otter's 290 m landing (plane2.py), so a
+	 * farm strip for a Cherokee or a Twin Otter is buildable and nothing shorter is.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
-	double MinimumRunwayLength = 50000.0;
+	double MinimumRunwayLength = 30000.0;
 
 	/** IRoadEditTarget accessor for MinimumRunwayLength - see the property's own comment. */
 	virtual double GetMinimumRunwayLength() const override { return MinimumRunwayLength; }

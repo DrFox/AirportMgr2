@@ -535,6 +535,30 @@ void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled, TO
 	}
 }
 
+void FRoadAgent::MarkTaxiOutStale()
+{
+	bTaxiOutStale = true;
+	bTaxiOutHoldSaid = false;
+}
+
+void FRoadAgent::AdoptTaxiOut(const FRoutePlan& Route)
+{
+	TaxiOutPlan = Route;
+	bTaxiOutStale = false;
+	bTaxiOutHoldSaid = false;
+}
+
+void FRoadAgent::ResumeTaxiOut(const FRoutePlan& Route)
+{
+	bTaxiOutStale = false;
+	bTaxiOutHoldSaid = false;
+	// THE ENGINE IS ALREADY TURNING: RestartTaxi spools from cold, which is right for a stand
+	// and wrong for an aeroplane that stopped on the taxiway a moment ago.
+	const double Spool = EngineRPM;
+	RestartTaxi(Route, 0.0, LastMotion.Heading);
+	EngineRPM = Spool;
+}
+
 bool FRoadAgent::StartPushback(const FRoutePlan& PushPlan, const FRoutePlan& InTaxiOutPlan,
 	const FAirframe& InAirframe, double PushSpeed, double PushAccel, double ThrustRPM)
 {
@@ -712,6 +736,22 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			//
 			// Follower.Start AND NOT StartTaxi, which writes EngineRPM = 0.0 from cold and
 			// would undo the spool the push has been running - see StartPushback.
+			// ONLY A TAXI OUT THAT BEGINS HERE. The two agree exactly when the push ran as
+			// planned (above); a rebuild during the push can leave the taxi out stranded, or
+			// starting somewhere else, and starting it anyway put the aeroplane on its first
+			// point - a jump across the airfield (2026-09-27). HOLD at the end of the push
+			// instead, still Manoeuvring and at rest, until UGroundTraffic::ReplanHeldTaxiOuts
+			// supplies a route from here. 10 uu: the planned case is exact, so this only ever
+			// has to tell exact from wrong.
+			constexpr double HandoverToleranceUu = 10.0;
+			if (bTaxiOutStale || !TaxiOutPlan.IsValid() || TaxiOutPlan.Polyline.Num() == 0
+				|| FVector2D::Distance(TaxiOutPlan.Polyline[0], PushAt) > HandoverToleranceUu)
+			{
+				bTaxiOutStale = true;
+				LastMotion = DescribeMotion(PushAt, PushHeading);
+				OutMotion = LastMotion;
+				return true;
+			}
 			Phase = EAgentPhase::Taxiing;
 			OutEvent = EAgentEvent::PushedBack;
 			Follower.Start(TaxiOutPlan, Chassis(), 0.0, Pushback.Heading);
@@ -772,6 +812,34 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 
 		if (Follower.HasArrived())
 		{
+			// HOLDING FOR A NEW WAY TO THE RUNWAY - see bTaxiOutStale. Neither a take-off nor a
+			// park: UGroundTraffic::ReplanHeldTaxiOuts restarts the taxi from here when it can.
+			if (bTaxiOutStale)
+			{
+				OutMotion = LastMotion;
+				return true;
+			}
+			// THE TAKE-OFF STARTS AT ITS ENTRY OR NOT AT ALL (2026-09-27). Departure.Start puts
+			// the aeroplane on DepartureOrder's entry whatever it is, and a route a rebuild
+			// stranded counts as ARRIVED (FRouteFollower::HasArrived: not drivable), so an
+			// aeroplane stranded half way along its taxi out jumped to the runway on the
+			// rebuild's own frame (Airside.Model.TaxiingDepartureStrandedDoesNotJump). Anywhere
+			// else it disarms and holds, and a new way to the runway is planned from here. 30 m:
+			// a route planned to the entry ends ON it; a hand-drawn one may end beside the
+			// centreline, within a strip's half width - never hundreds of metres away.
+			constexpr double DepartureEntryToleranceUu = 3000.0;
+			const FVector2D Entry = DepartureOrder.End.Threshold
+				+ DepartureOrder.End.Direction * DepartureOrder.EntryOffset;
+			if (bDepartureArmed && FVector2D::Distance(LastMotion.Position, Entry) > DepartureEntryToleranceUu)
+			{
+				UE_LOG(LogAirsideTraffic, Log,
+					TEXT("Taxi ended %.0f uu from its runway entry; holding for a new way to the runway."),
+					FVector2D::Distance(LastMotion.Position, Entry));
+				DisarmDeparture();
+				MarkTaxiOutStale();
+				OutMotion = LastMotion;
+				return true;
+			}
 			if (bDepartureArmed)
 			{
 				// ARRIVED ON A RUNWAY: hand over. Heading, speed and WHERE it joined carry

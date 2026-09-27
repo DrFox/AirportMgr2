@@ -101,10 +101,11 @@ GEAR = {
 # measured off. Left at 81 the four doors stop 9 degrees short of shut.
 BAY_DOOR_CLOSED_ANGLE_DEGREES = 90.0
 
-# PUBLISHED FIELD LENGTHS, at MTOW, sea level, ISA.
+# MODEL ROLL x 1.1 since 2026-09-27 - see build_aircraft_type.py, "FIELD LENGTHS ARE THE MODEL'S".
+# The published ones (inline) were at MTOW, sea level, ISA.
 REQUIREMENTS = {
-    "takeoff_field_length": 140200.0,   # 1,402 m
-    "landing_field_length": 128700.0,   # 1,287 m
+    "takeoff_field_length": 103000.0,   # 1030 m = model roll 934 m x 1.1; published 1,402 m
+    "landing_field_length": 90000.0,   # 900 m = model landing x1.25 816 m x 1.1; published 1,287 m
 }
 
 TURNAROUND_SECONDS = 1500.0   # 78 seats through one airstair door: twenty-five minutes

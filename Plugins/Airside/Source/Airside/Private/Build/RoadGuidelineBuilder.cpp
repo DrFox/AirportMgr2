@@ -1607,6 +1607,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			UE_LOG(LogAirside, Log, TEXT("Reverse turns: %d laid of %d on file"), ReverseTurnsLaid, Network.GetReverseTurns().Num());
 		}
 	}
+
+	// LAST, after every mutation above: the graph now matches the road as of this revision, and
+	// the planners may search it again - see URoadNetwork::AreGuidelinesBehindRoad.
+	Network.MarkGuidelinesDerived();
 }
 
 void FRoadGuidelineBuilder::MeasureSplitHalf(URoadNetwork& Network, FGuidelineEdgeId Half,

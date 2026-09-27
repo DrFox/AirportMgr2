@@ -99,8 +99,8 @@ GEAR = {
 }
 
 REQUIREMENTS = {
-    "takeoff_field_length": 231600.0,   # 2,316 m
-    "landing_field_length": 163400.0,   # 1,634 m
+    "takeoff_field_length": 149000.0,   # 1490 m = model roll 1346 m x 1.1; published 2,316 m
+    "landing_field_length": 112000.0,   # 1120 m = model landing x1.25 1012 m x 1.1; published 1,634 m
 }
 
 TURNAROUND_SECONDS = 2400.0   # 189 seats through two doors: forty minutes

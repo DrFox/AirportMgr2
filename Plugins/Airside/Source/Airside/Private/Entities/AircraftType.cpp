@@ -505,8 +505,14 @@ FRunwayRequirements UAircraftType::PiperMeridianRequirements()
 	// touched down 60 m past the threshold. With the landing-flap angle
 	// (FApproachPerformance::LandingLiftAngleDegrees) it flares to 164 m, and the rollout
 	// with margin is 461 m - rounded up. Still under the 530 m strip above.
-	Requirements.TakeoffFieldLength = 51000.0;
-	Requirements.LandingFieldLength = 47000.0;
+	//
+	// BOTH NOW MODEL x 1.1, 2026-09-27 - the rule every type follows; see
+	// Tools/Python/build_aircraft_type.py, "FIELD LENGTHS ARE THE MODEL'S". Landing 461 m x 1.1
+	// = 510 m. Take-off would be 327 m x 1.1 = 360 m, but is RAISED to 380: the Cessna 172
+	// (plane1, 370 m) must ask less than the Meridian - its ladder row in
+	// Airside.Content.FieldLengthsCoverTheRoll - and the model rolls the 172 in 332 m.
+	Requirements.TakeoffFieldLength = 38000.0;
+	Requirements.LandingFieldLength = 51000.0;
 
 	return Requirements;
 }

@@ -137,16 +137,13 @@ ENGINE = {
     "spool_down_seconds": 4.0,
 }
 
-# PUBLISHED FIELD LENGTHS, and they may never be shorter than the roll the model computes -
-# Airside.Model.FieldLengthsCoverTheRoll states the rule: a published figure may be generous,
-# but one shorter than the roll admits an aircraft to a strip it then runs off the end of.
-#
-# Both are the POH's TOTAL over a 50 ft obstacle rather than the ground roll. Taking the 172's
-# 293 m ground roll instead would have made it the shortest-field type in the game, and it
-# would have done so by measuring a different thing from every other type in the same field.
+# MODEL ROLL x 1.1 since 2026-09-27 - see build_aircraft_type.py, "FIELD LENGTHS ARE THE MODEL'S".
+# These were the POH's TOTAL over a 50 ft obstacle, chosen so the 172 measured the same thing as
+# every other type; now every type measures the model's own roll, which keeps that consistency.
+# Must stay under the Meridian's take-off figure - the ladder row in FieldLengthsCoverTheRoll.
 REQUIREMENTS = {
-    "takeoff_field_length": 49700.0,   # 497 m, POH 1,630 ft over 50 ft
-    "landing_field_length": 40700.0,   # 407 m, POH 1,335 ft over 50 ft
+    "takeoff_field_length": 37000.0,   # 370 m = model roll 332 m x 1.1; published 497 m, POH 1,630 ft over 50 ft
+    "landing_field_length": 22000.0,   # 220 m = model landing x1.25 200 m x 1.1; published 407 m, POH 1,335 ft over 50 ft
 }
 
 # Four seats and a door on each side. Ten minutes, the shortest in the game - plane2 turns in

@@ -54,6 +54,13 @@ struct AIRSIDE_API FRunwayAdmission
 	UPROPERTY() double Wingspan = 0.0;
 	UPROPERTY() double MaxWingspan = 0.0;
 
+	/**
+	 * The verdict is about LEAVING: an arrival whose landing fits, refused because no runway
+	 * takes its departure - see CheckArrival. RunwayLength and FieldLength are then the
+	 * longest runway's and the take-off figure. False for every Check.
+	 */
+	UPROPERTY() bool bForDeparture = false;
+
 	bool IsAdmitted() const { return Why == ERunwayRefusal::None; }
 };
 
@@ -92,6 +99,23 @@ namespace RunwayAdmission
 	 */
 	AIRSIDE_API FRunwayAdmission Check(const URoadNetwork& Network, FRoadSegmentId Seed,
 		const FAirframe& Airframe, bool bLanding);
+
+	/**
+	 * May this aircraft ARRIVE here: land on LandingSeed, and later leave from SOME runway.
+	 *
+	 * THE LANDING FIRST, on its own runway, and its refusal is returned as it is. Then the
+	 * departure, against every runway on the network, because DeparturePlanner::PlanAny
+	 * skips a refused runway - so a short landing strip beside a long departure one is an
+	 * airport the type can use. Refused when none takes it, with bForDeparture set and the
+	 * LONGEST runway's verdict, the one most nearly able to.
+	 *
+	 * WHY IT EXISTS (2026-09-27): once field lengths became the model's roll x 1.1, landing asked
+	 * less than take-off for most types, and an SR22 landed on a 404 m strip it could never
+	 * leave (Airside.Model.ArrivalAdmitsOnlyWhatCanLeave). Every arrival admission asks this,
+	 * not Check - ArrivalPlanner::Plan (offers, the board, the Land key) and the Land panel.
+	 */
+	AIRSIDE_API FRunwayAdmission CheckArrival(const URoadNetwork& Network, FRoadSegmentId LandingSeed,
+		const FAirframe& Airframe);
 
 	/** The widest wingspan a strip of TotalWidth admits by ICAO code, uu. */
 	AIRSIDE_API double MaxWingspanForWidth(double TotalWidth);

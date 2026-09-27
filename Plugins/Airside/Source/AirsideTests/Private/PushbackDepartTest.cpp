@@ -258,4 +258,240 @@ bool FPushbackDepartReleasesStandTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A REBUILD DURING A PUSH RE-RESOLVES THE TAXI OUT TOO, not only the push.
+ *
+ * REPORTED FROM PLAY, 2026-09-27: the player dragged a runway's end junction while an SR22 was
+ * pushing back. The release rebuild re-resolved the PUSH route ("1 agents re-resolved, 0
+ * replanned") - but FRoadAgent::TaxiOutPlan, the route the follower takes over when the push
+ * ends, was never looked at, and the aeroplane taxied out along lines that no longer existed.
+ * TaxiOutPlan is TaxiInPlan's mirror (its own comment says so), and TaxiInPlan IS re-resolved
+ * for an arriving aircraft; this is the same treatment for the other one.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackRebuildReResolvesTaxiOutTest,
+	"Airside.Model.PushbackRebuildReResolvesTaxiOut",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackRebuildReResolvesTaxiOutTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+
+	// Parked facing south from B -> A, so leaving means a push onto E, then E -> J -> B.
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
+	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)
+		|| !TestEqual(TEXT("into the manoeuvre"), Traffic->FindAgent(Id)->Phase, EAgentPhase::Manoeuvring))
+	{
+		return false;
+	}
+
+	// MID-PUSH, THE TAXI-OUT'S LAST LINE IS REDRAWN: J -> B removed, a bypass J -> K -> B laid.
+	FGuidelineEdgeId JB;
+	for (int32 Index = 0; Index < Net->GetGuidelineEdges().Num(); ++Index)
+	{
+		const FGuidelineEdge& Edge = Net->GetGuidelineEdges()[Index];
+		if (Edge.bAlive && ((Edge.A == G.J && Edge.B == G.B) || (Edge.A == G.B && Edge.B == G.J)))
+		{
+			JB.Index = Index;
+			JB.Generation = Edge.Generation;
+		}
+	}
+	if (!TestTrue(TEXT("the J-B line exists to redraw"), JB.IsSet())) { return false; }
+	Net->RemoveGuidelineEdge(JB);
+	const FGuidelineNodeId K = TestGraph::Node(*Net, -8000.0, -5000.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, G.J, K, Options);
+	TestGraph::Join(*Net, K, G.B, Options);
+	Traffic->OnGraphRebuilt(*Net);
+
+	const FRoadAgent* Agent = Traffic->FindAgent(Id);
+	if (!TestNotNull(TEXT("still there"), Agent)) { return false; }
+	TestEqual(TEXT("still pushing - the push itself was untouched"), Agent->Phase, EAgentPhase::Manoeuvring);
+	int32 Dead = 0;
+	for (const FRouteStep& Step : Agent->TaxiOutPlan.Steps)
+	{
+		Dead += Net->GetGuidelineEdge(Step.Edge) == nullptr ? 1 : 0;
+	}
+	TestEqual(TEXT("the taxi out names no dead line"), Dead, 0);
+	const bool bViaK = Agent->TaxiOutPlan.Polyline.ContainsByPredicate([](const FVector2D& P)
+	{
+		return FVector2D::Distance(P, FVector2D(-8000.0, -5000.0)) < 100.0;
+	});
+	TestTrue(TEXT("and it goes by the bypass the player drew"), bViaK);
+	return true;
+}
+
+/**
+ * A PUSH WHOSE WAY OUT WAS REDRAWN FROM UNDER IT DRIVES OFF - it does not teleport.
+ *
+ * REPORTED FROM PLAY, 2026-09-27, after the fix above: a second drag moved the node the push
+ * and its taxi-out both start from. Neither re-resolved (the match radius is 25 uu), both were
+ * STRANDED, the departure was re-armed from the dead taxi-out's end, and when the push finished
+ * the follower was started on that dead route - the aeroplane jumped to where the old runway
+ * began, facing the wrong way, crabbed round and took off. A stranded route an aircraft has not
+ * started is not a place to stop; it is a route to plan again, from wherever the push ends.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackStrandedTaxiOutReplansTest,
+	"Airside.Model.PushbackStrandedTaxiOutReplans",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackStrandedTaxiOutReplansTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
+	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None))
+	{
+		return false;
+	}
+
+	// PAST THE JUNCTION FIRST: in play the push was on its second step (J -> E) when the edit
+	// landed, so the node its CURRENT step starts from moved - which is what strands a route.
+	// A first version moved J while the push was still on A -> J; both routes then re-planned
+	// cleanly and the test passed on the code that teleported (2026-09-27).
+	for (int32 Tick = 0; Tick < 30 * 120 && Traffic->FindAgent(Id)->Pushback.Travelled < 12000.0; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestTrue(TEXT("the push is past the junction, on its way to E"),
+		Traffic->FindAgent(Id)->Phase == EAgentPhase::Manoeuvring && Traffic->FindAgent(Id)->Pushback.Travelled >= 12000.0))
+	{
+		return false;
+	}
+
+	// THE JUNCTION AND THE FAR ARM MOVE 5 m - far past the 25 uu re-resolve radius. J is where
+	// the push's current step starts; E is where the push ends and the taxi-out starts. Neither
+	// route can be matched by position, and both strand, exactly as in play.
+	Net->RemoveGuidelineNode(G.J);
+	Net->RemoveGuidelineNode(G.E);
+	const FGuidelineNodeId J2 = TestGraph::Node(*Net, 0.0, -10500.0);
+	const FGuidelineNodeId E2 = TestGraph::Node(*Net, 20000.0, -10500.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, G.A, J2, Options);
+	TestGraph::Join(*Net, J2, G.B, Options);
+	TestGraph::Join(*Net, J2, E2, Options);
+	Traffic->OnGraphRebuilt(*Net);
+	const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();
+	TestTrue(FString::Printf(TEXT("the rebuild's counts are never negative (%d re-resolved)"), Summary.ReResolved),
+		Summary.ReResolved >= 0);
+
+	// DRIVE IT OUT, watching every frame for a jump. At taxi speed a thirtieth of a second is
+	// tens of uu; a teleport to the old runway start is thousands.
+	FVector2D Last = Traffic->FindAgent(Id)->LastMotion.Position;
+	double WorstJump = 0.0;
+	bool bDeparted = false;
+	int32 DeadAtHandover = INDEX_NONE;   // dead lines in the route it taxis on, read once
+	// AND ONE SECOND INTO THE ROLL: the take-off places the aeroplane on its entry on the first
+	// frame it rolls - see TaxiingDepartureStrandedDoesNotJump, which found this test stopped a
+	// frame too early to see the jump.
+	int32 RollFrames = 0;
+	for (int32 Tick = 0; Tick < 30 * 300 && Traffic->FindAgent(Id) != nullptr && RollFrames < 30; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+		const FRoadAgent* Now = Traffic->FindAgent(Id);
+		if (Now == nullptr) { break; }
+		// MEASURED BEFORE THE DEPARTING CHECK: in play the jump happened ON the frame the roll
+		// began - a dead taxi-out ended at once and the take-off started from its armed entry.
+		// A first version broke out first and never saw it.
+		WorstJump = FMath::Max(WorstJump, FVector2D::Distance(Last, Now->LastMotion.Position));
+		Last = Now->LastMotion.Position;
+		// THE ROUTE IT IS HANDED WHEN THE PUSH ENDS. The code before this fix drove the stranded
+		// taxi-out's old polyline - every metre of it on lines the edit had removed.
+		if (DeadAtHandover == INDEX_NONE && Now->Phase == EAgentPhase::Taxiing)
+		{
+			DeadAtHandover = 0;
+			for (const FRouteStep& Step : Now->Follower.Plan.Steps)
+			{
+				DeadAtHandover += Net->GetGuidelineEdge(Step.Edge) == nullptr ? 1 : 0;
+			}
+		}
+		if (Now->Phase == EAgentPhase::Departing) { bDeparted = true; ++RollFrames; }
+	}
+	TestEqual(TEXT("it taxis out on live lines only - none the edit removed"), DeadAtHandover, 0);
+	TestTrue(FString::Printf(TEXT("it never jumps: worst frame-to-frame move %.0f uu"), WorstJump), WorstJump < 200.0);
+	TestTrue(TEXT("and it reaches the runway and rolls"), bDeparted);
+	return true;
+}
+
+/**
+ * A TAXIING DEPARTURE STRANDED BY AN EDIT DOES NOT JUMP TO THE RUNWAY.
+ *
+ * REPORTED FROM PLAY, 2026-09-27, after both fixes above: the re-planned taxi-out was being
+ * driven when a third drag moved the node its current step starts from. The route stranded -
+ * "stop where you are" - but a stranded route counts as ARRIVED, and the taxi-complete
+ * handover then started the armed take-off at the armed entry, wherever the aeroplane was:
+ * "Taxi complete; rolling for departure" on the rebuild's own frame, and a jump to the runway.
+ * The take-off now starts only AT its entry; anywhere else the aeroplane holds, and a new way
+ * to the runway is planned from where it stands.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTaxiingDepartureStrandedDoesNotJumpTest,
+	"Airside.Model.TaxiingDepartureStrandedDoesNotJump",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiingDepartureStrandedDoesNotJumpTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
+	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None))
+	{
+		return false;
+	}
+
+	// TAXIING OUT, PAST J: the push ends at E, the taxi out runs E -> J -> B. Past J the current
+	// step is J -> B, so moving J strands the route under the wheels.
+	auto PastJ = [&]()
+	{
+		const FRoadAgent* A = Traffic->FindAgent(Id);
+		return A != nullptr && A->Phase == EAgentPhase::Taxiing && A->LastMotion.Position.X < 1000.0
+			&& A->LastMotion.Position.Y > -9000.0;
+	};
+	for (int32 Tick = 0; Tick < 30 * 300 && !PastJ(); ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestTrue(TEXT("taxiing out, past the junction"), PastJ())) { return false; }
+
+	Net->RemoveGuidelineNode(G.J);
+	const FGuidelineNodeId J2 = TestGraph::Node(*Net, 0.0, -10500.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, G.A, J2, Options);
+	TestGraph::Join(*Net, J2, G.B, Options);
+	TestGraph::Join(*Net, J2, G.E, Options);
+	FVector2D Last = Traffic->FindAgent(Id)->LastMotion.Position;
+	Traffic->OnGraphRebuilt(*Net);
+
+	double WorstJump = 0.0;
+	bool bDeparted = false;
+	// ONE SECOND INTO THE ROLL TOO: the take-off puts the aeroplane at its entry on the first
+	// frame it ROLLS, the frame after the phase says Departing - a first version stopped at the
+	// phase change and passed on the code that jumped (2026-09-27). A second of roll from
+	// taxi speed is well under 200 uu a frame.
+	int32 RollFrames = 0;
+	for (int32 Tick = 0; Tick < 30 * 300 && Traffic->FindAgent(Id) != nullptr && RollFrames < 30; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+		const FRoadAgent* Now = Traffic->FindAgent(Id);
+		if (Now == nullptr) { break; }
+		WorstJump = FMath::Max(WorstJump, FVector2D::Distance(Last, Now->LastMotion.Position));
+		Last = Now->LastMotion.Position;
+		if (Now->Phase == EAgentPhase::Departing) { bDeparted = true; ++RollFrames; }
+	}
+	TestTrue(FString::Printf(TEXT("it never jumps: worst frame-to-frame move %.0f uu"), WorstJump), WorstJump < 200.0);
+	TestTrue(TEXT("and it still reaches the runway and rolls"), bDeparted);
+	return true;
+}
+
 #endif
