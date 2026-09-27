@@ -314,8 +314,8 @@ bool FOpsRuntimeLandNearTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("with no override, LandNear resolved the content default airframe"),
 		Offers[0]->Airframe.TypeCode, UAirsideSettings::ResolveDefaultAirframe().TypeCode);
 
-	// NOW WITH AN OVERRIDE - the Land key's DefaultGame.ini test type, standing in for whatever
-	// ARoadBuildController::LandAircraftType resolved. A DISTINCT TypeCode, so the assertion
+	// NOW WITH AN OVERRIDE - standing in for the type the driver's Land panel passes (it was
+	// DefaultGame.ini's LandAircraftType until 2026-09-27). A DISTINCT TypeCode, so the assertion
 	// below can only pass if LandNear actually used it rather than falling back to the default -
 	// the exact regression a controller-side change to that fallback logic could reintroduce.
 	FAirframe Override;

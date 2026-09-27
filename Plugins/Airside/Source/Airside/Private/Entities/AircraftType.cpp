@@ -499,8 +499,14 @@ FRunwayRequirements UAircraftType::PiperMeridianRequirements()
 	// published figure may never be shorter than the model needs
 	// (Airside.Model.FieldLengthsCoverTheRoll). The 800 m first written here refused the
 	// player's 530 m strip that the aircraft had been landing on all week.
+	//
+	// LANDING RAISED TO 470 m, 2026-09-27. That 370 m was a flare that never flew: the
+	// climb's take-off angle scaled to Vref put the nose on this type's 8-degree cap, and it
+	// touched down 60 m past the threshold. With the landing-flap angle
+	// (FApproachPerformance::LandingLiftAngleDegrees) it flares to 164 m, and the rollout
+	// with margin is 461 m - rounded up. Still under the 530 m strip above.
 	Requirements.TakeoffFieldLength = 51000.0;
-	Requirements.LandingFieldLength = 40000.0;
+	Requirements.LandingFieldLength = 47000.0;
 
 	return Requirements;
 }
