@@ -1714,7 +1714,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFuelTowRecalledMidRouteGetsHomeTest::RunTest(const FString& Parameters)
 {
-	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::A);
+	// WAS CODE A (review fix round 1, 2026-09-27 merge): built at Letter=A this drew a hybrid
+	// box - B's pad size through IcaoCode::StandLetterFor, but A's own unaliased envelope for
+	// StandBox::EntranceSetback (MaxTailAft 1000 against B's 2000) - a shape no player can draw
+	// any more. B is still the tow's letter (UAirsideSettings::ResolveStandDesignVehicle keys
+	// Letter <= B to it, same as A did), so this keeps testing the tow, on a real box.
+	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::B);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -1736,7 +1741,10 @@ bool FFuelTowRecalledOnItsLastLegGetsHomeTest::RunTest(const FString& Parameters
 {
 	// NO NODE AHEAD TO TURN AT: the step it is on ends at the service point. It finishes the leg,
 	// parks, and backs off by the ordinary cycle - UFuelService::OnAgentPhase's recalled branch.
-	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::A, /*bOnLastLeg=*/true);
+	//
+	// WAS CODE A (review fix round 1, 2026-09-27 merge) - see
+	// FFuelTowRecalledMidRouteGetsHomeTest's own note; B is still the tow's letter.
+	return FuelServiceTest::RecalledMidRouteGetsHome(*this, EIcaoCode::B, /*bOnLastLeg=*/true);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
