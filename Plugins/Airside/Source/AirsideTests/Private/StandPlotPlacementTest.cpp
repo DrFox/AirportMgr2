@@ -2,6 +2,7 @@
 #include "AirsideTestFixtures.h"
 #include "Build/AnchorLink.h"
 #include "Build/AnchorLinkFinder.h"
+#include "Build/BuildCost.h"
 #include "Build/StandLayoutBuild.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
@@ -1187,10 +1188,14 @@ namespace StandPlotPlacementTest
 	{
 		double Funds = 0.0;
 
+		/** Every quote Credit was handed, summed at BaseAmount - the facade's refund QUOTE.
+		 *  RefundFraction is ULedger's (per line, at its Pricing), out of this module's reach. */
+		double Credited = 0.0;
+
 		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Funds; }
 		virtual int32 Charge(const FBuildQuote& Quote) override { Funds -= Quote.BaseAmount(); return 1; }
 		virtual void Reverse(int32) override {}
-		virtual void Credit(const FBuildQuote&) override {}
+		virtual void Credit(const FBuildQuote& Quote) override { Credited += Quote.BaseAmount(); }
 		virtual FText Describe(const FBuildQuote& Quote) const override { return FText::AsNumber(Quote.BaseAmount()); }
 	};
 }
@@ -1236,6 +1241,52 @@ bool FStandPlotAffordsWithTheChosenPavementTest::RunTest(const FString& Paramete
 	if (!TestTrue(TEXT("the grass stand is placed"), Placed != INDEX_NONE)) { return false; }
 	TestEqual(TEXT("and the placed stand is grass"), Actor->Network->GetEntities()[Placed].Pavement, EPavement::Grass);
 	TestEqual(TEXT("and it was charged the grass price, to the unit"), Purse.Funds, 0.0, 1e-6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotDemolishRefundsThePadTest,
+	"Airside.Present.StandPlot.DemolishRefundsThePad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotDemolishRefundsThePadTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	// R11 (shared-pavement final review): DeleteEntity quoted the definition alone, so a drawn
+	// stand refunded its equipment and kept the pad it was charged for. Through the ACTOR'S
+	// facade, placed and demolished the way the tools do, so this goes red if DeleteEntity's
+	// quote drops the pad line - not a hand-built quote asserted against itself.
+	FExactFundsPurse Purse; // before the world - the facade holds a raw pointer to it
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("the actor has an edit facade"), Facade)) { return false; }
+
+	const TArray<FVector2D> B = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+	const UEntityDefinition* Definition = Actor->ResolveStandDefinitionFor(EIcaoCode::B);
+	if (!TestNotNull(TEXT("a Code B stand definition resolves"), Definition)) { return false; }
+	const double EntityPrice = BuildCost::ForEntity(*Definition).BaseAmount();
+	const double TarmacPad = Facade->QuoteStand(*Definition, B, EPavement::Tarmac).BaseAmount() - EntityPrice;
+	if (!TestTrue(TEXT("the premise: a pad costs something, or a refund without it looks the same"),
+		TarmacPad > 0.0)) { return false; }
+
+	Purse.Funds = 1.0e12;
+	Facade->SetPurse(&Purse);
+	ON_SCOPE_EXIT { Facade->SetPurse(nullptr); };
+
+	const int32 Placed = Facade->PlaceStandInPlot(B, B[0], B[1], EPavement::Grass);
+	if (!TestTrue(TEXT("the grass stand is placed"), Placed != INDEX_NONE)) { return false; }
+	if (!TestTrue(TEXT("and demolished"), Facade->DeleteEntity(Placed))) { return false; }
+
+	// The QUOTE the ledger scraps, entity plus the pad at grass's 0.4 - ULedger::Credit then
+	// applies RefundFraction to every line, the pad's (null source) included.
+	TestEqual(TEXT("the demolition credits the equipment AND the grass pad (entity + 0.4 x tarmac pad)"),
+		Purse.Credited, EntityPrice + 0.4 * TarmacPad, 1e-6);
 	return true;
 }
 

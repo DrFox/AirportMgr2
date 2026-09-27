@@ -915,8 +915,30 @@ bool URoadEditFacade::DeleteEntity(int32 EntityIndex)
 
 	// Quoted from the DEFINITION, which is what was paid for, while the instance still names
 	// it - after the removal there is nothing left to ask.
-	const FBuildQuote Quote = (Entity != nullptr && Entity->Definition != nullptr)
-		? BuildCost::ForEntity(*Entity->Definition) : FBuildQuote();
+	//
+	// AND FROM THE PAD, the same shape its placement charged (R11, shared-pavement final
+	// review): a plotted stand paid QuoteStand (entity plus pad at its pavement's factor), a
+	// plotted depot paid PlaceEntityInPlot's entity plus pad at the apron's own rate. Quoting
+	// the entity alone refunded the equipment and kept the pad, though ULedger::Credit's
+	// per-line scrap was already there to refund it. An entity with no outline paid the
+	// entity only.
+	// ENFORCED BY: Airside.Present.StandPlot.DemolishRefundsThePad
+	FBuildQuote Quote;
+	if (Entity != nullptr && Entity->Definition != nullptr)
+	{
+		if (Entity->IsStand() && Entity->IsPlotted())
+		{
+			Quote = QuoteStand(*Entity->Definition, Entity->Outline, Entity->Pavement);
+		}
+		else if (Entity->IsDepot() && Entity->IsPlotted())
+		{
+			Quote = BuildCost::Combine(BuildCost::ForEntity(*Entity->Definition), QuoteForApron(Entity->Outline, {}));
+		}
+		else
+		{
+			Quote = BuildCost::ForEntity(*Entity->Definition);
+		}
+	}
 
 	return DeleteSlot(Doomed.IsSet(), Label,
 		[Doomed](URoadNetwork& Net) { return Net.RemoveEntity(Doomed); }, Quote);
