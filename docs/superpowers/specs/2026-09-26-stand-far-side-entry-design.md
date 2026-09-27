@@ -86,8 +86,10 @@
   service road along the far edge". No stored state. The existing `AnchorLink` "joins nothing"
   warning stays; a new Warning covers the partial case (some entries joined, others not), which
   is silent today.
-- **Placement never refuses for a missing road.** The plot tool's ghost draws the far edge
-  with a new `IToolPreviewSink` MEANING (`ServiceEdge`), colour chosen only in `PreviewPalette`.
+- **Placement never refuses for a missing road.** The plot tool's ghost draws a new
+  `IToolPreviewSink` MEANING (`ServiceEdge`), colour chosen only in `PreviewPalette`, along the
+  far edge moved OUT by the default service road's half-width: the line marks where the road's
+  centre goes, so its near kerb lies on the far edge (ruling 2026-09-27, below).
 
 ## 3. Testing
 
@@ -145,6 +147,18 @@ Solve/Model first, failing test before fix.
 - **Entry-link fillets sized for the stand's design vehicle** (review minor): an A/B entry is
   filleted for the tow, not the truck.
 - **M_Starter** is not edited headlessly; its stands and roads are on the PIE checklist.
+- **Kerb on the edge (user, 2026-09-27).** A two-lane service road centred ON the far edge puts
+  its near lane 150 uu inside the stand, short of the corner run every entry is inset by: the
+  half-plane refuses that lane and every entry joins the far lane across it, and on C a truck
+  could not sweep onto it at all (631 of the 781 uu it needs). Ruled: the ghost's `ServiceEdge`
+  line moves out by the service road's half-width (`GetMaxHalfWidth` of
+  `ResolveServiceRoadProfile`, via `FToolContext::ServiceRoadHalfWidth`), so the road's centre
+  goes on the line and its near kerb on the far edge. The lane-level half-plane is unchanged; a
+  centreline-judging variant was tried and dropped. Tests:
+  `Airside.Present.StandPlot.RoadAlongTheServiceEdgeJoinsTheNearLane` (A and C: near lane, swept,
+  no corner warning) and `.RoadOnTheFarEdgeIsTheKnownCrossingCase` (far lane only, still
+  serviceable). Known issue, not fixed: Join's no-room hard join adds its road node to the anchor
+  set, which makes the whole lane unjoinable for the stand's other entries.
 
 ## Risks
 
