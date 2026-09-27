@@ -275,7 +275,10 @@ struct AIRSIDE_API FRouteQuery
 	 * would report TooWide for an aircraft whose wings fit.
 	 *
 	 * RUNWAYS ARE NOT JUDGED HERE: a strip's surface is RunwayAdmission's, which also knows
-	 * length and approach. This gates taxiing only.
+	 * length and approach. This gates taxiing only - and CLAMPED to the strongest pavement a
+	 * taxiway may offer (tarmac; RouteSearch.cpp's TaxiwayPavementCeiling), so a jet needing
+	 * concrete taxis on tarmac rather than reaching no stand at all. Set the full need; the
+	 * gate clamps it.
 	 */
 	UPROPERTY() EPavement MinimumPavement = EPavement::Grass;
 

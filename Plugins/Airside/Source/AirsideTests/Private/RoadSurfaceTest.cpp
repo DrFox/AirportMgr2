@@ -449,9 +449,10 @@ bool FRsGrassRouteGateTest::RunTest(const FString& Parameters)
 /**
  * THE GATE IS THE SHARED COMPARISON, not a grass special case: a taxiway whose pavement is
  * below the aircraft's need is refused whatever that pavement is. #356's gate tested
- * "IsGrassRoad" and would have passed a concrete-needing jet down a tarmac taxiway. Same
- * W-M-E line as RouteGrassGate, every segment left TARMAC - only the need differs, so the
- * gate is the only thing that can separate the two answers.
+ * "IsGrassRoad". Since R12 the need is clamped to tarmac, the strongest a taxiway offers, so a
+ * concrete-needing jet taxis on tarmac and is refused grass. Same W-M-E line as
+ * RouteGrassGate - only the need and the west half's pavement differ, so the gate is the only
+ * thing that can separate the answers.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRsPavementRouteGateTest,
@@ -478,8 +479,19 @@ bool FRsPavementRouteGateTest::RunTest(const FString& Parameters)
 			FRouteQuery::For(ERouteErrand::GraphProbe, A, B, 0.0, ETraversalClass::Aircraft).NeedsPavement(Needs));
 	};
 
-	TestFalse(TEXT("a concrete-needing jet is refused a tarmac taxiway"), Find(EPavement::Concrete).IsValid());
-	TestTrue(TEXT("and a tarmac-needing one is not"), Find(EPavement::Tarmac).IsValid());
+	// R12: THE TAXIING NEED IS CLAMPED TO TARMAC, the strongest a taxiway can offer - real
+	// heavies taxi on asphalt, and unclamped a concrete-needing type could reach no stand.
+	TestTrue(TEXT("a concrete-needing jet is admitted to a tarmac taxiway (need clamped to tarmac)"),
+		Find(EPavement::Concrete).IsValid());
+	TestTrue(TEXT("and so is a tarmac-needing one"), Find(EPavement::Tarmac).IsValid());
+
+	// AND STILL REFUSED GRASS: the clamp lowers the need to tarmac, never to nothing.
+	if (!TestTrue(TEXT("the west half goes to grass"), Net->SetSegmentSurface(West, EPavement::Grass))) { return false; }
+	TestGraph::Derive(*Net);
+	TestFalse(TEXT("a concrete-needing jet is refused a grass taxiway"), Find(EPavement::Concrete).IsValid());
+	TestFalse(TEXT("and so is a tarmac-needing one"), Find(EPavement::Tarmac).IsValid());
+	if (!TestTrue(TEXT("the west half goes back to tarmac"), Net->SetSegmentSurface(West, EPavement::Tarmac))) { return false; }
+	TestGraph::Derive(*Net);
 
 	// THE PROFILE'S LIST GATES THE WRITE: a taxiway profile offers tarmac and grass, so a
 	// concrete taxiway is refused by the network as well as never offered by the row.
