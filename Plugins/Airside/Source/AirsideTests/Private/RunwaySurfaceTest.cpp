@@ -79,12 +79,12 @@ bool FRunwaySurfaceSlotsTest::RunTest(const FString& Parameters)
 {
 	URoadMaterialSet* Set = URoadMaterialSet::MakeTransient({
 		TEXT("Asphalt"), TEXT("Concrete"), TEXT("Kerb"),
-		URoadMaterialSet::RunwaySlotName(ERunwaySurface::Grass),
-		URoadMaterialSet::RunwaySlotName(ERunwaySurface::Tarmac),
-		URoadMaterialSet::RunwaySlotName(ERunwaySurface::Concrete) });
+		URoadMaterialSet::RunwaySlotName(EPavement::Grass),
+		URoadMaterialSet::RunwaySlotName(EPavement::Tarmac),
+		URoadMaterialSet::RunwaySlotName(EPavement::Concrete) });
 	const int32 Tarmac = Set->IndexOf(TEXT("RunwayTarmac"));
 	const int32 Grass = Set->IndexOf(TEXT("RunwayGrass"));
-	TestEqual(TEXT("reinforced shares concrete's slot"), URoadMaterialSet::RunwaySlotName(ERunwaySurface::Reinforced), FName(TEXT("RunwayConcrete")));
+	TestEqual(TEXT("reinforced shares concrete's slot"), URoadMaterialSet::RunwaySlotName(EPavement::Reinforced), FName(TEXT("RunwayConcrete")));
 
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FRoadSegmentId RW = RunwayAndTaxiway(*Net);
@@ -115,7 +115,7 @@ bool FRunwaySurfaceSlotsTest::RunTest(const FString& Parameters)
 	// 2. The facts change, the profile does not, and the pavement follows the facts.
 	{
 		FRunwayFacts Facts;
-		Facts.Surface = ERunwaySurface::Grass;
+		Facts.Surface = EPavement::Grass;
 		TestTrue(TEXT("the strip becomes grass"), Net->SetRunwayFacts(RW, Facts));
 		TMap<int32, int32> Runway, Taxiway;
 		BuildAndCount(Runway, Taxiway);
@@ -128,7 +128,7 @@ bool FRunwaySurfaceSlotsTest::RunTest(const FString& Parameters)
 	{
 		URoadMaterialSet* Plain = URoadMaterialSet::MakeTransient({ TEXT("Asphalt"), TEXT("Concrete") });
 		const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(
-			Net->ProfileFor(*Net->GetSegment(RW)), Plain, URoadMaterialSet::RunwaySlotName(ERunwaySurface::Grass));
+			Net->ProfileFor(*Net->GetSegment(RW)), Plain, URoadMaterialSet::RunwaySlotName(EPavement::Grass));
 		for (const int32 Slot : Bands.SlotIndices)
 		{
 			TestEqual(TEXT("an undeclared runway slot falls back to 0"), Slot, 0);
@@ -171,9 +171,9 @@ bool FRunwayMarkingsDrawnTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the runway paint component now holds triangles"), Actor->GetPresenter()->RunwayMarkingTriangleCountForTest() > 0);
 	const URoadMaterialSet* Effective = Actor->GetPresenter()->EffectiveMaterialSetForTest();
 	if (!TestNotNull(TEXT("the mesh was skinned with an effective set"), Effective)) { return false; }
-	TestNotEqual(TEXT("which declares the tarmac slot"), Effective->IndexOf(URoadMaterialSet::RunwaySlotName(ERunwaySurface::Tarmac)), (int32)INDEX_NONE);
-	TestNotEqual(TEXT("and the grass slot"), Effective->IndexOf(URoadMaterialSet::RunwaySlotName(ERunwaySurface::Grass)), (int32)INDEX_NONE);
-	TestNotEqual(TEXT("and the concrete slot"), Effective->IndexOf(URoadMaterialSet::RunwaySlotName(ERunwaySurface::Concrete)), (int32)INDEX_NONE);
+	TestNotEqual(TEXT("which declares the tarmac slot"), Effective->IndexOf(URoadMaterialSet::RunwaySlotName(EPavement::Tarmac)), (int32)INDEX_NONE);
+	TestNotEqual(TEXT("and the grass slot"), Effective->IndexOf(URoadMaterialSet::RunwaySlotName(EPavement::Grass)), (int32)INDEX_NONE);
+	TestNotEqual(TEXT("and the concrete slot"), Effective->IndexOf(URoadMaterialSet::RunwaySlotName(EPavement::Concrete)), (int32)INDEX_NONE);
 	TestTrue(TEXT("with the surface slot first, so a band's id 0 means what it always did"), Effective->Slots.Num() >= 4);
 	return true;
 }

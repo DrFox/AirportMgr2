@@ -53,15 +53,15 @@ URoadMaterialSet* URoadMaterialSet::MakeTransient(const TArray<FName>& Names)
 	return Set;
 }
 
-FName URoadMaterialSet::RunwaySlotName(ERunwaySurface Surface)
+FName URoadMaterialSet::RunwaySlotName(EPavement Surface)
 {
 	switch (Surface)
 	{
-	case ERunwaySurface::Grass:  return TEXT("RunwayGrass");
-	case ERunwaySurface::Tarmac: return TEXT("RunwayTarmac");
+	case EPavement::Grass:  return TEXT("RunwayGrass");
+	case EPavement::Tarmac: return TEXT("RunwayTarmac");
 	// Reinforced LOOKS like concrete: the extra strength is a rating, not a texture.
-	case ERunwaySurface::Concrete:
-	case ERunwaySurface::Reinforced:
+	case EPavement::Concrete:
+	case EPavement::Reinforced:
 	default:
 		return TEXT("RunwayConcrete");
 	}

@@ -100,7 +100,7 @@ public:
 	void NextWidth(const FToolContext& Context);
 
 	/** What the next runway is paved with and what approach it offers - the facts placement writes. */
-	ERunwaySurface Surface = ERunwaySurface::Tarmac;
+	EPavement Surface = EPavement::Tarmac;
 	ERunwayApproach Approach = ERunwayApproach::Visual;
 
 	/** Steps each scale, wrapping. Take the context now (2026-09-26) because the step goes

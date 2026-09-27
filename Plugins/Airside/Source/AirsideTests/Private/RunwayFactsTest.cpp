@@ -31,24 +31,24 @@ bool FRunwayFactsTest::RunTest(const FString& Parameters)
 
 	// Defaults: an existing level loads as tarmac / visual (spec §5).
 	const FRunwayFacts Loaded = Net->RunwayFactsFor(RW1);
-	TestEqual(TEXT("a fresh runway is tarmac by default"), Loaded.Surface, ERunwaySurface::Tarmac);
+	TestEqual(TEXT("a fresh runway is tarmac by default"), Loaded.Surface, EPavement::Tarmac);
 	TestEqual(TEXT("and visual by default"), Loaded.Approach, ERunwayApproach::Visual);
 
 	FRunwayFacts Facts;
-	Facts.Surface = ERunwaySurface::Concrete;
+	Facts.Surface = EPavement::Concrete;
 	Facts.Approach = ERunwayApproach::Precision;
 	TestTrue(TEXT("setting facts on a runway segment succeeds"), Net->SetRunwayFacts(RW1, Facts));
 
 	const FRunwayFacts Other = Net->RunwayFactsFor(RW2);
-	TestEqual(TEXT("the OTHER half of the strip carries the surface"), Other.Surface, ERunwaySurface::Concrete);
+	TestEqual(TEXT("the OTHER half of the strip carries the surface"), Other.Surface, EPavement::Concrete);
 	TestEqual(TEXT("and the approach"), Other.Approach, ERunwayApproach::Precision);
 
 	// A taxiway has no runway facts to set; refusing is how the tool learns its click missed.
 	FRunwayFacts Grass;
-	Grass.Surface = ERunwaySurface::Grass;
+	Grass.Surface = EPavement::Grass;
 	TestFalse(TEXT("a taxiway refuses runway facts"), Net->SetRunwayFacts(Tx, Grass));
-	TestEqual(TEXT("and nothing on the runway changed"), Net->RunwayFactsFor(RW1).Surface, ERunwaySurface::Concrete);
-	TestEqual(TEXT("a non-runway reads back the struct default"), Net->RunwayFactsFor(Tx).Surface, ERunwaySurface::Tarmac);
+	TestEqual(TEXT("and nothing on the runway changed"), Net->RunwayFactsFor(RW1).Surface, EPavement::Concrete);
+	TestEqual(TEXT("a non-runway reads back the struct default"), Net->RunwayFactsFor(Tx).Surface, EPavement::Tarmac);
 
 	// The split surgery replaces a segment with two: both halves must inherit the facts, or
 	// adding an exit to a precision runway would silently demote the half past the exit.
@@ -63,7 +63,7 @@ bool FRunwayFactsTest::RunTest(const FString& Parameters)
 			continue;
 		}
 		++RunwaySegments;
-		TestEqual(TEXT("every runway segment after the split carries the surface"), Segment.Runway.Surface, ERunwaySurface::Concrete);
+		TestEqual(TEXT("every runway segment after the split carries the surface"), Segment.Runway.Surface, EPavement::Concrete);
 		TestEqual(TEXT("and the approach"), Segment.Runway.Approach, ERunwayApproach::Precision);
 	}
 	TestEqual(TEXT("the split made three runway segments"), RunwaySegments, 3);
@@ -72,7 +72,7 @@ bool FRunwayFactsTest::RunTest(const FString& Parameters)
 	// through it. A transient or non-UPROPERTY field would land in play as the default.
 	URoadNetwork* Dup = DuplicateObject<URoadNetwork>(Net, GetTransientPackage());
 	if (!TestNotNull(TEXT("the network duplicates"), Dup)) { return false; }
-	TestEqual(TEXT("the duplicate reads the same surface"), Dup->RunwayFactsFor(RW1).Surface, ERunwaySurface::Concrete);
+	TestEqual(TEXT("the duplicate reads the same surface"), Dup->RunwayFactsFor(RW1).Surface, EPavement::Concrete);
 	TestEqual(TEXT("and the same approach"), Dup->RunwayFactsFor(RW1).Approach, ERunwayApproach::Precision);
 	return true;
 }

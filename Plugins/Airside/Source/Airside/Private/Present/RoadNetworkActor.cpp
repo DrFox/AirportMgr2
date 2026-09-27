@@ -177,10 +177,10 @@ void ARoadNetworkActor::RefreshResolvedContentCacheIfDirty()
 	ResolvedGhostMaterialCache = ResolveGhostMaterial();
 	ResolvedTierDesignVehiclesCache = UAirsideSettings::ResolveTierDesignVehicles();
 
-	ResolvedRunwayMaterialsCache.SetNum(RunwayMaterialSlotCount);
-	ResolvedRunwayMaterialsCache[RunwayMaterialSlot(ERunwaySurface::Grass)] = ResolveRunwayMaterial(ERunwaySurface::Grass);
-	ResolvedRunwayMaterialsCache[RunwayMaterialSlot(ERunwaySurface::Tarmac)] = ResolveRunwayMaterial(ERunwaySurface::Tarmac);
-	ResolvedRunwayMaterialsCache[RunwayMaterialSlot(ERunwaySurface::Concrete)] = ResolveRunwayMaterial(ERunwaySurface::Concrete);
+	ResolvedRunwayMaterialsCache.SetNum(PavementMaterialSlotCount);
+	ResolvedRunwayMaterialsCache[Pavement::MaterialSlot(EPavement::Grass)] = ResolveRunwayMaterial(EPavement::Grass);
+	ResolvedRunwayMaterialsCache[Pavement::MaterialSlot(EPavement::Tarmac)] = ResolveRunwayMaterial(EPavement::Tarmac);
+	ResolvedRunwayMaterialsCache[Pavement::MaterialSlot(EPavement::Concrete)] = ResolveRunwayMaterial(EPavement::Concrete);
 
 	// CLEARED LAST, so a crash or an early return above never leaves this actor believing a
 	// half-filled cache is complete.
@@ -219,9 +219,9 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	Settings.ApronMaterial = ResolvedApronMaterialCache;
 	Settings.RubberMaterial = ResolvedRubberMaterialCache;
 	Settings.GhostMaterial = ResolvedGhostMaterialCache;
-	if (ResolvedRunwayMaterialsCache.Num() == RunwayMaterialSlotCount)
+	if (ResolvedRunwayMaterialsCache.Num() == PavementMaterialSlotCount)
 	{
-		for (int32 Slot = 0; Slot < RunwayMaterialSlotCount; ++Slot)
+		for (int32 Slot = 0; Slot < PavementMaterialSlotCount; ++Slot)
 		{
 			Settings.RunwayMaterials[Slot] = ResolvedRunwayMaterialsCache[Slot];
 		}
@@ -503,16 +503,16 @@ URoadMaterialSet* ARoadNetworkActor::ResolveMaterialSet() const
 	return MaterialSet;
 }
 
-UMaterialInterface* ARoadNetworkActor::ResolveRunwayMaterial(ERunwaySurface Surface) const
+UMaterialInterface* ARoadNetworkActor::ResolveRunwayMaterial(EPavement Surface) const
 {
 	const UAirsideContent* Content = UAirsideSettings::GetContent();
 	if (Content == nullptr)
 	{
 		return nullptr;
 	}
-	// RunwayMaterialSlot is the ONE place Reinforced aliases to Concrete's slot - see its
+	// Pavement::MaterialSlot is the ONE place Reinforced aliases to Concrete's slot - see its
 	// own declaration's comment. An unauthored (short) array reads as every slot null.
-	const int32 Slot = RunwayMaterialSlot(Surface);
+	const int32 Slot = Pavement::MaterialSlot(Surface);
 	return Content->RunwayMaterials.IsValidIndex(Slot) ? Content->RunwayMaterials[Slot].LoadSynchronous() : nullptr;
 }
 

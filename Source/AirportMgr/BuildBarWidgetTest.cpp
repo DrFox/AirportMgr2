@@ -299,7 +299,7 @@ bool FVariantRowFollowsToolTest::RunTest(const FString& Parameters)
 	Bar->RefreshStateForTest(*C);
 	TestEqual(TEXT("the runway gets a row each for width, surface and approach"),
 		Bar->VariantButtonCountForTest(),
-		TestWorld.Actor->GetRunwayProfileCount() + static_cast<int32>(ERunwaySurface::Count)
+		TestWorld.Actor->GetRunwayProfileCount() + static_cast<int32>(EPavement::Count)
 			+ static_cast<int32>(ERunwayApproach::Count));
 
 	// A CLICK LANDS ON THE TOOL - through the bar, the controller and the session.

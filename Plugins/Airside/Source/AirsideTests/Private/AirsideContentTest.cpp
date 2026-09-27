@@ -51,19 +51,19 @@ bool FAirsideContentMigratesDeprecatedRunwayMaterialsTest::RunTest(const FString
 	Content->PostLoad();
 
 	if (!TestEqual(TEXT("PostLoad sizes RunwayMaterials to the slot count"),
-		Content->RunwayMaterials.Num(), RunwayMaterialSlotCount))
+		Content->RunwayMaterials.Num(), PavementMaterialSlotCount))
 	{
 		return false;
 	}
 
 	TestEqual(TEXT("Grass slot resolves from the deprecated grass material"),
-		Content->RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Grass)],
+		Content->RunwayMaterials[Pavement::MaterialSlot(EPavement::Grass)],
 		Content->RunwayGrassMaterial_DEPRECATED);
 	TestEqual(TEXT("Tarmac slot resolves from the deprecated tarmac material"),
-		Content->RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Tarmac)],
+		Content->RunwayMaterials[Pavement::MaterialSlot(EPavement::Tarmac)],
 		Content->RunwayTarmacMaterial_DEPRECATED);
 	TestEqual(TEXT("Concrete slot resolves from the deprecated concrete material"),
-		Content->RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Concrete)],
+		Content->RunwayMaterials[Pavement::MaterialSlot(EPavement::Concrete)],
 		Content->RunwayConcreteMaterial_DEPRECATED);
 
 	return true;
@@ -81,8 +81,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FAirsideContentPostLoadDoesNotClobberAuthoredSlotTest::RunTest(const FString& Parameters)
 {
 	UAirsideContent* Content = NewObject<UAirsideContent>();
-	Content->RunwayMaterials.SetNum(RunwayMaterialSlotCount);
-	Content->RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Grass)] =
+	Content->RunwayMaterials.SetNum(PavementMaterialSlotCount);
+	Content->RunwayMaterials[Pavement::MaterialSlot(EPavement::Grass)] =
 		TSoftObjectPtr<UMaterialInterface>(
 			FSoftObjectPath(TEXT("/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial")));
 
@@ -91,7 +91,7 @@ bool FAirsideContentPostLoadDoesNotClobberAuthoredSlotTest::RunTest(const FStrin
 	Content->PostLoad();
 
 	TestTrue(TEXT("an already-authored slot survives PostLoad untouched"),
-		!Content->RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Grass)].IsNull());
+		!Content->RunwayMaterials[Pavement::MaterialSlot(EPavement::Grass)].IsNull());
 
 	return true;
 }

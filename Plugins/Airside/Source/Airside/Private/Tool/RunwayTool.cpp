@@ -109,9 +109,9 @@ void FRunwayTool::GetVariantAxes(const FToolContext& Context, TArray<FToolVarian
 	SurfaceAxis.Id = TEXT("Surface");
 	SurfaceAxis.Label = LOCTEXT("RunwayAxisSurface", "Surface");
 	SurfaceAxis.Current = static_cast<int32>(Surface);
-	for (uint8 Each = 0; Each < static_cast<uint8>(ERunwaySurface::Count); ++Each)
+	for (uint8 Each = 0; Each < static_cast<uint8>(EPavement::Count); ++Each)
 	{
-		const TCHAR* Name = RunwaySurfaceName(static_cast<ERunwaySurface>(Each));
+		const TCHAR* Name = Pavement::Name(static_cast<EPavement>(Each));
 		FToolVariant& Option = SurfaceAxis.Options.AddDefaulted_GetRef();
 		Option.Id = Name;
 		Option.Label = FText::FromString(Name);
@@ -158,8 +158,8 @@ bool FRunwayTool::SelectVariant(const FToolContext& Context, int32 Axis, int32 O
 	}
 	else if (Id == TEXT("Surface"))
 	{
-		Surface = static_cast<ERunwaySurface>(Option);
-		UE_LOG(LogAirside, Log, TEXT("Runway surface -> %s"), RunwaySurfaceName(Surface));
+		Surface = static_cast<EPavement>(Option);
+		UE_LOG(LogAirside, Log, TEXT("Runway surface -> %s"), Pavement::Name(Surface));
 	}
 	else
 	{
@@ -303,7 +303,7 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 			// committed - "45 m, concrete, precision".
 			Sink.Label(Context.GuidedCursor(),
 				FString::Printf(TEXT("%.0f m, %s, %s"), Profile->GetTotalWidth() / 100.0,
-					RunwaySurfaceName(Surface), RunwayApproachName(Approach)),
+					Pavement::Name(Surface), RunwayApproachName(Approach)),
 				EPreviewStyle::Pending);
 		}
 		else
@@ -374,7 +374,7 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 			FString::Printf(TEXT("%s  %.0f x %.0f m, %s, %s"),
 				*RunwayDesignator::ToPairText(Along),
 				Length / 100.0, Profile->GetTotalWidth() / 100.0,
-				RunwaySurfaceName(Surface), RunwayApproachName(Approach)),
+				Pavement::Name(Surface), RunwayApproachName(Approach)),
 			Style);
 	}
 

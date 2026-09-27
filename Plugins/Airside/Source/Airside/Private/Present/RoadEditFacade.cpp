@@ -658,7 +658,7 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Runway %s placed, %.0f uu long, %.0f uu wide, %s, %s approach"),
 		*RunwayDesignator::ToPairText(To - From), Length, RunwayProfile->GetTotalWidth(),
-		RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach));
+		Pavement::Name(Facts.Surface), RunwayApproachName(Facts.Approach));
 	return true;
 }
 
@@ -688,7 +688,7 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Fac
 	CommitAndNotify(Edit);
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Runway at segment %d reclassified: %s, %s approach (the whole strip)"),
-		SegmentIndex, RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach));
+		SegmentIndex, Pavement::Name(Facts.Surface), RunwayApproachName(Facts.Approach));
 	return true;
 }
 

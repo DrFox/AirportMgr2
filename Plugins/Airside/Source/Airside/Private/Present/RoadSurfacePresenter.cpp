@@ -169,11 +169,11 @@ const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfa
 	// authored set that already declares one of these names keeps its own binding: the
 	// name resolves to the earlier index, and the appended copy is never reached.
 	//
-	// Grass/Tarmac/Concrete ONLY - Reinforced has no slot of its own; RunwayMaterialSlot is
+	// Grass/Tarmac/Concrete ONLY - Reinforced has no slot of its own; Pavement::MaterialSlot is
 	// where that alias happens, and Settings.RunwayMaterials is already indexed by it.
-	const ERunwaySurface RunwaySurfacesBySlot[] = { ERunwaySurface::Grass, ERunwaySurface::Tarmac, ERunwaySurface::Concrete };
-	static_assert(UE_ARRAY_COUNT(RunwaySurfacesBySlot) == RunwayMaterialSlotCount,
-		"One entry per runway material slot - see RunwayMaterialSlotCount's own comment");
+	const EPavement RunwaySurfacesBySlot[] = { EPavement::Grass, EPavement::Tarmac, EPavement::Concrete };
+	static_assert(UE_ARRAY_COUNT(RunwaySurfacesBySlot) == PavementMaterialSlotCount,
+		"One entry per runway material slot - see PavementMaterialSlotCount's own comment");
 	for (int32 Slot = 0; Slot < UE_ARRAY_COUNT(RunwaySurfacesBySlot); ++Slot)
 	{
 		FRoadMaterialSlot MatSlot;

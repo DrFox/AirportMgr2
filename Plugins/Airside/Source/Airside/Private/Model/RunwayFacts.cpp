@@ -4,43 +4,21 @@
 // instead, which meant the header's declaration and its definition were in two different
 // files with no obvious link between them (#103). Moved here so a doc comment on the
 // declaration is the whole story, the way every other header in this module works.
+// RunwaySurfaceName and RunwayMaterialSlot made a further move, to Pavement::Name and
+// Pavement::MaterialSlot in Pavement.h/.cpp, when ERunwaySurface became EPavement
+// (2026-09-27-shared-pavement) - RunwayApproachName has no such second scale to share with
+// roads and stands, so it stays here.
 
-const TCHAR* RunwaySurfaceName(ERunwaySurface Surface)
+EPavement RoadSurfacePavement(ERoadSurface Surface)
 {
-	switch (Surface)
-	{
-	case ERunwaySurface::Grass:      return TEXT("grass");
-	case ERunwaySurface::Tarmac:     return TEXT("tarmac");
-	case ERunwaySurface::Concrete:   return TEXT("concrete");
-	case ERunwaySurface::Reinforced: return TEXT("reinforced");
-	default:                         break;
-	}
-	return TEXT("unknown");
-}
-
-int32 RunwayMaterialSlot(ERunwaySurface Surface)
-{
-	switch (Surface)
-	{
-	case ERunwaySurface::Grass:  return 0;
-	case ERunwaySurface::Tarmac: return 1;
-	// Reinforced shares concrete's slot - see the declaration's own comment for why.
-	case ERunwaySurface::Concrete:
-	case ERunwaySurface::Reinforced:
-	default:                     return 2;
-	}
-}
-
-ERunwaySurface RoadSurfacePavement(ERoadSurface Surface)
-{
-	return Surface == ERoadSurface::Grass ? ERunwaySurface::Grass : ERunwaySurface::Tarmac;
+	return Surface == ERoadSurface::Grass ? EPavement::Grass : EPavement::Tarmac;
 }
 
 const TCHAR* RoadSurfaceName(ERoadSurface Surface)
 {
-	// THROUGH THE RUNWAY SPELLING, so "grass" in a taxiway log line and in a runway refusal
+	// THROUGH THE PAVEMENT SPELLING, so "grass" in a taxiway log line and in a runway refusal
 	// are one string rather than two that happen to match.
-	return RunwaySurfaceName(RoadSurfacePavement(Surface));
+	return Pavement::Name(RoadSurfacePavement(Surface));
 }
 
 const TCHAR* RunwayApproachName(ERunwayApproach Approach)

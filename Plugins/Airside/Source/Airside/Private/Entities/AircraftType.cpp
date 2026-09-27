@@ -484,7 +484,7 @@ FRunwayRequirements UAircraftType::PiperMeridianRequirements()
 
 	// A turboprop single operates off grass strips routinely; nothing about the type
 	// needs pavement or approach aids, so it may use ANY runway this project can build.
-	Requirements.MinimumSurface = ERunwaySurface::Grass;
+	Requirements.MinimumSurface = EPavement::Grass;
 	Requirements.ApproachNeeded = ERunwayApproach::Visual;
 
 	// GROUND ROLLS, not the 50 ft figures (2026-09-07, revised the same day). The POH's

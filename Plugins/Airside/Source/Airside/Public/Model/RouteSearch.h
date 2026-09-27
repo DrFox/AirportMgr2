@@ -277,7 +277,7 @@ struct AIRSIDE_API FRouteQuery
 	 * RUNWAYS ARE NOT JUDGED HERE: a strip's surface is RunwayAdmission's, which also knows
 	 * length and approach. This gates taxiing only.
 	 */
-	UPROPERTY() ERunwaySurface MinimumSurface = ERunwaySurface::Grass;
+	UPROPERTY() EPavement MinimumSurface = EPavement::Grass;
 
 	/**
 	 * An edge the search may not use. Set by a deadlock replan to forbid the edge the agent
@@ -369,7 +369,7 @@ struct AIRSIDE_API FRouteQuery
 	}
 
 	/** Chainable: see MinimumSurface. Pass the airframe's Requirements.MinimumSurface. */
-	FRouteQuery& NeedsSurface(ERunwaySurface InMinimumSurface)
+	FRouteQuery& NeedsSurface(EPavement InMinimumSurface)
 	{
 		MinimumSurface = InMinimumSurface;
 		return *this;

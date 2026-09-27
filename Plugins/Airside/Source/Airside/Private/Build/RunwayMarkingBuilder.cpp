@@ -366,7 +366,7 @@ int32 FRunwayMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadM
 		// line is the marking you cannot actually lay on turf, and it is also the one the
 		// edge markers already do the job of - so the rule is that an edge is marked by
 		// MARKERS on grass and by a STRIPE on pavement, never by both.
-		const bool bGrass = Facts.Surface == ERunwaySurface::Grass;
+		const bool bGrass = Facts.Surface == EPavement::Grass;
 		if (bGrass)
 		{
 			C.GrassMarkers += GrassMarkers(Out, Z, Frame);
@@ -411,7 +411,7 @@ int32 FRunwayMarkingBuilder::BuildRubber(const URoadNetwork& Network, double Z,
 	ForEachRunway(Network, [&](const FRunwayFrame& Frame, const FRunwayFrame& Far, const FRunwayFacts& Facts)
 	{
 		++Runways;
-		if (Facts.Surface == ERunwaySurface::Grass)
+		if (Facts.Surface == EPavement::Grass)
 		{
 			return;
 		}

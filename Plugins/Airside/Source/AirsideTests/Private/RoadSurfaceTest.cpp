@@ -263,10 +263,10 @@ bool FRsGrassRoadSlotsTest::RunTest(const FString& Parameters)
 {
 	URoadMaterialSet* Set = URoadMaterialSet::MakeTransient({
 		TEXT("Asphalt"), TEXT("Concrete"), TEXT("Kerb"),
-		URoadMaterialSet::RunwaySlotName(ERunwaySurface::Grass),
-		URoadMaterialSet::RunwaySlotName(ERunwaySurface::Tarmac),
-		URoadMaterialSet::RunwaySlotName(ERunwaySurface::Concrete) });
-	const int32 GrassSlot = Set->IndexOf(URoadMaterialSet::RunwaySlotName(ERunwaySurface::Grass));
+		URoadMaterialSet::RunwaySlotName(EPavement::Grass),
+		URoadMaterialSet::RunwaySlotName(EPavement::Tarmac),
+		URoadMaterialSet::RunwaySlotName(EPavement::Concrete) });
+	const int32 GrassSlot = Set->IndexOf(URoadMaterialSet::RunwaySlotName(EPavement::Grass));
 
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	URoadProfile* Taxiway = TestProfiles::Taxiway();
@@ -367,7 +367,7 @@ bool FRsGrassRouteGateTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the west half takes grass"), Net->SetSegmentSurface(Grassy, ERoadSurface::Grass));
 	TestGraph::Derive(*Net);
 
-	auto Find = [&](ERunwaySurface Needs, ETraversalClass Class)
+	auto Find = [&](EPavement Needs, ETraversalClass Class)
 	{
 		const FGuidelineNodeId A = TestGraph::NodeFor(*Net, Grassy, true);
 		const FGuidelineNodeId B = TestGraph::NodeFor(*Net, Paved, false);
@@ -375,11 +375,11 @@ bool FRsGrassRouteGateTest::RunTest(const FString& Parameters)
 			FRouteQuery::For(ERouteErrand::GraphProbe, A, B, 0.0, Class).NeedsSurface(Needs));
 	};
 
-	if (!TestTrue(TEXT("a grass-capable aircraft taxis the grass"), Find(ERunwaySurface::Grass, ETraversalClass::Aircraft).IsValid()))
+	if (!TestTrue(TEXT("a grass-capable aircraft taxis the grass"), Find(EPavement::Grass, ETraversalClass::Aircraft).IsValid()))
 	{
 		return false;
 	}
-	TestFalse(TEXT("an aircraft that needs tarmac is refused it"), Find(ERunwaySurface::Tarmac, ETraversalClass::Aircraft).IsValid());
+	TestFalse(TEXT("an aircraft that needs tarmac is refused it"), Find(EPavement::Tarmac, ETraversalClass::Aircraft).IsValid());
 	{
 		// NO NeedsSurface AT ALL - every query written before grass existed, a vehicle's included.
 		const FRoutePlan Unset = RouteSearch::Find(*Net, FRouteQuery::For(ERouteErrand::GraphProbe,
@@ -389,7 +389,7 @@ bool FRsGrassRouteGateTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("the west half is repaved"), Net->SetSegmentSurface(Grassy, ERoadSurface::Tarmac));
 	TestGraph::Derive(*Net);
-	TestTrue(TEXT("and the tarmac aircraft routes again"), Find(ERunwaySurface::Tarmac, ETraversalClass::Aircraft).IsValid());
+	TestTrue(TEXT("and the tarmac aircraft routes again"), Find(EPavement::Tarmac, ETraversalClass::Aircraft).IsValid());
 
 	TestFalse(TEXT("a runway's own Surface field is never written"), Net->SetSegmentSurface(
 		TestGraph::Lay(*Net, Net->AddNode(FVector2D(0.0, 50000.0)), Net->AddNode(FVector2D(150000.0, 50000.0)), TestProfiles::Runway()),

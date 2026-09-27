@@ -1009,7 +1009,7 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ResolvedRubberMaterialCache;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ResolvedGhostMaterialCache;
 
-	/** Indexed by RunwayMaterialSlot(Surface), exactly like FSurfaceSettings::RunwayMaterials -
+	/** Indexed by Pavement::MaterialSlot(Surface), exactly like FSurfaceSettings::RunwayMaterials -
 	 *  a TArray rather than that struct's fixed C array because UPROPERTY reflection (what
 	 *  keeps the garbage collector tracing these) has no fixed-array support for TObjectPtr. */
 	UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInterface>> ResolvedRunwayMaterialsCache;
@@ -1252,7 +1252,7 @@ public:
 	 * markings. Null when the content set names none: the presenter then falls back to
 	 * the surface material, and the runway draws as a road.
 	 */
-	UMaterialInterface* ResolveRunwayMaterial(ERunwaySurface Surface) const;
+	UMaterialInterface* ResolveRunwayMaterial(EPavement Surface) const;
 
 	/**
 	 * AUTHORED INPUT, READ AND NEVER WRITTEN save for the on-demand fallback cache - see
