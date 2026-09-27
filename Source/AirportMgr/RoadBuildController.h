@@ -87,7 +87,8 @@ public:
 
 	/**
 	 * How close, in PIXELS, the cursor must be to an aircraft's projected position to pick
-	 * it. Pixels, not uu: an aircraft on final is clicked in screen space (spec §3.3), and a
+	 * it WHEN THE CURSOR IS NOT ON ITS BODY - the fallback for an aircraft zoomed out to a few
+	 * pixels (see HoverAgentUnderCursor); anywhere on the drawn body picks it regardless. Pixels, not uu: an aircraft on final is clicked in screen space (spec §3.3), and a
 	 * radius that shrank with distance would make the far ones unclickable.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
@@ -576,8 +577,16 @@ private:
 	/** True while Ctrl is held: the gesture means remove rather than build. */
 	bool IsRemoveHeld() const;
 
-	/** The agent whose projected position is nearest the cursor within AgentPickPixels, or 0. */
+	/** The agent whose drawn body the cursor is over (nearest first), else the one whose
+	 *  projected position is nearest the cursor within AgentPickPixels, else 0. */
 	int32 HoverAgentUnderCursor() const;
+
+	/** View's visible primitives' bounds in its own frame - the body HoverAgentUnderCursor
+	 *  picks by. Empty (IsValid false) when nothing is visible. */
+	static FBox VisibleLocalBounds(const AActor& View);
+
+	/** The hover HoverAgentUnderCursor last logged, so it logs on change and not per frame. */
+	mutable int32 LastLoggedHoverAgent = 0;
 
 	/** Read WASD/QE/wheel/mouse-drag into axes and hand them to the camera component; owns
 	 *  the raw reads because that is host input, not camera geometry. */

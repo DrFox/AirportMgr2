@@ -1,5 +1,7 @@
 #include "CoreMinimal.h"
 #include "BuildActions.h"
+#include "BuildBarWidget.h"
+#include "BuildHudLayer.h"
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Content/AirsideSettings.h"
@@ -12,6 +14,7 @@
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
+#include "RoadBuildController.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/Selection.h"
@@ -323,6 +326,62 @@ bool FInspectorSubKnotSpeedChangeRecomposesTest::RunTest(const FString& Paramete
 		"change - keying on whole knots alone would have left this at Before"),
 		Panel->ComposeCountForTest(), Before + 1);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorDocksAboveTheBarTest,
+	"AirportMgr.Inspector.DocksAboveTheBar",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorDocksAboveTheBarTest::RunTest(const FString& Parameters)
+{
+	// THE CARD NEVER COVERS THE BAR, however tall the bar grows (2026-09-27: it sat a fixed
+	// 72 uu above the screen's bottom while the bar was 118 uu tall, hiding the bar's
+	// left-hand sections). Through the HUD layer's own wiring, not a hand-called DockAbove,
+	// so an unwired seam goes red here.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHudForTest()))
+	{
+		return false;
+	}
+	// A headless controller has no local player, so BeginPlay never created the HUD's
+	// widgets; they are put where CreateAll would have put them, then CreateAll's own last
+	// step runs.
+	UBuildHudLayer* Hud = C->GetHudForTest();
+	Hud->BuildBar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	Hud->Inspector = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("bar"), Hud->BuildBar.Get()) || !TestNotNull(TEXT("inspector"), Hud->Inspector.Get())) { return false; }
+	Hud->WireDocking();
+	TestTrue(TEXT("the HUD docks the inspector on ITS bar"), Hud->Inspector->DockedBarForTest() == Hud->BuildBar);
+
+	UBuildBarWidget& Bar = *Hud->BuildBar;
+	UInspectorWidget& Panel = *Hud->Inspector;
+	const float Wide = static_cast<float>(Bar.SectionRowSizeForTest(6000.0f).X);
+	if (!TestTrue(TEXT("the bar's row measures to a real width"), Wide > 100.0f)) { return false; }
+
+	// One line of sections: measured, then docked on.
+	const float OneLine = Bar.BarReservedHeightForTest(Wide * 1.1f);
+	Panel.UpdateDockForTest();
+	TestEqual(TEXT("the bar reports the height the canvas gives it"), Bar.LiveHeight(), OneLine);
+	TestEqual(TEXT("the card's bottom sits BarGap above the bar's top edge"),
+		Panel.CardClearanceForTest(), static_cast<double>(OneLine) + Panel.BarGap, 0.5);
+
+	// The row wraps (a narrow viewport, or the Selection section arriving): the bar grows,
+	// and the card has to rise with it or the new line is hidden under the card.
+	const float TwoLines = Bar.BarReservedHeightForTest(Wide * 0.66f);
+	if (!TestTrue(TEXT("the wrapped bar is taller - otherwise this proves nothing"), TwoLines > OneLine + 10.0f)) { return false; }
+	Panel.UpdateDockForTest();
+	TestEqual(TEXT("the card rises with a growing bar"),
+		Panel.CardClearanceForTest(), static_cast<double>(TwoLines) + Panel.BarGap, 0.5);
+
+	// And back down when it shrinks - a card left floating is a gap the player reads as a bug.
+	Bar.BarReservedHeightForTest(Wide * 1.1f);
+	Panel.UpdateDockForTest();
+	TestEqual(TEXT("the card comes back down when the bar shrinks"),
+		Panel.CardClearanceForTest(), static_cast<double>(OneLine) + Panel.BarGap, 0.5);
 	return true;
 }
 

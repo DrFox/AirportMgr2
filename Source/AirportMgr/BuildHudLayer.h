@@ -88,12 +88,19 @@ public:
 
 	/**
 	 * Creates all four onto Owner's viewport, at the fixed Z-orders they have always used:
-	 * bar 0; inspector and inbox both 1 (the inspector's card sits over the bar's canvas
-	 * where the two overlap at the bottom-left, and the inbox never overlaps the inspector -
-	 * it anchors bottom-right); toast stack 2, above both - a toast covered by anything else
-	 * is one the player never saw, which is the defect this whole surface exists to fix.
+	 * bar 0; inspector and inbox both 1 (the inbox never overlaps the inspector - it anchors
+	 * top-right); toast stack 2, above both - a toast covered by anything else is one the
+	 * player never saw, which is the defect this whole surface exists to fix. The inspector
+	 * no longer overlaps the bar at all: see WireDocking.
 	 */
 	void CreateAll(APlayerController& Owner);
+
+	/**
+	 * Docks the inspector above the bar (UInspectorWidget::DockAbove) - the one relationship
+	 * between two of these widgets. Split from CreateAll so a headless test, which cannot add
+	 * widgets to a viewport, can put the widgets in place and prove the wiring.
+	 */
+	void WireDocking();
 
 private:
 	/**

@@ -161,6 +161,17 @@ public:
 	 */
 	static float BarHeightFor(const UUIStyle& Style);
 
+	/**
+	 * How tall the bar is ON SCREEN NOW, in the same slate units a canvas slot positions in.
+	 *
+	 * NOT BarHeightFor: that is the floor for one section line, and the bar grows past it -
+	 * the Selection section appears when an aircraft is picked and the row wraps on a narrow
+	 * viewport (BarReservedHeightForTest). Something docked to the bar's top edge has to read
+	 * this every frame or the growing bar slides up underneath it. Falls back to the floor
+	 * before the first layout pass, and for a Blueprint bar with no BarBorder to measure.
+	 */
+	float LiveHeight() const;
+
 	int32 ButtonCountForTest(EActionSection Section) const;
 	bool HasRootWidgetForTest() const;
 
@@ -221,6 +232,10 @@ private:
 	 * the one thing about this bar that has actually broken.
 	 */
 	UPROPERTY() TObjectPtr<UPanelWidget> SectionRow;
+
+	/** The auto-sized strip whose desired height LiveHeight reports. Held for the reason
+	 *  SectionRow is: it is measured every frame by whatever docks above it. */
+	UPROPERTY() TObjectPtr<UWidget> BarBorderWidget;
 
 	UPanelWidget* SectionPanel(EActionSection Section) const;
 	void EnsureSlots(const UUIStyle* Style);

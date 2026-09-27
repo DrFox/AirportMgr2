@@ -6,6 +6,7 @@
 #include "LandAircraftPanelWidget.h"
 #include "LedgerPanelWidget.h"
 #include "Components/InputComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Content/AirsideSettings.h"
 #include "Engine/LocalPlayer.h"
 #include "Entities/AircraftType.h"
@@ -536,8 +537,10 @@ int32 ARoadBuildController::HoverAgentUnderCursor() const
 	const TArray<FRoadAgent>& Agents = AgentModel->GetAgents();
 	TArray<FVector2D> Screen;
 	TArray<int32> Ids;
+	TArray<ScreenPick::FPickBox> Bodies;
 	Screen.Reserve(Agents.Num());
 	Ids.Reserve(Agents.Num());
+	Bodies.Reserve(Agents.Num());
 	for (const FRoadAgent& Agent : Agents)
 	{
 		const ARoadAgentActor* View = Target->GetAgentView(Agent.Id);
@@ -547,10 +550,62 @@ int32 ARoadBuildController::HoverAgentUnderCursor() const
 		{
 			Screen.Add(At);
 			Ids.Add(Agent.Id);
+			Bodies.Add({ VisibleLocalBounds(*View), View->GetActorTransform() });
 		}
 	}
-	const int32 Pick = ScreenPick::NearestWithin(Screen, FVector2D(MouseX, MouseY), AgentPickPixels);
-	return Pick != INDEX_NONE ? Ids[Pick] : 0;
+
+	// THE BODY FIRST (2026-09-27): a ray from the cursor against each aircraft's drawn box, so
+	// a click anywhere on the aeroplane picks it - see ScreenPick::FirstBoxHit for why the old
+	// point at the nose gear was the whole complaint. The point pick stays as the FALLBACK for
+	// an aircraft zoomed out to a few pixels, where its box is smaller than a fingertip and
+	// AgentPickPixels is still the kinder target.
+	int32 Pick = INDEX_NONE;
+	const TCHAR* How = TEXT("body");
+	FVector RayOrigin, RayDirection;
+	if (DeprojectMousePositionToWorld(RayOrigin, RayDirection))
+	{
+		// 100 km: past anything the build camera can frame (its furthest zoom is a few km), and
+		// short enough that a double keeps centimetres at the far end.
+		Pick = ScreenPick::FirstBoxHit(Bodies, RayOrigin, RayOrigin + RayDirection * 1.0e7);
+	}
+	if (Pick == INDEX_NONE)
+	{
+		Pick = ScreenPick::NearestWithin(Screen, FVector2D(MouseX, MouseY), AgentPickPixels);
+		How = TEXT("point");
+	}
+	const int32 Id = Pick != INDEX_NONE ? Ids[Pick] : 0;
+
+	// On CHANGE only - this runs every frame. Says which rule caught it and how big the box
+	// was, so "hard to select" is answerable from the log: a box of zero size, or every pick
+	// arriving by "point", means the body test is not doing its job.
+	if (Id != LastLoggedHoverAgent)
+	{
+		LastLoggedHoverAgent = Id;
+		if (Id != 0)
+		{
+			const FVector Size = Bodies[Pick].LocalBox.IsValid ? Bodies[Pick].LocalBox.GetSize() : FVector::ZeroVector;
+			UE_LOG(LogRoadBuild, Log, TEXT("Pick: hovering aircraft %d by its %s (box %.0f x %.0f x %.0f uu)"),
+				Id, How, Size.X, Size.Y, Size.Z);
+		}
+	}
+	return Id;
+}
+
+FBox ARoadBuildController::VisibleLocalBounds(const AActor& View)
+{
+	// VISIBLE components only, not CalculateComponentsBoundingBoxInLocalSpace(true): an agent
+	// with a loaded airframe keeps its placeholder cube registered but hidden
+	// (ARoadAgentActor::SetAirframe), and the pick box is what the player SEES.
+	FBox Box(ForceInit);
+	const FTransform WorldToActor = View.GetActorTransform().Inverse();
+	View.ForEachComponent<UPrimitiveComponent>(false, [&](const UPrimitiveComponent* Component)
+	{
+		if (Component->IsRegistered() && Component->IsVisible())
+		{
+			Box += Component->CalcBounds(Component->GetComponentTransform() * WorldToActor).GetBox();
+		}
+	});
+	return Box;
 }
 
 bool ARoadBuildController::SelectedAgentFacts(FAgentFacts& Out) const
