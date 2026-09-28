@@ -79,8 +79,9 @@ public:
 	/** Text and glyphs on Surface or Well. Sheet: buildings, dark slate. */
 	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Ink = FLinearColor::FromSRGBColor(FColor(0x3E, 0x4A, 0x54));
 
-	/** Section headings, secondary facts, disabled labels. */
-	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor InkMuted = FLinearColor::FromSRGBColor(FColor(0x7D, 0x8B, 0x96));
+	/** Section headings, secondary facts, disabled labels. 76848F, not the first cut's 7D8B96: a
+	 *  button's detail sits on Control, where 7D8B96 read 2.8:1 (final review 2026-09-28). */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor InkMuted = FLinearColor::FromSRGBColor(FColor(0x76, 0x84, 0x8F));
 
 	/** Text and glyphs on Accent, Warning or Positive. Same value as Ink today; a separate slot
 	 *  because a darker Accent would want it lighter, and Ink must not move with it. */
@@ -255,6 +256,12 @@ public:
 	 * Layout (wrap width, alignment, visibility) stays at the call site; this only owns type.
 	 */
 	void ApplyText(UTextBlock& TextBlock, EUITextRole Role, FLinearColor Colour) const;
+
+#if WITH_EDITOR
+	/** Drops the fill and font caches, so a Details-panel edit reaches the next ControlFill /
+	 *  ApplyText without an editor restart. See AirportMgr.UI.EditingTheStyleReachesTheControlFill. */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& Event) override;
+#endif
 
 private:
 	/**

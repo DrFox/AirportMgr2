@@ -60,7 +60,7 @@ COLOURS = {
     "well":          "F0F2F4",
     "control":       "E2E6EA",
     "ink":           "3E4A54",
-    "ink_muted":     "7D8B96",
+    "ink_muted":     "76848F",
     "ink_on_accent": "3E4A54",
     "rule":          "E2E6EA",
     "accent":        "F4BA38",

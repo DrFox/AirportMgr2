@@ -33,7 +33,8 @@ FUiButtonLook UUiButton::LookFor(const UUIStyle& S, EUiButtonKind InKind, bool b
 	switch (InKind)
 	{
 	case EUiButtonKind::Primary: return { S.Accent, S.InkOnAccent };
-	case EUiButtonKind::Danger:  return { S.Warning, S.InkOnAccent };
+	// Danger reads SURFACE on brick: InkOnAccent (dark slate) is 2.2:1 on Warning, Surface ~4:1.
+	case EUiButtonKind::Danger:  return { S.Warning, S.Surface };
 	default:                     return { S.Control, S.Ink };
 	}
 }
@@ -183,12 +184,14 @@ void UUiButton::SetState(bool bInEnabled, bool bInSelected)
 
 void UUiButton::Paint()
 {
+	// ENABLED STATE FIRST, style or not: a designer-placed button (UInspectorWidget's
+	// BindWidgetOptional Depart) is never Built, and must still stop taking clicks when disabled.
+	SetIsEnabled(bEnabled);
 	if (Style == nullptr)
 	{
-		return;   // SetState before Build: nothing to paint with yet; Build paints
+		return;   // not Built: no colours to paint with; Build paints
 	}
 	const FUiButtonLook Look = LookFor(*Style, Kind, bEnabled, bSelected);
-	SetIsEnabled(bEnabled);
 	SetBackgroundColor(Look.Fill);
 	if (Label != nullptr) { Label->SetColorAndOpacity(FSlateColor(Look.Ink)); }
 	if (Icon != nullptr) { Icon->SetColorAndOpacity(Look.Ink); }

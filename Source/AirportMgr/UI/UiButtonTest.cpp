@@ -27,7 +27,7 @@ bool FUiButtonLookTest::RunTest(const FString& Parameters)
 		{ EUiButtonKind::Secondary, false, true,  S.Control, S.InkMuted,    TEXT("a disabled tool cannot read as armed") },
 		{ EUiButtonKind::Primary,   true,  false, S.Accent,  S.InkOnAccent, TEXT("Accept") },
 		{ EUiButtonKind::Primary,   false, false, S.Control, S.InkMuted,    TEXT("an offer that cannot be taken must not shout") },
-		{ EUiButtonKind::Danger,    true,  false, S.Warning, S.InkOnAccent, TEXT("a destructive verb") },
+		{ EUiButtonKind::Danger,    true,  false, S.Warning, S.Surface,     TEXT("a destructive verb: light on brick, dark ink is 2.2:1") },
 		{ EUiButtonKind::Danger,    false, false, S.Control, S.InkMuted,    TEXT("disabled destructive verb") },
 		{ EUiButtonKind::Ghost,     true,  false, FLinearColor::White, S.Ink, TEXT("ghost: fill comes from its own brushes") },
 		{ EUiButtonKind::Ghost,     false, false, FLinearColor::White, S.InkMuted, TEXT("disabled ghost") },
@@ -95,4 +95,22 @@ bool FUiButtonContentTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A DESIGNER-PLACED BUTTON IS NEVER BUILT. UInspectorWidget's Depart/Follow are BindWidgetOptional,
+ * and EnsureSlots skips Build for a bound one - so SetState on an un-built button must still
+ * disable it, or a restyle Blueprint's Depart stays clickable while the aircraft taxis (the old
+ * code called SetIsEnabled unconditionally; final review 2026-09-28).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiButtonUnbuiltTest, "AirportMgr.UI.Button.UnbuiltStillDisables",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiButtonUnbuiltTest::RunTest(const FString& Parameters)
+{
+	UUiButton* B = NewObject<UUiButton>();
+	B->SetState(false, false);
+	TestFalse(TEXT("disabled although never built"), B->GetIsEnabled());
+	B->SetState(true, false);
+	TestTrue(TEXT("and enabled again"), B->GetIsEnabled());
+	return true;
+}
 #endif

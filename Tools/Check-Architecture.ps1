@@ -1363,7 +1363,9 @@ if (-not (Test-Path $uiDir)) {
     $failures.Add("button-looks-in-ui: $uiDir is named by rule 28 but does not exist - update the rule")
 }
 Get-ChildItem -Path $gameSource -Recurse -Include *.cpp, *.h |
-    Where-Object { -not $_.FullName.StartsWith($uiDir) -and $_.Name -notlike '*Test.cpp' } |
+    # The SEPARATOR matters: without it '...\AirportMgr\UI' is a prefix of '...\AirportMgr\UIStyle.cpp',
+    # and the style - the likeliest home for a convenient FButtonStyle helper - was silently exempt.
+    Where-Object { -not $_.FullName.StartsWith($uiDir + [IO.Path]::DirectorySeparatorChar) -and $_.Name -notlike '*Test.cpp' } |
     ForEach-Object {
         $file = $_
         $hits = Select-String -Path $file.FullName -Pattern 'SetBackgroundColor\(|FButtonStyle' |

@@ -71,6 +71,19 @@ FSlateBrush UUIStyle::ControlFill() const
 	return FSlateRoundedBoxBrush(FLinearColor::White, ControlRadius);
 }
 
+#if WITH_EDITOR
+void UUIStyle::PostEditChangeProperty(FPropertyChangedEvent& Event)
+{
+	Super::PostEditChangeProperty(Event);
+	// ALL of them, whichever property changed: which fields feed which cache is exactly the kind
+	// of knowledge that goes stale, and rebuilding one MID and one composite is free.
+	ControlFillInstance.Reset();
+	CompositeFontCache.Reset();
+	RegularFaceRef.Reset();
+	SemiBoldFaceRef.Reset();
+}
+#endif
+
 TSharedPtr<const FCompositeFont> UUIStyle::Composite() const
 {
 	if (CompositeFontCache.IsValid())

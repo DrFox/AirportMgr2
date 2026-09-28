@@ -1,6 +1,9 @@
 #include "CoreMinimal.h"
 #include "Components/TextBlock.h"
+#include "HAL/IConsoleManager.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/AutomationTest.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 #include "BuildActions.h"
 
@@ -205,6 +208,15 @@ bool FUIStyleContrastTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("InkMuted on Surface >= 3"), Ratio(Style->InkMuted, Style->Surface) >= 3.0);
 		TestTrue(TEXT("InkMuted on Well >= 3"), Ratio(Style->InkMuted, Style->Well) >= 3.0);
 		TestTrue(TEXT("Surface and Well are distinguishable"), !Style->Surface.Equals(Style->Well));
+		// A Secondary button's DETAIL (a variant's second line, a Land row's refusal) is InkMuted
+		// on Control - the one pair the first cut of this test missed (final review 2026-09-28).
+		TestTrue(TEXT("InkMuted on Control >= 3"), Ratio(Style->InkMuted, Style->Control) >= 3.0);
+		// Every filled kind's label, through the rule that picks it, at the 3:1 a button label needs.
+		for (const EUiButtonKind Kind : { EUiButtonKind::Primary, EUiButtonKind::Secondary, EUiButtonKind::Danger })
+		{
+			const FUiButtonLook Look = UUiButton::LookFor(*Style, Kind, true, false);
+			TestTrue(FString::Printf(TEXT("kind %d label on its fill >= 3"), static_cast<int32>(Kind)), Ratio(Look.Ink, Look.Fill) >= 3.0);
+		}
 	}
 	return true;
 }
@@ -277,4 +289,65 @@ bool FUIStyleInterTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * ONE DIMMING, NOT TWO. Slate multiplies every DISABLED widget's content alpha by 0.45 on top of
+ * whatever colour it was given (SlateElementPixelShader.usf, DrawDisabledEffect). UUiButton::LookFor
+ * already dims a disabled label to InkMuted, so with the engine's pass left on, a refused Land
+ * row's reason - text the player must read - rendered about 1.5:1 on its fill (PIE capture
+ * 2026-09-28: (175,183,190) on (220,224,228)). The cvar strips the effect for project content only.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUIDisabledEffectOffTest,
+	"AirportMgr.UI.DisabledTextIsDimmedOnceNotTwice",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUIDisabledEffectOffTest::RunTest(const FString& Parameters)
+{
+	const IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("Slate.ApplyDisabledEffectOnWidgets"));
+	if (!TestNotNull(TEXT("the engine still has the cvar"), CVar)) { return false; }
+	TestFalse(TEXT("Slate's own disabled dimming is off - LookFor's InkMuted is the only one"), CVar->GetBool());
+	return true;
+}
+
+/**
+ * THE STYLE IS EDITED IN A DETAILS PANEL - that is the whole point of the asset - so its caches
+ * must not outlive an edit. ControlFill's dynamic instance used to keep the radius it was built
+ * with until an editor restart, while UUiRow read the new ControlRadius at once: rows and buttons
+ * disagreeing in the same frame (final review 2026-09-28).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUIStyleEditInvalidatesTest,
+	"AirportMgr.UI.EditingTheStyleReachesTheControlFill",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUIStyleEditInvalidatesTest::RunTest(const FString& Parameters)
+{
+#if WITH_EDITOR
+	const UUIStyle* Configured = UAirportMgrUISettings::ResolveStyle();
+	if (Configured->ButtonMaterial.IsNull())
+	{
+		AddInfo(TEXT("no style asset with a ButtonMaterial configured - skipped"));
+		return true;
+	}
+	UUIStyle* Style = NewObject<UUIStyle>();
+	Style->ButtonMaterial = Configured->ButtonMaterial;
+	Style->ControlRadius = 5.0f;
+	auto RadiusOf = [](const FSlateBrush& Brush)
+	{
+		float R = -1.0f;
+		if (const UMaterialInstanceDynamic* MID = Cast<UMaterialInstanceDynamic>(Brush.GetResourceObject()))
+		{
+			MID->GetScalarParameterValue(FName(TEXT("RadiusPx")), R);
+		}
+		return R;
+	};
+	TestEqual(TEXT("built with the radius it had"), RadiusOf(Style->ControlFill()), 5.0f);
+	Style->ControlRadius = 9.0f;
+	FProperty* Prop = UUIStyle::StaticClass()->FindPropertyByName(TEXT("ControlRadius"));
+	FPropertyChangedEvent Changed(Prop);
+	Style->PostEditChangeProperty(Changed);
+	TestEqual(TEXT("an edit reaches the fill without a restart"), RadiusOf(Style->ControlFill()), 9.0f);
+#endif
+	return true;
+}
 #endif
