@@ -36,7 +36,7 @@ namespace StandAdmission
 		// THE STRIP FIRST - see the header. A legacy outline-less stand has no footprint, and
 		// WorstIntrusion answers "clear" for under three points, so it keeps today's answer.
 		// ENFORCED BY: Airside.Model.StandAdmission.InsideStrip
-		if (TaxiwayStrip::WorstIntrusion(Network, Stand.Outline).IsSet())
+		if (StripClosure(Network, Stand).IsSet())
 		{
 			Out.Why = EStandRefusal::InsideStrip;
 		}
@@ -90,4 +90,9 @@ namespace StandAdmission
 			return FString();
 		}
 	}
+}
+
+TOptional<TaxiwayStrip::FIntrusion> StandAdmission::StripClosure(const URoadNetwork& Network, const FEntityInstance& Stand)
+{
+	return TaxiwayStrip::WorstIntrusion(Network, Stand.Outline);
 }

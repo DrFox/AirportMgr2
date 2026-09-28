@@ -122,7 +122,8 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 
 		TArray<FToolVariantAxis> Axes;
 		Tool.GetVariantAxes(Context, Axes);
-		const int32 Lit = Axes.Num() > 0 ? Axes[0].Current : INDEX_NONE;
+		// Row 1: Mode leads since strip stage 6.
+		const int32 Lit = Axes.Num() > 1 ? Axes[1].Current : INDEX_NONE;
 		const int32 First = Lit == INDEX_NONE ? 0 : (Lit + 1) % Count;
 
 		Tool.OnReselect(Context);
@@ -144,7 +145,7 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
 		// A PICK, not a press: which index a press lands on now depends on what the level's
 		// default lights (block 2), and this block needs the narrowest specifically.
-		Tool.SelectVariant(TestTool::ContextAt(*Actor, FVector2D::ZeroVector), 0, 0);
+		Tool.SelectVariant(TestTool::ContextAt(*Actor, FVector2D::ZeroVector), 1, 0);   // row 1: Width, after Mode
 
 		const URoadProfile* Narrowest = Actor->ResolveWidthProfile(ERoadKind::Taxiway, 0);
 		if (!TestNotNull(TEXT("the narrowest profile loads"), Narrowest)) { return false; }

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/Pavement.h"
 #include "Model/RoadEntity.h"
+#include "Model/TaxiwayStrip.h"
 #include "StandAdmission.generated.h"
 
 struct FAirframe;
@@ -97,6 +98,17 @@ namespace StandAdmission
 	 * applied to a stand instead of a runway.
 	 */
 	AIRSIDE_API FStandAdmission Judge(const URoadNetwork& Network, const FEntityInstance& Stand, const FAirframe& Airframe);
+
+	/**
+	 * Is this stand CLOSED because a taxiway's strip covers it - the taxiway, how far in - or
+	 * unset when it is clear? Judge's InsideStrip test, by itself, for the readers that have no
+	 * airframe to judge against: the HUD overlay's flag (GraphOverlay::DescribeStands), the
+	 * Upgrade mode's "closes stand N", the inspector's ClosedBecause (strip stage 6). ONE RULE,
+	 * so the flag cannot show a stand open that admission refuses. An outline-less legacy stand
+	 * has no footprint and is never closed (WorstIntrusion's under-three-points answer).
+	 * ENFORCED BY: Airside.Model.StandAdmission.InsideStrip, Airside.Tool.StandInStripFlagged
+	 */
+	AIRSIDE_API TOptional<TaxiwayStrip::FIntrusion> StripClosure(const URoadNetwork& Network, const FEntityInstance& Stand);
 
 	/** The sentence for a refusal: "the surface is grass; this aircraft needs concrete", or the
 	 *  Code-letter or service equivalent. Empty when admitted. */

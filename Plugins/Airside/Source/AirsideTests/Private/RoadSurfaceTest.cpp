@@ -147,7 +147,8 @@ bool FRsToolSurfaceRowTest::RunTest(const FString& Parameters)
 		TArray<FToolVariantAxis> Axes;
 		Tool.GetVariantAxes(Context, Axes);
 		const int32 Row = RsAxisIndex(Axes, TEXT("Surface"));
-		if (!TestEqual(TEXT("the surface row follows the width row"), Row, 1)) { return false; }
+		// Row 2: Mode (strip stage 6), Width, then Surface.
+		if (!TestEqual(TEXT("the surface row follows the width row"), Row, 2)) { return false; }
 		if (!TestEqual(TEXT("two options"), Axes[Row].Options.Num(), 2)) { return false; }
 		TestEqual(TEXT("grass first, as on the runway and stand rows"), Axes[Row].Options[0].Label.ToString(), FString(TEXT("grass")));
 		TestEqual(TEXT("tarmac second"), Axes[Row].Options[1].Label.ToString(), FString(TEXT("tarmac")));
@@ -158,12 +159,12 @@ bool FRsToolSurfaceRowTest::RunTest(const FString& Parameters)
 	// 2. A PICK SETS THE SURFACE, and leaves the width alone.
 	{
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
-		TestTrue(TEXT("picking tarmac is accepted"), Tool.SelectVariant(Context, 1, 1));
+		TestTrue(TEXT("picking tarmac is accepted"), Tool.SelectVariant(Context, 2, 1));
 		TestEqual(TEXT("the next click lays tarmac"), Tool.GetSurface(), EPavement::Tarmac);
 		TestEqual(TEXT("the width was not touched - still the narrowest"), Tool.GetWidthIndex(), 0);
 		TArray<FToolVariantAxis> Axes;
 		Tool.GetVariantAxes(Context, Axes);
-		TestEqual(TEXT("and tarmac is lit"), Axes[1].Current, 1);
+		TestEqual(TEXT("and tarmac is lit"), Axes[2].Current, 1);
 	}
 
 	// 3. SHIFT+KEY STEPS THE SURFACE; the plain key still steps the width.
@@ -181,14 +182,14 @@ bool FRsToolSurfaceRowTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and not the surface"), Tool.GetSurface(), EPavement::Grass);
 	}
 
-	// 4. NO WIDTHS: surface is row 0, and a pick on row 0 means surface - the Id, not the index.
+	// 4. NO WIDTHS: surface is row 1 (after Mode), and a pick on it means surface - the Id, not the index.
 	{
 		FRsWidthTarget Empty;
 		Empty.LevelDefault = TestProfiles::Taxiway();
 		FToolContext EmptyContext;
 		EmptyContext.Target = &Empty;
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
-		TestTrue(TEXT("row 0 is surface when there are no widths"), Tool.SelectVariant(EmptyContext, 0, 1));
+		TestTrue(TEXT("row 1 is surface when there are no widths"), Tool.SelectVariant(EmptyContext, 1, 1));
 		TestEqual(TEXT("so the pick lays tarmac"), Tool.GetSurface(), EPavement::Tarmac);
 		FToolContext Shift = EmptyContext;
 		Shift.bInsertModifier = true;

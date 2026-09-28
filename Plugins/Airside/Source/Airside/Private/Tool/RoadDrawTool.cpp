@@ -9,6 +9,12 @@
 
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Model/StandAdmission.h"
+#include "Model/TaxiwayRestriction.h"
+#include "Model/TaxiwayStrip.h"
+#include "Solve/IcaoCode.h"
+#include "Solve/RoadGeom.h"
+#include "UObject/UObjectGlobals.h"
 #include "Solve/GuideArbiter.h"
 #include "Tool/RoadHeal.h"
 #include "Tool/PavementAxis.h"
@@ -406,6 +412,13 @@ void FRoadDrawTool::OnClick(const FToolContext& Context)
 		return;
 	}
 
+	// UPGRADE LAYS NOTHING: the click changes the piece under it, and no node or chain is made.
+	if (Mode == EToolMode::Upgrade)
+	{
+		Upgrade(Context);
+		return;
+	}
+
 	// Shift on a road inserts a node and stops there. A plain click splits too, but also
 	// starts a chain from the new node - right when drawing a road INTO an existing one,
 	// and a nuisance when all you wanted was somewhere to drag from.
@@ -528,6 +541,10 @@ void FRoadDrawTool::GetVariantAxes(const FToolContext& Context, TArray<FToolVari
 	{
 		return;
 	}
+	// MODE FIRST (strip stage 6): it says what the rows below it DO - lay at this width, or
+	// re-width what is clicked - so it heads them. ModeAxis's words, shared with every tool
+	// that gains an upgrade.
+	ModeAxis::AppendAxis(Out, Mode);
 	AddWidthAxis(Context, Out);
 
 	// SURFACE ALWAYS, after Width: choosable with or without width profiles, from THE
@@ -597,6 +614,27 @@ bool FRoadDrawTool::SelectVariant(const FToolContext& Context, int32 Axis, int32
 
 	const TCHAR* What = Kind == ERoadKind::ServiceRoad ? TEXT("Road") : TEXT("Taxiway");
 
+	if (Axes[Axis].Id == ModeAxis::AxisId())
+	{
+		const EToolMode Next = ModeAxis::ModeAt(Option);
+		if (Next != Mode)
+		{
+			// A PART-DRAWN CHAIN ENDS on the switch, as a deactivate ends it: in Upgrade the
+			// next click changes a road rather than continuing one, and a chain left pending
+			// would reappear, half-drawn, on the way back to Build.
+			if (State.IsValid() && !State->IsIdle())
+			{
+				if (TUniquePtr<IRoadDrawState> Cancelled = State->OnCancel(Context)) { State = MoveTemp(Cancelled); }
+			}
+			State = MakeUnique<FRoadIdleState>(Kind, WidthIndex, Surface);
+			Context.Target->HideGhost();
+			Mode = Next;
+			Hover = FUpgradeHover();
+		}
+		UE_LOG(LogAirside, Log, TEXT("%s mode -> %s"), What, *ModeAxis::OptionId(Mode).ToString());
+		return true;
+	}
+
 	// BY THE ROW'S Id - see StepAxis on why an index cannot say which row it is.
 	if (Axes[Axis].Id == TEXT("Surface"))
 	{
@@ -650,6 +688,13 @@ void FRoadDrawTool::Tick(const FToolContext& Context)
 {
 	if (Context.Target == nullptr)
 	{
+		return;
+	}
+
+	// NO ROAD GHOST IN UPGRADE: nothing is being laid; PreviewUpgrade outlines the change.
+	if (Mode == EToolMode::Upgrade)
+	{
+		Context.Target->HideGhost();
 		return;
 	}
 
@@ -724,6 +769,12 @@ void FRoadDrawTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& 
 		return;
 	}
 
+	if (Mode == EToolMode::Upgrade)
+	{
+		PreviewUpgrade(Context, Sink);
+		return;
+	}
+
 	// Where the click lands on the PLANE, which under an angled view is not where the
 	// mouse pointer is drawn - and the shallower the view, the further apart they are.
 	Sink.Marker(RoadGuidedSnap(Context).Position, EPreviewStyle::Pending);
@@ -759,6 +810,151 @@ void FRoadDrawTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& 
 	{
 		State->BuildPreview(Context, Sink);
 	}
+}
+
+// --- Upgrade mode (strip stage 6) ---------------------------------------------------------
+
+int32 FRoadDrawTool::UpgradeTargetUnder(const FToolContext& Context) const
+{
+	const URoadNetwork* Network = Context.Network();
+	if (Network == nullptr)
+	{
+		return INDEX_NONE;
+	}
+	if (Context.Snap.Kind == ERoadSnapKind::Segment && Network->GetSegment(Context.Snap.Segment) != nullptr)
+	{
+		return Context.Snap.Segment.Index;
+	}
+	// THE PAVEMENT UNDER THE CURSOR, TaxiwayStrip's footprint - the one description of a
+	// segment's ground. Every live segment, linearly (N was 34 on M_Test, 2026-09-28), only
+	// while Upgrade is the mode and only when the snap found nothing.
+	const TArray<FRoadSegment>& Segments = Network->GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network->SegmentIdAt(Index);
+		TaxiwayStrip::FSegmentShape Shape;
+		if (!Id.IsSet() || Network->IsRunwaySegment(Id) || !TaxiwayStrip::ShapeOf(*Network, Id, Shape)) { continue; }
+		if (RoadGeom::PointInPolygon(TaxiwayStrip::FootprintOf(Shape), Context.Cursor))
+		{
+			return Index;
+		}
+	}
+	return INDEX_NONE;
+}
+
+void FRoadDrawTool::Upgrade(const FToolContext& Context)
+{
+	const int32 Segment = UpgradeTargetUnder(Context);
+	const TCHAR* What = Kind == ERoadKind::ServiceRoad ? TEXT("Road") : TEXT("Taxiway");
+	if (Segment == INDEX_NONE)
+	{
+		// SAID, for "the click did nothing": Upgrade changes a piece, and there was none here.
+		UE_LOG(LogAirside, Log, TEXT("%s upgrade: nothing under the cursor to upgrade"), What);
+		return;
+	}
+	// The facade refuses and logs its own reason; the hover already showed the same one.
+	Context.Target->UpgradeSegment(Segment, Kind, WidthIndex, Surface);
+	Hover = FUpgradeHover();
+}
+
+void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink& Sink) const
+{
+	Sink.Marker(Context.Cursor, EPreviewStyle::Pending);
+	const URoadNetwork* Network = Context.Network();
+	const int32 Segment = UpgradeTargetUnder(Context);
+	if (Network == nullptr || Segment == INDEX_NONE)
+	{
+		return;
+	}
+	const FRoadSegmentId Id = Network->SegmentIdAt(Segment);
+	const FRoadSegment& Piece = Network->GetSegments()[Segment];
+	const URoadProfile* Had = Network->ProfileFor(Piece);
+
+	const bool bSame = Hover.Network == Network && Hover.Revision == Network->GetEditRevision()
+		&& Hover.Entities == Network->GetEntities().Num() && Hover.Segment == Segment && Hover.Had == Had
+		&& Hover.HadSurface == Piece.Surface && Hover.Width == WidthIndex && Hover.Surface == Surface;
+	if (!bSame)
+	{
+		Hover = FUpgradeHover();
+		Hover.Network = Network;
+		Hover.Revision = Network->GetEditRevision();
+		Hover.Entities = Network->GetEntities().Num();
+		Hover.Segment = Segment;
+		Hover.Had = Had;
+		Hover.HadSurface = Piece.Surface;
+		Hover.Width = WidthIndex;
+		Hover.Surface = Surface;
+
+		// THE ONE EVALUATOR the click asks (IRoadEditTarget::WhyUpgradeRefused).
+		const FString Why = Context.Target->WhyUpgradeRefused(Segment, Kind, WidthIndex, Surface);
+		URoadProfile* New = WidthIndex != INDEX_NONE ? Context.Target->ResolveWidthProfile(Kind, WidthIndex) : nullptr;
+		const URoadProfile* Becomes = New != nullptr ? New : Had;
+		const bool bTaxiway = TaxiwayStrip::HasStrip(*Network, Id);
+		const double NewWidth = Becomes != nullptr ? Becomes->GetTotalWidth() : 0.0;
+		const EIcaoCode NewLetter = IcaoCode::TaxiwayLetterForWidth(NewWidth);
+		const FString Named = bTaxiway ? FString::Printf(TEXT("Code %s"), IcaoCode::ToLetter(NewLetter))
+			: VariantWidthLabel(NewWidth).ToString();
+
+		EIcaoCode Operates = NewLetter;
+		if (!Why.IsEmpty())
+		{
+			Hover.bRefused = true;
+			Hover.Text = FString::Printf(TEXT("Upgrade refused: %s"), *Why);
+		}
+		else if (Becomes == Had && Surface == Piece.Surface)
+		{
+			Hover.Text = FString::Printf(TEXT("already %s, %s"), *Named, Pavement::Name(Surface));
+		}
+		else
+		{
+			Hover.Text = FString::Printf(TEXT("Upgrade to %s, %s"), *Named, Pavement::Name(Surface));
+			if (bTaxiway && New != nullptr && New != Had)
+			{
+				// THE GRAPH AS IT WOULD BE: a duplicate carrying the new profile, asked the same
+				// questions the rebuild and admission will ask of the real one after the click.
+				URoadNetwork* Ghost = DuplicateObject<URoadNetwork>(Network, GetTransientPackage());
+				Ghost->SetSegmentProfile(Id, New);
+				TArray<FString> Effects;
+				TaxiwayRestriction::FObstruction Worst;
+				if (const TOptional<EIcaoCode> Restricted = TaxiwayRestriction::RestrictionOf(*Ghost, Id, &Worst))
+				{
+					Operates = Restricted.GetValue();
+					Effects.Add(FString::Printf(TEXT("restricts to Code %s (%s)"), IcaoCode::ToLetter(Operates),
+						*TaxiwayRestriction::Describe(Worst)));
+				}
+				// BY ENTITY INDEX: stand numbers (strip stage 5) are not in this tree yet.
+				const TArray<FEntityInstance>& Now = Network->GetEntities();
+				const TArray<FEntityInstance>& Then = Ghost->GetEntities();
+				for (int32 E = 0; E < Now.Num() && E < Then.Num(); ++E)
+				{
+					if (!Now[E].bAlive || !Now[E].IsStand()) { continue; }
+					const bool bWas = StandAdmission::StripClosure(*Network, Now[E]).IsSet();
+					const bool bWill = StandAdmission::StripClosure(*Ghost, Then[E]).IsSet();
+					if (bWill && !bWas) { Effects.Add(FString::Printf(TEXT("closes stand %d"), E)); }
+					if (bWas && !bWill) { Effects.Add(FString::Printf(TEXT("reopens stand %d"), E)); }
+				}
+				if (Effects.Num() > 0)
+				{
+					Hover.Text += TEXT(": ") + FString::Join(Effects, TEXT(", "));
+				}
+			}
+		}
+
+		// THE OUTLINE: the strip it would operate at for a taxiway, the pavement for a road.
+		TaxiwayStrip::FSegmentShape Shape;
+		if (TaxiwayStrip::ShapeOf(*Network, Id, Shape) && Becomes != nullptr)
+		{
+			Shape.HalfWidth = Becomes->GetMaxHalfWidth()
+				+ (bTaxiway ? IcaoCode::TaxiwayStripFor(Operates, NewWidth) : 0.0);
+			Hover.Outline = TaxiwayStrip::FootprintOf(Shape);
+		}
+	}
+
+	if (Hover.Outline.Num() > 0)
+	{
+		Sink.Polygon(Hover.Outline, Hover.bRefused ? EPreviewStyle::Refused : EPreviewStyle::Guide);
+	}
+	Sink.Label(Context.Cursor, Hover.Text, Hover.bRefused ? EPreviewStyle::Refused : EPreviewStyle::Pending);
 }
 
 #undef LOCTEXT_NAMESPACE

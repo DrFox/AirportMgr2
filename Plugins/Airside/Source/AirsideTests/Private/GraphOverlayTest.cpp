@@ -9,6 +9,8 @@
 #include "Present/RoadNetworkActor.h"
 #include "Tool/GraphOverlay.h"
 #include "Tool/RoadBuildTool.h"
+#include "Profiles/RoadProfile.h"
+#include "StandFixture.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -379,6 +381,38 @@ bool FStandOverlayMarkersTest::RunTest(const FString& Parameters)
 			*Anchor.Id.ToString()), Sink.MarkersNear(Node->Position), 1);
 	}
 	TestEqual(TEXT("and every marker drawn is one of those anchor rings"), Sink.Markers.Num(), Anchors);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandInStripFlaggedTest,
+	"Airside.Tool.StandInStripFlagged",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandInStripFlaggedTest::RunTest(const FString& Parameters)
+{
+	// STRIP STAGE 6: a stand a grown strip swallowed is CLOSED to new arrivals, and the overlay
+	// says so - its outline in the Refused style. PAINT stays untouched (red stand paint was
+	// removed on purpose, RoadSurfacePresenter); the overlay is the flag.
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	Network->AddStraightSegment(Network->AddNode({ -20000.0, 0.0 }), Network->AddNode({ 20000.0, 0.0 }),
+		URoadProfile::MakeTransient(2400.0, 1600.0));   // E: strip edge 12 + 28 = 40 m off
+	UEntityDefinition* Def = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
+	const FEntityInstanceId Stand = ServiceLinkFixture::PlaceStand(*Network, *Def, FVector2D(0.0, 5000.0), 0.0);
+	FRoadNetworkTestAccess(*Network).SetEntityOutlineForTest(Stand,
+		{ { -2000.0, 3000.0 }, { 2000.0, 3000.0 }, { 2000.0, 7000.0 }, { -2000.0, 7000.0 } });
+	{
+		FGraphSink Sink;
+		GraphOverlay::DescribeStands(*Network, Sink);
+		TestTrue(TEXT("a stand inside the strip is outlined Refused"), Sink.CountLines(EPreviewStyle::Refused) >= 4);
+	}
+	FRoadNetworkTestAccess(*Network).SetEntityOutlineForTest(Stand,
+		{ { -2000.0, 5000.0 }, { 2000.0, 5000.0 }, { 2000.0, 9000.0 }, { -2000.0, 9000.0 } });
+	{
+		FGraphSink Sink;
+		GraphOverlay::DescribeStands(*Network, Sink);
+		TestEqual(TEXT("one clear of it is not"), Sink.CountLines(EPreviewStyle::Refused), 0);
+	}
 	return true;
 }
 
