@@ -675,4 +675,47 @@ bool FStandMarkingPaintStaysInsideOutlineTest::RunTest(const FString& Parameters
 	return true;
 }
 
+/**
+ * THE STOP LINE IS WHITE ON THE BUILT COMPONENT, not only in the builder's buffers: the seam is
+ * URoadSurfacePresenter::RebuildMarkings resolving the white slot and handing its id to
+ * FHoldingPositionMarkingBuilder (taxiway strip stage 4). A derived crossing and nothing else -
+ * no stand, no runway - so every painted triangle on the holding-paint layer is a stop line.
+ * Lives beside PaintSlotsResolve because it reads the same component the same way.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCrossingStopLineIsWhiteTest,
+	"Airside.Present.CrossingStopLineIsWhite",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCrossingStopLineIsWhiteTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	FRoadCrossingFixture::Lay(*Actor->Network);
+	Actor->RebuildMesh();
+
+	URoadSurfacePresenter* Presenter = Actor->GetPresenter();
+	UDynamicMeshComponent* Paint = Presenter != nullptr ? Presenter->GetLayerComponentForTest(ESurfaceLayer::HoldingPaint) : nullptr;
+	const URoadMaterialSet* Set = Presenter != nullptr ? Presenter->MarkingMaterialSetForTest() : nullptr;
+	if (!TestNotNull(TEXT("a paint component"), Paint) || !TestNotNull(TEXT("a marking material set"), Set)) { return false; }
+
+	const int32 White = Set->IndexOf(URoadSurfacePresenter::StandPaintSlot(EStandPaint::Boundary));
+	if (!TestTrue(TEXT("the layer declares its white slot"), White > 0)) { return false; }
+	const UE::Geometry::FDynamicMesh3& Mesh = Paint->GetDynamicMesh()->GetMeshRef();
+	const UE::Geometry::FDynamicMeshMaterialAttribute* MeshIds = Mesh.HasAttributes() ? Mesh.Attributes()->GetMaterialID() : nullptr;
+	if (!TestNotNull(TEXT("the paint mesh carries material ids"), MeshIds)) { return false; }
+	int32 Triangles = 0, OnWhite = 0;
+	for (const int32 Tri : Mesh.TriangleIndicesItr())
+	{
+		++Triangles;
+		OnWhite += MeshIds->GetValue(Tri) == White ? 1 : 0;
+	}
+	TestEqual(TEXT("two stop bars painted - one quad per road arm"), Triangles, 2 * 2);
+	TestEqual(TEXT("every one of them on the white slot, not the yellow the aircraft holds use"), OnWhite, Triangles);
+	return true;
+}
+
 #endif

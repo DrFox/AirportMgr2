@@ -14,6 +14,10 @@ class URoadNetwork;
  *    runway. An aircraft stops with its whole body behind the solid pair; crossing from the
  *    runway side it passes the dashed pair first and is clear once past the solid ones.
  *  - INTERMEDIATE: one dashed bar.
+ *  - TAXIWAY CROSSING (a road's stop line, taxiway strip stage 4): one SOLID WHITE bar across
+ *    the whole road, the stand stop bar's depth (user ruling 2026-09-29). White because it is a
+ *    road marking; the aircraft holds are yellow. The caller hands in the slot (StopLineId), so
+ *    this builder names a meaning's id, never a colour - FStandMarkingBuilder's own discipline.
  *
  * Every vertex carries UV1 = (0, 0). M_RoadSurface paints its centreline from UV1.X, the
  * lateral offset, as mask = 1 - saturate((|lateral| - CentrelineWidth) * Sharpness); at
@@ -43,6 +47,10 @@ struct AIRSIDE_API FHoldingPositionMarkingBuilder
 	 * and the pattern sits on the far side of the node in the direction of travel toward the
 	 * junction, so a nose stopped AT the node is exactly behind the first solid line. A node
 	 * with no Origin (an anchor, a hand-placed node) uses its first incident edge for both.
+	 *
+	 * StopLineId is the material slot a road's stop line draws with - the paint layer's white
+	 * (URoadSurfacePresenter::RebuildMarkings resolves it); 0, the layer's own yellow, by default,
+	 * so a caller with no material set paints it as before paint had meanings.
 	 */
-	static int32 Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out);
+	static int32 Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out, int32 StopLineId = 0);
 };

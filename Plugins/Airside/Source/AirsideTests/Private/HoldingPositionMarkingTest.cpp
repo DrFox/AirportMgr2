@@ -4,11 +4,13 @@
 #include "Build/HoldingPositionMarkingBuilder.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Build/StandMarkingBuilder.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/MeshNormals.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -110,6 +112,68 @@ bool FHoldingPositionMarkingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("two positions painted"), FHoldingPositionMarkingBuilder::Build(*Net, Z, Both), 2);
 	TestEqual(TEXT("one more dashed bar: 13 quads more"), Both.Indices.Num() / 3, Triangles + 13 * 2);
 
+	return true;
+}
+
+/**
+ * THE ROAD'S STOP LINE AT A TAXIWAY CROSSING IS A SOLID WHITE BAR (user ruling 2026-09-29;
+ * taxiway strip stage 4): one per road arm, at its stop line on the strip edge, the stand stop
+ * bar's depth, across the road's whole width - and nothing on the taxiway. White is a meaning
+ * the caller resolves to a slot; the builder is handed the id and asserted to use it.
+ *
+ * Named CrossingStopLinePaint, not HoldingPositionMarking.CrossingStopLine as the plan had it:
+ * a dotted child drops the bare-named HoldingPositionMarking from the automation tree.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCrossingStopLinePaintTest,
+	"Airside.Build.CrossingStopLinePaint",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCrossingStopLinePaintTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadCrossingFixture Crossing = FRoadCrossingFixture::Lay(*Net);
+	TestGraph::Derive(*Net);
+
+	const URoadProfile* Taxiway = Net->ProfileFor(*Net->GetSegment(Crossing.West));
+	const URoadProfile* Road = Net->ProfileFor(*Net->GetSegment(Crossing.South));
+	const double TaxiwayHalf = Taxiway->GetTotalWidth() * 0.5;
+	const double StripEdge = TaxiwayHalf + TaxiwayStrip::StripWidthOf(*Net, Crossing.West);
+	const double RoadHalf = Road->GetTotalWidth() * 0.5;
+
+	constexpr double Z = 10.5;
+	constexpr int32 StopLineId = 7;
+	FRoadMeshBuffers Buffers;
+	const int32 Painted = FHoldingPositionMarkingBuilder::Build(*Net, Z, Buffers, StopLineId);
+	TestEqual(TEXT("one stop line per road arm - the two arriving lanes"), Painted, 2);
+	TestEqual(TEXT("each ONE solid bar: a quad, two triangles"), Buffers.Indices.Num() / 3, 2 * 2);
+	for (const int32 Id : Buffers.MaterialIDs)
+	{
+		TestEqual(TEXT("every triangle draws with the stop-line slot it was handed - white, not the yellow default"),
+			Id, StopLineId);
+	}
+
+	// Four vertices per quad (MarkingQuads::AddQuad's contract), measured one bar at a time.
+	for (int32 Base = 0; Base + 3 < Buffers.Positions.Num(); Base += 4)
+	{
+		double MinY = 1e9, MaxY = -1e9, MinX = 1e9, MaxX = -1e9;
+		for (int32 Corner = 0; Corner < 4; ++Corner)
+		{
+			const FVector3d& P = Buffers.Positions[Base + Corner];
+			MinY = FMath::Min(MinY, FMath::Abs(P.Y));
+			MaxY = FMath::Max(MaxY, FMath::Abs(P.Y));
+			MinX = FMath::Min(MinX, P.X);
+			MaxX = FMath::Max(MaxX, P.X);
+		}
+		// ON THE JUNCTION SIDE OF THE LINE, like every holding bar: a nose stopped at the node
+		// is at the bar's near edge, and the bar's far edge is the stand stop bar's depth on.
+		TestNearlyEqual(TEXT("the bar's near edge is on the stop line, at the strip edge"), MaxY, StripEdge, 1.0);
+		TestNearlyEqual(TEXT("and it is the stand stop bar's depth - one constant, shared"),
+			MaxY - MinY, FStandMarkingBuilder::StopBarWidth, 1.0);
+		TestNearlyEqual(TEXT("across the ROAD's whole width, not the lane's"), MinX, -RoadHalf, 1.0);
+		TestNearlyEqual(TEXT("to both edges"), MaxX, RoadHalf, 1.0);
+		TestTrue(TEXT("and none of it on the taxiway"), MinY > TaxiwayHalf);
+	}
 	return true;
 }
 
