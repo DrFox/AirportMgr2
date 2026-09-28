@@ -72,4 +72,18 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "0.0"))
 	double FuelDwellSeconds = 40.0;
+
+	/**
+	 * How many offers the inbox holds before new ones are dropped (spec 2026-09-28 ruling 6).
+	 * Copied into UOfferGenerator at attach. The ATC tower may raise it later.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "1"))
+	int32 MaxPendingOffers = 8;
+
+	/**
+	 * GAME seconds the turnaround contract allows for landing and taxiing in. Copied into
+	 * UOfferGenerator at attach. A flat figure until B's sequencer can estimate it per flight.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "0.0"))
+	double TaxiAllowanceSeconds = 600.0;
 };

@@ -123,7 +123,7 @@ public:
 
 	/**
 	 * The DEFAULT focus for the next generated offer - UOpsRuntime writes it before calling
-	 * UOfferGenerator::MakeOffer, which copies it onto the flight it builds.
+	 * UOfferGenerator::TickMinute, which copies it onto every flight it builds.
 	 *
 	 * NOT consulted by Accept, WhyNotAcceptable or DispatchNow: those read UFlight::
 	 * ApproachFocus, which is fixed on the flight at the offer and travels with it. This

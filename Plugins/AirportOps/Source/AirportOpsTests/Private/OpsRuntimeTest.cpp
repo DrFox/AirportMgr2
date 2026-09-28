@@ -2,6 +2,7 @@
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Model/OfferGenerator.h"
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -90,15 +91,15 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		// this test's runway admits any particular one.
 		if (TestTrue(TEXT("Attach armed the repeating offer schedule"), Runtime->HasOfferScheduledForTest()))
 		{
-			// ONE TICK, RIGHT THROUGH THE SCHEDULE'S OWN INTERVAL - not a guessed real-seconds
-			// delta that might land short of it (or, converted back from a huge one, spend the
-			// test iterating hundreds of avoidable fires). TimeScale() is exactly the
-			// game-seconds-per-real-second USimClock::Advance divides by internally.
-			const double RealSeconds = Runtime->OfferIntervalSecondsForTest() / Runtime->GetClock()->TimeScale() * 1.01;
+			// ONE TICK, RIGHT THROUGH ONE GENERATOR MINUTE - not a guessed real-seconds delta
+			// that might land short of it. TimeScale() is exactly the game-seconds-per-real-
+			// second USimClock::Advance uses at this hour, and one minute cannot cross dawn or
+			// dusk by enough to matter at the 1% margin.
+			const double RealSeconds = UOfferGenerator::TickSeconds / Runtime->GetClock()->TimeScale() * 1.01;
 			Runtime->Tick(RealSeconds);
 
 			// THE FOCUS UPDATES REGARDLESS OF WHETHER THIS RUNWAY ADMITS ANY REAL FLEET
-			// AIRCRAFT (UOpsRuntime::GenerateOffer sets it before the admissibility check) -
+			// AIRCRAFT (UOpsRuntime::OfferTick sets it before the admissibility check) -
 			// so this assertion, unlike an offer actually appearing, does not depend on this
 			// test's short runway matching a real AircraftType's LandingFieldLength.
 			TestEqual(TEXT("a runway-bearing network's board focus equals DefaultApproachFocus"),

@@ -85,7 +85,34 @@ public:
 	UPROPERTY() FText AirlineName;
 	UPROPERTY() FText TypeName;
 
+	/** What the row prints: "CU 204", or a tail number for the club. See UOfferGenerator::MakeCallsign. */
+	UPROPERTY() FString Callsign;
+
 	UPROPERTY() EFlightPhase Phase = EFlightPhase::Offered;
+
+	/**
+	 * REAL seconds this offer has left in the inbox, and the window it started with.
+	 *
+	 * REAL, NOT GAME, and drained only while unpaused (spec 2026-09-28 ruling 3): 600 GAME
+	 * seconds was eight real seconds at x1 and less at speed, too short to read the row. A
+	 * countdown saved as a plain number resumes after a load with exactly what was left - an
+	 * absolute real timestamp would mean nothing in the next session.
+	 */
+	UPROPERTY() double OfferSecondsLeft = 0.0;
+	UPROPERTY() double OfferWindowSeconds = 0.0;
+
+	/** GAME seconds from the accept to the aircraft on approach. The airline's, captured at offer. */
+	UPROPERTY() double LeadTimeSeconds = 0.0;
+
+	/**
+	 * The turnaround contract: GAME seconds from the accept to airborne again. Fixed at the
+	 * offer (lead + taxi allowance + turnaround x the airline's slack) so the row can show it
+	 * BEFORE the player accepts. C scores AirborneAt against it.
+	 */
+	UPROPERTY() double ContractSeconds = 0.0;
+
+	/** From the floor airline (the flying club) - C never penalises its lapses. */
+	UPROPERTY() bool bFloorAirline = false;
 
 	/**
 	 * USimClock::Now at which it lands.

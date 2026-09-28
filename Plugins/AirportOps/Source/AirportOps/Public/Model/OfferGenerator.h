@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/OpsSave.h"
 #include "Model/RoadEntity.h"
 #include "UObject/Object.h"
 
@@ -12,6 +13,7 @@ class UPricing;
 class UAirlineDefinition;
 class UFlight;
 class URoadNetwork;
+class USimClock;
 struct FAirsideCapability;
 
 /**
@@ -32,6 +34,34 @@ struct AIRPORTOPS_API FOfferCandidate
 };
 
 /**
+ * One airline and what of its fleet the caller could resolve, handed to TickMinute.
+ *
+ * NOT A USTRUCT: it is an argument, never saved or reflected, and the airline it points at is
+ * held by UOpsCatalog's own UPROPERTY for as long as the runtime is attached.
+ */
+struct FAirlineOffers
+{
+	const UAirlineDefinition* Airline = nullptr;
+	TArray<FOfferCandidate> Fleet;
+};
+
+/** One airline's running total toward its next offer. Saved, so a reload continues it. */
+USTRUCT()
+struct AIRPORTOPS_API FAirlineOfferState
+{
+	GENERATED_BODY()
+
+	/** Offers owed so far, in units of offers. Emits one each time it reaches Threshold. */
+	UPROPERTY() double Accumulated = 0.0;
+
+	/** What Accumulated must reach for the next offer; drawn from the stream, 0 = not yet. */
+	UPROPERTY() double Threshold = 0.0;
+
+	/** Whether any of the fleet could use the airport last minute. For the transition log. */
+	UPROPERTY() bool bCouldCome = true;
+};
+
+/**
  * Where offers come from.
  *
  * ONE EVALUATOR, NOT TWO. This asks ArrivalPlanner::Plan - the same question the inbox asks
@@ -45,26 +75,40 @@ struct AIRPORTOPS_API FOfferCandidate
  * wingspan. A filter that disagrees with the gate behind it is worse than no filter - it
  * fills the inbox with decisions the player is not allowed to make.
  *
- * The cost is one route search per candidate per offer tick, a handful of each, minutes
- * apart. That is not a price worth a second source of truth.
+ * The cost is one route search per fleet type per airline per game minute. N was ~10 types
+ * across 2 airlines on 2026-09-28; a fleet of hundreds would want the answer cached on the
+ * guideline revision, the way the board caches its verdict.
  */
 UCLASS()
-class AIRPORTOPS_API UOfferGenerator : public UObject
+class AIRPORTOPS_API UOfferGenerator : public UObject, public IOpsPersistent
 {
 	GENERATED_BODY()
 
 public:
+	// --- IOpsPersistent ---------------------------------------------------------------
+	/**
+	 * "Offers". NEW WITH SNAPSHOT VERSION 5: this class's Stream comment said "SAVED" for a
+	 * month while the generator was in no Persistents() list, so a reload restarted the
+	 * sequence. Now the stream, the running totals and the drop count all travel.
+	 */
+	virtual FName SaveBlobName() const override { return TEXT("Offers"); }
+	virtual UObject& AsPersistentObject() override { return *this; }
+
+	/** Game seconds between TickMinute calls. The runtime books Clock->Every with this. */
+	static constexpr double TickSeconds = 60.0;
 
 	/**
 	 * What a landing is worth, or null for a test that does not care.
 	 *
 	 * THE OFFER IS PRICED, NOT THE LANDING. See MakeOffer - the fee is fixed here so the inbox
 	 * row can show what accepting it is worth, and so the player's lever moves NEW offers only.
+	 * Its DemandFactor is also read every tick - see RateAt.
 	 */
 	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
 
 	/**
-	 * Which aeroplane this generator picks, next.
+	 * Which aeroplane this generator picks, next, and every other draw it makes (thresholds,
+	 * callsigns).
 	 *
 	 * A SEEDED STREAM AND NOT FMath::RandHelper, which is what this used. The global RNG is
 	 * shared with everything else in the process and is advanced by anything that draws from
@@ -74,21 +118,28 @@ public:
 	 *
 	 * SAVED, so a reload continues the same sequence rather than restarting it: a player who
 	 * reloads to dodge an offer they did not like should get the same one back.
+	 * ENFORCED BY: AirportOps.Save.GeneratorSurvivesASave
 	 */
 	UPROPERTY() FRandomStream Stream;
 
-	/** How far ahead of the offer an accepted flight lands, GAME seconds. */
-	UPROPERTY(EditAnywhere, Category = "Offers", meta = (ClampMin = "0.0"))
-	double LeadTimeSeconds = 900.0;
+	/** Per airline (keyed by its asset FName), how close it is to its next offer. */
+	UPROPERTY() TMap<FName, FAirlineOfferState> States;
 
 	/**
-	 * How long an unanswered offer stands, GAME seconds.
+	 * Offers the airport was owed and could not take because the inbox was full.
 	 *
-	 * MUST be less than LeadTimeSeconds, or an offer could lapse while its own aeroplane was
-	 * already on the way - MakeOffer clamps it rather than trusting the authored pair.
+	 * C READS IT as unmet demand. Saved; never reset here - C decides what a count means.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Offers", meta = (ClampMin = "0.0"))
-	double OfferLifeSeconds = 600.0;
+	UPROPERTY() int32 DroppedOffers = 0;
+
+	/** The inbox cap (spec ruling 6). Copied from UScenario at attach. */
+	UPROPERTY() int32 MaxPendingOffers = 8;
+
+	/**
+	 * A flat allowance, GAME seconds, for landing and taxiing in, inside the turnaround
+	 * contract. Copied from UScenario. B replaces it with the sequencer's own estimate.
+	 */
+	UPROPERTY() double TaxiAllowanceSeconds = 600.0;
 
 	/**
 	 * Whether this field could EVER take this airframe, and why not when it could not.
@@ -109,26 +160,61 @@ public:
 	static bool IsPermanentRefusal(EArrivalRefusal Why);
 
 	/**
-	 * One offer from these candidates, or nullptr if the airport can take none of them.
+	 * One airline's offer rate, offers per GAME hour, at this time of day:
+	 * Peak x CurveAt x DemandFactor, never below the airline's floor in daylight.
+	 *
+	 * THE FEE'S ONLY COST, AND IT IS PAID HERE. A higher landing fee scales DemandFactor down,
+	 * so the player earns more per aeroplane and sees fewer of them. See UPricing::Elasticity
+	 * for why that trade is deliberately even until the airport is capacity-bound: the lever
+	 * is meant to pose "am I full?", not to have a best setting.
+	 *
+	 * READ EVERY TICK, not once at Attach - which is what OfferIntervalSeconds, the function
+	 * this replaced, was reduced to, and why raising the fee used to be pure profit.
+	 * ENFORCED BY: AirportOps.Model.Offers.Generate.FeeStepMovesCadence
+	 *
+	 * A negative factor is clamped to zero rather than trusted: it would otherwise make a
+	 * negative rate, which reads exactly like an airport nobody flies to.
+	 *
+	 * ONE FUNCTION, which the demand strip samples too, so the strip cannot draw a curve the
+	 * generator does not follow.
+	 */
+	static double RateAt(const UAirlineDefinition& Airline, double TimeOfDaySeconds, bool bDaylight,
+		double DemandFactor);
+
+	/** RateAt summed over every airline - what the demand strip draws. */
+	static double TotalRateAt(TArrayView<const FAirlineOffers> Airlines, double TimeOfDaySeconds,
+		bool bDaylight, double DemandFactor);
+
+	/** The demand factor RateAt is given: Pricing's, or 1.0 when there is none. */
+	double DemandFactor() const;
+
+	/**
+	 * One game minute of demand. Returns the offers it made (0..n), never more than the
+	 * inbox has room for: MaxPendingOffers - PendingNow.
+	 *
+	 * AN ACCUMULATOR, NOT A TIMER (spec 2026-09-28). Each airline adds RateAt/60 to its own
+	 * running total and emits an offer each time the total reaches a threshold drawn from
+	 * [0.6, 1.4] - so the mean rate is exact, the spacing is not a metronome, and a peak hour
+	 * is reliably busy. Poisson arrivals were rejected: a peak can go randomly dead, which a
+	 * player reads as a bug.
+	 *
+	 * NO BANKING. An airline none of whose fleet can use the airport accrues nothing, so the
+	 * minute the player widens a runway does not release hours of queued demand at once.
 	 *
 	 * NextId is the board's counter: the generator does not own numbering, because the board
 	 * is what has to keep ids unique across a save.
 	 */
-	UFlight* MakeOffer(const URoadNetwork& Network, const FVector2D& Focus,
-		const TArray<FOfferCandidate>& Fleet, double Now, int32 NextId);
+	TArray<UFlight*> TickMinute(const URoadNetwork& Network, const FVector2D& Focus,
+		TArrayView<const FAirlineOffers> Airlines, const USimClock& Clock, int32 PendingNow,
+		TFunctionRef<int32()> NextId);
 
 	/**
-	 * Seconds between offers for the airport as a whole, at the combined rate every airline
-	 * asks for - USimClock::SecondsPerDay over the sum of Airlines' OffersPerDay. Zero when
-	 * nothing offers anything, which is not an error: the caller decides what an airport
-	 * with no traffic is worth logging.
-	 *
-	 * MOVED OUT OF UOpsRuntime::Attach (issue #98), which summed the same figure against a
-	 * LOCAL 86400.0 that duplicated USimClock::SecondsPerDay - the two would drift the day
-	 * the compressed day length ever became configurable at that constant's site rather than
-	 * this one. Static and world-free for the same reason CouldEverAdmit is: it reads its
-	 * argument and nothing else, so a test can ask it without owning a generator.
+	 * Build the offer for one chosen candidate. Admissibility and the pick are TickMinute's;
+	 * this only fills the flight in, which is why it takes no network.
 	 */
-	static double OfferIntervalSeconds(const TArray<UAirlineDefinition*>& Airlines,
-		double DemandFactor = 1.0);
+	UFlight* MakeOffer(const FVector2D& Focus, const UAirlineDefinition& Airline,
+		const FOfferCandidate& Chosen, double Now, int32 Id);
+
+	/** "CU 204" from "CU", or "G-ABCD" from "G-????" - see UAirlineDefinition::CallsignPrefix. */
+	static FString MakeCallsign(const FString& Prefix, FRandomStream& Stream);
 };

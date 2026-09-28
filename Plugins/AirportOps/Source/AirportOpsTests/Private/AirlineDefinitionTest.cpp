@@ -28,7 +28,7 @@ bool FAirlineDefinitionCatalogTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("and its fleet survived the round trip"), Found[0]->Fleet.Num(), 1);
 		TestEqual(TEXT("an airline offers something by default, or the inbox stays empty"),
-			Found[0]->OffersPerDay > 0.0, true);
+			Found[0]->PeakOffersPerHour > 0.0, true);
 	}
 	return true;
 }
@@ -62,7 +62,10 @@ bool FAirlineAssetsAreScannedTest::RunTest(const FString& Parameters)
 		}
 		// An airline with an empty fleet offers nothing, for ever, and says nothing about it.
 		TestTrue(TEXT("every shipped airline has a fleet"), Airline->Fleet.Num() > 0);
-		TestTrue(TEXT("and asks for flights"), Airline->OffersPerDay > 0.0);
+		TestTrue(TEXT("and asks for flights"),
+			Airline->PeakOffersPerHour > 0.0 || Airline->FloorOffersPerHour > 0.0);
+		TestTrue(TEXT("its demand curve is flat (empty) or one weight per hour"),
+			Airline->DemandCurve.Num() == 0 || Airline->DemandCurve.Num() == 24);
 	}
 	return true;
 }

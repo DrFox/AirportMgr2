@@ -88,6 +88,11 @@ struct AIRPORTOPS_API FOpsSnapshot
 	GENERATED_BODY()
 
 	/**
+	 * 5: the offer generator is saved (its "Offers" blob - stream, per-airline totals, drop
+	 * count) and offers count down in REAL seconds (UFlight::OfferSecondsLeft) rather than
+	 * expiring at a game time. Offer fields from before it are not migrated: there were no
+	 * player saves on 2026-09-28 (spec 2026-09-28-offers-and-demand).
+	 *
 	 * 4: blobs move from three named fields (Clock/Network/Flights) to one map keyed by
 	 * IOpsPersistent::SaveBlobName() (issue #105 item 8) - so UFuelService (added here to fix
 	 * the GoingHome leak IOpsPersistent::OnBeforeRestore's comment describes) is one more
@@ -108,7 +113,7 @@ struct AIRPORTOPS_API FOpsSnapshot
 	 * 2 since flights. A v1 snapshot is a game from before the flight board and loads with
 	 * an empty inbox rather than being refused - an old save must still open.
 	 */
-	UPROPERTY() int32 Version = 4;
+	UPROPERTY() int32 Version = 5;
 
 	UPROPERTY() TMap<FName, FOpsBlob> Blobs;
 
