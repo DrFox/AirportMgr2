@@ -49,6 +49,10 @@ class AIRPORTMGR_API UUiDropdown : public UUserWidget
 public:
 	void Build(const UUIStyle& Style, const TArray<FText>& InOptions);
 
+	/** The "this opens a list" arrow after the label. A character Inter HAS - see UUIStyle::CanDraw.
+	 *  ENFORCED BY: AirportMgr.UI.Controls.DropdownArrowIsInInter. */
+	static constexpr UTF32CHAR ArrowCodepoint = 0x25BC;   // U+25BC; U+25BE (the first choice) is not in Inter
+
 	/** From CODE: clamped into range; no event unless bBroadcast. */
 	void SetSelected(int32 Index, bool bBroadcast = false);
 	int32 GetSelected() const { return Selected; }

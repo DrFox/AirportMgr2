@@ -36,6 +36,7 @@ void UUiSlider::Build(const UUIStyle& Style, float InMin, float InMax, float InS
 	Slider->SetMaxValue(Max);
 	Slider->SetStepSize(Step);
 	Slider->OnValueChanged.AddDynamic(this, &UUiSlider::HandleSliderMoved);
+	Slider->OnMouseCaptureEnd.AddDynamic(this, &UUiSlider::HandleReleased);
 	BarBox->SetContent(Slider);
 	Row->AddChildToHorizontalBox(BarBox)->SetVerticalAlignment(VAlign_Center);
 
@@ -91,7 +92,22 @@ void UUiSlider::HandleSliderMoved(float Raw)
 	{
 		return;   // our own SetValue's echo, not the player
 	}
-	SetValue(Raw, /*bBroadcast=*/true);
+	// ONLY A CHANGE IS NEWS. USlider reports every mouse move, and moves within one step quantise
+	// to the value already held - rebroadcasting each re-applied a live setting many times a
+	// second (step 4a final review, Important 2).
+	const float Before = Value;
+	SetValue(Raw);
+	if (!FMath::IsNearlyEqual(Value, Before))
+	{
+		++Broadcasts;
+		OnValueChanged.Broadcast(Value);
+	}
+}
+
+void UUiSlider::HandleReleased()
+{
+	++Commits;
+	OnValueCommitted.Broadcast(Value);
 }
 
 FString UUiSlider::ReadoutForTest() const

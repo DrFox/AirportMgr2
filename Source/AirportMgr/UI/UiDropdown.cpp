@@ -28,7 +28,8 @@ void UUiDropdownList::Build(const UUIStyle& Style, const TArray<FText>& Options,
 	Card->SetContent(Column);
 	for (int32 I = 0; I < Options.Num(); ++I)
 	{
-		UUiButton* B = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
+		// NAMED by index, so a test can click the option the player would.
+		UUiButton* B = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), *FString::Printf(TEXT("Option%d"), I));
 		B->SetLabel(Options[I]);
 		B->Build(Style, EUiButtonKind::Ghost);
 		UUiDropdownEntry* Entry = NewObject<UUiDropdownEntry>(this);
@@ -65,7 +66,9 @@ void UUiDropdown::SetSelected(int32 Index, bool bBroadcast)
 	if (Button != nullptr && Options.IsValidIndex(Selected))
 	{
 		// The arrow says "this opens a list" - without it the control reads as a plain button.
-		Button->SetLabel(FText::Format(INVTEXT("{0}  ▾"), Options[Selected]));
+		FString Arrow;
+		Arrow.AppendChar(static_cast<TCHAR>(ArrowCodepoint));
+		Button->SetLabel(FText::Format(INVTEXT("{0}  {1}"), Options[Selected], FText::FromString(Arrow)));
 	}
 	if (bBroadcast)
 	{

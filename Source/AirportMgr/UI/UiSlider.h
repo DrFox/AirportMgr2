@@ -30,11 +30,19 @@ public:
 
 	UPROPERTY(BlueprintAssignable) FUiSliderChanged OnValueChanged;
 
+	/** Raised when the player LETS GO, with the value let go on - for a setting too heavy to apply
+	 *  on every step. OnValueChanged still fires during the drag. */
+	UPROPERTY(BlueprintAssignable) FUiSliderChanged OnValueCommitted;
+
 	/** USlider's own event - the player's drag, or the echo of our own SetValue (ignored). */
 	UFUNCTION() void HandleSliderMoved(float Raw);
 
+	/** USlider's mouse capture ending - the player let go. */
+	UFUNCTION() void HandleReleased();
+
 	FString ReadoutForTest() const;
 	int32 BroadcastCountForTest() const { return Broadcasts; }
+	int32 CommitCountForTest() const { return Commits; }
 
 private:
 	float Quantise(float V) const;
@@ -48,6 +56,7 @@ private:
 	FText Suffix;
 	float Value = 0.0f;
 	int32 Broadcasts = 0;
+	int32 Commits = 0;
 	/** True while SetValue pushes into USlider, whose own SetValue broadcasts - see SetValue. */
 	bool bSettingFromCode = false;
 };

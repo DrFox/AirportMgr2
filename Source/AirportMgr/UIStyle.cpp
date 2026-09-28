@@ -8,6 +8,9 @@
 #include "Engine/FontFace.h"
 #include "Engine/Texture2D.h"
 #include "Fonts/CompositeFont.h"
+#include "Fonts/FontCache.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Rendering/SlateRenderer.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUIStyle, Log, All);
 
@@ -152,4 +155,23 @@ const UUIStyle* UAirportMgrUISettings::ResolveStyle()
 		return GetDefault<UUIStyle>();
 	}
 	return Loaded;
+}
+
+bool UUIStyle::CanDraw(UTF32CHAR Codepoint) const
+{
+	const TSharedPtr<const FCompositeFont> Font = Composite();
+	if (!Font.IsValid() || Font->DefaultTypeface.Fonts.Num() == 0 || !FSlateApplication::IsInitialized()
+		|| FSlateApplication::Get().GetRenderer() == nullptr)
+	{
+		return false;
+	}
+	const TSharedRef<FSlateFontCache> Cache = FSlateApplication::Get().GetRenderer()->GetFontCache();
+	for (const FTypefaceEntry& Entry : Font->DefaultTypeface.Fonts)
+	{
+		if (!Cache->CanLoadCodepoint(Entry.Font, Codepoint))
+		{
+			return false;
+		}
+	}
+	return true;
 }

@@ -273,6 +273,13 @@ public:
 	 */
 	void ApplyText(UTextBlock& TextBlock, EUITextRole Role, FLinearColor Colour) const;
 
+	/**
+	 * Whether EVERY face of the composite has this character. The composite has no fallback
+	 * typeface, so a glyph Inter lacks is drawn by the engine's last resort or as a box - ask this
+	 * before putting a symbol in a label. False without Slate (a commandlet) or without the faces.
+	 */
+	bool CanDraw(UTF32CHAR Codepoint) const;
+
 #if WITH_EDITOR
 	/** Drops the fill and font caches, so a Details-panel edit reaches the next ControlFill /
 	 *  ApplyText without an editor restart. See AirportMgr.UI.EditingTheStyleReachesTheControlFill. */

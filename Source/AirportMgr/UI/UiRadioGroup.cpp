@@ -21,7 +21,8 @@ void UUiRadioGroup::Build(const UUIStyle& InStyle, const TArray<FText>& Options)
 	WidgetTree->RootWidget = Row;
 	for (int32 I = 0; I < Options.Num(); ++I)
 	{
-		UUiButton* B = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
+		// NAMED by index, so a test can click the segment the player would.
+		UUiButton* B = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), *FString::Printf(TEXT("Segment%d"), I));
 		B->SetLabel(Options[I]);
 		B->Build(InStyle, EUiButtonKind::Secondary);
 		UUiRadioEntry* Entry = NewObject<UUiRadioEntry>(this);

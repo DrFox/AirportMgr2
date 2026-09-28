@@ -1,4 +1,8 @@
 #include "CoreMinimal.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Button.h"
+#include "Components/Slider.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Misc/AutomationTest.h"
 #include "Testing/AirsideTestWorld.h"
 #include "UI/UiDropdown.h"
@@ -33,6 +37,14 @@ bool FUiToggleTest::RunTest(const FString& Parameters)
 	T->HandleClicked();
 	TestFalse(TEXT("the player's click flips it"), T->IsOn());
 	TestEqual(TEXT("and raises the event once"), T->BroadcastCountForTest(), 1);
+
+	// THROUGH THE ENGINE'S OWN EVENT, not the handler: the seam a deleted AddDynamic would cut
+	// while every line above stayed green (step 4a final review, Important 3).
+	UButton* Hit = T->WidgetTree->FindWidget<UButton>(TEXT("ToggleHit"));
+	if (!TestNotNull(TEXT("the toggle's hit button"), Hit)) { return false; }
+	Hit->OnClicked.Broadcast();
+	TestTrue(TEXT("a real click reaches the toggle"), T->IsOn());
+	TestEqual(TEXT("and raises the event"), T->BroadcastCountForTest(), 2);
 	return true;
 }
 
@@ -62,6 +74,24 @@ bool FUiSliderTest::RunTest(const FString& Parameters)
 	Sl->HandleSliderMoved(1.02f);
 	TestTrue(TEXT("the player's drag quantises too"), FMath::IsNearlyEqual(Sl->GetValue(), 1.0f, 1e-4f));
 	TestEqual(TEXT("and raises the event once"), Sl->BroadcastCountForTest(), 1);
+
+	// A DRAG WITHIN ONE STEP CHANGES NOTHING, so it raises nothing: USlider reports every mouse
+	// move, and a live-applied UI scale re-laid the whole screen on each (final review, Important 2).
+	Sl->HandleSliderMoved(1.01f);
+	TestEqual(TEXT("a move that quantises to the same value raises nothing new"), Sl->BroadcastCountForTest(), 1);
+
+	// Through the engine's events, not the handlers (Important 3).
+	USlider* Bar = Sl->WidgetTree->FindWidget<USlider>(TEXT("SliderBar"));
+	if (!TestNotNull(TEXT("the slider's bar"), Bar)) { return false; }
+	Bar->OnValueChanged.Broadcast(1.22f);
+	TestTrue(TEXT("a real drag reaches the slider"), FMath::IsNearlyEqual(Sl->GetValue(), 1.2f, 1e-4f));
+	TestEqual(TEXT("and raises the event"), Sl->BroadcastCountForTest(), 2);
+
+	// THE RELEASE, for a setting too heavy to apply on every step (UI scale re-lays the screen
+	// under the captured mouse and can oscillate): raised once, with the value let go on.
+	TestEqual(TEXT("no commit before the release"), Sl->CommitCountForTest(), 0);
+	Bar->OnMouseCaptureEnd.Broadcast();
+	TestEqual(TEXT("letting go commits once"), Sl->CommitCountForTest(), 1);
 	return true;
 }
 
@@ -89,6 +119,13 @@ bool FUiRadioGroupTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and raises the event once"), G->BroadcastCountForTest(), 1);
 	G->Choose(0);
 	TestEqual(TEXT("clicking the lit one again raises nothing - nothing changed"), G->BroadcastCountForTest(), 1);
+
+	// A real click on the SECOND segment picks index 1 - the seam, and the index each entry carries.
+	UButton* Second = G->WidgetTree->FindWidget<UButton>(TEXT("Segment1"));
+	if (!TestNotNull(TEXT("the second segment"), Second)) { return false; }
+	Second->OnClicked.Broadcast();
+	TestEqual(TEXT("a real click on segment 1 selects 1"), G->GetSelected(), 1);
+	TestEqual(TEXT("and raises the event"), G->BroadcastCountForTest(), 2);
 	return true;
 }
 
@@ -114,14 +151,44 @@ bool FUiDropdownTest::RunTest(const FString& Parameters)
 	D->SetSelected(9);
 	TestEqual(TEXT("past the end lands on the last"), D->GetSelected(), 3);
 	TestEqual(TEXT("code choosing raises nothing"), D->BroadcastCountForTest(), 0);
-	const UUiDropdownList* List = Cast<UUiDropdownList>(D->BuildMenu());
-	if (TestNotNull(TEXT("the popup builds"), List))
-	{
-		TestEqual(TEXT("with every option"), List->OptionCountForTest(), 4);
-	}
+	UUiDropdownList* List = Cast<UUiDropdownList>(D->BuildMenu());
+	if (!TestNotNull(TEXT("the popup builds"), List)) { return false; }
+	TestEqual(TEXT("with every option"), List->OptionCountForTest(), 4);
+
+	// A real click on the popup's second option picks index 1 (Important 3).
+	UButton* Medium = List->WidgetTree->FindWidget<UButton>(TEXT("Option1"));
+	if (!TestNotNull(TEXT("the popup's second option"), Medium)) { return false; }
+	Medium->OnClicked.Broadcast();
+	TestEqual(TEXT("a real click on option 1 selects 1"), D->GetSelected(), 1);
+	TestEqual(TEXT("and raises the event"), D->BroadcastCountForTest(), 1);
+
+	// Opening needs a Slate anchor a headless test does not have, so the seam is checked as a
+	// binding: the button's click must be wired to the function that opens the list.
+	UButton* Open = D->WidgetTree->FindWidget<UButton>(TEXT("DropdownButton"));
+	if (!TestNotNull(TEXT("the dropdown's button"), Open)) { return false; }
+	TestTrue(TEXT("its click opens the list"),
+		Open->OnClicked.Contains(D, GET_FUNCTION_NAME_CHECKED(UUiDropdown, HandleOpenClicked)));
 	D->Choose(0);
 	TestTrue(TEXT("a choice from the list reads on the button"), D->LabelForTest().StartsWith(TEXT("Low")));
-	TestEqual(TEXT("and raises the event once"), D->BroadcastCountForTest(), 1);
+	TestEqual(TEXT("and raises the event once more"), D->BroadcastCountForTest(), 2);
+	return true;
+}
+
+/**
+ * THE ARROW IS A CHARACTER INTER CAN DRAW. The composite has no fallback typeface, so a glyph
+ * missing from Inter is drawn by the engine's last-resort font or as a box in a shipped build.
+ * U+25BE was the first choice and Inter lacks it (step 4a final review, Important 1, measured
+ * with fontTools); asked of Slate's own font cache, which is what draws it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiDropdownArrowTest, "AirportMgr.UI.Controls.DropdownArrowIsInInter",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiDropdownArrowTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("Slate is up - the font cache is what answers"), FSlateApplication::IsInitialized())) { return false; }
+	const UUIStyle* S = UAirportMgrUISettings::ResolveStyle();
+	TestTrue(TEXT("the style's faces can draw the dropdown arrow"), S->CanDraw(UUiDropdown::ArrowCodepoint));
+	TestTrue(TEXT("control: they can draw a plain letter"), S->CanDraw(TEXT('A')));
 	return true;
 }
 
