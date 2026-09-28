@@ -5,6 +5,8 @@
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayQuery.h"
+#include "Model/TaxiwayStrip.h"
+#include "Solve/RoadGeom.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
@@ -48,6 +50,39 @@ namespace
 		if (A != nullptr && Network.InUseRunwayAt(A->Position, End))
 		{
 			Sink.Polyline({ End.Threshold, End.FarEnd() }, Style);
+		}
+	}
+}
+
+namespace
+{
+	/**
+	 * The taxiway whose PAVEMENT holds Point (TaxiwayStrip::FootprintOf, the one description of
+	 * a segment's ground), or unset. Taxiways only - HasStrip: a road or a runway has no taxiway
+	 * card. Every live segment, linearly (N was 34 on M_Test, 2026-09-28), on a click or a hover.
+	 */
+	FRoadSegmentId TaxiwaySegmentAt(const URoadNetwork& Network, const FVector2D& Point)
+	{
+		for (int32 Index = 0; Index < Network.GetSegments().Num(); ++Index)
+		{
+			const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+			TaxiwayStrip::FSegmentShape Shape;
+			if (Id.IsSet() && TaxiwayStrip::HasStrip(Network, Id) && TaxiwayStrip::ShapeOf(Network, Id, Shape)
+				&& RoadGeom::PointInPolygon(TaxiwayStrip::FootprintOf(Shape), Point))
+			{
+				return Id;
+			}
+		}
+		return FRoadSegmentId();
+	}
+
+	/** A taxiway drawn as its pavement's outline - the ground the card describes. */
+	void DrawTaxiway(const URoadNetwork& Network, int32 SegmentIndex, EPreviewStyle Style, IToolPreviewSink& Sink)
+	{
+		TaxiwayStrip::FSegmentShape Shape;
+		if (TaxiwayStrip::ShapeOf(Network, Network.SegmentIdAt(SegmentIndex), Shape))
+		{
+			Sink.Polygon(TaxiwayStrip::FootprintOf(Shape), Style);
 		}
 	}
 }
@@ -98,6 +133,19 @@ bool FSelectTool::PositionOf(const FToolContext& Context, ESelectionKind Kind, i
 		Out = (Network->GetNode(Found->A)->Position + Network->GetNode(Found->B)->Position) * 0.5;
 		return true;
 	}
+	case ESelectionKind::Taxiway:
+	{
+		// Runway's shape, for a live taxiway piece - a split kills it, and Tick clears the card.
+		const URoadNetwork* Network = Context.Target->GetNetwork();
+		const FRoadSegmentId Segment = Network != nullptr ? Network->SegmentIdAt(Id) : FRoadSegmentId();
+		const FRoadSegment* Found = Segment.IsSet() ? Network->GetSegment(Segment) : nullptr;
+		if (Found == nullptr || !TaxiwayStrip::HasStrip(*Network, Segment))
+		{
+			return false;
+		}
+		Out = (Network->GetNode(Found->A)->Position + Network->GetNode(Found->B)->Position) * 0.5;
+		return true;
+	}
 	default:
 		return false;
 	}
@@ -134,6 +182,14 @@ void FSelectTool::OnClick(const FToolContext& Context)
 			Sel.Kind = ESelectionKind::Runway;
 			Sel.Id = Runway.Index;
 		}
+		else if (const FRoadSegmentId Taxiway = Context.Network() != nullptr
+			? TaxiwaySegmentAt(*Context.Network(), Context.Cursor) : FRoadSegmentId(); Taxiway.IsSet())
+		{
+			// LAST OF ALL (strip stage 6): a taxiway is under most of an airport's clicks, and a
+			// stand, a runway or an aircraft on it must still be the thing picked.
+			Sel.Kind = ESelectionKind::Taxiway;
+			Sel.Id = Taxiway.Index;
+		}
 		else
 		{
 			// A click on nothing deselects, as it does in every Cities-style game: the
@@ -143,7 +199,8 @@ void FSelectTool::OnClick(const FToolContext& Context)
 	}
 	UE_LOG(LogAirside, Log, TEXT("Select: %s %d"),
 		Sel.Kind == ESelectionKind::Aircraft ? TEXT("aircraft") : Sel.Kind == ESelectionKind::Stand ? TEXT("stand")
-			: Sel.Kind == ESelectionKind::Runway ? TEXT("runway segment") : TEXT("nothing"),
+			: Sel.Kind == ESelectionKind::Runway ? TEXT("runway segment")
+			: Sel.Kind == ESelectionKind::Taxiway ? TEXT("taxiway segment") : TEXT("nothing"),
 		Sel.Id);
 }
 
@@ -196,6 +253,10 @@ void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 			{
 				DrawRunway(*Context.Network(), Runway.Index, EPreviewStyle::Hover, Sink);
 			}
+			else if (const FRoadSegmentId Taxiway = TaxiwaySegmentAt(*Context.Network(), Context.Cursor); Taxiway.IsSet())
+			{
+				DrawTaxiway(*Context.Network(), Taxiway.Index, EPreviewStyle::Hover, Sink);
+			}
 		}
 	}
 
@@ -209,6 +270,10 @@ void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 		else if (Context.Selection->Kind == ESelectionKind::Runway && Context.Network() != nullptr)
 		{
 			DrawRunway(*Context.Network(), Context.Selection->Id, EPreviewStyle::Selected, Sink);
+		}
+		else if (Context.Selection->Kind == ESelectionKind::Taxiway && Context.Network() != nullptr)
+		{
+			DrawTaxiway(*Context.Network(), Context.Selection->Id, EPreviewStyle::Selected, Sink);
 		}
 		else
 		{

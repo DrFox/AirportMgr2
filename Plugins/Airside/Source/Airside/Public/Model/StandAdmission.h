@@ -110,6 +110,11 @@ namespace StandAdmission
 	 */
 	AIRSIDE_API TOptional<TaxiwayStrip::FIntrusion> StripClosure(const URoadNetwork& Network, const FEntityInstance& Stand);
 
+	/** StripClosure's answer as a sentence, with its figures: "inside a taxiway's clearance strip
+	 *  by 12.3 m (a Code F taxiway needs 34.5 m clear) - redraw it further back". The inspector's
+	 *  ClosedBecause; the stand tool's placement refusal words the same two figures the same way. */
+	AIRSIDE_API FString DescribeClosure(const TaxiwayStrip::FIntrusion& Closure);
+
 	/** The sentence for a refusal: "the surface is grass; this aircraft needs concrete", or the
 	 *  Code-letter or service equivalent. Empty when admitted. */
 	AIRSIDE_API FString Describe(const FStandAdmission& Admission);

@@ -3,6 +3,9 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/StandAdmission.h"
+#include "Model/TaxiwayRestriction.h"
+#include "Profiles/RoadProfile.h"
 #include "Model/TrafficOccupancy.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/RunwayDesignator.h"
@@ -141,6 +144,39 @@ namespace InspectFacts
 		return true;
 	}
 
+	bool DescribeTaxiway(const URoadNetwork& Network, int32 SegmentIndex, FTaxiwayCardFacts& Out)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(SegmentIndex);
+		if (!Id.IsSet() || !TaxiwayStrip::HasStrip(Network, Id))
+		{
+			return false;
+		}
+		const FRoadSegment& Segment = *Network.GetSegment(Id);
+		const double Width = Network.ProfileFor(Segment)->GetTotalWidth();   // HasStrip proved it non-null
+		const EIcaoCode Own = IcaoCode::TaxiwayLetterForWidth(Width);
+		// THE STORED LETTER, what the guideline builder capped the edges with - so the card says
+		// what routing does, not what a fresh pass might say mid-edit.
+		const EIcaoCode Operates = TaxiwayRestriction::EffectiveLetterOf(Network, Id).Get(Own);
+		Out.Index = SegmentIndex;
+		Out.Letter = IcaoCode::ToLetter(Own);
+		Out.Width = Width;
+		Out.Strip = IcaoCode::TaxiwayStripFor(Operates, Width);
+		Out.MaxWingspan = IcaoCode::MaxWingspanForLetter(Operates);
+		Out.Surface = Segment.Surface;
+		Out.RestrictedTo.Reset();
+		Out.RestrictedBy.Reset();
+		if (Operates != Own)
+		{
+			Out.RestrictedTo = FString(IcaoCode::ToLetter(Operates));
+			TaxiwayRestriction::FObstruction Worst;
+			if (TaxiwayRestriction::RestrictionOf(Network, Id, &Worst).IsSet())
+			{
+				Out.RestrictedBy = TaxiwayRestriction::Describe(Worst);
+			}
+		}
+		return true;
+	}
+
 	bool DescribeStand(const UGroundTraffic* Traffic, const URoadNetwork& Network, int32 EntityIndex, FStandFacts& Out)
 	{
 		const TArray<FEntityInstance>& Entities = Network.GetEntities();
@@ -211,6 +247,17 @@ namespace InspectFacts
 		// FALSE FOR NO BAYS: see FStandFacts::bServiceable - "every" over an empty set would
 		// otherwise read as trivially true.
 		Out.bServiceable = BayCount > 0 && bAllJoined;
+
+		// CLOSED BY A STRIP (strip stage 6) - admission's own rule, so the card and the refusal
+		// agree. A depot is never "closed": the strip closes stands to ARRIVALS.
+		Out.ClosedBecause.Reset();
+		if (E.IsStand())
+		{
+			if (const TOptional<TaxiwayStrip::FIntrusion> Closure = StandAdmission::StripClosure(Network, E))
+			{
+				Out.ClosedBecause = StandAdmission::DescribeClosure(Closure.GetValue());
+			}
+		}
 
 		Out.OccupantAgent = 0;
 		Out.bOccupantParked = false;

@@ -10,6 +10,9 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "StandFixture.h"
+#include "Model/TaxiwayRestriction.h"
+#include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
 #include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -273,6 +276,74 @@ bool FInspectFactsPushbackTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("self"), InspectFacts::PushbackText(EPushbackNeed::SelfManoeuvre), FString(TEXT("reverses itself")));
 	TestEqual(TEXT("hand"), InspectFacts::PushbackText(EPushbackNeed::HandTug), FString(TEXT("needs a hand tug")));
 	TestEqual(TEXT("vehicle"), InspectFacts::PushbackText(EPushbackNeed::VehicleTug), FString(TEXT("needs a tug")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectFactsTaxiwayTest,
+	"Airside.Model.InspectFacts.Taxiway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectFactsTaxiwayTest::RunTest(const FString& Parameters)
+{
+	// STRIP STAGE 6: the taxiway card - its letter, width and strip, and, restricted, the letter
+	// it operates at and what restricts it (spec: "max span 65 m - restricted by building at ...").
+	constexpr double Pavement = 2600.0;   // Code F
+	const double ReachE = 0.5 * Pavement + IcaoCode::TaxiwayStripFor(EIcaoCode::E, Pavement);
+	const double ReachF = 0.5 * Pavement + IcaoCode::TaxiwayStripFor(EIcaoCode::F, Pavement);
+	URoadProfile* Road = URoadProfile::MakeServiceRoadTransient();
+	const double RoadY = 0.5 * (ReachE + ReachF) + Road->GetMaxHalfWidth();
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadSegmentId Taxi = Net->AddStraightSegment(Net->AddNode({ -20000.0, 0.0 }), Net->AddNode({ 20000.0, 0.0 }),
+		URoadProfile::MakeTransient(Pavement, 1733.0));
+	const FRoadSegmentId RoadSeg = Net->AddStraightSegment(Net->AddNode({ -3000.0, RoadY }), Net->AddNode({ 3000.0, RoadY }), Road);
+
+	{
+		FTaxiwayCardFacts Card;
+		if (TestTrue(TEXT("a taxiway is described"), InspectFacts::DescribeTaxiway(*Net, Taxi.Index, Card)))
+		{
+			TestEqual(TEXT("by its pavement's letter"), Card.Letter, FString(TEXT("F")));
+			TestEqual(TEXT("and width"), Card.Width, Pavement, 0.5);
+			TestFalse(TEXT("unrestricted before the pass has run"), Card.RestrictedTo.IsSet());
+			TestEqual(TEXT("its strip is F's"), Card.Strip, IcaoCode::TaxiwayStripFor(EIcaoCode::F, Pavement), 0.5);
+		}
+	}
+	TaxiwayRestriction::Apply(*Net);
+	{
+		FTaxiwayCardFacts Card;
+		if (TestTrue(TEXT("described again"), InspectFacts::DescribeTaxiway(*Net, Taxi.Index, Card)))
+		{
+			TestTrue(TEXT("restricted to E"), Card.RestrictedTo.IsSet() && Card.RestrictedTo.GetValue() == TEXT("E"));
+			TestEqual(TEXT("by the road"), Card.RestrictedBy, FString(TEXT("a service road")));
+			TestEqual(TEXT("operating E's strip"), Card.Strip, IcaoCode::TaxiwayStripFor(EIcaoCode::E, Pavement), 0.5);
+		}
+	}
+	{
+		FTaxiwayCardFacts Card;
+		TestFalse(TEXT("a service road is no taxiway card"), InspectFacts::DescribeTaxiway(*Net, RoadSeg.Index, Card));
+	}
+
+	// A STAND THE STRIP COVERS SAYS WHY IT IS CLOSED, in the words the placement refusal uses.
+	UEntityDefinition* Def = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
+	const FEntityInstanceId Stand = ServiceLinkFixture::PlaceStand(*Net, *Def, FVector2D(0.0, -8000.0), 0.0);
+	FRoadNetworkTestAccess(*Net).SetEntityOutlineForTest(Stand,
+		{ { -2000.0, -ReachE - 4000.0 }, { 2000.0, -ReachE - 4000.0 }, { 2000.0, -ReachE }, { -2000.0, -ReachE } });
+	{
+		FStandFacts S;
+		if (TestTrue(TEXT("the stand is described"), InspectFacts::DescribeStand(nullptr, *Net, Stand.Index, S)))
+		{
+			TestTrue(FString::Printf(TEXT("and says it is closed by the strip: '%s'"), *S.ClosedBecause),
+				S.ClosedBecause.Contains(TEXT("clearance strip")));
+		}
+	}
+	FRoadNetworkTestAccess(*Net).SetEntityOutlineForTest(Stand,
+		{ { -2000.0, -ReachF - 5000.0 }, { 2000.0, -ReachF - 5000.0 }, { 2000.0, -ReachF - 1000.0 }, { -2000.0, -ReachF - 1000.0 } });
+	{
+		FStandFacts S;
+		InspectFacts::DescribeStand(nullptr, *Net, Stand.Index, S);
+		TestTrue(TEXT("a stand clear of every strip is not closed"), S.ClosedBecause.IsEmpty());
+	}
 	return true;
 }
 

@@ -103,6 +103,33 @@ struct FStandFacts
 	 * kind of installation arrives, and the enum already exists and already says it.
 	 */
 	EServiceRole PoseRole = EServiceRole::Aircraft;
+
+	/**
+	 * Why the stand is CLOSED to new arrivals, empty when it is not (strip stage 6): a taxiway's
+	 * strip covers it - drawn before the strip existed, or the taxiway upgraded since. From
+	 * StandAdmission::StripClosure, the rule admission refuses by, in the placement refusal's
+	 * own words (StandAdmission::DescribeClosure). An aircraft already parked finishes.
+	 */
+	FString ClosedBecause;
+};
+
+/** What the inspector shows for a taxiway (ESelectionKind::Taxiway). Plain, like its siblings. */
+struct FTaxiwayCardFacts
+{
+	int32 Index = INDEX_NONE;
+	/** The PAVEMENT's letter, "F" - what it was built for. */
+	FString Letter;
+	/** Pavement width, uu. */
+	double Width = 0.0;
+	/** The strip each side it operates, uu: its pavement's, or the restricted letter's. */
+	double Strip = 0.0;
+	/** The letter it operates at when restricted ("E"); unset when it operates at Letter. */
+	TOptional<FString> RestrictedTo;
+	/** What restricts it, TaxiwayRestriction::Describe's words ("a service road"); empty when not. */
+	FString RestrictedBy;
+	/** The widest span it admits, uu - its effective letter's (every taxiway limits wingspan). */
+	double MaxWingspan = 0.0;
+	EPavement Surface = EPavement::Tarmac;
 };
 
 /** What the inspector shows for a runway (ESelectionKind::Runway). Plain, like its siblings. */
@@ -148,6 +175,14 @@ namespace InspectFacts
 	 * end, not 0 - the card says what the planners will do, not what the struct stores.
 	 */
 	AIRSIDE_API bool DescribeRunway(const URoadNetwork& Network, int32 SegmentIndex, FRunwayCardFacts& Out);
+
+	/**
+	 * False when SegmentIndex is not a live taxiway (TaxiwayStrip::HasStrip). RestrictedTo reads
+	 * the STORED restriction (TaxiwayRestriction::EffectiveLetterOf) - what routing uses, so the
+	 * card says what the planners do; RestrictedBy re-asks RestrictionOf for the obstruction.
+	 * ENFORCED BY: Airside.Model.InspectFacts.Taxiway
+	 */
+	AIRSIDE_API bool DescribeTaxiway(const URoadNetwork& Network, int32 SegmentIndex, FTaxiwayCardFacts& Out);
 
 	/** The card's pushback words for a need. */
 	AIRSIDE_API FString PushbackText(EPushbackNeed Need);

@@ -230,4 +230,39 @@ bool FSelectToolIsIdleReadsLiveSelectionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSelectToolPicksTaxiwayTest,
+	"Airside.Tool.SelectTool.PicksTaxiway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSelectToolPicksTaxiwayTest::RunTest(const FString& Parameters)
+{
+	// STRIP STAGE 6: a taxiway has a card, so a click on its pavement selects it - LAST, after
+	// aircraft, entity and runway, since most of the airport's clicks land on a taxiway.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	TestTrue(TEXT("a taxiway"), Actor->ConnectNodes(Actor->PlaceNode({ -20000.0, 0.0 }), Actor->PlaceNode({ 20000.0, 0.0 }),
+		ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+	const int32 Seg = Actor->Network->GetSegments().Num() - 1;
+	TestTrue(TEXT("and a service road"), Actor->ConnectNodes(Actor->PlaceNode({ -20000.0, 30000.0 }), Actor->PlaceNode({ 20000.0, 30000.0 }),
+		ERoadKind::ServiceRoad, INDEX_NONE, EPavement::Tarmac));
+
+	FSelectTool Tool;
+	FSelection Sel;
+	Tool.OnClick(SelToolContext(Actor, Sel, FVector2D(5000.0, 500.0), 0));
+	TestTrue(TEXT("a click on the taxiway's pavement selects the taxiway"), Sel.Kind == ESelectionKind::Taxiway && Sel.Id == Seg);
+	{
+		FSelToolSink Sink;
+		Tool.BuildPreview(SelToolContext(Actor, Sel, FVector2D(90000.0, 90000.0), 0), Sink);
+		TestTrue(TEXT("and outlines it Selected"), Sink.LinesOf(EPreviewStyle::Selected) > 0);
+	}
+	Tool.Tick(SelToolContext(Actor, Sel, FVector2D(5000.0, 500.0), 0));
+	TestTrue(TEXT("a live taxiway stays selected (PositionOf answers for it)"), Sel.Kind == ESelectionKind::Taxiway);
+
+	Tool.OnClick(SelToolContext(Actor, Sel, FVector2D(5000.0, 30000.0), 0));
+	TestFalse(TEXT("a service road has no card - a click on one selects nothing"), Sel.IsSet());
+	return true;
+}
+
 #endif

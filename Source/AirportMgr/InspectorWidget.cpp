@@ -353,7 +353,36 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		RunwayCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorRunwayUse", "Use {0}"), FText::FromString(Other));
 		bDepartEnabled = false;
 	}
-	else
+	else if (Selection.Kind == ESelectionKind::Taxiway)
+	{
+		FTaxiwayCardFacts T;
+		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeTaxiway(*Target->GetNetwork(), Selection.Id, T))
+		{
+			SetShown(false);
+			bDepartEnabled = false;
+			return;
+		}
+		// THE TAXIWAY CARD (strip stage 6): its letter, strip and the widest span it admits -
+		// every taxiway limits wingspan to its letter (user 2026-09-29) - and, restricted, what
+		// restricts it (spec: "max span 65 m - restricted by building at ..."). Composed every
+		// tick like the runway card; the SetText gate below makes an unchanged one free.
+		Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayTitle", "Taxiway {0}").ToString(), { T.Index });
+		Facts = FString::Format(
+			*NSLOCTEXT("AirportMgr", "InspectorTaxiwayFacts", "Code {0}, {1} m wide, {2}\nStrip {3} m each side\nMax span {4} m").ToString(),
+			{ T.Letter, FString::Printf(TEXT("%.1f"), T.Width / 100.0), FString(Pavement::Name(T.Surface)),
+				FString::Printf(TEXT("%.1f"), T.Strip / 100.0), FString::Printf(TEXT("%.0f"), T.MaxWingspan / 100.0) });
+		if (T.RestrictedTo.IsSet())
+		{
+			Facts += FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayRestricted",
+				"\nRestricted to Code {0} by {1} - move it clear of the strip").ToString(),
+				{ T.RestrictedTo.GetValue(), T.RestrictedBy.IsEmpty() ? FString(TEXT("something in its strip")) : T.RestrictedBy });
+		}
+		Status = T.RestrictedTo.IsSet()
+			? NSLOCTEXT("AirportMgr", "InspectorTaxiwayStatusRestricted", "Restricted").ToString()
+			: NSLOCTEXT("AirportMgr", "InspectorTaxiwayStatusOpen", "Open to its letter").ToString();
+		bDepartEnabled = false;
+	}
+	else if (Selection.Kind == ESelectionKind::Stand)
 	{
 		FStandFacts S;
 		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Selection.Id, S))
@@ -389,6 +418,12 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 					Reachability.ToString(),
 					ServiceRoad.ToString(),
 				});
+			// CLOSED BY A STRIP (strip stage 6): the reason, and the figures to fix it by.
+			if (!S.ClosedBecause.IsEmpty())
+			{
+				Facts += FString::Format(*NSLOCTEXT("AirportMgr", "InspectorStandClosed",
+					"\nClosed to new arrivals: {0}").ToString(), { S.ClosedBecause });
+			}
 			Status = S.OccupantAgent == 0
 				? NSLOCTEXT("AirportMgr", "InspectorStandEmpty", "Empty").ToString()
 				: S.bOccupantParked
@@ -430,6 +465,16 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			}
 		}
 		bDepartEnabled = false;
+	}
+	else
+	{
+		// A KIND WITH NO CARD - appended to ESelectionKind without a branch here. It used to fall
+		// into the stand branch and describe ENTITY Id; now it says so and shows nothing.
+		// ENFORCED BY: AirportMgr.Inspector.TaxiwayCard (the newest kind has its own card)
+		UE_LOG(LogInspector, Warning, TEXT("Inspector: no card for selection kind %d"), static_cast<int32>(Selection.Kind));
+		SetShown(false);
+		bDepartEnabled = false;
+		return;
 	}
 
 	// THE GATE. Compared against the COMPOSED text rather than a (selection id, phase) key -

@@ -26,7 +26,7 @@ namespace TaxiwayRestriction
 
 	/**
 	 * What restricts a taxiway - TaxiwayStrip's own kind-and-index. The plan's struct carried a
-	 * Depth too; nothing reads one (the log and the inspector name the thing), and the overlap
+	 * Depth too; no consumer of this stage wants one (the log and the inspector name the thing), and the overlap
 	 * test it comes from is a yes/no, so a depth would be a second, approximate measure.
 	 */
 	using FObstruction = TaxiwayStrip::FSwallowed;
