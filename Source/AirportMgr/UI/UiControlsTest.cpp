@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Testing/AirsideTestWorld.h"
+#include "UI/UiDropdown.h"
 #include "UI/UiRadioGroup.h"
 #include "UI/UiSlider.h"
 #include "UI/UiToggle.h"
@@ -88,6 +89,39 @@ bool FUiRadioGroupTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and raises the event once"), G->BroadcastCountForTest(), 1);
 	G->Choose(0);
 	TestEqual(TEXT("clicking the lit one again raises nothing - nothing changed"), G->BroadcastCountForTest(), 1);
+	return true;
+}
+
+/**
+ * THE DROPDOWN'S BUTTON READS WHAT WAS CHOSEN (Review Focus 5), an index past the end lands on the
+ * last (Focus 4), and its popup lists every option. The popup itself is Slate's to place and open;
+ * a headless test builds its content through the same function the anchor calls.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiDropdownTest, "AirportMgr.UI.Controls.Dropdown",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiDropdownTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	const UUIStyle& S = *GetDefault<UUIStyle>();
+	UUiDropdown* D = CreateWidget<UUiDropdown>(TestWorld.World, UUiDropdown::StaticClass());
+	if (!TestNotNull(TEXT("a dropdown"), D)) { return false; }
+	const TArray<FText> Levels = { FText::FromString(TEXT("Low")), FText::FromString(TEXT("Medium")),
+		FText::FromString(TEXT("High")), FText::FromString(TEXT("Epic")) };
+	D->Build(S, Levels);
+	D->SetSelected(2);
+	TestTrue(TEXT("its button reads the choice"), D->LabelForTest().StartsWith(TEXT("High")));
+	D->SetSelected(9);
+	TestEqual(TEXT("past the end lands on the last"), D->GetSelected(), 3);
+	TestEqual(TEXT("code choosing raises nothing"), D->BroadcastCountForTest(), 0);
+	const UUiDropdownList* List = Cast<UUiDropdownList>(D->BuildMenu());
+	if (TestNotNull(TEXT("the popup builds"), List))
+	{
+		TestEqual(TEXT("with every option"), List->OptionCountForTest(), 4);
+	}
+	D->Choose(0);
+	TestTrue(TEXT("a choice from the list reads on the button"), D->LabelForTest().StartsWith(TEXT("Low")));
+	TestEqual(TEXT("and raises the event once"), D->BroadcastCountForTest(), 1);
 	return true;
 }
 
