@@ -409,4 +409,34 @@ bool FInspectorFollowSaysUnfollowTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorDemandsTest,
+	"AirportMgr.Inspector.ShowsDemands",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorDemandsTest::RunTest(const FString& Parameters)
+{
+	// THE DEMANDS BLOCK (2026-09-28): what the aircraft wants, one line each - the fuel line from
+	// AirportOps, the pushback line from its airframe.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	TestWorld.Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+
+	FAgentFacts Facts;
+	Facts.Id = 7;
+	Facts.TypeName = TEXT("SR22");
+	Facts.Phase = EAgentPhase::Parked;
+	Facts.Pushback = TEXT("reverses itself");
+	Facts.Fuel = TEXT("Fuel 300 L \u00B7 120 L left \u00B7 fuelling");
+	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = 7;
+	Panel->Refresh(TestWorld.Actor, Sel, &Facts);
+	const FString Text = Panel->FactsForTest();
+	TestTrue(TEXT("a Demands heading"), Text.Contains(TEXT("Demands")));
+	TestTrue(TEXT("the fuel line"), Text.Contains(TEXT("Fuel 300 L \u00B7 120 L left \u00B7 fuelling")));
+	TestTrue(TEXT("the pushback line"), Text.Contains(TEXT("Pushback reverses itself")));
+	return true;
+}
+
 #endif

@@ -45,6 +45,13 @@ struct FAgentFacts
 	 * knows. The same seam M3's UFlight fills its airline and off-block time through.
 	 */
 	FString Fuel;
+
+	/**
+	 * What gets it off its stand - "reverses itself", "needs a tug" - from its airframe. Empty
+	 * for a vehicle. Airside's to say: EPushbackNeed is an airframe fact, and nothing yet
+	 * services it (no tug depot), so there is no progress to report.
+	 */
+	FString Pushback;
 };
 
 struct FStandFacts
@@ -112,4 +119,7 @@ namespace InspectFacts
 	 * branches on it.
 	 */
 	AIRSIDE_API FString StatusOf(const FRoadAgent& Agent);
+
+	/** The card's pushback words for a need. */
+	AIRSIDE_API FString PushbackText(EPushbackNeed Need);
 }

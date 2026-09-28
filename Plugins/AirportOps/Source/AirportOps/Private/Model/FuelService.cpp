@@ -769,6 +769,8 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 
 			Demand->State = EFuelDemandState::Fuelling;
 			Demand->LoadThisTrip = Load;
+			Demand->TankLitres = FMath::Max(Spec.CapacityLitres, 1.0);
+			Demand->PumpStartedAt = Clock.Now();
 			Demand->DwellEndsAt = Clock.Now() + Minutes * 60.0;
 			UE_LOG(LogAirportOps, Log,
 				TEXT("Fuel: truck %d at stand %d for aircraft %d: %.0f L of %.0f L (trip %d), %.1f game min"),
@@ -981,6 +983,8 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 
 			Demand.State = EFuelDemandState::TruckEnRoute;
 			Demand.TruckId = TruckId;
+			// THE TANK THAT IS COMING - what the card counts the remaining trips by.
+			Demand.TankLitres = FMath::Max(SpecFor(Sent.TypeCode).CapacityLitres, 1.0);
 			Demand.Depot = Choice.Depot;
 			UE_LOG(LogAirportOps, Log,
 				TEXT("Fuel: depot %d sends truck %d (%s) to stand %d for aircraft %d (%.0f uu)"),
@@ -1134,7 +1138,7 @@ void UFuelService::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& N
 	}
 }
 
-FString UFuelService::DescribeAgent(int32 AgentId) const
+FString UFuelService::DescribeAgent(int32 AgentId, double Now) const
 {
 	const FFuelDemand* Demand = FindByAircraft(AgentId);
 	if (Demand == nullptr)
@@ -1142,15 +1146,47 @@ FString UFuelService::DescribeAgent(int32 AgentId) const
 		return FString();
 	}
 
-	switch (Demand->State)
+	// THE CARD'S FUEL LINE (2026-09-28): the load, what is left, where the job has got to.
+	// Numbers through FText::AsNumber so they group ("2,900") as the rest of the UI's do.
+	auto Litres = [](double L) { return FText::AsNumber(FMath::RoundToInt(L)).ToString(); };
+	const double Total = Demand->LitresOwed + Demand->LitresDelivered;
+	const FString Dot = TEXT(" \u00B7 ");
+	if (Total <= 0.0)
 	{
-	case EFuelDemandState::Needed:       return TEXT("needed");
-	case EFuelDemandState::TruckEnRoute: return TEXT("truck en route");
-	case EFuelDemandState::Fuelling:     return TEXT("fuelling");
-	case EFuelDemandState::Done:         return TEXT("done");
-	case EFuelDemandState::Unserviceable: return RefusalText(Demand->Why);
-	default:                             return FString();
+		return TEXT("Fuel") + Dot + TEXT("none needed");
 	}
+	const FString Head = FString::Printf(TEXT("Fuel %s L"), *Litres(Total));
+
+	if (Demand->State == EFuelDemandState::Unserviceable)
+	{
+		return Head + Dot + RefusalText(Demand->Why);
+	}
+	if (Demand->State == EFuelDemandState::Done)
+	{
+		return Head + Dot + (Demand->Trips > 1 ? FString::Printf(TEXT("done in %d trips"), Demand->Trips) : FString(TEXT("done")));
+	}
+
+	// LIVE WHILE PUMPING: LitresOwed only moves when a trip ends, so the part of this trip's
+	// load already pumped is the elapsed fraction of its pumping time - on the game clock, so a
+	// pause freezes it. Rounded to 10 L so the card is not rebuilt every frame.
+	double Left = Demand->LitresOwed;
+	if (Demand->State == EFuelDemandState::Fuelling && Demand->DwellEndsAt > Demand->PumpStartedAt)
+	{
+		const double Fraction = FMath::Clamp((Now - Demand->PumpStartedAt) / (Demand->DwellEndsAt - Demand->PumpStartedAt), 0.0, 1.0);
+		Left -= Demand->LoadThisTrip * Fraction;
+	}
+	Left = FMath::RoundToDouble(FMath::Max(Left, 0.0) / 10.0) * 10.0;
+
+	const TCHAR* Stage = Demand->State == EFuelDemandState::Fuelling ? TEXT("fuelling")
+		: Demand->State == EFuelDemandState::TruckEnRoute ? TEXT("truck en route")
+		: TEXT("waiting for a truck");
+	// TRIPS ONLY WHEN THERE IS MORE THAN ONE: this one plus what the rest will take in the tank
+	// that is coming (or came).
+	const int32 TotalTrips = Demand->TankLitres > 0.0
+		? Demand->Trips + FMath::CeilToInt(Demand->LitresOwed / Demand->TankLitres) : 0;
+	const FString Trips = TotalTrips > 1
+		? FString::Printf(TEXT(" (trip %d of %d)"), Demand->Trips + 1, TotalTrips) : FString();
+	return Head + Dot + FString::Printf(TEXT("%s L left"), *Litres(Left)) + Dot + Stage + Trips;
 }
 
 bool UFuelService::HasWorkingPump(const FEntityInstance& Depot)

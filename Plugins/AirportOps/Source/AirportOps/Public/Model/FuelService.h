@@ -153,6 +153,13 @@ struct AIRPORTOPS_API FFuelDemand
 	/** Trips completed. A load bigger than the vehicle's tank takes more than one. */
 	UPROPERTY() int32 Trips = 0;
 
+	/** The tank of the vehicle serving it (set at dispatch) - how many trips the rest will take. */
+	UPROPERTY() double TankLitres = 0.0;
+
+	/** USimClock::Now at which this trip's pumping began - so the card can count litres down
+	 *  WHILE the pump runs (LitresOwed only moves at the end of a trip). */
+	UPROPERTY() double PumpStartedAt = 0.0;
+
 	UPROPERTY() EFuelRefusal Why = EFuelRefusal::None;
 
 	/**
@@ -416,7 +423,7 @@ public:
 	 * two orthogonal model facts (the state, and for Unserviceable the reason), and nothing
 	 * branches on it - the same argument InspectFacts::StatusOf makes for its own line.
 	 */
-	FString DescribeAgent(int32 AgentId) const;
+	FString DescribeAgent(int32 AgentId, double Now) const;
 
 	const TArray<FFuelDemand>& GetDemands() const { return Demands; }
 
@@ -479,7 +486,7 @@ public:
 	 * ChooseDepot never reads Stand, i.e. with no depot on the fixture's airport at all: the
 	 * NoDepot branch is decided from Network.GetEntities() alone.
 	 */
-	void AddDemandForTest(int32 AircraftId, EFuelDemandState State, EFuelRefusal Why,
+	FFuelDemand& AddDemandForTest(int32 AircraftId, EFuelDemandState State, EFuelRefusal Why,
 		uint32 RefusedAtRevision)
 	{
 		FFuelDemand Demand;
@@ -487,7 +494,7 @@ public:
 		Demand.State = State;
 		Demand.Why = Why;
 		Demand.RefusedAtRevision = RefusedAtRevision;
-		Demands.Add(Demand);
+		return Demands.Add_GetRef(Demand);
 	}
 
 private:
