@@ -1349,6 +1349,31 @@ foreach ($caller in $preferenceCallers) {
 }
 $ranRules.Add('tool-preferences-both-drivers')
 
+# --- 28. The planners choose a runway END only through the in-use resolver ---------------------
+# 2026-09-28, samples/deadlock.png: ArrivalPlanner landed at the threshold NEAREST the approach
+# focus, DeparturePlanner::PlanAny tried BOTH thresholds and kept the shorter taxi, and the two
+# rules met nose to nose on a connector. The fix is one rule, FRunwayFacts::InUse, read through
+# RunwayQuery::InUseEnd (InUseRunwayAt / InUseRunwayNearest). A planner calling RunwayExtentAt or
+# NearestRunwayThreshold itself is choosing an end by proximity again, which is the shape removed.
+# WHAT NO REGEX SEES: a planner that calls the in-use resolver and then Reversed()s the answer.
+# That is pinned by Airside.Model.RunwayInUse.DepartsFromTheEndInUse and .LandsOverTheEndInUse.
+$inUsePlanners = @(
+    (Join-Path $plugin 'Private\Model\ArrivalPlanner.cpp'),
+    (Join-Path $plugin 'Private\Model\DeparturePlanner.cpp')
+)
+foreach ($path in $inUsePlanners) {
+    if (-not (Test-Path $path)) {
+        $failures.Add("runway-end-in-use: $path is named by rule 28 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    foreach ($h in (Select-String -Path $path -Pattern '\b(RunwayExtentAt|NearestRunwayThreshold)\s*\(')) {
+        $t = $h.Line.Trim()
+        if ($t -match '^//') { continue }
+        $failures.Add("runway-end-in-use: $($path):$($h.LineNumber) chooses a runway end by proximity; use InUseRunwayAt/InUseRunwayNearest (FRunwayFacts::InUse): $t")
+    }
+}
+$ranRules.Add('runway-end-in-use')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

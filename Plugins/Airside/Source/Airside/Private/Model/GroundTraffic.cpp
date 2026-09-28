@@ -271,6 +271,22 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Route ends on runway %s %.0f uu past the threshold: %.0f uu available, departure armed"),
 			*RunwayDesignator::ToPairText(End.Direction), EntryOffset, End.Length - EntryOffset);
+
+		// THE ROLL IS STILL DERIVED FROM THE ROUTE, not forced to the runway in use: a planner
+		// route arrives aligned with it (intersection) or backtracks to its threshold, so this
+		// gives the in-use direction - and a rebuild that re-arms a departure planned BEFORE the
+		// player flipped keeps the original roll, which is ruling 2 (spec 2026-09-28-runway-in-
+		// use): what is planned finishes as planned. Forcing InUseEnd here would turn that
+		// aircraft round on the entry it already took. Loud when the two disagree, so a planner
+		// that stops honouring the runway in use cannot do it quietly.
+		const int32 Rolls = RunwayDesignator::Designate(End.Direction);
+		const int32 InUse = RunwayDesignator::Designate(Network->InUseEnd(End).Direction);
+		if (Rolls != InUse)
+		{
+			UE_LOG(LogAirsideTraffic, Warning,
+				TEXT("Agent %d armed to roll %s against the runway in use %s (planned before a flip, or a route not from DeparturePlanner)"),
+				Agent.Id, *RunwayDesignator::ToText(Rolls), *RunwayDesignator::ToText(InUse));
+		}
 	}
 }
 

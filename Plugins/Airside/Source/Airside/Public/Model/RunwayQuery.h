@@ -141,6 +141,28 @@ namespace RunwayQuery
 	AIRSIDE_API bool NearestRunwayThreshold(const URoadNetwork& Network, const FVector2D& Near, FRunwayEnd& OutEnd);
 
 	/**
+	 * The END IN USE of the strip Either describes: Either itself, or Either.Reversed(),
+	 * whichever's designator is circularly nearer FRunwayFacts::InUse of its seed. InUse 0
+	 * (unset) means the LOWER designator of the two. A tie (a strip rotated exactly 90 degrees
+	 * from its stored heading) also takes the lower, so the answer never depends on which end
+	 * the caller happened to hold.
+	 *
+	 * THE ONE PLACE a traffic planner learns which way a runway is used. ArrivalPlanner and
+	 * DeparturePlanner reach it through InUseRunwayAt/InUseRunwayNearest below and never call
+	 * RunwayExtentAt/NearestRunwayThreshold themselves - before this each chose an end by its
+	 * own rule (nearest the approach focus; shortest taxi), and the two rules put a landing
+	 * and a take-off head to head on one strip (samples/deadlock.png, 2026-09-28).
+	 * ENFORCED BY: Check-Architecture.ps1 rule 28 (planners may not call the end-choosing queries).
+	 */
+	AIRSIDE_API FRunwayEnd InUseEnd(const URoadNetwork& Network, const FRunwayEnd& Either);
+
+	/** RunwayExtentAt, then InUseEnd: Near picks the RUNWAY, the facts pick the end. */
+	AIRSIDE_API bool InUseRunwayAt(const URoadNetwork& Network, const FVector2D& Near, FRunwayEnd& OutEnd);
+
+	/** NearestRunwayThreshold, then InUseEnd: Near picks the RUNWAY, the facts pick the end. */
+	AIRSIDE_API bool InUseRunwayNearest(const URoadNetwork& Network, const FVector2D& Near, FRunwayEnd& OutEnd);
+
+	/**
 	 * Guideline nodes lying on the runway chain Seed belongs to, ordered by distance from
 	 * Threshold along Direction.
 	 *

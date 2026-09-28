@@ -137,6 +137,15 @@ struct AIRSIDE_API FArrivalPlan
 	UPROPERTY() FStandAdmission StandRefusal;
 
 	/**
+	 * NoExit or NoRouteToStand only: landing the OTHER way would have reached a stand. The
+	 * refusal is still made - a flip is the player's call, never the planner's (ruling 3,
+	 * spec 2026-09-28-runway-in-use) - but the sentence says so, because the likeliest reason
+	 * a layout that worked yesterday refuses today is that its runway in use was flipped, and
+	 * "check the taxiway reaches the stands" sends the player to a taxiway that does.
+	 */
+	UPROPERTY() bool bOtherEndWouldServe = false;
+
+	/**
 	 * None means every step above succeeded and every other field is meaningful.
 	 *
 	 * DEFAULTS TO NoRunway, not None - fail closed. A default-constructed plan (one nobody

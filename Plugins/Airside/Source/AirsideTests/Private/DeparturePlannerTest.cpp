@@ -47,9 +47,15 @@ namespace
 		const FRoadNodeId X = Out.Net->AddNode(Out.XAt);
 		const FRoadNodeId E = Out.Net->AddNode(Out.EAt);
 		const FRoadNodeId T = Out.Net->AddNode(Out.XAt + FVector2D(20000.0, -20000.0));
-		Out.Net->AddStraightSegment(W, X, Runway);
+		const FRoadSegmentId Strip = Out.Net->AddStraightSegment(W, X, Runway);
 		Out.Net->AddStraightSegment(X, E, Runway);
 		Out.Net->AddStraightSegment(X, T, Taxiway);
+		// WESTBOUND IN USE, since 2026-09-28: every test on this fixture departs from the E
+		// threshold toward W, which used to be chosen by asking near E. The END is the runway
+		// in use now (spec 2026-09-28-runway-in-use), and drawn W to E this strip would be 36.
+		FRunwayFacts Westbound = Out.Net->RunwayFactsFor(Strip);
+		Westbound.InUse = 18;
+		Out.Net->SetRunwayFacts(Strip, Westbound);
 		TestGraph::Derive(*Out.Net);
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 		const FEntityInstanceId StandId = Out.Net->PlaceEntity(Stand, Stand->Anchors, Out.XAt + FVector2D(25000.0, -14000.0), 0.0);

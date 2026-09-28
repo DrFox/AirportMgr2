@@ -42,9 +42,27 @@ struct AIRSIDE_API FRunwayFacts
 	UPROPERTY(EditAnywhere) EPavement Surface = EPavement::Tarmac;
 	UPROPERTY(EditAnywhere) ERunwayApproach Approach = ERunwayApproach::Visual;
 
+	/**
+	 * THE RUNWAY IN USE: the designator (1-36) of the end both landings and take-offs use -
+	 * land over that threshold, take off from it, the same heading (spec
+	 * 2026-09-28-runway-in-use). The player's choice, standing in for the wind the game does
+	 * not model; one direction per strip is what keeps arrivals and departures from meeting
+	 * nose to nose on a connector (samples/deadlock.png).
+	 *
+	 * A DESIGNATOR, not a vector or a chain-end flag: splits, heals and drags reorder which
+	 * node a chain's walk finds first, and a flag relative to that order would silently
+	 * reverse the runway. A number is a heading, and RunwayQuery::InUseEnd resolves it to
+	 * whichever end is nearer it - so a strip dragged round 30 degrees keeps its direction.
+	 *
+	 * 0 = UNSET: a runway saved before this field. Resolves to the LOWER designator
+	 * (RunwayQuery::InUseEnd), deterministic rather than whatever end a query was nearest.
+	 * A new runway segment is given its drawn direction by URoadNetwork::AddSegment.
+	 */
+	UPROPERTY(EditAnywhere) int32 InUse = 0;
+
 	bool operator==(const FRunwayFacts& Other) const
 	{
-		return Surface == Other.Surface && Approach == Other.Approach;
+		return Surface == Other.Surface && Approach == Other.Approach && InUse == Other.InUse;
 	}
 	bool operator!=(const FRunwayFacts& Other) const { return !(*this == Other); }
 };

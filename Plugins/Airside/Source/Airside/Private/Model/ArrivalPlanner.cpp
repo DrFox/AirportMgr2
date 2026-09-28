@@ -7,6 +7,7 @@
 #include "Model/StandAdmission.h"
 #include "Model/TrafficOccupancy.h"
 #include "Solve/IcaoCode.h"
+#include "Solve/RunwayDesignator.h"
 
 namespace
 {
@@ -261,10 +262,39 @@ namespace ArrivalPlanner
 		return Best;
 	}
 
+	namespace
+	{
+		/**
+		 * Would an arrival landing over End's OTHER threshold reach a stand? Asked only on a
+		 * NoExit/NoRouteToStand refusal, to word it (FArrivalPlan::bOtherEndWouldServe) - never
+		 * to land that way. The same exit list and the same ChooseStand the plan itself uses,
+		 * from the reversed end: a second opinion built from different rules would be a
+		 * sentence about an airport the planner does not see.
+		 */
+		bool OtherEndServes(const URoadNetwork& Network, const FRunwayEnd& End, double SlowedBy,
+			const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingHolder)
+		{
+			const FRunwayEnd Other = End.Reversed();
+			for (const FGuidelineNodeId& Exit : Network.RunwayExitNodes(Other.Seed, Other.Threshold, Other.Direction, SlowedBy))
+			{
+				FRoutePlan Route;
+				ChooseStand(Network, Exit, Airframe, Occupancy, ExcludingHolder, &Route);
+				if (Route.IsValid())
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+	}
+
 	bool IsRunwayBusy(const URoadNetwork& Network, const FVector2D& Near, const FTrafficOccupancy* Occupancy)
 	{
+		// InUseRunwayNearest, not NearestRunwayThreshold, although only the CHAIN is read here:
+		// the planners choose ends through the in-use resolver only (Check-Architecture rule 28),
+		// and the chain is the same whichever end is returned.
 		FRunwayEnd End;
-		if (Occupancy == nullptr || !Network.NearestRunwayThreshold(Near, End))
+		if (Occupancy == nullptr || !Network.InUseRunwayNearest(Near, End))
 		{
 			return false;
 		}
@@ -287,9 +317,12 @@ namespace ArrivalPlanner
 			return Out;
 		}
 
-		// 1. WHICH RUNWAY. Nearest threshold to the query point, which is the user's own choice
-		//    of rule - there is no wind model, so nothing else could decide it.
-		if (!Network.NearestRunwayThreshold(Near, Out.End))
+		// 1. WHICH RUNWAY, AND WHICH END. The runway nearest the query point, which is the
+		//    user's own choice of rule; the END is the runway in use, never the one nearest the
+		//    approach focus (spec 2026-09-28-runway-in-use). Nearest-end put a landing and a
+		//    shortest-taxi departure head to head on one strip (samples/deadlock.png): with no
+		//    wind model, the player's choice of direction is what stands in for one.
+		if (!Network.InUseRunwayNearest(Near, Out.End))
 		{
 			Out.Why = EArrivalRefusal::NoRunway;
 			return Out;
@@ -367,6 +400,7 @@ namespace ArrivalPlanner
 		if (Exits.Num() == 0)
 		{
 			Out.Why = EArrivalRefusal::NoExit;
+			Out.bOtherEndWouldServe = OtherEndServes(Network, Out.End, SlowedBy, Airframe, Occupancy, ExcludingHolder);
 			return Out;
 		}
 
@@ -459,6 +493,13 @@ namespace ArrivalPlanner
 				break;
 			}
 			Out.Why = bSawHeldStand ? EArrivalRefusal::NoFreeStand : EArrivalRefusal::NoRouteToStand;
+			if (Out.Why == EArrivalRefusal::NoRouteToStand)
+			{
+				// THE SHAPE samples/deadlock.png's field refuses in when flipped: its one connector
+				// is behind the touchdown, the strip's own dead-end node is the only "exit" left,
+				// and no stand is reachable from that.
+				Out.bOtherEndWouldServe = OtherEndServes(Network, Out.End, SlowedBy, Airframe, Occupancy, ExcludingHolder);
+			}
 			return Out;
 		}
 
@@ -488,7 +529,10 @@ namespace ArrivalPlanner
 			return TEXT("Arrival refused: the runway is too short for this aircraft to stop.");
 
 		case EArrivalRefusal::NoExit:
-			return TEXT("Arrival refused: nothing joins the runway far enough down to be an exit.");
+			// THE DIRECTION IS A FIX TOO (ruling 3, 2026-09-28): an exit behind the touchdown is
+			// no exit, and flipping the runway in use turns it into one ahead.
+			return TEXT("Arrival refused: nothing joins the runway far enough down to be an exit. ")
+				TEXT("Connect a taxiway further down it, or change the runway in use.");
 
 		case EArrivalRefusal::NoRouteToStand:
 			return TEXT("Arrival refused: no route from any usable exit to a stand.");
@@ -522,6 +566,20 @@ namespace ArrivalPlanner
 		}
 	}
 
+	namespace
+	{
+		/** " Landing 27 would reach a stand - change the runway in use." or empty. */
+		FString OtherEndSentence(const FArrivalPlan& Plan)
+		{
+			if (!Plan.bOtherEndWouldServe)
+			{
+				return FString();
+			}
+			return FString::Printf(TEXT(" Landing %s would reach a stand - change the runway in use."),
+				*RunwayDesignator::ToText(RunwayDesignator::Designate(-Plan.End.Direction)));
+		}
+	}
+
 	FString DescribeRefusal(const FArrivalPlan& Plan)
 	{
 		// Exactly the three refusal branches DispatchArrival used to choose between inline,
@@ -539,15 +597,18 @@ namespace ArrivalPlanner
 
 		case EArrivalRefusal::NoExit:
 			return FString::Printf(
-				TEXT("Arrival refused: nothing joins the runway beyond %.0f uu, so there is ")
-				TEXT("no exit this aircraft could take. Connect a taxiway further down it."),
-				Plan.Needed);
+				TEXT("Arrival refused: landing %s, nothing joins the runway beyond %.0f uu, so ")
+				TEXT("there is no exit this aircraft could take. Connect a taxiway further down it, ")
+				TEXT("or change the runway in use.%s"),
+				*RunwayDesignator::ToText(RunwayDesignator::Designate(Plan.End.Direction)), Plan.Needed,
+				*OtherEndSentence(Plan));
 
 		case EArrivalRefusal::NoRouteToStand:
 			return FString::Printf(
-				TEXT("Arrival refused: %d usable exit(s), but no route from any of them to a ")
-				TEXT("stand. Check the taxiway reaches the stands."),
-				Plan.ExitCount);
+				TEXT("Arrival refused: landing %s, %d usable exit(s), but no route from any of them ")
+				TEXT("to a stand. Check the taxiway reaches the stands.%s"),
+				*RunwayDesignator::ToText(RunwayDesignator::Designate(Plan.End.Direction)), Plan.ExitCount,
+				*OtherEndSentence(Plan));
 
 		case EArrivalRefusal::NotAdmitted:
 			return FString::Printf(TEXT("Arrival refused: %s."), *RunwayAdmission::Describe(Plan.Admission));

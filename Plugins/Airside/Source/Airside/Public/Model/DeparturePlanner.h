@@ -117,14 +117,17 @@ namespace DeparturePlanner
 {
 	/**
 	 * Plan a departure from Start onto the runway under OnRunway (any point on its
-	 * pavement; the threshold nearest it is the one departed from, as RunwayExtentAt reads it).
+	 * pavement). The END departed from is the runway IN USE (FRunwayFacts::InUse, through
+	 * RunwayQuery::InUseRunwayAt), whichever end OnRunway is nearer - since 2026-09-28; it
+	 * used to be the threshold nearest OnRunway.
 	 */
 	AIRSIDE_API FDeparturePlan Plan(const URoadNetwork& Network, FGuidelineNodeId Start,
 		const FVector2D& OnRunway, const FAirframe& Airframe, ETraversalClass Class);
 
 	/**
 	 * Plan a departure from Start onto WHICHEVER runway gives the shortest admitted taxi.
-	 * Both thresholds of every chain are tried through Plan. When none is valid the first
+	 * Each runway is tried once, from its end in use - never its other end, however much
+	 * shorter that taxi would be (samples/deadlock.png). When none is valid the first
 	 * refusal is returned, so the log can say "grass strip, needs tarmac" rather than
 	 * "no runway". The inspector's Depart button; M3's sequencer replaces the choice, not
 	 * the shape.

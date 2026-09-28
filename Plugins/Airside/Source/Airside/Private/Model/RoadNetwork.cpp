@@ -6,6 +6,7 @@
 #include "Solve/GuidelineGeom.h"
 #include "Solve/JunctionSolver.h"
 #include "Solve/RoadGeom.h"
+#include "Solve/RunwayDesignator.h"
 #include "Solve/StandBox.h"
 
 bool URoadNetwork::SetDriveSide(EDriveSide Side)
@@ -69,6 +70,32 @@ FRoadSegmentId URoadNetwork::AddSegment(FRoadNodeId A, FRoadNodeId B, const FVec
 	SortIncident(B);
 
 	++EditRevision;
+
+	// A NEW RUNWAY PIECE TAKES A DIRECTION IN USE here, the one site every runway passes
+	// through (the tool's PlaceRunway, the test fixtures, the heal's scratch graph): the
+	// chain's own if it joined a strip that has one - an extension drawn back toward the
+	// threshold must not reverse the runway - else the direction it was DRAWN, A to B
+	// (ruling 5, spec 2026-09-28-runway-in-use). SplitSegment overwrites both halves with the
+	// doomed segment's facts straight after, so a split keeps the strip's.
+	if (IsRunwaySegment(Handle))
+	{
+		int32 InUse = 0;
+		for (const FRoadSegmentId& Member : RunwayChain(Handle))
+		{
+			const FRoadSegment* Other = GetSegment(Member);
+			if (Member != Handle && Other != nullptr && Other->Runway.InUse != 0)
+			{
+				InUse = Other->Runway.InUse;
+				break;
+			}
+		}
+		if (InUse == 0)
+		{
+			InUse = RunwayDesignator::Designate(
+				RoadSlot::Get<FRoadNodeId>(Nodes, B)->Position - RoadSlot::Get<FRoadNodeId>(Nodes, A)->Position);
+		}
+		GetSegmentMutable(Handle)->Runway.InUse = InUse;
+	}
 	return Handle;
 }
 
@@ -554,7 +581,13 @@ bool URoadNetwork::SetRunwayFacts(FRoadSegmentId Seed, const FRunwayFacts& Facts
 	{
 		if (FRoadSegment* Segment = GetSegmentMutable(Member))
 		{
+			// InUse 0 keeps the member's own - see the header for why 0 cannot mean "clear".
+			const int32 Kept = Segment->Runway.InUse;
 			Segment->Runway = Facts;
+			if (Facts.InUse == 0)
+			{
+				Segment->Runway.InUse = Kept;
+			}
 		}
 	}
 	return true;
@@ -568,6 +601,21 @@ bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FRunwayEnd& OutEnd) con
 bool URoadNetwork::NearestRunwayThreshold(const FVector2D& Near, FRunwayEnd& OutEnd) const
 {
 	return RunwayQuery::NearestRunwayThreshold(*this, Near, OutEnd);
+}
+
+FRunwayEnd URoadNetwork::InUseEnd(const FRunwayEnd& Either) const
+{
+	return RunwayQuery::InUseEnd(*this, Either);
+}
+
+bool URoadNetwork::InUseRunwayAt(const FVector2D& Near, FRunwayEnd& OutEnd) const
+{
+	return RunwayQuery::InUseRunwayAt(*this, Near, OutEnd);
+}
+
+bool URoadNetwork::InUseRunwayNearest(const FVector2D& Near, FRunwayEnd& OutEnd) const
+{
+	return RunwayQuery::InUseRunwayNearest(*this, Near, OutEnd);
 }
 
 TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(FRoadSegmentId Seed, const FVector2D& Threshold,
@@ -1144,6 +1192,19 @@ bool FRoadNetworkTestAccess::SetEntityPavementForTest(FEntityInstanceId Entity, 
 	}
 	Found->Pavement = Pavement;
 	return true;
+}
+
+bool FRoadNetworkTestAccess::ClearRunwayInUseForTest(FRoadSegmentId Seed)
+{
+	const TArray<FRoadSegmentId> Chain = Network.RunwayChain(Seed);
+	for (const FRoadSegmentId& Member : Chain)
+	{
+		if (FRoadSegment* Segment = Network.GetSegmentMutable(Member))
+		{
+			Segment->Runway.InUse = 0;
+		}
+	}
+	return !Chain.IsEmpty();
 }
 
 void URoadNetwork::PruneHoldingPositionMarks()
