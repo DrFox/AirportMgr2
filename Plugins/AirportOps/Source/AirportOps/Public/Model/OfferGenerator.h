@@ -217,4 +217,29 @@ public:
 
 	/** "CU 204" from "CU", or "G-ABCD" from "G-????" - see UAirlineDefinition::CallsignPrefix. */
 	static FString MakeCallsign(const FString& Prefix, FRandomStream& Stream);
+
+	/** How many CouldEverAdmit route searches TickMinute has actually run. See AdmissionCache. */
+	int32 AdmissionChecksForTest() const { return AdmissionChecks; }
+
+private:
+	/**
+	 * Which of an airline's fleet this field could ever take, remembered per airline.
+	 *
+	 * CACHED ON THE GRAPH (review I2, 2026-09-28): CouldEverAdmit is a full ArrivalPlanner::Plan
+	 * per fleet type with NO occupancy, so its answer moves only when the network, its guideline
+	 * revision, the approach focus or the fleet does - and it used to run every game minute,
+	 * ~40 times a real second at x32. Not saved: a load recomputes on its first minute.
+	 */
+	struct FAdmissionCache
+	{
+		TWeakObjectPtr<const URoadNetwork> Network;
+		uint32 GuidelineRevision = 0;
+		FVector2D Focus = FVector2D::ZeroVector;
+		int32 FleetSize = INDEX_NONE;
+		TArray<int32> Admissible;
+		EArrivalRefusal FirstRefusal = EArrivalRefusal::None;
+		int32 FirstRefused = INDEX_NONE;
+	};
+	TMap<FName, FAdmissionCache> AdmissionCache;
+	int32 AdmissionChecks = 0;
 };

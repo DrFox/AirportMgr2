@@ -8,6 +8,7 @@
 #include "Model/FlightBoard.h"
 #include "Model/InspectFacts.h"
 #include "Model/OpsEvents.h"
+#include "Model/OpsSave.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -483,6 +484,48 @@ bool FOpsRuntimeLegacyStandGetsOutlineOnLoadTest::RunTest(const FString& Paramet
 	if (!TestTrue(TEXT("the stand came back"), Index != INDEX_NONE)) { return false; }
 	TestEqual(TEXT("with the Code C box its pose implies - four corners"),
 		Actor->Network->GetEntities()[Index].Outline.Num(), 4);
+	return true;
+}
+
+/**
+ * REVIEW I1 (2026-09-28): the clock's queue is not saved and holds ABSOLUTE due times, so the
+ * repeating offer tick and upkeep booked at Attach still pointed at the PRE-load time after a
+ * load. A save two days ahead fired the minute tick ~2,880 times in one frame (a burst, and
+ * hundreds of DroppedOffers C would read as unmet demand); a save behind went silent until the
+ * clock caught up. RearmRepeatingSchedules re-books both from the loaded Now.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeRearmsRepeatersOnLoadTest,
+	"AirportOps.Present.OffersRearmOnLoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeRearmsRepeatersOnLoadTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	if (!TestTrue(TEXT("the minute tick is armed"), Runtime->HasOfferScheduledForTest())) { return false; }
+
+	// A SAVE FROM TWO DAYS LATER, restored into the runtime's own clock the way OpsSave does:
+	// GameSeconds jumps, the queue does not.
+	USimClock* Later = NewObject<USimClock>();
+	Later->SetUniformDay(1.0);
+	Later->StartAtHour(9.0);
+	Later->Advance(2.0);
+	TArray<uint8> Bytes;
+	OpsSave::SerializeObject(*Later, Bytes);
+	OpsSave::DeserializeObject(*Runtime->GetClock(), Bytes);
+	Runtime->GetClock()->SetUniformDay(USimClock::SecondsPerDay);   // 1 game s per real s from here
+
+	Runtime->RearmRepeatingSchedules();
+	const int32 Before = Runtime->OfferTicksForTest();
+	Runtime->Tick(1.0);
+	TestEqual(TEXT("one game second after the load fires no backlog of minute ticks"),
+		Runtime->OfferTicksForTest() - Before, 0);
+	Runtime->Tick(60.0);
+	TestEqual(TEXT("and the next one comes a minute after the loaded time, not days away"),
+		Runtime->OfferTicksForTest() - Before, 1);
 	return true;
 }
 

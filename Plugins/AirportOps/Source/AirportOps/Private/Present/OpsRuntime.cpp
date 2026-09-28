@@ -81,6 +81,7 @@ TArray<FAirlineOffers> UOpsRuntime::AirlineOffersFromCatalog() const
 
 void UOpsRuntime::OfferTick()
 {
+	++OfferTicks;
 	if (Target == nullptr || Target->Network == nullptr)
 	{
 		return;
@@ -215,9 +216,6 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		Facade->SetPurse(Ledger);
 	}
 
-	// ONE ENTRY A DAY, not one per object: a hundred-stand airport would otherwise write a
-	// hundred rows a day into a saved array, and RollUp would spend its life folding them.
-	UpkeepHandle = Clock->Every(USimClock::SecondsPerDay, [this]() { PostDailyUpkeep(); });
 	// THE ONE PRODUCTION DISPATCHER. Weak, because the board outlives a level change and a
 	// captured raw pointer would keep a dead actor alive - or worse, be used.
 	TWeakObjectPtr<ARoadNetworkActor> WeakTarget = Target;
@@ -232,7 +230,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// (spec 2026-09-28 problem 2). Each airline's own curve and the live fee are read inside
 	// the tick - see UOfferGenerator::TickMinute.
 	AirlineOffers = AirlineOffersFromCatalog();
-	OfferHandle = Clock->Every(UOfferGenerator::TickSeconds, [this]() { OfferTick(); });
+	RearmRepeatingSchedules();
 	{
 		// THE DAY'S EXPECTED TOTAL, integrated from the same RateAt the generator follows, so
 		// the banner is a measurement of the mechanism rather than a figure typed beside it.
@@ -268,6 +266,20 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 
 	ApplySpeed(Clock->GetSpeed());
 	UE_LOG(LogAirportOps, Log, TEXT("OpsRuntime attached to %s"), *Target->GetName());
+}
+
+void UOpsRuntime::RearmRepeatingSchedules()
+{
+	if (UpkeepHandle != INDEX_NONE) { Clock->Cancel(UpkeepHandle); }
+	if (OfferHandle != INDEX_NONE) { Clock->Cancel(OfferHandle); }
+
+	// ONE ENTRY A DAY, not one per object: a hundred-stand airport would otherwise write a
+	// hundred rows a day into a saved array, and RollUp would spend its life folding them.
+	UpkeepHandle = Clock->Every(USimClock::SecondsPerDay, [this]() { PostDailyUpkeep(); });
+
+	// ONE GENERATOR MINUTE, every game minute - see Attach for why this replaced a single
+	// fixed-interval timer.
+	OfferHandle = Clock->Every(UOfferGenerator::TickSeconds, [this]() { OfferTick(); });
 }
 
 void UOpsRuntime::Detach()
@@ -563,6 +575,8 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 		FlightBoard->OnGraphRebuilt(*Model, *Target->Network);
 		FlightBoard->RearmSchedules(*Model, *Target->Network, *Clock);
 	}
+	// THE REPEATERS TOO, from the loaded Now - see RearmRepeatingSchedules (review I1).
+	RearmRepeatingSchedules();
 
 	ApplySpeed(Clock->GetSpeed());
 	Events->NotifyNotification(FString::Printf(TEXT("Loaded '%s'"), *SlotName));

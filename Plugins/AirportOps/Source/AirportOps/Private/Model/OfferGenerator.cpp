@@ -104,22 +104,48 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 			State.Threshold = Stream.FRandRange(0.6, 1.4);
 		}
 
-		TArray<const FOfferCandidate*> Admissible;
-		EArrivalRefusal FirstRefusal = EArrivalRefusal::None;
-		const FOfferCandidate* FirstRefused = nullptr;
-		for (const FOfferCandidate& Candidate : Each.Fleet)
+		// NOTHING TO OFFER THIS MINUTE, NOTHING TO ASK (review I2): a night-quiet club at x32
+		// would otherwise buy a route search per type per game minute for a rate of zero.
+		const double Rate = RateAt(Airline, TimeOfDay, bDaylight, Factor);
+		if (Rate <= 0.0)
 		{
-			EArrivalRefusal Why = EArrivalRefusal::None;
-			if (CouldEverAdmit(Network, Focus, Candidate.Airframe, Why))
+			continue;
+		}
+
+		FAdmissionCache& Cache = AdmissionCache.FindOrAdd(Airline.GetFName());
+		const uint32 Revision = Network.GetGuidelineRevision();
+		if (Cache.Network.Get() != &Network || Cache.GuidelineRevision != Revision
+			|| Cache.Focus != Focus || Cache.FleetSize != Each.Fleet.Num())
+		{
+			Cache.Network = &Network;
+			Cache.GuidelineRevision = Revision;
+			Cache.Focus = Focus;
+			Cache.FleetSize = Each.Fleet.Num();
+			Cache.Admissible.Reset();
+			Cache.FirstRefusal = EArrivalRefusal::None;
+			Cache.FirstRefused = INDEX_NONE;
+			for (int32 Index = 0; Index < Each.Fleet.Num(); ++Index)
 			{
-				Admissible.Add(&Candidate);
-			}
-			else if (FirstRefused == nullptr)
-			{
-				FirstRefusal = Why;
-				FirstRefused = &Candidate;
+				++AdmissionChecks;
+				EArrivalRefusal Why = EArrivalRefusal::None;
+				if (CouldEverAdmit(Network, Focus, Each.Fleet[Index].Airframe, Why))
+				{
+					Cache.Admissible.Add(Index);
+				}
+				else if (Cache.FirstRefused == INDEX_NONE)
+				{
+					Cache.FirstRefusal = Why;
+					Cache.FirstRefused = Index;
+				}
 			}
 		}
+		TArray<const FOfferCandidate*> Admissible;
+		for (const int32 Index : Cache.Admissible)
+		{
+			Admissible.Add(&Each.Fleet[Index]);
+		}
+		const EArrivalRefusal FirstRefusal = Cache.FirstRefusal;
+		const FOfferCandidate* FirstRefused = Cache.FirstRefused != INDEX_NONE ? &Each.Fleet[Cache.FirstRefused] : nullptr;
 
 		if (Admissible.Num() == 0)
 		{
@@ -149,7 +175,7 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 			State.bCouldCome = true;
 		}
 
-		State.Accumulated += RateAt(Airline, TimeOfDay, bDaylight, Factor) * (TickSeconds / 3600.0);
+		State.Accumulated += Rate * (TickSeconds / 3600.0);
 		while (State.Accumulated >= State.Threshold)
 		{
 			State.Accumulated -= State.Threshold;

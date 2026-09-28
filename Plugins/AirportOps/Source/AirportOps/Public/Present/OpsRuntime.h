@@ -126,6 +126,22 @@ public:
 	bool HasOfferScheduledForTest() const { return OfferHandle != INDEX_NONE; }
 
 	/**
+	 * Cancel and re-book the two repeaters - the generator's minute tick and the daily upkeep -
+	 * from the clock's CURRENT Now.
+	 *
+	 * AFTER A LOAD, and not optional (review I1, 2026-09-28): USimClock does not save its queue
+	 * and books absolute due times, so repeaters armed at Attach still pointed at the pre-load
+	 * time. A later save fired the minute tick once per missed minute in one frame; an earlier
+	 * one went silent until the clock caught up. Attach books them through this too, so there is
+	 * one place that knows the two exist.
+	 * ENFORCED BY: AirportOps.Present.OffersRearmOnLoad
+	 */
+	void RearmRepeatingSchedules();
+
+	/** How many times OfferTick has run. For the load re-arm test. */
+	int32 OfferTicksForTest() const { return OfferTicks; }
+
+	/**
 	 * Every airline with its fleet resolved to airframes, built once at Attach. What the
 	 * generator ticks over and what the inbox's demand strip samples - one list, so the strip
 	 * cannot show an airline the generator does not have.
@@ -171,6 +187,9 @@ private:
 	 * next to it (see the .cpp).
 	 */
 	void PostDailyUpkeep();
+
+	/** See OfferTicksForTest. A session counter, not saved. */
+	int32 OfferTicks = 0;
 
 	/** See GetAirlineOffers. Not a UPROPERTY: the airlines are the catalog's to hold. */
 	TArray<FAirlineOffers> AirlineOffers;

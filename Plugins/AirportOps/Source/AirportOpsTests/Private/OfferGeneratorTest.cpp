@@ -483,4 +483,40 @@ bool FOfferGeneratorSaveTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * REVIEW I2 (2026-09-28): the admissibility check is a full ArrivalPlanner::Plan per fleet
+ * type, and it ran every GAME minute - ~40 times a real second at x32 at night, for a rate of
+ * zero. Occupancy plays no part in it, so its answer can only move with the graph.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferAdmissionCachedTest, "AirportOps.Model.Offers.Generate.AdmissionCachedOnGuidelineRevision",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferAdmissionCachedTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0));
+	UOfferGenerator* Generator = SeededGenerator();
+	Generator->MaxPendingOffers = 100000;
+	const TArray<FAirlineOffers> Airlines = {
+		Offering(MakeAirline(6.0), { Candidate(3000.0, TEXT("A")), Candidate(2800.0, TEXT("B")) }) };
+	RunMinutes(*Generator, *Field, Airlines, *ClockAt(9.0), 60);
+	TestEqual(TEXT("an hour on an unchanged graph asks each type once"), Generator->AdmissionChecksForTest(), 2);
+
+	Field->AddGuidelineNode(FVector2D(900000.0, 900000.0), /*bDerived*/ false);
+	RunMinutes(*Generator, *Field, Airlines, *ClockAt(10.0), 1);
+	TestEqual(TEXT("an edit to the graph asks again"), Generator->AdmissionChecksForTest(), 4);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferZeroRateSkipsTest, "AirportOps.Model.Offers.Generate.ZeroRateSkipsAdmission",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferZeroRateSkipsTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0));
+	UOfferGenerator* Generator = SeededGenerator();
+	const TArray<FAirlineOffers> Airlines = { Offering(MakeAirline(0.0, 1.0, true), { Candidate(3000.0) }) };
+	RunMinutes(*Generator, *Field, Airlines, *ClockAt(21.0), 180);
+	TestEqual(TEXT("an airline with nothing to offer this minute costs no route search"),
+		Generator->AdmissionChecksForTest(), 0);
+	return true;
+}
+
 #endif
