@@ -27,6 +27,25 @@ struct FRoadAgent;
 enum class EAgentPhase : uint8;
 
 /**
+ * How far behind one depot is: the depot card's two texts and the counts behind them. See
+ * UJobBoard::DescribeDepot.
+ */
+struct FDepotBacklog
+{
+	/** "3 jobs · clears in 38 min · 1 late", or "No jobs". */
+	FString Summary;
+
+	/** One line per vehicle, then its jobs in the order it will do them. Empty with no vehicles. */
+	FString Detail;
+
+	int32 Jobs = 0;
+	int32 LateJobs = 0;
+
+	/** The latest promised finish among its jobs, USimClock game seconds; 0 with none. */
+	double ClearsAt = 0.0;
+};
+
+/**
  * Every parked aircraft's service jobs, every service vehicle, and the bidding that puts one on the
  * other. Spec 2026-09-28-service-vehicle-lifecycle; the systems map's UJobBoard (§3.5), first cut.
  *
@@ -261,6 +280,19 @@ public:
 	 */
 	FString DescribeAgent(int32 AgentId, double Now) const;
 
+	/**
+	 * How far behind Depot is (user, 2026-09-28: "see how far behind your depot is in jobs"): every job
+	 * on its vehicles - under way, being served, or queued - when the last of them is promised to
+	 * finish, and how many of those promises land after their aircraft's turnaround ends, which is the
+	 * backlog actually costing the airport. Read off each job's PromisedFinish, which the re-bid pass
+	 * refreshes on every trigger (RebidQueued), so the card needs no bookkeeping of its own. Minutes are
+	 * whole, so the inspector's text gate redraws at most once a game minute.
+	 */
+	FDepotBacklog DescribeDepot(FEntityInstanceId Depot, double Now) const;
+
+	/** A turnaround with a deadline and one job, bypassing OnAgentPhase - for the backlog's lateness. */
+	void AddTurnaroundForTest(int32 AircraftId, double TurnaroundEndsAt, int32 JobId);
+
 	const TArray<FServiceJob>& GetJobs() const { return Jobs; }
 	const TArray<FServiceVehicle>& GetVehicles() const { return Vehicles; }
 	const TArray<FTurnaround>& GetTurnarounds() const { return Turnarounds; }
@@ -407,6 +439,10 @@ private:
 
 	/** The vehicle card's line - its kind, what it is doing, what it carries, what is queued. */
 	FString DescribeVehicle(const FServiceVehicle& Vehicle) const;
+
+	/** "to stand 3", "at depot 1" - the one phrase the vehicle card and the depot card share, so the
+	 *  two cannot describe the same vehicle two ways. */
+	FString VehicleDoing(const FServiceVehicle& Vehicle) const;
 
 	/** A job the vehicle can no longer do goes back to the board, remainder and all. */
 	void Reopen(FServiceJob& Job);

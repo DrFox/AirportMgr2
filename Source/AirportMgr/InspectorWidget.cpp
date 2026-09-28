@@ -18,6 +18,7 @@
 #include "ArrivalViewModels.h"
 #include "Model/InspectFacts.h"
 #include "Model/RoadAgent.h"
+#include "Model/RoadNetwork.h"
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
@@ -409,6 +410,24 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			Status = S.bReachable
 				? NSLOCTEXT("AirportMgr", "InspectorDepotReady", "Ready").ToString()
 				: NSLOCTEXT("AirportMgr", "InspectorDepotCannotDispatch", "Cannot dispatch").ToString();
+
+			// HOW FAR BEHIND IT IS (user, 2026-09-28): its vehicles and their jobs, and a summary
+			// that replaces "Ready" - through the ops subsystem, for the fuel line's reason above:
+			// the airport actor is Airside's and may not know what a job is. An off-road depot
+			// keeps "Cannot dispatch", which names the fix; its backlog is empty anyway.
+			if (const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()); Runtime != nullptr && S.bReachable)
+			{
+				if (const UJobBoard* Board = Runtime->GetJobBoard())
+				{
+					const FDepotBacklog Backlog = Board->DescribeDepot(Target->GetNetwork()->EntityIdAt(Selection.Id),
+						Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0);
+					Status = Backlog.Summary;
+					if (!Backlog.Detail.IsEmpty())
+					{
+						Facts += TEXT("\n") + Backlog.Detail;
+					}
+				}
+			}
 		}
 		bDepartEnabled = false;
 	}

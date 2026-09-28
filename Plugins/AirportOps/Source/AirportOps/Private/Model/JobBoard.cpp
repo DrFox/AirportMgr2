@@ -1010,23 +1010,87 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 	}
 }
 
+FString UJobBoard::VehicleDoing(const FServiceVehicle& Vehicle) const
+{
+	const FServiceJob* Job = FindJob(Vehicle.CurrentJob);
+	const int32 Stand = Job != nullptr ? Job->Stand.Index : INDEX_NONE;
+	switch (Vehicle.State)
+	{
+	case EServiceVehicleState::ToJob:      return FString::Printf(TEXT("to stand %d"), Stand);
+	case EServiceVehicleState::Serving:    return FString::Printf(TEXT("fuelling at stand %d"), Stand);
+	case EServiceVehicleState::ToFacility: return FString::Printf(TEXT("to depot %d"), Vehicle.Home.Index);
+	case EServiceVehicleState::AtFacility: return FString::Printf(TEXT("refilling at depot %d"), Vehicle.Home.Index);
+	default:                               return FString::Printf(TEXT("at depot %d"), Vehicle.Home.Index);
+	}
+}
+
 FString UJobBoard::DescribeVehicle(const FServiceVehicle& Vehicle) const
 {
 	const FString Dot = TEXT(" · ");
-	const FServiceJob* Job = FindJob(Vehicle.CurrentJob);
-	const int32 Stand = Job != nullptr ? Job->Stand.Index : INDEX_NONE;
-	FString Doing;
-	switch (Vehicle.State)
-	{
-	case EServiceVehicleState::ToJob:      Doing = FString::Printf(TEXT("to stand %d"), Stand); break;
-	case EServiceVehicleState::Serving:    Doing = FString::Printf(TEXT("fuelling at stand %d"), Stand); break;
-	case EServiceVehicleState::ToFacility: Doing = FString::Printf(TEXT("to depot %d"), Vehicle.Home.Index); break;
-	case EServiceVehicleState::AtFacility: Doing = FString::Printf(TEXT("refilling at depot %d"), Vehicle.Home.Index); break;
-	default:                               Doing = FString::Printf(TEXT("at depot %d"), Vehicle.Home.Index); break;
-	}
 	const FString Cargo = FText::AsNumber(FMath::RoundToInt(Vehicle.Cargo)).ToString() + TEXT(" L");
 	const FString Queued = Vehicle.Queue.Num() > 0 ? Dot + FString::Printf(TEXT("%d queued"), Vehicle.Queue.Num()) : FString();
-	return Vehicle.TypeCode.ToString() + Dot + Doing + Dot + Cargo + Queued;
+	return Vehicle.TypeCode.ToString() + Dot + VehicleDoing(Vehicle) + Dot + Cargo + Queued;
+}
+
+FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) const
+{
+	const FString Dot = TEXT(" · ");
+	auto Litres = [](double L) { return FText::AsNumber(FMath::RoundToInt(L)).ToString() + TEXT(" L"); };
+	// WHOLE MINUTES, rounded: the card's text gate then redraws at most once a game minute.
+	auto Minutes = [](double Seconds) { return FMath::RoundToInt(FMath::Max(Seconds, 0.0) / 60.0); };
+
+	FDepotBacklog Out;
+	TArray<FString> Lines;
+	for (const FServiceVehicle& Vehicle : Vehicles)
+	{
+		if (Vehicle.Home != Depot)
+		{
+			continue;
+		}
+		Lines.Add(FString::Printf(TEXT("%s #%d"), *Vehicle.TypeCode.ToString(), Vehicle.Id) + Dot + VehicleDoing(Vehicle)
+			+ Dot + Litres(Vehicle.Cargo));
+
+		// ITS JOBS IN THE ORDER IT WILL DO THEM: the one it is on, then its queue.
+		TArray<int32> Order;
+		if (Vehicle.CurrentJob != 0)
+		{
+			Order.Add(Vehicle.CurrentJob);
+		}
+		Order.Append(Vehicle.Queue);
+		for (const int32 JobId : Order)
+		{
+			const FServiceJob* Job = FindJob(JobId);
+			if (Job == nullptr)
+			{
+				continue;
+			}
+			++Out.Jobs;
+			Out.ClearsAt = FMath::Max(Out.ClearsAt, Job->PromisedFinish);
+			FString Line = FString::Printf(TEXT("  stand %d"), Job->Stand.Index) + Dot + Litres(Job->QuantityOwed)
+				+ Dot + FString::Printf(TEXT("+%d min"), Minutes(Job->PromisedFinish - Now));
+
+			// LATE is the promise landing after the aircraft's turnaround: the one number that says the
+			// backlog is costing the airport, not merely keeping the depot busy.
+			const FTurnaround* Turnaround = TurnaroundFor(Job->AircraftId);
+			if (Turnaround != nullptr && Job->PromisedFinish > Turnaround->TurnaroundEndsAt)
+			{
+				++Out.LateJobs;
+				Line += Dot + FString::Printf(TEXT("late %d min"), Minutes(Job->PromisedFinish - Turnaround->TurnaroundEndsAt));
+			}
+			Lines.Add(Line);
+		}
+	}
+	Out.Detail = FString::Join(Lines, TEXT("\n"));
+
+	if (Out.Jobs == 0)
+	{
+		Out.Summary = TEXT("No jobs");
+		return Out;
+	}
+	Out.Summary = FString::Printf(TEXT("%d job%s"), Out.Jobs, Out.Jobs == 1 ? TEXT("") : TEXT("s"))
+		+ Dot + FString::Printf(TEXT("clears in %d min"), Minutes(Out.ClearsAt - Now))
+		+ (Out.LateJobs > 0 ? Dot + FString::Printf(TEXT("%d late"), Out.LateJobs) : FString());
+	return Out;
 }
 
 FString UJobBoard::DescribeAgent(int32 AgentId, double Now) const
@@ -1083,4 +1147,13 @@ FString UJobBoard::DescribeAgent(int32 AgentId, double Now) const
 	const FString Trips = TotalTrips > 1
 		? FString::Printf(TEXT(" (trip %d of %d)"), Job->Trips + 1, TotalTrips) : FString();
 	return Head + Dot + FString::Printf(TEXT("%s L left"), *Litres(Left)) + Dot + Stage + Trips;
+}
+
+
+void UJobBoard::AddTurnaroundForTest(int32 AircraftId, double TurnaroundEndsAt, int32 JobId)
+{
+	FTurnaround& Turnaround = Turnarounds.AddDefaulted_GetRef();
+	Turnaround.AircraftId = AircraftId;
+	Turnaround.TurnaroundEndsAt = TurnaroundEndsAt;
+	Turnaround.JobIds.Add(JobId);
 }
