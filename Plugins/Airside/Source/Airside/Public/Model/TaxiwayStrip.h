@@ -84,6 +84,52 @@ namespace TaxiwayStrip
 	 *
 	 * DEEPEST, NOT ALL: every caller so far reports one reason, and the deepest is the one to
 	 * fix first. A caller that needs the list is the day this grows one.
+	 *
+	 * Exempt names taxiways to skip - the ones a new segment MEETS (JudgeSegment), whose strip
+	 * it may cross by definition. Stands and plots pass nothing: they meet no taxiway.
 	 */
-	AIRSIDE_API TOptional<FIntrusion> WorstIntrusion(const URoadNetwork& Network, TConstArrayView<FVector2D> Footprint);
+	AIRSIDE_API TOptional<FIntrusion> WorstIntrusion(const URoadNetwork& Network, TConstArrayView<FVector2D> Footprint,
+		TConstArrayView<FRoadSegmentId> Exempt = {});
+
+	/**
+	 * Where a new segment's end meets the network: a node it shares, or a point on a segment it
+	 * will split. Unset Node and Segment = a free end.
+	 */
+	struct FSegmentEnd
+	{
+		FRoadNodeId Node;
+		/** A Segment snap: the ORIGINAL segment, before any split - the preview's ghost network
+		 *  has split it and the real one has not, so only this id names the same taxiway in both. */
+		FRoadSegmentId Segment;
+		FVector2D At = FVector2D::ZeroVector;
+	};
+
+	/** What a placement is refused for, if anything. Written once; tool and facade both show Text. */
+	struct FStripVerdict
+	{
+		bool bRefused = false;
+		FString Text;
+		/** How far inside, uu, for a strip refusal; 0 for an angle or a reverse-query refusal. */
+		double Depth = 0.0;
+	};
+
+	/** Meets within 30 degrees of square (60..120 deg), or continues straight on (>= 150 deg). */
+	inline constexpr double MeetMinDegrees = 60.0;
+	inline constexpr double MeetMaxDegrees = 120.0;
+	inline constexpr double ContinueMinDegrees = 150.0;
+
+	/**
+	 * May a road or taxiway of this shape be laid with these ends? Refuses when its pavement
+	 * enters the strip of a taxiway it does not MEET (share a node / split, at an allowed angle),
+	 * or - bIsTaxiway - when its own strip would contain an existing stand, depot, road or other
+	 * taxiway's pavement it does not meet. Ignore lists the segments a caller is replacing (a
+	 * moved node's own incident segments, a heal's two stubs).
+	 *
+	 * ONE JUDGE FOR EVERY PAVEMENT PATH - the road tool's preview and click, the facade's
+	 * ConnectNodes, MoveNode and the delete heal - so the readout cannot approve what the commit
+	 * refuses (the WhyStandRefused pattern). Aprons and runways never reach it (plan rulings 1-2).
+	 */
+	AIRSIDE_API FStripVerdict JudgeSegment(const URoadNetwork& Network, const FSegmentShape& Shape,
+		bool bIsTaxiway, const FSegmentEnd& AtA, const FSegmentEnd& AtB,
+		TConstArrayView<FRoadSegmentId> Ignore = {});
 }

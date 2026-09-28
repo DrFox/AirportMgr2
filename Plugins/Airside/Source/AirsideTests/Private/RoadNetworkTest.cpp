@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Entities/EntityDefinition.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TaxiwayStrip.h"
@@ -7,6 +8,7 @@
 #include "Solve/GuidelineGeom.h"
 #include "Solve/JunctionSolver.h"
 #include "Solve/RoadGeom.h"
+#include "StandFixture.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -600,6 +602,163 @@ bool FTaxiwayStripFootprintTest::RunTest(const FString&)
 		TestTrue(TEXT("a live segment has a shape"), TaxiwayStrip::ShapeOf(*Net, Seg, Shape));
 		TestEqual(TEXT("its half-width is read through ProfileFor"), Shape.HalfWidth, 1200.0, 0.01);
 		TestFalse(TEXT("a dead handle has none"), TaxiwayStrip::ShapeOf(*Net, FRoadSegmentId(), Shape));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayStripSegmentJudgeTest, "Airside.Model.TaxiwayStrip.SegmentJudge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayStripSegmentJudgeTest::RunTest(const FString&)
+{
+	using namespace TaxiwayStrip;
+
+	// A 24 m (code E) taxiway W-E along y 0 in two pieces, meeting at a node at the origin:
+	// pavement edge 1200, strip edge 1200 + 2800 = 4000 off the centreline.
+	struct FFixture
+	{
+		URoadNetwork* Net = nullptr;
+		FRoadNodeId W, Mid, E;
+		FRoadSegmentId West, East;
+	};
+	auto MakeTaxiway = []()
+	{
+		FFixture F;
+		F.Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Taxi = URoadProfile::MakeTransient(2400.0, 1600.0);
+		F.W = F.Net->AddNode({ -10000.0, 0.0 });
+		F.Mid = F.Net->AddNode({ 0.0, 0.0 });
+		F.E = F.Net->AddNode({ 10000.0, 0.0 });
+		F.West = F.Net->AddStraightSegment(F.W, F.Mid, Taxi);
+		F.East = F.Net->AddStraightSegment(F.Mid, F.E, Taxi);
+		return F;
+	};
+	auto Shape = [](const FVector2D& A, const FVector2D& B, double HalfWidth)
+	{
+		FSegmentShape S;
+		S.A = A;
+		S.B = B;
+		S.Control = (A + B) * 0.5;
+		S.HalfWidth = HalfWidth;
+		return S;
+	};
+	auto AtNode = [](const URoadNetwork& Net, FRoadNodeId Node)
+	{
+		FSegmentEnd End;
+		End.Node = Node;
+		End.At = Net.GetNode(Node)->Position;
+		return End;
+	};
+	auto Free = [](const FVector2D& At)
+	{
+		FSegmentEnd End;
+		End.At = At;
+		return End;
+	};
+	auto Dir = [](double Degrees)
+	{
+		return FVector2D(FMath::Cos(FMath::DegreesToRadians(Degrees)), FMath::Sin(FMath::DegreesToRadians(Degrees)));
+	};
+	constexpr double Road = 300.0;   // a 6 m service road's half
+
+	{
+		const FFixture F = MakeTaxiway();
+		const FVector2D To(0.0, 10000.0);
+		const FStripVerdict V = JudgeSegment(*F.Net, Shape({ 0.0, 0.0 }, To, Road), false, AtNode(*F.Net, F.Mid), Free(To));
+		TestFalse(FString::Printf(TEXT("right-angle road meeting the taxiway at a node is allowed (%s)"), *V.Text), V.bRefused);
+	}
+	{
+		const FFixture F = MakeTaxiway();
+		const FVector2D To = Dir(20.0) * 10000.0;
+		const FStripVerdict V = JudgeSegment(*F.Net, Shape({ 0.0, 0.0 }, To, Road), false, AtNode(*F.Net, F.Mid), Free(To));
+		TestTrue(TEXT("a road meeting at 20 degrees runs along the strip - refused"), V.bRefused);
+		TestTrue(FString::Printf(TEXT("and says why in the strip's own words (%s)"), *V.Text), V.Text.Contains(TEXT("clearance strip")));
+	}
+	{
+		const FFixture F = MakeTaxiway();
+		const FStripVerdict V = JudgeSegment(*F.Net, Shape({ -5000.0, 2000.0 }, { 5000.0, 2000.0 }, Road), false,
+			Free({ -5000.0, 2000.0 }), Free({ 5000.0, 2000.0 }));
+		TestTrue(TEXT("a road alongside, 20 m off, meeting nothing - refused"), V.bRefused);
+		TestTrue(FString::Printf(TEXT("inside the clearance strip (%s)"), *V.Text), V.Text.Contains(TEXT("clearance strip")));
+	}
+	{
+		const FFixture F = MakeTaxiway();
+		const FStripVerdict V = JudgeSegment(*F.Net, Shape({ 3000.0, -8000.0 }, { 3000.0, 8000.0 }, Road), false,
+			Free({ 3000.0, -8000.0 }), Free({ 3000.0, 8000.0 }));
+		TestTrue(TEXT("a road across the taxiway with free ends - refused"), V.bRefused);
+		TestTrue(FString::Printf(TEXT("naming the missing junction (%s)"), *V.Text), V.Text.Contains(TEXT("junction")));
+	}
+	{
+		// RULING 3: extending a taxiway straight on from its end node is a meeting, or the rule
+		// would forbid lengthening one.
+		const FFixture F = MakeTaxiway();
+		const FVector2D To(20000.0, 0.0);
+		const FStripVerdict V = JudgeSegment(*F.Net, Shape({ 10000.0, 0.0 }, To, 1200.0), true, AtNode(*F.Net, F.E), Free(To));
+		TestFalse(FString::Printf(TEXT("a taxiway continuing straight on is allowed (%s)"), *V.Text), V.bRefused);
+	}
+	{
+		// REVIEW FOCUS 2: a node where two taxiways join - the road must meet EACH at an allowed
+		// angle. Square to the W-E taxiway, 15 degrees off the one leaving at 105 degrees.
+		FFixture F = MakeTaxiway();
+		const FRoadNodeId Far = F.Net->AddNode(Dir(105.0) * 10000.0);
+		F.Net->AddStraightSegment(F.Mid, Far, URoadProfile::MakeTransient(2400.0, 1600.0));
+		const FVector2D To(0.0, 10000.0);
+		const FStripVerdict V = JudgeSegment(*F.Net, Shape({ 0.0, 0.0 }, To, Road), false, AtNode(*F.Net, F.Mid), Free(To));
+		TestTrue(TEXT("square to one taxiway but 15 degrees off the other - refused"), V.bRefused);
+		TestTrue(FString::Printf(TEXT("naming the angle (%s)"), *V.Text), V.Text.Contains(TEXT("15 degrees")));
+	}
+	{
+		// A SEGMENT SNAP: the end lands mid-segment on a taxiway that will be split there. The
+		// met segment is named by its ORIGINAL id (Review Focus 1), and square is allowed.
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadSegmentId Taxi = Net->AddStraightSegment(Net->AddNode({ -10000.0, 0.0 }), Net->AddNode({ 10000.0, 0.0 }),
+			URoadProfile::MakeTransient(2400.0, 1600.0));
+		FSegmentEnd OnTaxiway;
+		OnTaxiway.Segment = Taxi;
+		OnTaxiway.At = { 2000.0, 0.0 };
+		const FVector2D From(2000.0, 10000.0);
+		const FStripVerdict Square = JudgeSegment(*Net, Shape(From, { 2000.0, 0.0 }, Road), false, Free(From), OnTaxiway);
+		TestFalse(FString::Printf(TEXT("a road ending square on a taxiway mid-segment is allowed (%s)"), *Square.Text), Square.bRefused);
+		const FVector2D Shallow = FVector2D(2000.0, 0.0) + Dir(160.0) * 10000.0;
+		const FStripVerdict Slant = JudgeSegment(*Net, Shape(Shallow, { 2000.0, 0.0 }, Road), false, Free(Shallow), OnTaxiway);
+		TestTrue(TEXT("and one ending on it at 20 degrees is refused"), Slant.bRefused);
+	}
+	{
+		// RULING 5: a new F taxiway parallel to a B. At 20 m its own pavement is in B's strip;
+		// at 40 m B's 9 m strip is CLEAR of it - only the F's 34.5 m strip, looking back,
+		// swallows B's pavement (4000 - 1300 - 3450 = -750: 7.5 m past B's centreline).
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		Net->AddStraightSegment(Net->AddNode({ -10000.0, 0.0 }), Net->AddNode({ 10000.0, 0.0 }),
+			URoadProfile::MakeTransient(1200.0, 800.0));
+		const FStripVerdict Near = JudgeSegment(*Net, Shape({ -10000.0, 2000.0 }, { 10000.0, 2000.0 }, 1300.0), true,
+			Free({ -10000.0, 2000.0 }), Free({ 10000.0, 2000.0 }));
+		TestTrue(TEXT("an F taxiway 20 m from a B is refused"), Near.bRefused);
+		const FStripVerdict Far = JudgeSegment(*Net, Shape({ -10000.0, 4000.0 }, { 10000.0, 4000.0 }, 1300.0), true,
+			Free({ -10000.0, 4000.0 }), Free({ 10000.0, 4000.0 }));
+		TestTrue(TEXT("at 40 m, clear of B's strip, its OWN strip still swallows B - refused"), Far.bRefused);
+		TestTrue(FString::Printf(TEXT("naming what it would contain (%s)"), *Far.Text), Far.Text.Contains(TEXT("would contain a taxiway")));
+		const FStripVerdict Clear = JudgeSegment(*Net, Shape({ -10000.0, 6000.0 }, { 10000.0, 6000.0 }, 1300.0), true,
+			Free({ -10000.0, 6000.0 }), Free({ 10000.0, 6000.0 }));
+		TestFalse(FString::Printf(TEXT("at 60 m both strips are clear - allowed (%s)"), *Clear.Text), Clear.bRefused);
+	}
+	{
+		// A NEW TAXIWAY'S STRIP OVER A STAND already built: a stand 30 m off, clear of nothing
+		// yet, is inside a new E taxiway's 40 m keep-out.
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		UEntityDefinition* Def = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
+		const FEntityInstanceId Stand = ServiceLinkFixture::PlaceStand(*Net, *Def, FVector2D(0.0, 5000.0), 0.0);
+		FRoadNetworkTestAccess(*Net).SetEntityOutlineForTest(Stand, { { -2000.0, 3000.0 }, { 2000.0, 3000.0 }, { 2000.0, 7000.0 }, { -2000.0, 7000.0 } });
+		const FStripVerdict V = JudgeSegment(*Net, Shape({ -10000.0, 0.0 }, { 10000.0, 0.0 }, 1200.0), true,
+			Free({ -10000.0, 0.0 }), Free({ 10000.0, 0.0 }));
+		TestTrue(TEXT("a taxiway whose strip would contain a stand is refused"), V.bRefused);
+		TestTrue(FString::Printf(TEXT("naming the stand (%s)"), *V.Text), V.Text.Contains(FString::Printf(TEXT("stand %d"), Stand.Index)));
+	}
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		Net->AddStraightSegment(Net->AddNode({ -10000.0, 50000.0 }), Net->AddNode({ 10000.0, 50000.0 }),
+			URoadProfile::MakeServiceRoadTransient());
+		const FStripVerdict V = JudgeSegment(*Net, Shape({ -5000.0, 2000.0 }, { 5000.0, 2000.0 }, Road), false,
+			Free({ -5000.0, 2000.0 }), Free({ 5000.0, 2000.0 }));
+		TestFalse(TEXT("a service road with no taxiway near is allowed"), V.bRefused);
 	}
 	return true;
 }

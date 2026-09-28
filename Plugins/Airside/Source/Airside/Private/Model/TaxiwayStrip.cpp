@@ -1,5 +1,6 @@
 #include "Model/TaxiwayStrip.h"
 
+#include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
@@ -120,7 +121,8 @@ namespace TaxiwayStrip
 		return IcaoCode::TaxiwayStripForWidth(Network.ProfileFor(*Network.GetSegment(Id))->GetTotalWidth());
 	}
 
-	TOptional<FIntrusion> WorstIntrusion(const URoadNetwork& Network, TConstArrayView<FVector2D> Footprint)
+	TOptional<FIntrusion> WorstIntrusion(const URoadNetwork& Network, TConstArrayView<FVector2D> Footprint,
+		TConstArrayView<FRoadSegmentId> Exempt)
 	{
 		TOptional<FIntrusion> Worst;
 		if (Footprint.Num() < 3)
@@ -136,7 +138,7 @@ namespace TaxiwayStrip
 		for (int32 Index = 0; Index < Segments.Num(); ++Index)
 		{
 			const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-			if (!Id.IsSet() || !HasStrip(Network, Id))
+			if (!Id.IsSet() || Exempt.Contains(Id) || !HasStrip(Network, Id))
 			{
 				continue;
 			}
@@ -190,5 +192,244 @@ namespace TaxiwayStrip
 			}
 		}
 		return Worst;
+	}
+
+	namespace
+	{
+		double DegreesBetween(const FVector2D& A, const FVector2D& B)
+		{
+			return FMath::RadiansToDegrees(RoadGeom::AngleBetween(A, B));
+		}
+
+		/** The pavement letter of a live strip-bearing segment, for the refusal text. */
+		const TCHAR* LetterOf(const URoadNetwork& Network, FRoadSegmentId Id)
+		{
+			const FRoadSegment* Segment = Network.GetSegment(Id);
+			const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+			return IcaoCode::ToLetter(IcaoCode::TaxiwayLetterForWidth(Profile != nullptr ? Profile->GetTotalWidth() : 0.0));
+		}
+
+		TArray<FVector2D> CentreOf(const FSegmentShape& Shape)
+		{
+			TArray<FVector2D> Centre;
+			Centre.Reserve(GuidelineGeom::DefaultSamples + 1);
+			for (int32 S = 0; S <= GuidelineGeom::DefaultSamples; ++S)
+			{
+				Centre.Add(GuidelineGeom::Eval(Shape.A, Shape.Control, Shape.B,
+					static_cast<double>(S) / GuidelineGeom::DefaultSamples));
+			}
+			return Centre;
+		}
+
+		/**
+		 * FootprintOf's polygon as its per-sample quads. PolygonsOverlap is a CONVEX test, and a
+		 * curved footprint is not convex: judged whole, a bent taxiway's strip would claim its
+		 * own inside-of-the-bend as if it were the hull. Each quad between two samples is convex
+		 * for any bend GuidelineGeom's radii allow.
+		 */
+		TArray<TArray<FVector2D>> QuadsOf(const TArray<FVector2D>& Footprint)
+		{
+			const int32 N = Footprint.Num() / 2;   // samples along each edge
+			TArray<TArray<FVector2D>> Quads;
+			Quads.Reserve(N - 1);
+			for (int32 K = 0; K + 1 < N; ++K)
+			{
+				Quads.Add({ Footprint[K], Footprint[K + 1], Footprint[2 * N - 2 - K], Footprint[2 * N - 1 - K] });
+			}
+			return Quads;
+		}
+
+		bool QuadsOverlap(const TArray<TArray<FVector2D>>& A, const TArray<TArray<FVector2D>>& B)
+		{
+			for (const TArray<FVector2D>& QA : A)
+			{
+				for (const TArray<FVector2D>& QB : B)
+				{
+					if (RoadGeom::PolygonsOverlap(QA, QB, ToleranceUu)) { return true; }
+				}
+			}
+			return false;
+		}
+
+		/** Does the new centreline cross this segment's centreline, sampled both? */
+		bool CentrelinesCross(const TArray<FVector2D>& New, const FSegmentShape& Other)
+		{
+			const TArray<FVector2D> Theirs = CentreOf(Other);
+			for (int32 I = 0; I + 1 < New.Num(); ++I)
+			{
+				for (int32 J = 0; J + 1 < Theirs.Num(); ++J)
+				{
+					if (RoadGeom::SegmentsCross(New[I], New[I + 1], Theirs[J], Theirs[J + 1])) { return true; }
+				}
+			}
+			return false;
+		}
+
+		/** The curve parameter of Shape nearest At, from its own samples refined along the nearest chord. */
+		double NearestT(const FSegmentShape& Shape, const FVector2D& At)
+		{
+			const TArray<FVector2D> Centre = CentreOf(Shape);
+			double Best = DBL_MAX, BestT = 0.0;
+			for (int32 C = 0; C + 1 < Centre.Num(); ++C)
+			{
+				const double U = RoadGeom::ClosestPointOnSegment(Centre[C], Centre[C + 1], At);
+				const double D = FVector2D::DistSquared(At, Centre[C] + (Centre[C + 1] - Centre[C]) * U);
+				if (D < Best)
+				{
+					Best = D;
+					BestT = (C + U) / GuidelineGeom::DefaultSamples;
+				}
+			}
+			return BestT;
+		}
+	}
+
+	FStripVerdict JudgeSegment(const URoadNetwork& Network, const FSegmentShape& Shape,
+		bool bIsTaxiway, const FSegmentEnd& AtA, const FSegmentEnd& AtB,
+		TConstArrayView<FRoadSegmentId> Ignore)
+	{
+		FStripVerdict Verdict;
+
+		// 1. WHAT IT MEETS. Exempt = the strip-bearing taxiways it joins at an allowed angle,
+		// whose strip it may therefore cross (spec: "network that MEETS the taxiway may pass
+		// through its strip"). Met = every segment at either end, strip or not - a new taxiway's
+		// own strip cannot "contain" the road it is being joined to.
+		TArray<FRoadSegmentId> Exempt(Ignore.GetData(), Ignore.Num());
+		TArray<FRoadSegmentId> Met;
+		const auto Meet = [&](const FSegmentEnd& End, const FVector2D& Out) -> bool
+		{
+			if (End.Node.IsSet())
+			{
+				const FRoadNode* Node = Network.GetNode(End.Node);
+				if (Node == nullptr) { return true; }
+				for (const FRoadSegmentId Arm : Node->Incident)
+				{
+					Met.AddUnique(Arm);
+					if (Ignore.Contains(Arm) || !HasStrip(Network, Arm)) { continue; }
+					// PER ARM (Review Focus 2): at a node where two taxiways join, a road square
+					// to one can be 15 degrees off the other and run along ITS strip. Straight on
+					// (>= 150) is a meeting too (plan ruling 3) - else no taxiway could be lengthened.
+					const double Deg = DegreesBetween(Out, Network.GetOutgoingTangent(Arm, End.Node));
+					if ((Deg >= MeetMinDegrees && Deg <= MeetMaxDegrees) || Deg >= ContinueMinDegrees)
+					{
+						Exempt.AddUnique(Arm);
+						continue;
+					}
+					Verdict.bRefused = true;
+					Verdict.Text = FString::Printf(
+						TEXT("meets a Code %s taxiway at %d degrees, inside its clearance strip - join within 30 degrees of square, or straight on"),
+						LetterOf(Network, Arm), FMath::RoundToInt(Deg));
+					return false;
+				}
+			}
+			else if (End.Segment.IsSet())
+			{
+				Met.AddUnique(End.Segment);
+				FSegmentShape Theirs;
+				if (Ignore.Contains(End.Segment) || !HasStrip(Network, End.Segment) || !ShapeOf(Network, End.Segment, Theirs))
+				{
+					return true;
+				}
+				// A SPLIT MAKES TWO ARMS, Deg and 180 - Deg, so the square band alone decides:
+				// no mid-segment join is "straight on" to both.
+				const FVector2D Along = GuidelineGeom::Tangent(Theirs.A, Theirs.Control, Theirs.B, NearestT(Theirs, End.At));
+				const double Deg = DegreesBetween(Out, Along);
+				if (Deg >= MeetMinDegrees && Deg <= MeetMaxDegrees)
+				{
+					Exempt.AddUnique(End.Segment);
+					return true;
+				}
+				Verdict.bRefused = true;
+				Verdict.Text = FString::Printf(
+					TEXT("meets a Code %s taxiway at %d degrees, inside its clearance strip - join within 30 degrees of square"),
+					LetterOf(Network, End.Segment), FMath::RoundToInt(FMath::Min(Deg, 180.0 - Deg)));
+				return false;
+			}
+			return true;
+		};
+		// Each end's direction pointing AWAY from that end along the new segment - the same sense
+		// GetOutgoingTangent gives the existing arm, so square is 90 and straight on is 180.
+		if (!Meet(AtA, GuidelineGeom::Tangent(Shape.A, Shape.Control, Shape.B, 0.0))
+			|| !Meet(AtB, -GuidelineGeom::Tangent(Shape.A, Shape.Control, Shape.B, 1.0)))
+		{
+			return Verdict;
+		}
+
+		// 2. ITS PAVEMENT in any other taxiway's strip.
+		const TArray<FVector2D> Footprint = FootprintOf(Shape);
+		if (const TOptional<FIntrusion> In = WorstIntrusion(Network, Footprint, Exempt))
+		{
+			Verdict.bRefused = true;
+			Verdict.Depth = In->Depth;
+			FSegmentShape Theirs;
+			if (ShapeOf(Network, In->Taxiway, Theirs) && CentrelinesCross(CentreOf(Shape), Theirs))
+			{
+				Verdict.Text = FString::Printf(
+					TEXT("crosses a Code %s taxiway without a junction - end it on the taxiway, square to it"),
+					IcaoCode::ToLetter(In->Letter));
+			}
+			else
+			{
+				Verdict.Text = FString::Printf(
+					TEXT("inside a Code %s taxiway's clearance strip by %.1f m - end it on the taxiway at a junction, or move it %.1f m away"),
+					IcaoCode::ToLetter(In->Letter), In->Depth / 100.0, In->Depth / 100.0);
+			}
+			return Verdict;
+		}
+
+		if (!bIsTaxiway)
+		{
+			return Verdict;
+		}
+
+		// 3. A NEW TAXIWAY'S OWN STRIP, looking back (plan ruling 5): one-way checking would lay
+		// an F 40 m from a B because the B's 9 m strip is clear, while the F's 34.5 m one
+		// swallows the B's pavement.
+		FSegmentShape StripShape = Shape;
+		StripShape.HalfWidth = Shape.HalfWidth + IcaoCode::TaxiwayStripForWidth(2.0 * Shape.HalfWidth);
+		const TArray<TArray<FVector2D>> StripQuads = QuadsOf(FootprintOf(StripShape));
+
+		// EVERY LIVE ENTITY AND SEGMENT, LINEARLY - WorstIntrusion's own reasoning and N (34
+		// segments on M_Test, 2026-09-28), times 16 x 16 quad pairs; paid once a frame by the
+		// taxiway tool's preview only.
+		const TArray<FEntityInstance>& Entities = Network.GetEntities();
+		for (int32 Index = 0; Index < Entities.Num(); ++Index)
+		{
+			const FEntityInstance& Entity = Entities[Index];
+			// STANDS AND DEPOTS ALIKE - both are ground a taxiing wing must not sweep; named apart
+			// below because the player fixes them differently. A plotted outline is convex (a
+			// stand box, a depot rectangle) - PolygonsOverlap's contract.
+			if (!Entity.bAlive || !(Entity.IsStand() || Entity.IsDepot()) || !Entity.IsPlotted()) { continue; }
+			for (const TArray<FVector2D>& Quad : StripQuads)
+			{
+				if (RoadGeom::PolygonsOverlap(Quad, Entity.Outline, ToleranceUu))
+				{
+					Verdict.bRefused = true;
+					Verdict.Text = Entity.IsStand()
+						? FString::Printf(TEXT("its clearance strip would contain stand %d"), Index)
+						: FString(TEXT("its clearance strip would contain a fuel depot"));
+					return Verdict;
+				}
+			}
+		}
+
+		const TArray<FRoadSegment>& Segments = Network.GetSegments();
+		for (int32 Index = 0; Index < Segments.Num(); ++Index)
+		{
+			const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+			// RUNWAYS ARE OUT OF SCOPE (plan ruling 2) - their own strip rules, not this one.
+			if (!Id.IsSet() || Exempt.Contains(Id) || Met.Contains(Id) || Network.IsRunwaySegment(Id)) { continue; }
+			FSegmentShape Theirs;
+			if (!ShapeOf(Network, Id, Theirs)) { continue; }
+			if (QuadsOverlap(StripQuads, QuadsOf(FootprintOf(Theirs))))
+			{
+				Verdict.bRefused = true;
+				Verdict.Text = IsAircraftOnly(Network, Id)
+					? FString(TEXT("its clearance strip would contain a taxiway"))
+					: FString(TEXT("its clearance strip would contain a service road"));
+				return Verdict;
+			}
+		}
+		return Verdict;
 	}
 }

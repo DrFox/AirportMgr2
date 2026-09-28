@@ -123,6 +123,48 @@ double RoadGeom::PolygonArea(TArrayView<const FVector2D> Points)
 	return Sum * 0.5;
 }
 
+bool RoadGeom::PolygonsOverlap(TArrayView<const FVector2D> A, TArrayView<const FVector2D> B, double Tolerance)
+{
+	// Is there an edge normal of Edges along which A and B's projections are apart, or
+	// meet within the tolerance?
+	const auto SeparatedByEdgesOf = [A, B, Tolerance](TArrayView<const FVector2D> Edges)
+	{
+		const int32 Num = Edges.Num();
+		for (int32 Index = 0; Index < Num; ++Index)
+		{
+			const FVector2D Edge = Edges[(Index + 1) % Num] - Edges[Index];
+			const double Length = Edge.Size();
+			if (Length <= UE_DOUBLE_SMALL_NUMBER)
+			{
+				continue;
+			}
+			// Unit length, so the tolerance below is in uu along every axis alike.
+			const FVector2D Axis(-Edge.Y / Length, Edge.X / Length);
+
+			double MinA = TNumericLimits<double>::Max(), MaxA = TNumericLimits<double>::Lowest();
+			for (const FVector2D& P : A)
+			{
+				const double D = FVector2D::DotProduct(P, Axis);
+				MinA = FMath::Min(MinA, D);
+				MaxA = FMath::Max(MaxA, D);
+			}
+			double MinB = TNumericLimits<double>::Max(), MaxB = TNumericLimits<double>::Lowest();
+			for (const FVector2D& P : B)
+			{
+				const double D = FVector2D::DotProduct(P, Axis);
+				MinB = FMath::Min(MinB, D);
+				MaxB = FMath::Max(MaxB, D);
+			}
+			if (MaxA - MinB <= Tolerance || MaxB - MinA <= Tolerance)
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+	return !SeparatedByEdgesOf(A) && !SeparatedByEdgesOf(B);
+}
+
 bool RoadGeom::IsSimplePolygon(TArrayView<const FVector2D> Points)
 {
 	const int32 Count = Points.Num();
