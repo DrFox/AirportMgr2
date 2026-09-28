@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/JunctionSolver.h"
 
@@ -435,6 +436,88 @@ bool FRoadNetworkNarrowMutatorsTest::RunTest(const FString& Parameters)
 			Net->SetGuidelineNodeHoldingPosition(FGuidelineNodeId(), EHoldingPositionKind::Runway, Runway));
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTaxiwayStripQueryTest,
+	"Airside.Model.TaxiwayStrip.Query",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiwayStripQueryTest::RunTest(const FString& Parameters)
+{
+	// A box 40 m wide whose near edge sits at NearY, running 40 m further from the road.
+	auto BoxFrom = [](double NearY)
+	{
+		return TArray<FVector2D>{ { -2000.0, NearY }, { 2000.0, NearY }, { 2000.0, NearY + 4000.0 }, { -2000.0, NearY + 4000.0 } };
+	};
+	auto Lay = [](URoadNetwork* Net, URoadProfile* Profile, const FVector2D& Control)
+	{
+		const FRoadNodeId W = Net->AddNode(FVector2D(-10000.0, 0.0));
+		const FRoadNodeId E = Net->AddNode(FVector2D(10000.0, 0.0));
+		return Net->AddSegment(W, E, Control, Profile);
+	};
+
+	// STRAIGHT 24 m TAXIWAY: code E, pavement edge at 1200, strip edge at 1200 + 2800 = 4000.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadSegmentId Taxi = Lay(Net, URoadProfile::MakeTransient(2400.0, 1600.0), FVector2D::ZeroVector);
+		TestEqual(TEXT("its strip is E's 28 m"), TaxiwayStrip::StripWidthOf(*Net, Taxi), 2800.0, 0.5);
+		TestFalse(TEXT("flush at the strip edge: clear - float noise must not refuse it"),
+			TaxiwayStrip::WorstIntrusion(*Net, BoxFrom(4000.0)).IsSet());
+		const TOptional<TaxiwayStrip::FIntrusion> OneMetre = TaxiwayStrip::WorstIntrusion(*Net, BoxFrom(3900.0));
+		if (TestTrue(TEXT("a metre inside the strip intrudes"), OneMetre.IsSet()))
+		{
+			TestEqual(TEXT("by a metre"), OneMetre->Depth, 100.0, 1.0);
+			TestEqual(TEXT("naming the letter that set it"), static_cast<int32>(OneMetre->Letter), static_cast<int32>(EIcaoCode::E));
+			TestEqual(TEXT("and what it needs"), OneMetre->Required, 2800.0, 0.5);
+		}
+		const TOptional<TaxiwayStrip::FIntrusion> Flush = TaxiwayStrip::WorstIntrusion(*Net, BoxFrom(1200.0));
+		TestTrue(TEXT("flush to the pavement - today's stand - intrudes by the whole strip"),
+			Flush.IsSet() && FMath::IsNearlyEqual(Flush->Depth, 2800.0, 1.0));
+	}
+
+	// A BEND: control (0, 10000) puts the curve's midpoint at y 5000. A chord test would see
+	// the road at y 0 and pass a box at 8900; the curve's strip edge is 5000 + 1200 + 2800 = 9000.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		Lay(Net, URoadProfile::MakeTransient(2400.0, 1600.0), FVector2D(0.0, 10000.0));
+		TestTrue(TEXT("the strip follows the bend, not the chord"),
+			TaxiwayStrip::WorstIntrusion(*Net, BoxFrom(8900.0)).IsSet());
+		TestFalse(TEXT("and clears past it"), TaxiwayStrip::WorstIntrusion(*Net, BoxFrom(9100.0)).IsSet());
+	}
+
+	// NO STRIP: a service road (trucks), and a runway (its own rules - out of scope).
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadSegmentId Road = Lay(Net, URoadProfile::MakeServiceRoadTransient(), FVector2D::ZeroVector);
+		TestFalse(TEXT("a service road has no strip"), TaxiwayStrip::HasStrip(*Net, Road));
+		TestFalse(TEXT("so nothing beside it intrudes"), TaxiwayStrip::WorstIntrusion(*Net, BoxFrom(400.0)).IsSet());
+
+		URoadNetwork* RunwayNet = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* RunwayProfile = URoadProfile::MakeTransient(4600.0, 1600.0);
+		RunwayProfile->bContinuousThroughJunctions = true;   // IsRunwaySegment's own rule
+		const FRoadSegmentId Runway = Lay(RunwayNet, RunwayProfile, FVector2D::ZeroVector);
+		TestFalse(TEXT("a runway has no taxiway strip"), TaxiwayStrip::HasStrip(*RunwayNet, Runway));
+	}
+
+	// TWO TAXIWAYS: a 12 m B along Y=0 and a 26 m F along X=6000. A box 1 m inside B's strip
+	// and 10 m inside F's reports F - the deeper - so the readout names the one to fix first.
+	// B strip edge at 600 + 900 = 1500 in Y; F strip edge at 6000 - 1300 - 3450 = 1250 in X.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		Lay(Net, URoadProfile::MakeTransient(1200.0, 800.0), FVector2D::ZeroVector);
+		const FRoadNodeId S = Net->AddNode(FVector2D(6000.0, -10000.0));
+		const FRoadNodeId N = Net->AddNode(FVector2D(6000.0, 10000.0));
+		const FRoadSegmentId Wide = Net->AddSegment(S, N, FVector2D(6000.0, 0.0), URoadProfile::MakeTransient(2600.0, 1733.0));
+		const TArray<FVector2D> Box{ { -2000.0, 1400.0 }, { 2250.0, 1400.0 }, { 2250.0, 5400.0 }, { -2000.0, 5400.0 } };
+		const TOptional<TaxiwayStrip::FIntrusion> Worst = TaxiwayStrip::WorstIntrusion(*Net, Box);
+		if (TestTrue(TEXT("the box intrudes"), Worst.IsSet()))
+		{
+			TestTrue(TEXT("the deeper intrusion wins"), Worst->Taxiway == Wide);
+			TestEqual(TEXT("by 10 m"), Worst->Depth, 1000.0, 1.0);
+		}
+	}
 	return true;
 }
 

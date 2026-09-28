@@ -1,6 +1,7 @@
 #include "Tool/PlotGesture.h"
 
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GridSnap.h"
 #include "Solve/RoadGeom.h"
@@ -40,26 +41,10 @@ namespace PlotGesture
 
 	bool IsTaxiway(const URoadNetwork& Network, FRoadSegmentId Id)
 	{
-		const FRoadSegment* Segment = Network.GetSegment(Id);
-		if (Segment == nullptr || Segment->Profile == nullptr)
-		{
-			return false;
-		}
-
-		// BOTH HALVES, because either alone admits the wrong ground. An aircraft line alone
-		// would admit a mixed cross-section a truck also drives (a stand opening onto a
-		// service road is exactly what the stand tool refuses); no truck line alone would
-		// admit a profile with no lines at all, which nothing can taxi on.
-		bool bAircraft = false;
-		for (const FProfileGuideline& Guideline : Segment->Profile->Guidelines)
-		{
-			if (Guideline.Class == ETraversalClass::GroundVehicle)
-			{
-				return false;
-			}
-			bAircraft |= Guideline.Class == ETraversalClass::Aircraft;
-		}
-		return bAircraft;
+		// THE RULE LIVES IN Model/TaxiwayStrip (IsAircraftOnly) since 2026-09-28, so the strip
+		// query - which Model/ owns and cannot reach Tool/ for - asks the same question the
+		// stand tool anchors by. Its "BOTH HALVES" comment moved with it.
+		return TaxiwayStrip::IsAircraftOnly(Network, Id);
 	}
 
 	/**
