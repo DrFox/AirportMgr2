@@ -9,6 +9,8 @@
 class ARoadBuildController;
 class UAircraftType;
 class UButton;
+class UUiButton;
+class UUiButton;
 class ULandAircraftPanelWidget;
 class UTextBlock;
 class UUIStyle;
@@ -28,7 +30,7 @@ class ULandRowEntry : public UObject
 public:
 	UPROPERTY() TObjectPtr<UAircraftType> Type;
 	UPROPERTY() TWeakObjectPtr<ULandAircraftPanelWidget> Owner;
-	UPROPERTY() TObjectPtr<UButton> Button;
+	UPROPERTY() TObjectPtr<UUiButton> Button;
 
 	UFUNCTION() void HandleClick();
 };

@@ -13,6 +13,7 @@
 #include "Model/SimClock.h"
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
+#include "UI/UiRow.h"
 #include "UIStyle.h"
 
 #define LOCTEXT_NAMESPACE "Ledger"
@@ -188,7 +189,12 @@ UWidget* ULedgerPanelWidget::BuildRow(const UUIStyle& Style, const ULedgerRowVie
 	AddCell(Row.GetAmount(), AmountWidth, EUITextRole::Label,
 		Row.IsOutgoing() ? Style.Warning : Style.Positive, true);
 
-	return Line;
+	// A WELL PER ROW, so a column of numbers reads as rows on the window's Surface rather than
+	// text floating on it - the offer rows' surface, from the same UUiRow.
+	UUiRow* RowBox = WidgetTree->ConstructWidget<UUiRow>(UUiRow::StaticClass());
+	RowBox->Build(Style, FMargin(8.0f, 4.0f));
+	RowBox->SetContent(Line);
+	return RowBox;
 }
 
 int32 ULedgerPanelWidget::RowWidgetCountForTest() const

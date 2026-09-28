@@ -18,6 +18,7 @@
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/Selection.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 
 #if WITH_DEV_AUTOMATION_TESTS

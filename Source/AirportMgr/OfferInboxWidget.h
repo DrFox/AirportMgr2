@@ -8,6 +8,10 @@
 
 class ARoadNetworkActor;
 class UButton;
+class UUiButton;
+enum class EUiButtonKind : uint8;
+class UUiButton;
+enum class EUiButtonKind : uint8;
 class UListView;
 class UOfferInboxWidget;
 class UOfferInboxViewModel;
@@ -44,7 +48,7 @@ public:
 	UPROPERTY() TObjectPtr<UTextBlock> TypeText;
 	UPROPERTY() TObjectPtr<UTextBlock> EtaText;
 	UPROPERTY() TObjectPtr<UTextBlock> RefusalText;
-	UPROPERTY() TObjectPtr<UButton> AcceptButton;
+	UPROPERTY() TObjectPtr<UUiButton> AcceptButton;
 
 	UFUNCTION() void HandleAccept();
 	UFUNCTION() void HandleDecline();
@@ -109,6 +113,8 @@ public:
 	/** Paint from the viewmodel without a tick. A headless test never paints, so NativeTick
 	 *  never runs - the same seam UInspectorWidget's test uses. */
 	void PaintRowsForTest() { PaintRows(); }
+	/** Row N's Accept button, or null - see AirportMgr.UI.OfferInbox's Primary-kind assertion. */
+	const UUiButton* AcceptButtonForTest(int32 Row) const;
 
 	/** Runs NativeTick with a throwaway geometry - the same precedent as
 	 *  UBuildBarWidget::NativeTickForTest - so a headless test can prove an idle tick resolves
@@ -136,8 +142,8 @@ private:
 	UWidget* BuildRow(const class UUIStyle& Style, UOfferRowEntry& Entry, int32 Index);
 
 	/** A rounded Accept or Decline. See its body for why the ROUNDING goes on the style. */
-	UButton* MakeAnswerButton(const class UUIStyle& Style, const TCHAR* Name, const FText& Label,
-		const FLinearColor& Fill, const FLinearColor& Ink, int32 Index);
+	UUiButton* MakeAnswerButton(const class UUIStyle& Style, const TCHAR* Name, const FText& Label,
+		EUiButtonKind Kind, int32 Index);
 	UPROPERTY() TArray<TObjectPtr<UOfferRowEntry>> Entries;
 
 	void EnsureSlots(const UUIStyle* Style);

@@ -19,6 +19,7 @@
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogInspector, Log, All);
@@ -86,17 +87,13 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 
 	// LABEL FROM Action.Label, KEY IN THE TOOLTIP - the bar's own convention
 	// (UBuildBarWidget::BuildButtons), so a verb reads the same wherever it appears.
-	auto Button = [&](TObjectPtr<UButton>& Field, const TCHAR* Name, int32 ActionIndex, TObjectPtr<UTextBlock>* OutLabel)
+	auto Button = [&](TObjectPtr<UUiButton>& Field, const TCHAR* Name, int32 ActionIndex)
 	{
 		if (Field != nullptr || !Actions.IsValidIndex(ActionIndex)) { return; }
 		const FBuildAction& Action = Actions[ActionIndex];
-		Field = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), Name);
-		UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-		Label->SetText(Action.Label);
-		Style->ApplyText(*Label, EUITextRole::Label, Style->Ink);
-		Field->SetContent(Label);
-		Field->SetBackgroundColor(Style->Control);
-		if (OutLabel != nullptr) { *OutLabel = Label; }
+		Field = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), Name);
+		Field->SetLabel(Action.Label);
+		Field->Build(*Style, EUiButtonKind::Secondary);
 		if (Action.Key.IsValid())
 		{
 			Field->SetToolTipText(FText::FromString(FString::Printf(TEXT("%s  (%s%s)"),
@@ -109,10 +106,10 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		}
 		if (Row != nullptr) { Row->AddChildToHorizontalBox(Field)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f)); }
 	};
-	// DepartLabel is HELD, not re-found: Refresh recolours it every tick when Depart's
-	// enabled state changes, and UBuildBarEntry holds its own Label for the same reason.
-	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex, &DepartLabel);
-	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex, nullptr);
+	// The caption lives in the button (UUiButton::GetLabel): Refresh recolours it through
+	// SetState, and ShowFollowing retitles it, without either holding a second pointer.
+	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex);
+	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex);
 }
 
 void UInspectorWidget::DockAbove(UBuildBarWidget* Bar)
@@ -169,9 +166,9 @@ void UInspectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 
 void UInspectorWidget::ShowFollowing(bool bFollowing)
 {
-	// FOUND THROUGH THE BUTTON, not held: EnsureSlots builds the caption as the button's only
-	// content, and a Blueprint whose Follow button holds something else simply keeps its own.
-	UTextBlock* Caption = FollowButton != nullptr ? Cast<UTextBlock>(FollowButton->GetContent()) : nullptr;
+	// FOUND THROUGH THE BUTTON, not held: UUiButton owns its caption, and a button built with
+	// no label (a Blueprint's) simply has none to retitle.
+	UTextBlock* Caption = FollowButton != nullptr ? FollowButton->GetLabel() : nullptr;
 	const TConstArrayView<FBuildAction> Actions = BuildActions();
 	if (Caption == nullptr || !Actions.IsValidIndex(FollowActionIndex))
 	{
@@ -192,7 +189,7 @@ void UInspectorWidget::ShowFollowing(bool bFollowing)
 
 FString UInspectorWidget::FollowCaptionForTest() const
 {
-	const UTextBlock* Caption = FollowButton != nullptr ? Cast<UTextBlock>(FollowButton->GetContent()) : nullptr;
+	const UTextBlock* Caption = FollowButton != nullptr ? FollowButton->GetLabel() : nullptr;
 	return Caption != nullptr ? Caption->GetText().ToString() : FString();
 }
 
@@ -393,22 +390,13 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	}
 	if (DepartButton != nullptr)
 	{
-		// PanelStyle is the base class's (issue #187) - never null once BuildOnce has run.
-		const UUIStyle* Style = PanelStyle != nullptr ? PanelStyle.Get() : UAirportMgrUISettings::ResolveStyle();
 		DepartButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-		DepartButton->SetIsEnabled(bDepartEnabled);
 
-		// THE BAR'S OWN RULE (UBuildBarWidget::RefreshState): the BUTTON stays Style->Control
-		// always: disabled dims a button by darkening it under Button, never by brightening
-		// it, and TextMuted is a LABEL slot (it is lighter than Button on purpose, for text
-		// over a dark ground) - painting a disabled background with it made Depart look
-		// MORE prominent while taxiing than while parked, backwards from the intent. Only the
-		// CAPTION follows enabled state, exactly as the bar's icon/label content does.
-		DepartButton->SetBackgroundColor(Style->Control);
-		if (DepartLabel != nullptr)
-		{
-			DepartLabel->SetColorAndOpacity(FSlateColor(bDepartEnabled ? Style->Ink : Style->InkMuted));
-		}
+		// THE BAR'S OWN RULE, now UUiButton::LookFor: the BUTTON stays Control always - disabled
+		// dims a button by its ink, never by brightening the fill. Painting a disabled background
+		// with the muted LABEL slot made Depart look MORE prominent while taxiing than while
+		// parked, backwards from the intent. Only the CAPTION follows enabled state.
+		DepartButton->SetState(bDepartEnabled, false);
 	}
 	if (FollowButton != nullptr)
 	{
@@ -444,5 +432,6 @@ bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }
 FString UInspectorWidget::TitleForTest() const { return TitleText != nullptr ? TitleText->GetText().ToString() : FString(); }
 FLinearColor UInspectorWidget::DepartLabelColourForTest() const
 {
-	return DepartLabel != nullptr ? DepartLabel->GetColorAndOpacity().GetSpecifiedColor() : FLinearColor::Black;
+	const UTextBlock* Caption = DepartButton != nullptr ? DepartButton->GetLabel() : nullptr;
+	return Caption != nullptr ? Caption->GetColorAndOpacity().GetSpecifiedColor() : FLinearColor::Black;
 }

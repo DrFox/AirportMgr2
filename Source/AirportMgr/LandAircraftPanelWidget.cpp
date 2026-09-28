@@ -12,6 +12,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
 #include "RoadBuildLog.h"
+#include "UI/UiButton.h"
 #include "Styling/SlateBrush.h"
 #include "UIStyle.h"
 
@@ -127,42 +128,22 @@ void ULandAircraftPanelWidget::PaintRows(const TArray<FLandChoice>& Choices)
 		Entry->Type = Choice.Type;
 		Entry->Owner = this;
 
-		UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
-		// Rounded, white brushes tinted by SetBackgroundColor - UOfferInboxWidget::
-		// MakeAnswerButton's recipe and its reason.
-		FButtonStyle ButtonStyle = Button->GetStyle();
-		const FSlateRoundedBoxBrush Rounded(FLinearColor::White, Style.ControlRadius);
-		ButtonStyle.SetNormal(Rounded);
-		ButtonStyle.SetHovered(Rounded);
-		ButtonStyle.SetPressed(Rounded);
-		ButtonStyle.SetDisabled(Rounded);
-		ButtonStyle.SetNormalPadding(Style.ButtonPadding);
-		ButtonStyle.SetPressedPadding(Style.ButtonPadding);
-		Button->SetStyle(ButtonStyle);
-		Button->SetBackgroundColor(Style.Control);   // a refused row dims its INK (below), never its fill
-		// DISABLED, not merely tinted: a greyed row is a click the arrival would refuse, so
-		// it must not be clickable at all.
-		Button->SetIsEnabled(Choice.bAdmitted);
-		Button->OnClicked.AddDynamic(Entry, &ULandRowEntry::HandleClick);
-		Entry->Button = Button;
-
-		UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-		UTextBlock* Name = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-		Name->SetText(Choice.Label);
-		Style.ApplyText(*Name, EUITextRole::Label, Choice.bAdmitted ? Style.Ink : Style.InkMuted);
-		USizeBox* NameBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
-		NameBox->SetWidthOverride(NameWidth);
-		NameBox->SetContent(Name);
-		Line->AddChildToHorizontalBox(NameBox);
-
+		UUiButton* Button = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
+		// The airframe's name at a fixed width, then why it would be refused - so the names line
+		// up in a column. UUiButton::Build carries the rounded-white recipe
+		// UOfferInboxWidget::MakeAnswerButton used to type by hand.
+		Button->SetLabel(Choice.Label);
+		Button->SetLabelMinWidth(NameWidth);
 		if (!Choice.Refusal.IsEmpty())
 		{
-			UTextBlock* Why = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-			Why->SetText(FText::FromString(Choice.Refusal));
-			Style.ApplyText(*Why, EUITextRole::Label, Style.InkMuted);
-			Line->AddChildToHorizontalBox(Why);
+			Button->SetDetail(FText::FromString(Choice.Refusal));
 		}
-		Button->AddChild(Line);
+		Button->Build(Style, EUiButtonKind::Secondary);
+		// DISABLED, not merely tinted: a greyed row is a click the arrival would refuse, so
+		// it must not be clickable at all. SetState both disables and dims its ink.
+		Button->SetState(Choice.bAdmitted, false);
+		Button->OnClicked.AddDynamic(Entry, &ULandRowEntry::HandleClick);
+		Entry->Button = Button;
 
 		UVerticalBoxSlot* RowSlot = RowColumn->AddChildToVerticalBox(Button);
 		RowSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 2.0f));

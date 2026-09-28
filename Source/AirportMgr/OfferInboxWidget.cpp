@@ -22,6 +22,10 @@
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "UI/UiButton.h"
+#include "UI/UiRow.h"
+#include "UI/UiButton.h"
+#include "UI/UiRow.h"
 #include "UIStyle.h"
 
 // Its own category, and its own NAME: the module is a unity build, and two
@@ -230,25 +234,24 @@ void UOfferInboxWidget::PaintRows()
 		{
 			// DISABLED, not hidden: the player needs to see the offer and the reason it
 			// cannot be taken, which is what tells them to build another stand.
-			Entry->AcceptButton->SetIsEnabled(Row->IsAcceptable());
-
+			//
 			// ACCEPT IS THE ONE THING ON THIS CARD THAT TAKES ACCENT. The bar spends that
 			// colour on the armed tool and nothing else; here it is the affirmative verb,
-			// and the two never share a screen region.
-			Entry->AcceptButton->SetBackgroundColor(Row->IsAcceptable() ? Style->Accent : Style->Control);
+			// and the two never share a screen region. The Primary KIND carries that now, and
+			// UUiButton::LookFor dims a disabled Primary to Control rather than leave it shouting.
+			Entry->AcceptButton->SetState(Row->IsAcceptable(), false);
 		}
 	}
 }
 
 UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entry, int32 Index)
 {
-	// ONE CARD PER OFFER, Well over the inbox's Surface ground, so a row reads as a thing
-	// that can be answered rather than as a line of text. Rounded from the style's own
-	// ControlRadius (CornerRadius once sat in the asset unread while everything drew square).
-	UBorder* Card = WidgetTree->ConstructWidget<UBorder>(
-		UBorder::StaticClass(), *FString::Printf(TEXT("OfferCard%d"), Index));
-	Card->SetBrush(FSlateRoundedBoxBrush(Style.Well, Style.ControlRadius));
-	Card->SetPadding(FMargin(10.0f, 8.0f));
+	// ONE ROW PER OFFER, a Well on the window's Surface, so it reads as a thing that can be
+	// answered rather than as a line of text - UUiRow owns that choice now (CornerRadius once
+	// sat in the asset unread while everything drew square).
+	UUiRow* Card = WidgetTree->ConstructWidget<UUiRow>(
+		UUiRow::StaticClass(), *FString::Printf(TEXT("OfferCard%d"), Index));
+	Card->Build(Style, FMargin(10.0f, 8.0f));
 
 	UVerticalBox* Lines = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 	Card->SetContent(Lines);
@@ -293,12 +296,12 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	PushSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
 	Entry.AcceptButton = MakeAnswerButton(Style, TEXT("Accept"),
-		NSLOCTEXT("AirportMgr", "OfferAccept", "Accept"), Style.Accent, Style.InkOnAccent, Index);
+		NSLOCTEXT("AirportMgr", "OfferAccept", "Accept"), EUiButtonKind::Primary, Index);
 	Entry.AcceptButton->OnClicked.AddDynamic(&Entry, &UOfferRowEntry::HandleAccept);
 	Answers->AddChildToHorizontalBox(Entry.AcceptButton)->SetPadding(FMargin(0.0f, 0.0f, 6.0f, 0.0f));
 
-	UButton* DeclineButton = MakeAnswerButton(Style, TEXT("Decline"),
-		NSLOCTEXT("AirportMgr", "OfferDecline", "Decline"), Style.Control, Style.Ink, Index);
+	UUiButton* DeclineButton = MakeAnswerButton(Style, TEXT("Decline"),
+		NSLOCTEXT("AirportMgr", "OfferDecline", "Decline"), EUiButtonKind::Secondary, Index);
 	DeclineButton->OnClicked.AddDynamic(&Entry, &UOfferRowEntry::HandleDecline);
 	Answers->AddChildToHorizontalBox(DeclineButton);
 
@@ -306,34 +309,24 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	return Card;
 }
 
-UButton* UOfferInboxWidget::MakeAnswerButton(const UUIStyle& Style, const TCHAR* Name,
-	const FText& Label, const FLinearColor& Fill, const FLinearColor& Ink, int32 Index)
+UUiButton* UOfferInboxWidget::MakeAnswerButton(const UUIStyle& Style, const TCHAR* Name,
+	const FText& Label, EUiButtonKind Kind, int32 Index)
 {
-	UButton* Button = WidgetTree->ConstructWidget<UButton>(
-		UButton::StaticClass(), *FString::Printf(TEXT("Offer%s%d"), Name, Index));
+	UUiButton* Button = WidgetTree->ConstructWidget<UUiButton>(
+		UUiButton::StaticClass(), *FString::Printf(TEXT("Offer%s%d"), Name, Index));
 
-	// ROUNDED THROUGH THE BUTTON STYLE, not through a background tint. UButton draws its own
-	// FButtonStyle brushes, so SetBrush on the widget is ignored and SetBackgroundColor only
-	// tints whichever brush the style already has - which was the engine's flat default box,
-	// and is why these read as stock editor buttons. The brushes are left WHITE so that
-	// SetBackgroundColor stays the one place a state colour is chosen, as the repaint does.
-	FButtonStyle ButtonStyle = Button->GetStyle();
-	const FSlateRoundedBoxBrush Rounded(FLinearColor::White, Style.ControlRadius);
-	ButtonStyle.SetNormal(Rounded);
-	ButtonStyle.SetHovered(Rounded);
-	ButtonStyle.SetPressed(Rounded);
-	ButtonStyle.SetDisabled(Rounded);
-	// UUIStyle::ButtonPadding, not a literal here: see its own comment (issue #192).
-	ButtonStyle.SetNormalPadding(Style.ButtonPadding);
-	ButtonStyle.SetPressedPadding(Style.ButtonPadding);
-	Button->SetStyle(ButtonStyle);
-	Button->SetBackgroundColor(Fill);
-
-	UTextBlock* Text = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Text->SetText(Label);
-	Style.ApplyText(*Text, EUITextRole::Label, Ink);
-	Button->AddChild(Text);
+	// ROUNDED THROUGH THE BUTTON STYLE, not through a background tint: UButton draws its own
+	// FButtonStyle brushes, which were the engine's flat default box and read as stock editor
+	// buttons. That recipe (white brushes, ButtonPadding - issue #192) lives in UUiButton::Build
+	// now, and the kind picks the state colour through UUiButton::LookFor.
+	Button->SetLabel(Label);
+	Button->Build(Style, Kind);
 	return Button;
+}
+
+const UUiButton* UOfferInboxWidget::AcceptButtonForTest(int32 Row) const
+{
+	return Entries.IsValidIndex(Row) && Entries[Row] != nullptr ? Entries[Row]->AcceptButton.Get() : nullptr;
 }
 
 int32 UOfferInboxWidget::RowWidgetCountForTest() const

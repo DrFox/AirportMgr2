@@ -10,6 +10,7 @@ class ARoadBuildController;
 class ARoadNetworkActor;
 class UBuildBarWidget;
 class UButton;
+class UUiButton;
 class UTextBlock;
 class UUIStyle;
 struct FAgentFacts;
@@ -97,8 +98,8 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TitleText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> FactsText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> StatusText;
-	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> DepartButton;
-	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> FollowButton;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> DepartButton;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> FollowButton;
 
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double PanelWidth = 300.0;
 
@@ -154,7 +155,7 @@ public:
 	bool IsDepartEnabledForTest() const;
 	FString TitleForTest() const;
 	/** Depart's CAPTION colour - the thing that must actually change with enabled state.
-	 *  See Refresh: the button's own background stays Style->Control always. */
+	 *  See Refresh: the button's own background stays Style->Control always (UUiButton::LookFor). */
 	FLinearColor DepartLabelColourForTest() const;
 	/** How many times Refresh actually called SetText on one of its three fields, as opposed
 	 *  to how many times it was asked - the seam issue #187's gate is measured through: an
@@ -188,9 +189,6 @@ private:
 	int32 DepartActionIndex = INDEX_NONE;
 	int32 FollowActionIndex = INDEX_NONE;
 
-	/** DepartButton's own caption, held so Refresh can recolour it without re-finding it
-	 *  through GetContent() every tick - the same reason UBuildBarEntry holds its Label. */
-	UPROPERTY() TObjectPtr<UTextBlock> DepartLabel;
 
 	/**
 	 * What Title/Facts/Status last actually SET, so a repeat with nothing changed - the

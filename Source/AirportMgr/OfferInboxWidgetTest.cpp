@@ -13,6 +13,7 @@
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestWorld.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -146,6 +147,14 @@ bool FOfferInboxIdleTickResolvesNoStyleTest::RunTest(const FString& Parameters)
 
 	// First paint builds the row - a real cost, not what this test measures.
 	Widget->PaintRowsForTest();
+
+	// ACCEPT IS A PRIMARY UUiButton: the kind carries "affirmative", LookFor carries the colour
+	// - so a row whose Accept went back to a hand-painted UButton fails here, at the composition.
+	const UUiButton* Accept = Widget->AcceptButtonForTest(0);
+	if (TestNotNull(TEXT("row 0 has an Accept UUiButton"), Accept))
+	{
+		TestEqual(TEXT("Accept is Primary"), Accept->GetKind(), EUiButtonKind::Primary);
+	}
 
 	const int32 Before = UAirportMgrUISettings::ResolveCallCountForTest();
 	for (int32 Tick = 0; Tick < 10; ++Tick)
