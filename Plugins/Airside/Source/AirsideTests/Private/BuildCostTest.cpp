@@ -133,6 +133,50 @@ bool FBuildCostTarmacPricesUnchangedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * EVERY PROFILE THE CONTENT SET OFFERS IS PRICED, AT ONE RATE PER LIST (2026-09-28).
+ *
+ * The Standard and Wide road tiers shipped at CostPerMetre 0 for four days: build_cost_rates.py
+ * priced a typed list of assets, and the two new tiers were never added to it. It now walks the
+ * content set's lists; this is what goes red if a profile in one of them is unpriced, or priced
+ * at a rate per square metre other than its siblings' - a wider tier must cost more per metre
+ * in proportion to its pavement, which is the property the script's docstring defends.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryProfileIsPricedTest,
+	"Airside.Content.EveryProfileIsPriced",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryProfileIsPricedTest::RunTest(const FString& Parameters)
+{
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (!TestNotNull(TEXT("the content set loads"), Content)) { return false; }
+
+	const TPair<const TCHAR*, const TArray<TSoftObjectPtr<URoadProfile>>*> Lists[] = {
+		{ TEXT("taxiway"), &Content->TaxiwayProfiles },
+		{ TEXT("runway"), &Content->RunwayProfiles },
+		{ TEXT("service road"), &Content->ServiceRoadProfiles },
+	};
+	for (const auto& [Kind, List] : Lists)
+	{
+		if (!TestTrue(FString::Printf(TEXT("the content set offers %s profiles"), Kind), List->Num() > 0)) { continue; }
+		double FirstRate = -1.0;
+		for (int32 Index = 0; Index < List->Num(); ++Index)
+		{
+			const URoadProfile* Profile = (*List)[Index].LoadSynchronous();
+			if (!TestNotNull(FString::Printf(TEXT("%s %d loads"), Kind, Index), Profile)) { continue; }
+			TestTrue(FString::Printf(TEXT("%s %d costs something to lay"), Kind, Index), Profile->CostPerMetre > 0.0);
+			TestTrue(FString::Printf(TEXT("%s %d costs something to keep"), Kind, Index), Profile->UpkeepPerMetrePerDay > 0.0);
+
+			const double Rate = Profile->CostPerMetre / (Profile->GetTotalWidth() / 100.0);
+			if (FirstRate < 0.0) { FirstRate = Rate; }
+			TestEqual(FString::Printf(TEXT("%s %d is priced at its list's rate per square metre"), Kind, Index),
+				Rate, FirstRate, 1e-6);
+		}
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FBuildCostQuoteIsItsLinesTest,
 	"Airside.Build.BuildCostQuoteIsItsLines",

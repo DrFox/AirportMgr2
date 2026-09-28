@@ -35,19 +35,32 @@ UPKEEP_FRACTION = 0.001
 
 UU_PER_METRE = 100.0
 
-PROFILES = [
-    ("/Game/DA_RoadProfile_Taxiway_B", TAXIWAY_RATE),
-    ("/Game/DA_RoadProfile_Taxiway_C", TAXIWAY_RATE),
-    ("/Game/DA_RoadProfile_Taxiway_D", TAXIWAY_RATE),
-    ("/Game/DA_RoadProfile_Taxiway_E", TAXIWAY_RATE),
-    ("/Game/DA_RoadProfile_Taxiway_F", TAXIWAY_RATE),
-    ("/Game/DA_RoadProfile_ServiceRoad", SERVICE_ROAD_RATE),
-    ("/Game/DA_Runway_20m", RUNWAY_RATE),
-    ("/Game/DA_Runway_26m", RUNWAY_RATE),
-    ("/Game/DA_Runway_30m", RUNWAY_RATE),
-    ("/Game/DA_Runway_46m", RUNWAY_RATE),
-    ("/Game/DA_Runway_60m", RUNWAY_RATE),
+# WHICH PROFILES ARE PRICED IS THE CONTENT SET'S, not a list here (2026-09-28). This was a
+# typed list of eleven asset paths, and when the road tiers went from one to three
+# (build_road_profiles.py, 2026-09-24) the Standard and Wide tiers were never added to it -
+# so both shipped free while every test stayed green. The content set's lists are what the
+# tools offer a player, so they are what must carry a price.
+# ENFORCED BY: Airside.Content.EveryProfileIsPriced.
+CONTENT_SET = "/Game/DA_AirsideContent"
+PROFILE_LISTS = [
+    ("taxiway_profiles", TAXIWAY_RATE),
+    ("runway_profiles", RUNWAY_RATE),
+    ("service_road_profiles", SERVICE_ROAD_RATE),
 ]
+
+
+def shipped_profiles():
+    """(path, rate per square metre) for every profile the content set offers."""
+    content = unreal.EditorAssetLibrary.load_asset(CONTENT_SET)
+    if content is None:
+        fail("%s not found - nothing to price" % CONTENT_SET)
+        return []
+    out = []
+    for prop, rate in PROFILE_LISTS:
+        for soft in content.get_editor_property(prop):
+            # "/Game/X.X" - load_asset takes the package path, before the dot.
+            out.append((soft.get_path_name().split(".")[0], rate))
+    return out
 
 # What placing one costs. A stand and a depot are single objects rather than lengths, so
 # these are authored directly - there is no width to derive them from.
@@ -81,7 +94,7 @@ def total_width_uu(profile):
 def main():
     priced = 0
 
-    for path, rate_per_square_metre in PROFILES:
+    for path, rate_per_square_metre in shipped_profiles():
         profile = unreal.EditorAssetLibrary.load_asset(path)
         if profile is None:
             fail("%s does not exist - author the profiles first" % path)
