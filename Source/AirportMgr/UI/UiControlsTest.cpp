@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Testing/AirsideTestWorld.h"
+#include "UI/UiSlider.h"
 #include "UI/UiToggle.h"
 #include "UIStyle.h"
 
@@ -30,6 +31,35 @@ bool FUiToggleTest::RunTest(const FString& Parameters)
 	T->HandleClicked();
 	TestFalse(TEXT("the player's click flips it"), T->IsOn());
 	TestEqual(TEXT("and raises the event once"), T->BroadcastCountForTest(), 1);
+	return true;
+}
+
+/**
+ * A SLIDER LANDS ON ITS STEP AND STAYS IN RANGE - a drag to 1.37 on a 0.05 step reads 1.35, a
+ * saved 3.0 on a 0.75..1.5 range reads 1.5, and the readout shows what the value IS, not what
+ * the mouse was near (Review Focus 2, 3). Code setting it raises nothing (Focus 1).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiSliderTest, "AirportMgr.UI.Controls.Slider",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiSliderTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	const UUIStyle& S = *GetDefault<UUIStyle>();
+	UUiSlider* Sl = CreateWidget<UUiSlider>(TestWorld.World, UUiSlider::StaticClass());
+	if (!TestNotNull(TEXT("a slider"), Sl)) { return false; }
+	Sl->Build(S, 0.75f, 1.5f, 0.05f, 2, FText::FromString(TEXT("x")));
+	Sl->SetValue(1.37f);
+	TestTrue(TEXT("quantised to the step"), FMath::IsNearlyEqual(Sl->GetValue(), 1.35f, 1e-4f));
+	TestEqual(TEXT("the readout shows the quantised value"), Sl->ReadoutForTest(), FString(TEXT("1.35x")));
+	Sl->SetValue(3.0f);
+	TestTrue(TEXT("clamped to the maximum"), FMath::IsNearlyEqual(Sl->GetValue(), 1.5f, 1e-4f));
+	Sl->SetValue(0.7499999f);
+	TestTrue(TEXT("a float that is nearly on a step lands on it"), FMath::IsNearlyEqual(Sl->GetValue(), 0.75f, 1e-4f));
+	TestEqual(TEXT("code setting it raises nothing"), Sl->BroadcastCountForTest(), 0);
+	Sl->HandleSliderMoved(1.02f);
+	TestTrue(TEXT("the player's drag quantises too"), FMath::IsNearlyEqual(Sl->GetValue(), 1.0f, 1e-4f));
+	TestEqual(TEXT("and raises the event once"), Sl->BroadcastCountForTest(), 1);
 	return true;
 }
 
