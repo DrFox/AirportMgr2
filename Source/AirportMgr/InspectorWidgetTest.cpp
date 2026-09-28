@@ -1,3 +1,4 @@
+#include "UI/UiWindowHost.h"
 #include "CoreMinimal.h"
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
@@ -330,8 +331,67 @@ bool FInspectorSubKnotSpeedChangeRecomposesTest::RunTest(const FString& Paramete
 	return true;
 }
 
-// AirportMgr.Inspector.DocksAboveTheBar moved to WindowDocksAboveTheBar below, when the dock
-// moved into UUiWindowHost (UI library step 2).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorWindowDocksAboveTheBarTest,
+	"AirportMgr.Inspector.WindowDocksAboveTheBar",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorWindowDocksAboveTheBarTest::RunTest(const FString& Parameters)
+{
+	// THE WINDOW NEVER COVERS THE BAR, however tall the bar grows (2026-09-27: the card sat a
+	// fixed 72 uu above the screen's bottom while the bar was 118 uu tall). Through the HUD
+	// layer's own wiring, not a hand-called DockAbove, so an unwired seam goes red here. Moved
+	// from AirportMgr.Inspector.DocksAboveTheBar when the dock moved into UUiWindowHost.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHudForTest()))
+	{
+		return false;
+	}
+	// A headless controller has no local player, so BeginPlay never created the HUD's widgets;
+	// they are put where CreateAll would have put them, then CreateAll's own last step runs.
+	UBuildHudLayer* Hud = C->GetHudForTest();
+	Hud->BuildBar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	Hud->Inspector = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
+	if (!TestNotNull(TEXT("bar"), Hud->BuildBar.Get()) || !TestNotNull(TEXT("inspector"), Hud->Inspector.Get())
+		|| !TestNotNull(TEXT("host"), Hud->WindowHost.Get())) { return false; }
+	Hud->WireWindows();
+	TestTrue(TEXT("the HUD docks the host on ITS bar"), Hud->WindowHost->DockedBarForTest() == Hud->BuildBar);
+	TestNotNull(TEXT("and hosts the inspector"), Hud->WindowHost->WindowForTest(TEXT("inspector")));
+
+	UBuildBarWidget& Bar = *Hud->BuildBar;
+	UUiWindowHost& Host = *Hud->WindowHost;
+	const double Gap = Hud->Inspector->BarGap;
+	const float Wide = static_cast<float>(Bar.SectionRowSizeForTest(6000.0f).X);
+	if (!TestTrue(TEXT("the bar's row measures to a real width"), Wide > 100.0f)) { return false; }
+
+	const float OneLine = Bar.BarReservedHeightForTest(Wide * 1.1f);
+	Host.TickForTest(0.016f);
+	TestEqual(TEXT("the window's bottom sits BarGap above the bar's top edge"),
+		Host.WindowClearanceForTest(TEXT("inspector")), static_cast<double>(OneLine) + Gap, 0.5);
+
+	const float TwoLines = Bar.BarReservedHeightForTest(Wide * 0.66f);
+	if (!TestTrue(TEXT("the wrapped bar is taller - otherwise this proves nothing"), TwoLines > OneLine + 10.0f)) { return false; }
+	Host.TickForTest(0.016f);
+	TestEqual(TEXT("the window rises with a growing bar"),
+		Host.WindowClearanceForTest(TEXT("inspector")), static_cast<double>(TwoLines) + Gap, 0.5);
+
+	Bar.BarReservedHeightForTest(Wide * 1.1f);
+	Host.TickForTest(0.016f);
+	TestEqual(TEXT("and comes back down when the bar shrinks"),
+		Host.WindowClearanceForTest(TEXT("inspector")), static_cast<double>(OneLine) + Gap, 0.5);
+
+	// ONCE THE PLAYER MOVES IT, IT STAYS: docking would yank a placed window back over the bar.
+	Host.MoveWindow(TEXT("inspector"), FVector2D(400.0, 300.0));
+	const FBox2D Placed = Host.WindowRect(TEXT("inspector"));
+	Bar.BarReservedHeightForTest(Wide * 0.66f);
+	Host.TickForTest(0.016f);
+	TestEqual(TEXT("a placed window does not follow the bar"), Host.WindowRect(TEXT("inspector")).Min, Placed.Min);
+	return true;
+}
+
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FInspectorFollowSaysUnfollowTest,

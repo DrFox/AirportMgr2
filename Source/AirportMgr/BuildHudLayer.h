@@ -9,6 +9,7 @@ class UOfferInboxWidget;
 class ULedgerPanelWidget;
 class ULandAircraftPanelWidget;
 class UToastStackWidget;
+class UUiWindowHost;
 class APlayerController;
 
 /**
@@ -86,26 +87,30 @@ public:
 	UPROPERTY(Transient)
 	TObjectPtr<UToastStackWidget> ToastStack;
 
+	/** Every floating panel's window, on one canvas at Z 1 - see UUiWindowHost. */
+	UPROPERTY(Transient)
+	TObjectPtr<UUiWindowHost> WindowHost;
+
 	/**
-	 * Creates all four onto Owner's viewport, at the fixed Z-orders they have always used:
-	 * bar 0; inspector and inbox both 1 (the inbox never overlaps the inspector - it anchors
-	 * top-right); toast stack 2, above both - a toast covered by anything else is one the
-	 * player never saw, which is the defect this whole surface exists to fix. The inspector
-	 * no longer overlaps the bar at all: see WireDocking.
+	 * Creates them all, at the fixed Z-orders they have always used: bar 0; the window host 1,
+	 * holding the inspector, inbox, ledger and Land panel as windows; toast stack 2, above all -
+	 * a toast covered by anything else is one the player never saw, which is the defect this
+	 * whole surface exists to fix. No window overlaps the bar: see WireWindows.
 	 */
 	void CreateAll(APlayerController& Owner);
 
 	/**
-	 * Docks the inspector above the bar (UInspectorWidget::DockAbove) - the one relationship
-	 * between two of these widgets. Split from CreateAll so a headless test, which cannot add
-	 * widgets to a viewport, can put the widgets in place and prove the wiring.
+	 * Hands each floating panel to the window host and docks the host above the bar - the
+	 * relationships between these widgets. Split from CreateAll so a headless test, which cannot
+	 * add widgets to a viewport, can put the widgets in place and prove the wiring.
 	 */
-	void WireDocking();
+	void WireWindows();
 
 private:
 	/**
 	 * ConfiguredClass if set, else T's own C++ class; makes the widget, adds it to Owner's
-	 * viewport at ZOrder, and logs which class it used. The one recipe all four widgets
+	 * viewport at ZOrder (INDEX_NONE: not added - the window host takes it), and logs which
+	 * class it used. The one recipe all four widgets
 	 * follow now, rather than four hand-written copies of it.
 	 */
 	template<class T>

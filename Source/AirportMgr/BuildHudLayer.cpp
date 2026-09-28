@@ -9,6 +9,7 @@
 #include "OfferInboxWidget.h"
 #include "RoadBuildLog.h"
 #include "ToastStackWidget.h"
+#include "UI/UiWindowHost.h"
 
 template<class T>
 T* UBuildHudLayer::CreateConfiguredWidget(APlayerController& Owner, TSubclassOf<T> ConfiguredClass,
@@ -19,7 +20,10 @@ T* UBuildHudLayer::CreateConfiguredWidget(APlayerController& Owner, TSubclassOf<
 	T* Widget = CreateWidget<T>(&Owner, WidgetClass);
 	if (Widget != nullptr)
 	{
-		Widget->AddToViewport(ZOrder);
+		if (ZOrder != INDEX_NONE)
+		{
+			Widget->AddToViewport(ZOrder);
+		}
 		UE_LOG(LogRoadBuild, Log, TEXT("%s: %s"), DisplayName,
 			ConfiguredClass != nullptr ? *ConfiguredClass->GetName()
 				: *FString::Printf(TEXT("code-only (no %s configured)"), PropertyName));
@@ -31,20 +35,37 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 {
 	BuildBar = CreateConfiguredWidget<UBuildBarWidget>(Owner, BuildBarClass, 0,
 		TEXT("Build bar"), TEXT("BuildBarClass"));
-	Inspector = CreateConfiguredWidget<UInspectorWidget>(Owner, InspectorClass, 1,
+	WindowHost = CreateWidget<UUiWindowHost>(&Owner, UUiWindowHost::StaticClass());
+	if (WindowHost != nullptr)
+	{
+		WindowHost->AddToViewport(1);
+	}
+	// INDEX_NONE: not added to the viewport - WireWindows hands each to the window host.
+	Inspector = CreateConfiguredWidget<UInspectorWidget>(Owner, InspectorClass, INDEX_NONE,
 		TEXT("Inspector"), TEXT("InspectorClass"));
-	OfferInbox = CreateConfiguredWidget<UOfferInboxWidget>(Owner, OfferInboxClass, 1,
+	OfferInbox = CreateConfiguredWidget<UOfferInboxWidget>(Owner, OfferInboxClass, INDEX_NONE,
 		TEXT("Offer inbox"), TEXT("OfferInboxClass"));
-	LedgerPanel = CreateConfiguredWidget<ULedgerPanelWidget>(Owner, LedgerPanelClass, 1,
+	LedgerPanel = CreateConfiguredWidget<ULedgerPanelWidget>(Owner, LedgerPanelClass, INDEX_NONE,
 		TEXT("Ledger panel"), TEXT("LedgerPanelClass"));
-	LandPanel = CreateConfiguredWidget<ULandAircraftPanelWidget>(Owner, LandPanelClass, 1,
+	LandPanel = CreateConfiguredWidget<ULandAircraftPanelWidget>(Owner, LandPanelClass, INDEX_NONE,
 		TEXT("Land panel"), TEXT("LandPanelClass"));
 	ToastStack = CreateConfiguredWidget<UToastStackWidget>(Owner, ToastStackClass, 2,
 		TEXT("Toast stack"), TEXT("ToastStackClass"));
-	WireDocking();
+	WireWindows();
 }
 
-void UBuildHudLayer::WireDocking()
+void UBuildHudLayer::WireWindows()
 {
-	// The inspector's dock above the bar is the window host's now - Task 7 wires it here.
+	if (WindowHost == nullptr)
+	{
+		return;
+	}
+	for (UAirportMgrPanelWidget* Panel : TArray<UAirportMgrPanelWidget*>{ Inspector, OfferInbox, LedgerPanel, LandPanel })
+	{
+		if (Panel != nullptr)
+		{
+			WindowHost->AddWindow(*Panel);
+		}
+	}
+	WindowHost->DockAbove(BuildBar);
 }
