@@ -149,6 +149,20 @@ struct AIRSIDE_API FArrivalPlan
 };
 
 /**
+ * What Plan does about a runway someone else holds.
+ *
+ * Refuse is a landing NOW - the dispatch - which must not be cleared onto an occupied strip.
+ * Queue is an ACCEPT: the flight will wait its turn (UArrivalSequencer), so a busy runway is not
+ * a reason to turn it away - and Plan must still run every later step, the stand above all.
+ * AN ENUM, not a bool, so a call site says which question it is asking.
+ */
+enum class ERunwayBusy : uint8
+{
+	Refuse,
+	Queue
+};
+
+/**
  * Chooses a runway, an exit and a stand for an arrival - the model half of a landing.
  *
  * Free functions over a const URoadNetwork&, matching RouteSearch's shape rather than a
@@ -190,12 +204,24 @@ namespace ArrivalPlanner
 	 * a runway by, and an aircraft takes the earliest turn-off it can rather than rolling to
 	 * the end in search of a marginally shorter taxi.
 	 *
-	 * Occupancy, when given, refuses RunwayOccupied while any segment of the chain is held.
+	 * Occupancy, when given, refuses RunwayOccupied while any segment of the chain is held -
+	 * unless RunwayBusy is Queue, which skips that one step and carries on (see ERunwayBusy).
 	 * Null is the pre-traffic answer, which is what a tool that only asks "could this land
 	 * here" still wants.
 	 */
 	AIRSIDE_API FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near,
-		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy = nullptr);
+		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy = nullptr,
+		ERunwayBusy RunwayBusy = ERunwayBusy::Refuse);
+
+	/**
+	 * Is the runway nearest Near held by anyone - the one test Plan's RunwayOccupied step makes,
+	 * and the one UArrivalSequencer asks before clearing a queued flight. False with no runway or
+	 * no occupancy to ask. ONE FUNCTION, so the queue and the dispatch cannot disagree about
+	 * whether the strip is free.
+	 * ENFORCED BY: Airside.Model.ArrivalQueue.IsRunwayBusyAgreesWithPlan
+	 */
+	AIRSIDE_API bool IsRunwayBusy(const URoadNetwork& Network, const FVector2D& Near,
+		const FTrafficOccupancy* Occupancy);
 
 	/**
 	 * The user-facing sentence for a refused plan - the same wording DispatchArrival used to

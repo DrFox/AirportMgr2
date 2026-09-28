@@ -261,8 +261,20 @@ namespace ArrivalPlanner
 		return Best;
 	}
 
+	bool IsRunwayBusy(const URoadNetwork& Network, const FVector2D& Near, const FTrafficOccupancy* Occupancy)
+	{
+		FRunwayEnd End;
+		if (Occupancy == nullptr || !Network.NearestRunwayThreshold(Near, End))
+		{
+			return false;
+		}
+		// No agent of our own to be occupying anything: nothing has been dispatched yet, so
+		// bCountOwnOccupied is false - see FTrafficOccupancy::IsAnyHeld.
+		return Occupancy->IsAnyHeld(Network.RunwaySurfaces(End.Seed), 0, false);
+	}
+
 	FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near, const FAirframe& Airframe,
-		const FTrafficOccupancy* Occupancy)
+		const FTrafficOccupancy* Occupancy, ERunwayBusy RunwayBusy)
 	{
 		FArrivalPlan Out;
 		Out.AircraftWingspan = Airframe.Wingspan;
@@ -302,9 +314,9 @@ namespace ArrivalPlanner
 		// Asked before the length and exit steps, because those cannot change while the
 		// runway is busy and this can: a refusal that clears on its own is reported as
 		// itself, not as whichever later step happened to fail too.
-		// No agent of our own to be occupying anything: nothing has been dispatched yet, so
-		// bCountOwnOccupied is false - see FTrafficOccupancy::IsAnyHeld.
-		if (Occupancy != nullptr && Occupancy->IsAnyHeld(Network.RunwaySurfaces(Out.End.Seed), 0, false))
+		// SKIPPED UNDER Queue: an accept waits its turn for the strip - see ERunwayBusy. The
+		// test itself is IsRunwayBusy, the same one the sequencer asks.
+		if (RunwayBusy == ERunwayBusy::Refuse && IsRunwayBusy(Network, Near, Occupancy))
 		{
 			Out.Why = EArrivalRefusal::RunwayOccupied;
 			return Out;
