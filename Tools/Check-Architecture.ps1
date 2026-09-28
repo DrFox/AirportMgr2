@@ -1328,6 +1328,27 @@ foreach ($caller in $gridOverlayCallers) {
 }
 $ranRules.Add('grid-overlay-both-drivers')
 
+# --- 27. BOTH DRIVERS REMEMBER TOOL SURFACES ------------------------------------------------
+# FBuildSession::SetToolPreferences is the seam a surface pick is remembered through, and a
+# session never handed a store remembers nothing - which is every test's session, deliberately,
+# so the player's ini cannot steer the suite. So nothing but this rule sees a driver stop
+# wiring it: BeginPlay and URoadBuildEdMode::Enter both need a live world or editor viewport
+# the headless suite does not have (2026-09-28, remembered surface).
+$preferenceCallers = @(
+    (Join-Path $Root 'Source\AirportMgr\RoadBuildController.cpp'),
+    (Join-Path $editor 'Private\RoadBuildEdMode.cpp')
+)
+foreach ($caller in $preferenceCallers) {
+    if (-not (Test-Path $caller)) {
+        $failures.Add("tool-preferences-both-drivers: $caller is named by rule 27 but does not exist - update the rule")
+        continue
+    }
+    if (-not (Select-String -Path $caller -Pattern 'SetToolPreferences\(MakeShared<FConfigToolPreferences>' -Quiet)) {
+        $failures.Add("tool-preferences-both-drivers: $caller no longer hands its session an FConfigToolPreferences - one driver would forget the player's surface pick")
+    }
+}
+$ranRules.Add('tool-preferences-both-drivers')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

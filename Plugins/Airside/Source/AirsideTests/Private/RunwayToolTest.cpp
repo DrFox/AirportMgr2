@@ -281,8 +281,11 @@ bool FRunwayToolTest::RunTest(const FString& Parameters)
 	FRunwayTool* Tool = static_cast<FRunwayTool*>(Session.GetActiveTool());
 	if (!TestNotNull(TEXT("the runway tool is active"), Tool)) { return false; }
 	TestEqual(TEXT("it starts on the first width"), Tool->WidthIndex, 0);
-	TestEqual(TEXT("tarmac"), Tool->Surface, EPavement::Tarmac);
+	TestEqual(TEXT("grass - the cheap start (2026-09-28)"), Tool->Surface, EPavement::Grass);
 	TestEqual(TEXT("visual"), Tool->Approach, ERunwayApproach::Visual);
+	// The cycle below was written stepping from tarmac, and what it proves does not depend on
+	// where it starts - so it starts there, rather than every figure after it being renumbered.
+	Tool->RestoreSurface(EPavement::Tarmac);
 
 	Session.SelectTool(RunwayIndex, Plain);
 	TestEqual(TEXT("6 again cycles the width - the caller NextWidth never had"), Tool->WidthIndex, 1);

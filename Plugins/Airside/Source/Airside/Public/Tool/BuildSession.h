@@ -9,6 +9,7 @@
 #include "Tool/Selection.h"
 #include "Tool/SnapGuideChain.h"
 #include "Tool/SnapGuideSettings.h"
+#include "Tool/ToolPreferences.h"
 #include "BuildSession.generated.h"
 
 class URoadNetwork;
@@ -344,6 +345,27 @@ public:
 	bool SelectActiveVariant(const FToolContext& Context, int32 Axis, int32 Option);
 
 	/**
+	 * Where each tool's surface pick is remembered, and a restore from it at once.
+	 *
+	 * ON THE SESSION, not on each tool: the two gestures a pick is made with - the bar's click
+	 * (SelectActiveVariant) and the key-again cycle (SelectTool's reselect) - both arrive here,
+	 * so one hook covers both (2026-09-28).
+	 * ENFORCED BY: Airside.Tool.SurfacePreference.RemembersAcrossSessions, which picks through each.
+	 *
+	 * Both drivers call this once - ARoadBuildController::BeginPlay and URoadBuildEdMode::Enter -
+	 * with an FConfigToolPreferences; a session handed none (every test's) remembers nothing and
+	 * writes nothing, and every tool starts on grass.
+	 * ENFORCED BY: Check-Architecture rule 27, tool-preferences-both-drivers.
+	 *
+	 * KEYED BY FToolRegistration::Id ("Taxiway.Surface"), the field nothing localises, for the
+	 * reason that field gives: a key built from the display name would orphan the pick on a
+	 * locale change. The value is the enum's own name, so a reordered row cannot remap it.
+	 */
+	void SetToolPreferences(TSharedPtr<IToolPreferences> InPreferences);
+
+	bool HasToolPreferences() const { return Preferences.IsValid(); }
+
+	/**
 	 * Whether the committed graph's node rings belong on screen right now.
 	 *
 	 * ON THE SESSION so both drivers agree - the HUD and the editor viewport drew this from
@@ -555,6 +577,16 @@ private:
 	TArray<TUniquePtr<IBuildTool>> Tools;
 
 	int32 ActiveTool = 0;
+
+	/** See SetToolPreferences. Null until a driver hands one over. */
+	TSharedPtr<IToolPreferences> Preferences;
+
+	/** Per tool, what was last read from or written to Preferences - so a pick that did not
+	 *  change the surface (another axis, a width) writes nothing. Sized with Tools. */
+	TArray<TOptional<EPavement>> RememberedSurfaces;
+
+	/** Writes each tool's surface that differs from RememberedSurfaces. After every pick. */
+	void RememberSurfaces();
 
 	EGestureMode Mode = EGestureMode::Build;
 

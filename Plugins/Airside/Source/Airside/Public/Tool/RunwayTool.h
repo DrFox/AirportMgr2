@@ -60,6 +60,8 @@ public:
 
 	/** Sets the field the named row stands for. Axis is by Id, not index - see the .cpp. */
 	virtual bool SelectVariant(const FToolContext& Context, int32 Axis, int32 Option) override;
+	virtual TOptional<EPavement> GetChosenSurface() const override { return Surface; }
+	virtual bool RestoreSurface(EPavement InSurface) override { Surface = InSurface; return true; }
 
 	/**
 	 * The first threshold, once one is down - and a FREE START before that. See
@@ -99,8 +101,9 @@ public:
 	/** Steps to the next standard width, wrapping, through SelectVariant. Called from OnReselect. */
 	void NextWidth(const FToolContext& Context);
 
-	/** What the next runway is paved with and what approach it offers - the facts placement writes. */
-	EPavement Surface = EPavement::Tarmac;
+	/** What the next runway is paved with and what approach it offers - the facts placement writes.
+	 *  Surface STARTS GRASS - see FRoadDrawTool::Surface for the ruling. */
+	EPavement Surface = EPavement::Grass;
 	ERunwayApproach Approach = ERunwayApproach::Visual;
 
 	/** Steps each scale, wrapping. Take the context now (2026-09-26) because the step goes

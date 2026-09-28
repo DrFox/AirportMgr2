@@ -1564,16 +1564,18 @@ bool FStandPlotSurfaceRowPlacesItsPavementTest::RunTest(const FString& Parameter
 	if (!TestEqual(TEXT("the stand tool offers exactly one row"), Axes.Num(), 1)) { return false; }
 	TestEqual(TEXT("and it is the Surface row"), Axes[0].Id, FName(TEXT("Surface")));
 	TestEqual(TEXT("of all four pavements"), Axes[0].Options.Num(), 4);
-	TestEqual(TEXT("lit on tarmac, what every stand was paved with before the row"),
-		Axes[0].Current, Pavement::Offered({}).IndexOfByKey(EPavement::Tarmac));
+	TestEqual(TEXT("lit on grass, the cheap start every surface tool opens on (2026-09-28)"),
+		Axes[0].Current, Pavement::Offered({}).IndexOfByKey(EPavement::Grass));
 
-	const int32 GrassOption = Pavement::Offered({}).IndexOfByKey(EPavement::Grass);
-	TestTrue(TEXT("grass is picked"), Tool.SelectVariant(At(Actor, AnchorCursor), 0, GrassOption));
+	// TARMAC, not grass, since grass became the default: a pick of what is already lit would
+	// pass the placement check below without the pick reaching anything.
+	const int32 PickedOption = Pavement::Offered({}).IndexOfByKey(EPavement::Tarmac);
+	TestTrue(TEXT("tarmac is picked"), Tool.SelectVariant(At(Actor, AnchorCursor), 0, PickedOption));
 	TestFalse(TEXT("an option past the row is refused"), Tool.SelectVariant(At(Actor, AnchorCursor), 0, 4));
 	TestFalse(TEXT("and so is a row that does not exist"), Tool.SelectVariant(At(Actor, AnchorCursor), 1, 0));
 	Axes.Reset();
 	Tool.GetVariantAxes(At(Actor, AnchorCursor), Axes);
-	TestEqual(TEXT("the row now lights grass"), Axes.Num() == 1 ? Axes[0].Current : INDEX_NONE, GrassOption);
+	TestEqual(TEXT("the row now lights tarmac"), Axes.Num() == 1 ? Axes[0].Current : INDEX_NONE, PickedOption);
 
 	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
 	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
@@ -1585,7 +1587,7 @@ bool FStandPlotSurfaceRowPlacesItsPavementTest::RunTest(const FString& Parameter
 	{
 		if (Entity.bAlive && Entity.IsStand())
 		{
-			TestEqual(TEXT("the placed stand is paved with what the row picked"), Entity.Pavement, EPavement::Grass);
+			TestEqual(TEXT("the placed stand is paved with what the row picked"), Entity.Pavement, EPavement::Tarmac);
 		}
 	}
 	return true;
@@ -1623,7 +1625,8 @@ bool FStandPlotSurfaceChangeReasksRefusalTest::RunTest(const FString& Parameters
 	TestEqual(TEXT("the control: the same shape and pavement is answered from the memo"),
 		Tool.GetRefusalCountForTest(), AfterFirst);
 
-	Tool.SelectVariant(At(Actor, AnchorCursor), 0, Pavement::Offered({}).IndexOfByKey(EPavement::Grass));
+	// TARMAC: a NEW pavement - grass is what a fresh tool already has (2026-09-28).
+	Tool.SelectVariant(At(Actor, AnchorCursor), 0, Pavement::Offered({}).IndexOfByKey(EPavement::Tarmac));
 	ReadoutOf(Tool, At(Actor, AnchorCursor));
 	TestEqual(TEXT("the same shape on a new pavement is asked again"),
 		Tool.GetRefusalCountForTest(), AfterFirst + 1);

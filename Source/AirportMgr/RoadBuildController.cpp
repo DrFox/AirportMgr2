@@ -53,6 +53,11 @@ void ARoadBuildController::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// BEFORE THE TARGET CHECK: a surface pick is the player's, not the level's, so a level with
+	// no network actor still restores it - and the editor mode, which wires the same store in
+	// URoadBuildEdMode::Enter, then agrees with this driver on what the next taxiway lays.
+	Session.SetToolPreferences(MakeShared<FConfigToolPreferences>());
+
 	Target = ARoadNetworkActor::Find(GetWorld());
 
 	if (Target == nullptr)

@@ -267,7 +267,7 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 // --- The tool -----------------------------------------------------------------------
 
 FRoadDrawTool::FRoadDrawTool(ERoadKind InKind)
-	: State(MakeUnique<FRoadIdleState>(InKind))
+	: State(MakeUnique<FRoadIdleState>(InKind, /*InWidthIndex*/ 0))   // WidthIndex's default - see its comment
 	, Kind(InKind)
 {
 }
@@ -526,11 +526,9 @@ void FRoadDrawTool::AddWidthAxis(const FToolContext& Context, TArray<FToolVarian
 		return;
 	}
 
-	// ONLY FOR THE MATCH, and only when nothing is chosen - see the header on why the default
-	// is lit but never written.
-	const URoadProfile* LevelDefault = WidthIndex == INDEX_NONE
-		? Context.Target->ResolveProfileFor(Kind, INDEX_NONE) : nullptr;
-
+	// LIT IS WHAT THE TOOL HOLDS, and nothing else, since 2026-09-28: WidthIndex starts on the
+	// narrowest rather than unset, so the level-default match that used to light a preset for an
+	// unset tool - and lit nothing when the level's width was off the set - had no case left.
 	FToolVariantAxis& Axis = Out.AddDefaulted_GetRef();
 	Axis.Id = TEXT("Width");
 	Axis.Label = LOCTEXT("VariantAxisWidth", "Width");
@@ -547,15 +545,21 @@ void FRoadDrawTool::AddWidthAxis(const FToolContext& Context, TArray<FToolVarian
 		Option.Id = FName(*FString::Printf(TEXT("W%d"), FMath::RoundToInt(Width)));
 		Option.Label = VariantWidthLabel(Width);
 
-		// SAME ASSET FIRST, SAME WIDTH SECOND. The level's tuning is often the content asset
-		// itself; when it is a copy tuned in the Details panel, its width is still the fact the
-		// player would recognise, and 0.5 uu is well under anything the ghost could draw.
-		if (Axis.Current == INDEX_NONE && LevelDefault != nullptr && Profile != nullptr
-			&& (Profile == LevelDefault || FMath::Abs(Width - LevelDefault->GetTotalWidth()) < 0.5))
-		{
-			Axis.Current = Index;
-		}
 	}
+}
+
+bool FRoadDrawTool::RestoreSurface(EPavement InSurface)
+{
+	// NOT CHECKED AGAINST THE PROFILE'S OFFERED LIST: there is no context to ask for the profile
+	// here (FBuildSession restores at construction). A surface the profile does not offer can
+	// only come from a hand-edited ini, and would light no option on the row and be refused at
+	// the lay by URoadEditFacade's own Offered check - wrong, visibly, and nothing laid.
+	Surface = InSurface;
+	if (State.IsValid())
+	{
+		State->Surface = Surface;
+	}
+	return true;
 }
 
 bool FRoadDrawTool::SelectVariant(const FToolContext& Context, int32 Axis, int32 Option)
