@@ -39,66 +39,17 @@ ARoadBuildController* UAirportMgrPanelWidget::Controller() const
 	return GetWorld() ? Cast<ARoadBuildController>(GetWorld()->GetFirstPlayerController()) : nullptr;
 }
 
-UPanelWidget* UAirportMgrPanelWidget::EnsureCardRoot(FName CardName, const FAnchors& Anchors,
-	FVector2D Alignment, FVector2D Position, bool bRounded)
+UPanelWidget* UAirportMgrPanelWidget::EnsureContentRoot(FName ContentName)
 {
-	UVerticalBox* Column = nullptr;
-	if (WidgetTree->RootWidget == nullptr)
+	if (WidgetTree->RootWidget != nullptr)
 	{
-		// PanelStyle, not another ResolveStyle() call (issue #309): Initialize sets it before
-		// BuildOnce runs, and EnsureCardRoot is only ever called FROM BuildOnce (or something
-		// it calls), so the resolve two lines above in Initialize has always already happened
-		// by the time this runs - this was a second LoadSynchronous of the same asset for no
-		// reason, not a per-frame cost (EnsureCardRoot runs once, guarded by bBuilt).
-		const UUIStyle* Style = PanelStyle;
-
-		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("PanelRoot"));
-		WidgetTree->RootWidget = Root;
-
-		UBorder* CardBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), CardName);
-		if (bRounded)
-		{
-			CardBorder->SetBrush(FSlateRoundedBoxBrush(Style->Surface, Style->WindowRadius, Style->Rule, 1.0f));
-		}
-		else
-		{
-			CardBorder->SetBrushColor(Style->Surface);
-		}
-		// UUIStyle::CardPadding, not a literal here: see its own comment (issue #192).
-		CardBorder->SetPadding(Style->CardPadding);
-
-		UCanvasPanelSlot* CardSlot = Root->AddChildToCanvas(CardBorder);
-		CardSlot->SetAnchors(Anchors);
-		CardSlot->SetAlignment(Alignment);
-		CardSlot->SetAutoSize(true);
-		CardSlot->SetPosition(Position);
-
-		Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
-		CardBorder->SetContent(Column);
+		// An asset already supplied a root: BindWidgetOptional has filled every slot it offers,
+		// and a code-built root here would replace the designer's own layout.
+		return nullptr;
 	}
-	// An asset already supplied a root: BindWidgetOptional has filled every slot it offers,
-	// and a code-built card here would replace the designer's own layout - Column stays null
-	// for that path, same as before.
-	//
-	// FOUND BY NAME EITHER WAY, and cached in CardWidget - a Blueprint restyle names its own card to
-	// match (UInspectorWidget's class comment states the convention), so this is the one place
-	// that has to know the name at all. See CardWidget and SetCardShown's own comments (issue #187):
-	// two subclasses used to do this same FindWidget themselves, one of them every tick.
-	CardWidget = WidgetTree != nullptr ? WidgetTree->FindWidget(CardName) : nullptr;
+	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), ContentName);
+	WidgetTree->RootWidget = Column;
 	return Column;
-}
-
-void UAirportMgrPanelWidget::SetCardShown(bool bShown)
-{
-	if (CardWidget == nullptr)
-	{
-		return;
-	}
-	const ESlateVisibility Wanted = bShown ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
-	if (CardWidget->GetVisibility() != Wanted)
-	{
-		CardWidget->SetVisibility(Wanted);
-	}
 }
 
 FReply UAirportMgrPanelWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)

@@ -97,6 +97,9 @@ public:
 
 	UOfferInboxViewModel* GetInbox() const { return Inbox; }
 
+	/** Top-right; NOT closable - an offer must never be hidden. */
+	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
+
 	/**
 	 * Re-read the board and repaint. What NativeTick calls, and what a headless test calls
 	 * directly - the tick-to-Refresh seam is one line, and a test has no viewport to paint in.
@@ -130,7 +133,7 @@ protected:
 	/** Builds the inbox's chrome. See UAirportMgrPanelWidget::Initialize for why this runs
 	 *  from Initialize rather than NativeOnInitialized. */
 	virtual void BuildOnce(const UUIStyle& Style) override;
-	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	virtual void TickPanel(float DeltaTime) override;
 
 private:
 	UPROPERTY() TObjectPtr<UOfferInboxViewModel> Inbox;

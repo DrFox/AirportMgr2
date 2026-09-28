@@ -1,8 +1,11 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "BuildBarWidget.h"
+#include "InspectorWidget.h"
 #include "LandAircraftPanelWidget.h"
 #include "LedgerPanelWidget.h"
 #include "Misc/AutomationTest.h"
+#include "OfferInboxWidget.h"
 #include "Testing/AirsideTestWorld.h"
 #include "UI/UiButton.h"
 #include "UI/UiWindow.h"
@@ -240,6 +243,39 @@ bool FUiWindowSnapShownTest::RunTest(const FString& Parameters)
 	F.Ledger->Toggle();   // hidden
 	F.Host->MoveWindow(LandId, FVector2D(908.0, 320.0));
 	TestEqual(TEXT("beside a HIDDEN ledger it stays where it was dropped"), F.Host->WindowRect(LandId).Min.X, 908.0);
+	return true;
+}
+
+/**
+ * EVERY FLOATING PANEL IS A WINDOW, with the id step 3 will persist under. A panel left out would
+ * float as a bare card with no title, close or drag - the look this step exists to remove.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowPanelsTest, "AirportMgr.UI.WindowHost.FourPanelsAreWindows",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowPanelsTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	UWorld* W = TestWorld.World;
+	if (!TestNotNull(TEXT("a world"), W)) { return false; }
+	UUiWindowHost* Host = CreateWidget<UUiWindowHost>(W, UUiWindowHost::StaticClass());
+	if (!TestNotNull(TEXT("a host"), Host)) { return false; }
+	TestNotNull(TEXT("inspector"), Host->AddWindow(*CreateWidget<UInspectorWidget>(W, UInspectorWidget::StaticClass())));
+	TestNotNull(TEXT("ledger"), Host->AddWindow(*CreateWidget<ULedgerPanelWidget>(W, ULedgerPanelWidget::StaticClass())));
+	TestNotNull(TEXT("land"), Host->AddWindow(*CreateWidget<ULandAircraftPanelWidget>(W, ULandAircraftPanelWidget::StaticClass())));
+	TestNotNull(TEXT("offers"), Host->AddWindow(*CreateWidget<UOfferInboxWidget>(W, UOfferInboxWidget::StaticClass())));
+	for (const TCHAR* Id : { TEXT("inspector"), TEXT("ledger"), TEXT("land"), TEXT("offers") })
+	{
+		TestNotNull(*FString::Printf(TEXT("a window under the id '%s'"), Id), Host->WindowForTest(Id));
+	}
+	TestTrue(TEXT("the offers window shows from the start - an offer must never be hidden"), Host->IsShown(TEXT("offers")));
+	TestNull(TEXT("the bar is not a window"), Host->AddWindow(*CreateWidget<UBuildBarWidget>(W, UBuildBarWidget::StaticClass())));
+
+	// RAISING OVER ANOTHER WINDOW (moved here from BringToFrontRaises, which had only one): the
+	// inspector was added first, so every later window sits above it until it is clicked.
+	TestTrue(TEXT("the first window starts below the last"), Host->ZOrderForTest(TEXT("inspector")) < Host->ZOrderForTest(TEXT("offers")));
+	Host->BringToFront(TEXT("inspector"));
+	TestTrue(TEXT("a click lifts it over the last"), Host->ZOrderForTest(TEXT("inspector")) > Host->ZOrderForTest(TEXT("offers")));
 	return true;
 }
 

@@ -46,8 +46,5 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 
 void UBuildHudLayer::WireDocking()
 {
-	if (Inspector != nullptr)
-	{
-		Inspector->DockAbove(BuildBar);
-	}
+	// The inspector's dock above the bar is the window host's now - Task 7 wires it here.
 }

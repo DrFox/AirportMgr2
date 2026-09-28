@@ -25,21 +25,18 @@ void ULedgerPanelWidget::BuildOnce(const UUIStyle& Style)
 
 	EnsureSlots(&Style);
 
-	// SelfHitTestInvisible on the ROOT and Collapsed on the CARD, the split
-	// UAirportMgrPanelWidget::BuildOnce documents: the root must stay laid out or the panel
-	// never gets another tick to un-hide itself with.
+	// SelfHitTestInvisible on the ROOT; the WINDOW hides (SetShown) - see
+	// UAirportMgrPanelWidget::BuildOnce.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	SetShown(false);
 }
 
 void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
 {
-	// TOP RIGHT, UNDER THE INBOX. The inbox owns that corner and must never be covered - see
-	// its TopOffset comment, missing an offer costs money - so this sits below it. The card is
-	// found by name afterwards so the Blueprint path, where EnsureCardRoot returns null, still
-	// has something for Toggle to hide.
-	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("LedgerCard"),
-		FAnchors(1.0f, 0.0f, 1.0f, 0.0f), FVector2D(1.0, 0.0), FVector2D(-12.0, TopOffset), true)))
+	// TOP RIGHT, UNDER THE INBOX (its window - WantsWindow). The inbox owns that corner and must
+	// never be covered - see its TopOffset comment, missing an offer costs money. The window hides
+	// the whole panel, so the Blueprint path, where EnsureContentRoot returns null, still hides.
+	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureContentRoot(TEXT("LedgerCard"))))
 	{
 		UHorizontalBox* HeadingRow = WidgetTree->ConstructWidget<UHorizontalBox>(
 			UHorizontalBox::StaticClass(), TEXT("LedgerHeading"));
@@ -50,6 +47,8 @@ void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
 				TEXT("TitleText"));
 			TitleText->SetText(LOCTEXT("LedgerTitle", "LEDGER"));
 			Style->ApplyText(*TitleText, EUITextRole::Heading, Style->InkMuted);
+			// The window's title bar says it now; kept (collapsed) because a Blueprint may bind it.
+			TitleText->SetVisibility(ESlateVisibility::Collapsed);
 			HeadingRow->AddChildToHorizontalBox(TitleText);
 		}
 		if (BalanceText == nullptr)
@@ -71,7 +70,6 @@ void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
 			RowsSlot->SetPadding(FMargin(0.0f, Style->RowGap, 0.0f, 0.0f));
 		}
 	}
-	// CardWidget is found and cached by EnsureCardRoot itself now (issue #187) - see its own comment.
 }
 
 bool ULedgerPanelWidget::WantsWindow(FUiWindowSpec& Out) const
@@ -221,9 +219,8 @@ int32 ULedgerPanelWidget::RowWidgetCountForTest() const
 	return RowColumn != nullptr ? RowColumn->GetChildrenCount() : 0;
 }
 
-void ULedgerPanelWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+void ULedgerPanelWidget::TickPanel(float InDeltaTime)
 {
-	Super::NativeTick(MyGeometry, InDeltaTime);
 
 	// ONLY WHILE OPEN. A closed panel costs nothing - the ledger's own revision gate would
 	// make the work cheap anyway, but a panel nobody is looking at should not be asking.

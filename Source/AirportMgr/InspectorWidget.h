@@ -108,17 +108,13 @@ public:
 	 *
 	 * WAS BottomOffset = 72, a distance above the SCREEN's bottom (until 2026-09-27) - and the
 	 * code-only bar is 118 uu tall before it grows, so the card sat over the bar's left-hand
-	 * sections and hid them. Measured from the bar instead (see DockAbove), so the card rides
+	 * sections and hid them. Measured from the bar instead (see UUiWindowHost::DockAbove), so the card rides
 	 * up and down as the bar grows and shrinks and never covers it.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double BarGap = 12.0;
 
-	/**
-	 * Keep the card's bottom BarGap above Bar's top edge from now on, re-measured every tick.
-	 * UBuildHudLayer::WireDocking calls this with its own bar. Null undocks: the card then sits
-	 * BarGap above the screen's bottom edge.
-	 */
-	void DockAbove(UBuildBarWidget* Bar);
+	/** Bottom-left, riding the bar's top edge BarGap above it until the player moves it. */
+	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
 
 	/**
 	 * Captions the Follow button "Unfollow" while bFollowing, its action's own label otherwise
@@ -131,11 +127,6 @@ public:
 	/** The Follow button's caption as it reads now. */
 	FString FollowCaptionForTest() const;
 
-	/** The card's distance above the screen's bottom edge, as its slot has it now. */
-	double CardClearanceForTest() const;
-	/** What NativeTick does to the card's position each frame, without the rest of the tick. */
-	void UpdateDockForTest() { UpdateDock(); }
-	const UBuildBarWidget* DockedBarForTest() const { return DockBar; }
 
 	/**
 	 * Re-reads the facts for Selection over Target and repaints. What NativeTick calls with
@@ -174,7 +165,7 @@ protected:
 	/** Builds the panel's chrome and binds its two verbs. See
 	 *  UAirportMgrPanelWidget::Initialize for why this runs from Initialize. */
 	virtual void BuildOnce(const UUIStyle& Style) override;
-	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	virtual void TickPanel(float DeltaTime) override;
 
 private:
 	bool bDepartEnabled = false;
@@ -217,15 +208,11 @@ private:
 	/** See ComposeCountForTest. */
 	int32 ComposeCalls = 0;
 
-	/** The bar the card docks above - see DockAbove. */
-	UPROPERTY() TObjectPtr<UBuildBarWidget> DockBar;
-
-	/** The clearance last written to the card's slot, so an unchanged bar writes nothing. */
-	double DockedClearance = -1.0;
+	/** What Refresh last showed, so a NEW selection can reopen a window the player closed. */
+	FSelection LastSelection;
 
 	void EnsureSlots(const UUIStyle* Style);
 	void RunAction(int32 ActionIndex);
-	void UpdateDock();
 
 	UFUNCTION() void HandleDepart();
 	UFUNCTION() void HandleFollow();

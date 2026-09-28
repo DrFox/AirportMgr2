@@ -23,17 +23,15 @@ class UWidget;
  * called exactly once, with the resolved style already in hand so it never has to ask whether
  * ResolveStyle() came back null (it never does - see UAirportMgrUISettings::ResolveStyle).
  *
- * Controller() and EnsureCardRoot() are the other two things duplicated across two or more of
+ * Controller() and EnsureContentRoot() are the other two things duplicated across two or more of
  * the four: a click-driven panel asks the same question about who is playing, and a floating
- * corner card builds the same canvas-root-plus-bordered-card skeleton before it ever reaches
- * its own content.
+ * panel builds the same root column before it ever reaches its own content.
  *
- * NOT ALL FOUR USE EnsureCardRoot. UBuildBarWidget's chrome is a full-width bar stretched by
- * OFFSETS across two differently-coloured rows, and UToastStackWidget's root holds a bare
- * VerticalBox with no card at all (each toast is its own rounded card) - neither shape is the
- * single anchored-and-auto-sized card EnsureCardRoot builds. Both still sit on this base for
- * Initialize/BuildOnce/Controller; only UInspectorWidget and UOfferInboxWidget call
- * EnsureCardRoot.
+ * FLOATING PANELS ARE WINDOWS (UI library step 2): the inspector, inbox, ledger and Land panel
+ * describe their window in WantsWindow and UUiWindowHost wraps them - the card, its placement
+ * and its chrome are the window's, not the panel's. UBuildBarWidget (a full-width bar stretched
+ * by OFFSETS) and UToastStackWidget (a bare VerticalBox, each toast its own card) are not windows;
+ * both still sit on this base for Initialize/BuildOnce/Controller.
  */
 UCLASS(Abstract)
 class AIRPORTMGR_API UAirportMgrPanelWidget : public UUserWidget
@@ -107,13 +105,12 @@ protected:
 	 * A SUBCLASS WHOSE CONTENT CAN GO ENTIRELY EMPTY (the inspector with nothing selected, the
 	 * offer inbox with no offers, the toast stack with nothing to show) must mark ITSELF
 	 * `SetVisibility(ESlateVisibility::SelfHitTestInvisible)` here, never Collapsed: Slate only
-	 * ticks a widget from its paint pass, so a Collapsed widget is never arranged, is never
-	 * painted, and so never ticks - and the tick is the only thing that could later un-collapse
-	 * it (PIE 2026-09-07: a panel built this way, never shown). SelfHitTestInvisible keeps the
-	 * panel laid out and running while staying click-transparent, so an otherwise-empty panel
-	 * does not sit over the world as an invisible pane that eats the player's clicks. Individual
-	 * pieces of content (the inspector's card, an offer row) still hide themselves normally;
-	 * this is about the PANEL's own root, once, not about them.
+	 * ticks a widget from its paint pass, so a Collapsed widget is never painted and never ticks
+	 * - and the tick is the only thing that could later un-collapse it (PIE 2026-09-07: a panel
+	 * built this way, never shown). A HOSTED panel is ticked by the host whatever its window's
+	 * visibility (RunPanelTick) and hides through SetShown; it still keeps its root
+	 * SelfHitTestInvisible, so its empty space inside the window does not eat clicks meant for
+	 * the window's own chrome.
 	 */
 	virtual void BuildOnce(const UUIStyle& Style) PURE_VIRTUAL(UAirportMgrPanelWidget::BuildOnce, );
 
@@ -125,18 +122,13 @@ protected:
 	ARoadBuildController* Controller() const;
 
 	/**
-	 * A canvas root (if the asset gave none) plus ONE bordered card, anchored, aligned and
-	 * positioned as given, auto-sized to its content. Returns the panel INSIDE the card that
-	 * a subclass adds its own rows to, or nullptr when an asset already supplied a root - in
-	 * that case BindWidgetOptional has already filled every slot the asset supplies, and a
-	 * code-built card would replace the designer's layout.
-	 *
-	 * Surface, ALWAYS: the card is the outer surface everything a subclass draws sits ON,
-	 * and Panel is left free for whatever goes inside it (a button, an offer row) - the same
-	 * split UBuildBarWidget's two rows and UOfferInboxWidget's offer cards already draw.
+	 * A root VerticalBox named ContentName, returned for the subclass to fill, when the asset gave
+	 * no root; null when an asset supplied one - BindWidgetOptional has already filled every slot
+	 * the asset supplies, and a code-built root would replace the designer's layout. Replaces
+	 * EnsureCardRoot: the CARD - surface, padding, corners, placement - is the window's now
+	 * (UUiWindow), not the panel's.
 	 */
-	UPanelWidget* EnsureCardRoot(FName CardName, const FAnchors& Anchors, FVector2D Alignment,
-		FVector2D Position, bool bRounded);
+	UPanelWidget* EnsureContentRoot(FName ContentName);
 
 	/**
 	 * The style resolved ONCE, before BuildOnce runs - see Initialize(). NEVER NULL once set.
@@ -156,29 +148,6 @@ protected:
 	 */
 	UPROPERTY() TObjectPtr<const UUIStyle> PanelStyle;
 
-	/**
-	 * The card EnsureCardRoot built (or found by name on an asset-supplied root), so a
-	 * subclass that shows/hides it need not re-walk the widget tree to ask again.
-	 *
-	 * issue #187: UInspectorWidget's ShowInspectorCard called WidgetTree->FindWidget (a
-	 * recursive walk) once or twice EVERY tick just to toggle a Collapsed/Visible flag;
-	 * ULedgerPanelWidget already found it once in EnsureSlots and held it for exactly this
-	 * reason - this is that field, promoted so EnsureCardRoot itself can fill it for every
-	 * caller. Null for a panel that never calls EnsureCardRoot (UBuildBarWidget,
-	 * UToastStackWidget - see EnsureCardRoot's own comment).
-	 */
-	UPROPERTY() TObjectPtr<UWidget> CardWidget;
-
-	/**
-	 * Shows or hides CardWidget, doing nothing if it is already in the requested state.
-	 *
-	 * THE GATE ITSELF: SetVisibility has no early-out of its own (the same reason SetText is
-	 * this issue's other half), so a panel polled every tick used to re-invalidate Slate's
-	 * layout for a visibility that had not changed since the last frame. A no-op when CardWidget is
-	 * null (EnsureCardRoot not called, or an asset root with no widget of that name), so a
-	 * caller need not guard the call itself.
-	 */
-	void SetCardShown(bool bShown);
 
 	/**
 	 * A CLICK ON THE PANEL STOPS AT THE PANEL (2026-09-28): its card, a section's background, the

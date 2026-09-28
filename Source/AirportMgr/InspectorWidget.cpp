@@ -32,10 +32,10 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 	EnsureSlots(&Style);
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
-	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
-	// otherwise-empty panel must stay this way. Only the CARD hides; the root stays laid out.
+	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce. The WINDOW
+	// hides (SetShown); the root stays laid out.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	SetCardShown(false);
+	SetShown(false);
 }
 
 void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
@@ -54,12 +54,10 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		++SelectionSeen;
 	}
 
-	// Code-built chrome only where the asset gave none - the same skeleton the offer inbox
-	// uses (EnsureCardRoot, issue #90). A bottom-left card: title, facts, status, then the two
-	// verbs in a row. Its height above the bottom is UpdateDock's, every tick - this is only
-	// where it starts.
-	UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("InspectorCard"),
-		FAnchors(0.0f, 1.0f, 0.0f, 1.0f), FVector2D(0.0, 1.0), FVector2D(12.0, -BarGap), true));
+	// Code-built content only where the asset gave none - the same root the offer inbox uses
+	// (EnsureContentRoot, issue #90): title, facts, status, then the two verbs in a row. Where it
+	// sits - bottom-left, riding the bar - is its window's (WantsWindow, UUiWindowHost::DockAbove).
+	UVerticalBox* Column = Cast<UVerticalBox>(EnsureContentRoot(TEXT("InspectorCard")));
 	if (Column != nullptr)
 	{
 		UE_LOG(LogInspector, Log, TEXT("No inspector asset: building the code-only panel"));
@@ -112,46 +110,19 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex);
 }
 
-void UInspectorWidget::DockAbove(UBuildBarWidget* Bar)
+bool UInspectorWidget::WantsWindow(FUiWindowSpec& Out) const
 {
-	DockBar = Bar;
-	DockedClearance = -1.0;
-	UpdateDock();
-	UE_LOG(LogInspector, Log, TEXT("Inspector: %s"),
-		Bar != nullptr ? TEXT("docked above the build bar") : TEXT("undocked - no bar to sit on"));
+	Out.Id = TEXT("inspector");
+	Out.Title = NSLOCTEXT("AirportMgr", "InspectorWindow", "Inspector");
+	Out.Anchor = EUiWindowAnchor::AboveBarLeft;
+	Out.Offset = FVector2D(12.0, BarGap);
+	return true;
 }
 
-void UInspectorWidget::UpdateDock()
+void UInspectorWidget::TickPanel(float InDeltaTime)
 {
-	UCanvasPanelSlot* CardSlot = CardWidget != nullptr ? Cast<UCanvasPanelSlot>(CardWidget->Slot) : nullptr;
-	if (CardSlot == nullptr)
-	{
-		// A Blueprint that put its card somewhere other than a canvas has laid itself out;
-		// there is no slot position to move.
-		return;
-	}
-	const double Clearance = (DockBar != nullptr ? DockBar->LiveHeight() : 0.0) + BarGap;
-	if (Clearance == DockedClearance)
-	{
-		return;
-	}
-	DockedClearance = Clearance;
-	const FVector2D At = CardSlot->GetPosition();
-	CardSlot->SetPosition(FVector2D(At.X, -Clearance));
-}
-
-double UInspectorWidget::CardClearanceForTest() const
-{
-	const UCanvasPanelSlot* CardSlot = CardWidget != nullptr ? Cast<UCanvasPanelSlot>(CardWidget->Slot) : nullptr;
-	return CardSlot != nullptr ? -CardSlot->GetPosition().Y : 0.0;
-}
-
-void UInspectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
-{
-	Super::NativeTick(MyGeometry, InDeltaTime);
-	// BEFORE Refresh, which may show the card this frame: it should appear already clear of
-	// a bar that grew to make room for the Selection section on the same click.
-	UpdateDock();
+	// The dock above the bar is the host's now, written in the same tick loop just after this
+	// (UUiWindowHost::TickWindows) - a window shown this frame is placed before it is painted.
 	if (const ARoadBuildController* C = Controller())
 	{
 		// The controller already computed this frame's FAgentFacts for the bar's
@@ -198,9 +169,17 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 {
 	if (Target == nullptr || !Selection.IsSet())
 	{
-		SetCardShown(false);
+		SetShown(false);
 		bDepartEnabled = false;
+		LastSelection = FSelection();
 		return;
+	}
+	// A NEW SELECTION REOPENS A WINDOW THE PLAYER CLOSED: the close meant "not this one", and
+	// clicking another aircraft is asking to see it (Review Focus 4 of the step 2 plan).
+	if (Selection.Kind != LastSelection.Kind || Selection.Id != LastSelection.Id)
+	{
+		ForgetPlayerClose();
+		LastSelection = Selection;
 	}
 
 	FString Title, Facts, Status;
@@ -221,7 +200,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		}
 		if (!bOk)
 		{
-			SetCardShown(false);
+			SetShown(false);
 			bDepartEnabled = false;
 			return;
 		}
@@ -309,7 +288,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		FStandFacts S;
 		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Selection.Id, S))
 		{
-			SetCardShown(false);
+			SetShown(false);
 			bDepartEnabled = false;
 			return;
 		}
@@ -402,7 +381,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	{
 		FollowButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
-	SetCardShown(true);
+	SetShown(true);
 }
 
 void UInspectorWidget::RunAction(int32 ActionIndex)
@@ -427,7 +406,7 @@ void UInspectorWidget::RunAction(int32 ActionIndex)
 void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
 void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 
-bool UInspectorWidget::IsShownForTest() const { return CardWidget != nullptr && CardWidget->GetVisibility() != ESlateVisibility::Collapsed; }
+bool UInspectorWidget::IsShownForTest() const { return IsShown(); }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }
 FString UInspectorWidget::TitleForTest() const { return TitleText != nullptr ? TitleText->GetText().ToString() : FString(); }
 FLinearColor UInspectorWidget::DepartLabelColourForTest() const

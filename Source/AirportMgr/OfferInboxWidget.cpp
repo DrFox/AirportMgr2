@@ -56,6 +56,19 @@ void UOfferInboxWidget::BuildOnce(const UUIStyle& Style)
 	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
 	// otherwise-empty panel must stay this way rather than Collapsed.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	// SHOWN FROM THE START, and not closable (WantsWindow): an offer must never be the thing that
+	// hides - missing one costs money (TopOffset's comment).
+	SetShown(true);
+}
+
+bool UOfferInboxWidget::WantsWindow(FUiWindowSpec& Out) const
+{
+	Out.Id = TEXT("offers");
+	Out.Title = NSLOCTEXT("AirportMgr", "InboxWindow", "Offers");
+	Out.bClosable = false;
+	Out.Anchor = EUiWindowAnchor::TopRight;
+	Out.Offset = FVector2D(12.0, TopOffset);
+	return true;
 }
 
 void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
@@ -65,11 +78,10 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 	// bottom, because the feed owns the bottom-right corner now and the two-row bar is tall
 	// enough to have swallowed the old placement (spec section 6.2).
 	//
-	// Surface, so the Well-coloured offer cards inside it have something to sit ON. A flat
-	// Panel here made the container and its rows one surface, and the offers read as lines of
-	// text in a box rather than as things awaiting an answer - see EnsureCardRoot (#90).
-	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("InboxCard"),
-		FAnchors(1.0f, 0.0f, 1.0f, 0.0f), FVector2D(1.0, 0.0), FVector2D(-12.0, TopOffset), true)))
+	// Its window is Surface, so the Well-coloured offer rows inside it have something to sit ON. A
+	// flat Panel here once made the container and its rows one surface, and the offers read as
+	// lines of text in a box rather than as things awaiting an answer (#90).
+	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureContentRoot(TEXT("InboxCard"))))
 	{
 		// HEADING AND COUNT ON ONE LINE. The count used to be FText::AsNumber on a line of
 		// its OWN directly under the word OFFERS - a bare "1" floating in the card, which is
@@ -81,6 +93,8 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 		TitleText->SetText(NSLOCTEXT("AirportMgr", "InboxTitle", "OFFERS"));
 		// The same heading treatment the bar's sections take - see UUIStyle::ApplyText (#89).
 		Style->ApplyText(*TitleText, EUITextRole::Heading, Style->InkMuted);
+		// The window's title bar says "Offers" now; the count stays on this row.
+		TitleText->SetVisibility(ESlateVisibility::Collapsed);
 		HeadingRow->AddChildToHorizontalBox(TitleText)->SetVerticalAlignment(VAlign_Center);
 
 		UHorizontalBoxSlot* HeadGap = HeadingRow->AddChildToHorizontalBox(
@@ -102,9 +116,8 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 	}
 }
 
-void UOfferInboxWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+void UOfferInboxWidget::TickPanel(float InDeltaTime)
 {
-	Super::NativeTick(MyGeometry, InDeltaTime);
 
 	// The target comes from the controller, not a fresh TActorIterator scan: this widget
 	// only ever hangs off BuildHudLayer, which only ever exists on ARoadBuildController, so

@@ -185,7 +185,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Metrics") float SectionPadding = 14.0f;
 
 	/**
-	 * Padding inside the one bordered card EnsureCardRoot builds for every panel that calls it
+	 * Padding inside every window's body (UUiWindow) - before windows, inside the one bordered
+	 * card EnsureCardRoot built for every panel that called it
 	 * (the inspector, the offer inbox, the ledger). NAMED by issue #192: it was a bare
 	 * `FMargin(12.0f, 10.0f)` inside UAirportMgrPanelWidget::EnsureCardRoot with nothing else
 	 * in the codebase reading the same value, the "UI literals remaining after #89-#91" finding.

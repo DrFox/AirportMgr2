@@ -28,17 +28,18 @@ void ULandRowEntry::HandleClick()
 
 void ULandAircraftPanelWidget::BuildOnce(const UUIStyle& Style)
 {
-	// TOP LEFT. The offer inbox owns the top right and the ledger sits under it; the bar owns
-	// the bottom. Found by name afterwards, as the ledger's card is, so the Blueprint path -
-	// where EnsureCardRoot returns null - still has something for Toggle to hide.
-	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("LandCard"),
-		FAnchors(0.0f, 0.0f, 0.0f, 0.0f), FVector2D(0.0, 0.0), FVector2D(12.0, TopOffset), true)))
+	// TOP LEFT (its window - WantsWindow). The offer inbox owns the top right and the ledger sits
+	// under it; the bar owns the bottom. The window hides the whole panel, so the Blueprint path -
+	// where EnsureContentRoot returns null - still hides.
+	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureContentRoot(TEXT("LandCard"))))
 	{
 		if (TitleText == nullptr)
 		{
 			TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TitleText"));
 			TitleText->SetText(LOCTEXT("Title", "LAND AN AIRCRAFT"));
 			Style.ApplyText(*TitleText, EUITextRole::Heading, Style.InkMuted);
+			// The window's title bar says it now; kept (collapsed) because a Blueprint may bind it.
+			TitleText->SetVisibility(ESlateVisibility::Collapsed);
 			Column->AddChildToVerticalBox(TitleText);
 		}
 		if (RowColumn == nullptr)
@@ -49,17 +50,35 @@ void ULandAircraftPanelWidget::BuildOnce(const UUIStyle& Style)
 		}
 	}
 
-	// SelfHitTestInvisible on the ROOT and Collapsed on the CARD, the split
-	// UAirportMgrPanelWidget::BuildOnce documents: the root must stay laid out or the panel
-	// never gets another tick to un-hide itself with.
+	// SelfHitTestInvisible on the ROOT; the WINDOW hides (SetShown) - see
+	// UAirportMgrPanelWidget::BuildOnce.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	SetCardShown(false);
+	SetShown(false);
+}
+
+bool ULandAircraftPanelWidget::WantsWindow(FUiWindowSpec& Out) const
+{
+	Out.Id = TEXT("land");
+	Out.Title = LOCTEXT("LandWindow", "Land an aircraft");
+	Out.Anchor = EUiWindowAnchor::TopLeft;
+	Out.Offset = FVector2D(12.0, TopOffset);
+	return true;
+}
+
+void ULandAircraftPanelWidget::OnWindowClosedByPlayer()
+{
+	// THE CLOSE BUTTON IS THE TOGGLE - the ledger's reasoning: bShowing must agree, or the next 7
+	// "opens" it hidden and the bar lights a panel nobody can see.
+	if (bShowing)
+	{
+		Toggle();
+	}
 }
 
 void ULandAircraftPanelWidget::Toggle()
 {
 	bShowing = !bShowing;
-	SetCardShown(bShowing);
+	SetShown(bShowing);
 
 	// JUDGED ON OPEN, not left to the next tick - a panel that appeared empty for a frame and
 	// then filled reads as a bug, the ledger's reasoning.
@@ -197,9 +216,8 @@ void ULandAircraftPanelWidget::ClickRowForTest(int32 Index, ARoadBuildController
 	}
 }
 
-void ULandAircraftPanelWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+void ULandAircraftPanelWidget::TickPanel(float InDeltaTime)
 {
-	Super::NativeTick(MyGeometry, InDeltaTime);
 
 	// ONLY WHILE OPEN - a closed panel asks nothing.
 	if (bShowing)
