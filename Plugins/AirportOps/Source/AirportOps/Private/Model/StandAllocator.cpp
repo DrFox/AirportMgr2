@@ -39,7 +39,7 @@ bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 		// line used to read bAlive + PoseNode alone, with no kind check, and StandAdmits' "0 span
 		// admits anything" then handed a fuel depot (whose DesignWingspan is 0) to any airliner
 		// as the smallest "stand" on the field (final review C1).
-		if (!Stand.IsStandCandidate() || !StandAdmission::Judge(Stand, Flight.Airframe).IsAdmitted())
+		if (!Stand.IsStandCandidate() || !StandAdmission::Judge(Network, Stand, Flight.Airframe).IsAdmitted())
 		{
 			continue;
 		}

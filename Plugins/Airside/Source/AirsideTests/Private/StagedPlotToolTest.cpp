@@ -97,7 +97,13 @@ namespace StagedPlotSeamFixture
 		TArray<EPreviewStyle> LabelStyles;
 
 		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
-		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override { ++Lines; }
+		/** Guide-style lines, counted apart: the stand tool's clearance strip (2026-09-28) is
+		 *  drawn from the entrance drag on, by design, and is not "the rest of the rectangle". */
+		int32 GuideLines = 0;
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle Style) override
+		{
+			++(Style == EPreviewStyle::Guide ? GuideLines : Lines);
+		}
 		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
 		virtual void Label(const FVector2D&, const FString&, EPreviewStyle Style) override
 		{
@@ -462,8 +468,10 @@ bool FStandPlotEntranceStageAsksNoRefusalTest::RunTest(const FString& Parameters
 
 	TestEqual(TEXT("only the entrance edge is drawn, not the rest of the rectangle"),
 		Sink.Lines, 1);
-	TestEqual(TEXT("no label of any kind - no refusal, no letter - while only the entrance "
-		"is pinned"), Sink.LabelStyles.Num(), 0);
+	// THE STRIP'S OWN LABEL IS THE ONE EXCEPTION (user, 2026-09-28: the gap must be explained
+	// while it is being drawn) - a Guide label, never a refusal or a letter.
+	TestEqual(TEXT("no refusal or letter label while only the entrance is pinned - only the strip's"),
+		Sink.LabelStyles.FilterByPredicate([](EPreviewStyle S) { return S != EPreviewStyle::Guide; }).Num(), 0);
 	TestEqual(TEXT("WhyStandRefused is not asked while only the entrance is pinned"),
 		Tool.GetRefusalCountForTest() - Before, 0);
 

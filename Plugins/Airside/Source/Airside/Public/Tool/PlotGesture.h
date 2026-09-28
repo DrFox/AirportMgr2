@@ -44,6 +44,15 @@ namespace PlotGesture
 	/** Which segments a gesture may anchor on - IsServiceRoad, IsTaxiway, or a test's own. */
 	using FRoadFilter = TFunctionRef<bool(const URoadNetwork&, FRoadSegmentId)>;
 
+	/**
+	 * How far beyond the kerb a gesture's SHAPE opens on this road, uu - the stand tool's is the
+	 * taxiway's clearance strip (TaxiwayStrip::StripWidthOf); the depot's is 0 until stage 3 of
+	 * the strip spec asks it. The anchor itself stays on the kerb; this widens only the search's
+	 * REACH (NearestRoad), so a cursor over a neighbour's box, out past the strip, still finds
+	 * the road. A FUNCTION OF THE ROAD, not a number, because the search picks the road.
+	 */
+	using FRoadSetback = TFunctionRef<double(const URoadNetwork&, FRoadSegmentId)>;
+
 	/** Is this segment a service road - something a truck may drive on? See the .cpp. */
 	AIRSIDE_API bool IsServiceRoad(const URoadNetwork& Network, FRoadSegmentId Id);
 
@@ -81,11 +90,12 @@ namespace PlotGesture
 	AIRSIDE_API double AnchorOffset(int32 Index);
 
 	/**
-	 * The accepted road nearest the cursor within AnchorReachUu, and where along it the cursor
-	 * falls. OutSegment and OutT are written only on a true return. See the .cpp.
+	 * The accepted road nearest the cursor within AnchorReachUu of its FRONTAGE LINE (the
+	 * centreline plus Setback), and where along it the cursor falls. OutSegment and OutT are
+	 * written only on a true return. See the .cpp.
 	 */
 	AIRSIDE_API bool NearestRoad(const URoadNetwork& Network, const FVector2D& Cursor,
-		FRoadFilter Accept, FRoadSegmentId& OutSegment, double& OutT);
+		FRoadFilter Accept, FRoadSetback Setback, FRoadSegmentId& OutSegment, double& OutT);
 
 	/** Where a first click would anchor a plot: the pinned corner and the frame it set. */
 	struct FAnchor
@@ -123,7 +133,7 @@ namespace PlotGesture
 	 * section 2). Refused when the segment is shorter than a step and holds none.
 	 */
 	AIRSIDE_API bool AnchorAt(const URoadNetwork& Network, const FVector2D& Cursor,
-		FRoadFilter Accept, FAnchor& Out, const GridSnap::FGridFrame& Grid = GridSnap::FGridFrame());
+		FRoadFilter Accept, FRoadSetback Setback, FAnchor& Out, const GridSnap::FGridFrame& Grid = GridSnap::FGridFrame());
 
 	/**
 	 * Draw the anchor grid a first click would snap to - the one AnchorAt would take heavier
@@ -131,5 +141,5 @@ namespace PlotGesture
 	 * the caller names the road it wanted, since only it knows which kind that was.
 	 */
 	AIRSIDE_API bool DescribeAnchors(const URoadNetwork& Network, const FVector2D& Cursor,
-		FRoadFilter Accept, IToolPreviewSink& Sink, const GridSnap::FGridFrame& Grid = GridSnap::FGridFrame());
+		FRoadFilter Accept, FRoadSetback Setback, IToolPreviewSink& Sink, const GridSnap::FGridFrame& Grid = GridSnap::FGridFrame());
 }

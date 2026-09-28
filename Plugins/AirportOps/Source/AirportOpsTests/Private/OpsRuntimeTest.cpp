@@ -2,6 +2,7 @@
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Model/TaxiwayStrip.h"
 #include "Model/OfferGenerator.h"
 #include "Model/ArrivalSequencer.h"
 #include "Model/BuildPurse.h"
@@ -390,12 +391,16 @@ bool FOpsRuntimeDrawnStandSurvivesLoadTest::RunTest(const FString& Parameters)
 		const int32 East = Target->PlaceNode(FVector2D(20000.0, 0.0));
 		Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
 
-		// A CODE D FLOOR, entrance 10 m clear of the taxiway - D because C alone has an
-		// authored asset and would come back by path in any session.
+		// A CODE D FLOOR, entrance behind the taxiway's clearance strip (2026-09-28; it was
+		// 10 m off the centreline, over the pavement edge, and is refused now) - D because C
+		// alone has an authored asset and would come back by path in any session.
 		const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::D);
 		const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::D);
-		const FVector2D A(0.0, 1000.0), B(Width, 1000.0);
-		const TArray<FVector2D> Rect = { A, B, FVector2D(Width, 1000.0 + Depth), FVector2D(0.0, 1000.0 + Depth) };
+		const FRoadSegmentId Taxi = Actor->Network->SegmentIdAt(0);
+		const double EntranceY = Actor->Network->GetSegment(Taxi)->Profile->GetHalfWidthLeft()
+			+ TaxiwayStrip::StripWidthOf(*Actor->Network, Taxi);
+		const FVector2D A(0.0, EntranceY), B(Width, EntranceY);
+		const TArray<FVector2D> Rect = { A, B, FVector2D(Width, EntranceY + Depth), FVector2D(0.0, EntranceY + Depth) };
 		const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 		if (!TestTrue(TEXT("a Code D stand is drawn"), Index != INDEX_NONE)) { return false; }
 		Actor->RebuildMesh();

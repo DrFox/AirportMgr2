@@ -129,9 +129,14 @@ FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand, double XDis
 	if (bWithStand)
 	{
 		// Faces east (heading 0), so its lead-in casts WEST and meets the 45 degree
-		// taxiway at (34000, -14000), 11000 uu away - inside FAnchorLink's reach.
+		// taxiway at (34000, -14000), 13000 uu away - inside FAnchorLink's reach.
+		//
+		// 27000 EAST, NOT 25000, since the taxiway clearance strip (2026-09-28): at 25000 the
+		// box's back corner stood 35 m from the taxiway's dead-end tip, inside its 40 m reach
+		// (half-width + strip), and admission closed the only stand. Moved along the lead-in's
+		// own line, so where it meets the taxiway is unchanged.
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-		Out.Net->PlaceEntity(Stand, Stand->Anchors, Out.XAt + FVector2D(25000.0, -14000.0), 0.0);
+		Out.Net->PlaceEntity(Stand, Stand->Anchors, Out.XAt + FVector2D(27000.0, -14000.0), 0.0);
 		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
 	}
 	return Out;

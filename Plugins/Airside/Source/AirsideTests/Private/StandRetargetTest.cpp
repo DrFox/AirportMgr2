@@ -8,6 +8,8 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
+#include "Model/StandAdmission.h"
+#include "Model/TaxiwayStrip.h"
 #include "Model/TrafficOccupancy.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -76,6 +78,58 @@ bool FStandRetargetTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("and it parks there"), RunUntil(*Traffic, *A.Net, 600.0,
 		[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Parked && P->GoalNode == A.Pose(NewStand); }));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStripClosedStandKeepsItsOccupantTest,
+	"Airside.Model.Traffic.StripClosedStandKeepsItsOccupant",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStripClosedStandKeepsItsOccupantTest::RunTest(const FString& Parameters)
+{
+	// USER RULING 2026-09-28 (taxiway clearance strip spec): a stand that turns out to sit in a
+	// taxiway's strip takes no NEW arrivals, and the aircraft already parked on it finishes its
+	// turnaround. Pins GroundTrafficRebuild's "a strip-closed stand is not gone" claim.
+	const FTestAirport A = FTestAirport::Build(TestAirframes::Piper(), { .StandCount = 1 });
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FAirframe Piper = TestAirframes::Piper();
+
+	const int32 Id = Traffic->DispatchArrival(*A.Net, A.Threshold, Piper, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	if (!TestTrue(TEXT("it parks"), RunUntil(*Traffic, *A.Net, 600.0,
+		[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Parked; }))) { return false; }
+	const FGuidelineNodeId Parked = Traffic->FindAgent(Id)->GoalNode;
+	TestTrue(TEXT("on the stand"), Parked == A.Pose(A.Stands[0]));
+
+	// CLOSE THE STAND: an outline over a taxiway's own centreline, the extreme of "inside the
+	// strip" - what a taxiway upgrade does to a stand beside it, without needing stage 6.
+	FRoadSegmentId Taxi;
+	for (int32 Index = 0; Index < A.Net->GetSegments().Num() && !Taxi.IsSet(); ++Index)
+	{
+		const FRoadSegmentId Id2 = A.Net->SegmentIdAt(Index);
+		if (Id2.IsSet() && TaxiwayStrip::HasStrip(*A.Net, Id2)) { Taxi = Id2; }
+	}
+	FVector2D TA, TB;
+	if (!TestTrue(TEXT("the fixture has a taxiway"), Taxi.IsSet() && A.Net->SegmentEnds(Taxi, TA, TB))) { return false; }
+	const FVector2D Mid = (TA + TB) * 0.5;
+	FRoadNetworkTestAccess(*A.Net).SetEntityOutlineForTest(A.Stands[0], {
+		Mid + FVector2D(-500.0, -500.0), Mid + FVector2D(500.0, -500.0), Mid + FVector2D(500.0, 500.0), Mid + FVector2D(-500.0, 500.0) });
+
+	// CONTROL: admission now refuses it - or everything below measures nothing.
+	TestEqual(TEXT("control: the stand is closed to new arrivals"),
+		StandAdmission::Judge(*A.Net, *A.Net->GetEntity(A.Stands[0]), Piper).Why, EStandRefusal::InsideStrip);
+
+	TestGraph::Rebuild(*A.Net);
+	Traffic->OnGraphRebuilt(*A.Net);
+	Traffic->Advance(0.05, A.Net);
+	{
+		const FRoadAgent* P = Traffic->FindAgent(Id);
+		if (!TestNotNull(TEXT("the aircraft is still there"), P)) { return false; }
+		TestEqual(TEXT("still parked - not evicted by the rebuild"), P->Phase, EAgentPhase::Parked);
+		TestTrue(TEXT("on the same stand"), P->GoalNode == Parked);
+		TestFalse(TEXT("and not sent looking for another"), P->bAwaitingStand);
+	}
 	return true;
 }
 

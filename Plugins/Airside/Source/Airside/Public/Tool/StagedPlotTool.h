@@ -84,6 +84,26 @@ protected:
 	/** Which road this gesture may anchor on - PlotGesture::IsServiceRoad or IsTaxiway. */
 	virtual bool Filter(const URoadNetwork& Network, FRoadSegmentId Id) const = 0;
 
+	/**
+	 * How far past the kerb this tool's frontage stands on Id, uu - PlotGesture::FRoadSetback.
+	 * ZERO BY DEFAULT because the depot tool's plot is not yet held to the strip (stage 3 of
+	 * the strip spec); the stand tool overrides it. Not pure: a pure virtual would force the
+	 * depot to state a rule that spec has not written yet.
+	 */
+	virtual double FrontSetback(const URoadNetwork& Network, FRoadSegmentId Id) const { return 0.0; }
+
+	/**
+	 * FrontSetback of the road the first click anchored on, uu - captured with Corners[0] and
+	 * never re-asked, so the shape a gesture draws cannot change under it when a road is edited
+	 * mid-gesture. The anchor is on the kerb; a tool whose shape opens past a clearance strip
+	 * (the stand tool) offsets its own corners by this.
+	 */
+	double FrontGap = 0.0;
+
+	/** The road the first click anchored on, captured with FrontGap - what the gap belongs to,
+	 *  for a readout that names it. May have died since; ask the network before reading it. */
+	FRoadSegmentId FrontRoad;
+
 	/** Is this entity one THIS tool places - what Remove and the idle preview act on. */
 	virtual bool IsMine(const FEntityInstance& Entity) const = 0;
 

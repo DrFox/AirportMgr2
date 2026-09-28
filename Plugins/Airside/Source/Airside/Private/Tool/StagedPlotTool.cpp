@@ -36,11 +36,13 @@ bool FStagedPlotTool::DescribeGridLine(const URoadNetwork* Network, const FVecto
 	// of from DescribeAnchors - paid because MakeContext asks before the tool has a context to
 	// cache it on. Not measured (2026-09-28); the walk is the one every idle hover already pays.
 	auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
+	// THE SAME SETBACK AnchorAt reaches by, so the grid turns to the road the click takes.
+	auto Setback = [this](const URoadNetwork& N, FRoadSegmentId Id) { return FrontSetback(N, Id); };
 	FRoadSegmentId Road;
 	double T = 0.0;
 	FVector2D A = FVector2D::ZeroVector;
 	FVector2D B = FVector2D::ZeroVector;
-	if (!PlotGesture::NearestRoad(*Network, Cursor, Accept, Road, T) || !Network->SegmentEnds(Road, A, B)
+	if (!PlotGesture::NearestRoad(*Network, Cursor, Accept, Setback, Road, T) || !Network->SegmentEnds(Road, A, B)
 		|| (B - A).IsNearlyZero())
 	{
 		return false;
@@ -77,11 +79,14 @@ void FStagedPlotTool::OnClick(const FToolContext& Context)
 	{
 		PlotGesture::FAnchor Anchor;
 		auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
-		if (!PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Anchor, Context.GridFrame))
+		auto Setback = [this](const URoadNetwork& N, FRoadSegmentId Id) { return FrontSetback(N, Id); };
+		if (!PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Setback, Anchor, Context.GridFrame))
 		{
 			return;
 		}
 		Corners[0] = Anchor.Corner;
+		FrontGap = FrontSetback(*Network, Anchor.Road);
+		FrontRoad = Anchor.Road;
 		Along = Anchor.Along;
 		Inward = Anchor.Inward;
 		RoadA = Anchor.RoadA;
@@ -217,7 +222,8 @@ void FStagedPlotTool::BuildPreview(const FToolContext& Context, IToolPreviewSink
 		// THE SAME GRID THE CLICK ANCHORS ON - PlotGesture::DescribeAnchors and AnchorAt are
 		// one rule written once, so the heavier dot is the anchor a click takes.
 		auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
-		if (!PlotGesture::DescribeAnchors(*Network, Context.Cursor, Accept, Sink, Context.GridFrame))
+		auto Setback = [this](const URoadNetwork& N, FRoadSegmentId Id) { return FrontSetback(N, Id); };
+		if (!PlotGesture::DescribeAnchors(*Network, Context.Cursor, Accept, Setback, Sink, Context.GridFrame))
 		{
 			Sink.Label(Context.Cursor, FString::Printf(TEXT("move near %s"), *RoadNoun()),
 				EPreviewStyle::Refused);
@@ -275,9 +281,10 @@ void FStagedPlotTool::BuildReadout(const FToolContext& Context, IToolReadoutSink
 		// THE SAME QUESTION THE CLICK ASKS, so the warning cannot say "move near X" while a
 		// click would have anchored perfectly well.
 		auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
+		auto Setback = [this](const URoadNetwork& N, FRoadSegmentId Id) { return FrontSetback(N, Id); };
 		PlotGesture::FAnchor Unused;
 		if (Network == nullptr
-			|| !PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Unused, Context.GridFrame))
+			|| !PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Setback, Unused, Context.GridFrame))
 		{
 			Sink.Warning(FString::Printf(TEXT("Move near %s"), *RoadNoun()));
 		}

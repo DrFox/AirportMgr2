@@ -5,6 +5,7 @@
 #include "DynamicMesh/MeshNormals.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Model/TaxiwayStrip.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
@@ -496,9 +497,14 @@ bool FStandMarkingPaintsAfterPlacementTest::RunTest(const FString& Parameters)
 
 	const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::C);
 	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
-	const FVector2D A(0.0, 1000.0);
-	const FVector2D B(Width, 1000.0);
-	const TArray<FVector2D> Rect = { A, B, FVector2D(Width, 1000.0 + Depth), FVector2D(0.0, 1000.0 + Depth) };
+	// BEHIND THE TAXIWAY'S CLEARANCE STRIP (2026-09-28), where the stand tool puts an entrance -
+	// a bare 1000.0 sat over the pavement's own edge and is refused now.
+	const FRoadSegmentId Taxi = Actor->Network->SegmentIdAt(0);
+	const double EntranceY = Actor->Network->GetSegment(Taxi)->Profile->GetHalfWidthLeft()
+		+ TaxiwayStrip::StripWidthOf(*Actor->Network, Taxi);
+	const FVector2D A(0.0, EntranceY);
+	const FVector2D B(Width, EntranceY);
+	const TArray<FVector2D> Rect = { A, B, FVector2D(Width, EntranceY + Depth), FVector2D(0.0, EntranceY + Depth) };
 	const int32 Placed = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 	if (!TestTrue(TEXT("the stand is placed"), Placed != INDEX_NONE)) { return false; }
 

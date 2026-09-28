@@ -118,7 +118,7 @@ bool UFuelService::CouldServe(const URoadNetwork& Network, const FAirframe& Airf
 		const FEntityInstance& Stand = Entities[Index];
 		// THE SAME TWO FILTERS UStandAllocator::Reserve applies, so "a stand it would take" means
 		// the stand the accept would actually hold.
-		if (!Stand.IsStandCandidate() || !StandAdmission::Judge(Stand, Airframe).IsAdmitted())
+		if (!Stand.IsStandCandidate() || !StandAdmission::Judge(Network, Stand, Airframe).IsAdmitted())
 		{
 			continue;
 		}

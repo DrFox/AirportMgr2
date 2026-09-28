@@ -22,6 +22,7 @@
 #include "Model/RoadSlotMap.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
+#include "Model/TaxiwayStrip.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
@@ -755,6 +756,20 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline, EP
 			{
 				return TEXT("a taxiway crosses the stand");
 			}
+		}
+	}
+
+	// INSIDE A TAXIWAY'S CLEARANCE STRIP (strip spec 2026-09-28): a taxiing wing overhangs the
+	// pavement edge, and a parked tail within its reach is struck. AFTER the crossing check,
+	// which names the more specific fault when the taxiway runs through the box itself. THE
+	// STRIP IS THE TAXIWAY'S LETTER'S, so the message names the taxiway's letter, not the stand's.
+	// ENFORCED BY: Airside.Present.StandPlot.RefusedInsideStrip
+	if (Network != nullptr)
+	{
+		if (const TOptional<TaxiwayStrip::FIntrusion> In = TaxiwayStrip::WorstIntrusion(*Network, Outline))
+		{
+			return FString::Printf(TEXT("inside a taxiway's clearance strip by %.1f m (a Code %s taxiway needs %.1f m clear)"),
+				In->Depth / 100.0, IcaoCode::ToLetter(In->Letter), In->Required / 100.0);
 		}
 	}
 

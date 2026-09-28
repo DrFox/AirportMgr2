@@ -126,6 +126,11 @@ bool FOfferGeneratorTransientRefusalTest::RunTest(const FString& Parameters)
 	// the row says what is missing, and C scores it - the player's decision, not a filter's.
 	TestFalse(TEXT("a stand whose service cannot work is not a permanent refusal"),
 		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::NoStandServiceable));
+	// A STAND IN A TAXIWAY'S CLEARANCE STRIP needs redrawing - building, not waiting - so no
+	// airline is offered a flight it would refuse (strip spec 2026-09-28). It reaches the
+	// generator's default branch; this pins that it stays there.
+	TestTrue(TEXT("every fitting stand inside a strip is a permanent refusal"),
+		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::NoStandClearOfStrip));
 	return true;
 }
 

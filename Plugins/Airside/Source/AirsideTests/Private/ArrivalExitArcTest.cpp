@@ -200,4 +200,29 @@ bool FArrivalTakesTheArcNotTheJunctionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalRefusedWhenOnlyStandInStripTest,
+	"Airside.Model.ArrivalRefusedWhenOnlyStandInStrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalRefusedWhenOnlyStandInStripTest::RunTest(const FString& Parameters)
+{
+	// THE FIELD'S ONLY STAND FITS AND IS PAVED, but its back corner sits 35 m from the diagonal
+	// taxiway's dead-end tip - inside that taxiway's 40 m reach. The fix is "redraw it back",
+	// and the refusal must say so, not "pave a stand": WhyEveryStandRefused's strip-first
+	// priority (review, 2026-09-28). The spot is where ExitArcBuildAirport's stand stood
+	// before the strip moved it.
+	FExitArcAirport A = ExitArcBuildAirport(GetTransientPackage(), /*bWithStand=*/false);
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	A.Net->PlaceEntity(Stand, Stand->Anchors, A.XAt + FVector2D(25000.0, -14000.0), 0.0);
+	FAnchorLink::Build(*A.Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*A.Net, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
+	TestEqual(TEXT("refused for the strip"), Plan.Why, EArrivalRefusal::NoStandClearOfStrip);
+	TestTrue(FString::Printf(TEXT("and the sentence says to redraw (said: %s)"), *ArrivalPlanner::DescribeRefusal(Plan)),
+		ArrivalPlanner::DescribeRefusal(Plan).Contains(TEXT("redraw")));
+	return true;
+}
+
 #endif

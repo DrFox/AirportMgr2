@@ -13,6 +13,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiwayStrip.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
@@ -40,6 +41,19 @@ namespace StandPlotPlacementTest
 		const int32 West = Target->PlaceNode(FVector2D(-10000.0, Y));
 		const int32 East = Target->PlaceNode(FVector2D(10000.0, Y));
 		Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
+	}
+
+	/**
+	 * Where a stand's entrance goes beside the taxiway laid first (segment 0): past its kerb
+	 * AND its clearance strip (strip spec 2026-09-28) - where the stand tool itself puts it.
+	 * Was a bare 1000.0, 10 m off the centreline, which is over the pavement's own edge and now
+	 * refused by WhyStandRefused's strip gate.
+	 */
+	double BehindStrip(const ARoadNetworkActor* Actor)
+	{
+		const FRoadSegmentId Taxi = Actor->Network->SegmentIdAt(0);
+		return Actor->Network->GetSegment(Taxi)->Profile->GetHalfWidthLeft()
+			+ TaxiwayStrip::StripWidthOf(*Actor->Network, Taxi);
 	}
 
 	/** A rectangle sized exactly Letter's own floor: entrance edge on Y = EntranceY running
@@ -111,7 +125,7 @@ bool FStandPlotPlacesCodeCTest::RunTest(const FString& Parameters)
 	LayTaxiway(Actor, 0.0);
 
 	FVector2D A, B;
-	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::C, 1000.0, A, B);
+	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::C, BehindStrip(Actor), A, B);
 	const FVector2D Inward(0.0, 1.0);
 
 	IRoadEditTarget* Target = Actor;
@@ -230,7 +244,7 @@ bool FStandPlotRefusesOverlapTest::RunTest(const FString& Parameters)
 	LayTaxiway(Actor, 0.0);
 
 	FVector2D A, B;
-	const TArray<FVector2D> First = FloorRect(EIcaoCode::C, 1000.0, A, B);
+	const TArray<FVector2D> First = FloorRect(EIcaoCode::C, BehindStrip(Actor), A, B);
 	IRoadEditTarget* Target = Actor;
 	const int32 FirstIndex = Target->PlaceStandInPlot(First, A, B, EPavement::Tarmac);
 	if (!TestTrue(TEXT("the first stand is placed"), FirstIndex != INDEX_NONE)) { return false; }
@@ -239,7 +253,7 @@ bool FStandPlotRefusesOverlapTest::RunTest(const FString& Parameters)
 	// overlap rather than merely touch.
 	const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::C);
 	FVector2D SecondA, SecondB;
-	TArray<FVector2D> Second = FloorRect(EIcaoCode::C, 1000.0, SecondA, SecondB);
+	TArray<FVector2D> Second = FloorRect(EIcaoCode::C, BehindStrip(Actor), SecondA, SecondB);
 	for (FVector2D& P : Second) { P.X += Width * 0.5; }
 	SecondA.X += Width * 0.5;
 	SecondB.X += Width * 0.5;
@@ -349,7 +363,7 @@ bool FStandPlotUndoRemovesTest::RunTest(const FString& Parameters)
 	LayTaxiway(Actor, 0.0);
 
 	FVector2D A, B;
-	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::C, 1000.0, A, B);
+	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::C, BehindStrip(Actor), A, B);
 	IRoadEditTarget* Target = Actor;
 	const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 	if (!TestTrue(TEXT("the stand is placed"), Index != INDEX_NONE)) { return false; }
@@ -668,7 +682,7 @@ bool FStandPlotLeadInSizedByLetterTest::RunTest(const FString& Parameters)
 		Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
 
 		FVector2D A, B;
-		const TArray<FVector2D> Rect = FloorRect(EIcaoCode::F, 1000.0, A, B);
+		const TArray<FVector2D> Rect = FloorRect(EIcaoCode::F, BehindStrip(Actor), A, B);
 		const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 		if (!TestTrue(TEXT("a Code F floor rect beside the taxiway is placed"), Index != INDEX_NONE)) { return false; }
 		Actor->RebuildMesh();
@@ -772,7 +786,7 @@ bool FStandPlotRebindsAfterLevelLoadTest::RunTest(const FString& Parameters)
 	LayTaxiway(Actor, 0.0);
 
 	FVector2D A, B;
-	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::D, 1000.0, A, B);
+	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::D, BehindStrip(Actor), A, B);
 	IRoadEditTarget* Target = Actor;
 	const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 	if (!TestTrue(TEXT("a Code D stand is placed"), Index != INDEX_NONE)) { return false; }
@@ -962,7 +976,8 @@ namespace StandPlotPlacementTest
 		Actor->ClearNetwork();
 		LayTaxiway(Actor, 0.0);
 		FVector2D A, B;
-		const TArray<FVector2D> Rect = FloorRect(Letter, 1000.0, A, B);
+		const double EntranceY = BehindStrip(Actor);
+		const TArray<FVector2D> Rect = FloorRect(Letter, EntranceY, A, B);
 		IRoadEditTarget* Target = Actor;
 		const int32 Index = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
 		if (!Test.TestTrue(TEXT("the stand is placed"), Index != INDEX_NONE)) { return false; }
@@ -973,7 +988,8 @@ namespace StandPlotPlacementTest
 		const URoadProfile* Profile = Actor->ResolveServiceRoadProfile();
 		if (!Test.TestNotNull(TEXT("a service road profile resolves"), Profile)) { return false; }
 		Out.HalfWidth = Profile->GetMaxHalfWidth();
-		Out.FarEdgeY = 1000.0 + IcaoCode::StandDepthForLetter(Letter);
+		// FROM THE SAME ENTRANCE the rect was drawn at - one figure, so the two cannot drift.
+		Out.FarEdgeY = EntranceY + IcaoCode::StandDepthForLetter(Letter);
 		const double RoadY = RoadYFor(Out.FarEdgeY, Out.HalfWidth);
 		const int32 West = Target->PlaceNode(FVector2D(-12000.0, RoadY));
 		const int32 East = Target->PlaceNode(FVector2D(12000.0, RoadY));
@@ -1287,6 +1303,45 @@ bool FStandPlotDemolishRefundsThePadTest::RunTest(const FString& Parameters)
 	// applies RefundFraction to every line, the pad's (null source) included.
 	TestEqual(TEXT("the demolition credits the equipment AND the grass pad (entity + 0.4 x tarmac pad)"),
 		Purse.Credited, EntityPrice + 0.4 * TarmacPad, 1e-6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandRefusedInsideStripTest,
+	"Airside.Present.StandPlot.RefusedInsideStrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandRefusedInsideStripTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+	IRoadEditTarget* Target = Actor;
+	const int32 W = Target->PlaceNode(FVector2D(-10000.0, 0.0));
+	const int32 E = Target->PlaceNode(FVector2D(10000.0, 0.0));
+	Target->ConnectNodes(W, E, ERoadKind::Taxiway, INDEX_NONE);
+
+	const FRoadSegmentId Taxi = Actor->Network->SegmentIdAt(0);
+	const double Kerb = Actor->Network->GetSegment(Taxi)->Profile->GetHalfWidthLeft();
+	const double Strip = TaxiwayStrip::StripWidthOf(*Actor->Network, Taxi);
+	const double Wd = IcaoCode::StandWidthForLetter(EIcaoCode::C);
+	const double Dp = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	auto Box = [&](double NearY)
+	{
+		return TArray<FVector2D>{ { 0.0, NearY }, { Wd, NearY }, { Wd, NearY + Dp }, { 0.0, NearY + Dp } };
+	};
+
+	// TODAY'S STAND - flush to the kerb - is what a taxiing wing sweeps.
+	const FString Flush = Target->WhyStandRefused(Box(Kerb), EPavement::Tarmac);
+	TestTrue(FString::Printf(TEXT("a stand flush to the kerb is refused for the strip (said: %s)"), *Flush),
+		Flush.Contains(TEXT("clearance strip")));
+
+	// THE SAME STAND A STRIP BACK is the tool's own placement, and passes every gate.
+	TestEqual(TEXT("a stand at the strip edge is not refused"),
+		Target->WhyStandRefused(Box(Kerb + Strip), EPavement::Tarmac), FString());
 	return true;
 }
 

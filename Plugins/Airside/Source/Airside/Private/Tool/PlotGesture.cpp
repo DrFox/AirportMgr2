@@ -1,6 +1,7 @@
 #include "Tool/PlotGesture.h"
 
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GridSnap.h"
 #include "Solve/RoadGeom.h"
@@ -40,26 +41,10 @@ namespace PlotGesture
 
 	bool IsTaxiway(const URoadNetwork& Network, FRoadSegmentId Id)
 	{
-		const FRoadSegment* Segment = Network.GetSegment(Id);
-		if (Segment == nullptr || Segment->Profile == nullptr)
-		{
-			return false;
-		}
-
-		// BOTH HALVES, because either alone admits the wrong ground. An aircraft line alone
-		// would admit a mixed cross-section a truck also drives (a stand opening onto a
-		// service road is exactly what the stand tool refuses); no truck line alone would
-		// admit a profile with no lines at all, which nothing can taxi on.
-		bool bAircraft = false;
-		for (const FProfileGuideline& Guideline : Segment->Profile->Guidelines)
-		{
-			if (Guideline.Class == ETraversalClass::GroundVehicle)
-			{
-				return false;
-			}
-			bAircraft |= Guideline.Class == ETraversalClass::Aircraft;
-		}
-		return bAircraft;
+		// THE RULE LIVES IN Model/TaxiwayStrip (IsAircraftOnly) since 2026-09-28, so the strip
+		// query - which Model/ owns and cannot reach Tool/ for - asks the same question the
+		// stand tool anchors by. Its "BOTH HALVES" comment moved with it.
+		return TaxiwayStrip::IsAircraftOnly(Network, Id);
 	}
 
 	/**
@@ -180,9 +165,20 @@ namespace PlotGesture
 	 * GESTURE time is the safe half - the answer is frozen into the outline at commit.
 	 */
 	bool NearestRoad(const URoadNetwork& Network, const FVector2D& Cursor,
-		FRoadFilter Accept, FRoadSegmentId& OutSegment, double& OutT)
+		FRoadFilter Accept, FRoadSetback Setback, FRoadSegmentId& OutSegment, double& OutT)
 	{
-		double BestSquared = AnchorReachUu * AnchorReachUu;
+		// REACH IS MEASURED FROM THE FRONTAGE, not the centreline, since the clearance strip
+		// (2026-09-28): a stand's anchor dots stand a strip beyond the kerb - 28 m on the
+		// standard taxiway - and a reach counted from the road left the dots the player aims
+		// at outside it, so a click on them anchored nothing
+		// (Airside.Tool.StandPlot.FlushNeighboursBothPlace went red on exactly that). Roads
+		// also RANK by that distance, so the road whose frontage is nearer wins.
+		//
+		// NOT CLAMPED AT ZERO: a cursor inside two taxiways' strips (a junction) is "negative"
+		// from both frontages, and ranks by how far in. Clamped, both read 0 and array order
+		// chose - the farther taxiway could win (review, 2026-09-28).
+		// ENFORCED BY: Airside.Tool.StandGrid.NearerTaxiwayWinsInsideTwoStrips
+		double Best = AnchorReachUu;
 		bool bFound = false;
 
 		const TArray<FRoadSegment>& Segments = Network.GetSegments();
@@ -203,14 +199,14 @@ namespace PlotGesture
 			}
 
 			const double T = RoadGeom::ClosestPointOnSegment(A->Position, B->Position, Cursor);
-			const double DistanceSquared =
-				FVector2D::DistSquared(FMath::Lerp(A->Position, B->Position, T), Cursor);
-			if (DistanceSquared > BestSquared)
+			const double FromFrontage =
+				FVector2D::Distance(FMath::Lerp(A->Position, B->Position, T), Cursor) - Setback(Network, Id);
+			if (FromFrontage > Best)
 			{
 				continue;
 			}
 
-			BestSquared = DistanceSquared;
+			Best = FromFrontage;
 			OutSegment = Id;
 			OutT = T;
 			bFound = true;
@@ -218,7 +214,7 @@ namespace PlotGesture
 		return bFound;
 	}
 
-	bool AnchorAt(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept,
+	bool AnchorAt(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept, FRoadSetback Setback,
 		FAnchor& Out, const GridSnap::FGridFrame& Grid)
 	{
 		// MOVED FROM FPlotPlaceTool::OnClick's Idle case when the stand tool needed the same
@@ -230,7 +226,7 @@ namespace PlotGesture
 		// searches rather than reading the driver's snap.
 		FRoadSegmentId Road;
 		double AlongT = 0.0;
-		if (!NearestRoad(Network, Cursor, Accept, Road, AlongT))
+		if (!NearestRoad(Network, Cursor, Accept, Setback, Road, AlongT))
 		{
 			return false;
 		}
@@ -271,6 +267,11 @@ namespace PlotGesture
 		// OFF THE CARRIAGEWAY, and only now that the side is known. Measured BEFORE this
 		// step, because the side has to be read against the centreline the cursor was
 		// judged from - offsetting first would tilt that test by half a road width.
+		// ON THE KERB, NOT PAST THE STRIP (user, 2026-09-28: a first click out in the grass was
+		// "slightly unintuitive"). The corner is where the player reaches for the road; a tool
+		// with a clearance strip (the stand tool) opens its box a strip beyond it itself - see
+		// FStagedPlotTool::FrontGap. Setback still widens the REACH, in NearestRoad.
+		// ENFORCED BY: Airside.Tool.StandPlot.StartsAtTheKerb
 		Anchor.Corner += Anchor.Inward * KerbOffset(Network, Road, Side >= 0.0);
 
 		// THE GRID - WORLD OR TURNED TO THIS ROAD - REPLACES THE BAY GRID WHEN IT IS ON. The bay grid is phased from each
@@ -300,7 +301,7 @@ namespace PlotGesture
 		return true;
 	}
 
-	bool DescribeAnchors(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept,
+	bool DescribeAnchors(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept, FRoadSetback Setback,
 		IToolPreviewSink& Sink, const GridSnap::FGridFrame& Grid)
 	{
 		// The anchors the player could take, so the grid is visible before it is committed
@@ -316,7 +317,7 @@ namespace PlotGesture
 		// twice on every Idle-stage hover frame; Anchor.Road/AlongT/RoadA/RoadB are that same
 		// search's own answer, carried out on FAnchor rather than thrown away.
 		FAnchor Anchor;
-		if (!AnchorAt(Network, Cursor, Accept, Anchor, Grid))
+		if (!AnchorAt(Network, Cursor, Accept, Setback, Anchor, Grid))
 		{
 			return false;
 		}
