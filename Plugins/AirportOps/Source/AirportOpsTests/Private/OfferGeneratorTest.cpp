@@ -122,6 +122,10 @@ bool FOfferGeneratorTransientRefusalTest::RunTest(const FString& Parameters)
 		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::NoRouteToStand));
 	TestFalse(TEXT("and None is not a refusal at all"),
 		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::None));
+	// A SERVICE THE AIRPORT CANNOT GIVE IS SOFT (spec 2026-09-28 ruling 5): the offer is made,
+	// the row says what is missing, and C scores it - the player's decision, not a filter's.
+	TestFalse(TEXT("a stand whose service cannot work is not a permanent refusal"),
+		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::NoStandServiceable));
 	return true;
 }
 

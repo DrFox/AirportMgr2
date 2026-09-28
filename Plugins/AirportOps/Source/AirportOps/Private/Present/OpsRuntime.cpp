@@ -201,6 +201,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	OfferGenerator->Pricing = Pricing;
 	FlightBoard->Ledger = Ledger;
 	FlightBoard->Pricing = Pricing;
+	FlightBoard->Fuel = FuelService;
 	FuelService->Ledger = Ledger;
 	FuelService->Pricing = Pricing;
 	Ledger->Pricing = Pricing;

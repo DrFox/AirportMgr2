@@ -9,6 +9,7 @@
 #include "FlightBoard.generated.h"
 
 class UFlight;
+class UFuelService;
 class UGroundTraffic;
 class UOfferGenerator;
 class URoadNetwork;
@@ -135,6 +136,12 @@ public:
 	 */
 	UPROPERTY() TObjectPtr<ULedger> Ledger = nullptr;
 	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+
+	/**
+	 * Asked whether the airport could fuel an offer, for FOfferVerdict::bFuelServable. Null in
+	 * a test that does not care - fuel then reads as servable. Set by UOpsRuntime::Attach.
+	 */
+	UPROPERTY() TObjectPtr<UFuelService> Fuel = nullptr;
 
 	/**
 	 * Bank the landing fee this flight was OFFERED at. Idempotent - a flight lands once.

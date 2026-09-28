@@ -5,6 +5,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/FuelService.h"
 #include "Model/GroundTraffic.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadAgent.h"
@@ -227,6 +228,22 @@ bool FOfferAirborneAtTest::RunTest(const FString& Parameters)
 	const double At = Rig.Clock->Now();
 	Rig.Board->OnAgentPhase(*Rig.Traffic, *Rig.Net, *Rig.Clock, 7, EAgentPhase::Taxiing, EAgentPhase::Departing);
 	TestEqual(TEXT("the moment it departs is written down"), Flight->AirborneAt, At, 1e-9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferVerdictFuelTest, "AirportOps.Model.Offers.Countdown.VerdictReportsFuel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferVerdictFuelTest::RunTest(const FString& Parameters)
+{
+	// NO DEPOT ON THIS FIELD. The offer is still acceptable - a missing service is the
+	// player's to accept badly (spec ruling 5) - and the verdict says fuel cannot be given.
+	FCountdownRig Rig;
+	Rig.Board->Fuel = NewObject<UFuelService>(GetTransientPackage());
+	UFlight* Flight = Rig.Offer(60.0);
+	const FOfferVerdict& Verdict = Rig.Board->VerdictFor(*Rig.Traffic, *Rig.Net, *Flight);
+	TestEqual(TEXT("it can land and park"), Verdict.Why, EArrivalRefusal::None);
+	TestFalse(TEXT("but nobody can fuel it"), Verdict.bFuelServable);
+	TestTrue(TEXT("and the accept is allowed anyway"), Rig.Board->Accept(*Rig.Traffic, *Rig.Net, *Rig.Clock, *Flight));
 	return true;
 }
 

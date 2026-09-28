@@ -23,11 +23,17 @@ bool UOfferGenerator::IsPermanentRefusal(EArrivalRefusal Why)
 	case EArrivalRefusal::GraphBeingEdited:  // clears when the player lets go of the node
 		return false;
 
+	// A SERVICE THE AIRPORT CANNOT GIVE is the player's to accept badly (spec 2026-09-28
+	// ruling 5): the offer is made, the row says what is missing, and C scores the flight
+	// down. Filtering it out hid WHY an airline was not offering.
+	case EArrivalRefusal::NoStandServiceable:
+		return false;
+
 	// These need the player to BUILD something. NoRunway, RunwayTooShort, NotAdmitted,
 	// NoExit, NoRouteToStand, NoStandBigEnough (a bigger stand - so no airline is offered an
 	// A380 until an F stand exists, which is the drawn-stands spec's own promise),
-	// NoStandPavedEnough (pave a stand) and NoStandServiceable (fix the service, not the
-	// stand) - shared-pavement Task 9's two new refusals, neither of which clears on its own.
+	// and NoStandPavedEnough (pave a stand) - one of shared-pavement Task 9's two new
+	// refusals; its sibling NoStandServiceable is soft since 2026-09-28, above.
 	default:
 		return true;
 	}

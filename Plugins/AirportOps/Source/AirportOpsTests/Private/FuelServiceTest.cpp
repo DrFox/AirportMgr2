@@ -1972,4 +1972,31 @@ bool FFuelStandDesignVehicleFallsBackTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * CouldServe (spec 2026-09-28 section 3): the offer row asks whether a depot could fuel this
+ * airframe on a stand it would take, BEFORE the aircraft exists - so the player knows what
+ * accepting costs. Same ChooseDepot the live demand asks, so the row and the truck agree.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelCouldServeTest, "AirportOps.Fuel.CouldServe.DepotOrNot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelCouldServeTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	{
+		FFuelFixture Fixture;
+		Fixture.Build(/*bWithRoad=*/true, /*bWithDepot=*/false);
+		TestFalse(TEXT("with no depot the airport cannot fuel it"),
+			Fixture.Service->CouldServe(*Fixture.Net, Airframe));
+	}
+	{
+		FFuelFixture Fixture;
+		Fixture.Build(/*bWithRoad=*/true);
+		TestTrue(TEXT("with a joined depot on a road to the stand it can"),
+			Fixture.Service->CouldServe(*Fixture.Net, Airframe));
+	}
+	return true;
+}
+
 #endif

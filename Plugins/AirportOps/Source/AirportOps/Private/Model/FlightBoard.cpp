@@ -3,6 +3,7 @@
 #include "AirportOpsLog.h"
 #include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
+#include "Model/FuelService.h"
 #include "Model/Ledger.h"
 #include "Model/Pricing.h"
 #include "Model/GroundTraffic.h"
@@ -123,7 +124,7 @@ const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
 		// THE REAL PLAN, with the live occupancy. The greyed-out reason is the sentence the
 		// arrival itself would print, because it is the same refusal.
 		Verdict.Why = WhyNotAcceptable(Traffic, Network, Flight);
-		Verdict.bFuelServable = true;
+		Verdict.bFuelServable = Fuel == nullptr || Fuel->CouldServe(Network, Flight.Airframe);
 		Verdict.BoardAt = BoardNow;
 		Verdict.GuidelineAt = GuidelineNow;
 		Verdict.OccupancyAt = OccupancyNow;

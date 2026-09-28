@@ -351,6 +351,18 @@ public:
 	static EIcaoCode LetterOfStand(const FEntityInstance& Stand);
 
 	/**
+	 * Could a depot fuel this airframe on some stand it would take - asked BEFORE the aircraft
+	 * exists, for the offer row (spec 2026-09-28 section 3).
+	 *
+	 * THE SAME ChooseDepot the live demand asks, per admitting stand (StandAdmission::Judge),
+	 * so the row's "fuel" chip and the truck that does or does not come cannot disagree. Busy
+	 * trucks count as servable: a busy fleet frees itself, a missing depot does not. The cost is
+	 * a route search per admitting stand; the board calls it only when its verdict's revisions
+	 * move - see FOfferVerdict.
+	 */
+	bool CouldServe(const URoadNetwork& Network, const FAirframe& Airframe) const;
+
+	/**
 	 * Every phase change in the traffic model - the events this class is driven by.
 	 *
 	 * An aircraft reaching Parked at a stand makes a demand; a truck reaching Parked at the
