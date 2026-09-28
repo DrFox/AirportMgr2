@@ -13,6 +13,7 @@
 #include "Model/SimClock.h"
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
+#include "UI/UiRow.h"
 #include "UIStyle.h"
 
 #define LOCTEXT_NAMESPACE "Ledger"
@@ -24,21 +25,18 @@ void ULedgerPanelWidget::BuildOnce(const UUIStyle& Style)
 
 	EnsureSlots(&Style);
 
-	// SelfHitTestInvisible on the ROOT and Collapsed on the CARD, the split
-	// UAirportMgrPanelWidget::BuildOnce documents: the root must stay laid out or the panel
-	// never gets another tick to un-hide itself with.
+	// SelfHitTestInvisible on the ROOT; the WINDOW hides (SetShown) - see
+	// UAirportMgrPanelWidget::BuildOnce.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	SetCardShown(false);
+	SetShown(false);
 }
 
 void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
 {
-	// TOP RIGHT, UNDER THE INBOX. The inbox owns that corner and must never be covered - see
-	// its TopOffset comment, missing an offer costs money - so this sits below it. The card is
-	// found by name afterwards so the Blueprint path, where EnsureCardRoot returns null, still
-	// has something for Toggle to hide.
-	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("LedgerCard"),
-		FAnchors(1.0f, 0.0f, 1.0f, 0.0f), FVector2D(1.0, 0.0), FVector2D(-12.0, TopOffset), true)))
+	// TOP RIGHT, UNDER THE INBOX (its window - WantsWindow). The inbox owns that corner and must
+	// never be covered - see its TopOffset comment, missing an offer costs money. The window hides
+	// the whole panel, so the Blueprint path, where EnsureContentRoot returns null, still hides.
+	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureContentRoot(TEXT("LedgerCard"))))
 	{
 		UHorizontalBox* HeadingRow = WidgetTree->ConstructWidget<UHorizontalBox>(
 			UHorizontalBox::StaticClass(), TEXT("LedgerHeading"));
@@ -48,14 +46,16 @@ void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
 			TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(),
 				TEXT("TitleText"));
 			TitleText->SetText(LOCTEXT("LedgerTitle", "LEDGER"));
-			Style->ApplyText(*TitleText, EUITextRole::Heading, Style->TextMuted);
+			Style->ApplyText(*TitleText, EUITextRole::Heading, Style->InkMuted);
+			// The window's title bar says it now; kept (collapsed) because a Blueprint may bind it.
+			TitleText->SetVisibility(ESlateVisibility::Collapsed);
 			HeadingRow->AddChildToHorizontalBox(TitleText);
 		}
 		if (BalanceText == nullptr)
 		{
 			BalanceText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(),
 				TEXT("BalanceText"));
-			Style->ApplyText(*BalanceText, EUITextRole::Title, Style->Text);
+			Style->ApplyText(*BalanceText, EUITextRole::Title, Style->Ink);
 			UHorizontalBoxSlot* BalanceSlot = HeadingRow->AddChildToHorizontalBox(BalanceText);
 			BalanceSlot->SetPadding(FMargin(16.0f, 0.0f, 0.0f, 0.0f));
 		}
@@ -70,13 +70,31 @@ void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
 			RowsSlot->SetPadding(FMargin(0.0f, Style->RowGap, 0.0f, 0.0f));
 		}
 	}
-	// CardWidget is found and cached by EnsureCardRoot itself now (issue #187) - see its own comment.
+}
+
+bool ULedgerPanelWidget::WantsWindow(FUiWindowSpec& Out) const
+{
+	Out.Id = TEXT("ledger");
+	Out.Title = LOCTEXT("LedgerWindow", "Ledger");
+	Out.Anchor = EUiWindowAnchor::TopRight;
+	Out.Offset = FVector2D(12.0, TopOffset);
+	return true;
+}
+
+void ULedgerPanelWidget::OnWindowClosedByPlayer()
+{
+	// THE CLOSE BUTTON IS THE TOGGLE: bShowing must agree, or the next B "opens" it hidden and the
+	// bar lights a panel nobody can see.
+	if (bShowing)
+	{
+		Toggle();
+	}
 }
 
 void ULedgerPanelWidget::Toggle()
 {
 	bShowing = !bShowing;
-	SetCardShown(bShowing);
+	SetShown(bShowing);
 
 	// REPAINTED ON OPEN, not left to the next tick. A panel that appeared empty for a frame
 	// and then filled would read as a bug in the ledger rather than as a frame of latency.
@@ -113,7 +131,7 @@ void ULedgerPanelWidget::Refresh()
 		if (PanelStyle != nullptr)
 		{
 			BalanceText->SetColorAndOpacity(FSlateColor(
-				Panel->IsOverdrawn() ? PanelStyle->Warning : PanelStyle->Text));
+				Panel->IsOverdrawn() ? PanelStyle->Warning : PanelStyle->Ink));
 		}
 	}
 
@@ -178,9 +196,9 @@ UWidget* ULedgerPanelWidget::BuildRow(const UUIStyle& Style, const ULedgerRowVie
 		CellSlot->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
 	};
 
-	AddCell(Row.GetWhen(), WhenWidth, EUITextRole::Label, Style.TextMuted, false);
-	AddCell(Row.GetCategory(), CategoryWidth, EUITextRole::Label, Style.TextMuted, false);
-	AddCell(Row.GetWhat(), 0.0f, EUITextRole::Label, Style.Text, false);
+	AddCell(Row.GetWhen(), WhenWidth, EUITextRole::Label, Style.InkMuted, false);
+	AddCell(Row.GetCategory(), CategoryWidth, EUITextRole::Label, Style.InkMuted, false);
+	AddCell(Row.GetWhat(), 0.0f, EUITextRole::Label, Style.Ink, false);
 
 	// THE ONE PIECE OF COLOUR IN THE ROW, and it is semantic: money out is Warning, money in
 	// is Positive, both from the style's slots rather than a literal. Read off the viewmodel's
@@ -188,7 +206,12 @@ UWidget* ULedgerPanelWidget::BuildRow(const UUIStyle& Style, const ULedgerRowVie
 	AddCell(Row.GetAmount(), AmountWidth, EUITextRole::Label,
 		Row.IsOutgoing() ? Style.Warning : Style.Positive, true);
 
-	return Line;
+	// A WELL PER ROW, so a column of numbers reads as rows on the window's Surface rather than
+	// text floating on it - the offer rows' surface, from the same UUiRow.
+	UUiRow* RowBox = WidgetTree->ConstructWidget<UUiRow>(UUiRow::StaticClass());
+	RowBox->Build(Style, FMargin(8.0f, 4.0f));
+	RowBox->SetContent(Line);
+	return RowBox;
 }
 
 int32 ULedgerPanelWidget::RowWidgetCountForTest() const
@@ -196,9 +219,8 @@ int32 ULedgerPanelWidget::RowWidgetCountForTest() const
 	return RowColumn != nullptr ? RowColumn->GetChildrenCount() : 0;
 }
 
-void ULedgerPanelWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+void ULedgerPanelWidget::TickPanel(float InDeltaTime)
 {
-	Super::NativeTick(MyGeometry, InDeltaTime);
 
 	// ONLY WHILE OPEN. A closed panel costs nothing - the ledger's own revision gate would
 	// make the work cheap anyway, but a panel nobody is looking at should not be asking.

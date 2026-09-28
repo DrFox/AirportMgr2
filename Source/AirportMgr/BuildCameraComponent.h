@@ -184,6 +184,13 @@ public:
 	void ZoomBy(double Notches);
 
 	/**
+	 * The PLAYER's multipliers on PanRate and ZoomStep (Settings' pan and zoom speed), 1 = as
+	 * designed. Separate from those two on purpose: they are the designer's tuning, editor-set on
+	 * the component, and a player's 2x must not overwrite a value a level may have set.
+	 */
+	void SetPlayerSpeedScales(double Pan, double Zoom);
+
+	/**
 	 * Starts riding PreferredAgentId, or stops riding whatever is currently watched. Returns
 	 * false only when asked to START and PreferredAgentId cannot be found - the caller owns
 	 * the refusal log line, since it also names why (select an aircraft, or land one) in
@@ -231,6 +238,11 @@ private:
 	/** Where the input says the build view should be, and where it actually is. Separate so
 	 *  a wheel notch eases in rather than cutting - see FBuildCameraRig::EaseToward. */
 	FBuildCameraRig TargetView;
+
+	/** SetPlayerSpeedScales' multipliers. Not UPROPERTYs: the player's, from their settings file,
+	 *  never the designer's - see SetPlayerSpeedScales. */
+	double PanScale = 1.0;
+	double ZoomScale = 1.0;
 	FBuildCameraRig CurrentView;
 
 	/** Where the watch rig is asked to be, and where it is; relative to the aircraft - see

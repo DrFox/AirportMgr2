@@ -1374,6 +1374,46 @@ foreach ($path in $inUsePlanners) {
 }
 $ranRules.Add('runway-end-in-use')
 
+# --- 29. BUTTON LOOKS LIVE IN UI/ ------------------------------------------------------------
+# UI library step 1 (2026-09-28): four widgets each carried the enabled/selected -> colour rule
+# and two typed the rounded-white FButtonStyle recipe by hand; one copy drifted (the inspector's
+# Depart painted lighter when disabled). UUiButton::LookFor and ::Build are now the one home, so
+# a SetBackgroundColor( or an FButtonStyle anywhere else in the game module is that shape coming
+# back (#255: enforce the shape, not the site). UI\ itself is exempt - it is where they live.
+# SetBrushColor( is deliberately NOT flagged: the bar's borders call it with meaning-named slots
+# (Surface, Well), which is the shape this codebase wants.
+$gameSource = Join-Path $Root 'Source\AirportMgr'
+$uiDir = Join-Path $gameSource 'UI'
+if (-not (Test-Path $uiDir)) {
+    $failures.Add("button-looks-in-ui: $uiDir is named by rule 29 but does not exist - update the rule")
+}
+Get-ChildItem -Path $gameSource -Recurse -Include *.cpp, *.h |
+    # The SEPARATOR matters: without it '...\AirportMgr\UI' is a prefix of '...\AirportMgr\UIStyle.cpp',
+    # and the style - the likeliest home for a convenient FButtonStyle helper - was silently exempt.
+    Where-Object { -not $_.FullName.StartsWith($uiDir + [IO.Path]::DirectorySeparatorChar) -and $_.Name -notlike '*Test.cpp' } |
+    ForEach-Object {
+        $file = $_
+        $hits = Select-String -Path $file.FullName -Pattern 'SetBackgroundColor\(|FButtonStyle' |
+            Where-Object { $_.Line -notmatch '^\s*//' -and $_.Line -notmatch '^\s*\*' }
+        foreach ($h in $hits) {
+            $failures.Add("button-looks-in-ui: $($file.Name):$($h.LineNumber) hand-rolls a button look - use UUiButton (SetState / Build)")
+        }
+    }
+$ranRules.Add('button-looks-in-ui')
+
+# --- 30. THE GAME'S WINDOW HOST REMEMBERS THE LAYOUT ------------------------------------------
+# UUiWindowHost::SetLayoutStore is the seam a window's placement is remembered through, and a host
+# never handed a store remembers nothing - which is every test's host, deliberately, so the
+# player's ini cannot steer the suite. So nothing but this rule sees the HUD stop wiring it:
+# CreateAll needs a local player the headless suite does not have (UI library step 3, 2026-09-28).
+$hudLayer = Join-Path $Root 'Source\AirportMgr\BuildHudLayer.cpp'
+if (-not (Test-Path $hudLayer)) {
+    $failures.Add("layout-store-wired: $hudLayer is named by rule 30 but does not exist - update the rule")
+} elseif (-not (Select-String -Path $hudLayer -Pattern 'SetLayoutStore\(MakeShared<FUserSettingsLayoutStore>' -Quiet)) {
+    $failures.Add("layout-store-wired: $hudLayer no longer hands the window host an FUserSettingsLayoutStore - the player's window layout would be forgotten every launch")
+}
+$ranRules.Add('layout-store-wired')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

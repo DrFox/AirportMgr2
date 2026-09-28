@@ -1,5 +1,9 @@
 #include "CoreMinimal.h"
 #include "BuildActions.h"
+#include "BuildHudLayer.h"
+#include "PlayerSettings.h"
+#include "SettingsPanelWidget.h"
+#include "UI/UiWindowHost.h"
 #include "Misc/AutomationTest.h"
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestWorld.h"
@@ -86,7 +90,8 @@ bool FBuildActionsRegistryTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("found by key is selection.follow"), Follow->Id, FName(TEXT("selection.follow")));
 	}
 	TestNull(TEXT("FindAction(Key) respects the Ctrl requirement"), FindAction(EKeys::C, true));
-	TestNull(TEXT("FindAction(Key) is null for an unbound key"), FindAction(EKeys::Escape, false));
+	// Insert, not Escape: Escape opens Settings since UI library step 4b.
+	TestNull(TEXT("FindAction(Key) is null for an unbound key"), FindAction(EKeys::Insert, false));
 
 	return true;
 }
@@ -373,6 +378,131 @@ bool FGridButtonIsInTheRegistryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("can be executed"), static_cast<bool>(Action->Execute));
 	TestTrue(TEXT("reports whether it is lit"), static_cast<bool>(Action->IsActive));
 	TestTrue(TEXT("has a caption that follows the step"), static_cast<bool>(Action->DynamicLabel));
+	return true;
+}
+
+/**
+ * SETTINGS IS IN THE ONE LIST (spec section 3): the bar's gear and Escape come from game.settings,
+ * so neither can exist without the other - the "key that goes nowhere" this project shipped three
+ * times. Escape because it is what a player presses for a game's settings; in PIE the editor's
+ * Stop takes it first (memory: unreal-escape-stops-pie), and the gear is the way in there.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildActionsSettingsTest, "AirportMgr.Actions.SettingsOnEscape",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildActionsSettingsTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Settings = FindAction(SettingsActionId());
+	if (!TestNotNull(TEXT("game.settings is in BuildActions"), Settings)) { return false; }
+	TestEqual(TEXT("in the Game section, with save and load"), Settings->Section, EActionSection::Game);
+	const FBuildAction* OnEscape = FindAction(EKeys::Escape, false);
+	if (!TestNotNull(TEXT("Escape runs an action"), OnEscape)) { return false; }
+	TestEqual(TEXT("and it is Settings"), OnEscape->Id, SettingsActionId());
+	return true;
+}
+
+/**
+ * KEYS WAIT UNDER A MODAL (spec section 2, Modal; plan 4b Review Focus 3): a tool key pressed
+ * while Settings is open does nothing - the player is in a form, not building - and Escape still
+ * reaches Settings, which closes. Driven through the controller's own key path, with a real host
+ * and Settings panel standing in for the hud CreateAll would build (it needs a local player).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildActionsModalKeysTest, "AirportMgr.Actions.KeysIgnoredUnderModal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildActionsModalKeysTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	UBuildHudLayer* Hud = C->GetHudForTest();
+	Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
+	Hud->SettingsPanel = CreateWidget<USettingsPanelWidget>(TestWorld.World, USettingsPanelWidget::StaticClass());
+	if (!TestTrue(TEXT("a host and a Settings panel"), Hud->WindowHost != nullptr && Hud->SettingsPanel != nullptr)) { return false; }
+	Hud->WindowHost->AddWindow(*Hud->SettingsPanel);
+	Hud->SettingsPanel->SetSink(MakeShared<FMemoryPlayerSettingsSink>());
+
+	const int32 Before = C->GetActiveToolIndex();
+	TestNotEqual(TEXT("starts on a different tool than One selects"), Before, 1);
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	TestTrue(TEXT("Escape opens Settings"), C->IsSettingsShowing());
+	TestTrue(TEXT("as a modal"), C->IsModalOpen());
+	C->OnActionKeyForTest(EKeys::One, false);
+	TestEqual(TEXT("a tool key under the modal does nothing"), C->GetActiveToolIndex(), Before);
+	C->OnActionKeyForTest(EKeys::One, true);
+	TestEqual(TEXT("nor with Ctrl held"), C->GetActiveToolIndex(), Before);
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	TestFalse(TEXT("Escape closes it again"), C->IsSettingsShowing());
+	C->OnActionKeyForTest(EKeys::One, false);
+	TestEqual(TEXT("control: with it closed the same key selects the tool"), C->GetActiveToolIndex(), 1);
+	return true;
+}
+
+namespace BuildActionsModalTest
+{
+	/** A controller with a real host and Settings panel standing in for CreateAll's hud. */
+	ARoadBuildController* SpawnWithSettings(FAirsideTestWorld& TestWorld)
+	{
+		ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+		if (C == nullptr) { return nullptr; }
+		UBuildHudLayer* Hud = C->GetHudForTest();
+		Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
+		Hud->SettingsPanel = CreateWidget<USettingsPanelWidget>(TestWorld.World, USettingsPanelWidget::StaticClass());
+		if (Hud->WindowHost == nullptr || Hud->SettingsPanel == nullptr) { return nullptr; }
+		Hud->WindowHost->AddWindow(*Hud->SettingsPanel);
+		Hud->SettingsPanel->SetSink(MakeShared<FMemoryPlayerSettingsSink>());
+		return C;
+	}
+}
+
+/**
+ * THE MOUSE WAITS UNDER A MODAL TOO (4b final review, Important 5): a drag begun before Escape kept
+ * extending behind the scrim and built on release. Opening Settings drops a held press, and a
+ * press while it is open starts nothing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildActionsModalMouseTest, "AirportMgr.Actions.MouseWaitsUnderModal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildActionsModalMouseTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	ARoadBuildController* C = BuildActionsModalTest::SpawnWithSettings(TestWorld);
+	if (!TestNotNull(TEXT("a controller with Settings"), C)) { return false; }
+	C->PressPrimaryForTest(FVector2D(100.0, 100.0));
+	TestTrue(TEXT("control: a press is held"), C->IsPrimaryPressedForTest());
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	TestTrue(TEXT("Settings opened"), C->IsModalOpen());
+	TestFalse(TEXT("opening it dropped the held press"), C->IsPrimaryPressedForTest());
+	C->PressPrimaryForTest(FVector2D(100.0, 100.0));
+	TestFalse(TEXT("a press under the modal starts nothing"), C->IsPrimaryPressedForTest());
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	C->PressPrimaryForTest(FVector2D(100.0, 100.0));
+	TestTrue(TEXT("control: closed, a press is held again"), C->IsPrimaryPressedForTest());
+	return true;
+}
+
+/**
+ * CTRL CHORDS WAIT TOO (4b final review, Important 6): Ctrl+Z behind an open dialog would undo the
+ * airport. Both key handlers ask the one predicate, so this test covers the chord handler, which a
+ * headless test cannot drive (it polls WasInputKeyJustPressed).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildActionsModalChordTest, "AirportMgr.Actions.ChordsWaitUnderModal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildActionsModalChordTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	ARoadBuildController* C = BuildActionsModalTest::SpawnWithSettings(TestWorld);
+	if (!TestNotNull(TEXT("a controller with Settings"), C)) { return false; }
+	const FBuildAction* Undo = FindAction(FName(TEXT("edit.undo")));
+	const FBuildAction* Settings = FindAction(SettingsActionId());
+	if (!TestTrue(TEXT("undo and settings are registered"), Undo != nullptr && Settings != nullptr)) { return false; }
+	TestTrue(TEXT("control: undo is a Ctrl chord"), Undo->bRequiresCtrl);
+	TestFalse(TEXT("no modal: undo runs"), C->KeyWaitsForModal(*Undo));
+	C->ToggleSettings();
+	TestTrue(TEXT("under the modal: Ctrl+Z waits"), C->KeyWaitsForModal(*Undo));
+	TestFalse(TEXT("and Settings' own key does not"), C->KeyWaitsForModal(*Settings));
 	return true;
 }
 

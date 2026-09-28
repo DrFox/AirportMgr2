@@ -5,6 +5,9 @@
 #include "BuildHudLayer.h"
 #include "LandAircraftPanelWidget.h"
 #include "LedgerPanelWidget.h"
+#include "PlayerSettings.h"
+#include "SettingsPanelWidget.h"
+#include "UI/UiWindowHost.h"
 #include "Components/InputComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Content/AirsideSettings.h"
@@ -47,6 +50,22 @@ ARoadBuildController::ARoadBuildController()
 	// pattern already established in this codebase.
 	BuildCameraComp = CreateDefaultSubobject<UBuildCameraComponent>(TEXT("BuildCameraComp"));
 	Hud = CreateDefaultSubobject<UBuildHudLayer>(TEXT("Hud"));
+}
+
+void ARoadBuildController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// AN OPEN DIALOG IS CANCELLED: the settings object lives as long as the engine, and live values
+	// left in it would be read as saved by the next session (4b final review, Important 4).
+	// ENFORCED BY: AirportMgr.Settings.EndPlayCancelsAnOpenDialog.
+	if (IsSettingsShowing())
+	{
+		Hud->SettingsPanel->Cancel();
+	}
+	if (SettingsSink.IsValid())
+	{
+		SettingsSink->RestoreEngineScale();   // the settings CDO outlives this play session
+	}
+	Super::EndPlay(EndPlayReason);
 }
 
 void ARoadBuildController::BeginPlay()
@@ -94,6 +113,18 @@ void ARoadBuildController::BeginPlay()
 	// The six HUD widgets - see UBuildHudLayer::CreateAll for the recipe and the Z-orders.
 	Hud->CreateAll(*this);
 
+	// THE PLAYER'S SETTINGS, in force before the first frame: UI scale and camera speeds from their
+	// file (Apply of what Read found changes only those - the drive side and graphics already match),
+	// then the start grid. Settings edits through the same sink.
+	SettingsSink = MakeShared<FGamePlayerSettingsSink>(*this);
+	const FPlayerSettings Saved = SettingsSink->Read();
+	SettingsSink->Apply(Saved);
+	PlayerSettings::ApplyStartGrid(Target->GuideSources, Saved.bGridSnapOnStart);
+	if (Hud->SettingsPanel != nullptr)
+	{
+		Hud->SettingsPanel->SetSink(SettingsSink);
+	}
+
 	// The key list is GENERATED from the same registry SetupInputComponent binds from and
 	// the bar builds from, so this banner cannot advertise a key that goes nowhere - which
 	// the old hand-written one twice did.
@@ -121,10 +152,14 @@ void ARoadBuildController::UpdateView(float DeltaTime)
 	// Read as held keys rather than bound as actions: pan and rotate are continuous, and a
 	// key binding fires once on press. The same reason WASD was never bound. Reading them
 	// stays here - it is host input, which UBuildCameraComponent has no business owning.
-	const double Right = (IsInputKeyDown(EKeys::D) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::A) ? 1.0 : 0.0);
-	const double Forward = (IsInputKeyDown(EKeys::W) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::S) ? 1.0 : 0.0);
-	const double Turn = (IsInputKeyDown(EKeys::E) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::Q) ? 1.0 : 0.0);
-	BuildCameraComp->UpdateView(DeltaTime, Right, Forward, Turn, ReadMouseTurnPixels(), Target);
+	//
+	// UNDER A MODAL THE VIEW HOLDS STILL - WASD would pan the airport behind an open dialog. Still
+	// ticked with zero input, so an ease already under way settles rather than freezing mid-move.
+	const bool bModal = IsModalOpen();
+	const double Right = bModal ? 0.0 : (IsInputKeyDown(EKeys::D) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::A) ? 1.0 : 0.0);
+	const double Forward = bModal ? 0.0 : (IsInputKeyDown(EKeys::W) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::S) ? 1.0 : 0.0);
+	const double Turn = bModal ? 0.0 : (IsInputKeyDown(EKeys::E) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::Q) ? 1.0 : 0.0);
+	BuildCameraComp->UpdateView(DeltaTime, Right, Forward, Turn, bModal ? 0.0 : ReadMouseTurnPixels(), Target);
 }
 
 double ARoadBuildController::ReadMouseTurnPixels()
@@ -756,6 +791,14 @@ void ARoadBuildController::RunActionForKey(FKey Key, bool bCtrl)
 	{
 		Action = FindAction(Key, false);
 	}
+	// A MODAL IS UP: only Settings' own key goes through, so Escape still closes it. The scrim stops
+	// the mouse; keys reach the game viewport whatever is on screen, so they stop here.
+	// ENFORCED BY: AirportMgr.Actions.KeysIgnoredUnderModal.
+	if (Action != nullptr && KeyWaitsForModal(*Action))
+	{
+		UE_LOG(LogRoadBuild, Verbose, TEXT("Key %s ignored: a modal window is open"), *Key.ToString());
+		return;
+	}
 	if (Action != nullptr)
 	{
 		Action->TryRun(*this, TEXT("Key"));
@@ -768,6 +811,10 @@ void ARoadBuildController::OnCtrlActionKey()
 	{
 		if (Action.bRequiresCtrl && Action.Key.IsValid() && WasInputKeyJustPressed(Action.Key))
 		{
+			if (KeyWaitsForModal(Action))
+			{
+				return;   // RunActionForKey's reason: keys wait under a modal
+			}
 			Action.TryRun(*this, TEXT("Key"));
 			return;
 		}
@@ -944,6 +991,41 @@ bool ARoadBuildController::HasOpsRuntime() const
 	return UOpsRuntimeSubsystem::Get(GetWorld()) != nullptr;
 }
 
+void ARoadBuildController::ToggleSettings()
+{
+	if (Hud != nullptr && Hud->SettingsPanel != nullptr)
+	{
+		Hud->SettingsPanel->Toggle();
+		if (Hud->SettingsPanel->IsShowing())
+		{
+			// A GESTURE IN FLIGHT IS DROPPED: a drag begun before Escape would otherwise keep
+			// extending behind the scrim and build on release (4b final review, Important 5).
+			Gesture.Cancel();
+			if (Target != nullptr)
+			{
+				OnCancelGesture();
+			}
+		}
+	}
+}
+
+bool ARoadBuildController::IsSettingsShowing() const
+{
+	return Hud != nullptr && Hud->SettingsPanel != nullptr && Hud->SettingsPanel->IsShowing();
+}
+
+bool ARoadBuildController::IsModalOpen() const
+{
+	return Hud != nullptr && Hud->WindowHost != nullptr && Hud->WindowHost->IsModalOpen();
+}
+
+bool ARoadBuildController::KeyWaitsForModal(const FBuildAction& Action) const
+{
+	// ONE PREDICATE for both key handlers - the chord handler polls WasInputKeyJustPressed, which a
+	// headless test cannot drive, so this is what AirportMgr.Actions.ChordsWaitUnderModal tests.
+	return IsModalOpen() && Action.Id != SettingsActionId();
+}
+
 void ARoadBuildController::ToggleLedger()
 {
 	if (Hud != nullptr && Hud->LedgerPanel != nullptr)
@@ -1041,7 +1123,19 @@ void ARoadBuildController::OnPrimaryPressed()
 	float MouseX = 0.0f;
 	float MouseY = 0.0f;
 	GetMousePosition(MouseX, MouseY);
-	Gesture.Press(FVector2D(MouseX, MouseY));
+	PressAt(FVector2D(MouseX, MouseY));
+}
+
+void ARoadBuildController::PressAt(FVector2D Screen)
+{
+	// UNDER A MODAL NOTHING STARTS. The scrim eats presses over the screen, but a press can reach
+	// the viewport in the frame the dialog opens; with no press held, UpdateDrag and the release do
+	// nothing either. ENFORCED BY: AirportMgr.Actions.MouseWaitsUnderModal.
+	if (IsModalOpen())
+	{
+		return;
+	}
+	Gesture.Press(Screen);
 }
 
 void ARoadBuildController::UpdateDrag()

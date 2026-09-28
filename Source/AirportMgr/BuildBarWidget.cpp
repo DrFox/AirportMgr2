@@ -1,6 +1,7 @@
 #include "BuildBarWidget.h"
 
 #include "Blueprint/WidgetTree.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/CanvasPanel.h"
@@ -22,6 +23,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "RoadBuildController.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogBuildBar, Log, All);
@@ -109,7 +111,7 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		const float Height = FMath::Max(static_cast<float>(BarHeight), BarHeightFor(*Style));
 
 		UBorder* Border = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("BarBorder"));
-		Border->SetBrushColor(Style->PanelDark);
+		Border->SetBrushColor(Style->Surface);
 		Border->SetPadding(FMargin(0.0f));
 		UCanvasPanelSlot* BarSlot = Root->AddChildToCanvas(Border);
 		// Stretched across the bottom edge: with both anchors on y=1, Offsets reads as
@@ -139,7 +141,7 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		Floor->AddChild(Rows);
 
 		UBorder* StatusBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("StatusBorder"));
-		StatusBorder->SetBrushColor(Style->PanelDark);
+		StatusBorder->SetBrushColor(Style->Well);
 		StatusBorder->SetPadding(FMargin(Style->SectionPadding, 6.0f));
 		Rows->AddChildToVerticalBox(StatusBorder);
 		UHorizontalBox* StatusBox = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("StatusRow"));
@@ -147,7 +149,7 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		StatusRow = StatusBox;
 
 		UBorder* ToolsBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ToolsBorder"));
-		ToolsBorder->SetBrushColor(Style->Panel);
+		ToolsBorder->SetBrushColor(Style->Surface);
 		ToolsBorder->SetPadding(FMargin(Style->SectionPadding, 6.0f));
 		Rows->AddChildToVerticalBox(ToolsBorder);
 		// A WRAP BOX, NOT A HORIZONTAL BOX. A horizontal row has no answer for more buttons
@@ -165,7 +167,7 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		// and a runway has three. Starts collapsed - RefreshVariantsFor shows it over a tool
 		// with choices - so a bar over the select tool is the height it always was.
 		UBorder* VariantBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("VariantBorder"));
-		VariantBorder->SetBrushColor(Style->Panel);
+		VariantBorder->SetBrushColor(Style->Surface);
 		VariantBorder->SetPadding(FMargin(Style->SectionPadding, 0.0f, Style->SectionPadding, 6.0f));
 		Rows->AddChildToVerticalBox(VariantBorder);
 		if (VariantSection == nullptr)
@@ -220,7 +222,7 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		// A FRAME AND A HEADING EACH. EActionSection already carried these six groupings and
 		// the bar drew them as nothing; this is the whole of what makes them visible.
 		UBorder* Frame = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-		Frame->SetBrushColor(Style->Panel);
+		Frame->SetBrush(FSlateRoundedBoxBrush(Style->Well, Style->ControlRadius));
 		Frame->SetPadding(FMargin(8.0f, 2.0f, 8.0f, 4.0f));
 		UVerticalBox* Group = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 		Frame->SetContent(Group);
@@ -231,7 +233,7 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		Heading->SetText(FText::FromString(FString(ActionSectionName(Which)).ToUpper()));
 		// Fallback/size/letter-spacing/colour: see UUIStyle::ApplyText (issue #89). The wide
 		// spacing that makes a heading read as a heading, not a short label, lives there now.
-		Style->ApplyText(*Heading, EUITextRole::Heading, Style->TextMuted);
+		Style->ApplyText(*Heading, EUITextRole::Heading, Style->InkMuted);
 		Group->AddChildToVerticalBox(Heading)->SetHorizontalAlignment(HAlign_Left);
 		Group->AddChildToVerticalBox(Box);
 
@@ -283,7 +285,7 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 	if (ClockText == nullptr)
 	{
 		ClockText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ClockText"));
-		Style->ApplyText(*ClockText, EUITextRole::Clock, Style->Text);
+		Style->ApplyText(*ClockText, EUITextRole::Clock, Style->Ink);
 		if (UHorizontalBox* Box = Cast<UHorizontalBox>(TimeSection))
 		{
 			UHorizontalBoxSlot* ClockSlot = Box->AddChildToHorizontalBox(ClockText);
@@ -312,7 +314,7 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 			// THE CLOCK'S ROLE, not Label: the balance is the other number the player watches
 			// without looking for it, and a smaller one beside the clock would read as a
 			// caption rather than as a readout.
-			Style->ApplyText(*BalanceText, EUITextRole::Clock, Style->Text);
+			Style->ApplyText(*BalanceText, EUITextRole::Clock, Style->Ink);
 			UHorizontalBoxSlot* MoneySlot = StatusBox->AddChildToHorizontalBox(BalanceText);
 			MoneySlot->SetPadding(FMargin(0.0f, 0.0f, 14.0f, 0.0f));
 			MoneySlot->SetVerticalAlignment(VAlign_Center);
@@ -348,36 +350,25 @@ void UBuildBarWidget::BuildButtons(const UUIStyle* Style)
 		UBuildBarEntry* Entry = NewObject<UBuildBarEntry>(this);
 		Entry->ActionIndex = Index;
 		Entry->Owner = this;
-		Entry->Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
-		Entry->Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-
-		UVerticalBox* Stack = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+		Entry->Button = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
 
 		// The time controls carry no texture, deliberately: slower, pause and faster are
 		// geometric glyphs that render exactly as text. IconFor returns null for them and
 		// AirportMgr.UI.EveryActionResolvesAnIcon exempts them BY SECTION, so a fourth time
 		// control needs neither an icon nor that test edited.
-		if (UTexture2D* Icon = Style->IconFor(Action.Id))
+		if (UTexture2D* IconTexture = Style->IconFor(Action.Id))
 		{
-			UImage* Image = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
-			Image->SetBrushFromTexture(Icon, false);
-			Image->SetDesiredSizeOverride(FVector2D(Style->ButtonSize * 0.5f));
-			// The glyph is white with a transparent ground, so the tint IS the icon colour.
-			Image->SetColorAndOpacity(Style->Text);
-			Entry->Icon = Image;
-			Stack->AddChildToVerticalBox(Image)->SetHorizontalAlignment(HAlign_Center);
+			// The glyph is white with a transparent ground, so the button's ink IS the icon colour.
+			Entry->Button->SetIcon(IconTexture, Style->ButtonSize * 0.5f);
 			++WithIcon;
 		}
 
 		// THE LABEL IS NOW THE LABEL. The key used to be appended here - "Taxiway (1)" -
 		// which is most of what made the bar read as a debug menu. It moves to the tooltip,
 		// where it still teaches the shortcut without shouting it on every button forever.
-		Entry->Label->SetText(Action.Label);
-		Style->ApplyText(*Entry->Label, EUITextRole::Label, Style->Text);
-		Stack->AddChildToVerticalBox(Entry->Label)->SetHorizontalAlignment(HAlign_Center);
-
-		Entry->Button->SetContent(Stack);
-		Entry->Button->SetBackgroundColor(Style->Button);
+		Entry->Button->SetLabel(Action.Label);
+		// Stacked, and UButton's own padding: a tool button is sized by its icon, not ButtonPadding.
+		Entry->Button->Build(*Style, EUiButtonKind::Secondary, EUiButtonLayout::Stacked, false);
 		Entry->Button->OnClicked.AddDynamic(Entry, &UBuildBarEntry::HandleClicked);
 
 		if (Action.Key.IsValid())
@@ -469,23 +460,15 @@ void UBuildBarWidget::RefreshStateFor(ARoadBuildController& C)
 		const FBuildAction& Action = Actions[Entry->ActionIndex];
 		const bool bEnabled = Action.IsEnabled(Ctx);
 		const bool bActive = bEnabled && Action.IsActive(Ctx);
-		Entry->Button->SetIsEnabled(bEnabled);
-
 		// ACCENT MEANS ARMED AND NOTHING ELSE. If a second thing takes it, the player loses
 		// the one glance that says which tool is live - which is the whole job the colour has.
-		Entry->Button->SetBackgroundColor(bActive ? Style->Accent : Style->Button);
-
-		// Icon and label follow the button, not the other way round: on the accent the
-		// cream glyph would disappear, so the armed button draws its contents in PanelDark.
-		const FLinearColor Content = bActive ? Style->PanelDark : (bEnabled ? Style->Text : Style->TextMuted);
-		Entry->Label->SetColorAndOpacity(FSlateColor(Content));
+		// The rule (and the icon and label following it in InkOnAccent) lives in
+		// UUiButton::LookFor now, and SetState is a no-op when nothing changed, so ~70 calls a
+		// tick cost nothing.
+		Entry->Button->SetState(bEnabled, bActive);
 		if (Action.DynamicLabel)
 		{
-			Entry->Label->SetText(Action.DynamicLabel(Ctx));
-		}
-		if (Entry->Icon != nullptr)
-		{
-			Entry->Icon->SetColorAndOpacity(Content);
+			Entry->Button->SetLabel(Action.DynamicLabel(Ctx));
 		}
 	}
 
@@ -585,7 +568,7 @@ void UBuildBarWidget::RefreshBalance()
 	if (PanelStyle != nullptr)
 	{
 		BalanceText->SetColorAndOpacity(FSlateColor(
-			Ledger->Balance() < 0.0 ? PanelStyle->Warning : PanelStyle->Text));
+			Ledger->Balance() < 0.0 ? PanelStyle->Warning : PanelStyle->Ink));
 	}
 }
 
@@ -657,6 +640,15 @@ float UBuildBarWidget::BarReservedHeightForTest(float AvailableWidth) const
 		return static_cast<float>(Slate->GetDesiredSize().Y);
 	}
 	return BarSlot->GetOffsets().Bottom;
+}
+
+bool UBuildBarWidget::AllButtonsAreUiButtonsForTest() const
+{
+	for (const UBuildBarEntry* Entry : Entries)
+	{
+		if (Entry == nullptr || Entry->Button == nullptr || Entry->Button->GetLabel() == nullptr) { return false; }
+	}
+	return Entries.Num() > 0;
 }
 
 bool UBuildBarWidget::HasRootWidgetForTest() const

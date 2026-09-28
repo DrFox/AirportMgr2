@@ -129,6 +129,10 @@ struct FBuildAction
 
 /** Linear scan: BuildActions() is a few dozen entries, not a hot loop. */
 const FBuildAction* FindAction(FName Id);
+
+/** game.settings - named once, for the registry entry and for the controller's modal key gate,
+ *  which lets this one action through (ARoadBuildController::RunActionForKey). */
+inline FName SettingsActionId() { return FName(TEXT("game.settings")); }
 /** Ctrl state disambiguates two actions sharing a key; none do today, but the table allows it. */
 const FBuildAction* FindAction(FKey Key, bool bRequiresCtrl);
 

@@ -2,12 +2,14 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "UI/UiWindowSpec.h"
 #include "Widgets/Layout/Anchors.h"
 #include "AirportMgrPanelWidget.generated.h"
 
 class ARoadBuildController;
 class UPanelWidget;
 class UUIStyle;
+class UUiWindowHost;
 class UWidget;
 
 /**
@@ -21,17 +23,15 @@ class UWidget;
  * called exactly once, with the resolved style already in hand so it never has to ask whether
  * ResolveStyle() came back null (it never does - see UAirportMgrUISettings::ResolveStyle).
  *
- * Controller() and EnsureCardRoot() are the other two things duplicated across two or more of
+ * Controller() and EnsureContentRoot() are the other two things duplicated across two or more of
  * the four: a click-driven panel asks the same question about who is playing, and a floating
- * corner card builds the same canvas-root-plus-bordered-card skeleton before it ever reaches
- * its own content.
+ * panel builds the same root column before it ever reaches its own content.
  *
- * NOT ALL FOUR USE EnsureCardRoot. UBuildBarWidget's chrome is a full-width bar stretched by
- * OFFSETS across two differently-coloured rows, and UToastStackWidget's root holds a bare
- * VerticalBox with no card at all (each toast is its own rounded card) - neither shape is the
- * single anchored-and-auto-sized card EnsureCardRoot builds. Both still sit on this base for
- * Initialize/BuildOnce/Controller; only UInspectorWidget and UOfferInboxWidget call
- * EnsureCardRoot.
+ * FLOATING PANELS ARE WINDOWS (UI library step 2): the inspector, inbox, ledger and Land panel
+ * describe their window in WantsWindow and UUiWindowHost wraps them - the card, its placement
+ * and its chrome are the window's, not the panel's. UBuildBarWidget (a full-width bar stretched
+ * by OFFSETS) and UToastStackWidget (a bare VerticalBox, each toast its own card) are not windows;
+ * both still sit on this base for Initialize/BuildOnce/Controller.
  */
 UCLASS(Abstract)
 class AIRPORTMGR_API UAirportMgrPanelWidget : public UUserWidget
@@ -51,6 +51,53 @@ public:
 	 */
 	virtual bool Initialize() override final;
 
+	/**
+	 * This panel's window, if it is one: fills Out and returns true. The default is "not a
+	 * window" - the bar and the toast stack are fixed furniture, not something to drag.
+	 */
+	virtual bool WantsWindow(FUiWindowSpec& Out) const;
+
+	/** Called once by UUiWindowHost::AddWindow; applies whatever SetShown already asked for. */
+	void AttachToHost(UUiWindowHost& InHost, FName InId);
+
+	/**
+	 * One frame of this panel's own work. The HOST calls it for a hosted panel every frame, hidden
+	 * or not - a collapsed window stops Slate ticking its contents, and the tick is what decides to
+	 * show it again. NativeTick calls it only when there is no host.
+	 * ENFORCED BY: AirportMgr.Panels.HostedPanelTicksOnce, AirportMgr.UI.WindowHost.TicksHiddenPanelsOnce.
+	 */
+	void RunPanelTick(float DeltaTime);
+
+	/** The player pressed this panel's window's close. Default: nothing; a toggled panel un-toggles. */
+	virtual void OnWindowClosedByPlayer();
+
+	/** Whether the window shows: the host's answer when hosted, the last SetShown otherwise. */
+	bool IsShown() const;
+
+	/** Runs NativeTick with a throwaway geometry, so a headless test can drive a tick without a
+	 *  viewport - the precedent of ARoadBuildController::PlayerTickForTest. Moved here from
+	 *  UBuildBarWidget and UOfferInboxWidget, which each carried this exact one-liner. */
+	void NativeTickForTest(float DeltaTime) { FGeometry G; NativeTick(G, DeltaTime); }
+
+	/** How many times RunPanelTick has run - see HostedPanelTicksOnce. */
+	int32 PanelTickCountForTest() const { return PanelTicks; }
+
+protected:
+	/** A subclass's per-frame work - what its NativeTick override used to do. See RunPanelTick. */
+	virtual void TickPanel(float DeltaTime);
+
+	/** Ask for this panel's window to show or hide. The host decides (a player's close sticks). */
+	void SetShown(bool bShown);
+
+	/** The host that owns this panel's window; null when unhosted (the bar, toasts, a bare test). */
+	UUiWindowHost* GetWindowHost() const { return Host; }
+
+	/** Clears a player's close, so the next SetShown(true) shows again - for a panel whose
+	 *  content changed enough to deserve a second look (the inspector's new selection). */
+	void ForgetPlayerClose();
+
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+
 protected:
 	/**
 	 * Builds this panel's content. Called exactly once, right after WidgetTree is confirmed
@@ -61,13 +108,12 @@ protected:
 	 * A SUBCLASS WHOSE CONTENT CAN GO ENTIRELY EMPTY (the inspector with nothing selected, the
 	 * offer inbox with no offers, the toast stack with nothing to show) must mark ITSELF
 	 * `SetVisibility(ESlateVisibility::SelfHitTestInvisible)` here, never Collapsed: Slate only
-	 * ticks a widget from its paint pass, so a Collapsed widget is never arranged, is never
-	 * painted, and so never ticks - and the tick is the only thing that could later un-collapse
-	 * it (PIE 2026-09-07: a panel built this way, never shown). SelfHitTestInvisible keeps the
-	 * panel laid out and running while staying click-transparent, so an otherwise-empty panel
-	 * does not sit over the world as an invisible pane that eats the player's clicks. Individual
-	 * pieces of content (the inspector's card, an offer row) still hide themselves normally;
-	 * this is about the PANEL's own root, once, not about them.
+	 * ticks a widget from its paint pass, so a Collapsed widget is never painted and never ticks
+	 * - and the tick is the only thing that could later un-collapse it (PIE 2026-09-07: a panel
+	 * built this way, never shown). A HOSTED panel is ticked by the host whatever its window's
+	 * visibility (RunPanelTick) and hides through SetShown. Either way the root stays
+	 * SelfHitTestInvisible, so an otherwise-empty panel does not sit over the world as an invisible
+	 * pane that eats the player's clicks, nor eat clicks meant for its window's own chrome.
 	 */
 	virtual void BuildOnce(const UUIStyle& Style) PURE_VIRTUAL(UAirportMgrPanelWidget::BuildOnce, );
 
@@ -79,18 +125,13 @@ protected:
 	ARoadBuildController* Controller() const;
 
 	/**
-	 * A canvas root (if the asset gave none) plus ONE bordered card, anchored, aligned and
-	 * positioned as given, auto-sized to its content. Returns the panel INSIDE the card that
-	 * a subclass adds its own rows to, or nullptr when an asset already supplied a root - in
-	 * that case BindWidgetOptional has already filled every slot the asset supplies, and a
-	 * code-built card would replace the designer's layout.
-	 *
-	 * PanelDark, ALWAYS: the card is the outer surface everything a subclass draws sits ON,
-	 * and Panel is left free for whatever goes inside it (a button, an offer row) - the same
-	 * split UBuildBarWidget's two rows and UOfferInboxWidget's offer cards already draw.
+	 * A root VerticalBox named ContentName, returned for the subclass to fill, when the asset gave
+	 * no root; null when an asset supplied one - BindWidgetOptional has already filled every slot
+	 * the asset supplies, and a code-built root would replace the designer's layout. Replaces
+	 * EnsureCardRoot: the CARD - surface, padding, corners, placement - is the window's now
+	 * (UUiWindow), not the panel's.
 	 */
-	UPanelWidget* EnsureCardRoot(FName CardName, const FAnchors& Anchors, FVector2D Alignment,
-		FVector2D Position, bool bRounded);
+	UPanelWidget* EnsureContentRoot(FName ContentName);
 
 	/**
 	 * The style resolved ONCE, before BuildOnce runs - see Initialize(). NEVER NULL once set.
@@ -110,29 +151,6 @@ protected:
 	 */
 	UPROPERTY() TObjectPtr<const UUIStyle> PanelStyle;
 
-	/**
-	 * The card EnsureCardRoot built (or found by name on an asset-supplied root), so a
-	 * subclass that shows/hides it need not re-walk the widget tree to ask again.
-	 *
-	 * issue #187: UInspectorWidget's ShowInspectorCard called WidgetTree->FindWidget (a
-	 * recursive walk) once or twice EVERY tick just to toggle a Collapsed/Visible flag;
-	 * ULedgerPanelWidget already found it once in EnsureSlots and held it for exactly this
-	 * reason - this is that field, promoted so EnsureCardRoot itself can fill it for every
-	 * caller. Null for a panel that never calls EnsureCardRoot (UBuildBarWidget,
-	 * UToastStackWidget - see EnsureCardRoot's own comment).
-	 */
-	UPROPERTY() TObjectPtr<UWidget> CardWidget;
-
-	/**
-	 * Shows or hides CardWidget, doing nothing if it is already in the requested state.
-	 *
-	 * THE GATE ITSELF: SetVisibility has no early-out of its own (the same reason SetText is
-	 * this issue's other half), so a panel polled every tick used to re-invalidate Slate's
-	 * layout for a visibility that had not changed since the last frame. A no-op when CardWidget is
-	 * null (EnsureCardRoot not called, or an asset root with no widget of that name), so a
-	 * caller need not guard the call itself.
-	 */
-	void SetCardShown(bool bShown);
 
 	/**
 	 * A CLICK ON THE PANEL STOPS AT THE PANEL (2026-09-28): its card, a section's background, the
@@ -176,4 +194,13 @@ private:
 
 	/** See BuildOnceCallCountForTest. */
 	int32 BuildOnceCalls = 0;
+
+	/** The host that owns this panel's window; null for the bar, toasts and a headless test. */
+	UPROPERTY() TObjectPtr<UUiWindowHost> Host;
+	FName WindowId;
+	/** What the panel last asked for - applied to the host when it attaches, and what IsShown
+	 *  answers when there is no host. */
+	bool bShownRequested = false;
+	/** See PanelTickCountForTest. */
+	int32 PanelTicks = 0;
 };

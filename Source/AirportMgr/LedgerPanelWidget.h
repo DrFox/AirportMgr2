@@ -58,6 +58,10 @@ public:
 	/** Open or close it. Called by the game.ledger action - see BuildActions. */
 	void Toggle();
 
+	/** Top-right, under the inbox's corner; closable (the close is the toggle). */
+	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
+	virtual void OnWindowClosedByPlayer() override;
+
 	/**
 	 * Re-read the ledger and repaint. What NativeTick calls, and what a headless test calls
 	 * directly - a test has no viewport to paint in, the same seam the inbox uses.
@@ -72,14 +76,13 @@ public:
 
 protected:
 	virtual void BuildOnce(const UUIStyle& Style) override;
-	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	virtual void TickPanel(float DeltaTime) override;
 
 private:
 	UPROPERTY() TObjectPtr<ULedgerPanelViewModel> Panel;
 
-	// CardWidget and PanelStyle moved to the base class (issue #187): this panel was one of the two
-	// that already carried this exact pattern by hand, and UAirportMgrPanelWidget::EnsureCardRoot
-	// /Initialize now do it for every panel that calls EnsureCardRoot, not just this one.
+	// PanelStyle moved to the base class (issue #187): this panel was one of the two that already
+	// carried the pattern by hand, and UAirportMgrPanelWidget::Initialize now does it for every panel.
 
 	bool bShowing = false;
 

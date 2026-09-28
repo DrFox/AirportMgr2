@@ -14,6 +14,7 @@
 #include "Components/VerticalBox.h"
 #include "RoadBuildController.h"
 #include "RoadBuildLog.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 
 void UBuildBarVariantEntry::HandleClicked()
@@ -90,10 +91,7 @@ void UBuildBarWidget::RefreshVariantsFor(ARoadBuildController& C)
 		const FToolVariantAxis& Axis = Axes[Entry->Axis];
 		const bool bEnabled = Axis.Options[Entry->Option].bEnabled;
 		const bool bLit = bEnabled && Axis.Current == Entry->Option;
-		Entry->Button->SetIsEnabled(bEnabled);
-		Entry->Button->SetBackgroundColor(bLit ? Style->Accent : Style->Button);
-		const FLinearColor Content = bLit ? Style->PanelDark : (bEnabled ? Style->Text : Style->TextMuted);
-		Entry->Label->SetColorAndOpacity(FSlateColor(Content));
+		Entry->Button->SetState(bEnabled, bLit);
 	}
 }
 
@@ -113,7 +111,7 @@ void UBuildBarWidget::RebuildVariants(const TArray<FToolVariantAxis>& Axes)
 		// three runs of buttons with nothing to say which is the surface.
 		UTextBlock* Heading = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 		Heading->SetText(FText::FromString(Axis.Label.ToString().ToUpper()));
-		Style->ApplyText(*Heading, EUITextRole::Heading, Style->TextMuted);
+		Style->ApplyText(*Heading, EUITextRole::Heading, Style->InkMuted);
 		UHorizontalBoxSlot* HeadingSlot = Line->AddChildToHorizontalBox(Heading);
 		HeadingSlot->SetVerticalAlignment(VAlign_Center);
 		HeadingSlot->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
@@ -125,18 +123,16 @@ void UBuildBarWidget::RebuildVariants(const TArray<FToolVariantAxis>& Axes)
 			Entry->Axis = AxisIndex;
 			Entry->Option = OptionIndex;
 			Entry->Owner = this;
-			Entry->Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
-			Entry->Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			Entry->Button = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
 
-			// LABEL, AND THE DETAIL UNDER IT WHEN THERE IS ONE - one text block, two lines,
-			// because the detail is part of what the option IS, not a caption beside it.
-			Entry->Label->SetText(Option.Detail.IsEmpty() ? Option.Label
-				: FText::Format(INVTEXT("{0}\n{1}"), Option.Label, Option.Detail));
-			Style->ApplyText(*Entry->Label, EUITextRole::Label, Style->Text);
-			Entry->Label->SetJustification(ETextJustify::Center);
-
-			Entry->Button->SetContent(Entry->Label);
-			Entry->Button->SetBackgroundColor(Style->Button);
+			// LABEL, AND THE DETAIL UNDER IT WHEN THERE IS ONE - stacked, because the detail is
+			// part of what the option IS, not a caption beside it.
+			Entry->Button->SetLabel(Option.Label);
+			if (!Option.Detail.IsEmpty())
+			{
+				Entry->Button->SetDetail(Option.Detail);
+			}
+			Entry->Button->Build(*Style, EUiButtonKind::Secondary, EUiButtonLayout::Stacked, false);
 			Entry->Button->SetToolTipText(FText::Format(INVTEXT("{0}: {1}"), Axis.Label, Option.Label));
 			Entry->Button->OnClicked.AddDynamic(Entry, &UBuildBarVariantEntry::HandleClicked);
 

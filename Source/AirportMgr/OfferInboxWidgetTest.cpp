@@ -16,6 +16,7 @@
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestWorld.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -151,7 +152,7 @@ bool FOfferInboxIdleTickResolvesNoStyleTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the widget was created"), Widget)) { return false; }
 
 	// A REAL OFFER ON THE BOARD, not an empty inbox: PaintRows' style read (Style->Accent /
-	// Style->Button on the Accept button, per-row, per call) only runs for Rows.Num() > 0 - an
+	// Style->Control on the Accept button, per-row, per call) only runs for Rows.Num() > 0 - an
 	// empty inbox would pass this test having exercised almost none of the code #309 is about.
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
@@ -170,6 +171,18 @@ bool FOfferInboxIdleTickResolvesNoStyleTest::RunTest(const FString& Parameters)
 
 	// First paint builds the row - a real cost, not what this test measures.
 	Widget->PaintRowsForTest();
+
+	// THE COUNT READS AS A HEADING, not a bare "1" alone on a line under the window's "Offers"
+	// title - the debug-readout look the heading row's own comment forbids (final review 2026-09-28).
+	TestFalse(TEXT("the count is words, not a bare number"), Widget->BadgeForTest().IsNumeric());
+
+	// ACCEPT IS A PRIMARY UUiButton: the kind carries "affirmative", LookFor carries the colour
+	// - so a row whose Accept went back to a hand-painted UButton fails here, at the composition.
+	const UUiButton* Accept = Widget->AcceptButtonForTest(0);
+	if (TestNotNull(TEXT("row 0 has an Accept UUiButton"), Accept))
+	{
+		TestEqual(TEXT("Accept is Primary"), Accept->GetKind(), EUiButtonKind::Primary);
+	}
 
 	const int32 Before = UAirportMgrUISettings::ResolveCallCountForTest();
 	for (int32 Tick = 0; Tick < 10; ++Tick)

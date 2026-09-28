@@ -138,4 +138,55 @@ bool FBuildCameraTurnIsFrameRateIndependentTest::RunTest(const FString& Paramete
 	return true;
 }
 
+/**
+ * THE PLAYER'S SPEED SCALES MULTIPLY THE DESIGNER'S SPEEDS (spec section 3): tuning stays in the
+ * component's editor-set PanRate and ZoomStep, and Settings' pan and zoom sliders only scale them.
+ * Measured through UpdateView and ZoomBy - the sites that read them - not through a getter.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildCameraPlayerScalesTest,
+	"AirportMgr.Camera.PlayerSpeedScalesMultiply",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildCameraPlayerScalesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	UWorld* World = TestWorld.World;
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	ARoadNetworkActor* Target = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a target actor"), Target)) { return false; }
+
+	auto MakeCamera = [&](double PanScale, double ZoomScale) -> UBuildCameraComponent*
+	{
+		ARoadBuildController* C = World->SpawnActor<ARoadBuildController>();
+		UBuildCameraComponent* Camera = C != nullptr ? C->FindComponentByClass<UBuildCameraComponent>() : nullptr;
+		if (Camera == nullptr) { return nullptr; }
+		Camera->CreateBuildCamera(*C, *Target);
+		Camera->CameraLag = 0.0;
+		Camera->SetPlayerSpeedScales(PanScale, ZoomScale);
+		return Camera;
+	};
+	auto PanOneSecond = [&](double Scale) -> double
+	{
+		UBuildCameraComponent* Camera = MakeCamera(Scale, 1.0);
+		if (Camera == nullptr) { return 0.0; }
+		const FVector2D Before = Camera->ViewFocus();
+		Camera->UpdateView(1.0f, 1.0, 0.0, 0.0, 0.0, Target);
+		return FVector2D::Distance(Camera->ViewFocus(), Before);
+	};
+	const double Plain = PanOneSecond(1.0);
+	TestTrue(TEXT("a held pan key moves the view at all"), Plain > 1.0);
+	TestEqual(TEXT("at pan speed 2x it moves twice as far"), PanOneSecond(2.0), 2.0 * Plain, 1e-6 * Plain);
+
+	UBuildCameraComponent* Zoomed = MakeCamera(1.0, 2.0);
+	if (!TestNotNull(TEXT("a camera"), Zoomed)) { return false; }
+	FBuildCameraRig Expected = Zoomed->ActiveRig();
+	Expected.ApplyLimits(Zoomed->ViewLimits);
+	Expected.Zoom(Zoomed->ZoomStep * 2.0, 1.0);
+	Zoomed->ZoomBy(1.0);
+	Zoomed->UpdateView(1.0f, 0.0, 0.0, 0.0, 0.0, Target);   // lag 0: the view lands on its target
+	TestEqual(TEXT("at zoom speed 2x one notch zooms by twice the step"), Zoomed->ActiveRig().Distance, Expected.Distance, 1e-6);
+	return true;
+}
+
 #endif

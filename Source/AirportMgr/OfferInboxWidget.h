@@ -8,6 +8,10 @@
 
 class ARoadNetworkActor;
 class UButton;
+class UUiButton;
+enum class EUiButtonKind : uint8;
+class UUiButton;
+enum class EUiButtonKind : uint8;
 class UListView;
 class UProgressBar;
 class USizeBox;
@@ -53,8 +57,7 @@ public:
 	UPROPERTY() TObjectPtr<UTextBlock> FuelChip;
 	UPROPERTY() TObjectPtr<UTextBlock> TugChip;
 	UPROPERTY() TObjectPtr<UTextBlock> RefusalText;
-	UPROPERTY() TObjectPtr<UButton> AcceptButton;
-	UPROPERTY() TObjectPtr<UTextBlock> AcceptText;
+	UPROPERTY() TObjectPtr<UUiButton> AcceptButton;
 
 	UFUNCTION() void HandleAccept();
 	UFUNCTION() void HandleDecline();
@@ -111,6 +114,9 @@ public:
 	/** How many arrivals rows are built, as opposed to how many the viewmodel holds. */
 	int32 ArrivalRowCountForTest() const { return ArrivalTitles.Num(); }
 
+	/** Top-right; NOT closable - an offer must never be hidden. */
+	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
+
 	/**
 	 * Re-read the board and repaint. What NativeTick calls, and what a headless test calls
 	 * directly - the tick-to-Refresh seam is one line, and a test has no viewport to paint in.
@@ -127,13 +133,14 @@ public:
 	/** Paint from the viewmodel without a tick. A headless test never paints, so NativeTick
 	 *  never runs - the same seam UInspectorWidget's test uses. */
 	void PaintRowsForTest() { PaintRows(); }
+	/** The count beside the heading, as it reads now. */
+	FString BadgeForTest() const;
+	/** Row N's Accept button, or null - see AirportMgr.UI.OfferInbox's Primary-kind assertion. */
+	const UUiButton* AcceptButtonForTest(int32 Row) const;
 
-	/** Runs NativeTick with a throwaway geometry - the same precedent as
-	 *  UBuildBarWidget::NativeTickForTest - so a headless test can prove an idle tick resolves
-	 *  no style (issue #309, closes the #260 item) without a viewport ticking it for real.
-	 *  Needs Controller() to reach Refresh at all; PaintRowsForTest above skips straight to
-	 *  PaintRows for a test with no controller to poll. */
-	void NativeTickForTest(float DeltaTime) { FGeometry G; NativeTick(G, DeltaTime); }
+	// NativeTickForTest is the panel base's now: it lets a headless test prove an idle tick
+	// resolves no style (issue #309, closes the #260 item). It needs Controller() to reach Refresh
+	// at all; PaintRowsForTest above skips straight to PaintRows for a test with no controller.
 
 	/** Where the refusal sentence wraps, uu. The card is sized from this. */
 	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float RowWrapWidth = 260.0f;
@@ -152,7 +159,7 @@ protected:
 	/** Builds the inbox's chrome. See UAirportMgrPanelWidget::Initialize for why this runs
 	 *  from Initialize rather than NativeOnInitialized. */
 	virtual void BuildOnce(const UUIStyle& Style) override;
-	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	virtual void TickPanel(float DeltaTime) override;
 
 private:
 	UPROPERTY() TObjectPtr<UOfferInboxViewModel> Inbox;
@@ -170,8 +177,8 @@ private:
 	UWidget* BuildRow(const class UUIStyle& Style, UOfferRowEntry& Entry, int32 Index);
 
 	/** A rounded Accept or Decline. See its body for why the ROUNDING goes on the style. */
-	UButton* MakeAnswerButton(const class UUIStyle& Style, const TCHAR* Name, const FText& Label,
-		const FLinearColor& Fill, const FLinearColor& Ink, int32 Index);
+	UUiButton* MakeAnswerButton(const class UUIStyle& Style, const TCHAR* Name, const FText& Label,
+		EUiButtonKind Kind, int32 Index);
 	UPROPERTY() TArray<TObjectPtr<UOfferRowEntry>> Entries;
 
 	/**

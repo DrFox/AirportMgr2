@@ -9,6 +9,8 @@
 class ARoadBuildController;
 class UAircraftType;
 class UButton;
+class UUiButton;
+class UUiButton;
 class ULandAircraftPanelWidget;
 class UTextBlock;
 class UUIStyle;
@@ -28,7 +30,7 @@ class ULandRowEntry : public UObject
 public:
 	UPROPERTY() TObjectPtr<UAircraftType> Type;
 	UPROPERTY() TWeakObjectPtr<ULandAircraftPanelWidget> Owner;
-	UPROPERTY() TObjectPtr<UButton> Button;
+	UPROPERTY() TObjectPtr<UUiButton> Button;
 
 	UFUNCTION() void HandleClick();
 };
@@ -68,6 +70,10 @@ public:
 	/** Open or close it. Called by the aircraft.land action - see BuildActions. */
 	void Toggle();
 
+	/** Top-left; closable (the close is the toggle). */
+	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
+	virtual void OnWindowClosedByPlayer() override;
+
 	/**
 	 * Re-judge every row against the current runway and repaint if anything changed. What
 	 * NativeTick calls while open, and what Toggle calls on opening.
@@ -95,7 +101,7 @@ public:
 
 protected:
 	virtual void BuildOnce(const UUIStyle& Style) override;
-	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	virtual void TickPanel(float DeltaTime) override;
 
 private:
 	/** The content's types, read once on first open - held here so the rows' raw pointers

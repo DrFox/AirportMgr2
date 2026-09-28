@@ -22,6 +22,7 @@
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogInspector, Log, All);
@@ -35,10 +36,10 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
 	if (RunwayButton != nullptr) { RunwayButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunway); }
-	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
-	// otherwise-empty panel must stay this way. Only the CARD hides; the root stays laid out.
+	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce. The WINDOW
+	// hides (SetShown); the root stays laid out.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	SetCardShown(false);
+	SetShown(false);
 }
 
 void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
@@ -64,12 +65,10 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		++SelectionSeen;
 	}
 
-	// Code-built chrome only where the asset gave none - the same skeleton the offer inbox
-	// uses (EnsureCardRoot, issue #90). A bottom-left card: title, facts, status, then the two
-	// verbs in a row. Its height above the bottom is UpdateDock's, every tick - this is only
-	// where it starts.
-	UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("InspectorCard"),
-		FAnchors(0.0f, 1.0f, 0.0f, 1.0f), FVector2D(0.0, 1.0), FVector2D(12.0, -BarGap), true));
+	// Code-built content only where the asset gave none - the same root the offer inbox uses
+	// (EnsureContentRoot, issue #90): title, facts, status, then the two verbs in a row. Where it
+	// sits - bottom-left, riding the bar - is its window's (WantsWindow, UUiWindowHost::DockAbove).
+	UVerticalBox* Column = Cast<UVerticalBox>(EnsureContentRoot(TEXT("InspectorCard")));
 	if (Column != nullptr)
 	{
 		UE_LOG(LogInspector, Log, TEXT("No inspector asset: building the code-only panel"));
@@ -84,9 +83,9 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		Field->SetMinDesiredWidth(static_cast<float>(PanelWidth));
 		if (Column != nullptr) { Column->AddChildToVerticalBox(Field)->SetPadding(FMargin(0.0f, 2.0f)); }
 	};
-	Text(TitleText, TEXT("TitleText"), EUITextRole::Title, Style->Text);
-	Text(FactsText, TEXT("FactsText"), EUITextRole::Body, Style->TextMuted);
-	Text(StatusText, TEXT("StatusText"), EUITextRole::Body, Style->TextMuted);
+	Text(TitleText, TEXT("TitleText"), EUITextRole::Title, Style->Ink);
+	Text(FactsText, TEXT("FactsText"), EUITextRole::Body, Style->InkMuted);
+	Text(StatusText, TEXT("StatusText"), EUITextRole::Body, Style->InkMuted);
 
 	UHorizontalBox* Row = nullptr;
 	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr || RunwayButton == nullptr))
@@ -97,17 +96,13 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 
 	// LABEL FROM Action.Label, KEY IN THE TOOLTIP - the bar's own convention
 	// (UBuildBarWidget::BuildButtons), so a verb reads the same wherever it appears.
-	auto Button = [&](TObjectPtr<UButton>& Field, const TCHAR* Name, int32 ActionIndex, TObjectPtr<UTextBlock>* OutLabel)
+	auto Button = [&](TObjectPtr<UUiButton>& Field, const TCHAR* Name, int32 ActionIndex)
 	{
 		if (Field != nullptr || !Actions.IsValidIndex(ActionIndex)) { return; }
 		const FBuildAction& Action = Actions[ActionIndex];
-		Field = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), Name);
-		UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-		Label->SetText(Action.Label);
-		Style->ApplyText(*Label, EUITextRole::Label, Style->Text);
-		Field->SetContent(Label);
-		Field->SetBackgroundColor(Style->Button);
-		if (OutLabel != nullptr) { *OutLabel = Label; }
+		Field = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), Name);
+		Field->SetLabel(Action.Label);
+		Field->Build(*Style, EUiButtonKind::Secondary);
 		if (Action.Key.IsValid())
 		{
 			Field->SetToolTipText(FText::FromString(FString::Printf(TEXT("%s  (%s%s)"),
@@ -120,57 +115,29 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		}
 		if (Row != nullptr) { Row->AddChildToHorizontalBox(Field)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f)); }
 	};
-	// DepartLabel is HELD, not re-found: Refresh recolours it every tick when Depart's
-	// enabled state changes, and UBuildBarEntry holds its own Label for the same reason.
-	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex, &DepartLabel);
-	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex, nullptr);
-	Button(RunwayButton, TEXT("RunwayButton"), RunwayActionIndex, &RunwayLabel);
+	// The caption lives in the button (UUiButton::GetLabel): Refresh recolours it through
+	// SetState, and ShowFollowing retitles it, without either holding a second pointer.
+	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex);
+	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex);
+	Button(RunwayButton, TEXT("RunwayButton"), RunwayActionIndex);
 	if (!Actions.IsValidIndex(RunwayActionIndex))
 	{
 		UE_LOG(LogInspector, Warning, TEXT("No selection.runway_in_use row in BuildActions(): the runway card has no button"));
 	}
 }
 
-void UInspectorWidget::DockAbove(UBuildBarWidget* Bar)
+bool UInspectorWidget::WantsWindow(FUiWindowSpec& Out) const
 {
-	DockBar = Bar;
-	DockedClearance = -1.0;
-	UpdateDock();
-	UE_LOG(LogInspector, Log, TEXT("Inspector: %s"),
-		Bar != nullptr ? TEXT("docked above the build bar") : TEXT("undocked - no bar to sit on"));
+	Out.Id = TEXT("inspector");
+	Out.Title = NSLOCTEXT("AirportMgr", "InspectorWindow", "Inspector");
+	Out.Anchor = EUiWindowAnchor::AboveBarLeft;
+	Out.Offset = FVector2D(12.0, BarGap);
+	return true;
 }
 
-void UInspectorWidget::UpdateDock()
+void UInspectorWidget::TickPanel(float InDeltaTime)
 {
-	UCanvasPanelSlot* CardSlot = CardWidget != nullptr ? Cast<UCanvasPanelSlot>(CardWidget->Slot) : nullptr;
-	if (CardSlot == nullptr)
-	{
-		// A Blueprint that put its card somewhere other than a canvas has laid itself out;
-		// there is no slot position to move.
-		return;
-	}
-	const double Clearance = (DockBar != nullptr ? DockBar->LiveHeight() : 0.0) + BarGap;
-	if (Clearance == DockedClearance)
-	{
-		return;
-	}
-	DockedClearance = Clearance;
-	const FVector2D At = CardSlot->GetPosition();
-	CardSlot->SetPosition(FVector2D(At.X, -Clearance));
-}
-
-double UInspectorWidget::CardClearanceForTest() const
-{
-	const UCanvasPanelSlot* CardSlot = CardWidget != nullptr ? Cast<UCanvasPanelSlot>(CardWidget->Slot) : nullptr;
-	return CardSlot != nullptr ? -CardSlot->GetPosition().Y : 0.0;
-}
-
-void UInspectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
-{
-	Super::NativeTick(MyGeometry, InDeltaTime);
-	// BEFORE Refresh, which may show the card this frame: it should appear already clear of
-	// a bar that grew to make room for the Selection section on the same click.
-	UpdateDock();
+	// The dock above the bar is the host's now (UUiWindowHost::TickWindows), not this tick's.
 	if (const ARoadBuildController* C = Controller())
 	{
 		// The controller already computed this frame's FAgentFacts for the bar's
@@ -185,9 +152,9 @@ void UInspectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 
 void UInspectorWidget::ShowFollowing(bool bFollowing)
 {
-	// FOUND THROUGH THE BUTTON, not held: EnsureSlots builds the caption as the button's only
-	// content, and a Blueprint whose Follow button holds something else simply keeps its own.
-	UTextBlock* Caption = FollowButton != nullptr ? Cast<UTextBlock>(FollowButton->GetContent()) : nullptr;
+	// FOUND THROUGH THE BUTTON, not held: UUiButton owns its caption, and a button built with
+	// no label (a Blueprint's) simply has none to retitle.
+	UTextBlock* Caption = FollowButton != nullptr ? FollowButton->GetLabel() : nullptr;
 	const TConstArrayView<FBuildAction> Actions = BuildActions();
 	if (Caption == nullptr || !Actions.IsValidIndex(FollowActionIndex))
 	{
@@ -208,7 +175,7 @@ void UInspectorWidget::ShowFollowing(bool bFollowing)
 
 FString UInspectorWidget::FollowCaptionForTest() const
 {
-	const UTextBlock* Caption = FollowButton != nullptr ? Cast<UTextBlock>(FollowButton->GetContent()) : nullptr;
+	const UTextBlock* Caption = FollowButton != nullptr ? FollowButton->GetLabel() : nullptr;
 	return Caption != nullptr ? Caption->GetText().ToString() : FString();
 }
 
@@ -217,9 +184,17 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 {
 	if (Target == nullptr || !Selection.IsSet())
 	{
-		SetCardShown(false);
+		SetShown(false);
 		bDepartEnabled = false;
+		LastSelection = FSelection();
 		return;
+	}
+	// A NEW SELECTION REOPENS A WINDOW THE PLAYER CLOSED: the close meant "not this one", and
+	// clicking another aircraft is asking to see it (Review Focus 4 of the step 2 plan).
+	if (Selection.Kind != LastSelection.Kind || Selection.Id != LastSelection.Id)
+	{
+		ForgetPlayerClose();
+		LastSelection = Selection;
 	}
 
 	FString Title, Facts, Status;
@@ -242,7 +217,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		}
 		if (!bOk)
 		{
-			SetCardShown(false);
+			SetShown(false);
 			bDepartEnabled = false;
 			return;
 		}
@@ -357,7 +332,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		FRunwayCardFacts R;
 		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeRunway(*Target->GetNetwork(), Selection.Id, R))
 		{
-			SetCardShown(false);
+			SetShown(false);
 			bDepartEnabled = false;
 			return;
 		}
@@ -382,7 +357,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		FStandFacts S;
 		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Selection.Id, S))
 		{
-			SetCardShown(false);
+			SetShown(false);
 			bDepartEnabled = false;
 			return;
 		}
@@ -463,22 +438,13 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	}
 	if (DepartButton != nullptr)
 	{
-		// PanelStyle is the base class's (issue #187) - never null once BuildOnce has run.
-		const UUIStyle* Style = PanelStyle != nullptr ? PanelStyle.Get() : UAirportMgrUISettings::ResolveStyle();
 		DepartButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-		DepartButton->SetIsEnabled(bDepartEnabled);
 
-		// THE BAR'S OWN RULE (UBuildBarWidget::RefreshState): the BUTTON stays Style->Button
-		// always: disabled dims a button by darkening it under Button, never by brightening
-		// it, and TextMuted is a LABEL slot (it is lighter than Button on purpose, for text
-		// over a dark ground) - painting a disabled background with it made Depart look
-		// MORE prominent while taxiing than while parked, backwards from the intent. Only the
-		// CAPTION follows enabled state, exactly as the bar's icon/label content does.
-		DepartButton->SetBackgroundColor(Style->Button);
-		if (DepartLabel != nullptr)
-		{
-			DepartLabel->SetColorAndOpacity(FSlateColor(bDepartEnabled ? Style->Text : Style->TextMuted));
-		}
+		// THE BAR'S OWN RULE, now UUiButton::LookFor: the BUTTON stays Control always - disabled
+		// dims a button by its ink, never by brightening the fill. Painting a disabled background
+		// with the muted LABEL slot made Depart look MORE prominent while taxiing than while
+		// parked, backwards from the intent. Only the CAPTION follows enabled state.
+		DepartButton->SetState(bDepartEnabled, false);
 	}
 	if (FollowButton != nullptr)
 	{
@@ -487,12 +453,14 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	if (RunwayButton != nullptr)
 	{
 		RunwayButton->SetVisibility(bRunway ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-		if (bRunway && RunwayLabel != nullptr && !RunwayLabel->GetText().EqualTo(RunwayCaption))
+		// Retitled through the button's own caption (UUiButton::GetLabel), the Follow button's way.
+		const UTextBlock* Caption = RunwayButton->GetLabel();
+		if (bRunway && (Caption == nullptr || !Caption->GetText().EqualTo(RunwayCaption)))
 		{
-			RunwayLabel->SetText(RunwayCaption);
+			RunwayButton->SetLabel(RunwayCaption);
 		}
 	}
-	SetCardShown(true);
+	SetShown(true);
 }
 
 void UInspectorWidget::RunAction(int32 ActionIndex)
@@ -518,11 +486,12 @@ void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
 void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 void UInspectorWidget::HandleRunway() { RunAction(RunwayActionIndex); }
 
-bool UInspectorWidget::IsShownForTest() const { return CardWidget != nullptr && CardWidget->GetVisibility() != ESlateVisibility::Collapsed; }
+bool UInspectorWidget::IsShownForTest() const { return IsShown(); }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }
 FString UInspectorWidget::TitleForTest() const { return TitleText != nullptr ? TitleText->GetText().ToString() : FString(); }
 FString UInspectorWidget::FactsForTest() const { return FactsText != nullptr ? FactsText->GetText().ToString() : FString(); }
 FLinearColor UInspectorWidget::DepartLabelColourForTest() const
 {
-	return DepartLabel != nullptr ? DepartLabel->GetColorAndOpacity().GetSpecifiedColor() : FLinearColor::Black;
+	const UTextBlock* Caption = DepartButton != nullptr ? DepartButton->GetLabel() : nullptr;
+	return Caption != nullptr ? Caption->GetColorAndOpacity().GetSpecifiedColor() : FLinearColor::Black;
 }

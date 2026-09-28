@@ -10,6 +10,7 @@ class ARoadBuildController;
 class ARoadNetworkActor;
 class UBuildBarWidget;
 class UButton;
+class UUiButton;
 class UTextBlock;
 class UUIStyle;
 struct FAgentFacts;
@@ -99,10 +100,10 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TitleText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> FactsText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> StatusText;
-	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> DepartButton;
-	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> FollowButton;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> DepartButton;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> FollowButton;
 	/** The runway card's one verb, "Use 27" - selection.runway_in_use (2026-09-28). */
-	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> RunwayButton;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> RunwayButton;
 
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double PanelWidth = 300.0;
 
@@ -111,17 +112,13 @@ public:
 	 *
 	 * WAS BottomOffset = 72, a distance above the SCREEN's bottom (until 2026-09-27) - and the
 	 * code-only bar is 118 uu tall before it grows, so the card sat over the bar's left-hand
-	 * sections and hid them. Measured from the bar instead (see DockAbove), so the card rides
+	 * sections and hid them. Measured from the bar instead (see UUiWindowHost::DockAbove), so the card rides
 	 * up and down as the bar grows and shrinks and never covers it.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double BarGap = 12.0;
 
-	/**
-	 * Keep the card's bottom BarGap above Bar's top edge from now on, re-measured every tick.
-	 * UBuildHudLayer::WireDocking calls this with its own bar. Null undocks: the card then sits
-	 * BarGap above the screen's bottom edge.
-	 */
-	void DockAbove(UBuildBarWidget* Bar);
+	/** Bottom-left, riding the bar's top edge BarGap above it until the player moves it. */
+	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
 
 	/**
 	 * Captions the Follow button "Unfollow" while bFollowing, its action's own label otherwise
@@ -134,11 +131,6 @@ public:
 	/** The Follow button's caption as it reads now. */
 	FString FollowCaptionForTest() const;
 
-	/** The card's distance above the screen's bottom edge, as its slot has it now. */
-	double CardClearanceForTest() const;
-	/** What NativeTick does to the card's position each frame, without the rest of the tick. */
-	void UpdateDockForTest() { UpdateDock(); }
-	const UBuildBarWidget* DockedBarForTest() const { return DockBar; }
 
 	/**
 	 * Re-reads the facts for Selection over Target and repaints. What NativeTick calls with
@@ -161,7 +153,7 @@ public:
 	/** The composed facts text (heading, speed, ... and the Demands block). */
 	FString FactsForTest() const;
 	/** Depart's CAPTION colour - the thing that must actually change with enabled state.
-	 *  See Refresh: the button's own background stays Style->Button always. */
+	 *  See Refresh: the button's own background stays Style->Control always (UUiButton::LookFor). */
 	FLinearColor DepartLabelColourForTest() const;
 	/** How many times Refresh actually called SetText on one of its three fields, as opposed
 	 *  to how many times it was asked - the seam issue #187's gate is measured through: an
@@ -180,7 +172,7 @@ protected:
 	/** Builds the panel's chrome and binds its two verbs. See
 	 *  UAirportMgrPanelWidget::Initialize for why this runs from Initialize. */
 	virtual void BuildOnce(const UUIStyle& Style) override;
-	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	virtual void TickPanel(float DeltaTime) override;
 
 private:
 	bool bDepartEnabled = false;
@@ -199,12 +191,7 @@ private:
 	 *  reorder of the Selection section silently wire Depart's slot to the runway flip. */
 	int32 RunwayActionIndex = INDEX_NONE;
 
-	/** RunwayButton's caption - "Use 27" follows the selection, so Refresh rewrites it. */
-	UPROPERTY() TObjectPtr<UTextBlock> RunwayLabel;
 
-	/** DepartButton's own caption, held so Refresh can recolour it without re-finding it
-	 *  through GetContent() every tick - the same reason UBuildBarEntry holds its Label. */
-	UPROPERTY() TObjectPtr<UTextBlock> DepartLabel;
 
 	/**
 	 * What Title/Facts/Status last actually SET, so a repeat with nothing changed - the
@@ -233,15 +220,11 @@ private:
 	/** See ComposeCountForTest. */
 	int32 ComposeCalls = 0;
 
-	/** The bar the card docks above - see DockAbove. */
-	UPROPERTY() TObjectPtr<UBuildBarWidget> DockBar;
-
-	/** The clearance last written to the card's slot, so an unchanged bar writes nothing. */
-	double DockedClearance = -1.0;
+	/** What Refresh last showed, so a NEW selection can reopen a window the player closed. */
+	FSelection LastSelection;
 
 	void EnsureSlots(const UUIStyle* Style);
 	void RunAction(int32 ActionIndex);
-	void UpdateDock();
 
 	UFUNCTION() void HandleDepart();
 	UFUNCTION() void HandleFollow();

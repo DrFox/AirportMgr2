@@ -231,6 +231,17 @@ namespace
 			},
 			Never, HasRuntime));
 
+		// SETTINGS, on Escape - what a player presses for a game's settings (spec, ruled 2026-09-28).
+		// In PIE the editor's Stop takes Escape before the game sees it (DebuggerCommands.cpp:358,
+		// PlayLevel.cpp:3092); the gear on the bar is the way in there. Always enabled: it edits the
+		// player's own values, which exist with or without a runtime. Its id is named once, in
+		// SettingsActionId for the controller's modal key gate, which lets exactly this action through;
+		// Make takes a literal, so AirportMgr.Actions.SettingsOnEscape checks the two agree.
+		Out.Add(Make(TEXT("game.settings"), EActionSection::Game, LOCTEXT("Settings", "Settings"),
+			EKeys::Escape, false,
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleSettings(); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsSettingsShowing(); }, Always));
+
 		// B, and a key is fine here where the fee lever's is not: opening a panel changes
 		// nothing about the airport, so a mis-hit costs a keystroke rather than repricing
 		// every future offer. IsActive lights the button while the panel is open, the way

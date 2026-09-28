@@ -1,3 +1,4 @@
+#include "UI/UiWindowHost.h"
 #include "CoreMinimal.h"
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
@@ -18,6 +19,7 @@
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/Selection.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -74,13 +76,13 @@ bool FInspectorWidgetTest::RunTest(const FString& Parameters)
 	// slot lighter than Button) than an enabled one - backwards. The button's own background
 	// never changes (UBuildBarWidget::RefreshState's rule); only the caption dims to TextMuted.
 	TestEqual(TEXT("Depart's caption is muted while taxiing, not the button background"),
-		Panel->DepartLabelColourForTest(), Style->TextMuted);
+		Panel->DepartLabelColourForTest(), Style->InkMuted);
 
 	for (int32 I = 0; I < 20000 && Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked; ++I) { Actor->Tick(1.0f / 30.0f); }
 	Panel->Refresh(Actor, Sel);
 	TestTrue(TEXT("Depart lights once parked"), Panel->IsDepartEnabledForTest());
 	TestEqual(TEXT("Depart's caption returns to full Text once parked"),
-		Panel->DepartLabelColourForTest(), Style->Text);
+		Panel->DepartLabelColourForTest(), Style->Ink);
 	return true;
 }
 
@@ -330,16 +332,16 @@ bool FInspectorSubKnotSpeedChangeRecomposesTest::RunTest(const FString& Paramete
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FInspectorDocksAboveTheBarTest,
-	"AirportMgr.Inspector.DocksAboveTheBar",
+	FInspectorWindowDocksAboveTheBarTest,
+	"AirportMgr.Inspector.WindowDocksAboveTheBar",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FInspectorDocksAboveTheBarTest::RunTest(const FString& Parameters)
+bool FInspectorWindowDocksAboveTheBarTest::RunTest(const FString& Parameters)
 {
-	// THE CARD NEVER COVERS THE BAR, however tall the bar grows (2026-09-27: it sat a fixed
-	// 72 uu above the screen's bottom while the bar was 118 uu tall, hiding the bar's
-	// left-hand sections). Through the HUD layer's own wiring, not a hand-called DockAbove,
-	// so an unwired seam goes red here.
+	// THE WINDOW NEVER COVERS THE BAR, however tall the bar grows (2026-09-27: the card sat a
+	// fixed 72 uu above the screen's bottom while the bar was 118 uu tall). Through the HUD
+	// layer's own wiring, not a hand-called DockAbove, so an unwired seam goes red here. Moved
+	// from AirportMgr.Inspector.DocksAboveTheBar when the dock moved into UUiWindowHost.
 	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
@@ -347,43 +349,52 @@ bool FInspectorDocksAboveTheBarTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	// A headless controller has no local player, so BeginPlay never created the HUD's
-	// widgets; they are put where CreateAll would have put them, then CreateAll's own last
-	// step runs.
+	// A headless controller has no local player, so BeginPlay never created the HUD's widgets;
+	// they are put where CreateAll would have put them, then CreateAll's own last step runs.
 	UBuildHudLayer* Hud = C->GetHudForTest();
 	Hud->BuildBar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	Hud->Inspector = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
-	if (!TestNotNull(TEXT("bar"), Hud->BuildBar.Get()) || !TestNotNull(TEXT("inspector"), Hud->Inspector.Get())) { return false; }
-	Hud->WireDocking();
-	TestTrue(TEXT("the HUD docks the inspector on ITS bar"), Hud->Inspector->DockedBarForTest() == Hud->BuildBar);
+	Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
+	if (!TestNotNull(TEXT("bar"), Hud->BuildBar.Get()) || !TestNotNull(TEXT("inspector"), Hud->Inspector.Get())
+		|| !TestNotNull(TEXT("host"), Hud->WindowHost.Get())) { return false; }
+	Hud->WireWindows();
+	TestTrue(TEXT("the HUD docks the host on ITS bar"), Hud->WindowHost->DockedBarForTest() == Hud->BuildBar);
+	TestNotNull(TEXT("and hosts the inspector"), Hud->WindowHost->WindowForTest(TEXT("inspector")));
 
 	UBuildBarWidget& Bar = *Hud->BuildBar;
-	UInspectorWidget& Panel = *Hud->Inspector;
+	UUiWindowHost& Host = *Hud->WindowHost;
+	const double Gap = Hud->Inspector->BarGap;
 	const float Wide = static_cast<float>(Bar.SectionRowSizeForTest(6000.0f).X);
 	if (!TestTrue(TEXT("the bar's row measures to a real width"), Wide > 100.0f)) { return false; }
 
-	// One line of sections: measured, then docked on.
 	const float OneLine = Bar.BarReservedHeightForTest(Wide * 1.1f);
-	Panel.UpdateDockForTest();
-	TestEqual(TEXT("the bar reports the height the canvas gives it"), Bar.LiveHeight(), OneLine);
-	TestEqual(TEXT("the card's bottom sits BarGap above the bar's top edge"),
-		Panel.CardClearanceForTest(), static_cast<double>(OneLine) + Panel.BarGap, 0.5);
+	Host.TickForTest(0.016f);
+	TestEqual(TEXT("the window's bottom sits BarGap above the bar's top edge"),
+		Host.WindowClearanceForTest(TEXT("inspector")), static_cast<double>(OneLine) + Gap, 0.5);
 
-	// The row wraps (a narrow viewport, or the Selection section arriving): the bar grows,
-	// and the card has to rise with it or the new line is hidden under the card.
+	// The row wraps (a narrow viewport, or the Selection section arriving): the bar grows, and the
+	// window has to rise with it or the new line is hidden under the window.
 	const float TwoLines = Bar.BarReservedHeightForTest(Wide * 0.66f);
 	if (!TestTrue(TEXT("the wrapped bar is taller - otherwise this proves nothing"), TwoLines > OneLine + 10.0f)) { return false; }
-	Panel.UpdateDockForTest();
-	TestEqual(TEXT("the card rises with a growing bar"),
-		Panel.CardClearanceForTest(), static_cast<double>(TwoLines) + Panel.BarGap, 0.5);
+	Host.TickForTest(0.016f);
+	TestEqual(TEXT("the window rises with a growing bar"),
+		Host.WindowClearanceForTest(TEXT("inspector")), static_cast<double>(TwoLines) + Gap, 0.5);
 
-	// And back down when it shrinks - a card left floating is a gap the player reads as a bug.
+	// And back down when it shrinks - a window left floating is a gap the player reads as a bug.
 	Bar.BarReservedHeightForTest(Wide * 1.1f);
-	Panel.UpdateDockForTest();
-	TestEqual(TEXT("the card comes back down when the bar shrinks"),
-		Panel.CardClearanceForTest(), static_cast<double>(OneLine) + Panel.BarGap, 0.5);
+	Host.TickForTest(0.016f);
+	TestEqual(TEXT("and comes back down when the bar shrinks"),
+		Host.WindowClearanceForTest(TEXT("inspector")), static_cast<double>(OneLine) + Gap, 0.5);
+
+	// ONCE THE PLAYER MOVES IT, IT STAYS: docking would yank a placed window back over the bar.
+	Host.MoveWindow(TEXT("inspector"), FVector2D(400.0, 300.0));
+	const FBox2D Placed = Host.WindowRect(TEXT("inspector"));
+	Bar.BarReservedHeightForTest(Wide * 0.66f);
+	Host.TickForTest(0.016f);
+	TestEqual(TEXT("a placed window does not follow the bar"), Host.WindowRect(TEXT("inspector")).Min, Placed.Min);
 	return true;
 }
+
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FInspectorFollowSaysUnfollowTest,
