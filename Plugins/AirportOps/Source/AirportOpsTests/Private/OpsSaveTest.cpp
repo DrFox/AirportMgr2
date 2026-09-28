@@ -262,4 +262,56 @@ bool FOpsSaveFuelResetOnRestoreTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE FLEET IS SAVED (spec 2026-09-28-service-vehicle-lifecycle §6 stage 3). The player will BUY
+ * vehicles; losing them on a load would be losing property. A vehicle out on a job at save time comes
+ * back Idle at its depot with what it was carrying - its agent and its queue named things a load
+ * clears (agents, and the jobs of aircraft that are not restored), so those do not survive.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsSaveFleetSurvivesALoadTest,
+	"AirportOps.Model.Save.FleetSurvivesALoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsSaveFleetSurvivesALoadTest::RunTest(const FString& Parameters)
+{
+	FEntityInstanceId Depot;
+	Depot.Index = 3;
+	Depot.Generation = 1;
+
+	UJobBoard* Fuel = NewObject<UJobBoard>();
+	FServiceVehicle& Out = Fuel->AddVehicleForTest(TEXT("FUEL"), Depot, EServiceVehicleState::ToJob, 400.0);
+	Out.AgentId = 17;
+	Out.CurrentJob = 5;
+	Out.Queue = { 6, 7 };
+	const int32 SavedId = Out.Id;
+
+	USimClock* Clock = NewObject<USimClock>();
+	URoadNetwork* Net = NewObject<URoadNetwork>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	FOpsSnapshot Snapshot;
+	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, Snapshot);
+
+	UJobBoard* RestoredFuel = NewObject<UJobBoard>();
+	if (!TestTrue(TEXT("restore succeeds"), OpsSave::Restore(Snapshot,
+		OpsSaveTest::Persistents(*NewObject<USimClock>(), *NewObject<UFlightBoard>(), *RestoredFuel), *NewObject<URoadNetwork>())))
+	{
+		return false;
+	}
+
+	if (!TestEqual(TEXT("the vehicle survives the load"), RestoredFuel->GetVehicles().Num(), 1)) { return false; }
+	const FServiceVehicle& Back = RestoredFuel->GetVehicles()[0];
+	TestEqual(TEXT("the same vehicle"), Back.Id, SavedId);
+	TestEqual(TEXT("of the same kind"), Back.TypeCode, FName(TEXT("FUEL")));
+	TestTrue(TEXT("at the same depot"), Back.Home == Depot);
+	TestEqual(TEXT("carrying what it carried"), Back.Cargo, 400.0, 1e-9);
+	TestEqual(TEXT("idle at home"), static_cast<int32>(Back.State), static_cast<int32>(EServiceVehicleState::Idle));
+	TestEqual(TEXT("with no agent - agents are never saved"), Back.AgentId, 0);
+	TestEqual(TEXT("and no job - its aircraft are not restored"), Back.CurrentJob, 0);
+	TestEqual(TEXT("and an empty queue"), Back.Queue.Num(), 0);
+	TestTrue(TEXT("a vehicle added after the load gets a fresh id, not the restored one's"),
+		RestoredFuel->AddVehicleForTest(TEXT("FUEL"), Depot, EServiceVehicleState::Idle, 0.0).Id != SavedId);
+	return true;
+}
+
 #endif

@@ -88,6 +88,13 @@ public:
 	virtual void OnBeforeRestore() override;
 
 	/**
+	 * LOADING normalises every restored vehicle to Idle at home - see Vehicles. HERE, not in
+	 * OnAfterRestore, because OpsSave::RestoreBlob restores one object without calling it, and a
+	 * vehicle deserialized "on its way home" with no agent behind it would count as out for ever.
+	 */
+	virtual void Serialize(FArchive& Ar) override;
+
+	/**
 	 * Each fuel vehicle's tank and flow, by FVehicle::TypeCode - copied from UScenario::FuelVehicles
 	 * at attach (spec 2026-09-28-fuel-litres). Empty in a bare NewObject; SpecFor then answers
 	 * FallbackSpec.
@@ -243,8 +250,10 @@ public:
 	void Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
 	/**
-	 * The one line the inspector's aircraft card shows for this agent, or empty when it has no
-	 * turnaround.
+	 * The one line the inspector's card shows for this agent, or empty when the board has nothing to
+	 * say about it: an aircraft's fuel line, or - for a service vehicle's agent - the vehicle's own
+	 * line (DescribeVehicle). ONE SEAM FOR BOTH, because the inspector already asks it for whatever
+	 * agent is selected.
 	 *
 	 * A STRING BUILT HERE rather than an enum the panel switches on: it is presentation of two
 	 * orthogonal model facts (the state, and for Unserviceable the reason), and nothing branches on
@@ -396,6 +405,9 @@ private:
 	bool DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, bool bToFacility,
 		UGroundTraffic& Traffic, const URoadNetwork& Network);
 
+	/** The vehicle card's line - its kind, what it is doing, what it carries, what is queued. */
+	FString DescribeVehicle(const FServiceVehicle& Vehicle) const;
+
 	/** A job the vehicle can no longer do goes back to the board, remainder and all. */
 	void Reopen(FServiceJob& Job);
 
@@ -481,21 +493,32 @@ private:
 	static FGuidelineNodeId HomePose(const URoadNetwork& Network, const FServiceVehicle& Vehicle);
 
 	/**
-	 * TRANSIENT (PR #137 review, issue #105 item 8): jobs, turnarounds and vehicles all NAME AGENTS,
-	 * and agents are never saved - see OpsRuntimeTest's own "agents do not survive a load" assertion.
-	 * Non-Transient, they would be serialized straight into the Fuel blob and restored right over what
-	 * OnBeforeRestore cleared - the leak it exists to fix.
+	 * TRANSIENT (PR #137 review, issue #105 item 8): jobs and turnarounds NAME AGENTS, and agents are
+	 * never saved - see OpsRuntimeTest's own "agents do not survive a load" assertion. Nor do the
+	 * aircraft they are for come back: a load re-arms Accepted and Inbound flights only, so a job
+	 * restored from a save would be a job for an aircraft that is not there. Non-Transient, they would
+	 * be serialized straight into the Fuel blob and restored right over what OnBeforeRestore cleared -
+	 * the leak it exists to fix.
 	 */
 	UPROPERTY(Transient) TArray<FServiceJob> Jobs;
 	UPROPERTY(Transient) TArray<FTurnaround> Turnarounds;
-	UPROPERTY(Transient) TArray<FServiceVehicle> Vehicles;
+
+	/**
+	 * SAVED, unlike the two above (stage 3): the fleet is what the player will BUY, and a load that
+	 * lost it would lose property. What a vehicle held that names the session - its agent, its job,
+	 * its queue, its timed step - is dropped on the way in (Serialize), so it comes back Idle at home
+	 * with what it was carrying. NextVehicleId travels with it, so a vehicle added after a load never
+	 * reuses a restored one's id.
+	 * ENFORCED BY: AirportOps.Model.Save.FleetSurvivesALoad
+	 */
+	UPROPERTY() TArray<FServiceVehicle> Vehicles;
 
 	/** Depots SyncFleet has already given their placeholder fleet, so a depot is seeded once and a
 	 *  vehicle that is out does not get a twin at home. */
 	UPROPERTY(Transient) TSet<FEntityInstanceId> SeededDepots;
 
 	int32 NextJobId = 1;
-	int32 NextVehicleId = 1;
+	UPROPERTY() int32 NextVehicleId = 1;
 
 	/** Unknown vehicle codes already warned about - see SpecFor. */
 	mutable TSet<FName> WarnedSpecs;
