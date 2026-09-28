@@ -9,6 +9,7 @@
 #include "RoadBuildController.h"
 #include "RoadBuildLog.h"
 #include "Styling/SlateBrush.h"
+#include "UI/UiClicks.h"
 #include "UIStyle.h"
 
 bool UAirportMgrPanelWidget::Initialize()
@@ -99,44 +100,14 @@ void UAirportMgrPanelWidget::SetCardShown(bool bShown)
 	}
 }
 
-namespace AirportMgrPanelClicks
-{
-	/** Whether W's OWN rectangle takes hits - Visible - as opposed to only its children's. */
-	bool HitsItself(const UWidget* W)
-	{
-		return W != nullptr && W->GetVisibility() == ESlateVisibility::Visible;
-	}
-
-	/**
-	 * Handled when the event can only have come from the panel's own pixels - see the header.
-	 * A root that hits itself may cover the screen, so it keeps Slate's answer instead: better a
-	 * click through the bar than every click in the game swallowed.
-	 */
-	FReply Eat(const UAirportMgrPanelWidget& Panel, const UWidget* Root, FReply Reply, const TCHAR* What)
-	{
-		if (Reply.IsEventHandled())
-		{
-			return Reply;   // a button (or a Blueprint) took it - its own answer stands
-		}
-		if (HitsItself(&Panel) || HitsItself(Root))
-		{
-			return Reply;
-		}
-		// AT THE BOUNDARY, so "a click on the bar drew a road" is answerable from the log: this
-		// line present means the panel stopped it, absent means it never reached the panel.
-		UE_LOG(LogRoadBuild, Log, TEXT("%s: mouse %s stopped at the panel"), *Panel.GetName(), What);
-		return FReply::Handled();
-	}
-}
-
 FReply UAirportMgrPanelWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
-	return AirportMgrPanelClicks::Eat(*this, WidgetTree != nullptr ? WidgetTree->RootWidget : nullptr,
+	return UiClicks::EatUnhandled(*this, WidgetTree != nullptr ? WidgetTree->RootWidget : nullptr,
 		Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent), TEXT("down"));
 }
 
 FReply UAirportMgrPanelWidget::NativeOnMouseButtonDoubleClick(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
-	return AirportMgrPanelClicks::Eat(*this, WidgetTree != nullptr ? WidgetTree->RootWidget : nullptr,
+	return UiClicks::EatUnhandled(*this, WidgetTree != nullptr ? WidgetTree->RootWidget : nullptr,
 		Super::NativeOnMouseButtonDoubleClick(InGeometry, InMouseEvent), TEXT("double-click"));
 }
