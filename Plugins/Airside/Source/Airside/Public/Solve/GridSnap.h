@@ -69,4 +69,69 @@ namespace GridSnap
 	 */
 	AIRSIDE_API void PiecesInDisc(const FVector2D& Centre, double RadiusUu, double StepUu,
 		TArray<FPiece>& Out);
+
+	/**
+	 * A grid TURNED TO A THING - grid-follows-snap design (2026-09-28). The functions above are
+	 * the world grid; a frame is the same arithmetic in rotated coordinates.
+	 *
+	 * ONE LINE ALONG THE THING'S CENTRELINE, THE CROSS LINES PHASED FROM THE WORLD ORIGIN - the
+	 * design's option 1. Along() puts Origin at the foot of the world origin on the thing's line,
+	 * so both families pass through it: the thing lies on a line (a stand's depth off it is a
+	 * round figure), and the cross lines are the same for every segment of one road and every
+	 * road parallel to it (the 2026-09-27 report the world grid fixed stays fixed). Rejected: the
+	 * world grid rotated about the origin (the road sits between lines - odd depths, the diagonal
+	 * complaint turned); an origin at the segment's own end (a phase per segment - that report).
+	 *
+	 * AXIS FOLDED INTO [0, 90) DEGREES. A square grid is the same after a quarter turn, so a road
+	 * drawn A->B and one drawn B->A, or at 30 and at 120 degrees, must give ONE frame - and
+	 * SameLines compares them exactly, which only an exact fold makes possible.
+	 */
+	struct AIRSIDE_API FGridFrame
+	{
+		FVector2D Origin = FVector2D::ZeroVector;
+
+		/** Unit, folded - see above. */
+		FVector2D Axis = FVector2D(1.0, 0.0);
+
+		/** uu; <= 0 is "no grid", as for every function here. */
+		double StepUu = 0.0;
+
+		/** The world grid: what every function above computes. */
+		static FGridFrame World(double StepUu);
+
+		/** The grid along the line through Point in Direction. A zero Direction is World. */
+		static FGridFrame Along(const FVector2D& Point, const FVector2D& Direction, double StepUu);
+
+		bool IsOn() const { return StepUu > 0.0; }
+
+		/**
+		 * Origin zero and Axis (1,0): the frame overloads then call the world functions DIRECTLY
+		 * rather than mapping - the bitwise-today contract, not an optimisation. A map through
+		 * (1,0) is exact for finite values but can flip the sign of a zero, and "World is
+		 * today" was promised without that footnote.
+		 * ENFORCED BY: Airside.Solve.GridSnap.WorldFrameIsBitwiseToday
+		 */
+		bool IsWorldAligned() const;
+
+		/** Exactly the same lines: origin, axis and step compared bitwise. */
+		bool SameLines(const FGridFrame& Other) const;
+
+		/** The folded axis's angle from +X, [0, 90). For the log line, not for arithmetic. */
+		double AxisDegrees() const;
+	};
+
+	/** Quantise in Frame's coordinates. Point unchanged when the frame is off. */
+	AIRSIDE_API FVector2D Quantise(const FVector2D& Point, const FGridFrame& Frame);
+
+	/** NearestCrossingAlong against Frame's two families. Same refusals, same out-parameter rule. */
+	AIRSIDE_API bool NearestCrossingAlong(const FVector2D& Origin, const FVector2D& Direction,
+		const FVector2D& Near, const FGridFrame& Frame, FVector2D& Out);
+
+	/** NearestCrossingInRange against Frame. T is along the unit Direction, as there. */
+	AIRSIDE_API bool NearestCrossingInRange(const FVector2D& Origin, const FVector2D& Direction,
+		const FVector2D& Near, const FGridFrame& Frame, double TMin, double TMax, FVector2D& Out);
+
+	/** PiecesInDisc for Frame's lines; major every fifth line from Frame.Origin. */
+	AIRSIDE_API void PiecesInDisc(const FVector2D& Centre, double RadiusUu, const FGridFrame& Frame,
+		TArray<FPiece>& Out);
 }
