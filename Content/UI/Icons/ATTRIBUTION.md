@@ -23,6 +23,7 @@ drives the downloads, so it cannot drift from what was fetched.
 | `game.ledger` | abacus | delapouite |
 | `game.load` | load | delapouite |
 | `game.save` | save | delapouite |
+| `game.settings` | cog | lorc |
 | `selection.depart` | airplane-departure | delapouite |
 | `selection.follow` | binoculars | delapouite |
 | `tool.apron` | stone-path | delapouite |

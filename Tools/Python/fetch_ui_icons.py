@@ -102,6 +102,10 @@ ICONS = {
     # and which side the wheel sits on is the everyday sign of which side a country drives.
     # "delapouite/two-way-traffic" returns the HTML 404 under HTTP 200; this one is real.
     "game.driveside":      ("delapouite", "steering-wheel"),
+
+    # Settings (UI library step 4b). The gear every game uses for it; "lorc/cog" checked
+    # 200 image/png 2026-09-28.
+    "game.settings":       ("lorc",       "cog"),
 }
 
 # The notification icons, one per ENotificationSeverity. Keyed by the severity name rather

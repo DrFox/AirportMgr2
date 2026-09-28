@@ -7,6 +7,7 @@ class UBuildBarWidget;
 class UInspectorWidget;
 class UOfferInboxWidget;
 class ULedgerPanelWidget;
+class USettingsPanelWidget;
 class ULandAircraftPanelWidget;
 class UToastStackWidget;
 class UUiWindowHost;
@@ -86,6 +87,11 @@ public:
 	/** The feed on screen. Owns the notification centre; see UToastStackWidget. */
 	UPROPERTY(Transient)
 	TObjectPtr<UToastStackWidget> ToastStack;
+
+	/** The player's Settings - a modal window, opened by game.settings. Code-only: no Blueprint
+	 *  restyle hook until one is wanted (the other five have one because they predate windows). */
+	UPROPERTY(Transient)
+	TObjectPtr<USettingsPanelWidget> SettingsPanel;
 
 	/** Every floating panel's window, on one canvas at Z 1 - see UUiWindowHost. */
 	UPROPERTY(Transient)

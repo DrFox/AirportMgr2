@@ -7,6 +7,7 @@
 #include "LandAircraftPanelWidget.h"
 #include "LedgerPanelWidget.h"
 #include "OfferInboxWidget.h"
+#include "SettingsPanelWidget.h"
 #include "RoadBuildLog.h"
 #include "ToastStackWidget.h"
 #include "UI/UiLayoutStore.h"
@@ -53,6 +54,8 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 		TEXT("Ledger panel"), TEXT("LedgerPanelClass"));
 	LandPanel = CreateConfiguredWidget<ULandAircraftPanelWidget>(Owner, LandPanelClass, INDEX_NONE,
 		TEXT("Land panel"), TEXT("LandPanelClass"));
+	// CODE-ONLY, no *Class hook: the other panels' hooks predate windows (see SettingsPanel's comment).
+	SettingsPanel = CreateWidget<USettingsPanelWidget>(&Owner, USettingsPanelWidget::StaticClass());
 	ToastStack = CreateConfiguredWidget<UToastStackWidget>(Owner, ToastStackClass, 2,
 		TEXT("Toast stack"), TEXT("ToastStackClass"));
 	WireWindows();
@@ -64,7 +67,7 @@ void UBuildHudLayer::WireWindows()
 	{
 		return;
 	}
-	for (UAirportMgrPanelWidget* Panel : TArray<UAirportMgrPanelWidget*>{ Inspector, OfferInbox, LedgerPanel, LandPanel })
+	for (UAirportMgrPanelWidget* Panel : TArray<UAirportMgrPanelWidget*>{ Inspector, OfferInbox, LedgerPanel, LandPanel, SettingsPanel })
 	{
 		if (Panel != nullptr)
 		{

@@ -57,6 +57,28 @@ public:
 	int32 Saves = 0;
 };
 
+class ARoadBuildController;
+
+/**
+ * The game's sink: UAirportMgrUserSettings for the player's own values (saved to their
+ * GameUserSettings.ini), and each value pushed to the code that reads it.
+ */
+class AIRPORTMGR_API FGamePlayerSettingsSink : public IPlayerSettingsSink
+{
+public:
+	explicit FGamePlayerSettingsSink(ARoadBuildController& InController);
+	virtual FPlayerSettings Read() const override;
+	virtual void Apply(const FPlayerSettings& Values) override;
+	virtual void Save() override;
+
+	/** Puts the engine's UI scale back as it was: the settings CDO Apply writes outlives a PIE session. */
+	void RestoreEngineScale();
+
+private:
+	TWeakObjectPtr<ARoadBuildController> Controller;
+	float EngineScaleAtStart = 1.0f;
+};
+
 namespace PlayerSettings
 {
 	/** Grid snap on start: turns a grid ON (the Grid button's first step) when the level has none;

@@ -10,10 +10,10 @@
  * named as GameUserSettingsClassName in DefaultEngine.ini, so it saves to the player's
  * GameUserSettings.ini beside the scalability it already owns - where a shipped game keeps them.
  *
- * ONE FIELD FOR NOW - WindowLayout. The spec's other five (UI scale, camera speeds, drive side,
- * grid snap default) arrive in step 4 with the Settings control that edits each and the code that
- * reads it: a config field no code reads is the declared-never-consumed bug this codebase keeps
- * shipping (CLAUDE.md, "Check where a list is CONSUMED").
+ * EVERY FIELD HAS A READER: WindowLayout the window host's store, the rest FGamePlayerSettingsSink.
+ * A config field no code reads is the declared-never-consumed bug this codebase keeps shipping
+ * (CLAUDE.md, "Check where a list is CONSUMED") - which is why these arrived with their reader in
+ * step 4b, not with WindowLayout in step 3.
  */
 UCLASS(config = GameUserSettings)
 class AIRPORTMGR_API UAirportMgrUserSettings : public UGameUserSettings
@@ -26,4 +26,16 @@ public:
 
 	/** Where each window was left, by window id - see FUserSettingsLayoutStore. */
 	UPROPERTY(config) TMap<FName, FUiWindowPlacement> WindowLayout;
+
+	// THE SETTINGS WINDOW'S FOUR (step 4b). Each is read by FGamePlayerSettingsSink, which pushes it
+	// to its consumer; the drive side and graphics are not here - the road actor and the engine's
+	// own scalability already hold them.
+
+	/** Multiplies the engine's DPI curve (UUserInterfaceSettings::ApplicationScale). 0.75-1.5. */
+	UPROPERTY(config) float UIScale = 1.0f;
+	/** Multiply UBuildCameraComponent's PanRate / ZoomStep (SetPlayerSpeedScales). 0.5-2.0. */
+	UPROPERTY(config) float PanSpeedScale = 1.0f;
+	UPROPERTY(config) float ZoomSpeedScale = 1.0f;
+	/** A fresh start turns the world grid on (PlayerSettings::ApplyStartGrid). */
+	UPROPERTY(config) bool bGridSnapOnStart = false;
 };
