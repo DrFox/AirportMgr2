@@ -192,3 +192,17 @@ new assignments, occupant finishes) - it is the smallest thing that keeps the ma
 - Numbering scheme (stage 5).
 - How the strip is drawn - grass vs shoulder material - is a live visual iteration, not a spec
   figure.
+
+## Rulings, 2026-09-29 (answers to the stage 3-6 plans' questions)
+
+- **Aprons are exempt from strips** - aircraft pavement beside a taxiway is the normal layout.
+- **A taxiway limits aircraft to its letter** (user: "an aircraft should not be able to use a
+  taxiway that is too small for it. The opposite is allowed, a Cessna 172 is allowed on any
+  taxiway"). Every taxiway edge carries its effective letter's max wingspan - the pavement's,
+  lowered by a restriction. A ceiling, never a floor. Changes routing on existing maps.
+- **Stand numbers: 1..N for now**, never reused.
+- **Road crossing stop line: a solid white stop bar** at the strip edge.
+- **Upgrades are a MODE, not a gesture** (user: "an upgrade mode rather than a specific widen and
+  we can then use that for surface as well as width and other tools can use the same
+  terminology"). A shared `Mode` axis (`Build` / `Upgrade`) on the variant row; in Upgrade the
+  row's width and surface apply to the existing piece clicked.

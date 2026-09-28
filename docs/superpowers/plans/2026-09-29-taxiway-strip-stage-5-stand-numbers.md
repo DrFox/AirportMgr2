@@ -25,7 +25,7 @@
 
 ## Rulings made while planning (user asleep - see Unresolved questions)
 
-1. **Numbering: sequential per airport from 1, never reused.** A deleted stand's number is retired (real aprons do not renumber); gaps are fine. Depots are not numbered.
+1. **Numbering: sequential per airport from 1, never reused** (USER 2026-09-29: "1..N for now"). A deleted stand's number is retired (real aprons do not renumber); gaps are fine. Depots are not numbered.
 2. **Backfill on load** for stands saved without a number: in `Entities` order, starting past the saved counter.
 3. **One number painted per turn-off**, on the taxiway pavement beside the centreline on the approach side of the turn, reading for a pilot approaching - two for a taxi-through stand (both turn-offs). Arrow: a chevron pointing along the sweep into the stand.
 4. **The lead-in paint follows the derived edges, clipped to taxiway pavement** - so the strip gap falls out of "paint only where paved" rather than a second rule, and the samples are the edges' own (the graph samples once).
@@ -107,7 +107,8 @@
 
 ## Unresolved questions (for the user)
 
-1. Numbering: sequential 1..N, never reused (ruling 1) - or per-apron prefixes ("A12"), or player-renamable?
+ANSWERED 2026-09-29: 1..N for now (ruling 1).
+
 2. Where the number sits: on the taxiway at the turn-off (ruling 3, as BHX) - also on the stand itself (at the stop bar), or only there?
 3. Number height 2 m to start - fine to tune live?
 4. Legacy indices in debug logs stay as indices (ruling 5) - OK?

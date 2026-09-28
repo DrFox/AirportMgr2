@@ -28,7 +28,7 @@
 2. **Vehicle stop line = strip edge of the crossed taxiway**, measured along the road arm: `(TaxiwayHalfWidth + Strip) / sin(angle)` from the node, the runway's own `TaxiwayEndFloor` shape with the strip added.
 3. **Aircraft do not stop at road crossings** - rank already gives them way; no aircraft-side hold is added.
 4. **Intermediate holds move to the joined taxiway's strip edge** by SPLITTING the arm edge at that distance and flagging the split node; the arm's end node (where junction turns attach) does not move. Intermediate holds stay INERT in traffic (spec 2026-09-07) - this stage moves and paints them only.
-5. **Stop line paint:** a white double dashed bar ("give way") across the road at its hold node. White, because it is a road marking; the aircraft holds are yellow.
+5. **USER 2026-09-29: a SOLID WHITE STOP BAR** across the road at its hold node. White, because it is a road marking; the aircraft holds are yellow.
 
 ## Global Constraints
 
@@ -105,17 +105,18 @@
 
 **Files:** `Private/Build/HoldingPositionMarkingBuilder.cpp`, the paint-slot map (`RoadSurfacePresenter.cpp` - how lane markings get white; reuse that slot), test `HoldingPositionMarkingTest.cpp`.
 
-- [ ] **Step 1: Failing test** `Airside.Build.HoldingPositionMarking.CrossingStopLine`: a derived crossing paints, per road arm, two dashed bars (`MarkingAddBar(..., bDashed=true)`) across the ROAD's full width at the hold node, in the white lane-marking slot (assert the meaning id / slot the way `PaintCarriesItsMeaningId` does for stands), none on the taxiway.
-- [ ] **Step 2:** FAIL. **Step 3:** Add the `TaxiwayCrossing` case: two dashed bars `LineWidth` deep, `LineGap` apart, `HalfWidth` = the ROAD profile's (HoldingBarAt already reads the node's own segment). **Step 4:** Pass; commit `feat(crossing): paint the give-way line`.
+- [ ] **Step 1: Failing test** `Airside.Build.HoldingPositionMarking.CrossingStopLine`: a derived crossing paints, per road arm, ONE SOLID bar (`MarkingAddBar(..., bDashed=false)`), 40 uu deep (the stand stop bar's `StopBarWidth` - share the constant, do not retype it), across the ROAD's full width at the hold node, in the white lane-marking slot (assert the meaning id / slot the way `PaintCarriesItsMeaningId` does for stands), none on the taxiway.
+- [ ] **Step 2:** FAIL. **Step 3:** Add the `TaxiwayCrossing` case: one solid bar, `HalfWidth` = the ROAD profile's (HoldingBarAt already reads the node's own segment). **Step 4:** Pass; commit `feat(crossing): paint the stop bar`.
 
 ---
 
 ### Task 6: Look at it
 
-- [ ] Worktree editor (port 8002), M_Test: lay a service road across a taxiway at a right angle; PIE; dispatch an arrival and a vehicle across it. Shot the stop line (`Mcp.py shot x.png editor`) and read `LogAirsideTraffic` for the truck waiting. Ask the user whether the white give-way line reads right at zoom (visual iteration live, not SDD).
+- [ ] Worktree editor (port 8002), M_Test: lay a service road across a taxiway at a right angle; PIE; dispatch an arrival and a vehicle across it. Shot the stop bar (`Mcp.py shot x.png editor`) and read `LogAirsideTraffic` for the truck waiting. Ask the user whether the white stop bar reads right at zoom (visual iteration live, not SDD).
 
 ## Unresolved questions (for the user)
 
-1. Stop line style: white double dashed "give way" (ruling 5) - or a solid white stop bar? Real UK airside crossings use a give-way line plus a sign.
+ANSWERED 2026-09-29: solid white stop bar (ruling 5).
+
 2. Should aircraft ever wait for a vehicle already committed to the crossing (current rank rule: only if the vehicle holds the conflict first)? Rules as planned: yes, whoever reserves first; aircraft outrank when both ask at once.
 3. Intermediate holds stay inert in traffic (spec 2026-09-07) - still right, or should a hold at the strip edge now actually stop aircraft when the joined taxiway is occupied?

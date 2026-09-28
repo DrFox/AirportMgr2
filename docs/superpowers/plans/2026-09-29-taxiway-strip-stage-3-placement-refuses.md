@@ -22,7 +22,7 @@
 
 ## Rulings made while planning (user asleep - each is in "Unresolved questions")
 
-1. **Aprons are exempt.** An apron is aircraft pavement - the same movement area as the taxiway it borders. Refusing aprons in strips would forbid the normal apron-beside-taxiway layout. What stands ON an apron is still judged (stands already are).
+1. **Aprons are exempt** (USER agreed 2026-09-29). An apron is aircraft pavement - the same movement area as the taxiway it borders. Refusing aprons in strips would forbid the normal apron-beside-taxiway layout. What stands ON an apron is still judged (stands already are).
 2. **Runways are out of scope** (spec: "runways have their own strip rules"). A runway is neither refused by taxiway strips nor given one.
 3. **Straight continuation is a meeting.** A segment leaving a taxiway's end node at >= 150 degrees to it (extending it) meets it; exempt from that taxiway, as a right-angle join is. Else the rule would forbid lengthening a taxiway.
 4. **Existing placements are not re-judged here.** Roads already inside strips (e.g. in M_Test) stay; stage 6 turns them into taxiway restrictions.
@@ -230,7 +230,8 @@ Also give `WorstIntrusion` an exempt parameter (`TConstArrayView<FRoadSegmentId>
 
 ## Unresolved questions (for the user)
 
-1. Aprons exempt from strips (ruling 1) - agree? The alternative refuses an apron edge within 28 m of an E taxiway.
+ANSWERED 2026-09-29: aprons exempt (ruling 1).
+
 2. Straight-on continuation (>= 150 degrees) counts as meeting (ruling 3) - agree? Or only same-kind continuation (a road may not continue a taxiway's line)?
 3. Existing roads already inside strips stay until stage 6 restricts their taxiway (ruling 4) - agree?
 4. Refusal wording tells the player the fix ("end it on the taxiway at a junction, or move it N m away") - OK, or shorter?
