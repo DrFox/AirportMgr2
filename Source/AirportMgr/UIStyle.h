@@ -165,6 +165,13 @@ public:
 	 *  reference kit's 16 px read as a toy (user, 2026-09-28: "not as cutesy rounded"). */
 	UPROPERTY(EditAnywhere, Category = "Metrics") float ControlRadius = 5.0f;
 
+	/** A dragged window's edge within this many uu of a screen edge, the bar's top or another
+	 *  window's edge snaps onto it (spec 2026-09-28 section 2). */
+	UPROPERTY(EditAnywhere, Category = "Metrics", meta = (ClampMin = "0.0")) float SnapDistance = 12.0f;
+
+	/** The smallest a player can resize a window to; its scroll box takes whatever no longer fits. */
+	UPROPERTY(EditAnywhere, Category = "Metrics") FVector2D WindowMinSize = FVector2D(180.0, 90.0);
+
 	/**
 	 * The UI material every Primary/Secondary/Danger control fill draws with: rounded corners and
 	 * a vertical shade in one, tinted by the button's background colour - see

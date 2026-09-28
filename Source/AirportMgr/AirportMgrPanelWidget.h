@@ -2,12 +2,14 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "UI/UiWindowSpec.h"
 #include "Widgets/Layout/Anchors.h"
 #include "AirportMgrPanelWidget.generated.h"
 
 class ARoadBuildController;
 class UPanelWidget;
 class UUIStyle;
+class UUiWindowHost;
 class UWidget;
 
 /**
@@ -50,6 +52,50 @@ public:
 	 * carried this exact reasoning on an identical override (issue #90).
 	 */
 	virtual bool Initialize() override final;
+
+	/**
+	 * This panel's window, if it is one: fills Out and returns true. The default is "not a
+	 * window" - the bar and the toast stack are fixed furniture, not something to drag.
+	 */
+	virtual bool WantsWindow(FUiWindowSpec& Out) const;
+
+	/** Called once by UUiWindowHost::AddWindow; applies whatever SetShown already asked for. */
+	void AttachToHost(UUiWindowHost& InHost, FName InId);
+
+	/**
+	 * One frame of this panel's own work. The HOST calls it for a hosted panel every frame, hidden
+	 * or not - a collapsed window stops Slate ticking its contents, and the tick is what decides to
+	 * show it again. NativeTick calls it only when there is no host.
+	 * ENFORCED BY: AirportMgr.Panels.HostedPanelTicksOnce, AirportMgr.UI.WindowHost.TicksHiddenPanelsOnce.
+	 */
+	void RunPanelTick(float DeltaTime);
+
+	/** The player pressed this panel's window's close. Default: nothing; a toggled panel un-toggles. */
+	virtual void OnWindowClosedByPlayer();
+
+	/** Whether the window shows: the host's answer when hosted, the last SetShown otherwise. */
+	bool IsShown() const;
+
+	/** Runs NativeTick with a throwaway geometry, so a headless test can drive a tick without a
+	 *  viewport - the precedent of ARoadBuildController::PlayerTickForTest. Moved here from
+	 *  UBuildBarWidget and UOfferInboxWidget, which each carried this exact one-liner. */
+	void NativeTickForTest(float DeltaTime) { FGeometry G; NativeTick(G, DeltaTime); }
+
+	/** How many times RunPanelTick has run - see HostedPanelTicksOnce. */
+	int32 PanelTickCountForTest() const { return PanelTicks; }
+
+protected:
+	/** A subclass's per-frame work - what its NativeTick override used to do. See RunPanelTick. */
+	virtual void TickPanel(float DeltaTime);
+
+	/** Ask for this panel's window to show or hide. The host decides (a player's close sticks). */
+	void SetShown(bool bShown);
+
+	/** Clears a player's close, so the next SetShown(true) shows again - for a panel whose
+	 *  content changed enough to deserve a second look (the inspector's new selection). */
+	void ForgetPlayerClose();
+
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 protected:
 	/**
@@ -176,4 +222,13 @@ private:
 
 	/** See BuildOnceCallCountForTest. */
 	int32 BuildOnceCalls = 0;
+
+	/** The host that owns this panel's window; null for the bar, toasts and a headless test. */
+	UPROPERTY() TObjectPtr<UUiWindowHost> Host;
+	FName WindowId;
+	/** What the panel last asked for - applied to the host when it attaches, and what IsShown
+	 *  answers when there is no host. */
+	bool bShownRequested = false;
+	/** See PanelTickCountForTest. */
+	int32 PanelTicks = 0;
 };

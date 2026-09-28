@@ -176,10 +176,8 @@ public:
 	/** Every tool entry is a UUiButton with a label - see AirportMgr.Actions.BarToolsAreUiButtons. */
 	bool AllButtonsAreUiButtonsForTest() const;
 
-	/** Runs NativeTick with a throwaway geometry - the same precedent as
-	 *  ARoadBuildController::PlayerTickForTest - so a headless test can prove the per-tick
-	 *  refresh is cheap without a viewport ticking it for real. */
-	void NativeTickForTest(float DeltaTime) { FGeometry G; NativeTick(G, DeltaTime); }
+	// NativeTickForTest is the panel base's now (UAirportMgrPanelWidget) - used here so a headless
+	// test can prove the per-tick refresh is cheap without a viewport ticking it for real.
 
 	/** RefreshState's per-entry work, given the controller directly rather than through
 	 *  Controller() - see RefreshStateFor's own comment for why NativeTickForTest alone cannot

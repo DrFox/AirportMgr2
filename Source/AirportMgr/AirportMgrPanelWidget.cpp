@@ -10,6 +10,7 @@
 #include "RoadBuildLog.h"
 #include "Styling/SlateBrush.h"
 #include "UI/UiClicks.h"
+#include "UI/UiWindowHost.h"
 #include "UIStyle.h"
 
 bool UAirportMgrPanelWidget::Initialize()
@@ -110,4 +111,63 @@ FReply UAirportMgrPanelWidget::NativeOnMouseButtonDoubleClick(const FGeometry& I
 {
 	return UiClicks::EatUnhandled(*this, WidgetTree != nullptr ? WidgetTree->RootWidget : nullptr,
 		Super::NativeOnMouseButtonDoubleClick(InGeometry, InMouseEvent), TEXT("double-click"));
+}
+
+bool UAirportMgrPanelWidget::WantsWindow(FUiWindowSpec& Out) const
+{
+	return false;
+}
+
+void UAirportMgrPanelWidget::AttachToHost(UUiWindowHost& InHost, FName InId)
+{
+	Host = &InHost;
+	WindowId = InId;
+	InHost.SetShown(WindowId, bShownRequested);   // whatever BuildOnce already asked for
+}
+
+void UAirportMgrPanelWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+	// HOSTED PANELS ARE TICKED BY THE HOST, hidden or not - see RunPanelTick. Doing it here too
+	// would tick a visible hosted panel twice. ENFORCED BY: AirportMgr.UI.WindowHost.TicksHiddenPanelsOnce.
+	if (Host == nullptr)
+	{
+		RunPanelTick(InDeltaTime);
+	}
+}
+
+void UAirportMgrPanelWidget::RunPanelTick(float DeltaTime)
+{
+	++PanelTicks;
+	TickPanel(DeltaTime);
+}
+
+void UAirportMgrPanelWidget::TickPanel(float DeltaTime)
+{
+}
+
+void UAirportMgrPanelWidget::OnWindowClosedByPlayer()
+{
+}
+
+void UAirportMgrPanelWidget::SetShown(bool bShown)
+{
+	bShownRequested = bShown;
+	if (Host != nullptr)
+	{
+		Host->SetShown(WindowId, bShown);
+	}
+}
+
+bool UAirportMgrPanelWidget::IsShown() const
+{
+	return Host != nullptr ? Host->IsShown(WindowId) : bShownRequested;
+}
+
+void UAirportMgrPanelWidget::ForgetPlayerClose()
+{
+	if (Host != nullptr)
+	{
+		Host->ForgetDismissal(WindowId);
+	}
 }

@@ -111,4 +111,30 @@ bool FAirportMgrPanelChromeEatsClicksTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A HOSTED PANEL TICKS ONCE A FRAME, FROM THE HOST. A collapsed window stops Slate ticking its
+ * contents, and a panel's tick is what un-hides it (the inspector showing a new selection), so
+ * the host ticks every hosted panel itself - which means the panel's OWN NativeTick must then do
+ * nothing, or a visible panel is ticked twice. Without a host (the bar, toasts, headless tests)
+ * NativeTick keeps doing the work. The hosted half is AirportMgr.UI.WindowHost.TicksHiddenPanelsOnce.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAirportMgrPanelHostedTicksOnceTest,
+	"AirportMgr.Panels.HostedPanelTicksOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAirportMgrPanelHostedTicksOnceTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("a panel"), Panel)) { return false; }
+
+	Panel->NativeTickForTest(0.016f);
+	TestEqual(TEXT("no host: its own NativeTick runs the panel tick"), Panel->PanelTickCountForTest(), 1);
+	Panel->RunPanelTick(0.016f);
+	TestEqual(TEXT("RunPanelTick is the one entry"), Panel->PanelTickCountForTest(), 2);
+	return true;
+}
+
 #endif

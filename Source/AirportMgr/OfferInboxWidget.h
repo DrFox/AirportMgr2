@@ -116,12 +116,9 @@ public:
 	/** Row N's Accept button, or null - see AirportMgr.UI.OfferInbox's Primary-kind assertion. */
 	const UUiButton* AcceptButtonForTest(int32 Row) const;
 
-	/** Runs NativeTick with a throwaway geometry - the same precedent as
-	 *  UBuildBarWidget::NativeTickForTest - so a headless test can prove an idle tick resolves
-	 *  no style (issue #309, closes the #260 item) without a viewport ticking it for real.
-	 *  Needs Controller() to reach Refresh at all; PaintRowsForTest above skips straight to
-	 *  PaintRows for a test with no controller to poll. */
-	void NativeTickForTest(float DeltaTime) { FGeometry G; NativeTick(G, DeltaTime); }
+	// NativeTickForTest is the panel base's now: it lets a headless test prove an idle tick
+	// resolves no style (issue #309, closes the #260 item). It needs Controller() to reach Refresh
+	// at all; PaintRowsForTest above skips straight to PaintRows for a test with no controller.
 
 	/** Where the refusal sentence wraps, uu. The card is sized from this. */
 	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float RowWrapWidth = 260.0f;
