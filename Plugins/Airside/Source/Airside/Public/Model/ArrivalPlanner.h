@@ -85,6 +85,16 @@ enum class EArrivalRefusal : uint8
 	 * building. Appended LAST, as GraphBeingEdited was, so saved values keep their meaning.
 	 */
 	NoStandClearOfStrip,
+
+	/**
+	 * A stand is reachable, but only over a taxiway too narrow for this aircraft - its own
+	 * letter, or lower where something in its strip restricts it (strip stage 6: every taxiway
+	 * limits wingspan to its letter). Distinct from NoRouteToStand because the taxiways ARE
+	 * joined up; the fix is to upgrade the taxiway or clear what restricts it, and
+	 * FArrivalPlan::NarrowTaxiway says which. PERMANENT to the offer generator (it needs
+	 * building). Appended LAST, NoStandClearOfStrip's reason.
+	 */
+	TaxiwayTooNarrow,
 };
 
 /**
@@ -143,6 +153,14 @@ struct AIRSIDE_API FArrivalPlan
 	 * re-deriving it. Default (admitted) for every other Why; see WhyEveryStandRefused.
 	 */
 	UPROPERTY() FStandAdmission StandRefusal;
+
+	/**
+	 * TaxiwayTooNarrow only: the too-narrow piece and its fix, as a clause - "a taxiway
+	 * restricted to Code C by a service road - move it clear of the strip" or "a Code C taxiway
+	 * - upgrade it to Code D". Words, not ids, because DescribeRefusal has no network to read
+	 * the restriction back from; written once, where the route that found it is in hand.
+	 */
+	UPROPERTY() FString NarrowTaxiway;
 
 	/**
 	 * NoExit or NoRouteToStand only: landing the OTHER way would have reached a stand. The

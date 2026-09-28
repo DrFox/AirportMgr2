@@ -5,6 +5,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
 #include "Model/StandAdmission.h"
+#include "Model/TaxiwayRestriction.h"
 #include "Model/TrafficOccupancy.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/RunwayDesignator.h"
@@ -296,6 +297,72 @@ namespace ArrivalPlanner
 			}
 			return false;
 		}
+
+		/**
+		 * The TaxiwayTooNarrow clause, or empty when no stand is reachable even ignoring size
+		 * (then it IS NoRouteToStand). Asked only on a NoRouteToStand refusal, with the same exit
+		 * list and the same ChooseStand as the plan - at span 0, which no taxiway limits (a 0 span
+		 * is "unknown", admitted everywhere, IcaoCode::StandAdmits' rule) - then walks the route
+		 * it WOULD have taken to the first edge this aircraft's wings do not fit: the one a pilot
+		 * would meet first, not necessarily the only one. FindToGoals has no TooWide retry of its
+		 * own (RouteSearch::Find's), which is why this second search lives here.
+		 */
+		FString NarrowTaxiwayOnRoute(const URoadNetwork& Network, const FRunwayEnd& End, double SlowedBy,
+			const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingHolder)
+		{
+			if (Airframe.Wingspan <= 0.0)
+			{
+				return FString();
+			}
+			FAirframe AnySize = Airframe;
+			AnySize.Wingspan = 0.0;
+			for (const FGuidelineNodeId& Exit : Network.RunwayExitNodes(End.Seed, End.Threshold, End.Direction, SlowedBy))
+			{
+				FRoutePlan Route;
+				ChooseStand(Network, Exit, AnySize, Occupancy, ExcludingHolder, &Route);
+				if (!Route.IsValid())
+				{
+					continue;
+				}
+				for (int32 Index = 0; Index < Route.Steps.Num(); ++Index)
+				{
+					const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Route.Steps[Index].Edge);
+					// RouteSearch's own ExceedsWingspan: 0 unlimited, otherwise strictly wider.
+					if (Edge == nullptr || Edge->MaxWingspan <= 0.0 || Airframe.Wingspan <= Edge->MaxWingspan)
+					{
+						continue;
+					}
+					// THE PIECE: a straight edge names its segment; a turn path names none, so take
+					// the neighbouring derived edge carrying the same limit - the turn's Min came
+					// from one of its two arms (RoadGuidelineBuilder's turn rule).
+					FRoadSegmentId Piece = Edge->DerivedFrom;
+					for (const int32 Near : { Index - 1, Index + 1 })
+					{
+						const FGuidelineEdge* Arm = Route.Steps.IsValidIndex(Near)
+							? Network.GetGuidelineEdge(Route.Steps[Near].Edge) : nullptr;
+						if (!Piece.IsSet() && Arm != nullptr && Arm->DerivedFrom.IsSet() && Arm->MaxWingspan == Edge->MaxWingspan)
+						{
+							Piece = Arm->DerivedFrom;
+						}
+					}
+					const FString Need = IcaoCode::LetterForWingspan(Airframe.Wingspan);
+					TaxiwayRestriction::FObstruction Worst;
+					const TOptional<EIcaoCode> Restricted = Piece.IsSet()
+						? TaxiwayRestriction::RestrictionOf(Network, Piece, &Worst) : TOptional<EIcaoCode>();
+					if (Restricted.IsSet())
+					{
+						return FString::Printf(TEXT("a taxiway restricted to Code %s by %s - move it clear of the strip"),
+							IcaoCode::ToLetter(Restricted.GetValue()), *TaxiwayRestriction::Describe(Worst));
+					}
+					const TOptional<EIcaoCode> Letter = Piece.IsSet()
+						? TaxiwayRestriction::EffectiveLetterOf(Network, Piece) : TOptional<EIcaoCode>();
+					return Letter.IsSet()
+						? FString::Printf(TEXT("a Code %s taxiway - upgrade it to Code %s"), IcaoCode::ToLetter(Letter.GetValue()), *Need)
+						: FString::Printf(TEXT("a taxiway too narrow for it - upgrade it to Code %s"), *Need);
+				}
+			}
+			return FString();
+		}
 	}
 
 	bool IsRunwayBusy(const URoadNetwork& Network, const FVector2D& Near, const FTrafficOccupancy* Occupancy)
@@ -512,6 +579,15 @@ namespace ArrivalPlanner
 				// is behind the touchdown, the strip's own dead-end node is the only "exit" left,
 				// and no stand is reachable from that.
 				Out.bOtherEndWouldServe = OtherEndServes(Network, Out.End, SlowedBy, Airframe, Occupancy, ExcludingHolder);
+
+				// JOINED UP BUT TOO NARROW (strip stage 6): every taxiway limits aircraft to its
+				// letter, so "no route" may only mean "not for wings this wide". The player's fix
+				// is an upgrade or a cleared strip, not a new taxiway.
+				Out.NarrowTaxiway = NarrowTaxiwayOnRoute(Network, Out.End, SlowedBy, Airframe, Occupancy, ExcludingHolder);
+				if (!Out.NarrowTaxiway.IsEmpty())
+				{
+					Out.Why = EArrivalRefusal::TaxiwayTooNarrow;
+				}
 			}
 			return Out;
 		}
@@ -576,6 +652,9 @@ namespace ArrivalPlanner
 		case EArrivalRefusal::NoStandClearOfStrip:
 			return TEXT("Arrival refused: every stand that fits sits inside a taxiway's clearance strip - redraw one further back.");
 
+		case EArrivalRefusal::TaxiwayTooNarrow:
+			return TEXT("Arrival refused: the taxiways to the stands are too narrow for this aircraft - upgrade them, or clear what restricts them.");
+
 		case EArrivalRefusal::None:
 		default:
 			return FString();
@@ -628,6 +707,10 @@ namespace ArrivalPlanner
 
 		case EArrivalRefusal::NotAdmitted:
 			return FString::Printf(TEXT("Arrival refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
+
+		case EArrivalRefusal::TaxiwayTooNarrow:
+			return FString::Printf(TEXT("Arrival refused: landing %s, the only route to a stand is over %s."),
+				*RunwayDesignator::ToText(RunwayDesignator::Designate(Plan.End.Direction)), *Plan.NarrowTaxiway);
 
 		// THE STAND REFUSALS NAME THE PAVEMENT from the admission that spoke for them (R13,
 		// spec 2026-09-27 §3: the plan's refusal text reaches the stand's own decision) - "pave

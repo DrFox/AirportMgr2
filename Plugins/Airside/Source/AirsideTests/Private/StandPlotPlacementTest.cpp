@@ -679,7 +679,18 @@ bool FStandPlotLeadInSizedByLetterTest::RunTest(const FString& Parameters)
 		IRoadEditTarget* Target = Actor;
 		const int32 West = Target->PlaceNode(FVector2D(-40000.0, 0.0));
 		const int32 East = Target->PlaceNode(FVector2D(60000.0, 0.0));
-		Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
+		// A CODE F TAXIWAY, not the level default (24 m, E): since strip stage 6 every taxiway
+		// limits aircraft to its letter (user 2026-09-29), and this test is about the STAND's
+		// lead-in admitting the A380, not about the taxiway to it - so the taxiway is one an
+		// A380 may use. BehindStrip reads the laid width, so the stand moves out with its strip.
+		int32 WidthF = INDEX_NONE;
+		for (int32 W = 0; W < Actor->GetWidthCount(ERoadKind::Taxiway); ++W)
+		{
+			const URoadProfile* Each = Actor->ResolveWidthProfile(ERoadKind::Taxiway, W);
+			if (Each != nullptr && IcaoCode::TaxiwayLetterForWidth(Each->GetTotalWidth()) == EIcaoCode::F) { WidthF = W; }
+		}
+		if (!TestTrue(TEXT("the content set has a Code F taxiway width"), WidthF != INDEX_NONE)) { return false; }
+		Target->ConnectNodes(West, East, ERoadKind::Taxiway, WidthF);
 
 		FVector2D A, B;
 		const TArray<FVector2D> Rect = FloorRect(EIcaoCode::F, BehindStrip(Actor), A, B);
