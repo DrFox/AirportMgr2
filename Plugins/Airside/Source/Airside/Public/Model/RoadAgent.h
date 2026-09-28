@@ -776,9 +776,14 @@ public:
 	 *  StartArrival until Vacated, a departure from the handover until Gone. */
 	UPROPERTY() TArray<FRoadSegmentId> RunwayHeld;
 
-	/** Holds this chain from now - an arrival's touchdown (DispatchArrival) or a departure's
-	 *  line-up (the LinedUp handover). See RunwayHeld. */
-	void HoldRunway(const TArray<FRoadSegmentId>& Chain) { RunwayHeld = Chain; }
+	/** A point on RunwayHeld's strip (RunwayQuery::PointOnChain), written with it by HoldRunway,
+	 *  so a rebuild that killed every handle in the chain can find the strip again - see
+	 *  RunwayQuery::RePointChain. */
+	UPROPERTY() FVector2D RunwayHeldAt = FVector2D::ZeroVector;
+
+	/** Holds this chain from now - an arrival's touchdown (DispatchArrival), a departure's
+	 *  line-up (the LinedUp handover) or a rebuild's re-point. See RunwayHeld and RunwayHeldAt. */
+	void HoldRunway(const TArray<FRoadSegmentId>& Chain, const FVector2D& At) { RunwayHeld = Chain; RunwayHeldAt = At; }
 
 	/** Releases whatever runway this agent held - the vacate (to the crossing rule) or the
 	 *  Airborne handover (to nobody; the strip is simply free). */
@@ -790,14 +795,23 @@ private:
 	 *  ArmDepartureIfRunway used to assign and .Reset() it directly. */
 	UPROPERTY() TArray<FRoadSegmentId> DepartureRunway;
 
+	/** A point on DepartureRunway's strip, for the same reason as RunwayHeldAt and written with
+	 *  it by ArmDepartureRunway. */
+	UPROPERTY() FVector2D DepartureRunwayAt = FVector2D::ZeroVector;
+
 public:
 	/** Read-only outside ArmDepartureRunway/DisarmDeparture - see DepartureRunway's own
 	 *  comment. */
 	const TArray<FRoadSegmentId>& GetDepartureRunway() const { return DepartureRunway; }
+	const FVector2D& GetDepartureRunwayAt() const { return DepartureRunwayAt; }
 
 	/** Arms the chain a departure will hold once the taxi that is heading for a runway reaches
-	 *  it - ArmDepartureIfRunway's one caller, alongside ArmDeparture itself. */
-	void ArmDepartureRunway(TArray<FRoadSegmentId> Chain) { DepartureRunway = MoveTemp(Chain); }
+	 *  it - ArmDepartureIfRunway, alongside ArmDeparture itself, and a rebuild's re-point. */
+	void ArmDepartureRunway(TArray<FRoadSegmentId> Chain, const FVector2D& At)
+	{
+		DepartureRunway = MoveTemp(Chain);
+		DepartureRunwayAt = At;
+	}
 
 	/**
 	 * Whether a runway crossing is current. Public read of the private CrossingPhase/

@@ -170,6 +170,27 @@ namespace RunwayQuery
 	AIRSIDE_API FRoadSegmentId RunwaySegmentAt(const URoadNetwork& Network, const FVector2D& Position);
 
 	/**
+	 * A point on Chain's strip - the midpoint of its first live segment - or ZeroVector when
+	 * none is live. What a hold stores beside its chain so RePointChain can find the strip
+	 * again once every handle in the chain has died.
+	 */
+	AIRSIDE_API FVector2D PointOnChain(const URoadNetwork& Network, const TArray<FRoadSegmentId>& Chain);
+
+	/**
+	 * The chain Held names on the network as it NOW is: the chain of any member still a live
+	 * runway, else the chain of the runway segment under At, else empty.
+	 *
+	 * WHY A HOLD NEEDS THIS (playtest 2026-09-28): an exit built onto a runway is a split, and
+	 * URoadNetwork::SplitSegment frees the segment and adds two. A landing that held the chain
+	 * as it was at dispatch then held dead handles, IsRunwayBusy asked about the new ones, and a
+	 * holding arrival was cleared onto the strip behind it. A survivor first, because it follows
+	 * a runway the player DRAGGED, where At no longer lies on the asphalt; At for the case with
+	 * no survivor, a strip whose every segment was split.
+	 */
+	AIRSIDE_API TArray<FRoadSegmentId> RePointChain(const URoadNetwork& Network,
+		const TArray<FRoadSegmentId>& Held, const FVector2D& At);
+
+	/**
 	 * Guideline nodes lying on the runway chain Seed belongs to, ordered by distance from
 	 * Threshold along Direction.
 	 *

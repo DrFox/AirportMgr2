@@ -12,6 +12,7 @@
 #include "Model/PushbackPlanner.h"
 #include "Model/PushbackRun.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RunwayQuery.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
 #include "Model/VehicleFit.h"
@@ -83,7 +84,7 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	// THE RUNWAY IS HELD FROM NOW. Claimed as occupied every tick by Advance while the phase
 	// is Arriving; released at the Vacated handover. Held on the agent rather than looked
 	// up again at release, because by then the graph may have been rebuilt.
-	Agent.HoldRunway(Plan.RunwayChain);
+	Agent.HoldRunway(Plan.RunwayChain, RunwayQuery::PointOnChain(Network, Plan.RunwayChain));
 
 	// NO ZERO-SECOND POSE HERE, unlike DispatchAgent: FRoadAgent::StartArrival already ran
 	// one and wrote LastMotion from the approach's own starting pose - see its comment - so
@@ -265,8 +266,12 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 		// THE WHOLE CHAIN, not the seed segment: a runway is several segments by the time it
 		// has exits, and a departure that held only the piece its taxi ended on would let a
 		// second aircraft line up on the same strip further down. Recorded now rather than
-		// looked up at the handover, because by then the graph may have been rebuilt.
-		Agent.ArmDepartureRunway(Network->RunwayChain(End.Seed));
+		// looked up at the handover, because by then the graph may have been rebuilt - and WITH
+		// a point on the strip, because a rebuild can kill every handle in it (OnGraphRebuilt's
+		// re-point, RunwayQuery::RePointChain).
+		TArray<FRoadSegmentId> Chain = Network->RunwayChain(End.Seed);
+		const FVector2D OnStrip = RunwayQuery::PointOnChain(*Network, Chain);
+		Agent.ArmDepartureRunway(MoveTemp(Chain), OnStrip);
 
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Route ends on runway %s %.0f uu past the threshold: %.0f uu available, departure armed"),
@@ -1348,7 +1353,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			// frame. DepartureRunway comes off the AGENT rather than a fresh lookup, because
 			// by now the graph may have been rebuilt under it; it was recorded at dispatch
 			// for that reason.
-			Agent.HoldRunway(Agent.GetDepartureRunway());
+			Agent.HoldRunway(Agent.GetDepartureRunway(), Agent.GetDepartureRunwayAt());
 
 			// CLAIMED HERE AND NOT ON THE NEXT TICK'S non-Taxiing pass. A route that ends on
 			// a junction turn path carries no DerivedFrom, so nothing claimed the strip while
