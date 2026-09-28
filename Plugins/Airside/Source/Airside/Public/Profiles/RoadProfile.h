@@ -383,8 +383,9 @@ public:
 	/**
 	 * FillTwoWayRoad plus a NewObject, so there is one description of a service road.
 	 *
-	 * The defaults are the NARROW road: two 3 m lanes between 0.6 m kerbs, 7.2 m overall -
-	 * two vans pass, and it still reads as a road beside a 23 m taxiway.
+	 * The defaults are the NARROW road: two 3 m lanes between 1 m kerbs, 8 m overall -
+	 * two vans pass, and it still reads as a road beside a 23 m taxiway. Whole-metre bands so
+	 * every edge lands on the 1 m world grid; build_road_profiles.py's KERB_WIDTH says why.
 	 *
 	 * THE CORNER IS NOT A NUMBER ANY MORE. It was 500 uu, then 750, typed in four places -
 	 * here, build_road_profiles.py, DA_RoadProfile_ServiceRoad, and the test pinning two of
@@ -396,5 +397,5 @@ public:
 	 * See URoadProfile::ResolvedFilletRadius.
 	 */
 	static URoadProfile* MakeServiceRoadTransient(double LaneWidth = 300.0,
-		double KerbWidth = 60.0, double FilletRadius = 0.0);
+		double KerbWidth = 100.0, double FilletRadius = 0.0);
 };

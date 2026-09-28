@@ -19,7 +19,7 @@ this work (see memory `articulated-vehicles-decisions`).
 |---|---|
 | What "struggle" means | Both: too wide for the road AND can't make the turns |
 | Drive-side scope | Airport-wide toggle, default Right |
-| Width tiers | Three, all two-way: Narrow 2x3.0 m, Standard 2x3.5 m, Wide 2x4.5 m |
+| Width tiers | Three, all two-way: Narrow 2x3.0 m, Standard 2x4.0 m, Wide 2x5.0 m between 1 m kerbs - 8/10/12 m overall. **Revised 2026-09-28** from 2x3.0/3.5/4.5 m between 0.6 m kerbs (7.2/8.2/10.2 m): the world grid snaps centrelines, so an edge is on the 1 m grid only at a whole-metre half-width. Odd totals (8/9/11) rejected for that reason; no sensible set aligns on the 5 m grid. |
 | No route fits the vehicle | Fail and tell the player. No fallback to a smaller vehicle |
 | Dead ends | Derived U-turn guideline, no surface mesh bulb |
 

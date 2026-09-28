@@ -31,7 +31,7 @@ ASSET_DIR = "/Game"
 CONTENT_SET = "/Game/DA_AirsideContent"
 
 # The service road's CROSS-SECTION, in uu (a uu is a centimetre): two 3 m lanes, one each way,
-# between 0.6 m kerbs - 7.2 m overall, the NARROW road. LANE_WIDTH IS PER LANE since
+# between 1 m kerbs - 8 m overall, the NARROW road. LANE_WIDTH IS PER LANE since
 # 2026-09-23; until then it was kerb to kerb, so "600" meant 4.8 m of carriageway. These are
 # the defaults URoadProfile::MakeServiceRoadTransient uses, so the shipped asset and every
 # test fixture are the same cross-section.
@@ -54,7 +54,14 @@ CONTENT_SET = "/Game/DA_AirsideContent"
 # nothing. Passing zero below is what asks for that derivation.
 LANE_WIDTH = 300.0
 
-KERB_WIDTH = 60.0
+# ONE METRE, not the 0.6 m it was until 2026-09-28, so every band edge of every tier lands on
+# the 1 m world grid (GridSnap). A node snaps the CENTRELINE to a grid line, so a line lies on
+# the grid only when its offset from the centre is whole metres: 1 m kerbs with whole-metre
+# lanes put the kerb line AND the edge there. With 0.6 m kerbs the tiers were 7.2/8.2/10.2 m
+# and no edge sat on the grid, so stands set back from a road sat off it. An ODD total (9 m,
+# 11 m) was rejected for the same reason: its half-width is 4.5 m. No three sensible widths
+# put every edge on the 5 m grid (that needs 10/20/30 m); 1 m is the step widths are for.
+KERB_WIDTH = 100.0
 DERIVE_FILLET = 0.0
 
 # THE ROAD TIERS (spec 2026-09-23 section 1), narrow first - the order the road tool cycles in.
@@ -68,9 +75,9 @@ DERIVE_FILLET = 0.0
 # and allowed to swing across both lanes as real drivers do, the rig turns both ways at the
 # derived corner (Airside.Model.RigTurnsOnWide).
 ROAD_TIERS = [
-    ("DA_RoadProfile_ServiceRoad", LANE_WIDTH, DERIVE_FILLET),           # Narrow, 2 x 3.0 m
-    ("DA_RoadProfile_ServiceRoad_Standard", 350.0, DERIVE_FILLET),       # Standard, 2 x 3.5 m
-    ("DA_RoadProfile_ServiceRoad_Wide", 450.0, DERIVE_FILLET),           # Wide, 2 x 4.5 m
+    ("DA_RoadProfile_ServiceRoad", LANE_WIDTH, DERIVE_FILLET),           # Narrow, 2 x 3.0 m, 8 m overall
+    ("DA_RoadProfile_ServiceRoad_Standard", 400.0, DERIVE_FILLET),       # Standard, 2 x 4.0 m, 10 m overall
+    ("DA_RoadProfile_ServiceRoad_Wide", 500.0, DERIVE_FILLET),           # Wide, 2 x 5.0 m, 12 m overall
 ]
 
 # THE STANDARD TAXIWAY WIDTHS, by ICAO aerodrome code letter - the same reasoning

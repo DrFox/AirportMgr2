@@ -1,4 +1,6 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideContent.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadTraffic.h"
 #include "Profiles/RoadProfile.h"
@@ -37,7 +39,7 @@ bool FServiceRoadProfileTest::RunTest(const FString& Parameters)
 		static_cast<int32>(Forward.Direction), static_cast<int32>(EGuidelineDir::AToB));
 	TestEqual(TEXT("the other runs B to A"),
 		static_cast<int32>(Back.Direction), static_cast<int32>(EGuidelineDir::BToA));
-	TestEqual(TEXT("kerb to kerb: two 3 m lanes and two 0.6 m kerbs"), Road->GetTotalWidth(), 720.0);
+	TestEqual(TEXT("kerb to kerb: two 3 m lanes and two 1 m kerbs"), Road->GetTotalWidth(), 800.0);
 
 	// KERBS, not run-offs. The edge-treatment note: a road is kerbed and a taxiway has a
 	// paved run-off, and the difference is what tells the two apart on the ground.
@@ -58,6 +60,54 @@ bool FServiceRoadProfileTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("narrower than a taxiway - a lane, not a movement area"),
 		Road->GetTotalWidth() < 2300.0);
+	return true;
+}
+
+/**
+ * EVERY BAND EDGE OF EVERY AUTHORED ROAD TIER IS ON THE 1 M GRID (2026-09-28).
+ *
+ * A node snaps the road's CENTRELINE to the world grid (GridSnap::Quantise), so a band edge is
+ * on a grid line only when its offset from the centre is a whole number of metres. The tiers
+ * were 7.2/8.2/10.2 m with 0.6 m kerbs, and a stand set back from any road's edge sat between
+ * grid lines. It is the AUTHORED ASSETS that are loaded, not MakeServiceRoadTransient, because
+ * the asset is what a player lays - build_road_profiles.py writes the figures.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadTiersOnGridTest,
+	"Airside.Content.RoadTiersOnGrid",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadTiersOnGridTest::RunTest(const FString& Parameters)
+{
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (!TestTrue(TEXT("the content set has three road tiers"),
+		Content != nullptr && Content->ServiceRoadProfiles.Num() == 3))
+	{
+		return false;
+	}
+
+	constexpr double Metre = 100.0;
+	const double Expected[] = { 800.0, 1000.0, 1200.0 };
+	for (int32 Tier = 0; Tier < 3; ++Tier)
+	{
+		const URoadProfile* Road = Content->ServiceRoadProfiles[Tier].LoadSynchronous();
+		if (!TestNotNull(FString::Printf(TEXT("tier %d loads"), Tier), Road)) { return false; }
+
+		TestEqual(FString::Printf(TEXT("tier %d is 8/10/12 m overall"), Tier),
+			Road->GetTotalWidth(), Expected[Tier]);
+
+		// Walk the bands from the left edge: every boundary, the outer edges included, must sit a
+		// whole number of metres from the centreline. An odd total fails here on its edges alone.
+		double Edge = -Road->GetHalfWidthLeft();
+		TestEqual(FString::Printf(TEXT("tier %d left edge on a grid line"), Tier),
+			FMath::Fmod(FMath::Abs(Edge), Metre), 0.0);
+		for (const FProfileBand& Band : Road->Bands)
+		{
+			Edge += Band.Width;
+			TestEqual(FString::Printf(TEXT("tier %d band edge at %.1f uu on a grid line"), Tier, Edge),
+				FMath::Fmod(FMath::Abs(Edge), Metre), 0.0);
+		}
+	}
 	return true;
 }
 
