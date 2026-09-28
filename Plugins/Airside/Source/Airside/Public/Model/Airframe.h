@@ -616,5 +616,13 @@ struct AIRSIDE_API FAirframe
 	 * airport that never needs the depot at all.
 	 */
 	UPROPERTY(EditAnywhere) EPushbackNeed PushbackNeed = EPushbackNeed::VehicleTug;
+
+	/**
+	 * The fuel tank, litres (UAircraftType::FuelCapacityLitres). IN THE BUNDLE for
+	 * TurnaroundSeconds' reason: the fuel service that sizes a job holds an FAirframe and may
+	 * not see Entities/. 0 = wants no fuel - the default, so a hand-built airframe in a test
+	 * asks for nothing unless it says so.
+	 */
+	UPROPERTY(EditAnywhere) double FuelCapacityLitres = 0.0;
 };
 
