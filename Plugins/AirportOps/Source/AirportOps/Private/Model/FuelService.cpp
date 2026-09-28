@@ -657,6 +657,7 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		TruckId, Depot.Index);
 	Traffic.RetireAgent(TruckId);
 	GoingHome.Remove(TruckId);
+	RefillOnReturn.Remove(TruckId);
 
 	// RETIRED, not merely redirected: Depot's own count just dropped, exactly as it does
 	// when a truck actually makes it home below - see FleetRevision.
@@ -761,7 +762,9 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 			// vehicle holds or what is still owed, whichever is less, at the vehicle's own rate.
 			// The AGENT's vehicle - the one that actually came - not the table's current entry.
 			const FFuelVehicleSpec Spec = SpecFor(Agent->AsVehicle() != nullptr ? Agent->AsVehicle()->TypeCode : NAME_None);
-			const double Load = FMath::Min(Spec.CapacityLitres, Demand->LitresOwed);
+			// FLOORED AT A LITRE: ClampMin guards only the editor, and a 0 L tank would make every
+			// trip a zero-litre trip, for ever. ENFORCED BY: AirportOps.Fuel.ZeroCapacitySpecStillFinishes
+			const double Load = FMath::Min(FMath::Max(Spec.CapacityLitres, 1.0), Demand->LitresOwed);
 			const double Minutes = Load / FMath::Max(Spec.FlowLitresPerMinute, 1.0);
 
 			Demand->State = EFuelDemandState::Fuelling;
@@ -1085,6 +1088,9 @@ void UFuelService::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& N
 		const bool bUnfuelled = Demand->State == EFuelDemandState::Unserviceable;
 		const EFuelRefusal Why = Demand->Why;
 		const int32 Stand = Demand->Stand.Index;
+		// READ BEFORE THE DEPARTURE, which drops the demand (OnAgentPhase's leaving branch).
+		const double Delivered = Demand->LitresDelivered;
+		const double Wanted = Demand->LitresDelivered + Demand->LitresOwed;
 
 		const EDepartureRefusal Refusal = Traffic.DepartAgent(AircraftId, Network);
 		if (Refusal != EDepartureRefusal::None)
@@ -1107,11 +1113,24 @@ void UFuelService::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& N
 		// SAID WHEN IT LEAVES WITHOUT FUEL. The 'cannot be served' warning fired when the
 		// demand went Unserviceable and named what was missing; this says the airport lost
 		// the turnaround rather than the stand, which is the consequence the player sees.
+		//
+		// PART-FUELLED is not UNFUELLED (review, 2026-09-28): a job that became impossible after
+		// a trip or two - a depot deleted, a road cut - leaves with what it got, and PAYS for it.
+		// Fuel sold is fuel paid for; what the shortfall costs the player's standing is C's to
+		// score, not the fee's.
+		// ENFORCED BY: AirportOps.Fuel.PartFuelledPaysForWhatItGot
+		const bool bPartFuelled = bUnfuelled && Delivered > 0.0;
+		if (bPartFuelled)
+		{
+			PostServiceFee(Clock.Now(), Delivered);
+		}
 		UE_LOG(LogAirportOps, Log,
 			TEXT("Fuel: aircraft %d departs stand %d%s"), AircraftId, Stand,
-			bUnfuelled
-				? *FString::Printf(TEXT(" UNFUELLED - %s"), RefusalText(Why))
-				: TEXT(" after its turnaround"));
+			bPartFuelled
+				? *FString::Printf(TEXT(" PART-FUELLED %.0f of %.0f L - %s"), Delivered, Wanted, RefusalText(Why))
+				: bUnfuelled
+					? *FString::Printf(TEXT(" UNFUELLED - %s"), RefusalText(Why))
+					: TEXT(" after its turnaround"));
 	}
 }
 

@@ -347,10 +347,10 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 		// actor's network OBJECT rather than draining it, so a pointer held across a clear is
 		// stale - the same reason LoadFromSlot re-reads it.
 		//
-		// AND NOTHING IS SCALED HERE. The fuel service's own clock is
-		// UGroundTraffic::GetSimSeconds, which the actor's tick has already advanced by the
-		// speed multiplier; scaling again would run the dwell at the square of the player's
-		// speed setting.
+		// AND NOTHING IS SCALED HERE. The fuel service reads the clock advanced above for its
+		// pumping and refills (game time, spec 2026-09-28-fuel-litres) and the traffic model's
+		// movement for its trucks, both already at the player's speed; scaling again here would
+		// run them at the square of it.
 		if (Target->Network != nullptr && Target->GetTraffic() != nullptr)
 		{
 			if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())

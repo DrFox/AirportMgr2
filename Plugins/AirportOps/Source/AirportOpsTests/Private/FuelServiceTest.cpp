@@ -4,6 +4,8 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/FuelService.h"
+#include "Model/Pricing.h"
+#include "Model/Ledger.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
@@ -2113,6 +2115,77 @@ bool FFuelNoLitresTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("already done"), static_cast<int32>(Fixture.Service->GetDemands()[0].State),
 		static_cast<int32>(EFuelDemandState::Done));
 	TestEqual(TEXT("and no truck was sent"), Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelPartFuelledTest, "AirportOps.Fuel.PartFuelledPaysForWhatItGot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelPartFuelledTest::RunTest(const FString& Parameters)
+{
+	// REVIEW (2026-09-28): a job that becomes impossible after its first trip - the depot
+	// deleted - went Unserviceable, left "UNFUELLED", and the 1,000 L already pumped were never
+	// paid for. Fuel sold is fuel paid for; the log says how much it got.
+	FFuelFixture Fixture;
+	Fixture.FixtureLitres = 2500.0;
+	Fixture.TurnaroundSeconds = 60.0;
+	Fixture.bWithRunway = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.Service->FallbackSpec = FFuelVehicleSpec(1000.0, 600.0);
+	Fixture.Service->VehicleSpecs.Reset();
+	ULedger* Ledger = NewObject<ULedger>();
+	Ledger->Open(0.0);
+	Fixture.Service->Ledger = Ledger;
+	Fixture.Service->Pricing = NewObject<UPricing>();
+
+	FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
+	GLog->AddOutputDevice(&Spy);
+	const int32 Aircraft = Fixture.ParkAircraft();
+	const bool bFirstTrip = Fixture.AdvanceUntil([&Fixture]
+	{
+		return Fixture.Service->GetDemands().Num() == 1 && Fixture.Service->GetDemands()[0].Trips == 1;
+	}, 600.0);
+	if (bFirstTrip)
+	{
+		Fixture.Net->RemoveEntity(Fixture.Depot);
+		Fixture.AdvanceUntil([&Fixture, Aircraft] { return Fixture.Service->GetDemands().Num() == 0; }, 600.0);
+	}
+	GLog->RemoveOutputDevice(&Spy);
+	if (!TestTrue(TEXT("one trip was made before the depot went"), bFirstTrip)) { return false; }
+
+	TestEqual(TEXT("it paid for the litres it got"), Ledger->Balance(),
+		1000.0 * Fixture.Service->Pricing->FuelPricePerLitre, 1e-6);
+	bool bPartLine = false;
+	for (const FString& Line : Spy.CapturedLines)
+	{
+		bPartLine |= Line.Contains(TEXT("PART-FUELLED 1000 of 2500 L"));
+		TestFalse(*FString::Printf(TEXT("never called UNFUELLED: %s"), *Line), Line.Contains(TEXT("UNFUELLED")));
+	}
+	TestTrue(TEXT("and the log says how much it got"), bPartLine);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelZeroCapacitySpecTest, "AirportOps.Fuel.ZeroCapacitySpecStillFinishes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelZeroCapacitySpecTest::RunTest(const FString& Parameters)
+{
+	// REVIEW (2026-09-28): ClampMin is an editor-only guard, and a vehicle spec with a 0 L tank
+	// made every trip a zero-litre trip - the job looped for ever. Floored at a litre, it ends.
+	FFuelFixture Fixture;
+	Fixture.FixtureLitres = 3.0;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.Service->FallbackSpec = FFuelVehicleSpec(0.0, 600.0);
+	Fixture.Service->VehicleSpecs.Reset();
+	Fixture.Service->RefillLitresPerMinutePerPump = 100000.0;
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	TestTrue(TEXT("a zero-tank vehicle still finishes the job"), Fixture.AdvanceUntil([&Fixture]
+	{
+		return Fixture.Service->GetDemands().Num() == 1
+			&& Fixture.Service->GetDemands()[0].State == EFuelDemandState::Done;
+	}, 900.0));
 	return true;
 }
 
