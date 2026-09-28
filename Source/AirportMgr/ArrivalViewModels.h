@@ -45,6 +45,12 @@ public:
 	 */
 	static FText DescribeDetail(const UFlight& Flight, double Now, bool& bOutLate);
 
+	/**
+	 * "Turnaround 2 h - 47 min left", or "... 12 min late" past AirborneBy - the contract line
+	 * on the aircraft card. Empty for a flight with no contract (the debug land key's).
+	 */
+	static FText DescribeTurnaround(const UFlight& Flight, double Now);
+
 private:
 	UPROPERTY(Transient) FText Title;
 	UPROPERTY(Transient) FText Status;
