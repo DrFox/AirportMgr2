@@ -88,7 +88,7 @@ bool FIcaoCodeTaxiwayStripTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("26 m is F"), static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(2600.0)), static_cast<int32>(EIcaoCode::F));
 	TestEqual(TEXT("the old 23 m standard is E"), static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(2300.0)), static_cast<int32>(EIcaoCode::E));
 	TestEqual(TEXT("under every minimum is still A - the least a taxiway can be"),
-		IcaoCode::TaxiwayLetterForWidth(500.0), EIcaoCode::A);
+		static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(500.0)), static_cast<int32>(EIcaoCode::A));
 
 	// THE STRIP: half the letter's widest wing, less half the pavement, plus the letter's
 	// wingtip clearance. These five are the spec's table - if one moves, the table in the
