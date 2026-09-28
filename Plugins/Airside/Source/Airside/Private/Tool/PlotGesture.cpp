@@ -165,9 +165,15 @@ namespace PlotGesture
 	 * GESTURE time is the safe half - the answer is frozen into the outline at commit.
 	 */
 	bool NearestRoad(const URoadNetwork& Network, const FVector2D& Cursor,
-		FRoadFilter Accept, FRoadSegmentId& OutSegment, double& OutT)
+		FRoadFilter Accept, FRoadSetback Setback, FRoadSegmentId& OutSegment, double& OutT)
 	{
-		double BestSquared = AnchorReachUu * AnchorReachUu;
+		// REACH IS MEASURED FROM THE FRONTAGE, not the centreline, since the clearance strip
+		// (2026-09-28): a stand's anchor dots stand a strip beyond the kerb - 28 m on the
+		// standard taxiway - and a reach counted from the road left the dots the player aims
+		// at outside it, so a click on them anchored nothing
+		// (Airside.Tool.StandPlot.FlushNeighboursBothPlace went red on exactly that). Roads
+		// also RANK by that distance, so the road whose frontage is nearer wins.
+		double Best = AnchorReachUu;
 		bool bFound = false;
 
 		const TArray<FRoadSegment>& Segments = Network.GetSegments();
@@ -188,14 +194,14 @@ namespace PlotGesture
 			}
 
 			const double T = RoadGeom::ClosestPointOnSegment(A->Position, B->Position, Cursor);
-			const double DistanceSquared =
-				FVector2D::DistSquared(FMath::Lerp(A->Position, B->Position, T), Cursor);
-			if (DistanceSquared > BestSquared)
+			const double FromFrontage = FMath::Max(0.0,
+				FVector2D::Distance(FMath::Lerp(A->Position, B->Position, T), Cursor) - Setback(Network, Id));
+			if (FromFrontage > Best)
 			{
 				continue;
 			}
 
-			BestSquared = DistanceSquared;
+			Best = FromFrontage;
 			OutSegment = Id;
 			OutT = T;
 			bFound = true;
@@ -203,7 +209,7 @@ namespace PlotGesture
 		return bFound;
 	}
 
-	bool AnchorAt(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept,
+	bool AnchorAt(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept, FRoadSetback Setback,
 		FAnchor& Out, const GridSnap::FGridFrame& Grid)
 	{
 		// MOVED FROM FPlotPlaceTool::OnClick's Idle case when the stand tool needed the same
@@ -215,7 +221,7 @@ namespace PlotGesture
 		// searches rather than reading the driver's snap.
 		FRoadSegmentId Road;
 		double AlongT = 0.0;
-		if (!NearestRoad(Network, Cursor, Accept, Road, AlongT))
+		if (!NearestRoad(Network, Cursor, Accept, Setback, Road, AlongT))
 		{
 			return false;
 		}
@@ -256,7 +262,9 @@ namespace PlotGesture
 		// OFF THE CARRIAGEWAY, and only now that the side is known. Measured BEFORE this
 		// step, because the side has to be read against the centreline the cursor was
 		// judged from - offsetting first would tilt that test by half a road width.
-		Anchor.Corner += Anchor.Inward * KerbOffset(Network, Road, Side >= 0.0);
+		// AND PAST THE CLEARANCE STRIP where the caller has one (Setback) - a stand's entrance
+		// sits where a taxiing wing no longer reaches (strip spec 2026-09-28).
+		Anchor.Corner += Anchor.Inward * (KerbOffset(Network, Road, Side >= 0.0) + Setback(Network, Road));
 
 		// THE GRID - WORLD OR TURNED TO THIS ROAD - REPLACES THE BAY GRID WHEN IT IS ON. The bay grid is phased from each
 		// segment's A end, so two plots off two segments could not share a line (the 2026-09-27
@@ -285,7 +293,7 @@ namespace PlotGesture
 		return true;
 	}
 
-	bool DescribeAnchors(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept,
+	bool DescribeAnchors(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept, FRoadSetback Setback,
 		IToolPreviewSink& Sink, const GridSnap::FGridFrame& Grid)
 	{
 		// The anchors the player could take, so the grid is visible before it is committed
@@ -301,7 +309,7 @@ namespace PlotGesture
 		// twice on every Idle-stage hover frame; Anchor.Road/AlongT/RoadA/RoadB are that same
 		// search's own answer, carried out on FAnchor rather than thrown away.
 		FAnchor Anchor;
-		if (!AnchorAt(Network, Cursor, Accept, Anchor, Grid))
+		if (!AnchorAt(Network, Cursor, Accept, Setback, Anchor, Grid))
 		{
 			return false;
 		}
@@ -325,7 +333,7 @@ namespace PlotGesture
 		// click, which is the one thing this codebase will not have.
 		const FVector2D Left = RoadGeom::PerpCCW(Unit);
 		const bool bLeft = FVector2D::DotProduct(Cursor - Anchor.RoadA, Left) >= 0.0;
-		const FVector2D Offset = (bLeft ? Left : -Left) * KerbOffset(Network, Anchor.Road, bLeft);
+		const FVector2D Offset = (bLeft ? Left : -Left) * (KerbOffset(Network, Anchor.Road, bLeft) + Setback(Network, Anchor.Road));
 
 		// THE ONE A CLICK WOULD TAKE IS DRAWN DIFFERENTLY. A row of identical dots
 		// says where anchors exist; it does not say which one the cursor has. Pending

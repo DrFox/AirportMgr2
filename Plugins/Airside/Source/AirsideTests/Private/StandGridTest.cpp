@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "Profiles/RoadProfile.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
@@ -207,6 +208,11 @@ bool FStandGridOnWorldLinesTest::RunTest(const FString& Parameters)
 {
 	StandGridFixture::FStandSession S;
 	if (!TestTrue(TEXT("stand tool, 5 m"), StandGridFixture::Begin(S, EGridStep::FiveMetres))) { return false; }
+	// A CODE C TAXIWAY, since the clearance strip (2026-09-28): a stand's entrance now sits half
+	// the letter's span plus its clearance off the centreline, whatever the pavement width -
+	// 40 m for the default E, a whole 5 m step, which would put the control below ON a line.
+	// C's is 22.5 m, off every 5 m line, so the control still discriminates.
+	S.TestWorld.Actor->Profile = URoadProfile::MakeTransient(1600.0, 1067.0);
 	StandGridFixture::LayTaxiway(S.TestWorld.Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0));
 
 	TestEqual(TEXT("idle: the stand tool asks for the grid itself"), S.At(FVector2D(1234.0, 1000.0)).GridFrame.StepUu, 500.0);
@@ -247,15 +253,17 @@ bool FStandGridAnchorPhaseTest::RunTest(const FString& Parameters)
 
 	const URoadNetwork& Network = *Actor->Network;
 	auto Taxiways = [](const URoadNetwork& N, FRoadSegmentId Id) { return PlotGesture::IsTaxiway(N, Id); };
+	// AT THE KERB: these pin the grid along the frontage, not the strip - 0 states that.
+	auto AtKerb = [](const URoadNetwork&, FRoadSegmentId) { return 0.0; };
 	const FVector2D OnSecond(4100.0, 1000.0);
 
 	PlotGesture::FAnchor Off;
-	if (!TestTrue(TEXT("grid off anchors"), PlotGesture::AnchorAt(Network, OnSecond, Taxiways, Off))) { return false; }
+	if (!TestTrue(TEXT("grid off anchors"), PlotGesture::AnchorAt(Network, OnSecond, Taxiways, AtKerb, Off))) { return false; }
 	TestFalse(TEXT("control: grid off, the second segment's own phase is off the world grid"),
 		StandGridFixture::IsOnGridLine(Off.Corner.X, 500.0));
 
 	PlotGesture::FAnchor On;
-	if (!TestTrue(TEXT("grid on anchors"), PlotGesture::AnchorAt(Network, OnSecond, Taxiways, On, GridSnap::FGridFrame::World(500.0)))) { return false; }
+	if (!TestTrue(TEXT("grid on anchors"), PlotGesture::AnchorAt(Network, OnSecond, Taxiways, AtKerb, On, GridSnap::FGridFrame::World(500.0)))) { return false; }
 	TestTrue(TEXT("grid on: a world X line"), StandGridFixture::IsOnGridLine(On.Corner.X, 500.0));
 	TestEqual(TEXT("and still off the kerb, as the bay grid was"), On.Corner.Y, Off.Corner.Y);
 	return true;
@@ -279,14 +287,16 @@ bool FStandGridAnchorNearEndTest::RunTest(const FString& Parameters)
 
 	const URoadNetwork& Network = *S.TestWorld.Actor->Network;
 	auto Taxiways = [](const URoadNetwork& N, FRoadSegmentId Id) { return PlotGesture::IsTaxiway(N, Id); };
+	// AT THE KERB: these pin the grid along the frontage, not the strip - 0 states that.
+	auto AtKerb = [](const URoadNetwork&, FRoadSegmentId) { return 0.0; };
 
 	PlotGesture::FAnchor Anchor;
 	if (!TestTrue(TEXT("10 m grid: the nearest line (10000) is past the end, the anchor still takes one"),
-		PlotGesture::AnchorAt(Network, FVector2D(9900.0, 1000.0), Taxiways, Anchor, GridSnap::FGridFrame::World(1000.0)))) { return false; }
+		PlotGesture::AnchorAt(Network, FVector2D(9900.0, 1000.0), Taxiways, AtKerb, Anchor, GridSnap::FGridFrame::World(1000.0)))) { return false; }
 	TestTrue(TEXT("the last line on the road, X = 9000"), FMath::IsNearlyEqual(Anchor.Corner.X, 9000.0, 1e-6));
 
 	TestFalse(TEXT("an 8 m segment between two 10 m lines has no anchor"),
-		PlotGesture::AnchorAt(Network, FVector2D(500.0, 6000.0), Taxiways, Anchor, GridSnap::FGridFrame::World(1000.0)));
+		PlotGesture::AnchorAt(Network, FVector2D(500.0, 6000.0), Taxiways, AtKerb, Anchor, GridSnap::FGridFrame::World(1000.0)));
 	return true;
 }
 
@@ -369,6 +379,11 @@ bool FStandGridDiagonalFollowsTest::RunTest(const FString& Parameters)
 	StandGridFixture::FStandSession S;
 	if (!TestTrue(TEXT("stand tool, 5 m"), StandGridFixture::Begin(S, EGridStep::FiveMetres))) { return false; }
 	S.Tunables.GuideSources.GridOrientation = EGridOrientation::Follow;
+	// A CODE C TAXIWAY, since the clearance strip (2026-09-28): a stand's entrance now sits half
+	// the letter's span plus its clearance off the centreline, whatever the pavement width -
+	// 40 m for the default E, a whole 5 m step, which would put the control below ON a line.
+	// C's is 22.5 m, off every 5 m line, so the control still discriminates.
+	S.TestWorld.Actor->Profile = URoadProfile::MakeTransient(1600.0, 1067.0);
 	StandGridFixture::LayTaxiway(S.TestWorld.Actor, RoadA, RoadA + Dir * 20000.0);
 
 	const FVector2D Hover = RoadA + Dir * 11234.0 + Perp * 1000.0;

@@ -147,6 +147,9 @@ protected:
 		return PlotGesture::IsTaxiway(Network, Id);
 	}
 
+	/** The adjoining taxiway's clearance strip - see the .cpp for why the TAXIWAY's letter. */
+	virtual double FrontSetback(const URoadNetwork& Network, FRoadSegmentId Id) const override;
+
 	/**
 	 * KIND, NOT OUTLINE: every stand and every drawn depot has an outline now, so IsStand() is
 	 * the only question that tells them apart - see FEntityInstance::IsStand. A depot under

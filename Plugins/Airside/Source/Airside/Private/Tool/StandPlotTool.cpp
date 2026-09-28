@@ -4,6 +4,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiwayStrip.h"
 #include "Solve/GridSnap.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/RoadGeom.h"
@@ -440,3 +441,12 @@ void FStandPlotTool::DescribeReadout(const FToolContext& Context, TConstArrayVie
 }
 
 #undef LOCTEXT_NAMESPACE
+
+double FStandPlotTool::FrontSetback(const URoadNetwork& Network, FRoadSegmentId Id) const
+{
+	// THE TAXIWAY'S STRIP, BY ITS OWN LETTER - not the stand's. The wing that overhangs the
+	// stand edge belongs to what taxis past, so a Code B stand off a Code F taxiway pays F's
+	// 34.5 m (strip spec 2026-09-28; the cost nudges the player to a B spur, as real aprons do).
+	// ENFORCED BY: Airside.Tool.StandPlot.EntranceBehindStrip
+	return TaxiwayStrip::StripWidthOf(Network, Id);
+}
