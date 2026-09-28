@@ -32,6 +32,52 @@ namespace TaxiwayStrip
 		}
 	}
 
+	TArray<FVector2D> FootprintOf(const FSegmentShape& Shape)
+	{
+		constexpr int32 Samples = GuidelineGeom::DefaultSamples;
+		TArray<FVector2D> Centre, Normal;
+		Centre.Reserve(Samples + 1);
+		Normal.Reserve(Samples + 1);
+		for (int32 S = 0; S <= Samples; ++S)
+		{
+			const double T = static_cast<double>(S) / Samples;
+			Centre.Add(GuidelineGeom::Eval(Shape.A, Shape.Control, Shape.B, T));
+			Normal.Add(RoadGeom::PerpCCW(GuidelineGeom::Tangent(Shape.A, Shape.Control, Shape.B, T)));
+		}
+
+		// THE CLOCKWISE-NORMAL EDGE FORWARD, THE COUNTER-CLOCKWISE ONE BACK: travelling +X with
+		// PerpCCW = +Y, (0,-w) -> (L,-w) -> (L,+w) -> (0,+w) is positive shoelace area. The
+		// other order is clockwise, and a PolygonArea sign test downstream would read it inside out.
+		TArray<FVector2D> Out;
+		Out.Reserve(2 * (Samples + 1));
+		for (int32 S = 0; S <= Samples; ++S)
+		{
+			Out.Add(Centre[S] - Normal[S] * Shape.HalfWidth);
+		}
+		for (int32 S = Samples; S >= 0; --S)
+		{
+			Out.Add(Centre[S] + Normal[S] * Shape.HalfWidth);
+		}
+		return Out;
+	}
+
+	bool ShapeOf(const URoadNetwork& Network, FRoadSegmentId Id, FSegmentShape& Out)
+	{
+		const FRoadSegment* Segment = Network.GetSegment(Id);
+		// THROUGH ProfileFor - see IsAircraftOnly.
+		const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+		FVector2D A, B;
+		if (Profile == nullptr || !Network.SegmentEnds(Id, A, B))
+		{
+			return false;
+		}
+		Out.A = A;
+		Out.Control = Segment->Control;
+		Out.B = B;
+		Out.HalfWidth = Profile->GetMaxHalfWidth();
+		return true;
+	}
+
 	bool IsAircraftOnly(const URoadNetwork& Network, FRoadSegmentId Id)
 	{
 		const FRoadSegment* Segment = Network.GetSegment(Id);

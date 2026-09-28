@@ -487,6 +487,12 @@ FBuildSessionTunables URoadEditFacade::MakeTunables(double ViewWorldWidth)
 	// here) judges a rejoin against the same width a click just did. NewRoadHalfWidth is
 	// deliberately not a UPROPERTY - see FRoadPlacementLimits - so this is a cache refresh, the
 	// same shape as RuntimeProfile, not a write to authored state.
+	//
+	// THE STRIP JUDGE DOES NOT READ THIS (stage 3, 2026-09-29). It is the TAXIWAY default
+	// whatever kind is being laid, so a 6 m service road would be judged 24 m wide and refused
+	// at twice its reach from every taxiway. WhySegmentRefused takes its half-width from
+	// ResolveProfileFor(Kind, WidthIndex) instead; this stays for the corner-fit checks that
+	// other tests pin to it.
 	if (const URoadProfile* ProfileForLimits = Owner.ResolveProfile())
 	{
 		Owner.PlacementLimits.NewRoadHalfWidth = ProfileForLimits->GetMaxHalfWidth();

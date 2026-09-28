@@ -16,6 +16,35 @@ class URoadNetwork;
  */
 namespace TaxiwayStrip
 {
+	/**
+	 * A road or taxiway that exists or is about to - enough to know its ground. The tool's
+	 * preview, the facade's commit, a moved node and a heal all describe the segment they are
+	 * ABOUT to make with one of these, so none of them needs a scratch network to be judged.
+	 */
+	struct FSegmentShape
+	{
+		FVector2D A = FVector2D::ZeroVector;
+		/** (A+B)/2 for straight - GuidelineGeom's own spelling of it. */
+		FVector2D Control = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		/** The WIDER half, GetMaxHalfWidth() - WorstIntrusion's own asymmetric-profile rule. */
+		double HalfWidth = 0.0;
+	};
+
+	/**
+	 * The pavement polygon: both edges of the sampled centreline, counter-clockwise (positive
+	 * RoadGeom::PolygonArea), 2 * (GuidelineGeom::DefaultSamples + 1) points.
+	 *
+	 * ALWAYS SAMPLED, EVEN STRAIGHT - unlike GuidelineGeom::Sample's two-point short circuit -
+	 * so a caller splitting it into per-sample quads (JudgeSegment's reverse query) sees one
+	 * layout for every shape. The edges offset along GuidelineGeom::Tangent's ANALYTIC normal:
+	 * differencing the samples would be a second evaluator of the same curve.
+	 */
+	AIRSIDE_API TArray<FVector2D> FootprintOf(const FSegmentShape& Shape);
+
+	/** The shape of a live segment, its half-width through ProfileFor; false if dead or profile-less. */
+	AIRSIDE_API bool ShapeOf(const URoadNetwork& Network, FRoadSegmentId Id, FSegmentShape& Out);
+
 	/** One taxiway whose strip a footprint enters, and how far. */
 	struct FIntrusion
 	{

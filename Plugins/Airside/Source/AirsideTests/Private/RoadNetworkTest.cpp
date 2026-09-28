@@ -4,7 +4,9 @@
 #include "Model/RoadNetwork.h"
 #include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/GuidelineGeom.h"
 #include "Solve/JunctionSolver.h"
+#include "Solve/RoadGeom.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -535,6 +537,70 @@ bool FTaxiwayStripReloadedProfileTest::RunTest(const FString&)
 	TestEqual(TEXT("the reloaded taxiway still has E's strip"), TaxiwayStrip::StripWidthOf(*Net, Taxi), 2800.0, 0.5);
 	const TArray<FVector2D> Flush{ { -2000.0, 1200.0 }, { 2000.0, 1200.0 }, { 2000.0, 5200.0 }, { -2000.0, 5200.0 } };
 	TestTrue(TEXT("and a stand flush to it intrudes"), TaxiwayStrip::WorstIntrusion(*Net, Flush).IsSet());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayStripFootprintTest, "Airside.Model.TaxiwayStrip.Footprint",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayStripFootprintTest::RunTest(const FString&)
+{
+	// THE GROUND A SEGMENT COVERS, which every stage-3 placement judges: the strip query
+	// measures it, and a new taxiway's own strip is this with a wider half.
+	{
+		TaxiwayStrip::FSegmentShape Straight;
+		Straight.A = { 0.0, 0.0 };
+		Straight.B = { 20000.0, 0.0 };
+		Straight.Control = (Straight.A + Straight.B) * 0.5;
+		Straight.HalfWidth = 300.0;
+		const TArray<FVector2D> Poly = TaxiwayStrip::FootprintOf(Straight);
+		TestEqual(TEXT("both edges, every sample - the curve's own sampling, not a special case"),
+			Poly.Num(), 2 * (GuidelineGeom::DefaultSamples + 1));
+		TestTrue(TEXT("counter-clockwise, so a triangulator or a winding test reads it the right way up"),
+			RoadGeom::PolygonArea(Poly) > 0.0);
+		TestEqual(TEXT("200 m by 6 m of ground"), RoadGeom::PolygonArea(Poly), 20000.0 * 600.0, 20000.0 * 600.0 * 0.001);
+	}
+	{
+		// A BEND: every edge point is HalfWidth off the centreline, measured against the SAME
+		// Eval samples - an offset built from differenced samples would drift on the bend.
+		TaxiwayStrip::FSegmentShape Bend;
+		Bend.A = { -10000.0, 0.0 };
+		Bend.Control = { 0.0, 10000.0 };
+		Bend.B = { 10000.0, 0.0 };
+		Bend.HalfWidth = 300.0;
+		const TArray<FVector2D> Poly = TaxiwayStrip::FootprintOf(Bend);
+		TestTrue(TEXT("the bend is CCW too"), RoadGeom::PolygonArea(Poly) > 0.0);
+		TArray<FVector2D> Centre;
+		for (int32 S = 0; S <= GuidelineGeom::DefaultSamples; ++S)
+		{
+			Centre.Add(GuidelineGeom::Eval(Bend.A, Bend.Control, Bend.B, static_cast<double>(S) / GuidelineGeom::DefaultSamples));
+		}
+		double Worst = 0.0;
+		for (const FVector2D& P : Poly)
+		{
+			double Nearest = DBL_MAX;
+			for (int32 C = 0; C + 1 < Centre.Num(); ++C)
+			{
+				const double T = RoadGeom::ClosestPointOnSegment(Centre[C], Centre[C + 1], P);
+				Nearest = FMath::Min(Nearest, FVector2D::Distance(P, Centre[C] + (Centre[C + 1] - Centre[C]) * T));
+			}
+			Worst = FMath::Max(Worst, FMath::Abs(Nearest - Bend.HalfWidth));
+		}
+		// ONE CENTIMETRE: the chord between two samples sits inside the curve by its sagitta's
+		// slope, ~0.7 uu at this 100 m radius (2026-09-29); an edge built off anything but the
+		// analytic normal misses by metres.
+		TestTrue(FString::Printf(TEXT("every edge point is HalfWidth off the sampled centreline (worst %.3f uu off)"), Worst),
+			Worst <= 1.0);
+	}
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		Net->DefaultProfile = URoadProfile::MakeTransient(2400.0, 1600.0);
+		const FRoadSegmentId Seg = Net->AddSegment(Net->AddNode({ 0.0, 0.0 }), Net->AddNode({ 10000.0, 0.0 }),
+			{ 5000.0, 0.0 }, nullptr);
+		TaxiwayStrip::FSegmentShape Shape;
+		TestTrue(TEXT("a live segment has a shape"), TaxiwayStrip::ShapeOf(*Net, Seg, Shape));
+		TestEqual(TEXT("its half-width is read through ProfileFor"), Shape.HalfWidth, 1200.0, 0.01);
+		TestFalse(TEXT("a dead handle has none"), TaxiwayStrip::ShapeOf(*Net, FRoadSegmentId(), Shape));
+	}
 	return true;
 }
 
