@@ -2,6 +2,7 @@
 
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/GridSnap.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/RoadBuildTool.h"
 
@@ -104,6 +105,29 @@ namespace PlotGesture
 		return MinFrontageUu + Steps * FrontageStepUu;
 	}
 
+	FVector2D FrontageEnd(const FVector2D& Anchor, const FVector2D& Along,
+		const FVector2D& Cursor, double GridStepUu)
+	{
+		const double Reach = FVector2D::DotProduct(Cursor - Anchor, Along);
+		const double Sign = Reach < 0.0 ? -1.0 : 1.0;
+		if (GridStepUu > 0.0)
+		{
+			// NO SHORTER THAN MinFrontageUu, the floor QuantisedFrontage keeps - a crossing
+			// within half a step of the anchor used to pin a zero-length entrance, after which
+			// the stand had no entrance direction to guide or grid its depth by (review,
+			// 2026-09-27). Either way along, as the stepped frontage runs.
+			constexpr double Unbounded = 1e12;
+			const double TMin = Sign > 0.0 ? MinFrontageUu : -Unbounded;
+			const double TMax = Sign > 0.0 ? Unbounded : -MinFrontageUu;
+			FVector2D OnGrid = Anchor;
+			if (GridSnap::NearestCrossingInRange(Anchor, Along, Cursor, GridStepUu, TMin, TMax, OnGrid))
+			{
+				return OnGrid;
+			}
+		}
+		return Anchor + Along * (Sign * QuantisedFrontage(FMath::Abs(Reach)));
+	}
+
 	/**
 	 * Which anchor point a click would take on this road, and where it stands.
 	 *
@@ -195,7 +219,7 @@ namespace PlotGesture
 	}
 
 	bool AnchorAt(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept,
-		FAnchor& Out)
+		FAnchor& Out, double GridStepUu)
 	{
 		// MOVED FROM FPlotPlaceTool::OnClick's Idle case when the stand tool needed the same
 		// first click against a taxiway. ONE RULE, EVERY PLOT TOOL: a second copy of the grid
@@ -249,6 +273,27 @@ namespace PlotGesture
 		// judged from - offsetting first would tilt that test by half a road width.
 		Anchor.Corner += Anchor.Inward * KerbOffset(Network, Road, Side >= 0.0);
 
+		// THE WORLD GRID REPLACES THE BAY GRID WHEN IT IS ON. The bay grid is phased from each
+		// segment's A end, so two plots off two segments could not share a line (the 2026-09-27
+		// report that started the world grid); a world crossing along the SAME kerb line keeps
+		// the side and the kerb offset above and changes only where along it the corner sits.
+		// Measured from the kerb line's own start so the segment bound below is a plain [0, L].
+		if (GridStepUu > 0.0)
+		{
+			const FVector2D KerbStart = Anchor.Corner - Anchor.Along * FVector2D::DotProduct(
+				Anchor.Corner - RoadA, Anchor.Along);
+			// THE NEAREST CROSSING ON THE SEGMENT, not the nearest anywhere: a cursor beside a
+			// segment's end whose nearest line falls just past it takes the last line on the
+			// road instead of refusing (review, 2026-09-27). Refused only when the segment is
+			// shorter than a step and holds no line at all.
+			FVector2D OnGrid = Anchor.Corner;
+			if (!GridSnap::NearestCrossingInRange(KerbStart, Anchor.Along, Cursor, GridStepUu, 0.0, Length, OnGrid))
+			{
+				return false;
+			}
+			Anchor.Corner = OnGrid;
+		}
+
 		// WRITTEN ONLY ON SUCCESS, so a caller that ignores the return still holds the
 		// anchor it had - CLAUDE.md's out-parameter rule.
 		Out = Anchor;
@@ -256,7 +301,7 @@ namespace PlotGesture
 	}
 
 	bool DescribeAnchors(const URoadNetwork& Network, const FVector2D& Cursor, FRoadFilter Accept,
-		IToolPreviewSink& Sink)
+		IToolPreviewSink& Sink, double GridStepUu)
 	{
 		// The anchors the player could take, so the grid is visible before it is committed
 		// to. Snap style: these are what the gesture would attach to.
@@ -271,9 +316,18 @@ namespace PlotGesture
 		// twice on every Idle-stage hover frame; Anchor.Road/AlongT/RoadA/RoadB are that same
 		// search's own answer, carried out on FAnchor rather than thrown away.
 		FAnchor Anchor;
-		if (!AnchorAt(Network, Cursor, Accept, Anchor))
+		if (!AnchorAt(Network, Cursor, Accept, Anchor, GridStepUu))
 		{
 			return false;
+		}
+
+		// ON THE WORLD GRID THE ONE ANCHOR IS DRAWN, not the segment's row of bay dots: those
+		// are the bay grid's slots, and drawing them while the click takes a world crossing is
+		// the preview disagreeing with the click. The overlay already draws the lines.
+		if (GridStepUu > 0.0)
+		{
+			Sink.Marker(Anchor.Corner, EPreviewStyle::Pending);
+			return true;
 		}
 
 		const FVector2D Span = Anchor.RoadB - Anchor.RoadA;

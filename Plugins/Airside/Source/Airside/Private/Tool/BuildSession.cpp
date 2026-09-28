@@ -377,6 +377,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// surviving a suspend would be the hysteresis rule working against the gesture that asked
 	// it to stop.
 	const IBuildTool* Tool = GetActiveTool();
+	bool bGuideChainRan = false;
 	if (!bSuspendGuides && Tool != nullptr && Network != nullptr
 		&& Tool->DescribeGuideAnchor(Network, Target, Anchor))
 	{
@@ -395,6 +396,17 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 		}
 
 		Guide = GuideChain.Resolve(*Network, Anchor, PlaneHit, LastGuide, Tunables.GuideSources);
+		bGuideChainRan = true;
+	}
+	else if (!bSuspendGuides && Tool != nullptr && Network == nullptr
+		&& Tool->DescribeGuideAnchor(nullptr, Target, Anchor))
+	{
+		// AN AIRPORT WITH NO NETWORK YET - it is created on the first edit (URoadEditFacade::
+		// EnsureNetwork), so the first click on an empty map lands here. No source has anything
+		// to propose, but the grid still applies: the first road of a new airport is exactly the
+		// one a player wants on it. Found by Airside.Tool.GridOverlay.DrawsRoundTheBuildPoint.
+		FSnapGuideChain::ApplyGrid(Guide, PlaneHit, Tunables.GuideSources.GridStepUu());
+		bGuideChainRan = true;
 	}
 
 	// ASSIGNED EVEN WHEN NOTHING RESOLVED, which is the clearing half: a gesture that ends
@@ -402,6 +414,17 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// through the hysteresis rule itself.
 	LastGuide = Guide;
 	Context.Guide = Guide;
+
+	// THE GRID APPLIES EXACTLY WHERE SOMETHING WILL QUANTISE BY IT: the chain just ran (and
+	// applied it inside Resolve), or the tool quantises a stage of its own. Alt suspends it with
+	// the guides - one "place freely" gesture, not two. The overlay reads the same field, so it
+	// shows only a grid the point is actually landing on.
+	// ENFORCED BY: Airside.Tool.GridSnap.SuspendAndSelectHaveNoGrid
+	if (!bSuspendGuides && Tool != nullptr && (bGuideChainRan || Tool->SnapsToGrid()))
+	{
+		Context.GridStepUu = Tunables.GuideSources.GridStepUu();
+		Context.GridOverlayRadiusUu = Tunables.GuideSources.GridOverlayRadiusUu();
+	}
 	return Context;
 }
 

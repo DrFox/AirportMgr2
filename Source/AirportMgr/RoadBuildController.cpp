@@ -497,6 +497,23 @@ bool ARoadBuildController::IsGuideReferenceOn(SnapGuide::EReference Reference) c
 	return Actor != nullptr && Actor->GuideSources.IsReferenceOn(Reference);
 }
 
+void ARoadBuildController::CycleGridStep()
+{
+	if (ARoadNetworkActor* Actor = GetTarget())
+	{
+		Actor->GuideSources.CycleGridStep();
+		const double Step = Actor->GuideSources.GridStepUu();
+		UE_LOG(LogRoadBuild, Log, TEXT("Grid step -> %s"),
+			Step > 0.0 ? *FString::Printf(TEXT("%.0f m"), Step / 100.0) : TEXT("off"));
+	}
+}
+
+double ARoadBuildController::GetGridStepUu() const
+{
+	const ARoadNetworkActor* Actor = GetTarget();
+	return Actor != nullptr ? Actor->GuideSources.GridStepUu() : 0.0;
+}
+
 int32 ARoadBuildController::HoverAgentUnderCursor() const
 {
 	UGroundTraffic* AgentModel = Target != nullptr ? Target->GetGroundTraffic() : nullptr;
@@ -1145,6 +1162,7 @@ ARoadBuildController::FToolReadoutKey ARoadBuildController::MakeReadoutKey(
 	Key.bGuideActive = Context.Guide.bActive;
 	Key.GuidePoint = Context.Guide.Point;
 	Key.EditHandles = Context.EditHandles;
+	Key.GridStepUu = Context.GridStepUu;
 	return Key;
 }
 

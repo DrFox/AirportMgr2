@@ -36,6 +36,10 @@ public class AirportMgr : ModuleRules
 		// AssetRegistry: AnimYardCatalogue scans for every UAircraftType in the project, so the
 		// model yard's bench needs no list of its own to keep in step with the fleet.
 		PrivateDependencyModuleNames.AddRange(new string[] { "UMG", "Slate", "SlateCore", "AssetRegistry" });
+
+		// RenderCore: GWhiteTexture, for ARoadBuildHUD's translucent-quad lines - canvas lines
+		// drop alpha (see FPreviewLook::bTranslucentLine), triangles need a texture to blend.
+		PrivateDependencyModuleNames.Add("RenderCore");
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

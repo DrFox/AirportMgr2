@@ -193,6 +193,15 @@ public:
 	/** Whether that column is lit. */
 	bool IsGuideReferenceOn(SnapGuide::EReference Reference) const;
 
+	/**
+	 * Off -> 1 m -> 5 m -> 10 m -> Off: the Grid button. Same ownership rule as the two above -
+	 * the step lives on the airport's FSnapGuideSettings. Logs "Grid step -> <n>".
+	 */
+	void CycleGridStep();
+
+	/** The airport's grid step in uu, 0 when off or when there is no airport. */
+	double GetGridStepUu() const;
+
 	/** The tool the number keys selected, or null before BeginPlay has built them. */
 	IBuildTool* GetActiveTool() const;
 
@@ -737,6 +746,10 @@ private:
 		FVector2D GuidePoint = FVector2D::ZeroVector;
 		EEditHandleKind EditHandles = EEditHandleKind::None;
 
+		/** The grid step: pressing Grid changes the readout (a plot's frontage, its letter)
+		 *  with the cursor sitting still - review, 2026-09-27. */
+		double GridStepUu = 0.0;
+
 		bool operator==(const FToolReadoutKey& Other) const
 		{
 			return Tool == Other.Tool
@@ -746,7 +759,8 @@ private:
 				&& SnapSegment == Other.SnapSegment
 				&& bGuideActive == Other.bGuideActive
 				&& GuidePoint == Other.GuidePoint
-				&& EditHandles == Other.EditHandles;
+				&& EditHandles == Other.EditHandles
+				&& GridStepUu == Other.GridStepUu;
 		}
 	};
 

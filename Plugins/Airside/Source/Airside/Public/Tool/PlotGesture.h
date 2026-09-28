@@ -61,6 +61,18 @@ namespace PlotGesture
 	/** A frontage length quantised to the plot's own steps. See the .cpp. */
 	AIRSIDE_API double QuantisedFrontage(double Raw);
 
+	/**
+	 * Where the frontage's far end goes for a cursor at Cursor, running either way along Along
+	 * from Anchor: QuantisedFrontage's steps with the grid off, the nearest world crossing along
+	 * the kerb line with it on. ONE FUNCTION for the stand and the depot, which used to carry
+	 * the same three lines each - the grid would have been a fourth and fifth.
+	 *
+	 * GRID ON KEEPS THE FLOOR: the nearest crossing at least MinFrontageUu from the anchor, so a
+	 * zero-length entrance can never be pinned.
+	 */
+	AIRSIDE_API FVector2D FrontageEnd(const FVector2D& Anchor, const FVector2D& Along,
+		const FVector2D& Cursor, double GridStepUu);
+
 	/** Which anchor point a click would take on this road. See the .cpp. */
 	AIRSIDE_API int32 AnchorIndexAt(double SegmentT, double Length);
 
@@ -104,9 +116,13 @@ namespace PlotGesture
 	/**
 	 * The anchor a first click at Cursor takes on the nearest accepted road, or false with
 	 * Out untouched when there is none in reach. ONE RULE, EVERY PLOT TOOL - see the .cpp.
+	 *
+	 * GridStepUu > 0 puts the corner on the WORLD grid instead of the segment's own bay grid:
+	 * the nearest crossing along the kerb line that lies on the segment (world-grid-snap design
+	 * section 2). Refused when the segment is shorter than a step and holds none.
 	 */
 	AIRSIDE_API bool AnchorAt(const URoadNetwork& Network, const FVector2D& Cursor,
-		FRoadFilter Accept, FAnchor& Out);
+		FRoadFilter Accept, FAnchor& Out, double GridStepUu = 0.0);
 
 	/**
 	 * Draw the anchor grid a first click would snap to - the one AnchorAt would take heavier
@@ -114,5 +130,5 @@ namespace PlotGesture
 	 * the caller names the road it wanted, since only it knows which kind that was.
 	 */
 	AIRSIDE_API bool DescribeAnchors(const URoadNetwork& Network, const FVector2D& Cursor,
-		FRoadFilter Accept, IToolPreviewSink& Sink);
+		FRoadFilter Accept, IToolPreviewSink& Sink, double GridStepUu = 0.0);
 }

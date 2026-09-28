@@ -1306,6 +1306,28 @@ foreach ($tree in $trees) {
 }
 $ranRules.Add('rebuild-batch-is-a-local')
 
+# --- 26. BOTH DRIVERS DRAW THE GRID OVERLAY -------------------------------------------------
+# GridOverlay::Describe is context the tool does not own (Tool/GridOverlay.h), so each driver
+# calls it beside the tool's own BuildPreview - and a driver that stopped would show a grid in
+# one of PIE and the editor mode and not the other, with every test green: the tests reach the
+# emitter through FBuildSession, never through ARoadBuildHUD::DrawHUD or the editor tool's
+# Render, which need a live viewport. So the call is asserted by file (2026-09-27, world grid).
+$gridOverlayCallers = @(
+    (Join-Path $Root 'Source\AirportMgr\RoadBuildHUD.cpp'),
+    (Join-Path $editor 'Private\RoadBuildEditorTool.cpp')
+)
+foreach ($caller in $gridOverlayCallers) {
+    if (-not (Test-Path $caller)) {
+        # Rule 24's trap: a moved file must not let this rule check nothing.
+        $failures.Add("grid-overlay-both-drivers: $caller is named by rule 26 but does not exist - update the rule")
+        continue
+    }
+    if (-not (Select-String -Path $caller -Pattern 'GridOverlay::Describe\(' -Quiet)) {
+        $failures.Add("grid-overlay-both-drivers: $caller no longer calls GridOverlay::Describe - the grid overlay would show in one driver and not the other")
+    }
+}
+$ranRules.Add('grid-overlay-both-drivers')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

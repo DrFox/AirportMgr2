@@ -44,7 +44,7 @@ void FStagedPlotTool::OnClick(const FToolContext& Context)
 	{
 		PlotGesture::FAnchor Anchor;
 		auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
-		if (!PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Anchor))
+		if (!PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Anchor, Context.GridStepUu))
 		{
 			return;
 		}
@@ -183,7 +183,7 @@ void FStagedPlotTool::BuildPreview(const FToolContext& Context, IToolPreviewSink
 		// THE SAME GRID THE CLICK ANCHORS ON - PlotGesture::DescribeAnchors and AnchorAt are
 		// one rule written once, so the heavier dot is the anchor a click takes.
 		auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
-		if (!PlotGesture::DescribeAnchors(*Network, Context.Cursor, Accept, Sink))
+		if (!PlotGesture::DescribeAnchors(*Network, Context.Cursor, Accept, Sink, Context.GridStepUu))
 		{
 			Sink.Label(Context.Cursor, FString::Printf(TEXT("move near %s"), *RoadNoun()),
 				EPreviewStyle::Refused);
@@ -243,7 +243,7 @@ void FStagedPlotTool::BuildReadout(const FToolContext& Context, IToolReadoutSink
 		auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
 		PlotGesture::FAnchor Unused;
 		if (Network == nullptr
-			|| !PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Unused))
+			|| !PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Unused, Context.GridStepUu))
 		{
 			Sink.Warning(FString::Printf(TEXT("Move near %s"), *RoadNoun()));
 		}

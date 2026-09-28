@@ -76,6 +76,12 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// own Pinned/Provisional white sides in the SAME frame, so it has to read as its own thing
 	// rather than blend into the rectangle it is one edge of.
 	case EPreviewStyle::ServiceEdge:                 return FLinearColor(0.95f, 0.5f, 0.15f);
+
+	// WHITE AT LOW ALPHA, drawn as translucent quads (FPreviewLook::bTranslucentLine) - the
+	// canvas's own lines drop alpha, which is why 2026-09-27/28's alpha-only changes showed
+	// nothing and a brighter, thicker attempt read "too thick, too strong" (PIE, 2026-09-28).
+	case EPreviewStyle::GridMinor:                   return FLinearColor(1.0f, 1.0f, 1.0f, 0.22f);
+	case EPreviewStyle::GridMajor:                   return FLinearColor(1.0f, 1.0f, 1.0f, 0.4f);
 	}
 
 	// Reached only if EPreviewStyle grew a value with no case above - not caught at compile
@@ -189,6 +195,17 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 	// rather than merely a different meaning.
 	case EPreviewStyle::ServiceEdge:
 		Look.ThicknessScale = 2.0f;
+		break;
+
+	// Thin, and translucent (see Default): the 2026-09-28 thicker attempt was "too thick".
+	// Major a touch heavier so fives still count.
+	case EPreviewStyle::GridMinor:
+		Look.ThicknessScale = 0.5f;
+		Look.bTranslucentLine = true;
+		break;
+	case EPreviewStyle::GridMajor:
+		Look.ThicknessScale = 0.6f;
+		Look.bTranslucentLine = true;
 		break;
 	}
 

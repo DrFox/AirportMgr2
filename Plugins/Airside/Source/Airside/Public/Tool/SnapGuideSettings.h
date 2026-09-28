@@ -5,6 +5,22 @@
 #include "SnapGuideSettings.generated.h"
 
 /**
+ * The world grid's pitch, or none - see GridSnap and FSnapGuideSettings::GridStep.
+ *
+ * AN ENUM, NOT A FREE FIGURE, because the bar cycles a fixed set (world-grid-snap design) and a
+ * stored 3.7 m would be a state no button can reach or show. Declared HERE rather than in
+ * Solve/GridSnap.h because it is a UPROPERTY: UHT cannot see a Solve/ enum.
+ */
+UENUM(BlueprintType)
+enum class EGridStep : uint8
+{
+	Off,
+	OneMetre,
+	FiveMetres,
+	TenMetres
+};
+
+/**
  * Which guide sources are live, per airport.
  *
  * BESIDE ARoadNetworkActor::Snap and for the same recorded reason as FRoadSnapSettings: the
@@ -111,6 +127,34 @@ struct AIRSIDE_API FSnapGuideSettings
 	/** 0/45/90/135 degrees. */
 	UPROPERTY(EditAnywhere, Category = "Snap to")
 	bool bWorld = true;
+
+	// --- The world grid ---------------------------------------------------------------
+
+	/**
+	 * The world grid every guided tool lands on when no stronger snap holds - road snap, then
+	 * guides, then this (world-grid-snap design, precedence A). Applied last in
+	 * FSnapGuideChain::Resolve.
+	 *
+	 * OFF BY DEFAULT: an airport that never asked for a grid places exactly as it did before
+	 * this existed, which is the contract the grid-off tests hold it to.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Grid")
+	EGridStep GridStep = EGridStep::Off;
+
+	/**
+	 * The grid pitch in uu, 0 when Off. The figures are written here and consumers ask for
+	 * them, so a 5 m grid cannot be 500 uu in the chain and 5 m somewhere else.
+	 */
+	double GridStepUu() const;
+
+	/**
+	 * How far round the build point the overlay draws, uu - 0 when Off. Scales with the step so
+	 * a 10 m grid shows more than a handful of cells (20 / 60 / 120 m, design section 3).
+	 */
+	double GridOverlayRadiusUu() const;
+
+	/** Off -> 1 m -> 5 m -> 10 m -> Off. What the bar's Grid button does. */
+	void CycleGridStep();
 
 	/**
 	 * Whether this CELL may propose: both axes on, and the pair legal.

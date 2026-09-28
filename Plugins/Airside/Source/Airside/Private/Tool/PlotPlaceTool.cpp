@@ -105,9 +105,7 @@ void FPlotPlaceTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 	FVector2D Far = Corners[1];
 	if (PinnedNow == 1)
 	{
-		const double Reach = FVector2D::DotProduct(Context.Cursor - Corners[0], Along);
-		const double Sign = Reach < 0.0 ? -1.0 : 1.0;
-		Far = Corners[0] + Along * (Sign * PlotGesture::QuantisedFrontage(FMath::Abs(Reach)));
+		Far = PlotGesture::FrontageEnd(Corners[0], Along, Context.Cursor, Context.GridStepUu);
 	}
 	OutShape.Add(Far);
 

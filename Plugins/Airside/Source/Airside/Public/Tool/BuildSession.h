@@ -294,6 +294,7 @@ struct FBuildSessionTunables
 			&& GuideSources.bRunway == Other.GuideSources.bRunway
 			&& GuideSources.bApron == Other.GuideSources.bApron
 			&& GuideSources.bStand == Other.GuideSources.bStand
+			&& GuideSources.GridStep == Other.GuideSources.GridStep
 			&& GuideSources.bWorld == Other.GuideSources.bWorld
 			&& Limits.MinSegmentLength == Other.Limits.MinSegmentLength
 			&& Limits.MinTurnDegrees == Other.Limits.MinTurnDegrees

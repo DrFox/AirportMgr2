@@ -4,16 +4,53 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Solve/GridSnap.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/RoadGeom.h"
 #include "Solve/StandBox.h"
 #include "Tool/PavementAxis.h"
+#include "Tool/SnapGuideChain.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
 // StandPlotRules::DepthStepUu moved to StandPlotTool.h (2026-09-26, on its own
 // review): a test enforcing every IcaoCode floor against the quantum needs to read the same
 // declaration the tool quantises by, not a second literal.
+
+namespace StandPlotGuide
+{
+	/**
+	 * The winner the depth obeys: a POSITIONAL guide (EFit::Perpendicular) running PARALLEL to
+	 * the entrance - a neighbouring stand's back edge. Null otherwise.
+	 *
+	 * BOTH TESTS, from review on 2026-09-27. Angular winners ("along the entrance", "north")
+	 * fix a direction the depth does not have - one near the entrance line projected the depth
+	 * to zero. A positional line ACROSS the entrance (a neighbour's side edge on the edge being
+	 * dragged) fixes nothing about depth, and took it as a raw cursor projection with no step.
+	 *
+	 * NAMESPACED, not anonymous: a unity build, and "BackEdgeGuide" is a name a second file
+	 * could choose.
+	 */
+	const SnapGuide::FCandidate* BackEdgeGuide(const FToolContext& Context, const FVector2D& Inward)
+	{
+		if (!Context.Guide.bActive)
+		{
+			return nullptr;
+		}
+		// Parallel to the entrance = square to Inward. 1e-3 is ~0.06 degrees: the neighbour's
+		// edge came from the same kind of taxiway-aligned rectangle, not a hand-drawn line.
+		constexpr double SquareEpsilon = 1e-3;
+		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
+		{
+			if (Winner.Fit == SnapGuide::EFit::Perpendicular
+				&& FMath::Abs(FVector2D::DotProduct(Winner.Direction.GetSafeNormal(), Inward)) < SquareEpsilon)
+			{
+				return &Winner;
+			}
+		}
+		return nullptr;
+	}
+}
 
 FText FStandPlotTool::GetDisplayName() const
 {
@@ -42,9 +79,7 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 	FVector2D Far = Corners[1];
 	if (PinnedNow == 1)
 	{
-		const double Reach = FVector2D::DotProduct(Context.Cursor - Anchor, Along);
-		const double Sign = Reach < 0.0 ? -1.0 : 1.0;
-		Far = Anchor + Along * (Sign * PlotGesture::QuantisedFrontage(FMath::Abs(Reach)));
+		Far = PlotGesture::FrontageEnd(Anchor, Along, Context.Cursor, Context.GridStepUu);
 	}
 
 	// Corner 2 is the far end carried inward by the depth.
@@ -64,10 +99,37 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 	FVector2D Back = Far;
 	if (PinnedNow == 2)
 	{
-		const double Raw = FMath::Max(0.0,
-			FVector2D::DotProduct(Context.GuidedCursor() - Anchor, Inward));
-		const double Depth =
-			FMath::RoundToDouble(Raw / StandPlotRules::DepthStepUu) * StandPlotRules::DepthStepUu;
+		// THREE RULES, STRONGEST FIRST (world-grid-snap design section 2):
+		//   1. A POSITIONAL guide - a neighbouring stand's back edge, via Collinear x Stand - sets
+		//      the depth outright, unquantised: lining up with it is the point, and a 0.5 m step
+		//      would put the edge beside the neighbour's instead of on it. Angular winners ("square
+		//      to the entrance") do not count: they fix a direction, and the depth is already
+		//      measured along one.
+		//   2. The world grid: the nearest crossing along the inward edge from Far.
+		//   3. Today's 0.5 m step.
+		// The chain's own grid point (a no-winner Guide.Point) is NOT used for 2: it rounds both
+		// axes, and on a diagonal taxiway its projection onto Inward is no grid crossing at all.
+		// Rule 1 is StandPlotGuide::BackEdgeGuide - a positional winner PARALLEL to the entrance.
+		//
+		// RULES 2 AND 3 READ THE RAW CURSOR, exactly as the tool did before it had a guide
+		// anchor: every other winner is angular or runs across the entrance, and following one
+		// moves the depth for a reason that is not about depth (see BackEdgeGuide).
+		double Depth = 0.0;
+		if (StandPlotGuide::BackEdgeGuide(Context, Inward) != nullptr)
+		{
+			Depth = FMath::Max(0.0, FVector2D::DotProduct(Context.GuidedCursor() - Anchor, Inward));
+		}
+		else if (FVector2D OnGrid = Far; Context.GridStepUu > 0.0
+			&& GridSnap::NearestCrossingAlong(Far, Inward, Context.Cursor, Context.GridStepUu, OnGrid))
+		{
+			Depth = FMath::Max(0.0, FVector2D::DotProduct(OnGrid - Far, Inward));
+		}
+		else
+		{
+			const double Raw = FMath::Max(0.0,
+				FVector2D::DotProduct(Context.Cursor - Anchor, Inward));
+			Depth = FMath::RoundToDouble(Raw / StandPlotRules::DepthStepUu) * StandPlotRules::DepthStepUu;
+		}
 		Back = Far + Inward * Depth;
 	}
 	else if (PinnedNow >= 3)
@@ -79,6 +141,39 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 	OutShape.Add(Far);
 	OutShape.Add(Back);
 	OutShape.Add(Anchor + (Back - Far));
+}
+
+bool FStandPlotTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+	FGuideAnchor& Out) const
+{
+	// THE DEPTH DRAG ONLY. The anchor and the frontage search for a taxiway and run along it
+	// (FStagedPlotTool::SnapsToGrid covers their grid); a guide over them would be a second
+	// opinion about where they may go - FPlotPlaceTool::DescribeGuideAnchor's reason.
+	//
+	// ADDED 2026-09-27 for the report that started the world grid: this tool had no anchor, so
+	// the Collinear x Stand source that already proposes every stand's edges never ran for it,
+	// and two stands of one depth off two taxiways could not be lined up by any means.
+	if (PinnedCount() != 2)
+	{
+		return false;
+	}
+
+	const FVector2D Entrance = Corners[1] - Corners[0];
+	if (Entrance.IsNearlyZero())
+	{
+		return false;
+	}
+
+	// SWINGING ROUND THE ENTRANCE'S FAR END, the corner the side edge being dragged grows from -
+	// the depot's own choice for its first back corner.
+	Out.Origin = Corners[1];
+	Out.ReferenceAt = Corners[0];
+	Out.Reference = Entrance.GetSafeNormal();
+	Out.ReferenceName = TEXT("the entrance");
+
+	// A CORNER OF THE SHAPE, not a centreline - see FPlotPlaceTool::DescribeGuideAnchor.
+	Out.Point = EDragPoint::Boundary;
+	return true;
 }
 
 bool FStandPlotTool::CanCloseShape(TConstArrayView<FVector2D> Shown) const
@@ -243,6 +338,24 @@ void FStandPlotTool::Describe(const FToolContext& Context, TConstArrayView<FVect
 	const FVector2D Out = Outward * Context.ServiceRoadHalfWidth;
 	Sink.Line(Shown[2] + Out, Shown[3] + Out, EPreviewStyle::ServiceEdge);
 	Sink.Line(Shown[3], Shown[0], Rest);
+
+	// WHAT THE DEPTH IS LINED UP WITH, while it is being dragged - the consumer of
+	// DescribeGuideAnchor above. Without it the guide is computed and never seen, the shape of
+	// the bug IBuildTool::WantsFreeStartGuides records. From the back corner the shape shows.
+	//
+	// THE BACK-EDGE WINNER ONLY: it is the one the depth obeys (BackEdgeGuide), and a dashed
+	// "north" or "45 degrees to the taxiway" beside a shape it does not move is a label that lies.
+	if (PinnedNow == 2)
+	{
+		if (const SnapGuide::FCandidate* BackEdge = StandPlotGuide::BackEdgeGuide(Context, Inward))
+		{
+			SnapGuide::FResult Obeyed;
+			Obeyed.bActive = true;
+			Obeyed.Winners.Add(*BackEdge);
+			Obeyed.Point = Context.Guide.Point;
+			Sink.Guides(Obeyed, Shown[2]);
+		}
+	}
 
 	DescribeLetter(Context, Shown, Sink);
 

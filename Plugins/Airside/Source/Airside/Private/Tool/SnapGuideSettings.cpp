@@ -73,3 +73,40 @@ void FSnapGuideSettings::ToggleReference(SnapGuide::EReference Reference)
 	case SnapGuide::EReference::World:       bWorld       = !bWorld;       return;
 	}
 }
+
+double FSnapGuideSettings::GridStepUu() const
+{
+	switch (GridStep)
+	{
+	case EGridStep::Off:        return 0.0;
+	case EGridStep::OneMetre:   return 100.0;
+	case EGridStep::FiveMetres: return 500.0;
+	case EGridStep::TenMetres:  return 1000.0;
+	}
+	return 0.0;
+}
+
+double FSnapGuideSettings::GridOverlayRadiusUu() const
+{
+	// TWENTY STEPS AT 1 M, TWELVE AT 5 AND 10 - the ruling was "20 / 60 / 120 m", chosen for how
+	// many cells the player can judge alignment across, not as a fixed multiple of the step.
+	switch (GridStep)
+	{
+	case EGridStep::Off:        return 0.0;
+	case EGridStep::OneMetre:   return 2000.0;
+	case EGridStep::FiveMetres: return 6000.0;
+	case EGridStep::TenMetres:  return 12000.0;
+	}
+	return 0.0;
+}
+
+void FSnapGuideSettings::CycleGridStep()
+{
+	switch (GridStep)
+	{
+	case EGridStep::Off:        GridStep = EGridStep::OneMetre;   return;
+	case EGridStep::OneMetre:   GridStep = EGridStep::FiveMetres; return;
+	case EGridStep::FiveMetres: GridStep = EGridStep::TenMetres;  return;
+	case EGridStep::TenMetres:  GridStep = EGridStep::Off;        return;
+	}
+}
