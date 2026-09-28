@@ -239,5 +239,8 @@ void UUiWindow::EndGesture(const TCHAR* Why)
 		const FBox2D Rect = Host->WindowRect(Id);
 		UE_LOG(LogRoadBuild, Log, TEXT("Window %s: gesture ends (%s) at (%.0f, %.0f) size (%.0f, %.0f)"), *Id.ToString(),
 			Why, Rect.Min.X, Rect.Min.Y, Rect.GetSize().X, Rect.GetSize().Y);
+		// REMEMBERED ON THE GESTURE'S END, never per move: a drag must cost one write, not one per
+		// frame. ENFORCED BY: AirportMgr.UI.WindowHost.WritesOncePerGesture.
+		Host->CommitPlacement(Id);
 	}
 }

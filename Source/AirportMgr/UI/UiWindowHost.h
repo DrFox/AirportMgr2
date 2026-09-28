@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "UI/UiLayoutStore.h"
 #include "UI/UiWindowSpec.h"
 #include "UiWindowHost.generated.h"
 
@@ -68,6 +69,13 @@ public:
 	void MoveWindow(FName Id, FVector2D ProposedTopLeft);
 	void ResizeWindow(FName Id, FVector2D ProposedSize);
 
+	/** Where the layout is remembered; null (the default, and every test's) remembers nothing. */
+	void SetLayoutStore(TSharedPtr<IUiLayoutStore> InStore);
+	/** The player finished moving or resizing Id: remember where it is. Once per gesture. */
+	void CommitPlacement(FName Id);
+	/** "Reset window layout": forget everything and put every window back where it starts. */
+	void ResetLayout();
+
 	/** The window's rectangle now, host-local. Empty box for an unknown id. */
 	FBox2D WindowRect(FName Id) const;
 	FVector2D ToLocal(FVector2D ScreenPosition) const;
@@ -84,6 +92,10 @@ protected:
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
+	/** The spec's anchor, offset and auto-size - where a window starts, and where a reset puts it. */
+	void ApplyDefaultPlacement(FUiWindowEntry& E);
+	/** Applies each saved placement that still fits this view; the rest keep their default. */
+	void RestoreSavedLayout();
 	FUiWindowEntry* Find(FName Id);
 	const FUiWindowEntry* Find(FName Id) const;
 	void Apply(FUiWindowEntry& E);
@@ -102,6 +114,9 @@ private:
 	UPROPERTY() TObjectPtr<UCanvasPanel> Canvas;
 	UPROPERTY() TObjectPtr<const UBuildBarWidget> DockBar;
 	UPROPERTY() TObjectPtr<const UUIStyle> Style;
+	TSharedPtr<IUiLayoutStore> LayoutStore;
+	/** The saved layout is judged once, on the first tick - when the view's real size is known. */
+	bool bLayoutRestored = false;
 	FVector2D ViewSize = FVector2D(1920.0, 1080.0);
 	int32 TopZ = 0;
 };

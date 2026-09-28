@@ -10,6 +10,7 @@
 #include "OfferInboxWidget.h"
 #include "Testing/AirsideTestWorld.h"
 #include "UI/UiButton.h"
+#include "UI/UiLayoutStore.h"
 #include "UI/UiWindow.h"
 #include "UI/UiWindowHost.h"
 
@@ -330,4 +331,179 @@ bool FUiWindowOverflowTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the offers window refuses a resize"), F.Host->WindowRect(TEXT("offers")).GetSize(), Before);
 	return true;
 }
+
+namespace UiWindowHostTest
+{
+	/** A host whose ledger has a memory store attached. */
+	struct FStoredFixture : FFixture
+	{
+		TSharedRef<FMemoryUiLayoutStore> Store = MakeShared<FMemoryUiLayoutStore>();
+		FStoredFixture()
+		{
+			if (Host != nullptr)
+			{
+				Host->SetLayoutStore(Store);
+			}
+		}
+		/** A second host over the same store - the next launch. */
+		UUiWindowHost* Relaunch(ULedgerPanelWidget*& OutLedger, FVector2D ViewSize)
+		{
+			UUiWindowHost* Next = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
+			OutLedger = CreateWidget<ULedgerPanelWidget>(TestWorld.World, ULedgerPanelWidget::StaticClass());
+			Next->SetViewSizeForTest(ViewSize);
+			Next->SetLayoutStore(Store);
+			Next->AddWindow(*OutLedger);
+			OutLedger->Toggle();
+			Next->TickForTest(0.016f);   // the first tick is when a saved layout is judged
+			return Next;
+		}
+	};
+}
+
+/**
+ * A WINDOW COMES BACK WHERE THE PLAYER LEFT IT - position and size - on the next launch.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiLayoutRestoreTest, "AirportMgr.UI.WindowHost.LayoutSurvivesARelaunch",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiLayoutRestoreTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FStoredFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	const FName Id(TEXT("ledger"));
+	F.Ledger->Toggle();
+	F.Host->MoveWindow(Id, FVector2D(100.0, 100.0));
+	F.Host->ResizeWindow(Id, FVector2D(300.0, 200.0));
+	F.Host->MoveWindow(Id, FVector2D(640.0, 380.0));
+	F.Host->CommitPlacement(Id);
+
+	ULedgerPanelWidget* Ledger = nullptr;
+	UUiWindowHost* Next = F.Relaunch(Ledger, FVector2D(1920.0, 1080.0));
+	TestEqual(TEXT("its position comes back"), Next->WindowRect(Id).Min, FVector2D(640.0, 380.0));
+	TestEqual(TEXT("and its size"), Next->WindowRect(Id).GetSize(), FVector2D(300.0, 200.0));
+	return true;
+}
+
+/** A DRAG WRITES ONCE, at its end - not a flush per frame (Review Focus 4). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiLayoutWritesOnceTest, "AirportMgr.UI.WindowHost.WritesOncePerGesture",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiLayoutWritesOnceTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FStoredFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	F.Ledger->Toggle();
+	F.Window->BeginGestureForTest(EUiWindowGesture::Move, FVector2D(100.0, 100.0));
+	for (int32 Frame = 0; Frame < 10; ++Frame)
+	{
+		F.Window->MoveGestureForTest(FVector2D(100.0 + 5.0 * Frame, 100.0));
+	}
+	TestEqual(TEXT("ten frames of drag write nothing"), F.Store->GetWriteCount(), 0);
+	F.Window->TakeWidget()->OnMouseCaptureLost(FCaptureLostEvent(0, 0));   // any gesture end
+	TestEqual(TEXT("the gesture's end writes once"), F.Store->GetWriteCount(), 1);
+	return true;
+}
+
+/** A LAYOUT FROM A BIGGER SCREEN FALLS BACK TO THE DEFAULT, not to a corner - Review Focus 1. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiLayoutOffScreenTest, "AirportMgr.UI.WindowHost.SavedLayoutOffScreenFallsBackToDefault",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiLayoutOffScreenTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FStoredFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	FUiWindowPlacement Far;
+	Far.TopLeft = FVector2D(3000.0, 1500.0);   // a 4K screen's bottom-right
+	Far.Size = FVector2D(300.0, 200.0);
+	Far.bSized = true;
+	F.Store->Write(TEXT("ledger"), Far);
+
+	ULedgerPanelWidget* Ledger = nullptr;
+	UUiWindowHost* Next = F.Relaunch(Ledger, FVector2D(1920.0, 1080.0));
+	// The ledger's default is top-right, 12 in; headless its auto size is 0x0, so its top-left IS
+	// the anchor point minus the inset.
+	TestEqual(TEXT("off-screen: back to the default placement"), Next->WindowRect(TEXT("ledger")).Min, FVector2D(1920.0 - 12.0, 12.0));
+	return true;
+}
+
+/** A SAVED SIZE BELOW THE MINIMUM IS RAISED TO IT - Review Focus 2. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiLayoutMinSizeTest, "AirportMgr.UI.WindowHost.RestoredSizeRespectsTheMinimum",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiLayoutMinSizeTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FStoredFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	FUiWindowPlacement Tiny;
+	Tiny.TopLeft = FVector2D(200.0, 200.0);
+	Tiny.Size = FVector2D(20.0, 10.0);
+	Tiny.bSized = true;
+	F.Store->Write(TEXT("ledger"), Tiny);
+	ULedgerPanelWidget* Ledger = nullptr;
+	UUiWindowHost* Next = F.Relaunch(Ledger, FVector2D(1920.0, 1080.0));
+	TestEqual(TEXT("raised to the minimum"), Next->WindowRect(TEXT("ledger")).GetSize(), FVector2D(180.0, 90.0));
+	return true;
+}
+
+/** A SAVED SIZE FOR A WINDOW THAT CANNOT BE RESIZED IS IGNORED; its position is not - Review Focus 3. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiLayoutUnresizableTest, "AirportMgr.UI.WindowHost.UnresizableWindowIgnoresASavedSize",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiLayoutUnresizableTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FStoredFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	FUiWindowPlacement Saved;
+	Saved.TopLeft = FVector2D(500.0, 300.0);
+	Saved.Size = FVector2D(400.0, 300.0);
+	Saved.bSized = true;
+	F.Store->Write(TEXT("offers"), Saved);
+	UOfferInboxWidget* Offers = CreateWidget<UOfferInboxWidget>(F.TestWorld.World, UOfferInboxWidget::StaticClass());
+	F.Host->AddWindow(*Offers);
+	F.Host->TickForTest(0.016f);
+	TestEqual(TEXT("its position is restored"), F.Host->WindowRect(TEXT("offers")).Min, FVector2D(500.0, 300.0));
+	TestEqual(TEXT("its size is not - it grows with its offers (headless: 0x0 desired)"),
+		F.Host->WindowRect(TEXT("offers")).GetSize(), FVector2D::ZeroVector);
+	return true;
+}
+
+/** RESET PUTS EVERY WINDOW BACK AND FORGETS THE STORE - including an id no window claims (Review Focus 5). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiLayoutResetTest, "AirportMgr.UI.WindowHost.ResetClearsTheStoreAndRestoresDefaults",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiLayoutResetTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FStoredFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	FUiWindowPlacement Orphan;
+	Orphan.TopLeft = FVector2D(10.0, 10.0);
+	F.Store->Write(TEXT("a.renamed.panel"), Orphan);   // no window claims it: ignored, no crash
+	const FName Id(TEXT("ledger"));
+	F.Ledger->Toggle();
+	F.Host->TickForTest(0.016f);
+	F.Host->MoveWindow(Id, FVector2D(640.0, 380.0));
+	F.Host->CommitPlacement(Id);
+	F.Host->ResetLayout();
+	TestEqual(TEXT("the ledger is back at its default top-right inset"), F.Host->WindowRect(Id).Min, FVector2D(1920.0 - 12.0, 12.0));
+	TestFalse(TEXT("its saved placement is gone"), F.Store->Read(Id).IsSet());
+	TestFalse(TEXT("and so is the orphan"), F.Store->Read(TEXT("a.renamed.panel")).IsSet());
+	return true;
+}
+
+/** NO STORE, NOTHING REMEMBERED - every test's host, deliberately (IUiLayoutStore's comment). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiLayoutNoStoreTest, "AirportMgr.UI.WindowHost.NoStoreRemembersNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiLayoutNoStoreTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	F.Ledger->Toggle();
+	F.Host->MoveWindow(TEXT("ledger"), FVector2D(640.0, 380.0));
+	F.Host->CommitPlacement(TEXT("ledger"));   // must not crash, must not reach any file
+	F.Host->ResetLayout();
+	TestEqual(TEXT("reset still restores the default"), F.Host->WindowRect(TEXT("ledger")).Min, FVector2D(1920.0 - 12.0, 12.0));
+	return true;
+}
+
 #endif

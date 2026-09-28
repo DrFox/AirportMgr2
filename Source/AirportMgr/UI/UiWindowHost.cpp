@@ -43,25 +43,6 @@ UUiWindow* UUiWindowHost::AddWindow(UAirportMgrPanelWidget& Panel)
 	Window->Build(*Style, Spec, Panel, *this);
 
 	UCanvasPanelSlot* CanvasSlot = Canvas->AddChildToCanvas(Window);
-	CanvasSlot->SetAutoSize(true);
-	switch (Spec.Anchor)
-	{
-	case EUiWindowAnchor::TopRight:
-		CanvasSlot->SetAnchors(FAnchors(1.0f, 0.0f));
-		CanvasSlot->SetAlignment(FVector2D(1.0, 0.0));
-		CanvasSlot->SetPosition(FVector2D(-Spec.Offset.X, Spec.Offset.Y));
-		break;
-	case EUiWindowAnchor::AboveBarLeft:
-		CanvasSlot->SetAnchors(FAnchors(0.0f, 1.0f));
-		CanvasSlot->SetAlignment(FVector2D(0.0, 1.0));
-		CanvasSlot->SetPosition(FVector2D(Spec.Offset.X, -(BarHeight() + Spec.Offset.Y)));
-		break;
-	default:
-		CanvasSlot->SetAnchors(FAnchors(0.0f, 0.0f));
-		CanvasSlot->SetAlignment(FVector2D::ZeroVector);
-		CanvasSlot->SetPosition(Spec.Offset);
-		break;
-	}
 	CanvasSlot->SetZOrder(++TopZ);
 
 	FUiWindowEntry& E = Windows.AddDefaulted_GetRef();
@@ -69,10 +50,119 @@ UUiWindow* UUiWindowHost::AddWindow(UAirportMgrPanelWidget& Panel)
 	E.Panel = &Panel;
 	E.Slot = CanvasSlot;
 	E.Spec = Spec;
+	ApplyDefaultPlacement(E);
 	Apply(E);
 	UE_LOG(LogRoadBuild, Log, TEXT("Window %s: hosted (%s)"), *Spec.Id.ToString(), *Panel.GetName());
 	Panel.AttachToHost(*this, Spec.Id);   // applies whatever the panel already asked for
 	return Window;
+}
+
+void UUiWindowHost::ApplyDefaultPlacement(FUiWindowEntry& E)
+{
+	UCanvasPanelSlot* CanvasSlot = E.Slot;
+	if (CanvasSlot == nullptr)
+	{
+		return;
+	}
+	CanvasSlot->SetAutoSize(true);
+	switch (E.Spec.Anchor)
+	{
+	case EUiWindowAnchor::TopRight:
+		CanvasSlot->SetAnchors(FAnchors(1.0f, 0.0f));
+		CanvasSlot->SetAlignment(FVector2D(1.0, 0.0));
+		CanvasSlot->SetPosition(FVector2D(-E.Spec.Offset.X, E.Spec.Offset.Y));
+		break;
+	case EUiWindowAnchor::AboveBarLeft:
+		CanvasSlot->SetAnchors(FAnchors(0.0f, 1.0f));
+		CanvasSlot->SetAlignment(FVector2D(0.0, 1.0));
+		CanvasSlot->SetPosition(FVector2D(E.Spec.Offset.X, -(BarHeight() + E.Spec.Offset.Y)));
+		break;
+	default:
+		CanvasSlot->SetAnchors(FAnchors(0.0f, 0.0f));
+		CanvasSlot->SetAlignment(FVector2D::ZeroVector);
+		CanvasSlot->SetPosition(E.Spec.Offset);
+		break;
+	}
+	E.bPlaced = false;
+}
+
+void UUiWindowHost::SetLayoutStore(TSharedPtr<IUiLayoutStore> InStore)
+{
+	LayoutStore = MoveTemp(InStore);
+}
+
+void UUiWindowHost::CommitPlacement(FName Id)
+{
+	FUiWindowEntry* E = Find(Id);
+	if (E == nullptr || !LayoutStore.IsValid() || !E->bPlaced || E->Slot == nullptr)
+	{
+		return;
+	}
+	FUiWindowPlacement P;
+	P.TopLeft = E->Slot->GetPosition();   // placed: top-left anchored, so position IS the top-left
+	P.bSized = !E->Slot->GetAutoSize();
+	P.Size = P.bSized ? E->Slot->GetSize() : FVector2D::ZeroVector;
+	LayoutStore->Write(Id, P);
+	UE_LOG(LogRoadBuild, Log, TEXT("Window %s: layout saved at (%.0f, %.0f)%s"), *Id.ToString(), P.TopLeft.X, P.TopLeft.Y,
+		P.bSized ? *FString::Printf(TEXT(" size (%.0f, %.0f)"), P.Size.X, P.Size.Y) : TEXT(""));
+}
+
+void UUiWindowHost::RestoreSavedLayout()
+{
+	if (!LayoutStore.IsValid())
+	{
+		return;
+	}
+	for (FUiWindowEntry& E : Windows)
+	{
+		const TOptional<FUiWindowPlacement> Saved = LayoutStore->Read(E.Spec.Id);
+		if (!Saved.IsSet() || E.Slot == nullptr)
+		{
+			continue;
+		}
+		// A SIZE ONLY FOR A WINDOW THAT CAN BE RESIZED, and never below the minimum: a saved size
+		// for Offers (unresizable since step 2) would freeze a window meant to grow with its offers.
+		const bool bUseSize = Saved->bSized && E.Spec.bResizable;
+		const FVector2D Size = bUseSize
+			? FVector2D(FMath::Max(Saved->Size.X, static_cast<double>(Style->WindowMinSize.X)),
+				FMath::Max(Saved->Size.Y, static_cast<double>(Style->WindowMinSize.Y)))
+			: SizeOf(E);
+		// OFF SCREEN -> THE DEFAULT, not a clamp: a layout from a bigger monitor clamped into this
+		// one's corner is a place the player never chose (Review Focus 1 of the step 3 plan).
+		const FBox2D B = Bounds();
+		const bool bFits = Saved->TopLeft.X >= B.Min.X && Saved->TopLeft.Y >= B.Min.Y
+			&& Saved->TopLeft.X + Size.X <= B.Max.X && Saved->TopLeft.Y + Size.Y <= B.Max.Y;
+		if (!bFits)
+		{
+			UE_LOG(LogRoadBuild, Log, TEXT("Window %s: saved layout (%.0f, %.0f) is off this screen - default placement"),
+				*E.Spec.Id.ToString(), Saved->TopLeft.X, Saved->TopLeft.Y);
+			continue;
+		}
+		E.Slot->SetAnchors(FAnchors(0.0f, 0.0f));
+		E.Slot->SetAlignment(FVector2D::ZeroVector);
+		E.Slot->SetPosition(Saved->TopLeft);
+		if (bUseSize)
+		{
+			E.Slot->SetAutoSize(false);
+			E.Slot->SetSize(Size);
+		}
+		E.bPlaced = true;
+		UE_LOG(LogRoadBuild, Log, TEXT("Window %s: layout restored from settings at (%.0f, %.0f)"),
+			*E.Spec.Id.ToString(), Saved->TopLeft.X, Saved->TopLeft.Y);
+	}
+}
+
+void UUiWindowHost::ResetLayout()
+{
+	if (LayoutStore.IsValid())
+	{
+		LayoutStore->Clear();
+	}
+	for (FUiWindowEntry& E : Windows)
+	{
+		ApplyDefaultPlacement(E);
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("Window host: layout reset to defaults"));
 }
 
 FUiWindowEntry* UUiWindowHost::Find(FName Id)
@@ -267,6 +357,13 @@ void UUiWindowHost::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 
 void UUiWindowHost::TickWindows(float DeltaTime)
 {
+	// THE SAVED LAYOUT IS JUDGED ON THE FIRST TICK, not in AddWindow: "does it still fit" needs the
+	// view's real size, which NativeTick has only just read.
+	if (!bLayoutRestored)
+	{
+		bLayoutRestored = true;
+		RestoreSavedLayout();
+	}
 	for (FUiWindowEntry& E : Windows)
 	{
 		if (E.Panel != nullptr)
