@@ -81,10 +81,12 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// paper, not geometry. DIM IN RGB AS WELL AS ALPHA because neither sink is shown to honour
 	// alpha on a line (the editor's PDI may not), and a white line drawn opaque would be the
 	// loudest thing on screen. RAISED 2026-09-28 at the player's ask ("more opaque") from
-	// 0.55 grey / 0.35 and 0.8 / 0.5, after seeing the first figures in PIE; alpha raised again
-	// the same day from 0.65 / 0.9 ("more alpha please").
-	case EPreviewStyle::GridMinor:                   return FLinearColor(0.72f, 0.75f, 0.72f, 0.85f);
-	case EPreviewStyle::GridMajor:                   return FLinearColor(0.92f, 0.95f, 0.92f, 1.0f);
+	// 0.55 grey / 0.35 and 0.8 / 0.5, after seeing the first figures in PIE. Alpha raised twice
+	// more that day (0.65, then 0.85) with NO VISIBLE CHANGE in PIE - measured against a log
+	// proving the new binary drew - so alpha is not the lever on the HUD's canvas lines; RGB and
+	// ThicknessScale (DefaultLook below) are.
+	case EPreviewStyle::GridMinor:                   return FLinearColor(0.85f, 0.88f, 0.85f, 0.85f);
+	case EPreviewStyle::GridMajor:                   return FLinearColor(1.0f, 1.0f, 1.0f, 1.0f);
 	}
 
 	// Reached only if EPreviewStyle grew a value with no case above - not caught at compile
@@ -200,10 +202,13 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 		Look.ThicknessScale = 2.0f;
 		break;
 
-	// Hairlines: context, like Guideline's weight.
+	// Was a 0.5 hairline for both; raised 2026-09-28 when alpha changes did not show (see
+	// Default). Major heavier than minor, so fives still count.
 	case EPreviewStyle::GridMinor:
+		Look.ThicknessScale = 0.75f;
+		break;
 	case EPreviewStyle::GridMajor:
-		Look.ThicknessScale = 0.5f;
+		Look.ThicknessScale = 1.0f;
 		break;
 	}
 
