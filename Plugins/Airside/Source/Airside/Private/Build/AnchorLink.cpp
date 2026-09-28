@@ -677,7 +677,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// to 563 against a lock of 699 by a fillet belonging to a vehicle that never drives it.
 	//
 	// A STAND'S ENTRY LINK IS DRIVEN BY THAT STAND'S DESIGN VEHICLE (2026-09-27): its bays were
-	// laid for it and it is what the fuel service sends (UFuelService's per-letter table), so the
+	// laid for it and it is what the fuel service sends (UJobBoard's per-letter table), so the
 	// largest vehicle ADMITTED to that link is the stand's own - the utility tow on A and B, whose
 	// lock is less than half the truck's. Filleting an A stand's entries for the truck laid curves
 	// no vehicle on them needed and warned "a truck will cut that corner" on stands no truck

@@ -1539,7 +1539,7 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, c
 	// truck: the player's mix IS the fleet size, so a separately-stated count could only
 	// ever disagree with the sheds they actually built.
 	//
-	// UFuelService is untouched by this and always will be - it reads Instance.Trucks, and
+	// UJobBoard is untouched by this and always will be - it seeds its fleet from Instance.Trucks, and
 	// that a module system landed without its consumer changing is the sign the seam was
 	// already in the right place.
 	//

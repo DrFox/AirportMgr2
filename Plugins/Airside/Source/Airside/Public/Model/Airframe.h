@@ -591,7 +591,7 @@ struct AIRSIDE_API FAirframe
 	 * which is what USimClock's header means by authoring turnarounds in game time. Fuelling
 	 * used to be a flat 40 s on the movement clock, and the two could not be compared.
 	 *
-	 * IT TRAVELS IN THE BUNDLE for the reason the bundle exists: UFuelService decides when an
+	 * IT TRAVELS IN THE BUNDLE for the reason the bundle exists: UJobBoard decides when an
 	 * aircraft may leave, it lives in Model/, and Check-Architecture forbids Model/ including
 	 * Entities/ - so it can no more read a UAircraftType for this than for the pose role.
 	 *

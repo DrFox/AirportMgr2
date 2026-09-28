@@ -8,7 +8,7 @@ class URoadNetwork;
 struct FVehicle;
 
 /**
- * LIFTED OFF ARigTestCourse (#301): the course, then FuelService::ChooseDepot, each ran the
+ * LIFTED OFF ARigTestCourse (#301): the course, then UJobBoard::DepotRoute, each ran the
  * SAME per-(start,goal,vehicle) Find with a per-vehicle edge-fit cache as private members - a
  * cache worth having is worth having in one place, not two that could drift out of step with
  * FRouteQuery::FitCache's own contract (same vehicle, same graph). This file is that one place.
@@ -48,7 +48,7 @@ struct AIRSIDE_API FCachedRoutePlan
  * owns the Find it runs on a miss.
  *
  * NOT SELF-DRIVING (Lookup/Store, not FindOrRun): ARigTestCourse::PlanBetween and
- * FuelService::ChooseDepot ask for different errands, gate different rules and log different
+ * UJobBoard::DepotRoute ask for different errands, gate different rules and log different
  * things around the Find, so the cache only remembers the ANSWER - it never issues the search.
  */
 struct AIRSIDE_API FRoutePlanCache
@@ -98,7 +98,7 @@ private:
 
 	/**
 	 * NO Errand/Class/Policy IN THIS KEY (PR #340 review): only (Start, Goal, Vehicle). Safe
-	 * ONLY because each owner (ARigTestCourse::PlanBetween, FuelService::ChooseDepot) builds
+	 * ONLY because each owner (ARigTestCourse::PlanBetween, UJobBoard::DepotRoute) builds
 	 * every FRouteQuery on this cache with the SAME fixed Errand/Class/Policy for the cache's
 	 * whole lifetime - never a parameter that could vary between two Lookups of the same
 	 * (Start, Goal, Vehicle). THE OWNER'S CONTRACT, not this struct's: an owner that ever asks

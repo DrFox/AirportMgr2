@@ -666,7 +666,7 @@ private:
 
 	/**
 	 * The departure verdict last LOGGED per aircraft, empty once it departed. DepartAgent is
-	 * retried every tick by UFuelService until it succeeds - so lengthening a runway releases
+	 * retried every tick by UJobBoard until it succeeds - so lengthening a runway releases
 	 * the aircraft - and a refusal logged per call wrote one line 14,944 times in three
 	 * minutes (2026-09-27, Airside.Model.Traffic.DepartRefusalSaidOnce). A session log gate,
 	 * not state - not a UPROPERTY, not saved.
@@ -839,7 +839,7 @@ private:
 	/**
 	 * Swaps a Vehicle-bodied agent's FVehicle in place, figures only - no re-lay of its tow, no
 	 * re-plan. So a world-free test can make the vehicle ALREADY OUT no longer fit the road it
-	 * will be sent home on: UFuelService routes a truck home by the agent's own vehicle, and
+	 * will be sent home on: UJobBoard routes a truck home by the agent's own vehicle, and
 	 * that is set once, at dispatch. False for an unknown agent or an aircraft. Not public -
 	 * see FGroundTrafficTestAccess (#104).
 	 */

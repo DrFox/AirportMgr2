@@ -652,7 +652,7 @@ void ARigTestCourse::PassMarker(FRigCourseRunner& Runner, const FRoadAgent& Agen
 uint32 ARigTestCourse::VehicleIdentity(const FVehicle& Vehicle)
 {
 	// FORWARDS (#301): the figures-hash itself now lives in Airside/Model/RoutePlanCache.h,
-	// shared with FuelService::ChooseDepot. Kept at this name and signature - see the header.
+	// shared with UJobBoard::DepotRoute. Kept at this name and signature - see the header.
 	return RoutePlanCache::VehicleIdentity(Vehicle);
 }
 
@@ -681,7 +681,7 @@ bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCours
 	// too: it is as much a fact about the graph and the body as a route is. The vehicle is its
 	// slot: Vehicles is fixed once the course is laid.
 	// FRoutePlanCache (#301): the cache itself moved to Airside/Model/RoutePlanCache.h, the one
-	// owner FuelService::ChooseDepot's identical cache now shares - this call site is unchanged
+	// owner UJobBoard::DepotRoute's identical cache now shares - this call site is unchanged
 	// in shape, only in which type owns the tables.
 	Cache.EnsureFresh(*Network);
 	if (const FCachedRoutePlan* Hit = Cache.Lookup(Start, Goal, Vehicles[Slot]))
