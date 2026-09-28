@@ -60,8 +60,9 @@ bool FOfferInboxWidgetTest::RunTest(const FString& Parameters)
 	{
 		UFlight* Offer = NewObject<UFlight>(GetTransientPackage());
 		Offer->Airframe.Wingspan = 3400.0;
-		Offer->ArrivesAt = Clock->Now() + 600.0;
-		Offer->ExpiresAt = Clock->Now() + 600.0;
+		Offer->LeadTimeSeconds = 600.0;
+		Offer->OfferWindowSeconds = 60.0;
+		Offer->OfferSecondsLeft = 60.0;
 		Offer->AirlineName = FText::FromString(TEXT("Meridian"));
 		Offer->TypeName = FText::FromString(TEXT("A320"));
 		Board->AddOffer(*Clock, Offer);
@@ -136,8 +137,9 @@ bool FOfferInboxIdleTickResolvesNoStyleTest::RunTest(const FString& Parameters)
 	Board->Allocator = NewObject<UStandAllocator>();
 	UFlight* Offer = NewObject<UFlight>(GetTransientPackage());
 	Offer->Airframe.Wingspan = 3400.0;
-	Offer->ArrivesAt = Clock->Now() + 600.0;
-	Offer->ExpiresAt = Clock->Now() + 600.0;
+	Offer->LeadTimeSeconds = 600.0;
+	Offer->OfferWindowSeconds = 60.0;
+	Offer->OfferSecondsLeft = 60.0;
 	Offer->AirlineName = FText::FromString(TEXT("Meridian"));
 	Offer->TypeName = FText::FromString(TEXT("A320"));
 	Board->AddOffer(*Clock, Offer);

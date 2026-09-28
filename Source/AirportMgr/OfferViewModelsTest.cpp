@@ -27,7 +27,8 @@ namespace
 		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 		Flight->Airframe.Wingspan = 3400.0;
 		Flight->ArrivesAt = ArrivesAt;
-		Flight->ExpiresAt = ArrivesAt;
+		Flight->OfferWindowSeconds = 60.0;
+		Flight->OfferSecondsLeft = 60.0;
 		Flight->AirlineName = FText::FromString(TEXT("Meridian"));
 		Flight->TypeName = FText::FromString(TEXT("A320"));
 		return Flight;

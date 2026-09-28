@@ -331,13 +331,17 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 			if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
 			{
 				FuelService->Tick(*Model, *Target->Network, *Clock);
+
+				// THE RAW FRAME TIME, for the one countdown that runs in real seconds - see
+				// UFlightBoard::TickOffers. It checks the pause itself.
+				FlightBoard->TickOffers(*Model, *Target->Network, *Clock, RealDeltaSeconds);
 			}
 		}
 	}
 
-	// Offers used to lapse here via UFlightBoard::Tick's per-frame poll (issue #105 item 9);
-	// now Clock->Advance above already fired any expiry due this frame - see
-	// UFlightBoard::ScheduleExpiry, armed from AddOffer and re-armed by RearmSchedules.
+	// Offers lapse in TickOffers above, on REAL seconds (spec 2026-09-28). Before that they
+	// were a Clock.At at a game-time ExpiresAt (issue #105 item 9), and before THAT a per-frame
+	// poll here; the game-time window shrank with the speed setting, which is why it went.
 }
 
 void UOpsRuntime::ApplySpeed(ESimSpeed Speed)

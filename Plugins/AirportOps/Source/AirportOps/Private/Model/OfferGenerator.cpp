@@ -188,11 +188,6 @@ UFlight* UOfferGenerator::MakeOffer(const FVector2D& Focus, const UAirlineDefini
 	Offer->ContractSeconds = Airline.LeadTimeSeconds + TaxiAllowanceSeconds
 		+ Chosen.Airframe.TurnaroundSeconds * Airline.TurnaroundSlack;
 
-	// BRIDGE (plan Task 3 ruling), removed by Task 4: the board still expires and schedules
-	// on game-time fields until the real-time countdown lands.
-	Offer->ArrivesAt = Now + Airline.LeadTimeSeconds;
-	Offer->ExpiresAt = Now + Airline.LeadTimeSeconds;
-
 	// CARRIED WITH THE FLIGHT, not left for the board's own field to answer later - see
 	// UFlight::ApproachFocus.
 	Offer->ApproachFocus = Focus;

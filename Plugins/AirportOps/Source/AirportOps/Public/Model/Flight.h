@@ -30,7 +30,7 @@ enum class EAgentPhase : uint8;
 UENUM()
 enum class EFlightPhase : uint8
 {
-	/** In the inbox, undecided. Lapses at ExpiresAt. */
+	/** In the inbox, undecided. Lapses when OfferSecondsLeft runs out. */
 	Offered,
 	/** The player said yes. A stand is held and the arrival is on the clock. */
 	Accepted,
@@ -53,6 +53,22 @@ enum class EFlightPhase : uint8
 	Declined,
 	/** Nobody said anything and the offer timed out. */
 	Expired
+};
+
+/**
+ * Why an offer lapsed - what C needs to decide whether the player is to blame.
+ *
+ * AN ENUM, not two bools: "ignored" and "never acceptable" cannot both be true, and None is
+ * every flight that did not lapse. A (spec 2026-09-28) records it; C rules what it costs.
+ */
+UENUM()
+enum class ELapseReason : uint8
+{
+	None,
+	/** It could have been accepted at some point in its window, and nobody did. */
+	Ignored,
+	/** No stand was free for it the whole time it stood. */
+	NeverAcceptable
 };
 
 /**
@@ -115,7 +131,7 @@ public:
 	UPROPERTY() bool bFloorAirline = false;
 
 	/**
-	 * USimClock::Now at which it lands.
+	 * USimClock::Now at which it lands: AcceptedAt + LeadTimeSeconds, set by the accept.
 	 *
 	 * SAVED, and it is the saved truth about the schedule: USimClock deliberately does not
 	 * save its callback queue, so a reload has an ETA and nothing armed until
@@ -123,8 +139,26 @@ public:
 	 */
 	UPROPERTY() double ArrivesAt = 0.0;
 
-	/** USimClock::Now at which an unanswered offer lapses. Before ArrivesAt, always. */
-	UPROPERTY() double ExpiresAt = 0.0;
+	/**
+	 * Set the first time the board judged this offer acceptable (a stand free for it). What
+	 * turns a lapse into Ignored rather than NeverAcceptable - see UFlightBoard::TickOffers.
+	 */
+	UPROPERTY() bool bWasEverAcceptable = false;
+
+	/** Why it lapsed, or None. Written once, by UFlightBoard::TickOffers. */
+	UPROPERTY() ELapseReason LapseReason = ELapseReason::None;
+
+	/** USimClock::Now of the accept, or 0 if never accepted. The contract runs from here. */
+	UPROPERTY() double AcceptedAt = 0.0;
+
+	/**
+	 * USimClock::Now at which it reached Departing, or 0 if it has not. C scores this against
+	 * AirborneBy(); recorded now so C needs no migration.
+	 */
+	UPROPERTY() double AirborneAt = 0.0;
+
+	/** The turnaround contract's deadline: AcceptedAt + ContractSeconds. */
+	double AirborneBy() const { return AcceptedAt + ContractSeconds; }
 
 	/**
 	 * Where THIS flight is aimed. ArrivalPlanner chooses the runway by nearest threshold to
