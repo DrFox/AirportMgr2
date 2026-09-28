@@ -922,7 +922,7 @@ public:
 	 * HoldingPositionFor (cleared: a stop line names no runway) and ProtectsConflicts written
 	 * together, for the reason SetGuidelineNodeHoldingPosition writes its pair together.
 	 * SetGuidelineNodeHoldingPosition clears ProtectsConflicts, so the list can never outlive
-	 * the kind. FRoadGuidelineBuilder is the only caller; like the runway kind, it is
+	 * the kind. Written by FRoadGuidelineBuilder; like the runway kind, it is
 	 * re-derived every rebuild and stores no mark. False for a dead node.
 	 */
 	bool SetGuidelineNodeCrossingHold(FGuidelineNodeId Node, TArray<FGuidelineNodeId> Conflicts);
