@@ -125,7 +125,7 @@ public:
 
 	/**
 	 * The turnaround contract: GAME seconds from the accept to airborne again. Fixed at the
-	 * offer (lead + taxi allowance + turnaround x the airline's slack) so the row can show it
+	 * offer (the airline's own UAirlineDefinition::ContractSeconds) so the row can show it
 	 * BEFORE the player accepts. C scores AirborneAt against it.
 	 */
 	UPROPERTY() double ContractSeconds = 0.0;

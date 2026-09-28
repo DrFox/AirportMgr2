@@ -395,22 +395,24 @@ bool FOfferFeeCadenceTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferContractTest, "AirportOps.Model.Offers.Generate.ContractFormula",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferContractTest, "AirportOps.Model.Offers.Generate.ContractIsTheAirlines",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOfferContractTest::RunTest(const FString& Parameters)
 {
-	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0));
+	// ONE FIGURE, THE AIRLINE'S (2026-09-28, from play): the old lead + 10 min taxi +
+	// turnaround x slack gave an SR22 40 game minutes, and it reached its stand with one left -
+	// aircraft MOVE in real seconds while the clock runs ~21x, so landing and taxiing alone ate
+	// the contract. How demanding an airline is, is now simply how long it gives.
 	UOfferGenerator* Generator = SeededGenerator();
-	Generator->TaxiAllowanceSeconds = 600.0;
 	UAirlineDefinition* Airline = MakeAirline(1.0);
 	Airline->LeadTimeSeconds = 900.0;
-	Airline->TurnaroundSlack = 1.5;
+	Airline->ContractSeconds = 7200.0;
 	Airline->OfferWindowSeconds = 45.0;
 	UFlight* Offer = Generator->MakeOffer(FVector2D::ZeroVector, *Airline, Candidate(3000.0), 1000.0, 3);
 	if (!TestNotNull(TEXT("a candidate makes an offer"), Offer)) { return false; }
 	TestEqual(TEXT("it is Offered"), Offer->Phase, EFlightPhase::Offered);
 	TestEqual(TEXT("its id is the one it was given"), Offer->Id, 3);
-	TestEqual(TEXT("the contract is lead + taxi + turnaround x slack"), Offer->ContractSeconds, 900.0 + 600.0 + 1800.0 * 1.5, 1e-9);
+	TestEqual(TEXT("the contract is the airline's, whatever the airframe"), Offer->ContractSeconds, 7200.0, 1e-9);
 	TestEqual(TEXT("the window is the airline's, in real seconds"), Offer->OfferSecondsLeft, 45.0, 1e-9);
 	TestEqual(TEXT("and remembered, so a row can draw how much is left"), Offer->OfferWindowSeconds, 45.0, 1e-9);
 	TestEqual(TEXT("the lead time travels with the flight"), Offer->LeadTimeSeconds, 900.0, 1e-9);

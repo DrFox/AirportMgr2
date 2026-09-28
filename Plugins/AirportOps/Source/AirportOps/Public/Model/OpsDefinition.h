@@ -79,11 +79,4 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "1"))
 	int32 MaxPendingOffers = 8;
-
-	/**
-	 * GAME seconds the turnaround contract allows for landing and taxiing in. Copied into
-	 * UOfferGenerator at attach. A flat figure until B's sequencer can estimate it per flight.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "0.0"))
-	double TaxiAllowanceSeconds = 600.0;
 };

@@ -136,12 +136,6 @@ public:
 	UPROPERTY() int32 MaxPendingOffers = 8;
 
 	/**
-	 * A flat allowance, GAME seconds, for landing and taxiing in, inside the turnaround
-	 * contract. Copied from UScenario. B replaces it with the sequencer's own estimate.
-	 */
-	UPROPERTY() double TaxiAllowanceSeconds = 600.0;
-
-	/**
 	 * Whether this field could EVER take this airframe, and why not when it could not.
 	 *
 	 * PERMANENT refusals only. RunwayOccupied and NoFreeStand clear on their own, so an

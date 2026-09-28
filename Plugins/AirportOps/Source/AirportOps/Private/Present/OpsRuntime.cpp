@@ -157,7 +157,6 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		// is the one somebody forgot to copy.
 		FuelService->DwellSeconds = Scenario->FuelDwellSeconds;
 		OfferGenerator->MaxPendingOffers = Scenario->MaxPendingOffers;
-		OfferGenerator->TaxiAllowanceSeconds = Scenario->TaxiAllowanceSeconds;
 
 		// THE BALANCE A NEW GAME OPENS AT. The comment that used to stand at the top of this
 		// block said this would happen "when the ledger exists (M3)"; this is that. A LOAD

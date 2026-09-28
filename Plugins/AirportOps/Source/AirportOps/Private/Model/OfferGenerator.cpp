@@ -214,11 +214,10 @@ UFlight* UOfferGenerator::MakeOffer(const FVector2D& Focus, const UAirlineDefini
 	Offer->OfferWindowSeconds = Airline.OfferWindowSeconds;
 	Offer->OfferSecondsLeft = Airline.OfferWindowSeconds;
 
-	// THE CONTRACT, fixed now so the row can show it before the player decides: the aeroplane
-	// is airborne again within lead + taxi allowance + turnaround x slack of the accept.
+	// THE CONTRACT, fixed now so the row can show it before the player decides: the airline's
+	// own figure - see UAirlineDefinition::ContractSeconds for why it is not a sum any more.
 	Offer->LeadTimeSeconds = Airline.LeadTimeSeconds;
-	Offer->ContractSeconds = Airline.LeadTimeSeconds + TaxiAllowanceSeconds
-		+ Chosen.Airframe.TurnaroundSeconds * Airline.TurnaroundSlack;
+	Offer->ContractSeconds = Airline.ContractSeconds;
 
 	// CARRIED WITH THE FLIGHT, not left for the board's own field to answer later - see
 	// UFlight::ApproachFocus.
