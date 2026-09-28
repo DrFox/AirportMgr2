@@ -24,9 +24,6 @@ namespace
 {
 	/** The spec's 420 px. */
 	constexpr float DialogWidth = 420.0f;
-
-	/** What the dropdown shows for the engine's -1 (a custom mix): High, the engine's default preset. */
-	constexpr int32 CustomShowsAs = 2;
 }
 
 bool USettingsPanelWidget::WantsWindow(FUiWindowSpec& Out) const
@@ -149,6 +146,7 @@ void USettingsPanelWidget::Open()
 		UE_LOG(LogRoadBuild, Warning, TEXT("Settings: no settings to edit - not opened"));
 		return;
 	}
+	Sink->BeginEdit();
 	Snapshot = Sink->Read();
 	Current = Snapshot;
 	LoadControls();
@@ -167,7 +165,13 @@ void USettingsPanelWidget::LoadControls()
 	if (UiScale != nullptr) { UiScale->SetValue(Current.UIScale); }
 	if (PanSpeed != nullptr) { PanSpeed->SetValue(Current.PanSpeedScale); }
 	if (ZoomSpeed != nullptr) { ZoomSpeed->SetValue(Current.ZoomSpeedScale); }
-	if (Graphics != nullptr) { Graphics->SetSelected(Current.GraphicsQuality < 0 ? CustomShowsAs : Current.GraphicsQuality); }
+	if (Graphics != nullptr)
+	{
+		// -1 IS A CUSTOM MIX, shown as such: a stand-in preset would claim a look the player does
+		// not have, and swallow their choosing it.
+		if (Current.GraphicsQuality < 0) { Graphics->ShowUnlisted(LOCTEXT("Custom", "Custom")); }
+		else { Graphics->SetSelected(Current.GraphicsQuality); }
+	}
 	if (DriveSide != nullptr) { DriveSide->SetSelected(Current.DriveSide == EDriveSide::Left ? 0 : 1); }
 	if (GridSnap != nullptr) { GridSnap->SetOn(Current.bGridSnapOnStart); }
 }
@@ -248,7 +252,7 @@ void USettingsPanelWidget::Cancel()
 		// window: FUserSettingsLayoutStore::Write saves the whole settings object) wrote the LIVE
 		// values to disk; saving the snapshot puts the file back to what the player kept.
 		// ENFORCED BY: AirportMgr.Settings.Panel.CancelRestoresEverything.
-		Sink->Apply(Snapshot);
+		Sink->Revert(Snapshot);
 		Sink->Save();
 	}
 	UE_LOG(LogRoadBuild, Log, TEXT("Settings: cancelled - every value restored"));

@@ -17,6 +17,7 @@
 #include "RoadBuildController.generated.h"
 
 class FGamePlayerSettingsSink;
+struct FBuildAction;
 
 class AAirsideBuildingsActor;
 class ARoadNetworkActor;
@@ -304,6 +305,12 @@ public:
 	 *  for the fallback this exists to prove (issue #192). */
 	void OnActionKeyForTest(FKey Key, bool bCtrl) { RunActionForKey(Key, bCtrl); }
 
+	/** A left press at a screen point, without reading a real mouse - OnActionKeyForTest's precedent. */
+	void PressPrimaryForTest(FVector2D At) { PressAt(At); }
+	bool IsPrimaryPressedForTest() const { return Gesture.IsPressed(); }
+	/** EndPlay without tearing the world down - PlayerTickForTest's precedent. */
+	void EndPlayForTest() { EndPlay(EEndPlayReason::EndPlayInEditor); }
+
 	/**
 	 * Light Mode, or go back to Build if it was already lit. Forwards to the session, which
 	 * owns the one mode so PIE and the editor mode cannot disagree about it - and so Remove,
@@ -382,6 +389,9 @@ public:
 
 	/** A modal window is up: every key but Settings' own waits (spec section 2, Modal). */
 	bool IsModalOpen() const;
+
+	/** Whether Action's key must wait: a modal is up and it is not Settings' own. */
+	bool KeyWaitsForModal(const FBuildAction& Action) const;
 
 	/** Open or close the Land panel. The aircraft.land action's verb (key 7). */
 	void ToggleLandPanel();
@@ -509,6 +519,8 @@ protected:
 private:
 	/** Left button down: remember where. Decides nothing - that waits for the release. */
 	void OnPrimaryPressed();
+	/** OnPrimaryPressed's work at a known point - refused under a modal. */
+	void PressAt(FVector2D Screen);
 
 	/** Left button up: a drag ends, or - if it never became one - it was a click. */
 	void OnPrimaryReleased();

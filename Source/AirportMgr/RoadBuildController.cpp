@@ -54,6 +54,13 @@ ARoadBuildController::ARoadBuildController()
 
 void ARoadBuildController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// AN OPEN DIALOG IS CANCELLED: the settings object lives as long as the engine, and live values
+	// left in it would be read as saved by the next session (4b final review, Important 4).
+	// ENFORCED BY: AirportMgr.Settings.EndPlayCancelsAnOpenDialog.
+	if (IsSettingsShowing())
+	{
+		Hud->SettingsPanel->Cancel();
+	}
 	if (SettingsSink.IsValid())
 	{
 		SettingsSink->RestoreEngineScale();   // the settings CDO outlives this play session
@@ -744,7 +751,7 @@ void ARoadBuildController::RunActionForKey(FKey Key, bool bCtrl)
 	// A MODAL IS UP: only Settings' own key goes through, so Escape still closes it. The scrim stops
 	// the mouse; keys reach the game viewport whatever is on screen, so they stop here.
 	// ENFORCED BY: AirportMgr.Actions.KeysIgnoredUnderModal.
-	if (Action != nullptr && IsModalOpen() && Action->Id != SettingsActionId())
+	if (Action != nullptr && KeyWaitsForModal(*Action))
 	{
 		UE_LOG(LogRoadBuild, Verbose, TEXT("Key %s ignored: a modal window is open"), *Key.ToString());
 		return;
@@ -761,7 +768,7 @@ void ARoadBuildController::OnCtrlActionKey()
 	{
 		if (Action.bRequiresCtrl && Action.Key.IsValid() && WasInputKeyJustPressed(Action.Key))
 		{
-			if (IsModalOpen() && Action.Id != SettingsActionId())
+			if (KeyWaitsForModal(Action))
 			{
 				return;   // RunActionForKey's reason: keys wait under a modal
 			}
@@ -946,6 +953,16 @@ void ARoadBuildController::ToggleSettings()
 	if (Hud != nullptr && Hud->SettingsPanel != nullptr)
 	{
 		Hud->SettingsPanel->Toggle();
+		if (Hud->SettingsPanel->IsShowing())
+		{
+			// A GESTURE IN FLIGHT IS DROPPED: a drag begun before Escape would otherwise keep
+			// extending behind the scrim and build on release (4b final review, Important 5).
+			Gesture.Cancel();
+			if (Target != nullptr)
+			{
+				OnCancelGesture();
+			}
+		}
 	}
 }
 
@@ -957,6 +974,13 @@ bool ARoadBuildController::IsSettingsShowing() const
 bool ARoadBuildController::IsModalOpen() const
 {
 	return Hud != nullptr && Hud->WindowHost != nullptr && Hud->WindowHost->IsModalOpen();
+}
+
+bool ARoadBuildController::KeyWaitsForModal(const FBuildAction& Action) const
+{
+	// ONE PREDICATE for both key handlers - the chord handler polls WasInputKeyJustPressed, which a
+	// headless test cannot drive, so this is what AirportMgr.Actions.ChordsWaitUnderModal tests.
+	return IsModalOpen() && Action.Id != SettingsActionId();
 }
 
 void ARoadBuildController::ToggleLedger()
@@ -1056,7 +1080,19 @@ void ARoadBuildController::OnPrimaryPressed()
 	float MouseX = 0.0f;
 	float MouseY = 0.0f;
 	GetMousePosition(MouseX, MouseY);
-	Gesture.Press(FVector2D(MouseX, MouseY));
+	PressAt(FVector2D(MouseX, MouseY));
+}
+
+void ARoadBuildController::PressAt(FVector2D Screen)
+{
+	// UNDER A MODAL NOTHING STARTS. The scrim eats presses over the screen, but a press can reach
+	// the viewport in the frame the dialog opens; with no press held, UpdateDrag and the release do
+	// nothing either. ENFORCED BY: AirportMgr.Actions.MouseWaitsUnderModal.
+	if (IsModalOpen())
+	{
+		return;
+	}
+	Gesture.Press(Screen);
 }
 
 void ARoadBuildController::UpdateDrag()

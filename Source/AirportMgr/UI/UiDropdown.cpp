@@ -77,6 +77,17 @@ void UUiDropdown::SetSelected(int32 Index, bool bBroadcast)
 	}
 }
 
+void UUiDropdown::ShowUnlisted(const FText& Label)
+{
+	Selected = INDEX_NONE;
+	if (Button != nullptr)
+	{
+		FString Arrow;
+		Arrow.AppendChar(static_cast<TCHAR>(ArrowCodepoint));
+		Button->SetLabel(FText::Format(INVTEXT("{0}  {1}"), Label, FText::FromString(Arrow)));
+	}
+}
+
 void UUiDropdown::Choose(int32 Index)
 {
 	if (Anchor != nullptr && Anchor->IsOpen())

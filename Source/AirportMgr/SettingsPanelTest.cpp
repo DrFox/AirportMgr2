@@ -232,13 +232,22 @@ bool FSettingsCustomGraphicsTest::RunTest(const FString& Parameters)
 	F.Panel->Open();
 	UUiDropdown* Gfx = F.Find<UUiDropdown>(TEXT("Graphics"));
 	if (!TestNotNull(TEXT("graphics"), Gfx)) { return false; }
-	TestEqual(TEXT("a custom mix shows as High"), Gfx->GetSelected(), 2);
+	TestEqual(TEXT("a custom mix is no preset"), Gfx->GetSelected(), static_cast<int32>(INDEX_NONE));
+	TestTrue(TEXT("and says so"), Gfx->LabelForTest().StartsWith(TEXT("Custom")));
 	F.Drag(TEXT("PanSpeed"), 1.8f);
 	F.ClickButton(TEXT("Save"));
 	TestEqual(TEXT("a save that never touched graphics keeps it custom"), F.Sink->Saved.GraphicsQuality, -1);
 	F.Panel->Open();
 	F.ClickButton(TEXT("Cancel"));
 	TestEqual(TEXT("and so does a cancel"), F.Sink->Values.GraphicsQuality, -1);
+
+	// EVERY PRESET IS CHOOSABLE from a custom mix - High too, which a stand-in "High" swallowed
+	// (the dropdown raises nothing for the choice already shown; 4b final review, Important 2).
+	F.Panel->Open();
+	const int32 AppliesBefore = F.Sink->Applies;
+	F.ChooseGraphics(2);
+	TestEqual(TEXT("choosing High from a custom mix applies"), F.Sink->Applies, AppliesBefore + 1);
+	TestEqual(TEXT("High"), F.Sink->Values.GraphicsQuality, 2);
 	return true;
 }
 

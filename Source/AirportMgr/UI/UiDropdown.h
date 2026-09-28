@@ -57,6 +57,14 @@ public:
 	void SetSelected(int32 Index, bool bBroadcast = false);
 	int32 GetSelected() const { return Selected; }
 
+	/**
+	 * Shows Label for a value that is none of the options (a custom graphics mix) - selection
+	 * INDEX_NONE, so EVERY option is a change and choosing any raises the event. A stand-in option
+	 * instead would swallow the player's choice of that one option.
+	 * ENFORCED BY: AirportMgr.Settings.Panel.CustomGraphicsStaysCustom.
+	 */
+	void ShowUnlisted(const FText& Label);
+
 	/** From the popup: selects, raises the event if it changed, and closes the popup. */
 	void Choose(int32 Index);
 

@@ -76,14 +76,56 @@ void FGamePlayerSettingsSink::Apply(const FPlayerSettings& V)
 	// SetDriveSide re-lanes every road and is an undo step.
 	// ENFORCED BY: AirportMgr.Settings.DriveSideIsOneValue.
 	ARoadNetworkActor* Target = C->GetTarget();
-	if (Target != nullptr && Target->GetDriveSide() != V.DriveSide)
+	if (Target != nullptr && Target->GetDriveSide() != V.DriveSide && Target->SetDriveSide(V.DriveSide) && bEditing)
 	{
-		Target->SetDriveSide(V.DriveSide);
+		++DriveSideSteps;
 	}
+}
+
+void FGamePlayerSettingsSink::BeginEdit()
+{
+	if (const UAirportMgrUserSettings* Settings = UAirportMgrUserSettings::Get())
+	{
+		LevelsAtEdit = Settings->ScalabilityQuality;
+	}
+	DriveSideSteps = 0;
+	bEditing = true;
+}
+
+void FGamePlayerSettingsSink::Revert(const FPlayerSettings& Snapshot)
+{
+	if (!bEditing)
+	{
+		Apply(Snapshot);
+		return;
+	}
+	UAirportMgrUserSettings* Settings = UAirportMgrUserSettings::Get();
+	if (Settings != nullptr && !(Settings->ScalabilityQuality == LevelsAtEdit))
+	{
+		Settings->ScalabilityQuality = LevelsAtEdit;
+		Settings->ApplyNonResolutionSettings();
+		UE_LOG(LogRoadBuild, Log, TEXT("Settings: graphics groups restored"));
+	}
+	ARoadBuildController* C = Controller.Get();
+	ARoadNetworkActor* Target = C != nullptr ? C->GetTarget() : nullptr;
+	// UNDONE, not set: nothing else can edit the airport while the modal is up (keys and presses
+	// wait), so the top DriveSideSteps entries of the undo stack are exactly this dialog's.
+	for (; DriveSideSteps > 0 && Target != nullptr; --DriveSideSteps)
+	{
+		Target->Undo();
+	}
+	DriveSideSteps = 0;
+	bEditing = false;
+	// The rest by value - graphics and the side now already match, so Apply leaves them alone.
+	FPlayerSettings Rest = Snapshot;
+	Rest.GraphicsQuality = -1;
+	Apply(Rest);
 }
 
 void FGamePlayerSettingsSink::Save()
 {
+	bEditing = false;   // kept: nothing left to revert
+	DriveSideSteps = 0;
 	if (UAirportMgrUserSettings* Settings = UAirportMgrUserSettings::Get())
 	{
 		Settings->SaveSettings();

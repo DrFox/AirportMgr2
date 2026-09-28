@@ -425,4 +425,71 @@ bool FBuildActionsModalKeysTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace BuildActionsModalTest
+{
+	/** A controller with a real host and Settings panel standing in for CreateAll's hud. */
+	ARoadBuildController* SpawnWithSettings(FAirsideTestWorld& TestWorld)
+	{
+		ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+		if (C == nullptr) { return nullptr; }
+		UBuildHudLayer* Hud = C->GetHudForTest();
+		Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
+		Hud->SettingsPanel = CreateWidget<USettingsPanelWidget>(TestWorld.World, USettingsPanelWidget::StaticClass());
+		if (Hud->WindowHost == nullptr || Hud->SettingsPanel == nullptr) { return nullptr; }
+		Hud->WindowHost->AddWindow(*Hud->SettingsPanel);
+		Hud->SettingsPanel->SetSink(MakeShared<FMemoryPlayerSettingsSink>());
+		return C;
+	}
+}
+
+/**
+ * THE MOUSE WAITS UNDER A MODAL TOO (4b final review, Important 5): a drag begun before Escape kept
+ * extending behind the scrim and built on release. Opening Settings drops a held press, and a
+ * press while it is open starts nothing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildActionsModalMouseTest, "AirportMgr.Actions.MouseWaitsUnderModal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildActionsModalMouseTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	ARoadBuildController* C = BuildActionsModalTest::SpawnWithSettings(TestWorld);
+	if (!TestNotNull(TEXT("a controller with Settings"), C)) { return false; }
+	C->PressPrimaryForTest(FVector2D(100.0, 100.0));
+	TestTrue(TEXT("control: a press is held"), C->IsPrimaryPressedForTest());
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	TestTrue(TEXT("Settings opened"), C->IsModalOpen());
+	TestFalse(TEXT("opening it dropped the held press"), C->IsPrimaryPressedForTest());
+	C->PressPrimaryForTest(FVector2D(100.0, 100.0));
+	TestFalse(TEXT("a press under the modal starts nothing"), C->IsPrimaryPressedForTest());
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	C->PressPrimaryForTest(FVector2D(100.0, 100.0));
+	TestTrue(TEXT("control: closed, a press is held again"), C->IsPrimaryPressedForTest());
+	return true;
+}
+
+/**
+ * CTRL CHORDS WAIT TOO (4b final review, Important 6): Ctrl+Z behind an open dialog would undo the
+ * airport. Both key handlers ask the one predicate, so this test covers the chord handler, which a
+ * headless test cannot drive (it polls WasInputKeyJustPressed).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildActionsModalChordTest, "AirportMgr.Actions.ChordsWaitUnderModal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildActionsModalChordTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	ARoadBuildController* C = BuildActionsModalTest::SpawnWithSettings(TestWorld);
+	if (!TestNotNull(TEXT("a controller with Settings"), C)) { return false; }
+	const FBuildAction* Undo = FindAction(FName(TEXT("edit.undo")));
+	const FBuildAction* Settings = FindAction(SettingsActionId());
+	if (!TestTrue(TEXT("undo and settings are registered"), Undo != nullptr && Settings != nullptr)) { return false; }
+	TestTrue(TEXT("control: undo is a Ctrl chord"), Undo->bRequiresCtrl);
+	TestFalse(TEXT("no modal: undo runs"), C->KeyWaitsForModal(*Undo));
+	C->ToggleSettings();
+	TestTrue(TEXT("under the modal: Ctrl+Z waits"), C->KeyWaitsForModal(*Undo));
+	TestFalse(TEXT("and Settings' own key does not"), C->KeyWaitsForModal(*Settings));
+	return true;
+}
+
 #endif
