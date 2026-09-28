@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
 #include "BuildBarWidget.h"
 #include "InspectorWidget.h"
 #include "Misc/AutomationTest.h"
@@ -70,6 +71,43 @@ bool FAirportMgrPanelWidgetSharedBaseTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a second Initialize() call does not re-run the bar's BuildOnce"),
 		Bar->BuildOnceCallCountForTest(), 1);
 
+	return true;
+}
+
+/**
+ * A PRESS ON A PANEL'S CHROME STOPS AT THE PANEL (2026-09-28 report: a click on the bar where
+ * there is no button started a road under it). Driven through the widget's own Slate widget -
+ * SObjectWidget, what the viewport's hit test actually reaches - rather than the protected
+ * UMG override, so the forwarding is under test too. A default FGeometry/FPointerEvent is enough:
+ * the rule does not look at where the press is, only whether anything took it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAirportMgrPanelChromeEatsClicksTest,
+	"AirportMgr.Panels.ChromeEatsClicks",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAirportMgrPanelChromeEatsClicksTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("the bar builds with no asset"), Bar)) { return false; }
+	const TSharedRef<SWidget> Slate = Bar->TakeWidget();
+
+	TestTrue(TEXT("a press on the bar's chrome is handled, so it never reaches the game viewport"),
+		Slate->OnMouseButtonDown(FGeometry(), FPointerEvent()).IsEventHandled());
+	TestTrue(TEXT("and so is a double-click - Slate's second press"),
+		Slate->OnMouseButtonDoubleClick(FGeometry(), FPointerEvent()).IsEventHandled());
+	TestFalse(TEXT("the release is left alone, so a drag begun on the ground can still end"),
+		Slate->OnMouseButtonUp(FGeometry(), FPointerEvent()).IsEventHandled());
+
+	// THE CONTROL: a root that hits ITSELF may cover the screen, and must not swallow the game.
+	UWidget* Root = Bar->WidgetTree != nullptr ? Bar->WidgetTree->RootWidget.Get() : nullptr;
+	if (!TestNotNull(TEXT("the bar has a root"), Root)) { return false; }
+	Root->SetVisibility(ESlateVisibility::Visible);
+	TestFalse(TEXT("a hit-testable root keeps Slate's answer - a click through, not every click eaten"),
+		Slate->OnMouseButtonDown(FGeometry(), FPointerEvent()).IsEventHandled());
 	return true;
 }
 

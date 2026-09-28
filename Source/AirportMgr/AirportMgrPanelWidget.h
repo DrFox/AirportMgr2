@@ -134,6 +134,29 @@ protected:
 	 */
 	void SetCardShown(bool bShown);
 
+	/**
+	 * A CLICK ON THE PANEL STOPS AT THE PANEL (2026-09-28): its card, a section's background, the
+	 * gap between two buttons. Before this a press there started a road under the bar - a Border
+	 * is hit-testable but handles no mouse event, so the press bubbled, unhandled, up to the
+	 * game viewport and reached ARoadBuildController::OnPrimaryPressed as a click on the ground.
+	 *
+	 * REACHED ONLY OVER THE PANEL'S OWN PIXELS. Canvas panels, boxes and the user widget itself
+	 * default to SelfHitTestInvisible (engine UMG constructors), so an event reaches this widget
+	 * only through a Visible descendant under the pointer - never over the empty screen around
+	 * it. A Blueprint that makes the ROOT Visible would make that screen the panel's too, which
+	 * is why the root's own hit-testability is checked before eating anything.
+	 *
+	 * THE PRESS AND THE DOUBLE-CLICK STOP; THE RELEASE DOES NOT. The controller's click fires on
+	 * RELEASE (ARoadBuildController::OnPrimaryReleased asks FBuildGesture what the press became),
+	 * so a release whose press was eaten here finds no gesture and does nothing - while eating
+	 * the release too would strand a drag that began on the ground and ended over the bar. A
+	 * second click comes as a double-click, not a press, so that is stopped with it. The wheel
+	 * is not touched - zoom over the bar still zooms.
+	 * ENFORCED BY: AirportMgr.Panels.ChromeEatsClicks.
+	 */
+	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+	virtual FReply NativeOnMouseButtonDoubleClick(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+
 public:
 	/**
 	 * How many times Initialize has actually resolved PanelStyle and called BuildOnce - the
