@@ -747,6 +747,45 @@ bool FTaxiwayStripSegmentJudgeTest::RunTest(const FString&)
 		TestTrue(TEXT("a road 20 m beside the far leg of an L is refused - the chain stops at the corner"), Corner.bRefused);
 	}
 	{
+		// THE CHAIN IS EXEMPT ONLY NEAR THE JOIN (final review 1): a 16-gon perimeter taxiway turns
+		// 22.5 degrees at every node, within the chain's per-node limit, so an unbounded walk made
+		// the whole ring one taxiway - and a road square to it from inside ran across the far
+		// side unrefused.
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Taxi = URoadProfile::MakeTransient(2400.0, 1600.0);
+		TArray<FRoadNodeId> Ring;
+		// 16, NOT THE REVIEW'S 12: a 12-gon's corners are exactly 150 degrees, which the per-node
+		// limit admits or not by the last bit of a double - this test must not depend on that.
+		for (int32 K = 0; K < 16; ++K)
+		{
+			Ring.Add(Net->AddNode(Dir(22.5 * K) * 15000.0));
+		}
+		for (int32 K = 0; K < 16; ++K)
+		{
+			Net->AddStraightSegment(Ring[K], Ring[(K + 1) % 16], Taxi);
+		}
+		const FVector2D Across(-20000.0, 3000.0);
+		const FStripVerdict V = JudgeSegment(*Net, Shape(Dir(0.0) * 15000.0, Across, Road), false, AtNode(*Net, Ring[0]), Free(Across));
+		TestTrue(TEXT("a road square to a ring taxiway is refused where it crosses the far side"), V.bRefused);
+	}
+	{
+		// A SEGMENT SNAP ON A CURVE IS JUDGED ON THE CHORDS THE SPLIT WILL MAKE (final review 4):
+		// SplitSegment replaces the curve with two straight halves, so the commit sees chord
+		// tangents. 80 degrees to this quarter-arc's tangent at its midpoint is ~53 to one chord.
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadSegmentId Arc = Net->AddSegment(Net->AddNode({ 0.0, 0.0 }), Net->AddNode({ 10000.0, 10000.0 }),
+			{ 10000.0, 0.0 }, URoadProfile::MakeTransient(2400.0, 1600.0));
+		FSegmentEnd OnArc;
+		OnArc.Segment = Arc;
+		OnArc.At = { 7500.0, 2500.0 };   // Eval at T 0.5, tangent at 45 degrees
+		const FVector2D From = OnArc.At + Dir(125.0) * 6000.0;
+		const FStripVerdict V = JudgeSegment(*Net, Shape(From, OnArc.At, Road), false, Free(From), OnArc);
+		TestTrue(FString::Printf(TEXT("80 degrees to the curve but 53 to a chord is refused (%s)"), *V.Text), V.bRefused);
+		const FVector2D Square = OnArc.At + Dir(135.0) * 6000.0;
+		const FStripVerdict S = JudgeSegment(*Net, Shape(Square, OnArc.At, Road), false, Free(Square), OnArc);
+		TestFalse(FString::Printf(TEXT("and one 63 degrees to both chords is allowed (%s)"), *S.Text), S.bRefused);
+	}
+	{
 		// A SEGMENT SNAP: the end lands mid-segment on a taxiway that will be split there. The
 		// met segment is named by its ORIGINAL id (Review Focus 1), and square is allowed.
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());

@@ -607,4 +607,149 @@ bool FHealRefusedAcrossStripTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A MOVE JUDGES THE NODE'S OWN ARMS AGAINST EACH OTHER (final review 2). Every arm is replaced
+ * by its moved self, so each was ignored when judging the others - and a T-junction dragged
+ * along its taxiway left the road running 28 degrees off the taxiway, along its strip.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMoveNodeJudgesItsOwnArmsTest,
+	"Airside.Present.MoveNodeJudgesItsOwnArms",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMoveNodeJudgesItsOwnArmsTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->ClearNetwork();
+
+	const int32 W = Actor->PlaceNode(FVector2D(-20000.0, 0.0));
+	const int32 N = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 E = Actor->PlaceNode(FVector2D(20000.0, 0.0));
+	const int32 S = Actor->PlaceNode(FVector2D(0.0, 10000.0));
+	bool bLaid = Actor->ConnectNodes(W, N, ERoadKind::Taxiway, INDEX_NONE);
+	bLaid &= Actor->ConnectNodes(N, E, ERoadKind::Taxiway, INDEX_NONE);
+	bLaid &= Actor->ConnectNodes(N, S, ERoadKind::ServiceRoad, 0);
+	if (!TestTrue(TEXT("a square T-junction is laid"), bLaid)) { return false; }
+
+	TestFalse(TEXT("dragging the junction to (190 m, -5 m) - the road now 28 degrees off W-N - is refused"),
+		Actor->MoveNode(N, FVector2D(19000.0, -500.0)));
+	TestEqual(TEXT("the junction is where it was"), Actor->Network->GetNodes()[N].Position, FVector2D(0.0, 0.0));
+	TestTrue(TEXT("control: a short slide along the taxiway keeps the road square enough, and moves"),
+		Actor->MoveNode(N, FVector2D(1000.0, 0.0)));
+	return true;
+}
+
+/**
+ * A MERGE REFUSES WHAT THE STRIP REFUSES (final review 3). The edit tool merges on drop whenever
+ * the drag snapped to a node, whatever MoveNode answered - so the merge itself asks the judge,
+ * of every arm it moved, in its own Verify: one evaluator, and the edit reverts whole.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMergeRefusedIntoStripTest,
+	"Airside.Present.MergeRefusedIntoStrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMergeRefusedIntoStripTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->ClearNetwork();
+
+	// A taxiway ending at T, and a road whose end R sits beside T so that, folded into T, it
+	// leaves T 20 degrees off the taxiway's arm - along its strip.
+	const int32 W = Actor->PlaceNode(FVector2D(-20000.0, 0.0));
+	const int32 T = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	Actor->ConnectNodes(W, T, ERoadKind::Taxiway, INDEX_NONE);
+	const FVector2D Along(FMath::Cos(FMath::DegreesToRadians(160.0)), FMath::Sin(FMath::DegreesToRadians(160.0)));
+	const int32 Far = Actor->PlaceNode(Along * 10000.0);
+	const int32 R = Actor->PlaceNode(FVector2D(300.0, 300.0));
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): the road already sits in the strip;
+	// what is judged here is the merge - see TestTool::ConnectUnjudged.
+	if (!TestTrue(TEXT("the road is laid"), TestTool::ConnectUnjudged(*Actor, Far, R, ERoadKind::ServiceRoad))) { return false; }
+
+	const int32 SegmentsBefore = LiveSegments(Actor);
+	TestFalse(TEXT("folding the road's end into the taxiway at 20 degrees is refused"), Actor->MergeNodes(T, R));
+	TestNotNull(TEXT("the road's end survives - the edit reverted whole"), Actor->Network->GetNode(Actor->Network->NodeIdAt(R)));
+	TestEqual(TEXT("and nothing was re-pointed"), LiveSegments(Actor), SegmentsBefore);
+	return true;
+}
+
+/**
+ * A SEGMENT SNAP ON A CURVED TAXIWAY: PREVIEW AND COMMIT AGREE (final review 4). The split
+ * straightens the curve into two chords, so the preview judges those chords; a refusal is made
+ * BEFORE the click splits anything, and leaves the taxiway whole.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadCurvedSnapAgreesTest,
+	"Airside.Tool.RoadCurvedSnapAgrees",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadCurvedSnapAgreesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->ClearNetwork();
+
+	// A quarter-arc taxiway, laid straight into the model - ConnectNodes lays straight only.
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(10000.0, 10000.0));
+	FRoadNodeId NA, NB;
+	Actor->MakeLiveNodeId(A, NA);
+	Actor->MakeLiveNodeId(B, NB);
+	Actor->Network->AddSegment(NA, NB, FVector2D(10000.0, 0.0), Actor->ResolveProfileFor(ERoadKind::Taxiway, INDEX_NONE));
+	Actor->RebuildMesh();
+
+	// 80 degrees to the curve's tangent at its midpoint, 53 to the chord the split makes.
+	const FVector2D OnArc(7500.0, 2500.0);
+	const FVector2D Start = OnArc + FVector2D(FMath::Cos(FMath::DegreesToRadians(125.0)), FMath::Sin(FMath::DegreesToRadians(125.0))) * 6000.0;
+	FRoadDrawTool Tool(ERoadKind::ServiceRoad);
+	Tool.OnClick(AtGround(Actor, Start));
+
+	const FToolContext Snap = AtSegment(Actor, 0, OnArc);
+	FCountingPreviewSink Sink;
+	Tool.BuildPreview(Snap, Sink);
+	TestTrue(FString::Printf(TEXT("the preview refuses what the commit would (labels: %s)"), *FString::Join(Sink.Labels, TEXT(" | "))),
+		Sink.LabelStyle.Contains(EPreviewStyle::Refused));
+
+	Tool.OnClick(Snap);
+	TestEqual(TEXT("the refused click leaves the taxiway whole - one segment, unsplit"), LiveSegments(Actor), 1);
+	return true;
+}
+
+/**
+ * A SKIPPED HEAL LEAVES NO BARE NODES (final review 5). The deletion plan sweeps only what it
+ * expects the heal to leave bare; skip the heal and the two ends it would have joined had no
+ * other road, so they are swept too.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHealSkippedSweepsBareEndsTest,
+	"Airside.Present.HealSkippedSweepsBareEnds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FHealSkippedSweepsBareEndsTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->ClearNetwork();
+
+	Actor->ConnectNodes(Actor->PlaceNode(FVector2D(0.0, -20000.0)), Actor->PlaceNode(FVector2D(0.0, 0.0)),
+		ERoadKind::Taxiway, INDEX_NONE);
+	const int32 A = Actor->PlaceNode(FVector2D(-6000.0, 3000.0));
+	const int32 Apex = Actor->PlaceNode(FVector2D(0.0, 9000.0));
+	const int32 B = Actor->PlaceNode(FVector2D(6000.0, 3000.0));
+	bool bLaid = Actor->ConnectNodes(A, Apex, ERoadKind::ServiceRoad, 0);
+	bLaid &= Actor->ConnectNodes(Apex, B, ERoadKind::ServiceRoad, 0);
+	if (!TestTrue(TEXT("the bent road is laid"), bLaid)) { return false; }
+
+	TestTrue(TEXT("the apex deletes"), Actor->DeleteNode(Apex));
+	TestEqual(TEXT("only the taxiway is left"), LiveSegments(Actor), 1);
+	TestEqual(TEXT("and only its two nodes - A and B were not left bare"), LiveNodes(Actor), 2);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

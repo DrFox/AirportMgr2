@@ -116,7 +116,8 @@ namespace TaxiwayStrip
 	/**
 	 * Meets within 30 degrees of square. PER ARM at a node: at least MeetMinDegrees from EVERY
 	 * strip-bearing arm there, i.e. never running back along one. Across a through-taxiway
-	 * (two opposite arms) that IS the 60..120 band; at a split, the band is asked directly.
+	 * (two opposite arms) that IS the 60..120 band; at a split, it is asked of each of the two
+	 * straight chords the split will make (final review 4).
 	 *
 	 * NO SEPARATE "STRAIGHT ON" BAND, unlike the plan's 150-degree ruling 3 (ruled 2026-09-29,
 	 * while implementing): at a taxiway's DEAD END the only arm is behind the new segment, so
@@ -125,7 +126,6 @@ namespace TaxiwayStrip
 	 * Straight on (180) passes this rule as it passed ruling 3's.
 	 */
 	inline constexpr double MeetMinDegrees = 60.0;
-	inline constexpr double MeetMaxDegrees = 120.0;
 
 	/**
 	 * Two strip-bearing pieces at a node with no third are ONE TAXIWAY when they run on within
@@ -150,4 +150,19 @@ namespace TaxiwayStrip
 	AIRSIDE_API FStripVerdict JudgeSegment(const URoadNetwork& Network, const FSegmentShape& Shape,
 		bool bIsTaxiway, const FSegmentEnd& AtA, const FSegmentEnd& AtB,
 		TConstArrayView<FRoadSegmentId> Ignore = {});
+
+	/**
+	 * JudgeSegment of a segment that already exists, as if it were laid now: its own shape and
+	 * nodes, itself (and Ignore) left out. For an edit that re-points a live segment rather than
+	 * making one - MergeNodes' Verify asks it of every arm the merge moved.
+	 */
+	AIRSIDE_API FStripVerdict JudgeExisting(const URoadNetwork& Network, FRoadSegmentId Id,
+		TConstArrayView<FRoadSegmentId> Ignore = {});
+
+	/** The meeting-angle rule on one arm: at least MeetMinDegrees from it. JudgeSegment's own
+	 *  test, public for MoveNode, which also judges a node's moved arms against each other. */
+	AIRSIDE_API bool MeetsAtAllowedAngle(double Degrees);
+
+	/** The refusal for an arm met at Degrees, in the one wording every caller shows. */
+	AIRSIDE_API FString MeetingRefusal(const URoadNetwork& Network, FRoadSegmentId Taxiway, double Degrees);
 }

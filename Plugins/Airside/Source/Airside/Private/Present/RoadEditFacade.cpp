@@ -16,6 +16,7 @@
 #include "Model/TaxiwayStrip.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/RoadPlacement.h"
 #include "Solve/RunwayDesignator.h"
@@ -1396,13 +1397,21 @@ bool URoadEditFacade::MergeNodes(int32 KeepIndex, int32 AbsorbIndex)
 	// merge has to happen before its corners can be measured at all, which is exactly what
 	// ApplyInteractiveMutation's Verify parameter exists for: run after Mutate, and REVERT
 	// rather than refuse on a false answer (see that method's own header comment).
+	// THE ARMS THE MERGE WILL RE-POINT, by id - URoadNetwork::MergeNodes keeps their handles -
+	// so the Verify below can judge exactly them against the clearance strip.
+	TArray<FRoadSegmentId> Absorbed;
+	if (const FRoadNode* AbsorbNode = Actor().Network->GetNode(Absorb))
+	{
+		Absorbed = AbsorbNode->Incident;
+	}
+
 	const bool bMerged = ApplyInteractiveMutation(TEXT("merge nodes"),
 		[Keep, Absorb](URoadNetwork& Net) { return Net.MergeNodes(Keep, Absorb); },
 		// A node disappeared - the graph's SHAPE changed - so this always notifies Topology,
 		// drag or no drag: see ApplyInteractiveMutation's own header comment for why that
 		// differs from MoveNode/MoveApronCorner's mid-drag Geometry notify.
 		/*bChangesGraphShape*/ true,
-		[Keep, KeepIndex, AbsorbIndex](const URoadNetwork& Net)
+		[Keep, KeepIndex, AbsorbIndex, Absorbed](const URoadNetwork& Net)
 		{
 			const FRoadNode* Merged = Net.GetNode(Keep);
 			const bool bFits = Merged != nullptr && RoadPlacement::NodeCornersFit(Net, Keep, Merged->Position);
@@ -1411,8 +1420,26 @@ bool URoadEditFacade::MergeNodes(int32 KeepIndex, int32 AbsorbIndex)
 				UE_LOG(LogRoadMesh, Log,
 					TEXT("Merge refused: node %d folded into %d makes a corner the solver cannot "
 						 "trim, so the whole edit is reverted."), AbsorbIndex, KeepIndex);
+				return false;
 			}
-			return bFits;
+
+			// THE CLEARANCE STRIP, of every arm the merge re-pointed, on the merged graph (final
+			// review 3). The edit tool merges on drop whenever its drag snapped to a node,
+			// whatever MoveNode answered on the way - so the merge is where the join is judged,
+			// by the same JudgeSegment, and a refusal reverts the whole edit. Runway arms are
+			// not judged (plan ruling 2).
+			// ENFORCED BY: Airside.Present.MergeRefusedIntoStrip
+			for (const FRoadSegmentId& Arm : Absorbed)
+			{
+				if (Net.GetSegment(Arm) == nullptr || Net.IsRunwaySegment(Arm)) { continue; }
+				const TaxiwayStrip::FStripVerdict Verdict = TaxiwayStrip::JudgeExisting(Net, Arm);
+				if (Verdict.bRefused)
+				{
+					UE_LOG(LogRoadMesh, Log, TEXT("Merge refused: %s"), *Verdict.Text);
+					return false;
+				}
+			}
+			return true;
 		});
 
 	if (bMerged)
@@ -1610,6 +1637,8 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 			}
 		}
 
+		// Each moved arm's direction OUT of the moved node, for the sibling check below.
+		TArray<TPair<FRoadSegmentId, FVector2D>> MovedOut;
 		for (const FRoadSegmentId& Incident : Live->Incident)
 		{
 			TaxiwayStrip::FSegmentShape Shape;
@@ -1636,6 +1665,28 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 			{
 				UE_LOG(LogRoadMesh, Log, TEXT("MoveNode refused: %s"), *Verdict.Text);
 				return false;
+			}
+			MovedOut.Emplace(Incident, bNodeIsA
+				? GuidelineGeom::Tangent(Shape.A, Shape.Control, Shape.B, 0.0)
+				: -GuidelineGeom::Tangent(Shape.A, Shape.Control, Shape.B, 1.0));
+		}
+
+		// THE NODE'S OWN ARMS AGAINST EACH OTHER (final review 2): each was Ignored above
+		// because each is being replaced, so nothing judged their MOVED angle - a T-junction
+		// slid along its taxiway left the road 28 degrees off it, along its strip. The meeting
+		// rule per pair, against every sibling that carries a strip.
+		for (const TPair<FRoadSegmentId, FVector2D>& Arm : MovedOut)
+		{
+			for (const TPair<FRoadSegmentId, FVector2D>& Sibling : MovedOut)
+			{
+				if (Arm.Key == Sibling.Key || !TaxiwayStrip::HasStrip(*Owner.Network, Sibling.Key)) { continue; }
+				const double Deg = FMath::RadiansToDegrees(RoadGeom::AngleBetween(Arm.Value, Sibling.Value));
+				if (!TaxiwayStrip::MeetsAtAllowedAngle(Deg))
+				{
+					UE_LOG(LogRoadMesh, Log, TEXT("MoveNode refused: %s"),
+						*TaxiwayStrip::MeetingRefusal(*Owner.Network, Sibling.Key, Deg));
+					return false;
+				}
 			}
 		}
 	}
@@ -1827,6 +1878,23 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 	for (const FRoadNodeId& Litter : Plan.Swept)
 	{
 		Owner.Network->RemoveNode(Litter);
+	}
+
+	// A SKIPPED HEAL'S ENDS, IF BARE (final review 5): Plan.Swept was planned on the heal
+	// happening, so a stranded node or anchor whose only road was a doomed arm is left with
+	// none. Swept here, as the plan sweeps any other bare litter.
+	if (SkipHeal.Num() > 0)
+	{
+		TArray<FRoadNodeId> Ends = SkipHeal.Array();
+		Ends.Add(Plan.Anchor);
+		for (const FRoadNodeId& End : Ends)
+		{
+			const FRoadNode* Left = Owner.Network->GetNode(End);
+			if (Left != nullptr && Left->Incident.Num() == 0)
+			{
+				Owner.Network->RemoveNode(End);
+			}
+		}
 	}
 
 	CommitDisposal(Edit, Quote);
