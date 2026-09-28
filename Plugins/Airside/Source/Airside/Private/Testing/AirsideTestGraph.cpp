@@ -38,15 +38,27 @@ FRoadSegmentId TestGraph::Lay(URoadNetwork& Net, FRoadNodeId A, FRoadNodeId B, U
 
 FGuidelineNodeId TestGraph::NodeFor(const URoadNetwork& Net, FRoadSegmentId Segment, bool bEndA)
 {
+	// THE NEAREST THE ROAD NODE when several carry this Origin: since 2026-09-29 an intermediate
+	// hold realised at a strip edge is a split node derived FOR the same end (RoadGuidelineBuilder's
+	// IntermediateHoldNode), further down the arm. The END is the one at the junction.
+	const FRoadSegment* Road = Net.GetSegment(Segment);
+	const FRoadNode* RoadEnd = Road ? Net.GetNode(bEndA ? Road->A : Road->B) : nullptr;
+	FGuidelineNodeId Best;
+	double BestDistance = TNumericLimits<double>::Max();
 	const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
 	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
 	{
 		if (Nodes[Index].bAlive && Nodes[Index].Origin.Segment == Segment && Nodes[Index].Origin.bEndA == bEndA)
 		{
-			return Net.GuidelineNodeIdAt(Index);
+			const double Distance = RoadEnd ? FVector2D::Distance(Nodes[Index].Position, RoadEnd->Position) : 0.0;
+			if (Distance < BestDistance)
+			{
+				BestDistance = Distance;
+				Best = Net.GuidelineNodeIdAt(Index);
+			}
 		}
 	}
-	return FGuidelineNodeId();
+	return Best;
 }
 
 FRoadSolveResult TestGraph::Derive(URoadNetwork& Net, const FRoadDesignVehicles* DesignVehicles, EWideningTrace Widening)

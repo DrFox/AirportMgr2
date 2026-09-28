@@ -57,6 +57,32 @@ namespace
 	}
 }
 
+namespace
+{
+	/** The node realising an intermediate hold marked on Segment's B end, wherever the builder
+	 *  put it (the end, or a split at the joined taxiway's strip edge that carries the end's
+	 *  Origin), or unset when nothing is flagged. */
+	FGuidelineNodeId M2HoldRealised(const URoadNetwork& Net, FRoadSegmentId Segment)
+	{
+		const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			if (Nodes[Index].bAlive && Nodes[Index].Origin.Segment == Segment && !Nodes[Index].Origin.bEndA
+				&& Nodes[Index].HoldingPosition != EHoldingPositionKind::None)
+			{
+				return Net.GuidelineNodeIdAt(Index);
+			}
+		}
+		return FGuidelineNodeId();
+	}
+
+	EHoldingPositionKind M2HoldRealisedKind(const URoadNetwork& Net, FRoadSegmentId Segment)
+	{
+		const FGuidelineNode* Found = Net.GetGuidelineNode(M2HoldRealised(Net, Segment));
+		return Found ? Found->HoldingPosition : EHoldingPositionKind::None;
+	}
+}
+
 /**
  * THE HOLDING POINT TOOL (key 8) places INTERMEDIATE holding positions and nothing else:
  * a runway-holding position is derived at every taxiway end on a runway and the tool says
@@ -141,11 +167,16 @@ bool FHoldingPointToolTest::RunTest(const FString& Parameters)
 	Tool.OnCancel(Ctx);
 	TestTrue(TEXT("cancel clears the refusal"), Tool.LastRefusal.IsEmpty());
 
-	// 2. A CLICK ON THE TAXIWAY JUNCTION PLACES AN INTERMEDIATE POSITION.
+	// 2. A CLICK ON THE TAXIWAY JUNCTION PLACES AN INTERMEDIATE POSITION - realised at the
+	//    strip edge of the taxiway it joins since 2026-09-29 (taxiway strip stage 4), on a node
+	//    split down the arm, so it is found by the end it names rather than by the clicked
+	//    handle, which the re-derive that placing it needs does not keep.
 	Ctx.Cursor = Net.GetGuidelineNode(Junction)->Position;
 	Tool.OnClick(Ctx);
-	TestTrue(TEXT("click sets an intermediate position at the junction"),
-		M2HoldToolKind(Net, Junction) == EHoldingPositionKind::Intermediate);
+	TestTrue(TEXT("click sets an intermediate position for the junction end"),
+		M2HoldRealisedKind(*Actor->Network, Tx) == EHoldingPositionKind::Intermediate);
+	TestTrue(TEXT("realised at once, not on the next unrelated edit: down the arm, clear of the joined strip"),
+		M2HoldRealised(*Actor->Network, Tx) != TestGraph::NodeFor(*Actor->Network, Tx, false));
 	TestTrue(TEXT("with no refusal"), Tool.LastRefusal.IsEmpty());
 
 	{
@@ -163,7 +194,9 @@ bool FHoldingPointToolTest::RunTest(const FString& Parameters)
 			FMath::Abs(Sink.LastAlong.Y) > 0.99);
 	}
 
-	// The hover on a set node warns that a click would REMOVE the position.
+	// The hover on a set node warns that a click would REMOVE the position - hovered where
+	// the bar is painted.
+	Ctx.Cursor = Actor->Network->GetGuidelineNode(M2HoldRealised(*Actor->Network, Tx))->Position;
 	{
 		FM2HoldSink Flagged;
 		Tool.BuildPreview(Ctx, Flagged);
@@ -174,18 +207,19 @@ bool FHoldingPointToolTest::RunTest(const FString& Parameters)
 	//    Actor->Network each time rather than through a handle captured before the snapshot.
 	TestTrue(TEXT("undoable"), Actor->Undo());
 	TestTrue(TEXT("undo clears it"),
-		M2HoldToolKind(*Actor->Network, TestGraph::NodeFor(*Actor->Network, Tx, false)) == EHoldingPositionKind::None);
+		M2HoldRealisedKind(*Actor->Network, Tx) == EHoldingPositionKind::None);
 	TestTrue(TEXT("and undo never touched the derived runway end"),
 		M2HoldToolKind(*Actor->Network, TestGraph::NodeFor(*Actor->Network, Tx, true)) == EHoldingPositionKind::Runway);
 	TestTrue(TEXT("redo"), Actor->Redo());
 	TestTrue(TEXT("redo restores it"),
-		M2HoldToolKind(*Actor->Network, TestGraph::NodeFor(*Actor->Network, Tx, false)) == EHoldingPositionKind::Intermediate);
+		M2HoldRealisedKind(*Actor->Network, Tx) == EHoldingPositionKind::Intermediate);
 
-	// 4. A SECOND CLICK CLEARS.
-	Ctx.Cursor = Actor->Network->GetGuidelineNode(TestGraph::NodeFor(*Actor->Network, Tx, false))->Position;
+	// 4. A SECOND CLICK, ON THE BAR, CLEARS.
+	Ctx.Cursor = Actor->Network->GetGuidelineNode(M2HoldRealised(*Actor->Network, Tx))->Position;
 	Tool.OnClick(Ctx);
 	TestTrue(TEXT("second click clears"),
-		M2HoldToolKind(*Actor->Network, TestGraph::NodeFor(*Actor->Network, Tx, false)) == EHoldingPositionKind::None);
+		M2HoldRealisedKind(*Actor->Network, Tx) == EHoldingPositionKind::None);
+	TestEqual(TEXT("and takes the mark with it"), Actor->Network->GetHoldingPositionMarks().Num(), 0);
 
 	return true;
 }

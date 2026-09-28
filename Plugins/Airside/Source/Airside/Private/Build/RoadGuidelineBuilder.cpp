@@ -394,11 +394,45 @@ namespace
 	}
 
 	/**
+	 * How far down Arm, from the junction NodeId, the strip edge of the taxiways in Joined lies:
+	 * (half width + strip) / sin(angle), the worst over them - ExitGeometry::TaxiwayEndFloor's own
+	 * shape, with the strip edge standing in for the runway's half width (its first two
+	 * arguments are only ever summed, and its ten-degree floor is the same guard against a line
+	 * running alongside). THE ONE RULE for both holds that sit at a strip edge: a road's stop
+	 * line at a crossing and a taxiway's intermediate hold where it joins another.
+	 *
+	 * IgnoreBelow skips a joined arm within that acute angle of Arm's own line - the stem's own
+	 * continuation through a four-way, which is the same taxiway, not one being joined.
+	 */
+	double StripEdgeAlong(const URoadNetwork& Network, FRoadNodeId NodeId, FRoadSegmentId Arm,
+		TConstArrayView<FRoadSegmentId> Joined, double IgnoreBelow = 0.0)
+	{
+		const FVector2D Axis = Network.GetOutgoingTangent(Arm, NodeId);
+		double Wanted = 0.0;
+		for (const FRoadSegmentId& StripSeg : Joined)
+		{
+			if (StripSeg == Arm || !TaxiwayStrip::HasStrip(Network, StripSeg))
+			{
+				continue;
+			}
+			const FRoadSegment* Taxiway = Network.GetSegment(StripSeg);
+			const URoadProfile* TaxiwayProfile = Taxiway ? Network.ProfileFor(*Taxiway) : nullptr;
+			const double Edge = (TaxiwayProfile ? TaxiwayProfile->GetTotalWidth() * 0.5 : 0.0)
+				+ TaxiwayStrip::StripWidthOf(Network, StripSeg);
+			const double Angle = RoadGeom::AngleBetween(Axis, Network.GetOutgoingTangent(StripSeg, NodeId));
+			if (FMath::Min(Angle, UE_DOUBLE_PI - Angle) < IgnoreBelow)
+			{
+				continue;
+			}
+			Wanted = FMath::Max(Wanted, ExitGeometry::TaxiwayEndFloor(Edge, 0.0, Angle));
+		}
+		return Wanted;
+	}
+
+	/**
 	 * ROAD STOP LINES AT THE STRIP EDGE (taxiway strip spec 2026-09-28, "Holds sit at the strip
 	 * edge"; stage 4). At a node where a road meets a taxiway that has a strip, every road arm's
-	 * lanes end where the road leaves the strip: (half width + strip) / sin(angle) from the node,
-	 * the worst over the taxiway arms there - ExitGeometry::TaxiwayEndFloor's own shape, with the
-	 * strip standing in for the runway's half width. A road waits clear of a passing wing, and
+	 * lanes end where the road leaves the strip (StripEdgeAlong). A road waits clear of a passing wing, and
 	 * the road-to-road turns re-attach there, so the road's through-path spans the whole strip.
 	 *
 	 * CLAMPED TO THE ARM'S SHARE (ExitGeometry::ArmShare, the runway exits' own clamp, reused and
@@ -450,20 +484,7 @@ namespace
 			for (const FRoadSegmentId& RoadSeg : RoadArms)
 			{
 				const FRoadSegment* Road = Network.GetSegment(RoadSeg);
-				const FVector2D RoadAxis = Network.GetOutgoingTangent(RoadSeg, NodeId);
-				double Wanted = 0.0;
-				for (const FRoadSegmentId& StripSeg : StripArms)
-				{
-					const FRoadSegment* Taxiway = Network.GetSegment(StripSeg);
-					const URoadProfile* TaxiwayProfile = Taxiway ? Network.ProfileFor(*Taxiway) : nullptr;
-					const double Edge = (TaxiwayProfile ? TaxiwayProfile->GetTotalWidth() * 0.5 : 0.0)
-						+ TaxiwayStrip::StripWidthOf(Network, StripSeg);
-					const double Angle = RoadGeom::AngleBetween(RoadAxis, Network.GetOutgoingTangent(StripSeg, NodeId));
-					// THE RUNWAY FLOOR'S FORMULA with the strip edge as the thing to clear: its
-					// first two arguments are only ever summed, and its ten-degree floor is the
-					// same guard against a road running alongside the taxiway.
-					Wanted = FMath::Max(Wanted, ExitGeometry::TaxiwayEndFloor(Edge, 0.0, Angle));
-				}
+				const double Wanted = StripEdgeAlong(Network, NodeId, RoadSeg, StripArms);
 				const FRoadNode* Far = Network.GetNode(Road->A == NodeId ? Road->B : Road->A);
 				const double ArmLength = Far ? FVector2D::Distance(Far->Position, Node->Position) : 0.0;
 				const double Share = ExitGeometry::ArmShare * ArmLength;
@@ -1480,6 +1501,85 @@ namespace
 	}
 
 	/**
+	 * How far down its arm from the junction an intermediate hold marked on End belongs (the
+	 * joined taxiway's strip edge, 0 when no taxiway with a strip is joined), and in OutAlong how
+	 * far down it End already sits. The junction's arms are read off the road node's own
+	 * Incident, so this needs no solve and FRoadGuidelineBuilder::IntermediateHoldMovesOffEnd
+	 * can ask it between rebuilds.
+	 */
+	double IntermediateHoldAlong(const URoadNetwork& Network, const FGuidelineEndRef& At, FGuidelineNodeId End,
+		double& OutAlong)
+	{
+		OutAlong = 0.0;
+		const FRoadSegment* Arm = Network.GetSegment(At.Segment);
+		const FRoadNodeId JunctionId = Arm ? (At.bEndA ? Arm->A : Arm->B) : FRoadNodeId();
+		const FRoadNode* Junction = Network.GetNode(JunctionId);
+		const FGuidelineNode* EndNode = Network.GetGuidelineNode(End);
+		if (Junction == nullptr || EndNode == nullptr)
+		{
+			return 0.0;
+		}
+		const FVector2D Axis = Network.GetOutgoingTangent(At.Segment, JunctionId).GetSafeNormal();
+		OutAlong = FVector2D::DotProduct(EndNode->Position - Junction->Position, Axis);
+		return StripEdgeAlong(Network, JunctionId, At.Segment, Junction->Incident, FMath::DegreesToRadians(30.0));
+	}
+
+	/**
+	 * WHERE AN INTERMEDIATE HOLD IS REALISED (taxiway strip stage 4): at the strip edge of the
+	 * taxiway the marked end JOINS (StripEdgeAlong, the stop line's own rule), by SPLITTING the
+	 * arm's guideline there - not by moving its end, which is where the junction's turns attach,
+	 * so moving it would re-shape every turn at the junction. The mark still names the END
+	 * (FHoldingPositionMark), so a saved mark keeps its meaning; only where it is painted and
+	 * flagged moves. The split node carries the end's Origin: it is derived FOR that end, and the
+	 * Origin is what lets HoldingBarAt face its bar along the arm and SetIntermediateHoldingPosition
+	 * find the mark when the player clicks the bar to clear it.
+	 *
+	 * Returns End itself when the end already sits at or beyond the strip edge, when no taxiway
+	 * with a strip is joined there, or when the arm is too short to split (said, once per build).
+	 * Other taxiway arms within 30 degrees of the arm's own line are its continuation through the
+	 * junction, not a taxiway being joined - the spec's own "within 30 degrees" figure.
+	 */
+	FGuidelineNodeId IntermediateHoldNode(URoadNetwork& Network, const FGuidelineEndRef& At, FGuidelineNodeId End)
+	{
+		double Along = 0.0;
+		const double Wanted = IntermediateHoldAlong(Network, At, End, Along);
+		const FGuidelineNode* EndNode = Network.GetGuidelineNode(End);
+		if (EndNode == nullptr || Wanted <= Along)
+		{
+			return End;
+		}
+
+		// The arm's own derived guideline leaving this end - the edge that carries its identity.
+		FGuidelineEdgeId ArmEdge;
+		bool bFromA = true;
+		for (const FGuidelineEdgeId Id : EndNode->Incident)
+		{
+			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Id);
+			// DERIVED only: splitting a player's hand-edited lane would leave FindSparedEdge two
+			// halves to choose from on the next rebuild.
+			if (Edge != nullptr && Edge->bDerived && Edge->DerivedFrom == At.Segment && Edge->DerivedGuidelineIndex == At.GuidelineIndex)
+			{
+				ArmEdge = Id;
+				bFromA = Edge->A == End;
+				break;
+			}
+		}
+		FGuidelineEdgeId Rest;
+		const FGuidelineNodeId Split = ArmEdge.IsSet()
+			? SplitFromEnd(Network, ArmEdge, bFromA, Wanted - Along, Rest) : FGuidelineNodeId();
+		if (!Split.IsSet())
+		{
+			UE_LOG(LogAirside, Warning,
+				TEXT("Intermediate hold kept at the junction: arm too short. Taxiway segment %d would put it %.0f uu ")
+				TEXT("from the junction, at the joined taxiway's strip edge; it stays at %.0f, inside the strip."),
+				At.Segment.Index, Wanted, Along);
+			return End;
+		}
+		Network.SetGuidelineNodeOrigin(Split, At);
+		return Split;
+	}
+
+	/**
 	 * --- Re-apply holding-position marks ---
 	 *
 	 * The flag lives on a node and every derived node above is FRESH, so a bar the player
@@ -1618,11 +1718,13 @@ namespace
 			const FGuidelineNode* Node = Network.GetGuidelineNode(*Found);
 			// A mark on an end that has since become a runway end (or a road stop line) is
 			// out-ranked by the derivation: the junction decides, and the stale mark is harmless.
-			if (Node != nullptr && Node->HoldingPosition != EHoldingPositionKind::Runway
-				&& Node->HoldingPosition != EHoldingPositionKind::TaxiwayCrossing)
+			if (Node == nullptr || Node->HoldingPosition == EHoldingPositionKind::Runway
+				|| Node->HoldingPosition == EHoldingPositionKind::TaxiwayCrossing)
 			{
-				Network.SetGuidelineNodeHoldingPosition(*Found, EHoldingPositionKind::Intermediate, FRoadSegmentId());
+				continue;
 			}
+			Network.SetGuidelineNodeHoldingPosition(IntermediateHoldNode(Network, Mark.At, *Found),
+				EHoldingPositionKind::Intermediate, FRoadSegmentId());
 		}
 	}
 }
@@ -2175,6 +2277,17 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 	// LAST, after every mutation above: the graph now matches the road as of this revision, and
 	// the planners may search it again - see URoadNetwork::AreGuidelinesBehindRoad.
 	Network.MarkGuidelinesDerived();
+}
+
+bool FRoadGuidelineBuilder::IntermediateHoldMovesOffEnd(const URoadNetwork& Network, FGuidelineNodeId End)
+{
+	const FGuidelineNode* Node = Network.GetGuidelineNode(End);
+	if (Node == nullptr || !Node->Origin.IsSet())
+	{
+		return false;
+	}
+	double Along = 0.0;
+	return IntermediateHoldAlong(Network, Node->Origin, End, Along) > Along;
 }
 
 void FRoadGuidelineBuilder::MeasureSplitHalf(URoadNetwork& Network, FGuidelineEdgeId Half,

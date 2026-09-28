@@ -68,4 +68,14 @@ struct AIRSIDE_API FRoadGuidelineBuilder
 	 */
 	static void MeasureSplitHalf(URoadNetwork& Network, FGuidelineEdgeId Half,
 		const FRoadSolveResult& Solved, FRoadNodeId JunctionNode);
+
+	/**
+	 * Whether an intermediate hold marked on End is realised AWAY from it - at the strip edge of
+	 * the taxiway End's arm joins, further down the arm (taxiway strip stage 4) - so that placing
+	 * one reshapes the graph (Build splits the arm there) and needs a re-derive, not a repaint.
+	 * URoadEditFacade::SetIntermediateHoldingPosition asks, to pick its EChangeKind: without it
+	 * the bar was painted where the player clicked and jumped to the strip edge on the next,
+	 * unrelated, edit. The same rule Build applies, not a copy of it.
+	 */
+	static bool IntermediateHoldMovesOffEnd(const URoadNetwork& Network, FGuidelineNodeId End);
 };
