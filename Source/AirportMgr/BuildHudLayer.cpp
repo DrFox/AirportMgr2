@@ -9,6 +9,7 @@
 #include "OfferInboxWidget.h"
 #include "RoadBuildLog.h"
 #include "ToastStackWidget.h"
+#include "UI/UiLayoutStore.h"
 #include "UI/UiWindowHost.h"
 
 template<class T>
@@ -39,6 +40,9 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 	if (WindowHost != nullptr)
 	{
 		WindowHost->AddToViewport(1);
+		// THE PLAYER'S FILE, here and only here - every test's host has none (IUiLayoutStore's
+		// comment). ENFORCED BY: Check-Architecture rule 29 (layout-store-wired).
+		WindowHost->SetLayoutStore(MakeShared<FUserSettingsLayoutStore>());
 	}
 	// INDEX_NONE: not added to the viewport - WireWindows hands each to the window host.
 	Inspector = CreateConfiguredWidget<UInspectorWidget>(Owner, InspectorClass, INDEX_NONE,

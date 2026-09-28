@@ -1376,6 +1376,19 @@ Get-ChildItem -Path $gameSource -Recurse -Include *.cpp, *.h |
     }
 $ranRules.Add('button-looks-in-ui')
 
+# --- 29. THE GAME'S WINDOW HOST REMEMBERS THE LAYOUT ------------------------------------------
+# UUiWindowHost::SetLayoutStore is the seam a window's placement is remembered through, and a host
+# never handed a store remembers nothing - which is every test's host, deliberately, so the
+# player's ini cannot steer the suite. So nothing but this rule sees the HUD stop wiring it:
+# CreateAll needs a local player the headless suite does not have (UI library step 3, 2026-09-28).
+$hudLayer = Join-Path $Root 'Source\AirportMgr\BuildHudLayer.cpp'
+if (-not (Test-Path $hudLayer)) {
+    $failures.Add("layout-store-wired: $hudLayer is named by rule 29 but does not exist - update the rule")
+} elseif (-not (Select-String -Path $hudLayer -Pattern 'SetLayoutStore\(MakeShared<FUserSettingsLayoutStore>' -Quiet)) {
+    $failures.Add("layout-store-wired: $hudLayer no longer hands the window host an FUserSettingsLayoutStore - the player's window layout would be forgotten every launch")
+}
+$ranRules.Add('layout-store-wired')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

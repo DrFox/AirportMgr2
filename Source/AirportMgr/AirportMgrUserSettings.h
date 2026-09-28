@@ -12,7 +12,7 @@
  *
  * ONE FIELD FOR NOW - WindowLayout. The spec's other five (UI scale, camera speeds, drive side,
  * grid snap default) arrive in step 4 with the Settings control that edits each and the code that
- * reads it: a config field nothing reads is the declared-never-consumed bug this codebase keeps
+ * reads it: a config field no code reads is the declared-never-consumed bug this codebase keeps
  * shipping (CLAUDE.md, "Check where a list is CONSUMED").
  */
 UCLASS(config = GameUserSettings)
