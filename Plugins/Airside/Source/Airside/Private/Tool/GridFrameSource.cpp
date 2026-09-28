@@ -79,8 +79,20 @@ namespace GridFrameSource
 		FVector2D Direction = FVector2D::ZeroVector;
 		EGridFrameSource Source = EGridFrameSource::Held;
 
+		// THE ROAD THE GESTURE ATTACHES TO, FIRST - above any winner (review, 2026-09-28). During a
+		// stand's depth drag a runway's "square to" can take the angular slot, and a grid phased
+		// from the runway put the back edge x.5 m off the stand's own taxiway: what the plot is
+		// built ON outranks what it happens to line up with. Only the plot tools name a line, so
+		// for every other tool the winner still leads.
+		if (In.bToolLine && !In.ToolDirection.IsNearlyZero())
+		{
+			Through = In.ToolThrough;
+			Direction = In.ToolDirection;
+			Source = EGridFrameSource::ToolLine;
+		}
+
 		// WINNERS IN THEIR OWN ORDER - at most two, one per fit; the first that is about a thing.
-		if (In.Guide != nullptr && In.Guide->bActive)
+		if (Source == EGridFrameSource::Held && In.Guide != nullptr && In.Guide->bActive)
 		{
 			for (const SnapGuide::FCandidate& Winner : In.Guide->Winners)
 			{
@@ -90,12 +102,6 @@ namespace GridFrameSource
 					break;
 				}
 			}
-		}
-		if (Source == EGridFrameSource::Held && In.bToolLine && !In.ToolDirection.IsNearlyZero())
-		{
-			Through = In.ToolThrough;
-			Direction = In.ToolDirection;
-			Source = EGridFrameSource::ToolLine;
 		}
 		if (Source == EGridFrameSource::Held && In.bAnchor && !In.AnchorReference.IsNearlyZero())
 		{

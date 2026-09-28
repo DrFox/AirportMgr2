@@ -60,7 +60,9 @@ revisable, with the reason recorded - this paragraph is the reason).
 
 ### 2. What sets the frame (Follow)
 
-First match wins, resolved once per frame in `FBuildSession::MakeContext` after the guide chain:
+First match wins, resolved once per frame in `FBuildSession::MakeContext` after the guide chain.
+REVISED IN REVIEW (2026-09-28): the tool's grid line (2 below) ranks FIRST, above winners - a
+runway's "square to" winning during a stand's depth drag phased the grid off the runway:
 
 1. **A guide winner** whose relation is `Parallel` (the along and square-to candidates, not the diagonals), `Collinear` or `MatchingGap` and whose reference is
    a road, runway or stand: `Along(Winner.Through, Winner.Direction)`. With two such winners, the
@@ -106,7 +108,9 @@ First match wins, resolved once per frame in `FBuildSession::MakeContext` after 
 - `snap.gridorient` action, `EActionSection::Snap`, beside `snap.grid`; caption
   "Grid: follow" / "Grid: world". Key H - plan checks H is unbound in BOTH drivers
   (`ARoadBuildController`, `URoadBuildEdMode`) and in the registry.
-- `ARoadBuildController::ToggleGridOrientation`; editor mode gets the same through the registry.
+- `ARoadBuildController::ToggleGridOrientation`. EDITOR MODE: no button or key - it reads
+  `GuideSources.GridOrientation` from the actor's Details panel, as it already does `GridStep`; H is
+  the level editor's Hide Selected (ruling, review 2026-09-28).
   Logs `LogRoadBuild: Grid orientation -> follow|world`.
 - The registry's NO KEYS comment gains the exception, dated, with this spec's name.
 
@@ -114,7 +118,7 @@ First match wins, resolved once per frame in `FBuildSession::MakeContext` after 
 
 - `GridOverlay` draws `PiecesInDisc(Context.GridFrame, ...)`: the disc turns with the grid, which
   is how the player sees what it followed.
-- `LogAirside: Grid frame -> <deg> deg through (<x>, <y>) from <winner|anchor|roadsnap|held|world>`
+- `LogAirside: Grid frame -> <deg> deg through (<x>, <y>) at <n> m from <tool line|winner|anchor|road snap|held|world>`
   once per CHANGE of frame, not per tick.
 
 ## Tests
@@ -141,13 +145,13 @@ First match wins, resolved once per frame in `FBuildSession::MakeContext` after 
   - World: every existing stand/plot grid test unchanged.
 - Session seam: spy sink sees overlay pieces rotated with Follow, axis-aligned with World - fails if
   the session never passes the frame.
-- Registry: `snap.gridorient` present in Snap; H bound in both drivers, checked by name.
+- Registry: `snap.gridorient` present in Snap; H bound in the PIE driver (from the registry), checked by name.
 - Tunables: changing `GridOrientation` invalidates the frame cache.
 
 ## Verification in PIE
 
 Grid 5 m, Follow, stand tool on a diagonal taxiway: overlay disc turns to the taxiway;
-`Grid frame -> <deg> deg ... from anchor` in `Saved/Logs/AirportMgr.log`; press H, disc goes
+`Grid frame -> 30.0 deg ... from tool line` in `Saved/Logs/AirportMgr.log`; press H, disc goes
 axis-aligned and `Grid orientation -> world` logs. `python Tools/Mcp.py shot out.png editor`.
 
 ## Out of scope

@@ -680,7 +680,8 @@ struct AIRSIDE_API IBuildTool
 
 	/**
 	 * The line this gesture ATTACHES TO, for a Follow grid to lie along - grid-follows-snap
-	 * design section 2, ranked below a guide winner and above the anchor's reference.
+	 * design section 2, ranked FIRST - above a guide winner (review, 2026-09-28; see
+	 * GridFrameSource::Resolve).
 	 *
 	 * ADDED FOR THE PLOT TOOLS: their first two clicks search for a road themselves (see
 	 * PlotGesture::NearestRoad on why not the driver's snap), so neither the road snap nor a guide

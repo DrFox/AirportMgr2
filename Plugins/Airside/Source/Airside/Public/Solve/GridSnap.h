@@ -83,8 +83,8 @@ namespace GridSnap
 	 * complaint turned); an origin at the segment's own end (a phase per segment - that report).
 	 *
 	 * AXIS FOLDED INTO [0, 90) DEGREES. A square grid is the same after a quarter turn, so a road
-	 * drawn A->B and one drawn B->A, or at 30 and at 120 degrees, must give ONE frame - and
-	 * SameLines compares them exactly, which only an exact fold makes possible.
+	 * drawn A->B and one drawn B->A, or at 30 and at 120 degrees, must give ONE axis - and an
+	 * exact fold gives it the same bits. The origin is another matter (see SameGrid).
 	 */
 	struct AIRSIDE_API FGridFrame
 	{
@@ -115,6 +115,18 @@ namespace GridSnap
 
 		/** Exactly the same lines: origin, axis and step compared bitwise. */
 		bool SameLines(const FGridFrame& Other) const;
+
+		/**
+		 * The same grid AS A PLAYER SEES IT: equal step, axes within 1e-9, and each origin on the
+		 * other's lines within 1e-3 uu. What anything comparing frames across a frame boundary
+		 * uses (the change log, the readout cache).
+		 *
+		 * NOT SameLines, because one road reached two ways is not one set of bits: the foot of
+		 * the origin is computed from whichever point names the line, and differed in its last
+		 * bits on 679 of 1000 random segments named A->B and then B->A (review, 2026-09-28).
+		 * ENFORCED BY: Airside.Tool.GridFrame.SameRoadEitherWayIsOneGrid
+		 */
+		bool SameGrid(const FGridFrame& Other) const;
 
 		/** The folded axis's angle from +X, [0, 90). For the log line, not for arithmetic. */
 		double AxisDegrees() const;

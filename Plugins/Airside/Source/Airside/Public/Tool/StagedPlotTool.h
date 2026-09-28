@@ -66,8 +66,9 @@ public:
 	/**
 	 * THE ROAD THIS PLOT GOES ON: the one AnchorAt would take while idle, the pinned one after -
 	 * its centreline, so a Follow grid lies along the taxiway a stand opens off (grid-follows-snap
-	 * design; see IBuildTool::DescribeGridLine). EVERY STAGE, the depth drag included: a guide
-	 * winner still outranks it there, and the neighbour's back edge is one.
+	 * design; see IBuildTool::DescribeGridLine). EVERY STAGE, the depth drag included, and above
+	 * any guide winner (GridFrameSource::Resolve): the neighbour's back edge sets the depth outright
+	 * (StandPlotGuide::BackEdgeGuide), so it never needed the grid turned to it.
 	 */
 	virtual bool DescribeGridLine(const URoadNetwork* Network, const FVector2D& Cursor,
 		FVector2D& OutThrough, FVector2D& OutDirection) const override;

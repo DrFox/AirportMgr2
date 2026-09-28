@@ -7,7 +7,8 @@
 
 /**
  * What the grid followed this frame - the log line's "from <source>", and what a test asserts.
- * Declaration order is the precedence Resolve applies, World aside.
+ * Precedence (Resolve): ToolLine, Winner, Anchor, RoadSnap, Held - ToolLine above Winner since
+ * the 2026-09-28 review; declaration order is kept, as nothing reads it as a rank.
  */
 enum class EGridFrameSource : uint8
 {
@@ -60,9 +61,10 @@ struct FGridFrameInputs
 /**
  * Which grid frame applies - grid-follows-snap design section 2.
  *
- * FIRST MATCH WINS, most specific first: a guide the point is already on names the thing the
- * player is lining up with; the tool's own line names what the gesture attaches to; the anchor's
- * reference names the edge it grew from; the road snap is only where the cursor happens to be.
+ * FIRST MATCH WINS, most specific first: the tool's own line names what the gesture is built ON
+ * (a stand's taxiway) and outranks everything - review, 2026-09-28, see Resolve; a guide the
+ * point is already on names the thing the player is lining up with; the anchor's reference names
+ * the edge it grew from; the road snap is only where the cursor happens to be.
  * Nothing: the held frame, so the grid stays put as the cursor leaves a road (ruling A).
  */
 namespace GridFrameSource

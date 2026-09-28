@@ -232,4 +232,59 @@ bool FGridFrameOrientationSettingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE ROAD A PLOT ATTACHES TO OUTRANKS WHAT IT LINES UP WITH (review, 2026-09-28): during a
+ * stand's depth drag a runway's "square to" can win the angular slot, and a grid phased from the
+ * runway puts the back edge x.5 m off the stand's own taxiway.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGridFrameToolLineBeatsWinnerTest,
+	"Airside.Tool.GridFrame.ToolLineBeatsWinner",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGridFrameToolLineBeatsWinnerTest::RunTest(const FString& Parameters)
+{
+	using namespace GridFrameSourceFixture;
+	SnapGuide::FCandidate Runway = Parallel(SnapGuide::ELabelKind::SquareTo, 90.0, SnapGuide::EReference::Runway);
+	Runway.ReferenceAt = RoadAt + FVector2D(-Deg(30.0).Y, Deg(30.0).X) * 18250.0;
+	const SnapGuide::FResult Guide = WithWinner(Runway);
+	FGridFrameInputs In = Inputs();
+	In.Guide = &Guide;
+	In.bToolLine = true;
+	In.ToolThrough = RoadAt;
+	In.ToolDirection = Deg(30.0);
+	GridSnap::FGridFrame Held, Out;
+	TestTrue(TEXT("the tool's road is the source"), GridFrameSource::Resolve(In, Held, Out) == EGridFrameSource::ToolLine);
+	TestTrue(TEXT("phased from the taxiway, not the runway 182.5 m over"), Out.SameLines(RoadFrame()));
+	return true;
+}
+
+/**
+ * ONE ROAD, TWO WAYS OF NAMING IT - A to B, and B to A - is one grid for everything that
+ * compares frames (the log line, the readout cache), even where the foot differs by ulps.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGridFrameSameRoadSameGridTest,
+	"Airside.Tool.GridFrame.SameRoadEitherWayIsOneGrid",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGridFrameSameRoadSameGridTest::RunTest(const FString& Parameters)
+{
+	using namespace GridFrameSourceFixture;
+	FRandomStream Random(20260928);
+	int32 Differ = 0;
+	for (int32 I = 0; I < 1000; ++I)
+	{
+		const FVector2D A(Random.FRandRange(-1e5, 1e5), Random.FRandRange(-1e5, 1e5));
+		const FVector2D B(Random.FRandRange(-1e5, 1e5), Random.FRandRange(-1e5, 1e5));
+		const GridSnap::FGridFrame Forward = GridSnap::FGridFrame::Along(A, B - A, 500.0);
+		const GridSnap::FGridFrame Back = GridSnap::FGridFrame::Along(B, A - B, 500.0);
+		Differ += Forward.SameGrid(Back) ? 0 : 1;
+	}
+	TestEqual(TEXT("every road is one grid whichever end names it"), Differ, 0);
+	TestFalse(TEXT("control: a road 1 m over is another grid"),
+		GridSnap::FGridFrame::Along(RoadAt, Deg(30.0), 500.0).SameGrid(GridSnap::FGridFrame::Along(RoadAt + FVector2D(0.0, 100.0), Deg(30.0), 500.0)));
+	return true;
+}
+
 #endif

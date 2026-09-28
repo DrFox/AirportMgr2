@@ -524,7 +524,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 		const EGridFrameSource Source = GridFrameSource::Resolve(Inputs, HeldGridFrame, Frame);
 
 		// ONCE PER CHANGE: what the grid turned to, and why - the line a PIE repro is read by.
-		if (!Frame.SameLines(LoggedGridFrame))
+		if (!Frame.SameGrid(LoggedGridFrame))
 		{
 			LoggedGridFrame = Frame;
 			UE_LOG(LogAirside, Log, TEXT("Grid frame -> %.1f deg through (%.0f, %.0f) at %.0f m from %s"),

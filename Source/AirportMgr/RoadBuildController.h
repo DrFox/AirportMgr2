@@ -770,7 +770,7 @@ private:
 				&& bGuideActive == Other.bGuideActive
 				&& GuidePoint == Other.GuidePoint
 				&& EditHandles == Other.EditHandles
-				&& Grid.SameLines(Other.Grid);
+				&& Grid.SameGrid(Other.Grid);
 		}
 	};
 

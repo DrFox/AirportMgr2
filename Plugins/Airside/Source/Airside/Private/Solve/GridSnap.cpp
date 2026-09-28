@@ -224,6 +224,32 @@ namespace GridSnap
 		return Origin == Other.Origin && Axis == Other.Axis && StepUu == Other.StepUu;
 	}
 
+	bool FGridFrame::SameGrid(const FGridFrame& Other) const
+	{
+		if (StepUu != Other.StepUu)
+		{
+			return false;
+		}
+		if (!IsOn())
+		{
+			return true;
+		}
+		constexpr double AxisTolerance = 1e-9;
+		constexpr double LineToleranceUu = 1e-3;
+		if (FMath::Abs(Axis.X - Other.Axis.X) > AxisTolerance || FMath::Abs(Axis.Y - Other.Axis.Y) > AxisTolerance)
+		{
+			return false;
+		}
+		// THE OTHER ORIGIN ON THIS FRAME'S LINES - both families - is the same grid: every line of
+		// one passes through a grid point of the other.
+		const FVector2D L = ToLocal(*this, Other.Origin);
+		auto OnLine = [this](double V)
+		{
+			return FMath::Abs(V - FMath::RoundToDouble(V / StepUu) * StepUu) <= LineToleranceUu;
+		};
+		return OnLine(L.X) && OnLine(L.Y);
+	}
+
 	double FGridFrame::AxisDegrees() const
 	{
 		return FMath::RadiansToDegrees(FMath::Atan2(Axis.Y, Axis.X));
