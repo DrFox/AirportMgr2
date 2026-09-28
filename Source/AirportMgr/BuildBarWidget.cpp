@@ -23,6 +23,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "RoadBuildController.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogBuildBar, Log, All);
@@ -349,36 +350,25 @@ void UBuildBarWidget::BuildButtons(const UUIStyle* Style)
 		UBuildBarEntry* Entry = NewObject<UBuildBarEntry>(this);
 		Entry->ActionIndex = Index;
 		Entry->Owner = this;
-		Entry->Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
-		Entry->Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-
-		UVerticalBox* Stack = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+		Entry->Button = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
 
 		// The time controls carry no texture, deliberately: slower, pause and faster are
 		// geometric glyphs that render exactly as text. IconFor returns null for them and
 		// AirportMgr.UI.EveryActionResolvesAnIcon exempts them BY SECTION, so a fourth time
 		// control needs neither an icon nor that test edited.
-		if (UTexture2D* Icon = Style->IconFor(Action.Id))
+		if (UTexture2D* IconTexture = Style->IconFor(Action.Id))
 		{
-			UImage* Image = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
-			Image->SetBrushFromTexture(Icon, false);
-			Image->SetDesiredSizeOverride(FVector2D(Style->ButtonSize * 0.5f));
-			// The glyph is white with a transparent ground, so the tint IS the icon colour.
-			Image->SetColorAndOpacity(Style->Ink);
-			Entry->Icon = Image;
-			Stack->AddChildToVerticalBox(Image)->SetHorizontalAlignment(HAlign_Center);
+			// The glyph is white with a transparent ground, so the button's ink IS the icon colour.
+			Entry->Button->SetIcon(IconTexture, Style->ButtonSize * 0.5f);
 			++WithIcon;
 		}
 
 		// THE LABEL IS NOW THE LABEL. The key used to be appended here - "Taxiway (1)" -
 		// which is most of what made the bar read as a debug menu. It moves to the tooltip,
 		// where it still teaches the shortcut without shouting it on every button forever.
-		Entry->Label->SetText(Action.Label);
-		Style->ApplyText(*Entry->Label, EUITextRole::Label, Style->Ink);
-		Stack->AddChildToVerticalBox(Entry->Label)->SetHorizontalAlignment(HAlign_Center);
-
-		Entry->Button->SetContent(Stack);
-		Entry->Button->SetBackgroundColor(Style->Control);
+		Entry->Button->SetLabel(Action.Label);
+		// Stacked, and UButton's own padding: a tool button is sized by its icon, not ButtonPadding.
+		Entry->Button->Build(*Style, EUiButtonKind::Secondary, EUiButtonLayout::Stacked, false);
 		Entry->Button->OnClicked.AddDynamic(Entry, &UBuildBarEntry::HandleClicked);
 
 		if (Action.Key.IsValid())
@@ -470,23 +460,15 @@ void UBuildBarWidget::RefreshStateFor(ARoadBuildController& C)
 		const FBuildAction& Action = Actions[Entry->ActionIndex];
 		const bool bEnabled = Action.IsEnabled(Ctx);
 		const bool bActive = bEnabled && Action.IsActive(Ctx);
-		Entry->Button->SetIsEnabled(bEnabled);
-
 		// ACCENT MEANS ARMED AND NOTHING ELSE. If a second thing takes it, the player loses
 		// the one glance that says which tool is live - which is the whole job the colour has.
-		Entry->Button->SetBackgroundColor(bActive ? Style->Accent : Style->Control);
-
-		// Icon and label follow the button, not the other way round: on the accent the
-		// Ink glyph would sit dark-on-yellow, so the armed button draws its contents in InkOnAccent.
-		const FLinearColor Content = bActive ? Style->InkOnAccent : (bEnabled ? Style->Ink : Style->InkMuted);
-		Entry->Label->SetColorAndOpacity(FSlateColor(Content));
+		// The rule (and the icon and label following it in InkOnAccent) lives in
+		// UUiButton::LookFor now, and SetState is a no-op when nothing changed, so ~70 calls a
+		// tick cost nothing.
+		Entry->Button->SetState(bEnabled, bActive);
 		if (Action.DynamicLabel)
 		{
-			Entry->Label->SetText(Action.DynamicLabel(Ctx));
-		}
-		if (Entry->Icon != nullptr)
-		{
-			Entry->Icon->SetColorAndOpacity(Content);
+			Entry->Button->SetLabel(Action.DynamicLabel(Ctx));
 		}
 	}
 
@@ -658,6 +640,15 @@ float UBuildBarWidget::BarReservedHeightForTest(float AvailableWidth) const
 		return static_cast<float>(Slate->GetDesiredSize().Y);
 	}
 	return BarSlot->GetOffsets().Bottom;
+}
+
+bool UBuildBarWidget::AllButtonsAreUiButtonsForTest() const
+{
+	for (const UBuildBarEntry* Entry : Entries)
+	{
+		if (Entry == nullptr || Entry->Button == nullptr || Entry->Button->GetLabel() == nullptr) { return false; }
+	}
+	return Entries.Num() > 0;
 }
 
 bool UBuildBarWidget::HasRootWidgetForTest() const

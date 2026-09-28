@@ -14,6 +14,7 @@ class UTextBlock;
 class UBuildBarWidget;
 class ARoadBuildController;
 class UUIStyle;
+class UUiButton;
 
 /**
  * One button on the bar and the action it runs. A UObject because UButton::OnClicked is a
@@ -27,10 +28,9 @@ class UBuildBarEntry : public UObject
 
 public:
 	UPROPERTY() int32 ActionIndex = INDEX_NONE;
-	UPROPERTY() TObjectPtr<UButton> Button;
-	UPROPERTY() TObjectPtr<UTextBlock> Label;
-	/** Null for the time controls, which are glyphs and carry no texture. */
-	UPROPERTY() TObjectPtr<UImage> Icon;
+	/** Label and icon live inside it (GetLabel/GetIcon); the icon is null for the time
+	 *  controls, which are glyphs and carry no texture. */
+	UPROPERTY() TObjectPtr<UUiButton> Button;
 	UPROPERTY() TWeakObjectPtr<UBuildBarWidget> Owner;
 
 	UFUNCTION() void HandleClicked();
@@ -49,8 +49,7 @@ class UBuildBarVariantEntry : public UObject
 public:
 	UPROPERTY() int32 Axis = INDEX_NONE;
 	UPROPERTY() int32 Option = INDEX_NONE;
-	UPROPERTY() TObjectPtr<UButton> Button;
-	UPROPERTY() TObjectPtr<UTextBlock> Label;
+	UPROPERTY() TObjectPtr<UUiButton> Button;
 	UPROPERTY() TWeakObjectPtr<UBuildBarWidget> Owner;
 
 	UFUNCTION() void HandleClicked();
@@ -174,6 +173,8 @@ public:
 
 	int32 ButtonCountForTest(EActionSection Section) const;
 	bool HasRootWidgetForTest() const;
+	/** Every tool entry is a UUiButton with a label - see AirportMgr.Actions.BarToolsAreUiButtons. */
+	bool AllButtonsAreUiButtonsForTest() const;
 
 	/** Runs NativeTick with a throwaway geometry - the same precedent as
 	 *  ARoadBuildController::PlayerTickForTest - so a headless test can prove the per-tick

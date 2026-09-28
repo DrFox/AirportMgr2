@@ -14,6 +14,7 @@
 #include "Components/VerticalBox.h"
 #include "RoadBuildController.h"
 #include "RoadBuildLog.h"
+#include "UI/UiButton.h"
 #include "UIStyle.h"
 
 void UBuildBarVariantEntry::HandleClicked()
@@ -90,10 +91,7 @@ void UBuildBarWidget::RefreshVariantsFor(ARoadBuildController& C)
 		const FToolVariantAxis& Axis = Axes[Entry->Axis];
 		const bool bEnabled = Axis.Options[Entry->Option].bEnabled;
 		const bool bLit = bEnabled && Axis.Current == Entry->Option;
-		Entry->Button->SetIsEnabled(bEnabled);
-		Entry->Button->SetBackgroundColor(bLit ? Style->Accent : Style->Control);
-		const FLinearColor Content = bLit ? Style->InkOnAccent : (bEnabled ? Style->Ink : Style->InkMuted);
-		Entry->Label->SetColorAndOpacity(FSlateColor(Content));
+		Entry->Button->SetState(bEnabled, bLit);
 	}
 }
 
@@ -125,18 +123,16 @@ void UBuildBarWidget::RebuildVariants(const TArray<FToolVariantAxis>& Axes)
 			Entry->Axis = AxisIndex;
 			Entry->Option = OptionIndex;
 			Entry->Owner = this;
-			Entry->Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
-			Entry->Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			Entry->Button = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
 
-			// LABEL, AND THE DETAIL UNDER IT WHEN THERE IS ONE - one text block, two lines,
-			// because the detail is part of what the option IS, not a caption beside it.
-			Entry->Label->SetText(Option.Detail.IsEmpty() ? Option.Label
-				: FText::Format(INVTEXT("{0}\n{1}"), Option.Label, Option.Detail));
-			Style->ApplyText(*Entry->Label, EUITextRole::Label, Style->Ink);
-			Entry->Label->SetJustification(ETextJustify::Center);
-
-			Entry->Button->SetContent(Entry->Label);
-			Entry->Button->SetBackgroundColor(Style->Control);
+			// LABEL, AND THE DETAIL UNDER IT WHEN THERE IS ONE - stacked, because the detail is
+			// part of what the option IS, not a caption beside it.
+			Entry->Button->SetLabel(Option.Label);
+			if (!Option.Detail.IsEmpty())
+			{
+				Entry->Button->SetDetail(Option.Detail);
+			}
+			Entry->Button->Build(*Style, EUiButtonKind::Secondary, EUiButtonLayout::Stacked, false);
 			Entry->Button->SetToolTipText(FText::Format(INVTEXT("{0}: {1}"), Axis.Label, Option.Label));
 			Entry->Button->OnClicked.AddDynamic(Entry, &UBuildBarVariantEntry::HandleClicked);
 

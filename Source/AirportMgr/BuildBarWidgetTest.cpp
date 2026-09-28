@@ -324,4 +324,22 @@ bool FVariantRowFollowsToolTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE BAR PAINTS THROUGH UUiButton, so the armed tool is Accent with InkOnAccent and every other
+ * tool Control with Ink - the rule has one home now, and a bar that bypassed it (a raw UButton
+ * slipped back in) would fail here rather than drift quietly.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildBarUsesUiButtonTest, "AirportMgr.Actions.BarToolsAreUiButtons",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildBarUsesUiButtonTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
+	TestTrue(TEXT("every tool button is a UUiButton with a label"), Bar->AllButtonsAreUiButtonsForTest());
+	return true;
+}
+
 #endif
