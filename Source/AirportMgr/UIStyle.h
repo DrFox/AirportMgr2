@@ -4,8 +4,12 @@
 #include "Engine/DataAsset.h"
 #include "Engine/DeveloperSettings.h"
 #include "Fonts/SlateFontInfo.h"
+#include "Styling/SlateBrush.h"
+#include "UObject/StrongObjectPtr.h"
 #include "UIStyle.generated.h"
 
+class UMaterialInstanceDynamic;
+class UMaterialInterface;
 class UTexture2D;
 class UTextBlock;
 
@@ -150,6 +154,17 @@ public:
 	/** Corner rounding of a CONTROL - a button, a row. Smaller than WindowRadius on purpose: the
 	 *  reference kit's 16 px read as a toy (user, 2026-09-28: "not as cutesy rounded"). */
 	UPROPERTY(EditAnywhere, Category = "Metrics") float ControlRadius = 5.0f;
+
+	/**
+	 * The UI material every Primary/Secondary/Danger control fill draws with: rounded corners and
+	 * a vertical shade in one, tinted by the button's background colour - see
+	 * Tools/Python/build_ui_material.py for why it needs no per-widget size. Unset (the CDO, a
+	 * fresh checkout) falls back to a flat FSlateRoundedBoxBrush, so nothing ever draws square.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Metrics") TSoftObjectPtr<UMaterialInterface> ButtonMaterial;
+
+	/** A control's fill brush, WHITE - see ButtonMaterial. Cheap after the first call. */
+	FSlateBrush ControlFill() const;
 	UPROPERTY(EditAnywhere, Category = "Metrics") float SectionPadding = 14.0f;
 
 	/**
@@ -231,6 +246,14 @@ public:
 	 * Layout (wrap width, alignment, visibility) stays at the call site; this only owns type.
 	 */
 	void ApplyText(UTextBlock& TextBlock, EUITextRole Role, FLinearColor Colour) const;
+
+private:
+	/**
+	 * ONE dynamic instance for the whole UI, carrying RadiusPx = ControlRadius. Held by a strong
+	 * pointer, not a UPROPERTY: ControlFill is const (callers hold a const style), and the
+	 * instance is a cache of values this asset already owns, not state worth serialising.
+	 */
+	mutable TStrongObjectPtr<UMaterialInstanceDynamic> ControlFillInstance;
 };
 
 /**

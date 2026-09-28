@@ -1,6 +1,10 @@
 #include "UIStyle.h"
 
+#include "Brushes/SlateRoundedBoxBrush.h"
 #include "Components/TextBlock.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
+#include "UObject/Package.h"
 #include "Engine/Texture2D.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUIStyle, Log, All);
@@ -34,6 +38,31 @@ void UUIStyle::ApplyText(UTextBlock& TextBlock, EUITextRole Role, FLinearColor C
 
 	TextBlock.SetFont(Font);
 	TextBlock.SetColorAndOpacity(FSlateColor(Colour));
+}
+
+FSlateBrush UUIStyle::ControlFill() const
+{
+	if (!ControlFillInstance.IsValid())
+	{
+		if (UMaterialInterface* Material = ButtonMaterial.LoadSynchronous())
+		{
+			// The transient package, not this asset: a MID outered to a saved asset would be
+			// dragged into its package on the next save.
+			UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(Material, GetTransientPackage());
+			Instance->SetScalarParameterValue(TEXT("RadiusPx"), ControlRadius);
+			ControlFillInstance.Reset(Instance);
+		}
+	}
+	if (ControlFillInstance.IsValid())
+	{
+		FSlateBrush Brush;
+		Brush.SetResourceObject(ControlFillInstance.Get());
+		Brush.DrawAs = ESlateBrushDrawType::Image;
+		Brush.ImageSize = FVector2D(32.0, 32.0);
+		Brush.TintColor = FSlateColor(FLinearColor::White);
+		return Brush;
+	}
+	return FSlateRoundedBoxBrush(FLinearColor::White, ControlRadius);
 }
 
 UTexture2D* UUIStyle::IconFor(FName ActionId) const

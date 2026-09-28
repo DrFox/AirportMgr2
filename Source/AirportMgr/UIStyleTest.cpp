@@ -211,4 +211,39 @@ bool FUIStyleContrastTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE FILL IS WHITE, ALWAYS - the caller's SetBackgroundColor is the one place a state colour is
+ * chosen (the rule UOfferInboxWidget::MakeAnswerButton's comment states). A fill that carried
+ * its own colour would multiply with that choice and every button would draw the wrong shade.
+ * And a style with no material (the CDO: a fresh checkout) must still round its corners.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUIStyleControlFillTest,
+	"AirportMgr.UI.ControlFillIsWhiteAndAlwaysRounded",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUIStyleControlFillTest::RunTest(const FString& Parameters)
+{
+	const UUIStyle* Cdo = GetDefault<UUIStyle>();
+	const FSlateBrush Fallback = Cdo->ControlFill();
+	TestEqual(TEXT("no material: a rounded box"), Fallback.DrawAs, ESlateBrushDrawType::RoundedBox);
+	TestTrue(TEXT("no material: corner is ControlRadius"),
+		FMath::IsNearlyEqual(static_cast<float>(Fallback.OutlineSettings.CornerRadii.X), Cdo->ControlRadius));
+	TestEqual(TEXT("no material: tint is white"), Fallback.TintColor.GetSpecifiedColor(), FLinearColor::White);
+
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+	if (Style == Cdo || Style->ButtonMaterial.IsNull())
+	{
+		AddInfo(TEXT("no style asset with a ButtonMaterial configured - material half skipped"));
+		return true;
+	}
+	const FSlateBrush Fill = Style->ControlFill();
+	TestEqual(TEXT("material: drawn as an image"), Fill.DrawAs, ESlateBrushDrawType::Image);
+	TestNotNull(TEXT("material: has a resource"), Fill.GetResourceObject());
+	TestEqual(TEXT("material: tint is white"), Fill.TintColor.GetSpecifiedColor(), FLinearColor::White);
+	TestTrue(TEXT("the SAME instance twice - one cached MID, not one per button"),
+		Style->ControlFill().GetResourceObject() == Fill.GetResourceObject());
+	return true;
+}
+
 #endif

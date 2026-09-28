@@ -90,6 +90,13 @@ def run():
     for prop, hex_string in COLOURS.items():
         style.set_editor_property(prop, srgb(hex_string))
 
+    # The control fill: M_UI_Rounded, authored by build_ui_material.py. See UUIStyle::ButtonMaterial.
+    material = unreal.EditorAssetLibrary.load_asset("/Game/UI/M_UI_Rounded")
+    if material is None:
+        fail("no /Game/UI/M_UI_Rounded - run build_ui_material.py first")
+    else:
+        style.set_editor_property("button_material", material)
+
     # READ THE MANIFEST fetch_ui_icons.py wrote. Deriving the id back from the asset name
     # cannot work: "tool.holding point" sanitises to T_Icon_tool_holding_point, and
     # underscores-to-dots would give "tool.holding.point", which matches no action.
@@ -175,6 +182,11 @@ def run():
         fail("ink read back as %r" % got_ink)
     else:
         say("PASS ink survived the save")
+
+    if reloaded.get_editor_property("button_material") is None:
+        fail("button_material unset after save")
+    else:
+        say("PASS button_material survived the save")
 
     say("ALL VERIFIED")
     say("DONE")
