@@ -716,6 +716,37 @@ bool FTaxiwayStripSegmentJudgeTest::RunTest(const FString&)
 		TestTrue(FString::Printf(TEXT("naming the angle (%s)"), *V.Text), V.Text.Contains(TEXT("15 degrees")));
 	}
 	{
+		// A TAXIWAY IS A CHAIN, NOT A SEGMENT (spec: "meets the TAXIWAY"): a road square at node M
+		// is exempt from the 10 m piece beyond M's neighbour too, which sits well inside the
+		// keep-out of the road's footprint. Exempting only M's own arms refused this.
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Taxi = URoadProfile::MakeTransient(2400.0, 1600.0);
+		const FRoadNodeId W = Net->AddNode({ -10000.0, 0.0 });
+		const FRoadNodeId M = Net->AddNode({ 0.0, 0.0 });
+		const FRoadNodeId P = Net->AddNode({ 1000.0, 0.0 });
+		const FRoadNodeId E = Net->AddNode({ 10000.0, 0.0 });
+		Net->AddStraightSegment(W, M, Taxi);
+		Net->AddStraightSegment(M, P, Taxi);
+		Net->AddStraightSegment(P, E, Taxi);
+		const FVector2D To(0.0, 10000.0);
+		const FStripVerdict V = JudgeSegment(*Net, Shape({ 0.0, 0.0 }, To, Road), false, AtNode(*Net, M), Free(To));
+		TestFalse(FString::Printf(TEXT("a square join is exempt from the whole straight chain (%s)"), *V.Text), V.bRefused);
+
+		// BUT A CHAIN ENDS AT A CORNER: an L-shaped taxiway, and a road square to its west leg
+		// 20 m short of the corner runs alongside the north leg inside its strip.
+		URoadNetwork* L = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadNodeId LW = L->AddNode({ -10000.0, 0.0 });
+		const FRoadNodeId LC = L->AddNode({ 0.0, 0.0 });
+		const FRoadNodeId LN = L->AddNode({ 0.0, 10000.0 });
+		const FRoadNodeId LJ = L->AddNode({ -2000.0, 0.0 });
+		L->AddStraightSegment(LW, LJ, Taxi);
+		L->AddStraightSegment(LJ, LC, Taxi);
+		L->AddStraightSegment(LC, LN, Taxi);
+		const FVector2D Up(-2000.0, 10000.0);
+		const FStripVerdict Corner = JudgeSegment(*L, Shape({ -2000.0, 0.0 }, Up, Road), false, AtNode(*L, LJ), Free(Up));
+		TestTrue(TEXT("a road 20 m beside the far leg of an L is refused - the chain stops at the corner"), Corner.bRefused);
+	}
+	{
 		// A SEGMENT SNAP: the end lands mid-segment on a taxiway that will be split there. The
 		// met segment is named by its ORIGINAL id (Review Focus 1), and square is allowed.
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());

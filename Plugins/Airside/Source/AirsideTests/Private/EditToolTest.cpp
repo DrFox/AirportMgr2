@@ -265,8 +265,10 @@ bool FEditModeDragSnapsExactlyToANodeTest::RunTest(const FString& Parameters)
 
 	// A road A-B to grab the end of, and a separate road C-D far enough away that only C
 	// can claim the drop. C needs an arm of its own or it is not an AirsideNode handle.
+	// B AT 100 m, not 120: dropped on C, A-B meets C-D at 63 degrees - within 30 of square,
+	// which the clearance strip asks of a join (stage 3, 2026-09-29); at 120 m it was 59.
 	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
-	const int32 B = Actor->PlaceNode(FVector2D(12000.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(10000.0, 0.0));
 	Actor->ConnectNodes(A, B);
 	const int32 C = Actor->PlaceNode(FVector2D(0.0, 20000.0));
 	const int32 D = Actor->PlaceNode(FVector2D(12000.0, 20000.0));

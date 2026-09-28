@@ -1585,6 +1585,61 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 		break;
 	}
 
+	// INSIDE A TAXIWAY'S CLEARANCE STRIP (strip stage 3, Review Focus 3): every segment this
+	// node drags, judged at the shape it would take - both ends where they would be, the
+	// control shifted by half the move exactly as URoadNetwork::SetNodePosition shifts it -
+	// with ALL of the node's own arms ignored, since each is being replaced by its moved self.
+	// Refused before ApplyInteractiveMutation, so nothing moves and no undo step is pushed.
+	// RUNWAY ARMS ARE NOT JUDGED (plan ruling 2: their own strip rules).
+	// ENFORCED BY: Airside.Present.MoveNodeRefusedIntoStrip
+	{
+		const FVector2D Shift = (To - Live->Position) * 0.5;
+
+		// A DRAG SNAPPED ONTO ANOTHER NODE MEETS THAT NODE'S ROADS. The edit tool's drop merges
+		// the two, and its node snap copies the target's position bitwise (FRoadSnapResult's
+		// contract) - so an exact match is the drag-to-join gesture, and judging the pre-merge
+		// frame as two unjoined roads would refuse every join onto a taxiway's end.
+		FRoadNodeId LandsOn = Node;
+		for (int32 Index = 0; Index < Owner.Network->GetNodes().Num(); ++Index)
+		{
+			const FRoadNodeId Other = Owner.Network->NodeIdAt(Index);
+			if (Other.IsSet() && Other != Node && Owner.Network->GetNodes()[Index].Position == To)
+			{
+				LandsOn = Other;
+				break;
+			}
+		}
+
+		for (const FRoadSegmentId& Incident : Live->Incident)
+		{
+			TaxiwayStrip::FSegmentShape Shape;
+			if (Owner.Network->IsRunwaySegment(Incident) || !TaxiwayStrip::ShapeOf(*Owner.Network, Incident, Shape))
+			{
+				continue;
+			}
+			const FRoadSegment* Segment = Owner.Network->GetSegment(Incident);
+			const bool bNodeIsA = Segment->A == Node;
+			(bNodeIsA ? Shape.A : Shape.B) = To;
+			Shape.Control += Shift;
+
+			TaxiwayStrip::FSegmentEnd Moved;
+			Moved.Node = LandsOn;
+			Moved.At = To;
+			TaxiwayStrip::FSegmentEnd Fixed;
+			Fixed.Node = Owner.Network->GetOtherEnd(Incident, Node);
+			Fixed.At = bNodeIsA ? Shape.B : Shape.A;
+
+			const TaxiwayStrip::FStripVerdict Verdict = TaxiwayStrip::JudgeSegment(*Owner.Network, Shape,
+				TaxiwayStrip::HasStrip(*Owner.Network, Incident),
+				bNodeIsA ? Moved : Fixed, bNodeIsA ? Fixed : Moved, Live->Incident);
+			if (Verdict.bRefused)
+			{
+				UE_LOG(LogRoadMesh, Log, TEXT("MoveNode refused: %s"), *Verdict.Text);
+				return false;
+			}
+		}
+	}
+
 	// A move changes no node's existence and no segment's endpoints-as-a-set, only where
 	// things sit, so bChangesGraphShape stays at its default, false: see
 	// ApplyInteractiveMutation's own header comment for the bare-call-trap Geometry/Topology
@@ -1665,6 +1720,56 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 		}
 	}
 
+	// THE HEAL, JUDGED BEFORE ANYTHING IS REMOVED (strip stage 3, Review Focus 4): a rejoin
+	// that would run through a taxiway's clearance strip is SKIPPED - the delete still
+	// happens, the stranded ends are left as they are - and logged, because a silent skip is a
+	// gap the player did not ask for with nothing to say why. Judged against the graph as it
+	// stands, with the doomed arms ignored: they are what the heal replaces. Refusing the whole
+	// delete instead would make a node in a legacy layout undeletable.
+	// ENFORCED BY: Airside.Present.HealRefusedAcrossStrip
+	TSet<FRoadNodeId> SkipHeal;
+	{
+		const FRoadNode* AnchorNode = Owner.Network->GetNode(Plan.Anchor);
+		const URoadProfile* HealWith = Plan.HealProfile != nullptr ? Plan.HealProfile.Get() : Owner.ResolveProfile();
+		// WHAT THE HEAL IS, asked of the doomed arms it replaces through the one taxiway and
+		// runway rules (HasStrip, IsRunwaySegment) rather than re-read off the profile here.
+		bool bHealIsRunway = false;
+		bool bHealIsTaxiway = false;
+		for (const FRoadSegmentId& Arm : Plan.Doomed)
+		{
+			bHealIsRunway |= Owner.Network->IsRunwaySegment(Arm);
+			bHealIsTaxiway |= TaxiwayStrip::HasStrip(*Owner.Network, Arm);
+		}
+		for (const FRoadNodeId& Stranded : Plan.Rejoin)
+		{
+			const FRoadNode* StrandedNode = Owner.Network->GetNode(Stranded);
+			if (AnchorNode == nullptr || StrandedNode == nullptr || HealWith == nullptr
+				|| bHealIsRunway)   // a runway relay - plan ruling 2
+			{
+				continue;
+			}
+			TaxiwayStrip::FSegmentShape Shape;
+			Shape.A = StrandedNode->Position;
+			Shape.B = AnchorNode->Position;
+			Shape.Control = (Shape.A + Shape.B) * 0.5;   // AddStraightSegment's, below
+			Shape.HalfWidth = HealWith->GetMaxHalfWidth();
+			TaxiwayStrip::FSegmentEnd AtA;
+			AtA.Node = Stranded;
+			AtA.At = Shape.A;
+			TaxiwayStrip::FSegmentEnd AtB;
+			AtB.Node = Plan.Anchor;
+			AtB.At = Shape.B;
+			const TaxiwayStrip::FStripVerdict Verdict = TaxiwayStrip::JudgeSegment(*Owner.Network, Shape,
+				bHealIsTaxiway, AtA, AtB, Plan.Doomed);
+			if (Verdict.bRefused)
+			{
+				UE_LOG(LogRoadMesh, Log, TEXT("Heal skipped: %s (node %d not rejoined to %d)"),
+					*Verdict.Text, Stranded.Index, Plan.Anchor.Index);
+				SkipHeal.Add(Stranded);
+			}
+		}
+	}
+
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("delete node"));
 
 	if (Plan.bKeepTarget)
@@ -1692,6 +1797,11 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 	// being applied to exactly the state it was approved for.
 	for (const FRoadNodeId& Stranded : Plan.Rejoin)
 	{
+		if (SkipHeal.Contains(Stranded))
+		{
+			continue;   // judged above, logged there
+		}
+
 		// THE PLAN'S PROFILE, not the level's default: the road being healed keeps its own
 		// cross-section. See FRoadDeletionPlan::HealProfile for what laying the default
 		// instead used to do to a runway.

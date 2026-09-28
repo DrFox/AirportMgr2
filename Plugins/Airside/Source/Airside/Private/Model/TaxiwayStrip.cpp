@@ -356,6 +356,41 @@ namespace TaxiwayStrip
 			return Verdict;
 		}
 
+		// 1b. A TAXIWAY IS A CHAIN, NOT A SEGMENT. The spec exempts what "meets the TAXIWAY",
+		// and one taxiway is often several pieces - every split and snapped junction adds one -
+		// so exempting only the met pieces refused a square join 10 m from the next piece's end
+		// (found 2026-09-29: a moved T-junction refused by its own neighbour piece). Walk on
+		// from every exempt piece through each node holding exactly two strip-bearing arms that
+		// run on within 30 degrees of straight. NOT round a corner: past one the next leg is a
+		// different line, and a road square to the first leg runs alongside the second.
+		// Seeded from Ignore too - a replaced piece (a moved node's own arm, a heal's stub) is
+		// the same taxiway as the one it becomes.
+		for (int32 Seed = 0; Seed < Exempt.Num(); ++Seed)
+		{
+			const FRoadSegmentId From = Exempt[Seed];
+			const FRoadSegment* Piece = Network.GetSegment(From);
+			if (Piece == nullptr || !HasStrip(Network, From)) { continue; }
+			for (const FRoadNodeId Through : { Piece->A, Piece->B })
+			{
+				const FRoadNode* Node = Network.GetNode(Through);
+				if (Node == nullptr) { continue; }
+				FRoadSegmentId Next;
+				int32 Arms = 0;
+				for (const FRoadSegmentId Arm : Node->Incident)
+				{
+					if (!HasStrip(Network, Arm)) { continue; }
+					++Arms;
+					if (Arm != From) { Next = Arm; }
+				}
+				if (Arms != 2 || !Next.IsSet() || Exempt.Contains(Next)) { continue; }
+				if (DegreesBetween(Network.GetOutgoingTangent(From, Through), Network.GetOutgoingTangent(Next, Through))
+					>= ChainStraightMinDegrees)
+				{
+					Exempt.Add(Next);   // walked on from in its own turn, by this loop
+				}
+			}
+		}
+
 		// 2. ITS PAVEMENT in any other taxiway's strip.
 		const TArray<FVector2D> Footprint = FootprintOf(Shape);
 		if (const TOptional<FIntrusion> In = WorstIntrusion(Network, Footprint, Exempt))

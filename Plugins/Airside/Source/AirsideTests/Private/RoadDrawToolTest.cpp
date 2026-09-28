@@ -5,6 +5,7 @@
 #include "Model/RoadNode.h"
 #include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
+#include "Present/RoadEditHistory.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/RoadDrawTool.h"
 
@@ -514,6 +515,95 @@ bool FRoadDrawRefusedInsideStripTest::RunTest(const FString& Parameters)
 		Tool.OnClick(AtGround(Actor, FVector2D(5000.0, 2000.0)));
 		TestEqual(TEXT("a parallel taxiway 20 m off is refused"), LiveSegments(Actor), Before);
 	}
+	return true;
+}
+
+/**
+ * A NODE DRAGGED INTO A STRIP IS REFUSED (strip stage 3, Review Focus 3): MoveNode judges every
+ * segment the node drags, at the position it would land, before anything changes - so a
+ * refusal leaves the node where it was and pushes no undo step.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMoveNodeRefusedIntoStripTest,
+	"Airside.Present.MoveNodeRefusedIntoStrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMoveNodeRefusedIntoStripTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->ClearNetwork();
+
+	// A 24 m taxiway along y 0 (40 m keep-out), and a service road running north from 60 m off it.
+	Actor->ConnectNodes(Actor->PlaceNode(FVector2D(-20000.0, 0.0)), Actor->PlaceNode(FVector2D(20000.0, 0.0)),
+		ERoadKind::Taxiway, INDEX_NONE);
+	const int32 Far = Actor->PlaceNode(FVector2D(0.0, 10000.0));
+	const int32 End = Actor->PlaceNode(FVector2D(0.0, 6000.0));
+	if (!TestTrue(TEXT("the road is laid clear of the strip"), Actor->ConnectNodes(Far, End, ERoadKind::ServiceRoad, 0))) { return false; }
+
+	const int32 UndoBefore = Actor->History->UndoDepth();
+	FLogLineSpy Spy(TEXT("LogRoadMesh"));
+	GLog->AddOutputDevice(&Spy);
+	const bool bMoved = Actor->MoveNode(End, FVector2D(0.0, 2000.0));
+	GLog->RemoveOutputDevice(&Spy);
+	TestFalse(TEXT("dragging the road's end 20 m off the taxiway is refused"), bMoved);
+	TestEqual(TEXT("the node is where it was"), Actor->Network->GetNodes()[End].Position, FVector2D(0.0, 6000.0));
+	TestEqual(TEXT("and no undo step was pushed"), Actor->History->UndoDepth(), UndoBefore);
+	TestTrue(FString::Printf(TEXT("the log says why (%s)"), *FString::Join(Spy.CapturedLines, TEXT(" | "))),
+		Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("MoveNode refused: inside")); }));
+
+	// THE CONTROL: a move that stays clear still moves, so the refusal above is the strip's.
+	TestTrue(TEXT("a move to 50 m off is allowed"), Actor->MoveNode(End, FVector2D(0.0, 5000.0)));
+	TestEqual(TEXT("and lands"), Actor->Network->GetNodes()[End].Position, FVector2D(0.0, 5000.0));
+	return true;
+}
+
+/**
+ * A HEAL THAT WOULD RUN THROUGH A STRIP IS SKIPPED, NOT THE DELETE (Review Focus 4). Deleting
+ * the apex of a road bent around a taxiway's dead end would rejoin its two sides straight
+ * across the end's keep-out: the node still goes, the heal does not, and the log says so -
+ * silence would leave a gap the player did not ask for with nothing to explain it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHealRefusedAcrossStripTest,
+	"Airside.Present.HealRefusedAcrossStrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FHealRefusedAcrossStripTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->ClearNetwork();
+
+	// A taxiway ending at the origin, from the south.
+	Actor->ConnectNodes(Actor->PlaceNode(FVector2D(0.0, -20000.0)), Actor->PlaceNode(FVector2D(0.0, 0.0)),
+		ERoadKind::Taxiway, INDEX_NONE);
+	// A road W - A - Apex - B - E bent up and over it; every piece 60 m+ from the dead end.
+	const int32 W = Actor->PlaceNode(FVector2D(-16000.0, 3000.0));
+	const int32 A = Actor->PlaceNode(FVector2D(-6000.0, 3000.0));
+	const int32 Apex = Actor->PlaceNode(FVector2D(0.0, 9000.0));
+	const int32 B = Actor->PlaceNode(FVector2D(6000.0, 3000.0));
+	const int32 E = Actor->PlaceNode(FVector2D(16000.0, 3000.0));
+	bool bLaid = Actor->ConnectNodes(W, A, ERoadKind::ServiceRoad, 0);
+	bLaid &= Actor->ConnectNodes(A, Apex, ERoadKind::ServiceRoad, 0);
+	bLaid &= Actor->ConnectNodes(Apex, B, ERoadKind::ServiceRoad, 0);
+	bLaid &= Actor->ConnectNodes(B, E, ERoadKind::ServiceRoad, 0);
+	if (!TestTrue(TEXT("the bent road is laid clear of the strip"), bLaid)) { return false; }
+
+	const FRoadDeletionPlan Plan = Actor->PlanNodeDeletion(Apex);
+	if (!TestTrue(TEXT("the apex plans a heal - or this proves nothing"), Plan.bValid && Plan.Rejoin.Num() > 0)) { return false; }
+
+	FLogLineSpy Spy(TEXT("LogRoadMesh"));
+	GLog->AddOutputDevice(&Spy);
+	const bool bDeleted = Actor->DeleteNode(Apex);
+	GLog->RemoveOutputDevice(&Spy);
+	TestTrue(TEXT("the delete itself still happens"), bDeleted);
+	TestNull(TEXT("the apex is gone"), Actor->Network->GetNode(Actor->Network->NodeIdAt(Apex)));
+	TestEqual(TEXT("both stubs remain, and no heal across the strip - the taxiway, W-A and B-E"), LiveSegments(Actor), 3);
+	TestTrue(FString::Printf(TEXT("the log names the skipped heal (%s)"), *FString::Join(Spy.CapturedLines, TEXT(" | "))),
+		Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("Heal skipped: inside")); }));
 	return true;
 }
 

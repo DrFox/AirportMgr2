@@ -128,6 +128,13 @@ namespace TaxiwayStrip
 	inline constexpr double MeetMaxDegrees = 120.0;
 
 	/**
+	 * Two strip-bearing pieces at a node with no third are ONE TAXIWAY when they run on within
+	 * 30 degrees of straight (arms 150+ degrees apart) - what JudgeSegment's exemption walks
+	 * along. Past a sharper bend the next leg is another line to meet, square, in its own right.
+	 */
+	inline constexpr double ChainStraightMinDegrees = 150.0;
+
+	/**
 	 * May a road or taxiway of this shape be laid with these ends? Refuses when its pavement
 	 * enters the strip of a taxiway it does not MEET (share a node / split, at an allowed angle),
 	 * or - bIsTaxiway - when its own strip would contain an existing stand, depot, road or other
