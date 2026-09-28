@@ -252,7 +252,7 @@ double UJobBoard::DriveSeconds(const URoadNetwork& Network, FGuidelineNodeId Fro
 }
 
 ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FServiceJob& Job, const UGroundTraffic& Traffic,
-	const URoadNetwork& Network, const USimClock& Clock) const
+	const URoadNetwork& Network, const USimClock& Clock, int32 QueueAhead) const
 {
 	++BidCallCountForTest;
 	const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
@@ -282,6 +282,10 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 	In.FacilityNode = NodeIndex(Home->PoseNode);
 	In.DriveSeconds = [this, &Nodes, &Network, &Type, GamePerMovement](int32 From, int32 To)
 	{
+		if (DriveSecondsOverride)
+		{
+			return DriveSecondsOverride(Nodes[From], Nodes[To], Type.TypeCode);
+		}
 		const double Movement = DriveSeconds(Network, Nodes[From], Nodes[To], Type);
 		return Movement < 0.0 ? -1.0 : Movement * GamePerMovement;
 	};
@@ -339,9 +343,10 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 		break;
 	}
 
-	for (const int32 QueuedId : Vehicle.Queue)
+	const int32 Ahead = QueueAhead == INDEX_NONE ? Vehicle.Queue.Num() : FMath::Min(QueueAhead, Vehicle.Queue.Num());
+	for (int32 At = 0; At < Ahead; ++At)
 	{
-		if (const FServiceJob* Queued = FindJob(QueuedId))
+		if (const FServiceJob* Queued = FindJob(Vehicle.Queue[At]))
 		{
 			In.Queued.Add({ NodeIndex(ServiceAnchorOf(Network, Queued->Stand, Vehicle.Role)), Queued->QuantityOwed });
 		}
@@ -470,6 +475,92 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 			Next != nullptr
 				? *FString::Printf(TEXT("vehicle %d %s +%.1f"), Next->Id, *Next->TypeCode.ToString(), (NextFinish - Clock.Now()) / 60.0)
 				: TEXT("none"));
+	}
+}
+
+void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+{
+	// NOTHING CHANGED, NOTHING RE-BID (#190's rule): a vehicle's step ending, a vehicle added or
+	// withdrawn (FleetRevision) and an airport edit (the guideline revision) are the only things that
+	// can make a different vehicle the better one.
+	const uint32 Revision = Network.GetGuidelineRevision();
+	if (LastRebidFleetRevision == FleetRevision && LastRebidGuidelineRevision == Revision)
+	{
+		return;
+	}
+	LastRebidFleetRevision = FleetRevision;
+	LastRebidGuidelineRevision = Revision;
+
+	// IDS FIRST: a move edits two queues, and the walk must not be over either of them.
+	TArray<int32> Queued;
+	for (const FServiceJob& Job : Jobs)
+	{
+		if (Job.State == EServiceJobState::Queued)
+		{
+			Queued.Add(Job.Id);
+		}
+	}
+
+	for (const int32 JobId : Queued)
+	{
+		FServiceJob* Job = FindJob(JobId);
+		FServiceVehicle* Holder = Job != nullptr ? FindVehicleMutable(Job->VehicleId) : nullptr;
+		if (Job == nullptr || Holder == nullptr || Job->State != EServiceJobState::Queued)
+		{
+			continue;
+		}
+		const int32 Position = Holder->Queue.Find(JobId);
+		if (Position == INDEX_NONE)
+		{
+			continue;
+		}
+
+		// ITS CURRENT FINISH, where it is: the holder's queue up to it, then it. Re-computed rather than
+		// read off PromisedFinish, because the holder's plan has moved since (a serve ran long, a job
+		// ahead of it left) and a stale promise would compare the alternative against a fiction.
+		const ServiceBid::FResult Current = BidFor(*Holder, *Job, Traffic, Network, Clock, Position);
+
+		TArray<FCandidate> Others;
+		for (const FServiceVehicle& Vehicle : Vehicles)
+		{
+			if (Vehicle.Id != Holder->Id && Vehicle.Role == Job->Role)
+			{
+				Others.Add({ Vehicle.Home, Vehicle.TypeCode, Vehicle.Id });
+			}
+		}
+		FJudgement Judged;
+		FServiceVehicle* Best = nullptr;
+		double BestFinish = TNumericLimits<double>::Max();
+		for (const FCandidate& Candidate : Judge(Network, Job->Role, Job->Stand, Others, Judged))
+		{
+			FServiceVehicle* Vehicle = FindVehicleMutable(Candidate.VehicleId);
+			if (Vehicle == nullptr)
+			{
+				continue;
+			}
+			const ServiceBid::FResult Bid = BidFor(*Vehicle, *Job, Traffic, Network, Clock);
+			if (Bid.bReachable && Bid.Finish < BestFinish)
+			{
+				Best = Vehicle;
+				BestFinish = Bid.Finish;
+			}
+		}
+
+		const double CurrentFinish = Current.bReachable ? Current.Finish : TNumericLimits<double>::Max();
+		if (Best == nullptr || BestFinish >= CurrentFinish - RebidMarginSeconds)
+		{
+			// STAYS - but with the promise brought up to date, so the card and the next re-bid read what
+			// is now true.
+			Job->PromisedFinish = CurrentFinish;
+			continue;
+		}
+
+		Holder->Queue.RemoveAt(Position);
+		Assign(*Best, *Job, BestFinish);
+		Job->TankLitres = TypeFor(Best->TypeCode).Capacity;
+		UE_LOG(LogAirportOps, Log, TEXT("Rebid: job %d (aircraft %d, stand %d) vehicle %d -> %d, +%.1f -> +%.1f game min"),
+			Job->Id, Job->AircraftId, Job->Stand.Index, Holder->Id, Best->Id,
+			(CurrentFinish - Clock.Now()) / 60.0, (BestFinish - Clock.Now()) / 60.0);
 	}
 }
 

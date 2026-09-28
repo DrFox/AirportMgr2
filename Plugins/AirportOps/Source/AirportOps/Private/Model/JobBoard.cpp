@@ -312,6 +312,10 @@ FServiceVehicle& UJobBoard::AddVehicleForTest(FName TypeCode, FEntityInstanceId 
 	Vehicle.Home = Home;
 	Vehicle.State = State;
 	Vehicle.Cargo = Cargo;
+	if (Home.IsSet())
+	{
+		SeededDepots.Add(Home);
+	}
 	++FleetRevision;
 	return Vehicle;
 }
@@ -858,6 +862,10 @@ void UJobBoard::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	}
 
 	AssignOpenJobs(Traffic, Network, Clock);
+
+	// AFTER THE NEW JOBS ARE PLACED, so a job opened this tick is not re-bid in the pass that placed it,
+	// and BEFORE the idle vehicles start, so one that a re-bid just gave work sets off this tick.
+	RebidQueued(Traffic, Network, Clock);
 
 	// EVERY IDLE VEHICLE THE BIDS JUST GAVE WORK, and every one whose step just ended.
 	for (FServiceVehicle& Vehicle : Vehicles)
