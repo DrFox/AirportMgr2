@@ -105,7 +105,7 @@ void FClaimPass::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
 	// body is on, and a crossing is exactly the second of those.
 	//
 	// A CROSSING WAS TREATED AS A TAXIING IDEA HERE AND CLEARED, which was wrong for the
-	// one case that matters: an aircraft whose plan dies mid-crossing is Parked by the end
+	// one case that matters: an aircraft whose plan dies mid-crossing is Stranded by the end
 	// of that same tick (an invalid plan makes FRouteFollower::HasArrived true), and
 	// RunwayHeld is empty on anything that did not land - so the strip under it came free
 	// on the next tick and a landing could be cleared onto an aeroplane standing on the
@@ -167,7 +167,7 @@ void FClaimPass::ReleaseForDeadPlan(FRoadAgent& Agent)
 	// line it logged would have been a log that lies.
 	//
 	// AND THEY GO ON SURVIVING. An invalid plan makes FRouteFollower::HasArrived true, so
-	// this agent is Parked by the end of this very tick and takes HoldRunwayOnly from the
+	// this agent is Stranded by the end of this very tick and takes HoldRunwayOnly from the
 	// next one - which re-claims the crossing chain for exactly this reason. The hold ends
 	// where the agent does: RetireAgent, or Advance's removal path. A player who deletes the
 	// taxiway under a crossing aeroplane has an aeroplane on the runway, and the table says
