@@ -89,6 +89,9 @@ protected:
 	/** Ask for this panel's window to show or hide. The host decides (a player's close sticks). */
 	void SetShown(bool bShown);
 
+	/** The host that owns this panel's window; null when unhosted (the bar, toasts, a bare test). */
+	UUiWindowHost* GetWindowHost() const { return Host; }
+
 	/** Clears a player's close, so the next SetShown(true) shows again - for a panel whose
 	 *  content changed enough to deserve a second look (the inspector's new selection). */
 	void ForgetPlayerClose();

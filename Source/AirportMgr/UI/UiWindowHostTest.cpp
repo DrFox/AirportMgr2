@@ -583,6 +583,7 @@ bool FUiModalScrimTest::RunTest(const FString& Parameters)
 	USettingsPanelWidget* Settings = CreateWidget<USettingsPanelWidget>(F.TestWorld.World, USettingsPanelWidget::StaticClass());
 	if (!TestNotNull(TEXT("a ledger window"), F.Window) || !TestNotNull(TEXT("a settings panel"), Settings)) { return false; }
 	if (!TestNotNull(TEXT("settings is hosted"), F.Host->AddWindow(*Settings))) { return false; }
+	Settings->SetSink(MakeShared<FMemoryPlayerSettingsSink>());   // Settings opens only with values to edit
 	UUserWidget* Scrim = F.Host->ScrimForTest();
 	if (!TestNotNull(TEXT("the host has a scrim"), Scrim)) { return false; }
 	F.Ledger->Toggle();
