@@ -25,7 +25,7 @@ namespace
 		UPricing* Pricing = NewObject<UPricing>();
 		ULedger* Ledger = NewObject<ULedger>();
 
-		Clock->RealSecondsPerGameDay = 1200.0;
+		Clock->SetUniformDay(1200.0);
 		Clock->StartAtHour(9.0);
 		Ledger->Pricing = Pricing;
 		Ledger->Clock = Clock;

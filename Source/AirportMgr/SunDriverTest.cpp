@@ -37,7 +37,7 @@ bool FSunDriverReadsClockTest::RunTest(const FString& Parameters)
 	// A game day of 86,400 real seconds makes TimeScale() exactly 1, so Advance() moves
 	// game time one-for-one and the numbers below read as the times they are. There is no
 	// SetGameSeconds accessor and this needs none.
-	Clock->RealSecondsPerGameDay = USimClock::SecondsPerDay;
+	Clock->SetUniformDay(USimClock::SecondsPerDay);
 
 	TestEqual(TEXT("a fresh clock is midnight"), ASunDriver::ResolveDayFraction(Clock), 0.0, 1e-9);
 

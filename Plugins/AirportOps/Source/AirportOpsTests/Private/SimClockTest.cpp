@@ -12,7 +12,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FSimClockSpeedTest::RunTest(const FString& Parameters)
 {
 	USimClock* Clock = NewObject<USimClock>();
-	Clock->RealSecondsPerGameDay = 1200.0;  // 20 real minutes per day -> 72 game s per real s
+	Clock->SetUniformDay(1200.0);  // 20 real minutes per day -> 72 game s per real s
 
 	Clock->Advance(1.0);
 	TestEqual(TEXT("x1 advances by the day compression alone"), Clock->Now(), 72.0, 1e-9);
@@ -39,7 +39,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FSimClockDayTest::RunTest(const FString& Parameters)
 {
 	USimClock* Clock = NewObject<USimClock>();
-	Clock->RealSecondsPerGameDay = 1.0;  // one real second is one game day: makes the arithmetic readable
+	Clock->SetUniformDay(1.0);  // one real second is one game day: makes the arithmetic readable
 
 	Clock->Advance(1.5);
 	TestEqual(TEXT("a day and a half is day 1"), Clock->Day(), 1);
@@ -55,7 +55,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FSimClockSchedulerTest::RunTest(const FString& Parameters)
 {
 	USimClock* Clock = NewObject<USimClock>();
-	Clock->RealSecondsPerGameDay = USimClock::SecondsPerDay;  // 1 real s == 1 game s, so steps read plainly
+	Clock->SetUniformDay(USimClock::SecondsPerDay);  // 1 real s == 1 game s, so steps read plainly
 
 	TArray<FString> Fired;
 	Clock->At(5.0, [&Fired]() { Fired.Add(TEXT("at5")); });
@@ -213,7 +213,7 @@ bool FSimClockStartHourTest::RunTest(const FString& Parameters)
 	// which is why StartAtHour has to be called before anything is scheduled - this pins
 	// the half of that contract the clock itself owns.
 	int32 Fired = 0;
-	Clock->RealSecondsPerGameDay = USimClock::SecondsPerDay;   // TimeScale 1: advance 1:1
+	Clock->SetUniformDay(USimClock::SecondsPerDay);   // TimeScale 1: advance 1:1
 	Clock->Every(3600.0, [&Fired]() { ++Fired; });
 	Clock->Advance(3599.0);
 	TestEqual(TEXT("nothing is due just short of the first hour"), Fired, 0);
@@ -222,6 +222,83 @@ bool FSimClockStartHourTest::RunTest(const FString& Parameters)
 
 	Clock->StartAtHour(24.0);
 	TestEqual(TEXT("24:00 wraps to midnight rather than overflowing the day"), Clock->Now(), 0.0, 1e-9);
+	return true;
+}
+
+/**
+ * Daylight and night run at their OWN rates (spec 2026-09-28 section 1). A night hour is
+ * a lull the player should not have to sit through at the pace of a busy morning, so the
+ * scenario gives each band its own real length.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSimClockDaylightHourTest,
+	"AirportOps.Model.SimClock.DaylightHourTakesItsShare",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSimClockDaylightHourTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	// Defaults: 2400 real s for 06-20 (14 hours), 480 real s for 20-06 (10 hours).
+	Clock->StartAtHour(7.0);
+	Clock->Advance(2400.0 / 14.0);
+	TestEqual(TEXT("one daylight hour takes a fourteenth of the daylight length"),
+		Clock->TimeOfDay(), 8.0 * 3600.0, 1e-6);
+	TestTrue(TEXT("08:00 is daylight"), Clock->IsDaylight());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSimClockNightHourTest,
+	"AirportOps.Model.SimClock.NightHourTakesItsShare",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSimClockNightHourTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	Clock->StartAtHour(22.0);
+	Clock->Advance(480.0 / 10.0);
+	TestEqual(TEXT("one night hour takes a tenth of the night length"),
+		Clock->TimeOfDay(), 23.0 * 3600.0, 1e-6);
+	TestFalse(TEXT("23:00 is night"), Clock->IsDaylight());
+	return true;
+}
+
+/** One Advance crossing dusk: each side at its own rate, not the rate the step began in. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSimClockStraddlesDuskTest,
+	"AirportOps.Model.SimClock.StraddlesDusk",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSimClockStraddlesDuskTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	Clock->StartAtHour(19.5);
+	Clock->Advance(2400.0 / 28.0 + 480.0 / 20.0);
+	TestEqual(TEXT("half a day-hour then half a night-hour lands at 20:30"),
+		Clock->TimeOfDay(), 20.5 * 3600.0, 1e-6);
+
+	// And at x4 the same real step covers four times the ground, split the same way.
+	Clock->StartAtHour(19.0);
+	Clock->SetSpeed(ESimSpeed::X4);
+	Clock->Advance((2400.0 / 14.0 + 480.0 / 10.0) / 4.0);
+	TestEqual(TEXT("x4 crosses dusk at both rates too"), Clock->TimeOfDay(), 21.0 * 3600.0, 1e-6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSimClockUniformDayTest,
+	"AirportOps.Model.SimClock.UniformDayIsUniform",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSimClockUniformDayTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	Clock->SetUniformDay(1200.0);
+	Clock->StartAtHour(0.0);
+	TestEqual(TEXT("03:00 runs at 72 game s per real s"), Clock->TimeScale(), 72.0, 1e-9);
+	Clock->Advance(600.0);
+	TestEqual(TEXT("half the real day is half the game day"), Clock->TimeOfDay(), 12.0 * 3600.0, 1e-6);
+	TestEqual(TEXT("13:00 runs at the same rate"), Clock->TimeScale(), 72.0, 1e-9);
 	return true;
 }
 

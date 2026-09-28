@@ -37,7 +37,7 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 	Source->RemoveNode(Spare);
 
 	USimClock* Clock = NewObject<USimClock>();
-	Clock->RealSecondsPerGameDay = 600.0;
+	Clock->SetUniformDay(600.0);
 	Clock->SetSpeed(ESimSpeed::X4);
 	Clock->Advance(3.0);
 	const double SavedNow = Clock->Now();
@@ -63,7 +63,8 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("game time survives"), RestoredClock->Now(), SavedNow, 1e-9);
 	TestEqual(TEXT("speed survives"), RestoredClock->GetSpeed(), ESimSpeed::X4);
-	TestEqual(TEXT("day length survives"), RestoredClock->RealSecondsPerGameDay, 600.0, 1e-9);
+	TestEqual(TEXT("daylight length survives"), RestoredClock->RealSecondsDaylight, 350.0, 1e-9);
+	TestEqual(TEXT("night length survives"), RestoredClock->RealSecondsNight, 250.0, 1e-9);
 
 	const FAirsideCapability Cap = AirsideCapability::Summarise(*Restored);
 	TestEqual(TEXT("the runway is still a runway after load - the profile reference resolved"), Cap.Runways.Num(), 1);
@@ -170,7 +171,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FOpsSaveLegacyShimTest::RunTest(const FString& Parameters)
 {
 	USimClock* Source = NewObject<USimClock>();
-	Source->RealSecondsPerGameDay = 900.0;
+	Source->SetUniformDay(900.0);
 	Source->Advance(5.0);
 	const double SavedNow = Source->Now();
 

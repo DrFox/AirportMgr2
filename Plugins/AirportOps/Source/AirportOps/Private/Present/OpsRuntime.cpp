@@ -141,7 +141,10 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// rather than skipped. See ResolveDefaultScenario.
 	if (const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario(*Catalog))
 	{
-		Clock->RealSecondsPerGameDay = Scenario->RealSecondsPerGameDay;
+		Clock->RealSecondsDaylight = Scenario->RealSecondsDaylight;
+		Clock->RealSecondsNight = Scenario->RealSecondsNight;
+		Clock->DawnHour = Scenario->DawnHour;
+		Clock->DuskHour = Scenario->DuskHour;
 
 		// BEFORE THE OFFER SCHEDULE BELOW, and that ordering is load-bearing: Every() books
 		// its first firing at Now() + Interval, so moving the clock after scheduling would
@@ -159,8 +162,9 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		Ledger->Open(Scenario->StartingBalance);
 
 		UE_LOG(LogAirportOps, Log,
-			TEXT("Scenario '%s': %.0f real s per game day, starts %02.0f:00, %.0f s fuel dwell, opens at %.0f"),
-			*Scenario->GetName(), Scenario->RealSecondsPerGameDay, Scenario->StartHour,
+			TEXT("Scenario '%s': %.0f/%.0f real s day/night (%02.0f-%02.0f), starts %02.0f:00, %.0f s fuel dwell, opens at %.0f"),
+			*Scenario->GetName(), Scenario->RealSecondsDaylight, Scenario->RealSecondsNight,
+			Scenario->DawnHour, Scenario->DuskHour, Scenario->StartHour,
 			Scenario->FuelDwellSeconds, Scenario->StartingBalance);
 	}
 
@@ -331,7 +335,7 @@ void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
 void UOpsRuntime::StepSpeed(int32 Delta)
 {
 	// THE LADDER WALK AND ResumeSpeed ARE THE CLOCK'S OWN NOW (issue #191): it is the object
-	// that is actually saved, and it is the one with RealSecondsPerGameDay and every other
+	// that is actually saved, and it is the one with the day lengths and every other
 	// speed-adjacent figure already. This is left to push the RESULT into the actor and the
 	// event bus, which is Present/'s job - ApplySpeed re-applies Clock->GetSpeed() to itself
 	// (a no-op; StepSpeed already set it) purely to reach the push/notify half in one call.

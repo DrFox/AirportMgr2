@@ -267,7 +267,7 @@ public:
 	 *
 	 * A PROPERTY AND NOT A CONSTANT, so it is a figure a designer changes rather than a
 	 * recompile. Set from UScenario::FuelDwellSeconds at attach, exactly as USimClock's
-	 * RealSecondsPerGameDay is; the default here is only what a bare NewObject gets.
+	 * RealSecondsDaylight is; the default here is only what a bare NewObject gets.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0"))
 	double DwellSeconds = 40.0;

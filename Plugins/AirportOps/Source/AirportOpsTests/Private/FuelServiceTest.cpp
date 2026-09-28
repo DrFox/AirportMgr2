@@ -79,8 +79,8 @@ namespace
 
 		/**
 		 * The DAY-COMPRESSED clock, beside the traffic's own seconds - the pair UFuelService
-		 * now takes. RealSecondsPerGameDay is left at its default so Advance(real seconds)
-		 * moves game time 72x faster, exactly as a session does.
+		 * now takes. SetUniformDay(1200) so Advance(real seconds) moves game time 72x faster at
+		 * every hour - the rate these fixtures were written against, before day and night split.
 		 */
 		USimClock* Clock = nullptr;
 
@@ -282,6 +282,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	Service = NewObject<UFuelService>(GetTransientPackage());
 	Clock = NewObject<USimClock>(GetTransientPackage());
+	Clock->SetUniformDay(1200.0);
 
 	// UOpsRuntime::Attach's job in production (#104) - a bare NewObject has no Present/ to
 	// set this, and an unset vehicle table means a truck dispatched with zero speed and
