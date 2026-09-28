@@ -288,6 +288,10 @@ namespace
 		FVehicle Vehicle;
 		/** Seconds after the first vehicle is dispatched. */
 		double After = 0.0;
+		/** A route of its own, From -> To, instead of the spec's shared one (a merging vehicle). */
+		bool bOwnRoute = false;
+		FVector2D From = FVector2D::ZeroVector;
+		FVector2D To = FVector2D::ZeroVector;
 	};
 
 	struct FContestAircraft
@@ -322,6 +326,8 @@ namespace
 		TArray<FContestAircraft> Aircraft;
 		uint8 Rebuild = 0;
 		FVector2D RebuildAt = FVector2D::ZeroVector;
+		/** Rebuild again every this many seconds for as long as the first vehicle waits (0: never). */
+		double RebuildPeriodWhileWaiting = 0.0;
 		double Seconds = 150.0;
 	};
 
@@ -342,6 +348,10 @@ namespace
 		/** How far into a strip the worst intruding body reached, uu - for the log line. */
 		double DeepestIntrusion = 0.0;
 		FString FirstIntrusion;
+		/** WHERE THE VANS STOOD: seconds any vehicle spent stopped (under 10 uu/s) with its body
+		 *  in a strip, and where the first such stop was. A crossing is driven, never stood on. */
+		double StoodInStripSeconds = 0.0;
+		FString FirstStood;
 	};
 
 	/**
@@ -367,6 +377,12 @@ namespace
 		const FRoutePlan VehiclePlan = DerivedCrossingRoute(*Net, Spec.VehicleFrom, Spec.VehicleTo, First.Class,
 			2000.0, Spec.VehicleMinCrossings);
 		if (!Test.TestTrue(*FString::Printf(TEXT("%s: the vehicles route across"), Name), VehiclePlan.IsValid())) { return Out; }
+		TArray<FRoutePlan> VehiclePlans;
+		for (const FContestVehicle& V : Spec.Vehicles)
+		{
+			VehiclePlans.Add(V.bOwnRoute ? DerivedCrossingRoute(*Net, V.From, V.To, V.Class) : VehiclePlan);
+			if (!Test.TestTrue(*FString::Printf(TEXT("%s: every vehicle routes"), Name), VehiclePlans.Last().IsValid())) { return Out; }
+		}
 
 		TArray<FRoutePlan> AircraftPlans;
 		TArray<TArray<FVector2D>> CrossingsOf;
@@ -457,6 +473,7 @@ namespace
 			return Dir;
 		}();
 
+		double LastPeriodicRebuild = -1.0e9;
 		int32 Step = 0;
 		for (; Step < FMath::CeilToInt32(Spec.Seconds * 30.0); ++Step)
 		{
@@ -472,7 +489,7 @@ namespace
 			{
 				if (VehicleIds[V] == 0 && Clock >= Shift + Spec.Vehicles[V].After)
 				{
-					VehicleIds[V] = Traffic->DispatchAgent(Net, VehiclePlan, Spec.Vehicles[V].Vehicle, Spec.Vehicles[V].Class, 0.0);
+					VehicleIds[V] = Traffic->DispatchAgent(Net, VehiclePlans[V], Spec.Vehicles[V].Vehicle, Spec.Vehicles[V].Class, 0.0);
 				}
 			}
 			Traffic->Advance(Dt, Net);
@@ -530,6 +547,15 @@ namespace
 					}
 					Out.DeepestIntrusion = FMath::Max(Out.DeepestIntrusion, Intrusion->Depth);
 				}
+				if (bInStrip && Van->LastMotion.GroundSpeed < 10.0)
+				{
+					if (Out.StoodInStripSeconds == 0.0)
+					{
+						Out.FirstStood = FString::Printf(TEXT("vehicle %d at %.1f s, centre (%.0f, %.0f), %.0f uu in"),
+							V, Clock, Van->LastMotion.Position.X, Van->LastMotion.Position.Y, Intrusion->Depth);
+					}
+					Out.StoodInStripSeconds += Dt;
+				}
 				const bool bWaiting = Van->GetWaitingOn() != 0 && AircraftIds.Contains(Van->GetWaitingOn());
 				if (V == 0)
 				{
@@ -539,7 +565,16 @@ namespace
 					Now |= ((Spec.Rebuild & uint8(EContestRebuild::WhileWaiting)) && bWaiting) ? uint8(EContestRebuild::WhileWaiting) : 0;
 					Now |= ((Spec.Rebuild & uint8(EContestRebuild::InStrip)) && bInStrip) ? uint8(EContestRebuild::InStrip) : 0;
 					Now |= ((Spec.Rebuild & uint8(EContestRebuild::PastPoint)) && bPast) ? uint8(EContestRebuild::PastPoint) : 0;
-					if (Now & ~Fired)
+					const bool bPeriodic = Spec.RebuildPeriodWhileWaiting > 0.0 && bWaiting
+						&& Clock - LastPeriodicRebuild >= Spec.RebuildPeriodWhileWaiting;
+					if (bPeriodic)
+					{
+						LastPeriodicRebuild = Clock;
+						TestGraph::Rebuild(*Net);
+						Traffic->OnGraphRebuilt(*Net);
+						++Out.Rebuilds;
+					}
+					else if (Now & ~Fired)
 					{
 						// A ROAD EDIT: every derived node - conflicts, stop lines - is re-made, and
 						// the agents re-resolve by position, exactly as a player's edit does it.
@@ -561,9 +596,10 @@ namespace
 		}
 		Test.AddInfo(FString::Printf(
 			TEXT("%s: %d vehicle(s), %d aircraft, %d rebuild(s): %d intrusion tick(s) (deepest %.0f uu); first vehicle waited %.2f s, ")
-			TEXT("aircraft waited %.2f s; %s after %.1f s%s%s"),
+			TEXT("aircraft waited %.2f s; stood in a strip %.2f s%s%s; %s after %.1f s%s%s"),
 			Name, Spec.Vehicles.Num(), Spec.Aircraft.Num(), Out.Rebuilds, Out.Intrusions, Out.DeepestIntrusion, Out.VehicleWaited,
-			Out.AircraftWaited, (Out.bAllVehiclesArrived && Out.bAllAircraftArrived) ? TEXT("all arrived") : TEXT("NOT all arrived"),
+			Out.AircraftWaited, Out.StoodInStripSeconds, Out.FirstStood.IsEmpty() ? TEXT("") : TEXT(" - first "), *Out.FirstStood,
+			(Out.bAllVehiclesArrived && Out.bAllAircraftArrived) ? TEXT("all arrived") : TEXT("NOT all arrived"),
 			Out.Clock, Out.FirstIntrusion.IsEmpty() ? TEXT("") : TEXT("; first intrusion: "), *Out.FirstIntrusion));
 		Out.bRan = true;
 		return Out;
@@ -639,6 +675,7 @@ bool FTruckYieldsAtDerivedCrossingTest::RunTest(const FString& Parameters)
 		const FContestOutcome Swept = RunContest(*this, DerivedCrossingSpec(ETraversalClass::GroundVehicle, Lag), *Name);
 		if (!Swept.bRan) { return false; }
 		TestEqual(*FString::Printf(TEXT("%s: no intrusion"), *Name), Swept.Intrusions, 0);
+		TestEqual(*FString::Printf(TEXT("%s: nobody stood in the strip"), *Name), Swept.StoodInStripSeconds, 0.0);
 		TestTrue(*FString::Printf(TEXT("%s: everyone gets across"), *Name), Swept.bAllVehiclesArrived && Swept.bAllAircraftArrived);
 	}
 
@@ -652,6 +689,7 @@ bool FTruckYieldsAtDerivedCrossingTest::RunTest(const FString& Parameters)
 		const FContestOutcome Convoy = RunContest(*this, DerivedCrossingSpec(ETraversalClass::GroundVehicle, Lag, 2, 5.0, 600.0), *Name);
 		if (!Convoy.bRan) { return false; }
 		TestEqual(*FString::Printf(TEXT("%s: no intrusion"), *Name), Convoy.Intrusions, 0);
+		TestEqual(*FString::Printf(TEXT("%s: nobody stood in the strip"), *Name), Convoy.StoodInStripSeconds, 0.0);
 		TestTrue(*FString::Printf(TEXT("%s: everyone gets across"), *Name), Convoy.bAllVehiclesArrived && Convoy.bAllAircraftArrived);
 	}
 
@@ -681,6 +719,7 @@ bool FTruckYieldsAtDerivedCrossingTest::RunTest(const FString& Parameters)
 		const FContestOutcome Rebuilt = RunContest(*this, Spec, *Name);
 		if (!Rebuilt.bRan) { return false; }
 		TestEqual(*FString::Printf(TEXT("%s: no intrusion"), *Name), Rebuilt.Intrusions, 0);
+		TestEqual(*FString::Printf(TEXT("%s: nobody stood in the strip"), *Name), Rebuilt.StoodInStripSeconds, 0.0);
 		TestTrue(*FString::Printf(TEXT("%s: everyone gets across"), *Name), Rebuilt.bAllVehiclesArrived && Rebuilt.bAllAircraftArrived);
 	}
 	return true;
@@ -813,6 +852,14 @@ bool FVanQueueBetweenTwoTaxiwaysTest::RunTest(const FString& Parameters)
 		const FContestOutcome Out = RunContest(*this, Spec, *Name);
 		if (!Out.bRan) { return false; }
 		TestEqual(*FString::Printf(TEXT("%s: no intrusion"), *Name), Out.Intrusions, 0);
+		// RE-REVIEW, IMPORTANT 2: WHERE THE VANS STOOD. The queue for the far crossing backs up to
+		// the near one; a van with no room beyond the near strip must wait at its line, never
+		// roll in behind the queue and stand in the strip holding the conflict.
+		TestEqual(*FString::Printf(TEXT("%s: no van ever stood in a strip"), *Name), Out.StoodInStripSeconds, 0.0);
+		// AND THE AIRCRAFT'S WAIT: at most the vans already committed when it asked - each is
+		// about 5 s over the near crossing - never a van parked in the strip behind the queue.
+		TestTrue(*FString::Printf(TEXT("%s: the near aircraft waited %.2f s, under 10"), *Name, Out.AircraftWaited),
+			Out.AircraftWaited < 10.0);
 		TestTrue(*FString::Printf(TEXT("%s: everyone gets across - no deadlock"), *Name), Out.bAllVehiclesArrived && Out.bAllAircraftArrived);
 	}
 	return true;
@@ -1022,6 +1069,160 @@ bool FVanStoppedAcrossTheLineTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("the aircraft never passes the van while any of it is in the strip"), Intrusions, 0);
 	TestTrue(TEXT("and both finish"), bVanArrived && bAircraftArrived);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVanHeldAtLineThroughRebuildsTest,
+	"Airside.Model.Traffic.VanHeldAtLineThroughRebuilds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVanHeldAtLineThroughRebuildsTest::RunTest(const FString& Parameters)
+{
+	// RE-REVIEW, IMPORTANT 1: a van HELD at the line has its nose parked exactly on it, and the
+	// commit rule's "nose past the line" was decided by rounding - a rebuild re-projecting the van
+	// a hair forward turned a waiting van into a committed one, whose occupancy then beat the
+	// aircraft's reservation. A slow aircraft (2 m/s) keeps the van waiting, and the graph is
+	// rebuilt every half second while it does. Measured: where the van stood, and whether the
+	// AIRCRAFT ever waited for it - it must not, the van never had the crossing.
+	for (const double Lag : { 0.0, 2.0 })
+	{
+		FContestSpec Spec = DerivedCrossingSpec(ETraversalClass::GroundVehicle, Lag);
+		Spec.Aircraft[0].SpeedCap = 200.0;
+		Spec.Rebuild = uint8(EContestRebuild::WhileWaiting);
+		Spec.RebuildPeriodWhileWaiting = 0.5;
+		Spec.Seconds = 240.0;
+		const FString Name = FString::Printf(TEXT("van held through rebuilds, aircraft %+.0f s"), Lag);
+		const FContestOutcome Out = RunContest(*this, Spec, *Name);
+		if (!Out.bRan) { return false; }
+		TestTrue(*FString::Printf(TEXT("%s: rebuilt while it waited (%d)"), *Name, Out.Rebuilds), Out.Rebuilds > 3);
+		TestTrue(*FString::Printf(TEXT("%s: the van waited for the aircraft"), *Name), Out.VehicleWaited > 0.0);
+		TestEqual(*FString::Printf(TEXT("%s: the aircraft never waited for the van (%.2f s)"), *Name, Out.AircraftWaited),
+			Out.AircraftWaited, 0.0);
+		TestEqual(*FString::Printf(TEXT("%s: the van never stood in the strip"), *Name), Out.StoodInStripSeconds, 0.0);
+		TestEqual(*FString::Printf(TEXT("%s: no intrusion"), *Name), Out.Intrusions, 0);
+		TestTrue(*FString::Printf(TEXT("%s: everyone gets across"), *Name), Out.bAllVehiclesArrived && Out.bAllAircraftArrived);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVanHoldsRoomUntilClearTest,
+	"Airside.Model.Traffic.VanHoldsRoomUntilClear",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVanHoldsRoomUntilClearTest::RunTest(const FString& Parameters)
+{
+	// RE-REVIEW, IMPORTANT 3: the room past the far strip edge - the far lane, a footprint and a
+	// gap of it - is what lets a committed van promise to leave the strip. It was claimed on the
+	// approach and given back halfway across, once no step ahead ended at a conflict node, for
+	// anything merging onto the far arm to take. Measured on the table itself, every tick the
+	// van's TAIL is still in the strip beyond the last conflict: the far lane's first edge is
+	// claimed by the van, over at least the room it needs.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadCrossingFixture Crossing = FRoadCrossingFixture::Lay(*Net);
+	TestGraph::Rebuild(*Net);
+	const FTrafficRules Rules;
+	const FRoutePlan Plan = DerivedCrossingRoute(*Net, FVector2D(0.0, -20000.0), FVector2D(0.0, 20000.0), ETraversalClass::GroundVehicle);
+	if (!TestTrue(TEXT("the van routes across"), Plan.IsValid())) { return false; }
+
+	// The far arm's end: the first node with an Origin after the last conflict node.
+	int32 LastConflict = INDEX_NONE;
+	for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
+	{
+		const FGuidelineNode* To = Net->GetGuidelineNode(Plan.Steps[Index].To);
+		LastConflict = (To != nullptr && To->bCrossingConflict) ? Index : LastConflict;
+	}
+	if (!TestTrue(TEXT("the route crosses a conflict"), LastConflict != INDEX_NONE && Plan.Steps.IsValidIndex(LastConflict + 2))) { return false; }
+	// Northbound: positions along Y are distances along the lane.
+	const double ConflictY = Net->GetGuidelineNode(Plan.Steps[LastConflict].To)->Position.Y;
+	const double FarEndY = Net->GetGuidelineNode(Plan.Steps[LastConflict + 1].To)->Position.Y;
+	const FGuidelineEdgeId FarLane = Plan.Steps[LastConflict + 2].Edge;
+	const double Room = Rules.VehicleFootprint + Rules.VehicleGap;
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Van = Traffic->DispatchAgent(Net, Plan, TestAirframes::Van(), ETraversalClass::GroundVehicle, 0.0);
+	int32 Measured = 0, Held = 0;
+	double Shortest = TNumericLimits<double>::Max();
+	for (int32 Step = 0; Step < 30 * 120; ++Step)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+		const FRoadAgent* Agent = Traffic->FindAgent(Van);
+		if (Agent == nullptr || Agent->Phase == EAgentPhase::Parked) { break; }
+		const double Centre = Agent->LastMotion.Position.Y;
+		if (Centre <= ConflictY || Centre - Rules.VehicleFootprint * 0.5 >= FarEndY) { continue; }
+		++Measured;
+		const FTrafficClaim* Claim = Traffic->GetOccupancy().FindClaim(Van, FTrafficResource::OfEdge(FarLane));
+		if (Claim != nullptr)
+		{
+			++Held;
+			Shortest = FMath::Min(Shortest, FMath::Abs(Claim->To - Claim->From));
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("the van was measured between the last conflict and clearing the strip (%d ticks)"), Measured), Measured > 10);
+	TestEqual(TEXT("every one of those ticks, the van holds the far lane"), Held, Measured);
+	TestTrue(*FString::Printf(TEXT("over at least the room it needs to clear: %.0f of %.0f uu"), Shortest, Room),
+		Held == 0 || Shortest >= Room - 1.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVanCrossesPastAircraftQueueTest,
+	"Airside.Model.Traffic.VanCrossesPastAircraftQueue",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVanCrossesPastAircraftQueueTest::RunTest(const FString& Parameters)
+{
+	// RE-REVIEW, IMPORTANT 4: one box is all or nothing. A2, queued a gap short of the crossing
+	// behind A1 (parked on the far arm's end), was granted both road lanes' conflicts - they
+	// come before its refusal in route order - and held them for as long as the queue lasted,
+	// with the crossing empty. A van then waits at the line for ever: if the queue waits for a
+	// stand that van is needed at, nobody moves. Measured: how long the van waited, where A2
+	// stood, and that the van crossed.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadCrossingFixture Crossing = FRoadCrossingFixture::Lay(*Net);
+	TestGraph::Rebuild(*Net);
+	const FAirframe Plane = TestAirframes::PiperType()->Airframe();
+	const FTrafficRules Rules;
+
+	const FGuidelineNodeId EastEnd = TestGraph::NodeFor(*Net, Crossing.East, /*bEndA=*/true);
+	const FRoutePlan Through = DerivedCrossingRoute(*Net, FVector2D(-20000.0, 0.0), FVector2D(20000.0, 0.0), ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("the taxiway routes"), Through.IsValid())) { return false; }
+	const FRoutePlan ToEnd = TestGraph::Probe(*Net, Through.Start, EastEnd, ETraversalClass::Aircraft);
+	const FRoutePlan VanPlan = DerivedCrossingRoute(*Net, FVector2D(0.0, -20000.0), FVector2D(0.0, 20000.0), ETraversalClass::GroundVehicle);
+	if (!TestTrue(TEXT("A1 routes to the east arm's end, the van across"), ToEnd.IsValid() && VanPlan.IsValid())) { return false; }
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 A1 = Traffic->DispatchAgent(Net, ToEnd, Plane, ETraversalClass::Aircraft, 0.0);
+	if (!TestTrue(TEXT("A1 parks on the far arm's end"), RunUntil(*Traffic, *Net, 120.0, [&]()
+	{
+		const FRoadAgent* A = Traffic->FindAgent(A1);
+		return A != nullptr && A->Phase == EAgentPhase::Parked;
+	}, 1.0 / 30.0))) { return false; }
+
+	const int32 A2 = Traffic->DispatchAgent(Net, Through, Plane, ETraversalClass::Aircraft, 0.0);
+	// A2 settles into its queue position behind the crossing.
+	TickUntil(*Traffic, *Net, 60.0, [](int32) { return true; }, 1.0 / 30.0);
+	const FRoadAgent* Queued = Traffic->FindAgent(A2);
+	if (!TestNotNull(TEXT("A2 exists"), Queued)) { return false; }
+	const double A2At = Queued->LastMotion.Position.X;
+	const URoadProfile* Road = Net->ProfileFor(*Net->GetSegment(Crossing.South));
+	TestTrue(*FString::Printf(TEXT("A2 queues clear of the road: nose at x = %.0f"), A2At + Rules.AircraftFootprint * 0.5),
+		A2At + Rules.AircraftFootprint * 0.5 < -Road->GetTotalWidth() * 0.5);
+
+	const int32 VanId = Traffic->DispatchAgent(Net, VanPlan, TestAirframes::Van(), ETraversalClass::GroundVehicle, 0.0);
+	double VanWaited = 0.0;
+	bool bVanArrived = false;
+	for (int32 Step = 0; Step < 30 * 90 && !bVanArrived; ++Step)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+		const FRoadAgent* Van = Traffic->FindAgent(VanId);
+		bVanArrived = Van == nullptr || Van->Phase == EAgentPhase::Parked;
+		VanWaited += (Van != nullptr && (Van->GetWaitingOn() == A1 || Van->GetWaitingOn() == A2)) ? 1.0 / 30.0 : 0.0;
+	}
+	AddInfo(FString::Printf(TEXT("the van waited %.2f s for the queue"), VanWaited));
+	TestTrue(TEXT("the van crosses past the queue"), bVanArrived);
+	TestEqual(TEXT("without waiting for aircraft that are not moving"), VanWaited, 0.0);
 	return true;
 }
 
