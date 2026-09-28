@@ -115,8 +115,13 @@ private:
 	UPROPERTY() TObjectPtr<const UBuildBarWidget> DockBar;
 	UPROPERTY() TObjectPtr<const UUIStyle> Style;
 	TSharedPtr<IUiLayoutStore> LayoutStore;
-	/** The saved layout is judged once, on the first tick - when the view's real size is known. */
+	/** The saved layout is judged once: when the view's real size is known AND the bar's height has
+	 *  settled - see TickWindows. All windows are added before the first tick (UBuildHudLayer::
+	 *  CreateAll, 2026-09-28), so judging once covers every window. */
 	bool bLayoutRestored = false;
+	/** The bar height last tick, and how many ticks the judgement has waited for it to settle. */
+	double LastBarHeightSeen = -1.0;
+	int32 RestoreWaitTicks = 0;
 	FVector2D ViewSize = FVector2D(1920.0, 1080.0);
 	int32 TopZ = 0;
 };

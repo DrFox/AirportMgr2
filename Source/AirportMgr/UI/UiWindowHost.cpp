@@ -128,10 +128,15 @@ void UUiWindowHost::RestoreSavedLayout()
 				FMath::Max(Saved->Size.Y, static_cast<double>(Style->WindowMinSize.Y)))
 			: SizeOf(E);
 		// OFF SCREEN -> THE DEFAULT, not a clamp: a layout from a bigger monitor clamped into this
-		// one's corner is a place the player never chose (Review Focus 1 of the step 3 plan).
+		// one's corner is a place the player never chose (Review Focus 1 of the step 3 plan). An
+		// AUTO-SIZED window is judged at least at the minimum size: hidden, it measures 0x0, and a
+		// top-left alone "fitted" an ultrawide's layout that was then clamped into the corner.
+		// ENFORCED BY: AirportMgr.UI.WindowHost.AutoSizedRestoreIsJudgedAtMinimumSize.
+		const FVector2D FitSize(FMath::Max(Size.X, static_cast<double>(Style->WindowMinSize.X)),
+			FMath::Max(Size.Y, static_cast<double>(Style->WindowMinSize.Y)));
 		const FBox2D B = Bounds();
 		const bool bFits = Saved->TopLeft.X >= B.Min.X && Saved->TopLeft.Y >= B.Min.Y
-			&& Saved->TopLeft.X + Size.X <= B.Max.X && Saved->TopLeft.Y + Size.Y <= B.Max.Y;
+			&& Saved->TopLeft.X + FitSize.X <= B.Max.X && Saved->TopLeft.Y + FitSize.Y <= B.Max.Y;
 		if (!bFits)
 		{
 			UE_LOG(LogRoadBuild, Log, TEXT("Window %s: saved layout (%.0f, %.0f) is off this screen - default placement"),
@@ -357,12 +362,25 @@ void UUiWindowHost::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 
 void UUiWindowHost::TickWindows(float DeltaTime)
 {
-	// THE SAVED LAYOUT IS JUDGED ON THE FIRST TICK, not in AddWindow: "does it still fit" needs the
-	// view's real size, which NativeTick has only just read.
+	// THE SAVED LAYOUT IS JUDGED ONCE THE VIEW AND THE BAR ARE REAL, not in AddWindow: "does it still
+	// fit" needs the view's real size (NativeTick has only just read it) and the bar's real height.
+	// The bar's first measure runs its wrap box at SWrapBox's 100-unit starting width, so frame 1's
+	// height reads several sections tall, and judging then threw away every window saved just above
+	// the bar (final review 2026-09-28). So: two equal readings in a row, or 30 ticks at most.
+	// ENFORCED BY: AirportMgr.UI.WindowHost.RestoreWaitsForTheBarToSettle.
 	if (!bLayoutRestored)
 	{
-		bLayoutRestored = true;
-		RestoreSavedLayout();
+		const double Height = BarHeight();
+		++RestoreWaitTicks;
+		const bool bSettled = DockBar == nullptr || (RestoreWaitTicks > 1 && Height == LastBarHeightSeen);
+		if (bSettled || RestoreWaitTicks >= 30)
+		{
+			bLayoutRestored = true;
+			UE_LOG(LogRoadBuild, Log, TEXT("Window host: judging the saved layout after %d tick(s) - view (%.0f, %.0f), bar %.0f%s"),
+				RestoreWaitTicks, ViewSize.X, ViewSize.Y, Height, bSettled ? TEXT("") : TEXT(" (bar never settled)"));
+			RestoreSavedLayout();
+		}
+		LastBarHeightSeen = Height;
 	}
 	for (FUiWindowEntry& E : Windows)
 	{

@@ -506,4 +506,65 @@ bool FUiLayoutNoStoreTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE SAVED LAYOUT WAITS FOR THE BAR TO SETTLE. The bar's first measure runs its wrap box at
+ * SWrapBox's 100-unit starting width, so its first height reads several sections tall; judging the
+ * saved layout then threw away every window saved just above the real bar, every launch (final
+ * review 2026-09-28, traced to SWrapBox.cpp:17/52). The judgement waits for two equal readings.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiLayoutWaitsForBarTest, "AirportMgr.UI.WindowHost.RestoreWaitsForTheBarToSettle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiLayoutWaitsForBarTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FStoredFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(F.TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("a bar"), Bar)) { return false; }
+	const float Wide = static_cast<float>(Bar->SectionRowSizeForTest(6000.0f).X);
+	const float Real = Bar->BarReservedHeightForTest(Wide * 1.1f);
+	const float Inflated = Bar->BarReservedHeightForTest(Wide * 0.2f);   // what frame 1 reads
+	if (!TestTrue(TEXT("the inflated reading is taller - otherwise this proves nothing"), Inflated > Real + 50.0f)) { return false; }
+
+	// Saved just above the REAL bar: fits it, does not fit the inflated one.
+	FUiWindowPlacement Saved;
+	Saved.Size = FVector2D(300.0, 200.0);
+	Saved.bSized = true;
+	Saved.TopLeft = FVector2D(400.0, 1080.0 - Real - 200.0 - 10.0);
+	F.Store->Write(TEXT("ledger"), Saved);
+	F.Host->DockAbove(Bar);
+	F.Ledger->Toggle();
+
+	F.Host->TickForTest(0.016f);            // frame 1: inflated - must not judge yet
+	Bar->BarReservedHeightForTest(Wide * 1.1f);
+	F.Host->TickForTest(0.016f);            // changed - still waiting
+	F.Host->TickForTest(0.016f);            // stable - judged now, against the real bar
+	TestEqual(TEXT("restored where it was saved, not thrown back to the default"),
+		F.Host->WindowRect(TEXT("ledger")).Min, Saved.TopLeft);
+	return true;
+}
+
+/**
+ * AN AUTO-SIZED WINDOW IS JUDGED AT LEAST AT THE MINIMUM SIZE. A hidden window measures 0x0, so a
+ * layout from an ultrawide screen "fitted" at its top-left and was then clamped into the corner
+ * the first time it showed - the placement Review Focus 1 rules out (final review 2026-09-28).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiLayoutAutoSizeFitTest, "AirportMgr.UI.WindowHost.AutoSizedRestoreIsJudgedAtMinimumSize",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiLayoutAutoSizeFitTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FStoredFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	FUiWindowPlacement Saved;
+	Saved.TopLeft = FVector2D(1850.0, 200.0);   // an ultrawide's right-hand side; 1850 + 180 > 1920
+	F.Store->Write(TEXT("offers"), Saved);
+	UOfferInboxWidget* Offers = CreateWidget<UOfferInboxWidget>(F.TestWorld.World, UOfferInboxWidget::StaticClass());
+	F.Host->AddWindow(*Offers);
+	F.Host->TickForTest(0.016f);
+	TestEqual(TEXT("too near the edge for even the minimum size: the default top-right placement"),
+		F.Host->WindowRect(TEXT("offers")).Min, FVector2D(1920.0 - 12.0, 12.0));
+	return true;
+}
+
 #endif
