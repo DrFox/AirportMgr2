@@ -60,10 +60,12 @@ All in AirportOps `Model/` (world-free, `NewObject`-testable, may not include `E
 ### 2.1 Vehicle state
 
 ```
-enum class EServiceVehicleState { Idle, ToJob, Serving, ToFacility, AtFacility, ToHome }
+enum class EServiceVehicleState { Idle, ToJob, Serving, ToFacility, AtFacility }
 ```
 
-One enum, not bools (Conventions: "a phase is an enum"). `Idle` has no agent: a vehicle at
+One enum, not bools (Conventions: "a phase is an enum"). NO ToHome (amended while planning):
+for every role home IS the facility - a fuel vehicle refills there, stairs park there with a
+zero-length visit - so a separate "going home" state would be ToFacility under another name. `Idle` has no agent: a vehicle at
 home is not on the road (today's retire-at-depot behaviour kept). Every other state has one.
 
 ```
@@ -72,8 +74,7 @@ Idle --queue non-empty--> NextStep(head)
    ViaFacility -> ToFacility  --arrive--> AtFacility --done--> NextStep(head)
    Refuse      -> head job back to board; NextStep(new head) / home
 (after-serve): remainder? -> back to board.  Queue non-empty? -> NextStep(head).
-               Empty -> policy.OnQueueEmpty: ToHome (fuel: arriving home runs AtFacility refill)
-ToHome --arrive--> AtFacility (if policy refills at home) --> Idle
+               Empty -> ToFacility (home); AtFacility there (fuel: the refill) --> Idle
 ```
 
 Arrival is Airside's `Parked` phase event, routed by agent id. `Serving`/`AtFacility` are
@@ -197,7 +198,8 @@ vehicles; roles other than fuel in production; simultaneous service of one stand
 ## 6. Stages
 
 1. Vehicles, jobs, board, fuel policy, queued bids; `UFuelService` becomes `UJobBoard`.
-2. Re-bidding of queued jobs and trip remainders, with the margin.
+2. Re-bidding of queued jobs, with the margin. (Trip remainders re-open in stage 1: multi-trip
+   loads already exist and have no other mechanism once a job is not owned by one truck.)
 3. Save/load of jobs and vehicles (jobs keyed by flight id; on load vehicles are Idle at home
    and unfinished jobs re-open with their remaining quantity); the inspector shows a vehicle's
    state and queue.
