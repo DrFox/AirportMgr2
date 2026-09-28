@@ -53,3 +53,19 @@ private:
 	TMap<FName, FUiWindowPlacement> Values;
 	int32 WriteCount = 0;
 };
+
+/**
+ * The player's per-user config: UAirportMgrUserSettings::WindowLayout in GameUserSettings.ini.
+ * PER USER, NOT PER AIRPORT, IToolPreferences' ruling: where a player keeps their ledger is a habit,
+ * like a keybinding. SAVED ON EVERY WRITE - writes happen once per gesture (CommitPlacement), and a
+ * save left for shutdown is lost on a crash or a Stop-Process, the way this project's editor ends.
+ */
+class AIRPORTMGR_API FUserSettingsLayoutStore : public IUiLayoutStore
+{
+public:
+	virtual TOptional<FUiWindowPlacement> Read(FName Id) const override;
+	virtual void Write(FName Id, const FUiWindowPlacement& Placement) override;
+	virtual void Clear() override;
+	/** Takes Id out again - for a test that wrote a key of its own, never a window. */
+	void Remove(FName Id);
+};
