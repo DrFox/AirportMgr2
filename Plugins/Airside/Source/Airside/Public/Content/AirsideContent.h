@@ -136,8 +136,9 @@ public:
 	 * not merely vanish, it would come back as a taxiway: right width lost, continuity lost,
 	 * and a junction paved across the middle of the runway. Nothing would report it.
 	 *
-	 * Widths are the ICAO set - 18, 23, 30, 45 and 60 m - because a runway conforms to one of
-	 * them or it is not a runway. The tool picks from this list rather than taking a number,
+	 * Widths are the ICAO set rounded up to even metres - 20, 26, 30, 46 and 60 m, for the 1 m
+	 * world grid (2026-09-28, build_road_profiles.py's RUNWAYS) - because a runway conforms to
+	 * one of them or it is not a runway. The tool picks from this list rather than taking a number,
 	 * which is what makes "conforms to certain widths" true by construction instead of by
 	 * validation.
 	 */

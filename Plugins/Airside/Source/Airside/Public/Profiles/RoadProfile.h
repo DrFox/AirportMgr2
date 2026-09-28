@@ -120,19 +120,22 @@ class AIRSIDE_API URoadProfile : public UDataAsset
 
 public:
 	/**
-	 * A real taxiway's width, uu - 23 m. The one figure ARoadNetworkActor::FallbackWidth's
-	 * own default and the holding-position marking's width-with-no-profile-to-ask fallback
-	 * both typed independently as a bare 2300.0 (#103); this is that number, named once.
+	 * A real taxiway's width, uu - 24 m: ICAO code E's 23 m rounded up to an even metre so its
+	 * edges land on the 1 m world grid (2026-09-28; build_road_profiles.py's TAXIWAY_WIDTHS
+	 * says why). The one figure ARoadNetworkActor::FallbackWidth's own default and the
+	 * holding-position marking's width-with-no-profile-to-ask fallback both typed
+	 * independently as a bare 2300.0 (#103); this is that number, named once.
 	 */
-	static constexpr double StandardTaxiwayWidth = 2300.0;
+	static constexpr double StandardTaxiwayWidth = 2400.0;
 
 	/**
-	 * A real taxiway's fillet, uu - 15 m. PreferredFilletRadius's own default, the debug
+	 * A real taxiway's fillet, uu - 16 m, two thirds of StandardTaxiwayWidth as every
+	 * authored taxiway's is (TAXIWAY_FILLET_RATIO); 15 m while the width was 23. PreferredFilletRadius's own default, the debug
 	 * gallery's FilletRadius and ARoadNetworkActor::FallbackFilletRadius all typed 1500.0
 	 * independently (issue #192 item 3); this is that number, named once, beside
 	 * StandardTaxiwayWidth for the same reason.
 	 */
-	static constexpr double StandardTaxiwayFilletRadius = 1500.0;
+	static constexpr double StandardTaxiwayFilletRadius = 1600.0;
 
 	/**
 	 * What a metre of this profile costs to lay, and what a day of owning it costs.

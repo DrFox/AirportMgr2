@@ -42,10 +42,10 @@ PROFILES = [
     ("/Game/DA_RoadProfile_Taxiway_E", TAXIWAY_RATE),
     ("/Game/DA_RoadProfile_Taxiway_F", TAXIWAY_RATE),
     ("/Game/DA_RoadProfile_ServiceRoad", SERVICE_ROAD_RATE),
-    ("/Game/DA_Runway_18m", RUNWAY_RATE),
-    ("/Game/DA_Runway_23m", RUNWAY_RATE),
+    ("/Game/DA_Runway_20m", RUNWAY_RATE),
+    ("/Game/DA_Runway_26m", RUNWAY_RATE),
     ("/Game/DA_Runway_30m", RUNWAY_RATE),
-    ("/Game/DA_Runway_45m", RUNWAY_RATE),
+    ("/Game/DA_Runway_46m", RUNWAY_RATE),
     ("/Game/DA_Runway_60m", RUNWAY_RATE),
 ]
 
