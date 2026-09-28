@@ -464,7 +464,7 @@ void UGroundTraffic::ReleaseGoal(FRoadAgent& Agent, int32 AgentId)
 	// ReofferStands used to clear it on the agent AFTER RedirectAgent by re-running
 	// FindIndex(Id), but TakeGoal is about to give the agent a real destination, and
 	// RedirectAgent's broadcast (OnAgentPhaseChanged) can run a listener that retires an
-	// agent synchronously - UFuelService::OnAgentPhase calls RetireAgent from inside it. A
+	// agent synchronously - UJobBoard::OnAgentPhase calls RetireAgent from inside it. A
 	// caller re-indexing Agents by Id AFTER that broadcast can find INDEX_NONE and index off
 	// the end. Clearing before the broadcast needs no such lookup: Agent is still the entry
 	// the caller already found.
@@ -634,7 +634,7 @@ bool UGroundTraffic::RerouteAgent(int32 AgentId, const URoadNetwork* Network, in
 	{
 		return false;
 	}
-	// GROUND VEHICLES ONLY - see the header. The one caller (UFuelService::SendTruckHome) sends
+	// GROUND VEHICLES ONLY - see the header. The one caller (UJobBoard::DriveVehicleTo) sends
 	// vehicles; the guard is what keeps an aircraft's runway and departure arming off this path.
 	if (Agent.AsVehicle() == nullptr)
 	{
@@ -662,7 +662,7 @@ bool UGroundTraffic::RerouteAgent(int32 AgentId, const URoadNetwork* Network, in
 	// THE SPLICE JUDGED WHOLE, FROM THE LIVE CHAIN - ExtendRoute's check, and the reverse too: a
 	// route home from a service point opens its tail with the bay's reverse leg, which only the
 	// chain the kept prefix leaves can solve. Refused, like a failed search, before anything moves -
-	// and at LOG level, as SpliceReplan's is: a caller tries the next node on (UFuelService::
+	// and at LOG level, as SpliceReplan's is: a caller tries the next node on (UJobBoard::
 	// SendTruckHome), so a refusal here is an answer to a question, not a fault.
 	if (const FVehicle* Vehicle = Agent.AsVehicle();
 		Vehicle != nullptr && Vehicle->HasTrailer() && Agent.TowAxles.Num() == Vehicle->Tow.Num()
@@ -980,7 +980,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	if (!IsPushGroundFree(AgentId, Push.PushRoute, Push.PushRoute.Length))
 	{
 		// AT Log AND NOT Warning: a taxiway the player has left busy refuses this for as long
-		// as they leave it, and it clears itself. UFuelService::DepartTheReady already
+		// as they leave it, and it clears itself. UJobBoard::DepartTheReady already
 		// throttles its own line to a CHANGE of reason, which keeps this from filling the file.
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Agent %d cannot push back yet: %.0f uu of ground is not free."),
@@ -1064,7 +1064,7 @@ bool UGroundTraffic::RetireAgent(int32 AgentId)
 	const EAgentPhase Before = Agents[Index].Phase;
 	Agents.RemoveAt(Index);
 	// BEFORE THE BROADCAST BELOW, which can run a listener that calls back into FindIndex
-	// (RetireAgent is exactly the kind of call UFuelService::OnAgentPhase makes synchronously
+	// (RetireAgent is exactly the kind of call UJobBoard::OnAgentPhase makes synchronously
 	// - see AdvanceOnce's own re-entrancy comment) - a stale index table would answer that
 	// call with an entry shifted or gone.
 	RebuildAgentIndex();
@@ -1283,7 +1283,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	// RE-ENTRANCY CONTRACT (issue #193): the broadcasts below - OnAgentPhaseChanged, here and
 	// in RedirectAgent/RetireAgent - can run a listener that calls back into this class and
 	// retires or redirects ANY agent, including ones still to be visited this tick
-	// (UFuelService::OnAgentPhase calls RetireAgent synchronously). This loop tolerates that
+	// (UJobBoard::OnAgentPhase calls RetireAgent synchronously). This loop tolerates that
 	// for two reasons together: it runs by DESCENDING index, so a RemoveAt at or below the
 	// current Index only ever shifts already-visited slots (Index and above), never the ones
 	// still to come; and it holds no reference across a broadcast - Agent and Index are used
@@ -1307,7 +1307,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			bStandsMayHaveFreed = true;
 			Agents.RemoveAt(Index);
 			// BEFORE THE BROADCAST, same reason as RetireAgent's own call: a listener firing
-			// synchronously from it (UFuelService::OnAgentPhase) can call back into FindIndex.
+			// synchronously from it (UJobBoard::OnAgentPhase) can call back into FindIndex.
 			RebuildAgentIndex();
 			// Broadcast AFTER the removal so a listener that asks GetAgentCount sees the
 			// agent already gone, which is what "To == Gone" promises.
@@ -1517,7 +1517,7 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 			// NOT Agents[FindIndex(Id)] HERE (issue #193): RedirectAgent already cleared
 			// bAwaitingStand itself, before its own OnAgentPhaseChanged broadcast - see its
 			// comment. Re-deriving the index AFTER that call is exactly the bug this fix
-			// removes: a listener on that broadcast (UFuelService::OnAgentPhase) can call
+			// removes: a listener on that broadcast (UJobBoard::OnAgentPhase) can call
 			// RetireAgent synchronously and remove Id from Agents, so FindIndex(Id) here would
 			// return INDEX_NONE and Agents[INDEX_NONE] would be an out-of-bounds write. Id and
 			// Stand.Index are plain values, not indices into Agents, so the log below is safe

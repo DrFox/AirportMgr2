@@ -99,7 +99,7 @@ bool FTrucksDerivedFromShedsTest::RunTest(const FString& Parameters)
 		return Net->GetEntity(Net->PlaceEntity(Placement));
 	};
 
-	// Two sheds is two trucks. The number UFuelService counts dispatches against, so this
+	// Two sheds is two trucks. The number UJobBoard seeds each depot's placeholder fleet from, so this
 	// is the one module whose effect is real today.
 	{
 		const FEntityInstance* Two = PlaceWith(

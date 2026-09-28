@@ -8,7 +8,7 @@
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 #include "Model/InspectFacts.h"
 #include "Model/OpsEvents.h"
 #include "Model/OpsSave.h"
@@ -573,7 +573,7 @@ bool FOpsRuntimeWiresLitresTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(TestWorld.Actor);
-	if (!TestTrue(TEXT("the fuel service has a litres seam"), static_cast<bool>(Runtime->GetFuelService()->LitresOwedFor)))
+	if (!TestTrue(TEXT("the fuel service has a litres seam"), static_cast<bool>(Runtime->GetJobBoard()->LitresOwedFor)))
 	{
 		return false;
 	}
@@ -585,9 +585,9 @@ bool FOpsRuntimeWiresLitresTest::RunTest(const FString& Parameters)
 	FAirframe Airframe;
 	Airframe.FuelCapacityLitres = 1000.0;
 	TestEqual(TEXT("the flight's own litres reach the demand"),
-		Runtime->GetFuelService()->LitresOwedFor(42, Airframe), 321.0, 1e-9);
+		Runtime->GetJobBoard()->LitresOwedFor(42, Airframe), 321.0, 1e-9);
 	TestEqual(TEXT("an agent no flight owns gets the stated fallback"),
-		Runtime->GetFuelService()->LitresOwedFor(7, Airframe), UFuelService::DefaultLitres(Airframe), 1e-9);
+		Runtime->GetJobBoard()->LitresOwedFor(7, Airframe), UJobBoard::DefaultLitres(Airframe), 1e-9);
 	return true;
 }
 

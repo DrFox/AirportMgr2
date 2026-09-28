@@ -750,7 +750,7 @@ public:
 	TArray<FName> GetAnchorIdsForRole(FEntityInstanceId Entity, EServiceRole Role) const;
 
 	/**
-	 * The first anchor id for a role, or NAME_None - what UFuelService::FuelAnchorOf actually
+	 * The first anchor id for a role, or NAME_None - what UJobBoard::ServiceAnchorOf actually
 	 * needs every tick and GetAnchorIdsForRole above never was (issue #190): that heap-
 	 * allocates a TArray<FName> BY VALUE for a caller that reads element 0 and stops, once
 	 * per waiting aircraft per tick for as long as the fleet stays saturated. Same ordering

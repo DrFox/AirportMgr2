@@ -3004,11 +3004,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FReofferStandsRetireReentrancyTest::RunTest(const FString& Parameters)
 {
 	// #193: ReofferStands used to re-derive its agent's index with FindIndex AFTER calling
-	// RedirectAgent, which broadcasts OnAgentPhaseChanged. In play, UFuelService::OnAgentPhase
+	// RedirectAgent, which broadcasts OnAgentPhaseChanged. In play, UJobBoard::OnAgentPhase
 	// answers that broadcast by calling UGroundTraffic::RetireAgent SYNCHRONOUSLY - so a
 	// listener that retires the very agent being redirected removes it from Agents mid-call,
 	// and Agents[FindIndex(Id)] afterwards indexed with INDEX_NONE. This test stands in for
-	// UFuelService with a plain lambda, so it exercises the real re-entrancy without pulling
+	// UJobBoard with a plain lambda, so it exercises the real re-entrancy without pulling
 	// in the AirportOps module: the fix is in Model/, and belongs to a Model/ test.
 	const FTestAirport A = FTestAirport::Build(TestAirframes::Piper(), { .StandCount = 2 });
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
@@ -3035,7 +3035,7 @@ bool FReofferStandsRetireReentrancyTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// THE LISTENER STANDS IN FOR UFuelService::OnAgentPhase: it retires this agent the moment
+	// THE LISTENER STANDS IN FOR UJobBoard::OnAgentPhase: it retires this agent the moment
 	// it sees ITS phase change away from Parked - which is the redirect ReofferStands is about
 	// to drive - and does so exactly once, so the Gone broadcast RetireAgent itself raises does
 	// not recurse.

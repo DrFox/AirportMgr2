@@ -41,7 +41,7 @@ struct FAgentFacts
 	 * empty when nothing is.
 	 *
 	 * FILLED BY AirportOps, NOT BY DescribeAgent, which leaves it empty. Airside must never
-	 * learn what a truck is FOR (see UFuelService), so the FIELD is here - because the panel
+	 * learn what a truck is FOR (see UJobBoard), so the FIELD is here - because the panel
 	 * reads FAgentFacts and never FRoadAgent - and the SENTENCE comes from the layer that
 	 * knows. The same seam M3's UFlight fills its airline and off-block time through.
 	 */

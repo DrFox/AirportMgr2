@@ -5,7 +5,7 @@
 #include "Model/FlightBoard.h"
 #include "Model/AirlineDefinition.h"
 #include "Model/OfferGenerator.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
@@ -283,7 +283,7 @@ bool FOfferRowAcceptLabelTest::RunTest(const FString& Parameters)
 
 	UFlightBoard* Fuelled = NewObject<UFlightBoard>();
 	Fuelled->Allocator = NewObject<UStandAllocator>();
-	Fuelled->Fuel = NewObject<UFuelService>();
+	Fuelled->Fuel = NewObject<UJobBoard>();
 	Fuelled->AddOffer(*Clock, InboxOffer(0.0));
 	UOfferInboxViewModel* Second = NewObject<UOfferInboxViewModel>();
 	Second->Refresh(*Fuelled, *Traffic, *Net, *Clock);

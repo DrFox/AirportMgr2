@@ -173,7 +173,7 @@ bool FDepartAgentForwardersTest::RunTest(const FString& Parameters)
  *
  * REPORTED FROM PLAY, 2026-09-27: an SR22 that could not take off wrote "DepartAgent 1:
  * Departure refused: the runway is 40366 uu; this aircraft's field length is 43000" 14,944
- * times in three minutes. UFuelService retries the departure every tick until it succeeds -
+ * times in three minutes. UJobBoard retries the departure every tick until it succeeds -
  * rightly, so lengthening the runway releases the aircraft - and quiets its OWN line on an
  * unchanged reason; the planner's verdict one level down was logged on every call.
  */

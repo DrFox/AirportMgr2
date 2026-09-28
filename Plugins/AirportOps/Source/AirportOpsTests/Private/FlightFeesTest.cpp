@@ -2,7 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/Pricing.h"
 #include "Model/RoadEntity.h"
@@ -147,7 +147,7 @@ bool FFuelServiceEarnsItsFeeTest::RunTest(const FString& Parameters)
 {
 	ULedger* Ledger = NewObject<ULedger>();
 	UPricing* Pricing = NewObject<UPricing>();
-	UFuelService* Fuel = NewObject<UFuelService>();
+	UJobBoard* Fuel = NewObject<UJobBoard>();
 	Ledger->Open(1000.0);
 	Fuel->Ledger = Ledger;
 	Fuel->Pricing = Pricing;

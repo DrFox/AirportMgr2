@@ -3,7 +3,7 @@
 #include "OpsSaveTestHelpers.h"
 #include "Model/AirsideCapability.h"
 #include "Model/FlightBoard.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
@@ -45,7 +45,7 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 	// An empty board: this test is about the clock and the network, and a board with no
 	// flights is what a game that never opened the inbox actually saves.
 	UFlightBoard* Board = NewObject<UFlightBoard>();
-	UFuelService* Fuel = NewObject<UFuelService>();
+	UJobBoard* Fuel = NewObject<UJobBoard>();
 
 	FOpsSnapshot Snapshot;
 	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Source, Snapshot);
@@ -57,7 +57,7 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 	URoadNetwork* Restored = NewObject<URoadNetwork>();
 	USimClock* RestoredClock = NewObject<USimClock>();
 	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
-	UFuelService* RestoredFuel = NewObject<UFuelService>();
+	UJobBoard* RestoredFuel = NewObject<UJobBoard>();
 	if (!TestTrue(TEXT("restore succeeds"),
 		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *Restored))) { return false; }
 
@@ -109,14 +109,14 @@ bool FOpsSavePauseResumeSpeedSurvivesTest::RunTest(const FString& Parameters)
 	}
 
 	UFlightBoard* Board = NewObject<UFlightBoard>();
-	UFuelService* Fuel = NewObject<UFuelService>();
+	UJobBoard* Fuel = NewObject<UJobBoard>();
 	URoadNetwork* Network = NewObject<URoadNetwork>();
 	FOpsSnapshot Snapshot;
 	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Network, Snapshot);
 
 	USimClock* RestoredClock = NewObject<USimClock>();
 	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
-	UFuelService* RestoredFuel = NewObject<UFuelService>();
+	UJobBoard* RestoredFuel = NewObject<UJobBoard>();
 	URoadNetwork* RestoredNetwork = NewObject<URoadNetwork>();
 	if (!TestTrue(TEXT("restore succeeds"),
 		OpsSave::Restore(Snapshot,
@@ -187,7 +187,7 @@ bool FOpsSaveLegacyShimTest::RunTest(const FString& Parameters)
 	USimClock* RestoredClock = NewObject<USimClock>();
 	URoadNetwork* RestoredNetwork = NewObject<URoadNetwork>();
 	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
-	UFuelService* RestoredFuel = NewObject<UFuelService>();
+	UJobBoard* RestoredFuel = NewObject<UJobBoard>();
 	if (!TestTrue(TEXT("restore succeeds against a legacy snapshot"),
 		OpsSave::Restore(Legacy, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNetwork)))
 	{
@@ -210,11 +210,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FOpsSaveFuelResetOnRestoreTest::RunTest(const FString& Parameters)
 {
-	UFuelService* Fuel = NewObject<UFuelService>();
+	UJobBoard* Fuel = NewObject<UJobBoard>();
 	// A truck "on its way home" from a PRE-load session - exactly the state a load's
 	// ClearAgents makes stale, and exactly what leaked before this fix: nothing ever
 	// touched GoingHome across a load, so this entry outlived the truck it named forever.
-	Fuel->SetGoingHomeForTest(1, FEntityInstanceId());
+	Fuel->AddVehicleForTest(TEXT("FUEL"), FEntityInstanceId(), EServiceVehicleState::ToFacility, 0.0);
 	if (!TestEqual(TEXT("set up with one truck going home"), Fuel->TrucksGoingHomeForTest(), 1))
 	{
 		return false;
@@ -236,7 +236,7 @@ bool FOpsSaveFuelResetOnRestoreTest::RunTest(const FString& Parameters)
 	// Restore round trip is the one path that actually proves the fix, not RestoreBlob alone
 	// against a snapshot built by hand. Both fields are UPROPERTY(Transient) now for exactly
 	// this reason.
-	Fuel->SetGoingHomeForTest(2, FEntityInstanceId());
+	Fuel->AddVehicleForTest(TEXT("FUEL"), FEntityInstanceId(), EServiceVehicleState::ToFacility, 0.0);
 	if (!TestEqual(TEXT("set up again with one truck going home, for the round trip"),
 		Fuel->TrucksGoingHomeForTest(), 1))
 	{
@@ -251,7 +251,7 @@ bool FOpsSaveFuelResetOnRestoreTest::RunTest(const FString& Parameters)
 	USimClock* RestoredClock = NewObject<USimClock>();
 	URoadNetwork* RestoredNet = NewObject<URoadNetwork>();
 	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
-	UFuelService* RestoredFuel = NewObject<UFuelService>();
+	UJobBoard* RestoredFuel = NewObject<UJobBoard>();
 	if (!TestTrue(TEXT("round-trip restore succeeds"),
 		OpsSave::Restore(RoundTrip, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNet)))
 	{

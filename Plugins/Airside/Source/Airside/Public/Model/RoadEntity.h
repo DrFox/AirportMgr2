@@ -192,14 +192,14 @@ struct AIRSIDE_API FResolvedAnchor
  * EPlaceableEntity records at its own declaration: UHT cannot resolve a type declared in a
  * header with no .generated.h, and a forward declaration does not satisfy it either.
  *
- * IN Model/ AND NOT Entities/, deliberately. UFuelService lives in another plugin's Model/
+ * IN Model/ AND NOT Entities/, deliberately. UJobBoard lives in another plugin's Model/
  * layer and counts a depot's pumps for itself; had this been an Entities/ type it could not
  * have, and the count would have needed a fifth captured fact to reach it. That it did not
  * is the test that this enum is in the right layer.
  *
  * WHAT EACH ONE DRIVES, and how real that is today:
- *   Shed - the truck count. LIVE: UFuelService gates dispatch on FEntityInstance::Trucks.
- *   Pump - the refill. LIVE: UFuelService::PumpsAt multiplies a returning vehicle's refill
+ *   Shed - the truck count. LIVE: UJobBoard seeds each depot's placeholder fleet from FEntityInstance::Trucks.
+ *   Pump - the refill. LIVE: UJobBoard::PumpsAt multiplies a returning vehicle's refill
  *          rate by these (spec 2026-09-28-fuel-litres; they divided a flat dwell before).
  *   Tank - storage. INERT: no fuel inventory exists anywhere yet. Counted, never read.
  * The asymmetry is deliberate and is recorded in the design doc §2: growing a consumable
@@ -293,11 +293,12 @@ struct AIRSIDE_API FEntityInstance
 	UPROPERTY() EServiceRole PoseRole = EServiceRole::Aircraft;
 
 	/**
-	 * How many service vehicles this installation may have out at once, captured from
+	 * How many of EACH kind of service vehicle this installation starts with (UJobBoard's placeholder
+	 * fleet until the player buys vehicles - spec 2026-09-28-service-vehicle-lifecycle §3.4), captured from
 	 * UEntityDefinition::Trucks at placement. 0 on a stand, where it means nothing.
 	 *
 	 * THE THIRD CAPTURED FACT, for the same reason as the two above - but note that it is
-	 * read from ANOTHER MODULE's Model/ layer (AirportOps' UFuelService), which
+	 * read from ANOTHER MODULE's Model/ layer (AirportOps' UJobBoard), which
 	 * Check-Architecture.ps1 also forbids from including Entities/. So the snapshot is not
 	 * merely convenient here, it is the only way the number reaches the thing that counts
 	 * against it.

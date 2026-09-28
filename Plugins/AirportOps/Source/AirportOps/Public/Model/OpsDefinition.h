@@ -27,7 +27,7 @@ public:
  * What one KIND of fuel vehicle carries and how fast it pumps - keyed by FVehicle::TypeCode.
  *
  * IN AirportOps, NOT ON FVehicle: Airside knows how a vehicle MOVES and must never learn what it
- * is FOR (UFuelService's header). Spec 2026-09-28-fuel-litres section 1.
+ * is FOR (UJobBoard's header). Spec 2026-09-28-fuel-litres section 1.
  */
 USTRUCT()
 struct AIRPORTOPS_API FFuelVehicleSpec
@@ -84,7 +84,7 @@ public:
 	double StartHour = 9.0;
 
 	/**
-	 * Each fuel vehicle's tank and flow rate, by FVehicle::TypeCode. Copied into UFuelService at
+	 * Each fuel vehicle's tank and flow rate, by FVehicle::TypeCode. Copied into UJobBoard at
 	 * attach. First guesses from the user (2026-09-28): the utility tow's 1,000 L trailer at
 	 * 75 L/min, the bowser 10,000 L at 200 L/min; the articulated tanker (30,000 L, 500 L/min)
 	 * joins with the depot fleet.

@@ -1,0 +1,524 @@
+#include "Model/JobBoard.h"
+
+#include "AirportOpsLog.h"
+#include "Model/GroundTraffic.h"
+#include "Model/RoadAgent.h"
+#include "Model/RoadEntity.h"
+#include "Model/RoadNetwork.h"
+#include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
+#include "Model/RouteSearch.h"
+#include "Model/SimClock.h"
+#include "Model/StandAdmission.h"
+#include "Model/VehicleFit.h"
+
+FRoutePlan UJobBoard::DepotRoute(const URoadNetwork& Network, FGuidelineNodeId DepotPose, FGuidelineNodeId Goal,
+	const FVehicle& Vehicle, bool* bOutTooNarrow, FGuidelineEdgeId* OutNarrowAt) const
+{
+	// DATED WITH THE GRAPH (#301), same rule as ARigTestCourse::PlanBetween's identical cache: clears
+	// itself when Network or its guideline revision moved since the last call, so a stale route or
+	// edge-fit answer is never served. Cheap to call every time nothing changed.
+	RouteCache.EnsureFresh(Network);
+
+	// CACHED PER (depot pose, stand anchor, vehicle figures) (#301): the SAME pair is asked at every
+	// job the stand ever has and by every bid for it, and a refusal is as much a fact about the graph
+	// and the vehicle as a route is.
+	FRoutePlan Plan;
+	if (const FCachedRoutePlan* Hit = RouteCache.Lookup(DepotPose, Goal, Vehicle))
+	{
+		Plan = Hit->Plan;
+	}
+	else
+	{
+		// THROUGH FRouteQuery::For, the one writer of AvoidRunways off the resolved policy (#312).
+		// WINGSPAN 0 IS UNLIMITED, and a road guideline carries no span limit either, so neither side
+		// of that comparison means anything for a van.
+		FRouteQuery Query = FRouteQuery::For(ERouteErrand::CandidateComparison, DepotPose, Goal, 0.0, ETraversalClass::GroundVehicle);
+
+		// NEVER ALONG A STRIP. A truck crossing a runway at a junction is unaffected - a crossing is a
+		// turn path and a node, and turn paths carry no DerivedFrom - but taxiing DOWN one is not
+		// something a service job may plan. The rule lives in FRoutePolicy::For(CandidateComparison);
+		// this paragraph is its justification.
+
+		// NO OCCUPANCY WEIGHT, deliberately. Which vehicle is nearest is a fact about the airport's
+		// SHAPE, not about who happens to be on the road this instant; a congestion-weighted length
+		// would make the winning bid flicker between ticks and the log unreadable. Congestion is the
+		// arbiter's job once the truck is under way. EOccupancyUse::Never on this errand's row IS that
+		// rule, and the search REFUSES a table passed alongside it rather than quietly ignoring one.
+
+		// THE VEHICLE THAT WILL DRIVE IT, so a vehicle only bids over road it fits (spec 2026-09-23
+		// §6). A depot reachable only over too-narrow road is remembered, so the refusal can say so
+		// rather than "no road". AND EACH EDGE'S FIT, cached: most of a Find's cost is tracing the
+		// vehicle round every curve the search relaxes, which every depot's own Find asks about the
+		// same shared roads.
+		Query.WithVehicle(Vehicle);
+		Query.FitCache = &RouteCache.FitCacheFor(Vehicle);
+		Plan = RouteSearch::Find(Network, Query);
+		RouteCache.Store(DepotPose, Goal, Vehicle, Plan, FString());
+	}
+	if (Plan.Result == ERouteResult::TooNarrow)
+	{
+		if (bOutTooNarrow != nullptr) { *bOutTooNarrow = true; }
+		if (OutNarrowAt != nullptr) { *OutNarrowAt = Plan.RejectedEdge; }
+	}
+	return Plan;
+}
+
+TArray<UJobBoard::FCandidate> UJobBoard::Judge(const URoadNetwork& Network, EServiceRole Role, FEntityInstanceId Stand,
+	const TArray<FCandidate>& Candidates, FJudgement& Out) const
+{
+	const IServiceRolePolicy* Policy = PolicyFor(Role);
+	TArray<FCandidate> Eligible;
+
+	// THE DEPOT COUNTS FIRST, off the entities and not the candidates: a depot with no vehicle at all
+	// is still a depot to the refusal chain, which must not report "no depot" about one that is there.
+	for (const FEntityInstance& Instance : Network.GetEntities())
+	{
+		// A DEPOT IS AN ENTITY WHOSE POSE IS A SERVICE VEHICLE'S. Read off the instance, where
+		// placement captured it: this layer may not dereference a UEntityDefinition.
+		if (!Instance.bAlive || Instance.PoseRole != Role)
+		{
+			continue;
+		}
+		++Out.Depots;
+		// Placed, but with no road within its lead-in reach: FAnchorLink has already warned about it
+		// in the census; this is the same fact reaching the player's aircraft card.
+		Out.DepotsOnRoad += Network.IsDepotJoined(Instance) ? 1 : 0;
+	}
+
+	// JOINED, NOT MERELY RESOLVED - and since the service loop, not merely INCIDENT either.
+	//
+	// This tested the anchor's IsSet() alone, which is a fact about PLACEMENT and not about the
+	// airport: URoadNetwork::PlaceEntity creates a node for every anchor whether or not a lead-in ever
+	// reaches it, so the test was true for every Code C stand ever placed and StandUnjoined could not
+	// fire at all. Counting incident edges fixed that, and then stopped working for the same shape of
+	// reason the moment stands grew SERVICE LANES: a hydrant is ALWAYS spurred to its own lane, so the
+	// count is true for a stand in the middle of a field. The question was never "does this node have a
+	// line on it" but "does that line go anywhere", which is a walk - see
+	// URoadNetwork::IsServiceNodeConnected.
+	//
+	// Both wrong answers reported NoRoute - "no road from depot" - which sends the player to look at
+	// the depot when the road they need is at the stand. Observed in PIE 2026-09-07.
+	Out.Hydrant = ServiceAnchorOf(Network, Stand, Role);
+	Out.bStandJoined = Out.Hydrant.IsSet() && Network.IsServiceNodeConnected(Out.Hydrant);
+
+	// A STAND DELETED UNDER ITS JOB is asked as Code C's, like an outline reading as no letter - the
+	// aircraft's own leaving drops the job a moment later.
+	const FEntityInstance* StandInstance = Network.GetEntity(Stand);
+	const FVehicle Design = StandInstance != nullptr ? DesignVehicleFor(*StandInstance) : VehiclesFor(EIcaoCode::C);
+	Out.DesignType = Design.TypeCode;
+
+	for (const FCandidate& Candidate : Candidates)
+	{
+		const FEntityInstance* Depot = Network.GetEntity(Candidate.Depot);
+		if (Depot == nullptr || !Depot->bAlive || !Network.IsDepotJoined(*Depot))
+		{
+			continue;
+		}
+
+		// NO PUMP, NO FUELLING - checked HERE, before a vehicle bids, rather than at the hydrant where
+		// the pumping is computed. A truck sent from a pumpless depot would drive the whole way and
+		// then have nothing to do, which reads on screen as the service hanging rather than as a depot
+		// the player has not finished building. Only a MODULAR depot can be pumpless - see
+		// HasWorkingPump.
+		if (Policy != nullptr && Policy->NeedsPumpAtHome() && !HasWorkingPump(*Depot))
+		{
+			Out.bAnyPumpless = true;
+			continue;
+		}
+
+		// NO LARGER THAN THE STAND WAS BUILT FOR (spec 2026-09-26 section 2): the stand's lane legs are
+		// proven drivable by its definition's design vehicle and anything VehicleFit::NoLargerThan it,
+		// and nothing else. PER VEHICLE - a typed fleet makes the vehicle a fact about this candidate,
+		// and a depot with a bowser AND a tow is too large for an A stand only through its bowser.
+		const FServiceVehicleType Type = TypeFor(Candidate.TypeCode);
+		if (!VehicleFit::NoLargerThan(Type.Vehicle, Design))
+		{
+			Out.bAnyTooLarge = true;
+			Out.TooLargeType = Type.TypeCode;
+			continue;
+		}
+
+		if (!Out.bStandJoined)
+		{
+			// Nothing to route TO. Skipped here as well as reported, so a stand with an unjoined anchor
+			// does not cost a search per candidate per bid.
+			continue;
+		}
+
+		bool bNarrow = false;
+		FGuidelineEdgeId NarrowAt;
+		const FRoutePlan Plan = DepotRoute(Network, Depot->PoseNode, Out.Hydrant, Type.Vehicle, &bNarrow, &NarrowAt);
+		if (bNarrow)
+		{
+			Out.bAnyTooNarrow = true;
+			Out.NarrowAt = NarrowAt;
+		}
+		if (Plan.IsValid())
+		{
+			Eligible.Add(Candidate);
+		}
+	}
+	return Eligible;
+}
+
+EServiceRefusal UJobBoard::RefusalOf(const FJudgement& Out)
+{
+	// THE ORDER OF THESE TESTS IS THE SPEC'S, and it is the order of the player's hand: no depot at all
+	// is a building to place, a depot off the road is a road to draw, and only then is it worth talking
+	// about the stand or the graph.
+	if (Out.Depots == 0)
+	{
+		return EServiceRefusal::NoDepot;
+	}
+	if (Out.DepotsOnRoad == 0)
+	{
+		return EServiceRefusal::NoRoad;
+	}
+	if (!Out.bStandJoined)
+	{
+		return EServiceRefusal::StandUnjoined;
+	}
+	if (Out.bAnyPumpless)
+	{
+		// BEFORE NoRoute, because this is a thing the player can go and fix. Falling through to
+		// NoRoute would have told them "no road from depot" about a depot sitting on a road.
+		return EServiceRefusal::NoPump;
+	}
+	if (Out.bAnyTooLarge)
+	{
+		// AFTER NoPump: a depot with no pump would not be sending anything at all, so the pump is the
+		// nearer fix.
+		return EServiceRefusal::VehicleTooLarge;
+	}
+	if (Out.bAnyTooNarrow)
+	{
+		return EServiceRefusal::TooNarrow;
+	}
+	return EServiceRefusal::NoRoute;
+}
+
+double UJobBoard::DriveSeconds(const URoadNetwork& Network, FGuidelineNodeId From, FGuidelineNodeId To,
+	const FServiceVehicleType& Type) const
+{
+	if (From == To)
+	{
+		return 0.0;
+	}
+	if (LegLengthsNetwork != &Network || LegLengthsRevision != Network.GetGuidelineRevision())
+	{
+		LegLengths.Reset();
+		LegLengthsNetwork = &Network;
+		LegLengthsRevision = Network.GetGuidelineRevision();
+	}
+
+	const FLegKey Key{ From, To, Type.TypeCode };
+	double Length = -1.0;
+	if (const double* Hit = LegLengths.Find(Key))
+	{
+		Length = *Hit;
+	}
+	else
+	{
+		// FROM A DEPOT, THE DEPOT ROUTE the eligibility already found - one cache, so a bid from an
+		// idle vehicle costs no search the judgement did not already make. Anything else - stand to
+		// stand, stand to depot - is searched here, gated first and ungated if the gated search
+		// refuses: a leg off a service point opens with its reverse, which an UNSEEDED search may
+		// refuse where the live, seeded one will not. The ungated length is a fair estimate of it.
+		RouteCache.EnsureFresh(Network);
+		FRoutePlan Plan = RouteCache.Lookup(From, To, Type.Vehicle) != nullptr
+			? RouteCache.Lookup(From, To, Type.Vehicle)->Plan : FRoutePlan();
+		if (!Plan.IsValid())
+		{
+			FRouteQuery Query = FRouteQuery::For(ERouteErrand::CandidateComparison, From, To, 0.0, ETraversalClass::GroundVehicle);
+			Query.WithVehicle(Type.Vehicle);
+			Plan = RouteSearch::Find(Network, Query);
+			if (!Plan.IsValid())
+			{
+				Query.Vehicle = nullptr;
+				Plan = RouteSearch::Find(Network, Query);
+			}
+		}
+		Length = Plan.IsValid() ? Plan.Length : -1.0;
+		LegLengths.Add(Key, Length);
+	}
+	if (Length < 0.0)
+	{
+		return -1.0;
+	}
+	// CRUISE SPEED ONLY: acceleration, corners and the service reverse make the real drive longer, and
+	// they do so for every bidder alike - the bid ranks correctly without being a promise to the second.
+	return Length / FMath::Max(Type.Vehicle.Chassis.Ground.Taxi.SpeedCap, 1.0);
+}
+
+ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FServiceJob& Job, const UGroundTraffic& Traffic,
+	const URoadNetwork& Network, const USimClock& Clock) const
+{
+	++BidCallCountForTest;
+	const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
+	const FServiceVehicleType Type = TypeFor(Vehicle.TypeCode);
+	const FEntityInstance* Home = Network.GetEntity(Vehicle.Home);
+	if (Policy == nullptr || Home == nullptr)
+	{
+		ServiceBid::FResult Unreachable;
+		Unreachable.bReachable = false;
+		return Unreachable;
+	}
+
+	// ONE CLOCK: the bid is in GAME seconds. Serves and refills already are; a drive is MOVEMENT time,
+	// which runs at the speed multiplier while game time runs at the multiplier times the day
+	// compression - so movement seconds times game-per-real at the hour is the drive in game seconds.
+	// Taken once per bid; the hour a bid spans barely moves it.
+	const double GamePerMovement = FMath::Max(Clock.GameSecondsPerRealSecond(Clock.TimeOfDay()), 0.0);
+
+	// NODES AS SMALL INTS for the pure simulation, which knows nothing of the graph.
+	TArray<FGuidelineNodeId> Nodes;
+	auto NodeIndex = [&Nodes](FGuidelineNodeId Node) { return Nodes.AddUnique(Node); };
+
+	ServiceBid::FInput In;
+	In.Type = &Type;
+	In.Policy = Policy;
+	In.Pumps = PumpsAt(*Home);
+	In.FacilityNode = NodeIndex(Home->PoseNode);
+	In.DriveSeconds = [this, &Nodes, &Network, &Type, GamePerMovement](int32 From, int32 To)
+	{
+		const double Movement = DriveSeconds(Network, Nodes[From], Nodes[To], Type);
+		return Movement < 0.0 ? -1.0 : Movement * GamePerMovement;
+	};
+
+	// WHERE AND WHEN THE CURRENT STEP LEAVES IT, and with what on board.
+	const double Now = Clock.Now();
+	const FRoadAgent* Agent = Vehicle.AgentId != 0 ? Traffic.FindAgent(Vehicle.AgentId) : nullptr;
+	auto RemainingDrive = [&]() -> double
+	{
+		if (Agent == nullptr || !Agent->Follower.Plan.IsValid())
+		{
+			return 0.0;
+		}
+		const double Left = FMath::Max(Agent->Follower.Plan.Length - Agent->Follower.Travelled, 0.0);
+		return Left / FMath::Max(Type.Vehicle.Chassis.Ground.Taxi.SpeedCap, 1.0) * GamePerMovement;
+	};
+	const FServiceJob* Current = Vehicle.CurrentJob != 0 ? FindJob(Vehicle.CurrentJob) : nullptr;
+
+	In.FreeAt = Now;
+	In.CargoWhenFree = Vehicle.Cargo;
+	In.NodeWhenFree = In.FacilityNode;
+	switch (Vehicle.State)
+	{
+	case EServiceVehicleState::AtFacility:
+		In.FreeAt = FMath::Max(Vehicle.StepEndsAt, Now);
+		In.CargoWhenFree = Policy->CargoAfterFacility(Vehicle.Cargo, Type);
+		break;
+	case EServiceVehicleState::ToFacility:
+		In.FreeAt = Now + RemainingDrive() + Policy->FacilitySeconds(Vehicle.Cargo, Type, In.Pumps);
+		In.CargoWhenFree = Policy->CargoAfterFacility(Vehicle.Cargo, Type);
+		break;
+	case EServiceVehicleState::ToJob:
+		if (Current != nullptr)
+		{
+			const double Trip = Policy->TripQuantity(Vehicle.Cargo, Type, Current->QuantityOwed);
+			In.FreeAt = Now + RemainingDrive() + Policy->ServeSeconds(Type, Trip);
+			In.CargoWhenFree = Policy->CargoAfterServe(Vehicle.Cargo, Trip);
+			In.NodeWhenFree = NodeIndex(ServiceAnchorOf(Network, Current->Stand, Vehicle.Role));
+		}
+		break;
+	case EServiceVehicleState::Serving:
+		if (Current != nullptr)
+		{
+			In.FreeAt = FMath::Max(Current->TripEndsAt, Now);
+			In.CargoWhenFree = Policy->CargoAfterServe(Vehicle.Cargo, Current->TripQuantity);
+		}
+		// PARKED AT A STAND whether or not the trip is still running: a vehicle whose serve just ended
+		// is still there, deciding where next.
+		if (Agent != nullptr)
+		{
+			In.NodeWhenFree = NodeIndex(Agent->GoalNode);
+		}
+		break;
+	default:
+		break;
+	}
+
+	for (const int32 QueuedId : Vehicle.Queue)
+	{
+		if (const FServiceJob* Queued = FindJob(QueuedId))
+		{
+			In.Queued.Add({ NodeIndex(ServiceAnchorOf(Network, Queued->Stand, Vehicle.Role)), Queued->QuantityOwed });
+		}
+	}
+	In.Appended = { NodeIndex(ServiceAnchorOf(Network, Job.Stand, Vehicle.Role)), Job.QuantityOwed };
+	return ServiceBid::Finish(In);
+}
+
+ServiceBid::FResult UJobBoard::BidForTest(const UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock,
+	int32 VehicleId, int32 JobId) const
+{
+	const FServiceVehicle* Vehicle = FindVehicle(VehicleId);
+	const FServiceJob* Job = FindJob(JobId);
+	if (Vehicle == nullptr || Job == nullptr)
+	{
+		return ServiceBid::FResult();
+	}
+	// THE JUDGEMENT FIRST, as AssignOpenJobs makes it: its route is the one the bid's first leg reads.
+	FJudgement Judged;
+	Judge(Network, Job->Role, Job->Stand, { FCandidate{ Vehicle->Home, Vehicle->TypeCode, Vehicle->Id } }, Judged);
+	return BidFor(*Vehicle, *Job, Traffic, Network, Clock);
+}
+
+void UJobBoard::Assign(FServiceVehicle& Vehicle, FServiceJob& Job, double PromisedFinish)
+{
+	Vehicle.Queue.Add(Job.Id);
+	Job.State = EServiceJobState::Queued;
+	Job.VehicleId = Vehicle.Id;
+	Job.PromisedFinish = PromisedFinish;
+	Job.Why = EServiceRefusal::None;
+}
+
+void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+{
+	const uint32 Revision = Network.GetGuidelineRevision();
+	for (FServiceJob& Job : Jobs)
+	{
+		if (Job.State != EServiceJobState::Open)
+		{
+			continue;
+		}
+
+		TArray<FCandidate> Candidates;
+		for (const FServiceVehicle& Vehicle : Vehicles)
+		{
+			if (Vehicle.Role == Job.Role)
+			{
+				Candidates.Add({ Vehicle.Home, Vehicle.TypeCode, Vehicle.Id });
+			}
+		}
+		FJudgement Judged;
+		const TArray<FCandidate> Eligible = Judge(Network, Job.Role, Job.Stand, Candidates, Judged);
+
+		// THE BIDS: when each would FINISH this job appended to its queue (user's ruling 6). The
+		// runner-up is kept for the log, because "why did the tow go?" is the first question in play.
+		FServiceVehicle* Best = nullptr;
+		double BestFinish = TNumericLimits<double>::Max();
+		const FServiceVehicle* Next = nullptr;
+		double NextFinish = TNumericLimits<double>::Max();
+		for (const FCandidate& Candidate : Eligible)
+		{
+			FServiceVehicle* Vehicle = FindVehicleMutable(Candidate.VehicleId);
+			if (Vehicle == nullptr)
+			{
+				continue;
+			}
+			const ServiceBid::FResult Bid = BidFor(*Vehicle, Job, Traffic, Network, Clock);
+			if (!Bid.bReachable)
+			{
+				continue;
+			}
+			if (Bid.Finish < BestFinish)
+			{
+				Next = Best;
+				NextFinish = BestFinish;
+				Best = Vehicle;
+				BestFinish = Bid.Finish;
+			}
+			else if (Bid.Finish < NextFinish)
+			{
+				Next = Vehicle;
+				NextFinish = Bid.Finish;
+			}
+		}
+
+		if (Best == nullptr)
+		{
+			// NOTHING MAY BID. Unserviceable, which is TERMINAL until the graph changes - and there is no
+			// "busy" to fall back on here, because a busy vehicle bids with its queue.
+			Job.State = EServiceJobState::Unserviceable;
+			Job.Why = RefusalOf(Judged);
+			Job.RefusedAtRevision = Revision;
+			if (Job.Why == EServiceRefusal::VehicleTooLarge)
+			{
+				UE_LOG(LogAirportOps, Warning,
+					TEXT("Fuel: %s is larger than the %s this stand was built for; no depot can serve it"),
+					*Judged.TooLargeType.ToString(), *Judged.DesignType.ToString());
+			}
+			else if (Job.Why == EServiceRefusal::TooNarrow)
+			{
+				UE_LOG(LogAirportOps, Warning,
+					TEXT("Fuel: no road wide enough for any fuel vehicle from any depot - the first edge one does not fit is guideline edge %d"),
+					Judged.NarrowAt.Index);
+			}
+
+			// THE COUNTS THAT DECIDED IT, in the line itself. A bare reason sent the player to look at
+			// the wrong end of the airport once already (PIE 2026-09-07); these three numbers say which
+			// end without a second repro - read off the judgement, which already counted them.
+			UE_LOG(LogAirportOps, Warning,
+				TEXT("Fuel: aircraft %d at stand %d cannot be served: %s. %d depot(s), %d on a "
+					 "road; the stand's hydrant %s. Check the 'Anchor links:' line."),
+				Job.AircraftId, Job.Stand.Index, RefusalText(Job.Why),
+				Judged.Depots, Judged.DepotsOnRoad,
+				!Judged.Hydrant.IsSet() ? TEXT("has no node at all")
+					: Network.IsServiceNodeConnected(Judged.Hydrant) ? TEXT("reaches a road")
+					: TEXT("reaches NO road from any of its stand's entrances"));
+			continue;
+		}
+
+		Assign(*Best, Job, BestFinish);
+		Job.TankLitres = TypeFor(Best->TypeCode).Capacity;
+		UE_LOG(LogAirportOps, Log,
+			TEXT("Bid: job %d (fuel %.0f L, aircraft %d, stand %d) -> vehicle %d %s finish +%.1f game min (next: %s)"),
+			Job.Id, Job.QuantityOwed, Job.AircraftId, Job.Stand.Index, Best->Id, *Best->TypeCode.ToString(),
+			(BestFinish - Clock.Now()) / 60.0,
+			Next != nullptr
+				? *FString::Printf(TEXT("vehicle %d %s +%.1f"), Next->Id, *Next->TypeCode.ToString(), (NextFinish - Clock.Now()) / 60.0)
+				: TEXT("none"));
+	}
+}
+
+bool UJobBoard::CouldServe(const URoadNetwork& Network, const FAirframe& Airframe) const
+{
+	// THE CANDIDATES A DEPOT HAS OR WILL HAVE: its vehicles once SyncFleet has seeded it, else the
+	// placeholder fleet its Trucks would give it - an offer can be asked before the first tick.
+	TArray<FCandidate> Candidates;
+	const TArray<FEntityInstance>& Entities = Network.GetEntities();
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		const FEntityInstance& Depot = Entities[Index];
+		if (!Depot.bAlive || Depot.PoseRole != EServiceRole::Fuel)
+		{
+			continue;
+		}
+		const FEntityInstanceId DepotId = Network.EntityIdAt(Index);
+		bool bHasVehicles = false;
+		for (const FServiceVehicle& Vehicle : Vehicles)
+		{
+			if (Vehicle.Home == DepotId)
+			{
+				bHasVehicles = true;
+				Candidates.Add({ DepotId, Vehicle.TypeCode, Vehicle.Id });
+			}
+		}
+		if (!bHasVehicles && Depot.Trucks > 0)
+		{
+			for (const FName TypeCode : FleetTypes())
+			{
+				Candidates.Add({ DepotId, TypeCode, 0 });
+			}
+		}
+	}
+
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		const FEntityInstance& Stand = Entities[Index];
+		// THE SAME TWO FILTERS UStandAllocator::Reserve applies, so "a stand it would take" means the
+		// stand the accept would actually hold.
+		if (!Stand.IsStandCandidate() || !StandAdmission::Judge(Network, Stand, Airframe).IsAdmitted())
+		{
+			continue;
+		}
+		FJudgement Judged;
+		if (Judge(Network, EServiceRole::Fuel, Network.EntityIdAt(Index), Candidates, Judged).Num() > 0)
+		{
+			return true;
+		}
+	}
+	return false;
+}
