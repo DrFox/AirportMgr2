@@ -208,15 +208,19 @@ private:
 	 * a fact about the TOOL the player selected rather than about the gesture, and a
 	 * context field would let two tools disagree about it.
 	 *
-	 * STARTS UNSET so a player who never presses the key again lays exactly the road this
-	 * level was tuned for - see ARoadNetworkActor::ResolveProfile, whose comment records
-	 * what happened the last time a default was quietly overridden.
+	 * STARTS ON THE NARROWEST (0) since 2026-09-28 - taxiway code B, the Narrow road - ruled
+	 * with the grass default: a new player starts on the cheapest. It STARTED UNSET before,
+	 * laying the level's own tuning (ARoadNetworkActor::ResolveProfile), and that lit NOTHING
+	 * on the width row whenever the level's width matched none of the standard set - reported
+	 * on M_Test's taxiway row after the grid-aligned widths (#374) moved the set. The row now lights
+	 * exactly the index the tool holds (AddWidthAxis). INDEX_NONE still means the level default
+	 * where a caller passes it; the tool no longer does.
 	 *
 	 * A SERVICE ROAD SETS IT TOO since 2026-09-23 (Narrow / Standard / Wide). It used to
 	 * refuse, having one authored cross-section; IRoadEditTarget::ResolveWidthProfile keys
 	 * the list by kind, so a road's index can only name a road tier.
 	 */
-	int32 WidthIndex = INDEX_NONE;
+	int32 WidthIndex = 0;
 
 	/**
 	 * What the next click lays the road on - FRoadSegment::Surface. ON THE TOOL for

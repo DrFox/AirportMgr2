@@ -25,7 +25,9 @@ namespace Pavement
 	{
 		if (Allowed.Num() > 0)
 		{
-			return TArray<EPavement>(Allowed);
+			TArray<EPavement> Sorted(Allowed);
+			Sorted.Sort();
+			return Sorted;
 		}
 		// ALL FOUR IN SCALE ORDER, from the enum rather than typed, so a fifth step is offered
 		// by the runway row without anyone remembering this list.

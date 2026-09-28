@@ -117,7 +117,7 @@ bool FServiceRoadWidthEmptyTest::RunTest(const FString& Parameters)
 	Context.Target = &Target;
 	FRoadDrawTool Tool(ERoadKind::ServiceRoad);
 	Tool.OnReselect(Context);
-	TestEqual(TEXT("with no tiers the tool stays on the default"), Tool.GetWidthIndex(), INDEX_NONE);
+	TestEqual(TEXT("with no tiers the tool stays where it started, on the narrowest"), Tool.GetWidthIndex(), 0);
 	return true;
 }
 

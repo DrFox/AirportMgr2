@@ -86,14 +86,13 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// 1. THE DEFAULT IS UNCHANGED UNTIL ASKED FOR, and this is the assertion that matters
-	//    most. Every taxiway drawn before this feature came from the actor's own instance
-	//    tuning - ARoadNetworkActor::ResolveProfile, "this is per-instance tuning" - and a
-	//    width cycle that silently re-pointed the default at the content set would
-	//    re-profile every road on the airport the moment the tool was selected.
+	// 1. A FRESH TOOL LAYS THE NARROWEST STANDARD WIDTH (ruled 2026-09-28). It used to lay the
+	//    actor's own instance tuning (ARoadNetworkActor::ResolveProfile) until a width was
+	//    asked for; the ruling puts every tool on its cheapest start instead. Roads already laid
+	//    are untouched either way - a segment keeps the profile it was laid with.
 	{
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
-		TestEqual(TEXT("a fresh tool has chosen no width"), Tool.GetWidthIndex(), INDEX_NONE);
+		TestEqual(TEXT("a fresh tool starts on the narrowest width"), Tool.GetWidthIndex(), 0);
 
 		Tool.OnClick(TestTool::ContextAt(*Actor, FVector2D(0.0, 0.0)));
 		Tool.OnClick(TestTool::ContextAt(*Actor, FVector2D(4000.0, 0.0)));
@@ -101,8 +100,8 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 		const TArray<FRoadSegment>& Segments = Actor->Network->GetSegments();
 		if (TestEqual(TEXT("one segment was laid"), Segments.Num(), 1))
 		{
-			TestEqual(TEXT("and it carries the level's own profile, as it always did"),
-				Segments[0].Profile.Get(), Actor->ResolveProfile());
+			TestEqual(TEXT("and it carries the narrowest standard profile"),
+				Segments[0].Profile.Get(), Actor->ResolveWidthProfile(ERoadKind::Taxiway, 0));
 		}
 	}
 
@@ -189,8 +188,8 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 		FToolContext Context;
 		Context.Target = &Empty;
 		Tool.OnReselect(Context);
-		TestEqual(TEXT("with nothing to cycle, no width is chosen"),
-			Tool.GetWidthIndex(), INDEX_NONE);
+		TestEqual(TEXT("with nothing to cycle, the tool stays where it started"),
+			Tool.GetWidthIndex(), 0);
 	}
 
 	return true;

@@ -96,23 +96,21 @@ bool FTvRoadWidthTest::RunTest(const FString& Parameters)
 		TestNotEqual(TEXT("Ids are distinct, since the bar rebuilds on them"),
 			Axes[0].Options[0].Id, Axes[0].Options[1].Id);
 
-		// 2. THE LEVEL DEFAULT LIGHTS ITS PRESET BUT IS NOT WRITTEN - drawing keeps the level's
-		//    own tuning, which is what TaxiwayWidthTest's block 1 pins against a real actor.
-		TestEqual(TEXT("the level default lights the preset it matches"), Axes[0].Current, 1);
-		TestEqual(TEXT("and the tool still has chosen nothing"), Tool.GetWidthIndex(), INDEX_NONE);
+		// 2. A FRESH TOOL LIGHTS AND LAYS THE NARROWEST (2026-09-28) - not the level default,
+		//    which Target sets to the middle width precisely so the two cannot be confused.
+		TestEqual(TEXT("a fresh tool lights the narrowest"), Axes[0].Current, 0);
+		TestEqual(TEXT("and holds it"), Tool.GetWidthIndex(), 0);
 	}
 
-	// 3. AN OFF-LIST DEFAULT LIGHTS NOTHING, rather than lighting a width it will not lay.
+	// 3. AN OFF-LIST LEVEL WIDTH STILL LIGHTS THE NARROWEST. It lit nothing before 2026-09-28 -
+	//    the empty taxiway row reported on M_Test - because an unset tool lit the level's match.
 	{
 		FTvWidthTarget OffList = Target;
 		OffList.LevelDefault = URoadProfile::MakeTransient(1800.0, 1500.0);
 		FToolContext OffContext;
 		OffContext.Target = &OffList;
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
-		TestEqual(TEXT("a tuned width that is no preset lights nothing"), TvLit(Tool, OffContext), INDEX_NONE);
-
-		Tool.OnReselect(OffContext);
-		TestEqual(TEXT("and the key from nothing lit picks the first"), Tool.GetWidthIndex(), 0);
+		TestEqual(TEXT("a level width that is no preset does not empty the row"), TvLit(Tool, OffContext), 0);
 	}
 
 	// 4. A PICK IS HONOURED, AND A BAD ONE CHANGES NOTHING.
@@ -128,12 +126,13 @@ bool FTvRoadWidthTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("none of them moved the width"), Tool.GetWidthIndex(), 2);
 	}
 
-	// 5. THE KEY STEPS FROM WHAT IS LIT - the row and the cycle are one list. Lit is 1 (the
-	//    default), so the first press goes to 2, the second wraps to 0.
+	// 5. THE KEY STEPS FROM WHAT IS LIT - the row and the cycle are one list. Lit is 0 (the
+	//    narrowest), so presses go 1, 2, then wrap to 0.
 	{
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
 		Tool.OnReselect(Context);
-		TestEqual(TEXT("the first press steps on from the lit default"), Tool.GetWidthIndex(), 2);
+		TestEqual(TEXT("the first press steps on from the lit narrowest"), Tool.GetWidthIndex(), 1);
+		Tool.OnReselect(Context);
 		Tool.OnReselect(Context);
 		TestEqual(TEXT("then wraps"), Tool.GetWidthIndex(), 0);
 	}
@@ -317,11 +316,11 @@ bool FTvLockedOptionTest::RunTest(const FString& Parameters)
 
 	FTvLockedRoadTool Road;
 	TestFalse(TEXT("a click on the locked width is refused"), Road.SelectVariant(Context, 0, 1));
-	TestEqual(TEXT("and chose nothing"), Road.GetWidthIndex(), INDEX_NONE);
+	TestEqual(TEXT("and left the narrowest chosen"), Road.GetWidthIndex(), 0);
 	Road.OnReselect(Context);
-	TestEqual(TEXT("the key from nothing lit takes the first"), Road.GetWidthIndex(), 0);
+	TestEqual(TEXT("the key steps OVER the locked width"), Road.GetWidthIndex(), 2);
 	Road.OnReselect(Context);
-	TestEqual(TEXT("and steps OVER the locked width"), Road.GetWidthIndex(), 2);
+	TestEqual(TEXT("and wraps to the first"), Road.GetWidthIndex(), 0);
 
 	FTvRunwayTarget RunwayTarget;
 	RunwayTarget.Profiles = { URoadProfile::MakeTransient(2300.0, 1500.0) };
