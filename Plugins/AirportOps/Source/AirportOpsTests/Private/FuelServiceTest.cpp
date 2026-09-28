@@ -4,6 +4,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/JobBoard.h"
+#include "Model/OpsSave.h"
 #include "Model/Pricing.h"
 #include "Model/Ledger.h"
 #include "Model/GroundTraffic.h"
@@ -2625,6 +2626,31 @@ bool FServiceRebidQuietWithoutTriggerTest::RunTest(const FString& Parameters)
 		Rig.Fixture.Advance(1.0 / 30.0);
 	}
 	TestEqual(TEXT("60 idle ticks re-bid nothing"), Rig.Fixture.Service->GetBidCallCountForTest(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelRestoredFleetIsNotReseededTest, "AirportOps.Fuel.RestoredFleetIsNotReseeded",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelRestoredFleetIsNotReseededTest::RunTest(const FString& Parameters)
+{
+	// A LOADED FLEET IS THE FLEET. The placeholder seeds a depot the first time the board sees it; a
+	// depot whose vehicles came back from a save has been seen, and seeding it again would double the
+	// fleet on every load - the placeholder minting vehicles the player (one day) paid for twice.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.Advance(1.0 / 30.0);
+	const int32 Seeded = Fixture.Service->GetVehicles().Num();
+	if (!TestTrue(TEXT("setup: the depot has its placeholder fleet"), Seeded > 0)) { return false; }
+
+	FOpsSnapshot Snapshot;
+	OpsSave::CaptureBlob(*Fixture.Service, Snapshot);
+	OpsSave::RestoreBlob(Snapshot, *Fixture.Service);
+	TestEqual(TEXT("the load brings the fleet back"), Fixture.Service->GetVehicles().Num(), Seeded);
+
+	Fixture.Advance(1.0 / 30.0);
+	TestEqual(TEXT("and the next tick does not seed the depot again"), Fixture.Service->GetVehicles().Num(), Seeded);
 	return true;
 }
 

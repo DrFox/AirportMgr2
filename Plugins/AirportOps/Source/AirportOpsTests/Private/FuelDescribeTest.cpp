@@ -85,4 +85,36 @@ bool FFuelDescribeStatesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelDescribeVehicleTest, "AirportOps.Fuel.Describe.Vehicle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelDescribeVehicleTest::RunTest(const FString& Parameters)
+{
+	// THE TRUCK'S OWN CARD (stage 3): selecting a vehicle's agent shows what the VEHICLE is doing -
+	// the state it owns, what it carries, how much work is queued behind the current job. Through the
+	// same DescribeAgent the aircraft card uses, so the inspector needs no second seam.
+	UJobBoard* Service = NewObject<UJobBoard>();
+	FEntityInstanceId Depot;
+	Depot.Index = 4;
+	FServiceJob& Job = Service->AddJobForTest(1, EServiceJobState::Underway, EServiceRefusal::None, 0);
+	Job.Stand.Index = 2;
+	const int32 JobId = Job.Id;
+	FServiceVehicle& Vehicle = Service->AddVehicleForTest(TEXT("FUEL"), Depot, EServiceVehicleState::ToJob, 9700.0);
+	Vehicle.AgentId = 7;
+	Vehicle.CurrentJob = JobId;
+	Vehicle.Queue = { 99 };
+	TestEqual(TEXT("driving to a job"), Service->DescribeAgent(7, 0.0),
+		FString(TEXT("FUEL · to stand 2 · 9,700 L · 1 queued")));
+
+	Vehicle.State = EServiceVehicleState::Serving;
+	Vehicle.Queue.Reset();
+	TestEqual(TEXT("serving, nothing behind it"), Service->DescribeAgent(7, 0.0),
+		FString(TEXT("FUEL · fuelling at stand 2 · 9,700 L")));
+
+	Vehicle.State = EServiceVehicleState::ToFacility;
+	Vehicle.CurrentJob = 0;
+	TestEqual(TEXT("going home"), Service->DescribeAgent(7, 0.0),
+		FString(TEXT("FUEL · to depot 4 · 9,700 L")));
+	return true;
+}
+
 #endif

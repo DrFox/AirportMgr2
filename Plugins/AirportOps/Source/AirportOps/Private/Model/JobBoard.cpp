@@ -56,6 +56,32 @@ void UJobBoard::OnBeforeRestore()
 	++FleetRevision;
 }
 
+void UJobBoard::Serialize(FArchive& Ar)
+{
+	Super::Serialize(Ar);
+	if (!Ar.IsLoading() || Vehicles.Num() == 0)
+	{
+		return;
+	}
+	for (FServiceVehicle& Vehicle : Vehicles)
+	{
+		Vehicle.State = EServiceVehicleState::Idle;
+		Vehicle.AgentId = 0;
+		Vehicle.CurrentJob = 0;
+		Vehicle.Queue.Reset();
+		Vehicle.StepStartedAt = 0.0;
+		Vehicle.StepEndsAt = 0.0;
+		// ITS DEPOT HAS BEEN SEEN: the placeholder must not add a second fleet beside a restored one.
+		// ENFORCED BY: AirportOps.Fuel.RestoredFleetIsNotReseeded
+		if (Vehicle.Home.IsSet())
+		{
+			SeededDepots.Add(Vehicle.Home);
+		}
+	}
+	++FleetRevision;
+	UE_LOG(LogAirportOps, Log, TEXT("Restore: %d vehicle(s) idle at home"), Vehicles.Num());
+}
+
 const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
 {
 	switch (Why)
@@ -984,8 +1010,31 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 	}
 }
 
+FString UJobBoard::DescribeVehicle(const FServiceVehicle& Vehicle) const
+{
+	const FString Dot = TEXT(" · ");
+	const FServiceJob* Job = FindJob(Vehicle.CurrentJob);
+	const int32 Stand = Job != nullptr ? Job->Stand.Index : INDEX_NONE;
+	FString Doing;
+	switch (Vehicle.State)
+	{
+	case EServiceVehicleState::ToJob:      Doing = FString::Printf(TEXT("to stand %d"), Stand); break;
+	case EServiceVehicleState::Serving:    Doing = FString::Printf(TEXT("fuelling at stand %d"), Stand); break;
+	case EServiceVehicleState::ToFacility: Doing = FString::Printf(TEXT("to depot %d"), Vehicle.Home.Index); break;
+	case EServiceVehicleState::AtFacility: Doing = FString::Printf(TEXT("refilling at depot %d"), Vehicle.Home.Index); break;
+	default:                               Doing = FString::Printf(TEXT("at depot %d"), Vehicle.Home.Index); break;
+	}
+	const FString Cargo = FText::AsNumber(FMath::RoundToInt(Vehicle.Cargo)).ToString() + TEXT(" L");
+	const FString Queued = Vehicle.Queue.Num() > 0 ? Dot + FString::Printf(TEXT("%d queued"), Vehicle.Queue.Num()) : FString();
+	return Vehicle.TypeCode.ToString() + Dot + Doing + Dot + Cargo + Queued;
+}
+
 FString UJobBoard::DescribeAgent(int32 AgentId, double Now) const
 {
+	if (const FServiceVehicle* Vehicle = VehicleForAgent(AgentId))
+	{
+		return DescribeVehicle(*Vehicle);
+	}
 	const FServiceJob* Job = JobForAircraft(AgentId, EServiceRole::Fuel);
 	const FString Dot = TEXT(" · ");
 	if (Job == nullptr)
