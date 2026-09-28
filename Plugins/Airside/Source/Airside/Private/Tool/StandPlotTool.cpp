@@ -70,8 +70,13 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 		return;
 	}
 
-	// Corner 0: the anchor, pinned by the first click and never moving after.
-	const FVector2D Anchor = Corners[0];
+	// Corner 0: the anchor - pinned by the first click ON THE KERB, never moving after - carried
+	// out by FrontGap, the taxiway's clearance strip (strip spec 2026-09-28). EVERY CORNER BELOW
+	// IS THE BOX'S, not the kerb's: the base pins Shown[N] straight into Corners[N], so a shape
+	// in two frames would be carried out twice. The strip is the ground between kerb and box.
+	// ENFORCED BY: Airside.Tool.StandPlot.StartsAtTheKerb, Airside.Tool.StandPlot.EntranceBehindStrip
+	const FVector2D Kerb = Corners[0];
+	const FVector2D Anchor = Kerb + Inward * FrontGap;
 
 	// Corner 1: the entrance edge's far end - along the taxiway, quantised on the depot's own
 	// steps, and EITHER WAY along it, exactly as FPlotPlaceTool::Shape derives its frontage. The
@@ -80,7 +85,9 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 	FVector2D Far = Corners[1];
 	if (PinnedNow == 1)
 	{
-		Far = PlotGesture::FrontageEnd(Anchor, Along, Context.Cursor, Context.GridFrame);
+		// ALONG THE KERB, where the anchor's own grid crossings were measured, then carried out by
+		// the gap - square to Along, so the crossing the kerb found is the box's too.
+		Far = PlotGesture::FrontageEnd(Kerb, Along, Context.Cursor, Context.GridFrame) + Inward * FrontGap;
 	}
 
 	// Corner 2 is the far end carried inward by the depth.
@@ -312,6 +319,21 @@ void FStandPlotTool::Describe(const FToolContext& Context, TConstArrayView<FVect
 	// `Shown.Num() < 4`, and Shape() always returns four points from one pinned corner on, so
 	// without this guard the degenerate rectangle reached DescribeLetter and WhyStandRefused a
 	// frame early and drew a "needs N m more depth" refusal the old tool never showed.
+	// THE CLEARANCE STRIP, from the entrance drag on: the ground between the kerb the player
+	// clicked and the box, which carries no paint (strip spec 2026-09-28). DRAWN AND NAMED, so the
+	// gap reads as a rule rather than a misplaced box - the user found it unexplained (2026-09-28).
+	// ENFORCED BY: Airside.Tool.StandPlot.StartsAtTheKerb
+	if (FrontGap > 0.0 && Shown.Num() >= 2)
+	{
+		const FVector2D K0 = Shown[0] - Inward * FrontGap;
+		const FVector2D K1 = Shown[1] - Inward * FrontGap;
+		Sink.Line(K0, K1, EPreviewStyle::Guide);
+		Sink.Line(K0, Shown[0], EPreviewStyle::Guide);
+		Sink.Line(K1, Shown[1], EPreviewStyle::Guide);
+		Sink.Label((K0 + Shown[1]) * 0.5,
+			FString::Printf(TEXT("clearance strip %.1f m"), FrontGap / 100.0), EPreviewStyle::Guide);
+	}
+
 	if (PinnedCount() < 2)
 	{
 		return;
@@ -387,6 +409,17 @@ void FStandPlotTool::DescribeReadout(const FToolContext& Context, TConstArrayVie
 	const double Width = StandBox::WidthOf(Shown);
 	const double Depth = StandBox::DepthOf(Shown);
 	Sink.Fact(TEXT("Size"), FString::Printf(TEXT("%.0f x %.0f m"), Width / 100.0, Depth / 100.0));
+
+	// THE STRIP, AND WHOSE IT IS: the taxiway's letter, not the stand's, sets it - a B stand off
+	// an F taxiway pays F's 34.5 m, and the readout is where the player learns why.
+	if (FrontGap > 0.0 && Context.Network() != nullptr)
+	{
+		if (const FRoadSegment* Road = Context.Network()->GetSegment(FrontRoad); Road != nullptr && Road->Profile != nullptr)
+		{
+			Sink.Fact(TEXT("Strip"), FString::Printf(TEXT("%.1f m (Code %s taxiway)"), FrontGap / 100.0,
+				IcaoCode::ToLetter(IcaoCode::TaxiwayLetterForWidth(Road->Profile->GetTotalWidth()))));
+		}
+	}
 
 	// THE LETTER THE GROUND READS AS - the game mechanic, live. "-" is a real answer: smaller
 	// than any stand, and the warning below names how much more is needed.

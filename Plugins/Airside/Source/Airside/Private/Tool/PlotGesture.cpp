@@ -267,9 +267,12 @@ namespace PlotGesture
 		// OFF THE CARRIAGEWAY, and only now that the side is known. Measured BEFORE this
 		// step, because the side has to be read against the centreline the cursor was
 		// judged from - offsetting first would tilt that test by half a road width.
-		// AND PAST THE CLEARANCE STRIP where the caller has one (Setback) - a stand's entrance
-		// sits where a taxiing wing no longer reaches (strip spec 2026-09-28).
-		Anchor.Corner += Anchor.Inward * (KerbOffset(Network, Road, Side >= 0.0) + Setback(Network, Road));
+		// ON THE KERB, NOT PAST THE STRIP (user, 2026-09-28: a first click out in the grass was
+		// "slightly unintuitive"). The corner is where the player reaches for the road; a tool
+		// with a clearance strip (the stand tool) opens its box a strip beyond it itself - see
+		// FStagedPlotTool::FrontGap. Setback still widens the REACH, in NearestRoad.
+		// ENFORCED BY: Airside.Tool.StandPlot.StartsAtTheKerb
+		Anchor.Corner += Anchor.Inward * KerbOffset(Network, Road, Side >= 0.0);
 
 		// THE GRID - WORLD OR TURNED TO THIS ROAD - REPLACES THE BAY GRID WHEN IT IS ON. The bay grid is phased from each
 		// segment's A end, so two plots off two segments could not share a line (the 2026-09-27
@@ -338,7 +341,7 @@ namespace PlotGesture
 		// click, which is the one thing this codebase will not have.
 		const FVector2D Left = RoadGeom::PerpCCW(Unit);
 		const bool bLeft = FVector2D::DotProduct(Cursor - Anchor.RoadA, Left) >= 0.0;
-		const FVector2D Offset = (bLeft ? Left : -Left) * (KerbOffset(Network, Anchor.Road, bLeft) + Setback(Network, Anchor.Road));
+		const FVector2D Offset = (bLeft ? Left : -Left) * KerbOffset(Network, Anchor.Road, bLeft);
 
 		// THE ONE A CLICK WOULD TAKE IS DRAWN DIFFERENTLY. A row of identical dots
 		// says where anchors exist; it does not say which one the cursor has. Pending

@@ -85,6 +85,8 @@ void FStagedPlotTool::OnClick(const FToolContext& Context)
 			return;
 		}
 		Corners[0] = Anchor.Corner;
+		FrontGap = FrontSetback(*Network, Anchor.Road);
+		FrontRoad = Anchor.Road;
 		Along = Anchor.Along;
 		Inward = Anchor.Inward;
 		RoadA = Anchor.RoadA;

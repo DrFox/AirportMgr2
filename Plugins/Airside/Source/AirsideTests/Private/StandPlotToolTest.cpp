@@ -1674,4 +1674,73 @@ bool FStandPlotEntranceBehindStripTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotStartsAtTheKerbTest,
+	"Airside.Tool.StandPlot.StartsAtTheKerb",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotStartsAtTheKerbTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	// USER, 2026-09-28: "the initial selection away from the taxiway is slightly unintuitive".
+	// The dots and the first click belong ON THE KERB, where a player reaches for a taxiway;
+	// the strip is shown as the drag crosses it, and the stand box starts beyond it.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	const FRoadSegmentId Taxi = Actor->Network->SegmentIdAt(0);
+	const URoadProfile* Profile = Actor->Network->GetSegment(Taxi)->Profile;
+	const double Kerb = Profile->GetHalfWidthLeft();
+	const double Strip = TaxiwayStrip::StripWidthOf(*Actor->Network, Taxi);
+
+	struct FMarkerSink : IToolPreviewSink
+	{
+		TArray<TPair<FVector2D, EPreviewStyle>> Markers;
+		TArray<FString> Labels;
+		virtual void Marker(const FVector2D& At, EPreviewStyle Style) override { Markers.Emplace(At, Style); }
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString& Text, EPreviewStyle) override { Labels.Add(Text); }
+	};
+
+	// IDLE: the dot a click would take stands on the kerb.
+	const FVector2D NearKerb(0.0, Kerb + 100.0);
+	FStandPlotTool Tool;
+	{
+		FMarkerSink Sink;
+		Tool.BuildPreview(At(Actor, NearKerb), Sink);
+		const TPair<FVector2D, EPreviewStyle>* Chosen = Sink.Markers.FindByPredicate(
+			[](const TPair<FVector2D, EPreviewStyle>& M) { return M.Value == EPreviewStyle::Pending; });
+		if (TestNotNull(TEXT("a chosen anchor dot is drawn"), Chosen))
+		{
+			TestEqual(TEXT("on the kerb, not out at the strip edge"), Chosen->Key.Y, Kerb, 1.0);
+		}
+	}
+
+	// A CLICK AT THE KERB ANCHORS, and the box it starts still opens a strip beyond.
+	Tool.OnClick(At(Actor, NearKerb));
+	if (!TestEqual(TEXT("a click at the kerb pins the entrance"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EStandStage::Entrance))) { return false; }
+	TArray<FVector2D> Shown;
+	Tool.Rect(At(Actor, NearKerb + FVector2D(6000.0, 0.0)), Shown);
+	TestEqual(TEXT("the box's entrance is a strip beyond the kerb"), Shown[0].Y, Kerb + Strip, 1.0);
+
+	// THE STRIP IS NAMED while the entrance is dragged - the gap is explained, not a mystery.
+	{
+		FMarkerSink Sink;
+		Tool.BuildPreview(At(Actor, NearKerb + FVector2D(6000.0, 0.0)), Sink);
+		TestTrue(TEXT("the ghost labels the clearance strip"),
+			Sink.Labels.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("clearance strip")); }));
+	}
+	const FToolReadout Readout = ReadoutOf(Tool, At(Actor, NearKerb + FVector2D(6000.0, 0.0)));
+	TestEqual(TEXT("and the readout states it"), FactOf(Readout, TEXT("Strip")),
+		FString::Printf(TEXT("%.1f m (Code %s taxiway)"), Strip / 100.0,
+			IcaoCode::ToLetter(IcaoCode::TaxiwayLetterForWidth(Profile->GetTotalWidth()))));
+	return true;
+}
+
 #endif

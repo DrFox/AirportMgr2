@@ -45,10 +45,11 @@ namespace PlotGesture
 	using FRoadFilter = TFunctionRef<bool(const URoadNetwork&, FRoadSegmentId)>;
 
 	/**
-	 * How far beyond the kerb a gesture's frontage stands on this road, uu. The stand tool's
-	 * is the taxiway's clearance strip (TaxiwayStrip::StripWidthOf); the depot's is 0 until
-	 * stage 3 of the strip spec asks it. A FUNCTION OF THE ROAD, not a number, because the
-	 * anchor search picks the road - the caller cannot know which before it is found.
+	 * How far beyond the kerb a gesture's SHAPE opens on this road, uu - the stand tool's is the
+	 * taxiway's clearance strip (TaxiwayStrip::StripWidthOf); the depot's is 0 until stage 3 of
+	 * the strip spec asks it. The anchor itself stays on the kerb; this widens only the search's
+	 * REACH (NearestRoad), so a cursor over a neighbour's box, out past the strip, still finds
+	 * the road. A FUNCTION OF THE ROAD, not a number, because the search picks the road.
 	 */
 	using FRoadSetback = TFunctionRef<double(const URoadNetwork&, FRoadSegmentId)>;
 
