@@ -9,6 +9,7 @@
 #include "Model/OpsDefinition.h"
 #include "Entities/AircraftType.h"
 #include "Model/AirlineDefinition.h"
+#include "Model/ArrivalSequencer.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/FuelService.h"
@@ -34,6 +35,7 @@ UOpsRuntime::UOpsRuntime()
 	// subobjects this class feeds and ticks, and it holds no logic of theirs.
 	FlightBoard = CreateDefaultSubobject<UFlightBoard>(TEXT("FlightBoard"));
 	FlightBoard->Allocator = CreateDefaultSubobject<UStandAllocator>(TEXT("StandAllocator"));
+	FlightBoard->Sequencer = CreateDefaultSubobject<UArrivalSequencer>(TEXT("ArrivalSequencer"));
 	OfferGenerator = CreateDefaultSubobject<UOfferGenerator>(TEXT("OfferGenerator"));
 	FlightBoard->Generator = OfferGenerator;
 
@@ -348,6 +350,10 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 				// THE RAW FRAME TIME, for the one countdown that runs in real seconds - see
 				// UFlightBoard::TickOffers. It checks the pause itself.
 				FlightBoard->TickOffers(*Model, *Target->Network, *Clock, RealDeltaSeconds);
+
+				// AFTER the clock advanced, so a flight that came due this frame is already
+				// holding and can be cleared this frame if its runway is free.
+				FlightBoard->TickQueue(*Model, *Target->Network, *Clock);
 			}
 		}
 	}

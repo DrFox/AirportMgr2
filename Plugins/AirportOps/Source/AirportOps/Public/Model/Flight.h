@@ -34,7 +34,10 @@ enum class EFlightPhase : uint8
 	Offered,
 	/** The player said yes. A stand is held and the arrival is on the clock. */
 	Accepted,
-	/** Between the accept and the ETA. Nothing is in the world yet. */
+	/**
+	 * HOLDING: the ETA has passed and it is waiting for the runway, off-map, stand kept (spec
+	 * 2026-09-28-arrival-queue). Nothing entered this phase before the queue existed.
+	 */
 	Inbound,
 	Landing,
 	TaxiIn,
@@ -147,6 +150,9 @@ public:
 
 	/** Why it lapsed, or None. Written once, by UFlightBoard::TickOffers. */
 	UPROPERTY() ELapseReason LapseReason = ELapseReason::None;
+
+	/** USimClock::Now at which it joined the arrival queue, or 0. See UFlightBoard::Queue. */
+	UPROPERTY() double HoldingSince = 0.0;
 
 	/** USimClock::Now of the accept, or 0 if never accepted. The contract runs from here. */
 	UPROPERTY() double AcceptedAt = 0.0;

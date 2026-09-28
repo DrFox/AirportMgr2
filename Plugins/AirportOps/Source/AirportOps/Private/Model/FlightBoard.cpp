@@ -2,6 +2,7 @@
 
 #include "AirportOpsLog.h"
 #include "Model/AirsideCapability.h"
+#include "Model/ArrivalSequencer.h"
 #include "Model/Flight.h"
 #include "Model/FuelService.h"
 #include "Model/Ledger.h"
@@ -177,17 +178,79 @@ void UFlightBoard::Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& 
 
 	const int32 Handle = Clock.At(Flight.ArrivesAt, [this, WeakTraffic, Id]()
 	{
-		UGroundTraffic* Model = WeakTraffic.Get();
 		UFlight* Due = FindById(Id);
-		if (Model != nullptr && Due != nullptr)
+		if (WeakTraffic.Get() != nullptr && Due != nullptr)
 		{
-			DispatchNow(*Model, *Due);
+			// INTO THE QUEUE, not straight onto the runway (spec 2026-09-28-arrival-queue): the
+			// runway may be busy, and TickQueue is what decides when it is not. HoldingSince is
+			// the ETA - the moment this callback exists to mark.
+			Enqueue(*Due, Due->ArrivesAt);
 		}
 	});
 	ArrivalHandles.Add(Flight.Id, Handle);
 }
 
-void UFlightBoard::DispatchNow(UGroundTraffic& Traffic, UFlight& Flight)
+void UFlightBoard::Enqueue(UFlight& Flight, double Since)
+{
+	ArrivalHandles.Remove(Flight.Id);
+	Flight.Phase = EFlightPhase::Inbound;
+	Flight.HoldingSince = Since;
+	UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: #%d in queue"),
+		Flight.Id, *Flight.Callsign, Queue().Find(&Flight) + 1);
+	++RevisionCount;
+}
+
+TArray<UFlight*> UFlightBoard::Queue() const
+{
+	TArray<UFlight*> Out;
+	for (const TObjectPtr<UFlight>& Each : Flights)
+	{
+		if (Each != nullptr && Each->Phase == EFlightPhase::Inbound)
+		{
+			Out.Add(Each);
+		}
+	}
+	// DERIVED, NOT STORED: the queue is the holding flights in the order they joined, ties by
+	// id - one list (Flights), so a save needs nothing new and nothing can drift out of step.
+	Algo::StableSortBy(Out, [](const UFlight* F) { return F->HoldingSince; });
+	return Out;
+}
+
+void UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+{
+	if (Clock.IsPaused())
+	{
+		return;
+	}
+	const TArray<UFlight*> Waiting = Queue();
+	if (Waiting.Num() == 0)
+	{
+		return;
+	}
+	// THE SAME TEST THE DISPATCH MAKES - ArrivalPlanner::IsRunwayBusy is Plan's own
+	// RunwayOccupied step - so the queue never clears a flight Plan would then refuse.
+	const auto IsBusy = [&Traffic, &Network](const UFlight& F)
+	{
+		return ArrivalPlanner::IsRunwayBusy(Network, F.ApproachFocus, &Traffic.GetOccupancy());
+	};
+	// NULL SEQUENCER IS STRICT FIRST COME, for a test that does not wire one.
+	UFlight* Next = Sequencer != nullptr ? Sequencer->Next(Waiting, IsBusy)
+		: (IsBusy(*Waiting[0]) ? nullptr : Waiting[0]);
+	if (Next == nullptr)
+	{
+		return;
+	}
+	// ONE CLEARANCE A FRAME: the aircraft just cleared claims the runway on its first tick, and
+	// a second clearance this frame would be decided before that claim exists.
+	const double Held = Clock.Now() - Next->HoldingSince;
+	if (DispatchNow(Traffic, Network, *Next))
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) cleared to land after %.0f s holding"),
+			Next->Id, *Next->Callsign, FMath::Max(Held, 0.0));
+	}
+}
+
+bool UFlightBoard::DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight)
 {
 	ArrivalHandles.Remove(Flight.Id);
 
@@ -195,7 +258,7 @@ void UFlightBoard::DispatchNow(UGroundTraffic& Traffic, UFlight& Flight)
 	{
 		UE_LOG(LogAirportOps, Warning,
 			TEXT("Flight %d came due with no dispatcher: the board is not attached"), Flight.Id);
-		return;
+		return false;
 	}
 
 	// RELEASE BEFORE DISPATCH, and the order is the whole point. ArrivalPlanner asks IsHeld
@@ -209,12 +272,16 @@ void UFlightBoard::DispatchNow(UGroundTraffic& Traffic, UFlight& Flight)
 
 	if (!Dispatcher(Flight.ApproachFocus, Flight.Airframe))
 	{
-		// Stays Accepted, with no hold. Queueing this properly is the sequencer's job and it
-		// does not exist yet; saying so is what stops it being a silent disappearance.
+		// STAYS IN THE QUEUE, STAND RE-HELD (spec 2026-09-28-arrival-queue): this used to leave
+		// the flight Accepted with no stand for ever. A refusal here is transient by
+		// construction - the runway was free a moment ago and the stand was held - so it is
+		// retried next frame, never dropped.
+		const bool bReheld = Allocator != nullptr && Allocator->Reserve(Traffic, Network, Flight);
 		UE_LOG(LogAirportOps, Warning,
-			TEXT("Flight %d could not be dispatched at its ETA; it keeps no stand"), Flight.Id);
+			TEXT("Flight %d could not be cleared to land; still holding%s"), Flight.Id,
+			bReheld ? TEXT(", stand re-held") : TEXT(" WITH NO STAND - no admitting stand was free to re-hold"));
 		++RevisionCount;
-		return;
+		return false;
 	}
 
 	Flight.AgentId = Traffic.GetNewestAgentId();
@@ -222,6 +289,7 @@ void UFlightBoard::DispatchNow(UGroundTraffic& Traffic, UFlight& Flight)
 	Flight.Phase = EFlightPhase::Landing;
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d dispatched as agent %d"), Flight.Id, Flight.AgentId);
 	++RevisionCount;
+	return true;
 }
 
 void UFlightBoard::Decline(USimClock& Clock, UFlight& Flight)
@@ -243,8 +311,11 @@ EArrivalRefusal UFlightBoard::WhyNotAcceptable(const UGroundTraffic& Traffic,
 	// #169: counted before the search runs, not after - GetWhyNotAcceptableCallsForTest exists
 	// to measure exactly how often this expensive call is reached, whatever it returns.
 	++WhyNotAcceptableCallsForTest;
+	// QUEUE, not Refuse: a busy runway is something an accepted flight waits for (spec
+	// 2026-09-28-arrival-queue section 1), so the row greys out only on what waiting cannot fix
+	// - a stand above all - and never on RunwayOccupied.
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, Flight.ApproachFocus, Flight.Airframe,
-		&Traffic.GetOccupancy());
+		&Traffic.GetOccupancy(), ERunwayBusy::Queue);
 	return Plan.Why;
 }
 
@@ -496,7 +567,8 @@ void UFlightBoard::OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& N
 	TArray<UFlight*> Holding;
 	for (const TObjectPtr<UFlight>& Each : Flights)
 	{
-		if (Each != nullptr && Each->Phase == EFlightPhase::Accepted)
+		// INBOUND TOO: a holding flight keeps its stand, and a graph rebuild takes every claim.
+		if (Each != nullptr && (Each->Phase == EFlightPhase::Accepted || Each->Phase == EFlightPhase::Inbound))
 		{
 			Holding.Add(Each);
 		}
@@ -545,13 +617,15 @@ void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& N
 
 		if (Each->ArrivesAt <= Clock.Now())
 		{
-			// Its slot passed while the game was shut. It is still owed an arrival, so it
-			// gets one at once rather than being dropped - and it says so, because a flight
-			// that silently never came is the exact bug this whole function exists to stop.
+			// Its slot passed while the game was shut. It is still owed an arrival, so it joins
+			// the queue at once rather than being dropped - and it says so (Enqueue logs),
+			// because a flight that silently never came is the exact bug this function exists
+			// to stop. The QUEUE, not a blind dispatch: TickQueue decides whether the runway
+			// the loaded game has is free.
 			UE_LOG(LogAirportOps, Log,
-				TEXT("Flight %d was due at %.0f, before this load at %.0f: dispatching now"),
+				TEXT("Flight %d was due at %.0f, before this load at %.0f: holding now"),
 				Each->Id, Each->ArrivesAt, Clock.Now());
-			DispatchNow(Traffic, *Each);
+			Enqueue(*Each, Each->ArrivesAt);
 			continue;
 		}
 

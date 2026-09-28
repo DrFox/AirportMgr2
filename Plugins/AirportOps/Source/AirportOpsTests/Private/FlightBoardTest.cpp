@@ -116,6 +116,9 @@ bool FFlightBoardDispatchesAtTheEtaTest::RunTest(const FString& Parameters)
 	// The clock compresses: at the default night rate (480 real s for ten hours) one real
 	// second is 75 game seconds, so two is past an ETA 100 game seconds out.
 	Clock->Advance(2.0);
+	// THE ETA PUTS IT IN THE QUEUE; the queue clears it (spec 2026-09-28-arrival-queue). This
+	// field has no runway, so nothing is busy and the first tick clears it.
+	Board->TickQueue(*Traffic, *Net, *Clock);
 
 	TestEqual(TEXT("the dispatcher ran exactly once, at the ETA"), Calls, 1);
 	TestFalse(TEXT("the stand hold was released BEFORE the dispatch"), bHeldAtDispatch);
@@ -296,6 +299,7 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 	// ArrivesAt == Clock->Now() at the accept (no lead time) - see AcceptImmediate's own
 	// header on why - so the tiniest advance crosses the ETA and fires the dispatcher.
 	Clock->Advance(0.1);
+	Board->TickQueue(*Traffic, *Net, *Clock);
 	TestEqual(TEXT("the dispatcher ran exactly once - only the accepted flight was ever due"),
 		DispatchedNear.Num(), 1);
 	if (DispatchedNear.Num() == 1)

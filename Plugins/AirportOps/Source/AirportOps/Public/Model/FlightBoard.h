@@ -8,6 +8,7 @@
 
 #include "FlightBoard.generated.h"
 
+class UArrivalSequencer;
 class UFlight;
 class UFuelService;
 class UGroundTraffic;
@@ -125,6 +126,9 @@ public:
 	uint32 Revision() const { return RevisionCount; }
 
 	UPROPERTY() TObjectPtr<UStandAllocator> Allocator = nullptr;
+
+	/** Who of the holding flights is cleared next. Null = strict first come. See UArrivalSequencer. */
+	UPROPERTY() TObjectPtr<UArrivalSequencer> Sequencer = nullptr;
 	UPROPERTY() TObjectPtr<UOfferGenerator> Generator = nullptr;
 
 	/**
@@ -332,6 +336,22 @@ public:
 	 */
 	TArray<UFlight*> Offers() const;
 
+	/**
+	 * The flights holding for the runway (phase Inbound), in the order they joined -
+	 * HoldingSince, ties by id. DERIVED from Flights every call, never stored: see Enqueue.
+	 */
+	TArray<UFlight*> Queue() const;
+
+	/**
+	 * Clear at most one holding flight whose runway is free - UArrivalSequencer picks which -
+	 * and dispatch it. Nothing while paused. Called every frame from UOpsRuntime::Tick.
+	 *
+	 * A REFUSED DISPATCH STAYS QUEUED with its stand re-held (see DispatchNow): the flight that
+	 * used to be lost at a busy ETA is now always landed eventually.
+	 * ENFORCED BY: AirportOps.Model.ArrivalQueue.DueWhileBusyWaitsThenLands
+	 */
+	void TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
+
 	/** Everything accepted and not yet departed. */
 	TArray<UFlight*> Live() const;
 
@@ -417,7 +437,11 @@ private:
 	 *  Offered phase; not a UPROPERTY, rebuilt in OnAfterRestore like the maps above. */
 	int32 OfferedCount = 0;
 
-	void DispatchNow(UGroundTraffic& Traffic, UFlight& Flight);
+	/** Release the hold and put it on final. False, flight still Inbound and stand re-held, if refused. */
+	bool DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight);
+
+	/** Into the queue: phase Inbound, HoldingSince = Since, stand kept. From the ETA callback and a load. */
+	void Enqueue(UFlight& Flight, double Since);
 	void Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& Flight);
 
 	/**
