@@ -104,6 +104,15 @@ struct AIRSIDE_API FGuidelineNode
 	UPROPERTY() TArray<FGuidelineNodeId> ProtectsConflicts;
 
 	/**
+	 * True on a CONFLICT node: where FRoadGuidelineBuilder welded a road lane and a taxiway line
+	 * that cross at a road-taxiway crossing (taxiway strip stage 4). Not a junction - no class
+	 * changes line here - but where the claim table makes the two contend. Read by the claim
+	 * pass to treat a crossing's split pieces as the one box they replaced. Derived, so every
+	 * rebuild makes it afresh on fresh nodes.
+	 */
+	UPROPERTY() bool bCrossingConflict = false;
+
+	/**
 	 * Overrides the default class priority at this node. Empty - the overwhelmingly
 	 * common case - means TraversalPriority applies. Spec 5.4.
 	 */

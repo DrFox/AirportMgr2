@@ -394,12 +394,16 @@ namespace
 	}
 
 	/**
-	 * How far down Arm, from the junction NodeId, the strip edge of the taxiways in Joined lies:
-	 * (half width + strip) / sin(angle), the worst over them - ExitGeometry::TaxiwayEndFloor's own
-	 * shape, with the strip edge standing in for the runway's half width (its first two
-	 * arguments are only ever summed, and its ten-degree floor is the same guard against a line
-	 * running alongside). THE ONE RULE for both holds that sit at a strip edge: a road's stop
-	 * line at a crossing and a taxiway's intermediate hold where it joins another.
+	 * How far down Arm, from the junction NodeId, a line ACROSS THE ARM'S WHOLE WIDTH must sit to
+	 * be clear of the strips of the taxiways in Joined: (strip edge + arm half width x |cos|) /
+	 * sin(angle), the worst over them - ExitGeometry::TaxiwayEndFloor's shape, the strip edge
+	 * standing in for the runway's half width and the arm's own reach along the taxiway for the
+	 * taxiway's. THE ARM'S WIDTH COUNTS: at an oblique crossing the bar's near corner reaches the
+	 * strip before its centre does, and the first cut - which passed 0 there - left that corner
+	 * half-width x cos(angle) inside the strip, 2.3 m at 60 degrees (final review, important 5).
+	 * Its ten-degree floor is the same guard against a line running alongside. THE ONE RULE for
+	 * both holds that sit at a strip edge: a road's stop line at a crossing and a taxiway's
+	 * intermediate hold where it joins another.
 	 *
 	 * IgnoreBelow skips a joined arm within that acute angle of Arm's own line - the stem's own
 	 * continuation through a four-way, which is the same taxiway, not one being joined.
@@ -408,6 +412,9 @@ namespace
 		TConstArrayView<FRoadSegmentId> Joined, double IgnoreBelow = 0.0)
 	{
 		const FVector2D Axis = Network.GetOutgoingTangent(Arm, NodeId);
+		const FRoadSegment* ArmSegment = Network.GetSegment(Arm);
+		const URoadProfile* ArmProfile = ArmSegment ? Network.ProfileFor(*ArmSegment) : nullptr;
+		const double ArmHalf = ArmProfile ? ArmProfile->GetTotalWidth() * 0.5 : 0.0;
 		double Wanted = 0.0;
 		for (const FRoadSegmentId& StripSeg : Joined)
 		{
@@ -424,7 +431,8 @@ namespace
 			{
 				continue;
 			}
-			Wanted = FMath::Max(Wanted, ExitGeometry::TaxiwayEndFloor(Edge, 0.0, Angle));
+			const double Acute = FMath::Min(Angle, UE_DOUBLE_PI - Angle);
+			Wanted = FMath::Max(Wanted, ExitGeometry::TaxiwayEndFloor(Edge, ArmHalf * FMath::Abs(FMath::Cos(Acute)), Angle));
 		}
 		return Wanted;
 	}
@@ -792,14 +800,30 @@ namespace
 
 			// Re-measured on this junction's pavement, as FAnchorLink's splits are: a split half
 			// is left unmeasured by SplitGuidelineEdge. A piece split again is dead and skipped.
+			//
+			// AND A SPLIT TAXIWAY PIECE STOPS ADMITTING EMERGENCY (final review, important 6). Both
+			// lines admitted it, the weld joined them at the conflict, and the route search has no
+			// heading check - so a fire truck's shortest U-turn was a right angle onto the taxiway
+			// at one lane's conflict and back off it at the other's. Taken off the TAXIWAY side,
+			// not the road's, because crossing on the road is what a ground vehicle is here for;
+			// the cost, ruled: an emergency vehicle driving ALONG the taxiway through a road
+			// crossing detours by the junction's Emergency-only road-taxiway turns.
+			// ENFORCED BY: Airside.Build.EmergencyNeverTurnsAtAConflict
 			for (const FGuidelineEdgeId Piece : Pieces)
 			{
 				FRoadGuidelineBuilder::MeasureSplitHalf(Network, Piece, Solved, Junction);
+				if (const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Piece);
+					Edge != nullptr && Edge->AllowedTraffic.Allows(ETraversalClass::Aircraft))
+				{
+					FTrafficMask AircraftOnly = FTrafficMask::Only(ETraversalClass::Aircraft);
+					Network.SetGuidelineEdgeAllowedTraffic(Piece, AircraftOnly);
+				}
 			}
 			for (const FGuidelineNodeId Conflict : ClusterNodes)
 			{
 				if (Conflict.IsSet())
 				{
+					Network.SetGuidelineNodeCrossingConflict(Conflict);
 					OutConflicts.Add(Conflict);
 				}
 			}
@@ -1791,6 +1815,13 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 	DeriveSegmentGuidelines(Network, Segments, SetBack, ContinuousEnds, CrossingSetBack, Ends, Attach);
 
+	// The crossing junctions themselves, for the turn loop's lopsided cross-class turns.
+	TSet<FRoadNodeId> CrossingJunctions;
+	for (const TPair<uint64, FRoadNodeId>& Pair : CrossingEnds)
+	{
+		CrossingJunctions.Add(Pair.Value);
+	}
+
 	// Turn paths: one edge per ordered pair of DISTINCT arms at each solved node.
 	int32 Balloons = 0;
 	int32 Tapers = 0;
@@ -2044,8 +2075,55 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					}
 					case ETurnShape::Chord:
 					default:
-						Pieces.Add(Turn);
+					{
+						// A LOPSIDED CROSS-CLASS TURN AT A CROSSING IS A STRAIGHT LEAD AND A SYMMETRIC
+						// ARC (final review, important 8). The road's stop line moved its lane ends to
+						// the strip edge, 40 m out, while the taxiway's stayed at its cut, 10 m in; one
+						// quadratic across legs that uneven bunches its curvature at the short end, and
+						// the Emergency-only road-taxiway turns came out at 501.6 uu against the service
+						// vehicle's 502.0 - a real shortfall, warned at every crossing on every rebuild
+						// and telling the player to draw longer arms that would not help. So the long
+						// leg runs straight to where the short one's length is left, and the curve is
+						// the symmetric quadratic of those two legs (L / sqrt 2 at a right angle). Only
+						// here: every other turn's legs are the two arms' own cut-backs, as on main.
+						// ENFORCED BY: Airside.Build.RoadCrossingWarnsNothing
+						const FVector2D PA = Network.GetGuidelineNode(Turn.A)->Position;
+						const FVector2D PB = Network.GetGuidelineNode(Turn.B)->Position;
+						const double LegA = FVector2D::Distance(PA, Turn.Control);
+						const double LegB = FVector2D::Distance(Turn.Control, PB);
+						const bool bEmergencyOnly = Turn.AllowedTraffic.Bits == FTrafficMask::Only(ETraversalClass::Emergency).Bits;
+						const bool bBends = !FMath::IsNearlyZero(FVector2D::CrossProduct(Turn.Control - PA, PB - Turn.Control), 1.0);
+						if (bEmergencyOnly && bBends && CrossingJunctions.Contains(NodeId) && FMath::Abs(LegA - LegB) > 1.0)
+						{
+							const bool bLongA = LegA > LegB;
+							const double Short = FMath::Min(LegA, LegB);
+							const FVector2D Lead = Turn.Control + ((bLongA ? PA : PB) - Turn.Control).GetSafeNormal() * Short;
+							const FGuidelineNodeId Mid = Network.AddGuidelineNode(Lead);
+							FGuidelineEdge Straight = Turn;
+							FGuidelineEdge Curve = Turn;
+							if (bLongA)
+							{
+								Straight.B = Mid;
+								Straight.Control = (PA + Lead) * 0.5;
+								Curve.A = Mid;
+								Pieces.Add(Straight);
+								Pieces.Add(Curve);
+							}
+							else
+							{
+								Curve.B = Mid;
+								Straight.A = Mid;
+								Straight.Control = (Lead + PB) * 0.5;
+								Pieces.Add(Curve);
+								Pieces.Add(Straight);
+							}
+						}
+						else
+						{
+							Pieces.Add(Turn);
+						}
 						break;
+					}
 					}
 					for (FGuidelineEdge& Piece : Pieces)
 					{

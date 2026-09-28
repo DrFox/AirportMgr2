@@ -1167,6 +1167,28 @@ bool URoadNetwork::SetGuidelineNodeHoldingPosition(FGuidelineNodeId Node, EHoldi
 	return true;
 }
 
+bool URoadNetwork::SetGuidelineNodeCrossingConflict(FGuidelineNodeId Node)
+{
+	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->bCrossingConflict = true;
+	return true;
+}
+
+bool URoadNetwork::SetGuidelineEdgeAllowedTraffic(FGuidelineEdgeId Edge, FTrafficMask Allowed)
+{
+	FGuidelineEdge* Found = GetGuidelineEdgeMutable(Edge);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->AllowedTraffic = Allowed;
+	return true;
+}
+
 bool URoadNetwork::SetGuidelineNodeCrossingHold(FGuidelineNodeId Node, TArray<FGuidelineNodeId> Conflicts)
 {
 	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);

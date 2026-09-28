@@ -378,9 +378,13 @@ bool FRoadCrossingTwoTaxiwaysTest::RunTest(const FString& Parameters)
 		CrossingUnsharedCrossings(*Net), 0);
 
 	// THE STOP LINE CLEARS THE WORST STRIP: the diagonal meets the road at 45 degrees, so its
-	// strip edge lies (half width + strip) / sin(45) down the road - further than the square one.
+	// strip edge lies (half width + strip + road half width x cos 45) / sin 45 down the road -
+	// further than the square one. The road's own width counts at an angle: the bar's near
+	// corner reaches the strip first (Airside.Build.RoadCrossingAtSixtyDegrees).
 	const URoadProfile* Taxiway = Net->ProfileFor(*Net->GetSegment(Diagonal));
-	const double StripEdge = (Taxiway->GetTotalWidth() * 0.5 + TaxiwayStrip::StripWidthOf(*Net, Diagonal))
+	const URoadProfile* Road = Net->ProfileFor(*Net->GetSegment(Crossing.South));
+	const double StripEdge = (Taxiway->GetTotalWidth() * 0.5 + TaxiwayStrip::StripWidthOf(*Net, Diagonal)
+		+ Road->GetTotalWidth() * 0.5 * FMath::Cos(FMath::DegreesToRadians(45.0)))
 		/ FMath::Sin(FMath::DegreesToRadians(45.0));
 	const TArray<FGuidelineNodeId> Conflicts = CrossingConflictNodes(*Net);
 	for (const TPair<FRoadSegmentId, const TCHAR*> Arm : { TPair<FRoadSegmentId, const TCHAR*>(Crossing.South, TEXT("south")),
@@ -433,6 +437,152 @@ bool FRoadCrossingStubClampedTest::RunTest(const FString& Parameters)
 	CrossingCheckArm(*this, *Net, North, Centre, StripEdge, TEXT("north"));
 	TestEqual(TEXT("no vehicle line crosses an aircraft line without sharing a node there"),
 		CrossingUnsharedCrossings(*Net), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadCrossingAtSixtyDegreesTest,
+	"Airside.Build.RoadCrossingAtSixtyDegrees",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadCrossingAtSixtyDegreesTest::RunTest(const FString& Parameters)
+{
+	// FINAL REVIEW, IMPORTANT 5: at an oblique crossing the ROAD'S OWN WIDTH reaches the strip
+	// before its centreline does - a stop line placed at (half width + strip) / sin(angle) had
+	// its corner half-road x cos(angle) inside the strip (2.3 m at 60 degrees). Measured on the
+	// bar the line stands for: both of its corners, across the whole road, outside the strip.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
+	URoadProfile* Road = URoadProfile::MakeServiceRoadTransient();
+	Net->DefaultProfile = Taxiway;
+	const FVector2D Axis(FMath::Cos(FMath::DegreesToRadians(60.0)), FMath::Sin(FMath::DegreesToRadians(60.0)));
+	const FRoadNodeId Centre = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadSegmentId West = Net->AddStraightSegment(Net->AddNode(FVector2D(-20000.0, 0.0)), Centre, Taxiway);
+	Net->AddStraightSegment(Centre, Net->AddNode(FVector2D(20000.0, 0.0)), Taxiway);
+	const FRoadSegmentId South = Net->AddStraightSegment(Net->AddNode(-Axis * 20000.0), Centre, Road);
+	const FRoadSegmentId North = Net->AddStraightSegment(Centre, Net->AddNode(Axis * 20000.0), Road);
+	TestGraph::Derive(*Net);
+
+	const double StripEdge = Taxiway->GetTotalWidth() * 0.5 + TaxiwayStrip::StripWidthOf(*Net, West);
+	const double RoadHalf = Road->GetTotalWidth() * 0.5;
+	const double Sine = FMath::Sin(FMath::DegreesToRadians(60.0));
+	const double Cosine = FMath::Cos(FMath::DegreesToRadians(60.0));
+	const double Expected = (StripEdge + RoadHalf * Cosine) / Sine;
+	for (const TPair<FRoadSegmentId, const TCHAR*> Arm : { TPair<FRoadSegmentId, const TCHAR*>(South, TEXT("south")),
+		TPair<FRoadSegmentId, const TCHAR*>(North, TEXT("north")) })
+	{
+		CrossingCheckArm(*this, *Net, Arm.Key, Centre, Expected, Arm.Value);
+		const FVector2D Out = Net->GetOutgoingTangent(Arm.Key, Centre).GetSafeNormal();
+		const FVector2D Across(-Out.Y, Out.X);
+		const FVector2D OnLine = Out * Expected;
+		for (const double Side : { -1.0, 1.0 })
+		{
+			const FVector2D Corner = OnLine + Across * RoadHalf * Side;
+			TestTrue(*FString::Printf(TEXT("%s: the stop line's corner (%.0f, %.0f) is outside the strip (edge %.0f)"),
+				Arm.Value, Corner.X, Corner.Y, StripEdge), FMath::Abs(Corner.Y) >= StripEdge - 1.0);
+		}
+	}
+	TestEqual(TEXT("no vehicle line crosses an aircraft line without sharing a node there"),
+		CrossingUnsharedCrossings(*Net), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEmergencyNeverTurnsAtAConflictTest,
+	"Airside.Build.EmergencyNeverTurnsAtAConflict",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEmergencyNeverTurnsAtAConflictTest::RunTest(const FString& Parameters)
+{
+	// FINAL REVIEW, IMPORTANT 6: a conflict node is where a road lane and a taxiway line CROSS,
+	// not a junction. Both classes' lines admitted Emergency, the weld joined them there, and the
+	// route search has no heading check - so a fire truck's shortest U-turn was a right angle
+	// onto the taxiway at one lane's conflict and another back off it at the other's. Every
+	// Emergency route between the crossing's arm ends must go through a conflict node on ONE
+	// class of line.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FRoadCrossingFixture::Lay(*Net);
+	TestGraph::Derive(*Net);
+	const TArray<FGuidelineNodeId> Conflicts = CrossingConflictNodes(*Net);
+	if (!TestTrue(TEXT("the crossing has conflict nodes"), Conflicts.Num() > 0)) { return false; }
+
+	TArray<FGuidelineNodeId> Ends;
+	const TArray<FGuidelineNode>& Nodes = Net->GetGuidelineNodes();
+	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+	{
+		if (Nodes[Index].bAlive && Nodes[Index].Origin.IsSet()) { Ends.Add(Net->GuidelineNodeIdAt(Index)); }
+	}
+	int32 Routes = 0;
+	for (const FGuidelineNodeId From : Ends)
+	{
+		for (const FGuidelineNodeId To : Ends)
+		{
+			if (From == To) { continue; }
+			const FRoutePlan Plan = TestGraph::Probe(*Net, From, To, ETraversalClass::Emergency);
+			if (!Plan.IsValid()) { continue; }
+			++Routes;
+			for (int32 Step = 1; Step < Plan.Steps.Num(); ++Step)
+			{
+				if (!Conflicts.Contains(Plan.Steps[Step - 1].To)) { continue; }
+				const FGuidelineEdge* In = Net->GetGuidelineEdge(Plan.Steps[Step - 1].Edge);
+				const FGuidelineEdge* Out = Net->GetGuidelineEdge(Plan.Steps[Step].Edge);
+				const bool bInRoad = In && In->AllowedTraffic.Allows(ETraversalClass::GroundVehicle);
+				const bool bOutRoad = Out && Out->AllowedTraffic.Allows(ETraversalClass::GroundVehicle);
+				TestEqual(*FString::Printf(TEXT("route %d -> %d stays on one class of line through conflict node %d"),
+					From.Index, To.Index, Plan.Steps[Step - 1].To.Index), bInRoad, bOutRoad);
+			}
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("emergency routes exist to judge: %d"), Routes), Routes > 0);
+	return true;
+}
+
+namespace RoadCrossingTest
+{
+	/** Warnings on one category, captured unbuffered (FLogLineSpy's own override, #216). */
+	struct FCrossingWarningSpy : public FLogLineSpy
+	{
+		explicit FCrossingWarningSpy(FName InCategory) : FLogLineSpy(InCategory) {}
+
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& InCategory) override
+		{
+			if (InCategory == Category && Verbosity == ELogVerbosity::Warning)
+			{
+				++Count;
+				CapturedLines.Add(FString(V));
+			}
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadCrossingWarnsNothingTest,
+	"Airside.Build.RoadCrossingWarnsNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadCrossingWarnsNothingTest::RunTest(const FString& Parameters)
+{
+	// FINAL REVIEW, IMPORTANT 8: a plain right-angle crossing of generous arms is a junction
+	// nobody need redraw, and "turn path radius 502 uu, but ... needs 502 ... Draw them longer"
+	// fired at every one, every rebuild (184 lines in one test log; none on main). Warnings on
+	// the builder's own category over two derives: none about the turns.
+	RoadCrossingTest::FCrossingWarningSpy Spy(TEXT("LogAirside"));
+	GLog->AddOutputDevice(&Spy);
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FRoadCrossingFixture::Lay(*Net);
+	TestGraph::Derive(*Net);
+	TestGraph::Derive(*Net);
+	GLog->RemoveOutputDevice(&Spy);
+	int32 Radius = 0;
+	for (const FString& Line : Spy.CapturedLines)
+	{
+		if (Line.Contains(TEXT("turn path radius")))
+		{
+			++Radius;
+			if (Radius == 1) { AddInfo(Line); }
+		}
+	}
+	TestEqual(TEXT("no turn-radius warning at a plain crossing"), Radius, 0);
 	return true;
 }
 

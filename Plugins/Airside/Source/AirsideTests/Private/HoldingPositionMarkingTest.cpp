@@ -165,9 +165,10 @@ bool FCrossingStopLinePaintTest::RunTest(const FString& Parameters)
 			MinX = FMath::Min(MinX, P.X);
 			MaxX = FMath::Max(MaxX, P.X);
 		}
-		// ON THE JUNCTION SIDE OF THE LINE, like every holding bar: a nose stopped at the node
-		// is at the bar's near edge, and the bar's far edge is the stand stop bar's depth on.
-		TestNearlyEqual(TEXT("the bar's near edge is on the stop line, at the strip edge"), MaxY, StripEdge, 1.0);
+		// ON THE FAR SIDE OF THE LINE FROM THE JUNCTION (final review of stage 4, minor 14):
+		// painted toward the junction, as the aircraft bars are, the bar lay inside the strip it
+		// marks the edge of. Its junction-side edge is the line, at the strip edge.
+		TestNearlyEqual(TEXT("the bar's junction-side edge is on the stop line, at the strip edge"), MinY, StripEdge, 1.0);
 		TestNearlyEqual(TEXT("and it is the stand stop bar's depth - one constant, shared"),
 			MaxY - MinY, FStandMarkingBuilder::StopBarWidth, 1.0);
 		TestNearlyEqual(TEXT("across the ROAD's whole width, not the lane's"), MinX, -RoadHalf, 1.0);

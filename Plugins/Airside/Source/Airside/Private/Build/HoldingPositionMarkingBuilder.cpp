@@ -120,7 +120,9 @@ int32 FHoldingPositionMarkingBuilder::Build(const URoadNetwork& Network, double 
 					Centre -= Across * FVector2D::DotProduct(Node.Position - RoadEnd->Position, Across);
 				}
 			}
-			MarkingAddBar(Out, Z, Centre, Toward, Across, HalfWidth, 0.0, FStandMarkingBuilder::StopBarWidth,
+			// ON THE FAR SIDE OF THE LINE FROM THE JUNCTION (final review, minor 14): painted toward
+			// the junction as the aircraft bars are, it lay inside the strip it marks the edge of.
+			MarkingAddBar(Out, Z, Centre, Toward, Across, HalfWidth, -FStandMarkingBuilder::StopBarWidth, 0.0,
 				/*bDashed=*/false, StopLineId);
 		}
 		else
