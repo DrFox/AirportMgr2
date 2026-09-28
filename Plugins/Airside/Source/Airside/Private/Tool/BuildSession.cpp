@@ -3,6 +3,7 @@
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
 #include "Tool/ApronDrawTool.h"
+#include "Tool/GridFrameSource.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/HoldingPointTool.h"
 #include "Tool/PlotPlaceTool.h"
@@ -488,8 +489,58 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 		// EnsureNetwork), so the first click on an empty map lands here. No source has anything
 		// to propose, but the grid still applies: the first road of a new airport is exactly the
 		// one a player wants on it. Found by Airside.Tool.GridOverlay.DrawsRoundTheBuildPoint.
-		FSnapGuideChain::ApplyGrid(Guide, PlaneHit, Tunables.GuideSources.GridStepUu());
+		// The grid itself is applied below, with the chain's.
 		bGuideChainRan = true;
+	}
+
+	// THE GRID APPLIES EXACTLY WHERE SOMETHING WILL QUANTISE BY IT: the chain just ran, or the
+	// tool quantises a stage of its own. Alt suspends it with the guides - one "place freely"
+	// gesture, not two. The overlay reads the same field, so it shows only a grid the point is
+	// actually landing on.
+	// ENFORCED BY: Airside.Tool.GridSnap.SuspendAndSelectHaveNoGrid
+	const double StepUu = Tunables.GuideSources.GridStepUu();
+	if (!bSuspendGuides && Tool != nullptr && (bGuideChainRan || Tool->SnapsToGrid()) && StepUu > 0.0)
+	{
+		// WHICH WAY THE GRID LIES - grid-follows-snap design section 2. HERE, AFTER THE CHAIN, and
+		// the reason Resolve no longer applies the grid itself: the frame depends on which guide
+		// won, so it cannot be known until Arbitrate has run.
+		FGridFrameInputs Inputs;
+		Inputs.Orientation = Tunables.GuideSources.GridOrientation;
+		Inputs.StepUu = StepUu;
+		Inputs.Guide = bGuideChainRan ? &Guide : nullptr;
+		Inputs.bToolLine = Tool->DescribeGridLine(Network, PlaneHit, Inputs.ToolThrough, Inputs.ToolDirection);
+		if (bGuideChainRan)
+		{
+			Inputs.bAnchor = true;
+			Inputs.AnchorOrigin = Anchor.Origin;
+			Inputs.AnchorReference = Anchor.Reference;
+		}
+		if (Network != nullptr && Snapped.Kind == ERoadSnapKind::Segment)
+		{
+			Inputs.bRoadSnap = Network->SegmentEnds(Snapped.Segment, Inputs.RoadA, Inputs.RoadB);
+		}
+
+		GridSnap::FGridFrame Frame;
+		const EGridFrameSource Source = GridFrameSource::Resolve(Inputs, HeldGridFrame, Frame);
+
+		// ONCE PER CHANGE: what the grid turned to, and why - the line a PIE repro is read by.
+		if (!Frame.SameLines(LoggedGridFrame))
+		{
+			LoggedGridFrame = Frame;
+			UE_LOG(LogAirside, Log, TEXT("Grid frame -> %.1f deg through (%.0f, %.0f) at %.0f m from %s"),
+				Frame.AxisDegrees(), Frame.Origin.X, Frame.Origin.Y, Frame.StepUu / 100.0,
+				GridFrameSource::Name(Source));
+		}
+
+		// THE GRID, LAST - precedence A of the world-grid-snap design; see ApplyGrid. Before
+		// LastGuide is stored, exactly as when Resolve applied it, so the hysteresis sees the
+		// same result it always did.
+		if (bGuideChainRan)
+		{
+			FSnapGuideChain::ApplyGrid(Guide, PlaneHit, Frame);
+		}
+		Context.GridFrame = Frame;
+		Context.GridOverlayRadiusUu = Tunables.GuideSources.GridOverlayRadiusUu();
 	}
 
 	// ASSIGNED EVEN WHEN NOTHING RESOLVED, which is the clearing half: a gesture that ends
@@ -497,17 +548,6 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// through the hysteresis rule itself.
 	LastGuide = Guide;
 	Context.Guide = Guide;
-
-	// THE GRID APPLIES EXACTLY WHERE SOMETHING WILL QUANTISE BY IT: the chain just ran (and
-	// applied it inside Resolve), or the tool quantises a stage of its own. Alt suspends it with
-	// the guides - one "place freely" gesture, not two. The overlay reads the same field, so it
-	// shows only a grid the point is actually landing on.
-	// ENFORCED BY: Airside.Tool.GridSnap.SuspendAndSelectHaveNoGrid
-	if (!bSuspendGuides && Tool != nullptr && (bGuideChainRan || Tool->SnapsToGrid()))
-	{
-		Context.GridStepUu = Tunables.GuideSources.GridStepUu();
-		Context.GridOverlayRadiusUu = Tunables.GuideSources.GridOverlayRadiusUu();
-	}
 	return Context;
 }
 

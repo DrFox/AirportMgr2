@@ -1174,15 +1174,15 @@ SnapGuide::FResult FSnapGuideChain::Resolve(const URoadNetwork& Network,
 		Winner.Description = SnapGuide::Describe(Network, Anchor, Winner.Label);
 	}
 
-	// THE WORLD GRID, LAST. See ApplyGrid.
-	ApplyGrid(Result, Cursor, Enabled.GridStepUu());
+	// NO GRID HERE since 2026-09-28: FBuildSession::MakeContext applies it with ApplyGrid once
+	// it knows the frame, which depends on the winners just chosen (grid-follows-snap design).
 
 	return Result;
 }
 
-void FSnapGuideChain::ApplyGrid(SnapGuide::FResult& Result, const FVector2D& Cursor, double StepUu)
+void FSnapGuideChain::ApplyGrid(SnapGuide::FResult& Result, const FVector2D& Cursor, const GridSnap::FGridFrame& Frame)
 {
-	// THE WORLD GRID, APPLIED LAST - precedence A of the world-grid-snap design: road snap (resolved
+	// THE GRID, APPLIED LAST - world or turned, the rule is one - precedence A of the world-grid-snap design: road snap (resolved
 	// before this, and preferred by every tool that reads one) > guides > grid.
 	//   - No winner: the nearest grid point. The result goes ACTIVE with no winners, which every
 	//     consumer already handles - they draw Winners (none) and move to Point.
@@ -1196,19 +1196,19 @@ void FSnapGuideChain::ApplyGrid(SnapGuide::FResult& Result, const FVector2D& Cur
 	//
 	// Previous keeps only Winners for hysteresis (see Arbitrate), so a grid point held as
 	// Result.Point is never mistaken for a guide next frame.
-	if (StepUu > 0.0)
+	if (Frame.IsOn())
 	{
 		if (Result.Winners.Num() == 0)
 		{
 			Result.bActive = true;
-			Result.Point = GridSnap::Quantise(Cursor, StepUu);
+			Result.Point = GridSnap::Quantise(Cursor, Frame);
 		}
 		else if (Result.Winners.Num() == 1)
 		{
 			// Out-parameter honoured: a refusal (degenerate direction) keeps the guide's point.
 			FVector2D OnGrid = Result.Point;
 			if (GridSnap::NearestCrossingAlong(Result.Winners[0].Through, Result.Winners[0].Direction,
-				Result.Point, StepUu, OnGrid))
+				Result.Point, Frame, OnGrid))
 			{
 				Result.Point = OnGrid;
 			}

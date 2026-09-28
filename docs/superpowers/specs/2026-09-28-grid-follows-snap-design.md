@@ -68,11 +68,15 @@ First match wins, resolved once per frame in `FBuildSession::MakeContext` after 
    references - following "45 degrees to the taxiway" would turn the grid 45 degrees off the
    thing meant. The plan verifies which fields name the relation and reference on
    `SnapGuide::FCandidate`.
-2. **The tool's anchor reference** - `FGuideAnchor::Reference` through `Origin` (the stand's
+2. **The tool's grid line** - `IBuildTool::DescribeGridLine`, added in implementation (plan,
+   "Refinement"): the plot tools find their taxiway themselves, so neither a guide nor the road
+   snap names it. The stand/depot tools return the centreline of the road `AnchorAt` would take
+   (idle) or took (pinned).
+3. **The tool's anchor reference** - `FGuideAnchor::Reference` through `Origin` (the stand's
    entrance edge; the segment a road extends).
-3. **The road snap segment** under the cursor (from `FBuildSession`'s road snap, already resolved
+4. **The road snap segment** under the cursor (from `FBuildSession`'s road snap, already resolved
    earlier in `MakeContext`).
-4. **Nothing:** the held frame. The session's held frame starts as World.
+5. **Nothing:** the held frame. The session's held frame starts as World.
 
 - Held on `FBuildSession` beside `LastGuide`; survives tool switches within the session; NOT reset
   by Alt (Alt suspends the grid, it does not forget where it pointed).

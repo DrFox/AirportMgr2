@@ -746,9 +746,10 @@ private:
 		FVector2D GuidePoint = FVector2D::ZeroVector;
 		EEditHandleKind EditHandles = EEditHandleKind::None;
 
-		/** The grid step: pressing Grid changes the readout (a plot's frontage, its letter)
-		 *  with the cursor sitting still - review, 2026-09-27. */
-		double GridStepUu = 0.0;
+		/** The grid: pressing Grid changes the readout (a plot's frontage, its letter)
+		 *  with the cursor sitting still - review, 2026-09-27. The whole FRAME since
+		 *  2026-09-28: pressing H, or the grid turning to a new road, does the same. */
+		GridSnap::FGridFrame Grid;
 
 		bool operator==(const FToolReadoutKey& Other) const
 		{
@@ -760,7 +761,7 @@ private:
 				&& bGuideActive == Other.bGuideActive
 				&& GuidePoint == Other.GuidePoint
 				&& EditHandles == Other.EditHandles
-				&& GridStepUu == Other.GridStepUu;
+				&& Grid.SameLines(Other.Grid);
 		}
 	};
 

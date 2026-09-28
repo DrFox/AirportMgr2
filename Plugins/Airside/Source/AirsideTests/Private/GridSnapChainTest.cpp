@@ -85,7 +85,7 @@ bool FGridSnapNoGuideRoundsTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("precondition: no guide holds out here"), Context.Guide.Winners.Num(), 0)) { return false; }
 
 	TestEqual(TEXT("the point is the nearest 5 m grid point"), Context.GuidedCursor(), FVector2D(4000.0, 3500.0));
-	TestEqual(TEXT("the context carries the step, for the overlay and the plot tools"), Context.GridStepUu, 500.0);
+	TestEqual(TEXT("the context carries the step, for the overlay and the plot tools"), Context.GridFrame.StepUu, 500.0);
 	TestEqual(TEXT("and the 5 m overlay radius"), Context.GridOverlayRadiusUu, 6000.0);
 	return true;
 }
@@ -107,7 +107,7 @@ bool FGridSnapOneGuideSlidesTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("precondition: the extension guide holds"), Plain.Guide.Winners.Num(), 1)) { return false; }
 	TestTrue(TEXT("grid off: on the extension, where the cursor is along it"),
 		FMath::IsNearlyEqual(Plain.GuidedCursor().Y, 0.0, 1e-6) && FMath::IsNearlyEqual(Plain.GuidedCursor().X, 4130.0, 1e-6));
-	TestEqual(TEXT("grid off: no step on the context"), Plain.GridStepUu, 0.0);
+	TestEqual(TEXT("grid off: no step on the context"), Plain.GridFrame.StepUu, 0.0);
 
 	GridSnapChainFixture::FGridSession On;
 	if (!TestTrue(TEXT("grid 5 m"), GridSnapChainFixture::Begin(On, TEXT("Taxiway"), EGridStep::FiveMetres))) { return false; }
@@ -135,12 +135,12 @@ bool FGridSnapSuspendAndSelectTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("taxiway, 5 m"), GridSnapChainFixture::Begin(S, TEXT("Taxiway"), EGridStep::FiveMetres))) { return false; }
 	const FToolContext Held = S.At(GridSnapChainFixture::InTheOpen, /*bSuspend=*/true);
 	TestEqual(TEXT("Alt held: the point is the raw cursor"), Held.GuidedCursor(), GridSnapChainFixture::InTheOpen);
-	TestEqual(TEXT("Alt held: no step, so no overlay"), Held.GridStepUu, 0.0);
+	TestEqual(TEXT("Alt held: no step, so no overlay"), Held.GridFrame.StepUu, 0.0);
 
 	GridSnapChainFixture::FGridSession Select;
 	if (!TestTrue(TEXT("select, 5 m"), GridSnapChainFixture::Begin(Select, TEXT("Select"), EGridStep::FiveMetres))) { return false; }
 	const FToolContext Picking = Select.At(GridSnapChainFixture::InTheOpen);
-	TestEqual(TEXT("Select: no step"), Picking.GridStepUu, 0.0);
+	TestEqual(TEXT("Select: no step"), Picking.GridFrame.StepUu, 0.0);
 	TestEqual(TEXT("Select: the cursor is not moved"), Picking.GuidedCursor(), GridSnapChainFixture::InTheOpen);
 	return true;
 }
@@ -195,6 +195,93 @@ bool FGridSnapCycleTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("press %d: radius"), Index + 1), Settings.GridOverlayRadiusUu(), Radii[Index]);
 	}
 	TestEqual(TEXT("four presses come back to off"), Settings.GridStep, EGridStep::Off);
+	return true;
+}
+
+/**
+ * FOLLOW, THROUGH THE SESSION - grid-follows-snap design. The fixture's road turned to 30
+ * degrees: a cursor near its extension wins Collinear, and the grid turns to the road.
+ */
+namespace GridFollowFixture
+{
+	FVector2D Dir() { return FVector2D(FMath::Cos(PI / 6.0), FMath::Sin(PI / 6.0)); }
+	FVector2D Perp() { return FVector2D(-Dir().Y, Dir().X); }
+
+	/** The fixture's geometry, turned: road from -20000 to -4000 along Dir. */
+	FVector2D Turned(const FVector2D& Along) { return Dir() * Along.X + Perp() * Along.Y; }
+
+	bool Begin(GridSnapChainFixture::FGridSession& Out, EGridOrientation Orientation, EGridStep Step = EGridStep::FiveMetres)
+	{
+		if (Out.TestWorld.World == nullptr || Out.TestWorld.Actor == nullptr) { return false; }
+		IRoadEditTarget* Target = Out.TestWorld.Actor;
+		const int32 West = Target->PlaceNode(Turned(FVector2D(-20000.0, 0.0)));
+		const int32 East = Target->PlaceNode(Turned(FVector2D(-4000.0, 0.0)));
+		Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
+
+		const int32 Index = GridSnapChainFixture::ToolIndexFor(TEXT("Taxiway"));
+		if (Index == INDEX_NONE) { return false; }
+		Out.Tunables = Out.TestWorld.Actor->MakeTunables(10000.0);
+		Out.Tunables.GuideSources.bCollinear = true;
+		Out.Tunables.GuideSources.bTaxiway = true;
+		Out.Tunables.GuideSources.GridStep = Step;
+		Out.Tunables.GuideSources.GridOrientation = Orientation;
+		Out.Session.SelectTool(Index);
+		return Out.Session.GetActiveTool() != nullptr;
+	}
+
+	const FVector2D NearTheExtension() { return Turned(GridSnapChainFixture::NearTheExtension); }
+	const FVector2D InTheOpen() { return Turned(GridSnapChainFixture::InTheOpen); }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGridFollowTurnsToTheRoadTest,
+	"Airside.Tool.GridSnap.FollowTurnsToTheRoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGridFollowTurnsToTheRoadTest::RunTest(const FString& Parameters)
+{
+	using namespace GridFollowFixture;
+	GridSnapChainFixture::FGridSession Follow;
+	if (!TestTrue(TEXT("30-degree taxiway, Follow"), Begin(Follow, EGridOrientation::Follow))) { return false; }
+	const FToolContext Turned = Follow.At(NearTheExtension());
+	if (!TestEqual(TEXT("precondition: the extension guide holds"), Turned.Guide.Winners.Num(), 1)) { return false; }
+	TestTrue(TEXT("the grid turned to the road"), FMath::IsNearlyEqual(Turned.GridFrame.AxisDegrees(), 30.0, 1e-6));
+	const FVector2D Point = Turned.GuidedCursor();
+	TestTrue(TEXT("the point stays on the extension"), FMath::Abs(FVector2D::DotProduct(Point, Perp())) < 1e-6);
+	TestTrue(TEXT("at a crossing along it, one step apart from the world origin's cross line"),
+		FMath::IsNearlyEqual(FVector2D::DotProduct(Point, Dir()), 4000.0, 1e-6));
+
+	GridSnapChainFixture::FGridSession World;
+	if (!TestTrue(TEXT("30-degree taxiway, World"), Begin(World, EGridOrientation::World))) { return false; }
+	const FToolContext Square = World.At(NearTheExtension());
+	TestTrue(TEXT("World: axis-aligned regardless"), Square.GridFrame.IsWorldAligned() && Square.GridFrame.IsOn());
+	return true;
+}
+
+/** Held: through Alt, and out into the open, and across a change of step. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGridFollowHoldsTest,
+	"Airside.Tool.GridSnap.FollowHoldsThroughAltAndStep",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGridFollowHoldsTest::RunTest(const FString& Parameters)
+{
+	using namespace GridFollowFixture;
+	GridSnapChainFixture::FGridSession S;
+	if (!TestTrue(TEXT("30-degree taxiway, Follow"), Begin(S, EGridOrientation::Follow))) { return false; }
+	S.At(NearTheExtension());
+
+	const FToolContext Held = S.At(InTheOpen(), /*bSuspend=*/true);
+	TestFalse(TEXT("Alt: no grid"), Held.GridFrame.IsOn());
+
+	const FToolContext Open = S.At(InTheOpen());
+	if (!TestEqual(TEXT("precondition: nothing to follow out here"), Open.Guide.Winners.Num(), 0)) { return false; }
+	TestTrue(TEXT("after Alt, in the open: still turned to the road"), FMath::IsNearlyEqual(Open.GridFrame.AxisDegrees(), 30.0, 1e-6));
+
+	S.Tunables.GuideSources.GridStep = EGridStep::TenMetres;
+	const FToolContext Wider = S.At(InTheOpen());
+	TestTrue(TEXT("a new step keeps the direction"), FMath::IsNearlyEqual(Wider.GridFrame.AxisDegrees(), 30.0, 1e-6));
+	TestEqual(TEXT("and takes the new pitch"), Wider.GridFrame.StepUu, 1000.0);
 	return true;
 }
 

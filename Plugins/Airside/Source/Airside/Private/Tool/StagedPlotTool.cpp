@@ -17,6 +17,39 @@ int32 FStagedPlotTool::EntityUnder(const FToolContext& Context) const
 	return IsMine(Network->GetEntities()[Under]) ? Under : INDEX_NONE;
 }
 
+bool FStagedPlotTool::DescribeGridLine(const URoadNetwork* Network, const FVector2D& Cursor,
+	FVector2D& OutThrough, FVector2D& OutDirection) const
+{
+	if (Pinned > 0)
+	{
+		OutThrough = RoadA;
+		OutDirection = Along;
+		return true;
+	}
+	if (Network == nullptr)
+	{
+		return false;
+	}
+
+	// THE SAME SEARCH AnchorAt RUNS, with the same filter, so the grid turns to the road the click
+	// would take and no other. A second O(segments) walk per idle frame - the cost #302 removed one
+	// of from DescribeAnchors - paid because MakeContext asks before the tool has a context to
+	// cache it on. Not measured (2026-09-28); the walk is the one every idle hover already pays.
+	auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
+	FRoadSegmentId Road;
+	double T = 0.0;
+	FVector2D A = FVector2D::ZeroVector;
+	FVector2D B = FVector2D::ZeroVector;
+	if (!PlotGesture::NearestRoad(*Network, Cursor, Accept, Road, T) || !Network->SegmentEnds(Road, A, B)
+		|| (B - A).IsNearlyZero())
+	{
+		return false;
+	}
+	OutThrough = A;
+	OutDirection = (B - A).GetSafeNormal();
+	return true;
+}
+
 void FStagedPlotTool::OnClick(const FToolContext& Context)
 {
 	const URoadNetwork* Network = Context.Network();
@@ -44,13 +77,14 @@ void FStagedPlotTool::OnClick(const FToolContext& Context)
 	{
 		PlotGesture::FAnchor Anchor;
 		auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
-		if (!PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Anchor, Context.GridStepUu))
+		if (!PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Anchor, Context.GridFrame))
 		{
 			return;
 		}
 		Corners[0] = Anchor.Corner;
 		Along = Anchor.Along;
 		Inward = Anchor.Inward;
+		RoadA = Anchor.RoadA;
 
 		// A FRESH GESTURE, so any refusal the LAST one earned at commit is no longer about
 		// anything on screen.
@@ -183,7 +217,7 @@ void FStagedPlotTool::BuildPreview(const FToolContext& Context, IToolPreviewSink
 		// THE SAME GRID THE CLICK ANCHORS ON - PlotGesture::DescribeAnchors and AnchorAt are
 		// one rule written once, so the heavier dot is the anchor a click takes.
 		auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
-		if (!PlotGesture::DescribeAnchors(*Network, Context.Cursor, Accept, Sink, Context.GridStepUu))
+		if (!PlotGesture::DescribeAnchors(*Network, Context.Cursor, Accept, Sink, Context.GridFrame))
 		{
 			Sink.Label(Context.Cursor, FString::Printf(TEXT("move near %s"), *RoadNoun()),
 				EPreviewStyle::Refused);
@@ -243,7 +277,7 @@ void FStagedPlotTool::BuildReadout(const FToolContext& Context, IToolReadoutSink
 		auto Accept = [this](const URoadNetwork& N, FRoadSegmentId Id) { return Filter(N, Id); };
 		PlotGesture::FAnchor Unused;
 		if (Network == nullptr
-			|| !PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Unused, Context.GridStepUu))
+			|| !PlotGesture::AnchorAt(*Network, Context.Cursor, Accept, Unused, Context.GridFrame))
 		{
 			Sink.Warning(FString::Printf(TEXT("Move near %s"), *RoadNoun()));
 		}

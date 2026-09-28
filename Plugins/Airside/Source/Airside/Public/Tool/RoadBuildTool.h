@@ -7,6 +7,7 @@
 #include "Tool/SnapGuideChain.h"
 #include "Tool/ToolReadout.h"
 #include "Tool/Selection.h"
+#include "Solve/GridSnap.h"
 #include "Solve/LetterEnvelope.h"
 #include "RoadBuildTool.generated.h"
 
@@ -118,17 +119,19 @@ struct FToolContext
 	FVector2D GuidedCursor() const { return Guide.bActive ? Guide.Point : Cursor; }
 
 	/**
-	 * The world grid's pitch THIS FRAME, uu - 0 whenever the grid does not apply to what the
-	 * active tool is doing: grid off, Alt held, or a tool (or a stage of one) that consults
-	 * neither the guide chain nor IBuildTool::SnapsToGrid. Set by FBuildSession::MakeContext.
+	 * The grid THIS FRAME - its pitch, and since 2026-09-28 its origin and axis (grid-follows-
+	 * snap design). Off (StepUu 0) whenever the grid does not apply to what the active tool is
+	 * doing: grid off, Alt held, or a tool (or a stage of one) that consults neither the guide
+	 * chain nor IBuildTool::SnapsToGrid. Set by FBuildSession::MakeContext.
 	 *
-	 * ONE FIELD FOR BOTH CONSUMERS: the plot tools quantise their own anchor and frontage by it,
-	 * and GridOverlay draws only when it is non-zero, so the overlay cannot show a grid the point
-	 * is not landing on. The chain reads the setting itself, from the same tunables.
+	 * ONE FIELD FOR EVERY CONSUMER: the session applies it to the guided point, the plot tools
+	 * quantise their own anchor and frontage by it, and GridOverlay draws it - so the overlay
+	 * cannot show a grid the point is not landing on, nor one turned differently. A frame, not a
+	 * step beside an angle: two fields that must agree are one struct (CLAUDE.md).
 	 */
-	double GridStepUu = 0.0;
+	GridSnap::FGridFrame GridFrame;
 
-	/** How far round the build point the overlay draws, uu. 0 exactly when GridStepUu is. */
+	/** How far round the build point the overlay draws, uu. 0 exactly when GridFrame is off. */
 	double GridOverlayRadiusUu = 0.0;
 
 	FRoadPlacementLimits Limits;
@@ -667,13 +670,31 @@ struct AIRSIDE_API IBuildTool
 	 * than take a guided cursor (see FStagedPlotTool).
 	 *
 	 * FALSE BY DEFAULT because the chain already covers every tool that describes a guide
-	 * anchor: FBuildSession::MakeContext sets FToolContext::GridStepUu when EITHER the chain ran
+	 * anchor: FBuildSession::MakeContext sets FToolContext::GridFrame when EITHER the chain ran
 	 * or this says yes. A tool that answers neither gets no grid and no overlay, which is right
 	 * for Select, and is what keeps the overlay from promising a grid nothing lands on.
 	 *
 	 * TAKES NO CONTEXT for DescribeGuideAnchor's reason: it is read while that context is built.
 	 */
 	virtual bool SnapsToGrid() const { return false; }
+
+	/**
+	 * The line this gesture ATTACHES TO, for a Follow grid to lie along - grid-follows-snap
+	 * design section 2, ranked below a guide winner and above the anchor's reference.
+	 *
+	 * ADDED FOR THE PLOT TOOLS: their first two clicks search for a road themselves (see
+	 * PlotGesture::NearestRoad on why not the driver's snap), so neither the road snap nor a guide
+	 * names the taxiway a stand is going on - and the taxiway is exactly what a player expects
+	 * the grid to turn to. Only the tool knows which road it would take, so the tool says.
+	 *
+	 * FALSE BY DEFAULT, outs untouched. Network may be null (an airport with no roads yet).
+	 * TAKES NO CONTEXT for DescribeGuideAnchor's reason.
+	 */
+	virtual bool DescribeGridLine(const URoadNetwork* Network, const FVector2D& Cursor,
+		FVector2D& OutThrough, FVector2D& OutDirection) const
+	{
+		return false;
+	}
 
 	/**
 	 * What this tool is dragging, and against what, for the guide chain. False means "no

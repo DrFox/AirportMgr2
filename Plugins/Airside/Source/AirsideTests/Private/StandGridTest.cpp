@@ -209,7 +209,7 @@ bool FStandGridOnWorldLinesTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("stand tool, 5 m"), StandGridFixture::Begin(S, EGridStep::FiveMetres))) { return false; }
 	StandGridFixture::LayTaxiway(S.TestWorld.Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0));
 
-	TestEqual(TEXT("idle: the stand tool asks for the grid itself"), S.At(FVector2D(1234.0, 1000.0)).GridStepUu, 500.0);
+	TestEqual(TEXT("idle: the stand tool asks for the grid itself"), S.At(FVector2D(1234.0, 1000.0)).GridFrame.StepUu, 500.0);
 
 	S.Click(FVector2D(1234.0, 1000.0));
 	const FVector2D Anchor = S.Corner(0, FVector2D(1234.0, 1000.0));
@@ -255,7 +255,7 @@ bool FStandGridAnchorPhaseTest::RunTest(const FString& Parameters)
 		StandGridFixture::IsOnGridLine(Off.Corner.X, 500.0));
 
 	PlotGesture::FAnchor On;
-	if (!TestTrue(TEXT("grid on anchors"), PlotGesture::AnchorAt(Network, OnSecond, Taxiways, On, 500.0))) { return false; }
+	if (!TestTrue(TEXT("grid on anchors"), PlotGesture::AnchorAt(Network, OnSecond, Taxiways, On, GridSnap::FGridFrame::World(500.0)))) { return false; }
 	TestTrue(TEXT("grid on: a world X line"), StandGridFixture::IsOnGridLine(On.Corner.X, 500.0));
 	TestEqual(TEXT("and still off the kerb, as the bay grid was"), On.Corner.Y, Off.Corner.Y);
 	return true;
@@ -282,11 +282,11 @@ bool FStandGridAnchorNearEndTest::RunTest(const FString& Parameters)
 
 	PlotGesture::FAnchor Anchor;
 	if (!TestTrue(TEXT("10 m grid: the nearest line (10000) is past the end, the anchor still takes one"),
-		PlotGesture::AnchorAt(Network, FVector2D(9900.0, 1000.0), Taxiways, Anchor, 1000.0))) { return false; }
+		PlotGesture::AnchorAt(Network, FVector2D(9900.0, 1000.0), Taxiways, Anchor, GridSnap::FGridFrame::World(1000.0)))) { return false; }
 	TestTrue(TEXT("the last line on the road, X = 9000"), FMath::IsNearlyEqual(Anchor.Corner.X, 9000.0, 1e-6));
 
 	TestFalse(TEXT("an 8 m segment between two 10 m lines has no anchor"),
-		PlotGesture::AnchorAt(Network, FVector2D(500.0, 6000.0), Taxiways, Anchor, 1000.0));
+		PlotGesture::AnchorAt(Network, FVector2D(500.0, 6000.0), Taxiways, Anchor, GridSnap::FGridFrame::World(1000.0)));
 	return true;
 }
 
@@ -346,6 +346,53 @@ bool FStandGridDepthIgnoresAngularTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("precondition: an angular guide holds here"), S.At(Cursor).Guide.Of(SnapGuide::EFit::Angular) != nullptr);
 	const double Depth = S.Corner(2, Cursor).Y - Far.Y;
 	TestTrue(*FString::Printf(TEXT("depth is the cursor's 1 m, not zero (%.3f)"), Depth), FMath::IsNearlyEqual(Depth, 100.0, 1e-6));
+	return true;
+}
+
+/**
+ * A DIAGONAL TAXIWAY UNDER FOLLOW - grid-follows-snap design, the report that asked for it. The
+ * stand tool names its taxiway (DescribeGridLine), so the grid lies along it from the first
+ * hover: anchor and frontage on the cross lines, back edge a whole number of steps off the
+ * centreline and parallel to it. With World the same clicks land on world lines instead.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandGridDiagonalFollowsTest,
+	"Airside.Tool.StandGrid.DiagonalTaxiwayFollows",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandGridDiagonalFollowsTest::RunTest(const FString& Parameters)
+{
+	const FVector2D Dir(FMath::Cos(PI / 6.0), FMath::Sin(PI / 6.0));
+	const FVector2D Perp(-Dir.Y, Dir.X);
+	const FVector2D RoadA = Dir * -10000.0 + Perp * 1234.0;
+
+	StandGridFixture::FStandSession S;
+	if (!TestTrue(TEXT("stand tool, 5 m"), StandGridFixture::Begin(S, EGridStep::FiveMetres))) { return false; }
+	S.Tunables.GuideSources.GridOrientation = EGridOrientation::Follow;
+	StandGridFixture::LayTaxiway(S.TestWorld.Actor, RoadA, RoadA + Dir * 20000.0);
+
+	const FVector2D Hover = RoadA + Dir * 11234.0 + Perp * 1000.0;
+	const FToolContext Idle = S.At(Hover);
+	TestTrue(TEXT("idle: the grid already lies along the taxiway"), FMath::IsNearlyEqual(Idle.GridFrame.AxisDegrees(), 30.0, 1e-6));
+
+	// Along the road, measured from the world origin's cross line; across it, from the centreline.
+	auto AlongOf = [&Dir](const FVector2D& P) { return FVector2D::DotProduct(P, Dir); };
+	auto OffCentre = [&Perp, &RoadA](const FVector2D& P) { return FVector2D::DotProduct(P - RoadA, Perp); };
+
+	S.Click(Hover);
+	const FVector2D Anchor = S.Corner(0, Hover);
+	TestTrue(TEXT("anchor on a cross line"), StandGridFixture::IsOnGridLine(AlongOf(Anchor), 500.0));
+
+	const FVector2D FarCursor = Anchor + Dir * 4321.0;
+	const FVector2D Far = S.Corner(1, FarCursor);
+	TestTrue(TEXT("frontage end on a cross line"), StandGridFixture::IsOnGridLine(AlongOf(Far), 500.0));
+	S.Click(FarCursor);
+
+	const FVector2D Back = S.Corner(2, Far + Perp * 3777.0);
+	TestTrue(TEXT("back corner a whole number of steps off the centreline"), StandGridFixture::IsOnGridLine(OffCentre(Back), 500.0));
+	TestTrue(TEXT("the back edge runs along the taxiway"), FMath::Abs(FVector2D::DotProduct(Back - Far, Dir)) < 1e-6);
+	TestFalse(TEXT("control: the kerb is not on a line - the half-width is not whole steps"),
+		StandGridFixture::IsOnGridLine(OffCentre(Anchor), 500.0));
 	return true;
 }
 

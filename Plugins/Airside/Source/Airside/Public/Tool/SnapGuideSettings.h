@@ -150,8 +150,8 @@ struct AIRSIDE_API FSnapGuideSettings
 
 	/**
 	 * The world grid every guided tool lands on when no stronger snap holds - road snap, then
-	 * guides, then this (world-grid-snap design, precedence A). Applied last in
-	 * FSnapGuideChain::Resolve.
+	 * guides, then this (world-grid-snap design, precedence A). Applied last, by
+	 * FBuildSession::MakeContext through FSnapGuideChain::ApplyGrid.
 	 *
 	 * OFF BY DEFAULT: an airport that never asked for a grid places exactly as it did before
 	 * this existed, which is the contract the grid-off tests hold it to.
