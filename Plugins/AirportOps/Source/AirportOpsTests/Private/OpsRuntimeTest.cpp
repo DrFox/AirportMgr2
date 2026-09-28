@@ -3,6 +3,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/OfferGenerator.h"
+#include "Model/ArrivalSequencer.h"
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -526,6 +527,30 @@ bool FOpsRuntimeRearmsRepeatersOnLoadTest::RunTest(const FString& Parameters)
 	Runtime->Tick(60.0);
 	TestEqual(TEXT("and the next one comes a minute after the loaded time, not days away"),
 		Runtime->OfferTicksForTest() - Before, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeTicksTheQueueTest,
+	"AirportOps.Present.RuntimeTicksTheQueue",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeTicksTheQueueTest::RunTest(const FString& Parameters)
+{
+	// THE SEAM, at the composition (review I2): the queue exists only if the runtime wires a
+	// sequencer into its board and ticks the queue every frame.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	// A NETWORK, which a fresh actor lacks until its first edit - and Tick reaches the model
+	// only through one.
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 0.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	TestNotNull(TEXT("the board has a sequencer"), Runtime->GetFlightBoard()->Sequencer.Get());
+	const int32 Before = Runtime->GetFlightBoard()->TickQueueCallsForTest();
+	Runtime->Tick(0.1);
+	Runtime->Tick(0.1);
+	TestEqual(TEXT("every runtime tick ticks the queue"), Runtime->GetFlightBoard()->TickQueueCallsForTest() - Before, 2);
 	return true;
 }
 

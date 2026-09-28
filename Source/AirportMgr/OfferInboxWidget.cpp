@@ -20,6 +20,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/OfferGenerator.h"
 #include "Model/SimClock.h"
+#include "ArrivalViewModels.h"
 #include "OfferViewModels.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntime.h"
@@ -51,6 +52,7 @@ void UOfferRowEntry::HandleDecline()
 void UOfferInboxWidget::BuildOnce(const UUIStyle& Style)
 {
 	Inbox = NewObject<UOfferInboxViewModel>(this);
+	Arrivals = NewObject<UArrivalsViewModel>(this);
 	EnsureSlots(&Style);
 
 	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
@@ -122,6 +124,25 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 		OfferColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxRows"));
 		Column->AddChildToVerticalBox(OfferColumn);
 
+		// ARRIVALS, UNDER THE OFFERS, in the same card (spec 2026-09-28-arrival-queue): what is
+		// coming is one place to look - the offers you might take, then the flights you did.
+		UHorizontalBox* ArrivalHeading = WidgetTree->ConstructWidget<UHorizontalBox>(
+			UHorizontalBox::StaticClass(), TEXT("ArrivalsHeading"));
+		UTextBlock* ArrivalTitle = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ArrivalsTitle"));
+		ArrivalTitle->SetText(NSLOCTEXT("AirportMgr", "ArrivalsTitle", "ARRIVALS"));
+		Style->ApplyText(*ArrivalTitle, EUITextRole::Heading, Style->TextMuted);
+		ArrivalHeading->AddChildToHorizontalBox(ArrivalTitle)->SetVerticalAlignment(VAlign_Center);
+		UHorizontalBoxSlot* ArrivalGap = ArrivalHeading->AddChildToHorizontalBox(
+			WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
+		ArrivalGap->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		ArrivalCountText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ArrivalsCount"));
+		Style->ApplyText(*ArrivalCountText, EUITextRole::Label, Style->TextMuted);
+		ArrivalHeading->AddChildToHorizontalBox(ArrivalCountText)->SetVerticalAlignment(VAlign_Center);
+		Column->AddChildToVerticalBox(ArrivalHeading)->SetPadding(FMargin(0.0f, 12.0f, 0.0f, 6.0f));
+
+		ArrivalColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ArrivalRows"));
+		Column->AddChildToVerticalBox(ArrivalColumn);
+
 		UE_LOG(LogOfferInbox, Log, TEXT("No inbox asset: building the code-only panel"));
 	}
 }
@@ -160,6 +181,7 @@ void UOfferInboxWidget::Refresh(ARoadNetworkActor* Target)
 	}
 
 	Inbox->Refresh(*Runtime->GetFlightBoard(), *Traffic, *Target->Network, *Runtime->GetClock());
+	Arrivals->Refresh(*Runtime->GetFlightBoard(), *Runtime->GetClock());
 
 	// THE STRIP'S SAMPLES, from the runtime's own airline list and the live fee - the same
 	// inputs UOfferGenerator::TickMinute reads, through the same TotalRateAt.
@@ -215,6 +237,7 @@ void UOfferInboxWidget::PaintRows()
 	if (Style != nullptr)
 	{
 		PaintDemand(*Style);
+		PaintArrivals(*Style);
 	}
 
 	// The code-only path. Rebuilt when the COUNT changes rather than every tick: a rebuild
@@ -454,6 +477,77 @@ UButton* UOfferInboxWidget::MakeAnswerButton(const UUIStyle& Style, const TCHAR*
 	Style.ApplyText(*Text, EUITextRole::Label, Ink);
 	Button->AddChild(Text);
 	return Button;
+}
+
+void UOfferInboxWidget::PaintArrivals(const UUIStyle& Style)
+{
+	if (Arrivals == nullptr || ArrivalColumn == nullptr)
+	{
+		return;
+	}
+	const TArray<UArrivalRowViewModel*> Rows = Arrivals->GetRows();
+	if (ArrivalCountText != nullptr)
+	{
+		ArrivalCountText->SetText(Rows.Num() == 0 ? NSLOCTEXT("AirportMgr", "ArrivalsNone", "none") : FText::AsNumber(Rows.Num()));
+	}
+
+	// REBUILT WHEN THE COUNT CHANGES, like the offer cards: a rebuild every frame would churn the
+	// widget tree for text that only moves by the minute.
+	if (ArrivalTitles.Num() != Rows.Num())
+	{
+		ArrivalColumn->ClearChildren();
+		ArrivalTitles.Reset();
+		ArrivalStatuses.Reset();
+		ArrivalDetails.Reset();
+		for (int32 Index = 0; Index < Rows.Num(); ++Index)
+		{
+			UBorder* Card = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+			Card->SetBrush(FSlateRoundedBoxBrush(Style.Panel, Style.CornerRadius));
+			Card->SetPadding(FMargin(10.0f, 5.0f));
+			UVerticalBox* Lines = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+			Card->SetContent(Lines);
+
+			UHorizontalBox* Head = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+			UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			Style.ApplyText(*Title, EUITextRole::Body, Style.Text);
+			Head->AddChildToHorizontalBox(Title)->SetVerticalAlignment(VAlign_Center);
+			UHorizontalBoxSlot* Gap = Head->AddChildToHorizontalBox(WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
+			Gap->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			UTextBlock* Status = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			Style.ApplyText(*Status, EUITextRole::Label, Style.TextMuted);
+			UHorizontalBoxSlot* StatusSlot = Head->AddChildToHorizontalBox(Status);
+			StatusSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
+			StatusSlot->SetVerticalAlignment(VAlign_Center);
+			Lines->AddChildToVerticalBox(Head)->SetHorizontalAlignment(HAlign_Fill);
+
+			UTextBlock* Detail = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			Style.ApplyText(*Detail, EUITextRole::Body, Style.TextMuted);
+			Lines->AddChildToVerticalBox(Detail);
+
+			UVerticalBoxSlot* CardSlot = ArrivalColumn->AddChildToVerticalBox(Card);
+			CardSlot->SetPadding(FMargin(0.0f, Index == 0 ? 0.0f : 4.0f, 0.0f, 0.0f));
+			ArrivalTitles.Add(Title);
+			ArrivalStatuses.Add(Status);
+			ArrivalDetails.Add(Detail);
+		}
+	}
+
+	for (int32 Index = 0; Index < Rows.Num() && Index < ArrivalTitles.Num(); ++Index)
+	{
+		const UArrivalRowViewModel* Row = Rows[Index];
+		if (Row == nullptr)
+		{
+			continue;
+		}
+		ArrivalTitles[Index]->SetText(Row->GetTitle());
+		ArrivalStatuses[Index]->SetText(Row->GetStatus());
+		// HOLDING IN ACCENT: the one state the player can do something about (a free runway).
+		ArrivalStatuses[Index]->SetColorAndOpacity(FSlateColor(Row->GetStatus().EqualTo(
+			NSLOCTEXT("AirportMgr", "ArrivalHolding", "HOLDING")) ? Style.Accent : Style.TextMuted));
+		ArrivalDetails[Index]->SetText(Row->GetDetail());
+		ArrivalDetails[Index]->SetColorAndOpacity(FSlateColor(Row->IsLate() ? Style.Warning : Style.TextMuted));
+		ArrivalDetails[Index]->SetVisibility(Row->GetDetail().IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+	}
 }
 
 void UOfferInboxWidget::PaintDemand(const UUIStyle& Style)

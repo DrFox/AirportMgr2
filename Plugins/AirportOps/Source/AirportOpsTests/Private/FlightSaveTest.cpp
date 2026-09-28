@@ -10,18 +10,22 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
 namespace
 {
+	/**
+	 * A runway, an exit, a taxiway and one stand for a 34 m span. A RUNWAY since the arrival
+	 * queue (2026-09-28): a flight is only cleared when the real plan says it could land, and
+	 * the arrival tests here dispatch.
+	 */
 	URoadNetwork* SaveTestNetwork()
 	{
-		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-		Net->PlaceEntity(Stand, Stand->Anchors, FVector2D::ZeroVector, 0.0, 3600.0,
-			Stand->PoseRole, Stand->Trucks);
-		return Net;
+		FAirframe Airframe;
+		Airframe.Wingspan = 3400.0;
+		return FTestAirport::Build(Airframe).Net;
 	}
 
 	UFlightBoard* SaveTestBoard()
@@ -71,6 +75,7 @@ bool FFlightSurvivesASaveTest::RunTest(const FString& Parameters)
 
 	Reloaded->RearmSchedules(*Traffic, *Net, *FreshClock);
 	FreshClock->Advance(20.0);   // 75 game s per real s at night: past an ETA 1000 game s out
+	Reloaded->TickQueue(*Traffic, *Net, *FreshClock);
 
 	TestEqual(TEXT("a reloaded inbound flight still arrives, once re-armed"), Calls, 1);
 	return true;
@@ -108,8 +113,10 @@ bool FFlightDueWhileClosedTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("nothing has been dispatched, because nothing was armed"), Calls, 0);
 
 	Board->RearmSchedules(*Traffic, *Net, *Clock);
-	TestEqual(TEXT("a flight already due is dispatched at once, not dropped"), Calls, 1);
-	TestEqual(TEXT("and it is landing, not still waiting"), Flight->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("a flight already due joins the queue at once, not dropped"), Flight->Phase, EFlightPhase::Inbound);
+	Board->TickQueue(*Traffic, *Net, *Clock);
+	TestEqual(TEXT("and the queue clears it - nothing holds the runway"), Calls, 1);
+	TestEqual(TEXT("so it is landing, not still waiting"), Flight->Phase, EFlightPhase::Landing);
 	return true;
 }
 

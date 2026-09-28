@@ -9,23 +9,19 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 
-namespace
+FText UOfferViewModel::DescribeDuration(double Seconds)
 {
-	/** "15 min", "1 h", "1 h 10 min" - game time as the clock reads, never seconds. */
-	FText DescribeDuration(double Seconds)
+	const int32 Minutes = FMath::Max(0, FMath::RoundToInt(Seconds / 60.0));
+	if (Minutes < 60)
 	{
-		const int32 Minutes = FMath::Max(0, FMath::RoundToInt(Seconds / 60.0));
-		if (Minutes < 60)
-		{
-			return FText::Format(NSLOCTEXT("AirportMgr", "DurationMin", "{0} min"), FText::AsNumber(Minutes));
-		}
-		const int32 Hours = Minutes / 60;
-		const int32 Rest = Minutes % 60;
-		return Rest == 0
-			? FText::Format(NSLOCTEXT("AirportMgr", "DurationH", "{0} h"), FText::AsNumber(Hours))
-			: FText::Format(NSLOCTEXT("AirportMgr", "DurationHMin", "{0} h {1} min"),
-				FText::AsNumber(Hours), FText::AsNumber(Rest));
+		return FText::Format(NSLOCTEXT("AirportMgr", "DurationMin", "{0} min"), FText::AsNumber(Minutes));
 	}
+	const int32 Hours = Minutes / 60;
+	const int32 Rest = Minutes % 60;
+	return Rest == 0
+		? FText::Format(NSLOCTEXT("AirportMgr", "DurationH", "{0} h"), FText::AsNumber(Hours))
+		: FText::Format(NSLOCTEXT("AirportMgr", "DurationHMin", "{0} h {1} min"),
+			FText::AsNumber(Hours), FText::AsNumber(Rest));
 }
 
 FText UOfferViewModel::DescribeContract(double LeadTimeSeconds, double ContractSeconds)

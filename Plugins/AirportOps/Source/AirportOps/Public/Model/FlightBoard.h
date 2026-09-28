@@ -8,6 +8,7 @@
 
 #include "FlightBoard.generated.h"
 
+class UArrivalSequencer;
 class UFlight;
 class UFuelService;
 class UGroundTraffic;
@@ -125,6 +126,9 @@ public:
 	uint32 Revision() const { return RevisionCount; }
 
 	UPROPERTY() TObjectPtr<UStandAllocator> Allocator = nullptr;
+
+	/** Who of the holding flights is cleared next. Null = strict first come. See UArrivalSequencer. */
+	UPROPERTY() TObjectPtr<UArrivalSequencer> Sequencer = nullptr;
 	UPROPERTY() TObjectPtr<UOfferGenerator> Generator = nullptr;
 
 	/**
@@ -332,6 +336,25 @@ public:
 	 */
 	TArray<UFlight*> Offers() const;
 
+	/**
+	 * The flights holding for the runway (phase Inbound), in the order they joined -
+	 * HoldingSince, ties by id. DERIVED from Flights every call, never stored: see Enqueue.
+	 */
+	TArray<UFlight*> Queue() const;
+
+	/**
+	 * Clear at most one holding flight whose runway is free - UArrivalSequencer picks which -
+	 * and dispatch it. Nothing while paused. Called every frame from UOpsRuntime::Tick.
+	 *
+	 * A REFUSED DISPATCH STAYS QUEUED with its stand re-held (see DispatchNow): the flight that
+	 * used to be lost at a busy ETA is now always landed eventually.
+	 * ENFORCED BY: AirportOps.Model.ArrivalQueue.DueWhileBusyWaitsThenLands
+	 */
+	void TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
+
+	/** How many times TickQueue has run. For the runtime-wiring test. */
+	int32 TickQueueCallsForTest() const { return TickQueueCalls; }
+
 	/** Everything accepted and not yet departed. */
 	TArray<UFlight*> Live() const;
 
@@ -397,6 +420,30 @@ private:
 	mutable TMap<int32, FOfferVerdict> Verdicts;
 
 	/**
+	 * Could a holding flight land, runway aside - the rest of the plan (exit, route, stand),
+	 * excluding its own stand hold - by flight id, cached on the guideline and occupancy
+	 * revisions like FOfferVerdict. The runway itself is asked live in TickQueue.
+	 *
+	 * THE CLEARANCE GATE (review C1/C2, 2026-09-28): the queue used to ask only "is the runway
+	 * busy" and hand everything else to the dispatcher, which refused - with a toast, four log
+	 * lines, a stand release and a board revision - every frame, for as long as the reason
+	 * lasted, and one stuck flight at the head blocked the rest. Now nothing is dispatched that
+	 * the plan would refuse, and a refusal is logged once, when its reason changes.
+	 */
+	struct FClearance
+	{
+		EArrivalRefusal Why = EArrivalRefusal::None;
+		uint32 GuidelineAt = 0;
+		uint32 OccupancyAt = 0;
+		bool bValid = false;
+	};
+	TMap<int32, FClearance> Clearances;
+	int32 TickQueueCalls = 0;
+
+	/** See Clearances. Logs on a change of reason; never bumps the revision. */
+	EArrivalRefusal ClearanceFor(const UGroundTraffic& Traffic, const URoadNetwork& Network, const UFlight& Flight);
+
+	/**
 	 * FindByAgent's and FindById's O(1) answer (issue #188 item 2).
 	 *
 	 * ByAgent is maintained at the sites that set or clear UFlight::AgentId: DispatchNow adds,
@@ -417,7 +464,11 @@ private:
 	 *  Offered phase; not a UPROPERTY, rebuilt in OnAfterRestore like the maps above. */
 	int32 OfferedCount = 0;
 
-	void DispatchNow(UGroundTraffic& Traffic, UFlight& Flight);
+	/** Release the hold and put it on final. False, flight still Inbound and stand re-held, if refused. */
+	bool DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight);
+
+	/** Into the queue: phase Inbound, HoldingSince = Since, stand kept. From the ETA callback and a load. */
+	void Enqueue(UFlight& Flight, double Since);
 	void Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& Flight);
 
 	/**

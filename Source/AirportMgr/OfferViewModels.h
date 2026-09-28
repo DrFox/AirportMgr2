@@ -60,6 +60,10 @@ public:
 	 */
 	static FText DescribeContract(double LeadTimeSeconds, double ContractSeconds);
 
+	/** "15 min", "1 h", "1 h 10 min" - game time as the clock reads, never seconds. Shared with
+	 *  the arrivals rows so the two sections word a duration one way. */
+	static FText DescribeDuration(double Seconds);
+
 private:
 	UPROPERTY(Transient) FText Callsign;
 	UPROPERTY(Transient) FText Airline;
