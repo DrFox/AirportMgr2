@@ -12,6 +12,15 @@ namespace IcaoCode
 			const TCHAR* Letter;
 			double MaxWingspan;
 			double RunwayWidth;
+
+			/**
+			 * ICAO Annex 14's MINIMUM taxiway width for the letter, uu - 7.5/10.5/15/18/23/25 m.
+			 * The ICAO figure, not the game's even-metre rounding (build_road_profiles.py
+			 * TAXIWAY_WIDTHS rounds UP from these), for the reason RunwayWidth keeps ICAO's:
+			 * the rounded widths are read back through TaxiwayLetterForWidth, and a minimum is
+			 * what a wider pavement still meets.
+			 */
+			double TaxiwayWidth;
 			double StandTurnRadius;
 
 			/**
@@ -111,22 +120,22 @@ namespace IcaoCode
 			// NO STANDS OF ITS OWN since 2026-09-27 - an A aircraft parks on B's (StandLetterFor).
 			// Its size columns are omitted, not zeroed by hand, so HasStands reads the table
 			// rather than a flag.
-			{ .Letter = TEXT("A"), .MaxWingspan = 1500.0, .RunwayWidth = 1800.0, .StandTurnRadius = 1500.0,
+			{ .Letter = TEXT("A"), .MaxWingspan = 1500.0, .RunwayWidth = 1800.0, .TaxiwayWidth = 750.0, .StandTurnRadius = 1500.0,
 			  .WingtipClearance = 300.0,
 			  .WingFwd = -50.0, .WingAft = -700.0 },
-			{ .Letter = TEXT("B"), .MaxWingspan = 2400.0, .RunwayWidth = 2300.0, .StandTurnRadius = 2000.0,
+			{ .Letter = TEXT("B"), .MaxWingspan = 2400.0, .RunwayWidth = 2300.0, .TaxiwayWidth = 1050.0, .StandTurnRadius = 2000.0,
 			  .WingtipClearance = 300.0, .StandDepth = 3950.0,
 			  .WingFwd = -300.0, .WingAft = -1400.0, .AftEdgeAllowance = 600.0, .TowLaneWidth = 5000.0 },
-			{ .Letter = TEXT("C"), .MaxWingspan = 3600.0, .RunwayWidth = 3000.0, .StandTurnRadius = 2500.0,
+			{ .Letter = TEXT("C"), .MaxWingspan = 3600.0, .RunwayWidth = 3000.0, .TaxiwayWidth = 1500.0, .StandTurnRadius = 2500.0,
 			  .WingtipClearance = 450.0, .StandDepth = 6500.0,
 			  .WingFwd = -950.0, .WingAft = -2150.0, .AftEdgeAllowance = 600.0 },
-			{ .Letter = TEXT("D"), .MaxWingspan = 5200.0, .RunwayWidth = 4500.0, .StandTurnRadius = 4000.0,
+			{ .Letter = TEXT("D"), .MaxWingspan = 5200.0, .RunwayWidth = 4500.0, .TaxiwayWidth = 1800.0, .StandTurnRadius = 4000.0,
 			  .WingtipClearance = 750.0, .StandDepth = 8400.0,
 			  .WingFwd = -1300.0, .WingAft = -3000.0, .AftEdgeAllowance = 600.0 },
-			{ .Letter = TEXT("E"), .MaxWingspan = 6500.0, .RunwayWidth = 4500.0, .StandTurnRadius = 5000.0,
+			{ .Letter = TEXT("E"), .MaxWingspan = 6500.0, .RunwayWidth = 4500.0, .TaxiwayWidth = 2300.0, .StandTurnRadius = 5000.0,
 			  .WingtipClearance = 750.0, .StandDepth = 9500.0,
 			  .WingFwd = -1600.0, .WingAft = -3700.0, .AftEdgeAllowance = 600.0 },
-			{ .Letter = TEXT("F"), .MaxWingspan = 8000.0, .RunwayWidth = 6000.0, .StandTurnRadius = 6000.0,
+			{ .Letter = TEXT("F"), .MaxWingspan = 8000.0, .RunwayWidth = 6000.0, .TaxiwayWidth = 2500.0, .StandTurnRadius = 6000.0,
 			  .WingtipClearance = 750.0, .StandDepth = 10000.0,
 			  .WingFwd = -1900.0, .WingAft = -4300.0, .AftEdgeAllowance = 600.0 },
 		};
@@ -333,6 +342,34 @@ namespace IcaoCode
 			}
 		}
 		return Nearest->MaxWingspan;
+	}
+
+	double TaxiwayWidthForLetter(EIcaoCode Code)
+	{
+		return RowFor(Code).TaxiwayWidth;
+	}
+
+	EIcaoCode TaxiwayLetterForWidth(double PavementWidthUu)
+	{
+		// Rows run A to F - RowFor indexes them by the enum, so they must - and the last row whose
+		// minimum is met is the largest. Half a uu of slack so a width typed as exactly a
+		// minimum, then carried through a sum of band widths, still meets it.
+		EIcaoCode Best = EIcaoCode::A;
+		for (const FRow& Row : Rows)
+		{
+			if (Row.TaxiwayWidth <= PavementWidthUu + 0.5)
+			{
+				Best = Parse(Row.Letter).GetValue();
+			}
+		}
+		return Best;
+	}
+
+	double TaxiwayStripForWidth(double PavementWidthUu)
+	{
+		const EIcaoCode Letter = TaxiwayLetterForWidth(PavementWidthUu);
+		const double Overhang = FMath::Max(0.0, 0.5 * MaxWingspanForLetter(Letter) - 0.5 * PavementWidthUu);
+		return Overhang + WingtipClearanceForLetter(Letter);
 	}
 
 	double RadiusForLetter(EIcaoCode Code)

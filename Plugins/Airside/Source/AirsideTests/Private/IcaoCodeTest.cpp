@@ -429,4 +429,41 @@ bool FStandAdmitsComparesLettersTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FIcaoCodeTaxiwayStripTest,
+	"Airside.Solve.IcaoCode.TaxiwayStrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FIcaoCodeTaxiwayStripTest::RunTest(const FString& Parameters)
+{
+	// THE GAME'S OWN FIVE WIDTHS (build_road_profiles.py TAXIWAY_WIDTHS, 2026-09-28) read as
+	// their own letters. 2400 is the one that matters: nearest-width would call it a tie
+	// between E (23 m) and F (25 m); "largest minimum met" says E, which is what it was
+	// rounded up from.
+	TestEqual(TEXT("12 m is B"), static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(1200.0)), static_cast<int32>(EIcaoCode::B));
+	TestEqual(TEXT("16 m is C"), static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(1600.0)), static_cast<int32>(EIcaoCode::C));
+	TestEqual(TEXT("18 m is D"), static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(1800.0)), static_cast<int32>(EIcaoCode::D));
+	TestEqual(TEXT("24 m is E, not F - it meets 23, not 25"), static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(2400.0)), static_cast<int32>(EIcaoCode::E));
+	TestEqual(TEXT("26 m is F"), static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(2600.0)), static_cast<int32>(EIcaoCode::F));
+	TestEqual(TEXT("the old 23 m standard is E"), static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(2300.0)), static_cast<int32>(EIcaoCode::E));
+	TestEqual(TEXT("under every minimum is still A - the least a taxiway can be"),
+		static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(500.0)), static_cast<int32>(EIcaoCode::A));
+
+	// THE STRIP: half the letter's widest wing, less half the pavement, plus the letter's
+	// wingtip clearance. These five are the spec's table - if one moves, the table in the
+	// spec and AIRCRAFT.md are wrong too.
+	TestEqual(TEXT("B strip 9 m"), IcaoCode::TaxiwayStripForWidth(1200.0), 900.0, 0.5);
+	TestEqual(TEXT("C strip 14.5 m"), IcaoCode::TaxiwayStripForWidth(1600.0), 1450.0, 0.5);
+	TestEqual(TEXT("D strip 24.5 m"), IcaoCode::TaxiwayStripForWidth(1800.0), 2450.0, 0.5);
+	TestEqual(TEXT("E strip 28 m"), IcaoCode::TaxiwayStripForWidth(2400.0), 2800.0, 0.5);
+	TestEqual(TEXT("F strip 34.5 m"), IcaoCode::TaxiwayStripForWidth(2600.0), 3450.0, 0.5);
+
+	// A PAVEMENT WIDER THAN ITS LETTER'S SPAN never yields a negative overhang: the strip
+	// floors at the clearance, because nothing overhangs but the clearance is still owed.
+	// 100 m reads as F (it meets 25 m); F's 40 m half-span is inside the 50 m half-pavement.
+	TestEqual(TEXT("absurdly wide pavement: clearance only"),
+		IcaoCode::TaxiwayStripForWidth(10000.0), IcaoCode::WingtipClearanceForLetter(EIcaoCode::F), 0.5);
+	return true;
+}
+
 #endif

@@ -149,6 +149,33 @@ namespace IcaoCode
 	 */
 	AIRSIDE_API double MaxWingspanForWidth(double TotalWidth);
 
+	/** ICAO Annex 14's minimum taxiway width for Code, uu. See FRow::TaxiwayWidth. */
+	AIRSIDE_API double TaxiwayWidthForLetter(EIcaoCode Code);
+
+	/**
+	 * The letter a taxiway of this PAVEMENT width is built for: the largest whose ICAO minimum
+	 * it meets, or A below every minimum.
+	 *
+	 * LARGEST MINIMUM MET, NOT NEAREST - MaxWingspanForWidth's runway rule. The game's standard
+	 * 24 m taxiway is ICAO E's 23 m rounded up, and sits exactly between E and F, so nearest
+	 * would decide it by a tie-break; a minimum is a floor, and 24 m meets E's and not F's.
+	 * ENFORCED BY: Airside.Solve.IcaoCode.TaxiwayStrip
+	 */
+	AIRSIDE_API EIcaoCode TaxiwayLetterForWidth(double PavementWidthUu);
+
+	/**
+	 * The clearance strip each side of a taxiway of this pavement width, uu: how far past the
+	 * pavement edge the widest wing its letter admits reaches, plus that letter's wingtip
+	 * clearance. Nothing may stand in it (taxiway clearance strip spec, 2026-09-28).
+	 *
+	 * DERIVED, NEVER STORED, for StandWidthForLetter's reason: a stored strip would be a third
+	 * figure obliged to agree with the pavement width and the span. Slightly tighter than
+	 * ICAO's taxiway-to-object distances, which also allow for wandering off the centreline;
+	 * accepted in the spec, and the clearance term is the knob if play says otherwise.
+	 * ENFORCED BY: Airside.Solve.IcaoCode.TaxiwayStrip
+	 */
+	AIRSIDE_API double TaxiwayStripForWidth(double PavementWidthUu);
+
 	/**
 	 * Minimum centreline curve radius, uu, for a stand sized to this code letter.
 	 *
