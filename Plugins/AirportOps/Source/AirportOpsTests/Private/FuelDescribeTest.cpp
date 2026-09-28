@@ -117,4 +117,65 @@ bool FFuelDescribeVehicleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelDescribeDepotBacklogTest, "AirportOps.Fuel.Describe.DepotBacklog",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelDescribeDepotBacklogTest::RunTest(const FString& Parameters)
+{
+	// HOW FAR BEHIND THE DEPOT IS (user, 2026-09-28): the jobs on its vehicles, when it will have
+	// cleared them - the latest promise - and how many of those promises land after the aircraft's
+	// turnaround ends, i.e. make an aircraft wait. The bowser has a job under way and one queued that
+	// will be four minutes late; the tow is idle.
+	UJobBoard* Service = NewObject<UJobBoard>();
+	FEntityInstanceId Depot;
+	Depot.Index = 1;
+	const double Now = 1000.0;
+
+	int32 OnTime = 0;
+	int32 Late = 0;
+	{
+		FServiceJob& Job = Service->AddJobForTest(1, EServiceJobState::Underway, EServiceRefusal::None, 0);
+		Job.Stand.Index = 3;
+		Job.QuantityOwed = 300.0;
+		Job.PromisedFinish = Now + 360.0;
+		OnTime = Job.Id;
+	}
+	{
+		FServiceJob& Job = Service->AddJobForTest(2, EServiceJobState::Queued, EServiceRefusal::None, 0);
+		Job.Stand.Index = 5;
+		Job.QuantityOwed = 1200.0;
+		Job.PromisedFinish = Now + 1260.0;
+		Late = Job.Id;
+	}
+	Service->AddTurnaroundForTest(1, Now + 3600.0, OnTime);
+	Service->AddTurnaroundForTest(2, Now + 1020.0, Late);
+
+	const int32 BowserId = [&]
+	{
+		FServiceVehicle& Bowser = Service->AddVehicleForTest(TEXT("FUEL"), Depot, EServiceVehicleState::ToJob, 9700.0);
+		Bowser.AgentId = 7;
+		Bowser.CurrentJob = OnTime;
+		Bowser.Queue = { Late };
+		return Bowser.Id;
+	}();
+	const int32 TowId = Service->AddVehicleForTest(TEXT("UTILITY"), Depot, EServiceVehicleState::Idle, 1000.0).Id;
+	for (const int32 JobId : { OnTime, Late })
+	{
+		const_cast<FServiceJob*>(Service->GetJobs().FindByPredicate([JobId](const FServiceJob& J) { return J.Id == JobId; }))->VehicleId = BowserId;
+	}
+
+	const FDepotBacklog Backlog = Service->DescribeDepot(Depot, Now);
+	TestEqual(TEXT("the summary: how many, when it clears, how many late"), Backlog.Summary,
+		FString(TEXT("2 jobs · clears in 21 min · 1 late")));
+	TestEqual(TEXT("and where the backlog sits: each vehicle, then its jobs in order"), Backlog.Detail,
+		FString::Printf(TEXT("FUEL #%d · to stand 3 · 9,700 L\n  stand 3 · 300 L · +6 min\n  stand 5 · 1,200 L · +21 min · late 4 min\nUTILITY #%d · at depot 1 · 1,000 L"),
+			BowserId, TowId));
+	TestEqual(TEXT("the counts behind the text"), Backlog.Jobs, 2);
+	TestEqual(TEXT("one late"), Backlog.LateJobs, 1);
+
+	FEntityInstanceId Empty;
+	Empty.Index = 9;
+	TestEqual(TEXT("a depot with nothing to do says so"), Service->DescribeDepot(Empty, Now).Summary, FString(TEXT("No jobs")));
+	return true;
+}
+
 #endif
