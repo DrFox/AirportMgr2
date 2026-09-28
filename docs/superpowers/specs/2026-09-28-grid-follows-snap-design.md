@@ -62,7 +62,7 @@ revisable, with the reason recorded - this paragraph is the reason).
 
 First match wins, resolved once per frame in `FBuildSession::MakeContext` after the guide chain:
 
-1. **A guide winner** whose relation is `Parallel`, `Collinear` or `Offset` and whose reference is
+1. **A guide winner** whose relation is `Parallel` (the along and square-to candidates, not the diagonals), `Collinear` or `MatchingGap` and whose reference is
    a road, runway or stand: `Along(Winner.Through, Winner.Direction)`. With two such winners, the
    first ranked. Excluded: `Angled`, `Extending`, `LevelWith`, and the World / ThisGesture
    references - following "45 degrees to the taxiway" would turn the grid 45 degrees off the

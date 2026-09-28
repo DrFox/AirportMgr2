@@ -202,6 +202,15 @@ public:
 	/** The airport's grid step in uu, 0 when off or when there is no airport. */
 	double GetGridStepUu() const;
 
+	/**
+	 * Follow <-> World: the Grid follows button and H. Same ownership rule as CycleGridStep - the
+	 * orientation lives on the airport's FSnapGuideSettings. Logs "Grid orientation -> <way>".
+	 */
+	void ToggleGridOrientation();
+
+	/** Whether the airport's grid follows the snap. False with no airport. */
+	bool IsGridFollowing() const;
+
 	/** The tool the number keys selected, or null before BeginPlay has built them. */
 	IBuildTool* GetActiveTool() const;
 

@@ -362,4 +362,28 @@ bool FGridButtonIsInTheRegistryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE GRID'S ORIENTATION TOGGLE, ON H - the one snap toggle with a key, by the player's request
+ * (grid-follows-snap design): it is switched mid-gesture, which is the NO KEYS rule's own test.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGridOrientButtonIsInTheRegistryTest,
+	"AirportMgr.Actions.GridOrientButtonIsOnH",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGridOrientButtonIsInTheRegistryTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Action = FindAction(FName(TEXT("snap.gridorient")));
+	if (!TestNotNull(TEXT("snap.gridorient is registered"), Action)) { return false; }
+	TestEqual(TEXT("in the Snap section"), Action->Section, EActionSection::Snap);
+	TestTrue(TEXT("on H"), Action->Key == EKeys::H);
+	TestFalse(TEXT("no Ctrl"), Action->bRequiresCtrl);
+	TestTrue(TEXT("FindAction(H) is this action - the binding loop reads the same table"),
+		FindAction(EKeys::H, false) == Action);
+	TestTrue(TEXT("can be executed"), static_cast<bool>(Action->Execute));
+	TestTrue(TEXT("reports whether it is lit"), static_cast<bool>(Action->IsActive));
+	TestTrue(TEXT("has a caption that follows the orientation"), static_cast<bool>(Action->DynamicLabel));
+	return true;
+}
+
 #endif
