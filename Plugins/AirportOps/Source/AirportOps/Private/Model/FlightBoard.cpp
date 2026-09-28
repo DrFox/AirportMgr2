@@ -3,6 +3,7 @@
 #include "AirportOpsLog.h"
 #include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
+#include "Model/FuelService.h"
 #include "Model/Ledger.h"
 #include "Model/Pricing.h"
 #include "Model/GroundTraffic.h"
@@ -10,6 +11,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "Algo/StableSort.h"
 
 bool UFlightBoard::DefaultApproachFocus(const URoadNetwork& Network, FVector2D& OutFocus)
 {
@@ -66,45 +68,69 @@ void UFlightBoard::AddOffer(USimClock& Clock, UFlight* Offer)
 		// Offered, so nothing would ever decrement it back out.
 		++OfferedCount;
 	}
-	ScheduleExpiry(Clock, *Offer);
 	++RevisionCount;
 }
 
-void UFlightBoard::ScheduleExpiry(USimClock& Clock, UFlight& Offer)
+void UFlightBoard::TickOffers(const UGroundTraffic& Traffic, const URoadNetwork& Network,
+	const USimClock& Clock, double RealDeltaSeconds)
 {
-	// WEAK BY ID, exactly as Schedule (arrivals) does - the callback outlives this call by
-	// design, and the flight it names may be gone (declined, accepted then departed, or the
-	// board itself torn down) long before its ExpiresAt comes due.
-	const int32 Id = Offer.Id;
-	const int32 Handle = Clock.At(Offer.ExpiresAt, [this, Id]()
+	// PAUSE STOPS IT; SPEED DOES NOT. RealDeltaSeconds is the raw frame time - never scaled
+	// by Multiplier() or TimeScale() - so x4 drains exactly as fast as x1.
+	if (Clock.IsPaused())
 	{
-		UFlight* Due = FindById(Id);
-		ExpiryHandles.Remove(Id);
-		// STILL Offered, not just found: Accept/Decline cancel this handle, but a callback
-		// already popped off the clock's queue this same Advance() cannot be un-fired -
-		// the phase check is the second guard for that ordering, not a substitute for
-		// CancelExpiry.
-		if (Due != nullptr && Due->Phase == EFlightPhase::Offered)
+		return;
+	}
+
+	// SNAPSHOT: a lapse calls MoveToHistory, which removes from the array being walked.
+	const TArray<TObjectPtr<UFlight>> Snapshot = Flights;
+	for (const TObjectPtr<UFlight>& Each : Snapshot)
+	{
+		if (Each == nullptr || Each->Phase != EFlightPhase::Offered)
 		{
-			Due->Phase = EFlightPhase::Expired;
-			--OfferedCount;
-			UE_LOG(LogAirportOps, Log, TEXT("Offer %d lapsed unanswered"), Due->Id);
-			// USES ExpiresAt, NOT Clock.Now(): this lambda only captured Id, and ExpiresAt IS
-			// the moment Advance decided to fire this callback in the first place.
-			MoveToHistory(*Due, Due->ExpiresAt);
-			++RevisionCount;
+			continue;
 		}
-	});
-	ExpiryHandles.Add(Offer.Id, Handle);
+		// JUDGED BEFORE IT DRAINS, so an offer acceptable in its last frame counts as one the
+		// player could have taken.
+		if (VerdictFor(Traffic, Network, *Each).Why == EArrivalRefusal::None)
+		{
+			Each->bWasEverAcceptable = true;
+		}
+		Each->OfferSecondsLeft -= FMath::Max(RealDeltaSeconds, 0.0);
+		if (Each->OfferSecondsLeft > 0.0)
+		{
+			continue;
+		}
+		Each->OfferSecondsLeft = 0.0;
+		Each->Phase = EFlightPhase::Expired;
+		Each->LapseReason = Each->bWasEverAcceptable ? ELapseReason::Ignored : ELapseReason::NeverAcceptable;
+		--OfferedCount;
+		UE_LOG(LogAirportOps, Log, TEXT("Offer %d (%s) lapsed unanswered (%s)"), Each->Id, *Each->Callsign,
+			Each->LapseReason == ELapseReason::Ignored ? TEXT("ignored") : TEXT("never acceptable"));
+		MoveToHistory(*Each, Clock.Now());
+		++RevisionCount;
+	}
 }
 
-void UFlightBoard::CancelExpiry(USimClock& Clock, UFlight& Offer)
+const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
+	const URoadNetwork& Network, const UFlight& Flight) const
 {
-	int32 Handle = INDEX_NONE;
-	if (ExpiryHandles.RemoveAndCopyValue(Offer.Id, Handle))
+	FOfferVerdict& Verdict = Verdicts.FindOrAdd(Flight.Id);
+	const uint32 BoardNow = Revision();
+	const uint32 GuidelineNow = Network.GetGuidelineRevision();
+	const uint32 OccupancyNow = Traffic.OccupancyRevision();
+	if (!Verdict.bValid || Verdict.BoardAt != BoardNow || Verdict.GuidelineAt != GuidelineNow
+		|| Verdict.OccupancyAt != OccupancyNow)
 	{
-		Clock.Cancel(Handle);
+		// THE REAL PLAN, with the live occupancy. The greyed-out reason is the sentence the
+		// arrival itself would print, because it is the same refusal.
+		Verdict.Why = WhyNotAcceptable(Traffic, Network, Flight);
+		Verdict.bFuelServable = Fuel == nullptr || Fuel->CouldServe(Network, Flight.Airframe);
+		Verdict.BoardAt = BoardNow;
+		Verdict.GuidelineAt = GuidelineNow;
+		Verdict.OccupancyAt = OccupancyNow;
+		Verdict.bValid = true;
 	}
+	return Verdict;
 }
 
 int32 UFlightBoard::TakeNextId()
@@ -128,7 +154,11 @@ bool UFlightBoard::Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 
 	Flight.Phase = EFlightPhase::Accepted;
 	--OfferedCount;
-	CancelExpiry(Clock, Flight);
+
+	// THE LEAD TIME RUNS FROM THE ACCEPT, not from the offer: a player who took most of the
+	// window to decide still gets the whole lead, and the contract is measured from here.
+	Flight.AcceptedAt = Clock.Now();
+	Flight.ArrivesAt = Flight.AcceptedAt + Flight.LeadTimeSeconds;
 	Schedule(Traffic, Clock, Flight);
 
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d accepted: stand %d held, landing at %.0f"),
@@ -200,7 +230,6 @@ void UFlightBoard::Decline(USimClock& Clock, UFlight& Flight)
 	{
 		return;
 	}
-	CancelExpiry(Clock, Flight);
 	Flight.Phase = EFlightPhase::Declined;
 	--OfferedCount;
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d declined"), Flight.Id);
@@ -227,10 +256,11 @@ EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URo
 	Flight->AirlineName = Airline;
 	Flight->TypeName = FText::FromName(Airframe.TypeCode);
 
-	// NOW, not the generator's lead time: AcceptImmediate exists to put an aeroplane on the
-	// field this second - see its own header.
-	Flight->ArrivesAt = Clock.Now();
-	Flight->ExpiresAt = Clock.Now();
+	// NO LEAD TIME: AcceptImmediate exists to put an aeroplane on the field this second - see
+	// its own header. The one-second window is never drained: the accept below is this call.
+	Flight->LeadTimeSeconds = 0.0;
+	Flight->OfferWindowSeconds = 1.0;
+	Flight->OfferSecondsLeft = 1.0;
 	Flight->ApproachFocus = Focus;
 
 	AddOffer(Clock, Flight);
@@ -276,14 +306,12 @@ void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
 			|| Each->Phase == EFlightPhase::Departed)
 		{
 			// TerminatedAt DID NOT EXIST before this change, so a flight loaded from a save
-			// that predates it has none - ExpiresAt (for a lapsed offer) or ArrivesAt (for
-			// anything else terminal) is the closest recorded moment to when it actually
-			// finished, and is only ever a fallback for THIS one-time migration: a flight
-			// retired after this change always carries the real TerminatedAt its own call
-			// site set - see Decline, the ScheduleExpiry callback, and OnAgentPhase below.
-			const double Approx =
-				Each->Phase == EFlightPhase::Expired ? Each->ExpiresAt : Each->ArrivesAt;
-			MoveToHistory(*Each, Approx);
+			// that predates it has none - ArrivesAt is the closest recorded moment to when it
+			// actually finished, and is only ever a fallback for THIS one-time migration: a
+			// flight retired after this change always carries the real TerminatedAt its own
+			// call site set - see Decline, TickOffers, and OnAgentPhase below. (ExpiresAt, the
+			// closer figure for a lapsed offer, went with snapshot v5.)
+			MoveToHistory(*Each, Each->ArrivesAt);
 		}
 	}
 
@@ -418,6 +446,12 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 		Flight->AgentId = INDEX_NONE;
 	}
 
+	if (Flight->Phase == EFlightPhase::Departing && Flight->AirborneAt <= 0.0)
+	{
+		// THE OTHER END OF THE TURNAROUND CONTRACT - see UFlight::AirborneAt. Taken once.
+		Flight->AirborneAt = Clock.Now();
+	}
+
 	if (Flight->Phase == EFlightPhase::Departed)
 	{
 		// TERMINAL: retired out of the live list on the same phase change that made it so,
@@ -479,20 +513,19 @@ void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& N
 	// function has no way to know that is the only time it is ever called, and an entry that
 	// fires later still runs its captured lambda against whatever Id it named.
 	for (const TPair<int32, int32>& Handle : ArrivalHandles) { Clock.Cancel(Handle.Value); }
-	for (const TPair<int32, int32>& Handle : ExpiryHandles) { Clock.Cancel(Handle.Value); }
 	ArrivalHandles.Reset();
-	ExpiryHandles.Reset();
+	Verdicts.Reset();
 
 	// REBUILT HERE TOO, NOT ONLY IN OnAfterRestore: this is the one call every load path is
 	// documented to make (see this function's own header), while OnAfterRestore only runs
 	// under OpsSave::Restore. A board deserialised directly - OpsSave::SerializeObject/
 	// DeserializeObject, which FFlightSurvivesASaveTest uses on purpose to isolate the clock's
-	// own re-arm from the rest of Restore - would otherwise re-arm a Schedule/ScheduleExpiry
+	// own re-arm from the rest of Restore - would otherwise re-arm a Schedule
 	// callback whose eventual FindById(Id) found nothing, because ById was still empty.
 	RebuildIndices();
 
-	// SNAPSHOT, NOT A LIVE ITERATION: the Offered branch below can call MoveToHistory, which
-	// removes its argument from Flights - mutating the array a range-based for is walking.
+	// SNAPSHOT, NOT A LIVE ITERATION: DispatchNow below mutates the board, and a range-based
+	// for over Flights must not see that happen under it.
 	const TArray<TObjectPtr<UFlight>> Loaded = Flights;
 	for (const TObjectPtr<UFlight>& Each : Loaded)
 	{
@@ -501,25 +534,10 @@ void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& N
 			continue;
 		}
 
-		if (Each->Phase == EFlightPhase::Offered)
-		{
-			if (Each->ExpiresAt <= Clock.Now())
-			{
-				// Its offer window passed while the game was shut - the same "act at once,
-				// and say so" rule the arrival branch below follows, rather than leaving a
-				// stale "still offered" row nothing will ever expire.
-				Each->Phase = EFlightPhase::Expired;
-				--OfferedCount;
-				UE_LOG(LogAirportOps, Log,
-					TEXT("Offer %d expired at %.0f, before this load at %.0f: lapsed on load"),
-					Each->Id, Each->ExpiresAt, Clock.Now());
-				MoveToHistory(*Each, Each->ExpiresAt);
-				continue;
-			}
-			ScheduleExpiry(Clock, *Each);
-			continue;
-		}
-
+		// OFFERS NEED NOTHING HERE since snapshot v5: their countdown is OfferSecondsLeft,
+		// saved as itself and resumed by TickOffers. The branch that lapsed an offer whose
+		// GAME-time window had passed "while the game was shut" went with it - a countdown in
+		// real seconds cannot run while the game is not.
 		if (Each->Phase != EFlightPhase::Accepted)
 		{
 			continue;
@@ -558,6 +576,8 @@ TArray<UFlight*> UFlightBoard::Offers() const
 			Out.Add(Each);
 		}
 	}
+	// STABLE, so two offers with the same time left keep the order they arrived in.
+	Algo::StableSortBy(Out, [](const UFlight* F) { return F->OfferSecondsLeft; });
 	return Out;
 }
 
@@ -607,6 +627,7 @@ void UFlightBoard::MoveToHistory(UFlight& Flight, double Now)
 		Flights.RemoveAt(Index);
 	}
 	History.Add(&Flight);
+	Verdicts.Remove(Flight.Id);
 
 	if (Flight.AgentId != INDEX_NONE)
 	{

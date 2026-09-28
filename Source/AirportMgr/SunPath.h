@@ -22,8 +22,8 @@ struct FSunLighting
  * and copies them on, exactly as ARoadBuildController::ApplyViewLimits does for the rig.
  *
  * THE ARC IS FLOORED ABOVE THE HORIZON, and that is the design rather than a
- * simplification. USimClock::RealSecondsPerGameDay is 1200, so a literal sun sweeps 18
- * degrees a minute at x1 and 144 at x8, and roughly 40% of a day is dark. With no runway
+ * simplification. A game day was 1200 real s when this was written (2026-09-28: 2400 s of
+ * daylight and 480 of night), so a literal sun swept 18 degrees a minute at x1 and 144 at x8, and roughly 40% of a day is dark. With no runway
  * lights, no apron floods and exposure locked, that dark is unreadable rather than
  * atmospheric - a defect, not a mood. The concept sheet agrees: its lighting mast is
  * captioned "For when you operate later", so night operations are a progression unlock.

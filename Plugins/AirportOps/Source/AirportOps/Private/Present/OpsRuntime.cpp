@@ -43,18 +43,20 @@ UOpsRuntime::UOpsRuntime()
 	Pricing = CreateDefaultSubobject<UPricing>(TEXT("Pricing"));
 }
 
-TArray<FOfferCandidate> UOpsRuntime::CandidatesFromCatalog() const
+TArray<FAirlineOffers> UOpsRuntime::AirlineOffersFromCatalog() const
 {
 	// THE CROSSING. Model/ may not read a UAircraftType, so the definitions are flattened
 	// into airframes here, where Entities/ is legal - the same division of labour
 	// URoadNetwork::PlaceEntity uses for a design wingspan.
-	TArray<FOfferCandidate> Out;
+	TArray<FAirlineOffers> Out;
 	for (const UAirlineDefinition* Airline : Catalog->All<UAirlineDefinition>())
 	{
 		if (Airline == nullptr)
 		{
 			continue;
 		}
+		FAirlineOffers& Offering = Out.AddDefaulted_GetRef();
+		Offering.Airline = Airline;
 		for (const TSoftObjectPtr<UAircraftType>& SoftType : Airline->Fleet)
 		{
 			// LoadSynchronous, not a bare Get(): Fleet is now a SOFT reference (issue #191 -
@@ -71,24 +73,23 @@ TArray<FOfferCandidate> UOpsRuntime::CandidatesFromCatalog() const
 			Candidate.Airframe = Type->Airframe();
 			Candidate.AirlineName = Airline->DisplayName;
 			Candidate.TypeName = Type->DisplayName;
-			Out.Add(Candidate);
+			Offering.Fleet.Add(Candidate);
 		}
 	}
 	return Out;
 }
 
-void UOpsRuntime::GenerateOffer()
+void UOpsRuntime::OfferTick()
 {
+	++OfferTicks;
 	if (Target == nullptr || Target->Network == nullptr)
 	{
 		return;
 	}
-
-	const TArray<FOfferCandidate> Candidates = CandidatesFromCatalog();
-	if (Candidates.Num() == 0)
+	if (AirlineOffers.Num() == 0)
 	{
 		// No airlines loaded. Almost always the missing PrimaryAssetTypesToScan line rather
-		// than an empty world - see UAirlineDefinition's header.
+		// than an empty world - see UAirlineDefinition's header. Attach has already warned.
 		return;
 	}
 
@@ -101,17 +102,16 @@ void UOpsRuntime::GenerateOffer()
 		FlightBoard->ApproachFocus = Focus;
 	}
 
-	UFlight* Offer = OfferGenerator->MakeOffer(*Target->Network, FlightBoard->ApproachFocus,
-		Candidates, Clock->Now(), FlightBoard->TakeNextId());
-	if (Offer == nullptr)
+	const TArray<UFlight*> Made = OfferGenerator->TickMinute(*Target->Network,
+		FlightBoard->ApproachFocus, AirlineOffers, *Clock, FlightBoard->PendingOfferCount(),
+		[this]() { return FlightBoard->TakeNextId(); });
+	for (UFlight* Offer : Made)
 	{
-		// MakeOffer has already logged which refusal, and for which aeroplane.
-		return;
+		FlightBoard->AddOffer(*Clock, Offer);
+		UE_LOG(LogAirportOps, Log, TEXT("Offer %d: %s %s, %s, %.0f s to answer"),
+			Offer->Id, *Offer->Callsign, *Offer->AirlineName.ToString(), *Offer->TypeName.ToString(),
+			Offer->OfferSecondsLeft);
 	}
-
-	FlightBoard->AddOffer(*Clock, Offer);
-	UE_LOG(LogAirportOps, Log, TEXT("Offer %d: %s, %s, landing at %.0f"),
-		Offer->Id, *Offer->AirlineName.ToString(), *Offer->TypeName.ToString(), Offer->ArrivesAt);
 }
 
 FVehicle UOpsRuntime::StandDesignVehicleOf(const FEntityInstance& Stand)
@@ -141,7 +141,10 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// rather than skipped. See ResolveDefaultScenario.
 	if (const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario(*Catalog))
 	{
-		Clock->RealSecondsPerGameDay = Scenario->RealSecondsPerGameDay;
+		Clock->RealSecondsDaylight = Scenario->RealSecondsDaylight;
+		Clock->RealSecondsNight = Scenario->RealSecondsNight;
+		Clock->DawnHour = Scenario->DawnHour;
+		Clock->DuskHour = Scenario->DuskHour;
 
 		// BEFORE THE OFFER SCHEDULE BELOW, and that ordering is load-bearing: Every() books
 		// its first firing at Now() + Interval, so moving the clock after scheduling would
@@ -151,6 +154,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		// The designer figures set from the same asset in the same breath, so none of them
 		// is the one somebody forgot to copy.
 		FuelService->DwellSeconds = Scenario->FuelDwellSeconds;
+		OfferGenerator->MaxPendingOffers = Scenario->MaxPendingOffers;
+		OfferGenerator->TaxiAllowanceSeconds = Scenario->TaxiAllowanceSeconds;
 
 		// THE BALANCE A NEW GAME OPENS AT. The comment that used to stand at the top of this
 		// block said this would happen "when the ledger exists (M3)"; this is that. A LOAD
@@ -159,8 +164,9 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		Ledger->Open(Scenario->StartingBalance);
 
 		UE_LOG(LogAirportOps, Log,
-			TEXT("Scenario '%s': %.0f real s per game day, starts %02.0f:00, %.0f s fuel dwell, opens at %.0f"),
-			*Scenario->GetName(), Scenario->RealSecondsPerGameDay, Scenario->StartHour,
+			TEXT("Scenario '%s': %.0f/%.0f real s day/night (%02.0f-%02.0f), starts %02.0f:00, %.0f s fuel dwell, opens at %.0f"),
+			*Scenario->GetName(), Scenario->RealSecondsDaylight, Scenario->RealSecondsNight,
+			Scenario->DawnHour, Scenario->DuskHour, Scenario->StartHour,
 			Scenario->FuelDwellSeconds, Scenario->StartingBalance);
 	}
 
@@ -196,6 +202,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	OfferGenerator->Pricing = Pricing;
 	FlightBoard->Ledger = Ledger;
 	FlightBoard->Pricing = Pricing;
+	FlightBoard->Fuel = FuelService;
 	FuelService->Ledger = Ledger;
 	FuelService->Pricing = Pricing;
 	Ledger->Pricing = Pricing;
@@ -209,9 +216,6 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		Facade->SetPurse(Ledger);
 	}
 
-	// ONE ENTRY A DAY, not one per object: a hundred-stand airport would otherwise write a
-	// hundred rows a day into a saved array, and RollUp would spend its life folding them.
-	UpkeepHandle = Clock->Every(USimClock::SecondsPerDay, [this]() { PostDailyUpkeep(); });
 	// THE ONE PRODUCTION DISPATCHER. Weak, because the board outlives a level change and a
 	// captured raw pointer would keep a dead actor alive - or worse, be used.
 	TWeakObjectPtr<ARoadNetworkActor> WeakTarget = Target;
@@ -221,30 +225,61 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		return Actor != nullptr && Actor->DispatchArrival(Near, Airframe);
 	};
 
-	// One repeating offer for the airport as a whole, at the average rate the airlines ask
-	// for between them. Per-airline scheduling is a refinement the inbox cannot yet show.
-	//
-	// FORWARDED: the rate-to-interval arithmetic is UOfferGenerator's now, against
-	// USimClock::SecondsPerDay rather than a local figure duplicating it - see
-	// UOfferGenerator::OfferIntervalSeconds (issue #98).
-	const TArray<UAirlineDefinition*> Airlines = Catalog->All<UAirlineDefinition>();
-	const double Interval = UOfferGenerator::OfferIntervalSeconds(Airlines, Pricing->DemandFactor());
-	if (Interval > 0.0)
+	// ONE GENERATOR MINUTE, every game minute, for every airline - replacing one fixed-interval
+	// timer whose interval was computed here once, from the fee at Attach, and never again
+	// (spec 2026-09-28 problem 2). Each airline's own curve and the live fee are read inside
+	// the tick - see UOfferGenerator::TickMinute.
+	AirlineOffers = AirlineOffersFromCatalog();
+	RearmRepeatingSchedules();
 	{
-		OfferHandle = Clock->Every(Interval, [this]() { GenerateOffer(); });
-		LastOfferIntervalSeconds = Interval;
-		UE_LOG(LogAirportOps, Log, TEXT("Offers: %.1f per game day across %d airline(s)"),
-			USimClock::SecondsPerDay / Interval, Airlines.Num());
-	}
-	else
-	{
-		LastOfferIntervalSeconds = 0.0;
-		UE_LOG(LogAirportOps, Warning,
-			TEXT("Offers: no airline offers anything, so the inbox will stay empty"));
+		// THE DAY'S EXPECTED TOTAL, integrated from the same RateAt the generator follows, so
+		// the banner is a measurement of the mechanism rather than a figure typed beside it.
+		double Expected = 0.0;
+		for (int32 Hour = 0; Hour < 24; ++Hour)
+		{
+			const double Midpoint = (Hour + 0.5) * 3600.0;
+			Expected += UOfferGenerator::TotalRateAt(AirlineOffers, Midpoint,
+				Clock->IsDaylight(Midpoint), OfferGenerator->DemandFactor());
+		}
+		FString Floors;
+		for (const FAirlineOffers& Each : AirlineOffers)
+		{
+			if (Each.Airline != nullptr && Each.Airline->bIsFloor)
+			{
+				Floors += (Floors.IsEmpty() ? TEXT("") : TEXT(", ")) + Each.Airline->DisplayName.ToString();
+			}
+		}
+		UE_LOG(LogAirportOps, Log, TEXT("Offers: ~%.0f expected today across %d airline(s), inbox holds %d (floor: %s)"),
+			Expected, AirlineOffers.Num(), OfferGenerator->MaxPendingOffers,
+			Floors.IsEmpty() ? TEXT("none") : *Floors);
+		if (Expected <= 0.0)
+		{
+			UE_LOG(LogAirportOps, Warning,
+				TEXT("Offers: no airline offers anything, so the inbox will stay empty"));
+		}
+		else if (Floors.IsEmpty())
+		{
+			UE_LOG(LogAirportOps, Warning,
+				TEXT("Offers: no airline is the floor - the airport can go silent"));
+		}
 	}
 
 	ApplySpeed(Clock->GetSpeed());
 	UE_LOG(LogAirportOps, Log, TEXT("OpsRuntime attached to %s"), *Target->GetName());
+}
+
+void UOpsRuntime::RearmRepeatingSchedules()
+{
+	if (UpkeepHandle != INDEX_NONE) { Clock->Cancel(UpkeepHandle); }
+	if (OfferHandle != INDEX_NONE) { Clock->Cancel(OfferHandle); }
+
+	// ONE ENTRY A DAY, not one per object: a hundred-stand airport would otherwise write a
+	// hundred rows a day into a saved array, and RollUp would spend its life folding them.
+	UpkeepHandle = Clock->Every(USimClock::SecondsPerDay, [this]() { PostDailyUpkeep(); });
+
+	// ONE GENERATOR MINUTE, every game minute - see Attach for why this replaced a single
+	// fixed-interval timer.
+	OfferHandle = Clock->Every(UOfferGenerator::TickSeconds, [this]() { OfferTick(); });
 }
 
 void UOpsRuntime::Detach()
@@ -279,8 +314,8 @@ void UOpsRuntime::Detach()
 	{
 		Clock->Cancel(OfferHandle);
 		OfferHandle = INDEX_NONE;
-		LastOfferIntervalSeconds = 0.0;
 	}
+	AirlineOffers.Reset();
 	// Cleared rather than left pointing at the old actor: a dispatcher that still answers
 	// after a detach would put an aeroplane on a field this runtime no longer drives.
 	FlightBoard->Dispatcher = nullptr;
@@ -309,13 +344,17 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 			if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
 			{
 				FuelService->Tick(*Model, *Target->Network, *Clock);
+
+				// THE RAW FRAME TIME, for the one countdown that runs in real seconds - see
+				// UFlightBoard::TickOffers. It checks the pause itself.
+				FlightBoard->TickOffers(*Model, *Target->Network, *Clock, RealDeltaSeconds);
 			}
 		}
 	}
 
-	// Offers used to lapse here via UFlightBoard::Tick's per-frame poll (issue #105 item 9);
-	// now Clock->Advance above already fired any expiry due this frame - see
-	// UFlightBoard::ScheduleExpiry, armed from AddOffer and re-armed by RearmSchedules.
+	// Offers lapse in TickOffers above, on REAL seconds (spec 2026-09-28). Before that they
+	// were a Clock.At at a game-time ExpiresAt (issue #105 item 9), and before THAT a per-frame
+	// poll here; the game-time window shrank with the speed setting, which is why it went.
 }
 
 void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
@@ -331,7 +370,7 @@ void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
 void UOpsRuntime::StepSpeed(int32 Delta)
 {
 	// THE LADDER WALK AND ResumeSpeed ARE THE CLOCK'S OWN NOW (issue #191): it is the object
-	// that is actually saved, and it is the one with RealSecondsPerGameDay and every other
+	// that is actually saved, and it is the one with the day lengths and every other
 	// speed-adjacent figure already. This is left to push the RESULT into the actor and the
 	// event bus, which is Present/'s job - ApplySpeed re-applies Clock->GetSpeed() to itself
 	// (a no-op; StepSpeed already set it) purely to reach the push/notify half in one call.
@@ -406,6 +445,7 @@ TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
 	Out.Add(FlightBoard);
 	Out.Add(Ledger);
 	Out.Add(Pricing);
+	Out.Add(OfferGenerator);
 	return Out;
 }
 
@@ -535,6 +575,8 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 		FlightBoard->OnGraphRebuilt(*Model, *Target->Network);
 		FlightBoard->RearmSchedules(*Model, *Target->Network, *Clock);
 	}
+	// THE REPEATERS TOO, from the loaded Now - see RearmRepeatingSchedules (review I1).
+	RearmRepeatingSchedules();
 
 	ApplySpeed(Clock->GetSpeed());
 	Events->NotifyNotification(FString::Printf(TEXT("Loaded '%s'"), *SlotName));

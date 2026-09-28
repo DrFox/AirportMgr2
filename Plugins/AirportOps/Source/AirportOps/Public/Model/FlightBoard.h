@@ -9,6 +9,7 @@
 #include "FlightBoard.generated.h"
 
 class UFlight;
+class UFuelService;
 class UGroundTraffic;
 class UOfferGenerator;
 class URoadNetwork;
@@ -17,6 +18,32 @@ class ULedger;
 class UPricing;
 class USimClock;
 enum class EAgentPhase : uint8;
+
+/**
+ * Whether an offer can be accepted right now, and whether the airport can serve it.
+ *
+ * CACHED ON THREE REVISIONS (issue #169, moved from UOfferViewModel 2026-09-28): Why is a
+ * full ArrivalPlanner::Plan - a route search over every stand, then every runway exit - so it
+ * is recomputed only when something it depends on has moved: the board itself
+ * (UFlightBoard::Revision - added/accepted/declined/expired), the guideline graph
+ * (URoadNetwork::GetGuidelineRevision - an edit changed the taxiways), or occupancy
+ * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or cleared).
+ * Three integer compares replace the search on every frame where none of them moved.
+ */
+struct FOfferVerdict
+{
+	EArrivalRefusal Why = EArrivalRefusal::None;
+
+	/** Could a depot fuel this airframe on a stand it would take? True when nothing checks
+	 *  (no fuel service wired, as in most board tests). A MISSING service does not block the
+	 *  accept (spec ruling 5) - the row says so and C scores it. */
+	bool bFuelServable = true;
+
+	uint32 BoardAt = 0;
+	uint32 GuidelineAt = 0;
+	uint32 OccupancyAt = 0;
+	bool bValid = false;
+};
 
 /**
  * Every live flight, and the ONLY thing that dispatches an arrival.
@@ -111,6 +138,12 @@ public:
 	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
 
 	/**
+	 * Asked whether the airport could fuel an offer, for FOfferVerdict::bFuelServable. Null in
+	 * a test that does not care - fuel then reads as servable. Set by UOpsRuntime::Attach.
+	 */
+	UPROPERTY() TObjectPtr<UFuelService> Fuel = nullptr;
+
+	/**
 	 * Bank the landing fee this flight was OFFERED at. Idempotent - a flight lands once.
 	 *
 	 * PUBLIC so a test can post a fee without driving a whole agent through its phases; the
@@ -123,7 +156,7 @@ public:
 
 	/**
 	 * The DEFAULT focus for the next generated offer - UOpsRuntime writes it before calling
-	 * UOfferGenerator::MakeOffer, which copies it onto the flight it builds.
+	 * UOfferGenerator::TickMinute, which copies it onto every flight it builds.
 	 *
 	 * NOT consulted by Accept, WhyNotAcceptable or DispatchNow: those read UFlight::
 	 * ApproachFocus, which is fixed on the flight at the offer and travels with it. This
@@ -152,10 +185,36 @@ public:
 	static bool DefaultApproachFocus(const URoadNetwork& Network, FVector2D& OutFocus);
 
 	/**
-	 * Takes ownership of an offer, gives it the next id if it has none, and puts its expiry
-	 * on the clock - see ScheduleExpiry's own comment for why this replaced Tick's poll.
+	 * Takes ownership of an offer and gives it the next id if it has none. Its countdown is
+	 * OfferSecondsLeft, drained by TickOffers - nothing goes on the clock.
 	 */
 	void AddOffer(USimClock& Clock, UFlight* Offer);
+
+	/**
+	 * Drain every offer's REAL-seconds countdown and lapse the ones that reach zero.
+	 *
+	 * REAL SECONDS, AND ONLY WHILE UNPAUSED (spec 2026-09-28 ruling 3). It replaced a
+	 * Clock.At callback at a GAME-time ExpiresAt, which made the window shrink with the speed
+	 * setting: 600 game seconds was eight real seconds at x1. A plain seconds-left field also
+	 * saves as itself, so there is no load-time re-arm to get wrong.
+	 *
+	 * EACH OFFER'S VERDICT IS REFRESHED HERE TOO (see VerdictFor), which is what lets a lapse
+	 * say whether the player could ever have taken it - UFlight::LapseReason - with no inbox
+	 * open. Called from UOpsRuntime::Tick; tests call it directly.
+	 */
+	void TickOffers(const UGroundTraffic& Traffic, const URoadNetwork& Network,
+		const USimClock& Clock, double RealDeltaSeconds);
+
+	/**
+	 * Can this offer be accepted right now, and can the airport serve it - CACHED.
+	 *
+	 * MOVED HERE FROM UOfferViewModel (issue #169's cache): the board is what classifies a
+	 * lapse, so it has to know the answer whether or not a row is on screen, and one cache
+	 * both the board and the row read is one evaluator rather than two. Recomputed only when
+	 * the board, the guideline graph or the occupancy has moved since - see FOfferVerdict.
+	 */
+	const FOfferVerdict& VerdictFor(const UGroundTraffic& Traffic, const URoadNetwork& Network,
+		const UFlight& Flight) const;
 
 	/** The id the next offer should carry. The board owns numbering; see UOfferGenerator. */
 	int32 TakeNextId();
@@ -169,14 +228,14 @@ public:
 	bool Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock,
 		UFlight& Flight);
 
-	/** Cancels the offer's scheduled expiry - it will never lapse now, having been answered. */
+	/** Retires the offer at once; free (spec ruling 8) - only a lapse will cost anything, in C. */
 	void Decline(USimClock& Clock, UFlight& Flight);
 
 	/**
 	 * Make a flight from an airframe, aim it at Focus, and accept it on the spot - the debug
 	 * land key's whole job, and previously done by hand at the call site (issue #96).
 	 *
-	 * ArrivesAt and ExpiresAt are Clock.Now(): this exists to put an aeroplane on the field
+	 * Its lead time is zero, so ArrivesAt is Clock.Now(): this exists to put an aeroplane on the field
 	 * THIS SECOND, not to queue a normal offer. Focus travels onto the flight itself - see
 	 * UFlight::ApproachFocus - so it never has to touch the board's own field, which the
 	 * generator also writes and would otherwise fight over.
@@ -216,7 +275,7 @@ public:
 
 	/**
 	 * THE MAINTAINED INDEX production reaches through the private FindByAgent/FindById -
-	 * OnAgentPhase calls the first, the Schedule/ScheduleExpiry clock callbacks the second.
+	 * OnAgentPhase calls the first, the Schedule clock callback the second.
 	 * Exposed only so a test can compare its answer against FindByAgentLinearForTest /
 	 * FindByIdLinearForTest's O(n) scan - see issue #188.
 	 */
@@ -246,12 +305,12 @@ public:
 	void OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network);
 
 	/**
-	 * Re-arm the clock for every Accepted flight's arrival AND every Offered flight's expiry.
+	 * Re-arm the clock for every Accepted flight's arrival.
 	 *
 	 * CALLED AFTER A LOAD, and it is not optional: USimClock deliberately does not save its
-	 * callback queue, so a restored flight has an ETA (or an ExpiresAt) and nothing armed.
-	 * Without this an accepted flight never arrives, and an offered one never lapses even
-	 * long after its window - and nothing anywhere says so.
+	 * callback queue, so a restored flight has an ETA and nothing armed. Without this an
+	 * accepted flight never arrives - and nothing anywhere says so. Offers need nothing: their
+	 * countdown is a saved seconds-left figure TickOffers resumes (snapshot v5).
 	 */
 	void RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock);
 
@@ -265,7 +324,12 @@ public:
 	 */
 	void RollUp(double Now);
 
-	/** Offers still awaiting an answer, in the order they arrived. */
+	/**
+	 * Offers still awaiting an answer, the least time left first (ties keep arrival order).
+	 *
+	 * SORTED, not arrival order, since windows became per airline (spec 2026-09-28): a
+	 * 45-second offer that arrived after a 120-second one is the one the player must see first.
+	 */
 	TArray<UFlight*> Offers() const;
 
 	/** Everything accepted and not yet departed. */
@@ -327,8 +391,10 @@ private:
 	 */
 	TMap<int32, int32> ArrivalHandles;
 
-	/** Same shape as ArrivalHandles, same reason: not saved, rebuilt by RearmSchedules. */
-	TMap<int32, int32> ExpiryHandles;
+	/** See VerdictFor. By flight id; MUTABLE because VerdictFor is const and caching an answer
+	 *  is bookkeeping about the board, not a change to what it holds. Not saved: a load starts
+	 *  every verdict invalid, one recompute away from correct. */
+	mutable TMap<int32, FOfferVerdict> Verdicts;
 
 	/**
 	 * FindByAgent's and FindById's O(1) answer (issue #188 item 2).
@@ -341,8 +407,8 @@ private:
 	 * place an entry actually leaves this map.
 	 *
 	 * NOT UPROPERTYs: a restored flight's own Id/AgentId fields are the saved truth, and these
-	 * are rebuilt from Flights and History in OnAfterRestore - the same split ArrivalHandles/
-	 * ExpiryHandles above already use for the clock's handles.
+	 * are rebuilt from Flights and History in OnAfterRestore - the same split ArrivalHandles
+	 * above already uses for the clock's handles.
 	 */
 	TMap<int32, TObjectPtr<UFlight>> ByAgent;
 	TMap<int32, TObjectPtr<UFlight>> ById;
@@ -355,20 +421,10 @@ private:
 	void Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& Flight);
 
 	/**
-	 * Puts Offer's ExpiresAt on the clock, replacing what used to be Tick's per-frame poll
-	 * over every offer (issue #105 item 9) - arrivals were already Clock.At callbacks
-	 * (Schedule, above); expiry was the one thing still checked by hand every tick.
-	 */
-	void ScheduleExpiry(USimClock& Clock, UFlight& Offer);
-
-	/** Called on Accept/Decline: the offer has been answered, so it can no longer lapse. */
-	void CancelExpiry(USimClock& Clock, UFlight& Offer);
-
-	/**
 	 * Retires Flight out of the live list: stamps TerminatedAt, moves it Flights -> History,
 	 * and drops its ByAgent entry if it still had one. THE ONE PLACE a flight leaves Flights,
-	 * so every terminal transition - Decline, the expiry callback, the load-time lapse in
-	 * RearmSchedules, OnAgentPhase's Departed branch, and the migration sweep in
+	 * so every terminal transition - Decline, TickOffers' lapse, OnAgentPhase's Departed
+	 * branch, and the migration sweep in
 	 * OnAfterRestore - goes through it rather than five call sites each remembering their own
 	 * piece of the move (issue #188).
 	 */

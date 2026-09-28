@@ -79,8 +79,8 @@ namespace
 
 		/**
 		 * The DAY-COMPRESSED clock, beside the traffic's own seconds - the pair UFuelService
-		 * now takes. RealSecondsPerGameDay is left at its default so Advance(real seconds)
-		 * moves game time 72x faster, exactly as a session does.
+		 * now takes. SetUniformDay(1200) so Advance(real seconds) moves game time 72x faster at
+		 * every hour - the rate these fixtures were written against, before day and night split.
 		 */
 		USimClock* Clock = nullptr;
 
@@ -282,6 +282,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	Service = NewObject<UFuelService>(GetTransientPackage());
 	Clock = NewObject<USimClock>(GetTransientPackage());
+	Clock->SetUniformDay(1200.0);
 
 	// UOpsRuntime::Attach's job in production (#104) - a bare NewObject has no Present/ to
 	// set this, and an unset vehicle table means a truck dispatched with zero speed and
@@ -1967,6 +1968,33 @@ bool FFuelStandDesignVehicleFallsBackTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("and carries Code C's design vehicle, authored rather than assumed"),
 			Shipped->DesignVehicle.TypeCode, UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode);
+	}
+	return true;
+}
+
+/**
+ * CouldServe (spec 2026-09-28 section 3): the offer row asks whether a depot could fuel this
+ * airframe on a stand it would take, BEFORE the aircraft exists - so the player knows what
+ * accepting costs. Same ChooseDepot the live demand asks, so the row and the truck agree.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelCouldServeTest, "AirportOps.Fuel.CouldServe.DepotOrNot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelCouldServeTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	{
+		FFuelFixture Fixture;
+		Fixture.Build(/*bWithRoad=*/true, /*bWithDepot=*/false);
+		TestFalse(TEXT("with no depot the airport cannot fuel it"),
+			Fixture.Service->CouldServe(*Fixture.Net, Airframe));
+	}
+	{
+		FFuelFixture Fixture;
+		Fixture.Build(/*bWithRoad=*/true);
+		TestTrue(TEXT("with a joined depot on a road to the stand it can"),
+			Fixture.Service->CouldServe(*Fixture.Net, Airframe));
 	}
 	return true;
 }

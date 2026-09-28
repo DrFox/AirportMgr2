@@ -23,11 +23,17 @@ bool UOfferGenerator::IsPermanentRefusal(EArrivalRefusal Why)
 	case EArrivalRefusal::GraphBeingEdited:  // clears when the player lets go of the node
 		return false;
 
+	// A SERVICE THE AIRPORT CANNOT GIVE is the player's to accept badly (spec 2026-09-28
+	// ruling 5): the offer is made, the row says what is missing, and C scores the flight
+	// down. Filtering it out hid WHY an airline was not offering.
+	case EArrivalRefusal::NoStandServiceable:
+		return false;
+
 	// These need the player to BUILD something. NoRunway, RunwayTooShort, NotAdmitted,
 	// NoExit, NoRouteToStand, NoStandBigEnough (a bigger stand - so no airline is offered an
 	// A380 until an F stand exists, which is the drawn-stands spec's own promise),
-	// NoStandPavedEnough (pave a stand) and NoStandServiceable (fix the service, not the
-	// stand) - shared-pavement Task 9's two new refusals, neither of which clears on its own.
+	// and NoStandPavedEnough (pave a stand) - one of shared-pavement Task 9's two new
+	// refusals; its sibling NoStandServiceable is soft since 2026-09-28, above.
 	default:
 		return true;
 	}
@@ -42,59 +48,181 @@ bool UOfferGenerator::CouldEverAdmit(const URoadNetwork& Network, const FVector2
 	return !IsPermanentRefusal(Plan.Why);
 }
 
-UFlight* UOfferGenerator::MakeOffer(const URoadNetwork& Network, const FVector2D& Focus,
-	const TArray<FOfferCandidate>& Fleet, double Now, int32 NextId)
+double UOfferGenerator::RateAt(const UAirlineDefinition& Airline, double TimeOfDaySeconds,
+	bool bDaylight, double DemandFactor)
 {
-	TArray<const FOfferCandidate*> Admissible;
-	EArrivalRefusal FirstRefusal = EArrivalRefusal::None;
-	FAirframe FirstRefused;
+	const double Demand = Airline.PeakOffersPerHour * Airline.CurveAt(TimeOfDaySeconds)
+		* FMath::Max(DemandFactor, 0.0);
+	// THE FLOOR IS NOT SCALED BY THE FEE, which is the whole of what makes it a floor - see
+	// UAirlineDefinition::FloorOffersPerHour. Daylight only, so the night is a real lull.
+	const double Floor = bDaylight ? Airline.FloorOffersPerHour : 0.0;
+	return FMath::Max(Demand, Floor);
+}
 
-	for (const FOfferCandidate& Candidate : Fleet)
+double UOfferGenerator::TotalRateAt(TArrayView<const FAirlineOffers> Airlines,
+	double TimeOfDaySeconds, bool bDaylight, double DemandFactor)
+{
+	double Total = 0.0;
+	for (const FAirlineOffers& Each : Airlines)
 	{
-		EArrivalRefusal Why = EArrivalRefusal::None;
-		if (CouldEverAdmit(Network, Focus, Candidate.Airframe, Why))
+		if (Each.Airline != nullptr)
 		{
-			Admissible.Add(&Candidate);
-		}
-		else if (FirstRefusal == EArrivalRefusal::None)
-		{
-			FirstRefusal = Why;
-			FirstRefused = Candidate.Airframe;
+			Total += RateAt(*Each.Airline, TimeOfDaySeconds, bDaylight, DemandFactor);
 		}
 	}
+	return Total;
+}
 
-	if (Admissible.Num() == 0)
+double UOfferGenerator::DemandFactor() const
+{
+	return Pricing != nullptr ? Pricing->DemandFactor() : 1.0;
+}
+
+TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const FVector2D& Focus,
+	TArrayView<const FAirlineOffers> Airlines, const USimClock& Clock, int32 PendingNow,
+	TFunctionRef<int32()> NextId)
+{
+	TArray<UFlight*> Made;
+	const double Now = Clock.Now();
+	const double TimeOfDay = Clock.TimeOfDay();
+	const bool bDaylight = Clock.IsDaylight();
+	// READ NOW, every minute - see RateAt's ENFORCED BY.
+	const double Factor = DemandFactor();
+
+	for (const FAirlineOffers& Each : Airlines)
 	{
-		// SAYS WHY, and names the aeroplane. An inbox that is simply empty is
-		// indistinguishable from a generator that is not running - which is exactly how the
-		// 2026-09-11 width refusal presented, and it cost a PIE session to tell apart.
-		UE_LOG(LogAirportOps, Log,
-			TEXT("Offers: nothing in any fleet can use this airport. %s (the first refused "
-				"has a %.0f uu wingspan and wants %.0f uu of runway)"),
-			*ArrivalPlanner::DescribeRefusal(FirstRefusal), FirstRefused.Wingspan,
-			FirstRefused.Requirements.LandingFieldLength);
-		return nullptr;
+		if (Each.Airline == nullptr)
+		{
+			continue;
+		}
+		const UAirlineDefinition& Airline = *Each.Airline;
+		FAirlineOfferState& State = States.FindOrAdd(Airline.GetFName());
+		if (State.Threshold <= 0.0)
+		{
+			// FROM THE STREAM, not 1.0: every airline starting on exactly 1.0 would put all
+			// their first offers on the same minute of a flat curve.
+			State.Threshold = Stream.FRandRange(0.6, 1.4);
+		}
+
+		// NOTHING TO OFFER THIS MINUTE, NOTHING TO ASK (review I2): a night-quiet club at x32
+		// would otherwise buy a route search per type per game minute for a rate of zero.
+		const double Rate = RateAt(Airline, TimeOfDay, bDaylight, Factor);
+		if (Rate <= 0.0)
+		{
+			continue;
+		}
+
+		FAdmissionCache& Cache = AdmissionCache.FindOrAdd(Airline.GetFName());
+		const uint32 Revision = Network.GetGuidelineRevision();
+		if (Cache.Network.Get() != &Network || Cache.GuidelineRevision != Revision
+			|| Cache.Focus != Focus || Cache.FleetSize != Each.Fleet.Num())
+		{
+			Cache.Network = &Network;
+			Cache.GuidelineRevision = Revision;
+			Cache.Focus = Focus;
+			Cache.FleetSize = Each.Fleet.Num();
+			Cache.Admissible.Reset();
+			Cache.FirstRefusal = EArrivalRefusal::None;
+			Cache.FirstRefused = INDEX_NONE;
+			for (int32 Index = 0; Index < Each.Fleet.Num(); ++Index)
+			{
+				++AdmissionChecks;
+				EArrivalRefusal Why = EArrivalRefusal::None;
+				if (CouldEverAdmit(Network, Focus, Each.Fleet[Index].Airframe, Why))
+				{
+					Cache.Admissible.Add(Index);
+				}
+				else if (Cache.FirstRefused == INDEX_NONE)
+				{
+					Cache.FirstRefusal = Why;
+					Cache.FirstRefused = Index;
+				}
+			}
+		}
+		TArray<const FOfferCandidate*> Admissible;
+		for (const int32 Index : Cache.Admissible)
+		{
+			Admissible.Add(&Each.Fleet[Index]);
+		}
+		const EArrivalRefusal FirstRefusal = Cache.FirstRefusal;
+		const FOfferCandidate* FirstRefused = Cache.FirstRefused != INDEX_NONE ? &Each.Fleet[Cache.FirstRefused] : nullptr;
+
+		if (Admissible.Num() == 0)
+		{
+			// NO BANKING - see TickMinute's header.
+			State.Accumulated = 0.0;
+			if (State.bCouldCome)
+			{
+				// SAYS WHY, and names the aeroplane - ON THE TRANSITION, not every minute. An
+				// inbox that is simply empty is indistinguishable from a generator that is not
+				// running, which is exactly how the 2026-09-11 width refusal presented and it
+				// cost a PIE session to tell apart; a line every game minute would bury it.
+				UE_LOG(LogAirportOps, Log,
+					TEXT("Offers: %s cannot use this airport. %s (the first refused, %s, has a %.0f uu "
+						"wingspan and wants %.0f uu of runway)"),
+					*Airline.DisplayName.ToString(), *ArrivalPlanner::DescribeRefusal(FirstRefusal),
+					FirstRefused != nullptr ? *FirstRefused->TypeName.ToString() : TEXT("none"),
+					FirstRefused != nullptr ? FirstRefused->Airframe.Wingspan : 0.0,
+					FirstRefused != nullptr ? FirstRefused->Airframe.Requirements.LandingFieldLength : 0.0);
+				State.bCouldCome = false;
+			}
+			continue;
+		}
+		if (!State.bCouldCome)
+		{
+			UE_LOG(LogAirportOps, Log, TEXT("Offers: %s can use this airport again (%d type(s))"),
+				*Airline.DisplayName.ToString(), Admissible.Num());
+			State.bCouldCome = true;
+		}
+
+		State.Accumulated += Rate * (TickSeconds / 3600.0);
+		while (State.Accumulated >= State.Threshold)
+		{
+			State.Accumulated -= State.Threshold;
+			State.Threshold = Stream.FRandRange(0.6, 1.4);
+
+			// FROM THIS GENERATOR'S OWN STREAM, never the global RNG - see Stream. Drawn even
+			// when the inbox is full, so a dropped offer consumes the same draws a taken one
+			// does and a full inbox cannot shift the sequence of every later offer.
+			const FOfferCandidate& Chosen = *Admissible[Stream.RandHelper(Admissible.Num())];
+			if (PendingNow + Made.Num() >= MaxPendingOffers)
+			{
+				++DroppedOffers;
+				UE_LOG(LogAirportOps, Log, TEXT("Offers: inbox full (%d), dropped %s %s"),
+					MaxPendingOffers, *Airline.DisplayName.ToString(), *Chosen.TypeName.ToString());
+				continue;
+			}
+			Made.Add(MakeOffer(Focus, Airline, Chosen, Now, NextId()));
+		}
 	}
+	return Made;
+}
 
-	// FROM THIS GENERATOR'S OWN STREAM, never the global RNG - see UOfferGenerator::Stream.
-	const FOfferCandidate& Chosen = *Admissible[Stream.RandHelper(Admissible.Num())];
-
+UFlight* UOfferGenerator::MakeOffer(const FVector2D& Focus, const UAirlineDefinition& Airline,
+	const FOfferCandidate& Chosen, double Now, int32 Id)
+{
 	UFlight* Offer = NewObject<UFlight>(this);
-	Offer->Id = NextId;
+	Offer->Id = Id;
 	Offer->Airframe = Chosen.Airframe;
 	Offer->AirlineName = Chosen.AirlineName;
 	Offer->TypeName = Chosen.TypeName;
+	Offer->Callsign = MakeCallsign(Airline.CallsignPrefix, Stream);
 	Offer->Phase = EFlightPhase::Offered;
-	Offer->ArrivesAt = Now + LeadTimeSeconds;
+	Offer->bFloorAirline = Airline.bIsFloor;
+
+	// REAL SECONDS, drained by UFlightBoard::TickOffers - see UAirlineDefinition::OfferWindowSeconds.
+	Offer->OfferWindowSeconds = Airline.OfferWindowSeconds;
+	Offer->OfferSecondsLeft = Airline.OfferWindowSeconds;
+
+	// THE CONTRACT, fixed now so the row can show it before the player decides: the aeroplane
+	// is airborne again within lead + taxi allowance + turnaround x slack of the accept.
+	Offer->LeadTimeSeconds = Airline.LeadTimeSeconds;
+	Offer->ContractSeconds = Airline.LeadTimeSeconds + TaxiAllowanceSeconds
+		+ Chosen.Airframe.TurnaroundSeconds * Airline.TurnaroundSlack;
 
 	// CARRIED WITH THE FLIGHT, not left for the board's own field to answer later - see
 	// UFlight::ApproachFocus.
 	Offer->ApproachFocus = Focus;
-
-	// CLAMPED, not trusted. An offer that outlived its own ETA would sit in the inbox while
-	// the aeroplane it describes was already on the approach, and accepting it would hold a
-	// stand for something landing in the past.
-	Offer->ExpiresAt = Now + FMath::Min(OfferLifeSeconds, LeadTimeSeconds);
 
 	// PRICED AT THE OFFER, not at touchdown, so the inbox row shows what accepting it is worth
 	// and the player's fee lever moves NEW offers only. A fee computed on landing would let
@@ -107,25 +235,19 @@ UFlight* UOfferGenerator::MakeOffer(const URoadNetwork& Network, const FVector2D
 	return Offer;
 }
 
-double UOfferGenerator::OfferIntervalSeconds(const TArray<UAirlineDefinition*>& Airlines,
-	double DemandFactor)
+FString UOfferGenerator::MakeCallsign(const FString& Prefix, FRandomStream& Stream)
 {
-	double OffersPerDay = 0.0;
-	for (const UAirlineDefinition* Airline : Airlines)
+	if (Prefix.Contains(TEXT("?")))
 	{
-		OffersPerDay += Airline != nullptr ? Airline->OffersPerDay : 0.0;
+		FString Out = Prefix;
+		for (TCHAR& Char : Out.GetCharArray())
+		{
+			if (Char == TEXT('?'))
+			{
+				Char = static_cast<TCHAR>(TEXT('A') + Stream.RandHelper(26));
+			}
+		}
+		return Out;
 	}
-
-	// THE FEE'S ONLY COST, AND IT IS PAID HERE. A higher landing fee scales this down, so the
-	// player earns more per aeroplane and sees fewer of them. See UPricing::Elasticity for why
-	// that trade is deliberately even until the airport is capacity-bound: the lever is meant
-	// to pose "am I full?", not to have a best setting.
-	//
-	// Clamped at zero rather than trusted: a negative factor would turn the whole sum negative
-	// and fall through the "never" branch below looking like an airport nobody flies to.
-	OffersPerDay *= FMath::Max(DemandFactor, 0.0);
-	// ZERO IS "NEVER", not a divide-by-zero to guard against a caller forgot to. An airport
-	// with no airline offering anything is a real, reportable state - UOpsRuntime::Attach
-	// warns about it rather than scheduling a callback that would never fire usefully.
-	return OffersPerDay > 0.0 ? USimClock::SecondsPerDay / OffersPerDay : 0.0;
+	return FString::Printf(TEXT("%s %d"), *Prefix, 100 + Stream.RandHelper(900));
 }

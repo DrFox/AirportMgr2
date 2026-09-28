@@ -14,6 +14,7 @@
 #include "Model/Vehicle.h"
 #include "Model/VehicleFit.h"
 #include "Model/SimClock.h"
+#include "Model/StandAdmission.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/StandBox.h"
 
@@ -107,6 +108,28 @@ FFuelDemand* UFuelService::FindByTruck(int32 TruckId)
 {
 	return TruckId == 0 ? nullptr : Demands.FindByPredicate(
 		[TruckId](const FFuelDemand& Demand) { return Demand.TruckId == TruckId; });
+}
+
+bool UFuelService::CouldServe(const URoadNetwork& Network, const FAirframe& Airframe) const
+{
+	const TArray<FEntityInstance>& Entities = Network.GetEntities();
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		const FEntityInstance& Stand = Entities[Index];
+		// THE SAME TWO FILTERS UStandAllocator::Reserve applies, so "a stand it would take" means
+		// the stand the accept would actually hold.
+		if (!Stand.IsStandCandidate() || !StandAdmission::Judge(Stand, Airframe).IsAdmitted())
+		{
+			continue;
+		}
+		const FDepotChoice Choice = ChooseDepot(Network, FuelAnchorOf(Network, Network.EntityIdAt(Index)),
+			VehicleFor(Stand), DesignVehicleFor(Stand));
+		if (Choice.Why == EFuelRefusal::None)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 FGuidelineNodeId UFuelService::FuelAnchorOf(const URoadNetwork& Network, FEntityInstanceId Stand)

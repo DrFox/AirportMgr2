@@ -70,9 +70,13 @@ aircraft is never offered. Examples: runway length, runway surface, stand size c
 a Control building of a given tier, an instrument approach.
 
 **Service demands** are what the aircraft wants once on the ground. Each is *required* or
-*optional*. Missing a required service means no offer. Missing an optional one means the
-aircraft still comes and that fee goes unpaid. Examples: refuelling, goods handling,
-passenger handling, pushback.
+*optional*. Missing an optional one means the aircraft still comes and that fee goes
+unpaid. Examples: refuelling, goods handling, passenger handling, pushback.
+
+*Revised 2026-09-28* (spec `2026-09-28-offers-and-demand-design.md`): a missing *required*
+service no longer blocks the offer. The offer is made, shows the service as unavailable, and
+the player may accept it anyway - the flight's service score (chunk C) pays for it. The
+choice between taking it badly now and building first is the game; a silent filter hid it.
 
 A service demand is abstract ("needs fuel"). When the aircraft reaches its stand it becomes
 one or more **jobs**, which are concrete ("deliver 500 litres to stand 5 before 14:20").
@@ -124,6 +128,15 @@ what the airport can admit, weights by reputation and range, and posts offers. A
 capable airport gets a busier inbox. Reputation moves only on outcomes: on-time departures
 up; late or unpaid optional services down; a diversion sharply down. Below a floor the
 airline stops offering until a recovery period passes.
+
+*Revised 2026-09-28* (spec `2026-09-28-offers-and-demand-design.md`): each airline has a
+24-hour **demand curve**, so the day has busy periods and lulls, sampled every game minute
+and scaled live by the landing fee. Offers stand for a window of **real** seconds, set per
+airline, that pause stops and game speed does not. The inbox holds at most eight; an offer
+beyond that is dropped and counted. A **flying club** of private owners is the airport's
+floor: it offers in daylight whatever the fee and never stops coming, so the airport is never
+shunned outright - the per-airline floor above applies to every other airline. Declining is
+free; an offer left to lapse records why, for reputation to weigh.
 
 Once research unlocks it, an **airline contract** replaces the inbox for that airline: a
 fixed number of flights per day, a fixed service set, fixed fees and a fine per late

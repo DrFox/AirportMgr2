@@ -122,14 +122,31 @@ public:
 	 */
 	EArrivalRefusal LandNear(const FVector2D& Focus, const FAirframe* Override);
 
-	/** True once Attach has armed the repeating offer schedule. False if no airline in the
-	 *  catalog offers anything, or before Attach - see Attach's own comment. */
+	/** True once Attach has armed the generator's minute tick. False before Attach. */
 	bool HasOfferScheduledForTest() const { return OfferHandle != INDEX_NONE; }
 
-	/** The GAME-seconds interval the offer schedule actually fires at, or 0.0 if it was never
-	 *  armed - see HasOfferScheduledForTest. Lets a test tick exactly one cadence rather than
-	 *  guessing a real-seconds delta long enough to cover an interval it cannot otherwise see. */
-	double OfferIntervalSecondsForTest() const { return LastOfferIntervalSeconds; }
+	/**
+	 * Cancel and re-book the two repeaters - the generator's minute tick and the daily upkeep -
+	 * from the clock's CURRENT Now.
+	 *
+	 * AFTER A LOAD, and not optional (review I1, 2026-09-28): USimClock does not save its queue
+	 * and books absolute due times, so repeaters armed at Attach still pointed at the pre-load
+	 * time. A later save fired the minute tick once per missed minute in one frame; an earlier
+	 * one went silent until the clock caught up. Attach books them through this too, so there is
+	 * one place that knows the two exist.
+	 * ENFORCED BY: AirportOps.Present.OffersRearmOnLoad
+	 */
+	void RearmRepeatingSchedules();
+
+	/** How many times OfferTick has run. For the load re-arm test. */
+	int32 OfferTicksForTest() const { return OfferTicks; }
+
+	/**
+	 * Every airline with its fleet resolved to airframes, built once at Attach. What the
+	 * generator ticks over and what the inbox's demand strip samples - one list, so the strip
+	 * cannot show an airline the generator does not have.
+	 */
+	const TArray<FAirlineOffers>& GetAirlineOffers() const { return AirlineOffers; }
 
 private:
 	/**
@@ -171,14 +188,17 @@ private:
 	 */
 	void PostDailyUpkeep();
 
-	/** The interval OfferHandle was armed with. See OfferIntervalSecondsForTest. */
-	double LastOfferIntervalSeconds = 0.0;
+	/** See OfferTicksForTest. A session counter, not saved. */
+	int32 OfferTicks = 0;
+
+	/** See GetAirlineOffers. Not a UPROPERTY: the airlines are the catalog's to hold. */
+	TArray<FAirlineOffers> AirlineOffers;
 
 	/** The catalog's airlines, flattened into airframes Model/ may read. See the .cpp. */
-	TArray<FOfferCandidate> CandidatesFromCatalog() const;
+	TArray<FAirlineOffers> AirlineOffersFromCatalog() const;
 
-	/** One offer, on the clock. Bound in Attach. */
-	void GenerateOffer();
+	/** One game minute of the generator, on the clock. Bound in Attach. */
+	void OfferTick();
 
 	FDelegateHandle PhaseHandle;
 	FDelegateHandle RefusalHandle;

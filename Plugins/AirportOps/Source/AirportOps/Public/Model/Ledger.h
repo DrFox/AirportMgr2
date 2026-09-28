@@ -160,7 +160,7 @@ public:
 	 * MOVED FROM UOpsRuntime (issue #191): computing the figure needs BuildCost::DailyUpkeep,
 	 * which lives in Build/ and which Model/ may not include (Check-Architecture rule 1), so
 	 * the runtime still resolves Base itself - this is just where POSTING it belongs, the same
-	 * split UOpsRuntime::CandidatesFromCatalog draws for Entities/.
+	 * split UOpsRuntime::AirlineOffersFromCatalog draws for Entities/.
 	 *
 	 * Base <= 0 skips the CHARGE - an airport with nothing standing on it costs nothing to
 	 * own, and a zero entry every day would be noise in the one place the player goes to find
