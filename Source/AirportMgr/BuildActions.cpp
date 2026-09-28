@@ -288,6 +288,30 @@ namespace
 			Out.Add(MoveTemp(Grid));
 		}
 
+		// WHICH WAY THE GRID LIES: Follow turns it to what is snapped to, World keeps it square
+		// to the map (grid-follows-snap design, 2026-09-28). Lit while following.
+		//
+		// THE ONE SNAP TOGGLE WITH A KEY - H, a dated exception to the NO KEYS rule above. That
+		// rule's own reason is that a toggle "is set once rather than reached for mid-drag"; this
+		// one is reached for mid-drag (lay a stand square to the map beside a diagonal taxiway),
+		// and the player asked for a key. H was unbound in both drivers on 2026-09-28.
+		// ENFORCED BY: AirportMgr.Actions.GridOrientButtonIsOnH, and the one-list check's
+		// duplicate-chord assertion for a clash.
+		{
+			FBuildAction Orient = Make(TEXT("snap.gridorient"), EActionSection::Snap, LOCTEXT("SnapGridOrient", "Grid follows"),
+				EKeys::H, false,
+				[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGridOrientation(); },
+				[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGridFollowing(); },
+				Always);
+			Orient.DynamicLabel = [](const FBuildActionContext& Ctx)
+			{
+				return Ctx.Controller.IsGridFollowing()
+					? LOCTEXT("SnapGridFollow", "Grid: follow")
+					: LOCTEXT("SnapGridWorld", "Grid: world");
+			};
+			Out.Add(MoveTemp(Orient));
+		}
+
 		// THE SECOND AXIS. Before 2026-09-20 these sat in the same list as the rows above, which
 		// is why "Runway" read as a source you could switch off for every relation and was not -
 		// see SnapGuide::EReference.

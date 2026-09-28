@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Solve/GridSnap.h"
 #include "Solve/GuideArbiter.h"
 #include "Tool/SnapGuideSettings.h"
 
@@ -702,18 +703,20 @@ public:
 		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const;
 
 	/**
-	 * The world grid applied to an arbitrated result - precedence A of the world-grid-snap
-	 * design, see the .cpp. PUBLIC AND STATIC because FBuildSession::MakeContext needs it for an
-	 * airport with no network yet, where there is nothing for Resolve to arbitrate but the grid
-	 * still applies to the first click. One rule, two callers, no second copy.
+	 * The grid applied to an arbitrated result - precedence A of the world-grid-snap design, see
+	 * the .cpp. PUBLIC AND STATIC because FBuildSession::MakeContext calls it, AFTER Resolve: the
+	 * frame it takes depends on which guide won (grid-follows-snap design), so the grid can no
+	 * longer be applied inside Resolve. One rule, one caller, for a network or none.
 	 */
-	static void ApplyGrid(SnapGuide::FResult& Result, const FVector2D& Cursor, double StepUu);
+	static void ApplyGrid(SnapGuide::FResult& Result, const FVector2D& Cursor, const GridSnap::FGridFrame& Frame);
 
 	/**
 	 * Every source's candidates, arbitrated, with Previous carrying the flicker rule.
 	 *
 	 * Previous is the caller's business to store: FBuildSession holds it, because
 	 * IBuildTool::BuildPreview and BuildReadout are both const and neither could.
+	 *
+	 * NO GRID - since 2026-09-28 the caller applies it, with ApplyGrid, once it knows the frame.
 	 */
 	SnapGuide::FResult Resolve(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		const FVector2D& Cursor, const SnapGuide::FResult& Previous,

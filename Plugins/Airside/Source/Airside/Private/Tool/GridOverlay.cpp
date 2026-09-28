@@ -6,7 +6,7 @@
 
 void GridOverlay::Describe(const FToolContext& Context, IToolPreviewSink& Sink)
 {
-	if (Context.GridStepUu <= 0.0 || Context.GridOverlayRadiusUu <= 0.0)
+	if (!Context.GridFrame.IsOn() || Context.GridOverlayRadiusUu <= 0.0)
 	{
 		return;
 	}
@@ -16,16 +16,16 @@ void GridOverlay::Describe(const FToolContext& Context, IToolPreviewSink& Sink)
 	// member because this is a free function with no instance to own it - and game-thread only,
 	// as both callers are.
 	static TArray<GridSnap::FPiece> Pieces;
-	GridSnap::PiecesInDisc(Context.GuidedCursor(), Context.GridOverlayRadiusUu, Context.GridStepUu, Pieces);
+	GridSnap::PiecesInDisc(Context.GuidedCursor(), Context.GridOverlayRadiusUu, Context.GridFrame, Pieces);
 
 	// MEASURED, NOT ASSUMED: the piece count once per step change, so the design's estimate can
 	// be read off the log rather than trusted.
 	static double LoggedStep = 0.0;
-	if (LoggedStep != Context.GridStepUu)
+	if (LoggedStep != Context.GridFrame.StepUu)
 	{
-		LoggedStep = Context.GridStepUu;
+		LoggedStep = Context.GridFrame.StepUu;
 		UE_LOG(LogAirside, Log, TEXT("Grid overlay: %d pieces at %.0f m, radius %.0f m"),
-			Pieces.Num(), Context.GridStepUu / 100.0, Context.GridOverlayRadiusUu / 100.0);
+			Pieces.Num(), Context.GridFrame.StepUu / 100.0, Context.GridOverlayRadiusUu / 100.0);
 	}
 
 	for (const GridSnap::FPiece& Piece : Pieces)

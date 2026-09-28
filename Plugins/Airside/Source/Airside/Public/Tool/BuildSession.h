@@ -296,6 +296,7 @@ struct FBuildSessionTunables
 			&& GuideSources.bApron == Other.GuideSources.bApron
 			&& GuideSources.bStand == Other.GuideSources.bStand
 			&& GuideSources.GridStep == Other.GuideSources.GridStep
+			&& GuideSources.GridOrientation == Other.GuideSources.GridOrientation
 			&& GuideSources.bWorld == Other.GuideSources.bWorld
 			&& Limits.MinSegmentLength == Other.Limits.MinSegmentLength
 			&& Limits.MinTurnDegrees == Other.Limits.MinTurnDegrees
@@ -636,6 +637,18 @@ private:
 	 * earned it and then be HELD into the next one by the hysteresis rule itself.
 	 */
 	mutable SnapGuide::FResult LastGuide;
+
+	/**
+	 * THE LAST FRAME A FOLLOW GRID TURNED TO, held while nothing is snapped - GridFrameSource::
+	 * Resolve owns the rule. Beside LastGuide and for its reasons: one copy for both drivers,
+	 * mutable because MakeContext is const. NOT cleared with the guide: the held frame is the
+	 * point of Follow, and Alt releasing must find the grid where the player left it.
+	 * Starts as the world grid.
+	 */
+	mutable GridSnap::FGridFrame HeldGridFrame;
+
+	/** The frame last logged, so "Grid frame ->" prints once per change, not once per tick. */
+	mutable GridSnap::FGridFrame LoggedGridFrame;
 
 	/** See RecordPlaneHit/LastPlaneHit. mutable for the same reason Selection is. */
 	mutable FVector2D LastPlaneHitValue = FVector2D::ZeroVector;

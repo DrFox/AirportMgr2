@@ -110,3 +110,8 @@ void FSnapGuideSettings::CycleGridStep()
 	case EGridStep::TenMetres:  GridStep = EGridStep::Off;        return;
 	}
 }
+
+void FSnapGuideSettings::ToggleGridOrientation()
+{
+	GridOrientation = GridOrientation == EGridOrientation::Follow ? EGridOrientation::World : EGridOrientation::Follow;
+}
