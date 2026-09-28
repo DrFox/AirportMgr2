@@ -694,6 +694,15 @@ bool FTaxiwayStripSegmentJudgeTest::RunTest(const FString&)
 		const FVector2D To(20000.0, 0.0);
 		const FStripVerdict V = JudgeSegment(*F.Net, Shape({ 10000.0, 0.0 }, To, 1200.0), true, AtNode(*F.Net, F.E), Free(To));
 		TestFalse(FString::Printf(TEXT("a taxiway continuing straight on is allowed (%s)"), *V.Text), V.bRefused);
+
+		// A BEND AT THE DEAD END, 45 degrees off straight: it heads away from the only arm there,
+		// so it runs along no strip. The plan's 150-degree band refused it while admitting a 90.
+		const FVector2D Bent = FVector2D(10000.0, 0.0) + Dir(45.0) * 10000.0;
+		const FStripVerdict B = JudgeSegment(*F.Net, Shape({ 10000.0, 0.0 }, Bent, 1200.0), true, AtNode(*F.Net, F.E), Free(Bent));
+		TestFalse(FString::Printf(TEXT("a taxiway chained on with a 45-degree bend is allowed (%s)"), *B.Text), B.bRefused);
+		const FVector2D Back = FVector2D(10000.0, 0.0) + Dir(160.0) * 10000.0;
+		const FStripVerdict R = JudgeSegment(*F.Net, Shape({ 10000.0, 0.0 }, Back, Road), false, AtNode(*F.Net, F.E), Free(Back));
+		TestTrue(TEXT("but one doubling back 20 degrees off its arm is refused"), R.bRefused);
 	}
 	{
 		// REVIEW FOCUS 2: a node where two taxiways join - the road must meet EACH at an allowed

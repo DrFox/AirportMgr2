@@ -188,6 +188,20 @@ const FGuidelineEdge* ExitArcTurnBetween(const URoadNetwork& Net, FGuidelineNode
 	return nullptr;
 }
 
+bool TestTool::ConnectUnjudged(ARoadNetworkActor& Actor, int32 FromIndex, int32 ToIndex, ERoadKind Kind)
+{
+	URoadProfile* Profile = Actor.ResolveProfileFor(Kind, INDEX_NONE);
+	FRoadNodeId From, To;
+	if (Profile == nullptr || Actor.Network == nullptr
+		|| !Actor.MakeLiveNodeId(FromIndex, From) || !Actor.MakeLiveNodeId(ToIndex, To))
+	{
+		return false;
+	}
+	const bool bLaid = Actor.Network->AddStraightSegment(From, To, Profile).IsSet();
+	Actor.RebuildMesh();
+	return bLaid;
+}
+
 namespace TestGuide
 {
 /** An anchor with no reference and no points, so ONLY the network sources answer. */

@@ -1429,7 +1429,9 @@ bool FAdoptNetworkHidesGhostTest::RunTest(const FString& Parameters)
 
 		const int32 Absorb = Actor->PlaceNode(FVector2D(5.0, 5.0));
 		const int32 Far2 = Actor->PlaceNode(FVector2D(100.0, 1.0));
-		if (!TestTrue(TEXT("Absorb's arm connects"), Actor->ConnectNodes(Absorb, Far2))) { return false; }
+		// OVER KEEP'S ARM BY DESIGN, so inside its clearance strip - unjudged.
+		// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+		if (!TestTrue(TEXT("Absorb's arm connects"), TestTool::ConnectUnjudged(*Actor, Absorb, Far2))) { return false; }
 
 		ShowGhostOver(*Actor, Keep, FVector2D(50.0, 50.0));
 		if (!TestTrue(TEXT("the ghost shows before the merge"),

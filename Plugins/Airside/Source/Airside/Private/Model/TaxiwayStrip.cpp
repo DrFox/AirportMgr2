@@ -307,17 +307,18 @@ namespace TaxiwayStrip
 					Met.AddUnique(Arm);
 					if (Ignore.Contains(Arm) || !HasStrip(Network, Arm)) { continue; }
 					// PER ARM (Review Focus 2): at a node where two taxiways join, a road square
-					// to one can be 15 degrees off the other and run along ITS strip. Straight on
-					// (>= 150) is a meeting too (plan ruling 3) - else no taxiway could be lengthened.
+					// to one can be 15 degrees off the other and run along ITS strip. At least
+					// MeetMinDegrees from every arm - see its header for why there is no
+					// separate straight-on band (a dead end's bend heads away from its arm).
 					const double Deg = DegreesBetween(Out, Network.GetOutgoingTangent(Arm, End.Node));
-					if ((Deg >= MeetMinDegrees && Deg <= MeetMaxDegrees) || Deg >= ContinueMinDegrees)
+					if (Deg >= MeetMinDegrees)
 					{
 						Exempt.AddUnique(Arm);
 						continue;
 					}
 					Verdict.bRefused = true;
 					Verdict.Text = FString::Printf(
-						TEXT("meets a Code %s taxiway at %d degrees, inside its clearance strip - join within 30 degrees of square, or straight on"),
+						TEXT("meets a Code %s taxiway at %d degrees, inside its clearance strip - join within 30 degrees of square"),
 						LetterOf(Network, Arm), FMath::RoundToInt(Deg));
 					return false;
 				}

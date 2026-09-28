@@ -70,7 +70,9 @@ bool FDescribeIncomingArmTest::RunTest(const FString& Parameters)
 
 	// THREE ARMS: a third road onto B. Still no reference - the "more than one" branch, not
 	// just the "exactly two" one.
-	const int32 D = Actor->PlaceNode(FVector2D(-6000.0, -6000.0));
+	// NORTH-EAST of B, 135 degrees from both arms: at (-6000, -6000) it ran 45 degrees back
+	// along A-B, which the clearance strip refuses (stage 3, 2026-09-29). Only the count matters.
+	const int32 D = Actor->PlaceNode(FVector2D(12000.0, 6000.0));
 	Actor->ConnectNodes(B, D);
 	Network = Actor->GetNetwork();
 	BNode = Network->GetNode(BId);

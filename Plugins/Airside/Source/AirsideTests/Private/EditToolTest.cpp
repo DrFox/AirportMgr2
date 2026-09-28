@@ -482,7 +482,9 @@ bool FEditModeDropOnNodeMergesTest::RunTest(const FString& Parameters)
 	Actor->ConnectNodes(A, B);
 	const int32 C = Actor->PlaceNode(FVector2D(600.0, 0.0));
 	const int32 D = Actor->PlaceNode(FVector2D(9600.0, 0.0));
-	Actor->ConnectNodes(C, D);
+	// 6 m past A-B's end, unjoined, so in its strip - two runs about to be joined BY this drop.
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+	TestTool::ConnectUnjudged(*Actor, C, D);
 
 	const FVector2D CPosition = Actor->GetNetwork()->GetNodes()[C].Position;
 

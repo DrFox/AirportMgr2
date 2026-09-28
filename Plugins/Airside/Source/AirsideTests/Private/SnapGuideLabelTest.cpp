@@ -124,7 +124,8 @@ bool FSnapGuideLabelsMatchTheOldStringsTest::RunTest(const FString& Parameters)
 		GapTarget->ConnectNodes(A1, A2, ERoadKind::Taxiway, INDEX_NONE);
 		const int32 B1 = GapTarget->PlaceNode(FVector2D(-10000.0, 4000.0));
 		const int32 B2 = GapTarget->PlaceNode(FVector2D(10000.0, 4000.0));
-		GapTarget->ConnectNodes(B1, B2, ERoadKind::Taxiway, INDEX_NONE);
+		// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+		TestTool::ConnectUnjudged(*GapActor, B1, B2);
 		if (!TestTrue(TEXT("the network exists"), GapActor->Network != nullptr)) { return false; }
 
 		const FGuideAnchor Anchor = TestGuide::BareAnchor(FVector2D(0.0, 5000.0));

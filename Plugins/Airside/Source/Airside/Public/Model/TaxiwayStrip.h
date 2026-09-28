@@ -113,10 +113,19 @@ namespace TaxiwayStrip
 		double Depth = 0.0;
 	};
 
-	/** Meets within 30 degrees of square (60..120 deg), or continues straight on (>= 150 deg). */
+	/**
+	 * Meets within 30 degrees of square. PER ARM at a node: at least MeetMinDegrees from EVERY
+	 * strip-bearing arm there, i.e. never running back along one. Across a through-taxiway
+	 * (two opposite arms) that IS the 60..120 band; at a split, the band is asked directly.
+	 *
+	 * NO SEPARATE "STRAIGHT ON" BAND, unlike the plan's 150-degree ruling 3 (ruled 2026-09-29,
+	 * while implementing): at a taxiway's DEAD END the only arm is behind the new segment, so
+	 * 120..150 is a bend heading AWAY from it, not a diagonal along its strip - and the plan's
+	 * bands refused a taxiway chained on with a 45-degree bend while admitting a 90-degree one.
+	 * Straight on (180) passes this rule as it passed ruling 3's.
+	 */
 	inline constexpr double MeetMinDegrees = 60.0;
 	inline constexpr double MeetMaxDegrees = 120.0;
-	inline constexpr double ContinueMinDegrees = 150.0;
 
 	/**
 	 * May a road or taxiway of this shape be laid with these ends? Refuses when its pavement

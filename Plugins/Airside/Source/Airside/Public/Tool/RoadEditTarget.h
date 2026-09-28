@@ -185,6 +185,21 @@ public:
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
 		EPavement Surface) = 0;
 
+	/**
+	 * Why a road or taxiway from FromIndex to the snapped point To, at this Kind and width,
+	 * may not be laid - inside a taxiway's clearance strip it does not meet square, or (a
+	 * taxiway) with its own strip over something built. Empty = allowed. The strip judge only;
+	 * RoadPlacement::Validate still owns the geometric rules and ConnectNodes the price.
+	 *
+	 * THE ONE EVALUATOR, WhyStandRefused's pattern for roads (strip stage 3): the draw tool's
+	 * readout, its ghost, its click and ConnectNodes all ask this, so the preview can never
+	 * approve what the commit refuses. A SNAP, not a node index, for To: a Segment snap names
+	 * the ORIGINAL segment before the click splits it, which is what lets the preview (unsplit)
+	 * and the commit (split, a Node) give one answer.
+	 * ENFORCED BY: Airside.Tool.RoadRefusedInsideStrip
+	 */
+	virtual FString WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const = 0;
+
 	/** Tarmac - what every caller before the surface row meant. */
 	bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex)
 	{

@@ -129,7 +129,8 @@ bool FOffsetAndParallelNameOneRoadTest::RunTest(const FString& Parameters)
 	// The neighbour, 4000 uu south of the near taxiway - the gap Offset has to copy.
 	const int32 FarWest = Target->PlaceNode(FVector2D(-20000.0, -4000.0));
 	const int32 FarEast = Target->PlaceNode(FVector2D(20000.0, -4000.0));
-	Target->ConnectNodes(FarWest, FarEast, ERoadKind::Taxiway, INDEX_NONE);
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+	TestTool::ConnectUnjudged(*Actor, FarWest, FarEast);
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
 
 	// THE ORIGIN IS NEAREST THE FIRST TAXIWAY. Each relation is asked SEPARATELY, and the

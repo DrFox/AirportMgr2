@@ -46,6 +46,19 @@ namespace TestTool
 	 */
 	FToolContext ContextAt(IRoadEditTarget& Target, const FVector2D& Where,
 		ERoadSnapKind Kind = ERoadSnapKind::Free, double SnapRadius = 150.0);
+
+	/**
+	 * A straight segment between two live nodes STRAIGHT INTO THE MODEL, at the kind's default
+	 * profile, then one rebuild - past ConnectNodes and so past the clearance-strip judge
+	 * (strip stage 3, 2026-09-29).
+	 *
+	 * FOR LAYOUTS THAT PREDATE THE STRIP, which the game still has to answer over (plan ruling
+	 * 4: M_Test's roads inside strips stay until stage 6 restricts their taxiway). Snap-guide,
+	 * stand-grid and edit-tool fixtures lay parallel taxiways 30-40 m apart or a road 2 m off
+	 * one; what they measure is the guide or the gesture, not whether the layout may be built.
+	 * A test about PLACEMENT never uses this - it goes through ConnectNodes, and the refusal.
+	 */
+	bool ConnectUnjudged(ARoadNetworkActor& Actor, int32 FromIndex, int32 ToIndex, ERoadKind Kind = ERoadKind::Taxiway);
 }
 
 /**

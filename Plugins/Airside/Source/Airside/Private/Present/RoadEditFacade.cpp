@@ -13,6 +13,7 @@
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
+#include "Model/TaxiwayStrip.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/RoadGeom.h"
@@ -568,6 +569,48 @@ FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoa
 		FVector2D::Distance(Network->GetNodes()[FromIndex].Position, To), Surface);
 }
 
+FString URoadEditFacade::WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	FRoadNodeId From;
+	if (Network == nullptr || !MakeLiveNodeId(FromIndex, From))
+	{
+		return FString();
+	}
+	// THROUGH THE ACTOR'S FORWARDER, QuoteForConnect's reason: this is const and the facade's
+	// own ResolveProfileFor is not. No profile = nothing to judge; ConnectNodes refuses that
+	// case itself, with its own message.
+	const URoadProfile* Profile = Actor().ResolveProfileFor(Kind, WidthIndex);
+	if (Profile == nullptr)
+	{
+		return FString();
+	}
+
+	TaxiwayStrip::FSegmentShape Shape;
+	Shape.A = Network->GetNodes()[From.Index].Position;
+	Shape.B = To.Position;
+	Shape.Control = (Shape.A + Shape.B) * 0.5;   // straight - AddStraightSegment's own control
+	Shape.HalfWidth = Profile->GetMaxHalfWidth();
+
+	TaxiwayStrip::FSegmentEnd AtA;
+	AtA.Node = From;
+	AtA.At = Shape.A;
+	TaxiwayStrip::FSegmentEnd AtB;
+	AtB.At = To.Position;
+	if (To.Kind == ERoadSnapKind::Node)
+	{
+		AtB.Node = To.Node;
+	}
+	else if (To.Kind == ERoadSnapKind::Segment)
+	{
+		AtB.Segment = To.Segment;
+	}
+
+	const TaxiwayStrip::FStripVerdict Verdict =
+		TaxiwayStrip::JudgeSegment(*Network, Shape, Kind == ERoadKind::Taxiway, AtA, AtB);
+	return Verdict.bRefused ? Verdict.Text : FString();
+}
+
 bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex,
 	EPavement Surface)
 {
@@ -623,6 +666,24 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectNodes refused: %s is not offered by profile %s"),
 			Pavement::Name(Surface), *Chosen->GetName());
 		return false;
+	}
+
+	// INSIDE A TAXIWAY'S CLEARANCE STRIP (strip stage 3), BEFORE THE PRICE, so a refused road
+	// is never quoted. THE SAME WhySegmentRefused the draw tool's readout and click ask - a
+	// Node snap at To, which is what the click's Segment snap has become by now (its split made
+	// the node), so preview and commit judge one geometry.
+	// ENFORCED BY: Airside.Tool.RoadRefusedInsideStrip
+	{
+		FRoadSnapResult AtTo;
+		AtTo.Kind = ERoadSnapKind::Node;
+		AtTo.Node = To;
+		AtTo.Position = Owner.Network->GetNodes()[To.Index].Position;
+		const FString Why = WhySegmentRefused(FromIndex, AtTo, Kind, WidthIndex);
+		if (!Why.IsEmpty())
+		{
+			UE_LOG(LogRoadMesh, Log, TEXT("ConnectNodes refused: %s"), *Why);
+			return false;
+		}
 	}
 
 	// PRICED AND REFUSED BEFORE THE SCOPE, not at commit. An FRoadEditScope that is not

@@ -21,6 +21,14 @@ namespace
 		Target->ConnectNodes(A, B, ERoadKind::Taxiway, INDEX_NONE);
 	}
 
+	/** LayTaxiway past the strip judge - see TestTool::ConnectUnjudged for when that is honest. */
+	void LayTaxiwayUnjudged(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To)
+	{
+		const int32 A = Actor->PlaceNode(From);
+		const int32 B = Actor->PlaceNode(To);
+		TestTool::ConnectUnjudged(*Actor, A, B);
+	}
+
 	FGuideAnchor AnchorAt(const FVector2D& Origin)
 	{
 		FGuideAnchor Anchor;
@@ -47,7 +55,8 @@ bool FOffsetGuideMatchesTheExistingGapTest::RunTest(const FString& Parameters)
 
 	// Two east-west taxiways, 4000 uu (40 m) apart.
 	LayTaxiway(Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0));
-	LayTaxiway(Actor, FVector2D(-10000.0, 4000.0), FVector2D(10000.0, 4000.0));
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+	LayTaxiwayUnjudged(Actor, FVector2D(-10000.0, 4000.0), FVector2D(10000.0, 4000.0));
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
 
 	// A drag just north of the SECOND road: its nearest road is the one at y = 4000, and the
@@ -120,7 +129,8 @@ bool FOffsetGuideIgnoresACrossingRoadTest::RunTest(const FString& Parameters)
 	// wrong rule, which only a deliberate mutation showed. This road's nearest point is
 	// (1000, -1000): a gap of 1000, so nothing but the parallel test can reject it.
 	LayTaxiway(Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0));
-	LayTaxiway(Actor, FVector2D(0.0, -2000.0), FVector2D(4000.0, 2000.0));
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+	LayTaxiwayUnjudged(Actor, FVector2D(0.0, -2000.0), FVector2D(4000.0, 2000.0));
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
 
 	const FOffsetGuideSource Source;
@@ -136,7 +146,7 @@ bool FOffsetGuideIgnoresACrossingRoadTest::RunTest(const FString& Parameters)
 	// fussiness: at 1500 the two roads are EQUIDISTANT, so which one becomes the reference is
 	// decided by the network's iteration order, and the leg would be asserting against an
 	// accident. At 3500 the reference is the road at 3000 and there is one answer.
-	LayTaxiway(Actor, FVector2D(-10000.0, 3000.0), FVector2D(10000.0, 3000.0));
+	LayTaxiwayUnjudged(Actor, FVector2D(-10000.0, 3000.0), FVector2D(10000.0, 3000.0));
 	TArray<SnapGuide::FCandidate> WithNeighbour;
 	Source.Propose(*Actor->Network, AnchorAt(FVector2D(0.0, 3500.0)),
 		FVector2D(0.0, 3500.0), WithNeighbour);
@@ -171,7 +181,7 @@ bool FOffsetGuideNeverProposesTheNeighboursLineTest::RunTest(const FString& Para
 	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
 
 	LayTaxiway(Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0));
-	LayTaxiway(Actor, FVector2D(-10000.0, 3000.0), FVector2D(10000.0, 3000.0));
+	LayTaxiwayUnjudged(Actor, FVector2D(-10000.0, 3000.0), FVector2D(10000.0, 3000.0));
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
 
 	// BETWEEN THEM, and nearer the northern one, so the reference is unambiguous and the
@@ -231,7 +241,8 @@ bool FOffsetGuideReachesWhatTheCursorIsNearTest::RunTest(const FString& Paramete
 	Target->ConnectNodes(NearWest, NearEast, ERoadKind::Taxiway, INDEX_NONE);
 	const int32 FarWest = Target->PlaceNode(FVector2D(-20000.0, -4000.0));
 	const int32 FarEast = Target->PlaceNode(FVector2D(20000.0, -4000.0));
-	Target->ConnectNodes(FarWest, FarEast, ERoadKind::Taxiway, INDEX_NONE);
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+	TestTool::ConnectUnjudged(*Actor, FarWest, FarEast);
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
 
 	const FOffsetGuideSource Source;

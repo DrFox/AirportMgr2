@@ -252,6 +252,14 @@ public:
 	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const override;
 
 	/**
+	 * See IRoadEditTarget::WhySegmentRefused. Builds the straight shape a click lays (ConnectNodes
+	 * is straight only), at the half-width of the profile THIS Kind and WidthIndex resolve to -
+	 * not PlacementLimits.NewRoadHalfWidth, the taxiway default whatever is laid - and asks
+	 * TaxiwayStrip::JudgeSegment.
+	 */
+	virtual FString WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const override;
+
+	/**
 	 * The one quote a drawn stand is priced at: BuildCost::ForEntity(Definition) plus the pad
 	 * it sits on (QuoteForApron(Outline, Pavement)), combined into one "{0} + {1}" What text -
 	 * the same shape QuoteForApron's own callers in PlaceEntityInPlot already sum by hand,

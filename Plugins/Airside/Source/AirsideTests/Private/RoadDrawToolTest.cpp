@@ -3,6 +3,8 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Model/TaxiwayStrip.h"
+#include "Profiles/RoadProfile.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/RoadDrawTool.h"
 
@@ -408,6 +410,110 @@ bool FRoadDrawLengthReadoutTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	return true;
+}
+
+/**
+ * Roads and taxiways refuse inside a taxiway's clearance strip (strip stage 3), and the
+ * tool's readout, its click and the facade's ConnectNodes give ONE answer - they all ask
+ * URoadEditFacade::WhySegmentRefused, so none can approve what another refuses.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadDrawRefusedInsideStripTest,
+	"Airside.Tool.RoadRefusedInsideStrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadDrawRefusedInsideStripTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+
+	// A TAXIWAY LAID THROUGH THE FACADE at the level's default width along y 0. Its keep-out
+	// is read back rather than typed, so a change of default width moves the fixture's
+	// expectation rather than silently clearing the road below.
+	const auto LayTaxiway = [Actor]()
+	{
+		Actor->ClearNetwork();
+		const int32 W = Actor->PlaceNode(FVector2D(-20000.0, 0.0));
+		const int32 E = Actor->PlaceNode(FVector2D(20000.0, 0.0));
+		Actor->ConnectNodes(W, E, ERoadKind::Taxiway, INDEX_NONE);
+	};
+	LayTaxiway();
+	{
+		const FRoadSegmentId Taxi = Actor->Network->SegmentIdAt(0);
+		const URoadProfile* Profile = Actor->Network->ProfileFor(Actor->Network->GetSegments()[0]);
+		const double Reach = TaxiwayStrip::StripWidthOf(*Actor->Network, Taxi)
+			+ (Profile != nullptr ? Profile->GetMaxHalfWidth() : 0.0);
+		if (!TestTrue(FString::Printf(TEXT("the default taxiway's keep-out reaches past 20 m (%.0f uu), or this proves nothing"), Reach),
+			Reach > 2500.0))
+		{
+			return false;
+		}
+	}
+
+	// 1. A ROAD ALONGSIDE, 20 m off: the readout says so, the click lays nothing, and the
+	//    facade refuses the same pair of nodes directly.
+	{
+		FRoadDrawTool Tool(ERoadKind::ServiceRoad);
+		Tool.OnClick(AtGround(Actor, FVector2D(-5000.0, 2000.0)));
+		const int32 Start = Tool.GetPendingNode();
+		if (!TestTrue(TEXT("the first click starts a chain"), Start != INDEX_NONE)) { return false; }
+
+		FCountingPreviewSink Sink;
+		Tool.BuildPreview(AtGround(Actor, FVector2D(5000.0, 2000.0)), Sink);
+		const int32 Why = Sink.Labels.IndexOfByPredicate([](const FString& L) { return L.Contains(TEXT("clearance strip")); });
+		if (TestTrue(FString::Printf(TEXT("the readout names the clearance strip (labels: %s)"), *FString::Join(Sink.Labels, TEXT(" | "))),
+			Why != INDEX_NONE))
+		{
+			TestEqual(TEXT("in the Refused style"), Sink.LabelStyle[Why], EPreviewStyle::Refused);
+		}
+
+		const int32 Before = LiveSegments(Actor);
+		Tool.OnClick(AtGround(Actor, FVector2D(5000.0, 2000.0)));
+		TestEqual(TEXT("the click lays nothing"), LiveSegments(Actor), Before);
+
+		const int32 Far = Actor->PlaceNode(FVector2D(5000.0, 2000.0));
+		FLogLineSpy Spy(TEXT("LogRoadMesh"));
+		GLog->AddOutputDevice(&Spy);
+		const bool bConnected = Actor->ConnectNodes(Start, Far, ERoadKind::ServiceRoad, 0);
+		GLog->RemoveOutputDevice(&Spy);
+		TestFalse(TEXT("ConnectNodes refuses the same road"), bConnected);
+		TestTrue(FString::Printf(TEXT("and logs why (%s)"), *FString::Join(Spy.CapturedLines, TEXT(" | "))),
+			Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("ConnectNodes refused: inside")); }));
+		TestEqual(TEXT("still nothing laid"), LiveSegments(Actor), Before);
+	}
+
+	// 2. THE SAME ROAD ENDING ON THE TAXIWAY AT A RIGHT ANGLE, by a Segment snap mid-taxiway
+	//    (Review Focus 1): the preview judges the unsplit segment, the click the split one,
+	//    and both must say yes.
+	{
+		LayTaxiway();
+		FRoadDrawTool Tool(ERoadKind::ServiceRoad);
+		Tool.OnClick(AtGround(Actor, FVector2D(8000.0, 10000.0)));
+
+		const FToolContext OnTaxiway = AtSegment(Actor, 0, FVector2D(8000.0, 0.0));
+		FCountingPreviewSink Sink;
+		Tool.BuildPreview(OnTaxiway, Sink);
+		TestFalse(FString::Printf(TEXT("the preview does not refuse a square join (labels: %s)"), *FString::Join(Sink.Labels, TEXT(" | "))),
+			Sink.LabelStyle.Contains(EPreviewStyle::Refused));
+
+		const int32 Before = LiveSegments(Actor);
+		Tool.OnClick(OnTaxiway);
+		TestEqual(TEXT("the click splits the taxiway and lays the road - two more live segments"),
+			LiveSegments(Actor), Before + 2);
+	}
+
+	// 3. THE TAXIWAY TOOL refuses a parallel taxiway 20 m away - its pavement is in the
+	//    first one's strip.
+	{
+		LayTaxiway();
+		FRoadDrawTool Tool(ERoadKind::Taxiway);
+		Tool.OnClick(AtGround(Actor, FVector2D(-5000.0, 2000.0)));
+		const int32 Before = LiveSegments(Actor);
+		Tool.OnClick(AtGround(Actor, FVector2D(5000.0, 2000.0)));
+		TestEqual(TEXT("a parallel taxiway 20 m off is refused"), LiveSegments(Actor), Before);
+	}
 	return true;
 }
 
