@@ -1,7 +1,10 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideContent.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadTraffic.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -37,7 +40,7 @@ bool FServiceRoadProfileTest::RunTest(const FString& Parameters)
 		static_cast<int32>(Forward.Direction), static_cast<int32>(EGuidelineDir::AToB));
 	TestEqual(TEXT("the other runs B to A"),
 		static_cast<int32>(Back.Direction), static_cast<int32>(EGuidelineDir::BToA));
-	TestEqual(TEXT("kerb to kerb: two 3 m lanes and two 0.6 m kerbs"), Road->GetTotalWidth(), 720.0);
+	TestEqual(TEXT("kerb to kerb: two 3 m lanes and two 1 m kerbs"), Road->GetTotalWidth(), 800.0);
 
 	// KERBS, not run-offs. The edge-treatment note: a road is kerbed and a taxiway has a
 	// paved run-off, and the difference is what tells the two apart on the ground.
@@ -58,6 +61,114 @@ bool FServiceRoadProfileTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("narrower than a taxiway - a lane, not a movement area"),
 		Road->GetTotalWidth() < 2300.0);
+	return true;
+}
+
+namespace ServiceRoadProfileTest
+{
+	/**
+	 * Walks the bands from the left edge: every boundary, the outer edges included, must sit a
+	 * whole number of metres from the centreline, because a node snaps the centreline to the
+	 * grid. An odd total fails on its outer edges alone.
+	 */
+	void AssertBandEdgesOnGrid(FAutomationTestBase& Test, const URoadProfile& Profile, const FString& Name)
+	{
+		constexpr double Metre = 100.0;
+		double Edge = -Profile.GetHalfWidthLeft();
+		Test.TestEqual(FString::Printf(TEXT("%s left edge on a grid line"), *Name),
+			FMath::Fmod(FMath::Abs(Edge), Metre), 0.0);
+		for (const FProfileBand& Band : Profile.Bands)
+		{
+			Edge += Band.Width;
+			Test.TestEqual(FString::Printf(TEXT("%s band edge at %.1f uu on a grid line"), *Name, Edge),
+				FMath::Fmod(FMath::Abs(Edge), Metre), 0.0);
+		}
+	}
+}
+
+/**
+ * EVERY BAND EDGE OF EVERY AUTHORED ROAD TIER IS ON THE 1 M GRID (2026-09-28).
+ *
+ * A node snaps the road's CENTRELINE to the world grid (GridSnap::Quantise), so a band edge is
+ * on a grid line only when its offset from the centre is a whole number of metres. The tiers
+ * were 7.2/8.2/10.2 m with 0.6 m kerbs, and a stand set back from any road's edge sat between
+ * grid lines. It is the AUTHORED ASSETS that are loaded, not MakeServiceRoadTransient, because
+ * the asset is what a player lays - build_road_profiles.py writes the figures.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadTiersOnGridTest,
+	"Airside.Content.RoadTiersOnGrid",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadTiersOnGridTest::RunTest(const FString& Parameters)
+{
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (!TestTrue(TEXT("the content set has three road tiers"),
+		Content != nullptr && Content->ServiceRoadProfiles.Num() == 3))
+	{
+		return false;
+	}
+
+	const double Expected[] = { 800.0, 1000.0, 1200.0 };
+	for (int32 Tier = 0; Tier < 3; ++Tier)
+	{
+		const URoadProfile* Road = Content->ServiceRoadProfiles[Tier].LoadSynchronous();
+		if (!TestNotNull(FString::Printf(TEXT("tier %d loads"), Tier), Road)) { return false; }
+
+		TestEqual(FString::Printf(TEXT("tier %d is 8/10/12 m overall"), Tier),
+			Road->GetTotalWidth(), Expected[Tier]);
+
+		ServiceRoadProfileTest::AssertBandEdgesOnGrid(*this, *Road, FString::Printf(TEXT("tier %d"), Tier));
+	}
+	return true;
+}
+
+/**
+ * THE SAME FOR EVERY AUTHORED TAXIWAY AND RUNWAY (2026-09-28): ICAO's widths rounded UP to even
+ * metres, since a stand anchors on a taxiway's edge. And each runway, though wider than its ICAO
+ * figure, still admits the letter it was sized for - IcaoCode::MaxWingspanForWidth takes the
+ * NEAREST ICAO row, and this is what goes red if a rounding ever lands nearer the next one.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwaysAndTaxiwaysOnGridTest,
+	"Airside.Content.RunwaysAndTaxiwaysOnGrid",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwaysAndTaxiwaysOnGridTest::RunTest(const FString& Parameters)
+{
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (!TestTrue(TEXT("the content set has five taxiways and five runways"), Content != nullptr
+		&& Content->TaxiwayProfiles.Num() == 5 && Content->RunwayProfiles.Num() == 5))
+	{
+		return false;
+	}
+
+	const double TaxiwayWidths[] = { 1200.0, 1600.0, 1800.0, 2400.0, 2600.0 };
+	for (int32 Index = 0; Index < 5; ++Index)
+	{
+		const URoadProfile* Taxiway = Content->TaxiwayProfiles[Index].LoadSynchronous();
+		if (!TestNotNull(FString::Printf(TEXT("taxiway %d loads"), Index), Taxiway)) { return false; }
+		TestEqual(FString::Printf(TEXT("taxiway %d is its ICAO minimum rounded up to even metres"), Index),
+			Taxiway->GetTotalWidth(), TaxiwayWidths[Index]);
+		ServiceRoadProfileTest::AssertBandEdgesOnGrid(*this, *Taxiway, FString::Printf(TEXT("taxiway %d"), Index));
+	}
+	TestEqual(TEXT("StandardTaxiwayWidth is the authored code E taxiway"),
+		URoadProfile::StandardTaxiwayWidth, TaxiwayWidths[3]);
+
+	// ICAO 18/23/30/45/60 m -> the letter each admits: A, B, C, E (45 m serves D and E; the tie
+	// breaks to the wider), F.
+	const double RunwayWidths[] = { 2000.0, 2600.0, 3000.0, 4600.0, 6000.0 };
+	const double IcaoWidths[] = { 1800.0, 2300.0, 3000.0, 4500.0, 6000.0 };
+	for (int32 Index = 0; Index < 5; ++Index)
+	{
+		const URoadProfile* Runway = Content->RunwayProfiles[Index].LoadSynchronous();
+		if (!TestNotNull(FString::Printf(TEXT("runway %d loads"), Index), Runway)) { return false; }
+		TestEqual(FString::Printf(TEXT("runway %d is its ICAO width rounded up to even metres"), Index),
+			Runway->GetTotalWidth(), RunwayWidths[Index]);
+		ServiceRoadProfileTest::AssertBandEdgesOnGrid(*this, *Runway, FString::Printf(TEXT("runway %d"), Index));
+		TestEqual(FString::Printf(TEXT("runway %d still admits the letter its ICAO width does"), Index),
+			IcaoCode::MaxWingspanForWidth(Runway->GetTotalWidth()), IcaoCode::MaxWingspanForWidth(IcaoWidths[Index]));
+	}
 	return true;
 }
 

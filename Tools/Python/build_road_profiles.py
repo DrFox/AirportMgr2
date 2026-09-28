@@ -31,7 +31,7 @@ ASSET_DIR = "/Game"
 CONTENT_SET = "/Game/DA_AirsideContent"
 
 # The service road's CROSS-SECTION, in uu (a uu is a centimetre): two 3 m lanes, one each way,
-# between 0.6 m kerbs - 7.2 m overall, the NARROW road. LANE_WIDTH IS PER LANE since
+# between 1 m kerbs - 8 m overall, the NARROW road. LANE_WIDTH IS PER LANE since
 # 2026-09-23; until then it was kerb to kerb, so "600" meant 4.8 m of carriageway. These are
 # the defaults URoadProfile::MakeServiceRoadTransient uses, so the shipped asset and every
 # test fixture are the same cross-section.
@@ -54,7 +54,14 @@ CONTENT_SET = "/Game/DA_AirsideContent"
 # nothing. Passing zero below is what asks for that derivation.
 LANE_WIDTH = 300.0
 
-KERB_WIDTH = 60.0
+# ONE METRE, not the 0.6 m it was until 2026-09-28, so every band edge of every tier lands on
+# the 1 m world grid (GridSnap). A node snaps the CENTRELINE to a grid line, so a line lies on
+# the grid only when its offset from the centre is whole metres: 1 m kerbs with whole-metre
+# lanes put the kerb line AND the edge there. With 0.6 m kerbs the tiers were 7.2/8.2/10.2 m
+# and no edge sat on the grid, so stands set back from a road sat off it. An ODD total (9 m,
+# 11 m) was rejected for the same reason: its half-width is 4.5 m. No three sensible widths
+# put every edge on the 5 m grid (that needs 10/20/30 m); 1 m is the step widths are for.
+KERB_WIDTH = 100.0
 DERIVE_FILLET = 0.0
 
 # THE ROAD TIERS (spec 2026-09-23 section 1), narrow first - the order the road tool cycles in.
@@ -68,9 +75,9 @@ DERIVE_FILLET = 0.0
 # and allowed to swing across both lanes as real drivers do, the rig turns both ways at the
 # derived corner (Airside.Model.RigTurnsOnWide).
 ROAD_TIERS = [
-    ("DA_RoadProfile_ServiceRoad", LANE_WIDTH, DERIVE_FILLET),           # Narrow, 2 x 3.0 m
-    ("DA_RoadProfile_ServiceRoad_Standard", 350.0, DERIVE_FILLET),       # Standard, 2 x 3.5 m
-    ("DA_RoadProfile_ServiceRoad_Wide", 450.0, DERIVE_FILLET),           # Wide, 2 x 4.5 m
+    ("DA_RoadProfile_ServiceRoad", LANE_WIDTH, DERIVE_FILLET),           # Narrow, 2 x 3.0 m, 8 m overall
+    ("DA_RoadProfile_ServiceRoad_Standard", 400.0, DERIVE_FILLET),       # Standard, 2 x 4.0 m, 10 m overall
+    ("DA_RoadProfile_ServiceRoad_Wide", 500.0, DERIVE_FILLET),           # Wide, 2 x 5.0 m, 12 m overall
 ]
 
 # THE STANDARD TAXIWAY WIDTHS, by ICAO aerodrome code letter - the same reasoning
@@ -82,13 +89,20 @@ ROAD_TIERS = [
 # between two 25 m taxiways that turned on the same radius as one between two 10.5 m ones
 # would pave a corner the wider aircraft cannot use - and the corner radius is what decides
 # whether an aircraft can take the turn at all (FSpeedProfile: R >= L/sin(lock)). Two thirds
-# of the width is the ratio the standard 23 m taxiway already uses at its 1500 uu fillet.
+# of the width is the ratio the standard taxiway uses - 24 m at its 1600 uu fillet
+# (URoadProfile::StandardTaxiwayFilletRadius; it was 23 m at 1500 before the grid rounding).
+#
+# THE ICAO MINIMUMS ROUNDED UP TO AN EVEN METRE (2026-09-28): ICAO's 10.5/15/18/23/25 m put
+# every edge but D's half a metre off the 1 m world grid, because a node snaps the CENTRELINE
+# and the edge sits a half-width from it - see KERB_WIDTH above. Stands anchor on a taxiway's
+# edge, so a stand off one sat off the grid. UP, not to nearest: Annex 14's figures are
+# minimums, so a wider taxiway still conforms and a 10 m code B would not.
 TAXIWAY_WIDTHS = [
-    ("B", 1050.0),
-    ("C", 1500.0),
-    ("D", 1800.0),
-    ("E", 2300.0),   # the project's standard, and URoadProfile::StandardTaxiwayWidth
-    ("F", 2500.0),
+    ("B", 1200.0),   # ICAO 10.5 m
+    ("C", 1600.0),   # ICAO 15 m
+    ("D", 1800.0),   # ICAO 18 m, already even
+    ("E", 2400.0),   # ICAO 23 m; the project's standard, and URoadProfile::StandardTaxiwayWidth
+    ("F", 2600.0),   # ICAO 25 m
 ]
 TAXIWAY_FILLET_RATIO = 2.0 / 3.0
 
@@ -171,6 +185,55 @@ def build_taxiways():
     return built
 
 
+# THE RUNWAY CROSS-SECTIONS, (asset, total width, shoulder each side), in uu. Same rule as the
+# taxiways: ICAO's 18/23/30/45/60 m rounded UP to an even metre, so both edges land on the
+# 1 m grid; 30 and 60 were already even. The SHOULDER is the hand-authored 10% of the width,
+# rounded up to a whole metre so the concrete's edge is on the grid too (2.6 -> 3, 4.6 -> 5).
+#
+# BAND WIDTHS ARE SET IN PLACE, not through URoadProfile::Fill. These assets were authored by
+# hand (c9266ef8) and carry flags Fill does not know about - continuity through junctions,
+# exit length, cost - and Fill resets what it does own. Only the three widths are this
+# script's; everything else on the asset is left as it was.
+#
+# The asset names carry the width, and were renamed with it on 2026-09-28 (18 -> 20,
+# 23 -> 26, 45 -> 46). IcaoCode's table keeps the ICAO figures: MaxWingspanForWidth takes the
+# NEAREST row, and each rounded width is still nearest its own letter's -
+# ENFORCED BY: Airside.Content.RunwaysAndTaxiwaysOnGrid.
+RUNWAYS = [
+    ("DA_Runway_20m", 2000.0, 200.0),
+    ("DA_Runway_26m", 2600.0, 300.0),
+    ("DA_Runway_30m", 3000.0, 300.0),
+    ("DA_Runway_46m", 4600.0, 500.0),
+    ("DA_Runway_60m", 6000.0, 600.0),
+]
+
+
+def resize_runways():
+    """Set each runway's shoulder/concrete/shoulder widths, touching nothing else on it."""
+    for name, width, shoulder in RUNWAYS:
+        path = "%s/%s" % (ASSET_DIR, name)
+        profile = unreal.EditorAssetLibrary.load_asset(path)
+        if profile is None:
+            unreal.log_error("MARKER: %s not found - the runway set has moved." % path)
+            continue
+        bands = profile.get_editor_property("bands")
+        # THREE BANDS, shoulder-lane-shoulder, or this is not the asset this was written for;
+        # refuse rather than stretch an unknown cross-section.
+        if len(bands) != 3:
+            unreal.log_error("MARKER: %s has %d bands, expected 3 - left alone." % (path, len(bands)))
+            continue
+        # BY INDEX, written back: an element of a struct array read from Python is a COPY, and
+        # setting its width in a for loop changed nothing while logging the old figures.
+        for index, band_width in enumerate((shoulder, width - 2.0 * shoulder, shoulder)):
+            band = bands[index]
+            band.set_editor_property("width", band_width)
+            bands[index] = band
+        profile.set_editor_property("bands", bands)
+        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+        unreal.log("MARKER: %s resized, %s uu" % (
+            name, [b.get_editor_property("width") for b in profile.get_editor_property("bands")]))
+
+
 def wire_taxiways_into_content(profiles):
     """Point the content set's TaxiwayProfiles at them, in width order.
 
@@ -216,3 +279,5 @@ if roads:
 taxiways = build_taxiways()
 if taxiways:
     wire_taxiways_into_content(taxiways)
+
+resize_runways()

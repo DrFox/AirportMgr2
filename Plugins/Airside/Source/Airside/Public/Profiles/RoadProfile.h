@@ -120,19 +120,22 @@ class AIRSIDE_API URoadProfile : public UDataAsset
 
 public:
 	/**
-	 * A real taxiway's width, uu - 23 m. The one figure ARoadNetworkActor::FallbackWidth's
-	 * own default and the holding-position marking's width-with-no-profile-to-ask fallback
-	 * both typed independently as a bare 2300.0 (#103); this is that number, named once.
+	 * A real taxiway's width, uu - 24 m: ICAO code E's 23 m rounded up to an even metre so its
+	 * edges land on the 1 m world grid (2026-09-28; build_road_profiles.py's TAXIWAY_WIDTHS
+	 * says why). The one figure ARoadNetworkActor::FallbackWidth's own default and the
+	 * holding-position marking's width-with-no-profile-to-ask fallback both typed
+	 * independently as a bare 2300.0 (#103); this is that number, named once.
 	 */
-	static constexpr double StandardTaxiwayWidth = 2300.0;
+	static constexpr double StandardTaxiwayWidth = 2400.0;
 
 	/**
-	 * A real taxiway's fillet, uu - 15 m. PreferredFilletRadius's own default, the debug
+	 * A real taxiway's fillet, uu - 16 m, two thirds of StandardTaxiwayWidth as every
+	 * authored taxiway's is (TAXIWAY_FILLET_RATIO); 15 m while the width was 23. PreferredFilletRadius's own default, the debug
 	 * gallery's FilletRadius and ARoadNetworkActor::FallbackFilletRadius all typed 1500.0
 	 * independently (issue #192 item 3); this is that number, named once, beside
 	 * StandardTaxiwayWidth for the same reason.
 	 */
-	static constexpr double StandardTaxiwayFilletRadius = 1500.0;
+	static constexpr double StandardTaxiwayFilletRadius = 1600.0;
 
 	/**
 	 * What a metre of this profile costs to lay, and what a day of owning it costs.
@@ -383,8 +386,9 @@ public:
 	/**
 	 * FillTwoWayRoad plus a NewObject, so there is one description of a service road.
 	 *
-	 * The defaults are the NARROW road: two 3 m lanes between 0.6 m kerbs, 7.2 m overall -
-	 * two vans pass, and it still reads as a road beside a 23 m taxiway.
+	 * The defaults are the NARROW road: two 3 m lanes between 1 m kerbs, 8 m overall -
+	 * two vans pass, and it still reads as a road beside a 23 m taxiway. Whole-metre bands so
+	 * every edge lands on the 1 m world grid; build_road_profiles.py's KERB_WIDTH says why.
 	 *
 	 * THE CORNER IS NOT A NUMBER ANY MORE. It was 500 uu, then 750, typed in four places -
 	 * here, build_road_profiles.py, DA_RoadProfile_ServiceRoad, and the test pinning two of
@@ -396,5 +400,5 @@ public:
 	 * See URoadProfile::ResolvedFilletRadius.
 	 */
 	static URoadProfile* MakeServiceRoadTransient(double LaneWidth = 300.0,
-		double KerbWidth = 60.0, double FilletRadius = 0.0);
+		double KerbWidth = 100.0, double FilletRadius = 0.0);
 };
