@@ -79,7 +79,9 @@ namespace TaxiwayStrip
 		}
 
 		// EVERY LIVE SEGMENT, LINEARLY. Callers are a placement readout (once a frame) and stand
-		// admission (once per candidate per plan).
+		// admission (once per candidate per plan). N was 34 on M_Test, 2026-09-28 (its
+		// "LogRoadMesh: Rebuilt" line), times 16 samples times a stand's four edges - a few
+		// thousand segment tests per call. A spatial index is the day a map runs to thousands.
 		const TArray<FRoadSegment>& Segments = Network.GetSegments();
 		for (int32 Index = 0; Index < Segments.Num(); ++Index)
 		{
