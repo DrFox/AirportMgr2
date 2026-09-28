@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Entities/AircraftType.h"
 #include "Misc/AutomationTest.h"
 
@@ -53,6 +54,12 @@ bool FFuelCapacitiesAuthoredTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("%s's tank"), Each.Asset), Type->FuelCapacityLitres, Each.Litres, 0.5);
 		TestEqual(*FString::Printf(TEXT("%s's tank travels in its airframe"), Each.Asset),
 			Type->Airframe().FuelCapacityLitres, Each.Litres, 0.5);
+	}
+	const UAircraftType* Meridian = LoadObject<UAircraftType>(nullptr, TEXT("/Game/Entities/DA_Aircraft_Plane7.DA_Aircraft_Plane7"));
+	if (Meridian != nullptr)
+	{
+		TestEqual(TEXT("the code-built Meridian (the content-less fallback's figures) has the asset's tank"),
+			TestAirframes::PiperType()->FuelCapacityLitres, Meridian->FuelCapacityLitres, 0.5);
 	}
 	return true;
 }

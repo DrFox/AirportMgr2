@@ -332,6 +332,15 @@ public:
 	static double PiperMeridianWingspan();
 
 	/**
+	 * The Meridian's tank, litres - for the fallback airframe, which has no asset to read
+	 * FuelCapacityLitres from, and for BuildPiperMeridian. One place, for PiperMeridianWingspan's
+	 * reason: a fallback with no tank would ask for no fuel, and every automation test that runs
+	 * without a content set would then see no truck at all.
+	 * ENFORCED BY: Airside.Content.FuelCapacitiesAuthored (asserts DA_Aircraft_Plane7 agrees)
+	 */
+	static double PiperMeridianFuelCapacityLitres();
+
+	/**
 	 * The Meridian's runway requirements, for the same reason PiperMeridianGround exists.
 	 *
 	 * Grass, visual, and the POH ground rolls rounded up: 510 m take-off, 400 m landing

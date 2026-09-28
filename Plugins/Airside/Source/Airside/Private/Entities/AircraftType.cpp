@@ -247,6 +247,7 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	Type->Footprint.NoseX = 119.4;    // the spinner tip
 	Type->Footprint.TailX = -751.8;   // the fin trailing edge - 871.2 uu apart, the 8.712 m length
 	Type->Footprint.Wingspan = PiperMeridianWingspan();   // 43 ft 0 in, published, and the import asserts it
+	Type->FuelCapacityLitres = PiperMeridianFuelCapacityLitres();
 
 	// Mid-chord of the wing, which is the spanwise line FEntityFootprint::WingX documents.
 	// IT WAS 0.0, and that was only ever true of the old origin: the mains sit under the spar,
@@ -438,6 +439,12 @@ FEnginePerformance UAircraftType::PiperMeridianEngine()
 	Engine.SpoolDownSeconds = 9.0;
 
 	return Engine;
+}
+
+double UAircraftType::PiperMeridianFuelCapacityLitres()
+{
+	// 120 US gal usable, published.
+	return 454.0;
 }
 
 double UAircraftType::PiperMeridianWingspan()

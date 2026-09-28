@@ -45,6 +45,10 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 	Fee = Board.Pricing != nullptr ? Board.Pricing->Format(Live->LandingFee) : FText::GetEmpty();
 	Contract = DescribeContract(Live->LeadTimeSeconds, Live->ContractSeconds);
 	bNeedsTug = Live->Airframe.PushbackNeed == EPushbackNeed::VehicleTug;
+	// THE SIZE OF THE JOB, before the accept (spec 2026-09-28-fuel-litres).
+	FuelText = Live->FuelLitres > 0.0
+		? FText::Format(NSLOCTEXT("AirportMgr", "OfferFuelLitres", "Fuel {0} L"), FText::AsNumber(FMath::RoundToInt(Live->FuelLitres)))
+		: FText::GetEmpty();
 
 	// ROUNDED UP: "0 s" while there is still time to click reads as a lie.
 	SecondsLeft = FMath::CeilToInt(FMath::Max(Live->OfferSecondsLeft, 0.0));

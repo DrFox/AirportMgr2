@@ -152,11 +152,10 @@ bool FFuelServiceEarnsItsFeeTest::RunTest(const FString& Parameters)
 	Fuel->Ledger = Ledger;
 	Fuel->Pricing = Pricing;
 
-	FAirframe Airframe;
-	Airframe.Wingspan = 2800.0;   // code C
-
-	Fuel->PostServiceFee(0.0, Airframe);
-	TestEqual(TEXT("a completed fuelling earns the service fee"), Ledger->Balance(), 1600.0, 1e-6);
+	// BY THE LITRE since 2026-09-28 (spec fuel-litres): 400 L at the default rate.
+	Fuel->PostServiceFee(0.0, 400.0);
+	TestEqual(TEXT("a completed fuelling earns the litres it sold"), Ledger->Balance(),
+		1000.0 + 400.0 * Pricing->FuelPricePerLitre, 1e-6);
 	TestEqual(TEXT("booked as a service fee, so a finance screen can tell it from a landing"),
 		Ledger->Entries()[0].Category, ELedgerCategory::ServiceFee);
 

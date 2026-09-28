@@ -312,9 +312,11 @@ void UOfferInboxWidget::PaintRows()
 		}
 		if (Entry->FuelChip != nullptr)
 		{
-			Entry->FuelChip->SetText(Row->IsFuelServable()
-				? NSLOCTEXT("AirportMgr", "OfferFuelYes", "Fuel \u2713")
-				: NSLOCTEXT("AirportMgr", "OfferFuelNo", "Fuel \u2717"));
+			// LITRES AND WHETHER THEY CAN BE GIVEN; hidden for a flight that wants none.
+			Entry->FuelChip->SetVisibility(Row->GetFuelText().IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+			Entry->FuelChip->SetText(FText::Format(NSLOCTEXT("AirportMgr", "OfferFuelChip", "{0} {1}"),
+				Row->GetFuelText(), Row->IsFuelServable()
+					? FText::FromString(TEXT("\u2713")) : FText::FromString(TEXT("\u2717"))));
 			Entry->FuelChip->SetColorAndOpacity(FSlateColor(Row->IsFuelServable() ? Style->Positive : Style->Warning));
 		}
 		if (Entry->TugChip != nullptr)

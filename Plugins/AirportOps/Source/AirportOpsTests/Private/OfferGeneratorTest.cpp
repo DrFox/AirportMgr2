@@ -521,4 +521,30 @@ bool FOfferZeroRateSkipsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferFuelLoadTest, "AirportOps.Model.Offers.Generate.FuelLoadIsHalfToNineTenths",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferFuelLoadTest::RunTest(const FString& Parameters)
+{
+	// THE LOAD IS FIXED AT THE OFFER (spec 2026-09-28-fuel-litres section 2), from the seeded
+	// stream: 50-90% of the tank, so the row can show the size of the job before the accept.
+	UOfferGenerator* Generator = SeededGenerator();
+	UAirlineDefinition* Airline = MakeAirline(1.0);
+	FOfferCandidate Tanked = Candidate(3000.0);
+	Tanked.Airframe.FuelCapacityLitres = 1000.0;
+	double Lowest = 1.0e9, Highest = 0.0;
+	for (int32 Index = 0; Index < 200; ++Index)
+	{
+		const UFlight* Offer = Generator->MakeOffer(FVector2D::ZeroVector, *Airline, Tanked, 0.0, Index + 1);
+		Lowest = FMath::Min(Lowest, Offer->FuelLitres);
+		Highest = FMath::Max(Highest, Offer->FuelLitres);
+	}
+	TestTrue(FString::Printf(TEXT("never under half the tank (lowest %.0f)"), Lowest), Lowest >= 500.0);
+	TestTrue(FString::Printf(TEXT("never over nine tenths (highest %.0f)"), Highest), Highest <= 900.0);
+	TestTrue(TEXT("and it varies"), Highest - Lowest > 200.0);
+	FOfferCandidate NoTank = Candidate(3000.0);
+	TestEqual(TEXT("a type with no tank asks for nothing"),
+		Generator->MakeOffer(FVector2D::ZeroVector, *Airline, NoTank, 0.0, 999)->FuelLitres, 0.0, 1e-9);
+	return true;
+}
+
 #endif

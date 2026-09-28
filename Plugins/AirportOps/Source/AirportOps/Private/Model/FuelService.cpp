@@ -166,6 +166,14 @@ int32 UFuelService::TrucksOutFor(FEntityInstanceId Depot) const
 		// round mid-journey.
 		Out += Home.Value == Depot ? 1 : 0;
 	}
+	// REFILLING TOO: a truck home from a trip holds its slot until its tank is full again.
+	for (const TPair<int32, FRefill>& Each : Refilling)
+	{
+		if (Each.Value.Depot == Depot)
+		{
+			++Out;
+		}
+	}
 	return Out;
 }
 
@@ -421,14 +429,14 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 	return Result;
 }
 
-void UFuelService::PostServiceFee(double Now, const FAirframe& Airframe)
+void UFuelService::PostServiceFee(double Now, double Litres)
 {
 	if (Ledger == nullptr || Pricing == nullptr)
 	{
 		return;
 	}
 
-	const double Fee = Pricing->FuelServiceFee(Airframe);
+	const double Fee = Pricing->FuelFee(Litres);
 	if (Fee <= 0.0)
 	{
 		return;
@@ -469,6 +477,7 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		// GONE, so it no longer counts as out for Depot anywhere - TrucksOutFor's total for
 		// it just went down. See FleetRevision.
 		GoingHome.Remove(TruckId);
+		RefillOnReturn.Remove(TruckId);
 		++FleetRevision;
 		return;
 	}
@@ -699,18 +708,36 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 	// GoingHome.
 	if (const FEntityInstanceId* Home = GoingHome.Find(AgentId))
 	{
-		const FEntityInstance* Depot = Network.GetEntity(*Home);
+		// A COPY: GoingHome.Remove below frees the slot this pointer reads.
+		const FEntityInstanceId HomeDepot = *Home;
+		const FEntityInstance* Depot = Network.GetEntity(HomeDepot);
 		if (Depot != nullptr && Agent->GoalNode == Depot->PoseNode)
 		{
 			UE_LOG(LogAirportOps, Log, TEXT("Fuel: truck %d home at depot %d; retired"),
-				AgentId, Home->Index);
+				AgentId, HomeDepot.Index);
 			GoingHome.Remove(AgentId);
 			Traffic.RetireAgent(AgentId);
 
-			// A DEPOT SLOT FREED. The event UFuelService::FleetRevision exists for: a demand
-			// that has been waiting on every depot being busy is worth re-offering the
-			// instant one of them stops being busy, not thirty times a second until then.
-			++FleetRevision;
+			// REFILL BEFORE THE SLOT FREES (spec 2026-09-28-fuel-litres): what it pumped out, at
+			// the depot's pumps. Nothing pumped (a recall mid-leg) frees the slot at once.
+			const double Litres = RefillOnReturn.FindRef(AgentId);
+			RefillOnReturn.Remove(AgentId);
+			if (Litres > 0.0)
+			{
+				const double Minutes = Litres / (PumpsAt(*Depot) * FMath::Max(RefillLitresPerMinutePerPump, 1.0));
+				FRefill& Refill = Refilling.Add(AgentId);
+				Refill.Depot = HomeDepot;
+				Refill.ReadyAt = Clock.Now() + Minutes * 60.0;
+				UE_LOG(LogAirportOps, Log, TEXT("Fuel: depot %d refilling truck %d (%.0f L, %.0f game min)"),
+					HomeDepot.Index, AgentId, Litres, Minutes);
+			}
+			else
+			{
+				// A DEPOT SLOT FREED. The event UFuelService::FleetRevision exists for: a demand
+				// that has been waiting on every depot being busy is worth re-offering the
+				// instant one of them stops being busy, not thirty times a second until then.
+				++FleetRevision;
+			}
 		}
 		else if (Depot != nullptr)
 		{
@@ -730,17 +757,20 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 		if (Demand->State == EFuelDemandState::TruckEnRoute
 			&& Agent->GoalNode == FuelAnchorOf(Network, Demand->Stand))
 		{
-			// THE DEPOT'S OWN DWELL, not the service-wide one: its pumps divide it. Read
-			// from the depot the truck came FROM, which the demand records precisely so a
-			// truck can be traced back to its owner after it has left home.
-			const FEntityInstance* Depot = Network.GetEntity(Demand->Depot);
-			const double Dwell = Depot != nullptr ? DwellSecondsFor(*Depot) : DwellSeconds;
+			// LITRES OVER FLOW, IN GAME TIME (spec 2026-09-28-fuel-litres): this trip pumps what the
+			// vehicle holds or what is still owed, whichever is less, at the vehicle's own rate.
+			// The AGENT's vehicle - the one that actually came - not the table's current entry.
+			const FFuelVehicleSpec Spec = SpecFor(Agent->AsVehicle() != nullptr ? Agent->AsVehicle()->TypeCode : NAME_None);
+			const double Load = FMath::Min(Spec.CapacityLitres, Demand->LitresOwed);
+			const double Minutes = Load / FMath::Max(Spec.FlowLitresPerMinute, 1.0);
 
 			Demand->State = EFuelDemandState::Fuelling;
-			Demand->DwellEndsAt = Traffic.GetSimSeconds() + Dwell;
+			Demand->LoadThisTrip = Load;
+			Demand->DwellEndsAt = Clock.Now() + Minutes * 60.0;
 			UE_LOG(LogAirportOps, Log,
-				TEXT("Fuel: truck %d at stand %d for aircraft %d; fuelling for %.0f s"),
-				AgentId, Demand->Stand.Index, Demand->AircraftId, Dwell);
+				TEXT("Fuel: truck %d at stand %d for aircraft %d: %.0f L of %.0f L (trip %d), %.1f game min"),
+				AgentId, Demand->Stand.Index, Demand->AircraftId, Load, Demand->LitresOwed + Demand->LitresDelivered,
+				Demand->Trips + 1, Minutes);
 		}
 		return;
 	}
@@ -776,18 +806,41 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 	// include Entities/ and so cannot ask the aircraft's type - the same reason the pose role
 	// is read off FEntityInstance above. See FAirframe::TurnaroundSeconds.
 	Demand.TurnaroundEndsAt = Clock.Now() + Aircraft->TurnaroundSeconds;
+
+	// THE LOAD, from the flight's own offer (LitresOwedFor), or the one fallback.
+	Demand.LitresOwed = FMath::Max(LitresOwedFor ? LitresOwedFor(AgentId, *Aircraft) : DefaultLitres(*Aircraft), 0.0);
+	if (Demand.LitresOwed <= 0.0)
+	{
+		// WANTS NOTHING, BUT STILL TURNS ROUND: Done from the start rather than absent, because
+		// DepartTheReady is what sends a parked aircraft off and it walks the demands.
+		Demand.State = EFuelDemandState::Done;
+		Demands.Add(Demand);
+		UE_LOG(LogAirportOps, Log, TEXT("Fuel: aircraft %d parked at stand %d; wants no fuel, away in %.0f game s"),
+			AgentId, Stand.Index, Aircraft->TurnaroundSeconds);
+		return;
+	}
 	Demands.Add(Demand);
 
 	UE_LOG(LogAirportOps, Log,
-		TEXT("Fuel: aircraft %d parked at stand %d; needs fuel, away in %.0f game s"),
-		AgentId, Stand.Index, Aircraft->TurnaroundSeconds);
+		TEXT("Fuel: aircraft %d parked at stand %d; needs %.0f L, away in %.0f game s at the earliest"),
+		AgentId, Stand.Index, Demand.LitresOwed, Aircraft->TurnaroundSeconds);
 }
 
 void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	const USimClock& Clock)
 {
-	const double Now = Traffic.GetSimSeconds();
 	const uint32 Revision = Network.GetGuidelineRevision();
+
+	// REFILLS THAT HAVE FINISHED free their depot's slot - see Refilling.
+	for (auto It = Refilling.CreateIterator(); It; ++It)
+	{
+		if (Clock.Now() >= It.Value().ReadyAt)
+		{
+			UE_LOG(LogAirportOps, Log, TEXT("Fuel: truck %d refilled at depot %d"), It.Key(), It.Value().Depot.Index);
+			It.RemoveCurrent();
+			++FleetRevision;
+		}
+	}
 
 	for (FFuelDemand& Demand : Demands)
 	{
@@ -935,33 +988,51 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 
 		case EFuelDemandState::Fuelling:
 		{
-			if (Now < Demand.DwellEndsAt)
+			// GAME TIME - see FFuelDemand::DwellEndsAt.
+			if (Clock.Now() < Demand.DwellEndsAt)
 			{
+				break;
+			}
+
+			Demand.LitresDelivered += Demand.LoadThisTrip;
+			Demand.LitresOwed = FMath::Max(Demand.LitresOwed - Demand.LoadThisTrip, 0.0);
+			++Demand.Trips;
+
+			// CLEARED BEFORE THE TRIP HOME, so the truck belongs to GoingHome and to nothing
+			// else - see that member for why a home-bound truck cannot stay on a demand. It
+			// carries home what it pumped, so its depot can size the refill.
+			const int32 TruckId = Demand.TruckId;
+			Demand.TruckId = 0;
+			if (TruckId != 0)
+			{
+				RefillOnReturn.Add(TruckId, Demand.LoadThisTrip);
+				SendTruckHome(Traffic, Network, TruckId, Demand.Depot);
+			}
+			Demand.LoadThisTrip = 0.0;
+
+			if (Demand.LitresOwed > 0.5)
+			{
+				// MORE THAN ONE TANKFUL (spec 2026-09-28-fuel-litres): back to Needed, and the next
+				// trip is a fresh dispatch - the busy-wait memo is cleared so it asks at once, and
+				// it waits on the depot's refill like any other busy depot.
+				Demand.State = EFuelDemandState::Needed;
+				Demand.BusyAtGuidelineRevision = MAX_uint32;
+				Demand.BusyAtFleetRevision = MAX_uint32;
+				UE_LOG(LogAirportOps, Log,
+					TEXT("Fuel: aircraft %d at stand %d has %.0f L of %.0f L after trip %d; another trip needed"),
+					Demand.AircraftId, Demand.Stand.Index, Demand.LitresDelivered,
+					Demand.LitresDelivered + Demand.LitresOwed, Demand.Trips);
 				break;
 			}
 
 			Demand.State = EFuelDemandState::Done;
 			UE_LOG(LogAirportOps, Log,
-				TEXT("Fuel: aircraft %d fuelled at stand %d by truck %d"),
-				Demand.AircraftId, Demand.Stand.Index, Demand.TruckId);
+				TEXT("Fuel: aircraft %d fuelled at stand %d: %.0f L in %d trip(s)"),
+				Demand.AircraftId, Demand.Stand.Index, Demand.LitresDelivered, Demand.Trips);
 
-			// EARNED HERE AND NOWHERE ELSE. The aircraft's own airframe prices it, so a code F
-			// fuelling is worth more than a code A one for the same reason its landing is. An
-			// Unserviceable demand never reaches this branch, which IS the forfeit.
-			const FRoadAgent* Fuelled = Traffic.FindAgent(Demand.AircraftId);
-			if (const FAirframe* Aircraft = Fuelled != nullptr ? Fuelled->AsAircraft() : nullptr)
-			{
-				PostServiceFee(Clock.Now(), *Aircraft);
-			}
-
-			// CLEARED BEFORE THE TRIP HOME, so the truck belongs to GoingHome and to nothing
-			// else - see that member for why a home-bound truck cannot stay on a demand.
-			const int32 TruckId = Demand.TruckId;
-			Demand.TruckId = 0;
-			if (TruckId != 0)
-			{
-				SendTruckHome(Traffic, Network, TruckId, Demand.Depot);
-			}
+			// EARNED HERE AND NOWHERE ELSE, by the litre. An Unserviceable demand never reaches
+			// this branch, which IS the forfeit.
+			PostServiceFee(Clock.Now(), Demand.LitresDelivered);
 			break;
 		}
 
@@ -1084,7 +1155,7 @@ bool UFuelService::HasWorkingPump(const FEntityInstance& Depot)
 	return false;
 }
 
-double UFuelService::DwellSecondsFor(const FEntityInstance& Depot) const
+int32 UFuelService::PumpsAt(const FEntityInstance& Depot)
 {
 	int32 Pumps = 0;
 	for (const EDepotModule Module : Depot.Modules)
@@ -1094,16 +1165,24 @@ double UFuelService::DwellSecondsFor(const FEntityInstance& Depot) const
 			++Pumps;
 		}
 	}
+	// A plotless depot counts as one pump - see HasWorkingPump for why its empty module list is
+	// not a claim about pumps.
+	return FMath::Max(Pumps, 1);
+}
 
-	// A plotless depot keeps the service-wide figure - see HasWorkingPump for why its empty
-	// module list is not a claim about pumps.
-	if (Pumps == 0)
+FFuelVehicleSpec UFuelService::SpecFor(FName TypeCode) const
+{
+	if (const FFuelVehicleSpec* Found = VehicleSpecs.Find(TypeCode))
 	{
-		return DwellSeconds;
+		return *Found;
 	}
-
-	// FLOORED, so a yard full of pumps cannot make refuelling instant. The dwell is the only
-	// pressure the fuel loop applies; discharging a demand on the frame it arrived would
-	// delete the reason to build a second depot at all.
-	return FMath::Max(DwellSeconds / static_cast<double>(Pumps), MinDwellSeconds);
+	// ONCE PER CODE: a vehicle nobody gave fuel figures to still fuels, at the trailer's rate,
+	// and says so where the designer will look.
+	if (VehicleSpecs.Num() > 0 && !WarnedSpecs.Contains(TypeCode))
+	{
+		WarnedSpecs.Add(TypeCode);
+		UE_LOG(LogAirportOps, Warning, TEXT("Fuel: vehicle %s has no fuel figures; using %.0f L at %.0f L/min"),
+			*TypeCode.ToString(), FallbackSpec.CapacityLitres, FallbackSpec.FlowLitresPerMinute);
+	}
+	return FallbackSpec;
 }

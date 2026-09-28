@@ -284,6 +284,9 @@ public:
 	 * FindByIdLinearForTest's O(n) scan - see issue #188.
 	 */
 	UFlight* FindByAgentForTest(int32 AgentId) const { return FindByAgent(AgentId); }
+
+	/** The flight an agent flies, or null - what UOpsRuntime hands UFuelService::LitresOwedFor. */
+	const UFlight* FlightForAgent(int32 AgentId) const { return FindByAgent(AgentId); }
 	UFlight* FindByIdForTest(int32 Id) const { return FindById(Id); }
 
 	/**

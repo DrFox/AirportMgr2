@@ -59,12 +59,10 @@ double UPricing::ParkingFeePerHour(const FAirframe& Airframe) const
 	return LandingFee(Airframe) * 0.1;
 }
 
-double UPricing::FuelServiceFee(const FAirframe& Airframe) const
+double UPricing::FuelFee(double Litres) const
 {
-	// Deliberately reads the BASE fee rather than LandingFee() - see the header for why the
-	// player's landing lever must not silently reprice a service they performed.
-	const FString Letter = IcaoCode::LetterForWingspan(Airframe.Wingspan);
-	return BaseLandingFeeForLetter(Letter) * 0.5;
+	// Deliberately NOT through LandingFeeMultiplier - see the header.
+	return FMath::Max(Litres, 0.0) * FuelPricePerLitre;
 }
 
 double UPricing::DemandFactor() const

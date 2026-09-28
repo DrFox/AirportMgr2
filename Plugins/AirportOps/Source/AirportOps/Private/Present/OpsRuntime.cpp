@@ -155,7 +155,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 
 		// The designer figures set from the same asset in the same breath, so none of them
 		// is the one somebody forgot to copy.
-		FuelService->DwellSeconds = Scenario->FuelDwellSeconds;
+		FuelService->VehicleSpecs = Scenario->FuelVehicles;
+		FuelService->RefillLitresPerMinutePerPump = Scenario->DepotRefillLitresPerMinutePerPump;
 		OfferGenerator->MaxPendingOffers = Scenario->MaxPendingOffers;
 
 		// THE BALANCE A NEW GAME OPENS AT. The comment that used to stand at the top of this
@@ -165,10 +166,10 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		Ledger->Open(Scenario->StartingBalance);
 
 		UE_LOG(LogAirportOps, Log,
-			TEXT("Scenario '%s': %.0f/%.0f real s day/night (%02.0f-%02.0f), starts %02.0f:00, %.0f s fuel dwell, opens at %.0f"),
+			TEXT("Scenario '%s': %.0f/%.0f real s day/night (%02.0f-%02.0f), starts %02.0f:00, %d fuel vehicle kind(s), refill %.0f L/min/pump, opens at %.0f"),
 			*Scenario->GetName(), Scenario->RealSecondsDaylight, Scenario->RealSecondsNight,
 			Scenario->DawnHour, Scenario->DuskHour, Scenario->StartHour,
-			Scenario->FuelDwellSeconds, Scenario->StartingBalance);
+			Scenario->FuelVehicles.Num(), Scenario->DepotRefillLitresPerMinutePerPump, Scenario->StartingBalance);
 	}
 
 	// EVERY LETTER'S FUEL VEHICLE resolved HERE, once, into FuelService's table - not by
@@ -183,6 +184,16 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// UFuelService::DesignVehicleOf for why the read is handed down rather than made there.
 	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A sent the truck still reads as tow-built)
 	FuelService->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
+
+	// THE LITRES A FLIGHT WAS OFFERED AT reach its fuel demand through the board - see
+	// UFuelService::LitresOwedFor. Weak, for the dispatcher's reason below.
+	TWeakObjectPtr<UFlightBoard> WeakBoard = FlightBoard;
+	FuelService->LitresOwedFor = [WeakBoard](int32 AgentId, const FAirframe& Airframe)
+	{
+		const UFlightBoard* Board = WeakBoard.Get();
+		const UFlight* Flight = Board != nullptr ? Board->FlightForAgent(AgentId) : nullptr;
+		return Flight != nullptr ? Flight->FuelLitres : UFuelService::DefaultLitres(Airframe);
+	};
 	{
 		// READ BACK OFF THE TABLE, every letter, rather than a banner typed beside the resolve:
 		// the line then says what dispatch will actually send.

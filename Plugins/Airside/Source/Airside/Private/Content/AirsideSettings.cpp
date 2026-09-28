@@ -98,6 +98,9 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 	// take a turn too tight for its own wing depending purely on whether content happened
 	// to be loaded.
 	Piper.Wingspan = UAircraftType::PiperMeridianWingspan();
+	// AND THE TANK, for the same "must agree with the content branch" reason - a fallback with
+	// none would ask for no fuel (spec 2026-09-28-fuel-litres).
+	Piper.FuelCapacityLitres = UAircraftType::PiperMeridianFuelCapacityLitres();
 
 	// Same rule as Wingspan: the content branch reads Type->Requirements, so the fallback
 	// must carry the Piper's too, or admission would judge the same aircraft by 0 m field

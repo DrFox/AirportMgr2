@@ -179,6 +179,9 @@ namespace
 		/** Where the bFarEdgeRoad road runs, x. Set by Build. */
 		double FarRoadX = 0.0;
 
+		/** The litres every parked aircraft asks for - see Build's LitresOwedFor. */
+		double FixtureLitres = 300.0;
+
 		void Build(bool bWithRoad, bool bWithDepot = true);
 
 		/**
@@ -290,6 +293,11 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	// through the same loop, so the fixture's letters get the vehicles the game's do.
 	Service->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
 	Service->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
+
+	// A 300 L JOB for every aircraft this fixture parks, unless a test says otherwise
+	// (spec 2026-09-28-fuel-litres): the fixture's airframe is hand-assembled content default
+	// and may carry no tank, and every case below was written about ONE truck trip.
+	Service->LitresOwedFor = [this](int32, const FAirframe&) { return FixtureLitres; };
 
 	FGuidelineNodeId TaxiSouth, TaxiNorth;
 	LayLine(*Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
@@ -663,21 +671,27 @@ bool FFuelServiceTest::RunTest(const FString& Parameters)
 					&& Fixture.Service->GetDemands()[0].State == EFuelDemandState::Fuelling;
 			}, 240.0))) { return false; }
 
-	// 4. THE DWELL IS THE DWELL. Measured in UGroundTraffic's sim seconds - the same clock
-	// the truck's own motion accrues on - so 40 s of dwell is 40 s of watching, not the 0.55
-	// it would be on the day-compressed USimClock.
-	const double DwellStarted = Fixture.Traffic->GetSimSeconds();
-	Fixture.Advance(Fixture.Service->DwellSeconds - 5.0);
-	TestEqual(TEXT("still fuelling five seconds short"),
+	// 4. THE PUMPING IS LITRES OVER FLOW, IN GAME TIME (spec 2026-09-28-fuel-litres): 300 L
+	// at the vehicle's flow rate, timed on USimClock - the clock the turnaround contract is in.
+	const double PumpStarted = Fixture.Clock->Now();
+	const double PumpGameSeconds = Fixture.Service->GetDemands()[0].DwellEndsAt - PumpStarted;
+	const FFuelVehicleSpec Spec = Fixture.Service->SpecFor(Fixture.Traffic->FindAgent(TruckId)->AsVehicle()->TypeCode);
+	// WITHIN ONE FRAME: AdvanceUntil stops the frame AFTER pumping began, and a frame at the
+	// fixture's 72x is 2.4 game seconds.
+	TestEqual(TEXT("the pump runs litres / flow minutes"), PumpGameSeconds, 300.0 / Spec.FlowLitresPerMinute * 60.0,
+		Fixture.Clock->TimeScale() / 30.0 + 0.1);
+	const double RealToPump = PumpGameSeconds / Fixture.Clock->TimeScale();
+	Fixture.Advance(RealToPump - 0.5);
+	TestEqual(TEXT("still fuelling just short"),
 		static_cast<int32>(Fixture.Service->GetDemands()[0].State),
 		static_cast<int32>(EFuelDemandState::Fuelling));
 
-	Fixture.Advance(10.0);
-	TestEqual(TEXT("done once the dwell is up"),
+	Fixture.Advance(1.0);
+	TestEqual(TEXT("done once the pumping is done"),
 		static_cast<int32>(Fixture.Service->GetDemands()[0].State),
 		static_cast<int32>(EFuelDemandState::Done));
-	TestTrue(TEXT("and it took the whole dwell, not less"),
-		Fixture.Traffic->GetSimSeconds() - DwellStarted >= Fixture.Service->DwellSeconds);
+	TestTrue(TEXT("and it took the whole pumping time, not less"),
+		Fixture.Clock->Now() - PumpStarted >= PumpGameSeconds);
 
 	// 5. HOME AND RETIRED. A truck does not fly away, so nothing else would ever remove it -
 	// which is exactly what UGroundTraffic::RetireAgent exists for.
@@ -1600,6 +1614,9 @@ namespace FuelServiceTest
 		Test.TestTrue(TEXT("the tow backed off the service point"), bSawReverse);
 		Test.TestTrue(TEXT("the tow left the traffic model"), bTowGone);
 		Test.TestTrue(TEXT("by arriving home, not by being retired where it stands"), bHomeLine);
+		// ONCE ITS REFILL IS DONE (spec 2026-09-28-fuel-litres): home is not free until the tank
+		// it emptied is full again - 300 L at the depot's pump rate.
+		Fixture.AdvanceUntil([&Fixture] { return Fixture.Service->RefillingForTest() == 0; }, 60.0);
 		Test.TestEqual(TEXT("its depot has every truck back"), Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
 		return true;
 	}
@@ -1996,6 +2013,106 @@ bool FFuelCouldServeTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("with a joined depot on a road to the stand it can"),
 			Fixture.Service->CouldServe(*Fixture.Net, Airframe));
 	}
+	return true;
+}
+
+/**
+ * FUEL BY THE LITRE (spec 2026-09-28-fuel-litres section 3): the trailer's 1,000 L tank cannot
+ * fuel a Saab in one visit, so a load bigger than the vehicle's tank takes several trips, with a
+ * refill at the depot between them - and the aircraft waits for all of them.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelBigLoadTakesTripsTest, "AirportOps.Fuel.BigLoadTakesTrips",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelBigLoadTakesTripsTest::RunTest(const FString& Parameters)
+{
+	FFuelFixture Fixture;
+	Fixture.FixtureLitres = 2500.0;
+	Fixture.Build(/*bWithRoad=*/true);
+	// EVERY VEHICLE A 1000 L TANK AT A QUICK 600 L/MIN, so three trips fit the test's patience.
+	Fixture.Service->FallbackSpec = FFuelVehicleSpec{ 1000.0, 600.0 };
+	Fixture.Service->VehicleSpecs.Reset();
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+
+	bool bSawRefill = false;
+	const bool bDone = Fixture.AdvanceUntil([&Fixture, &bSawRefill]
+	{
+		bSawRefill |= Fixture.Service->RefillingForTest() > 0;
+		return Fixture.Service->GetDemands().Num() == 1
+			&& Fixture.Service->GetDemands()[0].State == EFuelDemandState::Done;
+	}, 900.0);
+	if (!TestTrue(TEXT("the job finishes"), bDone)) { return false; }
+	const FFuelDemand& Demand = Fixture.Service->GetDemands()[0];
+	TestEqual(TEXT("2,500 L on a 1,000 L tank is three trips"), Demand.Trips, 3);
+	TestEqual(TEXT("and all of it was delivered"), Demand.LitresDelivered, 2500.0, 0.5);
+	TestEqual(TEXT("nothing is owed"), Demand.LitresOwed, 0.0, 0.5);
+	TestTrue(TEXT("and the depot refilled a truck between trips"), bSawRefill);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelPausedPumpTest, "AirportOps.Fuel.PausedPumpDoesNotFinish",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelPausedPumpTest::RunTest(const FString& Parameters)
+{
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	if (!TestTrue(TEXT("the truck starts pumping"), Fixture.AdvanceUntil([&Fixture]
+		{
+			return Fixture.Service->GetDemands().Num() == 1
+				&& Fixture.Service->GetDemands()[0].State == EFuelDemandState::Fuelling;
+		}, 240.0))) { return false; }
+	// GAME TIME: a paused clock does not pump, however long the frames run.
+	Fixture.Clock->TogglePause();
+	Fixture.Advance(120.0);
+	TestEqual(TEXT("still fuelling after two paused minutes"),
+		static_cast<int32>(Fixture.Service->GetDemands()[0].State),
+		static_cast<int32>(EFuelDemandState::Fuelling));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelRefillHoldsDepotTest, "AirportOps.Fuel.RefillHoldsTheDepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelRefillHoldsDepotTest::RunTest(const FString& Parameters)
+{
+	// A TRUCK HOME EMPTY IS NOT FREE AT ONCE: it refills at the depot's pumps, and until it has
+	// its slot stays taken - Delivered / (pumps x rate) game minutes.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.Service->RefillLitresPerMinutePerPump = 10.0;   // slow, so the hold is long enough to see
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	if (!TestTrue(TEXT("the truck comes home and starts refilling"), Fixture.AdvanceUntil([&Fixture]
+		{ return Fixture.Service->RefillingForTest() == 1; }, 600.0))) { return false; }
+	TestEqual(TEXT("the refilling truck still counts against its depot"),
+		Fixture.Service->TrucksOutForTest(Fixture.Depot), 1);
+	TestTrue(TEXT("and the refill ends"), Fixture.AdvanceUntil([&Fixture]
+		{ return Fixture.Service->RefillingForTest() == 0; }, 600.0));
+	TestEqual(TEXT("freeing the slot"), Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelNoLitresTest, "AirportOps.Fuel.NoLitresNoTruck",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelNoLitresTest::RunTest(const FString& Parameters)
+{
+	// A TYPE WITH NO TANK wants nothing - but still turns round and leaves, so its demand is
+	// Done from the start rather than absent (DepartTheReady walks demands).
+	FFuelFixture Fixture;
+	Fixture.FixtureLitres = 0.0;
+	Fixture.Build(/*bWithRoad=*/true);
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	Fixture.Advance(2.0);
+	if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+	TestEqual(TEXT("already done"), static_cast<int32>(Fixture.Service->GetDemands()[0].State),
+		static_cast<int32>(EFuelDemandState::Done));
+	TestEqual(TEXT("and no truck was sent"), Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
 	return true;
 }
 

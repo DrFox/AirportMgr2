@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/OpsDefinition.h"
+#include "Model/Airframe.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadHandles.h"
@@ -133,9 +135,23 @@ struct AIRPORTOPS_API FFuelDemand
 	/** Whose truck, so the count is freed against the right depot. */
 	UPROPERTY() FEntityInstanceId Depot;
 
-	/** UGroundTraffic::GetSimSeconds at which the dwell ends. See UFuelService's header for
-	 *  why that clock and not USimClock. */
+	/**
+	 * USimClock::Now at which this trip's pumping ends - GAME time since 2026-09-28 (spec
+	 * fuel-litres), so a pause stops it and it is measured in the clock the turnaround contract
+	 * is in. It was UGroundTraffic::GetSimSeconds, for a flat 40 s dwell the player watched; a
+	 * realistic load at a realistic rate is game MINUTES, which is 5-90 real seconds to watch.
+	 */
 	UPROPERTY() double DwellEndsAt = 0.0;
+
+	/** Litres still to deliver, and delivered so far. Owed comes from LitresOwedFor at park. */
+	UPROPERTY() double LitresOwed = 0.0;
+	UPROPERTY() double LitresDelivered = 0.0;
+
+	/** This trip's load: min(the vehicle's tank, LitresOwed). */
+	UPROPERTY() double LoadThisTrip = 0.0;
+
+	/** Trips completed. A load bigger than the vehicle's tank takes more than one. */
+	UPROPERTY() int32 Trips = 0;
 
 	UPROPERTY() EFuelRefusal Why = EFuelRefusal::None;
 
@@ -218,18 +234,13 @@ struct AIRPORTOPS_API FFuelDemand
  * module as much as in Airside's. So everything it needs from a UEntityDefinition (the pose
  * role, the truck count) is read off FEntityInstance, where placement captured it.
  *
- * IT SEES BOTH CLOCKS, and which one answers which question is the whole of the paragraph
- * below. A DWELL is timed on UGroundTraffic::GetSimSeconds; a TURNAROUND is timed on
- * USimClock - see FFuelDemand::TurnaroundEndsAt and FAirframe::TurnaroundSeconds. They are
- * opposite cases of the same compression and neither reading generalises to the other.
- *
- * THE DWELL COMES FROM UGroundTraffic::GetSimSeconds, NOT FROM USimClock. The clock is
- * day-compressed - at the default 1200 real seconds per game day a 40 s dwell would be 0.55
- * real seconds - while the truck's MOTION runs on the speed multiplier alone. A dwell timed
- * on the clock would be over before the truck had finished rolling to a stop. USimClock's own
- * header says turnaround durations are authored in game time; this is the one place that
- * reading does not survive contact with a dwell the player watches, and the reason is
- * recorded here rather than argued again later.
+ * ONE CLOCK SINCE 2026-09-28 (spec fuel-litres): pumping and the turnaround are both timed on
+ * USimClock - see FFuelDemand::DwellEndsAt and ::TurnaroundEndsAt. The dwell USED to be on
+ * UGroundTraffic::GetSimSeconds, because a flat 40 s dwell on the day-compressed clock would
+ * have been over in half a real second. A realistic load at a realistic flow rate is game
+ * MINUTES (300 L at 75 L/min is 4), which is a few real seconds to watch - so the reason for
+ * the second clock went, and with it the dwell that could not be compared with the contract.
+ * The truck's MOTION still runs on the speed multiplier alone, as everything's does.
  *
  * SCAFFOLDING, and named as such by the spec (§0.1): M3's UJobBoard replaces "nearest depot
  * with a truck free" with demands from a flight, depots bidding by ETA, multi-trip jobs and
@@ -260,27 +271,37 @@ public:
 	 * session, one truck short, for every depot a truck happened to be homeward bound from
 	 * at save time. The demands agents rebuild the moment OnAgentPhase sees them again.
 	 */
-	virtual void OnBeforeRestore() override { Demands.Reset(); GoingHome.Reset(); }
+	virtual void OnBeforeRestore() override { Demands.Reset(); GoingHome.Reset(); Refilling.Reset(); RefillOnReturn.Reset(); }
 
 	/**
-	 * How long a truck stays at the hydrant, in the sim seconds a truck MOVES in.
-	 *
-	 * A PROPERTY AND NOT A CONSTANT, so it is a figure a designer changes rather than a
-	 * recompile. Set from UScenario::FuelDwellSeconds at attach, exactly as USimClock's
-	 * RealSecondsDaylight is; the default here is only what a bare NewObject gets.
+	 * Each fuel vehicle's tank and flow, by FVehicle::TypeCode - copied from UScenario::
+	 * FuelVehicles at attach (spec 2026-09-28-fuel-litres). Empty in a bare NewObject; SpecFor
+	 * then answers FallbackSpec.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0"))
-	double DwellSeconds = 40.0;
+	UPROPERTY() TMap<FName, FFuelVehicleSpec> VehicleSpecs;
+
+	/** What a vehicle with no entry in VehicleSpecs carries: the trailer's figures. */
+	UPROPERTY() FFuelVehicleSpec FallbackSpec = FFuelVehicleSpec(1000.0, 75.0);
+
+	/** Litres per GAME minute per pump module a depot refills a returning vehicle at. */
+	UPROPERTY() double RefillLitresPerMinutePerPump = 500.0;
+
+	/** VehicleSpecs[TypeCode], or FallbackSpec - with a Warning once per unknown code. */
+	FFuelVehicleSpec SpecFor(FName TypeCode) const;
 
 	/**
-	 * The floor DwellSecondsFor cannot go below, however many pumps a depot has.
-	 *
-	 * A pump farm must not make refuelling instant: the dwell is the only pressure the fuel
-	 * loop applies, and a depot that discharged a demand the frame it arrived would delete
-	 * the reason to build a second one.
+	 * The litres a parked aircraft asks for - the flight's own FuelLitres, drawn at its offer.
+	 * UOpsRuntime::Attach points this at the flight board; unset, or for an agent no flight owns,
+	 * DefaultLitres. 0 means it wants no fuel.
+	 * ENFORCED BY: AirportOps.Fuel.RuntimeWiresLitresOwed
 	 */
-	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0"))
-	double MinDwellSeconds = 5.0;
+	TFunction<double(int32 AgentId, const FAirframe& Airframe)> LitresOwedFor;
+
+	/** The one fallback load: 70% of the tank - the middle of the offer's 50-90% draw. */
+	static double DefaultLitres(const FAirframe& Airframe) { return FMath::Max(Airframe.FuelCapacityLitres, 0.0) * 0.7; }
+
+	/** How many returning trucks are refilling at their depots right now. */
+	int32 RefillingForTest() const { return Refilling.Num(); }
 
 	/**
 	 * True when Depot can fuel at all - it has a pump, or it predates modules entirely.
@@ -291,18 +312,8 @@ public:
 	 */
 	static bool HasWorkingPump(const FEntityInstance& Depot);
 
-	/**
-	 * How long a truck from Depot dwells at the hydrant - the base divided by its pumps.
-	 *
-	 * READS EDepotModule DIRECTLY, which this layer may do because that enum lives in
-	 * Airside's Model/ rather than its Entities/. Had it been an Entities/ type the count
-	 * would have needed a captured field on FEntityInstance to reach here at all, exactly as
-	 * Trucks did - that it does not is the test that the enum sits in the right layer.
-	 *
-	 * A depot with no modules gets the base dwell: see HasWorkingPump. A depot with modules
-	 * and no pump never reaches here, because ChooseDepot will not dispatch to one.
-	 */
-	double DwellSecondsFor(const FEntityInstance& Depot) const;
+	/** Pump modules at Depot, or 1 for a plotless depot - see HasWorkingPump. The refill rate's multiplier. */
+	static int32 PumpsAt(const FEntityInstance& Depot);
 
 	/** How many ICAO letters the vehicle table holds, A-F. See VehiclesByLetter. */
 	static constexpr int32 LetterCount = 6;
@@ -310,7 +321,7 @@ public:
 	/**
 	 * Fill every letter's table entry - the vehicle a depot SENDS to a stand of that letter -
 	 * from Resolve. UOpsRuntime::Attach fills it with UAirsideSettings::ResolveStandDesignVehicle,
-	 * next to DwellSeconds above; nothing on the dispatch path resolves content, and cannot: this
+	 * next to VehicleSpecs above; nothing on the dispatch path resolves content, and cannot: this
 	 * is Model/, and reaching Content/ was the only Model->Content edge in either plugin (#104).
 	 * A TFunctionRef rather than the resolve itself for the same reason, and so the world-free
 	 * fixture fills the table through the one loop too.
@@ -389,7 +400,7 @@ public:
 	 * different thing needing a promised time to be late against - and nothing in this build
 	 * has one, because FFuelDemand::TurnaroundEndsAt is computed from the actual park time.
 	 */
-	void PostServiceFee(double Now, const FAirframe& Airframe);
+	void PostServiceFee(double Now, double Litres);
 
 	/**
 	 * One pass: offer every Needed demand a truck, run the dwells down, and re-offer the
@@ -518,6 +529,25 @@ private:
 	 * has actually arrived. TRANSIENT for the same reason as Demands above.
 	 */
 	UPROPERTY(Transient) TMap<int32, FEntityInstanceId> GoingHome;
+
+	/**
+	 * A truck home from a trip is not free at once: it refills at its depot's pumps. Its slot
+	 * stays taken (TrucksOutFor counts these) until ReadyAt, GAME time; FleetRevision bumps when
+	 * it frees, which is what re-offers a demand waiting on a busy depot. Transient like
+	 * GoingHome - a load clears demands and trucks alike.
+	 */
+	struct FRefill
+	{
+		FEntityInstanceId Depot;
+		double ReadyAt = 0.0;
+	};
+	TMap<int32, FRefill> Refilling;
+
+	/** Litres a truck on its way home pumped out, so its refill can be sized when it arrives. */
+	TMap<int32, double> RefillOnReturn;
+
+	/** Unknown vehicle codes already warned about - see SpecFor. */
+	mutable TSet<FName> WarnedSpecs;
 
 	FFuelDemand* FindByAircraft(int32 AircraftId);
 	const FFuelDemand* FindByAircraft(int32 AircraftId) const;
