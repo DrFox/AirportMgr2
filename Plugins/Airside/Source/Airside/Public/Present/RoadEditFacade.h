@@ -259,6 +259,10 @@ public:
 	 */
 	virtual FString WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const override;
 
+	/** See IRoadEditTarget::WhyPlotRefused. PlaceEntityInPlot's own outline refusals, moved here
+	 *  whole (same order, same wording), plus the clearance strip in the stand's words. */
+	virtual FString WhyPlotRefused(TArrayView<const FVector2D> Outline) const override;
+
 	/**
 	 * The one quote a drawn stand is priced at: BuildCost::ForEntity(Definition) plus the pad
 	 * it sits on (QuoteForApron(Outline, Pavement)), combined into one "{0} + {1}" What text -

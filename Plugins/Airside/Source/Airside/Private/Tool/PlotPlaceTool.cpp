@@ -381,6 +381,9 @@ void FPlotPlaceTool::DescribeReadout(const FToolContext& Context, TConstArrayVie
 	// regardless of whether the reservation placed anything.
 	const bool bHasDefinition =
 		Context.Target != nullptr && Context.Target->GetEntityDefinition(Kind) != nullptr;
+	// THE OUTLINE'S REFUSALS, the facade's own evaluator (strip stage 3) - the same call
+	// PlaceEntityInPlot makes first, so Build cannot light over a plot inside a strip.
+	const FString Why = Context.Target != nullptr ? Context.Target->WhyPlotRefused(Shown) : FString();
 
 	if (IsConfirmed())
 	{
@@ -389,6 +392,11 @@ void FPlotPlaceTool::DescribeReadout(const FToolContext& Context, TConstArrayVie
 			// THE SAME FACT the facade's own log line names - see PlaceEntityInPlot's refusal
 			// message - said here because the player, unlike the log, is looking at the bar.
 			Sink.Warning(TEXT("No fuel depot is authored to build here"));
+		}
+		else if (!Why.IsEmpty())
+		{
+			// Capitalised for the bar; the words are the facade's.
+			Sink.Warning(Why.Left(1).ToUpper() + Why.Mid(1));
 		}
 		else if (Total == 0)
 		{
@@ -407,7 +415,7 @@ void FPlotPlaceTool::DescribeReadout(const FToolContext& Context, TConstArrayVie
 		}
 	}
 
-	Sink.Committable(IsConfirmed() && bHasDefinition && Total > 0);
+	Sink.Committable(IsConfirmed() && bHasDefinition && Why.IsEmpty() && Total > 0);
 }
 
 #undef LOCTEXT_NAMESPACE

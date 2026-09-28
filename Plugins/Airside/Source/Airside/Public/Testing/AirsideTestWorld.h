@@ -231,6 +231,9 @@ struct FNullEditTarget : IRoadEditTarget
 	 *  inside, and the road fakes built on this (TaxiwayWidthTest's FFakeWidthTarget) record a
 	 *  click's ConnectNodes - a refusal here would stop the click before it reached them. */
 	virtual FString WhySegmentRefused(int32, const FRoadSnapResult&, ERoadKind, int32) const override { return FString(); }
+	/** Allowed, WhySegmentRefused's reason: no network, no strip - and PlaceEntityInPlot above
+	 *  already answers INDEX_NONE, so nothing is built either way. */
+	virtual FString WhyPlotRefused(TArrayView<const FVector2D>) const override { return FString(); }
 	virtual bool DeleteEntity(int32) override { return false; }
 	virtual int32 FindEntityAt(FVector2D, double) const override { return INDEX_NONE; }
 	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity) const override { return nullptr; }

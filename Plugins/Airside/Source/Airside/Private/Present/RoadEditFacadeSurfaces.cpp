@@ -321,6 +321,49 @@ namespace
 	constexpr double OverlapToleranceUu = 1.0;
 }
 
+FString URoadEditFacade::WhyPlotRefused(TArrayView<const FVector2D> Outline) const
+{
+	// The triangulator's contract is a SIMPLE polygon, and it is this layer that owes it -
+	// fed a figure-eight it produces overlapping triangles rather than an error. The gesture
+	// cannot produce one now that a plot is a rectangle, which is exactly why this stays:
+	// the guarantee belongs to whoever feeds the triangulator, not to whoever happens to be
+	// calling this month.
+	if (!RoadGeom::IsSimplePolygon(Outline))
+	{
+		return TEXT("the outline crosses itself");
+	}
+
+	const URoadNetwork* Network = GetNetwork();
+	if (Network == nullptr)
+	{
+		return FString();
+	}
+
+	// NOT OVER A STAND. WhyStandRefused has always refused a stand drawn over a depot; the
+	// reverse had no check, so a depot plot laid across a stand's apron placed its fence and
+	// tanks under the parked aircraft (final review). The SAME RoadGeom::PolygonsOverlap, so a depot
+	// flush against a stand's edge places exactly as a stand flush against a depot does.
+	// Stands only: depot-on-depot was never refused and is not this fix's to change.
+	for (int32 Index = 0; Index < Network->GetEntities().Num(); ++Index)
+	{
+		const FEntityInstance& Entity = Network->GetEntities()[Index];
+		if (Entity.bAlive && Entity.IsStand() && Entity.IsPlotted() && RoadGeom::PolygonsOverlap(Outline, Entity.Outline, OverlapToleranceUu))
+		{
+			return FString::Printf(TEXT("the plot overlaps stand %d"), Index);
+		}
+	}
+
+	// INSIDE A TAXIWAY'S CLEARANCE STRIP (strip stage 3): a depot's fence and tanks are as
+	// struck by a passing wing as a parked tail. WhyStandRefused's own words, so the two
+	// readouts name the fault alike.
+	if (const TOptional<TaxiwayStrip::FIntrusion> In = TaxiwayStrip::WorstIntrusion(*Network, Outline))
+	{
+		return FString::Printf(TEXT("inside a taxiway's clearance strip by %.1f m (a Code %s taxiway needs %.1f m clear)"),
+			In->Depth / 100.0, IcaoCode::ToLetter(In->Letter), In->Required / 100.0);
+	}
+	return FString();
+}
+
 PlotYard::FReservation URoadEditFacade::ReserveForPlot(TArrayView<const FVector2D> Outline,
 	FVector2D FrontageA, FVector2D FrontageB, EPlaceableEntity Kind) const
 {
@@ -366,32 +409,14 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 
 	URoadNetwork& Net = EnsureNetwork();
 
-	// The triangulator's contract is a SIMPLE polygon, and it is this layer that owes it -
-	// fed a figure-eight it produces overlapping triangles rather than an error. The gesture
-	// cannot produce one now that a plot is a rectangle, which is exactly why this stays:
-	// the guarantee belongs to whoever feeds the triangulator, not to whoever happens to be
-	// calling this month.
-	if (!RoadGeom::IsSimplePolygon(Outline))
+	// THE OUTLINE'S REFUSALS, through the one evaluator the tool's readout asks - see
+	// WhyPlotRefused, which holds them (moved there whole, strip stage 3). ONE log line for all
+	// of them now, where each had its own; the reason text is the same words.
+	const FString Why = WhyPlotRefused(Outline);
+	if (!Why.IsEmpty())
 	{
-		UE_LOG(LogRoadMesh, Warning,
-			TEXT("PlaceEntityInPlot refused: the outline crosses itself"));
+		UE_LOG(LogRoadMesh, Warning, TEXT("PlaceEntityInPlot refused: %s"), *Why);
 		return INDEX_NONE;
-	}
-
-	// NOT OVER A STAND. WhyStandRefused has always refused a stand drawn over a depot; the
-	// reverse had no check, so a depot plot laid across a stand's apron placed its fence and
-	// tanks under the parked aircraft (final review). The SAME RoadGeom::PolygonsOverlap, so a depot
-	// flush against a stand's edge places exactly as a stand flush against a depot does.
-	// Stands only: depot-on-depot was never refused and is not this fix's to change.
-	for (int32 Index = 0; Index < Net.GetEntities().Num(); ++Index)
-	{
-		const FEntityInstance& Entity = Net.GetEntities()[Index];
-		if (Entity.bAlive && Entity.IsStand() && Entity.IsPlotted() && RoadGeom::PolygonsOverlap(Outline, Entity.Outline, OverlapToleranceUu))
-		{
-			UE_LOG(LogRoadMesh, Warning,
-				TEXT("PlaceEntityInPlot refused: the plot overlaps stand %d"), Index);
-			return INDEX_NONE;
-		}
 	}
 
 	// COUNTER-CLOCKWISE, exactly the correction AddApron makes and for the same reason: the

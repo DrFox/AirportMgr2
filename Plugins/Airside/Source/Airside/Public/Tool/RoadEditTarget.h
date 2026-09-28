@@ -446,6 +446,17 @@ public:
 	 */
 	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const = 0;
 
+	/**
+	 * Why a depot plot with this Outline may not be placed, or empty. WhyStandRefused's
+	 * pattern for plots (strip stage 3): FPlotPlaceTool's readout and Build button and
+	 * PlaceEntityInPlot's commit all ask this, so the bar cannot light Build over a plot the
+	 * commit refuses. The outline alone - self-crossing, over a stand, inside a taxiway's
+	 * clearance strip - in that order; what only the commit knows (no definition, a
+	 * reservation that fits nothing, afford) stays the commit's.
+	 * ENFORCED BY: Airside.Tool.PlotPlace.RefusedInsideStrip
+	 */
+	virtual FString WhyPlotRefused(TArrayView<const FVector2D> Outline) const = 0;
+
 	virtual bool DeleteEntity(int32 EntityIndex) = 0;
 
 	/**

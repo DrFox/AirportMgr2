@@ -603,6 +603,9 @@ public:
 	/** Forwards to the facade - see URoadEditFacade::WhyStandRefused. */
 	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const override;
 
+	/** Forwards to the facade - see IRoadEditTarget::WhyPlotRefused. */
+	virtual FString WhyPlotRefused(TArrayView<const FVector2D> Outline) const override;
+
 	/** Forwards to the facade - see IRoadEditTarget::WhySegmentRefused. */
 	virtual FString WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const override;
 
