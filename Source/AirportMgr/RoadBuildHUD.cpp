@@ -325,6 +325,27 @@ void ARoadBuildHUD::Line(const FVector2D& From, const FVector2D& To, EPreviewSty
 	const FPreviewLook& Look = LookFor(Style);
 	const float Weight = PreviewThickness * Look.ThicknessScale;
 
+	// ALPHA-BLENDED AS A QUAD: canvas lines are drawn opaque whatever their alpha - see
+	// FPreviewLook::bTranslucentLine. Two triangles with translucent blending do honour it.
+	if (Look.bTranslucentLine && !IsDashed(Style) && Canvas != nullptr)
+	{
+		const FVector2D Along = (ScreenB - ScreenA).GetSafeNormal();
+		const FVector2D Across = FVector2D(-Along.Y, Along.X) * (0.5 * Weight);
+		const FVector2D A0 = ScreenA - Across;
+		const FVector2D A1 = ScreenA + Across;
+		const FVector2D B0 = ScreenB - Across;
+		const FVector2D B1 = ScreenB + Across;
+		FCanvasTriangleItem First(A0, A1, B1, GWhiteTexture);
+		First.SetColor(Look.Colour);
+		First.BlendMode = SE_BLEND_Translucent;
+		Canvas->DrawItem(First);
+		FCanvasTriangleItem Second(A0, B1, B0, GWhiteTexture);
+		Second.SetColor(Look.Colour);
+		Second.BlendMode = SE_BLEND_Translucent;
+		Canvas->DrawItem(Second);
+		return;
+	}
+
 	if (!IsDashed(Style))
 	{
 		DrawLine(

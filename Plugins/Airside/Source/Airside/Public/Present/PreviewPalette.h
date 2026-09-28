@@ -34,6 +34,19 @@ struct FPreviewLook
 	/** A second, larger ring at the same colour - Doomed/Pending/Selected's emphasis ring. */
 	UPROPERTY(EditAnywhere)
 	bool bDoubleRing = false;
+
+	/**
+	 * Draw this style's lines ALPHA-BLENDED. Canvas lines ignore Colour.A: FBatchedElements
+	 * draws thick lines in its opaque pass with SE_BLEND_Opaque (BatchedElements.cpp, UE 5.8),
+	 * so a line style's alpha did nothing - measured in PIE 2026-09-28, where three alpha
+	 * changes to the grid overlay showed no difference. ARoadBuildHUD draws a style with this
+	 * set as a translucent quad instead.
+	 *
+	 * OPT-IN, not "any alpha below 1": IntermediateHoldingPosition has carried a 0.5 alpha that
+	 * never rendered, and honouring it now would change a look nobody asked to change.
+	 */
+	UPROPERTY(EditAnywhere)
+	bool bTranslucentLine = false;
 };
 
 /**

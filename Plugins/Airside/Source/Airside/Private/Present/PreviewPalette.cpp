@@ -77,16 +77,11 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// rather than blend into the rectangle it is one edge of.
 	case EPreviewStyle::ServiceEdge:                 return FLinearColor(0.95f, 0.5f, 0.15f);
 
-	// GREY AND PART-TRANSPARENT: hundreds of pieces under every gesture must read as graph
-	// paper, not geometry. DIM IN RGB AS WELL AS ALPHA because neither sink is shown to honour
-	// alpha on a line (the editor's PDI may not), and a white line drawn opaque would be the
-	// loudest thing on screen. RAISED 2026-09-28 at the player's ask ("more opaque") from
-	// 0.55 grey / 0.35 and 0.8 / 0.5, after seeing the first figures in PIE. Alpha raised twice
-	// more that day (0.65, then 0.85) with NO VISIBLE CHANGE in PIE - measured against a log
-	// proving the new binary drew - so alpha is not the lever on the HUD's canvas lines; RGB and
-	// ThicknessScale (DefaultLook below) are.
-	case EPreviewStyle::GridMinor:                   return FLinearColor(0.85f, 0.88f, 0.85f, 0.85f);
-	case EPreviewStyle::GridMajor:                   return FLinearColor(1.0f, 1.0f, 1.0f, 1.0f);
+	// WHITE AT LOW ALPHA, drawn as translucent quads (FPreviewLook::bTranslucentLine) - the
+	// canvas's own lines drop alpha, which is why 2026-09-27/28's alpha-only changes showed
+	// nothing and a brighter, thicker attempt read "too thick, too strong" (PIE, 2026-09-28).
+	case EPreviewStyle::GridMinor:                   return FLinearColor(1.0f, 1.0f, 1.0f, 0.22f);
+	case EPreviewStyle::GridMajor:                   return FLinearColor(1.0f, 1.0f, 1.0f, 0.4f);
 	}
 
 	// Reached only if EPreviewStyle grew a value with no case above - not caught at compile
@@ -202,13 +197,15 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 		Look.ThicknessScale = 2.0f;
 		break;
 
-	// Was a 0.5 hairline for both; raised 2026-09-28 when alpha changes did not show (see
-	// Default). Major heavier than minor, so fives still count.
+	// Thin, and translucent (see Default): the 2026-09-28 thicker attempt was "too thick".
+	// Major a touch heavier so fives still count.
 	case EPreviewStyle::GridMinor:
-		Look.ThicknessScale = 0.75f;
+		Look.ThicknessScale = 0.5f;
+		Look.bTranslucentLine = true;
 		break;
 	case EPreviewStyle::GridMajor:
-		Look.ThicknessScale = 1.0f;
+		Look.ThicknessScale = 0.6f;
+		Look.bTranslucentLine = true;
 		break;
 	}
 
