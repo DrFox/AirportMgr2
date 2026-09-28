@@ -3,12 +3,15 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "Engine/DeveloperSettings.h"
+// Complete type, not a forward declaration: TStrongObjectPtr<UFontFace> below static_asserts on it.
+#include "Engine/FontFace.h"
 #include "Fonts/SlateFontInfo.h"
 #include "Styling/SlateBrush.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UIStyle.generated.h"
 
 class UMaterialInstanceDynamic;
+struct FCompositeFont;
 class UMaterialInterface;
 class UTexture2D;
 class UTextBlock;
@@ -120,8 +123,14 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor HudGround = FLinearColor(0.02f, 0.03f, 0.04f, 0.72f);
 
-	UPROPERTY(EditAnywhere, Category = "Type") FSlateFontInfo TitleFont;
-	UPROPERTY(EditAnywhere, Category = "Type") FSlateFontInfo LabelFont;
+	/**
+	 * Inter, as two faces (Tools/Python/build_ui_font.py). Heading, Title and Clock draw SemiBold;
+	 * Label and Body draw Regular. FACES, NOT A UFont: a composite UFont cannot be authored from
+	 * Python on 5.8 (FFontData::FontFaceAsset is private), so ApplyText builds the composite from
+	 * these once. Unset (the CDO) draws in the widget's own engine font.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Type") TSoftObjectPtr<UFontFace> FontRegular;
+	UPROPERTY(EditAnywhere, Category = "Type") TSoftObjectPtr<UFontFace> FontSemiBold;
 
 	// Per-role sizes, uu. ONE UPROPERTY PER EUITextRole, so a size lives in exactly one place
 	// instead of at every call site that used to retype it - the whole point of issue #89.
@@ -254,6 +263,14 @@ private:
 	 * instance is a cache of values this asset already owns, not state worth serialising.
 	 */
 	mutable TStrongObjectPtr<UMaterialInstanceDynamic> ControlFillInstance;
+
+	/** Built once from FontRegular/FontSemiBold, shared by every text block. See Composite(). */
+	mutable TSharedPtr<const FCompositeFont> CompositeFontCache;
+	/** Keeps the two faces loaded: FFontData holds them by raw pointer, invisible to GC. */
+	mutable TStrongObjectPtr<UFontFace> RegularFaceRef;
+	mutable TStrongObjectPtr<UFontFace> SemiBoldFaceRef;
+	/** The composite, or null when either face is unset or fails to load. */
+	TSharedPtr<const FCompositeFont> Composite() const;
 };
 
 /**

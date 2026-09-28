@@ -5,23 +5,29 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/Package.h"
+#include "Engine/FontFace.h"
 #include "Engine/Texture2D.h"
+#include "Fonts/CompositeFont.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUIStyle, Log, All);
 
 void UUIStyle::ApplyText(UTextBlock& TextBlock, EUITextRole Role, FLinearColor Colour) const
 {
-	// Title and Clock read off TitleFont; everything smaller off LabelFont - the same split
-	// the eleven call sites made by hand. Falls back to the widget's own font when the asset
-	// carries none, same as every site this replaces did.
-	const bool bUsesTitleFont = (Role == EUITextRole::Title || Role == EUITextRole::Clock);
-	const FSlateFontInfo& BaseFont = bUsesTitleFont ? TitleFont : LabelFont;
-	FSlateFontInfo Font = BaseFont.HasValidFont() ? BaseFont : TextBlock.GetFont();
+	// Heading, Title and Clock SemiBold; Label and Body Regular - the weight split the old
+	// TitleFont/LabelFont pair made, now read off one composite. No faces (the CDO) keeps the
+	// widget's own engine font, same as every site this replaced did.
+	const bool bHeavy = (Role == EUITextRole::Heading || Role == EUITextRole::Title || Role == EUITextRole::Clock);
+	FSlateFontInfo Font = TextBlock.GetFont();
+	if (const TSharedPtr<const FCompositeFont> Inter = Composite())
+	{
+		Font = FSlateFontInfo(Inter, Font.Size, bHeavy ? FName(TEXT("SemiBold")) : FName(TEXT("Regular")));
+	}
+	Font.LetterSpacing = 0;
 
-	// Only Heading forces spacing. Every other role LEAVES THE BASE FONT'S OWN SPACING ALONE:
-	// forcing it to 0 would silently override whatever the asset's TitleFont/LabelFont
-	// carries, the exact "one function overwrites a value nothing told it to touch" shape
-	// this refactor is supposed to be removing, not reintroducing.
+	// Only Heading is tracked out; every other role is Inter's own 0. This used to defer to
+	// whatever the asset's TitleFont/LabelFont carried, so as not to override a value nothing
+	// told it to touch - those two fields are gone (nothing ever set them), so there is no
+	// asset value left to respect, and a block reused across roles must not keep Heading's 120.
 	switch (Role)
 	{
 	case EUITextRole::Heading:
@@ -63,6 +69,35 @@ FSlateBrush UUIStyle::ControlFill() const
 		return Brush;
 	}
 	return FSlateRoundedBoxBrush(FLinearColor::White, ControlRadius);
+}
+
+TSharedPtr<const FCompositeFont> UUIStyle::Composite() const
+{
+	if (CompositeFontCache.IsValid())
+	{
+		return CompositeFontCache;
+	}
+	UFontFace* Regular = FontRegular.LoadSynchronous();
+	UFontFace* SemiBold = FontSemiBold.LoadSynchronous();
+	if (Regular == nullptr || SemiBold == nullptr)
+	{
+		return nullptr;
+	}
+	RegularFaceRef.Reset(Regular);
+	SemiBoldFaceRef.Reset(SemiBold);
+	TSharedRef<FCompositeFont> Built = MakeShared<FCompositeFont>();
+	auto Add = [&Built](const TCHAR* Name, UFontFace* Face)
+	{
+		FTypefaceEntry& Entry = Built->DefaultTypeface.Fonts.AddDefaulted_GetRef();
+		Entry.Name = FName(Name);
+		Entry.Font = FFontData(Face);
+	};
+	// Regular FIRST: a typeface name that matches nothing falls back to the first entry.
+	Add(TEXT("Regular"), Regular);
+	Add(TEXT("SemiBold"), SemiBold);
+	CompositeFontCache = Built;
+	UE_LOG(LogUIStyle, Log, TEXT("UI font: Inter composite built from %s and %s"), *Regular->GetName(), *SemiBold->GetName());
+	return CompositeFontCache;
 }
 
 UTexture2D* UUIStyle::IconFor(FName ActionId) const

@@ -97,6 +97,16 @@ def run():
     else:
         style.set_editor_property("button_material", material)
 
+    # Inter, as two faces - build_ui_font.py. See UUIStyle::FontRegular.
+    fonts = (("font_regular", "/Game/UI/Fonts/FF_Inter_Regular"),
+             ("font_semi_bold", "/Game/UI/Fonts/FF_Inter_SemiBold"))
+    for prop, face_path in fonts:
+        face = unreal.EditorAssetLibrary.load_asset(face_path)
+        if face is None:
+            fail("no %s - run build_ui_font.py first" % face_path)
+        else:
+            style.set_editor_property(prop, face)
+
     # READ THE MANIFEST fetch_ui_icons.py wrote. Deriving the id back from the asset name
     # cannot work: "tool.holding point" sanitises to T_Icon_tool_holding_point, and
     # underscores-to-dots would give "tool.holding.point", which matches no action.
@@ -187,6 +197,12 @@ def run():
         fail("button_material unset after save")
     else:
         say("PASS button_material survived the save")
+
+    for prop, _ in fonts:
+        if reloaded.get_editor_property(prop) is None:
+            fail("%s unset after save" % prop)
+        else:
+            say("PASS %s survived the save" % prop)
 
     say("ALL VERIFIED")
     say("DONE")

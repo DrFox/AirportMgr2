@@ -159,12 +159,10 @@ bool FUIStyleApplyTextTest::RunTest(const FString& Parameters)
 	Style->ApplyText(*Label, EUITextRole::Label, Style->Ink);
 	TestEqual(TEXT("Label takes the style's LabelSize, distinct from Heading"),
 		Label->GetFont().Size, Style->LabelSize);
-	// The BASE FONT'S OWN SPACING, not a literal 0: only Heading forces one, and every other
-	// role must leave whatever LabelFont/TitleFont already carries alone - a UI Style asset is
-	// free to set its own tracking (e.g. a condensed label face wanting +10), and ApplyText
-	// must not silently override it the way the old per-site `F.LetterSpacing = 0` would have.
-	TestEqual(TEXT("Label leaves the base font's own letter-spacing untouched"),
-		Label->GetFont().LetterSpacing, Style->LabelFont.LetterSpacing);
+	// ONLY HEADING IS TRACKED OUT. The per-asset TitleFont/LabelFont this used to defer to are
+	// gone (nothing ever set them - UI library step 1); Inter's own spacing is 0, and a Label
+	// that inherited Heading's 120 would read as a heading.
+	TestEqual(TEXT("Label is not tracked out - only Heading is"), Label->GetFont().LetterSpacing, 0);
 
 	UTextBlock* Clock = Fresh();
 	if (!TestNotNull(TEXT("a text block to paint"), Clock)) { return false; }
@@ -243,6 +241,39 @@ bool FUIStyleControlFillTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("material: tint is white"), Fill.TintColor.GetSpecifiedColor(), FLinearColor::White);
 	TestTrue(TEXT("the SAME instance twice - one cached MID, not one per button"),
 		Style->ControlFill().GetResourceObject() == Fill.GetResourceObject());
+	return true;
+}
+
+/**
+ * INTER, OR THE ENGINE FONT - NEVER NOTHING. The composite is built from two faces the style
+ * asset points at; a style without them (the CDO) must still draw text in the widget's own
+ * font rather than an empty FSlateFontInfo, which renders nothing at all.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUIStyleInterTest,
+	"AirportMgr.UI.TextDrawsInInterWithWeightByRole",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUIStyleInterTest::RunTest(const FString& Parameters)
+{
+	UTextBlock* Plain = NewObject<UTextBlock>();
+	GetDefault<UUIStyle>()->ApplyText(*Plain, EUITextRole::Body, FLinearColor::Black);
+	TestTrue(TEXT("no faces: still a valid font"), Plain->GetFont().HasValidFont());
+
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+	if (Style->FontRegular.IsNull() || Style->FontSemiBold.IsNull())
+	{
+		AddInfo(TEXT("no style asset with Inter faces configured - Inter half skipped"));
+		return true;
+	}
+	UTextBlock* Title = NewObject<UTextBlock>();
+	Style->ApplyText(*Title, EUITextRole::Title, Style->Ink);
+	UTextBlock* Body = NewObject<UTextBlock>();
+	Style->ApplyText(*Body, EUITextRole::Body, Style->Ink);
+	TestTrue(TEXT("Title uses the composite"), Title->GetFont().CompositeFont.IsValid());
+	TestEqual(TEXT("Title is SemiBold"), Title->GetFont().TypefaceFontName, FName(TEXT("SemiBold")));
+	TestEqual(TEXT("Body is Regular"), Body->GetFont().TypefaceFontName, FName(TEXT("Regular")));
+	TestTrue(TEXT("one composite for the whole UI"), Title->GetFont().CompositeFont == Body->GetFont().CompositeFont);
 	return true;
 }
 
