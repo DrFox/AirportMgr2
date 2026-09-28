@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Testing/AirsideTestWorld.h"
+#include "UI/UiRadioGroup.h"
 #include "UI/UiSlider.h"
 #include "UI/UiToggle.h"
 #include "UIStyle.h"
@@ -60,6 +61,33 @@ bool FUiSliderTest::RunTest(const FString& Parameters)
 	Sl->HandleSliderMoved(1.02f);
 	TestTrue(TEXT("the player's drag quantises too"), FMath::IsNearlyEqual(Sl->GetValue(), 1.0f, 1e-4f));
 	TestEqual(TEXT("and raises the event once"), Sl->BroadcastCountForTest(), 1);
+	return true;
+}
+
+/**
+ * EXACTLY ONE SEGMENT IS LIT, whatever index arrives - a saved 7 of 2 lands on the last, not on
+ * nothing (Review Focus 4). Code choosing raises nothing; the player's click raises once.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiRadioGroupTest, "AirportMgr.UI.Controls.Segmented",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiRadioGroupTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	const UUIStyle& S = *GetDefault<UUIStyle>();
+	UUiRadioGroup* G = CreateWidget<UUiRadioGroup>(TestWorld.World, UUiRadioGroup::StaticClass());
+	if (!TestNotNull(TEXT("a group"), G)) { return false; }
+	G->Build(S, { FText::FromString(TEXT("Left")), FText::FromString(TEXT("Right")) });
+	TestEqual(TEXT("one lit from the start"), G->SelectedButtonCountForTest(), 1);
+	G->SetSelected(7);
+	TestEqual(TEXT("an out-of-range index lands on the last"), G->GetSelected(), 1);
+	TestEqual(TEXT("still exactly one lit"), G->SelectedButtonCountForTest(), 1);
+	TestEqual(TEXT("code choosing raises nothing"), G->BroadcastCountForTest(), 0);
+	G->Choose(0);
+	TestEqual(TEXT("the player's click selects"), G->GetSelected(), 0);
+	TestEqual(TEXT("and raises the event once"), G->BroadcastCountForTest(), 1);
+	G->Choose(0);
+	TestEqual(TEXT("clicking the lit one again raises nothing - nothing changed"), G->BroadcastCountForTest(), 1);
 	return true;
 }
 
