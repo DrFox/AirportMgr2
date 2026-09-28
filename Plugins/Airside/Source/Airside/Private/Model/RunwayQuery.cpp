@@ -402,6 +402,38 @@ namespace RunwayQuery
 		return FRoadSegmentId();
 	}
 
+	FVector2D PointOnChain(const URoadNetwork& Network, const TArray<FRoadSegmentId>& Chain)
+	{
+		for (const FRoadSegmentId Segment : Chain)
+		{
+			const FRoadSegment* Found = Network.GetSegment(Segment);
+			const bool bLive = Found != nullptr && Found->bAlive;
+			const FRoadNode* A = bLive ? Network.GetNode(Found->A) : nullptr;
+			const FRoadNode* B = bLive ? Network.GetNode(Found->B) : nullptr;
+			if (A != nullptr && B != nullptr)
+			{
+				// THE MIDPOINT, not an end: an end node is shared with the next segment of the
+				// chain or with nothing, and a split never moves a point that lay on the strip.
+				return (A->Position + B->Position) * 0.5;
+			}
+		}
+		return FVector2D::ZeroVector;
+	}
+
+	TArray<FRoadSegmentId> RePointChain(const URoadNetwork& Network, const TArray<FRoadSegmentId>& Held,
+		const FVector2D& At)
+	{
+		for (const FRoadSegmentId Segment : Held)
+		{
+			if (Network.IsRunwaySegment(Segment))
+			{
+				return RunwayChain(Network, Segment);
+			}
+		}
+		const FRoadSegmentId Under = RunwaySegmentAt(Network, At);
+		return Under.IsSet() ? RunwayChain(Network, Under) : TArray<FRoadSegmentId>();
+	}
+
 	bool InUseRunwayNearest(const URoadNetwork& Network, const FVector2D& Near, FRunwayEnd& OutEnd)
 	{
 		FRunwayEnd Found;

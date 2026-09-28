@@ -6,9 +6,11 @@
 #include "Model/GroundTraffic.h"
 
 #include "AirsideLog.h"
+#include "Algo/AllOf.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
+#include "Model/RunwayQuery.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
 #include "Model/VehicleFit.h"
@@ -227,6 +229,73 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// rather than waiting for the next Get/GetOrSeed says so where the rebuild is, same as
 	// NodeReach above.
 	RunwayChains.Invalidate();
+
+	// EVERY RUNWAY AN AGENT HOLDS OR WILL HOLD, RE-POINTED (playtest 2026-09-28). An exit built
+	// onto a runway splits it, and the split kills the handles a landing, a lined-up departure,
+	// an armed taxi-out and a crossing each stored - so the strip read free under an aeroplane
+	// and a holding arrival was cleared onto it. FIRST, before any replan below reads the table,
+	// and CLAIMED HERE rather than on the next tick for DispatchArrival's own reason: the
+	// planner reads the table between ticks. The dead handles' claims are left for the next
+	// claim pass to drop - nothing asks about a segment that no longer exists.
+	for (FRoadAgent& Agent : Agents)
+	{
+		const auto Claim = [this, &Agent](const TArray<FRoadSegmentId>& Chain)
+		{
+			for (const FRoadSegmentId Segment : Chain)
+			{
+				Occupancy.Assert(FTrafficClaim::Make(Agent.Id, FTrafficResource::OfSurface(Segment),
+					/*bOccupied*/ true, TraversalPriority(Agent.Class)));
+			}
+		};
+		const auto RePoint = [&Network, &Agent](const TCHAR* What, const TArray<FRoadSegmentId>& Was,
+			const FVector2D& At, TArray<FRoadSegmentId>& Out) -> bool
+		{
+			Out = RunwayQuery::RePointChain(Network, Was, At);
+			if (Out.Num() == 0)
+			{
+				// NOT RELEASED: the old handles are dead either way, and saying so beats a
+				// silent empty hold that reads as "this aircraft is on no runway".
+				UE_LOG(LogAirsideTraffic, Warning,
+					TEXT("Agent %d: the %s it held is gone from the rebuilt graph; nothing to re-point to"),
+					Agent.Id, What);
+				return false;
+			}
+			// AS A SET: the walk starts from whichever member survived, so an untouched chain can
+			// come back in another order, and that is not a change worth a claim or a line.
+			const bool bSame = Out.Num() == Was.Num()
+				&& Algo::AllOf(Out, [&Was](const FRoadSegmentId& Segment) { return Was.Contains(Segment); });
+			if (!bSame)
+			{
+				UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: %s re-pointed after the rebuild, %d -> %d segment(s)"),
+					Agent.Id, What, Was.Num(), Out.Num());
+			}
+			return !bSame;
+		};
+
+		TArray<FRoadSegmentId> Now;
+		if (Agent.RunwayHeld.Num() > 0 && RePoint(TEXT("runway"), Agent.RunwayHeld, Agent.RunwayHeldAt, Now))
+		{
+			Agent.HoldRunway(Now, RunwayQuery::PointOnChain(Network, Now));
+			Claim(Now);
+		}
+		if (Agent.GetDepartureRunway().Num() > 0
+			&& RePoint(TEXT("departure runway"), Agent.GetDepartureRunway(), Agent.GetDepartureRunwayAt(), Now))
+		{
+			// Armed only - nothing is claimed until the LinedUp handover.
+			Agent.ArmDepartureRunway(Now, RunwayQuery::PointOnChain(Network, Now));
+		}
+		// A CROSSING stores a seed, re-expanded per tick through RunwayChains - and a dead seed
+		// expands to itself (GetOrSeed). Only a DEAD seed is re-pointed: a live one already
+		// expands to the new chain. The body is ON the strip, so its own position is the point
+		// to re-find it by.
+		if (Agent.GetCrossingPhase() != ECrossingPhase::None && Agent.GetCrossingRunway().IsSet()
+			&& !Network.IsRunwaySegment(Agent.GetCrossingRunway())
+			&& RePoint(TEXT("crossing runway"), { Agent.GetCrossingRunway() }, Agent.GroundPosition(), Now))
+		{
+			Agent.BeginCrossing(Now[0], Agent.GetCrossingPhase());
+			Claim(Now);
+		}
+	}
 
 	// ONE INDEX FOR THE WHOLE REBUILD (#172), built before any agent is touched: every
 	// FindNearestNode call below - the parked-agent branch just past this loop's top, and

@@ -16,6 +16,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
+#include "Model/RunwayQuery.h"
 #include "Model/TrafficOccupancy.h"
 #include "Profiles/RoadProfile.h"
 
@@ -654,6 +655,84 @@ bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters
 				Refused.Num() == 1 && Refused[0] == EArrivalRefusal::RunwayOccupied);
 			TestEqual(TEXT("and nothing was admitted for it"), Two->GetAgentCount(), 1);
 		}
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficArrivalHoldSurvivesRunwaySplitTest,
+	"Airside.Model.Traffic.ArrivalHoldSurvivesRunwaySplit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficArrivalHoldSurvivesRunwaySplitTest::RunTest(const FString& Parameters)
+{
+	// PLAYTEST 2026-09-28: an exit built onto the runway while one aircraft was landing let the
+	// holding one land behind it. An exit is a SPLIT (URoadNetwork::SplitSegment frees the
+	// segment and adds two), and RunwayHeld is the chain as it was at dispatch - so the landing
+	// held handles the rebuild had just killed. Two cases: one segment of the chain split (the
+	// playtest's multi-exit runway), and every segment split (a strip with no survivor at all).
+	for (const bool bSplitAll : { false, true })
+	{
+		const FAirframe Piper = TestAirframes::Piper();
+		const FTestAirport Fixture = FTestAirport::Build(Piper);
+		URoadNetwork* Net = Fixture.Net;
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const FVector2D Approach = Fixture.Threshold - FVector2D(1000.0, 0.0);
+		const TCHAR* Case = bSplitAll ? TEXT("every segment split") : TEXT("one segment split");
+
+		const int32 First = Traffic->DispatchArrival(*Net, Approach, Piper, 1.0);
+		if (!TestTrue(FString::Printf(TEXT("%s: the first arrival is admitted"), Case), First > 0))
+		{
+			continue;
+		}
+		Traffic->Advance(0.05, Net);
+
+		// THE PLAYER'S EDIT: a taxiway spur off a new node on the strip. Each split at the
+		// segment's own midpoint, so the new node is on the centreline wherever it is.
+		const TArray<FRoadSegmentId> Before = Net->RunwayChain(Fixture.ThresholdSegment);
+		for (const FRoadSegmentId Segment : Before)
+		{
+			if (!bSplitAll && Segment != Fixture.ThresholdSegment)
+			{
+				continue;
+			}
+			const FRoadSegment* S = Net->GetSegment(Segment);
+			const FVector2D Mid = (Net->GetNode(S->A)->Position + Net->GetNode(S->B)->Position) * 0.5;
+			const FRoadNodeId Middle = Net->SplitSegment(Segment, Mid);
+			const FRoadNodeId Spur = Net->AddNode(Mid + FVector2D(0.0, -8000.0));
+			Net->AddStraightSegment(Middle, Spur, TestProfiles::Taxiway());
+		}
+		TestGraph::Derive(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+		Traffic->OnGraphRebuilt(*Net);
+
+		// The chain the split left, walked from anything still on the strip.
+		const FRoadSegmentId Live = RunwayQuery::RunwaySegmentAt(*Net, Fixture.Threshold + FVector2D(100.0, 0.0));
+		const TArray<FRoadSegmentId> After = Net->RunwayChain(Live);
+		const FRoadAgent* Landing = Traffic->FindAgent(First);
+		UE_LOG(LogAirsideTests, Log, TEXT("ArrivalHoldSurvivesRunwaySplit (%s): chain %d -> %d segment(s), agent holds %d"),
+			Case, Before.Num(), After.Num(), Landing != nullptr ? Landing->RunwayHeld.Num() : -1);
+
+		// BETWEEN THE REBUILD AND THE NEXT TICK, the window a same-frame accept lands in.
+		TestTrue(FString::Printf(TEXT("%s: the runway is still busy straight after the rebuild"), Case),
+			ArrivalPlanner::IsRunwayBusy(*Net, Approach, &Traffic->GetOccupancy()));
+
+		Traffic->Advance(0.05, Net);
+		TestTrue(FString::Printf(TEXT("%s: and still busy a tick later"), Case),
+			ArrivalPlanner::IsRunwayBusy(*Net, Approach, &Traffic->GetOccupancy()));
+		if (Landing != nullptr && TestEqual(FString::Printf(TEXT("%s: the landing is still landing"), Case),
+			Landing->Phase, EAgentPhase::Arriving))
+		{
+			// THE SHAPE, not only the verdict: the agent holds the strip as it now is.
+			for (const FRoadSegmentId Segment : After)
+			{
+				TestTrue(FString::Printf(TEXT("%s: it holds new segment %d"), Case, Segment.Index),
+					Landing->RunwayHeld.Contains(Segment));
+			}
+		}
+		TestEqual(FString::Printf(TEXT("%s: a second arrival is refused while it lands"), Case),
+			Traffic->DispatchArrival(*Net, Approach, Piper, 1.0), 0);
 	}
 	return true;
 }

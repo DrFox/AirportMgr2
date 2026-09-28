@@ -378,8 +378,9 @@ bool FRoadAgentInvariantMethodsTest::RunTest(const FString& Parameters)
 	// hand at every one of these call sites.
 	FRoadSegmentId Strip;
 	Strip.Index = 4;
-	Agent.HoldRunway({ Strip });
+	Agent.HoldRunway({ Strip }, FVector2D(10.0, 20.0));
 	TestEqual(TEXT("HoldRunway holds the chain given"), Agent.RunwayHeld.Num(), 1);
+	TestEqual(TEXT("and the point on the strip a rebuild re-finds it by"), Agent.RunwayHeldAt, FVector2D(10.0, 20.0));
 	TestTrue(TEXT("HoldRunway holds the segment given"), Agent.RunwayHeld[0] == Strip);
 	Agent.ReleaseRunway();
 	TestEqual(TEXT("ReleaseRunway clears the chain"), Agent.RunwayHeld.Num(), 0);
