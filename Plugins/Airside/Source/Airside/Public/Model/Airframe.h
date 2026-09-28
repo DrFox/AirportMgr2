@@ -585,13 +585,11 @@ struct AIRSIDE_API FAirframe
 	/**
 	 * How long this type spends on a stand before it is ready to go again, in GAME seconds.
 	 *
-	 * GAME seconds, on USimClock, and NOT the UGroundTraffic::GetSimSeconds a fuel dwell is
-	 * timed on. The two are opposite cases of the same day compression: a 40-SECOND dwell on
-	 * the game clock would be over in half a real second before the truck had stopped rolling,
-	 * which is why UFuelService times that on the movement clock; a 30-MINUTE turnaround on
-	 * the movement clock would be thirty real minutes. Compressed it is about 25 real seconds
-	 * at normal speed, which is what USimClock's header means by authoring turnarounds in game
-	 * time.
+	 * GAME seconds, on USimClock - the same clock the fuel pumping is timed on since
+	 * 2026-09-28 (spec fuel-litres: litres over flow). A 30-MINUTE turnaround on the movement
+	 * clock would be thirty real minutes; compressed it is well under two at normal speed,
+	 * which is what USimClock's header means by authoring turnarounds in game time. Fuelling
+	 * used to be a flat 40 s on the movement clock, and the two could not be compared.
 	 *
 	 * IT TRAVELS IN THE BUNDLE for the reason the bundle exists: UFuelService decides when an
 	 * aircraft may leave, it lives in Model/, and Check-Architecture forbids Model/ including
@@ -616,5 +614,13 @@ struct AIRSIDE_API FAirframe
 	 * airport that never needs the depot at all.
 	 */
 	UPROPERTY(EditAnywhere) EPushbackNeed PushbackNeed = EPushbackNeed::VehicleTug;
+
+	/**
+	 * The fuel tank, litres (UAircraftType::FuelCapacityLitres). IN THE BUNDLE for
+	 * TurnaroundSeconds' reason: the fuel service that sizes a job holds an FAirframe and may
+	 * not see Entities/. 0 = wants no fuel - the default, so a hand-built airframe in a test
+	 * asks for nothing unless it says so.
+	 */
+	UPROPERTY(EditAnywhere) double FuelCapacityLitres = 0.0;
 };
 

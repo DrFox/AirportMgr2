@@ -95,13 +95,17 @@ public:
 	double ParkingFeePerHour(const FAirframe& Airframe) const;
 
 	/**
-	 * What a completed fuelling earns. Half the landing fee.
+	 * What a completed fuelling earns: the litres delivered at FuelPricePerLitre.
 	 *
-	 * NOT SCALED BY THE LANDING-FEE LEVER: the player is charging for a service they actually
-	 * performed, not for permission to land. One lever moving both would make the fee decision
-	 * unreadable - a rise meant to price landings would quietly reprice fuelling too.
+	 * BY THE LITRE since 2026-09-28 (spec fuel-litres): it was half the base landing fee, the
+	 * same for a 172 topping up and a Saab taking three trailer-loads. NOT SCALED BY THE
+	 * LANDING-FEE LEVER, as before: the player is charging for a service performed, and the
+	 * landing lever must not silently reprice it.
 	 */
-	double FuelServiceFee(const FAirframe& Airframe) const;
+	double FuelFee(double Litres) const;
+
+	/** What the airport charges per litre of fuel delivered. First guess. */
+	UPROPERTY() double FuelPricePerLitre = 1.5;
 
 	/** Offers per day scale by this. See Elasticity. */
 	double DemandFactor() const;

@@ -39,8 +39,8 @@ bool FPricingByCodeLetterTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("parking is a tenth of the landing fee per hour - ONE row per letter drives "
 		"all three fees, so there is no second table to drift"),
 		Pricing->ParkingFeePerHour(AirframeOfSpan(28.0)), 120.0, 1e-6);
-	TestEqual(TEXT("and a fuelling is half of it"),
-		Pricing->FuelServiceFee(AirframeOfSpan(28.0)), 600.0, 1e-6);
+	// PER LITRE since 2026-09-28 (spec fuel-litres): what the airport sold, not the size letter.
+	TestEqual(TEXT("fuel is sold by the litre"), Pricing->FuelFee(240.0), 240.0 * Pricing->FuelPricePerLitre, 1e-6);
 	return true;
 }
 
@@ -63,7 +63,7 @@ bool FPricingMultiplierTest::RunTest(const FString& Parameters)
 	// THE DELIBERATE EXCEPTION (spec D7 and the header): fuelling is a service performed, not
 	// permission to land, so the landing lever must not quietly reprice it.
 	TestEqual(TEXT("but a fuelling is NOT repriced by the landing lever"),
-		Pricing->FuelServiceFee(Airframe), 600.0, 1e-6);
+		Pricing->FuelFee(240.0), 240.0 * Pricing->FuelPricePerLitre, 1e-6);
 	return true;
 }
 

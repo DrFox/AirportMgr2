@@ -130,6 +130,13 @@ public:
 	 */
 	UPROPERTY() double ContractSeconds = 0.0;
 
+	/**
+	 * The fuel this flight will take on, litres - 50-90% of its tank, drawn at the offer so the
+	 * row can show the size of the job (spec 2026-09-28-fuel-litres). 0 = none. Reaches the fuel
+	 * demand through UFuelService::LitresOwedFor.
+	 */
+	UPROPERTY() double FuelLitres = 0.0;
+
 	/** From the floor airline (the flying club) - C never penalises its lapses. */
 	UPROPERTY() bool bFloorAirline = false;
 

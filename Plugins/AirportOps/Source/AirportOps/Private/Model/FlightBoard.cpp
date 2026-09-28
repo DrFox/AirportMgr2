@@ -381,6 +381,8 @@ EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URo
 	// NO LEAD TIME: AcceptImmediate exists to put an aeroplane on the field this second - see
 	// its own header. The one-second window is never drained: the accept below is this call.
 	Flight->LeadTimeSeconds = 0.0;
+	// THE FUEL SERVICE'S OWN FALLBACK, not a second figure: key 7 was never offered.
+	Flight->FuelLitres = UFuelService::DefaultLitres(Airframe);
 	Flight->OfferWindowSeconds = 1.0;
 	Flight->OfferSecondsLeft = 1.0;
 	Flight->ApproachFocus = Focus;

@@ -23,6 +23,27 @@ public:
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override;
 };
 
+/**
+ * What one KIND of fuel vehicle carries and how fast it pumps - keyed by FVehicle::TypeCode.
+ *
+ * IN AirportOps, NOT ON FVehicle: Airside knows how a vehicle MOVES and must never learn what it
+ * is FOR (UFuelService's header). Spec 2026-09-28-fuel-litres section 1.
+ */
+USTRUCT()
+struct AIRPORTOPS_API FFuelVehicleSpec
+{
+	GENERATED_BODY()
+
+	FFuelVehicleSpec() = default;
+	FFuelVehicleSpec(double InCapacity, double InFlow) : CapacityLitres(InCapacity), FlowLitresPerMinute(InFlow) {}
+
+	/** The vehicle's own tank - a load bigger than this takes more than one trip. */
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "1.0")) double CapacityLitres = 1000.0;
+
+	/** How fast it pumps into an aircraft, litres per GAME minute. */
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "1.0")) double FlowLitresPerMinute = 75.0;
+};
+
 /** A new-game setup. Difficulty is these numbers and nothing else (spec §5.2). */
 UCLASS(BlueprintType)
 class AIRPORTOPS_API UScenario : public UOpsDefinition
@@ -63,15 +84,21 @@ public:
 	double StartHour = 9.0;
 
 	/**
-	 * How long a fuel truck stays at the hydrant, in the sim seconds a truck MOVES in - see
-	 * UFuelService::DwellSeconds, and its header for why that is not game time.
+	 * Each fuel vehicle's tank and flow rate, by FVehicle::TypeCode. Copied into UFuelService at
+	 * attach. First guesses from the user (2026-09-28): the utility tow's 1,000 L trailer at
+	 * 75 L/min, the bowser 10,000 L at 200 L/min; the articulated tanker (30,000 L, 500 L/min)
+	 * joins with the depot fleet.
 	 *
-	 * Copied into UFuelService by UOpsRuntime at attach, exactly as RealSecondsDaylight is
-	 * copied into USimClock: a designer figure lives on the authored asset, and the object
-	 * that consumes it is transient.
+	 * REPLACED FuelDwellSeconds, a flat 40 movement-seconds for every aircraft whatever it held.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "0.0"))
-	double FuelDwellSeconds = 40.0;
+	UPROPERTY(EditAnywhere, Category = "Scenario")
+	TMap<FName, FFuelVehicleSpec> FuelVehicles = {
+		{ FName(TEXT("UTILITY")), FFuelVehicleSpec(1000.0, 75.0) },
+		{ FName(TEXT("FUEL")), FFuelVehicleSpec(10000.0, 200.0) } };
+
+	/** How fast a depot refills a returning vehicle, litres per GAME minute per pump module. */
+	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "1.0"))
+	double DepotRefillLitresPerMinutePerPump = 500.0;
 
 	/**
 	 * How many offers the inbox holds before new ones are dropped (spec 2026-09-28 ruling 6).

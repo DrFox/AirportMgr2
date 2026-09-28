@@ -360,4 +360,24 @@ bool FOfferStripMatchesGeneratorTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferRowFuelChipTest, "AirportMgr.Offers.ViewModel.FuelChipShowsLitres",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferRowFuelChipTest::RunTest(const FString& Parameters)
+{
+	// THE SIZE OF THE JOB, on the row, before the accept (spec 2026-09-28-fuel-litres).
+	URoadNetwork* Net = InboxNetwork();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	Board->Allocator = NewObject<UStandAllocator>();
+	UFlight* Offer = InboxOffer(0.0);
+	Offer->FuelLitres = 2900.0;
+	Board->AddOffer(*Clock, Offer);
+	UOfferInboxViewModel* Inbox = NewObject<UOfferInboxViewModel>();
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	if (!TestEqual(TEXT("one row"), Inbox->GetOffers().Num(), 1)) { return false; }
+	TestEqual(TEXT("the chip names the litres"), Inbox->GetOffers()[0]->GetFuelText().ToString(), FString(TEXT("Fuel 2,900 L")));
+	return true;
+}
+
 #endif

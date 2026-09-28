@@ -48,6 +48,8 @@ public:
 	bool IsAcceptable() const { return bAcceptable; }
 	FText GetRefusal() const { return Refusal; }
 	bool IsFuelServable() const { return bFuelServable; }
+	/** "Fuel 2,900 L", or empty for a flight that wants none. */
+	FText GetFuelText() const { return FuelText; }
 	bool NeedsTug() const { return bNeedsTug; }
 	int32 GetSecondsLeft() const { return SecondsLeft; }
 	float GetTimeLeftFraction() const { return TimeLeftFraction; }
@@ -84,6 +86,9 @@ private:
 	 * a second wording here would be a second account of why an aeroplane cannot land.
 	 */
 	UPROPERTY(Transient) FText Refusal;
+
+	/** See GetFuelText. */
+	UPROPERTY(Transient) FText FuelText;
 
 	/** The fuel chip: can the airport fuel it? See FOfferVerdict::bFuelServable. */
 	UPROPERTY(Transient) bool bFuelServable = true;

@@ -7,6 +7,7 @@
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/FuelService.h"
 #include "Model/InspectFacts.h"
 #include "Model/OpsEvents.h"
 #include "Model/OpsSave.h"
@@ -551,6 +552,37 @@ bool FOpsRuntimeTicksTheQueueTest::RunTest(const FString& Parameters)
 	Runtime->Tick(0.1);
 	Runtime->Tick(0.1);
 	TestEqual(TEXT("every runtime tick ticks the queue"), Runtime->GetFlightBoard()->TickQueueCallsForTest() - Before, 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeWiresLitresTest,
+	"AirportOps.Fuel.RuntimeWiresLitresOwed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeWiresLitresTest::RunTest(const FString& Parameters)
+{
+	// THE SEAM (spec 2026-09-28-fuel-litres section 2): the litres a flight was offered at reach
+	// the fuel demand only if the runtime points the fuel service at the board.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	if (!TestTrue(TEXT("the fuel service has a litres seam"), static_cast<bool>(Runtime->GetFuelService()->LitresOwedFor)))
+	{
+		return false;
+	}
+	UFlight* Flight = NewObject<UFlight>();
+	Flight->AgentId = 42;
+	Flight->Phase = EFlightPhase::Landing;
+	Flight->FuelLitres = 321.0;
+	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);
+	FAirframe Airframe;
+	Airframe.FuelCapacityLitres = 1000.0;
+	TestEqual(TEXT("the flight's own litres reach the demand"),
+		Runtime->GetFuelService()->LitresOwedFor(42, Airframe), 321.0, 1e-9);
+	TestEqual(TEXT("an agent no flight owns gets the stated fallback"),
+		Runtime->GetFuelService()->LitresOwedFor(7, Airframe), UFuelService::DefaultLitres(Airframe), 1e-9);
 	return true;
 }
 
