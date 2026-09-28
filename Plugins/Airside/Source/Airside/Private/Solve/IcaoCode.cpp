@@ -365,11 +365,15 @@ namespace IcaoCode
 		return Best;
 	}
 
-	double TaxiwayStripForWidth(double PavementWidthUu)
+	double TaxiwayStripFor(EIcaoCode Letter, double PavementWidthUu)
 	{
-		const EIcaoCode Letter = TaxiwayLetterForWidth(PavementWidthUu);
 		const double Overhang = FMath::Max(0.0, 0.5 * MaxWingspanForLetter(Letter) - 0.5 * PavementWidthUu);
 		return Overhang + WingtipClearanceForLetter(Letter);
+	}
+
+	double TaxiwayStripForWidth(double PavementWidthUu)
+	{
+		return TaxiwayStripFor(TaxiwayLetterForWidth(PavementWidthUu), PavementWidthUu);
 	}
 
 	double RadiusForLetter(EIcaoCode Code)

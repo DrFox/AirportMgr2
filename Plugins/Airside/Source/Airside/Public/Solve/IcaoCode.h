@@ -177,6 +177,15 @@ namespace IcaoCode
 	AIRSIDE_API double TaxiwayStripForWidth(double PavementWidthUu);
 
 	/**
+	 * The strip each side of a taxiway of this pavement width OPERATED AT Letter, uu - a
+	 * restricted taxiway (stage 6) keeps its pavement and sweeps a lower letter's wing over it.
+	 * TaxiwayStripForWidth is this at the pavement's own letter: one formula, so lifting a
+	 * restriction reads back exactly the strip the taxiway had.
+	 * ENFORCED BY: Airside.Solve.IcaoCode.TaxiwayStripForLetter
+	 */
+	AIRSIDE_API double TaxiwayStripFor(EIcaoCode Letter, double PavementWidthUu);
+
+	/**
 	 * Minimum centreline curve radius, uu, for a stand sized to this code letter.
 	 *
 	 * TAKES THE ENUM, NOT A STRING, since 2026-09-21 - the fallback to Code C for "no letter,
