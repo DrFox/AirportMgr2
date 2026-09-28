@@ -13,6 +13,9 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Model/FuelService.h"
+#include "Model/FlightBoard.h"
+#include "Model/Flight.h"
+#include "ArrivalViewModels.h"
 #include "Model/InspectFacts.h"
 #include "Model/RoadAgent.h"
 #include "Present/OpsRuntime.h"
@@ -245,6 +248,15 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			{
 				F.Fuel = Fuel->DescribeAgent(F.Id, Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0);
 			}
+			// THE CONTRACT, from the flight that owns this aircraft - its minute resolution keeps
+			// the gate below from recomposing more than once a game minute.
+			if (const UFlightBoard* Board = Runtime->GetFlightBoard())
+			{
+				if (const UFlight* Flight = Board->FlightForAgent(F.Id); Flight != nullptr && Runtime->GetClock() != nullptr)
+				{
+					F.Turnaround = UArrivalRowViewModel::DescribeTurnaround(*Flight, Runtime->GetClock()->Now()).ToString();
+				}
+			}
 		}
 
 		// MAGNITUDE. FAgentMotion::GroundSpeed became signed on 2026-09-20 so the view could
@@ -270,6 +282,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		Key.bEngineRunning = F.bEngineRunning;
 		Key.Fuel = F.Fuel;
 		Key.Pushback = F.Pushback;
+		Key.Turnaround = F.Turnaround;
 
 		if (Key != LastComposedKey)
 		{
@@ -312,6 +325,11 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 					LastComposedFacts += FString::Format(
 						*NSLOCTEXT("AirportMgr", "InspectorPushbackLine", "\nPushback {0}").ToString(), { F.Pushback });
 				}
+			}
+			// THE CONTRACT, after the demands it depends on - see UArrivalRowViewModel::DescribeTurnaround.
+			if (!F.Turnaround.IsEmpty())
+			{
+				LastComposedFacts += TEXT("\n\n") + F.Turnaround;
 			}
 			LastComposedStatus = F.Status;
 		}

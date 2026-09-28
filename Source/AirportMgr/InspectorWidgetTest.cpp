@@ -430,12 +430,14 @@ bool FInspectorDemandsTest::RunTest(const FString& Parameters)
 	Facts.Phase = EAgentPhase::Parked;
 	Facts.Pushback = TEXT("reverses itself");
 	Facts.Fuel = TEXT("Fuel 300 L \u00B7 120 L left \u00B7 fuelling");
+	Facts.Turnaround = TEXT("Turnaround 3 h \u00B7 1 h 12 min left");
 	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = 7;
 	Panel->Refresh(TestWorld.Actor, Sel, &Facts);
 	const FString Text = Panel->FactsForTest();
 	TestTrue(TEXT("a Demands heading"), Text.Contains(TEXT("Demands")));
 	TestTrue(TEXT("the fuel line"), Text.Contains(TEXT("Fuel 300 L \u00B7 120 L left \u00B7 fuelling")));
 	TestTrue(TEXT("the pushback line"), Text.Contains(TEXT("Pushback reverses itself")));
+	TestTrue(TEXT("and the turnaround contract"), Text.Contains(TEXT("Turnaround 3 h \u00B7 1 h 12 min left")));
 	return true;
 }
 

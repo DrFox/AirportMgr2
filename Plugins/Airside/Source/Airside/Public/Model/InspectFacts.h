@@ -52,6 +52,13 @@ struct FAgentFacts
 	 * services it (no tug depot), so there is no progress to report.
 	 */
 	FString Pushback;
+
+	/**
+	 * The turnaround contract - "Turnaround 2 h - 47 min left" - or empty for an aircraft no
+	 * flight owns. FILLED BY THE GAME MODULE from the flight board, for Fuel's reason: Airside
+	 * does not know what a flight or a contract is. The seam this struct's header promised UFlight.
+	 */
+	FString Turnaround;
 };
 
 struct FStandFacts

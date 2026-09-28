@@ -59,13 +59,14 @@ struct FInspectorKey
 	bool bEngineRunning = false;
 	FString Fuel;
 	FString Pushback;
+	FString Turnaround;
 
 	bool operator==(const FInspectorKey& Other) const
 	{
 		return Id == Other.Id && Phase == Other.Phase && HeadingRounded == Other.HeadingRounded
 			&& SpeedTenthsRounded == Other.SpeedTenthsRounded && AltitudeRounded == Other.AltitudeRounded
 			&& Destination == Other.Destination && bEngineRunning == Other.bEngineRunning
-			&& Fuel == Other.Fuel && Pushback == Other.Pushback;
+			&& Fuel == Other.Fuel && Pushback == Other.Pushback && Turnaround == Other.Turnaround;
 	}
 	bool operator!=(const FInspectorKey& Other) const { return !(*this == Other); }
 };

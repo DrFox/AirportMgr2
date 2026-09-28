@@ -49,6 +49,22 @@ FText UArrivalRowViewModel::DescribeDetail(const UFlight& Flight, double Now, bo
 	return Remaining;
 }
 
+FText UArrivalRowViewModel::DescribeTurnaround(const UFlight& Flight, double Now)
+{
+	if (Flight.ContractSeconds <= 0.0)
+	{
+		return FText::GetEmpty();
+	}
+	// THE SAME DURATION WORDS AND THE SAME LEFT/LATE RULE as the ARRIVALS row (DescribeDetail),
+	// so the card and the list cannot tell the player two different things.
+	const double Left = Flight.AirborneBy() - Now;
+	const FText Remaining = Left < 0.0
+		? FText::Format(NSLOCTEXT("AirportMgr", "ArrivalLate", "{0} late"), UOfferViewModel::DescribeDuration(-Left))
+		: FText::Format(NSLOCTEXT("AirportMgr", "ArrivalLeft", "{0} left"), UOfferViewModel::DescribeDuration(Left));
+	return FText::Format(NSLOCTEXT("AirportMgr", "CardTurnaround", "Turnaround {0} \u00B7 {1}"),
+		UOfferViewModel::DescribeDuration(Flight.ContractSeconds), Remaining);
+}
+
 void UArrivalRowViewModel::Refresh(const USimClock& Clock)
 {
 	const UFlight* Live = Flight.Get();

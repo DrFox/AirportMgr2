@@ -95,4 +95,22 @@ bool FArrivalsDetailTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalsTurnaroundLineTest, "AirportMgr.Arrivals.TurnaroundLine",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalsTurnaroundLineTest::RunTest(const FString& Parameters)
+{
+	// THE CONTRACT ON THE AIRCRAFT CARD (2026-09-28): how long the airline gave, and how much of
+	// it is left - the same words the ARRIVALS row uses, so the two cannot disagree.
+	UFlight* F = Flight(TEXT("CU 1"), EFlightPhase::Turnaround);
+	F->AcceptedAt = 0.0;
+	F->ContractSeconds = 7200.0;
+	TestEqual(TEXT("time left"), UArrivalRowViewModel::DescribeTurnaround(*F, 7200.0 - 47.0 * 60.0).ToString(),
+		FString(TEXT("Turnaround 2 h \u00B7 47 min left")));
+	TestEqual(TEXT("past the deadline"), UArrivalRowViewModel::DescribeTurnaround(*F, 7200.0 + 12.0 * 60.0).ToString(),
+		FString(TEXT("Turnaround 2 h \u00B7 12 min late")));
+	F->ContractSeconds = 0.0;
+	TestTrue(TEXT("no contract (the debug land key), no line"), UArrivalRowViewModel::DescribeTurnaround(*F, 0.0).IsEmpty());
+	return true;
+}
+
 #endif
