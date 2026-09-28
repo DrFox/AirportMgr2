@@ -80,9 +80,10 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// GREY AND PART-TRANSPARENT: hundreds of pieces under every gesture must read as graph
 	// paper, not geometry. DIM IN RGB AS WELL AS ALPHA because neither sink is shown to honour
 	// alpha on a line (the editor's PDI may not), and a white line drawn opaque would be the
-	// loudest thing on screen. Unjudged in PIE as of 2026-09-27.
-	case EPreviewStyle::GridMinor:                   return FLinearColor(0.55f, 0.58f, 0.55f, 0.35f);
-	case EPreviewStyle::GridMajor:                   return FLinearColor(0.8f, 0.83f, 0.8f, 0.5f);
+	// loudest thing on screen. RAISED 2026-09-28 at the player's ask ("more opaque") from
+	// 0.55 grey / 0.35 and 0.8 / 0.5, after seeing the first figures in PIE.
+	case EPreviewStyle::GridMinor:                   return FLinearColor(0.72f, 0.75f, 0.72f, 0.65f);
+	case EPreviewStyle::GridMajor:                   return FLinearColor(0.92f, 0.95f, 0.92f, 0.9f);
 	}
 
 	// Reached only if EPreviewStyle grew a value with no case above - not caught at compile
