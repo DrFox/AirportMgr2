@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "LandAircraftPanelWidget.h"
 #include "LedgerPanelWidget.h"
 #include "Misc/AutomationTest.h"
 #include "Testing/AirsideTestWorld.h"
@@ -167,6 +168,78 @@ bool FUiWindowEatsClicksTest::RunTest(const FString& Parameters)
 	const TSharedRef<SWidget> Slate = F.Window->TakeWidget();
 	TestTrue(TEXT("a press on the chrome is handled"), Slate->OnMouseButtonDown(FGeometry(), FPointerEvent()).IsEventHandled());
 	TestFalse(TEXT("the release is left alone"), Slate->OnMouseButtonUp(FGeometry(), FPointerEvent()).IsEventHandled());
+	return true;
+}
+
+/**
+ * A DRAG IS CLAMPED AND SNAPPED BY THE HOST - the window cannot leave the screen or go under the
+ * bar, and lands flush on an edge within SnapDistance.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowMoveTest, "AirportMgr.UI.WindowHost.MoveClampsAndSnaps",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowMoveTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	const FName Id(TEXT("ledger"));
+	F.Ledger->Toggle();
+	// A KNOWN SIZE: headless there is no layout, so an auto-sized window measures 0x0 - moved into
+	// open space first, or the resize is clamped against the top-right corner it starts in.
+	F.Host->MoveWindow(Id, FVector2D(100.0, 100.0));
+	F.Host->ResizeWindow(Id, FVector2D(300.0, 200.0));
+	F.Host->MoveWindow(Id, FVector2D(10.0, 400.0));
+	TestEqual(TEXT("10 px from the left snaps flush"), F.Host->WindowRect(Id).Min, FVector2D(0.0, 400.0));
+	F.Host->MoveWindow(Id, FVector2D(5000.0, 5000.0));
+	TestEqual(TEXT("dragged far off: clamped to the bottom-right corner"),
+		F.Host->WindowRect(Id).Min, FVector2D(1920.0 - 300.0, 1080.0 - 200.0));
+	return true;
+}
+
+/** A VIEW THAT SHRINKS UNDER A PLACED WINDOW PULLS IT BACK - Review Focus 1. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowReclampTest, "AirportMgr.UI.WindowHost.ReclampsWhenTheViewShrinks",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowReclampTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	const FName Id(TEXT("ledger"));
+	F.Ledger->Toggle();
+	F.Host->MoveWindow(Id, FVector2D(100.0, 100.0));   // see MoveClampsAndSnaps: headless size is 0
+	F.Host->ResizeWindow(Id, FVector2D(300.0, 200.0));
+	F.Host->MoveWindow(Id, FVector2D(1600.0, 800.0));
+	F.Host->SetViewSizeForTest(FVector2D(1280.0, 720.0));
+	F.Host->TickForTest(0.016f);
+	const FBox2D R = F.Host->WindowRect(Id);
+	TestTrue(TEXT("its right edge is back on screen"), R.Max.X <= 1280.0);
+	TestTrue(TEXT("its bottom edge is back on screen"), R.Max.Y <= 720.0);
+	return true;
+}
+
+/** A CLOSED WINDOW LEAVES NO INVISIBLE EDGE to snap onto - Review Focus 2. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowSnapShownTest, "AirportMgr.UI.WindowHost.SnapsOnlyToShownWindows",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowSnapShownTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	ULandAircraftPanelWidget* Land = CreateWidget<ULandAircraftPanelWidget>(F.TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("a second panel"), Land) || !TestNotNull(TEXT("with a window"), F.Host->AddWindow(*Land))) { return false; }
+	const FName Ledger(TEXT("ledger")), LandId(TEXT("land"));
+	F.Ledger->Toggle();
+	F.Host->MoveWindow(Ledger, FVector2D(100.0, 100.0));   // see MoveClampsAndSnaps: headless size is 0
+	F.Host->ResizeWindow(Ledger, FVector2D(300.0, 200.0));
+	F.Host->MoveWindow(Ledger, FVector2D(600.0, 300.0));
+	Land->Toggle();
+	F.Host->MoveWindow(LandId, FVector2D(100.0, 600.0));
+	F.Host->ResizeWindow(LandId, FVector2D(300.0, 200.0));
+	F.Host->MoveWindow(LandId, FVector2D(908.0, 320.0));
+	TestEqual(TEXT("beside the SHOWN ledger it snaps flush"), F.Host->WindowRect(LandId).Min.X, 900.0);
+	F.Ledger->Toggle();   // hidden
+	F.Host->MoveWindow(LandId, FVector2D(908.0, 320.0));
+	TestEqual(TEXT("beside a HIDDEN ledger it stays where it was dropped"), F.Host->WindowRect(LandId).Min.X, 908.0);
 	return true;
 }
 
