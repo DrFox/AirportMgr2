@@ -37,7 +37,11 @@ PLANE18 = "/Game/Entities/DA_Aircraft_Plane18.DA_Aircraft_Plane18"
 #
 # DEMAND (spec 2026-09-28-offers-and-demand): a 24-weight curve by hour, a peak rate in offers
 # per GAME hour at weight 1.0, a floor that holds in daylight, the floor flag, the offer window
-# in REAL seconds, the lead time and the contract slack. First guesses, not a balance decision
+# in REAL seconds, the lead time and the turnaround contract (accept to airborne, GAME seconds).
+#
+# 2026-09-28: THE CONTRACT IS A LENGTH, not a slack. The first cut (lead + 10 min taxi +
+# turnaround x slack) gave an SR22 40 game minutes; it reached its stand with one to spare, since
+# aircraft move in real seconds while the clock runs ~21x. Two hours strict, three relaxed. First guesses, not a balance decision
 # - they live on the asset precisely so they can be changed without a build.
 #
 # 2026-09-28: SPLIT IN TWO. Cumbria flew every GA type there is; now the FLYING CLUB takes the
@@ -150,16 +154,16 @@ AIRLINES = {
     "DA_Airline_Cumbria": ("Cumbria Air",
                            [PLANE2, PLANE5, PLANE10, PLANE16, PLANE17, PLANE18],
                            dict(curve=CUMBRIA_CURVE, peak=2.0, floor=0.0, is_floor=False,
-                                window=60.0, lead=900.0, slack=1.3, prefix="CU")),
+                                window=60.0, lead=900.0, contract=2 * 3600.0, prefix="CU")),
 
     # 2026-09-28: THE FLYING CLUB, AND IT IS THE FLOOR. Private owners in light singles, so its
     # callsigns are tail numbers. Daylight only - nobody flies a 172 for fun at 02:00 - with a
     # floor of one an hour that no fee and (in C) no reputation takes away. A relaxed window and
-    # a relaxed contract: this is the airport's first customer, and it forgives.
+    # a relaxed three-hour contract: this is the airport's first customer, and it forgives.
     "DA_Airline_FlyingClub": ("Flying Club",
                               [PLANE1, PIPER, PLANE12, PLANE15],
                               dict(curve=CLUB_CURVE, peak=3.0, floor=1.0, is_floor=True,
-                                   window=120.0, lead=600.0, slack=2.0, prefix="G-????")),
+                                   window=120.0, lead=600.0, contract=3 * 3600.0, prefix="G-????")),
 }
 
 
@@ -203,7 +207,7 @@ def build():
         asset.set_editor_property("is_floor", demand["is_floor"])
         asset.set_editor_property("offer_window_seconds", demand["window"])
         asset.set_editor_property("lead_time_seconds", demand["lead"])
-        asset.set_editor_property("turnaround_slack", demand["slack"])
+        asset.set_editor_property("contract_seconds", demand["contract"])
         asset.set_editor_property("callsign_prefix", demand["prefix"])
 
         # save_asset does nothing for an asset the editor does not think is dirty, so the
@@ -211,11 +215,12 @@ def build():
         # worked and leave nothing on disk.
         unreal.EditorAssetLibrary.save_asset(package, only_if_is_dirty=False)
         # READ BACK OFF THE ASSET, not echoed from the dict, so the line says what was saved.
-        unreal.log_warning("MARKER: {} '{}' with {} type(s), peak {}/h, floor {}/h, window {} s, prefix {}".format(
+        unreal.log_warning("MARKER: {} '{}' with {} type(s), peak {}/h, floor {}/h, window {} s, contract {} s, prefix {}".format(
             name, display, len(asset.get_editor_property("fleet")),
             asset.get_editor_property("peak_offers_per_hour"),
             asset.get_editor_property("floor_offers_per_hour"),
             asset.get_editor_property("offer_window_seconds"),
+            asset.get_editor_property("contract_seconds"),
             asset.get_editor_property("callsign_prefix")))
 
 

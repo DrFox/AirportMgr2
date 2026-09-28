@@ -64,6 +64,10 @@ bool FAirlineAssetsAreScannedTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("every shipped airline has a fleet"), Airline->Fleet.Num() > 0);
 		TestTrue(TEXT("and asks for flights"),
 			Airline->PeakOffersPerHour > 0.0 || Airline->FloorOffersPerHour > 0.0);
+		// TWO GAME HOURS AT LEAST (2026-09-28, from play): landing, taxiing in, a fuel loop and
+		// taxiing out take ~95 game minutes in daylight before any queueing.
+		TestTrue(FString::Printf(TEXT("%s gives at least two game hours from accept to airborne"),
+			*Airline->DisplayName.ToString()), Airline->ContractSeconds >= 2.0 * 3600.0);
 		TestTrue(TEXT("its demand curve is flat (empty) or one weight per hour"),
 			Airline->DemandCurve.Num() == 0 || Airline->DemandCurve.Num() == 24);
 	}

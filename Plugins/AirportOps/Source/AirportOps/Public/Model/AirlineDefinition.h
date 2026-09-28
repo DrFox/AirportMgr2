@@ -86,7 +86,7 @@ public:
 	 * setting does not change it - see UFlightBoard::TickOffers.
 	 *
 	 * PER AIRLINE, because "some airlines are more demanding than others" is one personality,
-	 * and it lives with the turnaround slack below rather than in two places.
+	 * and it lives with the contract length below rather than in two places.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Offer", meta = (ClampMin = "1.0"))
 	double OfferWindowSeconds = 60.0;
@@ -96,11 +96,19 @@ public:
 	double LeadTimeSeconds = 900.0;
 
 	/**
-	 * The turnaround contract's allowance over the airframe's own TurnaroundSeconds. 1.0 is
-	 * strict; the club's 2.0 is relaxed. See UFlight::ContractSeconds.
+	 * The turnaround contract: GAME seconds from the accept to airborne again. See
+	 * UFlight::ContractSeconds, and C, which scores AirborneAt against it.
+	 *
+	 * ONE FIGURE PER AIRLINE (2026-09-28, from play) - it replaced lead + a 10-minute taxi
+	 * allowance + the airframe's turnaround x a slack multiplier, which gave an SR22 40 game
+	 * minutes and saw it reach its stand with one to spare. Aircraft MOVE in real seconds while
+	 * the clock runs ~21x in daylight (USimClock), so landing and taxiing in alone cost ~28 game
+	 * minutes measured, a fuel loop ~30 and taxiing out ~25 - about 95 before any queueing. How
+	 * demanding an airline is, is simply how long it gives: two hours is strict, three relaxed.
+	 * ENFORCED BY: AirportOps.Content.AirlineDefinition.TheAssetManagerScansThem (>= 2 h)
 	 */
-	UPROPERTY(EditAnywhere, Category = "Offer", meta = (ClampMin = "1.0"))
-	double TurnaroundSlack = 1.5;
+	UPROPERTY(EditAnywhere, Category = "Offer", meta = (ClampMin = "0.0"))
+	double ContractSeconds = 7200.0;
 
 	/**
 	 * What the row prints as the flight's name. A flight-number prefix ("CU" -> "CU 204"), or

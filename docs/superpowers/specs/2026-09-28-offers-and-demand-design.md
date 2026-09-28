@@ -98,6 +98,12 @@ lands the game is the old one.
 | `AirborneBy` | The turnaround contract: `ArrivesAt + TaxiAllowance + TurnaroundSeconds x TurnaroundSlack`, fixed at accept. |
 | `AirborneAt` | Game time the flight reached `Departing`. |
 
+**Revised 2026-09-28, from play:** the contract is ONE per-airline figure,
+`UAirlineDefinition::ContractSeconds` (club 3 h, Cumbria 2 h). The formula below gave an SR22
+40 game minutes and it reached its stand with one to spare - aircraft move in real seconds while
+the clock runs ~21x, so landing + taxi-in measured ~28 game min, a fuel loop ~30, taxi-out ~25.
+`TurnaroundSlack` and `TaxiAllowance` are gone. Original text kept below.
+
 `TaxiAllowance` is one scenario figure for A (a flat game-seconds allowance for landing and
 taxi-in). B replaces it with the sequencer's own estimate.
 
