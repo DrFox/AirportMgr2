@@ -11,6 +11,7 @@
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadEditHistory.h"
 #include "Solve/IcaoCode.h"
+#include "Model/TaxiwayRestriction.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -362,6 +363,56 @@ bool FUpgradeSegmentRefusesIntoNeighbourTest::RunTest(const FString& Parameters)
 		Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac));
 	TestTrue(TEXT("and the refusal names the strip"),
 		Actor->WhyUpgradeRefused(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac).Contains(TEXT("clearance strip")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUpgradeSegmentRestrictsTest,
+	"Airside.Present.UpgradeRestrictsAndUndoLifts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUpgradeSegmentRestrictsTest::RunTest(const FString& Parameters)
+{
+	// THE SEAM, AT THE COMPOSITION (CLAUDE.md's refactor contract): the restriction pass runs in
+	// the actor's own Topology rebuild, before the guideline builder. Unwired, the upgraded
+	// taxiway would keep reading unrestricted. Review Focus 1 and 4: undo and a downgrade lift it.
+	FAirsideTestWorld World;
+	if (!TestNotNull(TEXT("a world"), World.Actor)) { return false; }
+	ARoadNetworkActor* Actor = World.Actor;
+	const int32 C = UpgradeWidthIndexFor(*Actor, EIcaoCode::C);
+	const int32 F = UpgradeWidthIndexFor(*Actor, EIcaoCode::F);
+	if (!TestTrue(TEXT("C and F widths"), C != INDEX_NONE && F != INDEX_NONE)) { return false; }
+	const double WidthF = Actor->ResolveWidthProfile(ERoadKind::Taxiway, F)->GetTotalWidth();
+	const URoadProfile* Road = Actor->ResolveProfileFor(ERoadKind::ServiceRoad, INDEX_NONE);
+	if (!TestNotNull(TEXT("a service road profile"), Road)) { return false; }
+	// The road's near edge between E's reach and F's at the F pavement - it restricts F to E.
+	const double ReachE = 0.5 * WidthF + IcaoCode::TaxiwayStripFor(EIcaoCode::E, WidthF);
+	const double ReachF = 0.5 * WidthF + IcaoCode::TaxiwayStripFor(EIcaoCode::F, WidthF);
+	const double RoadY = 0.5 * (ReachE + ReachF) + Road->GetMaxHalfWidth();
+
+	const int32 A = Actor->PlaceNode(FVector2D(-20000.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(20000.0, 0.0));
+	TestTrue(TEXT("a C taxiway"), Actor->ConnectNodes(A, B, ERoadKind::Taxiway, C, EPavement::Tarmac));
+	const int32 Seg = Actor->Network->GetSegments().Num() - 1;
+	const int32 P = Actor->PlaceNode(FVector2D(-3000.0, RoadY));
+	const int32 Q = Actor->PlaceNode(FVector2D(3000.0, RoadY));
+	TestTrue(TEXT("a service road clear of its C strip"), Actor->ConnectNodes(P, Q, ERoadKind::ServiceRoad, INDEX_NONE, EPavement::Tarmac));
+	auto Stored = [Actor, Seg]() { return static_cast<int32>(Actor->Network->GetSegments()[Seg].RestrictedLetter); };
+	TestEqual(TEXT("at C nothing is restricted"), Stored(), static_cast<int32>(TaxiwayRestriction::Unrestricted));
+
+	if (!TestTrue(TEXT("the upgrade to F lands - the strip swallowing the road is not a refusal"),
+		Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac)))
+	{
+		return false;
+	}
+	TestEqual(TEXT("the rebuild restricted the F taxiway to E, by the road"), Stored(), static_cast<int32>(EIcaoCode::E));
+
+	TestTrue(TEXT("undo"), Actor->GetEditFacade()->Undo());
+	TestEqual(TEXT("undo lifts the restriction with the width"), Stored(), static_cast<int32>(TaxiwayRestriction::Unrestricted));
+	TestTrue(TEXT("redo"), Actor->GetEditFacade()->Redo());
+	TestEqual(TEXT("redo restricts again"), Stored(), static_cast<int32>(EIcaoCode::E));
+	TestTrue(TEXT("a downgrade back to C"), Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, C, EPavement::Tarmac));
+	TestEqual(TEXT("lifts it too"), Stored(), static_cast<int32>(TaxiwayRestriction::Unrestricted));
 	return true;
 }
 

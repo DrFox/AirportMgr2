@@ -519,6 +519,17 @@ bool URoadNetwork::SetSegmentProfile(FRoadSegmentId Segment, URoadProfile* Profi
 	return true;
 }
 
+bool URoadNetwork::WriteSegmentRestriction(FRoadSegmentId Segment, uint8 Letter)
+{
+	FRoadSegment* Found = GetSegmentMutable(Segment);
+	if (Found == nullptr || !Found->bAlive)
+	{
+		return false;
+	}
+	Found->RestrictedLetter = Letter;
+	return true;
+}
+
 bool URoadNetwork::SetSegmentSurface(FRoadSegmentId Segment, EPavement Surface)
 {
 	FRoadSegment* Found = GetSegmentMutable(Segment);

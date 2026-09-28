@@ -272,6 +272,13 @@ public:
 	 */
 	bool SetSegmentProfile(FRoadSegmentId Segment, URoadProfile* Profile);
 
+	/**
+	 * Write FRoadSegment::RestrictedLetter - the ONE writer, for TaxiwayRestriction::Apply only
+	 * (the WriteSegmentEndSolve precedent). A raw uint8 so this header gains no Solve/ include.
+	 * No EditRevision bump: it is derived from the graph, not an edit of it. False for a dead slot.
+	 */
+	bool WriteSegmentRestriction(FRoadSegmentId Segment, uint8 Letter);
+
 	// --- Runway reads: forwarders. See Model/RunwayQuery.h for what each answers and why -
 	// the repository grew a second responsibility deriving these from its own graph, so the
 	// logic moved beside IsRunwaySegment/ProfileFor's callers rather than living inside the

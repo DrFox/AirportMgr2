@@ -66,6 +66,18 @@ struct AIRSIDE_API FRoadSegment
 	 */
 	UPROPERTY() EPavement Surface = EPavement::Tarmac;
 
+	/**
+	 * The letter this taxiway OPERATES at when its strip is not clear at its pavement's own
+	 * (strip stage 6): an EIcaoCode as uint8, 0xFF (TaxiwayRestriction::Unrestricted) when it
+	 * operates at its pavement's letter. Written ONLY by TaxiwayRestriction::Apply, through
+	 * URoadNetwork::WriteSegmentRestriction, on every Topology rebuild - DERIVED BUT SAVED, the
+	 * TrimA precedent: the undo snapshot duplicates the network, and a transient field would
+	 * come back unset until the next rebuild. A uint8 because EIcaoCode is a plain enum UHT
+	 * cannot see (Solve/IcaoCode.h's own comment).
+	 * ENFORCED BY: Airside.Model.TaxiwayRestriction
+	 */
+	UPROPERTY() uint8 RestrictedLetter = 0xFF;
+
 	/** Written ONLY by FRoadNetworkSolver, through URoadNetwork::WriteSegmentEndSolve (#191) -
 	 *  not a raw pointer, so this and the cut vertices below cannot land out of step with
 	 *  bSolvedA/B. Distance from each end at which the segment is cut. */

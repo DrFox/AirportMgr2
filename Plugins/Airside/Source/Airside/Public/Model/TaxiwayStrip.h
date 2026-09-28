@@ -165,6 +165,29 @@ namespace TaxiwayStrip
 	AIRSIDE_API FStripVerdict JudgeExisting(const URoadNetwork& Network, FRoadSegmentId Id,
 		TConstArrayView<FRoadSegmentId> Ignore = {});
 
+	/** Something a strip is over: what JudgeSegment's own-strip step found, by kind and index. */
+	struct FSwallowed
+	{
+		enum class EKind : uint8 { Stand, Depot, Road, Taxiway };
+		EKind Kind = EKind::Road;
+		/** An entity index for Stand and Depot, a segment index for Road and Taxiway. */
+		int32 Index = INDEX_NONE;
+	};
+
+	/**
+	 * JudgeSegment's own-strip step asked of a LIVE taxiway at a strip width of the caller's
+	 * choosing - the restriction pass's question, "is the strip at letter L clear?" (stage 6).
+	 * Ends and exemption as JudgeExisting's (its own nodes, itself ignored, the met taxiway's
+	 * straight chain walked), but no angle refusal: a badly met arm is Met, not an obstruction,
+	 * as step 3 has always treated it. ONE MACHINERY with JudgeSegment (factored, not copied),
+	 * so the restriction and the placement refusal cannot disagree about what a strip is over.
+	 * bCountStands false for the restriction: a stand closes instead (plan ruling 3).
+	 * Unset for anything HasStrip refuses.
+	 * ENFORCED BY: Airside.Model.TaxiwayRestriction, Airside.Model.TaxiwayStrip.SegmentJudge
+	 */
+	AIRSIDE_API TOptional<FSwallowed> StripSwallows(const URoadNetwork& Network, FRoadSegmentId Taxiway,
+		double StripWidth, bool bCountStands);
+
 	/** The meeting-angle rule on one arm: at least MeetMinDegrees from it. JudgeSegment's own
 	 *  test, public for MoveNode, which also judges a node's moved arms against each other. */
 	AIRSIDE_API bool MeetsAtAllowedAngle(double Degrees);

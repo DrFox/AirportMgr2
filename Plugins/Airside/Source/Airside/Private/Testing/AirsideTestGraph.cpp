@@ -9,6 +9,7 @@
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/LandingRun.h"
+#include "Model/TaxiwayRestriction.h"
 #include "Profiles/RoadProfile.h"
 
 FGuidelineNodeId TestGraph::Node(URoadNetwork& Net, double X, double Y)
@@ -62,6 +63,9 @@ FRoadSolveResult TestGraph::Derive(URoadNetwork& Net, const FRoadDesignVehicles*
 	// directly instead of coming through here.
 	const FRoadDesignVehicles Resolved = DesignVehicles != nullptr ? *DesignVehicles : UAirsideSettings::ResolveRoadDesignVehicles();
 	FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net, 12, &Resolved, Widening);
+	// The production sequence's restriction pass too (URoadSurfacePresenter::RebuildInternal):
+	// the builder reads what it writes.
+	TaxiwayRestriction::Apply(Net);
 	FRoadGuidelineBuilder::Build(Net, Solved, Resolved);
 	return Solved;
 }
