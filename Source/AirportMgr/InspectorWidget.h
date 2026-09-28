@@ -154,7 +154,7 @@ public:
 	bool IsDepartEnabledForTest() const;
 	FString TitleForTest() const;
 	/** Depart's CAPTION colour - the thing that must actually change with enabled state.
-	 *  See Refresh: the button's own background stays Style->Button always. */
+	 *  See Refresh: the button's own background stays Style->Control always. */
 	FLinearColor DepartLabelColourForTest() const;
 	/** How many times Refresh actually called SetText on one of its three fields, as opposed
 	 *  to how many times it was asked - the seam issue #187's gate is measured through: an

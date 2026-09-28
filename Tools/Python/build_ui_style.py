@@ -52,19 +52,22 @@ def srgb(hex_string):
         to_linear(value & 255), 1.0)
 
 
-# Spec section 2.1, verbatim. SEMANTIC SLOTS: each is named for what it IS, never for where
-# it appears, which is what makes a re-skin six edits instead of a hunt.
+# Spec 2026-09-28 (UI library) section 4. SEMANTIC SLOTS: each is named for what it MEANS,
+# never for where it appears, which is what makes a re-skin a handful of edits instead of a
+# hunt. Shadow stays at its C++ default: translucent black is not an sRGB hex.
 COLOURS = {
-    "panel":      "4F5E6A",
-    "panel_dark": "3E4A54",
-    "button":     "5D6D7A",
-    "accent":     "F4BA38",
-    "text":       "E4E0D9",
-    "text_muted": "9FB0BD",
-    # Severity. Added beyond the spec's six because a toast could not say "this went badly"
-    # without spending Accent, which means the armed tool and nothing else.
-    "warning":    "C45D45",
-    "positive":   "7E9C6B",
+    "surface":       "FFFFFF",
+    "well":          "F0F2F4",
+    "control":       "E2E6EA",
+    "ink":           "3E4A54",
+    "ink_muted":     "7D8B96",
+    "ink_on_accent": "3E4A54",
+    "rule":          "E2E6EA",
+    "accent":        "F4BA38",
+    # Severity. Added beyond the first spec's six because a toast could not say "this went
+    # badly" without spending Accent, which means the armed tool and nothing else.
+    "warning":       "C45D45",
+    "positive":      "7E9C6B",
 }
 
 
@@ -91,35 +94,38 @@ def run():
     # cannot work: "tool.holding point" sanitises to T_Icon_tool_holding_point, and
     # underscores-to-dots would give "tool.holding.point", which matches no action.
     manifest_path = os.path.join(unreal.Paths.project_saved_dir(), "UIIcons", "manifest.json")
-    if not os.path.isfile(manifest_path):
-        fail("no %s - run fetch_ui_icons.py first" % manifest_path)
-        say("DONE")
-        return
-    with io.open(manifest_path, encoding="utf-8") as handle:
-        manifest = json.load(handle)
+    manifest = None
+    if os.path.isfile(manifest_path):
+        with io.open(manifest_path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    else:
+        # A WORKTREE HAS NO Saved/UIIcons. Refusing here used to leave the colours unsaved too;
+        # the icon map already on the asset survives a load-and-save, so skip only this part.
+        unreal.log_warning("MARKER: no %s - icon map left as it is on the asset" % manifest_path)
 
     icons = {}
-    for action_id, asset_path in sorted(manifest.get("actions", {}).items()):
-        texture = unreal.EditorAssetLibrary.load_asset(asset_path)
-        if texture is None:
-            fail("manifest names %s for '%s' but it did not load" % (asset_path, action_id))
-            continue
-        icons[unreal.Name(action_id)] = texture
-    style.set_editor_property("icons_by_action_id", icons)
-    say("mapped %d action icons from the manifest" % len(icons))
+    if manifest is not None:
+        for action_id, asset_path in sorted(manifest.get("actions", {}).items()):
+            texture = unreal.EditorAssetLibrary.load_asset(asset_path)
+            if texture is None:
+                fail("manifest names %s for '%s' but it did not load" % (asset_path, action_id))
+                continue
+            icons[unreal.Name(action_id)] = texture
+        style.set_editor_property("icons_by_action_id", icons)
+        say("mapped %d action icons from the manifest" % len(icons))
 
-    # NAMED FIELDS, not a map: a severity whose icon is missing would draw a blank chip that
-    # nobody notices, and three fields cannot be missing a key. See UUIStyle::IconInfo.
-    notes = manifest.get("notifications", {})
-    for severity, prop in (("info", "icon_info"), ("success", "icon_success"),
-                           ("warning", "icon_warning")):
-        asset_path = notes.get(severity)
-        texture = unreal.EditorAssetLibrary.load_asset(asset_path) if asset_path else None
-        if texture is None:
-            fail("no notification icon for '%s' (%s)" % (severity, asset_path))
-            continue
-        style.set_editor_property(prop, texture)
-        say("mapped notification icon %s -> %s" % (severity, asset_path))
+        # NAMED FIELDS, not a map: a severity whose icon is missing would draw a blank chip that
+        # nobody notices, and three fields cannot be missing a key. See UUIStyle::IconInfo.
+        notes = manifest.get("notifications", {})
+        for severity, prop in (("info", "icon_info"), ("success", "icon_success"),
+                               ("warning", "icon_warning")):
+            asset_path = notes.get(severity)
+            texture = unreal.EditorAssetLibrary.load_asset(asset_path) if asset_path else None
+            if texture is None:
+                fail("no notification icon for '%s' (%s)" % (severity, asset_path))
+                continue
+            style.set_editor_property(prop, texture)
+            say("mapped notification icon %s -> %s" % (severity, asset_path))
 
     # Forced: save_asset does nothing for an asset the editor does not think is dirty.
     unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
@@ -135,25 +141,26 @@ def run():
     else:
         say("PASS accent survived the save")
 
-    read_back = reloaded.get_editor_property("icons_by_action_id")
-    if len(read_back) != len(icons):
-        fail("icon map did not survive the save: %d of %d entries" % (len(read_back), len(icons)))
-    else:
-        say("PASS icon map survived the save, %d entries" % len(icons))
-
-    # The two ids with a space are the reason the manifest exists; assert one arrived under
-    # its real id rather than a sanitised one, because that is the failure this design
-    # avoids and it would otherwise show up only as a blank button.
-    if unreal.Name("tool.holding point") not in read_back:
-        fail("'tool.holding point' is not in the map - the space-bearing ids did not survive")
-    else:
-        say("PASS 'tool.holding point' is keyed by its real id, space and all")
-
-    for prop in ("icon_info", "icon_success", "icon_warning"):
-        if reloaded.get_editor_property(prop) is None:
-            fail("%s is unset after the save - a severity would draw a blank chip" % prop)
+    if manifest is not None:
+        read_back = reloaded.get_editor_property("icons_by_action_id")
+        if len(read_back) != len(icons):
+            fail("icon map did not survive the save: %d of %d entries" % (len(read_back), len(icons)))
         else:
-            say("PASS %s survived the save" % prop)
+            say("PASS icon map survived the save, %d entries" % len(icons))
+
+        # The two ids with a space are the reason the manifest exists; assert one arrived under
+        # its real id rather than a sanitised one, because that is the failure this design
+        # avoids and it would otherwise show up only as a blank button.
+        if unreal.Name("tool.holding point") not in read_back:
+            fail("'tool.holding point' is not in the map - the space-bearing ids did not survive")
+        else:
+            say("PASS 'tool.holding point' is keyed by its real id, space and all")
+
+        for prop in ("icon_info", "icon_success", "icon_warning"):
+            if reloaded.get_editor_property(prop) is None:
+                fail("%s is unset after the save - a severity would draw a blank chip" % prop)
+            else:
+                say("PASS %s survived the save" % prop)
 
     got_warning = reloaded.get_editor_property("warning")
     want_warning = srgb(COLOURS["warning"])
@@ -161,6 +168,13 @@ def run():
         fail("warning colour read back as %r" % got_warning)
     else:
         say("PASS warning colour survived the save")
+
+    got_ink = reloaded.get_editor_property("ink")
+    want_ink = srgb(COLOURS["ink"])
+    if abs(got_ink.r - want_ink.r) > 1e-4:
+        fail("ink read back as %r" % got_ink)
+    else:
+        say("PASS ink survived the save")
 
     say("ALL VERIFIED")
     say("DONE")

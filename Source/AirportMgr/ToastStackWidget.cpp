@@ -135,7 +135,7 @@ FLinearColor UToastStackWidget::ColourFor(const UUIStyle& Style, ENotificationSe
 	case ENotificationSeverity::Warning: return Style.Warning;
 	case ENotificationSeverity::Success: return Style.Positive;
 	case ENotificationSeverity::Info:
-	default:                             return Style.TextMuted;
+	default:                             return Style.InkMuted;
 	}
 }
 
@@ -241,15 +241,15 @@ UBorder* UToastStackWidget::BuildCard(const UUIStyle& Style, const FNotification
 
 	// A ROUNDED CARD, NOT A TINTED RECTANGLE. UBorder's default brush is a flat box, and
 	// SetBrushColor only tints it - which is how these drew as square slabs while
-	// UUIStyle::CornerRadius sat in the asset unread. FSlateRoundedBoxBrush is the only
+	// UUIStyle::CornerRadius (now WindowRadius) sat in the asset unread. FSlateRoundedBoxBrush is the only
 	// thing in Slate that actually rounds a corner, and it takes the radius and an
 	// outline in one construction.
 	//
-	// PanelDark, not Panel: a toast floats OVER the world and sits directly above a
-	// Panel-coloured bar, so drawing it in Panel made it read as part of the bar.
+	// Surface, not Well: a toast floats OVER the world and sits directly above a
+	// bar, so drawing it in the bar's own section colour made it read as part of the bar.
 	UBorder* Row = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 	// UUIStyle::OutlineAlpha, not a literal here: see its own comment (issue #192).
-	Row->SetBrush(FSlateRoundedBoxBrush(Style.PanelDark, Style.CornerRadius,
+	Row->SetBrush(FSlateRoundedBoxBrush(Style.Surface, Style.WindowRadius,
 		FLinearColor(Severity.R, Severity.G, Severity.B, Style.OutlineAlpha), ToastOutlineWidth));
 	Row->SetPadding(FMargin(12.0f, 9.0f));
 
@@ -271,7 +271,7 @@ UBorder* UToastStackWidget::BuildCard(const UUIStyle& Style, const FNotification
 
 	UTextBlock* Words = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 	Words->SetText(Entry.Text);
-	Style.ApplyText(*Words, EUITextRole::Body, Style.Text);
+	Style.ApplyText(*Words, EUITextRole::Body, Style.Ink);
 
 	// WRAPPED, and this is most of what made the old row look clunky: "Arrival refused:
 	// the runway is in use. Wait for it to clear." on one line is a 400 uu ribbon across

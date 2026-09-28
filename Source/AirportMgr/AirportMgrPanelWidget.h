@@ -85,7 +85,7 @@ protected:
 	 * that case BindWidgetOptional has already filled every slot the asset supplies, and a
 	 * code-built card would replace the designer's layout.
 	 *
-	 * PanelDark, ALWAYS: the card is the outer surface everything a subclass draws sits ON,
+	 * Surface, ALWAYS: the card is the outer surface everything a subclass draws sits ON,
 	 * and Panel is left free for whatever goes inside it (a button, an offer row) - the same
 	 * split UBuildBarWidget's two rows and UOfferInboxWidget's offer cards already draw.
 	 */

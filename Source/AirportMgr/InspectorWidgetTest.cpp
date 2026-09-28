@@ -74,13 +74,13 @@ bool FInspectorWidgetTest::RunTest(const FString& Parameters)
 	// slot lighter than Button) than an enabled one - backwards. The button's own background
 	// never changes (UBuildBarWidget::RefreshState's rule); only the caption dims to TextMuted.
 	TestEqual(TEXT("Depart's caption is muted while taxiing, not the button background"),
-		Panel->DepartLabelColourForTest(), Style->TextMuted);
+		Panel->DepartLabelColourForTest(), Style->InkMuted);
 
 	for (int32 I = 0; I < 20000 && Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked; ++I) { Actor->Tick(1.0f / 30.0f); }
 	Panel->Refresh(Actor, Sel);
 	TestTrue(TEXT("Depart lights once parked"), Panel->IsDepartEnabledForTest());
 	TestEqual(TEXT("Depart's caption returns to full Text once parked"),
-		Panel->DepartLabelColourForTest(), Style->Text);
+		Panel->DepartLabelColourForTest(), Style->Ink);
 	return true;
 }
 

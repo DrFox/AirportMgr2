@@ -54,24 +54,40 @@ class AIRPORTMGR_API UUIStyle : public UDataAsset
 	GENERATED_BODY()
 
 public:
-	/** Section panels. Sheet: buildings, slate blue. */
-	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Panel = FLinearColor::FromSRGBColor(FColor(0x4F, 0x5E, 0x6A));
+	// SLOTS ARE NAMED FOR WHAT THEY MEAN, AND EACH MEANS ONE THING (2026-09-28, UI library
+	// step 1). The slate-blue palette had PanelDark doing two jobs - the darkest SURFACE and the
+	// INK drawn on Accent - which only worked while those were the same dark colour. The white
+	// ground split them, so they are two slots now. Colours from the concept sheet's buildings
+	// row, re-cast for a white ground; Accent/Warning/Positive unchanged.
 
-	/** The status strip, and any surface that must sit behind Panel. */
-	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor PanelDark = FLinearColor::FromSRGBColor(FColor(0x3E, 0x4A, 0x54));
+	/** The ground every window, the bar and a toast sit on. */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Surface = FLinearColor::White;
 
-	/** An unselected button. */
-	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Button = FLinearColor::FromSRGBColor(FColor(0x5D, 0x6D, 0x7A));
+	/** A recessed surface ON Surface: a row, a bar section. Reads as a well, not a slab. */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Well = FLinearColor::FromSRGBColor(FColor(0xF0, 0xF2, 0xF4));
+
+	/** A Secondary button's fill. */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Control = FLinearColor::FromSRGBColor(FColor(0xE2, 0xE6, 0xEA));
+
+	/** Text and glyphs on Surface or Well. Sheet: buildings, dark slate. */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Ink = FLinearColor::FromSRGBColor(FColor(0x3E, 0x4A, 0x54));
+
+	/** Section headings, secondary facts, disabled labels. */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor InkMuted = FLinearColor::FromSRGBColor(FColor(0x7D, 0x8B, 0x96));
+
+	/** Text and glyphs on Accent, Warning or Positive. Same value as Ink today; a separate slot
+	 *  because a darker Accent would want it lighter, and Ink must not move with it. */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor InkOnAccent = FLinearColor::FromSRGBColor(FColor(0x3E, 0x4A, 0x54));
+
+	/** Hairlines: under a window title, a card's outline, a toggle track when off. */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Rule = FLinearColor::FromSRGBColor(FColor(0xE2, 0xE6, 0xEA));
+
+	/** A window's drop shadow. Translucent black, so it darkens grass and concrete alike. */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Shadow = FLinearColor(0.0f, 0.0f, 0.0f, 0.16f);
 
 	/** The selected tool, AND NOTHING ELSE. Sheet: vehicles, yellow. If a second thing
 	 *  takes this colour, the player stops being able to see at a glance what is armed. */
 	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Accent = FLinearColor::FromSRGBColor(FColor(0xF4, 0xBA, 0x38));
-
-	/** Sheet: buildings, cream. */
-	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Text = FLinearColor::FromSRGBColor(FColor(0xE4, 0xE0, 0xD9));
-
-	/** Section headings and disabled labels. */
-	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor TextMuted = FLinearColor::FromSRGBColor(FColor(0x9F, 0xB0, 0xBD));
 
 	/**
 	 * Something went wrong, or will. A brick that sits with the slate rather than a signal
@@ -122,14 +138,18 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Metrics", meta = (ClampMin = "32.0")) float ButtonSize = 56.0f;
 
 	/**
-	 * Corner rounding, uu. CONSUMED by the toast cards through FSlateRoundedBoxBrush.
+	 * Window and card corner rounding, uu. CONSUMED by the toast cards through FSlateRoundedBoxBrush.
 	 *
 	 * It sat here unread for a while and the toasts drew as flat square slabs because of it -
 	 * the declared-but-never-consumed bug CLAUDE.md names three times, in a new place.
 	 * AirportMgr.UI.ToastCardUsesTheStyleCornerRadius reads it back off the brush so it
 	 * cannot quietly stop being used again.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Metrics") float CornerRadius = 5.0f;
+	UPROPERTY(EditAnywhere, Category = "Metrics") float WindowRadius = 8.0f;
+
+	/** Corner rounding of a CONTROL - a button, a row. Smaller than WindowRadius on purpose: the
+	 *  reference kit's 16 px read as a toy (user, 2026-09-28: "not as cutesy rounded"). */
+	UPROPERTY(EditAnywhere, Category = "Metrics") float ControlRadius = 5.0f;
 	UPROPERTY(EditAnywhere, Category = "Metrics") float SectionPadding = 14.0f;
 
 	/**

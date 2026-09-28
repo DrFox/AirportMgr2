@@ -48,14 +48,14 @@ void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
 			TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(),
 				TEXT("TitleText"));
 			TitleText->SetText(LOCTEXT("LedgerTitle", "LEDGER"));
-			Style->ApplyText(*TitleText, EUITextRole::Heading, Style->TextMuted);
+			Style->ApplyText(*TitleText, EUITextRole::Heading, Style->InkMuted);
 			HeadingRow->AddChildToHorizontalBox(TitleText);
 		}
 		if (BalanceText == nullptr)
 		{
 			BalanceText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(),
 				TEXT("BalanceText"));
-			Style->ApplyText(*BalanceText, EUITextRole::Title, Style->Text);
+			Style->ApplyText(*BalanceText, EUITextRole::Title, Style->Ink);
 			UHorizontalBoxSlot* BalanceSlot = HeadingRow->AddChildToHorizontalBox(BalanceText);
 			BalanceSlot->SetPadding(FMargin(16.0f, 0.0f, 0.0f, 0.0f));
 		}
@@ -113,7 +113,7 @@ void ULedgerPanelWidget::Refresh()
 		if (PanelStyle != nullptr)
 		{
 			BalanceText->SetColorAndOpacity(FSlateColor(
-				Panel->IsOverdrawn() ? PanelStyle->Warning : PanelStyle->Text));
+				Panel->IsOverdrawn() ? PanelStyle->Warning : PanelStyle->Ink));
 		}
 	}
 
@@ -178,9 +178,9 @@ UWidget* ULedgerPanelWidget::BuildRow(const UUIStyle& Style, const ULedgerRowVie
 		CellSlot->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
 	};
 
-	AddCell(Row.GetWhen(), WhenWidth, EUITextRole::Label, Style.TextMuted, false);
-	AddCell(Row.GetCategory(), CategoryWidth, EUITextRole::Label, Style.TextMuted, false);
-	AddCell(Row.GetWhat(), 0.0f, EUITextRole::Label, Style.Text, false);
+	AddCell(Row.GetWhen(), WhenWidth, EUITextRole::Label, Style.InkMuted, false);
+	AddCell(Row.GetCategory(), CategoryWidth, EUITextRole::Label, Style.InkMuted, false);
+	AddCell(Row.GetWhat(), 0.0f, EUITextRole::Label, Style.Ink, false);
 
 	// THE ONE PIECE OF COLOUR IN THE ROW, and it is semantic: money out is Warning, money in
 	// is Positive, both from the style's slots rather than a literal. Read off the viewmodel's

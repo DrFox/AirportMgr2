@@ -73,9 +73,9 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		Field->SetMinDesiredWidth(static_cast<float>(PanelWidth));
 		if (Column != nullptr) { Column->AddChildToVerticalBox(Field)->SetPadding(FMargin(0.0f, 2.0f)); }
 	};
-	Text(TitleText, TEXT("TitleText"), EUITextRole::Title, Style->Text);
-	Text(FactsText, TEXT("FactsText"), EUITextRole::Body, Style->TextMuted);
-	Text(StatusText, TEXT("StatusText"), EUITextRole::Body, Style->TextMuted);
+	Text(TitleText, TEXT("TitleText"), EUITextRole::Title, Style->Ink);
+	Text(FactsText, TEXT("FactsText"), EUITextRole::Body, Style->InkMuted);
+	Text(StatusText, TEXT("StatusText"), EUITextRole::Body, Style->InkMuted);
 
 	UHorizontalBox* Row = nullptr;
 	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr))
@@ -93,9 +93,9 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		Field = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), Name);
 		UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 		Label->SetText(Action.Label);
-		Style->ApplyText(*Label, EUITextRole::Label, Style->Text);
+		Style->ApplyText(*Label, EUITextRole::Label, Style->Ink);
 		Field->SetContent(Label);
-		Field->SetBackgroundColor(Style->Button);
+		Field->SetBackgroundColor(Style->Control);
 		if (OutLabel != nullptr) { *OutLabel = Label; }
 		if (Action.Key.IsValid())
 		{
@@ -398,16 +398,16 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		DepartButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		DepartButton->SetIsEnabled(bDepartEnabled);
 
-		// THE BAR'S OWN RULE (UBuildBarWidget::RefreshState): the BUTTON stays Style->Button
+		// THE BAR'S OWN RULE (UBuildBarWidget::RefreshState): the BUTTON stays Style->Control
 		// always: disabled dims a button by darkening it under Button, never by brightening
 		// it, and TextMuted is a LABEL slot (it is lighter than Button on purpose, for text
 		// over a dark ground) - painting a disabled background with it made Depart look
 		// MORE prominent while taxiing than while parked, backwards from the intent. Only the
 		// CAPTION follows enabled state, exactly as the bar's icon/label content does.
-		DepartButton->SetBackgroundColor(Style->Button);
+		DepartButton->SetBackgroundColor(Style->Control);
 		if (DepartLabel != nullptr)
 		{
-			DepartLabel->SetColorAndOpacity(FSlateColor(bDepartEnabled ? Style->Text : Style->TextMuted));
+			DepartLabel->SetColorAndOpacity(FSlateColor(bDepartEnabled ? Style->Ink : Style->InkMuted));
 		}
 	}
 	if (FollowButton != nullptr)

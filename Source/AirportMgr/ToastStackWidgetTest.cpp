@@ -129,10 +129,10 @@ bool FToastCardRoundingTest::RunTest(const FString& Parameters)
 		Brush.DrawAs, ESlateBrushDrawType::RoundedBox);
 	// float against float: the ambiguity is real, TestEqual takes double and float overloads
 	// and CornerRadii is a FVector4 of doubles.
-	TestTrue(TEXT("and its radius is the style's CornerRadius, so the asset's value is the "
+	TestTrue(TEXT("and its radius is the style's WindowRadius, so the asset's value is the "
 		"one on screen"),
 		FMath::IsNearlyEqual(static_cast<float>(Brush.OutlineSettings.CornerRadii.X),
-			Style->CornerRadius, KINDA_SMALL_NUMBER));
+			Style->WindowRadius, KINDA_SMALL_NUMBER));
 	return true;
 }
 

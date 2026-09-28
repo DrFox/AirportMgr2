@@ -56,11 +56,11 @@ UPanelWidget* UAirportMgrPanelWidget::EnsureCardRoot(FName CardName, const FAnch
 		UBorder* CardBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), CardName);
 		if (bRounded)
 		{
-			CardBorder->SetBrush(FSlateRoundedBoxBrush(Style->PanelDark, Style->CornerRadius));
+			CardBorder->SetBrush(FSlateRoundedBoxBrush(Style->Surface, Style->WindowRadius, Style->Rule, 1.0f));
 		}
 		else
 		{
-			CardBorder->SetBrushColor(Style->PanelDark);
+			CardBorder->SetBrushColor(Style->Surface);
 		}
 		// UUIStyle::CardPadding, not a literal here: see its own comment (issue #192).
 		CardBorder->SetPadding(Style->CardPadding);

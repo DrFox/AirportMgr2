@@ -37,7 +37,7 @@ void ULandAircraftPanelWidget::BuildOnce(const UUIStyle& Style)
 		{
 			TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TitleText"));
 			TitleText->SetText(LOCTEXT("Title", "LAND AN AIRCRAFT"));
-			Style.ApplyText(*TitleText, EUITextRole::Heading, Style.TextMuted);
+			Style.ApplyText(*TitleText, EUITextRole::Heading, Style.InkMuted);
 			Column->AddChildToVerticalBox(TitleText);
 		}
 		if (RowColumn == nullptr)
@@ -131,7 +131,7 @@ void ULandAircraftPanelWidget::PaintRows(const TArray<FLandChoice>& Choices)
 		// Rounded, white brushes tinted by SetBackgroundColor - UOfferInboxWidget::
 		// MakeAnswerButton's recipe and its reason.
 		FButtonStyle ButtonStyle = Button->GetStyle();
-		const FSlateRoundedBoxBrush Rounded(FLinearColor::White, Style.CornerRadius);
+		const FSlateRoundedBoxBrush Rounded(FLinearColor::White, Style.ControlRadius);
 		ButtonStyle.SetNormal(Rounded);
 		ButtonStyle.SetHovered(Rounded);
 		ButtonStyle.SetPressed(Rounded);
@@ -139,7 +139,7 @@ void ULandAircraftPanelWidget::PaintRows(const TArray<FLandChoice>& Choices)
 		ButtonStyle.SetNormalPadding(Style.ButtonPadding);
 		ButtonStyle.SetPressedPadding(Style.ButtonPadding);
 		Button->SetStyle(ButtonStyle);
-		Button->SetBackgroundColor(Choice.bAdmitted ? Style.Button : Style.PanelDark);
+		Button->SetBackgroundColor(Style.Control);   // a refused row dims its INK (below), never its fill
 		// DISABLED, not merely tinted: a greyed row is a click the arrival would refuse, so
 		// it must not be clickable at all.
 		Button->SetIsEnabled(Choice.bAdmitted);
@@ -149,7 +149,7 @@ void ULandAircraftPanelWidget::PaintRows(const TArray<FLandChoice>& Choices)
 		UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 		UTextBlock* Name = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 		Name->SetText(Choice.Label);
-		Style.ApplyText(*Name, EUITextRole::Label, Choice.bAdmitted ? Style.Text : Style.TextMuted);
+		Style.ApplyText(*Name, EUITextRole::Label, Choice.bAdmitted ? Style.Ink : Style.InkMuted);
 		USizeBox* NameBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
 		NameBox->SetWidthOverride(NameWidth);
 		NameBox->SetContent(Name);
@@ -159,7 +159,7 @@ void ULandAircraftPanelWidget::PaintRows(const TArray<FLandChoice>& Choices)
 		{
 			UTextBlock* Why = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 			Why->SetText(FText::FromString(Choice.Refusal));
-			Style.ApplyText(*Why, EUITextRole::Label, Style.TextMuted);
+			Style.ApplyText(*Why, EUITextRole::Label, Style.InkMuted);
 			Line->AddChildToHorizontalBox(Why);
 		}
 		Button->AddChild(Line);

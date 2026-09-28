@@ -128,7 +128,7 @@ bool FOfferInboxIdleTickResolvesNoStyleTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the widget was created"), Widget)) { return false; }
 
 	// A REAL OFFER ON THE BOARD, not an empty inbox: PaintRows' style read (Style->Accent /
-	// Style->Button on the Accept button, per-row, per call) only runs for Rows.Num() > 0 - an
+	// Style->Control on the Accept button, per-row, per call) only runs for Rows.Num() > 0 - an
 	// empty inbox would pass this test having exercised almost none of the code #309 is about.
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();

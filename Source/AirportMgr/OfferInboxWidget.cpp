@@ -61,7 +61,7 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 	// bottom, because the feed owns the bottom-right corner now and the two-row bar is tall
 	// enough to have swallowed the old placement (spec section 6.2).
 	//
-	// PanelDark, so the Panel-coloured offer cards inside it have something to sit ON. A flat
+	// Surface, so the Well-coloured offer cards inside it have something to sit ON. A flat
 	// Panel here made the container and its rows one surface, and the offers read as lines of
 	// text in a box rather than as things awaiting an answer - see EnsureCardRoot (#90).
 	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("InboxCard"),
@@ -76,7 +76,7 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 		TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("InboxTitle"));
 		TitleText->SetText(NSLOCTEXT("AirportMgr", "InboxTitle", "OFFERS"));
 		// The same heading treatment the bar's sections take - see UUIStyle::ApplyText (#89).
-		Style->ApplyText(*TitleText, EUITextRole::Heading, Style->TextMuted);
+		Style->ApplyText(*TitleText, EUITextRole::Heading, Style->InkMuted);
 		HeadingRow->AddChildToHorizontalBox(TitleText)->SetVerticalAlignment(VAlign_Center);
 
 		UHorizontalBoxSlot* HeadGap = HeadingRow->AddChildToHorizontalBox(
@@ -84,7 +84,7 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 		HeadGap->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
 		BadgeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("InboxBadge"));
-		Style->ApplyText(*BadgeText, EUITextRole::Label, Style->TextMuted);
+		Style->ApplyText(*BadgeText, EUITextRole::Label, Style->InkMuted);
 		UHorizontalBoxSlot* BadgeSlot = HeadingRow->AddChildToHorizontalBox(BadgeText);
 		BadgeSlot->SetPadding(FMargin(16.0f, 0.0f, 0.0f, 0.0f));
 		BadgeSlot->SetVerticalAlignment(VAlign_Center);
@@ -235,19 +235,19 @@ void UOfferInboxWidget::PaintRows()
 			// ACCEPT IS THE ONE THING ON THIS CARD THAT TAKES ACCENT. The bar spends that
 			// colour on the armed tool and nothing else; here it is the affirmative verb,
 			// and the two never share a screen region.
-			Entry->AcceptButton->SetBackgroundColor(Row->IsAcceptable() ? Style->Accent : Style->Button);
+			Entry->AcceptButton->SetBackgroundColor(Row->IsAcceptable() ? Style->Accent : Style->Control);
 		}
 	}
 }
 
 UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entry, int32 Index)
 {
-	// ONE CARD PER OFFER, Panel over the inbox's PanelDark ground, so a row reads as a thing
+	// ONE CARD PER OFFER, Well over the inbox's Surface ground, so a row reads as a thing
 	// that can be answered rather than as a line of text. Rounded from the style's own
-	// CornerRadius, which sat in the asset unread while everything drew as square slabs.
+	// ControlRadius (CornerRadius once sat in the asset unread while everything drew square).
 	UBorder* Card = WidgetTree->ConstructWidget<UBorder>(
 		UBorder::StaticClass(), *FString::Printf(TEXT("OfferCard%d"), Index));
-	Card->SetBrush(FSlateRoundedBoxBrush(Style.Panel, Style.CornerRadius));
+	Card->SetBrush(FSlateRoundedBoxBrush(Style.Well, Style.ControlRadius));
 	Card->SetPadding(FMargin(10.0f, 8.0f));
 
 	UVerticalBox* Lines = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
@@ -258,7 +258,7 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	// than buried mid-sentence.
 	UHorizontalBox* Head = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	Entry.AirlineText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Style.ApplyText(*Entry.AirlineText, EUITextRole::Title, Style.Text);
+	Style.ApplyText(*Entry.AirlineText, EUITextRole::Title, Style.Ink);
 	Head->AddChildToHorizontalBox(Entry.AirlineText)->SetVerticalAlignment(VAlign_Center);
 
 	UHorizontalBoxSlot* GapSlot = Head->AddChildToHorizontalBox(
@@ -266,7 +266,7 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	GapSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
 	Entry.EtaText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Style.ApplyText(*Entry.EtaText, EUITextRole::Label, Style.TextMuted);
+	Style.ApplyText(*Entry.EtaText, EUITextRole::Label, Style.InkMuted);
 	UHorizontalBoxSlot* EtaSlot = Head->AddChildToHorizontalBox(Entry.EtaText);
 	EtaSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
 	EtaSlot->SetVerticalAlignment(VAlign_Center);
@@ -274,7 +274,7 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 
 	// LINE TWO: the airframe, quieter. It matters while deciding, not while scanning.
 	Entry.TypeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Style.ApplyText(*Entry.TypeText, EUITextRole::Body, Style.TextMuted);
+	Style.ApplyText(*Entry.TypeText, EUITextRole::Body, Style.InkMuted);
 	Lines->AddChildToVerticalBox(Entry.TypeText);
 
 	// LINE THREE: why it cannot be taken, in Warning and wrapped. Hidden while acceptable -
@@ -293,12 +293,12 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	PushSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
 	Entry.AcceptButton = MakeAnswerButton(Style, TEXT("Accept"),
-		NSLOCTEXT("AirportMgr", "OfferAccept", "Accept"), Style.Accent, Style.PanelDark, Index);
+		NSLOCTEXT("AirportMgr", "OfferAccept", "Accept"), Style.Accent, Style.InkOnAccent, Index);
 	Entry.AcceptButton->OnClicked.AddDynamic(&Entry, &UOfferRowEntry::HandleAccept);
 	Answers->AddChildToHorizontalBox(Entry.AcceptButton)->SetPadding(FMargin(0.0f, 0.0f, 6.0f, 0.0f));
 
 	UButton* DeclineButton = MakeAnswerButton(Style, TEXT("Decline"),
-		NSLOCTEXT("AirportMgr", "OfferDecline", "Decline"), Style.Button, Style.Text, Index);
+		NSLOCTEXT("AirportMgr", "OfferDecline", "Decline"), Style.Control, Style.Ink, Index);
 	DeclineButton->OnClicked.AddDynamic(&Entry, &UOfferRowEntry::HandleDecline);
 	Answers->AddChildToHorizontalBox(DeclineButton);
 
@@ -318,7 +318,7 @@ UButton* UOfferInboxWidget::MakeAnswerButton(const UUIStyle& Style, const TCHAR*
 	// and is why these read as stock editor buttons. The brushes are left WHITE so that
 	// SetBackgroundColor stays the one place a state colour is chosen, as the repaint does.
 	FButtonStyle ButtonStyle = Button->GetStyle();
-	const FSlateRoundedBoxBrush Rounded(FLinearColor::White, Style.CornerRadius);
+	const FSlateRoundedBoxBrush Rounded(FLinearColor::White, Style.ControlRadius);
 	ButtonStyle.SetNormal(Rounded);
 	ButtonStyle.SetHovered(Rounded);
 	ButtonStyle.SetPressed(Rounded);

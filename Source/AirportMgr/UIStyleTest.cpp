@@ -27,8 +27,8 @@ bool FUIStyleResolvesTest::RunTest(const FString& Parameters)
 
 	// The CDO's own declared defaults must be usable, not zeroes: a style of transparent
 	// black would render a bar that is technically present and invisible.
-	TestTrue(TEXT("Panel colour is not transparent"), Style->Panel.A > 0.0f);
-	TestTrue(TEXT("Text colour is not transparent"), Style->Text.A > 0.0f);
+	TestTrue(TEXT("Well colour is not transparent"), Style->Well.A > 0.0f);
+	TestTrue(TEXT("Ink colour is not transparent"), Style->Ink.A > 0.0f);
 	TestTrue(TEXT("Button size is a usable hit target"), Style->ButtonSize >= 32.0f);
 	return true;
 }
@@ -147,16 +147,16 @@ bool FUIStyleApplyTextTest::RunTest(const FString& Parameters)
 
 	UTextBlock* Heading = Fresh();
 	if (!TestNotNull(TEXT("a text block to paint"), Heading)) { return false; }
-	Style->ApplyText(*Heading, EUITextRole::Heading, Style->TextMuted);
+	Style->ApplyText(*Heading, EUITextRole::Heading, Style->InkMuted);
 	TestEqual(TEXT("Heading takes the style's HeadingSize"), Heading->GetFont().Size, Style->HeadingSize);
 	TestEqual(TEXT("Heading is widely spaced, so it reads as a heading and not a short label"),
 		Heading->GetFont().LetterSpacing, 120);
 	TestEqual(TEXT("colour is the passed-in one, not baked into the role"),
-		Heading->GetColorAndOpacity().GetSpecifiedColor(), Style->TextMuted);
+		Heading->GetColorAndOpacity().GetSpecifiedColor(), Style->InkMuted);
 
 	UTextBlock* Label = Fresh();
 	if (!TestNotNull(TEXT("a text block to paint"), Label)) { return false; }
-	Style->ApplyText(*Label, EUITextRole::Label, Style->Text);
+	Style->ApplyText(*Label, EUITextRole::Label, Style->Ink);
 	TestEqual(TEXT("Label takes the style's LabelSize, distinct from Heading"),
 		Label->GetFont().Size, Style->LabelSize);
 	// The BASE FONT'S OWN SPACING, not a literal 0: only Heading forces one, and every other
@@ -168,8 +168,46 @@ bool FUIStyleApplyTextTest::RunTest(const FString& Parameters)
 
 	UTextBlock* Clock = Fresh();
 	if (!TestNotNull(TEXT("a text block to paint"), Clock)) { return false; }
-	Style->ApplyText(*Clock, EUITextRole::Clock, Style->Text);
+	Style->ApplyText(*Clock, EUITextRole::Clock, Style->Ink);
 	TestEqual(TEXT("Clock takes its own size, kept apart from Title"), Clock->GetFont().Size, Style->ClockSize);
+	return true;
+}
+
+namespace UIStyleContrast
+{
+	/** WCAG relative luminance of a LINEAR colour - the slots are stored linear already. */
+	double Luminance(const FLinearColor& C) { return 0.2126 * C.R + 0.7152 * C.G + 0.0722 * C.B; }
+	double Ratio(const FLinearColor& A, const FLinearColor& B)
+	{
+		const double LA = Luminance(A), LB = Luminance(B);
+		return (FMath::Max(LA, LB) + 0.05) / (FMath::Min(LA, LB) + 0.05);
+	}
+}
+
+/**
+ * THE WHITE GROUND IS ONLY SAFE IF EVERY INK STILL READS ON IT. The old palette was cream on
+ * slate; flipping the ground to white flips which slot is the ink, and PanelDark was quietly
+ * doing two jobs (a surface AND the text on yellow) - so each ink is pinned against the surface
+ * it actually lands on. 4.5:1 is WCAG AA for body text, 3:1 for the muted headings.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUIStyleContrastTest,
+	"AirportMgr.UI.EveryInkReadsOnItsSurface",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUIStyleContrastTest::RunTest(const FString& Parameters)
+{
+	using namespace UIStyleContrast;
+	for (const UUIStyle* Style : { GetDefault<UUIStyle>(), UAirportMgrUISettings::ResolveStyle() })
+	{
+		if (!TestNotNull(TEXT("a style"), Style)) { return false; }
+		TestTrue(TEXT("Ink on Surface >= 4.5"), Ratio(Style->Ink, Style->Surface) >= 4.5);
+		TestTrue(TEXT("Ink on Well >= 4.5"), Ratio(Style->Ink, Style->Well) >= 4.5);
+		TestTrue(TEXT("InkOnAccent on Accent >= 4.5"), Ratio(Style->InkOnAccent, Style->Accent) >= 4.5);
+		TestTrue(TEXT("InkMuted on Surface >= 3"), Ratio(Style->InkMuted, Style->Surface) >= 3.0);
+		TestTrue(TEXT("InkMuted on Well >= 3"), Ratio(Style->InkMuted, Style->Well) >= 3.0);
+		TestTrue(TEXT("Surface and Well are distinguishable"), !Style->Surface.Equals(Style->Well));
+	}
 	return true;
 }
 
