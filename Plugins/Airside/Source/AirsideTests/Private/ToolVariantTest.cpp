@@ -388,8 +388,8 @@ bool FTvSessionTest::RunTest(const FString& Parameters)
 
 /**
  * ONE SURFACE-ROW BUILDER, reading the profile's list - world-free. Fails if the row offers
- * the enum rather than the list, reorders it, or lights Current by its enum value rather than
- * by its place in what was offered.
+ * the enum rather than the list, leaves it in the asset's order rather than the scale's, or
+ * lights Current by its enum value rather than by its place in what was offered.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadSurfaceRowOffersTheProfileListTest,
@@ -405,7 +405,10 @@ bool FRoadSurfaceRowOffersTheProfileListTest::RunTest(const FString& Parameters)
 	Pavement::AppendAxis(Axes, EPavement::Tarmac, RoadList);
 	if (!TestEqual(TEXT("one row"), Axes.Num(), 1)) { return false; }
 	if (!TestEqual(TEXT("with exactly the profile's two options"), Axes[0].Options.Num(), 2)) { return false; }
-	TestEqual(TEXT("in the profile's order - tarmac first, as #356's row had it"), Axes[0].Options[1].Id, FName(TEXT("grass")));
+	// SCALE ORDER since 2026-09-28, though the list here - like every road asset's - names tarmac
+	// first: grass leads every surface row, the runway's and stand's included (Pavement::Offered).
+	TestEqual(TEXT("in scale order - grass first, whatever order the profile lists"), Axes[0].Options[0].Id, FName(TEXT("grass")));
+	TestEqual(TEXT("and tarmac lit by its place in that order"), Axes[0].Current, 1);
 
 	TArray<FToolVariantAxis> All;
 	Pavement::AppendAxis(All, EPavement::Tarmac, {});

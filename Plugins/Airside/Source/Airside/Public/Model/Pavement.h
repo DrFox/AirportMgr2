@@ -44,7 +44,7 @@ namespace Pavement
 	 * means all" (URoadProfile::AllowedPavements). SORTED since 2026-09-28: every road and
 	 * taxiway asset lists tarmac before grass, so its row put grass second while the runway's
 	 * and the stand's put it first; the row is the scale, so a profile's authoring order must
-	 * not reorder it. HERE IN Model/, not beside Pavement::AppendAxis in
+	 * not reorder it. ENFORCED BY: Airside.Tool.Variants.RoadSurfaceRowOffersTheProfileList. HERE IN Model/, not beside Pavement::AppendAxis in
 	 * Tool/PavementAxis.h: URoadNetwork::SetSegmentSurface refuses by it, and Model/ may not
 	 * see Tool/. The row and the refusal read one list, so a pick the row offered is never
 	 * one the network then refuses.
