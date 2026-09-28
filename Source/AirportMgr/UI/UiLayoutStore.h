@@ -26,7 +26,7 @@ struct FUiWindowPlacement
  * and its reason: a test's host must never read or write the player's own GameUserSettings.ini,
  * or a player's dragged ledger would move where every test's ledger starts. A host starts with no
  * store (nothing remembered, nothing written); UBuildHudLayer alone hands it the real one.
- * ENFORCED BY: Check-Architecture rule 29 (layout-store-wired).
+ * ENFORCED BY: Check-Architecture rule 30 (layout-store-wired).
  */
 class AIRPORTMGR_API IUiLayoutStore
 {

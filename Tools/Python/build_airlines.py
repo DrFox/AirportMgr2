@@ -33,11 +33,36 @@ PLANE16 = "/Game/Entities/DA_Aircraft_Plane16.DA_Aircraft_Plane16"
 PLANE17 = "/Game/Entities/DA_Aircraft_Plane17.DA_Aircraft_Plane17"
 PLANE18 = "/Game/Entities/DA_Aircraft_Plane18.DA_Aircraft_Plane18"
 
-# name -> (display name, fleet asset paths, offers per game day)
+# name -> (display name, fleet asset paths, demand)
 #
-# OffersPerDay is the rate at full capability; UOpsRuntime sums it across airlines and asks
-# for one offer that often. Six and four are a starting pair, not a balance decision - the
-# numbers live on the asset precisely so they can be changed without a build.
+# DEMAND (spec 2026-09-28-offers-and-demand): a 24-weight curve by hour, a peak rate in offers
+# per GAME hour at weight 1.0, a floor that holds in daylight, the floor flag, the offer window
+# in REAL seconds, the lead time and the turnaround contract (accept to airborne, GAME seconds).
+#
+# 2026-09-28: THE CONTRACT IS A LENGTH, not a slack. The first cut (lead + 10 min taxi +
+# turnaround x slack) gave an SR22 40 game minutes; it reached its stand with one to spare, since
+# aircraft move in real seconds while the clock runs ~21x. Two hours strict, three relaxed. First guesses, not a balance decision
+# - they live on the asset precisely so they can be changed without a build.
+#
+# 2026-09-28: SPLIT IN TWO. Cumbria flew every GA type there is; now the FLYING CLUB takes the
+# light singles and is the airport's floor - "you should never be in a place where no one wants
+# to use you" - and Cumbria keeps the twins and turboprops, a small scheduled/charter operator
+# with a morning and an evening peak. The split was made from a probe of each type's display
+# name and stand letter, not from memory: the singles are all Code A.
+
+def curve(**hours):
+    """24 hourly weights, 0 everywhere not named. hours: h07=0.6 etc."""
+    out = [0.0] * 24
+    for key, value in hours.items():
+        out[int(key[1:])] = value
+    return out
+
+CLUB_CURVE = curve(h07=0.6, h08=0.8, h09=0.9, h10=1.0, h11=1.0, h12=1.0, h13=1.0, h14=1.0,
+                   h15=1.0, h16=1.0, h17=0.7, h18=0.7, h19=0.7)
+CUMBRIA_CURVE = curve(h06=0.8, h07=1.0, h08=1.0, h09=1.0, h10=0.4, h11=0.4, h12=0.4, h13=0.4,
+                      h14=0.4, h15=0.4, h16=1.0, h17=1.0, h18=1.0, h19=1.0, h20=0.5, h21=0.5,
+                      h22=0.1, h23=0.1)
+
 AIRLINES = {
     # THE JET OPERATOR IS NOT SHIPPED YET, and its absence is the whole entry.
     #
@@ -121,10 +146,24 @@ AIRLINES = {
     # tarmac, over the King Air's 1,006 and under the Q400's 1,402 - and Code B, so a paved
     # field that took the King Air takes it by LENGTHENING alone, with no widening. On this
     # airline for the King Air's reason above: a second operator is a second thing to balance.
+    #
+    # 2026-09-28: THE SINGLES MOVED TO THE FLYING CLUB (below) - the 172, the Meridian, the
+    # Cherokee and the SR22. What stays is the operation the entries above describe as
+    # Cumbria's own: the Twin Otter, the King Air, the Caravan, the two piston twins and the
+    # Saab 340.
     "DA_Airline_Cumbria": ("Cumbria Air",
-                           [PIPER, PLANE1, PLANE2, PLANE5, PLANE10, PLANE12, PLANE15, PLANE16,
-                            PLANE17, PLANE18],
-                           4.0),
+                           [PLANE2, PLANE5, PLANE10, PLANE16, PLANE17, PLANE18],
+                           dict(curve=CUMBRIA_CURVE, peak=2.0, floor=0.0, is_floor=False,
+                                window=60.0, lead=900.0, contract=2 * 3600.0, prefix="CU")),
+
+    # 2026-09-28: THE FLYING CLUB, AND IT IS THE FLOOR. Private owners in light singles, so its
+    # callsigns are tail numbers. Daylight only - nobody flies a 172 for fun at 02:00 - with a
+    # floor of one an hour that no fee and (in C) no reputation takes away. A relaxed window and
+    # a relaxed three-hour contract: this is the airport's first customer, and it forgives.
+    "DA_Airline_FlyingClub": ("Flying Club",
+                              [PLANE1, PIPER, PLANE12, PLANE15],
+                              dict(curve=CLUB_CURVE, peak=3.0, floor=1.0, is_floor=True,
+                                   window=120.0, lead=600.0, contract=3 * 3600.0, prefix="G-????")),
 }
 
 
@@ -138,12 +177,15 @@ def load_type(path):
 def build():
     tools = unreal.AssetToolsHelpers.get_asset_tools()
 
-    for name, (display, fleet_paths, per_day) in AIRLINES.items():
+    for name, (display, fleet_paths, demand) in AIRLINES.items():
         package = "{}/{}".format(ENTITY_DIR, name)
 
         # Load-or-create rather than delete-and-recreate: deleting an asset something else
         # references breaks the reference rather than updating it.
-        asset = unreal.EditorAssetLibrary.load_asset(package)
+        # EXISTS FIRST: load_asset on a package that is not there logs an Error, which fails the
+        # commandlet run for an airline being authored for the first time.
+        asset = (unreal.EditorAssetLibrary.load_asset(package)
+                 if unreal.EditorAssetLibrary.does_asset_exist(package) else None)
         if asset is None:
             asset = tools.create_asset(
                 asset_name=name,
@@ -159,15 +201,27 @@ def build():
 
         asset.set_editor_property("display_name", unreal.Text(display))
         asset.set_editor_property("fleet", fleet)
-        asset.set_editor_property("offers_per_day", per_day)
-        asset.set_editor_property("offer_weight", 1.0)
+        asset.set_editor_property("demand_curve", demand["curve"])
+        asset.set_editor_property("peak_offers_per_hour", demand["peak"])
+        asset.set_editor_property("floor_offers_per_hour", demand["floor"])
+        asset.set_editor_property("is_floor", demand["is_floor"])
+        asset.set_editor_property("offer_window_seconds", demand["window"])
+        asset.set_editor_property("lead_time_seconds", demand["lead"])
+        asset.set_editor_property("contract_seconds", demand["contract"])
+        asset.set_editor_property("callsign_prefix", demand["prefix"])
 
         # save_asset does nothing for an asset the editor does not think is dirty, so the
         # save is forced - this is the failure that makes a headless author look like it
         # worked and leave nothing on disk.
         unreal.EditorAssetLibrary.save_asset(package, only_if_is_dirty=False)
-        unreal.log("MARKER: {} '{}' with {} type(s), {}/day".format(
-            name, display, len(fleet), per_day))
+        # READ BACK OFF THE ASSET, not echoed from the dict, so the line says what was saved.
+        unreal.log_warning("MARKER: {} '{}' with {} type(s), peak {}/h, floor {}/h, window {} s, contract {} s, prefix {}".format(
+            name, display, len(asset.get_editor_property("fleet")),
+            asset.get_editor_property("peak_offers_per_hour"),
+            asset.get_editor_property("floor_offers_per_hour"),
+            asset.get_editor_property("offer_window_seconds"),
+            asset.get_editor_property("contract_seconds"),
+            asset.get_editor_property("callsign_prefix")))
 
 
 def prune():

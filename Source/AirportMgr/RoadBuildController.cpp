@@ -554,6 +554,22 @@ double ARoadBuildController::GetGridStepUu() const
 	return Actor != nullptr ? Actor->GuideSources.GridStepUu() : 0.0;
 }
 
+void ARoadBuildController::ToggleGridOrientation()
+{
+	if (ARoadNetworkActor* Actor = GetTarget())
+	{
+		Actor->GuideSources.ToggleGridOrientation();
+		UE_LOG(LogRoadBuild, Log, TEXT("Grid orientation -> %s"),
+			Actor->GuideSources.GridOrientation == EGridOrientation::Follow ? TEXT("follow") : TEXT("world"));
+	}
+}
+
+bool ARoadBuildController::IsGridFollowing() const
+{
+	const ARoadNetworkActor* Actor = GetTarget();
+	return Actor != nullptr && Actor->GuideSources.GridOrientation == EGridOrientation::Follow;
+}
+
 int32 ARoadBuildController::HoverAgentUnderCursor() const
 {
 	UGroundTraffic* AgentModel = Target != nullptr ? Target->GetGroundTraffic() : nullptr;
@@ -701,6 +717,33 @@ bool ARoadBuildController::SelectedStandFacts(FStandFacts& Out) const
 		return false;
 	}
 	return InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Sel.Id, Out);
+}
+
+bool ARoadBuildController::SelectedRunwayFacts(FRunwayCardFacts& Out) const
+{
+	const FSelection& Sel = GetSelection();
+	if (Sel.Kind != ESelectionKind::Runway || Target == nullptr || Target->GetNetwork() == nullptr)
+	{
+		return false;
+	}
+	return InspectFacts::DescribeRunway(*Target->GetNetwork(), Sel.Id, Out);
+}
+
+void ARoadBuildController::FlipSelectedRunway()
+{
+	FRunwayCardFacts Card;
+	if (!SelectedRunwayFacts(Card))
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Runway in use: no runway selected."));
+		return;
+	}
+	const FRoadSegmentId Segment = Target->GetNetwork()->SegmentIdAt(GetSelection().Id);
+	FRunwayFacts Facts = Target->GetNetwork()->RunwayFactsFor(Segment);
+	Facts.InUse = Card.Other;
+	if (!Target->SetRunwayFacts(GetSelection().Id, Facts))
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Runway in use: the change to %02d was refused."), Card.Other);
+	}
 }
 
 bool ARoadBuildController::CanDepartSelected() const
@@ -1261,7 +1304,7 @@ ARoadBuildController::FToolReadoutKey ARoadBuildController::MakeReadoutKey(
 	Key.bGuideActive = Context.Guide.bActive;
 	Key.GuidePoint = Context.Guide.Point;
 	Key.EditHandles = Context.EditHandles;
-	Key.GridStepUu = Context.GridStepUu;
+	Key.Grid = Context.GridFrame;
 	return Key;
 }
 

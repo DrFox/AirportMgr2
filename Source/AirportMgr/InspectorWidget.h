@@ -59,13 +59,15 @@ struct FInspectorKey
 	FString Destination;
 	bool bEngineRunning = false;
 	FString Fuel;
+	FString Pushback;
+	FString Turnaround;
 
 	bool operator==(const FInspectorKey& Other) const
 	{
 		return Id == Other.Id && Phase == Other.Phase && HeadingRounded == Other.HeadingRounded
 			&& SpeedTenthsRounded == Other.SpeedTenthsRounded && AltitudeRounded == Other.AltitudeRounded
 			&& Destination == Other.Destination && bEngineRunning == Other.bEngineRunning
-			&& Fuel == Other.Fuel;
+			&& Fuel == Other.Fuel && Pushback == Other.Pushback && Turnaround == Other.Turnaround;
 	}
 	bool operator!=(const FInspectorKey& Other) const { return !(*this == Other); }
 };
@@ -100,6 +102,8 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> StatusText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> DepartButton;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> FollowButton;
+	/** The runway card's one verb, "Use 27" - selection.runway_in_use (2026-09-28). */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> RunwayButton;
 
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double PanelWidth = 300.0;
 
@@ -145,6 +149,9 @@ public:
 	bool IsShownForTest() const;
 	bool IsDepartEnabledForTest() const;
 	FString TitleForTest() const;
+
+	/** The composed facts text (heading, speed, ... and the Demands block). */
+	FString FactsForTest() const;
 	/** Depart's CAPTION colour - the thing that must actually change with enabled state.
 	 *  See Refresh: the button's own background stays Style->Control always (UUiButton::LookFor). */
 	FLinearColor DepartLabelColourForTest() const;
@@ -179,6 +186,11 @@ private:
 	 */
 	int32 DepartActionIndex = INDEX_NONE;
 	int32 FollowActionIndex = INDEX_NONE;
+	/** Found BY ID, not third-in-line: the pair above predates the rule that lists which must
+	 *  agree check names, not positions (CLAUDE.md); a third positional row would have made a
+	 *  reorder of the Selection section silently wire Depart's slot to the runway flip. */
+	int32 RunwayActionIndex = INDEX_NONE;
+
 
 
 	/**
@@ -216,4 +228,5 @@ private:
 
 	UFUNCTION() void HandleDepart();
 	UFUNCTION() void HandleFollow();
+	UFUNCTION() void HandleRunway();
 };

@@ -2,6 +2,7 @@
 
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/RunwayDesignator.h"
 
 namespace
 {
@@ -339,6 +340,77 @@ namespace RunwayQuery
 		// which must say no for the rest of the airport. This answers "which runway would you
 		// land on", which is asked of a click that is deliberately nowhere near one.
 		return RunwayExtentInternal(Network, Near, false, OutEnd);
+	}
+
+	FRunwayEnd InUseEnd(const URoadNetwork& Network, const FRunwayEnd& Either)
+	{
+		const int32 Here = RunwayDesignator::Designate(Either.Direction);
+		if (Here == 0)
+		{
+			// No bearing (a zero-length strip): nothing to orient, and Designate's own contract
+			// says 0 is "no runway here", never north.
+			return Either;
+		}
+		const int32 There = RunwayDesignator::Reciprocal(Here);
+		const int32 Lower = FMath::Min(Here, There);
+
+		// CIRCULAR distance on the 36-point dial: 35 and 01 are two apart, not 34.
+		auto Apart = [](int32 A, int32 B)
+		{
+			const int32 D = FMath::Abs(A - B) % 36;
+			return FMath::Min(D, 36 - D);
+		};
+
+		const int32 Wanted = RunwayFactsFor(Network, Either.Seed).InUse;
+		int32 Chosen = Lower;
+		if (Wanted != 0)
+		{
+			const int32 ToHere = Apart(Here, Wanted);
+			const int32 ToThere = Apart(There, Wanted);
+			// The two ends are exactly 18 apart, so these sum to 18 and tie only at 9 - a strip
+			// rotated a right angle from its stored heading. The tie takes the lower, as unset does.
+			Chosen = ToHere < ToThere ? Here : ToThere < ToHere ? There : Lower;
+		}
+		return Chosen == Here ? Either : Either.Reversed();
+	}
+
+	bool InUseRunwayAt(const URoadNetwork& Network, const FVector2D& Near, FRunwayEnd& OutEnd)
+	{
+		FRunwayEnd Found;
+		if (!RunwayExtentAt(Network, Near, Found))
+		{
+			return false;
+		}
+		OutEnd = InUseEnd(Network, Found);
+		return true;
+	}
+
+	FRoadSegmentId RunwaySegmentAt(const URoadNetwork& Network, const FVector2D& Position)
+	{
+		// A linear scan, asked per click and per hover frame on the Select tool: segments were
+		// ~300 on the scale fixture (BuildScale, 2026-09-28), and each test here is a few dot
+		// products on a one-segment chain.
+		for (int32 Index = 0; Index < Network.GetSegments().Num(); ++Index)
+		{
+			const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+			if (Id.IsSet() && Network.IsRunwaySegment(Id)
+				&& IsPointOnRunway(Network, Position, TArray<FRoadSegmentId>{ Id }))
+			{
+				return Id;
+			}
+		}
+		return FRoadSegmentId();
+	}
+
+	bool InUseRunwayNearest(const URoadNetwork& Network, const FVector2D& Near, FRunwayEnd& OutEnd)
+	{
+		FRunwayEnd Found;
+		if (!NearestRunwayThreshold(Network, Near, Found))
+		{
+			return false;
+		}
+		OutEnd = InUseEnd(Network, Found);
+		return true;
 	}
 
 	TArray<FGuidelineNodeId> RunwayExitNodes(const URoadNetwork& Network, FRoadSegmentId Seed,

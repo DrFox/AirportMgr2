@@ -13,6 +13,9 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Model/FuelService.h"
+#include "Model/FlightBoard.h"
+#include "Model/Flight.h"
+#include "ArrivalViewModels.h"
 #include "Model/InspectFacts.h"
 #include "Model/RoadAgent.h"
 #include "Present/OpsRuntime.h"
@@ -32,6 +35,7 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 	EnsureSlots(&Style);
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
+	if (RunwayButton != nullptr) { RunwayButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunway); }
 	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce. The WINDOW
 	// hides (SetShown); the root stays laid out.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
@@ -49,6 +53,13 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	for (int32 Index = 0; Index < Actions.Num(); ++Index)
 	{
 		if (Actions[Index].Section != EActionSection::Selection) { continue; }
+		if (Actions[Index].Id == FName(TEXT("selection.runway_in_use")))
+		{
+			// By id - see RunwayActionIndex. Not counted in SelectionSeen, so it cannot shift
+			// the positional pair whichever side of them it is registered.
+			RunwayActionIndex = Index;
+			continue;
+		}
 		if (SelectionSeen == 0) { DepartActionIndex = Index; }
 		else if (SelectionSeen == 1) { FollowActionIndex = Index; }
 		++SelectionSeen;
@@ -77,7 +88,7 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	Text(StatusText, TEXT("StatusText"), EUITextRole::Body, Style->InkMuted);
 
 	UHorizontalBox* Row = nullptr;
-	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr))
+	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr || RunwayButton == nullptr))
 	{
 		Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("InspectorVerbs"));
 		Column->AddChildToVerticalBox(Row)->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 0.0f));
@@ -108,6 +119,11 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	// SetState, and ShowFollowing retitles it, without either holding a second pointer.
 	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex);
 	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex);
+	Button(RunwayButton, TEXT("RunwayButton"), RunwayActionIndex);
+	if (!Actions.IsValidIndex(RunwayActionIndex))
+	{
+		UE_LOG(LogInspector, Warning, TEXT("No selection.runway_in_use row in BuildActions(): the runway card has no button"));
+	}
 }
 
 bool UInspectorWidget::WantsWindow(FUiWindowSpec& Out) const
@@ -183,6 +199,8 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 
 	FString Title, Facts, Status;
 	bool bAircraft = false;
+	bool bRunway = false;
+	FText RunwayCaption;
 	if (Selection.Kind == ESelectionKind::Aircraft)
 	{
 		FAgentFacts F;
@@ -218,7 +236,16 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		{
 			if (const UFuelService* Fuel = Runtime->GetFuelService())
 			{
-				F.Fuel = Fuel->DescribeAgent(F.Id);
+				F.Fuel = Fuel->DescribeAgent(F.Id, Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0);
+			}
+			// THE CONTRACT, from the flight that owns this aircraft - its minute resolution keeps
+			// the gate below from recomposing more than once a game minute.
+			if (const UFlightBoard* Board = Runtime->GetFlightBoard())
+			{
+				if (const UFlight* Flight = Board->FlightForAgent(F.Id); Flight != nullptr && Runtime->GetClock() != nullptr)
+				{
+					F.Turnaround = UArrivalRowViewModel::DescribeTurnaround(*Flight, Runtime->GetClock()->Now()).ToString();
+				}
 			}
 		}
 
@@ -244,6 +271,8 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		Key.Destination = F.Destination;
 		Key.bEngineRunning = F.bEngineRunning;
 		Key.Fuel = F.Fuel;
+		Key.Pushback = F.Pushback;
+		Key.Turnaround = F.Turnaround;
 
 		if (Key != LastComposedKey)
 		{
@@ -271,16 +300,57 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 					F.Destination,
 					EngineState.ToString(),
 				});
-			if (!F.Fuel.IsEmpty())
+			// THE DEMANDS BLOCK (2026-09-28): what the aircraft wants, one line each. The fuel
+			// line is AirportOps's whole sentence (it names itself "Fuel ..."); pushback is the
+			// airframe's need, which nothing services yet.
+			if (!F.Fuel.IsEmpty() || !F.Pushback.IsEmpty())
 			{
-				LastComposedFacts += FString::Format(
-					*NSLOCTEXT("AirportMgr", "InspectorFuelLine", "\nFuel {0}").ToString(), { F.Fuel });
+				LastComposedFacts += NSLOCTEXT("AirportMgr", "InspectorDemandsHeading", "\n\nDemands").ToString();
+				if (!F.Fuel.IsEmpty())
+				{
+					LastComposedFacts += TEXT("\n") + F.Fuel;
+				}
+				if (!F.Pushback.IsEmpty())
+				{
+					LastComposedFacts += FString::Format(
+						*NSLOCTEXT("AirportMgr", "InspectorPushbackLine", "\nPushback {0}").ToString(), { F.Pushback });
+				}
+			}
+			// THE CONTRACT, after the demands it depends on - see UArrivalRowViewModel::DescribeTurnaround.
+			if (!F.Turnaround.IsEmpty())
+			{
+				LastComposedFacts += TEXT("\n\n") + F.Turnaround;
 			}
 			LastComposedStatus = F.Status;
 		}
 		Title = LastComposedTitle;
 		Facts = LastComposedFacts;
 		Status = LastComposedStatus;
+	}
+	else if (Selection.Kind == ESelectionKind::Runway)
+	{
+		FRunwayCardFacts R;
+		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeRunway(*Target->GetNetwork(), Selection.Id, R))
+		{
+			SetShown(false);
+			bDepartEnabled = false;
+			return;
+		}
+		// THE RUNWAY IN USE CARD (spec 2026-09-28-runway-in-use). Composed every tick without
+		// FInspectorKey's gate: nothing on it moves, and the SetText gate below already makes
+		// an unchanged sentence free.
+		bRunway = true;
+		const FString InUse = FString::Printf(TEXT("%02d"), R.InUse);
+		const FString Other = FString::Printf(TEXT("%02d"), R.Other);
+		Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorRunwayTitle", "Runway {0}").ToString(), { R.Pair });
+		Facts = FString::Format(
+			*NSLOCTEXT("AirportMgr", "InspectorRunwayFacts", "In use: {0}\n{1}, {2} approach\n{3} m long").ToString(),
+			{ InUse, FString(Pavement::Name(R.Surface)), FString(RunwayApproachName(R.Approach)),
+				FString::Printf(TEXT("%.0f"), R.Length / 100.0) });
+		Status = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorRunwayStatus",
+			"Landing and taking off {0}. A change reaches the next flight planned.").ToString(), { InUse });
+		RunwayCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorRunwayUse", "Use {0}"), FText::FromString(Other));
+		bDepartEnabled = false;
 	}
 	else
 	{
@@ -380,6 +450,16 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	{
 		FollowButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
+	if (RunwayButton != nullptr)
+	{
+		RunwayButton->SetVisibility(bRunway ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		// Retitled through the button's own caption (UUiButton::GetLabel), the Follow button's way.
+		const UTextBlock* Caption = RunwayButton->GetLabel();
+		if (bRunway && (Caption == nullptr || !Caption->GetText().EqualTo(RunwayCaption)))
+		{
+			RunwayButton->SetLabel(RunwayCaption);
+		}
+	}
 	SetShown(true);
 }
 
@@ -404,10 +484,12 @@ void UInspectorWidget::RunAction(int32 ActionIndex)
 
 void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
 void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
+void UInspectorWidget::HandleRunway() { RunAction(RunwayActionIndex); }
 
 bool UInspectorWidget::IsShownForTest() const { return IsShown(); }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }
 FString UInspectorWidget::TitleForTest() const { return TitleText != nullptr ? TitleText->GetText().ToString() : FString(); }
+FString UInspectorWidget::FactsForTest() const { return FactsText != nullptr ? FactsText->GetText().ToString() : FString(); }
 FLinearColor UInspectorWidget::DepartLabelColourForTest() const
 {
 	const UTextBlock* Caption = DepartButton != nullptr ? DepartButton->GetLabel() : nullptr;

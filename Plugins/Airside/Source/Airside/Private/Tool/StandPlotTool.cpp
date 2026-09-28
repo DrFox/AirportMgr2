@@ -79,7 +79,7 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 	FVector2D Far = Corners[1];
 	if (PinnedNow == 1)
 	{
-		Far = PlotGesture::FrontageEnd(Anchor, Along, Context.Cursor, Context.GridStepUu);
+		Far = PlotGesture::FrontageEnd(Anchor, Along, Context.Cursor, Context.GridFrame);
 	}
 
 	// Corner 2 is the far end carried inward by the depth.
@@ -105,7 +105,9 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 		//      would put the edge beside the neighbour's instead of on it. Angular winners ("square
 		//      to the entrance") do not count: they fix a direction, and the depth is already
 		//      measured along one.
-		//   2. The world grid: the nearest crossing along the inward edge from Far.
+		//   2. The grid (Context.GridFrame - under Follow, laid along the taxiway, so the back edge
+		//      lands a whole number of steps off its centreline): the nearest crossing along the
+		//      inward edge from Far.
 		//   3. Today's 0.5 m step.
 		// The chain's own grid point (a no-winner Guide.Point) is NOT used for 2: it rounds both
 		// axes, and on a diagonal taxiway its projection onto Inward is no grid crossing at all.
@@ -119,8 +121,8 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 		{
 			Depth = FMath::Max(0.0, FVector2D::DotProduct(Context.GuidedCursor() - Anchor, Inward));
 		}
-		else if (FVector2D OnGrid = Far; Context.GridStepUu > 0.0
-			&& GridSnap::NearestCrossingAlong(Far, Inward, Context.Cursor, Context.GridStepUu, OnGrid))
+		else if (FVector2D OnGrid = Far; Context.GridFrame.IsOn()
+			&& GridSnap::NearestCrossingAlong(Far, Inward, Context.Cursor, Context.GridFrame, OnGrid))
 		{
 			Depth = FMath::Max(0.0, FVector2D::DotProduct(OnGrid - Far, Inward));
 		}

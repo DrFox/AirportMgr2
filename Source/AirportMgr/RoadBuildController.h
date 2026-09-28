@@ -205,6 +205,15 @@ public:
 	/** The airport's grid step in uu, 0 when off or when there is no airport. */
 	double GetGridStepUu() const;
 
+	/**
+	 * Follow <-> World: the Grid follows button and H. Same ownership rule as CycleGridStep - the
+	 * orientation lives on the airport's FSnapGuideSettings. Logs "Grid orientation -> <way>".
+	 */
+	void ToggleGridOrientation();
+
+	/** Whether the airport's grid follows the snap. False with no airport. */
+	bool IsGridFollowing() const;
+
 	/** The tool the number keys selected, or null before BeginPlay has built them. */
 	IBuildTool* GetActiveTool() const;
 
@@ -481,6 +490,17 @@ public:
 	bool CanDepartSelected() const;
 	/** Depart the selected aircraft; logs the planner's answer. */
 	void DepartSelected();
+
+	/** A runway is selected (ESelectionKind::Runway) and still describes - the card and the verb. */
+	bool SelectedRunwayFacts(FRunwayCardFacts& Out) const;
+	bool CanFlipSelectedRunway() const { FRunwayCardFacts Unused; return SelectedRunwayFacts(Unused); }
+	/**
+	 * Change the selected runway's direction in use to its other end, through the actor's
+	 * SetRunwayFacts (so it is one undo step and logs "Runway 09/27 in use: 27 (was 09)").
+	 * Flights already planned finish as planned; the next plan reads the new direction
+	 * (ruling 2, spec 2026-09-28-runway-in-use).
+	 */
+	void FlipSelectedRunway();
 
 	/**
 	 * What the next click would do, run through the snap chain. False only when the
@@ -775,9 +795,10 @@ private:
 		FVector2D GuidePoint = FVector2D::ZeroVector;
 		EEditHandleKind EditHandles = EEditHandleKind::None;
 
-		/** The grid step: pressing Grid changes the readout (a plot's frontage, its letter)
-		 *  with the cursor sitting still - review, 2026-09-27. */
-		double GridStepUu = 0.0;
+		/** The grid: pressing Grid changes the readout (a plot's frontage, its letter)
+		 *  with the cursor sitting still - review, 2026-09-27. The whole FRAME since
+		 *  2026-09-28: pressing H, or the grid turning to a new road, does the same. */
+		GridSnap::FGridFrame Grid;
 
 		bool operator==(const FToolReadoutKey& Other) const
 		{
@@ -789,7 +810,7 @@ private:
 				&& bGuideActive == Other.bGuideActive
 				&& GuidePoint == Other.GuidePoint
 				&& EditHandles == Other.EditHandles
-				&& GridStepUu == Other.GridStepUu;
+				&& Grid.SameGrid(Other.Grid);
 		}
 	};
 

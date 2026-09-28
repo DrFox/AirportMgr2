@@ -1349,7 +1349,32 @@ foreach ($caller in $preferenceCallers) {
 }
 $ranRules.Add('tool-preferences-both-drivers')
 
-# --- 28. BUTTON LOOKS LIVE IN UI/ ------------------------------------------------------------
+# --- 28. The planners choose a runway END only through the in-use resolver ---------------------
+# 2026-09-28, samples/deadlock.png: ArrivalPlanner landed at the threshold NEAREST the approach
+# focus, DeparturePlanner::PlanAny tried BOTH thresholds and kept the shorter taxi, and the two
+# rules met nose to nose on a connector. The fix is one rule, FRunwayFacts::InUse, read through
+# RunwayQuery::InUseEnd (InUseRunwayAt / InUseRunwayNearest). A planner calling RunwayExtentAt or
+# NearestRunwayThreshold itself is choosing an end by proximity again, which is the shape removed.
+# WHAT NO REGEX SEES: a planner that calls the in-use resolver and then Reversed()s the answer.
+# That is pinned by Airside.Model.RunwayInUse.DepartsFromTheEndInUse and .LandsOverTheEndInUse.
+$inUsePlanners = @(
+    (Join-Path $plugin 'Private\Model\ArrivalPlanner.cpp'),
+    (Join-Path $plugin 'Private\Model\DeparturePlanner.cpp')
+)
+foreach ($path in $inUsePlanners) {
+    if (-not (Test-Path $path)) {
+        $failures.Add("runway-end-in-use: $path is named by rule 28 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    foreach ($h in (Select-String -Path $path -Pattern '\b(RunwayExtentAt|NearestRunwayThreshold)\s*\(')) {
+        $t = $h.Line.Trim()
+        if ($t -match '^//') { continue }
+        $failures.Add("runway-end-in-use: $($path):$($h.LineNumber) chooses a runway end by proximity; use InUseRunwayAt/InUseRunwayNearest (FRunwayFacts::InUse): $t")
+    }
+}
+$ranRules.Add('runway-end-in-use')
+
+# --- 29. BUTTON LOOKS LIVE IN UI/ ------------------------------------------------------------
 # UI library step 1 (2026-09-28): four widgets each carried the enabled/selected -> colour rule
 # and two typed the rounded-white FButtonStyle recipe by hand; one copy drifted (the inspector's
 # Depart painted lighter when disabled). UUiButton::LookFor and ::Build are now the one home, so
@@ -1360,7 +1385,7 @@ $ranRules.Add('tool-preferences-both-drivers')
 $gameSource = Join-Path $Root 'Source\AirportMgr'
 $uiDir = Join-Path $gameSource 'UI'
 if (-not (Test-Path $uiDir)) {
-    $failures.Add("button-looks-in-ui: $uiDir is named by rule 28 but does not exist - update the rule")
+    $failures.Add("button-looks-in-ui: $uiDir is named by rule 29 but does not exist - update the rule")
 }
 Get-ChildItem -Path $gameSource -Recurse -Include *.cpp, *.h |
     # The SEPARATOR matters: without it '...\AirportMgr\UI' is a prefix of '...\AirportMgr\UIStyle.cpp',
@@ -1376,14 +1401,14 @@ Get-ChildItem -Path $gameSource -Recurse -Include *.cpp, *.h |
     }
 $ranRules.Add('button-looks-in-ui')
 
-# --- 29. THE GAME'S WINDOW HOST REMEMBERS THE LAYOUT ------------------------------------------
+# --- 30. THE GAME'S WINDOW HOST REMEMBERS THE LAYOUT ------------------------------------------
 # UUiWindowHost::SetLayoutStore is the seam a window's placement is remembered through, and a host
 # never handed a store remembers nothing - which is every test's host, deliberately, so the
 # player's ini cannot steer the suite. So nothing but this rule sees the HUD stop wiring it:
 # CreateAll needs a local player the headless suite does not have (UI library step 3, 2026-09-28).
 $hudLayer = Join-Path $Root 'Source\AirportMgr\BuildHudLayer.cpp'
 if (-not (Test-Path $hudLayer)) {
-    $failures.Add("layout-store-wired: $hudLayer is named by rule 29 but does not exist - update the rule")
+    $failures.Add("layout-store-wired: $hudLayer is named by rule 30 but does not exist - update the rule")
 } elseif (-not (Select-String -Path $hudLayer -Pattern 'SetLayoutStore\(MakeShared<FUserSettingsLayoutStore>' -Quiet)) {
     $failures.Add("layout-store-wired: $hudLayer no longer hands the window host an FUserSettingsLayoutStore - the player's window layout would be forgotten every launch")
 }

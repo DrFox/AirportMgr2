@@ -3,6 +3,9 @@
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/AirlineDefinition.h"
+#include "Model/OfferGenerator.h"
+#include "Model/FuelService.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
@@ -27,7 +30,8 @@ namespace
 		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 		Flight->Airframe.Wingspan = 3400.0;
 		Flight->ArrivesAt = ArrivesAt;
-		Flight->ExpiresAt = ArrivesAt;
+		Flight->OfferWindowSeconds = 60.0;
+		Flight->OfferSecondsLeft = 60.0;
 		Flight->AirlineName = FText::FromString(TEXT("Meridian"));
 		Flight->TypeName = FText::FromString(TEXT("A320"));
 		return Flight;
@@ -254,6 +258,125 @@ bool FOfferInboxWhyNotAcceptableRecomputesOnEachRevisionTest::RunTest(const FStr
 	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
 	TestEqual(TEXT("and a further quiet tick still does not search again"),
 		Board->GetWhyNotAcceptableCallsForTest(), 4);
+	return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferRowAcceptLabelTest, "AirportMgr.Offers.ViewModel.AcceptLabelNamesMissingFuel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferRowAcceptLabelTest::RunTest(const FString& Parameters)
+{
+	// THE COST OF A SOFT DEMAND GOES ON THE BUTTON THAT INCURS IT (spec 2026-09-28 section 4):
+	// a player who accepts a jet with no fuel depot should have read "no fuel" as they clicked.
+	URoadNetwork* Net = InboxNetwork();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	Board->Allocator = NewObject<UStandAllocator>();
+	Board->AddOffer(*Clock, InboxOffer(0.0));
+
+	UOfferInboxViewModel* Inbox = NewObject<UOfferInboxViewModel>();
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	if (!TestEqual(TEXT("one row"), Inbox->GetOffers().Num(), 1)) { return false; }
+	TestEqual(TEXT("with nothing checking fuel, the plain verb"),
+		Inbox->GetOffers()[0]->GetAcceptLabel().ToString(), FString(TEXT("Accept")));
+
+	UFlightBoard* Fuelled = NewObject<UFlightBoard>();
+	Fuelled->Allocator = NewObject<UStandAllocator>();
+	Fuelled->Fuel = NewObject<UFuelService>();
+	Fuelled->AddOffer(*Clock, InboxOffer(0.0));
+	UOfferInboxViewModel* Second = NewObject<UOfferInboxViewModel>();
+	Second->Refresh(*Fuelled, *Traffic, *Net, *Clock);
+	if (!TestEqual(TEXT("one row"), Second->GetOffers().Num(), 1)) { return false; }
+	TestFalse(TEXT("no depot on this field, so no fuel"), Second->GetOffers()[0]->IsFuelServable());
+	TestEqual(TEXT("and the button says what accepting costs"),
+		Second->GetOffers()[0]->GetAcceptLabel().ToString(), FString(TEXT("Accept (no fuel)")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferRowContractTextTest, "AirportMgr.Offers.ViewModel.ContractText",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferRowContractTextTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("game time in the clock's words"),
+		UOfferViewModel::DescribeContract(900.0, 4200.0).ToString(),
+		FString(TEXT("lands in 15 min \u00B7 airborne within 1 h 10 min")));
+	TestEqual(TEXT("a round hour drops its minutes"),
+		UOfferViewModel::DescribeContract(600.0, 7200.0).ToString(),
+		FString(TEXT("lands in 10 min \u00B7 airborne within 2 h")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferRowsSortedTest, "AirportMgr.Offers.ViewModel.RowsSortedByTimeLeft",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferRowsSortedTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = InboxNetwork();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	Board->Allocator = NewObject<UStandAllocator>();
+	UFlight* Relaxed = InboxOffer(0.0);
+	Relaxed->OfferWindowSeconds = 120.0;
+	Relaxed->OfferSecondsLeft = 120.0;
+	UFlight* Urgent = InboxOffer(0.0);
+	Urgent->OfferWindowSeconds = 45.0;
+	Urgent->OfferSecondsLeft = 45.0;
+	Board->AddOffer(*Clock, Relaxed);
+	Board->AddOffer(*Clock, Urgent);
+
+	UOfferInboxViewModel* Inbox = NewObject<UOfferInboxViewModel>();
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	if (!TestEqual(TEXT("two rows"), Inbox->GetOffers().Num(), 2)) { return false; }
+	TestEqual(TEXT("the one that lapses first is on top"), Inbox->GetOffers()[0]->GetSecondsLeft(), 45);
+	TestEqual(TEXT("its bar is full"), Inbox->GetOffers()[0]->GetTimeLeftFraction(), 1.0f, 1e-6f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferStripMatchesGeneratorTest, "AirportMgr.Offers.ViewModel.StripMatchesGenerator",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferStripMatchesGeneratorTest::RunTest(const FString& Parameters)
+{
+	// ONE FUNCTION: the strip must draw exactly the curve the generator follows.
+	UAirlineDefinition* Airline = NewObject<UAirlineDefinition>();
+	Airline->PeakOffersPerHour = 6.0;
+	Airline->FloorOffersPerHour = 1.0;
+	Airline->DemandCurve.Init(0.0, 24);
+	Airline->DemandCurve[8] = 1.0;
+	Airline->DemandCurve[17] = 0.7;
+	FAirlineOffers Offering;
+	Offering.Airline = Airline;
+	const TArray<FAirlineOffers> Airlines = { Offering };
+	USimClock* Clock = NewObject<USimClock>();
+
+	const TArray<double> Samples = UOfferInboxViewModel::SampleDemand(Airlines, *Clock, 0.8, 24);
+	if (!TestEqual(TEXT("one sample an hour"), Samples.Num(), 24)) { return false; }
+	for (int32 Hour = 0; Hour < 24; ++Hour)
+	{
+		const double Midpoint = (Hour + 0.5) * 3600.0;
+		TestEqual(*FString::Printf(TEXT("hour %d is the generator's own rate"), Hour), Samples[Hour],
+			UOfferGenerator::TotalRateAt(Airlines, Midpoint, Clock->IsDaylight(Midpoint), 0.8), 1e-12);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferRowFuelChipTest, "AirportMgr.Offers.ViewModel.FuelChipShowsLitres",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferRowFuelChipTest::RunTest(const FString& Parameters)
+{
+	// THE SIZE OF THE JOB, on the row, before the accept (spec 2026-09-28-fuel-litres).
+	URoadNetwork* Net = InboxNetwork();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	Board->Allocator = NewObject<UStandAllocator>();
+	UFlight* Offer = InboxOffer(0.0);
+	Offer->FuelLitres = 2900.0;
+	Board->AddOffer(*Clock, Offer);
+	UOfferInboxViewModel* Inbox = NewObject<UOfferInboxViewModel>();
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	if (!TestEqual(TEXT("one row"), Inbox->GetOffers().Num(), 1)) { return false; }
+	TestEqual(TEXT("the chip names the litres"), Inbox->GetOffers()[0]->GetFuelText().ToString(), FString(TEXT("Fuel 2,900 L")));
 	return true;
 }
 

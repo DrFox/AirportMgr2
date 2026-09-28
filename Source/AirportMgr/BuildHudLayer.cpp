@@ -42,7 +42,7 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 	{
 		WindowHost->AddToViewport(1);
 		// THE PLAYER'S FILE, here and only here - every test's host has none (IUiLayoutStore's
-		// comment). ENFORCED BY: Check-Architecture rule 29 (layout-store-wired).
+		// comment). ENFORCED BY: Check-Architecture rule 30 (layout-store-wired).
 		WindowHost->SetLayoutStore(MakeShared<FUserSettingsLayoutStore>());
 	}
 	// INDEX_NONE: not added to the viewport - WireWindows hands each to the window host.

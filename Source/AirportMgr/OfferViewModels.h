@@ -9,6 +9,7 @@ class UFlightBoard;
 class UGroundTraffic;
 class URoadNetwork;
 class USimClock;
+struct FAirlineOffers;
 
 /**
  * One row of the offer inbox.
@@ -35,56 +36,48 @@ public:
 	/** The flight this row shows. WEAK: the board owns flights and retires them. */
 	UPROPERTY(Transient) TWeakObjectPtr<UFlight> Flight;
 
-	/** Pull every field from the flight and the board's refusal. */
+	/** Pull every field from the flight and the board's verdict. */
 	void Refresh(const UFlightBoard& Board, const UGroundTraffic& Traffic,
 		const URoadNetwork& Network, const USimClock& Clock);
 
+	FText GetCallsign() const { return Callsign; }
 	FText GetAirline() const { return Airline; }
 	FText GetTypeName() const { return TypeName; }
-	FText GetEta() const { return Eta; }
+	FText GetFee() const { return Fee; }
+	FText GetContract() const { return Contract; }
 	bool IsAcceptable() const { return bAcceptable; }
 	FText GetRefusal() const { return Refusal; }
+	bool IsFuelServable() const { return bFuelServable; }
+	/** "Fuel 2,900 L", or empty for a flight that wants none. */
+	FText GetFuelText() const { return FuelText; }
+	bool NeedsTug() const { return bNeedsTug; }
+	int32 GetSecondsLeft() const { return SecondsLeft; }
+	float GetTimeLeftFraction() const { return TimeLeftFraction; }
+	FText GetAcceptLabel() const { return AcceptLabel; }
+
+	/**
+	 * "lands in 15 min - airborne within 1 h 10 min", from the flight's lead time and contract.
+	 * GAME time, in the clock's own words: the player reads the clock, not a seconds count.
+	 * Static so a test can ask it of numbers.
+	 */
+	static FText DescribeContract(double LeadTimeSeconds, double ContractSeconds);
+
+	/** "15 min", "1 h", "1 h 10 min" - game time as the clock reads, never seconds. Shared with
+	 *  the arrivals rows so the two sections word a duration one way. */
+	static FText DescribeDuration(double Seconds);
 
 private:
-	/**
-	 * The three revisions bAcceptable/Refusal were last computed at, and whether they have
-	 * been computed at all yet.
-	 *
-	 * WHY THIS ROW EXISTS (issue #169): WhyNotAcceptable is a full ArrivalPlanner::Plan - a
-	 * route search over every stand, then every runway exit - and Refresh used to run it
-	 * every tick for every row, whether or not anything it could depend on had moved. The
-	 * three things it depends on each publish a cheap revision already: the board itself
-	 * (UFlightBoard::Revision - added/accepted/declined/expired), the guideline graph
-	 * (URoadNetwork::GetGuidelineRevision - an edit changed the taxiways), and occupancy
-	 * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or
-	 * cleared). Three integer compares replace the search on every call where none of the
-	 * three moved, which is most of them - the whole reason a route search per row per frame
-	 * went unnoticed until #169's profiling caught it.
-	 *
-	 * NOT reflected and not a UPROPERTY: bookkeeping about the last recompute, not state a
-	 * save would ever need - the same reasoning UGroundTraffic::LastStepsForTest gives.
-	 */
-	uint32 BoardRevisionAt = 0;
-	uint32 GuidelineRevisionAt = 0;
-	uint32 OccupancyRevisionAt = 0;
-	bool bWhyComputed = false;
+	UPROPERTY(Transient) FText Callsign;
+	UPROPERTY(Transient) FText Airline;
+	UPROPERTY(Transient) FText TypeName;
 
-	UPROPERTY(BlueprintReadOnly, Transient, Getter = "GetAirline",
-		Category = "Offer", meta = (AllowPrivateAccess))
-	FText Airline;
+	/** The landing fee, fixed at the offer and formatted by UPricing - what accepting is worth. */
+	UPROPERTY(Transient) FText Fee;
 
-	UPROPERTY(BlueprintReadOnly, Transient, Getter = "GetTypeName",
-		Category = "Offer", meta = (AllowPrivateAccess))
-	FText TypeName;
+	/** See DescribeContract. */
+	UPROPERTY(Transient) FText Contract;
 
-	/** "in 12 min", not a game-second count: the player has no feel for the compressed clock. */
-	UPROPERTY(BlueprintReadOnly, Transient, Getter = "GetEta",
-		Category = "Offer", meta = (AllowPrivateAccess))
-	FText Eta;
-
-	UPROPERTY(BlueprintReadOnly, Transient, Getter = "IsAcceptable",
-		Category = "Offer", meta = (AllowPrivateAccess))
-	bool bAcceptable = true;
+	UPROPERTY(Transient) bool bAcceptable = true;
 
 	/**
 	 * Why not, in the words ArrivalPlanner::DescribeRefusal uses.
@@ -92,9 +85,25 @@ private:
 	 * The SAME sentence the arrival itself would print, because it comes from the same plan -
 	 * a second wording here would be a second account of why an aeroplane cannot land.
 	 */
-	UPROPERTY(BlueprintReadOnly, Transient, Getter = "GetRefusal",
-		Category = "Offer", meta = (AllowPrivateAccess))
-	FText Refusal;
+	UPROPERTY(Transient) FText Refusal;
+
+	/** See GetFuelText. */
+	UPROPERTY(Transient) FText FuelText;
+
+	/** The fuel chip: can the airport fuel it? See FOfferVerdict::bFuelServable. */
+	UPROPERTY(Transient) bool bFuelServable = true;
+
+	/** The tug chip, information only - no tug service exists to check against yet. */
+	UPROPERTY(Transient) bool bNeedsTug = false;
+
+	/** REAL seconds left, rounded up, and as a fraction of the airline's window, for the bar. */
+	UPROPERTY(Transient) int32 SecondsLeft = 0;
+	UPROPERTY(Transient) float TimeLeftFraction = 1.0f;
+
+	/**
+	 * "Accept", or "Accept (no fuel)" - the cost of a soft demand, on the button that incurs it.
+	 */
+	UPROPERTY(Transient) FText AcceptLabel;
 };
 
 /**
@@ -141,6 +150,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Offers")
 	TArray<UOfferViewModel*> GetOffers() const;
 
+	/** The inbox cap - the generator's MaxPendingOffers, for the header's "3/8". */
+	int32 GetCapacity() const { return Capacity; }
+
+	/**
+	 * The demand strip: Count samples of UOfferGenerator::TotalRateAt across the day, each at
+	 * its slot's midpoint. THE GENERATOR'S OWN FUNCTION, so the strip cannot draw a curve the
+	 * offers do not follow. Static so a test can compare it with the generator directly.
+	 */
+	static TArray<double> SampleDemand(TArrayView<const FAirlineOffers> Airlines,
+		const USimClock& Clock, double DemandFactor, int32 Count);
+
 	/** Rows itself, for a test asserting there is only the one list - see
 	 *  OfferViewModelsTest's OneList case. Not BlueprintCallable: GetOffers() is the shape
 	 *  Blueprint and the list view want, this is a test seam onto the source of truth. */
@@ -170,6 +190,9 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Getter = "GetPendingCount",
 		Category = "Offers", meta = (AllowPrivateAccess))
 	int32 PendingCount = 0;
+
+	/** See GetCapacity. Read off the board's generator each refresh. */
+	int32 Capacity = 0;
 
 	/** What Accept and Decline call. Set by Refresh; weak for the usual lifetime reason. */
 	UPROPERTY(Transient) TWeakObjectPtr<UFlightBoard> Board;

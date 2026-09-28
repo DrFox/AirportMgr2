@@ -59,6 +59,11 @@ bool FBuildActionsRegistryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("selection.depart is registered"), Actions.ContainsByPredicate([](const FBuildAction& A) { return A.Id == FName(TEXT("selection.depart")) && A.Section == EActionSection::Selection && !A.Key.IsValid(); }));
 	TestTrue(TEXT("selection.follow is registered on C"), Actions.ContainsByPredicate([](const FBuildAction& A) { return A.Id == FName(TEXT("selection.follow")) && A.Key == EKeys::C; }));
 	TestFalse(TEXT("aircraft.watch is gone - one verb for following"), Actions.ContainsByPredicate([](const FBuildAction& A) { return A.Id == FName(TEXT("aircraft.watch")); }));
+	// The runway card's verb (spec 2026-09-28-runway-in-use): a Selection row, found by the
+	// inspector BY ID, and like Depart it has no key - a key that reversed whatever runway was
+	// selected is a misclick away from sending the next arrival the other way.
+	TestTrue(TEXT("selection.runway_in_use is registered, keyless, in Selection"), Actions.ContainsByPredicate([](const FBuildAction& A)
+		{ return A.Id == FName(TEXT("selection.runway_in_use")) && A.Section == EActionSection::Selection && !A.Key.IsValid() && A.DynamicLabel; }));
 
 	// Every section has at least one action - an empty section on the bar is a layout with
 	// nothing in it, which reads as a bug.
@@ -128,6 +133,15 @@ bool FBuildActionTryRunTest::RunTest(const FString& Parameters)
 	Action.IsEnabled = [](const FBuildActionContext&) { return true; };
 	TestTrue(TEXT("TryRun runs an enabled action"), Action.TryRun(*C, TEXT("Test")));
 	TestEqual(TEXT("Execute ran exactly once while enabled"), RanCount, 1);
+
+	// THE RUNWAY FLIP WITH NOTHING SELECTED is refused by its own gate, not by a crash in
+	// FlipSelectedRunway reaching for a runway that is not there.
+	const FBuildAction* Flip = FindAction(FName(TEXT("selection.runway_in_use")));
+	if (TestNotNull(TEXT("the runway flip is registered"), Flip))
+	{
+		TestFalse(TEXT("no runway selected: the flip is disabled"), C->CanFlipSelectedRunway());
+		TestFalse(TEXT("and TryRun refuses it"), Flip->TryRun(*C, TEXT("Test")));
+	}
 
 	return true;
 }
@@ -489,6 +503,30 @@ bool FBuildActionsModalChordTest::RunTest(const FString& Parameters)
 	C->ToggleSettings();
 	TestTrue(TEXT("under the modal: Ctrl+Z waits"), C->KeyWaitsForModal(*Undo));
 	TestFalse(TEXT("and Settings' own key does not"), C->KeyWaitsForModal(*Settings));
+	return true;
+}
+
+/**
+ * THE GRID'S ORIENTATION TOGGLE, ON H - the one snap toggle with a key, by the player's request
+ * (grid-follows-snap design): it is switched mid-gesture, which is the NO KEYS rule's own test.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGridOrientButtonIsInTheRegistryTest,
+	"AirportMgr.Actions.GridOrientButtonIsOnH",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGridOrientButtonIsInTheRegistryTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Action = FindAction(FName(TEXT("snap.gridorient")));
+	if (!TestNotNull(TEXT("snap.gridorient is registered"), Action)) { return false; }
+	TestEqual(TEXT("in the Snap section"), Action->Section, EActionSection::Snap);
+	TestTrue(TEXT("on H"), Action->Key == EKeys::H);
+	TestFalse(TEXT("no Ctrl"), Action->bRequiresCtrl);
+	TestTrue(TEXT("FindAction(H) is this action - the binding loop reads the same table"),
+		FindAction(EKeys::H, false) == Action);
+	TestTrue(TEXT("can be executed"), static_cast<bool>(Action->Execute));
+	TestTrue(TEXT("reports whether it is lit"), static_cast<bool>(Action->IsActive));
+	TestTrue(TEXT("has a caption that follows the orientation"), static_cast<bool>(Action->DynamicLabel));
 	return true;
 }
 

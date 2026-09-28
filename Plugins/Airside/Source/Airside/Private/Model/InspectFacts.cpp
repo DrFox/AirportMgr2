@@ -101,6 +101,41 @@ namespace InspectFacts
 		Out.Status = StatusOf(*Agent);
 		Out.bEngineRunning = Agent->bEngineRunning;
 		Out.bCanDepart = Agent->Phase == EAgentPhase::Parked;
+		if (const FAirframe* Aircraft = Agent->AsAircraft())
+		{
+			Out.Pushback = PushbackText(Aircraft->PushbackNeed);
+		}
+		return true;
+	}
+
+	FString PushbackText(EPushbackNeed Need)
+	{
+		switch (Need)
+		{
+		case EPushbackNeed::SelfManoeuvre: return TEXT("reverses itself");
+		case EPushbackNeed::HandTug:       return TEXT("needs a hand tug");
+		case EPushbackNeed::VehicleTug:    return TEXT("needs a tug");
+		}
+		return FString();
+	}
+
+	bool DescribeRunway(const URoadNetwork& Network, int32 SegmentIndex, FRunwayCardFacts& Out)
+	{
+		const FRoadSegmentId Segment = Network.SegmentIdAt(SegmentIndex);
+		const FRoadSegment* Found = Segment.IsSet() ? Network.GetSegment(Segment) : nullptr;
+		const FRoadNode* A = Found != nullptr ? Network.GetNode(Found->A) : nullptr;
+		FRunwayEnd End;
+		if (A == nullptr || !Network.IsRunwaySegment(Segment) || !Network.InUseRunwayAt(A->Position, End))
+		{
+			return false;
+		}
+		const FRunwayFacts Facts = Network.RunwayFactsFor(Segment);
+		Out.Pair = RunwayDesignator::ToPairText(End.Direction);
+		Out.InUse = RunwayDesignator::Designate(End.Direction);
+		Out.Other = RunwayDesignator::Reciprocal(Out.InUse);
+		Out.Surface = Facts.Surface;
+		Out.Approach = Facts.Approach;
+		Out.Length = End.Length;
 		return true;
 	}
 

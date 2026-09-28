@@ -294,12 +294,19 @@ public:
 		double* OutChainHalfWidth = nullptr) const;
 	bool RunwayExtentAt(const FVector2D& Near, FRunwayEnd& OutEnd) const;
 	bool NearestRunwayThreshold(const FVector2D& Near, FRunwayEnd& OutEnd) const;
+	FRunwayEnd InUseEnd(const FRunwayEnd& Either) const;
+	bool InUseRunwayAt(const FVector2D& Near, FRunwayEnd& OutEnd) const;
+	bool InUseRunwayNearest(const FVector2D& Near, FRunwayEnd& OutEnd) const;
 	TArray<FGuidelineNodeId> RunwayExitNodes(FRoadSegmentId Seed, const FVector2D& Threshold,
 		const FVector2D& Direction, double MinDistance) const;
 
 	/**
 	 * Write Facts onto EVERY segment of RunwayChain(Seed). False, and nothing written,
 	 * when Seed is not a live runway - a taxiway has no surface class to set.
+	 *
+	 * Facts.InUse 0 KEEPS the strip's runway in use: 0 is no designator, and every caller that
+	 * builds a fresh FRunwayFacts to reclassify a surface (the runway tool's Facts(), a test's
+	 * `FRunwayFacts Grass;`) would otherwise silently reset the direction the player chose.
 	 *
 	 * The chain rather than the one segment, because the facts are the strip's: a runway
 	 * split by two exits is three segments and one runway, and a tool that classified the
@@ -1079,6 +1086,11 @@ struct AIRSIDE_API FRoadNetworkTestAccess
 	 *  apron-layer slot measured without the stand tool (Airside.Build.BuildCostStandPadUpkeepByArea,
 	 *  Airside.Build.StandPadSlots). False for a dead entity. */
 	bool SetEntityPavementForTest(FEntityInstanceId Entity, EPavement Pavement);
+
+	/** Write FRunwayFacts::InUse = 0 on every segment of Seed's chain - a runway as a level saved
+	 *  before the field existed loads (Airside.Model.RunwayInUse.UnsetIsLowerDesignator).
+	 *  SetRunwayFacts cannot: it reads 0 as "keep the strip's". False when Seed is no runway. */
+	bool ClearRunwayInUseForTest(FRoadSegmentId Seed);
 
 private:
 	URoadNetwork& Network;

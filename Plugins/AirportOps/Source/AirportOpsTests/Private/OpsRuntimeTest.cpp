@@ -2,11 +2,15 @@
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Model/OfferGenerator.h"
+#include "Model/ArrivalSequencer.h"
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/FuelService.h"
 #include "Model/InspectFacts.h"
 #include "Model/OpsEvents.h"
+#include "Model/OpsSave.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -90,15 +94,15 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		// this test's runway admits any particular one.
 		if (TestTrue(TEXT("Attach armed the repeating offer schedule"), Runtime->HasOfferScheduledForTest()))
 		{
-			// ONE TICK, RIGHT THROUGH THE SCHEDULE'S OWN INTERVAL - not a guessed real-seconds
-			// delta that might land short of it (or, converted back from a huge one, spend the
-			// test iterating hundreds of avoidable fires). TimeScale() is exactly the
-			// game-seconds-per-real-second USimClock::Advance divides by internally.
-			const double RealSeconds = Runtime->OfferIntervalSecondsForTest() / Runtime->GetClock()->TimeScale() * 1.01;
+			// ONE TICK, RIGHT THROUGH ONE GENERATOR MINUTE - not a guessed real-seconds delta
+			// that might land short of it. TimeScale() is exactly the game-seconds-per-real-
+			// second USimClock::Advance uses at this hour, and one minute cannot cross dawn or
+			// dusk by enough to matter at the 1% margin.
+			const double RealSeconds = UOfferGenerator::TickSeconds / Runtime->GetClock()->TimeScale() * 1.01;
 			Runtime->Tick(RealSeconds);
 
 			// THE FOCUS UPDATES REGARDLESS OF WHETHER THIS RUNWAY ADMITS ANY REAL FLEET
-			// AIRCRAFT (UOpsRuntime::GenerateOffer sets it before the admissibility check) -
+			// AIRCRAFT (UOpsRuntime::OfferTick sets it before the admissibility check) -
 			// so this assertion, unlike an offer actually appearing, does not depend on this
 			// test's short runway matching a real AircraftType's LandingFieldLength.
 			TestEqual(TEXT("a runway-bearing network's board focus equals DefaultApproachFocus"),
@@ -482,6 +486,103 @@ bool FOpsRuntimeLegacyStandGetsOutlineOnLoadTest::RunTest(const FString& Paramet
 	if (!TestTrue(TEXT("the stand came back"), Index != INDEX_NONE)) { return false; }
 	TestEqual(TEXT("with the Code C box its pose implies - four corners"),
 		Actor->Network->GetEntities()[Index].Outline.Num(), 4);
+	return true;
+}
+
+/**
+ * REVIEW I1 (2026-09-28): the clock's queue is not saved and holds ABSOLUTE due times, so the
+ * repeating offer tick and upkeep booked at Attach still pointed at the PRE-load time after a
+ * load. A save two days ahead fired the minute tick ~2,880 times in one frame (a burst, and
+ * hundreds of DroppedOffers C would read as unmet demand); a save behind went silent until the
+ * clock caught up. RearmRepeatingSchedules re-books both from the loaded Now.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeRearmsRepeatersOnLoadTest,
+	"AirportOps.Present.OffersRearmOnLoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeRearmsRepeatersOnLoadTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	if (!TestTrue(TEXT("the minute tick is armed"), Runtime->HasOfferScheduledForTest())) { return false; }
+
+	// A SAVE FROM TWO DAYS LATER, restored into the runtime's own clock the way OpsSave does:
+	// GameSeconds jumps, the queue does not.
+	USimClock* Later = NewObject<USimClock>();
+	Later->SetUniformDay(1.0);
+	Later->StartAtHour(9.0);
+	Later->Advance(2.0);
+	TArray<uint8> Bytes;
+	OpsSave::SerializeObject(*Later, Bytes);
+	OpsSave::DeserializeObject(*Runtime->GetClock(), Bytes);
+	Runtime->GetClock()->SetUniformDay(USimClock::SecondsPerDay);   // 1 game s per real s from here
+
+	Runtime->RearmRepeatingSchedules();
+	const int32 Before = Runtime->OfferTicksForTest();
+	Runtime->Tick(1.0);
+	TestEqual(TEXT("one game second after the load fires no backlog of minute ticks"),
+		Runtime->OfferTicksForTest() - Before, 0);
+	Runtime->Tick(60.0);
+	TestEqual(TEXT("and the next one comes a minute after the loaded time, not days away"),
+		Runtime->OfferTicksForTest() - Before, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeTicksTheQueueTest,
+	"AirportOps.Present.RuntimeTicksTheQueue",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeTicksTheQueueTest::RunTest(const FString& Parameters)
+{
+	// THE SEAM, at the composition (review I2): the queue exists only if the runtime wires a
+	// sequencer into its board and ticks the queue every frame.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	// A NETWORK, which a fresh actor lacks until its first edit - and Tick reaches the model
+	// only through one.
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 0.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	TestNotNull(TEXT("the board has a sequencer"), Runtime->GetFlightBoard()->Sequencer.Get());
+	const int32 Before = Runtime->GetFlightBoard()->TickQueueCallsForTest();
+	Runtime->Tick(0.1);
+	Runtime->Tick(0.1);
+	TestEqual(TEXT("every runtime tick ticks the queue"), Runtime->GetFlightBoard()->TickQueueCallsForTest() - Before, 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeWiresLitresTest,
+	"AirportOps.Fuel.RuntimeWiresLitresOwed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeWiresLitresTest::RunTest(const FString& Parameters)
+{
+	// THE SEAM (spec 2026-09-28-fuel-litres section 2): the litres a flight was offered at reach
+	// the fuel demand only if the runtime points the fuel service at the board.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	if (!TestTrue(TEXT("the fuel service has a litres seam"), static_cast<bool>(Runtime->GetFuelService()->LitresOwedFor)))
+	{
+		return false;
+	}
+	UFlight* Flight = NewObject<UFlight>();
+	Flight->AgentId = 42;
+	Flight->Phase = EFlightPhase::Landing;
+	Flight->FuelLitres = 321.0;
+	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);
+	FAirframe Airframe;
+	Airframe.FuelCapacityLitres = 1000.0;
+	TestEqual(TEXT("the flight's own litres reach the demand"),
+		Runtime->GetFuelService()->LitresOwedFor(42, Airframe), 321.0, 1e-9);
+	TestEqual(TEXT("an agent no flight owns gets the stated fallback"),
+		Runtime->GetFuelService()->LitresOwedFor(7, Airframe), UFuelService::DefaultLitres(Airframe), 1e-9);
 	return true;
 }
 

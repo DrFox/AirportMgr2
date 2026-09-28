@@ -91,20 +91,65 @@ void USimClock::StartAtHour(double Hour)
 		static_cast<int32>(FMath::Fmod(TimeOfDay() / 60.0, 60.0)));
 }
 
-double USimClock::TimeScale() const
+void USimClock::SetUniformDay(double RealSecondsPerDay)
 {
+	const double DaylightHours = FMath::Clamp(DuskHour - DawnHour, 0.0, 24.0);
+	RealSecondsDaylight = RealSecondsPerDay * DaylightHours / 24.0;
+	RealSecondsNight = RealSecondsPerDay - RealSecondsDaylight;
+}
+
+bool USimClock::IsDaylight(double TimeOfDaySeconds) const
+{
+	const double Hour = TimeOfDaySeconds / 3600.0;
+	return Hour >= DawnHour && Hour < DuskHour;
+}
+
+double USimClock::GameSecondsPerRealSecond(double TimeOfDaySeconds) const
+{
+	const double DaylightHours = FMath::Clamp(DuskHour - DawnHour, 0.0, 24.0);
+	const bool bDay = IsDaylight(TimeOfDaySeconds);
+	const double Hours = bDay ? DaylightHours : 24.0 - DaylightHours;
+	const double Real = bDay ? RealSecondsDaylight : RealSecondsNight;
 	// Guarded rather than asserted: a zero from a mis-authored scenario should give a
 	// frozen clock and a log line, not a division by zero in Tick.
-	if (RealSecondsPerGameDay <= 0.0)
-	{
-		return 0.0;
-	}
-	return Multiplier(Speed) * (SecondsPerDay / RealSecondsPerGameDay);
+	return Real > 0.0 ? Hours * 3600.0 / Real : 0.0;
+}
+
+double USimClock::TimeScale() const
+{
+	return Multiplier(Speed) * GameSecondsPerRealSecond(TimeOfDay());
 }
 
 void USimClock::Advance(double RealDeltaSeconds)
 {
-	GameSeconds += RealDeltaSeconds * TimeScale();
+	// PIECEWISE ACROSS DAWN AND DUSK. A single multiply by TimeScale() would run a step that
+	// began at 19:59 at the daylight rate all the way through the night - and a long frame, or
+	// a test's one big step, is exactly when that is wrong by the most.
+	double Remaining = FMath::Max(RealDeltaSeconds, 0.0);
+	const double Dawn = DawnHour * 3600.0;
+	const double Dusk = DuskHour * 3600.0;
+	while (Remaining > 0.0)
+	{
+		const double Rate = TimeScale();
+		if (Rate <= 0.0)
+		{
+			break;
+		}
+		const double Tod = TimeOfDay();
+		// Game seconds to the next band edge, wrapping midnight.
+		double Edge;
+		if (Tod < Dawn)      { Edge = Dawn - Tod; }
+		else if (Tod < Dusk) { Edge = Dusk - Tod; }
+		else                 { Edge = SecondsPerDay - Tod + Dawn; }
+		const double RealToEdge = Edge / Rate;
+		if (Remaining <= RealToEdge)
+		{
+			GameSeconds += Remaining * Rate;
+			break;
+		}
+		GameSeconds += Edge;
+		Remaining -= RealToEdge;
+	}
 
 	// Drain in due order, re-scanning after every callback: a callback may schedule
 	// something that is ALREADY due (an At in the past), and it must fire in this same

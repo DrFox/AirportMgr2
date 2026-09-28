@@ -9,6 +9,8 @@
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/ListView.h"
+#include "Components/ProgressBar.h"
+#include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Components/Spacer.h"
 #include "Components/VerticalBox.h"
@@ -16,14 +18,15 @@
 #include "Styling/SlateBrush.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/OfferGenerator.h"
+#include "Model/SimClock.h"
+#include "ArrivalViewModels.h"
 #include "OfferViewModels.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
-#include "UI/UiButton.h"
-#include "UI/UiRow.h"
 #include "UI/UiButton.h"
 #include "UI/UiRow.h"
 #include "UIStyle.h"
@@ -51,6 +54,7 @@ void UOfferRowEntry::HandleDecline()
 void UOfferInboxWidget::BuildOnce(const UUIStyle& Style)
 {
 	Inbox = NewObject<UOfferInboxViewModel>(this);
+	Arrivals = NewObject<UArrivalsViewModel>(this);
 	EnsureSlots(&Style);
 
 	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
@@ -110,10 +114,53 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 		BadgeSlot->SetPadding(FMargin(16.0f, 0.0f, 0.0f, 0.0f));
 		BadgeSlot->SetVerticalAlignment(VAlign_Center);
 
-		Column->AddChildToVerticalBox(HeadingRow)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
+		Column->AddChildToVerticalBox(HeadingRow)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 6.0f));
+
+		// THE DEMAND STRIP, under the heading: the day's demand an hour a bar, night shaded,
+		// now in accent. What makes the morning peak something to build FOR rather than a
+		// surprise (spec 2026-09-28 section 4). A fixed-height box, so the card does not jog
+		// when the bars change height.
+		USizeBox* StripBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("DemandStrip"));
+		StripBox->SetHeightOverride(DemandStripHeight);
+		UHorizontalBox* Strip = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+		StripBox->SetContent(Strip);
+		for (int32 Hour = 0; Hour < 24; ++Hour)
+		{
+			USizeBox* Bar = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+			Bar->SetWidthOverride(8.0f);
+			Bar->SetHeightOverride(1.0f);
+			UBorder* Fill = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+			Fill->SetBrush(FSlateRoundedBoxBrush(FLinearColor::White, 1.0f));
+			Bar->SetContent(Fill);
+			UHorizontalBoxSlot* BarSlot = Strip->AddChildToHorizontalBox(Bar);
+			BarSlot->SetVerticalAlignment(VAlign_Bottom);
+			BarSlot->SetPadding(FMargin(0.0f, 0.0f, 2.0f, 0.0f));
+			DemandBars.Add(Bar);
+			DemandFills.Add(Fill);
+		}
+		Column->AddChildToVerticalBox(StripBox)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
 
 		OfferColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxRows"));
 		Column->AddChildToVerticalBox(OfferColumn);
+
+		// ARRIVALS, UNDER THE OFFERS, in the same card (spec 2026-09-28-arrival-queue): what is
+		// coming is one place to look - the offers you might take, then the flights you did.
+		UHorizontalBox* ArrivalHeading = WidgetTree->ConstructWidget<UHorizontalBox>(
+			UHorizontalBox::StaticClass(), TEXT("ArrivalsHeading"));
+		UTextBlock* ArrivalTitle = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ArrivalsTitle"));
+		ArrivalTitle->SetText(NSLOCTEXT("AirportMgr", "ArrivalsTitle", "ARRIVALS"));
+		Style->ApplyText(*ArrivalTitle, EUITextRole::Heading, Style->InkMuted);
+		ArrivalHeading->AddChildToHorizontalBox(ArrivalTitle)->SetVerticalAlignment(VAlign_Center);
+		UHorizontalBoxSlot* ArrivalGap = ArrivalHeading->AddChildToHorizontalBox(
+			WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
+		ArrivalGap->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		ArrivalCountText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ArrivalsCount"));
+		Style->ApplyText(*ArrivalCountText, EUITextRole::Label, Style->InkMuted);
+		ArrivalHeading->AddChildToHorizontalBox(ArrivalCountText)->SetVerticalAlignment(VAlign_Center);
+		Column->AddChildToVerticalBox(ArrivalHeading)->SetPadding(FMargin(0.0f, 12.0f, 0.0f, 6.0f));
+
+		ArrivalColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ArrivalRows"));
+		Column->AddChildToVerticalBox(ArrivalColumn);
 
 		UE_LOG(LogOfferInbox, Log, TEXT("No inbox asset: building the code-only panel"));
 	}
@@ -152,6 +199,19 @@ void UOfferInboxWidget::Refresh(ARoadNetworkActor* Target)
 	}
 
 	Inbox->Refresh(*Runtime->GetFlightBoard(), *Traffic, *Target->Network, *Runtime->GetClock());
+	Arrivals->Refresh(*Runtime->GetFlightBoard(), *Runtime->GetClock());
+
+	// THE STRIP'S SAMPLES, from the runtime's own airline list and the live fee - the same
+	// inputs UOfferGenerator::TickMinute reads, through the same TotalRateAt.
+	const USimClock& Clock = *Runtime->GetClock();
+	const double Factor = Runtime->GetOfferGenerator() != nullptr ? Runtime->GetOfferGenerator()->DemandFactor() : 1.0;
+	DemandSamples = UOfferInboxViewModel::SampleDemand(Runtime->GetAirlineOffers(), Clock, Factor, 24);
+	DemandNight.SetNum(24);
+	for (int32 Hour = 0; Hour < 24; ++Hour)
+	{
+		DemandNight[Hour] = !Clock.IsDaylight((Hour + 0.5) * 3600.0);
+	}
+	DemandNowSlot = FMath::Clamp(FMath::FloorToInt32(Clock.TimeOfDay() / 3600.0), 0, 23);
 	PaintRows();
 }
 
@@ -161,13 +221,16 @@ void UOfferInboxWidget::PaintRows()
 
 	if (BadgeText != nullptr)
 	{
-		// "none" rather than "0": the player is being told a STATE, and a zero is a value. And
-		// "1 waiting" rather than "1": under the window's "Offers" title the count sits on a line of
-		// its own, and a bare number there is the debug-readout look the heading row's comment
-		// forbids (final review 2026-09-28).
+		// AGAINST THE CAP when there is one - "3/8" says how close the inbox is to turning
+		// offers away (spec ruling 6). Without one, "none" rather than "0" - the player is being
+		// told a STATE, and a zero is a value - and "1 waiting" rather than "1": under the window's
+		// "Offers" title a bare number is the debug-readout look the heading row's comment forbids
+		// (UI library final review 2026-09-28).
 		const int32 Pending = Inbox->GetPendingCount();
-		BadgeText->SetText(Pending == 0
-			? NSLOCTEXT("AirportMgr", "InboxNone", "none")
+		const int32 Capacity = Inbox->GetCapacity();
+		BadgeText->SetText(Capacity > 0
+			? FText::Format(NSLOCTEXT("AirportMgr", "InboxOfCap", "{0}/{1}"), FText::AsNumber(Pending), FText::AsNumber(Capacity))
+			: Pending == 0 ? NSLOCTEXT("AirportMgr", "InboxNone", "none")
 			: FText::Format(NSLOCTEXT("AirportMgr", "InboxWaiting", "{0} waiting"), FText::AsNumber(Pending)));
 	}
 
@@ -192,6 +255,11 @@ void UOfferInboxWidget::PaintRows()
 	// every tick outright - issue #309, the regression #187 did not reach because this file
 	// was not one of the two it named.
 	const UUIStyle* Style = PanelStyle;
+	if (Style != nullptr)
+	{
+		PaintDemand(*Style);
+		PaintArrivals(*Style);
+	}
 
 	// The code-only path. Rebuilt when the COUNT changes rather than every tick: a rebuild
 	// every frame would drop a half-pressed button and churn the widget tree.
@@ -232,9 +300,60 @@ void UOfferInboxWidget::PaintRows()
 		// double spaces - "Cumbria Air  PA-46-500TP Meridian  in 9 min  " - which gave the
 		// airline, the airframe and the countdown identical weight and read as a log line
 		// rather than as something with an answer expected.
-		if (Entry->AirlineText != nullptr) { Entry->AirlineText->SetText(Row->GetAirline()); }
-		if (Entry->TypeText != nullptr)    { Entry->TypeText->SetText(Row->GetTypeName()); }
-		if (Entry->EtaText != nullptr)     { Entry->EtaText->SetText(Row->GetEta()); }
+		if (Entry->AirlineText != nullptr)
+		{
+			Entry->AirlineText->SetText(Row->GetCallsign().IsEmpty() ? Row->GetAirline()
+				: FText::Format(NSLOCTEXT("AirportMgr", "OfferWho", "{0}  {1}"), Row->GetCallsign(), Row->GetAirline()));
+		}
+		if (Entry->TypeText != nullptr)
+		{
+			Entry->TypeText->SetText(Row->GetFee().IsEmpty() ? Row->GetTypeName()
+				: FText::Format(NSLOCTEXT("AirportMgr", "OfferWhat", "{0}  \u00B7  {1}"), Row->GetTypeName(), Row->GetFee()));
+		}
+		if (Entry->ContractText != nullptr) { Entry->ContractText->SetText(Row->GetContract()); }
+
+		// THE COUNTDOWN: seconds and a draining bar, amber then red-and-pulsing as it runs out,
+		// because an offer that lapses unseen is money the player never knew they lost.
+		const int32 Left = Row->GetSecondsLeft();
+		const bool bUrgent = Left <= CountdownUrgentSeconds;
+		FLinearColor TimeColour = bUrgent ? Style->Warning : Left <= CountdownAmberSeconds ? Style->Accent : Style->InkMuted;
+		if (bUrgent)
+		{
+			TimeColour.A = 0.6f + 0.4f * FMath::Abs(FMath::Sin(static_cast<float>(FPlatformTime::Seconds()) * 4.0f));
+		}
+		if (Entry->CountdownText != nullptr)
+		{
+			Entry->CountdownText->SetText(FText::Format(NSLOCTEXT("AirportMgr", "OfferSecondsLeft", "{0} s"), FText::AsNumber(Left)));
+			Entry->CountdownText->SetColorAndOpacity(FSlateColor(TimeColour));
+		}
+		if (Entry->CountdownBar != nullptr)
+		{
+			Entry->CountdownBar->SetPercent(Row->GetTimeLeftFraction());
+			Entry->CountdownBar->SetFillColorAndOpacity(TimeColour);
+		}
+		if (Entry->FuelChip != nullptr)
+		{
+			// LITRES AND WHETHER THEY CAN BE GIVEN; hidden for a flight that wants none.
+			Entry->FuelChip->SetVisibility(Row->GetFuelText().IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+			Entry->FuelChip->SetText(FText::Format(NSLOCTEXT("AirportMgr", "OfferFuelChip", "{0} {1}"),
+				Row->GetFuelText(), Row->IsFuelServable()
+					? FText::FromString(TEXT("\u2713")) : FText::FromString(TEXT("\u2717"))));
+			Entry->FuelChip->SetColorAndOpacity(FSlateColor(Row->IsFuelServable() ? Style->Positive : Style->Warning));
+		}
+		if (Entry->TugChip != nullptr)
+		{
+			Entry->TugChip->SetVisibility(Row->NeedsTug() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		}
+		// "Accept (no fuel)" - the one caption on the card that changes. Through the button's own
+		// label (UUiButton::GetLabel), gated, since SetText has no early-out.
+		if (Entry->AcceptButton != nullptr)
+		{
+			const UTextBlock* Caption = Entry->AcceptButton->GetLabel();
+			if (Caption == nullptr || !Caption->GetText().EqualTo(Row->GetAcceptLabel()))
+			{
+				Entry->AcceptButton->SetLabel(Row->GetAcceptLabel());
+			}
+		}
 
 		if (Entry->RefusalText != nullptr)
 		{
@@ -287,19 +406,50 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 		WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
 	GapSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
-	Entry.EtaText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Style.ApplyText(*Entry.EtaText, EUITextRole::Label, Style.InkMuted);
-	UHorizontalBoxSlot* EtaSlot = Head->AddChildToHorizontalBox(Entry.EtaText);
-	EtaSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
-	EtaSlot->SetVerticalAlignment(VAlign_Center);
+	Entry.CountdownText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Style.ApplyText(*Entry.CountdownText, EUITextRole::Label, Style.InkMuted);
+	UHorizontalBoxSlot* CountdownSlot = Head->AddChildToHorizontalBox(Entry.CountdownText);
+	CountdownSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
+	CountdownSlot->SetVerticalAlignment(VAlign_Center);
 	Lines->AddChildToVerticalBox(Head)->SetHorizontalAlignment(HAlign_Fill);
 
-	// LINE TWO: the airframe, quieter. It matters while deciding, not while scanning.
+	// THE BAR under the head line: how much of the window is left, at a glance across rows.
+	Entry.CountdownBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass());
+	{
+		FProgressBarStyle BarStyle = Entry.CountdownBar->GetWidgetStyle();
+		BarStyle.SetBackgroundImage(FSlateRoundedBoxBrush(Style.Control, 1.5f));
+		BarStyle.SetFillImage(FSlateRoundedBoxBrush(FLinearColor::White, 1.5f));
+		Entry.CountdownBar->SetWidgetStyle(BarStyle);
+	}
+	USizeBox* BarBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+	BarBox->SetHeightOverride(3.0f);
+	BarBox->SetContent(Entry.CountdownBar);
+	Lines->AddChildToVerticalBox(BarBox)->SetPadding(FMargin(0.0f, 3.0f, 0.0f, 3.0f));
+
+	// LINE TWO: the airframe and what it pays, quieter. It matters while deciding, not while
+	// scanning.
 	Entry.TypeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 	Style.ApplyText(*Entry.TypeText, EUITextRole::Body, Style.InkMuted);
 	Lines->AddChildToVerticalBox(Entry.TypeText);
 
-	// LINE THREE: why it cannot be taken, in Warning and wrapped. Hidden while acceptable -
+	// LINE THREE: the turnaround contract, in game time.
+	Entry.ContractText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Style.ApplyText(*Entry.ContractText, EUITextRole::Body, Style.InkMuted);
+	Lines->AddChildToVerticalBox(Entry.ContractText);
+
+	// LINE FOUR: what it wants on the ground. Fuel is live (can the airport give it?); the tug
+	// is information only until a pushback service exists to ask.
+	UHorizontalBox* Chips = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	Entry.FuelChip = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Style.ApplyText(*Entry.FuelChip, EUITextRole::Label, Style.Positive);
+	Chips->AddChildToHorizontalBox(Entry.FuelChip)->SetPadding(FMargin(0.0f, 0.0f, 10.0f, 0.0f));
+	Entry.TugChip = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Entry.TugChip->SetText(NSLOCTEXT("AirportMgr", "OfferTug", "Needs tug"));
+	Style.ApplyText(*Entry.TugChip, EUITextRole::Label, Style.InkMuted);
+	Chips->AddChildToHorizontalBox(Entry.TugChip);
+	Lines->AddChildToVerticalBox(Chips)->SetPadding(FMargin(0.0f, 3.0f, 0.0f, 0.0f));
+
+	// LINE FIVE: why it cannot be taken, in Warning and wrapped. Hidden while acceptable -
 	// see the Collapsed comment in the repaint above.
 	Entry.RefusalText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 	Style.ApplyText(*Entry.RefusalText, EUITextRole::Body, Style.Warning);
@@ -308,7 +458,7 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	Entry.RefusalText->SetVisibility(ESlateVisibility::Collapsed);
 	Lines->AddChildToVerticalBox(Entry.RefusalText)->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
 
-	// LINE FOUR: the two answers, right-aligned beneath what they answer.
+	// LINE SIX: the two answers, right-aligned beneath what they answer.
 	UHorizontalBox* Answers = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	UHorizontalBoxSlot* PushSlot = Answers->AddChildToHorizontalBox(
 		WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
@@ -351,6 +501,100 @@ FString UOfferInboxWidget::BadgeForTest() const
 const UUiButton* UOfferInboxWidget::AcceptButtonForTest(int32 Row) const
 {
 	return Entries.IsValidIndex(Row) && Entries[Row] != nullptr ? Entries[Row]->AcceptButton.Get() : nullptr;
+}
+
+void UOfferInboxWidget::PaintArrivals(const UUIStyle& Style)
+{
+	if (Arrivals == nullptr || ArrivalColumn == nullptr)
+	{
+		return;
+	}
+	const TArray<UArrivalRowViewModel*> Rows = Arrivals->GetRows();
+	if (ArrivalCountText != nullptr)
+	{
+		ArrivalCountText->SetText(Rows.Num() == 0 ? NSLOCTEXT("AirportMgr", "ArrivalsNone", "none") : FText::AsNumber(Rows.Num()));
+	}
+
+	// REBUILT WHEN THE COUNT CHANGES, like the offer cards: a rebuild every frame would churn the
+	// widget tree for text that only moves by the minute.
+	if (ArrivalTitles.Num() != Rows.Num())
+	{
+		ArrivalColumn->ClearChildren();
+		ArrivalTitles.Reset();
+		ArrivalStatuses.Reset();
+		ArrivalDetails.Reset();
+		for (int32 Index = 0; Index < Rows.Num(); ++Index)
+		{
+			// A WELL ROW, the offer cards' own surface (UUiRow) - so the two lists read as one card.
+			UUiRow* Card = WidgetTree->ConstructWidget<UUiRow>(UUiRow::StaticClass());
+			Card->Build(Style, FMargin(10.0f, 5.0f));
+			UVerticalBox* Lines = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+			Card->SetContent(Lines);
+
+			UHorizontalBox* Head = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+			UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			Style.ApplyText(*Title, EUITextRole::Body, Style.Ink);
+			Head->AddChildToHorizontalBox(Title)->SetVerticalAlignment(VAlign_Center);
+			UHorizontalBoxSlot* Gap = Head->AddChildToHorizontalBox(WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
+			Gap->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			UTextBlock* Status = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			Style.ApplyText(*Status, EUITextRole::Label, Style.InkMuted);
+			UHorizontalBoxSlot* StatusSlot = Head->AddChildToHorizontalBox(Status);
+			StatusSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
+			StatusSlot->SetVerticalAlignment(VAlign_Center);
+			Lines->AddChildToVerticalBox(Head)->SetHorizontalAlignment(HAlign_Fill);
+
+			UTextBlock* Detail = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			Style.ApplyText(*Detail, EUITextRole::Body, Style.InkMuted);
+			Lines->AddChildToVerticalBox(Detail);
+
+			UVerticalBoxSlot* CardSlot = ArrivalColumn->AddChildToVerticalBox(Card);
+			CardSlot->SetPadding(FMargin(0.0f, Index == 0 ? 0.0f : 4.0f, 0.0f, 0.0f));
+			ArrivalTitles.Add(Title);
+			ArrivalStatuses.Add(Status);
+			ArrivalDetails.Add(Detail);
+		}
+	}
+
+	for (int32 Index = 0; Index < Rows.Num() && Index < ArrivalTitles.Num(); ++Index)
+	{
+		const UArrivalRowViewModel* Row = Rows[Index];
+		if (Row == nullptr)
+		{
+			continue;
+		}
+		ArrivalTitles[Index]->SetText(Row->GetTitle());
+		ArrivalStatuses[Index]->SetText(Row->GetStatus());
+		// HOLDING IN ACCENT: the one state the player can do something about (a free runway).
+		ArrivalStatuses[Index]->SetColorAndOpacity(FSlateColor(Row->GetStatus().EqualTo(
+			NSLOCTEXT("AirportMgr", "ArrivalHolding", "HOLDING")) ? Style.Accent : Style.InkMuted));
+		ArrivalDetails[Index]->SetText(Row->GetDetail());
+		ArrivalDetails[Index]->SetColorAndOpacity(FSlateColor(Row->IsLate() ? Style.Warning : Style.InkMuted));
+		ArrivalDetails[Index]->SetVisibility(Row->GetDetail().IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+	}
+}
+
+void UOfferInboxWidget::PaintDemand(const UUIStyle& Style)
+{
+	if (DemandBars.Num() == 0)
+	{
+		return;
+	}
+	double Peak = 0.0;
+	for (const double Each : DemandSamples) { Peak = FMath::Max(Peak, Each); }
+	for (int32 Hour = 0; Hour < DemandBars.Num(); ++Hour)
+	{
+		const double Sample = DemandSamples.IsValidIndex(Hour) ? DemandSamples[Hour] : 0.0;
+		// A HAIRLINE, never nothing, for an hour with no demand - a gap reads as a missing bar.
+		const float Height = Peak > 0.0 ? FMath::Max(1.0f, static_cast<float>(Sample / Peak) * DemandStripHeight) : 1.0f;
+		if (DemandBars[Hour] != nullptr) { DemandBars[Hour]->SetHeightOverride(Height); }
+		if (DemandFills[Hour] != nullptr)
+		{
+			const bool bNight = DemandNight.IsValidIndex(Hour) && DemandNight[Hour];
+			DemandFills[Hour]->SetBrushColor(Hour == DemandNowSlot ? Style.Accent
+				: bNight ? Style.Control : Style.InkMuted);
+		}
+	}
 }
 
 int32 UOfferInboxWidget::RowWidgetCountForTest() const

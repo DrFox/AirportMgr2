@@ -198,6 +198,14 @@ public:
 	UPROPERTY(EditAnywhere) EPushbackNeed PushbackNeed = EPushbackNeed::VehicleTug;
 
 	/**
+	 * The fuel tank, litres - the published capacity. A flight's load is drawn from it at the
+	 * offer (spec 2026-09-28-fuel-litres). 0 = this type wants no fuel. Carried into FAirframe
+	 * by Airframe() for PushbackNeed's reason. Authored by build_fuel_capacities.py.
+	 * ENFORCED BY: Airside.Content.FuelCapacitiesAuthored
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0")) double FuelCapacityLitres = 0.0;
+
+	/**
 	 * The four performance structs plus Wingspan and Requirements, bundled - see FAirframe
 	 * for why.
 	 *
@@ -240,6 +248,7 @@ public:
 		Out.AnimClass = AnimClass;
 		Out.TurnaroundSeconds = TurnaroundSeconds;
 		Out.PushbackNeed = PushbackNeed;
+		Out.FuelCapacityLitres = FuelCapacityLitres;
 		return Out;
 	}
 
@@ -321,6 +330,15 @@ public:
 	 * BuildPiperMeridian's own footprint cannot drift apart the way two copies would.
 	 */
 	static double PiperMeridianWingspan();
+
+	/**
+	 * The Meridian's tank, litres - for the fallback airframe, which has no asset to read
+	 * FuelCapacityLitres from, and for BuildPiperMeridian. One place, for PiperMeridianWingspan's
+	 * reason: a fallback with no tank would ask for no fuel, and every automation test that runs
+	 * without a content set would then see no truck at all.
+	 * ENFORCED BY: Airside.Content.FuelCapacitiesAuthored (asserts DA_Aircraft_Plane7 agrees)
+	 */
+	static double PiperMeridianFuelCapacityLitres();
 
 	/**
 	 * The Meridian's runway requirements, for the same reason PiperMeridianGround exists.

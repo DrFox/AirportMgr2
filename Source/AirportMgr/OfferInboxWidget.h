@@ -13,7 +13,12 @@ enum class EUiButtonKind : uint8;
 class UUiButton;
 enum class EUiButtonKind : uint8;
 class UListView;
+class UProgressBar;
+class USizeBox;
+class UBorder;
+class UHorizontalBox;
 class UOfferInboxWidget;
+class UArrivalsViewModel;
 class UOfferInboxViewModel;
 class UOfferViewModel;
 class UTextBlock;
@@ -46,7 +51,11 @@ public:
 	 */
 	UPROPERTY() TObjectPtr<UTextBlock> AirlineText;
 	UPROPERTY() TObjectPtr<UTextBlock> TypeText;
-	UPROPERTY() TObjectPtr<UTextBlock> EtaText;
+	UPROPERTY() TObjectPtr<UTextBlock> CountdownText;
+	UPROPERTY() TObjectPtr<UProgressBar> CountdownBar;
+	UPROPERTY() TObjectPtr<UTextBlock> ContractText;
+	UPROPERTY() TObjectPtr<UTextBlock> FuelChip;
+	UPROPERTY() TObjectPtr<UTextBlock> TugChip;
 	UPROPERTY() TObjectPtr<UTextBlock> RefusalText;
 	UPROPERTY() TObjectPtr<UUiButton> AcceptButton;
 
@@ -85,6 +94,10 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TitleText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> BadgeText;
 
+	/** The ARRIVALS section under the offers (spec 2026-09-28-arrival-queue section 3). */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UVerticalBox> ArrivalColumn;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> ArrivalCountText;
+
 	/**
 	 * Distance from the TOP of the screen for the code-built card.
 	 *
@@ -96,6 +109,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float TopOffset = 12.0f;
 
 	UOfferInboxViewModel* GetInbox() const { return Inbox; }
+	UArrivalsViewModel* GetArrivals() const { return Arrivals; }
+
+	/** How many arrivals rows are built, as opposed to how many the viewmodel holds. */
+	int32 ArrivalRowCountForTest() const { return ArrivalTitles.Num(); }
 
 	/** Top-right; NOT closable - an offer must never be hidden. */
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
@@ -131,6 +148,13 @@ public:
 	/** Gap between offer cards, so two offers do not read as one. */
 	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float RowGap = 6.0f;
 
+	/** The demand strip's tallest bar, uu. */
+	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float DemandStripHeight = 22.0f;
+
+	/** Seconds left at which the countdown turns amber, and at which it turns red and pulses. */
+	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float CountdownAmberSeconds = 30.0f;
+	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float CountdownUrgentSeconds = 10.0f;
+
 protected:
 	/** Builds the inbox's chrome. See UAirportMgrPanelWidget::Initialize for why this runs
 	 *  from Initialize rather than NativeOnInitialized. */
@@ -139,6 +163,15 @@ protected:
 
 private:
 	UPROPERTY() TObjectPtr<UOfferInboxViewModel> Inbox;
+	UPROPERTY() TObjectPtr<UArrivalsViewModel> Arrivals;
+
+	/** Each arrivals row's three texts, HELD rather than found by child index - the rule
+	 *  UOfferRowEntry states for the offer cards. Rebuilt when the row count changes. */
+	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ArrivalTitles;
+	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ArrivalStatuses;
+	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ArrivalDetails;
+
+	void PaintArrivals(const UUIStyle& Style);
 
 	/** One offer card: airline and countdown, airframe, refusal, then the two answers. */
 	UWidget* BuildRow(const class UUIStyle& Style, UOfferRowEntry& Entry, int32 Index);
@@ -147,6 +180,25 @@ private:
 	UUiButton* MakeAnswerButton(const class UUIStyle& Style, const TCHAR* Name, const FText& Label,
 		EUiButtonKind Kind, int32 Index);
 	UPROPERTY() TArray<TObjectPtr<UOfferRowEntry>> Entries;
+
+	/**
+	 * The demand strip: one bar per hour, heights from UOfferInboxViewModel::SampleDemand.
+	 *
+	 * BARS BUILT FROM PLAIN WIDGETS, not a NativePaint class of its own: 24 size boxes are the
+	 * whole of it, and a painter would be a second widget class to style and test for the same
+	 * picture. Code-built path only, like the rows.
+	 */
+	UPROPERTY() TArray<TObjectPtr<USizeBox>> DemandBars;
+	UPROPERTY() TArray<TObjectPtr<UBorder>> DemandFills;
+
+	/** Samples for the strip, set by Refresh from the runtime's airlines. Empty = no strip. */
+	TArray<double> DemandSamples;
+	/** Which strip slot "now" falls in, or INDEX_NONE. */
+	int32 DemandNowSlot = INDEX_NONE;
+	/** Which slots are night, for their colour. */
+	TArray<bool> DemandNight;
+
+	void PaintDemand(const UUIStyle& Style);
 
 	void EnsureSlots(const UUIStyle* Style);
 	void PaintRows();

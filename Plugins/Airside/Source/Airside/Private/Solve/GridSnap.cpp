@@ -152,4 +152,166 @@ namespace GridSnap
 			}
 		}
 	}
+
+	namespace
+	{
+		FVector2D PerpOf(const FVector2D& Axis) { return FVector2D(-Axis.Y, Axis.X); }
+
+		FVector2D ToLocal(const FGridFrame& Frame, const FVector2D& Q)
+		{
+			const FVector2D D = Q - Frame.Origin;
+			return FVector2D(FVector2D::DotProduct(D, Frame.Axis), FVector2D::DotProduct(D, PerpOf(Frame.Axis)));
+		}
+
+		/** A direction, not a point: rotated, never shifted by the origin. */
+		FVector2D DirToLocal(const FGridFrame& Frame, const FVector2D& V)
+		{
+			return FVector2D(FVector2D::DotProduct(V, Frame.Axis), FVector2D::DotProduct(V, PerpOf(Frame.Axis)));
+		}
+
+		FVector2D ToWorld(const FGridFrame& Frame, const FVector2D& L)
+		{
+			return Frame.Origin + Frame.Axis * L.X + PerpOf(Frame.Axis) * L.Y;
+		}
+
+		/** The world functions answer every frame that needs no map - see IsWorldAligned. */
+		bool NeedsNoMap(const FGridFrame& Frame) { return Frame.IsWorldAligned() || !Frame.IsOn(); }
+	}
+
+	FGridFrame FGridFrame::World(double StepUu)
+	{
+		FGridFrame Frame;
+		Frame.StepUu = StepUu;
+		return Frame;
+	}
+
+	FGridFrame FGridFrame::Along(const FVector2D& Point, const FVector2D& Direction, double StepUu)
+	{
+		const FVector2D Unit = Direction.GetSafeNormal();
+		if (Unit.IsZero())
+		{
+			return World(StepUu);
+		}
+
+		// THE FOLD BY QUARTER TURNS, (x, y) -> (y, -x): a swap and a negation, exact in IEEE
+		// doubles, so the same line reached from any of its four directions folds to the same
+		// bits. A trig fold (atan2, fmod, cos/sin) would not, and SameLines would then see four
+		// grids where the player sees one.
+		FVector2D Axis = Unit;
+		for (int32 Turn = 0; Turn < 4 && !(Axis.X > 0.0 && Axis.Y >= 0.0); ++Turn)
+		{
+			Axis = FVector2D(Axis.Y, -Axis.X);
+		}
+
+		FGridFrame Frame;
+		// -0 FOLDED TO +0 (x + 0.0 is +0 for x = -0), so an axis-aligned road gets the world's
+		// own (1, 0) bits and, through y = 0, IsWorldAligned.
+		Frame.Axis = FVector2D(Axis.X + 0.0, Axis.Y + 0.0);
+		// THE FOOT OF THE WORLD ORIGIN ON THE LINE - see the header: both families pass through it.
+		const FVector2D Foot = Point - Unit * FVector2D::DotProduct(Point, Unit);
+		Frame.Origin = FVector2D(Foot.X + 0.0, Foot.Y + 0.0);
+		Frame.StepUu = StepUu;
+		return Frame;
+	}
+
+	bool FGridFrame::IsWorldAligned() const
+	{
+		return Origin.X == 0.0 && Origin.Y == 0.0 && Axis.X == 1.0 && Axis.Y == 0.0;
+	}
+
+	bool FGridFrame::SameLines(const FGridFrame& Other) const
+	{
+		return Origin == Other.Origin && Axis == Other.Axis && StepUu == Other.StepUu;
+	}
+
+	bool FGridFrame::SameGrid(const FGridFrame& Other) const
+	{
+		if (StepUu != Other.StepUu)
+		{
+			return false;
+		}
+		if (!IsOn())
+		{
+			return true;
+		}
+		constexpr double AxisTolerance = 1e-9;
+		constexpr double LineToleranceUu = 1e-3;
+		if (FMath::Abs(Axis.X - Other.Axis.X) > AxisTolerance || FMath::Abs(Axis.Y - Other.Axis.Y) > AxisTolerance)
+		{
+			return false;
+		}
+		// THE OTHER ORIGIN ON THIS FRAME'S LINES - both families - is the same grid: every line of
+		// one passes through a grid point of the other.
+		const FVector2D L = ToLocal(*this, Other.Origin);
+		auto OnLine = [this](double V)
+		{
+			return FMath::Abs(V - FMath::RoundToDouble(V / StepUu) * StepUu) <= LineToleranceUu;
+		};
+		return OnLine(L.X) && OnLine(L.Y);
+	}
+
+	double FGridFrame::AxisDegrees() const
+	{
+		return FMath::RadiansToDegrees(FMath::Atan2(Axis.Y, Axis.X));
+	}
+
+	FVector2D Quantise(const FVector2D& Point, const FGridFrame& Frame)
+	{
+		if (NeedsNoMap(Frame))
+		{
+			return Quantise(Point, Frame.StepUu);
+		}
+		return ToWorld(Frame, Quantise(ToLocal(Frame, Point), Frame.StepUu));
+	}
+
+	bool NearestCrossingAlong(const FVector2D& Origin, const FVector2D& Direction,
+		const FVector2D& Near, const FGridFrame& Frame, FVector2D& Out)
+	{
+		if (NeedsNoMap(Frame))
+		{
+			return NearestCrossingAlong(Origin, Direction, Near, Frame.StepUu, Out);
+		}
+		FVector2D Local;
+		if (!NearestCrossingAlong(ToLocal(Frame, Origin), DirToLocal(Frame, Direction), ToLocal(Frame, Near),
+			Frame.StepUu, Local))
+		{
+			return false;
+		}
+		Out = ToWorld(Frame, Local);
+		return true;
+	}
+
+	bool NearestCrossingInRange(const FVector2D& Origin, const FVector2D& Direction,
+		const FVector2D& Near, const FGridFrame& Frame, double TMin, double TMax, FVector2D& Out)
+	{
+		if (NeedsNoMap(Frame))
+		{
+			return NearestCrossingInRange(Origin, Direction, Near, Frame.StepUu, TMin, TMax, Out);
+		}
+		// T SURVIVES THE MAP: a rotation keeps lengths, so a range along the unit direction in the
+		// world is the same range along its rotated image.
+		FVector2D Local;
+		if (!NearestCrossingInRange(ToLocal(Frame, Origin), DirToLocal(Frame, Direction), ToLocal(Frame, Near),
+			Frame.StepUu, TMin, TMax, Local))
+		{
+			return false;
+		}
+		Out = ToWorld(Frame, Local);
+		return true;
+	}
+
+	void PiecesInDisc(const FVector2D& Centre, double RadiusUu, const FGridFrame& Frame, TArray<FPiece>& Out)
+	{
+		if (NeedsNoMap(Frame))
+		{
+			PiecesInDisc(Centre, RadiusUu, Frame.StepUu, Out);
+			return;
+		}
+		PiecesInDisc(ToLocal(Frame, Centre), RadiusUu, Frame.StepUu, Out);
+		for (FPiece& Piece : Out)
+		{
+			Piece.From = ToWorld(Frame, Piece.From);
+			Piece.To = ToWorld(Frame, Piece.To);
+		}
+	}
 }

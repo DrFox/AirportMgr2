@@ -199,7 +199,8 @@ struct AIRSIDE_API FResolvedAnchor
  *
  * WHAT EACH ONE DRIVES, and how real that is today:
  *   Shed - the truck count. LIVE: UFuelService gates dispatch on FEntityInstance::Trucks.
- *   Pump - the dwell. LIVE: UFuelService::DwellSecondsFor divides by these.
+ *   Pump - the refill. LIVE: UFuelService::PumpsAt multiplies a returning vehicle's refill
+ *          rate by these (spec 2026-09-28-fuel-litres; they divided a flat dwell before).
  *   Tank - storage. INERT: no fuel inventory exists anywhere yet. Counted, never read.
  * The asymmetry is deliberate and is recorded in the design doc §2: growing a consumable
  * economy inside a feel probe is how a probe stops being one.

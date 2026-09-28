@@ -25,7 +25,7 @@ void UUiToggle::Build(const UUIStyle& InStyle)
 	Style = &InStyle;
 
 	// A HIT AREA, not a button look: the track is the whole appearance, so the engine button
-	// draws nothing (and rule 28 allows its FButtonStyle - it lives in UI/).
+	// draws nothing (and rule 29 allows its FButtonStyle - it lives in UI/).
 	UButton* Hit = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("ToggleHit"));
 	FButtonStyle NoLook = Hit->GetStyle();
 	NoLook.SetNormal(FSlateNoResource());

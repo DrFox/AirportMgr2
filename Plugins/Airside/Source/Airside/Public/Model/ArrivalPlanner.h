@@ -137,6 +137,15 @@ struct AIRSIDE_API FArrivalPlan
 	UPROPERTY() FStandAdmission StandRefusal;
 
 	/**
+	 * NoExit or NoRouteToStand only: landing the OTHER way would have reached a stand. The
+	 * refusal is still made - a flip is the player's call, never the planner's (ruling 3,
+	 * spec 2026-09-28-runway-in-use) - but the sentence says so, because the likeliest reason
+	 * a layout that worked yesterday refuses today is that its runway in use was flipped, and
+	 * "check the taxiway reaches the stands" sends the player to a taxiway that does.
+	 */
+	UPROPERTY() bool bOtherEndWouldServe = false;
+
+	/**
 	 * None means every step above succeeded and every other field is meaningful.
 	 *
 	 * DEFAULTS TO NoRunway, not None - fail closed. A default-constructed plan (one nobody
@@ -146,6 +155,20 @@ struct AIRSIDE_API FArrivalPlan
 	UPROPERTY() EArrivalRefusal Why = EArrivalRefusal::NoRunway;
 
 	bool IsValid() const { return Why == EArrivalRefusal::None; }
+};
+
+/**
+ * What Plan does about a runway someone else holds.
+ *
+ * Refuse is a landing NOW - the dispatch - which must not be cleared onto an occupied strip.
+ * Queue is an ACCEPT: the flight will wait its turn (UArrivalSequencer), so a busy runway is not
+ * a reason to turn it away - and Plan must still run every later step, the stand above all.
+ * AN ENUM, not a bool, so a call site says which question it is asking.
+ */
+enum class ERunwayBusy : uint8
+{
+	Refuse,
+	Queue
 };
 
 /**
@@ -190,12 +213,26 @@ namespace ArrivalPlanner
 	 * a runway by, and an aircraft takes the earliest turn-off it can rather than rolling to
 	 * the end in search of a marginally shorter taxi.
 	 *
-	 * Occupancy, when given, refuses RunwayOccupied while any segment of the chain is held.
+	 * Occupancy, when given, refuses RunwayOccupied while any segment of the chain is held -
+	 * unless RunwayBusy is Queue, which skips that one step and carries on (see ERunwayBusy).
+	 * ExcludingHolder is a stand hold that does not count as taken - a holding flight's OWN
+	 * hold, when the queue asks whether it could land now (UFlightBoard's clearance gate).
 	 * Null is the pre-traffic answer, which is what a tool that only asks "could this land
 	 * here" still wants.
 	 */
 	AIRSIDE_API FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near,
-		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy = nullptr);
+		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy = nullptr,
+		ERunwayBusy RunwayBusy = ERunwayBusy::Refuse, int32 ExcludingHolder = 0);
+
+	/**
+	 * Is the runway nearest Near held by anyone - the one test Plan's RunwayOccupied step makes,
+	 * and the one UArrivalSequencer asks before clearing a queued flight. False with no runway or
+	 * no occupancy to ask. ONE FUNCTION, so the queue and the dispatch cannot disagree about
+	 * whether the strip is free.
+	 * ENFORCED BY: Airside.Model.ArrivalQueue.IsRunwayBusyAgreesWithPlan
+	 */
+	AIRSIDE_API bool IsRunwayBusy(const URoadNetwork& Network, const FVector2D& Near,
+		const FTrafficOccupancy* Occupancy);
 
 	/**
 	 * The user-facing sentence for a refused plan - the same wording DispatchArrival used to

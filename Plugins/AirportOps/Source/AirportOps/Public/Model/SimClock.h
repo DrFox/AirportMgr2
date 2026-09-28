@@ -26,12 +26,15 @@ enum class ESimSpeed : uint8
  * The one authority on game time.
  *
  * Two independent scalings meet here and it matters which is which:
- *  - DAY COMPRESSION (RealSecondsPerGameDay): how many real seconds a 24h game day takes.
- *    This scales the CLOCK only - upkeep ticks, contract deliveries, off-block times.
+ *  - DAY COMPRESSION (RealSecondsDaylight, RealSecondsNight): how many real seconds the
+ *    daylight hours (DawnHour..DuskHour) and the night hours take. TWO BANDS, each at its own
+ *    rate (spec 2026-09-28 section 1): a night is a lull, and a lull the player has to sit
+ *    through at a busy morning's pace is dead time. This scales the CLOCK only - upkeep
+ *    ticks, contract deliveries, off-block times.
  *  - SPEED (ESimSpeed): the player's x1..x32. This scales the clock AND the movement layer.
  *
  * Airside agents run on Multiplier() alone, never on TimeScale(): a truck that drove 72x
- * faster because the day is 20 real minutes long would be unwatchable. Turnaround
+ * faster because the day is 40 real minutes long would be unwatchable. Turnaround
  * durations are therefore authored in game time knowing a truck covers "real" distance
  * while the clock runs compressed - the standard sim compromise, stated here so nobody
  * tries to fix it by scaling movement.
@@ -59,10 +62,32 @@ public:
 	virtual UObject& AsPersistentObject() override { return *this; }
 
 	/**
-	 * Real seconds one game day takes at x1. A tunable, set from the scenario by
-	 * UOpsRuntime; the default here is only what a bare NewObject gets.
+	 * Real seconds the daylight hours (DawnHour to DuskHour) take at x1, and the night hours
+	 * (DuskHour to DawnHour). Tunables, set from the scenario by UOpsRuntime; the defaults
+	 * here are only what a bare NewObject gets. SAVED, like every figure on this object.
+	 *
+	 * REPLACED RealSecondsPerGameDay (spec 2026-09-28): one figure for the whole day made the
+	 * night as slow as the morning peak. SetUniformDay gives the old single-rate behaviour.
 	 */
-	UPROPERTY() double RealSecondsPerGameDay = 1200.0;
+	UPROPERTY() double RealSecondsDaylight = 2400.0;
+	UPROPERTY() double RealSecondsNight = 480.0;
+
+	/** Hours of day, 0-24, at which daylight starts and ends. Dawn < Dusk. */
+	UPROPERTY() double DawnHour = 6.0;
+	UPROPERTY() double DuskHour = 20.0;
+
+	/** Split RealSecondsPerDay across the two bands so the rate is the same all day - the
+	 *  old single-figure clock, which most tests want so their arithmetic reads plainly. */
+	void SetUniformDay(double RealSecondsPerDay);
+
+	/** True between DawnHour (inclusive) and DuskHour (exclusive). */
+	bool IsDaylight(double TimeOfDaySeconds) const;
+	bool IsDaylight() const { return IsDaylight(TimeOfDay()); }
+
+	bool IsPaused() const { return Speed == ESimSpeed::Paused; }
+
+	/** Game seconds per real second at x1, in the band TimeOfDaySeconds falls in. */
+	double GameSecondsPerRealSecond(double TimeOfDaySeconds) const;
 
 	double Now() const { return GameSeconds; }
 	int32 Day() const;
@@ -95,11 +120,13 @@ public:
 	/** The speed table: 0, 1, 2, 4, 8. What Airside movement is scaled by. */
 	static double Multiplier(ESimSpeed Speed);
 
-	/** Multiplier() * (SecondsPerDay / RealSecondsPerGameDay): game seconds per real second. */
+	/** Multiplier() * GameSecondsPerRealSecond(TimeOfDay()): game seconds per real second NOW.
+	 *  Changes at dawn and dusk - a caller converting a long span should Advance, not multiply. */
 	double TimeScale() const;
 
 	/**
-	 * Advances game time by RealDeltaSeconds * TimeScale(), then fires every scheduled entry
+	 * Advances game time by RealDeltaSeconds, each part of it at the rate of the band it falls
+	 * in (a step across dusk is split there), then fires every scheduled entry
 	 * whose due time has passed, oldest first. A repeating entry that falls due several
 	 * times inside one step fires that many times.
 	 */

@@ -63,6 +63,16 @@ public:
 	 */
 	virtual bool SnapsToGrid() const override { return Pinned < 2; }
 
+	/**
+	 * THE ROAD THIS PLOT GOES ON: the one AnchorAt would take while idle, the pinned one after -
+	 * its centreline, so a Follow grid lies along the taxiway a stand opens off (grid-follows-snap
+	 * design; see IBuildTool::DescribeGridLine). EVERY STAGE, the depth drag included, and above
+	 * any guide winner (GridFrameSource::Resolve): the neighbour's back edge sets the depth outright
+	 * (StandPlotGuide::BackEdgeGuide), so it never needed the grid turned to it.
+	 */
+	virtual bool DescribeGridLine(const URoadNetwork* Network, const FVector2D& Cursor,
+		FVector2D& OutThrough, FVector2D& OutDirection) const override;
+
 protected:
 	explicit FStagedPlotTool(int32 InMaxPinned) : MaxPinned(InMaxPinned) {}
 
@@ -151,6 +161,12 @@ protected:
 
 	/** Unit vector away from the road, on the side the cursor was when it anchored. */
 	FVector2D Inward = FVector2D(0.0, 1.0);
+
+	/**
+	 * A point on the anchored road's CENTRELINE (its A end), pinned with Along. Corners[0] is off
+	 * the kerb, so it cannot stand in: DescribeGridLine puts the grid line on the road itself.
+	 */
+	FVector2D RoadA = FVector2D::ZeroVector;
 
 	/**
 	 * The corners, in the order they are pinned. Corners[0] IS the anchor, quantised onto the

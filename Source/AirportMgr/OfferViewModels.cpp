@@ -4,23 +4,30 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/OfferGenerator.h"
+#include "Model/Pricing.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 
-namespace
+FText UOfferViewModel::DescribeDuration(double Seconds)
 {
-	/** "in 12 min", or "now". Minutes, because the compressed clock makes seconds meaningless. */
-	FText DescribeEta(double ArrivesAt, double Now)
+	const int32 Minutes = FMath::Max(0, FMath::RoundToInt(Seconds / 60.0));
+	if (Minutes < 60)
 	{
-		const double Remaining = ArrivesAt - Now;
-		if (Remaining <= 60.0)
-		{
-			return NSLOCTEXT("AirportMgr", "EtaNow", "now");
-		}
-		const int32 Minutes = FMath::RoundToInt(Remaining / 60.0);
-		return FText::Format(NSLOCTEXT("AirportMgr", "EtaMinutes", "in {0} min"),
-			FText::AsNumber(Minutes));
+		return FText::Format(NSLOCTEXT("AirportMgr", "DurationMin", "{0} min"), FText::AsNumber(Minutes));
 	}
+	const int32 Hours = Minutes / 60;
+	const int32 Rest = Minutes % 60;
+	return Rest == 0
+		? FText::Format(NSLOCTEXT("AirportMgr", "DurationH", "{0} h"), FText::AsNumber(Hours))
+		: FText::Format(NSLOCTEXT("AirportMgr", "DurationHMin", "{0} h {1} min"),
+			FText::AsNumber(Hours), FText::AsNumber(Rest));
+}
+
+FText UOfferViewModel::DescribeContract(double LeadTimeSeconds, double ContractSeconds)
+{
+	return FText::Format(NSLOCTEXT("AirportMgr", "OfferContract", "lands in {0} \u00B7 airborne within {1}"),
+		DescribeDuration(LeadTimeSeconds), DescribeDuration(ContractSeconds));
 }
 
 void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& Traffic,
@@ -32,40 +39,54 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 		return;
 	}
 
+	Callsign = FText::FromString(Live->Callsign);
 	Airline = Live->AirlineName;
 	TypeName = Live->TypeName;
-	Eta = DescribeEta(Live->ArrivesAt, Clock.Now());
+	Fee = Board.Pricing != nullptr ? Board.Pricing->Format(Live->LandingFee) : FText::GetEmpty();
+	Contract = DescribeContract(Live->LeadTimeSeconds, Live->ContractSeconds);
+	bNeedsTug = Live->Airframe.PushbackNeed == EPushbackNeed::VehicleTug;
+	// THE SIZE OF THE JOB, before the accept (spec 2026-09-28-fuel-litres).
+	FuelText = Live->FuelLitres > 0.0
+		? FText::Format(NSLOCTEXT("AirportMgr", "OfferFuelLitres", "Fuel {0} L"), FText::AsNumber(FMath::RoundToInt(Live->FuelLitres)))
+		: FText::GetEmpty();
 
-	// THE REAL PLAN IS EXPENSIVE (issue #169): a full ArrivalPlanner::Plan is a route search
-	// over every stand, then every runway exit, so it is only re-run when one of the three
-	// things it could possibly depend on has moved since the last time - see this class's own
-	// comment on the three revisions below. Everything else on this row (Eta above) stays
-	// O(1) and keeps updating every call regardless.
-	const uint32 BoardNow = Board.Revision();
-	const uint32 GuidelineNow = Network.GetGuidelineRevision();
-	const uint32 OccupancyNow = Traffic.OccupancyRevision();
-	if (!bWhyComputed || BoardNow != BoardRevisionAt || GuidelineNow != GuidelineRevisionAt
-		|| OccupancyNow != OccupancyRevisionAt)
+	// ROUNDED UP: "0 s" while there is still time to click reads as a lie.
+	SecondsLeft = FMath::CeilToInt(FMath::Max(Live->OfferSecondsLeft, 0.0));
+	TimeLeftFraction = Live->OfferWindowSeconds > 0.0
+		? static_cast<float>(FMath::Clamp(Live->OfferSecondsLeft / Live->OfferWindowSeconds, 0.0, 1.0))
+		: 0.0f;
+
+	// THE BOARD'S VERDICT, cached on the board (issue #169's revisions moved there 2026-09-28 -
+	// see FOfferVerdict), so this row and the lapse classification read one answer. Cheap on
+	// every frame nothing moved.
+	const FOfferVerdict& Verdict = Board.VerdictFor(Traffic, Network, *Live);
+	bAcceptable = Verdict.Why == EArrivalRefusal::None;
+	bFuelServable = Verdict.bFuelServable;
+	// THE REASON-ONLY OVERLOAD, not a plan built by hand just to carry Why - ToastStackWidget
+	// already reads it this way, and a plan with every other field default-constructed is not
+	// a plan, it is Why wearing a bigger struct.
+	// THE FLIGHT'S OWN SPAN rides along so NoStandBigEnough can name the letter to build
+	// ("needs a Code F stand") - the row has the airframe, which the toast does not.
+	Refusal = bAcceptable
+		? FText::GetEmpty()
+		: FText::FromString(ArrivalPlanner::DescribeRefusal(Verdict.Why, Live->Airframe.Wingspan));
+	AcceptLabel = bFuelServable
+		? NSLOCTEXT("AirportMgr", "OfferAccept", "Accept")
+		: NSLOCTEXT("AirportMgr", "OfferAcceptNoFuel", "Accept (no fuel)");
+}
+
+TArray<double> UOfferInboxViewModel::SampleDemand(TArrayView<const FAirlineOffers> Airlines,
+	const USimClock& Clock, double DemandFactor, int32 Count)
+{
+	TArray<double> Out;
+	const int32 N = FMath::Max(Count, 0);
+	Out.Reserve(N);
+	for (int32 Index = 0; Index < N; ++Index)
 	{
-		// THE REAL PLAN, with the live occupancy. The greyed-out reason is the sentence the
-		// arrival itself would print, because it is the same refusal.
-		const EArrivalRefusal Why = Board.WhyNotAcceptable(Traffic, Network, *Live);
-		bAcceptable = Why == EArrivalRefusal::None;
-
-		// THE REASON-ONLY OVERLOAD, not a plan built by hand just to carry Why - ToastStackWidget
-		// already reads it this way, and a plan with every other field default-constructed is not
-		// a plan, it is Why wearing a bigger struct.
-		// THE FLIGHT'S OWN SPAN rides along so NoStandBigEnough can name the letter to build
-		// ("needs a Code F stand") - the row has the airframe, which the toast does not.
-		Refusal = Why == EArrivalRefusal::None
-			? FText::GetEmpty()
-			: FText::FromString(ArrivalPlanner::DescribeRefusal(Why, Live->Airframe.Wingspan));
-
-		BoardRevisionAt = BoardNow;
-		GuidelineRevisionAt = GuidelineNow;
-		OccupancyRevisionAt = OccupancyNow;
-		bWhyComputed = true;
+		const double Midpoint = (Index + 0.5) * USimClock::SecondsPerDay / N;
+		Out.Add(UOfferGenerator::TotalRateAt(Airlines, Midpoint, Clock.IsDaylight(Midpoint), DemandFactor));
 	}
+	return Out;
 }
 
 void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraffic,
@@ -130,6 +151,7 @@ void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraf
 	// ever bound this field - OfferInboxWidget::PaintRows reads GetPendingCount() directly
 	// every refresh, which is what actually keeps the badge current.
 	PendingCount = Rows.Num();
+	Capacity = InBoard.Generator != nullptr ? InBoard.Generator->MaxPendingOffers : 0;
 }
 
 TArray<UOfferViewModel*> UOfferInboxViewModel::GetOffers() const

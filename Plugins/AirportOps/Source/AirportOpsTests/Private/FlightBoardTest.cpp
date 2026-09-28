@@ -40,6 +40,20 @@ namespace
 		return Flight;
 	}
 
+	/**
+	 * A runway, an exit, a taxiway and stands sized for Wingspan - for the tests that DISPATCH.
+	 * Since the arrival queue's clearance gate (2026-09-28) a flight is only cleared when the
+	 * real plan says it could land, so a stand row with no runway never clears - correctly.
+	 */
+	URoadNetwork* BoardField(double Wingspan, int32 Stands = 1)
+	{
+		FAirframe Airframe;
+		Airframe.Wingspan = Wingspan;
+		FTestAirportOptions Options;
+		Options.StandCount = Stands;
+		return FTestAirport::Build(Airframe, Options).Net;
+	}
+
 	UFlightBoard* MakeBoard()
 	{
 		UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
@@ -64,8 +78,8 @@ bool FFlightBoardAcceptReservesTest::RunTest(const FString& Parameters)
 
 	UFlight* First = BoardFlightNeeding(3400.0);
 	UFlight* Second = BoardFlightNeeding(3400.0);
-	First->ArrivesAt = Clock->Now() + 100.0;
-	Second->ArrivesAt = Clock->Now() + 100.0;
+	First->LeadTimeSeconds = 100.0;
+	Second->LeadTimeSeconds = 100.0;
 	Board->AddOffer(*Clock, First);
 	Board->AddOffer(*Clock, Second);
 
@@ -88,13 +102,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFlightBoardDispatchesAtTheEtaTest::RunTest(const FString& Parameters)
 {
-	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
+	URoadNetwork* Net = BoardField(3400.0);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = MakeBoard();
 
 	UFlight* Flight = BoardFlightNeeding(3400.0);
-	Flight->ArrivesAt = Clock->Now() + 100.0;
+	Flight->LeadTimeSeconds = 100.0;
 	Board->AddOffer(*Clock, Flight);
 
 	int32 Calls = 0;
@@ -113,9 +127,12 @@ bool FFlightBoardDispatchesAtTheEtaTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("accepted"), Board->Accept(*Traffic, *Net, *Clock, *Flight));
 	TestEqual(TEXT("nothing is dispatched before the ETA"), Calls, 0);
 
-	// The clock compresses: at the default 1200 real seconds per game day one real second is
-	// 72 game seconds, so two is past an ETA 100 game seconds out.
+	// The clock compresses: at the default night rate (480 real s for ten hours) one real
+	// second is 75 game seconds, so two is past an ETA 100 game seconds out.
 	Clock->Advance(2.0);
+	// THE ETA PUTS IT IN THE QUEUE; the queue clears it (spec 2026-09-28-arrival-queue). Nothing
+	// holds the runway, so the first tick clears it.
+	Board->TickQueue(*Traffic, *Net, *Clock);
 
 	TestEqual(TEXT("the dispatcher ran exactly once, at the ETA"), Calls, 1);
 	TestFalse(TEXT("the stand hold was released BEFORE the dispatch"), bHeldAtDispatch);
@@ -182,17 +199,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFlightBoardExpiresOffersTest::RunTest(const FString& Parameters)
 {
+	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = MakeBoard();
 
 	UFlight* Offer = BoardFlightNeeding(3400.0);
-	Offer->ExpiresAt = Clock->Now() + 50.0;
+	Offer->OfferSecondsLeft = 50.0;
 	Board->AddOffer(*Clock, Offer);
 	TestEqual(TEXT("it is in the inbox to begin with"), Board->PendingOfferCount(), 1);
 
-	// 72 game seconds: past the expiry. No Tick to call any more (issue #105 item 9) - the
-	// expiry is a Clock.At callback armed by AddOffer, and Advance fires it itself.
-	Clock->Advance(1.0);
+	// REAL seconds now (spec 2026-09-28) - TickOffers, not Clock.Advance, drains the window.
+	Board->TickOffers(*Traffic, *Net, *Clock, 51.0);
 
 	TestEqual(TEXT("an ignored offer lapses"), Offer->Phase, EFlightPhase::Expired);
 	TestEqual(TEXT("and leaves the inbox"), Board->PendingOfferCount(), 0);
@@ -200,9 +218,9 @@ bool FFlightBoardExpiresOffersTest::RunTest(const FString& Parameters)
 }
 
 /**
- * PR #137 REVIEW: Decline -> CancelExpiry had no test. A declined offer that is left to sit
- * past its own ExpiresAt must stay Declined, not be silently flipped to Expired by a schedule
- * nobody cancelled.
+ * PR #137 REVIEW, kept through the move to a real-time countdown: a declined offer that is
+ * left to sit past its own window must stay Declined, not be flipped to Expired by a
+ * countdown still running on it.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFlightBoardDeclineCancelsExpiryTest,
@@ -211,20 +229,22 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFlightBoardDeclineCancelsExpiryTest::RunTest(const FString& Parameters)
 {
+	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = MakeBoard();
 
 	UFlight* Offer = BoardFlightNeeding(3400.0);
-	Offer->ExpiresAt = Clock->Now() + 50.0;
+	Offer->OfferSecondsLeft = 50.0;
 	Board->AddOffer(*Clock, Offer);
 
 	Board->Decline(*Clock, *Offer);
 	TestEqual(TEXT("declining sets the phase at once"), Offer->Phase, EFlightPhase::Declined);
 
-	// Well past the ExpiresAt that would have lapsed it, had Decline left the schedule armed.
-	Clock->Advance(1.0);
-	TestEqual(TEXT("a declined offer stays Declined - Decline cancelled the expiry"),
+	Board->TickOffers(*Traffic, *Net, *Clock, 100.0);
+	TestEqual(TEXT("a declined offer stays Declined - nothing counts it down any more"),
 		Offer->Phase, EFlightPhase::Declined);
+	TestEqual(TEXT("and it never records a lapse"), Offer->LapseReason, ELapseReason::None);
 	return true;
 }
 
@@ -245,7 +265,7 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 	// "last writer wins" bug issue #96 fixes. Only watching what actually gets dispatched
 	// catches a regression back to the board field. Revert FlightBoard.cpp's DispatchNow/
 	// WhyNotAcceptable to read the board's ApproachFocus again and this test goes red.
-	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
+	URoadNetwork* Net = BoardField(3400.0);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = MakeBoard();
@@ -290,9 +310,10 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the board's own field is STILL untouched, even by the refused call"),
 		Board->ApproachFocus, FVector2D::ZeroVector);
 
-	// ArrivesAt == ExpiresAt == Clock->Now() at the accept - see AcceptImmediate's own header
-	// on why - so the tiniest advance crosses the ETA and fires the dispatcher.
+	// ArrivesAt == Clock->Now() at the accept (no lead time) - see AcceptImmediate's own
+	// header on why - so the tiniest advance crosses the ETA and fires the dispatcher.
 	Clock->Advance(0.1);
+	Board->TickQueue(*Traffic, *Net, *Clock);
 	TestEqual(TEXT("the dispatcher ran exactly once - only the accepted flight was ever due"),
 		DispatchedNear.Num(), 1);
 	if (DispatchedNear.Num() == 1)
@@ -358,15 +379,14 @@ bool FFlightBoardAcceptedNeverExpiresTest::RunTest(const FString& Parameters)
 	Board->Dispatcher = [](const FVector2D&, const FAirframe&) { return true; };
 
 	UFlight* Flight = BoardFlightNeeding(3400.0);
-	Flight->ExpiresAt = Clock->Now() + 50.0;
-	Flight->ArrivesAt = Clock->Now() + 100000.0;
+	Flight->OfferSecondsLeft = 50.0;
+	Flight->LeadTimeSeconds = 100000.0;
 	Board->AddOffer(*Clock, Flight);
 	TestTrue(TEXT("accepted before it would have lapsed"),
 		Board->Accept(*Traffic, *Net, *Clock, *Flight));
 
-	// No Tick to call any more (issue #105 item 9) - Accept cancelled the expiry outright,
-	// so there is nothing left on the clock for Advance to fire even without the phase guard.
-	Clock->Advance(1.0);
+	// Well past the window: TickOffers only counts down what is still Offered.
+	Board->TickOffers(*Traffic, *Net, *Clock, 100.0);
 	TestEqual(TEXT("an accepted flight is not expired by its old offer deadline"),
 		Flight->Phase, EFlightPhase::Accepted);
 	return true;
@@ -481,18 +501,17 @@ bool FFlightBoardIndexMatchesTheLinearScanTest::RunTest(const FString& Parameter
 		++CreatedCount;
 	}
 
-	// A BATCH OF ALREADY-EXPIRED OFFERS, resolved through RearmSchedules rather than one at a
-	// time: this is the one production path that lapses an offer without a live Clock->Advance
-	// actually reaching its ExpiresAt, and issue #188's own migration sweep in OnAfterRestore
-	// shares its shape (a snapshot of Flights, walked once, moving some of it to History).
+	// A BATCH OF LAPSING OFFERS, resolved in one TickOffers rather than one at a time: the
+	// production path that lapses offers walks a snapshot of Flights and moves some of it to
+	// History - the same shape as issue #188's own migration sweep in OnAfterRestore.
 	for (int32 I = 0; I < 10; ++I)
 	{
 		UFlight* Flight = BoardFlightNeeding(3400.0);
-		Flight->ExpiresAt = -1.0;   // already behind a fresh clock's Now() == 0.0
+		Flight->OfferSecondsLeft = 0.5;
 		Board->AddOffer(*Clock, Flight);
 		++CreatedCount;
 	}
-	Board->RearmSchedules(*Traffic, *Net, *Clock);
+	Board->TickOffers(*Traffic, *Net, *Clock, 1.0);
 
 	bool bAllAgentsAgree = true;
 	for (int32 AgentId = INDEX_NONE; AgentId <= NextTestAgentId; ++AgentId)
