@@ -293,8 +293,8 @@ public:
 		FString* OutWhy = nullptr, const FTowSeed* Seed = nullptr);
 
 	/** Puts a vehicle on the board without the placeholder fleet or the traffic model - for OpsSave's
-	 *  and the re-bid tests. It is NOT counted against a depot's Trucks: SyncFleet seeds a depot once,
-	 *  from its own count, whatever else is there. */
+	 *  and the re-bid tests. ITS HOME COUNTS AS SEEDED: a test that places a depot's vehicles by hand
+	 *  means those to be the fleet, and SyncFleet must not add the placeholder's beside them. */
 	FServiceVehicle& AddVehicleForTest(FName TypeCode, FEntityInstanceId Home, EServiceVehicleState State, double Cargo);
 
 	/**
@@ -311,6 +311,21 @@ public:
 
 	/** See FleetRevision. */
 	uint32 GetFleetRevisionForTest() const { return FleetRevision; }
+
+	/**
+	 * How much better, in GAME seconds, a re-bid must be before a queued job moves to another
+	 * vehicle (user's ruling 7, spec §2.5). Two minutes: less and two near-equal vehicles swap a job
+	 * back and forth on every trigger, which on screen is a truck changing its mind for nothing.
+	 */
+	static constexpr double RebidMarginSeconds = 120.0;
+
+	/**
+	 * A test's drive times, GAME seconds from node to node for a vehicle kind - replacing the road
+	 * length over cruise speed. Empty in production. The re-bid's margin is a comparison of two
+	 * finish times, and a test that has to derive both from road geometry cannot pin which side of
+	 * two minutes they fall.
+	 */
+	TFunction<double(FGuidelineNodeId From, FGuidelineNodeId To, FName TypeCode)> DriveSecondsOverride;
 
 	/**
 	 * Appends a job with the caller's own starting state, Stand left unset.
@@ -425,9 +440,25 @@ private:
 	FRoutePlan DepotRoute(const URoadNetwork& Network, FGuidelineNodeId DepotPose, FGuidelineNodeId Goal,
 		const FVehicle& Vehicle, bool* bOutTooNarrow = nullptr, FGuidelineEdgeId* OutNarrowAt = nullptr) const;
 
-	/** ServiceBid's input for Vehicle taking Job, built from its live state. See the body. */
+	/**
+	 * ServiceBid's input for Vehicle taking Job, built from its live state. See the body. QueueAhead
+	 * is how many of its queued jobs come first: all of them (INDEX_NONE) for a new bid, the ones
+	 * before Job for the finish Job is already promised on this vehicle (the re-bid's "current").
+	 */
 	ServiceBid::FResult BidFor(const FServiceVehicle& Vehicle, const FServiceJob& Job, const UGroundTraffic& Traffic,
-		const URoadNetwork& Network, const USimClock& Clock) const;
+		const URoadNetwork& Network, const USimClock& Clock, int32 QueueAhead = INDEX_NONE) const;
+
+	/**
+	 * Every Queued job re-bid against every other vehicle that may take it, and moved when one now
+	 * beats its current finish by RebidMarginSeconds (spec §2.5). Underway and Serving never move -
+	 * committed is committed. Runs only when FleetRevision or the guideline revision moved since the
+	 * last pass: nothing changed, nothing re-bid (#190's rule).
+	 */
+	void RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
+
+	/** The two clocks RebidQueued last ran against - see RebidQueued. */
+	uint32 LastRebidFleetRevision = MAX_uint32;
+	uint32 LastRebidGuidelineRevision = MAX_uint32;
 
 	/** Movement seconds from one node to another for Type, over the road length, cached per graph
 	 *  revision; negative when there is no road. */

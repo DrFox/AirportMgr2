@@ -1185,8 +1185,8 @@ bool FFuelQueuedJobServedWithoutRebidsTest::RunTest(const FString& Parameters)
 {
 	// THE OTHER HALF OF #190: a job placed on a busy vehicle is served when that vehicle comes to it,
 	// with no retry along the way. WAS AirportOps.Ops.FuelBusyWaitReoffersOnce, which counted ONE
-	// ChooseDepot on the free-up; with the job already queued there is nothing to re-offer, so the
-	// count across the whole wait is zero.
+	// ChooseDepot on the free-up; with the job already queued there is nothing to re-offer, and the
+	// only asking left is the re-bid's, which runs on triggers alone.
 	FFuelFixture Fixture;
 	Fixture.bSecondStand = true;
 	Fixture.Build(/*bWithRoad=*/true);
@@ -1212,6 +1212,7 @@ bool FFuelQueuedJobServedWithoutRebidsTest::RunTest(const FString& Parameters)
 	Fixture.Advance(1.0 / 30.0);
 	if (!TestNotNull(TEXT("setup: the second job exists"), Fixture.Service->JobForAircraft(Second))) { return false; }
 	Fixture.Service->ResetBidCallCountForTest();
+	const uint32 FleetBefore = Fixture.Service->GetFleetRevisionForTest();
 
 	// SAME BOUND AS FFuelQueuesOnABusyDepot: a whole round trip - drive out, pump, drive home.
 	const bool bServed = Fixture.AdvanceUntil([&Fixture, Second]
@@ -1222,9 +1223,13 @@ bool FFuelQueuedJobServedWithoutRebidsTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("a vehicle comes for the queued job"), bServed)) { return false; }
 
 	// THE DEFECT THIS WOULD CATCH: a job re-bid on every idle tick along the way, which over a 450 s
-	// bound is thousands of bids.
-	TestEqual(TEXT("no bid ran for it while it waited - it was already placed"),
-		Fixture.Service->GetBidCallCountForTest(), 0);
+	// bound is thousands of bids. SINCE THE RE-BID STAGE a queued job IS asked again - on a trigger
+	// (a vehicle's step ends, the fleet or the airport changes), once per vehicle that could take it.
+	// Two vehicles here, so at most two bids per trigger.
+	const int32 Triggers = static_cast<int32>(Fixture.Service->GetFleetRevisionForTest() - FleetBefore);
+	AddInfo(FString::Printf(TEXT("%d bid(s) over %d trigger(s)"), Fixture.Service->GetBidCallCountForTest(), Triggers));
+	TestTrue(TEXT("bids only on triggers, never per idle tick"),
+		Fixture.Service->GetBidCallCountForTest() <= 2 * Triggers);
 	return true;
 }
 
@@ -2477,6 +2482,149 @@ bool FFuelTowRecalledWhileReversingTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("the tow left the traffic model"), bGone);
 	TestTrue(TEXT("by arriving home, not by being retired where it stood"), bHomeLine);
+	return true;
+}
+
+namespace FuelServiceTest
+{
+	/**
+	 * THE RE-BID STAGE (spec 2026-09-28-service-vehicle-lifecycle §2.5): a fuel fixture whose fleet
+	 * the test places by hand, with every drive a flat three game minutes so the margin arithmetic is
+	 * exact. Vehicle A is serving the first stand until ServeLeft game seconds from now, with a 300 L
+	 * job for the second stand queued behind it. B is a second bowser, added when the test says - the
+	 * trigger a re-bid answers.
+	 */
+	struct FRebidRig
+	{
+		FFuelFixture Fixture;
+		FName Bowser;
+		int32 VehicleA = 0;
+		int32 QueuedJob = 0;
+		int32 ServingJob = 0;
+
+		bool Build(double ServeLeft)
+		{
+			Fixture.bSecondStand = true;
+			Fixture.Build(/*bWithRoad=*/true);
+			UJobBoard& Board = *Fixture.Service;
+			Bowser = Board.VehiclesFor(EIcaoCode::C).TypeCode;
+			Board.DriveSecondsOverride = [](FGuidelineNodeId From, FGuidelineNodeId To, FName) { return From == To ? 0.0 : 180.0; };
+
+			const int32 AId = Board.AddVehicleForTest(Bowser, Fixture.Depot, EServiceVehicleState::Serving, 9000.0).Id;
+			VehicleA = AId;
+
+			const double StartedAt = Fixture.Clock->Now();
+			const double EndsAt = StartedAt + ServeLeft;
+			{
+				// SCOPED: the next AddJobForTest may reallocate the job array under this reference.
+				FServiceJob& Serving = Board.AddJobForTest(101, EServiceJobState::Serving, EServiceRefusal::None, 0);
+				Serving.Stand = Fixture.Stand;
+				Serving.QuantityOwed = 300.0;
+				Serving.TripQuantity = 300.0;
+				Serving.TripStartedAt = StartedAt;
+				Serving.TripEndsAt = EndsAt;
+				Serving.VehicleId = AId;
+				ServingJob = Serving.Id;
+			}
+
+			FServiceJob& Queued = Board.AddJobForTest(102, EServiceJobState::Queued, EServiceRefusal::None, 0);
+			Queued.Stand = Fixture.Stand2;
+			Queued.QuantityOwed = 300.0;
+			Queued.VehicleId = AId;
+			QueuedJob = Queued.Id;
+
+			// RE-FOUND: the job adds above may have moved nothing, but the vehicle array is the board's.
+			FServiceVehicle* Live = const_cast<FServiceVehicle*>(Board.FindVehicle(VehicleA));
+			Live->CurrentJob = ServingJob;
+			Live->StepStartedAt = StartedAt;
+			Live->StepEndsAt = EndsAt;
+			Live->Queue.Add(QueuedJob);
+
+			// ONE TICK to settle the trigger AddVehicleForTest itself bumped.
+			Fixture.Advance(1.0 / 30.0);
+			return Board.FindVehicle(VehicleA) != nullptr;
+		}
+
+		int32 AddB() { return Fixture.Service->AddVehicleForTest(Bowser, Fixture.Depot, EServiceVehicleState::Idle, 10000.0).Id; }
+		const FServiceJob* Job() const { return Fixture.Service->GetJobs().FindByPredicate([this](const FServiceJob& J) { return J.Id == QueuedJob; }); }
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceRebidMovesWhenMuchBetterTest, "AirportOps.Service.Rebid.MovesWhenMuchBetter",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceRebidMovesWhenMuchBetterTest::RunTest(const FString& Parameters)
+{
+	// USER'S RULING 7: a job not yet set off toward is re-bid when things change, and moves when
+	// another vehicle now beats its promised finish by more than the margin. A has ten game minutes
+	// of pumping left; B arrives idle. B finishes the queued job ten minutes sooner.
+	FuelServiceTest::FRebidRig Rig;
+	if (!TestTrue(TEXT("rig built"), Rig.Build(600.0))) { return false; }
+	const int32 B = Rig.AddB();
+	Rig.Fixture.Advance(1.0 / 30.0);
+	const FServiceJob* Job = Rig.Job();
+	if (!TestNotNull(TEXT("the job survives"), Job)) { return false; }
+	TestEqual(TEXT("it moved to B"), Job->VehicleId, B);
+	TestFalse(TEXT("and left A's queue"), Rig.Fixture.Service->FindVehicle(Rig.VehicleA)->Queue.Contains(Rig.QueuedJob));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceRebidStaysWithinMarginTest, "AirportOps.Service.Rebid.StaysWithinMargin",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceRebidStaysWithinMarginTest::RunTest(const FString& Parameters)
+{
+	// THE MARGIN: one minute better is not worth a visible change of plan - two near-equal vehicles
+	// would otherwise swap a job back and forth. UJobBoard::RebidMarginSeconds is two.
+	FuelServiceTest::FRebidRig Rig;
+	if (!TestTrue(TEXT("rig built"), Rig.Build(60.0))) { return false; }
+	Rig.AddB();
+	Rig.Fixture.Advance(1.0 / 30.0);
+	const FServiceJob* Job = Rig.Job();
+	if (!TestNotNull(TEXT("the job survives"), Job)) { return false; }
+	TestEqual(TEXT("it stays with A"), Job->VehicleId, Rig.VehicleA);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceRebidUnderwayNeverMovesTest, "AirportOps.Service.Rebid.UnderwayNeverMoves",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceRebidUnderwayNeverMovesTest::RunTest(const FString& Parameters)
+{
+	// COMMITTED MEANS COMMITTED: a job its vehicle has set off toward is never re-bid, however much
+	// better another vehicle would do - a truck turned back halfway reads as broken.
+	FuelServiceTest::FRebidRig Rig;
+	if (!TestTrue(TEXT("rig built"), Rig.Build(6000.0))) { return false; }
+	// THE SERVING JOB is the committed one; the rig's queued job is its control and should move.
+	Rig.AddB();
+	Rig.Fixture.Advance(1.0 / 30.0);
+	const FServiceJob* Committed = Rig.Fixture.Service->GetJobs().FindByPredicate(
+		[&Rig](const FServiceJob& J) { return J.Id == Rig.ServingJob; });
+	if (!TestNotNull(TEXT("the serving job survives"), Committed)) { return false; }
+	TestEqual(TEXT("the job A is serving stays with A"), Committed->VehicleId, Rig.VehicleA);
+	TestNotEqual(TEXT("while the queued one - the control - did move"), Rig.Job()->VehicleId, Rig.VehicleA);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceRebidQuietWithoutTriggerTest, "AirportOps.Service.Rebid.QuietWithoutTrigger",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceRebidQuietWithoutTriggerTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #190's RULE FOR THE RE-BID: nothing changed, nothing re-bid. A queued job is re-bid on a
+	// FleetRevision or guideline-revision move, never on an idle tick.
+	FuelServiceTest::FRebidRig Rig;
+	if (!TestTrue(TEXT("rig built"), Rig.Build(6000.0))) { return false; }
+	Rig.Fixture.Service->ResetBidCallCountForTest();
+	for (int32 Tick = 0; Tick < 60; ++Tick)
+	{
+		Rig.Fixture.Advance(1.0 / 30.0);
+	}
+	TestEqual(TEXT("60 idle ticks re-bid nothing"), Rig.Fixture.Service->GetBidCallCountForTest(), 0);
 	return true;
 }
 
