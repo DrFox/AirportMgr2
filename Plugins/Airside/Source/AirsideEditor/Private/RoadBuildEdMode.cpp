@@ -79,6 +79,11 @@ void URoadBuildEdMode::Enter()
 {
 	UEdMode::Enter();
 
+	// The runtime driver's twin - see ARoadBuildController::BeginPlay and
+	// FBuildSession::SetToolPreferences. One store, so a surface picked in PIE is the one the
+	// editor mode offers next, and the reverse.
+	Session.SetToolPreferences(MakeShared<FConfigToolPreferences>());
+
 	// ISSUE #191/#92-#93: this mode had no FEditorUndoClient at all before now, so an editor
 	// Ctrl+Z never reached PostUndo below - see that method's own comment. Registered here,
 	// unregistered in Exit(), the same pairing GEditor's own clients use (FEditorModeTools

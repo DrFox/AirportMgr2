@@ -136,6 +136,8 @@ public:
 	/** Axis 0 only: Option is an index into Pavement::Offered({}), the list the row was built
 	 *  from. False, and nothing changed, for any other axis or an option past the row. */
 	virtual bool SelectVariant(const FToolContext& Context, int32 Axis, int32 Option) override;
+	virtual TOptional<EPavement> GetChosenSurface() const override { return Pavement; }
+	virtual bool RestoreSurface(EPavement InSurface) override { Pavement = InSurface; return true; }
 
 protected:
 	virtual bool Filter(const URoadNetwork& Network, FRoadSegmentId Id) const override
@@ -199,9 +201,10 @@ private:
 	};
 	mutable TOutlineMemo<FRefusalPayload> RefusalMemo;
 
-	/** What the next Build paves the pad with - the Surface row's pick. Tarmac, what every
-	 *  stand was drawn with before the row existed. */
-	EPavement Pavement = EPavement::Tarmac;
+	/** What the next Build paves the pad with - the Surface row's pick. STARTS GRASS - see
+	 *  FRoadDrawTool::Surface for the ruling; it was tarmac, what every stand was drawn with
+	 *  before the row existed. */
+	EPavement Pavement = EPavement::Grass;
 
 	/** Bumped only on an actual ask - a cache hit must not move it. See GetRefusalCountForTest. */
 	mutable int32 RefusalCountForTest = 0;

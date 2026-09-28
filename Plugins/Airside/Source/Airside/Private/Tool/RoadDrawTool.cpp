@@ -558,6 +558,20 @@ void FRoadDrawTool::AddWidthAxis(const FToolContext& Context, TArray<FToolVarian
 	}
 }
 
+bool FRoadDrawTool::RestoreSurface(EPavement InSurface)
+{
+	// NOT CHECKED AGAINST THE PROFILE'S OFFERED LIST: there is no context to ask for the profile
+	// here (FBuildSession restores at construction). A surface the profile does not offer can
+	// only come from a hand-edited ini, and would light no option on the row and be refused at
+	// the lay by URoadEditFacade's own Offered check - wrong, visibly, and nothing laid.
+	Surface = InSurface;
+	if (State.IsValid())
+	{
+		State->Surface = Surface;
+	}
+	return true;
+}
+
 bool FRoadDrawTool::SelectVariant(const FToolContext& Context, int32 Axis, int32 Option)
 {
 	// THROUGH GetVariantAxes, virtually, so a lock is honoured wherever it was set - the row that

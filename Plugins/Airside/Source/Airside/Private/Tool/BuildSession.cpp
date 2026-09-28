@@ -184,7 +184,86 @@ void FBuildSession::GetActiveVariantAxes(const FToolContext& Context, TArray<FTo
 bool FBuildSession::SelectActiveVariant(const FToolContext& Context, int32 Axis, int32 Option)
 {
 	IBuildTool* Tool = GetActiveTool();
-	return Tool != nullptr && Tool->SelectVariant(Context, Axis, Option);
+	const bool bTook = Tool != nullptr && Tool->SelectVariant(Context, Axis, Option);
+	if (bTook)
+	{
+		RememberSurfaces();
+	}
+	return bTook;
+}
+
+namespace BuildSessionPreferences
+{
+	FString SurfaceKey(const FToolRegistration& Registration)
+	{
+		return Registration.Id.ToString() + TEXT(".Surface");
+	}
+}
+
+void FBuildSession::SetToolPreferences(TSharedPtr<IToolPreferences> InPreferences)
+{
+	Preferences = MoveTemp(InPreferences);
+	RememberedSurfaces.Reset();
+	RememberedSurfaces.SetNum(Tools.Num());
+	if (!Preferences.IsValid())
+	{
+		return;
+	}
+
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	const UEnum* Enum = StaticEnum<EPavement>();
+	for (int32 Index = 0; Index < Tools.Num() && Index < Registry.Num(); ++Index)
+	{
+		IBuildTool* Tool = Tools[Index].Get();
+		if (Tool == nullptr || !Tool->GetChosenSurface().IsSet())
+		{
+			continue;
+		}
+
+		const FString Key = BuildSessionPreferences::SurfaceKey(Registry[Index]);
+		const TOptional<FString> Stored = Preferences->Read(Key);
+		const int64 Value = Stored.IsSet() ? Enum->GetValueByNameString(*Stored) : INDEX_NONE;
+
+		// A NAME THE ENUM DOES NOT HAVE - a hand-edited ini, or a pavement since removed - keeps
+		// the tool's own default, and says so, rather than casting garbage into an EPavement.
+		// Count is the enum's sentinel, never a real surface.
+		if (Value == INDEX_NONE || Value >= static_cast<int64>(EPavement::Count))
+		{
+			if (Stored.IsSet())
+			{
+				UE_LOG(LogAirside, Warning, TEXT("Tool preferences: %s = '%s' is not a pavement - keeping %s"),
+					*Key, **Stored, Pavement::Name(*Tool->GetChosenSurface()));
+			}
+			RememberedSurfaces[Index] = Tool->GetChosenSurface();
+			continue;
+		}
+
+		Tool->RestoreSurface(static_cast<EPavement>(Value));
+		RememberedSurfaces[Index] = Tool->GetChosenSurface();
+		UE_LOG(LogAirside, Log, TEXT("Tool preferences: %s restored -> %s"),
+			*Key, Pavement::Name(*Tool->GetChosenSurface()));
+	}
+}
+
+void FBuildSession::RememberSurfaces()
+{
+	if (!Preferences.IsValid())
+	{
+		return;
+	}
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	for (int32 Index = 0; Index < Tools.Num() && Index < Registry.Num() && Index < RememberedSurfaces.Num(); ++Index)
+	{
+		const TOptional<EPavement> Chosen = Tools[Index].IsValid() ? Tools[Index]->GetChosenSurface() : TOptional<EPavement>();
+		if (!Chosen.IsSet() || Chosen == RememberedSurfaces[Index])
+		{
+			continue;
+		}
+		const FString Key = BuildSessionPreferences::SurfaceKey(Registry[Index]);
+		Preferences->Write(Key, StaticEnum<EPavement>()->GetNameStringByValue(static_cast<int64>(*Chosen)));
+		RememberedSurfaces[Index] = Chosen;
+		UE_LOG(LogAirside, Log, TEXT("Tool preferences: %s remembered -> %s"), *Key, Pavement::Name(*Chosen));
+	}
 }
 
 void FBuildSession::SetGestureMode(EGestureMode InMode, const FToolContext& DeactivateContext)
@@ -235,6 +314,10 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 		{
 			Active->OnReselect(DeactivateContext);
 		}
+
+		// Shift+key steps the surface on the runway and road tools - the second door a pick
+		// comes through. See SetToolPreferences.
+		RememberSurfaces();
 
 		// GetFrameContext's key cannot see this: GetActiveTool() returns the SAME pointer, but
 		// OnReselect can still drop a sticky Remove/Insert modifier below - the exact edge case

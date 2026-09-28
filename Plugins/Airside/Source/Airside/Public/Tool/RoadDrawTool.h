@@ -45,7 +45,7 @@ struct IRoadDrawState
 
 	/** What this state's next click lays the road on - WidthIndex's twin, for the same reason:
 	 *  picking grass mid-chain has to reach the part-drawn state. See FRoadDrawTool::Surface. */
-	EPavement Surface = EPavement::Tarmac;
+	EPavement Surface = EPavement::Grass;
 };
 
 /** Nothing part-drawn. A click puts down the start of a road. */
@@ -55,7 +55,7 @@ public:
 	/** Kind is carried by the STATE as well as by the tool because a state builds its own
 	 *  successor, and the successor must lay the same cross-section this one started. */
 	explicit FRoadIdleState(ERoadKind InKind = ERoadKind::Taxiway, int32 InWidthIndex = INDEX_NONE,
-		EPavement InSurface = EPavement::Tarmac)
+		EPavement InSurface = EPavement::Grass)
 		: Kind(InKind) { WidthIndex = InWidthIndex; Surface = InSurface; }
 
 	virtual TUniquePtr<IRoadDrawState> OnClick(const FToolContext& Context) override;
@@ -77,7 +77,7 @@ class FRoadChainingState : public IRoadDrawState
 {
 public:
 	FRoadChainingState(int32 InFrom, bool bInCreated, ERoadKind InKind = ERoadKind::Taxiway,
-		int32 InWidthIndex = INDEX_NONE, EPavement InSurface = EPavement::Tarmac)
+		int32 InWidthIndex = INDEX_NONE, EPavement InSurface = EPavement::Grass)
 		: From(InFrom), bCreated(bInCreated), Kind(InKind) { WidthIndex = InWidthIndex; Surface = InSurface; }
 
 	virtual TUniquePtr<IRoadDrawState> OnClick(const FToolContext& Context) override;
@@ -161,6 +161,9 @@ public:
 	/** Sets the field the row stands for - WidthIndex or Surface, and the live chain's copy of
 	 *  it. BY THE ROW'S Id, not its index: with no width profiles Surface is row 0. */
 	virtual bool SelectVariant(const FToolContext& Context, int32 Axis, int32 Option) override;
+	virtual TOptional<EPavement> GetChosenSurface() const override { return Surface; }
+	/** Reaches the part-drawn state too, for SelectVariant's reason. */
+	virtual bool RestoreSurface(EPavement InSurface) override;
 
 	/**
 	 * The node the chain is drawing FROM, and the direction of the segment already arriving
@@ -217,10 +220,12 @@ private:
 
 	/**
 	 * What the next click lays the road on - FRoadSegment::Surface. ON THE TOOL for
-	 * WidthIndex's reason, and STARTS TARMAC so a player who never touches the row lays what
-	 * every road before the row was.
+	 * WidthIndex's reason. STARTS GRASS since 2026-09-28 (it was tarmac, what every road before
+	 * the row was): the cheapest surface is the new player's default, and upgrading it is part
+	 * of the progression - ruled knowing most shipped aircraft need better than grass. A pick
+	 * then outlives the launch - see FBuildSession::SetToolPreferences.
 	 */
-	EPavement Surface = EPavement::Tarmac;
+	EPavement Surface = EPavement::Grass;
 
 	/** The Width row, or nothing when the content set declares no widths for Kind. */
 	void AddWidthAxis(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const;

@@ -7,6 +7,7 @@
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RunwayTool.h"
+#include "Tool/ToolPreferences.h"
 #include "Model/RunwayFacts.h"
 #include "Present/RoadNetworkActor.h"
 
@@ -220,7 +221,7 @@ bool FTvRunwayTest::RunTest(const FString& Parameters)
 		Axes[1].Options[static_cast<int32>(EPavement::Concrete)].Label.ToString(),
 		FString(Pavement::Name(EPavement::Concrete)));
 	TestEqual(TEXT("lit width is the first"), Axes[0].Current, 0);
-	TestEqual(TEXT("lit surface is tarmac"), Axes[1].Current, static_cast<int32>(EPavement::Tarmac));
+	TestEqual(TEXT("lit surface is grass - the cheap start (2026-09-28)"), Axes[1].Current, static_cast<int32>(EPavement::Grass));
 	TestEqual(TEXT("lit approach is visual"), Axes[2].Current, static_cast<int32>(ERunwayApproach::Visual));
 
 	TestTrue(TEXT("a surface pick is accepted"),
@@ -329,6 +330,8 @@ bool FTvLockedOptionTest::RunTest(const FString& Parameters)
 	FTvLockedRunwayTool Runway;
 	FToolContext Shift = RunwayContext;
 	Shift.bInsertModifier = true;
+	// FROM TARMAC, the step this test is about - grass is a fresh tool's default since 2026-09-28.
+	Runway.RestoreSurface(EPavement::Tarmac);
 	Runway.OnReselect(Shift);
 	TestEqual(TEXT("Shift steps from tarmac over locked concrete to reinforced"),
 		Runway.Surface, EPavement::Reinforced);
@@ -410,6 +413,139 @@ bool FRoadSurfaceRowOffersTheProfileListTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("still one row"), All.Num(), 1)) { return false; }
 	TestEqual(TEXT("an empty list offers all four - runways and stands"), All[0].Options.Num(), 4);
 	TestEqual(TEXT("and lights the current one by its place in the OFFERED list"), All[0].Current, 1);
+	return true;
+}
+
+namespace
+{
+	/** The registry index of the tool registered as Id, or INDEX_NONE. */
+	int32 TvToolIndex(const TCHAR* Id)
+	{
+		const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+		for (int32 Index = 0; Index < Registry.Num(); ++Index)
+		{
+			if (Registry[Index].Id == FName(Id)) { return Index; }
+		}
+		return INDEX_NONE;
+	}
+
+	/** The four tools that lay pavement, by registry Id - what the ruling named. */
+	const TCHAR* const TvSurfaceTools[] = { TEXT("Taxiway"), TEXT("Road"), TEXT("Runway"), TEXT("Stand") };
+
+	/** The surface Id's tool would lay next, read through the session as a driver would. */
+	TOptional<EPavement> TvSurfaceOf(FBuildSession& Session, const TCHAR* Id)
+	{
+		Session.SelectTool(TvToolIndex(Id));
+		const IBuildTool* Tool = Session.GetActiveTool();
+		return Tool != nullptr ? Tool->GetChosenSurface() : TOptional<EPavement>();
+	}
+}
+
+/**
+ * EVERY TOOL THAT LAYS PAVEMENT STARTS ON GRASS (ruled 2026-09-28): the cheapest surface is a
+ * new player's default and upgrading it is progression. Through a fresh session with no store,
+ * which is what a first launch is - nothing remembered yet.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTvSurfaceDefaultsToGrassTest,
+	"Airside.Tool.SurfacePreference.DefaultsToGrass",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTvSurfaceDefaultsToGrassTest::RunTest(const FString& Parameters)
+{
+	FBuildSession Session;
+	for (const TCHAR* Id : TvSurfaceTools)
+	{
+		if (!TestTrue(FString::Printf(TEXT("%s is in the registry"), Id), TvToolIndex(Id) != INDEX_NONE)) { continue; }
+		const TOptional<EPavement> Surface = TvSurfaceOf(Session, Id);
+		if (TestTrue(FString::Printf(TEXT("%s lays a surface"), Id), Surface.IsSet()))
+		{
+			TestEqual(FString::Printf(TEXT("%s starts on grass"), Id), *Surface, EPavement::Grass);
+		}
+	}
+	TestFalse(TEXT("a tool that lays nothing reports no surface"), TvSurfaceOf(Session, TEXT("Select")).IsSet());
+	TestFalse(TEXT("a session nobody handed a store remembers nothing"), Session.HasToolPreferences());
+	return true;
+}
+
+/**
+ * A SURFACE PICK OUTLIVES THE SESSION, per tool, through both doors a pick comes in by - the
+ * bar's click (SelectActiveVariant) and Shift+key again (SelectTool's reselect). The second
+ * session stands for the next launch: it is handed the same store and must come up on what the
+ * first one picked, while tools nobody touched stay on grass.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTvSurfaceRemembersAcrossSessionsTest,
+	"Airside.Tool.SurfacePreference.RemembersAcrossSessions",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTvSurfaceRemembersAcrossSessionsTest::RunTest(const FString& Parameters)
+{
+	FTvRunwayTarget Target;
+	Target.Profiles = { URoadProfile::MakeTransient(3000.0, 1500.0), URoadProfile::MakeTransient(4600.0, 1500.0) };
+	FToolContext Context;
+	Context.Target = &Target;
+
+	const TSharedPtr<FMemoryToolPreferences> Store = MakeShared<FMemoryToolPreferences>();
+	{
+		FBuildSession First;
+		First.SetToolPreferences(Store);
+		TestEqual(TEXT("restoring from an empty store writes nothing"), Store->GetWriteCount(), 0);
+
+		// THE BAR'S DOOR: the runway's Surface row is row 1 (Airside.Tool.Variants.Runway).
+		First.SelectTool(TvToolIndex(TEXT("Runway")));
+		if (!TestTrue(TEXT("the runway takes a concrete pick"),
+			First.SelectActiveVariant(Context, 1, static_cast<int32>(EPavement::Concrete)))) { return false; }
+		TestEqual(TEXT("the pick is written"), Store->Read(TEXT("Runway.Surface")).Get(FString()), FString(TEXT("Concrete")));
+		TestEqual(TEXT("once"), Store->GetWriteCount(), 1);
+
+		TestTrue(TEXT("a width pick is taken"), First.SelectActiveVariant(Context, 0, 1));
+		TestEqual(TEXT("and writes nothing - the surface did not change"), Store->GetWriteCount(), 1);
+
+		// THE KEY'S DOOR: Shift (the insert modifier) with the runway's key again steps the surface
+		// one along the scale, Concrete -> Reinforced (FRunwayTool::OnReselect).
+		FToolContext Shift = Context;
+		Shift.bInsertModifier = true;
+		First.SelectTool(TvToolIndex(TEXT("Runway")), Shift);
+		TestEqual(TEXT("Shift+key's step is written too"), Store->Read(TEXT("Runway.Surface")).Get(FString()), FString(TEXT("Reinforced")));
+	}
+
+	FBuildSession Next;
+	Next.SetToolPreferences(Store);
+	const TOptional<EPavement> Runway = TvSurfaceOf(Next, TEXT("Runway"));
+	TestTrue(TEXT("the next launch's runway comes up on the last pick"), Runway.IsSet() && *Runway == EPavement::Reinforced);
+	const TOptional<EPavement> Taxiway = TvSurfaceOf(Next, TEXT("Taxiway"));
+	TestTrue(TEXT("each tool remembers its own - the untouched taxiway is still grass"), Taxiway.IsSet() && *Taxiway == EPavement::Grass);
+
+	// A NAME THE ENUM DOES NOT HAVE (a hand-edited ini) keeps the default rather than casting it.
+	Store->Write(TEXT("Stand.Surface"), TEXT("Marble"));
+	FBuildSession Tampered;
+	AddExpectedMessage(TEXT("is not a pavement"), EAutomationExpectedMessageFlags::Contains, 1);
+	Tampered.SetToolPreferences(Store);
+	const TOptional<EPavement> Stand = TvSurfaceOf(Tampered, TEXT("Stand"));
+	TestTrue(TEXT("an unknown stored name leaves the stand on grass"), Stand.IsSet() && *Stand == EPavement::Grass);
+	return true;
+}
+
+/**
+ * THE CONFIG STORE ROUND-TRIPS through GGameUserSettingsIni: what one instance writes, a fresh
+ * one reads - the file, not the object, is what holds it. A TEST-ONLY KEY, removed after, so the
+ * player's real Taxiway/Road/Runway/Stand picks are neither read nor disturbed.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTvConfigPreferencesRoundTripTest,
+	"Airside.Tool.SurfacePreference.ConfigRoundTrips",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTvConfigPreferencesRoundTripTest::RunTest(const FString& Parameters)
+{
+	const FString Key = TEXT("AirsideTest.RoundTrip");
+	FConfigToolPreferences Writer;
+	Writer.Write(Key, TEXT("Concrete"));
+	const FConfigToolPreferences Reader;
+	TestEqual(TEXT("a fresh store reads what another wrote"), Reader.Read(Key).Get(FString()), FString(TEXT("Concrete")));
+	Writer.Remove(Key);
+	TestFalse(TEXT("and the test's key is gone again"), Reader.Read(Key).IsSet());
 	return true;
 }
 

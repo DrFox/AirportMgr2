@@ -140,7 +140,8 @@ bool FRsToolSurfaceRowTest::RunTest(const FString& Parameters)
 	FToolContext Context;
 	Context.Target = &Target;
 
-	// 1. THE ROW: after Width, tarmac then grass, tarmac lit - what every road before it was.
+	// 1. THE ROW: after Width, tarmac then grass, GRASS lit - the cheap start (2026-09-28; it was
+	// tarmac, what every road before the row was).
 	{
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
 		TArray<FToolVariantAxis> Axes;
@@ -150,19 +151,19 @@ bool FRsToolSurfaceRowTest::RunTest(const FString& Parameters)
 		if (!TestEqual(TEXT("two options"), Axes[Row].Options.Num(), 2)) { return false; }
 		TestEqual(TEXT("tarmac first"), Axes[Row].Options[0].Label.ToString(), FString(TEXT("tarmac")));
 		TestEqual(TEXT("grass second"), Axes[Row].Options[1].Label.ToString(), FString(TEXT("grass")));
-		TestEqual(TEXT("tarmac lit on a fresh tool"), Axes[Row].Current, 0);
-		TestEqual(TEXT("and it is what a click would lay"), Tool.GetSurface(), EPavement::Tarmac);
+		TestEqual(TEXT("grass lit on a fresh tool"), Axes[Row].Current, 1);
+		TestEqual(TEXT("and it is what a click would lay"), Tool.GetSurface(), EPavement::Grass);
 	}
 
 	// 2. A PICK SETS THE SURFACE, and leaves the width alone.
 	{
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
-		TestTrue(TEXT("picking grass is accepted"), Tool.SelectVariant(Context, 1, 1));
-		TestEqual(TEXT("the next click lays grass"), Tool.GetSurface(), EPavement::Grass);
+		TestTrue(TEXT("picking tarmac is accepted"), Tool.SelectVariant(Context, 1, 0));
+		TestEqual(TEXT("the next click lays tarmac"), Tool.GetSurface(), EPavement::Tarmac);
 		TestEqual(TEXT("the width was not touched"), Tool.GetWidthIndex(), INDEX_NONE);
 		TArray<FToolVariantAxis> Axes;
 		Tool.GetVariantAxes(Context, Axes);
-		TestEqual(TEXT("and grass is lit"), Axes[1].Current, 1);
+		TestEqual(TEXT("and tarmac is lit"), Axes[1].Current, 0);
 	}
 
 	// 3. SHIFT+KEY STEPS THE SURFACE; the plain key still steps the width.
@@ -171,13 +172,13 @@ bool FRsToolSurfaceRowTest::RunTest(const FString& Parameters)
 		FToolContext Shift = Context;
 		Shift.bInsertModifier = true;
 		Tool.OnReselect(Shift);
-		TestEqual(TEXT("Shift+key steps tarmac to grass"), Tool.GetSurface(), EPavement::Grass);
+		TestEqual(TEXT("Shift+key steps grass, the last option, round to tarmac"), Tool.GetSurface(), EPavement::Tarmac);
 		TestEqual(TEXT("and not the width"), Tool.GetWidthIndex(), INDEX_NONE);
 		Tool.OnReselect(Shift);
-		TestEqual(TEXT("then wraps back to tarmac"), Tool.GetSurface(), EPavement::Tarmac);
+		TestEqual(TEXT("then on to grass"), Tool.GetSurface(), EPavement::Grass);
 		Tool.OnReselect(Context);
 		TestNotEqual(TEXT("the plain key steps the width"), Tool.GetWidthIndex(), (int32)INDEX_NONE);
-		TestEqual(TEXT("and not the surface"), Tool.GetSurface(), EPavement::Tarmac);
+		TestEqual(TEXT("and not the surface"), Tool.GetSurface(), EPavement::Grass);
 	}
 
 	// 4. NO WIDTHS: surface is row 0, and a pick on row 0 means surface - the Id, not the index.
@@ -187,12 +188,12 @@ bool FRsToolSurfaceRowTest::RunTest(const FString& Parameters)
 		FToolContext EmptyContext;
 		EmptyContext.Target = &Empty;
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
-		TestTrue(TEXT("row 0 is surface when there are no widths"), Tool.SelectVariant(EmptyContext, 0, 1));
-		TestEqual(TEXT("so the pick lays grass"), Tool.GetSurface(), EPavement::Grass);
+		TestTrue(TEXT("row 0 is surface when there are no widths"), Tool.SelectVariant(EmptyContext, 0, 0));
+		TestEqual(TEXT("so the pick lays tarmac"), Tool.GetSurface(), EPavement::Tarmac);
 		FToolContext Shift = EmptyContext;
 		Shift.bInsertModifier = true;
 		Tool.OnReselect(Shift);
-		TestEqual(TEXT("and Shift+key still steps it with no widths to cycle"), Tool.GetSurface(), EPavement::Tarmac);
+		TestEqual(TEXT("and Shift+key still steps it with no widths to cycle"), Tool.GetSurface(), EPavement::Grass);
 	}
 	return true;
 }
@@ -216,6 +217,9 @@ bool FRsGrassRoadLaidTest::RunTest(const FString& Parameters)
 
 	// 1. THE TOOL'S PICK REACHES THE ROAD.
 	FRoadDrawTool Tool(ERoadKind::Taxiway);
+	// FROM TARMAC, so the Shift pick below changes something: grass is a fresh tool's default
+	// since 2026-09-28, and a pick of what is already chosen would pass without reaching the road.
+	Tool.RestoreSurface(EPavement::Tarmac);
 	{
 		FToolContext Pick = TestTool::ContextAt(*Actor, FVector2D::ZeroVector);
 		Pick.bInsertModifier = true;

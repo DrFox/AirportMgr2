@@ -609,6 +609,20 @@ struct AIRSIDE_API IBuildTool
 	virtual bool SelectVariant(const FToolContext& Context, int32 Axis, int32 Option) { return false; }
 
 	/**
+	 * The pavement the next placement lays, for FBuildSession to remember across launches - see
+	 * FBuildSession::SetToolPreferences. Unset for a tool that lays no pavement.
+	 *
+	 * A TYPED PAIR, not "remember whichever option the Surface row lights": reading the row
+	 * needs a context with a live target (a road's offered surfaces come from its profile), and
+	 * a session restoring at construction has none. The value, not the row index, is what
+	 * survives a content change that reorders the row.
+	 */
+	virtual TOptional<EPavement> GetChosenSurface() const { return {}; }
+
+	/** Puts back a remembered surface. False, nothing changed, for a tool that lays none. */
+	virtual bool RestoreSurface(EPavement Surface) { return false; }
+
+	/**
 	 * Whether a guide may position this gesture's FIRST click.
 	 *
 	 * ONE VIRTUAL, NOT PER-TOOL BOILERPLATE. Ruled 2026-09-20 from PIE: "a lot of the tools
