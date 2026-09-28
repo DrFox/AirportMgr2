@@ -35,7 +35,10 @@ namespace TaxiwayStrip
 	bool IsAircraftOnly(const URoadNetwork& Network, FRoadSegmentId Id)
 	{
 		const FRoadSegment* Segment = Network.GetSegment(Id);
-		if (Segment == nullptr || Segment->Profile == nullptr)
+		// THROUGH ProfileFor, the one accessor that repairs a reloaded segment's null Profile - read
+		// raw, a saved map lost every strip laid on the fallback profile (found 2026-09-29).
+		const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+		if (Profile == nullptr)
 		{
 			return false;
 		}
@@ -45,7 +48,7 @@ namespace TaxiwayStrip
 		// service road is exactly what the stand tool refuses); no truck line alone would
 		// admit a profile with no lines at all, which nothing can taxi on.
 		bool bAircraft = false;
-		for (const FProfileGuideline& Guideline : Segment->Profile->Guidelines)
+		for (const FProfileGuideline& Guideline : Profile->Guidelines)
 		{
 			if (Guideline.Class == ETraversalClass::GroundVehicle)
 			{
@@ -67,7 +70,8 @@ namespace TaxiwayStrip
 		{
 			return 0.0;
 		}
-		return IcaoCode::TaxiwayStripForWidth(Network.GetSegment(Id)->Profile->GetTotalWidth());
+		// THROUGH ProfileFor - see IsAircraftOnly; HasStrip has already proved it non-null.
+		return IcaoCode::TaxiwayStripForWidth(Network.ProfileFor(*Network.GetSegment(Id))->GetTotalWidth());
 	}
 
 	TOptional<FIntrusion> WorstIntrusion(const URoadNetwork& Network, TConstArrayView<FVector2D> Footprint)
@@ -91,6 +95,8 @@ namespace TaxiwayStrip
 				continue;
 			}
 			const FRoadSegment& Segment = Segments[Index];
+			// THROUGH ProfileFor - see IsAircraftOnly; HasStrip has already proved it non-null.
+			const URoadProfile* Profile = Network.ProfileFor(Segment);
 			FVector2D A, B;
 			if (!Network.SegmentEnds(Id, A, B))
 			{
@@ -124,9 +130,9 @@ namespace TaxiwayStrip
 
 			// THE WIDER HALF, so an asymmetric profile is judged on its generous side rather
 			// than leaving a sliver on the narrow one uncounted.
-			const double Pavement = Segment.Profile->GetTotalWidth();
+			const double Pavement = Profile->GetTotalWidth();
 			const double Strip = IcaoCode::TaxiwayStripForWidth(Pavement);
-			const double Depth = Segment.Profile->GetMaxHalfWidth() + Strip - Nearest;
+			const double Depth = Profile->GetMaxHalfWidth() + Strip - Nearest;
 			if (Depth > ToleranceUu && (!Worst.IsSet() || Depth > Worst->Depth))
 			{
 				FIntrusion Found;

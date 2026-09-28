@@ -521,4 +521,21 @@ bool FTaxiwayStripQueryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayStripReloadedProfileTest, "Airside.Model.TaxiwayStrip.ReloadedSegmentHasAStrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayStripReloadedProfileTest::RunTest(const FString&)
+{
+	// A SEGMENT RELOADED FROM A SAVED LEVEL carries a null Profile when it was laid with the
+	// actor's transient fallback (RoadSurfacePresenter's DefaultProfile comment); ProfileFor
+	// repairs it. The strip must be read through the same accessor, or a reloaded map has none.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	Net->DefaultProfile = URoadProfile::MakeTransient(2400.0, 1600.0);
+	const FRoadSegmentId Taxi = Net->AddSegment(Net->AddNode({ -10000.0, 0.0 }), Net->AddNode({ 10000.0, 0.0 }),
+		FVector2D::ZeroVector, nullptr);
+	TestEqual(TEXT("the reloaded taxiway still has E's strip"), TaxiwayStrip::StripWidthOf(*Net, Taxi), 2800.0, 0.5);
+	const TArray<FVector2D> Flush{ { -2000.0, 1200.0 }, { 2000.0, 1200.0 }, { 2000.0, 5200.0 }, { -2000.0, 5200.0 } };
+	TestTrue(TEXT("and a stand flush to it intrudes"), TaxiwayStrip::WorstIntrusion(*Net, Flush).IsSet());
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
