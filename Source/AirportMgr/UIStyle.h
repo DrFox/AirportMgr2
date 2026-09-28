@@ -92,6 +92,8 @@ public:
 
 	/** A window's drop shadow. Translucent black, so it darkens grass and concrete alike. */
 	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Shadow = FLinearColor(0.0f, 0.0f, 0.0f, 0.16f);
+	/** The sheet under a modal dialog - the world dimmed, still readable behind it. */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Scrim = FLinearColor(0.0f, 0.0f, 0.0f, 0.30f);
 
 	/** The selected tool, AND NOTHING ELSE. Sheet: vehicles, yellow. If a second thing
 	 *  takes this colour, the player stops being able to see at a glance what is armed. */

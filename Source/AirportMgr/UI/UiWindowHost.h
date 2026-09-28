@@ -76,6 +76,9 @@ public:
 	/** "Reset window layout": forget everything and put every window back where it starts. */
 	void ResetLayout();
 
+	/** A modal window is showing - its scrim is up and the game's keys wait (the controller asks). */
+	bool IsModalOpen() const;
+
 	/** The window's rectangle now, host-local. Empty box for an unknown id. */
 	FBox2D WindowRect(FName Id) const;
 	FVector2D ToLocal(FVector2D ScreenPosition) const;
@@ -83,6 +86,7 @@ public:
 	void TickForTest(float DeltaTime) { TickWindows(DeltaTime); }
 	void SetViewSizeForTest(FVector2D Size) { ViewSize = Size; }
 	UUiWindow* WindowForTest(FName Id) const;
+	UUserWidget* ScrimForTest() const { return Scrim; }
 	int32 ZOrderForTest(FName Id) const;
 	/** An AboveBarLeft window's distance above the screen's bottom, as its slot has it. */
 	double WindowClearanceForTest(FName Id) const;
@@ -99,6 +103,8 @@ private:
 	FUiWindowEntry* Find(FName Id);
 	const FUiWindowEntry* Find(FName Id) const;
 	void Apply(FUiWindowEntry& E);
+	/** Shows the scrim under a modal that just opened (and raises both), hides it when none is. */
+	void UpdateScrim(const FUiWindowEntry& Changed);
 	void TickWindows(float DeltaTime);
 	/** Folds a window's slot to top-left anchoring at its current rectangle. */
 	void Place(FUiWindowEntry& E);
@@ -112,6 +118,8 @@ private:
 
 	UPROPERTY() TArray<FUiWindowEntry> Windows;
 	UPROPERTY() TObjectPtr<UCanvasPanel> Canvas;
+	/** Under the modal window, over everything else; Collapsed while no modal shows. */
+	UPROPERTY() TObjectPtr<UUserWidget> Scrim;
 	UPROPERTY() TObjectPtr<const UBuildBarWidget> DockBar;
 	UPROPERTY() TObjectPtr<const UUIStyle> Style;
 	TSharedPtr<IUiLayoutStore> LayoutStore;

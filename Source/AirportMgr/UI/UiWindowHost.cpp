@@ -6,6 +6,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "RoadBuildLog.h"
+#include "UI/UiScrim.h"
 #include "UI/UiWindow.h"
 #include "UI/WindowSnap.h"
 #include "UIStyle.h"
@@ -20,6 +21,12 @@ bool UUiWindowHost::Initialize()
 	Style = UAirportMgrUISettings::ResolveStyle();   // never null
 	Canvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("WindowCanvas"));
 	WidgetTree->RootWidget = Canvas;
+	UUiScrim* Sheet = WidgetTree->ConstructWidget<UUiScrim>(UUiScrim::StaticClass(), TEXT("ModalScrim"));
+	Sheet->Build(*Style);
+	UCanvasPanelSlot* SheetSlot = Canvas->AddChildToCanvas(Sheet);
+	SheetSlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
+	SheetSlot->SetOffsets(FMargin(0.0f));
+	Scrim = Sheet;
 	// Click-transparent: empty screen between windows still reaches the game.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	return bOk;
@@ -71,6 +78,11 @@ void UUiWindowHost::ApplyDefaultPlacement(FUiWindowEntry& E)
 		CanvasSlot->SetAnchors(FAnchors(1.0f, 0.0f));
 		CanvasSlot->SetAlignment(FVector2D(1.0, 0.0));
 		CanvasSlot->SetPosition(FVector2D(-E.Spec.Offset.X, E.Spec.Offset.Y));
+		break;
+	case EUiWindowAnchor::Centre:
+		CanvasSlot->SetAnchors(FAnchors(0.5f, 0.5f));
+		CanvasSlot->SetAlignment(FVector2D(0.5, 0.5));
+		CanvasSlot->SetPosition(E.Spec.Offset);
 		break;
 	case EUiWindowAnchor::AboveBarLeft:
 		CanvasSlot->SetAnchors(FAnchors(0.0f, 1.0f));
@@ -190,6 +202,10 @@ void UUiWindowHost::Apply(FUiWindowEntry& E)
 		E.Window->SetVisibility(Wanted);
 		UE_LOG(LogRoadBuild, Log, TEXT("Window %s: %s"), *E.Spec.Id.ToString(),
 			Wanted == ESlateVisibility::Collapsed ? TEXT("hidden") : TEXT("shown"));
+		if (E.Spec.bModal)
+		{
+			UpdateScrim(E);
+		}
 	}
 }
 
@@ -438,4 +454,30 @@ double UUiWindowHost::WindowClearanceForTest(FName Id) const
 {
 	const FUiWindowEntry* E = Find(Id);
 	return E != nullptr && E->Slot != nullptr ? -E->Slot->GetPosition().Y : 0.0;
+}
+
+bool UUiWindowHost::IsModalOpen() const
+{
+	return Windows.ContainsByPredicate([](const FUiWindowEntry& E) { return E.Spec.bModal && E.bWanted && !E.bUserClosed; });
+}
+
+void UUiWindowHost::UpdateScrim(const FUiWindowEntry& Changed)
+{
+	if (Scrim == nullptr)
+	{
+		return;
+	}
+	const bool bUp = IsModalOpen();
+	Scrim->SetVisibility(bUp ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	if (bUp && Changed.bWanted && !Changed.bUserClosed && Changed.Slot != nullptr)
+	{
+		// ABOVE EVERYTHING, THEN THE DIALOG ABOVE IT: the scrim covers every window opened before,
+		// and the dialog stays the one thing on screen that takes a press.
+		if (UCanvasPanelSlot* SheetSlot = Cast<UCanvasPanelSlot>(Scrim->Slot))
+		{
+			SheetSlot->SetZOrder(++TopZ);
+		}
+		Changed.Slot->SetZOrder(++TopZ);
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("Window host: modal %s %s"), *Changed.Spec.Id.ToString(), bUp ? TEXT("up") : TEXT("down"));
 }

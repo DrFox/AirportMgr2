@@ -8,6 +8,8 @@
 #include "LedgerPanelWidget.h"
 #include "Misc/AutomationTest.h"
 #include "OfferInboxWidget.h"
+#include "SettingsPanelWidget.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Testing/AirsideTestWorld.h"
 #include "UI/UiButton.h"
 #include "UI/UiLayoutStore.h"
@@ -564,6 +566,64 @@ bool FUiLayoutAutoSizeFitTest::RunTest(const FString& Parameters)
 	F.Host->TickForTest(0.016f);
 	TestEqual(TEXT("too near the edge for even the minimum size: the default top-right placement"),
 		F.Host->WindowRect(TEXT("offers")).Min, FVector2D(1920.0 - 12.0, 12.0));
+	return true;
+}
+
+/**
+ * A MODAL WINDOW PUTS A SCRIM UNDER ITSELF that swallows every press over the rest of the screen -
+ * the other windows AND the world - and takes it away when it closes (spec section 2, Modal). The
+ * scrim sits between the modal and everything else, so the modal itself is still clickable.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiModalScrimTest, "AirportMgr.UI.WindowHost.ModalScrimSwallowsPresses",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiModalScrimTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	USettingsPanelWidget* Settings = CreateWidget<USettingsPanelWidget>(F.TestWorld.World, USettingsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("a ledger window"), F.Window) || !TestNotNull(TEXT("a settings panel"), Settings)) { return false; }
+	if (!TestNotNull(TEXT("settings is hosted"), F.Host->AddWindow(*Settings))) { return false; }
+	UUserWidget* Scrim = F.Host->ScrimForTest();
+	if (!TestNotNull(TEXT("the host has a scrim"), Scrim)) { return false; }
+	F.Ledger->Toggle();
+
+	TestFalse(TEXT("no modal before Settings opens"), F.Host->IsModalOpen());
+	TestEqual(TEXT("and no scrim"), Scrim->GetVisibility(), ESlateVisibility::Collapsed);
+
+	Settings->Toggle();
+	TestTrue(TEXT("Settings open is a modal"), F.Host->IsModalOpen());
+	TestNotEqual(TEXT("the scrim shows"), Scrim->GetVisibility(), ESlateVisibility::Collapsed);
+	const int32 ScrimZ = Cast<UCanvasPanelSlot>(Scrim->Slot)->GetZOrder();
+	TestTrue(TEXT("the scrim is above the ledger"), ScrimZ > F.Host->ZOrderForTest(TEXT("ledger")));
+	TestTrue(TEXT("and below Settings, which stays clickable"), ScrimZ < F.Host->ZOrderForTest(TEXT("settings")));
+
+	const TSharedRef<SWidget> Slate = Scrim->TakeWidget();
+	TestTrue(TEXT("a press on the scrim stops there"), Slate->OnMouseButtonDown(FGeometry(), FPointerEvent()).IsEventHandled());
+	TestTrue(TEXT("so does a double-click"), Slate->OnMouseButtonDoubleClick(FGeometry(), FPointerEvent()).IsEventHandled());
+	TestTrue(TEXT("and the wheel - no zooming the world behind a dialog"), Slate->OnMouseWheel(FGeometry(), FPointerEvent()).IsEventHandled());
+
+	Settings->Toggle();
+	TestFalse(TEXT("closed, no modal"), F.Host->IsModalOpen());
+	TestEqual(TEXT("and the scrim goes"), Scrim->GetVisibility(), ESlateVisibility::Collapsed);
+	return true;
+}
+
+/** A DIALOG OPENS IN THE MIDDLE, where the eye already is - not in a corner the others own. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiModalCentredTest, "AirportMgr.UI.WindowHost.ModalOpensCentred",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiModalCentredTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	USettingsPanelWidget* Settings = CreateWidget<USettingsPanelWidget>(F.TestWorld.World, USettingsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("a settings panel"), Settings)) { return false; }
+	UUiWindow* W = F.Host->AddWindow(*Settings);
+	if (!TestNotNull(TEXT("settings is hosted"), W)) { return false; }
+	const UCanvasPanelSlot* S = Cast<UCanvasPanelSlot>(W->Slot);
+	if (!TestNotNull(TEXT("on the canvas"), S)) { return false; }
+	TestEqual(TEXT("anchored at the centre"), S->GetAnchors().Minimum, FVector2D(0.5, 0.5));
+	TestEqual(TEXT("aligned on its own centre"), S->GetAlignment(), FVector2D(0.5, 0.5));
+	TestEqual(TEXT("with no offset"), S->GetPosition(), FVector2D::ZeroVector);
 	return true;
 }
 
