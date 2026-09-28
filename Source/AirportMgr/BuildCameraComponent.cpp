@@ -86,7 +86,7 @@ void UBuildCameraComponent::UpdateView(float DeltaTime, double Right, double For
 		if (ARoadAgentActor* Agent = Target->GetAgentView(WatchAgentId))
 		{
 			WatchTarget.ApplyLimits(WatchLimits);
-			WatchTarget.Pan(Right, Forward, PanRate, DeltaTime);
+			WatchTarget.Pan(Right, Forward, PanRate * PanScale, DeltaTime);
 			WatchTarget.Focus = WatchTarget.Focus.GetClampedToMaxSize(WatchMaxFocusOffset);
 			// Keys are a rate and need DeltaTime; the mouse delta is already a per-frame
 			// distance and must NOT have it - see UpdateView's own comment.
@@ -123,7 +123,7 @@ void UBuildCameraComponent::UpdateFreeView(float DeltaTime, double Right, double
 	}
 
 	TargetView.ApplyLimits(ViewLimits);
-	TargetView.Pan(Right, Forward, PanRate, DeltaTime);
+	TargetView.Pan(Right, Forward, PanRate * PanScale, DeltaTime);
 	// Keys are a rate and need DeltaTime; the mouse delta is already a per-frame distance and
 	// must NOT have it - see UpdateView's own comment.
 	TargetView.Rotate(Turn * RotateRate * DeltaTime + TurnPixels * MouseRotateRate);
@@ -133,13 +133,20 @@ void UBuildCameraComponent::UpdateFreeView(float DeltaTime, double Right, double
 		CurrentView.CameraLocation(SurfaceZ), CurrentView.CameraRotation());
 }
 
+void UBuildCameraComponent::SetPlayerSpeedScales(double Pan, double Zoom)
+{
+	PanScale = FMath::Max(0.0, Pan);
+	ZoomScale = FMath::Max(0.0, Zoom);
+}
+
 void UBuildCameraComponent::ZoomBy(double Notches)
 {
 	// The wheel drives whichever rig owns the camera. Zooming the hidden build view while
 	// watching would be a surprise stored up for the moment the watch ends.
 	FBuildCameraRig& View = bWatchingAgent ? WatchTarget : TargetView;
 	View.ApplyLimits(bWatchingAgent ? WatchLimits : ViewLimits);
-	View.Zoom(ZoomStep, Notches);
+	// Capped where ZoomStep's own ClampMax is: a notch that more than doubles the distance is a jump.
+	View.Zoom(FMath::Min(ZoomStep * ZoomScale, 0.9), Notches);
 
 	UE_LOG(LogRoadBuild, Log, TEXT("%s %.0f uu out, %.1f degrees"),
 		bWatchingAgent ? TEXT("Watch") : TEXT("View"), View.Distance, View.PitchDegrees());
