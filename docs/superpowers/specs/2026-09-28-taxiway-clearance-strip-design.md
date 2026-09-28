@@ -33,11 +33,13 @@ clear a STRIP beside it; so does this.
 ## The strip
 
 **Every taxiway has a clearance strip each side of its pavement, sized by the TAXIWAY's
-letter** - the largest wingspan it admits (`URoadProfile::MaxWingspan`), never the letter of
-whatever is placed beside it (per "taxi lines are painted infrastructure": size ground for the
+letter**, read from its pavement width: the largest letter whose ICAO minimum taxiway width
+(A 7.5, B 10.5, C 15, D 18, E 23, F 25 m) the pavement meets - never the letter of whatever is
+placed beside it. Not `MaxWingspan` - taxiway guidelines carry 0 (unlimited). Not nearest-width,
+the runway rule: the game's 24 m sits exactly between E and F (per "taxi lines are painted infrastructure": size ground for the
 largest aircraft admitted).
 
-    Strip = MaxWingspan/2 - PavementWidth/2 + WingtipClearanceForLetter(taxiway letter)
+    Strip = MaxWingspanForLetter(letter)/2 - PavementWidth/2 + WingtipClearanceForLetter(letter)
 
 | Taxiway | Pavement | Max span | Wing past edge | Clearance | Strip |
 |---|---|---|---|---|---|
@@ -115,6 +117,8 @@ crossing appears to build, but the yield has not been read. Stage 4 checks it fi
   floor depth, and the ghost shows both parts. A stand already drawn before stage 2 keeps its
   outline; if what remains beyond the strip is under floor depth it is invalid (same state as
   an upgrade leaves it in), and is redrawn. No player saves exist, so only test maps pay.
+- Implemented as: the tool anchors the entrance at pavement edge + strip, so the committed
+  outline is the parking box alone and no `StandBox` reader changes.
 
 ### Paint (user, from BHX)
 
@@ -161,8 +165,8 @@ restores for free.
 Each ships alone and leaves the game playable.
 
 1. **The strip, measured.** `Model/` query + derived strip width per profile; world-free tests
-   pin the table above. Nothing refuses yet; a debug overlay draws the strips. Visible: the
-   player can see the zones on the current map.
+   pin the table above. Nothing refuses yet. No overlay - stage 2's gap is the visible
+   strip.
 2. **Stands set back.** Entrance edge to strip edge; `PoseFor`, `AnchorLink`,
    `StandMarkingBuilder`; lead-in paint gap. Test: a stand off each letter of taxiway has its
    parked tail clear of the widest wing that taxiway admits - measured against the aircraft's
