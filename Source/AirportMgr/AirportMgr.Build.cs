@@ -7,6 +7,11 @@ public class AirportMgr : ModuleRules
 	public AirportMgr(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+
+		// The module root, so a file in a subfolder includes its siblings' headers as "UI/UiButton.h"
+		// and the flat module's own as "UIStyle.h". Every file sat at the root until the UI library
+		// (2026-09-28), which is why nothing needed it before.
+		PrivateIncludePaths.Add(ModuleDirectory);
 	
 		// Airside: the game module drives the road facade. AirportOps: the game module drives
 		// the sim clock and save/load. Both dependencies run this way only - neither plugin
