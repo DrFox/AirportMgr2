@@ -83,8 +83,17 @@ void UJobBoard::GoToFacility(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, 
 		Vehicle.State = EServiceVehicleState::ToFacility;
 		return;
 	}
-	// DriveVehicleTo retired it where it stood (and said so). Idle at home is the honest state: the
-	// depot keeps its vehicle, which is the leak UFuelService's GoingHome existed to prevent.
+	// DriveVehicleTo retired it where it stood (and said so) - OR WAS NEVER ASKED, because the depot is
+	// gone (final review #2, 2026-09-28): then the agent is still on the road, and zeroing the id here
+	// would leave it there for the session with nothing that knows it. Retired here in that case.
+	// Idle at home is the honest state: the depot keeps its vehicle, which is the leak UFuelService's
+	// GoingHome existed to prevent.
+	// ENFORCED BY: AirportOps.Fuel.DepotGoneBeforeRecallLeavesNoAgent
+	if (Vehicle.AgentId != 0 && Traffic.FindAgent(Vehicle.AgentId) != nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Fuel: truck %d has no depot to go home to; retired where it stands"), Vehicle.AgentId);
+		Traffic.RetireAgent(Vehicle.AgentId);
+	}
 	Vehicle.AgentId = 0;
 	Vehicle.State = EServiceVehicleState::Idle;
 	++FleetRevision;
@@ -111,14 +120,6 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 			return false;
 		}
 
-		// At LOG, not Verbose: a dispatch happens once per trip, not per tick, so this costs one line a
-		// trip - and a line the player has to switch on is a line that is not there in the session
-		// that needed it.
-		UE_LOG(LogAirportOps, Log,
-			TEXT("Fuel route: vehicle %d, depot %d to guideline node %d, %.0f uu over %d point(s): %s"),
-			Vehicle.Id, Vehicle.Home.Index, Goal.Index,
-			GuidelineGeom::PolylineLength(Plan.Polyline), Plan.Polyline.Num(), *JobBoardDrive::DescribePath(Plan));
-
 		// ShutdownPause 0 - see TruckShutdownPause. A TOW IS DISPATCHED WHOLE by this same call:
 		// FRoadAgent::StartDrive lays one axle per tow link, and the agent arms FTowReverseRun on a
 		// reverse leg because its vehicle has a trailer - nothing here has to know which kind it sent.
@@ -127,13 +128,27 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 		if (NewId == 0)
 		{
 			// The model refused a plan the search called valid. Nothing about the AIRPORT is wrong, so
-			// a rebuild is not what would fix it: the caller re-opens the job and the next tick is a
-			// free retry.
-			UE_LOG(LogAirportOps, Warning,
-				TEXT("Fuel: vehicle %d - depot %d had a route but the dispatch was refused"),
-				Vehicle.Id, Vehicle.Home.Index);
+			// a rebuild is not what would fix it: the caller keeps the job queued and the next tick is a
+			// free retry. SAID ONCE PER VEHICLE until a dispatch of it works (final review #5): the retry
+			// runs every tick, and a line a tick buries every other line in the file.
+			if (!DispatchRefusedWarned.Contains(Vehicle.Id))
+			{
+				DispatchRefusedWarned.Add(Vehicle.Id);
+				UE_LOG(LogAirportOps, Warning,
+					TEXT("Fuel: vehicle %d - depot %d had a route but the dispatch was refused; retrying each tick"),
+					Vehicle.Id, Vehicle.Home.Index);
+			}
 			return false;
 		}
+		DispatchRefusedWarned.Remove(Vehicle.Id);
+
+		// At LOG, not Verbose: a dispatch happens once per trip, not per tick, so this costs one line a
+		// trip - and a line the player has to switch on is a line that is not there in the session
+		// that needed it. AFTER THE DISPATCH, so a refused one does not print its route every retry.
+		UE_LOG(LogAirportOps, Log,
+			TEXT("Fuel route: vehicle %d, depot %d to guideline node %d, %.0f uu over %d point(s): %s"),
+			Vehicle.Id, Vehicle.Home.Index, Goal.Index,
+			GuidelineGeom::PolylineLength(Plan.Polyline), Plan.Polyline.Num(), *JobBoardDrive::DescribePath(Plan));
 		Vehicle.AgentId = NewId;
 		UE_LOG(LogAirportOps, Log,
 			TEXT("Fuel: depot %d sends truck %d (vehicle %d, %s) to guideline node %d (%.0f uu)"),
@@ -245,6 +260,18 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 		// its state is heading for and sends it on from there, parked.
 		UE_LOG(LogAirportOps, Log,
 			TEXT("Fuel: truck %d finishes its leg to the service point and turns for %s there"), TruckId, Where);
+		return true;
+	}
+
+	// REVERSING (or any other motion that is not the road and not parked): RedirectAgent refuses it, so
+	// the parked path below would retire the vehicle where it stood (final review #3, 2026-09-28; the
+	// old SendTruckHome had the same Taxiing-only test). It FINISHES THE LEG - backing off one stand at
+	// the start of a chained leg, into a bay at the end of one - and OnVehicleArrived sends it on from
+	// the service point it parks at, exactly as the last-leg recall above does.
+	// ENFORCED BY: AirportOps.Fuel.TowRecalledWhileReversingGetsHome
+	if (Truck->Phase != EAgentPhase::Parked)
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Fuel: truck %d finishes its reverse and turns for %s where it parks"), TruckId, Where);
 		return true;
 	}
 

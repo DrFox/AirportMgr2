@@ -377,8 +377,12 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 		// clear each other by 750 uu and each is nearer the road (3910 uu) than the other -
 		// and this stand's pose ray still reaches the taxiway 16 000 uu west, inside the
 		// 20 000 uu aircraft cap.
-		Stand2 = Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(6000.0, 0.0), 0.0,
-			/*DesignWingspan=*/3600.0, StandDef->PoseRole, StandDef->Trucks);
+		// A DRAWN STAND OF THE FIRST ONE'S LETTER when the test drew the first - the tow's chain needs
+		// two stands it may serve; else the shipping Code C, as every older test here expects.
+		Stand2 = StandLetter.IsSet()
+			? FuelServiceTest::PlaceDrawnStand(*Net, *StandLetter, FVector2D(6000.0, 0.0))
+			: Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(6000.0, 0.0), 0.0,
+				/*DesignWingspan=*/3600.0, StandDef->PoseRole, StandDef->Trucks);
 	}
 
 	// AFTER THE STANDS, because the spurs are laid along their far edges - see LaySouthRoad.
@@ -2206,13 +2210,15 @@ namespace FuelServiceTest
 		int32 Trucks = 0;
 	};
 
-	FTwoJobRun RunTwoJobs(FAutomationTestBase& Test, double BowserCapacity)
+	FTwoJobRun RunTwoJobs(FAutomationTestBase& Test, double BowserCapacity, TOptional<EIcaoCode> Letter = TOptional<EIcaoCode>())
 	{
 		FTwoJobRun Run;
 		FFuelFixture Fixture;
 		Fixture.bSecondStand = true;
+		Fixture.StandLetter = Letter;
 		Fixture.Build(/*bWithRoad=*/true);
-		const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+		// THE LETTER'S VEHICLE - the bowser on C, the utility tow on A and B.
+		const FName Bowser = Fixture.Service->VehiclesFor(Letter.Get(EIcaoCode::C)).TypeCode;
 		// THE BOWSER ALONE, and a 2 L/min pump: 300 L is 150 game minutes, two real minutes at the
 		// fixture's 72x - longer than the second aircraft's taxi in.
 		Fixture.Service->DefaultFleetTypes = { Bowser };
@@ -2331,6 +2337,146 @@ bool FFuelDepotDeletedWithdrawsTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the job survives"), Job)) { return false; }
 	TestEqual(TEXT("unserviceable"), static_cast<int32>(Job->State), static_cast<int32>(EServiceJobState::Unserviceable));
 	TestEqual(TEXT("because there is no depot now"), static_cast<int32>(Job->Why), static_cast<int32>(EServiceRefusal::NoDepot));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTowChainsStandToStandTest, "AirportOps.Fuel.TowChainsStandToStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelTowChainsStandToStandTest::RunTest(const FString& Parameters)
+{
+	// FINAL REVIEW #4 (2026-09-28): the seeded reverse off a stand is shared by the job leg and the
+	// home leg, and only the home leg was tested. The TOW is the vehicle whose reverse can fail - its
+	// trailer - so a tow with fuel to spare chains two B stands on one agent.
+	const FuelServiceTest::FTwoJobRun Run = FuelServiceTest::RunTwoJobs(*this, 10000.0, EIcaoCode::B);
+	TestTrue(TEXT("both aircraft are fuelled"), Run.bBothServed);
+	TestTrue(TEXT("by one agent - the tow backed off the first stand onto the second's leg, not retired"), Run.Agents.Num() == 1);
+	TestTrue(TEXT("it drove from one stand to the next"), FuelServiceTest::BetweenServes(Run, EServiceVehicleState::ToJob));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelUnreachableQueueSendsItHomeTest, "AirportOps.Fuel.UnreachableQueueSendsItHome",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelUnreachableQueueSendsItHomeTest::RunTest(const FString& Parameters)
+{
+	// FINAL REVIEW #1 (2026-09-28): a vehicle whose serve ends with TWO queued jobs it cannot set off
+	// for was left Serving with no job, parked on the hydrant for the session: StartNext's loop bound
+	// shrank as it popped the failures and it exited before the "nothing left, go home" branch. The
+	// two jobs here name no stand, so neither can be driven to.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+	Fixture.Service->DefaultFleetTypes = { Bowser };
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+
+	int32 VehicleId = 0;
+	if (!TestTrue(TEXT("the bowser starts serving"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Fixture.Service->GetVehicles().FindByPredicate(
+				[](const FServiceVehicle& Each) { return Each.State == EServiceVehicleState::Serving; });
+			VehicleId = V != nullptr ? V->Id : 0;
+			return VehicleId != 0;
+		}, 240.0))) { return false; }
+
+	TArray<int32> Unreachable;
+	for (int32 Index = 0; Index < 2; ++Index)
+	{
+		FServiceJob& Job = Fixture.Service->AddJobForTest(900 + Index, EServiceJobState::Queued, EServiceRefusal::None, 0);
+		Job.QuantityOwed = 100.0;
+		Job.VehicleId = VehicleId;
+		Unreachable.Add(Job.Id);
+	}
+	const_cast<FServiceVehicle*>(Fixture.Service->FindVehicle(VehicleId))->Queue.Append(Unreachable);
+
+	TestTrue(TEXT("once its serve ends it goes home, rather than standing on the hydrant"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Fixture.Service->FindVehicle(VehicleId);
+			return V != nullptr && (V->State == EServiceVehicleState::ToFacility || V->State == EServiceVehicleState::AtFacility
+				|| V->State == EServiceVehicleState::Idle);
+		}, 600.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelDepotGoneBeforeRecallTest, "AirportOps.Fuel.DepotGoneBeforeRecallLeavesNoAgent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelDepotGoneBeforeRecallTest::RunTest(const FString& Parameters)
+{
+	// FINAL REVIEW #2 (2026-09-28): the depot deleted and the aircraft gone IN THE SAME FRAME, before
+	// the board's tick. The recall asks for the way home, there is no home, and the vehicle was set
+	// Idle with its agent still on the road - which the next tick's withdrawal then could not retire,
+	// because it no longer knew the agent. A truck nobody owns, parked for the session.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+	int32 TruckId = 0;
+	if (!TestTrue(TEXT("a truck goes out"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceJob* Job = Fixture.Service->JobForAircraft(Aircraft);
+			TruckId = Job != nullptr ? Fixture.Service->AgentForJob(*Job) : 0;
+			return TruckId != 0;
+		}, 30.0))) { return false; }
+
+	Fixture.Net->RemoveEntity(Fixture.Depot);
+	Fixture.Traffic->RetireAgent(Aircraft);
+	Fixture.Advance(0.2);
+	TestNull(TEXT("the truck is not left on the road"), Fixture.Traffic->FindAgent(TruckId));
+	TestEqual(TEXT("and its vehicle went with the depot"), Fixture.Service->GetVehicles().Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTowRecalledWhileReversingTest, "AirportOps.Fuel.TowRecalledWhileReversingGetsHome",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelTowRecalledWhileReversingTest::RunTest(const FString& Parameters)
+{
+	// FINAL REVIEW #3 (2026-09-28; the shape predates the job board): a recall that finds the vehicle
+	// REVERSING fell to the parked path, whose redirect refuses a reversing agent - so the tow was
+	// retired where it stood, instantly "home". WHERE A TOW REVERSES WHILE STILL OUT FOR A JOB: backing
+	// off one stand at the start of a chained leg to the next. The next stand's aircraft leaves then.
+	FFuelFixture Fixture;
+	Fixture.bSecondStand = true;
+	Fixture.StandLetter = EIcaoCode::B;
+	Fixture.Build(/*bWithRoad=*/true);
+	const FName Tow = Fixture.Service->VehiclesFor(EIcaoCode::B).TypeCode;
+	Fixture.Service->DefaultFleetTypes = { Tow };
+	// A BIG TANK so it chains, and a slow pump so the second aircraft is on stand before the first is done.
+	Fixture.Service->VehicleSpecs.Add(Tow, FFuelVehicleSpec(10000.0, 2.0));
+
+	FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
+	GLog->AddOutputDevice(&Spy);
+	const int32 First = Fixture.ParkAircraft();
+	const int32 Second = First != 0 ? Fixture.ParkAircraftAt(Fixture.StandPose2) : 0;
+	int32 TruckId = 0;
+	const bool bReversing = Second != 0 && Fixture.AdvanceUntil([&]
+		{
+			const FServiceJob* Job = Fixture.Service->JobForAircraft(Second);
+			const int32 Out = Job != nullptr ? Fixture.Service->AgentForJob(*Job) : 0;
+			TruckId = Out != 0 ? Out : TruckId;
+			const FRoadAgent* Truck = Out != 0 ? Fixture.Traffic->FindAgent(Out) : nullptr;
+			return Truck != nullptr && Truck->Phase == EAgentPhase::Reversing && Job->State == EServiceJobState::Underway;
+		}, 600.0);
+	if (bReversing)
+	{
+		Fixture.Traffic->RetireAgent(Second);
+	}
+	const bool bGone = bReversing && Fixture.AdvanceUntil([&] { return Fixture.Traffic->FindAgent(TruckId) == nullptr; }, 600.0);
+	GLog->RemoveOutputDevice(&Spy);
+
+	if (!TestTrue(TEXT("the premise: the tow was backing off the first stand toward the second when the second aircraft went"), bReversing)) { return false; }
+	bool bHomeLine = false;
+	for (const FString& Line : Spy.CapturedLines)
+	{
+		bHomeLine |= Line.Contains(FString::Printf(TEXT("truck %d home at depot"), TruckId));
+	}
+	TestTrue(TEXT("the tow left the traffic model"), bGone);
+	TestTrue(TEXT("by arriving home, not by being retired where it stood"), bHomeLine);
 	return true;
 }
 

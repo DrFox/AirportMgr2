@@ -469,6 +469,10 @@ private:
 	/** Unknown vehicle codes already warned about - see SpecFor. */
 	mutable TSet<FName> WarnedSpecs;
 
+	/** Vehicles whose refused dispatch has been warned about, until one of theirs works - see
+	 *  DriveVehicleTo. */
+	TSet<int32> DispatchRefusedWarned;
+
 	/**
 	 * Bumped whenever a vehicle's availability changes: a step ends, a vehicle is added or withdrawn.
 	 * The fleet's half of "has anything changed that a re-bid could answer differently" (stage 2);

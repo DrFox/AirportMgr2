@@ -475,8 +475,13 @@ void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, con
 	const FServiceVehicleType Type = TypeFor(Vehicle.TypeCode);
 
 	// A BOUNDED LOOP: each pass either returns or drops a job it could not reach from the queue, so a
-	// queue of unreachable jobs cannot spin.
-	for (int32 Guard = 0; Guard <= Vehicle.Queue.Num() + 1; ++Guard)
+	// queue of unreachable jobs cannot spin. THE BOUND IS TAKEN ONCE (final review #1, 2026-09-28): it
+	// read Queue.Num() each pass, which the failures themselves shrink, and with two unreachable jobs
+	// the loop ended before the "nothing left - go home" branch, leaving the vehicle parked on the
+	// hydrant as Serving with no job, for the session.
+	// ENFORCED BY: AirportOps.Fuel.UnreachableQueueSendsItHome
+	const int32 Bound = Vehicle.Queue.Num() + 1;
+	for (int32 Guard = 0; Guard <= Bound; ++Guard)
 	{
 		// JOBS GONE FROM UNDER THE QUEUE - their aircraft left, or a re-bid moved them - are dropped.
 		while (Vehicle.Queue.Num() > 0)
@@ -549,9 +554,23 @@ void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, con
 			return;
 		}
 
+		Vehicle.CurrentJob = 0;
+
+		// REFUSED AT HOME WITH A ROUTE THERE: the traffic model would not take a plan the search
+		// called valid (final review #5). Nothing about the AIRPORT is wrong, so the job stays at the
+		// head of this vehicle's queue and the vehicle, Idle, retries next tick - rather than going
+		// back to the board, which re-bid it, re-dispatched and re-logged three lines every tick.
+		if (bAtHome && Vehicle.AgentId == 0 && Anchor.IsSet() && HomePose(Network, Vehicle).IsSet()
+			&& DepotRoute(Network, HomePose(Network, Vehicle), Anchor, Type.Vehicle).IsValid())
+		{
+			Job.State = EServiceJobState::Queued;
+			Vehicle.Queue.Insert(Job.Id, 0);
+			Vehicle.State = EServiceVehicleState::Idle;
+			return;
+		}
+
 		// COULD NOT SET OFF: the job goes back to the board, which will choose again - this vehicle
 		// included, if it is still the best - and this vehicle tries the next thing on its queue.
-		Vehicle.CurrentJob = 0;
 		Reopen(Job);
 		if (Vehicle.AgentId == 0 && !bAtHome)
 		{
@@ -827,6 +846,13 @@ void UJobBoard::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 		else if (Vehicle.State == EServiceVehicleState::Idle && Vehicle.Queue.Num() > 0)
 		{
 			// A DISPATCH REFUSED LAST TICK, or a job queued while it sat at home: a free retry.
+			Deciding.Add(Vehicle.Id);
+		}
+		else if (Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob == 0)
+		{
+			// PARKED AT A STAND WITH NOTHING TO DO - a decision that did not land (a prerequisite still
+			// open, or a drive refused). Asked again every tick until it does: the backstop for the
+			// wedge final review #1 found, whatever the next path to it is.
 			Deciding.Add(Vehicle.Id);
 		}
 	}
