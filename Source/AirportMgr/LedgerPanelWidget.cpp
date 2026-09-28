@@ -29,7 +29,7 @@ void ULedgerPanelWidget::BuildOnce(const UUIStyle& Style)
 	// UAirportMgrPanelWidget::BuildOnce documents: the root must stay laid out or the panel
 	// never gets another tick to un-hide itself with.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	SetCardShown(false);
+	SetShown(false);
 }
 
 void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
@@ -74,10 +74,29 @@ void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
 	// CardWidget is found and cached by EnsureCardRoot itself now (issue #187) - see its own comment.
 }
 
+bool ULedgerPanelWidget::WantsWindow(FUiWindowSpec& Out) const
+{
+	Out.Id = TEXT("ledger");
+	Out.Title = LOCTEXT("LedgerWindow", "Ledger");
+	Out.Anchor = EUiWindowAnchor::TopRight;
+	Out.Offset = FVector2D(12.0, TopOffset);
+	return true;
+}
+
+void ULedgerPanelWidget::OnWindowClosedByPlayer()
+{
+	// THE CLOSE BUTTON IS THE TOGGLE: bShowing must agree, or the next B "opens" it hidden and the
+	// bar lights a panel nobody can see.
+	if (bShowing)
+	{
+		Toggle();
+	}
+}
+
 void ULedgerPanelWidget::Toggle()
 {
 	bShowing = !bShowing;
-	SetCardShown(bShowing);
+	SetShown(bShowing);
 
 	// REPAINTED ON OPEN, not left to the next tick. A panel that appeared empty for a frame
 	// and then filled would read as a bug in the ledger rather than as a frame of latency.

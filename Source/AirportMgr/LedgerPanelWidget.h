@@ -58,6 +58,10 @@ public:
 	/** Open or close it. Called by the game.ledger action - see BuildActions. */
 	void Toggle();
 
+	/** Top-right, under the inbox's corner; closable (the close is the toggle). */
+	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
+	virtual void OnWindowClosedByPlayer() override;
+
 	/**
 	 * Re-read the ledger and repaint. What NativeTick calls, and what a headless test calls
 	 * directly - a test has no viewport to paint in, the same seam the inbox uses.
