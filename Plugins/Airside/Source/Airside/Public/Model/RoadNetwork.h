@@ -918,6 +918,16 @@ public:
 	bool SetGuidelineNodeHoldingPosition(FGuidelineNodeId Node, EHoldingPositionKind Kind, FRoadSegmentId For);
 
 	/**
+	 * Make a guideline node a road's TaxiwayCrossing stop line protecting Conflicts - kind,
+	 * HoldingPositionFor (cleared: a stop line names no runway) and ProtectsConflicts written
+	 * together, for the reason SetGuidelineNodeHoldingPosition writes its pair together.
+	 * SetGuidelineNodeHoldingPosition clears ProtectsConflicts, so the list can never outlive
+	 * the kind. FRoadGuidelineBuilder is the only caller; like the runway kind, it is
+	 * re-derived every rebuild and stores no mark. False for a dead node.
+	 */
+	bool SetGuidelineNodeCrossingHold(FGuidelineNodeId Node, TArray<FGuidelineNodeId> Conflicts);
+
+	/**
 	 * Overwrite one guideline edge's PER-HALF measured fields together - MinRadius,
 	 * ClearInner, ClearOuter, ClearInnerAt, ClearOuterAt (FGuidelineEdge's own "PER-HALF
 	 * FIELDS" comment, the list SplitGuidelineEdge resets to unmeasured) - the one whole

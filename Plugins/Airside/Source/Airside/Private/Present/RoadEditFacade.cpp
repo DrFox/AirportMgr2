@@ -1200,6 +1200,15 @@ bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 	// MUTATING, so there is nothing to put back. A future mutation followed by a return
 	// false inside a scope would leave a changed graph with no undo entry for it, which is
 	// a corruption no later undo can reach - hence the guard living out here.
+	// A road's taxiway-crossing stop line is refused by the same model rule, for the same reason.
+	if (Nodes[NodeIndex].HoldingPosition == EHoldingPositionKind::TaxiwayCrossing)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("SetIntermediateHoldingPosition refused before the snapshot at guideline node %d: "
+				 "it is a road's stop line at a taxiway crossing, derived and not the player's"),
+			NodeIndex);
+		return false;
+	}
 	if (Nodes[NodeIndex].HoldingPosition == EHoldingPositionKind::Runway)
 	{
 		UE_LOG(LogRoadMesh, Warning,

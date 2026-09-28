@@ -47,6 +47,12 @@ struct AIRSIDE_API FGuidelineEndRef
  * INTERMEDIATE one is a single dashed line at a taxiway junction where ATC may hold traffic;
  * the player places it. "Hold short" is the instruction given AT one of these, not a kind
  * of marking - it belongs to M3's sequencer, and nothing here means "hold" by itself.
+ *
+ * A TAXIWAY-CROSSING stop line (taxiway strip stage 4, 2026-09-29) is a ROAD's: derived at
+ * every road lane arriving at a node where a taxiway with a strip also meets, at that strip's
+ * edge, painted as a solid white stop bar. It is the one kind that DOES mean hold - a vehicle
+ * reaching it reserves every conflict node its lane crosses (FGuidelineNode::ProtectsConflicts)
+ * and waits there while an aircraft holds one. APPENDED, never inserted: the values are saved.
  */
 UENUM()
 enum class EHoldingPositionKind : uint8
@@ -54,6 +60,7 @@ enum class EHoldingPositionKind : uint8
 	None,
 	Runway,
 	Intermediate,
+	TaxiwayCrossing,
 };
 
 /**
@@ -82,6 +89,19 @@ struct AIRSIDE_API FGuidelineNode
 
 	/** The runway a Runway holding position protects (any segment of its chain). Unset otherwise. */
 	UPROPERTY() FRoadSegmentId HoldingPositionFor;
+
+	/**
+	 * The conflict nodes a TaxiwayCrossing stop line protects: every node, beyond this one, where
+	 * the road lanes leaving it cross an aircraft line at the same junction. Empty for every other
+	 * kind, and for a road that ends against a taxiway (nothing crosses). URoadNetwork keeps it so.
+	 *
+	 * A LIST, NOT ONE NODE: a road through a node where two taxiways meet crosses an aircraft
+	 * line per taxiway turn, and a stop line that reserved only the first would let a vehicle
+	 * out in front of an aircraft turning on the second. Not HoldingPositionFor: that names a
+	 * RUNWAY, whose whole chain the arbiter reserves as a surface - naming a taxiway there
+	 * would hand every crossing truck a reservation on the taxiway itself.
+	 */
+	UPROPERTY() TArray<FGuidelineNodeId> ProtectsConflicts;
 
 	/**
 	 * Overrides the default class priority at this node. Empty - the overwhelmingly
