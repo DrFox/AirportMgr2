@@ -121,8 +121,7 @@ bool UInspectorWidget::WantsWindow(FUiWindowSpec& Out) const
 
 void UInspectorWidget::TickPanel(float InDeltaTime)
 {
-	// The dock above the bar is the host's now, written in the same tick loop just after this
-	// (UUiWindowHost::TickWindows) - a window shown this frame is placed before it is painted.
+	// The dock above the bar is the host's now (UUiWindowHost::TickWindows), not this tick's.
 	if (const ARoadBuildController* C = Controller())
 	{
 		// The controller already computed this frame's FAgentFacts for the bar's

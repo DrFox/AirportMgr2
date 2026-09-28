@@ -11,17 +11,20 @@ namespace WindowSnap
 {
 	/**
 	 * Top-left for a window of Size dragged to Proposed: clamped inside Bounds, then each axis
-	 * snapped onto the nearest edge within Distance - Bounds' own edges, and the edges of every
+	 * snapped onto the nearest edge within Distance - Bounds' own edges, the MARGIN LINES Margin
+	 * inside them (the default inset, so a window resting at its default place has nothing to jump
+	 * to when a drag starts), and the edges of every
 	 * Other that FACES the window (overlaps it, give or take Distance, on the other axis). A
 	 * neighbour far above must not pull a window sideways onto a line nobody can see connecting them.
 	 */
 	AIRPORTMGR_API FVector2D Place(FVector2D Proposed, FVector2D Size, const FBox2D& Bounds,
-		TConstArrayView<FBox2D> Others, double Distance);
+		TConstArrayView<FBox2D> Others, double Distance, double Margin);
 
 	/**
 	 * Size for a window at TopLeft resized to Proposed: at least MinSize, no further than Bounds
-	 * (the minimum wins where they disagree), then its right and bottom edges snapped the same way.
+	 * (the minimum wins where they disagree), then its right and bottom edges snapped the same way
+	 * (margin lines included).
 	 */
 	AIRPORTMGR_API FVector2D Resize(FVector2D TopLeft, FVector2D Proposed, FVector2D MinSize,
-		const FBox2D& Bounds, TConstArrayView<FBox2D> Others, double Distance);
+		const FBox2D& Bounds, TConstArrayView<FBox2D> Others, double Distance, double Margin);
 }

@@ -91,9 +91,11 @@ void UUiWindow::Build(const UUIStyle& Style, const FUiWindowSpec& Spec, UWidget&
 	Chrome->AddChildToVerticalBox(Rule)->SetHorizontalAlignment(HAlign_Fill);
 
 	// A SCROLL BOX, so a window resized smaller than its panel scrolls instead of cropping.
-	// Auto-sized, it is exactly the panel's size.
+	// Auto-sized, it is exactly the panel's size. Its bar is VISIBLE, which SScrollBox draws only
+	// when the content overflows: Collapsed hid content below the fold with no sign it was there
+	// (final review 2026-09-28). ENFORCED BY: AirportMgr.UI.WindowHost.OverflowIsSignalledAndOffersNeverShrink.
 	UScrollBox* Scroll = WidgetTree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("WindowScroll"));
-	Scroll->SetScrollBarVisibility(ESlateVisibility::Collapsed);
+	Scroll->SetScrollBarVisibility(ESlateVisibility::Visible);
 	Chrome->AddChildToVerticalBox(Scroll)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	UBorder* Pad = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 	Pad->SetBrushColor(FLinearColor::Transparent);

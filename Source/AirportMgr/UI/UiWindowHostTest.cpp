@@ -1,5 +1,7 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/ScrollBox.h"
 #include "BuildBarWidget.h"
 #include "InspectorWidget.h"
 #include "LandAircraftPanelWidget.h"
@@ -192,7 +194,10 @@ bool FUiWindowMoveTest::RunTest(const FString& Parameters)
 	F.Host->MoveWindow(Id, FVector2D(100.0, 100.0));
 	F.Host->ResizeWindow(Id, FVector2D(300.0, 200.0));
 	F.Host->MoveWindow(Id, FVector2D(10.0, 400.0));
-	TestEqual(TEXT("10 px from the left snaps flush"), F.Host->WindowRect(Id).Min, FVector2D(0.0, 400.0));
+	TestEqual(TEXT("10 px in snaps onto the 12 px margin line, not flush - the default inset is a place to rest"),
+		F.Host->WindowRect(Id).Min, FVector2D(12.0, 400.0));
+	F.Host->MoveWindow(Id, FVector2D(4.0, 400.0));
+	TestEqual(TEXT("4 px in is nearer the edge: flush"), F.Host->WindowRect(Id).Min, FVector2D(0.0, 400.0));
 	F.Host->MoveWindow(Id, FVector2D(5000.0, 5000.0));
 	TestEqual(TEXT("dragged far off: clamped to the bottom-right corner"),
 		F.Host->WindowRect(Id).Min, FVector2D(1920.0 - 300.0, 1080.0 - 200.0));
@@ -279,4 +284,50 @@ bool FUiWindowPanelsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE FIRST PIXEL OF A DRAG DOES NOT JUMP. Every default inset is 12 px and the snap distance is
+ * 12, so without a margin line a 1 px drag threw a window resting at its default place flush into
+ * the screen corner (final review 2026-09-28).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowFirstPixelTest, "AirportMgr.UI.WindowHost.FirstPixelOfADragDoesNotJump",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowFirstPixelTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	const FName Id(TEXT("ledger"));
+	F.Ledger->Toggle();
+	F.Host->MoveWindow(Id, FVector2D(100.0, 100.0));   // see MoveClampsAndSnaps: headless size is 0
+	F.Host->ResizeWindow(Id, FVector2D(300.0, 200.0));
+	const FVector2D Rest(1920.0 - 300.0 - 12.0, 12.0);   // its default top-right inset
+	F.Host->MoveWindow(Id, Rest);
+	F.Host->MoveWindow(Id, Rest + FVector2D(1.0, 1.0));
+	TestEqual(TEXT("a 1 px drag from the default place stays at the default place"), F.Host->WindowRect(Id).Min, Rest);
+	return true;
+}
+
+/**
+ * CONTENT A WINDOW NO LONGER FITS IS SIGNALLED, not silently cut off: the scroll bar shows when
+ * it is needed. And the offers window cannot be resized at all - an offer must never be the thing
+ * that scrolls away (OfferInboxWidget's TopOffset comment; final review 2026-09-28).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowOverflowTest, "AirportMgr.UI.WindowHost.OverflowIsSignalledAndOffersNeverShrink",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowOverflowTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
+	const UScrollBox* Scroll = Cast<UScrollBox>(F.Window->WidgetTree->FindWidget(TEXT("WindowScroll")));
+	if (!TestNotNull(TEXT("the window has its scroll body"), Scroll)) { return false; }
+	TestNotEqual(TEXT("its scroll bar may show when the content overflows"), Scroll->GetScrollBarVisibility(), ESlateVisibility::Collapsed);
+
+	UOfferInboxWidget* Offers = CreateWidget<UOfferInboxWidget>(F.TestWorld.World, UOfferInboxWidget::StaticClass());
+	if (!TestNotNull(TEXT("an offers window"), F.Host->AddWindow(*Offers))) { return false; }
+	const FVector2D Before = F.Host->WindowRect(TEXT("offers")).GetSize();
+	F.Host->ResizeWindow(TEXT("offers"), FVector2D(180.0, 90.0));
+	TestEqual(TEXT("the offers window refuses a resize"), F.Host->WindowRect(TEXT("offers")).GetSize(), Before);
+	return true;
+}
 #endif

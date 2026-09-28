@@ -108,9 +108,9 @@ protected:
 	 * ticks a widget from its paint pass, so a Collapsed widget is never painted and never ticks
 	 * - and the tick is the only thing that could later un-collapse it (PIE 2026-09-07: a panel
 	 * built this way, never shown). A HOSTED panel is ticked by the host whatever its window's
-	 * visibility (RunPanelTick) and hides through SetShown; it still keeps its root
-	 * SelfHitTestInvisible, so its empty space inside the window does not eat clicks meant for
-	 * the window's own chrome.
+	 * visibility (RunPanelTick) and hides through SetShown. Either way the root stays
+	 * SelfHitTestInvisible, so an otherwise-empty panel does not sit over the world as an invisible
+	 * pane that eats the player's clicks, nor eat clicks meant for its window's own chrome.
 	 */
 	virtual void BuildOnce(const UUIStyle& Style) PURE_VIRTUAL(UAirportMgrPanelWidget::BuildOnce, );
 

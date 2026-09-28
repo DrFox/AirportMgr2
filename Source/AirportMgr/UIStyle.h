@@ -169,6 +169,14 @@ public:
 	 *  window's edge snaps onto it (spec 2026-09-28 section 2). */
 	UPROPERTY(EditAnywhere, Category = "Metrics", meta = (ClampMin = "0.0")) float SnapDistance = 12.0f;
 
+	/**
+	 * The inset windows rest at by default, and a second snap line that far inside each screen edge.
+	 * Equal to the panels' default offsets on purpose: with only the edges to snap to, every default
+	 * inset sat within SnapDistance of an edge and the first pixel of a drag threw the window flush
+	 * into the corner (final review 2026-09-28). ENFORCED BY: AirportMgr.UI.WindowHost.FirstPixelOfADragDoesNotJump.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Metrics", meta = (ClampMin = "0.0")) float WindowMargin = 12.0f;
+
 	/** The smallest a player can resize a window to; its scroll box takes whatever no longer fits. */
 	UPROPERTY(EditAnywhere, Category = "Metrics") FVector2D WindowMinSize = FVector2D(180.0, 90.0);
 

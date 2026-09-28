@@ -148,6 +148,10 @@ bool FOfferInboxIdleTickResolvesNoStyleTest::RunTest(const FString& Parameters)
 	// First paint builds the row - a real cost, not what this test measures.
 	Widget->PaintRowsForTest();
 
+	// THE COUNT READS AS A HEADING, not a bare "1" alone on a line under the window's "Offers"
+	// title - the debug-readout look the heading row's own comment forbids (final review 2026-09-28).
+	TestFalse(TEXT("the count is words, not a bare number"), Widget->BadgeForTest().IsNumeric());
+
 	// ACCEPT IS A PRIMARY UUiButton: the kind carries "affirmative", LookFor carries the colour
 	// - so a row whose Accept went back to a hand-painted UButton fails here, at the composition.
 	const UUiButton* Accept = Widget->AcceptButtonForTest(0);

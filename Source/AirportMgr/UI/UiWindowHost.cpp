@@ -236,7 +236,7 @@ void UUiWindowHost::MoveWindow(FName Id, FVector2D ProposedTopLeft)
 	}
 	Place(*E);
 	const TArray<FBox2D> Others = OthersThan(Id);
-	E->Slot->SetPosition(WindowSnap::Place(ProposedTopLeft, SizeOf(*E), Bounds(), Others, Style->SnapDistance));
+	E->Slot->SetPosition(WindowSnap::Place(ProposedTopLeft, SizeOf(*E), Bounds(), Others, Style->SnapDistance, Style->WindowMargin));
 }
 
 void UUiWindowHost::ResizeWindow(FName Id, FVector2D ProposedSize)
@@ -249,7 +249,8 @@ void UUiWindowHost::ResizeWindow(FName Id, FVector2D ProposedSize)
 	Place(*E);
 	const FVector2D TL = E->Slot->GetPosition();
 	const TArray<FBox2D> Others = OthersThan(Id);
-	const FVector2D Size = WindowSnap::Resize(TL, ProposedSize, Style->WindowMinSize, Bounds(), Others, Style->SnapDistance);
+	const FVector2D Size = WindowSnap::Resize(TL, ProposedSize, Style->WindowMinSize, Bounds(), Others,
+		Style->SnapDistance, Style->WindowMargin);
 	E->Slot->SetAutoSize(false);
 	E->Slot->SetSize(Size);
 }
@@ -292,7 +293,7 @@ void UUiWindowHost::TickWindows(float DeltaTime)
 			// A PLACED WINDOW STAYS REACHABLE when the view shrinks under it (ReclampsWhenTheViewShrinks):
 			// a pure clamp, no snapping - nobody is dragging.
 			const FVector2D At = E.Slot->GetPosition();
-			const FVector2D Clamped = WindowSnap::Place(At, SizeOf(E), Bounds(), TConstArrayView<FBox2D>(), 0.0);
+			const FVector2D Clamped = WindowSnap::Place(At, SizeOf(E), Bounds(), TConstArrayView<FBox2D>(), 0.0, 0.0);
 			if (!Clamped.Equals(At))
 			{
 				E.Slot->SetPosition(Clamped);

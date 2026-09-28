@@ -116,6 +116,8 @@ public:
 	/** Paint from the viewmodel without a tick. A headless test never paints, so NativeTick
 	 *  never runs - the same seam UInspectorWidget's test uses. */
 	void PaintRowsForTest() { PaintRows(); }
+	/** The count beside the heading, as it reads now. */
+	FString BadgeForTest() const;
 	/** Row N's Accept button, or null - see AirportMgr.UI.OfferInbox's Primary-kind assertion. */
 	const UUiButton* AcceptButtonForTest(int32 Row) const;
 

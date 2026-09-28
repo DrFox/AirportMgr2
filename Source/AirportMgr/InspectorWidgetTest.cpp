@@ -372,12 +372,15 @@ bool FInspectorWindowDocksAboveTheBarTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the window's bottom sits BarGap above the bar's top edge"),
 		Host.WindowClearanceForTest(TEXT("inspector")), static_cast<double>(OneLine) + Gap, 0.5);
 
+	// The row wraps (a narrow viewport, or the Selection section arriving): the bar grows, and the
+	// window has to rise with it or the new line is hidden under the window.
 	const float TwoLines = Bar.BarReservedHeightForTest(Wide * 0.66f);
 	if (!TestTrue(TEXT("the wrapped bar is taller - otherwise this proves nothing"), TwoLines > OneLine + 10.0f)) { return false; }
 	Host.TickForTest(0.016f);
 	TestEqual(TEXT("the window rises with a growing bar"),
 		Host.WindowClearanceForTest(TEXT("inspector")), static_cast<double>(TwoLines) + Gap, 0.5);
 
+	// And back down when it shrinks - a window left floating is a gap the player reads as a bug.
 	Bar.BarReservedHeightForTest(Wide * 1.1f);
 	Host.TickForTest(0.016f);
 	TestEqual(TEXT("and comes back down when the bar shrinks"),

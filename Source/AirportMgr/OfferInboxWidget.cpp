@@ -66,6 +66,9 @@ bool UOfferInboxWidget::WantsWindow(FUiWindowSpec& Out) const
 	Out.Id = TEXT("offers");
 	Out.Title = NSLOCTEXT("AirportMgr", "InboxWindow", "Offers");
 	Out.bClosable = false;
+	// Nor resizable: a window shrunk below its offers would scroll one out of sight, and an offer
+	// must never be the thing that hides (TopOffset's comment). It grows with its offers instead.
+	Out.bResizable = false;
 	Out.Anchor = EUiWindowAnchor::TopRight;
 	Out.Offset = FVector2D(12.0, TopOffset);
 	return true;
@@ -158,11 +161,14 @@ void UOfferInboxWidget::PaintRows()
 
 	if (BadgeText != nullptr)
 	{
-		// "none" rather than "0": the player is being told a STATE, and a zero is a value.
+		// "none" rather than "0": the player is being told a STATE, and a zero is a value. And
+		// "1 waiting" rather than "1": under the window's "Offers" title the count sits on a line of
+		// its own, and a bare number there is the debug-readout look the heading row's comment
+		// forbids (final review 2026-09-28).
 		const int32 Pending = Inbox->GetPendingCount();
 		BadgeText->SetText(Pending == 0
 			? NSLOCTEXT("AirportMgr", "InboxNone", "none")
-			: FText::AsNumber(Pending));
+			: FText::Format(NSLOCTEXT("AirportMgr", "InboxWaiting", "{0} waiting"), FText::AsNumber(Pending)));
 	}
 
 	// The Blueprint path: UListView::SetListItems (core UMG, not ModelViewViewModel - issue
@@ -335,6 +341,11 @@ UUiButton* UOfferInboxWidget::MakeAnswerButton(const UUIStyle& Style, const TCHA
 	Button->SetLabel(Label);
 	Button->Build(Style, Kind);
 	return Button;
+}
+
+FString UOfferInboxWidget::BadgeForTest() const
+{
+	return BadgeText != nullptr ? BadgeText->GetText().ToString() : FString();
 }
 
 const UUiButton* UOfferInboxWidget::AcceptButtonForTest(int32 Row) const

@@ -22,12 +22,13 @@ namespace
 		return Best;
 	}
 
-	/** Bounds' edges plus the edges of every Other that faces a window at TopLeft/Size. */
+	/** Bounds' edges, the margin lines inside them, and the edges of every Other that faces a
+	 *  window at TopLeft/Size. A zero margin adds nothing new (the lines sit on the edges). */
 	void Targets(FVector2D TopLeft, FVector2D Size, const FBox2D& Bounds, TConstArrayView<FBox2D> Others,
-		double Distance, TArray<double>& OutX, TArray<double>& OutY)
+		double Distance, double Margin, TArray<double>& OutX, TArray<double>& OutY)
 	{
-		OutX = { Bounds.Min.X, Bounds.Max.X };
-		OutY = { Bounds.Min.Y, Bounds.Max.Y };
+		OutX = { Bounds.Min.X, Bounds.Max.X, Bounds.Min.X + Margin, Bounds.Max.X - Margin };
+		OutY = { Bounds.Min.Y, Bounds.Max.Y, Bounds.Min.Y + Margin, Bounds.Max.Y - Margin };
 		for (const FBox2D& O : Others)
 		{
 			const bool bRowsMeet = O.Min.Y <= TopLeft.Y + Size.Y + Distance && O.Max.Y >= TopLeft.Y - Distance;
@@ -46,11 +47,11 @@ namespace
 }
 
 FVector2D WindowSnap::Place(FVector2D Proposed, FVector2D Size, const FBox2D& Bounds,
-	TConstArrayView<FBox2D> Others, double Distance)
+	TConstArrayView<FBox2D> Others, double Distance, double Margin)
 {
 	FVector2D P = Clamp(Proposed, Size, Bounds);
 	TArray<double> Xs, Ys;
-	Targets(P, Size, Bounds, Others, Distance, Xs, Ys);
+	Targets(P, Size, Bounds, Others, Distance, Margin, Xs, Ys);
 	P.X += Shift({ P.X, P.X + Size.X }, Xs, Distance);
 	P.Y += Shift({ P.Y, P.Y + Size.Y }, Ys, Distance);
 	// Clamped again: a neighbour's edge can sit outside the bounds after the viewport shrank.
@@ -58,7 +59,7 @@ FVector2D WindowSnap::Place(FVector2D Proposed, FVector2D Size, const FBox2D& Bo
 }
 
 FVector2D WindowSnap::Resize(FVector2D TopLeft, FVector2D Proposed, FVector2D MinSize,
-	const FBox2D& Bounds, TConstArrayView<FBox2D> Others, double Distance)
+	const FBox2D& Bounds, TConstArrayView<FBox2D> Others, double Distance, double Margin)
 {
 	auto Fit = [&](FVector2D S)
 	{
@@ -68,7 +69,7 @@ FVector2D WindowSnap::Resize(FVector2D TopLeft, FVector2D Proposed, FVector2D Mi
 	};
 	FVector2D S = Fit(Proposed);
 	TArray<double> Xs, Ys;
-	Targets(TopLeft, S, Bounds, Others, Distance, Xs, Ys);
+	Targets(TopLeft, S, Bounds, Others, Distance, Margin, Xs, Ys);
 	S.X += Shift({ TopLeft.X + S.X }, Xs, Distance);
 	S.Y += Shift({ TopLeft.Y + S.Y }, Ys, Distance);
 	return Fit(S);
