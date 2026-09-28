@@ -536,6 +536,59 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 		}
 	}
 
+	// 0'. PAST A ROAD'S STOP LINE AT A TAXIWAY CROSSING: every conflict that line protects is
+	// held OCCUPIED until the tail is off the far arm's end - which ComputeCrossingSetBacks put at
+	// the far strip edge - for the runway crossing's reason above: the vehicle is in the strip,
+	// and a reservation an aircraft's rank could take would leave it stopped under the wing. The
+	// reservation step 2 raises at the line itself turns occupied at the same moment, once the
+	// vehicle can no longer stop short of it; this is the same hold after the line is behind it.
+	//
+	// STATELESS, read off the plan: the line is the node the current step (or one before it on
+	// the same junction) leaves. A walk back stops at the first arm end - a node with an Origin -
+	// so a vehicle a whole road away from any crossing costs one or two node lookups.
+	// ENFORCED BY: Airside.Model.Traffic.TruckYieldsAtDerivedCrossing
+	for (int32 Index = Current; Index >= 0; --Index)
+	{
+		const FGuidelineNode* Line = Network.GetGuidelineNode(UGroundTraffic::StepFromNode(Plan, Index));
+		if (Line == nullptr)
+		{
+			break;
+		}
+		if (Line->HoldingPosition == EHoldingPositionKind::TaxiwayCrossing)
+		{
+			double FarEnd = Plan.Steps.Last().EndDistance;
+			for (int32 Ahead = Index; Ahead < Plan.Steps.Num(); ++Ahead)
+			{
+				const FGuidelineNode* To = Network.GetGuidelineNode(Plan.Steps[Ahead].To);
+				if (To != nullptr && To->Origin.IsSet())
+				{
+					FarEnd = Plan.Steps[Ahead].EndDistance;
+					break;
+				}
+			}
+			if (Tail < FarEnd)
+			{
+				for (const FGuidelineNodeId Conflict : Line->ProtectsConflicts)
+				{
+					FWantedClaim Committed;
+					Committed.Claim.AgentId = Agent.Id;
+					Committed.Claim.Resource = FTrafficResource::OfNode(Conflict);
+					Committed.Claim.bOccupied = true;
+					Committed.Claim.Rank = RankAt(Network, Conflict, Agent.Class);
+					Committed.Step = Current;
+					Committed.StepStart = UGroundTraffic::StepStart(Plan, Current);
+					Committed.StepEnd = Plan.Steps[Current].EndDistance;
+					Pending.Add(Committed);
+				}
+			}
+			break;
+		}
+		if (Line->Origin.IsSet())
+		{
+			break;
+		}
+	}
+
 	// THE ENTRY RULE FIRES FOR ONE BOX PER PASS - the first the window reaches that the agent
 	// has not entered. See the loop below and Run's header for the trace that rejected
 	// chaining it through every consecutive box.
@@ -764,6 +817,65 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 					Pending.Add(Bar);
 				}
 			}
+
+			// A ROAD'S STOP LINE AT A TAXIWAY CROSSING RESERVES ITS CONFLICT NODES - the runway
+			// bar's pattern applied to a node (taxiway strip stage 4): the vehicle asks for every
+			// node where its lane crosses an aircraft line BEFORE it passes the line, so a refusal
+			// stops it with its nose on the line, at the strip edge and clear of a passing wing,
+			// rather than a gap short of the conflict itself, inside the strip. Without this the
+			// conflict's own node claim still decides who goes, but the loser waits under the wing.
+			//
+			// RESERVED for the bar's own reason: a queue at the line must not lock the conflict
+			// against the aircraft it protects. Aircraft need no change - their route runs THROUGH
+			// the conflict node, so their ordinary node claims contend with this reservation, and
+			// rank decides.
+			//
+			// UNTIL THE VEHICLE CAN NO LONGER STOP AT THE LINE: then OCCUPIED, and it stays so
+			// across the strip (step 0' of this pass, above). A reservation a
+			// higher rank may take is right for a vehicle that can still stop, and wrong for one
+			// that cannot - measured before this rule on the arrival sweep in
+			// TruckYieldsAtDerivedCrossing: an aircraft arriving 1-4 s after the truck took the
+			// conflict from a truck already committed, and the truck stopped inside the strip,
+			// under the wing, for 40 ticks. Committed means the nose is within braking distance of
+			// the line, the same figure the window itself is built from, AND the vehicle was not
+			// refused on its last pass: one that was is braking for the line, and turning its ask
+			// into an occupancy there - which presence lets beat any reservation - took the
+			// conflict from the aircraft that held it (measured: the aircraft 4 s ahead then
+			// waited 8 s for the truck). WaitingOn and not "holds the reservation in the table":
+			// a rebuild releases every guideline claim (UGroundTraffic::OnGraphRebuilt), and a
+			// truck committed an instant before one was then refused under the wing for 39 ticks
+			// (measured on the same test's rebuild run); ClearArbitration resets WaitingOn too,
+			// but a refused vehicle is refused again on the next pass, before it can commit.
+			// ENFORCED BY: Airside.Model.Traffic.TruckYieldsAtDerivedCrossing
+			if (Node != nullptr && Node->HoldingPosition == EHoldingPositionKind::TaxiwayCrossing)
+			{
+				const double Braking = Head - T - F * 0.5 - G;
+				// Braking > 0 because a vehicle STANDING at the line - its nose a hair past it, where
+				// the stop left it - can stop, trivially, and must go on waiting.
+				const bool bCannotStop = Braking > 0.0 && End - (T + F * 0.5) < Braking;
+				for (const FGuidelineNodeId Conflict : Node->ProtectsConflicts)
+				{
+					FWantedClaim Line;
+					Line.Claim.AgentId = Agent.Id;
+					Line.Claim.Resource = FTrafficResource::OfNode(Conflict);
+					Line.Claim.bOccupied = bCannotStop && Agent.GetWaitingOn() == 0;
+					// Ranked AT THE CONFLICT, as every other claim on that node is: an authored
+					// priority there has to govern the reservation as well as the crossing.
+					Line.Claim.Rank = RankAt(Network, Conflict, Agent.Class);
+					Line.Step = Index;
+					Line.StepStart = Start;
+					Line.StepEnd = End;
+					Line.EdgeLength = Length;
+					Line.bReversed = Step.bReversed;
+					Line.Surface = FWantedClaim::ESurface::HoldingPosition;
+					Line.HoldNode = Step.To;
+					if (WantedOccupied(Line.Claim.Resource))
+					{
+						continue;
+					}
+					Pending.Add(Line);
+				}
+			}
 		}
 	}
 }
@@ -893,9 +1005,19 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		{
 			if (WasWaitingOn != Blocker.AgentId || WasBlockedStep != NewBlockedStep)
 			{
-				UE_LOG(LogAirsideTraffic, Log,
-					TEXT("Agent %d holding short at node %d for runway segment %d held by agent %d"),
-					Agent.Id, Want.HoldNode.Index, Want.Claim.Resource.Surface.Index, Blocker.AgentId);
+				// A ROAD STOP LINE reserves a conflict NODE, not a runway surface - named as what it is.
+				if (Want.Claim.Resource.Kind == ETrafficResourceKind::Node)
+				{
+					UE_LOG(LogAirsideTraffic, Log,
+						TEXT("Agent %d waiting at the stop line at node %d for taxiway crossing %s held by agent %d"),
+						Agent.Id, Want.HoldNode.Index, *Want.Claim.Resource.Describe(), Blocker.AgentId);
+				}
+				else
+				{
+					UE_LOG(LogAirsideTraffic, Log,
+						TEXT("Agent %d holding short at node %d for runway segment %d held by agent %d"),
+						Agent.Id, Want.HoldNode.Index, Want.Claim.Resource.Surface.Index, Blocker.AgentId);
+				}
 			}
 		}
 		else if (WasWaitingOn != Blocker.AgentId)

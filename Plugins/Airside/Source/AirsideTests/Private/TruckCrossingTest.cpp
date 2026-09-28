@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/GroundTraffic.h"
@@ -8,7 +9,10 @@
 #include "Model/RoadTraffic.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
+#include "Model/TaxiwayStrip.h"
 #include "Model/TrafficOccupancy.h"
+#include "Entities/AircraftType.h"
+#include "Profiles/RoadProfile.h"
 #include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -201,6 +205,307 @@ bool FTruckCrossesTaxiwayTest::RunTest(const FString& Parameters)
 	// AND THE TRUCK STILL GETS THERE. A yield that never released would satisfy every
 	// assertion above and be exactly the starvation the resolver exists to prevent.
 	TestTrue(TEXT("the truck reaches the far side"), bTruckArrived);
+	return true;
+}
+
+namespace
+{
+	/**
+	 * A route for Class from the alive node nearest From to the one nearest To, trying every
+	 * pair within Radius (a dead-end taxiway ends at its cut, 11.5 m short of
+	 * the node): which lane end leaves which way is the drive side's business, not
+	 * this test's. Named for this file because the tests module is a UNITY build.
+	 */
+	FRoutePlan DerivedCrossingRoute(const URoadNetwork& Net, const FVector2D& From, const FVector2D& To,
+		ETraversalClass Class, double Radius = 2000.0)
+	{
+		TArray<FGuidelineNodeId> Starts, Goals;
+		const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			if (!Nodes[Index].bAlive) { continue; }
+			if (FVector2D::Distance(Nodes[Index].Position, From) < Radius) { Starts.Add(Net.GuidelineNodeIdAt(Index)); }
+			if (FVector2D::Distance(Nodes[Index].Position, To) < Radius) { Goals.Add(Net.GuidelineNodeIdAt(Index)); }
+		}
+		for (const FGuidelineNodeId Start : Starts)
+		{
+			for (const FGuidelineNodeId Goal : Goals)
+			{
+				FRoutePlan Plan = TestGraph::Probe(Net, Start, Goal, Class);
+				if (Plan.IsValid()) { return Plan; }
+			}
+		}
+		return FRoutePlan();
+	}
+
+	/** Where a plan's polyline first crosses the line Y = 0 - the vehicle's lane on the
+	 *  taxiway centreline, which is where the conflict is. */
+	bool DerivedCrossingPoint(const FRoutePlan& Plan, FVector2D& Out)
+	{
+		for (int32 Index = 1; Index < Plan.Polyline.Num(); ++Index)
+		{
+			const FVector2D P = Plan.Polyline[Index - 1];
+			const FVector2D Q = Plan.Polyline[Index];
+			if ((P.Y <= 0.0) != (Q.Y <= 0.0) && !FMath::IsNearlyEqual(P.Y, Q.Y))
+			{
+				Out = P + (Q - P) * (-P.Y / (Q.Y - P.Y));
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Seconds from dispatch until the agent's centre is within 100 uu of At, driving ALONE. */
+	double DerivedCrossingEta(const URoadNetwork& Net, const FRoutePlan& Plan, const FAirframe* Airframe,
+		const FVehicle* Vehicle, ETraversalClass Class, const FVector2D& At)
+	{
+		UGroundTraffic* Solo = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Id = Airframe != nullptr
+			? Solo->DispatchAgent(&Net, Plan, *Airframe, Class, 0.0)
+			: Solo->DispatchAgent(&Net, Plan, *Vehicle, Class, 0.0);
+		const double Dt = 1.0 / 30.0;
+		for (int32 Step = 0; Step < 30 * 120; ++Step)
+		{
+			Solo->Advance(Dt, &Net);
+			const FRoadAgent* Agent = Solo->FindAgent(Id);
+			if (Agent == nullptr) { break; }
+			if (FVector2D::Distance(Agent->LastMotion.Position, At) < 100.0)
+			{
+				return (Step + 1) * Dt;
+			}
+		}
+		return -1.0;
+	}
+
+	/** What one contest at the derived crossing measured. */
+	struct FDerivedCrossingOutcome
+	{
+		bool bRan = false;
+		bool bSharedNode = false;
+		bool bVehicleArrived = false;
+		/** Ticks on which the vehicle's nose was inside the strip while the aircraft was within
+		 *  its own half-span of the crossing point. The safety property: zero. */
+		int32 Intrusions = 0;
+		/** Seconds the vehicle spent refused by the aircraft. */
+		double WaitedSeconds = 0.0;
+		/** Seconds the aircraft spent refused by the vehicle. */
+		double AircraftWaitedSeconds = 0.0;
+		double NearestNoseToCentreline = TNumericLimits<double>::Max();
+	};
+
+	/**
+	 * THE CONTEST, on a DERIVED graph: an aircraft along the taxiway and a vehicle of Class
+	 * along the road, dispatched so that - each driving alone - the aircraft would reach the
+	 * crossing point at the instant the vehicle's nose reaches the stop line, the moment the
+	 * vehicle has to decide. Arranged rather than hoped for, for TruckCrossesTaxiway's reason:
+	 * two agents dispatched together and left to chance cross seconds apart and test nothing.
+	 * AircraftLag shifts the aircraft's arrival that many seconds LATER (negative: earlier), so
+	 * a sweep covers every order the two can meet in. bRebuild
+	 * re-derives the graph twice (Review Focus 3): the first tick the vehicle waits at the stop
+	 * line, and the first tick its nose is inside the strip.
+	 */
+	FDerivedCrossingOutcome RunDerivedCrossingContest(FAutomationTestBase& Test, ETraversalClass VehicleClass,
+		bool bRebuild, double AircraftLag = 0.0)
+	{
+		FDerivedCrossingOutcome Out;
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadCrossingFixture Crossing = FRoadCrossingFixture::Lay(*Net);
+		TestGraph::Rebuild(*Net);
+
+		// THE AUTHORED TYPE'S airframe, not TestAirframes::Piper(): that one leaves Wingspan 0,
+		// and the half-span is what the safety property below is measured against.
+		const FAirframe Plane = TestAirframes::PiperType()->Airframe();
+		const FVehicle Van = TestAirframes::Van();
+
+		const FRoutePlan AircraftPlan = DerivedCrossingRoute(*Net, FVector2D(-20000.0, 0.0), FVector2D(20000.0, 0.0),
+			ETraversalClass::Aircraft);
+		const FRoutePlan VehiclePlan = DerivedCrossingRoute(*Net, FVector2D(0.0, -20000.0), FVector2D(0.0, 20000.0),
+			VehicleClass);
+		if (!Test.TestTrue(TEXT("the aircraft routes along the taxiway"), AircraftPlan.IsValid())
+			|| !Test.TestTrue(TEXT("the vehicle routes across it"), VehiclePlan.IsValid()))
+		{
+			return Out;
+		}
+
+		// WHY IT FAILED BEFORE STAGE 4: at a derived crossing every segment end derived its own
+		// node, so the road's through-turn and the taxiway's crossed in geometry and shared no
+		// FGuidelineNodeId - and the claim table conflicts by resource identity only. With no
+		// shared node there is nothing for the rank rule to decide.
+		TSet<FGuidelineNodeId> AircraftNodes;
+		for (const FRouteStep& Step : AircraftPlan.Steps) { AircraftNodes.Add(Step.To); }
+		for (const FRouteStep& Step : VehiclePlan.Steps) { Out.bSharedNode |= AircraftNodes.Contains(Step.To); }
+
+		FVector2D CrossingAt;
+		if (!Test.TestTrue(TEXT("the vehicle's route crosses the taxiway centreline"),
+			DerivedCrossingPoint(VehiclePlan, CrossingAt)))
+		{
+			return Out;
+		}
+
+		const URoadProfile* TaxiwayProfile = Net->ProfileFor(*Net->GetSegment(Crossing.West));
+		const double StripEdge = TaxiwayProfile->GetTotalWidth() * 0.5 + TaxiwayStrip::StripWidthOf(*Net, Crossing.West);
+		const double HalfSpan = Plane.Wingspan * 0.5;
+
+		const double AircraftEta = DerivedCrossingEta(*Net, AircraftPlan, &Plane, nullptr, ETraversalClass::Aircraft, CrossingAt);
+		// The vehicle's CENTRE when its nose is on the stop line: half a footprint short of it.
+		const FVector2D AtStopLine = CrossingAt - FVector2D(0.0, StripEdge + FTrafficRules().VehicleFootprint * 0.5);
+		const double VehicleEta = DerivedCrossingEta(*Net, VehiclePlan, nullptr, &Van, VehicleClass, AtStopLine);
+		if (!Test.TestTrue(TEXT("each reaches the crossing driving alone"), AircraftEta > 0.0 && VehicleEta > 0.0))
+		{
+			return Out;
+		}
+
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const double Dt = 1.0 / 30.0;
+		// Dispatch times that put the aircraft at the crossing AircraftLag after the vehicle.
+		const double AircraftAt = FMath::Max(0.0, (VehicleEta + AircraftLag) - AircraftEta);
+		const double VehicleAt = FMath::Max(0.0, AircraftEta - (VehicleEta + AircraftLag));
+		int32 Aircraft = 0;
+		int32 Vehicle = 0;
+
+		int32 Rebuilds = 0;
+		bool bRebuiltWaiting = false;
+		bool bRebuiltInStrip = false;
+		for (int32 Step = 0; Step < 30 * 120; ++Step)
+		{
+			const double Clock = Step * Dt;
+			if (Aircraft == 0 && Clock >= AircraftAt)
+			{
+				Aircraft = Traffic->DispatchAgent(Net, AircraftPlan, Plane, ETraversalClass::Aircraft, 0.0);
+			}
+			if (Vehicle == 0 && Clock >= VehicleAt)
+			{
+				Vehicle = Traffic->DispatchAgent(Net, VehiclePlan, Van, VehicleClass, 0.0);
+			}
+			Traffic->Advance(Dt, Net);
+
+			const FRoadAgent* Plan = Traffic->FindAgent(Aircraft);
+			const FRoadAgent* Truck = Traffic->FindAgent(Vehicle);
+			if (Plan != nullptr && Vehicle != 0 && Plan->GetWaitingOn() == Vehicle)
+			{
+				Out.AircraftWaitedSeconds += Dt;
+			}
+			if (Truck == nullptr)
+			{
+				if (Vehicle != 0) { break; }
+				continue;
+			}
+			Out.bVehicleArrived |= Truck->Phase == EAgentPhase::Parked;
+			if (Out.bVehicleArrived) { break; }
+
+			const FVector2D Nose = Truck->LastMotion.Position
+				+ FVector2D(FMath::Cos(Truck->LastMotion.Heading), FMath::Sin(Truck->LastMotion.Heading))
+				* Traffic->Rules.VehicleFootprint * 0.5;
+			Out.NearestNoseToCentreline = FMath::Min(Out.NearestNoseToCentreline, FMath::Abs(Nose.Y));
+			const bool bNoseInStrip = FMath::Abs(Nose.Y) < StripEdge - TaxiwayStrip::ToleranceUu;
+			const bool bAircraftAtCrossing = Plan != nullptr
+				&& FVector2D::Distance(Plan->LastMotion.Position, CrossingAt) < HalfSpan;
+			Out.Intrusions += (bNoseInStrip && bAircraftAtCrossing) ? 1 : 0;
+			Out.WaitedSeconds += (Aircraft != 0 && Truck->GetWaitingOn() == Aircraft) ? Dt : 0.0;
+
+			// A ROAD EDIT while the vehicle waits, and again mid-crossing: every derived node, the
+			// conflicts and the stop line included, is re-made, and the agents re-resolve by
+			// position (UGroundTraffic::OnGraphRebuilt), exactly as a player's edit does it.
+			const bool bWaiting = Aircraft != 0 && Truck->GetWaitingOn() == Aircraft;
+			if (bRebuild && ((!bRebuiltWaiting && bWaiting) || (!bRebuiltInStrip && bNoseInStrip)))
+			{
+				bRebuiltWaiting |= bWaiting;
+				bRebuiltInStrip |= bNoseInStrip;
+				TestGraph::Rebuild(*Net);
+				Traffic->OnGraphRebuilt(*Net);
+				++Rebuilds;
+			}
+		}
+		if (bRebuild)
+		{
+			Test.TestTrue(TEXT("the graph was rebuilt while the vehicle waited at the stop line"), bRebuiltWaiting);
+			Test.TestTrue(TEXT("and again with the vehicle inside the strip"), bRebuiltInStrip);
+		}
+		Test.AddInfo(FString::Printf(
+			TEXT("%s, aircraft lag %.1f s, %d rebuild(s): aircraft eta %.2f s, vehicle eta to the stop line %.2f s; crossing at (%.0f,%.0f), strip edge %.0f uu, "
+				 "half-span %.0f uu; %d intrusion tick(s); vehicle waited %.2f s, aircraft waited %.2f s; "
+				 "nose nearest the centreline %.0f uu"),
+			VehicleClass == ETraversalClass::Emergency ? TEXT("emergency") : TEXT("truck"), AircraftLag, Rebuilds,
+			AircraftEta, VehicleEta, CrossingAt.X, CrossingAt.Y, StripEdge, HalfSpan, Out.Intrusions,
+			Out.WaitedSeconds, Out.AircraftWaitedSeconds, Out.NearestNoseToCentreline));
+		Out.bRan = true;
+		return Out;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTruckYieldsAtDerivedCrossingTest,
+	"Airside.Model.Traffic.TruckYieldsAtDerivedCrossing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTruckYieldsAtDerivedCrossingTest::RunTest(const FString& Parameters)
+{
+	// TruckCrossesTaxiway above passes only because it HAND-AUTHORS a shared centre node. This
+	// is the same contest on the graph the builder actually derives from a drawn crossing -
+	// taxiway strip spec, "Holds sit at the strip edge", stage 4.
+	const FDerivedCrossingOutcome Truck = RunDerivedCrossingContest(*this, ETraversalClass::GroundVehicle, false);
+	if (!Truck.bRan) { return false; }
+
+	// THE MECHANISM, asserted so a regression names itself: before stage 4 the two routes
+	// crossed in geometry and shared no node, so nothing yielded.
+	TestTrue(TEXT("the truck's route and the aircraft's share a conflict node at the crossing"), Truck.bSharedNode);
+
+	// THE SAFETY PROPERTY, in the spec's own terms: the truck waits clear of a passing wing -
+	// its nose outside the taxiway's strip - for as long as the aircraft's body is within its
+	// half-span of the point where the truck's lane crosses the centreline.
+	TestEqual(TEXT("the truck's nose never enters the strip while the aircraft is at the crossing"),
+		Truck.Intrusions, 0);
+
+	// AND IT STILL GETS ACROSS: a yield that never released would pass every line above.
+	TestTrue(TEXT("the truck reaches the far side"), Truck.bVehicleArrived);
+
+	// IT WAITED, AT THE LINE: the aircraft is at the crossing as the truck reaches the line, so
+	// a zero here would mean the property above held by timing, not by the arbiter.
+	TestTrue(*FString::Printf(TEXT("the truck was held for the aircraft: %.2f s"), Truck.WaitedSeconds),
+		Truck.WaitedSeconds > 0.0);
+
+	// EVERY ORDER THEY CAN MEET IN, not just the one: an aircraft arriving just after the truck
+	// has passed the line, while it is still inside the strip, is the case a reservation that a
+	// higher rank may take would get wrong - the truck refused under the wing. Measured before
+	// the commit rule in FClaimPass::BuildPending: 40 intrusion ticks at 1-3 s.
+	for (const double Lag : { -3.0, -1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 9.0 })
+	{
+		const FDerivedCrossingOutcome Swept = RunDerivedCrossingContest(*this, ETraversalClass::GroundVehicle, false, Lag);
+		if (!Swept.bRan) { return false; }
+		TestEqual(*FString::Printf(TEXT("aircraft %.0f s after the truck: no intrusion"), Lag), Swept.Intrusions, 0);
+		TestTrue(*FString::Printf(TEXT("aircraft %.0f s after the truck: the truck gets across"), Lag), Swept.bVehicleArrived);
+	}
+
+	// REVIEW FOCUS 3: a rebuild while the truck waits at the line, and again mid-crossing. The
+	// conflicts and the stop line are re-derived; the truck re-resolves and still behaves.
+	const FDerivedCrossingOutcome Rebuilt = RunDerivedCrossingContest(*this, ETraversalClass::GroundVehicle, true);
+	if (!Rebuilt.bRan) { return false; }
+	TestEqual(TEXT("across two rebuilds: no intrusion"), Rebuilt.Intrusions, 0);
+	TestTrue(TEXT("across two rebuilds: the truck still waited for the aircraft"), Rebuilt.WaitedSeconds > 0.0);
+	TestTrue(TEXT("across two rebuilds: the truck still gets across"), Rebuilt.bVehicleArrived);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEmergencyCrossesDerivedCrossingTest,
+	"Airside.Model.Traffic.EmergencyCrossesDerivedCrossing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEmergencyCrossesDerivedCrossingTest::RunTest(const FString& Parameters)
+{
+	// REVIEW FOCUS 4: an emergency vehicle outranks an aircraft (TraversalPriority), so where a
+	// truck would wait it is the AIRCRAFT that gives way: the stop line's reservation is taken at
+	// the emergency's rank and the aircraft's own node claim is refused by it. The aircraft two
+	// seconds behind the line, not on the crossing: an aircraft already STANDING on the conflict
+	// holds it occupied, and nobody - an emergency included - is driven into a body.
+	const FDerivedCrossingOutcome Emergency = RunDerivedCrossingContest(*this, ETraversalClass::Emergency, false, 2.0);
+	if (!Emergency.bRan) { return false; }
+	TestTrue(TEXT("the emergency vehicle's route shares the conflict node"), Emergency.bSharedNode);
+	TestTrue(*FString::Printf(TEXT("the emergency vehicle never waits for the aircraft: %.2f s"), Emergency.WaitedSeconds),
+		Emergency.WaitedSeconds <= 0.0);
+	TestTrue(*FString::Printf(TEXT("the aircraft gives way to it: %.2f s"), Emergency.AircraftWaitedSeconds),
+		Emergency.AircraftWaitedSeconds > 0.0);
+	TestTrue(TEXT("the emergency vehicle gets across"), Emergency.bVehicleArrived);
 	return true;
 }
 
