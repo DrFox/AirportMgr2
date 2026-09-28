@@ -48,6 +48,20 @@ FBuildQuote BuildCost::ForSegment(const URoadProfile& Profile, double LengthUu, 
 	return Quote;
 }
 
+FBuildQuote BuildCost::ForUpgrade(const URoadProfile& From, EPavement FromSurface,
+	const URoadProfile& To, EPavement ToSurface, double LengthUu)
+{
+	const double Difference = ForSegment(To, LengthUu, ToSurface).BaseAmount()
+		- ForSegment(From, LengthUu, FromSurface).BaseAmount();
+	FBuildQuote Quote;
+	Quote.Lines.Add({ &To, EBuildUnit::Each, 1.0, FMath::Max(0.0, Difference), {} });
+	Quote.What = FText::Format(
+		NSLOCTEXT("BuildCost", "UpgradeOf", "Upgrade to {0}, {1} m"),
+		FText::FromString(To.GetName()),
+		FText::AsNumber(FMath::RoundToInt(MetresFromUu(LengthUu))));
+	return Quote;
+}
+
 FBuildQuote BuildCost::ForEntity(const UEntityDefinition& Definition)
 {
 	FBuildQuote Quote;

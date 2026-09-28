@@ -389,6 +389,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts) override;
 
+	/** Forwards to the facade - see IRoadEditTarget::UpgradeSegment. Not a UFUNCTION: ERoadKind
+	 *  is a plain enum UHT cannot see, and no Blueprint upgrades. */
+	virtual bool UpgradeSegment(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) override;
+	/** Forwards to the facade - see IRoadEditTarget::WhyUpgradeRefused. */
+	virtual FString WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const override;
+
 	/**
 	 * The shortest thing that may be called a runway, in uu. 300 m.
 	 *

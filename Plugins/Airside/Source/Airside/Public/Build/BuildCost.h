@@ -37,6 +37,18 @@ namespace BuildCost
 	AIRSIDE_API FBuildQuote ForSegment(const URoadProfile& Profile, double LengthUu,
 		EPavement Surface = EPavement::Tarmac);
 
+	/**
+	 * Re-paving LengthUu of From on FromSurface as To on ToSurface (strip stage 6's Upgrade
+	 * mode): To's ForSegment less From's, as ONE Each line on To - never below zero, so a
+	 * downgrade is free and refunds nothing (plan ruling 1). One line rather than To's lines
+	 * with From's subtracted, because FBuildLine clamps each line at zero and a negative line
+	 * is exactly what it exists to refuse; keyed on To so a discount aimed at the new profile
+	 * still applies to the difference.
+	 * ENFORCED BY: Airside.Present.UpgradeSegment (the charge is the difference; a downgrade charges nothing)
+	 */
+	AIRSIDE_API FBuildQuote ForUpgrade(const URoadProfile& From, EPavement FromSurface,
+		const URoadProfile& To, EPavement ToSurface, double LengthUu);
+
 	/** One placed thing - a stand, a depot - at its definition's rate. No pavement of its own -
 	 *  see FBuildLine::Pavement. */
 	AIRSIDE_API FBuildQuote ForEntity(const UEntityDefinition& Definition);

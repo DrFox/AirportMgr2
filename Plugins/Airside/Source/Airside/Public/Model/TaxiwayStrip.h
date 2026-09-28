@@ -5,6 +5,7 @@
 #include "Solve/IcaoCode.h"
 
 class URoadNetwork;
+class URoadProfile;
 
 /**
  * The clearance strip beside every taxiway, as a keep-out question: does this footprint stand
@@ -70,6 +71,11 @@ namespace TaxiwayStrip
 	 * include Tool/. A runway passes this too; HasStrip is the one that excludes it.
 	 */
 	AIRSIDE_API bool IsAircraftOnly(const URoadNetwork& Network, FRoadSegmentId Id);
+
+	/** IsAircraftOnly's rule on a profile alone, for a profile not yet on any segment - the
+	 *  Upgrade mode's "does this width keep the segment's kind?" (URoadNetwork::SetSegmentProfile).
+	 *  IsAircraftOnly forwards here, so the two cannot disagree. False for null. */
+	AIRSIDE_API bool IsAircraftOnlyProfile(const URoadProfile* Profile);
 
 	/** A taxiway with a strip: aircraft only, and not a runway (runways have their own rules). */
 	AIRSIDE_API bool HasStrip(const URoadNetwork& Network, FRoadSegmentId Id);

@@ -244,6 +244,29 @@ public:
 	 */
 	virtual bool SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts) = 0;
 
+	/**
+	 * Upgrade mode's commit (strip stage 6): give an existing road or taxiway the standard width
+	 * WidthIndex of Kind and the Surface, IN PLACE, as ONE undoable edit - so one Ctrl+Z reverts
+	 * both. Priced as the new ground less the old, never a refund on a downgrade. True with no
+	 * edit when it already is so (SetRunwayFacts' rule); false, and nothing touched, whenever
+	 * WhyUpgradeRefused has a reason.
+	 *
+	 * KIND TRAVELS, beside the plan's (SegmentIndex, WidthIndex, Surface): a width index names a
+	 * choice WITHIN a kind (ConnectNodes' rule), so the tool says which list it picked from and a
+	 * Road tool's tier clicked on a taxiway is refused rather than silently re-read as a code.
+	 */
+	virtual bool UpgradeSegment(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) = 0;
+
+	/**
+	 * Why UpgradeSegment would refuse, empty = allowed. THE ONE EVALUATOR - the Upgrade mode's
+	 * hover label, its ghost colour and the click all ask it (WhySegmentRefused's pattern): dead
+	 * slot, a runway or a kind change, no such width, an unoffered surface, the price, and the
+	 * widened PAVEMENT inside another taxiway's strip. What the grown STRIP swallows is NOT a
+	 * refusal - that restricts the taxiway or closes a stand (TaxiwayRestriction, stage 6).
+	 * ENFORCED BY: Airside.Present.UpgradeSegment, Airside.Present.UpgradeSegmentRefusesIntoNeighbourStrip
+	 */
+	virtual FString WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const = 0;
+
 	/** MinimumRunwayLength, read-only: RunwayTool judges a drag against it but never sets it. */
 	virtual double GetMinimumRunwayLength() const = 0;
 

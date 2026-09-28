@@ -196,6 +196,9 @@ struct FNullEditTarget : IRoadEditTarget
 	virtual bool PlaceRunway(FVector2D, FVector2D, URoadProfile*, const FRunwayFacts&) override { return false; }
 	using IRoadEditTarget::PlaceRunway;
 	virtual bool SetRunwayFacts(int32, const FRunwayFacts&) override { return false; }
+	virtual bool UpgradeSegment(int32, ERoadKind, int32, EPavement) override { return false; }
+	/** Refused, WhyStandRefused's reason: a null target has no segment to upgrade. */
+	virtual FString WhyUpgradeRefused(int32, ERoadKind, int32, EPavement) const override { return TEXT("no target"); }
 	virtual double GetMinimumRunwayLength() const override { return 0.0; }
 	virtual int32 GetRunwayProfileCount() const override { return 0; }
 	virtual URoadProfile* ResolveRunwayProfile(int32) const override { return nullptr; }

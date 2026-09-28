@@ -6,6 +6,11 @@
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/RoadEditTarget.h"
+#include "Build/BuildCost.h"
+#include "Model/BuildPurse.h"
+#include "Present/RoadEditFacade.h"
+#include "Present/RoadEditHistory.h"
+#include "Solve/IcaoCode.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -192,6 +197,171 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 			Tool.GetWidthIndex(), 0);
 	}
 
+	return true;
+}
+
+namespace
+{
+	/** Records what the facade charged. Prefixed against the unity build (BuildPurseTest has
+	 *  its own recorder). A fake, not ULedger, for that file's reason: the SEAM is under test. */
+	class FUpgradeRecordingPurse : public IBuildPurse
+	{
+	public:
+		double Funds = 1.0e9;
+		TArray<double> Charges;
+		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Funds; }
+		virtual int32 Charge(const FBuildQuote& Quote) override { Funds -= Quote.BaseAmount(); Charges.Add(Quote.BaseAmount()); return Charges.Num(); }
+		virtual void Reverse(int32) override {}
+		virtual void Credit(const FBuildQuote&) override {}
+		virtual FText Describe(const FBuildQuote& Quote) const override { return FText::AsNumber(Quote.BaseAmount()); }
+	};
+
+	/** The standard width index whose letter is Letter, INDEX_NONE if the content set has none -
+	 *  looked up, never typed, so a re-authored width list moves the test with it. */
+	int32 UpgradeWidthIndexFor(const ARoadNetworkActor& Actor, EIcaoCode Letter)
+	{
+		for (int32 Index = 0; Index < Actor.GetWidthCount(ERoadKind::Taxiway); ++Index)
+		{
+			const URoadProfile* Profile = Actor.ResolveWidthProfile(ERoadKind::Taxiway, Index);
+			if (Profile != nullptr && IcaoCode::TaxiwayLetterForWidth(Profile->GetTotalWidth()) == Letter)
+			{
+				return Index;
+			}
+		}
+		return INDEX_NONE;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUpgradeSegmentTest,
+	"Airside.Present.UpgradeSegment",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUpgradeSegmentTest::RunTest(const FString& Parameters)
+{
+	// THE UPGRADE SEAM (strip stage 6): an existing segment's width and surface change IN PLACE,
+	// as one undo step, priced by the difference - on the facade, not a tool, so the tool's
+	// Upgrade mode and anything later (a stand re-pave) refuse and charge one way.
+	FUpgradeRecordingPurse Purse; // before the world - the facade holds a raw pointer to it
+	FAirsideTestWorld World;
+	if (!TestNotNull(TEXT("a world"), World.Actor)) { return false; }
+	ARoadNetworkActor* Actor = World.Actor;
+	Actor->GetEditFacade()->SetPurse(&Purse);
+	ON_SCOPE_EXIT { Actor->GetEditFacade()->SetPurse(nullptr); };
+
+	const int32 C = UpgradeWidthIndexFor(*Actor, EIcaoCode::C);
+	const int32 F = UpgradeWidthIndexFor(*Actor, EIcaoCode::F);
+	if (!TestTrue(TEXT("the content set has a C and an F taxiway width"), C != INDEX_NONE && F != INDEX_NONE)) { return false; }
+	const URoadProfile* ProfileC = Actor->ResolveWidthProfile(ERoadKind::Taxiway, C);
+	const URoadProfile* ProfileF = Actor->ResolveWidthProfile(ERoadKind::Taxiway, F);
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(20000.0, 0.0));
+	if (!TestTrue(TEXT("a Code C tarmac taxiway laid"), Actor->ConnectNodes(A, B, ERoadKind::Taxiway, C, EPavement::Tarmac))) { return false; }
+	const int32 Seg = Actor->Network->GetSegments().Num() - 1;
+	auto Piece = [Actor, Seg]() -> const FRoadSegment& { return Actor->Network->GetSegments()[Seg]; };
+	const int32 ChargesAfterLay = Purse.Charges.Num();
+
+	// 1. SAME WIDTH, SAME SURFACE: true (it IS so) and no edit - an undo step that changes nothing
+	//    is a Ctrl+Z the player presses twice (SetRunwayFacts' rule).
+	{
+		const int32 Depth = Actor->History->UndoDepth();
+		TestTrue(TEXT("already so is not a refusal"), Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, C, EPavement::Tarmac));
+		TestEqual(TEXT("and opens no edit"), Actor->History->UndoDepth(), Depth);
+		TestEqual(TEXT("and charges nothing"), Purse.Charges.Num(), ChargesAfterLay);
+	}
+
+	// 2. REFUSALS, before the snapshot: nothing changes, nothing is charged, WhyUpgradeRefused says why.
+	{
+		const int32 Depth = Actor->History->UndoDepth();
+		TestFalse(TEXT("a surface the profile does not offer (concrete on a taxiway) refuses"),
+			Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Concrete));
+		TestFalse(TEXT("and says why"), Actor->WhyUpgradeRefused(Seg, ERoadKind::Taxiway, F, EPavement::Concrete).IsEmpty());
+		TestFalse(TEXT("a service-road width on a taxiway refuses - the kind never changes in place"),
+			Actor->UpgradeSegment(Seg, ERoadKind::ServiceRoad, 0, EPavement::Tarmac));
+		TestFalse(TEXT("a dead slot refuses"), Actor->UpgradeSegment(Seg + 100, ERoadKind::Taxiway, F, EPavement::Tarmac));
+		TestEqual(TEXT("no refusal opened an edit"), Actor->History->UndoDepth(), Depth);
+		TestTrue(TEXT("the profile is untouched"), Piece().Profile.Get() == ProfileC);
+	}
+
+	// 3. UNAFFORDABLE refuses before the scope.
+	{
+		Purse.Funds = 0.0;
+		const int32 Depth = Actor->History->UndoDepth();
+		TestFalse(TEXT("an upgrade the player cannot pay for refuses"), Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac));
+		TestEqual(TEXT("with no edit"), Actor->History->UndoDepth(), Depth);
+		TestTrue(TEXT("and no width change"), Piece().Profile.Get() == ProfileC);
+		Purse.Funds = 1.0e9;
+	}
+
+	// 4. WIDTH AND SURFACE TOGETHER: one undo step, priced as the new ground less the old.
+	{
+		const double Length = BuildCost::SegmentLengthUu(*Actor->Network, Piece());
+		const double Expected = BuildCost::ForSegment(*ProfileF, Length, EPavement::Grass).BaseAmount()
+			- BuildCost::ForSegment(*ProfileC, Length, EPavement::Tarmac).BaseAmount();
+		const int32 Depth = Actor->History->UndoDepth();
+		if (!TestTrue(TEXT("C tarmac -> F grass upgrades"), Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Grass)))
+		{
+			return false;   // the undo below would otherwise step back past the lay itself
+		}
+		TestTrue(TEXT("the segment carries F's profile"), Piece().Profile.Get() == ProfileF);
+		TestEqual(TEXT("and grass"), static_cast<int32>(Piece().Surface), static_cast<int32>(EPavement::Grass));
+		TestEqual(TEXT("as ONE undo step"), Actor->History->UndoDepth(), Depth + 1);
+		if (Expected > 0.0 && TestEqual(TEXT("charged once"), Purse.Charges.Num(), ChargesAfterLay + 1))
+		{
+			TestEqual(TEXT("the difference between the new ground and the old"), Purse.Charges.Last(), Expected, 0.01);
+		}
+
+		if (!TestTrue(TEXT("undo"), Actor->GetEditFacade()->Undo()) || !Actor->Network->GetSegments().IsValidIndex(Seg)) { return false; }
+		TestEqual(TEXT("one undo restores the width"), Actor->Network->GetSegments()[Seg].Profile->GetTotalWidth(), ProfileC->GetTotalWidth(), 0.5);
+		TestEqual(TEXT("and the surface"), static_cast<int32>(Actor->Network->GetSegments()[Seg].Surface), static_cast<int32>(EPavement::Tarmac));
+	}
+
+	// 5. A DOWNGRADE works and refunds nothing (plan ruling 1: no refund on a downgrade).
+	{
+		TestTrue(TEXT("up to F again"), Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac));
+		const int32 Charged = Purse.Charges.Num();
+		TestTrue(TEXT("and back down to C"), Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, C, EPavement::Tarmac));
+		TestEqual(TEXT("the downgrade lands"), Piece().Profile->GetTotalWidth(), ProfileC->GetTotalWidth(), 0.5);
+		TestEqual(TEXT("and charges nothing"), Purse.Charges.Num(), Charged);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUpgradeSegmentRefusesIntoNeighbourTest,
+	"Airside.Present.UpgradeSegmentRefusesIntoNeighbourStrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUpgradeSegmentRefusesIntoNeighbourTest::RunTest(const FString& Parameters)
+{
+	// WIDENING INTO A NEIGHBOUR IS LAYING PAVEMENT: the widened edge must stay out of another
+	// taxiway's strip (stage 3's JudgeSegment, asked with the NEW shape). What the grown STRIP
+	// swallows is not refused - that restricts (Task 3).
+	FAirsideTestWorld World;
+	if (!TestNotNull(TEXT("a world"), World.Actor)) { return false; }
+	ARoadNetworkActor* Actor = World.Actor;
+	const int32 C = UpgradeWidthIndexFor(*Actor, EIcaoCode::C);
+	const int32 F = UpgradeWidthIndexFor(*Actor, EIcaoCode::F);
+	if (!TestTrue(TEXT("C and F widths"), C != INDEX_NONE && F != INDEX_NONE)) { return false; }
+	const double HalfC = Actor->ResolveWidthProfile(ERoadKind::Taxiway, C)->GetMaxHalfWidth();
+	const double HalfF = Actor->ResolveWidthProfile(ERoadKind::Taxiway, F)->GetMaxHalfWidth();
+	const double NeighbourReach = HalfC + IcaoCode::TaxiwayStripForWidth(2.0 * HalfC);
+	// C's edge clear of the neighbour's strip, F's edge inside it.
+	const double Gap = NeighbourReach + 0.5 * (HalfC + HalfF);
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(20000.0, 0.0));
+	TestTrue(TEXT("the taxiway to widen"), Actor->ConnectNodes(A, B, ERoadKind::Taxiway, C, EPavement::Tarmac));
+	const int32 Seg = Actor->Network->GetSegments().Num() - 1;
+	const int32 P = Actor->PlaceNode(FVector2D(0.0, Gap));
+	const int32 Q = Actor->PlaceNode(FVector2D(20000.0, Gap));
+	TestTrue(TEXT("a parallel C taxiway, clear of it at C"), Actor->ConnectNodes(P, Q, ERoadKind::Taxiway, C, EPavement::Tarmac));
+
+	TestFalse(TEXT("widening to F puts pavement in the neighbour's strip: refused"),
+		Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac));
+	TestTrue(TEXT("and the refusal names the strip"),
+		Actor->WhyUpgradeRefused(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac).Contains(TEXT("clearance strip")));
 	return true;
 }
 

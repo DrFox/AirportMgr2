@@ -260,6 +260,18 @@ public:
 	 */
 	bool SetSegmentSurface(FRoadSegmentId Segment, EPavement Surface);
 
+	/**
+	 * Re-profile a live road or taxiway IN PLACE - the Upgrade mode's width change (strip stage
+	 * 6); before this a profile was written only by AddSegment and copied by SplitSegment. False,
+	 * nothing written, for a dead slot, a null profile, a runway either side (a runway's
+	 * cross-section is its chain's, PlaceRunway's), or a KIND change: aircraft-only in, aircraft-
+	 * only out (TaxiwayStrip::IsAircraftOnlyProfile) - a taxiway re-profiled as a road would keep
+	 * its stands' lead-ins on a van lane. Bumps EditRevision: a new width is new geometry, so the
+	 * next rebuild must be Topology.
+	 * ENFORCED BY: Airside.Present.UpgradeSegment
+	 */
+	bool SetSegmentProfile(FRoadSegmentId Segment, URoadProfile* Profile);
+
 	// --- Runway reads: forwarders. See Model/RunwayQuery.h for what each answers and why -
 	// the repository grew a second responsibility deriving these from its own graph, so the
 	// logic moved beside IsRunwaySegment/ProfileFor's callers rather than living inside the

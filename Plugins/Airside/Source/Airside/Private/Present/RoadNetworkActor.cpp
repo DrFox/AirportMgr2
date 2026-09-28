@@ -983,6 +983,16 @@ bool ARoadNetworkActor::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& F
 	return Facade->SetRunwayFacts(SegmentIndex, Facts);
 }
 
+bool ARoadNetworkActor::UpgradeSegment(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface)
+{
+	return Facade->UpgradeSegment(SegmentIndex, Kind, WidthIndex, Surface);
+}
+
+FString ARoadNetworkActor::WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const
+{
+	return Facade->WhyUpgradeRefused(SegmentIndex, Kind, WidthIndex, Surface);
+}
+
 bool ARoadNetworkActor::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 {
 	return Facade->SetIntermediateHoldingPosition(NodeIndex, bSet);

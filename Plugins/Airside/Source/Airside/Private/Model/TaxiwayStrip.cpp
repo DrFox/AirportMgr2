@@ -104,7 +104,11 @@ namespace TaxiwayStrip
 		const FRoadSegment* Segment = Network.GetSegment(Id);
 		// THROUGH ProfileFor, the one accessor that repairs a reloaded segment's null Profile - read
 		// raw, a saved map lost every strip laid on the fallback profile (found 2026-09-29).
-		const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+		return IsAircraftOnlyProfile(Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr);
+	}
+
+	bool IsAircraftOnlyProfile(const URoadProfile* Profile)
+	{
 		if (Profile == nullptr)
 		{
 			return false;
