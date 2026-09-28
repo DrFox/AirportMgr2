@@ -119,6 +119,26 @@ namespace InspectFacts
 		return FString();
 	}
 
+	bool DescribeRunway(const URoadNetwork& Network, int32 SegmentIndex, FRunwayCardFacts& Out)
+	{
+		const FRoadSegmentId Segment = Network.SegmentIdAt(SegmentIndex);
+		const FRoadSegment* Found = Segment.IsSet() ? Network.GetSegment(Segment) : nullptr;
+		const FRoadNode* A = Found != nullptr ? Network.GetNode(Found->A) : nullptr;
+		FRunwayEnd End;
+		if (A == nullptr || !Network.IsRunwaySegment(Segment) || !Network.InUseRunwayAt(A->Position, End))
+		{
+			return false;
+		}
+		const FRunwayFacts Facts = Network.RunwayFactsFor(Segment);
+		Out.Pair = RunwayDesignator::ToPairText(End.Direction);
+		Out.InUse = RunwayDesignator::Designate(End.Direction);
+		Out.Other = RunwayDesignator::Reciprocal(Out.InUse);
+		Out.Surface = Facts.Surface;
+		Out.Approach = Facts.Approach;
+		Out.Length = End.Length;
+		return true;
+	}
+
 	bool DescribeStand(const UGroundTraffic* Traffic, const URoadNetwork& Network, int32 EntityIndex, FStandFacts& Out)
 	{
 		const TArray<FEntityInstance>& Entities = Network.GetEntities();

@@ -101,6 +101,8 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> StatusText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> DepartButton;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> FollowButton;
+	/** The runway card's one verb, "Use 27" - selection.runway_in_use (2026-09-28). */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> RunwayButton;
 
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double PanelWidth = 300.0;
 
@@ -192,6 +194,13 @@ private:
 	 */
 	int32 DepartActionIndex = INDEX_NONE;
 	int32 FollowActionIndex = INDEX_NONE;
+	/** Found BY ID, not third-in-line: the pair above predates the rule that lists which must
+	 *  agree check names, not positions (CLAUDE.md); a third positional row would have made a
+	 *  reorder of the Selection section silently wire Depart's slot to the runway flip. */
+	int32 RunwayActionIndex = INDEX_NONE;
+
+	/** RunwayButton's caption - "Use 27" follows the selection, so Refresh rewrites it. */
+	UPROPERTY() TObjectPtr<UTextBlock> RunwayLabel;
 
 	/** DepartButton's own caption, held so Refresh can recolour it without re-finding it
 	 *  through GetContent() every tick - the same reason UBuildBarEntry holds its Label. */
@@ -236,4 +245,5 @@ private:
 
 	UFUNCTION() void HandleDepart();
 	UFUNCTION() void HandleFollow();
+	UFUNCTION() void HandleRunway();
 };

@@ -470,6 +470,17 @@ public:
 	/** Depart the selected aircraft; logs the planner's answer. */
 	void DepartSelected();
 
+	/** A runway is selected (ESelectionKind::Runway) and still describes - the card and the verb. */
+	bool SelectedRunwayFacts(FRunwayCardFacts& Out) const;
+	bool CanFlipSelectedRunway() const { FRunwayCardFacts Unused; return SelectedRunwayFacts(Unused); }
+	/**
+	 * Change the selected runway's direction in use to its other end, through the actor's
+	 * SetRunwayFacts (so it is one undo step and logs "Runway 09/27 in use: 27 (was 09)").
+	 * Flights already planned finish as planned; the next plan reads the new direction
+	 * (ruling 2, spec 2026-09-28-runway-in-use).
+	 */
+	void FlipSelectedRunway();
+
 	/**
 	 * What the next click would do, run through the snap chain. False only when the
 	 * cursor is not over the road plane at all.

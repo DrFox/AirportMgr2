@@ -1,17 +1,20 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Build/AnchorLink.h"
+#include "Content/AirsideSettings.h"
+#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/GroundTraffic.h"
+#include "Model/InspectFacts.h"
 #include "Model/LandingRun.h"
-#include "Build/AnchorLink.h"
-#include "Content/AirsideSettings.h"
-#include "Entities/EntityDefinition.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayQuery.h"
+#include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/RunwayDesignator.h"
+#include "Tool/SelectTool.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -342,6 +345,14 @@ namespace
  * landing. Measured every tick, for every agent: nothing is ever armed to roll against the
  * runway in use - the shape that put two aircraft nose to nose. And both complete: the
  * departure leaves, the arrival parks.
+ *
+ * WHAT THIS DOES NOT DISCRIMINATE, measured 2026-09-28: with InUseEnd mutated back to the
+ * old nearest-end rule this still passes, because on this layout the shortest taxi happens
+ * to be the 36 end too. The RULE is pinned by DepartsFromTheEndInUse / LandsOverTheEndInUse
+ * (both red under that mutation); this pins the end-to-end flow. Moving the apron beside the
+ * exit connector to make it discriminate deadlocked BOTH rules on the dead-end apron stub -
+ * an arrival in and a departure out on one lane, "no member can turn" - which is a ground
+ * traffic question about two-way dead ends, not about the runway direction.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRunwayInUseTrafficFlowTest,
@@ -424,6 +435,63 @@ bool FRunwayInUseFlipTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("flipped back while armed: the plan it holds still rolls 18"),
 			RunwayDesignator::Designate(After->DepartureOrder.End.Direction), 18);
 	}
+	return true;
+}
+
+/**
+ * THE SEAMS, AT THE COMPOSITION (CLAUDE.md "every seam you introduce gets a test"): a runway
+ * placed through the ACTOR takes its drawn direction; a click on it through FSelectTool selects
+ * it; InspectFacts::DescribeRunway reads the card from that selection; and a flip through the
+ * actor's SetRunwayFacts forwarder reaches the model and logs the line to grep for.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayInUsePresentTest,
+	"Airside.Present.RunwayInUse.PlaceSelectFlip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayInUsePresentTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	// Drawn from +X toward -X: the take-off heads -X, runway 18.
+	if (!TestTrue(TEXT("laid"), TestGuide::LayRunway(Actor, FVector2D(40000.0, 0.0), FVector2D(-40000.0, 0.0)))) { return false; }
+
+	FSelectTool Tool;
+	FSelection Sel;
+	FToolContext C;
+	C.Target = Actor;
+	C.SnapRadius = 400.0;
+	FRoadSnapResult NoSnap; NoSnap.Position = FVector2D(1000.0, 500.0);
+	C.SetCursor(NoSnap.Position, NoSnap);
+	C.Selection = &Sel;
+	Tool.OnClick(C);
+	if (!TestTrue(TEXT("a click on the strip selects the runway"), Sel.Kind == ESelectionKind::Runway)) { return false; }
+
+	FRunwayCardFacts Card;
+	if (!TestTrue(TEXT("the card describes it"), InspectFacts::DescribeRunway(*Actor->Network, Sel.Id, Card))) { return false; }
+	TestEqual(TEXT("named low end first"), Card.Pair, FString(TEXT("18/36")));
+	TestEqual(TEXT("placed through the actor, in use is the drawn direction, 18"), Card.InUse, 18);
+	TestEqual(TEXT("the other end is 36"), Card.Other, 36);
+
+	// A surface reclassify through the SAME forwarder with a fresh struct keeps the direction.
+	FRunwayFacts Grass;
+	Grass.Surface = EPavement::Grass;
+	TestTrue(TEXT("reclassified"), Actor->SetRunwayFacts(Sel.Id, Grass));
+	InspectFacts::DescribeRunway(*Actor->Network, Sel.Id, Card);
+	TestEqual(TEXT("a surface change keeps the runway in use"), Card.InUse, 18);
+
+	FLogLineSpy Spy(TEXT("LogRoadMesh"));
+	GLog->AddOutputDevice(&Spy);
+	FRunwayFacts Flip = Actor->Network->RunwayFactsFor(Actor->Network->SegmentIdAt(Sel.Id));
+	Flip.InUse = Card.Other;
+	const bool bFlipped = Actor->SetRunwayFacts(Sel.Id, Flip);
+	GLog->RemoveOutputDevice(&Spy);
+	TestTrue(TEXT("flipped through the actor"), bFlipped);
+	InspectFacts::DescribeRunway(*Actor->Network, Sel.Id, Card);
+	TestEqual(TEXT("the card now says 36"), Card.InUse, 36);
+	TestTrue(FString::Printf(TEXT("and the log says so (%d LogRoadMesh lines)"), Spy.Count),
+		Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("Runway 18/36 in use: 36 (was 18)")); }));
 	return true;
 }
 

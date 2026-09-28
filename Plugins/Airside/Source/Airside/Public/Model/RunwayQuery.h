@@ -163,6 +163,13 @@ namespace RunwayQuery
 	AIRSIDE_API bool InUseRunwayNearest(const URoadNetwork& Network, const FVector2D& Near, FRunwayEnd& OutEnd);
 
 	/**
+	 * The runway segment whose own strip Position lies on (IsPointOnRunway against that one
+	 * segment, so a click is answered by the piece under it), or unset. What the select tool
+	 * asks of a click that hit no aircraft and no stand.
+	 */
+	AIRSIDE_API FRoadSegmentId RunwaySegmentAt(const URoadNetwork& Network, const FVector2D& Position);
+
+	/**
 	 * Guideline nodes lying on the runway chain Seed belongs to, ordered by distance from
 	 * Threshold along Direction.
 	 *

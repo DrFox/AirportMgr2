@@ -25,6 +25,7 @@ drives the downloads, so it cannot drift from what was fetched.
 | `game.save` | save | delapouite |
 | `selection.depart` | airplane-departure | delapouite |
 | `selection.follow` | binoculars | delapouite |
+| `selection.runway_in_use` | windsock | delapouite |
 | `tool.apron` | stone-path | delapouite |
 | `tool.fuel depot` | fuel-tank | delapouite |
 | `tool.guidelines` | path-distance | delapouite |

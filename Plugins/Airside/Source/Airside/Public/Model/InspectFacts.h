@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
+#include "Model/RunwayFacts.h"
 
 class UGroundTraffic;
 class URoadNetwork;
@@ -104,6 +105,20 @@ struct FStandFacts
 	EServiceRole PoseRole = EServiceRole::Aircraft;
 };
 
+/** What the inspector shows for a runway (ESelectionKind::Runway). Plain, like its siblings. */
+struct FRunwayCardFacts
+{
+	/** Low end first, as the strip is spoken of: "09/27". */
+	FString Pair;
+	/** The designator in use (FRunwayFacts::InUse, resolved: never 0) and the other end's. */
+	int32 InUse = 0;
+	int32 Other = 0;
+	EPavement Surface = EPavement::Tarmac;
+	ERunwayApproach Approach = ERunwayApproach::Visual;
+	/** The whole strip, uu. */
+	double Length = 0.0;
+};
+
 namespace InspectFacts
 {
 	/** False for an unknown agent id; Out untouched. Network may be null (no destination names). */
@@ -126,6 +141,13 @@ namespace InspectFacts
 	 * branches on it.
 	 */
 	AIRSIDE_API FString StatusOf(const FRoadAgent& Agent);
+
+	/**
+	 * False when SegmentIndex is not a live runway segment. The direction is the RESOLVED one
+	 * (RunwayQuery::InUseEnd), so a runway saved before the field existed reads its effective
+	 * end, not 0 - the card says what the planners will do, not what the struct stores.
+	 */
+	AIRSIDE_API bool DescribeRunway(const URoadNetwork& Network, int32 SegmentIndex, FRunwayCardFacts& Out);
 
 	/** The card's pushback words for a need. */
 	AIRSIDE_API FString PushbackText(EPushbackNeed Need);

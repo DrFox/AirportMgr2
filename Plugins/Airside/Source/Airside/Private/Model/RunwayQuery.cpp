@@ -385,6 +385,23 @@ namespace RunwayQuery
 		return true;
 	}
 
+	FRoadSegmentId RunwaySegmentAt(const URoadNetwork& Network, const FVector2D& Position)
+	{
+		// A linear scan, asked per click and per hover frame on the Select tool: segments were
+		// ~300 on the scale fixture (BuildScale, 2026-09-28), and each test here is a few dot
+		// products on a one-segment chain.
+		for (int32 Index = 0; Index < Network.GetSegments().Num(); ++Index)
+		{
+			const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+			if (Id.IsSet() && Network.IsRunwaySegment(Id)
+				&& IsPointOnRunway(Network, Position, TArray<FRoadSegmentId>{ Id }))
+			{
+				return Id;
+			}
+		}
+		return FRoadSegmentId();
+	}
+
 	bool InUseRunwayNearest(const URoadNetwork& Network, const FVector2D& Near, FRunwayEnd& OutEnd)
 	{
 		FRunwayEnd Found;
