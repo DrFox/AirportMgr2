@@ -684,6 +684,33 @@ bool ARoadBuildController::SelectedStandFacts(FStandFacts& Out) const
 	return InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Sel.Id, Out);
 }
 
+bool ARoadBuildController::SelectedRunwayFacts(FRunwayCardFacts& Out) const
+{
+	const FSelection& Sel = GetSelection();
+	if (Sel.Kind != ESelectionKind::Runway || Target == nullptr || Target->GetNetwork() == nullptr)
+	{
+		return false;
+	}
+	return InspectFacts::DescribeRunway(*Target->GetNetwork(), Sel.Id, Out);
+}
+
+void ARoadBuildController::FlipSelectedRunway()
+{
+	FRunwayCardFacts Card;
+	if (!SelectedRunwayFacts(Card))
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Runway in use: no runway selected."));
+		return;
+	}
+	const FRoadSegmentId Segment = Target->GetNetwork()->SegmentIdAt(GetSelection().Id);
+	FRunwayFacts Facts = Target->GetNetwork()->RunwayFactsFor(Segment);
+	Facts.InUse = Card.Other;
+	if (!Target->SetRunwayFacts(GetSelection().Id, Facts))
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Runway in use: the change to %02d was refused."), Card.Other);
+	}
+}
+
 bool ARoadBuildController::CanDepartSelected() const
 {
 	// THROUGH THE PER-FRAME CACHE (issue #187): the bar polls this every tick, and

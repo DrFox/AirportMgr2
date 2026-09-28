@@ -12,8 +12,12 @@ namespace DeparturePlanner
 	FDeparturePlan Plan(const URoadNetwork& Network, FGuidelineNodeId Start,
 		const FVector2D& OnRunway, const FAirframe& Airframe, ETraversalClass Class)
 	{
+		// OnRunway picks the RUNWAY; the END is the one in use (spec 2026-09-28-runway-in-use).
+		// It used to be the threshold nearest OnRunway, and PlanAny asked both - so a departure
+		// took whichever end gave the shorter taxi and met the landings coming the other way
+		// (samples/deadlock.png).
 		FDeparturePlan Out;
-		if (!Network.RunwayExtentAt(OnRunway, Out.End))
+		if (!Network.InUseRunwayAt(OnRunway, Out.End))
 		{
 			Out.Why = EDepartureRefusal::NoRunway;
 			return Out;
@@ -156,12 +160,13 @@ namespace DeparturePlanner
 
 		for (const FRunwaySummary& R : Cap.Runways)
 		{
-			// A point just inside EACH end: RunwayExtentAt's proximity gate is against the
-			// nearest segment end, so a midpoint on a long segment is "not on a runway" and
-			// the threshold it hands back is the one nearest the point asked about.
-			const FVector2D Ends[2] = { R.End.Threshold + R.End.Direction * 10.0, R.End.FarEnd() - R.End.Direction * 10.0 };
-			for (const FVector2D& OnRunway : Ends)
+			// ONE POINT PER RUNWAY, just inside an end: RunwayExtentAt's proximity gate is against
+			// the nearest segment end, so a midpoint on a long segment is "not on a runway". It
+			// used to be a point inside EACH end, which is how a departure came to take off from
+			// whichever end was nearer its stand; Plan now resolves the end in use itself, so
+			// both probes would plan the same departure twice.
 			{
+				const FVector2D OnRunway = R.End.Threshold + R.End.Direction * 10.0;
 				const FDeparturePlan Candidate = Plan(Network, Start, OnRunway, Airframe, Class);
 				if (Candidate.IsValid())
 				{

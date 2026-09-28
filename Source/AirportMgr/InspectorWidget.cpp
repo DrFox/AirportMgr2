@@ -34,6 +34,7 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 	EnsureSlots(&Style);
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
+	if (RunwayButton != nullptr) { RunwayButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunway); }
 	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
 	// otherwise-empty panel must stay this way. Only the CARD hides; the root stays laid out.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
@@ -51,6 +52,13 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	for (int32 Index = 0; Index < Actions.Num(); ++Index)
 	{
 		if (Actions[Index].Section != EActionSection::Selection) { continue; }
+		if (Actions[Index].Id == FName(TEXT("selection.runway_in_use")))
+		{
+			// By id - see RunwayActionIndex. Not counted in SelectionSeen, so it cannot shift
+			// the positional pair whichever side of them it is registered.
+			RunwayActionIndex = Index;
+			continue;
+		}
 		if (SelectionSeen == 0) { DepartActionIndex = Index; }
 		else if (SelectionSeen == 1) { FollowActionIndex = Index; }
 		++SelectionSeen;
@@ -81,7 +89,7 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	Text(StatusText, TEXT("StatusText"), EUITextRole::Body, Style->TextMuted);
 
 	UHorizontalBox* Row = nullptr;
-	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr))
+	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr || RunwayButton == nullptr))
 	{
 		Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("InspectorVerbs"));
 		Column->AddChildToVerticalBox(Row)->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 0.0f));
@@ -116,6 +124,11 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	// enabled state changes, and UBuildBarEntry holds its own Label for the same reason.
 	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex, &DepartLabel);
 	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex, nullptr);
+	Button(RunwayButton, TEXT("RunwayButton"), RunwayActionIndex, &RunwayLabel);
+	if (!Actions.IsValidIndex(RunwayActionIndex))
+	{
+		UE_LOG(LogInspector, Warning, TEXT("No selection.runway_in_use row in BuildActions(): the runway card has no button"));
+	}
 }
 
 void UInspectorWidget::DockAbove(UBuildBarWidget* Bar)
@@ -211,6 +224,8 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 
 	FString Title, Facts, Status;
 	bool bAircraft = false;
+	bool bRunway = false;
+	FText RunwayCaption;
 	if (Selection.Kind == ESelectionKind::Aircraft)
 	{
 		FAgentFacts F;
@@ -337,6 +352,31 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		Facts = LastComposedFacts;
 		Status = LastComposedStatus;
 	}
+	else if (Selection.Kind == ESelectionKind::Runway)
+	{
+		FRunwayCardFacts R;
+		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeRunway(*Target->GetNetwork(), Selection.Id, R))
+		{
+			SetCardShown(false);
+			bDepartEnabled = false;
+			return;
+		}
+		// THE RUNWAY IN USE CARD (spec 2026-09-28-runway-in-use). Composed every tick without
+		// FInspectorKey's gate: nothing on it moves, and the SetText gate below already makes
+		// an unchanged sentence free.
+		bRunway = true;
+		const FString InUse = FString::Printf(TEXT("%02d"), R.InUse);
+		const FString Other = FString::Printf(TEXT("%02d"), R.Other);
+		Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorRunwayTitle", "Runway {0}").ToString(), { R.Pair });
+		Facts = FString::Format(
+			*NSLOCTEXT("AirportMgr", "InspectorRunwayFacts", "In use: {0}\n{1}, {2} approach\n{3} m long").ToString(),
+			{ InUse, FString(Pavement::Name(R.Surface)), FString(RunwayApproachName(R.Approach)),
+				FString::Printf(TEXT("%.0f"), R.Length / 100.0) });
+		Status = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorRunwayStatus",
+			"Landing and taking off {0}. A change reaches the next flight planned.").ToString(), { InUse });
+		RunwayCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorRunwayUse", "Use {0}"), FText::FromString(Other));
+		bDepartEnabled = false;
+	}
 	else
 	{
 		FStandFacts S;
@@ -444,6 +484,14 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	{
 		FollowButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
+	if (RunwayButton != nullptr)
+	{
+		RunwayButton->SetVisibility(bRunway ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		if (bRunway && RunwayLabel != nullptr && !RunwayLabel->GetText().EqualTo(RunwayCaption))
+		{
+			RunwayLabel->SetText(RunwayCaption);
+		}
+	}
 	SetCardShown(true);
 }
 
@@ -468,6 +516,7 @@ void UInspectorWidget::RunAction(int32 ActionIndex)
 
 void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
 void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
+void UInspectorWidget::HandleRunway() { RunAction(RunwayActionIndex); }
 
 bool UInspectorWidget::IsShownForTest() const { return CardWidget != nullptr && CardWidget->GetVisibility() != ESlateVisibility::Collapsed; }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }

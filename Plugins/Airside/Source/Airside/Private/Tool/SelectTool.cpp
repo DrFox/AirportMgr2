@@ -4,6 +4,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RunwayQuery.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
@@ -32,6 +33,21 @@ namespace
 		else
 		{
 			Sink.Marker(Entity.Position, Style);
+		}
+	}
+
+	/**
+	 * A runway drawn as its whole centreline, threshold IN USE to far end - the strip, not the
+	 * one segment clicked, because the facts (and so the card) are the strip's.
+	 */
+	void DrawRunway(const URoadNetwork& Network, int32 SegmentIndex, EPreviewStyle Style, IToolPreviewSink& Sink)
+	{
+		const FRoadSegment* Segment = Network.GetSegment(Network.SegmentIdAt(SegmentIndex));
+		const FRoadNode* A = Segment != nullptr ? Network.GetNode(Segment->A) : nullptr;
+		FRunwayEnd End;
+		if (A != nullptr && Network.InUseRunwayAt(A->Position, End))
+		{
+			Sink.Polyline({ End.Threshold, End.FarEnd() }, Style);
 		}
 	}
 }
@@ -70,6 +86,18 @@ bool FSelectTool::PositionOf(const FToolContext& Context, ESelectionKind Kind, i
 		Out = Network->GetEntities()[Id].Position;
 		return true;
 	}
+	case ESelectionKind::Runway:
+	{
+		const URoadNetwork* Network = Context.Target->GetNetwork();
+		const FRoadSegmentId Segment = Network != nullptr ? Network->SegmentIdAt(Id) : FRoadSegmentId();
+		const FRoadSegment* Found = Segment.IsSet() ? Network->GetSegment(Segment) : nullptr;
+		if (Found == nullptr || !Network->IsRunwaySegment(Segment))
+		{
+			return false;
+		}
+		Out = (Network->GetNode(Found->A)->Position + Network->GetNode(Found->B)->Position) * 0.5;
+		return true;
+	}
 	default:
 		return false;
 	}
@@ -98,6 +126,14 @@ void FSelectTool::OnClick(const FToolContext& Context)
 			Sel.Kind = ESelectionKind::Stand;
 			Sel.Id = Stand;
 		}
+		else if (const FRoadSegmentId Runway = Context.Network() != nullptr
+			? RunwayQuery::RunwaySegmentAt(*Context.Network(), Context.Cursor) : FRoadSegmentId(); Runway.IsSet())
+		{
+			// LAST, after aircraft and stand: a runway is under most of the airport's clicks
+			// that matter, and an aircraft rolling on it must still be the thing picked.
+			Sel.Kind = ESelectionKind::Runway;
+			Sel.Id = Runway.Index;
+		}
 		else
 		{
 			// A click on nothing deselects, as it does in every Cities-style game: the
@@ -106,7 +142,8 @@ void FSelectTool::OnClick(const FToolContext& Context)
 		}
 	}
 	UE_LOG(LogAirside, Log, TEXT("Select: %s %d"),
-		Sel.Kind == ESelectionKind::Aircraft ? TEXT("aircraft") : Sel.Kind == ESelectionKind::Stand ? TEXT("stand") : TEXT("nothing"),
+		Sel.Kind == ESelectionKind::Aircraft ? TEXT("aircraft") : Sel.Kind == ESelectionKind::Stand ? TEXT("stand")
+			: Sel.Kind == ESelectionKind::Runway ? TEXT("runway segment") : TEXT("nothing"),
 		Sel.Id);
 }
 
@@ -152,6 +189,14 @@ void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 		{
 			DrawEntity(*Context.Network(), Stand, EPreviewStyle::Hover, Sink);
 		}
+		else if (Stand == INDEX_NONE && Context.Network() != nullptr)
+		{
+			const FRoadSegmentId Runway = RunwayQuery::RunwaySegmentAt(*Context.Network(), Context.Cursor);
+			if (Runway.IsSet())
+			{
+				DrawRunway(*Context.Network(), Runway.Index, EPreviewStyle::Hover, Sink);
+			}
+		}
 	}
 
 	if (Context.Selection != nullptr && Context.Selection->IsSet()
@@ -160,6 +205,10 @@ void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 		if (Context.Selection->Kind == ESelectionKind::Stand && Context.Network() != nullptr)
 		{
 			DrawEntity(*Context.Network(), Context.Selection->Id, EPreviewStyle::Selected, Sink);
+		}
+		else if (Context.Selection->Kind == ESelectionKind::Runway && Context.Network() != nullptr)
+		{
+			DrawRunway(*Context.Network(), Context.Selection->Id, EPreviewStyle::Selected, Sink);
 		}
 		else
 		{

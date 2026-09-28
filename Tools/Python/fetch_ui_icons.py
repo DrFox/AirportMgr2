@@ -83,6 +83,8 @@ ICONS = {
 
     "selection.depart":    ("delapouite", "airplane-departure"),
     "selection.follow":    ("delapouite", "binoculars"),
+    # The runway in use (2026-09-28): the windsock is what a pilot reads it from.
+    "selection.runway_in_use": ("delapouite", "windsock"),
 
     "game.save":           ("delapouite", "save"),
     "game.load":           ("delapouite", "load"),

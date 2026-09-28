@@ -155,6 +155,25 @@ namespace
 			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleWatchAgent(); },
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsWatchingAgent(); },
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.HasSelectedAircraft() || Ctx.Controller.HasAgent() || Ctx.Controller.IsWatchingAgent(); }));
+		// THE RUNWAY IN USE, flipped from the selected runway's card (spec 2026-09-28-runway-in-
+		// use, ruling 4): a run-time traffic control, so a Selection verb and not a runway-tool
+		// modifier. No key, Depart's reason: a key that reversed whatever runway happened to be
+		// selected is a misclick away from sending the next arrival the other way. Captioned with
+		// the end it would CHANGE TO - "Use 27" - so the button says what pressing it does.
+		{
+			FBuildAction Flip = Make(TEXT("selection.runway_in_use"), EActionSection::Selection,
+				LOCTEXT("RunwayInUse", "Change runway in use"), EKeys::Invalid, false,
+				[](FBuildActionContext& Ctx) { Ctx.Controller.FlipSelectedRunway(); }, Never,
+				[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanFlipSelectedRunway(); });
+			Flip.DynamicLabel = [](const FBuildActionContext& Ctx)
+			{
+				FRunwayCardFacts Card;
+				return Ctx.Controller.SelectedRunwayFacts(Card)
+					? FText::Format(LOCTEXT("RunwayUse", "Use {0}"), FText::FromString(FString::Printf(TEXT("%02d"), Card.Other)))
+					: LOCTEXT("RunwayInUse", "Change runway in use");
+			};
+			Out.Add(MoveTemp(Flip));
+		}
 
 		// --- Game ---
 		Out.Add(Make(TEXT("game.save"), EActionSection::Game, LOCTEXT("Save", "Save"), EKeys::K, false,

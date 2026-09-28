@@ -55,6 +55,11 @@ bool FBuildActionsRegistryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("selection.depart is registered"), Actions.ContainsByPredicate([](const FBuildAction& A) { return A.Id == FName(TEXT("selection.depart")) && A.Section == EActionSection::Selection && !A.Key.IsValid(); }));
 	TestTrue(TEXT("selection.follow is registered on C"), Actions.ContainsByPredicate([](const FBuildAction& A) { return A.Id == FName(TEXT("selection.follow")) && A.Key == EKeys::C; }));
 	TestFalse(TEXT("aircraft.watch is gone - one verb for following"), Actions.ContainsByPredicate([](const FBuildAction& A) { return A.Id == FName(TEXT("aircraft.watch")); }));
+	// The runway card's verb (spec 2026-09-28-runway-in-use): a Selection row, found by the
+	// inspector BY ID, and like Depart it has no key - a key that reversed whatever runway was
+	// selected is a misclick away from sending the next arrival the other way.
+	TestTrue(TEXT("selection.runway_in_use is registered, keyless, in Selection"), Actions.ContainsByPredicate([](const FBuildAction& A)
+		{ return A.Id == FName(TEXT("selection.runway_in_use")) && A.Section == EActionSection::Selection && !A.Key.IsValid() && A.DynamicLabel; }));
 
 	// Every section has at least one action - an empty section on the bar is a layout with
 	// nothing in it, which reads as a bug.
@@ -123,6 +128,15 @@ bool FBuildActionTryRunTest::RunTest(const FString& Parameters)
 	Action.IsEnabled = [](const FBuildActionContext&) { return true; };
 	TestTrue(TEXT("TryRun runs an enabled action"), Action.TryRun(*C, TEXT("Test")));
 	TestEqual(TEXT("Execute ran exactly once while enabled"), RanCount, 1);
+
+	// THE RUNWAY FLIP WITH NOTHING SELECTED is refused by its own gate, not by a crash in
+	// FlipSelectedRunway reaching for a runway that is not there.
+	const FBuildAction* Flip = FindAction(FName(TEXT("selection.runway_in_use")));
+	if (TestNotNull(TEXT("the runway flip is registered"), Flip))
+	{
+		TestFalse(TEXT("no runway selected: the flip is disabled"), C->CanFlipSelectedRunway());
+		TestFalse(TEXT("and TryRun refuses it"), Flip->TryRun(*C, TEXT("Test")));
+	}
 
 	return true;
 }

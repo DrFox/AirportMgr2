@@ -738,8 +738,9 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	return true;
 }
 
-bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts)
+bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& InFacts)
 {
+	FRunwayFacts Facts = InFacts;
 	URoadNetwork* Network = Actor().Network;
 	if (Network == nullptr)
 	{
@@ -752,7 +753,14 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Fac
 		// SetIntermediateHoldingPosition for why a refusal inside the scope is not a rollback.
 		return false;
 	}
-	if (Network->RunwayFactsFor(Segment) == Facts)
+	// InUse 0 means "keep the strip's" (URoadNetwork::SetRunwayFacts) - resolved HERE too, so a
+	// surface-only reclassify that changes nothing is still "already so" rather than an undo step.
+	const FRunwayFacts Was = Network->RunwayFactsFor(Segment);
+	if (Facts.InUse == 0)
+	{
+		Facts.InUse = Was.InUse;
+	}
+	if (Was == Facts)
 	{
 		// Already so. True, because the runway IS what was asked for - but no edit, since
 		// an undo step that changes nothing is a Ctrl+Z the player has to press twice.
@@ -765,6 +773,20 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Fac
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Runway at segment %d reclassified: %s, %s approach (the whole strip)"),
 		SegmentIndex, Pavement::Name(Facts.Surface), RunwayApproachName(Facts.Approach));
+	if (Facts.InUse != Was.InUse)
+	{
+		// The line to grep when "the planes still land the old way": a flip reached the model.
+		// Planned flights keep their plan (ruling 2) - only the next one reads this.
+		// The pair from the clicked segment's own axis: a runway is straight, so any member
+		// names the strip, and ToPairText is low-first whichever way the segment was drawn.
+		const FRoadSegment* Piece = Network->GetSegment(Segment);
+		const FRoadNode* A = Piece != nullptr ? Network->GetNode(Piece->A) : nullptr;
+		const FRoadNode* B = Piece != nullptr ? Network->GetNode(Piece->B) : nullptr;
+		const FString Pair = A != nullptr && B != nullptr
+			? RunwayDesignator::ToPairText(B->Position - A->Position) : FString(TEXT("?"));
+		UE_LOG(LogRoadMesh, Log, TEXT("Runway %s in use: %s (was %s)"), *Pair,
+			*RunwayDesignator::ToText(Facts.InUse), *RunwayDesignator::ToText(Was.InUse));
+	}
 	return true;
 }
 
