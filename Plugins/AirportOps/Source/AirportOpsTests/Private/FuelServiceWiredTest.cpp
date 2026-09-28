@@ -3,7 +3,7 @@
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 #include "Model/GroundTraffic.h"
 #include "Model/InspectFacts.h"
 #include "Model/RoadAgent.h"
@@ -114,7 +114,7 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
-	if (!TestNotNull(TEXT("the runtime owns a fuel service"), Runtime->GetFuelService())) { return false; }
+	if (!TestNotNull(TEXT("the runtime owns a fuel service"), Runtime->GetJobBoard())) { return false; }
 	Runtime->Attach(Actor);
 
 	// Taxi an aircraft in to the stand.
@@ -154,9 +154,9 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 			bSawTruckWithAView |= Actor->GetTraffic()->GetAgentView(Agent.Id) != nullptr;
 		}
 
-		for (const FFuelDemand& Demand : Runtime->GetFuelService()->GetDemands())
+		for (const FServiceJob& Demand : Runtime->GetJobBoard()->GetJobs())
 		{
-			bSawFuelling |= Demand.State == EFuelDemandState::Fuelling;
+			bSawFuelling |= Demand.State == EServiceJobState::Serving;
 		}
 
 		if (bSawFuelling && bSawVehicleAgent && TruckId != 0
@@ -167,13 +167,13 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	}
 
 	// 1. The RELAY: an aircraft parking reached the service at all.
-	TestEqual(TEXT("parking made a demand"), Runtime->GetFuelService()->GetDemands().Num(), 1);
+	TestEqual(TEXT("parking made a demand"), Runtime->GetJobBoard()->GetJobs().Num(), 1);
 	TestEqual(TEXT("for the aircraft that parked"),
-		Runtime->GetFuelService()->GetDemands()[0].AircraftId, Aircraft);
+		Runtime->GetJobBoard()->GetJobs()[0].AircraftId, Aircraft);
 	TestEqual(TEXT("at the stand it parked on"),
-		Runtime->GetFuelService()->GetDemands()[0].Stand, Stand);
+		Runtime->GetJobBoard()->GetJobs()[0].Stand, Stand);
 	TestEqual(TEXT("served by the depot"),
-		Runtime->GetFuelService()->GetDemands()[0].Depot, Depot);
+		Runtime->GetJobBoard()->GetJobs()[0].LastDepot, Depot);
 
 	// 2. The TICK: a GroundVehicle agent appeared, with a view of its own, and fuelled.
 	TestTrue(TEXT("a ground vehicle agent appeared"), bSawVehicleAgent);
@@ -184,8 +184,8 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	// this is the end of the round trip the whole slice exists to produce.
 	TestNull(TEXT("the truck is gone once it is home"),
 		Actor->GetTraffic()->GetModel()->FindAgent(TruckId));
-	TestEqual(TEXT("done"), static_cast<int32>(Runtime->GetFuelService()->GetDemands()[0].State),
-		static_cast<int32>(EFuelDemandState::Done));
+	TestEqual(TEXT("done"), static_cast<int32>(Runtime->GetJobBoard()->GetJobs()[0].State),
+		static_cast<int32>(EServiceJobState::Done));
 
 	// 4. THE PANEL'S SEAM. FAgentFacts::Fuel is filled by the ops layer, not by DescribeAgent
 	// - so the field must be empty out of Airside and non-empty once the service is asked.
@@ -198,7 +198,7 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Airside leaves the fuel line empty - it must not know what fuel is"),
 		AirsideFacts.Fuel.IsEmpty());
 	TestEqual(TEXT("and the ops layer fills it"),
-		Runtime->GetFuelService()->DescribeAgent(Aircraft, 0.0).EndsWith(TEXT("\u00B7 done")), true);
+		Runtime->GetJobBoard()->DescribeAgent(Aircraft, 0.0).EndsWith(TEXT("\u00B7 done")), true);
 
 	// 5. And the depot's own card can tell itself from a stand.
 	FStandFacts DepotFacts;

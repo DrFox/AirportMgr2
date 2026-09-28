@@ -9,7 +9,7 @@
 class ARoadNetworkActor;
 class UOpsCatalog;
 class UOpsEvents;
-class UFuelService;
+class UJobBoard;
 class UFlightBoard;
 class UOfferGenerator;
 class ULedger;
@@ -31,7 +31,7 @@ enum class EArrivalRefusal : uint8;
  * a lifetime in play. Same split as ARoadNetworkActor (composition root) over
  * UAirsideTraffic (testable subobject), for the same reason.
  *
- * It GROWS BY FORWARDING. UFuelService was the first such subobject: this class gained a
+ * It GROWS BY FORWARDING. UJobBoard was the first such subobject: this class gained a
  * pointer, three lines in Attach/Tick/OnAgentPhase, and no logic at all. The flight board, the
  * ledger and the pricing arrived the same way and cost the same: a pointer each and a line in
  * Attach. The job board is next, and gets no more. Logic lands in them, never here.
@@ -48,9 +48,9 @@ public:
 	UOpsEvents* GetEvents() const { return Events; }
 	UOpsCatalog* GetCatalog() const { return Catalog; }
 
-	/** The fuel jobs. See UFuelService - this runtime owns it, feeds it the phase events and
+	/** The fuel jobs. See UJobBoard - this runtime owns it, feeds it the phase events and
 	 *  ticks it, and that is the whole of the wiring. */
-	UFuelService* GetFuelService() const { return FuelService; }
+	UJobBoard* GetJobBoard() const { return JobBoard; }
 
 	/** Every flight, and the one caller of DispatchArrival. See UFlightBoard. */
 	UFlightBoard* GetFlightBoard() const { return FlightBoard; }
@@ -69,7 +69,7 @@ public:
 
 	/**
 	 * What Stand was built for: UAirsideSettings::ResolveStandDesignVehicleOf on its definition and
-	 * its outline's letter. The ONE reader Attach hands UFuelService::DesignVehicleOf, and the one
+	 * its outline's letter. The ONE reader Attach hands UJobBoard::DesignVehicleOf, and the one
 	 * the world-free fuel fixture hands it too, so the two cannot read a stand differently. A
 	 * forwarder, not logic - the reading lives in Content/.
 	 */
@@ -162,7 +162,7 @@ private:
 	UPROPERTY() TObjectPtr<USimClock> Clock;
 	UPROPERTY() TObjectPtr<UOpsEvents> Events;
 	UPROPERTY() TObjectPtr<UOpsCatalog> Catalog;
-	UPROPERTY() TObjectPtr<UFuelService> FuelService;
+	UPROPERTY() TObjectPtr<UJobBoard> JobBoard;
 	UPROPERTY() TObjectPtr<UFlightBoard> FlightBoard;
 	UPROPERTY() TObjectPtr<UOfferGenerator> OfferGenerator;
 	UPROPERTY() TObjectPtr<ULedger> Ledger;

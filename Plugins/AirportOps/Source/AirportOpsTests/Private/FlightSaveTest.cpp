@@ -4,7 +4,7 @@
 #include "OpsSaveTestHelpers.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 #include "Model/GroundTraffic.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
@@ -138,7 +138,7 @@ bool FFlightOfferCountdownSurvivesSaveTest::RunTest(const FString& Parameters)
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = SaveTestBoard();
-	UFuelService* Fuel = NewObject<UFuelService>(GetTransientPackage());
+	UJobBoard* Fuel = NewObject<UJobBoard>(GetTransientPackage());
 
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe.Wingspan = 3400.0;
@@ -153,7 +153,7 @@ bool FFlightOfferCountdownSurvivesSaveTest::RunTest(const FString& Parameters)
 	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
 	USimClock* RestoredClock = NewObject<USimClock>();
 	UFlightBoard* RestoredBoard = SaveTestBoard();
-	UFuelService* RestoredFuel = NewObject<UFuelService>(GetTransientPackage());
+	UJobBoard* RestoredFuel = NewObject<UJobBoard>(GetTransientPackage());
 	if (!TestTrue(TEXT("restore succeeds"),
 		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNet))) { return false; }
 	RestoredBoard->RearmSchedules(*Traffic, *RestoredNet, *RestoredClock);
@@ -201,7 +201,7 @@ bool FFlightV2LoadAimsAtTheBoardsOldFocusTest::RunTest(const FString& Parameters
 	// blob no v2 game ever actually produced.
 	Flight->ApproachFocus = FVector2D::ZeroVector;
 
-	UFuelService* Fuel = NewObject<UFuelService>(GetTransientPackage());
+	UJobBoard* Fuel = NewObject<UJobBoard>(GetTransientPackage());
 
 	FOpsSnapshot Snapshot;
 	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, Snapshot);
@@ -210,7 +210,7 @@ bool FFlightV2LoadAimsAtTheBoardsOldFocusTest::RunTest(const FString& Parameters
 	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
 	USimClock* RestoredClock = NewObject<USimClock>();
 	UFlightBoard* RestoredBoard = SaveTestBoard();
-	UFuelService* RestoredFuel = NewObject<UFuelService>(GetTransientPackage());
+	UJobBoard* RestoredFuel = NewObject<UJobBoard>(GetTransientPackage());
 	if (!TestTrue(TEXT("restore succeeds"),
 		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNet))) { return false; }
 
@@ -259,14 +259,14 @@ bool FFlightBoardHistorySplitMigratesAnOldSaveTest::RunTest(const FString& Param
 	OldDeclined->Phase = EFlightPhase::Declined;
 	const int32 DeclinedId = OldDeclined->Id;
 
-	UFuelService* Fuel = NewObject<UFuelService>(GetTransientPackage());
+	UJobBoard* Fuel = NewObject<UJobBoard>(GetTransientPackage());
 	FOpsSnapshot Snapshot;
 	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, Snapshot);
 
 	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
 	USimClock* RestoredClock = NewObject<USimClock>();
 	UFlightBoard* RestoredBoard = SaveTestBoard();
-	UFuelService* RestoredFuel = NewObject<UFuelService>(GetTransientPackage());
+	UJobBoard* RestoredFuel = NewObject<UJobBoard>(GetTransientPackage());
 	if (!TestTrue(TEXT("restore succeeds"),
 		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNet))) { return false; }
 

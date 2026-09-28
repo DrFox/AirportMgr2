@@ -36,7 +36,7 @@ bool FLedgerRoundTripTest::RunTest(const FString& Parameters)
 {
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = NewObject<UFlightBoard>();
-	UFuelService* Fuel = NewObject<UFuelService>();
+	UJobBoard* Fuel = NewObject<UJobBoard>();
 	ULedger* Ledger = NewObject<ULedger>();
 	UPricing* Pricing = NewObject<UPricing>();
 	URoadNetwork* Network = NewObject<URoadNetwork>();
@@ -51,7 +51,7 @@ bool FLedgerRoundTripTest::RunTest(const FString& Parameters)
 
 	USimClock* LoadedClock = NewObject<USimClock>();
 	UFlightBoard* LoadedBoard = NewObject<UFlightBoard>();
-	UFuelService* LoadedFuel = NewObject<UFuelService>();
+	UJobBoard* LoadedFuel = NewObject<UJobBoard>();
 	ULedger* Loaded = NewObject<ULedger>();
 	UPricing* LoadedPricing = NewObject<UPricing>();
 	URoadNetwork* LoadedNetwork = NewObject<URoadNetwork>();
@@ -88,7 +88,7 @@ bool FLedgerAbsentBlobTest::RunTest(const FString& Parameters)
 
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = NewObject<UFlightBoard>();
-	UFuelService* Fuel = NewObject<UFuelService>();
+	UJobBoard* Fuel = NewObject<UJobBoard>();
 	ULedger* Ledger = NewObject<ULedger>();
 	UPricing* Pricing = NewObject<UPricing>();
 	URoadNetwork* Network = NewObject<URoadNetwork>();

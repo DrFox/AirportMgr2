@@ -7,7 +7,7 @@
 class USimClock;
 class URoadNetwork;
 class UFlightBoard;
-class UFuelService;
+class UJobBoard;
 
 /**
  * A model object OpsSave::Capture/Restore treats generically: one blob in
@@ -32,7 +32,7 @@ public:
 	/**
 	 * Called on EVERY registered persistent object before ANY blob is deserialised into any
 	 * of them - even one with no blob in this snapshot at all (an old save, or one from
-	 * before this object existed). UFuelService::OnBeforeRestore clears Demands and GoingHome
+	 * before this object existed). UJobBoard::OnBeforeRestore clears Demands and GoingHome
 	 * for exactly that reason: UOpsRuntime::LoadFromSlot always clears agents before calling
 	 * OpsSave::Restore, so every TruckId/AircraftId either map holds is about to go stale
 	 * regardless of what this snapshot contains - the leak this issue traced was GoingHome
@@ -94,7 +94,7 @@ struct AIRPORTOPS_API FOpsSnapshot
 	 * player saves on 2026-09-28 (spec 2026-09-28-offers-and-demand).
 	 *
 	 * 4: blobs move from three named fields (Clock/Network/Flights) to one map keyed by
-	 * IOpsPersistent::SaveBlobName() (issue #105 item 8) - so UFuelService (added here to fix
+	 * IOpsPersistent::SaveBlobName() (issue #105 item 8) - so UJobBoard (added here to fix
 	 * the GoingHome leak IOpsPersistent::OnBeforeRestore's comment describes) is one more
 	 * blob rather than a fourth named field and a fifth positional Capture/Restore parameter.
 	 *

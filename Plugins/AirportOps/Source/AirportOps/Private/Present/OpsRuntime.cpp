@@ -12,7 +12,7 @@
 #include "Model/ArrivalSequencer.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/OfferGenerator.h"
 #include "Model/StandAllocator.h"
@@ -29,9 +29,9 @@ UOpsRuntime::UOpsRuntime()
 	Clock = CreateDefaultSubobject<USimClock>(TEXT("Clock"));
 	Events = CreateDefaultSubobject<UOpsEvents>(TEXT("Events"));
 	Catalog = CreateDefaultSubobject<UOpsCatalog>(TEXT("Catalog"));
-	FuelService = CreateDefaultSubobject<UFuelService>(TEXT("FuelService"));
+	JobBoard = CreateDefaultSubobject<UJobBoard>(TEXT("JobBoard"));
 
-	// GROWS BY FORWARDING, as UFuelService established: the board and the generator are
+	// GROWS BY FORWARDING, as UJobBoard established: the board and the generator are
 	// subobjects this class feeds and ticks, and it holds no logic of theirs.
 	FlightBoard = CreateDefaultSubobject<UFlightBoard>(TEXT("FlightBoard"));
 	FlightBoard->Allocator = CreateDefaultSubobject<UStandAllocator>(TEXT("StandAllocator"));
@@ -118,7 +118,7 @@ void UOpsRuntime::OfferTick()
 
 FVehicle UOpsRuntime::StandDesignVehicleOf(const FEntityInstance& Stand)
 {
-	return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UFuelService::LetterOfStand(Stand));
+	return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UJobBoard::LetterOfStand(Stand));
 }
 
 void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
@@ -155,8 +155,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 
 		// The designer figures set from the same asset in the same breath, so none of them
 		// is the one somebody forgot to copy.
-		FuelService->VehicleSpecs = Scenario->FuelVehicles;
-		FuelService->RefillLitresPerMinutePerPump = Scenario->DepotRefillLitresPerMinutePerPump;
+		JobBoard->VehicleSpecs = Scenario->FuelVehicles;
+		JobBoard->RefillLitresPerMinutePerPump = Scenario->DepotRefillLitresPerMinutePerPump;
 		OfferGenerator->MaxPendingOffers = Scenario->MaxPendingOffers;
 
 		// THE BALANCE A NEW GAME OPENS AT. The comment that used to stand at the top of this
@@ -179,30 +179,30 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// C to F for the fuel truck, so a single vehicle would send a truck onto an A stand's lane
 	// that only the tow was proven to drive.
 	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand
-	FuelService->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
+	JobBoard->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
 	// AND WHAT EACH STAND WAS BUILT FOR, read off its own definition when the guard asks - see
-	// UFuelService::DesignVehicleOf for why the read is handed down rather than made there.
+	// UJobBoard::DesignVehicleOf for why the read is handed down rather than made there.
 	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A sent the truck still reads as tow-built)
-	FuelService->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
+	JobBoard->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
 
 	// THE LITRES A FLIGHT WAS OFFERED AT reach its fuel demand through the board - see
-	// UFuelService::LitresOwedFor. Weak, for the dispatcher's reason below.
+	// UJobBoard::LitresOwedFor. Weak, for the dispatcher's reason below.
 	TWeakObjectPtr<UFlightBoard> WeakBoard = FlightBoard;
-	FuelService->LitresOwedFor = [WeakBoard](int32 AgentId, const FAirframe& Airframe)
+	JobBoard->LitresOwedFor = [WeakBoard](int32 AgentId, const FAirframe& Airframe)
 	{
 		const UFlightBoard* Board = WeakBoard.Get();
 		const UFlight* Flight = Board != nullptr ? Board->FlightForAgent(AgentId) : nullptr;
-		return Flight != nullptr ? Flight->FuelLitres : UFuelService::DefaultLitres(Airframe);
+		return Flight != nullptr ? Flight->FuelLitres : UJobBoard::DefaultLitres(Airframe);
 	};
 	{
 		// READ BACK OFF THE TABLE, every letter, rather than a banner typed beside the resolve:
 		// the line then says what dispatch will actually send.
 		FString PerLetter;
-		for (int32 Index = 0; Index < UFuelService::LetterCount; ++Index)
+		for (int32 Index = 0; Index < UJobBoard::LetterCount; ++Index)
 		{
 			const EIcaoCode Letter = static_cast<EIcaoCode>(Index);
 			PerLetter += FString::Printf(TEXT("%s %s  "), IcaoCode::ToLetter(Letter),
-				*FuelService->VehiclesFor(Letter).TypeCode.ToString());
+				*JobBoard->VehiclesFor(Letter).TypeCode.ToString());
 		}
 		UE_LOG(LogAirportOps, Log, TEXT("Fuel vehicles by stand letter: %s"), *PerLetter.TrimEnd());
 	}
@@ -214,9 +214,9 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	OfferGenerator->Pricing = Pricing;
 	FlightBoard->Ledger = Ledger;
 	FlightBoard->Pricing = Pricing;
-	FlightBoard->Fuel = FuelService;
-	FuelService->Ledger = Ledger;
-	FuelService->Pricing = Pricing;
+	FlightBoard->Fuel = JobBoard;
+	JobBoard->Ledger = Ledger;
+	JobBoard->Pricing = Pricing;
 	Ledger->Pricing = Pricing;
 	Ledger->Clock = Clock;
 
@@ -355,7 +355,7 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 		{
 			if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
 			{
-				FuelService->Tick(*Model, *Target->Network, *Clock);
+				JobBoard->Tick(*Model, *Target->Network, *Clock);
 
 				// THE RAW FRAME TIME, for the one countdown that runs in real seconds - see
 				// UFlightBoard::TickOffers. It checks the pause itself.
@@ -409,7 +409,7 @@ void UOpsRuntime::OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
 	{
 		if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
 		{
-			FuelService->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
+			JobBoard->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
 			FlightBoard->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
 		}
 	}
@@ -457,7 +457,7 @@ TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
 	// nothing here depends on a neighbour having been restored first.
 	TArray<IOpsPersistent*> Out;
 	Out.Add(Clock);
-	Out.Add(FuelService);
+	Out.Add(JobBoard);
 	Out.Add(FlightBoard);
 	Out.Add(Ledger);
 	Out.Add(Pricing);

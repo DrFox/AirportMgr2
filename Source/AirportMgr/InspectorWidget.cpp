@@ -12,7 +12,7 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 #include "Model/FlightBoard.h"
 #include "Model/Flight.h"
 #include "ArrivalViewModels.h"
@@ -234,7 +234,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		// RESULT is one of the key's fields, so it has to run before the key can be compared.
 		if (const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
 		{
-			if (const UFuelService* Fuel = Runtime->GetFuelService())
+			if (const UJobBoard* Fuel = Runtime->GetJobBoard())
 			{
 				F.Fuel = Fuel->DescribeAgent(F.Id, Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0);
 			}

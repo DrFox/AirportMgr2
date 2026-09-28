@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/FlightBoard.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/OpsSave.h"
 #include "Model/Pricing.h"
@@ -26,7 +26,7 @@
 namespace OpsSaveTest
 {
 	inline TArray<IOpsPersistent*> Persistents(USimClock& Clock, UFlightBoard& Board,
-		UFuelService& Fuel)
+		UJobBoard& Fuel)
 	{
 		TArray<IOpsPersistent*> Out;
 		Out.Add(&Clock);
@@ -37,7 +37,7 @@ namespace OpsSaveTest
 
 	/** As above, plus the money. For tests that care what a save does to the ledger. */
 	inline TArray<IOpsPersistent*> Persistents(USimClock& Clock, UFlightBoard& Board,
-		UFuelService& Fuel, ULedger& Ledger, UPricing& Pricing)
+		UJobBoard& Fuel, ULedger& Ledger, UPricing& Pricing)
 	{
 		TArray<IOpsPersistent*> Out = Persistents(Clock, Board, Fuel);
 		Out.Add(&Ledger);

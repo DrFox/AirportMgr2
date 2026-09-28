@@ -10,7 +10,7 @@
 
 class UArrivalSequencer;
 class UFlight;
-class UFuelService;
+class UJobBoard;
 class UGroundTraffic;
 class UOfferGenerator;
 class URoadNetwork;
@@ -145,7 +145,7 @@ public:
 	 * Asked whether the airport could fuel an offer, for FOfferVerdict::bFuelServable. Null in
 	 * a test that does not care - fuel then reads as servable. Set by UOpsRuntime::Attach.
 	 */
-	UPROPERTY() TObjectPtr<UFuelService> Fuel = nullptr;
+	UPROPERTY() TObjectPtr<UJobBoard> Fuel = nullptr;
 
 	/**
 	 * Bank the landing fee this flight was OFFERED at. Idempotent - a flight lands once.
@@ -285,7 +285,7 @@ public:
 	 */
 	UFlight* FindByAgentForTest(int32 AgentId) const { return FindByAgent(AgentId); }
 
-	/** The flight an agent flies, or null - what UOpsRuntime hands UFuelService::LitresOwedFor. */
+	/** The flight an agent flies, or null - what UOpsRuntime hands UJobBoard::LitresOwedFor. */
 	const UFlight* FlightForAgent(int32 AgentId) const { return FindByAgent(AgentId); }
 	UFlight* FindByIdForTest(int32 Id) const { return FindById(Id); }
 
@@ -302,7 +302,7 @@ public:
 	/**
 	 * TAKES THE CLOCK because the fees posted here are dated, and a ledger entry that could not
 	 * say when it happened would break the roll-up and the determinism test both. The sibling
-	 * UFuelService::OnAgentPhase already takes one, so this is the neighbouring shape rather
+	 * UJobBoard::OnAgentPhase already takes one, so this is the neighbouring shape rather
 	 * than a second way of getting at the time.
 	 */
 	void OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwork& Network,

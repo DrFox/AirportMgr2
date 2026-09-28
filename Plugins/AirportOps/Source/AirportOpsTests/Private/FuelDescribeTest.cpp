@@ -1,7 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Airframe.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -11,11 +11,11 @@
  */
 namespace
 {
-	FFuelDemand& Demand(UFuelService& Service, EFuelDemandState State, double Owed, double Delivered, int32 Trips)
+	FServiceJob& Demand(UJobBoard& Service, EServiceJobState State, double Owed, double Delivered, int32 Trips)
 	{
-		FFuelDemand& D = Service.AddDemandForTest(1, State, EFuelRefusal::None, 0);
-		D.LitresOwed = Owed;
-		D.LitresDelivered = Delivered;
+		FServiceJob& D = Service.AddJobForTest(1, State, EServiceRefusal::None, 0);
+		D.QuantityOwed = Owed;
+		D.QuantityDelivered = Delivered;
 		D.Trips = Trips;
 		D.TankLitres = 1000.0;
 		return D;
@@ -26,11 +26,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelDescribePumpingTest, "AirportOps.Fuel.Desc
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FFuelDescribePumpingTest::RunTest(const FString& Parameters)
 {
-	UFuelService* Service = NewObject<UFuelService>();
-	FFuelDemand& D = Demand(*Service, EFuelDemandState::Fuelling, 2900.0, 0.0, 0);
-	D.LoadThisTrip = 1000.0;
-	D.PumpStartedAt = 0.0;
-	D.DwellEndsAt = 800.0;
+	UJobBoard* Service = NewObject<UJobBoard>();
+	FServiceJob& D = Demand(*Service, EServiceJobState::Serving, 2900.0, 0.0, 0);
+	D.TripQuantity = 1000.0;
+	D.TripStartedAt = 0.0;
+	D.TripEndsAt = 800.0;
 	TestEqual(TEXT("halfway through the first trip, 500 L are in"),
 		Service->DescribeAgent(1, 400.0), FString(TEXT("Fuel 2,900 L · 2,400 L left · fuelling (trip 1 of 3)")));
 	TestEqual(TEXT("a pump that has not moved has not delivered"),
@@ -43,43 +43,43 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelDescribeStatesTest, "AirportOps.Fuel.Descr
 bool FFuelDescribeStatesTest::RunTest(const FString& Parameters)
 {
 	{
-		UFuelService* Service = NewObject<UFuelService>();
-		Demand(*Service, EFuelDemandState::TruckEnRoute, 1900.0, 1000.0, 1);
+		UJobBoard* Service = NewObject<UJobBoard>();
+		Demand(*Service, EServiceJobState::Underway, 1900.0, 1000.0, 1);
 		TestEqual(TEXT("second trip on its way"), Service->DescribeAgent(1, 0.0),
 			FString(TEXT("Fuel 2,900 L · 1,900 L left · truck en route (trip 2 of 3)")));
 	}
 	{
-		UFuelService* Service = NewObject<UFuelService>();
-		Demand(*Service, EFuelDemandState::Needed, 1900.0, 1000.0, 1);
+		UJobBoard* Service = NewObject<UJobBoard>();
+		Demand(*Service, EServiceJobState::Open, 1900.0, 1000.0, 1);
 		TestEqual(TEXT("between trips it waits for a truck"), Service->DescribeAgent(1, 0.0),
 			FString(TEXT("Fuel 2,900 L · 1,900 L left · waiting for a truck (trip 2 of 3)")));
 	}
 	{
-		UFuelService* Service = NewObject<UFuelService>();
-		Demand(*Service, EFuelDemandState::Needed, 300.0, 0.0, 0);
+		UJobBoard* Service = NewObject<UJobBoard>();
+		Demand(*Service, EServiceJobState::Open, 300.0, 0.0, 0);
 		TestEqual(TEXT("a one-trip job names no trips"), Service->DescribeAgent(1, 0.0),
 			FString(TEXT("Fuel 300 L · 300 L left · waiting for a truck")));
 	}
 	{
-		UFuelService* Service = NewObject<UFuelService>();
-		Demand(*Service, EFuelDemandState::Done, 0.0, 2900.0, 3);
+		UJobBoard* Service = NewObject<UJobBoard>();
+		Demand(*Service, EServiceJobState::Done, 0.0, 2900.0, 3);
 		TestEqual(TEXT("done, in how many trips"), Service->DescribeAgent(1, 0.0),
 			FString(TEXT("Fuel 2,900 L · done in 3 trips")));
 	}
 	{
-		UFuelService* Service = NewObject<UFuelService>();
-		Demand(*Service, EFuelDemandState::Done, 0.0, 0.0, 0);
+		UJobBoard* Service = NewObject<UJobBoard>();
+		Demand(*Service, EServiceJobState::Done, 0.0, 0.0, 0);
 		TestEqual(TEXT("a type with no tank"), Service->DescribeAgent(1, 0.0), FString(TEXT("Fuel · none needed")));
 	}
 	{
-		UFuelService* Service = NewObject<UFuelService>();
-		FFuelDemand& D = Demand(*Service, EFuelDemandState::Unserviceable, 2900.0, 0.0, 0);
-		D.Why = EFuelRefusal::NoDepot;
+		UJobBoard* Service = NewObject<UJobBoard>();
+		FServiceJob& D = Demand(*Service, EServiceJobState::Unserviceable, 2900.0, 0.0, 0);
+		D.Why = EServiceRefusal::NoDepot;
 		TestEqual(TEXT("the refusal, as before"), Service->DescribeAgent(1, 0.0),
 			FString(TEXT("Fuel 2,900 L · no fuel depot")));
 	}
 	{
-		UFuelService* Service = NewObject<UFuelService>();
+		UJobBoard* Service = NewObject<UJobBoard>();
 		TestEqual(TEXT("no demand, no line"), Service->DescribeAgent(1, 0.0), FString());
 	}
 	return true;

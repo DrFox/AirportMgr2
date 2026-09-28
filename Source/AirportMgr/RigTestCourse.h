@@ -478,7 +478,7 @@ public:
 	/**
 	 * What a cached plan is keyed on for its VEHICLE - forwards to RoutePlanCache::
 	 * VehicleIdentity (#301: lifted off this class into Airside/Model/RoutePlanCache.h, which
-	 * FuelService::ChooseDepot now shares). Kept at this name: the test above and
+	 * UJobBoard::DepotRoute now shares). Kept at this name: the test above and
 	 * RigTestCourseTest.cpp's own PlanCacheKnowsItsVehicle both call it as ARigTestCourse's.
 	 * ENFORCED BY: AirportMgr.RigCourse.PlanCacheKnowsItsVehicle
 	 */
@@ -611,7 +611,7 @@ private:
 	/**
 	 * PlanBetween's answers - see its body. Mutable: a cache behind a const query.
 	 * FRoutePlanCache (#301): lifted off this class into Airside/Model/RoutePlanCache.h, the
-	 * one owner FuelService::ChooseDepot now shares - see that header for the full contract.
+	 * one owner UJobBoard::DepotRoute now shares - see that header for the full contract.
 	 */
 	mutable FRoutePlanCache Cache;
 	mutable int32 TotalPlanFinds = 0;

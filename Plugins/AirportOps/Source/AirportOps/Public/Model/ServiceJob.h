@@ -151,6 +151,10 @@ struct AIRPORTOPS_API FServiceJob
 	/** The capacity of the vehicle that took the latest trip - what the card counts trips by. */
 	UPROPERTY() double TankLitres = 0.0;
 
+	/** Whose depot took the latest trip - kept past the trip, for the log and a test, for
+	 *  TankLitres' reason: VehicleId is cleared the moment the vehicle moves on. */
+	UPROPERTY() FEntityInstanceId LastDepot;
+
 	/**
 	 * This trip, while Serving: how much, and when the pump started and stops (USimClock game time,
 	 * spec fuel-litres - a pause stops it). The card counts down from these WHILE the pump runs;

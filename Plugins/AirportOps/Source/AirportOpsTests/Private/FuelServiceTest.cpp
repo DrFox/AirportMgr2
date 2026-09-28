@@ -3,7 +3,7 @@
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
-#include "Model/FuelService.h"
+#include "Model/JobBoard.h"
 #include "Model/Pricing.h"
 #include "Model/Ledger.h"
 #include "Model/GroundTraffic.h"
@@ -32,7 +32,7 @@ namespace FuelServiceTest
 {
 	/**
 	 * A stand of Letter, DRAWN at its letter's floor box with the stop mark on At, facing +X -
-	 * the shape the plot tool commits. The OUTLINE is what UFuelService::VehicleFor reads the
+	 * the shape the plot tool commits. The OUTLINE is what UJobBoard::VehicleFor reads the
 	 * letter from, so a plop (which placement gives a Code C box whatever its template) would
 	 * not be an A stand to the service at all.
 	 */
@@ -77,10 +77,10 @@ namespace
 	{
 		URoadNetwork* Net = nullptr;
 		UGroundTraffic* Traffic = nullptr;
-		UFuelService* Service = nullptr;
+		UJobBoard* Service = nullptr;
 
 		/**
-		 * The DAY-COMPRESSED clock, beside the traffic's own seconds - the pair UFuelService
+		 * The DAY-COMPRESSED clock, beside the traffic's own seconds - the pair UJobBoard
 		 * now takes. SetUniformDay(1200) so Advance(real seconds) moves game time 72x faster at
 		 * every hour - the rate these fixtures were written against, before day and night split.
 		 */
@@ -285,7 +285,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 {
 	Net = NewObject<URoadNetwork>(GetTransientPackage());
 	Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	Service = NewObject<UFuelService>(GetTransientPackage());
+	Service = NewObject<UJobBoard>(GetTransientPackage());
 	Clock = NewObject<USimClock>(GetTransientPackage());
 	Clock->SetUniformDay(1200.0);
 
@@ -295,6 +295,12 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	// through the same loop, so the fixture's letters get the vehicles the game's do.
 	Service->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
 	Service->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
+
+	// THE SCENARIO'S FIGURES FOR EVERY KIND, as UOpsRuntime::Attach copies them: the depot's
+	// placeholder fleet has a tow AND a bowser (spec 2026-09-28-service-vehicle-lifecycle §3.4), and
+	// which of them wins a bid turns on their tanks and pumps. A test that wants every vehicle alike
+	// resets this and sets FallbackSpec, as the litres tests do.
+	Service->VehicleSpecs = GetDefault<UScenario>()->FuelVehicles;
 
 	// A 300 L JOB for every aircraft this fixture parks, unless a test says otherwise
 	// (spec 2026-09-28-fuel-litres): the fixture's airframe is hand-assembled content default
@@ -392,7 +398,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 			// A MODULAR depot whose plot holds a shed and a tank and no pump. Placed through
 			// FEntityPlacement because that is the only path that carries modules at all -
 			// the plotless signature above has none, and a depot with no modules is not a
-			// depot with no pump (see UFuelService::HasWorkingPump).
+			// depot with no pump (see UJobBoard::HasWorkingPump).
 			FEntityPlacement Placement;
 			Placement.Definition = DepotDef;
 			Placement.Anchors = DepotDef->Anchors;
@@ -447,7 +453,7 @@ void FFuelFixture::RelayPhases()
 	// EXACTLY WHAT UOpsRuntime::OnAgentPhase WILL DO (Task 8). Bound here so the world-free
 	// tests exercise the same relay the composition does, rather than calling OnAgentPhase
 	// by hand at moments the test chose.
-	UFuelService* Bound = Service;
+	UJobBoard* Bound = Service;
 	URoadNetwork* Graph = Net;
 	UGroundTraffic* Model = Traffic;
 	USimClock* Time = Clock;
@@ -645,22 +651,22 @@ bool FFuelServiceTest::RunTest(const FString& Parameters)
 
 	// 1. PARKING MAKES A DEMAND, and nothing else does. No button and no offer - the player's
 	// only act was to build a depot on a road that reaches the stand (spec §2).
-	if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+	if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
 	TestEqual(TEXT("for the aircraft that parked"),
-		Fixture.Service->GetDemands()[0].AircraftId, Aircraft);
+		Fixture.Service->GetJobs()[0].AircraftId, Aircraft);
 	TestEqual(TEXT("at the stand it parked on"),
-		Fixture.Service->GetDemands()[0].Stand, Fixture.Stand);
+		Fixture.Service->GetJobs()[0].Stand, Fixture.Stand);
 
 	// 2. A TRUCK GOES OUT on the next tick, and the demand names it and its depot.
 	Fixture.Advance(0.2);
 	if (!TestEqual(TEXT("a truck is en route"),
-		static_cast<int32>(Fixture.Service->GetDemands()[0].State),
-		static_cast<int32>(EFuelDemandState::TruckEnRoute))) { return false; }
+		static_cast<int32>(Fixture.Service->GetJobs()[0].State),
+		static_cast<int32>(EServiceJobState::Underway))) { return false; }
 
-	const int32 TruckId = Fixture.Service->GetDemands()[0].TruckId;
+	const int32 TruckId = Fixture.Service->AgentForJob(Fixture.Service->GetJobs()[0]);
 	if (!TestTrue(TEXT("and it is a real agent"), TruckId != 0)) { return false; }
 	TestEqual(TEXT("dispatched from the depot"),
-		Fixture.Service->GetDemands()[0].Depot, Fixture.Depot);
+		Fixture.Service->GetJobs()[0].LastDepot, Fixture.Depot);
 	TestEqual(TEXT("as a ground vehicle"),
 		static_cast<int32>(Fixture.Traffic->FindAgent(TruckId)->Class),
 		static_cast<int32>(ETraversalClass::GroundVehicle));
@@ -669,14 +675,14 @@ bool FFuelServiceTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the truck reaches the hydrant and starts fuelling"),
 		Fixture.AdvanceUntil(
 			[&Fixture] {
-				return Fixture.Service->GetDemands().Num() == 1
-					&& Fixture.Service->GetDemands()[0].State == EFuelDemandState::Fuelling;
+				return Fixture.Service->GetJobs().Num() == 1
+					&& Fixture.Service->GetJobs()[0].State == EServiceJobState::Serving;
 			}, 240.0))) { return false; }
 
 	// 4. THE PUMPING IS LITRES OVER FLOW, IN GAME TIME (spec 2026-09-28-fuel-litres): 300 L
 	// at the vehicle's flow rate, timed on USimClock - the clock the turnaround contract is in.
 	const double PumpStarted = Fixture.Clock->Now();
-	const double PumpGameSeconds = Fixture.Service->GetDemands()[0].DwellEndsAt - PumpStarted;
+	const double PumpGameSeconds = Fixture.Service->GetJobs()[0].TripEndsAt - PumpStarted;
 	const FFuelVehicleSpec Spec = Fixture.Service->SpecFor(Fixture.Traffic->FindAgent(TruckId)->AsVehicle()->TypeCode);
 	// WITHIN ONE FRAME: AdvanceUntil stops the frame AFTER pumping began, and a frame at the
 	// fixture's 72x is 2.4 game seconds.
@@ -685,13 +691,13 @@ bool FFuelServiceTest::RunTest(const FString& Parameters)
 	const double RealToPump = PumpGameSeconds / Fixture.Clock->TimeScale();
 	Fixture.Advance(RealToPump - 0.5);
 	TestEqual(TEXT("still fuelling just short"),
-		static_cast<int32>(Fixture.Service->GetDemands()[0].State),
-		static_cast<int32>(EFuelDemandState::Fuelling));
+		static_cast<int32>(Fixture.Service->GetJobs()[0].State),
+		static_cast<int32>(EServiceJobState::Serving));
 
 	Fixture.Advance(1.0);
 	TestEqual(TEXT("done once the pumping is done"),
-		static_cast<int32>(Fixture.Service->GetDemands()[0].State),
-		static_cast<int32>(EFuelDemandState::Done));
+		static_cast<int32>(Fixture.Service->GetJobs()[0].State),
+		static_cast<int32>(EServiceJobState::Done));
 	TestTrue(TEXT("and it took the whole pumping time, not less"),
 		Fixture.Clock->Now() - PumpStarted >= PumpGameSeconds);
 
@@ -713,16 +719,16 @@ bool FFuelServiceTest::RunTest(const FString& Parameters)
 	Fixture.Traffic->RetireAgent(Aircraft);
 	Fixture.Advance(0.2);
 	TestEqual(TEXT("the fuelled aircraft's demand goes with it"),
-		Fixture.Service->GetDemands().Num(), 0);
+		Fixture.Service->GetJobs().Num(), 0);
 
 	const int32 Second = Fixture.ParkAircraft();
 	if (!TestTrue(TEXT("a second aircraft parks at the freed stand"), Second != 0)) { return false; }
 	Fixture.Advance(0.2);
 
 	bool bSecondServed = false;
-	for (const FFuelDemand& Demand : Fixture.Service->GetDemands())
+	for (const FServiceJob& Demand : Fixture.Service->GetJobs())
 	{
-		bSecondServed |= Demand.AircraftId == Second && Demand.TruckId != 0;
+		bSecondServed |= Demand.AircraftId == Second && Fixture.Service->AgentForJob(Demand) != 0;
 	}
 	TestTrue(TEXT("the freed truck serves the next aircraft"), bSecondServed);
 	return true;
@@ -742,15 +748,15 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
 		Fixture.Advance(0.2);
 
-		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
 		TestEqual(TEXT("unserviceable"),
-			static_cast<int32>(Fixture.Service->GetDemands()[0].State),
-			static_cast<int32>(EFuelDemandState::Unserviceable));
+			static_cast<int32>(Fixture.Service->GetJobs()[0].State),
+			static_cast<int32>(EServiceJobState::Unserviceable));
 		TestEqual(TEXT("because there is no depot"),
-			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
-			static_cast<int32>(EFuelRefusal::NoDepot));
+			static_cast<int32>(Fixture.Service->GetJobs()[0].Why),
+			static_cast<int32>(EServiceRefusal::NoDepot));
 		TestEqual(TEXT("and the card says so"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId, 0.0),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
 			FString(TEXT("Fuel 300 L \u00B7 no fuel depot")));
 	}
 
@@ -768,15 +774,18 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		Sent.BodyWidth = 2000.0;
 		const FVehicle Wide = Sent;
 		Fixture.Service->DesignVehicleOf = [Wide](const FEntityInstance&) { return Wide; };
+		// AND THE DEPOT HAS ONLY THAT VEHICLE. The placeholder fleet would also give it the utility
+		// tow, which fits these roads and would simply be sent - true, and not this case.
+		Fixture.Service->DefaultFleetTypes = { Wide.TypeCode };
 		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
 		Fixture.Advance(0.2);
 
-		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
 		TestEqual(TEXT("because no road is wide enough for the truck"),
-			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
-			static_cast<int32>(EFuelRefusal::TooNarrow));
+			static_cast<int32>(Fixture.Service->GetJobs()[0].Why),
+			static_cast<int32>(EServiceRefusal::TooNarrow));
 		TestEqual(TEXT("and the card says the road is too narrow, not missing"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId, 0.0),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
 			FString(TEXT("Fuel 300 L \u00B7 no road wide enough for the fuel vehicle")));
 	}
 
@@ -792,12 +801,12 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
 		Fixture.Advance(0.2);
 
-		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
 		TestEqual(TEXT("because the depot has no pump"),
-			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
-			static_cast<int32>(EFuelRefusal::NoPump));
+			static_cast<int32>(Fixture.Service->GetJobs()[0].Why),
+			static_cast<int32>(EServiceRefusal::NoPump));
 		TestEqual(TEXT("and the card names the pump, not the road"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId, 0.0),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
 			FString(TEXT("Fuel 300 L \u00B7 depot has no pump")));
 	}
 
@@ -809,10 +818,10 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
 		Fixture.Advance(0.2);
 
-		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
 		TestEqual(TEXT("depot not on a road"),
-			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
-			static_cast<int32>(EFuelRefusal::NoRoad));
+			static_cast<int32>(Fixture.Service->GetJobs()[0].Why),
+			static_cast<int32>(EServiceRefusal::NoRoad));
 
 		// A REBUILD RE-OFFERS IT. The player may have just drawn the road, and a terminal
 		// state that never looked again would leave them staring at a truck that never comes.
@@ -821,8 +830,8 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		Fixture.JoinRoad();
 		Fixture.Advance(0.2);
 		TestNotEqual(TEXT("the demand is live again once the road is drawn"),
-			static_cast<int32>(Fixture.Service->GetDemands()[0].State),
-			static_cast<int32>(EFuelDemandState::Unserviceable));
+			static_cast<int32>(Fixture.Service->GetJobs()[0].State),
+			static_cast<int32>(EServiceJobState::Unserviceable));
 	}
 
 	// THE DEPOT IS ON A ROAD AND THE STAND'S HYDRANT IS NOT.
@@ -838,16 +847,16 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
 		Fixture.Advance(0.2);
 
-		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
 		TestEqual(TEXT("the reason names the STAND, not the depot"),
-			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
-			static_cast<int32>(EFuelRefusal::StandUnjoined));
+			static_cast<int32>(Fixture.Service->GetJobs()[0].Why),
+			static_cast<int32>(EServiceRefusal::StandUnjoined));
 		// THE WORDING IS THE ASSERTION, not just the enum: this string is what the offer card
 		// puts in front of the player, and the stand-routing spec promised it name the
 		// ENTRANCES rather than report a bare "not on a road" (which sent the player looking at
 		// the stand's sides, where there is nothing to draw).
 		TestEqual(TEXT("and the card names what the road has to reach"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId, 0.0),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
 			FString(TEXT("Fuel 300 L \u00B7 no road within reach of the stand's entrances")));
 	}
 	return true;
@@ -859,7 +868,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFuelPerDemandRefusalRevisionTest::RunTest(const FString& Parameters)
 {
-	// THE RACE ISSUE #193 NAMES. UFuelService::LastRefusedRevision used to be ONE field for
+	// THE RACE ISSUE #193 NAMES. UJobBoard::LastRefusedRevision used to be ONE field for
 	// every demand's own fact. Demand A (Needed, processed first because it was ADDED first)
 	// refuses for the first time inside a Tick pass that ALSO revisits Demand B, already
 	// Unserviceable from an OLDER revision - A's write of the CURRENT revision into the
@@ -867,7 +876,7 @@ bool FFuelPerDemandRefusalRevisionTest::RunTest(const FString& Parameters)
 	// value its own refusal never set and stays stuck, with the re-offer log line
 	// ("the airport changed; aircraft %d asks again") never firing.
 	//
-	// BOTH DEMANDS ARE NoDepot, built directly with AddDemandForTest rather than through two
+	// BOTH DEMANDS ARE NoDepot, built directly with AddJobForTest rather than through two
 	// independently-failing stands: NoDepot is decided from Network.GetEntities() alone (see
 	// ChooseDepot), so it is deterministic with no depot at all on the fixture's airport, and
 	// the test can pin exactly what each demand's history was and in what array order Tick
@@ -881,12 +890,12 @@ bool FFuelPerDemandRefusalRevisionTest::RunTest(const FString& Parameters)
 	const uint32 OriginalRevision = Fixture.Net->GetGuidelineRevision();
 
 	// A: still Needed, added FIRST so Tick's loop reaches it before B.
-	Fixture.Service->AddDemandForTest(/*AircraftId=*/1, EFuelDemandState::Needed,
-		EFuelRefusal::None, /*RefusedAtRevision=*/OriginalRevision);
+	Fixture.Service->AddJobForTest(/*AircraftId=*/1, EServiceJobState::Open,
+		EServiceRefusal::None, /*RefusedAtRevision=*/OriginalRevision);
 
 	// B: already refused at the ORIGINAL revision, added SECOND.
-	Fixture.Service->AddDemandForTest(/*AircraftId=*/2, EFuelDemandState::Unserviceable,
-		EFuelRefusal::NoDepot, /*RefusedAtRevision=*/OriginalRevision);
+	Fixture.Service->AddJobForTest(/*AircraftId=*/2, EServiceJobState::Unserviceable,
+		EServiceRefusal::NoDepot, /*RefusedAtRevision=*/OriginalRevision);
 
 	// The player edits the airport - an inert node, far from anything, so the ONLY thing it
 	// changes is the revision both demands are judged against. Still no depot, so neither
@@ -900,28 +909,28 @@ bool FFuelPerDemandRefusalRevisionTest::RunTest(const FString& Parameters)
 	// checked in the very same pass, straight after.
 	Fixture.Service->Tick(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
 
-	auto FindDemand = [&Fixture](int32 AircraftId) -> const FFuelDemand*
+	auto FindDemand = [&Fixture](int32 AircraftId) -> const FServiceJob*
 	{
-		for (const FFuelDemand& Demand : Fixture.Service->GetDemands())
+		for (const FServiceJob& Demand : Fixture.Service->GetJobs())
 		{
 			if (Demand.AircraftId == AircraftId) { return &Demand; }
 		}
 		return nullptr;
 	};
 
-	const FFuelDemand* DemandA = FindDemand(1);
-	const FFuelDemand* DemandB = FindDemand(2);
+	const FServiceJob* DemandA = FindDemand(1);
+	const FServiceJob* DemandB = FindDemand(2);
 	if (!TestNotNull(TEXT("A's demand survives the tick"), DemandA)) { return false; }
 	if (!TestNotNull(TEXT("B's demand survives the tick"), DemandB)) { return false; }
 
 	TestEqual(TEXT("A refuses for the first time, at the new revision"),
-		static_cast<int32>(DemandA->State), static_cast<int32>(EFuelDemandState::Unserviceable));
+		static_cast<int32>(DemandA->State), static_cast<int32>(EServiceJobState::Unserviceable));
 
 	// THE DEFECT, DIRECTLY: B's OWN refusal was at revision 0, and the revision has moved to
 	// 1 - it must be re-offered on this same tick, not left reading a fact A's refusal just
 	// overwrote a moment before.
 	TestNotEqual(TEXT("B is re-offered too - its own stale refusal is not masked by A's"),
-		static_cast<int32>(DemandB->State), static_cast<int32>(EFuelDemandState::Unserviceable));
+		static_cast<int32>(DemandB->State), static_cast<int32>(EServiceJobState::Unserviceable));
 	return true;
 }
 
@@ -938,7 +947,7 @@ bool FFuelServiceAircraftLeavesTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
 	Fixture.Advance(0.2);
 
-	const int32 TruckId = Fixture.Service->GetDemands()[0].TruckId;
+	const int32 TruckId = Fixture.Service->AgentForJob(Fixture.Service->GetJobs()[0]);
 	if (!TestTrue(TEXT("a truck went out for it"), TruckId != 0)) { return false; }
 
 	// The aircraft goes mid-service. The truck must NOT be left standing at a hydrant nobody
@@ -947,7 +956,7 @@ bool FFuelServiceAircraftLeavesTest::RunTest(const FString& Parameters)
 	Fixture.Traffic->RetireAgent(Aircraft);
 	Fixture.Advance(0.2);
 
-	TestEqual(TEXT("the demand is dropped"), Fixture.Service->GetDemands().Num(), 0);
+	TestEqual(TEXT("the demand is dropped"), Fixture.Service->GetJobs().Num(), 0);
 	if (!TestNotNull(TEXT("but the truck still exists"),
 		Fixture.Traffic->FindAgent(TruckId))) { return false; }
 	TestEqual(TEXT("and is on its way home"), Fixture.Service->TrucksGoingHomeForTest(), 1);
@@ -964,9 +973,9 @@ bool FFuelServiceAircraftLeavesTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("another aircraft parks"), Next != 0)) { return false; }
 	Fixture.Advance(0.2);
 
-	if (!TestEqual(TEXT("it has a demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+	if (!TestEqual(TEXT("it has a demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
 	TestTrue(TEXT("and the depot has a truck for it"),
-		Fixture.Service->GetDemands()[0].TruckId != 0);
+		Fixture.Service->AgentForJob(Fixture.Service->GetJobs()[0]) != 0);
 	return true;
 }
 
@@ -998,9 +1007,9 @@ bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the depot dispatches its truck"),
 		Fixture.AdvanceUntil([&Fixture]
 		{
-			const FFuelDemand* Demand = Fixture.Service->GetDemands().Num() > 0
-				? &Fixture.Service->GetDemands()[0] : nullptr;
-			return Demand != nullptr && Demand->TruckId != 0;
+			const FServiceJob* Demand = Fixture.Service->GetJobs().Num() > 0
+				? &Fixture.Service->GetJobs()[0] : nullptr;
+			return Demand != nullptr && Fixture.Service->AgentForJob(*Demand) != 0;
 		}, 30.0)))
 	{
 		return false;
@@ -1009,9 +1018,9 @@ bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
 	const int32 Second = Fixture.ParkAircraftAt(Fixture.StandPose2);
 	if (!TestTrue(TEXT("a second aircraft parked at the second stand"), Second != 0)) { return false; }
 
-	auto SecondDemand = [&Fixture, Second]() -> const FFuelDemand*
+	auto SecondDemand = [&Fixture, Second]() -> const FServiceJob*
 	{
-		for (const FFuelDemand& Demand : Fixture.Service->GetDemands())
+		for (const FServiceJob& Demand : Fixture.Service->GetJobs())
 		{
 			if (Demand.AircraftId == Second) { return &Demand; }
 		}
@@ -1020,18 +1029,22 @@ bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
 
 	if (!TestNotNull(TEXT("the second aircraft made a demand"), SecondDemand())) { return false; }
 
-	// A tick or two is all it takes: the state machine offers a Needed demand every tick.
+	// A tick or two is all it takes: an Open job is bid on the tick it opens.
 	Fixture.Advance(0.5);
 
-	const FFuelDemand* Waiting = SecondDemand();
+	const FServiceJob* Waiting = SecondDemand();
 	if (!TestNotNull(TEXT("the second demand survives"), Waiting)) { return false; }
 
 	// THE DEFECT, DIRECTLY. Not "the card reads oddly" - Unserviceable is TERMINAL until the
-	// graph changes, so this state is the aircraft never being fuelled.
-	TestEqual(TEXT("a demand waiting on a busy truck stays Needed, not Unserviceable"),
-		static_cast<int32>(Waiting->State), static_cast<int32>(EFuelDemandState::Needed));
+	// graph changes, so this state is the aircraft never being fuelled. SINCE THE JOB BOARD
+	// (2026-09-28) a busy vehicle BIDS with its queue, so the job is on somebody's queue - or already
+	// under way with the depot's other vehicle - rather than waiting Open for one to come free.
+	TestNotEqual(TEXT("a job behind a busy truck is never Unserviceable"),
+		static_cast<int32>(Waiting->State), static_cast<int32>(EServiceJobState::Unserviceable));
+	TestNotEqual(TEXT("and is not left Open either: a busy vehicle bids"),
+		static_cast<int32>(Waiting->State), static_cast<int32>(EServiceJobState::Open));
 	TestEqual(TEXT("and carries no refusal, because nothing about the airport is wrong"),
-		static_cast<int32>(Waiting->Why), static_cast<int32>(EFuelRefusal::None));
+		static_cast<int32>(Waiting->Why), static_cast<int32>(EServiceRefusal::None));
 
 	// AND THE QUEUE ACTUALLY DRAINS, with NO edit to the airport. This is the half a
 	// state-only assertion would miss: Needed is worth nothing if the demand is never
@@ -1046,32 +1059,33 @@ bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
 	// retrace the serve leg. Verified as a bound and not a stall before the number moved: the
 	// same test passes at 1200 s, so the truck does get home.
 	TestTrue(TEXT("and once the truck is home the second aircraft gets it"),
-		Fixture.AdvanceUntil([&SecondDemand]
+		Fixture.AdvanceUntil([&Fixture, &SecondDemand]
 		{
-			const FFuelDemand* Demand = SecondDemand();
-			return Demand != nullptr && Demand->TruckId != 0;
+			const FServiceJob* Demand = SecondDemand();
+			return Demand != nullptr && Fixture.Service->AgentForJob(*Demand) != 0;
 		}, 450.0));
 
 	// The card never said anything false along the way.
-	if (const FFuelDemand* Served = SecondDemand())
+	if (const FServiceJob* Served = SecondDemand())
 	{
 		TestEqual(TEXT("and was never marked unserviceable on the way"),
-			static_cast<int32>(Served->Why), static_cast<int32>(EFuelRefusal::None));
+			static_cast<int32>(Served->Why), static_cast<int32>(EServiceRefusal::None));
 	}
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelBusyWaitSkipsChooseDepotTest, "AirportOps.Ops.FuelBusyWaitSkipsChooseDepot",
+	FFuelIdleTicksRunNoBidsTest, "AirportOps.Ops.FuelIdleTicksRunNoBids",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FFuelBusyWaitSkipsChooseDepotTest::RunTest(const FString& Parameters)
+bool FFuelIdleTicksRunNoBidsTest::RunTest(const FString& Parameters)
 {
-	// ISSUE #190, MEASURED DIRECTLY. A Needed demand behind a saturated fleet used to run
-	// ChooseDepot - a walk of every depot, a route search, and an IsServiceNodeConnected BFS
-	// - every single tick for as long as the fleet stayed busy, exactly the queue this
-	// module's own FFuelQueuesOnABusyDepotTest drains. Same fixture: one depot, one truck,
-	// two stands.
+	// ISSUE #190, MEASURED DIRECTLY, AND KEPT THROUGH THE JOB BOARD. A demand behind a saturated
+	// fleet used to run ChooseDepot - a walk of every depot, a route search, and an
+	// IsServiceNodeConnected BFS - every single tick for as long as the fleet stayed busy. WAS
+	// AirportOps.Ops.FuelBusyWaitSkipsChooseDepot: there is no busy-wait to skip any more (a busy
+	// vehicle bids with its queue, so a job is placed the tick it opens), and what #190 asked for is
+	// what is left to measure - an idle tick bids nothing. Same fixture: one depot, two stands.
 	FFuelFixture Fixture;
 	Fixture.bSecondStand = true;
 	Fixture.Build(/*bWithRoad=*/true);
@@ -1079,12 +1093,12 @@ bool FFuelBusyWaitSkipsChooseDepotTest::RunTest(const FString& Parameters)
 	const int32 First = Fixture.ParkAircraft();
 	if (!TestTrue(TEXT("an aircraft parked at the first stand"), First != 0)) { return false; }
 
-	if (!TestTrue(TEXT("the depot dispatches its truck"),
+	if (!TestTrue(TEXT("the depot dispatches a truck"),
 		Fixture.AdvanceUntil([&Fixture]
 		{
-			const FFuelDemand* Demand = Fixture.Service->GetDemands().Num() > 0
-				? &Fixture.Service->GetDemands()[0] : nullptr;
-			return Demand != nullptr && Demand->TruckId != 0;
+			const FServiceJob* Demand = Fixture.Service->GetJobs().Num() > 0
+				? &Fixture.Service->GetJobs()[0] : nullptr;
+			return Demand != nullptr && Fixture.Service->AgentForJob(*Demand) != 0;
 		}, 30.0)))
 	{
 		return false;
@@ -1093,72 +1107,66 @@ bool FFuelBusyWaitSkipsChooseDepotTest::RunTest(const FString& Parameters)
 	const int32 Second = Fixture.ParkAircraftAt(Fixture.StandPose2);
 	if (!TestTrue(TEXT("a second aircraft parked at the second stand"), Second != 0)) { return false; }
 
-	auto SecondDemand = [&Fixture, Second]() -> const FFuelDemand*
-	{
-		for (const FFuelDemand& Demand : Fixture.Service->GetDemands())
-		{
-			if (Demand.AircraftId == Second) { return &Demand; }
-		}
-		return nullptr;
-	};
-
-	// ONE TICK TO DISCOVER IT IS BUSY. This is the call ChooseDepot must still make - finding
-	// out costs exactly one walk, the same as any other Needed demand's first look.
+	// ONE TICK TO PLACE IT. The bid that must still happen - once.
 	Fixture.Advance(1.0 / 30.0);
-	const FFuelDemand* Waiting = SecondDemand();
-	if (!TestNotNull(TEXT("the second demand survives its first tick"), Waiting)) { return false; }
-	if (!TestEqual(TEXT("setup: it is Needed and busy, not Unserviceable"),
-		static_cast<int32>(Waiting->State), static_cast<int32>(EFuelDemandState::Needed)))
+	const FServiceJob* Placed = Fixture.Service->JobForAircraft(Second);
+	if (!TestNotNull(TEXT("the second job survives its first tick"), Placed)) { return false; }
+	if (!TestNotEqual(TEXT("setup: it was placed, not refused"),
+		static_cast<int32>(Placed->State), static_cast<int32>(EServiceJobState::Unserviceable)))
 	{
 		return false;
 	}
 
-	// FROM HERE, NOTHING ABOUT THE AIRPORT OR THE FLEET CHANGES for a couple of seconds - the
-	// first truck is still out (its 40 s dwell alone dwarfs this window). Every one of the
-	// next 60 ticks is exactly the case the ticket names: a saturated fleet, checked again
-	// for no reason.
-	Fixture.Service->ResetChooseDepotCallCountForTest();
+	// FROM HERE, NOTHING ABOUT THE AIRPORT CHANGES and nothing opens for a couple of seconds - the
+	// first truck is still out. Every one of the next 60 ticks is exactly the case the ticket names.
+	Fixture.Service->ResetBidCallCountForTest();
 	for (int32 Index = 0; Index < 60; ++Index)
 	{
 		Fixture.Advance(1.0 / 30.0);
 	}
 
-	TestEqual(TEXT("60 idle ticks against an unchanged fleet and graph call ChooseDepot zero times"),
-		Fixture.Service->GetChooseDepotCallCountForTest(), 0);
+	TestEqual(TEXT("60 idle ticks against an unchanged airport bid zero times"),
+		Fixture.Service->GetBidCallCountForTest(), 0);
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelChooseDepotCachesRouteFindsTest, "AirportOps.Ops.FuelChooseDepotCachesRouteFinds",
+	FFuelBidCachesRouteFindsTest, "AirportOps.Ops.FuelBidCachesRouteFinds",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FFuelChooseDepotCachesRouteFindsTest::RunTest(const FString& Parameters)
+bool FFuelBidCachesRouteFindsTest::RunTest(const FString& Parameters)
 {
-	// #301: FFuelBusyWaitSkipsChooseDepotTest above already proves the busy-wait keeps
-	// ChooseDepot from running AT ALL while nothing changes. This proves the OTHER half - when
-	// ChooseDepot DOES run again (a truck freeing up bumps FleetRevision every idle tick until
-	// THIS depot's own route is asked for again), it does not re-run RouteSearch::Find for a
-	// (depot, stand, truck) it has already answered on the same graph. ChooseDepotForTest calls
-	// the walk directly, so N repeats do not need N contrived FleetRevision bumps to get there -
-	// measured against RouteSearch::SearchCallCountForTest, a fact about the engine actually
-	// running, not a caller-owned counter a cache that is never consulted could still satisfy.
+	// #301, THROUGH THE BID. WAS AirportOps.Ops.FuelChooseDepotCachesRouteFinds: the same promise - a
+	// (depot, stand, vehicle) route already answered on this graph is not searched again - made now by
+	// the bid, which asks it for every eligible vehicle of every job. BidForTest makes the ask directly,
+	// so N repeats need no contrived re-bids, and it is measured against
+	// RouteSearch::SearchCallCountForTest - a fact about the engine actually running, not a
+	// caller-owned counter a cache that is never consulted could still satisfy.
 	FFuelFixture Fixture;
 	Fixture.Build(/*bWithRoad=*/true);
-	const FName AnchorId = Fixture.Net->FirstAnchorIdForRole(Fixture.Stand, EServiceRole::Fuel);
-	const FResolvedAnchor* Resolved = AnchorId.IsNone() ? nullptr : Fixture.Net->FindResolvedAnchor(Fixture.Stand, AnchorId);
-	if (!TestNotNull(TEXT("the stand's fuel anchor resolves"), Resolved)) { return false; }
-	const FGuidelineNodeId Hydrant = Resolved->Node;
-	if (!TestTrue(TEXT("the hydrant is joined"), Hydrant.IsSet())) { return false; }
+	// ONE TICK so the depot has its placeholder fleet.
+	Fixture.Advance(1.0 / 30.0);
+
+	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+	const FServiceVehicle* Vehicle = Fixture.Service->GetVehicles().FindByPredicate(
+		[Bowser](const FServiceVehicle& Each) { return Each.TypeCode == Bowser; });
+	if (!TestNotNull(TEXT("the depot has a bowser"), Vehicle)) { return false; }
+
+	// A JOB THE TICK LEAVES ALONE (Done), so nothing but this test bids it.
+	FServiceJob& Job = Fixture.Service->AddJobForTest(99, EServiceJobState::Done, EServiceRefusal::None, 0);
+	Job.Stand = Fixture.Stand;
+	Job.QuantityOwed = 300.0;
+	const int32 JobId = Job.Id;
 
 	RouteSearch::ResetSearchCallCountForTest();
-	const FVehicle& Vehicle = Fixture.Service->VehiclesFor(EIcaoCode::C);
-	const auto First = Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant, Vehicle, Vehicle);
-	if (!TestTrue(TEXT("the one depot is chosen"), First.Depot.IsSet())) { return false; }
-	TestEqual(TEXT("the first ask runs one Find"), RouteSearch::SearchCallCountForTest(), 1);
+	const ServiceBid::FResult First = Fixture.Service->BidForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, Vehicle->Id, JobId);
+	if (!TestTrue(TEXT("the bowser can reach the stand"), First.bReachable)) { return false; }
+	TestEqual(TEXT("the first ask runs one Find - the depot's route, which the bid's own drive reads back"),
+		RouteSearch::SearchCallCountForTest(), 1);
 
 	for (int32 Idle = 0; Idle < 5; ++Idle)
 	{
-		Fixture.Service->ChooseDepotForTest(*Fixture.Net, Hydrant, Vehicle, Vehicle);
+		Fixture.Service->BidForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, Vehicle->Id, JobId);
 	}
 	TestEqual(TEXT("5 more asks over an unchanged graph answer from the cache - no new Find"),
 		RouteSearch::SearchCallCountForTest(), 1);
@@ -1166,14 +1174,15 @@ bool FFuelChooseDepotCachesRouteFindsTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelBusyWaitReoffersOnceTest, "AirportOps.Ops.FuelBusyWaitReoffersOnce",
+	FFuelQueuedJobServedWithoutRebidsTest, "AirportOps.Ops.FuelQueuedJobServedWithoutRebids",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FFuelBusyWaitReoffersOnceTest::RunTest(const FString& Parameters)
+bool FFuelQueuedJobServedWithoutRebidsTest::RunTest(const FString& Parameters)
 {
-	// THE OTHER HALF OF #190's FIX: skipping ChooseDepot while busy is only correct if a
-	// truck actually freeing up still reaches the waiting demand - and reaches it exactly
-	// once, the tick FleetRevision moves, not on a retry every idle tick from then on.
+	// THE OTHER HALF OF #190: a job placed on a busy vehicle is served when that vehicle comes to it,
+	// with no retry along the way. WAS AirportOps.Ops.FuelBusyWaitReoffersOnce, which counted ONE
+	// ChooseDepot on the free-up; with the job already queued there is nothing to re-offer, so the
+	// count across the whole wait is zero.
 	FFuelFixture Fixture;
 	Fixture.bSecondStand = true;
 	Fixture.Build(/*bWithRoad=*/true);
@@ -1181,12 +1190,12 @@ bool FFuelBusyWaitReoffersOnceTest::RunTest(const FString& Parameters)
 	const int32 First = Fixture.ParkAircraft();
 	if (!TestTrue(TEXT("an aircraft parked at the first stand"), First != 0)) { return false; }
 
-	if (!TestTrue(TEXT("the depot dispatches its truck"),
+	if (!TestTrue(TEXT("the depot dispatches a truck"),
 		Fixture.AdvanceUntil([&Fixture]
 		{
-			const FFuelDemand* Demand = Fixture.Service->GetDemands().Num() > 0
-				? &Fixture.Service->GetDemands()[0] : nullptr;
-			return Demand != nullptr && Demand->TruckId != 0;
+			const FServiceJob* Demand = Fixture.Service->GetJobs().Num() > 0
+				? &Fixture.Service->GetJobs()[0] : nullptr;
+			return Demand != nullptr && Fixture.Service->AgentForJob(*Demand) != 0;
 		}, 30.0)))
 	{
 		return false;
@@ -1195,35 +1204,23 @@ bool FFuelBusyWaitReoffersOnceTest::RunTest(const FString& Parameters)
 	const int32 Second = Fixture.ParkAircraftAt(Fixture.StandPose2);
 	if (!TestTrue(TEXT("a second aircraft parked at the second stand"), Second != 0)) { return false; }
 
-	auto SecondDemand = [&Fixture, Second]() -> const FFuelDemand*
-	{
-		for (const FFuelDemand& Demand : Fixture.Service->GetDemands())
-		{
-			if (Demand.AircraftId == Second) { return &Demand; }
-		}
-		return nullptr;
-	};
-
-	// ESTABLISH BUSY, then start counting from a clean slate.
+	// PLACED, then start counting from a clean slate.
 	Fixture.Advance(1.0 / 30.0);
-	if (!TestNotNull(TEXT("setup: the second demand is busy"), SecondDemand())) { return false; }
-	Fixture.Service->ResetChooseDepotCallCountForTest();
+	if (!TestNotNull(TEXT("setup: the second job exists"), Fixture.Service->JobForAircraft(Second))) { return false; }
+	Fixture.Service->ResetBidCallCountForTest();
 
-	// SAME BOUND AS FFuelQueuesOnABusyDepot: the first truck's whole round trip - drive out,
-	// the 40 s dwell, drive home.
-	const bool bServed = Fixture.AdvanceUntil([&SecondDemand]
+	// SAME BOUND AS FFuelQueuesOnABusyDepot: a whole round trip - drive out, pump, drive home.
+	const bool bServed = Fixture.AdvanceUntil([&Fixture, Second]
 	{
-		const FFuelDemand* Demand = SecondDemand();
-		return Demand != nullptr && Demand->TruckId != 0;
+		const FServiceJob* Demand = Fixture.Service->JobForAircraft(Second);
+		return Demand != nullptr && Fixture.Service->AgentForJob(*Demand) != 0;
 	}, 450.0);
-	if (!TestTrue(TEXT("the truck coming home re-offers the waiting demand"), bServed)) { return false; }
+	if (!TestTrue(TEXT("a vehicle comes for the queued job"), bServed)) { return false; }
 
-	// THE DEFECT THIS WOULD CATCH: reverting the skip in Tick's Needed case turns this back
-	// into "every idle tick along the way", which over a 450 s bound is thousands of calls,
-	// not one.
-	TestEqual(TEXT("ChooseDepot ran exactly once to do it - the free-up is caught the tick it "
-		"happens, not retried on every idle tick beforehand"),
-		Fixture.Service->GetChooseDepotCallCountForTest(), 1);
+	// THE DEFECT THIS WOULD CATCH: a job re-bid on every idle tick along the way, which over a 450 s
+	// bound is thousands of bids.
+	TestEqual(TEXT("no bid ran for it while it waited - it was already placed"),
+		Fixture.Service->GetBidCallCountForTest(), 0);
 	return true;
 }
 
@@ -1247,9 +1244,9 @@ bool FFuelTurnaroundDepartsTest::RunTest(const FString& Parameters)
 	const int32 Aircraft = Fixture.ParkAircraft();
 	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
 
-	auto Demand = [&Fixture, Aircraft]() -> const FFuelDemand*
+	auto Demand = [&Fixture, Aircraft]() -> const FServiceJob*
 	{
-		for (const FFuelDemand& Each : Fixture.Service->GetDemands())
+		for (const FServiceJob& Each : Fixture.Service->GetJobs())
 		{
 			if (Each.AircraftId == Aircraft) { return &Each; }
 		}
@@ -1262,7 +1259,7 @@ bool FFuelTurnaroundDepartsTest::RunTest(const FString& Parameters)
 	};
 
 	if (!TestNotNull(TEXT("it demanded fuel"), Demand())) { return false; }
-	const double Deadline = Demand()->TurnaroundEndsAt;
+	const double Deadline = Fixture.Service->TurnaroundFor(Aircraft)->TurnaroundEndsAt;
 
 	// THE DEADLINE IS NOT A GUILLOTINE. Advanced until it has passed, then asserted that an
 	// aircraft still being served has NOT been sent - a job it asked for is finished first,
@@ -1270,11 +1267,11 @@ bool FFuelTurnaroundDepartsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the turnaround runs out"),
 		Fixture.AdvanceUntil([&Fixture, Deadline] { return Fixture.Clock->Now() >= Deadline; }, 120.0));
 
-	if (const FFuelDemand* Now = Demand();
+	if (const FServiceJob* Now = Demand();
 		TestNotNull(TEXT("and the demand is still open"), Now))
 	{
 		TestNotEqual(TEXT("because the truck has not finished"),
-			static_cast<int32>(Now->State), static_cast<int32>(EFuelDemandState::Done));
+			static_cast<int32>(Now->State), static_cast<int32>(EServiceJobState::Done));
 		TestEqual(TEXT("so the aircraft is still on its stand"),
 			static_cast<int32>(Phase()), static_cast<int32>(EAgentPhase::Parked));
 	}
@@ -1307,11 +1304,11 @@ bool FFuelUnserviceableStillDepartsTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("nothing can serve it"), Fixture.AdvanceUntil([&Fixture, Aircraft]
 	{
-		for (const FFuelDemand& Each : Fixture.Service->GetDemands())
+		for (const FServiceJob& Each : Fixture.Service->GetJobs())
 		{
 			if (Each.AircraftId == Aircraft)
 			{
-				return Each.State == EFuelDemandState::Unserviceable;
+				return Each.State == EServiceJobState::Unserviceable;
 			}
 		}
 		return false;
@@ -1359,8 +1356,8 @@ bool FTruckNeverTeleportsOnItsRoundTripTest::RunTest(const FString& Parameters)
 	// UNTIL THE TRUCK IS HOME AND RETIRED, which is the last handover of the trip.
 	const bool bDone = Fixture.AdvanceUntil([&Fixture]
 		{
-			const TArray<FFuelDemand>& Demands = Fixture.Service->GetDemands();
-			return Demands.Num() > 0 && Demands[0].State == EFuelDemandState::Done;
+			const TArray<FServiceJob>& Demands = Fixture.Service->GetJobs();
+			return Demands.Num() > 0 && Demands[0].State == EServiceJobState::Done;
 		}, 600.0);
 
 	AddInfo(FString::Printf(
@@ -1403,7 +1400,7 @@ bool FFuelTruckGetsHomeWhenTooNarrowTest::RunTest(const FString& Parameters)
 	const int32 Aircraft = Fixture.ParkAircraft();
 	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
 	Fixture.Advance(0.2);
-	const int32 TruckId = Fixture.Service->GetDemands()[0].TruckId;
+	const int32 TruckId = Fixture.Service->AgentForJob(Fixture.Service->GetJobs()[0]);
 	if (!TestTrue(TEXT("a truck went out for it"), TruckId != 0)) { return false; }
 
 	// Out it went; now nothing on the airport fits it on the way back. THE AGENT'S OWN VEHICLE,
@@ -1435,7 +1432,7 @@ bool FFuelTowNeverDrivenHomeIntoAFoldTest::RunTest(const FString& Parameters)
 {
 	// THE UNGATED FALLBACK IS FOR A SCUFFED KERB, NOT A JACK-KNIFE (review of 9441ccf1): a truck
 	// that does not fit the road home drives it anyway (FuelTruckGetsHomeWhenTooNarrow), UNLESS it
-	// tows something that route folds - UFuelService::MayDriveUngated, the rule SendTruckHome asks.
+	// tows something that route folds - UJobBoard::MayDriveUngated, the rule SendTruckHome asks.
 	// On a hand-drawn road, because the fuel fixture's roads turn left and right and fold nothing:
 	// three same-hand quarters (the turn of a dead-end balloon) fold the rig; two - a U - do not.
 	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
@@ -1478,7 +1475,7 @@ bool FFuelTowNeverDrivenHomeIntoAFoldTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("an ungated plan"), Plan.IsValid())) { continue; }
 
 		FString Why;
-		const bool bMay = UFuelService::MayDriveUngated(Plan, Rig, *Net, &Why);
+		const bool bMay = UJobBoard::MayDriveUngated(Plan, Rig, *Net, &Why);
 		AddInfo(FString::Printf(TEXT("%d quarters: rig %s %s"), Quarters, bMay ? TEXT("may drive") : TEXT("may not:"), *Why));
 		if (Quarters == 3)
 		{
@@ -1489,7 +1486,7 @@ bool FFuelTowNeverDrivenHomeIntoAFoldTest::RunTest(const FString& Parameters)
 		{
 			TestTrue(TEXT("a road its trailer holds is driven ungated, as for any truck"), bMay);
 		}
-		TestTrue(TEXT("a rigid truck is always driven home ungated - nothing to fold"), UFuelService::MayDriveUngated(Plan, Bowser, *Net));
+		TestTrue(TEXT("a rigid truck is always driven home ungated - nothing to fold"), UJobBoard::MayDriveUngated(Plan, Bowser, *Net));
 	}
 	return true;
 }
@@ -1505,9 +1502,9 @@ bool FFuelTowNeverDrivenHomeIntoAFoldTest::RunTest(const FString& Parameters)
 namespace FuelServiceTest
 {
 	/** The demand for Aircraft, or null. */
-	const FFuelDemand* DemandFor(const UFuelService& Service, int32 Aircraft)
+	const FServiceJob* DemandFor(const UJobBoard& Service, int32 Aircraft)
 	{
-		for (const FFuelDemand& Each : Service.GetDemands())
+		for (const FServiceJob& Each : Service.GetJobs())
 		{
 			if (Each.AircraftId == Aircraft) { return &Each; }
 		}
@@ -1545,7 +1542,7 @@ namespace FuelServiceTest
 		const FEntityInstance* Stand = Fixture.Net->GetEntity(Fixture.Stand);
 		if (!Test.TestNotNull(*FString::Printf(TEXT("the %s stand is placed"), Code), Stand)) { return false; }
 		Test.TestEqual(*FString::Printf(TEXT("and the service reads it as Code %s"), Code),
-			static_cast<int32>(UFuelService::LetterOfStand(*Stand)), static_cast<int32>(Letter));
+			static_cast<int32>(UJobBoard::LetterOfStand(*Stand)), static_cast<int32>(Letter));
 
 		const FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
 		if (!Test.TestTrue(TEXT("the utility tow tows something - else this test measures a rigid truck"), Tow.HasTrailer()))
@@ -1562,9 +1559,9 @@ namespace FuelServiceTest
 		bool bWholeChain = false;
 		const bool bDeparted = Aircraft != 0 && Fixture.AdvanceUntil([&]
 		{
-			if (const FFuelDemand* Demand = DemandFor(*Fixture.Service, Aircraft))
+			if (const FServiceJob* Demand = DemandFor(*Fixture.Service, Aircraft))
 			{
-				TruckId = Demand->TruckId != 0 ? Demand->TruckId : TruckId;
+				TruckId = Fixture.Service->AgentForJob(*Demand) != 0 ? Fixture.Service->AgentForJob(*Demand) : TruckId;
 			}
 			if (const FRoadAgent* Truck = TruckId != 0 ? Fixture.Traffic->FindAgent(TruckId) : nullptr)
 			{
@@ -1650,8 +1647,8 @@ namespace FuelServiceTest
 		int32 TruckId = 0;
 		const bool bSent = Aircraft != 0 && Fixture.AdvanceUntil([&]
 		{
-			const FFuelDemand* Demand = DemandFor(*Fixture.Service, Aircraft);
-			TruckId = Demand != nullptr ? Demand->TruckId : 0;
+			const FServiceJob* Demand = DemandFor(*Fixture.Service, Aircraft);
+			TruckId = Demand != nullptr ? Fixture.Service->AgentForJob(*Demand) : 0;
 			return TruckId != 0;
 		}, 60.0);
 
@@ -1760,7 +1757,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FFuelTowRecalledOnItsLastLegGetsHomeTest::RunTest(const FString& Parameters)
 {
 	// NO NODE AHEAD TO TURN AT: the step it is on ends at the service point. It finishes the leg,
-	// parks, and backs off by the ordinary cycle - UFuelService::OnAgentPhase's recalled branch.
+	// parks, and backs off by the ordinary cycle - UJobBoard::OnAgentPhase's recalled branch.
 	//
 	// WAS CODE A (review fix round 1, 2026-09-27 merge) - see
 	// FFuelTowRecalledMidRouteGetsHomeTest's own note; B is still the tow's letter.
@@ -1781,8 +1778,8 @@ bool FFuelTruckServesCodeCTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("an aircraft parked at the C stand"), Aircraft != 0)) { return false; }
 	Fixture.Advance(0.2);
 
-	const FFuelDemand* Demand = FuelServiceTest::DemandFor(*Fixture.Service, Aircraft);
-	const FRoadAgent* Truck = Demand != nullptr ? Fixture.Traffic->FindAgent(Demand->TruckId) : nullptr;
+	const FServiceJob* Demand = FuelServiceTest::DemandFor(*Fixture.Service, Aircraft);
+	const FRoadAgent* Truck = Demand != nullptr ? Fixture.Traffic->FindAgent(Fixture.Service->AgentForJob(*Demand)) : nullptr;
 	if (!TestNotNull(TEXT("a vehicle is out for it"), Truck)) { return false; }
 
 	const FVehicle Design = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
@@ -1816,6 +1813,9 @@ bool FFuelVehicleTooLargeRefusedTest::RunTest(const FString& Parameters)
 	Fixture.bFarEdgeRoad = true;
 	Fixture.Build(/*bWithRoad=*/true);
 	Fixture.Service->VehiclesFor(EIcaoCode::B) = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
+	// THE DEPOT'S ONLY VEHICLE IS THE TRUCK (a fleet since 2026-09-28): the placeholder fleet would
+	// also give it the tow, which the B stand was built for and would simply be sent.
+	Fixture.Service->DefaultFleetTypes = { UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode };
 	TestEqual(TEXT("the B stand's definition says it was built for the tow"),
 		Fixture.Service->DesignVehicleFor(*Fixture.Net->GetEntity(Fixture.Stand)).TypeCode,
 		UAirsideSettings::ResolveUtilityTowVehicle().TypeCode);
@@ -1824,16 +1824,16 @@ bool FFuelVehicleTooLargeRefusedTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("an aircraft parked at the B stand"), Aircraft != 0)) { return false; }
 	Fixture.Advance(0.2);
 
-	const FFuelDemand* Demand = FuelServiceTest::DemandFor(*Fixture.Service, Aircraft);
+	const FServiceJob* Demand = FuelServiceTest::DemandFor(*Fixture.Service, Aircraft);
 	if (!TestNotNull(TEXT("it demanded fuel"), Demand)) { return false; }
 	TestEqual(TEXT("unserviceable"),
-		static_cast<int32>(Demand->State), static_cast<int32>(EFuelDemandState::Unserviceable));
+		static_cast<int32>(Demand->State), static_cast<int32>(EServiceJobState::Unserviceable));
 	TestEqual(TEXT("because the vehicle is larger than the stand was drawn for"),
-		static_cast<int32>(Demand->Why), static_cast<int32>(EFuelRefusal::VehicleTooLarge));
+		static_cast<int32>(Demand->Why), static_cast<int32>(EServiceRefusal::VehicleTooLarge));
 	TestEqual(TEXT("and the card names the vehicle, not the road"),
 		Fixture.Service->DescribeAgent(Aircraft, 0.0),
 		FString(TEXT("Fuel 300 L \u00B7 the depot's vehicle is too large for this stand")));
-	TestEqual(TEXT("no truck went out"), Demand->TruckId, 0);
+	TestEqual(TEXT("no truck went out"), Fixture.Service->AgentForJob(*Demand), 0);
 	return true;
 }
 
@@ -1886,7 +1886,7 @@ bool FFuelRuntimeResolvesPerStandTest::RunTest(const FString& Parameters)
 	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
-	if (!TestNotNull(TEXT("the runtime owns a fuel service"), Runtime->GetFuelService())) { return false; }
+	if (!TestNotNull(TEXT("the runtime owns a fuel service"), Runtime->GetJobBoard())) { return false; }
 	Runtime->Attach(Actor);
 
 	const FName Tow = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::A).TypeCode;
@@ -1915,14 +1915,14 @@ bool FFuelRuntimeResolvesPerStandTest::RunTest(const FString& Parameters)
 	// the lead-in: the second is dispatched once the first has parked and asked for fuel.
 	for (const FEntityInstanceId Stand : { StandA, StandC })
 	{
-		const int32 DemandsBefore = Runtime->GetFuelService()->GetDemands().Num();
+		const int32 DemandsBefore = Runtime->GetJobBoard()->GetJobs().Num();
 		const FRoutePlan Plan = TestGraph::Probe(Net, TaxiSouth, Net.GetEntity(Stand)->PoseNode, ETraversalClass::Aircraft);
 		if (!TestTrue(TEXT("the aircraft routes to its stand"), Plan.IsValid())) { return false; }
 		if (!TestTrue(TEXT("and dispatches"), Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultAirframe())))
 		{
 			return false;
 		}
-		for (int32 Tick = 0; Tick < 3600 && Runtime->GetFuelService()->GetDemands().Num() == DemandsBefore; ++Tick)
+		for (int32 Tick = 0; Tick < 3600 && Runtime->GetJobBoard()->GetJobs().Num() == DemandsBefore; ++Tick)
 		{
 			TickAndWatch();
 		}
@@ -1935,16 +1935,16 @@ bool FFuelRuntimeResolvesPerStandTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the A stand was sent the tow"), Sent.Contains(Tow));
 	TestTrue(TEXT("the C stand was sent the truck"), Sent.Contains(Truck));
 	TestEqual(TEXT("the runtime's table answers A's stand with the tow"),
-		Runtime->GetFuelService()->VehicleFor(*Net.GetEntity(StandA)).TypeCode, Tow);
+		Runtime->GetJobBoard()->VehicleFor(*Net.GetEntity(StandA)).TypeCode, Tow);
 	TestEqual(TEXT("and C's with the truck"),
-		Runtime->GetFuelService()->VehicleFor(*Net.GetEntity(StandC)).TypeCode, Truck);
+		Runtime->GetJobBoard()->VehicleFor(*Net.GetEntity(StandC)).TypeCode, Truck);
 	// THE BUILT-FOR READ IS WIRED, and measured so it can tell: with A's table entry made the
 	// truck, an unwired DesignVehicleOf falls back to what the table sends (the truck), while the
 	// wired one still reads A's definition (the tow) - the fact the VehicleTooLarge guard compares
 	// against. Asking with the table left alone could not tell the two apart: both answer tow.
-	Runtime->GetFuelService()->VehiclesFor(EIcaoCode::A) = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
+	Runtime->GetJobBoard()->VehiclesFor(EIcaoCode::A) = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
 	TestEqual(TEXT("the runtime wired the built-for read: A's stand, sent the truck, was still built for the tow"),
-		Runtime->GetFuelService()->DesignVehicleFor(*Net.GetEntity(StandA)).TypeCode, Tow);
+		Runtime->GetJobBoard()->DesignVehicleFor(*Net.GetEntity(StandA)).TypeCode, Tow);
 	return true;
 }
 
@@ -2041,14 +2041,14 @@ bool FFuelBigLoadTakesTripsTest::RunTest(const FString& Parameters)
 	const bool bDone = Fixture.AdvanceUntil([&Fixture, &bSawRefill]
 	{
 		bSawRefill |= Fixture.Service->RefillingForTest() > 0;
-		return Fixture.Service->GetDemands().Num() == 1
-			&& Fixture.Service->GetDemands()[0].State == EFuelDemandState::Done;
+		return Fixture.Service->GetJobs().Num() == 1
+			&& Fixture.Service->GetJobs()[0].State == EServiceJobState::Done;
 	}, 900.0);
 	if (!TestTrue(TEXT("the job finishes"), bDone)) { return false; }
-	const FFuelDemand& Demand = Fixture.Service->GetDemands()[0];
+	const FServiceJob& Demand = Fixture.Service->GetJobs()[0];
 	TestEqual(TEXT("2,500 L on a 1,000 L tank is three trips"), Demand.Trips, 3);
-	TestEqual(TEXT("and all of it was delivered"), Demand.LitresDelivered, 2500.0, 0.5);
-	TestEqual(TEXT("nothing is owed"), Demand.LitresOwed, 0.0, 0.5);
+	TestEqual(TEXT("and all of it was delivered"), Demand.QuantityDelivered, 2500.0, 0.5);
+	TestEqual(TEXT("nothing is owed"), Demand.QuantityOwed, 0.0, 0.5);
 	TestTrue(TEXT("and the depot refilled a truck between trips"), bSawRefill);
 	return true;
 }
@@ -2064,15 +2064,15 @@ bool FFuelPausedPumpTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
 	if (!TestTrue(TEXT("the truck starts pumping"), Fixture.AdvanceUntil([&Fixture]
 		{
-			return Fixture.Service->GetDemands().Num() == 1
-				&& Fixture.Service->GetDemands()[0].State == EFuelDemandState::Fuelling;
+			return Fixture.Service->GetJobs().Num() == 1
+				&& Fixture.Service->GetJobs()[0].State == EServiceJobState::Serving;
 		}, 240.0))) { return false; }
 	// GAME TIME: a paused clock does not pump, however long the frames run.
 	Fixture.Clock->TogglePause();
 	Fixture.Advance(120.0);
 	TestEqual(TEXT("still fuelling after two paused minutes"),
-		static_cast<int32>(Fixture.Service->GetDemands()[0].State),
-		static_cast<int32>(EFuelDemandState::Fuelling));
+		static_cast<int32>(Fixture.Service->GetJobs()[0].State),
+		static_cast<int32>(EServiceJobState::Serving));
 	return true;
 }
 
@@ -2104,16 +2104,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFuelNoLitresTest::RunTest(const FString& Parameters)
 {
-	// A TYPE WITH NO TANK wants nothing - but still turns round and leaves, so its demand is
-	// Done from the start rather than absent (DepartTheReady walks demands).
+	// A TYPE WITH NO TANK wants nothing - but still turns round and leaves. SINCE THE JOB BOARD it
+	// has a TURNAROUND and no job: the turnaround is what departs (DepartTheReady walks turnarounds),
+	// so the Done-for-zero-litres demand UFuelService needed is gone.
 	FFuelFixture Fixture;
 	Fixture.FixtureLitres = 0.0;
 	Fixture.Build(/*bWithRoad=*/true);
-	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
 	Fixture.Advance(2.0);
-	if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
-	TestEqual(TEXT("already done"), static_cast<int32>(Fixture.Service->GetDemands()[0].State),
-		static_cast<int32>(EFuelDemandState::Done));
+	TestNotNull(TEXT("it has a turnaround"), Fixture.Service->TurnaroundFor(Aircraft));
+	TestEqual(TEXT("and no job"), Fixture.Service->GetJobs().Num(), 0);
+	TestEqual(TEXT("and the card says so"), Fixture.Service->DescribeAgent(Aircraft, 0.0), FString(TEXT("Fuel · none needed")));
 	TestEqual(TEXT("and no truck was sent"), Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
 	return true;
 }
@@ -2144,12 +2146,12 @@ bool FFuelPartFuelledTest::RunTest(const FString& Parameters)
 	const int32 Aircraft = Fixture.ParkAircraft();
 	const bool bFirstTrip = Fixture.AdvanceUntil([&Fixture]
 	{
-		return Fixture.Service->GetDemands().Num() == 1 && Fixture.Service->GetDemands()[0].Trips == 1;
+		return Fixture.Service->GetJobs().Num() == 1 && Fixture.Service->GetJobs()[0].Trips == 1;
 	}, 600.0);
 	if (bFirstTrip)
 	{
 		Fixture.Net->RemoveEntity(Fixture.Depot);
-		Fixture.AdvanceUntil([&Fixture, Aircraft] { return Fixture.Service->GetDemands().Num() == 0; }, 600.0);
+		Fixture.AdvanceUntil([&Fixture, Aircraft] { return Fixture.Service->GetJobs().Num() == 0; }, 600.0);
 	}
 	GLog->RemoveOutputDevice(&Spy);
 	if (!TestTrue(TEXT("one trip was made before the depot went"), bFirstTrip)) { return false; }
@@ -2183,9 +2185,152 @@ bool FFuelZeroCapacitySpecTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
 	TestTrue(TEXT("a zero-tank vehicle still finishes the job"), Fixture.AdvanceUntil([&Fixture]
 	{
-		return Fixture.Service->GetDemands().Num() == 1
-			&& Fixture.Service->GetDemands()[0].State == EFuelDemandState::Done;
+		return Fixture.Service->GetJobs().Num() == 1
+			&& Fixture.Service->GetJobs()[0].State == EServiceJobState::Done;
 	}, 900.0));
+	return true;
+}
+
+namespace FuelServiceTest
+{
+	/**
+	 * Two aircraft parked, one bowser with a pump slow enough that the second is on stand before the
+	 * first is fuelled - so the second job goes on the bowser's queue and the question is what the
+	 * bowser does BETWEEN them. Records every state the vehicle passes through.
+	 */
+	struct FTwoJobRun
+	{
+		bool bBothServed = false;
+		TArray<EServiceVehicleState> States;
+		TSet<int32> Agents;
+		int32 Trucks = 0;
+	};
+
+	FTwoJobRun RunTwoJobs(FAutomationTestBase& Test, double BowserCapacity)
+	{
+		FTwoJobRun Run;
+		FFuelFixture Fixture;
+		Fixture.bSecondStand = true;
+		Fixture.Build(/*bWithRoad=*/true);
+		const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+		// THE BOWSER ALONE, and a 2 L/min pump: 300 L is 150 game minutes, two real minutes at the
+		// fixture's 72x - longer than the second aircraft's taxi in.
+		Fixture.Service->DefaultFleetTypes = { Bowser };
+		Fixture.Service->VehicleSpecs.Add(Bowser, FFuelVehicleSpec(BowserCapacity, 2.0));
+
+		const int32 First = Fixture.ParkAircraft();
+		const int32 Second = First != 0 ? Fixture.ParkAircraftAt(Fixture.StandPose2) : 0;
+		if (!Test.TestTrue(TEXT("both aircraft parked"), First != 0 && Second != 0)) { return Run; }
+
+		Run.bBothServed = Fixture.AdvanceUntil([&]
+		{
+			if (Fixture.Service->GetVehicles().Num() > 0)
+			{
+				const FServiceVehicle& Vehicle = Fixture.Service->GetVehicles()[0];
+				if (Run.States.Num() == 0 || Run.States.Last() != Vehicle.State)
+				{
+					Run.States.Add(Vehicle.State);
+				}
+				if (Vehicle.AgentId != 0)
+				{
+					Run.Agents.Add(Vehicle.AgentId);
+				}
+			}
+			const FServiceJob* A = Fixture.Service->JobForAircraft(First);
+			const FServiceJob* B = Fixture.Service->JobForAircraft(Second);
+			return A != nullptr && B != nullptr && A->State == EServiceJobState::Done && B->State == EServiceJobState::Done;
+		}, 900.0);
+		Run.Trucks = Fixture.Service->GetVehicles().Num();
+		FString Seen;
+		for (const EServiceVehicleState State : Run.States)
+		{
+			Seen += UEnum::GetValueAsString(State) + TEXT(" ");
+		}
+		Test.AddInfo(FString::Printf(TEXT("vehicle states: %s; agents used: %d; worst jump %.1f uu"), *Seen, Run.Agents.Num(), Fixture.WorstJump));
+		Test.TestTrue(*FString::Printf(TEXT("no body ever teleports (worst %.1f uu)"), Fixture.WorstJump), Fixture.WorstJump < 60.0);
+		return Run;
+	}
+
+	/** Whether State occurs strictly between the first two Serving states of Run. */
+	bool BetweenServes(const FTwoJobRun& Run, EServiceVehicleState State)
+	{
+		const int32 FirstServe = Run.States.Find(EServiceVehicleState::Serving);
+		int32 SecondServe = INDEX_NONE;
+		for (int32 At = FirstServe + 1; FirstServe != INDEX_NONE && At < Run.States.Num(); ++At)
+		{
+			if (Run.States[At] == EServiceVehicleState::Serving) { SecondServe = At; break; }
+		}
+		for (int32 At = FirstServe + 1; SecondServe != INDEX_NONE && At < SecondServe; ++At)
+		{
+			if (Run.States[At] == State) { return true; }
+		}
+		return false;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelChainsStandToStandTest, "AirportOps.Fuel.ChainsStandToStandWithoutTheDepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelChainsStandToStandTest::RunTest(const FString& Parameters)
+{
+	// THE USER'S RULING 4 (2026-09-28): "if a fuel vehicle finishes its serve and has enough fuel in
+	// the tank to satisfy the next job there is no need for it to go back to the depot". A 10,000 L
+	// bowser with two 300 L jobs goes stand to stand. UFuelService sent it home between them.
+	const FuelServiceTest::FTwoJobRun Run = FuelServiceTest::RunTwoJobs(*this, 10000.0);
+	TestTrue(TEXT("both aircraft are fuelled"), Run.bBothServed);
+	TestTrue(TEXT("by one agent - the truck never left the road between them"), Run.Agents.Num() == 1);
+	TestFalse(TEXT("it did not head for the depot between the two serves"),
+		FuelServiceTest::BetweenServes(Run, EServiceVehicleState::ToFacility));
+	TestTrue(TEXT("it drove from one stand to the next"), FuelServiceTest::BetweenServes(Run, EServiceVehicleState::ToJob));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelShortTankGoesViaTheDepotTest, "AirportOps.Fuel.ShortTankGoesViaTheDepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelShortTankGoesViaTheDepotTest::RunTest(const FString& Parameters)
+{
+	// THE OTHER HALF OF RULING 4: "only if it doesn't have enough fuel does it need to go back to the
+	// depot". A 400 L tank has 100 L left after the first 300 L job - not enough for the second.
+	const FuelServiceTest::FTwoJobRun Run = FuelServiceTest::RunTwoJobs(*this, 400.0);
+	TestTrue(TEXT("both aircraft are fuelled"), Run.bBothServed);
+	TestTrue(TEXT("it went to the depot between the two serves"),
+		FuelServiceTest::BetweenServes(Run, EServiceVehicleState::ToFacility));
+	TestTrue(TEXT("and refilled there"), FuelServiceTest::BetweenServes(Run, EServiceVehicleState::AtFacility));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelDepotDeletedWithdrawsTest, "AirportOps.Fuel.DepotDeletedWithdrawsItsVehicles",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelDepotDeletedWithdrawsTest::RunTest(const FString& Parameters)
+{
+	// A DEPOT DELETED WITH ITS VEHICLE OUT: the vehicle goes with it (its agent too - nothing is left
+	// on the road with no home), and the job goes back to the board, which says what is now missing.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+	int32 TruckId = 0;
+	if (!TestTrue(TEXT("a truck goes out"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceJob* Job = Fixture.Service->JobForAircraft(Aircraft);
+			TruckId = Job != nullptr ? Fixture.Service->AgentForJob(*Job) : 0;
+			return TruckId != 0;
+		}, 30.0))) { return false; }
+
+	Fixture.Net->RemoveEntity(Fixture.Depot);
+	Fixture.Advance(0.2);
+
+	TestEqual(TEXT("the depot's vehicles are withdrawn"), Fixture.Service->GetVehicles().Num(), 0);
+	TestNull(TEXT("and the truck on the road with them"), Fixture.Traffic->FindAgent(TruckId));
+	const FServiceJob* Job = Fixture.Service->JobForAircraft(Aircraft);
+	if (!TestNotNull(TEXT("the job survives"), Job)) { return false; }
+	TestEqual(TEXT("unserviceable"), static_cast<int32>(Job->State), static_cast<int32>(EServiceJobState::Unserviceable));
+	TestEqual(TEXT("because there is no depot now"), static_cast<int32>(Job->Why), static_cast<int32>(EServiceRefusal::NoDepot));
 	return true;
 }
 

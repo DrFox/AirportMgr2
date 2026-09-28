@@ -124,8 +124,9 @@
           caller that fills a query by hand and skips For() gets the permissive
           ERunwayAvoidance::None for every errand, silently: six test helpers and 48 call
           sites did this before #312. Test modules are explicitly IN SCOPE, unlike rules 5/6 -
-          a test's query reaches the same RunSearch a production one does. Six sites are
-          allow-listed by (File, Var), each checked by hand: FuelService.cpp and
+          a test's query reaches the same RunSearch a production one does. Five sites are
+          allow-listed by (File, Var), each checked by hand (FuelService.cpp's two went to
+          FRouteQuery::For in the JobBoard move, 2026-09-28):
           ArrivalPlanner.cpp/RoadEditFacadeSurfaces.cpp already set AvoidRunways correctly
           by hand (the last two because FindToGoals takes a Goals ARRAY, so neither For() nor
           Probe() fits); RoutePolicyTest.cpp deliberately builds a no-errand query to test its
@@ -1169,7 +1170,8 @@ $ranRules.Add('no-vehiclecode-compare')
 #
 # THE ALLOW-LIST, one entry per (File, VarName), matching rule 6's "file AND field name" shape
 # rather than exempting a whole file: each remaining site was checked by hand (issue #312's PR)
-# and either already sets AvoidRunways correctly (FuelService.cpp, ArrivalPlanner.cpp,
+# and either already sets AvoidRunways correctly (ArrivalPlanner.cpp - FuelService.cpp's two moved
+# to FRouteQuery::For when it became JobBoard*.cpp, 2026-09-28 -
 # RoadEditFacadeSurfaces.cpp, RouteSearchTest.cpp - the last two because FindToGoals takes a
 # GOALS ARRAY, not the one Goal either For() or Probe() needs) or deliberately builds an
 # incomplete or hand-swept query to test the refusal/sweep itself (RoutePolicyTest.cpp's
@@ -1179,7 +1181,6 @@ $ranRules.Add('no-vehiclecode-compare')
 # `FRouteQuery Var;` in one of these files, or a second one of an already-listed (File, Var),
 # still fails - the allow-list is not a whole-file exemption.
 $routeQueryAllowList = @(
-    @{ File = 'Plugins\AirportOps\Source\AirportOps\Private\Model\FuelService.cpp'; Var = 'Query'; Count = 2 }
     @{ File = 'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'; Var = 'Query'; Count = 1 }
     @{ File = 'Plugins\Airside\Source\Airside\Private\Present\RoadEditFacadeSurfaces.cpp'; Var = 'Query'; Count = 1 }
     @{ File = 'Plugins\Airside\Source\AirsideTests\Private\RoutePolicyTest.cpp'; Var = 'Q'; Count = 2 }
