@@ -243,7 +243,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		{
 			if (const UFuelService* Fuel = Runtime->GetFuelService())
 			{
-				F.Fuel = Fuel->DescribeAgent(F.Id);
+				F.Fuel = Fuel->DescribeAgent(F.Id, Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0);
 			}
 		}
 
@@ -269,6 +269,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		Key.Destination = F.Destination;
 		Key.bEngineRunning = F.bEngineRunning;
 		Key.Fuel = F.Fuel;
+		Key.Pushback = F.Pushback;
 
 		if (Key != LastComposedKey)
 		{
@@ -296,10 +297,21 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 					F.Destination,
 					EngineState.ToString(),
 				});
-			if (!F.Fuel.IsEmpty())
+			// THE DEMANDS BLOCK (2026-09-28): what the aircraft wants, one line each. The fuel
+			// line is AirportOps's whole sentence (it names itself "Fuel ..."); pushback is the
+			// airframe's need, which nothing services yet.
+			if (!F.Fuel.IsEmpty() || !F.Pushback.IsEmpty())
 			{
-				LastComposedFacts += FString::Format(
-					*NSLOCTEXT("AirportMgr", "InspectorFuelLine", "\nFuel {0}").ToString(), { F.Fuel });
+				LastComposedFacts += NSLOCTEXT("AirportMgr", "InspectorDemandsHeading", "\n\nDemands").ToString();
+				if (!F.Fuel.IsEmpty())
+				{
+					LastComposedFacts += TEXT("\n") + F.Fuel;
+				}
+				if (!F.Pushback.IsEmpty())
+				{
+					LastComposedFacts += FString::Format(
+						*NSLOCTEXT("AirportMgr", "InspectorPushbackLine", "\nPushback {0}").ToString(), { F.Pushback });
+				}
 			}
 			LastComposedStatus = F.Status;
 		}
@@ -442,6 +454,7 @@ void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 bool UInspectorWidget::IsShownForTest() const { return CardWidget != nullptr && CardWidget->GetVisibility() != ESlateVisibility::Collapsed; }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }
 FString UInspectorWidget::TitleForTest() const { return TitleText != nullptr ? TitleText->GetText().ToString() : FString(); }
+FString UInspectorWidget::FactsForTest() const { return FactsText != nullptr ? FactsText->GetText().ToString() : FString(); }
 FLinearColor UInspectorWidget::DepartLabelColourForTest() const
 {
 	return DepartLabel != nullptr ? DepartLabel->GetColorAndOpacity().GetSpecifiedColor() : FLinearColor::Black;

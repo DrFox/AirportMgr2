@@ -265,4 +265,15 @@ bool FStandPartiallyJoinedIsUnserviceableTest::RunTest(const FString& Parameters
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectFactsPushbackTest, "Airside.Model.InspectFacts.PushbackDemand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectFactsPushbackTest::RunTest(const FString& Parameters)
+{
+	// WHAT GETS IT OFF THE STAND, in the card's Demands block (2026-09-28).
+	TestEqual(TEXT("self"), InspectFacts::PushbackText(EPushbackNeed::SelfManoeuvre), FString(TEXT("reverses itself")));
+	TestEqual(TEXT("hand"), InspectFacts::PushbackText(EPushbackNeed::HandTug), FString(TEXT("needs a hand tug")));
+	TestEqual(TEXT("vehicle"), InspectFacts::PushbackText(EPushbackNeed::VehicleTug), FString(TEXT("needs a tug")));
+	return true;
+}
+
 #endif

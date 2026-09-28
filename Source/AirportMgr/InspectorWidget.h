@@ -58,13 +58,14 @@ struct FInspectorKey
 	FString Destination;
 	bool bEngineRunning = false;
 	FString Fuel;
+	FString Pushback;
 
 	bool operator==(const FInspectorKey& Other) const
 	{
 		return Id == Other.Id && Phase == Other.Phase && HeadingRounded == Other.HeadingRounded
 			&& SpeedTenthsRounded == Other.SpeedTenthsRounded && AltitudeRounded == Other.AltitudeRounded
 			&& Destination == Other.Destination && bEngineRunning == Other.bEngineRunning
-			&& Fuel == Other.Fuel;
+			&& Fuel == Other.Fuel && Pushback == Other.Pushback;
 	}
 	bool operator!=(const FInspectorKey& Other) const { return !(*this == Other); }
 };
@@ -153,6 +154,9 @@ public:
 	bool IsShownForTest() const;
 	bool IsDepartEnabledForTest() const;
 	FString TitleForTest() const;
+
+	/** The composed facts text (heading, speed, ... and the Demands block). */
+	FString FactsForTest() const;
 	/** Depart's CAPTION colour - the thing that must actually change with enabled state.
 	 *  See Refresh: the button's own background stays Style->Button always. */
 	FLinearColor DepartLabelColourForTest() const;

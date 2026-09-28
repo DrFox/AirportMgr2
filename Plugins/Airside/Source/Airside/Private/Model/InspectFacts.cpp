@@ -101,7 +101,22 @@ namespace InspectFacts
 		Out.Status = StatusOf(*Agent);
 		Out.bEngineRunning = Agent->bEngineRunning;
 		Out.bCanDepart = Agent->Phase == EAgentPhase::Parked;
+		if (const FAirframe* Aircraft = Agent->AsAircraft())
+		{
+			Out.Pushback = PushbackText(Aircraft->PushbackNeed);
+		}
 		return true;
+	}
+
+	FString PushbackText(EPushbackNeed Need)
+	{
+		switch (Need)
+		{
+		case EPushbackNeed::SelfManoeuvre: return TEXT("reverses itself");
+		case EPushbackNeed::HandTug:       return TEXT("needs a hand tug");
+		case EPushbackNeed::VehicleTug:    return TEXT("needs a tug");
+		}
+		return FString();
 	}
 
 	bool DescribeStand(const UGroundTraffic* Traffic, const URoadNetwork& Network, int32 EntityIndex, FStandFacts& Out)

@@ -750,8 +750,8 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
 			static_cast<int32>(EFuelRefusal::NoDepot));
 		TestEqual(TEXT("and the card says so"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
-			FString(TEXT("no fuel depot")));
+			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId, 0.0),
+			FString(TEXT("Fuel 300 L \u00B7 no fuel depot")));
 	}
 
 	// NO ROAD WIDE ENOUGH (spec 2026-09-23 §6). Everything is joined and connected, but the
@@ -776,8 +776,8 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
 			static_cast<int32>(EFuelRefusal::TooNarrow));
 		TestEqual(TEXT("and the card says the road is too narrow, not missing"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
-			FString(TEXT("no road wide enough for the fuel vehicle")));
+			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId, 0.0),
+			FString(TEXT("Fuel 300 L \u00B7 no road wide enough for the fuel vehicle")));
 	}
 
 	// A DEPOT WITH NO PUMP. On a road, with a truck, and still unable to fuel - so the
@@ -797,8 +797,8 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
 			static_cast<int32>(EFuelRefusal::NoPump));
 		TestEqual(TEXT("and the card names the pump, not the road"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
-			FString(TEXT("depot has no pump")));
+			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId, 0.0),
+			FString(TEXT("Fuel 300 L \u00B7 depot has no pump")));
 	}
 
 	// DEPOT OFF ANY ROAD. The stand's hydrant is unjoined too, and NoRoad wins by the
@@ -847,8 +847,8 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		// ENTRANCES rather than report a bare "not on a road" (which sent the player looking at
 		// the stand's sides, where there is nothing to draw).
 		TestEqual(TEXT("and the card names what the road has to reach"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
-			FString(TEXT("no road within reach of the stand's entrances")));
+			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId, 0.0),
+			FString(TEXT("Fuel 300 L \u00B7 no road within reach of the stand's entrances")));
 	}
 	return true;
 }
@@ -1831,8 +1831,8 @@ bool FFuelVehicleTooLargeRefusedTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("because the vehicle is larger than the stand was drawn for"),
 		static_cast<int32>(Demand->Why), static_cast<int32>(EFuelRefusal::VehicleTooLarge));
 	TestEqual(TEXT("and the card names the vehicle, not the road"),
-		Fixture.Service->DescribeAgent(Aircraft),
-		FString(TEXT("the depot's vehicle is too large for this stand")));
+		Fixture.Service->DescribeAgent(Aircraft, 0.0),
+		FString(TEXT("Fuel 300 L \u00B7 the depot's vehicle is too large for this stand")));
 	TestEqual(TEXT("no truck went out"), Demand->TruckId, 0);
 	return true;
 }
