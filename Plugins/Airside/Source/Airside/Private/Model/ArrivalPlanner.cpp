@@ -22,8 +22,10 @@ namespace
 	 * disagree with ChooseStand about what a stand is or what fits it - only about whether
 	 * reach matters, which for "draw a bigger stand" or "pave a stand" it does not.
 	 *
-	 * PRIORITY ACROSS STANDS, not per-stand precedence (Judge already orders Surface, TooSmall,
-	 * Service within one stand): Service wins if ANY stand was refused only for a service - the
+	 * PRIORITY ACROSS STANDS, not per-stand precedence (Judge already orders Strip, Surface,
+	 * TooSmall, Service within one stand): a stand refused ONLY for sitting in a taxiway's
+	 * clearance strip wins first - it fits and is paved, so redrawing it back is the one fix
+	 * (strip spec 2026-09-28); then Service wins if ANY stand was refused only for a service - the
 	 * more specific, more actionable report; else Surface if ANY stand is big enough at all
 	 * (Admission.bPassesSize, regardless of its own pavement) - paving one would fix it; else
 	 * every stand really is too small, whatever it is paved with.
@@ -43,6 +45,7 @@ namespace
 		FStandAdmission& OutSpeaker)
 	{
 		int32 Stands = 0;
+		TOptional<FStandAdmission> FirstStripOnly;
 		TOptional<FStandAdmission> FirstServiceOnly;
 		TOptional<FStandAdmission> FirstBigEnough;
 		TOptional<FStandAdmission> FirstPavedEnough;
@@ -51,9 +54,11 @@ namespace
 		{
 			if (!Stand.IsStandCandidate()) { continue; }
 			++Stands;
-			const FStandAdmission Admission = StandAdmission::Judge(Stand, Airframe);
+			const FStandAdmission Admission = StandAdmission::Judge(Network, Stand, Airframe);
 			if (Admission.IsAdmitted()) { return EStandRefusal::None; }
 			if (!First.IsSet()) { First = Admission; }
+			if (Admission.Why == EStandRefusal::InsideStrip && Admission.bPassesSize && Admission.Pavement.Passes()
+				&& !FirstStripOnly.IsSet()) { FirstStripOnly = Admission; }
 			if (Admission.Why == EStandRefusal::Service && !FirstServiceOnly.IsSet()) { FirstServiceOnly = Admission; }
 			if (Admission.bPassesSize && !FirstBigEnough.IsSet()) { FirstBigEnough = Admission; }
 			if (Admission.Pavement.Passes() && !FirstPavedEnough.IsSet()) { FirstPavedEnough = Admission; }
@@ -65,6 +70,7 @@ namespace
 			// Stands > 0 guard read before this generalised it.
 			return EStandRefusal::None;
 		}
+		if (FirstStripOnly.IsSet()) { OutSpeaker = *FirstStripOnly; return EStandRefusal::InsideStrip; }
 		if (FirstServiceOnly.IsSet()) { OutSpeaker = *FirstServiceOnly; return EStandRefusal::Service; }
 		if (FirstBigEnough.IsSet()) { OutSpeaker = *FirstBigEnough; return EStandRefusal::Surface; }
 		OutSpeaker = FirstPavedEnough.IsSet() ? *FirstPavedEnough : *First;
@@ -183,7 +189,10 @@ namespace ArrivalPlanner
 		double BestLength = TNumericLimits<double>::Max();
 		int32 BestRank = TNumericLimits<int32>::Max();
 		bool bSawHeld = false;
-		int32 RefusedCount[4] = {}; // indexed by EStandRefusal - None's slot never increments
+		// INDEXED BY EStandRefusal - None's slot never increments. SIZED FROM THE ENUM'S LAST
+		// VALUE, not a literal: this was [4] until InsideStrip (value 4) was appended on
+		// 2026-09-28, and a literal would have been written one past its end.
+		int32 RefusedCount[static_cast<uint8>(EStandRefusal::InsideStrip) + 1] = {};
 		int32 HeldCount = 0;
 		for (int32 Index = 0; Index < Candidates.Num(); ++Index)
 		{
@@ -197,7 +206,7 @@ namespace ArrivalPlanner
 			// NoFreeStand's wording). StandAdmission::Judge is the ONE rule - surface, then
 			// size (IcaoCode::StandAdmits' "unknown admits anything" and "wider than F is never
 			// admitted"), then service - UStandAllocator::Reserve also calls.
-			const FStandAdmission Admission = StandAdmission::Judge(*CandidateStand[Index], Airframe);
+			const FStandAdmission Admission = StandAdmission::Judge(Network, *CandidateStand[Index], Airframe);
 			if (!Admission.IsAdmitted())
 			{
 				++RefusedCount[static_cast<uint8>(Admission.Why)];
@@ -255,9 +264,10 @@ namespace ArrivalPlanner
 		}
 		const int32 TooSmallCount = RefusedCount[static_cast<uint8>(EStandRefusal::TooSmall)];
 		const int32 UnpavedCount = RefusedCount[static_cast<uint8>(EStandRefusal::Surface)];
+		const int32 InStripCount = RefusedCount[static_cast<uint8>(EStandRefusal::InsideStrip)];
 		UE_LOG(LogAirside, Log,
-			TEXT("ChooseStand: span %.1f m -> node %d (Code %s); %d too small, %d held, %d unpaved"),
-			Airframe.Wingspan / 100.0, Best.Index, *CodeText, TooSmallCount, HeldCount, UnpavedCount);
+			TEXT("ChooseStand: span %.1f m -> node %d (Code %s); %d too small, %d held, %d unpaved, %d in a taxiway strip"),
+			Airframe.Wingspan / 100.0, Best.Index, *CodeText, TooSmallCount, HeldCount, UnpavedCount, InStripCount);
 
 		return Best;
 	}
@@ -488,6 +498,9 @@ namespace ArrivalPlanner
 			case EStandRefusal::Service:
 				Out.Why = EArrivalRefusal::NoStandServiceable;
 				return Out;
+			case EStandRefusal::InsideStrip:
+				Out.Why = EArrivalRefusal::NoStandClearOfStrip;
+				return Out;
 			case EStandRefusal::None:
 			default:
 				break;
@@ -559,6 +572,9 @@ namespace ArrivalPlanner
 
 		case EArrivalRefusal::GraphBeingEdited:
 			return TEXT("Arrival waiting: the airport is being edited.");
+
+		case EArrivalRefusal::NoStandClearOfStrip:
+			return TEXT("Arrival refused: every stand that fits sits inside a taxiway's clearance strip - redraw one further back.");
 
 		case EArrivalRefusal::None:
 		default:

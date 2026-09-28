@@ -997,6 +997,11 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// the replan searches to a live stand rather than to a freed handle and truncates. No
 	// stand: it is marked awaiting, and the truncation that follows gives it a node to wait
 	// at. Spec 2026-09-07-stand-occupancy §5. Vehicles and departures keep M2's rules.
+	//
+	// A STAND CLOSED BY A TAXIWAY'S CLEARANCE STRIP IS NOT "GONE": its pose node lives, so Goal
+	// resolves above and this branch never runs for it. An aircraft parked on it, or already
+	// inbound to it, keeps it - the strip spec's ruling that the occupant finishes its
+	// turnaround (2026-09-28). StandAdmission::Judge closes it to NEW choices only.
 	if (!Goal.IsSet() && Agent.Class == ETraversalClass::Aircraft && Agent.AsAircraft() != nullptr
 		&& !Agent.bDepartureArmed
 		&& Failed < Plan.Steps.Num())

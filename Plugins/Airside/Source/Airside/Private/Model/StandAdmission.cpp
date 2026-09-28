@@ -1,6 +1,7 @@
 #include "Model/StandAdmission.h"
 
 #include "Model/Airframe.h"
+#include "Model/TaxiwayStrip.h"
 #include "Solve/IcaoCode.h"
 
 namespace StandAdmission
@@ -12,7 +13,7 @@ namespace StandAdmission
 		return true;
 	}
 
-	FStandAdmission Judge(const FEntityInstance& Stand, const FAirframe& Airframe)
+	FStandAdmission Judge(const URoadNetwork& Network, const FEntityInstance& Stand, const FAirframe& Airframe)
 	{
 		FStandAdmission Out;
 		Out.Pavement = Pavement::Judge(Stand.Pavement, Airframe.MinimumPavement);
@@ -32,7 +33,14 @@ namespace StandAdmission
 
 		// SURFACE, SIZE, SERVICE - first wins. Surface first for RunwayAdmission's reason: it is
 		// the fact a player cannot fix by drawing the stand bigger.
-		if (!Out.Pavement.Passes())
+		// THE STRIP FIRST - see the header. A legacy outline-less stand has no footprint, and
+		// WorstIntrusion answers "clear" for under three points, so it keeps today's answer.
+		// ENFORCED BY: Airside.Model.StandAdmission.InsideStrip
+		if (TaxiwayStrip::WorstIntrusion(Network, Stand.Outline).IsSet())
+		{
+			Out.Why = EStandRefusal::InsideStrip;
+		}
+		else if (!Out.Pavement.Passes())
 		{
 			Out.Why = EStandRefusal::Surface;
 		}
@@ -73,6 +81,9 @@ namespace StandAdmission
 			return FString::Printf(TEXT("%s cannot work on %s"),
 				*UEnum::GetDisplayValueAsText(Admission.RefusedRole).ToString(),
 				Pavement::Name(Admission.Pavement.Have));
+
+		case EStandRefusal::InsideStrip:
+			return TEXT("the stand is inside a taxiway's clearance strip - redraw it further back");
 
 		case EStandRefusal::None:
 		default:

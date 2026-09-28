@@ -77,6 +77,14 @@ enum class EArrivalRefusal : uint8
 	 * their meaning. See URoadNetwork::AreGuidelinesBehindRoad.
 	 */
 	GraphBeingEdited,
+
+	/**
+	 * A stand would fit and is paved enough, but it sits inside a taxiway's clearance strip -
+	 * drawn before the strip existed, or its taxiway upgraded since (strip spec 2026-09-28).
+	 * The player's fix: redraw it further back. PERMANENT to the offer generator, since it needs
+	 * building. Appended LAST, as GraphBeingEdited was, so saved values keep their meaning.
+	 */
+	NoStandClearOfStrip,
 };
 
 /**

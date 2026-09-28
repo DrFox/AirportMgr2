@@ -6,6 +6,7 @@
 #include "StandAdmission.generated.h"
 
 struct FAirframe;
+class URoadNetwork;
 
 /** Why a stand may not admit an aircraft. None means it may. */
 UENUM()
@@ -19,6 +20,10 @@ enum class EStandRefusal : uint8
 	/** Surface and size both pass, but a service this aircraft needs cannot work on this
 	 *  pavement. */
 	Service,
+	/** The stand sits inside a taxiway's clearance strip - drawn before the strip existed, or
+	 *  its taxiway was upgraded since. Closed to NEW arrivals only; one already parked
+	 *  finishes its turnaround (user, 2026-09-28). Appended, never inserted: a UENUM. */
+	InsideStrip,
 };
 
 /**
@@ -78,12 +83,20 @@ namespace StandAdmission
 	/**
 	 * The comparison itself, over a placed stand and an airframe.
 	 *
-	 * SURFACE, SIZE, SERVICE - the refusals are checked in that order, and the FIRST wins:
+	 * STRIP FIRST, THEN SURFACE, SIZE, SERVICE - the refusals are checked in that order, and the
+	 * FIRST wins. A stand inside a taxiway's clearance strip refuses every aircraft, so no
+	 * other reason may speak over it; its figures (bPassesSize, Pavement) are still written, so
+	 * an aggregate can tell "redraw it back" from "it would not fit anyway".
+	 *
+	 * NETWORK because that strip belongs to the taxiway beside the stand, which the stand alone
+	 * cannot know (strip spec 2026-09-28).
+	 *
+	 * Among the rest:
 	 * a stand too small for a jet AND laid on grass is refused for its grass, because that is
 	 * the fact a player cannot fix by drawing the stand bigger - RunwayAdmission's own reason,
 	 * applied to a stand instead of a runway.
 	 */
-	AIRSIDE_API FStandAdmission Judge(const FEntityInstance& Stand, const FAirframe& Airframe);
+	AIRSIDE_API FStandAdmission Judge(const URoadNetwork& Network, const FEntityInstance& Stand, const FAirframe& Airframe);
 
 	/** The sentence for a refusal: "the surface is grass; this aircraft needs concrete", or the
 	 *  Code-letter or service equivalent. Empty when admitted. */
