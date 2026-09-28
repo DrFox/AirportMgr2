@@ -21,6 +21,24 @@ enum class EGridStep : uint8
 };
 
 /**
+ * Which way the grid lies - grid-follows-snap design (2026-09-28).
+ *
+ * Follow: turned to the thing being snapped to, and HELD at the last such frame when nothing is
+ * - one state covers both "fall back" and "keep the last", and holding stops the grid flipping
+ * as the cursor passes several things (brainstorm ruling A). World: axis-aligned at the origin,
+ * the world-grid-snap behaviour exactly.
+ *
+ * AN ENUM, NOT bFollow, because a third way (the selection's frame) is the obvious next ask and
+ * a bool would have to become one then. Declared here for EGridStep's reason: a UPROPERTY.
+ */
+UENUM(BlueprintType)
+enum class EGridOrientation : uint8
+{
+	Follow,
+	World
+};
+
+/**
  * Which guide sources are live, per airport.
  *
  * BESIDE ARoadNetworkActor::Snap and for the same recorded reason as FRoadSnapSettings: the
@@ -155,6 +173,19 @@ struct AIRSIDE_API FSnapGuideSettings
 
 	/** Off -> 1 m -> 5 m -> 10 m -> Off. What the bar's Grid button does. */
 	void CycleGridStep();
+
+	/**
+	 * Follow turns the grid to what is snapped to; World keeps it axis-aligned. See
+	 * EGridOrientation and GridFrameSource::Resolve.
+	 *
+	 * FOLLOW BY DEFAULT - what the player expected the grid to do all along (2026-09-28 report).
+	 * With GridStep Off this changes nothing, so the grid-off contract above still holds.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Grid")
+	EGridOrientation GridOrientation = EGridOrientation::Follow;
+
+	/** Follow <-> World. What the bar's Grid follows button and H do. */
+	void ToggleGridOrientation();
 
 	/**
 	 * Whether this CELL may propose: both axes on, and the pair legal.
