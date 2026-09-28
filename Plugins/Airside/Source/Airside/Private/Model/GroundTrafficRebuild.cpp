@@ -1002,6 +1002,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// resolves above and this branch never runs for it. An aircraft parked on it, or already
 	// inbound to it, keeps it - the strip spec's ruling that the occupant finishes its
 	// turnaround (2026-09-28). StandAdmission::Judge closes it to NEW choices only.
+	// ENFORCED BY: Airside.Model.Traffic.StripClosedStandKeepsItsOccupant
 	if (!Goal.IsSet() && Agent.Class == ETraversalClass::Aircraft && Agent.AsAircraft() != nullptr
 		&& !Agent.bDepartureArmed
 		&& Failed < Plan.Steps.Num())

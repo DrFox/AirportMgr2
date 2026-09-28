@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
@@ -408,6 +409,31 @@ bool FStandGridDiagonalFollowsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the back edge runs along the taxiway"), FMath::Abs(FVector2D::DotProduct(Back - Far, Dir)) < 1e-6);
 	TestFalse(TEXT("control: the kerb is not on a line - the half-width is not whole steps"),
 		StandGridFixture::IsOnGridLine(OffCentre(Anchor), 500.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandGridNearerTaxiwayWinsTest,
+	"Airside.Tool.StandGrid.NearerTaxiwayWinsInsideTwoStrips",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandGridNearerTaxiwayWinsTest::RunTest(const FString& Parameters)
+{
+	// A JUNCTION: the cursor stands inside BOTH taxiways' strips, 3 m from one centreline and
+	// 5 m from the other. The nearer one must win - a reach counted from the frontage and
+	// clamped at zero called both "0 away" and let array order decide (review, 2026-09-28).
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadSegmentId Near = Net->AddSegment(Net->AddNode(FVector2D(-10000.0, 0.0)), Net->AddNode(FVector2D(10000.0, 0.0)),
+		FVector2D::ZeroVector, URoadProfile::MakeTransient(2400.0, 1600.0));
+	Net->AddSegment(Net->AddNode(FVector2D(6000.0, -10000.0)), Net->AddNode(FVector2D(6000.0, 10000.0)),
+		FVector2D(6000.0, 0.0), URoadProfile::MakeTransient(2400.0, 1600.0));
+	auto Taxiways = [](const URoadNetwork& N, FRoadSegmentId Id) { return PlotGesture::IsTaxiway(N, Id); };
+	auto Strip = [](const URoadNetwork& N, FRoadSegmentId Id) { return TaxiwayStrip::StripWidthOf(N, Id); };
+
+	FRoadSegmentId Road;
+	double T = 0.0;
+	if (!TestTrue(TEXT("a road is found"), PlotGesture::NearestRoad(*Net, FVector2D(5500.0, 300.0), Taxiways, Strip, Road, T))) { return false; }
+	TestTrue(TEXT("the nearer taxiway wins, whatever order they were laid in"), Road == Near);
 	return true;
 }
 

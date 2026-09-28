@@ -173,6 +173,11 @@ namespace PlotGesture
 		// at outside it, so a click on them anchored nothing
 		// (Airside.Tool.StandPlot.FlushNeighboursBothPlace went red on exactly that). Roads
 		// also RANK by that distance, so the road whose frontage is nearer wins.
+		//
+		// NOT CLAMPED AT ZERO: a cursor inside two taxiways' strips (a junction) is "negative"
+		// from both frontages, and ranks by how far in. Clamped, both read 0 and array order
+		// chose - the farther taxiway could win (review, 2026-09-28).
+		// ENFORCED BY: Airside.Tool.StandGrid.NearerTaxiwayWinsInsideTwoStrips
 		double Best = AnchorReachUu;
 		bool bFound = false;
 
@@ -194,8 +199,8 @@ namespace PlotGesture
 			}
 
 			const double T = RoadGeom::ClosestPointOnSegment(A->Position, B->Position, Cursor);
-			const double FromFrontage = FMath::Max(0.0,
-				FVector2D::Distance(FMath::Lerp(A->Position, B->Position, T), Cursor) - Setback(Network, Id));
+			const double FromFrontage =
+				FVector2D::Distance(FMath::Lerp(A->Position, B->Position, T), Cursor) - Setback(Network, Id);
 			if (FromFrontage > Best)
 			{
 				continue;
