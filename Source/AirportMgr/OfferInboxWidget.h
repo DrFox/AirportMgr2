@@ -9,6 +9,10 @@
 class ARoadNetworkActor;
 class UButton;
 class UListView;
+class UProgressBar;
+class USizeBox;
+class UBorder;
+class UHorizontalBox;
 class UOfferInboxWidget;
 class UOfferInboxViewModel;
 class UOfferViewModel;
@@ -42,9 +46,14 @@ public:
 	 */
 	UPROPERTY() TObjectPtr<UTextBlock> AirlineText;
 	UPROPERTY() TObjectPtr<UTextBlock> TypeText;
-	UPROPERTY() TObjectPtr<UTextBlock> EtaText;
+	UPROPERTY() TObjectPtr<UTextBlock> CountdownText;
+	UPROPERTY() TObjectPtr<UProgressBar> CountdownBar;
+	UPROPERTY() TObjectPtr<UTextBlock> ContractText;
+	UPROPERTY() TObjectPtr<UTextBlock> FuelChip;
+	UPROPERTY() TObjectPtr<UTextBlock> TugChip;
 	UPROPERTY() TObjectPtr<UTextBlock> RefusalText;
 	UPROPERTY() TObjectPtr<UButton> AcceptButton;
+	UPROPERTY() TObjectPtr<UTextBlock> AcceptText;
 
 	UFUNCTION() void HandleAccept();
 	UFUNCTION() void HandleDecline();
@@ -123,6 +132,13 @@ public:
 	/** Gap between offer cards, so two offers do not read as one. */
 	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float RowGap = 6.0f;
 
+	/** The demand strip's tallest bar, uu. */
+	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float DemandStripHeight = 22.0f;
+
+	/** Seconds left at which the countdown turns amber, and at which it turns red and pulses. */
+	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float CountdownAmberSeconds = 30.0f;
+	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float CountdownUrgentSeconds = 10.0f;
+
 protected:
 	/** Builds the inbox's chrome. See UAirportMgrPanelWidget::Initialize for why this runs
 	 *  from Initialize rather than NativeOnInitialized. */
@@ -139,6 +155,25 @@ private:
 	UButton* MakeAnswerButton(const class UUIStyle& Style, const TCHAR* Name, const FText& Label,
 		const FLinearColor& Fill, const FLinearColor& Ink, int32 Index);
 	UPROPERTY() TArray<TObjectPtr<UOfferRowEntry>> Entries;
+
+	/**
+	 * The demand strip: one bar per hour, heights from UOfferInboxViewModel::SampleDemand.
+	 *
+	 * BARS BUILT FROM PLAIN WIDGETS, not a NativePaint class of its own: 24 size boxes are the
+	 * whole of it, and a painter would be a second widget class to style and test for the same
+	 * picture. Code-built path only, like the rows.
+	 */
+	UPROPERTY() TArray<TObjectPtr<USizeBox>> DemandBars;
+	UPROPERTY() TArray<TObjectPtr<UBorder>> DemandFills;
+
+	/** Samples for the strip, set by Refresh from the runtime's airlines. Empty = no strip. */
+	TArray<double> DemandSamples;
+	/** Which strip slot "now" falls in, or INDEX_NONE. */
+	int32 DemandNowSlot = INDEX_NONE;
+	/** Which slots are night, for their colour. */
+	TArray<bool> DemandNight;
+
+	void PaintDemand(const UUIStyle& Style);
 
 	void EnsureSlots(const UUIStyle* Style);
 	void PaintRows();

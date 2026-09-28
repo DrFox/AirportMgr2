@@ -1,9 +1,11 @@
 #include "CoreMinimal.h"
+#include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/OfferGenerator.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
@@ -55,6 +57,7 @@ bool FOfferInboxWidgetTest::RunTest(const FString& Parameters)
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = NewObject<UFlightBoard>();
 	Board->Allocator = NewObject<UStandAllocator>();
+	Board->Generator = NewObject<UOfferGenerator>();
 
 	for (int32 Index = 0; Index < 2; ++Index)
 	{
@@ -81,6 +84,14 @@ bool FOfferInboxWidgetTest::RunTest(const FString& Parameters)
 	Widget->PaintRowsForTest();
 	TestEqual(TEXT("one card is built per offer, so the code-built path really draws them"),
 		Widget->RowWidgetCountForTest(), 2);
+
+	// THE HEADER COUNTS AGAINST THE CAP (spec 2026-09-28 section 4): the inbox card is always
+	// on screen, so the count lives here rather than on a bar badge.
+	if (TestNotNull(TEXT("the heading has a count"), Widget->BadgeText.Get()))
+	{
+		TestEqual(TEXT("offers against the generator's cap"),
+			Widget->BadgeText->GetText().ToString(), FString(TEXT("2/8")));
+	}
 
 	Widget->AcceptRow(0);
 	TestEqual(TEXT("accepting a row takes it out of the inbox"),
