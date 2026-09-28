@@ -40,6 +40,20 @@ namespace
 		return Flight;
 	}
 
+	/**
+	 * A runway, an exit, a taxiway and stands sized for Wingspan - for the tests that DISPATCH.
+	 * Since the arrival queue's clearance gate (2026-09-28) a flight is only cleared when the
+	 * real plan says it could land, so a stand row with no runway never clears - correctly.
+	 */
+	URoadNetwork* BoardField(double Wingspan, int32 Stands = 1)
+	{
+		FAirframe Airframe;
+		Airframe.Wingspan = Wingspan;
+		FTestAirportOptions Options;
+		Options.StandCount = Stands;
+		return FTestAirport::Build(Airframe, Options).Net;
+	}
+
 	UFlightBoard* MakeBoard()
 	{
 		UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
@@ -88,7 +102,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFlightBoardDispatchesAtTheEtaTest::RunTest(const FString& Parameters)
 {
-	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
+	URoadNetwork* Net = BoardField(3400.0);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = MakeBoard();
@@ -116,8 +130,8 @@ bool FFlightBoardDispatchesAtTheEtaTest::RunTest(const FString& Parameters)
 	// The clock compresses: at the default night rate (480 real s for ten hours) one real
 	// second is 75 game seconds, so two is past an ETA 100 game seconds out.
 	Clock->Advance(2.0);
-	// THE ETA PUTS IT IN THE QUEUE; the queue clears it (spec 2026-09-28-arrival-queue). This
-	// field has no runway, so nothing is busy and the first tick clears it.
+	// THE ETA PUTS IT IN THE QUEUE; the queue clears it (spec 2026-09-28-arrival-queue). Nothing
+	// holds the runway, so the first tick clears it.
 	Board->TickQueue(*Traffic, *Net, *Clock);
 
 	TestEqual(TEXT("the dispatcher ran exactly once, at the ETA"), Calls, 1);
@@ -251,7 +265,7 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 	// "last writer wins" bug issue #96 fixes. Only watching what actually gets dispatched
 	// catches a regression back to the board field. Revert FlightBoard.cpp's DispatchNow/
 	// WhyNotAcceptable to read the board's ApproachFocus again and this test goes red.
-	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
+	URoadNetwork* Net = BoardField(3400.0);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = MakeBoard();

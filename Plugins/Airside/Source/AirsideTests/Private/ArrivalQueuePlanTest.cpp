@@ -94,4 +94,29 @@ bool FArrivalQueueRunwayBusyAgreesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueOwnHoldTest, "Airside.Model.ArrivalQueue.PlanExcludesItsOwnHold",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueOwnHoldTest::RunTest(const FString& Parameters)
+{
+	// A HOLDING FLIGHT KEEPS ITS STAND, so asking "can it land now" must not be refused by its
+	// OWN hold (review C1, 2026-09-28) - the queue asks the whole plan, not just the runway.
+	const FAirframe Airframe = TestAirframes::Piper();
+	const FTestAirport Airport = FTestAirport::Build(Airframe);
+	if (!TestTrue(TEXT("the fixture has a stand"), Airport.Stands.Num() == 1)) { return false; }
+	FTrafficOccupancy Occupancy;
+	const FEntityInstance* Stand = Airport.Net->GetEntity(Airport.Stands[0]);
+	FTrafficClaim Claim;
+	Claim.AgentId = -7;
+	Claim.Resource = FTrafficResource::OfNode(Stand->PoseNode);
+	Claim.bOccupied = true;
+	FTrafficClaim Blocker;
+	Occupancy.TryClaim(Claim, Blocker);
+	TestEqual(TEXT("someone else's hold is a full stand row"),
+		ArrivalPlanner::Plan(*Airport.Net, Airport.Threshold, Airframe, &Occupancy).Why, EArrivalRefusal::NoFreeStand);
+	TestEqual(TEXT("its own hold is not"),
+		ArrivalPlanner::Plan(*Airport.Net, Airport.Threshold, Airframe, &Occupancy, ERunwayBusy::Refuse, -7).Why,
+		EArrivalRefusal::None);
+	return true;
+}
+
 #endif

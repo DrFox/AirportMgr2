@@ -274,7 +274,7 @@ namespace ArrivalPlanner
 	}
 
 	FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near, const FAirframe& Airframe,
-		const FTrafficOccupancy* Occupancy, ERunwayBusy RunwayBusy)
+		const FTrafficOccupancy* Occupancy, ERunwayBusy RunwayBusy, int32 ExcludingHolder)
 	{
 		FArrivalPlan Out;
 		Out.AircraftWingspan = Airframe.Wingspan;
@@ -396,7 +396,7 @@ namespace ArrivalPlanner
 			// (0: it does not exist yet).
 			FRoutePlan BestForExit;
 			bool bHeldHere = false;
-			ChooseStand(Network, Candidate, Airframe, Occupancy, 0, &BestForExit, &bHeldHere);
+			ChooseStand(Network, Candidate, Airframe, Occupancy, ExcludingHolder, &BestForExit, &bHeldHere);
 			bSawHeldStand = bSawHeldStand || bHeldHere;
 			if (!BestForExit.IsValid())
 			{

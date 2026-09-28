@@ -206,12 +206,14 @@ namespace ArrivalPlanner
 	 *
 	 * Occupancy, when given, refuses RunwayOccupied while any segment of the chain is held -
 	 * unless RunwayBusy is Queue, which skips that one step and carries on (see ERunwayBusy).
+	 * ExcludingHolder is a stand hold that does not count as taken - a holding flight's OWN
+	 * hold, when the queue asks whether it could land now (UFlightBoard's clearance gate).
 	 * Null is the pre-traffic answer, which is what a tool that only asks "could this land
 	 * here" still wants.
 	 */
 	AIRSIDE_API FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near,
 		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy = nullptr,
-		ERunwayBusy RunwayBusy = ERunwayBusy::Refuse);
+		ERunwayBusy RunwayBusy = ERunwayBusy::Refuse, int32 ExcludingHolder = 0);
 
 	/**
 	 * Is the runway nearest Near held by anyone - the one test Plan's RunwayOccupied step makes,

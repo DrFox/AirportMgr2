@@ -3,11 +3,11 @@
 #include "Model/Flight.h"
 
 UFlight* UArrivalSequencer::Next(TArrayView<UFlight* const> Queue,
-	TFunctionRef<bool(const UFlight&)> IsRunwayBusy) const
+	TFunctionRef<bool(const UFlight&)> CanClear) const
 {
 	for (UFlight* Each : Queue)
 	{
-		if (Each != nullptr && !IsRunwayBusy(*Each))
+		if (Each != nullptr && CanClear(*Each))
 		{
 			return Each;
 		}

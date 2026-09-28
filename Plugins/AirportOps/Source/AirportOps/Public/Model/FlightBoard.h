@@ -352,6 +352,9 @@ public:
 	 */
 	void TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
+	/** How many times TickQueue has run. For the runtime-wiring test. */
+	int32 TickQueueCallsForTest() const { return TickQueueCalls; }
+
 	/** Everything accepted and not yet departed. */
 	TArray<UFlight*> Live() const;
 
@@ -415,6 +418,30 @@ private:
 	 *  is bookkeeping about the board, not a change to what it holds. Not saved: a load starts
 	 *  every verdict invalid, one recompute away from correct. */
 	mutable TMap<int32, FOfferVerdict> Verdicts;
+
+	/**
+	 * Could a holding flight land, runway aside - the rest of the plan (exit, route, stand),
+	 * excluding its own stand hold - by flight id, cached on the guideline and occupancy
+	 * revisions like FOfferVerdict. The runway itself is asked live in TickQueue.
+	 *
+	 * THE CLEARANCE GATE (review C1/C2, 2026-09-28): the queue used to ask only "is the runway
+	 * busy" and hand everything else to the dispatcher, which refused - with a toast, four log
+	 * lines, a stand release and a board revision - every frame, for as long as the reason
+	 * lasted, and one stuck flight at the head blocked the rest. Now nothing is dispatched that
+	 * the plan would refuse, and a refusal is logged once, when its reason changes.
+	 */
+	struct FClearance
+	{
+		EArrivalRefusal Why = EArrivalRefusal::None;
+		uint32 GuidelineAt = 0;
+		uint32 OccupancyAt = 0;
+		bool bValid = false;
+	};
+	TMap<int32, FClearance> Clearances;
+	int32 TickQueueCalls = 0;
+
+	/** See Clearances. Logs on a change of reason; never bumps the revision. */
+	EArrivalRefusal ClearanceFor(const UGroundTraffic& Traffic, const URoadNetwork& Network, const UFlight& Flight);
 
 	/**
 	 * FindByAgent's and FindById's O(1) answer (issue #188 item 2).

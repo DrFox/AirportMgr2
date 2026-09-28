@@ -10,18 +10,22 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
 namespace
 {
+	/**
+	 * A runway, an exit, a taxiway and one stand for a 34 m span. A RUNWAY since the arrival
+	 * queue (2026-09-28): a flight is only cleared when the real plan says it could land, and
+	 * the arrival tests here dispatch.
+	 */
 	URoadNetwork* SaveTestNetwork()
 	{
-		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-		Net->PlaceEntity(Stand, Stand->Anchors, FVector2D::ZeroVector, 0.0, 3600.0,
-			Stand->PoseRole, Stand->Trucks);
-		return Net;
+		FAirframe Airframe;
+		Airframe.Wingspan = 3400.0;
+		return FTestAirport::Build(Airframe).Net;
 	}
 
 	UFlightBoard* SaveTestBoard()
@@ -111,7 +115,7 @@ bool FFlightDueWhileClosedTest::RunTest(const FString& Parameters)
 	Board->RearmSchedules(*Traffic, *Net, *Clock);
 	TestEqual(TEXT("a flight already due joins the queue at once, not dropped"), Flight->Phase, EFlightPhase::Inbound);
 	Board->TickQueue(*Traffic, *Net, *Clock);
-	TestEqual(TEXT("and the queue clears it - this field has no runway to be busy"), Calls, 1);
+	TestEqual(TEXT("and the queue clears it - nothing holds the runway"), Calls, 1);
 	TestEqual(TEXT("so it is landing, not still waiting"), Flight->Phase, EFlightPhase::Landing);
 	return true;
 }

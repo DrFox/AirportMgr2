@@ -216,8 +216,41 @@ TArray<UFlight*> UFlightBoard::Queue() const
 	return Out;
 }
 
+EArrivalRefusal UFlightBoard::ClearanceFor(const UGroundTraffic& Traffic, const URoadNetwork& Network,
+	const UFlight& Flight)
+{
+	FClearance& Clearance = Clearances.FindOrAdd(Flight.Id);
+	const uint32 GuidelineNow = Network.GetGuidelineRevision();
+	const uint32 OccupancyNow = Traffic.OccupancyRevision();
+	if (Clearance.bValid && Clearance.GuidelineAt == GuidelineNow && Clearance.OccupancyAt == OccupancyNow)
+	{
+		return Clearance.Why;
+	}
+	// THE PLAN THE DISPATCH ITSELF WILL MAKE, MINUS THE RUNWAY STEP - Queue, not Refuse - and
+	// without this flight's own stand hold counting against it: it keeps that hold precisely so
+	// it has somewhere to go, and DispatchNow releases it the moment before dispatching.
+	//
+	// THE RUNWAY IS NOT CACHED HERE, it is asked live in TickQueue: OccupancyRevision does not
+	// move for a taxiing aircraft's runway crossing (see its own comment), so a cached "busy"
+	// could strand a quiet airport's queue until some unrelated claim happened to bump it.
+	const EArrivalRefusal Why = ArrivalPlanner::Plan(Network, Flight.ApproachFocus, Flight.Airframe,
+		&Traffic.GetOccupancy(), ERunwayBusy::Queue, Flight.HolderId()).Why;
+	if (Why != EArrivalRefusal::None && (!Clearance.bValid || Why != Clearance.Why))
+	{
+		// ONCE PER REASON, not per frame - the reason is the evidence, the repetition is noise.
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: cannot land yet - %s"),
+			Flight.Id, *Flight.Callsign, *ArrivalPlanner::DescribeRefusal(Why, Flight.Airframe.Wingspan));
+	}
+	Clearance.Why = Why;
+	Clearance.GuidelineAt = GuidelineNow;
+	Clearance.OccupancyAt = OccupancyNow;
+	Clearance.bValid = true;
+	return Why;
+}
+
 void UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
+	++TickQueueCalls;
 	if (Clock.IsPaused())
 	{
 		return;
@@ -227,15 +260,32 @@ void UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	{
 		return;
 	}
-	// THE SAME TEST THE DISPATCH MAKES - ArrivalPlanner::IsRunwayBusy is Plan's own
-	// RunwayOccupied step - so the queue never clears a flight Plan would then refuse.
-	const auto IsBusy = [&Traffic, &Network](const UFlight& F)
+
+	// A HOLDING FLIGHT WITH NO STAND TAKES ONE BACK the moment one is free (review I1): the
+	// stand is what makes an accept safe, and a holder without one could land on a stand the
+	// next accept was promised. Reserve is a stand walk, no route search.
+	if (Allocator != nullptr)
 	{
-		return ArrivalPlanner::IsRunwayBusy(Network, F.ApproachFocus, &Traffic.GetOccupancy());
+		for (UFlight* Each : Waiting)
+		{
+			if (!Each->Stand.IsSet() && Allocator->Reserve(Traffic, Network, *Each))
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: stand %d held again"),
+					Each->Id, *Each->Callsign, Each->Stand.Index);
+			}
+		}
+	}
+
+	// LIVE RUNWAY, CACHED REST - see ClearanceFor. Together they are exactly the Refuse plan the
+	// dispatch will make, so nothing is dispatched that it would refuse.
+	const auto CanClear = [this, &Traffic, &Network](const UFlight& F)
+	{
+		return !ArrivalPlanner::IsRunwayBusy(Network, F.ApproachFocus, &Traffic.GetOccupancy())
+			&& ClearanceFor(Traffic, Network, F) == EArrivalRefusal::None;
 	};
 	// NULL SEQUENCER IS STRICT FIRST COME, for a test that does not wire one.
-	UFlight* Next = Sequencer != nullptr ? Sequencer->Next(Waiting, IsBusy)
-		: (IsBusy(*Waiting[0]) ? nullptr : Waiting[0]);
+	UFlight* Next = Sequencer != nullptr ? Sequencer->Next(Waiting, CanClear)
+		: (CanClear(*Waiting[0]) ? Waiting[0] : nullptr);
 	if (Next == nullptr)
 	{
 		return;
@@ -245,6 +295,7 @@ void UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	const double Held = Clock.Now() - Next->HoldingSince;
 	if (DispatchNow(Traffic, Network, *Next))
 	{
+		Clearances.Remove(Next->Id);
 		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) cleared to land after %.0f s holding"),
 			Next->Id, *Next->Callsign, FMath::Max(Held, 0.0));
 	}
@@ -273,9 +324,9 @@ bool UFlightBoard::DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Netw
 	if (!Dispatcher(Flight.ApproachFocus, Flight.Airframe))
 	{
 		// STAYS IN THE QUEUE, STAND RE-HELD (spec 2026-09-28-arrival-queue): this used to leave
-		// the flight Accepted with no stand for ever. A refusal here is transient by
-		// construction - the runway was free a moment ago and the stand was held - so it is
-		// retried next frame, never dropped.
+		// the flight Accepted with no stand for ever. RARE since the clearance gate: TickQueue
+		// only dispatches what the same plan just said yes to, so this is a same-frame race,
+		// not a standing condition - retried next frame, never dropped.
 		const bool bReheld = Allocator != nullptr && Allocator->Reserve(Traffic, Network, Flight);
 		UE_LOG(LogAirportOps, Warning,
 			TEXT("Flight %d could not be cleared to land; still holding%s"), Flight.Id,
@@ -587,6 +638,7 @@ void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& N
 	for (const TPair<int32, int32>& Handle : ArrivalHandles) { Clock.Cancel(Handle.Value); }
 	ArrivalHandles.Reset();
 	Verdicts.Reset();
+	Clearances.Reset();
 
 	// REBUILT HERE TOO, NOT ONLY IN OnAfterRestore: this is the one call every load path is
 	// documented to make (see this function's own header), while OnAfterRestore only runs
@@ -702,6 +754,7 @@ void UFlightBoard::MoveToHistory(UFlight& Flight, double Now)
 	}
 	History.Add(&Flight);
 	Verdicts.Remove(Flight.Id);
+	Clearances.Remove(Flight.Id);
 
 	if (Flight.AgentId != INDEX_NONE)
 	{

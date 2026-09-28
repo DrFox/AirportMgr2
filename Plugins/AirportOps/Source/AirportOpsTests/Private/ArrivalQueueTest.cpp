@@ -165,10 +165,10 @@ bool FQueueFreeRunwayJumpsTest::RunTest(const FString& Parameters)
 	UFlight* OnBusy = NewObject<UFlight>(GetTransientPackage());
 	UFlight* OnFree = NewObject<UFlight>(GetTransientPackage());
 	const TArray<UFlight*> Queue = { OnBusy, OnFree };
-	UFlight* Next = Sequencer->Next(Queue, [OnBusy](const UFlight& F) { return &F == OnBusy; });
-	TestTrue(TEXT("the flight whose runway is free goes"), Next == OnFree);
-	TestNull(TEXT("and with every runway busy, nobody"),
-		Sequencer->Next(Queue, [](const UFlight&) { return true; }));
+	UFlight* Next = Sequencer->Next(Queue, [OnBusy](const UFlight& F) { return &F != OnBusy; });
+	TestTrue(TEXT("the flight that can land goes"), Next == OnFree);
+	TestNull(TEXT("and with nobody able to land, nobody"),
+		Sequencer->Next(Queue, [](const UFlight&) { return false; }));
 	return true;
 }
 
@@ -247,6 +247,71 @@ bool FQueueOverdueOnLoadTest::RunTest(const FString& Parameters)
 	Rig.Board->RearmSchedules(*Rig.Traffic, *Rig.Airport.Net, *Rig.Clock);
 	TestEqual(TEXT("it is holding"), Flight->Phase, EFlightPhase::Inbound);
 	TestEqual(TEXT("and nothing was dispatched onto the busy runway"), Rig.Dispatched, 0);
+	return true;
+}
+
+namespace
+{
+	/** A flight put straight into the queue, the shape a load or a refused clearance leaves. */
+	UFlight* Holding(FQueueRig& Rig, double Wingspan, double Since)
+	{
+		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+		Flight->Airframe = QueueAirframe();
+		Flight->Airframe.Wingspan = Wingspan;
+		Flight->Phase = EFlightPhase::Inbound;
+		Flight->HoldingSince = Since;
+		Flight->ApproachFocus = Rig.Airport.Threshold;
+		Rig.Board->AddOffer(*Rig.Clock, Flight);
+		return Flight;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueStuckHeadTest, "AirportOps.Model.ArrivalQueue.StuckHeadDoesNotBlockTheQueue",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueStuckHeadTest::RunTest(const FString& Parameters)
+{
+	// REVIEW C2: a head the runway can no longer take (here a span the strip does not admit -
+	// in play, a runway shortened under a holding flight) is returned every frame by a
+	// runway-busy-only test, and blocks everything behind it. The queue asks the real plan.
+	FQueueRig Rig;
+	UFlight* Stuck = Holding(Rig, 90000.0, 1.0);
+	UFlight* Fine = Rig.Accepted(10.0);
+	Rig.Clock->Advance(11.0);
+	for (int32 Frame = 0; Frame < 5; ++Frame) { Rig.Tick(); }
+	TestEqual(TEXT("the flight that can land did, once"), Rig.Dispatched, 1);
+	TestEqual(TEXT("it is landing"), Fine->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("the stuck one is still holding, never thrown at the dispatcher"), Stuck->Phase, EFlightPhase::Inbound);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueRefusalQuietTest, "AirportOps.Model.ArrivalQueue.RefusalIsQuiet",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueRefusalQuietTest::RunTest(const FString& Parameters)
+{
+	// REVIEW C1: a flight that cannot land yet must cost nothing visible frame after frame - no
+	// dispatch attempt (which toasts), no board revision (which re-plans every offer row).
+	FQueueRig Rig;
+	Holding(Rig, 90000.0, 1.0);
+	Rig.Tick();
+	const uint32 After = Rig.Board->Revision();
+	for (int32 Frame = 0; Frame < 10; ++Frame) { Rig.Tick(); }
+	TestEqual(TEXT("never dispatched"), Rig.Dispatched, 0);
+	TestEqual(TEXT("and the board did not move"), Rig.Board->Revision(), After);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueReholdTest, "AirportOps.Model.ArrivalQueue.HoldingWithoutAStandReholdsOne",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueReholdTest::RunTest(const FString& Parameters)
+{
+	// REVIEW I1: a holding flight that lost its hold must take one again as soon as a stand is
+	// free, or the next offer could be accepted onto the stand it is about to land on.
+	FQueueRig Rig;
+	Rig.HoldRunway();
+	UFlight* Flight = Holding(Rig, QueueAirframe().Wingspan, 1.0);
+	TestFalse(TEXT("it starts with no stand"), Flight->Stand.IsSet());
+	Rig.Tick();
+	TestTrue(TEXT("and holds one after a tick"), Rig.StandHeldFor(*Flight));
 	return true;
 }
 
