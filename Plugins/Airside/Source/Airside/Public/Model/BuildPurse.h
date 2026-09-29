@@ -92,6 +92,17 @@ struct FBuildQuote
 };
 
 /**
+ * Why a build was refused AT COMMIT, for URoadEditFacade::OnRefused. One value today: every other
+ * refusal is explained before the click by the tool's readout and preview colour (the Why* evaluators);
+ * "cannot afford" is the one a player could only learn from the log (ops alerts spec 2026-09-29 §2).
+ * An enum rather than a bool so the next silent refusal has somewhere to go.
+ */
+enum class EBuildRefusal : uint8
+{
+	CannotAfford
+};
+
+/**
  * Where the money for a build comes from, as Airside sees it.
  *
  * A PLAIN ABSTRACT CLASS, not a UINTERFACE, for the same reason IRoadEditTarget is one: nothing

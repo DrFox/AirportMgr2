@@ -135,6 +135,7 @@
           decoupled from Policy, to test ERunwayAvoidance itself. The allow-list also fails if
           an entry stops matching anything - the same "list drifted silently" failure rule 15
           guards against.
+      32. A facade commit's affordability refusal is announced (AffordOrRefuse) - see the rule.
       31. The ops event bus is subscribed to only in OpsRuntime.cpp (UOpsRuntime::WireBus) - see the
           rule's own comment.
 
@@ -1438,6 +1439,26 @@ foreach ($busTree in @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'),
     }
 }
 $ranRules.Add('bus-wired-once')
+
+# --- 32. A REFUSED COMMIT IS ANNOUNCED ----------------------------------------------------------
+# Ops alerts spec (2026-09-29): "cannot afford" at commit was a log line and nothing else. Every
+# mutator's affordability guard now goes through URoadEditFacade::AffordOrRefuse, which broadcasts
+# OnRefused; a bare !CanAfford( is legal only in a Why* PREVIEW evaluator (asked every frame, so
+# it must stay silent), and says so on the same line with "// preview". A new mutator that
+# guards with a bare !CanAfford( is the silent refusal coming back.
+$facadeDir = Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Present'
+$facadeFiles = @(Get-ChildItem -Path $facadeDir -Filter 'RoadEditFacade*.cpp' -ErrorAction SilentlyContinue)
+if ($facadeFiles.Count -eq 0) {
+    $failures.Add("refusal-is-announced: no RoadEditFacade*.cpp under $facadeDir - update rule 32")
+}
+foreach ($file in $facadeFiles) {
+    $hits = Select-String -Path $file.FullName -Pattern '!CanAfford\(' |
+        Where-Object { $_.Line -notmatch '^\s*//' -and $_.Line -notmatch '//\s*preview' }
+    foreach ($h in $hits) {
+        $failures.Add("refusal-is-announced: $($file.Name):$($h.LineNumber) guards a commit with a bare !CanAfford( - use AffordOrRefuse, or mark a Why* preview with // preview")
+    }
+}
+$ranRules.Add('refusal-is-announced')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
