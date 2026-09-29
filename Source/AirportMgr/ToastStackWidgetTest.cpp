@@ -4,6 +4,8 @@
 #include "NotificationCentre.h"
 #include "Testing/AirsideTestWorld.h"
 #include "ToastStackWidget.h"
+#include "Model/OpsAlerts.h"
+#include "Model/OpsEvents.h"
 #include "UIStyle.h"
 #include "Styling/SlateBrush.h"
 
@@ -298,6 +300,55 @@ bool FToastStackHandlesAMidListRemovalTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("row 0 still shows the FIRST entry, in order"), Row0Text.ToString(), FString(TEXT("first")));
 	TestEqual(TEXT("row 1 now shows the THIRD entry, in order - not the removed middle one"),
 		Row1Text.ToString(), FString(TEXT("third")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FToastsFromOpsAlertsTest,
+	"AirportMgr.UI.ToastsSayAlertsAndRefusals",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FToastsFromOpsAlertsTest::RunTest(const FString& Parameters)
+{
+	// OPS ALERTS STAGE 1 (spec 2026-09-29-ops-alerts §3): what used to be log lines now reaches the player -
+	// an alert starting, a build or a landing refused. Bound through BindTo, the one seam the widget's own
+	// runtime binding uses, so no world's event bus is needed.
+	FAirsideTestWorld TestWorld;
+	UToastStackWidget* Stack = MakeStack(TestWorld.World);
+	if (!TestNotNull(TEXT("a toast stack"), Stack)) { return false; }
+	UOpsEvents* Events = NewObject<UOpsEvents>();
+	Stack->BindTo(*Events);
+
+	FOpsAlert Alert;
+	Alert.Key.Kind = EAlertKind::JobUnserviceable;
+	Alert.Text = FText::FromString(TEXT("No fuel for stand 3: no road"));
+	Events->OnAlertRaised.Broadcast(Alert);
+	if (!TestEqual(TEXT("an alert starting is one toast"), Stack->Centre()->Entries().Num(), 1)) { return false; }
+	TestEqual(TEXT("a Warning - the player has something to do"), Stack->Centre()->Entries()[0].Severity, ENotificationSeverity::Warning);
+	TestEqual(TEXT("in the alert's own words"), Stack->Centre()->Entries()[0].Text.ToString(), Alert.Text.ToString());
+
+	Events->OnAlertCleared.Broadcast(Alert.Key);
+	TestEqual(TEXT("most clears are silent - the badge count says it"), Stack->Centre()->Entries().Num(), 1);
+
+	FOpsAlertKey Overdrawn;
+	Overdrawn.Kind = EAlertKind::Overdrawn;
+	Events->OnAlertCleared.Broadcast(Overdrawn);
+	if (TestEqual(TEXT("but coming out of the red is said"), Stack->Centre()->Entries().Num(), 2))
+	{
+		TestEqual(TEXT("as Info"), Stack->Centre()->Entries()[1].Severity, ENotificationSeverity::Info);
+	}
+
+	Events->OnBuildRefused.Broadcast(TEXT("Taxiway, 100 m"), TEXT("30,000"), TEXT("-1"));
+	if (TestEqual(TEXT("a refused build is a toast"), Stack->Centre()->Entries().Num(), 3))
+	{
+		const FString Said = Stack->Centre()->Entries()[2].Text.ToString();
+		TestTrue(TEXT("naming what, the price and the balance"),
+			Said.Contains(TEXT("Taxiway, 100 m")) && Said.Contains(TEXT("30,000")) && Said.Contains(TEXT("-1")));
+		TestEqual(TEXT("as a Warning"), Stack->Centre()->Entries()[2].Severity, ENotificationSeverity::Warning);
+	}
+
+	Events->OnLandRefused.Broadcast(EArrivalRefusal::NoRunway);
+	TestEqual(TEXT("and so is a refused key 7"), Stack->Centre()->Entries().Num(), 4);
 	return true;
 }
 

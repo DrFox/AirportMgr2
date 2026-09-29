@@ -28,7 +28,7 @@ public:
 	UFUNCTION() void OnNote(const FString& Text) { Seen.Add(TEXT("note:") + Text); }
 	UFUNCTION() void OnAlertRaised(const FOpsAlert& Alert) { Seen.Add(TEXT("alert+:") + UEnum::GetValueAsString(Alert.Key.Kind)); }
 	UFUNCTION() void OnAlertCleared(const FOpsAlertKey& Key) { Seen.Add(TEXT("alert-:") + UEnum::GetValueAsString(Key.Kind)); }
-	UFUNCTION() void OnBuildRefused(const FString& What, const FString& Price, double Balance) { Seen.Add(TEXT("refused:") + What); }
+	UFUNCTION() void OnBuildRefused(const FString& What, const FString& Price, const FString& Balance) { Seen.Add(TEXT("refused:") + What); }
 	UFUNCTION() void OnLandRefused(EArrivalRefusal Why) { Seen.Add(FString::Printf(TEXT("land:%d"), static_cast<int32>(Why))); }
 
 	int32 CountOf(const FString& Prefix) const

@@ -1,4 +1,6 @@
 #include "ToastStackWidget.h"
+#include "Model/OpsAlerts.h"
+#include "Model/OpsEvents.h"
 
 #include "Blueprint/WidgetTree.h"
 #include "BuildBarWidget.h"
@@ -41,8 +43,7 @@ void UToastStackWidget::BuildOnce(const UUIStyle& Style)
 	// that decides what is worth telling the player (spec section 6.1).
 	if (UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
 	{
-		Runtime->GetEvents()->OnNotification.AddDynamic(this, &UToastStackWidget::OnNotification);
-		Runtime->GetEvents()->OnArrivalRefused.AddDynamic(this, &UToastStackWidget::OnArrivalRefused);
+		BindTo(*Runtime->GetEvents());
 	}
 	else
 	{
@@ -79,6 +80,49 @@ void UToastStackWidget::EnsureSlots(const UUIStyle* Style)
 		ToastColumn = Column;
 		UE_LOG(LogToasts, Log, TEXT("No toast asset: building the code-only stack, %.0f uu clear of the bottom"), Clearance);
 	}
+}
+
+void UToastStackWidget::BindTo(UOpsEvents& Events)
+{
+	Events.OnNotification.AddUniqueDynamic(this, &UToastStackWidget::OnNotification);
+	Events.OnArrivalRefused.AddUniqueDynamic(this, &UToastStackWidget::OnArrivalRefused);
+	Events.OnAlertRaised.AddUniqueDynamic(this, &UToastStackWidget::OnAlertRaised);
+	Events.OnAlertCleared.AddUniqueDynamic(this, &UToastStackWidget::OnAlertCleared);
+	Events.OnBuildRefused.AddUniqueDynamic(this, &UToastStackWidget::OnBuildRefused);
+	Events.OnLandRefused.AddUniqueDynamic(this, &UToastStackWidget::OnLandRefused);
+}
+
+void UToastStackWidget::OnAlertRaised(const FOpsAlert& Alert)
+{
+	if (Notifications != nullptr)
+	{
+		Notifications->PostFeed(Alert.Text, ENotificationSeverity::Warning);
+	}
+}
+
+void UToastStackWidget::OnAlertCleared(const FOpsAlertKey& Key)
+{
+	// SILENT FOR EVERY KIND BUT ONE: the alert window's count going down says a problem ended, and a toast for
+	// each would bury the ones that started. Coming out of the red is the exception - it unlocks building.
+	if (Notifications != nullptr && Key.Kind == EAlertKind::Overdrawn)
+	{
+		Notifications->PostFeed(NSLOCTEXT("AirportMgr", "BackInCredit", "Back in credit - building unlocked"), ENotificationSeverity::Info);
+	}
+}
+
+void UToastStackWidget::OnBuildRefused(const FString& What, const FString& Price, const FString& Balance)
+{
+	if (Notifications != nullptr)
+	{
+		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "CannotAfford", "Can't afford {0} ({1}; balance {2})"),
+			FText::FromString(What), FText::FromString(Price), FText::FromString(Balance)), ENotificationSeverity::Warning);
+	}
+}
+
+void UToastStackWidget::OnLandRefused(EArrivalRefusal Why)
+{
+	// THE SAME SENTENCE as a dispatch refusal (OnArrivalRefused) - one account of why an aeroplane cannot land.
+	OnArrivalRefused(Why);
 }
 
 void UToastStackWidget::OnNotification(const FString& Text)

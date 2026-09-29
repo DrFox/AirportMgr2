@@ -85,7 +85,7 @@ FString FAlertClearedEvent::Describe() const
 
 FString FBuildRefusedEvent::Describe() const
 {
-	return FString::Printf(TEXT("%s, cannot afford %s, balance %.0f"), *What, *Price, Balance);
+	return FString::Printf(TEXT("%s, cannot afford %s, balance %s"), *What, *Price, *Balance);
 }
 
 FString FLandRefusedEvent::Describe() const

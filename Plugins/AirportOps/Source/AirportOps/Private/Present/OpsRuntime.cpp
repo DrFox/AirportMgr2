@@ -320,7 +320,8 @@ void UOpsRuntime::OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why)
 {
 	// PRICED BY THE PURSE, which is the ledger: Airside knows only the base amount (FBuildQuote's own
 	// comment - "what it COSTS is AirportOps' answer").
-	Bus.Publish(FBuildRefusedEvent{ Quote.What.ToString(), Why, Ledger->Describe(Quote).ToString(), Ledger->Balance() });
+	Bus.Publish(FBuildRefusedEvent{ Quote.What.ToString(), Why, Ledger->Describe(Quote).ToString(),
+		Pricing->Format(Ledger->Balance()).ToString() });
 }
 
 void UOpsRuntime::ArmJobBoardDeadline()

@@ -171,7 +171,8 @@ struct AIRPORTOPS_API FBuildRefusedEvent
 	EBuildRefusal Why = EBuildRefusal::CannotAfford;
 	/** The purse's own wording of the price ("£120,000") - Airside knows only the base amount. */
 	FString Price;
-	double Balance = 0.0;
+	/** The balance, worded by UPricing::Format - the toast has no pricing of its own to word it with. */
+	FString Balance;
 	static const TCHAR* EventName() { return TEXT("BuildRefused"); }
 	FString Describe() const;
 };

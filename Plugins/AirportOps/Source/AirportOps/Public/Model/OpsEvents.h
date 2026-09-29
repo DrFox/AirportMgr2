@@ -14,7 +14,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsSpeedChanged, ESimSpeed, Speed);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsNotification, const FString&, Text);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertRaised, const FOpsAlert&, Alert);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertCleared, const FOpsAlertKey&, Key);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOpsBuildRefused, const FString&, What, const FString&, Price, double, Balance);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOpsBuildRefused, const FString&, What, const FString&, Price, const FString&, Balance);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsLandRefused, EArrivalRefusal, Why);
 
 /**
