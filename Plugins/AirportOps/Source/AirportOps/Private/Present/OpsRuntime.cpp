@@ -779,7 +779,14 @@ void UOpsRuntime::PostDailyUpkeep()
 	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
 	const double Base = BuildCost::DailyUpkeep(*Target->Network,
 		Settings != nullptr ? Settings->ApronUpkeepPerSquareMetrePerDay : 0.0);
-	Ledger->PostDailyUpkeep(Base, Clock->Now());
+	// THE FACILITIES' SHARE, from the one service that knows what a module and a vehicle cost to keep
+	// (facility-upgrades spec R6), as lines of their own so the finance screen can say where it went.
+	const FFacilityUpkeep Facilities = FacilityPurchases->DailyUpkeep(*Target->Network);
+	const FUpkeepLine Lines[] = {
+		{ Base, NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep") },
+		{ Facilities.Modules, NSLOCTEXT("Ledger", "FacilityUpkeep", "Facility upkeep") },
+		{ Facilities.Fleet, NSLOCTEXT("Ledger", "FleetUpkeep", "Fleet upkeep") } };
+	Ledger->PostDailyUpkeep(Lines, Clock->Now());
 
 	// SAME BEAT, SAME REASON (issue #188): FlightBoard's own History needs no schedule of its
 	// own either, and a second daily timer here would just be a second place for the two to
@@ -793,8 +800,8 @@ void UOpsRuntime::PostDailyUpkeep()
 	// reason RollUp rides it (issue #188). The airlines forgive a little on it.
 	Bus.Publish(FDayEndedEvent{ Clock->Day() });
 
-	UE_LOG(LogAirportOps, Log, TEXT("Upkeep day %d: %.0f; balance %.0f"),
-		Clock->Day(), Base, Ledger->Balance());
+	UE_LOG(LogAirportOps, Log, TEXT("Upkeep day %d: %.0f (+%.0f facilities, +%.0f fleet); balance %.0f"),
+		Clock->Day(), Base, Facilities.Modules, Facilities.Fleet, Ledger->Balance());
 }
 
 TArray<IOpsPersistent*> UOpsRuntime::Persistents() const

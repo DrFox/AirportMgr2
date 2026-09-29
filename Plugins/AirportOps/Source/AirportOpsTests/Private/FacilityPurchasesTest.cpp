@@ -366,4 +366,27 @@ bool FFacilityNameFallbackTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityUpkeepTest, "AirportOps.Model.Facility.UpkeepSumsModulesAndFleet",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityUpkeepTest::RunTest(const FString&)
+{
+	// R6: sheds and vehicles both cost upkeep. Tanks and pumps have no offer and so no upkeep this slice.
+	FFacilityFixture F;
+	F.Board->AddVehicleForTest(TEXT("FUEL"), F.Depot, EServiceVehicleState::Idle, 0.0);
+	F.Board->AddVehicleForTest(TEXT("UTILITY"), F.Depot, EServiceVehicleState::ToJob, 0.0);
+	UEntityDefinition* Def = UEntityDefinition::MakeFuelDepotTransient();
+	FEntityPlacement Gone;
+	Gone.Definition = Def;
+	Gone.Anchors = Def->Anchors;
+	Gone.Position = FVector2D(40000.0, 0.0);
+	Gone.PoseRole = EServiceRole::Fuel;
+	Gone.Modules = { EDepotModule::Shed, EDepotModule::Shed };
+	F.Net->RemoveEntity(F.Net->PlaceEntity(Gone));
+
+	const FFacilityUpkeep Upkeep = F.Shop->DailyUpkeep(*F.Net);
+	TestEqual(TEXT("one live shed at 200 - a removed depot's sheds cost nothing"), Upkeep.Modules, 200.0, 1e-9);
+	TestEqual(TEXT("a bowser and a tow, busy or not, 500 + 150"), Upkeep.Fleet, 650.0, 1e-9);
+	return true;
+}
+
 #endif

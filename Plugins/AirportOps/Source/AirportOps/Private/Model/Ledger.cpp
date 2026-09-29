@@ -121,9 +121,18 @@ void ULedger::RollUp(double Now)
 
 void ULedger::PostDailyUpkeep(double Base, double Now)
 {
-	if (Base > 0.0)
+	const FUpkeepLine Line{ Base, NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep") };
+	PostDailyUpkeep(MakeArrayView(&Line, 1), Now);
+}
+
+void ULedger::PostDailyUpkeep(TConstArrayView<FUpkeepLine> Lines, double Now)
+{
+	for (const FUpkeepLine& Line : Lines)
 	{
-		Post(Now, ELedgerCategory::Upkeep, -Base, NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep"));
+		if (Line.Amount > 0.0)
+		{
+			Post(Now, ELedgerCategory::Upkeep, -Line.Amount, Line.What);
+		}
 	}
 
 	// UNCONDITIONAL - see this method's own header comment for why a Base of zero used to

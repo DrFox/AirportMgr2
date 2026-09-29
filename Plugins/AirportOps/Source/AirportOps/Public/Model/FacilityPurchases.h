@@ -167,6 +167,13 @@ public:
 	FPurchaseResult BuyVehicle(const URoadNetwork& Network, FEntityInstanceId Entity, FName TypeCode);
 	FPurchaseResult SellVehicle(int32 VehicleId);
 
+	/**
+	 * One day's upkeep: every owned module with an offer on every live facility, and every vehicle on the
+	 * board at its row's UpkeepPerDay (R6). Two figures, posted as two described lines by UOpsRuntime.
+	 * ENFORCED BY: AirportOps.Model.Facility.UpkeepSumsModulesAndFleet
+	 */
+	FFacilityUpkeep DailyUpkeep(const URoadNetwork& Network) const;
+
 	/** "No space", "Can't afford" - the disabled button's reason. The wording is the contract. */
 	static FText RefusalText(EPurchaseRefusal Why);
 

@@ -313,4 +313,31 @@ FPurchaseResult UFacilityPurchases::SellVehicle(int32 VehicleId)
 	return Result;
 }
 
+FFacilityUpkeep UFacilityPurchases::DailyUpkeep(const URoadNetwork& Network) const
+{
+	FFacilityUpkeep Out;
+	for (const FEntityInstance& Entity : Network.GetEntities())
+	{
+		if (!Entity.bAlive || !Entity.IsDepot())
+		{
+			continue;
+		}
+		for (const EDepotModule Module : Entity.Modules)
+		{
+			if (const FModuleOffer* Offer = ModuleOffers.Find(Module))
+			{
+				Out.Modules += Offer->UpkeepPerDay;
+			}
+		}
+	}
+	if (JobBoard != nullptr)
+	{
+		for (const FServiceVehicle& Vehicle : JobBoard->GetVehicles())
+		{
+			Out.Fleet += JobBoard->SpecFor(Vehicle.TypeCode).UpkeepPerDay;
+		}
+	}
+	return Out;
+}
+
 #undef LOCTEXT_NAMESPACE

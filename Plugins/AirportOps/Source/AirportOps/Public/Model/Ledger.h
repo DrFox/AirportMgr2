@@ -62,6 +62,14 @@ struct AIRPORTOPS_API FLedgerEntry
 	UPROPERTY() int32 Reverses = INDEX_NONE;
 };
 
+/** One described upkeep entry. A plain struct: it lives for one PostDailyUpkeep call. */
+struct FUpkeepLine
+{
+	/** Positive: what the day costs. <= 0 posts nothing. */
+	double Amount = 0.0;
+	FText What;
+};
+
 /**
  * The money. Append-only entries; the balance is their sum.
  *
@@ -184,6 +192,14 @@ public:
 	 * ledger stayed unbounded for exactly the games with the least happening in them.
 	 */
 	void PostDailyUpkeep(double Base, double Now);
+
+	/**
+	 * The same beat with DESCRIBED lines - the airport's base upkeep, "Facility upkeep", "Fleet upkeep"
+	 * (facility-upgrades spec §3) - one Upkeep entry per positive line, then the RollUp, unconditional for
+	 * the reason above. The Base overload forwards here with one line, so the skip-if-zero rule is written
+	 * once. ENFORCED BY: AirportOps.Model.LedgerUpkeepLines, AirportOps.Model.LedgerPostDailyUpkeep
+	 */
+	void PostDailyUpkeep(TConstArrayView<FUpkeepLine> Lines, double Now);
 
 	/**
 	 * The balance computed from the entries.
