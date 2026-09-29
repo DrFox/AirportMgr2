@@ -180,6 +180,18 @@ public:
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnNetworkChanged, EChangeKind);
 	FOnNetworkChanged OnChanged;
 
+	/**
+	 * Fired when a mutator REFUSES A BUILD AT COMMIT for a reason no tool showed first - today only
+	 * "cannot afford" (EBuildRefusal). The quote says what, and the purse can price it. The layer that
+	 * owns the purse turns this into something the player sees; Airside itself has no UI to say it on.
+	 *
+	 * NATIVE, NOT DYNAMIC: FBuildQuote is a plain struct (see its own comment) and nothing in Blueprint
+	 * binds here directly.
+	 * ENFORCED BY: Airside.Present.BuildPurseRefusalIsAnnounced, Check-Architecture rule 32
+	 */
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnBuildRefused, const FBuildQuote& /*Quote*/, EBuildRefusal /*Why*/);
+	FOnBuildRefused OnRefused;
+
 	// --- IRoadEditTarget ---------------------------------------------------------------
 
 	virtual const URoadNetwork* GetNetwork() const override;
@@ -406,6 +418,22 @@ public:
 
 	/** True when there is no purse (design time) or the purse says the player can pay. */
 	bool CanAfford(const FBuildQuote& Quote) const;
+
+	/**
+	 * CanAfford FOR A COMMIT: the same answer, and when it is no, OnRefused is broadcast so the player
+	 * hears it. Every mutator's affordability guard goes through here; CanAfford itself is for the
+	 * previews and Why* evaluators, which must stay silent (a ghost is asked every frame).
+	 * ENFORCED BY: Check-Architecture rule 32 (refusal-is-announced)
+	 */
+	bool AffordOrRefuse(const FBuildQuote& Quote);
+
+	/** WhyUpgradeRefused, and - when the refusal is affordability - the quote, so UpgradeSegment can
+	 *  announce it. The interface virtual forwards here with null: a preview must stay silent. */
+	FString WhyUpgradeRefusedImpl(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface,
+		FBuildQuote* OutUnaffordable) const;
+
+	/** WhyStandRefused with the same out-parameter, for PlaceStandInPlot - see WhyUpgradeRefusedImpl. */
+	FString WhyStandRefusedImpl(TArrayView<const FVector2D> Outline, EPavement Pavement, FBuildQuote* OutUnaffordable) const;
 
 	// --- Undo ----------------------------------------------------------------------------
 

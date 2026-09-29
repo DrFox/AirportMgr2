@@ -17,6 +17,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
+#include "Profiles/RoadProfile.h"
 #include "Model/StandAllocator.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Model/OpsEventBus.h"
@@ -376,6 +377,87 @@ bool FOpsRuntimeBusQuietBoardTest::RunTest(const FString&)
 	Runtime->Tick(1.0 / 30.0);
 	TestTrue(TEXT("a depot placed on a quiet airport still gets its fleet (FNetworkChangedEvent)"),
 		Runtime->GetJobBoard()->GetVehicles().Num() > Fleet);
+	return true;
+}
+
+// --- Ops alerts, stage 1 (spec 2026-09-29-ops-alerts): the runtime's wiring of refusals and the alerts pass.
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBuildRefusedTest, "AirportOps.Present.Alerts.BuildRefusalReachesUi",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeBuildRefusedTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnBuildRefused.AddDynamic(Listener, &UOpsEventsTestListener::OnBuildRefused);
+	if (URoadProfile* Profile = TestWorld.Actor->ResolveProfile())
+	{
+		Profile->CostPerMetre = 300.0;
+	}
+	// BROKE: the scenario's opening balance, spent.
+	Runtime->GetLedger()->Post(0.0, ELedgerCategory::Upkeep, -(Runtime->GetLedger()->Balance() + 1.0), FText::FromString(TEXT("test")));
+	const int32 A = TestWorld.Actor->PlaceNode(FVector2D(0.0, 60000.0));
+	const int32 B = TestWorld.Actor->PlaceNode(FVector2D(10000.0, 60000.0));
+	TestFalse(TEXT("a taxiway the player cannot pay for is refused"), TestWorld.Actor->ConnectNodes(A, B, ERoadKind::Taxiway, INDEX_NONE));
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("and the refusal reaches the UI's face of the bus - no longer only a log line"), Listener->CountOf(TEXT("refused:")), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeLandRefusedTest, "AirportOps.Present.Alerts.LandRefusalReachesUi",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeLandRefusedTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnLandRefused.AddDynamic(Listener, &UOpsEventsTestListener::OnLandRefused);
+	TestEqual(TEXT("no runway, so key 7 is refused"), Runtime->LandNear(FVector2D::ZeroVector, nullptr), EArrivalRefusal::NoRunway);
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("and the refusal reaches the UI - it never went through Airside's OnArrivalRefused"),
+		Listener->CountOf(TEXT("land:")), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeAlertsPassTest, "AirportOps.Present.Alerts.PassRaisesThroughTheRuntime",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeAlertsPassTest::RunTest(const FString&)
+{
+	// THE PASS IS WIRED AND DIRTIED: an overdraft becomes an alert through the runtime, with no hand call to
+	// Recompute. Stage 1 dirties the pass on the offer minute among others; stage 3 adds MoneyPosted.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnAlertRaised.AddDynamic(Listener, &UOpsEventsTestListener::OnAlertRaised);
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("a solvent airport raises nothing"), Listener->CountOf(TEXT("alert+:")), 0);
+
+	Runtime->GetLedger()->Post(0.0, ELedgerCategory::Upkeep, -(Runtime->GetLedger()->Balance() + 1.0), FText::FromString(TEXT("test")));
+	const double OneMinute = UOfferGenerator::TickSeconds / Runtime->GetClock()->TimeScale() * 1.01;
+	Runtime->Tick(OneMinute);
+	// OVERDRAWN BY NAME: this field has no runway, so the content's airlines cannot come either, and the same
+	// pass rightly raises those too.
+	const FString Overdrawn = TEXT("alert+:") + UEnum::GetValueAsString(EAlertKind::Overdrawn);
+	auto HeldOverdrawn = [Runtime]()
+	{
+		return Runtime->GetAlerts()->GetAlerts().FilterByPredicate(
+			[](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::Overdrawn; }).Num();
+	};
+	TestEqual(TEXT("overdrawn, the next pass raises it"), Listener->CountOf(Overdrawn), 1);
+	TestEqual(TEXT("and the runtime holds it"), HeldOverdrawn(), 1);
+
+	const FString Slot = TEXT("AirportOpsTest_AlertsLoad");
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	Runtime->GetEvents()->OnAlertsReset.AddDynamic(Listener, &UOpsEventsTestListener::OnAlertsReset);
+	if (!TestTrue(TEXT("load reads again"), Runtime->LoadFromSlot(Slot))) { return false; }
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("a load tells the UI its alert list is stale"), Listener->CountOf(TEXT("reset")), 1);
+	TestEqual(TEXT("then re-raises, once, what is still true of the loaded airport (no tick came between the two loads)"), Listener->CountOf(Overdrawn), 2);
+	TestEqual(TEXT("and holds it once"), HeldOverdrawn(), 1);
 	return true;
 }
 

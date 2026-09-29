@@ -154,6 +154,114 @@ bool FDeadlockResolver::CanReplanAtBlockedStep(const FRoadAgent& Agent, const UR
 		&& ToNode <= Rules.GapFor(Agent.Class) + Rules.FootprintFor(Agent.Class) * 0.5 + Excess;
 }
 
+void FDeadlockResolver::FindCycles(TConstArrayView<FRoadAgent> Agents, const FTrafficRules& Rules,
+	FCycleScratch& Scratch, TArray<TArray<int32>>& OutCycles)
+{
+	OutCycles.Reset();
+
+	// ONE EDGE PER STALLED WAITER. StalledSeconds only accrues while an agent is Taxiing,
+	// stopped and naming a blocker (see FRoadAgent::Advance's caller in AdvanceOnce), and
+	// FClaimPass::Run clears WaitingOn the moment an agent stops taxiing - so a parked or
+	// retired agent cannot contribute an edge, and a cycle through one is not representable
+	// rather than merely unlikely.
+	//
+	// MEMBER, NOT A LOCAL (issue #190) - now Scratch, the caller's: see FCycleScratch. Reset here,
+	// not left with whatever the last call found.
+	Scratch.Waiting.Reset();
+	for (const FRoadAgent& Agent : Agents)
+	{
+		if (Agent.GetStalledSeconds() > Rules.StallSeconds && Agent.GetWaitingOn() != 0)
+		{
+			Scratch.Waiting.Add(Agent.Id, Agent.GetWaitingOn());
+		}
+	}
+	if (Scratch.Waiting.Num() == 0)
+	{
+		return;
+	}
+
+	// Every agent whose walk has been made, this tick. Out-degree is one, so the walk from an
+	// agent already walked would follow the identical chain and find the identical cycle:
+	// skipping it is what makes this pass linear rather than quadratic, and what stops one
+	// cycle being handled once per member.
+	//
+	// MEMBER, NOT A LOCAL (issue #190) - see FCycleScratch.
+	Scratch.Visited.Reset();
+
+	for (const TPair<int32, int32>& Start : Scratch.Waiting)
+	{
+		if (Scratch.Visited.Contains(Start.Key))
+		{
+			continue;
+		}
+
+		// THE WALK IS BOUNDED BY CONSTRUCTION: every step either stops or appends an agent
+		// not already on the path, and Waiting is finite - so no counter is needed and none
+		// is used, which is better than a guard whose limit would be a second rule about how
+		// big a jam may be. Position is the path membership test and the cycle's start index
+		// in one, because the cycle is the path FROM the revisited agent onward, not all of it
+		// (an agent can wait on a jam it is not part of).
+		//
+		// MEMBERS, NOT LOCALS (issue #190) - see FCycleScratch. Reset per waiter walked, not
+		// per Resolve() call: a cycle's path means nothing outside the walk that built it.
+		Scratch.Path.Reset();
+		Scratch.Position.Reset();
+		int32 At = Start.Key;
+		int32 CycleAt = INDEX_NONE;
+		while (true)
+		{
+			if (const int32* Where = Scratch.Position.Find(At))
+			{
+				CycleAt = *Where;
+				break;
+			}
+			if (Scratch.Visited.Contains(At))
+			{
+				break;
+			}
+			const int32* Next = Scratch.Waiting.Find(At);
+			if (Next == nullptr)
+			{
+				// Waiting on somebody who is not a stalled waiter - a moving agent, or one
+				// that has not been stopped long enough. That is a queue, not a deadlock.
+				break;
+			}
+			Scratch.Position.Add(At, Scratch.Path.Num());
+			Scratch.Path.Add(At);
+			At = *Next;
+		}
+		for (const int32 Walked : Scratch.Path)
+		{
+			Scratch.Visited.Add(Walked);
+		}
+		if (CycleAt == INDEX_NONE)
+		{
+			continue;
+		}
+
+		TArray<int32>& Cycle = OutCycles.AddDefaulted_GetRef();
+		Cycle.Append(Scratch.Path.GetData() + CycleAt, Scratch.Path.Num() - CycleAt);
+	}
+}
+
+void FDeadlockResolver::AllAircraftCycles(TConstArrayView<FRoadAgent> Agents, const TMap<int32, int32>& AgentIndex,
+	const FTrafficRules& Rules, TArray<TArray<int32>>& OutCycles)
+{
+	FCycleScratch Scratch;
+	FindCycles(Agents, Rules, Scratch, OutCycles);
+	// THE SAME TEST AS Resolve's bAllAircraft, and for its reason: a cycle a van or a truck is in can be
+	// broken by the vehicle going round; one made only of aircraft is a LAYOUT the player must fix. A
+	// member nobody can find is not an aircraft - a lookup miss must not promote a cycle to an alert.
+	OutCycles.RemoveAll([&Agents, &AgentIndex](const TArray<int32>& Cycle)
+		{
+			return Cycle.ContainsByPredicate([&Agents, &AgentIndex](int32 Id)
+				{
+					const int32* At = AgentIndex.Find(Id);
+					return At == nullptr || !Agents.IsValidIndex(*At) || Agents[*At].Class != ETraversalClass::Aircraft;
+				});
+		});
+}
+
 void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, int32>& AgentIndex,
 	const FTrafficContext& Context, FPlanReResolver& PlanReResolver)
 {
@@ -166,88 +274,14 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 	FNodeReachCache& Reach = Context.Reach;
 	const double SimSeconds = Context.SimSeconds;
 
-	// ONE EDGE PER STALLED WAITER. StalledSeconds only accrues while an agent is Taxiing,
-	// stopped and naming a blocker (see FRoadAgent::Advance's caller in AdvanceOnce), and
-	// FClaimPass::Run clears WaitingOn the moment an agent stops taxiing - so a parked or
-	// retired agent cannot contribute an edge, and a cycle through one is not representable
-	// rather than merely unlikely.
-	//
-	// MEMBER, NOT A LOCAL (issue #190) - see the header. Reset here, not left with whatever
-	// the last Resolve() call found.
-	Waiting.Reset();
-	for (const FRoadAgent& Agent : Agents)
+	// THE WALK IS FindCycles NOW (ops alerts spec 2026-09-29): one definition of a wait cycle, shared
+	// with the Deadlock alert, so the resolver and the player's warning cannot disagree about what a jam
+	// is. Every cycle is found first and then acted on; the walk reads only the wait map built from the
+	// agents at the top, never the agents this loop's body stamps or replans, so that order is the same
+	// answer the interleaved version gave.
+	FindCycles(Agents, Rules, Scratch, Cycles);
+	for (const TArray<int32>& Cycle : Cycles)
 	{
-		if (Agent.GetStalledSeconds() > Rules.StallSeconds && Agent.GetWaitingOn() != 0)
-		{
-			Waiting.Add(Agent.Id, Agent.GetWaitingOn());
-		}
-	}
-	if (Waiting.Num() == 0)
-	{
-		return;
-	}
-
-	// Every agent whose walk has been made, this tick. Out-degree is one, so the walk from an
-	// agent already walked would follow the identical chain and find the identical cycle:
-	// skipping it is what makes this pass linear rather than quadratic, and what stops one
-	// cycle being handled once per member.
-	//
-	// MEMBER, NOT A LOCAL (issue #190) - see the header.
-	Visited.Reset();
-
-	for (const TPair<int32, int32>& Start : Waiting)
-	{
-		if (Visited.Contains(Start.Key))
-		{
-			continue;
-		}
-
-		// THE WALK IS BOUNDED BY CONSTRUCTION: every step either stops or appends an agent
-		// not already on the path, and Waiting is finite - so no counter is needed and none
-		// is used, which is better than a guard whose limit would be a second rule about how
-		// big a jam may be. Position is the path membership test and the cycle's start index
-		// in one, because the cycle is the path FROM the revisited agent onward, not all of it
-		// (an agent can wait on a jam it is not part of).
-		//
-		// MEMBERS, NOT LOCALS (issue #190) - see the header. Reset per waiter walked, not
-		// per Resolve() call: a cycle's path means nothing outside the walk that built it.
-		Path.Reset();
-		Position.Reset();
-		int32 At = Start.Key;
-		int32 CycleAt = INDEX_NONE;
-		while (true)
-		{
-			if (const int32* Where = Position.Find(At))
-			{
-				CycleAt = *Where;
-				break;
-			}
-			if (Visited.Contains(At))
-			{
-				break;
-			}
-			const int32* Next = Waiting.Find(At);
-			if (Next == nullptr)
-			{
-				// Waiting on somebody who is not a stalled waiter - a moving agent, or one
-				// that has not been stopped long enough. That is a queue, not a deadlock.
-				break;
-			}
-			Position.Add(At, Path.Num());
-			Path.Add(At);
-			At = *Next;
-		}
-		for (const int32 Walked : Path)
-		{
-			Visited.Add(Walked);
-		}
-		if (CycleAt == INDEX_NONE)
-		{
-			continue;
-		}
-
-		TArray<int32> Cycle;
-		Cycle.Append(Path.GetData() + CycleAt, Path.Num() - CycleAt);
 
 		// THE RETRY WINDOW, and it is what makes an unresolvable jam a CADENCE rather than a
 		// line per tick. (What makes one jam count ONCE is the min-id key below, which is a
@@ -481,4 +515,9 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 		// and the two answer different questions.
 		CyclesSeen.Add(Key);
 	}
+}
+
+void UGroundTraffic::CurrentDeadlocks(TArray<TArray<int32>>& Out) const
+{
+	FDeadlockResolver::AllAircraftCycles(Agents, AgentIndex, Rules, Out);
 }

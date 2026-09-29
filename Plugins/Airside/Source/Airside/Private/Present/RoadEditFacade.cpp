@@ -255,6 +255,16 @@ bool URoadEditFacade::CanAfford(const FBuildQuote& Quote) const
 	return Purse == nullptr || Quote.IsFree() || Purse->CanAfford(Quote);
 }
 
+bool URoadEditFacade::AffordOrRefuse(const FBuildQuote& Quote)
+{
+	if (CanAfford(Quote)) // announces: the one check that broadcasts OnRefused (rule 32)
+	{
+		return true;
+	}
+	OnRefused.Broadcast(Quote, EBuildRefusal::CannotAfford);
+	return false;
+}
+
 FBuildQuote URoadEditFacade::QuoteForSegment(int32 SegmentIndex) const
 {
 	const URoadNetwork* Network = Actor().Network;
@@ -695,7 +705,7 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	const FBuildQuote Quote = BuildCost::ForSegment(*Chosen,
 		FVector2D::Distance(Owner.Network->GetNodes()[From.Index].Position,
 			Owner.Network->GetNodes()[To.Index].Position), Surface);
-	if (!CanAfford(Quote))
+	if (!AffordOrRefuse(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("ConnectNodes refused: cannot afford %s"),
 			*Quote.What.ToString());
@@ -770,7 +780,7 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	// "what does this strip cost", so the preview and the charge cannot drift. Priced at
 	// Facts.Surface - the runway's ground is FRunwayFacts', not the profile's.
 	const FBuildQuote Quote = QuoteForRunway(From, To, RunwayProfile, Facts.Surface);
-	if (!CanAfford(Quote))
+	if (!AffordOrRefuse(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceRunway refused: cannot afford %s"),
 			*Quote.What.ToString());
@@ -885,6 +895,12 @@ namespace
 
 FString URoadEditFacade::WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const
 {
+	return WhyUpgradeRefusedImpl(SegmentIndex, Kind, WidthIndex, Surface, nullptr);
+}
+
+FString URoadEditFacade::WhyUpgradeRefusedImpl(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface,
+	FBuildQuote* OutUnaffordable) const
+{
 	const URoadNetwork* Network = Actor().Network;
 	FRoadSegmentId Id;
 	if (Network == nullptr || !MakeLiveSegmentId(SegmentIndex, Id))
@@ -926,8 +942,12 @@ FString URoadEditFacade::WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, i
 	}
 	const FBuildQuote Quote = BuildCost::ForUpgrade(*Old, Segment.Surface, *New, Surface,
 		BuildCost::SegmentLengthUu(*Network, Segment));
-	if (!CanAfford(Quote))
+	if (!CanAfford(Quote)) // preview: WhyUpgradeRefused is asked by the tool every frame - silent here, UpgradeSegment announces
 	{
+		if (OutUnaffordable != nullptr)
+		{
+			*OutUnaffordable = Quote;
+		}
 		return FString::Printf(TEXT("cannot afford %s"), *Quote.What.ToString());
 	}
 
@@ -965,9 +985,16 @@ bool URoadEditFacade::UpgradeSegment(int32 SegmentIndex, ERoadKind Kind, int32 W
 	// SetRunwayFacts' SHAPE: every guard before the snapshot (an uncommitted scope discards its
 	// undo step but does not roll the network back), already-so answers true with no edit, and
 	// ONE scope for both writes so one Ctrl+Z reverts width and surface together.
-	const FString Why = WhyUpgradeRefused(SegmentIndex, Kind, WidthIndex, Surface);
+	// THE SAME EVALUATOR THE TOOL ASKED, plus which quote could not be afforded - the one refusal here
+	// the preview could show but a player might still click through, announced so it is not only a log line.
+	FBuildQuote Unaffordable;
+	const FString Why = WhyUpgradeRefusedImpl(SegmentIndex, Kind, WidthIndex, Surface, &Unaffordable);
 	if (!Why.IsEmpty())
 	{
+		if (Unaffordable.Lines.Num() > 0)
+		{
+			OnRefused.Broadcast(Unaffordable, EBuildRefusal::CannotAfford);
+		}
 		UE_LOG(LogRoadMesh, Log, TEXT("UpgradeSegment refused: segment %d, %s"), SegmentIndex, *Why);
 		return false;
 	}
@@ -1432,7 +1459,7 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 			EBuildUnit::Each, FMath::Abs(RawDelta), 1.0, {} });
 		Delta.What = After.What;
 
-		if (RawDelta > 0.0 && !CanAfford(Delta))
+		if (RawDelta > 0.0 && !AffordOrRefuse(Delta))
 		{
 			// REVERTED, NOT ABANDONED. The node has already moved on every frame of the drag, so
 			// dropping the snapshot would leave the longer taxiway standing and unpaid for. This is

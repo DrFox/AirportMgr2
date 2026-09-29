@@ -455,6 +455,13 @@ public:
 	uint32 OccupancyRevision() const { return OccupancyRevisionCount; }
 
 	/**
+	 * Every all-aircraft wait cycle right now, as member agent ids - FDeadlockResolver::AllAircraftCycles over
+	 * this model's agents. For the ops Deadlock alert: the resolver logs these, and a log line is not
+	 * something a player sees. Out is reset first.
+	 */
+	void CurrentDeadlocks(TArray<TArray<int32>>& Out) const;
+
+	/**
 	 * The agent currently holding Node, or 0 if nobody is (0 is never a real agent id - see
 	 * FRoadAgent::Id). Wraps FTrafficResource::OfNode and IsHeld's ExcludingAgent=0 idiom
 	 * ("exclude no real agent") so a caller outside Model/ can ask "who is here" without

@@ -565,4 +565,45 @@ bool FBuildPurseUndoReversesPlottedDepotTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildPurseRefusalAnnouncedTest,
+	"Airside.Present.BuildPurseRefusalIsAnnounced",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildPurseRefusalAnnouncedTest::RunTest(const FString& Parameters)
+{
+	// A REFUSAL THE PLAYER CAN SEE (ops alerts spec 2026-09-29 §2): "cannot afford" at commit used to be a
+	// log line and nothing else - the one build refusal no tool readout explains before the click.
+	FAirsideTestWorld World;
+	PriceTheTaxiway(*World.Actor);
+	URoadEditFacade* Facade = World.Actor->GetEditFacade();
+
+	TArray<FString> Heard;
+	Facade->OnRefused.AddLambda([&Heard](const FBuildQuote& Quote, EBuildRefusal Why)
+	{
+		Heard.Add(FString::Printf(TEXT("%s:%d"), *Quote.What.ToString(), static_cast<int32>(Why)));
+	});
+
+	const int32 A = World.Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = World.Actor->PlaceNode(FVector2D(10000.0, 0.0));
+
+	// DESIGN TIME FIRST - no purse, so building is free and nothing is refused or announced.
+	TestTrue(TEXT("with no purse the build is free"), World.Actor->ConnectNodes(A, B, ERoadKind::Taxiway, INDEX_NONE));
+	TestEqual(TEXT("and no refusal is announced"), Heard.Num(), 0);
+
+	FRecordingPurse Purse;
+	Purse.Funds = 0.0;
+	Facade->SetPurse(&Purse);
+	const int32 C = World.Actor->PlaceNode(FVector2D(20000.0, 0.0));
+	TestFalse(TEXT("a build nobody can pay for is refused"), World.Actor->ConnectNodes(B, C, ERoadKind::Taxiway, INDEX_NONE));
+	if (TestEqual(TEXT("and the refusal is announced exactly once"), Heard.Num(), 1))
+	{
+		TestTrue(TEXT("naming what was refused and why"),
+			Heard[0].EndsWith(FString::Printf(TEXT(":%d"), static_cast<int32>(EBuildRefusal::CannotAfford)))
+			&& !Heard[0].StartsWith(TEXT(":")));
+	}
+	Facade->SetPurse(nullptr);
+	return true;
+}
+
 #endif

@@ -4,7 +4,9 @@
 #include "AirportOpsLog.h"
 #include "Misc/TVariant.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/BuildPurse.h"
 #include "Model/Flight.h"
+#include "Model/OpsAlerts.h"
 #include "Model/RoadAgent.h"
 #include "Model/SimClock.h"
 
@@ -146,6 +148,51 @@ struct AIRPORTOPS_API FAirlineSatisfactionEvent
 template <typename T> struct TOpsEventIsChatty { static constexpr bool Value = false; };
 template <> struct TOpsEventIsChatty<FAgentPhaseEvent> { static constexpr bool Value = true; };
 
+/** A standing problem started (UOpsAlerts's diff). Spec 2026-09-29-ops-alerts §1. */
+struct AIRPORTOPS_API FAlertRaisedEvent
+{
+	FOpsAlert Alert;
+	static const TCHAR* EventName() { return TEXT("AlertRaised"); }
+	FString Describe() const;
+};
+
+/** A standing problem stopped being true - whatever made it stop. */
+struct AIRPORTOPS_API FAlertClearedEvent
+{
+	FOpsAlertKey Key;
+	static const TCHAR* EventName() { return TEXT("AlertCleared"); }
+	FString Describe() const;
+};
+
+/** Every alert was forgotten (UOpsAlerts::Reset - a load or an attach): a UI list empties, and the raises
+ *  that follow are re-raises (FOpsAlert::bReRaised). */
+struct AIRPORTOPS_API FAlertsResetEvent
+{
+	static const TCHAR* EventName() { return TEXT("AlertsReset"); }
+	FString Describe() const;
+};
+
+/** A build refused at commit (URoadEditFacade::OnRefused), priced by the purse for the toast. */
+struct AIRPORTOPS_API FBuildRefusedEvent
+{
+	FString What;
+	EBuildRefusal Why = EBuildRefusal::CannotAfford;
+	/** The purse's own wording of the price ("£120,000") - Airside knows only the base amount. */
+	FString Price;
+	/** The balance, worded by UPricing::Format - the toast has no pricing of its own to word it with. */
+	FString Balance;
+	static const TCHAR* EventName() { return TEXT("BuildRefused"); }
+	FString Describe() const;
+};
+
+/** Key 7 (UOpsRuntime::LandNear) refused before any dispatch - so Airside's OnArrivalRefused never fired. */
+struct AIRPORTOPS_API FLandRefusedEvent
+{
+	EArrivalRefusal Why = EArrivalRefusal::None;
+	static const TCHAR* EventName() { return TEXT("LandRefused"); }
+	FString Describe() const;
+};
+
 /**
  * EVERY EVENT THERE IS, as one closed list. Subscribe<T> and Publish<T> are compile-checked
  * against it, and the wiring test walks it - "lists that must agree are ONE list".
@@ -153,7 +200,7 @@ template <> struct TOpsEventIsChatty<FAgentPhaseEvent> { static constexpr bool V
  */
 using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent,
 	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
-	FNetworkChangedEvent>;
+	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

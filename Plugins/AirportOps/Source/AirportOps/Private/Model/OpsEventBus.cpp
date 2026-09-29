@@ -71,6 +71,33 @@ FString FNetworkChangedEvent::Describe() const
 	return FString::Printf(TEXT("guideline revision %u"), GuidelineRevision);
 }
 
+FString FAlertRaisedEvent::Describe() const
+{
+	return FString::Printf(TEXT("%s %d%s, \"%s\""), *UEnum::GetValueAsString(Alert.Key.Kind), Alert.Key.Id,
+		Alert.Key.Name.IsNone() ? TEXT("") : *(TEXT(" ") + Alert.Key.Name.ToString()), *Alert.Text.ToString());
+}
+
+FString FAlertClearedEvent::Describe() const
+{
+	return FString::Printf(TEXT("%s %d%s"), *UEnum::GetValueAsString(Key.Kind), Key.Id,
+		Key.Name.IsNone() ? TEXT("") : *(TEXT(" ") + Key.Name.ToString()));
+}
+
+FString FAlertsResetEvent::Describe() const
+{
+	return TEXT("every alert forgotten");
+}
+
+FString FBuildRefusedEvent::Describe() const
+{
+	return FString::Printf(TEXT("%s, cannot afford %s, balance %s"), *What, *Price, *Balance);
+}
+
+FString FLandRefusedEvent::Describe() const
+{
+	return UEnum::GetValueAsString(Why);
+}
+
 FString FOpsEventBus::Describe(const FOpsEvent& Event)
 {
 	return Visit([](const auto& Each) { return Each.Describe(); }, Event);

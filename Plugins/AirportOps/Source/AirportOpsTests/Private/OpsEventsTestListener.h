@@ -26,6 +26,16 @@ public:
 	UFUNCTION() void OnRefused(EArrivalRefusal Why) { Seen.Add(FString::Printf(TEXT("refused:%d"), static_cast<int32>(Why))); }
 	UFUNCTION() void OnSpeed(ESimSpeed Speed) { Seen.Add(FString::Printf(TEXT("speed:%d"), static_cast<int32>(Speed))); }
 	UFUNCTION() void OnNote(const FString& Text) { Seen.Add(TEXT("note:") + Text); }
+	UFUNCTION() void OnAlertRaised(const FOpsAlert& Alert) { Seen.Add(TEXT("alert+:") + UEnum::GetValueAsString(Alert.Key.Kind)); }
+	UFUNCTION() void OnAlertsReset() { Seen.Add(TEXT("reset")); }
+	UFUNCTION() void OnAlertCleared(const FOpsAlertKey& Key) { Seen.Add(TEXT("alert-:") + UEnum::GetValueAsString(Key.Kind)); }
+	UFUNCTION() void OnBuildRefused(const FString& What, const FString& Price, const FString& Balance) { Seen.Add(TEXT("refused:") + What); }
+	UFUNCTION() void OnLandRefused(EArrivalRefusal Why) { Seen.Add(FString::Printf(TEXT("land:%d"), static_cast<int32>(Why))); }
+
+	int32 CountOf(const FString& Prefix) const
+	{
+		return Seen.FilterByPredicate([&Prefix](const FString& S) { return S.StartsWith(Prefix); }).Num();
+	}
 
 	/** A Blueprint-shaped autosave: a Presentation handler that saves when told to - for
 	 *  AirportOps.Present.Bus.SaveFromAHandler, which needs a save made from INSIDE a drain. */

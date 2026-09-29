@@ -10,6 +10,9 @@
 
 class ARoadNetworkActor;
 class UAirlineRoster;
+class UOpsAlerts;
+struct FBuildQuote;
+enum class EBuildRefusal : uint8;
 class UGroundTraffic;
 class UOpsCatalog;
 class UOpsEvents;
@@ -93,6 +96,9 @@ public:
 
 	/** How every airline feels about this airport. See UAirlineRoster - a Reaction on the bus. */
 	UAirlineRoster* GetAirlines() const { return Airlines; }
+
+	/** The standing problems the player must act on - see UOpsAlerts; run as the bus pass "Alerts". */
+	UOpsAlerts* GetAlerts() const { return Alerts; }
 
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
@@ -199,6 +205,14 @@ private:
 	UPROPERTY() TObjectPtr<UAgentRescue> AgentRescue;
 
 	UPROPERTY() TObjectPtr<UAirlineRoster> Airlines;
+	UPROPERTY() TObjectPtr<UOpsAlerts> Alerts;
+
+	/** The facade's OnRefused, bridged onto the bus as FBuildRefusedEvent - see OnBuildRefused. */
+	FDelegateHandle RefusedHandle;
+	void OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why);
+
+	/** Live sources for UOpsAlerts::Recompute, read fresh - the network object can be replaced. */
+	void RecomputeAlerts();
 
 	/** Every catalog airline gets a row - at attach, and again after a load, whose snapshot may predate
 	 *  the "Airlines" blob. Seeded here and never from an event: see UAirlineRoster's class comment. */

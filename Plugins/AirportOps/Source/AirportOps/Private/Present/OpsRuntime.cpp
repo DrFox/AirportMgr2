@@ -10,6 +10,7 @@
 #include "Entities/AircraftType.h"
 #include "Model/AirlineDefinition.h"
 #include "Model/AirlineRoster.h"
+#include "Model/OpsAlerts.h"
 #include "Model/ArrivalSequencer.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -47,6 +48,9 @@ UOpsRuntime::UOpsRuntime()
 
 	// The airlines' mood - the bus's first Reaction (spec 2026-09-29 §3), forwarded like the rest.
 	Airlines = CreateDefaultSubobject<UAirlineRoster>(TEXT("Airlines"));
+
+	// The standing alerts - derived from the boards, owned here like them (spec 2026-09-29-ops-alerts).
+	Alerts = CreateDefaultSubobject<UOpsAlerts>(TEXT("Alerts"));
 
 	// The Unstick menu, the same shape again: a pointer, and the two boards it composes.
 	AgentRescue = CreateDefaultSubobject<UAgentRescue>(TEXT("AgentRescue"));
@@ -131,6 +135,9 @@ TArray<FAirlineOffers> UOpsRuntime::AirlineOffersFromCatalog() const
 void UOpsRuntime::OfferTick()
 {
 	++OfferTicks;
+	// AN AIRLINE'S "CAN IT COME?" is re-judged inside TickMinute below, which announces nothing - so the
+	// alerts pass looks again every offer minute (spec 2026-09-29-ops-alerts §1).
+	Bus.MarkDirty(TEXT("Alerts"));
 	if (Target == nullptr || Target->Network == nullptr)
 	{
 		return;
@@ -214,6 +221,8 @@ void UOpsRuntime::WireBus()
 		}
 		const bool bUnresolved = JobBoard->Step(*Model, *Target->Network, *Clock);
 		ArmJobBoardDeadline();
+		// A STEP MAY HAVE MADE A JOB UNSERVICEABLE, or servable again - the alerts pass reads the result.
+		Bus.MarkDirty(TEXT("Alerts"));
 		if (bUnresolved)
 		{
 			Bus.MarkDirtyNextDrain(TEXT("JobBoard"));
@@ -256,7 +265,57 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FNotificationEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FNotificationEvent& E) { Events->NotifyNotification(E.Text); });
 
+	// THE ALERTS PASS (spec 2026-09-29-ops-alerts §1) - registered AFTER the job board's, so a Step and the
+	// alerts that follow from it land in the same round. Dirtied, in the Reaction tier, by the events below,
+	// by the job board pass, and by the OFFER MINUTE (OfferTick). The offer minute is also the catch-all: a
+	// condition that starts or ends with no event of its own - a deadlock's stall time passing the
+	// threshold, an airline's admission re-judged, a balance crossing zero before stage 3's MoneyPosted -
+	// is seen within one game minute, ~1 real second at x1 (2026-09-29). A separate stall backstop on a
+	// 10 game s timer was cut in review: at the day compression it fired about seven times a real second
+	// whenever any agent queued, recomputing every alert.
+	// ENFORCED BY: AirportOps.Present.Alerts.PassRaisesThroughTheRuntime
+	Bus.RegisterPass(TEXT("Alerts"), [this]() { RecomputeAlerts(); });
+	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FAgentPhaseEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferExpiredEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferDeclinedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FFlightAirborneEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+
+	// PRESENTATION: the new UOpsEvents faces.
+	Bus.Subscribe<FAlertRaisedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FAlertRaisedEvent& E) { Events->OnAlertRaised.Broadcast(E.Alert); });
+	Bus.Subscribe<FAlertClearedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FAlertClearedEvent& E) { Events->OnAlertCleared.Broadcast(E.Key); });
+	Bus.Subscribe<FAlertsResetEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FAlertsResetEvent&) { Events->OnAlertsReset.Broadcast(); });
+	Bus.Subscribe<FBuildRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FBuildRefusedEvent& E) { Events->OnBuildRefused.Broadcast(E.What, E.Price, E.Balance); });
+	Bus.Subscribe<FLandRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FLandRefusedEvent& E) { Events->OnLandRefused.Broadcast(E.Why); });
+
 	Bus.EndWiring();
+}
+
+void UOpsRuntime::RecomputeAlerts()
+{
+	UGroundTraffic* Model = LiveModel();
+	FOpsAlertSources Sources;
+	Sources.Flights = FlightBoard;
+	Sources.Jobs = JobBoard;
+	Sources.Traffic = Model;
+	Sources.Network = Target != nullptr ? Target->Network.Get() : nullptr;
+	Sources.Offers = OfferGenerator;
+	Sources.Ledger = Ledger;
+	Sources.Airlines = AirlineOffers;
+	Alerts->Recompute(Sources, Clock->Now());
+}
+
+void UOpsRuntime::OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why)
+{
+	// PRICED BY THE PURSE, which is the ledger: Airside knows only the base amount (FBuildQuote's own
+	// comment - "what it COSTS is AirportOps' answer").
+	Bus.Publish(FBuildRefusedEvent{ Quote.What.ToString(), Why, Ledger->Describe(Quote).ToString(),
+		Pricing->Format(Ledger->Balance()).ToString() });
 }
 
 void UOpsRuntime::ArmJobBoardDeadline()
@@ -379,6 +438,9 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	FlightBoard->Pricing = Pricing;
 	FlightBoard->Fuel = JobBoard;
 	FlightBoard->Bus = &Bus;
+	Alerts->Bus = &Bus;
+	// A NEW AIRPORT, A NEW SET: the old actor's alerts name its flights and agents.
+	Alerts->Reset();
 	Airlines->Bus = &Bus;
 	JobBoard->Ledger = Ledger;
 	JobBoard->Pricing = Pricing;
@@ -391,6 +453,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	if (URoadEditFacade* Facade = Target->GetEditFacade())
 	{
 		Facade->SetPurse(Ledger);
+		// THE FACADE'S SILENT REFUSAL, bridged: "cannot afford" at commit (spec 2026-09-29-ops-alerts §2).
+		RefusedHandle = Facade->OnRefused.AddUObject(this, &UOpsRuntime::OnBuildRefused);
 	}
 
 	// THE ONE PRODUCTION DISPATCHER. Weak, because the board outlives a level change and a
@@ -487,6 +551,7 @@ void UOpsRuntime::Detach()
 		if (URoadEditFacade* Facade = Target->GetEditFacade())
 		{
 			Facade->SetPurse(nullptr);
+			Facade->OnRefused.Remove(RefusedHandle);
 		}
 	}
 
@@ -718,6 +783,7 @@ EArrivalRefusal UOpsRuntime::LandNear(const FVector2D& Focus, const FAirframe* O
 		// NoRunway rather than a new refusal of its own: there is nothing here to check a
 		// runway AGAINST, which is the same fact that refusal already names.
 		UE_LOG(LogAirportOps, Warning, TEXT("Land: no attached network to land on."));
+		Bus.Publish(FLandRefusedEvent{ EArrivalRefusal::NoRunway });
 		return EArrivalRefusal::NoRunway;
 	}
 
@@ -753,6 +819,10 @@ EArrivalRefusal UOpsRuntime::LandNear(const FVector2D& Focus, const FAirframe* O
 		Airframe, Focus, NSLOCTEXT("AirportOps", "DebugAirline", "(key 7)"));
 	if (Why != EArrivalRefusal::None)
 	{
+		// SAID TO THE PLAYER, not only the log: AcceptImmediate refuses BEFORE any dispatch, so Airside's
+		// OnArrivalRefused - the toast key 7 used to rely on - never fires (spec 2026-09-29-ops-alerts §2).
+		// ENFORCED BY: AirportOps.Present.Alerts.LandRefusalReachesUi
+		Bus.Publish(FLandRefusedEvent{ Why });
 		// The key used to do nothing at all when the airport was full. Now it says which of the
 		// seven refusals it was, in the sentence the inbox would show.
 		UE_LOG(LogAirportOps, Warning, TEXT("Land: no flight. %s"),
@@ -787,6 +857,10 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// OnAgentPhaseChanged does not hear Gone for agents a load clears - it hears "Loaded" instead.
 	// ENFORCED BY: AirportOps.Present.Bus.LoadDiscardsQueue (the queue is dropped, nothing hears it)
 	Bus.Discard();
+	// THE ALERTS GO WITH IT: they name agents and flights of the airport being replaced, and are derived -
+	// the MarkAllDirty below re-raises whatever is true of the loaded one.
+	// ENFORCED BY: AirportOps.Present.Alerts.PassRaisesThroughTheRuntime
+	Alerts->Reset();
 	const TArray<IOpsPersistent*> Loaded = Persistents();
 	if (!OpsSave::Restore(Snapshot, Loaded, *Target->Network))
 	{

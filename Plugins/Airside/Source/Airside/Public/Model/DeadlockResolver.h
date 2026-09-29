@@ -23,6 +23,49 @@ class URoadNetwork;
  */
 struct AIRSIDE_API FDeadlockResolver
 {
+	struct FCycleScratch
+	{
+		/**
+		 * FindCycles' scratch, PROMOTED FROM LOCALS (issue #190): Waiting and Visited used to
+		 * be declared fresh at the top of every Resolve() call, and Path/Position fresh at the
+		 * top of every not-yet-visited waiter's walk within it - four heap allocations (Waiting,
+		 * Visited always; Path/Position once per waiter) every substep ANY agent is stalled,
+		 * which for a busy junction with a jam in it is every substep for as long as the jam
+		 * lasts. Reset at the top of the scope that used to declare them; kept as members purely
+		 * so their capacity survives from one Resolve() call - or one waiter's walk - to the next.
+		 */
+		TMap<int32, int32> Waiting;
+
+		/** See Waiting above. Reset once per Resolve() call, at the same point Waiting is filled. */
+		TSet<int32> Visited;
+
+		/** See Waiting above. Reset once per WAITER walked, not once per Resolve() call - a
+		 *  cycle's path is only meaningful within the one walk that built it. */
+		TArray<int32> Path;
+
+		/** See Path above - the same walk's membership test and the cycle's start index in one,
+		 *  reset alongside it. */
+		TMap<int32, int32> Position;
+	};
+
+	/**
+	 * Every wait cycle among Agents: an agent stalled past Rules.StallSeconds naming a blocker is one edge,
+	 * and a cycle is a closed chain of them. Out-degree is one, so each cycle is found once (see the walk's
+	 * own comments). OutCycles is reset first.
+	 *
+	 * ONE DEFINITION, used by Resolve (which acts on each cycle) and by UGroundTraffic::CurrentDeadlocks
+	 * (which reports the all-aircraft ones to the player), so the two cannot disagree about what a jam is.
+	 * ENFORCED BY: Airside.Model.Traffic.DeadlockResolverStandalone (Resolve acting on these cycles),
+	 * Airside.Model.Traffic.Deadlock.MixedCycleIsNotAnAlert (the alert's filter over the same cycles)
+	 */
+	static void FindCycles(TConstArrayView<FRoadAgent> Agents, const FTrafficRules& Rules, FCycleScratch& Scratch,
+		TArray<TArray<int32>>& OutCycles);
+
+	/** FindCycles, keeping only cycles every member of which is found and is an aircraft - Resolve's own
+	 *  bAllAircraft test. What the ops Deadlock alert shows. */
+	static void AllAircraftCycles(TConstArrayView<FRoadAgent> Agents, const TMap<int32, int32>& AgentIndex,
+		const FTrafficRules& Rules, TArray<TArray<int32>>& OutCycles);
+
 	/**
 	 * The wait-for graph, its cycles, and one replan per cycle per retry window. Spec §5.
 	 *
@@ -101,27 +144,11 @@ struct AIRSIDE_API FDeadlockResolver
 	int32 DeadlockLogLines = 0;
 
 private:
-	/**
-	 * Resolve's own scratch, PROMOTED FROM LOCALS (issue #190): Waiting and Visited used to
-	 * be declared fresh at the top of every Resolve() call, and Path/Position fresh at the
-	 * top of every not-yet-visited waiter's walk within it - four heap allocations (Waiting,
-	 * Visited always; Path/Position once per waiter) every substep ANY agent is stalled,
-	 * which for a busy junction with a jam in it is every substep for as long as the jam
-	 * lasts. Reset at the top of the scope that used to declare them; kept as members purely
-	 * so their capacity survives from one Resolve() call - or one waiter's walk - to the next.
-	 */
-	TMap<int32, int32> Waiting;
+	/** See FCycleScratch - Resolve's own, so its capacity survives between calls (issue #190). */
+	FCycleScratch Scratch;
 
-	/** See Waiting above. Reset once per Resolve() call, at the same point Waiting is filled. */
-	TSet<int32> Visited;
-
-	/** See Waiting above. Reset once per WAITER walked, not once per Resolve() call - a
-	 *  cycle's path is only meaningful within the one walk that built it. */
-	TArray<int32> Path;
-
-	/** See Path above - the same walk's membership test and the cycle's start index in one,
-	 *  reset alongside it. */
-	TMap<int32, int32> Position;
+	/** The cycles FindCycles found this Resolve - kept for its capacity, like Scratch. */
+	TArray<TArray<int32>> Cycles;
 
 	/**
 	 * Can this member of a cycle turn where it stands? Spec §5's refined resolver rule.

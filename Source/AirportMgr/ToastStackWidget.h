@@ -11,6 +11,9 @@ class UBorder;
 class UPanelWidget;
 class UTexture2D;
 class UUIStyle;
+class UOpsEvents;
+struct FOpsAlert;
+struct FOpsAlertKey;
 
 /**
  * A card and the entry it currently shows.
@@ -78,6 +81,14 @@ public:
 	void TickFeed(float RealDeltaSeconds);
 
 	int32 ToastCountForTest() const;
+
+	/**
+	 * Subscribe to every ops event the feed turns into a toast. THE ONE BINDING - BuildOnce calls it with the
+	 * runtime's UOpsEvents, and a test calls it with its own, so a delegate added here cannot be one the
+	 * running game forgets to bind.
+	 * ENFORCED BY: AirportMgr.UI.ToastsSayAlertsAndRefusals
+	 */
+	void BindTo(UOpsEvents& Events);
 
 	/** The first card's brush, so a test can read the corner radius actually drawn. */
 	bool FirstToastBrushForTest(struct FSlateBrush& OutBrush) const;
@@ -156,4 +167,12 @@ private:
 	/** Both are FEED: they happened, they are worth knowing, and they need no decision. */
 	UFUNCTION() void OnNotification(const FString& Text);
 	UFUNCTION() void OnArrivalRefused(EArrivalRefusal Why);
+
+	/** Ops alerts (spec 2026-09-29-ops-alerts §3): a standing problem starting is a Warning; its clearing
+	 *  is silent except for Overdrawn, whose end ("back in credit") is news. */
+	UFUNCTION() void OnAlertRaised(const FOpsAlert& Alert);
+	UFUNCTION() void OnAlertCleared(const FOpsAlertKey& Key);
+	/** Refusals that used to be log lines only - a build the purse refused, key 7 refused. */
+	UFUNCTION() void OnBuildRefused(const FString& What, const FString& Price, const FString& Balance);
+	UFUNCTION() void OnLandRefused(EArrivalRefusal Why);
 };

@@ -83,7 +83,7 @@ bool URoadEditFacade::Redo()
 	// REFUSED WHEN THE MONEY HAS GONE SINCE, exactly as a fresh build would be. Redoing a
 	// taxiway the player can no longer afford would hand it to them for nothing, and undo
 	// refunding while redo rebuilt free is a loop that prints money.
-	if (!CanAfford(Quote))
+	if (!AffordOrRefuse(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("Redo refused: cannot afford %s again"),
 			*Quote.What.ToString());
@@ -154,7 +154,7 @@ int32 URoadEditFacade::AddApron(const TArray<FVector2D>& Outline)
 	// absolute area for that reason. Refused before the scope: an abandoned scope drops the
 	// undo snapshot but does not roll the model back.
 	const FBuildQuote Quote = QuoteForApron(Surface.Outline, {});
-	if (!CanAfford(Quote))
+	if (!AffordOrRefuse(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("AddApron refused: cannot afford %s"), *Quote.What.ToString());
 		return INDEX_NONE;
@@ -274,7 +274,7 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 	// Priced from the definition and refused before anything is placed - see ConnectNodes for
 	// why an abandoned scope is not a rollback.
 	const FBuildQuote Quote = BuildCost::ForEntity(*Definition);
-	if (!CanAfford(Quote))
+	if (!AffordOrRefuse(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceEntity refused: cannot afford %s"),
 			*Quote.What.ToString());
@@ -485,7 +485,7 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// UNSET PAVEMENT: a depot's plot is not a stand's pad - it quotes at the apron's own rate,
 	// as it did before stands had a pavement.
 	const FBuildQuote Quote = BuildCost::Combine(BuildCost::ForEntity(*Definition), QuoteForApron(Wound, {}));
-	if (!CanAfford(Quote))
+	if (!AffordOrRefuse(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceEntityInPlot refused: cannot afford %s"),
 			*Quote.What.ToString());
@@ -604,6 +604,12 @@ FBuildQuote URoadEditFacade::QuoteStand(const UEntityDefinition& Definition,
 }
 
 FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const
+{
+	return WhyStandRefusedImpl(Outline, Pavement, nullptr);
+}
+
+FString URoadEditFacade::WhyStandRefusedImpl(TArrayView<const FVector2D> Outline, EPavement Pavement,
+	FBuildQuote* OutUnaffordable) const
 {
 	// SELF-CROSSING FIRST, AND GUARDS THE MALFORMED CASE TOO - StandBox::WidthOf/DepthOf
 	// below do not check Outline.Num() themselves (Solve/StandBox.h's own note), and every
@@ -746,8 +752,12 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline, EP
 	// admission's job (StandAdmission, Task 9 of this plan), not the build gate's.
 	const UEntityDefinition* Definition = Actor().ResolveStandDefinitionFor(*Letter);
 	const FBuildQuote Quote = QuoteStand(*Definition, Outline, Pavement);
-	if (!CanAfford(Quote))
+	if (!CanAfford(Quote)) // preview: WhyStandRefused is asked by the tool every frame - silent here, PlaceStandInPlot announces
 	{
+		if (OutUnaffordable != nullptr)
+		{
+			*OutUnaffordable = Quote;
+		}
 		return FString::Printf(TEXT("cannot afford %s"), *Quote.What.ToString());
 	}
 
@@ -763,9 +773,16 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	// tool's own readout would ask, so a commit here can never approve what the readout just
 	// refused, or the reverse. Asked of Outline BEFORE the CCW correction below, because
 	// every check inside it is winding-independent - see WhyStandRefused's own header.
-	const FString Refusal = WhyStandRefused(Outline, Pavement);
+	// AND WHICH QUOTE could not be afforded, so the one refusal a player might click through is
+	// announced (OnRefused) rather than only logged - UpgradeSegment's pattern.
+	FBuildQuote Unaffordable;
+	const FString Refusal = WhyStandRefusedImpl(Outline, Pavement, &Unaffordable);
 	if (!Refusal.IsEmpty())
 	{
+		if (Unaffordable.Lines.Num() > 0)
+		{
+			OnRefused.Broadcast(Unaffordable, EBuildRefusal::CannotAfford);
+		}
 		UE_LOG(LogRoadMesh, Warning, TEXT("PlaceStandInPlot refused: %s"), *Refusal);
 		return INDEX_NONE;
 	}
@@ -827,7 +844,7 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	// (it returns a string, not a quote), so the charge itself is computed fresh here, on the
 	// wound outline this call actually places.
 	const FBuildQuote Quote = QuoteStand(*Definition, Wound, Pavement);
-	if (!CanAfford(Quote))
+	if (!AffordOrRefuse(Quote))
 	{
 		UE_LOG(LogRoadMesh, Log, TEXT("PlaceStandInPlot refused: cannot afford %s"),
 			*Quote.What.ToString());
