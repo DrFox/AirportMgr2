@@ -621,6 +621,10 @@ private:
 	/** See StepCountForTest. A session counter, not saved. */
 	int32 StepCount = 0;
 
+	/** True while any of the turnaround's jobs is neither Done nor Unserviceable. One rule, read by
+	 *  DepartTheReady and by Step's "is a departure waiting?" - so the two cannot disagree. */
+	bool IsBeingServed(const FTurnaround& Turnaround) const;
+
 	/**
 	 * The depot-to-stand route cache, dated by the graph's guideline revision (#301: the shape
 	 * ARigTestCourse's identical cache carried alone - see Airside/Model/RoutePlanCache.h for the one

@@ -226,13 +226,17 @@ private:
 	 * The ONE clock entry that wakes the job board at its next deadline (UJobBoard::NextDeadline) -
 	 * cancelled and re-booked after every Step, so it always names the earliest. Not saved, like every
 	 * USimClock entry: a load runs the pass once (MarkAllDirty), which re-books it from restored state.
-	 * ENFORCED BY: AirportOps.Present.Bus.DeadlineWakesTheBoard
+	 * ENFORCED BY: AirportOps.Present.FuelServiceWired (the serve ends on the first step past StepEndsAt)
 	 */
 	int32 JobBoardDeadlineHandle = INDEX_NONE;
 	void ArmJobBoardDeadline();
 
-	/** What FNetworkChangedEvent compares against - see UOpsRuntime::Tick. Not saved: a load swaps
-	 *  the revision anyway, and a spurious first event only costs one pass. */
+	/**
+	 * What FNetworkChangedEvent compares against - see UOpsRuntime::Tick. Not saved: a load swaps the
+	 * revision anyway, and a spurious first event only costs one pass. RESET BY Detach, which is also
+	 * how Attach gets its catch-up pass: the first Tick after an attach always publishes one.
+	 * ENFORCED BY: AirportOps.Present.Bus.QuietBoardDoesNoWork ("the first steps seeded the depot's fleet")
+	 */
 	TWeakObjectPtr<const URoadNetwork> SeenNetwork;
 	uint32 SeenGuidelineRevision = 0;
 
