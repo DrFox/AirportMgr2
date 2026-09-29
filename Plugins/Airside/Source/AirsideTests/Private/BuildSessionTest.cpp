@@ -251,4 +251,23 @@ bool FEveryPlacementToolHonoursTheStripTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildSessionSelectFromCodeTest,
+	"Airside.Tool.BuildSession.SelectFromCode",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildSessionSelectFromCodeTest::RunTest(const FString& Parameters)
+{
+	// AN ALERT'S "GO" SELECTS ITS SUBJECT (ops alerts spec 2026-09-29 §3) - the first writer of the
+	// selection that is not the select tool's hover and click. The inspector shows whatever is selected.
+	FBuildSession Session;
+	TestFalse(TEXT("a fresh session selects nothing"), Session.GetSelection().IsSet());
+	Session.Select(ESelectionKind::Stand, 3);
+	TestEqual(TEXT("selected from code, the kind reads back"), Session.GetSelection().Kind, ESelectionKind::Stand);
+	TestEqual(TEXT("and the id"), Session.GetSelection().Id, 3);
+	Session.Select(ESelectionKind::None, 0);
+	TestFalse(TEXT("and None clears it"), Session.GetSelection().IsSet());
+	return true;
+}
+
 #endif

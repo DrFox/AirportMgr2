@@ -1,4 +1,5 @@
 #include "RoadBuildController.h"
+#include "Model/OpsAlerts.h"
 
 #include "BuildActions.h"
 #include "BuildCameraComponent.h"
@@ -1074,6 +1075,47 @@ void ARoadBuildController::ToggleLedger()
 		Hud->LedgerPanel->Toggle();
 		UE_LOG(LogRoadBuild, Log, TEXT("Ledger panel %s"),
 			Hud->LedgerPanel->IsShowing() ? TEXT("opened") : TEXT("closed"));
+	}
+}
+
+bool ARoadBuildController::SelectAndFocus(const FAlertFocus& Focus)
+{
+	switch (Focus.Kind)
+	{
+	case EAlertFocusKind::Point:
+		BuildCameraComp->FocusOn(Focus.Point);
+		return true;
+
+	case EAlertFocusKind::Agent:
+	{
+		// WHERE IT IS NOW, not where it was when the alert was raised - an aircraft moves.
+		const UGroundTraffic* Traffic = Target != nullptr ? Target->GetGroundTraffic() : nullptr;
+		const FRoadAgent* Agent = Traffic != nullptr ? Traffic->FindAgent(Focus.Id) : nullptr;
+		if (Agent == nullptr)
+		{
+			UE_LOG(LogRoadBuild, Verbose, TEXT("Alert Go: agent %d has gone"), Focus.Id);
+			return false;
+		}
+		BuildCameraComp->FocusOn(Agent->GroundPosition());
+		Session.Select(ESelectionKind::Aircraft, Focus.Id);
+		return true;
+	}
+
+	case EAlertFocusKind::Entity:
+	{
+		const URoadNetwork* Network = Target != nullptr ? Target->Network.Get() : nullptr;
+		if (Network == nullptr || !Network->GetEntities().IsValidIndex(Focus.Id) || !Network->GetEntities()[Focus.Id].bAlive)
+		{
+			UE_LOG(LogRoadBuild, Verbose, TEXT("Alert Go: entity %d has gone"), Focus.Id);
+			return false;
+		}
+		BuildCameraComp->FocusOn(Network->GetEntities()[Focus.Id].Position);
+		Session.Select(ESelectionKind::Stand, Focus.Id);
+		return true;
+	}
+
+	default:
+		return false;
 	}
 }
 

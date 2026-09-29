@@ -474,6 +474,17 @@ public:
 	// --- Selection (the inspector's verbs) --------------------------------------------
 	const FSelection& GetSelection() const { return Session.GetSelection(); }
 	bool HasSelectedAircraft() const { return GetSelection().Kind == ESelectionKind::Aircraft; }
+
+	/**
+	 * An alert's "Go" (ops alerts spec 2026-09-29 §3): move the camera to the alert's subject and select
+	 * it, so the inspector opens on it. An agent is selected as ESelectionKind::Aircraft (the kind the
+	 * select tool gives any agent), an entity as Stand, by index. A Point is focus only.
+	 *
+	 * FALSE, AND NOTHING MOVES, when there is nowhere to go: no focus at all, or a subject gone since the
+	 * alert was raised (an agent retired, a stand deleted) - the row stays until the next pass clears it.
+	 * ENFORCED BY: AirportMgr.UI.Alerts.GoToSomethingGoneMovesNothing
+	 */
+	bool SelectAndFocus(const struct FAlertFocus& Focus);
 	/** The selected aircraft's facts, or false when nothing is selected or it has gone. */
 	bool SelectedAgentFacts(FAgentFacts& Out) const;
 
