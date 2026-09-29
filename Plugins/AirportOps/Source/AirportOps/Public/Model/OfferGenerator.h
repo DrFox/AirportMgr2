@@ -150,6 +150,14 @@ public:
 	static bool CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
 		const FAirframe& Airframe, EArrivalRefusal& OutWhy);
 
+	/**
+	 * The same, and the refusal as the plan's own sentence - WITH its figures, which the reason
+	 * alone cannot give: "not admitted to that runway" did not say whether length, width or
+	 * surface failed (issue #396). For the log line that says an airline cannot come.
+	 */
+	static bool CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
+		const FAirframe& Airframe, EArrivalRefusal& OutWhy, FString& OutSentence);
+
 	/** True for a refusal no amount of waiting will clear. See CouldEverAdmit. */
 	static bool IsPermanentRefusal(EArrivalRefusal Why);
 
@@ -232,6 +240,8 @@ private:
 		int32 FleetSize = INDEX_NONE;
 		TArray<int32> Admissible;
 		EArrivalRefusal FirstRefusal = EArrivalRefusal::None;
+		/** FirstRefusal as the plan described it, figures and all - see CouldEverAdmit. */
+		FString FirstRefusalSentence;
 		int32 FirstRefused = INDEX_NONE;
 	};
 	TMap<FName, FAdmissionCache> AdmissionCache;

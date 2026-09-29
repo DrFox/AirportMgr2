@@ -179,7 +179,7 @@ struct AIRSIDE_API FClaimPass
 	 * on the roll owns the strip and nothing on the taxiway. Which surfaces is RunwayHeld -
 	 * the handovers that fill it live in FRoadAgent::Advance - PLUS the chain of any crossing
 	 * still in progress, because spec §3.4's "their surface" has to mean the one the body is
-	 * on: an aircraft whose plan dies mid-crossing is Parked by the end of that tick with
+	 * on: an aircraft whose plan dies mid-crossing is Stranded by the end of that tick with
 	 * RunwayHeld empty, and holding nothing would show the strip free with an aeroplane on
 	 * it. The third route is that one.
 	 */

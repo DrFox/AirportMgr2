@@ -708,7 +708,9 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	}
 	FRoadAgent& Agent = Agents[Index];
 	const EAgentPhase Before = Agent.Phase;
-	if (Before != EAgentPhase::Parked && Before != EAgentPhase::Taxiing)
+	// STRANDED TOO: a stranded taxi-in waits at its exit for a stand (ReofferStands), and this is
+	// how the re-offer sends it there - it used to be Parked at that moment (issue #396).
+	if (Before != EAgentPhase::Parked && Before != EAgentPhase::Taxiing && Before != EAgentPhase::Stranded)
 	{
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("RedirectAgent %d refused: agent is %s"),
 			AgentId, *UEnum::GetValueAsString(Before));
@@ -1493,7 +1495,8 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 	for (const FRoadAgent& Agent : Agents)
 	{
 		if (Agent.bAwaitingStand && Agent.GoalNode.IsSet()
-			&& (Agent.Phase == EAgentPhase::Parked || Agent.Phase == EAgentPhase::Taxiing))
+			&& (Agent.Phase == EAgentPhase::Parked || Agent.Phase == EAgentPhase::Taxiing
+				|| Agent.Phase == EAgentPhase::Stranded))
 		{
 			Waiting.Add(Agent.Id);
 		}

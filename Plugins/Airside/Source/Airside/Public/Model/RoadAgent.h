@@ -86,7 +86,19 @@ enum class EAgentPhase : uint8
 	Reversing,
 
 	/** The take-off has cleared. FRoadAgent::Advance returns false from here on. */
-	Gone
+	Gone,
+
+	/**
+	 * The route died under it (a rebuild's Strand): it stands where it stopped, at no goal, until
+	 * the player retires it or a stand re-offer redirects it.
+	 *
+	 * NOT PARKED, and that difference is issue #396. A stranded plan counts as arrived
+	 * (FRouteFollower::HasArrived: not drivable), and Parked at that moment told the ops layer -
+	 * which reads GoalNode as the stand an aircraft parked on - that an aeroplane half way along a
+	 * taxiway was on its stand: a truck fuelled the empty stand and the pushback started from it,
+	 * a jump. APPENDED, after Gone, so no existing value moves.
+	 */
+	Stranded
 };
 
 /**
@@ -947,6 +959,17 @@ public:
 	 */
 	void RestartTaxi(const FRoutePlan& Plan, double InitialTravelled = 0.0,
 		TOptional<double> InitialHeading = TOptional<double>());
+
+	/**
+	 * The same body carrying on along a new plan from part-way along its first step: speed,
+	 * heading and engine spool kept, position rebased to At (the point on the plan's first step
+	 * the agent was projected onto). Phase becomes Taxiing.
+	 *
+	 * NOT RestartTaxi, which starts from rest and spools from cold - right for a redirect from a
+	 * stand, wrong for an aeroplane rolling along a taxiway that a rebuild split under it (issue
+	 * #396): it would stop dead on the edit's frame and pull away again.
+	 */
+	void RejoinTaxi(const FRoutePlan& Plan, double InitialTravelled, const FVector2D& At);
 
 	/**
 	 * Sends a parked aeroplane off its stand: Phase becomes Manoeuvring. False, and leaves

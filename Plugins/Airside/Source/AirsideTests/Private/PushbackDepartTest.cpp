@@ -439,58 +439,84 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FTaxiingDepartureStrandedDoesNotJumpTest::RunTest(const FString& Parameters)
 {
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const FPushbackGraph G = PushbackBuildGraph(*Net);
-	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
-	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
-	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None))
+	// TWO CASES SINCE ISSUE #396. The reported drag moved J ALONG the line, and a rebuild now
+	// rejoins an agent onto live pavement still under it (FPlanReResolver's RejoinInPlace) - so
+	// that case no longer strands at all, and on its own this test stopped reaching the guard it
+	// was written for. The second case strands the route outright, with nothing under the wheels
+	// to rejoin, and is the one that still walks the taxi-complete guard's hold.
+	for (const bool bDrag : { true, false })
 	{
-		return false;
-	}
+		const TCHAR* Name = bDrag ? TEXT("J dragged along the line") : TEXT("route stranded outright");
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const FPushbackGraph G = PushbackBuildGraph(*Net);
+		const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+		if (!TestTrue(FString::Printf(TEXT("%s: parked"), Name), Id > 0)) { return false; }
+		if (!TestEqual(FString::Printf(TEXT("%s: departs by pushing back"), Name), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None))
+		{
+			return false;
+		}
 
-	// TAXIING OUT, PAST J: the push ends at E, the taxi out runs E -> J -> B. Past J the current
-	// step is J -> B, so moving J strands the route under the wheels.
-	auto PastJ = [&]()
-	{
-		const FRoadAgent* A = Traffic->FindAgent(Id);
-		return A != nullptr && A->Phase == EAgentPhase::Taxiing && A->LastMotion.Position.X < 1000.0
-			&& A->LastMotion.Position.Y > -9000.0;
-	};
-	for (int32 Tick = 0; Tick < 30 * 300 && !PastJ(); ++Tick)
-	{
-		Traffic->Advance(1.0 / 30.0, Net);
-	}
-	if (!TestTrue(TEXT("taxiing out, past the junction"), PastJ())) { return false; }
+		// TAXIING OUT, PAST J: the push ends at E, the taxi out runs E -> J -> B. Past J the current
+		// step is J -> B, so moving J strands the route under the wheels.
+		auto PastJ = [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			return A != nullptr && A->Phase == EAgentPhase::Taxiing && A->LastMotion.Position.X < 1000.0
+				&& A->LastMotion.Position.Y > -9000.0;
+		};
+		for (int32 Tick = 0; Tick < 30 * 300 && !PastJ(); ++Tick)
+		{
+			Traffic->Advance(1.0 / 30.0, Net);
+		}
+		if (!TestTrue(FString::Printf(TEXT("%s: taxiing out, past the junction"), Name), PastJ())) { return false; }
 
-	Net->RemoveGuidelineNode(G.J);
-	const FGuidelineNodeId J2 = TestGraph::Node(*Net, 0.0, -10500.0);
-	TestGraph::FJoinOptions Options;
-	Options.bDerived = false;
-	TestGraph::Join(*Net, G.A, J2, Options);
-	TestGraph::Join(*Net, J2, G.B, Options);
-	TestGraph::Join(*Net, J2, G.E, Options);
-	FVector2D Last = Traffic->FindAgent(Id)->LastMotion.Position;
-	Traffic->OnGraphRebuilt(*Net);
+		FVector2D Last = Traffic->FindAgent(Id)->LastMotion.Position;
+		if (bDrag)
+		{
+			Net->RemoveGuidelineNode(G.J);
+			const FGuidelineNodeId J2 = TestGraph::Node(*Net, 0.0, -10500.0);
+			TestGraph::FJoinOptions Options;
+			Options.bDerived = false;
+			TestGraph::Join(*Net, G.A, J2, Options);
+			TestGraph::Join(*Net, J2, G.B, Options);
+			TestGraph::Join(*Net, J2, G.E, Options);
+			Traffic->OnGraphRebuilt(*Net);
+			TestEqual(FString::Printf(TEXT("%s: the pavement is still under it, so it is NOT stranded (#396)"), Name),
+				Traffic->GetLastRebuildSummaryForTest().Stranded, 0);
+		}
+		else if (!TestTrue(FString::Printf(TEXT("%s: stranded"), Name), FGroundTrafficTestAccess(*Traffic).Strand(Id)))
+		{
+			return false;
+		}
 
-	double WorstJump = 0.0;
-	bool bDeparted = false;
-	// ONE SECOND INTO THE ROLL TOO: the take-off puts the aeroplane at its entry on the first
-	// frame it ROLLS, the frame after the phase says Departing - a first version stopped at the
-	// phase change and passed on the code that jumped (2026-09-27). A second of roll from
-	// taxi speed is well under 200 uu a frame.
-	int32 RollFrames = 0;
-	for (int32 Tick = 0; Tick < 30 * 300 && Traffic->FindAgent(Id) != nullptr && RollFrames < 30; ++Tick)
-	{
-		Traffic->Advance(1.0 / 30.0, Net);
-		const FRoadAgent* Now = Traffic->FindAgent(Id);
-		if (Now == nullptr) { break; }
-		WorstJump = FMath::Max(WorstJump, FVector2D::Distance(Last, Now->LastMotion.Position));
-		Last = Now->LastMotion.Position;
-		if (Now->Phase == EAgentPhase::Departing) { bDeparted = true; ++RollFrames; }
+		double WorstJump = 0.0;
+		bool bDeparted = false;
+		bool bHeld = false;
+		// ONE SECOND INTO THE ROLL TOO: the take-off puts the aeroplane at its entry on the first
+		// frame it ROLLS, the frame after the phase says Departing - a first version stopped at the
+		// phase change and passed on the code that jumped (2026-09-27). A second of roll from
+		// taxi speed is well under 200 uu a frame.
+		int32 RollFrames = 0;
+		for (int32 Tick = 0; Tick < 30 * 300 && Traffic->FindAgent(Id) != nullptr && RollFrames < 30; ++Tick)
+		{
+			Traffic->Advance(1.0 / 30.0, Net);
+			const FRoadAgent* Now = Traffic->FindAgent(Id);
+			if (Now == nullptr) { break; }
+			WorstJump = FMath::Max(WorstJump, FVector2D::Distance(Last, Now->LastMotion.Position));
+			Last = Now->LastMotion.Position;
+			bHeld |= Now->IsHoldingForTaxiOut();
+			if (Now->Phase == EAgentPhase::Departing) { bDeparted = true; ++RollFrames; }
+		}
+		TestTrue(FString::Printf(TEXT("%s: it never jumps: worst frame-to-frame move %.0f uu"), Name, WorstJump), WorstJump < 200.0);
+		TestTrue(FString::Printf(TEXT("%s: and it still reaches the runway and rolls"), Name), bDeparted);
+		if (!bDrag)
+		{
+			// THE GUARD THIS TEST EXISTS FOR, reached: a stranded taxi out holds and replans - it is
+			// neither Stranded (a departure has a way back: ReplanHeldTaxiOuts) nor lined up.
+			TestTrue(FString::Printf(TEXT("%s: it went through the taxi-complete guard's hold"), Name), bHeld);
+		}
 	}
-	TestTrue(FString::Printf(TEXT("it never jumps: worst frame-to-frame move %.0f uu"), WorstJump), WorstJump < 200.0);
-	TestTrue(TEXT("and it still reaches the runway and rolls"), bDeparted);
 	return true;
 }
 

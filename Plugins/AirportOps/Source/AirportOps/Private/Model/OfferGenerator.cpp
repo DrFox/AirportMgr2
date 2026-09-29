@@ -42,9 +42,17 @@ bool UOfferGenerator::IsPermanentRefusal(EArrivalRefusal Why)
 bool UOfferGenerator::CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
 	const FAirframe& Airframe, EArrivalRefusal& OutWhy)
 {
+	FString Unused;
+	return CouldEverAdmit(Network, Focus, Airframe, OutWhy, Unused);
+}
+
+bool UOfferGenerator::CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
+	const FAirframe& Airframe, EArrivalRefusal& OutWhy, FString& OutSentence)
+{
 	// No occupancy: the question is what this FIELD can take, not what is free this second.
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, Focus, Airframe, nullptr);
 	OutWhy = Plan.Why;
+	OutSentence = Plan.Why == EArrivalRefusal::None ? FString() : ArrivalPlanner::DescribeRefusal(Plan);
 	return !IsPermanentRefusal(Plan.Why);
 }
 
@@ -123,18 +131,21 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 			Cache.FleetSize = Each.Fleet.Num();
 			Cache.Admissible.Reset();
 			Cache.FirstRefusal = EArrivalRefusal::None;
+			Cache.FirstRefusalSentence.Reset();
 			Cache.FirstRefused = INDEX_NONE;
 			for (int32 Index = 0; Index < Each.Fleet.Num(); ++Index)
 			{
 				++AdmissionChecks;
 				EArrivalRefusal Why = EArrivalRefusal::None;
-				if (CouldEverAdmit(Network, Focus, Each.Fleet[Index].Airframe, Why))
+				FString Sentence;
+				if (CouldEverAdmit(Network, Focus, Each.Fleet[Index].Airframe, Why, Sentence))
 				{
 					Cache.Admissible.Add(Index);
 				}
 				else if (Cache.FirstRefused == INDEX_NONE)
 				{
 					Cache.FirstRefusal = Why;
+					Cache.FirstRefusalSentence = MoveTemp(Sentence);
 					Cache.FirstRefused = Index;
 				}
 			}
@@ -145,6 +156,10 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 			Admissible.Add(&Each.Fleet[Index]);
 		}
 		const EArrivalRefusal FirstRefusal = Cache.FirstRefusal;
+		// THE PLAN'S SENTENCE, with its figures, when there is one (#396); the reason's own wording
+		// otherwise.
+		const FString FirstRefusalText = Cache.FirstRefusalSentence.IsEmpty()
+			? ArrivalPlanner::DescribeRefusal(FirstRefusal) : Cache.FirstRefusalSentence;
 		const FOfferCandidate* FirstRefused = Cache.FirstRefused != INDEX_NONE ? &Each.Fleet[Cache.FirstRefused] : nullptr;
 
 		if (Admissible.Num() == 0)
@@ -160,7 +175,7 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 				UE_LOG(LogAirportOps, Log,
 					TEXT("Offers: %s cannot use this airport. %s (the first refused, %s, has a %.0f uu "
 						"wingspan and wants %.0f uu of runway)"),
-					*Airline.DisplayName.ToString(), *ArrivalPlanner::DescribeRefusal(FirstRefusal),
+					*Airline.DisplayName.ToString(), *FirstRefusalText,
 					FirstRefused != nullptr ? *FirstRefused->TypeName.ToString() : TEXT("none"),
 					FirstRefused != nullptr ? FirstRefused->Airframe.Wingspan : 0.0,
 					FirstRefused != nullptr ? FirstRefused->Airframe.Requirements.LandingFieldLength : 0.0);

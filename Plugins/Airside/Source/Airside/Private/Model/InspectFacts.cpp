@@ -73,6 +73,8 @@ namespace InspectFacts
 			return Agent.LastMotion.bAirborne ? TEXT("Climbing") : TEXT("Rolling");
 		case EAgentPhase::Gone:
 			return TEXT("Gone");
+		case EAgentPhase::Stranded:
+			return TEXT("Stranded - retire it");
 		case EAgentPhase::Taxiing:
 		default:
 			return TEXT("Taxiing");

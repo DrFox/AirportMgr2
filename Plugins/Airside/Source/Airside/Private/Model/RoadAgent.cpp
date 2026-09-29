@@ -257,6 +257,7 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// the follower once a departure has cleared, so its last figure is not a fact about
 	// either resting phase.
 	case EAgentPhase::Parked:
+	case EAgentPhase::Stranded:
 	case EAgentPhase::Gone:        Motion.GroundSpeed = 0.0; break;
 	default:                       Motion.GroundSpeed = Follower.Speed;  break;
 	}
@@ -535,6 +536,20 @@ void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled, TO
 	}
 }
 
+void FRoadAgent::RejoinTaxi(const FRoutePlan& Plan, double InitialTravelled, const FVector2D& At)
+{
+	// READ BEFORE Start, which overwrites the follower's speed with its argument.
+	const double Speed = Follower.Speed;
+	const double Heading = LastMotion.Heading;
+	Phase = EAgentPhase::Taxiing;
+	Follower.Start(Plan, Chassis(), Speed, Heading, InitialTravelled);
+	bEngineRunning = true;
+
+	// LastMotion KEPT, not reset as RestartTaxi resets it: it is the same body mid-roll, and the
+	// view reads its ground speed. Only the position moves, onto the new line.
+	LastMotion.Position = At;
+}
+
 void FRoadAgent::MarkTaxiOutStale()
 {
 	bTaxiOutStale = true;
@@ -653,9 +668,9 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// guideline graph while this aircraft was on final, and UGroundTraffic::ReResolvePlan
 		// could not find live pavement for TaxiInPlan - so it marked it Unreachable (see
 		// OnGraphRebuilt). Start() on an invalid plan leaves the follower already arrived, so
-		// the aircraft becomes Taxiing and then Parked on the next tick, at the exit it
-		// vacated to, and ClaimAhead's invalid-plan branch hands the strip back. That is the
-		// intended outcome - a parked aeroplane off the runway, with a Warning in the log
+		// the aircraft becomes Taxiing and then Stranded (not Parked: issue #396) on the next
+		// tick, at the exit it vacated to, and ClaimAhead's invalid-plan branch hands the strip
+		// back. That is the intended outcome - a stopped aeroplane off the runway, with a Warning in the log
 		// naming it - and not a runway blocked by an aircraft with nowhere to go.
 		//
 		// STARTED FROM Airframe, THE AGENT'S OWN FIELD: the follower used to store its own
@@ -864,6 +879,24 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 				// but parking one frame late is a safer failure than flying a departure
 				// that just refused itself.
 			}
+			else if (!Follower.Plan.IsDrivable())
+			{
+				// STRANDED, NOT PARKED (issue #396). "Arrived" here means only that the plan died
+				// under it - FRouteFollower::HasArrived is true for any plan that is not drivable,
+				// and DispatchAgent refuses one, so this is a rebuild's Strand (or a taxi-in it
+				// stranded before the landing handed over). The agent is not at its goal, and
+				// Parked would tell every listener it was: the ops layer reads GoalNode as the
+				// stand it parked on. It stands where it is, zero speed, until it is retired or a
+				// stand re-offer redirects it.
+				// ENFORCED BY: Airside.Model.Traffic.StrandedIsNotParked
+				Phase = EAgentPhase::Stranded;
+				Follower.Speed = 0.0;
+				LastMotion = DescribeMotion(FollowAt, FollowHeading);
+				OutMotion = LastMotion;
+				UE_LOG(LogAirsideTraffic, Warning,
+					TEXT("Agent %d stranded at (%.0f, %.0f), short of its goal; it waits here to be retired."),
+					Id, FollowAt.X, FollowAt.Y);
+			}
 			else
 			{
 				// PARKED: the taxi is over, so the turnaround starts. Reached only once -
@@ -1022,6 +1055,15 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			}
 		}
 
+		LastMotion = DescribeMotion(At, Heading, Altitude, Pitch);
+		OutMotion = LastMotion;
+		return true;
+	}
+
+	case EAgentPhase::Stranded:
+	{
+		// HELD WHERE IT STOPPED - nothing drives it. The engine keeps running: a crew stuck on a
+		// taxiway does not shut down, and the shutdown pause is a stand's.
 		LastMotion = DescribeMotion(At, Heading, Altitude, Pitch);
 		OutMotion = LastMotion;
 		return true;

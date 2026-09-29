@@ -29,6 +29,12 @@ EFlightPhase FlightPhaseFromAgent(EAgentPhase To, EFlightPhase Current)
 	case EAgentPhase::Gone:
 		return EFlightPhase::Departed;
 
+	case EAgentPhase::Stranded:
+		// NOWHERE, by name rather than by the default (issue #396): the aeroplane stopped short of
+		// its stand, so no turnaround has started, and the flight reads the taxi it was in until the
+		// player retires the aeroplane. Turnaround here was the stranded-at-the-stand bug.
+		return Current;
+
 	default:
 		// Unchanged rather than a guess. A phase this does not know about must not move a
 		// flight backwards through states the inbox is showing.

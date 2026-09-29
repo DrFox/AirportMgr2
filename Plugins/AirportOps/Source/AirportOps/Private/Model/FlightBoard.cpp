@@ -548,7 +548,26 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 		return;
 	}
 
+	// SAID, every change (issue #396): a panel that seemed to desync after a stranding could be
+	// neither confirmed nor ruled out from the log, because nothing here logged a phase. Changes
+	// only - OnAgentPhase hears every agent phase, and most move a flight nowhere.
+	const EFlightPhase WasPhase = Flight->Phase;
 	Flight->Phase = FlightPhaseFromAgent(To, Flight->Phase);
+	if (Flight->Phase != WasPhase)
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): %s -> %s (agent %d %s -> %s)"),
+			Flight->Id, *Flight->Callsign, *UEnum::GetValueAsString(WasPhase), *UEnum::GetValueAsString(Flight->Phase),
+			AgentId, *UEnum::GetValueAsString(From), *UEnum::GetValueAsString(To));
+	}
+	else if (To == EAgentPhase::Stranded)
+	{
+		// A STRANDED AEROPLANE MOVES ITS FLIGHT NOWHERE - FlightPhaseFromAgent's default. It is not
+		// at its stand, so no turnaround starts; the flight stays in its taxi until the player
+		// retires the aeroplane. Said, because it is the one agent phase change here with no
+		// flight phase change to show for it.
+		UE_LOG(LogAirportOps, Warning, TEXT("Flight %d (%s): its aircraft (agent %d) is stranded in %s; retire it to free the flight"),
+			Flight->Id, *Flight->Callsign, AgentId, *UEnum::GetValueAsString(Flight->Phase));
+	}
 
 	if (To == EAgentPhase::Parked)
 	{

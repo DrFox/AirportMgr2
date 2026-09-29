@@ -1918,6 +1918,171 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRebuildSplitUnderTheAgentTest,
+	"Airside.Model.Traffic.RebuildSplitUnderTheAgent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRebuildSplitUnderTheAgentTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #396, REPORTED FROM PLAY 2026-09-28: linking a new exit to a taxiway puts a junction
+	// on it, so the edge an aeroplane is taxiing along becomes two edges with a node between them.
+	// Re-resolve asked for ONE edge between the step's two old ends, found none, and stranded the
+	// aeroplane for good as if "the pavement under it was deleted" - which it was not. The same
+	// ground is still there, under the wheels; only the handles changed.
+	//
+	// THREE SHAPES OF ONE EDIT, all on the step the aircraft is ON (a split AHEAD of it already
+	// replanned): the new node ahead of it, the new node behind it, and the node its step leaves
+	// from moved back along the same line - the "no live node holds the position its current
+	// step starts from" stranding of the same report.
+	struct FCase { const TCHAR* Name; double SplitAt; double MovedB; };
+	const FCase Cases[] = {
+		{ TEXT("split ahead of it"), 30000.0, 20000.0 },
+		{ TEXT("split behind it"), 22000.0, 20000.0 },
+		{ TEXT("its step's start moved back along the line"), 0.0, 15000.0 },
+	};
+	for (const FCase& Case : Cases)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+		const FGuidelineNodeId B = TestGraph::Node(*Net, 20000.0, 0.0);
+		const FGuidelineNodeId C = TestGraph::Node(*Net, 40000.0, 0.0);
+		TestGraph::Join(*Net, A, B);
+		TestGraph::Join(*Net, B, C);
+
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft),
+			TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+		if (!TestTrue(FString::Printf(TEXT("%s: dispatched"), Case.Name), Plane > 0)) { return false; }
+
+		// ON STEP 1 (B -> C), between every case's new node and the end.
+		TickUntil(*Traffic, *Net, 300.0, [&](int32)
+		{
+			const FRoadAgent* P = Traffic->FindAgent(Plane);
+			return P != nullptr && P->LastMotion.Position.X < 24000.0;
+		});
+		const FRoadAgent* Before = Traffic->FindAgent(Plane);
+		if (!TestNotNull(FString::Printf(TEXT("%s: still under way"), Case.Name), Before)) { return false; }
+		const FVector2D WasAt = Before->LastMotion.Position;
+		const double WasSpeed = Before->Follower.Speed;
+		if (!TestTrue(FString::Printf(TEXT("%s: taxiing on B -> C at %.0f, %.0f uu/s"), Case.Name, WasAt.X, WasSpeed),
+			WasAt.X >= 24000.0 && WasAt.X < 29000.0 && WasSpeed > 0.0)) { return false; }
+
+		// THE BUILDER'S WAY: every node and edge removed and re-added with NEW handles - see
+		// Airside.Model.Traffic.GraphRebuild - with the one edit the case names.
+		TArray<FGuidelineEdgeId> Edges;
+		for (int32 I = 0; I < Net->GetGuidelineEdges().Num(); ++I)
+		{
+			if (Net->GetGuidelineEdges()[I].bAlive) { Edges.Add(Net->GuidelineEdgeIdAt(I)); }
+		}
+		for (const FGuidelineEdgeId Id : Edges) { Net->RemoveGuidelineEdge(Id); }
+		for (int32 I = 0; I < Net->GetGuidelineNodes().Num(); ++I)
+		{
+			if (Net->GetGuidelineNodes()[I].bAlive) { Net->RemoveGuidelineNode(Net->GuidelineNodeIdAt(I)); }
+		}
+		const FGuidelineNodeId A2 = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+		const FGuidelineNodeId B2 = Net->AddGuidelineNode(FVector2D(Case.MovedB, 0.0));
+		const FGuidelineNodeId C2 = Net->AddGuidelineNode(FVector2D(40000.0, 0.0));
+		TestGraph::Join(*Net, A2, B2);
+		if (Case.SplitAt > 0.0)
+		{
+			const FGuidelineNodeId M = Net->AddGuidelineNode(FVector2D(Case.SplitAt, 0.0));
+			TestGraph::Join(*Net, B2, M);
+			TestGraph::Join(*Net, M, C2);
+		}
+		else
+		{
+			TestGraph::Join(*Net, B2, C2);
+		}
+		Traffic->OnGraphRebuilt(*Net);
+		const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();
+		UE_LOG(LogAirsideTests, Log,
+			TEXT("RebuildSplitUnderTheAgent %s: %d re-resolved, %d replanned, %d truncated, %d stranded"),
+			Case.Name, Summary.ReResolved, Summary.Replanned, Summary.Truncated, Summary.Stranded);
+		TestEqual(FString::Printf(TEXT("%s: NOT stranded - the ground under it is still there"), Case.Name),
+			Summary.Stranded, 0);
+
+		// NO JUMP, AND IT KEEPS ROLLING: one tick's travel at twice the speed it had is the budget
+		// per frame, and it reaches C and parks there - the stand, in the game.
+		const double PerTick = FMath::Max(WasSpeed, 1.0) * 2.0 * 0.05 + 1.0;
+		double MaxStep = 0.0;
+		double SpeedAfter = -1.0;
+		FVector2D Last = WasAt;
+		TickUntil(*Traffic, *Net, 300.0, [&](int32 Tick)
+		{
+			const FRoadAgent* Q = Traffic->FindAgent(Plane);
+			if (Q == nullptr) { return false; }
+			if (Tick == 0) { SpeedAfter = Q->Follower.Speed; }
+			MaxStep = FMath::Max(MaxStep, FVector2D::Distance(Last, Q->LastMotion.Position));
+			Last = Q->LastMotion.Position;
+			return Q->Phase == EAgentPhase::Taxiing;
+		});
+		const FRoadAgent* After = Traffic->FindAgent(Plane);
+		if (!TestNotNull(FString::Printf(TEXT("%s: still there"), Case.Name), After)) { return false; }
+		UE_LOG(LogAirsideTests, Log,
+			TEXT("RebuildSplitUnderTheAgent %s: max step %.1f uu (budget %.1f), speed %.0f -> %.0f, ended %s at (%.0f, %.0f)"),
+			Case.Name, MaxStep, PerTick, WasSpeed, SpeedAfter, *UEnum::GetValueAsString(After->Phase),
+			After->LastMotion.Position.X, After->LastMotion.Position.Y);
+		TestTrue(FString::Printf(TEXT("%s: no jump (max %.1f uu per tick, budget %.1f)"), Case.Name, MaxStep, PerTick),
+			MaxStep <= PerTick);
+		TestTrue(FString::Printf(TEXT("%s: it did not stop dead at the rebuild (%.0f -> %.0f uu/s)"), Case.Name, WasSpeed, SpeedAfter),
+			SpeedAfter >= WasSpeed * 0.5);
+		TestEqual(FString::Printf(TEXT("%s: it parks"), Case.Name), After->Phase, EAgentPhase::Parked);
+		TestTrue(FString::Printf(TEXT("%s: AT C, where it was going (%.0f uu off)"), Case.Name,
+			FVector2D::Distance(After->LastMotion.Position, FVector2D(40000.0, 0.0))),
+			FVector2D::Distance(After->LastMotion.Position, FVector2D(40000.0, 0.0)) < 100.0);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficStrandedIsNotParkedTest,
+	"Airside.Model.Traffic.StrandedIsNotParked",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficStrandedIsNotParkedTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #396: a stranded plan counts as ARRIVED (FRouteFollower::HasArrived: not drivable), so
+	// an aeroplane stranded half way along a taxiway went to Parked on the spot with its GoalNode
+	// still the stand - and the ops layer, which reads GoalNode as the stand it parked at, fuelled
+	// an empty stand and later pushed the aeroplane back from it: the visible jump. A stranding is
+	// its own phase, and nothing hears Parked.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 20000.0, 0.0);
+	TestGraph::Join(*Net, A, B);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+		TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+	TArray<EAgentPhase> Heard;
+	Traffic->OnAgentPhaseChanged.AddLambda([&](int32 Id, EAgentPhase, EAgentPhase To)
+	{
+		if (Id == Plane) { Heard.Add(To); }
+	});
+
+	TickUntil(*Traffic, *Net, 5.0, [](int32) { return true; });
+	const FVector2D WasAt = Traffic->FindAgent(Plane)->LastMotion.Position;
+	if (!TestTrue(TEXT("stranded"), FGroundTrafficTestAccess(*Traffic).Strand(Plane))) { return false; }
+	TickUntil(*Traffic, *Net, 3.0, [](int32) { return true; });
+
+	const FRoadAgent* P = Traffic->FindAgent(Plane);
+	if (!TestNotNull(TEXT("a stranded agent stays until it is retired"), P)) { return false; }
+	TestEqual(TEXT("its phase says STRANDED"), P->Phase, EAgentPhase::Stranded);
+	TestFalse(TEXT("and nothing ever heard Parked"), Heard.Contains(EAgentPhase::Parked));
+	TestTrue(TEXT("and what was heard was Stranded"), Heard.Contains(EAgentPhase::Stranded));
+	TestTrue(TEXT("it stands where it stopped, well short of its goal"),
+		FVector2D::Distance(P->LastMotion.Position, WasAt) < 100.0
+			&& FVector2D::Distance(P->LastMotion.Position, FVector2D(20000.0, 0.0)) > 1000.0);
+	TestEqual(TEXT("it cannot be told to depart - it is at no stand"),
+		Traffic->DepartAgent(Plane, *Net), EDepartureRefusal::NotParked);
+	TestTrue(TEXT("and the player can still retire it"), Traffic->RetireAgent(Plane));
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTrafficDeadPlanReleasesTest,
 	"Airside.Model.Traffic.DeadPlanReleases",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -2067,10 +2232,10 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 				TestEqual(TEXT("and a landing offered in that same frame is refused: RunwayOccupied"),
 					Landing.Why, EArrivalRefusal::RunwayOccupied);
 
-				// AND IT KEEPS IT AFTER IT PARKS, WHICH IS THE FRAME THAT MATTERED.
+				// AND IT KEEPS IT AFTER IT STOPS, WHICH IS THE FRAME THAT MATTERED.
 				//
 				// An invalid plan makes FRouteFollower::HasArrived true, so this agent is
-				// Parked by the end of the very tick that stranded it, and from the next tick
+				// Stranded (Parked before issue #396) by the end of the very tick that stranded it, and from the next tick
 				// on it takes ClaimAhead's non-Taxiing branch. That branch used to hold
 				// RunwayHeld and nothing else - and RunwayHeld is empty on an agent that
 				// never landed - so the strip it is physically standing on came free one tick
@@ -2085,8 +2250,8 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 						*UEnum::GetValueAsString(Parked->Phase), static_cast<int32>(Parked->GetCrossingPhase()),
 						Air->GetOccupancy().IsHeld(Strip, 0) ? TEXT("HELD") : TEXT("free"));
 
-					TestEqual(TEXT("and it has parked where it stood"), Parked->Phase, EAgentPhase::Parked);
-					TestTrue(TEXT("a PARKED aircraft still holds the strip its body is on"),
+					TestEqual(TEXT("and it is stranded where it stood - not parked, it is at no stand (#396)"), Parked->Phase, EAgentPhase::Stranded);
+					TestTrue(TEXT("a STRANDED aircraft still holds the strip its body is on"),
 						Air->GetOccupancy().IsHeld(Strip, /*ExcludingAgent=*/0));
 
 					const FArrivalPlan Later = ArrivalPlanner::Plan(*Cross, FVector2D(-51000.0, 0.0),

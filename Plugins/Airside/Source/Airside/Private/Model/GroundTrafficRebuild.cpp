@@ -373,7 +373,9 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		// Depart, a stand re-offer) would start at a dead handle and fail for ever. The stand
 		// pose node itself is authored and survives, so this changes nothing for an aircraft
 		// parked on a stand.
-		if (Agent.Phase == EAgentPhase::Parked && Network.GetGuidelineNode(Agent.GoalNode) == nullptr)
+		// AND A STRANDED ONE'S (#396), which a waiting taxi-in re-offer searches from.
+		if ((Agent.Phase == EAgentPhase::Parked || Agent.Phase == EAgentPhase::Stranded)
+			&& Network.GetGuidelineNode(Agent.GoalNode) == nullptr)
 		{
 			const FGuidelineNodeId Here = RouteSearch::FindNearestNode(
 				Network, Agent.LastMotion.Position, Agent.Class, Rules.ResolveRadius, &NodeIndex);
@@ -519,14 +521,27 @@ namespace
 	constexpr double FlipRejoinRadius = 1000.0;
 
 	/**
-	 * After a drive-side flip: the nearest point, within FlipRejoinRadius of the vehicle, on an
-	 * edge running the way it was driving with a route to its goal from there; that route and
-	 * how far along its first step the point is. The vehicle hops sideways onto it - a visible
-	 * 3-4 m jump, once, on a deliberate airport-wide setting change; the alternative was
-	 * stranding every truck on the road.
+	 * How far a driving agent whose own step no longer re-resolves may be moved onto a live edge
+	 * running its way, uu: 3 m. Issue #396: linking a new exit to a taxiway SPLITS the edge under
+	 * a taxiing aeroplane - same ground, two edges and a junction node where there was one edge -
+	 * and re-resolve, which matches a step by its two end nodes, found no edge between them and
+	 * stranded it as if the pavement had gone. A split leaves the line where it was (0 uu on
+	 * Airside.Model.Traffic.RebuildSplitUnderTheAgent); 3 m is the drive-side flip's own accepted
+	 * jump, for a re-fitted curve. Deleted pavement has nothing this close running the same way -
+	 * GraphRebuild's case 5 bypass is 3123 uu off - so it still strands.
 	 */
-	bool RejoinAfterFlip(FRoadAgent& Agent, const FRoutePlan& Plan, const FTrafficContext& Context,
-		FRoutePlan& OutPlan, double& OutTravelled, FVector2D& OutAt)
+	constexpr double SplitRejoinRadius = 300.0;
+
+	/**
+	 * The nearest point, within Radius of the agent, on an edge running the way it is facing with
+	 * a route to its goal from there; that route and how far along its first step the point is.
+	 * The agent hops onto it. Two callers: a drive-side flip (FlipRejoinRadius - a visible 3-4 m
+	 * jump, once, on a deliberate airport-wide setting change; the alternative was stranding every
+	 * truck on the road), and a step that no longer re-resolves under a driving agent
+	 * (SplitRejoinRadius - see there).
+	 */
+	bool RejoinNearby(FRoadAgent& Agent, const FRoutePlan& Plan, const FTrafficContext& Context,
+		double Radius, FRoutePlan& OutPlan, double& OutTravelled, FVector2D& OutAt)
 	{
 		const URoadNetwork& Network = Context.Network;
 		const FVector2D Here = Agent.LastMotion.Position;
@@ -586,7 +601,9 @@ namespace
 		// A LINEAR SCAN, sampling every edge, once per driving vehicle, once per flip -
 		// O(vehicles x edges x samples), UNMEASURED on 2026-09-23 and accepted because a flip
 		// is a deliberate, rare setting change. Bound it with a spatial index before anything
-		// makes a flip cheap to repeat.
+		// makes a flip cheap to repeat. The split caller (#396) pays it only for an agent whose
+		// OWN step failed to re-resolve - one or two per edit - on a graph of 49 edges in the
+		// report's airport (2026-09-28).
 		struct FCandidate
 		{
 			FGuidelineEdgeId Edge;
@@ -613,7 +630,7 @@ namespace
 			int32 Span = 0;
 			double Fraction = 0.0;
 			const double Distance = GuidelineGeom::NearestOnPolyline(Points, Here, Span, Fraction);
-			if (Distance > FlipRejoinRadius)
+			if (Distance > Radius)
 			{
 				continue;
 			}
@@ -716,7 +733,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// neither has stopped being true because a route died. Cleared here (which is what
 		// this did) they would have contradicted the claim that is now kept, and the log line
 		// that announced the release would have been a log that lies. They are cleared
-		// together with the claim by FClaimPass::Run's non-Taxiing branch once the agent parks.
+		// together with the claim by FClaimPass::Run's non-Taxiing branch once the agent is Stranded.
 
 		// A STRANDING IS FINAL, and that is a deliberate v1 limitation rather than an oversight.
 		// Result is now Unreachable, so OnGraphRebuilt's own "!Plan->IsValid()" filter skips
@@ -749,6 +766,38 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		return EReResolve::Stranded;
 	};
 
+	// THE STEP UNDER A DRIVING AGENT DID NOT RE-RESOLVE, BUT THE GROUND MAY STILL BE THERE - issue
+	// #396. Re-resolve matches a step by its two end nodes, so a step whose edge was SPLIT (a new
+	// junction on it) or whose start node moved along the same line fails the match with the
+	// pavement intact, and was stranded as if it had been deleted. Asked of the pavement instead:
+	// is there a live edge under the agent, running its way, with a route to its goal? Then it
+	// carries on along that - same speed, same heading, same engine - and only when nothing is
+	// there within SplitRejoinRadius is it stranded. The same aftermath as the flip's rejoin
+	// below, and the same reason: a new route owns none of the old one's reservations.
+	// ENFORCED BY: Airside.Model.Traffic.RebuildSplitUnderTheAgent
+	auto RejoinInPlace = [&Agent, &Plan, &Context, &Occupancy]()
+	{
+		FRoutePlan Rejoined;
+		double Travelled = 0.0;
+		FVector2D At = FVector2D::ZeroVector;
+		if (!RejoinNearby(Agent, Plan, Context, SplitRejoinRadius, Rejoined, Travelled, At))
+		{
+			return false;
+		}
+		const double Sideways = FVector2D::Distance(Agent.LastMotion.Position, At);
+		Occupancy.ReleaseReservations(Agent.Id);
+		Occupancy.ReleaseGuidelineClaimsOf(Agent.Id);
+		Agent.ClearArbitration();
+		Agent.ResetStall();
+		const FGuidelineNodeId Goal = Agent.GoalNode;
+		Agent.RejoinTaxi(Rejoined, Travelled, At);
+		Agent.SetGoal(Goal);
+		UE_LOG(LogAirsideTraffic, Log,
+			TEXT("Agent %d rejoined the pavement under it after the rebuild: %.0f uu sideways, %.0f uu to go"),
+			Agent.Id, Sideways, Rejoined.Length - Travelled);
+		return true;
+	};
+
 	// Defensive, and both callers already check: this function indexes Polyline off step
 	// vertices, and an out-of-range read here would be a crash in the middle of a rebuild.
 	// STRANDED rather than Intact, because a caller bug counted as a clean re-resolution is
@@ -768,7 +817,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		FRoutePlan Rejoined;
 		double Travelled = 0.0;
 		FVector2D At = FVector2D::ZeroVector;
-		if (!RejoinAfterFlip(Agent, Plan, Context, Rejoined, Travelled, At))
+		if (!RejoinNearby(Agent, Plan, Context, FlipRejoinRadius, Rejoined, Travelled, At))
 		{
 			return Strand(TEXT("the drive side flipped and no lane running its way reaches its goal"));
 		}
@@ -798,6 +847,10 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	FGuidelineNodeId Prev = RouteSearch::FindNearestNode(Network, Plan.Polyline[FromVertex], Agent.Class, Radius, &NodeIndex);
 	if (!Prev.IsSet())
 	{
+		if (bDriving && RejoinInPlace())
+		{
+			return EReResolve::Replanned;
+		}
 		return Strand(TEXT("no live node holds the position its current step starts from"));
 	}
 
@@ -1058,8 +1111,17 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		//
 		// So the agent stops where it is, keeps its runway claim if it has one, and the
 		// player retires it. See Strand.
+		//
+		// UNLESS THE PAVEMENT IS STILL UNDER IT (issue #396): a split or a moved node fails the
+		// step match with the ground intact, and a rejoin onto the live edge beneath it is a
+		// new route from where it IS - not Travelled re-read on other geometry - so none of the
+		// above applies to it. See RejoinInPlace.
 		if (Failed == FromStep)
 		{
+			if (RejoinInPlace())
+			{
+				return EReResolve::Replanned;
+			}
 			return Strand(TEXT("the step it is driving on is gone - the pavement under it was deleted"));
 		}
 
