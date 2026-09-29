@@ -74,4 +74,32 @@ bool FAirportOpsSettingsResolveDefaultScenarioTest::RunTest(const FString& Param
 	return true;
 }
 
+
+/**
+ * THE PROJECT'S OWN CONFIGURATION, measured - not the function, which the test above does with a settings
+ * CDO it overrides. Spec 2026-09-29-ops-batch3 §2: until DA_Scenario_Default existed, Content/Ops did not,
+ * and every figure a designer might tune was a constructor default nobody could see in the editor. This goes
+ * red if the asset is deleted, renamed, moved out of the /Game/Ops scan, or the ini line is dropped.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAirportOpsDefaultScenarioIsTheAssetTest,
+	"AirportOps.Content.DefaultScenarioIsTheAsset",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAirportOpsDefaultScenarioIsTheAssetTest::RunTest(const FString& Parameters)
+{
+	// A FRESH CATALOG, loaded the one way the runtime loads one (UOpsRuntime::Attach).
+	UOpsCatalog* Catalog = NewObject<UOpsCatalog>();
+	Catalog->LoadFromAssetManager();
+	const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario(*Catalog);
+	if (!TestNotNull(TEXT("the default scenario resolves"), Scenario)) { return false; }
+	TestTrue(TEXT("to an asset, not UScenario's CDO - the tuning is editable in the Details panel"), Scenario != GetDefault<UScenario>());
+	TestEqual(TEXT("the asset build_scenario.py creates"), Scenario->GetName(), FString(TEXT("DA_Scenario_Default")));
+	// BUILT FROM THE DEFAULTS: the asset starts as the CDO's figures, so creating it changed no number in play.
+	TestEqual(TEXT("carrying the constructor's shortfall penalty"),
+		Scenario->AirlineSatisfaction.ShortfallPenalty, GetDefault<UScenario>()->AirlineSatisfaction.ShortfallPenalty, 1e-12);
+	TestEqual(TEXT("and the constructor's opening balance"), Scenario->StartingBalance, GetDefault<UScenario>()->StartingBalance, 1e-6);
+	return true;
+}
+
 #endif
