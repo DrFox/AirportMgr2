@@ -105,6 +105,36 @@ FUnstickVerdict UOpsRuntime::Unstick(int32 AgentId, EUnstickAction Action)
 	return Verdict;
 }
 
+FFacilityQuote UOpsRuntime::QuoteFacility(FEntityInstanceId Entity) const
+{
+	return Target != nullptr && Target->Network != nullptr ? FacilityPurchases->Quote(*Target->Network, Entity) : FFacilityQuote();
+}
+
+FPurchaseResult UOpsRuntime::BuyModule(FEntityInstanceId Entity, EDepotModule Module)
+{
+	if (Target == nullptr || Target->Network == nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Purchase refused: depot %d - no airport attached"), Entity.Index);
+		return FPurchaseResult{ EPurchaseRefusal::NotAFacility };
+	}
+	return FacilityPurchases->BuyModule(*Target->Network, Entity, Module);
+}
+
+FPurchaseResult UOpsRuntime::BuyVehicle(FEntityInstanceId Entity, FName TypeCode)
+{
+	if (Target == nullptr || Target->Network == nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Purchase refused: depot %d - no airport attached"), Entity.Index);
+		return FPurchaseResult{ EPurchaseRefusal::NotAFacility };
+	}
+	return FacilityPurchases->BuyVehicle(*Target->Network, Entity, TypeCode);
+}
+
+FPurchaseResult UOpsRuntime::SellVehicle(int32 VehicleId)
+{
+	return FacilityPurchases->SellVehicle(VehicleId);
+}
+
 TArray<FAirlineOffers> UOpsRuntime::AirlineOffersFromCatalog() const
 {
 	// THE CROSSING. Model/ may not read a UAircraftType, so the definitions are flattened
@@ -216,6 +246,13 @@ void UOpsRuntime::WireBus()
 	// THE PLAYER DREW SOMETHING: a new depot seeds its fleet, a refused job may be servable now.
 	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
 		[this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
+	// A VEHICLE BOUGHT OR SOLD, A MODULE BOUGHT: the board's candidates changed, and a job waiting on an
+	// empty depot meets the new vehicle on this drain's pass - nothing polls (facility-upgrades spec §3).
+	// ENFORCED BY: AirportOps.Present.Facility.PurchaseWakesTheBoard
+	Bus.Subscribe<FFleetChangedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
+		[this](const FFleetChangedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
+	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
+		[this](const FFacilityUpgradedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
 
 	// THE JOB BOARD'S WHOLE SEQUENCE, as one pass (stage 3 - see UJobBoard::Step for why it stays one
 	// sequence). It runs when something above marked it, when its deadline comes due, or - while it

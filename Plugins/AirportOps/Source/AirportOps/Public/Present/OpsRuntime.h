@@ -91,6 +91,16 @@ public:
 	UFacilityPurchases* GetFacilityPurchases() const { return FacilityPurchases; }
 
 	/**
+	 * FORWARDERS to UFacilityPurchases with this runtime's network - the one the driver does not hold, as
+	 * CanUnstick supplies it. Refused NotAFacility when unattached. Logic lives in UFacilityPurchases.
+	 * ENFORCED BY: AirportOps.Present.Facility.PurchaseWakesTheBoard, AirportOps.Present.Facility.AttachCopiesTheOffers
+	 */
+	FFacilityQuote QuoteFacility(FEntityInstanceId Entity) const;
+	FPurchaseResult BuyModule(FEntityInstanceId Entity, EDepotModule Module);
+	FPurchaseResult BuyVehicle(FEntityInstanceId Entity, FName TypeCode);
+	FPurchaseResult SellVehicle(int32 VehicleId);
+
+	/**
 	 * FORWARDERS to UAgentRescue with this runtime's traffic, network and clock - the three the driver
 	 * does not hold, as LandNear supplies them. Refused ("Nothing selected"-shaped) when unattached.
 	 * ENFORCED BY: AirportOps.Present.UnstickForwards

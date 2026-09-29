@@ -374,6 +374,7 @@ int32 UJobBoard::AddPurchasedVehicle(FName TypeCode, FEntityInstanceId Home)
 
 	// A NEW VEHICLE IS A CHANGE A REFUSED JOB CAN ANSWER DIFFERENTLY - see the header. Re-opened, not bid
 	// here: the next Step bids it, in its one sequence (the bus's FleetChanged wakes that pass).
+	// ENFORCED BY: AirportOps.Present.Facility.PurchaseWakesTheBoard
 	int32 Reopened = 0;
 	for (FServiceJob& Job : Jobs)
 	{

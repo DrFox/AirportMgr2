@@ -191,6 +191,8 @@ public:
 	 * The depot modules the player can buy, and what each grants. Copied into UFacilityPurchases at
 	 * attach. THE SHED ONLY this slice (spec 2026-09-29-facility-upgrades §1: pumps and tanks are out of
 	 * scope) - a module with no row here is not for sale, and its buy is refused UnknownType.
+	 * ENFORCED BY: AirportOps.Present.Facility.AttachCopiesTheOffers (the copy),
+	 * AirportOps.Model.Facility.RefusalsChargeAndPublishNothing ("UnknownType module (no offer)")
 	 */
 	UPROPERTY(EditAnywhere, Category = "Facilities")
 	TMap<EDepotModule, FModuleOffer> ModuleOffers = {
