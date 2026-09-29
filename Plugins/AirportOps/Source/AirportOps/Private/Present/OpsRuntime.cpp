@@ -56,6 +56,15 @@ UOpsRuntime::UOpsRuntime()
 	AgentRescue = CreateDefaultSubobject<UAgentRescue>(TEXT("AgentRescue"));
 	AgentRescue->JobBoard = JobBoard;
 	AgentRescue->FlightBoard = FlightBoard;
+
+	// PURCHASES, the same shape: a pointer, and the owners it commands - the board owns the fleet, the
+	// ledger the money. The world hooks are Attach's (they need the actor).
+	FacilityPurchases = CreateDefaultSubobject<UFacilityPurchases>(TEXT("FacilityPurchases"));
+	FacilityPurchases->JobBoard = JobBoard;
+	FacilityPurchases->Ledger = Ledger;
+	FacilityPurchases->Pricing = Pricing;
+	FacilityPurchases->Clock = Clock;
+	FacilityPurchases->Bus = &Bus;
 }
 
 void UOpsRuntime::SeedAirlines()
@@ -298,6 +307,22 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FBalanceSignChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FBalanceSignChangedEvent& E) { Events->OnBalanceSignChanged.Broadcast(E.bOverdrawn); });
 
+	// THE PURCHASE TOASTS - through the notification face every other toast uses, not a delegate of their
+	// own (§6 deviation 4: nothing would bind one; the inspector re-reads the quote anyway).
+	Bus.Subscribe<FFleetChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FFleetChangedEvent& E)
+	{
+		const FFuelVehicleSpec Spec = JobBoard->SpecFor(E.TypeCode);
+		const FString Name = Spec.DisplayName.IsEmpty() ? E.TypeCode.ToString() : Spec.DisplayName.ToString();
+		Events->NotifyNotification(FString::Printf(TEXT("%s %s \u2014 %s"),
+			E.Change == EFleetChange::Bought ? TEXT("Bought") : TEXT("Sold"), *Name, *Pricing->Format(E.Amount).ToString()));
+	});
+	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FFacilityUpgradedEvent& E)
+	{
+		const FModuleOffer* Offer = FacilityPurchases->ModuleOffers.Find(E.Module);
+		const FString Name = Offer != nullptr ? Offer->DisplayName.ToString() : UEnum::GetValueAsString(E.Module);
+		Events->NotifyNotification(FString::Printf(TEXT("Bought %s \u2014 %s"), *Name, *Pricing->Format(E.Amount).ToString()));
+	});
+
 	Bus.EndWiring();
 }
 
@@ -380,6 +405,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		// is the one somebody forgot to copy.
 		JobBoard->VehicleSpecs = Scenario->FuelVehicles;
 		JobBoard->RefillLitresPerMinutePerPump = Scenario->DepotRefillLitresPerMinutePerPump;
+		FacilityPurchases->ModuleOffers = Scenario->ModuleOffers;
 		OfferGenerator->MaxPendingOffers = Scenario->MaxPendingOffers;
 		Airlines->Tuning = Scenario->AirlineSatisfaction;
 		// A NEW GAME, like the ledger's Open below: an airport attached afresh starts every airline at

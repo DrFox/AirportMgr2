@@ -172,8 +172,11 @@ double ULedger::PriceOf(const FBuildQuote& Quote) const
 
 bool ULedger::CanAfford(const FBuildQuote& Quote) const
 {
-	const double Price = PriceOf(Quote);
+	return CanPay(PriceOf(Quote));
+}
 
+bool ULedger::CanPay(double Price) const
+{
 	// A FREE EDIT IS ALWAYS ALLOWED, even under water, and the check has to come first: with a
 	// balance of -1000, "0 <= -1000" is false, so a plain comparison would refuse to split a
 	// segment or name a runway for a player who cannot pay their upkeep. Locking PLACEMENT is

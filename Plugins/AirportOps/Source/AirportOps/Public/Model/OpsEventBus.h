@@ -9,6 +9,7 @@
 #include "Model/Ledger.h"
 #include "Model/OpsAlerts.h"
 #include "Model/RoadAgent.h"
+#include "Model/RoadEntity.h"
 #include "Model/SimClock.h"
 
 /**
@@ -142,6 +143,38 @@ struct AIRPORTOPS_API FAirlineSatisfactionEvent
 };
 
 /**
+ * A facility bought a module (facility-upgrades spec §3). Published by UFacilityPurchases on success only.
+ * Entity is the depot's INDEX - an id, never a pointer (spec 2026-09-29-ops-event-bus §4).
+ */
+struct AIRPORTOPS_API FFacilityUpgradedEvent
+{
+	int32 Entity = INDEX_NONE;
+	EDepotModule Module = EDepotModule::Shed;
+	double Amount = 0.0;
+	static const TCHAR* EventName() { return TEXT("FacilityUpgraded"); }
+	FString Describe() const;
+};
+
+/** Bought or sold. A plain enum - this header has no .generated.h for a UENUM (memory: UHT cannot see it). */
+enum class EFleetChange : uint8
+{
+	Bought,
+	Sold
+};
+
+/** A vehicle joined or left a depot's fleet. Published by UFacilityPurchases on success only. */
+struct AIRPORTOPS_API FFleetChangedEvent
+{
+	int32 Depot = INDEX_NONE;
+	int32 VehicleId = 0;
+	FName TypeCode;
+	EFleetChange Change = EFleetChange::Bought;
+	double Amount = 0.0;
+	static const TCHAR* EventName() { return TEXT("FleetChanged"); }
+	FString Describe() const;
+};
+
+/**
  * An event logged at VERBOSE when published, not Log. Only what fires in bulk belongs here: every agent
  * phase change of every aircraft and vehicle would bury the rest of the file. Everything else is Log,
  * so the default log is a complete trace of what happened (user, 2026-09-29).
@@ -221,7 +254,7 @@ struct AIRPORTOPS_API FLandRefusedEvent
 using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent,
 	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
-	FMoneyPostedEvent, FBalanceSignChangedEvent>;
+	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

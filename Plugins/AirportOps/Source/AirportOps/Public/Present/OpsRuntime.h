@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/AgentRescue.h"
+#include "Model/FacilityPurchases.h"
 #include "Model/OfferGenerator.h"
 #include "Model/OpsEventBus.h"
 #include "Model/SimClock.h"
@@ -85,6 +86,9 @@ public:
 
 	/** The inspector's Unstick. See UAgentRescue - this runtime owns it and hands it the two boards. */
 	UAgentRescue* GetAgentRescue() const { return AgentRescue; }
+
+	/** Sheds and vehicles bought and sold. See UFacilityPurchases - this runtime owns it and wires its hooks. */
+	UFacilityPurchases* GetFacilityPurchases() const { return FacilityPurchases; }
 
 	/**
 	 * FORWARDERS to UAgentRescue with this runtime's traffic, network and clock - the three the driver
@@ -203,6 +207,7 @@ private:
 	UPROPERTY() TObjectPtr<ULedger> Ledger;
 	UPROPERTY() TObjectPtr<UPricing> Pricing;
 	UPROPERTY() TObjectPtr<UAgentRescue> AgentRescue;
+	UPROPERTY() TObjectPtr<UFacilityPurchases> FacilityPurchases;
 
 	UPROPERTY() TObjectPtr<UAirlineRoster> Airlines;
 	UPROPERTY() TObjectPtr<UOpsAlerts> Alerts;

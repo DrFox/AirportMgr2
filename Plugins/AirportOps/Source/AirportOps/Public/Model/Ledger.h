@@ -112,6 +112,13 @@ public:
 	virtual FText Describe(const FBuildQuote& Quote) const override;
 
 	/**
+	 * The ONE affordability rule, for a price already known: free is always allowed, else Price <= Balance.
+	 * CanAfford prices a quote and asks this; UFacilityPurchases asks it directly for a catalogue price -
+	 * so a shed and a taxiway are refused under water by the same line.
+	 */
+	bool CanPay(double Price) const;
+
+	/**
 	 * What things cost, and what dates an entry. Both set by the ops runtime at attach.
 	 *
 	 * THE CLOCK IS NOT OPTIONAL FOR A PURSE. IBuildPurse hands no time down - Airside has no

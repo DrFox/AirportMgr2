@@ -199,6 +199,7 @@ struct AIRSIDE_API FResolvedAnchor
  *
  * WHAT EACH ONE DRIVES, and how real that is today:
  *   Shed - a vehicle bay. LIVE: UFacilityPurchases counts bays from the offers' VehicleSlots (facility spec §2).
+ *          ENFORCED BY: AirportOps.Model.Facility.SlotsDeriveFromModules
  *   Pump - the refill. LIVE: UJobBoard::PumpsAt multiplies a returning vehicle's refill
  *          rate by these (spec 2026-09-28-fuel-litres; they divided a flat dwell before).
  *   Tank - storage. INERT: no fuel inventory exists anywhere yet. Counted, never read.
