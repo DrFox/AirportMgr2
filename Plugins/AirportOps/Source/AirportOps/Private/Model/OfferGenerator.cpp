@@ -277,3 +277,14 @@ FString UOfferGenerator::MakeCallsign(const FString& Prefix, FRandomStream& Stre
 	}
 	return FString::Printf(TEXT("%s %d"), *Prefix, 100 + Stream.RandHelper(900));
 }
+
+FString UOfferGenerator::DescribeWhyNot(FName AirlineId) const
+{
+	const FAdmissionCache* Cache = AdmissionCache.Find(AirlineId);
+	if (Cache == nullptr || Cache->FirstRefused == INDEX_NONE)
+	{
+		return FString();
+	}
+	// THE SAME FALLBACK TickMinute's log line uses: the plan's sentence with its figures, else the reason.
+	return Cache->FirstRefusalSentence.IsEmpty() ? ArrivalPlanner::DescribeRefusal(Cache->FirstRefusal) : Cache->FirstRefusalSentence;
+}

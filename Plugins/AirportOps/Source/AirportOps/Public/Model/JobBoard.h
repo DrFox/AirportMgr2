@@ -329,6 +329,13 @@ public:
 	void AddTurnaroundForTest(int32 AircraftId, double TurnaroundEndsAt, int32 JobId);
 
 	const TArray<FServiceJob>& GetJobs() const { return Jobs; }
+
+	/**
+	 * Its agent is Stranded: it bids for nothing until the player unsticks it (AssignOpenJobs, RebidQueued).
+	 * PUBLIC since the ops alerts (spec 2026-09-29): UOpsAlerts reports a stranded vehicle by this same rule,
+	 * so the board and the alert cannot disagree about what "stranded" is.
+	 */
+	static bool IsStranded(const FServiceVehicle& Vehicle, const UGroundTraffic& Traffic);
 	const TArray<FServiceVehicle>& GetVehicles() const { return Vehicles; }
 	const TArray<FTurnaround>& GetTurnarounds() const { return Turnarounds; }
 
@@ -486,8 +493,6 @@ private:
 	 *  count, for the caller's log line. */
 	int32 ReleaseJobsOf(FServiceVehicle& Vehicle);
 
-	/** Its agent is Stranded: it bids for nothing until the player unsticks it (AssignOpenJobs, RebidQueued). */
-	static bool IsStranded(const FServiceVehicle& Vehicle, const UGroundTraffic& Traffic);
 
 	/** What Judge learned about one job, for its refusal and its log line (#103: counted once). */
 	struct FJudgement

@@ -239,6 +239,14 @@ public:
 	/** "CU 204" from "CU", or "G-ABCD" from "G-????" - see UAirlineDefinition::CallsignPrefix. */
 	static FString MakeCallsign(const FString& Prefix, FRandomStream& Stream);
 
+	/**
+	 * Why AirlineId's fleet cannot use this airport, in the sentence TickMinute's "cannot use this airport"
+	 * log line prints - the plan's own refusal with its figures, else the reason's wording. Empty when the
+	 * airline has not been judged yet (no admission check has run for it). For the ops AirlineCannotCome
+	 * alert, so the alert and the log say the same thing.
+	 */
+	FString DescribeWhyNot(FName AirlineId) const;
+
 	/** How many CouldEverAdmit route searches TickMinute has actually run. See AdmissionCache. */
 	int32 AdmissionChecksForTest() const { return AdmissionChecks; }
 
