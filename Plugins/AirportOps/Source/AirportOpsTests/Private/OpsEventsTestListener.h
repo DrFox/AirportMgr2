@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/OpsEvents.h"
+#include "Present/OpsRuntime.h"
 #include "UObject/Object.h"
 #include "OpsEventsTestListener.generated.h"
 
@@ -25,4 +26,17 @@ public:
 	UFUNCTION() void OnRefused(EArrivalRefusal Why) { Seen.Add(FString::Printf(TEXT("refused:%d"), static_cast<int32>(Why))); }
 	UFUNCTION() void OnSpeed(ESimSpeed Speed) { Seen.Add(FString::Printf(TEXT("speed:%d"), static_cast<int32>(Speed))); }
 	UFUNCTION() void OnNote(const FString& Text) { Seen.Add(TEXT("note:") + Text); }
+
+	/** A Blueprint-shaped autosave: a Presentation handler that saves when told to - for
+	 *  AirportOps.Present.Bus.SaveFromAHandler, which needs a save made from INSIDE a drain. */
+	UPROPERTY() TObjectPtr<UOpsRuntime> SaveOnNote;
+	FString SaveSlot;
+	bool bSavedFromHandler = false;
+	UFUNCTION() void OnNoteSave(const FString& Text)
+	{
+		if (SaveOnNote != nullptr && Text == TEXT("autosave"))
+		{
+			bSavedFromHandler = SaveOnNote->SaveToSlot(SaveSlot);
+		}
+	}
 };

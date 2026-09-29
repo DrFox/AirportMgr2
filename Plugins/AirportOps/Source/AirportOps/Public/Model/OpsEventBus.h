@@ -20,7 +20,14 @@ enum class EOpsTier : uint8
 	Sim,
 	/** Reads Sim's settled result and changes only its own state; may publish. Airlines. */
 	Reaction,
-	/** Read-only - BP/UMG, toasts, audio. A publish from here is dropped with an Error. */
+	/**
+	 * Read-only by convention - BP/UMG, toasts, audio. NOT ENFORCED by dropping publishes (it was,
+	 * until the stage 1 review): a Presentation handler that triggers a player command - an autosave
+	 * on a notification, a speed step - mutates the sim through that command anyway, and dropping the
+	 * command's own announcement ("Saved", SpeedChanged) only desynced the UI from what happened. So
+	 * what it publishes queues for the next round like anything else.
+	 * ENFORCED BY: AirportOps.Model.Bus.PresentationPublishIsNextRound
+	 */
 	Presentation
 };
 
@@ -86,7 +93,8 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
  *
  * PLAIN C++, NOT A UObject: it holds TFunctions (which UHT cannot see) and nothing about it is saved -
  * the queue is drained before a save and discarded after a load (spec §4). Owned by value by
- * UOpsRuntime; the boards hold a raw pointer to it, which is safe because the runtime owns both.
+ * UOpsRuntime; anything given a raw pointer to it must be owned by the runtime too, so the two die
+ * together.
  */
 class AIRPORTOPS_API FOpsEventBus
 {
@@ -127,22 +135,17 @@ public:
 	void Publish(T&& Event)
 	{
 		using FEvent = std::decay_t<T>;
-		if (bDraining && CurrentTier == EOpsTier::Presentation)
-		{
-			// AN ERROR, NOT AN ensure(): an ensure reports once per call site per session, so the
-			// second offender would be silent - and the UI steering the sim is worth hearing every time.
-			UE_LOG(LogOpsBus, Error, TEXT("Bus: a Presentation handler published %s - dropped; the UI may not steer the sim"),
-				FEvent::EventName());
-			return;
-		}
 		Queue.Emplace(TInPlaceType<FEvent>(), Forward<T>(Event));
 	}
 
 	/** Run rounds until quiet or MaxRounds. Returns the number of events dispatched. */
 	int32 Drain();
 
-	/** Drop the queue unhandled (after a load). Returns how many were dropped, and logs it. */
+	/** Drop the queue unhandled (a load, a detach). Returns how many were dropped, and logs it. */
 	int32 Discard();
+
+	/** True inside Drain - for a caller that would otherwise re-enter it (a save from a handler). */
+	bool IsDraining() const { return bDraining; }
 
 	/** Who subscribed to the event at TypeIndex, every tier, in tier order. For the wiring test. */
 	TArray<FName> SubscribersOf(SIZE_T TypeIndex) const;
@@ -168,7 +171,6 @@ private:
 	TArray<FOpsEvent> Queue;
 	bool bWiring = false;
 	bool bDraining = false;
-	EOpsTier CurrentTier = EOpsTier::Sim;
 
 	static const TCHAR* NameOf(const FOpsEvent& Event);
 	static void LogSubscription(FName Who, EOpsTier Tier, const TCHAR* Event);

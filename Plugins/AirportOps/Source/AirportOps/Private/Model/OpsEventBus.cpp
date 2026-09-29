@@ -99,7 +99,6 @@ int32 FOpsEventBus::Drain()
 			UE_LOG(LogOpsBus, Verbose, TEXT("Bus: %s"), NameOf(Event));
 			for (int32 Tier = 0; Tier < NumTiers; ++Tier)
 			{
-				CurrentTier = static_cast<EOpsTier>(Tier);
 				for (const FHandler& Handler : Handlers[Event.GetIndex()][Tier])
 				{
 					Handler.Run(Event);
@@ -107,8 +106,7 @@ int32 FOpsEventBus::Drain()
 			}
 			++Dispatched;
 		}
-		// Passes run as Sim: they mutate the sim and may publish.
-		CurrentTier = EOpsTier::Sim;
+		// Passes run after every tier of the round: they mutate the sim and may publish.
 		for (FPass& Pass : Passes)
 		{
 			if (Pass.bDirty)

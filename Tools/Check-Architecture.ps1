@@ -1430,7 +1430,7 @@ if (-not (Test-Path $busWiring)) {
 foreach ($busTree in @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'), (Join-Path $Root 'Source\AirportMgr'))) {
     foreach ($file in Get-Sources $busTree @('.h', '.cpp')) {
         if ($file.FullName -eq $busWiring -or $file.Name -like 'OpsEventBus.*' -or $file.Name -like '*Test.cpp') { continue }
-        $hits = Select-String -Path $file.FullName -Pattern '\.Subscribe<|RegisterPass\(' |
+        $hits = Select-String -Path $file.FullName -Pattern '(\.|->)Subscribe<|RegisterPass\(' |
             Where-Object { $_.Line -notmatch '^\s*//' -and $_.Line -notmatch '^\s*\*' }
         foreach ($h in $hits) {
             $failures.Add("bus-wired-once: $($file.Name):$($h.LineNumber) subscribes to the ops bus outside UOpsRuntime::WireBus")

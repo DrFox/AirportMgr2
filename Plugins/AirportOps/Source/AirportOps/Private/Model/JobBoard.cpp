@@ -857,6 +857,16 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	{
 		return;
 	}
+	// A PARKED EVENT IS A FACT ABOUT THE PAST: the ops bus delivers it on the next ops step (spec
+	// 2026-09-29 §1), and the agent may have moved on since. UGroundTraffic::ReofferStands redirects an
+	// aircraft parked on a fallback junction to a stand that freed in the same frame, and its GoalNode is
+	// then the NEW stand - acting on it would open a turnaround for an aircraft still taxiing in. Its own
+	// Parked event for the real stand follows.
+	// ENFORCED BY: AirportOps.Present.Bus.StaleParkedOpensNoTurnaround
+	if (Agent->Phase != EAgentPhase::Parked)
+	{
+		return;
+	}
 
 	// A VEHICLE ARRIVING - at a stand, or home. Its own state says which it was heading for.
 	if (const FServiceVehicle* Found = VehicleForAgent(AgentId))

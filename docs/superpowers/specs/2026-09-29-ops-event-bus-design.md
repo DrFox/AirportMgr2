@@ -62,7 +62,7 @@ callback, or a handler.
 |---|---|---|
 | Sim | JobBoard, FlightBoard | mutate simulation state |
 | Reaction | UAirlineRoster | read Sim's settled result; own state only; may publish |
-| Presentation | `UOpsEvents` (BP/UMG), toasts, audio | read-only; `ensure` + drop if it publishes |
+| Presentation | `UOpsEvents` (BP/UMG), toasts, audio | read-only by convention; what a player command it triggers publishes queues for the next round (revised after the stage 1 review - see §4) |
 
 **Airside bridge.** Airside must not learn ops exists. It keeps native delegates
 (`OnAgentPhaseChanged`, `OnArrivalRefused`, new `OnRunwayFreed`), and `UOpsRuntime` publishes each onto
@@ -70,6 +70,15 @@ the bus - the only place the two meet. The motion ticker (`ARoadNetworkActor::Ti
 have no fixed order; an Airside event is handled at the next ops drain, at most one frame later. That
 is deliberate: no ops handler runs inside Airside's loop. The tier order replaces
 `OnAgentPhase`'s hand-written "SERVICE FIRST, THEN THE BUS".
+
+**Timing shift, accepted (stage 1 review, finding 8).** An event raised inside `UOpsRuntime::Tick`
+(a departure, a dispatch) is handled on the NEXT ops step, so the times handlers stamp from
+`Clock.Now()` (ParkedAt, AirborneAt, TurnaroundEndsAt, the parking fee) move by one frame of game time
+- larger at x32. Clock callbacks fire in `Advance`, before the drain, so they see boards not yet
+updated for this frame's motion. Both are within a frame and deliberately not corrected.
+
+**Handlers read live state as of the DRAIN, not the event.** A Parked event may be stale: the agent can
+have been redirected since (`ReofferStands`). Every handler that reads the agent re-checks its phase.
 
 **Logging** - `LogOpsBus`: one Verbose line per event dispatched, one Log line per subscription at
 wire time, Error on the cap, Warning from the safety pass (§2).
@@ -151,8 +160,11 @@ Out of scope: cross-airline reputation, contracts/negotiation, personalities, la
 **Save/load**
 
 - The queue is never saved. `SaveToSlot` drains before snapshotting (Airside events can arrive
-  between ops steps). `LoadFromSlot` discards the queue after `Restore` and logs how many were dropped
-  - `ClearAgents` publishes Gone for agents that no longer exist.
+  between ops steps) - except when called from inside a drain (a BP autosave), where it saves without
+  draining and says so. `LoadFromSlot` discards the queue right after `ClearAgents`, before `Restore`
+  and whether or not it succeeds - `ClearAgents` publishes Gone for agents that no longer exist. Cost:
+  BP listeners do not hear Gone for agents a load clears. `Detach` discards too: a new level numbers
+  its agents from 1 again.
 - `Clock.At`s follow `USimClock`'s existing rule (SimClock.h: entries not saved; each system re-arms
   from its own state). Vehicles load Idle and turnarounds are not restored today, so JobBoard has
   nothing to re-arm; the rule gets a test anyway.
@@ -165,7 +177,9 @@ Out of scope: cross-airline reputation, contracts/negotiation, personalities, la
 **Failure handling**
 
 - Round cap: Error + carry over.
-- Presentation publishes: `ensure`, drop.
+- Presentation publishes: queued for the next round. The spec first said `ensure` + drop; the stage 1
+  review showed that drops a player command's own announcement ("Saved", SpeedChanged) while the
+  command's mutation still happens, desyncing the UI. Read-only stays the convention.
 - Subscribe outside `WireBus` or mid-drain: `check`.
 - Stale ids: a handler that cannot find its flight/vehicle/airline logs Verbose and skips - an event
   is a fact about the past.

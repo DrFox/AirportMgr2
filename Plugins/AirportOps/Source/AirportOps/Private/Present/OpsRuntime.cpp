@@ -406,6 +406,11 @@ void UOpsRuntime::Detach()
 		OfferHandle = INDEX_NONE;
 	}
 	AirlineOffers.Reset();
+	// THE QUEUE IS THE OLD ACTOR'S. A new level's traffic numbers its agents from 1 again, so a
+	// stale Parked for agent k would land on the new level's agent k. Dropped, and the price is
+	// that a re-Attach to the SAME actor loses at most one step of its events.
+	// ENFORCED BY: AirportOps.Present.Bus.DetachDiscardsQueue
+	Bus.Discard();
 	// Cleared rather than left pointing at the old actor: a dispatcher that still answers
 	// after a detach would put an aeroplane on a field this runtime no longer drives.
 	FlightBoard->Dispatcher = nullptr;
@@ -550,8 +555,19 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 		return false;
 	}
 	// DRAINED BEFORE THE SNAPSHOT: an Airside event queued since the last step would otherwise be
-	// handled after the save, and its effect missing from it.
-	Bus.Drain();
+	// handled after the save, and its effect missing from it. NOT FROM INSIDE A DRAIN - a Blueprint
+	// bound to a UOpsEvents delegate may save (an autosave on a notification), and a nested Drain
+	// would assert; that save simply misses what is still queued, and says so.
+	// ENFORCED BY: AirportOps.Present.Bus.SaveFromAHandler
+	if (Bus.IsDraining())
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Save '%s' from inside an ops event handler: %d queued event(s) are not in it"),
+			*SlotName, Bus.QueuedCount());
+	}
+	else
+	{
+		Bus.Drain();
+	}
 	FOpsSnapshot Snapshot;
 	const TArray<IOpsPersistent*> Saved = Persistents();
 	OpsSave::Capture(Saved, *Target->Network, Snapshot);
@@ -637,15 +653,18 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// Agents first: they were never saved, and one mid-taxi on a network about to be
 	// replaced would be following a polyline through pavement that no longer exists.
 	Target->GetTraffic()->ClearAgents();
+	// THE QUEUE GOES WITH THEM, before Restore and whether or not it succeeds. The Gone events
+	// ClearAgents just queued name agents that no longer exist, and handling them after the
+	// boards are restored would un-hold restored flights' stands; a failed Restore must not leave
+	// them for next frame either. The COST, taken on purpose: a Blueprint bound to
+	// OnAgentPhaseChanged does not hear Gone for agents a load clears - it hears "Loaded" instead.
+	// ENFORCED BY: AirportOps.Present.Bus.LoadDiscardsQueue (the queue is dropped, nothing hears it)
+	Bus.Discard();
 	const TArray<IOpsPersistent*> Loaded = Persistents();
 	if (!OpsSave::Restore(Snapshot, Loaded, *Target->Network))
 	{
 		return false;
 	}
-	// THE GONE EVENTS ClearAgents JUST QUEUED name agents that no longer exist, and the boards
-	// were restored after them: handling them now would un-hold restored flights' stands.
-	// ENFORCED BY: AirportOps.Present.Bus.LoadDiscardsQueue
-	Bus.Discard();
 	// THE LOAD-TIME REPAIRS A LEVEL GETS FROM PostLoad AND PostRegisterAllComponents, which a
 	// save game does not get - OpsSave::Restore is Serialize alone (final review C2).
 	// Outlines first: a stand saved before stands had them gets its Code C box, and only a

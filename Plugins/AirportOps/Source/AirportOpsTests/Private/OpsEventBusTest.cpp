@@ -109,21 +109,23 @@ bool FOpsEventBusCapTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsEventBusPresentationPublishTest, "AirportOps.Model.Bus.PresentationMayNotPublish",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsEventBusPresentationPublishTest, "AirportOps.Model.Bus.PresentationPublishIsNextRound",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOpsEventBusPresentationPublishTest::RunTest(const FString&)
 {
 	FOpsEventBus Bus;
-	int32 Sim = 0;
+	TArray<FString> Seen;
 	Bus.BeginWiring();
-	Bus.Subscribe<FNotificationEvent>(EOpsTier::Sim, TEXT("sim"), [&Sim](const FNotificationEvent&) { ++Sim; });
-	Bus.Subscribe<FSpeedChangedEvent>(EOpsTier::Presentation, TEXT("ui"),
-		[&Bus](const FSpeedChangedEvent&) { Bus.Publish(FNotificationEvent{ TEXT("from ui") }); });
+	Bus.Subscribe<FNotificationEvent>(EOpsTier::Presentation, TEXT("toast"),
+		[&Seen](const FNotificationEvent& E) { Seen.Add(TEXT("toast:") + E.Text); });
+	// A UI handler that runs a player command - an autosave on a speed change, say - whose own
+	// announcement must still reach the toast rather than being dropped (stage 1 review).
+	Bus.Subscribe<FSpeedChangedEvent>(EOpsTier::Presentation, TEXT("autosave"),
+		[&Bus](const FSpeedChangedEvent&) { Bus.Publish(FNotificationEvent{ TEXT("Saved") }); });
 	Bus.EndWiring();
 	Bus.Publish(FSpeedChangedEvent{ ESimSpeed::X2 });
-	AddExpectedError(TEXT("Presentation"), EAutomationExpectedErrorFlags::Contains, 1);
-	Bus.Drain();
-	TestEqual(TEXT("a Presentation handler's publish is dropped - the UI may not steer the sim"), Sim, 0);
+	TestEqual(TEXT("both the change and the command's announcement are dispatched in one Drain"), Bus.Drain(), 2);
+	TestEqual(TEXT("the announcement reaches the UI on the next round"), Seen, TArray<FString>{ TEXT("toast:Saved") });
 	return true;
 }
 
