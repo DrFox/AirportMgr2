@@ -188,6 +188,31 @@ void UOpsRuntime::WireBus()
 		{
 			JobBoard->OnAgentPhase(*Model, *Target->Network, *Clock, E.AgentId, E.From, E.To);
 		}
+		// ANY PHASE CHANGE may be the board's business - an aircraft parked, a vehicle arrived or lost
+		// its agent - and deciding which here would be a second copy of OnAgentPhase's own rules.
+		Bus.MarkDirty(TEXT("JobBoard"));
+	});
+	// THE PLAYER DREW SOMETHING: a new depot seeds its fleet, a refused job may be servable now.
+	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
+		[this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
+
+	// THE JOB BOARD'S WHOLE SEQUENCE, as one pass (stage 3 - see UJobBoard::Step for why it stays one
+	// sequence). It runs when something above marked it, when its deadline comes due, or - while it
+	// says something is unresolved - once each frame, which is exactly what Tick used to do always.
+	// ENFORCED BY: AirportOps.Present.Bus.QuietBoardDoesNoWork
+	Bus.RegisterPass(TEXT("JobBoard"), [this]()
+	{
+		UGroundTraffic* Model = LiveModel();
+		if (Model == nullptr)
+		{
+			return;
+		}
+		const bool bUnresolved = JobBoard->Step(*Model, *Target->Network, *Clock);
+		ArmJobBoardDeadline();
+		if (bUnresolved)
+		{
+			Bus.MarkDirtyNextDrain(TEXT("JobBoard"));
+		}
 	});
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAgentPhaseEvent& E)
 	{
@@ -227,6 +252,24 @@ void UOpsRuntime::WireBus()
 		[this](const FNotificationEvent& E) { Events->NotifyNotification(E.Text); });
 
 	Bus.EndWiring();
+}
+
+void UOpsRuntime::ArmJobBoardDeadline()
+{
+	if (JobBoardDeadlineHandle != INDEX_NONE)
+	{
+		Clock->Cancel(JobBoardDeadlineHandle);
+		JobBoardDeadlineHandle = INDEX_NONE;
+	}
+	const double Next = JobBoard->NextDeadline(Clock->Now());
+	if (Next < TNumericLimits<double>::Max())
+	{
+		JobBoardDeadlineHandle = Clock->At(Next, [this]()
+		{
+			JobBoardDeadlineHandle = INDEX_NONE;
+			Bus.MarkDirty(TEXT("JobBoard"));
+		});
+	}
 }
 
 void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
@@ -458,6 +501,12 @@ void UOpsRuntime::Detach()
 		OfferHandle = INDEX_NONE;
 	}
 	AirlineOffers.Reset();
+	if (JobBoardDeadlineHandle != INDEX_NONE)
+	{
+		Clock->Cancel(JobBoardDeadlineHandle);
+		JobBoardDeadlineHandle = INDEX_NONE;
+	}
+	SeenNetwork.Reset();
 	// THE QUEUE IS THE OLD ACTOR'S. A new level's traffic numbers its agents from 1 again, so a
 	// stale Parked for agent k would land on the new level's agent k. Dropped, and the price is
 	// that a re-Attach to the SAME actor loses at most one step of its events.
@@ -472,6 +521,21 @@ void UOpsRuntime::Detach()
 void UOpsRuntime::Tick(double RealDeltaSeconds)
 {
 	Clock->Advance(RealDeltaSeconds);
+
+	// THE NETWORK, COMPARED ONCE A FRAME: a different object (ClearNetwork, a load) or a new guideline
+	// revision is FNetworkChangedEvent. One pointer and one integer - the whole cost of the job board
+	// no longer re-scanning every depot every frame.
+	if (Target != nullptr && Target->Network != nullptr)
+	{
+		const URoadNetwork* Network = Target->Network;
+		const uint32 Revision = Network->GetGuidelineRevision();
+		if (SeenNetwork.Get() != Network || SeenGuidelineRevision != Revision)
+		{
+			SeenNetwork = Network;
+			SeenGuidelineRevision = Revision;
+			Bus.Publish(FNetworkChangedEvent{ Revision });
+		}
+	}
 
 	// ONE DRAIN, after the clock: the queue holds Airside's events from the motion tick in publish
 	// order, then anything the clock just fired - so a flight that came due this frame is handled
@@ -496,7 +560,8 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 		{
 			if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
 			{
-				JobBoard->Tick(*Model, *Target->Network, *Clock);
+				// NO JobBoard->Tick HERE since stage 3: it is the bus's "JobBoard" pass, run by the drain
+				// above when an event, its deadline or its own unresolved work says so - see WireBus.
 
 				// THE RAW FRAME TIME, for the one countdown that runs in real seconds - see
 				// UFlightBoard::TickOffers. It checks the pause itself.

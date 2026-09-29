@@ -66,6 +66,11 @@ FString FAirlineSatisfactionEvent::Describe() const
 	return FString::Printf(TEXT("airline %s, %.2f -> %.2f, %s"), *AirlineId.ToString(), Old, New, *Cause);
 }
 
+FString FNetworkChangedEvent::Describe() const
+{
+	return FString::Printf(TEXT("guideline revision %u"), GuidelineRevision);
+}
+
 FString FOpsEventBus::Describe(const FOpsEvent& Event)
 {
 	return Visit([](const auto& Each) { return Each.Describe(); }, Event);
@@ -123,6 +128,19 @@ void FOpsEventBus::MarkDirty(FName Pass)
 	UE_LOG(LogOpsBus, Warning, TEXT("Bus: MarkDirty(%s) names no registered pass"), *Pass.ToString());
 }
 
+void FOpsEventBus::MarkDirtyNextDrain(FName Pass)
+{
+	for (FPass& Each : Passes)
+	{
+		if (Each.Name == Pass)
+		{
+			Each.bDirtyNextDrain = true;
+			return;
+		}
+	}
+	UE_LOG(LogOpsBus, Warning, TEXT("Bus: MarkDirtyNextDrain(%s) names no registered pass"), *Pass.ToString());
+}
+
 void FOpsEventBus::MarkAllDirty()
 {
 	for (FPass& Each : Passes) { Each.bDirty = true; }
@@ -137,6 +155,12 @@ int32 FOpsEventBus::Drain()
 {
 	check(!bDraining);
 	bDraining = true;
+	// LAST FRAME'S "TRY AGAIN NEXT FRAME" becomes this frame's dirty - see MarkDirtyNextDrain.
+	for (FPass& Pass : Passes)
+	{
+		Pass.bDirty |= Pass.bDirtyNextDrain;
+		Pass.bDirtyNextDrain = false;
+	}
 	int32 Dispatched = 0;
 	int32 Round = 0;
 	for (; Round < MaxRounds && (Queue.Num() > 0 || AnyDirty()); ++Round)

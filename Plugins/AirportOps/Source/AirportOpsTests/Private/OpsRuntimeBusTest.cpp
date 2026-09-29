@@ -347,4 +347,36 @@ bool FOpsRuntimeBusOldSnapshotTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBusQuietBoardTest, "AirportOps.Present.Bus.QuietBoardDoesNoWork",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeBusQuietBoardTest::RunTest(const FString&)
+{
+	// STAGE 3's POINT, measured: a depot with its fleet at home and nothing to do costs the job board no
+	// Step at all, where UJobBoard::Tick used to walk every depot and vehicle thirty times a second.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	URoadNetwork& Net = *Actor->Network;
+	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+	Net.PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(12000.0, 0.0), 0.0, 0.0, DepotDef->PoseRole, DepotDef->Trucks);
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Runtime->Tick(1.0 / 30.0); }
+	TestTrue(TEXT("the first steps seeded the depot's fleet"), Runtime->GetJobBoard()->GetVehicles().Num() > 0);
+	const int32 Settled = Runtime->GetJobBoard()->StepCountForTest();
+	for (int32 Tick = 0; Tick < 300; ++Tick) { Runtime->Tick(1.0 / 30.0); }
+	TestEqual(TEXT("ten quiet seconds run no job board step at all"), Runtime->GetJobBoard()->StepCountForTest(), Settled);
+
+	// AND THE PLAYER DRAWING SOMETHING WAKES IT - a second depot seeds on the next step.
+	const int32 Fleet = Runtime->GetJobBoard()->GetVehicles().Num();
+	Net.PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(-12000.0, 0.0), 0.0, 0.0, DepotDef->PoseRole, DepotDef->Trucks);
+	Runtime->Tick(1.0 / 30.0);
+	TestTrue(TEXT("a depot placed on a quiet airport still gets its fleet (FNetworkChangedEvent)"),
+		Runtime->GetJobBoard()->GetVehicles().Num() > Fleet);
+	return true;
+}
+
 #endif

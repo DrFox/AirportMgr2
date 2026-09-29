@@ -927,8 +927,31 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 		AgentId, Stand.Index, Litres, Aircraft->TurnaroundSeconds);
 }
 
-void UJobBoard::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+double UJobBoard::NextDeadline(double Now) const
 {
+	double Next = TNumericLimits<double>::Max();
+	for (const FServiceVehicle& Vehicle : Vehicles)
+	{
+		const bool bTimed = (Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob != 0)
+			|| Vehicle.State == EServiceVehicleState::AtFacility;
+		if (bTimed && Vehicle.StepEndsAt > Now)
+		{
+			Next = FMath::Min(Next, Vehicle.StepEndsAt);
+		}
+	}
+	for (const FTurnaround& Turnaround : Turnarounds)
+	{
+		if (Turnaround.TurnaroundEndsAt > Now)
+		{
+			Next = FMath::Min(Next, Turnaround.TurnaroundEndsAt);
+		}
+	}
+	return Next;
+}
+
+bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+{
+	++StepCount;
 	SyncFleet(Traffic, Network);
 
 	// TIMED STEPS THAT ARE DUE: a trip's pumping, a refill. GAME TIME - a pause stops both. The vehicle
@@ -1009,6 +1032,21 @@ void UJobBoard::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	}
 
 	DepartTheReady(Traffic, Network, Clock);
+
+	// WHAT IS STILL UNRESOLVED - see the header. Each of these used to be retried simply because Tick ran
+	// every frame; now it is retried because it said so, and nothing else is.
+	const bool bVehicleWaiting = Vehicles.ContainsByPredicate([](const FServiceVehicle& Vehicle)
+		{
+			return (Vehicle.State == EServiceVehicleState::Idle && Vehicle.Queue.Num() > 0)
+				|| (Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob == 0);
+		});
+	const bool bJobOpen = Jobs.ContainsByPredicate([](const FServiceJob& Job) { return Job.State == EServiceJobState::Open; });
+	const double Now = Clock.Now();
+	const bool bDepartureWaiting = Turnarounds.ContainsByPredicate([Now](const FTurnaround& Turnaround)
+		{
+			return Now >= Turnaround.TurnaroundEndsAt;
+		});
+	return bVehicleWaiting || bJobOpen || bDepartureWaiting;
 }
 
 void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
