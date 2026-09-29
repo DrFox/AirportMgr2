@@ -58,9 +58,32 @@ enum class EFlightPhase : uint8
 	Declined,
 	/** Nobody said anything and the offer timed out. */
 	Expired,
-	/** The player despawned the aeroplane (the inspector's Unstick). Terminal, like Departed,
-	 *  but it did not leave by the runway - see UFlightBoard::CancelByAgent. */
-	Cancelled
+	/** The player despawned the aeroplane (the inspector's Unstick), or the airport closed before it
+	 *  arrived (UFlightBoard::CancelUnarrived). Terminal, like Departed, but it did not leave by the
+	 *  runway - see UFlightBoard::CancelByAgent. */
+	Cancelled,
+	/**
+	 * An OFFER the airport took back when it stopped being open (UFlightBoard::CancelUnarrived, spec
+	 * 2026-09-29-ops-batch3 §3) - entered only there. Not Expired: nobody let it lapse, so no
+	 * OfferExpired and no Ignored penalty; not Cancelled: it was never the airline's flight here.
+	 * APPENDED LAST because the order above is load-bearing (FlightPhaseFromAgent, UFlightBoard::Live).
+	 */
+	Withdrawn
+};
+
+/**
+ * Why a flight was cancelled - FFlightCancelledEvent's reason, and what the airline roster scores it by.
+ * AN ENUM: the three are mutually exclusive, and only AirportClosed is the player's choice to pay for.
+ */
+UENUM()
+enum class ECancelReason : uint8
+{
+	/** The player closed the airport (UAirport::SetClosedByPlayer). Costs ClosureCancelPenalty. */
+	AirportClosed,
+	/** The last runway went. Free - the user accepted that loophole (spec 2026-09-29-ops-batch3 §0). */
+	NoRunway,
+	/** The player despawned the aeroplane (UFlightBoard::CancelByAgent). Free. */
+	Unstuck
 };
 
 /**
@@ -243,7 +266,7 @@ public:
 
 	/**
 	 * USimClock::Now at which this flight reached a terminal phase (Declined, Expired,
-	 * Departed or Cancelled), or 0 before that.
+	 * Departed, Cancelled or Withdrawn), or 0 before that.
 	 *
 	 * WHAT UFlightBoard::RollUp AGES AGAINST, the same role FLedgerEntry::At plays for
 	 * ULedger::RollUp - see UFlightBoard::History and issue #188. Zero rather than an Optional:

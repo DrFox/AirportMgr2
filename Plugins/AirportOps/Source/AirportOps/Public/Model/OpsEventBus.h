@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "AirportOpsLog.h"
 #include "Misc/TVariant.h"
+#include "Model/Airport.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
@@ -288,6 +289,33 @@ struct AIRPORTOPS_API FTurnaroundEndedEvent
 };
 
 /**
+ * The airport's status changed (UAirport::Refresh) - the network lost or gained its last runway, or the player
+ * closed or reopened it. NOT published by an attach or a load, which re-derive silently (UAirport::Reseat): entering
+ * a closed status cancels flights, and a load must never do that again (spec 2026-09-29-ops-batch3 §3).
+ */
+struct AIRPORTOPS_API FAirportStatusChangedEvent
+{
+	EAirportStatus Old = EAirportStatus::Open;
+	EAirportStatus New = EAirportStatus::Open;
+	static const TCHAR* EventName() { return TEXT("AirportStatusChanged"); }
+	FString Describe() const;
+};
+
+/**
+ * A flight will not come, or will not finish: cancelled by a closure (UFlightBoard::CancelUnarrived) or by the
+ * player despawning its aeroplane (UFlightBoard::CancelByAgent) - two publishers, one subscriber (the roster,
+ * which charges only AirportClosed). An offer WITHDRAWN by a closure is not a cancellation and publishes nothing.
+ */
+struct AIRPORTOPS_API FFlightCancelledEvent
+{
+	int32 FlightId = 0;
+	FName AirlineId;
+	ECancelReason Reason = ECancelReason::AirportClosed;
+	static const TCHAR* EventName() { return TEXT("FlightCancelled"); }
+	FString Describe() const;
+};
+
+/**
  * EVERY EVENT THERE IS, as one closed list. Subscribe<T> and Publish<T> are compile-checked
  * against it, and the wiring test walks it - "lists that must agree are ONE list".
  * FInstancedStruct was rejected: an open set has no answer to "which events exist?".
@@ -296,7 +324,7 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
 	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
-	FTurnaroundEndedEvent>;
+	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

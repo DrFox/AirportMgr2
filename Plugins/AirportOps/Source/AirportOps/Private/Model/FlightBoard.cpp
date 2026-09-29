@@ -390,9 +390,98 @@ bool UFlightBoard::CancelByAgent(int32 AgentId, double Now)
 	Flight->AgentId = INDEX_NONE;
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): %s -> Cancelled (agent %d despawned)"),
 		Flight->Id, *Flight->Callsign, *UEnum::GetValueAsString(WasPhase), AgentId);
+	// THE SECOND PUBLISHER of FlightCancelled (spec 2026-09-29-ops-batch3 §3): the roster hears it and charges
+	// nothing for Unstuck - heard, so the log and any later reaction see every cancellation the same way.
+	// ENFORCED BY: AirportOps.Model.FlightBoard.CancelByAgentPublishesUnstuck
+	if (Bus != nullptr)
+	{
+		Bus->Publish(FFlightCancelledEvent{ Flight->Id, Flight->AirlineId, ECancelReason::Unstuck });
+	}
 	MoveToHistory(*Flight, Now);
 	++RevisionCount;
 	return true;
+}
+
+int32 UFlightBoard::CancelUnarrived(UGroundTraffic& Traffic, USimClock& Clock, ECancelReason Reason)
+{
+	int32 Cancelled = 0;
+	int32 Withdrawn = 0;
+	// SNAPSHOT: MoveToHistory removes from the array being walked.
+	const TArray<TObjectPtr<UFlight>> Snapshot = Flights;
+	for (const TObjectPtr<UFlight>& Each : Snapshot)
+	{
+		if (Each == nullptr)
+		{
+			continue;
+		}
+		UFlight& Flight = *Each;
+		if (Flight.Phase == EFlightPhase::Offered)
+		{
+			Flight.Phase = EFlightPhase::Withdrawn;
+			--OfferedCount;
+			++Withdrawn;
+			MoveToHistory(Flight, Clock.Now());
+			continue;
+		}
+		if (Flight.Phase != EFlightPhase::Accepted && Flight.Phase != EFlightPhase::Inbound)
+		{
+			// LANDING AND LATER FINISH: committed to the runway, or on the ground being drained.
+			continue;
+		}
+		// THE ARRIVAL DISARMED, not merely forgotten: its Clock.At finds the flight by id even in History (ById
+		// keeps it until RollUp) and would put a cancelled flight back in the queue. Inbound has none left.
+		// ENFORCED BY: AirportOps.Model.FlightBoard.CancelUnarrivedCancelsAndWithdraws ("still Cancelled after its ETA")
+		if (const int32* Handle = ArrivalHandles.Find(Flight.Id))
+		{
+			Clock.Cancel(*Handle);
+			ArrivalHandles.Remove(Flight.Id);
+		}
+		if (Allocator != nullptr)
+		{
+			Allocator->Release(Traffic, Flight);
+		}
+		const EFlightPhase WasPhase = Flight.Phase;
+		Flight.Phase = EFlightPhase::Cancelled;
+		++Cancelled;
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): %s -> Cancelled (%s)"), Flight.Id, *Flight.Callsign,
+			*UEnum::GetValueAsString(WasPhase), *UEnum::GetValueAsString(Reason));
+		if (Bus != nullptr)
+		{
+			Bus->Publish(FFlightCancelledEvent{ Flight.Id, Flight.AirlineId, Reason });
+		}
+		MoveToHistory(Flight, Clock.Now());
+	}
+	if (Cancelled + Withdrawn > 0)
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Airport not open (%s): %d flight(s) cancelled, %d offer(s) withdrawn"),
+			*UEnum::GetValueAsString(Reason), Cancelled, Withdrawn);
+		++RevisionCount;
+	}
+	return Cancelled;
+}
+
+int32 UFlightBoard::UnarrivedCount() const
+{
+	// A SCAN OF Flights, not a maintained counter: asked by the bar's confirm when the popup opens, and Flights
+	// holds only the live flights (~10 on 2026-09-29, terminal ones move to History at once).
+	int32 Count = 0;
+	for (const TObjectPtr<UFlight>& Each : Flights)
+	{
+		Count += Each != nullptr && (Each->Phase == EFlightPhase::Accepted || Each->Phase == EFlightPhase::Inbound);
+	}
+	return Count;
+}
+
+int32 UFlightBoard::OnGroundCount() const
+{
+	// LANDING THROUGH DEPARTING - what a closure leaves to finish (CancelUnarrived's "untouched"). The same range
+	// Live() reads, minus the two a closure cancels. A scan, for UnarrivedCount's reason.
+	int32 Count = 0;
+	for (const TObjectPtr<UFlight>& Each : Flights)
+	{
+		Count += Each != nullptr && Each->Phase >= EFlightPhase::Landing && Each->Phase <= EFlightPhase::Departing;
+	}
+	return Count;
 }
 
 EArrivalRefusal UFlightBoard::WhyNotAcceptable(const UGroundTraffic& Traffic,
@@ -466,7 +555,8 @@ void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
 			continue;
 		}
 		if (Each->Phase == EFlightPhase::Declined || Each->Phase == EFlightPhase::Expired
-			|| Each->Phase == EFlightPhase::Departed || Each->Phase == EFlightPhase::Cancelled)
+			|| Each->Phase == EFlightPhase::Departed || Each->Phase == EFlightPhase::Cancelled
+			|| Each->Phase == EFlightPhase::Withdrawn)
 		{
 			// TerminatedAt DID NOT EXIST before this change, so a flight loaded from a save
 			// that predates it has none - ArrivesAt is the closest recorded moment to when it

@@ -1,6 +1,7 @@
 #include "Model/OpsAlerts.h"
 #include "AirportOpsLog.h"
 #include "Model/AirlineDefinition.h"
+#include "Model/Airport.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
@@ -128,8 +129,18 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 		}
 	}
 
+	// THE AIRPORT'S STATUS (spec 2026-09-29-ops-batch3 §3). No runway is the player's to fix; a closure is the
+	// player's own choice and raises nothing. While not Open the generator judges no airline, so a verdict left
+	// from before the closure would be a stale alert: airlines are reported only while Open.
+	const bool bOpen = Sources.Airport == nullptr || Sources.Airport->Status() == EAirportStatus::Open;
+	if (Sources.Airport != nullptr && Sources.Airport->Status() == EAirportStatus::NoRunway)
+	{
+		Found.Add(OpsAlertOf(EAlertKind::NoRunway, 0, NAME_None,
+			NSLOCTEXT("OpsAlerts", "NoRunway", "No runway - build one to receive offers")));
+	}
+
 	// AIRLINES that cannot use the airport, named as the generator's own log line names them.
-	if (Sources.Offers != nullptr)
+	if (Sources.Offers != nullptr && bOpen)
 	{
 		for (const TPair<FName, FAirlineOfferState>& Each : Sources.Offers->States)
 		{
