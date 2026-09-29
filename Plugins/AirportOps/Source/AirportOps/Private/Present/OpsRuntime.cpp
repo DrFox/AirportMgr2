@@ -84,7 +84,12 @@ FUnstickVerdict UOpsRuntime::Unstick(int32 AgentId, EUnstickAction Action)
 			AgentId, *UEnum::GetValueAsString(Action));
 		return FUnstickVerdict::No(NSLOCTEXT("AgentRescue", "NoAirport", "No airport attached"));
 	}
-	return AgentRescue->Unstick(*Model, *Target->Network, *Clock, AgentId, Action);
+	const FUnstickVerdict Verdict = AgentRescue->Unstick(*Model, *Target->Network, *Clock, AgentId, Action);
+	// A PLAYER COMMAND THAT MAY HAVE CHANGED THE JOB BOARD (jobs released, a vehicle recalled): its
+	// pass runs on events (stage 3), and every rescue path today also raises a phase event - but a
+	// command is not an event, so it says so itself rather than leaning on that.
+	Bus.MarkDirty(TEXT("JobBoard"));
+	return Verdict;
 }
 
 TArray<FAirlineOffers> UOpsRuntime::AirlineOffersFromCatalog() const
