@@ -18,7 +18,6 @@ class USizeBox;
 class UBorder;
 class UHorizontalBox;
 class UOfferInboxWidget;
-class UArrivalsViewModel;
 class UOfferInboxViewModel;
 class UOfferViewModel;
 class UTextBlock;
@@ -94,9 +93,7 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TitleText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> BadgeText;
 
-	/** The ARRIVALS section under the offers (spec 2026-09-28-arrival-queue section 3). */
-	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UVerticalBox> ArrivalColumn;
-	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> ArrivalCountText;
+	// ARRIVALS moved to their own window, UArrivalsPanelWidget (2026-09-29) - see its comment.
 
 	/**
 	 * Distance from the TOP of the screen for the code-built card.
@@ -109,12 +106,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float TopOffset = 12.0f;
 
 	UOfferInboxViewModel* GetInbox() const { return Inbox; }
-	UArrivalsViewModel* GetArrivals() const { return Arrivals; }
 
-	/** How many arrivals rows are built, as opposed to how many the viewmodel holds. */
-	int32 ArrivalRowCountForTest() const { return ArrivalTitles.Num(); }
-
-	/** Top-right; NOT closable - an offer must never be hidden. */
+	/** Top-right; NOT closable - an offer must never be hidden. Resizable and foldable since
+	 *  2026-09-29 (the player asked): the count rides in the title badge, so a fold hides the
+	 *  cards but never the fact that offers are waiting. */
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
 
 	/**
@@ -165,16 +160,6 @@ protected:
 
 private:
 	UPROPERTY() TObjectPtr<UOfferInboxViewModel> Inbox;
-	UPROPERTY() TObjectPtr<UArrivalsViewModel> Arrivals;
-
-	/** Each arrivals row's three texts, HELD rather than found by child index - the rule
-	 *  UOfferRowEntry states for the offer cards. Rebuilt when the row count changes. */
-	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ArrivalTitles;
-	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ArrivalStatuses;
-	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ArrivalDetails;
-
-	void PaintArrivals(const UUIStyle& Style);
-
 	/** One offer card: airline and countdown, airframe, refusal, then the two answers. */
 	UWidget* BuildRow(const class UUIStyle& Style, UOfferRowEntry& Entry, int32 Index);
 

@@ -89,6 +89,9 @@ protected:
 	/** Ask for this panel's window to show or hide. The host decides (a player's close sticks). */
 	void SetShown(bool bShown);
 
+	/** The text beside this panel's window title - survives a fold. Nothing when unhosted. */
+	void SetWindowBadge(const FText& Badge);
+
 	/** The host that owns this panel's window; null when unhosted (the bar, toasts, a bare test). */
 	UUiWindowHost* GetWindowHost() const { return Host; }
 

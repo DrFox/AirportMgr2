@@ -1,5 +1,6 @@
 #include "BuildHudLayer.h"
 
+#include "ArrivalsPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "BuildBarWidget.h"
 #include "GameFramework/PlayerController.h"
@@ -54,6 +55,8 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 		TEXT("Ledger panel"), TEXT("LedgerPanelClass"));
 	LandPanel = CreateConfiguredWidget<ULandAircraftPanelWidget>(Owner, LandPanelClass, INDEX_NONE,
 		TEXT("Land panel"), TEXT("LandPanelClass"));
+	// CODE-ONLY, no *Class hook, like Settings: split out of the inbox after windows existed.
+	ArrivalsPanel = CreateWidget<UArrivalsPanelWidget>(&Owner, UArrivalsPanelWidget::StaticClass());
 	// CODE-ONLY, no *Class hook: the other panels' hooks predate windows (see SettingsPanel's comment).
 	SettingsPanel = CreateWidget<USettingsPanelWidget>(&Owner, USettingsPanelWidget::StaticClass());
 	ToastStack = CreateConfiguredWidget<UToastStackWidget>(Owner, ToastStackClass, 2,
@@ -67,7 +70,7 @@ void UBuildHudLayer::WireWindows()
 	{
 		return;
 	}
-	for (UAirportMgrPanelWidget* Panel : TArray<UAirportMgrPanelWidget*>{ Inspector, OfferInbox, LedgerPanel, LandPanel, SettingsPanel })
+	for (UAirportMgrPanelWidget* Panel : TArray<UAirportMgrPanelWidget*>{ Inspector, OfferInbox, ArrivalsPanel, LedgerPanel, LandPanel, SettingsPanel })
 	{
 		if (Panel != nullptr)
 		{

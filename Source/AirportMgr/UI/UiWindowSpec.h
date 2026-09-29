@@ -26,6 +26,9 @@ struct FUiWindowSpec
 	UPROPERTY() FText Title;
 	UPROPERTY() bool bClosable = true;
 	UPROPERTY() bool bResizable = true;
+	/** A title-bar button (and a double-click on the title) folds the window to its title bar.
+	 *  Off by default: a folded ledger or inspector is one more state for a panel nobody asked to fold. */
+	UPROPERTY() bool bCollapsible = false;
 	/** A dialog: while shown, the host lays a scrim under it that swallows every press elsewhere. */
 	UPROPERTY() bool bModal = false;
 	UPROPERTY() EUiWindowAnchor Anchor = EUiWindowAnchor::TopLeft;

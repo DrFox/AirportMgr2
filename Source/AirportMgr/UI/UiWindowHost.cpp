@@ -112,8 +112,11 @@ void UUiWindowHost::CommitPlacement(FName Id)
 	}
 	FUiWindowPlacement P;
 	P.TopLeft = E->Slot->GetPosition();   // placed: top-left anchored, so position IS the top-left
-	P.bSized = !E->Slot->GetAutoSize();
-	P.Size = P.bSized ? E->Slot->GetSize() : FVector2D::ZeroVector;
+	// A FOLDED window's slot is auto-sized to its title bar; what is remembered is the size it
+	// unfolds to, or a relaunch would restore the fold's size as the window's own.
+	P.bSized = E->bCollapsed ? E->bSizedWhenExpanded : !E->Slot->GetAutoSize();
+	P.Size = !P.bSized ? FVector2D::ZeroVector : E->bCollapsed ? E->ExpandedSize : E->Slot->GetSize();
+	P.bCollapsed = E->bCollapsed;
 	LayoutStore->Write(Id, P);
 	UE_LOG(LogRoadBuild, Log, TEXT("Window %s: layout saved at (%.0f, %.0f)%s"), *Id.ToString(), P.TopLeft.X, P.TopLeft.Y,
 		P.bSized ? *FString::Printf(TEXT(" size (%.0f, %.0f)"), P.Size.X, P.Size.Y) : TEXT(""));
@@ -153,19 +156,27 @@ void UUiWindowHost::RestoreSavedLayout()
 		{
 			UE_LOG(LogRoadBuild, Log, TEXT("Window %s: saved layout (%.0f, %.0f) is off this screen - default placement"),
 				*E.Spec.Id.ToString(), Saved->TopLeft.X, Saved->TopLeft.Y);
-			continue;
 		}
-		E.Slot->SetAnchors(FAnchors(0.0f, 0.0f));
-		E.Slot->SetAlignment(FVector2D::ZeroVector);
-		E.Slot->SetPosition(Saved->TopLeft);
-		if (bUseSize)
+		else
 		{
-			E.Slot->SetAutoSize(false);
-			E.Slot->SetSize(Size);
+			E.Slot->SetAnchors(FAnchors(0.0f, 0.0f));
+			E.Slot->SetAlignment(FVector2D::ZeroVector);
+			E.Slot->SetPosition(Saved->TopLeft);
+			if (bUseSize)
+			{
+				E.Slot->SetAutoSize(false);
+				E.Slot->SetSize(Size);
+			}
+			E.bPlaced = true;
+			UE_LOG(LogRoadBuild, Log, TEXT("Window %s: layout restored from settings at (%.0f, %.0f)"),
+				*E.Spec.Id.ToString(), Saved->TopLeft.X, Saved->TopLeft.Y);
 		}
-		E.bPlaced = true;
-		UE_LOG(LogRoadBuild, Log, TEXT("Window %s: layout restored from settings at (%.0f, %.0f)"),
-			*E.Spec.Id.ToString(), Saved->TopLeft.X, Saved->TopLeft.Y);
+		// THE FOLD IS RESTORED EVEN WHERE THE POSITION IS NOT: it is a choice about the window, not
+		// about this screen. After the size, so the fold remembers that size to unfold to.
+		if (Saved->bCollapsed)
+		{
+			FoldWithoutCommit(E, true);
+		}
 	}
 }
 
@@ -177,9 +188,66 @@ void UUiWindowHost::ResetLayout()
 	}
 	for (FUiWindowEntry& E : Windows)
 	{
+		// Unfolded first, so its remembered size is dropped rather than put back over the default.
+		E.bSizedWhenExpanded = false;
+		FoldWithoutCommit(E, false);
 		ApplyDefaultPlacement(E);
 	}
 	UE_LOG(LogRoadBuild, Log, TEXT("Window host: layout reset to defaults"));
+}
+
+void UUiWindowHost::SetCollapsed(FName Id, bool bCollapsed)
+{
+	FUiWindowEntry* E = Find(Id);
+	if (E == nullptr || !E->Spec.bCollapsible || E->bCollapsed == bCollapsed)
+	{
+		return;
+	}
+	FoldWithoutCommit(*E, bCollapsed);
+	// Remembered at once, like the end of a drag - one write per press.
+	CommitPlacement(Id);
+}
+
+void UUiWindowHost::FoldWithoutCommit(FUiWindowEntry& E, bool bCollapsed)
+{
+	if (E.Slot == nullptr || E.bCollapsed == bCollapsed)
+	{
+		return;
+	}
+	if (bCollapsed)
+	{
+		// AUTO-SIZED WHILE FOLDED, so the window is exactly its title bar; the player's size is
+		// kept aside for the unfold. A fixed size here would keep the folded window full height.
+		E.bSizedWhenExpanded = !E.Slot->GetAutoSize();
+		E.ExpandedSize = E.bSizedWhenExpanded ? E.Slot->GetSize() : FVector2D::ZeroVector;
+		E.Slot->SetAutoSize(true);
+	}
+	else if (E.bSizedWhenExpanded)
+	{
+		E.Slot->SetAutoSize(false);
+		E.Slot->SetSize(E.ExpandedSize);
+	}
+	E.bCollapsed = bCollapsed;
+	if (E.Window != nullptr)
+	{
+		E.Window->ShowCollapsed(bCollapsed);
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("Window %s: %s"), *E.Spec.Id.ToString(), bCollapsed ? TEXT("folded") : TEXT("unfolded"));
+}
+
+bool UUiWindowHost::IsCollapsed(FName Id) const
+{
+	const FUiWindowEntry* E = Find(Id);
+	return E != nullptr && E->bCollapsed;
+}
+
+void UUiWindowHost::SetBadge(FName Id, const FText& Badge)
+{
+	const FUiWindowEntry* E = Find(Id);
+	if (E != nullptr && E->Window != nullptr)
+	{
+		E->Window->SetBadge(Badge);
+	}
 }
 
 FUiWindowEntry* UUiWindowHost::Find(FName Id)
@@ -353,7 +421,8 @@ void UUiWindowHost::MoveWindow(FName Id, FVector2D ProposedTopLeft)
 void UUiWindowHost::ResizeWindow(FName Id, FVector2D ProposedSize)
 {
 	FUiWindowEntry* E = Find(Id);
-	if (E == nullptr || E->Slot == nullptr || !E->Spec.bResizable)
+	// Nor while folded: the fold owns the slot's size until it unfolds (FoldWithoutCommit).
+	if (E == nullptr || E->Slot == nullptr || !E->Spec.bResizable || E->bCollapsed)
 	{
 		return;
 	}

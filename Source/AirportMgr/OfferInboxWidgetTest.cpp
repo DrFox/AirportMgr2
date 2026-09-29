@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "ArrivalViewModels.h"
+#include "ArrivalsPanelWidget.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Entities/EntityDefinition.h"
@@ -103,14 +104,14 @@ bool FOfferInboxWidgetTest::RunTest(const FString& Parameters)
 	Widget->PaintRowsForTest();
 	TestEqual(TEXT("the cards follow the offers down"), Widget->RowWidgetCountForTest(), 1);
 
-	// THE ACCEPTED FLIGHT MOVES TO ARRIVALS (spec 2026-09-28-arrival-queue section 3), in the
-	// same card, so "what is coming" is one place to look.
-	Widget->GetArrivals()->Refresh(*Board, *Clock);
-	Widget->PaintRowsForTest();
-	TestEqual(TEXT("one arrivals row for the accepted flight"), Widget->ArrivalRowCountForTest(), 1);
-	if (TestNotNull(TEXT("the arrivals heading has a count"), Widget->ArrivalCountText.Get()))
+	// THE ACCEPTED FLIGHT MOVES TO ARRIVALS (spec 2026-09-28-arrival-queue section 3) - its own
+	// window since 2026-09-29 (UArrivalsPanelWidget), reading the same board.
+	UArrivalsPanelWidget* ArrivalsPanel = CreateWidget<UArrivalsPanelWidget>(TestWorld.World, UArrivalsPanelWidget::StaticClass());
+	if (TestNotNull(TEXT("an arrivals panel"), ArrivalsPanel))
 	{
-		TestEqual(TEXT("which says one"), Widget->ArrivalCountText->GetText().ToString(), FString(TEXT("1")));
+		ArrivalsPanel->GetArrivals()->Refresh(*Board, *Clock);
+		ArrivalsPanel->PaintRowsForTest();
+		TestEqual(TEXT("one arrivals row for the accepted flight"), ArrivalsPanel->RowCountForTest(), 1);
 	}
 	return true;
 }

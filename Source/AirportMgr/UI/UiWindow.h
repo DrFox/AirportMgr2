@@ -41,6 +41,17 @@ public:
 	 * grows with its content (Offers) scrolls at the screen's edge instead of running off it.
 	 */
 	void SetMaxHeight(double MaxHeight);
+
+	/** Folds the window to its title bar, or unfolds it. Visual only - the HOST owns the state and
+	 *  the slot's size (UUiWindowHost::SetCollapsed); this hides the body and swaps the button. */
+	void ShowCollapsed(bool bCollapsed);
+
+	/** A short text right of the title - still readable while the window is folded (the offer count). */
+	void SetBadge(const FText& Badge);
+	FString BadgeForTest() const;
+
+	/** The fold button. Public for the test that presses it. */
+	UFUNCTION() void HandleCollapse();
 	double MaxHeightForTest() const;
 
 	/** The close button. Public for the test that presses it. */
@@ -70,6 +81,12 @@ private:
 	UPROPERTY() TObjectPtr<UWidget> Grip;
 	/** Between the shadow frame and the card; see SetMaxHeight. */
 	UPROPERTY() TObjectPtr<class USizeBox> HeightCap;
+	/** What folding hides: the hairline under the title, and the scroll body. */
+	UPROPERTY() TObjectPtr<UWidget> Rule;
+	UPROPERTY() TObjectPtr<UWidget> Body;
+	UPROPERTY() TObjectPtr<UUiButton> CollapseButton;
+	UPROPERTY() TObjectPtr<class UTextBlock> BadgeText;
+	bool bCollapsible = false;
 	UPROPERTY() TObjectPtr<UUiButton> CloseButton;
 	FName Id;
 	EUiWindowGesture Gesture = EUiWindowGesture::None;
