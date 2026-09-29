@@ -7,10 +7,12 @@
 #include "AirlineRoster.generated.h"
 
 class FOpsEventBus;
+class UFlightBoard;
 struct FDayEndedEvent;
 struct FFlightAirborneEvent;
 struct FOfferDeclinedEvent;
 struct FOfferExpiredEvent;
+struct FTurnaroundEndedEvent;
 
 /** One change to an airline's satisfaction and what caused it - the "why" the inbox row shows. */
 USTRUCT()
@@ -120,6 +122,18 @@ public:
 	/** DELIBERATELY FREE: declining is a legitimate choice (spec §3), and an airline that punished it
 	 *  would make the inbox a trap. Heard so the decision is visible in the log, and nothing more. */
 	void OnOfferDeclined(const FOfferDeclinedEvent& Event);
+
+	/**
+	 * An aircraft left its stand short of fuel: -Tuning.ShortfallPenalty times the fraction NOT delivered
+	 * ("left part-fuelled" / "left unfuelled"). A fuelled turnaround, or one that wanted nothing, scores 0.
+	 *
+	 * Flights RESOLVES THE AIRLINE, through the agent the event names - the job board that publishes it
+	 * does not know flights. PASSED, not held: WireBus owns both objects, and a held pointer would be one
+	 * more thing a detach must remember to clear. A flight not found (key 7's debug arrival, a flight
+	 * already retired) is skipped - an event is a fact about the past, not a demand to find one.
+	 * ENFORCED BY: AirportOps.Model.Airlines.TurnaroundOfNoFlightIsSkipped
+	 */
+	void OnTurnaroundEnded(const FTurnaroundEndedEvent& Event, const UFlightBoard* Flights);
 
 	/** Every airline forgives a little each day: Tuning.DailyDriftFraction of the way back to Start. */
 	void OnDayEnded(const FDayEndedEvent& Event);

@@ -22,6 +22,7 @@ class USimClock;
 class UGroundTraffic;
 class URoadNetwork;
 class ULedger;
+class FOpsEventBus;
 class UPricing;
 struct FRoadAgent;
 enum class EAgentPhase : uint8;
@@ -248,6 +249,13 @@ public:
 	 */
 	UPROPERTY() TObjectPtr<ULedger> Ledger = nullptr;
 	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+
+	/**
+	 * Where a turnaround's end is announced (FTurnaroundEndedEvent). Set by UOpsRuntime::Attach beside the
+	 * ledger; null in a bare NewObject, and the publish checks - Ledger's reason. Raw: the runtime owns
+	 * both this board and the bus.
+	 */
+	FOpsEventBus* Bus = nullptr;
 
 	/**
 	 * Bank the fee for one completed fuelling.

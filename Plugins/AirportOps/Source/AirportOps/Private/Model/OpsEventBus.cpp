@@ -124,6 +124,12 @@ FString FOfferAcceptedEvent::Describe() const
 	return FString::Printf(TEXT("flight %d, airline %s, stand %d"), FlightId, *AirlineId.ToString(), Stand.Index);
 }
 
+FString FTurnaroundEndedEvent::Describe() const
+{
+	return FString::Printf(TEXT("agent %d, stand %d, %s, %.0f of %.0f L"), AircraftAgentId, Stand.Index,
+		*UEnum::GetValueAsString(Outcome), Delivered, Wanted);
+}
+
 FString FOpsEventBus::Describe(const FOpsEvent& Event)
 {
 	return Visit([](const auto& Each) { return Each.Describe(); }, Event);

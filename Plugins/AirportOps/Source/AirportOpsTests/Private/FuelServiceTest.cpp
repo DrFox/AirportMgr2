@@ -8,6 +8,7 @@
 #include "Model/OpsSave.h"
 #include "Model/Pricing.h"
 #include "Model/Ledger.h"
+#include "Model/OpsEventBus.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
@@ -94,6 +95,9 @@ namespace
 		FGuidelineNodeId DepotPose;
 		FGuidelineNodeId TaxiwayFarEnd;
 
+		/** The taxiway's north end, where LayRunway joins the runway on. Set by Build. */
+		FGuidelineNodeId TaxiwayNorthEnd;
+
 		/** A SECOND stand, for the queue case. Unset unless bSecondStand was set before Build. */
 		FEntityInstanceId Stand2;
 		FGuidelineNodeId StandPose2;
@@ -133,6 +137,13 @@ namespace
 		 * The turnaround tests need one, because what they assert is the aeroplane going.
 		 */
 		bool bWithRunway = false;
+
+		/**
+		 * The runway bWithRunway lays, laid NOW - for a test that needs the airport to gain its runway after
+		 * an aircraft has been refused for the want of one. Build calls it when bWithRunway is set, so the
+		 * recipe exists once.
+		 */
+		void LayRunway();
 
 		/**
 		 * How far south of the stands the service road runs.
@@ -286,6 +297,39 @@ namespace
 	}
 }
 
+void FFuelFixture::LayRunway()
+{
+	// THE SAME RECIPE Airside.Model.Traffic.DepartAgent uses - PAVEMENT split at the
+	// point the guideline meets it, and a wide continuous profile. No SetRunwayFacts: the
+	// defaults admit the default airframe, and a fixture that authored facts would be
+	// asserting admission rules this test says nothing about.
+	//
+	// NORTH of the taxiway's far end, so a departure taxis AWAY from the stand and the
+	// leaving is unmistakable on the phase.
+	URoadProfile* Strip = TestProfiles::Runway();
+	const FRoadNodeId West = Net->AddNode(FVector2D(-50000.0, 20000.0));
+	const FRoadNodeId Mid = Net->AddNode(FVector2D(-10000.0, 20000.0));
+	const FRoadNodeId East = Net->AddNode(FVector2D(50000.0, 20000.0));
+	Net->AddStraightSegment(West, Mid, Strip);
+	Net->AddStraightSegment(Mid, East, Strip);
+
+	// FROM THE TAXIWAY'S OWN NORTH NODE, not from a fresh one at the same place. LayLine
+	// adds nodes, so a second call at (-10000, 10000) puts a SECOND node there joined to
+	// nothing - the runway was then found and refused NoRoute, which is a graph with two
+	// components and no way between them.
+	const FGuidelineNodeId OnStrip = Net->AddGuidelineNode(FVector2D(-10000.0, 20000.0), false);
+	FGuidelineEdge ToStrip;
+	ToStrip.A = TaxiwayNorthEnd;
+	ToStrip.B = OnStrip;
+	ToStrip.Control = FVector2D(-10000.0, 15000.0);
+	ToStrip.AllowedTraffic = FTrafficMask::Only(ETraversalClass::Aircraft);
+	ToStrip.AllowedTraffic.Add(ETraversalClass::Emergency);
+	ToStrip.Direction = EGuidelineDir::Bidirectional;
+	ToStrip.Width = 600.0;
+	ToStrip.bDerived = true;
+	Net->AddGuidelineEdge(MoveTemp(ToStrip));
+}
+
 void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 {
 	Net = NewObject<URoadNetwork>(GetTransientPackage());
@@ -316,38 +360,11 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	LayLine(*Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
 		ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);
 	TaxiwayFarEnd = TaxiSouth;
+	TaxiwayNorthEnd = TaxiNorth;
 
 	if (bWithRunway)
 	{
-		// THE SAME RECIPE Airside.Model.Traffic.DepartAgent uses - PAVEMENT split at the
-		// point the guideline meets it, and a wide continuous profile. No SetRunwayFacts: the
-		// defaults admit the default airframe, and a fixture that authored facts would be
-		// asserting admission rules this test says nothing about.
-		//
-		// NORTH of the taxiway's far end, so a departure taxis AWAY from the stand and the
-		// leaving is unmistakable on the phase.
-		URoadProfile* Strip = TestProfiles::Runway();
-		const FRoadNodeId West = Net->AddNode(FVector2D(-50000.0, 20000.0));
-		const FRoadNodeId Mid = Net->AddNode(FVector2D(-10000.0, 20000.0));
-		const FRoadNodeId East = Net->AddNode(FVector2D(50000.0, 20000.0));
-		Net->AddStraightSegment(West, Mid, Strip);
-		Net->AddStraightSegment(Mid, East, Strip);
-
-		// FROM THE TAXIWAY'S OWN NORTH NODE, not from a fresh one at the same place. LayLine
-		// adds nodes, so a second call at (-10000, 10000) puts a SECOND node there joined to
-		// nothing - the runway was then found and refused NoRoute, which is a graph with two
-		// components and no way between them.
-		const FGuidelineNodeId OnStrip = Net->AddGuidelineNode(FVector2D(-10000.0, 20000.0), false);
-		FGuidelineEdge ToStrip;
-		ToStrip.A = TaxiNorth;
-		ToStrip.B = OnStrip;
-		ToStrip.Control = FVector2D(-10000.0, 15000.0);
-		ToStrip.AllowedTraffic = FTrafficMask::Only(ETraversalClass::Aircraft);
-		ToStrip.AllowedTraffic.Add(ETraversalClass::Emergency);
-		ToStrip.Direction = EGuidelineDir::Bidirectional;
-		ToStrip.Width = 600.0;
-		ToStrip.bDerived = true;
-		Net->AddGuidelineEdge(MoveTemp(ToStrip));
+		LayRunway();
 	}
 
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
@@ -2848,6 +2865,62 @@ bool FFuelEmptyDepotSaysNoVehiclesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and the card says what to do"),
 		Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
 		FString(TEXT("Fuel 300 L \u00B7 depot has no vehicles - buy one")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelRefusedDepartureTest, "AirportOps.Fuel.RefusedDepartureEndsNoTurnaround",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelRefusedDepartureTest::RunTest(const FString& Parameters)
+{
+	// FTurnaroundEndedEvent IS PUBLISHED ONLY ONCE DepartAgent SAYS YES (spec 2026-09-29-ops-batch3 §2). A
+	// refusal is retried every step the aircraft stays due, so an event published before the answer would
+	// score one turnaround against its airline once per retry - thirty times a second while a runway is busy.
+	FFuelFixture Fixture;
+	Fixture.TurnaroundSeconds = 60.0;
+	Fixture.Build(/*bWithRoad=*/true);   // NO RUNWAY: every departure is refused NoRunway until LayRunway
+	FOpsEventBus Bus;
+	TArray<FTurnaroundEndedEvent> Ended;
+	Bus.BeginWiring();
+	Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Sim, TEXT("test"), [&Ended](const FTurnaroundEndedEvent& E) { Ended.Add(E); });
+	Bus.EndWiring();
+	Fixture.Service->Bus = &Bus;
+
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+	const FTurnaround* Turnaround = Fixture.Service->TurnaroundFor(Aircraft);
+	if (!TestNotNull(TEXT("its turnaround opened"), Turnaround)) { return false; }
+	const double Deadline = Turnaround->TurnaroundEndsAt;
+	auto Phase = [&Fixture, Aircraft]
+	{
+		const FRoadAgent* Agent = Fixture.Traffic->FindAgent(Aircraft);
+		return Agent != nullptr ? Agent->Phase : EAgentPhase::Gone;
+	};
+	const bool bDue = Fixture.AdvanceUntil([&Fixture, Deadline]
+	{
+		const TArray<FServiceJob>& Jobs = Fixture.Service->GetJobs();
+		return Fixture.Clock->Now() >= Deadline && Jobs.Num() == 1 && Jobs[0].State == EServiceJobState::Done;
+	}, 300.0);
+	if (!TestTrue(TEXT("fuelled, and past its deadline"), bDue)) { return false; }
+
+	// FIVE SECONDS OF REFUSALS - 150 steps, each one asking DepartAgent again.
+	Fixture.Advance(5.0);
+	Bus.Drain();
+	TestEqual(TEXT("with no runway it is still on its stand"), static_cast<int32>(Phase()), static_cast<int32>(EAgentPhase::Parked));
+	TestEqual(TEXT("and a refused departure ends no turnaround - nothing is published"), Ended.Num(), 0);
+
+	Fixture.LayRunway();
+	TestTrue(TEXT("given a runway, it leaves and the turnaround's end is published"),
+		Fixture.AdvanceUntil([&Bus, &Ended] { Bus.Drain(); return Ended.Num() > 0; }, 60.0));
+	Fixture.Advance(5.0);
+	Bus.Drain();
+	if (!TestEqual(TEXT("exactly once, for all the refusals before it"), Ended.Num(), 1)) { return false; }
+	TestEqual(TEXT("naming the aircraft's agent - the roster finds the flight through it"), Ended[0].AircraftAgentId, Aircraft);
+	TestEqual(TEXT("and the stand it left"), Ended[0].Stand.Index, Fixture.Stand.Index);
+	TestEqual(TEXT("fuelled"), static_cast<int32>(Ended[0].Outcome), static_cast<int32>(EFuelOutcome::Fuelled));
+	TestEqual(TEXT("with everything it asked for delivered"), Ended[0].Delivered, 300.0, 1e-6);
+	TestEqual(TEXT("of the 300 L it asked for"), Ended[0].Wanted, 300.0, 1e-6);
 	return true;
 }
 

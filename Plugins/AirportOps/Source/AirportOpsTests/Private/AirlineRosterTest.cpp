@@ -1,9 +1,12 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Model/AirlineRoster.h"
+#include "Model/Flight.h"
+#include "Model/FlightBoard.h"
 #include "Model/OpsEventBus.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
+#include "Model/SimClock.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -16,6 +19,9 @@ namespace
 	{
 		UAirlineRoster* Roster = nullptr;
 		FOpsEventBus Bus;
+
+		/** The board the roster resolves a turnaround's airline through: one flight of airline A, flown by agent 7. */
+		UFlightBoard* Flights = nullptr;
 		TArray<FAirlineSatisfactionEvent> Changes;
 
 		FRosterFixture()
@@ -23,11 +29,18 @@ namespace
 			Roster = NewObject<UAirlineRoster>(GetTransientPackage());
 			Roster->Bus = &Bus;
 			Roster->Ensure(TEXT("A"));
+			Flights = NewObject<UFlightBoard>(GetTransientPackage());
+			UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+			Flight->AirlineId = TEXT("A");
+			Flight->AgentId = 7;
+			Flight->Phase = EFlightPhase::TaxiOut;
+			Flights->AddOffer(*NewObject<USimClock>(GetTransientPackage()), Flight);
 			Bus.BeginWiring();
 			Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FFlightAirborneEvent& E) { Roster->OnFlightAirborne(E); });
 			Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FOfferExpiredEvent& E) { Roster->OnOfferExpired(E); });
 			Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FOfferDeclinedEvent& E) { Roster->OnOfferDeclined(E); });
 			Bus.Subscribe<FDayEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FDayEndedEvent& E) { Roster->OnDayEnded(E); });
+			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FTurnaroundEndedEvent& E) { Roster->OnTurnaroundEnded(E, Flights); });
 			Bus.Subscribe<FAirlineSatisfactionEvent>(EOpsTier::Presentation, TEXT("test"), [this](const FAirlineSatisfactionEvent& E) { Changes.Add(E); });
 			Bus.EndWiring();
 		}
@@ -36,6 +49,17 @@ namespace
 		{
 			const FAirlineStanding* Row = Roster->Find(Id);
 			return Row != nullptr ? Row->Satisfaction : -1.0;
+		}
+
+		void TurnaroundEnded(EFuelOutcome Outcome, double Delivered, double Wanted, int32 Agent = 7)
+		{
+			FTurnaroundEndedEvent Event;
+			Event.AircraftAgentId = Agent;
+			Event.Outcome = Outcome;
+			Event.Delivered = Delivered;
+			Event.Wanted = Wanted;
+			Bus.Publish(MoveTemp(Event));
+			Bus.Drain();
 		}
 
 		void Airborne(double LateBy, FName Id = TEXT("A"))
@@ -237,6 +261,66 @@ bool FAirlinesDriftSettlesTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("the row"), Row)) { return false; }
 	TestTrue(TEXT("the row's cause is still what the player did, not the forgiveness"),
 		Row->Recent.Num() == 1 && Row->Recent.Last().Cause.Contains(TEXT("late")));
+	return true;
+}
+
+
+// --- TurnaroundEnded (spec 2026-09-29-ops-batch3 §2): the shortfall the log used to be the only witness of.
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesPartFuelledTest, "AirportOps.Model.Airlines.TurnaroundPartFuelledScoresInProportion",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesPartFuelledTest::RunTest(const FString&)
+{
+	FRosterFixture F;
+	F.TurnaroundEnded(EFuelOutcome::PartFuelled, 1000.0, 2500.0);
+	// 60% short of 0.06: -0.036. PROPORTIONAL, one knob - a truck that got most of the way there costs less
+	// than one that never came (user ruling 2026-09-29).
+	TestEqual(TEXT("part-fuelled costs the penalty times the fraction not delivered"), F.Sat(), 0.5 - 0.06 * 0.6, 1e-9);
+	if (!TestEqual(TEXT("the change is published once"), F.Changes.Num(), 1)) { return false; }
+	TestEqual(TEXT("and its cause is what the inbox row shows"), F.Changes[0].Cause, FString(TEXT("left part-fuelled")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesUnfuelledTest, "AirportOps.Model.Airlines.TurnaroundUnfuelledScoresTheFullPenalty",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesUnfuelledTest::RunTest(const FString&)
+{
+	FRosterFixture F;
+	F.TurnaroundEnded(EFuelOutcome::Unfuelled, 0.0, 2500.0);
+	TestEqual(TEXT("nothing delivered costs the whole penalty"), F.Sat(), 0.5 - 0.06, 1e-9);
+	if (!TestEqual(TEXT("the change is published once"), F.Changes.Num(), 1)) { return false; }
+	TestEqual(TEXT("left unfuelled"), F.Changes[0].Cause, FString(TEXT("left unfuelled")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesFuelledTest, "AirportOps.Model.Airlines.TurnaroundFuelledScoresNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesFuelledTest::RunTest(const FString&)
+{
+	FRosterFixture F;
+	// FUELLED SCORES 0 (user ruling 2026-09-29): the on-time bonus already rewards a turnaround that went right,
+	// and paying for it twice would make fuel worth more to an airline than punctuality.
+	F.TurnaroundEnded(EFuelOutcome::Fuelled, 2500.0, 2500.0);
+	// WANTED 0 IS FUELLED, whatever the outcome says: an aircraft that asked for nothing was not let down.
+	F.TurnaroundEnded(EFuelOutcome::Unfuelled, 0.0, 0.0);
+	TestEqual(TEXT("neither moves the airline"), F.Sat(), 0.5, 1e-9);
+	TestEqual(TEXT("and neither is announced"), F.Changes.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesTurnaroundNoFlightTest, "AirportOps.Model.Airlines.TurnaroundOfNoFlightIsSkipped",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesTurnaroundNoFlightTest::RunTest(const FString&)
+{
+	FRosterFixture F;
+	// AGENT 99 FLIES NO FLIGHT - key 7's arrival before it had one, or a flight already retired. Skipped: an
+	// event is a fact about the past, and there is no airline to tell.
+	F.TurnaroundEnded(EFuelOutcome::Unfuelled, 0.0, 2500.0, /*Agent=*/99);
+	TestEqual(TEXT("no airline is charged for an aircraft that flew for none"), F.Sat(), 0.5, 1e-9);
+	TestEqual(TEXT("and nothing is announced"), F.Changes.Num(), 0);
+	// AND THE RESOLUTION IS BY AGENT, not "whichever airline": the same event for agent 7 does score.
+	F.TurnaroundEnded(EFuelOutcome::Unfuelled, 0.0, 2500.0, /*Agent=*/7);
+	TestEqual(TEXT("the flight agent 7 flies is found, and its airline charged"), F.Sat(), 0.44, 1e-9);
 	return true;
 }
 

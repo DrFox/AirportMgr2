@@ -500,4 +500,37 @@ bool FOpsRuntimeAcceptDirtiesAlertsTest::RunTest(const FString&)
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeTurnaroundShortfallTest, "AirportOps.Present.Bus.TurnaroundShortfallReachesAirline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeTurnaroundShortfallTest::RunTest(const FString&)
+{
+	// THE CHAIN THROUGH THE RUNTIME'S OWN WIRING: the job board publishes onto the runtime's bus (Attach), the
+	// roster hears TurnaroundEnded in the Reaction tier (WireBus) and resolves the airline through the
+	// runtime's flight board. The roster's world-free tests wire a bus by hand and cannot see either line missing.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	TestTrue(TEXT("the job board publishes onto the runtime's bus - set by Attach"), Runtime->GetJobBoard()->Bus == &Runtime->GetBus());
+
+	const FName Airline = TEXT("BusTestShortfallAirline");
+	Runtime->GetAirlines()->Ensure(Airline);
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->AirlineId = Airline;
+	Flight->AgentId = 7;
+	Flight->Phase = EFlightPhase::TaxiOut;
+	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);
+	const double Before = Runtime->GetAirlines()->Find(Airline)->Satisfaction;
+
+	FTurnaroundEndedEvent Event;
+	Event.AircraftAgentId = 7;
+	Event.Outcome = EFuelOutcome::Unfuelled;
+	Event.Wanted = 2500.0;
+	Runtime->GetBus().Publish(MoveTemp(Event));
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("an unfuelled departure costs the flight's airline the scenario's shortfall penalty"),
+		Runtime->GetAirlines()->Find(Airline)->Satisfaction, Before - Runtime->GetAirlines()->Tuning.ShortfallPenalty, 1e-9);
+	return true;
+}
+
 #endif

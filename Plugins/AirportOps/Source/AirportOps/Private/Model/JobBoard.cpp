@@ -1,6 +1,7 @@
 #include "Model/JobBoard.h"
 
 #include "Model/Ledger.h"
+#include "Model/OpsEventBus.h"
 #include "Model/Pricing.h"
 
 #include "AirportOpsLog.h"
@@ -1202,6 +1203,7 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		const double Delivered = Fuel != nullptr ? Fuel->QuantityDelivered : 0.0;
 		const double Wanted = Fuel != nullptr ? Fuel->QuantityDelivered + Fuel->QuantityOwed : 0.0;
 		const int32 Stand = Turnaround->Stand.Index;
+		const FEntityInstanceId StandId = Turnaround->Stand;
 
 		const EDepartureRefusal Refusal = Traffic.DepartAgent(AircraftId, Network);
 		if (Refusal != EDepartureRefusal::None)
@@ -1237,6 +1239,17 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 				: bUnfuelled
 					? *FString::Printf(TEXT(" UNFUELLED - %s"), RefusalText(Why))
 					: TEXT(" after its turnaround"));
+
+		// THE TURNAROUND'S END, for the airline to score (spec 2026-09-29-ops-batch3 §2) - HERE, past the
+		// refusal's `continue`, and never above it: a refused departure is retried on a later step, and an
+		// event published before DepartAgent answered would score one turnaround once per retry.
+		// ENFORCED BY: AirportOps.Fuel.RefusedDepartureEndsNoTurnaround
+		if (Bus != nullptr)
+		{
+			const EFuelOutcome Outcome = bPartFuelled ? EFuelOutcome::PartFuelled
+				: bUnfuelled ? EFuelOutcome::Unfuelled : EFuelOutcome::Fuelled;
+			Bus->Publish(FTurnaroundEndedEvent{ AircraftId, StandId, Outcome, Delivered, Wanted });
+		}
 	}
 }
 

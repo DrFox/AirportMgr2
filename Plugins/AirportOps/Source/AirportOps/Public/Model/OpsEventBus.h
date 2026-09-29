@@ -264,6 +264,27 @@ struct AIRPORTOPS_API FOfferAcceptedEvent
 };
 
 /**
+ * An aircraft left its stand - UJobBoard::DepartTheReady, ONLY once UGroundTraffic::DepartAgent has
+ * accepted the departure. A refusal (a busy runway) is retried on a later step, so publishing before the
+ * answer would score one turnaround once per retry.
+ *
+ * NAMES THE AGENT, NOT THE FLIGHT: the job board does not know flights, and must not learn them. The
+ * airline roster resolves the flight through UFlightBoard::FlightForAgent when it hears this - the
+ * flight is still the agent's then, since a departing aircraft keeps its flight until it is Gone.
+ */
+struct AIRPORTOPS_API FTurnaroundEndedEvent
+{
+	int32 AircraftAgentId = INDEX_NONE;
+	FEntityInstanceId Stand;
+	EFuelOutcome Outcome = EFuelOutcome::Fuelled;
+	/** Litres delivered and litres the flight asked for - both 0 for an aircraft that wanted none. */
+	double Delivered = 0.0;
+	double Wanted = 0.0;
+	static const TCHAR* EventName() { return TEXT("TurnaroundEnded"); }
+	FString Describe() const;
+};
+
+/**
  * EVERY EVENT THERE IS, as one closed list. Subscribe<T> and Publish<T> are compile-checked
  * against it, and the wiring test walks it - "lists that must agree are ONE list".
  * FInstancedStruct was rejected: an open set has no answer to "which events exist?".
@@ -271,7 +292,8 @@ struct AIRPORTOPS_API FOfferAcceptedEvent
 using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent,
 	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
-	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent>;
+	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
+	FTurnaroundEndedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

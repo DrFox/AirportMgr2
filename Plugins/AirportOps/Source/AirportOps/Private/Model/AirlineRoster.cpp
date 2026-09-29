@@ -1,5 +1,6 @@
 #include "Model/AirlineRoster.h"
 #include "AirportOpsLog.h"
+#include "Model/FlightBoard.h"
 #include "Model/OpsEventBus.h"
 
 void UAirlineRoster::Ensure(FName AirlineId)
@@ -89,6 +90,35 @@ void UAirlineRoster::OnOfferDeclined(const FOfferDeclinedEvent& Event)
 {
 	UE_LOG(LogAirportOps, Verbose, TEXT("Airline '%s': flight %d declined - no effect on satisfaction"),
 		*Event.AirlineId.ToString(), Event.FlightId);
+}
+
+void UAirlineRoster::OnTurnaroundEnded(const FTurnaroundEndedEvent& Event, const UFlightBoard* Flights)
+{
+	// WANTED NOTHING IS FUELLED: an aircraft that asked for no fuel was not let down, whatever the outcome
+	// field says. And FUELLED SCORES 0 - the on-time bonus already rewards the turnaround that went right.
+	if (Event.Outcome == EFuelOutcome::Fuelled || Event.Wanted <= 0.0)
+	{
+		return;
+	}
+	const UFlight* Flight = Flights != nullptr ? Flights->FlightForAgent(Event.AircraftAgentId) : nullptr;
+	if (Flight == nullptr)
+	{
+		UE_LOG(LogAirportOps, Verbose, TEXT("Turnaround of agent %d ended short of fuel, but it flies no flight - no airline to tell"),
+			Event.AircraftAgentId);
+		return;
+	}
+	FAirlineStanding* Row = FindMutable(Flight->AirlineId);
+	if (Row == nullptr)
+	{
+		UE_LOG(LogAirportOps, Verbose, TEXT("Airline '%s' (flight %d) has no standing - debug flight or removed airline"),
+			*Flight->AirlineId.ToString(), Flight->Id);
+		return;
+	}
+	// PROPORTIONAL, ONE KNOB (user ruling 2026-09-29): the fraction NOT delivered, so a truck that got most of
+	// the way there costs less than one that never came, and unfuelled is simply the whole of it.
+	const double Short = 1.0 - FMath::Clamp(Event.Delivered / Event.Wanted, 0.0, 1.0);
+	Apply(*Row, -Tuning.ShortfallPenalty * Short,
+		Event.Outcome == EFuelOutcome::PartFuelled ? TEXT("left part-fuelled") : TEXT("left unfuelled"));
 }
 
 void UAirlineRoster::OnDayEnded(const FDayEndedEvent& Event)

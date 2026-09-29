@@ -50,6 +50,22 @@ enum class EServiceJobState : uint8
 };
 
 /**
+ * How much of its fuel an aircraft left with - what FTurnaroundEndedEvent tells the airline (spec
+ * 2026-09-29-ops-batch3 §2). AN ENUM, not bUnfuelled + bPartFuelled: part-fuelled IS unserviceable with
+ * something delivered, and two bools would admit "part-fuelled but fuelled".
+ */
+UENUM()
+enum class EFuelOutcome : uint8
+{
+	/** Everything it asked for - or it asked for nothing. */
+	Fuelled,
+	/** Its fuel job went Unserviceable after at least one delivery. */
+	PartFuelled,
+	/** Its fuel job went Unserviceable before any delivery. */
+	Unfuelled
+};
+
+/**
  * WHY nothing can serve a job - one cause, named for the thing the player would go and fix.
  *
  * Not a bare "no route", which is the least useful thing a system can say to somebody building an

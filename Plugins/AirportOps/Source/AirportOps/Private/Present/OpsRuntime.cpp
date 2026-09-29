@@ -320,6 +320,12 @@ void UOpsRuntime::WireBus()
 		[this](const FOfferDeclinedEvent& E) { Airlines->OnOfferDeclined(E); });
 	Bus.Subscribe<FDayEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
 		[this](const FDayEndedEvent& E) { Airlines->OnDayEnded(E); });
+	// THE FLIGHT BOARD IS HANDED IN, so the job board that published this never learns flights: the roster
+	// resolves the airline through the agent the event names. REACTION, after the Sim tier has settled the
+	// departure's phase change - the flight is still the agent's until it is Gone.
+	// ENFORCED BY: AirportOps.Present.Bus.TurnaroundShortfallReachesAirline
+	Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
+		[this](const FTurnaroundEndedEvent& E) { Airlines->OnTurnaroundEnded(E, FlightBoard); });
 
 	// PRESENTATION: the line the PIE check greps for (spec §4) - a satisfaction change as the bus
 	// delivered it, which is what proves the chain end to end rather than the roster's own log line.
@@ -566,6 +572,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	Airlines->Bus = &Bus;
 	JobBoard->Ledger = Ledger;
 	JobBoard->Pricing = Pricing;
+	JobBoard->Bus = &Bus;
 	Ledger->Pricing = Pricing;
 	Ledger->Clock = Clock;
 
@@ -704,6 +711,7 @@ void UOpsRuntime::Detach()
 	FlightBoard->Bus = nullptr;
 	Alerts->Bus = nullptr;
 	Ledger->Bus = nullptr;
+	JobBoard->Bus = nullptr;
 	// THE QUEUE IS THE OLD ACTOR'S. A new level's traffic numbers its agents from 1 again, so a
 	// stale Parked for agent k would land on the new level's agent k. Dropped, and the price is
 	// that a re-Attach to the SAME actor loses at most one step of its events.
