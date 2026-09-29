@@ -229,6 +229,17 @@ public:
 	 */
 	const FVector2D& ViewFocus() const { return TargetView.Focus; }
 
+	/**
+	 * Glide the build camera to At - an alert's "Go". Leaves watch mode (riding an aircraft and being sent
+	 * somewhere else cannot both hold), then sets the TARGET focus only: the existing ease carries the view
+	 * there, so it glides rather than cuts, as a wheel notch does.
+	 */
+	void FocusOn(const FVector2D& At)
+	{
+		bWatchingAgent = false;
+		TargetView.Focus = At;
+	}
+
 private:
 	/** Orbiting camera spawned on possession; the view target while building AND while
 	 *  watching - the SAME actor serves both, only the rig driving it changes. */

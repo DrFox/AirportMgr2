@@ -433,6 +433,18 @@ public:
 	const FSelection& GetSelection() const { return Selection; }
 
 	/**
+	 * Select something FROM CODE - an alert's "Go" (ops alerts spec 2026-09-29). The select tool's hover
+	 * and click were the only writers before; the inspector shows whatever is selected, whoever set it.
+	 * None clears. The tool's own Tick still clears a selection whose subject has gone.
+	 * ENFORCED BY: Airside.Tool.BuildSession.SelectFromCode
+	 */
+	void Select(ESelectionKind Kind, int32 Id) const
+	{
+		Selection.Kind = Kind;
+		Selection.Id = Kind == ESelectionKind::None ? 0 : Id;
+	}
+
+	/**
 	 * Switches the active tool, deactivating the outgoing one first so nothing is left
 	 * part-drawn to reappear on the next selection.
 	 *

@@ -105,6 +105,8 @@ ICONS = {
     # The ledger panel. An abacus rather than a scroll or a notebook: it reads as COUNTING
     # at 24 pixels, where a scroll reads as a quest log and a notebook as notes.
     "game.ledger":         ("delapouite", "abacus"),
+    # FETCHED AND CHECKED 2026-09-29: delapouite/alarm-bell and lorc/alarm-clock return HTML, not PNG.
+    "game.alerts":         ("lorc",       "hazard-sign"),
 
     # The drive-side toggle (2026-09-23). A steering wheel: it reads as DRIVING at 24 pixels,
     # and which side the wheel sits on is the everyday sign of which side a country drives.
