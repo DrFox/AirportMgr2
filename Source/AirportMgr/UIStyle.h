@@ -144,11 +144,16 @@ public:
 	// an offer actually lives or dies on - shrinking the affirmative verb the player must read
 	// and click is the wrong two sites to save, against a badge count and tool captions that
 	// only gain legibility from the same +2. See the PR body's size table for every site.
+	//
+	// ONE STEP DOWN ACROSS THE WHOLE UI, 2026-09-29 (Label/Body 11 -> 10, Title/Clock 13 -> 12;
+	// Heading stays 9, already the floor): the player judged the text too large once Offers
+	// stacked past the screen. Whole-UI rather than an Offers-only size, their call, so every panel
+	// keeps one type scale. Label and Body stay EQUAL, so the reasoning above still holds.
 	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float HeadingSize = 9.0f;
-	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float LabelSize = 11.0f;
-	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float BodySize = 11.0f;
-	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float TitleSize = 13.0f;
-	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float ClockSize = 13.0f;
+	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float LabelSize = 10.0f;
+	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float BodySize = 10.0f;
+	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float TitleSize = 12.0f;
+	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float ClockSize = 12.0f;
 
 	/** Square edge of a tool button, uu. Today's bar is about 30 and is hard to hit. */
 	UPROPERTY(EditAnywhere, Category = "Metrics", meta = (ClampMin = "32.0")) float ButtonSize = 56.0f;
