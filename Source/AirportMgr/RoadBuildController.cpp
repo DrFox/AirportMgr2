@@ -789,6 +789,99 @@ void ARoadBuildController::UnstickSelected(EUnstickAction Action)
 	Runtime->Unstick(Id, Action);
 }
 
+FEntityInstanceId ARoadBuildController::DepotForSelection(const ARoadNetworkActor* InTarget, const FSelection& Selection)
+{
+	// A Stand-kind selection's Id is an ENTITY index (a depot is selected as a stand - FStandFacts::PoseRole);
+	// any other kind's Id is an agent or segment, and must not be read as one.
+	const URoadNetwork* Net = InTarget != nullptr ? InTarget->GetNetwork() : nullptr;
+	if (Net == nullptr || Selection.Kind != ESelectionKind::Stand)
+	{
+		return FEntityInstanceId();
+	}
+	const FEntityInstanceId Id = Net->EntityIdAt(Selection.Id);
+	const FEntityInstance* Entity = Net->GetEntity(Id);
+	return Entity != nullptr && Entity->bAlive && Entity->IsDepot() ? Id : FEntityInstanceId();
+}
+
+FEntityInstanceId ARoadBuildController::SelectedFacility() const
+{
+	return DepotForSelection(Target, GetSelection());
+}
+
+FFacilityQuote ARoadBuildController::QuoteSelectedFacility() const
+{
+	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	const FEntityInstanceId Id = SelectedFacility();
+	return Runtime != nullptr && Id.IsSet() ? Runtime->QuoteFacility(Id) : FFacilityQuote();
+}
+
+bool ARoadBuildController::CanBuySelectedModule() const
+{
+	const FFacilityQuote Quote = QuoteSelectedFacility();
+	return Quote.Modules.Num() > 0 && Quote.Modules[0].Refusal == EPurchaseRefusal::None;
+}
+
+void ARoadBuildController::BuySelectedModule()
+{
+	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	const FFacilityQuote Quote = QuoteSelectedFacility();
+	if (Runtime == nullptr || Quote.Modules.Num() == 0)
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Buy module: no depot selected, or no ops runtime."));
+		return;
+	}
+	// UFacilityPurchases logs the "Purchase: ..." line; this one says the click arrived.
+	const FEntityInstanceId Depot = SelectedFacility();
+	UE_LOG(LogRoadBuild, Log, TEXT("Buy module %s: depot %d"), *UEnum::GetValueAsString(Quote.Modules[0].Module), Depot.Index);
+	Runtime->BuyModule(Depot, Quote.Modules[0].Module);
+}
+
+bool ARoadBuildController::CanBuyChosenVehicle() const
+{
+	const FFacilityQuote Quote = QuoteSelectedFacility();
+	const FName Chosen = ChosenVehicleType;
+	const FVehicleOfferQuote* Offer = Quote.VehicleOffers.FindByPredicate([Chosen](const FVehicleOfferQuote& O) { return O.TypeCode == Chosen; });
+	return Offer != nullptr && Offer->Refusal == EPurchaseRefusal::None;
+}
+
+void ARoadBuildController::BuyChosenVehicle()
+{
+	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	const FEntityInstanceId Depot = SelectedFacility();
+	if (Runtime == nullptr || !Depot.IsSet() || ChosenVehicleType.IsNone())
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Buy vehicle: no depot selected, no type chosen, or no ops runtime."));
+		return;
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("Buy vehicle %s: depot %d"), *ChosenVehicleType.ToString(), Depot.Index);
+	Runtime->BuyVehicle(Depot, ChosenVehicleType);
+	// SPENT: a choice is one purchase, so a stray later run of the row cannot buy a second of it.
+	ChosenVehicleType = NAME_None;
+}
+
+bool ARoadBuildController::CanSellArmedVehicle() const
+{
+	// Asked of the SELECTED depot's fleet, not the board at large: an armed id left over from another
+	// card cannot sell a vehicle the player is not looking at.
+	const FFacilityQuote Quote = QuoteSelectedFacility();
+	const int32 Armed = ArmedSellVehicle;
+	const FFleetRowQuote* Row = Quote.Fleet.FindByPredicate([Armed](const FFleetRowQuote& R) { return R.VehicleId == Armed; });
+	return Row != nullptr && Row->Refusal == EPurchaseRefusal::None;
+}
+
+void ARoadBuildController::SellArmedVehicle()
+{
+	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	if (Runtime == nullptr || ArmedSellVehicle == 0)
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Sell vehicle: nothing armed, or no ops runtime."));
+		return;
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("Sell vehicle %d"), ArmedSellVehicle);
+	Runtime->SellVehicle(ArmedSellVehicle);
+	ArmedSellVehicle = 0;
+}
+
 bool ARoadBuildController::CanDepartSelected() const
 {
 	// THROUGH THE PER-FRAME CACHE (issue #187): the bar polls this every tick, and

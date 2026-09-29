@@ -111,7 +111,9 @@ bool FUIStyleIconsTest::RunTest(const FString& Parameters)
 	{
 		if (Action.Section == EActionSection::Time
 			|| Action.Section == EActionSection::Snap
-			|| Action.Section == EActionSection::SnapTo)
+			|| Action.Section == EActionSection::SnapTo
+			// INSPECTOR-ONLY rows draw no bar button, so they need no icon (facility spec §6 deviation 8).
+			|| Action.bInspectorOnly)
 		{
 			continue;
 		}

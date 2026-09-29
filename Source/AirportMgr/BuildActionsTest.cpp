@@ -1,6 +1,9 @@
 #include "CoreMinimal.h"
 #include "BuildActions.h"
 #include "BuildHudLayer.h"
+#include "Entities/EntityDefinition.h"
+#include "Model/RoadNetwork.h"
+#include "Present/RoadNetworkActor.h"
 #include "PlayerSettings.h"
 #include "SettingsPanelWidget.h"
 #include "UI/UiWindowHost.h"
@@ -8,6 +11,7 @@
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/BuildSession.h"
+#include "Tool/Selection.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -530,6 +534,69 @@ bool FGridOrientButtonIsInTheRegistryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("can be executed"), static_cast<bool>(Action->Execute));
 	TestTrue(TEXT("reports whether it is lit"), static_cast<bool>(Action->IsActive));
 	TestTrue(TEXT("has a caption that follows the orientation"), static_cast<bool>(Action->DynamicLabel));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFacilityVerbsRegisteredTest,
+	"AirportMgr.Actions.FacilityVerbsRegistered",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFacilityVerbsRegisteredTest::RunTest(const FString& Parameters)
+{
+	// BY NAME (CLAUDE.md "lists that must agree"): the inspector finds these rows by id, so a rename here
+	// would leave the depot card with dead buttons and nothing red.
+	for (const TCHAR* Id : { TEXT("selection.buy_module"), TEXT("selection.buy_vehicle"), TEXT("selection.sell_vehicle") })
+	{
+		const FBuildAction* Action = FindAction(FName(Id));
+		if (!TestNotNull(*FString::Printf(TEXT("%s is registered"), Id), Action)) { continue; }
+		TestEqual(*FString::Printf(TEXT("%s is a Selection verb"), Id), Action->Section, EActionSection::Selection);
+		TestFalse(*FString::Printf(TEXT("%s has no key - a key that spent money on whatever was selected is a misclick"), Id), Action->Key.IsValid());
+		TestTrue(*FString::Printf(TEXT("%s is inspector-only - acting on a selection belongs to the inspector"), Id), Action->bInspectorOnly);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotForSelectionTest,
+	"AirportMgr.Actions.SelectionNamesItsDepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotForSelectionTest::RunTest(const FString& Parameters)
+{
+	// THE ONE selection->depot WALK (ruling C4): the card's verbs and the ghost reveal both ask it, so what
+	// counts as "the selected depot" is decided here once. An UNPLOTTED depot still counts - the card sells
+	// its vehicles; narrowing to plotted yards is the reveal's own business.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+	// PlotKitContentTest's setup: a spawned actor's network is only placeable into after a clear.
+	Actor->ClearNetwork();
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	URoadNetwork& Net = *Actor->Network;
+	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+	FEntityPlacement Placement;
+	Placement.Definition = DepotDef;
+	Placement.Anchors = DepotDef->Anchors;
+	Placement.Position = FVector2D(1000.0, 0.0);
+	Placement.Heading = UE_DOUBLE_HALF_PI;
+	Placement.PoseRole = EServiceRole::Fuel;
+	const FEntityInstanceId Depot = Net.PlaceEntity(Placement);
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(20000.0, 0.0), 0.0, 0.0, StandDef->PoseRole, 0);
+	if (!TestTrue(TEXT("setup: a depot and a stand"), Depot.IsSet() && Stand.IsSet())) { return false; }
+
+	FSelection Sel;
+	Sel.Kind = ESelectionKind::Stand;
+	Sel.Id = Depot.Index;
+	TestTrue(TEXT("a selected depot is named, plotted or not"), ARoadBuildController::DepotForSelection(Actor, Sel) == Depot);
+	Sel.Id = Stand.Index;
+	TestFalse(TEXT("a selected stand is no depot"), ARoadBuildController::DepotForSelection(Actor, Sel).IsSet());
+	Sel.Id = Depot.Index;
+	Sel.Kind = ESelectionKind::Aircraft;
+	TestFalse(TEXT("an aircraft id that happens to equal the depot's index names nothing"), ARoadBuildController::DepotForSelection(Actor, Sel).IsSet());
+	Sel.Kind = ESelectionKind::Stand;
+	TestFalse(TEXT("and no target names nothing"), ARoadBuildController::DepotForSelection(nullptr, Sel).IsSet());
 	return true;
 }
 

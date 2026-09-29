@@ -208,6 +208,34 @@ namespace
 			[](FBuildActionContext& Ctx) { Ctx.Controller.RequestUnstickMenu(); }, Never,
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanUnstickSelected(EUnstickAction::Despawn).bAllowed; }));
 
+		// FACILITY PURCHASES (spec 2026-09-29-facility-upgrades §4): the depot card's three verbs, INSPECTOR
+		// ONLY. Buy-vehicle and sell carry an argument a row cannot: the card CHOOSES the type / ARMS the
+		// vehicle on the controller, then runs the row - so a sale takes two clicks (a destructive gesture
+		// needs a deliberate second one - memory). Keyless: a key that spent money on whatever was selected
+		// is a misclick.
+		{
+			FBuildAction Module = Make(TEXT("selection.buy_module"), EActionSection::Selection,
+				LOCTEXT("BuyModule", "Buy module"), EKeys::Invalid, false,
+				[](FBuildActionContext& Ctx) { Ctx.Controller.BuySelectedModule(); }, Never,
+				[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanBuySelectedModule(); });
+			Module.bInspectorOnly = true;
+			Out.Add(MoveTemp(Module));
+
+			FBuildAction Vehicle = Make(TEXT("selection.buy_vehicle"), EActionSection::Selection,
+				LOCTEXT("BuyVehicle", "Buy vehicle"), EKeys::Invalid, false,
+				[](FBuildActionContext& Ctx) { Ctx.Controller.BuyChosenVehicle(); }, Never,
+				[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanBuyChosenVehicle(); });
+			Vehicle.bInspectorOnly = true;
+			Out.Add(MoveTemp(Vehicle));
+
+			FBuildAction Sell = Make(TEXT("selection.sell_vehicle"), EActionSection::Selection,
+				LOCTEXT("SellVehicle", "Sell vehicle"), EKeys::Invalid, false,
+				[](FBuildActionContext& Ctx) { Ctx.Controller.SellArmedVehicle(); }, Never,
+				[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanSellArmedVehicle(); });
+			Sell.bInspectorOnly = true;
+			Out.Add(MoveTemp(Sell));
+		}
+
 		// --- Game ---
 		Out.Add(Make(TEXT("game.save"), EActionSection::Game, LOCTEXT("Save", "Save"), EKeys::K, false,
 			[](FBuildActionContext& Ctx) { Ctx.Controller.QuickSave(); }, Never, HasRuntime));

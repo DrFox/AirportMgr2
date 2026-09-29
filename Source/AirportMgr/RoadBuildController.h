@@ -15,6 +15,7 @@
 #include "Tool/RoadSnap.h"
 #include "Tool/Selection.h"
 #include "Model/AgentRescue.h"
+#include "Model/FacilityPurchases.h"
 #include "RoadBuildController.generated.h"
 
 class FGamePlayerSettingsSink;
@@ -547,6 +548,36 @@ public:
 	int32 GetUnstickMenuRequests() const { return UnstickMenuRequests; }
 
 	/**
+	 * THE selection->depot WALK, written once (ruling C4 of the facility-upgrades plan): the live fuel
+	 * depot a Stand-kind selection names on InTarget's network, else unset. STATIC over (target,
+	 * selection) rather than a member reading this controller's own, so a headless test and the ghost
+	 * reveal (RevealedDepotFor, which narrows it to PLOTTED depots) ask it without a controller. What
+	 * counts as "the selected depot" is decided here; a caller narrows, never re-walks.
+	 * ENFORCED BY: AirportMgr.Actions.SelectionNamesItsDepot
+	 */
+	static FEntityInstanceId DepotForSelection(const ARoadNetworkActor* InTarget, const FSelection& Selection);
+
+	/**
+	 * THE DEPOT CARD'S VERBS (facility-upgrades spec §4) - FORWARDERS to UOpsRuntime with the selected
+	 * depot, the Unstick verbs' shape. The quote is asked fresh on every call, so an enabled check and the
+	 * command it guards read the same state. Refused (logged) with no depot selected or no runtime.
+	 */
+	FEntityInstanceId SelectedFacility() const;
+	FFacilityQuote QuoteSelectedFacility() const;
+	/** The quote's FIRST module offer - the only one this slice (the shed). A second becomes a menu. */
+	bool CanBuySelectedModule() const;
+	void BuySelectedModule();
+	/** The card's buy menu chooses, then runs selection.buy_vehicle - the row cannot carry the type. */
+	void ChooseVehicleToBuy(FName TypeCode) { ChosenVehicleType = TypeCode; }
+	bool CanBuyChosenVehicle() const;
+	void BuyChosenVehicle();
+	/** The fleet row's first click arms, its second runs selection.sell_vehicle. 0 disarms. */
+	void ArmSellVehicle(int32 VehicleId) { ArmedSellVehicle = VehicleId; }
+	int32 GetArmedSellVehicle() const { return ArmedSellVehicle; }
+	bool CanSellArmedVehicle() const;
+	void SellArmedVehicle();
+
+	/**
 	 * What the next click would do, run through the snap chain. False only when the
 	 * cursor is not over the road plane at all.
 	 *
@@ -892,4 +923,8 @@ private:
 private:
 	/** See RequestUnstickMenu. */
 	int32 UnstickMenuRequests = 0;
+
+	/** See ChooseVehicleToBuy / ArmSellVehicle. Session state, never saved. */
+	FName ChosenVehicleType;
+	int32 ArmedSellVehicle = 0;
 };

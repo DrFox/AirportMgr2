@@ -9,6 +9,7 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
+#include "Components/PanelWidget.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
@@ -48,6 +49,14 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 		UnstickMenu->Items = [Weak]() { return Weak.IsValid() ? Weak->UnstickItems() : TArray<FUiMenuItem>(); };
 		UnstickMenu->OnChosen.AddDynamic(this, &UInspectorWidget::HandleUnstickChosen);
 	}
+	if (BuyModuleButton != nullptr) { BuyModuleButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleBuyModule); }
+	if (BuyVehicleMenu != nullptr)
+	{
+		// WEAK - UnstickMenu's reason above.
+		TWeakObjectPtr<UInspectorWidget> WeakSelf(this);
+		BuyVehicleMenu->Items = [WeakSelf]() { return WeakSelf.IsValid() ? WeakSelf->BuyVehicleItems() : TArray<FUiMenuItem>(); };
+		BuyVehicleMenu->OnChosen.AddDynamic(this, &UInspectorWidget::HandleBuyVehicleChosen);
+	}
 	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce. The WINDOW
 	// hides (SetShown); the root stays laid out.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
@@ -84,6 +93,9 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 			UnstickActionIndex = Index;
 			continue;
 		}
+		if (Actions[Index].Id == FName(TEXT("selection.buy_module"))) { BuyModuleActionIndex = Index; continue; }
+		if (Actions[Index].Id == FName(TEXT("selection.buy_vehicle"))) { BuyVehicleActionIndex = Index; continue; }
+		if (Actions[Index].Id == FName(TEXT("selection.sell_vehicle"))) { SellVehicleActionIndex = Index; continue; }
 		if (SelectionSeen == 0) { DepartActionIndex = Index; }
 		else if (SelectionSeen == 1) { FollowActionIndex = Index; }
 		++SelectionSeen;
@@ -168,6 +180,51 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	if (!Actions.IsValidIndex(UnstickActionIndex))
 	{
 		UE_LOG(LogInspector, Warning, TEXT("No selection.unstick row in BuildActions(): the agent card has no Unstick"));
+	}
+
+	// THE PURCHASE ROWS, built empty; ShowFacilityQuote fills them from the one quote.
+	auto Panel = [&](TObjectPtr<UPanelWidget>& Field, UClass* Class, const TCHAR* Name)
+	{
+		if (Field != nullptr || Column == nullptr) { return; }
+		Field = WidgetTree->ConstructWidget<UPanelWidget>(Class, Name);
+		Column->AddChildToVerticalBox(Field)->SetPadding(FMargin(0.0f, 6.0f, 0.0f, 0.0f));
+		Field->SetVisibility(ESlateVisibility::Collapsed);
+	};
+	// Only into a row that exists: with an asset's content and no code-built row, a text block built here
+	// would be parented nowhere and never drawn.
+	auto RowText = [&](TObjectPtr<UTextBlock>& Field, const TCHAR* Name, UPanelWidget* Into)
+	{
+		UHorizontalBox* Box = Cast<UHorizontalBox>(Into);
+		if (Field != nullptr || Box == nullptr) { return; }
+		Field = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), Name);
+		Style->ApplyText(*Field, EUITextRole::Body, Style->InkMuted);
+		Box->AddChildToHorizontalBox(Field)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
+	};
+	Panel(ShedsRow, UHorizontalBox::StaticClass(), TEXT("ShedsRow"));
+	RowText(ShedsText, TEXT("ShedsText"), ShedsRow);
+	if (BuyModuleButton == nullptr && Actions.IsValidIndex(BuyModuleActionIndex))
+	{
+		BuyModuleButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), TEXT("BuyModuleButton"));
+		BuyModuleButton->SetLabel(Actions[BuyModuleActionIndex].Label);
+		BuyModuleButton->Build(*Style, EUiButtonKind::Secondary);
+		if (UHorizontalBox* Box = Cast<UHorizontalBox>(ShedsRow)) { Box->AddChildToHorizontalBox(BuyModuleButton); }
+	}
+	Panel(VehiclesRow, UHorizontalBox::StaticClass(), TEXT("VehiclesRow"));
+	RowText(VehiclesText, TEXT("VehiclesText"), VehiclesRow);
+	if (BuyVehicleMenu == nullptr && Actions.IsValidIndex(BuyVehicleActionIndex))
+	{
+		BuyVehicleMenu = WidgetTree->ConstructWidget<UUiMenuButton>(UUiMenuButton::StaticClass(), TEXT("BuyVehicleMenu"));
+		BuyVehicleMenu->Build(*Style, Actions[BuyVehicleActionIndex].Label);
+		if (UHorizontalBox* Box = Cast<UHorizontalBox>(VehiclesRow)) { Box->AddChildToHorizontalBox(BuyVehicleMenu); }
+	}
+	Panel(FleetList, UVerticalBox::StaticClass(), TEXT("FleetList"));
+	for (const int32 Found : { BuyModuleActionIndex, BuyVehicleActionIndex, SellVehicleActionIndex })
+	{
+		if (!Actions.IsValidIndex(Found))
+		{
+			UE_LOG(LogInspector, Warning, TEXT("A selection.buy_module/buy_vehicle/sell_vehicle row is missing from BuildActions(): the depot card cannot buy or sell"));
+			break;
+		}
 	}
 }
 
@@ -255,6 +312,10 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		// A POPUP FOR THE OLD AGENT closes with its card: its lines were asked of that agent, and a
 		// confirm armed for one aeroplane must not despawn the next one clicked.
 		if (UnstickMenu != nullptr) { UnstickMenu->Close(); }
+		// The same for the buy menu, and a key no fleet has forces the next depot's rows to rebuild -
+		// which disarms any sale armed on the old card (RebuildFleetRows).
+		if (BuyVehicleMenu != nullptr) { BuyVehicleMenu->Close(); }
+		LastFleetKey = TEXT("!");
 	}
 
 	// ONE CARD PER KIND, counted at compile time (review fix 3): the branches below are None
@@ -264,6 +325,8 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		"a new ESelectionKind needs an inspector card - add its branch below, then update this count");
 
 	FString Title, Facts, Status;
+	// Default (NotAFacility) for every card but a depot's - which collapses the purchase rows.
+	FFacilityQuote CardQuote;
 	bool bAircraft = false;
 	bool bRunway = false;
 	FText RunwayCaption;
@@ -535,6 +598,12 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 					}
 				}
 			}
+			// THE PURCHASE ROWS AND "NO VEHICLES", from the one quote (facility-upgrades spec §4).
+			if (const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
+			{
+				CardQuote = Runtime->QuoteFacility(Target->GetNetwork()->EntityIdAt(Selection.Id));
+			}
+			Status = DepotStatus(CardQuote, S.bReachable, Status);
 		}
 		bDepartEnabled = false;
 	}
@@ -624,6 +693,8 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			RunwayUseButton->SetLabel(RunwayUseCaption);
 		}
 	}
+	// EVERY CARD SAYS whether it has purchase rows - a non-depot's default quote collapses them.
+	ShowFacilityQuote(CardQuote);
 	SetShown(true);
 }
 
@@ -692,6 +763,184 @@ void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
 void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 void UInspectorWidget::HandleRunway() { RunAction(RunwayActionIndex); }
 void UInspectorWidget::HandleRunwayUse() { RunAction(RunwayUseActionIndex); }
+
+FString UInspectorWidget::DepotStatus(const FFacilityQuote& Quote, bool bReachable, const FString& Current)
+{
+	// OFF THE ROAD, THE ROAD IS THE FIX, and a depot with a vehicle keeps its backlog line.
+	if (!bReachable || !Quote.IsFacility() || Quote.Vehicles > 0)
+	{
+		return Current;
+	}
+	return NSLOCTEXT("AirportMgr", "InspectorDepotNoVehicles", "No vehicles — buy one").ToString();
+}
+
+void UInspectorWidget::ShowFacilityQuote(const FFacilityQuote& Quote)
+{
+	LastQuote = Quote;
+	const bool bCard = Quote.IsFacility();
+	auto Show = [](UWidget* Widget, bool bShow)
+	{
+		const ESlateVisibility Wanted = bShow ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
+		if (Widget != nullptr && Widget->GetVisibility() != Wanted) { Widget->SetVisibility(Wanted); }
+	};
+	// COMPARED FIRST: SetText has no early-out, and this runs every tick (Refresh's own gate, same reason).
+	auto SetIfChanged = [](UTextBlock* Block, const FString& Text)
+	{
+		if (Block != nullptr && Block->GetText().ToString() != Text) { Block->SetText(FText::FromString(Text)); }
+	};
+	Show(ShedsRow, bCard && Quote.Modules.Num() > 0);
+	Show(VehiclesRow, bCard);
+	Show(FleetList, bCard && Quote.Fleet.Num() > 0);
+
+	if (bCard && Quote.Modules.Num() > 0)
+	{
+		const FModuleOfferQuote& Module = Quote.Modules[0];
+		SetIfChanged(ShedsText, FString::Printf(TEXT("%s %d / %d space"), *Module.PluralName.ToString(), Module.Owned, Module.Reserved));
+		if (BuyModuleButton != nullptr)
+		{
+			// A REFUSED BUY SAYS WHY on its own caption - a greyed button with no reason teaches nothing.
+			const bool bCan = Module.Refusal == EPurchaseRefusal::None;
+			const FText Caption = bCan ? Module.Label
+				: FText::Format(NSLOCTEXT("AirportMgr", "InspectorRefusedCaption", "{0} - {1}"), Module.Label, UFacilityPurchases::RefusalText(Module.Refusal));
+			const UTextBlock* Current = BuyModuleButton->GetLabel();
+			if (Current == nullptr || !Current->GetText().EqualTo(Caption)) { BuyModuleButton->SetLabel(Caption); }
+			BuyModuleButton->SetState(bCan, false);
+		}
+	}
+	if (bCard)
+	{
+		SetIfChanged(VehiclesText, FString::Printf(TEXT("Vehicles %d / %d bays"), Quote.Vehicles, Quote.Bays));
+		if (BuyVehicleMenu != nullptr && BuyVehicleMenu->GetButton() != nullptr)
+		{
+			// The MENU opens whenever there is an offer; each LINE greys with its own reason (BuyVehicleItems).
+			BuyVehicleMenu->GetButton()->SetState(Quote.VehicleOffers.Num() > 0, false);
+		}
+	}
+
+	FString Key;
+	for (const FFleetRowQuote& Row : Quote.Fleet) { Key += FString::Printf(TEXT("%d,"), Row.VehicleId); }
+	if (Key != LastFleetKey)
+	{
+		LastFleetKey = Key;
+		RebuildFleetRows();
+	}
+	for (int32 Index = 0; Index < FleetRows.Num() && Index < Quote.Fleet.Num(); ++Index)
+	{
+		UInspectorFleetRow* Row = FleetRows[Index];
+		const FFleetRowQuote& Facts = Quote.Fleet[Index];
+		SetIfChanged(Row->Line, Facts.Line);
+		const bool bCan = Facts.Refusal == EPurchaseRefusal::None;
+		// A vehicle that went busy while armed DISARMS: the confirm was for an idle vehicle.
+		if (!bCan) { Row->bArmed = false; }
+		const FText Caption = !bCan ? UFacilityPurchases::RefusalText(Facts.Refusal)
+			: Row->bArmed ? FText::Format(NSLOCTEXT("AirportMgr", "InspectorSellConfirm", "{0} - click again"), Facts.SellLabel)
+			: Facts.SellLabel;
+		const UTextBlock* Current = Row->SellButton->GetLabel();
+		if (Current == nullptr || !Current->GetText().EqualTo(Caption)) { Row->SellButton->SetLabel(Caption); }
+		Row->SellButton->SetState(bCan, Row->bArmed);
+	}
+}
+
+void UInspectorWidget::RebuildFleetRows()
+{
+	if (FleetList != nullptr) { FleetList->ClearChildren(); }
+	FleetRows.Reset();
+	// A REBUILD DISARMS: the armed vehicle may be the one that just left the list.
+	if (ARoadBuildController* C = Controller()) { C->ArmSellVehicle(0); }
+	if (FleetList == nullptr || PanelStyle == nullptr) { return; }
+	for (const FFleetRowQuote& Facts : LastQuote.Fleet)
+	{
+		UInspectorFleetRow* Row = NewObject<UInspectorFleetRow>(this);
+		Row->VehicleId = Facts.VehicleId;
+		Row->Owner = this;
+		UHorizontalBox* Box = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+		Row->Line = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+		PanelStyle->ApplyText(*Row->Line, EUITextRole::Body, PanelStyle->InkMuted);
+		Row->Line->SetText(FText::FromString(Facts.Line));
+		Box->AddChildToHorizontalBox(Row->Line)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
+		Row->SellButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
+		Row->SellButton->SetLabel(Facts.SellLabel);
+		Row->SellButton->Build(*PanelStyle, EUiButtonKind::Secondary);
+		Row->SellButton->OnClicked.AddDynamic(Row, &UInspectorFleetRow::HandleSell);
+		Box->AddChildToHorizontalBox(Row->SellButton);
+		FleetList->AddChild(Box);
+		FleetRows.Add(Row);
+	}
+}
+
+void UInspectorFleetRow::HandleSell()
+{
+	if (UInspectorWidget* Panel = Owner.Get())
+	{
+		Panel->OnFleetSell(*this);
+	}
+}
+
+void UInspectorWidget::OnFleetSell(UInspectorFleetRow& Row)
+{
+	ARoadBuildController* C = Controller();
+	if (C == nullptr)
+	{
+		UE_LOG(LogInspector, Warning, TEXT("Sell click on vehicle %d ignored: no controller"), Row.VehicleId);
+		return;
+	}
+	if (!Row.bArmed)
+	{
+		// ONE ARMED ROW: arming a second row disarms the first, so "click again" is never ambiguous.
+		for (UInspectorFleetRow* Other : FleetRows) { if (Other != nullptr) { Other->bArmed = false; } }
+		Row.bArmed = true;
+		C->ArmSellVehicle(Row.VehicleId);
+		return;
+	}
+	Row.bArmed = false;
+	RunAction(SellVehicleActionIndex);
+}
+
+TArray<FUiMenuItem> UInspectorWidget::BuyVehicleItems() const
+{
+	TArray<FUiMenuItem> Out;
+	ShownVehicleCodes.Reset();
+	for (const FVehicleOfferQuote& Offer : LastQuote.VehicleOffers)
+	{
+		FUiMenuItem& Item = Out.AddDefaulted_GetRef();
+		Item.Label = Offer.Label;
+		Item.bEnabled = Offer.Refusal == EPurchaseRefusal::None;
+		Item.Why = UFacilityPurchases::RefusalText(Offer.Refusal);
+		ShownVehicleCodes.Add(Offer.TypeCode);
+	}
+	return Out;
+}
+
+void UInspectorWidget::HandleBuyVehicleChosen(int32 Index)
+{
+	ARoadBuildController* C = Controller();
+	if (C == nullptr || !ShownVehicleCodes.IsValidIndex(Index))
+	{
+		UE_LOG(LogInspector, Warning, TEXT("Buy vehicle line %d ignored: no controller or no such line"), Index);
+		return;
+	}
+	C->ChooseVehicleToBuy(ShownVehicleCodes[Index]);
+	RunAction(BuyVehicleActionIndex);
+}
+
+void UInspectorWidget::HandleBuyModule() { RunAction(BuyModuleActionIndex); }
+
+bool UInspectorWidget::AreFacilityRowsShownForTest() const
+{
+	return VehiclesRow != nullptr && VehiclesRow->GetVisibility() == ESlateVisibility::Visible;
+}
+FString UInspectorWidget::ShedsTextForTest() const { return ShedsText != nullptr ? ShedsText->GetText().ToString() : FString(); }
+FString UInspectorWidget::VehiclesTextForTest() const { return VehiclesText != nullptr ? VehiclesText->GetText().ToString() : FString(); }
+bool UInspectorWidget::IsBuyModuleEnabledForTest() const { return BuyModuleButton != nullptr && BuyModuleButton->GetIsEnabled(); }
+FString UInspectorWidget::BuyModuleCaptionForTest() const
+{
+	const UTextBlock* Caption = BuyModuleButton != nullptr ? BuyModuleButton->GetLabel() : nullptr;
+	return Caption != nullptr ? Caption->GetText().ToString() : FString();
+}
+bool UInspectorWidget::IsSellEnabledForTest(int32 Row) const
+{
+	return FleetRows.IsValidIndex(Row) && FleetRows[Row]->SellButton != nullptr && FleetRows[Row]->SellButton->GetIsEnabled();
+}
 
 bool UInspectorWidget::IsShownForTest() const { return IsShown(); }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }

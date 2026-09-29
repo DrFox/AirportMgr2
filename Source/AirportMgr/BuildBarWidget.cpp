@@ -346,6 +346,11 @@ void UBuildBarWidget::BuildButtons(const UUIStyle* Style)
 		{
 			continue;
 		}
+		// INSPECTOR-ONLY rows have no bar button - see FBuildAction::bInspectorOnly.
+		if (Action.bInspectorOnly)
+		{
+			continue;
+		}
 
 		UBuildBarEntry* Entry = NewObject<UBuildBarEntry>(this);
 		Entry->ActionIndex = Index;

@@ -114,6 +114,14 @@ struct FBuildAction
 	TFunction<FText(const FBuildActionContext&)> DynamicLabel;
 
 	/**
+	 * Run from the inspector's card only - no bar button, so no icon (facility-upgrades spec §4: "nothing on
+	 * the bottom bar: acting on a selection belongs to the inspector"). Still a row, so the card's clicks go
+	 * through TryRun's one door and its log line.
+	 * ENFORCED BY: AirportMgr.Actions.FacilityVerbsRegistered, AirportMgr.Actions.BarBuildsFromRegistry
+	 */
+	bool bInspectorOnly = false;
+
+	/**
 	 * The ONE door: checks IsEnabled, logs "<Via>: <Id>" on LogRoadBuild, then Execute - so
 	 * the bar, the inspector and every key press leave the same one line when they actually
 	 * fire, and none of them can fire a disabled action by forgetting the check. Returns

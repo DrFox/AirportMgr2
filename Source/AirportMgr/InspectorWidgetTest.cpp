@@ -9,6 +9,7 @@
 #include "Content/AirsideSettings.h"
 #include "InspectorWidget.h"
 #include "Misc/AutomationTest.h"
+#include "Model/FacilityPurchases.h"
 #include "Model/InspectFacts.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -725,6 +726,76 @@ bool FUiMenuButtonConfirmTest::RunTest(const FString& Parameters)
 	Menu->Choose(0);
 	TestEqual(TEXT("a plain line chooses on one click"), Menu->ChosenCountForTest(), 2);
 	TestEqual(TEXT("that line"), Menu->LastChosenForTest(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorFacilityCardTest,
+	"AirportMgr.Inspector.FacilityCardRendersTheQuote",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorFacilityCardTest::RunTest(const FString& Parameters)
+{
+	// THE CARD RENDERS ONLY THE QUOTE (spec §4): every caption, enabled state and reason below comes from
+	// the struct handed in - nothing is computed here, so a button cannot disagree with the rules.
+	FAirsideTestWorld Bare(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), Bare.World)) { return false; }
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(Bare.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+	TestNotNull(TEXT("the code-built card has a buy-module button"), Panel->BuyModuleButton.Get());
+	TestNotNull(TEXT("and a buy-vehicle menu"), Panel->BuyVehicleMenu.Get());
+
+	FFacilityQuote Quote;
+	Quote.Refusal = EPurchaseRefusal::None;
+	Quote.Bays = 1;
+	Quote.Vehicles = 1;
+	FModuleOfferQuote& Shed = Quote.Modules.AddDefaulted_GetRef();
+	Shed.Module = EDepotModule::Shed;
+	Shed.Name = FText::FromString(TEXT("Shed"));
+	Shed.PluralName = FText::FromString(TEXT("Sheds"));
+	Shed.Owned = 1;
+	Shed.Reserved = 3;
+	Shed.Refusal = EPurchaseRefusal::CannotAfford;
+	Shed.Label = FText::FromString(TEXT("Buy Shed 40,000"));
+	for (const TCHAR* Code : { TEXT("FUEL"), TEXT("UTILITY") })
+	{
+		FVehicleOfferQuote& Offer = Quote.VehicleOffers.AddDefaulted_GetRef();
+		Offer.TypeCode = Code;
+		Offer.Refusal = EPurchaseRefusal::NoFreeBay;
+		Offer.Label = FText::FromString(Code);
+	}
+	FFleetRowQuote& Row = Quote.Fleet.AddDefaulted_GetRef();
+	Row.VehicleId = 7;
+	Row.Line = TEXT("FUEL #7 · to stand 2 · 10,000 L");
+	Row.Refusal = EPurchaseRefusal::VehicleBusy;
+	Row.SellLabel = FText::FromString(TEXT("Sell 45,000"));
+
+	Panel->ShowFacilityQuote(Quote);
+	TestTrue(TEXT("a facility's rows are shown"), Panel->AreFacilityRowsShownForTest());
+	TestEqual(TEXT("the shed line counts owned against reserved"), Panel->ShedsTextForTest(), FString(TEXT("Sheds 1 / 3 space")));
+	TestFalse(TEXT("an unaffordable shed is a disabled button"), Panel->IsBuyModuleEnabledForTest());
+	TestTrue(TEXT("whose caption says why"), Panel->BuyModuleCaptionForTest().Contains(UFacilityPurchases::RefusalText(EPurchaseRefusal::CannotAfford).ToString()));
+	TestEqual(TEXT("the vehicle line counts vehicles against bays"), Panel->VehiclesTextForTest(), FString(TEXT("Vehicles 1 / 1 bays")));
+	const TArray<FUiMenuItem> Items = Panel->BuyVehicleItemsForTest();
+	if (TestEqual(TEXT("one menu line per vehicle offer"), Items.Num(), 2))
+	{
+		TestFalse(TEXT("a full depot greys every line"), Items[0].bEnabled);
+		TestTrue(TEXT("with the refusal as its reason"), Items[0].Why.EqualTo(UFacilityPurchases::RefusalText(EPurchaseRefusal::NoFreeBay)));
+	}
+	TestEqual(TEXT("one fleet row per vehicle"), Panel->FleetRowCountForTest(), 1);
+	TestFalse(TEXT("a busy vehicle's Sell is disabled"), Panel->IsSellEnabledForTest(0));
+
+	Panel->ShowFacilityQuote(FFacilityQuote());
+	TestFalse(TEXT("a card that is no facility shows no purchase rows"), Panel->AreFacilityRowsShownForTest());
+
+	FFacilityQuote Empty = Quote;
+	Empty.Vehicles = 0;
+	TestEqual(TEXT("an empty depot on a road says what to do"),
+		UInspectorWidget::DepotStatus(Empty, /*bReachable=*/true, TEXT("No jobs")), FString(TEXT("No vehicles \u2014 buy one")));
+	TestEqual(TEXT("off the road, the road is the fix it names"),
+		UInspectorWidget::DepotStatus(Empty, /*bReachable=*/false, TEXT("Cannot dispatch")), FString(TEXT("Cannot dispatch")));
+	TestEqual(TEXT("with a vehicle, the backlog stands"),
+		UInspectorWidget::DepotStatus(Quote, /*bReachable=*/true, TEXT("No jobs")), FString(TEXT("No jobs")));
 	return true;
 }
 
