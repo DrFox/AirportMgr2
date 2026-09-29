@@ -178,8 +178,22 @@ double UUiWindow::MaxHeightForTest() const
 	return HeightCap != nullptr && HeightCap->IsMaxDesiredHeightOverride() ? HeightCap->GetMaxDesiredHeight() : 0.0;
 }
 
-void UUiWindow::ShowCollapsed(bool bCollapsed)
+void UUiWindow::ShowCollapsed(bool bCollapsed, double KeepWidth)
 {
+	// THE WIDTH HOLDS THROUGH A FOLD (the player's ask, 2026-09-29): folded to its title text, the
+	// window jumped narrower, and a right-anchored one moved its left edge. A floor on the same
+	// cap box the height cap uses, lifted on unfold.
+	if (HeightCap != nullptr)
+	{
+		if (bCollapsed && KeepWidth > 0.0)
+		{
+			HeightCap->SetMinDesiredWidth(static_cast<float>(KeepWidth));
+		}
+		else
+		{
+			HeightCap->ClearMinDesiredWidth();
+		}
+	}
 	// COLLAPSED, not hidden: a Hidden body still takes its height, and the fold would save nothing.
 	const ESlateVisibility BodyVis = bCollapsed ? ESlateVisibility::Collapsed : ESlateVisibility::Visible;
 	if (Rule != nullptr) { Rule->SetVisibility(BodyVis); }
@@ -190,6 +204,11 @@ void UUiWindow::ShowCollapsed(bool bCollapsed)
 	{
 		CollapseButton->SetLabel(FText::FromString(FString(bCollapsed ? TEXT("+") : TEXT("\u2013"))));
 	}
+}
+
+double UUiWindow::FoldWidthForTest() const
+{
+	return HeightCap != nullptr && HeightCap->IsMinDesiredWidthOverride() ? HeightCap->GetMinDesiredWidth() : 0.0;
 }
 
 void UUiWindow::SetBadge(const FText& Badge)

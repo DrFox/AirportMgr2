@@ -537,6 +537,7 @@ bool FUiWindowFoldTest::RunTest(const FString& Parameters)
 	Window->HandleCollapse();   // the title-bar button
 	TestTrue(TEXT("the button folds it"), F.Host->IsCollapsed(TEXT("offers")));
 	TestEqual(TEXT("folded, it gives up its fixed size"), F.Host->WindowRect(TEXT("offers")).GetSize(), FVector2D::ZeroVector);
+	TestEqual(TEXT("but holds its width, so the title bar does not jump narrower"), Window->FoldWidthForTest(), Sized.X);
 	F.Host->ResizeWindow(TEXT("offers"), FVector2D(300.0, 300.0));
 	TestEqual(TEXT("and refuses a resize while folded"), F.Host->WindowRect(TEXT("offers")).GetSize(), FVector2D::ZeroVector);
 	const TOptional<FUiWindowPlacement> Stored = F.Store->Read(TEXT("offers"));
@@ -553,7 +554,15 @@ bool FUiWindowFoldTest::RunTest(const FString& Parameters)
 	Next->AddWindow(*CreateWidget<UOfferInboxWidget>(F.TestWorld.World, UOfferInboxWidget::StaticClass()));
 	Next->TickForTest(0.016f);
 	TestTrue(TEXT("a relaunch restores the fold"), Next->IsCollapsed(TEXT("offers")));
+	if (UUiWindow* NextWindow = Next->WindowForTest(TEXT("offers")))
+	{
+		TestEqual(TEXT("at the same width"), NextWindow->FoldWidthForTest(), Sized.X);
+	}
 	Next->SetCollapsed(TEXT("offers"), false);
+	if (UUiWindow* NextWindow = Next->WindowForTest(TEXT("offers")))
+	{
+		TestEqual(TEXT("and an unfold lifts the width floor"), NextWindow->FoldWidthForTest(), 0.0);
+	}
 	TestEqual(TEXT("and unfolds to the player's size"), Next->WindowRect(TEXT("offers")).GetSize(), Sized);
 	return true;
 }

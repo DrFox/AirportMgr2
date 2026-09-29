@@ -31,8 +31,8 @@ struct FUiWindowEntry
 	bool bPlaced = false;
 	/** Folded to its title bar (FUiWindowSpec::bCollapsible). */
 	bool bCollapsed = false;
-	/** Whether it had a player-set size when it folded, and that size - a folded window auto-sizes
-	 *  to its title bar, and unfolding puts this back. */
+	/** Whether it had a player-set size when it folded, and its size then - a folded window
+	 *  auto-sizes to its title bar and holds this WIDTH; unfolding puts a player's size back. */
 	bool bSizedWhenExpanded = false;
 	FVector2D ExpandedSize = FVector2D::ZeroVector;
 };
@@ -123,8 +123,10 @@ private:
 	void TickWindows(float DeltaTime);
 	/** Folds a window's slot to top-left anchoring at its current rectangle. */
 	void Place(FUiWindowEntry& E);
-	/** SetCollapsed's work without the write - for a restore, which must not write back what it read. */
-	void FoldWithoutCommit(FUiWindowEntry& E, bool bCollapsed);
+	/** SetCollapsed's work without the write - for a restore, which must not write back what it read.
+	 *  WidthHint: the width to hold folded when the window cannot measure it now (a restore before
+	 *  first paint); 0 measures it. */
+	void FoldWithoutCommit(FUiWindowEntry& E, bool bCollapsed, double WidthHint = 0.0);
 	FVector2D TopLeftOf(const FUiWindowEntry& E) const;
 	FVector2D SizeOf(const FUiWindowEntry& E) const;
 	/** The tallest an auto-sized window may grow where it stands; see its body. */

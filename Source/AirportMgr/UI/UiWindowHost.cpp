@@ -114,8 +114,9 @@ void UUiWindowHost::CommitPlacement(FName Id)
 	P.TopLeft = E->Slot->GetPosition();   // placed: top-left anchored, so position IS the top-left
 	// A FOLDED window's slot is auto-sized to its title bar; what is remembered is the size it
 	// unfolds to, or a relaunch would restore the fold's size as the window's own.
+	// Folded, Size is written even for an auto-sized window: its X is the width the fold holds.
 	P.bSized = E->bCollapsed ? E->bSizedWhenExpanded : !E->Slot->GetAutoSize();
-	P.Size = !P.bSized ? FVector2D::ZeroVector : E->bCollapsed ? E->ExpandedSize : E->Slot->GetSize();
+	P.Size = E->bCollapsed ? E->ExpandedSize : P.bSized ? E->Slot->GetSize() : FVector2D::ZeroVector;
 	P.bCollapsed = E->bCollapsed;
 	LayoutStore->Write(Id, P);
 	UE_LOG(LogRoadBuild, Log, TEXT("Window %s: layout saved at (%.0f, %.0f)%s"), *Id.ToString(), P.TopLeft.X, P.TopLeft.Y,
@@ -175,7 +176,7 @@ void UUiWindowHost::RestoreSavedLayout()
 		// about this screen. After the size, so the fold remembers that size to unfold to.
 		if (Saved->bCollapsed)
 		{
-			FoldWithoutCommit(E, true);
+			FoldWithoutCommit(E, true, Saved->Size.X);
 		}
 	}
 }
@@ -208,7 +209,7 @@ void UUiWindowHost::SetCollapsed(FName Id, bool bCollapsed)
 	CommitPlacement(Id);
 }
 
-void UUiWindowHost::FoldWithoutCommit(FUiWindowEntry& E, bool bCollapsed)
+void UUiWindowHost::FoldWithoutCommit(FUiWindowEntry& E, bool bCollapsed, double WidthHint)
 {
 	if (E.Slot == nullptr || E.bCollapsed == bCollapsed)
 	{
@@ -219,7 +220,11 @@ void UUiWindowHost::FoldWithoutCommit(FUiWindowEntry& E, bool bCollapsed)
 		// AUTO-SIZED WHILE FOLDED, so the window is exactly its title bar; the player's size is
 		// kept aside for the unfold. A fixed size here would keep the folded window full height.
 		E.bSizedWhenExpanded = !E.Slot->GetAutoSize();
-		E.ExpandedSize = E.bSizedWhenExpanded ? E.Slot->GetSize() : FVector2D::ZeroVector;
+		E.ExpandedSize = SizeOf(E);
+		if (WidthHint > 0.0)
+		{
+			E.ExpandedSize.X = WidthHint;
+		}
 		E.Slot->SetAutoSize(true);
 	}
 	else if (E.bSizedWhenExpanded)
@@ -230,7 +235,7 @@ void UUiWindowHost::FoldWithoutCommit(FUiWindowEntry& E, bool bCollapsed)
 	E.bCollapsed = bCollapsed;
 	if (E.Window != nullptr)
 	{
-		E.Window->ShowCollapsed(bCollapsed);
+		E.Window->ShowCollapsed(bCollapsed, E.ExpandedSize.X);
 	}
 	UE_LOG(LogRoadBuild, Log, TEXT("Window %s: %s"), *E.Spec.Id.ToString(), bCollapsed ? TEXT("folded") : TEXT("unfolded"));
 }

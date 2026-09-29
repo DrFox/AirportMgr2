@@ -43,8 +43,11 @@ public:
 	void SetMaxHeight(double MaxHeight);
 
 	/** Folds the window to its title bar, or unfolds it. Visual only - the HOST owns the state and
-	 *  the slot's size (UUiWindowHost::SetCollapsed); this hides the body and swaps the button. */
-	void ShowCollapsed(bool bCollapsed);
+	 *  the slot's size (UUiWindowHost::SetCollapsed); this hides the body and swaps the button.
+	 *  KeepWidth: the width to hold while folded, so the title bar does not shrink to its text. */
+	void ShowCollapsed(bool bCollapsed, double KeepWidth = 0.0);
+	/** The width a fold is holding, or 0 - headless, desired sizes are 0x0, so a test reads this. */
+	double FoldWidthForTest() const;
 
 	/** A short text right of the title - still readable while the window is folded (the offer count). */
 	void SetBadge(const FText& Badge);
