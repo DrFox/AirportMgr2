@@ -174,6 +174,14 @@ namespace
 			};
 			Out.Add(MoveTemp(Flip));
 		}
+		// UNSTICK (spec 2026-09-29-unstick-agent): one verb, three sub-choices in the inspector's popup
+		// (UUiMenuButton) - so ONE row here, whose Execute asks the inspector to open that popup; the
+		// three choices are UAgentRescue's, not three rows, or the bar would grow three buttons for a
+		// rescue the player needs rarely. No key, Depart's reason: a despawn is a misclick away.
+		// Enabled whenever an agent is selected at all - Despawn always is (UAgentRescue::Decide).
+		Out.Add(Make(TEXT("selection.unstick"), EActionSection::Selection, LOCTEXT("Unstick", "Unstick"), EKeys::Invalid, false,
+			[](FBuildActionContext& Ctx) { Ctx.Controller.RequestUnstickMenu(); }, Never,
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanUnstickSelected(EUnstickAction::Despawn).bAllowed; }));
 
 		// --- Game ---
 		Out.Add(Make(TEXT("game.save"), EActionSection::Game, LOCTEXT("Save", "Save"), EKeys::K, false,

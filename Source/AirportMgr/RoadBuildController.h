@@ -14,6 +14,7 @@
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
 #include "Tool/Selection.h"
+#include "Model/AgentRescue.h"
 #include "RoadBuildController.generated.h"
 
 class FGamePlayerSettingsSink;
@@ -503,6 +504,24 @@ public:
 	void FlipSelectedRunway();
 
 	/**
+	 * THE UNSTICK MENU'S VERBS (spec 2026-09-29-unstick-agent) - FORWARDERS to UOpsRuntime::CanUnstick /
+	 * Unstick with the selected agent, so the inspector's lines and the action they run are the one
+	 * decision UAgentRescue makes. Refused ("Nothing selected") with no agent selected or no runtime
+	 * (the editor mode has none).
+	 */
+	FUnstickVerdict CanUnstickSelected(EUnstickAction Action) const;
+	void UnstickSelected(EUnstickAction Action);
+
+	/**
+	 * The selection.unstick row's Execute: ASK the inspector to open its menu. A COUNTER, not a bool the
+	 * two sides would have to keep in step: the inspector opens whenever it sees a request it has not,
+	 * and the menu closes itself however the player dismisses it - so the bar button and the
+	 * inspector's own reach the one popup, and nothing has to be told it closed.
+	 */
+	void RequestUnstickMenu() { ++UnstickMenuRequests; }
+	int32 GetUnstickMenuRequests() const { return UnstickMenuRequests; }
+
+	/**
 	 * What the next click would do, run through the snap chain. False only when the
 	 * cursor is not over the road plane at all.
 	 *
@@ -844,4 +863,8 @@ private:
 	// of reading the mouse and calling into IBuildTool.
 
 	FBuildGesture Gesture;
+
+private:
+	/** See RequestUnstickMenu. */
+	int32 UnstickMenuRequests = 0;
 };

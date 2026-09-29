@@ -85,6 +85,9 @@ ICONS = {
     "selection.follow":    ("delapouite", "binoculars"),
     # The runway in use (2026-09-28): the windsock is what a pilot reads it from.
     "selection.runway_in_use": ("delapouite", "windsock"),
+    # Unstick (2026-09-29): a rescue, not a tool - the life-buoy reads as "help" at 24 pixels.
+    # "lorc/crowbar" and "lorc/life-buoy" return the HTML 404 under HTTP 200; this one is real.
+    "selection.unstick":   ("delapouite", "life-buoy"),
 
     "game.save":           ("delapouite", "save"),
     "game.load":           ("delapouite", "load"),

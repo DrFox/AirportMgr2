@@ -10,7 +10,12 @@
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "Model/RoadGuideline.h"
+#include "Present/AirsideTraffic.h"
+#include "Present/OpsRuntime.h"
+#include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestGraph.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -220,6 +225,50 @@ bool FAgentRescueRefusalsTest::RunTest(const FString& Parameters)
 	}
 	TestFalse(TEXT("an unknown agent is refused"),
 		Field.Rescue->CanUnstick(*Field.Traffic, 9999, EUnstickAction::Despawn).bAllowed);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAgentRescueRuntimeForwardsTest,
+	"AirportOps.Present.UnstickForwards",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAgentRescueRuntimeForwardsTest::RunTest(const FString& Parameters)
+{
+	// THE SEAM, AT THE COMPOSITION: UOpsRuntime::CanUnstick / Unstick supply the ATTACHED actor's
+	// traffic, network and clock to UAgentRescue. Every AgentRescue test above hands those in by hand,
+	// so they would all stay green with the runtime's forwarders reading a null model - which is what
+	// the driver calls. Spawned actor, real agent, real runtime.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(20000.0, 0.0), false);
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A; Edge.B = B;
+		Edge.Control = FVector2D(10000.0, 0.0);
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.bDerived = false;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>(GetTransientPackage());
+	TestFalse(TEXT("unattached: refused, not a crash"), Runtime->CanUnstick(1, EUnstickAction::Despawn).bAllowed);
+	TestFalse(TEXT("unattached: Unstick refused too"), Runtime->Unstick(1, EUnstickAction::Despawn).bAllowed);
+
+	Runtime->Attach(Actor);
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft),
+		UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+	TestNotNull(TEXT("the rescue is the runtime's"), Runtime->GetAgentRescue());
+	TestTrue(TEXT("attached: Despawn offered for the real agent"), Runtime->CanUnstick(Id, EUnstickAction::Despawn).bAllowed);
+	TestTrue(TEXT("attached: Despawn runs"), Runtime->Unstick(Id, EUnstickAction::Despawn).bAllowed);
+	TestNull(TEXT("and the agent is gone from the ATTACHED model"), Actor->GetTraffic()->GetModel()->FindAgent(Id));
 	return true;
 }
 

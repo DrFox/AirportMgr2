@@ -4,6 +4,7 @@
 #include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "Tool/Selection.h"
+#include "UI/UiMenuButton.h"
 #include "InspectorWidget.generated.h"
 
 class ARoadBuildController;
@@ -104,6 +105,16 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> FollowButton;
 	/** The runway card's one verb, "Use 27" - selection.runway_in_use (2026-09-28). */
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> RunwayButton;
+	/** An agent card's escape hatch - selection.unstick, a popup of UAgentRescue's three actions
+	 *  (spec 2026-09-29-unstick-agent). */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiMenuButton> UnstickMenu;
+
+	/**
+	 * How long an agent must have stood behind something before the Unstick button lights up, s.
+	 * NOT the deadlock resolver's StallSeconds (3 s), which every queue at a hold bar passes; a
+	 * stranded agent lights it at once. A knob, so it is judged in play rather than here.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double UnstickHighlightSeconds = 15.0;
 
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double PanelWidth = 300.0;
 
@@ -130,6 +141,12 @@ public:
 
 	/** The Follow button's caption as it reads now. */
 	FString FollowCaptionForTest() const;
+
+	/** Whether the Unstick button is lit (Selected) - the agent looks stuck. */
+	bool IsUnstickHighlightedForTest() const { return bUnstickHighlighted; }
+
+	/** The lines the Unstick popup would show now, as UUiMenuButton::Items would give them. */
+	TArray<FUiMenuItem> UnstickItemsForTest() const { return UnstickItems(); }
 
 
 	/**
@@ -190,6 +207,16 @@ private:
 	 *  agree check names, not positions (CLAUDE.md); a third positional row would have made a
 	 *  reorder of the Selection section silently wire Depart's slot to the runway flip. */
 	int32 RunwayActionIndex = INDEX_NONE;
+	/** By id, RunwayActionIndex's rule. Its row only opens the popup - see ARoadBuildController::RequestUnstickMenu. */
+	int32 UnstickActionIndex = INDEX_NONE;
+
+	/** The controller's request count last acted on - see ARoadBuildController::RequestUnstickMenu. */
+	int32 SeenUnstickRequests = 0;
+	bool bUnstickHighlighted = false;
+
+	/** The popup's lines for the selected agent, one per EUnstickAction in enum order - HandleUnstickChosen
+	 *  reads the line's index AS the action, so the two cannot disagree about which line is which. */
+	TArray<FUiMenuItem> UnstickItems() const;
 
 
 
@@ -229,4 +256,5 @@ private:
 	UFUNCTION() void HandleDepart();
 	UFUNCTION() void HandleFollow();
 	UFUNCTION() void HandleRunway();
+	UFUNCTION() void HandleUnstickChosen(int32 Index);
 };

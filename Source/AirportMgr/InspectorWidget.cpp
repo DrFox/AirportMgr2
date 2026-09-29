@@ -13,7 +13,9 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Model/JobBoard.h"
+#include "Model/AgentRescue.h"
 #include "Model/FlightBoard.h"
+#include "Model/GroundTraffic.h"
 #include "Model/Flight.h"
 #include "ArrivalViewModels.h"
 #include "Model/InspectFacts.h"
@@ -37,6 +39,14 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
 	if (RunwayButton != nullptr) { RunwayButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunway); }
+	if (UnstickMenu != nullptr)
+	{
+		// WEAK, not this: a lambda held by a child widget that captured a raw pointer to its owner is
+		// the shape that dangles the first time either is rebuilt.
+		TWeakObjectPtr<UInspectorWidget> Weak(this);
+		UnstickMenu->Items = [Weak]() { return Weak.IsValid() ? Weak->UnstickItems() : TArray<FUiMenuItem>(); };
+		UnstickMenu->OnChosen.AddDynamic(this, &UInspectorWidget::HandleUnstickChosen);
+	}
 	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce. The WINDOW
 	// hides (SetShown); the root stays laid out.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
@@ -59,6 +69,12 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 			// By id - see RunwayActionIndex. Not counted in SelectionSeen, so it cannot shift
 			// the positional pair whichever side of them it is registered.
 			RunwayActionIndex = Index;
+			continue;
+		}
+		if (Actions[Index].Id == FName(TEXT("selection.unstick")))
+		{
+			// By id, the runway row's reason.
+			UnstickActionIndex = Index;
 			continue;
 		}
 		if (SelectionSeen == 0) { DepartActionIndex = Index; }
@@ -89,7 +105,8 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	Text(StatusText, TEXT("StatusText"), EUITextRole::Body, Style->InkMuted);
 
 	UHorizontalBox* Row = nullptr;
-	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr || RunwayButton == nullptr))
+	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr || RunwayButton == nullptr
+		|| UnstickMenu == nullptr))
 	{
 		Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("InspectorVerbs"));
 		Column->AddChildToVerticalBox(Row)->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 0.0f));
@@ -125,6 +142,20 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	{
 		UE_LOG(LogInspector, Warning, TEXT("No selection.runway_in_use row in BuildActions(): the runway card has no button"));
 	}
+
+	// THE UNSTICK POPUP, captioned by its row like every other verb here. Its own button opens it
+	// (UUiMenuButton); the bar's row reaches it through the controller's request count (TickPanel).
+	if (UnstickMenu == nullptr && Actions.IsValidIndex(UnstickActionIndex))
+	{
+		UnstickMenu = WidgetTree->ConstructWidget<UUiMenuButton>(UUiMenuButton::StaticClass(), TEXT("UnstickMenu"));
+		UnstickMenu->Build(*Style, Actions[UnstickActionIndex].Label);
+		UnstickMenu->SetToolTipText(NSLOCTEXT("AirportMgr", "InspectorUnstickTip", "Replan, send home or despawn a stuck agent"));
+		if (Row != nullptr) { Row->AddChildToHorizontalBox(UnstickMenu)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f)); }
+	}
+	if (!Actions.IsValidIndex(UnstickActionIndex))
+	{
+		UE_LOG(LogInspector, Warning, TEXT("No selection.unstick row in BuildActions(): the agent card has no Unstick"));
+	}
 }
 
 bool UInspectorWidget::WantsWindow(FUiWindowSpec& Out) const
@@ -148,6 +179,17 @@ void UInspectorWidget::TickPanel(float InDeltaTime)
 		const bool bHaveFacts = C->SelectedAgentFactsThisFrame(Facts);
 		Refresh(C->GetTarget(), C->GetSelection(), bHaveFacts ? &Facts : nullptr);
 		ShowFollowing(C->IsWatchingAgent());
+
+		// THE BAR'S Unstick, arriving - see ARoadBuildController::RequestUnstickMenu. Opened only on an
+		// agent card; a request made with nothing to unstick is spent, not kept for the next card.
+		if (C->GetUnstickMenuRequests() != SeenUnstickRequests)
+		{
+			SeenUnstickRequests = C->GetUnstickMenuRequests();
+			if (UnstickMenu != nullptr && UnstickMenu->GetVisibility() == ESlateVisibility::Visible && IsShown())
+			{
+				UnstickMenu->Open();
+			}
+		}
 	}
 }
 
@@ -197,6 +239,9 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	{
 		ForgetPlayerClose();
 		LastSelection = Selection;
+		// A POPUP FOR THE OLD AGENT closes with its card: its lines were asked of that agent, and a
+		// confirm armed for one aeroplane must not despawn the next one clicked.
+		if (UnstickMenu != nullptr) { UnstickMenu->Close(); }
 	}
 
 	// ONE CARD PER KIND, counted at compile time (review fix 3): the branches below are None
@@ -529,6 +574,19 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	{
 		FollowButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
+	if (UnstickMenu != nullptr)
+	{
+		UnstickMenu->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		// LIT WHEN IT LOOKS STUCK - Selected is the Accent fill (UUiButton::LookFor), the one "look at
+		// me" this style has. Read off the model agent, since FAgentFacts carries no stall clock.
+		const FRoadAgent* Agent = bAircraft && Target->GetGroundTraffic() != nullptr
+			? Target->GetGroundTraffic()->FindAgent(Selection.Id) : nullptr;
+		bUnstickHighlighted = Agent != nullptr && UAgentRescue::LooksStuck(*Agent, UnstickHighlightSeconds);
+		if (UUiButton* B = UnstickMenu->GetButton())
+		{
+			B->SetState(true, bUnstickHighlighted);
+		}
+	}
 	if (RunwayButton != nullptr)
 	{
 		RunwayButton->SetVisibility(bRunway ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
@@ -559,6 +617,48 @@ void UInspectorWidget::RunAction(int32 ActionIndex)
 		return;
 	}
 	Actions[ActionIndex].TryRun(*C, TEXT("Inspector"));
+}
+
+TArray<FUiMenuItem> UInspectorWidget::UnstickItems() const
+{
+	TArray<FUiMenuItem> Out;
+	const ARoadBuildController* C = Controller();
+	if (C == nullptr)
+	{
+		return Out;
+	}
+	const UGroundTraffic* Traffic = C->GetTarget() != nullptr ? C->GetTarget()->GetGroundTraffic() : nullptr;
+	const FRoadAgent* Agent = Traffic != nullptr ? Traffic->FindAgent(C->GetSelection().Id) : nullptr;
+	const bool bVehicle = Agent != nullptr && Agent->AsVehicle() != nullptr;
+
+	// ENUM ORDER, one line per action - see UnstickItems' header.
+	auto Line = [&](EUnstickAction Action, const FText& Label)
+	{
+		const FUnstickVerdict Verdict = C->CanUnstickSelected(Action);
+		FUiMenuItem& Item = Out.AddDefaulted_GetRef();
+		Item.Label = Label;
+		Item.bEnabled = Verdict.bAllowed;
+		Item.Why = Verdict.Why;
+		check(Out.Num() - 1 == static_cast<int32>(Action));
+	};
+	Line(EUnstickAction::Replan, NSLOCTEXT("AirportMgr", "UnstickReplan", "Replan"));
+	Line(EUnstickAction::SendHome, bVehicle ? NSLOCTEXT("AirportMgr", "UnstickHome", "Send home")
+		: NSLOCTEXT("AirportMgr", "UnstickStand", "Find a stand"));
+	Line(EUnstickAction::Despawn, NSLOCTEXT("AirportMgr", "UnstickDespawn", "Despawn"));
+	Out.Last().bConfirm = true;
+	Out.Last().ConfirmLabel = NSLOCTEXT("AirportMgr", "UnstickDespawnConfirm", "Despawn - click to confirm");
+	return Out;
+}
+
+void UInspectorWidget::HandleUnstickChosen(int32 Index)
+{
+	ARoadBuildController* C = Controller();
+	if (C == nullptr || Index < 0 || Index > static_cast<int32>(EUnstickAction::Despawn))
+	{
+		UE_LOG(LogInspector, Warning, TEXT("Unstick line %d ignored: no controller or no such action"), Index);
+		return;
+	}
+	C->UnstickSelected(static_cast<EUnstickAction>(Index));
 }
 
 void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
