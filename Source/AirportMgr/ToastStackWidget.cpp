@@ -95,6 +95,10 @@ void UToastStackWidget::BindTo(UOpsEvents& Events)
 
 void UToastStackWidget::OnAlertRaised(const FOpsAlert& Alert)
 {
+	if (Alert.Key.Kind == EAlertKind::Overdrawn)
+	{
+		bToldOverdrawn = true;
+	}
 	// A RE-RAISE AFTER A LOAD is not news: the alert list shows it, the feed does not (stage 1 review).
 	if (Notifications != nullptr && !Alert.bReRaised)
 	{
@@ -111,10 +115,14 @@ void UToastStackWidget::OnAlertCleared(const FOpsAlertKey& Key)
 
 void UToastStackWidget::OnBalanceSignChanged(bool bOverdrawn)
 {
-	// ONLY THE WAY OUT: going into the red is the Overdrawn alert's own toast (OnAlertRaised).
-	if (Notifications != nullptr && !bOverdrawn)
+	// ONLY THE WAY OUT, and only after the way in was said: going into the red is the Overdrawn alert's own
+	// toast, and a dip and recovery inside one frame raised no alert - so "back in credit" would come from
+	// nowhere (stage 3 review). NOT "building unlocked": at exactly zero CanAfford still refuses a price.
+	// ENFORCED BY: AirportMgr.UI.ToastsSayAlertsAndRefusals
+	if (Notifications != nullptr && !bOverdrawn && bToldOverdrawn)
 	{
-		Notifications->PostFeed(NSLOCTEXT("AirportMgr", "BackInCredit", "Back in credit - building unlocked"), ENotificationSeverity::Info);
+		bToldOverdrawn = false;
+		Notifications->PostFeed(NSLOCTEXT("AirportMgr", "BackInCredit", "Back in credit"), ENotificationSeverity::Info);
 	}
 }
 

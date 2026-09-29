@@ -98,11 +98,6 @@ FString FBalanceSignChangedEvent::Describe() const
 	return bOverdrawn ? TEXT("overdrawn") : TEXT("back in credit");
 }
 
-FString FLandingFeeChangedEvent::Describe() const
-{
-	return FString::Printf(TEXT("%.0f%% -> %.0f%%"), Old * 100.0, New * 100.0);
-}
-
 FString FBuildRefusedEvent::Describe() const
 {
 	return FString::Printf(TEXT("%s, cannot afford %s, balance %s"), *What, *Price, *Balance);

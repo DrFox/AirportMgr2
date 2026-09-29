@@ -177,4 +177,6 @@ private:
 	UFUNCTION() void OnLandRefused(EArrivalRefusal Why);
 	/** Back in credit (stage 3) - the one money moment the feed says; going negative is the alert's. */
 	UFUNCTION() void OnBalanceSignChanged(bool bOverdrawn);
+	/** An Overdrawn alert was toasted, so the way back out is news. */
+	bool bToldOverdrawn = false;
 };

@@ -201,7 +201,9 @@ private:
 
 	/** RefreshDemand's key - see there. */
 	double DemandKeyFee = -1.0;
-	TArray<double> DemandKeyFactors;
+	TArray<double, TInlineAllocator<8>> DemandKeyFactors;
+	/** KEYED ON INPUTS THAT MOVE IN PLAY. Airline identity and the dawn/dusk split are not in it: both are
+	 *  fixed at Attach, and the widget is rebuilt per session (2026-09-29). */
 	int32 DemandSampleCount = 0;
 
 	void PaintDemand(const UUIStyle& Style);

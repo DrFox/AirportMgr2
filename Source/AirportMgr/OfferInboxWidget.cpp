@@ -161,13 +161,6 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 
 void UOfferInboxWidget::TickPanel(float InDeltaTime)
 {
-	// NOTHING TO DRAW WHILE THE PLAYER HAS IT CLOSED: the host ticks hidden panels, and this one used to
-	// refresh every row and the demand strip regardless (ops bus survey 2026-09-29). It shows itself once at
-	// BuildOnce, so only the player's close hides it - and reopening repaints on the next tick.
-	if (!IsShown())
-	{
-		return;
-	}
 
 	// The target comes from the controller, not a fresh TActorIterator scan: this widget
 	// only ever hangs off BuildHudLayer, which only ever exists on ARoadBuildController, so
@@ -216,12 +209,12 @@ bool UOfferInboxWidget::RefreshDemand(TArrayView<const FAirlineOffers> Airlines,
 	{
 		Factors.Add(Each.Airline != nullptr && Generator != nullptr ? Generator->AirlineFactor(*Each.Airline) : 1.0);
 	}
-	if (DemandSamples.Num() == 24 && Fee == DemandKeyFee && DemandKeyFactors == TArray<double>(Factors))
+	if (DemandSamples.Num() == 24 && Fee == DemandKeyFee && DemandKeyFactors == Factors)
 	{
 		return false;
 	}
 	DemandKeyFee = Fee;
-	DemandKeyFactors = TArray<double>(Factors);
+	DemandKeyFactors = Factors;
 	++DemandSampleCount;
 
 	// THE STRIP'S SAMPLES, from the runtime's own airline list and the live fee - the same inputs

@@ -30,8 +30,10 @@ int32 ULedger::Post(double At, ELedgerCategory Category, double Amount, FText Wh
 	CachedBalance += Amount;
 	++RevisionCount;
 
-	// ANNOUNCED HERE, THE ONE FUNNEL: every fee, charge, credit and reversal comes through Post, so this is
-	// the one place the bar, the ledger window and the Overdrawn alert can hear money move without polling.
+	// ANNOUNCED HERE, THE ONE FUNNEL FOR PLAY: every fee, charge, credit, reversal and upkeep comes through
+	// Post. Three changes of the balance do NOT, on purpose, and each is covered elsewhere: Open (a new game
+	// - the attach's first network event dirties the alerts pass), OpsSave's restore (Recache - a load runs
+	// every pass via MarkAllDirty), and RollUp (the fold leaves the balance unchanged).
 	// ENFORCED BY: AirportOps.Model.Money.PostIsAnnounced, AirportOps.Model.Money.CrossingZeroIsAnnouncedOnce
 	if (Bus != nullptr)
 	{

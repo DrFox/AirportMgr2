@@ -91,10 +91,6 @@ public:
 	 */
 	void StepLandingFee(int32 Direction);
 
-	/** Where a fee step is announced (ops alerts spec 2026-09-29 §2). Set by UOpsRuntime::Attach; null in a
-	 *  bare NewObject. Raw: the runtime owns both. */
-	class FOpsEventBus* Bus = nullptr;
-
 	/** Per GAME hour on a stand. A tenth of the landing fee - see the class comment. */
 	double ParkingFeePerHour(const FAirframe& Airframe) const;
 

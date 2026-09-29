@@ -17,9 +17,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertCleared, const FOpsAlertKey
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOpsAlertsReset);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOpsBuildRefused, const FString&, What, const FString&, Price, const FString&, Balance);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsLandRefused, EArrivalRefusal, Why);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOpsMoneyPosted, double, Amount, double, Balance);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsBalanceSignChanged, bool, bOverdrawn);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOpsLandingFeeChanged, double, Old, double, New);
 
 /**
  * The outcome bus. Pattern: Observer, via DYNAMIC multicast delegates so UMG and Blueprint
@@ -61,10 +59,13 @@ public:
 	UPROPERTY(BlueprintAssignable) FOpsBuildRefused      OnBuildRefused;
 	UPROPERTY(BlueprintAssignable) FOpsLandRefused       OnLandRefused;
 
-	/** Money pushed, not polled (spec §2): the bar's balance and fee, the back-in-credit toast. */
-	UPROPERTY(BlueprintAssignable) FOpsMoneyPosted       OnMoneyPosted;
+	/**
+	 * The balance crossed zero - the back-in-credit toast. The ONE money delegate: the bar keeps its own
+	 * Ledger->Revision gate, because a load restores the balance without a post and an event-only bar would
+	 * be stale after every load (stage 3 review). OnMoneyPosted/OnLandingFeeChanged were cut for having no
+	 * listener - declared, never consumed.
+	 */
 	UPROPERTY(BlueprintAssignable) FOpsBalanceSignChanged OnBalanceSignChanged;
-	UPROPERTY(BlueprintAssignable) FOpsLandingFeeChanged OnLandingFeeChanged;
 
 	void NotifyAgentPhaseChanged(int32 AgentId, EAgentPhase From, EAgentPhase To);
 	void NotifyArrivalRefused(EArrivalRefusal Why);

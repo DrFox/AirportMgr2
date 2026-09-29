@@ -1,5 +1,4 @@
 #include "Model/Pricing.h"
-#include "Model/OpsEventBus.h"
 
 #include "AirportOpsLog.h"
 #include "Model/Airframe.h"
@@ -50,13 +49,6 @@ void UPricing::StepLandingFee(int32 Direction)
 	// the offers dry up" is otherwise a question the log cannot answer.
 	UE_LOG(LogAirportOps, Log, TEXT("Landing fee %.0f%% -> %.0f%%"),
 		Was * 100.0, LandingFeeMultiplier * 100.0);
-
-	// NOT AT A CLAMP: a step that moved nothing is not a change, and the bar and the demand strip would
-	// redraw for it. ENFORCED BY: AirportOps.Model.Money.FeeStepIsAnnounced
-	if (Bus != nullptr && LandingFeeMultiplier != Was)
-	{
-		Bus->Publish(FLandingFeeChangedEvent{ Was, LandingFeeMultiplier });
-	}
 }
 
 double UPricing::ParkingFeePerHour(const FAirframe& Airframe) const
