@@ -146,4 +146,35 @@ bool FOpsEventBusDiscardTest::RunTest(const FString&)
 	return true;
 }
 
+namespace
+{
+	/** One default-constructed instance of every type in the variant, in variant order. */
+	template <typename TVariantType> struct TOpsBusTestEveryEvent;
+	template <typename... Ts> struct TOpsBusTestEveryEvent<TVariant<Ts...>>
+	{
+		static TArray<FOpsEvent> Get() { return { FOpsEvent(TInPlaceType<Ts>(), Ts())... }; }
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsEventBusDescribeTest, "AirportOps.Model.Bus.EveryEventDescribesItself",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsEventBusDescribeTest::RunTest(const FString&)
+{
+	// THE LOG IS THE TRACE (user, 2026-09-29): every event, even a default one, says something - an
+	// empty Describe() would log "Bus: + X {}" and hide the fields the line exists to show.
+	const TArray<FOpsEvent> Every = TOpsBusTestEveryEvent<FOpsEvent>::Get();
+	const TArray<const TCHAR*> Names = FOpsEventBus::EventNames();
+	TestEqual(TEXT("one sample per event type"), Every.Num(), Names.Num());
+	for (int32 Index = 0; Index < Every.Num(); ++Index)
+	{
+		TestFalse(FString::Printf(TEXT("%s describes its fields"), Names[Index]), FOpsEventBus::Describe(Every[Index]).IsEmpty());
+	}
+	FAgentPhaseEvent Phase;
+	Phase.AgentId = 7;
+	Phase.From = EAgentPhase::Taxiing;
+	Phase.To = EAgentPhase::Parked;
+	TestTrue(TEXT("and names the ids that tell events apart"), Phase.Describe().Contains(TEXT("agent 7")));
+	return true;
+}
+
 #endif

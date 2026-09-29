@@ -32,37 +32,52 @@ enum class EOpsTier : uint8
 };
 
 // THE EVENTS. Small value structs - ids and figures, never a UObject pointer that may be dead by
-// the time the queue drains (spec §4 "stale ids"). Each names itself for the log and the wiring test.
+// the time the queue drains (spec §4 "stale ids"). Each names itself for the log and the wiring test,
+// and DESCRIBES itself - its fields, for the log line FOpsEventBus writes when it is published. An event
+// without a Describe() does not compile: the bus's describer visits every type in FOpsEvent.
+// ENFORCED BY: AirportOps.Model.Bus.EveryEventDescribesItself
 
 /** Airside's agent phase change, bridged by UOpsRuntime. */
-struct FAgentPhaseEvent
+struct AIRPORTOPS_API FAgentPhaseEvent
 {
 	int32 AgentId = INDEX_NONE;
 	EAgentPhase From = EAgentPhase::Gone;
 	EAgentPhase To = EAgentPhase::Gone;
 	static const TCHAR* EventName() { return TEXT("AgentPhase"); }
+	FString Describe() const;
 };
 
 /** Airside refused an arrival. */
-struct FArrivalRefusedEvent
+struct AIRPORTOPS_API FArrivalRefusedEvent
 {
 	EArrivalRefusal Why = EArrivalRefusal::None;
 	static const TCHAR* EventName() { return TEXT("ArrivalRefused"); }
+	FString Describe() const;
 };
 
 /** The player's speed setting changed. */
-struct FSpeedChangedEvent
+struct AIRPORTOPS_API FSpeedChangedEvent
 {
 	ESimSpeed Speed = ESimSpeed::X1;
 	static const TCHAR* EventName() { return TEXT("SpeedChanged"); }
+	FString Describe() const;
 };
 
 /** A line for the toast stack (saved, loaded, ...). */
-struct FNotificationEvent
+struct AIRPORTOPS_API FNotificationEvent
 {
 	FString Text;
 	static const TCHAR* EventName() { return TEXT("Notification"); }
+	FString Describe() const;
 };
+
+/**
+ * An event logged at VERBOSE when published, not Log. Only what fires in bulk belongs here: every agent
+ * phase change of every aircraft and vehicle would bury the rest of the file. Everything else is Log,
+ * so the default log is a complete trace of what happened (user, 2026-09-29).
+ */
+template <typename T> struct TOpsEventIsChatty { static constexpr bool Value = false; };
+template <> struct TOpsEventIsChatty<FAgentPhaseEvent> { static constexpr bool Value = true; };
 
 /**
  * EVERY EVENT THERE IS, as one closed list. Subscribe<T> and Publish<T> are compile-checked
@@ -131,12 +146,28 @@ public:
 	void MarkDirty(FName Pass);
 	void MarkAllDirty();
 
+	/**
+	 * Queue Event, and log it with its fields - "Bus: + OfferExpired {flight 12, airline Cumbria,
+	 * Ignored}". LOGGED HERE, AT THE SOURCE, not only when dispatched: the line then sits beside
+	 * whatever raised it, and an event dropped by a load's Discard still appears once.
+	 */
 	template <typename T>
 	void Publish(T&& Event)
 	{
 		using FEvent = std::decay_t<T>;
+		if constexpr (TOpsEventIsChatty<FEvent>::Value)
+		{
+			UE_LOG(LogOpsBus, Verbose, TEXT("Bus: + %s {%s}"), FEvent::EventName(), *Event.Describe());
+		}
+		else
+		{
+			UE_LOG(LogOpsBus, Log, TEXT("Bus: + %s {%s}"), FEvent::EventName(), *Event.Describe());
+		}
 		Queue.Emplace(TInPlaceType<FEvent>(), Forward<T>(Event));
 	}
+
+	/** Any queued event's fields, as Describe() gives them. For the dispatch and discard lines. */
+	static FString Describe(const FOpsEvent& Event);
 
 	/** Run rounds until quiet or MaxRounds. Returns the number of events dispatched. */
 	int32 Drain();

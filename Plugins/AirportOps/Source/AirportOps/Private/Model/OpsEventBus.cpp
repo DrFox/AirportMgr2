@@ -20,6 +20,31 @@ namespace
 	}
 }
 
+FString FAgentPhaseEvent::Describe() const
+{
+	return FString::Printf(TEXT("agent %d, %s -> %s"), AgentId, *UEnum::GetValueAsString(From), *UEnum::GetValueAsString(To));
+}
+
+FString FArrivalRefusedEvent::Describe() const
+{
+	return UEnum::GetValueAsString(Why);
+}
+
+FString FSpeedChangedEvent::Describe() const
+{
+	return UEnum::GetValueAsString(Speed);
+}
+
+FString FNotificationEvent::Describe() const
+{
+	return FString::Printf(TEXT("\"%s\""), *Text);
+}
+
+FString FOpsEventBus::Describe(const FOpsEvent& Event)
+{
+	return Visit([](const auto& Each) { return Each.Describe(); }, Event);
+}
+
 TArray<const TCHAR*> FOpsEventBus::EventNames()
 {
 	return TOpsBusEventNames<FOpsEvent>::Get();
@@ -96,7 +121,7 @@ int32 FOpsEventBus::Drain()
 		Queue.Reset();
 		for (const FOpsEvent& Event : Batch)
 		{
-			UE_LOG(LogOpsBus, Verbose, TEXT("Bus: %s"), NameOf(Event));
+			UE_LOG(LogOpsBus, Verbose, TEXT("Bus: > %s {%s}"), NameOf(Event), *Describe(Event));
 			for (int32 Tier = 0; Tier < NumTiers; ++Tier)
 			{
 				for (const FHandler& Handler : Handlers[Event.GetIndex()][Tier])
@@ -130,6 +155,12 @@ int32 FOpsEventBus::Drain()
 int32 FOpsEventBus::Discard()
 {
 	const int32 Dropped = Queue.Num();
+	// EACH ONE NAMED, not only counted: a discard is the one place an event dies unhandled, and "3
+	// events" cannot say whether one of them was the one being chased.
+	for (const FOpsEvent& Event : Queue)
+	{
+		UE_LOG(LogOpsBus, Log, TEXT("Bus: x %s {%s} (discarded)"), NameOf(Event), *Describe(Event));
+	}
 	Queue.Reset();
 	UE_LOG(LogOpsBus, Log, TEXT("Bus: discarded %d queued event(s)"), Dropped);
 	return Dropped;
