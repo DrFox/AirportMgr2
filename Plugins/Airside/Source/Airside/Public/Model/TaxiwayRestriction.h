@@ -57,6 +57,7 @@ namespace TaxiwayRestriction
 	AIRSIDE_API int32 Apply(URoadNetwork& Network, bool bLog = true);
 
 	/** "a service road", "a fuel depot", "a taxiway", "stand 3" - the obstruction as the log,
-	 *  the arrival refusal and the inspector all say it. */
-	AIRSIDE_API FString Describe(const FObstruction& Obstruction);
+	 *  the arrival refusal and the inspector all say it. A stand by its NUMBER (strip stage 5),
+	 *  which is why the network is asked: FObstruction carries the entity index. */
+	AIRSIDE_API FString Describe(const URoadNetwork& Network, const FObstruction& Obstruction);
 }

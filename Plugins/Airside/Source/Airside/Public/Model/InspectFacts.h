@@ -65,6 +65,10 @@ struct FAgentFacts
 struct FStandFacts
 {
 	int32 Index = INDEX_NONE;
+	/** The stand's number as the player sees it (FEntityInstance::StandNumber) - the panel's
+	 *  title and the digits painted at its turn-off. NOT Index, which RoadSlot recycles. 0 for
+	 *  a depot. */
+	int32 Number = 0;
 	/** ICAO code letter A-F from the design wingspan. */
 	FString SizeClass;
 	double DesignWingspan = 0.0;

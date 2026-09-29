@@ -22,6 +22,9 @@ enum class EStandPaint : uint8
 	// Restraint and the two hatch meanings were removed 2026-09-27: the user judged the red
 	// line and the red/white hatch over the vehicle ground "awful" in PIE and asked for the
 	// white edge and the taxi line with its stop line only.
+	/** Behind a turn-off sign's number: the black box the yellow digits sit on (user
+	 *  2026-09-29, samples/standsigns.png). Painted by FStandTurnOffMarkingBuilder. */
+	SignBackground,
 	Count
 };
 

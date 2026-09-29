@@ -369,6 +369,20 @@ struct AIRSIDE_API FEntityInstance
 	 */
 	UPROPERTY() TArray<EDepotModule> Modules;
 
+	/**
+	 * The stand's number as the player sees it - inspector title, refusal text, and the digits
+	 * painted at its turn-off. 1..N per airport in placement order; 0 means not a stand (a
+	 * depot) or not yet numbered (a stand saved before 2026-09-29, until PostLoad's
+	 * URoadNetwork::EnsureStandNumbers gives it one).
+	 *
+	 * ISSUED BY URoadNetwork::PlaceEntity FROM A SAVED COUNTER AND NEVER REUSED, rather than
+	 * derived from the entity's index: RoadSlot recycles a freed slot, so an index is not
+	 * stable, and this number is painted on the ground - renumbering would repaint the airport
+	 * under the player's feet. A deleted stand's number is retired (user 2026-09-29: "1..N for
+	 * now"). ENFORCED BY: Airside.Model.StandNumbers.
+	 */
+	UPROPERTY() int32 StandNumber = 0;
+
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
 };

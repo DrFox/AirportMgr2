@@ -5,6 +5,7 @@
 #include "BuildHudLayer.h"
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
+#include "Entities/EntityDefinition.h"
 #include "Content/AirsideSettings.h"
 #include "InspectorWidget.h"
 #include "Misc/AutomationTest.h"
@@ -18,6 +19,7 @@
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
+#include "Tool/RoadEditTarget.h"
 #include "Tool/Selection.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
@@ -544,6 +546,44 @@ bool FInspectorUnknownKindWarnsOnceTest::RunTest(const FString& Parameters)
 
 	TestFalse(TEXT("the panel hides"), Panel->IsShownForTest());
 	TestEqual(TEXT("one warning per selection, not per tick"), Spy.Count, 2);
+	return true;
+}
+
+/**
+ * A stand's card is titled by its NUMBER - the one painted at its turn-off - never by its entity
+ * index (taxiway strip stage 5). Built so the two differ: a stand placed and deleted first, so
+ * the stand under test recycles slot 0 but is issued number 2. The old title read "Stand 0".
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorStandTitleIsTheNumberTest,
+	"AirportMgr.Inspector.StandTitleIsTheNumber",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorStandTitleIsTheNumberTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+
+	IRoadEditTarget* Target = Actor;
+	const int32 Retired = Target->PlaceStand(FVector2D(-60000.0, 0.0), 0.0);
+	if (!TestTrue(TEXT("a stand placed first"), Retired != INDEX_NONE)) { return false; }
+	TestTrue(TEXT("and removed"), Actor->Network->RemoveEntity(Actor->Network->EntityIdAt(Retired)));
+	const int32 Index = Target->PlaceStand(FVector2D(0.0, 0.0), 0.0);
+	if (!TestTrue(TEXT("the stand under test placed"), Index != INDEX_NONE)) { return false; }
+	const int32 Number = Actor->Network->GetEntities()[Index].StandNumber;
+	if (!TestTrue(TEXT("its number differs from its index, or this test measures nothing"),
+			Number == 2 && Index != Number)) { return false; }
+
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+	FSelection Sel; Sel.Kind = ESelectionKind::Stand; Sel.Id = Index;
+	Panel->Refresh(Actor, Sel);
+	TestTrue(TEXT("shown with a stand selected"), Panel->IsShownForTest());
+	TestEqual(TEXT("the title is the stand's number"), Panel->TitleForTest(), FString(TEXT("Stand 2")));
 	return true;
 }
 

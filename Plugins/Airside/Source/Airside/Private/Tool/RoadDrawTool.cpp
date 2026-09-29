@@ -955,10 +955,11 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 				{
 					Operates = Restricted.GetValue();
 					Effects.Add(FString::Printf(TEXT("restricts to Code %s (%s)"), IcaoCode::ToLetter(Operates),
-						*TaxiwayRestriction::Describe(Worst)));
+						*TaxiwayRestriction::Describe(*Ghost, Worst)));
 				}
 				GhostStrip = TaxiwayStrip::StripWidthOf(*Ghost, Id);
-				// BY ENTITY INDEX: stand numbers (strip stage 5) are not in this tree yet.
+				// BY STAND NUMBER (strip stage 5), the one painted at its turn-off - not the entity
+				// index, which a delete recycles. Integration of stages 5 and 6, 2026-09-29.
 				const TArray<FEntityInstance>& Now = Network->GetEntities();
 				const TArray<FEntityInstance>& Then = Ghost->GetEntities();
 				for (int32 E = 0; E < Now.Num() && E < Then.Num(); ++E)
@@ -966,8 +967,8 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 					if (!Now[E].bAlive || !Now[E].IsStand()) { continue; }
 					const bool bWas = StandAdmission::StripClosure(*Network, Now[E]).IsSet();
 					const bool bWill = StandAdmission::StripClosure(*Ghost, Then[E]).IsSet();
-					if (bWill && !bWas) { Effects.Add(FString::Printf(TEXT("closes stand %d"), E)); }
-					if (bWas && !bWill) { Effects.Add(FString::Printf(TEXT("reopens stand %d"), E)); }
+					if (bWill && !bWas) { Effects.Add(FString::Printf(TEXT("closes stand %d"), Now[E].StandNumber)); }
+					if (bWas && !bWill) { Effects.Add(FString::Printf(TEXT("reopens stand %d"), Now[E].StandNumber)); }
 				}
 				if (Effects.Num() > 0)
 				{

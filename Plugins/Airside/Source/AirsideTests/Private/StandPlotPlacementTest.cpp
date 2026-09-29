@@ -263,6 +263,10 @@ bool FStandPlotRefusesOverlapTest::RunTest(const FString& Parameters)
 
 	const FString Reason = Target->WhyStandRefused(Second, EPavement::Tarmac);
 	TestTrue(TEXT("the reason names the overlap"), Reason.Contains(TEXT("overlaps stand")));
+	// BY NUMBER: the first stand is entity 0 but stand 1 - the number the player sees painted
+	// at its turn-off, not a slot index that a delete would recycle (taxiway strip stage 5).
+	TestTrue(TEXT("the reason names the stand by its number, 1, not its index, 0"),
+		Reason.Contains(TEXT("overlaps stand 1")));
 
 	return true;
 }

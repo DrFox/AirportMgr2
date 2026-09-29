@@ -61,11 +61,14 @@ namespace TaxiwayRestriction
 			? static_cast<EIcaoCode>(Stored) : Own;
 	}
 
-	FString Describe(const FObstruction& Obstruction)
+	FString Describe(const URoadNetwork& Network, const FObstruction& Obstruction)
 	{
 		switch (Obstruction.Kind)
 		{
-		case FObstruction::EKind::Stand:   return FString::Printf(TEXT("stand %d"), Obstruction.Index);
+		case FObstruction::EKind::Stand:
+			// The painted number, not the recyclable index - integration of stages 5 and 6.
+			return FString::Printf(TEXT("stand %d"), Network.GetEntities().IsValidIndex(Obstruction.Index)
+				? Network.GetEntities()[Obstruction.Index].StandNumber : Obstruction.Index);
 		case FObstruction::EKind::Depot:   return TEXT("a fuel depot");
 		case FObstruction::EKind::Taxiway: return TEXT("a taxiway");
 		case FObstruction::EKind::Road:    return TEXT("a service road");
@@ -113,7 +116,7 @@ namespace TaxiwayRestriction
 			if (Letter.IsSet())
 			{
 				UE_LOG(LogAirside, Log, TEXT("Restriction: taxiway %d -> %s (was %s), by %s %d"),
-					Index, *Name(Now), *Name(Was), *Describe(Worst), Worst.Index);
+					Index, *Name(Now), *Name(Was), *Describe(Network, Worst), Worst.Index);
 			}
 			else
 			{

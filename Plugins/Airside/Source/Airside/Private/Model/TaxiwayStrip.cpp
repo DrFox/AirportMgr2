@@ -623,7 +623,9 @@ namespace TaxiwayStrip
 			Verdict.bRefused = true;
 			switch (Hit->Kind)
 			{
-			case FSwallowed::EKind::Stand:   Verdict.Text = FString::Printf(TEXT("its clearance strip would contain stand %d"), Hit->Index); break;
+			// The stand's NUMBER (strip stage 5), not its entity index - integration of 3 and 5.
+			case FSwallowed::EKind::Stand:   Verdict.Text = FString::Printf(TEXT("its clearance strip would contain stand %d"),
+				Network.GetEntities().IsValidIndex(Hit->Index) ? Network.GetEntities()[Hit->Index].StandNumber : Hit->Index); break;
 			case FSwallowed::EKind::Depot:   Verdict.Text = TEXT("its clearance strip would contain a fuel depot"); break;
 			case FSwallowed::EKind::Taxiway: Verdict.Text = TEXT("its clearance strip would contain a taxiway"); break;
 			case FSwallowed::EKind::Road:    Verdict.Text = TEXT("its clearance strip would contain a service road"); break;
