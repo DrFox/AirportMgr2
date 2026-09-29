@@ -207,11 +207,9 @@ public:
 	static const TCHAR* RefusalText(EServiceRefusal Why);
 
 	/**
-	 * The kinds of vehicle the PLACEHOLDER FLEET gives a depot (spec §3.4): DefaultFleetTypes if set,
-	 * else every distinct TypeCode in the letter table (today the utility tow and the bowser).
-	 *
-	 * A PLACEHOLDER BECAUSE THE PLAYER WILL BUY THE FLEET (user, 2026-09-28) and that is not in the
-	 * game yet. A depot with Trucks = N gets N of each; purchase will add to the same list.
+	 * The kinds of vehicle a STARTER fleet gives a depot (spec §3.4): DefaultFleetTypes if set, else every
+	 * distinct TypeCode in the letter table. A depot with Trucks = N gets N of each, once; the player's
+	 * depot has Trucks 0 and buys its fleet instead (UFacilityPurchases, facility-upgrades spec).
 	 */
 	TArray<FName> FleetTypes() const;
 
@@ -498,6 +496,8 @@ private:
 	{
 		int32 Depots = 0;
 		int32 DepotsOnRoad = 0;
+		/** Real vehicles whose home depot is alive and on a road - NoVehicles when zero. */
+		int32 FleetOnRoad = 0;
 		bool bStandJoined = false;
 		bool bAnyPumpless = false;
 		bool bAnyTooLarge = false;

@@ -30,7 +30,9 @@ enum class ELedgerCategory : uint8
 	Refund,
 	Upkeep,
 	/** RollUp's summary of everything older than MaxDays. Never posted directly. */
-	BroughtForward
+	BroughtForward,
+	/** A vehicle bought (negative) or sold (positive) - UFacilityPurchases. Appended, not inserted. */
+	Fleet
 };
 
 /** One movement of money. Append-only: entries are never edited, only followed by more. */

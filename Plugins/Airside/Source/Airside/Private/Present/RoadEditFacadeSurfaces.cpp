@@ -539,6 +539,11 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// keeps exactly what the player chose and UPlotPresenter lights only the stands the SAME
 	// solve, run again from the built entity, actually reserved.
 	Placement.Modules = Modules;
+	// NO STARTER VEHICLES (facility-upgrades spec R3): the depot the player draws has its kit and an
+	// empty yard; the fleet is bought from its inspector card. Stated rather than left to the default,
+	// so the rule is visible where the placement is built. (The default is already 0, so no test can
+	// go red without this line; the behaviour is pinned by Airside.Present.PlayerDepotStartsWithNoTrucks.)
+	Placement.Trucks = 0;
 
 	const FEntityInstanceId Placed = Net.PlaceEntity(Placement);
 	if (!Placed.IsSet())

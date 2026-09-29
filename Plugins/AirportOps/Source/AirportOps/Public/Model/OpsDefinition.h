@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "Model/RoadEntity.h"
 #include "OpsDefinition.generated.h"
 
 /**
@@ -24,10 +25,12 @@ public:
 };
 
 /**
- * What one KIND of fuel vehicle carries and how fast it pumps - keyed by FVehicle::TypeCode.
+ * What one KIND of fuel vehicle carries, how fast it pumps, and what it costs to own - keyed by
+ * FVehicle::TypeCode.
  *
  * IN AirportOps, NOT ON FVehicle: Airside knows how a vehicle MOVES and must never learn what it
- * is FOR (UJobBoard's header). Spec 2026-09-28-fuel-litres section 1.
+ * is FOR (UJobBoard's header). Spec 2026-09-28-fuel-litres section 1; prices from spec
+ * 2026-09-29-facility-upgrades §2, where "a tanker later is a data row" (R4) is this struct.
  */
 USTRUCT()
 struct AIRPORTOPS_API FFuelVehicleSpec
@@ -36,12 +39,59 @@ struct AIRPORTOPS_API FFuelVehicleSpec
 
 	FFuelVehicleSpec() = default;
 	FFuelVehicleSpec(double InCapacity, double InFlow) : CapacityLitres(InCapacity), FlowLitresPerMinute(InFlow) {}
+	FFuelVehicleSpec(double InCapacity, double InFlow, double InPrice, double InUpkeep, FText InName)
+		: CapacityLitres(InCapacity), FlowLitresPerMinute(InFlow), DisplayName(MoveTemp(InName)), Price(InPrice), UpkeepPerDay(InUpkeep) {}
 
 	/** The vehicle's own tank - a load bigger than this takes more than one trip. */
 	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "1.0")) double CapacityLitres = 1000.0;
 
 	/** How fast it pumps into an aircraft, litres per GAME minute. */
 	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "1.0")) double FlowLitresPerMinute = 75.0;
+
+	/** What the depot card calls it - "Bowser". Empty falls back to the TypeCode. */
+	UPROPERTY(EditAnywhere, Category = "Fleet") FText DisplayName;
+
+	/** What buying one costs, charged to ELedgerCategory::Fleet. 0 is free, not "not for sale". */
+	UPROPERTY(EditAnywhere, Category = "Fleet", meta = (ClampMin = "0.0")) double Price = 0.0;
+
+	/** What owning one costs a day, whatever it does - part of the daily "Fleet upkeep" entry. */
+	UPROPERTY(EditAnywhere, Category = "Fleet", meta = (ClampMin = "0.0")) double UpkeepPerDay = 0.0;
+
+	/** The share of Price an idle one sells back for (R5). */
+	UPROPERTY(EditAnywhere, Category = "Fleet", meta = (ClampMin = "0.0", ClampMax = "1.0")) double ResaleFraction = 0.5;
+};
+
+/**
+ * One depot module the player can buy, and what it grants (spec 2026-09-29-facility-upgrades §2).
+ *
+ * ON UScenario, NOT ON UPlotModuleKit as the spec first said (§6 deviation 1): difficulty is the
+ * scenario's numbers, a kit is a .uasset needing a headless edit per rebalance, and AirportOps'
+ * Model/ may not include Airside's Content/. Rules code never names "shed": a module grants
+ * VehicleSlots, and a second kind of bay later is a second row.
+ */
+USTRUCT()
+struct AIRPORTOPS_API FModuleOffer
+{
+	GENERATED_BODY()
+
+	FModuleOffer() = default;
+	FModuleOffer(double InPrice, double InUpkeep, int32 InSlots, FText InName, FText InPlural)
+		: DisplayName(MoveTemp(InName)), PluralName(MoveTemp(InPlural)), Price(InPrice), UpkeepPerDay(InUpkeep), VehicleSlots(InSlots) {}
+
+	/** "Shed" - the buy button's word. */
+	UPROPERTY(EditAnywhere, Category = "Facility") FText DisplayName;
+
+	/** "Sheds" - the card's count line. Data, not an appended "s". */
+	UPROPERTY(EditAnywhere, Category = "Facility") FText PluralName;
+
+	/** Charged to ELedgerCategory::Placement - a module is building work. */
+	UPROPERTY(EditAnywhere, Category = "Facility", meta = (ClampMin = "0.0")) double Price = 0.0;
+
+	/** Per owned module per day, on every live depot - the daily "Facility upkeep" entry. */
+	UPROPERTY(EditAnywhere, Category = "Facility", meta = (ClampMin = "0.0")) double UpkeepPerDay = 0.0;
+
+	/** Vehicle bays each one grants (R2: a shed is one bay, any type). */
+	UPROPERTY(EditAnywhere, Category = "Facility", meta = (ClampMin = "0")) int32 VehicleSlots = 0;
 };
 
 /**
@@ -125,15 +175,26 @@ public:
 	 * joins with the depot fleet.
 	 *
 	 * REPLACED FuelDwellSeconds, a flat 40 movement-seconds for every aircraft whatever it held.
+	 *
+	 * PRICES (spec 2026-09-29-facility-upgrades §2): first guesses against a 500k opening balance and a ~15k full bowser load; unjudged in play.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Scenario")
 	TMap<FName, FFuelVehicleSpec> FuelVehicles = {
-		{ FName(TEXT("UTILITY")), FFuelVehicleSpec(1000.0, 75.0) },
-		{ FName(TEXT("FUEL")), FFuelVehicleSpec(10000.0, 200.0) } };
+		{ FName(TEXT("UTILITY")), FFuelVehicleSpec(1000.0, 75.0, 25000.0, 150.0, NSLOCTEXT("Scenario", "UtilityTow", "Utility tow")) },
+		{ FName(TEXT("FUEL")), FFuelVehicleSpec(10000.0, 200.0, 90000.0, 500.0, NSLOCTEXT("Scenario", "Bowser", "Bowser")) } };
 
 	/** How fast a depot refills a returning vehicle, litres per GAME minute per pump module. */
 	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "1.0"))
 	double DepotRefillLitresPerMinutePerPump = 500.0;
+
+	/**
+	 * The depot modules the player can buy, and what each grants. Copied into UFacilityPurchases at
+	 * attach. THE SHED ONLY this slice (spec 2026-09-29-facility-upgrades §1: pumps and tanks are out of
+	 * scope) - a module with no row here is not for sale, and its buy is refused UnknownType.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Facilities")
+	TMap<EDepotModule, FModuleOffer> ModuleOffers = {
+		{ EDepotModule::Shed, FModuleOffer(40000.0, 200.0, 1, NSLOCTEXT("Scenario", "Shed", "Shed"), NSLOCTEXT("Scenario", "Sheds", "Sheds")) } };
 
 	/**
 	 * How many offers the inbox holds before new ones are dropped (spec 2026-09-28 ruling 6).

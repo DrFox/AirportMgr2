@@ -111,6 +111,9 @@ namespace
 		/** A depot whose plot holds a shed and a tank and NO PUMP. Set before Build. */
 		bool bDepotWithoutPump = false;
 
+		/** A depot placed with NO starter vehicles - the player's new depot (facility spec R3). Set before Build. */
+		bool bEmptyDepot = false;
+
 		/**
 		 * Seconds of GAME time an aircraft dispatched by this fixture spends on stand, or 0
 		 * to leave FAirframe's authored default alone.
@@ -412,6 +415,9 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 			Placement.Heading = UE_DOUBLE_PI * 0.5;
 			Placement.PoseRole = DepotDef->PoseRole;
 			Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank };
+			// ITS STARTER TRUCK, STATED: sheds no longer imply vehicles (facility spec §6), and this case
+			// is about the missing PUMP, so the depot must still have something to send.
+			Placement.Trucks = DepotDef->Trucks;
 			Depot = Net->PlaceEntity(Placement);
 		}
 		else if (bFarEdgeRoad)
@@ -427,7 +433,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 		{
 			Depot = Net->PlaceEntity(DepotDef, DepotDef->Anchors,
 				FVector2D(12000.0, RoadY + 4000.0),
-				UE_DOUBLE_PI * 0.5, 0.0, DepotDef->PoseRole, DepotDef->Trucks);
+				UE_DOUBLE_PI * 0.5, 0.0, DepotDef->PoseRole, bEmptyDepot ? 0 : DepotDef->Trucks);
 		}
 	}
 
@@ -2785,6 +2791,31 @@ bool FAgentRescueStrandedVehicleTest::RunTest(const FString& Parameters)
 		const FServiceVehicle* V = Fixture.Service->FindVehicle(Out.VehicleId);
 		return V != nullptr && V->AgentId == 0;
 	}, 240.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelEmptyDepotSaysNoVehiclesTest, "AirportOps.Fuel.EmptyDepotSaysNoVehicles",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelEmptyDepotSaysNoVehiclesTest::RunTest(const FString& Parameters)
+{
+	// A DEPOT WITH NO VEHICLES (R3): not seeded, and the card names the fix. Before NoVehicles the chain
+	// fell through to NoRoute - "no road from depot" about a depot sitting on a road with nothing in it.
+	FFuelFixture Fixture;
+	Fixture.bEmptyDepot = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.Advance(1.0 / 30.0);
+	TestEqual(TEXT("a depot placed with no starter trucks is not seeded"), Fixture.Service->GetVehicles().Num(), 0);
+
+	if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
+	Fixture.Advance(0.2);
+	if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
+	TestEqual(TEXT("refused for the missing vehicle"),
+		static_cast<int32>(Fixture.Service->GetJobs()[0].Why), static_cast<int32>(EServiceRefusal::NoVehicles));
+	TestEqual(TEXT("and the card says what to do"),
+		Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
+		FString(TEXT("Fuel 300 L \u00B7 depot has no vehicles - buy one")));
 	return true;
 }
 

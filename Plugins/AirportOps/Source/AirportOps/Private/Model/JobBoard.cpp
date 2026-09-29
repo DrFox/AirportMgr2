@@ -102,6 +102,8 @@ const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
 	// THE VEHICLE, NOT THE ROAD OR THE STAND: the fix is a depot with a smaller vehicle, which is why
 	// this does not share TooNarrow's text.
 	case EServiceRefusal::VehicleTooLarge: return TEXT("the depot's vehicle is too large for this stand");
+	// THE FIX, NAMED: the depot card has the buy button (facility-upgrades spec §4).
+	case EServiceRefusal::NoVehicles:    return TEXT("depot has no vehicles - buy one");
 	default:                             return TEXT("unserviceable");
 	}
 }

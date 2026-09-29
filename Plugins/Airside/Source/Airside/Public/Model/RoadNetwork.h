@@ -638,8 +638,7 @@ public:
 	 * guideline the pose's lead-in may join - see FEntityInstance::PoseRole. Defaulted to
 	 * Aircraft so every caller written before the fuel slice keeps meaning what it meant.
 	 *
-	 * Trucks is the third and last such capture - see FEntityInstance::Trucks for why a
-	 * fourth would become a struct instead.
+	 * Trucks is the starter fleet - see FEntityInstance::Trucks.
 	 *
 	 * CodeCEnvelope DEFAULTS TO THE FLOOR (#292 review finding): a stand placed with no
 	 * drawn plot always gets a CODE C box (see GiveStandOutlineIfMissing), so this is the

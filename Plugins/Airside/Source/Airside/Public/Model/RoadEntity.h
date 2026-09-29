@@ -198,7 +198,7 @@ struct AIRSIDE_API FResolvedAnchor
  * is the test that this enum is in the right layer.
  *
  * WHAT EACH ONE DRIVES, and how real that is today:
- *   Shed - the truck count. LIVE: UJobBoard seeds each depot's placeholder fleet from FEntityInstance::Trucks.
+ *   Shed - a vehicle bay. LIVE: UFacilityPurchases counts bays from the offers' VehicleSlots (facility spec §2).
  *   Pump - the refill. LIVE: UJobBoard::PumpsAt multiplies a returning vehicle's refill
  *          rate by these (spec 2026-09-28-fuel-litres; they divided a flat dwell before).
  *   Tank - storage. INERT: no fuel inventory exists anywhere yet. Counted, never read.
@@ -293,18 +293,14 @@ struct AIRSIDE_API FEntityInstance
 	UPROPERTY() EServiceRole PoseRole = EServiceRole::Aircraft;
 
 	/**
-	 * How many of EACH kind of service vehicle this installation starts with (UJobBoard's placeholder
-	 * fleet until the player buys vehicles - spec 2026-09-28-service-vehicle-lifecycle §3.4), captured from
-	 * UEntityDefinition::Trucks at placement. 0 on a stand, where it means nothing.
+	 * The STARTER vehicles this installation came with - of each kind in UJobBoard::FleetTypes -
+	 * turned into real vehicles once by UJobBoard's placeholder seeding. 0 on a stand, and 0 on a
+	 * depot the player drew (facility-upgrades spec R3): the player BUYS its fleet. Kept, rather than
+	 * retired as that spec first said (§6), because plotless and test depots still start with one.
 	 *
-	 * THE THIRD CAPTURED FACT, for the same reason as the two above - but note that it is
-	 * read from ANOTHER MODULE's Model/ layer (AirportOps' UJobBoard), which
-	 * Check-Architecture.ps1 also forbids from including Entities/. So the snapshot is not
-	 * merely convenient here, it is the only way the number reaches the thing that counts
-	 * against it.
-	 *
-	 * If a FOURTH capture arrives, these become one struct passed by reference: three
-	 * trailing defaulted parameters on PlaceEntity is the most a caller can still get right.
+	 * CAPTURED at placement for the Model/-must-not-see-Entities/ reason DesignWingspan is - and read
+	 * from ANOTHER MODULE's Model/ (AirportOps' UJobBoard), which Check-Architecture also forbids from
+	 * including Entities/.
 	 */
 	UPROPERTY() int32 Trucks = 0;
 
@@ -396,11 +392,9 @@ struct AIRSIDE_API FEntityInstance
  * length of one call. Marking it USTRUCT to match its neighbours would mean copying the
  * anchors into an owned array for no reason but decoration.
  *
- * TRUCKS IS STILL HERE, and is NOT what a plotted depot uses. A plot's truck count is
- * derived from the sheds in Modules, because the player's mix IS the fleet size and a
- * separately-stated number could only ever disagree with it. This field is what a PLOTLESS
- * caller states - every stand, and every pre-plot depot - and exactly one of the two paths
- * is taken, so the two can never both apply.
+ * TRUCKS IS THE STARTER FLEET, stated by the caller and never derived from Modules (facility-upgrades
+ * spec §6): the player's plotted depot states 0 and buys its vehicles; a plotless caller states its
+ * definition's count.
  */
 struct AIRSIDE_API FEntityPlacement
 {
@@ -421,7 +415,7 @@ struct AIRSIDE_API FEntityPlacement
 
 	EServiceRole PoseRole = EServiceRole::Aircraft;
 
-	/** Only read when Modules is empty. See the struct comment. */
+	/** Starter vehicles - see FEntityInstance::Trucks. */
 	int32 Trucks = 0;
 
 	/** The drawn plot, world space, implicitly closed. Empty for an ordinary plop. */
