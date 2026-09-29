@@ -205,4 +205,39 @@ bool FAirlinesSaveTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesFloorLapseTest, "AirportOps.Model.Airlines.FloorLapseIsFree",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesFloorLapseTest::RunTest(const FString&)
+{
+	FRosterFixture F;
+	F.Bus.Publish(FOfferExpiredEvent{ 1, TEXT("A"), ELapseReason::Ignored, /*bFloorAirline=*/true });
+	F.Bus.Drain();
+	TestEqual(TEXT("a floor airline's lapsed offer costs nothing - rulings 7 and 8, UFlight::bFloorAirline"), F.Sat(), 0.5, 1e-9);
+	TestEqual(TEXT("and says nothing"), F.Changes.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesDriftSettlesTest, "AirportOps.Model.Airlines.DriftSettlesAndKeepsTheCause",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesDriftSettlesTest::RunTest(const FString&)
+{
+	FRosterFixture F;
+	F.Airborne(1500.0);   // 0.45, "late departure (25 min)"
+	for (int32 Day = 1; Day <= 40; ++Day)
+	{
+		F.Bus.Publish(FDayEndedEvent{ Day });
+		F.Bus.Drain();
+	}
+	TestEqual(TEXT("the drift reaches the start exactly rather than creeping at it for ever"), F.Sat(), 0.5, 1e-12);
+	const int32 Announced = F.Changes.Num();
+	F.Bus.Publish(FDayEndedEvent{ 41 });
+	F.Bus.Drain();
+	TestEqual(TEXT("and once there, a day ending announces nothing"), F.Changes.Num(), Announced);
+	const FAirlineStanding* Row = F.Roster->Find(TEXT("A"));
+	if (!TestNotNull(TEXT("the row"), Row)) { return false; }
+	TestTrue(TEXT("the row's cause is still what the player did, not the forgiveness"),
+		Row->Recent.Num() == 1 && Row->Recent.Last().Cause.Contains(TEXT("late")));
+	return true;
+}
+
 #endif

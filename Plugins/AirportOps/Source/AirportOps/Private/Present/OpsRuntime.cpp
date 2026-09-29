@@ -270,6 +270,9 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		JobBoard->RefillLitresPerMinutePerPump = Scenario->DepotRefillLitresPerMinutePerPump;
 		OfferGenerator->MaxPendingOffers = Scenario->MaxPendingOffers;
 		Airlines->Tuning = Scenario->AirlineSatisfaction;
+		// A NEW GAME, like the ledger's Open below: an airport attached afresh starts every airline at
+		// the tuning's start. A load overwrites it from the snapshot moments later.
+		Airlines->ResetForNewGame();
 
 		// THE BALANCE A NEW GAME OPENS AT. The comment that used to stand at the top of this
 		// block said this would happen "when the ledger exists (M3)"; this is that. A LOAD

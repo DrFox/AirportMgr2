@@ -350,14 +350,21 @@ bool FOfferStripMatchesGeneratorTest::RunTest(const FString& Parameters)
 	const TArray<FAirlineOffers> Airlines = { Offering };
 	USimClock* Clock = NewObject<USimClock>();
 
-	const TArray<double> Samples = UOfferInboxViewModel::SampleDemand(Airlines, *Clock, 0.8, 24);
+	// AN UNHAPPY AIRLINE, through the generator's own reader - the widget's exact call - so a strip
+	// that dropped the factor would draw the factor-1 curve and fail here (stage 2 review).
+	UOfferGenerator* Generator = NewObject<UOfferGenerator>();
+	Generator->AirlineFactorOf = [](const UAirlineDefinition&) { return 0.5; };
+	const TArray<double> Samples = UOfferInboxViewModel::SampleDemand(Airlines, *Clock, 0.8, 24,
+		[Generator](const UAirlineDefinition& Each) { return Generator->AirlineFactor(Each); });
 	if (!TestEqual(TEXT("one sample an hour"), Samples.Num(), 24)) { return false; }
 	for (int32 Hour = 0; Hour < 24; ++Hour)
 	{
 		const double Midpoint = (Hour + 0.5) * 3600.0;
 		TestEqual(*FString::Printf(TEXT("hour %d is the generator's own rate"), Hour), Samples[Hour],
-			UOfferGenerator::TotalRateAt(Airlines, Midpoint, Clock->IsDaylight(Midpoint), 0.8), 1e-12);
+			UOfferGenerator::RateAt(*Airline, Midpoint, Clock->IsDaylight(Midpoint), 0.8, Generator->AirlineFactor(*Airline)), 1e-12);
 	}
+	TestTrue(TEXT("and the factor is really applied: the 08:00 peak is below the factor-1 rate"),
+		Samples[8] < UOfferGenerator::RateAt(*Airline, 8.5 * 3600.0, true, 0.8, 1.0));
 	return true;
 }
 

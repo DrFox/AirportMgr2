@@ -72,12 +72,14 @@ struct AIRPORTOPS_API FNotificationEvent
 	FString Describe() const;
 };
 
-/** An offer lapsed unanswered. Reason says whether it could ever have been taken. */
+/** An offer lapsed unanswered. Reason says whether it could ever have been taken; bFloorAirline is
+ *  the flight's own UFlight::bFloorAirline - a floor airline's lapse never costs the player (rulings 7-8). */
 struct FOfferExpiredEvent
 {
 	int32 FlightId = 0;
 	FName AirlineId;
 	ELapseReason Reason = ELapseReason::None;
+	bool bFloorAirline = false;
 	static const TCHAR* EventName() { return TEXT("OfferExpired"); }
 };
 

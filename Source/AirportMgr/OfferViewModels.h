@@ -173,13 +173,9 @@ public:
 	/**
 	 * The demand strip: Count samples of UOfferGenerator::TotalRateAt across the day, each at
 	 * its slot's midpoint. THE GENERATOR'S OWN FUNCTION, so the strip cannot draw a curve the
-	 * offers do not follow. Static so a test can compare it with the generator directly.
+	 * offers do not follow. Static so a test can compare it with the generator directly. Each airline at
+	 * AirlineFactorOf - the widget passes UOfferGenerator::AirlineFactor, the generator's own reader.
 	 */
-	static TArray<double> SampleDemand(TArrayView<const FAirlineOffers> Airlines,
-		const USimClock& Clock, double DemandFactor, int32 Count);
-
-	/** The same, with each airline's own factor (its satisfaction) - what the widget draws, so the
-	 *  strip follows UOfferGenerator::AirlineFactor exactly as the generator does. */
 	static TArray<double> SampleDemand(TArrayView<const FAirlineOffers> Airlines,
 		const USimClock& Clock, double DemandFactor, int32 Count,
 		TFunctionRef<double(const UAirlineDefinition&)> AirlineFactorOf);

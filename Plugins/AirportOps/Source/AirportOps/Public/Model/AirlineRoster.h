@@ -72,6 +72,13 @@ class AIRPORTOPS_API UAirlineRoster : public UObject, public IOpsPersistent
 public:
 	static constexpr int32 RecentCap = 5;
 
+	/** How close to Tuning.Start the daily drift snaps home - see OnDayEnded. */
+	static constexpr double DriftSnap = 0.005;
+
+	/** A new game: every row gone. UOpsRuntime::Attach calls it beside ULedger::Open - the same
+	 *  new-game path - and re-seeds the catalog airlines after. */
+	void ResetForNewGame() { Standings.Reset(); }
+
 	// --- IOpsPersistent ---------------------------------------------------------------
 	virtual FName SaveBlobName() const override { return TEXT("Airlines"); }
 	virtual UObject& AsPersistentObject() override { return *this; }
@@ -125,6 +132,7 @@ private:
 
 	FAirlineStanding* FindMutable(FName AirlineId);
 
-	/** Clamp to 0..1; if it moved, record the change, trim Recent, log it and publish it. */
-	void Apply(FAirlineStanding& Standing, double Delta, const FString& Cause);
+	/** Clamp to 0..1; if it moved, log and publish it - and, bRemember, record it as the row's latest
+	 *  cause (trimming Recent). */
+	void Apply(FAirlineStanding& Standing, double Delta, const FString& Cause, bool bRemember = true);
 };

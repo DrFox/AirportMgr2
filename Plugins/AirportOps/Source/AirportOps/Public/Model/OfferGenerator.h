@@ -188,12 +188,11 @@ public:
 	static double RateAt(const UAirlineDefinition& Airline, double TimeOfDaySeconds, bool bDaylight,
 		double DemandFactor, double AirlineFactor = 1.0);
 
-	/** RateAt summed over every airline - what the demand strip draws. Every airline at factor 1. */
-	static double TotalRateAt(TArrayView<const FAirlineOffers> Airlines, double TimeOfDaySeconds,
-		bool bDaylight, double DemandFactor);
-
-	/** The same, with each airline's own factor - the strip passes the generator's AirlineFactor so
-	 *  it draws the rate the generator follows. */
+	/**
+	 * RateAt summed over every airline, each at its own factor - what the demand strip draws, given the
+	 * generator's AirlineFactor so it draws the rate the generator follows. ONE SIGNATURE: a
+	 * factor-less overload would be a second way in that silently ignored satisfaction (stage 2 review).
+	 */
 	static double TotalRateAt(TArrayView<const FAirlineOffers> Airlines, double TimeOfDaySeconds,
 		bool bDaylight, double DemandFactor, TFunctionRef<double(const UAirlineDefinition&)> AirlineFactorOf);
 

@@ -149,7 +149,10 @@ public:
 	 */
 	UPROPERTY() double FuelLitres = 0.0;
 
-	/** From the floor airline (the flying club) - C never penalises its lapses. */
+	/**
+	 * From the floor airline (the flying club) - C never penalises its lapses.
+	 * ENFORCED BY: AirportOps.Model.Airlines.FloorLapseIsFree
+	 */
 	UPROPERTY() bool bFloorAirline = false;
 
 	/**

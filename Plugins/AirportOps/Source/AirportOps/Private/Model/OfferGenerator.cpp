@@ -68,13 +68,6 @@ double UOfferGenerator::RateAt(const UAirlineDefinition& Airline, double TimeOfD
 }
 
 double UOfferGenerator::TotalRateAt(TArrayView<const FAirlineOffers> Airlines,
-	double TimeOfDaySeconds, bool bDaylight, double DemandFactor)
-{
-	return TotalRateAt(Airlines, TimeOfDaySeconds, bDaylight, DemandFactor,
-		[](const UAirlineDefinition&) { return 1.0; });
-}
-
-double UOfferGenerator::TotalRateAt(TArrayView<const FAirlineOffers> Airlines,
 	double TimeOfDaySeconds, bool bDaylight, double DemandFactor,
 	TFunctionRef<double(const UAirlineDefinition&)> AirlineFactorOf)
 {

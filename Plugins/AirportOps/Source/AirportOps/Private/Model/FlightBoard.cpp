@@ -110,7 +110,7 @@ void UFlightBoard::TickOffers(const UGroundTraffic& Traffic, const URoadNetwork&
 			Each->LapseReason == ELapseReason::Ignored ? TEXT("ignored") : TEXT("never acceptable"));
 		if (Bus != nullptr)
 		{
-			Bus->Publish(FOfferExpiredEvent{ Each->Id, Each->AirlineId, Each->LapseReason });
+			Bus->Publish(FOfferExpiredEvent{ Each->Id, Each->AirlineId, Each->LapseReason, Each->bFloorAirline });
 		}
 		MoveToHistory(*Each, Clock.Now());
 		++RevisionCount;

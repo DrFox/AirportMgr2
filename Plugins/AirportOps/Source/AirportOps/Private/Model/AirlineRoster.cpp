@@ -59,6 +59,17 @@ void UAirlineRoster::OnOfferExpired(const FOfferExpiredEvent& Event)
 	FAirlineStanding* Row = FindMutable(Event.AirlineId);
 	if (Row == nullptr)
 	{
+		UE_LOG(LogAirportOps, Verbose, TEXT("Airline '%s' (offer %d) has no standing - debug flight or removed airline"),
+			*Event.AirlineId.ToString(), Event.FlightId);
+		return;
+	}
+	// THE FLOOR AIRLINE'S LAPSES NEVER COST THE PLAYER (spec 2026-09-28 rulings 7 and 8, UFlight::
+	// bFloorAirline): the flying club is always there and its offers are small change - letting one
+	// lapse is not an insult to anyone.
+	if (Event.bFloorAirline)
+	{
+		UE_LOG(LogAirportOps, Verbose, TEXT("Airline %s: floor-airline offer %d lapsed - no effect"),
+			*Event.AirlineId.ToString(), Event.FlightId);
 		return;
 	}
 	// IGNORED COSTS MORE THAN NEVER-ACCEPTABLE: the first is the player not answering an offer they
@@ -84,12 +95,17 @@ void UAirlineRoster::OnDayEnded(const FDayEndedEvent& Event)
 {
 	for (FAirlineStanding& Row : Standings)
 	{
-		const double Drift = (Tuning.Start - Row.Satisfaction) * FMath::Clamp(Tuning.DailyDriftFraction, 0.0, 1.0);
-		Apply(Row, Drift, TEXT("a day's forgiveness"));
+		// SNAPPED HOME within half a percent: a fraction of the gap each day never reaches zero, and an
+		// airline 0.001 from its start would otherwise announce "0.50 -> 0.50" every day for months.
+		const double Gap = Tuning.Start - Row.Satisfaction;
+		const double Drift = FMath::Abs(Gap) < DriftSnap ? Gap : Gap * FMath::Clamp(Tuning.DailyDriftFraction, 0.0, 1.0);
+		// NOT REMEMBERED as the row's cause: a day's forgiveness is not something the player did, and
+		// letting it replace "late departure" would hide the one reason they could act on.
+		Apply(Row, Drift, TEXT("a day's forgiveness"), /*bRemember=*/false);
 	}
 }
 
-void UAirlineRoster::Apply(FAirlineStanding& Standing, double Delta, const FString& Cause)
+void UAirlineRoster::Apply(FAirlineStanding& Standing, double Delta, const FString& Cause, bool bRemember)
 {
 	const double Old = Standing.Satisfaction;
 	Standing.Satisfaction = FMath::Clamp(Old + Delta, 0.0, 1.0);
@@ -101,12 +117,17 @@ void UAirlineRoster::Apply(FAirlineStanding& Standing, double Delta, const FStri
 	{
 		return;
 	}
-	Standing.Recent.Add({ Moved, Cause });
-	if (Standing.Recent.Num() > RecentCap)
+	if (bRemember)
 	{
-		Standing.Recent.RemoveAt(0, Standing.Recent.Num() - RecentCap);
+		Standing.Recent.Add({ Moved, Cause });
+		if (Standing.Recent.Num() > RecentCap)
+		{
+			Standing.Recent.RemoveAt(0, Standing.Recent.Num() - RecentCap);
+		}
 	}
-	UE_LOG(LogAirportOps, Log, TEXT("Airline %s: satisfaction %.2f -> %.2f (%s)"),
+	// VERBOSE: the bus's Presentation "Log" subscriber prints every change at Log already (the line the
+	// PIE check greps), and two lines per change is noise.
+	UE_LOG(LogAirportOps, Verbose, TEXT("Airline %s: satisfaction %.2f -> %.2f (%s)"),
 		*Standing.AirlineId.ToString(), Old, Standing.Satisfaction, *Cause);
 	if (Bus != nullptr)
 	{

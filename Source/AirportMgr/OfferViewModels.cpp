@@ -97,12 +97,6 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 }
 
 TArray<double> UOfferInboxViewModel::SampleDemand(TArrayView<const FAirlineOffers> Airlines,
-	const USimClock& Clock, double DemandFactor, int32 Count)
-{
-	return SampleDemand(Airlines, Clock, DemandFactor, Count, [](const UAirlineDefinition&) { return 1.0; });
-}
-
-TArray<double> UOfferInboxViewModel::SampleDemand(TArrayView<const FAirlineOffers> Airlines,
 	const USimClock& Clock, double DemandFactor, int32 Count,
 	TFunctionRef<double(const UAirlineDefinition&)> AirlineFactorOf)
 {
