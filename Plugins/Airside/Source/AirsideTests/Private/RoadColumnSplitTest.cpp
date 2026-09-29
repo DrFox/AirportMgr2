@@ -32,6 +32,15 @@ namespace
 		Target->ConnectNodes(A, B, Kind, INDEX_NONE);
 	}
 
+	/** LaySplit past the strip judge - see TestTool::ConnectUnjudged for when that is honest. */
+	void LaySplitUnjudged(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To,
+		ERoadKind Kind)
+	{
+		const int32 A = Actor->PlaceNode(From);
+		const int32 B = Actor->PlaceNode(To);
+		TestTool::ConnectUnjudged(*Actor, A, B, Kind);
+	}
+
 	/** Only Collinear, and only the columns named, so a winner came from nowhere else. */
 	FSnapGuideSettings OnlyCollinear(bool bTaxiway, bool bServiceRoad)
 	{
@@ -141,7 +150,8 @@ bool FEachRoadColumnSwitchesAloneTest::RunTest(const FString& Parameters)
 	// extensions lie 200 uu apart, which is inside EFit::Perpendicular's 300 uu corridor, so
 	// a cursor between them is eligible for BOTH and only the gate can separate them.
 	LaySplit(Actor, FVector2D(-10000.0, 0.0), FVector2D(0.0, 0.0), ERoadKind::Taxiway);
-	LaySplit(Actor, FVector2D(-10000.0, 200.0), FVector2D(0.0, 200.0), ERoadKind::ServiceRoad);
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+	LaySplitUnjudged(Actor, FVector2D(-10000.0, 200.0), FVector2D(0.0, 200.0), ERoadKind::ServiceRoad);
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
 
 	const FSnapGuideChain Chain;
@@ -217,7 +227,8 @@ bool FMatchingGapIsWithinOneKindTest::RunTest(const FString& Parameters)
 	// A taxiway on y = 0 and a SERVICE ROAD parallel to it 4000 uu north. Nothing else, so the
 	// only pair on the field is a mixed one.
 	LaySplit(Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0), ERoadKind::Taxiway);
-	LaySplit(Actor, FVector2D(-10000.0, 4000.0), FVector2D(10000.0, 4000.0), ERoadKind::ServiceRoad);
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+	LaySplitUnjudged(Actor, FVector2D(-10000.0, 4000.0), FVector2D(10000.0, 4000.0), ERoadKind::ServiceRoad);
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
 
 	const FOffsetGuideSource Source;
@@ -237,7 +248,7 @@ bool FMatchingGapIsWithinOneKindTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a second network actor"), Pair)) { return false; }
 
 	LaySplit(Pair, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0), ERoadKind::Taxiway);
-	LaySplit(Pair, FVector2D(-10000.0, 4000.0), FVector2D(10000.0, 4000.0), ERoadKind::Taxiway);
+	LaySplitUnjudged(Pair, FVector2D(-10000.0, 4000.0), FVector2D(10000.0, 4000.0), ERoadKind::Taxiway);
 
 	const TArray<SnapGuide::FCandidate> OneKind =
 		TestGuide::ProposedBy(Source, *Pair->Network, Anchor, FVector2D(0.0, -500.0));

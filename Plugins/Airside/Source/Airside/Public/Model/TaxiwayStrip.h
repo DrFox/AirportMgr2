@@ -16,6 +16,35 @@ class URoadNetwork;
  */
 namespace TaxiwayStrip
 {
+	/**
+	 * A road or taxiway that exists or is about to - enough to know its ground. The tool's
+	 * preview, the facade's commit, a moved node and a heal all describe the segment they are
+	 * ABOUT to make with one of these, so none of them needs a scratch network to be judged.
+	 */
+	struct FSegmentShape
+	{
+		FVector2D A = FVector2D::ZeroVector;
+		/** (A+B)/2 for straight - GuidelineGeom's own spelling of it. */
+		FVector2D Control = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		/** The WIDER half, GetMaxHalfWidth() - WorstIntrusion's own asymmetric-profile rule. */
+		double HalfWidth = 0.0;
+	};
+
+	/**
+	 * The pavement polygon: both edges of the sampled centreline, counter-clockwise (positive
+	 * RoadGeom::PolygonArea), 2 * (GuidelineGeom::DefaultSamples + 1) points.
+	 *
+	 * ALWAYS SAMPLED, EVEN STRAIGHT - unlike GuidelineGeom::Sample's two-point short circuit -
+	 * so a caller splitting it into per-sample quads (JudgeSegment's reverse query) sees one
+	 * layout for every shape. The edges offset along GuidelineGeom::Tangent's ANALYTIC normal:
+	 * differencing the samples would be a second evaluator of the same curve.
+	 */
+	AIRSIDE_API TArray<FVector2D> FootprintOf(const FSegmentShape& Shape);
+
+	/** The shape of a live segment, its half-width through ProfileFor; false if dead or profile-less. */
+	AIRSIDE_API bool ShapeOf(const URoadNetwork& Network, FRoadSegmentId Id, FSegmentShape& Out);
+
 	/** One taxiway whose strip a footprint enters, and how far. */
 	struct FIntrusion
 	{
@@ -55,6 +84,85 @@ namespace TaxiwayStrip
 	 *
 	 * DEEPEST, NOT ALL: every caller so far reports one reason, and the deepest is the one to
 	 * fix first. A caller that needs the list is the day this grows one.
+	 *
+	 * Exempt names taxiways to skip - the ones a new segment MEETS (JudgeSegment), whose strip
+	 * it may cross by definition. Stands and plots pass nothing: they meet no taxiway.
 	 */
-	AIRSIDE_API TOptional<FIntrusion> WorstIntrusion(const URoadNetwork& Network, TConstArrayView<FVector2D> Footprint);
+	AIRSIDE_API TOptional<FIntrusion> WorstIntrusion(const URoadNetwork& Network, TConstArrayView<FVector2D> Footprint,
+		TConstArrayView<FRoadSegmentId> Exempt = {});
+
+	/**
+	 * Where a new segment's end meets the network: a node it shares, or a point on a segment it
+	 * will split. Unset Node and Segment = a free end.
+	 */
+	struct FSegmentEnd
+	{
+		FRoadNodeId Node;
+		/** A Segment snap: the ORIGINAL segment, before any split - the preview's ghost network
+		 *  has split it and the real one has not, so only this id names the same taxiway in both. */
+		FRoadSegmentId Segment;
+		FVector2D At = FVector2D::ZeroVector;
+	};
+
+	/** What a placement is refused for, if anything. Written once; tool and facade both show Text. */
+	struct FStripVerdict
+	{
+		bool bRefused = false;
+		FString Text;
+		/** How far inside, uu, for a strip refusal; 0 for an angle or a reverse-query refusal. */
+		double Depth = 0.0;
+	};
+
+	/**
+	 * Meets within 30 degrees of square. PER ARM at a node: at least MeetMinDegrees from EVERY
+	 * strip-bearing arm there, i.e. never running back along one. Across a through-taxiway
+	 * (two opposite arms) that IS the 60..120 band; at a split, it is asked of each of the two
+	 * straight chords the split will make (final review 4).
+	 *
+	 * NO SEPARATE "STRAIGHT ON" BAND, unlike the plan's 150-degree ruling 3 (ruled 2026-09-29,
+	 * while implementing): at a taxiway's DEAD END the only arm is behind the new segment, so
+	 * 120..150 is a bend heading AWAY from it, not a diagonal along its strip - and the plan's
+	 * bands refused a taxiway chained on with a 45-degree bend while admitting a 90-degree one.
+	 * Straight on (180) passes this rule as it passed ruling 3's.
+	 */
+	inline constexpr double MeetMinDegrees = 60.0;
+
+	/**
+	 * Two strip-bearing pieces at a node with no third are ONE TAXIWAY when they run on within
+	 * 30 degrees of straight (arms 150+ degrees apart) - what JudgeSegment's exemption walks
+	 * along. Past a sharper bend the next leg is another line to meet, square, in its own right.
+	 */
+	inline constexpr double ChainStraightMinDegrees = 150.0;
+
+	/**
+	 * May a road or taxiway of this shape be laid with these ends? Refuses when its pavement
+	 * enters the strip of a taxiway it does not MEET (share a node / split, at an allowed angle),
+	 * or - bIsTaxiway - when its own strip would contain an existing stand, depot, road or other
+	 * taxiway's pavement it does not meet. Ignore lists the segments a caller is replacing (a
+	 * moved node's own incident segments, a heal's two stubs).
+	 *
+	 * ONE JUDGE FOR EVERY PAVEMENT PATH - the road tool's preview and click, the facade's
+	 * ConnectNodes, MoveNode and the delete heal - so the readout cannot approve what the commit
+	 * refuses (the WhyStandRefused pattern). Aprons and runways never reach it (plan rulings 1-2).
+	 * ENFORCED BY: Airside.Tool.EveryPlacementToolHonoursTheStrip (every registered tool has a
+	 * row: Judged, ExemptApron, ExemptRunway or PlacesNoPavement)
+	 */
+	AIRSIDE_API FStripVerdict JudgeSegment(const URoadNetwork& Network, const FSegmentShape& Shape,
+		bool bIsTaxiway, const FSegmentEnd& AtA, const FSegmentEnd& AtB,
+		TConstArrayView<FRoadSegmentId> Ignore = {});
+
+	/**
+	 * JudgeSegment of a segment that already exists, as if it were laid now: its own shape and
+	 * nodes, itself (and Ignore) left out. For an edit that re-points a live segment rather than
+	 * making one - MergeNodes' Verify asks it of every arm the merge moved.
+	 */
+	AIRSIDE_API FStripVerdict JudgeExisting(const URoadNetwork& Network, FRoadSegmentId Id,
+		TConstArrayView<FRoadSegmentId> Ignore = {});
+
+	/** The meeting-angle rule on one arm: at least MeetMinDegrees from it. JudgeSegment's own
+	 *  test, public for MoveNode, which also judges a node's moved arms against each other. */
+	AIRSIDE_API bool MeetsAtAllowedAngle(double Degrees);
+
+	/** The refusal for an arm met at Degrees, in the one wording every caller shows. */
+	AIRSIDE_API FString MeetingRefusal(const URoadNetwork& Network, FRoadSegmentId Taxiway, double Degrees);
 }

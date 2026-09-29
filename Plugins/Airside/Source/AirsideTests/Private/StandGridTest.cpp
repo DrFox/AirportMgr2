@@ -67,6 +67,14 @@ namespace StandGridFixture
 		Target->ConnectNodes(First, Second, ERoadKind::Taxiway, INDEX_NONE);
 	}
 
+	/** LayTaxiway past the strip judge - see TestTool::ConnectUnjudged for when that is honest. */
+	void LayTaxiwayUnjudged(ARoadNetworkActor* Actor, const FVector2D& A, const FVector2D& B)
+	{
+		const int32 First = Actor->PlaceNode(A);
+		const int32 Second = Actor->PlaceNode(B);
+		TestTool::ConnectUnjudged(*Actor, First, Second);
+	}
+
 	/** A cleared network with a stand definition, the Stand tool selected, and the step set. */
 	bool Begin(FStandSession& Out, EGridStep Step)
 	{
@@ -155,7 +163,8 @@ bool FStandGridNeighbourBackEdgeTest::RunTest(const FString& Parameters)
 		ARoadNetworkActor* Actor = S.TestWorld.Actor;
 
 		StandGridFixture::LayTaxiway(Actor, FVector2D(-20000.0, 0.0), FVector2D(0.0, 0.0));
-		StandGridFixture::LayTaxiway(Actor, FVector2D(1234.0, -730.0), FVector2D(20000.0, -730.0));
+		// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+		StandGridFixture::LayTaxiwayUnjudged(Actor, FVector2D(1234.0, -730.0), FVector2D(20000.0, -730.0));
 
 		// Stand 1, with the grid off whatever the case, so its edge is the same in every case.
 		const EGridStep Asked = S.Tunables.GuideSources.GridStep;
@@ -250,7 +259,10 @@ bool FStandGridAnchorPhaseTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("stand tool"), StandGridFixture::Begin(S, EGridStep::Off))) { return false; }
 	ARoadNetworkActor* Actor = S.TestWorld.Actor;
 	StandGridFixture::LayTaxiway(Actor, FVector2D(-10000.0, 0.0), FVector2D(1234.0, 0.0));
-	StandGridFixture::LayTaxiway(Actor, FVector2D(1234.0, 0.0), FVector2D(10000.0, 0.0));
+	// A SEPARATE NODE at 1234, as it always was - the phase is the point - so the second piece
+	// is not joined to the first and sits in its strip.
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+	StandGridFixture::LayTaxiwayUnjudged(Actor, FVector2D(1234.0, 0.0), FVector2D(10000.0, 0.0));
 
 	const URoadNetwork& Network = *Actor->Network;
 	auto Taxiways = [](const URoadNetwork& N, FRoadSegmentId Id) { return PlotGesture::IsTaxiway(N, Id); };
@@ -284,7 +296,8 @@ bool FStandGridAnchorNearEndTest::RunTest(const FString& Parameters)
 	StandGridFixture::FStandSession S;
 	if (!TestTrue(TEXT("stand tool"), StandGridFixture::Begin(S, EGridStep::Off))) { return false; }
 	StandGridFixture::LayTaxiway(S.TestWorld.Actor, FVector2D(0.0, 0.0), FVector2D(9700.0, 0.0));
-	StandGridFixture::LayTaxiway(S.TestWorld.Actor, FVector2D(100.0, 5000.0), FVector2D(900.0, 5000.0));
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+	StandGridFixture::LayTaxiwayUnjudged(S.TestWorld.Actor, FVector2D(100.0, 5000.0), FVector2D(900.0, 5000.0));
 
 	const URoadNetwork& Network = *S.TestWorld.Actor->Network;
 	auto Taxiways = [](const URoadNetwork& N, FRoadSegmentId Id) { return PlotGesture::IsTaxiway(N, Id); };

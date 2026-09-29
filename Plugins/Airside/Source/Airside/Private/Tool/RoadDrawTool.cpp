@@ -162,6 +162,18 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 		{
 			return nullptr;
 		}
+		// THE STRIP, here too and for the same reason: judged before ResolveToNode makes a
+		// node or splits a segment, so a refused click leaves nothing behind. ConnectNodes asks
+		// the same question again below and would refuse the same road - but only after the
+		// split. ONE EVALUATOR, the readout's (BuildPreview).
+		const FString Why = Context.Target->WhySegmentRefused(From, RoadGuidedSnap(Context), Kind, WidthIndex);
+		if (!Why.IsEmpty())
+		{
+			// LOGGED, unlike Validate's refusals above: this is new at stage 3, and "why will it
+			// not lay my road" is the first thing a repro asks.
+			UE_LOG(LogAirside, Log, TEXT("Road click refused: %s"), *Why);
+			return nullptr;
+		}
 	}
 
 	bool bNextCreated = false;
@@ -228,6 +240,11 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 		const FVector2D Start = NodePosition(Context, From);
 		const ERoadPlacement Judgement =
 			RoadPlacement::Validate(*Context.Network(), FromId, Guided, Context.Limits);
+		// THE STRIP JUDGE after the geometric one - a corner the solver cannot draw is the
+		// more basic fault, and Validate's reasons stay first. Asked only once Validate passes.
+		const FString StripWhy = Judgement == ERoadPlacement::Valid
+			? Context.Target->WhySegmentRefused(From, Guided, Kind, WidthIndex) : FString();
+		const bool bAllowed = Judgement == ERoadPlacement::Valid && StripWhy.IsEmpty();
 
 		// THE LENGTH, as the runway's preview has always said its own (reported 2026-09-27:
 		// taxiways and roads said nothing). Mid-segment so it never sits on the refusal or the
@@ -237,13 +254,17 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 		if (Length > 0.0)
 		{
 			Sink.Label((Start + Guided.Position) * 0.5, FString::Printf(TEXT("%.0f m"), Length / 100.0),
-				Judgement == ERoadPlacement::Valid ? EPreviewStyle::Pending : EPreviewStyle::Refused);
+				bAllowed ? EPreviewStyle::Pending : EPreviewStyle::Refused);
 		}
 
 		if (Judgement != ERoadPlacement::Valid)
 		{
 			Sink.Label(Guided.Position, RoadPlacement::Describe(Judgement),
 				EPreviewStyle::Refused);
+		}
+		else if (!StripWhy.IsEmpty())
+		{
+			Sink.Label(Guided.Position, StripWhy, EPreviewStyle::Refused);
 		}
 		else if (const IBuildPurse* Purse = Context.Target->GetPurse())
 		{
@@ -653,8 +674,11 @@ void FRoadDrawTool::Tick(const FToolContext& Context)
 	// can I not build here" with nothing at all.
 	const ERoadPlacement Judgement =
 		RoadPlacement::Validate(*Context.Network(), FromId, RoadGuidedSnap(Context), Context.Limits);
-	Context.Target->UpdateGhost(Pending, RoadGuidedSnap(Context),
-		Judgement == ERoadPlacement::Valid, Kind, WidthIndex);
+	// Red inside a strip too - the readout's own WhySegmentRefused, so the colour and the
+	// label cannot disagree.
+	const bool bValid = Judgement == ERoadPlacement::Valid
+		&& Context.Target->WhySegmentRefused(Pending, RoadGuidedSnap(Context), Kind, WidthIndex).IsEmpty();
+	Context.Target->UpdateGhost(Pending, RoadGuidedSnap(Context), bValid, Kind, WidthIndex);
 }
 
 void FRoadDrawTool::OnDeactivate(const FToolContext& Context)

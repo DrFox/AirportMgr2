@@ -1108,6 +1108,16 @@ int32 ARoadNetworkActor::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	return Facade->PlaceStandInPlot(Outline, EntranceA, EntranceB, Pavement);
 }
 
+FString ARoadNetworkActor::WhyPlotRefused(TArrayView<const FVector2D> Outline) const
+{
+	return Facade->WhyPlotRefused(Outline);
+}
+
+FString ARoadNetworkActor::WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const
+{
+	return Facade->WhySegmentRefused(FromIndex, To, Kind, WidthIndex);
+}
+
 FString ARoadNetworkActor::WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const
 {
 	return Facade->WhyStandRefused(Outline, Pavement);

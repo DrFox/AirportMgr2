@@ -1950,4 +1950,82 @@ bool FDepotTruckTurnsOutWithinItsLockTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A DEPOT PLOT REFUSES INSIDE A TAXIWAY'S CLEARANCE STRIP (strip stage 3) - through the one
+ * evaluator, IRoadEditTarget::WhyPlotRefused, which the readout's warning, the Build button and
+ * PlaceEntityInPlot's commit all ask. A service road 50 m off a 24 m taxiway is clear of its
+ * 40 m keep-out; a plot drawn off that road TOWARD the taxiway reaches into it, one drawn away
+ * from it does not.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPlaceRefusedInsideStripTest,
+	"Airside.Tool.PlotPlace.RefusedInsideStrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPlaceRefusedInsideStripTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	// THE ROAD FIRST, so it is segment 0 - the one OnRoad snaps to.
+	LayServiceRoad(Actor, 5000.0);
+	LayRoad(Actor, 0.0, ERoadKind::Taxiway);
+	if (!TestEqual(TEXT("the road and the taxiway are both laid - the road is clear of the strip"),
+		Actor->Network->GetSegments().Num(), 2)) { return false; }
+
+	// Draws a 20 m x 16 m plot off the road at Side (-1 toward the taxiway, +1 away).
+	const auto Draw = [this, Actor](FPlotPlaceTool& Tool, double Side, FVector2D& OutAnchor)
+	{
+		Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 5000.0 + Side * 200.0)));
+		TArray<FVector2D> Anchored;
+		Tool.Quad(PlotAt(Actor, FVector2D(0.0, 5000.0 + Side * 200.0)), Anchored);
+		if (Anchored.Num() < 1) { return false; }
+		OutAnchor = Anchored[0];
+		Tool.OnClick(PlotAt(Actor, OutAnchor + FVector2D(2000.0, 0.0)));
+		Tool.OnClick(PlotAt(Actor, OutAnchor + FVector2D(2000.0, Side * 1600.0)));
+		Tool.OnClick(PlotAt(Actor, OutAnchor + FVector2D(0.0, Side * 1600.0)));
+		return Tool.GetStage() == EPlotStage::Confirm;
+	};
+
+	// TOWARD THE TAXIWAY: the back edge lands ~30 m off its centreline, inside the 40 m keep-out.
+	{
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		FVector2D Anchor;
+		if (!TestTrue(TEXT("the taxiway-side plot is drawn to Confirm"), Draw(Tool, -1.0, Anchor))) { return false; }
+		const FToolContext Confirming = PlotAt(Actor, Anchor + FVector2D(0.0, -1600.0));
+
+		FToolReadoutCollector Collector;
+		Tool.BuildReadout(Confirming, Collector);
+		TestTrue(FString::Printf(TEXT("the readout names the clearance strip (%s)"), *FString::Join(Collector.Readout.Warnings, TEXT(" | "))),
+			Collector.Readout.Warnings.ContainsByPredicate([](const FString& W) { return W.Contains(TEXT("clearance strip")); }));
+		TestFalse(TEXT("and Build is not committable"), Collector.Readout.bCommittable);
+
+		const TArray<FVector2D> Outline{ Anchor, Anchor + FVector2D(2000.0, 0.0),
+			Anchor + FVector2D(2000.0, -1600.0), Anchor + FVector2D(0.0, -1600.0) };
+		TestEqual(TEXT("PlaceEntityInPlot refuses the same plot"),
+			Actor->PlaceEntityInPlot(Outline, Outline[0], Outline[1], TArray<EDepotModule>(), EPlaceableEntity::FuelDepot),
+			INDEX_NONE);
+		TestEqual(TEXT("nothing was built"), LiveEntities(Actor), 0);
+	}
+
+	// AWAY FROM IT: the control - the same plot, mirrored, builds.
+	{
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		FVector2D Anchor;
+		if (!TestTrue(TEXT("the far-side plot is drawn to Confirm"), Draw(Tool, 1.0, Anchor))) { return false; }
+		const FToolContext Confirming = PlotAt(Actor, Anchor + FVector2D(0.0, 1600.0));
+		FToolReadoutCollector Collector;
+		Tool.BuildReadout(Confirming, Collector);
+		TestTrue(FString::Printf(TEXT("the far side is committable (%s)"), *FString::Join(Collector.Readout.Warnings, TEXT(" | "))),
+			Collector.Readout.bCommittable);
+		Tool.OnCommit(Confirming);
+		TestEqual(TEXT("and builds"), LiveEntities(Actor), 1);
+	}
+	return true;
+}
+
 #endif

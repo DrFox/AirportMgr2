@@ -131,6 +131,34 @@ namespace RoadGeom
 	AIRSIDE_API double PolygonArea(TArrayView<const FVector2D> Points);
 
 	/**
+	 * Do two outlines share INTERIOR - more than Tolerance uu of ground in common?
+	 * Touching along an edge or at a corner is NOT overlapping.
+	 *
+	 * SEPARATING AXES, NOT CONTAINMENT (final review I4). This was "any vertex of one inside
+	 * the other, or an edge of one crossing an edge of the other", through RoadGeom::
+	 * PointInPolygon and RoadGeom::SegmentsCross. Both are undefined exactly on a boundary
+	 * (RoadGeom.h says so of the first), and a row of stands drawn off one taxiway grid puts
+	 * every neighbour's corner exactly on the last one's edge, to within the ulps of two
+	 * independent sums: the second stand of a row was refused "overlaps stand 0" by a coin
+	 * flip. Two convex outlines are disjoint exactly when some edge normal of either separates
+	 * their projections, so asking that axis by axis with a tolerance makes "touching" a
+	 * margin rather than a knife edge - and a real overlap, of any shape (one inside the
+	 * other, or crossed like a plus sign, the two cases the old test needed both halves for),
+	 * still has no separating axis and is still refused.
+	 *
+	 * MOVED HERE FROM URoadEditFacade (OutlinesOverlap, 2026-09-29) so Model/TaxiwayStrip can
+	 * ask the same question of a new taxiway's strip - Model may not include Present/. The
+	 * facade passes its own OverlapToleranceUu; the strip passes TaxiwayStrip::ToleranceUu.
+	 *
+	 * CONVEX INPUTS, which is every outline that reaches the facade: a stand is StandBox's
+	 * rectangle, a depot plot the gesture's rectangle, and TaxiwayStrip splits a curved
+	 * footprint into per-sample quads before asking. A non-convex one would be judged by its
+	 * own edges' normals, so the answer errs toward "overlaps" (refusal), never toward
+	 * letting two interiors share ground.
+	 */
+	AIRSIDE_API bool PolygonsOverlap(TArrayView<const FVector2D> A, TArrayView<const FVector2D> B, double Tolerance);
+
+	/**
 	 * True if no pair of non-adjacent edges crosses transversally. O(n^2); n is tiny here.
 	 *
 	 * This is a transversal-crossing test, and that is all it claims to be. Three kinds

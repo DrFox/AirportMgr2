@@ -313,75 +313,55 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 namespace
 {
 	/**
-	 * How far two outlines must interpenetrate, uu, before OutlinesOverlap calls it an
+	 * How far two outlines must interpenetrate, uu, before RoadGeom::PolygonsOverlap calls it an
 	 * overlap. One centimetre: the PlotFit::CornerInsetUu precedent, and for the same reason -
 	 * a boundary-exact question answered by floating point is a coin flip, and the question
 	 * meant is "do these interiors share ground", not "is this point on that line".
 	 */
 	constexpr double OverlapToleranceUu = 1.0;
+}
 
-	/**
-	 * Do two outlines share INTERIOR - more than OverlapToleranceUu of ground in common?
-	 * Touching along an edge or at a corner is NOT overlapping.
-	 *
-	 * SEPARATING AXES, NOT CONTAINMENT (final review I4). This was "any vertex of one inside
-	 * the other, or an edge of one crossing an edge of the other", through RoadGeom::
-	 * PointInPolygon and RoadGeom::SegmentsCross. Both are undefined exactly on a boundary
-	 * (RoadGeom.h says so of the first), and a row of stands drawn off one taxiway grid puts
-	 * every neighbour's corner exactly on the last one's edge, to within the ulps of two
-	 * independent sums: the second stand of a row was refused "overlaps stand 0" by a coin
-	 * flip. Two convex outlines are disjoint exactly when some edge normal of either separates
-	 * their projections, so asking that axis by axis with a tolerance makes "touching" a
-	 * margin rather than a knife edge - and a real overlap, of any shape (one inside the
-	 * other, or crossed like a plus sign, the two cases the old test needed both halves for),
-	 * still has no separating axis and is still refused.
-	 *
-	 * CONVEX INPUTS, which is every outline that reaches here: a stand is StandBox's
-	 * rectangle, a depot plot the gesture's rectangle. A non-convex one would be judged by its
-	 * own edges' normals, so the answer errs toward "overlaps" (refusal), never toward
-	 * letting two interiors share ground.
-	 */
-	bool OutlinesOverlap(TArrayView<const FVector2D> A, TArrayView<const FVector2D> B)
+FString URoadEditFacade::WhyPlotRefused(TArrayView<const FVector2D> Outline) const
+{
+	// The triangulator's contract is a SIMPLE polygon, and it is this layer that owes it -
+	// fed a figure-eight it produces overlapping triangles rather than an error. The gesture
+	// cannot produce one now that a plot is a rectangle, which is exactly why this stays:
+	// the guarantee belongs to whoever feeds the triangulator, not to whoever happens to be
+	// calling this month.
+	if (!RoadGeom::IsSimplePolygon(Outline))
 	{
-		// Is there an edge normal of Edges along which A and B's projections are apart, or
-		// meet within the tolerance?
-		const auto SeparatedByEdgesOf = [A, B](TArrayView<const FVector2D> Edges)
-		{
-			const int32 Num = Edges.Num();
-			for (int32 Index = 0; Index < Num; ++Index)
-			{
-				const FVector2D Edge = Edges[(Index + 1) % Num] - Edges[Index];
-				const double Length = Edge.Size();
-				if (Length <= UE_DOUBLE_SMALL_NUMBER)
-				{
-					continue;
-				}
-				// Unit length, so the tolerance below is in uu along every axis alike.
-				const FVector2D Axis(-Edge.Y / Length, Edge.X / Length);
-
-				double MinA = TNumericLimits<double>::Max(), MaxA = TNumericLimits<double>::Lowest();
-				for (const FVector2D& P : A)
-				{
-					const double D = FVector2D::DotProduct(P, Axis);
-					MinA = FMath::Min(MinA, D);
-					MaxA = FMath::Max(MaxA, D);
-				}
-				double MinB = TNumericLimits<double>::Max(), MaxB = TNumericLimits<double>::Lowest();
-				for (const FVector2D& P : B)
-				{
-					const double D = FVector2D::DotProduct(P, Axis);
-					MinB = FMath::Min(MinB, D);
-					MaxB = FMath::Max(MaxB, D);
-				}
-				if (MaxA - MinB <= OverlapToleranceUu || MaxB - MinA <= OverlapToleranceUu)
-				{
-					return true;
-				}
-			}
-			return false;
-		};
-		return !SeparatedByEdgesOf(A) && !SeparatedByEdgesOf(B);
+		return TEXT("the outline crosses itself");
 	}
+
+	const URoadNetwork* Network = GetNetwork();
+	if (Network == nullptr)
+	{
+		return FString();
+	}
+
+	// NOT OVER A STAND. WhyStandRefused has always refused a stand drawn over a depot; the
+	// reverse had no check, so a depot plot laid across a stand's apron placed its fence and
+	// tanks under the parked aircraft (final review). The SAME RoadGeom::PolygonsOverlap, so a depot
+	// flush against a stand's edge places exactly as a stand flush against a depot does.
+	// Stands only: depot-on-depot was never refused and is not this fix's to change.
+	for (int32 Index = 0; Index < Network->GetEntities().Num(); ++Index)
+	{
+		const FEntityInstance& Entity = Network->GetEntities()[Index];
+		if (Entity.bAlive && Entity.IsStand() && Entity.IsPlotted() && RoadGeom::PolygonsOverlap(Outline, Entity.Outline, OverlapToleranceUu))
+		{
+			return FString::Printf(TEXT("the plot overlaps stand %d"), Index);
+		}
+	}
+
+	// INSIDE A TAXIWAY'S CLEARANCE STRIP (strip stage 3): a depot's fence and tanks are as
+	// struck by a passing wing as a parked tail. WhyStandRefused's own words, so the two
+	// readouts name the fault alike.
+	if (const TOptional<TaxiwayStrip::FIntrusion> In = TaxiwayStrip::WorstIntrusion(*Network, Outline))
+	{
+		return FString::Printf(TEXT("inside a taxiway's clearance strip by %.1f m (a Code %s taxiway needs %.1f m clear)"),
+			In->Depth / 100.0, IcaoCode::ToLetter(In->Letter), In->Required / 100.0);
+	}
+	return FString();
 }
 
 PlotYard::FReservation URoadEditFacade::ReserveForPlot(TArrayView<const FVector2D> Outline,
@@ -429,32 +409,14 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 
 	URoadNetwork& Net = EnsureNetwork();
 
-	// The triangulator's contract is a SIMPLE polygon, and it is this layer that owes it -
-	// fed a figure-eight it produces overlapping triangles rather than an error. The gesture
-	// cannot produce one now that a plot is a rectangle, which is exactly why this stays:
-	// the guarantee belongs to whoever feeds the triangulator, not to whoever happens to be
-	// calling this month.
-	if (!RoadGeom::IsSimplePolygon(Outline))
+	// THE OUTLINE'S REFUSALS, through the one evaluator the tool's readout asks - see
+	// WhyPlotRefused, which holds them (moved there whole, strip stage 3). ONE log line for all
+	// of them now, where each had its own; the reason text is the same words.
+	const FString Why = WhyPlotRefused(Outline);
+	if (!Why.IsEmpty())
 	{
-		UE_LOG(LogRoadMesh, Warning,
-			TEXT("PlaceEntityInPlot refused: the outline crosses itself"));
+		UE_LOG(LogRoadMesh, Warning, TEXT("PlaceEntityInPlot refused: %s"), *Why);
 		return INDEX_NONE;
-	}
-
-	// NOT OVER A STAND. WhyStandRefused has always refused a stand drawn over a depot; the
-	// reverse had no check, so a depot plot laid across a stand's apron placed its fence and
-	// tanks under the parked aircraft (final review). The SAME OutlinesOverlap, so a depot
-	// flush against a stand's edge places exactly as a stand flush against a depot does.
-	// Stands only: depot-on-depot was never refused and is not this fix's to change.
-	for (int32 Index = 0; Index < Net.GetEntities().Num(); ++Index)
-	{
-		const FEntityInstance& Entity = Net.GetEntities()[Index];
-		if (Entity.bAlive && Entity.IsStand() && Entity.IsPlotted() && OutlinesOverlap(Outline, Entity.Outline))
-		{
-			UE_LOG(LogRoadMesh, Warning,
-				TEXT("PlaceEntityInPlot refused: the plot overlaps stand %d"), Index);
-			return INDEX_NONE;
-		}
 	}
 
 	// COUNTER-CLOCKWISE, exactly the correction AddApron makes and for the same reason: the
@@ -721,7 +683,7 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline, EP
 		{
 			const FEntityInstance& Entity = Entities[Index];
 			if (!Entity.bAlive || !Entity.IsPlotted()) { continue; }
-			if (OutlinesOverlap(Outline, Entity.Outline))
+			if (RoadGeom::PolygonsOverlap(Outline, Entity.Outline, OverlapToleranceUu))
 			{
 				return Entity.IsStand()
 					? FString::Printf(TEXT("overlaps stand %d"), Index)

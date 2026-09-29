@@ -204,7 +204,8 @@ bool FGuideGridHasNoCellOutsideTheListTest::RunTest(const FString& Parameters)
 	// go unseen - the exact shape of failure this test exists to catch, in the newest column.
 	const int32 VanWest = Target->PlaceNode(FVector2D(-10000.0, -3000.0));
 	const int32 VanEast = Target->PlaceNode(FVector2D(10000.0, -3000.0));
-	Target->ConnectNodes(VanWest, VanEast, ERoadKind::ServiceRoad, INDEX_NONE);
+	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): this test is about the guides over it, not about laying it - see TestTool::ConnectUnjudged.
+	TestTool::ConnectUnjudged(*Actor, VanWest, VanEast, ERoadKind::ServiceRoad);
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
 
 	const int32 Stand = Target->PlaceStand(FVector2D(-4000.0, 5000.0), 0.0);
