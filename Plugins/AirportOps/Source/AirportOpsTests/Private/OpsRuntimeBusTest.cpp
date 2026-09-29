@@ -6,7 +6,10 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/AirlineDefinition.h"
+#include "Model/AirlineRoster.h"
 #include "Model/JobBoard.h"
+#include "Model/OfferGenerator.h"
 #include "Model/Ledger.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -18,6 +21,7 @@
 #include "Testing/AirsideTestGraph.h"
 #include "Model/OpsEventBus.h"
 #include "Model/OpsEvents.h"
+#include "Model/OpsSave.h"
 #include "Model/RoadAgent.h"
 #include "OpsEventsTestListener.h"
 #include "Present/AirsideTraffic.h"
@@ -286,6 +290,60 @@ bool FOpsBusLandingFeeTest::RunTest(const FString&)
 	const bool bCharged = Ledger->Entries().ContainsByPredicate([](const FLedgerEntry& Entry)
 		{ return Entry.Category == ELedgerCategory::LandingFee; });
 	TestTrue(TEXT("landing is charged once the arrival's Gone -> Arriving reaches a board that knows its agent"), bCharged);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBusSatisfactionRateTest, "AirportOps.Present.Bus.SatisfactionMovesRate",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeBusSatisfactionRateTest::RunTest(const FString&)
+{
+	// THE WHOLE CHAIN, through the runtime's own wiring: an airborne event on the bus -> the roster's
+	// Reaction -> the generator's rate. The roster's world-free tests cannot see a WireBus that forgot a
+	// subscription, or an Attach that never handed the generator its reader. ITS OWN AIRLINE, not the
+	// content's, so the test measures something whatever content ships (stage 2 review).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	UAirlineDefinition* Airline = NewObject<UAirlineDefinition>(GetTransientPackage(), TEXT("BusTestAirline"));
+	Airline->bIsFloor = false;
+	Runtime->GetAirlines()->Ensure(Airline->GetFName());
+	const double Before = Runtime->GetOfferGenerator()->AirlineFactor(*Airline);
+	for (int32 Index = 0; Index < 10; ++Index)
+	{
+		Runtime->GetBus().Publish(FFlightAirborneEvent{ 0, Airline->GetFName(), 6000.0 });
+	}
+	Runtime->Tick(0.0);
+	const double After = Runtime->GetOfferGenerator()->AirlineFactor(*Airline);
+	TestTrue(FString::Printf(TEXT("ten very late departures lower the airline's offer rate (%.2f -> %.2f)"), Before, After), After < Before);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBusOldSnapshotTest, "AirportOps.Present.Bus.OldSnapshotSeedsAirlines",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeBusOldSnapshotTest::RunTest(const FString&)
+{
+	// A SAVE FROM BEFORE THE "Airlines" BLOB: every catalog airline must come back at the start, not
+	// be missing - OnBeforeRestore clears the rows, and only SeedAirlines puts them back.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	if (Runtime->GetAirlineOffers().Num() == 0 || Runtime->GetAirlineOffers()[0].Airline == nullptr)
+	{
+		AddError(TEXT("no catalog airline to seed - the content this test needs is missing"));
+		return false;
+	}
+	const FName First = Runtime->GetAirlineOffers()[0].Airline->GetFName();
+	const FString Slot = TEXT("AirportOpsTest_BusOldSnapshot");
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+	FOpsSnapshot Snapshot;
+	if (!TestTrue(TEXT("and reads back"), OpsSave::ReadSlot(Slot, Snapshot))) { return false; }
+	TestTrue(TEXT("the save carries the airlines' blob"), Snapshot.Blobs.Contains(TEXT("Airlines")));
+	Snapshot.Blobs.Remove(TEXT("Airlines"));
+	if (!TestTrue(TEXT("the older snapshot writes"), OpsSave::WriteSlot(Slot, Snapshot))) { return false; }
+	if (!TestTrue(TEXT("and loads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	const FAirlineStanding* Row = Runtime->GetAirlines()->Find(First);
+	if (!TestNotNull(TEXT("a catalog airline is seeded after loading a snapshot with no Airlines blob"), Row)) { return false; }
+	TestEqual(TEXT("at the tuning's start"), Row->Satisfaction, Runtime->GetAirlines()->Tuning.Start, 1e-9);
 	return true;
 }
 

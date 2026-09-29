@@ -1,5 +1,6 @@
 #include "OfferViewModels.h"
 
+#include "Model/AirlineRoster.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -30,14 +31,34 @@ FText UOfferViewModel::DescribeContract(double LeadTimeSeconds, double ContractS
 		DescribeDuration(LeadTimeSeconds), DescribeDuration(ContractSeconds));
 }
 
+FText UOfferViewModel::DescribeSatisfaction(const FAirlineStanding* Standing)
+{
+	if (Standing == nullptr)
+	{
+		return FText::GetEmpty();
+	}
+	const FText Percent = FText::Format(NSLOCTEXT("AirportMgr", "OfferSatisfactionPct", "{0}%"),
+		FText::AsNumber(FMath::RoundToInt(Standing->Satisfaction * 100.0)));
+	if (Standing->Recent.Num() == 0)
+	{
+		return Percent;
+	}
+	// THE NEWEST CHANGE ONLY: the row has room for one reason, and the latest is the one the player
+	// can still connect to something they just did.
+	const FAirlineSatisfactionChange& Latest = Standing->Recent.Last();
+	return FText::Format(NSLOCTEXT("AirportMgr", "OfferSatisfaction", "{0} {1} {2}"), Percent,
+		FText::FromString(Latest.Delta >= 0.0 ? TEXT("\u25B2") : TEXT("\u25BC")), FText::FromString(Latest.Cause));
+}
+
 void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& Traffic,
-	const URoadNetwork& Network, const USimClock& Clock)
+	const URoadNetwork& Network, const USimClock& Clock, const UAirlineRoster* Airlines)
 {
 	const UFlight* Live = Flight.Get();
 	if (Live == nullptr)
 	{
 		return;
 	}
+	Satisfaction = DescribeSatisfaction(Airlines != nullptr ? Airlines->Find(Live->AirlineId) : nullptr);
 
 	Callsign = FText::FromString(Live->Callsign);
 	Airline = Live->AirlineName;
@@ -76,7 +97,8 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 }
 
 TArray<double> UOfferInboxViewModel::SampleDemand(TArrayView<const FAirlineOffers> Airlines,
-	const USimClock& Clock, double DemandFactor, int32 Count)
+	const USimClock& Clock, double DemandFactor, int32 Count,
+	TFunctionRef<double(const UAirlineDefinition&)> AirlineFactorOf)
 {
 	TArray<double> Out;
 	const int32 N = FMath::Max(Count, 0);
@@ -84,14 +106,15 @@ TArray<double> UOfferInboxViewModel::SampleDemand(TArrayView<const FAirlineOffer
 	for (int32 Index = 0; Index < N; ++Index)
 	{
 		const double Midpoint = (Index + 0.5) * USimClock::SecondsPerDay / N;
-		Out.Add(UOfferGenerator::TotalRateAt(Airlines, Midpoint, Clock.IsDaylight(Midpoint), DemandFactor));
+		Out.Add(UOfferGenerator::TotalRateAt(Airlines, Midpoint, Clock.IsDaylight(Midpoint), DemandFactor, AirlineFactorOf));
 	}
 	return Out;
 }
 
 void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraffic,
-	const URoadNetwork& InNetwork, const USimClock& InClock)
+	const URoadNetwork& InNetwork, const USimClock& InClock, const UAirlineRoster* InAirlines)
 {
+	Airlines = InAirlines;
 	Board = &InBoard;
 	Traffic = &InTraffic;
 	Network = const_cast<URoadNetwork*>(&InNetwork);
@@ -142,7 +165,7 @@ void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraf
 	{
 		if (Row != nullptr)
 		{
-			Row->Refresh(InBoard, InTraffic, InNetwork, InClock);
+			Row->Refresh(InBoard, InTraffic, InNetwork, InClock, InAirlines);
 		}
 	}
 
@@ -187,7 +210,7 @@ bool UOfferInboxViewModel::Accept(UOfferViewModel* Row)
 
 	// THE ONE DOOR. The viewmodel asks the board; it never writes a phase or a stand itself.
 	const bool bAccepted = LiveBoard->Accept(*LiveTraffic, *LiveNetwork, *LiveClock, *Flight);
-	Refresh(*LiveBoard, *LiveTraffic, *LiveNetwork, *LiveClock);
+	Refresh(*LiveBoard, *LiveTraffic, *LiveNetwork, *LiveClock, Airlines.Get());
 	return bAccepted;
 }
 
@@ -207,7 +230,7 @@ void UOfferInboxViewModel::Decline(UOfferViewModel* Row)
 	{
 		if (URoadNetwork* LiveNetwork = Network.Get())
 		{
-			Refresh(*LiveBoard, *LiveTraffic, *LiveNetwork, *LiveClock);
+			Refresh(*LiveBoard, *LiveTraffic, *LiveNetwork, *LiveClock, Airlines.Get());
 		}
 	}
 }

@@ -44,6 +44,41 @@ struct AIRPORTOPS_API FFuelVehicleSpec
 	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "1.0")) double FlowLitresPerMinute = 75.0;
 };
 
+/**
+ * What moves an airline's satisfaction, and how much it moves its offers. Spec 2026-09-29-ops-event-bus
+ * §3. Copied into UAirlineRoster at attach.
+ *
+ * FIRST GUESSES, UNJUDGED (2026-09-29): nobody has played with them yet. Tune once seen in play.
+ */
+USTRUCT(BlueprintType)
+struct AIRPORTOPS_API FAirlineSatisfactionTuning
+{
+	GENERATED_BODY()
+
+	/** Where every airline starts, and where the daily drift pulls it back to. 0..1. */
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0", ClampMax = "1.0")) double Start = 0.5;
+
+	/** A flight airborne by its contract's deadline. */
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double OnTimeBonus = 0.03;
+
+	/** A late flight costs this per ten game minutes late, up to LatePenaltyCap. */
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double LatePenaltyPerTenMinutes = 0.02;
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double LatePenaltyCap = 0.10;
+
+	/** An offer the player could have taken and let lapse. */
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double IgnoredPenalty = 0.02;
+
+	/** An offer that lapsed because no stand was free for it the whole time - the airport's fault, not the player's inattention. */
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double NeverAcceptablePenalty = 0.01;
+
+	/** Each day, this fraction of the way back to Start. */
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0", ClampMax = "1.0")) double DailyDriftFraction = 0.2;
+
+	/** An airline's demand is scaled by Lerp(Min, Max, satisfaction). A floor airline never below 1.0. */
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double MinRateMultiplier = 0.5;
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double MaxRateMultiplier = 1.5;
+};
+
 /** A new-game setup. Difficulty is these numbers and nothing else (spec §5.2). */
 UCLASS(BlueprintType)
 class AIRPORTOPS_API UScenario : public UOpsDefinition
@@ -106,4 +141,8 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "1"))
 	int32 MaxPendingOffers = 8;
+
+	/** What moves an airline's satisfaction - see FAirlineSatisfactionTuning. */
+	UPROPERTY(EditAnywhere, Category = "Airlines")
+	FAirlineSatisfactionTuning AirlineSatisfaction;
 };

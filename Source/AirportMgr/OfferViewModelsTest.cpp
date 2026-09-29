@@ -4,6 +4,7 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/AirlineDefinition.h"
+#include "Model/AirlineRoster.h"
 #include "Model/OfferGenerator.h"
 #include "Model/JobBoard.h"
 #include "Model/GroundTraffic.h"
@@ -349,14 +350,21 @@ bool FOfferStripMatchesGeneratorTest::RunTest(const FString& Parameters)
 	const TArray<FAirlineOffers> Airlines = { Offering };
 	USimClock* Clock = NewObject<USimClock>();
 
-	const TArray<double> Samples = UOfferInboxViewModel::SampleDemand(Airlines, *Clock, 0.8, 24);
+	// AN UNHAPPY AIRLINE, through the generator's own reader - the widget's exact call - so a strip
+	// that dropped the factor would draw the factor-1 curve and fail here (stage 2 review).
+	UOfferGenerator* Generator = NewObject<UOfferGenerator>();
+	Generator->AirlineFactorOf = [](const UAirlineDefinition&) { return 0.5; };
+	const TArray<double> Samples = UOfferInboxViewModel::SampleDemand(Airlines, *Clock, 0.8, 24,
+		[Generator](const UAirlineDefinition& Each) { return Generator->AirlineFactor(Each); });
 	if (!TestEqual(TEXT("one sample an hour"), Samples.Num(), 24)) { return false; }
 	for (int32 Hour = 0; Hour < 24; ++Hour)
 	{
 		const double Midpoint = (Hour + 0.5) * 3600.0;
 		TestEqual(*FString::Printf(TEXT("hour %d is the generator's own rate"), Hour), Samples[Hour],
-			UOfferGenerator::TotalRateAt(Airlines, Midpoint, Clock->IsDaylight(Midpoint), 0.8), 1e-12);
+			UOfferGenerator::RateAt(*Airline, Midpoint, Clock->IsDaylight(Midpoint), 0.8, Generator->AirlineFactor(*Airline)), 1e-12);
 	}
+	TestTrue(TEXT("and the factor is really applied: the 08:00 peak is below the factor-1 rate"),
+		Samples[8] < UOfferGenerator::RateAt(*Airline, 8.5 * 3600.0, true, 0.8, 1.0));
 	return true;
 }
 
@@ -377,6 +385,34 @@ bool FOfferRowFuelChipTest::RunTest(const FString& Parameters)
 	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
 	if (!TestEqual(TEXT("one row"), Inbox->GetOffers().Num(), 1)) { return false; }
 	TestEqual(TEXT("the chip names the litres"), Inbox->GetOffers()[0]->GetFuelText().ToString(), FString(TEXT("Fuel 2,900 L")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOfferSatisfactionTextTest,
+	"AirportMgr.UI.OfferInbox.SatisfactionText",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOfferSatisfactionTextTest::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("no airline, no line - the debug flight's row stays as it was"),
+		UOfferViewModel::DescribeSatisfaction(nullptr).IsEmpty());
+
+	FAirlineStanding Standing;
+	Standing.Satisfaction = 0.5;
+	TestEqual(TEXT("an airline nothing has moved yet shows only how it feels"),
+		UOfferViewModel::DescribeSatisfaction(&Standing).ToString(), FString(TEXT("50%")));
+
+	Standing.Satisfaction = 0.62;
+	Standing.Recent.Add({ 0.03, TEXT("on time") });
+	Standing.Recent.Add({ -0.04, TEXT("late departure (25 min)") });
+	TestEqual(TEXT("the NEWEST reason, with the way it went"),
+		UOfferViewModel::DescribeSatisfaction(&Standing).ToString(), FString(TEXT("62% ▼ late departure (25 min)")));
+
+	Standing.Satisfaction = 0.53;
+	Standing.Recent.Add({ 0.03, TEXT("on time") });
+	TestEqual(TEXT("an improvement points up"),
+		UOfferViewModel::DescribeSatisfaction(&Standing).ToString(), FString(TEXT("53% ▲ on time")));
 	return true;
 }
 

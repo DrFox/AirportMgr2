@@ -16,6 +16,7 @@ class UOfferGenerator;
 class URoadNetwork;
 class UStandAllocator;
 class ULedger;
+class FOpsEventBus;
 class UPricing;
 class USimClock;
 enum class EAgentPhase : uint8;
@@ -146,6 +147,13 @@ public:
 	 * a test that does not care - fuel then reads as servable. Set by UOpsRuntime::Attach.
 	 */
 	UPROPERTY() TObjectPtr<UJobBoard> Fuel = nullptr;
+
+	/**
+	 * Where this board publishes what happened to its flights - an offer lapsing or declined, a flight
+	 * airborne. Set by UOpsRuntime::Attach. NULL IS A WORKING STATE, for Ledger's reason above: every
+	 * publish checks. Raw: the runtime owns both this board and the bus.
+	 */
+	FOpsEventBus* Bus = nullptr;
 
 	/**
 	 * Bank the landing fee this flight was OFFERED at. Idempotent - a flight lands once.

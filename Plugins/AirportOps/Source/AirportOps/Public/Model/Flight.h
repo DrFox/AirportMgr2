@@ -107,6 +107,13 @@ public:
 
 	/** For the inbox to print. Captured with the airframe, and for the same reason. */
 	UPROPERTY() FText AirlineName;
+
+	/**
+	 * WHICH airline, as a key: the UAirlineDefinition's object name, set at the offer. AirlineName is
+	 * display text and a display text is not a key - two airlines may share a name, and a rename would
+	 * orphan every flight. NAME_None for the debug flight (key 7), which belongs to no airline.
+	 */
+	UPROPERTY() FName AirlineId;
 	UPROPERTY() FText TypeName;
 
 	/** What the row prints: "CU 204", or a tail number for the club. See UOfferGenerator::MakeCallsign. */
@@ -142,7 +149,10 @@ public:
 	 */
 	UPROPERTY() double FuelLitres = 0.0;
 
-	/** From the floor airline (the flying club) - C never penalises its lapses. */
+	/**
+	 * From the floor airline (the flying club) - C never penalises its lapses.
+	 * ENFORCED BY: AirportOps.Model.Airlines.FloorLapseIsFree
+	 */
 	UPROPERTY() bool bFloorAirline = false;
 
 	/**
