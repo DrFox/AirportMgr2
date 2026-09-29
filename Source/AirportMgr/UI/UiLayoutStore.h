@@ -17,6 +17,8 @@ struct FUiWindowPlacement
 	UPROPERTY() FVector2D TopLeft = FVector2D::ZeroVector;
 	UPROPERTY() FVector2D Size = FVector2D::ZeroVector;
 	UPROPERTY() bool bSized = false;
+	/** Folded to its title bar. Size is still the EXPANDED size, so unfolding restores it. */
+	UPROPERTY() bool bCollapsed = false;
 };
 
 /**

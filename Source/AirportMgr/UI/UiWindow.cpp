@@ -39,7 +39,13 @@ void UUiWindow::Build(const UUIStyle& Style, const FUiWindowSpec& Spec, UWidget&
 	Card->SetBrush(FSlateRoundedBoxBrush(Style.Surface, Style.WindowRadius));
 	Card->SetPadding(FMargin(0.0f));
 	Card->SetClipping(EWidgetClipping::ClipToBounds);
-	Frame->SetContent(Card);
+	// A HEIGHT CAP between frame and card, lifted until the host sets one (SetMaxHeight). A cap on
+	// the card, not the scroll box: the title bar is Auto in the chrome column and the scroll body
+	// Fill, so capping the whole card squeezes only the body - which is the part that scrolls.
+	HeightCap = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("WindowHeightCap"));
+	HeightCap->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	HeightCap->SetContent(Card);
+	Frame->SetContent(HeightCap);
 
 	UOverlay* Layers = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
 	Card->SetContent(Layers);
@@ -67,6 +73,27 @@ void UUiWindow::Build(const UUIStyle& Style, const FUiWindowSpec& Spec, UWidget&
 	TitleSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	TitleSlot->SetVerticalAlignment(VAlign_Center);
 
+	// THE BADGE, beside the title rather than in the panel: a folded window shows only its title
+	// bar, and a folded Offers must still say how many are waiting. Empty until a panel sets one.
+	BadgeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("WindowBadge"));
+	Style.ApplyText(*BadgeText, EUITextRole::Label, Style.InkMuted);
+	UHorizontalBoxSlot* BadgeSlot = Row->AddChildToHorizontalBox(BadgeText);
+	BadgeSlot->SetVerticalAlignment(VAlign_Center);
+	BadgeSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
+
+	bCollapsible = Spec.bCollapsible;
+	if (Spec.bCollapsible)
+	{
+		// A Ghost button, the close button's treatment - see its comment below.
+		CollapseButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), TEXT("WindowCollapse"));
+		CollapseButton->SetLabel(FText::FromString(FString(TEXT("\u2013"))));
+		CollapseButton->Build(Style, EUiButtonKind::Ghost, EUiButtonLayout::Inline, false);
+		CollapseButton->OnClicked.AddDynamic(this, &UUiWindow::HandleCollapse);
+		UHorizontalBoxSlot* CollapseSlot = Row->AddChildToHorizontalBox(CollapseButton);
+		CollapseSlot->SetVerticalAlignment(VAlign_Center);
+		CollapseSlot->SetPadding(FMargin(8.0f, 0.0f, 0.0f, 0.0f));
+	}
+
 	if (Spec.bClosable)
 	{
 		// A Ghost UUiButton: no fill until hovered, so the close reads as an affordance rather
@@ -82,18 +109,19 @@ void UUiWindow::Build(const UUIStyle& Style, const FUiWindowSpec& Spec, UWidget&
 
 	// The hairline under the title. A SizeBox, not UImage::SetDesiredSizeOverride, which drew a
 	// 15 px band in the spike: the height has to be imposed from outside the brush.
-	USizeBox* Rule = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("WindowRule"));
-	Rule->SetHeightOverride(1.0f);
+	USizeBox* RuleBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("WindowRule"));
+	RuleBox->SetHeightOverride(1.0f);
 	UBorder* RuleFill = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 	RuleFill->SetBrushColor(Style.Rule);
 	RuleFill->SetPadding(FMargin(0.0f));
-	Rule->SetContent(RuleFill);
-	Chrome->AddChildToVerticalBox(Rule)->SetHorizontalAlignment(HAlign_Fill);
+	RuleBox->SetContent(RuleFill);
+	Chrome->AddChildToVerticalBox(RuleBox)->SetHorizontalAlignment(HAlign_Fill);
+	Rule = RuleBox;
 
 	// A SCROLL BOX, so a window resized smaller than its panel scrolls instead of cropping.
 	// Auto-sized, it is exactly the panel's size. Its bar is VISIBLE, which SScrollBox draws only
 	// when the content overflows: Collapsed hid content below the fold with no sign it was there
-	// (final review 2026-09-28). ENFORCED BY: AirportMgr.UI.WindowHost.OverflowIsSignalledAndOffersNeverShrink.
+	// (final review 2026-09-28). ENFORCED BY: AirportMgr.UI.WindowHost.OverflowIsSignalledAndUnresizableNeverShrinks.
 	UScrollBox* Scroll = WidgetTree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("WindowScroll"));
 	Scroll->SetScrollBarVisibility(ESlateVisibility::Visible);
 	Chrome->AddChildToVerticalBox(Scroll)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -103,6 +131,7 @@ void UUiWindow::Build(const UUIStyle& Style, const FUiWindowSpec& Spec, UWidget&
 	Pad->SetPadding(Style.CardPadding);
 	Pad->SetContent(&Content);
 	Scroll->AddChild(Pad);
+	Body = Scroll;
 
 	if (Spec.bResizable)
 	{
@@ -119,6 +148,89 @@ void UUiWindow::Build(const UUIStyle& Style, const FUiWindowSpec& Spec, UWidget&
 		Grip = GripImage;
 	}
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+}
+
+void UUiWindow::SetMaxHeight(double MaxHeight)
+{
+	if (HeightCap == nullptr)
+	{
+		return;
+	}
+	// Gated: the host calls this every tick, and SetMaxDesiredHeight invalidates layout each time.
+	const float Want = MaxHeight > 0.0 ? static_cast<float>(MaxHeight) : 0.0f;
+	const float Have = HeightCap->IsMaxDesiredHeightOverride() ? HeightCap->GetMaxDesiredHeight() : 0.0f;
+	if (FMath::IsNearlyEqual(Want, Have, 0.5f))
+	{
+		return;
+	}
+	if (Want > 0.0f)
+	{
+		HeightCap->SetMaxDesiredHeight(Want);
+	}
+	else
+	{
+		HeightCap->ClearMaxDesiredHeight();
+	}
+}
+
+double UUiWindow::MaxHeightForTest() const
+{
+	return HeightCap != nullptr && HeightCap->IsMaxDesiredHeightOverride() ? HeightCap->GetMaxDesiredHeight() : 0.0;
+}
+
+void UUiWindow::ShowCollapsed(bool bCollapsed, double KeepWidth)
+{
+	// THE WIDTH HOLDS THROUGH A FOLD (the player's ask, 2026-09-29): folded to its title text, the
+	// window jumped narrower, and a right-anchored one moved its left edge. A floor on the same
+	// cap box the height cap uses, lifted on unfold.
+	if (HeightCap != nullptr)
+	{
+		if (bCollapsed && KeepWidth > 0.0)
+		{
+			HeightCap->SetMinDesiredWidth(static_cast<float>(KeepWidth));
+		}
+		else
+		{
+			HeightCap->ClearMinDesiredWidth();
+		}
+	}
+	// COLLAPSED, not hidden: a Hidden body still takes its height, and the fold would save nothing.
+	const ESlateVisibility BodyVis = bCollapsed ? ESlateVisibility::Collapsed : ESlateVisibility::Visible;
+	if (Rule != nullptr) { Rule->SetVisibility(BodyVis); }
+	if (Body != nullptr) { Body->SetVisibility(BodyVis); }
+	// The grip resizes the BODY; folded, there is no body to resize.
+	if (Grip != nullptr) { Grip->SetVisibility(BodyVis); }
+	if (CollapseButton != nullptr)
+	{
+		CollapseButton->SetLabel(FText::FromString(FString(bCollapsed ? TEXT("+") : TEXT("\u2013"))));
+	}
+}
+
+double UUiWindow::FoldWidthForTest() const
+{
+	return HeightCap != nullptr && HeightCap->IsMinDesiredWidthOverride() ? HeightCap->GetMinDesiredWidth() : 0.0;
+}
+
+void UUiWindow::SetBadge(const FText& Badge)
+{
+	// Gated: panels set it every tick, and SetText has no early-out.
+	if (BadgeText != nullptr && !BadgeText->GetText().EqualTo(Badge))
+	{
+		BadgeText->SetText(Badge);
+	}
+}
+
+FString UUiWindow::BadgeForTest() const
+{
+	return BadgeText != nullptr ? BadgeText->GetText().ToString() : FString();
+}
+
+void UUiWindow::HandleCollapse()
+{
+	if (Host != nullptr)
+	{
+		Host->SetCollapsed(Id, !Host->IsCollapsed(Id));
+	}
 }
 
 void UUiWindow::HandleClose()
@@ -165,6 +277,13 @@ FReply UUiWindow::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPo
 
 FReply UUiWindow::NativeOnMouseButtonDoubleClick(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
+	// A DOUBLE-CLICK ON THE TITLE FOLDS, the desktop habit - the button is small to aim at.
+	if (bCollapsible && TitleBar != nullptr && InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton
+		&& TitleBar->GetCachedGeometry().IsUnderLocation(InMouseEvent.GetScreenSpacePosition()))
+	{
+		HandleCollapse();
+		return FReply::Handled();
+	}
 	return UiClicks::EatUnhandled(*this, WidgetTree != nullptr ? WidgetTree->RootWidget.Get() : nullptr,
 		Super::NativeOnMouseButtonDoubleClick(InGeometry, InMouseEvent), TEXT("double-click"));
 }

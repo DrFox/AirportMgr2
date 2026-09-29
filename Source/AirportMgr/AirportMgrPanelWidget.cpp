@@ -110,6 +110,14 @@ void UAirportMgrPanelWidget::SetShown(bool bShown)
 	}
 }
 
+void UAirportMgrPanelWidget::SetWindowBadge(const FText& Badge)
+{
+	if (Host != nullptr)
+	{
+		Host->SetBadge(WindowId, Badge);
+	}
+}
+
 bool UAirportMgrPanelWidget::IsShown() const
 {
 	return Host != nullptr ? Host->IsShown(WindowId) : bShownRequested;

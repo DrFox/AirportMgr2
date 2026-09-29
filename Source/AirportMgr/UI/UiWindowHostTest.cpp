@@ -2,6 +2,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/ScrollBox.h"
+#include "ArrivalsPanelWidget.h"
 #include "BuildBarWidget.h"
 #include "InspectorWidget.h"
 #include "LandAircraftPanelWidget.h"
@@ -272,11 +273,13 @@ bool FUiWindowPanelsTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("ledger"), Host->AddWindow(*CreateWidget<ULedgerPanelWidget>(W, ULedgerPanelWidget::StaticClass())));
 	TestNotNull(TEXT("land"), Host->AddWindow(*CreateWidget<ULandAircraftPanelWidget>(W, ULandAircraftPanelWidget::StaticClass())));
 	TestNotNull(TEXT("offers"), Host->AddWindow(*CreateWidget<UOfferInboxWidget>(W, UOfferInboxWidget::StaticClass())));
-	for (const TCHAR* Id : { TEXT("inspector"), TEXT("ledger"), TEXT("land"), TEXT("offers") })
+	TestNotNull(TEXT("arrivals"), Host->AddWindow(*CreateWidget<UArrivalsPanelWidget>(W, UArrivalsPanelWidget::StaticClass())));
+	for (const TCHAR* Id : { TEXT("inspector"), TEXT("ledger"), TEXT("land"), TEXT("offers"), TEXT("arrivals") })
 	{
 		TestNotNull(*FString::Printf(TEXT("a window under the id '%s'"), Id), Host->WindowForTest(Id));
 	}
 	TestTrue(TEXT("the offers window shows from the start - an offer must never be hidden"), Host->IsShown(TEXT("offers")));
+	TestTrue(TEXT("and arrivals beside it - a flight the player took must stay findable"), Host->IsShown(TEXT("arrivals")));
 	TestNull(TEXT("the bar is not a window"), Host->AddWindow(*CreateWidget<UBuildBarWidget>(W, UBuildBarWidget::StaticClass())));
 
 	// RAISING OVER ANOTHER WINDOW (moved here from BringToFrontRaises, which had only one): the
@@ -315,7 +318,7 @@ bool FUiWindowFirstPixelTest::RunTest(const FString& Parameters)
  * it is needed. And the offers window cannot be resized at all - an offer must never be the thing
  * that scrolls away (OfferInboxWidget's TopOffset comment; final review 2026-09-28).
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowOverflowTest, "AirportMgr.UI.WindowHost.OverflowIsSignalledAndOffersNeverShrink",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowOverflowTest, "AirportMgr.UI.WindowHost.OverflowIsSignalledAndUnresizableNeverShrinks",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FUiWindowOverflowTest::RunTest(const FString& Parameters)
@@ -326,11 +329,46 @@ bool FUiWindowOverflowTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the window has its scroll body"), Scroll)) { return false; }
 	TestNotEqual(TEXT("its scroll bar may show when the content overflows"), Scroll->GetScrollBarVisibility(), ESlateVisibility::Collapsed);
 
+	// SETTINGS, not Offers: Offers became resizable 2026-09-29 (the player's ask); the rule that an
+	// unresizable window refuses a resize still needs a window to hold it.
+	USettingsPanelWidget* Settings = CreateWidget<USettingsPanelWidget>(F.TestWorld.World, USettingsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("a settings window"), F.Host->AddWindow(*Settings))) { return false; }
+	const FVector2D Before = F.Host->WindowRect(TEXT("settings")).GetSize();
+	F.Host->ResizeWindow(TEXT("settings"), FVector2D(180.0, 90.0));
+	TestEqual(TEXT("an unresizable window refuses a resize"), F.Host->WindowRect(TEXT("settings")).GetSize(), Before);
+	return true;
+}
+
+/**
+ * AN AUTO-SIZED WINDOW STOPS ABOVE THE SCREEN'S EDGE and scrolls, rather than growing off it:
+ * Offers cannot be resized, so without the cap eight offers ran past the bar (2026-09-29). A
+ * window the player HAS sized keeps no cap - its own size is the limit.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowAutoCapTest, "AirportMgr.UI.WindowHost.AutoSizedWindowIsCappedAboveTheBar",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowAutoCapTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	if (!TestNotNull(TEXT("a host"), F.Host)) { return false; }
 	UOfferInboxWidget* Offers = CreateWidget<UOfferInboxWidget>(F.TestWorld.World, UOfferInboxWidget::StaticClass());
-	if (!TestNotNull(TEXT("an offers window"), F.Host->AddWindow(*Offers))) { return false; }
-	const FVector2D Before = F.Host->WindowRect(TEXT("offers")).GetSize();
-	F.Host->ResizeWindow(TEXT("offers"), FVector2D(180.0, 90.0));
-	TestEqual(TEXT("the offers window refuses a resize"), F.Host->WindowRect(TEXT("offers")).GetSize(), Before);
+	UUiWindow* OffersWindow = F.Host->AddWindow(*Offers);
+	if (!TestNotNull(TEXT("an offers window"), OffersWindow)) { return false; }
+
+	F.Host->TickForTest(0.016f);
+	const double Top = F.Host->WindowRect(TEXT("offers")).Min.Y;
+	// 1080 view, no bar: the room below the window's top edge, less the margin.
+	const double Margin = 12.0;
+	TestEqual(TEXT("the offers window is capped at the room below its top"), OffersWindow->MaxHeightForTest(), 1080.0 - Top - Margin, 1.0);
+
+	F.Host->SetViewSizeForTest(FVector2D(1920.0, 600.0));
+	F.Host->TickForTest(0.016f);
+	TestEqual(TEXT("and the cap follows a shorter view"), OffersWindow->MaxHeightForTest(), 600.0 - Top - Margin, 1.0);
+
+	F.Ledger->Toggle();
+	F.Host->ResizeWindow(TEXT("ledger"), FVector2D(300.0, 300.0));
+	F.Host->TickForTest(0.016f);
+	TestEqual(TEXT("a window the player sized has no cap"), F.Window->MaxHeightForTest(), 0.0);
 	return true;
 }
 
@@ -459,13 +497,95 @@ bool FUiLayoutUnresizableTest::RunTest(const FString& Parameters)
 	Saved.TopLeft = FVector2D(500.0, 300.0);
 	Saved.Size = FVector2D(400.0, 300.0);
 	Saved.bSized = true;
-	F.Store->Write(TEXT("offers"), Saved);
-	UOfferInboxWidget* Offers = CreateWidget<UOfferInboxWidget>(F.TestWorld.World, UOfferInboxWidget::StaticClass());
-	F.Host->AddWindow(*Offers);
+	// Settings, the one unresizable window left - see OverflowIsSignalledAndUnresizableNeverShrinks.
+	F.Store->Write(TEXT("settings"), Saved);
+	USettingsPanelWidget* Settings = CreateWidget<USettingsPanelWidget>(F.TestWorld.World, USettingsPanelWidget::StaticClass());
+	F.Host->AddWindow(*Settings);
 	F.Host->TickForTest(0.016f);
-	TestEqual(TEXT("its position is restored"), F.Host->WindowRect(TEXT("offers")).Min, FVector2D(500.0, 300.0));
-	TestEqual(TEXT("its size is not - it grows with its offers (headless: 0x0 desired)"),
-		F.Host->WindowRect(TEXT("offers")).GetSize(), FVector2D::ZeroVector);
+	TestEqual(TEXT("its position is restored"), F.Host->WindowRect(TEXT("settings")).Min, FVector2D(500.0, 300.0));
+	TestEqual(TEXT("its size is not - it sizes to its content (headless: 0x0 desired)"),
+		F.Host->WindowRect(TEXT("settings")).GetSize(), FVector2D::ZeroVector);
+	return true;
+}
+
+/**
+ * A FOLD SHRINKS A WINDOW TO ITS TITLE BAR AND AN UNFOLD PUTS THE PLAYER'S SIZE BACK, remembered
+ * across a relaunch. Only for a window whose spec asks (the ledger does not). Headless, an
+ * auto-sized window measures 0x0 - so "folded" reads as the slot giving up its fixed size.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowFoldTest, "AirportMgr.UI.WindowHost.FoldKeepsTheSizeToUnfoldTo",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowFoldTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FStoredFixture F;
+	if (!TestNotNull(TEXT("a host"), F.Host)) { return false; }
+	UOfferInboxWidget* Offers = CreateWidget<UOfferInboxWidget>(F.TestWorld.World, UOfferInboxWidget::StaticClass());
+	UUiWindow* Window = F.Host->AddWindow(*Offers);
+	if (!TestNotNull(TEXT("an offers window"), Window)) { return false; }
+
+	F.Host->SetCollapsed(TEXT("ledger"), true);
+	TestFalse(TEXT("a window that did not ask to fold does not"), F.Host->IsCollapsed(TEXT("ledger")));
+
+	// Moved clear of the corner first: its default place is flush top-right, where a resize is
+	// clamped by the screen's edge and would not be the size asked for.
+	F.Host->MoveWindow(TEXT("offers"), FVector2D(200.0, 100.0));
+	const FVector2D Sized(520.0, 400.0);
+	F.Host->ResizeWindow(TEXT("offers"), Sized);
+	TestEqual(TEXT("offers takes a player's size now"), F.Host->WindowRect(TEXT("offers")).GetSize(), Sized);
+
+	Window->HandleCollapse();   // the title-bar button
+	TestTrue(TEXT("the button folds it"), F.Host->IsCollapsed(TEXT("offers")));
+	TestEqual(TEXT("folded, it gives up its fixed size"), F.Host->WindowRect(TEXT("offers")).GetSize(), FVector2D::ZeroVector);
+	TestEqual(TEXT("but holds its width, so the title bar does not jump narrower"), Window->FoldWidthForTest(), Sized.X);
+	F.Host->ResizeWindow(TEXT("offers"), FVector2D(300.0, 300.0));
+	TestEqual(TEXT("and refuses a resize while folded"), F.Host->WindowRect(TEXT("offers")).GetSize(), FVector2D::ZeroVector);
+	const TOptional<FUiWindowPlacement> Stored = F.Store->Read(TEXT("offers"));
+	if (TestTrue(TEXT("the fold is written"), Stored.IsSet()))
+	{
+		TestTrue(TEXT("as folded"), Stored->bCollapsed);
+		TestEqual(TEXT("with the size to unfold to, not the fold's"), Stored->Size, Sized);
+	}
+
+	// THE NEXT LAUNCH: a second host over the same store comes up folded and unfolds to the size.
+	UUiWindowHost* Next = CreateWidget<UUiWindowHost>(F.TestWorld.World, UUiWindowHost::StaticClass());
+	Next->SetViewSizeForTest(FVector2D(1920.0, 1080.0));
+	Next->SetLayoutStore(F.Store);
+	Next->AddWindow(*CreateWidget<UOfferInboxWidget>(F.TestWorld.World, UOfferInboxWidget::StaticClass()));
+	Next->TickForTest(0.016f);
+	TestTrue(TEXT("a relaunch restores the fold"), Next->IsCollapsed(TEXT("offers")));
+	if (UUiWindow* NextWindow = Next->WindowForTest(TEXT("offers")))
+	{
+		TestEqual(TEXT("at the same width"), NextWindow->FoldWidthForTest(), Sized.X);
+	}
+	Next->SetCollapsed(TEXT("offers"), false);
+	if (UUiWindow* NextWindow = Next->WindowForTest(TEXT("offers")))
+	{
+		TestEqual(TEXT("and an unfold lifts the width floor"), NextWindow->FoldWidthForTest(), 0.0);
+	}
+	TestEqual(TEXT("and unfolds to the player's size"), Next->WindowRect(TEXT("offers")).GetSize(), Sized);
+	return true;
+}
+
+/**
+ * THE OFFER COUNT RIDES ON THE WINDOW'S TITLE, so a folded Offers still says offers are waiting -
+ * the one thing about an offer that must never hide.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowOfferBadgeTest, "AirportMgr.UI.WindowHost.OfferCountIsOnTheTitle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowOfferBadgeTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	UOfferInboxWidget* Offers = CreateWidget<UOfferInboxWidget>(F.TestWorld.World, UOfferInboxWidget::StaticClass());
+	UUiWindow* Window = F.Host->AddWindow(*Offers);
+	if (!TestNotNull(TEXT("an offers window"), Window)) { return false; }
+	Offers->PaintRowsForTest();
+	TestFalse(TEXT("the count is painted"), Offers->BadgeForTest().IsEmpty());
+	TestEqual(TEXT("and the title shows the same count"), Window->BadgeForTest(), Offers->BadgeForTest());
+	F.Host->SetCollapsed(TEXT("offers"), true);
+	Offers->PaintRowsForTest();
+	TestEqual(TEXT("still there folded"), Window->BadgeForTest(), Offers->BadgeForTest());
 	return true;
 }
 

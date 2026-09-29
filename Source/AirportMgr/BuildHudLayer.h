@@ -8,6 +8,7 @@ class UInspectorWidget;
 class UOfferInboxWidget;
 class ULedgerPanelWidget;
 class USettingsPanelWidget;
+class UArrivalsPanelWidget;
 class ULandAircraftPanelWidget;
 class UToastStackWidget;
 class UUiWindowHost;
@@ -92,6 +93,11 @@ public:
 	 *  restyle hook until one is wanted (the other five have one because they predate windows). */
 	UPROPERTY(Transient)
 	TObjectPtr<USettingsPanelWidget> SettingsPanel;
+
+	/** The flights already accepted - its own window beside Offers since 2026-09-29. Code-only,
+	 *  like Settings. */
+	UPROPERTY(Transient)
+	TObjectPtr<UArrivalsPanelWidget> ArrivalsPanel;
 
 	/** Every floating panel's window, on one canvas at Z 1 - see UUiWindowHost. */
 	UPROPERTY(Transient)

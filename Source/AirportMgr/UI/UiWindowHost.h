@@ -29,6 +29,12 @@ struct FUiWindowEntry
 	bool bUserClosed = false;
 	/** The player moved or resized it: its slot is top-left anchored and no longer docks. */
 	bool bPlaced = false;
+	/** Folded to its title bar (FUiWindowSpec::bCollapsible). */
+	bool bCollapsed = false;
+	/** Whether it had a player-set size when it folded, and its size then - a folded window
+	 *  auto-sizes to its title bar and holds this WIDTH; unfolding puts a player's size back. */
+	bool bSizedWhenExpanded = false;
+	FVector2D ExpandedSize = FVector2D::ZeroVector;
 };
 
 /**
@@ -61,6 +67,15 @@ public:
 	/** The window's close button. Hides it and tells the panel (a toggled panel un-toggles). */
 	void CloseByPlayer(FName Id);
 	void BringToFront(FName Id);
+
+	/**
+	 * Folds Id to its title bar, or unfolds it - for a window whose spec says bCollapsible, and
+	 * nothing otherwise. Remembered with the layout (FUiWindowPlacement::bCollapsed).
+	 */
+	void SetCollapsed(FName Id, bool bCollapsed);
+	bool IsCollapsed(FName Id) const;
+	/** The text beside Id's title - what a panel shows that must survive a fold (UUiWindow::SetBadge). */
+	void SetBadge(FName Id, const FText& Badge);
 
 	/** The bar the AboveBarLeft windows ride, and whose live height is off-limits to all of them. */
 	void DockAbove(const UBuildBarWidget* Bar);
@@ -108,8 +123,14 @@ private:
 	void TickWindows(float DeltaTime);
 	/** Folds a window's slot to top-left anchoring at its current rectangle. */
 	void Place(FUiWindowEntry& E);
+	/** SetCollapsed's work without the write - for a restore, which must not write back what it read.
+	 *  WidthHint: the width to hold folded when the window cannot measure it now (a restore before
+	 *  first paint); 0 measures it. */
+	void FoldWithoutCommit(FUiWindowEntry& E, bool bCollapsed, double WidthHint = 0.0);
 	FVector2D TopLeftOf(const FUiWindowEntry& E) const;
 	FVector2D SizeOf(const FUiWindowEntry& E) const;
+	/** The tallest an auto-sized window may grow where it stands; see its body. */
+	double MaxAutoHeight(const FUiWindowEntry& E) const;
 	/** The screen minus the bar: where a window may be. */
 	FBox2D Bounds() const;
 	/** Every OTHER shown window's rectangle - hidden ones are not snap targets. */
