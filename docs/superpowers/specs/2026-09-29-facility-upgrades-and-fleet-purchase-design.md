@@ -146,3 +146,35 @@ Updated: fleet-seeding tests (`RestoredFleetIsNotReseeded`, `SyncFleet` tests) a
 PIE verification: place depot → "No vehicles — buy one"; buy bowser → `Purchase: depot N
 bought FUEL` and the queued job dispatches; buy shed → ghost slot lights; sell idle vehicle →
 refund line in the log and the ledger.
+
+## 6. Deviations found in planning
+
+Recorded 2026-09-29 while writing `docs/superpowers/plans/2026-09-29-facility-upgrades-and-fleet-purchase.md`,
+checked against the live code. Lead rulings D1-D8 where marked.
+
+1. **Offers on `UScenario`, not `UPlotModuleKit`** (§2; D3). The scenario is where difficulty lives; kits
+   are `.uasset`s needing headless edits; AirportOps `Model/` may not include Airside `Content/`. New
+   `FModuleOffer {DisplayName, PluralName, Price, UpkeepPerDay, VehicleSlots}` and
+   `UScenario::ModuleOffers` (Shed only). `FFuelVehicleSpec` gains `DisplayName` besides the prices.
+2. **`Trucks` kept, re-meant as the starter fleet** (§2 "Retired"; D1). 36 files read it. SyncFleet's
+   seeding stays for plotless/test depots; the player's drawn depot states 0. `PlaceEntity` no longer
+   derives it from sheds. `UJobBoard::SeededDepots` becomes saved, or a sold starter fleet regrows on load.
+3. **`UFacilityPurchases` takes the network per call** (§3 "holds URoadNetwork"): the actor's network
+   object is replaced by clear, load and undo; `UJobBoard` already works this way.
+4. **No `UOpsEvents::OnFleetChanged` delegate** (§3 Presentation): nothing would bind it (Check-Architecture
+   rule 11a); the toast goes through `NotifyNotification`, the inspector re-reads the quote.
+5. **Upkeep is three described `Upkeep` entries** (base, "Facility upkeep", "Fleet upkeep") through a
+   line-list `ULedger::PostDailyUpkeep` overload.
+6. **New `EServiceRefusal::NoVehicles`** ("depot has no vehicles - buy one"): an empty depot otherwise
+   refused `NoRoute`.
+7. **A purchase re-opens refused jobs, and the offer verdict is dated by the fleet revision**: a refused job
+   is terminal until the guideline revision moves, and `FOfferVerdict` was cached without the fleet.
+8. **The three `selection.*` rows are inspector-only** (`FBuildAction::bInspectorOnly`) - "nothing on the
+   bottom bar" - and every row is still run through `TryRun`: the card chooses a type / arms a vehicle on
+   the controller, then runs the row. Selling takes a confirming second click.
+9. **R10's reveal is read from the selection in the controller's existing per-frame ghost gate**
+   (`AAirsideBuildingsActor::ShowPlotGhosts`), not pushed by the inspector; a change of revealed depot
+   rebuilds the plots once.
+10. **The reserved-slot ceiling is `DepotKit::ReservationOf` in Airside `Build/`**, the presenter's own solve
+    extracted, memoised per depot by `UOpsRuntime` (the inspector re-quotes every tick).
+11. **Hover-highlight of the next slot is optional** (last plan task).
