@@ -4,6 +4,7 @@
 #include "Misc/ScopeExit.h"
 #include "Model/OpsCatalog.h"
 #include "Model/OpsDefinition.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -95,10 +96,48 @@ bool FAirportOpsDefaultScenarioIsTheAssetTest::RunTest(const FString& Parameters
 	if (!TestNotNull(TEXT("the default scenario resolves"), Scenario)) { return false; }
 	TestTrue(TEXT("to an asset, not UScenario's CDO - the tuning is editable in the Details panel"), Scenario != GetDefault<UScenario>());
 	TestEqual(TEXT("the asset build_scenario.py creates"), Scenario->GetName(), FString(TEXT("DA_Scenario_Default")));
-	// BUILT FROM THE DEFAULTS: the asset starts as the CDO's figures, so creating it changed no number in play.
-	TestEqual(TEXT("carrying the constructor's shortfall penalty"),
-		Scenario->AirlineSatisfaction.ShortfallPenalty, GetDefault<UScenario>()->AirlineSatisfaction.ShortfallPenalty, 1e-12);
-	TestEqual(TEXT("and the constructor's opening balance"), Scenario->StartingBalance, GetDefault<UScenario>()->StartingBalance, 1e-6);
+	// NO FIGURE IS ASSERTED (review I3): the asset is the designer's to tune, and a check that its numbers
+	// equal the CDO's would fail on the first tune while proving nothing today (an untouched asset IS the CDO's
+	// values). build_scenario.py checks "creation changed nothing" once, at creation, where it is true.
+	return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAirportOpsResolvedLineTest,
+	"AirportOps.Content.ResolvedScenarioIsLoggedPerAsset",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAirportOpsResolvedLineTest::RunTest(const FString& Parameters)
+{
+	// ONCE PER DISTINCT ASSET, not once per process (review M5): a once-per-process line names whichever
+	// scenario was resolved first - in an editor session, possibly one a test configured - and is silent for
+	// the one the game then runs on, which is the very question the line exists to answer.
+	UOpsCatalog* Catalog = NewObject<UOpsCatalog>();
+	UScenario* First = NewObject<UScenario>(GetTransientPackage(), TEXT("TestLoggedScenarioA"));
+	UScenario* Second = NewObject<UScenario>(GetTransientPackage(), TEXT("TestLoggedScenarioB"));
+	Catalog->Add(First);
+	Catalog->Add(Second);
+	UAirportOpsSettings* Settings = GetMutableDefault<UAirportOpsSettings>();
+	const FPrimaryAssetId Configured = Settings->DefaultScenario;
+	ON_SCOPE_EXIT { Settings->DefaultScenario = Configured; };
+
+	FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
+	GLog->AddOutputDevice(&Spy);
+	Settings->DefaultScenario = First->GetPrimaryAssetId();
+	UAirportOpsSettings::ResolveDefaultScenario(*Catalog);
+	UAirportOpsSettings::ResolveDefaultScenario(*Catalog);
+	Settings->DefaultScenario = Second->GetPrimaryAssetId();
+	UAirportOpsSettings::ResolveDefaultScenario(*Catalog);
+	GLog->RemoveOutputDevice(&Spy);
+
+	auto Count = [&Spy](const TCHAR* Name)
+	{
+		return Spy.CapturedLines.FilterByPredicate([Name](const FString& Line)
+			{ return Line.Contains(TEXT("resolved to")) && Line.Contains(Name); }).Num();
+	};
+	TestEqual(TEXT("the first asset is named once, however often it is resolved"), Count(TEXT("TestLoggedScenarioA")), 1);
+	TestEqual(TEXT("and a different asset is named when the setting moves to it"), Count(TEXT("TestLoggedScenarioB")), 1);
 	return true;
 }
 

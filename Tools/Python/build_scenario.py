@@ -13,7 +13,9 @@ a config file; a DataTable or raw JSON was rejected for one struct (tables and m
 are for).
 
 CREATED FROM THE CDO'S DEFAULTS and nothing else: the script sets no figure, so creating the asset
-changes no number in play (AirportOps.Content.DefaultScenarioIsTheAsset checks two against the CDO).
+changes no number in play. CHECKED HERE, AT CREATION, where it is true (check_matches_cdo): every
+UScenario property of the new asset against the CDO's. Not by a test - the asset is the designer's to
+tune, and a test pinning its figures to the CDO would fail on the first tune (review I3, 2026-09-29).
 The constructor defaults stay in C++ - they are what this asset is created from and what a test's
 NewObject gets.
 
@@ -45,6 +47,39 @@ def fail(msg):
     unreal.log_error("MARKER: FAIL " + str(msg))
 
 
+# EVERY UPROPERTY OF UScenario (OpsDefinition.h, 2026-09-29), so the creation check covers the whole class.
+# A property added to UScenario and not here goes unchecked, which the name list below would show in review.
+SCENARIO_PROPERTIES = [
+    "starting_balance", "real_seconds_daylight", "real_seconds_night", "dawn_hour", "dusk_hour",
+    "start_hour", "fuel_vehicles", "depot_refill_litres_per_minute_per_pump", "max_pending_offers",
+    "airline_satisfaction",
+]
+
+
+def same(a, b):
+    # STRUCTS AND CONTAINERS BY THEIR TEXT: export_text is what the engine itself would write, so two values
+    # that print alike are alike, whatever the Python wrapper's own == does with a struct or a map.
+    if hasattr(a, "export_text") and hasattr(b, "export_text"):
+        return a.export_text() == b.export_text()
+    if isinstance(a, (dict, unreal.Map)) or isinstance(b, (dict, unreal.Map)):
+        if len(a) != len(b):
+            return False
+        return all(k in b and same(a[k], b[k]) for k in a.keys())
+    return a == b
+
+
+def check_matches_cdo(asset):
+    cdo = unreal.get_default_object(unreal.Scenario)
+    differ = [name for name in SCENARIO_PROPERTIES
+              if not same(asset.get_editor_property(name), cdo.get_editor_property(name))]
+    if differ:
+        fail("{} was created with figures that are not UScenario's defaults: {}".format(PACKAGE, ", ".join(differ)))
+        return False
+    say("{} carries UScenario's defaults in all {} properties - creating it changed no number in play".format(
+        PACKAGE, len(SCENARIO_PROPERTIES)))
+    return True
+
+
 def build_asset():
     # EXISTS FIRST: load_asset on a package that is not there logs an Error, which fails the
     # commandlet run for an asset being authored for the first time (build_airlines.py's lesson).
@@ -64,8 +99,14 @@ def build_asset():
             fail("could not create {}".format(PACKAGE))
             return None
         say("created {}".format(PACKAGE))
+        if not check_matches_cdo(asset):
+            return None
     else:
         say("{} exists - kept as the designer left it".format(PACKAGE))
+        # AIRSIDE_SCENARIO_CHECK=1 runs the creation check against the existing asset - how the check itself
+        # was exercised once the asset existed; a tuned asset fails it, as it should.
+        if os.environ.get("AIRSIDE_SCENARIO_CHECK") == "1":
+            check_matches_cdo(asset)
 
     # FORCED: save_asset does nothing for an asset the editor does not think is dirty - the
     # failure that makes a headless author look like it worked and leave nothing on disk.

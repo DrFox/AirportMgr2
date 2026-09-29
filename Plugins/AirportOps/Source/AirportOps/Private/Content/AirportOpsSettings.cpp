@@ -13,12 +13,13 @@ const UScenario* UAirportOpsSettings::ResolveDefaultScenario(const UOpsCatalog& 
 		// which name is the default rather than a second place that also loads one.
 		if (const UScenario* Found = Catalog.Find<UScenario>(Settings->DefaultScenario.PrimaryAssetName))
 		{
-			// ONCE, like the unconfigured line below - and the line that replaces it in the log since
-			// DA_Scenario_Default shipped (batch 3 §2), so one grep says which the game is running on.
-			static bool bSaidFound = false;
-			if (!bSaidFound)
+			// ONCE PER DISTINCT ASSET (review M5), not once per process: the line that replaces "built-in
+			// defaults" in the log since DA_Scenario_Default shipped (batch 3 §2), so one grep says which the
+			// game is running on - and a re-pointed setting (a test, an editor session) says so again.
+			static FString SaidFor;
+			if (SaidFor != Found->GetPathName())
 			{
-				bSaidFound = true;
+				SaidFor = Found->GetPathName();
 				UE_LOG(LogAirportOps, Log, TEXT("DefaultScenario '%s' resolved to %s"),
 					*Settings->DefaultScenario.ToString(), *Found->GetPathName());
 			}
