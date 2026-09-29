@@ -1222,6 +1222,15 @@ bool URoadEditFacade::AddEntityModule(FEntityInstanceId Entity, EDepotModule Mod
 		UE_LOG(LogRoadMesh, Warning, TEXT("AddEntityModule refused: entity %d is not a live depot"), Entity.Index);
 		return false;
 	}
+	// REFUSED WHILE A DRAG IS OPEN: ClearHistory below would drop the drag's pending snapshot, and its
+	// EndInteractiveEdit would then land a whole drag with no undo step. The inspector's Buy is a click the
+	// player makes between drags, but nothing in the UI makes that impossible, so the facade says no.
+	// ENFORCED BY: AirportOps.Present.Facility.ShedRefusedDuringADrag
+	if (bInteractiveEditOpen)
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("AddEntityModule refused: depot %d - an interactive edit is open"), Entity.Index);
+		return false;
+	}
 	{
 		// A SCOPE AND CommitAndNotify, the one door every mutator notifies through - then closed, so its
 		// destructor has pushed the step BEFORE the history is cleared below.

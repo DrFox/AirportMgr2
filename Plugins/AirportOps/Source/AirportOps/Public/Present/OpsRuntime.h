@@ -87,7 +87,11 @@ public:
 	/** The inspector's Unstick. See UAgentRescue - this runtime owns it and hands it the two boards. */
 	UAgentRescue* GetAgentRescue() const { return AgentRescue; }
 
-	/** Sheds and vehicles bought and sold. See UFacilityPurchases - this runtime owns it and wires its hooks. */
+	/**
+	 * Sheds and vehicles bought and sold. See UFacilityPurchases - this runtime owns it and wires its two
+	 * world hooks at Attach (cleared at Detach).
+	 * ENFORCED BY: AirportOps.Present.Facility.ShedPurchaseRelightsASlot, AirportOps.Present.Facility.QuoteSolvesOncePerDepot
+	 */
 	UFacilityPurchases* GetFacilityPurchases() const { return FacilityPurchases; }
 
 	/**
@@ -190,6 +194,9 @@ public:
 	/** How many times OfferTick has run. For the load re-arm test. */
 	int32 OfferTicksForTest() const { return OfferTicks; }
 
+	/** How many plot solves ReservedSlotsOf has run - see its memo. */
+	int32 ReservationSolvesForTest() const { return ReservationSolves; }
+
 	/**
 	 * Every airline with its fleet resolved to airframes, built once at Attach. What the
 	 * generator ticks over and what the inbox's demand strip samples - one list, so the strip
@@ -218,6 +225,18 @@ private:
 	UPROPERTY() TObjectPtr<UPricing> Pricing;
 	UPROPERTY() TObjectPtr<UAgentRescue> AgentRescue;
 	UPROPERTY() TObjectPtr<UFacilityPurchases> FacilityPurchases;
+
+	/**
+	 * UFacilityPurchases::ReservedSlotsOf's production answer: DepotKit::ReservationOf's ceiling over the
+	 * actor's one kit table, MEMOISED per (network object, depot) - the inspector re-quotes every tick and
+	 * the ceiling is a plot solve. Modules do not change what a plot holds, and a depot never moves, so the
+	 * only invalidations are a different network (clear, load, undo replace the object) and Detach.
+	 * ENFORCED BY: AirportOps.Present.Facility.QuoteSolvesOncePerDepot
+	 */
+	int32 ReservedSlotsOf(FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module);
+	TWeakObjectPtr<const URoadNetwork> ReservationMemoNetwork;
+	TMap<FEntityInstanceId, TArray<int32>> ReservationMemo;
+	int32 ReservationSolves = 0;
 
 	UPROPERTY() TObjectPtr<UAirlineRoster> Airlines;
 	UPROPERTY() TObjectPtr<UOpsAlerts> Alerts;

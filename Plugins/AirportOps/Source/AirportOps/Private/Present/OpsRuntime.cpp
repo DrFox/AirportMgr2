@@ -1,6 +1,7 @@
 #include "Present/OpsRuntime.h"
 #include "AirportOpsLog.h"
 #include "Build/BuildCost.h"
+#include "Build/DepotKit.h"
 #include "Content/AirportOpsSettings.h"
 #include "Content/AirsideSettings.h"
 #include "Model/ArrivalPlanner.h"
@@ -133,6 +134,34 @@ FPurchaseResult UOpsRuntime::BuyVehicle(FEntityInstanceId Entity, FName TypeCode
 FPurchaseResult UOpsRuntime::SellVehicle(int32 VehicleId)
 {
 	return FacilityPurchases->SellVehicle(VehicleId);
+}
+
+int32 UOpsRuntime::ReservedSlotsOf(FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module)
+{
+	if (Target == nullptr)
+	{
+		return 0;
+	}
+	if (ReservationMemoNetwork.Get() != Target->Network)
+	{
+		ReservationMemo.Reset();
+		ReservationMemoNetwork = Target->Network;
+	}
+	TArray<int32>* Ceilings = ReservationMemo.Find(Id);
+	if (Ceilings == nullptr)
+	{
+		++ReservationSolves;
+		Ceilings = &ReservationMemo.Add(Id);
+		const TArray<PlotYard::FKitSpec> Specs = Target->ResolveDepotKits();
+		const TOptional<PlotYard::FReservation> Reserved = DepotKit::ReservationOf(Depot, Specs);
+		// INDEXED BY EDepotModule: DepotKitSpecs walks the enum, so a spec's index IS its module (its header).
+		for (int32 Kit = 0; Kit < Specs.Num(); ++Kit)
+		{
+			Ceilings->Add(Reserved.IsSet() ? Reserved->CeilingFor(Kit) : 0);
+		}
+	}
+	const int32 Kit = static_cast<int32>(Module);
+	return Ceilings->IsValidIndex(Kit) ? (*Ceilings)[Kit] : 0;
 }
 
 TArray<FAirlineOffers> UOpsRuntime::AirlineOffersFromCatalog() const
@@ -475,6 +504,25 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A sent the truck still reads as tow-built)
 	JobBoard->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
 
+	// THE PURCHASE SERVICE'S TWO WORLD HOOKS (facility-upgrades spec §3; UJobBoard::DesignVehicleOf's
+	// pattern): the plot's ceiling from Airside's one solve, and the module write through the facade's one
+	// door - which rebuilds the yard and checkpoints undo. `this` for the ceiling, which the runtime memoises
+	// and outlives nothing; weak for the actor, the dispatcher's reason below.
+	// ENFORCED BY: AirportOps.Present.Facility.ShedPurchaseRelightsASlot
+	FacilityPurchases->ReservedSlotsOf = [this](FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module)
+	{
+		return ReservedSlotsOf(Id, Depot, Module);
+	};
+	{
+		TWeakObjectPtr<ARoadNetworkActor> WeakActor = Target;
+		FacilityPurchases->ApplyModulePurchase = [WeakActor](FEntityInstanceId Id, EDepotModule Module)
+		{
+			ARoadNetworkActor* Actor = WeakActor.Get();
+			URoadEditFacade* Facade = Actor != nullptr ? Actor->GetEditFacade() : nullptr;
+			return Facade != nullptr && Facade->AddEntityModule(Id, Module);
+		};
+	}
+
 	// THE LITRES A FLIGHT WAS OFFERED AT reach its fuel demand through the board - see
 	// UJobBoard::LitresOwedFor. Weak, for the dispatcher's reason below.
 	TWeakObjectPtr<UFlightBoard> WeakBoard = FlightBoard;
@@ -659,6 +707,12 @@ void UOpsRuntime::Detach()
 	// Cleared rather than left pointing at the old actor: a dispatcher that still answers
 	// after a detach would put an aeroplane on a field this runtime no longer drives.
 	FlightBoard->Dispatcher = nullptr;
+	// THE PURCHASE HOOKS GO WITH THE ACTOR, the dispatcher's reason: a hook that still answered after a
+	// detach would build into a field this runtime no longer drives.
+	FacilityPurchases->ReservedSlotsOf = nullptr;
+	FacilityPurchases->ApplyModulePurchase = nullptr;
+	ReservationMemo.Reset();
+	ReservationMemoNetwork.Reset();
 	Target = nullptr;
 }
 

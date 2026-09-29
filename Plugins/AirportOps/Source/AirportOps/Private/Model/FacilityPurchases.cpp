@@ -100,7 +100,10 @@ void UFacilityPurchases::LogRefused(int32 Depot, const FString& What, EPurchaseR
 
 EPurchaseRefusal UFacilityPurchases::JudgeModule(const FEntityInstance* Facility, EDepotModule Module, int32 Reserved) const
 {
-	if (Facility == nullptr)
+	// NO WRITE HOOK IS NO FACILITY, judged HERE rather than only in BuyModule: a quote that ignored it lit
+	// "Buy Shed" for a command that could only refuse (task-7 review finding 1).
+	// ENFORCED BY: AirportOps.Model.Facility.QuoteEqualsCommandForEveryOffer ("no module hook")
+	if (Facility == nullptr || !ApplyModulePurchase)
 	{
 		return EPurchaseRefusal::NotAFacility;
 	}
@@ -217,13 +220,13 @@ FPurchaseResult UFacilityPurchases::BuyModule(const URoadNetwork& Network, FEnti
 	const FString What = StaticEnum<EDepotModule>()->GetNameStringByValue(static_cast<int64>(Module));
 	if (!Result.Succeeded())
 	{
+		// THE UNSET HOOK is now JudgeModule's NotAFacility; its own warning kept, since a bare "NotAFacility"
+		// on a live depot would send a reader looking at the depot rather than the attach.
+		if (Facility != nullptr && !ApplyModulePurchase)
+		{
+			UE_LOG(LogAirportOps, Warning, TEXT("Purchase refused: depot %d %s - no module hook (UOpsRuntime not attached)"), Entity.Index, *What);
+		}
 		LogRefused(Entity.Index, What, Result.Refusal);
-		return Result;
-	}
-	if (!ApplyModulePurchase)
-	{
-		UE_LOG(LogAirportOps, Warning, TEXT("Purchase refused: depot %d %s - no module hook (UOpsRuntime not attached)"), Entity.Index, *What);
-		Result.Refusal = EPurchaseRefusal::NotAFacility;
 		return Result;
 	}
 	// READ BEFORE THE WRITE: the hook rebuilds the airport, and nothing here touches Facility after it.

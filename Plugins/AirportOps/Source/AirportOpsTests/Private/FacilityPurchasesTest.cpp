@@ -291,18 +291,22 @@ bool FFacilityQuoteAgreesTest::RunTest(const FString&)
 {
 	// THE UI AND THE RULES CANNOT DISAGREE (spec §3): for every offer and fleet row the quote shows, the
 	// command run on an identical airport refuses for exactly the quoted reason (or succeeds).
-	struct FCase { const TCHAR* Name; double Balance; int32 ReservedSheds; int32 Idle; int32 Busy; };
+	// "no module hook": a shop the runtime never attached - the quote lit "Buy Shed" while the command
+	// refused NotAFacility, until JudgeModule counted the unset hook (task-7 review finding 1).
+	struct FCase { const TCHAR* Name; double Balance; int32 ReservedSheds; int32 Idle; int32 Busy; bool bHookless = false; };
 	const FCase Cases[] = {
 		{ TEXT("rich, room, empty"), 500000.0, 3, 0, 0 },
 		{ TEXT("poor"), 1000.0, 3, 0, 0 },
 		{ TEXT("no space"), 500000.0, 1, 0, 0 },
 		{ TEXT("bays full"), 500000.0, 3, 1, 0 },
 		{ TEXT("a busy vehicle"), 500000.0, 3, 0, 1 },
+		{ TEXT("no module hook"), 500000.0, 3, 0, 0, true },
 	};
 	auto Make = [](const FCase& Case)
 	{
 		TUniquePtr<FFacilityFixture> F = MakeUnique<FFacilityFixture>(Case.Balance);
 		F->ReservedSheds = Case.ReservedSheds;
+		if (Case.bHookless) { F->Shop->ApplyModulePurchase = nullptr; }
 		for (int32 I = 0; I < Case.Idle; ++I) { F->Board->AddVehicleForTest(TEXT("FUEL"), F->Depot, EServiceVehicleState::Idle, 10000.0); }
 		for (int32 I = 0; I < Case.Busy; ++I) { F->Board->AddVehicleForTest(TEXT("FUEL"), F->Depot, EServiceVehicleState::ToJob, 0.0); }
 		return F;

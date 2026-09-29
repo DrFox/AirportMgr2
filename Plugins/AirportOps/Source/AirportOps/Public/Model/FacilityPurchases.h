@@ -155,7 +155,9 @@ public:
 
 	/**
 	 * Append Module to the depot, rebuild its yard and checkpoint undo - URoadEditFacade::AddEntityModule
-	 * in production. UNSET or false refuses NotAFacility, uncharged.
+	 * in production. UNSET or false refuses NotAFacility, uncharged - and UNSET is quoted NotAFacility too
+	 * (JudgeModule), so a card never lights a Buy the command can only refuse. FALSE cannot be quoted: the
+	 * facade refuses during an open drag, a state no quote sees (a click between drags in practice).
 	 */
 	TFunction<bool(FEntityInstanceId Id, EDepotModule Module)> ApplyModulePurchase;
 
