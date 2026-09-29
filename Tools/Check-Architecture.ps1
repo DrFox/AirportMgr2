@@ -135,9 +135,9 @@
           decoupled from Policy, to test ERunwayAvoidance itself. The allow-list also fails if
           an entry stops matching anything - the same "list drifted silently" failure rule 15
           guards against.
-      32. A facade commit's affordability refusal is announced (AffordOrRefuse) - see the rule.
       31. The ops event bus is subscribed to only in OpsRuntime.cpp (UOpsRuntime::WireBus) - see the
           rule's own comment.
+      32. A facade commit's affordability refusal is announced (AffordOrRefuse) - see the rule.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -1452,10 +1452,12 @@ if ($facadeFiles.Count -eq 0) {
     $failures.Add("refusal-is-announced: no RoadEditFacade*.cpp under $facadeDir - update rule 32")
 }
 foreach ($file in $facadeFiles) {
-    $hits = Select-String -Path $file.FullName -Pattern '!CanAfford\(' |
-        Where-Object { $_.Line -notmatch '^\s*//' -and $_.Line -notmatch '//\s*preview' }
+    # ANY CanAfford( call, not only the negated form (review: `if (CanAfford(Q)) ... else` would slip
+    # past a !-only pattern). Legal: the definition, AffordOrRefuse's own check (marked), a preview.
+    $hits = Select-String -Path $file.FullName -Pattern '\bCanAfford\(' |
+        Where-Object { $_.Line -notmatch '^\s*//' -and $_.Line -notmatch '//\s*(preview|announces)' -and $_.Line -notmatch 'URoadEditFacade::CanAfford\(' -and $_.Line -notmatch 'Purse->CanAfford\(' }
     foreach ($h in $hits) {
-        $failures.Add("refusal-is-announced: $($file.Name):$($h.LineNumber) guards a commit with a bare !CanAfford( - use AffordOrRefuse, or mark a Why* preview with // preview")
+        $failures.Add("refusal-is-announced: $($file.Name):$($h.LineNumber) guards a commit with a bare CanAfford( - use AffordOrRefuse, or mark a Why* preview with // preview")
     }
 }
 $ranRules.Add('refusal-is-announced')

@@ -39,6 +39,13 @@ public:
 	void Release(UGroundTraffic& Traffic, UFlight& Flight);
 
 	/**
+	 * True when Flight holds a stand that is no longer there to hold - deleted, or left with no pose node.
+	 * ONE TEST, read by Reapply (which warns) and by the ops HeldStandLost alert (which tells the player),
+	 * so the two cannot disagree about what "gone" means.
+	 */
+	static bool HeldStandIsGone(const UFlight& Flight, const URoadNetwork& Network);
+
+	/**
 	 * Re-make every hold after a graph rebuild.
 	 *
 	 * UGroundTraffic::OnGraphRebuilt goes through FTrafficOccupancy::ReleaseGuidelineClaims,

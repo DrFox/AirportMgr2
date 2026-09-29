@@ -46,7 +46,7 @@ struct AIRSIDE_API FDeadlockResolver
 		/** See Path above - the same walk's membership test and the cycle's start index in one,
 		 *  reset alongside it. */
 		TMap<int32, int32> Position;
-};
+	};
 
 	/**
 	 * Every wait cycle among Agents: an agent stalled past Rules.StallSeconds naming a blocker is one edge,
@@ -55,7 +55,8 @@ struct AIRSIDE_API FDeadlockResolver
 	 *
 	 * ONE DEFINITION, used by Resolve (which acts on each cycle) and by UGroundTraffic::CurrentDeadlocks
 	 * (which reports the all-aircraft ones to the player), so the two cannot disagree about what a jam is.
-	 * ENFORCED BY: Airside.Model.Traffic.Deadlock.MixedCycleIsNotAnAlert
+	 * ENFORCED BY: Airside.Model.Traffic.DeadlockResolverStandalone (Resolve acting on these cycles),
+	 * Airside.Model.Traffic.Deadlock.MixedCycleIsNotAnAlert (the alert's filter over the same cycles)
 	 */
 	static void FindCycles(TConstArrayView<FRoadAgent> Agents, const FTrafficRules& Rules, FCycleScratch& Scratch,
 		TArray<TArray<int32>>& OutCycles);

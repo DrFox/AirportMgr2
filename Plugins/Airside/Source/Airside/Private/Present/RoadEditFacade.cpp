@@ -257,7 +257,7 @@ bool URoadEditFacade::CanAfford(const FBuildQuote& Quote) const
 
 bool URoadEditFacade::AffordOrRefuse(const FBuildQuote& Quote)
 {
-	if (CanAfford(Quote))
+	if (CanAfford(Quote)) // announces: the one check that broadcasts OnRefused (rule 32)
 	{
 		return true;
 	}

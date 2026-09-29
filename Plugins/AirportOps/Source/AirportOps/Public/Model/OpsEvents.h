@@ -14,6 +14,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsSpeedChanged, ESimSpeed, Speed);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsNotification, const FString&, Text);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertRaised, const FOpsAlert&, Alert);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertCleared, const FOpsAlertKey&, Key);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOpsAlertsReset);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOpsBuildRefused, const FString&, What, const FString&, Price, const FString&, Balance);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsLandRefused, EArrivalRefusal, Why);
 
@@ -51,6 +52,8 @@ public:
 	/** A standing problem started / stopped (spec 2026-09-29-ops-alerts). The toast and the alert window. */
 	UPROPERTY(BlueprintAssignable) FOpsAlertRaised       OnAlertRaised;
 	UPROPERTY(BlueprintAssignable) FOpsAlertCleared      OnAlertCleared;
+	/** Every alert forgotten (a load, an attach) - a UI list empties; re-raises follow. */
+	UPROPERTY(BlueprintAssignable) FOpsAlertsReset       OnAlertsReset;
 	/** A build refused at commit, and key 7 refused - silent before this (spec §2). */
 	UPROPERTY(BlueprintAssignable) FOpsBuildRefused      OnBuildRefused;
 	UPROPERTY(BlueprintAssignable) FOpsLandRefused       OnLandRefused;

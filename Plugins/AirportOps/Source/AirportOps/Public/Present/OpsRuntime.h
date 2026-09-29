@@ -211,12 +211,6 @@ private:
 	FDelegateHandle RefusedHandle;
 	void OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why);
 
-	/**
-	 * The Deadlock alert's backstop: stall time grows with no event, so while any agent is stalled a
-	 * repeating clock entry dirties the alerts pass. Armed and cancelled by the pass itself (spec §1).
-	 */
-	int32 AlertsBackstopHandle = INDEX_NONE;
-
 	/** Live sources for UOpsAlerts::Recompute, read fresh - the network object can be replaced. */
 	void RecomputeAlerts();
 

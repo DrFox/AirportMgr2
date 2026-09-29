@@ -493,7 +493,6 @@ private:
 	 *  count, for the caller's log line. */
 	int32 ReleaseJobsOf(FServiceVehicle& Vehicle);
 
-
 	/** What Judge learned about one job, for its refusal and its log line (#103: counted once). */
 	struct FJudgement
 	{

@@ -452,8 +452,12 @@ bool FOpsRuntimeAlertsPassTest::RunTest(const FString&)
 	const FString Slot = TEXT("AirportOpsTest_AlertsLoad");
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	Runtime->GetEvents()->OnAlertsReset.AddDynamic(Listener, &UOpsEventsTestListener::OnAlertsReset);
+	if (!TestTrue(TEXT("load reads again"), Runtime->LoadFromSlot(Slot))) { return false; }
 	Runtime->Tick(0.0);
-	TestEqual(TEXT("after a load the alert is held once - re-derived, not duplicated"), HeldOverdrawn(), 1);
+	TestEqual(TEXT("a load tells the UI its alert list is stale"), Listener->CountOf(TEXT("reset")), 1);
+	TestEqual(TEXT("then re-raises, once, what is still true of the loaded airport (no tick came between the two loads)"), Listener->CountOf(Overdrawn), 2);
+	TestEqual(TEXT("and holds it once"), HeldOverdrawn(), 1);
 	return true;
 }
 

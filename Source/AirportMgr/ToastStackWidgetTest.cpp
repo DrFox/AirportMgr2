@@ -330,6 +330,11 @@ bool FToastsFromOpsAlertsTest::RunTest(const FString& Parameters)
 	Events->OnAlertCleared.Broadcast(Alert.Key);
 	TestEqual(TEXT("most clears are silent - the badge count says it"), Stack->Centre()->Entries().Num(), 1);
 
+	FOpsAlert Again = Alert;
+	Again.bReRaised = true;
+	Events->OnAlertRaised.Broadcast(Again);
+	TestEqual(TEXT("a re-raise after a load is not news - no toast"), Stack->Centre()->Entries().Num(), 1);
+
 	FOpsAlertKey Overdrawn;
 	Overdrawn.Kind = EAlertKind::Overdrawn;
 	Events->OnAlertCleared.Broadcast(Overdrawn);

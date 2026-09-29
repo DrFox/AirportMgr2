@@ -96,8 +96,7 @@ void UStandAllocator::Reapply(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 			continue;
 		}
 
-		const FEntityInstance* Stand = Network.GetEntity(Flight->Stand);
-		if (Stand == nullptr || !Stand->PoseNode.IsSet())
+		if (HeldStandIsGone(*Flight, Network))
 		{
 			// The stand was deleted under an accepted flight. Finding it another one belongs
 			// to the sequencer's divert path, which does not exist yet - but the silence is
@@ -108,6 +107,16 @@ void UStandAllocator::Reapply(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 			continue;
 		}
 
-		Traffic.HoldStand(Flight->HolderId(), Stand->PoseNode);
+		Traffic.HoldStand(Flight->HolderId(), Network.GetEntity(Flight->Stand)->PoseNode);
 	}
+}
+
+bool UStandAllocator::HeldStandIsGone(const UFlight& Flight, const URoadNetwork& Network)
+{
+	if (!Flight.Stand.IsSet())
+	{
+		return false;
+	}
+	const FEntityInstance* Stand = Network.GetEntity(Flight.Stand);
+	return Stand == nullptr || !Stand->PoseNode.IsSet();
 }

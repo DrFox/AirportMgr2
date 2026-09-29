@@ -266,8 +266,13 @@ void UOpsRuntime::WireBus()
 		[this](const FNotificationEvent& E) { Events->NotifyNotification(E.Text); });
 
 	// THE ALERTS PASS (spec 2026-09-29-ops-alerts §1) - registered AFTER the job board's, so a Step and the
-	// alerts that follow from it land in the same round. Dirtied, in the Reaction tier, by every event that
-	// can change a condition; the job board pass and the offer minute dirty it directly (see there).
+	// alerts that follow from it land in the same round. Dirtied, in the Reaction tier, by the events below,
+	// by the job board pass, and by the OFFER MINUTE (OfferTick). The offer minute is also the catch-all: a
+	// condition that starts or ends with no event of its own - a deadlock's stall time passing the
+	// threshold, an airline's admission re-judged, a balance crossing zero before stage 3's MoneyPosted -
+	// is seen within one game minute, ~1 real second at x1 (2026-09-29). A separate stall backstop on a
+	// 10 game s timer was cut in review: at the day compression it fired about seven times a real second
+	// whenever any agent queued, recomputing every alert.
 	// ENFORCED BY: AirportOps.Present.Alerts.PassRaisesThroughTheRuntime
 	Bus.RegisterPass(TEXT("Alerts"), [this]() { RecomputeAlerts(); });
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FAgentPhaseEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
@@ -281,6 +286,8 @@ void UOpsRuntime::WireBus()
 		[this](const FAlertRaisedEvent& E) { Events->OnAlertRaised.Broadcast(E.Alert); });
 	Bus.Subscribe<FAlertClearedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FAlertClearedEvent& E) { Events->OnAlertCleared.Broadcast(E.Key); });
+	Bus.Subscribe<FAlertsResetEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FAlertsResetEvent&) { Events->OnAlertsReset.Broadcast(); });
 	Bus.Subscribe<FBuildRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FBuildRefusedEvent& E) { Events->OnBuildRefused.Broadcast(E.What, E.Price, E.Balance); });
 	Bus.Subscribe<FLandRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
@@ -301,19 +308,6 @@ void UOpsRuntime::RecomputeAlerts()
 	Sources.Ledger = Ledger;
 	Sources.Airlines = AirlineOffers;
 	Alerts->Recompute(Sources, Clock->Now());
-
-	// THE DEADLOCK BACKSTOP: armed only while something is stalled, so a quiet airport pays nothing.
-	const bool bAnyStalled = Model != nullptr && Model->GetAgents().ContainsByPredicate(
-		[](const FRoadAgent& Agent) { return Agent.GetStalledSeconds() > 0.0; });
-	if (bAnyStalled && AlertsBackstopHandle == INDEX_NONE)
-	{
-		AlertsBackstopHandle = Clock->Every(10.0, [this]() { Bus.MarkDirty(TEXT("Alerts")); });
-	}
-	else if (!bAnyStalled && AlertsBackstopHandle != INDEX_NONE)
-	{
-		Clock->Cancel(AlertsBackstopHandle);
-		AlertsBackstopHandle = INDEX_NONE;
-	}
 }
 
 void UOpsRuntime::OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why)
@@ -583,11 +577,6 @@ void UOpsRuntime::Detach()
 		JobBoardDeadlineHandle = INDEX_NONE;
 	}
 	SeenNetwork.Reset();
-	if (AlertsBackstopHandle != INDEX_NONE)
-	{
-		Clock->Cancel(AlertsBackstopHandle);
-		AlertsBackstopHandle = INDEX_NONE;
-	}
 	// THE QUEUE IS THE OLD ACTOR'S. A new level's traffic numbers its agents from 1 again, so a
 	// stale Parked for agent k would land on the new level's agent k. Dropped, and the price is
 	// that a re-Attach to the SAME actor loses at most one step of its events.

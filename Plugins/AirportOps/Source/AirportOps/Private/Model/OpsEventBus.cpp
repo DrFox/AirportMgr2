@@ -83,6 +83,11 @@ FString FAlertClearedEvent::Describe() const
 		Key.Name.IsNone() ? TEXT("") : *(TEXT(" ") + Key.Name.ToString()));
 }
 
+FString FAlertsResetEvent::Describe() const
+{
+	return TEXT("every alert forgotten");
+}
+
 FString FBuildRefusedEvent::Describe() const
 {
 	return FString::Printf(TEXT("%s, cannot afford %s, balance %s"), *What, *Price, *Balance);

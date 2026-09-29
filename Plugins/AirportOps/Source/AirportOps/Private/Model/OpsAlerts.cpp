@@ -11,6 +11,7 @@
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Model/StandAllocator.h"
 
 namespace
 {
@@ -29,6 +30,16 @@ namespace
 		Alert.Focus.Kind = EAlertFocusKind::Agent;
 		Alert.Focus.Id = Agent.Id;
 		Alert.Focus.Point = Agent.GroundPosition();
+	}
+}
+
+void UOpsAlerts::Reset()
+{
+	Alerts.Reset();
+	bAfterReset = true;
+	if (Bus != nullptr)
+	{
+		Bus->Publish(FAlertsResetEvent{});
 	}
 }
 
@@ -56,13 +67,11 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 				OpsAlertFocusAgent(Alert, *Agent);
 			}
 
-			// THE SAME TEST UStandAllocator::Reapply logs as a Warning ("an aeroplane is coming for a stand
-			// nobody is holding"), for the phases Reapply is given - a flight not yet on the ground.
+			// UStandAllocator::HeldStandIsGone - the one test Reapply logs its Warning on ("an aeroplane is
+			// coming for a stand nobody is holding"), for the phases Reapply is given: not yet on the ground.
 			const bool bComing = Flight->Phase == EFlightPhase::Accepted || Flight->Phase == EFlightPhase::Inbound;
-			if (bComing && Flight->Stand.IsSet() && Sources.Network != nullptr)
+			if (bComing && Sources.Network != nullptr && UStandAllocator::HeldStandIsGone(*Flight, *Sources.Network))
 			{
-				const FEntityInstance* Stand = Sources.Network->GetEntity(Flight->Stand);
-				if (Stand == nullptr || !Stand->PoseNode.IsSet())
 				{
 					FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::HeldStandLost, Flight->Id, NAME_None,
 						FText::Format(NSLOCTEXT("OpsAlerts", "HeldStandLost", "Flight {0}'s stand was removed - it has nowhere to park"),
@@ -179,7 +188,9 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 			continue;
 		}
 		Now_.RaisedAt = Now;
-		UE_LOG(LogAirportOps, Log, TEXT("Alert raised: %s"), *Now_.Text.ToString());
+		Now_.bReRaised = bAfterReset;
+		// VERBOSE: the bus's own "Bus: + AlertRaised {...}" line is the Log-level record (stage 1 review).
+		UE_LOG(LogAirportOps, Verbose, TEXT("Alert raised: %s"), *Now_.Text.ToString());
 		if (Bus != nullptr)
 		{
 			Bus->Publish(FAlertRaisedEvent{ Now_ });
@@ -189,7 +200,7 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 	{
 		if (!Found.ContainsByPredicate([&Was](const FOpsAlert& A) { return A.Key == Was.Key; }))
 		{
-			UE_LOG(LogAirportOps, Log, TEXT("Alert cleared: %s"), *Was.Text.ToString());
+			UE_LOG(LogAirportOps, Verbose, TEXT("Alert cleared: %s"), *Was.Text.ToString());
 			if (Bus != nullptr)
 			{
 				Bus->Publish(FAlertClearedEvent{ Was.Key });
@@ -197,4 +208,5 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 		}
 	}
 	Alerts = MoveTemp(Found);
+	bAfterReset = false;
 }

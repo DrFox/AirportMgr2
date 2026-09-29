@@ -164,6 +164,14 @@ struct AIRPORTOPS_API FAlertClearedEvent
 	FString Describe() const;
 };
 
+/** Every alert was forgotten (UOpsAlerts::Reset - a load or an attach): a UI list empties, and the raises
+ *  that follow are re-raises (FOpsAlert::bReRaised). */
+struct AIRPORTOPS_API FAlertsResetEvent
+{
+	static const TCHAR* EventName() { return TEXT("AlertsReset"); }
+	FString Describe() const;
+};
+
 /** A build refused at commit (URoadEditFacade::OnRefused), priced by the purse for the toast. */
 struct AIRPORTOPS_API FBuildRefusedEvent
 {
@@ -192,7 +200,7 @@ struct AIRPORTOPS_API FLandRefusedEvent
  */
 using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent,
 	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
-	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FBuildRefusedEvent, FLandRefusedEvent>;
+	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

@@ -82,6 +82,13 @@ struct AIRPORTOPS_API FOpsAlert
 	UPROPERTY(BlueprintReadOnly) FAlertFocus Focus;
 	/** USimClock game seconds it was first raised. */
 	UPROPERTY(BlueprintReadOnly) double RaisedAt = 0.0;
+
+	/**
+	 * Raised by the first recompute after a Reset (a load, an attach) rather than because the condition
+	 * just started. The alert list shows it; the toast does not - a load re-announcing every standing
+	 * problem as news would bury the ones that really are (stage 1 review).
+	 */
+	UPROPERTY(BlueprintReadOnly) bool bReRaised = false;
 };
 
 /** What a recompute reads. Any null skips the kinds it answers - a test, or a runtime not yet attached. */
@@ -125,9 +132,13 @@ public:
 	/** Work out every true condition, and publish what changed since the last call. */
 	void Recompute(const FOpsAlertSources& Sources, double Now);
 
-	/** Forget every alert WITHOUT announcing it - a load or an attach, whose UI mirror is cleared by its
-	 *  owner; the next Recompute re-raises whatever is still true. */
-	void Reset() { Alerts.Reset(); }
+	/**
+	 * Forget every alert - a load or an attach. Publishes FAlertsResetEvent (no per-alert clears: the
+	 * subjects belong to the airport being replaced), so a UI list empties; the next Recompute re-raises
+	 * whatever is still true, marked bReRaised.
+	 * ENFORCED BY: AirportOps.Present.Alerts.PassRaisesThroughTheRuntime
+	 */
+	void Reset();
 
 	const TArray<FOpsAlert>& GetAlerts() const { return Alerts; }
 
@@ -137,4 +148,6 @@ public:
 private:
 	UPROPERTY(Transient) TArray<FOpsAlert> Alerts;
 	int32 RecomputeCount = 0;
+	/** Set by Reset: the next Recompute's raises are re-raises. */
+	bool bAfterReset = false;
 };

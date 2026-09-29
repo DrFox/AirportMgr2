@@ -94,7 +94,8 @@ void UToastStackWidget::BindTo(UOpsEvents& Events)
 
 void UToastStackWidget::OnAlertRaised(const FOpsAlert& Alert)
 {
-	if (Notifications != nullptr)
+	// A RE-RAISE AFTER A LOAD is not news: the alert list shows it, the feed does not (stage 1 review).
+	if (Notifications != nullptr && !Alert.bReRaised)
 	{
 		Notifications->PostFeed(Alert.Text, ENotificationSeverity::Warning);
 	}
