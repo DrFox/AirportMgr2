@@ -4,6 +4,7 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/AirlineDefinition.h"
+#include "Model/AirlineRoster.h"
 #include "Model/OfferGenerator.h"
 #include "Model/JobBoard.h"
 #include "Model/GroundTraffic.h"
@@ -377,6 +378,34 @@ bool FOfferRowFuelChipTest::RunTest(const FString& Parameters)
 	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
 	if (!TestEqual(TEXT("one row"), Inbox->GetOffers().Num(), 1)) { return false; }
 	TestEqual(TEXT("the chip names the litres"), Inbox->GetOffers()[0]->GetFuelText().ToString(), FString(TEXT("Fuel 2,900 L")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOfferSatisfactionTextTest,
+	"AirportMgr.UI.OfferInbox.SatisfactionText",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOfferSatisfactionTextTest::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("no airline, no line - the debug flight's row stays as it was"),
+		UOfferViewModel::DescribeSatisfaction(nullptr).IsEmpty());
+
+	FAirlineStanding Standing;
+	Standing.Satisfaction = 0.5;
+	TestEqual(TEXT("an airline nothing has moved yet shows only how it feels"),
+		UOfferViewModel::DescribeSatisfaction(&Standing).ToString(), FString(TEXT("50%")));
+
+	Standing.Satisfaction = 0.62;
+	Standing.Recent.Add({ 0.03, TEXT("on time") });
+	Standing.Recent.Add({ -0.04, TEXT("late departure (25 min)") });
+	TestEqual(TEXT("the NEWEST reason, with the way it went"),
+		UOfferViewModel::DescribeSatisfaction(&Standing).ToString(), FString(TEXT("62% ▼ late departure (25 min)")));
+
+	Standing.Satisfaction = 0.53;
+	Standing.Recent.Add({ 0.03, TEXT("on time") });
+	TestEqual(TEXT("an improvement points up"),
+		UOfferViewModel::DescribeSatisfaction(&Standing).ToString(), FString(TEXT("53% ▲ on time")));
 	return true;
 }
 

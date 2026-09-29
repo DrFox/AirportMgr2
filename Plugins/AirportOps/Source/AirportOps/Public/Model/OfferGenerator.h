@@ -179,16 +179,36 @@ public:
 	 *
 	 * ONE FUNCTION, which the demand strip samples too, so the strip cannot draw a curve the
 	 * generator does not follow.
+	 *
+	 * AND THE AIRLINE'S OWN FACTOR - its satisfaction, through UAirlineRoster::RateMultiplier (spec
+	 * 2026-09-29-ops-event-bus section 3) - scales the demand but NOT the floor, for the fee's reason:
+	 * the floor is what keeps the airport from going silent, whatever the airline thinks of it.
+	 * ENFORCED BY: AirportOps.Model.Offers.Rate.AirlineFactorSparesTheFloor
 	 */
 	static double RateAt(const UAirlineDefinition& Airline, double TimeOfDaySeconds, bool bDaylight,
-		double DemandFactor);
+		double DemandFactor, double AirlineFactor = 1.0);
 
-	/** RateAt summed over every airline - what the demand strip draws. */
+	/** RateAt summed over every airline - what the demand strip draws. Every airline at factor 1. */
 	static double TotalRateAt(TArrayView<const FAirlineOffers> Airlines, double TimeOfDaySeconds,
 		bool bDaylight, double DemandFactor);
 
+	/** The same, with each airline's own factor - the strip passes the generator's AirlineFactor so
+	 *  it draws the rate the generator follows. */
+	static double TotalRateAt(TArrayView<const FAirlineOffers> Airlines, double TimeOfDaySeconds,
+		bool bDaylight, double DemandFactor, TFunctionRef<double(const UAirlineDefinition&)> AirlineFactorOf);
+
 	/** The demand factor RateAt is given: Pricing's, or 1.0 when there is none. */
 	double DemandFactor() const;
+
+	/**
+	 * How much this airline's own demand is scaled - its satisfaction. Set by UOpsRuntime::Attach to
+	 * read UAirlineRoster; unset in a bare NewObject, and AirlineFactor then answers 1.0. READ every
+	 * minute, never cached here: it is the roster's value, and a copy would be a second one.
+	 */
+	TFunction<double(const UAirlineDefinition&)> AirlineFactorOf;
+
+	/** AirlineFactorOf(Airline), or 1.0 when it is unset. */
+	double AirlineFactor(const UAirlineDefinition& Airline) const;
 
 	/**
 	 * One game minute of demand. Returns the offers it made (0..n), never more than the

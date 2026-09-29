@@ -57,10 +57,10 @@ bool UOfferGenerator::CouldEverAdmit(const URoadNetwork& Network, const FVector2
 }
 
 double UOfferGenerator::RateAt(const UAirlineDefinition& Airline, double TimeOfDaySeconds,
-	bool bDaylight, double DemandFactor)
+	bool bDaylight, double DemandFactor, double AirlineFactor)
 {
 	const double Demand = Airline.PeakOffersPerHour * Airline.CurveAt(TimeOfDaySeconds)
-		* FMath::Max(DemandFactor, 0.0);
+		* FMath::Max(DemandFactor, 0.0) * FMath::Max(AirlineFactor, 0.0);
 	// THE FLOOR IS NOT SCALED BY THE FEE, which is the whole of what makes it a floor - see
 	// UAirlineDefinition::FloorOffersPerHour. Daylight only, so the night is a real lull.
 	const double Floor = bDaylight ? Airline.FloorOffersPerHour : 0.0;
@@ -70,12 +70,20 @@ double UOfferGenerator::RateAt(const UAirlineDefinition& Airline, double TimeOfD
 double UOfferGenerator::TotalRateAt(TArrayView<const FAirlineOffers> Airlines,
 	double TimeOfDaySeconds, bool bDaylight, double DemandFactor)
 {
+	return TotalRateAt(Airlines, TimeOfDaySeconds, bDaylight, DemandFactor,
+		[](const UAirlineDefinition&) { return 1.0; });
+}
+
+double UOfferGenerator::TotalRateAt(TArrayView<const FAirlineOffers> Airlines,
+	double TimeOfDaySeconds, bool bDaylight, double DemandFactor,
+	TFunctionRef<double(const UAirlineDefinition&)> AirlineFactorOf)
+{
 	double Total = 0.0;
 	for (const FAirlineOffers& Each : Airlines)
 	{
 		if (Each.Airline != nullptr)
 		{
-			Total += RateAt(*Each.Airline, TimeOfDaySeconds, bDaylight, DemandFactor);
+			Total += RateAt(*Each.Airline, TimeOfDaySeconds, bDaylight, DemandFactor, AirlineFactorOf(*Each.Airline));
 		}
 	}
 	return Total;
@@ -84,6 +92,11 @@ double UOfferGenerator::TotalRateAt(TArrayView<const FAirlineOffers> Airlines,
 double UOfferGenerator::DemandFactor() const
 {
 	return Pricing != nullptr ? Pricing->DemandFactor() : 1.0;
+}
+
+double UOfferGenerator::AirlineFactor(const UAirlineDefinition& Airline) const
+{
+	return AirlineFactorOf ? AirlineFactorOf(Airline) : 1.0;
 }
 
 TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const FVector2D& Focus,
@@ -114,7 +127,7 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 
 		// NOTHING TO OFFER THIS MINUTE, NOTHING TO ASK (review I2): a night-quiet club at x32
 		// would otherwise buy a route search per type per game minute for a rate of zero.
-		const double Rate = RateAt(Airline, TimeOfDay, bDaylight, Factor);
+		const double Rate = RateAt(Airline, TimeOfDay, bDaylight, Factor, AirlineFactor(Airline));
 		if (Rate <= 0.0)
 		{
 			continue;

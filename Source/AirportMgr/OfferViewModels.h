@@ -4,12 +4,15 @@
 
 #include "OfferViewModels.generated.h"
 
+class UAirlineRoster;
 class UFlight;
+struct FAirlineStanding;
 class UFlightBoard;
 class UGroundTraffic;
 class URoadNetwork;
 class USimClock;
 struct FAirlineOffers;
+class UAirlineDefinition;
 
 /**
  * One row of the offer inbox.
@@ -36,9 +39,10 @@ public:
 	/** The flight this row shows. WEAK: the board owns flights and retires them. */
 	UPROPERTY(Transient) TWeakObjectPtr<UFlight> Flight;
 
-	/** Pull every field from the flight and the board's verdict. */
+	/** Pull every field from the flight and the board's verdict - and, given the roster, how its
+	 *  airline feels (null: no satisfaction line, as in a test that does not care). */
 	void Refresh(const UFlightBoard& Board, const UGroundTraffic& Traffic,
-		const URoadNetwork& Network, const USimClock& Clock);
+		const URoadNetwork& Network, const USimClock& Clock, const UAirlineRoster* Airlines = nullptr);
 
 	FText GetCallsign() const { return Callsign; }
 	FText GetAirline() const { return Airline; }
@@ -54,6 +58,16 @@ public:
 	int32 GetSecondsLeft() const { return SecondsLeft; }
 	float GetTimeLeftFraction() const { return TimeLeftFraction; }
 	FText GetAcceptLabel() const { return AcceptLabel; }
+
+	/** "62% \u25BC late departure (25 min)" - see DescribeSatisfaction. Empty with no roster. */
+	FText GetSatisfaction() const { return Satisfaction; }
+
+	/**
+	 * How an airline feels and the latest reason why: the percentage, an arrow for which way the
+	 * newest change went, and its cause. Just the percentage for an airline nothing has moved yet;
+	 * empty for none (the debug flight's, or no roster). Static so a test can ask it of a row.
+	 */
+	static FText DescribeSatisfaction(const FAirlineStanding* Standing);
 
 	/**
 	 * "lands in 15 min - airborne within 1 h 10 min", from the flight's lead time and contract.
@@ -104,6 +118,9 @@ private:
 	 * "Accept", or "Accept (no fuel)" - the cost of a soft demand, on the button that incurs it.
 	 */
 	UPROPERTY(Transient) FText AcceptLabel;
+
+	/** See GetSatisfaction. */
+	UPROPERTY(Transient) FText Satisfaction;
 };
 
 /**
@@ -137,7 +154,7 @@ public:
 	 * actually expensive.
 	 */
 	void Refresh(UFlightBoard& Board, UGroundTraffic& Traffic, const URoadNetwork& Network,
-		const USimClock& Clock);
+		const USimClock& Clock, const UAirlineRoster* Airlines = nullptr);
 
 	/**
 	 * The rows, as the raw pointers SetListItems and Blueprint want. Built ON DEMAND from
@@ -160,6 +177,12 @@ public:
 	 */
 	static TArray<double> SampleDemand(TArrayView<const FAirlineOffers> Airlines,
 		const USimClock& Clock, double DemandFactor, int32 Count);
+
+	/** The same, with each airline's own factor (its satisfaction) - what the widget draws, so the
+	 *  strip follows UOfferGenerator::AirlineFactor exactly as the generator does. */
+	static TArray<double> SampleDemand(TArrayView<const FAirlineOffers> Airlines,
+		const USimClock& Clock, double DemandFactor, int32 Count,
+		TFunctionRef<double(const UAirlineDefinition&)> AirlineFactorOf);
 
 	/** Rows itself, for a test asserting there is only the one list - see
 	 *  OfferViewModelsTest's OneList case. Not BlueprintCallable: GetOffers() is the shape
@@ -199,4 +222,8 @@ private:
 	UPROPERTY(Transient) TWeakObjectPtr<UGroundTraffic> Traffic;
 	UPROPERTY(Transient) TWeakObjectPtr<URoadNetwork> Network;
 	UPROPERTY(Transient) TWeakObjectPtr<USimClock> Clock;
+
+	/** The roster the last Refresh was given, so Accept/Decline's own refresh keeps the rows'
+	 *  satisfaction line rather than blanking it for a frame. Null when none was. */
+	UPROPERTY(Transient) TWeakObjectPtr<const UAirlineRoster> Airlines;
 };

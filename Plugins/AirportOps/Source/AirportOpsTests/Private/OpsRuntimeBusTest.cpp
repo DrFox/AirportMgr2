@@ -6,7 +6,10 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/AirlineDefinition.h"
+#include "Model/AirlineRoster.h"
 #include "Model/JobBoard.h"
+#include "Model/OfferGenerator.h"
 #include "Model/Ledger.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -286,6 +289,42 @@ bool FOpsBusLandingFeeTest::RunTest(const FString&)
 	const bool bCharged = Ledger->Entries().ContainsByPredicate([](const FLedgerEntry& Entry)
 		{ return Entry.Category == ELedgerCategory::LandingFee; });
 	TestTrue(TEXT("landing is charged once the arrival's Gone -> Arriving reaches a board that knows its agent"), bCharged);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBusSatisfactionRateTest, "AirportOps.Present.Bus.SatisfactionMovesRate",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeBusSatisfactionRateTest::RunTest(const FString&)
+{
+	// THE WHOLE CHAIN, through the runtime's own wiring: an airborne event on the bus -> the roster's
+	// Reaction -> the generator's rate. The roster's world-free tests cannot see a WireBus that forgot a
+	// subscription, or an Attach that never handed the generator its reader.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	const UAirlineDefinition* Airline = nullptr;
+	for (const FAirlineOffers& Each : Runtime->GetAirlineOffers())
+	{
+		if (Each.Airline != nullptr && !Each.Airline->bIsFloor)
+		{
+			Airline = Each.Airline;
+			break;
+		}
+	}
+	if (Airline == nullptr)
+	{
+		AddInfo(TEXT("no non-floor airline in content - nothing to measure"));
+		return true;
+	}
+	TestNotNull(TEXT("every catalog airline is seeded at attach"), Runtime->GetAirlines()->Find(Airline->GetFName()));
+	const double Before = Runtime->GetOfferGenerator()->AirlineFactor(*Airline);
+	for (int32 Index = 0; Index < 10; ++Index)
+	{
+		Runtime->GetBus().Publish(FFlightAirborneEvent{ 0, Airline->GetFName(), 6000.0 });
+	}
+	Runtime->Tick(0.0);
+	const double After = Runtime->GetOfferGenerator()->AirlineFactor(*Airline);
+	TestTrue(FString::Printf(TEXT("ten very late departures lower the airline's offer rate (%.2f -> %.2f)"), Before, After), After < Before);
 	return true;
 }
 

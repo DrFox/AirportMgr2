@@ -357,6 +357,17 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// the tick - see UOfferGenerator::TickMinute.
 	AirlineOffers = AirlineOffersFromCatalog();
 	SeedAirlines();
+
+	// THE AIRLINE'S MOOD reaches demand through the generator's one reader - READ, not subscribed:
+	// a rate is a value asked for when it is needed (spec 2026-09-29 section 3). Weak, for the
+	// dispatcher's reason below.
+	// ENFORCED BY: AirportOps.Present.Bus.SatisfactionMovesRate
+	TWeakObjectPtr<UAirlineRoster> WeakAirlines = Airlines;
+	OfferGenerator->AirlineFactorOf = [WeakAirlines](const UAirlineDefinition& Airline)
+	{
+		const UAirlineRoster* Roster = WeakAirlines.Get();
+		return Roster != nullptr ? Roster->RateMultiplier(Airline.GetFName(), Airline.bIsFloor) : 1.0;
+	};
 	RearmRepeatingSchedules();
 	{
 		// THE DAY'S EXPECTED TOTAL, integrated from the same RateAt the generator follows, so
@@ -366,7 +377,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		{
 			const double Midpoint = (Hour + 0.5) * 3600.0;
 			Expected += UOfferGenerator::TotalRateAt(AirlineOffers, Midpoint,
-				Clock->IsDaylight(Midpoint), OfferGenerator->DemandFactor());
+				Clock->IsDaylight(Midpoint), OfferGenerator->DemandFactor(),
+				[this](const UAirlineDefinition& Airline) { return OfferGenerator->AirlineFactor(Airline); });
 		}
 		FString Floors;
 		for (const FAirlineOffers& Each : AirlineOffers)

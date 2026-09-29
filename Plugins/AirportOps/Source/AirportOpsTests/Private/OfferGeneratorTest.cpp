@@ -251,6 +251,31 @@ bool FOfferRateFloorTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferRateAirlineFactorTest, "AirportOps.Model.Offers.Rate.AirlineFactorSparesTheFloor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferRateAirlineFactorTest::RunTest(const FString& Parameters)
+{
+	UAirlineDefinition* Airline = MakeAirline(10.0);
+	Airline->DemandCurve.Init(0.0, 24);
+	Airline->DemandCurve[8] = 1.0;
+	TestEqual(TEXT("a delighted airline (1.5x) offers half as often again"),
+		UOfferGenerator::RateAt(*Airline, 7.5 * 3600.0, true, 1.0, 1.5), 7.5, 1e-9);
+	TestEqual(TEXT("and the factor multiplies with the fee's, not instead of it"),
+		UOfferGenerator::RateAt(*Airline, 7.5 * 3600.0, true, 0.5, 1.5), 3.75, 1e-9);
+
+	UAirlineDefinition* Club = MakeAirline(4.0, 1.0, true);
+	TestEqual(TEXT("an unhappy airline's demand falls - but the floor is not scaled by its mood, nor by the fee"),
+		UOfferGenerator::RateAt(*Club, 10.0 * 3600.0, true, 0.1, 0.5), 1.0, 1e-9);
+	TestEqual(TEXT("a negative factor is none, not a negative rate"),
+		UOfferGenerator::RateAt(*Airline, 7.5 * 3600.0, true, 1.0, -1.0), 0.0, 1e-9);
+
+	UOfferGenerator* Generator = NewObject<UOfferGenerator>(GetTransientPackage());
+	TestEqual(TEXT("a generator nobody wired scales nothing"), Generator->AirlineFactor(*Airline), 1.0, 1e-9);
+	Generator->AirlineFactorOf = [](const UAirlineDefinition&) { return 0.7; };
+	TestEqual(TEXT("a wired one answers its reader"), Generator->AirlineFactor(*Airline), 0.7, 1e-9);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferFlatRateTest, "AirportOps.Model.Offers.Generate.FlatRateOverTenHours",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOfferFlatRateTest::RunTest(const FString& Parameters)

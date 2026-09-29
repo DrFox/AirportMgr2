@@ -198,14 +198,17 @@ void UOfferInboxWidget::Refresh(ARoadNetworkActor* Target)
 		return;
 	}
 
-	Inbox->Refresh(*Runtime->GetFlightBoard(), *Traffic, *Target->Network, *Runtime->GetClock());
+	Inbox->Refresh(*Runtime->GetFlightBoard(), *Traffic, *Target->Network, *Runtime->GetClock(), Runtime->GetAirlines());
 	Arrivals->Refresh(*Runtime->GetFlightBoard(), *Runtime->GetClock());
 
 	// THE STRIP'S SAMPLES, from the runtime's own airline list and the live fee - the same
 	// inputs UOfferGenerator::TickMinute reads, through the same TotalRateAt.
 	const USimClock& Clock = *Runtime->GetClock();
-	const double Factor = Runtime->GetOfferGenerator() != nullptr ? Runtime->GetOfferGenerator()->DemandFactor() : 1.0;
-	DemandSamples = UOfferInboxViewModel::SampleDemand(Runtime->GetAirlineOffers(), Clock, Factor, 24);
+	const UOfferGenerator* Generator = Runtime->GetOfferGenerator();
+	const double Factor = Generator != nullptr ? Generator->DemandFactor() : 1.0;
+	// AND EACH AIRLINE'S SATISFACTION, through the generator's own reader - see UOfferGenerator::AirlineFactor.
+	DemandSamples = UOfferInboxViewModel::SampleDemand(Runtime->GetAirlineOffers(), Clock, Factor, 24,
+		[Generator](const UAirlineDefinition& Airline) { return Generator != nullptr ? Generator->AirlineFactor(Airline) : 1.0; });
 	DemandNight.SetNum(24);
 	for (int32 Hour = 0; Hour < 24; ++Hour)
 	{
@@ -302,8 +305,12 @@ void UOfferInboxWidget::PaintRows()
 		// rather than as something with an answer expected.
 		if (Entry->AirlineText != nullptr)
 		{
-			Entry->AirlineText->SetText(Row->GetCallsign().IsEmpty() ? Row->GetAirline()
-				: FText::Format(NSLOCTEXT("AirportMgr", "OfferWho", "{0}  {1}"), Row->GetCallsign(), Row->GetAirline()));
+			const FText Who = Row->GetCallsign().IsEmpty() ? Row->GetAirline()
+				: FText::Format(NSLOCTEXT("AirportMgr", "OfferWho", "{0}  {1}"), Row->GetCallsign(), Row->GetAirline());
+			// HOW THE AIRLINE FEELS, beside its name - the one place the player sees that answering its
+			// offers late or not at all has a cost (spec 2026-09-29-ops-event-bus section 3).
+			Entry->AirlineText->SetText(Row->GetSatisfaction().IsEmpty() ? Who
+				: FText::Format(NSLOCTEXT("AirportMgr", "OfferWhoMood", "{0}  \u00B7  {1}"), Who, Row->GetSatisfaction()));
 		}
 		if (Entry->TypeText != nullptr)
 		{
