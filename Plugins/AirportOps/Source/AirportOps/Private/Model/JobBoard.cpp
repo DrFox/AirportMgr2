@@ -50,8 +50,7 @@ void UJobBoard::OnBeforeRestore()
 	Jobs.Reset();
 	Turnarounds.Reset();
 	Vehicles.Reset();
-	// RE-SEEDED on the next tick: the depots are restored with the network, and each gets its
-	// placeholder fleet back, Idle at home.
+	// CLEARED, THEN RESTORED FROM THE BLOB (it is saved): a snapshot without it re-seeds each depot once, which is the old behaviour.
 	SeededDepots.Reset();
 	++FleetRevision;
 }
@@ -346,6 +345,85 @@ FServiceVehicle& UJobBoard::AddVehicleForTest(FName TypeCode, FEntityInstanceId 
 	}
 	++FleetRevision;
 	return Vehicle;
+}
+
+void UJobBoard::ReopenRefusedJob(FServiceJob& Job)
+{
+	Job.State = EServiceJobState::Open;
+	Job.Why = EServiceRefusal::None;
+}
+
+int32 UJobBoard::AddPurchasedVehicle(FName TypeCode, FEntityInstanceId Home)
+{
+	if (!Home.IsSet() || TypeCode.IsNone())
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Fleet: purchase of '%s' for depot %d refused - no depot or no type"),
+			*TypeCode.ToString(), Home.Index);
+		return 0;
+	}
+	const FServiceVehicleType Type = TypeFor(TypeCode);
+	FServiceVehicle& Vehicle = Vehicles.AddDefaulted_GetRef();
+	Vehicle.Id = NextVehicleId++;
+	Vehicle.TypeCode = TypeCode;
+	Vehicle.Role = Type.Role;
+	Vehicle.Home = Home;
+	Vehicle.State = EServiceVehicleState::Idle;
+	Vehicle.Cargo = FFuelRolePolicy::CapacityOf(Type);
+	const int32 Id = Vehicle.Id;
+	++FleetRevision;
+
+	// A NEW VEHICLE IS A CHANGE A REFUSED JOB CAN ANSWER DIFFERENTLY - see the header. Re-opened, not bid
+	// here: the next Step bids it, in its one sequence (the bus's FleetChanged wakes that pass).
+	int32 Reopened = 0;
+	for (FServiceJob& Job : Jobs)
+	{
+		if (Job.State == EServiceJobState::Unserviceable && Job.Role == Type.Role)
+		{
+			ReopenRefusedJob(Job);
+			++Reopened;
+		}
+	}
+	UE_LOG(LogAirportOps, Log, TEXT("Fleet: depot %d gains bought vehicle %d %s (%.0f L at %.0f L/min); %d refused job(s) ask again"),
+		Home.Index, Id, *TypeCode.ToString(), FFuelRolePolicy::CapacityOf(Type), Type.RatePerMinute, Reopened);
+	return Id;
+}
+
+bool UJobBoard::CanRemoveVehicle(int32 VehicleId) const
+{
+	const FServiceVehicle* Vehicle = FindVehicle(VehicleId);
+	return Vehicle != nullptr && Vehicle->State == EServiceVehicleState::Idle && Vehicle->AgentId == 0
+		&& Vehicle->CurrentJob == 0 && Vehicle->Queue.Num() == 0;
+}
+
+bool UJobBoard::RemoveVehicle(int32 VehicleId)
+{
+	if (!CanRemoveVehicle(VehicleId))
+	{
+		return false;
+	}
+	const int32 Index = Vehicles.IndexOfByPredicate([VehicleId](const FServiceVehicle& V) { return V.Id == VehicleId; });
+	UE_LOG(LogAirportOps, Log, TEXT("Fleet: vehicle %d %s leaves depot %d"),
+		VehicleId, *Vehicles[Index].TypeCode.ToString(), Vehicles[Index].Home.Index);
+	Vehicles.RemoveAt(Index);
+	++FleetRevision;
+	return true;
+}
+
+int32 UJobBoard::VehiclesAt(FEntityInstanceId Depot) const
+{
+	int32 Count = 0;
+	for (const FServiceVehicle& Vehicle : Vehicles)
+	{
+		Count += Vehicle.Home == Depot ? 1 : 0;
+	}
+	return Count;
+}
+
+FString UJobBoard::VehicleLine(const FServiceVehicle& Vehicle) const
+{
+	const FString Dot = TEXT(" · ");
+	return FString::Printf(TEXT("%s #%d"), *Vehicle.TypeCode.ToString(), Vehicle.Id) + Dot + VehicleDoing(Vehicle)
+		+ Dot + FText::AsNumber(FMath::RoundToInt(Vehicle.Cargo)).ToString() + TEXT(" L");
 }
 
 FServiceJob& UJobBoard::AddJobForTest(int32 AircraftId, EServiceJobState State, EServiceRefusal Why, uint32 RefusedAtRevision)
@@ -1038,8 +1116,7 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	{
 		if (Job.State == EServiceJobState::Unserviceable && Revision != Job.RefusedAtRevision)
 		{
-			Job.State = EServiceJobState::Open;
-			Job.Why = EServiceRefusal::None;
+			ReopenRefusedJob(Job);
 			UE_LOG(LogAirportOps, Log, TEXT("Fuel: the airport changed; aircraft %d asks again"), Job.AircraftId);
 		}
 	}
@@ -1184,8 +1261,7 @@ FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) cons
 		{
 			continue;
 		}
-		Lines.Add(FString::Printf(TEXT("%s #%d"), *Vehicle.TypeCode.ToString(), Vehicle.Id) + Dot + VehicleDoing(Vehicle)
-			+ Dot + Litres(Vehicle.Cargo));
+		Lines.Add(VehicleLine(Vehicle));
 
 		// ITS JOBS IN THE ORDER IT WILL DO THEM: the one it is on, then its queue.
 		TArray<int32> Order;
