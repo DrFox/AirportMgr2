@@ -1029,7 +1029,7 @@ bool FPlotPresenterRevealTest::RunTest(const FString& Parameters)
 	TestWorld.Buildings->ShowPlotGhosts(/*bVisible=*/true, A);
 	const int32 OnlyA = Plots->GetGhostInstanceCountForTest();
 	TestTrue(TEXT("the revealed depot draws its ghosts"), OnlyA > 0);
-	TestTrue(TEXT("and the other depot's are not drawn"), OnlyA < Every);
+	TestEqual(TEXT("and the other depot's are not drawn - two identical yards, so exactly half"), OnlyA * 2, Every);
 	TestTrue(TEXT("the ghost layer is visible for it"), Plots->AreGhostsVisible());
 	TestEqual(TEXT("capacity is a fact about the yards, not about what is drawn"), Plots->GetGhostCount(), Capacity);
 

@@ -96,12 +96,14 @@ public:
 	virtual UObject& AsPersistentObject() override { return *this; }
 
 	/**
-	 * Jobs, turnarounds AND vehicles are cleared, not restored from a blob: all three name agents
-	 * (AircraftId, a vehicle's AgentId), and UOpsRuntime::LoadFromSlot always clears every agent
-	 * before calling OpsSave::Restore - so any id they held is stale the instant a load happens,
-	 * whether or not this snapshot even has a Fuel blob. The vehicles come back from the Fuel blob
-	 * (Serialize normalises them Idle at home), and SeededDepots with them. Before the fix this descends from, a truck sent home, then a load,
-	 * left its entry in GoingHome forever and its depot one truck short for the rest of the session.
+	 * Jobs, turnarounds AND vehicles are CLEARED here: all three name agents (AircraftId, a
+	 * vehicle's AgentId), and UOpsRuntime::LoadFromSlot always clears every agent before calling
+	 * OpsSave::Restore - so any id they held is stale the instant a load happens, whether or not
+	 * this snapshot even has a Fuel blob. Jobs and turnarounds (Transient) stay cleared. Vehicles
+	 * and SeededDepots are saved, so a snapshot WITH a Fuel blob then restores them, and Serialize
+	 * normalises each vehicle Idle at home with its agent forgotten. Before the fix this descends
+	 * from, a truck sent home, then a load, left its entry in GoingHome forever and its depot one
+	 * truck short for the rest of the session.
 	 */
 	virtual void OnBeforeRestore() override;
 
@@ -464,10 +466,11 @@ private:
 	/**
 	 * The placeholder fleet brought in line with the depots (spec §3.4): a live depot seen for the
 	 * first time gets Trucks x FleetTypes() vehicles, Idle at home and full; a vehicle whose depot is
-	 * gone is withdrawn (its agent retired, its jobs back to the board); a vehicle whose agent vanished
-	 * under it (retired by somebody else) is put back Idle at home, its job re-opened.
+	 * gone is withdrawn (its agent retired, its jobs back to the board) and credited its resale value
+	 * to Ledger, dated by Clock; a vehicle whose agent vanished under it (retired by somebody else) is
+	 * put back Idle at home, its job re-opened.
 	 */
-	void SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network);
+	void SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
 	/** Every Open job bid and assigned, or refused. See BidFor and Judge. */
 	void AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);

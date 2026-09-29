@@ -586,7 +586,8 @@ bool UJobBoard::CouldServe(const URoadNetwork& Network, const FAirframe& Airfram
 {
 	// THE CANDIDATES A DEPOT HAS OR WILL HAVE: its vehicles once SyncFleet has seeded it, else the
 	// STARTER fleet its Trucks would give it - an offer can be asked before the first tick. A depot the
-	// player drew has Trucks 0 and, until a vehicle is bought, no candidate: its offers say "no fuel".
+	// player drew has Trucks 0 and, until a vehicle is bought, no candidate: its offers say "no fuel";
+	// so has a seeded depot whose fleet was sold.
 	TArray<FCandidate> Candidates;
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
@@ -606,7 +607,11 @@ bool UJobBoard::CouldServe(const URoadNetwork& Network, const FAirframe& Airfram
 				Candidates.Add({ DepotId, Vehicle.TypeCode, Vehicle.Id });
 			}
 		}
-		if (!bHasVehicles && Depot.Trucks > 0)
+		// SEEDED IS NOT "NOT YET SEEDED": a starter depot whose fleet the player sold has Trucks > 0 and
+		// no vehicles, and inventing its starter fleet here said "fuel OK" on the offer while the board
+		// refused the aircraft NoVehicles (final review 2026-09-30).
+		// ENFORCED BY: AirportOps.Fuel.CouldServe.SoldOutStarterDepotCannot
+		if (!bHasVehicles && Depot.Trucks > 0 && !SeededDepots.Contains(DepotId))
 		{
 			for (const FName TypeCode : FleetTypes())
 			{

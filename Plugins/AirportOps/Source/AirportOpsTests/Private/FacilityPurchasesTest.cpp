@@ -2,6 +2,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/FacilityPurchases.h"
+#include "Model/GroundTraffic.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/OpsDefinition.h"
@@ -240,6 +241,33 @@ bool FFacilitySellTest::RunTest(const FString&)
 	TestEqual(TEXT("as a Fleet entry"), static_cast<int32>(F.Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Fleet));
 	TestNull(TEXT("and it is gone"), F.Board->FindVehicle(Bought.VehicleId));
 	TestEqual(TEXT("one FleetChanged published"), F.Bus.QueuedCount(), Queued + 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityDepotRemovedCreditsTest, "AirportOps.Model.Facility.DepotRemovalCreditsItsVehicles",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityDepotRemovedCreditsTest::RunTest(const FString&)
+{
+	// RULED 2026-09-30: a vehicle withdrawn because its depot went (bulldoze, undo of the placement) is
+	// credited its resale value, as a sale would have been. Before it, the player paid 90000 for a bowser
+	// and removing the depot took it without a penny back.
+	FFacilityFixture F;
+	F.Board->Ledger = F.Ledger;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPurchaseResult Bought = F.Shop->BuyVehicle(*F.Net, F.Depot, TEXT("FUEL"));
+	if (!TestTrue(TEXT("setup: a vehicle is bought"), Bought.Succeeded())) { return false; }
+	const double AfterBuy = F.Ledger->Balance();
+	const int32 EntriesBefore = F.Ledger->Entries().Num();
+
+	F.Net->RemoveEntity(F.Depot);
+	F.Board->Step(*Traffic, *F.Net, *F.Clock);
+	TestNull(TEXT("the vehicle is withdrawn with its depot"), F.Board->FindVehicle(Bought.VehicleId));
+	TestEqual(TEXT("and credited Price x ResaleFraction"), F.Ledger->Balance(), AfterBuy + 45000.0, 1e-6);
+	if (!TestEqual(TEXT("in exactly one entry"), F.Ledger->Entries().Num(), EntriesBefore + 1)) { return true; }
+	TestEqual(TEXT("filed under Fleet, where its purchase was"),
+		static_cast<int32>(F.Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Fleet));
+	F.Board->Step(*Traffic, *F.Net, *F.Clock);
+	TestEqual(TEXT("and only once - the next sync finds nothing to credit"), F.Ledger->Entries().Num(), EntriesBefore + 1);
 	return true;
 }
 

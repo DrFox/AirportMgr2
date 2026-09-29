@@ -59,6 +59,13 @@ struct AIRPORTOPS_API FFuelVehicleSpec
 
 	/** The share of Price an idle one sells back for (R5). */
 	UPROPERTY(EditAnywhere, Category = "Fleet", meta = (ClampMin = "0.0", ClampMax = "1.0")) double ResaleFraction = 0.5;
+
+	/**
+	 * What one is worth back: Price x ResaleFraction. ONE RULE for the two ways a vehicle leaves for
+	 * money - UFacilityPurchases::RefundOf (a sale) and UJobBoard::SyncFleet (its depot removed) - so
+	 * the card's "Sell" label and a bulldozer's credit cannot drift apart.
+	 */
+	double ResaleValue() const { return Price * ResaleFraction; }
 };
 
 /**

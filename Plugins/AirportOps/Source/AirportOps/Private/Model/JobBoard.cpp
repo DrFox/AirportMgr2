@@ -521,7 +521,7 @@ bool UJobBoard::RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic
 	return true;
 }
 
-void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network)
+void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	// NEW DEPOTS GET THEIR PLACEHOLDER FLEET (spec §3.4): Trucks of every kind in FleetTypes, Idle and
 	// full. Once per depot, so a vehicle that is out never gets a twin at home.
@@ -598,6 +598,21 @@ void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network)
 		}
 		UE_LOG(LogAirportOps, Log, TEXT("Fleet: depot %d removed; vehicle %d %s withdrawn, %d job(s) back to the board"),
 			Vehicle.Home.Index, Vehicle.Id, *Vehicle.TypeCode.ToString(), Reopened);
+		// PAID FOR, AS A SALE WOULD BE (ruled 2026-09-30): the player bought it, and removing its depot
+		// - a bulldoze, an undo of the placement - is not a reason to lose its value. Resale, not the
+		// price: a vehicle that leaves for money leaves at one rate (FFuelVehicleSpec::ResaleValue).
+		// Undo never touches this (R8): a re-placed depot does not buy the vehicle back.
+		// ENFORCED BY: AirportOps.Model.Facility.DepotRemovalCreditsItsVehicles
+		const FFuelVehicleSpec Spec = SpecFor(Vehicle.TypeCode);
+		const double Credit = Spec.ResaleValue();
+		if (Ledger != nullptr && Credit > 0.0)
+		{
+			const FText Name = Spec.DisplayName.IsEmpty() ? FText::FromName(Vehicle.TypeCode) : Spec.DisplayName;
+			Ledger->Post(Clock.Now(), ELedgerCategory::Fleet, Credit,
+				FText::Format(NSLOCTEXT("Ledger", "DepotRemovedVehicle", "{0} #{1} - depot removed"), Name, FText::AsNumber(Vehicle.Id)));
+			UE_LOG(LogAirportOps, Log, TEXT("Purchase: depot %d removed; vehicle %d %s credited %.0f"),
+				Vehicle.Home.Index, Vehicle.Id, *Vehicle.TypeCode.ToString(), Credit);
+		}
 		Vehicles.RemoveAt(Index);
 		++FleetRevision;
 	}
@@ -1044,7 +1059,7 @@ double UJobBoard::NextDeadline(double Now) const
 bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	++StepCount;
-	SyncFleet(Traffic, Network);
+	SyncFleet(Traffic, Network, Clock);
 
 	// TIMED STEPS THAT ARE DUE: a trip's pumping, a refill. GAME TIME - a pause stops both. The vehicle
 	// is left parked and jobless, and decides where next below, AFTER the bids: a trip's remainder is

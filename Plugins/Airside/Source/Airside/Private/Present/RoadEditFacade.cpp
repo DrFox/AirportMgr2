@@ -1232,7 +1232,7 @@ bool URoadEditFacade::AddEntityModule(FEntityInstanceId Entity, EDepotModule Mod
 		return false;
 	}
 	{
-		// A SCOPE AND CommitAndNotify, the one door every mutator notifies through - then closed, so its
+		// A SCOPE AND CommitAndNotify, as the facade's other mutators notify - then closed, so its
 		// destructor has pushed the step BEFORE the history is cleared below.
 		FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("buy module"));
 		Network->AddEntityModule(Entity, Module);

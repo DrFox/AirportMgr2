@@ -2036,6 +2036,38 @@ bool FFuelCouldServeTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * A SEEDED DEPOT WHOSE STARTER FLEET WAS SOLD has no candidate (final review, 2026-09-30). CouldServe
+ * used to read Trucks > 0 with no vehicles as "not seeded yet" and invent the starter fleet, so the
+ * offer row said fuel OK while the board refused the aircraft NoVehicles.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelCouldServeSoldOutTest, "AirportOps.Fuel.CouldServe.SoldOutStarterDepotCannot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelCouldServeSoldOutTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	TestTrue(TEXT("setup: before the first tick the starter fleet it will have can serve"),
+		Fixture.Service->CouldServe(*Fixture.Net, Airframe));
+	Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+	TArray<int32> Ids;
+	for (const FServiceVehicle& Vehicle : Fixture.Service->GetVehicles())
+	{
+		Ids.Add(Vehicle.Id);
+	}
+	if (!TestTrue(TEXT("setup: the depot was seeded"), Ids.Num() > 0)) { return false; }
+	for (const int32 Id : Ids)
+	{
+		TestTrue(TEXT("setup: each idle starter vehicle sells"), Fixture.Service->RemoveVehicle(Id));
+	}
+	TestFalse(TEXT("sold out, the depot cannot fuel it - the row agrees with the board's NoVehicles"),
+		Fixture.Service->CouldServe(*Fixture.Net, Airframe));
+	return true;
+}
+
+/**
  * FUEL BY THE LITRE (spec 2026-09-28-fuel-litres section 3): the trailer's 1,000 L tank cannot
  * fuel a Saab in one visit, so a load bigger than the vehicle's tank takes several trips, with a
  * refill at the depot between them - and the aircraft waits for all of them.

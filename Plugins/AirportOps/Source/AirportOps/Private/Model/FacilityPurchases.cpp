@@ -84,7 +84,7 @@ FText UFacilityPurchases::VehicleName(FName TypeCode) const
 double UFacilityPurchases::RefundOf(FName TypeCode) const
 {
 	const FFuelVehicleSpec* Spec = JobBoard != nullptr ? JobBoard->VehicleSpecs.Find(TypeCode) : nullptr;
-	return Spec != nullptr ? Spec->Price * Spec->ResaleFraction : 0.0;
+	return Spec != nullptr ? Spec->ResaleValue() : 0.0;
 }
 
 void UFacilityPurchases::LogRefused(int32 Depot, const FString& What, EPurchaseRefusal Why) const

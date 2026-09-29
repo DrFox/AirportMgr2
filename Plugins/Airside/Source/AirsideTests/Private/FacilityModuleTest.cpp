@@ -115,7 +115,7 @@ bool FFacilityModuleFacadeTest::RunTest(const FString&)
 	TestEqual(TEXT("one more bay is lit - the Topology rebuild reached the buildings actor"), Plots->GetModuleCount(), Built + 1);
 	TestEqual(TEXT("and one fewer is ghosted"), Plots->GetGhostCount(), Ghosts - 1);
 	TestFalse(TEXT("R8: the purchase is a checkpoint - an undo would drop the shed and keep the money"), Facade->CanUndo());
-	TestFalse(TEXT("a stand-shaped id is refused at the door"), Facade->AddEntityModule(FEntityInstanceId(), EDepotModule::Shed));
+	TestFalse(TEXT("an unset id is refused at the door"), Facade->AddEntityModule(FEntityInstanceId(), EDepotModule::Shed));
 	return true;
 }
 
