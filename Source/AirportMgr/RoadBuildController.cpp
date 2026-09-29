@@ -808,9 +808,25 @@ FEntityInstanceId ARoadBuildController::SelectedFacility() const
 	return DepotForSelection(Target, GetSelection());
 }
 
+UOpsRuntime* ARoadBuildController::GetOpsRuntime() const
+{
+	return OpsRuntimeOverride != nullptr ? OpsRuntimeOverride.Get() : UOpsRuntimeSubsystem::Get(GetWorld());
+}
+
+void ARoadBuildController::SelectForTest(const FSelection& InSelection)
+{
+	// THROUGH THE CONTEXT'S POINTER, the way the Select tool writes it (FBuildSession::GetSelection's own
+	// comment) - not a second setter on the session.
+	const FToolContext Context = Session.MakeContext(Target, FVector2D::ZeroVector, FBuildSessionTunables(), false, false);
+	if (Context.Selection != nullptr)
+	{
+		*Context.Selection = InSelection;
+	}
+}
+
 FFacilityQuote ARoadBuildController::QuoteSelectedFacility() const
 {
-	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	const UOpsRuntime* Runtime = GetOpsRuntime();
 	const FEntityInstanceId Id = SelectedFacility();
 	return Runtime != nullptr && Id.IsSet() ? Runtime->QuoteFacility(Id) : FFacilityQuote();
 }
@@ -823,7 +839,7 @@ bool ARoadBuildController::CanBuySelectedModule() const
 
 void ARoadBuildController::BuySelectedModule()
 {
-	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	UOpsRuntime* Runtime = GetOpsRuntime();
 	const FFacilityQuote Quote = QuoteSelectedFacility();
 	if (Runtime == nullptr || Quote.Modules.Num() == 0)
 	{
@@ -846,7 +862,7 @@ bool ARoadBuildController::CanBuyChosenVehicle() const
 
 void ARoadBuildController::BuyChosenVehicle()
 {
-	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	UOpsRuntime* Runtime = GetOpsRuntime();
 	const FEntityInstanceId Depot = SelectedFacility();
 	if (Runtime == nullptr || !Depot.IsSet() || ChosenVehicleType.IsNone())
 	{
@@ -871,7 +887,7 @@ bool ARoadBuildController::CanSellArmedVehicle() const
 
 void ARoadBuildController::SellArmedVehicle()
 {
-	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	UOpsRuntime* Runtime = GetOpsRuntime();
 	if (Runtime == nullptr || ArmedSellVehicle == 0)
 	{
 		UE_LOG(LogRoadBuild, Warning, TEXT("Sell vehicle: nothing armed, or no ops runtime."));

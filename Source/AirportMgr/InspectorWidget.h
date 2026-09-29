@@ -13,6 +13,7 @@ class ARoadNetworkActor;
 class UBuildBarWidget;
 class UButton;
 class UInspectorWidget;
+class UOpsRuntime;
 class UPanelWidget;
 class UUiButton;
 class UTextBlock;
@@ -168,6 +169,11 @@ public:
 	TArray<FUiMenuItem> BuyVehicleItemsForTest() const { return BuyVehicleItems(); }
 	int32 FleetRowCountForTest() const { return FleetRows.Num(); }
 	bool IsSellEnabledForTest(int32 Row) const;
+	/** The card's clicks, raised through each widget's OWN delegate so an unbound button fails the test. */
+	void ClickSellForTest(int32 Row);
+	FString SellCaptionForTest(int32 Row) const;
+	void ClickBuyModuleForTest();
+	void ChooseBuyVehicleForTest(int32 Line);
 
 	/**
 	 * How long an agent must have stood behind something before the Unstick button lights up, s.
@@ -287,6 +293,11 @@ private:
 
 	TArray<FUiMenuItem> BuyVehicleItems() const;
 	void RebuildFleetRows();
+	/** Unarm every fleet row and the controller's armed sale - a new card, a deselect or a rebuild. */
+	void DisarmSale();
+	/** The runtime the card quotes: the controller's (ARoadBuildController::GetOpsRuntime), else the
+	 *  game instance's. */
+	const UOpsRuntime* OpsRuntime() const;
 	UFUNCTION() void HandleBuyModule();
 	UFUNCTION() void HandleBuyVehicleChosen(int32 Index);
 

@@ -578,6 +578,18 @@ public:
 	void SellArmedVehicle();
 
 	/**
+	 * The ops runtime the depot verbs forward to: the one SetOpsRuntimeForTest gave, else the game
+	 * instance's (null in the editor mode). A headless world has no game instance, so without the
+	 * override the verbs could never be driven end to end by a test.
+	 */
+	UOpsRuntime* GetOpsRuntime() const;
+	/** See GetOpsRuntime. SetTargetForTest's precedent. */
+	void SetOpsRuntimeForTest(UOpsRuntime* InRuntime) { OpsRuntimeOverride = InRuntime; }
+	/** Writes the session's selection as a Select-tool click would - a headless test has no screen to
+	 *  pick from. PlayerTickForTest's precedent. */
+	void SelectForTest(const FSelection& InSelection);
+
+	/**
 	 * What the next click would do, run through the snap chain. False only when the
 	 * cursor is not over the road plane at all.
 	 *
@@ -927,4 +939,7 @@ private:
 	/** See ChooseVehicleToBuy / ArmSellVehicle. Session state, never saved. */
 	FName ChosenVehicleType;
 	int32 ArmedSellVehicle = 0;
+
+	/** See SetOpsRuntimeForTest. Null in play: GetOpsRuntime asks the game instance. */
+	UPROPERTY(Transient) TObjectPtr<UOpsRuntime> OpsRuntimeOverride;
 };

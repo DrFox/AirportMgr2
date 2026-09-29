@@ -202,20 +202,21 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	};
 	Panel(ShedsRow, UHorizontalBox::StaticClass(), TEXT("ShedsRow"));
 	RowText(ShedsText, TEXT("ShedsText"), ShedsRow);
-	if (BuyModuleButton == nullptr && Actions.IsValidIndex(BuyModuleActionIndex))
+	// RowText's rule: built only into a row that exists, never an orphan.
+	if (UHorizontalBox* Box = Cast<UHorizontalBox>(ShedsRow); Box != nullptr && BuyModuleButton == nullptr && Actions.IsValidIndex(BuyModuleActionIndex))
 	{
 		BuyModuleButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), TEXT("BuyModuleButton"));
 		BuyModuleButton->SetLabel(Actions[BuyModuleActionIndex].Label);
 		BuyModuleButton->Build(*Style, EUiButtonKind::Secondary);
-		if (UHorizontalBox* Box = Cast<UHorizontalBox>(ShedsRow)) { Box->AddChildToHorizontalBox(BuyModuleButton); }
+		Box->AddChildToHorizontalBox(BuyModuleButton);
 	}
 	Panel(VehiclesRow, UHorizontalBox::StaticClass(), TEXT("VehiclesRow"));
 	RowText(VehiclesText, TEXT("VehiclesText"), VehiclesRow);
-	if (BuyVehicleMenu == nullptr && Actions.IsValidIndex(BuyVehicleActionIndex))
+	if (UHorizontalBox* Box = Cast<UHorizontalBox>(VehiclesRow); Box != nullptr && BuyVehicleMenu == nullptr && Actions.IsValidIndex(BuyVehicleActionIndex))
 	{
 		BuyVehicleMenu = WidgetTree->ConstructWidget<UUiMenuButton>(UUiMenuButton::StaticClass(), TEXT("BuyVehicleMenu"));
 		BuyVehicleMenu->Build(*Style, Actions[BuyVehicleActionIndex].Label);
-		if (UHorizontalBox* Box = Cast<UHorizontalBox>(VehiclesRow)) { Box->AddChildToHorizontalBox(BuyVehicleMenu); }
+		Box->AddChildToHorizontalBox(BuyVehicleMenu);
 	}
 	Panel(FleetList, UVerticalBox::StaticClass(), TEXT("FleetList"));
 	for (const int32 Found : { BuyModuleActionIndex, BuyVehicleActionIndex, SellVehicleActionIndex })
@@ -297,6 +298,9 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 {
 	if (Target == nullptr || !Selection.IsSet())
 	{
+		// NOTHING SELECTED DISARMS TOO - a sale armed and then clicked away from must not survive to the
+		// next time this depot is picked.
+		if (LastSelection.IsSet()) { DisarmSale(); }
 		SetShown(false);
 		bDepartEnabled = false;
 		LastSelection = FSelection();
@@ -316,6 +320,9 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		// which disarms any sale armed on the old card (RebuildFleetRows).
 		if (BuyVehicleMenu != nullptr) { BuyVehicleMenu->Close(); }
 		LastFleetKey = TEXT("!");
+		// DISARMED HERE, not only by the rebuild the key above forces: a card that returns early (an
+		// agent that vanished) never reaches ShowFacilityQuote, and the old depot's sale stays armed.
+		DisarmSale();
 	}
 
 	// ONE CARD PER KIND, counted at compile time (review fix 3): the branches below are None
@@ -585,11 +592,13 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			// that replaces "Ready" - through the ops subsystem, for the fuel line's reason above:
 			// the airport actor is Airside's and may not know what a job is. An off-road depot
 			// keeps "Cannot dispatch", which names the fix; its backlog is empty anyway.
-			if (const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()); Runtime != nullptr && S.bReachable)
+			// THE ONE selection->depot WALK (ruling C4) - the controller's verbs ask the same function.
+			const FEntityInstanceId DepotId = ARoadBuildController::DepotForSelection(Target, Selection);
+			if (const UOpsRuntime* Runtime = OpsRuntime(); Runtime != nullptr && S.bReachable)
 			{
 				if (const UJobBoard* Board = Runtime->GetJobBoard())
 				{
-					const FDepotBacklog Backlog = Board->DescribeDepot(Target->GetNetwork()->EntityIdAt(Selection.Id),
+					const FDepotBacklog Backlog = Board->DescribeDepot(DepotId,
 						Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0);
 					Status = Backlog.Summary;
 					if (!Backlog.Detail.IsEmpty())
@@ -599,9 +608,9 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 				}
 			}
 			// THE PURCHASE ROWS AND "NO VEHICLES", from the one quote (facility-upgrades spec §4).
-			if (const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
+			if (const UOpsRuntime* Runtime = OpsRuntime(); Runtime != nullptr && DepotId.IsSet())
 			{
-				CardQuote = Runtime->QuoteFacility(Target->GetNetwork()->EntityIdAt(Selection.Id));
+				CardQuote = Runtime->QuoteFacility(DepotId);
 			}
 			Status = DepotStatus(CardQuote, S.bReachable, Status);
 		}
@@ -843,10 +852,10 @@ void UInspectorWidget::ShowFacilityQuote(const FFacilityQuote& Quote)
 
 void UInspectorWidget::RebuildFleetRows()
 {
+	// A REBUILD DISARMS: the armed vehicle may be the one that just left the list.
+	DisarmSale();
 	if (FleetList != nullptr) { FleetList->ClearChildren(); }
 	FleetRows.Reset();
-	// A REBUILD DISARMS: the armed vehicle may be the one that just left the list.
-	if (ARoadBuildController* C = Controller()) { C->ArmSellVehicle(0); }
 	if (FleetList == nullptr || PanelStyle == nullptr) { return; }
 	for (const FFleetRowQuote& Facts : LastQuote.Fleet)
 	{
@@ -924,6 +933,47 @@ void UInspectorWidget::HandleBuyVehicleChosen(int32 Index)
 }
 
 void UInspectorWidget::HandleBuyModule() { RunAction(BuyModuleActionIndex); }
+
+void UInspectorWidget::DisarmSale()
+{
+	// BOTH HALVES: the row's caption state and the controller's armed id. The rows need no controller, so
+	// a panel with none still stops saying "click again".
+	for (UInspectorFleetRow* Row : FleetRows) { if (Row != nullptr) { Row->bArmed = false; } }
+	if (ARoadBuildController* C = Controller()) { C->ArmSellVehicle(0); }
+}
+
+const UOpsRuntime* UInspectorWidget::OpsRuntime() const
+{
+	// THE CONTROLLER'S, so the card reads the runtime its verbs act on; the subsystem when there is none.
+	if (const ARoadBuildController* C = Controller()) { return C->GetOpsRuntime(); }
+	return UOpsRuntimeSubsystem::Get(GetWorld());
+}
+
+void UInspectorWidget::ClickSellForTest(int32 Row)
+{
+	// THROUGH THE BUTTON'S DELEGATE, so an unbound Sell goes red here rather than passing.
+	if (FleetRows.IsValidIndex(Row) && FleetRows[Row]->SellButton != nullptr) { FleetRows[Row]->SellButton->OnClicked.Broadcast(); }
+}
+
+FString UInspectorWidget::SellCaptionForTest(int32 Row) const
+{
+	const UTextBlock* Caption = FleetRows.IsValidIndex(Row) && FleetRows[Row]->SellButton != nullptr ? FleetRows[Row]->SellButton->GetLabel() : nullptr;
+	return Caption != nullptr ? Caption->GetText().ToString() : FString();
+}
+
+void UInspectorWidget::ClickBuyModuleForTest()
+{
+	if (BuyModuleButton != nullptr) { BuyModuleButton->OnClicked.Broadcast(); }
+}
+
+void UInspectorWidget::ChooseBuyVehicleForTest(int32 Line)
+{
+	// AS AN OPEN WOULD: the lines are asked first (that is what fills ShownVehicleCodes), then the
+	// menu's own delegate raises the choice.
+	if (BuyVehicleMenu == nullptr || !BuyVehicleMenu->Items) { return; }
+	BuyVehicleMenu->Items();
+	BuyVehicleMenu->OnChosen.Broadcast(Line);
+}
 
 bool UInspectorWidget::AreFacilityRowsShownForTest() const
 {
