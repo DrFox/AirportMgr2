@@ -117,6 +117,13 @@ bool FFlightBoardEventsAcceptedTest::RunTest(const FString&)
 	TestFalse(TEXT("a second accept of the same flight is refused"), F.Board->Accept(*F.Traffic, *F.Net, *F.Clock, *Flight));
 	F.Bus.Drain();
 	TestEqual(TEXT("and publishes nothing more"), F.Accepted.Num(), 1);
+
+	// NO STAND FREE (review M6): the fixture's one stand is held by the flight above, so Reserve refuses the
+	// next offer - the refusal the inbox greys out, and not an accept.
+	UFlight* Second = F.Offer(TEXT("Cumbria"));
+	TestFalse(TEXT("an offer with no stand free is refused"), F.Board->Accept(*F.Traffic, *F.Net, *F.Clock, *Second));
+	F.Bus.Drain();
+	TestEqual(TEXT("and a refusal by the allocator publishes nothing"), F.Accepted.Num(), 1);
 	return true;
 }
 

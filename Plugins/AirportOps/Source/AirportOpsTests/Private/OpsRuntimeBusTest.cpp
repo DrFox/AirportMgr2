@@ -489,6 +489,9 @@ bool FOpsRuntimeAcceptDirtiesAlertsTest::RunTest(const FString&)
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe.Wingspan = 3400.0;
 	Flight->AirlineId = TEXT("Cumbria");
+	// A LONG LEAD, so the arrival's own clock entry cannot come due inside this test and dirty the pass for a
+	// reason that is not the accept (review M3).
+	Flight->LeadTimeSeconds = 1.0e7;
 	UFlightBoard* Board = Runtime->GetFlightBoard();
 	Board->AddOffer(*Runtime->GetClock(), Flight);
 	UGroundTraffic* Model = TestWorld.Actor->GetTraffic()->GetModel();
@@ -521,6 +524,8 @@ bool FOpsRuntimeTurnaroundShortfallTest::RunTest(const FString&)
 	Flight->Phase = EFlightPhase::TaxiOut;
 	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);
 	const double Before = Runtime->GetAirlines()->Find(Airline)->Satisfaction;
+	// A ZERO PENALTY WOULD MAKE THE ASSERTION BELOW TRUE WITH NOTHING WIRED (review M4).
+	if (!TestTrue(TEXT("the scenario's shortfall penalty is a real cost"), Runtime->GetAirlines()->Tuning.ShortfallPenalty > 0.0)) { return false; }
 
 	FTurnaroundEndedEvent Event;
 	Event.AircraftAgentId = 7;
@@ -530,6 +535,133 @@ bool FOpsRuntimeTurnaroundShortfallTest::RunTest(const FString&)
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("an unfuelled departure costs the flight's airline the scenario's shortfall penalty"),
 		Runtime->GetAirlines()->Find(Airline)->Satisfaction, Before - Runtime->GetAirlines()->Tuning.ShortfallPenalty, 1e-9);
+	return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeDetachUnhooksTest, "AirportOps.Present.Bus.DetachUnhooksEveryPublisher",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeDetachUnhooksTest::RunTest(const FString&)
+{
+	// EVERY SUBOBJECT ATTACH GAVE THE BUS, TAKEN BACK (review M7): a publisher left pointing at the bus after a
+	// detach publishes into whatever comes next - the stage 3 review's reason, which the roster had escaped.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	TestTrue(TEXT("attached, the roster publishes onto the runtime's bus"), Runtime->GetAirlines()->Bus == &Runtime->GetBus());
+	AddExpectedMessagePlain(TEXT("OpsRuntime attached to nothing"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	Runtime->Attach(nullptr);
+	TestNull(TEXT("the flight board's bus is cleared"), Runtime->GetFlightBoard()->Bus);
+	TestNull(TEXT("the job board's"), Runtime->GetJobBoard()->Bus);
+	TestNull(TEXT("the ledger's"), Runtime->GetLedger()->Bus);
+	TestNull(TEXT("the alerts'"), Runtime->GetAlerts()->Bus);
+	TestNull(TEXT("and the airline roster's"), Runtime->GetAirlines()->Bus);
+	return true;
+}
+
+namespace
+{
+	/** RuntimeE2E: a guideline line in the actor's network, the fuel fixture's shape. Prefixed: unity build. */
+	void RuntimeE2ELayLine(URoadNetwork& Net, const FVector2D& From, const FVector2D& To,
+		FGuidelineNodeId& OutA, FGuidelineNodeId& OutB)
+	{
+		OutA = Net.AddGuidelineNode(From);
+		OutB = Net.AddGuidelineNode(To);
+		FGuidelineEdge Edge;
+		Edge.A = OutA;
+		Edge.B = OutB;
+		Edge.Control = (From + To) * 0.5;
+		Edge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::Aircraft);
+		Edge.AllowedTraffic.Add(ETraversalClass::Emergency);
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.Width = 600.0;
+		Edge.bDerived = true;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeUnfuelledDepartureTest, "AirportOps.Present.Bus.UnfuelledDepartureLowersAirline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeUnfuelledDepartureTest::RunTest(const FString&)
+{
+	// END TO END, NOTHING PUBLISHED BY HAND (review M1): an aircraft parks at a field with no fuel depot, its
+	// turnaround runs out, the job board sends it, and its flight's airline minds. What this proves that no
+	// other test does: the job board's publish, from inside a drain, reaches the roster while the flight is
+	// still the agent's - the order of publication within the drain, not any tier, is what keeps it so.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 60000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	URoadNetwork& Net = *Actor->Network;
+
+	// THE FUEL FIXTURE'S AIRPORT (FuelServiceTest's FFuelFixture::Build + LayRunway), minus the depot: a
+	// north-south taxiway, a runway north of it, a stand facing +X whose pose ray meets the taxiway.
+	FGuidelineNodeId TaxiSouth, TaxiNorth;
+	RuntimeE2ELayLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0), TaxiSouth, TaxiNorth);
+	URoadProfile* Strip = TestProfiles::Runway();
+	const FRoadNodeId West = Net.AddNode(FVector2D(-50000.0, 20000.0));
+	const FRoadNodeId Mid = Net.AddNode(FVector2D(-10000.0, 20000.0));
+	const FRoadNodeId East = Net.AddNode(FVector2D(50000.0, 20000.0));
+	Net.AddStraightSegment(West, Mid, Strip);
+	Net.AddStraightSegment(Mid, East, Strip);
+	const FGuidelineNodeId OnStrip = Net.AddGuidelineNode(FVector2D(-10000.0, 20000.0), false);
+	{
+		FGuidelineEdge ToStrip;
+		ToStrip.A = TaxiNorth;
+		ToStrip.B = OnStrip;
+		ToStrip.Control = FVector2D(-10000.0, 15000.0);
+		ToStrip.AllowedTraffic = FTrafficMask::Only(ETraversalClass::Aircraft);
+		ToStrip.AllowedTraffic.Add(ETraversalClass::Emergency);
+		ToStrip.Direction = EGuidelineDir::Bidirectional;
+		ToStrip.Width = 600.0;
+		ToStrip.bDerived = true;
+		Net.AddGuidelineEdge(MoveTemp(ToStrip));
+	}
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 0.0), 0.0,
+		3600.0, StandDef->PoseRole, StandDef->Trucks);
+	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
+	// THE HAND-LAID LINES ARE THIS FIELD'S GUIDELINE GRAPH: PlaceNode above derived one, and the runway segments
+	// added since would otherwise read as a road the graph is behind - DepartAgent then refuses
+	// GraphBeingEdited for ever (URoadNetwork::AreGuidelinesBehindRoad), which is a drag, not this test.
+	Net.MarkGuidelinesDerived();
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	const FName Airline = TEXT("BusTestUnfuelledAirline");
+	Runtime->GetAirlines()->Ensure(Airline);
+
+	const FRoutePlan Plan = TestGraph::Probe(Net, TaxiSouth, Net.GetEntity(Stand)->PoseNode, ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("the aircraft routes to the stand"), Plan.IsValid())) { return false; }
+	FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	Airframe.TurnaroundSeconds = 60.0;
+	if (!TestTrue(TEXT("and dispatches"), Actor->DispatchAgent(Plan, Airframe))) { return false; }
+	const int32 Aircraft = Actor->GetTraffic()->GetNewestAgentId();
+
+	// ITS FLIGHT, flown by that agent before it parks - what the roster resolves the airline through.
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->AirlineId = Airline;
+	Flight->AgentId = Aircraft;
+	Flight->Phase = EFlightPhase::TaxiIn;
+	Flight->FuelLitres = 2000.0;
+	Flight->Airframe = Airframe;
+	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);
+
+	constexpr float Step = 1.0f / 30.0f;
+	const FAirlineStanding* Row = Runtime->GetAirlines()->Find(Airline);
+	bool bLeft = false;
+	for (int32 Tick = 0; Tick < 30 * 120 && Row->Recent.Num() == 0; ++Tick)
+	{
+		Actor->Tick(Step);
+		Runtime->Tick(Step);
+		const FRoadAgent* Agent = Actor->GetTraffic()->GetModel()->FindAgent(Aircraft);
+		bLeft |= Agent == nullptr || (Agent->Phase != EAgentPhase::Parked && Agent->Phase != EAgentPhase::Taxiing);
+	}
+	TestTrue(TEXT("the aircraft left its stand on its own"), bLeft);
+	if (!TestEqual(TEXT("and its airline heard one thing"), Row->Recent.Num(), 1)) { return false; }
+	TestEqual(TEXT("that it left unfuelled - the depot-less field could not serve it"), Row->Recent[0].Cause, FString(TEXT("left unfuelled")));
+	TestEqual(TEXT("costing the whole shortfall penalty"), Row->Recent[0].Delta, -Runtime->GetAirlines()->Tuning.ShortfallPenalty, 1e-9);
 	return true;
 }
 

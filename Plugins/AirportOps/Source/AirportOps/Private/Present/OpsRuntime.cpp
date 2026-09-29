@@ -321,9 +321,11 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FDayEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
 		[this](const FDayEndedEvent& E) { Airlines->OnDayEnded(E); });
 	// THE FLIGHT BOARD IS HANDED IN, so the job board that published this never learns flights: the roster
-	// resolves the airline through the agent the event names. REACTION, after the Sim tier has settled the
-	// departure's phase change - the flight is still the agent's until it is Gone.
-	// ENFORCED BY: AirportOps.Present.Bus.TurnaroundShortfallReachesAirline
+	// resolves the airline through the agent the event names. WHAT KEEPS THE FLIGHT FINDABLE IS PUBLISH ORDER
+	// WITHIN THE DRAIN, not the tier (review M1): the event is published by the job board's Sim handler for the
+	// aircraft leaving Parked, and the flight board unhooks the agent only on its Gone - a later phase change,
+	// published later, so dispatched in a later round than this.
+	// ENFORCED BY: AirportOps.Present.Bus.TurnaroundShortfallReachesAirline, AirportOps.Present.Bus.UnfuelledDepartureLowersAirline
 	Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
 		[this](const FTurnaroundEndedEvent& E) { Airlines->OnTurnaroundEnded(E, FlightBoard); });
 
@@ -364,9 +366,11 @@ void UOpsRuntime::WireBus()
 	// OVERDRAWN, as soon as money moves - no longer waiting for the offer minute (stage 3). Every post, not
 	// only a sign change: the pass is coalesced, and only Overdrawn reads the balance.
 	Bus.Subscribe<FMoneyPostedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FMoneyPostedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
-	// AN ACCEPT PROMISES A STAND (batch 3 §2): the conditions about accepted flights - HeldStandLost today -
-	// are re-derived on the accept itself, not on whatever unrelated event came next. The arrival queue's
-	// pass joins this event in PR D.
+	// AN ACCEPT CHANGES BOARD STATE, so the pass that reads the board runs (batch 3 §2) - for the pass's own
+	// correctness, not for any alert today: no alert kind can be raised or cleared BY an accept (Reserve holds
+	// only a stand with a pose, and HeldStandLost needs one without - review M2). It is here so the next
+	// condition about accepted flights is right without anyone remembering this line; the arrival queue's pass
+	// joins this event in PR D.
 	// ENFORCED BY: AirportOps.Present.Alerts.AcceptDirtiesAlerts
 	Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferAcceptedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 
@@ -707,11 +711,13 @@ void UOpsRuntime::Detach()
 	}
 	SeenNetwork.Reset();
 	// THE BUS POINTERS GO WITH THE ATTACH: the bus is this runtime's, and a subobject left pointing at it
-	// after a detach is a publish into whatever comes next (stage 3 review).
+	// after a detach is a publish into whatever comes next (stage 3 review). Every one Attach set.
+	// ENFORCED BY: AirportOps.Present.Bus.DetachUnhooksEveryPublisher
 	FlightBoard->Bus = nullptr;
 	Alerts->Bus = nullptr;
 	Ledger->Bus = nullptr;
 	JobBoard->Bus = nullptr;
+	Airlines->Bus = nullptr;
 	// THE QUEUE IS THE OLD ACTOR'S. A new level's traffic numbers its agents from 1 again, so a
 	// stale Parked for agent k would land on the new level's agent k. Dropped, and the price is
 	// that a re-Attach to the SAME actor loses at most one step of its events.

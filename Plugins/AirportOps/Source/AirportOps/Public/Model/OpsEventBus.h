@@ -264,13 +264,16 @@ struct AIRPORTOPS_API FOfferAcceptedEvent
 };
 
 /**
- * An aircraft left its stand - UJobBoard::DepartTheReady, ONLY once UGroundTraffic::DepartAgent has
- * accepted the departure. A refusal (a busy runway) is retried on a later step, so publishing before the
- * answer would score one turnaround once per retry.
+ * An aircraft left its stand for a departing phase - published by UJobBoard::DropAircraft, the ONE site, when
+ * the aircraft's Parked -> departing phase change reaches the job board: whoever sent it, DepartTheReady or
+ * the inspector's manual Depart (batch 3 review I1). A refused departure changes no phase, so ends nothing;
+ * a retire (Gone) is not a departure. Outcome is derived from the litres (UJobBoard::FuelOutcomeOf).
  *
  * NAMES THE AGENT, NOT THE FLIGHT: the job board does not know flights, and must not learn them. The
  * airline roster resolves the flight through UFlightBoard::FlightForAgent when it hears this - the
- * flight is still the agent's then, since a departing aircraft keeps its flight until it is Gone.
+ * flight is still the agent's then: the flight board unhooks the agent only at its Gone, which is
+ * published after this and so dispatched in a later round.
+ * ENFORCED BY: AirportOps.Present.Bus.UnfuelledDepartureLowersAirline
  */
 struct AIRPORTOPS_API FTurnaroundEndedEvent
 {
