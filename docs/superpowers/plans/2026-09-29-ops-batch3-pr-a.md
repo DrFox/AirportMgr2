@@ -132,3 +132,20 @@ test measures what the subscription does (the pass runs), which is what goes red
 Full suite, no filter; `UE_LOG` and comment-line counts of touched production files against the
 baseline (74 / 1738); `Check-Architecture` verdict line; rule-12 warning count not risen (111).
 Unverified in PIE: the inbox row `▼ left unfuelled (-0.06)` and the Details panel view of the asset.
+
+## Review ledger (fresh review of PR A, 2026-09-29: 0 Critical, 3 Important)
+
+Rulings are the orchestrator's; each fix got a test that failed first unless marked.
+
+| # | Finding | Ruling / fix | Test (red line) |
+|---|---|---|---|
+| I1 | The inspector's manual Depart (`DepartSelected` -> `DepartAgent`) skipped `DepartTheReady`: no TurnaroundEnded, no part-fuelled fee - an exploit | ONE site: `UJobBoard::DropAircraft`, when the aircraft leaves Parked for a DEPARTING phase (Manoeuvring/Reversing/Taxiing/Departing), only if a turnaround existed. Gone (Unstick despawn) is not a turnaround end - PR B scores it as Cancelled. `DepartTheReady` no longer publishes or pays. Outcome from the figures (`FuelOutcomeOf`): Wanted<=0 or delivered within `FuelledWithinLitres` (0.5, FinishServe's Done threshold) -> Fuelled; 0 delivered -> Unfuelled; else PartFuelled. Part-fuelled fee posted at the same site; never twice, since FinishServe pays only a Done job, which reads Fuelled | `AirportOps.Fuel.ManualDepartEndsTurnaroundOnce` ("a manual depart ends the turnaround, once" expected 1, got 0); `AirportOps.Fuel.RetiredAircraftEndsNoTurnaround` (guard) |
+| I2 | The publisher's figures were never pinned | Local bus in `PartFuelledPaysForWhatItGot` (PartFuelled 1000/2500) and `UnserviceableStillDeparts` (Unfuelled 0/300) | green on the old publisher (same figures); red when the new site's publish is removed |
+| I3 | `DefaultScenarioIsTheAsset` asserted asset == CDO: tautological, breaks on the first tune | Dropped; not-CDO + name kept. "Creation changed nothing" asserted by `build_scenario.py` at creation (`check_matches_cdo`, all 10 UScenario properties); control: a tweaked in-memory asset fails it | script control run |
+| M1 | Reaction-tier comment claimed tier settling | Reworded: publish order within the drain keeps the flight findable; `UnfuelledDepartureLowersAirline` (real depot-less departure through the runtime) named as ENFORCED BY | red when the publish site is removed |
+| M2 | OfferAccepted->Alerts comment overclaimed | Reworded: nothing an accept changes is re-derived today; kept for the pass's correctness and PR D | - |
+| M3 | AcceptDirtiesAlerts could be dirtied by the arrival clock | Lead time 1e7 s | - |
+| M4 | Shortfall composition test true with a zero penalty | `TestTrue(Penalty > 0)` | - |
+| M5 | "resolved" line once per process | Once per distinct resolved path | `AirportOps.Content.ResolvedScenarioIsLoggedPerAsset` (expected 1, got 0) |
+| M6 | No accept-refused-by-Reserve case | Second offer with the only stand held: refused, nothing published | green (behaviour existed) |
+| M7 | `Detach` left `Airlines->Bus` set | Nulled beside JobBoard's | `AirportOps.Present.Bus.DetachUnhooksEveryPublisher` ("and the airline roster's" expected null) |
