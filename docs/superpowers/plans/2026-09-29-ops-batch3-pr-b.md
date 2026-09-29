@@ -162,3 +162,23 @@ asserts the resolved tuning's penalty is non-zero.
 
 Full suite; UE_LOG / comment-line counts of touched files against `6aa4fc00`; Check-Architecture verdict and
 rule-12 warning count. Unverified in PIE: the bar popup and caption, the inbox strip, the NoRunway toast.
+
+## Execution notes (2026-09-30)
+
+- Full suite: `1499 test(s) run, 0 failed, 0 crashed` (baseline 1482; +17). Check-Architecture PASS, rule-12 warnings 111 (unchanged).
+- UE_LOG in touched production files 64 -> 74; comment lines 2443 -> 2650; no file fell.
+- The FlightBoard and Airport model tests live in the new `AirportTest.cpp` beside the composition tests, not in
+  `FlightBoardEventsTest.cpp` as planned: one fixture (a two-stand field, a bus with recorders) serves both.
+- Existing test changed by the spec: `AirportOps.Present.Alerts.PassRaisesThroughTheRuntime` runs on a runway-less
+  field, which now raises NoRunway (and no AirlineCannotCome); its first assertion counts that alert instead of zero.
+- Mutations (each red, restored with cp + touch, rebuilt green): generator gate -> NothingUnlessOpen; NoRunway alert
+  branch -> NoRunwayRaised; CancelByAgent publish -> CancelByAgentPublishesUnstuck; arrival disarm ->
+  CancelUnarrivedCancelsAndWithdraws; status Sim subscription -> CloseCancelsThroughTheBus; roster handler body ->
+  CloseCancelsThroughTheBus (penalty); status Alerts subscription -> StatusChangeDirtiesAlerts; load Refresh for Reseat
+  -> LoadRederivesWithoutCancelling; `OfferGenerator->Airport` wiring -> RunwayComesAndGoes; NetworkChanged Airport
+  subscription -> RunwayComesAndGoes; Detach's `Airport->Bus = nullptr` -> DetachUnhooksEveryPublisher; bar menu
+  branch -> BarBuildsMenuActionsAsMenus; `bConfirm` -> AirportCloseConfirms.
+- Scenario asset: not re-run (see "Scenario asset"); CloseCancelsThroughTheBus's `ClosureCancelPenalty > 0` passes
+  against the resolved DA_Scenario_Default.
+- Icon: `game.airport` -> delapouite/control-tower via fetch_ui_icons.py + build_ui_style.py headless; 34 re-saved
+  T_Icon_* reverted; DA_UIStyle holds `game.airport` (grep -a, 0 before).
