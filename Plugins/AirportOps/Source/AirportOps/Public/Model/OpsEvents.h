@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/OpsAlerts.h"
 #include "Model/RoadAgent.h"
 #include "Model/SimClock.h"
 #include "UObject/Object.h"
@@ -11,6 +12,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOpsAgentPhaseChanged, int32, Age
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsArrivalRefused, EArrivalRefusal, Why);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsSpeedChanged, ESimSpeed, Speed);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsNotification, const FString&, Text);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertRaised, const FOpsAlert&, Alert);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertCleared, const FOpsAlertKey&, Key);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOpsBuildRefused, const FString&, What, const FString&, Price, double, Balance);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsLandRefused, EArrivalRefusal, Why);
 
 /**
  * The outcome bus. Pattern: Observer, via DYNAMIC multicast delegates so UMG and Blueprint
@@ -42,6 +47,13 @@ public:
 	UPROPERTY(BlueprintAssignable) FOpsArrivalRefused    OnArrivalRefused;
 	UPROPERTY(BlueprintAssignable) FOpsSpeedChanged      OnSpeedChanged;
 	UPROPERTY(BlueprintAssignable) FOpsNotification      OnNotification;
+
+	/** A standing problem started / stopped (spec 2026-09-29-ops-alerts). The toast and the alert window. */
+	UPROPERTY(BlueprintAssignable) FOpsAlertRaised       OnAlertRaised;
+	UPROPERTY(BlueprintAssignable) FOpsAlertCleared      OnAlertCleared;
+	/** A build refused at commit, and key 7 refused - silent before this (spec §2). */
+	UPROPERTY(BlueprintAssignable) FOpsBuildRefused      OnBuildRefused;
+	UPROPERTY(BlueprintAssignable) FOpsLandRefused       OnLandRefused;
 
 	void NotifyAgentPhaseChanged(int32 AgentId, EAgentPhase From, EAgentPhase To);
 	void NotifyArrivalRefused(EArrivalRefusal Why);
