@@ -27,7 +27,7 @@ home**, **Despawn**.
 | Action | Vehicle | Aircraft |
 |---|---|---|
 | Replan | Taxiing: `ReplanAt` - held at a step: splice there, banning what refused it (the deadlock resolver's own ban); moving freely: splice at the next step, no ban. Stranded: rescue in place toward its OWN goal. | same |
-| Send home / Find stand | Reopen its current + queued jobs, then `GoToFacility`. Stranded now drives home through the rescue instead of "finish the leg". | Stranded, or Parked awaiting a stand: `ChooseStand` a stand, rescue toward it. Otherwise refused with a reason (Taxiing: "moving - use Replan"; at a stand: "already on a stand"). |
+| Send home / Find stand | Reopen its current + queued jobs, then `GoToFacility`. Stranded now drives home through the rescue instead of "finish the leg". | Stranded, or Parked awaiting a stand: `ChooseStand` a stand, rescue toward it. Otherwise refused with a reason (Taxiing: "moving - use Replan"; at a stand: "already parked"). The stand search starts from the next node on its own route when that still exists, else the nearest node (the nearest was a runway node in the test, and a taxi-in search avoids runways). |
 | Despawn | Reopen its jobs, `RetireAgent`, vehicle Idle at home. | Flight -> `Cancelled` -> history, then `RetireAgent` (claims released by `ReleaseAll`; a parked aircraft's turnaround drops through the existing Parked -> Gone path). |
 
 Refused in Arriving (on approach / roll-out), Departing and Manoeuvring for Replan and Home:
@@ -81,8 +81,12 @@ Every call logs one `LogAirportOps` line: `Unstick: agent N (Vehicle|Aircraft, <
   tick late after an external retire.
 - `DriveVehicleTo`: Stranded is no longer "finish the leg"; it goes through `RescueStranded`
   toward the goal, and retires where it stands if that refuses (the Parked branch's fallback).
-- `OnAgentPhase`: `To == Stranded` for a vehicle reopens its jobs and recalls it - the follow-up
-  from #399. Its own small fix, but it is the same seam.
+- `OnAgentPhase`: `To == Stranded` for a vehicle reopens its jobs - the follow-up from #399.
+  AMENDED IN IMPLEMENTATION: it does NOT recall the vehicle. A recall would rescue it (an automatic
+  hop) or retire it (every truck on a deleted road vanishing), both contradicting "nothing automatic
+  moves a stranded agent". It is set ToFacility and waits for the player's Unstick.
+- Bids (`AssignOpenJobs`, `RebidQueued`) skip a vehicle whose agent is Stranded: ToFacility with no
+  plan prices itself "home soon" and would win the job straight back.
 
 ### AirportOps: FlightBoard
 
@@ -97,6 +101,8 @@ Every call logs one `LogAirportOps` line: `Unstick: agent N (Vehicle|Aircraft, <
 ### Game module: inspector
 
 - `BuildActions()`: new row `selection.unstick`, found BY ID in `UInspectorWidget::EnsureSlots`.
+- `UUiMenuButton` (UI/): a verb with sub-choices - lines asked for on every open, greyed with a
+  reason, `bConfirm` lines take two clicks, any close disarms. Icon: `delapouite/life-buoy`.
 - Button "Unstick", highlighted when the agent is Stranded or has stalled past
   `UnstickHighlightSeconds` (15 s, a UPROPERTY on the widget; `Rules.StallSeconds` is 3 s,
   which would light up every queue at a hold).
