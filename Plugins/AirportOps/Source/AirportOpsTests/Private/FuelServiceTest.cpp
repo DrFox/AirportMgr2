@@ -3,6 +3,7 @@
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Model/AgentRescue.h"
 #include "Model/JobBoard.h"
 #include "Model/OpsSave.h"
 #include "Model/Pricing.h"
@@ -2651,6 +2652,139 @@ bool FFuelRestoredFleetIsNotReseededTest::RunTest(const FString& Parameters)
 
 	Fixture.Advance(1.0 / 30.0);
 	TestEqual(TEXT("and the next tick does not seed the depot again"), Fixture.Service->GetVehicles().Num(), Seeded);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// THE VEHICLE HALF OF THE UNSTICK MENU (spec 2026-09-29-unstick-agent), on this file's fixture
+// because a vehicle's Unstick is about its JOBS, and this is the fixture that has them.
+namespace
+{
+	/** A truck out on the road to the parked aircraft's hydrant, and its job and vehicle. */
+	struct FTruckOut
+	{
+		int32 TruckId = 0;
+		int32 VehicleId = 0;
+		int32 JobId = 0;
+	};
+
+	bool SendTruckOut(FFuelFixture& Fixture, FTruckOut& Out)
+	{
+		Fixture.Build(/*bWithRoad=*/true);
+		if (Fixture.ParkAircraft() == 0)
+		{
+			return false;
+		}
+		Fixture.Advance(0.5);
+		if (Fixture.Service->GetJobs().Num() != 1)
+		{
+			return false;
+		}
+		const FServiceJob& Job = Fixture.Service->GetJobs()[0];
+		Out.JobId = Job.Id;
+		Out.TruckId = Fixture.Service->AgentForJob(Job);
+		const FServiceVehicle* Vehicle = Out.TruckId != 0 ? Fixture.Service->VehicleForAgent(Out.TruckId) : nullptr;
+		Out.VehicleId = Vehicle != nullptr ? Vehicle->Id : 0;
+		const FRoadAgent* Agent = Fixture.Traffic->FindAgent(Out.TruckId);
+		return Out.VehicleId != 0 && Agent != nullptr && Agent->Phase == EAgentPhase::Taxiing;
+	}
+
+	const FServiceJob* JobById(const UJobBoard& Board, int32 Id)
+	{
+		return Board.GetJobs().FindByPredicate([Id](const FServiceJob& Each) { return Each.Id == Id; });
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAgentRescueVehicleSendHomeTest, "AirportOps.Model.AgentRescue.VehicleSendHome",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAgentRescueVehicleSendHomeTest::RunTest(const FString& Parameters)
+{
+	// SEND HOME GIVES THE JOB BACK IN THE SAME CALL. A vehicle turned for home still holding its job
+	// is a job no other vehicle may bid on for the whole drive home.
+	FFuelFixture Fixture;
+	FTruckOut Out;
+	if (!TestTrue(TEXT("a truck on its way to a job"), SendTruckOut(Fixture, Out))) { return false; }
+	UAgentRescue* Rescue = NewObject<UAgentRescue>(GetTransientPackage());
+	Rescue->JobBoard = Fixture.Service;
+
+	const FUnstickVerdict Done = Rescue->Unstick(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, Out.TruckId, EUnstickAction::SendHome);
+	if (!TestTrue(FString::Printf(TEXT("done (%s)"), *Done.Why.ToString()), Done.bAllowed)) { return false; }
+	const FServiceVehicle* Vehicle = Fixture.Service->FindVehicle(Out.VehicleId);
+	if (!TestNotNull(TEXT("the vehicle"), Vehicle)) { return false; }
+	TestEqual(TEXT("heading home"), Vehicle->State, EServiceVehicleState::ToFacility);
+	TestEqual(TEXT("holding no job"), Vehicle->CurrentJob, 0);
+	TestEqual(TEXT("and nothing queued"), Vehicle->Queue.Num(), 0);
+	const FServiceJob* Job = JobById(*Fixture.Service, Out.JobId);
+	if (!TestNotNull(TEXT("the job survives"), Job)) { return false; }
+	TestEqual(TEXT("back on the board"), Job->State, EServiceJobState::Open);
+	TestEqual(TEXT("nobody's"), Job->VehicleId, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAgentRescueVehicleDespawnTest, "AirportOps.Model.AgentRescue.VehicleDespawn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAgentRescueVehicleDespawnTest::RunTest(const FString& Parameters)
+{
+	// DESPAWN LOSES NO VEHICLE: the agent goes, the vehicle is Idle at its depot and its job is back
+	// on the board - in the same call, not a tick later through SyncFleet's lost-agent branch (which
+	// reopens only the current job and would leave a queue on a vehicle nobody drives).
+	FFuelFixture Fixture;
+	FTruckOut Out;
+	if (!TestTrue(TEXT("a truck on its way to a job"), SendTruckOut(Fixture, Out))) { return false; }
+	UAgentRescue* Rescue = NewObject<UAgentRescue>(GetTransientPackage());
+	Rescue->JobBoard = Fixture.Service;
+
+	const FUnstickVerdict Done = Rescue->Unstick(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, Out.TruckId, EUnstickAction::Despawn);
+	TestTrue(TEXT("done"), Done.bAllowed);
+	TestNull(TEXT("the agent is gone"), Fixture.Traffic->FindAgent(Out.TruckId));
+	const FServiceVehicle* Vehicle = Fixture.Service->FindVehicle(Out.VehicleId);
+	if (!TestNotNull(TEXT("the VEHICLE is not lost"), Vehicle)) { return false; }
+	TestEqual(TEXT("Idle"), Vehicle->State, EServiceVehicleState::Idle);
+	TestEqual(TEXT("at home, no agent"), Vehicle->AgentId, 0);
+	const FServiceJob* Job = JobById(*Fixture.Service, Out.JobId);
+	if (!TestNotNull(TEXT("the job survives"), Job)) { return false; }
+	TestEqual(TEXT("back on the board"), Job->State, EServiceJobState::Open);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAgentRescueStrandedVehicleTest, "AirportOps.Model.AgentRescue.StrandedVehicleReleasesJobs",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAgentRescueStrandedVehicleTest::RunTest(const FString& Parameters)
+{
+	// #399'S FOLLOW-UP: a stranded truck kept its job for the session - it never parks, so nothing
+	// released it, and every recall "finished the leg" it never would. Now the job goes back the
+	// moment it strands, the truck bids for nothing while stranded (it would price itself "home
+	// soon" and win), it stays put for the player - and Send home then gets it home.
+	FFuelFixture Fixture;
+	FTruckOut Out;
+	if (!TestTrue(TEXT("a truck on its way to a job"), SendTruckOut(Fixture, Out))) { return false; }
+	if (!TestTrue(TEXT("stranded"), FGroundTrafficTestAccess(*Fixture.Traffic).Strand(Out.TruckId))) { return false; }
+	Fixture.Advance(0.1);
+	if (!TestEqual(TEXT("its phase is Stranded"), Fixture.Traffic->FindAgent(Out.TruckId)->Phase, EAgentPhase::Stranded)) { return false; }
+
+	const FServiceJob* Job = JobById(*Fixture.Service, Out.JobId);
+	if (!TestNotNull(TEXT("the job survives"), Job)) { return false; }
+	TestNotEqual(TEXT("the job is no longer the stranded vehicle's"), Job->VehicleId, Out.VehicleId);
+	Fixture.Advance(1.0);
+	Job = JobById(*Fixture.Service, Out.JobId);
+	TestTrue(TEXT("and the bids do not hand it straight back"), Job == nullptr || Job->VehicleId != Out.VehicleId);
+	TestNotNull(TEXT("the truck waits where it stranded, for the player"), Fixture.Traffic->FindAgent(Out.TruckId));
+
+	UAgentRescue* Rescue = NewObject<UAgentRescue>(GetTransientPackage());
+	Rescue->JobBoard = Fixture.Service;
+	const FUnstickVerdict Done = Rescue->Unstick(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, Out.TruckId, EUnstickAction::SendHome);
+	TestTrue(FString::Printf(TEXT("Send home: done (%s)"), *Done.Why.ToString()), Done.bAllowed);
+	TestTrue(TEXT("and it gets home"), Fixture.AdvanceUntil([&Fixture, &Out]
+	{
+		const FServiceVehicle* V = Fixture.Service->FindVehicle(Out.VehicleId);
+		return V != nullptr && V->AgentId == 0;
+	}, 240.0));
 	return true;
 }
 

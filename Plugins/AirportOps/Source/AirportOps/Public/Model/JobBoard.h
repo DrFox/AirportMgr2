@@ -281,6 +281,18 @@ public:
 	FString DescribeAgent(int32 AgentId, double Now) const;
 
 	/**
+	 * The player's Unstick for a VEHICLE (spec 2026-09-29-unstick-agent): every job it holds - the
+	 * one it is on and its whole queue - goes back to the board for another vehicle to win, then it
+	 * heads home (GoToFacility) or, bRetire, is retired where it stands and is Idle at home at once.
+	 * THE EXPLICIT FORM of what SyncFleet's "lost its agent" branch does a tick late - and that branch
+	 * reopens only the current job, leaving the queue on a vehicle nobody is driving.
+	 * False, nothing changed, when AgentId drives no vehicle of this board.
+	 * ENFORCED BY: AirportOps.Model.AgentRescue.VehicleSendHome, .VehicleDespawn
+	 */
+	bool RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic& Traffic, const URoadNetwork& Network,
+		const USimClock& Clock);
+
+	/**
 	 * How far behind Depot is (user, 2026-09-28: "see how far behind your depot is in jobs"): every job
 	 * on its vehicles - under way, being served, or queued - when the last of them is promised to
 	 * finish, and how many of those promises land after their aircraft's turnaround ends, which is the
@@ -446,6 +458,13 @@ private:
 
 	/** A job the vehicle can no longer do goes back to the board, remainder and all. */
 	void Reopen(FServiceJob& Job);
+
+	/** Every job Vehicle holds - current and queued - Reopen'd; its CurrentJob and Queue emptied. The
+	 *  count, for the caller's log line. */
+	int32 ReleaseJobsOf(FServiceVehicle& Vehicle);
+
+	/** Its agent is Stranded: it bids for nothing until the player unsticks it (AssignOpenJobs, RebidQueued). */
+	static bool IsStranded(const FServiceVehicle& Vehicle, const UGroundTraffic& Traffic);
 
 	/** What Judge learned about one job, for its refusal and its log line (#103: counted once). */
 	struct FJudgement

@@ -24,8 +24,10 @@ enum class EAgentPhase : uint8;
  * aeroplane can now be watched doing it. The SERVICE that performs it for one that cannot
  * manage alone is PUSHBACK, which is the job board's and does not exist yet; a Twin Otter
  * reverses under its own power and is not being pushed by anything, so the two are not the
- * same word. Diverted and Cancelled are still deliberately ABSENT: the sequencer owns them
- * and it does not exist either. A phase nothing can enter is a lie.
+ * same word. Diverted is still deliberately ABSENT: the sequencer owns it and it does not
+ * exist either. A phase nothing can enter is a lie. Cancelled is here since 2026-09-29 because
+ * something enters it now - the player despawning the aeroplane (UFlightBoard::CancelByAgent);
+ * the sequencer's cancellations will share it when it exists.
  */
 UENUM()
 enum class EFlightPhase : uint8
@@ -55,7 +57,10 @@ enum class EFlightPhase : uint8
 	/** The player said no. */
 	Declined,
 	/** Nobody said anything and the offer timed out. */
-	Expired
+	Expired,
+	/** The player despawned the aeroplane (the inspector's Unstick). Terminal, like Departed,
+	 *  but it did not leave by the runway - see UFlightBoard::CancelByAgent. */
+	Cancelled
 };
 
 /**
@@ -227,8 +232,8 @@ public:
 	UPROPERTY() bool bLandingFeePaid = false;
 
 	/**
-	 * USimClock::Now at which this flight reached a terminal phase (Declined, Expired or
-	 * Departed), or 0 before that.
+	 * USimClock::Now at which this flight reached a terminal phase (Declined, Expired,
+	 * Departed or Cancelled), or 0 before that.
 	 *
 	 * WHAT UFlightBoard::RollUp AGES AGAINST, the same role FLedgerEntry::At plays for
 	 * ULedger::RollUp - see UFlightBoard::History and issue #188. Zero rather than an Optional:

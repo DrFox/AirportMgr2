@@ -392,7 +392,10 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		TArray<FCandidate> Candidates;
 		for (const FServiceVehicle& Vehicle : Vehicles)
 		{
-			if (Vehicle.Role == Job.Role)
+			// NOT A STRANDED ONE: it prices itself as "home soon" (ToFacility with no plan left, so no
+			// drive remaining), wins, and holds the job for a trip it will never make - the wedge
+			// OnAgentPhase's Stranded branch just released the job from.
+			if (Vehicle.Role == Job.Role && !IsStranded(Vehicle, Traffic))
 			{
 				Candidates.Add({ Vehicle.Home, Vehicle.TypeCode, Vehicle.Id });
 			}
@@ -523,7 +526,7 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 		TArray<FCandidate> Others;
 		for (const FServiceVehicle& Vehicle : Vehicles)
 		{
-			if (Vehicle.Id != Holder->Id && Vehicle.Role == Job->Role)
+			if (Vehicle.Id != Holder->Id && Vehicle.Role == Job->Role && !IsStranded(Vehicle, Traffic))
 			{
 				Others.Add({ Vehicle.Home, Vehicle.TypeCode, Vehicle.Id });
 			}
