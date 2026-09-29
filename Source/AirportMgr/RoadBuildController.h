@@ -558,6 +558,13 @@ public:
 	static FEntityInstanceId DepotForSelection(const ARoadNetworkActor* InTarget, const FSelection& Selection);
 
 	/**
+	 * The depot whose ghost slots the selection reveals (facility-upgrades spec R10): DepotForSelection's
+	 * answer narrowed to a PLOTTED yard, else unset. PlayerTick hands it to AAirsideBuildingsActor::ShowPlotGhosts.
+	 * ENFORCED BY: AirportMgr.Actions.RevealedDepotFollowsTheSelection
+	 */
+	static FEntityInstanceId RevealedDepotFor(const ARoadNetworkActor* InTarget, const FSelection& Selection);
+
+	/**
 	 * THE DEPOT CARD'S VERBS (facility-upgrades spec §4) - FORWARDERS to UOpsRuntime with the selected
 	 * depot, the Unstick verbs' shape. The quote is asked fresh on every call, so an enabled check and the
 	 * command it guards read the same state. Refused (logged) with no depot selected or no runtime.

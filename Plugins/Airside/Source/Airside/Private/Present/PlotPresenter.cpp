@@ -335,8 +335,28 @@ UInstancedStaticMeshComponent* UPlotPresenter::PoolFor(UStaticMesh* Mesh, bool b
 	return Made;
 }
 
+bool UPlotPresenter::SetGhostScope(FEntityInstanceId Only)
+{
+	if (Only == GhostScope)
+	{
+		return false;
+	}
+	GhostScope = Only;
+	return true;
+}
+
+int32 UPlotPresenter::GetGhostInstanceCountForTest() const
+{
+	int32 Count = GhostBoxes != nullptr ? GhostBoxes->GetInstanceCount() : 0;
+	for (const auto& Entry : GhostMeshPool)
+	{
+		Count += IsValid(Entry.Value) ? Entry.Value->GetInstanceCount() : 0;
+	}
+	return Count;
+}
+
 bool UPlotPresenter::DrawMeshes(const FDepotModuleLook& Look, const PlotYard::FKitSpec& Spec,
-	const FVector2D& RunCentre, double Heading, int32 Lit, int32 Dark)
+	const FVector2D& RunCentre, double Heading, int32 Lit, int32 Dark, bool bDrawDark)
 {
 	if (!Look.HasMeshes() || MeshParent == nullptr)
 	{
@@ -367,7 +387,7 @@ bool UPlotPresenter::DrawMeshes(const FDepotModuleLook& Look, const PlotYard::FK
 		{
 			Span(Lit, Start + LitWidth * 0.5, false);
 		}
-		if (Dark > 0 && GhostBoxes != nullptr)
+		if (Dark > 0 && GhostBoxes != nullptr && bDrawDark)
 		{
 			Span(Dark, Start + LitWidth + (FullWidth - LitWidth) * 0.5, true);
 		}
@@ -390,7 +410,9 @@ bool UPlotPresenter::DrawMeshes(const FDepotModuleLook& Look, const PlotYard::FK
 
 	auto Piece = [&](UStaticMesh* Mesh, const FKitBox& Box, double PieceYaw, bool bGhost, double Advance)
 	{
-		if (!bGhost || GhostBoxes != nullptr)
+		// AN UNDRAWN GHOST STILL ADVANCES THE CURSOR, so the lit building stays where the whole run puts
+		// it - a revealed-elsewhere yard (SetGhostScope) must not shift its built bays.
+		if (!bGhost || (GhostBoxes != nullptr && bDrawDark))
 		{
 			if (UInstancedStaticMeshComponent* Into = PoolFor(Mesh, bGhost))
 			{
@@ -546,8 +568,10 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 
 	int32 Plots = 0;
 
-	for (const FEntityInstance& Entity : Network.GetEntities())
+	const TArray<FEntityInstance>& Entities = Network.GetEntities();
+	for (int32 EntityIndex = 0; EntityIndex < Entities.Num(); ++EntityIndex)
 	{
+		const FEntityInstance& Entity = Entities[EntityIndex];
 		// KIND, NOT OUTLINE, SAYS DEPOT (2026-09-23): a stand can carry a drawn Outline too
 		// now, and this loop stands modules and a fence round whatever it does not skip here -
 		// Outline.Num() alone used to fence a drawn stand exactly like a depot's yard. See
@@ -556,6 +580,8 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 		{
 			continue;
 		}
+		// R10: THIS YARD'S GHOSTS ARE INSTANCED when every yard's are, or it is the one revealed.
+		const bool bDrawDark = !GhostScope.IsSet() || GhostScope == Network.EntityIdAt(EntityIndex);
 
 		// THE SAME GEOMETRY THE PLACEMENT USED, not a remembered list of bay transforms.
 		// Storing them on the instance would be a second copy of something PlotFit already
@@ -649,7 +675,7 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 			const FDepotModuleLook* Look =
 				Looks.IsValidIndex(Stand.KitIndex) ? &Looks[Stand.KitIndex] : nullptr;
 			const bool bMeshes = Look != nullptr
-				&& DrawMeshes(*Look, Spec, RunCentre, Stand.Heading, Lit, Dark);
+				&& DrawMeshes(*Look, Spec, RunCentre, Stand.Heading, Lit, Dark, bDrawDark);
 
 			if (Lit > 0)
 			{
@@ -666,7 +692,7 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 				ModuleBoxes += Lit;
 			}
 
-			if (Dark > 0 && GhostBoxes != nullptr && !bMeshes)
+			if (Dark > 0 && GhostBoxes != nullptr && !bMeshes && bDrawDark)
 			{
 				const FVector2D Centre = RunCentre + Across * ((FullWidth - DarkWidth) * 0.5);
 				GhostBoxes->AddInstance(

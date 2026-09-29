@@ -803,6 +803,15 @@ FEntityInstanceId ARoadBuildController::DepotForSelection(const ARoadNetworkActo
 	return Entity != nullptr && Entity->bAlive && Entity->IsDepot() ? Id : FEntityInstanceId();
 }
 
+FEntityInstanceId ARoadBuildController::RevealedDepotFor(const ARoadNetworkActor* InTarget, const FSelection& Selection)
+{
+	// NARROWS DepotForSelection (ruling C4), never re-walks the selection: an unplotted depot has no yard,
+	// so nothing to reveal.
+	const FEntityInstanceId Id = DepotForSelection(InTarget, Selection);
+	const FEntityInstance* Entity = Id.IsSet() ? InTarget->GetNetwork()->GetEntity(Id) : nullptr;
+	return Entity != nullptr && Entity->IsDepot() && Entity->IsPlotted() ? Id : FEntityInstanceId();
+}
+
 FEntityInstanceId ARoadBuildController::SelectedFacility() const
 {
 	return DepotForSelection(Target, GetSelection());
@@ -1496,13 +1505,15 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	// GHOST BAYS FOLLOW THE LIT TOOL. Polled once a frame rather than pushed from SelectTool
 	// and each mode change: the node rings are asked every frame by the HUD, and a push at
 	// each change site is the "every list must agree" shape this project keeps shipping one
-	// site short. SetGhostsVisible is a no-op unless the answer changed.
+	// site short. ShowPlotGhosts is two compares unless the answer changed.
 	if (AAirsideBuildingsActor* Found = Buildings.Get())
 	{
-		if (UPlotPresenter* Plots = Found->GetPlotPresenter())
-		{
-			Plots->SetGhostsVisible(Session.WantsPlotGhostsDrawn());
-		}
+		// R10 (facility-upgrades spec): EDIT MODE shows every yard's ghosts, as before; outside it the
+		// SELECTED depot's card reveals its own - read off the selection here, the one per-frame gate, rather
+		// than pushed by the inspector (a push per change site is the shape this comment already refuses).
+		const FEntityInstanceId Reveal = RevealedDepotFor(Target, GetSelection());
+		const bool bEditing = Session.WantsPlotGhostsDrawn();
+		Found->ShowPlotGhosts(bEditing || Reveal.IsSet(), bEditing ? FEntityInstanceId() : Reveal);
 	}
 
 	if (Target == nullptr)

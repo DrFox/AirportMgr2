@@ -992,4 +992,57 @@ bool FPlotPresenterHidesGhostBaysOnRequestTest::RunTest(const FString& Parameter
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPresenterRevealTest,
+	"Airside.Present.PlotPresenter.RevealDrawsOneDepotsGhosts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPresenterRevealTest::RunTest(const FString& Parameters)
+{
+	// R10: outside edit mode only the SELECTED depot shows its ghost slots; zoomed out, every other depot's
+	// cyan boxes would read as buildings (readability ruling 2026-09-27).
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	Actor->ClearNetwork();
+	auto Place = [&](double X)
+	{
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = FVector2D(X + 1500.0, 0.0);
+		Placement.Heading = UE_DOUBLE_HALF_PI;
+		Placement.PoseRole = EServiceRole::Fuel;
+		Placement.Outline = SpareRoomPlotAt(X);
+		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+		return Actor->Network->PlaceEntity(Placement);
+	};
+	const FEntityInstanceId A = Place(0.0);
+	Place(10000.0);
+	Actor->RebuildMesh();
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	const int32 Every = Plots->GetGhostInstanceCountForTest();
+	const int32 Capacity = Plots->GetGhostCount();
+	if (!TestTrue(TEXT("setup: both yards have ghosts to draw"), Every > 0)) { return false; }
+
+	TestWorld.Buildings->ShowPlotGhosts(/*bVisible=*/true, A);
+	const int32 OnlyA = Plots->GetGhostInstanceCountForTest();
+	TestTrue(TEXT("the revealed depot draws its ghosts"), OnlyA > 0);
+	TestTrue(TEXT("and the other depot's are not drawn"), OnlyA < Every);
+	TestTrue(TEXT("the ghost layer is visible for it"), Plots->AreGhostsVisible());
+	TestEqual(TEXT("capacity is a fact about the yards, not about what is drawn"), Plots->GetGhostCount(), Capacity);
+
+	// A ROAD EDIT REBUILDS WITH THE SCOPE STILL SET - the reveal must survive the rebuild that every
+	// topology change triggers, or selecting a depot and then editing a road would redraw every yard.
+	Actor->RebuildMesh();
+	TestEqual(TEXT("a rebuild while revealed keeps drawing only the revealed depot"),
+		Plots->GetGhostInstanceCountForTest(), OnlyA);
+
+	TestWorld.Buildings->ShowPlotGhosts(/*bVisible=*/false, FEntityInstanceId());
+	TestFalse(TEXT("with nothing revealed, outside edit mode, the ghosts are hidden"), Plots->AreGhostsVisible());
+	TestEqual(TEXT("and every yard is instanced again, ready for edit mode to show"), Plots->GetGhostInstanceCountForTest(), Every);
+	return true;
+}
+
 #endif

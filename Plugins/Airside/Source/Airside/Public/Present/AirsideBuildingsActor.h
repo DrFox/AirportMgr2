@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Model/RoadHandles.h"
 #include "AirsideBuildingsActor.generated.h"
 
 class ARoadNetworkActor;
@@ -65,6 +66,17 @@ public:
 
 	/** The plot boxes - see UPlotPresenter. */
 	UPlotPresenter* GetPlotPresenter() const { return Plots; }
+
+	/**
+	 * The ghost gate, both halves in one call (facility-upgrades spec R10): bVisible is edit mode OR a
+	 * revealed depot; Only is that depot (unset = every yard). A change of Only rebuilds the plots once -
+	 * instances are made in RebuildFrom - and a frame with no change costs two compares, so a driver may
+	 * call this every frame. Only the PIE controller (ARoadBuildController::PlayerTick) wires it; the editor
+	 * tool still calls UPlotPresenter::SetGhostsVisible alone, so its scope stays every yard.
+	 * ENFORCED BY: Airside.Present.PlotPresenter.RevealDrawsOneDepotsGhosts,
+	 * AirportMgr.Actions.RevealedDepotFollowsTheSelection
+	 */
+	void ShowPlotGhosts(bool bVisible, FEntityInstanceId Only);
 
 	/**
 	 * For tests: the fence's components. Same ...ForTest precedent as

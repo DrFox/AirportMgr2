@@ -4,6 +4,7 @@
 #include "UObject/Object.h"
 #include "Content/DepotModuleLook.h"
 #include "Content/FenceKit.h"
+#include "Model/RoadHandles.h"
 #include "Solve/PlotYard.h"
 #include "PlotPresenter.generated.h"
 
@@ -148,6 +149,23 @@ public:
 	bool AreGhostsVisible() const { return bGhostsVisible; }
 
 	/**
+	 * Whose unbought bays get INSTANCES: every plot (unset - the default, and edit mode's) or Only's
+	 * (facility-upgrades spec R10: the selected depot's card is open outside edit mode). Returns true when it
+	 * changed; the CALLER then rebuilds (AAirsideBuildingsActor::ShowPlotGhosts), because instances are made
+	 * in RebuildFrom. Visibility stays SetGhostsVisible's; GetGhostCount stays every yard's capacity.
+	 *
+	 * SCOPED INSTANCES, NOT A PER-YARD VISIBILITY FLAG: every yard's ghosts share GhostBoxes and one pooled
+	 * component per mesh, so hiding one yard's means not adding its instances - there is no per-yard
+	 * component to hide. A rebuild on each change of the revealed depot is the cost, paid on a click.
+	 * ENFORCED BY: Airside.Present.PlotPresenter.RevealDrawsOneDepotsGhosts
+	 */
+	bool SetGhostScope(FEntityInstanceId Only);
+	FEntityInstanceId GetGhostScope() const { return GhostScope; }
+
+	/** For tests: ghost instances drawn, grey boxes and pooled meshes together. */
+	int32 GetGhostInstanceCountForTest() const;
+
+	/**
 	 * For tests: one instance's transform, false if there is no such instance.
 	 *
 	 * The component itself is private on ARoadNetworkActor, and widening it so a test can
@@ -215,6 +233,9 @@ private:
 	 */
 	bool bGhostsVisible = true;
 
+	/** See SetGhostScope. Unset = every yard's ghosts are instanced. */
+	FEntityInstanceId GhostScope;
+
 	/** The pooled component drawing Mesh, made on first use; null with no MeshParent. */
 	UInstancedStaticMeshComponent* PoolFor(UStaticMesh* Mesh, bool bGhost);
 
@@ -222,9 +243,10 @@ private:
 	 * Draws one stand's modules from their meshes - see RebuildFrom's loop, which computed the
 	 * built and ghosted spans this lays pieces along. Returns false when there is nothing to
 	 * draw them with, and the caller draws boxes instead.
+	 * bDrawDark false lays the run out exactly as before but adds no ghost pieces (SetGhostScope).
 	 */
 	bool DrawMeshes(const FDepotModuleLook& Look, const PlotYard::FKitSpec& Spec,
-		const FVector2D& RunCentre, double Heading, int32 Lit, int32 Dark);
+		const FVector2D& RunCentre, double Heading, int32 Lit, int32 Dark, bool bDrawDark);
 
 	/**
 	 * Every MODULE transform added during the last rebuild, in the order it was added - the
