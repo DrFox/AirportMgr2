@@ -592,8 +592,11 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 	if (To == EAgentPhase::Parked)
 	{
 		// WHICH stand it actually got, which need not be the one held - see UFlight::Stand.
-		// The agent's own GoalNode is the authority, exactly as UJobBoard reads it.
-		if (const FRoadAgent* Agent = Traffic.FindAgent(AgentId))
+		// The agent's own GoalNode is the authority, exactly as UJobBoard reads it - and, as there,
+		// only while the agent is STILL parked: the bus delivers this a step late, and an aircraft
+		// redirected since has a GoalNode that is its next stand, not this one (UJobBoard::OnAgentPhase).
+		const FRoadAgent* Agent = Traffic.FindAgent(AgentId);
+		if (Agent != nullptr && Agent->Phase == EAgentPhase::Parked)
 		{
 			const int32 Index = Network.FindEntityIndexByPoseNode(Agent->GoalNode);
 			if (Index != INDEX_NONE)

@@ -115,6 +115,9 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		Runtime->GetEvents()->OnSpeedChanged.AddDynamic(L, &UOpsEventsTestListener::OnSpeed);
 
 		Actor->DispatchAgent(Outbound, UAirsideSettings::ResolveDefaultAirframe());
+		// THE BUS DELIVERS ON THE NEXT OPS STEP, not inside Airside's broadcast (spec 2026-09-29
+		// ops-event-bus §1) - a zero-length step drains it without moving the clock.
+		Runtime->Tick(0.0);
 
 		// BUILT FROM THE ENUM, not spelled ":4->1". This literal broke the day
 		// EAgentPhase::Manoeuvring was added between Parked and Gone and moved Gone from 4 to
@@ -134,7 +137,11 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 				{ return S.StartsWith(TEXT("phase:")) && S.EndsWith(SpawnSuffix); }));
 
 		Runtime->StepSpeed(+1);
-		TestEqual(TEXT("stepping speed announces the new speed"), L->Seen.Last(), FString(TEXT("speed:2")));
+		Runtime->Tick(0.0);   // the bus delivers on the next ops step - see the spawn above
+		if (TestTrue(TEXT("stepping speed announces something"), L->Seen.Num() > 0))
+		{
+			TestEqual(TEXT("stepping speed announces the new speed"), L->Seen.Last(), FString(TEXT("speed:2")));
+		}
 		TestEqual(TEXT("and pushes the multiplier into the actor"), Actor->GetSimTimeScale(), 2.0, 1e-12);
 
 		Runtime->TogglePause();
