@@ -284,6 +284,23 @@ namespace
 			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleLedger(); },
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsLedgerShowing(); }, HasRuntime));
 
+		// THE ALERTS BADGE (ops alerts spec 2026-09-29 §3): lit while anything needs the player, counting
+		// how many, and opening the window that lists them. NO KEY: a panel toggle needs none, and the
+		// free letters are fewer than the tools still to come.
+		{
+			FBuildAction Alerts = Make(TEXT("game.alerts"), EActionSection::Game, LOCTEXT("Alerts", "Alerts"),
+				EKeys::Invalid, false,
+				[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleAlerts(); },
+				[](const FBuildActionContext& Ctx) { return Ctx.Controller.AlertCount() > 0 || Ctx.Controller.IsAlertsShowing(); },
+				HasRuntime);
+			Alerts.DynamicLabel = [](const FBuildActionContext& Ctx)
+			{
+				const int32 Count = Ctx.Controller.AlertCount();
+				return Count > 0 ? FText::Format(LOCTEXT("AlertsCount", "Alerts ({0})"), FText::AsNumber(Count)) : LOCTEXT("Alerts", "Alerts");
+			};
+			Out.Add(MoveTemp(Alerts));
+		}
+
 		// TWO LISTS, ONE PER AXIS, and AirportMgr.Actions.GuideGridIsInTheRegistry walks BOTH
 		// enums against them rather than counting: a row or column added without a button is a
 		// guide the player cannot switch, and nothing else would say so.

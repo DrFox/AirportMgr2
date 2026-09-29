@@ -1,4 +1,5 @@
 #include "BuildHudLayer.h"
+#include "AlertsPanelWidget.h"
 
 #include "ArrivalsPanelWidget.h"
 #include "Blueprint/UserWidget.h"
@@ -59,6 +60,8 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 	ArrivalsPanel = CreateWidget<UArrivalsPanelWidget>(&Owner, UArrivalsPanelWidget::StaticClass());
 	// CODE-ONLY, no *Class hook: the other panels' hooks predate windows (see SettingsPanel's comment).
 	SettingsPanel = CreateWidget<USettingsPanelWidget>(&Owner, USettingsPanelWidget::StaticClass());
+	// CODE-ONLY, no *Class hook, like Arrivals and Settings. IN WireWindows TOO - a list that must agree.
+	AlertsPanel = CreateWidget<UAlertsPanelWidget>(&Owner, UAlertsPanelWidget::StaticClass());
 	ToastStack = CreateConfiguredWidget<UToastStackWidget>(Owner, ToastStackClass, 2,
 		TEXT("Toast stack"), TEXT("ToastStackClass"));
 	WireWindows();
@@ -70,7 +73,7 @@ void UBuildHudLayer::WireWindows()
 	{
 		return;
 	}
-	for (UAirportMgrPanelWidget* Panel : TArray<UAirportMgrPanelWidget*>{ Inspector, OfferInbox, ArrivalsPanel, LedgerPanel, LandPanel, SettingsPanel })
+	for (UAirportMgrPanelWidget* Panel : TArray<UAirportMgrPanelWidget*>{ Inspector, OfferInbox, ArrivalsPanel, LedgerPanel, LandPanel, AlertsPanel, SettingsPanel })
 	{
 		if (Panel != nullptr)
 		{

@@ -391,6 +391,12 @@ public:
 	/** Whether the ledger panel is open, so the bar's button can light itself. */
 	bool IsLedgerShowing() const;
 
+	/** The alerts window (ops alerts spec 2026-09-29) - the bar's Alerts button. */
+	void ToggleAlerts();
+	bool IsAlertsShowing() const;
+	/** How many standing alerts the window holds - the button's count. 0 with no HUD. */
+	int32 AlertCount() const;
+
 	/** Open Settings, or cancel it if open. The game.settings action's verb (Escape, the gear). */
 	void ToggleSettings();
 

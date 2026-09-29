@@ -1,4 +1,5 @@
 #include "RoadBuildController.h"
+#include "AlertsPanelWidget.h"
 #include "Model/OpsAlerts.h"
 
 #include "BuildActions.h"
@@ -1117,6 +1118,26 @@ bool ARoadBuildController::SelectAndFocus(const FAlertFocus& Focus)
 	default:
 		return false;
 	}
+}
+
+void ARoadBuildController::ToggleAlerts()
+{
+	if (Hud != nullptr && Hud->AlertsPanel != nullptr)
+	{
+		Hud->AlertsPanel->Toggle();
+		UE_LOG(LogRoadBuild, Log, TEXT("Alerts window %s (%d alert(s))"),
+			Hud->AlertsPanel->IsShowing() ? TEXT("opened") : TEXT("closed"), Hud->AlertsPanel->AlertCount());
+	}
+}
+
+bool ARoadBuildController::IsAlertsShowing() const
+{
+	return Hud != nullptr && Hud->AlertsPanel != nullptr && Hud->AlertsPanel->IsShowing();
+}
+
+int32 ARoadBuildController::AlertCount() const
+{
+	return Hud != nullptr && Hud->AlertsPanel != nullptr ? Hud->AlertsPanel->AlertCount() : 0;
 }
 
 bool ARoadBuildController::IsLedgerShowing() const
