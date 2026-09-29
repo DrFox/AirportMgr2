@@ -1,6 +1,7 @@
 #include "Model/ArrivalPlanner.h"
 
 #include "AirsideLog.h"
+#include "Model/AirsideCapability.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
@@ -386,46 +387,91 @@ namespace ArrivalPlanner
 		}
 	}
 
+	namespace
+	{
+		/** Is any segment of Seed's strip held. No agent of our own to be occupying anything:
+		 *  nothing has been dispatched yet, so bCountOwnOccupied is false - see
+		 *  FTrafficOccupancy::IsAnyHeld. */
+		bool IsChainHeld(const URoadNetwork& Network, FRoadSegmentId Seed, const FTrafficOccupancy* Occupancy)
+		{
+			return Occupancy != nullptr && Occupancy->IsAnyHeld(Network.RunwaySurfaces(Seed), 0, false);
+		}
+
+		/**
+		 * Every runway an arrival may land on - its ERunwayUse says it takes arrivals - each at its
+		 * END IN USE, nearest Near first. Nearest-first because the old rule was "the runway nearest
+		 * the focus" and it still decides which refusal is reported when none will do.
+		 *
+		 * InUseRunwayAt, not the summary's own End: the planners choose ends through the in-use
+		 * resolver only (Check-Architecture rule 28). A point just inside the summary's threshold,
+		 * DeparturePlanner::PlanAny's own probe and reason.
+		 */
+		TArray<FRunwayEnd> LandingRunways(const URoadNetwork& Network, const FVector2D& Near, int32& OutRunwayCount)
+		{
+			TArray<FRunwayEnd> Out;
+			const TArray<FRunwaySummary> Runways = AirsideCapability::SummariseRunways(Network);
+			OutRunwayCount = Runways.Num();
+			for (const FRunwaySummary& R : Runways)
+			{
+				FRunwayEnd End;
+				if (Network.InUseRunwayAt(R.End.Threshold + R.End.Direction * 10.0, End)
+					&& RunwayUse::Lands(Network.RunwayFactsFor(End.Seed).Use))
+				{
+					Out.Add(End);
+				}
+			}
+			auto Distance = [&Near](const FRunwayEnd& E)
+			{
+				return FMath::Min(FVector2D::Distance(Near, E.Threshold), FVector2D::Distance(Near, E.FarEnd()));
+			};
+			Out.StableSort([&](const FRunwayEnd& A, const FRunwayEnd& B) { return Distance(A) < Distance(B); });
+			return Out;
+		}
+	}
+
 	bool IsRunwayBusy(const URoadNetwork& Network, const FVector2D& Near, const FTrafficOccupancy* Occupancy)
 	{
-		// InUseRunwayNearest, not NearestRunwayThreshold, although only the CHAIN is read here:
-		// the planners choose ends through the in-use resolver only (Check-Architecture rule 28),
-		// and the chain is the same whichever end is returned.
-		FRunwayEnd End;
-		if (Occupancy == nullptr || !Network.InUseRunwayNearest(Near, End))
+		// EVERY RUNWAY THAT TAKES ARRIVALS HELD, not the one nearest Near (2026-09-29): Plan now
+		// lands on whichever is free, so the queue must release a flight as soon as ANY is -
+		// asking about one strip left the second runway empty while flights waited for the first
+		// (samples/2runways.png). False with no runway: Plan refuses that itself, not as busy.
+		if (Occupancy == nullptr)
 		{
 			return false;
 		}
-		// No agent of our own to be occupying anything: nothing has been dispatched yet, so
-		// bCountOwnOccupied is false - see FTrafficOccupancy::IsAnyHeld.
-		return Occupancy->IsAnyHeld(Network.RunwaySurfaces(End.Seed), 0, false);
+		int32 RunwayCount = 0;
+		const TArray<FRunwayEnd> Candidates = LandingRunways(Network, Near, RunwayCount);
+		if (Candidates.IsEmpty())
+		{
+			return false;
+		}
+		for (const FRunwayEnd& End : Candidates)
+		{
+			if (!IsChainHeld(Network, End.Seed, Occupancy))
+			{
+				return false;
+			}
+		}
+		return true;
 	}
 
-	FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near, const FAirframe& Airframe,
+	namespace
+	{
+	/**
+	 * Plan's work on ONE runway, landing over End (its end in use). Split out 2026-09-29 so Plan
+	 * can ask every runway that takes arrivals and keep the best - see Plan.
+	 */
+	FArrivalPlan PlanOn(const URoadNetwork& Network, const FRunwayEnd& End, const FAirframe& Airframe,
 		const FTrafficOccupancy* Occupancy, ERunwayBusy RunwayBusy, int32 ExcludingHolder)
 	{
 		FArrivalPlan Out;
 		Out.AircraftWingspan = Airframe.Wingspan;
 
-		// 0. NOT ON A GRAPH MID-EDIT - see EArrivalRefusal::GraphBeingEdited. First, because
-		//    every step below reads the guideline graph, and the one it would read is stale.
-		if (Network.AreGuidelinesBehindRoad())
-		{
-			Out.Why = EArrivalRefusal::GraphBeingEdited;
-			return Out;
-		}
-
-		// 1. WHICH RUNWAY, AND WHICH END. The runway nearest the query point, which is the
-		//    user's own choice of rule; the END is the runway in use, never the one nearest the
-		//    approach focus (spec 2026-09-28-runway-in-use). Nearest-end put a landing and a
-		//    shortest-taxi departure head to head on one strip (samples/deadlock.png): with no
+		// 1. THE END IS THE RUNWAY IN USE, never the one nearest the approach focus (spec
+		//    2026-09-28-runway-in-use) - LandingRunways resolved it. Nearest-end put a landing and
+		//    a shortest-taxi departure head to head on one strip (samples/deadlock.png): with no
 		//    wind model, the player's choice of direction is what stands in for one.
-		if (!Network.InUseRunwayNearest(Near, Out.End))
-		{
-			Out.Why = EArrivalRefusal::NoRunway;
-			return Out;
-		}
-
+		Out.End = End;
 		Out.RunwayChain = Network.RunwayChain(Out.End.Seed);
 
 		// 1a. MAY IT USE THIS RUNWAY AT ALL. Surface, approach, published field length and
@@ -445,9 +491,9 @@ namespace ArrivalPlanner
 		// Asked before the length and exit steps, because those cannot change while the
 		// runway is busy and this can: a refusal that clears on its own is reported as
 		// itself, not as whichever later step happened to fail too.
-		// SKIPPED UNDER Queue: an accept waits its turn for the strip - see ERunwayBusy. The
-		// test itself is IsRunwayBusy, the same one the sequencer asks.
-		if (RunwayBusy == ERunwayBusy::Refuse && IsRunwayBusy(Network, Near, Occupancy))
+		// SKIPPED UNDER Queue: an accept waits its turn for the strip - see ERunwayBusy. THIS
+		// strip only; IsRunwayBusy asks the same IsChainHeld of every arrival runway.
+		if (RunwayBusy == ERunwayBusy::Refuse && IsChainHeld(Network, Out.End.Seed, Occupancy))
 		{
 			Out.Why = EArrivalRefusal::RunwayOccupied;
 			return Out;
@@ -624,6 +670,87 @@ namespace ArrivalPlanner
 		Out.Why = EArrivalRefusal::None;
 		return Out;
 	}
+	}
+
+	FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near, const FAirframe& Airframe,
+		const FTrafficOccupancy* Occupancy, ERunwayBusy RunwayBusy, int32 ExcludingHolder)
+	{
+		FArrivalPlan Out;
+		Out.AircraftWingspan = Airframe.Wingspan;
+
+		// 0. NOT ON A GRAPH MID-EDIT - see EArrivalRefusal::GraphBeingEdited. First, because
+		//    every step below reads the guideline graph, and the one it would read is stale.
+		if (Network.AreGuidelinesBehindRoad())
+		{
+			Out.Why = EArrivalRefusal::GraphBeingEdited;
+			return Out;
+		}
+
+		// 1. WHICH RUNWAYS. Every one whose ERunwayUse takes arrivals, nearest Near first.
+		int32 RunwayCount = 0;
+		const TArray<FRunwayEnd> Candidates = LandingRunways(Network, Near, RunwayCount);
+		if (Candidates.IsEmpty())
+		{
+			// NoRunway only when there is none at all; runways that all refuse arrivals are the
+			// player's setting, and the sentence says so. End is the nearest anyway, for the log.
+			Out.Why = RunwayCount == 0 ? EArrivalRefusal::NoRunway : EArrivalRefusal::NoArrivalRunway;
+			Network.InUseRunwayNearest(Near, Out.End);
+			return Out;
+		}
+
+		// 2. EACH ONE PLANNED WHOLE, the best kept: FREE before held (a held one only survives
+		//    under Queue), then a runway SET to arrivals before a mixed one - the player said
+		//    which strip they want landings on - then the shortest taxi in. Before 2026-09-29 the
+		//    nearest runway was the only one ever asked, and a field with two used one
+		//    (samples/2runways.png). A full plan per runway, not a cheap pre-filter: which exits
+		//    and stands a strip reaches IS the answer, and there were 2 runways on the busiest
+		//    field on 2026-09-29.
+		FArrivalPlan Best;
+		bool bBestHeld = false;
+		const FArrivalPlan* Transient = nullptr;
+		TArray<FArrivalPlan> Tried;
+		Tried.Reserve(Candidates.Num());
+		for (const FRunwayEnd& End : Candidates)
+		{
+			const FArrivalPlan& Each = Tried.Add_GetRef(PlanOn(Network, End, Airframe, Occupancy, RunwayBusy, ExcludingHolder));
+			if (!Each.IsValid())
+			{
+				continue;
+			}
+			const bool bHeld = IsChainHeld(Network, End.Seed, Occupancy);
+			const bool bDedicated = RunwayUse::Resolve(Network.RunwayFactsFor(End.Seed).Use) == ERunwayUse::ArrivalsOnly;
+			const bool bBestDedicated = Best.IsValid()
+				&& RunwayUse::Resolve(Network.RunwayFactsFor(Best.End.Seed).Use) == ERunwayUse::ArrivalsOnly;
+			const bool bBetter = !Best.IsValid()
+				|| (bHeld != bBestHeld ? !bHeld
+				: bDedicated != bBestDedicated ? bDedicated
+				: Each.TaxiIn.Length < Best.TaxiIn.Length);
+			if (bBetter)
+			{
+				Best = Each;
+				bBestHeld = bHeld;
+			}
+		}
+		if (Best.IsValid())
+		{
+			return Best;
+		}
+
+		// 3. NONE WILL DO. A refusal that CLEARS ON ITS OWN wins - RunwayOccupied, then NoFreeStand -
+		//    because the queue waits on those and would give up on the flight for a permanent
+		//    refusal from a runway it never needed. Otherwise the nearest runway's, the old rule.
+		for (const EArrivalRefusal Soft : { EArrivalRefusal::RunwayOccupied, EArrivalRefusal::NoFreeStand })
+		{
+			for (const FArrivalPlan& Each : Tried)
+			{
+				if (Each.Why == Soft && Transient == nullptr)
+				{
+					Transient = &Each;
+				}
+			}
+		}
+		return Transient != nullptr ? *Transient : Tried[0];
+	}
 
 	FString DescribeRefusal(EArrivalRefusal Why, double AircraftWingspan)
 	{
@@ -634,6 +761,9 @@ namespace ArrivalPlanner
 		{
 		case EArrivalRefusal::NoRunway:
 			return TEXT("No runway to land on - draw one first.");
+
+		case EArrivalRefusal::NoArrivalRunway:
+			return TEXT("Arrival refused: every runway is set to departures only - set one to arrivals or mixed.");
 
 		case EArrivalRefusal::RunwayTooShort:
 			return TEXT("Arrival refused: the runway is too short for this aircraft to stop.");

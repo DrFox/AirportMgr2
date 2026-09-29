@@ -327,6 +327,7 @@ public:
 	 * Facts.InUse 0 KEEPS the strip's runway in use: 0 is no designator, and every caller that
 	 * builds a fresh FRunwayFacts to reclassify a surface (the runway tool's Facts(), a test's
 	 * `FRunwayFacts Grass;`) would otherwise silently reset the direction the player chose.
+	 * Facts.Use Unset keeps the strip's ERunwayUse for the same reason.
 	 *
 	 * The chain rather than the one segment, because the facts are the strip's: a runway
 	 * split by two exits is three segments and one runway, and a tool that classified the

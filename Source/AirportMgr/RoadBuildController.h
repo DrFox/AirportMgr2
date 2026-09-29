@@ -504,6 +504,14 @@ public:
 	void FlipSelectedRunway();
 
 	/**
+	 * Step the selected runway's ERunwayUse on - mixed, arrivals only, departures only, mixed
+	 * (RunwayUse::Next) - through the actor's SetRunwayFacts, FlipSelectedRunway's path: one undo
+	 * step, logged "Runway at segment N takes: arrivals only (was mixed)". Planned flights keep
+	 * their plan; the next plan reads it. Enabled whenever the flip is (CanFlipSelectedRunway).
+	 */
+	void CycleSelectedRunwayUse();
+
+	/**
 	 * THE UNSTICK MENU'S VERBS (spec 2026-09-29-unstick-agent) - FORWARDERS to UOpsRuntime::CanUnstick /
 	 * Unstick with the selected agent, so the inspector's lines and the action they run are the one
 	 * decision UAgentRescue makes. Refused ("Nothing selected") with no agent selected or no runtime

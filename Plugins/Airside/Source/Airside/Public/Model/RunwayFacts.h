@@ -23,6 +23,56 @@ enum class ERunwayApproach : uint8
 };
 
 /**
+ * What traffic a runway takes - the player's choice, on the runway's card (2026-09-29).
+ *
+ * WHY IT EXISTS: with two runways every arrival went to the one nearest the longest strip's
+ * threshold and every departure to the shortest taxi, so the second runway sat empty
+ * (samples/2runways.png). Mixed now means "free first" in both planners; the two dedicated
+ * modes let a player segregate parallels the way a real field does.
+ *
+ * Unset = 0 FOR THE WRITE, InUse's own reason (FRunwayFacts::InUse): every caller that builds a
+ * fresh FRunwayFacts to reclassify a surface would otherwise reset the player's choice - so
+ * Unset on a write KEEPS what the strip has, and Unset on a read is Mixed (RunwayUse::Resolve),
+ * which is also what a runway saved before the field loads as.
+ */
+UENUM(BlueprintType)
+enum class ERunwayUse : uint8
+{
+	Unset UMETA(Hidden),
+	Mixed,
+	ArrivalsOnly,
+	DeparturesOnly,
+};
+
+namespace RunwayUse
+{
+	/** Unset reads as Mixed - see ERunwayUse. */
+	inline ERunwayUse Resolve(ERunwayUse Use) { return Use == ERunwayUse::Unset ? ERunwayUse::Mixed : Use; }
+	inline bool Lands(ERunwayUse Use) { return Resolve(Use) != ERunwayUse::DeparturesOnly; }
+	inline bool Departs(ERunwayUse Use) { return Resolve(Use) != ERunwayUse::ArrivalsOnly; }
+	/** The one after Use, for the card's button: Mixed -> Arrivals only -> Departures only -> Mixed. */
+	inline ERunwayUse Next(ERunwayUse Use)
+	{
+		switch (Resolve(Use))
+		{
+		case ERunwayUse::Mixed:        return ERunwayUse::ArrivalsOnly;
+		case ERunwayUse::ArrivalsOnly: return ERunwayUse::DeparturesOnly;
+		default:                       return ERunwayUse::Mixed;
+		}
+	}
+	/** For logs and the card. */
+	inline const TCHAR* Name(ERunwayUse Use)
+	{
+		switch (Resolve(Use))
+		{
+		case ERunwayUse::ArrivalsOnly:   return TEXT("arrivals only");
+		case ERunwayUse::DeparturesOnly: return TEXT("departures only");
+		default:                         return TEXT("mixed");
+		}
+	}
+}
+
+/**
  * The facts about ONE runway that are neither its cross-section nor its length.
  *
  * On the SEGMENT (FRoadSegment::Runway), not on a profile asset: four surfaces by three
@@ -60,9 +110,12 @@ struct AIRSIDE_API FRunwayFacts
 	 */
 	UPROPERTY(EditAnywhere) int32 InUse = 0;
 
+	/** What traffic this strip takes - see ERunwayUse. Unset keeps on a write, reads Mixed. */
+	UPROPERTY(EditAnywhere) ERunwayUse Use = ERunwayUse::Unset;
+
 	bool operator==(const FRunwayFacts& Other) const
 	{
-		return Surface == Other.Surface && Approach == Other.Approach && InUse == Other.InUse;
+		return Surface == Other.Surface && Approach == Other.Approach && InUse == Other.InUse && Use == Other.Use;
 	}
 	bool operator!=(const FRunwayFacts& Other) const { return !(*this == Other); }
 };

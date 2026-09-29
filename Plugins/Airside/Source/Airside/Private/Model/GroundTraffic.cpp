@@ -90,11 +90,13 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	// one and wrote LastMotion from the approach's own starting pose - see its comment - so
 	// a second would be the second evaluator this codebase keeps out of motion.
 
+	// THE THRESHOLD'S POSITION, because two parallel strips share a designator pair: "09/27"
+	// alone could not say which runway a flight took (samples/2runways.png, 2026-09-29).
 	UE_LOG(LogAirsideTraffic, Log,
-		TEXT("Arrival on runway %s: %.0f uu available, %.0f needed, vacating at exit %d of %d, ")
+		TEXT("Arrival on runway %s (threshold at %.0f, %.0f): %.0f uu available, %.0f needed, vacating at exit %d of %d, ")
 		TEXT("taxiing %.0f uu to a stand."),
-		*RunwayDesignator::ToPairText(Plan.End.Direction), Plan.End.Length, Plan.Needed,
-		Plan.ExitOrdinal, Plan.ExitCount, Plan.TaxiIn.Length);
+		*RunwayDesignator::ToPairText(Plan.End.Direction), Plan.End.Threshold.X, Plan.End.Threshold.Y,
+		Plan.End.Length, Plan.Needed, Plan.ExitOrdinal, Plan.ExitCount, Plan.TaxiIn.Length);
 
 	const int32 Id = Admit(MoveTemp(Agent));
 
@@ -273,9 +275,10 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 		const FVector2D OnStrip = RunwayQuery::PointOnChain(*Network, Chain);
 		Agent.ArmDepartureRunway(MoveTemp(Chain), OnStrip);
 
+		// The threshold's position, the arrival line's reason: parallels share a designator.
 		UE_LOG(LogAirsideTraffic, Log,
-			TEXT("Route ends on runway %s %.0f uu past the threshold: %.0f uu available, departure armed"),
-			*RunwayDesignator::ToPairText(End.Direction), EntryOffset, End.Length - EntryOffset);
+			TEXT("Route ends on runway %s (threshold at %.0f, %.0f) %.0f uu past the threshold: %.0f uu available, departure armed"),
+			*RunwayDesignator::ToPairText(End.Direction), End.Threshold.X, End.Threshold.Y, EntryOffset, End.Length - EntryOffset);
 
 		// THE ROLL IS STILL DERIVED FROM THE ROUTE, not forced to the runway in use: a planner
 		// route arrives aligned with it (intersection) or backtracks to its threshold, so this
@@ -897,7 +900,8 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 
 	// From where it PARKED - its goal node - not from its polyline position: the search is
 	// over the graph and the pose node is the graph's name for this stand.
-	const FDeparturePlan Plan = DeparturePlanner::PlanAny(Network, Agent.GoalNode, *Aircraft, Agent.Class);
+	// WITH THE OCCUPANCY, so a free runway beats a busy one (2026-09-29, samples/2runways.png).
+	const FDeparturePlan Plan = DeparturePlanner::PlanAny(Network, Agent.GoalNode, *Aircraft, Agent.Class, &Occupancy);
 	// SAID ON A CHANGE, not per call - see LastDepartVerdict. A success is always said, and
 	// clears the gate so a later refusal of the same aircraft is said again.
 	const FString Verdict = DeparturePlanner::Describe(Plan);
@@ -1193,7 +1197,9 @@ void UGroundTraffic::ReplanHeldTaxiOuts(const URoadNetwork& Network)
 		FDeparturePlan Plan;
 		if (From.IsSet())
 		{
-			Plan = DeparturePlanner::PlanAny(Network, From, *Aircraft, Agent.Class);
+			// Occupancy, DepartAgent's reason. This agent holds no runway yet - it is holding
+			// for taxi-out - so its own claims cannot make a strip look busy to itself.
+			Plan = DeparturePlanner::PlanAny(Network, From, *Aircraft, Agent.Class, &Occupancy);
 		}
 		if (!From.IsSet() || !Plan.IsValid() || Plan.Route.Polyline.Num() == 0)
 		{

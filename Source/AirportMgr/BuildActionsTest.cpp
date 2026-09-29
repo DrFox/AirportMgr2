@@ -64,6 +64,9 @@ bool FBuildActionsRegistryTest::RunTest(const FString& Parameters)
 	// selected is a misclick away from sending the next arrival the other way.
 	TestTrue(TEXT("selection.runway_in_use is registered, keyless, in Selection"), Actions.ContainsByPredicate([](const FBuildAction& A)
 		{ return A.Id == FName(TEXT("selection.runway_in_use")) && A.Section == EActionSection::Selection && !A.Key.IsValid() && A.DynamicLabel; }));
+	// ITS NEIGHBOUR, the runway's mode (2026-09-29): keyless for the flip's reason, captioned live.
+	TestTrue(TEXT("selection.runway_use is registered, keyless, in Selection"), Actions.ContainsByPredicate([](const FBuildAction& A)
+		{ return A.Id == FName(TEXT("selection.runway_use")) && A.Section == EActionSection::Selection && !A.Key.IsValid() && A.DynamicLabel; }));
 
 	// Every section has at least one action - an empty section on the bar is a layout with
 	// nothing in it, which reads as a bug.

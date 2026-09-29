@@ -158,6 +158,7 @@ namespace InspectFacts
 		Out.Other = RunwayDesignator::Reciprocal(Out.InUse);
 		Out.Surface = Facts.Surface;
 		Out.Approach = Facts.Approach;
+		Out.Use = RunwayUse::Resolve(Facts.Use);
 		Out.Length = End.Length;
 		return true;
 	}

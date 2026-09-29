@@ -6,6 +6,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
 #include "Model/TakeoffRun.h"
+#include "Model/TrafficOccupancy.h"
 
 namespace DeparturePlanner
 {
@@ -138,7 +139,7 @@ namespace DeparturePlanner
 	}
 
 	FDeparturePlan PlanAny(const URoadNetwork& Network, FGuidelineNodeId Start,
-		const FAirframe& Airframe, ETraversalClass Class)
+		const FAirframe& Airframe, ETraversalClass Class, const FTrafficOccupancy* Occupancy)
 	{
 		// The capability summary already enumerates chains once each, by threshold pair;
 		// re-deriving that walk here would be a second enumerator to keep in step.
@@ -157,9 +158,20 @@ namespace DeparturePlanner
 		FDeparturePlan Best;
 		Best.Why = EDepartureRefusal::NoRunway;
 		bool bHaveRefusal = false;
+		bool bBestHeld = false;
+		bool bBestDedicated = false;
+		int32 Departing = 0;
 
 		for (const FRunwaySummary& R : Cap.Runways)
 		{
+			// A RUNWAY SET TO ARRIVALS ONLY is not tried at all - the player's segregation, not a
+			// refusal to report per strip. Read off the seed: every member carries the strip's facts.
+			const ERunwayUse Use = RunwayUse::Resolve(Network.RunwayFactsFor(R.End.Seed).Use);
+			if (!RunwayUse::Departs(Use))
+			{
+				continue;
+			}
+			++Departing;
 			// ONE POINT PER RUNWAY, just inside an end: RunwayExtentAt's proximity gate is against
 			// the nearest segment end, so a midpoint on a long segment is "not on a runway". It
 			// used to be a point inside EACH end, which is how a departure came to take off from
@@ -170,9 +182,20 @@ namespace DeparturePlanner
 				const FDeparturePlan Candidate = Plan(Network, Start, OnRunway, Airframe, Class);
 				if (Candidate.IsValid())
 				{
-					if (!Best.IsValid() || Candidate.Route.Length < Best.Route.Length)
+					// FREE, THEN DEDICATED, THEN SHORTEST - see the header. Held is asked of the
+					// whole strip, the claim a departure makes at its handover (GroundTraffic).
+					const bool bHeld = Occupancy != nullptr
+						&& Occupancy->IsAnyHeld(Network.RunwaySurfaces(Candidate.End.Seed), 0, false);
+					const bool bDedicated = Use == ERunwayUse::DeparturesOnly;
+					const bool bBetter = !Best.IsValid()
+						|| (bHeld != bBestHeld ? !bHeld
+						: bDedicated != bBestDedicated ? bDedicated
+						: Candidate.Route.Length < Best.Route.Length);
+					if (bBetter)
 					{
 						Best = Candidate;
+						bBestHeld = bHeld;
+						bBestDedicated = bDedicated;
 					}
 				}
 				else if (!Best.IsValid() && !bHaveRefusal)
@@ -181,6 +204,10 @@ namespace DeparturePlanner
 					bHaveRefusal = true;
 				}
 			}
+		}
+		if (Departing == 0 && Cap.Runways.Num() > 0)
+		{
+			Best.Why = EDepartureRefusal::NoDepartureRunway;
 		}
 		return Best;
 	}
@@ -197,6 +224,8 @@ namespace DeparturePlanner
 			return FString::Printf(TEXT("Departure refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
 		case EDepartureRefusal::NotParked:  return TEXT("Departure refused: the aircraft is not parked.");
 		case EDepartureRefusal::GraphBeingEdited: return TEXT("Departure waiting: the airport is being edited.");
+		case EDepartureRefusal::NoDepartureRunway:
+			return TEXT("Departure refused: every runway is set to arrivals only - set one to departures or mixed.");
 		case EDepartureRefusal::None:
 			return FString::Printf(TEXT("Departure: %s entry %.0f uu past the threshold, %.0f uu available of %.0f, %.0f needed, taxiing %.0f uu."),
 				Plan.bBacktrack ? TEXT("backtrack to the") : TEXT("intersection"),

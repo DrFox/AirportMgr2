@@ -746,6 +746,23 @@ void ARoadBuildController::FlipSelectedRunway()
 	}
 }
 
+void ARoadBuildController::CycleSelectedRunwayUse()
+{
+	FRunwayCardFacts Card;
+	if (!SelectedRunwayFacts(Card))
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Runway use: no runway selected."));
+		return;
+	}
+	const FRoadSegmentId Segment = Target->GetNetwork()->SegmentIdAt(GetSelection().Id);
+	FRunwayFacts Facts = Target->GetNetwork()->RunwayFactsFor(Segment);
+	Facts.Use = RunwayUse::Next(Card.Use);
+	if (!Target->SetRunwayFacts(GetSelection().Id, Facts))
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Runway use: the change to %s was refused."), RunwayUse::Name(Facts.Use));
+	}
+}
+
 FUnstickVerdict ARoadBuildController::CanUnstickSelected(EUnstickAction Action) const
 {
 	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
