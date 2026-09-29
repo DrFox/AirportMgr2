@@ -43,6 +43,33 @@ UOpsRuntime::UOpsRuntime()
 	// Attach, and every decision about what things cost lives in UPricing, not here.
 	Ledger = CreateDefaultSubobject<ULedger>(TEXT("Ledger"));
 	Pricing = CreateDefaultSubobject<UPricing>(TEXT("Pricing"));
+
+	// The Unstick menu, the same shape again: a pointer, and the two boards it composes.
+	AgentRescue = CreateDefaultSubobject<UAgentRescue>(TEXT("AgentRescue"));
+	AgentRescue->JobBoard = JobBoard;
+	AgentRescue->FlightBoard = FlightBoard;
+}
+
+FUnstickVerdict UOpsRuntime::CanUnstick(int32 AgentId, EUnstickAction Action) const
+{
+	const UGroundTraffic* Model = Target != nullptr && Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr;
+	if (Model == nullptr)
+	{
+		return FUnstickVerdict::No(NSLOCTEXT("AgentRescue", "NoAirport", "No airport attached"));
+	}
+	return AgentRescue->CanUnstick(*Model, AgentId, Action);
+}
+
+FUnstickVerdict UOpsRuntime::Unstick(int32 AgentId, EUnstickAction Action)
+{
+	UGroundTraffic* Model = Target != nullptr && Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr;
+	if (Model == nullptr || Target->Network == nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Unstick: agent %d %s -> refused: no airport attached"),
+			AgentId, *UEnum::GetValueAsString(Action));
+		return FUnstickVerdict::No(NSLOCTEXT("AgentRescue", "NoAirport", "No airport attached"));
+	}
+	return AgentRescue->Unstick(*Model, *Target->Network, *Clock, AgentId, Action);
 }
 
 TArray<FAirlineOffers> UOpsRuntime::AirlineOffersFromCatalog() const

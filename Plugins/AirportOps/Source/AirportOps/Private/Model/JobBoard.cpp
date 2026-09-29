@@ -390,6 +390,56 @@ void UJobBoard::Reopen(FServiceJob& Job)
 	Job.TripQuantity = 0.0;
 }
 
+bool UJobBoard::IsStranded(const FServiceVehicle& Vehicle, const UGroundTraffic& Traffic)
+{
+	const FRoadAgent* Agent = Vehicle.AgentId != 0 ? Traffic.FindAgent(Vehicle.AgentId) : nullptr;
+	return Agent != nullptr && Agent->Phase == EAgentPhase::Stranded;
+}
+
+int32 UJobBoard::ReleaseJobsOf(FServiceVehicle& Vehicle)
+{
+	int32 Released = 0;
+	for (FServiceJob& Job : Jobs)
+	{
+		if (Job.VehicleId == Vehicle.Id && Job.State != EServiceJobState::Done)
+		{
+			Reopen(Job);
+			++Released;
+		}
+	}
+	Vehicle.CurrentJob = 0;
+	Vehicle.Queue.Reset();
+	return Released;
+}
+
+bool UJobBoard::RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic& Traffic,
+	const URoadNetwork& Network, const USimClock& Clock)
+{
+	const FServiceVehicle* Found = AgentId != 0 ? VehicleForAgent(AgentId) : nullptr;
+	FServiceVehicle* Vehicle = Found != nullptr ? FindVehicleMutable(Found->Id) : nullptr;
+	if (Vehicle == nullptr)
+	{
+		return false;
+	}
+	const int32 Released = ReleaseJobsOf(*Vehicle);
+	++FleetRevision;
+	if (bRetire)
+	{
+		// RETIRED, THEN UNHOOKED: RetireAgent's Gone broadcast reaches OnAgentPhase, which ignores a
+		// non-Parked phase, and SyncFleet then finds nothing lost - the vehicle is already home.
+		Traffic.RetireAgent(AgentId);
+		Vehicle->AgentId = 0;
+		Vehicle->State = EServiceVehicleState::Idle;
+		UE_LOG(LogAirportOps, Log, TEXT("Fuel: vehicle %d (agent %d) despawned by the player; %d job(s) back to the board, Idle at depot %d"),
+			Vehicle->Id, AgentId, Released, Vehicle->Home.Index);
+		return true;
+	}
+	UE_LOG(LogAirportOps, Log, TEXT("Fuel: vehicle %d (agent %d) sent home by the player; %d job(s) back to the board"),
+		Vehicle->Id, AgentId, Released);
+	GoToFacility(*Vehicle, Traffic, Network, Clock);
+	return true;
+}
+
 void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network)
 {
 	// NEW DEPOTS GET THEIR PLACEHOLDER FLEET (spec §3.4): Trucks of every kind in FleetTypes, Idle and
@@ -773,6 +823,27 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	if (From == EAgentPhase::Parked && To != EAgentPhase::Parked && TurnaroundFor(AgentId) != nullptr)
 	{
 		DropAircraft(AgentId, Traffic, Network, Clock);
+		return;
+	}
+
+	// A VEHICLE STRANDED - the road under it went (#399's follow-up). It will never arrive, so its jobs
+	// would sit assigned to it for the session and no other vehicle would bid. They go back to the board
+	// now. THE VEHICLE STAYS WHERE IT IS, for the player's Unstick: nothing automatic moves a stranded
+	// agent (UGroundTraffic::RescueStranded's contract), and retiring it here would make every truck on a
+	// deleted road vanish. ToFacility, so whatever the player does next - a Replan to its old goal, Send
+	// home - ends at home: OnVehicleArrived turns a ToFacility vehicle for home wherever it parks.
+	// ENFORCED BY: AirportOps.Model.AgentRescue.StrandedVehicleReleasesJobs
+	if (To == EAgentPhase::Stranded)
+	{
+		if (const FServiceVehicle* Found = VehicleForAgent(AgentId))
+		{
+			FServiceVehicle& Vehicle = *FindVehicleMutable(Found->Id);
+			const int32 Released = ReleaseJobsOf(Vehicle);
+			Vehicle.State = EServiceVehicleState::ToFacility;
+			++FleetRevision;
+			UE_LOG(LogAirportOps, Warning, TEXT("Fuel: vehicle %d (agent %d) stranded; %d job(s) back to the board, it waits for the player"),
+				Vehicle.Id, AgentId, Released);
+		}
 		return;
 	}
 

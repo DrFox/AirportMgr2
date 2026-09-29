@@ -533,26 +533,44 @@ namespace
 	constexpr double SplitRejoinRadius = 300.0;
 
 	/**
+	 * How far the PLAYER'S rescue of a stranded agent may hop it onto live pavement, uu: 15 m.
+	 * Spec 2026-09-29-unstick-agent. The two radii above find nothing here BY CONSTRUCTION - an
+	 * agent is stranded because the rebuild found no line within reach - so this must be larger
+	 * to be any use at all. 15 m is a visible hop the player asked for, and short of the next
+	 * road over on every layout seen (a lane is 3.5-4.5 m, a taxiway strip half-width 20 m+).
+	 */
+	constexpr double RescueRejoinRadius = 1500.0;
+
+	/**
 	 * The nearest point, within Radius of the agent, on an edge running the way it is facing with
 	 * a route to its goal from there; that route and how far along its first step the point is.
 	 * The agent hops onto it. Two callers: a drive-side flip (FlipRejoinRadius - a visible 3-4 m
 	 * jump, once, on a deliberate airport-wide setting change; the alternative was stranding every
 	 * truck on the road), and a step that no longer re-resolves under a driving agent
-	 * (SplitRejoinRadius - see there).
+	 * (SplitRejoinRadius - see there). A THIRD, the player's rescue of a stranded agent
+	 * (UGroundTraffic::RescueStranded, RescueRejoinRadius), passes WantedGoal: Send home and Find
+	 * stand rescue toward a goal that is not the agent's own.
 	 */
 	bool RejoinNearby(FRoadAgent& Agent, const FRoutePlan& Plan, const FTrafficContext& Context,
-		double Radius, FRoutePlan& OutPlan, double& OutTravelled, FVector2D& OutAt)
+		double Radius, FRoutePlan& OutPlan, double& OutTravelled, FVector2D& OutAt,
+		FGuidelineNodeId WantedGoal = FGuidelineNodeId())
 	{
 		const URoadNetwork& Network = Context.Network;
 		const FVector2D Here = Agent.LastMotion.Position;
 		const FVector2D Facing(FMath::Cos(Agent.LastMotion.Heading), FMath::Sin(Agent.LastMotion.Heading));
+
+		if (WantedGoal.IsSet() && Network.GetGuidelineNode(WantedGoal) == nullptr)
+		{
+			return false;
+		}
 
 		// The goal is usually an anchor or a stand pose, whose handle survives any rebuild. A
 		// lane end does not, and the NEAREST node to where the plan ended is the wrong stand-in
 		// for the same reason the start is: the old lane end's position now holds the start of
 		// the lane running the other way. So: the nearest node the vehicle can ARRIVE at still
 		// heading the way the old plan arrived.
-		FGuidelineNodeId Goal = Network.GetGuidelineNode(Agent.GoalNode) != nullptr ? Agent.GoalNode : FGuidelineNodeId();
+		FGuidelineNodeId Goal = WantedGoal.IsSet() ? WantedGoal
+			: Network.GetGuidelineNode(Agent.GoalNode) != nullptr ? Agent.GoalNode : FGuidelineNodeId();
 		if (!Goal.IsSet() && Plan.Polyline.Num() >= 2)
 		{
 			const FVector2D End = Plan.Polyline.Last();
@@ -743,6 +761,11 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// within Rules.ResolveRadius of it - so "put it back" would mean choosing a place to
 		// teleport it to, and the honest answer is that the player retires it. The Warning
 		// above is what tells them there is something to retire.
+		//
+		// FINAL FOR THE SIMULATION, NOT FOR THE PLAYER (2026-09-29): the inspector's Unstick
+		// (UGroundTraffic::RescueStranded) is the player choosing that place - a hop onto the
+		// nearest line within RescueRejoinRadius - or retiring it. Nothing AUTOMATIC re-resolves
+		// a stranded agent still, for the reason above.
 		//
 		// AND IT NAMES THE RUNWAY WHEN THERE IS ONE. An agent stranded mid-crossing holds
 		// that strip until the player retires it, which is a runway out of service with no
@@ -1208,4 +1231,64 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		TEXT("Agent %d truncated by the rebuild: %d of %d steps survive, %.0f uu to the last live node"),
 		Agent.Id, Failed, WasSteps, Plan.Length);
 	return EReResolve::Truncated;
+}
+
+bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, FGuidelineNodeId Goal)
+{
+	// HERE, BESIDE THE REBUILD, because RejoinNearby is this file's and the rescue is its third
+	// caller: the same projection onto an edge running the agent's way, the same route that must
+	// begin with that edge, only a wider radius (RescueRejoinRadius, see there) and a goal the
+	// caller may choose.
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("RescueStranded %d refused: no such agent"), AgentId);
+		return false;
+	}
+	FRoadAgent& Agent = Agents[Index];
+	if (Agent.Phase != EAgentPhase::Stranded)
+	{
+		// A MOVING AGENT IS ReplanAt's: it keeps Travelled, Speed and Heading on the line it is on.
+		// This re-seats the follower on a (possibly other) edge, which under a moving agent is a jump.
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("RescueStranded %d refused: agent is %s, not Stranded"),
+			AgentId, *UEnum::GetValueAsString(Agent.Phase));
+		return false;
+	}
+
+	FTrafficContext Context{Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds};
+	const FGuidelineNodeId WasGoal = Agent.GoalNode;
+	FRoutePlan Rejoined;
+	double Travelled = 0.0;
+	FVector2D At = FVector2D::ZeroVector;
+	if (!RejoinNearby(Agent, Agent.Follower.Plan, Context, RescueRejoinRadius, Rejoined, Travelled, At, Goal))
+	{
+		UE_LOG(LogAirsideTraffic, Log,
+			TEXT("RescueStranded %d refused: no pavement within %.0f uu running its way with a route to node %d"),
+			AgentId, RescueRejoinRadius, (Goal.IsSet() ? Goal : WasGoal).Index);
+		return false;
+	}
+
+	// THE GOAL MOVES THE WAY EVERY GOAL MOVES - ReleaseGoal then TakeGoal, as RedirectAgent and
+	// ExtendRoute do - so the old goal's claim lets go and the departure is re-armed for the new
+	// end. RejoinNearby wrote the goal straight onto the agent, which is right for the rebuild (same
+	// goal, new handle) and skips both here, so the old one is put back first for ReleaseGoal to free.
+	Agent.SetGoal(WasGoal);
+	ReleaseGoal(Agent, AgentId);
+
+	// The split rejoin's aftermath, for its reason: a new route owns none of the old one's
+	// reservations, and a stall clock that ran while stranded is not a stall on this line.
+	const double Sideways = FVector2D::Distance(Agent.LastMotion.Position, At);
+	Occupancy.ReleaseReservations(AgentId);
+	Occupancy.ReleaseGuidelineClaimsOf(AgentId);
+	Agent.ClearArbitration();
+	Agent.ResetStall();
+	Agent.RejoinTaxi(Rejoined, Travelled, At);
+	TakeGoal(Agent, AgentId, &Network, Rejoined);
+
+	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d rescued: %.0f uu sideways, %.0f uu to node %d"),
+		AgentId, Sideways, Rejoined.Length - Travelled, Agent.GoalNode.Index);
+	// LAST, and nothing read from Agent after it: a listener may retire the agent synchronously
+	// (see ReleaseGoal's comment on UJobBoard::OnAgentPhase).
+	OnAgentPhaseChanged.Broadcast(AgentId, EAgentPhase::Stranded, EAgentPhase::Taxiing);
+	return true;
 }

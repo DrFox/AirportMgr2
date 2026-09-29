@@ -81,7 +81,7 @@ public:
 	virtual void OnAfterRestore(int32 SnapshotVersion) override;
 
 	/**
-	 * How many game days a terminal flight (Declined, Expired or Departed) is kept in History
+	 * How many game days a terminal flight (Declined, Expired, Departed or Cancelled) is kept in History
 	 * before RollUp forgets it outright.
 	 *
 	 * DISCARDED, NOT FOLDED like ULedger::RollUp's BroughtForward entry: a flight has no
@@ -236,6 +236,16 @@ public:
 	void Decline(USimClock& Clock, UFlight& Flight);
 
 	/**
+	 * The flight whose aeroplane the player is about to despawn ends CANCELLED, into history -
+	 * spec 2026-09-29-unstick-agent. CALLED BEFORE UGroundTraffic::RetireAgent, never after: this
+	 * unhooks the agent, so the Gone that follows finds no flight and cannot book it Departed
+	 * (FlightPhaseFromAgent reads Gone as a departure, which for a retired aeroplane is a lie).
+	 * No money moves: fees already posted stay posted. False when the agent flies no flight.
+	 * ENFORCED BY: AirportOps.Model.AgentRescue.AircraftDespawnCancelsFlight
+	 */
+	bool CancelByAgent(int32 AgentId, double Now);
+
+	/**
 	 * Make a flight from an airframe, aim it at Focus, and accept it on the spot - the debug
 	 * land key's whole job, and previously done by hand at the call site (issue #96).
 	 *
@@ -381,7 +391,7 @@ public:
 private:
 	/**
 	 * Every flight not yet in a terminal phase: offered, accepted, or anywhere between landing
-	 * and departing. TERMINAL flights (Declined, Expired, Departed) are moved into History the
+	 * and departing. TERMINAL flights (Declined, Expired, Departed, Cancelled) are moved into History the
 	 * moment they get there - see MoveToHistory - rather than staying here forever, which is
 	 * what made FindByAgent, FindById, Offers(), Live() and every save cost O(every flight
 	 * this session has ever seen) instead of O(what is actually happening) - issue #188.

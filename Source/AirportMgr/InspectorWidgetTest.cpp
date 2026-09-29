@@ -23,7 +23,9 @@
 #include "Tool/Selection.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
+#include "Model/GroundTraffic.h"
 #include "UI/UiButton.h"
+#include "UI/UiMenuButton.h"
 #include "UIStyle.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -584,6 +586,145 @@ bool FInspectorStandTitleIsTheNumberTest::RunTest(const FString& Parameters)
 	Panel->Refresh(Actor, Sel);
 	TestTrue(TEXT("shown with a stand selected"), Panel->IsShownForTest());
 	TestEqual(TEXT("the title is the stand's number"), Panel->TitleForTest(), FString(TEXT("Stand 2")));
+	return true;
+}
+
+/**
+ * THE UNSTICK ROW IS CONSUMED, not only declared (CLAUDE.md: "check where a list is CONSUMED") -
+ * selection.unstick in BuildActions() is read by EnsureSlots BY ID and becomes the card's popup
+ * button, captioned by the row. A row nothing reads is how ARoadBuildController::Tools shipped a
+ * tool with no key.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorUnstickRowTest,
+	"AirportMgr.Inspector.UnstickRowIsConsumed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorUnstickRowTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	const FBuildAction* Row = nullptr;
+	for (const FBuildAction& A : BuildActions())
+	{
+		if (A.Id == FName(TEXT("selection.unstick"))) { Row = &A; }
+	}
+	if (!TestNotNull(TEXT("the registry has an unstick row"), Row)) { return false; }
+	TestFalse(TEXT("with no key - a despawn is a misclick away"), Row->Key.IsValid());
+
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	if (!TestNotNull(TEXT("the Unstick popup button is built from the row"), Panel->UnstickMenu.Get())) { return false; }
+	const UUiButton* Button = Panel->UnstickMenu->GetButton();
+	if (!TestNotNull(TEXT("it has a button"), Button)) { return false; }
+	TestEqual(TEXT("captioned by the row, not a literal"), Button->GetLabel()->GetText().ToString(), Row->Label.ToString());
+	return true;
+}
+
+/**
+ * LIT WHEN STUCK. A stranded agent lights the button at once; one taxiing freely does not. The
+ * light is the only thing that tells the player which of forty aircraft the button is FOR.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorUnstickHighlightTest,
+	"AirportMgr.Inspector.UnstickLightsWhenStranded",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorUnstickHighlightTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(20000.0, 0.0), false);
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A; Edge.B = B;
+		Edge.Control = FVector2D(10000.0, 0.0);
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.bDerived = false;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = Id;
+
+	for (int32 I = 0; I < 30; ++I) { Actor->Tick(1.0f / 30.0f); }
+	Panel->Refresh(Actor, Sel);
+	TestFalse(TEXT("taxiing freely: not lit"), Panel->IsUnstickHighlightedForTest());
+
+	UGroundTraffic* Model = Actor->GetTraffic()->GetModel();
+	if (!TestTrue(TEXT("stranded"), FGroundTrafficTestAccess(*Model).Strand(Id))) { return false; }
+	for (int32 I = 0; I < 5; ++I) { Actor->Tick(1.0f / 30.0f); }
+	if (!TestEqual(TEXT("its phase is Stranded"), Model->FindAgent(Id)->Phase, EAgentPhase::Stranded)) { return false; }
+	Panel->Refresh(Actor, Sel);
+	TestTrue(TEXT("stranded: lit"), Panel->IsUnstickHighlightedForTest());
+	return true;
+}
+
+/**
+ * THE CONFIRM IS A SECOND CLICK, AND A CLOSE DISARMS IT. A bConfirm line's first click only arms it
+ * (and re-captions it); the second chooses it; closing in between means the next open starts from
+ * scratch - an armed Despawn surviving a close would be a one-click delete the next time.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUiMenuButtonConfirmTest,
+	"AirportMgr.UI.MenuButton.ConfirmTakesTwoClicks",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiMenuButtonConfirmTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+	if (!TestNotNull(TEXT("a style"), Style)) { return false; }
+	UUiMenuButton* Menu = CreateWidget<UUiMenuButton>(TestWorld.World, UUiMenuButton::StaticClass());
+	Menu->Build(*Style, FText::FromString(TEXT("Verb")));
+	Menu->Items = []()
+	{
+		TArray<FUiMenuItem> Out;
+		FUiMenuItem& Plain = Out.AddDefaulted_GetRef();
+		Plain.Label = FText::FromString(TEXT("Plain"));
+		FUiMenuItem& Off = Out.AddDefaulted_GetRef();
+		Off.Label = FText::FromString(TEXT("Off"));
+		Off.bEnabled = false;
+		Off.Why = FText::FromString(TEXT("because"));
+		FUiMenuItem& Danger = Out.AddDefaulted_GetRef();
+		Danger.Label = FText::FromString(TEXT("Danger"));
+		Danger.bConfirm = true;
+		Danger.ConfirmLabel = FText::FromString(TEXT("Sure?"));
+		return Out;
+	};
+
+	// HEADLESS OPEN: the anchor's content callback, which is what the anchor itself calls on open.
+	TestNotNull(TEXT("the popup builds"), Menu->BuildMenu());
+	TestEqual(TEXT("three lines"), Menu->ShownItemsForTest().Num(), 3);
+
+	Menu->Choose(1);
+	TestEqual(TEXT("a disabled line chooses nothing"), Menu->ChosenCountForTest(), 0);
+
+	Menu->Choose(2);
+	TestEqual(TEXT("a confirm line's first click chooses nothing"), Menu->ChosenCountForTest(), 0);
+	TestEqual(TEXT("it arms it"), Menu->ArmedForTest(), 2);
+
+	Menu->HandleOpenChanged(false);
+	TestEqual(TEXT("a close disarms it"), Menu->ArmedForTest(), INDEX_NONE);
+
+	Menu->BuildMenu();
+	Menu->Choose(2);
+	TestEqual(TEXT("re-opened: the first click arms again, chooses nothing"), Menu->ChosenCountForTest(), 0);
+	Menu->Choose(2);
+	TestEqual(TEXT("the second click chooses it"), Menu->ChosenCountForTest(), 1);
+	TestEqual(TEXT("that line"), Menu->LastChosenForTest(), 2);
+
+	Menu->BuildMenu();
+	Menu->Choose(0);
+	TestEqual(TEXT("a plain line chooses on one click"), Menu->ChosenCountForTest(), 2);
+	TestEqual(TEXT("that line"), Menu->LastChosenForTest(), 0);
 	return true;
 }
 

@@ -269,6 +269,30 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 	// the start of a chained leg, into a bay at the end of one - and OnVehicleArrived sends it on from
 	// the service point it parks at, exactly as the last-leg recall above does.
 	// ENFORCED BY: AirportOps.Fuel.TowRecalledWhileReversingGetsHome
+	//
+	// BUT NOT STRANDED (2026-09-29): a stranded vehicle has no leg to finish and would "turn where it
+	// parks" never. It is rescued onto pavement toward Goal (UGroundTraffic::RescueStranded), and when
+	// there is none, a job leg is refused and the way home falls to the parked branch's own fallback,
+	// retired where it stands.
+	// ENFORCED BY: AirportOps.Model.AgentRescue.StrandedVehicleReleasesJobs
+	if (Truck->Phase == EAgentPhase::Stranded)
+	{
+		if (Traffic.RescueStranded(TruckId, Network, Goal))
+		{
+			UE_LOG(LogAirportOps, Log, TEXT("Fuel: stranded truck %d rescued, heading for %s"), TruckId, Where);
+			return true;
+		}
+		if (!bToFacility)
+		{
+			return false;
+		}
+		UE_LOG(LogAirportOps, Warning,
+			TEXT("Fuel: stranded truck %d has no pavement to rejoin toward depot %d; retired where it stands, vehicle %d back at its depot"),
+			TruckId, Vehicle.Home.Index, Vehicle.Id);
+		Traffic.RetireAgent(TruckId);
+		Vehicle.AgentId = 0;
+		return false;
+	}
 	if (Truck->Phase != EAgentPhase::Parked)
 	{
 		UE_LOG(LogAirportOps, Log, TEXT("Fuel: truck %d finishes its reverse and turns for %s where it parks"), TruckId, Where);

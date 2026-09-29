@@ -746,6 +746,30 @@ void ARoadBuildController::FlipSelectedRunway()
 	}
 }
 
+FUnstickVerdict ARoadBuildController::CanUnstickSelected(EUnstickAction Action) const
+{
+	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	if (!HasSelectedAircraft() || Runtime == nullptr)
+	{
+		return FUnstickVerdict::No(NSLOCTEXT("AirportMgr", "UnstickNothing", "Nothing selected"));
+	}
+	return Runtime->CanUnstick(GetSelection().Id, Action);
+}
+
+void ARoadBuildController::UnstickSelected(EUnstickAction Action)
+{
+	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	if (!HasSelectedAircraft() || Runtime == nullptr)
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Unstick %s: no agent selected, or no ops runtime."), *UEnum::GetValueAsString(Action));
+		return;
+	}
+	// UAgentRescue logs the "Unstick: agent N ... -> done|refused" line; this one says the click arrived.
+	const int32 Id = GetSelection().Id;
+	UE_LOG(LogRoadBuild, Log, TEXT("Unstick %s: agent %d"), *UEnum::GetValueAsString(Action), Id);
+	Runtime->Unstick(Id, Action);
+}
+
 bool ARoadBuildController::CanDepartSelected() const
 {
 	// THROUGH THE PER-FRAME CACHE (issue #187): the bar polls this every tick, and

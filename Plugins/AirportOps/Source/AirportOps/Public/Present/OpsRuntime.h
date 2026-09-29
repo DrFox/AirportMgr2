@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/AgentRescue.h"
 #include "Model/OfferGenerator.h"
 #include "Model/SimClock.h"
 #include "UObject/Object.h"
@@ -64,6 +65,17 @@ public:
 
 	/** What things cost and what they earn. See UPricing. */
 	UPricing* GetPricing() const { return Pricing; }
+
+	/** The inspector's Unstick. See UAgentRescue - this runtime owns it and hands it the two boards. */
+	UAgentRescue* GetAgentRescue() const { return AgentRescue; }
+
+	/**
+	 * FORWARDERS to UAgentRescue with this runtime's traffic, network and clock - the three the driver
+	 * does not hold, as LandNear supplies them. Refused ("Nothing selected"-shaped) when unattached.
+	 * ENFORCED BY: AirportOps.Present.UnstickForwards
+	 */
+	FUnstickVerdict CanUnstick(int32 AgentId, EUnstickAction Action) const;
+	FUnstickVerdict Unstick(int32 AgentId, EUnstickAction Action);
 
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
@@ -167,6 +179,7 @@ private:
 	UPROPERTY() TObjectPtr<UOfferGenerator> OfferGenerator;
 	UPROPERTY() TObjectPtr<ULedger> Ledger;
 	UPROPERTY() TObjectPtr<UPricing> Pricing;
+	UPROPERTY() TObjectPtr<UAgentRescue> AgentRescue;
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
 
 	/** The repeating offer callback, so Detach can cancel it. INDEX_NONE when unattached. */

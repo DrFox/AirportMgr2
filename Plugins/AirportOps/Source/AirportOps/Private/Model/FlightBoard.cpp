@@ -356,6 +356,26 @@ void UFlightBoard::Decline(USimClock& Clock, UFlight& Flight)
 	++RevisionCount;
 }
 
+bool UFlightBoard::CancelByAgent(int32 AgentId, double Now)
+{
+	UFlight* Flight = FindByAgent(AgentId);
+	if (Flight == nullptr)
+	{
+		return false;
+	}
+	const EFlightPhase WasPhase = Flight->Phase;
+	Flight->Phase = EFlightPhase::Cancelled;
+	// UNHOOKED BEFORE MoveToHistory, as OnAgentPhase's Gone branch does - see MoveToHistory's
+	// DEFENSIVE comment for why a ByAgent entry must not outlive its flight.
+	ByAgent.Remove(AgentId);
+	Flight->AgentId = INDEX_NONE;
+	UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): %s -> Cancelled (agent %d despawned)"),
+		Flight->Id, *Flight->Callsign, *UEnum::GetValueAsString(WasPhase), AgentId);
+	MoveToHistory(*Flight, Now);
+	++RevisionCount;
+	return true;
+}
+
 EArrivalRefusal UFlightBoard::WhyNotAcceptable(const UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const UFlight& Flight) const
 {
@@ -427,7 +447,7 @@ void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
 			continue;
 		}
 		if (Each->Phase == EFlightPhase::Declined || Each->Phase == EFlightPhase::Expired
-			|| Each->Phase == EFlightPhase::Departed)
+			|| Each->Phase == EFlightPhase::Departed || Each->Phase == EFlightPhase::Cancelled)
 		{
 			// TerminatedAt DID NOT EXIST before this change, so a flight loaded from a save
 			// that predates it has none - ArrivesAt is the closest recorded moment to when it
