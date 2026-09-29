@@ -1211,6 +1211,30 @@ bool URoadEditFacade::SetDriveSide(EDriveSide Side)
 	return true;
 }
 
+bool URoadEditFacade::AddEntityModule(FEntityInstanceId Entity, EDepotModule Module)
+{
+	URoadNetwork* Network = Actor().Network;
+	// REFUSED BEFORE THE SCOPE, SetDriveSide's reason: there is no rollback, and a refused write inside a
+	// scope would push an undo step that does nothing.
+	const FEntityInstance* Instance = Network != nullptr ? Network->GetEntity(Entity) : nullptr;
+	if (Instance == nullptr || !Instance->bAlive || !Instance->IsDepot())
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("AddEntityModule refused: entity %d is not a live depot"), Entity.Index);
+		return false;
+	}
+	{
+		// A SCOPE AND CommitAndNotify, the one door every mutator notifies through - then closed, so its
+		// destructor has pushed the step BEFORE the history is cleared below.
+		FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("buy module"));
+		Network->AddEntityModule(Entity, Module);
+		CommitAndNotify(Edit, EChangeKind::Topology);
+	}
+	ClearHistory();
+	UE_LOG(LogRoadMesh, Log, TEXT("Depot %d: %s added; undo history cleared (a purchase is a checkpoint)"),
+		Entity.Index, *UEnum::GetValueAsString(Module));
+	return true;
+}
+
 bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 {
 	// Indexes the GUIDELINE graph - stale inside a batch that deferred its rebuild.

@@ -2003,3 +2003,14 @@ bool URoadNetwork::SetEntityPoseRole(FEntityInstanceId Entity, EServiceRole Pose
 	Instance->PoseRole = PoseRole;
 	return true;
 }
+
+bool URoadNetwork::AddEntityModule(FEntityInstanceId Entity, EDepotModule Module)
+{
+	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr || !Instance->bAlive || !Instance->IsDepot())
+	{
+		return false;
+	}
+	Instance->Modules.Add(Module);
+	return true;
+}

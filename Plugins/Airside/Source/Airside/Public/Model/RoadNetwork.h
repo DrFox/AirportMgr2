@@ -827,6 +827,15 @@ public:
 	bool SetEntityPoseRole(FEntityInstanceId Entity, EServiceRole PoseRole);
 
 	/**
+	 * Append Module to a live DEPOT's Modules - the one write a module purchase makes (facility-upgrades
+	 * spec §3). False, nothing changed, for a dead or unset handle or a non-depot. A pure data write: no
+	 * rebuild, no undo, no money - URoadEditFacade::AddEntityModule is the door that adds those. No
+	 * EditRevision bump: that clock is scoped to nodes and segments (see GetEditRevision).
+	 * ENFORCED BY: Airside.Model.EntityModules.AddAppendsToADepot
+	 */
+	bool AddEntityModule(FEntityInstanceId Entity, EDepotModule Module);
+
+	/**
 	 * Re-point an entity at Definition. False for a dead entity.
 	 *
 	 * A PURE POINTER WRITE, which is all Model/ may do with a UEntityDefinition (forward

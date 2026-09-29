@@ -2,7 +2,6 @@
 
 #include "AirsideLog.h"
 #include "Build/DepotKit.h"
-#include "Build/PlotLayoutStrategy.h"
 #include "Build/RoadMeshSink.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
@@ -216,46 +215,9 @@ namespace
 			FVector(Where.X, Where.Y, BaseZ));
 	}
 
-	/**
-	 * Which edge of the plot is its frontage, recovered from the entity alone.
-	 *
-	 * EXACT, NOT A GUESS, and not a second search either. URoadEditFacade::PlaceEntityInPlot
-	 * puts the pose at the MIDPOINT of the frontage edge, so the edge whose midpoint equals
-	 * Position is that edge by construction - this reads back a value rather than deriving a
-	 * new opinion.
-	 *
-	 * ASKING FAnchorLink AGAIN WAS REJECTED. It would search the live graph, so a road laid
-	 * or deleted after the depot was built could move the frontage, and every shed in the
-	 * yard would jump to a new edge without the player touching the depot. Where the thing
-	 * faces was decided when it was placed, and it stays decided.
-	 */
-	bool RecoverFrontage(const FEntityInstance& Entity, FVector2D& OutA, FVector2D& OutB)
-	{
-		double BestDistance = TNumericLimits<double>::Max();
-		int32 BestEdge = INDEX_NONE;
-
-		for (int32 I = 0; I < Entity.Outline.Num(); ++I)
-		{
-			const FVector2D& A = Entity.Outline[I];
-			const FVector2D& B = Entity.Outline[(I + 1) % Entity.Outline.Num()];
-			const double Distance = FVector2D::Distance((A + B) * 0.5, Entity.Position);
-			if (Distance < BestDistance)
-			{
-				BestDistance = Distance;
-				BestEdge = I;
-			}
-		}
-
-		if (BestEdge == INDEX_NONE)
-		{
-			return false;
-		}
-
-		OutA = Entity.Outline[BestEdge];
-		OutB = Entity.Outline[(BestEdge + 1) % Entity.Outline.Num()];
-		return true;
-	}
-
+	// RecoverFrontage MOVED to DepotKit (facility-upgrades spec, 2026-09-29), WHY comment with it:
+	// the purchase rules need the frontage this presenter draws with, through one solve -
+	// DepotKit::ReservationOf.
 }
 
 void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes,
@@ -598,15 +560,6 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 		// THE SAME GEOMETRY THE PLACEMENT USED, not a remembered list of bay transforms.
 		// Storing them on the instance would be a second copy of something PlotFit already
 		// derives from the outline, and the two would drift the moment a bay size changed.
-		FVector2D FrontageA = FVector2D::ZeroVector;
-		FVector2D FrontageB = FVector2D::ZeroVector;
-		if (!RecoverFrontage(Entity, FrontageA, FrontageB))
-		{
-			continue;
-		}
-
-		++Plots;
-
 		// THE YARD, NOT A GRID. Where each module stands is a question about the plot's
 		// CONTENTS, with different inputs from the plot's own shape - and a row of identical
 		// boxes all facing one way is what made a built depot read as a placeholder. The bay
@@ -622,18 +575,17 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 		// THE PLOT TYPE DECIDES ITS OWN ARRANGEMENT. A fuel depot bands; something meant to
 		// look unplanned still scatters. A null definition keeps the scatter, which is what
 		// an un-migrated save has.
-		FPlotSite PlotSite;
-		PlotSite.Outline = Entity.Outline;
-		PlotSite.FrontageA = FrontageA;
-		PlotSite.FrontageB = FrontageB;
-		PlotSite.Gate = Entity.Position;
-		PlotSite.Seed = DepotYardSeed(Entity.Position);
-
-		const EPlotLayout Layout = Entity.Definition != nullptr
-			? Entity.Definition->Layout : EPlotLayout::Scatter;
-
-		const PlotYard::FReservation Reservation =
-			PlotLayoutFor(Layout)->Solve(PlotSite, Specs);
+		//
+		// ALL OF THE ABOVE NOW LIVES IN DepotKit::ReservationOf (facility-upgrades spec,
+		// 2026-09-29), so the purchase rules' "free reserved slot" is this very solve rather
+		// than a copy of it that could disagree - a Buy shed that lights nothing.
+		const TOptional<PlotYard::FReservation> Solved = DepotKit::ReservationOf(Entity, Specs);
+		if (!Solved.IsSet())
+		{
+			continue;
+		}
+		++Plots;
+		const PlotYard::FReservation& Reservation = *Solved;
 
 		// HOW MANY OF EACH THE PLAYER HAS BOUGHT. Entity.Modules is still the owned list and
 		// still this depot's only record in the save.
