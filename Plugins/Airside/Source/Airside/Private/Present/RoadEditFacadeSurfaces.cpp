@@ -349,7 +349,7 @@ FString URoadEditFacade::WhyPlotRefused(TArrayView<const FVector2D> Outline) con
 		const FEntityInstance& Entity = Network->GetEntities()[Index];
 		if (Entity.bAlive && Entity.IsStand() && Entity.IsPlotted() && RoadGeom::PolygonsOverlap(Outline, Entity.Outline, OverlapToleranceUu))
 		{
-			return FString::Printf(TEXT("the plot overlaps stand %d"), Index);
+			return FString::Printf(TEXT("the plot overlaps stand %d"), Entity.StandNumber);
 		}
 	}
 
@@ -686,7 +686,8 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline, EP
 			if (RoadGeom::PolygonsOverlap(Outline, Entity.Outline, OverlapToleranceUu))
 			{
 				return Entity.IsStand()
-					? FString::Printf(TEXT("overlaps stand %d"), Index)
+					// The player's number for it (FEntityInstance::StandNumber), not the index.
+					? FString::Printf(TEXT("overlaps stand %d"), Entity.StandNumber)
 					: FString(TEXT("overlaps a fuel depot"));
 			}
 		}

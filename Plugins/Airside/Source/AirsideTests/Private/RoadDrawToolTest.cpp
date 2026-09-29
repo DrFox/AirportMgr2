@@ -859,10 +859,14 @@ bool FRoadDrawToolUpgradeModeTest::RunTest(const FString& Parameters)
 		if (TestNotNull(TEXT("the hover names the widening"), Said))
 		{
 			TestTrue(FString::Printf(TEXT("and the restriction it causes: '%s'"), **Said), Said->Contains(TEXT("restricts to Code E (a service road)")));
-			TestTrue(FString::Printf(TEXT("and the stand it closes, by index: '%s'"), **Said),
-				Said->Contains(FString::Printf(TEXT("closes stand %d"), Stand.Index)));
+			// BY NUMBER (strip stage 5): Stand is entity 0 but stand 1, so an index would say 0.
+			const int32 StandNumber = Actor->Network->GetEntity(Stand)->StandNumber;
+			const int32 OpenNumber = Actor->Network->GetEntity(Open)->StandNumber;
+			TestTrue(TEXT("the stand's number is not its index, or the line below measures nothing"), StandNumber != Stand.Index);
+			TestTrue(FString::Printf(TEXT("and the stand it closes, by number: '%s'"), **Said),
+				Said->Contains(FString::Printf(TEXT("closes stand %d"), StandNumber)));
 			TestFalse(FString::Printf(TEXT("but not the stand only F's strip would cover: '%s'"), **Said),
-				Said->Contains(FString::Printf(TEXT("closes stand %d"), Open.Index)));
+				Said->Contains(FString::Printf(TEXT("closes stand %d"), OpenNumber)));
 		}
 		TestTrue(TEXT("the grown strip is outlined"), Sink.CountLines(EPreviewStyle::Guide) > 0);
 		double Outline = 0.0;

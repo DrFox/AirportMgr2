@@ -496,10 +496,14 @@ private:
 	/** The runway paint's material instance: SurfaceMaterial with MarkingColor white. Cached like GhostMID. */
 	UMaterialInstanceDynamic* RunwayMarkingMaterialInstance(UMaterialInterface* SurfaceMaterialBase);
 
+	/** The black of a turn-off sign's box: a MID of the road material, made on first use and
+	 *  re-made when the base moves - RunwayMarkingMaterialInstance's rule. */
+	UMaterialInstanceDynamic* SignBackgroundMaterialInstance(UMaterialInterface* SurfaceMaterialBase);
+
 
 	/**
 	 * The HoldingPaint layer's material set: slot 0 the road material (holding bars and stand
-	 * guidance, yellow as ever), then white and red MIDs of it - the slots StandPaintSlot names.
+	 * guidance, yellow as ever), then the white and black MIDs of it - the slots StandPaintSlot names.
 	 * Rebuilt in place per call, like ApronMaterialSet.
 	 */
 	const URoadMaterialSet* MarkingMaterialSet(const FSurfaceSettings& Settings);
@@ -535,6 +539,9 @@ private:
 
 	/** See RunwayMarkingMaterialInstance. */
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> RunwayMarkingMID;
+
+	/** See SignBackgroundMaterialInstance. */
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> SignBackgroundMID;
 
 	/** See MarkingMaterialSet. Transient for EffectiveSet's reason. */
 	UPROPERTY(Transient) TObjectPtr<URoadMaterialSet> MarkingSet;

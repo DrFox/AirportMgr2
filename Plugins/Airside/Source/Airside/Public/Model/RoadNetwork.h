@@ -35,7 +35,8 @@ class AIRSIDE_API URoadNetwork : public UObject
 
 public:
 	/**
-	 * Super::PostLoad() then EnsureStandOutlines() - see that function. Only override this
+	 * Super::PostLoad() then EnsureStandOutlines() and EnsureStandNumbers() - see those
+	 * functions. Only override this
 	 * class has: a level saved before outlines existed (or before stands could be point-
 	 * placed at all) loads with live IsStand() entities carrying no Outline, and nothing
 	 * else in the load path would ever give them one.
@@ -701,6 +702,23 @@ public:
 	int32 EnsureStandOutlines();
 
 	/**
+	 * Number every alive IsStand() entity whose StandNumber is 0, in entity order, from
+	 * max(NextStandNumber, 1 + the highest number already held), and leave the counter past
+	 * the last one. Returns how many it numbered; logs LogAirside when more than zero.
+	 *
+	 * EXISTS FOR LEGACY SAVE DATA, like EnsureStandOutlines above: a level saved before
+	 * 2026-09-29 loads every stand at 0 and the counter at its default. PostLoad calls it, so
+	 * "every stand has a number" holds everywhere. Idempotent - a second load finds nothing
+	 * at 0, so it never renumbers (the number is painted on the ground; see
+	 * FEntityInstance::StandNumber). Public beside EnsureStandOutlines so a test can drive
+	 * the exact PostLoad path. ENFORCED BY: Airside.Model.StandNumbers.
+	 */
+	int32 EnsureStandNumbers();
+
+	/** The number the next placed stand will be issued. See NextStandNumber. */
+	int32 GetNextStandNumber() const { return NextStandNumber; }
+
+	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
 	 * them - RemoveGuidelineNode cascades. So deleting a stand also deletes the taxi line
 	 * drawn into it, which is intended (a lead-in to a deleted stand leads nowhere) but is
@@ -1060,6 +1078,17 @@ private:
 	UPROPERTY() TArray<int32>           EntityFreeList;
 
 	/**
+	 * The number PlaceEntity issues to the next stand - FEntityInstance::StandNumber. ONLY
+	 * EVER ADVANCES: removing a stand does not give its number back, because a number is
+	 * painted at the stand's turn-off and a reissued one would name two different stands in
+	 * one player's memory of the airport. SAVED (a UPROPERTY) rather than recomputed as
+	 * 1 + the highest live number, which would reissue the number of the most recently
+	 * deleted stand after a reload. Rides in the undo Memento with Entities, so an undone
+	 * delete neither loses nor double-spends a number.
+	 */
+	UPROPERTY() int32 NextStandNumber = 1;
+
+	/**
 	 * FindEntityIndexByPoseNode's index, memoised the same discipline FNodeReachCache and
 	 * FRunwayChainCache use against GuidelineRevision - brought inside this class rather than
 	 * a separate cache struct because there is only ever one Entities array to be stale
@@ -1131,6 +1160,14 @@ struct AIRSIDE_API FRoadNetworkTestAccess
 	 *  before the field existed loads (Airside.Model.RunwayInUse.UnsetIsLowerDesignator).
 	 *  SetRunwayFacts cannot: it reads 0 as "keep the strip's". False when Seed is no runway. */
 	bool ClearRunwayInUseForTest(FRoadSegmentId Seed);
+
+	/** Zero every entity's StandNumber and reset the counter to its default - a level as saved
+	 *  before stand numbers existed loads (Airside.Model.StandNumbers' backfill case). */
+	void ClearStandNumbersForTest();
+
+	/** Write Direction directly onto a live guideline edge - a one-way sweep, which FAnchorLink
+	 *  never lays today (Airside.Build.StandTurnOff.NumberOnADrivableSweep). False for a dead edge. */
+	bool SetGuidelineEdgeDirectionForTest(FGuidelineEdgeId Edge, EGuidelineDir Direction);
 
 private:
 	URoadNetwork& Network;

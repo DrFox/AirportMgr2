@@ -830,7 +830,10 @@ bool FTaxiwayStripSegmentJudgeTest::RunTest(const FString&)
 		const FStripVerdict V = JudgeSegment(*Net, Shape({ -10000.0, 0.0 }, { 10000.0, 0.0 }, 1200.0), true,
 			Free({ -10000.0, 0.0 }), Free({ 10000.0, 0.0 }));
 		TestTrue(TEXT("a taxiway whose strip would contain a stand is refused"), V.bRefused);
-		TestTrue(FString::Printf(TEXT("naming the stand (%s)"), *V.Text), V.Text.Contains(FString::Printf(TEXT("stand %d"), Stand.Index)));
+		// BY NUMBER (strip stage 5): entity 0 is stand 1.
+		const int32 Number = Net->GetEntity(Stand)->StandNumber;
+		TestTrue(TEXT("the stand's number is not its index, or the line below measures nothing"), Number != Stand.Index);
+		TestTrue(FString::Printf(TEXT("naming the stand by number (%s)"), *V.Text), V.Text.Contains(FString::Printf(TEXT("stand %d"), Number)));
 	}
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());

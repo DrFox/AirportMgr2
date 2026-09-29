@@ -1,5 +1,6 @@
 #include "Model/InspectFacts.h"
 
+#include "AirsideLog.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -23,6 +24,23 @@ namespace InspectFacts
 			const int32 Stand = Network->FindEntityIndexByPoseNode(Agent.GoalNode);
 			if (Stand != INDEX_NONE)
 			{
+				// BY NUMBER, the one painted at the stand's turn-off (FEntityInstance::StandNumber),
+				// never by index - RoadSlot recycles slots, so an index names a different stand
+				// after a delete. 0 should not survive PlaceEntity and PostLoad's backfill; if it
+				// does, the index is better than "Stand 0", and the log says the invariant broke.
+				// ENFORCED BY: Airside.Model.StandNumbers (placement and the PostLoad backfill).
+				const int32 Number = Network->GetEntities()[Stand].StandNumber;
+				if (Number > 0)
+				{
+					return FString::Printf(TEXT("Stand %d"), Number);
+				}
+				static bool bWarned = false;
+				if (!bWarned)
+				{
+					bWarned = true;
+					UE_LOG(LogAirside, Warning,
+						TEXT("InspectFacts: entity %d is an unnumbered destination - EnsureStandNumbers did not run?"), Stand);
+				}
 				return FString::Printf(TEXT("Stand %d"), Stand);
 			}
 			const FGuidelineNode* Node = Network->GetGuidelineNode(Agent.GoalNode);
@@ -171,7 +189,7 @@ namespace InspectFacts
 			TaxiwayRestriction::FObstruction Worst;
 			if (TaxiwayRestriction::RestrictionOf(Network, Id, &Worst).IsSet())
 			{
-				Out.RestrictedBy = TaxiwayRestriction::Describe(Worst);
+				Out.RestrictedBy = TaxiwayRestriction::Describe(Network, Worst);
 			}
 		}
 		return true;
@@ -186,6 +204,7 @@ namespace InspectFacts
 		}
 		const FEntityInstance& E = Entities[EntityIndex];
 		Out.Index = EntityIndex;
+		Out.Number = E.StandNumber;
 		Out.DesignWingspan = E.DesignWingspan;
 		// The table itself is Solve/IcaoCode.h - shared with RunwayAdmission (width ->
 		// wingspan) and AnchorLink (letter -> stand radius). See #85, and #292 for the

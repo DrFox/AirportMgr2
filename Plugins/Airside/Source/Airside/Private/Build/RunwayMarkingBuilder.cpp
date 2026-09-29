@@ -2,6 +2,7 @@
 
 #include "Build/MarkingGlyphs.h"
 #include "Build/MarkingQuads.h"
+#include "Build/MarkingText.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayFacts.h"
 #include "Profiles/RoadProfile.h"
@@ -64,42 +65,12 @@ namespace
 	 */
 	int32 Designation(FRoadMeshBuffers& Out, double Z, const FRunwayFrame& Frame, const FString& Text)
 	{
+		// THE RENDERER MOVED to MarkingText (taxiway strip stage 5) so a stand's number paints
+		// in the same font; this keeps only what is the RUNWAY's: where the feet sit.
 		using B = FRunwayMarkingBuilder;
-		const double Scale = B::DigitHeight / MarkingGlyphs::CellHeight;   // one cell unit in uu
 		const double Foot = B::StripeStart + B::StripeLength + B::DigitGapAfterStripes;
-		const double TotalWidth = Text.Len() * Scale + (Text.Len() - 1) * B::DigitSpacing * Scale;
-		double Left = -TotalWidth * 0.5;
-		int32 Strokes = 0;
-		for (const TCHAR Character : Text)
-		{
-			for (const TArray<FVector2D>& Line : MarkingGlyphs::Strokes(Character))
-			{
-				for (int32 Index = 0; Index + 1 < Line.Num(); ++Index)
-				{
-					// Each polyline span is a quad StrokeWidth wide, extended half a
-					// stroke at both ends so consecutive spans meet square at a corner
-					// rather than leaving a notch - which is also what makes a glyph fill
-					// its cell exactly (see MarkingGlyphs).
-					const FVector2D A = Line[Index];
-					const FVector2D C = Line[Index + 1];
-					const FVector2D U = (C - A).GetSafeNormal();
-					const FVector2D N(-U.Y, U.X);
-					constexpr double H = MarkingGlyphs::StrokeWidth * 0.5;
-					const FVector2D A2 = A - U * H;
-					const FVector2D C2 = C + U * H;
-					auto World = [&](const FVector2D& Cell)
-					{
-						return Frame.Origin + Frame.Along * (Foot + Cell.Y * Scale)
-							+ Frame.Across * ((Left + Cell.X * Scale));
-					};
-					MarkingQuads::AddQuad(Out, Z,
-						World(A2 - N * H), World(C2 - N * H), World(C2 + N * H), World(A2 + N * H));
-					++Strokes;
-				}
-			}
-			Left += Scale * (1.0 + B::DigitSpacing);
-		}
-		return Strokes;
+		return MarkingText::AddString(Out, Z, Frame.Origin + Frame.Along * Foot, Frame.Along, Frame.Across,
+			B::DigitHeight, B::DigitSpacing, Text);
 	}
 
 	/** The centreline: dashes between the two designations, centred in that span. */

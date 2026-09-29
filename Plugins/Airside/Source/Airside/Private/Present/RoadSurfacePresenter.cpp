@@ -10,6 +10,7 @@
 #include "Build/RoadNetworkSolver.h"
 #include "Build/RunwayMarkingBuilder.h"
 #include "Build/StandMarkingBuilder.h"
+#include "Build/StandTurnOffMarkingBuilder.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Content/AirsideSettings.h"
 #include "Debug/RoadRebuildCensus.h"
@@ -233,6 +234,21 @@ UMaterialInstanceDynamic* URoadSurfacePresenter::RunwayMarkingMaterialInstance(U
 	return RunwayMarkingMID;
 }
 
+UMaterialInstanceDynamic* URoadSurfacePresenter::SignBackgroundMaterialInstance(UMaterialInterface* SurfaceMaterialBase)
+{
+	// RunwayMarkingMaterialInstance's shape and reason, in black: the turn-off sign's box behind
+	// its yellow digits (user 2026-09-29, samples/standsigns.png). A MID of the road material,
+	// not a new asset, because the paint layer colours every marking through MarkingColor - the
+	// box is only a different value of it. Not pure black: a painted black on concrete reads as
+	// very dark grey, and pure black loses the box's edge against shadow.
+	if (SurfaceMaterialBase != nullptr && (SignBackgroundMID == nullptr || SignBackgroundMID->Parent != SurfaceMaterialBase))
+	{
+		SignBackgroundMID = UMaterialInstanceDynamic::Create(SurfaceMaterialBase, this);
+		SignBackgroundMID->SetVectorParameterValue(RoadMaterialParams::MarkingColor, FLinearColor(0.02f, 0.02f, 0.02f));
+	}
+	return SignBackgroundMID;
+}
+
 void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings)
 {
 	// Checked BEFORE RunwayMarkingMaterialInstance below, not left to RebuildLayer's own
@@ -439,12 +455,14 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 namespace StandPaintSlots
 {
 	/**
-	 * The paint layer's two slot names, spelled once: StandPaintSlot maps meanings onto them
+	 * The paint layer's slot names, spelled once: StandPaintSlot maps meanings onto them
 	 * and MarkingMaterialSet declares them, and a name typed at both sites is a name that
 	 * drifts (URoadMaterialSet::RunwaySlotName's own rule).
 	 */
 	const FName Guidance(TEXT("PaintGuidance"));
 	const FName White(TEXT("PaintWhite"));
+	/** The turn-off sign's box, behind its yellow digits (user 2026-09-29). */
+	const FName Black(TEXT("PaintBlack"));
 	// PaintRed and its colour went 2026-09-27 with the restraint line and hatch the user
 	// judged awful in PIE; the stand keeps the white edge and the yellow guidance only.
 }
@@ -457,6 +475,7 @@ FName URoadSurfacePresenter::StandPaintSlot(EStandPaint Paint)
 	{
 	case EStandPaint::Guidance:   return StandPaintSlots::Guidance;
 	case EStandPaint::Boundary:   return StandPaintSlots::White;
+	case EStandPaint::SignBackground: return StandPaintSlots::Black;
 	case EStandPaint::Count:      break;
 	}
 	return StandPaintSlots::Guidance;
@@ -483,6 +502,11 @@ const URoadMaterialSet* URoadSurfacePresenter::MarkingMaterialSet(const FSurface
 	White.Name = StandPaintSlots::White;
 	White.Material = RunwayMarkingMaterialInstance(Settings.SurfaceMaterial);
 	MarkingSet->Slots.Add(White);
+
+	FRoadMaterialSlot Black;
+	Black.Name = StandPaintSlots::Black;
+	Black.Material = SignBackgroundMaterialInstance(Settings.SurfaceMaterial);
+	MarkingSet->Slots.Add(Black);
 
 	return MarkingSet;
 }
@@ -519,6 +543,13 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	int32 HoldingPositionsPainted = 0;
 	int32 StandsPainted = 0;
 	FStandMarkingCensus StandCensus;
+	// THE TURN-OFF (taxiway strip stage 5): the lead-in's paint on the TAXIWAY, outside every
+	// stand box, with its arrow and number. Same layer and the same Guidance meaning as the
+	// lead-in inside the box - it is the same yellow line, cut by the strip. It reads the lead
+	// and sweep edges FAnchorLink::Build laid, which a Topology rebuild has run by now.
+	// ENFORCED BY: Airside.Present.StandTurnOff.PaintsAfterPlacement
+	int32 TurnOffsPainted = 0;
+	FStandTurnOffCensus TurnOffCensus;
 	// RESOLVED ONCE PER REBUILD, not once per stand painted - #292's own rule for a Build/
 	// caller that touches more than one letter in a pass. See Solve/LetterEnvelope.h.
 	const FLetterEnvelopeTable Envelopes = UAirsideSettings::ResolveLetterEnvelopeTable();
@@ -554,11 +585,13 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	const int32 StopLineId = FMath::Max(StopLineSlot, 0);
 
 	const int32 Painted = RebuildLayer(ESurfaceLayer::HoldingPaint,
-		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus, &Envelopes, &PaintIds, StopLineId](FRoadMeshBuffers& OutBuffers)
+		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus, &TurnOffsPainted, &TurnOffCensus,
+			&Envelopes, &PaintIds, StopLineId](FRoadMeshBuffers& OutBuffers)
 		{
 			HoldingPositionsPainted = FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, OutBuffers, StopLineId);
 			StandsPainted = FStandMarkingBuilder::Build(Network, MarkingZ, OutBuffers, Envelopes, &StandCensus, PaintIds);
-			return HoldingPositionsPainted + StandsPainted;
+			TurnOffsPainted = FStandTurnOffMarkingBuilder::Build(Network, MarkingZ, OutBuffers, &TurnOffCensus, PaintIds);
+			return HoldingPositionsPainted + StandsPainted + TurnOffsPainted;
 		},
 		Settings.SurfaceMaterial, Materials, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
 	if (Painted == INDEX_NONE)
@@ -574,9 +607,10 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 	{
 		UE_LOG(LogRoadMesh, Log,
 			TEXT("Holding positions: %d painted, %d stand(s), %d triangle(s) at Z=%.1f - stand paint: ")
-			TEXT("%d boundary edge(s), %d lead-in(s), %d stop bar(s)"),
+			TEXT("%d boundary edge(s), %d lead-in(s), %d stop bar(s); %d turn-off(s), %d stand number(s)"),
 			HoldingPositionsPainted, StandsPainted, Buffers.Indices.Num() / 3, MarkingZ,
-			StandCensus.BoundaryEdges, StandCensus.LeadIns, StandCensus.StopBars);
+			StandCensus.BoundaryEdges, StandCensus.LeadIns, StandCensus.StopBars,
+			TurnOffsPainted, TurnOffCensus.Numbers);
 	}
 }
 

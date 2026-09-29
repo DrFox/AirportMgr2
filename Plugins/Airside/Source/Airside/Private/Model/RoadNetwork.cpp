@@ -1253,6 +1253,26 @@ bool FRoadNetworkTestAccess::SetEntityOutlineForTest(FEntityInstanceId Entity, T
 	return true;
 }
 
+bool FRoadNetworkTestAccess::SetGuidelineEdgeDirectionForTest(FGuidelineEdgeId Edge, EGuidelineDir Direction)
+{
+	FGuidelineEdge* Found = Network.GetGuidelineEdgeMutable(Edge);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->Direction = Direction;
+	return true;
+}
+
+void FRoadNetworkTestAccess::ClearStandNumbersForTest()
+{
+	for (FEntityInstance& Instance : Network.Entities)
+	{
+		Instance.StandNumber = 0;
+	}
+	Network.NextStandNumber = 1;
+}
+
 bool FRoadNetworkTestAccess::SetEntityPavementForTest(FEntityInstanceId Entity, EPavement Pavement)
 {
 	FEntityInstance* Found = Network.GetEntityMutable(Entity);
@@ -1478,6 +1498,7 @@ void URoadNetwork::PostLoad()
 {
 	Super::PostLoad();
 	EnsureStandOutlines();
+	EnsureStandNumbers();
 }
 
 bool URoadNetwork::GiveStandOutlineIfMissing(FEntityInstance& Instance, const FLetterEnvelope& CodeCEnvelope)
@@ -1548,6 +1569,39 @@ int32 URoadNetwork::EnsureStandOutlines()
 	return Changed;
 }
 
+int32 URoadNetwork::EnsureStandNumbers()
+{
+	// PAST EVERY NUMBER ALREADY HELD, not merely the counter: a counter that somehow sits
+	// behind a live stand (hand-edited data, a half-migrated save) must not issue that
+	// stand's number a second time. The never-reuse rule outranks the counter's value.
+	int32 Next = FMath::Max(NextStandNumber, 1);
+	for (const FEntityInstance& Instance : Entities)
+	{
+		if (Instance.bAlive && Instance.IsStand())
+		{
+			Next = FMath::Max(Next, Instance.StandNumber + 1);
+		}
+	}
+
+	int32 Numbered = 0;
+	for (FEntityInstance& Instance : Entities)
+	{
+		if (Instance.bAlive && Instance.IsStand() && Instance.StandNumber == 0)
+		{
+			Instance.StandNumber = Next++;
+			++Numbered;
+		}
+	}
+	NextStandNumber = Next;
+
+	if (Numbered > 0)
+	{
+		UE_LOG(LogAirside, Log,
+			TEXT("EnsureStandNumbers: %d legacy stand(s) numbered; next stand is %d"), Numbered, NextStandNumber);
+	}
+	return Numbered;
+}
+
 FEntityInstanceId URoadNetwork::PlaceEntity(
 	UEntityDefinition* Definition, TConstArrayView<FEntityAnchor> Anchors,
 	const FVector2D& Position, double Heading, double DesignWingspan, EServiceRole PoseRole,
@@ -1590,6 +1644,16 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, c
 
 	Instance.Outline = Placement.Outline;
 	Instance.Modules = Placement.Modules;
+
+	// ISSUED HERE, THE ONE FUNCTION EVERY PLACEMENT PATH ENDS IN (the facade's point and plot
+	// gestures and the test fixtures all forward to it), and never reused - see
+	// FEntityInstance::StandNumber. After PoseRole, which IsStand() reads.
+	// ENFORCED BY: Airside.Model.StandNumbers (point placement) and
+	// Airside.Present.StandPlot.RefusesOverlap (a plot-placed stand reads back as stand 1).
+	if (Instance.IsStand())
+	{
+		Instance.StandNumber = NextStandNumber++;
+	}
 
 	// TASK 6 / RULING 6: a stand placed with no drawn plot (Placement.Outline empty) gets its
 	// Code C box RIGHT HERE, not only the next time EnsureStandOutlines runs at load. This is

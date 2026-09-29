@@ -74,8 +74,16 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 
 	// A stand whose pose node is the route's goal, so a taxi to it is a taxi "to Stand N".
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	// PLACE AND DELETE ONE FIRST, so the stand below recycles slot 0 but is issued number 2 -
+	// the index and the number differ, and a panel that named stands by index would show
+	// "Stand 0" where the player's ground paint says 2 (taxiway strip stage 5).
+	const FEntityInstanceId Retired = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(-50000.0, 5000.0), 0.0, 1800.0);
+	if (!TestTrue(TEXT("a stand placed and removed first"), Retired.IsSet() && Net->RemoveEntity(Retired))) { return false; }
 	const FEntityInstanceId StandId = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(20000.0, 5000.0), 0.0, 1800.0);
 	if (!TestTrue(TEXT("stand placed"), StandId.IsSet())) { return false; }
+	const int32 StandNumber = Net->GetEntity(StandId)->StandNumber;
+	if (!TestTrue(TEXT("the stand's number differs from its index, or this test measures nothing"),
+			StandNumber == 2 && StandId.Index != StandNumber)) { return false; }
 	const FGuidelineNodeId Pose = Net->GetEntity(StandId)->PoseNode;
 	if (!TestTrue(TEXT("the stand has a pose node"), Pose.IsSet())) { return false; }
 	InspJoin(*Net, B, Pose);
@@ -94,8 +102,8 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("id"), Facts.Id, Id);
 	TestEqual(TEXT("type name is the airframe's code"), Facts.TypeName, FString(TEXT("PA46")));
 	TestEqual(TEXT("phase"), Facts.Phase, EAgentPhase::Taxiing);
-	TestEqual(TEXT("destination names the stand by index"),
-		Facts.Destination, FString::Printf(TEXT("Stand %d"), StandId.Index));
+	TestEqual(TEXT("destination names the stand by its NUMBER, not its index"),
+		Facts.Destination, FString::Printf(TEXT("Stand %d"), StandNumber));
 	// Status while plain-taxiing is not asserted here: StatusOf's Taxiing case is a bare
 	// mirror of the Phase already checked above (#104) - the real content of Status, its
 	// PRECEDENCE over Phase, is what the scripted block below actually tests.
@@ -106,6 +114,7 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 	FStandFacts SF;
 	TestFalse(TEXT("a dead index yields no stand facts"), InspectFacts::DescribeStand(Traffic, *Net, 99, SF));
 	if (!TestTrue(TEXT("the stand yields facts"), InspectFacts::DescribeStand(Traffic, *Net, StandId.Index, SF))) { return false; }
+	TestEqual(TEXT("the stand facts carry its number"), SF.Number, StandNumber);
 	TestEqual(TEXT("occupant is the inbound agent"), SF.OccupantAgent, Id);
 	TestFalse(TEXT("inbound: reserved, not parked"), SF.bOccupantParked);
 	TestEqual(TEXT("1800 uu (18 m) span is ICAO code B"), SF.SizeClass, FString(TEXT("B")));

@@ -373,7 +373,7 @@ namespace ArrivalPlanner
 					if (Restricted.IsSet())
 					{
 						return FString::Printf(TEXT("a taxiway restricted to Code %s by %s - move it clear of the strip"),
-							IcaoCode::ToLetter(Restricted.GetValue()), *TaxiwayRestriction::Describe(Worst));
+							IcaoCode::ToLetter(Restricted.GetValue()), *TaxiwayRestriction::Describe(Network, Worst));
 					}
 					const TOptional<EIcaoCode> Letter = Piece.IsSet()
 						? TaxiwayRestriction::EffectiveLetterOf(Network, Piece) : TOptional<EIcaoCode>();

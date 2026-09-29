@@ -404,8 +404,10 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		{
 			// FString::Format, not Printf - see the aircraft branch's own comment on why
 			// (issue #192, UE 5.8's compile-time Printf format check).
+			// THE NUMBER, not the index - the one painted at the stand's turn-off; an index is
+			// recycled by the next stand placed after a delete (FEntityInstance::StandNumber).
 			Title = FString::Format(
-				*NSLOCTEXT("AirportMgr", "InspectorStandTitle", "Stand {0}").ToString(), { S.Index });
+				*NSLOCTEXT("AirportMgr", "InspectorStandTitle", "Stand {0}").ToString(), { S.Number });
 			const FText Reachability = S.bReachable
 				? NSLOCTEXT("AirportMgr", "InspectorStandReachable", "Reachable by taxiway")
 				: NSLOCTEXT("AirportMgr", "InspectorStandUnreachable", "NOT reachable - no taxiway joins it");

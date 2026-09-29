@@ -6,6 +6,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayFacts.h"
 #include "Profiles/RoadProfile.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -541,6 +542,55 @@ bool FRunwayRubberShortTest::RunTest(const FString& Parameters)
 			Box.AlongExtent() < B::RubberEnd - B::RubberStart - 1.0e-6);
 		TestTrue(TEXT("but is still long enough to be worth drawing"), Box.AlongExtent() > 0.0);
 	}
+	return true;
+}
+
+/**
+ * THE REFACTOR'S SAFETY NET (taxiway strip stage 5, Task 3): the designation text renderer moved
+ * out of this builder into MarkingText so the stand turn-off can paint its number with the same
+ * font. The runway's paint must not move. Pinned on a DIAGONAL runway, so the frame arithmetic is
+ * not all exact zeros and ones: the vertex and index counts exactly, and the bounding box and
+ * position sum of the whole buffer to a thousandth of a uu (values recorded 2026-09-29 against
+ * the pre-move builder). A reordered expression can change the last bit of a double; nothing a
+ * player can see can hide inside 0.001 uu.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayMarkingsPaintPinnedTest,
+	"Airside.Build.RunwayMarkings.PaintPinned",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayMarkingsPaintPinnedTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	const FRoadNodeId A = Net->AddNode(FVector2D(1000.0, -2000.0));
+	const FRoadNodeId E = Net->AddNode(FVector2D(1000.0 + 120000.0, -2000.0 + 90000.0));
+	const FRoadSegmentId Seg = Net->AddStraightSegment(A, E, Runway);
+	Net->SetRunwayFacts(Seg, Facts(EPavement::Tarmac, ERunwayApproach::Precision));
+
+	FRoadMeshBuffers Buffers;
+	FRunwayMarkingCensus Census;
+	B::Build(*Net, 10.5, Buffers, &Census);
+
+	FVector3d Min(1.0e18), Max(-1.0e18), Sum(0.0);
+	for (const FVector3d& P : Buffers.Positions)
+	{
+		Min = FVector3d::Min(Min, P);
+		Max = FVector3d::Max(Max, P);
+		Sum += P;
+	}
+	UE_LOG(LogTemp, Display, TEXT("RunwayPaintPin: verts %d indices %d strokes %d min (%.4f, %.4f) max (%.4f, %.4f) sum (%.4f, %.4f)"),
+		Buffers.Positions.Num(), Buffers.Indices.Num(), Census.DesignatorStrokes, Min.X, Min.Y, Max.X, Max.Y, Sum.X, Sum.Y);
+
+	TestEqual(TEXT("vertex count unchanged"), Buffers.Positions.Num(), 392);
+	TestEqual(TEXT("index count unchanged"), Buffers.Indices.Num(), 588);
+	TestEqual(TEXT("designator strokes unchanged"), Census.DesignatorStrokes, 17);
+	TestEqual(TEXT("bounding box min X unchanged"), Min.X, -350.0, 1.0e-3);
+	TestEqual(TEXT("bounding box min Y unchanged"), Min.Y, -3800.0, 1.0e-3);
+	TestEqual(TEXT("bounding box max X unchanged"), Max.X, 122350.0, 1.0e-3);
+	TestEqual(TEXT("bounding box max Y unchanged"), Max.Y, 89800.0, 1.0e-3);
+	TestEqual(TEXT("position sum X unchanged - every vertex, not just the extremes"), Sum.X, 24588957.5, 1.0e-3);
+	TestEqual(TEXT("position sum Y unchanged"), Sum.Y, 17361749.375, 1.0e-3);
 	return true;
 }
 

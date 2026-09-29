@@ -1,6 +1,9 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Build/AnchorLink.h"
+#include "Build/HoldingPositionMarkingBuilder.h"
 #include "Build/StandMarkingBuilder.h"
+#include "Build/StandTurnOffMarkingBuilder.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/MeshNormals.h"
 #include "Entities/EntityDefinition.h"
@@ -13,6 +16,7 @@
 #include "Solve/RoadGeom.h"
 #include "Solve/StandBox.h"
 #include "Testing/AirsideTestWorld.h"
+#include "Testing/AirsideTestGraph.h"
 #include "Tool/RoadEditTarget.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
@@ -612,6 +616,13 @@ bool FStandMarkingPaintSlotsResolveTest::RunTest(const FString& Parameters)
 				TestTrue(FString::Printf(TEXT("paint %d is white"), Index), Colour.Equals(FLinearColor::White));
 			}
 			break;
+		case EStandPaint::SignBackground:
+			// THE SIGN BOX (user 2026-09-29): near-black, so the yellow digits read against it.
+			if (TestTrue(FString::Printf(TEXT("paint %d is a MarkingColor MID of the road material"), Index), ColourAt(Id, Colour)))
+			{
+				TestTrue(FString::Printf(TEXT("paint %d is near-black"), Index), Colour.GetLuminance() < 0.05f);
+			}
+			break;
 		default:
 			AddError(TEXT("an EStandPaint with no expectation here - add one"));
 		}
@@ -715,6 +726,510 @@ bool FCrossingStopLineIsWhiteTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("two stop bars painted - one quad per road arm"), Triangles, 2 * 2);
 	TestEqual(TEXT("every one of them on the white slot, not the yellow the aircraft holds use"), OnWhite, Triangles);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE TURN-OFF (taxiway strip stage 5): the yellow lead-in painted on the taxiway pavement where
+// a stand's lead-in leaves the centreline, with an arrow and the stand's number - and a gap
+// across the strip, which falls out of "paint only where paved" (BHX, user 2026-09-28).
+// ---------------------------------------------------------------------------------------------
+
+namespace StandTurnOffTest
+{
+	/** A C stand drawn through the facade behind the strip of a straight taxiway along Y = 0 -
+	 *  where the stand tool itself puts one - and the real Topology rebuild placement runs. */
+	bool PlaceBesideTaxiway(FAutomationTestBase& Test, ARoadNetworkActor* Actor, int32& OutIndex, double& OutHalfWidth, double& OutStrip)
+	{
+		Actor->ClearNetwork();
+		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+		IRoadEditTarget* Target = Actor;
+		const int32 West = Target->PlaceNode(FVector2D(-10000.0, 0.0));
+		const int32 East = Target->PlaceNode(FVector2D(10000.0, 0.0));
+		Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
+		const FRoadSegmentId Taxi = Actor->Network->SegmentIdAt(0);
+		OutHalfWidth = Actor->Network->GetSegment(Taxi)->Profile->GetMaxHalfWidth();
+		OutStrip = TaxiwayStrip::StripWidthOf(*Actor->Network, Taxi);
+		const double EntranceY = Actor->Network->GetSegment(Taxi)->Profile->GetHalfWidthLeft() + OutStrip;
+		const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::C);
+		const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+		const FVector2D A(-Width * 0.5, EntranceY);
+		const FVector2D B(Width * 0.5, EntranceY);
+		const TArray<FVector2D> Rect = { A, B, FVector2D(B.X, EntranceY + Depth), FVector2D(A.X, EntranceY + Depth) };
+		OutIndex = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
+		return Test.TestTrue(TEXT("a C stand is placed behind the strip"), OutIndex != INDEX_NONE);
+	}
+
+	/** A bare network with a real taxiway SEGMENT and its guideline laid by hand, DerivedFrom
+	 *  set as the builder would - so a lead-in can be cast at exact geometry, no balloon, no
+	 *  junction. Returns the segment. */
+	FRoadSegmentId LayRawTaxiway(URoadNetwork& Net, double Y, double WestX, double EastX, bool bReverseGuideline = false)
+	{
+		const FRoadNodeId A = Net.AddNode(FVector2D(WestX, Y));
+		const FRoadNodeId B = Net.AddNode(FVector2D(EastX, Y));
+		const FRoadSegmentId Seg = Net.AddStraightSegment(A, B, TestProfiles::Taxiway());
+		FGuidelineEdge Edge;
+		// bReverseGuideline: the guideline runs East -> West against its West -> East segment,
+		// which changes which sweep FAnchorLink::Join lays first and nothing else.
+		Edge.A = Net.AddGuidelineNode(FVector2D(bReverseGuideline ? EastX : WestX, Y));
+		Edge.B = Net.AddGuidelineNode(FVector2D(bReverseGuideline ? WestX : EastX, Y));
+		Edge.Control = FVector2D((WestX + EastX) * 0.5, Y);
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.Width = 2300.0;
+		Edge.DerivedFrom = Seg;
+		Edge.bDerived = true;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+		return Seg;
+	}
+
+	/** Least distance from P to the polyline Points. */
+	double ToPolyline(const TArray<FVector2D>& Points, const FVector2D& P)
+	{
+		double Best = DBL_MAX;
+		for (int32 I = 0; I + 1 < Points.Num(); ++I)
+		{
+			const double T = RoadGeom::ClosestPointOnSegment(Points[I], Points[I + 1], P);
+			Best = FMath::Min(Best, FVector2D::Distance(P, Points[I] + (Points[I + 1] - Points[I]) * T));
+		}
+		return Best;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandTurnOffPaintsOneNumberPerTurnOffTest,
+	"Airside.Build.StandTurnOff.PaintsOneNumberPerTurnOff",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandTurnOffPaintsOneNumberPerTurnOffTest::RunTest(const FString& Parameters)
+{
+	using namespace StandTurnOffTest;
+	{
+		FAirsideTestWorld TestWorld;
+		if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("actor"), TestWorld.Actor)) { return false; }
+		int32 Index = INDEX_NONE; double HalfWidth = 0.0, Strip = 0.0;
+		if (!PlaceBesideTaxiway(*this, TestWorld.Actor, Index, HalfWidth, Strip)) { return false; }
+		const int32 Number = TestWorld.Actor->Network->GetEntities()[Index].StandNumber;
+
+		FRoadMeshBuffers Buffers;
+		FStandTurnOffCensus Census;
+		FStandTurnOffMarkingBuilder::Build(*TestWorld.Actor->Network, 0.0, Buffers, &Census);
+		TestEqual(TEXT("one stand, one lead-in, one turn-off"), Census.TurnOffs, 1);
+		TestTrue(TEXT("its number painted once, and it is the stand's own"),
+			Census.NumbersPainted == TArray<int32>{ Number });
+		TestEqual(TEXT("one arrow at the turn-off"), Census.Arrows, 1);
+		TestEqual(TEXT("and the number is not an index - the first stand is 1"), Number, 1);
+	}
+
+	// A TAXI-THROUGH STAND has a way in from each side, so two turn-offs - and both carry the
+	// SAME number, because it is one stand.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		LayRawTaxiway(*Net, 0.0, -10000.0, 10000.0);
+		LayRawTaxiway(*Net, 14000.0, -10000.0, 10000.0);
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+		Stand->bTaxiThrough = true;
+		const FEntityInstanceId Placed = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 7000.0), UE_DOUBLE_HALF_PI);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+		const int32 Number = Net->GetEntity(Placed)->StandNumber;
+
+		FRoadMeshBuffers Buffers;
+		FStandTurnOffCensus Census;
+		FStandTurnOffMarkingBuilder::Build(*Net, 0.0, Buffers, &Census);
+		TestEqual(TEXT("a taxi-through stand turns off two taxiways"), Census.TurnOffs, 2);
+		TestTrue(TEXT("and paints its one number at each"),
+			Census.NumbersPainted == (TArray<int32>{ Number, Number }));
+	}
+	return true;
+}
+
+/**
+ * THE GAP ACROSS THE STRIP (Review Focus 4): every triangle the turn-off paints lies on the
+ * taxiway's pavement - never in the strip between the pavement edge and the stand, which is
+ * grass or shoulder and carries no paint (spec "Paint (user, from BHX)"). Paired with counts,
+ * so an empty buffer cannot pass.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandTurnOffLeadInOnlyOnPavementTest,
+	"Airside.Build.StandTurnOff.LeadInOnlyOnPavement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandTurnOffLeadInOnlyOnPavementTest::RunTest(const FString& Parameters)
+{
+	using namespace StandTurnOffTest;
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("actor"), TestWorld.Actor)) { return false; }
+	int32 Index = INDEX_NONE; double HalfWidth = 0.0, Strip = 0.0;
+	if (!PlaceBesideTaxiway(*this, TestWorld.Actor, Index, HalfWidth, Strip)) { return false; }
+	if (!TestTrue(TEXT("the taxiway has a strip, or this test measures nothing"), Strip > 0.0)) { return false; }
+
+	FRoadMeshBuffers Buffers;
+	FStandTurnOffCensus Census;
+	FStandTurnOffMarkingBuilder::Build(*TestWorld.Actor->Network, 0.0, Buffers, &Census);
+	TestTrue(TEXT("some lead-in was painted"), Census.LeadInCentres.Num() > 0);
+	TestTrue(TEXT("and triangles were emitted"), Buffers.Indices.Num() >= 3);
+
+	int32 OffPavement = 0;
+	for (int32 Slot = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3)
+	{
+		const FVector3d Centroid = (Buffers.Positions[Buffers.Indices[Slot]] + Buffers.Positions[Buffers.Indices[Slot + 1]]
+			+ Buffers.Positions[Buffers.Indices[Slot + 2]]) / 3.0;
+		if (FMath::Abs(Centroid.Y) > HalfWidth + 1.0) { ++OffPavement; }
+	}
+	double Deepest = 0.0;
+	for (const FVector2D& Centre : Census.LeadInCentres)
+	{
+		Deepest = FMath::Max(Deepest, FMath::Abs(Centre.Y));
+	}
+	TestEqual(TEXT("no turn-off paint lies off the taxiway pavement - the strip is a gap"), OffPavement, 0);
+	// THE OTHER HALF OF THE GAP: the paint reaches out to the pavement edge rather than
+	// stopping short of it - a builder that painted only the first sample would pass the
+	// line above.
+	TestTrue(*FString::Printf(TEXT("the lead-in reaches the pavement edge (deepest %.0f of %.0f)"), Deepest, HalfWidth),
+		Deepest > HalfWidth - FStandMarkingBuilder::LeadInWidth * 2.0);
+	return true;
+}
+
+/** THE GRAPH SAMPLES ONCE: the painted lead-in lies on the edges the aircraft follows, sampled
+ *  by GuidelineGeom::Sample - not a second curve that agrees until a bend. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandTurnOffFollowsTheDerivedEdgesTest,
+	"Airside.Build.StandTurnOff.FollowsTheDerivedEdges",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandTurnOffFollowsTheDerivedEdgesTest::RunTest(const FString& Parameters)
+{
+	using namespace StandTurnOffTest;
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("actor"), TestWorld.Actor)) { return false; }
+	int32 Index = INDEX_NONE; double HalfWidth = 0.0, Strip = 0.0;
+	if (!PlaceBesideTaxiway(*this, TestWorld.Actor, Index, HalfWidth, Strip)) { return false; }
+	const URoadNetwork& Net = *TestWorld.Actor->Network;
+
+	// EVERY LINK EDGE - aircraft, not a road's own guideline (DerivedFrom unset), not a stand's
+	// lane (StandGeometryOwner unset): the lead-in and its sweeps, found without the builder.
+	// SAMPLED BY URoadNetwork::SampleGuideline, the graph's one edge sampler - what the router
+	// costs and the follower walks - not a re-derivation of it here.
+	TArray<TArray<FVector2D>> Links;
+	for (int32 EdgeIndex = 0; EdgeIndex < Net.GetGuidelineEdges().Num(); ++EdgeIndex)
+	{
+		const FGuidelineEdge& Edge = Net.GetGuidelineEdges()[EdgeIndex];
+		if (!Edge.bAlive || Edge.DerivedFrom.IsSet() || Edge.StandGeometryOwner.IsSet()
+			|| !Edge.AllowedTraffic.Allows(ETraversalClass::Aircraft)) { continue; }
+		TArray<FVector2D> Points;
+		if (Net.SampleGuideline(Net.GuidelineEdgeIdAt(EdgeIndex), Points)) { Links.Add(MoveTemp(Points)); }
+	}
+	if (!TestTrue(TEXT("the stand's lead-in and sweeps exist"), Links.Num() >= 3)) { return false; }
+
+	FRoadMeshBuffers Buffers;
+	FStandTurnOffCensus Census;
+	FStandTurnOffMarkingBuilder::Build(Net, 0.0, Buffers, &Census);
+	if (!TestTrue(TEXT("some lead-in was painted"), Census.LeadInCentres.Num() > 0)) { return false; }
+	double Worst = 0.0;
+	for (const FVector2D& Centre : Census.LeadInCentres)
+	{
+		double Best = DBL_MAX;
+		for (const TArray<FVector2D>& Points : Links) { Best = FMath::Min(Best, ToPolyline(Points, Centre)); }
+		Worst = FMath::Max(Worst, Best);
+	}
+	TestTrue(*FString::Printf(TEXT("every lead-in paint centre is within 1 uu of the sampled edges (worst %.3f)"), Worst), Worst <= 1.0);
+	return true;
+}
+
+/**
+ * NO ROOM TO SWEEP (Review Focus 3): a lead-in that meets the taxiway too near its end joins it
+ * hard - one split, no sweeps (FAnchorLink::Join's first branch). Still one turn-off and one
+ * number, placed at the lead end, which IS the taxiway node.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandTurnOffNoRoomBranchTest,
+	"Airside.Build.StandTurnOff.NoRoomBranch",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandTurnOffNoRoomBranchTest::RunTest(const FString& Parameters)
+{
+	using namespace StandTurnOffTest;
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	LayRawTaxiway(*Net, 0.0, -10000.0, 0.0);
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	// 15 uu short of the taxiway's end: past the weld tolerance, so the join splits, but with
+	// no room either side for a sweep.
+	const FEntityInstanceId Placed = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(-15.0, 7000.0), UE_DOUBLE_HALF_PI);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	// THE FIXTURE REALLY IS THE NO-ROOM SHAPE: the pose's lead-in ends on a node that carries
+	// the taxiway's own guideline, and no other link leaves it.
+	const FGuidelineNodeId PoseId = Net->GetEntity(Placed)->PoseNode;
+	const FGuidelineNode* Pose = Net->GetGuidelineNode(PoseId);
+	if (!TestTrue(TEXT("the stand has one lead-in"), Pose != nullptr && Pose->Incident.Num() == 1)) { return false; }
+	const FGuidelineEdgeId LeadId = Pose->Incident[0];
+	const FGuidelineEdge* Lead = Net->GetGuidelineEdge(LeadId);
+	const FGuidelineNode* End = Net->GetGuidelineNode(Lead->A == PoseId ? Lead->B : Lead->A);
+	bool bOnTaxiway = false, bSwept = false;
+	for (const FGuidelineEdgeId Id : End->Incident)
+	{
+		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+		bOnTaxiway |= Edge->DerivedFrom.IsSet();
+		bSwept |= !Edge->DerivedFrom.IsSet() && Id != LeadId;
+	}
+	if (!TestTrue(TEXT("the fixture is the no-room branch: the lead end is ON the taxiway, no sweep leaves it"), bOnTaxiway && !bSwept)) { return false; }
+
+	FRoadMeshBuffers Buffers;
+	FStandTurnOffCensus Census;
+	FStandTurnOffMarkingBuilder::Build(*Net, 0.0, Buffers, &Census);
+	TestEqual(TEXT("still one turn-off"), Census.TurnOffs, 1);
+	TestTrue(TEXT("still one number, the stand's"),
+		Census.NumbersPainted == TArray<int32>{ Net->GetEntity(Placed)->StandNumber });
+	TestTrue(TEXT("the lead-in is painted across the pavement from the lead end"), Census.LeadInCentres.Num() > 0);
+	const double HalfWidth = TestProfiles::Taxiway()->GetMaxHalfWidth();
+	int32 OffPavement = 0;
+	for (const FVector2D& Centre : Census.LeadInCentres)
+	{
+		OffPavement += FMath::Abs(Centre.Y) > HalfWidth + 1.0 ? 1 : 0;
+	}
+	TestEqual(TEXT("and only on the pavement"), OffPavement, 0);
+	return true;
+}
+
+/** NO TAXIWAY (Review Focus 5): a stand whose lead-in found nothing - no turn-off paint, no
+ *  crash, and the stand is still numbered. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandTurnOffNoTaxiwayTest,
+	"Airside.Build.StandTurnOff.NoTaxiway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandTurnOffNoTaxiwayTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Placed = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 7000.0), UE_DOUBLE_HALF_PI);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	FRoadMeshBuffers Buffers;
+	FStandTurnOffCensus Census;
+	TestEqual(TEXT("nothing to paint"), FStandTurnOffMarkingBuilder::Build(*Net, 0.0, Buffers, &Census), 0);
+	TestEqual(TEXT("no turn-off"), Census.TurnOffs, 0);
+	TestEqual(TEXT("no number painted"), Census.NumbersPainted.Num(), 0);
+	TestEqual(TEXT("no triangles"), Buffers.Indices.Num(), 0);
+	TestEqual(TEXT("the stand is still numbered"), Net->GetEntity(Placed)->StandNumber, 1);
+	return true;
+}
+
+/**
+ * THE SEAM: the presenter's marking rebuild runs the turn-off builder. Placing a stand paints the
+ * layer with exactly what the three marking builders make of the network - so a presenter that
+ * skipped this one comes up short by the turn-off's triangles.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandTurnOffPresenterPaintsItTest,
+	"Airside.Present.StandTurnOff.PaintsAfterPlacement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandTurnOffPresenterPaintsItTest::RunTest(const FString& Parameters)
+{
+	using namespace StandTurnOffTest;
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("actor"), TestWorld.Actor)) { return false; }
+	int32 Index = INDEX_NONE; double HalfWidth = 0.0, Strip = 0.0;
+	if (!PlaceBesideTaxiway(*this, TestWorld.Actor, Index, HalfWidth, Strip)) { return false; }
+	const URoadNetwork& Net = *TestWorld.Actor->Network;
+
+	FRoadMeshBuffers Holding, Stands, TurnOffs;
+	FHoldingPositionMarkingBuilder::Build(Net, 0.0, Holding);
+	FStandMarkingBuilder::Build(Net, 0.0, Stands, UAirsideSettings::ResolveLetterEnvelopeTable());
+	FStandTurnOffMarkingBuilder::Build(Net, 0.0, TurnOffs);
+	if (!TestTrue(TEXT("the turn-off paints something"), TurnOffs.Indices.Num() > 0)) { return false; }
+	TestEqual(TEXT("the paint layer holds the holding, stand AND turn-off paint"),
+		TestWorld.Actor->GetPresenter()->HoldingPaintTriangleCountForTest(),
+		(Holding.Indices.Num() + Stands.Indices.Num() + TurnOffs.Indices.Num()) / 3);
+	return true;
+}
+
+/**
+ * THE SIGN SITS ON THE LEAD-IN'S OWN AXIS (user 2026-09-29, samples/standsigns.png): a short
+ * STRAIGHT arrow on the line the lead-in leaves the taxiway centreline along, just clear of the
+ * centreline paint, pointing INTO the stand - not a chevron half-way round a sweep. The stand
+ * beside the taxiway at y = 0 faces +Y, so its axis is x = 0 and "into the stand" is +Y.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandTurnOffSignOnTheLeadInAxisTest,
+	"Airside.Build.StandTurnOff.SignOnTheLeadInAxis",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandTurnOffSignOnTheLeadInAxisTest::RunTest(const FString& Parameters)
+{
+	using namespace StandTurnOffTest;
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("actor"), TestWorld.Actor)) { return false; }
+	int32 Index = INDEX_NONE; double HalfWidth = 0.0, Strip = 0.0;
+	if (!PlaceBesideTaxiway(*this, TestWorld.Actor, Index, HalfWidth, Strip)) { return false; }
+
+	FRoadMeshBuffers Buffers;
+	FStandTurnOffCensus Census;
+	FStandTurnOffMarkingBuilder::Build(*TestWorld.Actor->Network, 0.0, Buffers, &Census);
+	if (!TestEqual(TEXT("one arrow"), Census.ArrowTails.Num(), 1) || !TestEqual(TEXT("tip beside tail"), Census.ArrowTips.Num(), 1)) { return false; }
+	const FVector2D Tail = Census.ArrowTails[0];
+	const FVector2D Tip = Census.ArrowTips[0];
+	TestTrue(*FString::Printf(TEXT("the arrow lies on the lead-in axis x = 0 (tail %.1f, tip %.1f)"), Tail.X, Tip.X),
+		FMath::Abs(Tail.X) <= 1.0 && FMath::Abs(Tip.X) <= 1.0);
+	TestTrue(TEXT("it points INTO the stand (+Y)"), Tip.Y > Tail.Y);
+	TestTrue(*FString::Printf(TEXT("it starts clear of the centreline paint (tail y %.0f)"), Tail.Y),
+		Tail.Y >= FStandTurnOffMarkingBuilder::ArrowStartFromCentreline - 1.0);
+	TestTrue(*FString::Printf(TEXT("and ends on the taxiway pavement (tip y %.0f, half-width %.0f)"), Tip.Y, HalfWidth),
+		Tip.Y <= HalfWidth);
+	TestTrue(TEXT("SHORT and STRAIGHT: tip to tail is the arrow's own length"),
+		FMath::IsNearlyEqual(FVector2D::Distance(Tail, Tip), FStandTurnOffMarkingBuilder::ArrowLength, 1.0));
+	return true;
+}
+
+/**
+ * THE NUMBER READS FROM BOTH SIDES (user 2026-09-29): two faces, one each side of the arrow,
+ * the text running ALONG the axis, the glyph tops toward the arrow - so they read in opposite
+ * directions, one for a pilot on each side, as samples/standsigns.png shows.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandTurnOffNumberReadsFromBothSidesTest,
+	"Airside.Build.StandTurnOff.NumberReadsFromBothSides",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandTurnOffNumberReadsFromBothSidesTest::RunTest(const FString& Parameters)
+{
+	using namespace StandTurnOffTest;
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("actor"), TestWorld.Actor)) { return false; }
+	int32 Index = INDEX_NONE; double HalfWidth = 0.0, Strip = 0.0;
+	if (!PlaceBesideTaxiway(*this, TestWorld.Actor, Index, HalfWidth, Strip)) { return false; }
+
+	FRoadMeshBuffers Buffers;
+	FStandTurnOffCensus Census;
+	FStandTurnOffMarkingBuilder::Build(*TestWorld.Actor->Network, 0.0, Buffers, &Census);
+	if (!TestEqual(TEXT("two faces per turn-off"), Census.SignFaces.Num(), 2)) { return false; }
+	const FStandSignFace& L = Census.SignFaces[0];
+	const FStandSignFace& R = Census.SignFaces[1];
+	TestTrue(TEXT("one face each side of the axis"), L.Origin.X * R.Origin.X < 0.0);
+	for (const FStandSignFace* F : { &L, &R })
+	{
+		TestTrue(TEXT("the text runs along the axis"), FMath::IsNearlyEqual(FMath::Abs(F->Right.Y), 1.0, 1e-6));
+		TestTrue(TEXT("the glyph tops face the arrow"), FVector2D::DotProduct(F->Up, FVector2D(-F->Origin.X, 0.0)) > 0.0);
+		TestTrue(TEXT("and the face is on the taxiway pavement"), F->Origin.Y > 0.0 && F->Origin.Y < HalfWidth);
+	}
+	TestTrue(TEXT("the two read in OPPOSITE directions"), FVector2D::DotProduct(L.Right, R.Right) < -0.999);
+	return true;
+}
+
+/**
+ * EACH FACE SITS ON A BLACK BOX (user 2026-09-29): the digits are painted in the guidance
+ * yellow over a box in EStandPaint::SignBackground, which contains them and lies BELOW them
+ * (a lower Z, so the digits win the depth test rather than z-fighting the box).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandTurnOffNumberOnABlackBoxTest,
+	"Airside.Build.StandTurnOff.NumberOnABlackBox",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandTurnOffNumberOnABlackBoxTest::RunTest(const FString& Parameters)
+{
+	using namespace StandTurnOffTest;
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("actor"), TestWorld.Actor)) { return false; }
+	int32 Index = INDEX_NONE; double HalfWidth = 0.0, Strip = 0.0;
+	if (!PlaceBesideTaxiway(*this, TestWorld.Actor, Index, HalfWidth, Strip)) { return false; }
+
+	FStandPaintIds Ids;
+	for (int32 Paint = 0; Paint < static_cast<int32>(EStandPaint::Count); ++Paint) { Ids.Ids[Paint] = 10 + Paint; }
+	const int32 Black = Ids[EStandPaint::SignBackground];
+	const int32 Yellow = Ids[EStandPaint::Guidance];
+	constexpr double Z = 10.0;
+	FRoadMeshBuffers Buffers;
+	FStandTurnOffCensus Census;
+	FStandTurnOffMarkingBuilder::Build(*TestWorld.Actor->Network, Z, Buffers, &Census, Ids);
+	if (!TestEqual(TEXT("two faces"), Census.SignFaces.Num(), 2)) { return false; }
+
+	int32 BlackTris = 0;
+	double BlackZ = -DBL_MAX, YellowZ = DBL_MAX;
+	for (int32 T = 0; T < Buffers.MaterialIDs.Num(); ++T)
+	{
+		const double TriZ = Buffers.Positions[Buffers.Indices[T * 3]].Z;
+		if (Buffers.MaterialIDs[T] == Black) { ++BlackTris; BlackZ = FMath::Max(BlackZ, TriZ); }
+		if (Buffers.MaterialIDs[T] == Yellow) { YellowZ = FMath::Min(YellowZ, TriZ); }
+	}
+	TestEqual(TEXT("one black box (two triangles) per face"), BlackTris, 4);
+	TestTrue(*FString::Printf(TEXT("the boxes lie below the yellow (%.2f < %.2f)"), BlackZ, YellowZ), BlackZ < YellowZ);
+	TestTrue(TEXT("and still above the pavement the paint lies on"), BlackZ > Z - 0.5);
+
+	// Each box CONTAINS its face's digits: the middle of the text, half a cell up from its foot.
+	for (const FStandSignFace& F : Census.SignFaces)
+	{
+		// A hair off the text's exact middle: that is the box's centre, which lies on the diagonal
+		// its two triangles share - a boundary PointInPolygon does not promise either answer on.
+		const FVector2D Middle = F.Origin + F.Up * (FStandTurnOffMarkingBuilder::NumberHeight * 0.5)
+			+ F.Right * 7.0 + F.Up * 3.0;
+		bool bInside = false;
+		for (int32 T = 0; T < Buffers.MaterialIDs.Num() && !bInside; ++T)
+		{
+			if (Buffers.MaterialIDs[T] != Black) { continue; }
+			const FVector3d& P0 = Buffers.Positions[Buffers.Indices[T * 3]];
+			const FVector3d& P1 = Buffers.Positions[Buffers.Indices[T * 3 + 1]];
+			const FVector3d& P2 = Buffers.Positions[Buffers.Indices[T * 3 + 2]];
+			const TArray<FVector2D> Tri{ FVector2D(P0.X, P0.Y), FVector2D(P1.X, P1.Y), FVector2D(P2.X, P2.Y) };
+			bInside = RoadGeom::PointInPolygon(Tri, Middle);
+		}
+		TestTrue(TEXT("its black box sits under the text"), bInside);
+	}
+	return true;
+}
+
+/**
+ * A NEIGHBOUR DOES NOT MOVE A NUMBER (final review 2026-09-29): stand 2 placed beside stand 1 on
+ * the same taxiway re-splits the edge stand 1 joined, on every rebuild; stand 1's painted number
+ * stays where it was, to 1 uu.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandTurnOffNeighbourDoesNotMoveTheNumberTest,
+	"Airside.Present.StandTurnOff.NeighbourDoesNotMoveTheNumber",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandTurnOffNeighbourDoesNotMoveTheNumberTest::RunTest(const FString& Parameters)
+{
+	using namespace StandTurnOffTest;
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	int32 Index = INDEX_NONE; double HalfWidth = 0.0, Strip = 0.0;
+	if (!PlaceBesideTaxiway(*this, Actor, Index, HalfWidth, Strip)) { return false; }
+
+	const auto NumberOf = [this, Actor](int32 Number, FVector2D& Out)
+	{
+		FRoadMeshBuffers Buffers;
+		FStandTurnOffCensus Census;
+		FStandTurnOffMarkingBuilder::Build(*Actor->Network, 0.0, Buffers, &Census);
+		const int32 At = Census.NumbersPainted.Find(Number);
+		if (!TestTrue(*FString::Printf(TEXT("stand %d's number is painted"), Number), At != INDEX_NONE)) { return false; }
+		Out = Census.NumberOrigins[At];
+		return true;
+	};
+	FVector2D Before;
+	if (!NumberOf(1, Before)) { return false; }
+
+	// STAND 2, BESIDE IT on the same taxiway: entrance on the same line, 20 m east of stand 1's
+	// east edge - close enough that its sweeps split the edge stand 1's sweeps split.
+	const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::C);
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	double EntranceY = DBL_MAX;
+	for (const FVector2D& P : Actor->Network->GetEntities()[Index].Outline) { EntranceY = FMath::Min(EntranceY, P.Y); }
+	const FVector2D A(Width * 0.5 + 2000.0, EntranceY);
+	const FVector2D B(A.X + Width, EntranceY);
+	IRoadEditTarget* Target = Actor;
+	const TArray<FVector2D> Rect = { A, B, FVector2D(B.X, EntranceY + Depth), FVector2D(A.X, EntranceY + Depth) };
+	if (!TestTrue(TEXT("stand 2 is placed beside stand 1"), Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac) != INDEX_NONE)) { return false; }
+	Actor->RebuildMesh();
+
+	FVector2D After;
+	if (!NumberOf(1, After)) { return false; }
+	FVector2D Second;
+	TestTrue(TEXT("stand 2 is signed too - the neighbour really joined the taxiway"), NumberOf(2, Second));
+	TestTrue(*FString::Printf(TEXT("stand 1's number has not moved (%.1f uu)"), FVector2D::Distance(Before, After)),
+		FVector2D::Distance(Before, After) <= 1.0);
 	return true;
 }
 
