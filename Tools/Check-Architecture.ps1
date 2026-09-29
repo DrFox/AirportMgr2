@@ -135,6 +135,8 @@
           decoupled from Policy, to test ERunwayAvoidance itself. The allow-list also fails if
           an entry stops matching anything - the same "list drifted silently" failure rule 15
           guards against.
+      31. The ops event bus is subscribed to only in OpsRuntime.cpp (UOpsRuntime::WireBus) - see the
+          rule's own comment.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -1414,6 +1416,28 @@ if (-not (Test-Path $hudLayer)) {
     $failures.Add("layout-store-wired: $hudLayer no longer hands the window host an FUserSettingsLayoutStore - the player's window layout would be forgotten every launch")
 }
 $ranRules.Add('layout-store-wired')
+
+# --- 31. THE BUS IS WIRED IN ONE FUNCTION ------------------------------------------------------
+# FOpsEventBus (spec 2026-09-29 ops-event-bus): UOpsRuntime::WireBus is the whole subscription map,
+# so "what reacts to X?" has one answer you can read. A Subscribe< or RegisterPass( anywhere else in
+# production is a subscription nobody can find being consumed - the list-declared-here, read-there
+# bug CLAUDE.md names three times. FOpsEventBus's own check() only fires when the stray call runs;
+# this sees it at rest. Test sources are exempt: a test wires a bare bus of its own.
+$busWiring = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps\Private\Present\OpsRuntime.cpp'
+if (-not (Test-Path $busWiring)) {
+    $failures.Add("bus-wired-once: $busWiring is named by rule 31 but does not exist - update the rule")
+}
+foreach ($busTree in @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'), (Join-Path $Root 'Source\AirportMgr'))) {
+    foreach ($file in Get-Sources $busTree @('.h', '.cpp')) {
+        if ($file.FullName -eq $busWiring -or $file.Name -like 'OpsEventBus.*' -or $file.Name -like '*Test.cpp') { continue }
+        $hits = Select-String -Path $file.FullName -Pattern '\.Subscribe<|RegisterPass\(' |
+            Where-Object { $_.Line -notmatch '^\s*//' -and $_.Line -notmatch '^\s*\*' }
+        foreach ($h in $hits) {
+            $failures.Add("bus-wired-once: $($file.Name):$($h.LineNumber) subscribes to the ops bus outside UOpsRuntime::WireBus")
+        }
+    }
+}
+$ranRules.Add('bus-wired-once')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

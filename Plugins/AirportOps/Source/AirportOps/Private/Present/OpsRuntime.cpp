@@ -148,6 +148,54 @@ FVehicle UOpsRuntime::StandDesignVehicleOf(const FEntityInstance& Stand)
 	return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UJobBoard::LetterOfStand(Stand));
 }
 
+UGroundTraffic* UOpsRuntime::LiveModel() const
+{
+	if (Target == nullptr || Target->Network == nullptr || Target->GetTraffic() == nullptr)
+	{
+		return nullptr;
+	}
+	return Target->GetTraffic()->GetModel();
+}
+
+void UOpsRuntime::WireBus()
+{
+	// THE WHOLE SUBSCRIPTION MAP, in one function - see FOpsEventBus. Reset first: Attach runs
+	// again on a level change, and a second wiring on top of the first would handle every
+	// event twice.
+	// ENFORCED BY: AirportOps.Present.Bus.ReattachDoesNotDouble
+	Bus.ResetWiring();
+	Bus.BeginWiring();
+
+	// SIM: the boards, job board first - the order OnAgentPhase kept by hand before the bus.
+	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("JobBoard"), [this](const FAgentPhaseEvent& E)
+	{
+		if (UGroundTraffic* Model = LiveModel())
+		{
+			JobBoard->OnAgentPhase(*Model, *Target->Network, *Clock, E.AgentId, E.From, E.To);
+		}
+	});
+	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAgentPhaseEvent& E)
+	{
+		if (UGroundTraffic* Model = LiveModel())
+		{
+			FlightBoard->OnAgentPhase(*Model, *Target->Network, *Clock, E.AgentId, E.From, E.To);
+		}
+	});
+
+	// PRESENTATION: UOpsEvents, the BP/UMG face of the bus. Its Notify* functions keep their
+	// UE_LOG lines, so the log is unchanged.
+	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FAgentPhaseEvent& E) { Events->NotifyAgentPhaseChanged(E.AgentId, E.From, E.To); });
+	Bus.Subscribe<FArrivalRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FArrivalRefusedEvent& E) { Events->NotifyArrivalRefused(E.Why); });
+	Bus.Subscribe<FSpeedChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FSpeedChangedEvent& E) { Events->NotifySpeedChanged(E.Speed); });
+	Bus.Subscribe<FNotificationEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FNotificationEvent& E) { Events->NotifyNotification(E.Text); });
+
+	Bus.EndWiring();
+}
+
 void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 {
 	Detach();
@@ -157,6 +205,9 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		UE_LOG(LogAirportOps, Warning, TEXT("OpsRuntime attached to nothing: no ARoadNetworkActor"));
 		return;
 	}
+	// WIRED BEFORE the Airside delegates are bound, so nothing can be published into a bus with
+	// no handlers for it.
+	WireBus();
 	UAirsideTraffic* Traffic = Target->GetTraffic();
 	PhaseHandle = Traffic->OnAgentPhaseChanged.AddUObject(this, &UOpsRuntime::OnAgentPhase);
 	RefusalHandle = Traffic->OnArrivalRefused.AddUObject(this, &UOpsRuntime::OnArrivalRefused);
@@ -364,6 +415,12 @@ void UOpsRuntime::Detach()
 void UOpsRuntime::Tick(double RealDeltaSeconds)
 {
 	Clock->Advance(RealDeltaSeconds);
+
+	// ONE DRAIN, after the clock: the queue holds Airside's events from the motion tick in publish
+	// order, then anything the clock just fired - so a flight that came due this frame is handled
+	// this frame (spec 2026-09-29 §1).
+	Bus.Drain();
+
 	if (Target != nullptr)
 	{
 		// The MULTIPLIER, not TimeScale(): movement runs at the player's speed setting,
@@ -407,7 +464,7 @@ void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
 	{
 		Target->SetSimTimeScale(USimClock::Multiplier(Speed));
 	}
-	Events->NotifySpeedChanged(Speed);
+	Bus.Publish(FSpeedChangedEvent{ Speed });
 }
 
 void UOpsRuntime::StepSpeed(int32 Delta)
@@ -429,24 +486,17 @@ void UOpsRuntime::TogglePause()
 
 void UOpsRuntime::OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
 {
-	// THE SERVICE FIRST, THEN THE BUS. A Blueprint listener that asked the fuel service what
-	// an aircraft was doing would otherwise see the state from BEFORE the event it was woken
-	// by - one frame stale, and only sometimes, which is the worst kind.
-	if (Target != nullptr && Target->Network != nullptr && Target->GetTraffic() != nullptr)
-	{
-		if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
-		{
-			JobBoard->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
-			FlightBoard->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
-		}
-	}
-
-	Events->NotifyAgentPhaseChanged(AgentId, From, To);
+	// PUBLISHED, NOT HANDLED. This runs inside UGroundTraffic's broadcast, and nothing may act
+	// there (#193's re-entrancy contract exists because a listener that did could retire any agent
+	// mid-loop). The rule this function used to keep by hand - THE SERVICE FIRST, THEN THE BUS, so a
+	// Blueprint listener that asked the fuel service what an aircraft was doing never saw the state
+	// from BEFORE the event that woke it - is now the tier order in WireBus: Sim, then Presentation.
+	Bus.Publish(FAgentPhaseEvent{ AgentId, From, To });
 }
 
 void UOpsRuntime::OnArrivalRefused(EArrivalRefusal Why)
 {
-	Events->NotifyArrivalRefused(Why);
+	Bus.Publish(FArrivalRefusedEvent{ Why });
 }
 
 void UOpsRuntime::PostDailyUpkeep()
@@ -499,12 +549,15 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 		UE_LOG(LogAirportOps, Warning, TEXT("Save refused: no network attached"));
 		return false;
 	}
+	// DRAINED BEFORE THE SNAPSHOT: an Airside event queued since the last step would otherwise be
+	// handled after the save, and its effect missing from it.
+	Bus.Drain();
 	FOpsSnapshot Snapshot;
 	const TArray<IOpsPersistent*> Saved = Persistents();
 	OpsSave::Capture(Saved, *Target->Network, Snapshot);
 	const bool bOk = OpsSave::WriteSlot(SlotName, Snapshot);
-	Events->NotifyNotification(bOk ? FString::Printf(TEXT("Saved '%s'"), *SlotName)
-	                               : FString::Printf(TEXT("Save to '%s' failed"), *SlotName));
+	Bus.Publish(FNotificationEvent{ bOk ? FString::Printf(TEXT("Saved '%s'"), *SlotName)
+	                                    : FString::Printf(TEXT("Save to '%s' failed"), *SlotName) });
 	return bOk;
 }
 
@@ -578,7 +631,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	FOpsSnapshot Snapshot;
 	if (!OpsSave::ReadSlot(SlotName, Snapshot))
 	{
-		Events->NotifyNotification(FString::Printf(TEXT("No save '%s'"), *SlotName));
+		Bus.Publish(FNotificationEvent{ FString::Printf(TEXT("No save '%s'"), *SlotName) });
 		return false;
 	}
 	// Agents first: they were never saved, and one mid-taxi on a network about to be
@@ -589,6 +642,10 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	{
 		return false;
 	}
+	// THE GONE EVENTS ClearAgents JUST QUEUED name agents that no longer exist, and the boards
+	// were restored after them: handling them now would un-hold restored flights' stands.
+	// ENFORCED BY: AirportOps.Present.Bus.LoadDiscardsQueue
+	Bus.Discard();
 	// THE LOAD-TIME REPAIRS A LEVEL GETS FROM PostLoad AND PostRegisterAllComponents, which a
 	// save game does not get - OpsSave::Restore is Serialize alone (final review C2).
 	// Outlines first: a stand saved before stands had them gets its Code C box, and only a
@@ -621,7 +678,11 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// THE REPEATERS TOO, from the loaded Now - see RearmRepeatingSchedules (review I1).
 	RearmRepeatingSchedules();
 
+	// EVERY PASS ONCE after a load - the one catch-up, since nothing that happened before the load
+	// is an event any more (spec 2026-09-29 §4). No passes exist until stage 3; the rule is here first.
+	Bus.MarkAllDirty();
+
 	ApplySpeed(Clock->GetSpeed());
-	Events->NotifyNotification(FString::Printf(TEXT("Loaded '%s'"), *SlotName));
+	Bus.Publish(FNotificationEvent{ FString::Printf(TEXT("Loaded '%s'"), *SlotName) });
 	return true;
 }

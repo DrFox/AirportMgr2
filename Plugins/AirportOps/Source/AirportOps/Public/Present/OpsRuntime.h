@@ -3,11 +3,13 @@
 #include "CoreMinimal.h"
 #include "Model/AgentRescue.h"
 #include "Model/OfferGenerator.h"
+#include "Model/OpsEventBus.h"
 #include "Model/SimClock.h"
 #include "UObject/Object.h"
 #include "OpsRuntime.generated.h"
 
 class ARoadNetworkActor;
+class UGroundTraffic;
 class UOpsCatalog;
 class UOpsEvents;
 class UJobBoard;
@@ -25,6 +27,10 @@ enum class EArrivalRefusal : uint8;
  * The AirportOps composition root. Owns the clock and the event bus, attaches to the one
  * ARoadNetworkActor, relays Airside delegates onto the bus, pushes the speed multiplier
  * down into the actor each tick, and performs save/load end to end.
+ *
+ * "THE BUS" IS FOpsEventBus since 2026-09-29 (spec ops-event-bus): the Airside relays PUBLISH
+ * onto it, Tick drains it, and WireBus is the one place anything subscribes. UOpsEvents is now
+ * the bus's Presentation tier - the BP/UMG face of it - rather than the bus itself.
  *
  * A UObject rather than the subsystem itself so a test can NewObject one, Attach a spawned
  * actor and Tick it by hand - a UGameInstanceSubsystem needs a UGameInstance, which a
@@ -47,6 +53,13 @@ public:
 
 	USimClock* GetClock() const { return Clock; }
 	UOpsEvents* GetEvents() const { return Events; }
+
+	/**
+	 * The ops event bus - see FOpsEventBus. Subscriptions are made in WireBus alone; anything may
+	 * Publish.
+	 * ENFORCED BY: Check-Architecture rule 31 (bus-wired-once)
+	 */
+	FOpsEventBus& GetBus() { return Bus; }
 	UOpsCatalog* GetCatalog() const { return Catalog; }
 
 	/** The fuel jobs. See UJobBoard - this runtime owns it, feeds it the phase events and
@@ -181,6 +194,23 @@ private:
 	UPROPERTY() TObjectPtr<UPricing> Pricing;
 	UPROPERTY() TObjectPtr<UAgentRescue> AgentRescue;
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
+
+	/**
+	 * PLAIN C++, NOT A UPROPERTY: it holds TFunctions, which UHT cannot see, and none of it is
+	 * saved - SaveToSlot drains it first and LoadFromSlot discards it (spec 2026-09-29 §4).
+	 */
+	FOpsEventBus Bus;
+
+	/**
+	 * Every subscription and pass - see FOpsEventBus. Called by Attach, which may run again on a
+	 * level change; it resets the wiring before re-making it.
+	 * ENFORCED BY: Check-Architecture rule 31 (bus-wired-once), AirportOps.Present.Bus.ReattachDoesNotDouble
+	 */
+	void WireBus();
+
+	/** The actor's traffic model, or null when there is no target, network or traffic yet - the
+	 *  one guard every Sim handler needs, since an event can outlive the frame it was raised in. */
+	UGroundTraffic* LiveModel() const;
 
 	/** The repeating offer callback, so Detach can cancel it. INDEX_NONE when unattached. */
 	int32 OfferHandle = INDEX_NONE;
