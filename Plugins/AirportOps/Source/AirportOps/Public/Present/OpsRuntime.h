@@ -9,6 +9,7 @@
 #include "OpsRuntime.generated.h"
 
 class ARoadNetworkActor;
+class UAirlineRoster;
 class UGroundTraffic;
 class UOpsCatalog;
 class UOpsEvents;
@@ -89,6 +90,9 @@ public:
 	 */
 	FUnstickVerdict CanUnstick(int32 AgentId, EUnstickAction Action) const;
 	FUnstickVerdict Unstick(int32 AgentId, EUnstickAction Action);
+
+	/** How every airline feels about this airport. See UAirlineRoster - a Reaction on the bus. */
+	UAirlineRoster* GetAirlines() const { return Airlines; }
 
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
@@ -193,6 +197,12 @@ private:
 	UPROPERTY() TObjectPtr<ULedger> Ledger;
 	UPROPERTY() TObjectPtr<UPricing> Pricing;
 	UPROPERTY() TObjectPtr<UAgentRescue> AgentRescue;
+
+	UPROPERTY() TObjectPtr<UAirlineRoster> Airlines;
+
+	/** Every catalog airline gets a row - at attach, and again after a load, whose snapshot may predate
+	 *  the "Airlines" blob. Seeded here and never from an event: see UAirlineRoster's class comment. */
+	void SeedAirlines();
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
 
 	/**

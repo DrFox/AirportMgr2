@@ -4,6 +4,7 @@
 #include "AirportOpsLog.h"
 #include "Misc/TVariant.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/Flight.h"
 #include "Model/RoadAgent.h"
 #include "Model/SimClock.h"
 
@@ -71,6 +72,53 @@ struct AIRPORTOPS_API FNotificationEvent
 	FString Describe() const;
 };
 
+/** An offer lapsed unanswered. Reason says whether it could ever have been taken. */
+struct FOfferExpiredEvent
+{
+	int32 FlightId = 0;
+	FName AirlineId;
+	ELapseReason Reason = ELapseReason::None;
+	static const TCHAR* EventName() { return TEXT("OfferExpired"); }
+};
+
+/** The player declined an offer. */
+struct FOfferDeclinedEvent
+{
+	int32 FlightId = 0;
+	FName AirlineId;
+	static const TCHAR* EventName() { return TEXT("OfferDeclined"); }
+};
+
+/**
+ * A flight left the ground. LateBySeconds is AirborneAt - AirborneBy(): the contract the inbox row
+ * showed at the offer. Negative is early, and is not clamped - what early is worth is the listener's
+ * decision, not the publisher's.
+ */
+struct FFlightAirborneEvent
+{
+	int32 FlightId = 0;
+	FName AirlineId;
+	double LateBySeconds = 0.0;
+	static const TCHAR* EventName() { return TEXT("FlightAirborne"); }
+};
+
+/** A game day ended - published by UOpsRuntime's daily beat, after the upkeep and the roll-up. */
+struct FDayEndedEvent
+{
+	int32 Day = 0;
+	static const TCHAR* EventName() { return TEXT("DayEnded"); }
+};
+
+/** An airline's satisfaction moved. Published by UAirlineRoster from the Reaction tier. */
+struct FAirlineSatisfactionEvent
+{
+	FName AirlineId;
+	double Old = 0.0;
+	double New = 0.0;
+	FString Cause;
+	static const TCHAR* EventName() { return TEXT("AirlineSatisfaction"); }
+};
+
 /**
  * An event logged at VERBOSE when published, not Log. Only what fires in bulk belongs here: every agent
  * phase change of every aircraft and vehicle would bury the rest of the file. Everything else is Log,
@@ -84,7 +132,8 @@ template <> struct TOpsEventIsChatty<FAgentPhaseEvent> { static constexpr bool V
  * against it, and the wiring test walks it - "lists that must agree are ONE list".
  * FInstancedStruct was rejected: an open set has no answer to "which events exist?".
  */
-using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent>;
+using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent,
+	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

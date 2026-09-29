@@ -220,6 +220,7 @@ UFlight* UOfferGenerator::MakeOffer(const FVector2D& Focus, const UAirlineDefini
 	Offer->Id = Id;
 	Offer->Airframe = Chosen.Airframe;
 	Offer->AirlineName = Chosen.AirlineName;
+	Offer->AirlineId = Airline.GetFName();
 	Offer->TypeName = Chosen.TypeName;
 	Offer->Callsign = MakeCallsign(Airline.CallsignPrefix, Stream);
 	Offer->Phase = EFlightPhase::Offered;

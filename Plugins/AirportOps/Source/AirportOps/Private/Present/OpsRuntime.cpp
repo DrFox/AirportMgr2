@@ -9,6 +9,7 @@
 #include "Model/OpsDefinition.h"
 #include "Entities/AircraftType.h"
 #include "Model/AirlineDefinition.h"
+#include "Model/AirlineRoster.h"
 #include "Model/ArrivalSequencer.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -44,10 +45,24 @@ UOpsRuntime::UOpsRuntime()
 	Ledger = CreateDefaultSubobject<ULedger>(TEXT("Ledger"));
 	Pricing = CreateDefaultSubobject<UPricing>(TEXT("Pricing"));
 
+	// The airlines' mood - the bus's first Reaction (spec 2026-09-29 §3), forwarded like the rest.
+	Airlines = CreateDefaultSubobject<UAirlineRoster>(TEXT("Airlines"));
+
 	// The Unstick menu, the same shape again: a pointer, and the two boards it composes.
 	AgentRescue = CreateDefaultSubobject<UAgentRescue>(TEXT("AgentRescue"));
 	AgentRescue->JobBoard = JobBoard;
 	AgentRescue->FlightBoard = FlightBoard;
+}
+
+void UOpsRuntime::SeedAirlines()
+{
+	for (const FAirlineOffers& Each : AirlineOffers)
+	{
+		if (Each.Airline != nullptr)
+		{
+			Airlines->Ensure(Each.Airline->GetFName());
+		}
+	}
 }
 
 FUnstickVerdict UOpsRuntime::CanUnstick(int32 AgentId, EUnstickAction Action) const
@@ -182,6 +197,24 @@ void UOpsRuntime::WireBus()
 		}
 	});
 
+	// REACTION: the airlines, reading what the boards have already settled.
+	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Airlines"),
+		[this](const FFlightAirborneEvent& E) { Airlines->OnFlightAirborne(E); });
+	Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Airlines"),
+		[this](const FOfferExpiredEvent& E) { Airlines->OnOfferExpired(E); });
+	Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
+		[this](const FOfferDeclinedEvent& E) { Airlines->OnOfferDeclined(E); });
+	Bus.Subscribe<FDayEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
+		[this](const FDayEndedEvent& E) { Airlines->OnDayEnded(E); });
+
+	// PRESENTATION: the line the PIE check greps for (spec §4) - a satisfaction change as the bus
+	// delivered it, which is what proves the chain end to end rather than the roster's own log line.
+	Bus.Subscribe<FAirlineSatisfactionEvent>(EOpsTier::Presentation, TEXT("Log"), [](const FAirlineSatisfactionEvent& E)
+	{
+		UE_LOG(LogOpsBus, Log, TEXT("Airline %s satisfaction %.2f -> %.2f: %s"),
+			*E.AirlineId.ToString(), E.Old, E.New, *E.Cause);
+	});
+
 	// PRESENTATION: UOpsEvents, the BP/UMG face of the bus. Its Notify* functions keep their
 	// UE_LOG lines, so the log is unchanged.
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
@@ -236,6 +269,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		JobBoard->VehicleSpecs = Scenario->FuelVehicles;
 		JobBoard->RefillLitresPerMinutePerPump = Scenario->DepotRefillLitresPerMinutePerPump;
 		OfferGenerator->MaxPendingOffers = Scenario->MaxPendingOffers;
+		Airlines->Tuning = Scenario->AirlineSatisfaction;
 
 		// THE BALANCE A NEW GAME OPENS AT. The comment that used to stand at the top of this
 		// block said this would happen "when the ledger exists (M3)"; this is that. A LOAD
@@ -293,6 +327,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	FlightBoard->Ledger = Ledger;
 	FlightBoard->Pricing = Pricing;
 	FlightBoard->Fuel = JobBoard;
+	FlightBoard->Bus = &Bus;
+	Airlines->Bus = &Bus;
 	JobBoard->Ledger = Ledger;
 	JobBoard->Pricing = Pricing;
 	Ledger->Pricing = Pricing;
@@ -320,6 +356,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// (spec 2026-09-28 problem 2). Each airline's own curve and the live fee are read inside
 	// the tick - see UOfferGenerator::TickMinute.
 	AirlineOffers = AirlineOffersFromCatalog();
+	SeedAirlines();
 	RearmRepeatingSchedules();
 	{
 		// THE DAY'S EXPECTED TOTAL, integrated from the same RateAt the generator follows, so
@@ -528,6 +565,10 @@ void UOpsRuntime::PostDailyUpkeep()
 	// Base was zero, which PR #213 flagged as "Not done" and left unresolved.
 	FlightBoard->RollUp(Clock->Now());
 
+	// THE DAY'S END, announced on the same beat rather than on a second daily timer - for the same
+	// reason RollUp rides it (issue #188). The airlines forgive a little on it.
+	Bus.Publish(FDayEndedEvent{ Clock->Day() });
+
 	UE_LOG(LogAirportOps, Log, TEXT("Upkeep day %d: %.0f; balance %.0f"),
 		Clock->Day(), Base, Ledger->Balance());
 }
@@ -544,6 +585,7 @@ TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
 	Out.Add(Ledger);
 	Out.Add(Pricing);
 	Out.Add(OfferGenerator);
+	Out.Add(Airlines);
 	return Out;
 }
 
@@ -665,6 +707,9 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	{
 		return false;
 	}
+	// A SNAPSHOT FROM BEFORE THE "Airlines" BLOB restores no rows (OnBeforeRestore cleared them);
+	// every catalog airline comes back at the tuning's start.
+	SeedAirlines();
 	// THE LOAD-TIME REPAIRS A LEVEL GETS FROM PostLoad AND PostRegisterAllComponents, which a
 	// save game does not get - OpsSave::Restore is Serialize alone (final review C2).
 	// Outlines first: a stand saved before stands had them gets its Code C box, and only a

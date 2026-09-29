@@ -1,6 +1,7 @@
 #include "Model/FlightBoard.h"
 
 #include "AirportOpsLog.h"
+#include "Model/OpsEventBus.h"
 #include "Model/AirsideCapability.h"
 #include "Model/ArrivalSequencer.h"
 #include "Model/Flight.h"
@@ -107,6 +108,10 @@ void UFlightBoard::TickOffers(const UGroundTraffic& Traffic, const URoadNetwork&
 		--OfferedCount;
 		UE_LOG(LogAirportOps, Log, TEXT("Offer %d (%s) lapsed unanswered (%s)"), Each->Id, *Each->Callsign,
 			Each->LapseReason == ELapseReason::Ignored ? TEXT("ignored") : TEXT("never acceptable"));
+		if (Bus != nullptr)
+		{
+			Bus->Publish(FOfferExpiredEvent{ Each->Id, Each->AirlineId, Each->LapseReason });
+		}
 		MoveToHistory(*Each, Clock.Now());
 		++RevisionCount;
 	}
@@ -352,6 +357,10 @@ void UFlightBoard::Decline(USimClock& Clock, UFlight& Flight)
 	Flight.Phase = EFlightPhase::Declined;
 	--OfferedCount;
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d declined"), Flight.Id);
+	if (Bus != nullptr)
+	{
+		Bus->Publish(FOfferDeclinedEvent{ Flight.Id, Flight.AirlineId });
+	}
 	MoveToHistory(Flight, Clock.Now());
 	++RevisionCount;
 }
@@ -616,6 +625,12 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 	{
 		// THE OTHER END OF THE TURNAROUND CONTRACT - see UFlight::AirborneAt. Taken once.
 		Flight->AirborneAt = Clock.Now();
+		if (Bus != nullptr)
+		{
+			// LATENESS AGAINST THE CONTRACT the row showed at the offer: AirborneBy is AcceptedAt +
+			// ContractSeconds. Published once, because AirborneAt is taken once.
+			Bus->Publish(FFlightAirborneEvent{ Flight->Id, Flight->AirlineId, Flight->AirborneAt - Flight->AirborneBy() });
+		}
 	}
 
 	if (Flight->Phase == EFlightPhase::Departed)
