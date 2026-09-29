@@ -9,6 +9,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TaxiwayRestriction.h"
+#include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadDesignVehicles.h"
 #include "Profiles/RoadProfile.h"
 #include "Model/VehicleFit.h"
@@ -373,6 +374,505 @@ namespace
 		}
 	}
 
+	/** A road: carries ground vehicles and no aircraft. The other half of a road-taxiway crossing. */
+	bool IsRoadProfile(const URoadProfile* Profile)
+	{
+		if (Profile == nullptr)
+		{
+			return false;
+		}
+		bool bVehicle = false;
+		for (const FProfileGuideline& Guideline : Profile->Guidelines)
+		{
+			if (Guideline.Class == ETraversalClass::Aircraft)
+			{
+				return false;
+			}
+			bVehicle |= Guideline.Class == ETraversalClass::GroundVehicle;
+		}
+		return bVehicle;
+	}
+
+	/**
+	 * How far down Arm, from the junction NodeId, a line ACROSS THE ARM'S WHOLE WIDTH must sit to
+	 * be clear of the strips of the taxiways in Joined: (strip edge + arm half width x |cos|) /
+	 * sin(angle), the worst over them - ExitGeometry::TaxiwayEndFloor's shape, the strip edge
+	 * standing in for the runway's half width and the arm's own reach along the taxiway for the
+	 * taxiway's. THE ARM'S WIDTH COUNTS: at an oblique crossing the bar's near corner reaches the
+	 * strip before its centre does, and the first cut - which passed 0 there - left that corner
+	 * half-width x cos(angle) inside the strip, 2.3 m at 60 degrees (final review, important 5).
+	 * Its ten-degree floor is the same guard against a line running alongside. THE ONE RULE for
+	 * both holds that sit at a strip edge: a road's stop line at a crossing and a taxiway's
+	 * intermediate hold where it joins another.
+	 *
+	 * IgnoreBelow skips a joined arm within that acute angle of Arm's own line - the stem's own
+	 * continuation through a four-way, which is the same taxiway, not one being joined.
+	 */
+	double StripEdgeAlong(const URoadNetwork& Network, FRoadNodeId NodeId, FRoadSegmentId Arm,
+		TConstArrayView<FRoadSegmentId> Joined, double IgnoreBelow = 0.0)
+	{
+		const FVector2D Axis = Network.GetOutgoingTangent(Arm, NodeId);
+		const FRoadSegment* ArmSegment = Network.GetSegment(Arm);
+		const URoadProfile* ArmProfile = ArmSegment ? Network.ProfileFor(*ArmSegment) : nullptr;
+		const double ArmHalf = ArmProfile ? ArmProfile->GetTotalWidth() * 0.5 : 0.0;
+		double Wanted = 0.0;
+		for (const FRoadSegmentId& StripSeg : Joined)
+		{
+			if (StripSeg == Arm || !TaxiwayStrip::HasStrip(Network, StripSeg))
+			{
+				continue;
+			}
+			const FRoadSegment* Taxiway = Network.GetSegment(StripSeg);
+			const URoadProfile* TaxiwayProfile = Taxiway ? Network.ProfileFor(*Taxiway) : nullptr;
+			const double Edge = (TaxiwayProfile ? TaxiwayProfile->GetTotalWidth() * 0.5 : 0.0)
+				+ TaxiwayStrip::StripWidthOf(Network, StripSeg);
+			const double Angle = RoadGeom::AngleBetween(Axis, Network.GetOutgoingTangent(StripSeg, NodeId));
+			if (FMath::Min(Angle, UE_DOUBLE_PI - Angle) < IgnoreBelow)
+			{
+				continue;
+			}
+			const double Acute = FMath::Min(Angle, UE_DOUBLE_PI - Angle);
+			Wanted = FMath::Max(Wanted, ExitGeometry::TaxiwayEndFloor(Edge, ArmHalf * FMath::Abs(FMath::Cos(Acute)), Angle));
+		}
+		return Wanted;
+	}
+
+	/**
+	 * ROAD STOP LINES AT THE STRIP EDGE (taxiway strip spec 2026-09-28, "Holds sit at the strip
+	 * edge"; stage 4). At a node where a road meets a taxiway that has a strip, every road arm's
+	 * lanes end where the road leaves the strip (StripEdgeAlong). A road waits clear of a passing wing, and
+	 * the road-to-road turns re-attach there, so the road's through-path spans the whole strip.
+	 *
+	 * CLAMPED TO THE ARM'S SHARE (ExitGeometry::ArmShare, the runway exits' own clamp, reused and
+	 * not retyped) so an end never passes its own far end; said once per short arm per build.
+	 * A NODE WITH A RUNWAY ARM IS LEFT to ComputeExitSetBacks: the runway's holding position is
+	 * the stricter hold, and two set-backs on one end would be two answers to one question.
+	 *
+	 * Fills CrossingSetBack (keyed like SetBack) and CrossingEnds (the road end's junction).
+	 */
+	void ComputeCrossingSetBacks(const URoadNetwork& Network, const FRoadSolveResult& Solved,
+		TMap<uint64, double>& CrossingSetBack, TMap<uint64, FRoadNodeId>& CrossingEnds)
+	{
+		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+		{
+			const TArray<FRoadSegmentId>* ArmSegments = Solved.NodeArmSegments.Find(Pair.Key);
+			if (ArmSegments == nullptr || !Pair.Value.bValid || ArmSegments->Num() < 2)
+			{
+				continue;
+			}
+			const FRoadNode* Node = Network.GetNodes().IsValidIndex(Pair.Key) ? &Network.GetNodes()[Pair.Key] : nullptr;
+			if (Node == nullptr || !Node->bAlive)
+			{
+				continue;
+			}
+			const FRoadNodeId NodeId = Network.NodeIdAt(Pair.Key);
+
+			bool bRunway = false;
+			TArray<FRoadSegmentId, TInlineAllocator<4>> StripArms;
+			TArray<FRoadSegmentId, TInlineAllocator<4>> RoadArms;
+			for (const FRoadSegmentId& ArmSeg : *ArmSegments)
+			{
+				const FRoadSegment* Arm = Network.GetSegment(ArmSeg);
+				const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
+				bRunway |= Profile != nullptr && Profile->bContinuousThroughJunctions;
+				if (TaxiwayStrip::HasStrip(Network, ArmSeg))
+				{
+					StripArms.Add(ArmSeg);
+				}
+				else if (IsRoadProfile(Profile))
+				{
+					RoadArms.Add(ArmSeg);
+				}
+			}
+			if (bRunway || StripArms.IsEmpty() || RoadArms.IsEmpty())
+			{
+				continue;
+			}
+
+			for (const FRoadSegmentId& RoadSeg : RoadArms)
+			{
+				const FRoadSegment* Road = Network.GetSegment(RoadSeg);
+				const double Wanted = StripEdgeAlong(Network, NodeId, RoadSeg, StripArms);
+				const FRoadNode* Far = Network.GetNode(Road->A == NodeId ? Road->B : Road->A);
+				const double ArmLength = Far ? FVector2D::Distance(Far->Position, Node->Position) : 0.0;
+				const double Share = ExitGeometry::ArmShare * ArmLength;
+				double Length = Wanted;
+				if (Length > Share)
+				{
+					UE_LOG(LogAirside, Warning,
+						TEXT("Crossing setback clamped: road segment %d is %.0f uu long, and its stop line at the ")
+						TEXT("taxiway strip edge wants %.0f uu from the crossing; it stops %.0f uu back instead, ")
+						TEXT("inside the strip. Draw the road longer."),
+						RoadSeg.Index, ArmLength, Wanted, Share);
+					Length = Share;
+				}
+				const uint64 Key = EndKey(RoadSeg.Index, Road->A == NodeId, 0);
+				CrossingSetBack.Add(Key, Length);
+				CrossingEnds.Add(Key, NodeId);
+			}
+		}
+	}
+
+	/** The curve parameter of the point on a guideline nearest P: a coarse walk, then a
+	 *  golden-section refine between the neighbours of the best coarse point. */
+	double NearestParamOnGuideline(const FVector2D& A, const FVector2D& Control, const FVector2D& B, const FVector2D& P)
+	{
+		constexpr int32 Coarse = 64;
+		int32 Best = 0;
+		double BestDistance = TNumericLimits<double>::Max();
+		for (int32 Index = 0; Index <= Coarse; ++Index)
+		{
+			const double D = FVector2D::DistSquared(GuidelineGeom::Eval(A, Control, B, double(Index) / Coarse), P);
+			if (D < BestDistance)
+			{
+				BestDistance = D;
+				Best = Index;
+			}
+		}
+		double Lo = FMath::Max(0.0, double(Best - 1) / Coarse);
+		double Hi = FMath::Min(1.0, double(Best + 1) / Coarse);
+		const double Ratio = 0.5 * (FMath::Sqrt(5.0) - 1.0);
+		for (int32 Iteration = 0; Iteration < 48; ++Iteration)
+		{
+			const double M1 = Hi - Ratio * (Hi - Lo);
+			const double M2 = Lo + Ratio * (Hi - Lo);
+			if (FVector2D::DistSquared(GuidelineGeom::Eval(A, Control, B, M1), P)
+				< FVector2D::DistSquared(GuidelineGeom::Eval(A, Control, B, M2), P))
+			{
+				Hi = M2;
+			}
+			else
+			{
+				Lo = M1;
+			}
+		}
+		return 0.5 * (Lo + Hi);
+	}
+
+	/**
+	 * Where two guidelines' TRUE curves cross, refined by Newton from a start at the crossing of
+	 * their sampled lines: returns each curve's parameter there. The sampled crossing alone is
+	 * not enough - it sits a chord's sagitta off a curved turn (measured 2.2 uu on a 45 degree
+	 * taxiway turn, 2026-09-29), and a split made there would land the two curves' nodes that far
+	 * apart, too far to weld. False if the refine leaves (0,1) or will not converge.
+	 */
+	bool CrossingOnCurves(const FVector2D& VA, const FVector2D& VC, const FVector2D& VB,
+		const FVector2D& AA, const FVector2D& AC, const FVector2D& AB, const FVector2D& Start,
+		double& OutTV, double& OutTA)
+	{
+		auto Derivative = [](const FVector2D& A, const FVector2D& C, const FVector2D& B, double T)
+		{
+			return 2.0 * (1.0 - T) * (C - A) + 2.0 * T * (B - C);
+		};
+		double TV = NearestParamOnGuideline(VA, VC, VB, Start);
+		double TA = NearestParamOnGuideline(AA, AC, AB, Start);
+		for (int32 Iteration = 0; Iteration < 32; ++Iteration)
+		{
+			const FVector2D F = GuidelineGeom::Eval(VA, VC, VB, TV) - GuidelineGeom::Eval(AA, AC, AB, TA);
+			if (F.Size() < 1e-6)
+			{
+				break;
+			}
+			// Solve [dV, -dA] (dTV, dTA) = -F.
+			const FVector2D DV = Derivative(VA, VC, VB, TV);
+			const FVector2D DA = -Derivative(AA, AC, AB, TA);
+			const double Det = FVector2D::CrossProduct(DV, DA);
+			if (FMath::IsNearlyZero(Det))
+			{
+				return false;
+			}
+			TV += FVector2D::CrossProduct(-F, DA) / Det;
+			TA += FVector2D::CrossProduct(DV, -F) / Det;
+		}
+		OutTV = TV;
+		OutTA = TA;
+		return TV > 0.0 && TV < 1.0 && TA > 0.0 && TA < 1.0
+			&& FVector2D::Distance(GuidelineGeom::Eval(VA, VC, VB, TV), GuidelineGeom::Eval(AA, AC, AB, TA)) < 0.01;
+	}
+
+	/** How close two lines' split points must be to share a conflict node, uu. */
+	constexpr double ConflictWeldTolerance = 1.0;
+
+	/**
+	 * THE CONFLICT NODE (taxiway strip stage 4). At a road-taxiway crossing every segment end
+	 * derived its own node, so a road turn and a taxiway turn crossed in GEOMETRY and shared no
+	 * FGuidelineNodeId - and the claim table conflicts by resource identity only, so nothing
+	 * yielded (Airside.Model.Traffic.TruckYieldsAtDerivedCrossing was that report as a test).
+	 * Here every vehicle-only turn and every aircraft-only turn at a crossing node are split
+	 * where their lines cross - FOUND on the sampled lines (GuidelineGeom::Sample, the one
+	 * sampler), then refined onto both curves (CrossingOnCurves) so the two splits land on one
+	 * point - and every split at one point is welded onto ONE node. Then the ordinary node-claim rank rule decides who
+	 * goes, as it always has at a hand-built shared node (Airside.Model.Traffic.TruckCrossesTaxiway).
+	 *
+	 * REJECTED: a geometric overlap test inside traffic. It would be a second, parallel arbiter
+	 * beside the claim table, and the table's every rule (occupied beats reserved, rank, the
+	 * deadlock resolver) would have to be restated for it.
+	 *
+	 * ONE NODE PER POINT, NOT PER EDGE PAIR: a taxiway's one bidirectional line derives two
+	 * coincident turns (W->E and E->W); welded per pair they would cross a road lane on two
+	 * different nodes, and an aircraft going one way would never contend with a truck the other
+	 * way's node was reserved for. So the points are clustered first (ConflictWeldTolerance) and
+	 * each edge is split at every cluster it passes, far end first so each later split is on the
+	 * head piece, whose parameter is the original's scaled (de Casteljau keeps t linear).
+	 *
+	 * SPLIT EXACTLY, WELDED WITHIN A CENTIMETRE: each split point is on its own curve; the first
+	 * edge's point becomes the node and a later edge's halves are re-pointed at it, which moves
+	 * that edge's end by at most the tolerance - straight lines, the crossing's common case, by
+	 * nothing measurable. A pair further apart than that is left unwelded and said so.
+	 *
+	 * Emergency-only turns (road to taxiway) are left alone: Emergency outranks everything, and
+	 * a turn onto the taxiway is not a crossing of it.
+	 */
+	void DeriveCrossingConflicts(URoadNetwork& Network, const FRoadSolveResult& Solved,
+		const TMap<uint64, FRoadNodeId>& CrossingEnds, TSet<FGuidelineNodeId>& OutConflicts)
+	{
+		TSet<FRoadNodeId> Junctions;
+		for (const TPair<uint64, FRoadNodeId>& Pair : CrossingEnds)
+		{
+			Junctions.Add(Pair.Value);
+		}
+
+		for (const FRoadNodeId Junction : Junctions)
+		{
+			TArray<FGuidelineEdgeId> Vehicle, Aircraft;
+			const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
+			for (int32 Index = 0; Index < Edges.Num(); ++Index)
+			{
+				const FGuidelineEdge& Edge = Edges[Index];
+				if (!Edge.bAlive || !Edge.bDerived || Edge.DerivedFrom.IsSet() || Edge.AtJunction != Junction)
+				{
+					continue;
+				}
+				const bool bVehicle = Edge.AllowedTraffic.Allows(ETraversalClass::GroundVehicle);
+				const bool bAircraft = Edge.AllowedTraffic.Allows(ETraversalClass::Aircraft);
+				if (bVehicle && !bAircraft)
+				{
+					Vehicle.Add(Network.GuidelineEdgeIdAt(Index));
+				}
+				else if (bAircraft && !bVehicle)
+				{
+					Aircraft.Add(Network.GuidelineEdgeIdAt(Index));
+				}
+			}
+			if (Vehicle.IsEmpty() || Aircraft.IsEmpty())
+			{
+				continue;
+			}
+
+			// Every crossing point, clustered, and each edge's parameter at each cluster it passes.
+			struct FCut
+			{
+				double T = 0.0;
+				int32 Cluster = INDEX_NONE;
+			};
+			TArray<FVector2D> Clusters;
+			TMap<int32, TArray<FCut>> CutsByEdge;
+			auto ClusterFor = [&Clusters](const FVector2D& At)
+			{
+				for (int32 Index = 0; Index < Clusters.Num(); ++Index)
+				{
+					if (FVector2D::Distance(Clusters[Index], At) <= ConflictWeldTolerance)
+					{
+						return Index;
+					}
+				}
+				return Clusters.Add(At);
+			};
+			auto AddCut = [&CutsByEdge](FGuidelineEdgeId Id, double T, int32 Cluster)
+			{
+				TArray<FCut>& Cuts = CutsByEdge.FindOrAdd(Id.Index);
+				if (!Cuts.ContainsByPredicate([Cluster](const FCut& Cut) { return Cut.Cluster == Cluster; }))
+				{
+					Cuts.Add({ T, Cluster });
+				}
+			};
+			TMap<int32, FGuidelineEdgeId> IdByIndex;
+
+			for (const FGuidelineEdgeId VId : Vehicle)
+			{
+				const FGuidelineEdge* V = Network.GetGuidelineEdge(VId);
+				const FVector2D VA = Network.GetGuidelineNode(V->A)->Position;
+				const FVector2D VB = Network.GetGuidelineNode(V->B)->Position;
+				TArray<FVector2D> PV;
+				GuidelineGeom::Sample(VA, V->Control, VB, PV);
+				for (const FGuidelineEdgeId AId : Aircraft)
+				{
+					const FGuidelineEdge* A = Network.GetGuidelineEdge(AId);
+					const FVector2D AA = Network.GetGuidelineNode(A->A)->Position;
+					const FVector2D AB = Network.GetGuidelineNode(A->B)->Position;
+					TArray<FVector2D> PA;
+					GuidelineGeom::Sample(AA, A->Control, AB, PA);
+					for (int32 I = 1; I < PV.Num(); ++I)
+					{
+						for (int32 J = 1; J < PA.Num(); ++J)
+						{
+							const FVector2D R = PV[I] - PV[I - 1];
+							const FVector2D S = PA[J] - PA[J - 1];
+							const double Den = FVector2D::CrossProduct(R, S);
+							if (FMath::IsNearlyZero(Den))
+							{
+								continue;
+							}
+							const FVector2D QP = PA[J - 1] - PV[I - 1];
+							const double TV = FVector2D::CrossProduct(QP, S) / Den;
+							const double TA = FVector2D::CrossProduct(QP, R) / Den;
+							if (TV < 0.0 || TV > 1.0 || TA < 0.0 || TA > 1.0)
+							{
+								continue;
+							}
+							const FVector2D Sampled = PV[I - 1] + R * TV;
+							double CurveTV = 0.0, CurveTA = 0.0;
+							if (!CrossingOnCurves(VA, V->Control, VB, AA, A->Control, AB, Sampled, CurveTV, CurveTA))
+							{
+								continue;
+							}
+							const FVector2D At = GuidelineGeom::Eval(VA, V->Control, VB, CurveTV);
+							// AT AN END is not a crossing to split: the two already meet there or
+							// merely touch, and a split there would be a zero-length stub.
+							if (FVector2D::Distance(At, VA) <= ConflictWeldTolerance || FVector2D::Distance(At, VB) <= ConflictWeldTolerance
+								|| FVector2D::Distance(At, AA) <= ConflictWeldTolerance || FVector2D::Distance(At, AB) <= ConflictWeldTolerance)
+							{
+								continue;
+							}
+							const int32 Cluster = ClusterFor(At);
+							AddCut(VId, CurveTV, Cluster);
+							AddCut(AId, CurveTA, Cluster);
+							IdByIndex.Add(VId.Index, VId);
+							IdByIndex.Add(AId.Index, AId);
+						}
+					}
+				}
+			}
+
+			TArray<FGuidelineNodeId> ClusterNodes;
+			ClusterNodes.SetNum(Clusters.Num());
+			TArray<FGuidelineEdgeId> Pieces;
+			for (TPair<int32, TArray<FCut>>& Pair : CutsByEdge)
+			{
+				TArray<FCut>& Cuts = Pair.Value;
+				Cuts.Sort([](const FCut& L, const FCut& R) { return L.T > R.T; });
+				FGuidelineEdgeId Current = IdByIndex[Pair.Key];
+				double Scale = 1.0;
+				for (const FCut& Cut : Cuts)
+				{
+					const double Local = Cut.T / Scale;
+					if (Local <= 0.0 || Local >= 1.0)
+					{
+						continue;
+					}
+					FGuidelineNodeId Made;
+					FGuidelineEdgeId Head, Tail;
+					if (!Network.SplitGuidelineEdge(Current, Local, /*WeldTolerance=*/0.0, Made, Head, Tail) || !Head.IsSet() || !Tail.IsSet())
+					{
+						continue;
+					}
+					FGuidelineNodeId& Conflict = ClusterNodes[Cut.Cluster];
+					if (!Conflict.IsSet())
+					{
+						Conflict = Made;
+					}
+					else if (Made != Conflict)
+					{
+						const double Miss = FVector2D::Distance(Network.GetGuidelineNode(Made)->Position,
+							Network.GetGuidelineNode(Conflict)->Position);
+						if (Miss <= ConflictWeldTolerance)
+						{
+							const FGuidelineNodeId HeadA = Network.GetGuidelineEdge(Head)->A;
+							const FGuidelineNodeId TailB = Network.GetGuidelineEdge(Tail)->B;
+							Network.RelinkGuidelineEdge(Head, HeadA, Conflict);
+							Network.RelinkGuidelineEdge(Tail, Conflict, TailB);
+							Network.RemoveGuidelineNode(Made);
+						}
+						else
+						{
+							UE_LOG(LogAirside, Warning,
+								TEXT("Crossing at (%.0f,%.0f): two lines cross %.1f uu apart at one point, more than the ")
+								TEXT("%.0f uu weld - left on separate nodes, so they do not yield to each other there"),
+								Clusters[Cut.Cluster].X, Clusters[Cut.Cluster].Y, Miss, ConflictWeldTolerance);
+						}
+					}
+					Pieces.Add(Head);
+					Pieces.Add(Tail);
+					Current = Head;
+					Scale = Cut.T;
+				}
+			}
+
+			// Re-measured on this junction's pavement, as FAnchorLink's splits are: a split half
+			// is left unmeasured by SplitGuidelineEdge. A piece split again is dead and skipped.
+			//
+			// AND A SPLIT TAXIWAY PIECE STOPS ADMITTING EMERGENCY (final review, important 6). Both
+			// lines admitted it, the weld joined them at the conflict, and the route search has no
+			// heading check - so a fire truck's shortest U-turn was a right angle onto the taxiway
+			// at one lane's conflict and back off it at the other's. Taken off the TAXIWAY side,
+			// not the road's, because crossing on the road is what a ground vehicle is here for;
+			// the cost, ruled: an emergency vehicle driving ALONG the taxiway through a road
+			// crossing detours by the junction's Emergency-only road-taxiway turns.
+			// ENFORCED BY: Airside.Build.EmergencyNeverTurnsAtAConflict
+			for (const FGuidelineEdgeId Piece : Pieces)
+			{
+				FRoadGuidelineBuilder::MeasureSplitHalf(Network, Piece, Solved, Junction);
+				if (const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Piece);
+					Edge != nullptr && Edge->AllowedTraffic.Allows(ETraversalClass::Aircraft))
+				{
+					FTrafficMask AircraftOnly = FTrafficMask::Only(ETraversalClass::Aircraft);
+					Network.SetGuidelineEdgeAllowedTraffic(Piece, AircraftOnly);
+				}
+			}
+			for (const FGuidelineNodeId Conflict : ClusterNodes)
+			{
+				if (Conflict.IsSet())
+				{
+					Network.SetGuidelineNodeCrossingConflict(Conflict);
+					OutConflicts.Add(Conflict);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Every conflict node a road lane end's stop line protects: walked forward from the end along
+	 * the junction's vehicle turns, through split nodes, to the far arm ends.
+	 */
+	TArray<FGuidelineNodeId> ConflictsBeyond(const URoadNetwork& Network, FGuidelineNodeId End, FRoadNodeId Junction,
+		const TSet<FGuidelineNodeId>& Conflicts)
+	{
+		TArray<FGuidelineNodeId> Out;
+		TArray<FGuidelineNodeId> Frontier = { End };
+		TSet<FGuidelineNodeId> Seen = { End };
+		while (!Frontier.IsEmpty())
+		{
+			const FGuidelineNode* Node = Network.GetGuidelineNode(Frontier.Pop());
+			if (Node == nullptr)
+			{
+				continue;
+			}
+			for (const FGuidelineEdgeId Id : Node->Incident)
+			{
+				const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Id);
+				if (Edge == nullptr || !Edge->bDerived || Edge->AtJunction != Junction
+					|| !Edge->AllowedTraffic.Allows(ETraversalClass::GroundVehicle)
+					|| Network.GetGuidelineNode(Edge->A) != Node || Seen.Contains(Edge->B))
+				{
+					continue;
+				}
+				Seen.Add(Edge->B);
+				const FGuidelineNode* Next = Network.GetGuidelineNode(Edge->B);
+				if (Conflicts.Contains(Edge->B))
+				{
+					Out.Add(Edge->B);
+					Frontier.Add(Edge->B);
+				}
+				else if (Next != nullptr && !Next->Origin.IsSet())
+				{
+					// A shape's own interior node (a bend's arc pieces): keep walking.
+					Frontier.Add(Edge->B);
+				}
+			}
+		}
+		return Out;
+	}
+
 	/**
 	 * One derived guideline edge per (segment, declared guideline): the segment pass. A
 	 * hand-authored edge already covering one is spared (FindSparedEdge) and its endpoints
@@ -380,11 +880,15 @@ namespace
 	 * ContinuousEnds (ComputeExitSetBacks) move a mixed end's guideline back from the node
 	 * for its exit arc, or split it and record the split in Attach for a continuous arm.
 	 *
+	 * CrossingSetBack (ComputeCrossingSetBacks) slides a road lane's end back to the taxiway
+	 * strip edge at a road-taxiway crossing.
+	 *
 	 * Fills Ends (every segment end's node, keyed by EndKey - the handle the turn-path pass
 	 * and the re-resolve/hold-mark passes below all share) and Attach.
 	 */
 	void DeriveSegmentGuidelines(URoadNetwork& Network, const TArray<FRoadSegment>& Segments,
 		const TMap<uint64, double>& SetBack, const TSet<uint64>& ContinuousEnds,
+		const TMap<uint64, double>& CrossingSetBack,
 		TMap<uint64, FGuidelineNodeId>& Ends, TMap<uint64, FGuidelineNodeId>& Attach)
 	{
 		for (int32 Index = 0; Index < Segments.Num(); ++Index)
@@ -471,6 +975,30 @@ namespace
 							+ Network.GetOutgoingTangent(SegmentId, Segment.B).GetSafeNormal() * (*Back);
 					}
 				}
+
+				// A ROAD LANE AT A TAXIWAY CROSSING stops at the strip edge (ComputeCrossingSetBacks):
+				// SLID along the arm's tangent from its cut-line point, not placed on the tangent
+				// through the node as an exit end is, because a road has a lane either side of its
+				// centreline and the node's tangent would put both on the centre. Never moved
+				// TOWARDS the node: a clamped stub whose share is inside its own cut keeps the cut,
+				// rather than an end on the taxiway's pavement.
+				auto SlideToStripEdge = [&Network, &SegmentId, &CrossingSetBack](FVector2D& At, FRoadNodeId NodeId, uint64 Key)
+				{
+					const double* Back = CrossingSetBack.Find(Key);
+					const FRoadNode* Node = Network.GetNode(NodeId);
+					if (Back == nullptr || Node == nullptr)
+					{
+						return;
+					}
+					const FVector2D Tangent = Network.GetOutgoingTangent(SegmentId, NodeId).GetSafeNormal();
+					const double Along = FVector2D::DotProduct(At - Node->Position, Tangent);
+					if (*Back > Along)
+					{
+						At += Tangent * (*Back - Along);
+					}
+				};
+				SlideToStripEdge(AtA, Segment.A, KeyA);
+				SlideToStripEdge(AtB, Segment.B, KeyB);
 
 				FGuidelineEdge Edge;
 				Edge.A = Network.AddGuidelineNode(AtA);
@@ -997,6 +1525,85 @@ namespace
 	}
 
 	/**
+	 * How far down its arm from the junction an intermediate hold marked on End belongs (the
+	 * joined taxiway's strip edge, 0 when no taxiway with a strip is joined), and in OutAlong how
+	 * far down it End already sits. The junction's arms are read off the road node's own
+	 * Incident, so this needs no solve and FRoadGuidelineBuilder::IntermediateHoldMovesOffEnd
+	 * can ask it between rebuilds.
+	 */
+	double IntermediateHoldAlong(const URoadNetwork& Network, const FGuidelineEndRef& At, FGuidelineNodeId End,
+		double& OutAlong)
+	{
+		OutAlong = 0.0;
+		const FRoadSegment* Arm = Network.GetSegment(At.Segment);
+		const FRoadNodeId JunctionId = Arm ? (At.bEndA ? Arm->A : Arm->B) : FRoadNodeId();
+		const FRoadNode* Junction = Network.GetNode(JunctionId);
+		const FGuidelineNode* EndNode = Network.GetGuidelineNode(End);
+		if (Junction == nullptr || EndNode == nullptr)
+		{
+			return 0.0;
+		}
+		const FVector2D Axis = Network.GetOutgoingTangent(At.Segment, JunctionId).GetSafeNormal();
+		OutAlong = FVector2D::DotProduct(EndNode->Position - Junction->Position, Axis);
+		return StripEdgeAlong(Network, JunctionId, At.Segment, Junction->Incident, FMath::DegreesToRadians(30.0));
+	}
+
+	/**
+	 * WHERE AN INTERMEDIATE HOLD IS REALISED (taxiway strip stage 4): at the strip edge of the
+	 * taxiway the marked end JOINS (StripEdgeAlong, the stop line's own rule), by SPLITTING the
+	 * arm's guideline there - not by moving its end, which is where the junction's turns attach,
+	 * so moving it would re-shape every turn at the junction. The mark still names the END
+	 * (FHoldingPositionMark), so a saved mark keeps its meaning; only where it is painted and
+	 * flagged moves. The split node carries the end's Origin: it is derived FOR that end, and the
+	 * Origin is what lets HoldingBarAt face its bar along the arm and SetIntermediateHoldingPosition
+	 * find the mark when the player clicks the bar to clear it.
+	 *
+	 * Returns End itself when the end already sits at or beyond the strip edge, when no taxiway
+	 * with a strip is joined there, or when the arm is too short to split (said, once per build).
+	 * Other taxiway arms within 30 degrees of the arm's own line are its continuation through the
+	 * junction, not a taxiway being joined - the spec's own "within 30 degrees" figure.
+	 */
+	FGuidelineNodeId IntermediateHoldNode(URoadNetwork& Network, const FGuidelineEndRef& At, FGuidelineNodeId End)
+	{
+		double Along = 0.0;
+		const double Wanted = IntermediateHoldAlong(Network, At, End, Along);
+		const FGuidelineNode* EndNode = Network.GetGuidelineNode(End);
+		if (EndNode == nullptr || Wanted <= Along)
+		{
+			return End;
+		}
+
+		// The arm's own derived guideline leaving this end - the edge that carries its identity.
+		FGuidelineEdgeId ArmEdge;
+		bool bFromA = true;
+		for (const FGuidelineEdgeId Id : EndNode->Incident)
+		{
+			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Id);
+			// DERIVED only: splitting a player's hand-edited lane would leave FindSparedEdge two
+			// halves to choose from on the next rebuild.
+			if (Edge != nullptr && Edge->bDerived && Edge->DerivedFrom == At.Segment && Edge->DerivedGuidelineIndex == At.GuidelineIndex)
+			{
+				ArmEdge = Id;
+				bFromA = Edge->A == End;
+				break;
+			}
+		}
+		FGuidelineEdgeId Rest;
+		const FGuidelineNodeId Split = ArmEdge.IsSet()
+			? SplitFromEnd(Network, ArmEdge, bFromA, Wanted - Along, Rest) : FGuidelineNodeId();
+		if (!Split.IsSet())
+		{
+			UE_LOG(LogAirside, Warning,
+				TEXT("Intermediate hold kept at the junction: arm too short. Taxiway segment %d would put it %.0f uu ")
+				TEXT("from the junction, at the joined taxiway's strip edge; it stays at %.0f, inside the strip."),
+				At.Segment.Index, Wanted, Along);
+			return End;
+		}
+		Network.SetGuidelineNodeOrigin(Split, At);
+		return Split;
+	}
+
+	/**
 	 * --- Re-apply holding-position marks ---
 	 *
 	 * The flag lives on a node and every derived node above is FRESH, so a bar the player
@@ -1005,7 +1612,8 @@ namespace
 	 * one source (the mark), one cache (the flag), rebuilt together. Spec 2026-09-06 §6.
 	 */
 	void ReapplyHoldingPositionMarks(URoadNetwork& Network, const TArray<FRoadSegment>& Segments,
-		const TMap<uint64, FGuidelineNodeId>& Ends, const TMap<uint64, FRoadSegmentId>& ProtectedBy)
+		const TMap<uint64, FGuidelineNodeId>& Ends, const TMap<uint64, FRoadSegmentId>& ProtectedBy,
+		const TMap<uint64, FRoadNodeId>& CrossingEnds, const TSet<FGuidelineNodeId>& Conflicts)
 	{
 		// The network owns this invariant, not the builder - it merely knows WHEN to ask.
 		// Pruning first also means the loop below cannot re-apply a mark whose runway has
@@ -1087,6 +1695,33 @@ namespace
 			}
 		}
 
+		// TAXIWAY-CROSSING STOP LINES ARE DERIVED, like the runway kind: every road lane ARRIVING
+		// at a road-taxiway crossing, at the strip edge ComputeCrossingSetBacks moved it to,
+		// protecting every conflict node its lane's turns run through (ConflictsBeyond). A
+		// leaving lane is not flagged: nothing stops at the end of a lane it is driving away
+		// from. A road that ends against the taxiway still gets one, protecting nothing - it
+		// still meets a live taxiway, and the paint says so.
+		for (const TPair<uint64, FRoadNodeId>& Pair : CrossingEnds)
+		{
+			const int32 SegmentIndex = static_cast<int32>(Pair.Key >> 32);
+			const bool bEndA = (Pair.Key & 1ull) != 0;
+			const FRoadSegment* Arm = Segments.IsValidIndex(SegmentIndex) ? &Segments[SegmentIndex] : nullptr;
+			const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
+			if (Profile == nullptr)
+			{
+				continue;
+			}
+			for (int32 Which = 0; Which < Profile->Guidelines.Num(); ++Which)
+			{
+				const FGuidelineNodeId* End = Ends.Find(EndKey(SegmentIndex, bEndA, Which));
+				if (End == nullptr || !Profile->Guidelines[Which].ArrivesAt(bEndA))
+				{
+					continue;
+				}
+				Network.SetGuidelineNodeCrossingHold(*End, ConflictsBeyond(Network, *End, Pair.Value, Conflicts));
+			}
+		}
+
 		// INTERMEDIATE positions are the player's, re-applied from their marks.
 		for (const FHoldingPositionMark& Mark : Network.GetHoldingPositionMarks())
 		{
@@ -1105,12 +1740,15 @@ namespace
 				continue;
 			}
 			const FGuidelineNode* Node = Network.GetGuidelineNode(*Found);
-			// A mark on an end that has since become a runway end is out-ranked by the
-			// derivation: the junction decides, and the stale mark is harmless.
-			if (Node != nullptr && Node->HoldingPosition != EHoldingPositionKind::Runway)
+			// A mark on an end that has since become a runway end (or a road stop line) is
+			// out-ranked by the derivation: the junction decides, and the stale mark is harmless.
+			if (Node == nullptr || Node->HoldingPosition == EHoldingPositionKind::Runway
+				|| Node->HoldingPosition == EHoldingPositionKind::TaxiwayCrossing)
 			{
-				Network.SetGuidelineNodeHoldingPosition(*Found, EHoldingPositionKind::Intermediate, FRoadSegmentId());
+				continue;
 			}
+			Network.SetGuidelineNodeHoldingPosition(IntermediateHoldNode(Network, Mark.At, *Found),
+				EHoldingPositionKind::Intermediate, FRoadSegmentId());
 		}
 	}
 }
@@ -1169,7 +1807,20 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 	ComputeExitSetBacks(Network, Solved, SetBack, ContinuousEnds, ProtectedBy);
 
-	DeriveSegmentGuidelines(Network, Segments, SetBack, ContinuousEnds, Ends, Attach);
+	// ROAD STOP LINES at road-taxiway crossings: ComputeCrossingSetBacks. Keyed like SetBack;
+	// CrossingEnds names each road end's junction for the conflict pass.
+	TMap<uint64, double> CrossingSetBack;
+	TMap<uint64, FRoadNodeId> CrossingEnds;
+	ComputeCrossingSetBacks(Network, Solved, CrossingSetBack, CrossingEnds);
+
+	DeriveSegmentGuidelines(Network, Segments, SetBack, ContinuousEnds, CrossingSetBack, Ends, Attach);
+
+	// The crossing junctions themselves, for the turn loop's lopsided cross-class turns.
+	TSet<FRoadNodeId> CrossingJunctions;
+	for (const TPair<uint64, FRoadNodeId>& Pair : CrossingEnds)
+	{
+		CrossingJunctions.Add(Pair.Value);
+	}
 
 	// Turn paths: one edge per ordered pair of DISTINCT arms at each solved node.
 	int32 Balloons = 0;
@@ -1424,8 +2075,55 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					}
 					case ETurnShape::Chord:
 					default:
-						Pieces.Add(Turn);
+					{
+						// A LOPSIDED CROSS-CLASS TURN AT A CROSSING IS A STRAIGHT LEAD AND A SYMMETRIC
+						// ARC (final review, important 8). The road's stop line moved its lane ends to
+						// the strip edge, 40 m out, while the taxiway's stayed at its cut, 10 m in; one
+						// quadratic across legs that uneven bunches its curvature at the short end, and
+						// the Emergency-only road-taxiway turns came out at 501.6 uu against the service
+						// vehicle's 502.0 - a real shortfall, warned at every crossing on every rebuild
+						// and telling the player to draw longer arms that would not help. So the long
+						// leg runs straight to where the short one's length is left, and the curve is
+						// the symmetric quadratic of those two legs (L / sqrt 2 at a right angle). Only
+						// here: every other turn's legs are the two arms' own cut-backs, as on main.
+						// ENFORCED BY: Airside.Build.RoadCrossingWarnsNothing
+						const FVector2D PA = Network.GetGuidelineNode(Turn.A)->Position;
+						const FVector2D PB = Network.GetGuidelineNode(Turn.B)->Position;
+						const double LegA = FVector2D::Distance(PA, Turn.Control);
+						const double LegB = FVector2D::Distance(Turn.Control, PB);
+						const bool bEmergencyOnly = Turn.AllowedTraffic.Bits == FTrafficMask::Only(ETraversalClass::Emergency).Bits;
+						const bool bBends = !FMath::IsNearlyZero(FVector2D::CrossProduct(Turn.Control - PA, PB - Turn.Control), 1.0);
+						if (bEmergencyOnly && bBends && CrossingJunctions.Contains(NodeId) && FMath::Abs(LegA - LegB) > 1.0)
+						{
+							const bool bLongA = LegA > LegB;
+							const double Short = FMath::Min(LegA, LegB);
+							const FVector2D Lead = Turn.Control + ((bLongA ? PA : PB) - Turn.Control).GetSafeNormal() * Short;
+							const FGuidelineNodeId Mid = Network.AddGuidelineNode(Lead);
+							FGuidelineEdge Straight = Turn;
+							FGuidelineEdge Curve = Turn;
+							if (bLongA)
+							{
+								Straight.B = Mid;
+								Straight.Control = (PA + Lead) * 0.5;
+								Curve.A = Mid;
+								Pieces.Add(Straight);
+								Pieces.Add(Curve);
+							}
+							else
+							{
+								Curve.B = Mid;
+								Straight.A = Mid;
+								Straight.Control = (Lead + PB) * 0.5;
+								Pieces.Add(Curve);
+								Pieces.Add(Straight);
+							}
+						}
+						else
+						{
+							Pieces.Add(Turn);
+						}
 						break;
+					}
 					}
 					for (FGuidelineEdge& Piece : Pieces)
 					{
@@ -1552,6 +2250,12 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		}
 	}
 
+	// THE CONFLICT NODES, once every turn exists and before anything else reads the graph -
+	// see DeriveCrossingConflicts. The stop lines that reserve them are flagged below, with the
+	// other derived holding positions.
+	TSet<FGuidelineNodeId> Conflicts;
+	DeriveCrossingConflicts(Network, Solved, CrossingEnds, Conflicts);
+
 	// Re-resolve hand-authored edges onto this rebuild's fresh nodes (ReResolveAuthoredEdges),
 	// then re-apply holding-position marks onto them (ReapplyHoldingPositionMarks) - see each
 	// function's comment. Order matters: marks are re-applied by the same Ends-keyed identity
@@ -1561,7 +2265,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 	const int32 ReverseTurnsLaid = BuildReverseTurns(Network, DesignVehicles, Ends);
 
 	ReResolveAuthoredEdges(Network, Ends);
-	ReapplyHoldingPositionMarks(Network, Segments, Ends, ProtectedBy);
+	ReapplyHoldingPositionMarks(Network, Segments, Ends, ProtectedBy, CrossingEnds, Conflicts);
 
 	// LAST, for the reason given where this used to live: every detachment above has now
 	// happened, so an idle derived node really is idle.
@@ -1632,6 +2336,16 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			Network.GetHoldingPositionMarks().Num(), DeadEnds, Balloons, Tapers, BendArcs,
 			Network.GetDriveSide() == EDriveSide::Left ? TEXT("left") : TEXT("right"));
 		// Its own line, and only when there are any: the census line above is grepped by tests.
+		if (!CrossingEnds.IsEmpty())
+		{
+			int32 StopLines = 0;
+			for (const FGuidelineNode& Node : Network.GetGuidelineNodes())
+			{
+				StopLines += (Node.bAlive && Node.HoldingPosition == EHoldingPositionKind::TaxiwayCrossing) ? 1 : 0;
+			}
+			UE_LOG(LogAirside, Log, TEXT("Road crossings: %d conflict node(s) welded, %d stop line(s) at the strip edge"),
+				Conflicts.Num(), StopLines);
+		}
 		if (Network.GetReverseTurns().Num() > 0)
 		{
 			UE_LOG(LogAirside, Log, TEXT("Reverse turns: %d laid of %d on file"), ReverseTurnsLaid, Network.GetReverseTurns().Num());
@@ -1641,6 +2355,17 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 	// LAST, after every mutation above: the graph now matches the road as of this revision, and
 	// the planners may search it again - see URoadNetwork::AreGuidelinesBehindRoad.
 	Network.MarkGuidelinesDerived();
+}
+
+bool FRoadGuidelineBuilder::IntermediateHoldMovesOffEnd(const URoadNetwork& Network, FGuidelineNodeId End)
+{
+	const FGuidelineNode* Node = Network.GetGuidelineNode(End);
+	if (Node == nullptr || !Node->Origin.IsSet())
+	{
+		return false;
+	}
+	double Along = 0.0;
+	return IntermediateHoldAlong(Network, Node->Origin, End, Along) > Along;
 }
 
 void FRoadGuidelineBuilder::MeasureSplitHalf(URoadNetwork& Network, FGuidelineEdgeId Half,

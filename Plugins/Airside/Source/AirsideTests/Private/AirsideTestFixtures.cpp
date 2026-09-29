@@ -110,6 +110,29 @@ FCrossingFixture FCrossingFixture::Build(URoadNetwork& Net, bool bFarBar)
 	return Out;
 }
 
+FRoadCrossingFixture FRoadCrossingFixture::Lay(URoadNetwork& Net, bool bFarSide, double ArmLength)
+{
+	FRoadCrossingFixture Out;
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
+	URoadProfile* Road = URoadProfile::MakeServiceRoadTransient();
+	Net.DefaultProfile = Taxiway;
+
+	const FRoadNodeId WestEnd = Net.AddNode(FVector2D(-ArmLength, 0.0));
+	Out.Centre = Net.AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId EastEnd = Net.AddNode(FVector2D(ArmLength, 0.0));
+	const FRoadNodeId SouthEnd = Net.AddNode(FVector2D(0.0, -ArmLength));
+
+	Out.West = Net.AddStraightSegment(WestEnd, Out.Centre, Taxiway);
+	Out.East = Net.AddStraightSegment(Out.Centre, EastEnd, Taxiway);
+	Out.South = Net.AddStraightSegment(SouthEnd, Out.Centre, Road);
+	if (bFarSide)
+	{
+		const FRoadNodeId NorthEnd = Net.AddNode(FVector2D(0.0, ArmLength));
+		Out.North = Net.AddStraightSegment(Out.Centre, NorthEnd, Road);
+	}
+	return Out;
+}
+
 FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand, double XDistance)
 {
 	FExitArcAirport Out;

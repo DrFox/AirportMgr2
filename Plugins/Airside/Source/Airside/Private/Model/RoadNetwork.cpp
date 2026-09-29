@@ -1088,8 +1088,10 @@ bool URoadNetwork::SetIntermediateHoldingPosition(FGuidelineNodeId Node, bool bS
 	}
 	// Not the player's: a runway-holding position is derived from the junction on every
 	// build, so a clear here would come back next rebuild and a set would be a no-op that
-	// looked like one. Refusing says so.
-	if (Found->HoldingPosition == EHoldingPositionKind::Runway)
+	// looked like one. Refusing says so. A road's taxiway-crossing stop line is derived the
+	// same way, for the same reason.
+	if (Found->HoldingPosition == EHoldingPositionKind::Runway
+		|| Found->HoldingPosition == EHoldingPositionKind::TaxiwayCrossing)
 	{
 		return false;
 	}
@@ -1160,6 +1162,43 @@ bool URoadNetwork::SetGuidelineNodeHoldingPosition(FGuidelineNodeId Node, EHoldi
 	}
 	Found->HoldingPosition = Kind;
 	Found->HoldingPositionFor = For;
+	// Only SetGuidelineNodeCrossingHold writes a list; any other write of the kind ends it.
+	Found->ProtectsConflicts.Reset();
+	return true;
+}
+
+bool URoadNetwork::SetGuidelineNodeCrossingConflict(FGuidelineNodeId Node)
+{
+	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->bCrossingConflict = true;
+	return true;
+}
+
+bool URoadNetwork::SetGuidelineEdgeAllowedTraffic(FGuidelineEdgeId Edge, FTrafficMask Allowed)
+{
+	FGuidelineEdge* Found = GetGuidelineEdgeMutable(Edge);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->AllowedTraffic = Allowed;
+	return true;
+}
+
+bool URoadNetwork::SetGuidelineNodeCrossingHold(FGuidelineNodeId Node, TArray<FGuidelineNodeId> Conflicts)
+{
+	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->HoldingPosition = EHoldingPositionKind::TaxiwayCrossing;
+	Found->HoldingPositionFor = FRoadSegmentId();
+	Found->ProtectsConflicts = MoveTemp(Conflicts);
 	return true;
 }
 

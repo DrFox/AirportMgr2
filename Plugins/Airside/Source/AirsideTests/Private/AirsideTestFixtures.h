@@ -200,6 +200,21 @@ struct FCrossingFixture
 };
 
 /**
+ * A taxiway east-west and a service road north-south, sharing the ROAD node at the origin -
+ * a solved, derived crossing, where FCrossingFixture above is a hand-built one. Moved here
+ * from RoadCrossingTest.cpp's anonymous namespace on 2026-09-29, when TruckCrossingTest.cpp
+ * needed the same junction (taxiway strip stage 4): one crossing, argued about by both.
+ * Every arm is ArmLength long. bFarSide false leaves the road ENDING against the taxiway.
+ */
+struct FRoadCrossingFixture
+{
+	FRoadNodeId Centre;
+	FRoadSegmentId West, East, South, North;
+
+	static FRoadCrossingFixture Lay(URoadNetwork& Net, bool bFarSide = true, double ArmLength = 20000.0);
+};
+
+/**
  * A runway long enough for the Piper to stop before the exit, one 45 degree taxiway, and a
  * stand beside it. Shared by RunwayExitArcTest.cpp's Build tests and ArrivalExitArcTest.cpp's
  * Model tests (issue #105 item 13 split the one file into those two, and hoisted this and

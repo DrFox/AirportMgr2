@@ -542,11 +542,21 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 			TEXT("Stand paint: %d meaning(s) name a slot the marking set does not declare - drawn with slot 0"),
 			UnresolvedPaints);
 	}
+	// A ROAD'S STOP LINE AT A TAXIWAY CROSSING IS WHITE (user ruling 2026-09-29) - the stand
+	// boundary's slot, the one white this layer declares, resolved here for the reason the stand
+	// meanings are: the builder names a slot id, never a colour.
+	const int32 StopLineSlot = Materials->IndexOf(StandPaintSlots::White);
+	if (StopLineSlot == INDEX_NONE)
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("Road stop lines: the marking set declares no %s slot - drawn with slot 0"),
+			*StandPaintSlots::White.ToString());
+	}
+	const int32 StopLineId = FMath::Max(StopLineSlot, 0);
 
 	const int32 Painted = RebuildLayer(ESurfaceLayer::HoldingPaint,
-		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus, &Envelopes, &PaintIds](FRoadMeshBuffers& OutBuffers)
+		[&Network, MarkingZ, &HoldingPositionsPainted, &StandsPainted, &StandCensus, &Envelopes, &PaintIds, StopLineId](FRoadMeshBuffers& OutBuffers)
 		{
-			HoldingPositionsPainted = FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, OutBuffers);
+			HoldingPositionsPainted = FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, OutBuffers, StopLineId);
 			StandsPainted = FStandMarkingBuilder::Build(Network, MarkingZ, OutBuffers, Envelopes, &StandCensus, PaintIds);
 			return HoldingPositionsPainted + StandsPainted;
 		},

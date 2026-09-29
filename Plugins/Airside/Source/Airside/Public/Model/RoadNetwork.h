@@ -918,6 +918,27 @@ public:
 	bool SetGuidelineNodeHoldingPosition(FGuidelineNodeId Node, EHoldingPositionKind Kind, FRoadSegmentId For);
 
 	/**
+	 * Make a guideline node a road's TaxiwayCrossing stop line protecting Conflicts - kind,
+	 * HoldingPositionFor (cleared: a stop line names no runway) and ProtectsConflicts written
+	 * together, for the reason SetGuidelineNodeHoldingPosition writes its pair together.
+	 * SetGuidelineNodeHoldingPosition clears ProtectsConflicts, so the list can never outlive
+	 * the kind. Written by FRoadGuidelineBuilder; like the runway kind, it is
+	 * re-derived every rebuild and stores no mark. False for a dead node.
+	 */
+	bool SetGuidelineNodeCrossingHold(FGuidelineNodeId Node, TArray<FGuidelineNodeId> Conflicts);
+
+	/** Mark a guideline node a road-taxiway crossing's conflict (FGuidelineNode::bCrossingConflict).
+	 *  False for a dead node. */
+	bool SetGuidelineNodeCrossingConflict(FGuidelineNodeId Node);
+
+	/**
+	 * Overwrite a guideline edge's AllowedTraffic. Written by FRoadGuidelineBuilder where a
+	 * crossing's split taxiway pieces stop admitting Emergency, so no route can change class at
+	 * a conflict node. False for a dead edge.
+	 */
+	bool SetGuidelineEdgeAllowedTraffic(FGuidelineEdgeId Edge, FTrafficMask Allowed);
+
+	/**
 	 * Overwrite one guideline edge's PER-HALF measured fields together - MinRadius,
 	 * ClearInner, ClearOuter, ClearInnerAt, ClearOuterAt (FGuidelineEdge's own "PER-HALF
 	 * FIELDS" comment, the list SplitGuidelineEdge resets to unmeasured) - the one whole

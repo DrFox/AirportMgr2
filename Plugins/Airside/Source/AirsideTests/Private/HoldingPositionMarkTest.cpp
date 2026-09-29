@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -13,6 +14,21 @@ namespace
 	{
 		const FGuidelineNode* Found = Net.GetGuidelineNode(Node);
 		return Found ? Found->HoldingPosition : EHoldingPositionKind::None;
+	}
+
+	/** The flagged node realising a mark on Segment's B end, wherever the builder put it. */
+	FGuidelineNodeId M2HoldRealisedAt(const URoadNetwork& Net, FRoadSegmentId Segment)
+	{
+		const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			if (Nodes[Index].bAlive && Nodes[Index].Origin.Segment == Segment && !Nodes[Index].Origin.bEndA
+				&& Nodes[Index].HoldingPosition == EHoldingPositionKind::Intermediate)
+			{
+				return Net.GuidelineNodeIdAt(Index);
+			}
+		}
+		return FGuidelineNodeId();
 	}
 }
 
@@ -68,9 +84,12 @@ bool FHoldingPositionSurvivesRebuildTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("protecting nothing - no runway is named"), Net->GetGuidelineNode(Junction)->HoldingPositionFor.IsSet());
 	TestEqual(TEXT("one mark recorded"), Net->GetHoldingPositionMarks().Num(), 1);
 
+	// SINCE 2026-09-29 (taxiway strip stage 4) the rebuild REALISES the mark at the strip edge
+	// of the taxiway X-Y that Tx joins - a node split down Tx, carrying the end's Origin - not
+	// on the end itself; M2HoldRealisedAt finds it by the end it names.
 	TestGraph::Rebuild(*Net);
 	TestNull(TEXT("the old node handle is dead - the builder made a fresh one"), Net->GetGuidelineNode(Junction));
-	const FGuidelineNodeId JunctionAfter = TestGraph::NodeFor(*Net, Tx, false);
+	const FGuidelineNodeId JunctionAfter = M2HoldRealisedAt(*Net, Tx);
 	if (!TestTrue(TEXT("the fresh node exists"), JunctionAfter.IsSet())) { return false; }
 	TestTrue(TEXT("and carries the intermediate position"), M2HoldKindAt(*Net, JunctionAfter) == EHoldingPositionKind::Intermediate);
 	TestTrue(TEXT("and has edges - it is connected, not an orphan kept alive"), Net->GetGuidelineNode(JunctionAfter)->Incident.Num() > 0);
@@ -79,7 +98,7 @@ bool FHoldingPositionSurvivesRebuildTest::RunTest(const FString& Parameters)
 
 	// TWICE, because one rebuild could pass on a mark the builder consumed destructively.
 	TestGraph::Rebuild(*Net);
-	const FGuidelineNodeId JunctionTwice = TestGraph::NodeFor(*Net, Tx, false);
+	const FGuidelineNodeId JunctionTwice = M2HoldRealisedAt(*Net, Tx);
 	if (!TestTrue(TEXT("the node after a second rebuild exists"), JunctionTwice.IsSet())) { return false; }
 	TestTrue(TEXT("and still carries it"), M2HoldKindAt(*Net, JunctionTwice) == EHoldingPositionKind::Intermediate);
 
@@ -138,6 +157,83 @@ bool FHoldingPositionSurvivesRebuildTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("the end is a runway-holding position again"), M2HoldKindAt(*Net, End) == EHoldingPositionKind::Runway);
 		}
 	}
+	return true;
+}
+
+/**
+ * AN INTERMEDIATE HOLD SITS AT THE STRIP EDGE OF THE TAXIWAY IT JOINS (taxiway strip spec
+ * 2026-09-28, "Holds sit at the strip edge"; stage 4): where ICAO puts one, clear of a wing
+ * passing on the joined taxiway. Realised by SPLITTING the stem's guideline there, not by
+ * moving its end - the end is where the junction's turns attach, and moving it would change
+ * every turn at the junction.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FIntermediateHoldAtStripEdgeTest,
+	"Airside.Build.IntermediateHoldAtStripEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FIntermediateHoldAtStripEdgeTest::RunTest(const FString& Parameters)
+{
+	//   W ======= J ======= E        taxiway (code E)
+	//             |
+	//             S                  stem taxiway, joining at J square
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
+	Net->DefaultProfile = Taxiway;
+	const FRoadNodeId J = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadSegmentId West = Net->AddStraightSegment(Net->AddNode(FVector2D(-20000.0, 0.0)), J, Taxiway);
+	Net->AddStraightSegment(J, Net->AddNode(FVector2D(20000.0, 0.0)), Taxiway);
+	const FRoadSegmentId Stem = Net->AddStraightSegment(Net->AddNode(FVector2D(0.0, -20000.0)), J, Taxiway);
+	TestGraph::Rebuild(*Net);
+
+	const double StripEdge = Taxiway->GetTotalWidth() * 0.5 + TaxiwayStrip::StripWidthOf(*Net, West);
+	const FGuidelineNodeId EndBefore = TestGraph::NodeFor(*Net, Stem, /*bEndA=*/false);
+	if (!TestTrue(TEXT("the stem's junction end exists"), EndBefore.IsSet())) { return false; }
+	const FVector2D EndAt = Net->GetGuidelineNode(EndBefore)->Position;
+	TestTrue(TEXT("the end sits inside the strip - at the cut line, where the hold used to be"), FMath::Abs(EndAt.Y) < StripEdge);
+
+	TestTrue(TEXT("set"), Net->SetIntermediateHoldingPosition(EndBefore, true));
+
+	for (int32 Pass = 0; Pass < 2; ++Pass)
+	{
+		// TWICE, because the first rebuild could pass on a mark the builder consumed.
+		TestGraph::Rebuild(*Net);
+
+		TArray<FGuidelineNodeId> Holds;
+		const TArray<FGuidelineNode>& Nodes = Net->GetGuidelineNodes();
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			if (Nodes[Index].bAlive && Nodes[Index].HoldingPosition == EHoldingPositionKind::Intermediate)
+			{
+				Holds.Add(Net->GuidelineNodeIdAt(Index));
+			}
+		}
+		if (!TestEqual(*FString::Printf(TEXT("rebuild %d: one intermediate position"), Pass + 1), Holds.Num(), 1)) { return false; }
+		const FGuidelineNode* Hold = Net->GetGuidelineNode(Holds[0]);
+
+		// (half width + strip) / sin(90) of the JOINED taxiway, down the stem from the junction.
+		TestNearlyEqual(*FString::Printf(TEXT("rebuild %d: the hold is at the joined taxiway's strip edge (%.1f)"),
+			Pass + 1, -Hold->Position.Y), -Hold->Position.Y, StripEdge, 1.0);
+		TestNearlyEqual(TEXT("on the stem's centreline"), Hold->Position.X, 0.0, 1.0);
+		TestTrue(TEXT("naming the stem end the player marked, so a click on it clears that mark"),
+			Hold->Origin.Segment == Stem && !Hold->Origin.bEndA);
+
+		// THE END DID NOT MOVE, and the turns still attach there.
+		const FGuidelineNodeId End = TestGraph::NodeFor(*Net, Stem, /*bEndA=*/false);
+		const FGuidelineNode* EndNode = Net->GetGuidelineNode(End);
+		if (!TestNotNull(TEXT("the stem end still exists"), EndNode)) { return false; }
+		TestTrue(TEXT("and is not the hold"), End != Holds[0]);
+		TestTrue(TEXT("and has not moved"), EndNode->Position.Equals(EndAt, 0.01));
+		int32 Turns = 0;
+		for (const FGuidelineEdgeId Id : EndNode->Incident)
+		{
+			const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+			Turns += (Edge != nullptr && !Edge->DerivedFrom.IsSet()) ? 1 : 0;
+		}
+		TestTrue(TEXT("and the junction's turns still attach to it"), Turns > 0);
+	}
+	TestEqual(TEXT("still one mark, on the end - where it is realised moved, what it names did not"),
+		Net->GetHoldingPositionMarks().Num(), 1);
 	return true;
 }
 

@@ -3,6 +3,7 @@
 #include "AirsideLog.h"
 
 #include "Build/MarkingQuads.h"
+#include "Build/StandMarkingBuilder.h"
 #include "Model/HoldingBarFrame.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -13,10 +14,11 @@ namespace
 	 * One bar across the taxiway: solid, or dashed from one edge. Toward is the unit
 	 * direction from the node INTO the junction (the side the pattern sits on), Across its
 	 * left-hand perpendicular. Near and Far are distances from the node along Toward.
+	 * MaterialID is the slot the bar draws with (MarkingQuads::AddQuad's).
 	 */
 	void MarkingAddBar(FRoadMeshBuffers& Out, double Z, const FVector2D& Node,
 		const FVector2D& Toward, const FVector2D& Across, double HalfWidth,
-		double Near, double Far, bool bDashed)
+		double Near, double Far, bool bDashed, int32 MaterialID = 0)
 	{
 		const FVector2D NearLine = Node + Toward * Near;
 		const FVector2D FarLine = Node + Toward * Far;
@@ -24,7 +26,7 @@ namespace
 		{
 			MarkingQuads::AddQuad(Out, Z,
 				NearLine - Across * HalfWidth, NearLine + Across * HalfWidth,
-				FarLine + Across * HalfWidth, FarLine - Across * HalfWidth);
+				FarLine + Across * HalfWidth, FarLine - Across * HalfWidth, MaterialID);
 			return;
 		}
 		const double Period = FHoldingPositionMarkingBuilder::DashLength + FHoldingPositionMarkingBuilder::DashGap;
@@ -38,7 +40,7 @@ namespace
 	}
 }
 
-int32 FHoldingPositionMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out)
+int32 FHoldingPositionMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out, int32 StopLineId)
 {
 	int32 Painted = 0;
 	const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
@@ -86,7 +88,8 @@ int32 FHoldingPositionMarkingBuilder::Build(const URoadNetwork& Network, double 
 			TEXT("HoldBar: node %d at (%.0f, %.0f), %s, half width %.0f, across (%.2f, %.2f), "
 				 "origin segment %d"),
 			Index, Node.Position.X, Node.Position.Y,
-			Node.HoldingPosition == EHoldingPositionKind::Runway ? TEXT("runway") : TEXT("intermediate"),
+			Node.HoldingPosition == EHoldingPositionKind::Runway ? TEXT("runway")
+				: Node.HoldingPosition == EHoldingPositionKind::TaxiwayCrossing ? TEXT("road stop line") : TEXT("intermediate"),
 			HalfWidth, Across.X, Across.Y,
 			Node.Origin.IsSet() ? Node.Origin.Segment.Index : -1);
 
@@ -100,6 +103,27 @@ int32 FHoldingPositionMarkingBuilder::Build(const URoadNetwork& Network, double 
 				MarkingAddBar(Out, Z, Node.Position, Toward, Across, HalfWidth, At, At + LineWidth, /*bDashed=*/Line >= 2);
 				At += LineWidth + LineGap;
 			}
+		}
+		else if (Node.HoldingPosition == EHoldingPositionKind::TaxiwayCrossing)
+		{
+			// A ROAD'S STOP LINE (user ruling 2026-09-29: a solid white stop bar): one solid bar,
+			// the stand stop bar's depth (FStandMarkingBuilder::StopBarWidth, shared, not retyped),
+			// in the slot the caller resolved for it. ACROSS THE ROAD'S WHOLE WIDTH - HalfWidth is
+			// the node's own segment's, the road's, from HoldingBarAt - and so CENTRED ON THE ROAD'S
+			// CENTRELINE, not on the node: the node sits on its arriving lane, a lane's offset to
+			// one side, and a bar centred there would overhang one kerb and stop short of the other.
+			FVector2D Centre = Node.Position;
+			if (const FRoadSegment* Segment = Node.Origin.IsSet() ? Network.GetSegment(Node.Origin.Segment) : nullptr)
+			{
+				if (const FRoadNode* RoadEnd = Network.GetNode(Node.Origin.bEndA ? Segment->A : Segment->B))
+				{
+					Centre -= Across * FVector2D::DotProduct(Node.Position - RoadEnd->Position, Across);
+				}
+			}
+			// ON THE FAR SIDE OF THE LINE FROM THE JUNCTION (final review, minor 14): painted toward
+			// the junction as the aircraft bars are, it lay inside the strip it marks the edge of.
+			MarkingAddBar(Out, Z, Centre, Toward, Across, HalfWidth, -FStandMarkingBuilder::StopBarWidth, 0.0,
+				/*bDashed=*/false, StopLineId);
 		}
 		else
 		{
