@@ -9,3 +9,7 @@
  * Airside learned this the hard way, and Check-Architecture.ps1 now fails it.
  */
 AIRPORTOPS_API DECLARE_LOG_CATEGORY_EXTERN(LogAirportOps, Log, All);
+
+/** The ops event bus (FOpsEventBus) - one line per subscription at wire time, Verbose per event,
+ *  Error on the round cap. Its own category so the bus can be turned up without the rest. */
+AIRPORTOPS_API DECLARE_LOG_CATEGORY_EXTERN(LogOpsBus, Log, All);
