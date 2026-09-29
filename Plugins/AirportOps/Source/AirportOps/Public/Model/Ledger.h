@@ -120,6 +120,10 @@ public:
 	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
 	UPROPERTY() TObjectPtr<USimClock> Clock = nullptr;
 
+	/** Where Post announces money moving (ops alerts spec 2026-09-29 §2). Set by UOpsRuntime::Attach;
+	 *  null in a bare NewObject, and Post checks. Raw: the runtime owns both. */
+	class FOpsEventBus* Bus = nullptr;
+
 	/** Start a NEW GAME at this balance. Not for a load - Restore brings back the entries. */
 	void Open(double InStartingBalance);
 

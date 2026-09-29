@@ -6,6 +6,7 @@
 #include "Model/ArrivalPlanner.h"
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
+#include "Model/Ledger.h"
 #include "Model/OpsAlerts.h"
 #include "Model/RoadAgent.h"
 #include "Model/SimClock.h"
@@ -172,6 +173,34 @@ struct AIRPORTOPS_API FAlertsResetEvent
 	FString Describe() const;
 };
 
+/** Money moved - ULedger::Post, the one funnel for every fee, charge, credit and reversal. */
+struct AIRPORTOPS_API FMoneyPostedEvent
+{
+	int32 EntryId = 0;
+	ELedgerCategory Category = ELedgerCategory::LandingFee;
+	double Amount = 0.0;
+	double Balance = 0.0;
+	static const TCHAR* EventName() { return TEXT("MoneyPosted"); }
+	FString Describe() const;
+};
+
+/** The balance crossed zero - overdrawn locks every paid placement (ULedger::CanAfford). */
+struct AIRPORTOPS_API FBalanceSignChangedEvent
+{
+	bool bOverdrawn = false;
+	static const TCHAR* EventName() { return TEXT("BalanceSignChanged"); }
+	FString Describe() const;
+};
+
+/** The player moved the landing-fee lever (UPricing::StepLandingFee). Not published at a clamp. */
+struct AIRPORTOPS_API FLandingFeeChangedEvent
+{
+	double Old = 1.0;
+	double New = 1.0;
+	static const TCHAR* EventName() { return TEXT("LandingFeeChanged"); }
+	FString Describe() const;
+};
+
 /** A build refused at commit (URoadEditFacade::OnRefused), priced by the purse for the toast. */
 struct AIRPORTOPS_API FBuildRefusedEvent
 {
@@ -200,7 +229,8 @@ struct AIRPORTOPS_API FLandRefusedEvent
  */
 using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent,
 	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
-	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent>;
+	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
+	FMoneyPostedEvent, FBalanceSignChangedEvent, FLandingFeeChangedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

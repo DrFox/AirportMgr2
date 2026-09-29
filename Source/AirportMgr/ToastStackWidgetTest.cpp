@@ -335,9 +335,9 @@ bool FToastsFromOpsAlertsTest::RunTest(const FString& Parameters)
 	Events->OnAlertRaised.Broadcast(Again);
 	TestEqual(TEXT("a re-raise after a load is not news - no toast"), Stack->Centre()->Entries().Num(), 1);
 
-	FOpsAlertKey Overdrawn;
-	Overdrawn.Kind = EAlertKind::Overdrawn;
-	Events->OnAlertCleared.Broadcast(Overdrawn);
+	Events->OnBalanceSignChanged.Broadcast(true);
+	TestEqual(TEXT("going into the red is the Overdrawn alert's toast, not a second one"), Stack->Centre()->Entries().Num(), 1);
+	Events->OnBalanceSignChanged.Broadcast(false);
 	if (TestEqual(TEXT("but coming out of the red is said"), Stack->Centre()->Entries().Num(), 2))
 	{
 		TestEqual(TEXT("as Info"), Stack->Centre()->Entries()[1].Severity, ENotificationSeverity::Info);

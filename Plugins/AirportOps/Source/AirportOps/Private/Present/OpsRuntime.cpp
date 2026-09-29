@@ -280,6 +280,8 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferExpiredEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferDeclinedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FFlightAirborneEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	// OVERDRAWN, exactly when the balance crosses - no longer waiting for the offer minute (stage 3).
+	Bus.Subscribe<FBalanceSignChangedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FBalanceSignChangedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 
 	// PRESENTATION: the new UOpsEvents faces.
 	Bus.Subscribe<FAlertRaisedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
@@ -292,6 +294,12 @@ void UOpsRuntime::WireBus()
 		[this](const FBuildRefusedEvent& E) { Events->OnBuildRefused.Broadcast(E.What, E.Price, E.Balance); });
 	Bus.Subscribe<FLandRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FLandRefusedEvent& E) { Events->OnLandRefused.Broadcast(E.Why); });
+	Bus.Subscribe<FMoneyPostedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FMoneyPostedEvent& E) { Events->OnMoneyPosted.Broadcast(E.Amount, E.Balance); });
+	Bus.Subscribe<FBalanceSignChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FBalanceSignChangedEvent& E) { Events->OnBalanceSignChanged.Broadcast(E.bOverdrawn); });
+	Bus.Subscribe<FLandingFeeChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FLandingFeeChangedEvent& E) { Events->OnLandingFeeChanged.Broadcast(E.Old, E.New); });
 
 	Bus.EndWiring();
 }
@@ -439,6 +447,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	FlightBoard->Fuel = JobBoard;
 	FlightBoard->Bus = &Bus;
 	Alerts->Bus = &Bus;
+	Ledger->Bus = &Bus;
+	Pricing->Bus = &Bus;
 	// A NEW AIRPORT, A NEW SET: the old actor's alerts name its flights and agents.
 	Alerts->Reset();
 	Airlines->Bus = &Bus;

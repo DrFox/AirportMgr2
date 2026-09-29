@@ -90,6 +90,7 @@ void UToastStackWidget::BindTo(UOpsEvents& Events)
 	Events.OnAlertCleared.AddUniqueDynamic(this, &UToastStackWidget::OnAlertCleared);
 	Events.OnBuildRefused.AddUniqueDynamic(this, &UToastStackWidget::OnBuildRefused);
 	Events.OnLandRefused.AddUniqueDynamic(this, &UToastStackWidget::OnLandRefused);
+	Events.OnBalanceSignChanged.AddUniqueDynamic(this, &UToastStackWidget::OnBalanceSignChanged);
 }
 
 void UToastStackWidget::OnAlertRaised(const FOpsAlert& Alert)
@@ -103,9 +104,15 @@ void UToastStackWidget::OnAlertRaised(const FOpsAlert& Alert)
 
 void UToastStackWidget::OnAlertCleared(const FOpsAlertKey& Key)
 {
-	// SILENT FOR EVERY KIND BUT ONE: the alert window's count going down says a problem ended, and a toast for
-	// each would bury the ones that started. Coming out of the red is the exception - it unlocks building.
-	if (Notifications != nullptr && Key.Kind == EAlertKind::Overdrawn)
+	// SILENT: the alert window's count going down says a problem ended, and a toast for each would bury the
+	// ones that started. Coming out of the red IS said - by OnBalanceSignChanged, the money event, since
+	// stage 3; saying it here too would toast it twice.
+}
+
+void UToastStackWidget::OnBalanceSignChanged(bool bOverdrawn)
+{
+	// ONLY THE WAY OUT: going into the red is the Overdrawn alert's own toast (OnAlertRaised).
+	if (Notifications != nullptr && !bOverdrawn)
 	{
 		Notifications->PostFeed(NSLOCTEXT("AirportMgr", "BackInCredit", "Back in credit - building unlocked"), ENotificationSeverity::Info);
 	}

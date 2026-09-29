@@ -88,6 +88,21 @@ FString FAlertsResetEvent::Describe() const
 	return TEXT("every alert forgotten");
 }
 
+FString FMoneyPostedEvent::Describe() const
+{
+	return FString::Printf(TEXT("entry %d, %s, %+.0f, balance %.0f"), EntryId, *UEnum::GetValueAsString(Category), Amount, Balance);
+}
+
+FString FBalanceSignChangedEvent::Describe() const
+{
+	return bOverdrawn ? TEXT("overdrawn") : TEXT("back in credit");
+}
+
+FString FLandingFeeChangedEvent::Describe() const
+{
+	return FString::Printf(TEXT("%.0f%% -> %.0f%%"), Old * 100.0, New * 100.0);
+}
+
 FString FBuildRefusedEvent::Describe() const
 {
 	return FString::Printf(TEXT("%s, cannot afford %s, balance %s"), *What, *Price, *Balance);

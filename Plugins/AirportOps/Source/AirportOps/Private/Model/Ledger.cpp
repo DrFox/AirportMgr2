@@ -1,4 +1,5 @@
 #include "Model/Ledger.h"
+#include "Model/OpsEventBus.h"
 
 #include "AirportOpsLog.h"
 #include "Model/Pricing.h"
@@ -25,8 +26,21 @@ int32 ULedger::Post(double At, ELedgerCategory Category, double Amount, FText Wh
 
 	// Added rather than recomputed: Post is the hot path, and the fold that would verify it is
 	// what FoldBalanceForTest and its test are for.
+	const double Before = CachedBalance;
 	CachedBalance += Amount;
 	++RevisionCount;
+
+	// ANNOUNCED HERE, THE ONE FUNNEL: every fee, charge, credit and reversal comes through Post, so this is
+	// the one place the bar, the ledger window and the Overdrawn alert can hear money move without polling.
+	// ENFORCED BY: AirportOps.Model.Money.PostIsAnnounced, AirportOps.Model.Money.CrossingZeroIsAnnouncedOnce
+	if (Bus != nullptr)
+	{
+		Bus->Publish(FMoneyPostedEvent{ Entry.Id, Category, Amount, CachedBalance });
+		if ((Before < 0.0) != (CachedBalance < 0.0))
+		{
+			Bus->Publish(FBalanceSignChangedEvent{ CachedBalance < 0.0 });
+		}
+	}
 	return Entry.Id;
 }
 

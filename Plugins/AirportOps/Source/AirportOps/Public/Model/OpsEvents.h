@@ -17,6 +17,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertCleared, const FOpsAlertKey
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOpsAlertsReset);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOpsBuildRefused, const FString&, What, const FString&, Price, const FString&, Balance);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsLandRefused, EArrivalRefusal, Why);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOpsMoneyPosted, double, Amount, double, Balance);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsBalanceSignChanged, bool, bOverdrawn);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOpsLandingFeeChanged, double, Old, double, New);
 
 /**
  * The outcome bus. Pattern: Observer, via DYNAMIC multicast delegates so UMG and Blueprint
@@ -57,6 +60,11 @@ public:
 	/** A build refused at commit, and key 7 refused - silent before this (spec §2). */
 	UPROPERTY(BlueprintAssignable) FOpsBuildRefused      OnBuildRefused;
 	UPROPERTY(BlueprintAssignable) FOpsLandRefused       OnLandRefused;
+
+	/** Money pushed, not polled (spec §2): the bar's balance and fee, the back-in-credit toast. */
+	UPROPERTY(BlueprintAssignable) FOpsMoneyPosted       OnMoneyPosted;
+	UPROPERTY(BlueprintAssignable) FOpsBalanceSignChanged OnBalanceSignChanged;
+	UPROPERTY(BlueprintAssignable) FOpsLandingFeeChanged OnLandingFeeChanged;
 
 	void NotifyAgentPhaseChanged(int32 AgentId, EAgentPhase From, EAgentPhase To);
 	void NotifyArrivalRefused(EArrivalRefusal Why);
