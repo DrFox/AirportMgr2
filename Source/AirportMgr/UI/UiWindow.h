@@ -35,6 +35,14 @@ public:
 
 	FName GetId() const { return Id; }
 
+	/**
+	 * The tallest this window may lay itself out, uu; 0 or less lifts the cap. The host sets it
+	 * every tick for an AUTO-SIZED window from the room below its top edge, so a window that
+	 * grows with its content (Offers) scrolls at the screen's edge instead of running off it.
+	 */
+	void SetMaxHeight(double MaxHeight);
+	double MaxHeightForTest() const;
+
 	/** The close button. Public for the test that presses it. */
 	UFUNCTION() void HandleClose();
 
@@ -60,6 +68,8 @@ private:
 	UPROPERTY() TObjectPtr<UUiWindowHost> Host;
 	UPROPERTY() TObjectPtr<UWidget> TitleBar;
 	UPROPERTY() TObjectPtr<UWidget> Grip;
+	/** Between the shadow frame and the card; see SetMaxHeight. */
+	UPROPERTY() TObjectPtr<class USizeBox> HeightCap;
 	UPROPERTY() TObjectPtr<UUiButton> CloseButton;
 	FName Id;
 	EUiWindowGesture Gesture = EUiWindowGesture::None;

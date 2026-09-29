@@ -142,8 +142,10 @@ public:
 	// resolves no style (issue #309, closes the #260 item). It needs Controller() to reach Refresh
 	// at all; PaintRowsForTest above skips straight to PaintRows for a test with no controller.
 
-	/** Where the refusal sentence wraps, uu. The card is sized from this. */
-	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float RowWrapWidth = 260.0f;
+	/** Where the refusal sentence wraps, uu. The card is sized from this: its floor is this plus
+	 *  the card's padding. 420, not 260: two lines per card merged into their neighbours
+	 *  (BuildRow) and need the width (2026-09-29). */
+	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float RowWrapWidth = 420.0f;
 
 	/** Gap between offer cards, so two offers do not read as one. */
 	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float RowGap = 6.0f;

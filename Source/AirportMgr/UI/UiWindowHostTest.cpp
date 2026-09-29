@@ -334,6 +334,39 @@ bool FUiWindowOverflowTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * AN AUTO-SIZED WINDOW STOPS ABOVE THE SCREEN'S EDGE and scrolls, rather than growing off it:
+ * Offers cannot be resized, so without the cap eight offers ran past the bar (2026-09-29). A
+ * window the player HAS sized keeps no cap - its own size is the limit.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowAutoCapTest, "AirportMgr.UI.WindowHost.AutoSizedWindowIsCappedAboveTheBar",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowAutoCapTest::RunTest(const FString& Parameters)
+{
+	UiWindowHostTest::FFixture F;
+	if (!TestNotNull(TEXT("a host"), F.Host)) { return false; }
+	UOfferInboxWidget* Offers = CreateWidget<UOfferInboxWidget>(F.TestWorld.World, UOfferInboxWidget::StaticClass());
+	UUiWindow* OffersWindow = F.Host->AddWindow(*Offers);
+	if (!TestNotNull(TEXT("an offers window"), OffersWindow)) { return false; }
+
+	F.Host->TickForTest(0.016f);
+	const double Top = F.Host->WindowRect(TEXT("offers")).Min.Y;
+	// 1080 view, no bar: the room below the window's top edge, less the margin.
+	const double Margin = 12.0;
+	TestEqual(TEXT("the offers window is capped at the room below its top"), OffersWindow->MaxHeightForTest(), 1080.0 - Top - Margin, 1.0);
+
+	F.Host->SetViewSizeForTest(FVector2D(1920.0, 600.0));
+	F.Host->TickForTest(0.016f);
+	TestEqual(TEXT("and the cap follows a shorter view"), OffersWindow->MaxHeightForTest(), 600.0 - Top - Margin, 1.0);
+
+	F.Ledger->Toggle();
+	F.Host->ResizeWindow(TEXT("ledger"), FVector2D(300.0, 300.0));
+	F.Host->TickForTest(0.016f);
+	TestEqual(TEXT("a window the player sized has no cap"), F.Window->MaxHeightForTest(), 0.0);
+	return true;
+}
+
 namespace UiWindowHostTest
 {
 	/** A host whose ledger has a memory store attached. */

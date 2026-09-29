@@ -141,7 +141,14 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 		Column->AddChildToVerticalBox(StripBox)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
 
 		OfferColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxRows"));
-		Column->AddChildToVerticalBox(OfferColumn);
+		// WIDE AND SHORT, not narrow and tall: the window is capped at the screen's height and
+		// scrolls past it, so every line a card spends is an offer pushed below the fold. A floor
+		// on the width, so the airframe-and-contract line and the chips-and-answers line each fit
+		// on one row rather than the card changing width as the offers change (2026-09-29).
+		USizeBox* RowsWidth = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("InboxRowsWidth"));
+		RowsWidth->SetMinDesiredWidth(RowWrapWidth + 20.0f);
+		RowsWidth->SetContent(OfferColumn);
+		Column->AddChildToVerticalBox(RowsWidth);
 
 		// ARRIVALS, UNDER THE OFFERS, in the same card (spec 2026-09-28-arrival-queue): what is
 		// coming is one place to look - the offers you might take, then the flights you did.
@@ -433,31 +440,26 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	BarBox->SetContent(Entry.CountdownBar);
 	Lines->AddChildToVerticalBox(BarBox)->SetPadding(FMargin(0.0f, 3.0f, 0.0f, 3.0f));
 
-	// LINE TWO: the airframe and what it pays, quieter. It matters while deciding, not while
-	// scanning.
+	// LINE TWO: the airframe and what it pays, then the turnaround contract in game time, quieter.
+	// They matter while deciding, not while scanning. ONE line, not two: the card is wide now
+	// (InboxRowsWidth's comment), and a line saved per card is an offer more above the fold.
+	UHorizontalBox* What = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	Entry.TypeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 	Style.ApplyText(*Entry.TypeText, EUITextRole::Body, Style.InkMuted);
-	Lines->AddChildToVerticalBox(Entry.TypeText);
-
-	// LINE THREE: the turnaround contract, in game time.
+	What->AddChildToHorizontalBox(Entry.TypeText)->SetVerticalAlignment(VAlign_Center);
+	UHorizontalBoxSlot* WhatGap = What->AddChildToHorizontalBox(
+		WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
+	WhatGap->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	Entry.ContractText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 	Style.ApplyText(*Entry.ContractText, EUITextRole::Body, Style.InkMuted);
-	Lines->AddChildToVerticalBox(Entry.ContractText);
+	UHorizontalBoxSlot* ContractSlot = What->AddChildToHorizontalBox(Entry.ContractText);
+	ContractSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
+	ContractSlot->SetVerticalAlignment(VAlign_Center);
+	Lines->AddChildToVerticalBox(What)->SetHorizontalAlignment(HAlign_Fill);
 
-	// LINE FOUR: what it wants on the ground. Fuel is live (can the airport give it?); the tug
-	// is information only until a pushback service exists to ask.
-	UHorizontalBox* Chips = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	Entry.FuelChip = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Style.ApplyText(*Entry.FuelChip, EUITextRole::Label, Style.Positive);
-	Chips->AddChildToHorizontalBox(Entry.FuelChip)->SetPadding(FMargin(0.0f, 0.0f, 10.0f, 0.0f));
-	Entry.TugChip = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Entry.TugChip->SetText(NSLOCTEXT("AirportMgr", "OfferTug", "Needs tug"));
-	Style.ApplyText(*Entry.TugChip, EUITextRole::Label, Style.InkMuted);
-	Chips->AddChildToHorizontalBox(Entry.TugChip);
-	Lines->AddChildToVerticalBox(Chips)->SetPadding(FMargin(0.0f, 3.0f, 0.0f, 0.0f));
-
-	// LINE FIVE: why it cannot be taken, in Warning and wrapped. Hidden while acceptable -
-	// see the Collapsed comment in the repaint above.
+	// LINE THREE: why it cannot be taken, in Warning and wrapped. Hidden while acceptable -
+	// see the Collapsed comment in the repaint above. ABOVE the answers it explains, so the
+	// greyed Accept has its reason directly over it.
 	Entry.RefusalText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 	Style.ApplyText(*Entry.RefusalText, EUITextRole::Body, Style.Warning);
 	Entry.RefusalText->SetAutoWrapText(true);
@@ -465,8 +467,20 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	Entry.RefusalText->SetVisibility(ESlateVisibility::Collapsed);
 	Lines->AddChildToVerticalBox(Entry.RefusalText)->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
 
-	// LINE SIX: the two answers, right-aligned beneath what they answer.
+	// LINE FOUR: what it wants on the ground on the left, the two answers hard right. Fuel is live
+	// (can the airport give it?); the tug is information only until a pushback service exists to
+	// ask. The answers used to take a line of their own under the chips - one more line per card
+	// for the width the card now has to spare.
 	UHorizontalBox* Answers = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	Entry.FuelChip = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Style.ApplyText(*Entry.FuelChip, EUITextRole::Label, Style.Positive);
+	UHorizontalBoxSlot* FuelSlot = Answers->AddChildToHorizontalBox(Entry.FuelChip);
+	FuelSlot->SetPadding(FMargin(0.0f, 0.0f, 10.0f, 0.0f));
+	FuelSlot->SetVerticalAlignment(VAlign_Center);
+	Entry.TugChip = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Entry.TugChip->SetText(NSLOCTEXT("AirportMgr", "OfferTug", "Needs tug"));
+	Style.ApplyText(*Entry.TugChip, EUITextRole::Label, Style.InkMuted);
+	Answers->AddChildToHorizontalBox(Entry.TugChip)->SetVerticalAlignment(VAlign_Center);
 	UHorizontalBoxSlot* PushSlot = Answers->AddChildToHorizontalBox(
 		WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
 	PushSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -481,7 +495,7 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	DeclineButton->OnClicked.AddDynamic(&Entry, &UOfferRowEntry::HandleDecline);
 	Answers->AddChildToHorizontalBox(DeclineButton);
 
-	Lines->AddChildToVerticalBox(Answers)->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 0.0f));
+	Lines->AddChildToVerticalBox(Answers)->SetPadding(FMargin(0.0f, 6.0f, 0.0f, 0.0f));
 	return Card;
 }
 

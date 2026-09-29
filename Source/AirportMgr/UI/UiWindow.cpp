@@ -39,7 +39,13 @@ void UUiWindow::Build(const UUIStyle& Style, const FUiWindowSpec& Spec, UWidget&
 	Card->SetBrush(FSlateRoundedBoxBrush(Style.Surface, Style.WindowRadius));
 	Card->SetPadding(FMargin(0.0f));
 	Card->SetClipping(EWidgetClipping::ClipToBounds);
-	Frame->SetContent(Card);
+	// A HEIGHT CAP between frame and card, lifted until the host sets one (SetMaxHeight). A cap on
+	// the card, not the scroll box: the title bar is Auto in the chrome column and the scroll body
+	// Fill, so capping the whole card squeezes only the body - which is the part that scrolls.
+	HeightCap = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("WindowHeightCap"));
+	HeightCap->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	HeightCap->SetContent(Card);
+	Frame->SetContent(HeightCap);
 
 	UOverlay* Layers = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
 	Card->SetContent(Layers);
@@ -119,6 +125,34 @@ void UUiWindow::Build(const UUIStyle& Style, const FUiWindowSpec& Spec, UWidget&
 		Grip = GripImage;
 	}
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+}
+
+void UUiWindow::SetMaxHeight(double MaxHeight)
+{
+	if (HeightCap == nullptr)
+	{
+		return;
+	}
+	// Gated: the host calls this every tick, and SetMaxDesiredHeight invalidates layout each time.
+	const float Want = MaxHeight > 0.0 ? static_cast<float>(MaxHeight) : 0.0f;
+	const float Have = HeightCap->IsMaxDesiredHeightOverride() ? HeightCap->GetMaxDesiredHeight() : 0.0f;
+	if (FMath::IsNearlyEqual(Want, Have, 0.5f))
+	{
+		return;
+	}
+	if (Want > 0.0f)
+	{
+		HeightCap->SetMaxDesiredHeight(Want);
+	}
+	else
+	{
+		HeightCap->ClearMaxDesiredHeight();
+	}
+}
+
+double UUiWindow::MaxHeightForTest() const
+{
+	return HeightCap != nullptr && HeightCap->IsMaxDesiredHeightOverride() ? HeightCap->GetMaxDesiredHeight() : 0.0;
 }
 
 void UUiWindow::HandleClose()

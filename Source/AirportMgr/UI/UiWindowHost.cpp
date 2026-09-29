@@ -430,7 +430,37 @@ void UUiWindowHost::TickWindows(float DeltaTime)
 				E.Slot->SetPosition(Clamped);
 			}
 		}
+		if (E.Window != nullptr)
+		{
+			E.Window->SetMaxHeight(E.Slot->GetAutoSize() ? MaxAutoHeight(E) : 0.0);
+		}
 	}
+}
+
+double UUiWindowHost::MaxAutoHeight(const FUiWindowEntry& E) const
+{
+	// AN AUTO-SIZED WINDOW STOPS AT THE SCREEN'S EDGE and scrolls (its body is a UScrollBox), rather
+	// than growing off it: Offers is unresizable and grows with its offers, and eight of them ran
+	// past the bar (2026-09-29). Its top edge is anchor + position - alignment * H, so with the
+	// anchor and position fixed each bound on H is linear: the top stays a margin below the view's
+	// top (alignment > 0) and the bottom a margin above the bar (alignment < 1).
+	// ENFORCED BY: AirportMgr.UI.WindowHost.AutoSizedWindowIsCappedAboveTheBar.
+	const FBox2D B = Bounds();
+	const double Margin = Style != nullptr ? Style->WindowMargin : 0.0;
+	const double Edge = E.Slot->GetAnchors().Minimum.Y * ViewSize.Y + E.Slot->GetPosition().Y;
+	const double Align = E.Slot->GetAlignment().Y;
+	double Cap = TNumericLimits<double>::Max();
+	if (Align > 0.0)
+	{
+		Cap = FMath::Min(Cap, (Edge - B.Min.Y - Margin) / Align);
+	}
+	if (Align < 1.0)
+	{
+		Cap = FMath::Min(Cap, (B.Max.Y - Margin - Edge) / (1.0 - Align));
+	}
+	// Never below the minimum: a window squeezed to nothing hides its content outright.
+	const double Floor = Style != nullptr ? Style->WindowMinSize.Y : 0.0;
+	return FMath::Max(Cap, Floor);
 }
 
 FVector2D UUiWindowHost::ToLocal(FVector2D ScreenPosition) const
