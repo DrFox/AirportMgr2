@@ -335,25 +335,35 @@ bool FToastsFromOpsAlertsTest::RunTest(const FString& Parameters)
 	Events->OnAlertRaised.Broadcast(Again);
 	TestEqual(TEXT("a re-raise after a load is not news - no toast"), Stack->Centre()->Entries().Num(), 1);
 
-	FOpsAlertKey Overdrawn;
-	Overdrawn.Kind = EAlertKind::Overdrawn;
-	Events->OnAlertCleared.Broadcast(Overdrawn);
-	if (TestEqual(TEXT("but coming out of the red is said"), Stack->Centre()->Entries().Num(), 2))
+	Events->OnBalanceSignChanged.Broadcast(true);
+	Events->OnBalanceSignChanged.Broadcast(false);
+	TestEqual(TEXT("a dip and recovery with no Overdrawn alert toasts nothing - 'back in credit' from nowhere"),
+		Stack->Centre()->Entries().Num(), 1);
+
+	FOpsAlert Red;
+	Red.Key.Kind = EAlertKind::Overdrawn;
+	Red.Text = FText::FromString(TEXT("Overdrawn - building is locked"));
+	Events->OnAlertRaised.Broadcast(Red);
+	TestEqual(TEXT("going into the red is the Overdrawn alert's toast"), Stack->Centre()->Entries().Num(), 2);
+	Events->OnAlertCleared.Broadcast(Red.Key);
+	TestEqual(TEXT("its clear says nothing - the money event does"), Stack->Centre()->Entries().Num(), 2);
+	Events->OnBalanceSignChanged.Broadcast(false);
+	if (TestEqual(TEXT("coming out of the red, after the alert said so, is said"), Stack->Centre()->Entries().Num(), 3))
 	{
-		TestEqual(TEXT("as Info"), Stack->Centre()->Entries()[1].Severity, ENotificationSeverity::Info);
+		TestEqual(TEXT("as Info"), Stack->Centre()->Entries()[2].Severity, ENotificationSeverity::Info);
 	}
 
 	Events->OnBuildRefused.Broadcast(TEXT("Taxiway, 100 m"), TEXT("30,000"), TEXT("-1"));
-	if (TestEqual(TEXT("a refused build is a toast"), Stack->Centre()->Entries().Num(), 3))
+	if (TestEqual(TEXT("a refused build is a toast"), Stack->Centre()->Entries().Num(), 4))
 	{
-		const FString Said = Stack->Centre()->Entries()[2].Text.ToString();
+		const FString Said = Stack->Centre()->Entries()[3].Text.ToString();
 		TestTrue(TEXT("naming what, the price and the balance"),
 			Said.Contains(TEXT("Taxiway, 100 m")) && Said.Contains(TEXT("30,000")) && Said.Contains(TEXT("-1")));
-		TestEqual(TEXT("as a Warning"), Stack->Centre()->Entries()[2].Severity, ENotificationSeverity::Warning);
+		TestEqual(TEXT("as a Warning"), Stack->Centre()->Entries()[3].Severity, ENotificationSeverity::Warning);
 	}
 
 	Events->OnLandRefused.Broadcast(EArrivalRefusal::NoRunway);
-	TestEqual(TEXT("and so is a refused key 7"), Stack->Centre()->Entries().Num(), 4);
+	TestEqual(TEXT("and so is a refused key 7"), Stack->Centre()->Entries().Num(), 5);
 	return true;
 }
 

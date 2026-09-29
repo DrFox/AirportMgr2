@@ -13,6 +13,7 @@
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
 #include "OfferInboxWidget.h"
+#include "Model/AirlineDefinition.h"
 #include "OfferViewModels.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
@@ -196,6 +197,38 @@ bool FOfferInboxIdleTickResolvesNoStyleTest::RunTest(const FString& Parameters)
 		"times - PaintRows reads PanelStyle, resolved once at construction, not asked again"),
 		After - Before, 0);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOfferInboxDemandGateTest,
+	"AirportMgr.UI.OfferInbox.DemandStripResamplesOnlyOnChange",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOfferInboxDemandGateTest::RunTest(const FString& Parameters)
+{
+	// THE STRIP USED TO RESAMPLE 24 HOURS EVERY FRAME (ops bus survey 2026-09-29, per-frame fix 2): its inputs
+	// are the fee's factor and each airline's own factor, which change a few times a game day. Keyed on them
+	// - not on events alone, because a load changes them without announcing it.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	UOfferInboxWidget* Widget = CreateWidget<UOfferInboxWidget>(TestWorld.World, UOfferInboxWidget::StaticClass());
+	if (!TestNotNull(TEXT("an inbox"), Widget)) { return false; }
+	USimClock* Clock = NewObject<USimClock>();
+	UOfferGenerator* Generator = NewObject<UOfferGenerator>();
+	double Mood = 1.0;
+	Generator->AirlineFactorOf = [&Mood](const UAirlineDefinition&) { return Mood; };
+	UAirlineDefinition* Airline = NewObject<UAirlineDefinition>();
+	Airline->PeakOffersPerHour = 4.0;
+	FAirlineOffers Offering;
+	Offering.Airline = Airline;
+	const TArray<FAirlineOffers> Airlines = { Offering };
+
+	TestTrue(TEXT("the first refresh samples"), Widget->RefreshDemand(Airlines, *Clock, Generator));
+	TestFalse(TEXT("a quiet frame does not"), Widget->RefreshDemand(Airlines, *Clock, Generator));
+	TestFalse(TEXT("nor the next"), Widget->RefreshDemand(Airlines, *Clock, Generator));
+	Mood = 0.6;
+	TestTrue(TEXT("an airline's mood moving resamples"), Widget->RefreshDemand(Airlines, *Clock, Generator));
+	TestEqual(TEXT("two samplings in four refreshes"), Widget->DemandSampleCountForTest(), 2);
 	return true;
 }
 

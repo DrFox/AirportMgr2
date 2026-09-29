@@ -6,6 +6,9 @@
 
 #include "OfferInboxWidget.generated.h"
 
+struct FAirlineOffers;
+class UOfferGenerator;
+class USimClock;
 class ARoadNetworkActor;
 class UButton;
 class UUiButton;
@@ -130,6 +133,17 @@ public:
 	void PaintRowsForTest() { PaintRows(); }
 	/** The count beside the heading, as it reads now. */
 	FString BadgeForTest() const;
+
+	/**
+	 * Resample the demand strip IF ITS INPUTS MOVED - the fee's demand factor, each airline's own factor
+	 * (satisfaction), the airline count - and set the "now" slot. True when it resampled. The strip used to
+	 * resample 24 hours every frame (ops bus survey 2026-09-29); these inputs change a few times a game day.
+	 * A KEY, NOT EVENTS ALONE: a load changes them without announcing it, and the key costs a few compares.
+	 * ENFORCED BY: AirportMgr.UI.OfferInbox.DemandStripResamplesOnlyOnChange
+	 */
+	bool RefreshDemand(TArrayView<const FAirlineOffers> Airlines, const USimClock& Clock, const UOfferGenerator* Generator);
+
+	int32 DemandSampleCountForTest() const { return DemandSampleCount; }
 	/** Row N's Accept button, or null - see AirportMgr.UI.OfferInbox's Primary-kind assertion. */
 	const UUiButton* AcceptButtonForTest(int32 Row) const;
 
@@ -184,6 +198,13 @@ private:
 	int32 DemandNowSlot = INDEX_NONE;
 	/** Which slots are night, for their colour. */
 	TArray<bool> DemandNight;
+
+	/** RefreshDemand's key - see there. */
+	double DemandKeyFee = -1.0;
+	TArray<double, TInlineAllocator<8>> DemandKeyFactors;
+	/** KEYED ON INPUTS THAT MOVE IN PLAY. Airline identity and the dawn/dusk split are not in it: both are
+	 *  fixed at Attach, and the widget is rebuilt per session (2026-09-29). */
+	int32 DemandSampleCount = 0;
 
 	void PaintDemand(const UUIStyle& Style);
 

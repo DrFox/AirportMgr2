@@ -193,21 +193,41 @@ void UOfferInboxWidget::Refresh(ARoadNetworkActor* Target)
 
 	Inbox->Refresh(*Runtime->GetFlightBoard(), *Traffic, *Target->Network, *Runtime->GetClock(), Runtime->GetAirlines());
 
-	// THE STRIP'S SAMPLES, from the runtime's own airline list and the live fee - the same
-	// inputs UOfferGenerator::TickMinute reads, through the same TotalRateAt.
-	const USimClock& Clock = *Runtime->GetClock();
-	const UOfferGenerator* Generator = Runtime->GetOfferGenerator();
-	const double Factor = Generator != nullptr ? Generator->DemandFactor() : 1.0;
-	// AND EACH AIRLINE'S SATISFACTION, through the generator's own reader - see UOfferGenerator::AirlineFactor.
-	DemandSamples = UOfferInboxViewModel::SampleDemand(Runtime->GetAirlineOffers(), Clock, Factor, 24,
+	RefreshDemand(Runtime->GetAirlineOffers(), *Runtime->GetClock(), Runtime->GetOfferGenerator());
+	PaintRows();
+}
+
+bool UOfferInboxWidget::RefreshDemand(TArrayView<const FAirlineOffers> Airlines, const USimClock& Clock,
+	const UOfferGenerator* Generator)
+{
+	DemandNowSlot = FMath::Clamp(FMath::FloorToInt32(Clock.TimeOfDay() / 3600.0), 0, 23);
+
+	// THE KEY: every input the samples read that can move in play.
+	const double Fee = Generator != nullptr ? Generator->DemandFactor() : 1.0;
+	TArray<double, TInlineAllocator<8>> Factors;
+	for (const FAirlineOffers& Each : Airlines)
+	{
+		Factors.Add(Each.Airline != nullptr && Generator != nullptr ? Generator->AirlineFactor(*Each.Airline) : 1.0);
+	}
+	if (DemandSamples.Num() == 24 && Fee == DemandKeyFee && DemandKeyFactors == Factors)
+	{
+		return false;
+	}
+	DemandKeyFee = Fee;
+	DemandKeyFactors = Factors;
+	++DemandSampleCount;
+
+	// THE STRIP'S SAMPLES, from the runtime's own airline list and the live fee - the same inputs
+	// UOfferGenerator::TickMinute reads, through the same TotalRateAt - AND EACH AIRLINE'S SATISFACTION,
+	// through the generator's own reader (UOfferGenerator::AirlineFactor).
+	DemandSamples = UOfferInboxViewModel::SampleDemand(Airlines, Clock, Fee, 24,
 		[Generator](const UAirlineDefinition& Airline) { return Generator != nullptr ? Generator->AirlineFactor(Airline) : 1.0; });
 	DemandNight.SetNum(24);
 	for (int32 Hour = 0; Hour < 24; ++Hour)
 	{
 		DemandNight[Hour] = !Clock.IsDaylight((Hour + 0.5) * 3600.0);
 	}
-	DemandNowSlot = FMath::Clamp(FMath::FloorToInt32(Clock.TimeOfDay() / 3600.0), 0, 23);
-	PaintRows();
+	return true;
 }
 
 void UOfferInboxWidget::PaintRows()

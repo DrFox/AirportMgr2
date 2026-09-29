@@ -280,6 +280,9 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferExpiredEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferDeclinedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FFlightAirborneEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	// OVERDRAWN, as soon as money moves - no longer waiting for the offer minute (stage 3). Every post, not
+	// only a sign change: the pass is coalesced, and only Overdrawn reads the balance.
+	Bus.Subscribe<FMoneyPostedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FMoneyPostedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 
 	// PRESENTATION: the new UOpsEvents faces.
 	Bus.Subscribe<FAlertRaisedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
@@ -292,6 +295,8 @@ void UOpsRuntime::WireBus()
 		[this](const FBuildRefusedEvent& E) { Events->OnBuildRefused.Broadcast(E.What, E.Price, E.Balance); });
 	Bus.Subscribe<FLandRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FLandRefusedEvent& E) { Events->OnLandRefused.Broadcast(E.Why); });
+	Bus.Subscribe<FBalanceSignChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FBalanceSignChangedEvent& E) { Events->OnBalanceSignChanged.Broadcast(E.bOverdrawn); });
 
 	Bus.EndWiring();
 }
@@ -439,6 +444,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	FlightBoard->Fuel = JobBoard;
 	FlightBoard->Bus = &Bus;
 	Alerts->Bus = &Bus;
+	Ledger->Bus = &Bus;
 	// A NEW AIRPORT, A NEW SET: the old actor's alerts name its flights and agents.
 	Alerts->Reset();
 	Airlines->Bus = &Bus;
@@ -577,6 +583,11 @@ void UOpsRuntime::Detach()
 		JobBoardDeadlineHandle = INDEX_NONE;
 	}
 	SeenNetwork.Reset();
+	// THE BUS POINTERS GO WITH THE ATTACH: the bus is this runtime's, and a subobject left pointing at it
+	// after a detach is a publish into whatever comes next (stage 3 review).
+	FlightBoard->Bus = nullptr;
+	Alerts->Bus = nullptr;
+	Ledger->Bus = nullptr;
 	// THE QUEUE IS THE OLD ACTOR'S. A new level's traffic numbers its agents from 1 again, so a
 	// stale Parked for agent k would land on the new level's agent k. Dropped, and the price is
 	// that a re-Attach to the SAME actor loses at most one step of its events.
