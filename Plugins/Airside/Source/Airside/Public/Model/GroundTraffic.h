@@ -335,6 +335,23 @@ public:
 	void OnGraphRebuilt(const URoadNetwork& Network);
 
 	/**
+	 * Puts a STRANDED agent back on the pavement - the player's Unstick (spec
+	 * 2026-09-29-unstick-agent), never the simulation's: a stranding stays final for everything
+	 * automatic (see ReResolvePlan's Strand).
+	 *
+	 * Hops the agent onto the nearest point, within RescueRejoinRadius (15 m), of a live edge
+	 * running the way it faces with a route to Goal - its OWN goal when Goal is unset - and taxis
+	 * on from there with its speed and heading kept (FRoadAgent::RejoinTaxi). The goal moves
+	 * through ReleaseGoal/TakeGoal like every other goal change, so the old goal's claim lets go.
+	 * Broadcasts Stranded -> Taxiing.
+	 *
+	 * FALSE AND NOTHING CHANGED for an unknown id, an agent that is not Stranded (a moving one is
+	 * ReplanAt's), a Goal that is no live node, or no such pavement within the radius.
+	 * ENFORCED BY: Airside.Model.Traffic.RescueStranded.Rejoins, .Refuses, .NewGoal
+	 */
+	bool RescueStranded(int32 AgentId, const URoadNetwork& Network, FGuidelineNodeId Goal);
+
+	/**
 	 * Removes an agent immediately, announcing <phase> -> Gone. For a service vehicle that
 	 * has returned to its depot: it does not fly away, so nothing else would ever remove it.
 	 * False for an unknown id.
