@@ -12,6 +12,7 @@
 #include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
+#include "Solve/IcaoCode.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -583,6 +584,70 @@ bool FRoadCrossingWarnsNothingTest::RunTest(const FString& Parameters)
 		}
 	}
 	TestEqual(TEXT("no turn-radius warning at a plain crossing"), Radius, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCrossingPiecesKeepTheLetterCapTest,
+	"Airside.Build.CrossingPiecesKeepTheLetterCap",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCrossingPiecesKeepTheLetterCapTest::RunTest(const FString& Parameters)
+{
+	// STAGES 4 AND 6 TOGETHER (integration, 2026-09-29). Stage 6 caps every taxiway edge and
+	// turn at its effective letter's widest span (LetterCappedWingspan, at construction); stage
+	// 4 then SPLITS the taxiway turns at a road crossing (DeriveCrossingConflicts) and re-masks
+	// the pieces aircraft-only. The pieces inherit the cap only because SplitGuidelineEdge
+	// copies every field of the original - a split that rebuilt its halves from the profile
+	// would hand an oversized aircraft the crossing. Restricted by hand and built directly, as
+	// TaxiwayLetterLimitsWingspan does, because the restriction pass would lift it here.
+	auto Build = [](URoadNetwork& Net)
+	{
+		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
+		FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+	};
+	auto WidestCrossingPiece = [](const URoadNetwork& Net, int32& OutPieces)
+	{
+		const TArray<FGuidelineNodeId> Conflicts = CrossingConflictNodes(Net);
+		double Widest = 0.0;
+		OutPieces = 0;
+		for (const FGuidelineNodeId Conflict : Conflicts)
+		{
+			for (const FGuidelineEdgeId Id : Net.GetGuidelineNode(Conflict)->Incident)
+			{
+				const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
+				if (Edge && CrossingIsAircraftOnly(*Edge))
+				{
+					++OutPieces;
+					Widest = FMath::Max(Widest, Edge->MaxWingspan <= 0.0 ? TNumericLimits<double>::Max() : Edge->MaxWingspan);
+				}
+			}
+		}
+		return Widest;
+	};
+	const double CapA = IcaoCode::MaxWingspanForLetter(EIcaoCode::A);
+
+	// THE CONTROL: unrestricted, the crossing's aircraft pieces admit more than Code A. Without
+	// it the assertion below could pass on a taxiway whose pavement is A already.
+	URoadNetwork* Free = NewObject<URoadNetwork>(GetTransientPackage());
+	FRoadCrossingFixture::Lay(*Free);
+	Build(*Free);
+	int32 FreePieces = 0;
+	const double FreeWidest = WidestCrossingPiece(*Free, FreePieces);
+	if (!TestTrue(TEXT("control: the crossing split its taxiway turns"), FreePieces > 0)) { return false; }
+	TestTrue(*FString::Printf(TEXT("control: unrestricted pieces admit more than Code A (%.0f > %.0f)"), FreeWidest, CapA),
+		FreeWidest > CapA);
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadCrossingFixture Fixture = FRoadCrossingFixture::Lay(*Net);
+	Net->WriteSegmentRestriction(Fixture.West, static_cast<uint8>(EIcaoCode::A));
+	Net->WriteSegmentRestriction(Fixture.East, static_cast<uint8>(EIcaoCode::A));
+	Build(*Net);
+	int32 Pieces = 0;
+	const double Widest = WidestCrossingPiece(*Net, Pieces);
+	if (!TestTrue(TEXT("the restricted crossing split its taxiway turns too"), Pieces > 0)) { return false; }
+	TestTrue(*FString::Printf(TEXT("every aircraft piece at a conflict node keeps the letter cap (%.0f <= %.0f)"), Widest, CapA),
+		Widest <= CapA);
 	return true;
 }
 
