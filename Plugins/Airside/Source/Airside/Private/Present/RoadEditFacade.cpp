@@ -829,6 +829,10 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& InF
 	{
 		Facts.InUse = Was.InUse;
 	}
+	if (Facts.Use == ERunwayUse::Unset)
+	{
+		Facts.Use = Was.Use;
+	}
 	if (Was == Facts)
 	{
 		// Already so. True, because the runway IS what was asked for - but no edit, since
@@ -855,6 +859,13 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& InF
 			? RunwayDesignator::ToPairText(B->Position - A->Position) : FString(TEXT("?"));
 		UE_LOG(LogRoadMesh, Log, TEXT("Runway %s in use: %s (was %s)"), *Pair,
 			*RunwayDesignator::ToText(Facts.InUse), *RunwayDesignator::ToText(Was.InUse));
+	}
+	if (RunwayUse::Resolve(Facts.Use) != RunwayUse::Resolve(Was.Use))
+	{
+		// The line to grep when "the second runway is still empty": the mode reached the model.
+		// Like the direction, planned flights keep their plan; the next one reads this.
+		UE_LOG(LogRoadMesh, Log, TEXT("Runway at segment %d takes: %s (was %s)"), SegmentIndex,
+			RunwayUse::Name(Facts.Use), RunwayUse::Name(Was.Use));
 	}
 	return true;
 }

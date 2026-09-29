@@ -174,6 +174,31 @@ namespace
 			};
 			Out.Add(MoveTemp(Flip));
 		}
+		// WHAT TRAFFIC THE SELECTED RUNWAY TAKES (2026-09-29, samples/2runways.png): mixed, arrivals
+		// only, departures only - the flip's neighbour on the runway card, and keyless for its
+		// reason. Captioned with the CURRENT mode, not the next: three states read as a setting,
+		// and "Arrivals only" on the button says what the strip is doing now.
+		{
+			FBuildAction Mode = Make(TEXT("selection.runway_use"), EActionSection::Selection,
+				LOCTEXT("RunwayUseMode", "Runway takes"), EKeys::Invalid, false,
+				[](FBuildActionContext& Ctx) { Ctx.Controller.CycleSelectedRunwayUse(); }, Never,
+				[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanFlipSelectedRunway(); });
+			Mode.DynamicLabel = [](const FBuildActionContext& Ctx)
+			{
+				FRunwayCardFacts Card;
+				if (!Ctx.Controller.SelectedRunwayFacts(Card))
+				{
+					return LOCTEXT("RunwayUseMode", "Runway takes");
+				}
+				switch (Card.Use)
+				{
+				case ERunwayUse::ArrivalsOnly:   return LOCTEXT("RunwayUseArrivals", "Arrivals only");
+				case ERunwayUse::DeparturesOnly: return LOCTEXT("RunwayUseDepartures", "Departures only");
+				default:                         return LOCTEXT("RunwayUseMixed", "Mixed ops");
+				}
+			};
+			Out.Add(MoveTemp(Mode));
+		}
 		// UNSTICK (spec 2026-09-29-unstick-agent): one verb, three sub-choices in the inspector's popup
 		// (UUiMenuButton) - so ONE row here, whose Execute asks the inspector to open that popup; the
 		// three choices are UAgentRescue's, not three rows, or the bar would grow three buttons for a

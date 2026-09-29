@@ -105,6 +105,8 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> FollowButton;
 	/** The runway card's one verb, "Use 27" - selection.runway_in_use (2026-09-28). */
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> RunwayButton;
+	/** The runway's mode - selection.runway_use, beside the flip. */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> RunwayUseButton;
 	/** An agent card's escape hatch - selection.unstick, a popup of UAgentRescue's three actions
 	 *  (spec 2026-09-29-unstick-agent). */
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiMenuButton> UnstickMenu;
@@ -207,6 +209,8 @@ private:
 	 *  agree check names, not positions (CLAUDE.md); a third positional row would have made a
 	 *  reorder of the Selection section silently wire Depart's slot to the runway flip. */
 	int32 RunwayActionIndex = INDEX_NONE;
+	/** By id, RunwayActionIndex's rule. */
+	int32 RunwayUseActionIndex = INDEX_NONE;
 	/** By id, RunwayActionIndex's rule. Its row only opens the popup - see ARoadBuildController::RequestUnstickMenu. */
 	int32 UnstickActionIndex = INDEX_NONE;
 
@@ -256,5 +260,6 @@ private:
 	UFUNCTION() void HandleDepart();
 	UFUNCTION() void HandleFollow();
 	UFUNCTION() void HandleRunway();
+	UFUNCTION() void HandleRunwayUse();
 	UFUNCTION() void HandleUnstickChosen(int32 Index);
 };

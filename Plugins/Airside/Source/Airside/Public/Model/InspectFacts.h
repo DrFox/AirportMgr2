@@ -146,6 +146,8 @@ struct FRunwayCardFacts
 	int32 Other = 0;
 	EPavement Surface = EPavement::Tarmac;
 	ERunwayApproach Approach = ERunwayApproach::Visual;
+	/** What traffic it takes, RESOLVED (RunwayUse::Resolve: never Unset) - the planners' reading. */
+	ERunwayUse Use = ERunwayUse::Mixed;
 	/** The whole strip, uu. */
 	double Length = 0.0;
 };

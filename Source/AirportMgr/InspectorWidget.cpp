@@ -39,6 +39,7 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
 	if (RunwayButton != nullptr) { RunwayButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunway); }
+	if (RunwayUseButton != nullptr) { RunwayUseButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunwayUse); }
 	if (UnstickMenu != nullptr)
 	{
 		// WEAK, not this: a lambda held by a child widget that captured a raw pointer to its owner is
@@ -69,6 +70,12 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 			// By id - see RunwayActionIndex. Not counted in SelectionSeen, so it cannot shift
 			// the positional pair whichever side of them it is registered.
 			RunwayActionIndex = Index;
+			continue;
+		}
+		if (Actions[Index].Id == FName(TEXT("selection.runway_use")))
+		{
+			// By id, the runway row's reason.
+			RunwayUseActionIndex = Index;
 			continue;
 		}
 		if (Actions[Index].Id == FName(TEXT("selection.unstick")))
@@ -106,6 +113,7 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 
 	UHorizontalBox* Row = nullptr;
 	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr || RunwayButton == nullptr
+		|| RunwayUseButton == nullptr
 		|| UnstickMenu == nullptr))
 	{
 		Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("InspectorVerbs"));
@@ -138,6 +146,11 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex);
 	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex);
 	Button(RunwayButton, TEXT("RunwayButton"), RunwayActionIndex);
+	Button(RunwayUseButton, TEXT("RunwayUseButton"), RunwayUseActionIndex);
+	if (!Actions.IsValidIndex(RunwayUseActionIndex))
+	{
+		UE_LOG(LogInspector, Warning, TEXT("No selection.runway_use row in BuildActions(): the runway card has no mode button"));
+	}
 	if (!Actions.IsValidIndex(RunwayActionIndex))
 	{
 		UE_LOG(LogInspector, Warning, TEXT("No selection.runway_in_use row in BuildActions(): the runway card has no button"));
@@ -254,6 +267,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	bool bAircraft = false;
 	bool bRunway = false;
 	FText RunwayCaption;
+	FText RunwayUseCaption;
 	if (Selection.Kind == ESelectionKind::Aircraft)
 	{
 		FAgentFacts F;
@@ -397,12 +411,16 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		const FString Other = FString::Printf(TEXT("%02d"), R.Other);
 		Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorRunwayTitle", "Runway {0}").ToString(), { R.Pair });
 		Facts = FString::Format(
-			*NSLOCTEXT("AirportMgr", "InspectorRunwayFacts", "In use: {0}\n{1}, {2} approach\n{3} m long").ToString(),
+			*NSLOCTEXT("AirportMgr", "InspectorRunwayFacts", "In use: {0}\nTakes: {4}\n{1}, {2} approach\n{3} m long").ToString(),
 			{ InUse, FString(Pavement::Name(R.Surface)), FString(RunwayApproachName(R.Approach)),
-				FString::Printf(TEXT("%.0f"), R.Length / 100.0) });
+				FString::Printf(TEXT("%.0f"), R.Length / 100.0), FString(RunwayUse::Name(R.Use)) });
 		Status = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorRunwayStatus",
 			"Landing and taking off {0}. A change reaches the next flight planned.").ToString(), { InUse });
 		RunwayCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorRunwayUse", "Use {0}"), FText::FromString(Other));
+		// The CURRENT mode, selection.runway_use's own caption rule - see its row in BuildActions.
+		RunwayUseCaption = R.Use == ERunwayUse::ArrivalsOnly ? NSLOCTEXT("AirportMgr", "InspectorRunwayArrivals", "Arrivals only")
+			: R.Use == ERunwayUse::DeparturesOnly ? NSLOCTEXT("AirportMgr", "InspectorRunwayDepartures", "Departures only")
+			: NSLOCTEXT("AirportMgr", "InspectorRunwayMixed", "Mixed ops");
 		bDepartEnabled = false;
 	}
 	else if (Selection.Kind == ESelectionKind::Taxiway)
@@ -597,6 +615,15 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			RunwayButton->SetLabel(RunwayCaption);
 		}
 	}
+	if (RunwayUseButton != nullptr)
+	{
+		RunwayUseButton->SetVisibility(bRunway ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		const UTextBlock* Caption = RunwayUseButton->GetLabel();
+		if (bRunway && (Caption == nullptr || !Caption->GetText().EqualTo(RunwayUseCaption)))
+		{
+			RunwayUseButton->SetLabel(RunwayUseCaption);
+		}
+	}
 	SetShown(true);
 }
 
@@ -664,6 +691,7 @@ void UInspectorWidget::HandleUnstickChosen(int32 Index)
 void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
 void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 void UInspectorWidget::HandleRunway() { RunAction(RunwayActionIndex); }
+void UInspectorWidget::HandleRunwayUse() { RunAction(RunwayUseActionIndex); }
 
 bool UInspectorWidget::IsShownForTest() const { return IsShown(); }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }

@@ -51,6 +51,9 @@ enum class EDepartureRefusal : uint8
 	 * their meaning. See URoadNetwork::AreGuidelinesBehindRoad.
 	 */
 	GraphBeingEdited,
+	/** Runways exist, but every one is set to arrivals only (ERunwayUse). The fix is the runway
+	 *  card's setting. Appended LAST, GraphBeingEdited's reason. */
+	NoDepartureRunway,
 };
 
 /**
@@ -125,15 +128,17 @@ namespace DeparturePlanner
 		const FVector2D& OnRunway, const FAirframe& Airframe, ETraversalClass Class);
 
 	/**
-	 * Plan a departure from Start onto WHICHEVER runway gives the shortest admitted taxi.
-	 * Each runway is tried once, from its end in use - never its other end, however much
-	 * shorter that taxi would be (samples/deadlock.png). When none is valid the first
-	 * refusal is returned, so the log can say "grass strip, needs tarmac" rather than
-	 * "no runway". The inspector's Depart button; M3's sequencer replaces the choice, not
-	 * the shape.
+	 * Plan a departure from Start onto the best runway that takes departures (ERunwayUse): a
+	 * FREE one before a held one (Occupancy, when given), one SET to departures before a mixed
+	 * one, then the shortest admitted taxi (2026-09-29 - shortest alone sent every departure to
+	 * the runway nearest the apron, samples/2runways.png). Each runway is tried once, from its
+	 * end in use - never its other end, however much shorter that taxi would be
+	 * (samples/deadlock.png). When none is valid the first refusal is returned, so the log can
+	 * say "grass strip, needs tarmac" rather than "no runway". The inspector's Depart button;
+	 * M3's sequencer replaces the choice, not the shape.
 	 */
 	AIRSIDE_API FDeparturePlan PlanAny(const URoadNetwork& Network, FGuidelineNodeId Start,
-		const FAirframe& Airframe, ETraversalClass Class);
+		const FAirframe& Airframe, ETraversalClass Class, const struct FTrafficOccupancy* Occupancy = nullptr);
 
 	/** One line saying what Plan decided or refused, for a log. */
 	AIRSIDE_API FString Describe(const FDeparturePlan& Plan);

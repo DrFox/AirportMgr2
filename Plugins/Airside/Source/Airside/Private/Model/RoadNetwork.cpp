@@ -613,11 +613,17 @@ bool URoadNetwork::SetRunwayFacts(FRoadSegmentId Seed, const FRunwayFacts& Facts
 		if (FRoadSegment* Segment = GetSegmentMutable(Member))
 		{
 			// InUse 0 keeps the member's own - see the header for why 0 cannot mean "clear".
+			// Use Unset keeps it too, for the same reason (ERunwayUse).
 			const int32 Kept = Segment->Runway.InUse;
+			const ERunwayUse KeptUse = Segment->Runway.Use;
 			Segment->Runway = Facts;
 			if (Facts.InUse == 0)
 			{
 				Segment->Runway.InUse = Kept;
+			}
+			if (Facts.Use == ERunwayUse::Unset)
+			{
+				Segment->Runway.Use = KeptUse;
 			}
 		}
 	}

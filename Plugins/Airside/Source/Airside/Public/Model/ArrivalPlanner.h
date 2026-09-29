@@ -95,6 +95,12 @@ enum class EArrivalRefusal : uint8
 	 * building). Appended LAST, NoStandClearOfStrip's reason.
 	 */
 	TaxiwayTooNarrow,
+
+	/**
+	 * Runways exist, but every one is set to departures only (ERunwayUse). The player's fix is
+	 * the runway card's setting, not building. Appended LAST, NoStandClearOfStrip's reason.
+	 */
+	NoArrivalRunway,
 };
 
 /**
@@ -234,10 +240,13 @@ namespace ArrivalPlanner
 	 * Plans an arrival at the runway nearest Near, for an airframe with Airframe's
 	 * performance and wingspan.
 	 *
-	 * NEAREST RUNWAY AND SHORTEST TAXI FROM THE EARLIEST USABLE EXIT are the user's own
-	 * rules, carried over unchanged from DispatchArrival: there is no wind model to choose
-	 * a runway by, and an aircraft takes the earliest turn-off it can rather than rolling to
-	 * the end in search of a marginally shorter taxi.
+	 * EVERY RUNWAY THAT TAKES ARRIVALS (ERunwayUse) is planned, and the best kept: a free one
+	 * before a held one, one SET to arrivals before a mixed one, then the shorter taxi in
+	 * (2026-09-29 - it used to be the runway nearest Near alone, and a second runway sat empty).
+	 * Near now only orders the runways, which decides whose refusal is reported when none will
+	 * do. SHORTEST TAXI FROM THE EARLIEST USABLE EXIT is still the rule on each runway: an
+	 * aircraft takes the earliest turn-off it can rather than rolling to the end in search of a
+	 * marginally shorter taxi.
 	 *
 	 * Occupancy, when given, refuses RunwayOccupied while any segment of the chain is held -
 	 * unless RunwayBusy is Queue, which skips that one step and carries on (see ERunwayBusy).
@@ -251,10 +260,10 @@ namespace ArrivalPlanner
 		ERunwayBusy RunwayBusy = ERunwayBusy::Refuse, int32 ExcludingHolder = 0);
 
 	/**
-	 * Is the runway nearest Near held by anyone - the one test Plan's RunwayOccupied step makes,
-	 * and the one UArrivalSequencer asks before clearing a queued flight. False with no runway or
-	 * no occupancy to ask. ONE FUNCTION, so the queue and the dispatch cannot disagree about
-	 * whether the strip is free.
+	 * Is EVERY runway that takes arrivals held - when Plan, refusing on a busy strip, would find
+	 * none free; and the one test UArrivalSequencer asks before clearing a queued flight. False
+	 * with no runway or no occupancy to ask. ONE FUNCTION, so the queue and the dispatch cannot
+	 * disagree about whether a strip is free.
 	 * ENFORCED BY: Airside.Model.ArrivalQueue.IsRunwayBusyAgreesWithPlan
 	 */
 	AIRSIDE_API bool IsRunwayBusy(const URoadNetwork& Network, const FVector2D& Near,
