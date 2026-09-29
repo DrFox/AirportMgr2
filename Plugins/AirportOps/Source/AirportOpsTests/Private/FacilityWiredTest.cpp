@@ -355,4 +355,58 @@ bool FFacilityDragRefusesTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityMemoInvalidatesTest, "AirportOps.Present.Facility.NewNetworkResolvesTheCeiling",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityMemoInvalidatesTest::RunTest(const FString&)
+{
+	// THE MEMO'S ONE INVALIDATION: ClearNetwork replaces the network object, and the first depot on the new
+	// one takes the SAME handle as the old one did. A memo keyed on the handle alone would keep quoting the
+	// wide plot's second shed slot for a narrow plot that holds one.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	UOpsRuntime* Runtime = nullptr;
+	const FEntityInstanceId Wide = FacilityWiredDepot(TestWorld, Runtime);
+	if (!TestTrue(TEXT("setup: the wide depot is placed"), Wide.IsSet())) { return false; }
+	const int32 WideSheds = Runtime->QuoteFacility(Wide).Modules[0].Reserved;
+	if (!TestTrue(TEXT("setup: the wide plot reserves a second shed"), WideSheds >= 2)) { return false; }
+	const int32 Solves = Runtime->ReservationSolvesForTest();
+
+	Actor->ClearNetwork();
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	const TArray<FVector2D> Narrow = { FVector2D(0.0, 0.0), FVector2D(2000.0, 0.0), FVector2D(2000.0, 2400.0), FVector2D(0.0, 2400.0) };
+	const int32 Index = Actor->PlaceEntityInPlot(Narrow, Narrow[0], Narrow[1],
+		{ EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump }, EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("setup: the narrow depot is placed"), Index != INDEX_NONE)) { return false; }
+	const FEntityInstanceId NarrowId = Actor->Network->EntityIdAt(Index);
+	if (!TestTrue(TEXT("setup: it reuses the old handle - the case a handle-only memo gets wrong"), NarrowId == Wide)) { return false; }
+
+	const FFacilityQuote Q = Runtime->QuoteFacility(NarrowId);
+	TestTrue(TEXT("the narrow plot's ceiling is solved afresh"), Runtime->ReservationSolvesForTest() > Solves);
+	TestTrue(TEXT("and it holds fewer sheds than the wide one"), Q.Modules.Num() == 1 && Q.Modules[0].Reserved < WideSheds);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityDetachClearsHooksTest, "AirportOps.Present.Facility.DetachClearsTheHooks",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityDetachClearsHooksTest::RunTest(const FString&)
+{
+	// THE HOOKS GO WITH THE ACTOR: after Attach(nullptr) (Detach, then nothing), the shop asked directly about
+	// the old actor's depot must refuse the module - a hook left set would build into a field nobody drives.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	const FEntityInstanceId Depot = FacilityWiredDepot(TestWorld, Runtime);
+	if (!TestTrue(TEXT("setup: the depot is placed"), Depot.IsSet())) { return false; }
+	UFacilityPurchases* Shop = Runtime->GetFacilityPurchases();
+
+	Runtime->Attach(nullptr);
+	TestFalse(TEXT("the ceiling hook is cleared"), static_cast<bool>(Shop->ReservedSlotsOf));
+	TestFalse(TEXT("the module hook is cleared"), static_cast<bool>(Shop->ApplyModulePurchase));
+	const FFacilityQuote Q = Shop->Quote(*TestWorld.Actor->Network, Depot);
+	TestTrue(TEXT("the shed row refuses NotAFacility"),
+		Q.Modules.Num() == 1 && Q.Modules[0].Refusal == EPurchaseRefusal::NotAFacility);
+	return true;
+}
+
 #endif

@@ -153,6 +153,18 @@ bool FDepotKitSpecsCoverEveryModuleTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("one spec per real module, sized to the sentinel"),
 		Specs.Num(), static_cast<int32>(EDepotModule::Count));
 
+	// AND IN ENUM ORDER: the presenter and the purchase service's ceiling hook index Specs by
+	// static_cast<int32>(Module), so spec i must be module i's footprint - a reordered or
+	// filtered walk would light a tank where a shed was bought.
+	for (int32 Raw = 0; Raw < Specs.Num(); ++Raw)
+	{
+		const PlotYard::FFootprint Expected = DepotFootprint(static_cast<EDepotModule>(Raw), nullptr);
+		TestTrue(FString::Printf(TEXT("spec %d is module %d's footprint - index IS the module"), Raw, Raw),
+			Specs[Raw].Footprint.LengthUu == Expected.LengthUu && Specs[Raw].Footprint.WidthUu == Expected.WidthUu);
+	}
+	TestEqual(TEXT("and the Shed row is the one that runs bays (RunCap 3) - footprints alone could tie"),
+		Specs[static_cast<int32>(EDepotModule::Shed)].RunCap, 3);
+
 	return true;
 }
 

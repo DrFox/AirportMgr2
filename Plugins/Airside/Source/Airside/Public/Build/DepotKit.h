@@ -39,6 +39,7 @@ AIRSIDE_API PlotYard::FFootprint DepotFootprint(EDepotModule Module,
  * to get back. Built by WALKING the enum rather than from a list written here: a list would
  * answer only for the modules somebody remembered to add, which is the failure
  * AircraftLookTest exists for.
+ * ENFORCED BY: Airside.Build.DepotKitSpecsCoverEveryModule (count and per-index footprint)
  */
 AIRSIDE_API TArray<PlotYard::FKitSpec> DepotKitSpecs(const UAirsideContent* Content);
 
