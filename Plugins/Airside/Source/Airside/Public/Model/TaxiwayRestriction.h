@@ -50,10 +50,11 @@ namespace TaxiwayRestriction
 	 * Writes RestrictedLetter on every live segment (Unrestricted on anything without a strip) -
 	 * THE ONE WRITER of that field. Runs in the Topology rebuild after the solve and BEFORE the
 	 * guideline builder, which reads it. Logs a `Restriction:` line only when a segment's letter
-	 * CHANGES (compared with the stored value), not every rebuild. Returns how many are restricted.
+	 * CHANGES (compared with the stored value), not every rebuild - and none with bLog false, the
+	 * Upgrade hover's ghost network, which is asked what WOULD happen. Returns how many are restricted.
 	 * ENFORCED BY: Airside.Model.TaxiwayRestriction
 	 */
-	AIRSIDE_API int32 Apply(URoadNetwork& Network);
+	AIRSIDE_API int32 Apply(URoadNetwork& Network, bool bLog = true);
 
 	/** "a service road", "a fuel depot", "a taxiway", "stand 3" - the obstruction as the log,
 	 *  the arrival refusal and the inspector all say it. */

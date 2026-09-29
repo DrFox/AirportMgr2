@@ -29,7 +29,14 @@ enum class ESelectionKind : uint8
 	 * segment, not per chain: a restriction is per segment (stage 6 plan ruling 4), so the card
 	 * the player opens is the piece whose letter they are reading.
 	 */
-	Taxiway
+	Taxiway,
+
+	/**
+	 * How many kinds there are - NOT a kind; nothing selects it. The inspector's static_assert
+	 * counts its cards against this, so a kind appended above without a card fails to COMPILE
+	 * (review fix 3). Stays last: append new kinds above it.
+	 */
+	Count
 };
 
 /**

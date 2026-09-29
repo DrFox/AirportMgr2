@@ -50,9 +50,9 @@ namespace TaxiwayStrip
 	struct FIntrusion
 	{
 		FRoadSegmentId Taxiway;
-		/** The taxiway's letter - what set the strip. */
+		/** The letter the taxiway OPERATES at - what set the strip (StripLetterOf). */
 		EIcaoCode Letter = EIcaoCode::A;
-		/** The strip's width, uu - IcaoCode::TaxiwayStripForWidth of the pavement. */
+		/** The strip's width, uu - StripWidthOf, at the effective letter. */
 		double Required = 0.0;
 		/** How far inside the strip's outer edge the footprint reaches, uu. */
 		double Depth = 0.0;
@@ -80,8 +80,26 @@ namespace TaxiwayStrip
 	/** A taxiway with a strip: aircraft only, and not a runway (runways have their own rules). */
 	AIRSIDE_API bool HasStrip(const URoadNetwork& Network, FRoadSegmentId Id);
 
-	/** The strip each side of this segment, uu; 0 for anything HasStrip refuses. */
+	/**
+	 * THE strip each side of this segment, uu - at its EFFECTIVE letter (the pavement's, lowered
+	 * by a restriction: TaxiwayRestriction::EffectiveLetterOf); 0 for anything HasStrip refuses.
+	 *
+	 * ORCHESTRATOR RULING, 2026-09-29 (owner asleep): the strip at the effective letter governs
+	 * EVERYTHING - stand closure, placement refusal, the inspector card, the Upgrade outline. The
+	 * spec says a restricted taxiway "operates at the largest letter whose strip is clear", and
+	 * no aircraft wider than that letter may use it, so no wing sweeps the ground between that
+	 * letter's strip and the pavement's; a stand there is OPEN. Two answers to "what is this
+	 * taxiway's strip" (the pavement's for closure, the restricted one for routing) was the review
+	 * finding this replaced. The ONE exception is TaxiwayRestriction::RestrictionOf, which must
+	 * try candidate letters over the pavement (IcaoCode::TaxiwayStripFor(L, width)) to FIND the
+	 * effective one - it reads the stored letter of no segment, so there is no circle.
+	 * ENFORCED BY: Airside.Tool.UpgradeMode (card, closure, placement and outline state one figure)
+	 */
 	AIRSIDE_API double StripWidthOf(const URoadNetwork& Network, FRoadSegmentId Id);
+
+	/** The letter StripWidthOf is at - the one that set the strip, for a refusal's words. Unset
+	 *  for anything HasStrip refuses. */
+	AIRSIDE_API TOptional<EIcaoCode> StripLetterOf(const URoadNetwork& Network, FRoadSegmentId Id);
 
 	/**
 	 * The deepest strip intrusion of a closed footprint polygon (any winding), or unset when it

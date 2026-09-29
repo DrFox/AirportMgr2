@@ -500,4 +500,51 @@ bool FInspectorTaxiwayCardTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace
+{
+	/** LogInspector at Warning - FLogLineSpy matches Log only. Unbuffered, issue #216's reason. */
+	struct FInspectorWarningSpy : public FOutputDevice
+	{
+		int32 Count = 0;
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& InCategory) override
+		{
+			if (InCategory == FName(TEXT("LogInspector")) && Verbosity == ELogVerbosity::Warning) { ++Count; }
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorUnknownKindWarnsOnceTest,
+	"AirportMgr.Inspector.UnknownKindWarnsOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorUnknownKindWarnsOnceTest::RunTest(const FString& Parameters)
+{
+	// A KIND WITH NO CARD hides the panel and says so ONCE per selection, not once per tick -
+	// Refresh runs every NativeTick, and a warning a frame is a log nobody can read.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	FSelection Sel;
+	Sel.Kind = static_cast<ESelectionKind>(200);   // no such kind - what an appended one looked like before its card
+	Sel.Id = 1;
+
+	FInspectorWarningSpy Spy;
+	GLog->AddOutputDevice(&Spy);
+	for (int32 Tick = 0; Tick < 5; ++Tick)
+	{
+		Panel->Refresh(TestWorld.Actor, Sel, nullptr);
+	}
+	Sel.Id = 2;
+	Panel->Refresh(TestWorld.Actor, Sel, nullptr);
+	Panel->Refresh(TestWorld.Actor, Sel, nullptr);
+	GLog->RemoveOutputDevice(&Spy);
+
+	TestFalse(TEXT("the panel hides"), Panel->IsShownForTest());
+	TestEqual(TEXT("one warning per selection, not per tick"), Spy.Count, 2);
+	return true;
+}
+
 #endif

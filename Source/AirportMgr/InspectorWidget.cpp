@@ -192,11 +192,18 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	}
 	// A NEW SELECTION REOPENS A WINDOW THE PLAYER CLOSED: the close meant "not this one", and
 	// clicking another aircraft is asking to see it (Review Focus 4 of the step 2 plan).
-	if (Selection.Kind != LastSelection.Kind || Selection.Id != LastSelection.Id)
+	const bool bNewSelection = Selection.Kind != LastSelection.Kind || Selection.Id != LastSelection.Id;
+	if (bNewSelection)
 	{
 		ForgetPlayerClose();
 		LastSelection = Selection;
 	}
+
+	// ONE CARD PER KIND, counted at compile time (review fix 3): the branches below are None
+	// (handled above), Aircraft, Runway, Taxiway and Stand. Appending a kind to ESelectionKind
+	// moves Count and stops this compiling until the kind gets its branch and this number.
+	static_assert(static_cast<int32>(ESelectionKind::Count) == 5,
+		"a new ESelectionKind needs an inspector card - add its branch below, then update this count");
 
 	FString Title, Facts, Status;
 	bool bAircraft = false;
@@ -468,10 +475,16 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	}
 	else
 	{
-		// A KIND WITH NO CARD - appended to ESelectionKind without a branch here. It used to fall
-		// into the stand branch and describe ENTITY Id; now it says so and shows nothing.
-		// ENFORCED BY: AirportMgr.Inspector.TaxiwayCard (the newest kind has its own card)
-		UE_LOG(LogInspector, Warning, TEXT("Inspector: no card for selection kind %d"), static_cast<int32>(Selection.Kind));
+		// A KIND WITH NO CARD - only a value outside the enum reaches here now: an appended kind
+		// fails the static_assert above until it has a branch. It used to fall into the stand
+		// branch and describe ENTITY Id; now it says so ONCE per selection (Refresh runs every
+		// tick) and shows nothing.
+		// ENFORCED BY: the static_assert on ESelectionKind::Count above;
+		// AirportMgr.Inspector.UnknownKindWarnsOnce (once per selection, not per tick)
+		if (bNewSelection)
+		{
+			UE_LOG(LogInspector, Warning, TEXT("Inspector: no card for selection kind %d"), static_cast<int32>(Selection.Kind));
+		}
 		SetShown(false);
 		bDepartEnabled = false;
 		return;

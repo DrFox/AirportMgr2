@@ -160,7 +160,7 @@ namespace InspectFacts
 		Out.Index = SegmentIndex;
 		Out.Letter = IcaoCode::ToLetter(Own);
 		Out.Width = Width;
-		Out.Strip = IcaoCode::TaxiwayStripFor(Operates, Width);
+		Out.Strip = TaxiwayStrip::StripWidthOf(Network, Id);   // THE strip - see its ruling
 		Out.MaxWingspan = IcaoCode::MaxWingspanForLetter(Operates);
 		Out.Surface = Segment.Surface;
 		Out.RestrictedTo.Reset();

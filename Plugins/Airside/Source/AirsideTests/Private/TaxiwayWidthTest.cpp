@@ -417,4 +417,41 @@ bool FUpgradeSegmentRestrictsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUpgradeSegmentRefusesARunwayProfileTest,
+	"Airside.Present.UpgradeSegmentRefusesARunwayProfile",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUpgradeSegmentRefusesARunwayProfileTest::RunTest(const FString& Parameters)
+{
+	// REVIEW FIX 5: a width whose profile URoadNetwork::SetSegmentProfile will refuse (here a
+	// continuous - runway - cross-section in the taxiway list) is refused by WhyUpgradeRefused
+	// BEFORE the scope. It used to be ignored: the profile write failed, the surface write
+	// landed, and the edit committed and charged as an "upgrade".
+	FAirsideTestWorld World;
+	if (!TestNotNull(TEXT("a world"), World.Actor)) { return false; }
+	ARoadNetworkActor* Actor = World.Actor;
+	const int32 C = UpgradeWidthIndexFor(*Actor, EIcaoCode::C);
+	const int32 F = UpgradeWidthIndexFor(*Actor, EIcaoCode::F);
+	if (!TestTrue(TEXT("C and F widths"), C != INDEX_NONE && F != INDEX_NONE)) { return false; }
+	URoadProfile* ProfileF = Actor->ResolveWidthProfile(ERoadKind::Taxiway, F);
+	TestTrue(TEXT("a C taxiway"), Actor->ConnectNodes(Actor->PlaceNode({ 0.0, 0.0 }), Actor->PlaceNode({ 20000.0, 0.0 }),
+		ERoadKind::Taxiway, C, EPavement::Tarmac));
+	const int32 Seg = Actor->Network->GetSegments().Num() - 1;
+
+	// THE CONTENT ASSET, flipped for this test only and restored on every exit.
+	const bool bWas = ProfileF->bContinuousThroughJunctions;
+	ProfileF->bContinuousThroughJunctions = true;
+	ON_SCOPE_EXIT { ProfileF->bContinuousThroughJunctions = bWas; };
+
+	const int32 Depth = Actor->History->UndoDepth();
+	TestFalse(TEXT("the refusal is said before the click"), Actor->WhyUpgradeRefused(Seg, ERoadKind::Taxiway, F, EPavement::Grass).IsEmpty());
+	TestFalse(TEXT("and the click refuses"), Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Grass));
+	TestEqual(TEXT("no edit"), Actor->History->UndoDepth(), Depth);
+	TestEqual(TEXT("the surface is untouched too - no half-applied upgrade"),
+		static_cast<int32>(Actor->Network->GetSegments()[Seg].Surface), static_cast<int32>(EPavement::Tarmac));
+	return true;
+}
+
+
 #endif

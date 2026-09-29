@@ -897,6 +897,13 @@ FString URoadEditFacade::WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, i
 	{
 		return TEXT("no such width in the content set");
 	}
+	// URoadNetwork::SetSegmentProfile's own refusals, asked HERE so the commit below can never
+	// meet them (review fix 5): a runway cross-section, or one of the other kind - a content
+	// list that put either among Kind's widths would otherwise half-apply the upgrade.
+	if (New->bContinuousThroughJunctions || TaxiwayStrip::IsAircraftOnlyProfile(New) != bIsTaxiway)
+	{
+		return FString::Printf(TEXT("%s is not a %s cross-section"), *New->GetName(), bIsTaxiway ? TEXT("taxiway") : TEXT("service road"));
+	}
 	if (!Pavement::Offered(New->AllowedPavements).Contains(Surface))
 	{
 		return FString::Printf(TEXT("%s is not offered on this width"), Pavement::Name(Surface));
@@ -967,8 +974,20 @@ bool URoadEditFacade::UpgradeSegment(int32 SegmentIndex, ERoadKind Kind, int32 W
 	const double WasWidth = Old->GetTotalWidth();
 
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("upgrade segment"));
-	Network->SetSegmentProfile(Id, New);
-	Network->SetSegmentSurface(Id, Surface);
+	// HONOURED, not discarded (review fix 5, CLAUDE.md's out-parameter rule): WhyUpgradeRefused
+	// asked both setters' refusals already, so either failing here is a new refusal it does not
+	// know about. An uncommitted scope rolls nothing back, so the profile is put back by hand.
+	if (!Network->SetSegmentProfile(Id, New))
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("UpgradeSegment refused: segment %d would not take %s"), SegmentIndex, *New->GetName());
+		return false;
+	}
+	if (!Network->SetSegmentSurface(Id, Surface))
+	{
+		Network->SetSegmentProfile(Id, const_cast<URoadProfile*>(Old));
+		UE_LOG(LogRoadMesh, Warning, TEXT("UpgradeSegment refused: segment %d would not take %s"), SegmentIndex, Pavement::Name(Surface));
+		return false;
+	}
 	CommitPurchase(Edit, Quote);
 
 	// The line to grep when "the upgrade did nothing": what reached the model, both halves.

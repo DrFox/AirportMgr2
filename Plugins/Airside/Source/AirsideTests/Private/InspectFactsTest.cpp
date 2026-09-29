@@ -327,8 +327,11 @@ bool FInspectFactsTaxiwayTest::RunTest(const FString& Parameters)
 	// A STAND THE STRIP COVERS SAYS WHY IT IS CLOSED, in the words the placement refusal uses.
 	UEntityDefinition* Def = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
 	const FEntityInstanceId Stand = ServiceLinkFixture::PlaceStand(*Net, *Def, FVector2D(0.0, -8000.0), 0.0);
+	// 5 m INSIDE E's reach: the taxiway operates at E after the pass, and its E strip is the one
+	// that closes stands (StripWidthOf's ruling) - flush with E's edge would be open.
+	const double Near = -(ReachE - 500.0);
 	FRoadNetworkTestAccess(*Net).SetEntityOutlineForTest(Stand,
-		{ { -2000.0, -ReachE - 4000.0 }, { 2000.0, -ReachE - 4000.0 }, { 2000.0, -ReachE }, { -2000.0, -ReachE } });
+		{ { -2000.0, Near - 4000.0 }, { 2000.0, Near - 4000.0 }, { 2000.0, Near }, { -2000.0, Near } });
 	{
 		FStandFacts S;
 		if (TestTrue(TEXT("the stand is described"), InspectFacts::DescribeStand(nullptr, *Net, Stand.Index, S)))

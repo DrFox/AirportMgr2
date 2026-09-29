@@ -571,6 +571,16 @@ void FRoadDrawTool::AddWidthAxis(const FToolContext& Context, TArray<FToolVarian
 	Axis.Id = TEXT("Width");
 	Axis.Label = LOCTEXT("VariantAxisWidth", "Width");
 	Axis.Current = WidthIndex != INDEX_NONE ? FMath::Clamp(WidthIndex, 0, Count - 1) : INDEX_NONE;
+
+	// IN UPGRADE, "Keep width" LEADS AND IS THE DEFAULT (review fix 4) - see UpgradeWidthIndex.
+	// Every standard width moves one option along; SelectVariant undoes the shift.
+	if (Mode == EToolMode::Upgrade)
+	{
+		FToolVariant& Keep = Axis.Options.AddDefaulted_GetRef();
+		Keep.Id = TEXT("Keep");
+		Keep.Label = LOCTEXT("VariantWidthKeep", "Keep width");
+		Axis.Current = UpgradeWidthIndex == INDEX_NONE ? 0 : FMath::Clamp(UpgradeWidthIndex, 0, Count - 1) + 1;
+	}
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		const URoadProfile* Profile = Context.Target->ResolveWidthProfile(Kind, Index);
@@ -630,6 +640,7 @@ bool FRoadDrawTool::SelectVariant(const FToolContext& Context, int32 Axis, int32
 			Context.Target->HideGhost();
 			Mode = Next;
 			Hover = FUpgradeHover();
+			UpgradeWidthIndex = INDEX_NONE;   // every entry to Upgrade starts on "Keep width"
 		}
 		UE_LOG(LogAirside, Log, TEXT("%s mode -> %s"), What, *ModeAxis::OptionId(Mode).ToString());
 		return true;
@@ -648,6 +659,16 @@ bool FRoadDrawTool::SelectVariant(const FToolContext& Context, int32 Axis, int32
 		{
 			State->Surface = Surface;
 		}
+		return true;
+	}
+
+	// UPGRADE'S WIDTH ROW: option 0 is "Keep width", the rest one past their Build index.
+	if (Mode == EToolMode::Upgrade)
+	{
+		UpgradeWidthIndex = Option == 0 ? INDEX_NONE : Option - 1;
+		const URoadProfile* Chosen = UpgradeWidthIndex != INDEX_NONE ? Context.Target->ResolveWidthProfile(Kind, UpgradeWidthIndex) : nullptr;
+		UE_LOG(LogAirside, Log, TEXT("%s upgrade width -> %s"), What, Chosen != nullptr
+			? *FString::Printf(TEXT("%.1f m"), Chosen->GetTotalWidth() / 100.0) : TEXT("keep"));
 		return true;
 	}
 
@@ -853,7 +874,7 @@ void FRoadDrawTool::Upgrade(const FToolContext& Context)
 		return;
 	}
 	// The facade refuses and logs its own reason; the hover already showed the same one.
-	Context.Target->UpgradeSegment(Segment, Kind, WidthIndex, Surface);
+	Context.Target->UpgradeSegment(Segment, Kind, UpgradeWidthIndex, Surface);
 	Hover = FUpgradeHover();
 }
 
@@ -872,7 +893,7 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 
 	const bool bSame = Hover.Network == Network && Hover.Revision == Network->GetEditRevision()
 		&& Hover.Entities == Network->GetEntities().Num() && Hover.Segment == Segment && Hover.Had == Had
-		&& Hover.HadSurface == Piece.Surface && Hover.Width == WidthIndex && Hover.Surface == Surface;
+		&& Hover.HadSurface == Piece.Surface && Hover.Width == UpgradeWidthIndex && Hover.Surface == Surface;
 	if (!bSame)
 	{
 		Hover = FUpgradeHover();
@@ -882,12 +903,12 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 		Hover.Segment = Segment;
 		Hover.Had = Had;
 		Hover.HadSurface = Piece.Surface;
-		Hover.Width = WidthIndex;
+		Hover.Width = UpgradeWidthIndex;
 		Hover.Surface = Surface;
 
 		// THE ONE EVALUATOR the click asks (IRoadEditTarget::WhyUpgradeRefused).
-		const FString Why = Context.Target->WhyUpgradeRefused(Segment, Kind, WidthIndex, Surface);
-		URoadProfile* New = WidthIndex != INDEX_NONE ? Context.Target->ResolveWidthProfile(Kind, WidthIndex) : nullptr;
+		const FString Why = Context.Target->WhyUpgradeRefused(Segment, Kind, UpgradeWidthIndex, Surface);
+		URoadProfile* New = UpgradeWidthIndex != INDEX_NONE ? Context.Target->ResolveWidthProfile(Kind, UpgradeWidthIndex) : nullptr;
 		const URoadProfile* Becomes = New != nullptr ? New : Had;
 		const bool bTaxiway = TaxiwayStrip::HasStrip(*Network, Id);
 		const double NewWidth = Becomes != nullptr ? Becomes->GetTotalWidth() : 0.0;
@@ -896,6 +917,9 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 			: VariantWidthLabel(NewWidth).ToString();
 
 		EIcaoCode Operates = NewLetter;
+		// The strip the outline draws: StripWidthOf's answer - of the ghost when the width
+		// changes (set below), of the live network otherwise. Never computed a second way.
+		double GhostStrip = bTaxiway ? TaxiwayStrip::StripWidthOf(*Network, Id) : 0.0;
 		if (!Why.IsEmpty())
 		{
 			Hover.bRefused = true;
@@ -907,13 +931,24 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 		}
 		else
 		{
-			Hover.Text = FString::Printf(TEXT("Upgrade to %s, %s"), *Named, Pavement::Name(Surface));
+			// WHICH WAY IT GOES, never "Upgrade to" (review fix 4): Upgrade is the MODE's word, and a
+			// label that said it over a narrowing is how the trap read as a promotion.
+			const double HadWidth = Had != nullptr ? Had->GetTotalWidth() : NewWidth;
+			const TCHAR* Verb = NewWidth > HadWidth + 0.5 ? TEXT("Widen to")
+				: NewWidth < HadWidth - 0.5 ? TEXT("Narrow to") : TEXT("Re-surface");
+			Hover.Text = FMath::IsNearlyEqual(NewWidth, HadWidth, 0.5)
+				? FString::Printf(TEXT("%s %s as %s"), Verb, *Named, Pavement::Name(Surface))
+				: FString::Printf(TEXT("%s %s, %s"), Verb, *Named, Pavement::Name(Surface));
 			if (bTaxiway && New != nullptr && New != Had)
 			{
 				// THE GRAPH AS IT WOULD BE: a duplicate carrying the new profile, asked the same
 				// questions the rebuild and admission will ask of the real one after the click.
+				// THE RESTRICTION PASS RUN ON IT, quietly, as the rebuild will run it on the real one -
+				// so the closures below read the strip at the letter it will OPERATE (StripWidthOf's
+				// ruling), and a neighbour the new pavement restricts is restricted here too.
 				URoadNetwork* Ghost = DuplicateObject<URoadNetwork>(Network, GetTransientPackage());
 				Ghost->SetSegmentProfile(Id, New);
+				TaxiwayRestriction::Apply(*Ghost, /*bLog=*/false);
 				TArray<FString> Effects;
 				TaxiwayRestriction::FObstruction Worst;
 				if (const TOptional<EIcaoCode> Restricted = TaxiwayRestriction::RestrictionOf(*Ghost, Id, &Worst))
@@ -922,6 +957,7 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 					Effects.Add(FString::Printf(TEXT("restricts to Code %s (%s)"), IcaoCode::ToLetter(Operates),
 						*TaxiwayRestriction::Describe(Worst)));
 				}
+				GhostStrip = TaxiwayStrip::StripWidthOf(*Ghost, Id);
 				// BY ENTITY INDEX: stand numbers (strip stage 5) are not in this tree yet.
 				const TArray<FEntityInstance>& Now = Network->GetEntities();
 				const TArray<FEntityInstance>& Then = Ghost->GetEntities();
@@ -944,8 +980,7 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 		TaxiwayStrip::FSegmentShape Shape;
 		if (TaxiwayStrip::ShapeOf(*Network, Id, Shape) && Becomes != nullptr)
 		{
-			Shape.HalfWidth = Becomes->GetMaxHalfWidth()
-				+ (bTaxiway ? IcaoCode::TaxiwayStripFor(Operates, NewWidth) : 0.0);
+			Shape.HalfWidth = Becomes->GetMaxHalfWidth() + GhostStrip;
 			Hover.Outline = TaxiwayStrip::FootprintOf(Shape);
 		}
 	}

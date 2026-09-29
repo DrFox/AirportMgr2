@@ -2,6 +2,7 @@
 
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiwayRestriction.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
@@ -141,8 +142,15 @@ namespace TaxiwayStrip
 		{
 			return 0.0;
 		}
-		// THROUGH ProfileFor - see IsAircraftOnly; HasStrip has already proved it non-null.
-		return IcaoCode::TaxiwayStripForWidth(Network.ProfileFor(*Network.GetSegment(Id))->GetTotalWidth());
+		// THROUGH ProfileFor - see IsAircraftOnly; HasStrip has already proved it non-null. AT THE
+		// EFFECTIVE LETTER - see the header's ruling.
+		const double Pavement = Network.ProfileFor(*Network.GetSegment(Id))->GetTotalWidth();
+		return IcaoCode::TaxiwayStripFor(StripLetterOf(Network, Id).GetValue(), Pavement);
+	}
+
+	TOptional<EIcaoCode> StripLetterOf(const URoadNetwork& Network, FRoadSegmentId Id)
+	{
+		return TaxiwayRestriction::EffectiveLetterOf(Network, Id);
 	}
 
 	TOptional<FIntrusion> WorstIntrusion(const URoadNetwork& Network, TConstArrayView<FVector2D> Footprint,
@@ -178,7 +186,8 @@ namespace TaxiwayStrip
 
 			// FAR AWAY, CHEAPLY: the curve's hull box grown by its whole reach misses the
 			// footprint's box, so nothing below could find it nearer (final review 6).
-			const double Reach = Profile->GetMaxHalfWidth() + IcaoCode::TaxiwayStripForWidth(Profile->GetTotalWidth());
+			const double Strip = StripWidthOf(Network, Id);   // the EFFECTIVE strip - see its ruling
+			const double Reach = Profile->GetMaxHalfWidth() + Strip;
 			if (!HullBox(A, Segment.Control, B, Reach + ToleranceUu).Intersect(FootprintBox))
 			{
 				continue;
@@ -211,14 +220,12 @@ namespace TaxiwayStrip
 
 			// THE WIDER HALF, so an asymmetric profile is judged on its generous side rather
 			// than leaving a sliver on the narrow one uncounted.
-			const double Pavement = Profile->GetTotalWidth();
-			const double Strip = IcaoCode::TaxiwayStripForWidth(Pavement);
 			const double Depth = Profile->GetMaxHalfWidth() + Strip - Nearest;
 			if (Depth > ToleranceUu && (!Worst.IsSet() || Depth > Worst->Depth))
 			{
 				FIntrusion Found;
 				Found.Taxiway = Id;
-				Found.Letter = IcaoCode::TaxiwayLetterForWidth(Pavement);
+				Found.Letter = StripLetterOf(Network, Id).GetValue();
 				Found.Required = Strip;
 				Found.Depth = Depth;
 				Worst = Found;
@@ -440,7 +447,7 @@ namespace TaxiwayStrip
 				const FRoadSegment* Segment = Network.GetSegment(Id);
 				const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
 				if (Profile == nullptr || !ShapeOf(Network, Id, Theirs)) { return false; }
-				const double Reach = Theirs.HalfWidth + IcaoCode::TaxiwayStripForWidth(Profile->GetTotalWidth()) + Shape.HalfWidth;
+				const double Reach = Theirs.HalfWidth + StripWidthOf(Network, Id) + Shape.HalfWidth;
 				const TArray<FVector2D> Centre = CentreOf(Theirs);
 				for (const FVector2D& End : { AtA.At, AtB.At })
 				{

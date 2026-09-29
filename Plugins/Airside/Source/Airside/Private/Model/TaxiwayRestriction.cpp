@@ -73,7 +73,7 @@ namespace TaxiwayRestriction
 		return TEXT("something");
 	}
 
-	int32 Apply(URoadNetwork& Network)
+	int32 Apply(URoadNetwork& Network, bool bLog)
 	{
 		// EVERY LIVE SEGMENT, LINEARLY: RestrictionOf is up to six StripSwallows each, whose own
 		// comment gives the cost and N (34 segments on M_Test, 2026-09-28). Topology rebuilds only.
@@ -99,6 +99,10 @@ namespace TaxiwayRestriction
 				continue;
 			}
 			Network.WriteSegmentRestriction(Id, Now);
+			if (!bLog)
+			{
+				continue;
+			}
 
 			// ONCE PER CHANGE, the line to grep when "the A380 won't taxi there any more".
 			const auto Name = [](uint8 Code) -> FString

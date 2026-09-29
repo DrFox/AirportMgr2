@@ -246,6 +246,16 @@ private:
 	 */
 	EToolMode Mode = EToolMode::Build;
 
+	/**
+	 * The width an Upgrade click gives the piece: a standard width of Kind, or INDEX_NONE to KEEP
+	 * the piece's own (a surface-only upgrade). SEPARATE FROM WidthIndex, and reset to keep on
+	 * every entry to Upgrade (review fix 4): WidthIndex starts on the narrowest, so a player who
+	 * entered Upgrade only to re-surface an F taxiway narrowed it to the narrowest letter, free.
+	 * The Width row leads with "Keep width" in Upgrade and lights it.
+	 * ENFORCED BY: Airside.Tool.UpgradeModeKeepsWidth
+	 */
+	int32 UpgradeWidthIndex = INDEX_NONE;
+
 	/** The live segment an Upgrade click would change: the snapped segment, else the one whose
 	 *  pavement holds the cursor (a wide taxiway's edge is past the segment snap). INDEX_NONE if none. */
 	int32 UpgradeTargetUnder(const FToolContext& Context) const;

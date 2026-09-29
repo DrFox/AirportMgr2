@@ -121,9 +121,18 @@ namespace
 
 namespace ArrivalPlanner
 {
-	FGuidelineNodeId ChooseStand(const URoadNetwork& Network, FGuidelineNodeId From,
+	/**
+	 * ChooseStand, with the span the ROUTE is limited by apart from the airframe the STANDS are
+	 * judged for (review fix 2). EdgeSpan 0 is NarrowTaxiwayOnRoute's probe: "which stand this
+	 * aircraft could use would it reach if no taxiway limited its wings?" - admitting by the
+	 * real airframe, so it never routes to a stand the aircraft is too big for and blames the
+	 * taxiway to it. bLog false for the probe: the ChooseStand line below is the plan's, and a
+	 * probe's per exit would read as the planner changing its mind.
+	 * ENFORCED BY: Airside.Model.ArrivalPlanner.NarrowProbeOnlyUsableStands
+	 */
+	static FGuidelineNodeId ChooseStandFor(const URoadNetwork& Network, FGuidelineNodeId From,
 		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingAgent,
-		FRoutePlan* OutRoute, bool* bOutSawHeld)
+		FRoutePlan* OutRoute, bool* bOutSawHeld, double EdgeSpan, bool bLog)
 	{
 		// Every live STAND's pose node - never a depot's, even though a depot has a pose node
 		// too (FEntityInstance::IsStandCandidate, the ONE filter UStandAllocator::Reserve also
@@ -172,7 +181,7 @@ namespace ArrivalPlanner
 		FRouteQuery Query;
 		Query.Start = From;
 		Query.Class = ETraversalClass::Aircraft;
-		Query.Wingspan = Airframe.Wingspan;
+		Query.Wingspan = EdgeSpan;
 		Query.NeedsPavement(Airframe.MinimumPavement);
 		Query.Errand = ERouteErrand::ArrivalTaxiIn;
 		Query.Policy = FRoutePolicy::For(Query.Errand);
@@ -266,11 +275,22 @@ namespace ArrivalPlanner
 		const int32 TooSmallCount = RefusedCount[static_cast<uint8>(EStandRefusal::TooSmall)];
 		const int32 UnpavedCount = RefusedCount[static_cast<uint8>(EStandRefusal::Surface)];
 		const int32 InStripCount = RefusedCount[static_cast<uint8>(EStandRefusal::InsideStrip)];
-		UE_LOG(LogAirside, Log,
-			TEXT("ChooseStand: span %.1f m -> node %d (Code %s); %d too small, %d held, %d unpaved, %d in a taxiway strip"),
-			Airframe.Wingspan / 100.0, Best.Index, *CodeText, TooSmallCount, HeldCount, UnpavedCount, InStripCount);
+		if (bLog)
+		{
+			UE_LOG(LogAirside, Log,
+				TEXT("ChooseStand: span %.1f m -> node %d (Code %s); %d too small, %d held, %d unpaved, %d in a taxiway strip"),
+				Airframe.Wingspan / 100.0, Best.Index, *CodeText, TooSmallCount, HeldCount, UnpavedCount, InStripCount);
+		}
 
 		return Best;
+	}
+
+	FGuidelineNodeId ChooseStand(const URoadNetwork& Network, FGuidelineNodeId From,
+		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingAgent,
+		FRoutePlan* OutRoute, bool* bOutSawHeld)
+	{
+		return ChooseStandFor(Network, From, Airframe, Occupancy, ExcludingAgent, OutRoute, bOutSawHeld,
+			Airframe.Wingspan, true);
 	}
 
 	namespace
@@ -299,13 +319,15 @@ namespace ArrivalPlanner
 		}
 
 		/**
-		 * The TaxiwayTooNarrow clause, or empty when no stand is reachable even ignoring size
-		 * (then it IS NoRouteToStand). Asked only on a NoRouteToStand refusal, with the same exit
-		 * list and the same ChooseStand as the plan - at span 0, which no taxiway limits (a 0 span
-		 * is "unknown", admitted everywhere, IcaoCode::StandAdmits' rule) - then walks the route
-		 * it WOULD have taken to the first edge this aircraft's wings do not fit: the one a pilot
-		 * would meet first, not necessarily the only one. FindToGoals has no TooWide retry of its
-		 * own (RouteSearch::Find's), which is why this second search lives here.
+		 * The TaxiwayTooNarrow clause, or empty when no stand THIS AIRCRAFT COULD USE is reachable
+		 * even ignoring the taxiways' span limits (then it IS NoRouteToStand). Asked only on a
+		 * NoRouteToStand refusal, with the same exit list and the same stand choice as the plan
+		 * (ChooseStandFor) - its stands judged for the real airframe, its route unlimited by span
+		 * (review fix 2: a span-0 AIRFRAME admitted every stand, so the probe routed to one too
+		 * small and blamed the taxiway to it) - then walks the route it WOULD have taken to the
+		 * first edge this aircraft's wings do not fit: the one a pilot would meet first, not
+		 * necessarily the only one. FindToGoals has no TooWide retry of its own
+		 * (RouteSearch::Find's), which is why this second search lives here.
 		 */
 		FString NarrowTaxiwayOnRoute(const URoadNetwork& Network, const FRunwayEnd& End, double SlowedBy,
 			const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingHolder)
@@ -314,12 +336,11 @@ namespace ArrivalPlanner
 			{
 				return FString();
 			}
-			FAirframe AnySize = Airframe;
-			AnySize.Wingspan = 0.0;
 			for (const FGuidelineNodeId& Exit : Network.RunwayExitNodes(End.Seed, End.Threshold, End.Direction, SlowedBy))
 			{
 				FRoutePlan Route;
-				ChooseStand(Network, Exit, AnySize, Occupancy, ExcludingHolder, &Route);
+				ChooseStandFor(Network, Exit, Airframe, Occupancy, ExcludingHolder, &Route, nullptr,
+					/*EdgeSpan=*/0.0, /*bLog=*/false);
 				if (!Route.IsValid())
 				{
 					continue;
