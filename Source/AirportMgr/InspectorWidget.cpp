@@ -192,11 +192,18 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	}
 	// A NEW SELECTION REOPENS A WINDOW THE PLAYER CLOSED: the close meant "not this one", and
 	// clicking another aircraft is asking to see it (Review Focus 4 of the step 2 plan).
-	if (Selection.Kind != LastSelection.Kind || Selection.Id != LastSelection.Id)
+	const bool bNewSelection = Selection.Kind != LastSelection.Kind || Selection.Id != LastSelection.Id;
+	if (bNewSelection)
 	{
 		ForgetPlayerClose();
 		LastSelection = Selection;
 	}
+
+	// ONE CARD PER KIND, counted at compile time (review fix 3): the branches below are None
+	// (handled above), Aircraft, Runway, Taxiway and Stand. Appending a kind to ESelectionKind
+	// moves Count and stops this compiling until the kind gets its branch and this number.
+	static_assert(static_cast<int32>(ESelectionKind::Count) == 5,
+		"a new ESelectionKind needs an inspector card - add its branch below, then update this count");
 
 	FString Title, Facts, Status;
 	bool bAircraft = false;
@@ -353,7 +360,36 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		RunwayCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorRunwayUse", "Use {0}"), FText::FromString(Other));
 		bDepartEnabled = false;
 	}
-	else
+	else if (Selection.Kind == ESelectionKind::Taxiway)
+	{
+		FTaxiwayCardFacts T;
+		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeTaxiway(*Target->GetNetwork(), Selection.Id, T))
+		{
+			SetShown(false);
+			bDepartEnabled = false;
+			return;
+		}
+		// THE TAXIWAY CARD (strip stage 6): its letter, strip and the widest span it admits -
+		// every taxiway limits wingspan to its letter (user 2026-09-29) - and, restricted, what
+		// restricts it (spec: "max span 65 m - restricted by building at ..."). Composed every
+		// tick like the runway card; the SetText gate below makes an unchanged one free.
+		Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayTitle", "Taxiway {0}").ToString(), { T.Index });
+		Facts = FString::Format(
+			*NSLOCTEXT("AirportMgr", "InspectorTaxiwayFacts", "Code {0}, {1} m wide, {2}\nStrip {3} m each side\nMax span {4} m").ToString(),
+			{ T.Letter, FString::Printf(TEXT("%.1f"), T.Width / 100.0), FString(Pavement::Name(T.Surface)),
+				FString::Printf(TEXT("%.1f"), T.Strip / 100.0), FString::Printf(TEXT("%.0f"), T.MaxWingspan / 100.0) });
+		if (T.RestrictedTo.IsSet())
+		{
+			Facts += FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayRestricted",
+				"\nRestricted to Code {0} by {1} - move it clear of the strip").ToString(),
+				{ T.RestrictedTo.GetValue(), T.RestrictedBy.IsEmpty() ? FString(TEXT("something in its strip")) : T.RestrictedBy });
+		}
+		Status = T.RestrictedTo.IsSet()
+			? NSLOCTEXT("AirportMgr", "InspectorTaxiwayStatusRestricted", "Restricted").ToString()
+			: NSLOCTEXT("AirportMgr", "InspectorTaxiwayStatusOpen", "Open to its letter").ToString();
+		bDepartEnabled = false;
+	}
+	else if (Selection.Kind == ESelectionKind::Stand)
 	{
 		FStandFacts S;
 		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Selection.Id, S))
@@ -389,6 +425,12 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 					Reachability.ToString(),
 					ServiceRoad.ToString(),
 				});
+			// CLOSED BY A STRIP (strip stage 6): the reason, and the figures to fix it by.
+			if (!S.ClosedBecause.IsEmpty())
+			{
+				Facts += FString::Format(*NSLOCTEXT("AirportMgr", "InspectorStandClosed",
+					"\nClosed to new arrivals: {0}").ToString(), { S.ClosedBecause });
+			}
 			Status = S.OccupantAgent == 0
 				? NSLOCTEXT("AirportMgr", "InspectorStandEmpty", "Empty").ToString()
 				: S.bOccupantParked
@@ -430,6 +472,22 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			}
 		}
 		bDepartEnabled = false;
+	}
+	else
+	{
+		// A KIND WITH NO CARD - only a value outside the enum reaches here now: an appended kind
+		// fails the static_assert above until it has a branch. It used to fall into the stand
+		// branch and describe ENTITY Id; now it says so ONCE per selection (Refresh runs every
+		// tick) and shows nothing.
+		// ENFORCED BY: the static_assert on ESelectionKind::Count above;
+		// AirportMgr.Inspector.UnknownKindWarnsOnce (once per selection, not per tick)
+		if (bNewSelection)
+		{
+			UE_LOG(LogInspector, Warning, TEXT("Inspector: no card for selection kind %d"), static_cast<int32>(Selection.Kind));
+		}
+		SetShown(false);
+		bDepartEnabled = false;
+		return;
 	}
 
 	// THE GATE. Compared against the COMPOSED text rather than a (selection id, phase) key -

@@ -3,6 +3,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Model/StandAdmission.h"
 #include "Tool/RoadBuildTool.h"
 #include "Tool/StandPreview.h"
 
@@ -55,6 +56,16 @@ void GraphOverlay::DescribeStands(const URoadNetwork& Network, IToolPreviewSink&
 		if (Entity.IsStand() || !Entity.IsPlotted())
 		{
 			StandPreview::DescribeBody(Entity.Definition, Entity.Position, Entity.Heading, Sink);
+		}
+
+		// A STAND A STRIP COVERS IS CLOSED to new arrivals (strip stage 6), and says so HERE - its
+		// drawn outline in Refused - rather than in paint, which went red once and was removed
+		// on purpose (RoadSurfacePresenter's stand paint). StandAdmission::StripClosure, the one
+		// rule admission refuses by, so the flag and the refusal cannot disagree.
+		// ENFORCED BY: Airside.Tool.StandInStripFlagged
+		if (Entity.IsStand() && StandAdmission::StripClosure(Network, Entity).IsSet())
+		{
+			Sink.Polygon(Entity.Outline, EPreviewStyle::Refused);
 		}
 
 		// NO STOP MARK AND NO POSE RING, for any kind, since 2026-09-27. They were an

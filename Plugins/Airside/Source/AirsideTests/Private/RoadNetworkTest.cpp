@@ -4,6 +4,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TaxiwayStrip.h"
+#include "Model/TaxiwayRestriction.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/JunctionSolver.h"
@@ -838,6 +839,114 @@ bool FTaxiwayStripSegmentJudgeTest::RunTest(const FString&)
 		const FStripVerdict V = JudgeSegment(*Net, Shape({ -5000.0, 2000.0 }, { 5000.0, 2000.0 }, Road), false,
 			Free({ -5000.0, 2000.0 }), Free({ 5000.0, 2000.0 }));
 		TestFalse(TEXT("a service road with no taxiway near is allowed"), V.bRefused);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayRestrictionTest, "Airside.Model.TaxiwayRestriction",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayRestrictionTest::RunTest(const FString&)
+{
+	// STAGE 6: A TAXIWAY WHOSE STRIP HAS GROWN OVER SOMETHING OPERATES AT THE LARGEST LETTER
+	// WHOSE STRIP IS CLEAR (spec "When a taxiway is upgraded"). Every reach below is derived from
+	// IcaoCode::TaxiwayStripFor, never typed, so a re-tuned clearance moves the fixture with it.
+	constexpr double Pavement = 2600.0;   // 26 m: Code F
+	const double Half = 0.5 * Pavement;
+	const double ReachF = Half + IcaoCode::TaxiwayStripFor(EIcaoCode::F, Pavement);
+	const double ReachE = Half + IcaoCode::TaxiwayStripFor(EIcaoCode::E, Pavement);
+	URoadProfile* RoadProfile = URoadProfile::MakeServiceRoadTransient();
+	const double RoadHalf = RoadProfile->GetMaxHalfWidth();
+	// The road's near edge between E's reach and F's: inside F's strip, clear of E's.
+	const double RoadY = 0.5 * (ReachE + ReachF) + RoadHalf;
+
+	struct FFixture
+	{
+		URoadNetwork* Net = nullptr;
+		FRoadSegmentId Taxi, Road;
+	};
+	auto Make = [&](bool bWithRoad)
+	{
+		FFixture F;
+		F.Net = NewObject<URoadNetwork>(GetTransientPackage());
+		F.Taxi = F.Net->AddStraightSegment(F.Net->AddNode({ -20000.0, 0.0 }), F.Net->AddNode({ 20000.0, 0.0 }),
+			URoadProfile::MakeTransient(Pavement, 1733.0));
+		if (bWithRoad)
+		{
+			// AddStraightSegment, not the facade: stage 3 would refuse to LAY this road. It is
+			// what an upgrade (or a map from before stage 3) leaves behind.
+			F.Road = F.Net->AddStraightSegment(F.Net->AddNode({ -3000.0, RoadY }), F.Net->AddNode({ 3000.0, RoadY }), RoadProfile);
+		}
+		return F;
+	};
+
+	{
+		const FFixture F = Make(true);
+		TaxiwayRestriction::FObstruction Worst;
+		const TOptional<EIcaoCode> Letter = TaxiwayRestriction::RestrictionOf(*F.Net, F.Taxi, &Worst);
+		if (TestTrue(TEXT("a service road inside F's strip restricts the taxiway"), Letter.IsSet()))
+		{
+			TestEqual(TEXT("to E - the largest letter whose strip is clear of it"),
+				static_cast<int32>(Letter.GetValue()), static_cast<int32>(EIcaoCode::E));
+		}
+		TestEqual(TEXT("and names the road as the obstruction"),
+			static_cast<int32>(Worst.Kind), static_cast<int32>(TaxiwayRestriction::FObstruction::EKind::Road));
+		TestEqual(TEXT("by its segment index"), Worst.Index, F.Road.Index);
+
+		TestEqual(TEXT("Apply counts one restricted taxiway"), TaxiwayRestriction::Apply(*F.Net), 1);
+		TestEqual(TEXT("and writes E onto it"), static_cast<int32>(F.Net->GetSegment(F.Taxi)->RestrictedLetter),
+			static_cast<int32>(EIcaoCode::E));
+		TestEqual(TEXT("the road itself carries no restriction"), static_cast<int32>(F.Net->GetSegment(F.Road)->RestrictedLetter),
+			static_cast<int32>(TaxiwayRestriction::Unrestricted));
+
+		// REVIEW FOCUS 3: the obstruction removed, the restriction lifts on the next pass.
+		F.Net->RemoveSegment(F.Road);
+		TestEqual(TEXT("with the road deleted nothing is restricted"), TaxiwayRestriction::Apply(*F.Net), 0);
+		TestEqual(TEXT("and the taxiway reads unrestricted again"), static_cast<int32>(F.Net->GetSegment(F.Taxi)->RestrictedLetter),
+			static_cast<int32>(TaxiwayRestriction::Unrestricted));
+	}
+	{
+		const FFixture F = Make(false);
+		TestFalse(TEXT("nothing in the strip: unrestricted"), TaxiwayRestriction::RestrictionOf(*F.Net, F.Taxi).IsSet());
+	}
+	{
+		// REVIEW FOCUS 2: split far from the road - each half is judged on its own ground.
+		const FFixture F = Make(true);
+		const FRoadNodeId Cut = F.Net->SplitSegment(F.Taxi, { 12000.0, 0.0 });
+		if (TestTrue(TEXT("the split made a node"), Cut.IsSet()))
+		{
+			FRoadSegmentId Near, Far;
+			for (const FRoadSegmentId Arm : F.Net->GetNode(Cut)->Incident)
+			{
+				const FRoadNode* Other = F.Net->GetNode(F.Net->GetOtherEnd(Arm, Cut));
+				(Other->Position.X < 0.0 ? Near : Far) = Arm;
+			}
+			TestTrue(TEXT("the half beside the road is restricted"), TaxiwayRestriction::RestrictionOf(*F.Net, Near).IsSet());
+			TestFalse(TEXT("the half 90 m past it is not"), TaxiwayRestriction::RestrictionOf(*F.Net, Far).IsSet());
+		}
+	}
+	{
+		// RULING 3: a stand in the strip CLOSES (StandAdmission), it never lowers the letter.
+		const FFixture F = Make(false);
+		UEntityDefinition* Def = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
+		const FEntityInstanceId Stand = ServiceLinkFixture::PlaceStand(*F.Net, *Def, FVector2D(0.0, RoadY + 2000.0), 0.0);
+		FRoadNetworkTestAccess(*F.Net).SetEntityOutlineForTest(Stand,
+			{ { -2000.0, RoadY - RoadHalf }, { 2000.0, RoadY - RoadHalf }, { 2000.0, RoadY + 4000.0 }, { -2000.0, RoadY + 4000.0 } });
+		TestTrue(TEXT("the stand IS inside the F strip (or this proves nothing)"),
+			TaxiwayStrip::WorstIntrusion(*F.Net, F.Net->GetEntity(Stand)->Outline).IsSet());
+		TestFalse(TEXT("but a stand never restricts the taxiway"), TaxiwayRestriction::RestrictionOf(*F.Net, F.Taxi).IsSet());
+	}
+	{
+		// A ROAD THAT MEETS THE TAXIWAY - square, at a node - may cross its strip (stage 3's
+		// exemption, reused): a T-junction is not an obstruction.
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Taxi = URoadProfile::MakeTransient(Pavement, 1733.0);
+		const FRoadNodeId Mid = Net->AddNode({ 0.0, 0.0 });
+		const FRoadSegmentId West = Net->AddStraightSegment(Net->AddNode({ -20000.0, 0.0 }), Mid, Taxi);
+		const FRoadSegmentId East = Net->AddStraightSegment(Mid, Net->AddNode({ 20000.0, 0.0 }), Taxi);
+		Net->AddStraightSegment(Mid, Net->AddNode({ 0.0, 20000.0 }), RoadProfile);
+		TestFalse(TEXT("a road meeting square at a node does not restrict the piece it meets"),
+			TaxiwayRestriction::RestrictionOf(*Net, West).IsSet());
+		TestFalse(TEXT("nor the other piece of the same taxiway"), TaxiwayRestriction::RestrictionOf(*Net, East).IsSet());
 	}
 	return true;
 }

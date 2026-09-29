@@ -361,6 +361,126 @@ bool FArrivalPlannerNoStandBigEnoughTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------------------
+// (f3) STRIP STAGE 6, Review Focus 5: the only route to a stand is over a taxiway RESTRICTED
+// below this aircraft's letter by a service road in its strip. The refusal names the
+// restriction and the fix - not "no route", which sends the player to build a taxiway that
+// already reaches the stand.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalPlannerTaxiwayTooNarrowTest,
+	"Airside.Model.ArrivalPlanner.TaxiwayTooNarrow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalPlannerTaxiwayTooNarrowTest::RunTest(const FString& Parameters)
+{
+	// THE PIPER'S LANDING, A CODE D SPAN - NoStandBigEnough's fixture with a D stand, so the
+	// stand admits it and the runway is the one that test proves works.
+	FAirframe Airframe = TestAirframes::Piper();
+	Airframe.Wingspan = IcaoCode::DesignSpanForLetter(EIcaoCode::D);
+	const double Needed = FLandingRun::RequiredLandingDistance(
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+	const double RunwayLength = Needed * 1.5;
+
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
+	URoadProfile* Road = URoadProfile::MakeServiceRoadTransient();
+	if (!TestTrue(TEXT("the fixture taxiway admits Code D unrestricted (or this proves nothing)"),
+		IcaoCode::TaxiwayLetterForWidth(Taxiway->GetTotalWidth()) >= EIcaoCode::D)) { return false; }
+
+	const FVector2D ThresholdAt(0.0, 0.0);
+	const FVector2D ExitAt(RunwayLength * 0.8, 0.0);
+	const FRoadNodeId Threshold = Network->AddNode(ThresholdAt);
+	const FRoadNodeId Exit = Network->AddNode(ExitAt);
+	const FRoadNodeId Far = Network->AddNode(FVector2D(RunwayLength, 0.0));
+	Network->AddStraightSegment(Threshold, Exit, Runway);
+	Network->AddStraightSegment(Exit, Far, Runway);
+	const FRoadNodeId TaxiEnd = Network->AddNode(ExitAt + FVector2D(0.0, -20000.0));
+	Network->AddStraightSegment(Exit, TaxiEnd, Taxiway);
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	Network->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -10000.0), 0.0,
+		IcaoCode::DesignSpanForLetter(EIcaoCode::D), Stand->PoseRole, Stand->Trucks);
+
+	// A SERVICE ROAD on the far side, its near edge between C's reach and D's: the taxiway
+	// operates at C. Every reach from IcaoCode, none typed.
+	const double W = Taxiway->GetTotalWidth();
+	const double ReachC = Taxiway->GetMaxHalfWidth() + IcaoCode::TaxiwayStripFor(EIcaoCode::C, W);
+	const double ReachD = Taxiway->GetMaxHalfWidth() + IcaoCode::TaxiwayStripFor(EIcaoCode::D, W);
+	const double RoadX = ExitAt.X - (0.5 * (ReachC + ReachD) + Road->GetMaxHalfWidth());
+	Network->AddStraightSegment(Network->AddNode(FVector2D(RoadX, -8000.0)), Network->AddNode(FVector2D(RoadX, -12000.0)), Road);
+
+	TestGraph::Rebuild(*Network);
+
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe);
+	TestEqual(TEXT("a route that exists only over a too-narrow taxiway refuses TaxiwayTooNarrow"),
+		Plan.Why, EArrivalRefusal::TaxiwayTooNarrow);
+	const FString Sentence = ArrivalPlanner::DescribeRefusal(Plan);
+	TestTrue(FString::Printf(TEXT("naming the restriction and the fix: '%s'"), *Sentence),
+		Sentence.Contains(TEXT("taxiway restricted to Code C by a service road - move it clear of the strip")));
+	TestFalse(TEXT("the reason-only sentence is not empty"),
+		ArrivalPlanner::DescribeRefusal(EArrivalRefusal::TaxiwayTooNarrow).IsEmpty());
+
+	// A SMALLER AIRCRAFT IS NOT REFUSED - the restriction is a ceiling (user 2026-09-29).
+	Airframe.Wingspan = IcaoCode::DesignSpanForLetter(EIcaoCode::C);
+	TestTrue(TEXT("a Code C span still taxis to the stand"), ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe).IsValid());
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// (f3b) REVIEW FIX 2: the too-narrow probe must blame a taxiway on the way to a stand THIS
+// aircraft could use. An A380 whose only F stand is disconnected, beside a C stand joined over
+// a C taxiway: the probe used to route to the C stand (at span 0 every stand admits) and say
+// "upgrade it to Code F" - the player upgrades, and is still refused.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalPlannerNarrowProbeOnlyUsableStandsTest,
+	"Airside.Model.ArrivalPlanner.NarrowProbeOnlyUsableStands",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalPlannerNarrowProbeOnlyUsableStandsTest::RunTest(const FString& Parameters)
+{
+	FAirframe Airframe = TestAirframes::Piper();
+	Airframe.Wingspan = 7980.0;   // A380-800, published 79.8 m
+	const double Needed = FLandingRun::RequiredLandingDistance(
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+	const double RunwayLength = Needed * 1.5;
+
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	if (!TestTrue(TEXT("a runway guideline to declare F on"), Runway->Guidelines.Num() > 0)) { return false; }
+	Runway->Guidelines[0].MaxWingspan = IcaoCode::MaxWingspanForLetter(EIcaoCode::F);   // the runway admits it
+	URoadProfile* TaxiC = URoadProfile::MakeTransient(IcaoCode::TaxiwayWidthForLetter(EIcaoCode::C) + 100.0, 1500.0);
+	if (!TestEqual(TEXT("the fixture taxiway is Code C"),
+		static_cast<int32>(IcaoCode::TaxiwayLetterForWidth(TaxiC->GetTotalWidth())), static_cast<int32>(EIcaoCode::C))) { return false; }
+
+	const FVector2D ThresholdAt(0.0, 0.0);
+	const FVector2D ExitAt(RunwayLength * 0.8, 0.0);
+	const FRoadNodeId Threshold = Network->AddNode(ThresholdAt);
+	const FRoadNodeId Exit = Network->AddNode(ExitAt);
+	Network->AddStraightSegment(Threshold, Exit, Runway);
+	Network->AddStraightSegment(Exit, Network->AddNode(FVector2D(RunwayLength, 0.0)), Runway);
+	Network->AddStraightSegment(Exit, Network->AddNode(ExitAt + FVector2D(0.0, -20000.0)), TaxiC);
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	// The C stand, joined over the C taxiway - too small for an A380.
+	Network->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -10000.0), 0.0,
+		IcaoCode::DesignSpanForLetter(EIcaoCode::C), Stand->PoseRole, Stand->Trucks);
+	// The F stand, a kilometre from any taxiway - the one it could use, and cannot reach.
+	Network->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(0.0, 100000.0), 0.0,
+		IcaoCode::DesignSpanForLetter(EIcaoCode::F), Stand->PoseRole, Stand->Trucks);
+
+	TestGraph::Rebuild(*Network);
+
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe);
+	TestNotEqual(TEXT("NOT TaxiwayTooNarrow: widening the C taxiway reaches no stand an A380 fits"),
+		Plan.Why, EArrivalRefusal::TaxiwayTooNarrow);
+	const FString Sentence = ArrivalPlanner::DescribeRefusal(Plan);
+	TestFalse(FString::Printf(TEXT("and it does not send the player to upgrade a taxiway: '%s'"), *Sentence),
+		Sentence.Contains(TEXT("upgrade")));
+	TestEqual(TEXT("it is no route to a stand it could use"), Plan.Why, EArrivalRefusal::NoRouteToStand);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
 // (f2) shared-pavement Task 9: THROUGH THE PLANNER, not the judge - an arrival whose only
 // stand is big enough but grass is told to PAVE it, not to draw a bigger stand and not to
 // build a taxiway that already reaches it.

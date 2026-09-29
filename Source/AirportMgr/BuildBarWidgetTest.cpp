@@ -294,13 +294,15 @@ bool FVariantRowFollowsToolTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the taxiway tool resolves a profile"), TaxiwayDefault)) { return false; }
 	const int32 Surfaces = TaxiwayDefault->AllowedPavements.Num();
 	TestEqual(TEXT("which offers the two road pavements"), Surfaces, 2);
-	TestEqual(TEXT("one button per taxiway width, and one per surface"), Bar->VariantButtonCountForTest(),
-		Taxiways + Surfaces);
+	// PLUS THE MODE ROW'S TWO (Build / Upgrade, strip stage 6), leading every road tool's rows.
+	constexpr int32 Modes = 2;
+	TestEqual(TEXT("one button per mode, per taxiway width, and per surface"), Bar->VariantButtonCountForTest(),
+		Modes + Taxiways + Surfaces);
 
 	C->SelectTool(VarRowToolIndex(TEXT("Road")));
 	Bar->RefreshStateForTest(*C);
 	TestEqual(TEXT("switching to the road tool REBUILDS the row to the road's widths"),
-		Bar->VariantButtonCountForTest(), Roads + Surfaces);
+		Bar->VariantButtonCountForTest(), Modes + Roads + Surfaces);
 
 	C->SelectTool(VarRowToolIndex(TEXT("Runway")));
 	Bar->RefreshStateForTest(*C);
@@ -316,11 +318,11 @@ bool FVariantRowFollowsToolTest::RunTest(const FString& Parameters)
 	// would pass with the click going nowhere.
 	TArray<FToolVariantAxis> Axes;
 	C->GetActiveVariantAxes(Axes);
-	if (!TestEqual(TEXT("the taxiway has two rows, width and surface"), Axes.Num(), 2)) { return false; }
-	const int32 Pick = Axes[0].Current == 1 ? 2 : 1;
-	Bar->RunVariantFor(*C, 0, Pick);
+	if (!TestEqual(TEXT("the taxiway has three rows, mode, width and surface"), Axes.Num(), 3)) { return false; }
+	const int32 Pick = Axes[1].Current == 1 ? 2 : 1;
+	Bar->RunVariantFor(*C, 1, Pick);
 	C->GetActiveVariantAxes(Axes);
-	TestEqual(TEXT("the clicked width is now what is lit"), Axes[0].Current, Pick);
+	TestEqual(TEXT("the clicked width is now what is lit"), Axes[1].Current, Pick);
 	return true;
 }
 

@@ -466,4 +466,34 @@ bool FIcaoCodeTaxiwayStripTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FIcaoCodeTaxiwayStripForLetterTest,
+	"Airside.Solve.IcaoCode.TaxiwayStripForLetter",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FIcaoCodeTaxiwayStripForLetterTest::RunTest(const FString& Parameters)
+{
+	// A RESTRICTED TAXIWAY (stage 6): the pavement stays 26 m, but the strip is the one a
+	// LOWER letter's widest wing sweeps over that same pavement. E: 65 m span -> 32.5 m half,
+	// less the 13 m half-pavement, plus E's 7.5 m clearance = 27 m.
+	TestEqual(TEXT("26 m restricted to E: 3250 - 1300 + 750"),
+		IcaoCode::TaxiwayStripFor(EIcaoCode::E, 2600.0), 3250.0 - 1300.0 + 750.0, 0.5);
+	// C: 36 m span -> 18 m half, 5 m past the pavement edge, plus C's 4.5 m clearance.
+	TestEqual(TEXT("26 m restricted to C: 1800 - 1300 + 450"),
+		IcaoCode::TaxiwayStripFor(EIcaoCode::C, 2600.0), 1800.0 - 1300.0 + 450.0, 0.5);
+	// A WING NARROWER THAN THE PAVEMENT overhangs nothing: the strip floors at the clearance.
+	TestEqual(TEXT("26 m restricted to A: clearance only"),
+		IcaoCode::TaxiwayStripFor(EIcaoCode::A, 2600.0), IcaoCode::WingtipClearanceForLetter(EIcaoCode::A), 0.5);
+
+	// THE UNRESTRICTED STRIP IS THE SAME FUNCTION at the pavement's own letter - one formula,
+	// so a restriction lifted reads back exactly the strip the taxiway had before.
+	for (const double Width : { 1200.0, 1600.0, 1800.0, 2400.0, 2600.0 })
+	{
+		TestEqual(FString::Printf(TEXT("%.0f uu: ForWidth == For(own letter)"), Width),
+			IcaoCode::TaxiwayStripForWidth(Width),
+			IcaoCode::TaxiwayStripFor(IcaoCode::TaxiwayLetterForWidth(Width), Width));
+	}
+	return true;
+}
+
 #endif

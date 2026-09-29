@@ -197,6 +197,9 @@ public:
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) override;
 	using IRoadEditTarget::PlaceRunway;
 	virtual bool SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts) override;
+	/** See IRoadEditTarget::UpgradeSegment - SetRunwayFacts' pattern, priced like ConnectNodes. */
+	virtual bool UpgradeSegment(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) override;
+	virtual FString WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const override;
 	virtual double GetMinimumRunwayLength() const override;
 	virtual int32 GetRunwayProfileCount() const override;
 	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override;

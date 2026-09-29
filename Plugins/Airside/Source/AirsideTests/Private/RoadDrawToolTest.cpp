@@ -8,6 +8,12 @@
 #include "Present/RoadEditHistory.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/RoadDrawTool.h"
+#include "Tool/ModeAxis.h"
+#include "Model/TaxiwayRestriction.h"
+#include "Solve/IcaoCode.h"
+#include "StandFixture.h"
+#include "Model/InspectFacts.h"
+#include "Model/StandAdmission.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -31,7 +37,10 @@ namespace
 		virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle Style) override
 		{
 			Lines.FindOrAdd(Style)++;
+			if (Style == EPreviewStyle::Guide) { GuidePoints.Add(From); GuidePoints.Add(To); }
 		}
+		/** Every Guide line's ends - the Upgrade hover's strip outline, to measure its width. */
+		TArray<FVector2D> GuidePoints;
 		virtual void CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style) override
 		{
 			Markers.FindOrAdd(Style)++;
@@ -749,6 +758,237 @@ bool FHealSkippedSweepsBareEndsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the apex deletes"), Actor->DeleteNode(Apex));
 	TestEqual(TEXT("only the taxiway is left"), LiveSegments(Actor), 1);
 	TestEqual(TEXT("and only its two nodes - A and B were not left bare"), LiveNodes(Actor), 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadDrawToolUpgradeModeTest,
+	"Airside.Tool.UpgradeMode",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadDrawToolUpgradeModeTest::RunTest(const FString& Parameters)
+{
+	// STRIP STAGE 6 (user 2026-09-29): an Upgrade MODE on the variant row, not a widen gesture -
+	// in Upgrade the row's width and surface apply to the segment clicked, and the hover says
+	// what the grown strip would restrict and close BEFORE the click.
+	FAirsideTestWorld World;
+	if (!TestNotNull(TEXT("a world"), World.Actor)) { return false; }
+	ARoadNetworkActor* Actor = World.Actor;
+	auto WidthIndexFor = [Actor](EIcaoCode Letter)
+	{
+		for (int32 W = 0; W < Actor->GetWidthCount(ERoadKind::Taxiway); ++W)
+		{
+			const URoadProfile* Each = Actor->ResolveWidthProfile(ERoadKind::Taxiway, W);
+			if (Each != nullptr && IcaoCode::TaxiwayLetterForWidth(Each->GetTotalWidth()) == Letter) { return W; }
+		}
+		return int32(INDEX_NONE);
+	};
+	const int32 C = WidthIndexFor(EIcaoCode::C);
+	const int32 F = WidthIndexFor(EIcaoCode::F);
+	if (!TestTrue(TEXT("C and F widths"), C != INDEX_NONE && F != INDEX_NONE)) { return false; }
+	const double WidthF = Actor->ResolveWidthProfile(ERoadKind::Taxiway, F)->GetTotalWidth();
+	const double ReachE = 0.5 * WidthF + IcaoCode::TaxiwayStripFor(EIcaoCode::E, WidthF);
+	const double ReachF = 0.5 * WidthF + IcaoCode::TaxiwayStripFor(EIcaoCode::F, WidthF);
+	const URoadProfile* Road = Actor->ResolveProfileFor(ERoadKind::ServiceRoad, INDEX_NONE);
+	if (!TestNotNull(TEXT("a road profile"), Road)) { return false; }
+
+	// A C taxiway; north of it a road the F strip would swallow (restricts to E); south two
+	// plotted stands: one inside the E strip (closes), one in the band between E's reach and F's
+	// (OPEN - orchestrator ruling 2026-09-29: the strip at the EFFECTIVE letter governs
+	// everything). All clear of the C strip.
+	TestTrue(TEXT("the C taxiway"), Actor->ConnectNodes(Actor->PlaceNode({ -20000.0, 0.0 }), Actor->PlaceNode({ 20000.0, 0.0 }),
+		ERoadKind::Taxiway, C, EPavement::Tarmac));
+	const int32 Seg = Actor->Network->GetSegments().Num() - 1;
+	const double RoadY = 0.5 * (ReachE + ReachF) + Road->GetMaxHalfWidth();
+	TestTrue(TEXT("the road"), Actor->ConnectNodes(Actor->PlaceNode({ -3000.0, RoadY }), Actor->PlaceNode({ 3000.0, RoadY }),
+		ERoadKind::ServiceRoad, INDEX_NONE, EPavement::Tarmac));
+	const URoadProfile* ProfileC = Actor->ResolveWidthProfile(ERoadKind::Taxiway, C);
+	const double ReachCAtC = ProfileC->GetMaxHalfWidth() + IcaoCode::TaxiwayStripFor(EIcaoCode::C, ProfileC->GetTotalWidth());
+	if (!TestTrue(TEXT("C's reach is short of E's (or the closed stand proves nothing)"), ReachCAtC < ReachE)) { return false; }
+	UEntityDefinition* Def = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
+	auto PlaceStandAt = [&](double X, double Near)
+	{
+		const FEntityInstanceId Id = ServiceLinkFixture::PlaceStand(*Actor->Network, *Def, FVector2D(X, Near - 2000.0), 0.0);
+		FRoadNetworkTestAccess(*Actor->Network).SetEntityOutlineForTest(Id,
+			{ { X - 2000.0, Near - 4000.0 }, { X + 2000.0, Near - 4000.0 }, { X + 2000.0, Near }, { X - 2000.0, Near } });
+		return Id;
+	};
+	const FEntityInstanceId Stand = PlaceStandAt(0.0, -0.5 * (ReachCAtC + ReachE));
+	const FEntityInstanceId Open = PlaceStandAt(9000.0, -0.5 * (ReachE + ReachF));
+	const int32 SegmentsBefore = Actor->Network->GetSegments().Num();
+	const int32 NodesBefore = Actor->Network->GetNodes().Num();
+
+	FRoadDrawTool Tool(ERoadKind::Taxiway);
+	const FToolContext OnTaxiway = TestTool::ContextAt(*Actor, FVector2D(0.0, 0.0));
+	TArray<FToolVariantAxis> Axes;
+	Axes.Reset();   // GetVariantAxes APPENDS
+	Tool.GetVariantAxes(OnTaxiway, Axes);
+	TArray<FToolVariantAxis> Reference;
+	ModeAxis::AppendAxis(Reference, EToolMode::Build);
+	if (!TestTrue(TEXT("the taxiway tool's first row is ModeAxis's"), Axes.Num() > 0 && Axes[0].Id == Reference[0].Id)) { return false; }
+	TestEqual(TEXT("with its two options"), Axes[0].Options.Num(), Reference[0].Options.Num());
+	for (int32 O = 0; O < Reference[0].Options.Num() && O < Axes[0].Options.Num(); ++O)
+	{
+		TestEqual(TEXT("named by ModeAxis, not retyped"), Axes[0].Options[O].Id, Reference[0].Options[O].Id);
+	}
+	TestEqual(TEXT("a fresh tool builds"), Axes[0].Current, static_cast<int32>(EToolMode::Build));
+	auto Row = [&Axes](FName Id) { return Axes.IndexOfByPredicate([Id](const FToolVariantAxis& A) { return A.Id == Id; }); };
+
+	TestTrue(TEXT("Upgrade picked"), Tool.SelectVariant(OnTaxiway, Row(ModeAxis::AxisId()), static_cast<int32>(EToolMode::Upgrade)));
+	// IN UPGRADE THE WIDTH ROW LEADS WITH "Keep width", lit (review fix 4): entering Upgrade to
+	// re-surface must never narrow the piece to whatever the Build row held.
+	Axes.Reset();   // GetVariantAxes APPENDS
+	Tool.GetVariantAxes(OnTaxiway, Axes);
+	if (!TestTrue(TEXT("a width row"), Row(TEXT("Width")) != INDEX_NONE)) { return false; }
+	TestEqual(TEXT("its first option is Keep width"), Axes[Row(TEXT("Width"))].Options[0].Id, FName(TEXT("Keep")));
+	TestEqual(TEXT("and it is lit on entering Upgrade"), Axes[Row(TEXT("Width"))].Current, 0);
+	TestTrue(TEXT("F picked - one past its Build index, after Keep"), Tool.SelectVariant(OnTaxiway, Row(TEXT("Width")), F + 1));
+	Axes.Reset();   // GetVariantAxes APPENDS
+	Tool.GetVariantAxes(OnTaxiway, Axes);
+	const int32 SurfaceRow = Row(TEXT("Surface"));
+	const int32 Tarmac = SurfaceRow != INDEX_NONE ? Axes[SurfaceRow].Options.IndexOfByPredicate(
+		[](const FToolVariant& V) { return V.Id == FName(Pavement::Name(EPavement::Tarmac)); }) : INDEX_NONE;
+	TestTrue(TEXT("tarmac picked"), Tool.SelectVariant(OnTaxiway, SurfaceRow, Tarmac));
+
+	// THE HOVER SAYS WHAT THE CLICK WILL DO - restriction by what, and the stand it closes.
+	{
+		FCountingPreviewSink Sink;
+		Tool.BuildPreview(OnTaxiway, Sink);
+		// "Widen", not "Upgrade": Upgrade is the MODE's word; the label says which way it goes.
+		const FString* Said = Sink.Labels.FindByPredicate([](const FString& L) { return L.Contains(TEXT("Widen to Code F")); });
+		if (TestNotNull(TEXT("the hover names the widening"), Said))
+		{
+			TestTrue(FString::Printf(TEXT("and the restriction it causes: '%s'"), **Said), Said->Contains(TEXT("restricts to Code E (a service road)")));
+			TestTrue(FString::Printf(TEXT("and the stand it closes, by index: '%s'"), **Said),
+				Said->Contains(FString::Printf(TEXT("closes stand %d"), Stand.Index)));
+			TestFalse(FString::Printf(TEXT("but not the stand only F's strip would cover: '%s'"), **Said),
+				Said->Contains(FString::Printf(TEXT("closes stand %d"), Open.Index)));
+		}
+		TestTrue(TEXT("the grown strip is outlined"), Sink.CountLines(EPreviewStyle::Guide) > 0);
+		double Outline = 0.0;
+		for (const FVector2D& P : Sink.GuidePoints)
+		{
+			if (FMath::Abs(P.X) < 15000.0) { Outline = FMath::Max(Outline, FMath::Abs(P.Y)); }
+		}
+		TestEqual(TEXT("the outline is the strip it will OPERATE, E's at the F pavement"), Outline, ReachE, 1.0);
+	}
+
+	// THE CLICK UPGRADES AND LAYS NOTHING.
+	Tool.OnClick(OnTaxiway);
+	TestEqual(TEXT("no segment laid"), Actor->Network->GetSegments().Num(), SegmentsBefore);
+	TestEqual(TEXT("no node placed"), Actor->Network->GetNodes().Num(), NodesBefore);
+	TestEqual(TEXT("the clicked taxiway is F now"), Actor->Network->GetSegments()[Seg].Profile->GetTotalWidth(), WidthF, 0.5);
+	TestEqual(TEXT("and restricted to E by the road"),
+		static_cast<int32>(Actor->Network->GetSegments()[Seg].RestrictedLetter), static_cast<int32>(EIcaoCode::E));
+
+	// ONE FIGURE (orchestrator ruling 2026-09-29): the card, the closure and the placement query
+	// all read the strip at the EFFECTIVE letter.
+	{
+		const double Governs = IcaoCode::TaxiwayStripFor(EIcaoCode::E, WidthF);
+		const FRoadSegmentId SegId = Actor->Network->SegmentIdAt(Seg);
+		TestEqual(TEXT("StripWidthOf is E's strip"), TaxiwayStrip::StripWidthOf(*Actor->Network, SegId), Governs, 0.5);
+		FTaxiwayCardFacts Card;
+		TestTrue(TEXT("the card"), InspectFacts::DescribeTaxiway(*Actor->Network, Seg, Card));
+		TestEqual(TEXT("the card states it"), Card.Strip, Governs, 0.5);
+		const FEntityInstance& Closed = Actor->Network->GetEntities()[Stand.Index];
+		const TOptional<TaxiwayStrip::FIntrusion> Closure = StandAdmission::StripClosure(*Actor->Network, Closed);
+		if (TestTrue(TEXT("the stand inside E's strip is closed"), Closure.IsSet()))
+		{
+			TestEqual(TEXT("by the same figure"), Closure->Required, Governs, 0.5);
+			TestEqual(TEXT("naming the letter it operates at"), static_cast<int32>(Closure->Letter), static_cast<int32>(EIcaoCode::E));
+		}
+		TestFalse(TEXT("the stand only F's strip would cover is OPEN"),
+			StandAdmission::StripClosure(*Actor->Network, Actor->Network->GetEntities()[Open.Index]).IsSet());
+	}
+
+	// THE SAME WIDTH AND SURFACE AGAIN: said so, and the click does nothing.
+	{
+		FCountingPreviewSink Sink;
+		Tool.BuildPreview(OnTaxiway, Sink);
+		TestTrue(TEXT("the hover says it is already so"),
+			Sink.Labels.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("already Code F")); }));
+		const int32 Depth = Actor->History->UndoDepth();
+		Tool.OnClick(OnTaxiway);
+		TestEqual(TEXT("and the click opens no edit"), Actor->History->UndoDepth(), Depth);
+	}
+
+	// BACK TO BUILD: a click lays again.
+	Axes.Reset();   // GetVariantAxes APPENDS
+	Tool.GetVariantAxes(OnTaxiway, Axes);
+	TestTrue(TEXT("Build picked"), Tool.SelectVariant(OnTaxiway, Row(ModeAxis::AxisId()), static_cast<int32>(EToolMode::Build)));
+	Tool.OnClick(TestTool::ContextAt(*Actor, FVector2D(0.0, -80000.0)));
+	Tool.OnClick(TestTool::ContextAt(*Actor, FVector2D(20000.0, -80000.0)));
+	TestEqual(TEXT("Build lays a segment again"), Actor->Network->GetSegments().Num(), SegmentsBefore + 1);
+
+	// THE ROAD TOOL CARRIES THE SAME ROW - "other tools can use the same terminology".
+	{
+		FRoadDrawTool RoadTool(ERoadKind::ServiceRoad);
+		TArray<FToolVariantAxis> RoadAxes;
+		RoadTool.GetVariantAxes(OnTaxiway, RoadAxes);
+		TestTrue(TEXT("the road tool's first row is Mode too"), RoadAxes.Num() > 0 && RoadAxes[0].Id == ModeAxis::AxisId());
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadDrawToolUpgradeKeepsWidthTest,
+	"Airside.Tool.UpgradeModeKeepsWidth",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadDrawToolUpgradeKeepsWidthTest::RunTest(const FString& Parameters)
+{
+	// REVIEW FIX 4 (the trap): the Build row starts on the narrowest width, so a player entering
+	// Upgrade only to re-surface an F taxiway used to narrow it to the narrowest letter, free.
+	// "Keep width" leads the width row in Upgrade and is lit on entry; a surface-only pick keeps F.
+	FAirsideTestWorld World;
+	if (!TestNotNull(TEXT("a world"), World.Actor)) { return false; }
+	ARoadNetworkActor* Actor = World.Actor;
+	int32 F = INDEX_NONE;
+	for (int32 W = 0; W < Actor->GetWidthCount(ERoadKind::Taxiway); ++W)
+	{
+		const URoadProfile* Each = Actor->ResolveWidthProfile(ERoadKind::Taxiway, W);
+		if (Each != nullptr && IcaoCode::TaxiwayLetterForWidth(Each->GetTotalWidth()) == EIcaoCode::F) { F = W; }
+	}
+	if (!TestTrue(TEXT("an F width"), F != INDEX_NONE)) { return false; }
+	const double WidthF = Actor->ResolveWidthProfile(ERoadKind::Taxiway, F)->GetTotalWidth();
+	TestTrue(TEXT("an F tarmac taxiway"), Actor->ConnectNodes(Actor->PlaceNode({ -20000.0, 0.0 }), Actor->PlaceNode({ 20000.0, 0.0 }),
+		ERoadKind::Taxiway, F, EPavement::Tarmac));
+	const int32 Seg = Actor->Network->GetSegments().Num() - 1;
+
+	FRoadDrawTool Tool(ERoadKind::Taxiway);
+	const FToolContext OnTaxiway = TestTool::ContextAt(*Actor, FVector2D(0.0, 0.0));
+	TArray<FToolVariantAxis> Axes;
+	Axes.Reset();   // GetVariantAxes APPENDS
+	Tool.GetVariantAxes(OnTaxiway, Axes);
+	auto Row = [&Axes](FName Id) { return Axes.IndexOfByPredicate([Id](const FToolVariantAxis& A) { return A.Id == Id; }); };
+	TestTrue(TEXT("Upgrade"), Tool.SelectVariant(OnTaxiway, Row(ModeAxis::AxisId()), static_cast<int32>(EToolMode::Upgrade)));
+	Axes.Reset();   // GetVariantAxes APPENDS
+	Tool.GetVariantAxes(OnTaxiway, Axes);
+	const int32 SurfaceRow = Row(TEXT("Surface"));
+	const int32 Grass = SurfaceRow != INDEX_NONE ? Axes[SurfaceRow].Options.IndexOfByPredicate(
+		[](const FToolVariant& V) { return V.Id == FName(Pavement::Name(EPavement::Grass)); }) : INDEX_NONE;
+	TestTrue(TEXT("grass picked, and nothing else"), Tool.SelectVariant(OnTaxiway, SurfaceRow, Grass));
+	{
+		FCountingPreviewSink Sink;
+		Tool.BuildPreview(OnTaxiway, Sink);
+		TestFalse(TEXT("the hover does not offer to narrow it"),
+			Sink.Labels.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("Narrow")); }));
+	}
+	Tool.OnClick(OnTaxiway);
+	const FRoadSegment& After = Actor->Network->GetSegments()[Seg];
+	TestEqual(TEXT("the taxiway is still F"), After.Profile->GetTotalWidth(), WidthF, 0.5);
+	TestEqual(TEXT("only its surface changed"), static_cast<int32>(After.Surface), static_cast<int32>(EPavement::Grass));
+
+	// A NARROWING, chosen, says so - "Narrow to", never "Upgrade to".
+	Axes.Reset();   // GetVariantAxes APPENDS
+	Tool.GetVariantAxes(OnTaxiway, Axes);
+	TestTrue(TEXT("the narrowest picked"), Tool.SelectVariant(OnTaxiway, Row(TEXT("Width")), 1));
+	{
+		FCountingPreviewSink Sink;
+		Tool.BuildPreview(OnTaxiway, Sink);
+		TestTrue(TEXT("the hover says it narrows"),
+			Sink.Labels.ContainsByPredicate([](const FString& L) { return L.StartsWith(TEXT("Narrow to Code")); }));
+	}
 	return true;
 }
 

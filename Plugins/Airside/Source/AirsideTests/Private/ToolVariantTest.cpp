@@ -57,8 +57,10 @@ namespace
 
 	int32 TvLit(const IBuildTool& Tool, const FToolContext& Context)
 	{
+		// THE WIDTH ROW BY ITS Id - row 0 is Mode since strip stage 6.
 		const TArray<FToolVariantAxis> Axes = TvAxes(Tool, Context);
-		return Axes.Num() > 0 ? Axes[0].Current : -2;
+		const FToolVariantAxis* Width = Axes.FindByPredicate([](const FToolVariantAxis& A) { return A.Id == FName(TEXT("Width")); });
+		return Width != nullptr ? Width->Current : -2;
 	}
 }
 
@@ -88,17 +90,18 @@ bool FTvRoadWidthTest::RunTest(const FString& Parameters)
 	{
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
 		const TArray<FToolVariantAxis> Axes = TvAxes(Tool, Context);
-		if (!TestEqual(TEXT("a taxiway offers two choices, width and surface"), Axes.Num(), 2)) { return false; }
-		TestEqual(TEXT("the axis is Width"), Axes[0].Id, FName(TEXT("Width")));
-		if (!TestEqual(TEXT("one option per standard width"), Axes[0].Options.Num(), 3)) { return false; }
-		TestEqual(TEXT("labelled by width"), Axes[0].Options[0].Label.ToString(), FString(TEXT("10.5 m")));
-		TestEqual(TEXT("whole metres drop the decimal"), Axes[0].Options[2].Label.ToString(), FString(TEXT("23 m")));
+		// ROW 0 IS MODE since strip stage 6 (ModeAxis leads every road tool's rows), so Width is 1.
+		if (!TestEqual(TEXT("a taxiway offers three choices, mode, width and surface"), Axes.Num(), 3)) { return false; }
+		TestEqual(TEXT("the axis is Width"), Axes[1].Id, FName(TEXT("Width")));
+		if (!TestEqual(TEXT("one option per standard width"), Axes[1].Options.Num(), 3)) { return false; }
+		TestEqual(TEXT("labelled by width"), Axes[1].Options[0].Label.ToString(), FString(TEXT("10.5 m")));
+		TestEqual(TEXT("whole metres drop the decimal"), Axes[1].Options[2].Label.ToString(), FString(TEXT("23 m")));
 		TestNotEqual(TEXT("Ids are distinct, since the bar rebuilds on them"),
-			Axes[0].Options[0].Id, Axes[0].Options[1].Id);
+			Axes[1].Options[0].Id, Axes[1].Options[1].Id);
 
 		// 2. A FRESH TOOL LIGHTS AND LAYS THE NARROWEST (2026-09-28) - not the level default,
 		//    which Target sets to the middle width precisely so the two cannot be confused.
-		TestEqual(TEXT("a fresh tool lights the narrowest"), Axes[0].Current, 0);
+		TestEqual(TEXT("a fresh tool lights the narrowest"), Axes[1].Current, 0);
 		TestEqual(TEXT("and holds it"), Tool.GetWidthIndex(), 0);
 	}
 
@@ -116,13 +119,13 @@ bool FTvRoadWidthTest::RunTest(const FString& Parameters)
 	// 4. A PICK IS HONOURED, AND A BAD ONE CHANGES NOTHING.
 	{
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
-		TestTrue(TEXT("picking the widest is accepted"), Tool.SelectVariant(Context, 0, 2));
+		TestTrue(TEXT("picking the widest is accepted"), Tool.SelectVariant(Context, 1, 2));
 		TestEqual(TEXT("it is what the next click lays"), Tool.GetWidthIndex(), 2);
 		TestEqual(TEXT("and what is lit"), TvLit(Tool, Context), 2);
 
-		TestFalse(TEXT("past the end is refused"), Tool.SelectVariant(Context, 0, 3));
-		TestFalse(TEXT("a negative option is refused"), Tool.SelectVariant(Context, 0, -1));
-		TestFalse(TEXT("an axis the tool does not have is refused"), Tool.SelectVariant(Context, 2, 0));
+		TestFalse(TEXT("past the end is refused"), Tool.SelectVariant(Context, 1, 3));
+		TestFalse(TEXT("a negative option is refused"), Tool.SelectVariant(Context, 1, -1));
+		TestFalse(TEXT("an axis the tool does not have is refused"), Tool.SelectVariant(Context, 3, 0));
 		TestEqual(TEXT("none of them moved the width"), Tool.GetWidthIndex(), 2);
 	}
 
@@ -145,7 +148,7 @@ bool FTvRoadWidthTest::RunTest(const FString& Parameters)
 		OneContext.Target = &One;
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
 		const TArray<FToolVariantAxis> Axes = TvAxes(Tool, OneContext);
-		TestTrue(TEXT("one width is one option"), Axes.Num() == 2 && Axes[0].Options.Num() == 1);
+		TestTrue(TEXT("one width is one option"), Axes.Num() == 3 && Axes[1].Options.Num() == 1);
 		Tool.OnReselect(OneContext);
 		Tool.OnReselect(OneContext);
 		TestEqual(TEXT("and cycling one option stays on it"), Tool.GetWidthIndex(), 0);
@@ -159,8 +162,8 @@ bool FTvRoadWidthTest::RunTest(const FString& Parameters)
 		EmptyContext.Target = &Empty;
 		FRoadDrawTool Tool(ERoadKind::Taxiway);
 		const TArray<FToolVariantAxis> EmptyAxes = TvAxes(Tool, EmptyContext);
-		TestTrue(TEXT("an empty content set offers only the surface"),
-			EmptyAxes.Num() == 1 && EmptyAxes[0].Id == FName(TEXT("Surface")));
+		TestTrue(TEXT("an empty content set offers only the mode and the surface"),
+			EmptyAxes.Num() == 2 && EmptyAxes[1].Id == FName(TEXT("Surface")));
 	}
 
 	// 8. A TOOL WITH NOTHING TO CHOOSE says so - the base's silence, reached through the registry.
@@ -272,7 +275,11 @@ namespace
 		virtual void GetVariantAxes(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const override
 		{
 			FRoadDrawTool::GetVariantAxes(Context, Out);
-			if (Out.Num() > 0 && Out[0].Options.Num() > 1) { Out[0].Options[1].bEnabled = false; }
+			// THE WIDTH ROW BY Id - row 0 is Mode since strip stage 6.
+			for (FToolVariantAxis& Axis : Out)
+			{
+				if (Axis.Id == FName(TEXT("Width")) && Axis.Options.Num() > 1) { Axis.Options[1].bEnabled = false; }
+			}
 		}
 	};
 
@@ -315,7 +322,7 @@ bool FTvLockedOptionTest::RunTest(const FString& Parameters)
 	Context.Target = &Target;
 
 	FTvLockedRoadTool Road;
-	TestFalse(TEXT("a click on the locked width is refused"), Road.SelectVariant(Context, 0, 1));
+	TestFalse(TEXT("a click on the locked width is refused"), Road.SelectVariant(Context, 1, 1));   // row 1: Width, after Mode
 	TestEqual(TEXT("and left the narrowest chosen"), Road.GetWidthIndex(), 0);
 	Road.OnReselect(Context);
 	TestEqual(TEXT("the key steps OVER the locked width"), Road.GetWidthIndex(), 2);
@@ -369,10 +376,11 @@ bool FTvSessionTest::RunTest(const FString& Parameters)
 
 	TArray<FToolVariantAxis> Axes;
 	Session.GetActiveVariantAxes(Context, Axes);
-	if (!TestEqual(TEXT("the lit taxiway tool's two rows reach the session"), Axes.Num(), 2)) { return false; }
-	TestEqual(TEXT("with every content width"), Axes[0].Options.Num(), Count);
+	// THREE since strip stage 6: Mode leads, then Width and Surface.
+	if (!TestEqual(TEXT("the lit taxiway tool's three rows reach the session"), Axes.Num(), 3)) { return false; }
+	TestEqual(TEXT("with every content width"), Axes[1].Options.Num(), Count);
 
-	TestTrue(TEXT("a pick through the session is accepted"), Session.SelectActiveVariant(Context, 0, 1));
+	TestTrue(TEXT("a pick through the session is accepted"), Session.SelectActiveVariant(Context, 1, 1));
 	const FRoadDrawTool* Tool = static_cast<const FRoadDrawTool*>(Session.GetActiveTool());
 	TestEqual(TEXT("and lands on the lit tool"), Tool->GetWidthIndex(), 1);
 

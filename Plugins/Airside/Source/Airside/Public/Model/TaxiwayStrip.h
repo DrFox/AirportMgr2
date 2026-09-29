@@ -5,6 +5,7 @@
 #include "Solve/IcaoCode.h"
 
 class URoadNetwork;
+class URoadProfile;
 
 /**
  * The clearance strip beside every taxiway, as a keep-out question: does this footprint stand
@@ -49,9 +50,9 @@ namespace TaxiwayStrip
 	struct FIntrusion
 	{
 		FRoadSegmentId Taxiway;
-		/** The taxiway's letter - what set the strip. */
+		/** The letter the taxiway OPERATES at - what set the strip (StripLetterOf). */
 		EIcaoCode Letter = EIcaoCode::A;
-		/** The strip's width, uu - IcaoCode::TaxiwayStripForWidth of the pavement. */
+		/** The strip's width, uu - StripWidthOf, at the effective letter. */
 		double Required = 0.0;
 		/** How far inside the strip's outer edge the footprint reaches, uu. */
 		double Depth = 0.0;
@@ -71,11 +72,34 @@ namespace TaxiwayStrip
 	 */
 	AIRSIDE_API bool IsAircraftOnly(const URoadNetwork& Network, FRoadSegmentId Id);
 
+	/** IsAircraftOnly's rule on a profile alone, for a profile not yet on any segment - the
+	 *  Upgrade mode's "does this width keep the segment's kind?" (URoadNetwork::SetSegmentProfile).
+	 *  IsAircraftOnly forwards here, so the two cannot disagree. False for null. */
+	AIRSIDE_API bool IsAircraftOnlyProfile(const URoadProfile* Profile);
+
 	/** A taxiway with a strip: aircraft only, and not a runway (runways have their own rules). */
 	AIRSIDE_API bool HasStrip(const URoadNetwork& Network, FRoadSegmentId Id);
 
-	/** The strip each side of this segment, uu; 0 for anything HasStrip refuses. */
+	/**
+	 * THE strip each side of this segment, uu - at its EFFECTIVE letter (the pavement's, lowered
+	 * by a restriction: TaxiwayRestriction::EffectiveLetterOf); 0 for anything HasStrip refuses.
+	 *
+	 * ORCHESTRATOR RULING, 2026-09-29 (owner asleep): the strip at the effective letter governs
+	 * EVERYTHING - stand closure, placement refusal, the inspector card, the Upgrade outline. The
+	 * spec says a restricted taxiway "operates at the largest letter whose strip is clear", and
+	 * no aircraft wider than that letter may use it, so no wing sweeps the ground between that
+	 * letter's strip and the pavement's; a stand there is OPEN. Two answers to "what is this
+	 * taxiway's strip" (the pavement's for closure, the restricted one for routing) was the review
+	 * finding this replaced. The ONE exception is TaxiwayRestriction::RestrictionOf, which must
+	 * try candidate letters over the pavement (IcaoCode::TaxiwayStripFor(L, width)) to FIND the
+	 * effective one - it reads the stored letter of no segment, so there is no circle.
+	 * ENFORCED BY: Airside.Tool.UpgradeMode (card, closure, placement and outline state one figure)
+	 */
 	AIRSIDE_API double StripWidthOf(const URoadNetwork& Network, FRoadSegmentId Id);
+
+	/** The letter StripWidthOf is at - the one that set the strip, for a refusal's words. Unset
+	 *  for anything HasStrip refuses. */
+	AIRSIDE_API TOptional<EIcaoCode> StripLetterOf(const URoadNetwork& Network, FRoadSegmentId Id);
 
 	/**
 	 * The deepest strip intrusion of a closed footprint polygon (any winding), or unset when it
@@ -158,6 +182,29 @@ namespace TaxiwayStrip
 	 */
 	AIRSIDE_API FStripVerdict JudgeExisting(const URoadNetwork& Network, FRoadSegmentId Id,
 		TConstArrayView<FRoadSegmentId> Ignore = {});
+
+	/** Something a strip is over: what JudgeSegment's own-strip step found, by kind and index. */
+	struct FSwallowed
+	{
+		enum class EKind : uint8 { Stand, Depot, Road, Taxiway };
+		EKind Kind = EKind::Road;
+		/** An entity index for Stand and Depot, a segment index for Road and Taxiway. */
+		int32 Index = INDEX_NONE;
+	};
+
+	/**
+	 * JudgeSegment's own-strip step asked of a LIVE taxiway at a strip width of the caller's
+	 * choosing - the restriction pass's question, "is the strip at letter L clear?" (stage 6).
+	 * Ends and exemption as JudgeExisting's (its own nodes, itself ignored, the met taxiway's
+	 * straight chain walked), but no angle refusal: a badly met arm is Met, not an obstruction,
+	 * as step 3 has always treated it. ONE MACHINERY with JudgeSegment (factored, not copied),
+	 * so the restriction and the placement refusal cannot disagree about what a strip is over.
+	 * bCountStands false for the restriction: a stand closes instead (plan ruling 3).
+	 * Unset for anything HasStrip refuses.
+	 * ENFORCED BY: Airside.Model.TaxiwayRestriction, Airside.Model.TaxiwayStrip.SegmentJudge
+	 */
+	AIRSIDE_API TOptional<FSwallowed> StripSwallows(const URoadNetwork& Network, FRoadSegmentId Taxiway,
+		double StripWidth, bool bCountStands);
 
 	/** The meeting-angle rule on one arm: at least MeetMinDegrees from it. JudgeSegment's own
 	 *  test, public for MoveNode, which also judges a node's moved arms against each other. */

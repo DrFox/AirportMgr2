@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/Pavement.h"
 #include "Tool/RoadBuildTool.h"
+#include "Tool/ModeAxis.h"
 
 /**
  * One step of drawing a road - State, per design spec 7.2.
@@ -136,6 +137,9 @@ public:
 	/** What the next click lays the road on. */
 	EPavement GetSurface() const { return Surface; }
 
+	/** Build (lay a road) or Upgrade (re-width and re-surface the one clicked). */
+	EToolMode GetMode() const { return Mode; }
+
 	/** Selecting this tool while it is already active cycles the taxiway width - the same
 	 *  gesture FRunwayTool::OnReselect gives runways. Steps from the LIT option, through
 	 *  SelectVariant, so the key and the bar's row walk one list. WITH THE INSERT MODIFIER
@@ -233,6 +237,58 @@ private:
 
 	/** The Width row, or nothing when the content set declares no widths for Kind. */
 	void AddWidthAxis(const FToolContext& Context, TArray<FToolVariantAxis>& Out) const;
+
+	/**
+	 * Build or Upgrade - the shared ModeAxis row, leading this tool's rows (strip stage 6). ON
+	 * THE TOOL for WidthIndex's reason. STARTS BUILD and is not a remembered preference: a
+	 * session that opened in Upgrade would re-width the first road clicked when the player
+	 * meant to draw one - the deliberate-mode argument that made it a mode at all.
+	 */
+	EToolMode Mode = EToolMode::Build;
+
+	/**
+	 * The width an Upgrade click gives the piece: a standard width of Kind, or INDEX_NONE to KEEP
+	 * the piece's own (a surface-only upgrade). SEPARATE FROM WidthIndex, and reset to keep on
+	 * every entry to Upgrade (review fix 4): WidthIndex starts on the narrowest, so a player who
+	 * entered Upgrade only to re-surface an F taxiway narrowed it to the narrowest letter, free.
+	 * The Width row leads with "Keep width" in Upgrade and lights it.
+	 * ENFORCED BY: Airside.Tool.UpgradeModeKeepsWidth
+	 */
+	int32 UpgradeWidthIndex = INDEX_NONE;
+
+	/** The live segment an Upgrade click would change: the snapped segment, else the one whose
+	 *  pavement holds the cursor (a wide taxiway's edge is past the segment snap). INDEX_NONE if none. */
+	int32 UpgradeTargetUnder(const FToolContext& Context) const;
+
+	/** Upgrade mode's click: IRoadEditTarget::UpgradeSegment on what is under the cursor. */
+	void Upgrade(const FToolContext& Context);
+
+	/** Upgrade mode's hover: the new strip outlined, and one label saying what the click would
+	 *  do - refused and why, already so, or the restriction it causes and the stands it closes. */
+	void PreviewUpgrade(const FToolContext& Context, IToolPreviewSink& Sink) const;
+
+	/**
+	 * PreviewUpgrade's answer, kept until any input to it changes. The restriction and closure
+	 * are asked of a DUPLICATE network carrying the new profile - the question is about a graph
+	 * that does not exist yet, and the one evaluator (TaxiwayRestriction, StandAdmission) is asked
+	 * it rather than a second rule - and a duplicate a frame is not a cost to pay while the mouse
+	 * rests. Mutable: BuildPreview is const by the tool contract, and this is a memo, not state.
+	 */
+	struct FUpgradeHover
+	{
+		const URoadNetwork* Network = nullptr;
+		uint32 Revision = MAX_uint32;
+		int32 Entities = INDEX_NONE;
+		int32 Segment = INDEX_NONE;
+		const URoadProfile* Had = nullptr;
+		EPavement HadSurface = EPavement::Tarmac;
+		int32 Width = INDEX_NONE;
+		EPavement Surface = EPavement::Tarmac;
+		FString Text;
+		bool bRefused = false;
+		TArray<FVector2D> Outline;
+	};
+	mutable FUpgradeHover Hover;
 
 	/** The row named AxisId, one enabled option on from what it lights - FRunwayTool::StepAxis. */
 	void StepAxis(const FToolContext& Context, FName AxisId, const TCHAR* What);

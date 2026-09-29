@@ -19,6 +19,8 @@
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/Selection.h"
+#include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
 #include "UI/UiButton.h"
 #include "UIStyle.h"
 
@@ -449,6 +451,99 @@ bool FInspectorDemandsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the fuel line"), Text.Contains(TEXT("Fuel 300 L \u00B7 120 L left \u00B7 fuelling")));
 	TestTrue(TEXT("the pushback line"), Text.Contains(TEXT("Pushback reverses itself")));
 	TestTrue(TEXT("and the turnaround contract"), Text.Contains(TEXT("Turnaround 3 h \u00B7 1 h 12 min left")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorTaxiwayCardTest,
+	"AirportMgr.Inspector.TaxiwayCard",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorTaxiwayCardTest::RunTest(const FString& Parameters)
+{
+	// STRIP STAGE 6: ESelectionKind::Taxiway has its own card - not the stand branch the widget's
+	// old if-chain fell through to for any kind it did not name (a stand card for segment index N
+	// would describe ENTITY N). A restricted taxiway says so and names the obstruction.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+
+	int32 F = INDEX_NONE;
+	for (int32 W = 0; W < Actor->GetWidthCount(ERoadKind::Taxiway); ++W)
+	{
+		const URoadProfile* Each = Actor->ResolveWidthProfile(ERoadKind::Taxiway, W);
+		if (Each != nullptr && IcaoCode::TaxiwayLetterForWidth(Each->GetTotalWidth()) == EIcaoCode::F) { F = W; }
+	}
+	if (!TestTrue(TEXT("an F width"), F != INDEX_NONE)) { return false; }
+	const double WidthF = Actor->ResolveWidthProfile(ERoadKind::Taxiway, F)->GetTotalWidth();
+	const URoadProfile* Road = Actor->ResolveProfileFor(ERoadKind::ServiceRoad, INDEX_NONE);
+	if (!TestNotNull(TEXT("a road profile"), Road)) { return false; }
+	const double RoadY = 0.5 * (WidthF + IcaoCode::TaxiwayStripFor(EIcaoCode::E, WidthF) + IcaoCode::TaxiwayStripFor(EIcaoCode::F, WidthF))
+		+ Road->GetMaxHalfWidth();
+
+	// Laid at the NARROWEST, then upgraded - the road is refused inside an F strip at lay time.
+	Actor->ConnectNodes(Actor->PlaceNode({ -20000.0, 0.0 }), Actor->PlaceNode({ 20000.0, 0.0 }), ERoadKind::Taxiway, 0, EPavement::Tarmac);
+	const int32 Seg = Actor->Network->GetSegments().Num() - 1;
+	Actor->ConnectNodes(Actor->PlaceNode({ -3000.0, RoadY }), Actor->PlaceNode({ 3000.0, RoadY }), ERoadKind::ServiceRoad, INDEX_NONE, EPavement::Tarmac);
+	if (!TestTrue(TEXT("upgraded to F"), Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac))) { return false; }
+
+	FSelection Sel; Sel.Kind = ESelectionKind::Taxiway; Sel.Id = Seg;
+	Panel->Refresh(Actor, Sel, nullptr);
+	TestTrue(TEXT("the panel shows"), Panel->IsShownForTest());
+	TestTrue(FString::Printf(TEXT("titled as a taxiway: '%s'"), *Panel->TitleForTest()), Panel->TitleForTest().StartsWith(TEXT("Taxiway")));
+	const FString Facts = Panel->FactsForTest();
+	TestTrue(FString::Printf(TEXT("its letter: '%s'"), *Facts), Facts.Contains(TEXT("Code F")));
+	TestTrue(FString::Printf(TEXT("and the restriction, naming the road: '%s'"), *Facts),
+		Facts.Contains(TEXT("Restricted to Code E")) && Facts.Contains(TEXT("a service road")));
+	return true;
+}
+
+namespace
+{
+	/** LogInspector at Warning - FLogLineSpy matches Log only. Unbuffered, issue #216's reason. */
+	struct FInspectorWarningSpy : public FOutputDevice
+	{
+		int32 Count = 0;
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& InCategory) override
+		{
+			if (InCategory == FName(TEXT("LogInspector")) && Verbosity == ELogVerbosity::Warning) { ++Count; }
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorUnknownKindWarnsOnceTest,
+	"AirportMgr.Inspector.UnknownKindWarnsOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorUnknownKindWarnsOnceTest::RunTest(const FString& Parameters)
+{
+	// A KIND WITH NO CARD hides the panel and says so ONCE per selection, not once per tick -
+	// Refresh runs every NativeTick, and a warning a frame is a log nobody can read.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	FSelection Sel;
+	Sel.Kind = static_cast<ESelectionKind>(200);   // no such kind - what an appended one looked like before its card
+	Sel.Id = 1;
+
+	FInspectorWarningSpy Spy;
+	GLog->AddOutputDevice(&Spy);
+	for (int32 Tick = 0; Tick < 5; ++Tick)
+	{
+		Panel->Refresh(TestWorld.Actor, Sel, nullptr);
+	}
+	Sel.Id = 2;
+	Panel->Refresh(TestWorld.Actor, Sel, nullptr);
+	Panel->Refresh(TestWorld.Actor, Sel, nullptr);
+	GLog->RemoveOutputDevice(&Spy);
+
+	TestFalse(TEXT("the panel hides"), Panel->IsShownForTest());
+	TestEqual(TEXT("one warning per selection, not per tick"), Spy.Count, 2);
 	return true;
 }
 

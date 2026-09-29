@@ -7,6 +7,8 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Model/RouteSearch.h"
+#include "Solve/IcaoCode.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -333,9 +335,13 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 			Made->Bands.Add(Lane);
 			Made->Bands.Add(Lane);
 
+			// GROUND VEHICLE, not Aircraft, since strip stage 6: an aircraft-only profile is a
+			// TAXIWAY, whose letter now caps every edge (LetterCappedWingspan) - both arms would
+			// carry a limit and the sentinel below would never see a 0. The builder's turn rule
+			// is class-agnostic, so a truck lane still exercises it.
 			FProfileGuideline Centre;
 			Centre.CentreOffset = 0.0;
-			Centre.Class = ETraversalClass::Aircraft;      // same class on both arms, so the
+			Centre.Class = ETraversalClass::GroundVehicle; // same class on both arms, so the
 			Centre.Direction = EGuidelineDir::Bidirectional; // direction filter keeps the turns
 			Centre.Width = 400.0;
 			Centre.MaxWingspan = MaxWingspan;
@@ -364,9 +370,13 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 				++SpanTurns;
 				TestEqual(TEXT("an unlimited arm does not widen a limited one"),
 					Edge.MaxWingspan, 5200.0);
+				TestTrue(TEXT("and every such edge is a turn at the mixed junction"), Edge.AtJunction == SpanHub);
 			}
 		}
-		TestEqual(TEXT("both turn paths at the mixed junction were checked"), SpanTurns, 2);
+		// AT LEAST BOTH TURN PATHS, not exactly two edges: a truck lane's turn is a bend arc in
+		// several pieces (BendArcPieceSweep), each carrying the turn's limit - so the count is
+		// pieces, and "both turns were checked" is that there are any beyond one.
+		TestTrue(FString::Printf(TEXT("both turn paths at the mixed junction were checked (%d pieces)"), SpanTurns), SpanTurns >= 2);
 	}
 
 	// Plan A's known gap 6. The turn loop filters by each arm's DIRECTION and intersects
@@ -509,6 +519,84 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 			EmergencyOnlyTurns, 4);
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTaxiwayLetterLimitsWingspanTest,
+	"Airside.Build.TaxiwayLetterLimitsWingspan",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiwayLetterLimitsWingspanTest::RunTest(const FString& Parameters)
+{
+	// USER 2026-09-29: "an aircraft should not be able to use a taxiway that is too small for
+	// it. The opposite is allowed, a Cessna 172 is allowed on any taxiway." Every taxiway edge
+	// carries its EFFECTIVE letter's widest span - the pavement's, lowered by a restriction -
+	// as a ceiling, never a floor.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* E24 = URoadProfile::MakeTransient(2400.0, 1600.0);   // 24 m: Code E
+	const FRoadNodeId Hub = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId West = Net->AddNode(FVector2D(-12000.0, 0.0));
+	const FRoadNodeId North = Net->AddNode(FVector2D(0.0, 12000.0));
+	const FRoadSegmentId WestSeg = Net->AddStraightSegment(West, Hub, E24);
+	const FRoadSegmentId NorthSeg = Net->AddStraightSegment(Hub, North, E24);
+	// THE RESTRICTION BY HAND, and the builder called directly rather than through
+	// TestGraph::Derive, whose restriction pass would find nothing here and lift it again.
+	Net->WriteSegmentRestriction(NorthSeg, static_cast<uint8>(EIcaoCode::C));
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
+
+	FGuidelineNodeId WestEnd, NorthEnd;
+	int32 Turns = 0;
+	for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+	{
+		if (!Edge.bAlive) { continue; }
+		const FGuidelineNode* A = Net->GetGuidelineNode(Edge.A);
+		const FGuidelineNode* B = Net->GetGuidelineNode(Edge.B);
+		const FGuidelineNodeId Far = A->Position.Size() > B->Position.Size() ? Edge.A : Edge.B;
+		if (Edge.DerivedFrom == WestSeg)
+		{
+			TestEqual(TEXT("an unrestricted 24 m taxiway admits up to Code E's span"),
+				Edge.MaxWingspan, IcaoCode::MaxWingspanForLetter(EIcaoCode::E));
+			WestEnd = Far;
+		}
+		else if (Edge.DerivedFrom == NorthSeg)
+		{
+			TestEqual(TEXT("the same pavement restricted to C admits C's"),
+				Edge.MaxWingspan, IcaoCode::MaxWingspanForLetter(EIcaoCode::C));
+			NorthEnd = Far;
+		}
+		else if (Edge.AtJunction == Hub)
+		{
+			++Turns;
+			TestEqual(TEXT("a turn between them takes the tighter arm's - the existing Min"),
+				Edge.MaxWingspan, IcaoCode::MaxWingspanForLetter(EIcaoCode::C));
+		}
+	}
+	TestTrue(TEXT("the turns were checked"), Turns > 0);
+	if (!TestTrue(TEXT("both arms derived a line"), WestEnd.IsSet() && NorthEnd.IsSet())) { return false; }
+
+	constexpr double CessnaSpan = 1100.0;   // a Cessna 172, 11.0 m
+	TestTrue(TEXT("a Cessna uses the restricted taxiway - a ceiling, never a floor"),
+		TestGraph::Probe(*Net, WestEnd, NorthEnd, ETraversalClass::Aircraft, nullptr, CessnaSpan).IsValid());
+	const FRoutePlan CodeD = TestGraph::Probe(*Net, WestEnd, NorthEnd, ETraversalClass::Aircraft, nullptr,
+		IcaoCode::DesignSpanForLetter(EIcaoCode::D));
+	TestEqual(TEXT("a Code D span through the C-restricted piece is TooWide, not Unreachable"),
+		CodeD.Result, ERouteResult::TooWide);
+
+	// AN A380 ON THE DEFAULT 24 m TAXIWAY: E admits up to 65 m; 79.8 m does not fit.
+	const FGuidelineNodeId HubEnd = [&]()
+	{
+		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+		{
+			if (Edge.bAlive && Edge.DerivedFrom == WestSeg) { return Edge.A == WestEnd ? Edge.B : Edge.A; }
+		}
+		return FGuidelineNodeId();
+	}();
+	TestEqual(TEXT("an A380 over a 24 m taxiway is TooWide"),
+		TestGraph::Probe(*Net, WestEnd, HubEnd, ETraversalClass::Aircraft, nullptr, 7980.0).Result, ERouteResult::TooWide);
+	TestTrue(TEXT("a 777 (64.8 m) fits it"),
+		TestGraph::Probe(*Net, WestEnd, HubEnd, ETraversalClass::Aircraft, nullptr, 6480.0).IsValid());
 	return true;
 }
 

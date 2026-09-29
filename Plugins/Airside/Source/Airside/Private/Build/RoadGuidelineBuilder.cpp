@@ -8,6 +8,7 @@
 #include "Model/Chassis.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiwayRestriction.h"
 #include "Profiles/RoadDesignVehicles.h"
 #include "Profiles/RoadProfile.h"
 #include "Model/VehicleFit.h"
@@ -17,6 +18,33 @@
 
 namespace
 {
+	/**
+	 * The widest span a derived edge of Segment admits: the guideline's declared limit, capped
+	 * on a TAXIWAY by its effective letter's widest span - the pavement's, lowered by a
+	 * restriction (TaxiwayRestriction::EffectiveLetterOf, which reads the RestrictedLetter the
+	 * restriction pass wrote before this builder ran).
+	 *
+	 * USER 2026-09-29: "an aircraft should not be able to use a taxiway that is too small for
+	 * it. The opposite is allowed, a Cessna 172 is allowed on any taxiway." A CEILING ONLY:
+	 * nothing is ever refused for being small. Roads and runways are untouched - a road admits
+	 * no aircraft by class, and a runway's admission is RunwayAdmission's.
+	 *
+	 * 0 IS UNLIMITED on the declared side, the turn rule's own sentinel below, so a naive Min
+	 * would read "no declared limit" as "admits nothing". THE ONE WRITER of the letter cap: the
+	 * straight edges and the turn paths both come through here.
+	 * ENFORCED BY: Airside.Build.TaxiwayLetterLimitsWingspan
+	 */
+	double LetterCappedWingspan(const URoadNetwork& Network, FRoadSegmentId Segment, double Declared)
+	{
+		const TOptional<EIcaoCode> Letter = TaxiwayRestriction::EffectiveLetterOf(Network, Segment);
+		if (!Letter.IsSet())
+		{
+			return Declared;
+		}
+		const double Cap = IcaoCode::MaxWingspanForLetter(Letter.GetValue());
+		return Declared <= 0.0 ? Cap : FMath::Min(Declared, Cap);
+	}
+
 	/**
 	 * Where a guideline crosses a cut line, as a lerp parameter from the right cut to the
 	 * left. Mirrors FRoadProfileBands' convention so the two never disagree about which
@@ -470,7 +498,7 @@ namespace
 				Edge.AllowedTraffic.Add(ETraversalClass::Emergency);
 				Edge.Direction = Declared.Direction;
 				Edge.Width = Declared.Width;
-				Edge.MaxWingspan = Declared.MaxWingspan;
+				Edge.MaxWingspan = LetterCappedWingspan(Network, SegmentId, Declared.MaxWingspan);
 				Edge.DerivedFrom = SegmentId;
 				Edge.DerivedGuidelineIndex = Which;
 				Edge.bDerived = true;
@@ -1350,8 +1378,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// limited one - wrong in the direction that puts an oversized aircraft
 					// onto a turn that cannot take it. A turn is usable only by what BOTH
 					// arms admit.
-					const double FromLimit = Declared.MaxWingspan;
-					const double ToLimit   = ToDeclared.MaxWingspan;
+					// Each arm's own limit, letter cap included (LetterCappedWingspan), so a turn
+					// onto a restricted taxiway admits no more than the taxiway does.
+					const double FromLimit = LetterCappedWingspan(Network, FromSeg, Declared.MaxWingspan);
+					const double ToLimit   = LetterCappedWingspan(Network, ToSeg, ToDeclared.MaxWingspan);
 					Turn.MaxWingspan =
 						(FromLimit <= 0.0) ? ToLimit :
 						(ToLimit   <= 0.0) ? FromLimit :

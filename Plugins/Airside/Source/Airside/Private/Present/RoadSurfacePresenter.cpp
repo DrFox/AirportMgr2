@@ -17,6 +17,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
+#include "Model/TaxiwayRestriction.h"
 #include "Present/DynamicMeshSink.h"
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
@@ -656,6 +657,12 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 		// Anchor lead-ins go second and must: they join stands to guidelines that only exist
 		// once the line above has run, and both are swept and rebuilt together. Both take the
 		// SAME resolved vehicle SolveAll just used, rather than resolving their own (#190).
+		//
+		// THE RESTRICTION PASS FIRST (strip stage 6): the builder writes every taxiway edge's
+		// MaxWingspan from its EFFECTIVE letter, which reads the RestrictedLetter this writes -
+		// run after, it would route on the previous edit's restriction. After SolveAll, which it
+		// does not read, so the order against the solve is free.
+		TaxiwayRestriction::Apply(Network);
 		FRoadGuidelineBuilder::Build(Network, Solved, Settings.DesignVehicles);
 		//
 		// THE SERVICE RADIUS COMES DOWN FROM THE LEVEL - see ARoadNetworkActor::ServiceLinkRadius.

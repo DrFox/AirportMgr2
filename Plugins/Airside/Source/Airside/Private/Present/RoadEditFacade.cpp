@@ -858,6 +858,144 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& InF
 	return true;
 }
 
+namespace
+{
+	/** What an upgrade would lay: Kind's standard width WidthIndex, or - INDEX_NONE - the
+	 *  segment's own profile, a surface-only upgrade. Through ResolveWidthProfile (const, the
+	 *  content list), not ResolveProfileFor: that folds in each kind's DEFAULT, and an upgrade
+	 *  never means "whatever a fresh road would be". */
+	const URoadProfile* UpgradeTarget(const ARoadNetworkActor& Owner, const URoadNetwork& Network,
+		const FRoadSegment& Segment, ERoadKind Kind, int32 WidthIndex)
+	{
+		return WidthIndex == INDEX_NONE ? Network.ProfileFor(Segment) : Owner.ResolveWidthProfile(Kind, WidthIndex);
+	}
+}
+
+FString URoadEditFacade::WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	FRoadSegmentId Id;
+	if (Network == nullptr || !MakeLiveSegmentId(SegmentIndex, Id))
+	{
+		return TEXT("there is no road there to upgrade");
+	}
+	if (Network->IsRunwaySegment(Id))
+	{
+		// A runway's width and surface are its whole strip's - the runway tool's, chain-wide.
+		return TEXT("a runway is upgraded with the runway tool");
+	}
+	const FRoadSegment& Segment = Network->GetSegments()[SegmentIndex];
+	const bool bIsTaxiway = TaxiwayStrip::IsAircraftOnly(*Network, Id);
+	if (bIsTaxiway != (Kind == ERoadKind::Taxiway))
+	{
+		return bIsTaxiway ? TEXT("that is a taxiway - upgrade it with the taxiway tool")
+			: TEXT("that is a service road - upgrade it with the road tool");
+	}
+	const URoadProfile* Old = Network->ProfileFor(Segment);
+	const URoadProfile* New = UpgradeTarget(Actor(), *Network, Segment, Kind, WidthIndex);
+	if (Old == nullptr || New == nullptr)
+	{
+		return TEXT("no such width in the content set");
+	}
+	// URoadNetwork::SetSegmentProfile's own refusals, asked HERE so the commit below can never
+	// meet them (review fix 5): a runway cross-section, or one of the other kind - a content
+	// list that put either among Kind's widths would otherwise half-apply the upgrade.
+	if (New->bContinuousThroughJunctions || TaxiwayStrip::IsAircraftOnlyProfile(New) != bIsTaxiway)
+	{
+		return FString::Printf(TEXT("%s is not a %s cross-section"), *New->GetName(), bIsTaxiway ? TEXT("taxiway") : TEXT("service road"));
+	}
+	if (!Pavement::Offered(New->AllowedPavements).Contains(Surface))
+	{
+		return FString::Printf(TEXT("%s is not offered on this width"), Pavement::Name(Surface));
+	}
+	if (New == Old && Surface == Segment.Surface)
+	{
+		return FString();   // already so - UpgradeSegment answers true with no edit
+	}
+	const FBuildQuote Quote = BuildCost::ForUpgrade(*Old, Segment.Surface, *New, Surface,
+		BuildCost::SegmentLengthUu(*Network, Segment));
+	if (!CanAfford(Quote))
+	{
+		return FString::Printf(TEXT("cannot afford %s"), *Quote.What.ToString());
+	}
+
+	// WIDENING INTO A NEIGHBOUR IS LAYING PAVEMENT (plan Task 2): the new edge is judged as if
+	// laid now - its own nodes, itself ignored - as a ROAD (bIsTaxiway false), so only its
+	// PAVEMENT in another taxiway's strip refuses. What its grown strip swallows is what the
+	// restriction pass and stand admission answer, not a refusal - the point of this stage.
+	// ONLY WHEN IT WIDENS: a surface change or a narrowing lays no new ground, and a segment
+	// already inside a strip (a map from before stage 3) must still be re-surfaceable.
+	if (New->GetMaxHalfWidth() > Old->GetMaxHalfWidth())
+	{
+		TaxiwayStrip::FSegmentShape Shape;
+		if (TaxiwayStrip::ShapeOf(*Network, Id, Shape))
+		{
+			Shape.HalfWidth = New->GetMaxHalfWidth();
+			TaxiwayStrip::FSegmentEnd AtA;
+			AtA.Node = Segment.A;
+			AtA.At = Shape.A;
+			TaxiwayStrip::FSegmentEnd AtB;
+			AtB.Node = Segment.B;
+			AtB.At = Shape.B;
+			const FRoadSegmentId Self[] = { Id };
+			const TaxiwayStrip::FStripVerdict Verdict = TaxiwayStrip::JudgeSegment(*Network, Shape, false, AtA, AtB, Self);
+			if (Verdict.bRefused)
+			{
+				return Verdict.Text;
+			}
+		}
+	}
+	return FString();
+}
+
+bool URoadEditFacade::UpgradeSegment(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface)
+{
+	// SetRunwayFacts' SHAPE: every guard before the snapshot (an uncommitted scope discards its
+	// undo step but does not roll the network back), already-so answers true with no edit, and
+	// ONE scope for both writes so one Ctrl+Z reverts width and surface together.
+	const FString Why = WhyUpgradeRefused(SegmentIndex, Kind, WidthIndex, Surface);
+	if (!Why.IsEmpty())
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("UpgradeSegment refused: segment %d, %s"), SegmentIndex, *Why);
+		return false;
+	}
+	URoadNetwork* Network = Actor().Network;
+	const FRoadSegmentId Id = Network->SegmentIdAt(SegmentIndex);
+	const FRoadSegment& Segment = Network->GetSegments()[SegmentIndex];
+	const URoadProfile* Old = Network->ProfileFor(Segment);
+	URoadProfile* New = const_cast<URoadProfile*>(UpgradeTarget(Actor(), *Network, Segment, Kind, WidthIndex));
+	const EPavement WasSurface = Segment.Surface;
+	if (New == Old && Surface == WasSurface)
+	{
+		return true;
+	}
+	const FBuildQuote Quote = BuildCost::ForUpgrade(*Old, WasSurface, *New, Surface,
+		BuildCost::SegmentLengthUu(*Network, Segment));
+	const double WasWidth = Old->GetTotalWidth();
+
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("upgrade segment"));
+	// HONOURED, not discarded (review fix 5, CLAUDE.md's out-parameter rule): WhyUpgradeRefused
+	// asked both setters' refusals already, so either failing here is a new refusal it does not
+	// know about. An uncommitted scope rolls nothing back, so the profile is put back by hand.
+	if (!Network->SetSegmentProfile(Id, New))
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("UpgradeSegment refused: segment %d would not take %s"), SegmentIndex, *New->GetName());
+		return false;
+	}
+	if (!Network->SetSegmentSurface(Id, Surface))
+	{
+		Network->SetSegmentProfile(Id, const_cast<URoadProfile*>(Old));
+		UE_LOG(LogRoadMesh, Warning, TEXT("UpgradeSegment refused: segment %d would not take %s"), SegmentIndex, Pavement::Name(Surface));
+		return false;
+	}
+	CommitPurchase(Edit, Quote);
+
+	// The line to grep when "the upgrade did nothing": what reached the model, both halves.
+	UE_LOG(LogRoadMesh, Log, TEXT("Segment %d upgraded: %.1f m %s -> %.1f m %s"), SegmentIndex,
+		WasWidth / 100.0, Pavement::Name(WasSurface), New->GetTotalWidth() / 100.0, Pavement::Name(Surface));
+	return true;
+}
+
 bool URoadEditFacade::AddReverseTurn(int32 NodeIndex, int32 FromFarIndex, int32 IntoFarIndex)
 {
 	URoadNetwork* Network = Actor().Network;

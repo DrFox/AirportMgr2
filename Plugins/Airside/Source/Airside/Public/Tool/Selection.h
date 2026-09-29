@@ -22,7 +22,21 @@ enum class ESelectionKind : uint8
 	 * segment-index seams (SetRunwayFacts) already take one. A split kills the segment, and
 	 * FSelectTool::Tick then clears the selection as it does a deleted stand's.
 	 */
-	Runway
+	Runway,
+	/**
+	 * Id is a taxiway SEGMENT index into URoadNetwork::GetSegments() (strip stage 6) - its card
+	 * says its letter, strip and any restriction. APPENDED: a value's meaning never moves. Per
+	 * segment, not per chain: a restriction is per segment (stage 6 plan ruling 4), so the card
+	 * the player opens is the piece whose letter they are reading.
+	 */
+	Taxiway,
+
+	/**
+	 * How many kinds there are - NOT a kind; nothing selects it. The inspector's static_assert
+	 * counts its cards against this, so a kind appended above without a card fails to COMPILE
+	 * (review fix 3). Stays last: append new kinds above it.
+	 */
+	Count
 };
 
 /**

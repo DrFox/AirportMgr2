@@ -68,7 +68,8 @@ bool FServiceRoadWidthTest::RunTest(const FString& Parameters)
 		// the widest is then driven to index 2 rather than counted in presses.
 		TArray<FToolVariantAxis> Axes;
 		Tool.GetVariantAxes(Context, Axes);
-		const int32 Lit = Axes.Num() > 0 ? Axes[0].Current : INDEX_NONE;
+		// Row 1: Mode leads since strip stage 6.
+		const int32 Lit = Axes.Num() > 1 ? Axes[1].Current : INDEX_NONE;
 		Tool.OnReselect(Context);
 		TestEqual(TEXT("the first press steps on from what is lit"), Tool.GetWidthIndex(),
 			Lit == INDEX_NONE ? 0 : (Lit + 1) % Count);

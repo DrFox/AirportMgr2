@@ -2,6 +2,7 @@
 
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiwayRestriction.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
@@ -104,7 +105,11 @@ namespace TaxiwayStrip
 		const FRoadSegment* Segment = Network.GetSegment(Id);
 		// THROUGH ProfileFor, the one accessor that repairs a reloaded segment's null Profile - read
 		// raw, a saved map lost every strip laid on the fallback profile (found 2026-09-29).
-		const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+		return IsAircraftOnlyProfile(Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr);
+	}
+
+	bool IsAircraftOnlyProfile(const URoadProfile* Profile)
+	{
 		if (Profile == nullptr)
 		{
 			return false;
@@ -137,8 +142,15 @@ namespace TaxiwayStrip
 		{
 			return 0.0;
 		}
-		// THROUGH ProfileFor - see IsAircraftOnly; HasStrip has already proved it non-null.
-		return IcaoCode::TaxiwayStripForWidth(Network.ProfileFor(*Network.GetSegment(Id))->GetTotalWidth());
+		// THROUGH ProfileFor - see IsAircraftOnly; HasStrip has already proved it non-null. AT THE
+		// EFFECTIVE LETTER - see the header's ruling.
+		const double Pavement = Network.ProfileFor(*Network.GetSegment(Id))->GetTotalWidth();
+		return IcaoCode::TaxiwayStripFor(StripLetterOf(Network, Id).GetValue(), Pavement);
+	}
+
+	TOptional<EIcaoCode> StripLetterOf(const URoadNetwork& Network, FRoadSegmentId Id)
+	{
+		return TaxiwayRestriction::EffectiveLetterOf(Network, Id);
 	}
 
 	TOptional<FIntrusion> WorstIntrusion(const URoadNetwork& Network, TConstArrayView<FVector2D> Footprint,
@@ -174,7 +186,8 @@ namespace TaxiwayStrip
 
 			// FAR AWAY, CHEAPLY: the curve's hull box grown by its whole reach misses the
 			// footprint's box, so nothing below could find it nearer (final review 6).
-			const double Reach = Profile->GetMaxHalfWidth() + IcaoCode::TaxiwayStripForWidth(Profile->GetTotalWidth());
+			const double Strip = StripWidthOf(Network, Id);   // the EFFECTIVE strip - see its ruling
+			const double Reach = Profile->GetMaxHalfWidth() + Strip;
 			if (!HullBox(A, Segment.Control, B, Reach + ToleranceUu).Intersect(FootprintBox))
 			{
 				continue;
@@ -207,14 +220,12 @@ namespace TaxiwayStrip
 
 			// THE WIDER HALF, so an asymmetric profile is judged on its generous side rather
 			// than leaving a sliver on the narrow one uncounted.
-			const double Pavement = Profile->GetTotalWidth();
-			const double Strip = IcaoCode::TaxiwayStripForWidth(Pavement);
 			const double Depth = Profile->GetMaxHalfWidth() + Strip - Nearest;
 			if (Depth > ToleranceUu && (!Worst.IsSet() || Depth > Worst->Depth))
 			{
 				FIntrusion Found;
 				Found.Taxiway = Id;
-				Found.Letter = IcaoCode::TaxiwayLetterForWidth(Pavement);
+				Found.Letter = StripLetterOf(Network, Id).GetValue();
 				Found.Required = Strip;
 				Found.Depth = Depth;
 				Worst = Found;
@@ -326,136 +337,258 @@ namespace TaxiwayStrip
 		return JudgeSegment(Network, Shape, HasStrip(Network, Id), AtA, AtB, Skip);
 	}
 
+	namespace
+	{
+		/** What a segment meets at its ends - JudgeSegment's steps 1 and 1b, factored out so the
+		 *  restriction pass (stage 6) asks the same exemption rather than re-deriving it. */
+		struct FMeeting
+		{
+			/** The strip-bearing taxiways it joins at an allowed angle, walked along their
+			 *  straight chains near the join, plus Ignore - whose strip it may cross. */
+			TArray<FRoadSegmentId> Exempt;
+			/** Every segment at either end, strip or not. */
+			TArray<FRoadSegmentId> Met;
+		};
+
+		/**
+		 * Steps 1 and 1b. bStopAtRefusal: JudgeSegment's mode - the first arm met at a refused
+		 * angle ends the walk and writes Verdict, exactly as before the factoring. Off (the
+		 * restriction pass), a badly met arm is still Met - never an obstruction, which is what
+		 * JudgeSegment's step 3 has always done with it - but not Exempt, and the walk goes on.
+		 */
+		bool MeetingOf(const URoadNetwork& Network, const FSegmentShape& Shape, const FSegmentEnd& AtA,
+			const FSegmentEnd& AtB, TConstArrayView<FRoadSegmentId> Ignore, bool bStopAtRefusal,
+			FMeeting& Out, FStripVerdict& Verdict)
+		{
+			// 1. WHAT IT MEETS. Exempt = the strip-bearing taxiways it joins at an allowed angle,
+			// whose strip it may therefore cross (spec: "network that MEETS the taxiway may pass
+			// through its strip"). Met = every segment at either end, strip or not - a new taxiway's
+			// own strip cannot "contain" the road it is being joined to.
+			TArray<FRoadSegmentId>& Exempt = Out.Exempt;
+			TArray<FRoadSegmentId>& Met = Out.Met;
+			Exempt.Append(Ignore.GetData(), Ignore.Num());
+			const auto Meet = [&](const FSegmentEnd& End, const FVector2D& Dir) -> bool
+			{
+				if (End.Node.IsSet())
+				{
+					const FRoadNode* Node = Network.GetNode(End.Node);
+					if (Node == nullptr) { return true; }
+					for (const FRoadSegmentId Arm : Node->Incident)
+					{
+						Met.AddUnique(Arm);
+						if (Ignore.Contains(Arm) || !HasStrip(Network, Arm)) { continue; }
+						// PER ARM (Review Focus 2): at a node where two taxiways join, a road square
+						// to one can be 15 degrees off the other and run along ITS strip. At least
+						// MeetMinDegrees from every arm - see its header for why there is no
+						// separate straight-on band (a dead end's bend heads away from its arm).
+						const double Deg = DegreesBetween(Dir, Network.GetOutgoingTangent(Arm, End.Node));
+						if (MeetsAtAllowedAngle(Deg))
+						{
+							Exempt.AddUnique(Arm);
+							continue;
+						}
+						if (!bStopAtRefusal) { continue; }
+						Verdict.bRefused = true;
+						Verdict.Text = MeetingRefusal(Network, Arm, Deg);
+						return false;
+					}
+				}
+				else if (End.Segment.IsSet())
+				{
+					Met.AddUnique(End.Segment);
+					FSegmentShape Theirs;
+					if (Ignore.Contains(End.Segment) || !HasStrip(Network, End.Segment) || !ShapeOf(Network, End.Segment, Theirs))
+					{
+						return true;
+					}
+					// THE TWO ARMS THE SPLIT WILL MAKE, not the curve's tangent (final review 4):
+					// URoadNetwork::SplitSegment replaces the segment with two STRAIGHT halves meeting
+					// at At, so the commit's ConnectNodes judges those chords - on a bend ~30 degrees
+					// off the tangent - and judging the tangent here let the preview approve a join
+					// the commit then refused after splitting. On a straight segment the two agree.
+					const double Deg = FMath::Min(DegreesBetween(Dir, Theirs.A - End.At), DegreesBetween(Dir, Theirs.B - End.At));
+					if (MeetsAtAllowedAngle(Deg))
+					{
+						Exempt.AddUnique(End.Segment);
+						return true;
+					}
+					if (!bStopAtRefusal) { return true; }
+					Verdict.bRefused = true;
+					Verdict.Text = MeetingRefusal(Network, End.Segment, Deg);
+					return false;
+				}
+				return true;
+			};
+			// Each end's direction pointing AWAY from that end along the new segment - the same sense
+			// GetOutgoingTangent gives the existing arm, so square is 90 and straight on is 180.
+			if (!Meet(AtA, GuidelineGeom::Tangent(Shape.A, Shape.Control, Shape.B, 0.0))
+				|| !Meet(AtB, -GuidelineGeom::Tangent(Shape.A, Shape.Control, Shape.B, 1.0)))
+			{
+				return false;
+			}
+
+			// 1b. A TAXIWAY IS A CHAIN, NOT A SEGMENT. The spec exempts what "meets the TAXIWAY",
+			// and one taxiway is often several pieces - every split and snapped junction adds one -
+			// so exempting only the met pieces refused a square join 10 m from the next piece's end
+			// (found 2026-09-29: a moved T-junction refused by its own neighbour piece). Walk on
+			// from every exempt piece through each node holding exactly two strip-bearing arms that
+			// run on within 30 degrees of straight. NOT round a corner: past one the next leg is a
+			// different line, and a road square to the first leg runs alongside the second.
+			// Seeded from Ignore too - a replaced piece (a moved node's own arm, a heal's stub) is
+			// the same taxiway as the one it becomes.
+			//
+			// ONLY NEAR THE JOIN (final review 1): a piece is walked onto only while some part of its
+			// centreline lies within its own reach (half-width + strip) plus the new segment's half of
+			// either end. A ring of gentle bends passes the per-node test all the way round, and an
+			// unbounded walk exempted a road from the ring's FAR side, which it crosses unjoined.
+			const auto NearTheJoin = [&Network, &Shape, &AtA, &AtB](FRoadSegmentId Id)
+			{
+				FSegmentShape Theirs;
+				const FRoadSegment* Segment = Network.GetSegment(Id);
+				const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+				if (Profile == nullptr || !ShapeOf(Network, Id, Theirs)) { return false; }
+				const double Reach = Theirs.HalfWidth + StripWidthOf(Network, Id) + Shape.HalfWidth;
+				const TArray<FVector2D> Centre = CentreOf(Theirs);
+				for (const FVector2D& End : { AtA.At, AtB.At })
+				{
+					for (int32 C = 0; C + 1 < Centre.Num(); ++C)
+					{
+						if (PointToSegment(End, Centre[C], Centre[C + 1]) <= Reach) { return true; }
+					}
+				}
+				return false;
+			};
+			for (int32 Seed = 0; Seed < Exempt.Num(); ++Seed)
+			{
+				const FRoadSegmentId From = Exempt[Seed];
+				const FRoadSegment* Piece = Network.GetSegment(From);
+				if (Piece == nullptr || !HasStrip(Network, From)) { continue; }
+				for (const FRoadNodeId Through : { Piece->A, Piece->B })
+				{
+					const FRoadNode* Node = Network.GetNode(Through);
+					if (Node == nullptr) { continue; }
+					FRoadSegmentId Next;
+					int32 Arms = 0;
+					for (const FRoadSegmentId Arm : Node->Incident)
+					{
+						if (!HasStrip(Network, Arm)) { continue; }
+						++Arms;
+						if (Arm != From) { Next = Arm; }
+					}
+					if (Arms != 2 || !Next.IsSet() || Exempt.Contains(Next)) { continue; }
+					if (DegreesBetween(Network.GetOutgoingTangent(From, Through), Network.GetOutgoingTangent(Next, Through))
+						>= ChainStraightMinDegrees && NearTheJoin(Next))
+					{
+						Exempt.Add(Next);   // walked on from in its own turn, by this loop
+					}
+				}
+			}
+			return true;
+		}
+
+		/**
+		 * Step 3: the first stand, depot, road or taxiway whose ground a strip of StripShape's
+		 * half-width (pavement half + strip) overlaps, skipping Exempt and Met. bCountStands off
+		 * for the restriction pass - a stand closes, it never lowers the letter (stage 6 ruling 3).
+		 */
+		TOptional<FSwallowed> SwallowedBy(const URoadNetwork& Network, const FSegmentShape& StripShape,
+			const FMeeting& Meeting, bool bCountStands)
+		{
+			const TArray<TArray<FVector2D>> StripQuads = QuadsOf(FootprintOf(StripShape));
+			const FBox2D StripBox = HullBox(StripShape.A, StripShape.Control, StripShape.B, StripShape.HalfWidth + ToleranceUu);
+
+			// EVERY LIVE ENTITY AND SEGMENT, LINEARLY - WorstIntrusion's own reasoning and N (34
+			// segments on M_Test, 2026-09-28), times 16 x 16 quad pairs for any that survive the
+			// box test. PAID TWICE A FRAME by the taxiway tool (FRoadChainingState::BuildPreview's
+			// readout and FRoadDrawTool::Tick's ghost colour both ask WhySegmentRefused, 2026-09-29),
+			// so the box early-outs below are what keep a far entity or segment to four compares.
+			// The restriction pass (stage 6) pays it up to six letters per taxiway per Topology
+			// rebuild; the box test keeps the letters that clear to four compares a neighbour too.
+			const TArray<FEntityInstance>& Entities = Network.GetEntities();
+			for (int32 Index = 0; Index < Entities.Num(); ++Index)
+			{
+				const FEntityInstance& Entity = Entities[Index];
+				// STANDS AND DEPOTS ALIKE - both are ground a taxiing wing must not sweep; named apart
+				// below because the player fixes them differently. A plotted outline is convex (a
+				// stand box, a depot rectangle) - PolygonsOverlap's contract.
+				if (!Entity.bAlive || !(Entity.IsStand() || Entity.IsDepot()) || !Entity.IsPlotted()) { continue; }
+				if (Entity.IsStand() && !bCountStands) { continue; }
+				if (!BoxOf(Entity.Outline).Intersect(StripBox)) { continue; }
+				for (const TArray<FVector2D>& Quad : StripQuads)
+				{
+					if (RoadGeom::PolygonsOverlap(Quad, Entity.Outline, ToleranceUu))
+					{
+						FSwallowed Found;
+						Found.Kind = Entity.IsStand() ? FSwallowed::EKind::Stand : FSwallowed::EKind::Depot;
+						Found.Index = Index;
+						return Found;
+					}
+				}
+			}
+
+			const TArray<FRoadSegment>& Segments = Network.GetSegments();
+			for (int32 Index = 0; Index < Segments.Num(); ++Index)
+			{
+				const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+				// RUNWAYS ARE OUT OF SCOPE (plan ruling 2) - their own strip rules, not this one.
+				if (!Id.IsSet() || Meeting.Exempt.Contains(Id) || Meeting.Met.Contains(Id) || Network.IsRunwaySegment(Id)) { continue; }
+				FSegmentShape Theirs;
+				if (!ShapeOf(Network, Id, Theirs)) { continue; }
+				if (!HullBox(Theirs.A, Theirs.Control, Theirs.B, Theirs.HalfWidth).Intersect(StripBox)) { continue; }
+				if (QuadsOverlap(StripQuads, QuadsOf(FootprintOf(Theirs))))
+				{
+					FSwallowed Found;
+					Found.Kind = IsAircraftOnly(Network, Id) ? FSwallowed::EKind::Taxiway : FSwallowed::EKind::Road;
+					Found.Index = Index;
+					return Found;
+				}
+			}
+			return TOptional<FSwallowed>();
+		}
+	}
+
+	TOptional<FSwallowed> StripSwallows(const URoadNetwork& Network, FRoadSegmentId Taxiway, double StripWidth,
+		bool bCountStands)
+	{
+		FSegmentShape Shape;
+		const FRoadSegment* Segment = Network.GetSegment(Taxiway);
+		if (Segment == nullptr || !HasStrip(Network, Taxiway) || !ShapeOf(Network, Taxiway, Shape))
+		{
+			return TOptional<FSwallowed>();
+		}
+		// JudgeExisting's ends: its own nodes, itself ignored - "as if laid now", minus the angle
+		// refusal (a live segment's joins are what they are; a badly met arm is simply not exempt).
+		FSegmentEnd AtA;
+		AtA.Node = Segment->A;
+		AtA.At = Shape.A;
+		FSegmentEnd AtB;
+		AtB.Node = Segment->B;
+		AtB.At = Shape.B;
+		const FRoadSegmentId Self[] = { Taxiway };
+		FMeeting Meeting;
+		FStripVerdict Unused;
+		MeetingOf(Network, Shape, AtA, AtB, Self, false, Meeting, Unused);
+		FSegmentShape StripShape = Shape;
+		StripShape.HalfWidth = Shape.HalfWidth + StripWidth;
+		return SwallowedBy(Network, StripShape, Meeting, bCountStands);
+	}
+
 	FStripVerdict JudgeSegment(const URoadNetwork& Network, const FSegmentShape& Shape,
 		bool bIsTaxiway, const FSegmentEnd& AtA, const FSegmentEnd& AtB,
 		TConstArrayView<FRoadSegmentId> Ignore)
 	{
 		FStripVerdict Verdict;
 
-		// 1. WHAT IT MEETS. Exempt = the strip-bearing taxiways it joins at an allowed angle,
-		// whose strip it may therefore cross (spec: "network that MEETS the taxiway may pass
-		// through its strip"). Met = every segment at either end, strip or not - a new taxiway's
-		// own strip cannot "contain" the road it is being joined to.
-		TArray<FRoadSegmentId> Exempt(Ignore.GetData(), Ignore.Num());
-		TArray<FRoadSegmentId> Met;
-		const auto Meet = [&](const FSegmentEnd& End, const FVector2D& Out) -> bool
-		{
-			if (End.Node.IsSet())
-			{
-				const FRoadNode* Node = Network.GetNode(End.Node);
-				if (Node == nullptr) { return true; }
-				for (const FRoadSegmentId Arm : Node->Incident)
-				{
-					Met.AddUnique(Arm);
-					if (Ignore.Contains(Arm) || !HasStrip(Network, Arm)) { continue; }
-					// PER ARM (Review Focus 2): at a node where two taxiways join, a road square
-					// to one can be 15 degrees off the other and run along ITS strip. At least
-					// MeetMinDegrees from every arm - see its header for why there is no
-					// separate straight-on band (a dead end's bend heads away from its arm).
-					const double Deg = DegreesBetween(Out, Network.GetOutgoingTangent(Arm, End.Node));
-					if (MeetsAtAllowedAngle(Deg))
-					{
-						Exempt.AddUnique(Arm);
-						continue;
-					}
-					Verdict.bRefused = true;
-					Verdict.Text = MeetingRefusal(Network, Arm, Deg);
-					return false;
-				}
-			}
-			else if (End.Segment.IsSet())
-			{
-				Met.AddUnique(End.Segment);
-				FSegmentShape Theirs;
-				if (Ignore.Contains(End.Segment) || !HasStrip(Network, End.Segment) || !ShapeOf(Network, End.Segment, Theirs))
-				{
-					return true;
-				}
-				// THE TWO ARMS THE SPLIT WILL MAKE, not the curve's tangent (final review 4):
-				// URoadNetwork::SplitSegment replaces the segment with two STRAIGHT halves meeting
-				// at At, so the commit's ConnectNodes judges those chords - on a bend ~30 degrees
-				// off the tangent - and judging the tangent here let the preview approve a join
-				// the commit then refused after splitting. On a straight segment the two agree.
-				const double Deg = FMath::Min(DegreesBetween(Out, Theirs.A - End.At), DegreesBetween(Out, Theirs.B - End.At));
-				if (MeetsAtAllowedAngle(Deg))
-				{
-					Exempt.AddUnique(End.Segment);
-					return true;
-				}
-				Verdict.bRefused = true;
-				Verdict.Text = MeetingRefusal(Network, End.Segment, Deg);
-				return false;
-			}
-			return true;
-		};
-		// Each end's direction pointing AWAY from that end along the new segment - the same sense
-		// GetOutgoingTangent gives the existing arm, so square is 90 and straight on is 180.
-		if (!Meet(AtA, GuidelineGeom::Tangent(Shape.A, Shape.Control, Shape.B, 0.0))
-			|| !Meet(AtB, -GuidelineGeom::Tangent(Shape.A, Shape.Control, Shape.B, 1.0)))
+		// 1 and 1b - see MeetingOf.
+		FMeeting Meeting;
+		if (!MeetingOf(Network, Shape, AtA, AtB, Ignore, true, Meeting, Verdict))
 		{
 			return Verdict;
 		}
 
-		// 1b. A TAXIWAY IS A CHAIN, NOT A SEGMENT. The spec exempts what "meets the TAXIWAY",
-		// and one taxiway is often several pieces - every split and snapped junction adds one -
-		// so exempting only the met pieces refused a square join 10 m from the next piece's end
-		// (found 2026-09-29: a moved T-junction refused by its own neighbour piece). Walk on
-		// from every exempt piece through each node holding exactly two strip-bearing arms that
-		// run on within 30 degrees of straight. NOT round a corner: past one the next leg is a
-		// different line, and a road square to the first leg runs alongside the second.
-		// Seeded from Ignore too - a replaced piece (a moved node's own arm, a heal's stub) is
-		// the same taxiway as the one it becomes.
-		//
-		// ONLY NEAR THE JOIN (final review 1): a piece is walked onto only while some part of its
-		// centreline lies within its own reach (half-width + strip) plus the new segment's half of
-		// either end. A ring of gentle bends passes the per-node test all the way round, and an
-		// unbounded walk exempted a road from the ring's FAR side, which it crosses unjoined.
-		const auto NearTheJoin = [&Network, &Shape, &AtA, &AtB](FRoadSegmentId Id)
-		{
-			FSegmentShape Theirs;
-			const FRoadSegment* Segment = Network.GetSegment(Id);
-			const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
-			if (Profile == nullptr || !ShapeOf(Network, Id, Theirs)) { return false; }
-			const double Reach = Theirs.HalfWidth + IcaoCode::TaxiwayStripForWidth(Profile->GetTotalWidth()) + Shape.HalfWidth;
-			const TArray<FVector2D> Centre = CentreOf(Theirs);
-			for (const FVector2D& End : { AtA.At, AtB.At })
-			{
-				for (int32 C = 0; C + 1 < Centre.Num(); ++C)
-				{
-					if (PointToSegment(End, Centre[C], Centre[C + 1]) <= Reach) { return true; }
-				}
-			}
-			return false;
-		};
-		for (int32 Seed = 0; Seed < Exempt.Num(); ++Seed)
-		{
-			const FRoadSegmentId From = Exempt[Seed];
-			const FRoadSegment* Piece = Network.GetSegment(From);
-			if (Piece == nullptr || !HasStrip(Network, From)) { continue; }
-			for (const FRoadNodeId Through : { Piece->A, Piece->B })
-			{
-				const FRoadNode* Node = Network.GetNode(Through);
-				if (Node == nullptr) { continue; }
-				FRoadSegmentId Next;
-				int32 Arms = 0;
-				for (const FRoadSegmentId Arm : Node->Incident)
-				{
-					if (!HasStrip(Network, Arm)) { continue; }
-					++Arms;
-					if (Arm != From) { Next = Arm; }
-				}
-				if (Arms != 2 || !Next.IsSet() || Exempt.Contains(Next)) { continue; }
-				if (DegreesBetween(Network.GetOutgoingTangent(From, Through), Network.GetOutgoingTangent(Next, Through))
-					>= ChainStraightMinDegrees && NearTheJoin(Next))
-				{
-					Exempt.Add(Next);   // walked on from in its own turn, by this loop
-				}
-			}
-		}
-
 		// 2. ITS PAVEMENT in any other taxiway's strip.
 		const TArray<FVector2D> Footprint = FootprintOf(Shape);
-		if (const TOptional<FIntrusion> In = WorstIntrusion(Network, Footprint, Exempt))
+		if (const TOptional<FIntrusion> In = WorstIntrusion(Network, Footprint, Meeting.Exempt))
 		{
 			Verdict.bRefused = true;
 			Verdict.Depth = In->Depth;
@@ -485,52 +618,15 @@ namespace TaxiwayStrip
 		// swallows the B's pavement.
 		FSegmentShape StripShape = Shape;
 		StripShape.HalfWidth = Shape.HalfWidth + IcaoCode::TaxiwayStripForWidth(2.0 * Shape.HalfWidth);
-		const TArray<TArray<FVector2D>> StripQuads = QuadsOf(FootprintOf(StripShape));
-		const FBox2D StripBox = HullBox(StripShape.A, StripShape.Control, StripShape.B, StripShape.HalfWidth + ToleranceUu);
-
-		// EVERY LIVE ENTITY AND SEGMENT, LINEARLY - WorstIntrusion's own reasoning and N (34
-		// segments on M_Test, 2026-09-28), times 16 x 16 quad pairs for any that survive the
-		// box test. PAID TWICE A FRAME by the taxiway tool (FRoadChainingState::BuildPreview's
-		// readout and FRoadDrawTool::Tick's ghost colour both ask WhySegmentRefused, 2026-09-29),
-		// so the box early-outs below are what keep a far entity or segment to four compares.
-		const TArray<FEntityInstance>& Entities = Network.GetEntities();
-		for (int32 Index = 0; Index < Entities.Num(); ++Index)
+		if (const TOptional<FSwallowed> Hit = SwallowedBy(Network, StripShape, Meeting, true))
 		{
-			const FEntityInstance& Entity = Entities[Index];
-			// STANDS AND DEPOTS ALIKE - both are ground a taxiing wing must not sweep; named apart
-			// below because the player fixes them differently. A plotted outline is convex (a
-			// stand box, a depot rectangle) - PolygonsOverlap's contract.
-			if (!Entity.bAlive || !(Entity.IsStand() || Entity.IsDepot()) || !Entity.IsPlotted()) { continue; }
-			if (!BoxOf(Entity.Outline).Intersect(StripBox)) { continue; }
-			for (const TArray<FVector2D>& Quad : StripQuads)
+			Verdict.bRefused = true;
+			switch (Hit->Kind)
 			{
-				if (RoadGeom::PolygonsOverlap(Quad, Entity.Outline, ToleranceUu))
-				{
-					Verdict.bRefused = true;
-					Verdict.Text = Entity.IsStand()
-						? FString::Printf(TEXT("its clearance strip would contain stand %d"), Index)
-						: FString(TEXT("its clearance strip would contain a fuel depot"));
-					return Verdict;
-				}
-			}
-		}
-
-		const TArray<FRoadSegment>& Segments = Network.GetSegments();
-		for (int32 Index = 0; Index < Segments.Num(); ++Index)
-		{
-			const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-			// RUNWAYS ARE OUT OF SCOPE (plan ruling 2) - their own strip rules, not this one.
-			if (!Id.IsSet() || Exempt.Contains(Id) || Met.Contains(Id) || Network.IsRunwaySegment(Id)) { continue; }
-			FSegmentShape Theirs;
-			if (!ShapeOf(Network, Id, Theirs)) { continue; }
-			if (!HullBox(Theirs.A, Theirs.Control, Theirs.B, Theirs.HalfWidth).Intersect(StripBox)) { continue; }
-			if (QuadsOverlap(StripQuads, QuadsOf(FootprintOf(Theirs))))
-			{
-				Verdict.bRefused = true;
-				Verdict.Text = IsAircraftOnly(Network, Id)
-					? FString(TEXT("its clearance strip would contain a taxiway"))
-					: FString(TEXT("its clearance strip would contain a service road"));
-				return Verdict;
+			case FSwallowed::EKind::Stand:   Verdict.Text = FString::Printf(TEXT("its clearance strip would contain stand %d"), Hit->Index); break;
+			case FSwallowed::EKind::Depot:   Verdict.Text = TEXT("its clearance strip would contain a fuel depot"); break;
+			case FSwallowed::EKind::Taxiway: Verdict.Text = TEXT("its clearance strip would contain a taxiway"); break;
+			case FSwallowed::EKind::Road:    Verdict.Text = TEXT("its clearance strip would contain a service road"); break;
 			}
 		}
 		return Verdict;

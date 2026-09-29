@@ -2,6 +2,7 @@
 #include "AirsideLog.h"
 #include "Model/RoadSlotMap.h"
 #include "Model/RunwayQuery.h"
+#include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/JunctionSolver.h"
@@ -497,6 +498,36 @@ EPavement URoadNetwork::PavementOf(FRoadSegmentId Segment) const
 bool URoadNetwork::IsGrassRoad(FRoadSegmentId Segment) const
 {
 	return !IsRunwaySegment(Segment) && PavementOf(Segment) == EPavement::Grass;
+}
+
+bool URoadNetwork::SetSegmentProfile(FRoadSegmentId Segment, URoadProfile* Profile)
+{
+	FRoadSegment* Found = GetSegmentMutable(Segment);
+	if (Found == nullptr || !Found->bAlive || Profile == nullptr || IsRunwaySegment(Segment)
+		|| Profile->bContinuousThroughJunctions)
+	{
+		return false;
+	}
+	if (TaxiwayStrip::IsAircraftOnlyProfile(ProfileFor(*Found)) != TaxiwayStrip::IsAircraftOnlyProfile(Profile))
+	{
+		UE_LOG(LogAirside, Warning, TEXT("SetSegmentProfile refused: %s would change segment %d's kind"),
+			*Profile->GetName(), Segment.Index);
+		return false;
+	}
+	Found->Profile = Profile;
+	++EditRevision;
+	return true;
+}
+
+bool URoadNetwork::WriteSegmentRestriction(FRoadSegmentId Segment, uint8 Letter)
+{
+	FRoadSegment* Found = GetSegmentMutable(Segment);
+	if (Found == nullptr || !Found->bAlive)
+	{
+		return false;
+	}
+	Found->RestrictedLetter = Letter;
+	return true;
 }
 
 bool URoadNetwork::SetSegmentSurface(FRoadSegmentId Segment, EPavement Surface)
