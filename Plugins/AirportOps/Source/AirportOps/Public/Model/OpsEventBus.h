@@ -303,8 +303,9 @@ struct AIRPORTOPS_API FAirportStatusChangedEvent
 
 /**
  * A flight will not come, or will not finish: cancelled by a closure (UFlightBoard::CancelUnarrived) or by the
- * player despawning its aeroplane (UFlightBoard::CancelByAgent) - two publishers, one subscriber (the roster,
- * which charges only AirportClosed). An offer WITHDRAWN by a closure is not a cancellation and publishes nothing.
+ * player despawning its aeroplane (UFlightBoard::CancelByAgent). Heard by the roster, which charges only
+ * AirportClosed. An offer WITHDRAWN by a closure is not a cancellation and publishes nothing.
+ * ENFORCED BY: AirportOps.Model.FlightBoard.CancelUnarrivedCancelsAndWithdraws, AirportOps.Model.FlightBoard.CancelByAgentPublishesUnstuck, AirportOps.Model.Airlines.ClosureCancelScoresOnlyAirportClosed
  */
 struct AIRPORTOPS_API FFlightCancelledEvent
 {

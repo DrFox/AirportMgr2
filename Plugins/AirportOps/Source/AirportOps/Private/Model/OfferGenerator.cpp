@@ -287,6 +287,15 @@ FString UOfferGenerator::MakeCallsign(const FString& Prefix, FRandomStream& Stre
 	return FString::Printf(TEXT("%s %d"), *Prefix, 100 + Stream.RandHelper(900));
 }
 
+void UOfferGenerator::ForgetAirlineVerdicts()
+{
+	for (TPair<FName, FAirlineOfferState>& Each : States)
+	{
+		Each.Value.bCouldCome = true;
+	}
+	UE_LOG(LogAirportOps, Log, TEXT("Offers: %d airline verdict(s) forgotten - judged again next minute"), States.Num());
+}
+
 FString UOfferGenerator::DescribeWhyNot(FName AirlineId) const
 {
 	const FAdmissionCache* Cache = AdmissionCache.Find(AirlineId);

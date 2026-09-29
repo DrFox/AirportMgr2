@@ -79,8 +79,13 @@ public:
 	 *  status changed. */
 	bool SetClosedByPlayer(bool bClosed, const URoadNetwork& Network);
 
-	/** A new game opens: UOpsRuntime::Attach, beside ULedger::Open and UAirlineRoster::ResetForNewGame. */
-	void ResetForNewGame() { bClosedByPlayer = false; }
+	/** A new game opens: UOpsRuntime::Attach, beside ULedger::Open and UAirlineRoster::ResetForNewGame. THE DERIVED
+	 *  STATUS TOO (review M2), so the old game's closure is not the status read before the attach's Reseat.
+	 *  ENFORCED BY: AirportOps.Model.Airport.NewGameForgetsTheStatus */
+	void ResetForNewGame() { bClosedByPlayer = false; Current = EAirportStatus::Open; }
+
+	/** How many status changes Refresh has published this session - for the attach/load "no event" tests. */
+	int32 ChangeCountForTest() const { return ChangeCount; }
 
 private:
 	/** The player's intent. THE saved state - see the class comment. */
@@ -88,4 +93,7 @@ private:
 
 	/** The derived status Refresh diffs against. Transient: re-derived after every load. */
 	UPROPERTY(Transient) EAirportStatus Current = EAirportStatus::Open;
+
+	/** See ChangeCountForTest. A session counter, not saved. */
+	int32 ChangeCount = 0;
 };

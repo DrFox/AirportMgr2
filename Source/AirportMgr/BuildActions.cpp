@@ -142,7 +142,14 @@ namespace
 			// what land now, each its own type - see ULandAircraftPanelWidget.
 			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleLandPanel(); },
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsLandPanelShowing(); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.HasRunway(); }));
+			// AND OPEN: a closed airport admits no arrivals, the debug one included (ruling I1, 2026-09-30). No runtime
+			// (the editor mode) is not a closure.
+			// ENFORCED BY: AirportMgr.Actions.LandGreyedWhileClosed
+			[](const FBuildActionContext& Ctx)
+			{
+				return Ctx.Controller.HasRunway()
+					&& (Ctx.Runtime == nullptr || Ctx.Runtime->GetAirport()->Status() == EAirportStatus::Open);
+			}));
 		Out.Add(Make(TEXT("aircraft.guidelines"), EActionSection::Aircraft, LOCTEXT("Guidelines", "Guidelines"), EKeys::G, false,
 			[](FBuildActionContext& Ctx) { Ctx.Controller.OnToggleGuidelines(); },
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuidelineOverlayOn(); }, Always));
@@ -340,6 +347,7 @@ namespace
 				EKeys::Invalid, false,
 				// EXECUTE ONLY REOPENS: it is the door with no confirm (a key, were one ever bound), and a close must
 				// never be reachable without one.
+				// ENFORCED BY: AirportMgr.Actions.AirportExecuteNeverCloses
 				[](FBuildActionContext& Ctx)
 				{
 					if (Ctx.Runtime != nullptr && Ctx.Runtime->GetAirport()->IsClosedByPlayer())
@@ -357,25 +365,31 @@ namespace
 				{
 					return Out;
 				}
-				FUiMenuItem& Line = Out.AddDefaulted_GetRef();
-				if (Ctx.Runtime->GetAirport()->IsClosedByPlayer())
-				{
-					Line.Label = LOCTEXT("OpenAirport", "Open airport");
-					return Out;
-				}
+				// TWO FIXED LINES, each enabled only when it applies (review M9): line 0 always closes and line 1 always
+				// opens, so Choose acts on the line the player saw rather than toggling whatever the state is by then.
+				const bool bClosed = Ctx.Runtime->GetAirport()->IsClosedByPlayer();
+				FUiMenuItem& Close = Out.AddDefaulted_GetRef();
 				// THE COST, ASKED AS THE POPUP OPENS: what a close would cancel now (UFlightBoard::UnarrivedCount).
-				Line.Label = LOCTEXT("CloseAirport", "Close airport");
-				Line.bConfirm = true;
-				Line.ConfirmLabel = FText::Format(LOCTEXT("CloseAirportConfirm", "Close? {0} {0}|plural(one=flight,other=flights) will be cancelled"),
+				Close.Label = LOCTEXT("CloseAirport", "Close airport");
+				Close.bEnabled = !bClosed;
+				Close.Why = LOCTEXT("CloseAirportWhy", "The airport is already closed");
+				Close.bConfirm = true;
+				Close.ConfirmLabel = FText::Format(LOCTEXT("CloseAirportConfirm", "Close? {0} {0}|plural(one=flight,other=flights) will be cancelled"),
 					FText::AsNumber(Ctx.Runtime->GetFlightBoard()->UnarrivedCount()));
+				FUiMenuItem& Open = Out.AddDefaulted_GetRef();
+				Open.Label = LOCTEXT("OpenAirport", "Open airport");
+				Open.bEnabled = bClosed;
+				Open.Why = LOCTEXT("OpenAirportWhy", "The airport is not closed");
 				return Out;
 			};
-			// ONE LINE, whose meaning is the intent it toggles: closed by the player reopens, anything else closes.
+			// THE LINE SHOWN, not a toggle: 0 closes, 1 opens - a no-op when already so (SetAirportClosed re-derives to
+			// no change).
+			// ENFORCED BY: AirportMgr.Actions.AirportChooseActsOnTheLine
 			Airport.Choose = [](FBuildActionContext& Ctx, int32 Line)
 			{
-				if (Ctx.Runtime != nullptr && Line == 0)
+				if (Ctx.Runtime != nullptr && (Line == 0 || Line == 1))
 				{
-					Ctx.Runtime->SetAirportClosed(!Ctx.Runtime->GetAirport()->IsClosedByPlayer());
+					Ctx.Runtime->SetAirportClosed(Line == 0);
 				}
 			};
 			// THE CAPTION IS THE STATUS whenever it is not simply open - "Closed (draining: 3)" counts the aircraft a
@@ -554,9 +568,14 @@ bool FBuildAction::TryRun(ARoadBuildController& C, const TCHAR* Via) const
 
 bool FBuildAction::TryChoose(ARoadBuildController& C, int32 Line, const TCHAR* Via) const
 {
+	FBuildActionContext Context(C);
+	return TryChoose(Context, Line, Via);
+}
+
+bool FBuildAction::TryChoose(FBuildActionContext& Context, int32 Line, const TCHAR* Via) const
+{
 	// TryRun's shape exactly - one context, the enabled gate, one log line - so a menu verb's line leaves the same
 	// trace a button or a key does.
-	FBuildActionContext Context(C);
 	if (!Choose || !IsEnabled(Context))
 	{
 		return false;

@@ -260,8 +260,8 @@ bool FAirportCancelByAgentTest::RunTest(const FString&)
 namespace
 {
 	/** An attached runtime over a world with a road and, when bRunway, a runway placed BEFORE the attach - so the
-	 *  attach's silent re-derive already finds it. Settled: a few frames drained. */
-	UOpsRuntime* AirportTestRuntime(FAirsideTestWorld& World, bool bRunway)
+	 *  attach's silent re-derive already finds it. Settled (unless !bSettle): a few frames drained. */
+	UOpsRuntime* AirportTestRuntime(FAirsideTestWorld& World, bool bRunway, bool bSettle = true)
 	{
 		ARoadNetworkActor* Actor = World.Actor;
 		const int32 A = Actor->PlaceNode(FVector2D(0.0, 30000.0));
@@ -274,7 +274,7 @@ namespace
 		}
 		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 		Runtime->Attach(Actor);
-		for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+		for (int32 Tick = 0; bSettle && Tick < 3; ++Tick) { Runtime->Tick(0.0); }
 		return Runtime;
 	}
 
@@ -380,7 +380,12 @@ bool FAirportRunwayComesAndGoesTest::RunTest(const FString&)
 	// no toast per airline). Then a runway built opens it; deleting it closes it again.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
-	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/false);
+	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/false, /*bSettle=*/false);
+	// STRAIGHT AFTER THE ATTACH, before any frame (review M3): the attach itself re-derived, and announced nothing.
+	TestEqual(TEXT("the attach re-derives: a runway-less field has no runway before any tick"), Runtime->GetAirport()->Status(), EAirportStatus::NoRunway);
+	TestEqual(TEXT("and publishes no status change - an attach is not a change the player made"), Runtime->GetAirport()->ChangeCountForTest(), 0);
+	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+	TestEqual(TEXT("nor does the first NetworkChanged, which finds the status already right"), Runtime->GetAirport()->ChangeCountForTest(), 0);
 	TestEqual(TEXT("a runway-less field has no runway"), Runtime->GetAirport()->Status(), EAirportStatus::NoRunway);
 	TestEqual(TEXT("and says so, once"), AirportTestAlertsOf(*Runtime, EAlertKind::NoRunway), 1);
 
@@ -529,6 +534,166 @@ bool FAirportDrainsTest::RunTest(const FString&)
 	TestEqual(TEXT("the closed airport drained: no aircraft left on the ground"), Runtime->GetFlightBoard()->OnGroundCount(), 0);
 	TestEqual(TEXT("the flight left by the runway"), Flight->Phase, EFlightPhase::Departed);
 	TestEqual(TEXT("and the airport is still closed"), Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// PR B REVIEW (2026-09-30): a closed airport admits nothing; the runway-loss mapping; the minors.
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportNewGameTest, "AirportOps.Model.Airport.NewGameForgetsTheStatus",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportNewGameTest::RunTest(const FString&)
+{
+	// A NEW GAME FORGETS THE DERIVED STATUS TOO (review M2), not only the intent: a status left ClosedByPlayer with
+	// the intent cleared would read closed until something re-derived it.
+	const FTestAirport Field = AirportTestField();
+	UAirport* Airport = NewObject<UAirport>(GetTransientPackage());
+	Airport->SetClosedByPlayer(true, *Field.Net);
+	Airport->ResetForNewGame();
+	TestFalse(TEXT("the intent is cleared"), Airport->IsClosedByPlayer());
+	TestEqual(TEXT("and the status with it"), Airport->Status(), EAirportStatus::Open);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportLandRefusedTest, "AirportOps.Present.Airport.LandRefusedWhileClosed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportLandRefusedTest::RunTest(const FString&)
+{
+	// RULING I1 (2026-09-30): A CLOSED AIRPORT ADMITS NO ARRIVALS, the debug Land included. AcceptImmediate leaves a
+	// refused flight in the inbox as an offer, so the gate must stand BEFORE it - nothing unarrived, nothing offered.
+	{
+		FAirsideTestWorld TestWorld;
+		if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+		UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+		AirportTestStand(*TestWorld.Actor->Network);
+		Runtime->SetAirportClosed(true);
+		Runtime->Tick(0.0);
+		AddExpectedMessagePlain(TEXT("Land: refused - the airport is closed"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+		const EArrivalRefusal Why = Runtime->LandNear(FVector2D(0.0, -50000.0), nullptr);
+		TestTrue(TEXT("closed by the player: Land is refused"), Why != EArrivalRefusal::None);
+		TestEqual(TEXT("no flight is on its way"), Runtime->GetFlightBoard()->UnarrivedCount(), 0);
+		TestEqual(TEXT("and none was left in the inbox"), Runtime->GetFlightBoard()->PendingOfferCount(), 0);
+	}
+	{
+		FAirsideTestWorld TestWorld;
+		if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+		UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/false);
+		TestEqual(TEXT("no runway: refused as NoRunway"), Runtime->LandNear(FVector2D::ZeroVector, nullptr), EArrivalRefusal::NoRunway);
+		TestEqual(TEXT("and nothing was left in the inbox"), Runtime->GetFlightBoard()->PendingOfferCount(), 0);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportAcceptRefusedTest, "AirportOps.Present.Airport.AcceptRefusedWhileClosed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportAcceptRefusedTest::RunTest(const FString&)
+{
+	// THE INBOX'S DOOR IS THE BOARD'S Accept (OfferViewModels.cpp calls it), so the gate is there: nothing Offered
+	// becomes Accepted while the airport is not open. The offer is planted AFTER the closure withdrew the rest.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+	URoadNetwork* Net = TestWorld.Actor->Network;
+	AirportTestStand(*Net);
+	Runtime->SetAirportClosed(true);
+	Runtime->Tick(0.0);
+	UFlight* Offer = AirportTestOffer(*Runtime, TEXT("AirportTestAcceptAirline"));
+	UGroundTraffic* Model = TestWorld.Actor->GetTraffic()->GetModel();
+	TestFalse(TEXT("closed: an accept is refused"), Runtime->GetFlightBoard()->Accept(*Model, *Net, *Runtime->GetClock(), *Offer));
+	TestEqual(TEXT("the flight is still only an offer"), Offer->Phase, EFlightPhase::Offered);
+	Runtime->SetAirportClosed(false);
+	TestTrue(TEXT("CONTROL: reopened, the same accept is taken"), Runtime->GetFlightBoard()->Accept(*Model, *Net, *Runtime->GetClock(), *Offer));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportRunwayLossFreeTest, "AirportOps.Present.Airport.RunwayLossCancelsFree",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportRunwayLossFreeTest::RunTest(const FString&)
+{
+	// THE MAPPING NoRunway -> ECancelReason::NoRunway, pinned through the runtime (review I2): losing the last runway
+	// cancels what has not arrived, and costs the airline nothing - the loophole the user accepted.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+	URoadNetwork* Net = TestWorld.Actor->Network;
+	AirportTestStand(*Net);
+	Runtime->Tick(0.0);
+	const FName Airline = TEXT("AirportTestRunwayLossAirline");
+	Runtime->GetAirlines()->Ensure(Airline);
+	UFlight* Coming = AirportTestOffer(*Runtime, Airline);
+	if (!TestTrue(TEXT("an accepted flight"), Runtime->GetFlightBoard()->Accept(*TestWorld.Actor->GetTraffic()->GetModel(), *Net, *Runtime->GetClock(), *Coming))) { return false; }
+	Runtime->Tick(0.0);
+	const double Before = Runtime->GetAirlines()->Find(Airline)->Satisfaction;
+	AirportTestDeleteRunways(*TestWorld.Actor);
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("the last runway gone: NoRunway"), Runtime->GetAirport()->Status(), EAirportStatus::NoRunway);
+	TestEqual(TEXT("the accepted flight is cancelled"), Coming->Phase, EFlightPhase::Cancelled);
+	TestEqual(TEXT("and its airline minds not at all"), Runtime->GetAirlines()->Find(Airline)->Satisfaction, Before, 1e-9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportReopenVerdictsTest, "AirportOps.Present.Airport.ReopenForgetsAirlineVerdicts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportReopenVerdictsTest::RunTest(const FString&)
+{
+	// NO STALE AIRLINE ALERT AFTER A REOPEN (review M1): while closed no airline is judged, so a verdict from before the
+	// closure is stale by the time it reopens - the player may have built what the airline wanted meanwhile. The
+	// reopen forgets the verdicts; the next offer minute judges afresh.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+	const double OneMinute = UOfferGenerator::TickSeconds / Runtime->GetClock()->TimeScale() * 1.01;
+	Runtime->Tick(OneMinute);
+	// A 60 m STRIP ADMITS NO AIRLINER, so some airline cannot come - the verdict this test needs to go stale.
+	if (!TestTrue(TEXT("PRECONDITION: an airline cannot use this field"), AirportTestAlertsOf(*Runtime, EAlertKind::AirlineCannotCome) > 0)) { return false; }
+	Runtime->SetAirportClosed(true);
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("closed: no airline alert"), AirportTestAlertsOf(*Runtime, EAlertKind::AirlineCannotCome), 0);
+	Runtime->SetAirportClosed(false);
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("reopened: no airline alert from the verdict before the closure"), AirportTestAlertsOf(*Runtime, EAlertKind::AirlineCannotCome), 0);
+	Runtime->Tick(OneMinute);
+	TestTrue(TEXT("CONTROL: the next offer minute judges afresh, and the field still admits no airliner"),
+		AirportTestAlertsOf(*Runtime, EAlertKind::AirlineCannotCome) > 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportNoModelWarnsTest, "AirportOps.Present.Airport.ClosureWithNoTrafficWarns",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportNoModelWarnsTest::RunTest(const FString&)
+{
+	// A CLOSURE THAT CANNOT CANCEL SAYS SO (review M4): with no live traffic model nothing can release a hold, and a
+	// silent skip would leave accepted flights coming to a closed airport. Reached by a detach, which keeps the wiring.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+	AddExpectedMessagePlain(TEXT("OpsRuntime attached to nothing"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	Runtime->Attach(nullptr);
+	AddExpectedMessagePlain(TEXT("cancels nothing: no traffic model"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	Runtime->GetBus().Publish(FAirportStatusChangedEvent{ EAirportStatus::Open, EAirportStatus::ClosedByPlayer });
+	Runtime->Tick(0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportSaveRefreshesTest, "AirportOps.Present.Airport.SaveRefreshesTheStatus",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportSaveRefreshesTest::RunTest(const FString&)
+{
+	// A SAVE IN THE SAME FRAME AS AN EDIT (review M5): NetworkChanged is published by Tick, so without a refresh of its
+	// own the save would snapshot an open airport over a runway-less network with its flights still coming - and the
+	// load re-derives silently, so nothing would ever cancel them.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+	URoadNetwork* Net = TestWorld.Actor->Network;
+	AirportTestStand(*Net);
+	Runtime->Tick(0.0);
+	UFlight* Coming = AirportTestOffer(*Runtime, TEXT("AirportTestSaveAirline"));
+	if (!TestTrue(TEXT("an accepted flight"), Runtime->GetFlightBoard()->Accept(*TestWorld.Actor->GetTraffic()->GetModel(), *Net, *Runtime->GetClock(), *Coming))) { return false; }
+	AirportTestDeleteRunways(*TestWorld.Actor);
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(TEXT("AirportOpsTest_SaveRefresh")))) { return false; }
+	TestEqual(TEXT("no tick between: the save itself saw the runway go"), Runtime->GetAirport()->Status(), EAirportStatus::NoRunway);
+	TestEqual(TEXT("and its drain cancelled the flight before the snapshot"), Coming->Phase, EFlightPhase::Cancelled);
 	return true;
 }
 

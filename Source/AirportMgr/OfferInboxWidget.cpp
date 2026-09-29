@@ -204,10 +204,21 @@ void UOfferInboxWidget::Refresh(ARoadNetworkActor* Target)
 		return;
 	}
 
-	Inbox->Refresh(*Runtime->GetFlightBoard(), *Traffic, *Target->Network, *Runtime->GetClock(), Runtime->GetAirlines());
+	RefreshWith(*Runtime, *Target);
+}
 
-	RefreshDemand(Runtime->GetAirlineOffers(), *Runtime->GetClock(), Runtime->GetOfferGenerator());
-	ShowAirportStatus(Runtime->GetAirport()->Status());
+void UOfferInboxWidget::RefreshWith(UOpsRuntime& Runtime, ARoadNetworkActor& Target)
+{
+	UGroundTraffic* Traffic = Target.GetGroundTraffic();
+	if (Inbox == nullptr || Target.Network == nullptr || Traffic == nullptr)
+	{
+		return;
+	}
+	Inbox->Refresh(*Runtime.GetFlightBoard(), *Traffic, *Target.Network, *Runtime.GetClock(), Runtime.GetAirlines());
+
+	RefreshDemand(Runtime.GetAirlineOffers(), *Runtime.GetClock(), Runtime.GetOfferGenerator());
+	// ENFORCED BY: AirportMgr.UI.OfferInbox.RefreshReadsTheStatus
+	ShowAirportStatus(Runtime.GetAirport()->Status());
 	PaintRows();
 }
 

@@ -16,6 +16,7 @@ class ARoadBuildController;
 class UUIStyle;
 class UUiButton;
 class UUiMenuButton;
+class UOpsRuntime;
 
 /**
  * One button on the bar and the action it runs. A UObject because UButton::OnClicked is a
@@ -151,6 +152,11 @@ public:
 	/** How many entries are menu verbs built as a UUiMenuButton - see AirportMgr.Actions.BarBuildsMenuActionsAsMenus. */
 	int32 MenuButtonCountForTest() const;
 
+	/** The controller and runtime the bar would find in play, handed in - a test world has no game instance. */
+	void UseForTest(ARoadBuildController* C, UOpsRuntime* Runtime);
+	/** The menu verb Id's popup, or null. */
+	UUiMenuButton* MenuForTest(FName ActionId) const;
+
 	/** Picks Option on the lit tool's row Axis, on the owning controller. Called by variant
 	 *  entries. */
 	void RunVariant(int32 Axis, int32 Option);
@@ -233,6 +239,14 @@ protected:
 
 private:
 	UPROPERTY() TArray<TObjectPtr<UBuildBarEntry>> Entries;
+
+	/** UseForTest's handed-in controller and runtime; unset in play, where Controller() and the subsystem answer. */
+	TWeakObjectPtr<ARoadBuildController> TestController;
+	TWeakObjectPtr<UOpsRuntime> TestRuntime;
+
+	/** The context a menu verb's lines and choice are asked through - Controller()'s, or UseForTest's. False, and Use
+	 *  not called, with no controller. */
+	bool WithContext(TFunctionRef<void(FBuildActionContext&)> Use);
 
 	/**
 	 * The row the section frames sit on.

@@ -480,6 +480,9 @@ bool FOpsRuntimeAcceptDirtiesAlertsTest::RunTest(const FString&)
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
 	URoadNetwork* Net = TestWorld.Actor->Network;
 	if (!TestNotNull(TEXT("a network"), Net)) { return false; }
+	// A RUNWAY: a closed airport - one without a runway too - accepts nothing (ruling I1, 2026-09-30).
+	TestWorld.Actor->MinimumRunwayLength = 100.0;
+	TestWorld.Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
 	Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 30000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
 

@@ -182,3 +182,28 @@ rule-12 warning count. Unverified in PIE: the bar popup and caption, the inbox s
   against the resolved DA_Scenario_Default.
 - Icon: `game.airport` -> delapouite/control-tower via fetch_ui_icons.py + build_ui_style.py headless; 34 re-saved
   T_Icon_* reverted; DA_UIStyle holds `game.airport` (grep -a, 0 before).
+
+## Review ledger (fresh review of PR B, 2026-09-30: 0 Critical, 3 Important)
+
+Rulings are the orchestrator's. Each fix got a test; a pin test on behaviour that already held went red under its
+mutation instead.
+
+| # | Finding | Ruling / fix | Test (red line) |
+|---|---|---|---|
+| I1 | A closed airport still took arrivals: debug Land, and an inbox accept | RULING: a closed airport admits NO arrivals. `UOpsRuntime::LandNear` gates before AcceptImmediate (which leaves a refused flight as an offer): NoRunway -> `FLandRefusedEvent{NoRunway}`, returns NoRunway; ClosedByPlayer -> `FNotificationEvent "Airport closed"`, returns NotAdmitted (Airside has no word for a closure). `UFlightBoard::Accept` asks `AdmitsArrivals` (a predicate set by the runtime, so the board still does not learn the airport) - the one door the inbox and key 7 share. `aircraft.land` IsEnabled = HasRunway && Open | `AirportOps.Present.Airport.LandRefusedWhileClosed` ("no flight is on its way" expected 0, got 1); `AirportOps.Present.Airport.AcceptRefusedWhileClosed` ("closed: an accept is refused" expected false); `AirportMgr.Actions.LandGreyedWhileClosed` ("closed: Land is greyed" expected false) |
+| I2 | NoRunway -> ECancelReason::NoRunway mapping unpinned | Pinned | `AirportOps.Present.Airport.RunwayLossCancelsFree` (green; mutant mapping to AirportClosed: "airline minds not at all" 0.50 expected, 0.45) |
+| I3 | The bar's production door (OnChosen -> TryChoose) untested | `UBuildBarWidget::UseForTest` / `MenuForTest`; the bar resolves its context once (`WithContext`); `TryChoose(FBuildActionContext&)` overload | `AirportMgr.Actions.BarMenuVerbReachesTheRuntime` ("game.airport is a menu on the bar" expected not null); `AirportMgr.Actions.TryChooseGatesOnEnabled` (green; mutant without the gate: "refuses a disabled action" expected false) |
+| M1 | Stale AirlineCannotCome flashed after a reopen | A Sim "Offers" subscription: entering Open calls `UOfferGenerator::ForgetAirlineVerdicts` | `AirportOps.Present.Airport.ReopenForgetsAirlineVerdicts` ("reopened: no airline alert" expected 0, got 2) |
+| M2 | ResetForNewGame kept Current | Resets it | `AirportOps.Model.Airport.NewGameForgetsTheStatus` ("and the status with it" not equal) |
+| M3 | Attach's silence not measured | `UAirport::ChangeCountForTest`; RunwayComesAndGoes asserts status and zero changes straight after Attach | green; mutant Attach Refresh: "publishes no status change" expected 0, got 1 |
+| M4 | Silent skip with no traffic model | Warning | `AirportOps.Present.Airport.ClosureWithNoTrafficWarns` (expected Warning found 0 times) |
+| M5 | A save in the frame of an edit snapshot a stale status | `Airport->Refresh` before the save's drain | `AirportOps.Present.Airport.SaveRefreshesTheStatus` ("the save itself saw the runway go" not equal) |
+| M6 | Inbox Refresh -> ShowAirportStatus unpinned | `UOfferInboxWidget::RefreshWith(Runtime, Target)` - Refresh's body past the subsystem lookup | `AirportMgr.UI.OfferInbox.RefreshReadsTheStatus` ("Closed" expected, got "") |
+| M7 | Unmarked claims | ENFORCED BY on Flight.h Withdrawn and FFlightCancelledEvent (reworded: no "only"/"one subscriber"); Execute's claim | `AirportMgr.Actions.AirportExecuteNeverCloses` (green; mutant toggle: "open stays open" not equal) |
+| M8 | Flight.h class comment | Cancelled's two paths and Withdrawn | - |
+| M9 | Choose toggled | Two fixed lines (0 Close, 1 Open), each enabled only when it applies; Choose acts on the line | `AirportMgr.Actions.AirportChooseActsOnTheLine` ("Close on a closed airport leaves it closed" not equal); AirportCloseConfirms updated to two lines |
+| M10 | Other menu-verb shape unnamed | Comment on `FBuildAction::MenuItems` naming selection.unstick's request shape | - |
+
+Existing tests changed by ruling I1: `AirportOps.Present.LandNear` (its runway-less vantage point is now refused before
+AcceptImmediate; it lays a 60 m runway, asserts Open, and watches the planner's refusal instead) and
+`AirportOps.Present.Alerts.AcceptDirtiesAlerts` (lays a runway so the accept is admitted).

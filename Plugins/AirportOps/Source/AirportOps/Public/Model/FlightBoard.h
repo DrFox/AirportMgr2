@@ -109,6 +109,15 @@ public:
 	TFunction<bool(const FVector2D& Near, const FAirframe& Airframe)> Dispatcher;
 
 	/**
+	 * Whether the airport admits arrivals now - asked by Accept, which every accept comes through (the inbox,
+	 * and key 7 via AcceptImmediate). A CLOSED AIRPORT ADMITS NOTHING (ruling I1, 2026-09-30). A predicate, not a
+	 * UAirport pointer, so the board still does not learn the airport (see CancelUnarrived). Set by UOpsRuntime's
+	 * constructor; unset in a bare NewObject, which admits.
+	 * ENFORCED BY: AirportOps.Present.Airport.AcceptRefusedWhileClosed
+	 */
+	TFunction<bool()> AdmitsArrivals;
+
+	/**
 	 * Bumped whenever anything a viewmodel displays has changed - an offer added, accepted,
 	 * declined or expired, a phase change, a graph rebuild's re-apply.
 	 *

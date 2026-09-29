@@ -219,6 +219,10 @@ public:
 	 */
 	UPROPERTY(Transient) TObjectPtr<const UAirport> Airport = nullptr;
 
+	/** Every airline back to "could come", unjudged - a reopen (UOpsRuntime::WireBus). The next TickMinute judges
+	 *  afresh against the admission cache, and logs the transition if an airline still cannot come. */
+	void ForgetAirlineVerdicts();
+
 	/**
 	 * One game minute of demand. Returns the offers it made (0..n), never more than the
 	 * inbox has room for: MaxPendingOffers - PendingNow.

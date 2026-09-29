@@ -32,6 +32,7 @@ bool UAirport::Refresh(const URoadNetwork& Network)
 	}
 	// SAID, every change: "why are there no offers?" is answered by this line or by its absence.
 	UE_LOG(LogAirportOps, Log, TEXT("Airport: %s -> %s"), *UEnum::GetValueAsString(Old), *UEnum::GetValueAsString(Current));
+	++ChangeCount;
 	if (Bus != nullptr)
 	{
 		Bus->Publish(FAirportStatusChangedEvent{ Old, Current });

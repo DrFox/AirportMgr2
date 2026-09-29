@@ -26,8 +26,10 @@ enum class EAgentPhase : uint8;
  * reverses under its own power and is not being pushed by anything, so the two are not the
  * same word. Diverted is still deliberately ABSENT: the sequencer owns it and it does not
  * exist either. A phase nothing can enter is a lie. Cancelled is here since 2026-09-29 because
- * something enters it now - the player despawning the aeroplane (UFlightBoard::CancelByAgent);
- * the sequencer's cancellations will share it when it exists.
+ * two things enter it now: the player despawning the aeroplane (UFlightBoard::CancelByAgent), and
+ * the airport ceasing to be open before an accepted flight arrived (UFlightBoard::CancelUnarrived,
+ * ops batch 3); the sequencer's cancellations will share it when it exists. Withdrawn, appended
+ * last, is an OFFER the same closure took back - never accepted, so neither Cancelled nor Expired.
  */
 UENUM()
 enum class EFlightPhase : uint8
@@ -63,9 +65,10 @@ enum class EFlightPhase : uint8
 	 *  runway - see UFlightBoard::CancelByAgent. */
 	Cancelled,
 	/**
-	 * An OFFER the airport took back when it stopped being open (UFlightBoard::CancelUnarrived, spec
-	 * 2026-09-29-ops-batch3 §3) - entered only there. Not Expired: nobody let it lapse, so no
-	 * OfferExpired and no Ignored penalty; not Cancelled: it was never the airline's flight here.
+	 * An OFFER the airport took back when it stopped being open - entered by UFlightBoard::CancelUnarrived
+	 * (spec 2026-09-29-ops-batch3 §3). Not Expired: nobody let it lapse, so no OfferExpired and no Ignored
+	 * penalty; not Cancelled: it was never the airline's flight here.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.CancelUnarrivedCancelsAndWithdraws
 	 * APPENDED LAST because the order above is load-bearing (FlightPhaseFromAgent, UFlightBoard::Live).
 	 */
 	Withdrawn

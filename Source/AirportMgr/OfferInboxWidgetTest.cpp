@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Present/OpsRuntime.h"
 #include "Model/Airport.h"
 #include "ArrivalViewModels.h"
 #include "ArrivalsPanelWidget.h"
@@ -252,6 +253,25 @@ bool FOfferInboxClosedStripTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("no runway reads Closed too"), Widget->DemandStatusForTest(), FString(TEXT("Closed")));
 	Widget->ShowAirportStatus(EAirportStatus::Open);
 	TestTrue(TEXT("reopened: the strip is back"), Widget->IsDemandStripShownForTest());
+	return true;
+}
+
+/** THE REFRESH READS THE STATUS (review M6): RefreshWith is Refresh's body past the subsystem lookup, so the call to
+ *  ShowAirportStatus is pinned with a runtime handed in - the test world has no game instance for Refresh to find. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferInboxRefreshReadsStatusTest, "AirportMgr.UI.OfferInbox.RefreshReadsTheStatus",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferInboxRefreshReadsStatusTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 30000.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	UOfferInboxWidget* Widget = CreateWidget<UOfferInboxWidget>(TestWorld.World, UOfferInboxWidget::StaticClass());
+	if (!TestNotNull(TEXT("an inbox"), Widget)) { return false; }
+	if (!TestEqual(TEXT("a runway-less field is not open"), Runtime->GetAirport()->Status(), EAirportStatus::NoRunway)) { return false; }
+	Widget->RefreshWith(*Runtime, *TestWorld.Actor);
+	TestEqual(TEXT("the refresh put Closed in place of the strip"), Widget->DemandStatusForTest(), FString(TEXT("Closed")));
 	return true;
 }
 

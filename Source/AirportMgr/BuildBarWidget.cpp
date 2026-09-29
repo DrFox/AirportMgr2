@@ -386,13 +386,12 @@ void UBuildBarWidget::BuildButtons(const UUIStyle* Style)
 			Entry->Menu->Items = [WeakBar, Index]()
 			{
 				UBuildBarWidget* Bar = WeakBar.Get();
-				ARoadBuildController* C = Bar != nullptr ? Bar->Controller() : nullptr;
-				if (C == nullptr)
+				TArray<FUiMenuItem> Lines;
+				if (Bar != nullptr)
 				{
-					return TArray<FUiMenuItem>();
+					Bar->WithContext([&Lines, Index](FBuildActionContext& Ctx) { Lines = BuildActions()[Index].MenuItems(Ctx); });
 				}
-				FBuildActionContext Ctx(*C);
-				return BuildActions()[Index].MenuItems(Ctx);
+				return Lines;
 			};
 			Entry->Menu->OnChosen.AddDynamic(Entry, &UBuildBarEntry::HandleChosen);
 			Entry->Button = Entry->Menu->GetButton();
@@ -462,14 +461,12 @@ void UBuildBarWidget::RunAction(int32 ActionIndex)
 
 void UBuildBarWidget::ChooseAction(int32 ActionIndex, int32 Line)
 {
-	ARoadBuildController* C = Controller();
 	const TConstArrayView<FBuildAction> Actions = BuildActions();
-	if (C == nullptr || !Actions.IsValidIndex(ActionIndex))
+	if (!Actions.IsValidIndex(ActionIndex)
+		|| !WithContext([&Actions, ActionIndex, Line](FBuildActionContext& Ctx) { Actions[ActionIndex].TryChoose(Ctx, Line, TEXT("Bar")); }))
 	{
 		UE_LOG(LogBuildBar, Warning, TEXT("Bar menu line %d of action %d ignored: no controller or no such action"), Line, ActionIndex);
-		return;
 	}
-	Actions[ActionIndex].TryChoose(*C, Line, TEXT("Bar"));
 }
 
 void UBuildBarWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -698,6 +695,41 @@ float UBuildBarWidget::BarReservedHeightForTest(float AvailableWidth) const
 		return static_cast<float>(Slate->GetDesiredSize().Y);
 	}
 	return BarSlot->GetOffsets().Bottom;
+}
+
+void UBuildBarWidget::UseForTest(ARoadBuildController* C, UOpsRuntime* Runtime)
+{
+	TestController = C;
+	TestRuntime = Runtime;
+}
+
+UUiMenuButton* UBuildBarWidget::MenuForTest(FName ActionId) const
+{
+	const TConstArrayView<FBuildAction> Actions = BuildActions();
+	for (const UBuildBarEntry* Entry : Entries)
+	{
+		if (Entry != nullptr && Entry->Menu != nullptr && Actions.IsValidIndex(Entry->ActionIndex) && Actions[Entry->ActionIndex].Id == ActionId)
+		{
+			return Entry->Menu;
+		}
+	}
+	return nullptr;
+}
+
+bool UBuildBarWidget::WithContext(TFunctionRef<void(FBuildActionContext&)> Use)
+{
+	ARoadBuildController* C = TestController.IsValid() ? TestController.Get() : Controller();
+	if (C == nullptr)
+	{
+		return false;
+	}
+	FBuildActionContext Ctx(*C);
+	if (TestRuntime.IsValid())
+	{
+		Ctx.Runtime = TestRuntime.Get();
+	}
+	Use(Ctx);
+	return true;
 }
 
 int32 UBuildBarWidget::MenuButtonCountForTest() const

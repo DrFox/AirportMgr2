@@ -153,6 +153,12 @@ bool UFlightBoard::Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 	{
 		return false;
 	}
+	// NOT OPEN, NOTHING ACCEPTED (ruling I1): before the stand is held, so a refusal holds nothing.
+	if (AdmitsArrivals && !AdmitsArrivals())
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d not accepted: the airport is not open"), Flight.Id);
+		return false;
+	}
 
 	if (!Allocator->Reserve(Traffic, Network, Flight))
 	{

@@ -10,6 +10,7 @@ struct FAirlineOffers;
 enum class EAirportStatus : uint8;
 class UOfferGenerator;
 class USimClock;
+class UOpsRuntime;
 class ARoadNetworkActor;
 class UButton;
 class UUiButton;
@@ -121,6 +122,9 @@ public:
 	 * directly - the tick-to-Refresh seam is one line, and a test has no viewport to paint in.
 	 */
 	void Refresh(ARoadNetworkActor* Target);
+
+	/** Refresh's body past the subsystem lookup - the runtime handed in. */
+	void RefreshWith(UOpsRuntime& Runtime, ARoadNetworkActor& Target);
 
 	/** Called by a row's entry object. Public because UOfferRowEntry is a separate UObject. */
 	void AcceptRow(int32 RowIndex);

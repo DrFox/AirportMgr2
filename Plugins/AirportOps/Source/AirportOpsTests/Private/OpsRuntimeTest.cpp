@@ -5,6 +5,7 @@
 #include "Model/TaxiwayStrip.h"
 #include "Model/OfferGenerator.h"
 #include "Model/ArrivalSequencer.h"
+#include "Model/Airport.h"
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -282,11 +283,13 @@ bool FOpsRuntimeLandNearTest::RunTest(const FString& Parameters)
 	// are AcceptImmediate's and ArrivalPlanner's own concerns, already covered by
 	// AirportOps.Model.FlightBoard.AcceptImmediate and Airside.Model.ArrivalPlanner.
 	//
-	// A network with NO runway is used ON PURPOSE, not as a shortcut: AcceptImmediate always
+	// A RUNWAY WITH NOWHERE TO GO is used ON PURPOSE, not as a shortcut: AcceptImmediate always
 	// records the flight it built (UFlightBoard::AddOffer) before asking ArrivalPlanner
-	// whether it can be accepted, so the refusal - NoRunway, deterministic and needing no
-	// fixture - is exactly as good a vantage point as an accepted landing for watching what
-	// airframe reached the board.
+	// whether it can be accepted, so the planner's refusal - no stand or exit to reach - is
+	// exactly as good a vantage point as an accepted landing for watching what airframe reached
+	// the board. A RUNWAY-LESS network was the vantage point until ruling I1 (2026-09-30): a
+	// closed airport admits no arrivals, and one with no runway is refused before AcceptImmediate
+	// (AirportOps.Present.Airport.LandRefusedWhileClosed).
 	{
 		// UNATTACHED: Target is null, the same state the editor mode's runtime never reaches
 		// (it has none) but a freshly-constructed one starts in. Must refuse rather than crash.
@@ -309,13 +312,18 @@ bool FOpsRuntimeLandNearTest::RunTest(const FString& Parameters)
 	// way - see the class comment on why that refusal is the deliberately chosen vantage point.
 	Actor->PlaceNode(FVector2D::ZeroVector);
 	if (!TestNotNull(TEXT("the actor has a network"), Actor->Network.Get())) { return false; }
+	Actor->MinimumRunwayLength = 100.0;
+	if (!TestTrue(TEXT("a runway, so the airport is open"),
+		Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway()))) { return false; }
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);
+	if (!TestEqual(TEXT("an open airport - the closure gate is not what refuses below"),
+		Runtime->GetAirport()->Status(), EAirportStatus::Open)) { return false; }
 
-	const EArrivalRefusal FirstWhy = Runtime->LandNear(FVector2D(500.0, 500.0), nullptr);
-	TestEqual(TEXT("still NoRunway - this network has none - proving the refusal came from "
-		"ArrivalPlanner and not from LandNear's own null guards"), FirstWhy, EArrivalRefusal::NoRunway);
+	const EArrivalRefusal FirstWhy = Runtime->LandNear(FVector2D(0.0, -50000.0), nullptr);
+	// THE AIRPORT IS OPEN (asserted above), so the refusal is ArrivalPlanner's: a 60 m strip admits no real airframe.
+	TestTrue(TEXT("refused by ArrivalPlanner, not by LandNear's own guards"), FirstWhy != EArrivalRefusal::None);
 
 	TArray<UFlight*> Offers = Runtime->GetFlightBoard()->Offers();
 	if (!TestEqual(TEXT("one flight was made and offered despite the refusal - AcceptImmediate "
@@ -333,8 +341,8 @@ bool FOpsRuntimeLandNearTest::RunTest(const FString& Parameters)
 	FAirframe Override;
 	Override.TypeCode = FName(TEXT("Airside_LandNearTest_Override"));
 	Override.Wingspan = 4321.0;
-	const EArrivalRefusal SecondWhy = Runtime->LandNear(FVector2D(-500.0, -500.0), &Override);
-	TestEqual(TEXT("still NoRunway, same network"), SecondWhy, EArrivalRefusal::NoRunway);
+	const EArrivalRefusal SecondWhy = Runtime->LandNear(FVector2D(0.0, -50000.0), &Override);
+	TestTrue(TEXT("refused again, same network"), SecondWhy != EArrivalRefusal::None);
 
 	Offers = Runtime->GetFlightBoard()->Offers();
 	if (!TestEqual(TEXT("a second flight was offered"), Offers.Num(), 2))
