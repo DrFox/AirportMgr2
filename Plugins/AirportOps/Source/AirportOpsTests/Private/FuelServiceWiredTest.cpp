@@ -129,6 +129,12 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	// runtime advances the clock and the service. Nothing calls the service by hand.
 	constexpr float Step = 1.0f / 30.0f;
 	int32 TruckId = 0;
+	// THE DEADLINE (stage 3): the serve's end is found by the job board's one Clock.At, not by looking
+	// every frame - so it must end on the FIRST step at or past StepEndsAt, never before, never later.
+	double ServeDueAt = -1.0;
+	double ServeLeftAt = -1.0;
+	double NowBeforeLeaving = -1.0;
+	double PreviousNow = 0.0;
 	bool bSawVehicleAgent = false;
 	bool bSawTruckWithAView = false;
 	bool bSawFuelling = false;
@@ -142,6 +148,20 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	{
 		Actor->Tick(Step);
 		Runtime->Tick(Step);
+
+		const double Now = Runtime->GetClock()->Now();
+		const FServiceVehicle* Serving = Runtime->GetJobBoard()->GetVehicles().FindByPredicate([](const FServiceVehicle& Vehicle)
+			{ return Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob != 0; });
+		if (Serving != nullptr && ServeLeftAt < 0.0)
+		{
+			ServeDueAt = Serving->StepEndsAt;
+		}
+		else if (Serving == nullptr && ServeDueAt >= 0.0 && ServeLeftAt < 0.0)
+		{
+			ServeLeftAt = Now;
+			NowBeforeLeaving = PreviousNow;
+		}
+		PreviousNow = Now;
 
 		for (const FRoadAgent& Agent : Actor->GetTraffic()->GetModel()->GetAgents())
 		{
@@ -179,6 +199,12 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("a ground vehicle agent appeared"), bSawVehicleAgent);
 	TestTrue(TEXT("with a view of its own"), bSawTruckWithAView);
 	TestTrue(TEXT("and it fuelled the aircraft"), bSawFuelling);
+	if (TestTrue(TEXT("the serve ended"), ServeLeftAt >= 0.0))
+	{
+		TestTrue(FString::Printf(TEXT("not before it was due (left %.2f, due %.2f)"), ServeLeftAt, ServeDueAt), ServeLeftAt >= ServeDueAt);
+		TestTrue(FString::Printf(TEXT("and on the first step past it - its deadline woke the board (step before %.2f, due %.2f)"),
+			NowBeforeLeaving, ServeDueAt), NowBeforeLeaving < ServeDueAt);
+	}
 
 	// 3. And went away again. A truck does not fly off, so only the service retires it -
 	// this is the end of the round trip the whole slice exists to produce.

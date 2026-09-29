@@ -177,4 +177,23 @@ bool FOpsEventBusDescribeTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsEventBusNextDrainTest, "AirportOps.Model.Bus.NextDrainIsNextFrame",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsEventBusNextDrainTest::RunTest(const FString&)
+{
+	FOpsEventBus Bus;
+	int32 Runs = 0;
+	Bus.BeginWiring();
+	// A retry: a pass that has not resolved its work asks to be looked at again NEXT frame.
+	Bus.RegisterPass(TEXT("Retry"), [&Bus, &Runs]() { ++Runs; Bus.MarkDirtyNextDrain(TEXT("Retry")); });
+	Bus.EndWiring();
+	Bus.MarkAllDirty();
+	Bus.Drain();
+	TestEqual(TEXT("a pass that re-dirties itself for next drain runs once in this one - no round-cap spin"), Runs, 1);
+	Bus.Drain();
+	Bus.Drain();
+	TestEqual(TEXT("and exactly once per drain after it, for as long as it keeps asking"), Runs, 3);
+	return true;
+}
+
 #endif

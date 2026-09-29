@@ -927,8 +927,42 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 		AgentId, Stand.Index, Litres, Aircraft->TurnaroundSeconds);
 }
 
-void UJobBoard::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+bool UJobBoard::IsBeingServed(const FTurnaround& Turnaround) const
 {
+	// STILL BEING SERVED, so the deadline does not apply - see DepartTheReady. Open and Queued count: the
+	// airport may be about to gain the depot the job waits for, and a queued vehicle is coming.
+	return Turnaround.JobIds.ContainsByPredicate([this](int32 JobId)
+		{
+			const FServiceJob* Job = FindJob(JobId);
+			return Job != nullptr && Job->State != EServiceJobState::Done && Job->State != EServiceJobState::Unserviceable;
+		});
+}
+
+double UJobBoard::NextDeadline(double Now) const
+{
+	double Next = TNumericLimits<double>::Max();
+	for (const FServiceVehicle& Vehicle : Vehicles)
+	{
+		const bool bTimed = (Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob != 0)
+			|| Vehicle.State == EServiceVehicleState::AtFacility;
+		if (bTimed && Vehicle.StepEndsAt > Now)
+		{
+			Next = FMath::Min(Next, Vehicle.StepEndsAt);
+		}
+	}
+	for (const FTurnaround& Turnaround : Turnarounds)
+	{
+		if (Turnaround.TurnaroundEndsAt > Now)
+		{
+			Next = FMath::Min(Next, Turnaround.TurnaroundEndsAt);
+		}
+	}
+	return Next;
+}
+
+bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+{
+	++StepCount;
 	SyncFleet(Traffic, Network);
 
 	// TIMED STEPS THAT ARE DUE: a trip's pumping, a refill. GAME TIME - a pause stops both. The vehicle
@@ -1009,6 +1043,31 @@ void UJobBoard::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	}
 
 	DepartTheReady(Traffic, Network, Clock);
+
+	// WHAT IS STILL UNRESOLVED - see the header. Each of these used to be retried simply because Tick ran
+	// every frame; now it is retried because it said so, and nothing else is.
+	const double Now = Clock.Now();
+	const bool bVehicleWaiting = Vehicles.ContainsByPredicate([Now](const FServiceVehicle& Vehicle)
+		{
+			// A STEP DUE ALREADY - set this Step, after the due loop above ran (BeginFacility with nothing
+			// to refill books StepEndsAt = Now): NextDeadline looks strictly AFTER Now, so without this it
+			// would be neither handled nor scheduled (stage 3 review #1).
+			const bool bTimedAndDue = ((Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob != 0)
+				|| Vehicle.State == EServiceVehicleState::AtFacility) && Vehicle.StepEndsAt <= Now;
+			return bTimedAndDue
+				|| (Vehicle.State == EServiceVehicleState::Idle && Vehicle.Queue.Num() > 0)
+				|| (Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob == 0);
+		});
+	const bool bJobOpen = Jobs.ContainsByPredicate([](const FServiceJob& Job) { return Job.State == EServiceJobState::Open; });
+	// ONLY A DUE TURNAROUND NOTHING IS SERVING - one DepartAgent refused (a busy runway). One still being
+	// served is not polled: its jobs finish inside a Step (FinishServe, AssignOpenJobs) or a phase handler
+	// (DropAircraft), and DepartTheReady runs after both, so it leaves on the step that finishes it
+	// (stage 3 review #3 - a late fuel job used to run a whole Step every frame for minutes).
+	const bool bDepartureWaiting = Turnarounds.ContainsByPredicate([this, Now](const FTurnaround& Turnaround)
+		{
+			return Now >= Turnaround.TurnaroundEndsAt && !IsBeingServed(Turnaround);
+		});
+	return bVehicleWaiting || bJobOpen || bDepartureWaiting;
 }
 
 void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
@@ -1028,12 +1087,7 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		// hydrant is finishing a job the aircraft asked for, and cutting it off would strand the vehicle
 		// at a stand nobody is at. Open and Queued are here too: the airport may be about to gain the
 		// depot the job is waiting for, and a queued vehicle is coming.
-		const bool bBusy = Turnaround.JobIds.ContainsByPredicate([this](int32 JobId)
-			{
-				const FServiceJob* Job = FindJob(JobId);
-				return Job != nullptr && Job->State != EServiceJobState::Done && Job->State != EServiceJobState::Unserviceable;
-			});
-		if (!bBusy)
+		if (!IsBeingServed(Turnaround))
 		{
 			Ready.Add(Turnaround.AircraftId);
 		}

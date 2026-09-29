@@ -265,8 +265,31 @@ public:
 	 * One pass: the fleet brought in line with the depots, due serves and refills finished, open jobs
 	 * bid, idle vehicles started on their queues, refused jobs re-offered when the graph changed, and
 	 * the ready aircraft sent.
+	 *
+	 * RETURNS TRUE WHEN SOMETHING IS LEFT UNRESOLVED and must be looked at again next frame: a vehicle
+	 * whose dispatch was refused, one parked at a stand with no decision (the final review #1
+	 * backstop), a job still Open (a re-offered one is bid on the NEXT pass - see the body), or a due
+	 * turnaround that could not leave. False means nothing here changes until an event or a deadline
+	 * says so - which is what lets the ops bus run this as a pass rather than every frame (spec
+	 * 2026-09-29-ops-event-bus section 2; UOpsRuntime::WireBus's "JobBoard" pass).
+	 *
+	 * ONE SEQUENCE, KEPT WHOLE, on purpose: each step's place in it is argued in its own comment, and
+	 * splitting it across event handlers would re-derive that order in several places.
 	 */
-	void Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
+	bool Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
+
+	/** Step, ignoring its answer - the world-free fixtures' per-frame driver, as it always was. */
+	void Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock) { Step(Traffic, Network, Clock); }
+
+	/**
+	 * The earliest game time after Now at which a Step would find something due: a vehicle's serve or
+	 * refill ending (StepEndsAt), a turnaround's deadline. Max double for none. What the ops runtime
+	 * schedules ONE Clock.At for, so a due step is not found by looking every frame.
+	 */
+	double NextDeadline(double Now) const;
+
+	/** How many Steps have run - for the test that a quiet airport runs none. */
+	int32 StepCountForTest() const { return StepCount; }
 
 	/**
 	 * The one line the inspector's card shows for this agent, or empty when the board has nothing to
@@ -594,6 +617,13 @@ private:
 
 	/** See GetBidCallCountForTest. */
 	mutable int32 BidCallCountForTest = 0;
+
+	/** See StepCountForTest. A session counter, not saved. */
+	int32 StepCount = 0;
+
+	/** True while any of the turnaround's jobs is neither Done nor Unserviceable. One rule, read by
+	 *  DepartTheReady and by Step's "is a departure waiting?" - so the two cannot disagree. */
+	bool IsBeingServed(const FTurnaround& Turnaround) const;
 
 	/**
 	 * The depot-to-stand route cache, dated by the graph's guideline revision (#301: the shape

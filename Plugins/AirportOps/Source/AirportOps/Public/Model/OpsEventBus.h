@@ -107,6 +107,18 @@ struct AIRPORTOPS_API FFlightAirborneEvent
 	FString Describe() const;
 };
 
+/**
+ * The attached network changed - a different network object, or a new guideline revision (a road, a
+ * stand, a depot drawn or removed). Published by UOpsRuntime::Tick from one compare a frame: the same
+ * revision the job board's re-bid and re-offer gates read, so this cannot disagree with them.
+ */
+struct AIRPORTOPS_API FNetworkChangedEvent
+{
+	uint32 GuidelineRevision = 0;
+	static const TCHAR* EventName() { return TEXT("NetworkChanged"); }
+	FString Describe() const;
+};
+
 /** A game day ended - published by UOpsRuntime's daily beat, after the upkeep and the roll-up. */
 struct AIRPORTOPS_API FDayEndedEvent
 {
@@ -140,7 +152,8 @@ template <> struct TOpsEventIsChatty<FAgentPhaseEvent> { static constexpr bool V
  * FInstancedStruct was rejected: an open set has no answer to "which events exist?".
  */
 using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent,
-	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent>;
+	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
+	FNetworkChangedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec
@@ -203,6 +216,14 @@ public:
 	void MarkAllDirty();
 
 	/**
+	 * Dirty for the NEXT Drain, not this one - "try again next frame". A pass that re-marked ITSELF
+	 * with MarkDirty would run again the very next round and burn the round cap in one frame; a retry
+	 * (a departure the runway refused) wants exactly one more look per frame until it resolves.
+	 * ENFORCED BY: AirportOps.Model.Bus.NextDrainIsNextFrame
+	 */
+	void MarkDirtyNextDrain(FName Pass);
+
+	/**
 	 * Queue Event, and log it with its fields - "Bus: + OfferExpired {flight 12, airline Cumbria,
 	 * Ignored}". LOGGED HERE, AT THE SOURCE, not only when dispatched: the line then sits beside
 	 * whatever raised it, and an event dropped by a load's Discard still appears once.
@@ -250,6 +271,8 @@ private:
 		FName Name;
 		TFunction<void()> Run;
 		bool bDirty = false;
+		/** See MarkDirtyNextDrain. Promoted to bDirty at the start of the next Drain. */
+		bool bDirtyNextDrain = false;
 	};
 
 	static constexpr int32 NumTiers = 3;
