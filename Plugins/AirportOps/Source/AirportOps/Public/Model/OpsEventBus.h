@@ -74,21 +74,23 @@ struct AIRPORTOPS_API FNotificationEvent
 
 /** An offer lapsed unanswered. Reason says whether it could ever have been taken; bFloorAirline is
  *  the flight's own UFlight::bFloorAirline - a floor airline's lapse never costs the player (rulings 7-8). */
-struct FOfferExpiredEvent
+struct AIRPORTOPS_API FOfferExpiredEvent
 {
 	int32 FlightId = 0;
 	FName AirlineId;
 	ELapseReason Reason = ELapseReason::None;
 	bool bFloorAirline = false;
 	static const TCHAR* EventName() { return TEXT("OfferExpired"); }
+	FString Describe() const;
 };
 
 /** The player declined an offer. */
-struct FOfferDeclinedEvent
+struct AIRPORTOPS_API FOfferDeclinedEvent
 {
 	int32 FlightId = 0;
 	FName AirlineId;
 	static const TCHAR* EventName() { return TEXT("OfferDeclined"); }
+	FString Describe() const;
 };
 
 /**
@@ -96,29 +98,32 @@ struct FOfferDeclinedEvent
  * showed at the offer. Negative is early, and is not clamped - what early is worth is the listener's
  * decision, not the publisher's.
  */
-struct FFlightAirborneEvent
+struct AIRPORTOPS_API FFlightAirborneEvent
 {
 	int32 FlightId = 0;
 	FName AirlineId;
 	double LateBySeconds = 0.0;
 	static const TCHAR* EventName() { return TEXT("FlightAirborne"); }
+	FString Describe() const;
 };
 
 /** A game day ended - published by UOpsRuntime's daily beat, after the upkeep and the roll-up. */
-struct FDayEndedEvent
+struct AIRPORTOPS_API FDayEndedEvent
 {
 	int32 Day = 0;
 	static const TCHAR* EventName() { return TEXT("DayEnded"); }
+	FString Describe() const;
 };
 
 /** An airline's satisfaction moved. Published by UAirlineRoster from the Reaction tier. */
-struct FAirlineSatisfactionEvent
+struct AIRPORTOPS_API FAirlineSatisfactionEvent
 {
 	FName AirlineId;
 	double Old = 0.0;
 	double New = 0.0;
 	FString Cause;
 	static const TCHAR* EventName() { return TEXT("AirlineSatisfaction"); }
+	FString Describe() const;
 };
 
 /**

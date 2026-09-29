@@ -40,6 +40,32 @@ FString FNotificationEvent::Describe() const
 	return FString::Printf(TEXT("\"%s\""), *Text);
 }
 
+FString FOfferExpiredEvent::Describe() const
+{
+	return FString::Printf(TEXT("flight %d, airline %s, %s%s"), FlightId, *AirlineId.ToString(),
+		*UEnum::GetValueAsString(Reason), bFloorAirline ? TEXT(", floor airline") : TEXT(""));
+}
+
+FString FOfferDeclinedEvent::Describe() const
+{
+	return FString::Printf(TEXT("flight %d, airline %s"), FlightId, *AirlineId.ToString());
+}
+
+FString FFlightAirborneEvent::Describe() const
+{
+	return FString::Printf(TEXT("flight %d, airline %s, %+.0f s against its contract"), FlightId, *AirlineId.ToString(), LateBySeconds);
+}
+
+FString FDayEndedEvent::Describe() const
+{
+	return FString::Printf(TEXT("day %d"), Day);
+}
+
+FString FAirlineSatisfactionEvent::Describe() const
+{
+	return FString::Printf(TEXT("airline %s, %.2f -> %.2f, %s"), *AirlineId.ToString(), Old, New, *Cause);
+}
+
 FString FOpsEventBus::Describe(const FOpsEvent& Event)
 {
 	return Visit([](const auto& Each) { return Each.Describe(); }, Event);
