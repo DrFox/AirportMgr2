@@ -358,6 +358,11 @@ void UOpsRuntime::WireBus()
 	// OVERDRAWN, as soon as money moves - no longer waiting for the offer minute (stage 3). Every post, not
 	// only a sign change: the pass is coalesced, and only Overdrawn reads the balance.
 	Bus.Subscribe<FMoneyPostedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FMoneyPostedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	// AN ACCEPT PROMISES A STAND (batch 3 §2): the conditions about accepted flights - HeldStandLost today -
+	// are re-derived on the accept itself, not on whatever unrelated event came next. The arrival queue's
+	// pass joins this event in PR D.
+	// ENFORCED BY: AirportOps.Present.Alerts.AcceptDirtiesAlerts
+	Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferAcceptedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 
 	// PRESENTATION: the new UOpsEvents faces.
 	Bus.Subscribe<FAlertRaisedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),

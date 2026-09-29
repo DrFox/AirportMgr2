@@ -31,6 +31,7 @@ namespace
 		TArray<FOfferExpiredEvent> Expired;
 		TArray<FOfferDeclinedEvent> Declined;
 		TArray<FFlightAirborneEvent> Airborne;
+		TArray<FOfferAcceptedEvent> Accepted;
 
 		FFbEventsFixture()
 		{
@@ -46,6 +47,7 @@ namespace
 			Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferExpiredEvent& E) { Expired.Add(E); });
 			Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferDeclinedEvent& E) { Declined.Add(E); });
 			Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightAirborneEvent& E) { Airborne.Add(E); });
+			Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferAcceptedEvent& E) { Accepted.Add(E); });
 			Bus.EndWiring();
 		}
 
@@ -92,6 +94,29 @@ bool FFlightBoardEventsDeclinedTest::RunTest(const FString&)
 	if (!TestEqual(TEXT("a decline is published once"), F.Declined.Num(), 1)) { return false; }
 	TestEqual(TEXT("naming the flight"), F.Declined[0].FlightId, Flight->Id);
 	TestEqual(TEXT("and its airline, so the roster can find it"), F.Declined[0].AirlineId, FName(TEXT("Cumbria")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightBoardEventsAcceptedTest, "AirportOps.Model.FlightBoard.AcceptPublishesOfferAccepted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFlightBoardEventsAcceptedTest::RunTest(const FString&)
+{
+	// SPEC 2026-09-29-ops-batch3 §2: the one offer decision with no event. Accept is a player command the
+	// game module calls on the board directly, so without this nothing downstream (the alerts pass today,
+	// the arrival queue in PR D) hears that a stand was just promised.
+	FFbEventsFixture F;
+	UFlight* Flight = F.Offer(TEXT("Cumbria"));
+	if (!TestTrue(TEXT("the offer is accepted - the fixture's stand admits it"), F.Board->Accept(*F.Traffic, *F.Net, *F.Clock, *Flight))) { return false; }
+	F.Bus.Drain();
+	if (!TestEqual(TEXT("an accept is published once"), F.Accepted.Num(), 1)) { return false; }
+	TestEqual(TEXT("naming the flight"), F.Accepted[0].FlightId, Flight->Id);
+	TestEqual(TEXT("its airline"), F.Accepted[0].AirlineId, FName(TEXT("Cumbria")));
+	TestTrue(TEXT("and the stand Accept held for it - the one the queue will wait on"), F.Accepted[0].Stand == Flight->Stand && Flight->Stand.IsSet());
+
+	// A REFUSED ACCEPT IS NOT AN ACCEPT: the flight is no longer Offered, so Accept returns false and says nothing.
+	TestFalse(TEXT("a second accept of the same flight is refused"), F.Board->Accept(*F.Traffic, *F.Net, *F.Clock, *Flight));
+	F.Bus.Drain();
+	TestEqual(TEXT("and publishes nothing more"), F.Accepted.Num(), 1);
 	return true;
 }
 

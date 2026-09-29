@@ -119,6 +119,11 @@ FString FFleetChangedEvent::Describe() const
 		Change == EFleetChange::Bought ? TEXT("bought") : TEXT("sold"), Amount);
 }
 
+FString FOfferAcceptedEvent::Describe() const
+{
+	return FString::Printf(TEXT("flight %d, airline %s, stand %d"), FlightId, *AirlineId.ToString(), Stand.Index);
+}
+
 FString FOpsEventBus::Describe(const FOpsEvent& Event)
 {
 	return Visit([](const auto& Each) { return Each.Describe(); }, Event);

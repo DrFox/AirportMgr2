@@ -10,6 +10,7 @@
 #include "Model/OpsAlerts.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
+#include "Model/ServiceJob.h"
 #include "Model/SimClock.h"
 
 /**
@@ -247,6 +248,22 @@ struct AIRPORTOPS_API FLandRefusedEvent
 };
 
 /**
+ * The player accepted an offer - UFlightBoard::Accept, once the stand is held. Accept is a player command
+ * called on the board straight from the game module (OfferViewModels), so before this event an accept
+ * dirtied no pass at all. No toast (spec 2026-09-29-ops-batch3 §0): the flight moving into the accepted
+ * list is the feedback. No roster score either - accepting is not something the airline experiences.
+ */
+struct AIRPORTOPS_API FOfferAcceptedEvent
+{
+	int32 FlightId = 0;
+	FName AirlineId;
+	/** The stand Accept just held for it. */
+	FEntityInstanceId Stand;
+	static const TCHAR* EventName() { return TEXT("OfferAccepted"); }
+	FString Describe() const;
+};
+
+/**
  * EVERY EVENT THERE IS, as one closed list. Subscribe<T> and Publish<T> are compile-checked
  * against it, and the wiring test walks it - "lists that must agree are ONE list".
  * FInstancedStruct was rejected: an open set has no answer to "which events exist?".
@@ -254,7 +271,7 @@ struct AIRPORTOPS_API FLandRefusedEvent
 using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent,
 	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
-	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent>;
+	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

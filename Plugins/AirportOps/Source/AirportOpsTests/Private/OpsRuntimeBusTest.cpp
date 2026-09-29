@@ -461,4 +461,43 @@ bool FOpsRuntimeAlertsPassTest::RunTest(const FString&)
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeAcceptDirtiesAlertsTest, "AirportOps.Present.Alerts.AcceptDirtiesAlerts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeAcceptDirtiesAlertsTest::RunTest(const FString&)
+{
+	// ACCEPT IS A PLAYER COMMAND ON THE BOARD (OfferViewModels calls UFlightBoard::Accept directly), so before
+	// FOfferAcceptedEvent it dirtied no pass: a condition about accepted flights waited for something unrelated
+	// to re-derive it. Measured as the pass RUNNING, not as a particular alert: no alert kind can be raised or
+	// cleared BY an accept today - UStandAllocator::Reserve only holds a stand with a pose, and HeldStandIsGone
+	// needs one without - so an alert-shaped assertion here would pass with the subscription deleted.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	URoadNetwork* Net = TestWorld.Actor->Network;
+	if (!TestNotNull(TEXT("a network"), Net)) { return false; }
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 30000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
+
+	// QUIET FIRST: the attach and the stand just drawn each dirty the pass; let them settle.
+	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+	const int32 Settled = Runtime->GetAlerts()->RecomputeCountForTest();
+	Runtime->Tick(0.0);
+	if (!TestEqual(TEXT("a quiet frame runs no alerts pass - the baseline the accept is measured against"),
+		Runtime->GetAlerts()->RecomputeCountForTest(), Settled)) { return false; }
+
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Airframe.Wingspan = 3400.0;
+	Flight->AirlineId = TEXT("Cumbria");
+	UFlightBoard* Board = Runtime->GetFlightBoard();
+	Board->AddOffer(*Runtime->GetClock(), Flight);
+	UGroundTraffic* Model = TestWorld.Actor->GetTraffic()->GetModel();
+	if (!TestTrue(TEXT("the offer is accepted, as the inbox's Accept button does it"),
+		Board->Accept(*Model, *Net, *Runtime->GetClock(), *Flight))) { return false; }
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("the accept dirtied the alerts pass, which ran once on the next frame (FOfferAcceptedEvent)"),
+		Runtime->GetAlerts()->RecomputeCountForTest(), Settled + 1);
+	return true;
+}
+
 #endif
