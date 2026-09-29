@@ -3,6 +3,9 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
+#include "Components/Image.h"
+#include "Engine/Texture2D.h"
+#include "Model/OpsAlerts.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
@@ -23,7 +26,7 @@ void UAlertRowEntry::HandleClick()
 	ARoadBuildController* Controller = Panel != nullptr ? Cast<ARoadBuildController>(Panel->GetOwningPlayer()) : nullptr;
 	if (Panel != nullptr && Controller != nullptr)
 	{
-		Panel->Go(Index, *Controller);
+		Panel->GoTo(Key, *Controller);
 	}
 }
 
@@ -41,10 +44,22 @@ void UAlertsPanelWidget::BuildOnce(const UUIStyle& Style)
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	SetShown(false);
 
-	// THE RUNTIME'S EVENTS, as the toast stack binds them. A headless test has no runtime and binds its own.
+	WarningIcon = Style.IconWarning.LoadSynchronous();
+
+	// THE RUNTIME'S EVENTS, as the toast stack binds them - AND WHAT IT ALREADY HOLDS: the model publishes
+	// only changes, so an alert raised before this panel existed would never reach it (stage 2 review).
 	if (UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
 	{
 		BindTo(*Runtime->GetEvents());
+		for (const FOpsAlert& Alert : Runtime->GetAlerts()->GetAlerts())
+		{
+			OnAlertRaised(Alert);
+		}
+	}
+	else
+	{
+		// Not an error: a headless test binds its own events. Said so a silent list in PIE has a line.
+		UE_LOG(LogRoadBuild, Log, TEXT("No ops runtime: the alerts window is up but subscribed to nothing"));
 	}
 }
 
@@ -121,11 +136,17 @@ void UAlertsPanelWidget::TickPanel(float DeltaTime)
 
 bool UAlertsPanelWidget::Go(int32 Index, ARoadBuildController& Controller)
 {
-	if (!Alerts.IsValidIndex(Index))
+	return Alerts.IsValidIndex(Index) && GoTo(Alerts[Index].Key, Controller);
+}
+
+bool UAlertsPanelWidget::GoTo(const FOpsAlertKey& Key, ARoadBuildController& Controller)
+{
+	const FOpsAlert* Found = Alerts.FindByPredicate([&Key](const FOpsAlert& A) { return A.Key == Key; });
+	if (Found == nullptr)
 	{
 		return false;
 	}
-	const FOpsAlert& Alert = Alerts[Index];
+	const FOpsAlert& Alert = *Found;
 	if (Alert.Focus.Kind == EAlertFocusKind::None)
 	{
 		// NO PLACE IN THE WORLD. Overdrawn's "where" is the ledger; an airline that cannot come has no one
@@ -166,6 +187,18 @@ void UAlertsPanelWidget::PaintRows()
 		const FOpsAlert& Alert = Alerts[Index];
 		UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 
+		// THE WARNING ICON, spec §3's row - the same texture a Warning toast shows, so the two read as one kind.
+		if (WarningIcon != nullptr)
+		{
+			UImage* Icon = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+			Icon->SetBrushFromTexture(WarningIcon);
+			Icon->SetDesiredSizeOverride(FVector2D(18.0, 18.0));
+			Icon->SetColorAndOpacity(Style.Warning);
+			UHorizontalBoxSlot* IconSlot = Line->AddChildToHorizontalBox(Icon);
+			IconSlot->SetVerticalAlignment(VAlign_Center);
+			IconSlot->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
+		}
+
 		UTextBlock* Text = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 		Text->SetText(Alert.Text);
 		Text->SetAutoWrapText(true);
@@ -182,7 +215,7 @@ void UAlertsPanelWidget::PaintRows()
 		GoButton->SetState(bCanGo, false);
 		UAlertRowEntry* Entry = NewObject<UAlertRowEntry>(this);
 		Entry->Owner = this;
-		Entry->Index = Index;
+		Entry->Key = Alert.Key;
 		GoButton->OnClicked.AddDynamic(Entry, &UAlertRowEntry::HandleClick);
 		Entries.Add(Entry);
 		Line->AddChildToHorizontalBox(GoButton);

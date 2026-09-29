@@ -1081,10 +1081,30 @@ void ARoadBuildController::ToggleLedger()
 
 bool ARoadBuildController::SelectAndFocus(const FAlertFocus& Focus)
 {
+	const bool bWasWatching = BuildCameraComp->IsWatchingAgent();
+	// ONE LINE PER GO, at Log: "Go did nothing" must have a line to grep (stage 2 review).
+	auto Said = [this, &Focus, bWasWatching](const TCHAR* Outcome)
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("Alert Go: %s %d -> %s%s"), *UEnum::GetValueAsString(Focus.Kind), Focus.Id, Outcome,
+			bWasWatching && !BuildCameraComp->IsWatchingAgent() ? TEXT(" (left watch)") : TEXT(""));
+	};
+	// A BUILD TOOL IS MODAL OVER THE AIRPORT (FBuildSession's own rule, "the selection closes"): selecting a
+	// subject under a live road tool would put the next world click's road under an open card. Back to the
+	// select tool first, as a player's own click on a stand would need.
+	// ENFORCED BY: AirportMgr.UI.Alerts.GoLeavesABuildTool
+	auto SelectInSelectTool = [this](ESelectionKind Kind, int32 Id)
+	{
+		if (Session.GetActiveToolIndex() != 0)
+		{
+			SelectTool(0);
+		}
+		Session.Select(Kind, Id);
+	};
 	switch (Focus.Kind)
 	{
 	case EAlertFocusKind::Point:
 		BuildCameraComp->FocusOn(Focus.Point);
+		Said(TEXT("camera moved"));
 		return true;
 
 	case EAlertFocusKind::Agent:
@@ -1094,11 +1114,12 @@ bool ARoadBuildController::SelectAndFocus(const FAlertFocus& Focus)
 		const FRoadAgent* Agent = Traffic != nullptr ? Traffic->FindAgent(Focus.Id) : nullptr;
 		if (Agent == nullptr)
 		{
-			UE_LOG(LogRoadBuild, Verbose, TEXT("Alert Go: agent %d has gone"), Focus.Id);
+			Said(TEXT("refused, the agent has gone"));
 			return false;
 		}
 		BuildCameraComp->FocusOn(Agent->GroundPosition());
-		Session.Select(ESelectionKind::Aircraft, Focus.Id);
+		SelectInSelectTool(ESelectionKind::Aircraft, Focus.Id);
+		Said(TEXT("camera moved, agent selected"));
 		return true;
 	}
 
@@ -1107,15 +1128,17 @@ bool ARoadBuildController::SelectAndFocus(const FAlertFocus& Focus)
 		const URoadNetwork* Network = Target != nullptr ? Target->Network.Get() : nullptr;
 		if (Network == nullptr || !Network->GetEntities().IsValidIndex(Focus.Id) || !Network->GetEntities()[Focus.Id].bAlive)
 		{
-			UE_LOG(LogRoadBuild, Verbose, TEXT("Alert Go: entity %d has gone"), Focus.Id);
+			Said(TEXT("refused, the entity has gone"));
 			return false;
 		}
 		BuildCameraComp->FocusOn(Network->GetEntities()[Focus.Id].Position);
-		Session.Select(ESelectionKind::Stand, Focus.Id);
+		SelectInSelectTool(ESelectionKind::Stand, Focus.Id);
+		Said(TEXT("camera moved, stand selected"));
 		return true;
 	}
 
 	default:
+		Said(TEXT("nowhere to go"));
 		return false;
 	}
 }

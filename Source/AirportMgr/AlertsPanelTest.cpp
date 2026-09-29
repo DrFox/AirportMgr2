@@ -5,6 +5,8 @@
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "UI/UiWindowHost.h"
+#include "BuildBarWidget.h"
 #include "Model/OpsEvents.h"
 #include "Blueprint/UserWidget.h"
 #include "BuildHudLayer.h"
@@ -162,6 +164,53 @@ bool FAlertsRowGoTest::RunTest(const FString&)
 	TestTrue(TEXT("Go on a row with a place goes there"), Panel->Go(0, *C));
 	TestEqual(TEXT("the camera's focus is the alert's"), C->GetViewFocus(), FVector2D(-2500.0, 800.0));
 	TestFalse(TEXT("a row that is not there does nothing"), Panel->Go(5, *C));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAlertsGoLeavesBuildToolTest, "AirportMgr.UI.Alerts.GoLeavesABuildTool",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAlertsGoLeavesBuildToolTest::RunTest(const FString&)
+{
+	// A BUILD TOOL IS MODAL OVER THE AIRPORT (FBuildSession's own rule): selecting a stand while the road
+	// tool stays live would put the next world click's road under an open stand card (stage 2 review).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	URoadNetwork& Net = *TestWorld.Actor->Network;
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(5000.0, 0.0), 0.0, 3600.0,
+		StandDef->PoseRole, StandDef->Trucks);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(TestWorld.Actor);
+	C->SelectTool(1);
+	if (!TestEqual(TEXT("a build tool is live"), C->GetSession().GetActiveToolIndex(), 1)) { return false; }
+
+	FAlertFocus Focus;
+	Focus.Kind = EAlertFocusKind::Entity;
+	Focus.Id = Stand.Index;
+	Focus.Point = FVector2D(5000.0, 0.0);
+	TestTrue(TEXT("Go"), C->SelectAndFocus(Focus));
+	TestEqual(TEXT("Go puts the select tool back first"), C->GetSession().GetActiveToolIndex(), 0);
+	TestEqual(TEXT("and then selects the stand"), C->GetSelection().Kind, ESelectionKind::Stand);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAlertsIsAWindowTest, "AirportMgr.UI.Alerts.HudHostsItAsAWindow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAlertsIsAWindowTest::RunTest(const FString&)
+{
+	// CreateAll AND WireWindows ARE TWO LISTS that must agree (BuildHudLayer.cpp): a panel created but not
+	// wired is never shown. Driven through the HUD's own WireWindows, not a hand-added window.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHudForTest())) { return false; }
+	UBuildHudLayer* Hud = C->GetHudForTest();
+	Hud->BuildBar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
+	Hud->AlertsPanel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
+	Hud->WireWindows();
+	TestNotNull(TEXT("the alerts panel is a window the host can show"), Hud->WindowHost->WindowForTest(TEXT("alerts")));
 	return true;
 }
 

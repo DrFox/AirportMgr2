@@ -20,7 +20,8 @@ class UAlertRowEntry : public UObject
 
 public:
 	UPROPERTY() TWeakObjectPtr<UAlertsPanelWidget> Owner;
-	int32 Index = INDEX_NONE;
+	/** BY KEY, not row index: a clear between a paint and a click shifts the indices (stage 2 review). */
+	FOpsAlertKey Key;
 
 	UFUNCTION() void HandleClick();
 };
@@ -59,6 +60,9 @@ public:
 	 */
 	bool Go(int32 Index, ARoadBuildController& Controller);
 
+	/** Go by the alert's key - what a row's button calls. False when that alert has cleared since. */
+	bool GoTo(const FOpsAlertKey& Key, ARoadBuildController& Controller);
+
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
 	virtual void OnWindowClosedByPlayer() override;
 
@@ -73,6 +77,8 @@ private:
 
 	UPROPERTY(Transient) TArray<FOpsAlert> Alerts;
 	UPROPERTY(Transient) TArray<TObjectPtr<UAlertRowEntry>> Entries;
+	/** The style's warning icon, resolved once in BuildOnce - the toast stack's reason (issue #186). */
+	UPROPERTY(Transient) TObjectPtr<class UTexture2D> WarningIcon;
 	bool bShowing = false;
 
 	/** Set when the list changes; the rows are rebuilt on the next tick while shown - not every frame. */

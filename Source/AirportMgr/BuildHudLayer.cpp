@@ -61,6 +61,7 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 	// CODE-ONLY, no *Class hook: the other panels' hooks predate windows (see SettingsPanel's comment).
 	SettingsPanel = CreateWidget<USettingsPanelWidget>(&Owner, USettingsPanelWidget::StaticClass());
 	// CODE-ONLY, no *Class hook, like Arrivals and Settings. IN WireWindows TOO - a list that must agree.
+	// ENFORCED BY: AirportMgr.UI.Alerts.HudHostsItAsAWindow
 	AlertsPanel = CreateWidget<UAlertsPanelWidget>(&Owner, UAlertsPanelWidget::StaticClass());
 	ToastStack = CreateConfiguredWidget<UToastStackWidget>(Owner, ToastStackClass, 2,
 		TEXT("Toast stack"), TEXT("ToastStackClass"));

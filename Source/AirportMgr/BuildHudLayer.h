@@ -101,7 +101,7 @@ public:
 	TObjectPtr<UArrivalsPanelWidget> ArrivalsPanel;
 
 	/** The standing alerts (ops alerts spec 2026-09-29) - opened from the bar's Alerts button. */
-	UPROPERTY()
+	UPROPERTY(Transient)
 	TObjectPtr<UAlertsPanelWidget> AlertsPanel;
 
 	/** Every floating panel's window, on one canvas at Z 1 - see UUiWindowHost. */
