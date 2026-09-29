@@ -846,8 +846,10 @@ bool FStandTurnOffPaintsOneNumberPerTurnOffTest::RunTest(const FString& Paramete
 /**
  * THE GAP ACROSS THE STRIP (Review Focus 4): every triangle the turn-off paints lies on the
  * taxiway's pavement - never in the strip between the pavement edge and the stand, which is
- * grass or shoulder and carries no paint (spec "Paint (user, from BHX)"). Paired with counts,
- * so an empty buffer cannot pass.
+ * grass or shoulder and carries no paint (spec "Paint (user, from BHX)"). Paired with a count,
+ * so an empty buffer cannot pass. It used to also require the lead-in to reach the pavement
+ * edge; that paint was the sweeps', which are no longer painted (user 2026-09-29) - here the
+ * triangles are the arrow and the sign.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandTurnOffLeadInOnlyOnPavementTest,
@@ -866,8 +868,7 @@ bool FStandTurnOffLeadInOnlyOnPavementTest::RunTest(const FString& Parameters)
 	FRoadMeshBuffers Buffers;
 	FStandTurnOffCensus Census;
 	FStandTurnOffMarkingBuilder::Build(*TestWorld.Actor->Network, 0.0, Buffers, &Census);
-	TestTrue(TEXT("some lead-in was painted"), Census.LeadInCentres.Num() > 0);
-	TestTrue(TEXT("and triangles were emitted"), Buffers.Indices.Num() >= 3);
+	TestTrue(TEXT("triangles were emitted"), Buffers.Indices.Num() >= 3);
 
 	int32 OffPavement = 0;
 	for (int32 Slot = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3)
@@ -876,28 +877,24 @@ bool FStandTurnOffLeadInOnlyOnPavementTest::RunTest(const FString& Parameters)
 			+ Buffers.Positions[Buffers.Indices[Slot + 2]]) / 3.0;
 		if (FMath::Abs(Centroid.Y) > HalfWidth + 1.0) { ++OffPavement; }
 	}
-	double Deepest = 0.0;
-	for (const FVector2D& Centre : Census.LeadInCentres)
-	{
-		Deepest = FMath::Max(Deepest, FMath::Abs(Centre.Y));
-	}
 	TestEqual(TEXT("no turn-off paint lies off the taxiway pavement - the strip is a gap"), OffPavement, 0);
-	// THE OTHER HALF OF THE GAP: the paint reaches out to the pavement edge rather than
-	// stopping short of it - a builder that painted only the first sample would pass the
-	// line above.
-	TestTrue(*FString::Printf(TEXT("the lead-in reaches the pavement edge (deepest %.0f of %.0f)"), Deepest, HalfWidth),
-		Deepest > HalfWidth - FStandMarkingBuilder::LeadInWidth * 2.0);
 	return true;
 }
 
-/** THE GRAPH SAMPLES ONCE: the painted lead-in lies on the edges the aircraft follows, sampled
- *  by GuidelineGeom::Sample - not a second curve that agrees until a bend. */
+/**
+ * NO PAINT ON THE SWEEPS (user 2026-09-29: "these are not needed"): the two curved links Join
+ * lays from the lead end onto the taxiway stay in the GRAPH - the aircraft still turns along
+ * them - but carry no yellow. Only the lead-in itself is painted, and only where paved.
+ * The fixture's lead end sits behind the pavement edge (Join lays it a fillet radius back from
+ * the corner), so no lead-in quad lies on the pavement at all: with the sweeps painted this
+ * count was the sweeps' quads, never zero.
+ */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FStandTurnOffFollowsTheDerivedEdgesTest,
-	"Airside.Build.StandTurnOff.FollowsTheDerivedEdges",
+	FStandTurnOffPaintsNoSweepTest,
+	"Airside.Build.StandTurnOff.PaintsNoSweep",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FStandTurnOffFollowsTheDerivedEdgesTest::RunTest(const FString& Parameters)
+bool FStandTurnOffPaintsNoSweepTest::RunTest(const FString& Parameters)
 {
 	using namespace StandTurnOffTest;
 	FAirsideTestWorld TestWorld;
@@ -906,33 +903,28 @@ bool FStandTurnOffFollowsTheDerivedEdgesTest::RunTest(const FString& Parameters)
 	if (!PlaceBesideTaxiway(*this, TestWorld.Actor, Index, HalfWidth, Strip)) { return false; }
 	const URoadNetwork& Net = *TestWorld.Actor->Network;
 
-	// EVERY LINK EDGE - aircraft, not a road's own guideline (DerivedFrom unset), not a stand's
-	// lane (StandGeometryOwner unset): the lead-in and its sweeps, found without the builder.
-	// SAMPLED BY URoadNetwork::SampleGuideline, the graph's one edge sampler - what the router
-	// costs and the follower walks - not a re-derivation of it here.
-	TArray<TArray<FVector2D>> Links;
-	for (int32 EdgeIndex = 0; EdgeIndex < Net.GetGuidelineEdges().Num(); ++EdgeIndex)
+	// THE FIXTURE HAS SWEEPS, and its lead end is off the pavement - or a zero below measures
+	// nothing. The lead-in is the pose's one link; the sweeps are the other links at its far end.
+	const FGuidelineNodeId PoseId = Net.GetEntities()[Index].PoseNode;
+	const FGuidelineNode* Pose = Net.GetGuidelineNode(PoseId);
+	if (!TestTrue(TEXT("the stand has a lead-in"), Pose != nullptr && Pose->Incident.Num() >= 1)) { return false; }
+	const FGuidelineEdge* Lead = Net.GetGuidelineEdge(Pose->Incident[0]);
+	const FGuidelineNode* End = Net.GetGuidelineNode(Lead->A == PoseId ? Lead->B : Lead->A);
+	int32 Sweeps = 0;
+	for (const FGuidelineEdgeId Id : End->Incident)
 	{
-		const FGuidelineEdge& Edge = Net.GetGuidelineEdges()[EdgeIndex];
-		if (!Edge.bAlive || Edge.DerivedFrom.IsSet() || Edge.StandGeometryOwner.IsSet()
-			|| !Edge.AllowedTraffic.Allows(ETraversalClass::Aircraft)) { continue; }
-		TArray<FVector2D> Points;
-		if (Net.SampleGuideline(Net.GuidelineEdgeIdAt(EdgeIndex), Points)) { Links.Add(MoveTemp(Points)); }
+		const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
+		Sweeps += Id != Pose->Incident[0] && !Edge->DerivedFrom.IsSet() ? 1 : 0;
 	}
-	if (!TestTrue(TEXT("the stand's lead-in and sweeps exist"), Links.Num() >= 3)) { return false; }
+	if (!TestEqual(TEXT("Join laid two sweeps"), Sweeps, 2)) { return false; }
+	if (!TestTrue(*FString::Printf(TEXT("the lead end is behind the pavement edge (%.0f vs %.0f)"), FMath::Abs(End->Position.Y), HalfWidth),
+		FMath::Abs(End->Position.Y) > HalfWidth)) { return false; }
 
 	FRoadMeshBuffers Buffers;
 	FStandTurnOffCensus Census;
 	FStandTurnOffMarkingBuilder::Build(Net, 0.0, Buffers, &Census);
-	if (!TestTrue(TEXT("some lead-in was painted"), Census.LeadInCentres.Num() > 0)) { return false; }
-	double Worst = 0.0;
-	for (const FVector2D& Centre : Census.LeadInCentres)
-	{
-		double Best = DBL_MAX;
-		for (const TArray<FVector2D>& Points : Links) { Best = FMath::Min(Best, ToPolyline(Points, Centre)); }
-		Worst = FMath::Max(Worst, Best);
-	}
-	TestTrue(*FString::Printf(TEXT("every lead-in paint centre is within 1 uu of the sampled edges (worst %.3f)"), Worst), Worst <= 1.0);
+	TestEqual(TEXT("the turn-off is still signed"), Census.Arrows, 1);
+	TestEqual(TEXT("no lead-in quad on the pavement - the sweeps are not painted"), Census.LeadInCentres.Num(), 0);
 	return true;
 }
 
@@ -988,6 +980,17 @@ bool FStandTurnOffNoRoomBranchTest::RunTest(const FString& Parameters)
 		OffPavement += FMath::Abs(Centre.Y) > HalfWidth + 1.0 ? 1 : 0;
 	}
 	TestEqual(TEXT("and only on the pavement"), OffPavement, 0);
+	// THE GRAPH SAMPLES ONCE: the paint lies on the lead edge as URoadNetwork::SampleGuideline
+	// samples it - what the router costs and the follower walks - not a second curve. (Moved
+	// here from FollowsTheDerivedEdges, whose fixture no longer paints a lead-in quad.)
+	TArray<FVector2D> LeadPoints;
+	if (!TestTrue(TEXT("the lead-in samples"), Net->SampleGuideline(LeadId, LeadPoints))) { return false; }
+	double Worst = 0.0;
+	for (const FVector2D& Centre : Census.LeadInCentres)
+	{
+		Worst = FMath::Max(Worst, ToPolyline(LeadPoints, Centre));
+	}
+	TestTrue(*FString::Printf(TEXT("every lead-in paint centre is within 1 uu of the sampled lead edge (worst %.3f)"), Worst), Worst <= 1.0);
 	return true;
 }
 

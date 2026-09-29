@@ -115,7 +115,7 @@ namespace
 	 * Edge's samples, ordered to start at From - URoadNetwork::SampleGuideline, the graph's one
 	 * edge sampler, whose bFromB walk swaps the endpoints rather than reversing an array (final
 	 * review 2026-09-29: this used to sample then Algo::Reverse, a second spelling of the walk
-	 * the follower takes). ENFORCED BY: Airside.Build.StandTurnOff.FollowsTheDerivedEdges.
+	 * the follower takes). ENFORCED BY: Airside.Build.StandTurnOff.NoRoomBranch.
 	 */
 	TArray<FVector2D> SamplesFrom(const URoadNetwork& Network, FGuidelineEdgeId EdgeId, FGuidelineNodeId From)
 	{
@@ -318,12 +318,13 @@ int32 FStandTurnOffMarkingBuilder::Build(const URoadNetwork& Network, double Z, 
 			++C.TurnOffs;
 			++Painted;
 
-			// THE LEAD-IN, WHERE PAVED - every sweep and the lead itself, from the taxiway end
-			// inward. On a close taxiway the lead end can sit on the pavement.
-			for (const FGuidelineEdgeId Sweep : Sweeps)
-			{
-				PaintPaved(Out, Z, SamplesFrom(Network, Sweep, TaxiEndOf(Sweep)), Pavement, Id, C);
-			}
+			// THE LEAD-IN, WHERE PAVED - the lead only, from the lead end inward. On a close taxiway
+			// the lead end can sit on the pavement. THE SWEEPS ARE NOT PAINTED (user 2026-09-29:
+			// "these are not needed"): the sign's arrow marks the turn-off, and two yellow arms
+			// curving off the centreline read as clutter. They stay in the graph - the aircraft
+			// still turns along them - so here, and only here, the line followed is not a line
+			// painted; the sweeps above are still read for the corner and the taxiway node.
+			// ENFORCED BY: Airside.Build.StandTurnOff.PaintsNoSweep.
 			PaintPaved(Out, Z, SamplesFrom(Network, LeadId, LeadEnd), Pavement, Id, C);
 
 			// THE SIGN, ON THE LEAD-IN'S OWN AXIS (user 2026-09-29, samples/standsigns.png): from

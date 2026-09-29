@@ -40,8 +40,8 @@ struct AIRSIDE_API FStandTurnOffCensus
 
 /**
  * THE TURN-OFF PAINT (taxiway strip stage 5; spec "Paint (user, from BHX)"): where a stand's
- * lead-in leaves a taxiway, the yellow lead-in line painted on the TAXIWAY PAVEMENT from the
- * centreline, and a SIGN on the lead-in's own axis just off the centreline: a short straight arrow
+ * lead-in leaves a taxiway, whatever of the lead-in itself lies on the TAXIWAY PAVEMENT (not the
+ * sweeps onto the centreline - see below), and a SIGN on the lead-in's own axis just off the centreline: a short straight arrow
  * into the stand between two black boxes carrying the stand number, one reading from each side
  * (user 2026-09-29, samples/standsigns.png - it replaced a chevron half-way round the sweep and a
  * single number beside the centreline). The strip
@@ -49,12 +49,15 @@ struct AIRSIDE_API FStandTurnOffCensus
  * inside the stand's white lines, which FStandMarkingBuilder paints.
  *
  * THE GAP IS "PAINT ONLY WHERE PAVED", NOT A SECOND RULE: every lead-in quad comes from
- * GuidelineGeom::Sample of the derived lead and sweep edges FAnchorLink::Join laid (so the
- * guideline graph still samples once - the aircraft follows exactly the line painted), kept only
- * where it lies on taxiway pavement. Nothing records a turn-off; it is re-derived from the graph
- * on every Topology rebuild, which is when RebuildMarkings runs, after FAnchorLink::Build.
+ * GuidelineGeom::Sample of the derived lead edge FAnchorLink::Join laid (so the guideline graph
+ * still samples once), kept only where it lies on taxiway pavement. The two SWEEPS Join lays
+ * from the lead end onto the taxiway are NOT painted (user 2026-09-29: not needed; the arrow
+ * marks the turn-off) - the aircraft still turns along them, unpainted. Where the lead end sits
+ * behind the pavement edge, which is the usual case, the turn-off paint is the sign alone.
+ * Nothing records a turn-off; it is re-derived from the graph on every Topology rebuild, which
+ * is when RebuildMarkings runs, after FAnchorLink::Build.
  * ENFORCED BY: Airside.Present.StandTurnOff.PaintsAfterPlacement,
- * Airside.Build.StandTurnOff.FollowsTheDerivedEdges and ...LeadInOnlyOnPavement.
+ * Airside.Build.StandTurnOff.PaintsNoSweep, ...NoRoomBranch and ...LeadInOnlyOnPavement.
  *
  * A SEPARATE BUILDER, not more of FStandMarkingBuilder: that one paints inside a stand's own box
  * and is clipped to it; this paints outside every box, on ground the stand does not own.
