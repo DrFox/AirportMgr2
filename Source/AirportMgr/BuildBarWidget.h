@@ -15,6 +15,7 @@ class UBuildBarWidget;
 class ARoadBuildController;
 class UUIStyle;
 class UUiButton;
+class UUiMenuButton;
 
 /**
  * One button on the bar and the action it runs. A UObject because UButton::OnClicked is a
@@ -33,7 +34,12 @@ public:
 	UPROPERTY() TObjectPtr<UUiButton> Button;
 	UPROPERTY() TWeakObjectPtr<UBuildBarWidget> Owner;
 
+	/** A MENU VERB's popup (FBuildAction::MenuItems), whose own button is Button above; null for a plain action. */
+	UPROPERTY() TObjectPtr<UUiMenuButton> Menu;
+
 	UFUNCTION() void HandleClicked();
+	/** A menu verb's line, chosen - after its confirm, for a bConfirm line. */
+	UFUNCTION() void HandleChosen(int32 Line);
 };
 
 /**
@@ -138,6 +144,12 @@ public:
 
 	/** Runs an action by registry index on the owning controller. Called by entries. */
 	void RunAction(int32 ActionIndex);
+
+	/** Runs a menu verb's chosen line (FBuildAction::TryChoose) on the owning controller. Called by entries. */
+	void ChooseAction(int32 ActionIndex, int32 Line);
+
+	/** How many entries are menu verbs built as a UUiMenuButton - see AirportMgr.Actions.BarBuildsMenuActionsAsMenus. */
+	int32 MenuButtonCountForTest() const;
 
 	/** Picks Option on the lit tool's row Axis, on the owning controller. Called by variant
 	 *  entries. */

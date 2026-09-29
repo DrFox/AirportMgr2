@@ -24,6 +24,7 @@
 #include "Present/OpsRuntimeSubsystem.h"
 #include "RoadBuildController.h"
 #include "UI/UiButton.h"
+#include "UI/UiMenuButton.h"
 #include "UIStyle.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogBuildBar, Log, All);
@@ -64,6 +65,14 @@ void UBuildBarEntry::HandleClicked()
 	if (UBuildBarWidget* Bar = Owner.Get())
 	{
 		Bar->RunAction(ActionIndex);
+	}
+}
+
+void UBuildBarEntry::HandleChosen(int32 Line)
+{
+	if (UBuildBarWidget* Bar = Owner.Get())
+	{
+		Bar->ChooseAction(ActionIndex, Line);
 	}
 }
 
@@ -355,26 +364,58 @@ void UBuildBarWidget::BuildButtons(const UUIStyle* Style)
 		UBuildBarEntry* Entry = NewObject<UBuildBarEntry>(this);
 		Entry->ActionIndex = Index;
 		Entry->Owner = this;
-		Entry->Button = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
+		// WHAT GOES ON THE PANEL: the button, or - for a menu verb - the UUiMenuButton wrapping it.
+		UWidget* OnPanel = nullptr;
 
 		// The time controls carry no texture, deliberately: slower, pause and faster are
 		// geometric glyphs that render exactly as text. IconFor returns null for them and
 		// AirportMgr.UI.EveryActionResolvesAnIcon exempts them BY SECTION, so a fourth time
 		// control needs neither an icon nor that test edited.
-		if (UTexture2D* IconTexture = Style->IconFor(Action.Id))
-		{
-			// The glyph is white with a transparent ground, so the button's ink IS the icon colour.
-			Entry->Button->SetIcon(IconTexture, Style->ButtonSize * 0.5f);
-			++WithIcon;
-		}
+		UTexture2D* IconTexture = Style->IconFor(Action.Id);
+		WithIcon += IconTexture != nullptr ? 1 : 0;
 
-		// THE LABEL IS NOW THE LABEL. The key used to be appended here - "Taxiway (1)" -
-		// which is most of what made the bar read as a debug menu. It moves to the tooltip,
-		// where it still teaches the shortcut without shouting it on every button forever.
-		Entry->Button->SetLabel(Action.Label);
-		// Stacked, and UButton's own padding: a tool button is sized by its icon, not ButtonPadding.
-		Entry->Button->Build(*Style, EUiButtonKind::Secondary, EUiButtonLayout::Stacked, false);
-		Entry->Button->OnClicked.AddDynamic(Entry, &UBuildBarEntry::HandleClicked);
+		if (Action.MenuItems)
+		{
+			// A MENU VERB (FBuildAction::MenuItems): its click opens a popup AT THE BUTTON - the inspector Unstick's
+			// UUiMenuButton, confirm and all - rather than running Execute. The lines are asked of the registry as the
+			// popup opens, through the same context TryRun builds; the stacked, icon-topped look is the bar's.
+			// ENFORCED BY: AirportMgr.Actions.BarBuildsMenuActionsAsMenus
+			Entry->Menu = WidgetTree->ConstructWidget<UUiMenuButton>(UUiMenuButton::StaticClass());
+			Entry->Menu->Build(*Style, Action.Label, EUiButtonLayout::Stacked, false, IconTexture, Style->ButtonSize * 0.5f);
+			TWeakObjectPtr<UBuildBarWidget> WeakBar = this;
+			Entry->Menu->Items = [WeakBar, Index]()
+			{
+				UBuildBarWidget* Bar = WeakBar.Get();
+				ARoadBuildController* C = Bar != nullptr ? Bar->Controller() : nullptr;
+				if (C == nullptr)
+				{
+					return TArray<FUiMenuItem>();
+				}
+				FBuildActionContext Ctx(*C);
+				return BuildActions()[Index].MenuItems(Ctx);
+			};
+			Entry->Menu->OnChosen.AddDynamic(Entry, &UBuildBarEntry::HandleChosen);
+			Entry->Button = Entry->Menu->GetButton();
+			OnPanel = Entry->Menu;
+		}
+		else
+		{
+			Entry->Button = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
+			if (IconTexture != nullptr)
+			{
+				// The glyph is white with a transparent ground, so the button's ink IS the icon colour.
+				Entry->Button->SetIcon(IconTexture, Style->ButtonSize * 0.5f);
+			}
+
+			// THE LABEL IS NOW THE LABEL. The key used to be appended here - "Taxiway (1)" -
+			// which is most of what made the bar read as a debug menu. It moves to the tooltip,
+			// where it still teaches the shortcut without shouting it on every button forever.
+			Entry->Button->SetLabel(Action.Label);
+			// Stacked, and UButton's own padding: a tool button is sized by its icon, not ButtonPadding.
+			Entry->Button->Build(*Style, EUiButtonKind::Secondary, EUiButtonLayout::Stacked, false);
+			Entry->Button->OnClicked.AddDynamic(Entry, &UBuildBarEntry::HandleClicked);
+			OnPanel = Entry->Button;
+		}
 
 		if (Action.Key.IsValid())
 		{
@@ -389,13 +430,13 @@ void UBuildBarWidget::BuildButtons(const UUIStyle* Style)
 
 		if (UHorizontalBox* Box = Cast<UHorizontalBox>(Panel))
 		{
-			UHorizontalBoxSlot* ButtonSlot = Box->AddChildToHorizontalBox(Entry->Button);
+			UHorizontalBoxSlot* ButtonSlot = Box->AddChildToHorizontalBox(OnPanel);
 			ButtonSlot->SetPadding(FMargin(3.0f, 0.0f));
 			ButtonSlot->SetVerticalAlignment(VAlign_Fill);
 		}
 		else
 		{
-			Panel->AddChild(Entry->Button);
+			Panel->AddChild(OnPanel);
 		}
 		Entries.Add(Entry);
 	}
@@ -417,6 +458,18 @@ void UBuildBarWidget::RunAction(int32 ActionIndex)
 		return;
 	}
 	Actions[ActionIndex].TryRun(*C, TEXT("Bar"));
+}
+
+void UBuildBarWidget::ChooseAction(int32 ActionIndex, int32 Line)
+{
+	ARoadBuildController* C = Controller();
+	const TConstArrayView<FBuildAction> Actions = BuildActions();
+	if (C == nullptr || !Actions.IsValidIndex(ActionIndex))
+	{
+		UE_LOG(LogBuildBar, Warning, TEXT("Bar menu line %d of action %d ignored: no controller or no such action"), Line, ActionIndex);
+		return;
+	}
+	Actions[ActionIndex].TryChoose(*C, Line, TEXT("Bar"));
 }
 
 void UBuildBarWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -645,6 +698,16 @@ float UBuildBarWidget::BarReservedHeightForTest(float AvailableWidth) const
 		return static_cast<float>(Slate->GetDesiredSize().Y);
 	}
 	return BarSlot->GetOffsets().Bottom;
+}
+
+int32 UBuildBarWidget::MenuButtonCountForTest() const
+{
+	int32 Count = 0;
+	for (const UBuildBarEntry* Entry : Entries)
+	{
+		Count += Entry != nullptr && Entry->Menu != nullptr ? 1 : 0;
+	}
+	return Count;
 }
 
 bool UBuildBarWidget::AllButtonsAreUiButtonsForTest() const

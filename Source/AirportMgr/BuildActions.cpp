@@ -1,4 +1,6 @@
 #include "BuildActions.h"
+#include "Model/Airport.h"
+#include "Model/FlightBoard.h"
 #include "Model/Pricing.h"
 #include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
@@ -329,6 +331,74 @@ namespace
 			Out.Add(MoveTemp(Alerts));
 		}
 
+		// THE AIRPORT'S STATUS (spec 2026-09-29-ops-batch3 §3): close it, reopen it, and read why it is not open. A MENU
+		// VERB, because closing cancels every flight not yet arrived - a destructive gesture, so it confirms at the
+		// cursor with the inspector Unstick's popup (UUiMenuButton + bConfirm) rather than on one click. Reopening loses
+		// nothing and is a plain line. NO KEY, Depart's reason. Bound to Ctx.Runtime, the fee lever's reason.
+		{
+			FBuildAction Airport = Make(TEXT("game.airport"), EActionSection::Game, LOCTEXT("CloseAirport", "Close airport"),
+				EKeys::Invalid, false,
+				// EXECUTE ONLY REOPENS: it is the door with no confirm (a key, were one ever bound), and a close must
+				// never be reachable without one.
+				[](FBuildActionContext& Ctx)
+				{
+					if (Ctx.Runtime != nullptr && Ctx.Runtime->GetAirport()->IsClosedByPlayer())
+					{
+						Ctx.Runtime->SetAirportClosed(false);
+					}
+				},
+				// LIT WHILE NOT OPEN: the one glance that says the airport is taking no traffic.
+				[](const FBuildActionContext& Ctx) { return Ctx.Runtime != nullptr && Ctx.Runtime->GetAirport()->Status() != EAirportStatus::Open; },
+				HasRuntime);
+			Airport.MenuItems = [](const FBuildActionContext& Ctx)
+			{
+				TArray<FUiMenuItem> Out;
+				if (Ctx.Runtime == nullptr)
+				{
+					return Out;
+				}
+				FUiMenuItem& Line = Out.AddDefaulted_GetRef();
+				if (Ctx.Runtime->GetAirport()->IsClosedByPlayer())
+				{
+					Line.Label = LOCTEXT("OpenAirport", "Open airport");
+					return Out;
+				}
+				// THE COST, ASKED AS THE POPUP OPENS: what a close would cancel now (UFlightBoard::UnarrivedCount).
+				Line.Label = LOCTEXT("CloseAirport", "Close airport");
+				Line.bConfirm = true;
+				Line.ConfirmLabel = FText::Format(LOCTEXT("CloseAirportConfirm", "Close? {0} {0}|plural(one=flight,other=flights) will be cancelled"),
+					FText::AsNumber(Ctx.Runtime->GetFlightBoard()->UnarrivedCount()));
+				return Out;
+			};
+			// ONE LINE, whose meaning is the intent it toggles: closed by the player reopens, anything else closes.
+			Airport.Choose = [](FBuildActionContext& Ctx, int32 Line)
+			{
+				if (Ctx.Runtime != nullptr && Line == 0)
+				{
+					Ctx.Runtime->SetAirportClosed(!Ctx.Runtime->GetAirport()->IsClosedByPlayer());
+				}
+			};
+			// THE CAPTION IS THE STATUS whenever it is not simply open - "Closed (draining: 3)" counts the aircraft a
+			// closed airport is still seeing off (UFlightBoard::OnGroundCount); draining is a readout, not a state.
+			Airport.DynamicLabel = [](const FBuildActionContext& Ctx)
+			{
+				const EAirportStatus Status = Ctx.Runtime != nullptr ? Ctx.Runtime->GetAirport()->Status() : EAirportStatus::Open;
+				if (Status == EAirportStatus::NoRunway)
+				{
+					return LOCTEXT("AirportNoRunway", "No runway");
+				}
+				if (Status == EAirportStatus::ClosedByPlayer)
+				{
+					const int32 Draining = Ctx.Runtime->GetFlightBoard()->OnGroundCount();
+					return Draining > 0
+						? FText::Format(LOCTEXT("AirportDraining", "Closed (draining: {0})"), FText::AsNumber(Draining))
+						: LOCTEXT("AirportClosed", "Closed");
+				}
+				return LOCTEXT("CloseAirport", "Close airport");
+			};
+			Out.Add(MoveTemp(Airport));
+		}
+
 		// TWO LISTS, ONE PER AXIS, and AirportMgr.Actions.GuideGridIsInTheRegistry walks BOTH
 		// enums against them rather than counting: a row or column added without a button is a
 		// guide the player cannot switch, and nothing else would say so.
@@ -479,6 +549,20 @@ bool FBuildAction::TryRun(ARoadBuildController& C, const TCHAR* Via) const
 	}
 	UE_LOG(LogRoadBuild, Log, TEXT("%s: %s"), Via, *Id.ToString());
 	Execute(Context);
+	return true;
+}
+
+bool FBuildAction::TryChoose(ARoadBuildController& C, int32 Line, const TCHAR* Via) const
+{
+	// TryRun's shape exactly - one context, the enabled gate, one log line - so a menu verb's line leaves the same
+	// trace a button or a key does.
+	FBuildActionContext Context(C);
+	if (!Choose || !IsEnabled(Context))
+	{
+		return false;
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("%s: %s line %d"), Via, *Id.ToString(), Line);
+	Choose(Context, Line);
 	return true;
 }
 

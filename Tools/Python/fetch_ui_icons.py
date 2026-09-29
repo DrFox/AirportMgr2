@@ -107,6 +107,9 @@ ICONS = {
     "game.ledger":         ("delapouite", "abacus"),
     # FETCHED AND CHECKED 2026-09-29: delapouite/alarm-bell and lorc/alarm-clock return HTML, not PNG.
     "game.alerts":         ("lorc",       "hazard-sign"),
+    # Close / open the airport (ops batch 3 PR B). The tower is the airport's own voice - closing is what ATC
+    # does - and it reads at 24 pixels. FETCHED AND CHECKED 2026-09-30: PNG; lorc/stop-sign returns HTML.
+    "game.airport":        ("delapouite", "control-tower"),
 
     # The drive-side toggle (2026-09-23). A steering wheel: it reads as DRIVING at 24 pixels,
     # and which side the wheel sits on is the everyday sign of which side a country drives.

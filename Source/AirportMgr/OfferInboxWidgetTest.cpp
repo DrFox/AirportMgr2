@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Model/Airport.h"
 #include "ArrivalViewModels.h"
 #include "ArrivalsPanelWidget.h"
 #include "Components/TextBlock.h"
@@ -229,6 +230,28 @@ bool FOfferInboxDemandGateTest::RunTest(const FString& Parameters)
 	Mood = 0.6;
 	TestTrue(TEXT("an airline's mood moving resamples"), Widget->RefreshDemand(Airlines, *Clock, Generator));
 	TestEqual(TEXT("two samplings in four refreshes"), Widget->DemandSampleCountForTest(), 2);
+	return true;
+}
+
+/** THE STRIP READS "Closed" while the airport is not open (spec 2026-09-29-ops-batch3 §3): a demand curve for offers
+ *  that will not come would be a promise the generator does not keep. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferInboxClosedStripTest, "AirportMgr.UI.OfferInbox.DemandStripReadsClosed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferInboxClosedStripTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	UOfferInboxWidget* Widget = CreateWidget<UOfferInboxWidget>(TestWorld.World, UOfferInboxWidget::StaticClass());
+	if (!TestNotNull(TEXT("an inbox"), Widget)) { return false; }
+	Widget->ShowAirportStatus(EAirportStatus::Open);
+	TestTrue(TEXT("open: the strip shows"), Widget->IsDemandStripShownForTest());
+	TestEqual(TEXT("and no status line"), Widget->DemandStatusForTest(), FString());
+	Widget->ShowAirportStatus(EAirportStatus::ClosedByPlayer);
+	TestFalse(TEXT("closed: the strip is hidden"), Widget->IsDemandStripShownForTest());
+	TestEqual(TEXT("and reads Closed"), Widget->DemandStatusForTest(), FString(TEXT("Closed")));
+	Widget->ShowAirportStatus(EAirportStatus::NoRunway);
+	TestEqual(TEXT("no runway reads Closed too"), Widget->DemandStatusForTest(), FString(TEXT("Closed")));
+	Widget->ShowAirportStatus(EAirportStatus::Open);
+	TestTrue(TEXT("reopened: the strip is back"), Widget->IsDemandStripShownForTest());
 	return true;
 }
 

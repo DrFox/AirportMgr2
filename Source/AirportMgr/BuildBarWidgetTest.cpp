@@ -348,4 +348,25 @@ bool FBuildBarUsesUiButtonTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A MENU VERB IS BUILT AS A MENU: an action with MenuItems (game.airport) gets a UUiMenuButton - the popup its confirm
+ * lives in - not a plain button whose click would run Execute. Counted against the registry, so a second menu verb
+ * needs no edit here.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarBuildsMenusTest, "AirportMgr.Actions.BarBuildsMenuActionsAsMenus",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FBarBuildsMenusTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("the bar"), Bar)) { return false; }
+	int32 Expected = 0;
+	for (const FBuildAction& A : BuildActions()) { Expected += A.MenuItems ? 1 : 0; }
+	TestTrue(TEXT("the registry has a menu verb (game.airport)"), Expected > 0);
+	TestEqual(TEXT("each menu verb is a menu button on the bar"), Bar->MenuButtonCountForTest(), Expected);
+	TestTrue(TEXT("and still a UUiButton with a label, like every other"), Bar->AllButtonsAreUiButtonsForTest());
+	return true;
+}
+
 #endif
