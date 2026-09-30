@@ -116,7 +116,7 @@ bool FDescribeIncomingArmAgreesAcrossToolsTest::RunTest(const FString& Parameter
 	DrawSession.SelectTool(1); // Taxiway, by registry index
 	IBuildTool* DrawTool = DrawSession.GetActiveTool();
 	if (!TestNotNull(TEXT("a taxiway tool"), DrawTool)) { return false; }
-	DrawTool->OnClick(DrawSession.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables, false, false));
+	DrawTool->OnClick(DrawSession.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables));
 
 	FGuideAnchor DrawAnchor;
 	if (!TestTrue(TEXT("the draw tool resumes from B and offers an anchor"),
@@ -131,7 +131,7 @@ bool FDescribeIncomingArmAgreesAcrossToolsTest::RunTest(const FString& Parameter
 	EditSession.SetGestureMode(EGestureMode::Edit);
 	IBuildTool* EditTool = EditSession.GetActiveTool();
 	if (!TestNotNull(TEXT("an edit tool"), EditTool)) { return false; }
-	EditTool->OnDragBegin(EditSession.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables, false, false));
+	EditTool->OnDragBegin(EditSession.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables));
 	if (!TestFalse(TEXT("B was really grabbed"), EditTool->IsIdle())) { return false; }
 
 	FGuideAnchor EditAnchor;
@@ -147,7 +147,7 @@ bool FDescribeIncomingArmAgreesAcrossToolsTest::RunTest(const FString& Parameter
 		DrawAnchor.ReferenceAt.Equals(EditAnchor.ReferenceAt, 1.0e-6));
 	TestEqual(TEXT("named the same way"), DrawAnchor.ReferenceName, EditAnchor.ReferenceName);
 
-	EditTool->OnDragEnd(EditSession.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables, false, false));
+	EditTool->OnDragEnd(EditSession.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables));
 
 	// NOW GIVE B A SECOND ARM. Neither tool has "the" one to extend any more, and neither
 	// must invent one - the case a per-tool implementation is most likely to answer
@@ -158,7 +158,7 @@ bool FDescribeIncomingArmAgreesAcrossToolsTest::RunTest(const FString& Parameter
 	FBuildSession DrawSession2;
 	DrawSession2.SelectTool(1);
 	IBuildTool* DrawTool2 = DrawSession2.GetActiveTool();
-	DrawTool2->OnClick(DrawSession2.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables, false, false));
+	DrawTool2->OnClick(DrawSession2.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables));
 	FGuideAnchor DrawAnchorTwoArms;
 	DrawTool2->DescribeGuideAnchor(Actor->GetNetwork(), Actor, DrawAnchorTwoArms);
 
@@ -166,7 +166,7 @@ bool FDescribeIncomingArmAgreesAcrossToolsTest::RunTest(const FString& Parameter
 	EditSession2.SelectTool(1);
 	EditSession2.SetGestureMode(EGestureMode::Edit);
 	IBuildTool* EditTool2 = EditSession2.GetActiveTool();
-	EditTool2->OnDragBegin(EditSession2.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables, false, false));
+	EditTool2->OnDragBegin(EditSession2.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables));
 	FGuideAnchor EditAnchorTwoArms;
 	EditTool2->DescribeGuideAnchor(Actor->GetNetwork(), Actor, EditAnchorTwoArms);
 
@@ -175,7 +175,7 @@ bool FDescribeIncomingArmAgreesAcrossToolsTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("and neither does the edit tool - the same answer, agreeing on 'none'"),
 		EditAnchorTwoArms.Reference.IsNearlyZero());
 
-	EditTool2->OnDragEnd(EditSession2.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables, false, false));
+	EditTool2->OnDragEnd(EditSession2.MakeContext(Actor, FVector2D(6000.0, 0.0), Tunables));
 	return true;
 }
 

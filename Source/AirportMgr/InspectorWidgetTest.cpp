@@ -10,6 +10,7 @@
 #include "InspectorFacilityRows.h"
 #include "InspectorWidget.h"
 #include "Misc/AutomationTest.h"
+#include "OpsRuntimeResolver.h"
 #include "Model/FacilityPurchases.h"
 #include "Model/InspectFacts.h"
 #include "Model/JobBoard.h"
@@ -361,13 +362,13 @@ bool FInspectorWindowDocksAboveTheBarTest::RunTest(const FString& Parameters)
 	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
-	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHudForTest()))
+	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHud()))
 	{
 		return false;
 	}
 	// A headless controller has no local player, so BeginPlay never created the HUD's widgets;
 	// they are put where CreateAll would have put them, then CreateAll's own last step runs.
-	UBuildHudLayer* Hud = C->GetHudForTest();
+	UBuildHudLayer* Hud = C->GetHud();
 	Hud->BuildBar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	Hud->Inspector = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
 	Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
@@ -982,7 +983,8 @@ namespace
 			// would find no controller - measured 2026-09-30, the card drew no purchase rows.
 			World.World->AddController(Controller);
 			Controller->SetTargetForTest(Actor);
-			Controller->SetOpsRuntimeForTest(Runtime);
+			// THE WORLD'S RUNTIME, through OpsRuntimeResolver (#448): the controller, its context and the panel all resolve it from here.
+			OpsRuntimeResolver::SetOverrideForTest(World.World, Runtime);
 			DepotSelection.Kind = ESelectionKind::Stand;
 			DepotSelection.Id = Index;
 			Controller->SelectForTest(DepotSelection);
@@ -1001,12 +1003,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FInspectorDepotCardBuysTest::RunTest(const FString& Parameters)
 {
-	// THE CARD'S BUY CLICKS REACH THE RULES: menu line -> ChooseVehicleToBuy -> selection.buy_vehicle's
-	// TryRun -> UOpsRuntime::BuyVehicle, and Buy Shed -> selection.buy_module -> BuyModule. Each hop is a
+	// THE CARD'S BUY CLICKS REACH THE RULES: menu line -> selection.buy_vehicle's TryRunWith (the line's kind is its argument)
+	// -> UOpsRuntime::BuyVehicle, and Buy Shed -> selection.buy_module -> BuyModule. Each hop is a
 	// seam a rename or an unbound delegate would cut with every widget test still green.
 	FInspectorDepotRig Rig;
 	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
-	TestTrue(TEXT("the controller names the selected depot"), Rig.Controller->SelectedFacility() == Rig.Depot);
+	TestTrue(TEXT("the selection names the depot"), ARoadBuildController::DepotForSelection(Rig.World.Actor, Rig.Controller->GetSelection()) == Rig.Depot);
 	const UJobBoard* Board = Rig.Runtime->GetJobBoard();
 	const ULedger* Ledger = Rig.Runtime->GetLedger();
 	if (!TestNotNull(TEXT("a job board"), Board) || !TestNotNull(TEXT("a ledger"), Ledger)) { return false; }
@@ -1062,66 +1064,128 @@ bool FInspectorSellTakesTwoClicksTest::RunTest(const FString& Parameters)
 	const double Refund = Quote.Fleet[0].Refund;
 	const double Balance = Ledger->Balance();
 
-	// FIRST CLICK: armed, nothing sold.
+	// FIRST CLICK: armed, nothing sold. THE ROW IS WHERE IT IS ARMED (#448): the controller holds no armed id.
 	Rig.Panel->FacilityRows->ClickSellForTest(0);
-	TestEqual(TEXT("the first click arms this vehicle on the controller"), Rig.Controller->GetArmedSellVehicle(), Vehicle);
+	TestTrue(TEXT("the first click arms this vehicle's row"), Rig.Panel->FacilityRows->IsArmedForTest(0));
 	TestNotNull(TEXT("the vehicle is still there"), Board->FindVehicle(Vehicle));
 	TestEqual(TEXT("and no money moved"), Ledger->Balance(), Balance, 0.01);
 	Rig.Refresh();
 	TestTrue(TEXT("the caption asks again"), Rig.Panel->FacilityRows->SellCaptionForTest(0).Contains(TEXT("click again")));
 
+	// A DIFFERENT CARD disarms too, not only a cleared selection: the armed row belonged to THIS depot's card, and a sale surviving a
+	// jump to another selection would be a one-click sale the next time the depot is picked. Refreshed straight onto the other selection,
+	// BEFORE the depot is reselected - a card with no purchase rows never reaches the rows' own rebuild, so only OnNewCard's disarm can
+	// clear it (#448 review: nothing pinned it once the controller stopped holding the id).
+	FSelection Other = Rig.DepotSelection;
+	Other.Id += 1;
+	Rig.Panel->Refresh(Rig.World.Actor, Other);
+	TestFalse(TEXT("a different selection disarms the sale"), Rig.Panel->FacilityRows->IsArmedForTest(0));
+	Rig.Refresh();
+	Rig.Panel->FacilityRows->ClickSellForTest(0);
+	if (!TestTrue(TEXT("setup: back on the depot and armed again"), Rig.Panel->FacilityRows->IsArmedForTest(0))) { return false; }
+
 	// CLICK AWAY AND BACK: disarmed.
 	Rig.Controller->SelectForTest(FSelection());
 	Rig.Refresh();
-	TestEqual(TEXT("clearing the selection disarms the sale"), Rig.Controller->GetArmedSellVehicle(), 0);
+	TestFalse(TEXT("clearing the selection disarms the sale"), Rig.Panel->FacilityRows->IsArmedForTest(0));
 	Rig.Controller->SelectForTest(Rig.DepotSelection);
 	Rig.Refresh();
 	TestFalse(TEXT("back on the depot, the caption no longer asks again"), Rig.Panel->FacilityRows->SellCaptionForTest(0).Contains(TEXT("click again")));
 	Rig.Panel->FacilityRows->ClickSellForTest(0);
 	TestNotNull(TEXT("so the next click only arms again - still not sold"), Board->FindVehicle(Vehicle));
-	TestEqual(TEXT("armed once more"), Rig.Controller->GetArmedSellVehicle(), Vehicle);
+	TestTrue(TEXT("armed once more"), Rig.Panel->FacilityRows->IsArmedForTest(0));
 
 	// SECOND CLICK: sold.
 	Rig.Refresh();
 	Rig.Panel->FacilityRows->ClickSellForTest(0);
 	TestNull(TEXT("the second click sells it"), Board->FindVehicle(Vehicle));
 	TestEqual(TEXT("crediting the resale"), Ledger->Balance(), Balance + Refund, 0.01);
-	TestEqual(TEXT("and the controller is disarmed"), Rig.Controller->GetArmedSellVehicle(), 0);
+	TestFalse(TEXT("and the row is disarmed"), Rig.Panel->FacilityRows->IsArmedForTest(0));
 	return true;
 }
 
 /**
- * THE CONTROLLER'S ARMED SALE IS NOT THE ROWS' TO CLEAR ALONE. A sale armed on a depot and then clicked away from - or replaced by
- * another selection - must not survive to the next time the depot is picked, and that holds for an inspector whose asset placed no
- * UInspectorFacilityRows too: there is no row to ask, and the controller's id is still armed. (Until review of #441 the widget asked
- * the rows and did nothing when it had none.)
+ * #448 PIN: SELLING VIA THE ROW WITH AN ID ARGUMENT SELLS THAT ROW'S VEHICLE, with no prior Arm call - there is nothing to arm: the
+ * controller held an armed id (ArmedSellVehicle) beside the row's own flag, "BOTH HALVES" kept in step by hand, and a second caller of
+ * the sell row (a hotkey, a test) ran with whatever was last armed. The id travels with the run (FBuildAction::TryRunWith) now. Two
+ * vehicles at the depot, so "that row's vehicle" is a choice and a sale of the wrong one could not pass.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FInspectorDeselectDisarmsWithoutRowsTest,
-	"AirportMgr.Inspector.DeselectDisarmsTheControllerWithoutRows",
+	FSellTakesItsVehicleFromTheRowTest,
+	"AirportMgr.Actions.SellTakesItsVehicleFromTheRow",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FInspectorDeselectDisarmsWithoutRowsTest::RunTest(const FString& Parameters)
+bool FSellTakesItsVehicleFromTheRowTest::RunTest(const FString& Parameters)
 {
 	FInspectorDepotRig Rig;
 	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
-	Rig.Refresh();
-	if (!TestNotNull(TEXT("setup: the panel built its purchase rows"), Rig.Panel->FacilityRows.Get())) { return false; }
-	Rig.Panel->FacilityRows = nullptr;   // an inspector whose asset placed none
-	Rig.Controller->ArmSellVehicle(42);
-	if (!TestEqual(TEXT("setup: a sale armed on the controller"), Rig.Controller->GetArmedSellVehicle(), 42)) { return false; }
+	UJobBoard* Board = Rig.Runtime->GetJobBoard();
+	const ULedger* Ledger = Rig.Runtime->GetLedger();
+	if (!TestNotNull(TEXT("a job board"), Board) || !TestNotNull(TEXT("a ledger"), Ledger)) { return false; }
+	const FBuildAction* Sell = FindAction(FName(TEXT("selection.sell_vehicle")));
+	if (!TestNotNull(TEXT("the sell row is registered"), Sell)) { return false; }
+	// THROUGH THE FLEET'S DOOR, past the bay limit a purchase would hit: the point is which of two vehicles is sold.
+	const int32 First = Board->Fleet().Add(TEXT("FUEL"), Rig.Depot, EFleetOrigin::Bought, 0.0);
+	const int32 Second = Board->Fleet().Add(TEXT("FUEL"), Rig.Depot, EFleetOrigin::Bought, 0.0);
+	if (!TestTrue(TEXT("setup: two vehicles at the depot"), First != 0 && Second != 0 && First != Second)) { return false; }
+	const FFacilityQuote Quote = Rig.Runtime->QuoteFacility(Rig.Depot);
+	const FFleetRowQuote* Row = Quote.Fleet.FindByPredicate([Second](const FFleetRowQuote& R) { return R.VehicleId == Second; });
+	if (!TestTrue(TEXT("setup: the second vehicle may be sold"), Row != nullptr && Row->Refusal == EPurchaseRefusal::None)) { return false; }
+	const double Balance = Ledger->Balance();
 
-	Rig.Controller->SelectForTest(FSelection());
-	Rig.Refresh();
-	TestEqual(TEXT("clearing the selection disarms it, with no rows to ask"), Rig.Controller->GetArmedSellVehicle(), 0);
+	// NO ARM CALL, anywhere: the run names the vehicle.
+	TestTrue(TEXT("the sell row runs with the second vehicle's id"), Sell->TryRunWith(*Rig.Controller, FBuildActionArg::OfId(Second), TEXT("Test")));
+	TestNull(TEXT("that vehicle is sold"), Board->FindVehicle(Second));
+	TestNotNull(TEXT("and the other one is not"), Board->FindVehicle(First));
+	TestEqual(TEXT("crediting its resale"), Ledger->Balance(), Balance + Row->Refund, 0.01);
+	return true;
+}
 
-	Rig.Controller->SelectForTest(Rig.DepotSelection);
-	Rig.Refresh();
-	Rig.Controller->ArmSellVehicle(43);
-	FSelection Other = Rig.DepotSelection;
-	Other.Id += 1;
-	Rig.Panel->Refresh(Rig.World.Actor, Other);
-	TestEqual(TEXT("and so does a different selection"), Rig.Controller->GetArmedSellVehicle(), 0);
+/**
+ * #448: A RUN WITH NO ARGUMENT SELLS AND BUYS NOTHING. The parameterised rows ran on state left for them - the last vehicle armed, the
+ * last kind chosen - so a second caller ran with a stranger's choice. There is no such state now, and a run that names nothing (TryRun,
+ * a hotkey) is DISABLED, not merely refused later; one that names something the selected depot does not hold is too.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FParameterisedVerbsRefuseNoArgumentTest,
+	"AirportMgr.Actions.ParameterisedVerbsRefuseNoArgument",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FParameterisedVerbsRefuseNoArgumentTest::RunTest(const FString& Parameters)
+{
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	UJobBoard* Board = Rig.Runtime->GetJobBoard();
+	const ULedger* Ledger = Rig.Runtime->GetLedger();
+	const FBuildAction* Sell = FindAction(FName(TEXT("selection.sell_vehicle")));
+	const FBuildAction* Buy = FindAction(FName(TEXT("selection.buy_vehicle")));
+	if (!TestTrue(TEXT("setup: the rows and the boards"), Sell != nullptr && Buy != nullptr && Board != nullptr && Ledger != nullptr)) { return false; }
+	const FFacilityQuote Offers = Rig.Runtime->QuoteFacility(Rig.Depot);
+	if (!TestTrue(TEXT("setup: an empty depot with a free bay and a kind on offer"),
+		Offers.Vehicles == 0 && Offers.VehicleOffers.Num() > 0 && Offers.VehicleOffers[0].Refusal == EPurchaseRefusal::None)) { return false; }
+	const FName Offered = Offers.VehicleOffers[0].TypeCode;
+
+	// A VEHICLE IN THE FLEET, bought through the row itself: the other half of "buy with an offered kind runs", and something for the refusals to leave alone.
+	TestTrue(TEXT("control: buy with an offered kind runs"), Buy->TryRunWith(*Rig.Controller, FBuildActionArg::OfCode(Offered), TEXT("Test")));
+	const FFacilityQuote After = Rig.Runtime->QuoteFacility(Rig.Depot);
+	if (!TestTrue(TEXT("control: and bought one, which can be sold"), After.Fleet.Num() == 1 && After.Fleet[0].Refusal == EPurchaseRefusal::None)) { return false; }
+	const int32 Vehicle = After.Fleet[0].VehicleId;
+	const double Balance = Ledger->Balance();
+	const int32 Owned = Board->VehiclesAt(Rig.Depot);
+
+	// NO ARGUMENT: the plain door, as a hotkey or another caller would use it.
+	TestFalse(TEXT("sell with no vehicle named is refused"), Sell->TryRun(*Rig.Controller, TEXT("Test")));
+	TestFalse(TEXT("buy with no kind named is refused"), Buy->TryRun(*Rig.Controller, TEXT("Test")));
+	// AN ARGUMENT THE SELECTED DEPOT DOES NOT HOLD: a vehicle that is not in its fleet, a kind that is not on offer.
+	TestFalse(TEXT("sell of a vehicle this depot does not hold is refused"), Sell->TryRunWith(*Rig.Controller, FBuildActionArg::OfId(Vehicle + 1000), TEXT("Test")));
+	TestFalse(TEXT("buy of a kind this depot does not offer is refused"), Buy->TryRunWith(*Rig.Controller, FBuildActionArg::OfCode(TEXT("NO_SUCH_KIND")), TEXT("Test")));
+	TestNotNull(TEXT("the vehicle is still there"), Board->FindVehicle(Vehicle));
+	TestEqual(TEXT("nothing was bought"), Board->VehiclesAt(Rig.Depot), Owned);
+	TestEqual(TEXT("and no money moved"), Ledger->Balance(), Balance, 0.01);
+
+	// CONTROL: the sell row runs when the argument is right - or the refusals above measure a dead row.
+	TestTrue(TEXT("control: sell with the held vehicle's id runs"), Sell->TryRunWith(*Rig.Controller, FBuildActionArg::OfId(Vehicle), TEXT("Test")));
+	TestNull(TEXT("control: and sold it"), Board->FindVehicle(Vehicle));
 	return true;
 }
 

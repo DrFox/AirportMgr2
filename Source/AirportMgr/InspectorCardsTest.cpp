@@ -14,6 +14,7 @@
 #include "Model/InspectFacts.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
+#include "Model/OpsDefinition.h"
 #include "Model/OpsAlerts.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
@@ -276,6 +277,70 @@ bool FInspectorAircraftCardTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorVehicleCardNamesTheVehicleTest, "AirportMgr.Inspector.Card.ServiceVehicleTitleNamesTheVehicle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorVehicleCardNamesTheVehicleTest::RunTest(const FString&)
+{
+	// #478 ITEM 1: a selected bowser read "FUEL  #37" - its type CODE and its AGENT id - while its fuel line said "Bowser" and the
+	// depot card showed the VEHICLE id. The title, and the name of any agent a hold or a ring names, go through
+	// FServiceFleet::NameOf with the vehicle's own id: "Bowser #2".
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>(GetTransientPackage());
+	UJobBoard& Jobs = *Runtime->GetJobBoard();
+	// THE CATALOGUE, as Attach resolves it (#430): the runtime here is never attached, and the kind's name is the catalogue row's.
+	UOpsRuntime::ResolveVehicleCatalogue(Jobs, *GetDefault<UScenario>());
+	// A SECOND VEHICLE FIRST, so the bowser's id is 2 and its agent's is 37: a title that printed the agent id, or the first id, cannot pass.
+	Jobs.AddVehicleForTest(TEXT("UTILITY"), FEntityInstanceId(), EServiceVehicleState::Idle, 0.0);
+	FServiceVehicle& Bowser = Jobs.AddVehicleForTest(TEXT("FUEL"), FEntityInstanceId(), EServiceVehicleState::Idle, 9700.0);
+	constexpr int32 BowserAgent = 37;
+	Bowser.AgentId = BowserAgent;
+	const FString Kind = FServiceFleet::NameOf(Jobs, TEXT("FUEL")).ToString();
+	if (!TestNotEqual(TEXT("setup: the kind is named, not coded - or the title below could pass printing the code"), Kind, FString(TEXT("FUEL")))) { return false; }
+	if (!TestNotEqual(TEXT("setup: the vehicle's id is not its agent's"), Bowser.Id, BowserAgent)) { return false; }
+	const FString Expected = FString::Printf(TEXT("%s #%d"), *Kind, Bowser.Id);
+
+	// THE BOWSER ITSELF, selected: its agent is the selection (an agent is an aircraft-kind selection, whatever it is).
+	FAircraftCard Card;
+	FAgentFacts F;
+	F.Id = BowserAgent;
+	F.TypeName = TEXT("FUEL");
+	F.Status = TEXT("Taxiing");
+	FInspectorCardInput In;
+	In.Runtime = Runtime;
+	In.Target = TestWorld.Actor;
+	In.Selection.Kind = ESelectionKind::Aircraft;
+	In.Selection.Id = BowserAgent;
+	In.PrecomputedAgentFacts = &F;
+	const FInspectorCardView* View = Card.Describe(In);
+	if (!TestNotNull(TEXT("a view for the bowser"), View)) { return false; }
+	TestEqual(TEXT("the bowser's title is its kind's name and its VEHICLE id"), View->Title, Expected);
+
+	// AN AGENT THE JOB BOARD KNOWS NO VEHICLE FOR keeps the id title - the fallback is for what has no vehicle, not for a bowser.
+	F.Id = 12;
+	In.Selection.Id = 12;
+	View = Card.Describe(In);
+	if (!TestNotNull(TEXT("a view for an agent with no vehicle"), View)) { return false; }
+	TestEqual(TEXT("no vehicle: the code and the agent id, as before"), View->Title, FString(TEXT("FUEL  #12")));
+
+	// A HOLD BEHIND THE BOWSER, and a ring with it: both name it as the card titles it, never by agent id.
+	F.Id = 7;
+	F.TypeName = TEXT("SR22");
+	F.Status = TEXT("Waiting behind aircraft 37");
+	F.bStatusIsHold = true;
+	F.Hold.WaitingOn = BowserAgent;
+	F.Hold.At = EHoldAt::Behind;
+	F.DeadlockedWith = { BowserAgent };
+	In.Selection.Id = 7;
+	View = Card.Describe(In);
+	if (!TestNotNull(TEXT("a view, held behind the bowser"), View)) { return false; }
+	TestTrue(FString::Printf(TEXT("the hold line names the vehicle ('%s')"), *View->Status), View->Status.Contains(Expected));
+	TestTrue(FString::Printf(TEXT("the ring names it too ('%s')"), *View->Deadlock), View->Deadlock.StartsWith(FString::Printf(TEXT("Deadlocked with %s"), *Expected)));
+	TestEqual(TEXT("and Show is captioned with it"), View->WaitingForCaption.ToString(), FString::Printf(TEXT("Show %s"), *Expected));
+	TestEqual(TEXT("Show still selects the AGENT - the card selects agents, the name is for reading"), View->WaitedForId, BowserAgent);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorRunwayCardTest, "AirportMgr.Inspector.Card.Runway",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FInspectorRunwayCardTest::RunTest(const FString&)
@@ -480,7 +545,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorFacilityRowsAreWiredTest, "AirportMgr
 bool FInspectorFacilityRowsAreWiredTest::RunTest(const FString&)
 {
 	// THE PURCHASE ROWS ARE A SUB-WIDGET THE INSPECTOR BUILDS, AND ITS THREE ACTION ROWS ARE CONSUMED: an inspector that stopped
-	// building it, left it unparented, or forgot to hand it a controller and a door to run a row through would draw its depot card
+	// building it, left it unparented, or forgot to hand it a door to run a row through would draw its depot card
 	// with no rows, or rows whose clicks went nowhere, and every other test of the card would notice only by the missing buttons.
 	FAirsideTestWorld Bare(/*bSpawnActor=*/false);
 	if (!TestNotNull(TEXT("a world"), Bare.World)) { return false; }
@@ -490,8 +555,7 @@ bool FInspectorFacilityRowsAreWiredTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("the panel built its purchase rows"), Rows)) { return false; }
 	TestTrue(TEXT("built, through Build"), Rows->IsBuilt());
 	TestNotNull(TEXT("and parented in the card's column, or it is never drawn"), Rows->GetParent());
-	TestTrue(TEXT("handed a controller to act through"), static_cast<bool>(Rows->ControllerSource));
-	TestTrue(TEXT("and a door to run a BuildActions row through"), static_cast<bool>(Rows->RunActionSource));
+	TestTrue(TEXT("handed a door to run a BuildActions row through - WITH an argument, the only thing the rows act by (#448)"), static_cast<bool>(Rows->RunActionSource));
 
 	const FBuildAction* BuyModule = FindAction(FName(TEXT("selection.buy_module")));
 	const FBuildAction* BuyVehicle = FindAction(FName(TEXT("selection.buy_vehicle")));

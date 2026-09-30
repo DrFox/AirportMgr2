@@ -172,9 +172,9 @@ bool FAlertsBadgeTest::RunTest(const FString&)
 {
 	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
 	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
-	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHudForTest())) { return false; }
+	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHud())) { return false; }
 	UAlertsPanelWidget* Panel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
-	C->GetHudForTest()->AlertsPanel = Panel;
+	C->GetHud()->AlertsPanel = Panel;
 	UOpsEvents* Events = NewObject<UOpsEvents>();
 	Panel->BindTo(*Events);
 
@@ -246,8 +246,8 @@ bool FAlertsIsAWindowTest::RunTest(const FString&)
 	// wired is never shown. Driven through the HUD's own WireWindows, not a hand-added window.
 	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
 	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
-	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHudForTest())) { return false; }
-	UBuildHudLayer* Hud = C->GetHudForTest();
+	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHud())) { return false; }
+	UBuildHudLayer* Hud = C->GetHud();
 	Hud->BuildBar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
 	Hud->AlertsPanel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());

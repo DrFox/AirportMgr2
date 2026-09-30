@@ -138,7 +138,7 @@ bool FToolCursorTest::RunTest(const FString& Parameters)
 			FBuildSession Session;
 			FBuildSessionTunables Tunables;
 			Tunables.Snap = Settings;
-			const FToolContext Context = Session.MakeContext(Actor, Hover, Tunables, false, false);
+			const FToolContext Context = Session.MakeContext(Actor, Hover, Tunables);
 
 			TestTrue(TEXT("Cursor is the raw hover point"), Context.Cursor.Equals(Hover, 1e-6));
 			TestTrue(TEXT("the snap beside it still claims the junction"),

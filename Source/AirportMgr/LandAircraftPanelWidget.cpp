@@ -11,7 +11,6 @@
 #include "Entities/AircraftType.h"
 #include "Model/Airport.h"
 #include "Present/OpsRuntime.h"
-#include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
 #include "RoadBuildLog.h"
@@ -93,7 +92,7 @@ void ULandAircraftPanelWidget::Toggle()
 
 void ULandAircraftPanelWidget::Refresh()
 {
-	RefreshFor(Controller(), UOpsRuntimeSubsystem::Get(GetWorld()));
+	RefreshFor(Controller(), OpsRuntime());
 }
 
 void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const UOpsRuntime* Runtime)

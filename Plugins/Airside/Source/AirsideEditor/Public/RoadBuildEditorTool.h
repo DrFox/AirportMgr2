@@ -103,8 +103,8 @@ public:
 	 *  #191/#92-#93; before this the editor's reselect context was bare Target with both
 	 *  false, so Ctrl+the runway key never reached FRunwayTool::OnReselect's NextApproach
 	 *  branch here the way it does in play. */
-	bool IsRemoveModifierHeld() const { return bRemoveHeld; }
-	bool IsInsertModifierHeld() const { return bInsertHeld; }
+	bool IsRemoveModifierHeld() const { return HeldInput.bRemoveModifier; }
+	bool IsInsertModifierHeld() const { return HeldInput.bInsertModifier; }
 
 	/** Points this instance at InTarget without going through Setup's ResolveTarget, which
 	 *  needs a live UInteractiveToolManager/world neither BuildGestureCompositionTest nor the
@@ -372,9 +372,13 @@ private:
 	 */
 	TUniquePtr<FScopedRoadBuildTransaction> DragTransaction;
 
-	bool bRemoveHeld = false;
-	bool bSuspendHeld = false;
-	bool bInsertHeld = false;
+	/**
+	 * The modifiers the input behaviours last reported (OnUpdateModifierState) - the editor's whole FBuildInputState: Ctrl,
+	 * Shift and Alt from the behaviours, and no hover agent (the editor mode has no agents to pick). The session's own type,
+	 * so this adapter and the runtime driver hand MakeContext the same shape rather than three bools here and four arguments
+	 * there (#448).
+	 */
+	FBuildInputState HeldInput;
 
 	/**
 	 * Whether RayToPlane resolved a real hover position this session.

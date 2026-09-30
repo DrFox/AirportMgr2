@@ -152,8 +152,10 @@ public:
 	/** How many entries are menu verbs built as a UUiMenuButton - see AirportMgr.Actions.BarBuildsMenuActionsAsMenus. */
 	int32 MenuButtonCountForTest() const;
 
-	/** The controller and runtime the bar would find in play, handed in - a test world has no game instance. */
-	void UseForTest(ARoadBuildController* C, UOpsRuntime* Runtime);
+	/** The controller the bar would find in play, handed in - a headless world never registers a controller with its player list.
+	 *  The RUNTIME was handed in here too until #448; it is OpsRuntimeResolver::SetOverrideForTest now, the one place a test
+	 *  stands a runtime in for its world, so the bar reads the same one as every other reader. */
+	void UseForTest(ARoadBuildController* C);
 	/** The menu verb Id's popup, or null. */
 	UUiMenuButton* MenuForTest(FName ActionId) const;
 
@@ -208,7 +210,7 @@ public:
 	int32 SetTextCallCountForTest() const { return SetTextCalls; }
 
 	/** The balance readout's tick on its own, and what it shows - RefreshStateForTest's precedent. The runtime is
-	 *  UseForTest's when one was handed in: a test world has no game instance for the subsystem to answer from. */
+	 *  the world's (OpsRuntime()): a test that stood one in for its world via OpsRuntimeResolver::SetOverrideForTest reads it here. */
 	void RefreshBalanceForTest() { RefreshBalance(); }
 	FText BalanceTextForTest() const;
 
@@ -245,12 +247,11 @@ protected:
 private:
 	UPROPERTY() TArray<TObjectPtr<UBuildBarEntry>> Entries;
 
-	/** UseForTest's handed-in controller and runtime; unset in play, where Controller() and the subsystem answer. */
+	/** UseForTest's handed-in controller; unset in play, where Controller() answers. */
 	TWeakObjectPtr<ARoadBuildController> TestController;
-	TWeakObjectPtr<UOpsRuntime> TestRuntime;
 
-	/** The context a menu verb's lines and choice are asked through - Controller()'s, or UseForTest's. False, and Use
-	 *  not called, with no controller. */
+	/** The context a menu verb's lines and choice are asked through - Controller()'s, or UseForTest's - its Runtime the resolver's.
+	 *  False, and Use not called, with no controller. */
 	bool WithContext(TFunctionRef<void(FBuildActionContext&)> Use);
 
 	/**

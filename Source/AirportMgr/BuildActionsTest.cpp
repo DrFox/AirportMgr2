@@ -12,8 +12,17 @@
 #include "Model/FlightBoard.h"
 #include "Model/Flight.h"
 #include "Model/Airport.h"
+#include "Model/DeparturePlanner.h"
+#include "Model/InspectFacts.h"
+#include "Model/RoadGuideline.h"
+#include "Model/RunwayFacts.h"
 #include "Entities/EntityDefinition.h"
+#include "AlertsPanelWidget.h"
 #include "BuildActions.h"
+#include "BuildBarWidget.h"
+#include "LandAircraftPanelWidget.h"
+#include "LedgerPanelWidget.h"
+#include "OpsRuntimeResolver.h"
 #include "Tool/SnapGuideSettings.h"
 #include "Tool/SnapToggleRegistry.h"
 #include "BuildHudLayer.h"
@@ -162,7 +171,8 @@ bool FBuildActionTryRunTest::RunTest(const FString& Parameters)
 	const FBuildAction* Flip = FindAction(FName(TEXT("selection.runway_in_use")));
 	if (TestNotNull(TEXT("the runway flip is registered"), Flip))
 	{
-		TestFalse(TEXT("no runway selected: the flip is disabled"), C->CanFlipSelectedRunway());
+		const FBuildActionContext Ctx(*C);
+		TestFalse(TEXT("no runway selected: the flip is disabled"), Flip->IsEnabled(Ctx));
 		TestFalse(TEXT("and TryRun refuses it"), Flip->TryRun(*C, TEXT("Test")));
 	}
 
@@ -439,7 +449,7 @@ bool FBuildActionsModalKeysTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
-	UBuildHudLayer* Hud = C->GetHudForTest();
+	UBuildHudLayer* Hud = C->GetHud();
 	Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
 	Hud->SettingsPanel = CreateWidget<USettingsPanelWidget>(TestWorld.World, USettingsPanelWidget::StaticClass());
 	if (!TestTrue(TEXT("a host and a Settings panel"), Hud->WindowHost != nullptr && Hud->SettingsPanel != nullptr)) { return false; }
@@ -469,7 +479,7 @@ namespace BuildActionsModalTest
 	{
 		ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 		if (C == nullptr) { return nullptr; }
-		UBuildHudLayer* Hud = C->GetHudForTest();
+		UBuildHudLayer* Hud = C->GetHud();
 		Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
 		Hud->SettingsPanel = CreateWidget<USettingsPanelWidget>(TestWorld.World, USettingsPanelWidget::StaticClass());
 		if (Hud->WindowHost == nullptr || Hud->SettingsPanel == nullptr) { return nullptr; }
@@ -502,6 +512,333 @@ bool FBuildActionsModalMouseTest::RunTest(const FString& Parameters)
 	C->OnActionKeyForTest(EKeys::Escape, false);
 	C->PressPrimaryForTest(FVector2D(100.0, 100.0));
 	TestTrue(TEXT("control: closed, a press is held again"), C->IsPrimaryPressedForTest());
+	return true;
+}
+
+/**
+ * OPENING SETTINGS IS NOT A RIGHT-CLICK (#448). ToggleSettings ran OnCancelGesture - the two-level cancel - whenever there was a
+ * target, so the moment the dialog opened the Select tool cleared the selection and an idle build tool was put down to Select.
+ * FBuildActionsModalMouseTest above has NO target, so that branch never ran under test. Only a drag in flight is dropped.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildActionsSettingsKeepsTheToolTest, "AirportMgr.Actions.OpeningSettingsKeepsToolAndSelection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildActionsSettingsKeepsTheToolTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	// FDepotForSelectionTest's setup: a spawned actor's network is only placeable into after a clear.
+	Actor->ClearNetwork();
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(20000.0, 0.0), 0.0, 0.0, StandDef->PoseRole, 0);
+	if (!TestTrue(TEXT("setup: a stand to select"), Stand.IsSet())) { return false; }
+	ARoadBuildController* C = BuildActionsModalTest::SpawnWithSettings(TestWorld);
+	if (!TestNotNull(TEXT("a controller with Settings"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+
+	// A BUILD TOOL LIT, IDLE: the state one right-click puts down. Opening Settings must not.
+	C->SelectTool(1);
+	if (!TestEqual(TEXT("setup: a build tool is lit"), C->GetActiveToolIndex(), 1)) { return false; }
+	if (!TestTrue(TEXT("setup: and idle, the state a cancel would drop to Select"), C->GetActiveTool() != nullptr && C->GetActiveTool()->IsIdle())) { return false; }
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	if (!TestTrue(TEXT("Settings opened"), C->IsSettingsShowing())) { return false; }
+	TestEqual(TEXT("opening Settings left the lit build tool lit - it is not a right-click"), C->GetActiveToolIndex(), 1);
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	if (!TestFalse(TEXT("Escape closed it again"), C->IsSettingsShowing())) { return false; }
+
+	// THE SELECT TOOL WITH A SELECTION: a cancel would clear it.
+	C->SelectTool(0);
+	FSelection Selected;
+	Selected.Kind = ESelectionKind::Stand;
+	Selected.Id = Stand.Index;
+	C->SelectForTest(Selected);
+	// The tool binds the session's selection on a tick, as PlayerTick's does - and only then is it not idle.
+	C->GetActiveTool()->Tick(C->MakeToolContext());
+	if (!TestFalse(TEXT("setup: the Select tool holds a selection, so a cancel would have something to clear"), C->GetActiveTool()->IsIdle())) { return false; }
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	if (!TestTrue(TEXT("Settings opened again"), C->IsSettingsShowing())) { return false; }
+	TestEqual(TEXT("opening Settings kept the selection's kind"), C->GetSelection().Kind, Selected.Kind);
+	TestEqual(TEXT("and its id"), C->GetSelection().Id, Selected.Id);
+	TestEqual(TEXT("and the Select tool stayed lit"), C->GetActiveToolIndex(), 0);
+	return true;
+}
+
+/**
+ * OPENING SETTINGS STILL DROPS A DRAG IN FLIGHT (4b final review, Important 5) - the half of the old behaviour that was right, which
+ * #448's fix must not take with the half that was wrong. A drag begun before Escape would keep extending behind the scrim and build on
+ * release; the tool's stage is abandoned through CancelStage and the press is let go. The CONTROL is the same state with the press NOT
+ * yet a drag: a staged tool is left as it was, because opening a dialog abandons nothing but a drag.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildActionsSettingsDropsADragTest, "AirportMgr.Actions.OpeningSettingsDropsADragInFlight",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildActionsSettingsDropsADragTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 30000.0));
+	ARoadBuildController* C = BuildActionsModalTest::SpawnWithSettings(TestWorld);
+	if (!TestNotNull(TEXT("a controller with Settings"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+
+	// A TOOL MID-STAGE: the taxiway tool's first click fixes a start and leaves it part-drawn, which is what a cancel abandons.
+	auto Stage = [&]() -> bool
+	{
+		C->SelectTool(1);
+		IBuildTool* Tool = C->GetActiveTool();
+		if (Tool == nullptr) { return false; }
+		Tool->OnClick(C->MakeToolContext());
+		return !Tool->IsIdle();
+	};
+	if (!TestTrue(TEXT("setup: the taxiway tool is part-drawn after a click"), Stage())) { return false; }
+
+	// CONTROL - A PRESS THAT HAS NOT BECOME A DRAG: dropped, but the staged chain is kept.
+	C->PressPrimaryForTest(FVector2D(100.0, 100.0));
+	if (!TestTrue(TEXT("setup: a press is held"), C->IsPrimaryPressedForTest())) { return false; }
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	if (!TestTrue(TEXT("Settings opened"), C->IsSettingsShowing())) { return false; }
+	TestFalse(TEXT("control: the held press was let go"), C->IsPrimaryPressedForTest());
+	TestFalse(TEXT("control: but a press that never became a drag abandons nothing - the staged chain is kept"), C->GetActiveTool()->IsIdle());
+	TestEqual(TEXT("control: and the tool is still lit"), C->GetActiveToolIndex(), 1);
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	if (!TestFalse(TEXT("Escape closed it again"), C->IsSettingsShowing())) { return false; }
+
+	// THE DRAG: pressed, then moved past the threshold.
+	C->PressPrimaryForTest(FVector2D(100.0, 100.0));
+	C->MovePrimaryForTest(FVector2D(100.0 + C->DragThresholdPixels * 4.0, 100.0));
+	if (!TestTrue(TEXT("setup: the press is held and travelling"), C->IsPrimaryPressedForTest())) { return false; }
+	C->OnActionKeyForTest(EKeys::Escape, false);
+	if (!TestTrue(TEXT("Settings opened over the drag"), C->IsSettingsShowing())) { return false; }
+	TestFalse(TEXT("the drag's press was let go"), C->IsPrimaryPressedForTest());
+	TestTrue(TEXT("and the tool's stage was abandoned through the tool's own cancel"), C->GetActiveTool()->IsIdle());
+	TestEqual(TEXT("with the tool still lit - only the drag was dropped"), C->GetActiveToolIndex(), 1);
+	return true;
+}
+
+/**
+ * #448: THE WINDOW VERBS TOGGLE THE HUD LAYER. Four Toggle/IsShowing pairs on the controller became ONE toggle on UBuildHudLayer, which the
+ * bar's rows reach through FBuildActionContext::Hud - so this is the seam that goes red if a row is left bound to nothing, or to the wrong
+ * window. Each row's Execute opens its window, its IsActive lights while open, and the second Execute closes it. (Ledger, alerts and Land
+ * go through the HUD directly; Settings through the controller, which adds the drag drop - the tests above.)
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWindowVerbsToggleTheHudTest, "AirportMgr.Actions.WindowVerbsToggleTheHudLayer",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWindowVerbsToggleTheHudTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	ARoadBuildController* C = BuildActionsModalTest::SpawnWithSettings(TestWorld);
+	if (!TestNotNull(TEXT("a controller with Settings"), C)) { return false; }
+	UBuildHudLayer* Hud = C->GetHud();
+	// A headless controller builds no HUD widgets: the panels are put where CreateAll would have put them.
+	Hud->LedgerPanel = CreateWidget<ULedgerPanelWidget>(TestWorld.World, ULedgerPanelWidget::StaticClass());
+	Hud->AlertsPanel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
+	Hud->LandPanel = CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestTrue(TEXT("setup: the three panels"), Hud->LedgerPanel != nullptr && Hud->AlertsPanel != nullptr && Hud->LandPanel != nullptr)) { return false; }
+
+	struct FRow { const TCHAR* Id; EHudWindow Window; };
+	const FRow Rows[] = { { TEXT("game.ledger"), EHudWindow::Ledger }, { TEXT("game.alerts"), EHudWindow::Alerts },
+		{ TEXT("aircraft.land"), EHudWindow::Land }, { TEXT("game.settings"), EHudWindow::Settings } };
+	for (const FRow& Row : Rows)
+	{
+		const FBuildAction* Action = FindAction(FName(Row.Id));
+		if (!TestNotNull(*FString::Printf(TEXT("%s is registered"), Row.Id), Action)) { continue; }
+		FBuildActionContext Ctx(*C);
+		TestFalse(*FString::Printf(TEXT("%s: closed to start"), Row.Id), Hud->IsWindowShowing(Row.Window));
+		Action->Execute(Ctx);
+		TestTrue(*FString::Printf(TEXT("%s: Execute opens its window"), Row.Id), Hud->IsWindowShowing(Row.Window));
+		TestTrue(*FString::Printf(TEXT("%s: and the button lights while it is open"), Row.Id), Action->IsActive(Ctx));
+		Action->Execute(Ctx);
+		TestFalse(*FString::Printf(TEXT("%s: the second Execute closes it"), Row.Id), Hud->IsWindowShowing(Row.Window));
+	}
+	// A HUD WITH NO PANEL FOR A WINDOW is inert, not a crash: the editor mode and a bare test build none.
+	UBuildHudLayer* Bare = NewObject<UBuildHudLayer>(GetTransientPackage());
+	Bare->ToggleWindow(EHudWindow::Ledger);
+	TestFalse(TEXT("no panel: nothing to open"), Bare->IsWindowShowing(EHudWindow::Ledger));
+	return true;
+}
+
+/**
+ * #448: ONE RESOLVER FOR THE OPS RUNTIME. A headless test's world has no game instance, so a test stands a runtime in for it
+ * (OpsRuntimeResolver::SetOverrideForTest) - and EVERY reader must see it: the action context, the bar, and the resolver itself. They
+ * did not: the controller's depot verbs saw a controller-held override while the context, the bar (UseForTest's own runtime) and nine widgets
+ * asked the subsystem, so handing one place a runtime left the rest with none.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOneResolverForTheOpsRuntimeTest, "AirportMgr.Actions.OneResolverForTheOpsRuntime",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOneResolverForTheOpsRuntimeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 0.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestTrue(TEXT("setup: a controller and a bar"), C != nullptr && Bar != nullptr)) { return false; }
+	Bar->UseForTest(C);
+
+	// CONTROL: before the override, a world with no game instance has no runtime for anyone.
+	TestNull(TEXT("control: the resolver finds none"), OpsRuntimeResolver::Resolve(TestWorld.World));
+	TestNull(TEXT("control: the action context finds none"), FBuildActionContext(*C).Runtime);
+	Bar->RefreshBalanceForTest();
+	const FString NoLedger = Bar->BalanceTextForTest().ToString();
+	TestTrue(TEXT("control: the bar shows no balance (the fallback, or nothing yet)"), NoLedger.IsEmpty() || NoLedger.Contains(TEXT("no ledger")));
+
+	OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, Runtime);
+	TestTrue(TEXT("the resolver answers the override"), OpsRuntimeResolver::Resolve(TestWorld.World) == Runtime);
+	TestTrue(TEXT("the action context sees the same runtime"), FBuildActionContext(*C).Runtime == Runtime);
+	Bar->RefreshBalanceForTest();
+	const FString Shown = Bar->BalanceTextForTest().ToString();
+	TestTrue(TEXT("and the bar reads its ledger: a balance is shown, not the fallback"), !Shown.IsEmpty() && !Shown.Contains(TEXT("no ledger")));
+
+	// PER WORLD: another world is not given this world's runtime.
+	FAirsideTestWorld Other(/*bSpawnActor=*/false);
+	TestNull(TEXT("a different world resolves none"), OpsRuntimeResolver::Resolve(Other.World));
+
+	OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, nullptr);
+	TestNull(TEXT("clearing the override gives the world its own answer back"), OpsRuntimeResolver::Resolve(TestWorld.World));
+	TestNull(TEXT("a null world resolves none"), OpsRuntimeResolver::Resolve(nullptr));
+	return true;
+}
+
+/**
+ * #448 (PR review): THE MOVED SELECTION VERBS ACT ON THEIR OWNERS THROUGH THE CONTEXT. Depart, the runway flip, the runway mode and the
+ * unstick gate left the controller for BuildActions.cpp, where each reads Ctx.Selection and acts on Ctx.Target / Ctx.Runtime; the
+ * controller's own tests of them went with the forwarders, and nothing else ran them through a row. Each is driven here by TryRun against
+ * a selection set the way a click sets it, and the EFFECT is read off the owner - the actor's runway facts, the agent's phase - not off a
+ * log line. Two worlds: a runway field for the runway verbs, and a parked aircraft for depart and unstick.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSelectionVerbsActOnTheirOwnersTest, "AirportMgr.Actions.SelectionVerbsActOnTheirOwners",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSelectionVerbsActOnTheirOwnersTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Flip = FindAction(FName(TEXT("selection.runway_in_use")));
+	const FBuildAction* Mode = FindAction(FName(TEXT("selection.runway_use")));
+	const FBuildAction* Unstick = FindAction(FName(TEXT("selection.unstick")));
+	const FBuildAction* Depart = FindAction(FName(TEXT("selection.depart")));
+	if (!TestTrue(TEXT("setup: the four rows are registered"), Flip != nullptr && Mode != nullptr && Unstick != nullptr && Depart != nullptr)) { return false; }
+
+	// --- THE RUNWAY VERBS, on a field with one runway ---
+	{
+		FAirsideTestWorld TestWorld;
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+		Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+		FTestAirport::Build(UAirsideSettings::ResolveDefaultAirframe(), FTestAirportOptions(), Actor->Network);
+		URoadNetwork& Net = *Actor->Network;
+		int32 Segment = INDEX_NONE;
+		for (int32 Index = 0; Index < Net.GetSegments().Num() && Segment == INDEX_NONE; ++Index)
+		{
+			const FRoadSegmentId Id = Net.SegmentIdAt(Index);
+			Segment = Id.IsSet() && Net.IsRunwaySegment(Id) ? Index : INDEX_NONE;
+		}
+		if (!TestTrue(TEXT("setup: a runway segment"), Segment != INDEX_NONE)) { return false; }
+		ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+		if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+		C->SetTargetForTest(Actor);
+		FSelection Selected;
+		Selected.Kind = ESelectionKind::Runway;
+		Selected.Id = Segment;
+		C->SelectForTest(Selected);
+		const FBuildActionContext Ctx(*C);
+
+		FRunwayCardFacts Before;
+		if (!TestTrue(TEXT("setup: the runway describes"), InspectFacts::DescribeRunway(Net, Segment, Before))) { return false; }
+		TestTrue(TEXT("the flip and the mode are enabled with a runway selected"), Flip->IsEnabled(Ctx) && Mode->IsEnabled(Ctx));
+		TestEqual(TEXT("the flip is captioned with the end it would change TO"), Flip->DynamicLabel(Ctx).ToString(), FString::Printf(TEXT("Use %02d"), Before.Other));
+		TestEqual(TEXT("the mode is captioned with the current one"), Mode->DynamicLabel(Ctx).ToString(), FString(TEXT("Mixed ops")));
+
+		// THE FLIP: the runway in use becomes the end it was not.
+		TestTrue(TEXT("the flip runs"), Flip->TryRun(*C, TEXT("Test")));
+		FRunwayCardFacts AfterFlip;
+		if (!TestTrue(TEXT("the runway still describes"), InspectFacts::DescribeRunway(Net, Segment, AfterFlip))) { return false; }
+		TestEqual(TEXT("the flip put the OTHER end in use"), AfterFlip.InUse, Before.Other);
+		TestEqual(TEXT("and the old end is now the other"), AfterFlip.Other, Before.InUse);
+		TestEqual(TEXT("the flip left the mode alone"), AfterFlip.Use, Before.Use);
+		TestEqual(TEXT("the caption follows to the end it would now change to"), Flip->DynamicLabel(Ctx).ToString(), FString::Printf(TEXT("Use %02d"), AfterFlip.Other));
+
+		// THE MODE: mixed -> arrivals only (RunwayUse::Next), and the flip untouched by it.
+		TestTrue(TEXT("the mode runs"), Mode->TryRun(*C, TEXT("Test")));
+		FRunwayCardFacts AfterMode;
+		if (!TestTrue(TEXT("the runway still describes, again"), InspectFacts::DescribeRunway(Net, Segment, AfterMode))) { return false; }
+		TestTrue(TEXT("the mode stepped to RunwayUse::Next"), AfterMode.Use == RunwayUse::Next(AfterFlip.Use));
+		TestEqual(TEXT("the mode left the end in use alone"), AfterMode.InUse, AfterFlip.InUse);
+		TestEqual(TEXT("and its caption is the new mode"), Mode->DynamicLabel(Ctx).ToString(), FString(TEXT("Arrivals only")));
+
+		// A SELECTION THAT IS NO RUNWAY: both refused, nothing changed.
+		Selected.Kind = ESelectionKind::Stand;
+		C->SelectForTest(Selected);
+		TestFalse(TEXT("a stand is selected: the flip is refused"), Flip->TryRun(*C, TEXT("Test")));
+		TestFalse(TEXT("and the mode"), Mode->TryRun(*C, TEXT("Test")));
+	}
+
+	// --- DEPART AND UNSTICK, on a parked aircraft ---
+	{
+		FAirsideTestWorld TestWorld;
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+		Actor->PlaceNode(FVector2D(-400000.0, -400000.0));
+		// DepartAgentTest's graph, its runway lengthened for the content airframe: a runway split at (0,0), a stand A, a junction J where the
+		// lead-in meets a taxiway, and the far arm E the pushback needs.
+		URoadNetwork& Net = *Actor->Network;
+		URoadProfile* Runway = TestProfiles::Runway();
+		const FRoadNodeId RA = Net.AddNode(FVector2D(-300000.0, 0.0));
+		const FRoadNodeId RM = Net.AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId RB = Net.AddNode(FVector2D(300000.0, 0.0));
+		Net.AddStraightSegment(RA, RM, Runway);
+		Net.AddStraightSegment(RM, RB, Runway);
+		const FGuidelineNodeId Stand = TestGraph::Node(Net, 0.0, -20000.0);
+		const FGuidelineNodeId Junction = TestGraph::Node(Net, 0.0, -10000.0);
+		const FGuidelineNodeId OnStrip = TestGraph::Node(Net, 0.0, 0.0);
+		const FGuidelineNodeId FarArm = TestGraph::Node(Net, 20000.0, -10000.0);
+		TestGraph::FJoinOptions Authored;
+		Authored.bDerived = false;
+		TestGraph::Join(Net, Stand, Junction, Authored);
+		TestGraph::Join(Net, Junction, OnStrip, Authored);
+		TestGraph::Join(Net, Junction, FarArm, Authored);
+		// The hand-authored graph is this fixture's graph (DepartAgentForwardersTest's reason): stamped current, or the planners wait for a release that never comes.
+		Net.MarkGuidelinesDerived();
+		if (!TestTrue(TEXT("setup: an aircraft dispatched to the stand"),
+			Actor->DispatchAgent(TestGraph::Probe(Net, OnStrip, Stand, ETraversalClass::Aircraft), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+		const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+		for (int32 I = 0; I < 20000 && Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked; ++I) { Actor->Tick(1.0f / 30.0f); }
+		if (!TestEqual(TEXT("setup: it parks"), Actor->GetTraffic()->LastAgentPhaseForTest(), EAgentPhase::Parked)) { return false; }
+
+		// THE RUNTIME, stood in for this world: the unstick gate asks it.
+		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+		Runtime->Attach(Actor);
+		OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, Runtime);
+
+		ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+		ARoadBuildController* Other = TestWorld.World->SpawnActor<ARoadBuildController>();
+		if (!TestTrue(TEXT("controllers spawned"), C != nullptr && Other != nullptr)) { return false; }
+		C->SetTargetForTest(Actor);
+		Other->SetTargetForTest(Actor);
+		FSelection Aircraft;
+		Aircraft.Kind = ESelectionKind::Aircraft;
+		Aircraft.Id = Id;
+		FSelection AStand = Aircraft;
+		AStand.Kind = ESelectionKind::Stand;   // the SAME id, read as a stand's entity index: the kind decides, not the number
+		C->SelectForTest(Aircraft);
+		Other->SelectForTest(AStand);
+
+		// UNSTICK'S GATE: an agent is selected and the runtime allows despawn.
+		TestTrue(TEXT("unstick is enabled with an aircraft selected"), Unstick->IsEnabled(FBuildActionContext(*C)));
+		TestFalse(TEXT("and not with a stand selected, whatever its index"), Unstick->IsEnabled(FBuildActionContext(*Other)));
+		TestFalse(TEXT("depart is not enabled with a stand selected"), Depart->IsEnabled(FBuildActionContext(*Other)));
+
+		// DEPART: the actor's own DepartAgent runs with the selected id. (The facts cache is per controller per frame, and C is asked first here.)
+		TestTrue(TEXT("depart runs with a parked aircraft selected"), Depart->TryRun(*C, TEXT("Test")));
+		const FRoadAgent* Agent = Actor->GetTraffic()->GetModel()->FindAgent(Id);
+		if (!TestNotNull(TEXT("the aircraft is still there"), Agent)) { return false; }
+		TestTrue(TEXT("and it left its stand"), Agent->Phase != EAgentPhase::Parked);
+	}
 	return true;
 }
 

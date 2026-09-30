@@ -1,11 +1,18 @@
 #include "BuildActions.h"
+#include "BuildHudLayer.h"
+#include "Model/AgentRescue.h"
 #include "Model/Airport.h"
+#include "Model/DeparturePlanner.h"
+#include "Model/FacilityPurchases.h"
 #include "Model/FlightBoard.h"
+#include "Model/InspectFacts.h"
 #include "Model/Pricing.h"
+#include "Model/RoadNetwork.h"
+#include "OpsRuntimeResolver.h"
 #include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
-#include "Present/OpsRuntimeSubsystem.h"
 #include "RoadBuildController.h"
+#include "RoadBuildLog.h"
 #include "Tool/BuildSession.h"
 #include "Tool/SnapToggleRegistry.h"
 
@@ -13,13 +20,25 @@
 
 int32 FBuildActionContext::ConstructCalls = 0;
 
+FString FBuildActionArg::Describe() const
+{
+	if (!Code.IsNone())
+	{
+		return FString::Printf(TEXT("code %s"), *Code.ToString());
+	}
+	return Id != 0 ? FString::Printf(TEXT("id %d"), Id) : FString();
+}
+
 FBuildActionContext::FBuildActionContext(ARoadBuildController& InController)
 	: Controller(InController)
-	// SAME LOOKUP TryRun always did inline (UOpsRuntimeSubsystem::Get(GetWorld())) - moved
-	// here so every verb reads it from the context rather than repeating the call, the way
-	// HasRuntime and (before issue #191) StepLandingFee/LandAircraftNearViewFocus each did.
-	, Runtime(UOpsRuntimeSubsystem::Get(InController.GetWorld()))
+	// THE RESOLVER'S ANSWER (#448), the one door to the runtime (ENFORCED BY: Check-Architecture rule 55) - what TryRun always looked up inline, moved here so every
+	// verb reads it from the context rather than repeating the call, the way HasRuntime and (before issue #191)
+	// StepLandingFee/LandAircraftNearViewFocus each did. It honours a test's stand-in, so the depot verbs, the bar and the
+	// inspector all see the one runtime a headless test handed the world.
+	, Runtime(OpsRuntimeResolver::Resolve(InController.GetWorld()))
 	, Target(InController.GetTarget())
+	, Hud(InController.GetHud())
+	, Selection(InController.GetSelection())
 {
 	++ConstructCalls;   // See ConstructCountForTest.
 }
@@ -52,6 +71,199 @@ namespace
 	 *  controller's own query ran, resolved once per action rather than once per predicate -
 	 *  see FBuildActionContext's own comment (issue #191). */
 	bool HasRuntime(const FBuildActionContext& Ctx) { return Ctx.Runtime != nullptr; }
+
+	// --- THE VERBS' BODIES, bound to their OWNERS (#448) -----------------------------------------------------------------
+	//
+	// Each takes the context's parts - the road actor, the runtime, the HUD, the selection, the argument - and acts on the thing that owns the
+	// work. They were ARoadBuildController methods, one forwarder per verb, because the context gave a verb no selection and no argument; the
+	// fee lever and the drive side below already bound straight to Ctx.Runtime / Ctx.Target, and these are the same shape. A NAMED namespace
+	// inside this anonymous one: the module is a UNITY build, and a bare name here could collide with another file's.
+	namespace BuildActionVerbs
+	{
+		void ToggleWindow(const FBuildActionContext& Ctx, EHudWindow Window)
+		{
+			if (Ctx.Hud != nullptr)
+			{
+				Ctx.Hud->ToggleWindow(Window);
+			}
+		}
+
+		bool WindowShowing(const FBuildActionContext& Ctx, EHudWindow Window)
+		{
+			return Ctx.Hud != nullptr && Ctx.Hud->IsWindowShowing(Window);
+		}
+
+		int32 AlertCount(const FBuildActionContext& Ctx)
+		{
+			return Ctx.Hud != nullptr ? Ctx.Hud->AlertCount() : 0;
+		}
+
+		/** The selected aircraft can depart - THROUGH THE PER-FRAME CACHE (issue #187): the bar polls this every tick, and UInspectorWidget::Refresh asks
+		 *  the same question of the same selection the same frame - see ARoadBuildController::SelectedAgentFactsThisFrame's own comment. */
+		bool CanDepart(const FBuildActionContext& Ctx)
+		{
+			FAgentFacts Facts;
+			return Ctx.Controller.SelectedAgentFactsThisFrame(Facts) && Facts.bCanDepart;
+		}
+
+		/** Depart the selected aircraft; logs the planner's answer. The road actor's own DepartAgent does the work. */
+		void Depart(const FBuildActionContext& Ctx)
+		{
+			if (Ctx.Selection.Kind != ESelectionKind::Aircraft || Ctx.Target == nullptr)
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Depart: no aircraft selected."));
+				return;
+			}
+			const EDepartureRefusal Why = Ctx.Target->DepartAgent(Ctx.Selection.Id);
+			UE_LOG(LogRoadBuild, Log, TEXT("Depart aircraft %d: %s"), Ctx.Selection.Id,
+				Why == EDepartureRefusal::None ? TEXT("accepted") : *UEnum::GetValueAsString(Why));
+		}
+
+		/** A runway is selected (ESelectionKind::Runway) and still describes - the card and the verb. */
+		bool SelectedRunway(const FBuildActionContext& Ctx, FRunwayCardFacts& Out)
+		{
+			if (Ctx.Selection.Kind != ESelectionKind::Runway || Ctx.Target == nullptr || Ctx.Target->GetNetwork() == nullptr)
+			{
+				return false;
+			}
+			return InspectFacts::DescribeRunway(*Ctx.Target->GetNetwork(), Ctx.Selection.Id, Out);
+		}
+
+		bool CanChangeRunway(const FBuildActionContext& Ctx)
+		{
+			FRunwayCardFacts Unused;
+			return SelectedRunway(Ctx, Unused);
+		}
+
+		/**
+		 * Change the selected runway's direction in use to its other end, through the actor's SetRunwayFacts (so it is one undo step and
+		 * logs "Runway 09/27 in use: 27 (was 09)"). Flights already planned finish as planned; the next plan reads the new direction
+		 * (ruling 2, spec 2026-09-28-runway-in-use).
+		 */
+		void FlipRunway(const FBuildActionContext& Ctx)
+		{
+			FRunwayCardFacts Card;
+			if (!SelectedRunway(Ctx, Card))
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Runway in use: no runway selected."));
+				return;
+			}
+			const FRoadSegmentId Segment = Ctx.Target->GetNetwork()->SegmentIdAt(Ctx.Selection.Id);
+			FRunwayFacts Facts = Ctx.Target->GetNetwork()->RunwayFactsFor(Segment);
+			Facts.InUse = Card.Other;
+			if (!Ctx.Target->SetRunwayFacts(Ctx.Selection.Id, Facts))
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Runway in use: the change to %02d was refused."), Card.Other);
+			}
+		}
+
+		/**
+		 * Step the selected runway's ERunwayUse on - mixed, arrivals only, departures only, mixed (RunwayUse::Next) - through the actor's
+		 * SetRunwayFacts, FlipRunway's path: one undo step, logged "Runway at segment N takes: arrivals only (was mixed)". Planned flights
+		 * keep their plan; the next plan reads it. Enabled whenever the flip is (CanChangeRunway).
+		 */
+		void CycleRunwayUse(const FBuildActionContext& Ctx)
+		{
+			FRunwayCardFacts Card;
+			if (!SelectedRunway(Ctx, Card))
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Runway use: no runway selected."));
+				return;
+			}
+			const FRoadSegmentId Segment = Ctx.Target->GetNetwork()->SegmentIdAt(Ctx.Selection.Id);
+			FRunwayFacts Facts = Ctx.Target->GetNetwork()->RunwayFactsFor(Segment);
+			Facts.Use = RunwayUse::Next(Card.Use);
+			if (!Ctx.Target->SetRunwayFacts(Ctx.Selection.Id, Facts))
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Runway use: the change to %s was refused."), RunwayUse::Name(Facts.Use));
+			}
+		}
+
+		/** selection.unstick's gate: an agent is selected, and the runtime's OWN verdict for Despawn - the one that is always allowed
+		 *  (UAgentRescue::Decide). The inspector's menu lines ask the runtime the same question for each action. */
+		bool CanUnstick(const FBuildActionContext& Ctx)
+		{
+			return Ctx.Runtime != nullptr && Ctx.Selection.Kind == ESelectionKind::Aircraft
+				&& Ctx.Runtime->CanUnstick(Ctx.Selection.Id, EUnstickAction::Despawn).bAllowed;
+		}
+
+		/**
+		 * THE DEPOT CARD'S VERBS (facility-upgrades spec §4), bound to UOpsRuntime with the selected depot - the fee lever's shape. The quote
+		 * is asked fresh on every call, so an enabled check and the command it guards read the same state. Refused (logged) with no depot
+		 * selected or no runtime. The selected depot is ARoadBuildController::DepotForSelection's walk, written once (ruling C4).
+		 */
+		FFacilityQuote QuoteSelectedFacility(const FBuildActionContext& Ctx)
+		{
+			const FEntityInstanceId Id = ARoadBuildController::DepotForSelection(Ctx.Target, Ctx.Selection);
+			return Ctx.Runtime != nullptr && Id.IsSet() ? Ctx.Runtime->QuoteFacility(Id) : FFacilityQuote();
+		}
+
+		/** The quote's FIRST module offer - the only one this slice (the shed). A second becomes a menu. */
+		bool CanBuyModule(const FBuildActionContext& Ctx)
+		{
+			const FFacilityQuote Quote = QuoteSelectedFacility(Ctx);
+			return Quote.Modules.Num() > 0 && Quote.Modules[0].Refusal == EPurchaseRefusal::None;
+		}
+
+		void BuyModule(const FBuildActionContext& Ctx)
+		{
+			const FFacilityQuote Quote = QuoteSelectedFacility(Ctx);
+			if (Ctx.Runtime == nullptr || Quote.Modules.Num() == 0)
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Buy module: no depot selected, or no ops runtime."));
+				return;
+			}
+			// UFacilityPurchases logs the "Purchase: ..." line; this one says the click arrived.
+			const FEntityInstanceId Depot = ARoadBuildController::DepotForSelection(Ctx.Target, Ctx.Selection);
+			UE_LOG(LogRoadBuild, Log, TEXT("Buy module %s: depot %d"), *UEnum::GetValueAsString(Quote.Modules[0].Module), Depot.Index);
+			Ctx.Runtime->BuyModule(Depot, Quote.Modules[0].Module);
+		}
+
+		/** The kind the run's argument names is on offer at the selected depot and not refused. NO ARGUMENT, NO BUY: a run that names no kind
+		 *  (a hotkey, a test) must not buy whatever was last chosen - there is nothing "last chosen" to find (#448). */
+		bool CanBuyVehicle(const FBuildActionContext& Ctx)
+		{
+			const FFacilityQuote Quote = QuoteSelectedFacility(Ctx);
+			const FName Chosen = Ctx.Arg.Code;
+			const FVehicleOfferQuote* Offer = Chosen.IsNone() ? nullptr
+				: Quote.VehicleOffers.FindByPredicate([Chosen](const FVehicleOfferQuote& O) { return O.TypeCode == Chosen; });
+			return Offer != nullptr && Offer->Refusal == EPurchaseRefusal::None;
+		}
+
+		void BuyVehicle(const FBuildActionContext& Ctx)
+		{
+			const FEntityInstanceId Depot = ARoadBuildController::DepotForSelection(Ctx.Target, Ctx.Selection);
+			if (Ctx.Runtime == nullptr || !Depot.IsSet() || Ctx.Arg.Code.IsNone())
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Buy vehicle: no depot selected, no type chosen, or no ops runtime."));
+				return;
+			}
+			UE_LOG(LogRoadBuild, Log, TEXT("Buy vehicle %s: depot %d"), *Ctx.Arg.Code.ToString(), Depot.Index);
+			Ctx.Runtime->BuyVehicle(Depot, Ctx.Arg.Code);
+		}
+
+		/** The argument's vehicle is in the SELECTED depot's fleet and may be sold. Asked of the selected depot's fleet, not the board at
+		 *  large: an id from another card cannot sell a vehicle the player is not looking at. NO ARGUMENT, NO SALE (BuyVehicle's reason). */
+		bool CanSellVehicle(const FBuildActionContext& Ctx)
+		{
+			const FFacilityQuote Quote = QuoteSelectedFacility(Ctx);
+			const int32 Wanted = Ctx.Arg.Id;
+			const FFleetRowQuote* Row = Wanted == 0 ? nullptr
+				: Quote.Fleet.FindByPredicate([Wanted](const FFleetRowQuote& R) { return R.VehicleId == Wanted; });
+			return Row != nullptr && Row->Refusal == EPurchaseRefusal::None;
+		}
+
+		void SellVehicle(const FBuildActionContext& Ctx)
+		{
+			if (Ctx.Runtime == nullptr || Ctx.Arg.Id == 0)
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Sell vehicle: no vehicle named, or no ops runtime."));
+				return;
+			}
+			UE_LOG(LogRoadBuild, Log, TEXT("Sell vehicle %d"), Ctx.Arg.Id);
+			Ctx.Runtime->SellVehicle(Ctx.Arg.Id);
+		}
+	}
 
 	FBuildAction Make(const TCHAR* Id, EActionSection Section, FText Label, FKey Key, bool bCtrl,
 		TFunction<void(FBuildActionContext&)> Execute,
@@ -141,8 +353,8 @@ namespace
 		Out.Add(Make(TEXT("aircraft.land"), EActionSection::Aircraft, LOCTEXT("Land", "Land"), EKeys::Seven, false,
 			// OPENS THE PANEL rather than landing a default (2026-09-27): the panel's rows are
 			// what land now, each its own type - see ULandAircraftPanelWidget.
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleLandPanel(); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsLandPanelShowing(); },
+			[](FBuildActionContext& Ctx) { BuildActionVerbs::ToggleWindow(Ctx, EHudWindow::Land); },
+			[](const FBuildActionContext& Ctx) { return BuildActionVerbs::WindowShowing(Ctx, EHudWindow::Land); },
 			// AND OPEN: a closed airport admits no arrivals, the debug one included (ruling I1, 2026-09-30) - UAirport::
 			// AdmitsArrivals, the one predicate (#431). AND A RUNTIME: landing is the flight board's, and with none there is
 			// nothing to land through - the board-less fallback that made "no runtime" look like a working Land went
@@ -160,12 +372,12 @@ namespace
 		// and the C key are one list (spec §6.2). Depart has no key: a key that departed
 		// whatever happened to be selected is a misclick away from an unintended take-off.
 		Out.Add(Make(TEXT("selection.depart"), EActionSection::Selection, LOCTEXT("Depart", "Depart"), EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.DepartSelected(); }, Never,
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanDepartSelected(); }));
+			[](FBuildActionContext& Ctx) { BuildActionVerbs::Depart(Ctx); }, Never,
+			[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanDepart(Ctx); }));
 		Out.Add(Make(TEXT("selection.follow"), EActionSection::Selection, LOCTEXT("Follow", "Follow"), EKeys::C, false,
 			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleWatchAgent(); },
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsWatchingAgent(); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.HasSelectedAircraft() || Ctx.Controller.HasAgent() || Ctx.Controller.IsWatchingAgent(); }));
+			[](const FBuildActionContext& Ctx) { return Ctx.Selection.Kind == ESelectionKind::Aircraft || Ctx.Controller.HasAgent() || Ctx.Controller.IsWatchingAgent(); }));
 		// THE RUNWAY IN USE, flipped from the selected runway's card (spec 2026-09-28-runway-in-
 		// use, ruling 4): a run-time traffic control, so a Selection verb and not a runway-tool
 		// modifier. No key, Depart's reason: a key that reversed whatever runway happened to be
@@ -174,12 +386,12 @@ namespace
 		{
 			FBuildAction Flip = Make(TEXT("selection.runway_in_use"), EActionSection::Selection,
 				LOCTEXT("RunwayInUse", "Change runway in use"), EKeys::Invalid, false,
-				[](FBuildActionContext& Ctx) { Ctx.Controller.FlipSelectedRunway(); }, Never,
-				[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanFlipSelectedRunway(); });
+				[](FBuildActionContext& Ctx) { BuildActionVerbs::FlipRunway(Ctx); }, Never,
+				[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanChangeRunway(Ctx); });
 			Flip.DynamicLabel = [](const FBuildActionContext& Ctx)
 			{
 				FRunwayCardFacts Card;
-				return Ctx.Controller.SelectedRunwayFacts(Card)
+				return BuildActionVerbs::SelectedRunway(Ctx, Card)
 					? FText::Format(LOCTEXT("RunwayUse", "Use {0}"), FText::FromString(FString::Printf(TEXT("%02d"), Card.Other)))
 					: LOCTEXT("RunwayInUse", "Change runway in use");
 			};
@@ -192,12 +404,12 @@ namespace
 		{
 			FBuildAction Mode = Make(TEXT("selection.runway_use"), EActionSection::Selection,
 				LOCTEXT("RunwayUseMode", "Runway takes"), EKeys::Invalid, false,
-				[](FBuildActionContext& Ctx) { Ctx.Controller.CycleSelectedRunwayUse(); }, Never,
-				[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanFlipSelectedRunway(); });
+				[](FBuildActionContext& Ctx) { BuildActionVerbs::CycleRunwayUse(Ctx); }, Never,
+				[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanChangeRunway(Ctx); });
 			Mode.DynamicLabel = [](const FBuildActionContext& Ctx)
 			{
 				FRunwayCardFacts Card;
-				if (!Ctx.Controller.SelectedRunwayFacts(Card))
+				if (!BuildActionVerbs::SelectedRunway(Ctx, Card))
 				{
 					return LOCTEXT("RunwayUseMode", "Runway takes");
 				}
@@ -217,32 +429,35 @@ namespace
 		// Enabled whenever an agent is selected at all - Despawn always is (UAgentRescue::Decide).
 		Out.Add(Make(TEXT("selection.unstick"), EActionSection::Selection, LOCTEXT("Unstick", "Unstick"), EKeys::Invalid, false,
 			[](FBuildActionContext& Ctx) { Ctx.Controller.RequestUnstickMenu(); }, Never,
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanUnstickSelected(EUnstickAction::Despawn).bAllowed; }));
+			[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanUnstick(Ctx); }));
 
 		// FACILITY PURCHASES (spec 2026-09-29-facility-upgrades §4): the depot card's three verbs, INSPECTOR
-		// ONLY. Buy-vehicle and sell carry an argument a row cannot: the card CHOOSES the type / ARMS the
-		// vehicle on the controller, then runs the row - so a sale takes two clicks (a destructive gesture
-		// needs a deliberate second one - memory). Keyless: a key that spent money on whatever was selected
-		// is a misclick.
+		// ONLY. Buy-vehicle and sell carry an ARGUMENT - the kind, the vehicle - and they carry it: the card runs the
+		// row WITH it (FBuildAction::TryRunWith, #448), where it used to choose the type / arm the vehicle on the
+		// controller and then run the row, leaving a second caller to run with whatever was last armed. A sale still
+		// takes two clicks (a destructive gesture needs a deliberate second one - memory) - the first arms the ROW,
+		// the second runs the verb with its id. Keyless: a key that spent money on whatever was selected is a
+		// misclick, and with no argument these rows are disabled anyway.
+		// ENFORCED BY: AirportMgr.Actions.SellTakesItsVehicleFromTheRow, AirportMgr.Actions.ParameterisedVerbsRefuseNoArgument
 		{
 			FBuildAction Module = Make(TEXT("selection.buy_module"), EActionSection::Selection,
 				LOCTEXT("BuyModule", "Buy module"), EKeys::Invalid, false,
-				[](FBuildActionContext& Ctx) { Ctx.Controller.BuySelectedModule(); }, Never,
-				[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanBuySelectedModule(); });
+				[](FBuildActionContext& Ctx) { BuildActionVerbs::BuyModule(Ctx); }, Never,
+				[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanBuyModule(Ctx); });
 			Module.bInspectorOnly = true;
 			Out.Add(MoveTemp(Module));
 
 			FBuildAction Vehicle = Make(TEXT("selection.buy_vehicle"), EActionSection::Selection,
 				LOCTEXT("BuyVehicle", "Buy vehicle"), EKeys::Invalid, false,
-				[](FBuildActionContext& Ctx) { Ctx.Controller.BuyChosenVehicle(); }, Never,
-				[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanBuyChosenVehicle(); });
+				[](FBuildActionContext& Ctx) { BuildActionVerbs::BuyVehicle(Ctx); }, Never,
+				[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanBuyVehicle(Ctx); });
 			Vehicle.bInspectorOnly = true;
 			Out.Add(MoveTemp(Vehicle));
 
 			FBuildAction Sell = Make(TEXT("selection.sell_vehicle"), EActionSection::Selection,
 				LOCTEXT("SellVehicle", "Sell vehicle"), EKeys::Invalid, false,
-				[](FBuildActionContext& Ctx) { Ctx.Controller.SellArmedVehicle(); }, Never,
-				[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanSellArmedVehicle(); });
+				[](FBuildActionContext& Ctx) { BuildActionVerbs::SellVehicle(Ctx); }, Never,
+				[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanSellVehicle(Ctx); });
 			Sell.bInspectorOnly = true;
 			Out.Add(MoveTemp(Sell));
 		}
@@ -320,8 +535,8 @@ namespace
 		// pause and the overlay toggles already do.
 		Out.Add(Make(TEXT("game.ledger"), EActionSection::Game, LOCTEXT("Ledger", "Ledger"),
 			EKeys::B, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleLedger(); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsLedgerShowing(); }, HasRuntime));
+			[](FBuildActionContext& Ctx) { BuildActionVerbs::ToggleWindow(Ctx, EHudWindow::Ledger); },
+			[](const FBuildActionContext& Ctx) { return BuildActionVerbs::WindowShowing(Ctx, EHudWindow::Ledger); }, HasRuntime));
 
 		// THE ALERTS BADGE (ops alerts spec 2026-09-29 §3): lit while anything needs the player, counting
 		// how many, and opening the window that lists them. NO KEY: a panel toggle needs none, and the
@@ -329,12 +544,12 @@ namespace
 		{
 			FBuildAction Alerts = Make(TEXT("game.alerts"), EActionSection::Game, LOCTEXT("Alerts", "Alerts"),
 				EKeys::Invalid, false,
-				[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleAlerts(); },
-				[](const FBuildActionContext& Ctx) { return Ctx.Controller.AlertCount() > 0 || Ctx.Controller.IsAlertsShowing(); },
+				[](FBuildActionContext& Ctx) { BuildActionVerbs::ToggleWindow(Ctx, EHudWindow::Alerts); },
+				[](const FBuildActionContext& Ctx) { return BuildActionVerbs::AlertCount(Ctx) > 0 || BuildActionVerbs::WindowShowing(Ctx, EHudWindow::Alerts); },
 				HasRuntime);
 			Alerts.DynamicLabel = [](const FBuildActionContext& Ctx)
 			{
-				const int32 Count = Ctx.Controller.AlertCount();
+				const int32 Count = BuildActionVerbs::AlertCount(Ctx);
 				return Count > 0 ? FText::Format(LOCTEXT("AlertsCount", "Alerts ({0})"), FText::AsNumber(Count)) : LOCTEXT("Alerts", "Alerts");
 			};
 			Out.Add(MoveTemp(Alerts));
@@ -466,14 +681,28 @@ TConstArrayView<FBuildAction> BuildActions()
 
 bool FBuildAction::TryRun(ARoadBuildController& C, const TCHAR* Via) const
 {
+	return TryRunWith(C, FBuildActionArg(), Via);
+}
+
+bool FBuildAction::TryRunWith(ARoadBuildController& C, const FBuildActionArg& Arg, const TCHAR* Via) const
+{
 	// THE ONE PLACE a bare controller reference becomes an FBuildActionContext (issue #191) -
 	// every caller above this keeps passing what it always held.
 	FBuildActionContext Context(C);
+	return TryRunWith(Context, Arg, Via);
+}
+
+bool FBuildAction::TryRunWith(FBuildActionContext& Context, const FBuildActionArg& Arg, const TCHAR* Via) const
+{
+	// THE ARGUMENT IS IN THE CONTEXT BEFORE THE GATE, so IsEnabled and Execute judge the same one - a sale is disabled for a vehicle
+	// that is not in the selected depot's fleet, not merely refused later (#448). TryRun is this with no argument, so every run takes
+	// this gate. ENFORCED BY: AirportMgr.Actions.TryRunGatesOnEnabled, AirportMgr.Actions.ParameterisedVerbsRefuseNoArgument
+	Context.Arg = Arg;
 	if (!IsEnabled(Context))
 	{
 		return false;
 	}
-	UE_LOG(LogRoadBuild, Log, TEXT("%s: %s"), Via, *Id.ToString());
+	UE_LOG(LogRoadBuild, Log, TEXT("%s: %s%s"), Via, *Id.ToString(), Arg.IsSet() ? *(TEXT(" ") + Arg.Describe()) : TEXT(""));
 	Execute(Context);
 	return true;
 }

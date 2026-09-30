@@ -21,7 +21,6 @@
 #include "Model/Ledger.h"
 #include "Model/Pricing.h"
 #include "Present/OpsRuntime.h"
-#include "Present/OpsRuntimeSubsystem.h"
 #include "RoadBuildController.h"
 #include "UI/UiButton.h"
 #include "UI/UiMenuButton.h"
@@ -538,7 +537,7 @@ void UBuildBarWidget::RefreshClock()
 	{
 		return;
 	}
-	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	const UOpsRuntime* Runtime = OpsRuntime();
 	FString Text;
 	if (Runtime == nullptr)
 	{
@@ -577,9 +576,9 @@ void UBuildBarWidget::RefreshBalance()
 		return;
 	}
 
-	// UseForTest's runtime when a test handed one in - WithContext's rule, so the balance a test reads is the one this
-	// tick computed from the ledger it set up, not "no ledger" from a world with no game instance. In play, unset.
-	const UOpsRuntime* Runtime = TestRuntime.IsValid() ? TestRuntime.Get() : UOpsRuntimeSubsystem::Get(GetWorld());
+	// THE WORLD'S RUNTIME, through OpsRuntimeResolver (#448): a test that stood a runtime in for its world reads the balance from the ledger
+	// it set up, not "no ledger" from a world with no game instance - the bar used to carry its own runtime for that (UseForTest).
+	const UOpsRuntime* Runtime = OpsRuntime();
 	const ULedger* Ledger = Runtime != nullptr ? Runtime->GetLedger() : nullptr;
 	const UPricing* Pricing = Runtime != nullptr ? Runtime->GetPricing() : nullptr;
 	if (Ledger == nullptr || Pricing == nullptr)
@@ -704,10 +703,9 @@ FText UBuildBarWidget::BalanceTextForTest() const
 	return BalanceText != nullptr ? BalanceText->GetText() : FText::GetEmpty();
 }
 
-void UBuildBarWidget::UseForTest(ARoadBuildController* C, UOpsRuntime* Runtime)
+void UBuildBarWidget::UseForTest(ARoadBuildController* C)
 {
 	TestController = C;
-	TestRuntime = Runtime;
 }
 
 UUiMenuButton* UBuildBarWidget::MenuForTest(FName ActionId) const
@@ -731,10 +729,6 @@ bool UBuildBarWidget::WithContext(TFunctionRef<void(FBuildActionContext&)> Use)
 		return false;
 	}
 	FBuildActionContext Ctx(*C);
-	if (TestRuntime.IsValid())
-	{
-		Ctx.Runtime = TestRuntime.Get();
-	}
 	Use(Ctx);
 	return true;
 }

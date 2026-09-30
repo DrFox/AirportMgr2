@@ -14,7 +14,7 @@
  * Airside.View.BuildCameraComponent.ToggleWatchAgent), which proves nothing about whether
  * ARoadBuildController still actually OWNS one of each - a constructor that stopped calling
  * CreateDefaultSubobject would still pass every isolated test (IsWatchingAgent null-guards
- * to false, GetHudForTest would just return null quietly) while the game shipped a
+ * to false, GetHud would just return null quietly) while the game shipped a
  * controller with no camera and no HUD at all.
  *
  * World-spawn pattern from ClickModifierTest.cpp, the precedent for testing this actor.
@@ -38,7 +38,7 @@ bool FRoadBuildControllerCameraTest::RunTest(const FString& Parameters)
 	// short of asking directly would notice - see this test's own class comment.
 	UBuildCameraComponent* CameraComp = C->FindComponentByClass<UBuildCameraComponent>();
 	TestNotNull(TEXT("the controller owns a UBuildCameraComponent"), CameraComp);
-	TestNotNull(TEXT("the controller owns a UBuildHudLayer"), C->GetHudForTest());
+	TestNotNull(TEXT("the controller owns a UBuildHudLayer"), C->GetHud());
 	if (CameraComp == nullptr)
 	{
 		return false;

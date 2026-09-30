@@ -220,8 +220,8 @@ struct FBuildVerbRegistration
 	 *  current state right now. Needs only the session - GetGestureMode() answers all three. */
 	TFunction<bool(const FBuildSession&)> IsActive;
 
-	/** Greyed on the bar when false. Also needs only the session, the same way
-	 *  ARoadBuildController::ActiveToolHasEditHandles already reads nothing else. */
+	/** Greyed on the bar when false. Also needs only the session: the lit tool's FToolRegistration::EditHandles
+	 *  is all the Edit verb asks (the controller method that used to ask it alone had no caller, and went in #448). */
 	TFunction<bool(const FBuildSession&)> IsEnabled;
 };
 
@@ -312,6 +312,32 @@ struct FBuildSessionTunables
 };
 
 /**
+ * WHAT THE PLAYER'S HANDS AND CURSOR ARE DOING, for one context (#448) - the four inputs a driver reads from its host and
+ * hands to FBuildSession::MakeContext / GetFrameContext, and the four fields of GetFrameContext's cache key. A driver reads
+ * them ONCE, into this, and passes it on.
+ *
+ * A STRUCT, NOT FOUR POSITIONAL ARGUMENTS: they were `bool bRemoveModifier, bool bInsertModifier, bool bSuspendGuides = false,
+ * int32 HoverAgent = 0`, typed at four call sites and two signatures, and inserting bSuspendGuides ahead of HoverAgent turned
+ * the hover agent id into a bool there - compiling perfectly, suspending every guide the moment the cursor was over an
+ * aeroplane, and zeroing the hover pick. Named fields cannot be passed in the wrong order.
+ *
+ * The sticky GESTURE MODE is not here: it is the session's (EGestureMode), and MakeContext ORs it with these.
+ */
+struct FBuildInputState
+{
+	/** Ctrl is held: the gesture means remove. ORed with the session's sticky Remove mode inside MakeContext. */
+	bool bRemoveModifier = false;
+	/** Shift is held: the gesture means insert a node. ORed with the session's sticky Insert mode. */
+	bool bInsertModifier = false;
+	/** Alt is held: suspend the guides for this click. */
+	bool bSuspendGuides = false;
+	/** The driver's screen-space pick, 0 when none - see FToolContext::HoverAgent. The editor mode has no agents to pick. */
+	int32 HoverAgent = 0;
+
+	bool operator==(const FBuildInputState& Other) const = default;
+};
+
+/**
  * Owns the tool session both build drivers drive: which tools exist and which one is
  * active.
  *
@@ -328,7 +354,15 @@ struct FBuildSessionTunables
 class AIRSIDE_API FBuildSession
 {
 public:
-	/** Builds Tools from ToolRegistry(), in registry order. Index 0 - Select - starts active. */
+	/**
+	 * THE REGISTRY INDEX OF THE SELECT TOOL, named once (#448): the session opens on it, a build tool's cancel returns to it,
+	 * picking any OTHER tool closes the selection, and the driver's alert Go leaves a build tool for it. It was a bare 0 at
+	 * several sites, each one a place to go on meaning "Select" after the registry is reordered.
+	 * ENFORCED BY: Airside.Tool.BuildSession.SelectIsTheRegistryIndexTheSessionNames
+	 */
+	static constexpr int32 SelectToolIndex = 0;
+
+	/** Builds Tools from ToolRegistry(), in registry order. The Select tool (SelectToolIndex) starts active. */
 	FBuildSession();
 
 	/** The tool the number keys selected, or null before any tool has been made. */
@@ -498,11 +532,11 @@ public:
 	 * handing it a road-snapped value silently applies road-building semantics to work that
 	 * has none.
 	 *
-	 * HoverAgent is the driver's screen-space pick, 0 when none - see FToolContext::HoverAgent.
+	 * Input is what the driver read from its host this call - see FBuildInputState. The default is "nothing held, nothing
+	 * under the cursor", which is what a test that has no hands wants.
 	 */
 	FToolContext MakeContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
-		const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
-		bool bSuspendGuides = false, int32 HoverAgent = 0) const;
+		const FBuildSessionTunables& Tunables, const FBuildInputState& Input = FBuildInputState()) const;
 
 	/**
 	 * What MakeContext would return for these exact inputs, rebuilt only when they differ from
@@ -527,8 +561,7 @@ public:
 	 * FToolReadoutKey needed one.
 	 */
 	const FToolContext& GetFrameContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
-		const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
-		bool bSuspendGuides = false, int32 HoverAgent = 0) const;
+		const FBuildSessionTunables& Tunables, const FBuildInputState& Input = FBuildInputState()) const;
 
 	/**
 	 * Forces the next GetFrameContext to rebuild regardless of its key.
@@ -551,9 +584,22 @@ public:
 
 	/**
 	 * Right click (or Escape, in the editor): step back out of whatever is part-drawn. With
-	 * nothing part-drawn in a build tool, put the tool down and return to Select (index 0).
+	 * nothing part-drawn in a build tool, put the tool down and return to Select (SelectToolIndex).
+	 * CancelStage, then - when there was nothing for it to cancel - the put-down.
 	 */
 	void CancelActiveGesture(const FToolContext& Context);
+
+	/**
+	 * THE FIRST LEVEL OF CancelActiveGesture ON ITS OWN (#448): abandon the active tool's own part-drawn stage, if it has one,
+	 * and do NOTHING else - never put the tool down, never drop to Select. True when there was a stage to abandon.
+	 *
+	 * SPLIT OUT because a caller can want "drop what is in flight" without "and then a right-click's second meaning": opening
+	 * Settings ran the whole two-level cancel, so with no drag at all it cleared the Select tool's selection and put an idle
+	 * build tool down. A driver that has to abandon a drag (a modal opening mid-drag) asks this; a right-click asks
+	 * CancelActiveGesture.
+	 * ENFORCED BY: AirportMgr.Actions.OpeningSettingsKeepsToolAndSelection, AirportMgr.Actions.OpeningSettingsDropsADragInFlight
+	 */
+	bool CancelStage(const FToolContext& Context);
 
 	/**
 	 * WHAT A REPLACED NETWORK RETIRES IN A SESSION - a driver's handler for URoadEditFacade::OnReplaced calls this and
@@ -609,7 +655,7 @@ private:
 	 */
 	TArray<TUniquePtr<IBuildTool>> Tools;
 
-	int32 ActiveTool = 0;
+	int32 ActiveTool = SelectToolIndex;
 
 	/** See SetToolPreferences. Null until a driver hands one over. */
 	TSharedPtr<IToolPreferences> Preferences;
@@ -706,10 +752,7 @@ private:
 		const IBuildTool* Tool = nullptr;
 		FVector2D PlaneHit = FVector2D::ZeroVector;
 		FBuildSessionTunables Tunables;
-		bool bRemoveModifier = false;
-		bool bInsertModifier = false;
-		bool bSuspendGuides = false;
-		int32 HoverAgent = 0;
+		FBuildInputState Input;
 
 		bool operator==(const FFrameContextKey& Other) const
 		{
@@ -717,10 +760,7 @@ private:
 				&& Tool == Other.Tool
 				&& PlaneHit == Other.PlaneHit
 				&& Tunables == Other.Tunables
-				&& bRemoveModifier == Other.bRemoveModifier
-				&& bInsertModifier == Other.bInsertModifier
-				&& bSuspendGuides == Other.bSuspendGuides
-				&& HoverAgent == Other.HoverAgent;
+				&& Input == Other.Input;
 		}
 	};
 

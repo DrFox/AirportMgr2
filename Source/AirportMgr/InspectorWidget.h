@@ -10,6 +10,7 @@
 
 class ARoadBuildController;
 class ARoadNetworkActor;
+struct FBuildActionArg;
 class UBuildBarWidget;
 class UFlightBoard;
 class UGroundTraffic;
@@ -134,7 +135,7 @@ public:
 
 	/**
 	 * The flight board registrations are read from, in place of the ops runtime's - a headless world
-	 * has no game instance and so no UOpsRuntimeSubsystem. Weak: the test owns the board.
+	 * has no game instance and so no runtime of its own. Weak: the test owns the board.
 	 */
 	void UseFlightBoardForTest(const UFlightBoard* Board);
 	/** The game clock the hold duration converts by, in place of the ops runtime's - UseFlightBoardForTest's reason. */
@@ -166,8 +167,8 @@ public:
 		const FAgentFacts* PrecomputedAgentFacts = nullptr);
 
 	/**
-	 * Refresh's body past the ops runtime lookup - Runtime is what Refresh finds through OpsRuntime() (the
-	 * controller's, else UOpsRuntimeSubsystem's), null for none. A headless test's world has no game instance to hold that subsystem, so the depot card, the
+	 * Refresh's body past the ops runtime lookup - Runtime is what Refresh finds through OpsRuntime() (the world's, by
+	 * OpsRuntimeResolver), null for none. A headless test's world has no game instance to hold the runtime, so the depot card, the
 	 * fuel line and the turnaround were out of its reach; UOfferInboxWidget::RefreshWith is the same seam.
 	 */
 	void RefreshWith(const UOpsRuntime* Runtime, const ARoadNetworkActor* Target, const FSelection& Selection,
@@ -243,10 +244,6 @@ private:
 	/** By id, RunwayActionIndex's rule. Its row only opens the popup - see ARoadBuildController::RequestUnstickMenu. */
 	int32 UnstickActionIndex = INDEX_NONE;
 
-	/** The runtime the card quotes: the controller's (ARoadBuildController::GetOpsRuntime), else the
-	 *  game instance's. */
-	const UOpsRuntime* OpsRuntime() const;
-
 	/** The controller's request count last acted on - see ARoadBuildController::RequestUnstickMenu. */
 	int32 SeenUnstickRequests = 0;
 	bool bUnstickHighlighted = false;
@@ -296,11 +293,11 @@ private:
 
 	void EnsureSlots(const UUIStyle* Style);
 	void RunAction(int32 ActionIndex);
+	/** RunAction with an argument - a parameterised verb's (FBuildAction::TryRunWith). The purchase rows run through it. */
+	void RunActionWith(int32 ActionIndex, const FBuildActionArg& Arg);
 
 	/** A selection that is not the last one: the window opens again, and everything armed for the old card goes. */
 	void OnNewSelection(const FSelection& Selection);
-	/** Unarm a sale: the purchase rows' captions and the controller's armed id - or the controller's alone with no rows. */
-	void DisarmSale();
 	/** Nothing to show: hides the window and unlights Depart. */
 	void HideCard();
 	/** Paints View: the texts, the verbs it names, the purchase rows under it. */

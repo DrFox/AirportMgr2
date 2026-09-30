@@ -4,7 +4,7 @@
 #include "Engine/DirectionalLight.h"
 #include "Model/SimClock.h"
 #include "Present/OpsRuntime.h"
-#include "Present/OpsRuntimeSubsystem.h"
+#include "OpsRuntimeResolver.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSunDriver, Log, All);
 
@@ -60,10 +60,10 @@ void ASunDriver::ApplyToSun()
 		return;
 	}
 
-	// UOpsRuntimeSubsystem::Get is built for exactly this: its own comment says "editor
-	// worlds have no game instance" and it returns null there rather than making every
-	// caller unpick the chain. ResolveDayFraction turns that null into noon.
-	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	// THE RESOLVER is built for exactly this: editor worlds have no game instance, and it
+	// returns null there rather than making every caller unpick the chain. ResolveDayFraction
+	// turns that null into noon.
+	const UOpsRuntime* Runtime = OpsRuntimeResolver::Resolve(GetWorld());
 	const USimClock* Clock = Runtime != nullptr ? Runtime->GetClock() : nullptr;
 
 	const double DayFraction = ResolveDayFraction(Clock);

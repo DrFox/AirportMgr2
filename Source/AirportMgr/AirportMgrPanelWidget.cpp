@@ -6,6 +6,7 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Components/PanelWidget.h"
 #include "Components/VerticalBox.h"
+#include "OpsRuntimeResolver.h"
 #include "RoadBuildController.h"
 #include "RoadBuildLog.h"
 #include "Styling/SlateBrush.h"
@@ -37,6 +38,11 @@ ARoadBuildController* UAirportMgrPanelWidget::Controller() const
 		return Cast<ARoadBuildController>(Owning);
 	}
 	return GetWorld() ? Cast<ARoadBuildController>(GetWorld()->GetFirstPlayerController()) : nullptr;
+}
+
+UOpsRuntime* UAirportMgrPanelWidget::OpsRuntime() const
+{
+	return OpsRuntimeResolver::Resolve(GetWorld());
 }
 
 UPanelWidget* UAirportMgrPanelWidget::EnsureContentRoot(FName ContentName)

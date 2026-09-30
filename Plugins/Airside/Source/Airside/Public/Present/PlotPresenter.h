@@ -176,7 +176,7 @@ public:
 	 *
 	 * The component itself is private on ARoadNetworkActor, and widening it so a test can
 	 * read one transform would open it to everything else too. Same ...ForTest precedent as
-	 * GetHudForTest and SessionForTest.
+	 * SessionForTest.
 	 */
 	bool GetInstanceTransformForTest(int32 Index, FTransform& OutTransform) const;
 

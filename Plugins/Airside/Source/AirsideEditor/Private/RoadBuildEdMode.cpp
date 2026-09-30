@@ -337,14 +337,19 @@ void URoadBuildEdMode::Enter()
 			 "buttons do the same job."),
 		*Banner);
 
-	// Roads first, because it is the one that needs no setup - an empty level can be drawn
-	// on immediately, where a stand wants somewhere to stand.
-	GetInteractiveToolsContext()->StartTool(MakeToolName(0));
+	// THE MODE OPENS ON SELECT (FBuildSession::SelectToolIndex), the session's default tool and the one a play session opens on too.
+	// This comment read "Roads first, because it needs no setup" above a StartTool(MakeToolName(0)) - and index 0 has been Select
+	// since the entity inspector (spec 2026-09-07 section 2) made it the default state, so the comment described a mode the code
+	// did not open. The behaviour is kept; whether the editor SHOULD open on Roads is the owner's call.
+	GetInteractiveToolsContext()->StartTool(MakeToolName(FBuildSession::SelectToolIndex));
 
-	// TODO(#33): key 7 (land an aircraft) has no editor equivalent. It is not a SelectTool
-	// at runtime either - see ARoadBuildController::LandAircraftNearViewFocus - so wiring it up here
-	// needs its own command and its own cursor-to-plane resolution, not a seventh registry
-	// entry; out of scope for making the two drivers share ONE tool table.
+	// KEY 7 (land an aircraft) HAS NO EDITOR EQUIVALENT, ON PURPOSE - and this was a TODO naming #33 (closed 2026-09-05: it shared ONE
+	// tool table and left this out of scope, so nothing was ever left to do under that number) until #448. Landing goes through the flight board
+	// (ARoadBuildController::LandAircraftNearViewFocus asks the game-instance runtime for it), which exists in play and
+	// not in this mode, and #431 removed the board-less dispatch that used to stand in for it. It is not a SelectTool at runtime
+	// either, so it is not a seventh registry entry. If the editor ever wants it, that is a new issue with its own command and its
+	// own cursor-to-plane resolution, not a line in this function.
+	// ENFORCED BY: the module graph (AirsideEditor.Build.cs lists Airside as its one project dependency, so nothing here can name the runtime or its board)
 }
 
 void URoadBuildEdMode::Exit()

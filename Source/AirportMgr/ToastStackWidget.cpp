@@ -16,7 +16,6 @@
 #include "NotificationCentre.h"
 #include "Model/OpsEvents.h"
 #include "Present/OpsRuntime.h"
-#include "Present/OpsRuntimeSubsystem.h"
 #include "Styling/SlateBrush.h"
 #include "UIStyle.h"
 
@@ -41,7 +40,7 @@ void UToastStackWidget::BuildOnce(const UUIStyle& Style)
 
 	// THE ONLY SUBSCRIBER THAT TURNS EVENTS INTO USER-VISIBLE ENTRIES, so there is one place
 	// that decides what is worth telling the player (spec section 6.1).
-	if (UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
+	if (UOpsRuntime* Runtime = OpsRuntime())
 	{
 		BindTo(*Runtime->GetEvents());
 	}

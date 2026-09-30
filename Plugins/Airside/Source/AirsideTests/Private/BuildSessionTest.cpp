@@ -276,4 +276,34 @@ bool FBuildSessionSelectFromCodeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildSessionSelectToolIndexTest,
+	"Airside.Tool.BuildSession.SelectIsTheRegistryIndexTheSessionNames",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildSessionSelectToolIndexTest::RunTest(const FString& Parameters)
+{
+	// #448: "Select is registry index 0" was a bare 0 at several sites; FBuildSession::SelectToolIndex is the one name, and it is the
+	// Select tool. A registry reordered so that index 0 is something else goes red HERE, not as a session that opens on a road tool.
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	if (!TestTrue(TEXT("the named index is in the registry"), Registry.IsValidIndex(FBuildSession::SelectToolIndex))) { return false; }
+	TestEqual(TEXT("and it is the Select tool"), Registry[FBuildSession::SelectToolIndex].Id, FName(TEXT("Select")));
+
+	FBuildSession Session;
+	TestEqual(TEXT("a fresh session opens on it"), Session.GetActiveToolIndex(), FBuildSession::SelectToolIndex);
+	Session.Select(ESelectionKind::Stand, 3);
+	Session.SelectTool(1);
+	TestFalse(TEXT("picking another tool closes the selection"), Session.GetSelection().IsSet());
+
+	// THE TWO LEVELS OF A CANCEL, apart (#448): CancelStage abandons only a part-drawn stage and never puts the tool down; the right-click
+	// cancel is CancelStage and then, with nothing to abandon, the put-down. An idle build tool has no stage.
+	if (!TestEqual(TEXT("setup: a build tool is lit"), Session.GetActiveToolIndex(), 1)) { return false; }
+	if (!TestTrue(TEXT("setup: and idle"), Session.GetActiveTool() != nullptr && Session.GetActiveTool()->IsIdle())) { return false; }
+	TestFalse(TEXT("CancelStage on an idle tool abandons nothing"), Session.CancelStage(FToolContext()));
+	TestEqual(TEXT("and leaves the tool lit - it is not a put-down"), Session.GetActiveToolIndex(), 1);
+	Session.CancelActiveGesture(FToolContext());
+	TestEqual(TEXT("the right-click cancel of an idle build tool returns to Select"), Session.GetActiveToolIndex(), FBuildSession::SelectToolIndex);
+	return true;
+}
+
 #endif

@@ -23,9 +23,9 @@
 #include "Model/InspectFacts.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
+#include "OpsRuntimeResolver.h"
 #include "Present/OpsRuntime.h"
 #include "Present/AirsideTraffic.h"
-#include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadAgentActor.h"
 #include "Model/BuildPurse.h"
 #include "Present/RoadEditFacade.h"
@@ -211,7 +211,7 @@ void ARoadBuildController::ToggleWatchAgent()
 	// are looking at, and the newest is what you are looking at when nothing is selected.
 	// This preference is Session/Selection policy and stays here; UBuildCameraComponent
 	// knows only the id it was given.
-	const int32 Wanted = HasSelectedAircraft() ? GetSelection().Id : Target->GetTraffic()->GetNewestAgentId();
+	const int32 Wanted = GetSelection().Kind == ESelectionKind::Aircraft ? GetSelection().Id : Target->GetTraffic()->GetNewestAgentId();
 	if (!BuildCameraComp->ToggleWatchAgent(*Target, Wanted))
 	{
 		// Refused out loud. Silently staying on the build camera is indistinguishable from
@@ -308,7 +308,7 @@ void ARoadBuildController::LandAircraftNearViewFocus(const UAircraftType* Type)
 	// THROUGH THE BOARD WHEN THERE IS ONE, so the aeroplane belongs to a flight the rest of
 	// the game can track - see LandNear's own header for why a direct dispatch is a second
 	// door onto arrival.
-	if (UOpsRuntime* Runtime = GetOpsRuntime())
+	if (UOpsRuntime* Runtime = OpsRuntimeResolver::Resolve(GetWorld()))
 	{
 		Runtime->LandNear(Focus, Configured != nullptr ? &Override : nullptr);
 		return;
@@ -489,23 +489,29 @@ FToolContext ARoadBuildController::MakeToolContext() const
 
 	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
 	// it rather than being folded into it.
-	// ONLY THE HELD KEYS from here. The sticky mode ORs with them inside MakeContext now
-	// that the session owns it - see EGestureMode.
-	// ALT GOES BEFORE THE HOVER AGENT, and the order is load-bearing: bSuspendGuides was
-	// inserted ahead of HoverAgent, so leaving this call as it was would have passed an int32
-	// agent id into a bool - compiling perfectly and suspending every guide the moment the
-	// cursor was over an aeroplane, while the hover pick silently became 0.
+	// ONLY THE HELD KEYS from here (ReadInputState). The sticky mode ORs with them inside MakeContext now
+	// that the session owns it - see EGestureMode. THE ONE READ: this and PlayerTick's frame context used to type the same
+	// five-line block of positional bools a thousand lines apart, and inserting Alt ahead of the hover agent once turned the
+	// agent id into a bool there - FBuildInputState's named fields are what ended that.
 	//
 	// STRAIGHT TO Session.MakeContext, NOT THROUGH GetFrameContext - deliberately (issue #303).
 	// This function exists for callers that want the pipeline run fresh against the mouse
 	// position at the exact moment they fire (a click, a drag step - see this method's own
 	// header comment); PlayerTick is the one caller that wants the cache, and reaches it
 	// directly with the same PlaneHit/Tunables this function just assembled.
-	return Session.MakeContext(Target, PlaneHit, Tunables,
-		IsRemoveHeld(),
-		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift),
-		IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt),
-		HoverAgentUnderCursor());
+	return Session.MakeContext(Target, PlaneHit, Tunables, ReadInputState());
+}
+
+FBuildInputState ARoadBuildController::ReadInputState() const
+{
+	// EVERY HELD KEY AND THE CURSOR'S PICK, read once into the session's own type - see FBuildInputState for the bug four positional
+	// call sites once had. Ctrl is IsRemoveHeld's; Shift and Alt each accept either physical key.
+	FBuildInputState Input;
+	Input.bRemoveModifier = IsRemoveHeld();
+	Input.bInsertModifier = IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift);
+	Input.bSuspendGuides = IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt);
+	Input.HoverAgent = HoverAgentUnderCursor();
+	return Input;
 }
 
 void ARoadBuildController::ApplySnapToggle(const FSnapToggleRegistration& Toggle)
@@ -640,24 +646,17 @@ FBox ARoadBuildController::VisibleLocalBounds(const AActor& View)
 	return Box;
 }
 
-bool ARoadBuildController::SelectedAgentFacts(FAgentFacts& Out) const
-{
-	const FSelection& Sel = GetSelection();
-	if (Sel.Kind != ESelectionKind::Aircraft || Target == nullptr || Target->GetGroundTraffic() == nullptr)
-	{
-		return false;
-	}
-	return InspectFacts::DescribeAgent(*Target->GetGroundTraffic(), Target->GetNetwork(), Sel.Id, Out);
-}
-
 bool ARoadBuildController::SelectedAgentFactsThisFrame(FAgentFacts& Out) const
 {
 	if (!SelectedAgentFactsCache.IsSet())
 	{
+		// THE DESCRIBE, once a frame: a selected AGENT, and the model's own answer for one that has gone. (A separate uncached
+		// SelectedAgentFacts used to sit under this; nothing else called it, and it went in #448 with the verbs it served.)
 		FAgentFacts Facts;
-		SelectedAgentFactsCache = SelectedAgentFacts(Facts)
-			? TOptional<FAgentFacts>(MoveTemp(Facts))
-			: TOptional<FAgentFacts>();
+		const FSelection& Sel = GetSelection();
+		const bool bFound = Sel.Kind == ESelectionKind::Aircraft && Target != nullptr && Target->GetGroundTraffic() != nullptr
+			&& InspectFacts::DescribeAgent(*Target->GetGroundTraffic(), Target->GetNetwork(), Sel.Id, Facts);
+		SelectedAgentFactsCache = bFound ? TOptional<FAgentFacts>(MoveTemp(Facts)) : TOptional<FAgentFacts>();
 	}
 	const TOptional<FAgentFacts>& Cached = SelectedAgentFactsCache.GetValue();
 	if (Cached.IsSet())
@@ -666,84 +665,6 @@ bool ARoadBuildController::SelectedAgentFactsThisFrame(FAgentFacts& Out) const
 		return true;
 	}
 	return false;
-}
-
-bool ARoadBuildController::SelectedStandFacts(FStandFacts& Out) const
-{
-	const FSelection& Sel = GetSelection();
-	if (Sel.Kind != ESelectionKind::Stand || Target == nullptr || Target->GetNetwork() == nullptr)
-	{
-		return false;
-	}
-	return InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Sel.Id, Out);
-}
-
-bool ARoadBuildController::SelectedRunwayFacts(FRunwayCardFacts& Out) const
-{
-	const FSelection& Sel = GetSelection();
-	if (Sel.Kind != ESelectionKind::Runway || Target == nullptr || Target->GetNetwork() == nullptr)
-	{
-		return false;
-	}
-	return InspectFacts::DescribeRunway(*Target->GetNetwork(), Sel.Id, Out);
-}
-
-void ARoadBuildController::FlipSelectedRunway()
-{
-	FRunwayCardFacts Card;
-	if (!SelectedRunwayFacts(Card))
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("Runway in use: no runway selected."));
-		return;
-	}
-	const FRoadSegmentId Segment = Target->GetNetwork()->SegmentIdAt(GetSelection().Id);
-	FRunwayFacts Facts = Target->GetNetwork()->RunwayFactsFor(Segment);
-	Facts.InUse = Card.Other;
-	if (!Target->SetRunwayFacts(GetSelection().Id, Facts))
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("Runway in use: the change to %02d was refused."), Card.Other);
-	}
-}
-
-void ARoadBuildController::CycleSelectedRunwayUse()
-{
-	FRunwayCardFacts Card;
-	if (!SelectedRunwayFacts(Card))
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("Runway use: no runway selected."));
-		return;
-	}
-	const FRoadSegmentId Segment = Target->GetNetwork()->SegmentIdAt(GetSelection().Id);
-	FRunwayFacts Facts = Target->GetNetwork()->RunwayFactsFor(Segment);
-	Facts.Use = RunwayUse::Next(Card.Use);
-	if (!Target->SetRunwayFacts(GetSelection().Id, Facts))
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("Runway use: the change to %s was refused."), RunwayUse::Name(Facts.Use));
-	}
-}
-
-FUnstickVerdict ARoadBuildController::CanUnstickSelected(EUnstickAction Action) const
-{
-	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
-	if (!HasSelectedAircraft() || Runtime == nullptr)
-	{
-		return FUnstickVerdict::No(NSLOCTEXT("AirportMgr", "UnstickNothing", "Nothing selected"));
-	}
-	return Runtime->CanUnstick(GetSelection().Id, Action);
-}
-
-void ARoadBuildController::UnstickSelected(EUnstickAction Action)
-{
-	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
-	if (!HasSelectedAircraft() || Runtime == nullptr)
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("Unstick %s: no agent selected, or no ops runtime."), *UEnum::GetValueAsString(Action));
-		return;
-	}
-	// UAgentRescue logs the "Unstick: agent N ... -> done|refused" line; this one says the click arrived.
-	const int32 Id = GetSelection().Id;
-	UE_LOG(LogRoadBuild, Log, TEXT("Unstick %s: agent %d"), *UEnum::GetValueAsString(Action), Id);
-	Runtime->Unstick(Id, Action);
 }
 
 FEntityInstanceId ARoadBuildController::DepotForSelection(const ARoadNetworkActor* InTarget, const FSelection& Selection)
@@ -769,120 +690,15 @@ FEntityInstanceId ARoadBuildController::RevealedDepotFor(const ARoadNetworkActor
 	return Entity != nullptr && Entity->IsDepot() && Entity->IsPlotted() ? Id : FEntityInstanceId();
 }
 
-FEntityInstanceId ARoadBuildController::SelectedFacility() const
-{
-	return DepotForSelection(Target, GetSelection());
-}
-
-UOpsRuntime* ARoadBuildController::GetOpsRuntime() const
-{
-	return OpsRuntimeOverride != nullptr ? OpsRuntimeOverride.Get() : UOpsRuntimeSubsystem::Get(GetWorld());
-}
-
 void ARoadBuildController::SelectForTest(const FSelection& InSelection)
 {
 	// THROUGH THE CONTEXT'S POINTER, the way the Select tool writes it (FBuildSession::GetSelection's own
 	// comment) - not a second setter on the session.
-	const FToolContext Context = Session.MakeContext(Target, FVector2D::ZeroVector, FBuildSessionTunables(), false, false);
+	const FToolContext Context = Session.MakeContext(Target, FVector2D::ZeroVector, FBuildSessionTunables());
 	if (Context.Selection != nullptr)
 	{
 		*Context.Selection = InSelection;
 	}
-}
-
-FFacilityQuote ARoadBuildController::QuoteSelectedFacility() const
-{
-	const UOpsRuntime* Runtime = GetOpsRuntime();
-	const FEntityInstanceId Id = SelectedFacility();
-	return Runtime != nullptr && Id.IsSet() ? Runtime->QuoteFacility(Id) : FFacilityQuote();
-}
-
-bool ARoadBuildController::CanBuySelectedModule() const
-{
-	const FFacilityQuote Quote = QuoteSelectedFacility();
-	return Quote.Modules.Num() > 0 && Quote.Modules[0].Refusal == EPurchaseRefusal::None;
-}
-
-void ARoadBuildController::BuySelectedModule()
-{
-	UOpsRuntime* Runtime = GetOpsRuntime();
-	const FFacilityQuote Quote = QuoteSelectedFacility();
-	if (Runtime == nullptr || Quote.Modules.Num() == 0)
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("Buy module: no depot selected, or no ops runtime."));
-		return;
-	}
-	// UFacilityPurchases logs the "Purchase: ..." line; this one says the click arrived.
-	const FEntityInstanceId Depot = SelectedFacility();
-	UE_LOG(LogRoadBuild, Log, TEXT("Buy module %s: depot %d"), *UEnum::GetValueAsString(Quote.Modules[0].Module), Depot.Index);
-	Runtime->BuyModule(Depot, Quote.Modules[0].Module);
-}
-
-bool ARoadBuildController::CanBuyChosenVehicle() const
-{
-	const FFacilityQuote Quote = QuoteSelectedFacility();
-	const FName Chosen = ChosenVehicleType;
-	const FVehicleOfferQuote* Offer = Quote.VehicleOffers.FindByPredicate([Chosen](const FVehicleOfferQuote& O) { return O.TypeCode == Chosen; });
-	return Offer != nullptr && Offer->Refusal == EPurchaseRefusal::None;
-}
-
-void ARoadBuildController::BuyChosenVehicle()
-{
-	UOpsRuntime* Runtime = GetOpsRuntime();
-	const FEntityInstanceId Depot = SelectedFacility();
-	if (Runtime == nullptr || !Depot.IsSet() || ChosenVehicleType.IsNone())
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("Buy vehicle: no depot selected, no type chosen, or no ops runtime."));
-		return;
-	}
-	UE_LOG(LogRoadBuild, Log, TEXT("Buy vehicle %s: depot %d"), *ChosenVehicleType.ToString(), Depot.Index);
-	Runtime->BuyVehicle(Depot, ChosenVehicleType);
-	// SPENT: a choice is one purchase, so a stray later run of the row cannot buy a second of it.
-	ChosenVehicleType = NAME_None;
-}
-
-bool ARoadBuildController::CanSellArmedVehicle() const
-{
-	// Asked of the SELECTED depot's fleet, not the board at large: an armed id left over from another
-	// card cannot sell a vehicle the player is not looking at.
-	const FFacilityQuote Quote = QuoteSelectedFacility();
-	const int32 Armed = ArmedSellVehicle;
-	const FFleetRowQuote* Row = Quote.Fleet.FindByPredicate([Armed](const FFleetRowQuote& R) { return R.VehicleId == Armed; });
-	return Row != nullptr && Row->Refusal == EPurchaseRefusal::None;
-}
-
-void ARoadBuildController::SellArmedVehicle()
-{
-	UOpsRuntime* Runtime = GetOpsRuntime();
-	if (Runtime == nullptr || ArmedSellVehicle == 0)
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("Sell vehicle: nothing armed, or no ops runtime."));
-		return;
-	}
-	UE_LOG(LogRoadBuild, Log, TEXT("Sell vehicle %d"), ArmedSellVehicle);
-	Runtime->SellVehicle(ArmedSellVehicle);
-	ArmedSellVehicle = 0;
-}
-
-bool ARoadBuildController::CanDepartSelected() const
-{
-	// THROUGH THE PER-FRAME CACHE (issue #187): the bar polls this every tick, and
-	// UInspectorWidget::Refresh asks the same question of the same selection the same frame -
-	// see SelectedAgentFactsThisFrame's own comment.
-	FAgentFacts Facts;
-	return SelectedAgentFactsThisFrame(Facts) && Facts.bCanDepart;
-}
-
-void ARoadBuildController::DepartSelected()
-{
-	if (!HasSelectedAircraft() || Target == nullptr)
-	{
-		UE_LOG(LogRoadBuild, Warning, TEXT("Depart: no aircraft selected."));
-		return;
-	}
-	const EDepartureRefusal Why = Target->DepartAgent(GetSelection().Id);
-	UE_LOG(LogRoadBuild, Log, TEXT("Depart aircraft %d: %s"), GetSelection().Id,
-		Why == EDepartureRefusal::None ? TEXT("accepted") : *UEnum::GetValueAsString(Why));
 }
 
 void ARoadBuildController::OnActionKey(FKey Key)
@@ -1035,13 +851,6 @@ bool ARoadBuildController::WantsRoadNodesDrawn() const
 	return Session.WantsRoadNodesDrawn();
 }
 
-bool ARoadBuildController::ActiveToolHasEditHandles() const
-{
-	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
-	const int32 Index = Session.GetActiveToolIndex();
-	return Registry.IsValidIndex(Index) && Registry[Index].EditHandles != EEditHandleKind::None;
-}
-
 bool ARoadBuildController::CanUndo() const { return Target != nullptr && Target->CanUndo(); }
 bool ARoadBuildController::CanRedo() const { return Target != nullptr && Target->CanRedo(); }
 
@@ -1144,26 +953,35 @@ bool ARoadBuildController::HasAgent() const
 	return Target != nullptr && Target->GetAgentCount() > 0;
 }
 
-bool ARoadBuildController::HasOpsRuntime() const
-{
-	return UOpsRuntimeSubsystem::Get(GetWorld()) != nullptr;
-}
-
 void ARoadBuildController::ToggleSettings()
 {
 	if (Hud != nullptr && Hud->SettingsPanel != nullptr)
 	{
-		Hud->SettingsPanel->Toggle();
-		if (Hud->SettingsPanel->IsShowing())
+		Hud->ToggleWindow(EHudWindow::Settings);
+		if (Hud->IsWindowShowing(EHudWindow::Settings))
 		{
-			// A GESTURE IN FLIGHT IS DROPPED: a drag begun before Escape would otherwise keep
-			// extending behind the scrim and build on release (4b final review, Important 5).
-			Gesture.Cancel();
-			if (Target != nullptr)
-			{
-				OnCancelGesture();
-			}
+			DropGestureForModal();
 		}
+	}
+}
+
+void ARoadBuildController::DropGestureForModal()
+{
+	// A GESTURE IN FLIGHT IS DROPPED: a drag begun before Escape would otherwise keep
+	// extending behind the scrim and build on release (4b final review, Important 5).
+	//
+	// ONLY THAT (#448). This ran OnCancelGesture - Session.CancelActiveGesture, the two-level RIGHT-CLICK cancel - whenever there was a
+	// target: with no drag at all, the Select tool cleared the selection and an idle build tool was put down to Select, the moment the
+	// dialog opened. A right-click means "step back out"; opening a dialog means nothing of the kind. The press is always let go (its
+	// release would otherwise build behind the scrim); the tool's own stage is abandoned only when a DRAG had begun - through
+	// CancelStage, the first level on its own, so the tool stays lit and the selection stays selected.
+	// ENFORCED BY: AirportMgr.Actions.OpeningSettingsKeepsToolAndSelection, AirportMgr.Actions.OpeningSettingsDropsADragInFlight
+	const bool bWasDragging = Gesture.IsDragging();
+	Gesture.Cancel();
+	if (bWasDragging && Target != nullptr)
+	{
+		Session.CancelStage(MakeToolContext());
+		InvalidateToolReadoutCache();
 	}
 }
 
@@ -1184,16 +1002,6 @@ bool ARoadBuildController::KeyWaitsForModal(const FBuildAction& Action) const
 	return IsModalOpen() && Action.Id != SettingsActionId();
 }
 
-void ARoadBuildController::ToggleLedger()
-{
-	if (Hud != nullptr && Hud->LedgerPanel != nullptr)
-	{
-		Hud->LedgerPanel->Toggle();
-		UE_LOG(LogRoadBuild, Log, TEXT("Ledger panel %s"),
-			Hud->LedgerPanel->IsShowing() ? TEXT("opened") : TEXT("closed"));
-	}
-}
-
 bool ARoadBuildController::SelectAndFocus(const FAlertFocus& Focus)
 {
 	const bool bWasWatching = BuildCameraComp->IsWatchingAgent();
@@ -1209,9 +1017,9 @@ bool ARoadBuildController::SelectAndFocus(const FAlertFocus& Focus)
 	// ENFORCED BY: AirportMgr.UI.Alerts.GoLeavesABuildTool
 	auto SelectInSelectTool = [this](ESelectionKind Kind, int32 Id)
 	{
-		if (Session.GetActiveToolIndex() != 0)
+		if (Session.GetActiveToolIndex() != FBuildSession::SelectToolIndex)
 		{
-			SelectTool(0);
+			SelectTool(FBuildSession::SelectToolIndex);
 		}
 		Session.Select(Kind, Id);
 	};
@@ -1258,46 +1066,6 @@ bool ARoadBuildController::SelectAndFocus(const FAlertFocus& Focus)
 	}
 }
 
-void ARoadBuildController::ToggleAlerts()
-{
-	if (Hud != nullptr && Hud->AlertsPanel != nullptr)
-	{
-		Hud->AlertsPanel->Toggle();
-		UE_LOG(LogRoadBuild, Log, TEXT("Alerts window %s (%d alert(s))"),
-			Hud->AlertsPanel->IsShowing() ? TEXT("opened") : TEXT("closed"), Hud->AlertsPanel->AlertCount());
-	}
-}
-
-bool ARoadBuildController::IsAlertsShowing() const
-{
-	return Hud != nullptr && Hud->AlertsPanel != nullptr && Hud->AlertsPanel->IsShowing();
-}
-
-int32 ARoadBuildController::AlertCount() const
-{
-	return Hud != nullptr && Hud->AlertsPanel != nullptr ? Hud->AlertsPanel->AlertCount() : 0;
-}
-
-bool ARoadBuildController::IsLedgerShowing() const
-{
-	return Hud != nullptr && Hud->LedgerPanel != nullptr && Hud->LedgerPanel->IsShowing();
-}
-
-void ARoadBuildController::ToggleLandPanel()
-{
-	if (Hud != nullptr && Hud->LandPanel != nullptr)
-	{
-		Hud->LandPanel->Toggle();
-		UE_LOG(LogRoadBuild, Log, TEXT("Land panel %s"),
-			Hud->LandPanel->IsShowing() ? TEXT("opened") : TEXT("closed"));
-	}
-}
-
-bool ARoadBuildController::IsLandPanelShowing() const
-{
-	return Hud != nullptr && Hud->LandPanel != nullptr && Hud->LandPanel->IsShowing();
-}
-
 FVector2D ARoadBuildController::GetViewFocus() const
 {
 	return BuildCameraComp != nullptr ? BuildCameraComp->ViewFocus() : FVector2D::ZeroVector;
@@ -1305,7 +1073,7 @@ FVector2D ARoadBuildController::GetViewFocus() const
 
 bool ARoadBuildController::IsPaused() const
 {
-	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	const UOpsRuntime* Runtime = OpsRuntimeResolver::Resolve(GetWorld());
 	return Runtime != nullptr && Runtime->GetClock()->GetSpeed() == ESimSpeed::Paused;
 }
 
@@ -1374,8 +1142,7 @@ void ARoadBuildController::PressAt(FVector2D Screen)
 
 void ARoadBuildController::UpdateDrag()
 {
-	IBuildTool* Tool = GetActiveTool();
-	if (!Gesture.IsPressed() || Tool == nullptr || Target == nullptr)
+	if (!Gesture.IsPressed() || GetActiveTool() == nullptr || Target == nullptr)
 	{
 		return;
 	}
@@ -1396,7 +1163,19 @@ void ARoadBuildController::UpdateDrag()
 	{
 		return;
 	}
-	const EGestureStep Step = Gesture.Move(FVector2D(MouseX, MouseY), DragThresholdPixels);
+	AdvanceDrag(FVector2D(MouseX, MouseY));
+}
+
+void ARoadBuildController::AdvanceDrag(FVector2D Mouse)
+{
+	// UpdateDrag's step, at a mouse position it was handed - the seam MovePrimaryForTest drives. The guard repeats UpdateDrag's because
+	// a test comes in here without it.
+	IBuildTool* Tool = GetActiveTool();
+	if (!Gesture.IsPressed() || Tool == nullptr || Target == nullptr)
+	{
+		return;
+	}
+	const EGestureStep Step = Gesture.Move(Mouse, DragThresholdPixels);
 
 	if (Step == EGestureStep::None)
 	{
@@ -1480,11 +1259,7 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 		FVector2D PlaneHit;
 		FBuildSessionTunables Tunables;
 		ComputeCurrentPlaneHitAndTunables(PlaneHit, Tunables);
-		FrameContext = Session.GetFrameContext(Target, PlaneHit, Tunables,
-			IsRemoveHeld(),
-			IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift),
-			IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt),
-			HoverAgentUnderCursor());
+		FrameContext = Session.GetFrameContext(Target, PlaneHit, Tunables, ReadInputState());
 	}
 
 	// BEFORE THE TARGET GUARD, so a frame with no road actor clears the bar instead of
@@ -1497,12 +1272,13 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	// site short. ShowPlotGhosts is two compares unless the answer changed.
 	if (AAirsideBuildingsActor* Found = Buildings.Get())
 	{
-		// R10 (facility-upgrades spec): EDIT MODE shows every yard's ghosts, as before; outside it the
-		// SELECTED depot's card reveals its own - read off the selection here, the one per-frame gate, rather
-		// than pushed by the inspector (a push per change site is the shape this comment already refuses).
+		// R10 (facility-upgrades spec): a LIT PLOT TOOL (the depot tool - FToolRegistration::bShowsPlotGhosts) shows every yard's
+		// ghosts, as before; outside it the SELECTED depot's card reveals its own - read off the selection here, the one per-frame
+		// gate, rather than pushed by the inspector (a push per change site is the shape this comment already refuses). (The flag
+		// was called bEditing until #448, which it never meant: Edit MODE is EGestureMode::Edit, and does not show these.)
 		const FEntityInstanceId Reveal = RevealedDepotFor(Target, GetSelection());
-		const bool bEditing = Session.WantsPlotGhostsDrawn();
-		Found->ShowPlotGhosts(bEditing || Reveal.IsSet(), bEditing ? FEntityInstanceId() : Reveal);
+		const bool bPlotToolLit = Session.WantsPlotGhostsDrawn();
+		Found->ShowPlotGhosts(bPlotToolLit || Reveal.IsSet(), bPlotToolLit ? FEntityInstanceId() : Reveal);
 	}
 
 	if (Target == nullptr)
@@ -1644,7 +1420,7 @@ namespace
 {
 	UOpsRuntime* RuntimeFor(const APlayerController& PC)
 	{
-		UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(PC.GetWorld());
+		UOpsRuntime* Runtime = OpsRuntimeResolver::Resolve(PC.GetWorld());
 		if (Runtime == nullptr)
 		{
 			// Says so rather than silently doing nothing: "pressing P does nothing" is the

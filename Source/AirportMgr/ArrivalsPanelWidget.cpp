@@ -10,7 +10,6 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Present/OpsRuntime.h"
-#include "Present/OpsRuntimeSubsystem.h"
 #include "UI/UiRow.h"
 #include "UIStyle.h"
 
@@ -55,7 +54,7 @@ void UArrivalsPanelWidget::TickPanel(float DeltaTime)
 
 void UArrivalsPanelWidget::Refresh()
 {
-	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	UOpsRuntime* Runtime = OpsRuntime();
 	if (Arrivals == nullptr || Runtime == nullptr || Runtime->GetFlightBoard() == nullptr || Runtime->GetClock() == nullptr)
 	{
 		// The editor mode has no game instance and so no runtime - a play-mode panel, like the inbox.

@@ -54,7 +54,7 @@ namespace GridOverlayFixture
 
 		FBuildSessionTunables Tunables = TestWorld.Actor->MakeTunables(10000.0);
 		Tunables.GuideSources.GridStep = Step;
-		const FToolContext Context = Session.MakeContext(TestWorld.Actor, Where, Tunables, false, false);
+		const FToolContext Context = Session.MakeContext(TestWorld.Actor, Where, Tunables);
 		OutCentre = Context.GuidedCursor();
 		GridOverlay::Describe(Context, Out);
 		return true;
@@ -145,7 +145,7 @@ bool FGridOverlayTurnsWithTheFrameTest::RunTest(const FString& Parameters)
 		FBuildSessionTunables Tunables = TestWorld.Actor->MakeTunables(10000.0);
 		Tunables.GuideSources.GridStep = EGridStep::FiveMetres;
 		Tunables.GuideSources.GridOrientation = Orientation;
-		const FToolContext Context = Session.MakeContext(TestWorld.Actor, Dir * 1234.0 + Perp * 1000.0, Tunables, false, false);
+		const FToolContext Context = Session.MakeContext(TestWorld.Actor, Dir * 1234.0 + Perp * 1000.0, Tunables);
 		GridOverlayFixture::FLineSink Sink;
 		GridOverlay::Describe(Context, Sink);
 		if (!TestTrue(TEXT("pieces drawn"), Sink.Lines.Num() > 0)) { return false; }

@@ -95,7 +95,7 @@ struct FInspectorCardView
  */
 struct FInspectorCardInput
 {
-	/** The ops runtime: the controller's, else the subsystem's; null for none (a headless test's world has no game instance). */
+	/** The ops runtime: the world's (OpsRuntimeResolver::Resolve); null for none (a headless test's world has no game instance). */
 	const UOpsRuntime* Runtime = nullptr;
 	/** Never null - the widget hides before asking when there is no airport. */
 	const ARoadNetworkActor* Target = nullptr;
@@ -282,6 +282,12 @@ struct FAircraftNames
 {
 	FString Registration;
 	FString Airline;
+	/**
+	 * The selected agent's SERVICE VEHICLE, named as the depot card names it - "Bowser #7": its kind's name (FServiceFleet::NameOf) and
+	 * its VEHICLE id, not the type code and the AGENT id ("FUEL  #37") the title printed before #478. Empty for an agent no vehicle owns.
+	 * Looked up with the registration, before the gate: it is a display field, and the job board's fleet is what answers it.
+	 */
+	FString Vehicle;
 	FString Blocker;
 	FString Partners;
 	/** The hold's game-time duration as printed ("12 min") - it moves while Phase, since the hold line left Airside without a
@@ -347,6 +353,7 @@ struct FAircraftDisplay
 	FString Turnaround;
 	FString Registration;
 	FString Airline;
+	FString Vehicle;
 	FString Blocker;
 	FString Partners;
 	FString Waited;
@@ -412,10 +419,19 @@ public:
 	static double GameSecondsOfStall(double StalledSeconds, const USimClock& Clock);
 
 	/**
-	 * How the card names another agent: its flight's registration, else "<type> #<id>" (the title's own fallback - a service
-	 * vehicle reads "FUEL #7"), else "aircraft <id>" for one already gone.
+	 * How the card names another agent: its flight's registration, else its service vehicle as the depot card names it ("Bowser #7" -
+	 * the kind's name and the VEHICLE id, FServiceFleet::NameOf; #478), else "<type> #<id>" (the title's own fallback for what no
+	 * vehicle owns), else "aircraft <id>" for one already gone. Jobs is the job board that knows the vehicles; null asks none.
+	 * ENFORCED BY: AirportMgr.Inspector.Card.ServiceVehicleTitleNamesTheVehicle
 	 */
-	static FString NameOfAgent(const UFlightBoard* Flights, const UGroundTraffic* Traffic, int32 AgentId);
+	static FString NameOfAgent(const UFlightBoard* Flights, const UGroundTraffic* Traffic, const UJobBoard* Jobs, int32 AgentId);
+
+	/**
+	 * A service vehicle's name - "Bowser #7" - as the card titles it and other cards name it: its kind's name and its vehicle id. Empty
+	 * when Jobs is null or no vehicle of it has AgentId. THE ONE COMPOSITION, so the title and a hold line naming the same vehicle
+	 * cannot differ.
+	 */
+	static FString NameOfVehicle(const UJobBoard* Jobs, int32 AgentId);
 
 	/** How many times the sentences were composed, as opposed to asked for (issue #309's gate, FAircraftDisplay). */
 	int32 ComposeCount() const { return ComposeCalls; }

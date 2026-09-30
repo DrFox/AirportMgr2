@@ -75,9 +75,9 @@ bool FBuildVerbRegistryTest::RunTest(const FString& Parameters)
 	}
 
 	// 4. Edit's IsEnabled reads FToolRegistration::EditHandles - greyed when the lit tool
-	// exposes nothing (Select, index 0) and lit when it does (Taxiway, index 1) - the exact rule
-	// ARoadBuildController::ActiveToolHasEditHandles already applies for PIE's own bar, now
-	// reachable from the registry directly rather than only through a controller method.
+	// exposes nothing (Select, index 0) and lit when it does (Taxiway, index 1) - the rule PIE's own bar
+	// applies through this registry entry, reachable from the registry directly rather than through a
+	// controller method (ARoadBuildController::ActiveToolHasEditHandles, which had no other caller, went in #448).
 	const FBuildVerbRegistration* Edit = nullptr;
 	for (const FBuildVerbRegistration& Verb : Registry)
 	{

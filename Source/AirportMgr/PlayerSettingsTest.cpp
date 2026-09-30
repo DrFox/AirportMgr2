@@ -170,7 +170,7 @@ bool FSettingsEndPlayTest::RunTest(const FString& Parameters)
 	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
 	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
-	UBuildHudLayer* Hud = C->GetHudForTest();
+	UBuildHudLayer* Hud = C->GetHud();
 	Hud->WindowHost = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
 	Hud->SettingsPanel = CreateWidget<USettingsPanelWidget>(TestWorld.World, USettingsPanelWidget::StaticClass());
 	if (!TestTrue(TEXT("a host and a Settings panel"), Hud->WindowHost != nullptr && Hud->SettingsPanel != nullptr)) { return false; }

@@ -14,8 +14,6 @@
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
 #include "Tool/Selection.h"
-#include "Model/AgentRescue.h"
-#include "Model/FacilityPurchases.h"
 #include "RoadBuildController.generated.h"
 
 class FGamePlayerSettingsSink;
@@ -25,9 +23,7 @@ struct FSnapToggleRegistration;
 class AAirsideBuildingsActor;
 class ARoadNetworkActor;
 class UAircraftType;
-class UOpsRuntime;
 struct FAirframe;
-struct FStandFacts;
 class UBuildCameraComponent;
 class UBuildHudLayer;
 class URoadEditFacade;
@@ -46,6 +42,15 @@ class URoadEditFacade;
  *
  * It lives in the game module rather than the Airside plugin because a PlayerController
  * is game-framework glue. The plugin must not depend on the game.
+ *
+ * REGROWN, AND SPLIT AGAIN by issue #448: 105 public methods by 2026-09-30, most of them selection verbs and window toggles that
+ * existed because FBuildActionContext (BuildActions.h) handed a verb no selection and no argument - so every verb on a selection
+ * was forced back through a forwarder here. The context carries both now (Selection, Arg), plus the HUD and the runtime, and
+ * those verbs bind straight to what they act on (BuildActions.cpp). What stays here is what needs the DRIVER: the session, the
+ * target, the gesture, the camera's preference, the per-frame caches. THE PUBLIC SURFACE IS A CLOSED LIST: Check-Architecture
+ * rule 54 names every public method this header may declare and fails a new one, and fails an AirportOps Model/ include - the
+ * controller is game-framework glue over Airside's model, not over the ops layer, whose runtime it reaches through
+ * OpsRuntimeResolver.
  *
  * SPLIT by issue #94: this class carried seven concerns as roughly 40 UPROPERTYs and a .cpp
  * to match - the view rig, the watch rig, four widget classes (a fifth, the ledger panel,
@@ -244,7 +249,7 @@ public:
 	 */
 	const FToolReadout& GetToolReadout() const { return ToolReadoutCollector.Readout; }
 
-	/** Drives one frame's collection without a whole tick. Same precedent as GetHudForTest.
+	/** Drives one frame's collection without a whole tick. Same precedent as PlayerTickForTest.
 	 *  Refreshes FrameContext first - issue #167 made CollectToolReadout read that member
 	 *  rather than build its own, and this must still work standalone, with no PlayerTick
 	 *  to have built it. */
@@ -304,6 +309,9 @@ public:
 
 	/** A left press at a screen point, without reading a real mouse - OnActionKeyForTest's precedent. */
 	void PressPrimaryForTest(FVector2D At) { PressAt(At); }
+	/** The mouse moving to a screen point with the button held - UpdateDrag's step without reading a real mouse, so a headless test
+	 *  can put a gesture in flight (a press past DragThresholdPixels is a drag). PressPrimaryForTest's precedent. */
+	void MovePrimaryForTest(FVector2D To) { AdvanceDrag(To); }
 	bool IsPrimaryPressedForTest() const { return Gesture.IsPressed(); }
 	/** EndPlay without tearing the world down - PlayerTickForTest's precedent. */
 	void EndPlayForTest() { EndPlay(EEndPlayReason::EndPlayInEditor); }
@@ -341,11 +349,6 @@ public:
 	 *  FBuildSession::WantsRoadNodesDrawn. Read by ARoadBuildHUD every frame. */
 	bool WantsRoadNodesDrawn() const;
 
-	/** Whether the LIT tool exposes anything to edit - what greys the Edit button out, so
-	 *  the bar answers "why can I not edit this" rather than lighting over a mode that would
-	 *  do nothing. Reads FToolRegistration::EditHandles, the one list. */
-	bool ActiveToolHasEditHandles() const;
-
 	/** Forwards to the camera component - see UBuildCameraComponent::IsWatchingAgent. */
 	bool IsWatchingAgent() const;
 	bool IsGuidelineOverlayOn() const { return bShowGuidelines; }
@@ -354,7 +357,6 @@ public:
 	bool HasNetworkContent() const;
 	bool HasRunway() const;
 	bool HasAgent() const;
-	bool HasOpsRuntime() const;
 
 	/** How many times HasRunway has actually re-walked the network (AirsideCapability::
 	 *  Summarise), as opposed to how many times it was asked - the seam that measures the
@@ -372,19 +374,20 @@ public:
 	// refactor contract's "every UFUNCTION and interface virtual stays reachable" clause,
 	// which this removal does not fall under.
 
-	/** Open or close the ledger panel. The game.ledger action's verb. */
-	void ToggleLedger();
+	// THE LEDGER, ALERTS AND LAND WINDOWS' Toggle/IsShowing pairs, and the alert count, WERE HERE until #448: they are
+	// UBuildHudLayer::ToggleWindow / IsWindowShowing / AlertCount now, which BuildActions.cpp's rows reach through
+	// FBuildActionContext::Hud. Settings is the one that stays, because opening it does something only the driver can do.
 
-	/** Whether the ledger panel is open, so the bar's button can light itself. */
-	bool IsLedgerShowing() const;
-
-	/** The alerts window (ops alerts spec 2026-09-29) - the bar's Alerts button. */
-	void ToggleAlerts();
-	bool IsAlertsShowing() const;
-	/** How many standing alerts the window holds - the button's count. 0 with no HUD. */
-	int32 AlertCount() const;
-
-	/** Open Settings, or cancel it if open. The game.settings action's verb (Escape, the gear). */
+	/**
+	 * Open Settings, or close it if open. The game.settings action's verb (Escape, the gear). The one window toggle that is still
+	 * here (see above): OPENING it drops a drag in flight, which only the driver can.
+	 *
+	 * ONLY A DRAG IS DROPPED (#448) - not the tool, not the selection. This used to run OnCancelGesture, the two-level right-click
+	 * cancel, so the moment the dialog opened the Select tool cleared the selection and an idle build tool was put down to Select;
+	 * a cancel is what a right-click MEANS, and opening a dialog is not one. A press that has not become a drag is let go (so its
+	 * release builds nothing behind the scrim); a drag that has is abandoned through the tool's own stage-cancel.
+	 * ENFORCED BY: AirportMgr.Actions.OpeningSettingsKeepsToolAndSelection, AirportMgr.Actions.OpeningSettingsDropsADragInFlight
+	 */
 	void ToggleSettings();
 
 	/** Whether Settings is open, so the bar's gear can light itself. */
@@ -395,12 +398,6 @@ public:
 
 	/** Whether Action's key must wait: a modal is up and it is not Settings' own. */
 	bool KeyWaitsForModal(const FBuildAction& Action) const;
-
-	/** Open or close the Land panel. The aircraft.land action's verb (key 7). */
-	void ToggleLandPanel();
-
-	/** Whether the Land panel is open, so the bar's Land button can light itself. */
-	bool IsLandPanelShowing() const;
 
 	/** Where the build view is looking, on the road plane - forwards to the camera component.
 	 *  The Land panel judges its rows against the runway nearest this, as the landing does. */
@@ -470,9 +467,14 @@ public:
 	 */
 	void ToggleWatchAgent();
 
-	// --- Selection (the inspector's verbs) --------------------------------------------
+	// --- Selection ----------------------------------------------------------------------
+	//
+	// THE SELECTION VERBS WERE HERE until #448 (depart, the runway flip and mode, unstick, the depot's quote / buy module / buy
+	// vehicle / sell, and the selected agent / stand / runway facts they read) - twenty-odd forwarders, each reading this class's
+	// session to hand a selection to the thing that owned the work. They bind to their owners in BuildActions.cpp now, reading
+	// FBuildActionContext::Selection; what a selection MEANS to a card is the card's (InspectorCards.h).
+
 	const FSelection& GetSelection() const { return Session.GetSelection(); }
-	bool HasSelectedAircraft() const { return GetSelection().Kind == ESelectionKind::Aircraft; }
 
 	/**
 	 * An alert's "Go" (ops alerts spec 2026-09-29 §3): move the camera to the alert's subject and select
@@ -484,51 +486,20 @@ public:
 	 * ENFORCED BY: AirportMgr.UI.Alerts.GoToSomethingGoneMovesNothing
 	 */
 	bool SelectAndFocus(const struct FAlertFocus& Focus);
-	/** The selected aircraft's facts, or false when nothing is selected or it has gone. */
-	bool SelectedAgentFacts(FAgentFacts& Out) const;
 
 	/**
-	 * The same facts as SelectedAgentFacts, computed AT MOST ONCE PER FRAME regardless of how
+	 * The selected aircraft's facts, computed AT MOST ONCE PER FRAME regardless of how
 	 * many callers ask - issue #187. Before this, the bar's selection.depart row
-	 * (CanDepartSelected, below) and UInspectorWidget::Refresh each called
+	 * and UInspectorWidget::Refresh each called
 	 * InspectFacts::DescribeAgent independently, every tick, for the one selected aircraft -
 	 * three FString allocations apiece, twice over, for facts that cannot have changed between
 	 * the two calls in the same frame. TFrameValue rather than a hand-rolled GFrameCounter
 	 * check: the engine already has exactly this cache-for-one-frame primitive.
+	 *
+	 * FALSE when nothing is selected, the selection is not an agent, or it has gone. HERE AND NOT IN THE ROW because the cache is
+	 * per driver per frame: a context is built per poll and could not keep it.
 	 */
 	bool SelectedAgentFactsThisFrame(FAgentFacts& Out) const;
-	bool SelectedStandFacts(FStandFacts& Out) const;
-	bool CanDepartSelected() const;
-	/** Depart the selected aircraft; logs the planner's answer. */
-	void DepartSelected();
-
-	/** A runway is selected (ESelectionKind::Runway) and still describes - the card and the verb. */
-	bool SelectedRunwayFacts(FRunwayCardFacts& Out) const;
-	bool CanFlipSelectedRunway() const { FRunwayCardFacts Unused; return SelectedRunwayFacts(Unused); }
-	/**
-	 * Change the selected runway's direction in use to its other end, through the actor's
-	 * SetRunwayFacts (so it is one undo step and logs "Runway 09/27 in use: 27 (was 09)").
-	 * Flights already planned finish as planned; the next plan reads the new direction
-	 * (ruling 2, spec 2026-09-28-runway-in-use).
-	 */
-	void FlipSelectedRunway();
-
-	/**
-	 * Step the selected runway's ERunwayUse on - mixed, arrivals only, departures only, mixed
-	 * (RunwayUse::Next) - through the actor's SetRunwayFacts, FlipSelectedRunway's path: one undo
-	 * step, logged "Runway at segment N takes: arrivals only (was mixed)". Planned flights keep
-	 * their plan; the next plan reads it. Enabled whenever the flip is (CanFlipSelectedRunway).
-	 */
-	void CycleSelectedRunwayUse();
-
-	/**
-	 * THE UNSTICK MENU'S VERBS (spec 2026-09-29-unstick-agent) - FORWARDERS to UOpsRuntime::CanUnstick /
-	 * Unstick with the selected agent, so the inspector's lines and the action they run are the one
-	 * decision UAgentRescue makes. Refused ("Nothing selected") with no agent selected or no runtime
-	 * (a headless test's world has none).
-	 */
-	FUnstickVerdict CanUnstickSelected(EUnstickAction Action) const;
-	void UnstickSelected(EUnstickAction Action);
 
 	/**
 	 * The selection.unstick row's Execute: ASK the inspector to open its menu. A COUNTER, not a bool the
@@ -556,34 +527,6 @@ public:
 	 */
 	static FEntityInstanceId RevealedDepotFor(const ARoadNetworkActor* InTarget, const FSelection& Selection);
 
-	/**
-	 * THE DEPOT CARD'S VERBS (facility-upgrades spec §4) - FORWARDERS to UOpsRuntime with the selected
-	 * depot, the Unstick verbs' shape. The quote is asked fresh on every call, so an enabled check and the
-	 * command it guards read the same state. Refused (logged) with no depot selected or no runtime.
-	 */
-	FEntityInstanceId SelectedFacility() const;
-	FFacilityQuote QuoteSelectedFacility() const;
-	/** The quote's FIRST module offer - the only one this slice (the shed). A second becomes a menu. */
-	bool CanBuySelectedModule() const;
-	void BuySelectedModule();
-	/** The card's buy menu chooses, then runs selection.buy_vehicle - the row cannot carry the type. */
-	void ChooseVehicleToBuy(FName TypeCode) { ChosenVehicleType = TypeCode; }
-	bool CanBuyChosenVehicle() const;
-	void BuyChosenVehicle();
-	/** The fleet row's first click arms, its second runs selection.sell_vehicle. 0 disarms. */
-	void ArmSellVehicle(int32 VehicleId) { ArmedSellVehicle = VehicleId; }
-	int32 GetArmedSellVehicle() const { return ArmedSellVehicle; }
-	bool CanSellArmedVehicle() const;
-	void SellArmedVehicle();
-
-	/**
-	 * The ops runtime the depot verbs forward to: the one SetOpsRuntimeForTest gave, else the game
-	 * instance's. A headless world has no game instance, so without the override the verbs could
-	 * never be driven end to end by a test.
-	 */
-	UOpsRuntime* GetOpsRuntime() const;
-	/** See GetOpsRuntime. SetTargetForTest's precedent. */
-	void SetOpsRuntimeForTest(UOpsRuntime* InRuntime) { OpsRuntimeOverride = InRuntime; }
 	/** Writes the session's selection as a Select-tool click would - a headless test has no screen to
 	 *  pick from. PlayerTickForTest's precedent. */
 	void SelectForTest(const FSelection& InSelection);
@@ -609,11 +552,11 @@ public:
 	/** G: show or hide the guideline overlay. */
 	void OnToggleGuidelines();
 
-	/** The widget layer this instance owns, or null before construction has run. For a test
-	 *  that CreateDefaultSubobject was not dropped - same precedent as SessionForTest,
-	 *  GestureForTest and ResolveProfileForTest. The camera component needs no equivalent:
-	 *  it is an actual UActorComponent, so FindComponentByClass already answers that. */
-	UBuildHudLayer* GetHudForTest() const { return Hud; }
+	/** The widget layer this instance owns, or null before construction has run. What FBuildActionContext hands a window verb, and
+	 *  what a test asks to prove CreateDefaultSubobject was not dropped. (GetHudForTest until #448: a production reader through a
+	 *  ForTest name is a name that lies.) The camera component needs no equivalent: it is an actual UActorComponent, so
+	 *  FindComponentByClass already answers that. */
+	UBuildHudLayer* GetHud() const { return Hud; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -631,8 +574,17 @@ private:
 	/** Left button up: a drag ends, or - if it never became one - it was a click. */
 	void OnPrimaryReleased();
 
-	/** Promote a held press to a drag once it has travelled, and feed the tool. */
+	/** Promote a held press to a drag once it has travelled, and feed the tool. Reads the mouse, then AdvanceDrag. */
 	void UpdateDrag();
+
+	/** UpdateDrag's step at a known mouse position - the seam MovePrimaryForTest drives. */
+	void AdvanceDrag(FVector2D Mouse);
+
+	/**
+	 * A modal has opened: let go of a press in progress and abandon a drag in flight - and ONLY that (see ToggleSettings). The tool's
+	 * own stage-cancel, never the two-level right-click cancel, so the tool stays lit and the selection stays selected.
+	 */
+	void DropGestureForModal();
 
 	/**
 	 * One frame's readout from the active tool.
@@ -718,6 +670,12 @@ private:
 
 	/** True while Ctrl is held: the gesture means remove rather than build. */
 	bool IsRemoveHeld() const;
+
+	/**
+	 * Every held key and the cursor's pick, read ONCE into the session's FBuildInputState (#448) - the one place this driver reads them,
+	 * for MakeToolContext and PlayerTick's frame context both. A pin: Check-Architecture rule 56 counts IsInputKeyDown(EKeys::LeftShift).
+	 */
+	FBuildInputState ReadInputState() const;
 
 	/** The agent whose drawn body the cursor is over (nearest first), else the one whose
 	 *  projected position is nearest the cursor within AgentPickPixels, else 0. */
@@ -984,10 +942,8 @@ private:
 	/** See RequestUnstickMenu. */
 	int32 UnstickMenuRequests = 0;
 
-	/** See ChooseVehicleToBuy / ArmSellVehicle. Session state, never saved. */
-	FName ChosenVehicleType;
-	int32 ArmedSellVehicle = 0;
-
-	/** See SetOpsRuntimeForTest. Null in play: GetOpsRuntime asks the game instance. */
-	UPROPERTY(Transient) TObjectPtr<UOpsRuntime> OpsRuntimeOverride;
+	// ChosenVehicleType, ArmedSellVehicle and OpsRuntimeOverride WERE HERE until #448. The first two were the inspector's card state
+	// parked on the PlayerController because a BuildActions row could not carry an argument (FBuildAction::TryRunWith carries it
+	// now, so the row holds what is armed and nothing else does); the third was one of five ways to reach the runtime
+	// (OpsRuntimeResolver is the one).
 };

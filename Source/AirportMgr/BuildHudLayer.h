@@ -16,6 +16,25 @@ class UUiWindowHost;
 class APlayerController;
 
 /**
+ * The floating windows a bar button or a key opens and closes (#448) - ONE enum and ONE toggle on the HUD layer, where each was
+ * a Toggle/IsShowing pair on ARoadBuildController (four pairs, plus the alert count) that forwarded to a panel's own. A fifth
+ * window adds a case here and a name in the table, not two more controller methods.
+ *
+ * Settings is one of them, but its OPENING has a driver-side effect the others lack (it drops a drag in flight), which is why
+ * ARoadBuildController::ToggleSettings still exists and calls this.
+ */
+enum class EHudWindow : uint8
+{
+	Ledger,
+	Alerts,
+	Land,
+	Settings,
+
+	/** How many windows there are - NOT one. Sizes the name table, whose static_assert fails a window added with no name. */
+	Count
+};
+
+/**
  * Owns the six HUD widgets a build driver shows, and the one recipe that creates each of
  * them the same way - see CreateConfiguredWidget.
  *
@@ -122,6 +141,19 @@ public:
 	 * add widgets to a viewport, can put the widgets in place and prove the wiring.
 	 */
 	void WireWindows();
+
+	/**
+	 * Opens Window, or closes it if open, and logs it ("Ledger panel opened", "Alerts window closed (3 alert(s))") - the one toggle
+	 * every window's bar button and key runs. Does nothing, and says nothing, for a window this layer has no panel for: a
+	 * headless test builds only what it needs, and the editor mode builds none.
+	 */
+	void ToggleWindow(EHudWindow Window);
+
+	/** Whether Window is open, so its bar button can light. False for a window this layer has no panel for. */
+	bool IsWindowShowing(EHudWindow Window) const;
+
+	/** How many standing alerts the alerts window holds - the Alerts button's count. 0 with no panel. */
+	int32 AlertCount() const;
 
 private:
 	/**

@@ -4,6 +4,7 @@
 #include "Entities/AircraftType.h"
 #include "LandAircraftPanelWidget.h"
 #include "LandChoices.h"
+#include "OpsRuntimeResolver.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
@@ -255,21 +256,21 @@ bool FLandPanelIsKeySevenTest::RunTest(const FString& Parameters)
 	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
-	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHudForTest()))
+	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHud()))
 	{
 		return false;
 	}
 	// A headless controller has no local player, so BeginPlay never created the HUD's
 	// widgets; the panel is put where CreateAll would have put it.
-	C->GetHudForTest()->LandPanel =
+	C->GetHud()->LandPanel =
 		CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
 
 	FBuildActionContext Ctx(*C);
 	Land->Execute(Ctx);
-	TestTrue(TEXT("pressing Land opens the panel rather than landing a default"), C->IsLandPanelShowing());
+	TestTrue(TEXT("pressing Land opens the panel rather than landing a default"), C->GetHud()->IsWindowShowing(EHudWindow::Land));
 	TestTrue(TEXT("and the bar button lights while it is open"), Land->IsActive(Ctx));
 	Land->Execute(Ctx);
-	TestFalse(TEXT("pressing it again closes it"), C->IsLandPanelShowing());
+	TestFalse(TEXT("pressing it again closes it"), C->GetHud()->IsWindowShowing(EHudWindow::Land));
 	return true;
 }
 
@@ -553,7 +554,7 @@ bool FLandWithNoRuntimeLandsNothingTest::RunTest(const FString& Parameters)
 	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
 	C->SetTargetForTest(Actor);
-	if (!TestTrue(TEXT("a headless world has no runtime - the case under test"), C->GetOpsRuntime() == nullptr)) { return false; }
+	if (!TestTrue(TEXT("a headless world has no runtime - the case under test"), OpsRuntimeResolver::Resolve(TestWorld.World) == nullptr)) { return false; }
 	UGroundTraffic* Traffic = Actor->GetGroundTraffic();
 	if (!TestNotNull(TEXT("traffic"), Traffic)) { return false; }
 

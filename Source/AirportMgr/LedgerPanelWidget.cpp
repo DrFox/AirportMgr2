@@ -12,7 +12,6 @@
 #include "Model/Pricing.h"
 #include "Model/SimClock.h"
 #include "Present/OpsRuntime.h"
-#include "Present/OpsRuntimeSubsystem.h"
 #include "UI/UiRow.h"
 #include "UIStyle.h"
 
@@ -111,7 +110,7 @@ void ULedgerPanelWidget::Refresh()
 		return;
 	}
 
-	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	const UOpsRuntime* Runtime = OpsRuntime();
 	const ULedger* Ledger = Runtime != nullptr ? Runtime->GetLedger() : nullptr;
 	const UPricing* Pricing = Runtime != nullptr ? Runtime->GetPricing() : nullptr;
 	const USimClock* Clock = Runtime != nullptr ? Runtime->GetClock() : nullptr;

@@ -9,7 +9,6 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "InspectorLog.h"
-#include "RoadBuildController.h"
 #include "UI/UiButton.h"
 #include "UIStyle.h"
 
@@ -230,22 +229,22 @@ void UInspectorFleetRow::HandleSell()
 
 void UInspectorFacilityRows::OnFleetSell(UInspectorFleetRow& Row)
 {
-	ARoadBuildController* C = Controller();
-	if (C == nullptr)
-	{
-		UE_LOG(LogInspector, Warning, TEXT("Sell click on vehicle %d ignored: no controller"), Row.VehicleId);
-		return;
-	}
 	if (!Row.bArmed)
 	{
-		// ONE ARMED ROW: arming a second row disarms the first, so "click again" is never ambiguous.
+		// ONE ARMED ROW: arming a second row disarms the first, so "click again" is never ambiguous. THE ROW IS WHERE IT IS ARMED:
+		// the controller used to hold the id as well (#448), and a second caller of the sell row ran with it.
 		for (UInspectorFleetRow* Other : FleetRows) { if (Other != nullptr) { Other->bArmed = false; } }
 		Row.bArmed = true;
-		C->ArmSellVehicle(Row.VehicleId);
 		return;
 	}
 	Row.bArmed = false;
-	if (RunActionSource) { RunActionSource(IndexOf(EAction::SellVehicle)); }
+	if (!RunActionSource)
+	{
+		UE_LOG(LogInspector, Warning, TEXT("Sell click on vehicle %d ignored: nothing to run it through"), Row.VehicleId);
+		return;
+	}
+	// THE SECOND CLICK SELLS THIS ROW'S VEHICLE: the id is the argument of the run, not state left for the verb to find.
+	RunActionSource(IndexOf(EAction::SellVehicle), FBuildActionArg::OfId(Row.VehicleId));
 }
 
 TArray<FUiMenuItem> UInspectorFacilityRows::BuyVehicleItems() const
@@ -265,27 +264,25 @@ TArray<FUiMenuItem> UInspectorFacilityRows::BuyVehicleItems() const
 
 void UInspectorFacilityRows::HandleBuyVehicleChosen(int32 Index)
 {
-	ARoadBuildController* C = Controller();
-	if (C == nullptr || !ShownVehicleCodes.IsValidIndex(Index))
+	if (!RunActionSource || !ShownVehicleCodes.IsValidIndex(Index))
 	{
-		UE_LOG(LogInspector, Warning, TEXT("Buy vehicle line %d ignored: no controller or no such line"), Index);
+		UE_LOG(LogInspector, Warning, TEXT("Buy vehicle line %d ignored: nothing to run it through or no such line"), Index);
 		return;
 	}
-	C->ChooseVehicleToBuy(ShownVehicleCodes[Index]);
-	if (RunActionSource) { RunActionSource(IndexOf(EAction::BuyVehicle)); }
+	// THE LINE'S KIND IS THE ARGUMENT of the run - the controller used to be told which kind was chosen one line before the row ran.
+	RunActionSource(IndexOf(EAction::BuyVehicle), FBuildActionArg::OfCode(ShownVehicleCodes[Index]));
 }
 
 void UInspectorFacilityRows::HandleBuyModule()
 {
-	if (RunActionSource) { RunActionSource(IndexOf(EAction::BuyModule)); }
+	if (RunActionSource) { RunActionSource(IndexOf(EAction::BuyModule), FBuildActionArg()); }
 }
 
 void UInspectorFacilityRows::DisarmSale()
 {
-	// BOTH HALVES: the row's caption state and the controller's armed id. The rows need no controller, so
-	// a panel with none still stops saying "click again".
+	// THE ROWS' OWN CAPTION STATE, which is all there is to disarm (#448). It was BOTH HALVES - the row's bArmed and the controller's
+	// armed id - until the id travelled with the run instead; a panel with no rows has nothing armed to forget.
 	for (UInspectorFleetRow* Row : FleetRows) { if (Row != nullptr) { Row->bArmed = false; } }
-	if (ARoadBuildController* C = Controller()) { C->ArmSellVehicle(0); }
 }
 
 void UInspectorFacilityRows::ClickSellForTest(int32 Row)

@@ -300,26 +300,26 @@ bool FGuideSuspendsOnHoldTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the depot tool is active"), Tool)) { return false; }
 
 	// Anchor beside the road and run the frontage east, so a back corner has a guide to get.
-	Tool->OnClick(Session.MakeContext(Actor, FVector2D(0.0, 1000.0), Tunables, false, false));
-	Tool->OnClick(Session.MakeContext(Actor, FVector2D(6000.0, 1000.0), Tunables, false, false));
+	Tool->OnClick(Session.MakeContext(Actor, FVector2D(0.0, 1000.0), Tunables));
+	Tool->OnClick(Session.MakeContext(Actor, FVector2D(6000.0, 1000.0), Tunables));
 
 	TArray<FVector2D> Frontage;
 	static_cast<FPlotPlaceTool*>(Tool)->Quad(
-		Session.MakeContext(Actor, FVector2D(6000.0, 3000.0), Tunables, false, false), Frontage);
+		Session.MakeContext(Actor, FVector2D(6000.0, 3000.0), Tunables), Frontage);
 	if (!TestTrue(TEXT("two corners are pinned"), Frontage.Num() >= 2)) { return false; }
 
 	// A corner dragged near square: with Alt up this is exactly the case stage 1 guides.
 	const FVector2D NearSquare = Frontage[1] + FVector2D(60.0, 2000.0);
 
 	const FToolContext Free = Session.MakeContext(
-		Actor, NearSquare, Tunables, false, false, false);
+		Actor, NearSquare, Tunables);
 	if (!TestTrue(TEXT("with Alt up, the corner is guided"), Free.Guide.bActive))
 	{
 		return false;
 	}
 
 	const FToolContext Held = Session.MakeContext(
-		Actor, NearSquare, Tunables, false, false, true);
+		Actor, NearSquare, Tunables, FBuildInputState{ .bSuspendGuides = true });
 	TestFalse(TEXT("with Alt held, the same drag is offered nothing"), Held.Guide.bActive);
 	TestTrue(TEXT("and the raw cursor is what the tool would use"),
 		Held.GuidedCursor().Equals(NearSquare, 1.0e-6));
@@ -327,7 +327,7 @@ bool FGuideSuspendsOnHoldTest::RunTest(const FString& Parameters)
 	// RELEASING ALT STARTS AFRESH rather than resuming the winner it was holding: the suspended
 	// frame cleared LastGuide, so this is the hysteresis rule being handed an empty previous.
 	const FToolContext Released = Session.MakeContext(
-		Actor, NearSquare, Tunables, false, false, false);
+		Actor, NearSquare, Tunables);
 	TestTrue(TEXT("and releasing Alt gives the guide back"), Released.Guide.bActive);
 
 	return true;

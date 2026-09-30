@@ -6,7 +6,7 @@
 #include "UI/UiMenuButton.h"
 #include "InspectorFacilityRows.generated.h"
 
-class ARoadBuildController;
+struct FBuildActionArg;
 class UInspectorFacilityRows;
 class UPanelWidget;
 class UTextBlock;
@@ -39,8 +39,13 @@ public:
  * the fleet - all filled from the depot card's one quote (FInspectorCardView::Quote).
  *
  * It RENDERS THE QUOTE AND NOTHING ELSE - the spec's rule that the card cannot disagree with the rules. It reports intents
- * through the two callbacks its host sets (a controller to act through, a way to run a BuildActions row) and holds no rule of
- * its own; the inspector's card selection, the Unstick popup and the aircraft verbs are none of its business.
+ * through the one callback its host sets (a way to run a BuildActions row, WITH an argument) and holds no rule of its own; the
+ * inspector's card selection, the Unstick popup and the aircraft verbs are none of its business.
+ *
+ * IT IS WHERE "ARMED" LIVES (#448; ENFORCED BY: AirportMgr.Inspector.SellTakesTwoClicks, AirportMgr.Actions.SellTakesItsVehicleFromTheRow): a fleet row's first click arms ITS row (bArmed, the caption asks again),
+ * its second runs selection.sell_vehicle with the row's vehicle id as the argument, and a menu line runs selection.buy_vehicle with
+ * the line's kind code. The controller used to hold the armed id and the chosen kind beside the row's own flag, "BOTH HALVES" kept
+ * in step by hand, and a second caller of the row ran with whatever was last armed; the argument travels with the run now.
  *
  * The C++ base builds the rows asset-free; a Blueprint subclass restyles through the BindWidgetOptional names. A Blueprint of
  * the inspector that bound these names on UInspectorWidget itself would have lost them in the move: the inspector binds one
@@ -78,11 +83,11 @@ public:
 	void Build(const UUIStyle& Style);
 	bool IsBuilt() const { return Style != nullptr; }
 
-	/** The controller the clicks act through - set by the host, weak-captured there: a lambda held by a child widget that
-	 *  captured a raw pointer to its owner is the shape that dangles the first time either is rebuilt. */
-	TFunction<ARoadBuildController*()> ControllerSource;
-	/** Runs BuildActions() row ActionIndex the way the host runs its own verbs (UInspectorWidget::RunAction: its log lines and all). */
-	TFunction<void(int32 ActionIndex)> RunActionSource;
+	/** Runs BuildActions() row ActionIndex WITH Arg the way the host runs its own verbs (UInspectorWidget::RunActionWith: its log
+	 *  lines and its refusal of a missing controller, and FBuildAction::TryRunWith's gate). Set by the host, weak-captured there: a
+	 *  lambda held by a child widget that captured a raw pointer to its owner is the shape that dangles the first time either is
+	 *  rebuilt. The rows hold no controller of their own - the host is the only thing here that knows one. */
+	TFunction<void(int32 ActionIndex, const FBuildActionArg& Arg)> RunActionSource;
 
 	/**
 	 * Render the purchase rows from Quote and NOTHING ELSE - the spec's rule that the card cannot disagree
@@ -97,7 +102,7 @@ public:
 	 *  card (RebuildFleetRows). */
 	void OnNewCard();
 
-	/** Unarm every fleet row and the controller's armed sale - a new card, a deselect or a rebuild. */
+	/** Unarm every fleet row - a new card, a deselect or a rebuild. Nothing else holds an armed sale. */
 	void DisarmSale();
 
 	/** A fleet row's click - see UInspectorFleetRow. */
@@ -121,6 +126,8 @@ public:
 	void ChooseBuyVehicleForTest(int32 Line);
 	/** Where Build found Action in BuildActions() - INDEX_NONE when the registry has no row by that id. */
 	int32 ActionIndexForTest(EAction Action) const { return ActionIndex[static_cast<int32>(Action)]; }
+	/** Whether fleet row Row's first click has armed it - the only armed state there is (#448). */
+	bool IsArmedForTest(int32 Row) const { return FleetRows.IsValidIndex(Row) && FleetRows[Row] != nullptr && FleetRows[Row]->bArmed; }
 
 private:
 	UPROPERTY() TObjectPtr<const UUIStyle> Style;
@@ -139,5 +146,4 @@ private:
 
 	TArray<FUiMenuItem> BuyVehicleItems() const;
 	void RebuildFleetRows();
-	ARoadBuildController* Controller() const { return ControllerSource ? ControllerSource() : nullptr; }
 };

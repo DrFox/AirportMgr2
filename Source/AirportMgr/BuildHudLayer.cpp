@@ -83,3 +83,63 @@ void UBuildHudLayer::WireWindows()
 	}
 	WindowHost->DockAbove(BuildBar);
 }
+
+namespace
+{
+	/** The words of each window's open/close line, in EHudWindow order - ONE TABLE whose static_assert fails a window added to the
+	 *  enum with no name, the way ActionSectionName's does. The first three are what the controller's own lines said. */
+	constexpr const TCHAR* HudWindowNames[] = { TEXT("Ledger panel"), TEXT("Alerts window"), TEXT("Land panel"), TEXT("Settings") };
+	static_assert(UE_ARRAY_COUNT(HudWindowNames) == static_cast<int32>(EHudWindow::Count),
+		"Every EHudWindow needs a name in HudWindowNames");
+}
+
+void UBuildHudLayer::ToggleWindow(EHudWindow Window)
+{
+	bool bOpen = false;
+	switch (Window)
+	{
+	case EHudWindow::Ledger:
+		if (LedgerPanel == nullptr) { return; }
+		LedgerPanel->Toggle();
+		bOpen = LedgerPanel->IsShowing();
+		break;
+	case EHudWindow::Alerts:
+		if (AlertsPanel == nullptr) { return; }
+		AlertsPanel->Toggle();
+		bOpen = AlertsPanel->IsShowing();
+		break;
+	case EHudWindow::Land:
+		if (LandPanel == nullptr) { return; }
+		LandPanel->Toggle();
+		bOpen = LandPanel->IsShowing();
+		break;
+	case EHudWindow::Settings:
+		if (SettingsPanel == nullptr) { return; }
+		SettingsPanel->Toggle();
+		bOpen = SettingsPanel->IsShowing();
+		break;
+	default:
+		return;
+	}
+	// ONE LINE FOR ALL FOUR, in the words the controller's three used ("Ledger panel opened", "Land panel closed") - and the alerts
+	// window's count, which is what tells a player the badge and the window agree.
+	const FString Count = Window == EHudWindow::Alerts ? FString::Printf(TEXT(" (%d alert(s))"), AlertCount()) : FString();
+	UE_LOG(LogRoadBuild, Log, TEXT("%s %s%s"), HudWindowNames[static_cast<int32>(Window)], bOpen ? TEXT("opened") : TEXT("closed"), *Count);
+}
+
+bool UBuildHudLayer::IsWindowShowing(EHudWindow Window) const
+{
+	switch (Window)
+	{
+	case EHudWindow::Ledger:   return LedgerPanel != nullptr && LedgerPanel->IsShowing();
+	case EHudWindow::Alerts:   return AlertsPanel != nullptr && AlertsPanel->IsShowing();
+	case EHudWindow::Land:     return LandPanel != nullptr && LandPanel->IsShowing();
+	case EHudWindow::Settings: return SettingsPanel != nullptr && SettingsPanel->IsShowing();
+	default:                   return false;
+	}
+}
+
+int32 UBuildHudLayer::AlertCount() const
+{
+	return AlertsPanel != nullptr ? AlertsPanel->AlertCount() : 0;
+}

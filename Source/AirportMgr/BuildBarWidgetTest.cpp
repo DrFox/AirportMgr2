@@ -6,6 +6,8 @@
 #include "Blueprint/UserWidget.h"
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
+#include "Model/Pricing.h"
+#include "OpsRuntimeResolver.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RunwayFacts.h"
 #include "Present/RoadNetworkActor.h"
@@ -398,7 +400,8 @@ bool FBarMenuVerbReachesRuntimeTest::RunTest(const FString& Parameters)
 
 	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	if (!TestNotNull(TEXT("the bar"), Bar)) { return false; }
-	Bar->UseForTest(C, Runtime);
+	OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, Runtime);
+	Bar->UseForTest(C);
 	UUiMenuButton* Menu = Bar->MenuForTest(FName(TEXT("game.airport")));
 	if (!TestNotNull(TEXT("game.airport is a menu on the bar"), Menu)) { return false; }
 	Menu->BuildMenu();
@@ -425,7 +428,7 @@ bool FBarBalanceFollowsALoadTest::RunTest(const FString& Parameters)
 	Runtime->Attach(TestWorld.Actor);
 	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	if (!TestNotNull(TEXT("the bar"), Bar)) { return false; }
-	Bar->UseForTest(nullptr, Runtime);
+	OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, Runtime);
 
 	ULedger* Ledger = Runtime->GetLedger();
 	Ledger->Post(0.0, ELedgerCategory::LandingFee, 1200.0, FText::FromString(TEXT("saved fee")));
