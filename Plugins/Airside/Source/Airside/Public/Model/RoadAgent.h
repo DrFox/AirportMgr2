@@ -743,14 +743,36 @@ public:
 	 *
 	 * ONE PREDICATE FOR THE PLACES THAT ASK: ReplanAt's guard and FDeadlockResolver::CanReplanAtBlockedStep spelled it
 	 * `Phase == Taxiing`, and FDeadlockResolver::AlertCycles spelled it "is an aircraft" - the two answers only
-	 * looked alike while every agent on a route was a taxi. The yield's candidate list asks it too (a reversing truck
-	 * or pushed aeroplane must not give up the hold that makes its manoeuvre whole). AlertCycles drops a cycle that has
-	 * a replannable non-aircraft member and keeps the rest, so if the askers disagreed the alert would promise a way
-	 * out the resolver does not have (or hide a jam it cannot break).
+	 * looked alike while every agent on a route was a taxi. ReplanAt's guard and the yield's candidate list ask it
+	 * directly (a reversing truck or pushed aeroplane must not give up the hold that makes its manoeuvre whole); the
+	 * resolver's candidate test and the alert's filter ask CanBeTurnedAtItsBlock, which is this plus WHERE the agent
+	 * is refused - so the two that decide whether a jam is the player's cannot disagree about who can be turned.
 	 * ENFORCED BY: Check-Architecture.ps1 rule 46 (the resolver's file spells no `Phase == Taxiing`)
 	 * ENFORCED BY: Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (the replannable column names every phase)
 	 */
 	bool IsReplannable() const { return Phase == EAgentPhase::Taxiing; }
+
+	/**
+	 * Whether the deadlock resolver can turn this agent where it stands: replannable (a taxi), and not refused AT A
+	 * REVERSE LEG'S STEP. A truck gate-refused the ground of the reverse leg it is about to arm
+	 * (UGroundTraffic::GateReverseLeg) is Taxiing and stopped with BlockedStep on that step, and the leg is the only
+	 * line off the service point: a replan spliced there would send it forward out of a bay it leaves backwards, so it is
+	 * waited out like a reversing or pushed member (#455). A block that names no step (INDEX_NONE) or a step that is not
+	 * a reverse leg is an ordinary taxi's, and turnable.
+	 *
+	 * THE ONE PREDICATE FOR "CAN THIS MEMBER OF A RING GO ROUND": FDeadlockResolver::CanReplanAtBlockedStep asks it to
+	 * choose a candidate and FDeadlockResolver::AlertCycles asks it to decide whether a ring is the player's. Two
+	 * spellings would let the resolver refuse to turn a truck the alert then counts as a way out - a ring that can wait
+	 * for ever and raises no alert.
+	 * ENFORCED BY: Airside.Model.Traffic.Deadlock.RingOfTwoGateRefusedTrucksIsAnAlert (the alert)
+	 * ENFORCED BY: Airside.Model.Traffic.Deadlock.ResolverDoesNotReplanATruckOutOfItsBay (the resolver)
+	 * ENFORCED BY: Check-Architecture.ps1 rule 46 (both still ask it)
+	 */
+	bool CanBeTurnedAtItsBlock() const
+	{
+		return IsReplannable()
+			&& !(Follower.Plan.Steps.IsValidIndex(BlockedStep) && Follower.Plan.Steps[BlockedStep].bReverseLeg);
+	}
 
 	/** Stable identity for the agent's lifetime, assigned by UGroundTraffic::Admit. 0 means
 	 *  unassigned and is never handed out. Was FAgentSlot::Id before the Mediator moved to

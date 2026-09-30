@@ -67,9 +67,10 @@ struct AIRSIDE_API FDeadlockResolver
 
 	/**
 	 * FindCycles, DROPPING every cycle that has a member the resolver can send round by another route: a member that
-	 * is not an aircraft and IS replannable (FRoadAgent::IsReplannable) - a Taxiing van or truck. What is left is
-	 * every cycle whose members are each an aircraft (replannable or not: an aircraft-only cycle is a layout the
-	 * player must fix whatever the resolver manages) or an agent that cannot be replanned. A member nobody can find
+	 * is not an aircraft and CAN BE TURNED where it stands (FRoadAgent::CanBeTurnedAtItsBlock - the same predicate
+	 * CanReplanAtBlockedStep chooses candidates by) - a Taxiing van or truck not waiting at a bay's reverse leg. What
+	 * is left is every cycle whose members are each an aircraft (replannable or not: an aircraft-only cycle is a layout
+	 * the player must fix whatever the resolver manages) or an agent that cannot be turned. A member nobody can find
 	 * drops the cycle too: a lookup miss must not promote a cycle to an alert. What the ops Deadlock alert shows.
 	 *
 	 * WAS AllAircraftCycles, and the rename is the correction (#455). "A cycle a van is in can be broken by the van

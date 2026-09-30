@@ -2332,12 +2332,16 @@ $ranRules.Add('capability-from-the-view')
 # guard, FDeadlockResolver::CanReplanAtBlockedStep and the alert's filter - and only the first two were ever written
 # that way. The third said "is an aircraft", so a cycle through a truck backing along a bay's leg (which cannot go
 # round) dropped out of the alert for being made of vehicles. Now one predicate; the resolver's file must not spell
-# the phase itself, and its three askers (the candidate test, the alert's filter and the yield's candidate list) and
-# ReplanAt's guard must still ask it. Comments and string literals are stripped first (rule 34's
-# stripper), so a WHY comment can name the banned spelling.
+# the phase itself. Two askers of CanBeTurnedAtItsBlock (IsReplannable plus WHERE the agent is refused: the candidate
+# test and the alert's filter - a second spelling would let them disagree, and a truck gate-refused at its bay's reverse
+# leg that the resolver will not turn but the alert counted as a way out makes a ring of two of them wait for ever with
+# no alert), one asker of IsReplannable in the resolver's file (the yield's candidate list) and ReplanAt's guard in the
+# rebuild file must still ask. Comments and string literals are stripped first (rule 34's stripper), so a WHY comment
+# can name the banned spelling.
 # WHAT NO REGEX SEES: a `switch (Agent.Phase)` that names Taxiing and answers the same question by another route -
 # pinned by Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (the replannable column) and
-# Airside.Model.Traffic.Deadlock.CycleThroughAReversingTruckIsAnAlert (the alert asks what the resolver asks).
+# Airside.Model.Traffic.Deadlock.CycleThroughAReversingTruckIsAnAlert / RingOfTwoGateRefusedTrucksIsAnAlert (the alert
+# asks what the resolver asks).
 $replannableFile = Join-Path $plugin 'Private\Model\GroundTrafficDeadlock.cpp'
 $replannableRebuildFile = Join-Path $plugin 'Private\Model\GroundTrafficRebuild.cpp'
 foreach ($path in @($replannableFile, $replannableRebuildFile)) {
@@ -2347,6 +2351,7 @@ foreach ($path in @($replannableFile, $replannableRebuildFile)) {
 }
 if ((Test-Path $replannableFile) -and (Test-Path $replannableRebuildFile)) {
     $asks = 0
+    $turnAsks = 0
     $lines = Get-Content -LiteralPath $replannableFile
     $inBlock = $false
     for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -2355,9 +2360,13 @@ if ((Test-Path $replannableFile) -and (Test-Path $replannableRebuildFile)) {
             $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf):$($i + 1) spells the phase itself; ask FRoadAgent::IsReplannable, the one place that says who may be turned (#455): $($code.Trim())")
         }
         if ($code -match '\bIsReplannable\s*\(') { $asks++ }
+        if ($code -match '\bCanBeTurnedAtItsBlock\s*\(') { $turnAsks++ }
     }
-    if ($asks -lt 3) {
-        $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf) asks IsReplannable $asks time(s), not the 3 it must (CanReplanAtBlockedStep, AlertCycles and the yield's candidate list) - one has its own copy of the rule again, or rule 46 is stale (#455)")
+    if ($asks -lt 1) {
+        $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf) no longer asks IsReplannable (the yield's candidate list) - it has its own copy of the rule again, or rule 46 is stale (#455)")
+    }
+    if ($turnAsks -lt 2) {
+        $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf) asks CanBeTurnedAtItsBlock $turnAsks time(s), not the 2 it must (CanReplanAtBlockedStep and AlertCycles) - one has its own copy of the rule again, or rule 46 is stale (#455)")
     }
     $replanGuard = $false
     $lines = Get-Content -LiteralPath $replannableRebuildFile

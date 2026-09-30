@@ -521,8 +521,8 @@ public:
 	/**
 	 * Every wait cycle with no member the resolver could send round by another route, right now, as member agent ids -
 	 * FDeadlockResolver::AlertCycles over this model's agents: each member is an aircraft (replannable or not) or an
-	 * agent that cannot be replanned (a reversing truck, a pushed aeroplane - #455); a cycle with a Taxiing van in it is
-	 * dropped. For the ops Deadlock alert: the resolver logs these, and a log line is not
+	 * agent that cannot be turned where it stands (a reversing truck, a pushed aeroplane, a truck waiting at its bay's
+	 * reverse leg - #455); a cycle with a Taxiing van in it is dropped. For the ops Deadlock alert: the resolver logs these, and a log line is not
 	 * something a player sees. Out is reset first.
 	 */
 	void CurrentDeadlocks(TArray<TArray<int32>>& Out) const;

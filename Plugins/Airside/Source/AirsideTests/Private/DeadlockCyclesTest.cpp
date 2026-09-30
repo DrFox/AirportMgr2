@@ -272,6 +272,102 @@ bool FDeadlockYieldSkipsFixedMembersTest::RunTest(const FString&)
 			Occupancy.FindClaim(2, FTrafficResource::OfNode(NodeA)) != nullptr
 			&& Occupancy.FindClaim(3, FTrafficResource::OfNode(NodeB)) != nullptr);
 	}
+	// TWO, GATE-REFUSED: a truck refused at its bay's reverse leg (Taxiing, refused at the reverse step, nothing armed) and a
+	// pushed aeroplane. The truck MAY be the yielder, by intent: IsReplannable is a phase question and it is Taxiing, it has
+	// not armed, so what it holds is the ground AHEAD of its nose - reservations the yield may give back and it will
+	// win again - not a span it is already backing over. The aeroplane keeps its push. (The resolver will still never
+	// TURN it: CanBeTurnedAtItsBlock refuses a block at a reverse step - a different question, asked of a different list.)
+	{
+		FTrafficOccupancy Occupancy;
+		Reserve(Occupancy, 2, NodeA);
+		Reserve(Occupancy, 3, NodeB);
+		TArray<FRoadAgent> Agents;
+		Agents.SetNum(2);
+		Agents[0].Phase = EAgentPhase::Manoeuvring;
+		Wait(Agents[0], 2, NodeB, 3);
+		Agents[1].Class = ETraversalClass::GroundVehicle;
+		Wait(Agents[1], 3, NodeA, 2);
+		Agents[1].Follower.Plan.Steps.SetNum(2);
+		Agents[1].Follower.Plan.Steps[1].bReverseLeg = true;
+		Agents[1].Refuse(1, FTrafficResource::OfNode(NodeA), TNumericLimits<double>::Max(), 2);
+
+		FDeadlockResolver Resolver;
+		Resolver.Resolve(Agents, Index(Agents), FTrafficContext{ *Network, Rules, Occupancy, Reach, Chains, 100.0 }, PlanReResolver);
+		TestEqual(TEXT("a gate-refused Taxiing truck may yield, by intent: it has not armed, and lets go only of ground ahead of it"),
+			Resolver.LastYieldedAgent, 3);
+		TestFalse(TEXT("its reservation is gone"), Occupancy.FindClaim(3, FTrafficResource::OfNode(NodeB)) != nullptr);
+		TestTrue(TEXT("and the pushed aeroplane keeps its push"), Occupancy.FindClaim(2, FTrafficResource::OfNode(NodeA)) != nullptr);
+	}
+	return true;
+}
+
+// A RING OF TWO TRUCKS GATE-REFUSED AT THEIR BAYS IS AN ALERT (issue #455, re-review of #466).
+//
+// A truck refused the ground of the reverse leg it is about to arm (UGroundTraffic::GateReverseLeg) is Taxiing, so
+// IsReplannable says yes - but the leg is the only line off its service point, so the resolver never turns it
+// (CanReplanAtBlockedStep). The alert asked the phase question alone and counted it as a way out: two such trucks, each
+// waiting on the other's ground (occupied, so not a yield), wait for ever and the player heard nothing but a log line
+// every retry window. Both now ask CanBeTurnedAtItsBlock. The CONTROL is the same ring with the blocked steps ordinary
+// taxi steps: two vans that can go round, no alert. And the resolver is run over the ring to show the two agree - it
+// is neither resolved nor yielded, only seen.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeadlockCyclesGateRefusedRingTest, "Airside.Model.Traffic.Deadlock.RingOfTwoGateRefusedTrucksIsAnAlert",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDeadlockCyclesGateRefusedRingTest::RunTest(const FString&)
+{
+	FGuidelineNodeId NodeA;
+	NodeA.Index = 1;
+	FGuidelineNodeId NodeB;
+	NodeB.Index = 2;
+	FTrafficRules Rules;
+
+	// Two Taxiing trucks, each refused at step 1 of a two-step plan whose step 1 is (or is not) a reverse leg.
+	auto Ring = [&](bool bReverseStep)
+	{
+		TArray<FRoadAgent> Agents = DeadlockCyclesAgents({ 2, 1 }, 10.0);
+		for (int32 At = 0; At < 2; ++At)
+		{
+			Agents[At].Class = ETraversalClass::GroundVehicle;
+			Agents[At].Follower.Plan.Steps.SetNum(2);
+			Agents[At].Follower.Plan.Steps[1].bReverseLeg = bReverseStep;
+			Agents[At].Refuse(1, FTrafficResource::OfNode(At == 0 ? NodeA : NodeB), TNumericLimits<double>::Max(), At == 0 ? 2 : 1);
+		}
+		return Agents;
+	};
+
+	TArray<FRoadAgent> Gated = Ring(true);
+	TArray<TArray<int32>> Alerts;
+	FDeadlockResolver::AlertCycles(Gated, DeadlockCyclesIndex(Gated), Rules, Alerts);
+	TestEqual(TEXT("two trucks refused at their bays' reverse legs, each waiting on the other, are an alert (red while only IsReplannable was asked)"),
+		Alerts.Num(), 1);
+
+	TArray<FRoadAgent> Vans = Ring(false);
+	Alerts.Reset();
+	FDeadlockResolver::AlertCycles(Vans, DeadlockCyclesIndex(Vans), Rules, Alerts);
+	TestEqual(TEXT("control: the same ring at ordinary taxi steps is two vans that can go round - no alert"), Alerts.Num(), 0);
+
+	// THE RESOLVER AGREES: over the gated ring, with occupied claims (so it is a deadlock and not a yield), nobody is
+	// replanned and nobody yields - the ring is seen and left, which is exactly what the alert has to tell the player.
+	FTrafficOccupancy Occupancy;
+	{
+		FTrafficClaim Claim;
+		FTrafficClaim Blocker;
+		Claim.AgentId = 2;
+		Claim.Resource = FTrafficResource::OfNode(NodeA);
+		Claim.bOccupied = true;
+		Occupancy.TryClaim(Claim, Blocker);
+		Claim.AgentId = 1;
+		Claim.Resource = FTrafficResource::OfNode(NodeB);
+		Occupancy.TryClaim(Claim, Blocker);
+	}
+	FNodeReachCache Reach;
+	FRunwayChainCache Chains;
+	FPlanReResolver PlanReResolver;
+	URoadNetwork* Network = NewObject<URoadNetwork>();
+	FDeadlockResolver Resolver;
+	Resolver.Resolve(Gated, DeadlockCyclesIndex(Gated), FTrafficContext{ *Network, Rules, Occupancy, Reach, Chains, 100.0 }, PlanReResolver);
+	TestEqual(TEXT("the resolver replans nobody in it"), Resolver.LastResolvedAgent, 0);
+	TestEqual(TEXT("and yields nobody: it is a deadlock, not reservations"), Resolver.Yields, 0);
+	TestEqual(TEXT("it only sees it"), Resolver.CyclesSeen.Num(), 1);
 	return true;
 }
 
