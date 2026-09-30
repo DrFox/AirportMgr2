@@ -30,7 +30,10 @@ enum class ECancelReason : uint8;
  * is recomputed only when something it depends on has moved: the board itself
  * (UFlightBoard::Revision - added/accepted/declined/expired), the guideline graph
  * (URoadNetwork::GetGuidelineRevision - an edit changed the taxiways), or occupancy
- * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or cleared), or the fleet (UJobBoard::GetFleetRevision - a vehicle bought or sold).
+ * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or cleared), or the fleet (UJobBoard::GetFleetRevision - a vehicle
+ * added or withdrawn, AND, since issue #428, every state change of a vehicle: it is dispatched, arrives, serves, heads home, is refilled or a load
+ * resets it. Those transitions change nothing bFuelServable depends on, so the verdict is redone more often than it strictly needs to be; splitting
+ * a composition revision for this from the transition counter the re-bid reads is #443's).
  * Four integer compares replace the search on every frame where none of them moved.
  */
 struct FOfferVerdict
@@ -46,7 +49,9 @@ struct FOfferVerdict
 	uint32 GuidelineAt = 0;
 	uint32 OccupancyAt = 0;
 	/** UJobBoard::GetFleetRevision when judged - a vehicle bought or sold changes bFuelServable
-	 *  (facility-upgrades spec). ENFORCED BY: AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet */
+	 *  (facility-upgrades spec); the counter also moves on every vehicle state change (issue #428), which does not,
+	 *  so a moved FleetAt means "look again", not "the fleet's composition changed" (#443 splits the two).
+	 *  ENFORCED BY: AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet */
 	uint32 FleetAt = 0;
 	bool bValid = false;
 };

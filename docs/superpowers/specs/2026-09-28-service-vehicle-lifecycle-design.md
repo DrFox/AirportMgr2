@@ -78,7 +78,30 @@ Idle --queue non-empty--> NextStep(head)
 ```
 
 Arrival is Airside's `Parked` phase event, routed by agent id. `Serving`/`AtFacility` are
-timed on `USimClock` (game time), `StepStartedAt`/`StepEndsAt` on the vehicle.
+timed on `USimClock` (game time), `StepEndsAt` on the vehicle.
+
+**Amended 2026-09-30 (issue #428), to match the code and to make the state machine checkable:**
+
+- `Idle` is NOT the only state without an agent. `AtFacility` has none either (the refill is at the depot, off the
+  road) - it never did, in the code; the sentence above was wrong from the start.
+- A sixth state, `Deciding`: on the road, with an agent, no job and no trip to the facility chosen yet - a serve
+  just ended, a job was taken from under the vehicle, or it has just been dispatched from home. It is transient by
+  contract (`StartNext` always ends it, the same Step). It replaces the illegal "Serving with no job" that the
+  `(after-serve)` line above spelled implicitly and a per-Step backstop had to catch.
+- The invariant, per state, checked on every transition (`FServiceVehicleLifecycle`, `Model/ServiceVehicleLifecycle.h`):
+
+  | state | agent | job |
+  |---|---|---|
+  | Idle | no | no |
+  | ToJob | yes | yes |
+  | Serving | yes | yes |
+  | ToFacility | yes | no |
+  | AtFacility | no | no |
+  | Deciding | yes | no |
+
+- `ToFacility` also names a STRANDED vehicle (it heads nowhere until the player unsticks it, but its purpose is
+  still home).
+- `StepStartedAt` is gone: written, never read; the job carries the trip's own start.
 
 ### 2.2 Job state
 

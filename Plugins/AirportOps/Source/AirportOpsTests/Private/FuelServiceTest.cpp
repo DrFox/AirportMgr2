@@ -261,6 +261,23 @@ namespace
 		int32 WorstJumpAgent = 0;
 		double WorstJumpAt = 0.0;
 
+		/**
+		 * Every vehicle's (State, AgentId, CurrentJob) invariant, asserted after every Advance and every
+		 * QuietUnresolvedSteps Step (issue #428's pin). WATCHED BY THE FIXTURE for WorstJump's reason: a
+		 * vehicle left in an illegal shape is a defect in a TRANSITION, and every test here drives a vehicle
+		 * through all of them, so one check here covers the whole file instead of each test remembering to.
+		 * Reported through the running test (FAutomationTestFramework::GetCurrentTest), once per fixture - the
+		 * first violation is the cause, and the rest are its echo.
+		 */
+		void CheckVehicleInvariants();
+
+		/**
+		 * Set false by a rig that PLACES vehicles by hand in a state no transition reaches - the re-bid rig's
+		 * "Serving" vehicle with no agent, which exists only to be busy for a chosen time. Every other test
+		 * leaves the check on: a hand-placed vehicle is the exception that names itself.
+		 */
+		bool bCheckVehicleInvariants = true;
+
 		/** Where it went from and to, and which phase it was in on arrival - so the report
 		 *  names the handover rather than only its size. */
 		FVector2D WorstJumpFrom = FVector2D::ZeroVector;
@@ -276,6 +293,7 @@ namespace
 		struct FSeen { FVector2D At = FVector2D::ZeroVector; int32 Phase = -1; };
 		TMap<int32, FSeen> LastSeen;
 		double Watched = 0.0;
+		bool bReportedInvariant = false;
 	};
 
 	void LayLine(URoadNetwork& Net, const FVector2D& From, const FVector2D& To,
@@ -640,6 +658,29 @@ void FFuelFixture::Advance(double Seconds)
 		// so a jump introduced by a redirect only exists on this side of the call.
 		Watched += Step;
 		WatchForJumps();
+		CheckVehicleInvariants();
+	}
+}
+
+void FFuelFixture::CheckVehicleInvariants()
+{
+	if (!bCheckVehicleInvariants || bReportedInvariant || Service == nullptr)
+	{
+		return;
+	}
+	for (const FServiceVehicle& Vehicle : Service->GetVehicles())
+	{
+		// AFTER A STEP a vehicle is never mid-decision, so the settled form applies: Deciding is a violation too.
+		const FString Why = FServiceVehicleLifecycle::Violation(Vehicle, /*bSettled=*/true);
+		if (!Why.IsEmpty())
+		{
+			bReportedInvariant = true;
+			if (FAutomationTestBase* Test = FAutomationTestFramework::Get().GetCurrentTest())
+			{
+				Test->AddError(FString::Printf(TEXT("vehicle %d after a Step at game time %.1f: %s"), Vehicle.Id, Clock->Now(), *Why));
+			}
+			return;
+		}
 	}
 }
 
@@ -2597,6 +2638,9 @@ namespace FuelServiceTest
 		bool Build(double ServeLeft)
 		{
 			Fixture.bSecondStand = true;
+			// THE HAND-PLACED VEHICLE BELOW is "Serving" with no agent - a state no transition reaches, staged only to be busy
+			// for a chosen time - so the fixture's per-Step invariant check (issue #428) does not apply to this rig.
+			Fixture.bCheckVehicleInvariants = false;
 			Fixture.Build(/*bWithRoad=*/true);
 			UJobBoard& Board = *Fixture.Service;
 			Bowser = Board.VehiclesFor(EIcaoCode::C).TypeCode;
@@ -2628,7 +2672,6 @@ namespace FuelServiceTest
 			// RE-FOUND: the job adds above may have moved nothing, but the vehicle array is the board's.
 			FServiceVehicle* Live = const_cast<FServiceVehicle*>(Board.FindVehicle(VehicleA));
 			Live->CurrentJob = ServingJob;
-			Live->StepStartedAt = StartedAt;
 			Live->StepEndsAt = EndsAt;
 			Live->Queue.Add(QueuedJob);
 
@@ -3052,6 +3095,7 @@ namespace FuelServiceTest
 			Fixture.Traffic->Advance(Frame, Fixture.Net);
 			Fixture.Clock->Advance(Frame);
 			Unresolved += Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock) ? 1 : 0;
+			Fixture.CheckVehicleInvariants();
 		}
 		return Unresolved;
 	}
@@ -3069,7 +3113,6 @@ bool FFuelQuietTimedStepDueTest::RunTest(const FString& Parameters)
 	Fixture.Build(/*bWithRoad=*/true);
 	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
 	FServiceVehicle& Vehicle = Fixture.Service->AddVehicleForTest(Bowser, Fixture.Depot, EServiceVehicleState::AtFacility, 0.0);
-	Vehicle.StepStartedAt = Fixture.Clock->Now();
 	Vehicle.StepEndsAt = Fixture.Clock->Now();
 	const int32 VehicleId = Vehicle.Id;
 
@@ -3113,15 +3156,18 @@ bool FFuelQuietIdleWithAQueueTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelQuietServingWithNoJobTest, "AirportOps.Fuel.QuietBoard.ServingWithNoJob",
+	FFuelQuietServeEndSettlesTest, "AirportOps.Fuel.QuietBoard.ServeEndSettlesInOneStep",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FFuelQuietServingWithNoJobTest::RunTest(const FString& Parameters)
+bool FFuelQuietServeEndSettlesTest::RunTest(const FString& Parameters)
 {
-	// PARKED AT A STAND WITH NO DECISION - the final review #1 backstop's state, made directly: a bowser serving an
-	// aircraft has its job finished under it. StartNext sends it home on the next Step (queue empty, not at home), so
-	// the backstop fires once. Only an open PREREQUISITE could hold it there, and nothing populates
-	// FServiceJob::Prerequisites outside a test (2026-09-30) - fuel is the only role.
+	// A SERVE THAT ENDS IS SETTLED IN THE STEP THAT ENDS IT, AND COSTS THE BOARD NOTHING PER FRAME. This was
+	// QuietBoard.ServingWithNoJob, which used to poke a vehicle into "Serving with no job" - the
+	// final review #1 backstop's state - and assert the backstop cleared it in one Step. That state is no longer
+	// representable (issue #428: the serve's end leaves the vehicle Deciding, StartNext always settles it, the fuel
+	// fixture asserts it), so there is nothing to poke; what is left to guard is the property the backstop was measured
+	// by: after the serve ends, no Step is left unresolved for want of a decision. The blocked-decision case is
+	// AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob.
 	FFuelFixture Fixture;
 	Fixture.Build(/*bWithRoad=*/true);
 	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
@@ -3131,24 +3177,21 @@ bool FFuelQuietServingWithNoJobTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("the bowser starts serving"), Fixture.AdvanceUntil([&]
 		{
 			const FServiceVehicle* V = Fixture.Service->GetVehicles().FindByPredicate(
-				[](const FServiceVehicle& Each) { return Each.State == EServiceVehicleState::Serving && Each.CurrentJob != 0; });
+				[](const FServiceVehicle& Each) { return Each.State == EServiceVehicleState::Serving; });
 			VehicleId = V != nullptr ? V->Id : 0;
 			return VehicleId != 0;
 		}, 240.0))) { return false; }
+	if (!TestTrue(TEXT("and its serve ends"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Fixture.Service->FindVehicle(VehicleId);
+			return V != nullptr && V->State != EServiceVehicleState::Serving;
+		}, 600.0))) { return false; }
 
-	FServiceVehicle* Serving = const_cast<FServiceVehicle*>(Fixture.Service->FindVehicle(VehicleId));
-	const int32 ServingJob = Serving->CurrentJob;
-	if (FServiceJob* Job = const_cast<FServiceJob*>(Fixture.Service->GetJobs().FindByPredicate([ServingJob](const FServiceJob& Each) { return Each.Id == ServingJob; })))
-	{
-		Job->State = EServiceJobState::Done;
-		Job->QuantityOwed = 0.0;
-	}
-	Serving->CurrentJob = 0;
-
-	const int32 Unresolved = FuelServiceTest::QuietUnresolvedSteps(Fixture, 300);
-	TestTrue(FString::Printf(TEXT("a jobless vehicle at a stand is unresolved for at most one Step (%d of 300)"), Unresolved), Unresolved <= 1);
 	const FServiceVehicle* After = Fixture.Service->FindVehicle(VehicleId);
-	TestTrue(TEXT("and it has gone for home"), After != nullptr && After->State != EServiceVehicleState::Serving);
+	TestTrue(TEXT("it has gone for home the same Step - not left at the stand"),
+		After != nullptr && After->State == EServiceVehicleState::ToFacility && After->AgentId != 0);
+	const int32 Unresolved = FuelServiceTest::QuietUnresolvedSteps(Fixture, 300);
+	TestTrue(FString::Printf(TEXT("and nothing after it is unresolved every frame (%d of 300)"), Unresolved), Unresolved <= 2);
 	return true;
 }
 
@@ -3171,6 +3214,432 @@ bool FFuelQuietNoVehiclesTest::RunTest(const FString& Parameters)
 		static_cast<int32>(Fixture.Service->GetJobs()[0].Why), static_cast<int32>(EServiceRefusal::NoVehicles))) { return false; }
 	const int32 Unresolved = FuelServiceTest::QuietUnresolvedSteps(Fixture, 300);
 	TestTrue(FString::Printf(TEXT("a depot with no vehicles leaves the board quiet (%d of 300 Steps unresolved)"), Unresolved), Unresolved <= 1);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// THE VEHICLE LIFECYCLE'S PINS (issue #428). FFuelFixture asserts every vehicle's (State, AgentId, CurrentJob)
+// invariant after every Step (CheckVehicleInvariants) - these three drive the paths that used to leave a vehicle
+// in a shape no state describes, or leave part of its work on it.
+namespace FuelServiceTest
+{
+	/**
+	 * Every LogAirportOps line at WARNING verbosity for as long as it exists (RAII). Not FLogLineSpy: that keeps Log
+	 * verbosity only (AirsideTestWorld.h), and the lines these tests look for - "lost its agent" - are Warnings, so
+	 * asserting their absence through it passes with them printed (the trap the 2026-09-27 note at the
+	 * MidRouteGetsHome tests documents). UNBUFFERED (CanBeUsedOnMultipleThreads) for FLogLineSpy's #216 reason: the
+	 * dedicated log thread would otherwise deliver a line after the spy is gone. ArrivalQueuePassTest's
+	 * FSafetyWarningSpy is the precedent. Every test using it runs a POSITIVE CONTROL first - a case that must print the
+	 * line - so an absence means something.
+	 */
+	struct FWarningSpy : public FOutputDevice
+	{
+		TArray<FString> Lines;
+		FWarningSpy() { GLog->AddOutputDevice(this); }
+		virtual ~FWarningSpy() override { GLog->RemoveOutputDevice(this); }
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			if (Category == FName(TEXT("LogAirportOps")) && (Verbosity & ELogVerbosity::VerbosityMask) == ELogVerbosity::Warning)
+			{
+				Lines.Add(V);
+			}
+		}
+		int32 CountContaining(const TCHAR* Text) const
+		{
+			int32 Count = 0;
+			for (const FString& Line : Lines)
+			{
+				Count += Line.Contains(Text) ? 1 : 0;
+			}
+			return Count;
+		}
+	};
+
+	/**
+	 * ONE bowser serving the first of two aircraft, the second's job queued behind it: a slow pump keeps the
+	 * first serve running while the second aircraft taxis in, exactly as RunTwoJobs stages it, and the rig waits
+	 * for the state it names.
+	 */
+	struct FQueuedBowser
+	{
+		FFuelFixture Fixture;
+		int32 VehicleId = 0;
+		int32 FirstJob = 0;
+		int32 SecondJob = 0;
+
+		bool Build(FAutomationTestBase& Test)
+		{
+			Fixture.bSecondStand = true;
+			Fixture.Build(/*bWithRoad=*/true);
+			const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+			Fixture.Service->DefaultFleetTypes = { Bowser };
+			Fixture.Service->VehicleSpecs.Add(Bowser, FFuelVehicleSpec(10000.0, 2.0));
+			const int32 First = Fixture.ParkAircraft();
+			const int32 Second = First != 0 ? Fixture.ParkAircraftAt(Fixture.StandPose2) : 0;
+			if (!Test.TestTrue(TEXT("both aircraft parked"), First != 0 && Second != 0))
+			{
+				return false;
+			}
+			const bool bReady = Fixture.AdvanceUntil([&]
+			{
+				const FServiceJob* A = Fixture.Service->JobForAircraft(First);
+				const FServiceJob* B = Fixture.Service->JobForAircraft(Second);
+				if (A == nullptr || B == nullptr || Fixture.Service->GetVehicles().Num() != 1)
+				{
+					return false;
+				}
+				const FServiceVehicle& Vehicle = Fixture.Service->GetVehicles()[0];
+				const bool bHeld = Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob == A->Id
+					&& Vehicle.Queue.Contains(B->Id);
+				if (bHeld)
+				{
+					VehicleId = Vehicle.Id;
+					FirstJob = A->Id;
+					SecondJob = B->Id;
+				}
+				return bHeld;
+			}, 240.0);
+			return Test.TestTrue(TEXT("the premise: the bowser is serving the first aircraft with the second's job queued behind it"), bReady);
+		}
+
+		const FServiceVehicle* Vehicle() const { return Fixture.Service->FindVehicle(VehicleId); }
+		const FServiceJob* Job(int32 Id) const { return JobById(*Fixture.Service, Id); }
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelLifecycleRetiredElsewhereRebidsQueueTest, "AirportOps.Fuel.Lifecycle.AgentRetiredElsewhereRebidsWholeQueue",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelLifecycleRetiredElsewhereRebidsQueueTest::RunTest(const FString& Parameters)
+{
+	// A VEHICLE'S AGENT RETIRED BY SOMEBODY ELSE - the player's despawn through another door, a cleared traffic
+	// model - reaches the board as the Gone phase event, which OnAgentPhase used to drop. The vehicle was found
+	// out a Step later by a poll that re-opened only the job it was ON and left its queue on a vehicle nobody was
+	// driving; the explicit recall (Unstick) gives every job back. The Gone event now takes the recall's body.
+	// NO STEP RUNS between the retire and the first assertions, so it is the EVENT that is measured, not the poll.
+	// THE FIXTURE DELIVERS THAT EVENT INSIDE RetireAgent; production delivers it a drain later (issue #436) - the
+	// same handler either way, because the board unhooks a vehicle's agent BEFORE retiring it, so its own retirements
+	// find nothing to recall.
+	FuelServiceTest::FQueuedBowser Rig;
+	if (!Rig.Build(*this)) { return false; }
+	const int32 OldAgent = Rig.Vehicle()->AgentId;
+	const uint32 RevisionBefore = Rig.Fixture.Service->GetFleetRevisionForTest();
+
+	Rig.Fixture.Traffic->RetireAgent(OldAgent);
+
+	const FServiceVehicle* Vehicle = Rig.Vehicle();
+	if (!TestNotNull(TEXT("the vehicle survives its agent"), Vehicle)) { return false; }
+	// THE LIFECYCLE'S HANDLE IS BOUND TO THE BOARD'S COUNTER: retiring an agent moves nothing on the board by itself, so
+	// a move here is the transitions' own bumps - and the re-bid runs only when FleetRevision moves.
+	TestTrue(TEXT("the loss moved FleetRevision - the handle bumps the board's counter, not a copy"),
+		Rig.Fixture.Service->GetFleetRevisionForTest() != RevisionBefore);
+	TestEqual(TEXT("it no longer drives the retired agent"), Vehicle->AgentId, 0);
+	TestEqual(TEXT("it is Idle at home"), Vehicle->State, EServiceVehicleState::Idle);
+	TestEqual(TEXT("holding no current job"), Vehicle->CurrentJob, 0);
+	TestEqual(TEXT("and nothing queued - the WHOLE queue went back, not just the job it was on"), Vehicle->Queue.Num(), 0);
+	for (const int32 JobId : { Rig.FirstJob, Rig.SecondJob })
+	{
+		const FServiceJob* Job = Rig.Job(JobId);
+		if (!TestNotNull(TEXT("each job survives"), Job)) { return false; }
+		TestEqual(FString::Printf(TEXT("job %d is back on the board"), JobId), Job->State, EServiceJobState::Open);
+		TestEqual(FString::Printf(TEXT("job %d is nobody's"), JobId), Job->VehicleId, 0);
+	}
+
+	// AND THEY ARE BID AFRESH: the only vehicle wins both back and sets off on a new agent.
+	Rig.Fixture.Advance(1.0 / 30.0);
+	Vehicle = Rig.Vehicle();
+	TestTrue(TEXT("the next Step bids the released jobs again - it is driving a new agent"),
+		Vehicle != nullptr && Vehicle->AgentId != 0 && Vehicle->AgentId != OldAgent);
+	for (const int32 JobId : { Rig.FirstJob, Rig.SecondJob })
+	{
+		const FServiceJob* Job = Rig.Job(JobId);
+		TestTrue(FString::Printf(TEXT("job %d is held by the vehicle again"), JobId), Job != nullptr && Job->VehicleId == Rig.VehicleId);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelLifecycleLostAgentNetTest, "AirportOps.Fuel.Lifecycle.LostAgentNetRecallsTheSameWay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelLifecycleLostAgentNetTest::RunTest(const FString& Parameters)
+{
+	// THE NET UNDER THE EVENT: an agent the traffic model lost with no Gone event heard (a delivery skipped while
+	// no live model was attached, a model swapped under the board) is still found by SyncFleet's check, and it
+	// takes the same recall body - so the two ways of learning of a loss cannot leave different vehicles behind.
+	// THE SEAM IS THE LINE'S JOB COUNT: the old inline body re-opened only the job the vehicle was ON, and the vehicle
+	// - Idle at home with its queue - then set off for the queued one again, so the jobs' final owner is the same either
+	// way. What tells LoseAgent from the old body is how many jobs the net gave back: both, not one.
+	FuelServiceTest::FWarningSpy Spy;
+	FuelServiceTest::FQueuedBowser Rig;
+	if (!Rig.Build(*this)) { return false; }
+	const int32 OldAgent = Rig.Vehicle()->AgentId;
+
+	Rig.Fixture.Traffic->OnAgentPhaseChanged.Clear();
+	Rig.Fixture.Traffic->RetireAgent(OldAgent);
+	TestEqual(TEXT("the premise: the event was not heard, so the board still names the retired agent"), Rig.Vehicle()->AgentId, OldAgent);
+
+	Rig.Fixture.Advance(1.0 / 30.0);
+	FString NetLine;
+	for (const FString& Line : Spy.Lines)
+	{
+		if (Line.Contains(TEXT("with no Gone heard")))
+		{
+			NetLine = Line;
+		}
+	}
+	if (!TestFalse(TEXT("the net said so - a Warning naming a loss with no Gone heard"), NetLine.IsEmpty())) { return false; }
+	TestTrue(*FString::Printf(TEXT("and it gave back BOTH jobs, the queued one as well as the one it was on: %s"), *NetLine),
+		NetLine.Contains(TEXT("2 job(s) back to the board")));
+	const FServiceVehicle* Vehicle = Rig.Vehicle();
+	TestTrue(TEXT("the next Step's net let go of the retired agent and the vehicle set off afresh"),
+		Vehicle != nullptr && Vehicle->AgentId != OldAgent && Vehicle->AgentId != 0);
+	for (const int32 JobId : { Rig.FirstJob, Rig.SecondJob })
+	{
+		const FServiceJob* Job = Rig.Job(JobId);
+		TestTrue(FString::Printf(TEXT("job %d was released and bid again - the vehicle holds it"), JobId),
+			Job != nullptr && Job->VehicleId == Rig.VehicleId);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelLifecycleBlockedHeadJobTest, "AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelLifecycleBlockedHeadJobTest::RunTest(const FString& Parameters)
+{
+	// THE WEDGE, BY THE ONE LEGITIMATE PATH THAT REACHED IT (issue #428). A serve ends, the next job in the queue
+	// is held by a prerequisite that is not Done, and StartNext used to return with the vehicle still "Serving" a
+	// job it no longer had - parked on the hydrant, caught only by a per-Step backstop that kept the whole
+	// JobBoard pass running every frame. Nothing populates Prerequisites outside a test (fuel is the only role), so
+	// the path is dead in play; it is staged here because the invariant is about the SHAPE, not today's roles.
+	// The fixture's per-Step check is what fails on the old code; the assertions below say what the vehicle does
+	// instead - go home, keeping the blocked job queued, and wait there.
+	FFuelFixture Fixture;
+	Fixture.bSecondStand = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+	Fixture.Service->DefaultFleetTypes = { Bowser };
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	int32 VehicleId = 0;
+	if (!TestTrue(TEXT("the bowser starts serving"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Fixture.Service->GetVehicles().FindByPredicate(
+				[](const FServiceVehicle& Each) { return Each.State == EServiceVehicleState::Serving && Each.CurrentJob != 0; });
+			VehicleId = V != nullptr ? V->Id : 0;
+			return VehicleId != 0;
+		}, 240.0))) { return false; }
+
+	// A job that is never Done, and a queued job that waits on it. Ids first: the job adds may move the array.
+	const int32 NeverDone = Fixture.Service->AddJobForTest(901, EServiceJobState::Underway, EServiceRefusal::None, 0).Id;
+	int32 Blocked = 0;
+	{
+		FServiceJob& Job = Fixture.Service->AddJobForTest(902, EServiceJobState::Queued, EServiceRefusal::None, 0);
+		Job.Stand = Fixture.Stand2;
+		Job.QuantityOwed = 100.0;
+		Job.VehicleId = VehicleId;
+		Job.Prerequisites.Add(NeverDone);
+		Blocked = Job.Id;
+	}
+	const_cast<FServiceVehicle*>(Fixture.Service->FindVehicle(VehicleId))->Queue.Add(Blocked);
+
+	TestTrue(TEXT("once its serve ends it is no longer 'Serving' a job it has finished"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Fixture.Service->FindVehicle(VehicleId);
+			return V != nullptr && V->State != EServiceVehicleState::Serving;
+		}, 600.0));
+	TestTrue(TEXT("it goes home, and is Idle there with no agent"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Fixture.Service->FindVehicle(VehicleId);
+			return V != nullptr && V->State == EServiceVehicleState::Idle && V->AgentId == 0;
+		}, 900.0));
+	const FServiceVehicle* After = Fixture.Service->FindVehicle(VehicleId);
+	TestTrue(TEXT("the blocked job stays queued on it - it is not dropped, and it was not set off for"),
+		After != nullptr && After->Queue.Contains(Blocked));
+	const FServiceJob* Held = JobById(*Fixture.Service, Blocked);
+	TestTrue(TEXT("still Queued, its prerequisite being open"), Held != nullptr && Held->State == EServiceJobState::Queued);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelLifecycleOwnRetirementTest, "AirportOps.Fuel.Lifecycle.OwnRetirementsAreNotLosses",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelLifecycleOwnRetirementTest::RunTest(const FString& Parameters)
+{
+	// THE BOARD RETIRES ITS OWN AGENTS - arriving home, a player's despawn, a withdrawn depot - and each of those
+	// broadcasts Gone, which OnAgentPhase now hears as "a vehicle lost its agent". It must find NOTHING: the board
+	// unhooks the vehicle before it retires the agent (RetireAgentOf). The fixture delivers the broadcast INSIDE
+	// RetireAgent, so a retire-then-unhook order shows here as the loss warning firing on the board's own retirement
+	// and recalling a vehicle mid-transition - which production, delivering a drain later, would hide.
+	// THE LOSS LINE IS A WARNING, and FLogLineSpy keeps Log verbosity only, so an absence asserted through it can never
+	// fail. FWarningSpy sees Warnings, and the CONTROL below proves it: a bare RetireAgent - not the board's - must print
+	// the line, or "none printed" means nothing.
+	FuelServiceTest::FWarningSpy Spy;
+	bool bControlRetired = false;
+	{
+		FFuelFixture Fixture;
+		FTruckOut Out;
+		if (SendTruckOut(Fixture, Out))
+		{
+			Fixture.Traffic->RetireAgent(Out.TruckId);
+			bControlRetired = true;
+		}
+	}
+	const int32 ControlLines = Spy.CountContaining(TEXT("lost its agent"));
+	if (!TestTrue(TEXT("the premise: a truck was sent out and retired behind the board's back"), bControlRetired)) { return false; }
+	if (!TestTrue(TEXT("the CONTROL: a retirement that is not the board's IS heard as a loss - the spy sees the Warning"), ControlLines >= 1)) { return false; }
+	const int32 Before = Spy.Lines.Num();
+
+	bool bHome = false;
+	bool bDespawned = false;
+	bool bWithdrawn = false;
+	{
+		// ARRIVING HOME: a whole job, to the vehicle Idle at its depot with its agent retired there.
+		FFuelFixture Fixture;
+		FTruckOut Out;
+		if (SendTruckOut(Fixture, Out))
+		{
+			bHome = Fixture.AdvanceUntil([&]
+			{
+				const FServiceJob* Job = JobById(*Fixture.Service, Out.JobId);
+				const FServiceVehicle* Vehicle = Fixture.Service->FindVehicle(Out.VehicleId);
+				return Job != nullptr && Job->State == EServiceJobState::Done && Vehicle != nullptr
+					&& Vehicle->State == EServiceVehicleState::Idle && Vehicle->AgentId == 0;
+			}, 900.0);
+		}
+	}
+	{
+		// THE PLAYER'S DESPAWN of a vehicle on the road.
+		FFuelFixture Fixture;
+		FTruckOut Out;
+		if (SendTruckOut(Fixture, Out))
+		{
+			bDespawned = Fixture.Service->RecallVehicleOfAgent(Out.TruckId, /*bRetire=*/true, *Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+		}
+	}
+	{
+		// A DEPOT REMOVED under a vehicle that is out.
+		FFuelFixture Fixture;
+		FTruckOut Out;
+		if (SendTruckOut(Fixture, Out))
+		{
+			Fixture.Net->RemoveEntity(Fixture.Depot);
+			Fixture.Advance(0.2);
+			bWithdrawn = Fixture.Service->GetVehicles().Num() == 0 && Fixture.Traffic->FindAgent(Out.TruckId) == nullptr;
+		}
+	}
+
+	TestTrue(TEXT("the premise: a whole job ends with the vehicle Idle at home, its agent retired there"), bHome);
+	TestTrue(TEXT("the premise: the player's despawn retired a vehicle on the road"), bDespawned);
+	TestTrue(TEXT("the premise: a removed depot withdrew its vehicle and retired its agent"), bWithdrawn);
+	for (int32 At = Before; At < Spy.Lines.Num(); ++At)
+	{
+		TestFalse(*FString::Printf(TEXT("the board's own retirement was heard as a loss: %s"), *Spy.Lines[At]),
+			Spy.Lines[At].Contains(TEXT("lost its agent")));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelLifecycleStepEndSettlesTest, "AirportOps.Fuel.Lifecycle.StepEndSettlesAStrandedDecision",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelLifecycleStepEndSettlesTest::RunTest(const FString& Parameters)
+{
+	// THE STEP-END WALK IS A RECOVERY, NOT ONLY AN ALARM. No path leaves a vehicle Deciding at the end of a Step any more
+	// (StartNext lands every decision), so this stages one - the serve's job let go, the state left at Deciding - and runs
+	// ONE Step: the walk must say so (an ensure, expected here) and send it home, rather than leave it on the hydrant with
+	// the ensure firing every Step for good.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+	Fixture.Service->DefaultFleetTypes = { Bowser };
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	int32 VehicleId = 0;
+	if (!TestTrue(TEXT("the bowser starts serving"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Fixture.Service->GetVehicles().FindByPredicate(
+				[](const FServiceVehicle& Each) { return Each.State == EServiceVehicleState::Serving && Each.CurrentJob != 0; });
+			VehicleId = V != nullptr ? V->Id : 0;
+			return VehicleId != 0;
+		}, 240.0))) { return false; }
+
+	FServiceVehicle* Vehicle = const_cast<FServiceVehicle*>(Fixture.Service->FindVehicle(VehicleId));
+	Vehicle->CurrentJob = 0;
+	FServiceVehicleLifecycle::SeedStateForTest(*Vehicle, EServiceVehicleState::Deciding);
+
+	// THE ENSURE IS THE POINT AND IS EXPECTED: the automation framework reports an ensure's log lines as errors, so each
+	// shape they take is named. Any number - the count is the engine's to change, the recovery below is what is measured.
+	AddExpectedError(TEXT("Ensure condition failed"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("Callstack"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("ends a Step Deciding"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("Handled ensure"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("Stack:"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("LogOutputDevice"), EAutomationExpectedErrorFlags::Contains, 0);
+	Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+
+	const FServiceVehicle* After = Fixture.Service->FindVehicle(VehicleId);
+	if (!TestNotNull(TEXT("the vehicle survives"), After)) { return false; }
+	TestEqual(TEXT("the Step settled it - heading home, not left Deciding on the hydrant"), After->State, EServiceVehicleState::ToFacility);
+	TestTrue(TEXT("on its own agent"), After->AgentId != 0);
+	TestTrue(TEXT("and that is a row of the invariant table, settled"), FServiceVehicleLifecycle::Violation(*After, /*bSettled=*/true).IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceBidDecidingPricesTest, "AirportOps.Service.Bid.DecidingVehiclePricesWhereItStands",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceBidDecidingPricesTest::RunTest(const FString& Parameters)
+{
+	// A VEHICLE WHOSE SERVE JUST ENDED is priced by the re-bid that runs between EndServe and StartNext, as standing where
+	// it is (BidFor's Deciding case). The one-bowser chaining tests cannot see that: a lone candidate wins at any price,
+	// and deleting the case left them green. TWO vehicles, then: one Deciding, parked at the stand a new job is for, and
+	// one Idle at the depot - and with every drive a flat three game minutes the bids differ by exactly that drive.
+	FFuelFixture Fixture;
+	Fixture.bSecondStand = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	UJobBoard& Board = *Fixture.Service;
+	const FName Bowser = Board.VehiclesFor(EIcaoCode::C).TypeCode;
+	Board.DefaultFleetTypes = { Bowser };
+	Board.DriveSecondsOverride = [](FGuidelineNodeId From, FGuidelineNodeId To, FName) { return From == To ? 0.0 : 180.0; };
+	if (!TestTrue(TEXT("an aircraft parked at the second stand"), Fixture.ParkAircraftAt(Fixture.StandPose2) != 0)) { return false; }
+	int32 ParkedId = 0;
+	if (!TestTrue(TEXT("the bowser reaches that stand and serves"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Board.GetVehicles().FindByPredicate(
+				[](const FServiceVehicle& Each) { return Each.State == EServiceVehicleState::Serving && Each.CurrentJob != 0; });
+			ParkedId = V != nullptr ? V->Id : 0;
+			return ParkedId != 0;
+		}, 240.0))) { return false; }
+
+	// STAGED: the moment its serve ends - the job let go, the vehicle still parked on its agent at the stand. No Advance
+	// after this: a Step would settle it, and this looks at the state BETWEEN the serve's end and the decision.
+	const double Capacity = Board.TypeFor(Bowser).Capacity;
+	FServiceVehicle* Parked = const_cast<FServiceVehicle*>(Board.FindVehicle(ParkedId));
+	Parked->CurrentJob = 0;
+	Parked->Cargo = Capacity;
+	FServiceVehicleLifecycle::SeedStateForTest(*Parked, EServiceVehicleState::Deciding);
+	const int32 FreshId = Board.AddVehicleForTest(Bowser, Fixture.Depot, EServiceVehicleState::Idle, Capacity).Id;
+	int32 JobId = 0;
+	{
+		FServiceJob& Job = Board.AddJobForTest(902, EServiceJobState::Open, EServiceRefusal::None, 0);
+		Job.Stand = Fixture.Stand2;
+		Job.QuantityOwed = 300.0;
+		JobId = Job.Id;
+	}
+
+	const ServiceBid::FResult FromStand = Board.BidForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, ParkedId, JobId);
+	const ServiceBid::FResult FromDepot = Board.BidForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, FreshId, JobId);
+	if (!TestTrue(TEXT("both vehicles can reach the job"), FromStand.bReachable && FromDepot.bReachable)) { return false; }
+	TestEqual(TEXT("the vehicle parked at the stand needs no drive - the one at the depot finishes exactly one drive (180 s) later"),
+		FromDepot.Finish - FromStand.Finish, 180.0, 1e-6);
+	TestTrue(TEXT("so the Deciding vehicle wins the bid, which is what lets the vehicle that just pumped win its own remainder"),
+		FromStand.Finish < FromDepot.Finish);
 	return true;
 }
 

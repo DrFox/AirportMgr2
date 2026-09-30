@@ -80,23 +80,24 @@ void UJobBoard::GoToFacility(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, 
 	const FGuidelineNodeId Home = HomePose(Network, Vehicle);
 	if (Home.IsSet() && DriveVehicleTo(Vehicle, Home, /*bToFacility=*/true, Traffic, Network))
 	{
-		Vehicle.State = EServiceVehicleState::ToFacility;
+		Lifecycle(Vehicle).HeadHome();
 		return;
 	}
-	// DriveVehicleTo retired it where it stood (and said so) - OR WAS NEVER ASKED, because the depot is
-	// gone (final review #2, 2026-09-28): then the agent is still on the road, and zeroing the id here
-	// would leave it there for the session with nothing that knows it. Retired here in that case.
+	// DriveVehicleTo retired it where it stood (and said so, and put it Idle at home) - OR WAS NEVER ASKED,
+	// because the depot is gone (final review #2, 2026-09-28): then the agent is still on the road, and
+	// unhooking it without retiring would leave it there for the session with nothing that knows it. Retired
+	// here in that case.
 	// Idle at home is the honest state: the depot keeps its vehicle, which is the leak UFuelService's
 	// GoingHome existed to prevent.
 	// ENFORCED BY: AirportOps.Fuel.DepotGoneBeforeRecallLeavesNoAgent
-	if (Vehicle.AgentId != 0 && Traffic.FindAgent(Vehicle.AgentId) != nullptr)
+	if (Vehicle.AgentId != 0)
 	{
-		UE_LOG(LogAirportOps, Warning, TEXT("Fuel: truck %d has no depot to go home to; retired where it stands"), Vehicle.AgentId);
-		Traffic.RetireAgent(Vehicle.AgentId);
+		if (Traffic.FindAgent(Vehicle.AgentId) != nullptr)
+		{
+			UE_LOG(LogAirportOps, Warning, TEXT("Fuel: truck %d has no depot to go home to; retired where it stands"), Vehicle.AgentId);
+		}
+		RetireAgentOf(Vehicle, Traffic);
 	}
-	Vehicle.AgentId = 0;
-	Vehicle.State = EServiceVehicleState::Idle;
-	++FleetRevision;
 }
 
 bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, bool bToFacility,
@@ -149,7 +150,8 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 			TEXT("Fuel route: vehicle %d, depot %d to guideline node %d, %.0f uu over %d point(s): %s"),
 			Vehicle.Id, Vehicle.Home.Index, Goal.Index,
 			GuidelineGeom::PolylineLength(Plan.Polyline), Plan.Polyline.Num(), *JobBoardDrive::DescribePath(Plan));
-		Vehicle.AgentId = NewId;
+		// IDLE -> DECIDING: it has its agent, and the caller (StartNext) sets it off for the job it chose.
+		Lifecycle(Vehicle).Dispatched(NewId);
 		UE_LOG(LogAirportOps, Log,
 			TEXT("Fuel: depot %d sends truck %d (vehicle %d, %s) to guideline node %d (%.0f uu)"),
 			Vehicle.Home.Index, NewId, Vehicle.Id, *Vehicle.TypeCode.ToString(), Goal.Index, Plan.Length);
@@ -159,9 +161,8 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 	const FRoadAgent* Truck = Traffic.FindAgent(TruckId);
 	if (Truck == nullptr)
 	{
-		// GONE. It no longer counts as out anywhere; the caller puts it back at home.
-		Vehicle.AgentId = 0;
-		++FleetRevision;
+		// GONE. It no longer counts as out anywhere: it is back at home, Idle, and the caller carries on from there.
+		Lifecycle(Vehicle).LeaveRoad();
 		return false;
 	}
 
@@ -289,8 +290,7 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 		UE_LOG(LogAirportOps, Warning,
 			TEXT("Fuel: stranded truck %d has no pavement to rejoin toward depot %d; retired where it stands, vehicle %d back at its depot"),
 			TruckId, Vehicle.Home.Index, Vehicle.Id);
-		Traffic.RetireAgent(TruckId);
-		Vehicle.AgentId = 0;
+		RetireAgentOf(Vehicle, Traffic);
 		return false;
 	}
 	if (Truck->Phase != EAgentPhase::Parked)
@@ -377,7 +377,6 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 	UE_LOG(LogAirportOps, Warning,
 		TEXT("Fuel: truck %d has no route home to depot %d; retired where it stands, vehicle %d back at its depot"),
 		TruckId, Vehicle.Home.Index, Vehicle.Id);
-	Traffic.RetireAgent(TruckId);
-	Vehicle.AgentId = 0;
+	RetireAgentOf(Vehicle, Traffic);
 	return false;
 }

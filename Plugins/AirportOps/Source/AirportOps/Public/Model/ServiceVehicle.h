@@ -20,6 +20,21 @@
  *
  * NO ToHome. For every role home IS the facility - a fuel vehicle refills there, stairs would park
  * there with a zero-length visit - so a "going home" state would be ToFacility under another name.
+ *
+ * WHICH STATES HOLD AN AGENT AND A JOB is the vehicle's invariant (issue #428), one table:
+ *
+ *   state        AgentId   CurrentJob
+ *   Idle         0         0
+ *   ToJob        set       set
+ *   Serving      set       set
+ *   ToFacility   set       0
+ *   AtFacility   0         0
+ *   Deciding     set       0
+ *
+ * FServiceVehicleLifecycle is the only writer of these three fields and asserts the row on every transition;
+ * FFuelFixture asserts it for every vehicle after every Step. THE SPEC (§2.1) SAID ONLY IDLE HAS NO AGENT, and
+ * the code has always given AtFacility none too - a refill happens at the depot, not on the road - so the table
+ * follows the code and the spec carries a dated note.
  */
 UENUM()
 enum class EServiceVehicleState : uint8
@@ -33,11 +48,32 @@ enum class EServiceVehicleState : uint8
 	/** At the stand serving CurrentJob, until StepEndsAt. Has an agent, parked. */
 	Serving,
 
-	/** Driving to its home facility - to refill before its next job, or to go idle. Has an agent. */
+	/**
+	 * Driving to its home facility - to refill before its next job, or to go idle. Has an agent and no job. ALSO
+	 * WHAT A STRANDED VEHICLE IS: it heads nowhere until the player unsticks it, but its PURPOSE is still home,
+	 * which is what OnVehicleArrived reads to turn it for home wherever it parks.
+	 */
 	ToFacility,
 
 	/** At the facility being refilled / unloaded until StepEndsAt. No agent, like Idle. */
-	AtFacility
+	AtFacility,
+
+	/**
+	 * On the road - parked or driving - with no job and no trip to the facility chosen yet: its serve has just
+	 * ended, its job was taken from under it, or it has just been dispatched from home. TRANSIENT BY CONTRACT:
+	 * UJobBoard::StartNext ends it the same Step and leaves the vehicle in one of the settled states, so a Step
+	 * never finishes with one.
+	 * ENFORCED BY: UJobBoard::Step's closing walk (an ensure that also sends a stuck vehicle home -
+	 * AirportOps.Fuel.Lifecycle.StepEndSettlesAStrandedDecision); AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob
+	 * (FFuelFixture's per-Step check); its price: AirportOps.Service.Bid.DecidingVehiclePricesWhereItStands
+	 *
+	 * A STATE, NOT "Serving WITH NO JOB": the re-bid that runs between a serve ending and the decision must price
+	 * this vehicle as standing where it is, with the cargo it has, free now - which ToFacility (priced as driving
+	 * home and refilling) would get wrong - and the shape that used to be spelled by an illegal Serving was
+	 * caught by a per-Step backstop that kept the whole board pass running every frame while it lasted.
+	 * Appended last: the enum's values are stable for anything that wrote one down.
+	 */
+	Deciding
 };
 
 /**
@@ -90,9 +126,14 @@ struct AIRPORTOPS_API FServiceVehicle
 	/** The depot it belongs to and returns to - its facility, for fuel. */
 	UPROPERTY() FEntityInstanceId Home;
 
+	/**
+	 * WRITTEN ONLY BY FServiceVehicleLifecycle - with AgentId and CurrentJob, the three fields whose combination
+	 * is the state's invariant (see the table on EServiceVehicleState). Public because a USTRUCT's fields are
+	 * how UHT and every reader see it; Check-Architecture rule 38 is what keeps the writers to one file.
+	 */
 	UPROPERTY() EServiceVehicleState State = EServiceVehicleState::Idle;
 
-	/** The Airside agent while on the road (ToJob, Serving, ToFacility), else 0. */
+	/** The Airside agent while on the road (every state but Idle and AtFacility), else 0. */
 	UPROPERTY() int32 AgentId = 0;
 
 	/** What it is carrying now, in the role's unit. Starts full. */
@@ -108,7 +149,11 @@ struct AIRPORTOPS_API FServiceVehicle
 	 */
 	UPROPERTY() TArray<int32> Queue;
 
-	/** The current timed step (Serving, AtFacility), USimClock game seconds. */
-	UPROPERTY() double StepStartedAt = 0.0;
+	/**
+	 * When the current timed step (Serving, AtFacility) ends, USimClock game seconds; 0 outside one. ITS START IS NOT
+	 * KEPT: a StepStartedAt sat beside it from stage 1, was written at three sites and read at none (the job carries
+	 * the trip's own TripStartedAt, which is what the card's live litres read); a field with no reader is a second
+	 * source of truth waiting to disagree.
+	 */
 	UPROPERTY() double StepEndsAt = 0.0;
 };
