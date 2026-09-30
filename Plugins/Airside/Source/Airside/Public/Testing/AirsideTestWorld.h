@@ -199,6 +199,10 @@ struct FNullEditTarget : IRoadEditTarget
 	virtual bool UpgradeSegment(int32, ERoadKind, int32, EPavement) override { return false; }
 	/** Refused, WhyStandRefused's reason: a null target has no segment to upgrade. */
 	virtual FString WhyUpgradeRefused(int32, ERoadKind, int32, EPavement) const override { return TEXT("no target"); }
+	/** WhyUpgradeRefused's two halves, WhyStandSiteRefused's split: the site half carries the
+	 *  refusal, the money half has nothing to price on a segment that is not there. */
+	virtual FString WhyUpgradeSiteRefused(int32, ERoadKind, int32, EPavement) const override { return TEXT("no target"); }
+	virtual FString WhyUpgradeUnaffordable(int32, ERoadKind, int32, EPavement) const override { return FString(); }
 	virtual double GetMinimumRunwayLength() const override { return 0.0; }
 	virtual int32 GetRunwayProfileCount() const override { return 0; }
 	virtual URoadProfile* ResolveRunwayProfile(int32) const override { return nullptr; }

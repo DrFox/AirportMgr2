@@ -159,7 +159,9 @@ public:
 	 */
 	bool Reverse(double At, int32 ChargeId);
 
-	double Balance() const { return CachedBalance; }
+	/** The cached fold of the entries - see IBuildPurse::Balance, which this is: the figure CanAfford
+	 *  compares against, and what a cache of its answers keys on. */
+	virtual double Balance() const override { return CachedBalance; }
 
 	/**
 	 * Bumped by every Post and every RollUp. A view rebuilds only when this changes.

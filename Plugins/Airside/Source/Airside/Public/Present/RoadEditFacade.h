@@ -212,6 +212,8 @@ public:
 	/** See IRoadEditTarget::UpgradeSegment - SetRunwayFacts' pattern, priced like ConnectNodes. */
 	virtual bool UpgradeSegment(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) override;
 	virtual FString WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const override;
+	virtual FString WhyUpgradeSiteRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const override;
+	virtual FString WhyUpgradeUnaffordable(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const override;
 	virtual double GetMinimumRunwayLength() const override;
 	virtual int32 GetRunwayProfileCount() const override;
 	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override;
@@ -444,6 +446,11 @@ public:
 	/** WhyUpgradeRefused, and - when the refusal is affordability - the quote, so UpgradeSegment can
 	 *  announce it. The interface virtual forwards here with null: a preview must stay silent. */
 	FString WhyUpgradeRefusedImpl(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface,
+		FBuildQuote* OutUnaffordable) const;
+
+	/** WhyUpgradeUnaffordable with the same out-parameter - see WhyUpgradeRefusedImpl, which is the
+	 *  two halves' composition (issue #439) and nothing more. */
+	FString WhyUpgradeUnaffordableImpl(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface,
 		FBuildQuote* OutUnaffordable) const;
 
 	/** WhyStandRefused with the same out-parameter, for PlaceStandInPlot - see WhyUpgradeRefusedImpl.

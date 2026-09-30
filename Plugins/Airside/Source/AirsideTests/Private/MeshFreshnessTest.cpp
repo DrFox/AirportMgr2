@@ -475,6 +475,7 @@ namespace
 	{
 	public:
 		virtual bool CanAfford(const FBuildQuote&) const override { return false; }
+		virtual double Balance() const override { return 0.0; }
 		virtual int32 Charge(const FBuildQuote&) override { return INDEX_NONE; }
 		virtual void Reverse(int32) override {}
 		virtual void Credit(const FBuildQuote&) override {}

@@ -993,6 +993,16 @@ FString ARoadNetworkActor::WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind,
 	return Facade->WhyUpgradeRefused(SegmentIndex, Kind, WidthIndex, Surface);
 }
 
+FString ARoadNetworkActor::WhyUpgradeSiteRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const
+{
+	return Facade->WhyUpgradeSiteRefused(SegmentIndex, Kind, WidthIndex, Surface);
+}
+
+FString ARoadNetworkActor::WhyUpgradeUnaffordable(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const
+{
+	return Facade->WhyUpgradeUnaffordable(SegmentIndex, Kind, WidthIndex, Surface);
+}
+
 bool ARoadNetworkActor::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 {
 	return Facade->SetIntermediateHoldingPosition(NodeIndex, bSet);

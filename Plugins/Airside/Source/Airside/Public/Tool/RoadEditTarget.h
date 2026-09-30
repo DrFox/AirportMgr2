@@ -267,6 +267,29 @@ public:
 	 */
 	virtual FString WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const = 0;
 
+	/**
+	 * The SITE half of WhyUpgradeRefused (issue #439's sibling of WhyStandSiteRefused): every gate
+	 * that reads the model and the picks - a dead slot, a runway or kind change, no such width, an
+	 * unoffered surface, the widened pavement inside a neighbour's strip - and none that reads
+	 * money. THE HALF A CALLER MAY MEMOISE, against GetEditEpoch and its own picks.
+	 *
+	 * SITE FIRST, then WhyUpgradeUnaffordable, is the composition WhyUpgradeRefused now is. That
+	 * moved the price gate AFTER the strip gate, where it used to sit before it: an upgrade both
+	 * unaffordable and refused by a neighbour's strip now says the strip, because earning the
+	 * money cannot make it committable and "cannot afford" would promise that it could.
+	 * ENFORCED BY: Airside.Present.UpgradeRefusalIsTheTwoHalves
+	 */
+	virtual FString WhyUpgradeSiteRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const = 0;
+
+	/**
+	 * The MONEY half of WhyUpgradeRefused: "cannot afford ..." when the purse cannot pay the
+	 * difference between the new ground and the old, else empty. ONE QUOTE AND A COMPARE, asked
+	 * FRESH by every caller and never memoised - the balance moves through no edit of the model
+	 * (see WhyStandUnaffordable). EMPTY when there is nothing to price: a dead slot, a width or
+	 * kind that does not resolve (the site half's to refuse), or an upgrade that changes nothing.
+	 */
+	virtual FString WhyUpgradeUnaffordable(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const = 0;
+
 	/** MinimumRunwayLength, read-only: RunwayTool judges a drag against it but never sets it. */
 	virtual double GetMinimumRunwayLength() const = 0;
 

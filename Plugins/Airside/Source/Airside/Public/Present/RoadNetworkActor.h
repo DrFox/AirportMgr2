@@ -397,6 +397,9 @@ public:
 	virtual bool UpgradeSegment(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) override;
 	/** Forwards to the facade - see IRoadEditTarget::WhyUpgradeRefused. */
 	virtual FString WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const override;
+	/** Forward to the facade - see IRoadEditTarget::WhyUpgradeSiteRefused and WhyUpgradeUnaffordable. */
+	virtual FString WhyUpgradeSiteRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const override;
+	virtual FString WhyUpgradeUnaffordable(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const override;
 
 	/**
 	 * The shortest thing that may be called a runway, in uu. 300 m.

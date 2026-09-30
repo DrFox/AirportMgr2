@@ -27,6 +27,7 @@
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadAgentActor.h"
+#include "Model/BuildPurse.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/AirsideBuildingsActor.h"
 #include "Present/PlotPresenter.h"
@@ -1552,6 +1553,16 @@ ARoadBuildController::FToolReadoutKey ARoadBuildController::MakeReadoutKey(
 	Key.GuidePoint = Context.Guide.Point;
 	Key.EditHandles = Context.EditHandles;
 	Key.Grid = Context.GridFrame;
+
+	// THE PURSE'S BALANCE - see FToolReadoutKey::PurseBalance. Read every call, which is one
+	// virtual call and a compare a frame: the cheap end of what the cache exists to save.
+	if (Context.Target != nullptr)
+	{
+		if (const IBuildPurse* Purse = Context.Target->GetPurse())
+		{
+			Key.PurseBalance = Purse->Balance();
+		}
+	}
 	return Key;
 }
 

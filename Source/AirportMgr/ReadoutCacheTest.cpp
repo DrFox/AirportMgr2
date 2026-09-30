@@ -1,10 +1,56 @@
 #include "CoreMinimal.h"
+#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
+#include "Model/BuildPurse.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "Solve/IcaoCode.h"
+#include "Solve/LetterEnvelope.h"
 #include "Testing/AirsideTestWorld.h"
+#include "Tool/BuildSession.h"
+#include "Tool/PlotGesture.h"
+#include "Tool/RoadEditTarget.h"
+#include "Tool/StandPlotTool.h"
+#include "Tool/ToolReadout.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+// NAMED, NOT ANONYMOUS - the game module's tests are one unity build too, and a common name
+// (a purse fake, a context builder) compiles alone and collides with another file's copy.
+namespace ReadoutCacheTestFixture
+{
+	/** A purse whose balance the test moves BETWEEN ticks. Declared before the world in the test
+	 *  that uses it, so it outlives the facade holding a raw pointer to it. */
+	struct FMovableFundsPurse : IBuildPurse
+	{
+		double Funds = 0.0;
+
+		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Funds; }
+		virtual double Balance() const override { return Funds; }
+		virtual int32 Charge(const FBuildQuote& Quote) override { Funds -= Quote.BaseAmount(); return 1; }
+		virtual void Reverse(int32) override {}
+		virtual void Credit(const FBuildQuote& Quote) override { Funds += Quote.BaseAmount(); }
+		virtual FText Describe(const FBuildQuote& Quote) const override { return FText::AsNumber(Quote.BaseAmount()); }
+	};
+
+	/** A click's context at Where, Free-snapped, 150uu - the shape the Airside tool tests use
+	 *  (TestTool::ContextAt), rebuilt here because that fixture lives in a test module this one
+	 *  may not depend on. */
+	FToolContext ClickAt(IRoadEditTarget& Target, const FVector2D& Where)
+	{
+		FToolContext Context;
+		Context.Target = &Target;
+		Context.SnapRadius = 150.0;
+		Context.Envelopes = FLetterEnvelopeTable::Floor();
+		FRoadSnapResult Snap;
+		Snap.Kind = ERoadSnapKind::Free;
+		Snap.Position = Where;
+		Context.SetCursor(Where, Snap);
+		return Context;
+	}
+}
 
 /**
  * ONE READOUT REBUILD FOR A STILL CURSOR, issue #190. Before this,
@@ -62,6 +108,102 @@ bool FReadoutRebuildsOnceForStillCursorTest::RunTest(const FString& Parameters)
 					"per tick"),
 		After - Before, 1);
 
+	return true;
+}
+
+/**
+ * THE READOUT CACHE SEES THE PURSE (issue #439). FToolReadoutKey named the cursor, the snap, the
+ * guide and the grid - everything the PLAYER moves - and not the balance, which moves on its own
+ * (landing fees, upkeep, a load). A stand in Confirm with the cursor held still therefore kept
+ * the "cannot afford" readout it was greyed with, however much money arrived, until the mouse
+ * moved: the tool's own answer had been made honest, and the controller kept serving last
+ * frame's copy of it.
+ *
+ * DRIVEN THROUGH THE CONTROLLER'S OWN COLLECTION with a real stand tool pinned to Confirm, so
+ * this fails on the cache and not on the tool: same cursor, same tool, only the purse moves.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FReadoutCacheSeesThePurseTest,
+	"AirportMgr.Actions.ReadoutCacheSeesThePurse",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FReadoutCacheSeesThePurseTest::RunTest(const FString& Parameters)
+{
+	using namespace ReadoutCacheTestFixture;
+
+	ReadoutCacheTestFixture::FMovableFundsPurse Purse; // before the world - the facade holds a raw pointer to it
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a target actor"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+	IRoadEditTarget* Edit = Actor;
+	Edit->ConnectNodes(Edit->PlaceNode(FVector2D(-10000.0, 0.0)), Edit->PlaceNode(FVector2D(10000.0, 0.0)),
+		ERoadKind::Taxiway, INDEX_NONE);
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("an edit facade"), Facade)) { return false; }
+	Facade->SetPurse(&Purse);
+	ON_SCOPE_EXIT { Facade->SetPurse(nullptr); };
+
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	C->InitInputSystem();
+
+	// THE STAND TOOL, looked up by its registry name rather than an index that a re-ordered
+	// registry would move under this test.
+	int32 StandIndex = INDEX_NONE;
+	for (int32 Index = 0; Index < ToolRegistry().Num(); ++Index)
+	{
+		if (ToolRegistry()[Index].Id == FName(TEXT("Stand"))) { StandIndex = Index; }
+	}
+	if (!TestTrue(TEXT("the registry names a Stand tool"), StandIndex != INDEX_NONE)) { return false; }
+	C->SelectTool(StandIndex);
+	FStandPlotTool* Tool = static_cast<FStandPlotTool*>(C->GetActiveTool());
+	if (!TestNotNull(TEXT("the stand tool is active"), Tool)) { return false; }
+
+	// THREE CLICKS TO CONFIRM, straight into the tool: the controller's own click path needs a
+	// viewport this test does not have. The readout below still goes through the controller.
+	const FVector2D AnchorCursor(0.0, 1000.0);
+	Tool->OnClick(ClickAt(*Actor, AnchorCursor));
+	TArray<FVector2D> Shown;
+	Tool->Rect(ClickAt(*Actor, AnchorCursor), Shown);
+	if (!TestTrue(TEXT("the first click anchored on the taxiway"), Shown.Num() == 4)) { return false; }
+	const FVector2D Anchor = Shown[0];
+	const double FloorWidth = IcaoCode::StandWidthForLetter(EIcaoCode::C);
+	const double Width = FloorWidth <= PlotGesture::MinFrontageUu ? PlotGesture::MinFrontageUu
+		: PlotGesture::MinFrontageUu
+			+ FMath::CeilToDouble((FloorWidth - PlotGesture::MinFrontageUu) / PlotGesture::FrontageStepUu)
+			* PlotGesture::FrontageStepUu;
+	Tool->OnClick(ClickAt(*Actor, Anchor + FVector2D(Width, 0.0)));
+	Tool->OnClick(ClickAt(*Actor, Anchor + FVector2D(Width, IcaoCode::StandDepthForLetter(EIcaoCode::C))));
+	if (!TestTrue(TEXT("a Code C stand reaches Confirm"), Tool->GetStage() == EStandStage::Confirm)) { return false; }
+
+	// SHORT, drawn ahead of the money. The first collection has no cached key, so it builds.
+	Purse.Funds = 0.0;
+	C->CollectToolReadoutForTest();
+	const int32 Built = C->GetToolReadoutRevision();
+	TestFalse(TEXT("purse short: Build is not committable"), C->GetToolReadout().bCommittable);
+
+	// THE CONTROL: nothing moved, so the cache answers - or a rebuild every frame would pass below
+	// for the wrong reason.
+	C->CollectToolReadoutForTest();
+	TestEqual(TEXT("the same cursor and the same purse rebuild nothing"), C->GetToolReadoutRevision(), Built);
+
+	// CREDITED, THE CURSOR STILL: only the balance changed.
+	Purse.Funds = 1.0e12;
+	C->CollectToolReadoutForTest();
+	TestEqual(TEXT("a credited purse rebuilds the readout though the cursor did not move"),
+		C->GetToolReadoutRevision(), Built + 1);
+	TestTrue(TEXT("and the rebuilt readout is committable"), C->GetToolReadout().bCommittable);
+
+	// AND DRAINED AGAIN, the other direction.
+	Purse.Funds = 0.0;
+	C->CollectToolReadoutForTest();
+	TestEqual(TEXT("a drained purse rebuilds it again"), C->GetToolReadoutRevision(), Built + 2);
+	TestFalse(TEXT("and Build greys"), C->GetToolReadout().bCommittable);
 	return true;
 }
 

@@ -871,7 +871,8 @@ private:
 	 * that never vary within one session. This names only the values a tool's BuildReadout is
 	 * documented to read - Cursor, the snap chain's kind and handle, the guide, and which
 	 * handle kind Edit mode exposes - plus which tool is being asked, since a session mode or
-	 * tool switch can change the answer with the cursor sitting still.
+	 * tool switch can change the answer with the cursor sitting still, and the purse's balance
+	 * (issue #439), which changes the answer with nothing the player did at all.
 	 *
 	 * WHAT IT CANNOT SEE is a tool's OWN internal stage - FPlotPlaceTool's pinned-corner count
 	 * and the like - which is why InvalidateToolReadoutCache() exists: every call this class
@@ -894,6 +895,20 @@ private:
 		 *  2026-09-28: pressing H, or the grid turning to a new road, does the same. */
 		GridSnap::FGridFrame Grid;
 
+		/**
+		 * THE FUNDS a tool's affordability answer was made against - issue #439. Everything above
+		 * is something the PLAYER moves; the balance moves on its own (landing fees, upkeep, a
+		 * load), and a readout that says "cannot afford" or lights Build is a function of it. Unset
+		 * for a target with no purse, which builds for free (IBuildPurse's rule).
+		 *
+		 * THE BALANCE VALUE, not ULedger::Revision: a revision moves only on the mutations that
+		 * remember to bump it (issue #426: a load does not), while equal balances give equal
+		 * CanAfford answers by construction. Read through the interface (IBuildPurse::Balance), so
+		 * this class still names no ledger.
+		 * ENFORCED BY: AirportMgr.Actions.ReadoutCacheSeesThePurse
+		 */
+		TOptional<double> PurseBalance;
+
 		bool operator==(const FToolReadoutKey& Other) const
 		{
 			return Tool == Other.Tool
@@ -904,7 +919,8 @@ private:
 				&& bGuideActive == Other.bGuideActive
 				&& GuidePoint == Other.GuidePoint
 				&& EditHandles == Other.EditHandles
-				&& Grid.SameGrid(Other.Grid);
+				&& Grid.SameGrid(Other.Grid)
+				&& PurseBalance == Other.PurseBalance;
 		}
 	};
 

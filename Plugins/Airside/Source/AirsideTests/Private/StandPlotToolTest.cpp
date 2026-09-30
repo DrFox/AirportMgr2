@@ -1609,6 +1609,7 @@ namespace StandPlotToolFixture
 		double Funds = 0.0;
 
 		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Funds; }
+		virtual double Balance() const override { return Funds; }
 		virtual int32 Charge(const FBuildQuote& Quote) override { Funds -= Quote.BaseAmount(); return 1; }
 		virtual void Reverse(int32) override {}
 		virtual void Credit(const FBuildQuote& Quote) override { Funds += Quote.BaseAmount(); }

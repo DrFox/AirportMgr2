@@ -140,6 +140,14 @@ public:
 	/** Build (lay a road) or Upgrade (re-width and re-surface the one clicked). */
 	EToolMode GetMode() const { return Mode; }
 
+	/**
+	 * How many times the Upgrade hover was REBUILT - the duplicate-network restriction pass, the
+	 * closures, the outline - rather than answered from its memo. FOR TESTS ONLY, issue #439: what
+	 * a test counts to prove a purse change is answered by the fresh money half and does NOT pay
+	 * for the site half again.
+	 */
+	int32 GetHoverBuildCountForTest() const { return HoverBuildCountForTest; }
+
 	/** Selecting this tool while it is already active cycles the taxiway width - the same
 	 *  gesture FRunwayTool::OnReselect gives runways. Steps from the LIT option, through
 	 *  SelectVariant, so the key and the bar's row walk one list. WITH THE INSERT MODIFIER
@@ -273,12 +281,19 @@ private:
 	 * that does not exist yet, and the one evaluator (TaxiwayRestriction, StandAdmission) is asked
 	 * it rather than a second rule - and a duplicate a frame is not a cost to pay while the mouse
 	 * rests. Mutable: BuildPreview is const by the tool contract, and this is a memo, not state.
+	 *
+	 * THE SITE HALF ONLY (issue #439, FStandPlotTool::RefusalFor's split): Text and bRefused are
+	 * what the model and the picks decide. Whether the purse can pay is asked fresh by every
+	 * PreviewUpgrade and laid over them, because the balance moves through no edit this key could
+	 * see - the memo used to hold "Upgrade refused: cannot afford ..." past the money arriving.
+	 * ENFORCED BY: Airside.Tool.UpgradeHoverFollowsThePurse
 	 */
 	struct FUpgradeHover
 	{
 		const URoadNetwork* Network = nullptr;
 		uint32 Revision = MAX_uint32;
 		int32 Entities = INDEX_NONE;
+		uint32 Epoch = MAX_uint32;
 		int32 Segment = INDEX_NONE;
 		const URoadProfile* Had = nullptr;
 		EPavement HadSurface = EPavement::Tarmac;
@@ -289,6 +304,10 @@ private:
 		TArray<FVector2D> Outline;
 	};
 	mutable FUpgradeHover Hover;
+
+	/** Bumped only when PreviewUpgrade REBUILDS the hover, never on a memo hit - see
+	 *  GetHoverBuildCountForTest. */
+	mutable int32 HoverBuildCountForTest = 0;
 
 	/** The row named AxisId, one enabled option on from what it lights - FRunwayTool::StepAxis. */
 	void StepAxis(const FToolContext& Context, FName AxisId, const TCHAR* What);
