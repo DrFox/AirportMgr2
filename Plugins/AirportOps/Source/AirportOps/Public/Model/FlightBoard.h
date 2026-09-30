@@ -440,14 +440,17 @@ public:
 	 * the runway, which TickQueue asks) holds, when that refusal is one the player must build or change something to clear
 	 * (ArrivalPlanner::IsPermanentRefusal). What the FlightCannotLand alert is derived from. None for a flight that is not
 	 * Inbound, that the queue has not judged yet (a busy runway is asked first, so the clearance of a flight waiting behind
-	 * one is computed when the runway frees), or whose refusal will clear on its own.
+	 * one is computed when the runway frees), whose refusal will clear on its own, or whose cached judgement is OLDER THAN
+	 * THE GUIDELINE GRAPH.
 	 *
 	 * READS THE CACHE AND NEVER FILLS IT: an alert pass that planned would be a route search per holding flight per
-	 * recompute. The queue pass is what keeps the cache current - dirtied by the same network and occupancy changes that
-	 * can change the answer - and the alerts pass runs after it in the same round.
-	 * ENFORCED BY: AirportOps.Model.Alerts.UnlandableHoldingFlightRaisesAnAlert
+	 * recompute. And it trusts the cache only while it is dated by Network's guideline revision: a holding flight behind a
+	 * busy runway is not re-judged (ClearanceFor is asked after the runway), so after the player fixes the airport its old
+	 * "no exit" would keep the alert up until the runway freed. A stale judgement is None here, not a guess either way.
+	 * ENFORCED BY: AirportOps.Model.Alerts.UnlandableHoldingFlightRaisesAnAlert,
+	 * AirportOps.Model.Alerts.FixedAirportClearsTheAlertBehindABusyRunway
 	 */
-	EArrivalRefusal UnlandableWhy(const UFlight& Flight) const;
+	EArrivalRefusal UnlandableWhy(const UFlight& Flight, const URoadNetwork& Network) const;
 
 	/**
 	 * Make a flight from an airframe, aim it at Focus, and accept it on the spot - the debug
@@ -547,6 +550,9 @@ public:
 	 *   3. OnGraphRebuilt(re-queued last) - the genuine holds first, then the re-queued flights' (review I1). AFTER the
 	 *      network's rebuild, which took every claim with it - so this is called once the load's AdoptNetwork has run.
 	 *   4. RearmSchedules - the clock's queue was never saved.
+	 *   (0. Before all of them, every arrival the REPLACED session armed is cancelled on the clock and forgotten - the map
+	 *   that holds them is not saved, and a restored flight can carry an id the old handle was booked under. So step 2 finds
+	 *   nothing armed, literally, and so does a load with no traffic model, which never reaches step 4.)
 	 *
 	 * NOT THROUGH CancelUnarrived FOR STEP 2, though the issue asked for "the same transitions as live play": the live
 	 * cancel publishes FFlightCancelledEvent, which the airline roster scores, and withdraws offers - both ruled against
@@ -781,6 +787,15 @@ private:
 	 * AirportOps.Model.FlightBoard.TransitionTable (one test per row)
 	 */
 	void TransitionTo(UFlight& Flight, EFlightPhase To, const FTransitionCause& Cause);
+
+	/** The test door onto TransitionTo, for the one thing no production door can reach: a Play-source Cancelled with no reason
+	 *  (every door names one). Defined in the test module - a friend by name, FRoadNetworkTestAccess's shape - so production has no
+	 *  second way in: rule 57 reads FlightBoard.cpp's Phase writes, and this grants no write of the field. */
+	friend struct FFlightBoardTestAccess;
+
+	/** Cancel every arrival the clock holds for a flight and forget them, with the verdict and clearance caches keyed on the same
+	 *  ids: RearmSchedules's first half, and a load's step 0. */
+	void DisarmEveryArrival(USimClock& Clock);
 
 	/** Release the hold and put it on final, Now being the game time the change is dated. False, flight still Inbound and
 	 *  stand re-held, if refused. */

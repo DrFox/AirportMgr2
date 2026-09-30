@@ -3649,16 +3649,20 @@ $ranRules.Add('shop-asks-stand-admission')
 #      thirteenth writer under another name. Tests (*Test.cpp/.h) may call it - a fixture stages a flight where no transition reaches.
 #   d. MoveToHistory( called outside TransitionTo's body (its own definition aside): the move into History is a terminal row's effect,
 #      and a caller of its own is the terminal transition that forgot the count, the publish or the unhook (FlightBoard.h says so).
-# All of (a) and (b) are hits OUTSIDE the body of UFlightBoard::TransitionTo, in the production ops and game trees (comments and strings are
-# stripped first - rule 34's helper). WHAT IT SEES NEITHER WAY: a write through a variable named for neither (`auto& F = ...; F.Phase = To;`) -
-# the compiler stops that one (Phase is private, friend UFlightBoard only), and rule 57 is the text-level second line, not the first.
-# The rule FAILS rather than checking nothing when TransitionTo is gone from FlightBoard.cpp or writes no phase.
-# Mutation-checked on 2026-09-30 against the lane's own tree (restored after each): an injected `Each->Phase = EFlightPhase::Cancelled;` in
-# ArrivalViewModels.cpp, `Flight.Phase = To;` in OpsAlerts.cpp and `Flight->SetPhaseForTest(...)` in OpsAlerts.cpp each FAIL, and renaming
-# TransitionTo FAILs (see the PR body for the pasted output).
+#   e. In FlightBoard.cpp ITSELF - `(.|->)Phase = x` through ANY variable, whatever it is called. UFlightBoard is the field's FRIEND, so the
+#      compiler lets the board write it through `Each`, `Due` or `Loaded[i]` - the one class that can still bring a second writer back - and
+#      (a) and (b) saw only a flight-named variable or the enum on the right (`Each->Phase = Next;` matched neither).
+# All of (a), (b) and (e) are hits OUTSIDE the body of UFlightBoard::TransitionTo, in the production ops and game trees (comments and strings
+# are stripped first - rule 34's helper). Elsewhere the compiler holds the line (Phase is private) and (a)/(b) are the text-level second.
+# WHAT NO REGEX SEES: a write to the field through a pointer-to-member, or a helper that takes the flight and the phase by parameter - which
+# reads as a call, not an assignment; the field's own test-seam (SetPhaseForTest) is (c). The rule FAILS rather than checking nothing when
+# TransitionTo is gone from FlightBoard.cpp or writes no phase. Mutation-checked on 2026-09-30 (restored after each; the PR body has the
+# output): `Each->Phase = Next;` in DemoteRestoredMidFlight, `Each->Phase = EFlightPhase::Cancelled;` in ArrivalViewModels.cpp,
+# `Flight.Phase = NewPhase;` and `SetPhaseForTest(...)` and `MoveToHistory(` in OpsAlerts.cpp each FAIL, and renaming TransitionTo FAILs.
 $flightBoardFile = Join-Path $ops 'Private\Model\FlightBoard.cpp'
 $phaseWriteEnum  = '(?:\.|->)Phase\s*=(?!=)\s*EFlightPhase::'
 $phaseWriteNamed = '\b\w*[Ff]light\w*(?:\[[^\]]*\])?(?:\.|->)Phase\s*=(?!=)'
+$phaseWriteAny   = '(?:\.|->)Phase\s*=(?!=)'
 $phaseTestSeam   = '\bSetPhaseForTest\s*\('
 $phaseHistoryCall = '\bMoveToHistory\s*\('
 $phaseRowWrites  = 0
@@ -3688,7 +3692,7 @@ foreach ($phaseTree in $phaseTrees) {
             if ($code -match $phaseHistoryCall -and -not $inRow -and $code -notmatch '^\s*void\s+UFlightBoard::MoveToHistory\s*\(' -and $code -notmatch '^\s*void\s+MoveToHistory\s*\(') {
                 $failures.Add("flight-phase-one-writer: $($file.FullName):$($i + 1) calls MoveToHistory outside UFlightBoard::TransitionTo - a terminal transition is the row's, with its count, publish and unhook (#442): $($code.Trim())")
             }
-            if ($code -match $phaseWriteEnum -or $code -match $phaseWriteNamed) {
+            if ($code -match $phaseWriteEnum -or $code -match $phaseWriteNamed -or ($file.FullName -eq $flightBoardFile -and $code -match $phaseWriteAny)) {
                 if ($inRow) { $phaseRowWrites++; continue }
                 $failures.Add("flight-phase-one-writer: $($file.FullName):$($i + 1) writes a flight's phase outside UFlightBoard::TransitionTo - the row owns the side effects (#442): $($code.Trim())")
             }
@@ -3707,18 +3711,27 @@ $ranRules.Add('flight-phase-one-writer')
 # Issue #442: "unarrived" was Accepted||Inbound at five sites, "on the ground" was Landing..Departing by ordinal range at four, and the
 # taxi's direction was `Current >= Turnaround` - the declaration order load-bearing, a comment the only thing saying so, and a new phase
 # (Diverted) about twelve edits none of which was a compile error. The groupings are FlightPhase::IsUnarrived / IsOnGround / IsTerminal /
-# IsLive / HasReachedStand / IsArriving now, each read off StageOf's ONE exhaustive switch in Flight.h. Two shapes, in any production ops or
-# game file but Flight.h (comments and strings stripped):
-#   a. A relational operator against an enumerator: `Phase >= EFlightPhase::Landing`, `EFlightPhase::Turnaround < EFlightPhase::TaxiOut`.
+# IsLive / HasReachedStand / IsArriving now, each read off StageOf's ONE exhaustive switch in Flight.h. Four shapes, in any production ops or
+# game file but Flight.h (comments and strings stripped, and continuation lines JOINED up to the statement's end - up to eight lines, to
+# `;`, `{`, `}` or a `:` - before matching, so a condition wrapped over two lines is one statement):
+#   a. A relational operator against an enumerator or a phase read: `Phase >= EFlightPhase::Landing`, `A.GetPhase() < B.GetPhase()`.
 #   b. Two EFlightPhase:: enumerators joined by || or && in one statement: `Phase == EFlightPhase::Accepted || Phase == EFlightPhase::Inbound`.
-# NOT BANNED: one comparison of a phase with one enumerator (`== EFlightPhase::Inbound`), a switch listing phases, and ANYTHING in a test file -
-# a test may assert "it went round again or landed". WHAT NO REGEX SEES: a grouping spelled over two statements (`bool A = ...; bool B = ...;
-# A || B`) or through a variable holding an enumerator. Mutation-checked on 2026-09-30 (restored after each): an injected
-# `Flight->GetPhase() >= EFlightPhase::Landing` and an injected `F.GetPhase() == EFlightPhase::Accepted || F.GetPhase() == EFlightPhase::Inbound`
-# in OpsAlerts.cpp each FAIL. The rule fails when Flight.h no longer defines StageOf, so a renamed table cannot switch it off.
+#   c. A phase cast to an integer - `static_cast<int32>(Flight.GetPhase())`, `static_cast<int32>(EFlightPhase::Landing)` - the ordinal by
+#      another road. (Casting it for a UEnum lookup goes through a variable, which this does not match: FlightBoardText::PhaseName.)
+#   d. A switch on EFlightPhase (one whose body has a `case EFlightPhase::`) that has a `default:`, or that is not inside
+#      AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN/_END. Without the macro C4062 is off on this toolchain, and a `default` makes a new phase someone's
+#      fallback: either way "Diverted is a build error" is false at that switch. DescribeStatus (ArrivalViewModels.cpp) had one.
+# NOT BANNED: one comparison of a phase with one enumerator (`== EFlightPhase::Inbound`), a switch that names every phase inside the macro,
+# and ANYTHING in a test file - a test may assert "it went round again or landed". WHAT NO REGEX SEES: a grouping spelled over two statements
+# (`bool A = ...; bool B = ...; A || B`) or through a variable holding an enumerator; a statement longer than eight lines. Mutation-checked on
+# 2026-09-30 (restored after each; the PR body has the output): `GetPhase() >= EFlightPhase::Landing`, `== Accepted || ... == Inbound` on one line
+# AND over two, `!= Accepted && != Inbound`, a cast-wrapped ordinal comparison, a switch with a default and a switch outside the macro each
+# FAIL. The rule fails when Flight.h no longer defines StageOf, or when it finds no switch on EFlightPhase at all (TransitionTo is one).
 $flightHeader  = Join-Path $ops 'Public\Model\Flight.h'
-$phaseRelation = '(?<!-)(?:<=|>=|<|>)\s*EFlightPhase::|EFlightPhase::\w+\s*(?:<=|>=|<(?!<)|>(?!>))'
+$phaseRelation = '(?<!-)(?:<=|>=|<|>)\s*EFlightPhase::|EFlightPhase::\w+\s*(?:<=|>=|<(?!<)|>(?!>))|GetPhase\s*\(\s*\)\s*(?:<=|>=|<(?!<)|>(?!>))|(?<!-)(?:<=|>=|<|>)\s*[\w\.\->\[\]\*\(\)]*GetPhase\s*\(\s*\)'
 $phaseGrouping = 'EFlightPhase::\w+[^;{}]*?(?:\|\||&&)[^;{}]*?EFlightPhase::\w+'
+$phaseCast     = 'static_cast\s*<\s*(?:u?int\w*|long|size_t)\s*>\s*\([^;]*(?:EFlightPhase::|GetPhase\s*\()'
+$phaseSwitchesSeen = 0
 if (-not (Test-Path $flightHeader) -or $null -eq (Select-String -Path $flightHeader -Pattern 'inline\s+EFlightStage\s+StageOf\s*\(')) {
     $failures.Add("flight-phase-groupings: Flight.h no longer defines FlightPhase::StageOf - rule 58 is stale or the one table moved (#442); update it, do not let it check nothing")
 }
@@ -3727,14 +3740,71 @@ foreach ($phaseTree in $phaseTrees) {
         if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.FullName -match '[\\/]Testing[\\/]' -or $file.Name -eq 'Flight.h') { continue }
         $lines = Get-Content -LiteralPath $file.FullName
         $inBlock = $false
+        $codeLines = New-Object System.Collections.Generic.List[string]
+        $exhaustiveAt = New-Object System.Collections.Generic.List[bool]
+        $exhaustive = $false
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
-            if ($code.Trim() -eq '' -or $code -notmatch 'EFlightPhase::') { continue }
-            if ($code -match $phaseRelation -or $code -match $phaseGrouping) {
-                $failures.Add("flight-phase-groupings: $($file.FullName):$($i + 1) groups EFlightPhase by comparison or by an OR of names - ask FlightPhase::IsUnarrived / IsOnGround / IsTerminal / IsLive / HasReachedStand / IsArriving (Flight.h) instead (#442): $($code.Trim())")
+            if ($code -match '\bAIRSIDE_EXHAUSTIVE_SWITCH_BEGIN\b') { $exhaustive = $true }
+            $codeLines.Add($code)
+            $exhaustiveAt.Add($exhaustive)
+            if ($code -match '\bAIRSIDE_EXHAUSTIVE_SWITCH_END\b') { $exhaustive = $false }
+        }
+        # (a) (b) (c): STATEMENTS, not lines.
+        $statement = ''
+        $statementStart = 0
+        $statementLines = 0
+        for ($i = 0; $i -lt $codeLines.Count; $i++) {
+            $trimmed = $codeLines[$i].Trim()
+            $flush = $false
+            if ($trimmed -eq '') {
+                $flush = $statement -ne ''
+            } else {
+                if ($statement -eq '') { $statementStart = $i }
+                $statement += ' ' + $trimmed
+                $statementLines++
+                $flush = ($trimmed -match '[;{}:]$') -or ($statementLines -ge 8)
+            }
+            if ($flush) {
+                if ($statement -match 'EFlightPhase::|GetPhase\s*\(' -and ($statement -match $phaseRelation -or $statement -match $phaseGrouping -or $statement -match $phaseCast)) {
+                    $failures.Add("flight-phase-groupings: $($file.FullName):$($statementStart + 1) groups EFlightPhase by comparison, cast or an OR of names - ask FlightPhase::IsUnarrived / IsOnGround / IsTerminal / IsLive / HasReachedStand / IsArriving (Flight.h) instead (#442): $($statement.Trim())")
+                }
+                $statement = ''
+                $statementLines = 0
+            }
+        }
+        # (d) SWITCHES: a default, or no exhaustive macro around it.
+        for ($i = 0; $i -lt $codeLines.Count; $i++) {
+            if ($codeLines[$i] -notmatch '\bswitch\s*\(') { continue }
+            $open = -1
+            for ($j = $i; $j -lt [Math]::Min($i + 4, $codeLines.Count); $j++) { if ($codeLines[$j].Contains('{')) { $open = $j; break } }
+            if ($open -lt 0) { continue }
+            $depth = 0
+            $flat = New-Object System.Text.StringBuilder
+            $closed = $false
+            for ($j = $open; $j -lt $codeLines.Count -and -not $closed; $j++) {
+                foreach ($ch in $codeLines[$j].ToCharArray()) {
+                    if ($ch -eq '{') { $depth++; if ($depth -gt 1) { [void]$flat.Append(' ') } }
+                    elseif ($ch -eq '}') { $depth--; if ($depth -eq 0) { $closed = $true; break } else { [void]$flat.Append(' ') } }
+                    elseif ($depth -eq 1) { [void]$flat.Append($ch) }
+                    else { [void]$flat.Append(' ') }
+                }
+                [void]$flat.Append(' ')
+            }
+            $body = $flat.ToString()
+            if ($body -notmatch '\bcase\s+EFlightPhase::') { continue }
+            $phaseSwitchesSeen++
+            if ($body -match '\bdefault\s*:') {
+                $failures.Add("flight-phase-groupings: $($file.FullName):$($i + 1) switches on EFlightPhase with a default - name every phase, so a new one is a build error here and not this switch's fallback (#442)")
+            }
+            if (-not $exhaustiveAt[$i]) {
+                $failures.Add("flight-phase-groupings: $($file.FullName):$($i + 1) switches on EFlightPhase outside AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN/_END - C4062 is off on this toolchain, so a new phase would pass it silently (#442)")
             }
         }
     }
+}
+if ($phaseSwitchesSeen -eq 0) {
+    $failures.Add("flight-phase-groupings: found no switch on EFlightPhase in the production trees - UFlightBoard::TransitionTo is one; rule 58's switch check no longer sees its shape; update it, do not let it check nothing")
 }
 $ranRules.Add('flight-phase-groupings')
 

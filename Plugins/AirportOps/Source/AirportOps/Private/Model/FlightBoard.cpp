@@ -509,7 +509,7 @@ EArrivalRefusal UFlightBoard::ClearanceFor(const UGroundTraffic& Traffic, const 
 	return Why;
 }
 
-EArrivalRefusal UFlightBoard::UnlandableWhy(const UFlight& Flight) const
+EArrivalRefusal UFlightBoard::UnlandableWhy(const UFlight& Flight, const URoadNetwork& Network) const
 {
 	// HOLDING ONLY: the clearance is computed for the queue (TickQueue), and an Accepted flight has not joined it - it is
 	// not refused anything yet, and a plan run for it here would be a route search per flight per alert recompute.
@@ -518,10 +518,13 @@ EArrivalRefusal UFlightBoard::UnlandableWhy(const UFlight& Flight) const
 		return EArrivalRefusal::None;
 	}
 	const FClearance* Clearance = Clearances.Find(Flight.Id);
-	// THE CACHE AS IT STANDS, stale or not: it is dated by the guideline and occupancy revisions, and an edit that could
-	// change the answer also dirties the queue pass, which refreshes it before the alerts pass reads it. A flight the queue
-	// has not judged is None - not "refused" - so an alert is never raised on a guess.
-	if (Clearance == nullptr || !Clearance->bValid || !ArrivalPlanner::IsPermanentRefusal(Clearance->Why))
+	// A FLIGHT THE QUEUE HAS NOT JUDGED is None - not "refused" - so an alert is never raised on a guess. NOR ONE JUDGED AGAINST A
+	// GRAPH THAT HAS MOVED since (#442 review): ClearanceFor is asked only after the runway is found free, so a flight waiting behind a
+	// busy runway keeps its old "no exit" after the player fixes the airport, and the alert would outlive the fix until the runway
+	// freed. An edit that could change the answer moves the guideline revision, so a judgement dated before it says nothing now. (The
+	// occupancy stamp is not asked: the permanent refusals are about the graph, and the transient ones - a busy stand - are not here.)
+	if (Clearance == nullptr || !Clearance->bValid || Clearance->GuidelineAt != Network.GetGuidelineRevision()
+		|| !ArrivalPlanner::IsPermanentRefusal(Clearance->Why))
 	{
 		return EArrivalRefusal::None;
 	}
@@ -862,6 +865,11 @@ void UFlightBoard::RestoreAfterLoad(UGroundTraffic* Traffic, const URoadNetwork&
 	bool bAirportAdmits)
 {
 	// THE ORDER IS THE HEADER'S, step for step - see RestoreAfterLoad there for why each is where it is.
+	// 0. THE REPLACED SESSION'S ARRIVALS, CANCELLED ON THE CLOCK AND FORGOTTEN (#442 review): ArrivalHandles is not saved, so it still
+	// holds the handles the session being replaced armed, keyed by ids a restored flight may carry. Before step 1, so step 2's cancel
+	// finds nothing armed - and a load with no traffic model, which returns before step 4's re-arm, no longer leaves them on the clock.
+	DisarmEveryArrival(Clock);
+
 	// 1. BESIDE ITS CAUSE (review ruling M5): the load's ClearAgents threw away every aeroplane, so a flight saved
 	// landing or taxiing in goes round again and one on the ground retires as departed - dated by the LOADED clock.
 	const TArray<UFlight*> Requeued = DemoteRestoredMidFlight(Clock.Now());
@@ -874,7 +882,8 @@ void UFlightBoard::RestoreAfterLoad(UGroundTraffic* Traffic, const URoadNetwork&
 	if (!bAirportAdmits)
 	{
 		// WITH THE TRAFFIC AND THE CLOCK THE LOAD HAS (#442), so the Cancelled row releases and disarms as it does in play: in this
-		// position there is nothing held or armed yet and they find nothing to do, but the cancel no longer depends on it.
+		// position nothing is held or armed yet (step 0 cancelled the old session's arrivals, nothing re-arms until step 4) and
+		// they find nothing to do, but the cancel no longer depends on it.
 		Cancelled = CancelUnarrivedAtLoad(Clock.Now(), Traffic, &Clock);
 	}
 
@@ -1051,7 +1060,10 @@ void UFlightBoard::PostParkingFee(double Now, UFlight& Flight)
 {
 	// ParkedAt of zero means it never parked - see UFlight::ParkedAt for the two ways a flight
 	// reaches TaxiOut without having done so, and for what billing from the epoch would cost.
-	if (Ledger == nullptr || Flight.ParkedAt <= 0.0)
+	// ONCE PER FLIGHT, like the landing fee: an aeroplane that parks again after its taxi out began enters TaxiOut a second time, and
+	// would be billed the overlapping hours again from the original ParkedAt (#442 review).
+	// ENFORCED BY: AirportOps.Model.FlightFees.ParkingIsBilledOncePerFlight
+	if (Ledger == nullptr || Flight.ParkedAt <= 0.0 || Flight.bParkingFeePaid)
 	{
 		return;
 	}
@@ -1068,6 +1080,7 @@ void UFlightBoard::PostParkingFee(double Now, UFlight& Flight)
 		return;
 	}
 
+	Flight.bParkingFeePaid = true;
 	Flight.ParkingFee = Fee;
 	Ledger->Post(Now, ELedgerCategory::ParkingFee, Fee,
 		FText::Format(NSLOCTEXT("Ledger", "ParkingBy", "Parking: {0}"), Flight.AirlineName));
@@ -1228,6 +1241,14 @@ void UFlightBoard::OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& N
 	}
 }
 
+void UFlightBoard::DisarmEveryArrival(USimClock& Clock)
+{
+	for (const TPair<int32, int32>& Handle : ArrivalHandles) { Clock.Cancel(Handle.Value); }
+	ArrivalHandles.Reset();
+	Verdicts.Reset();
+	Clearances.Reset();
+}
+
 void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	USimClock& Clock)
 {
@@ -1236,10 +1257,7 @@ void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& N
 	// harmless against a genuinely fresh post-load Clock (its queue starts empty), but this
 	// function has no way to know that is the only time it is ever called, and an entry that
 	// fires later still runs its captured lambda against whatever Id it named.
-	for (const TPair<int32, int32>& Handle : ArrivalHandles) { Clock.Cancel(Handle.Value); }
-	ArrivalHandles.Reset();
-	Verdicts.Reset();
-	Clearances.Reset();
+	DisarmEveryArrival(Clock);
 
 	// REBUILT HERE TOO, NOT ONLY IN OnAfterRestore: this is the one call every load path is
 	// documented to make (see this function's own header), while OnAfterRestore only runs
@@ -1494,9 +1512,20 @@ void UFlightBoard::TransitionTo(UFlight& Flight, EFlightPhase To, const FTransit
 		// then - publishing here would charge ClosureCancelPenalty again (PR C ruling I2). The one deliberate difference between
 		// two doors onto this row.
 		// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, AirportOps.Model.FlightBoard.CancelUnarrivedCancelsAndWithdraws
-		if (Cause.Source == EFlightChangeSource::Play && Bus != nullptr)
+		// A PLAY CANCEL MUST SAY WHY: the reason is what the roster scores by, and Unstuck - the free one - was the silent default
+		// of a door that forgot it (#442 review). Loud and unpublished instead: an event with an invented reason is a lie.
+		// ENFORCED BY: AirportOps.Model.FlightBoard.CancelWithNoReasonIsLoudNotFree
+		if (Cause.Source == EFlightChangeSource::Play)
 		{
-			Bus->Publish(FFlightCancelledEvent{ Flight.Id, Flight.AirlineId, Cause.CancelReason });
+			if (!Cause.CancelReason.IsSet())
+			{
+				UE_LOG(LogAirportOps, Error, TEXT("Flight %d cancelled from %s with no reason given - nothing published, so the airline is not charged and nobody is told"),
+					Flight.Id, *FlightBoardText::PhaseName(From));
+			}
+			else if (Bus != nullptr)
+			{
+				Bus->Publish(FFlightCancelledEvent{ Flight.Id, Flight.AirlineId, Cause.CancelReason.GetValue() });
+			}
 		}
 		break;
 	}

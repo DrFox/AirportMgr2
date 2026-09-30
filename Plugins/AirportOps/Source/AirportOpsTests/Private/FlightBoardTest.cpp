@@ -602,6 +602,17 @@ bool FFlightBoardIndexMatchesTheLinearScanTest::RunTest(const FString& Parameter
 // THE ONE WRITER OF A FLIGHT'S PHASE (#442): UFlightBoard::TransitionTo and its rows, each measured through the door that reaches
 // it. A row that is unwired - an effect the row owns but its door stopped getting - fails the test named for it.
 // ============================================================================================================================
+// THE TEST DOOR onto UFlightBoard::TransitionTo (FlightBoard.h's friend by name): the one thing no production door can reach is a
+// Play-source Cancelled with no reason - every door names one - and a pin that cannot be reached is no pin. Global scope, where the
+// friend declaration put the name.
+struct FFlightBoardTestAccess
+{
+	static void Transition(UFlightBoard& Board, UFlight& Flight, EFlightPhase To, const FTransitionCause& Cause)
+	{
+		Board.TransitionTo(Flight, To, Cause);
+	}
+};
+
 namespace
 {
 	FAirframe TransitionAirframe()
@@ -931,6 +942,69 @@ bool FFlightBoardCancelledRowTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("by agent: as Unstuck"), R.Cancelled[0].Reason, ECancelReason::Unstuck);
 		}
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardCancelWithNoReasonTest,
+	"AirportOps.Model.FlightBoard.CancelWithNoReasonIsLoudNotFree",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardCancelWithNoReasonTest::RunTest(const FString& Parameters)
+{
+	// A PLAY-SOURCE CANCEL THAT FORGOT WHY used to default to Unstuck - the one reason the airline roster does not charge - so a door that
+	// dropped its reason cost nobody anything, with no trace (#442 review). Now the Cancelled row logs an Error and publishes nothing;
+	// the flight is still filed, its stand still released. (An ensure would fail the run; AddExpectedError is how a test pins a log.)
+	FTransitionRig R;
+	UFlight* Flight = R.Accept(/*Lead=*/1000.0);
+	if (!TestNotNull(TEXT("an accepted flight"), Flight)) { return false; }
+	if (!TestTrue(TEXT("holding a stand"), R.StandHeldFor(*Flight))) { return false; }
+	R.Drain();
+	R.Cancelled.Reset();
+
+	AddExpectedError(TEXT("cancelled from Accepted with no reason given"), EAutomationExpectedErrorFlags::Contains, 1);
+	FFlightBoardTestAccess::Transition(*R.Board, *Flight, EFlightPhase::Cancelled,
+		FTransitionCause::Played(R.Clock->Now()).WithWorld(R.Clock, R.Traffic));
+	R.Drain();
+
+	TestEqual(TEXT("the flight is cancelled and filed all the same"), Flight->GetPhase(), EFlightPhase::Cancelled);
+	TestEqual(TEXT("in History"), R.Board->GetHistoryCountForTest(), 1);
+	TestFalse(TEXT("its stand is released"), R.StandHeldFor(*Flight));
+	TestEqual(TEXT("and NOTHING is published - an event with an invented reason is a lie, and the free one would hide the fault"), R.Cancelled.Num(), 0);
+
+	// CONTROL: the same cancel WITH a reason publishes it, so the silence above is the missing reason and nothing else.
+	UFlight* Second = R.Accept(/*Lead=*/1000.0);
+	if (!TestNotNull(TEXT("a second accepted flight"), Second)) { return false; }
+	FFlightBoardTestAccess::Transition(*R.Board, *Second, EFlightPhase::Cancelled,
+		FTransitionCause::Played(R.Clock->Now()).WithWorld(R.Clock, R.Traffic).Cancelling(ECancelReason::PlayerCancelled));
+	R.Drain();
+	if (TestEqual(TEXT("CONTROL: with a reason it is published once"), R.Cancelled.Num(), 1))
+	{
+		TestEqual(TEXT("CONTROL: as itself"), R.Cancelled[0].Reason, ECancelReason::PlayerCancelled);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardLoadDisarmsTheReplacedSessionTest,
+	"AirportOps.Model.FlightSave.LoadDisarmsTheReplacedSessionsArrivals",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardLoadDisarmsTheReplacedSessionTest::RunTest(const FString& Parameters)
+{
+	// THE BOARD'S ARRIVAL HANDLES ARE NOT SAVED, so a load found the REPLACED session's still in the map (#442 review) - keyed by ids a
+	// restored flight may carry. RestoreAfterLoad cancels them on the clock first (step 0). Measured with a load that has NO TRAFFIC
+	// MODEL: it returns before step 4's re-arm, which used to be the only thing that ever cancelled them, so the old session's arrival
+	// stayed on the clock for a flight that no longer exists.
+	FTransitionRig R;
+	UFlight* Flight = R.Accept(/*Lead=*/1000.0);
+	if (!TestNotNull(TEXT("an accepted flight, its arrival armed"), Flight)) { return false; }
+	if (!TestEqual(TEXT("PRECONDITION: one entry waiting on the clock"), R.Clock->PendingForTest(), 1)) { return false; }
+
+	// THE LOAD REPLACES EVERY FLIGHT (an empty snapshot's), and then runs its flight half with no traffic model.
+	R.Board->OnBeforeRestore();
+	R.Board->RestoreAfterLoad(nullptr, *R.Airport.Net, *R.Clock, /*bAirportAdmits=*/true);
+	TestEqual(TEXT("the replaced session's arrival is gone from the clock"), R.Clock->PendingForTest(), 0);
 	return true;
 }
 

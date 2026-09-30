@@ -26,9 +26,12 @@ struct FAgentTransition;
  * at five sites, "on the ground" was Landing..Departing by range at four, FlightPhaseFromTransition asked whether the
  * flight had reached Turnaround by `>=` - and a new phase needed about twelve edits, none of them a compile error. Every
  * grouping is now one of the FlightPhase:: predicates below, each derived from StageOf's ONE exhaustive switch, so a new
- * phase (Diverted) is a BUILD ERROR there and nowhere else has to be found by reading.
- * ENFORCED BY: Check-Architecture rule 58 (no ordinal or OR-grouped EFlightPhase test outside this file),
- * C4062 as an error around StageOf (AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN)
+ * phase (Diverted) is a BUILD ERROR at StageOf, at UFlightBoard::TransitionTo's row switch and at every other per-phase
+ * mapping in the ops and game modules - each inside AIRSIDE_EXHAUSTIVE_SWITCH with no default - and nowhere has to be
+ * found by reading. Tests are the exception: they may group phases, and a table of them names every phase by count.
+ * ENFORCED BY: Check-Architecture rule 58 (no ordinal, cast or OR-grouped EFlightPhase test, and no switch on one without
+ * AIRSIDE_EXHAUSTIVE_SWITCH or with a default, outside this file), C4062 as an error around StageOf
+ * (AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN)
  *
  * Manoeuvring is the aeroplane coming off the stand - the PHASE, and it exists because an
  * aeroplane can now be watched doing it. The SERVICE that performs it for one that cannot
@@ -245,7 +248,13 @@ struct FTransitionCause
 	double At = 0.0;
 	USimClock* Clock = nullptr;
 	UGroundTraffic* Traffic = nullptr;
-	ECancelReason CancelReason = ECancelReason::Unstuck;
+	/**
+	 * WHY, for the Cancelled row - UNSET until Cancelling names it. Not defaulted to a reason: a cancel that forgot to say why
+	 * was silently the FREE one (Unstuck, which the roster does not charge), so a door that dropped its reason cost the airline
+	 * nothing with no trace. The row logs an Error and publishes nothing for a Play-source cancel with none.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.CancelWithNoReasonIsLoudNotFree
+	 */
+	TOptional<ECancelReason> CancelReason;
 	int32 AgentId = INDEX_NONE;
 
 	static FTransitionCause Played(double InAt)
@@ -472,6 +481,14 @@ public:
 	 * aeroplanes that landed an hour ago.
 	 */
 	UPROPERTY() bool bLandingFeePaid = false;
+
+	/**
+	 * Whether the parking fee has been banked, so one flight is billed once (#442 review). PostParkingFee runs when the flight
+	 * ENTERS TaxiOut; an aeroplane that parks again (Parked -> Turnaround -> TaxiOut) enters it a second time, and without this
+	 * was billed the overlapping hours again from the original ParkedAt. SAVED, for bLandingFeePaid's reason.
+	 * ENFORCED BY: AirportOps.Model.FlightFees.ParkingIsBilledOncePerFlight
+	 */
+	UPROPERTY() bool bParkingFeePaid = false;
 
 	/**
 	 * USimClock::Now at which this flight reached a terminal phase (Declined, Expired,

@@ -15,7 +15,9 @@
 #include "Testing/AirsideTestWorld.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Content/AirsideSettings.h"
+#include "Misc/ScopeExit.h"
 #include "Model/Flight.h"
+#include "OpsRuntimeResolver.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
 #include "Present/OpsRuntime.h"
@@ -263,6 +265,65 @@ bool FAlertsCancelFlightTest::RunTest(const FString&)
 
 	Events->OnAlertCleared.Broadcast(Cannot.Key);
 	TestFalse(TEXT("and once the alert has cleared the row is gone"), Panel->CancelFlightOf(Cannot.Key, *Runtime));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAlertsCancelClickTest, "AirportMgr.UI.Alerts.CancelButtonCancelsItsFlight",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAlertsCancelClickTest::RunTest(const FString&)
+{
+	// THE WIRING, AT THE BUTTON (#442 review): CancelFlightOf is tested above by calling it, which passes a row whose button was built
+	// and never bound. This paints a FlightCannotLand row, checks its Cancel flight is bound to its own entry, and CLICKS it - the real
+	// OnClicked - and the flight is cancelled through the panel's own runtime (the resolver's, stood in for the headless world).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 90000.0));
+	URoadNetwork* Net = TestWorld.Actor->Network;
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	const FTestAirport Field = FTestAirport::Build(Airframe, FTestAirportOptions(), Net);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	UGroundTraffic* Model = TestWorld.Actor->GetTraffic()->GetModel();
+	if (!TestNotNull(TEXT("a traffic model"), Model)) { return false; }
+	UFlightBoard* Board = Runtime->GetFlightBoard();
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Id = Board->TakeNextId();
+	Flight->Airframe = Airframe;
+	Flight->Callsign = TEXT("CU 204");
+	Flight->OfferWindowSeconds = 60.0;
+	Flight->OfferSecondsLeft = 60.0;
+	Flight->LeadTimeSeconds = 1000.0;
+	Flight->RunwayPreference = Field.Threshold;
+	Board->AddOffer(*Runtime->GetClock(), Flight);
+	if (!TestTrue(TEXT("a flight accepted, holding a stand"), Board->Accept(*Model, *Net, *Runtime->GetClock(), *Flight))) { return false; }
+	const FEntityInstance* Stand = Net->GetEntity(Flight->Stand);
+	if (!TestNotNull(TEXT("its stand"), Stand)) { return false; }
+	const FGuidelineNodeId StandNode = Stand->PoseNode;
+
+	UAlertsPanelWidget* Panel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("an alerts window"), Panel)) { return false; }
+	UOpsEvents* Events = NewObject<UOpsEvents>();
+	Panel->BindTo(*Events);
+	const FOpsAlert Cannot = AlertsPanelTestAlert(EAlertKind::FlightCannotLand, Flight->Id, EAlertFocusKind::Point, Field.Threshold);
+	const FOpsAlert Lost = AlertsPanelTestAlert(EAlertKind::HeldStandLost, Flight->Id, EAlertFocusKind::Point, Field.Threshold);
+	Events->OnAlertRaised.Broadcast(Cannot);
+	Events->OnAlertRaised.Broadcast(Lost);
+	Panel->PaintRowsForTest();
+
+	TestTrue(TEXT("the flight-cannot-land row's Cancel flight is bound to its own entry"), Panel->IsCancelBoundForTest(Cannot.Key));
+	TestFalse(TEXT("a held-stand row has no such button"), Panel->IsCancelBoundForTest(Lost.Key));
+	TestFalse(TEXT("and there is none to click on it"), Panel->ClickCancelForTest(Lost.Key));
+
+	// NO RUNTIME FOR THE WORLD: the click is refused, logged, and cancels nothing (a world with no game instance and no override).
+	OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, nullptr);
+	TestTrue(TEXT("the click reaches the button"), Panel->ClickCancelForTest(Cannot.Key));
+	TestEqual(TEXT("with no runtime to ask, nothing is cancelled"), Flight->GetPhase(), EFlightPhase::Accepted);
+
+	OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, Runtime);
+	ON_SCOPE_EXIT { OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, nullptr); };
+	TestTrue(TEXT("the click reaches the button"), Panel->ClickCancelForTest(Cannot.Key));
+	TestEqual(TEXT("and the flight is cancelled"), Flight->GetPhase(), EFlightPhase::Cancelled);
+	TestFalse(TEXT("its stand released"), Model->IsStandHeld(StandNode, 0));
 	return true;
 }
 

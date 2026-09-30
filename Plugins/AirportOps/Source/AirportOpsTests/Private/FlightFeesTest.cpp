@@ -262,6 +262,55 @@ bool FParkingAtTheOffersRateTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FParkingBilledOncePerFlightTest,
+	"AirportOps.Model.FlightFees.ParkingIsBilledOncePerFlight",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FParkingBilledOncePerFlightTest::RunTest(const FString& Parameters)
+{
+	// AN AEROPLANE THAT PARKS AGAIN after its taxi out began enters TaxiOut a second time (#442 review): the once-per-entry guard lets that
+	// through, and PostParkingFee billed the overlapping hours again from the original ParkedAt. One flight, one parking fee - the landing
+	// fee's rule, and its bLandingFeePaid.
+	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
+	Ledger->Open(0.0);
+	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
+	Board->Ledger = Ledger;
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Id = 1;
+	Flight->AirlineName = FText::FromString(TEXT("Test Air"));
+	Flight->ParkingRatePerHour = 120.0;
+	Flight->AgentId = 5;
+	Flight->SetPhaseForTest(EFlightPhase::Manoeuvring);
+	Flight->ParkedAt = 1000.0;
+	Board->AddOffer(*Clock, Flight);
+
+	Clock->StartAtHour((1000.0 + 7200.0) / 3600.0);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
+	if (!TestEqual(TEXT("taxiing out"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
+	if (!TestEqual(TEXT("parking posted on entering TaxiOut: 2 h at 120"), Ledger->Balance(), 240.0, 1e-3)) { return false; }
+	TestTrue(TEXT("and the flight knows it was billed"), Flight->bParkingFeePaid);
+
+	// IT PARKS AGAIN (a Parked event reaches Turnaround from any phase that has reached the stand), an hour later, and pushes back out.
+	Clock->StartAtHour((1000.0 + 10800.0) / 3600.0);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
+	if (!TestEqual(TEXT("PRECONDITION: back on the stand"), Flight->GetPhase(), EFlightPhase::Turnaround)) { return false; }
+	Clock->StartAtHour((1000.0 + 14400.0) / 3600.0);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Parked, EAgentPhase::Taxiing, EAgentEvent::DepartOrdered));
+	if (!TestEqual(TEXT("PRECONDITION: taxiing out again - a second ENTRY"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
+	TestEqual(TEXT("and the flight is billed ONCE: the balance is unchanged"), Ledger->Balance(), 240.0, 1e-3);
+	int32 ParkingRows = 0;
+	for (const FLedgerEntry& Row : Ledger->Entries())
+	{
+		ParkingRows += Row.Category == ELedgerCategory::ParkingFee ? 1 : 0;
+	}
+	TestEqual(TEXT("one parking row in the ledger"), ParkingRows, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FParkingBilledOnceAcrossARedirectTest,
 	"AirportOps.Model.FlightFees.ParkingIsBilledOnceAcrossARedirect",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

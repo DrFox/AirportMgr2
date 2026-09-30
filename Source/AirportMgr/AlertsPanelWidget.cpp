@@ -1,6 +1,5 @@
 #include "AlertsPanelWidget.h"
 
-#include "BuildActions.h"
 #include "Blueprint/WidgetTree.h"
 #include "BuildHudLayer.h"
 #include "Components/HorizontalBox.h"
@@ -33,18 +32,12 @@ void UAlertRowEntry::HandleClick()
 
 void UAlertRowEntry::HandleCancelClick()
 {
-	UAlertsPanelWidget* Panel = Owner.Get();
-	ARoadBuildController* Controller = Panel != nullptr ? Cast<ARoadBuildController>(Panel->GetOwningPlayer()) : nullptr;
-	if (Panel == nullptr || Controller == nullptr)
+	// THROUGH THE PANEL, which asks its own runtime (OpsRuntime(), the resolver's answer) - not a controller verb, whose public surface
+	// is a closed list, and not a UOpsRuntimeSubsystem::Get of this widget's own. The flight is the row's own key.
+	// ENFORCED BY: Check-Architecture rule 55 (the subsystem is called from the resolver alone), rule 54 (the controller's closed list)
+	if (UAlertsPanelWidget* Panel = Owner.Get())
 	{
-		return;
-	}
-	// THE RUNTIME THROUGH THE ACTION CONTEXT, the game module's way to it - not a second UOpsRuntimeSubsystem::Get in a widget, and
-	// not a verb on the controller (whose public surface is a closed list). The flight is the row's own key.
-	FBuildActionContext Context(*Controller);
-	if (Context.Runtime != nullptr)
-	{
-		Panel->CancelFlightOf(Key, *Context.Runtime);
+		Panel->OnCancelClicked(Key);
 	}
 }
 
@@ -183,6 +176,44 @@ bool UAlertsPanelWidget::GoTo(const FOpsAlertKey& Key, ARoadBuildController& Con
 	return Controller.SelectAndFocus(Alert.Focus);
 }
 
+bool UAlertsPanelWidget::OnCancelClicked(const FOpsAlertKey& Key)
+{
+	UOpsRuntime* Runtime = OpsRuntime();
+	if (Runtime == nullptr)
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Alerts: Cancel flight clicked on %s %d with no ops runtime - nothing cancelled"),
+			*UEnum::GetValueAsString(Key.Kind), Key.Id);
+		return false;
+	}
+	return CancelFlightOf(Key, *Runtime);
+}
+
+bool UAlertsPanelWidget::IsCancelBoundForTest(const FOpsAlertKey& Key) const
+{
+	for (const TObjectPtr<UAlertRowEntry>& Entry : Entries)
+	{
+		if (Entry != nullptr && Entry->Key == Key)
+		{
+			return Entry->CancelButton != nullptr
+				&& Entry->CancelButton->OnClicked.Contains(Entry.Get(), GET_FUNCTION_NAME_CHECKED(UAlertRowEntry, HandleCancelClick));
+		}
+	}
+	return false;
+}
+
+bool UAlertsPanelWidget::ClickCancelForTest(const FOpsAlertKey& Key)
+{
+	for (const TObjectPtr<UAlertRowEntry>& Entry : Entries)
+	{
+		if (Entry != nullptr && Entry->Key == Key && Entry->CancelButton != nullptr)
+		{
+			Entry->CancelButton->OnClicked.Broadcast();
+			return true;
+		}
+	}
+	return false;
+}
+
 bool UAlertsPanelWidget::CancelFlightOf(const FOpsAlertKey& Key, UOpsRuntime& Runtime)
 {
 	const FOpsAlert* Found = Alerts.FindByPredicate([&Key](const FOpsAlert& A) { return A.Key == Key; });
@@ -261,6 +292,7 @@ void UAlertsPanelWidget::PaintRows()
 			CancelButton->Build(Style, EUiButtonKind::Secondary);
 			CancelButton->SetState(true, false);
 			CancelButton->OnClicked.AddDynamic(Entry, &UAlertRowEntry::HandleCancelClick);
+			Entry->CancelButton = CancelButton;
 			UHorizontalBoxSlot* CancelSlot = Line->AddChildToHorizontalBox(CancelButton);
 			CancelSlot->SetPadding(FMargin(6.0f, 0.0f, 0.0f, 0.0f));
 		}

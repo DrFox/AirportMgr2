@@ -92,7 +92,10 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 			// UnlandableWhy, which never plans), so the alert clears by itself the moment the airport is fixed and the queue pass
 			// re-judges it. The sentence is the planner's own, with its figures, and ends with the two things the player can do.
 			// ENFORCED BY: AirportOps.Model.Alerts.UnlandableHoldingFlightRaisesAnAlert
-			const EArrivalRefusal Unlandable = Sources.Flights->UnlandableWhy(*Flight);
+			// NEEDS THE NETWORK: a judgement is only as fresh as the guideline graph it was made against (UnlandableWhy), and with no
+			// network the alert cannot tell a current refusal from a stale one, so it raises none.
+			const EArrivalRefusal Unlandable = Sources.Network != nullptr ? Sources.Flights->UnlandableWhy(*Flight, *Sources.Network)
+				: EArrivalRefusal::None;
 			if (Unlandable != EArrivalRefusal::None)
 			{
 				FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::FlightCannotLand, Flight->Id, NAME_None,

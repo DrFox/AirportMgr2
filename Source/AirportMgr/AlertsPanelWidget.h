@@ -25,8 +25,12 @@ public:
 	/** BY KEY, not row index: a clear between a paint and a click shifts the indices (stage 2 review). */
 	FOpsAlertKey Key;
 
+	/** The row's Cancel flight button, kept so a test can click the real delegate and check it is bound (#442 review). Only a
+	 *  FlightCannotLand row has one. */
+	UPROPERTY() TObjectPtr<UUiButton> CancelButton;
+
 	UFUNCTION() void HandleClick();
-	/** The row's Cancel flight - UAlertsPanelWidget::CancelFlightOf through the world's ops runtime (#442). */
+	/** The row's Cancel flight - UAlertsPanelWidget::OnCancelClicked, which asks the panel's own ops runtime (#442). */
 	UFUNCTION() void HandleCancelClick();
 };
 
@@ -78,6 +82,24 @@ public:
 	 * ENFORCED BY: AirportMgr.UI.Alerts.CancelFlightCancelsOnlyAFlightCannotLandRow
 	 */
 	bool CancelFlightOf(const FOpsAlertKey& Key, UOpsRuntime& Runtime);
+
+	/**
+	 * THE CLICK ITSELF (what a row's Cancel flight button calls): CancelFlightOf against this panel's own ops runtime - the world's
+	 * resolver's, which a test overrides for a headless world - and LOGGED, not silent, when there is none: a button that does nothing
+	 * with no trace is the shape this project keeps paying for.
+	 */
+	bool OnCancelClicked(const FOpsAlertKey& Key);
+
+	/** Paint the rows now, instead of on the next tick while shown - for a test that clicks one. */
+	void PaintRowsForTest() { PaintRows(); }
+
+	/** Row Key's Cancel flight button is bound to its own entry's HandleCancelClick - the hop ClickCancelForTest skips when it
+	 *  calls the method. Checked by name on the delegate, so an unbound button fails it. False for a row with no such button. */
+	bool IsCancelBoundForTest(const FOpsAlertKey& Key) const;
+
+	/** Click row Key's Cancel flight button - its real OnClicked, so the binding is part of what is measured. False when the row
+	 *  has none. */
+	bool ClickCancelForTest(const FOpsAlertKey& Key);
 
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
 	virtual void OnWindowClosedByPlayer() override;

@@ -1,10 +1,17 @@
 #include "ArrivalViewModels.h"
 
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/SimClock.h"
 #include "OfferViewModels.h"
 
+// EVERY PHASE BY NAME, NO default, and a missing one is a BUILD ERROR (#442 review): this had a `default: return empty`, so a new phase
+// (Diverted) would have shown a blank status on the arrivals row with nothing to say so - the one per-phase table outside the board the
+// predicates in Flight.h did not reach. The phases a live row never shows (an offer, anything finished) are named, and empty.
+// ENFORCED BY: C4062 as an error, AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN; Check-Architecture rule 58 (a switch on EFlightPhase outside Flight.h is
+// inside it and has no default); AirportMgr.Arrivals.StatusText (every phase the enum has: a live one says something, the rest are empty)
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 FText UArrivalRowViewModel::DescribeStatus(const UFlight& Flight, double Now)
 {
 	switch (Flight.GetPhase())
@@ -19,9 +26,17 @@ FText UArrivalRowViewModel::DescribeStatus(const UFlight& Flight, double Now)
 	case EFlightPhase::Manoeuvring: return NSLOCTEXT("AirportMgr", "ArrivalManoeuvring", "MANOEUVRING");
 	case EFlightPhase::TaxiOut:     return NSLOCTEXT("AirportMgr", "ArrivalTaxiOut", "TAXI OUT");
 	case EFlightPhase::Departing:   return NSLOCTEXT("AirportMgr", "ArrivalDeparting", "DEPARTING");
-	default:                        return FText::GetEmpty();
+	case EFlightPhase::Offered:
+	case EFlightPhase::Declined:
+	case EFlightPhase::Expired:
+	case EFlightPhase::Departed:
+	case EFlightPhase::Cancelled:
+	case EFlightPhase::Withdrawn:
+		return FText::GetEmpty();
 	}
+	return FText::GetEmpty();
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 FText UArrivalRowViewModel::DescribeDetail(const UFlight& Flight, double Now, bool& bOutLate)
 {
