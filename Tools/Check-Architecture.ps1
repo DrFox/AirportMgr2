@@ -2968,7 +2968,7 @@ foreach ($owner in $inspectorDescribeOwners) {
 }
 $ranRules.Add('cards-own-the-describes')
 
-# --- 49. "THE NETWORK CHANGED" IS ANNOUNCED, NEVER POLLED -------------------------------------------
+# --- 51. "THE NETWORK CHANGED" IS ANNOUNCED, NEVER POLLED -------------------------------------------
 # Issue #446. UOpsRuntime::Tick compared the network pointer and GetGuidelineRevision() against a remembered pair every
 # frame and published FNetworkChangedEvent when either moved - a frame late (SaveToSlot patched that with a status
 # refresh of its own) and blind to a fact edit that re-derived no graph. ARoadNetworkActor::OnNetworkChanged now
@@ -2987,12 +2987,12 @@ $ranRules.Add('cards-own-the-describes')
 # the event does not arrive with no Tick.
 $bridgeFile = Join-Path $ops 'Private\Present\OpsRuntime.cpp'
 if (-not (Test-Path $bridgeFile)) {
-    $failures.Add("network-change-announced: $bridgeFile is named by rule 49 but does not exist - update the rule, do not let it check nothing")
+    $failures.Add("network-change-announced: $bridgeFile is named by rule 51 but does not exist - update the rule, do not let it check nothing")
 }
 else {
     $bridgeText = Get-Content -Raw -LiteralPath $bridgeFile
     if ($bridgeText -notmatch 'void\s+UOpsRuntime::OnNetworkChanged\s*\(') {
-        $failures.Add("network-change-announced: UOpsRuntime::OnNetworkChanged not found in OpsRuntime.cpp - the bridge moved or went; update rule 49, do not let it check nothing")
+        $failures.Add("network-change-announced: UOpsRuntime::OnNetworkChanged not found in OpsRuntime.cpp - the bridge moved or went; update rule 51, do not let it check nothing")
     }
     if ($bridgeText -notmatch 'OnNetworkChanged\.AddUObject\s*\(\s*this\s*,\s*&UOpsRuntime::OnNetworkChanged\s*\)') {
         $failures.Add("network-change-announced: OpsRuntime.cpp never binds Target->OnNetworkChanged to UOpsRuntime::OnNetworkChanged - the bridge is unwired, and ops would hear no network change at all (#446)")
@@ -3028,7 +3028,7 @@ foreach ($announceTree in @($ops, (Join-Path $Root 'Source\AirportMgr'), $plugin
 }
 $ranRules.Add('network-change-announced')
 
-# --- 50. ONE ANSWER TO "WHICH AIRPORT" ------------------------------------------------------------
+# --- 52. ONE ANSWER TO "WHICH AIRPORT" ------------------------------------------------------------
 # Issue #446. Four lookups found the world's ARoadNetworkActor with two rules: ARoadNetworkActor::Find and ops'
 # catch-up scan took the FIRST TActorIterator hit, ops also took whichever SPAWNED first (an OnActorSpawned hook) and
 # re-checked IsValid every tick, and the buildings actor refused to guess between two. With two network actors the
@@ -3041,7 +3041,7 @@ $ranRules.Add('network-change-announced')
 # (c) the registry exists and its refusal is an Error, so the rule cannot pass with the one answer gone.
 $registryFile = Join-Path $plugin 'Private\Present\RoadNetworkRegistry.cpp'
 if (-not (Test-Path $registryFile)) {
-    $failures.Add("one-airport-lookup: $registryFile is named by rule 50 but does not exist - update the rule, do not let it check nothing")
+    $failures.Add("one-airport-lookup: $registryFile is named by rule 52 but does not exist - update the rule, do not let it check nothing")
 }
 elseif ((Get-Content -Raw -LiteralPath $registryFile) -notmatch 'UE_LOG\s*\(\s*LogAirside\s*,\s*Error') {
     $failures.Add("one-airport-lookup: RoadNetworkRegistry.cpp no longer logs an Error when it refuses a second airport - the refusal must be loud (#446)")

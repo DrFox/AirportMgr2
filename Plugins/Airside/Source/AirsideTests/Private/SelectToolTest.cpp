@@ -126,7 +126,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FSelectToolPickTest::RunTest(const FString& Parameters)
 {
-	FAirsideTestWorld TestWorld;
+	// NO FIXTURE ACTOR: SelToolBuild spawns this test's network actor, and a world holds ONE airport (#446 - a second
+	// is refused by URoadNetworkRegistry with an Error). Braces, not parentheses, for Check-Architecture rule 9.
+	FAirsideTestWorld TestWorld{/*bSpawnActor=*/false};
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
 	FSelToolFixture F = SelToolBuild(TestWorld.World);
@@ -204,7 +206,8 @@ bool FSelectToolIsIdleReadsLiveSelectionTest::RunTest(const FString& Parameters)
 	// exactly that case, so this clears it directly, with NO Tick in between, and asserts
 	// IsIdle() already agrees. A bool-mirror implementation goes red here: it would still see
 	// yesterday's selection until its next Tick.
-	FAirsideTestWorld TestWorld;
+	// NO FIXTURE ACTOR, FSelectToolPickTest's reason: SelToolBuild spawns the one airport this world may hold (#446).
+	FAirsideTestWorld TestWorld{/*bSpawnActor=*/false};
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
 	FSelToolFixture F = SelToolBuild(TestWorld.World);

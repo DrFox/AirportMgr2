@@ -254,6 +254,9 @@ bool FSimTimeScaleOnChangeTest::RunTest(const FString&)
 	// A NEW ACTOR: a level change, or PIE's duplicate. Its Transient scale starts at 1 whatever the player's speed, and
 	// Attach is the only thing that tells it otherwise.
 	Runtime->StepSpeed(+1);
+	// IN THE SAME WORLD, so refused as its airport, loudly (#446, URoadNetworkRegistry) - expected: the attach below is
+	// explicit, which is what this test measures, and the actor is never looked up.
+	AddExpectedMessagePlain(TEXT("is already this world's airport"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, 1);
 	ARoadNetworkActor* Fresh = TestWorld.World->SpawnActor<ARoadNetworkActor>();
 	if (!TestNotNull(TEXT("a second actor"), Fresh)) { return false; }
 	Fresh->PlaceNode(FVector2D(0.0, 30000.0));

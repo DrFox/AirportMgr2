@@ -421,7 +421,7 @@ private:
 	 * airport's status itself - and a Detach reset the pair so the first Tick after an Attach published a
 	 * catch-up. The event is published in the rebuild that made the change; Attach's MarkAllDirty and Reseat
 	 * are the catch-up. ENFORCED BY: AirportOps.Present.Bus.NetworkChangedPublishedOnceWithNoTick;
-	 * Check-Architecture rule 49 (network-change-announced)
+	 * Check-Architecture rule 51 (network-change-announced)
 	 */
 	FDelegateHandle NetworkChangedHandle;
 	void OnNetworkChanged(EChangeKind Kind, const URoadNetwork& Network);

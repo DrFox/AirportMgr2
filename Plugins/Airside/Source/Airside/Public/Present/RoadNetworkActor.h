@@ -131,7 +131,7 @@ public:
 	 * built into one, ops ran the other and the depots vanished. The registry refuses the second
 	 * actor loudly instead. For callers that must not spawn one (a controller's BeginPlay warns
 	 * and no-ops instead) or that re-ask every tick (a widget's inbox): an O(1) read.
-	 * ENFORCED BY: Check-Architecture rule 50 (one-airport-lookup)
+	 * ENFORCED BY: Check-Architecture rule 52 (one-airport-lookup)
 	 */
 	static ARoadNetworkActor* Find(const UWorld* World);
 

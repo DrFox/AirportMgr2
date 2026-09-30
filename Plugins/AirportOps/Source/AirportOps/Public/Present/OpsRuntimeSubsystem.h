@@ -25,7 +25,7 @@ class UWorld;
  * OnActorSpawned hook for the actor spawned after that scan, and an IsValid check on the target every
  * tick to notice a PIE stop. The registry is the one answer to "which airport", so there is nothing
  * to search for and nothing to re-check.
- * ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemReattaches; Check-Architecture rule 50 (one-airport-lookup)
+ * ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemReattaches; Check-Architecture rule 52 (one-airport-lookup)
  */
 UCLASS()
 class AIRPORTOPS_API UOpsRuntimeSubsystem : public UGameInstanceSubsystem, public FTickableGameObject

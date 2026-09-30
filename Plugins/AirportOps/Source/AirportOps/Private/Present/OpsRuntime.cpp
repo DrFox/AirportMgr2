@@ -1150,7 +1150,7 @@ void UOpsRuntime::OnNetworkChanged(EChangeKind Kind, const URoadNetwork& Network
 	// fact edit that re-derived no graph. Every rebuild announces itself now, a new network object's included
 	// (ClearNetwork, Undo and a load all end in a Topology rebuild of the network they adopted).
 	// Published, not handled: the bus's drain runs the passes, in this frame's Tick or SaveToSlot's own drain.
-	// ENFORCED BY: AirportOps.Present.Bus.NetworkChangedPublishedOnceWithNoTick; Check-Architecture rule 49
+	// ENFORCED BY: AirportOps.Present.Bus.NetworkChangedPublishedOnceWithNoTick; Check-Architecture rule 51
 	switch (Kind)
 	{
 	case EChangeKind::Geometry:
@@ -1171,7 +1171,7 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 	Clock->Advance(RealDeltaSeconds);
 
 	// NO NETWORK POLL HERE since #446 - see OnNetworkChanged, which the actor calls in the rebuild that made
-	// the change. ENFORCED BY: Check-Architecture rule 49 (network-change-announced)
+	// the change. ENFORCED BY: Check-Architecture rule 51 (network-change-announced)
 
 	// ONE DRAIN, after the clock: the queue holds Airside's events from the motion tick in publish
 	// order, then anything the clock just fired - so a flight that came due this frame is handled
