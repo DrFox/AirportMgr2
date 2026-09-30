@@ -13,16 +13,13 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
-#include "Model/JobBoard.h"
+#include "InspectorFacilityRows.h"
+#include "InspectorLog.h"
 #include "Model/AgentRescue.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
-#include "Model/Flight.h"
-#include "ArrivalViewModels.h"
-#include "Model/InspectFacts.h"
 #include "Model/OpsAlerts.h"
 #include "Model/SimClock.h"
-#include "OfferViewModels.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Present/OpsRuntime.h"
@@ -32,18 +29,7 @@
 #include "UI/UiButton.h"
 #include "UIStyle.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogInspector, Log, All);
-
-namespace
-{
-	/** The game time the current game minute began at - what the depot card describes at and keys on (see
-	 *  FInspectorCardKey). Prefixed against the unity build. */
-	double InspectorMinuteStart(const UOpsRuntime& Runtime)
-	{
-		const double Now = Runtime.GetClock() != nullptr ? Runtime.GetClock()->Now() : 0.0;
-		return FMath::FloorToDouble(Now / 60.0) * 60.0;
-	}
-}
+DEFINE_LOG_CATEGORY(LogInspector);
 
 void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 {
@@ -63,14 +49,6 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 		TWeakObjectPtr<UInspectorWidget> Weak(this);
 		UnstickMenu->Items = [Weak]() { return Weak.IsValid() ? Weak->UnstickItems() : TArray<FUiMenuItem>(); };
 		UnstickMenu->OnChosen.AddDynamic(this, &UInspectorWidget::HandleUnstickChosen);
-	}
-	if (BuyModuleButton != nullptr) { BuyModuleButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleBuyModule); }
-	if (BuyVehicleMenu != nullptr)
-	{
-		// WEAK - UnstickMenu's reason above.
-		TWeakObjectPtr<UInspectorWidget> WeakSelf(this);
-		BuyVehicleMenu->Items = [WeakSelf]() { return WeakSelf.IsValid() ? WeakSelf->BuyVehicleItems() : TArray<FUiMenuItem>(); };
-		BuyVehicleMenu->OnChosen.AddDynamic(this, &UInspectorWidget::HandleBuyVehicleChosen);
 	}
 	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce. The WINDOW
 	// hides (SetShown); the root stays laid out.
@@ -108,9 +86,9 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 			UnstickActionIndex = Index;
 			continue;
 		}
-		if (Actions[Index].Id == FName(TEXT("selection.buy_module"))) { BuyModuleActionIndex = Index; continue; }
-		if (Actions[Index].Id == FName(TEXT("selection.buy_vehicle"))) { BuyVehicleActionIndex = Index; continue; }
-		if (Actions[Index].Id == FName(TEXT("selection.sell_vehicle"))) { SellVehicleActionIndex = Index; continue; }
+		// THE PURCHASE ROWS' THREE, found by id in UInspectorFacilityRows::Build: skipped here for the runway row's reason -
+		// counted in SelectionSeen they would shift the positional Depart/Follow pair.
+		if (UInspectorFacilityRows::OwnsAction(Actions[Index].Id)) { continue; }
 		if (SelectionSeen == 0) { DepartActionIndex = Index; }
 		else if (SelectionSeen == 1) { FollowActionIndex = Index; }
 		++SelectionSeen;
@@ -170,7 +148,7 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		}
 		if (Row != nullptr) { Row->AddChildToHorizontalBox(Field)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f)); }
 	};
-	// The caption lives in the button (UUiButton::GetLabel): Refresh recolours it through
+	// The caption lives in the button (UUiButton::GetLabel): PaintVerbs recolours it through
 	// SetState, and ShowFollowing retitles it, without either holding a second pointer.
 	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex);
 	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex);
@@ -200,7 +178,7 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	}
 
 	// THE WAITED-FOR VERB - no BuildActions row (see WaitingForButton), so captioned here and retitled
-	// per card in Refresh.
+	// per card in PaintVerbs.
 	if (WaitingForButton == nullptr)
 	{
 		WaitingForButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), TEXT("WaitingForButton"));
@@ -210,50 +188,21 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		if (Row != nullptr) { Row->AddChildToHorizontalBox(WaitingForButton)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f)); }
 	}
 
-	// THE PURCHASE ROWS, built empty; ShowFacilityQuote fills them from the one quote.
-	auto Panel = [&](TObjectPtr<UPanelWidget>& Field, UClass* Class, const TCHAR* Name)
+	// THE PURCHASE ROWS, a sub-widget of their own (issue #441): built empty, and filled from the depot card's quote (PaintView).
+	// Only into a column that exists: with an asset's content and no code-built column, a widget built here would be parented
+	// nowhere and never drawn - a designer places one under the name FacilityRows instead, and it is built all the same.
+	if (FacilityRows == nullptr && Column != nullptr)
 	{
-		if (Field != nullptr || Column == nullptr) { return; }
-		Field = WidgetTree->ConstructWidget<UPanelWidget>(Class, Name);
-		Column->AddChildToVerticalBox(Field)->SetPadding(FMargin(0.0f, 6.0f, 0.0f, 0.0f));
-		Field->SetVisibility(ESlateVisibility::Collapsed);
-	};
-	// Only into a row that exists: with an asset's content and no code-built row, a text block built here
-	// would be parented nowhere and never drawn.
-	auto RowText = [&](TObjectPtr<UTextBlock>& Field, const TCHAR* Name, UPanelWidget* Into)
-	{
-		UHorizontalBox* Box = Cast<UHorizontalBox>(Into);
-		if (Field != nullptr || Box == nullptr) { return; }
-		Field = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), Name);
-		Style->ApplyText(*Field, EUITextRole::Body, Style->InkMuted);
-		Box->AddChildToHorizontalBox(Field)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
-	};
-	Panel(ShedsRow, UHorizontalBox::StaticClass(), TEXT("ShedsRow"));
-	RowText(ShedsText, TEXT("ShedsText"), ShedsRow);
-	// RowText's rule: built only into a row that exists, never an orphan.
-	if (UHorizontalBox* Box = Cast<UHorizontalBox>(ShedsRow); Box != nullptr && BuyModuleButton == nullptr && Actions.IsValidIndex(BuyModuleActionIndex))
-	{
-		BuyModuleButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), TEXT("BuyModuleButton"));
-		BuyModuleButton->SetLabel(Actions[BuyModuleActionIndex].Label);
-		BuyModuleButton->Build(*Style, EUiButtonKind::Secondary);
-		Box->AddChildToHorizontalBox(BuyModuleButton);
+		FacilityRows = WidgetTree->ConstructWidget<UInspectorFacilityRows>(UInspectorFacilityRows::StaticClass(), TEXT("FacilityRows"));
+		Column->AddChildToVerticalBox(FacilityRows);
 	}
-	Panel(VehiclesRow, UHorizontalBox::StaticClass(), TEXT("VehiclesRow"));
-	RowText(VehiclesText, TEXT("VehiclesText"), VehiclesRow);
-	if (UHorizontalBox* Box = Cast<UHorizontalBox>(VehiclesRow); Box != nullptr && BuyVehicleMenu == nullptr && Actions.IsValidIndex(BuyVehicleActionIndex))
+	if (FacilityRows != nullptr && !FacilityRows->IsBuilt())
 	{
-		BuyVehicleMenu = WidgetTree->ConstructWidget<UUiMenuButton>(UUiMenuButton::StaticClass(), TEXT("BuyVehicleMenu"));
-		BuyVehicleMenu->Build(*Style, Actions[BuyVehicleActionIndex].Label);
-		Box->AddChildToHorizontalBox(BuyVehicleMenu);
-	}
-	Panel(FleetList, UVerticalBox::StaticClass(), TEXT("FleetList"));
-	for (const int32 Found : { BuyModuleActionIndex, BuyVehicleActionIndex, SellVehicleActionIndex })
-	{
-		if (!Actions.IsValidIndex(Found))
-		{
-			UE_LOG(LogInspector, Warning, TEXT("A selection.buy_module/buy_vehicle/sell_vehicle row is missing from BuildActions(): the depot card cannot buy or sell"));
-			break;
-		}
+		// WEAK - UnstickMenu's reason (BuildOnce).
+		TWeakObjectPtr<UInspectorWidget> WeakSelf(this);
+		FacilityRows->ControllerSource = [WeakSelf]() { return WeakSelf.IsValid() ? WeakSelf->Controller() : nullptr; };
+		FacilityRows->RunActionSource = [WeakSelf](int32 ActionIndex) { if (WeakSelf.IsValid()) { WeakSelf->RunAction(ActionIndex); } };
+		FacilityRows->Build(*Style);
 	}
 }
 
@@ -307,7 +256,7 @@ void UInspectorWidget::ShowFollowing(bool bFollowing)
 	const FText Wanted = bFollowing
 		? NSLOCTEXT("AirportMgr", "InspectorUnfollow", "Unfollow")
 		: Actions[FollowActionIndex].Label;
-	// Compared first: SetText has no early-out of its own (see Refresh's gate), and this runs
+	// Compared first: SetText has no early-out of its own (see PaintTexts' gate), and this runs
 	// every tick.
 	if (!Caption->GetText().EqualTo(Wanted))
 	{
@@ -333,7 +282,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetworkActor* Target,
 	const FSelection& Selection, const FAgentFacts* PrecomputedAgentFacts)
 {
-	// ONE RESET, before any early return: only the aircraft branch sets it again, so every other
+	// ONE RESET, before any early return: only the aircraft card sets it again, so every other
 	// path - no selection, a gone agent, another kind of card - leaves Show with nothing to select.
 	WaitedForId = 0;
 	if (Target == nullptr || !Selection.IsSet())
@@ -351,543 +300,142 @@ void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetwor
 	const bool bNewSelection = Selection.Kind != LastSelection.Kind || Selection.Id != LastSelection.Id;
 	if (bNewSelection)
 	{
-		ForgetPlayerClose();
-		LastSelection = Selection;
-		// A POPUP FOR THE OLD AGENT closes with its card: its lines were asked of that agent, and a
-		// confirm armed for one aeroplane must not despawn the next one clicked.
-		if (UnstickMenu != nullptr) { UnstickMenu->Close(); }
-		// The same for the buy menu, and a key no fleet has forces the next depot's rows to rebuild -
-		// which disarms any sale armed on the old card (RebuildFleetRows).
-		if (BuyVehicleMenu != nullptr) { BuyVehicleMenu->Close(); }
-		LastFleetKey = TEXT("!");
-		// DISARMED HERE, not only by the rebuild the key above forces: a card that returns early (an
-		// agent that vanished) never reaches ShowFacilityQuote, and the old depot's sale stays armed.
-		DisarmSale();
+		OnNewSelection(Selection);
 	}
 
-	// ONE CARD PER KIND, counted at compile time (review fix 3): the branches below are None
-	// (handled above), Aircraft, Runway, Taxiway and Stand. Appending a kind to ESelectionKind
-	// moves Count and stops this compiling until the kind gets its branch and this number.
-	static_assert(static_cast<int32>(ESelectionKind::Count) == 5,
-		"a new ESelectionKind needs an inspector card - add its branch below, then update this count");
-
-	// THE NETWORK CARDS' GATE (ops batch 3 PR E): a runway, taxiway, stand or depot card is described again only when
-	// something its Describe reads has moved - see FInspectorCardKey for each card's inputs. Keyed BEFORE the branches
-	// so an unchanged card skips its Describe; the result is stored AFTER them, and only once one has succeeded.
-	const bool bNetworkCard = Selection.Kind == ESelectionKind::Runway || Selection.Kind == ESelectionKind::Taxiway
-		|| Selection.Kind == ESelectionKind::Stand;
-	FInspectorCardKey CardKey;
-	bool bReuseCard = false;
-	if (bNetworkCard)
-	{
-		CardKey = CardKeyFor(Runtime, *Target, Selection);
-		bReuseCard = bCardValid && CardKey == LastCardKey;
-	}
-
-	FString Title, Facts, Status, Deadlock;
-	FText WaitingForCaption;
-	// Default (NotAFacility) for every card but a depot's - which collapses the purchase rows.
-	FFacilityQuote CardQuote;
-	// A DEPOT'S card, and whether it is on a road - set by its branch or restored with a reused card, and
-	// read after both: the purchase quote is asked every tick, outside FInspectorCardKey (see below).
-	bool bDepotCard = false;
-	bool bDepotReachable = false;
-	bool bAircraft = false;
-	bool bRunway = false;
-	FText RunwayCaption;
-	FText RunwayUseCaption;
-	if (Selection.Kind == ESelectionKind::Aircraft)
-	{
-		FAgentFacts F;
-		bool bOk;
-		if (PrecomputedAgentFacts != nullptr)
-		{
-			F = *PrecomputedAgentFacts;
-			bOk = true;
-		}
-		else
-		{
-			bOk = Target->GetGroundTraffic() != nullptr
-				&& InspectFacts::DescribeAgent(*Target->GetGroundTraffic(), Target->GetNetwork(), Selection.Id, F);
-		}
-		if (!bOk)
-		{
-			SetShown(false);
-			bDepartEnabled = false;
-			return;
-		}
-		bAircraft = true;
-		bDepartEnabled = F.bCanDepart;
-		const UGroundTraffic* Traffic = Target->GetGroundTraffic();
-
-		// THE FUEL LINE, from the layer that knows what fuel is. Reached through the ops
-		// subsystem rather than through Target, because the airport actor is Airside's and
-		// must not carry a pointer to a service it is forbidden to know about - see
-		// FAgentFacts::Fuel, the field this fills and DescribeAgent deliberately leaves empty.
-		//
-		// BEFORE FInspectorKey, NOT GATED BY IT: the RESULT is one of the key's fields, so it has
-		// to be in hand before the key can be compared. It was read every tick for that reason (a
-		// FindByPredicate over active trucks, the cheap kind); since ops batch 3 PR E it has a key
-		// of its own - the job board's Revision, and the clock only while it says it is live. See
-		// FuelLineBoard's comment for the three lookups and what each reads.
-		//
-		// THE FLIGHT FIRST, outside the runtime test: the title's registration reads it too, and a test's
-		// board (UseFlightBoardForTest) comes with no runtime. One keyed lookup serves the contract and the
-		// names - a second FlightForAgent for the title would be the per-tick walk PR E removed.
-		const UFlightBoard* FlightBoard = Flights(Runtime);
-		if (FlightBoard != nullptr && (FlightLookupBoard.Get() != FlightBoard || FlightLookupRevision != FlightBoard->Revision()
-			|| FlightLookupAgent != F.Id))
-		{
-			++FlightLookups;
-			FlightLookup = FlightBoard->FlightForAgent(F.Id);
-			FlightLookupBoard = FlightBoard;
-			FlightLookupRevision = FlightBoard->Revision();
-			FlightLookupAgent = F.Id;
-		}
-		const UFlight* OwnFlight = FlightBoard != nullptr ? FlightLookup.Get() : nullptr;
-		if (Runtime != nullptr)
-		{
-			const double Now = Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0;
-			if (const UJobBoard* Fuel = Runtime->GetJobBoard())
-			{
-				if (bFuelLineLive || FuelLineBoard.Get() != Fuel || FuelLineRevision != Fuel->Revision() || FuelLineAgent != F.Id)
-				{
-					++FuelLookups;
-					FuelLine = Fuel->DescribeAgent(F.Id, Now, bFuelLineLive);
-					FuelLineBoard = Fuel;
-					FuelLineRevision = Fuel->Revision();
-					FuelLineAgent = F.Id;
-				}
-				F.Fuel = FuelLine;
-			}
-			// THE CONTRACT, from the flight that owns this aircraft - its minute resolution keeps
-			// the gate below from recomposing more than once a game minute.
-			if (const UFlight* Flight = OwnFlight; Flight != nullptr && Runtime->GetClock() != nullptr)
-			{
-				// WHAT THE SENTENCE PRINTS, computed for two subtractions: the contract, and the whole
-				// minutes left or late - DescribeDuration's own rounding of AirborneBy() - Now.
-				const double Left = Flight->AirborneBy() - Now;
-				const bool bLate = Left < 0.0;
-				const int32 Minutes = FMath::RoundToInt(FMath::Abs(Left) / 60.0);
-				if (TurnaroundFlight.Get() != Flight || TurnaroundContract != Flight->ContractSeconds
-					|| bTurnaroundLate != bLate || TurnaroundMinutes != Minutes)
-				{
-					++TurnaroundComposes;
-					TurnaroundLine = UArrivalRowViewModel::DescribeTurnaround(*Flight, Now).ToString();
-					TurnaroundFlight = Flight;
-					TurnaroundContract = Flight->ContractSeconds;
-					bTurnaroundLate = bLate;
-					TurnaroundMinutes = Minutes;
-				}
-				F.Turnaround = TurnaroundLine;
-			}
-		}
-
-		// THE NAMES (2026-09-30): the registration and airline for the title, and whom it waits for
-		// or is deadlocked with, by the name the player reads on the other card - never an id. Looked
-		// up here, before the gate, for Fuel's reason: they are the key's inputs. Airside hands ids
-		// (FAgentFacts::Hold, DeadlockedWith) because it knows no registrations.
-		FString Registration, Airline;
-		if (OwnFlight != nullptr)
-		{
-			Registration = OwnFlight->Callsign;
-			Airline = OwnFlight->AirlineName.ToString();
-		}
-		// UNCACHED, and on purpose: whom it waits for and the ring re-derive from this tick's facts
-		// (F.Hold, F.DeadlockedWith - InspectFacts::DescribeAgent, every tick), and they are FInspectorKey
-		// fields, so a changed blocker or ring recomposes the card with no flight or job board revision
-		// moving. Asked only while held or deadlocked - a quiet card asks nothing.
-		// ENFORCED BY: AirportMgr.Inspector.Cache.WaitingOnRefreshesTheCard
-		const FString Blocker = F.Hold.IsSet() ? NameOfAgent(Runtime, Traffic, F.Hold.WaitingOn) : FString();
-		TArray<FString> PartnerNames;
-		for (const int32 Partner : F.DeadlockedWith)
-		{
-			PartnerNames.Add(NameOfAgent(Runtime, Traffic, Partner));
-		}
-		const FString Partners = FString::Join(PartnerNames, TEXT(", "));
-		// HOW LONG, IN GAME TIME and the turnaround line's words (ruled 2026-09-30): the stall clock
-		// is movement time, which the day's compression leaves ~72x behind the clock the rest of the
-		// card counts in. No clock, no figure - never movement seconds dressed as game minutes.
-		FString Waited;
-		if (const USimClock* Clock = GameClock(Runtime); Clock != nullptr && F.Hold.IsSet())
-		{
-			Waited = UOfferViewModel::DescribeDuration(GameSecondsOfStall(F.Hold.StalledSeconds, *Clock)).ToString();
-		}
-
-		// MAGNITUDE. FAgentMotion::GroundSpeed became signed on 2026-09-20 so the view could
-		// roll a reversing vehicle's wheels backwards, and a readout is not that view: an
-		// aircraft on a pushback would otherwise report "-1.5 m/s (-3 kt)", which reads as a
-		// fault rather than as a direction. Which way it is going is the Status line's job.
-		const double Shown = FMath::Abs(F.GroundSpeed);
-
-		// THE GATE, ONE LEVEL EARLIER THAN LastTitle/LastFacts/LastStatus (issue #309): built
-		// from the FINEST rounding the Printf specifiers below use for each quantity, so two
-		// facts that would compose to an identical sentence never fail this cheaper check first.
-		// See FInspectorKey's own comment for why Phase holds F.Status rather than F.Phase, and
-		// why speed keys on tenths of m/s rather than the coarser whole-knot figure also printed
-		// below (PR #329 review: a change that moves the m/s decimal without moving the rounded
-		// knot integer was composing nothing, leaving the m/s line stale).
-		FInspectorKey Key;
-		Key.Id = F.Id;
-		Key.Phase = F.Status;
-		Key.HeadingRounded = FMath::RoundToInt(F.HeadingDegrees);
-		Key.SpeedTenthsRounded = FMath::RoundToInt(Shown / 100.0 * 10.0);
-		Key.AltitudeRounded = FMath::RoundToInt(F.Altitude / 100.0);
-		Key.Destination = F.Destination;
-		Key.bEngineRunning = F.bEngineRunning;
-		Key.Fuel = F.Fuel;
-		Key.Pushback = F.Pushback;
-		Key.Turnaround = F.Turnaround;
-		Key.Registration = Registration;
-		Key.Airline = Airline;
-		Key.Blocker = Blocker;
-		Key.Partners = Partners;
-		Key.Waited = Waited;
-
-		if (Key != LastComposedKey)
-		{
-			++ComposeCalls;   // See ComposeCountForTest.
-			LastComposedKey = Key;
-
-			// THE REGISTRATION FIRST, as the player speaks of the aircraft - "G-SVBT · C172 · Flying
-			// Club". An agent no flight owns (a test's, a debug dispatch) keeps the id title.
-			if (!Registration.IsEmpty())
-			{
-				LastComposedTitle = Airline.IsEmpty()
-					? FString::Format(TEXT("{0} · {1}"), { Registration, F.TypeName })
-					: FString::Format(TEXT("{0} · {1} · {2}"), { Registration, F.TypeName, Airline });
-			}
-			else
-			{
-				LastComposedTitle = FString::Printf(TEXT("%s  #%d"), *F.TypeName, F.Id);
-			}
-			// THE RING, in the alert's own words for the fix (UOpsAlerts::DeadlockRemedy) - the card
-			// names the partners, the alert counts them, and both ask for the same change.
-			LastComposedDeadlock = Partners.IsEmpty() ? FString()
-				: FText::Format(NSLOCTEXT("AirportMgr", "InspectorDeadlock", "Deadlocked with {0} - {1}"),
-					FText::FromString(Partners), UOpsAlerts::DeadlockRemedy()).ToString();
-			// LOCTEXT for the words, FString::Format (not Printf) for the sentence - issue #192.
-			// UE 5.8's FString::Printf format string must be a compile-time literal
-			// (FormatStringSan), so an NSLOCTEXT result cannot be its Fmt argument. Every number is
-			// pre-formatted with the SAME %-specifier as before into its own FString, then dropped
-			// into the translatable template as a plain {n} string substitution, so every digit this
-			// already printed is unchanged - only the words around them can now be translated.
-			const FText EngineState = F.bEngineRunning
-				? NSLOCTEXT("AirportMgr", "InspectorEngineRunning", "running")
-				: NSLOCTEXT("AirportMgr", "InspectorEngineOff", "off");
-			LastComposedFacts = FString::Format(
-				*NSLOCTEXT("AirportMgr", "InspectorAircraftFacts",
-					"Heading {0}\nSpeed {1} m/s ({2} kt)\nAltitude {3} m\nTo {4}\nEngine {5}").ToString(),
-				{
-					FString::Printf(TEXT("%03.0f"), F.HeadingDegrees),
-					FString::Printf(TEXT("%.1f"), Shown / 100.0),
-					FString::Printf(TEXT("%.0f"), Shown / 100.0 * 1.94384),
-					FString::Printf(TEXT("%.0f"), F.Altitude / 100.0),
-					F.Destination,
-					EngineState.ToString(),
-				});
-			// THE DEMANDS BLOCK (2026-09-28): what the aircraft wants, one line each. The fuel
-			// line is AirportOps's whole sentence (it names itself "Fuel ..."); pushback is the
-			// airframe's need, which nothing services yet.
-			if (!F.Fuel.IsEmpty() || !F.Pushback.IsEmpty())
-			{
-				LastComposedFacts += NSLOCTEXT("AirportMgr", "InspectorDemandsHeading", "\n\nDemands").ToString();
-				if (!F.Fuel.IsEmpty())
-				{
-					LastComposedFacts += TEXT("\n") + F.Fuel;
-				}
-				if (!F.Pushback.IsEmpty())
-				{
-					LastComposedFacts += FString::Format(
-						*NSLOCTEXT("AirportMgr", "InspectorPushbackLine", "\nPushback {0}").ToString(), { F.Pushback });
-				}
-			}
-			// THE CONTRACT, after the demands it depends on - see UArrivalRowViewModel::DescribeTurnaround.
-			if (!F.Turnaround.IsEmpty())
-			{
-				LastComposedFacts += TEXT("\n\n") + F.Turnaround;
-			}
-			// THE HOLD LINE RE-SAID WITH A NAME - only where StatusOf's precedence chose it
-			// (bStatusIsHold), so "Departure armed" still outranks it as before.
-			LastComposedStatus = F.bStatusIsHold ? InspectFacts::HoldLine(F.Hold, Blocker, Waited) : F.Status;
-		}
-		Title = LastComposedTitle;
-		Facts = LastComposedFacts;
-		Status = LastComposedStatus;
-		Deadlock = LastComposedDeadlock;
-		WaitedForId = F.Hold.WaitingOn;
-		if (WaitedForId != 0)
-		{
-			WaitingForCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorShowBlockerNamed", "Show {0}"), FText::FromString(Blocker));
-		}
-	}
-	else if (bReuseCard)
-	{
-		// NOTHING IT READS HAS MOVED: what the last Describe said, handed to the SetText gate below, which then sets
-		// nothing - the same text, one step earlier than that gate.
-		Title = CardTitle;
-		Facts = CardFacts;
-		Status = CardStatus;
-		bRunway = bCardRunway;
-		RunwayCaption = CardRunwayCaption;
-		RunwayUseCaption = CardRunwayUseCaption;
-		bDepotCard = bCardDepot;
-		bDepotReachable = bCardDepotReachable;
-		bDepartEnabled = false;
-	}
-	else if (Selection.Kind == ESelectionKind::Runway)
-	{
-		FRunwayCardFacts R;
-		++CardDescribeCalls;
-		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeRunway(*Target->GetNetwork(), Selection.Id, R))
-		{
-			SetShown(false);
-			bDepartEnabled = false;
-			return;
-		}
-		// THE RUNWAY IN USE CARD (spec 2026-09-28-runway-in-use). Not FInspectorKey's gate - that
-		// one is the aircraft's. It was composed every tick, the SetText gate below making an
-		// unchanged sentence free; since ops batch 3 PR E it is composed only when
-		// FInspectorCardKey moves (bReuseCard above), since nothing on it moves otherwise.
-		bRunway = true;
-		const FString InUse = FString::Printf(TEXT("%02d"), R.InUse);
-		const FString Other = FString::Printf(TEXT("%02d"), R.Other);
-		Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorRunwayTitle", "Runway {0}").ToString(), { R.Pair });
-		Facts = FString::Format(
-			*NSLOCTEXT("AirportMgr", "InspectorRunwayFacts", "In use: {0}\nTakes: {4}\n{1}, {2} approach\n{3} m long").ToString(),
-			{ InUse, FString(Pavement::Name(R.Surface)), FString(RunwayApproachName(R.Approach)),
-				FString::Printf(TEXT("%.0f"), R.Length / 100.0), FString(RunwayUse::Name(R.Use)) });
-		Status = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorRunwayStatus",
-			"Landing and taking off {0}. A change reaches the next flight planned.").ToString(), { InUse });
-		RunwayCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorRunwayUse", "Use {0}"), FText::FromString(Other));
-		// The CURRENT mode, selection.runway_use's own caption rule - see its row in BuildActions.
-		RunwayUseCaption = R.Use == ERunwayUse::ArrivalsOnly ? NSLOCTEXT("AirportMgr", "InspectorRunwayArrivals", "Arrivals only")
-			: R.Use == ERunwayUse::DeparturesOnly ? NSLOCTEXT("AirportMgr", "InspectorRunwayDepartures", "Departures only")
-			: NSLOCTEXT("AirportMgr", "InspectorRunwayMixed", "Mixed ops");
-		bDepartEnabled = false;
-	}
-	else if (Selection.Kind == ESelectionKind::Taxiway)
-	{
-		FTaxiwayCardFacts T;
-		++CardDescribeCalls;
-		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeTaxiway(*Target->GetNetwork(), Selection.Id, T))
-		{
-			SetShown(false);
-			bDepartEnabled = false;
-			return;
-		}
-		// THE TAXIWAY CARD (strip stage 6): its letter, strip and the widest span it admits -
-		// every taxiway limits wingspan to its letter (user 2026-09-29) - and, restricted, what
-		// restricts it (spec: "max span 65 m - restricted by building at ..."). Composed like the
-		// runway card: when FInspectorCardKey moves, and the SetText gate below still makes an
-		// unchanged one free.
-		Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayTitle", "Taxiway {0}").ToString(), { T.Index });
-		Facts = FString::Format(
-			*NSLOCTEXT("AirportMgr", "InspectorTaxiwayFacts", "Code {0}, {1} m wide, {2}\nStrip {3} m each side\nMax span {4} m").ToString(),
-			{ T.Letter, FString::Printf(TEXT("%.1f"), T.Width / 100.0), FString(Pavement::Name(T.Surface)),
-				FString::Printf(TEXT("%.1f"), T.Strip / 100.0), FString::Printf(TEXT("%.0f"), T.MaxWingspan / 100.0) });
-		if (T.RestrictedTo.IsSet())
-		{
-			Facts += FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayRestricted",
-				"\nRestricted to Code {0} by {1} - move it clear of the strip").ToString(),
-				{ T.RestrictedTo.GetValue(), T.RestrictedBy.IsEmpty() ? FString(TEXT("something in its strip")) : T.RestrictedBy });
-		}
-		Status = T.RestrictedTo.IsSet()
-			? NSLOCTEXT("AirportMgr", "InspectorTaxiwayStatusRestricted", "Restricted").ToString()
-			: NSLOCTEXT("AirportMgr", "InspectorTaxiwayStatusOpen", "Open to its letter").ToString();
-		bDepartEnabled = false;
-	}
-	else if (Selection.Kind == ESelectionKind::Stand)
-	{
-		FStandFacts S;
-		++CardDescribeCalls;
-		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Selection.Id, S))
-		{
-			SetShown(false);
-			bDepartEnabled = false;
-			return;
-		}
-		// AN ENTITY, NOT ALWAYS A STAND, since the fuel slice. PoseRole is what tells the two
-		// apart (see FStandFacts::PoseRole); a stand's own card is unchanged.
-		if (S.PoseRole == EServiceRole::Aircraft)
-		{
-			// FString::Format, not Printf - see the aircraft branch's own comment on why
-			// (issue #192, UE 5.8's compile-time Printf format check).
-			// THE NUMBER, not the index - the one painted at the stand's turn-off; an index is
-			// recycled by the next stand placed after a delete (FEntityInstance::StandNumber).
-			Title = FString::Format(
-				*NSLOCTEXT("AirportMgr", "InspectorStandTitle", "Stand {0}").ToString(), { S.Number });
-			const FText Reachability = S.bReachable
-				? NSLOCTEXT("AirportMgr", "InspectorStandReachable", "Reachable by taxiway")
-				: NSLOCTEXT("AirportMgr", "InspectorStandUnreachable", "NOT reachable - no taxiway joins it");
-			// SERVICE ROAD, beside Reachability (far-side-entry spec §2): a stand is placed
-			// with no service road at all, so this NAMES THE FIX rather than refusing the
-			// stand - the same choice Reachability itself already made for a taxiway.
-			const FText ServiceRoad = S.bServiceable
-				? NSLOCTEXT("AirportMgr", "InspectorStandServiceable", "Service road: joined")
-				: NSLOCTEXT("AirportMgr", "InspectorStandUnserviceable",
-					"Service road: not joined - draw a service road along the far edge");
-			Facts = FString::Format(
-				*NSLOCTEXT("AirportMgr", "InspectorStandFacts", "Code {0} ({1} m span)\n{2} service anchors\n{3}\n{4}").ToString(),
-				{
-					S.SizeClass,
-					FString::Printf(TEXT("%.0f"), S.DesignWingspan / 100.0),
-					FString::FromInt(S.AnchorCount),
-					Reachability.ToString(),
-					ServiceRoad.ToString(),
-				});
-			// CLOSED BY A STRIP (strip stage 6): the reason, and the figures to fix it by.
-			if (!S.ClosedBecause.IsEmpty())
-			{
-				Facts += FString::Format(*NSLOCTEXT("AirportMgr", "InspectorStandClosed",
-					"\nClosed to new arrivals: {0}").ToString(), { S.ClosedBecause });
-			}
-			Status = S.OccupantAgent == 0
-				? NSLOCTEXT("AirportMgr", "InspectorStandEmpty", "Empty").ToString()
-				: S.bOccupantParked
-					? FString::Format(*NSLOCTEXT("AirportMgr", "InspectorStandOccupied",
-						"Occupied by aircraft #{0}").ToString(), { S.OccupantAgent })
-					: FString::Format(*NSLOCTEXT("AirportMgr", "InspectorStandReserved",
-						"Reserved for aircraft #{0}").ToString(), { S.OccupantAgent });
-		}
-		else
-		{
-			// bReachable is the pose node having line on it, which for a depot means a
-			// SERVICE ROAD within its lead-in reach. The message names the fix rather than
-			// the symptom: the road is the thing the player goes and draws.
-			Title = FString::Format(
-				*NSLOCTEXT("AirportMgr", "InspectorDepotTitle", "Fuel depot {0}").ToString(), { S.Index });
-			Facts = S.bReachable
-				? NSLOCTEXT("AirportMgr", "InspectorDepotOnRoad", "On a service road").ToString()
-				: NSLOCTEXT("AirportMgr", "InspectorDepotNotOnRoad", "Fuel depot: not on a road").ToString();
-			Status = S.bReachable
-				? NSLOCTEXT("AirportMgr", "InspectorDepotReady", "Ready").ToString()
-				: NSLOCTEXT("AirportMgr", "InspectorDepotCannotDispatch", "Cannot dispatch").ToString();
-
-			// HOW FAR BEHIND IT IS (user, 2026-09-28): its vehicles and their jobs, and a summary
-			// that replaces "Ready" - through the ops subsystem, for the fuel line's reason above:
-			// the airport actor is Airside's and may not know what a job is. An off-road depot
-			// keeps "Cannot dispatch", which names the fix; its backlog is empty anyway.
-			// THE ONE selection->depot WALK (ruling C4) - the controller's verbs ask the same function.
-			const FEntityInstanceId DepotId = ARoadBuildController::DepotForSelection(Target, Selection);
-			if (Runtime != nullptr && S.bReachable)
-			{
-				if (const UJobBoard* Board = Runtime->GetJobBoard())
-				{
-					// AT THE MINUTE, not at Now: the card's key holds the game minute (FInspectorCardKey), so what it
-					// shows must be a function of the minute - DescribeDepot's own rounding from Now would move a
-					// figure mid-minute that the key could not see.
-					++DepotDescribeCalls;
-					const FDepotBacklog Backlog = Board->DescribeDepot(DepotId, InspectorMinuteStart(*Runtime));
-					Status = Backlog.Summary;
-					if (!Backlog.Detail.IsEmpty())
-					{
-						Facts += TEXT("\n") + Backlog.Detail;
-					}
-				}
-			}
-			// THE PURCHASE ROWS AND "NO VEHICLES" are laid on after the card, every tick - see the quote below.
-			bDepotCard = true;
-			bDepotReachable = S.bReachable;
-		}
-		bDepartEnabled = false;
-	}
-	else
+	// THE CARD FOR THE SELECTION, from the table: one card per kind, its own describe and its own change key (issue #441).
+	IInspectorCard* Card = Cards.Find(FInspectorCards::CardFor(Selection, Target->GetNetwork()));
+	if (Card == nullptr)
 	{
 		// A KIND WITH NO CARD - only a value outside the enum reaches here now: an appended kind
-		// fails the static_assert above until it has a branch. It used to fall into the stand
+		// fails the static_assert in FInspectorCards::CardFor until it has a case. It used to fall into the stand
 		// branch and describe ENTITY Id; now it says so ONCE per selection (Refresh runs every
 		// tick) and shows nothing.
-		// ENFORCED BY: the static_assert on ESelectionKind::Count above;
+		// ENFORCED BY: the static_assert on ESelectionKind::Count in FInspectorCards::CardFor;
 		// AirportMgr.Inspector.UnknownKindWarnsOnce (once per selection, not per tick)
 		if (bNewSelection)
 		{
 			UE_LOG(LogInspector, Warning, TEXT("Inspector: no card for selection kind %d"), static_cast<int32>(Selection.Kind));
 		}
-		SetShown(false);
-		bDepartEnabled = false;
+		HideCard();
 		return;
 	}
-
-	// A NETWORK CARD DESCRIBED THIS TICK - kept, with what it was described from (see bReuseCard above).
-	if (bNetworkCard && !bReuseCard)
+	FInspectorCardInput In;
+	In.Runtime = Runtime;
+	In.Target = Target;
+	In.Selection = Selection;
+	In.PrecomputedAgentFacts = PrecomputedAgentFacts;
+	In.Flights = Flights(Runtime);
+	In.Clock = GameClock(Runtime);
+	const FInspectorCardView* View = Card->Describe(In);
+	if (View == nullptr)
 	{
-		LastCardKey = CardKey;
-		bCardValid = true;
-		CardTitle = Title;
-		CardFacts = Facts;
-		CardStatus = Status;
-		bCardRunway = bRunway;
-		CardRunwayCaption = RunwayCaption;
-		CardRunwayUseCaption = RunwayUseCaption;
-		bCardDepot = bDepotCard;
-		bCardDepotReachable = bDepotReachable;
+		// A gone agent, a dead entity, a facts call that failed: nothing to show, and nothing left lit.
+		HideCard();
+		return;
 	}
+	PaintView(*View, Selection, *Target);
+}
 
-	// THE PURCHASE ROWS AND "NO VEHICLES", from the one quote (facility-upgrades spec §4) - asked EVERY TICK, outside
-	// FInspectorCardKey, as before that key existed: the quote reads the balance (a Buy greys when it is unaffordable),
-	// the fleet, the sheds and the bays, and the card key holds none of the balance. A quote kept with a reused card
-	// would leave Buy lit after the money ran out. The Status the key keeps is the backlog's; "No vehicles" is laid
-	// over it here, from this tick's quote, so the two cannot disagree.
-	if (bDepotCard)
-	{
-		const FEntityInstanceId DepotId = ARoadBuildController::DepotForSelection(Target, Selection);
-		if (Runtime != nullptr && DepotId.IsSet())
-		{
-			CardQuote = Runtime->QuoteFacility(DepotId);
-		}
-		Status = DepotStatus(CardQuote, bDepotReachable, Status);
-	}
+void UInspectorWidget::OnNewSelection(const FSelection& Selection)
+{
+	ForgetPlayerClose();
+	LastSelection = Selection;
+	// A POPUP FOR THE OLD AGENT closes with its card: its lines were asked of that agent, and a
+	// confirm armed for one aeroplane must not despawn the next one clicked.
+	if (UnstickMenu != nullptr) { UnstickMenu->Close(); }
+	// The purchase rows' own (its buy menu closes, its fleet rows rebuild, any armed sale goes) - and with no rows, the
+	// controller's armed sale all the same.
+	if (FacilityRows != nullptr) { FacilityRows->OnNewCard(); }
+	else { DisarmSale(); }
+}
 
+void UInspectorWidget::DisarmSale()
+{
+	// THE CONTROLLER'S ARMED SALE DOES NOT LIVE IN THE ROWS: an inspector whose asset placed no UInspectorFacilityRows has no row
+	// to ask, and a sale armed on a depot and then clicked away from must still not survive to the next time it is picked.
+	if (FacilityRows != nullptr) { FacilityRows->DisarmSale(); return; }
+	if (ARoadBuildController* C = Controller()) { C->ArmSellVehicle(0); }
+}
+
+void UInspectorWidget::HideCard()
+{
+	SetShown(false);
+	bDepartEnabled = false;
+}
+
+void UInspectorWidget::PaintView(const FInspectorCardView& View, const FSelection& Selection, const ARoadNetworkActor& Target)
+{
+	WaitedForId = View.WaitedForId;
+	bDepartEnabled = View.bCanDepart;
+	PaintTexts(View);
+	PaintVerbs(View, Selection, Target);
+	// EVERY CARD SAYS whether it has purchase rows - a non-depot's default quote collapses them.
+	if (FacilityRows != nullptr) { FacilityRows->Show(View.Quote); }
+	SetShown(true);
+}
+
+void UInspectorWidget::PaintTexts(const FInspectorCardView& View)
+{
 	// THE GATE. Compared against the COMPOSED text rather than a (selection id, phase) key -
 	// see LastTitle/LastFacts/LastStatus's own comment for why phase alone would freeze a
 	// moving aircraft's numbers. SetText has no early-out of its own (UIStyle.cpp's own note
 	// on why UBuildBarWidget gates its clock and balance the same way), so the common case -
 	// nothing selected, or a parked aircraft awaiting dispatch - now sets no text at all.
-	if (TitleText != nullptr && Title != LastTitle)
+	if (TitleText != nullptr && View.Title != LastTitle)
 	{
-		TitleText->SetText(FText::FromString(Title));
-		LastTitle = Title;
+		TitleText->SetText(FText::FromString(View.Title));
+		LastTitle = View.Title;
 		++SetTextCalls;
 	}
-	if (FactsText != nullptr && Facts != LastFacts)
+	if (FactsText != nullptr && View.Facts != LastFacts)
 	{
-		FactsText->SetText(FText::FromString(Facts));
-		LastFacts = Facts;
+		FactsText->SetText(FText::FromString(View.Facts));
+		LastFacts = View.Facts;
 		++SetTextCalls;
 	}
-	if (StatusText != nullptr && Status != LastStatus)
+	if (StatusText != nullptr && View.Status != LastStatus)
 	{
-		StatusText->SetText(FText::FromString(Status));
-		LastStatus = Status;
+		StatusText->SetText(FText::FromString(View.Status));
+		LastStatus = View.Status;
 		++SetTextCalls;
 	}
 	if (DeadlockText != nullptr)
 	{
-		if (Deadlock != LastDeadlock)
+		if (View.Deadlock != LastDeadlock)
 		{
-			DeadlockText->SetText(FText::FromString(Deadlock));
-			LastDeadlock = Deadlock;
+			DeadlockText->SetText(FText::FromString(View.Deadlock));
+			LastDeadlock = View.Deadlock;
 			++SetTextCalls;
 		}
 		// Collapsed, not an empty line: an empty row would still take its padding under the title.
-		const ESlateVisibility Wanted = Deadlock.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible;
+		const ESlateVisibility Wanted = View.Deadlock.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible;
 		if (DeadlockText->GetVisibility() != Wanted) { DeadlockText->SetVisibility(Wanted); }
 	}
+}
+
+void UInspectorWidget::PaintVerbs(const FInspectorCardView& View, const FSelection& Selection, const ARoadNetworkActor& Target)
+{
+	// EXACTLY THE VERBS THE VIEW NAMES: per-kind button visibility is the card's to say (EInspectorVerbs), so a new card adds
+	// no branch here.
+	const auto Has = [&View](EInspectorVerbs Verb) { return EnumHasAllFlags(View.Verbs, Verb); };
+	// Retitled through the button's own caption (UUiButton::GetLabel), the Follow button's way.
+	const auto Caption = [](UUiButton& Button, bool bShown, const FText& Wanted)
+	{
+		Button.SetVisibility(bShown ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		const UTextBlock* Current = Button.GetLabel();
+		if (bShown && (Current == nullptr || !Current->GetText().EqualTo(Wanted)))
+		{
+			Button.SetLabel(Wanted);
+		}
+	};
 	if (WaitingForButton != nullptr)
 	{
-		const bool bWaiting = bAircraft && WaitedForId != 0;
-		WaitingForButton->SetVisibility(bWaiting ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-		// Retitled through the button's own caption, the runway button's way.
-		const UTextBlock* Caption = WaitingForButton->GetLabel();
-		if (bWaiting && (Caption == nullptr || !Caption->GetText().EqualTo(WaitingForCaption)))
-		{
-			WaitingForButton->SetLabel(WaitingForCaption);
-		}
+		Caption(*WaitingForButton, Has(EInspectorVerbs::WaitingFor), View.WaitingForCaption);
 	}
 	if (DepartButton != nullptr)
 	{
-		DepartButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		DepartButton->SetVisibility(Has(EInspectorVerbs::Depart) ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 
 		// THE BAR'S OWN RULE, now UUiButton::LookFor: the BUTTON stays Control always - disabled
 		// dims a button by its ink, never by brightening the fill. Painting a disabled background
@@ -897,16 +445,18 @@ void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetwor
 	}
 	if (FollowButton != nullptr)
 	{
-		FollowButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		FollowButton->SetVisibility(Has(EInspectorVerbs::Follow) ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
 	if (UnstickMenu != nullptr)
 	{
-		UnstickMenu->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		const bool bUnstick = Has(EInspectorVerbs::Unstick);
+		UnstickMenu->SetVisibility(bUnstick ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		// LIT WHEN IT LOOKS STUCK - Selected is the Accent fill (UUiButton::LookFor), the one "look at
 		// me" this style has. Read off the model agent: LooksStuck also asks Stranded, which
-		// FAgentFacts::Hold (the stall clock only while waiting on someone) does not carry.
-		const FRoadAgent* Agent = bAircraft && Target->GetGroundTraffic() != nullptr
-			? Target->GetGroundTraffic()->FindAgent(Selection.Id) : nullptr;
+		// FAgentFacts::Hold (the stall clock only while waiting on someone) does not carry. Per tick and outside the
+		// view on purpose: it moves with the stall clock, which no card key holds.
+		const FRoadAgent* Agent = bUnstick && Target.GetGroundTraffic() != nullptr
+			? Target.GetGroundTraffic()->FindAgent(Selection.Id) : nullptr;
 		bUnstickHighlighted = Agent != nullptr && UAgentRescue::LooksStuck(*Agent, UnstickHighlightSeconds);
 		if (UUiButton* B = UnstickMenu->GetButton())
 		{
@@ -915,64 +465,12 @@ void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetwor
 	}
 	if (RunwayButton != nullptr)
 	{
-		RunwayButton->SetVisibility(bRunway ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-		// Retitled through the button's own caption (UUiButton::GetLabel), the Follow button's way.
-		const UTextBlock* Caption = RunwayButton->GetLabel();
-		if (bRunway && (Caption == nullptr || !Caption->GetText().EqualTo(RunwayCaption)))
-		{
-			RunwayButton->SetLabel(RunwayCaption);
-		}
+		Caption(*RunwayButton, Has(EInspectorVerbs::Runway), View.RunwayCaption);
 	}
 	if (RunwayUseButton != nullptr)
 	{
-		RunwayUseButton->SetVisibility(bRunway ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-		const UTextBlock* Caption = RunwayUseButton->GetLabel();
-		if (bRunway && (Caption == nullptr || !Caption->GetText().EqualTo(RunwayUseCaption)))
-		{
-			RunwayUseButton->SetLabel(RunwayUseCaption);
-		}
+		Caption(*RunwayUseButton, Has(EInspectorVerbs::RunwayUse), View.RunwayUseCaption);
 	}
-	// EVERY CARD SAYS whether it has purchase rows - a non-depot's default quote collapses them.
-	ShowFacilityQuote(CardQuote);
-	SetShown(true);
-}
-
-FInspectorCardKey UInspectorWidget::CardKeyFor(const UOpsRuntime* Runtime, const ARoadNetworkActor& Target,
-	const FSelection& Selection) const
-{
-	FInspectorCardKey Key;
-	Key.Kind = Selection.Kind;
-	Key.Id = Selection.Id;
-	const URoadNetwork* Network = Target.GetNetwork();
-	Key.Network = Network;
-	if (Network == nullptr)
-	{
-		return Key;
-	}
-	Key.EditRevision = Network->GetEditRevision();
-	Key.GuidelineRevision = Network->GetGuidelineRevision();
-	if (Selection.Kind != ESelectionKind::Stand || !Network->GetEntities().IsValidIndex(Selection.Id))
-	{
-		return Key;
-	}
-	// A STAND OR A DEPOT - the same selection kind, told apart the way the Stand branch tells them (PoseRole), and
-	// each keyed on what ITS half of that branch reads.
-	if (Network->GetEntities()[Selection.Id].PoseRole == EServiceRole::Aircraft)
-	{
-		if (const UGroundTraffic* Traffic = Target.GetGroundTraffic())
-		{
-			Key.Traffic = Traffic;
-			Key.OccupancyRevision = Traffic->OccupancyRevision();
-			Key.StandHolds = Traffic->StandHoldChangeCount();
-		}
-	}
-	else if (Runtime != nullptr && Runtime->GetJobBoard() != nullptr)
-	{
-		Key.JobBoard = Runtime->GetJobBoard();
-		Key.JobRevision = Runtime->GetJobBoard()->Revision();
-		Key.Minute = FMath::FloorToInt64(InspectorMinuteStart(*Runtime) / 60.0);
-	}
-	return Key;
 }
 
 void UInspectorWidget::RunAction(int32 ActionIndex)
@@ -1079,11 +577,7 @@ const USimClock* UInspectorWidget::GameClock(const UOpsRuntime* Runtime) const
 
 double UInspectorWidget::GameSecondsOfStall(double StalledSeconds, const USimClock& Clock)
 {
-	// NOT TimeScale(): that is Multiplier x day rate, and the stall already carries the
-	// multiplier (agents run on it). Only the day's compression is missing. The rate NOW, not
-	// integrated over the wait - a stall that straddles dawn or dusk reads at the current band's
-	// rate, an error of one band change against a figure shown to the minute.
-	return StalledSeconds * Clock.GameSecondsPerRealSecond(Clock.TimeOfDay());
+	return FAircraftCard::GameSecondsOfStall(StalledSeconds, Clock);
 }
 
 const UFlightBoard* UInspectorWidget::Flights(const UOpsRuntime* Runtime) const
@@ -1095,244 +589,16 @@ const UFlightBoard* UInspectorWidget::Flights(const UOpsRuntime* Runtime) const
 	return Runtime != nullptr ? Runtime->GetFlightBoard() : nullptr;
 }
 
-FString UInspectorWidget::NameOfAgent(const UOpsRuntime* Runtime, const UGroundTraffic* Traffic, int32 AgentId) const
-{
-	if (const UFlightBoard* Board = Flights(Runtime))
-	{
-		if (const UFlight* Flight = Board->FlightForAgent(AgentId); Flight != nullptr && !Flight->Callsign.IsEmpty())
-		{
-			return Flight->Callsign;
-		}
-	}
-	if (const FRoadAgent* Agent = Traffic != nullptr ? Traffic->FindAgent(AgentId) : nullptr)
-	{
-		return FString::Printf(TEXT("%s #%d"), *InspectFacts::TypeNameOf(*Agent), AgentId);
-	}
-	return FString::Printf(TEXT("aircraft %d"), AgentId);
-}
-
 void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
 void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 void UInspectorWidget::HandleRunway() { RunAction(RunwayActionIndex); }
 void UInspectorWidget::HandleRunwayUse() { RunAction(RunwayUseActionIndex); }
-
-FString UInspectorWidget::DepotStatus(const FFacilityQuote& Quote, bool bReachable, const FString& Current)
-{
-	// OFF THE ROAD, THE ROAD IS THE FIX, and a depot with a vehicle keeps its backlog line.
-	if (!bReachable || !Quote.IsFacility() || Quote.Vehicles > 0)
-	{
-		return Current;
-	}
-	return NSLOCTEXT("AirportMgr", "InspectorDepotNoVehicles", "No vehicles — buy one").ToString();
-}
-
-void UInspectorWidget::ShowFacilityQuote(const FFacilityQuote& Quote)
-{
-	LastQuote = Quote;
-	const bool bCard = Quote.IsFacility();
-	auto Show = [](UWidget* Widget, bool bShow)
-	{
-		const ESlateVisibility Wanted = bShow ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
-		if (Widget != nullptr && Widget->GetVisibility() != Wanted) { Widget->SetVisibility(Wanted); }
-	};
-	// COMPARED FIRST: SetText has no early-out, and this runs every tick (Refresh's own gate, same reason).
-	auto SetIfChanged = [](UTextBlock* Block, const FString& Text)
-	{
-		if (Block != nullptr && Block->GetText().ToString() != Text) { Block->SetText(FText::FromString(Text)); }
-	};
-	Show(ShedsRow, bCard && Quote.Modules.Num() > 0);
-	Show(VehiclesRow, bCard);
-	Show(FleetList, bCard && Quote.Fleet.Num() > 0);
-
-	if (bCard && Quote.Modules.Num() > 0)
-	{
-		const FModuleOfferQuote& Module = Quote.Modules[0];
-		SetIfChanged(ShedsText, FString::Printf(TEXT("%s %d / %d space"), *Module.PluralName.ToString(), Module.Owned, Module.Reserved));
-		if (BuyModuleButton != nullptr)
-		{
-			// A REFUSED BUY SAYS WHY on its own caption - a greyed button with no reason teaches nothing.
-			const bool bCan = Module.Refusal == EPurchaseRefusal::None;
-			const FText Caption = bCan ? Module.Label
-				: FText::Format(NSLOCTEXT("AirportMgr", "InspectorRefusedCaption", "{0} - {1}"), Module.Label, UFacilityPurchases::RefusalText(Module.Refusal));
-			const UTextBlock* Current = BuyModuleButton->GetLabel();
-			if (Current == nullptr || !Current->GetText().EqualTo(Caption)) { BuyModuleButton->SetLabel(Caption); }
-			BuyModuleButton->SetState(bCan, false);
-		}
-	}
-	if (bCard)
-	{
-		SetIfChanged(VehiclesText, FString::Printf(TEXT("Vehicles %d / %d bays"), Quote.Vehicles, Quote.Bays));
-		if (BuyVehicleMenu != nullptr && BuyVehicleMenu->GetButton() != nullptr)
-		{
-			// The MENU opens whenever there is an offer; each LINE greys with its own reason (BuyVehicleItems).
-			BuyVehicleMenu->GetButton()->SetState(Quote.VehicleOffers.Num() > 0, false);
-		}
-	}
-
-	FString Key;
-	for (const FFleetRowQuote& Row : Quote.Fleet) { Key += FString::Printf(TEXT("%d,"), Row.VehicleId); }
-	if (Key != LastFleetKey)
-	{
-		LastFleetKey = Key;
-		RebuildFleetRows();
-	}
-	for (int32 Index = 0; Index < FleetRows.Num() && Index < Quote.Fleet.Num(); ++Index)
-	{
-		UInspectorFleetRow* Row = FleetRows[Index];
-		const FFleetRowQuote& Facts = Quote.Fleet[Index];
-		SetIfChanged(Row->Line, Facts.Line);
-		const bool bCan = Facts.Refusal == EPurchaseRefusal::None;
-		// A vehicle that went busy while armed DISARMS: the confirm was for an idle vehicle.
-		if (!bCan) { Row->bArmed = false; }
-		const FText Caption = !bCan ? UFacilityPurchases::RefusalText(Facts.Refusal)
-			: Row->bArmed ? FText::Format(NSLOCTEXT("AirportMgr", "InspectorSellConfirm", "{0} - click again"), Facts.SellLabel)
-			: Facts.SellLabel;
-		const UTextBlock* Current = Row->SellButton->GetLabel();
-		if (Current == nullptr || !Current->GetText().EqualTo(Caption)) { Row->SellButton->SetLabel(Caption); }
-		Row->SellButton->SetState(bCan, Row->bArmed);
-	}
-}
-
-void UInspectorWidget::RebuildFleetRows()
-{
-	// A REBUILD DISARMS: the armed vehicle may be the one that just left the list.
-	DisarmSale();
-	if (FleetList != nullptr) { FleetList->ClearChildren(); }
-	FleetRows.Reset();
-	if (FleetList == nullptr || PanelStyle == nullptr) { return; }
-	for (const FFleetRowQuote& Facts : LastQuote.Fleet)
-	{
-		UInspectorFleetRow* Row = NewObject<UInspectorFleetRow>(this);
-		Row->VehicleId = Facts.VehicleId;
-		Row->Owner = this;
-		UHorizontalBox* Box = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-		Row->Line = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-		PanelStyle->ApplyText(*Row->Line, EUITextRole::Body, PanelStyle->InkMuted);
-		Row->Line->SetText(FText::FromString(Facts.Line));
-		Box->AddChildToHorizontalBox(Row->Line)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
-		Row->SellButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
-		Row->SellButton->SetLabel(Facts.SellLabel);
-		Row->SellButton->Build(*PanelStyle, EUiButtonKind::Secondary);
-		Row->SellButton->OnClicked.AddDynamic(Row, &UInspectorFleetRow::HandleSell);
-		Box->AddChildToHorizontalBox(Row->SellButton);
-		FleetList->AddChild(Box);
-		FleetRows.Add(Row);
-	}
-}
-
-void UInspectorFleetRow::HandleSell()
-{
-	if (UInspectorWidget* Panel = Owner.Get())
-	{
-		Panel->OnFleetSell(*this);
-	}
-}
-
-void UInspectorWidget::OnFleetSell(UInspectorFleetRow& Row)
-{
-	ARoadBuildController* C = Controller();
-	if (C == nullptr)
-	{
-		UE_LOG(LogInspector, Warning, TEXT("Sell click on vehicle %d ignored: no controller"), Row.VehicleId);
-		return;
-	}
-	if (!Row.bArmed)
-	{
-		// ONE ARMED ROW: arming a second row disarms the first, so "click again" is never ambiguous.
-		for (UInspectorFleetRow* Other : FleetRows) { if (Other != nullptr) { Other->bArmed = false; } }
-		Row.bArmed = true;
-		C->ArmSellVehicle(Row.VehicleId);
-		return;
-	}
-	Row.bArmed = false;
-	RunAction(SellVehicleActionIndex);
-}
-
-TArray<FUiMenuItem> UInspectorWidget::BuyVehicleItems() const
-{
-	TArray<FUiMenuItem> Out;
-	ShownVehicleCodes.Reset();
-	for (const FVehicleOfferQuote& Offer : LastQuote.VehicleOffers)
-	{
-		FUiMenuItem& Item = Out.AddDefaulted_GetRef();
-		Item.Label = Offer.Label;
-		Item.bEnabled = Offer.Refusal == EPurchaseRefusal::None;
-		Item.Why = UFacilityPurchases::RefusalText(Offer.Refusal);
-		ShownVehicleCodes.Add(Offer.TypeCode);
-	}
-	return Out;
-}
-
-void UInspectorWidget::HandleBuyVehicleChosen(int32 Index)
-{
-	ARoadBuildController* C = Controller();
-	if (C == nullptr || !ShownVehicleCodes.IsValidIndex(Index))
-	{
-		UE_LOG(LogInspector, Warning, TEXT("Buy vehicle line %d ignored: no controller or no such line"), Index);
-		return;
-	}
-	C->ChooseVehicleToBuy(ShownVehicleCodes[Index]);
-	RunAction(BuyVehicleActionIndex);
-}
-
-void UInspectorWidget::HandleBuyModule() { RunAction(BuyModuleActionIndex); }
-
-void UInspectorWidget::DisarmSale()
-{
-	// BOTH HALVES: the row's caption state and the controller's armed id. The rows need no controller, so
-	// a panel with none still stops saying "click again".
-	for (UInspectorFleetRow* Row : FleetRows) { if (Row != nullptr) { Row->bArmed = false; } }
-	if (ARoadBuildController* C = Controller()) { C->ArmSellVehicle(0); }
-}
 
 const UOpsRuntime* UInspectorWidget::OpsRuntime() const
 {
 	// THE CONTROLLER'S, so the card reads the runtime its verbs act on; the subsystem when there is none.
 	if (const ARoadBuildController* C = Controller()) { return C->GetOpsRuntime(); }
 	return UOpsRuntimeSubsystem::Get(GetWorld());
-}
-
-void UInspectorWidget::ClickSellForTest(int32 Row)
-{
-	// THROUGH THE BUTTON'S DELEGATE, so an unbound Sell goes red here rather than passing.
-	if (FleetRows.IsValidIndex(Row) && FleetRows[Row]->SellButton != nullptr) { FleetRows[Row]->SellButton->OnClicked.Broadcast(); }
-}
-
-FString UInspectorWidget::SellCaptionForTest(int32 Row) const
-{
-	const UTextBlock* Caption = FleetRows.IsValidIndex(Row) && FleetRows[Row]->SellButton != nullptr ? FleetRows[Row]->SellButton->GetLabel() : nullptr;
-	return Caption != nullptr ? Caption->GetText().ToString() : FString();
-}
-
-void UInspectorWidget::ClickBuyModuleForTest()
-{
-	if (BuyModuleButton != nullptr) { BuyModuleButton->OnClicked.Broadcast(); }
-}
-
-void UInspectorWidget::ChooseBuyVehicleForTest(int32 Line)
-{
-	// AS AN OPEN WOULD: the lines are asked first (that is what fills ShownVehicleCodes), then the
-	// menu's own delegate raises the choice.
-	if (BuyVehicleMenu == nullptr || !BuyVehicleMenu->Items) { return; }
-	BuyVehicleMenu->Items();
-	BuyVehicleMenu->OnChosen.Broadcast(Line);
-}
-
-bool UInspectorWidget::AreFacilityRowsShownForTest() const
-{
-	return VehiclesRow != nullptr && VehiclesRow->GetVisibility() == ESlateVisibility::Visible;
-}
-FString UInspectorWidget::ShedsTextForTest() const { return ShedsText != nullptr ? ShedsText->GetText().ToString() : FString(); }
-FString UInspectorWidget::VehiclesTextForTest() const { return VehiclesText != nullptr ? VehiclesText->GetText().ToString() : FString(); }
-bool UInspectorWidget::IsBuyModuleEnabledForTest() const { return BuyModuleButton != nullptr && BuyModuleButton->GetIsEnabled(); }
-FString UInspectorWidget::BuyModuleCaptionForTest() const
-{
-	const UTextBlock* Caption = BuyModuleButton != nullptr ? BuyModuleButton->GetLabel() : nullptr;
-	return Caption != nullptr ? Caption->GetText().ToString() : FString();
-}
-bool UInspectorWidget::IsSellEnabledForTest(int32 Row) const
-{
-	return FleetRows.IsValidIndex(Row) && FleetRows[Row]->SellButton != nullptr && FleetRows[Row]->SellButton->GetIsEnabled();
 }
 
 bool UInspectorWidget::IsShownForTest() const { return IsShown(); }

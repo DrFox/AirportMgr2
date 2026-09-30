@@ -2861,6 +2861,108 @@ foreach ($file in Get-Sources $opsTests @('.cpp', '.h')) {
     }
 }
 $ranRules.Add('agent-transition-one-door')
+# --- 49. THE INSPECTOR'S REFRESH STAYS SMALL (#441) --------------------------------------------
+# UInspectorWidget::RefreshWith was 605 lines - five cards, the purchase rows and five hand-kept memo keys in one function -
+# and every next card (service vehicle, road, #386's runway occupancy) had to be threaded through all of them. The shape that
+# replaced it: a card per EInspectorCard returns a view, the widget picks one and paints it. THE SHAPE is what this holds, by
+# its symptom: a RATCHET on the body's length, every line counted (a WHY comment included - a comment is not what grows a
+# function back, and this must not be gameable by deleting one). 120 is the issue's own figure; the body was 53 lines on
+# 2026-09-30 when this landed, so a card's branch slipping back into it fails long before 120 and the headroom is for a
+# seam, not a card. Raise it only with a reason in the PR - a rule that only ever moves up is not a ratchet.
+# DOES NOT SEE: the same branches moved into another function of the file. Rule 50 is the other half (the describes).
+$inspectorWidgetFile = Join-Path $Root 'Source\AirportMgr\InspectorWidget.cpp'
+$inspectorRefreshMax = 120
+if (-not (Test-Path $inspectorWidgetFile)) {
+    $failures.Add("inspector-refresh-length: $inspectorWidgetFile not found - update rule 49, do not let it check nothing")
+} else {
+    $inspectorLines = Get-Content -LiteralPath $inspectorWidgetFile
+    $refreshStart = -1
+    for ($i = 0; $i -lt $inspectorLines.Count; $i++) {
+        if ($inspectorLines[$i] -match '^void UInspectorWidget::RefreshWith\(') { $refreshStart = $i; break }
+    }
+    $refreshOpen = -1
+    $refreshClose = -1
+    if ($refreshStart -ge 0) {
+        # The body is the lines between the first column-0 '{' after the signature and the next column-0 '}'.
+        for ($i = $refreshStart; $i -lt $inspectorLines.Count; $i++) {
+            if ($refreshOpen -lt 0 -and $inspectorLines[$i] -eq '{') { $refreshOpen = $i; continue }
+            if ($refreshOpen -ge 0 -and $inspectorLines[$i] -eq '}') { $refreshClose = $i; break }
+        }
+    }
+    if ($refreshOpen -lt 0 -or $refreshClose -lt 0) {
+        $failures.Add("inspector-refresh-length: could not find the body of UInspectorWidget::RefreshWith in $inspectorWidgetFile (a column-0 '{' and '}' after its signature) - it moved or was reshaped; update rule 49, do not let it check nothing")
+    } else {
+        $refreshBody = $refreshClose - $refreshOpen - 1
+        if ($refreshBody -gt $inspectorRefreshMax) {
+            $failures.Add("inspector-refresh-length: UInspectorWidget::RefreshWith is $refreshBody lines (max $inspectorRefreshMax) - a card's branch belongs in its IInspectorCard (InspectorCards.h), and the widget only paints the view it returns (#441)")
+        }
+    }
+}
+$ranRules.Add('inspector-refresh-length')
+
+# --- 50. THE CARDS OWN THE DESCRIBES (#441) ------------------------------------------------------
+# InspectFacts::DescribeAgent / DescribeRunway / DescribeTaxiway / DescribeStand were called from the widget's own Refresh,
+# which is how its branch for each kind grew in there: a widget that describes is a widget that composes. They are the cards'
+# now (InspectorAircraftCard.cpp, InspectorNetworkCards.cpp), each beside the change key built from what it reads, so no
+# InspectFacts::Describe* call may appear in InspectorWidget.cpp - or in InspectorFacilityRows.cpp, which renders a quote and
+# describes nothing. Comments and string literals are stripped first (rule 34's stripper), so a WHY comment can name them.
+# THE QUALIFIED CALL IS NOT THE ONLY SPELLING: `using namespace InspectFacts;` (or a namespace alias of it) followed by an
+# unqualified DescribeAgent( passes a check that only reads `InspectFacts::`, so the using-directive, the alias and the
+# unqualified four names are banned in the same files. A member call (`Board->DescribeAgent(`, UJobBoard's own) is not these
+# and is not matched: the unqualified pattern refuses a name preceded by `.`, `>`, `:` or a word character.
+# And the half that stops it checking nothing: each card file must still make the calls it owns.
+# DOES NOT SEE: a describe reached through a helper in another file. AirportMgr.Inspector.EveryKindHasACard is the runtime half.
+$inspectorDescribeBanned = @(
+    (Join-Path $Root 'Source\AirportMgr\InspectorWidget.cpp'),
+    (Join-Path $Root 'Source\AirportMgr\InspectorFacilityRows.cpp')
+)
+$inspectorDescribeBans = @(
+    @{ Pattern = '\bInspectFacts::Describe\w*\s*\('; What = 'calls InspectFacts::Describe*' },
+    @{ Pattern = '\busing\s+namespace\s+InspectFacts\b'; What = 'opens namespace InspectFacts (an unqualified Describe* call would pass the qualified check)' },
+    @{ Pattern = '\bnamespace\s+\w+\s*=\s*InspectFacts\b'; What = 'aliases namespace InspectFacts' },
+    @{ Pattern = '(?<![\w:.>])Describe(Agent|Runway|Taxiway|Stand)\s*\('; What = 'calls an unqualified Describe(Agent|Runway|Taxiway|Stand)' }
+)
+$inspectorDescribeOwners = @(
+    @{ Path = (Join-Path $Root 'Source\AirportMgr\InspectorAircraftCard.cpp'); Calls = @('DescribeAgent') },
+    @{ Path = (Join-Path $Root 'Source\AirportMgr\InspectorNetworkCards.cpp'); Calls = @('DescribeRunway', 'DescribeTaxiway', 'DescribeStand') }
+)
+foreach ($path in $inspectorDescribeBanned) {
+    if (-not (Test-Path $path)) {
+        $failures.Add("cards-own-the-describes: $path is named by rule 50 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    $lines = Get-Content -LiteralPath $path
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        foreach ($ban in $inspectorDescribeBans) {
+            if ($code -match $ban.Pattern) {
+                $failures.Add("cards-own-the-describes: $(Split-Path $path -Leaf):$($i + 1) $($ban.What) - the cards own the describes (InspectorCards.h), and the widget paints the view one returns (#441): $($code.Trim())")
+            }
+        }
+    }
+}
+foreach ($owner in $inspectorDescribeOwners) {
+    if (-not (Test-Path $owner.Path)) {
+        $failures.Add("cards-own-the-describes: $($owner.Path) is named by rule 50 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    $seen = @{}
+    $lines = Get-Content -LiteralPath $owner.Path
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        foreach ($call in $owner.Calls) {
+            if ($code -match ('\bInspectFacts::' + $call + '\s*\(')) { $seen[$call] = $true }
+        }
+    }
+    foreach ($call in $owner.Calls) {
+        if (-not $seen.ContainsKey($call)) {
+            $failures.Add("cards-own-the-describes: $(Split-Path $owner.Path -Leaf) no longer calls InspectFacts::$call( - the describe moved again, or rule 50 is stale (#441)")
+        }
+    }
+}
+$ranRules.Add('cards-own-the-describes')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
