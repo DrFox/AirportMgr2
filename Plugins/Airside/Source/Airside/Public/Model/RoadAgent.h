@@ -343,13 +343,19 @@ private:
 	 * So the remainder is CUT instead, with RouteSearch::Section, and the follower is given a
 	 * plan whose beginning is where it should start.
 	 *
-	 * PRIVATE (issue #295): written and read only inside RoadAgent.cpp (TryArmReverseLeg arms
-	 * it, Advance's reverse-handover branch consumes it), so no mutator is needed - the whole
-	 * point of #174's pattern is a door for the OUTSIDE writers this field never had.
+	 * PRIVATE (issue #295): WRITTEN only inside RoadAgent.cpp (TryArmReverseLeg arms it,
+	 * Advance's reverse-handover branch consumes it), so no mutator is needed - the whole point of
+	 * #174's pattern is a door for the OUTSIDE writers this field never had. READ from outside
+	 * through GetResumeStep, by OnGraphRebuilt's Reversing arm (issue #434), which re-resolves the
+	 * route from this step: the part of it the vehicle has still to drive once it has backed out.
 	 */
 	UPROPERTY() int32 ResumeStep = INDEX_NONE;
 
 public:
+	/** Read-only - see ResumeStep's own comment. INDEX_NONE when no reverse is playing, or the
+	 *  reverse is the last thing the route does. */
+	int32 GetResumeStep() const { return ResumeStep; }
+
 	/**
 	 * RPM at or above which a powerback may begin. Copied from FTrafficRules at StartPushback
 	 * because this struct is world-free and cannot read the rules for itself - the same
@@ -582,10 +588,20 @@ public:
 	 * is actually driving.
 	 *
 	 * THREE ACCESSORS AND NOT THREE DIRECT READS OF Follower, because since the push there are
-	 * TWO structs that can be walking an agent along a route. Reading Agent.Follower.Travelled
+	 * TWO structs that can be walking an agent along a route (and since the reverse, a third and
+	 * fourth that walk a SPAN of one). Reading Agent.Follower.Travelled
 	 * on a manoeuvring agent returns whatever the taxi IN left there - a stale distance on a
 	 * live plan, which claims ground the aeroplane is nowhere near. Airside.Model.ClaimCentre
 	 * measured that at 99 000 uu against a real 1 500.
+	 *
+	 * A REVERSING AGENT IS THE OTHER WAY ROUND (issue #434): its plan IS the follower's - the
+	 * whole route, of which the reverse is one span - but the follower is not stepped while
+	 * FReverseRun / FTowReverseRun play that span back, so Follower.Travelled sits FROZEN at the
+	 * span's start and the honest distance is that plus how far the playback has got
+	 * (ReverseProgress). Read bare, the claim pass would place a truck that has backed 20 m
+	 * still at the service point, and every stop distance it computed from there - which the
+	 * reverse honours as room from where the truck IS - would run 20 m long into whatever it
+	 * was told to stop for.
 	 *
 	 * NOT A CASE FOR EVERY PHASE. An arrival and a departure are not on a route at all, and
 	 * their callers branch away before they reach these (see FClaimPass::Run's first arm). The
@@ -597,11 +613,62 @@ public:
 	}
 	double DistanceAlongPlan() const
 	{
-		return Phase == EAgentPhase::Manoeuvring ? Pushback.Travelled : Follower.Travelled;
+		switch (Phase)
+		{
+		case EAgentPhase::Manoeuvring: return Pushback.Travelled;
+		case EAgentPhase::Reversing:   return Follower.Travelled + ReverseProgress();
+		default:                       return Follower.Travelled;
+		}
 	}
 	double SpeedAlongPlan() const
 	{
-		return Phase == EAgentPhase::Manoeuvring ? Pushback.Speed : Follower.Speed;
+		switch (Phase)
+		{
+		case EAgentPhase::Manoeuvring: return Pushback.Speed;
+		case EAgentPhase::Reversing:   return Vehicle.HasTrailer() ? TowReverse.Speed : Reverse.Speed;
+		default:                       return Follower.Speed;
+		}
+	}
+
+	/**
+	 * How far the reverse playback has carried a Reversing agent along its span, uu, measured as
+	 * DistanceAlongPlan measures everything else: the STEERED axle's route distance, so that
+	 * FClaimPass::CentreOf can turn it into a body centre the way it does for a push.
+	 *
+	 * A RIGID VEHICLE'S RUN TRACKS THE FIXED AXLE (FReverseRun's header), and arms with that axle
+	 * a wheelbase into the span while the steered one is on its start - so the steered axle's
+	 * progress is the run's Travelled less one wheelbase, floored at zero for a span shorter than
+	 * the vehicle. A TOW'S RUN counts the trailer's leading axle, which is the FURTHEST point of a
+	 * rig backing along the line; its own counter is used as it is. That places the window a
+	 * chain's length AHEAD of the cab: the safe side for a stop, which is measured from it.
+	 *
+	 * ZERO OUTSIDE A REVERSE, so a caller that reaches it in the wrong phase reads the follower's
+	 * distance unchanged rather than a stale run's.
+	 */
+	double ReverseProgress() const
+	{
+		if (Phase != EAgentPhase::Reversing)
+		{
+			return 0.0;
+		}
+		return Vehicle.HasTrailer() ? TowReverse.Along
+			: FMath::Max(0.0, Reverse.Travelled - Chassis().Wheelbase());
+	}
+
+	/**
+	 * Where the span being backed along ENDS, in Follower.Plan's own route distance, uu: the frozen
+	 * start (Follower.Travelled - see the accessors above) plus the span's length, which the run
+	 * holds as its own copy of the plan. The claim pass holds a reversing vehicle's ground out to
+	 * here from the moment the reverse begins, as it holds a push's to the end of its plan.
+	 *
+	 * DERIVED, NOT STORED beside ResumeStep: a second copy of where the span sits in the route is a
+	 * number that can disagree with the follower's own Travelled, which is what it is measured from.
+	 * The follower does not move while a reverse plays, so the derivation cannot drift.
+	 * ENFORCED BY: Airside.Model.Traffic.ReversingHoldsItsSpan (the far end of the span is held)
+	 */
+	double ReverseSpanEnd() const
+	{
+		return Follower.Travelled + (Vehicle.HasTrailer() ? TowReverse.Plan.Length : Reverse.Plan.Length);
 	}
 
 	/**
@@ -616,12 +683,28 @@ public:
 	 */
 	void RebaseTravelled(double Dropped) { Follower.Travelled -= Dropped; }
 
-	/** True while a route-walking phase is driving: a taxi, or a push off a stand. The one
-	 *  question FClaimPass::Run, the rebuild and the deadlock resolver all used to spell as
-	 *  "Phase == Taxiing", which silently excluded the push. */
+	/** True while a route-walking phase is driving: a taxi, a push off a stand, or a vehicle backing
+	 *  along a span of its route. The one question FClaimPass::Run, the rebuild and the deadlock
+	 *  resolver all used to spell as "Phase == Taxiing", which silently excluded the push - and,
+	 *  from 2026-09-17 until issue #434, the reverse: a backing truck was handed HoldRunwayOnly, so
+	 *  it held no ground and never yielded for a whole leg.
+	 *
+	 *  WIDENED RATHER THAN GIVEN A SEPARATE ARM IN THE CLAIM PASS (#434), decided after reading
+	 *  every reader of it: what a reversing agent needs from Run is exactly what a push needs - the
+	 *  ordinary window over its plan, with the head extended to the end of the manoeuvre - so a
+	 *  second branch beside this one would be a copy of the first, and would leave this answering
+	 *  false for a phase that IS on a route: the trap that hid the push, kept for the next reader.
+	 *  What a Reversing agent does NOT share with the taxi is the replan: ReplanAt asks for
+	 *  Taxiing by name, deliberately (a push and a reverse have no other line to be sent along),
+	 *  and OnGraphRebuilt names its phases arm by arm, so widening this moves neither of them.
+	 *  ENFORCED BY: Airside.Model.Traffic.ReversingHoldsItsSpan (ReplanAt refuses a reversing agent)
+	 *
+	 *  A PHASE ADDED TO EAGENTPHASE IS CLASSIFIED HERE, in the table that names all of them.
+	 *  ENFORCED BY: Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase */
 	bool IsOnRoute() const
 	{
-		return Phase == EAgentPhase::Taxiing || Phase == EAgentPhase::Manoeuvring;
+		return Phase == EAgentPhase::Taxiing || Phase == EAgentPhase::Manoeuvring
+			|| Phase == EAgentPhase::Reversing;
 	}
 
 	/** Stable identity for the agent's lifetime, assigned by UGroundTraffic::Admit. 0 means

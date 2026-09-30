@@ -878,6 +878,16 @@ private:
 	 * Offers every waiting aircraft (bAwaitingStand) the best free stand reachable from where
 	 * it stopped, through RedirectAgent. Runs at the end of Advance when bStandsMayHaveFreed;
 	 * one pass, then the flag clears whether or not anyone was placed.
+	 *
+	 * BY PHASE, NOT BY GOAL (issue #435): a TAXIING waiter is still moving, and its GoalNode is
+	 * the end of the route it has not finished - so the way to a stand starts exactly where its live
+	 * plan ends, which is ExtendRoute's own precondition, and it is extended IN PLACE: speed,
+	 * heading and distance driven all carry on. RedirectAgent restarts an aircraft from REST at the
+	 * new route's first point, which for a moving waiter is the far end of the route ahead of it -
+	 * a teleport. So RedirectAgent is only for a waiter that is standing at that point already:
+	 * Parked on the fallback junction, or Stranded. A Taxiing waiter whose extension is refused
+	 * keeps waiting and is asked again the next time something frees; it is never redirected.
+	 * ENFORCED BY: Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump
 	 */
 	void ReofferStands(const URoadNetwork& Network);
 

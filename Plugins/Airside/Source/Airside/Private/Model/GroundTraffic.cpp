@@ -1808,11 +1808,35 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 		{
 			continue;
 		}
-		if (RedirectAgent(Id, &Network, Route))
+
+		// THE PHASE CHOOSES THE VERB (issue #435). Route starts at Agent->GoalNode, which for a
+		// TAXIING waiter is where its truncated route ENDS - a node ahead of the aircraft. Handed to
+		// RedirectAgent that is a restart from rest at the new route's first point: the aircraft
+		// jumped to the end of the route it had not driven (9271 uu on the first frame, measured 2026-09-30 on
+		// Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump). ExtendRoute splices the tail onto
+		// the live plan with Travelled, Speed and Heading kept, and its precondition - the tail
+		// starts where the live plan ends - is the very thing that made the route above.
+		//
+		// A PARKED OR STRANDED waiter is standing at GoalNode, so the restart is where it already
+		// is, and RedirectAgent is the only verb that gets a stopped aircraft going: they keep it.
+		//
+		// NEVER RedirectAgent AS THE FALLBACK when the extension is refused (a tail that does not
+		// join, a plan that died between the search and here): that is the teleport again, in the
+		// one case nothing has measured. It keeps waiting, and the next freed stand asks again.
+		const bool bMoving = Agent->Phase == EAgentPhase::Taxiing;
+		const bool bSent = bMoving ? ExtendRoute(Id, &Network, Route) : RedirectAgent(Id, &Network, Route);
+		if (!bSent && bMoving)
+		{
+			UE_LOG(LogAirsideTraffic, Log,
+				TEXT("Agent %d: a stand freed at node %d, but its route could not be extended from where it ends; it keeps waiting"),
+				Id, Stand.Index);
+		}
+		if (bSent)
 		{
 			// NOT Agents[FindIndex(Id)] HERE (issue #193): RedirectAgent already cleared
 			// bAwaitingStand itself, before its own OnAgentPhaseChanged broadcast - see its
-			// comment. Re-deriving the index AFTER that call is exactly the bug this fix
+			// comment. (ExtendRoute clears it through the same ReleaseGoal and broadcasts nothing.)
+			// Re-deriving the index AFTER that call is exactly the bug this fix
 			// removes: a listener on that broadcast (UJobBoard::OnAgentPhase) can call
 			// RetireAgent synchronously and remove Id from Agents, so FindIndex(Id) here would
 			// return INDEX_NONE and Agents[INDEX_NONE] would be an out-of-bounds write. Id and

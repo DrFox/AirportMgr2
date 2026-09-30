@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/GroundTraffic.h"
@@ -517,6 +518,77 @@ bool FTaxiingDepartureStrandedDoesNotJumpTest::RunTest(const FString& Parameters
 			TestTrue(FString::Printf(TEXT("%s: it went through the taxi-complete guard's hold"), Name), bHeld);
 		}
 	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A PUSH IS REFUSED INTO A TRUCK THAT IS BACKING OVER ITS GROUND (issue #434).
+ *
+ * DepartAgent asks IsPushGroundFree, which reads the same claim table every agent's own claims go
+ * into. A Reversing truck held NOTHING there (EAgentPhase::Reversing was outside IsOnRoute, so every
+ * claim pass gave it HoldRunwayOnly), so the ground under it read free and an aeroplane was cleared
+ * to be pushed into it.
+ *
+ * THE TRUCK BACKS OVER THE FAR ARM - the edge a push reverses onto - and onto the junction the push
+ * starts along: F -> E forward, then E -> J as a reverse leg, the same graph and the same aeroplane
+ * FPushbackClearanceTest uses, whose blocker is a phantom claim; this is the real thing that
+ * phantom stands for. The control is the same push once the truck is gone, so the refusal is shown
+ * to be the truck's.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackRefusedIntoABackingTruckTest,
+	"Airside.Model.Traffic.PushRefusedIntoABackingTruck",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackRefusedIntoABackingTruckTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+
+	// Taxied in from the runway, so it parks facing SOUTH with its way out behind it: a push.
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("an aircraft parks facing away from its way out"), Id > 0)) { return false; }
+
+	// THE TRUCK'S ROUTE: in along the far arm, then the last leg backed - the polyline runs E -> J
+	// and the body faces the other way. Marked on the plan, as ReverseRunTest marks its legs; the
+	// claim pass reads steps, not edges.
+	const FGuidelineNodeId F = TestGraph::Node(*Net, 30000.0, -10000.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, F, G.E, Options);
+	FRoutePlan Route = TestGraph::Probe(*Net, F, G.J, ETraversalClass::GroundVehicle);
+	if (!TestTrue(TEXT("the truck routes F -> E -> J"), Route.IsValid() && Route.Steps.Num() == 2)) { return false; }
+	Route.Steps[1].bReverseLeg = true;
+
+	FVehicle Truck = UAirsideSettings::ResolveDefaultVehicle();
+	Truck.Chassis = UAirsideSettings::ResolveLargestServiceVehicle();
+	const int32 TruckId = Traffic->DispatchAgent(Net, Route, Truck, ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("the truck is dispatched"), TruckId > 0)) { return false; }
+	if (!TestTrue(TEXT("and starts backing along the far arm"), RunUntil(*Traffic, *Net, 90.0, [&]()
+		{
+			const FRoadAgent* T = Traffic->FindAgent(TruckId);
+			return T != nullptr && T->Phase == EAgentPhase::Reversing;
+		}, 1.0 / 30.0))) { return false; }
+	for (int32 Tick = 0; Tick < 10; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestEqual(TEXT("still reversing"), Traffic->FindAgent(TruckId)->Phase, EAgentPhase::Reversing)) { return false; }
+
+	// THE ASSERTION: clearance is withheld while the truck is on the ground the push needs.
+	if (!TestEqual(TEXT("a push onto ground a truck is backing over is refused"),
+		Traffic->DepartAgent(Id, *Net), EDepartureRefusal::PushbackBlocked))
+	{
+		return false;
+	}
+	TestEqual(TEXT("and nothing was half-started"), Traffic->FindAgent(Id)->Phase, EAgentPhase::Parked);
+
+	// THE CONTROL: the same push, the same aeroplane, with the truck gone.
+	TestTrue(TEXT("the truck retires"), Traffic->RetireAgent(TruckId));
+	TestEqual(TEXT("and with it gone the push is cleared - the truck was the reason"),
+		Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None);
 	return true;
 }
 
