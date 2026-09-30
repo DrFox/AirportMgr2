@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/DepotCapability.h"
 #include "Model/OpsDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadHandles.h"
@@ -109,9 +110,10 @@ struct FFacilityUpkeep
  * building with modules and a fleet (spec 2026-09-29-facility-upgrades, R1/R7). Today: fuel depots.
  *
  * PATTERN: a Command service over three owners, none of which it duplicates. The network owns Modules
- * (written only through ApplyModulePurchase), UJobBoard owns Vehicles (through AddPurchasedVehicle and
- * RemoveVehicle), ULedger owns the money. Capacity is DERIVED on every ask - offers' VehicleSlots over
- * owned modules - never stored.
+ * (written only through ApplyModulePurchase), UJobBoard owns Vehicles (through FServiceFleet, the fleet's membership
+ * door: its Add and Withdraw take the charge, the credit, the FleetChanged event and the re-open of refused jobs, so
+ * a purchase, a starter fleet's seeding and a removed depot's withdrawal owe the same things - #443), ULedger owns the
+ * money. Capacity is DERIVED on every ask - offers' VehicleSlots over owned modules - never stored.
  *
  * QUOTE AND COMMAND SHARE THEIR JUDGEMENT: each command re-runs the private Judge* its quote row was
  * built from, so a button can only be lit for a command that will succeed.
@@ -134,7 +136,9 @@ public:
 	/** Set by UOpsRuntime's constructor, like UAgentRescue's boards. Null refuses everything NotAFacility. */
 	UPROPERTY() TObjectPtr<UJobBoard> JobBoard = nullptr;
 
-	/** The money. Null in a test that does not care: then everything is free, IBuildPurse's rule. */
+	/** The money. Null in a test that does not care: then everything is free, IBuildPurse's rule. THE JUDGEMENT reads
+	 *  it (CanPay) and a MODULE purchase posts to it; a vehicle's charge and credit are posted by the fleet's door, from
+	 *  UJobBoard::Ledger - which UOpsRuntime wires to this same ledger. */
 	UPROPERTY() TObjectPtr<ULedger> Ledger = nullptr;
 
 	/** Formats prices for the labels; null formats plain numbers. */
@@ -143,15 +147,18 @@ public:
 	/** Dates the ledger entries; null dates them 0, ULedger::NowOrZero's rule. */
 	UPROPERTY() TObjectPtr<USimClock> Clock = nullptr;
 
-	/** Published to on success only. Owned by UOpsRuntime, like UAirlineRoster::Bus. */
+	/** Published to on success only: FFacilityUpgradedEvent. Owned by UOpsRuntime, like UAirlineRoster::Bus. A vehicle's
+	 *  FleetChanged is the fleet door's (UJobBoard::Bus). */
 	FOpsEventBus* Bus = nullptr;
 
 	/**
 	 * How many of Module the placed plot of Depot can hold - PlotYard's reservation ceiling. UNSET (a bare
 	 * NewObject) answers 0, so no module can be bought: refusing is the honest default for a question
-	 * this layer cannot answer.
+	 * this layer cannot answer. THE SAME CEILING seats what the depot already owns (VehicleSlotsOf reads FDepotCapability
+	 * through it), so a purchase, a quote and the bays the depot grants are one plot's answer (#443). UOpsRuntime sets the
+	 * board's own ModuleCeilingOf to this same function.
 	 */
-	TFunction<int32(FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module)> ReservedSlotsOf;
+	FModuleCeilingFn ReservedSlotsOf;
 
 	/**
 	 * Append Module to the depot, rebuild its yard and checkpoint undo - URoadEditFacade::AddEntityModule
@@ -161,8 +168,13 @@ public:
 	 */
 	TFunction<bool(FEntityInstanceId Id, EDepotModule Module)> ApplyModulePurchase;
 
-	/** Vehicle bays Depot's modules grant. */
-	int32 VehicleSlotsOf(const FEntityInstance& Depot) const;
+	/**
+	 * Vehicle bays Depot's SEATED modules grant (#443, ruled 2026-09-30): the modules the plot could not seat grant
+	 * nothing, so the card never quotes a bay the player cannot see. With no ceiling hook (a world-free shop) the owned
+	 * list stands - see FDepotCapability::Of.
+	 * ENFORCED BY: AirportOps.Model.Facility.UnseatedModulesGrantNeitherBaysNorPumps
+	 */
+	int32 VehicleSlotsOf(FEntityInstanceId Id, const FEntityInstance& Depot) const;
 
 	FFacilityQuote Quote(const URoadNetwork& Network, FEntityInstanceId Entity) const;
 	FPurchaseResult BuyModule(const URoadNetwork& Network, FEntityInstanceId Entity, EDepotModule Module);

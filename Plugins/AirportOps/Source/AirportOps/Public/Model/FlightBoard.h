@@ -25,16 +25,20 @@ enum class ECancelReason : uint8;
 /**
  * Whether an offer can be accepted right now, and whether the airport can serve it.
  *
- * CACHED ON FOUR REVISIONS (issue #169, moved from UOfferViewModel 2026-09-28): Why is a
+ * CACHED ON FOUR REVISIONS, TWO ANSWERS (issue #169, moved from UOfferViewModel 2026-09-28; split by #443). Why is a
  * full ArrivalPlanner::Plan - a route search over every stand, then every runway exit - so it
  * is recomputed only when something it depends on has moved: the board itself
  * (UFlightBoard::Revision - added/accepted/declined/expired), the guideline graph
  * (URoadNetwork::GetGuidelineRevision - an edit changed the taxiways), or occupancy
- * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or cleared), or the fleet (UJobBoard::GetFleetRevision - a vehicle
- * added or withdrawn, AND, since issue #428, every state change of a vehicle: it is dispatched, arrives, serves, heads home, is refilled or a load
- * resets it. Those transitions change nothing bFuelServable depends on, so the verdict is redone more often than it strictly needs to be; splitting
- * a composition revision for this from the transition counter the re-bid reads is #443's).
- * Four integer compares replace the search on every frame where none of them moved.
+ * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or cleared). bFuelServable is
+ * CouldServe, which reads the airport's shape and the fleet's COMPOSITION and nothing else: it is dated by the
+ * guideline graph and by UJobBoard::GetFleetCompositionRevision (a vehicle added, withdrawn, seeded, sold or a load
+ * replacing the fleet), and by NEITHER the board (the airframe is the flight's own) NOR occupancy (it judges no traffic)
+ * NOR a vehicle's state. Before #443 the whole verdict hung on the counter that moves on every vehicle TRANSITION
+ * (dispatched, arrived, serving, refilled - #428 made each one bump it), so a truck arriving or finishing a refill
+ * re-planned every pending offer's full arrival plan, which reads no fleet. A few integer compares replace the
+ * search on every frame where none of them moved.
+ * ENFORCED BY: AirportOps.Model.FlightBoard.VehicleTransitionsDoNotReplanOffers
  */
 struct FOfferVerdict
 {
@@ -45,12 +49,13 @@ struct FOfferVerdict
 	 *  accept (spec ruling 5) - the row says so and C scores it. */
 	bool bFuelServable = true;
 
+	/** What Why was judged at. The guideline stamp dates bFuelServable too: an edit re-judges both. */
 	uint32 BoardAt = 0;
 	uint32 GuidelineAt = 0;
 	uint32 OccupancyAt = 0;
-	/** UJobBoard::GetFleetRevision when judged - a vehicle bought or sold changes bFuelServable
-	 *  (facility-upgrades spec); the counter also moves on every vehicle state change (issue #428), which does not,
-	 *  so a moved FleetAt means "look again", not "the fleet's composition changed" (#443 splits the two).
+	/** UJobBoard::GetFleetCompositionRevision when bFuelServable was judged - a vehicle bought, sold, seeded or
+	 *  withdrawn changes it (facility-upgrades spec), a vehicle changing STATE does not (#443: this was the transition
+	 *  counter, which moved on every one and re-planned every offer's Why with it).
 	 *  ENFORCED BY: AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet */
 	uint32 FleetAt = 0;
 	bool bValid = false;

@@ -115,6 +115,13 @@ public:
 		double ServiceLinkRadius = FAnchorLink::DefaultServiceLinkRadius;
 
 		/**
+		 * The depot kit table the plots are solved with (ARoadNetworkActor::ResolveDepotKits, the one resolver) - what the
+		 * census (DepotKit::ReportIncomplete) seats a depot's modules against, the same solve the plot presenter draws from
+		 * (#443). Empty in a caller with no content: the census then has no plot to seat against.
+		 */
+		TArray<PlotYard::FKitSpec> DepotKits;
+
+		/**
 		 * What each road's turns are sized for: the biggest RIGID thing that may drive a service
 		 * road (UAirsideSettings::ResolveLargestServiceVehicle) as the Default, with each width
 		 * tier's own design vehicle beside it - the rig on Wide (ResolveTierDesignVehicles,

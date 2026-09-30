@@ -9,10 +9,10 @@ double FFuelRolePolicy::CapacityOf(const FServiceVehicleType& Type)
 
 EServiceStep FFuelRolePolicy::NextStep(double Cargo, const FServiceVehicleType& Type, double Owed) const
 {
-	// HALF A LITRE OF SLACK, the tolerance the job itself is judged Done by: a tank 0.2 L short of
-	// the job is not worth a trip to the depot, and a tank that reads 999.8 of 1000 is full.
-	const bool bCovers = Cargo >= Owed - 0.5;
-	const bool bFull = Cargo >= CapacityOf(Type) - 0.5;
+	// THE SLACK THE JOB ITSELF IS JUDGED DONE BY (DoneWithin): a tank 0.2 L short of the job is not worth a trip to the
+	// depot, and a tank that reads 999.8 of 1000 is full.
+	const bool bCovers = Cargo >= Owed - DoneWithin();
+	const bool bFull = Cargo >= CapacityOf(Type) - DoneWithin();
 	return (bCovers || bFull) ? EServiceStep::Direct : EServiceStep::ViaFacility;
 }
 

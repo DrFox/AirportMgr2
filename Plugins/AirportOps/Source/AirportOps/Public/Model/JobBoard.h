@@ -4,11 +4,13 @@
 #include "Model/OpsDefinition.h"
 #include "Model/Airframe.h"
 #include "Model/DeparturePlanner.h"
+#include "Model/DepotCapability.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoutePlanCache.h"
 #include "Model/RouteSearch.h"
 #include "Model/ServiceBid.h"
+#include "Model/ServiceFleet.h"
 #include "Model/ServiceJob.h"
 #include "Model/ServiceRolePolicy.h"
 #include "Model/ServiceVehicle.h"
@@ -79,9 +81,22 @@ struct FDepotBacklog
  * USimClock. A bid's DRIVES are movement time and are converted into it - see BidFor. The truck's
  * MOTION still runs on the speed multiplier alone, as everything's does.
  *
- * FUEL IS STILL THE ONLY ROLE BUILT. Everything here is keyed by EServiceRole and asks the role's
- * policy; the fuel-shaped remainder is the refusal texts, the pump check (the policy's
- * NeedsPumpAtHome) and the depot pose role it looks for.
+ * THIS BOARD IS FUEL'S UNTIL A SECOND ROLE IS SCHEDULED (#443, its option a - said, rather than half-generalised).
+ * What is role-shaped and would carry a second role today: the vehicle lifecycle and the bid ask the ROLE'S policy
+ * (PolicyFor: NextStep, TripQuantity, ServeSeconds, FacilitySeconds, DoneWithin), and a vehicle and a job each carry a
+ * Role. What is FUEL, written as fuel, and would have to be routed through the catalogue row and the policy before
+ * another role could join (#443's option b, NOT built: a second role to design against decides its shape):
+ *  - the catalogue: TypeFor gives every row Role = Fuel and reads its figures from FFuelVehicleSpec;
+ *  - the tank: FFuelRolePolicy::CapacityOf is called as a static (FServiceFleet::Add, the refill log, a job's TankLitres);
+ *  - the jobs: OnAgentPhase creates a Fuel job for a parked aircraft and no other kind, the fee is Pricing->FuelFee
+ *    (PostServiceFee), and the outcome enum (EFuelOutcome) and its rule (FuelOutcomeOf) are fuel's;
+ *  - the depot: a fuel depot is an entity whose PoseRole is Fuel and whose pumps are its EDepotModule::Pump modules
+ *    (the starter seeding, CouldServe, HasWorkingPump, PumpsAt); PolicyFor pushes RefillLitresPerMinutePerPump into the
+ *    one FFuelRolePolicy the constructor registers;
+ *  - the words: RefusalText, DescribeAgent's fuel line, the "Fuel:" log lines.
+ * PolicyFor is where a second role's policy would be looked up, and the registry has the constructor's Fuel entry
+ * alone: a test-only way to register another had no caller and was removed, because a seam nothing plugs into is a
+ * claim the code does not keep.
  */
 UCLASS()
 class AIRPORTOPS_API UJobBoard : public UObject, public IOpsPersistent
@@ -145,16 +160,31 @@ public:
 	static double DefaultLitres(const FAirframe& Airframe) { return FMath::Max(Airframe.FuelCapacityLitres, 0.0) * 0.7; }
 
 	/**
-	 * True when Depot can fuel at all - it has a pump, or it predates modules entirely.
-	 *
-	 * A depot placed WITHOUT a plot has an empty module list and fuels as it always did. That is not
-	 * a claim it has a pump; it is that the question does not apply, and a save written before plots
-	 * existed must keep working.
+	 * How many modules of a kind a depot's plot can hold - the ceiling FDepotCapability seats the owned modules against.
+	 * UOpsRuntime::Attach sets it to the same answer UFacilityPurchases::ReservedSlotsOf gives (DepotKit::ReservationOf,
+	 * the presenter's own solve, memoised per depot), so the board and the shop read ONE plot. UNSET in a bare NewObject
+	 * board, which has no plot solve: every owned module then counts as seated (see FDepotCapability::Of).
+	 * ENFORCED BY: AirportOps.Present.Facility.CapabilityReadsTheRuntimesPlotSolve (a runtime whose board is left unwired
+	 * counts the owned pumps, not the seated ones)
 	 */
-	static bool HasWorkingPump(const FEntityInstance& Depot);
+	FModuleCeilingFn ModuleCeilingOf;
 
-	/** Pump modules at Depot, or 1 for a plotless depot - see HasWorkingPump. The refill rate's multiplier. */
-	static int32 PumpsAt(const FEntityInstance& Depot);
+	/**
+	 * What Depot's SEATED modules give it (#443, ruled 2026-09-30): its pumps and whether it can fuel at all. THE MODULES
+	 * THAT COUNT ARE THE PLACED ONES - the presenter could not seat an owned module beyond its plot's ceiling, and that
+	 * module grants nothing. A depot placed WITHOUT a plot has an empty module list and fuels as it always did: the named
+	 * legacy exemption of FDepotCapability, not a claim it has a pump.
+	 */
+	FDepotCapability CapabilityOf(FEntityInstanceId Id, const FEntityInstance& Depot) const
+	{
+		return FDepotCapability::Of(Id, Depot, ModuleCeilingOf);
+	}
+
+	/** True when Depot can fuel at all - a seated pump, or the legacy plotless exemption. See CapabilityOf. */
+	bool HasWorkingPump(FEntityInstanceId Id, const FEntityInstance& Depot) const { return CapabilityOf(Id, Depot).HasWorkingPump(); }
+
+	/** Seated pumps at Depot, or 1 for a plotless depot - see CapabilityOf. The refill rate's multiplier. */
+	int32 PumpsAt(FEntityInstanceId Id, const FEntityInstance& Depot) const { return CapabilityOf(Id, Depot).Pumps(); }
 
 	/** How many ICAO letters the vehicle table holds, A-F. See VehiclesByLetter. */
 	static constexpr int32 LetterCount = 6;
@@ -231,6 +261,16 @@ public:
 	 * row's "fuel" chip and the truck that does or does not come cannot disagree. Busy vehicles count
 	 * as servable: they bid with their queue. The cost is a route search per (depot, type, stand); the
 	 * board calls it only when its verdict's revisions move - see FOfferVerdict.
+	 *
+	 * REAL VEHICLES ONLY (#443): it used to add the starter fleet a not-yet-seeded depot WOULD get, a prediction
+	 * written beside the seeding it had to mirror and already fixed once for drifting from it ("seeded is not
+	 * not-yet-seeded"). The seeding is FServiceFleet::SeedStarterFleets, run by every Step (SyncFleet) through the
+	 * fleet's door, so a starter depot has its vehicles before any bid can use them and the offer's answer and the
+	 * bid are read off the SAME vehicles. THE PRICE: asked before a board's first Step, a starter depot says "no
+	 * fuel". A Step is the first thing UOpsRuntime::Attach schedules (Bus.MarkAllDirty), so no offer is read in that
+	 * window in play; a test that asks earlier steps the board first.
+	 * ENFORCED BY: AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid,
+	 * AirportOps.Fuel.CouldServe.SoldOutStarterDepotCannot, AirportOps.Present.Fleet.AttachSeedsTheStarterFleetOnTheFirstDrain
 	 */
 	bool CouldServe(const URoadNetwork& Network, const FAirframe& Airframe) const;
 
@@ -325,17 +365,33 @@ public:
 	bool HasRefusedDeparture(double Now) const;
 
 	/**
-	 * Moves with every mutator of Jobs, Vehicles and Turnarounds - private, so every public door to them: Step,
-	 * OnAgentPhase, RecallVehicleOfAgent, OnBeforeRestore, the player's fleet doors (AddPurchasedVehicle,
-	 * RemoveVehicle - #417, rebased under this counter) and the ForTest adders. The bumps in Serialize and
-	 * ResolveVehicles are REDUNDANT, kept as cheap insurance: a load's OnBeforeRestore runs immediately before the
-	 * blob's Serialize and has already moved it, and ResolveVehicles fills the letter table, which no Describe reads. The inspector's
-	 * depot card and fuel line key on it (ops batch 3 PR E). NOT StepCount, which the spec named: OnAgentPhase and
+	 * Moves with every CHANGE to Jobs, Vehicles and Turnarounds, and not with a call that changed nothing (#443: it was
+	 * bumped on entry to every OnAgentPhase for every agent in the airport and to every Step, so the inspector's depot
+	 * card and fuel line, which key on it (ops batch 3 PR E), were rebuilt for changes that were not there). It is TWO
+	 * COUNTERS SUMMED, so a monotonic sum moves when either does:
+	 *  - FleetRevision: every vehicle transition (FServiceVehicleLifecycle bumps it) and every membership change
+	 *    (FServiceFleet does) - which is most of what a Step or a phase event can do;
+	 *  - RevisionCount: what moves WITHOUT a vehicle transition - a job made, queued, refused, re-opened or dropped, a
+	 *    queue trimmed, a turnaround opened or closed, a re-bid that refreshed its promises, a load, and the ForTest adders.
+	 * So a Step with nothing to do, an OnAgentPhase for an agent that is none of the board's business and a recall of
+	 * a vehicle the board does not have leave it where it was. NOT StepCount, which the spec named: OnAgentPhase and
 	 * the recall change the board outside Step, and a card keyed on steps would show them a pass late or never.
 	 * A session counter, not saved - the same idiom as UFlightBoard::Revision.
-	 * ENFORCED BY: AirportOps.Fuel.RevisionMovesOnEveryChange (each public door, one line each)
+	 * WHAT THIS DOES NOT CLAIM: that every bump is a visible change (a re-bid that finds nothing better still refreshes
+	 * the promises it runs over, and says so by moving it), only that a change with no bump is a defect.
+	 * ENFORCED BY: AirportOps.Fuel.RevisionMovesOnEveryChange (each public door, and the queue trim, the refused-job
+	 * re-open and the released job, one line each), AirportOps.Fuel.RevisionMovesAtEachPointOfChange (the turnaround
+	 * open, the drop, an assignment and a rebid that ran), AirportOps.Fuel.RevisionHoldsStillWhenNothingChanged (a Step
+	 * with nothing to do, a foreign agent's phase, a recall of nobody)
 	 */
-	uint32 Revision() const { return RevisionCount; }
+	uint32 Revision() const { return RevisionCount + FleetRevision; }
+
+	/**
+	 * RevisionCount alone: the changes that move no vehicle (see Revision). FOR THE TESTS that pin each point-of-change bump
+	 * on its own - the vehicle transitions that usually ride beside a change move FleetRevision, so Revision() cannot tell
+	 * whether the leaf's own bump is still there, and a deleted one would go unseen.
+	 */
+	uint32 RevisionCountForTest() const { return RevisionCount; }
 
 	/**
 	 * The one line the inspector's card shows for this agent, or empty when the board has nothing to
@@ -387,25 +443,19 @@ public:
 	FDepotBacklog DescribeDepot(FEntityInstanceId Depot, double Now) const;
 
 	/**
-	 * THE DOOR A BOUGHT VEHICLE ENTERS BY (facility-upgrades spec §3): Idle at Home and full, its row
-	 * resolved through TypeFor like a seeded one. Bumps FleetRevision and RE-OPENS every refused job of its
-	 * role - a refused job is terminal until something changes, and a vehicle that did not exist is the
-	 * change (see the re-offer pass in Step, which watches the guideline revision only). Returns the new
-	 * id, or 0 (logged) for an unset Home or a None type. Money and bays are UFacilityPurchases', not this.
-	 * ENFORCED BY: AirportOps.Model.Fleet.PurchasedVehicleIsIdleAndFull, .PurchaseReopensRefusedJobs
+	 * THE FLEET'S MEMBERSHIP DOOR (#443): every vehicle that joins or leaves goes through FServiceFleet::Add and
+	 * Withdraw - the player's purchase and sale (UFacilityPurchases), the starter seeding and a removed depot's
+	 * withdrawal (SyncFleet) - so each owes the same three things whichever asked: its Fleet ledger line, its
+	 * FFleetChangedEvent, and (on an add) the re-opening of the jobs a missing vehicle refused. It was four doors with
+	 * four sets of side effects, and the job board posted fleet money itself. A handle constructed per use, the way
+	 * Lifecycle is, because the vehicles, the jobs and both revision counters are this board's to hold.
+	 * ENFORCED BY: Check-Architecture rule 43 (fleet-one-door), AirportOps.Model.Fleet.*
 	 */
-	int32 AddPurchasedVehicle(FName TypeCode, FEntityInstanceId Home);
+	FServiceFleet Fleet() { return FServiceFleet(*this); }
 
 	/** True when VehicleId is Idle, has no agent, no current job and an empty queue - the only vehicle
-	 *  that may leave (R5). RemoveVehicle asks exactly this. */
+	 *  that may leave by a SALE (R5). FServiceFleet::Withdraw(Sold) asks exactly this. */
 	bool CanRemoveVehicle(int32 VehicleId) const;
-
-	/**
-	 * THE DOOR A SOLD VEHICLE LEAVES BY. False, nothing changed, unless CanRemoveVehicle. Bumps
-	 * FleetRevision; leaves SeededDepots alone, so a sold starter fleet stays sold.
-	 * ENFORCED BY: AirportOps.Model.Fleet.OnlyAnIdleVehicleLeaves
-	 */
-	bool RemoveVehicle(int32 VehicleId);
 
 	/** Vehicles whose Home is Depot - counted off the vehicles, never stored on the depot. */
 	int32 VehiclesAt(FEntityInstanceId Depot) const;
@@ -431,17 +481,12 @@ public:
 	const FServiceJob* JobForAircraft(int32 AircraftId, EServiceRole Role = EServiceRole::Fuel) const;
 
 	/**
-	 * Litres a job may be short and still count as fuelled - FinishServe calls a job Done within this of
-	 * what it owed, so the outcome and the fee must use the same figure, or a Done job 0.4 L short would
-	 * read part-fuelled and be paid for twice.
-	 */
-	static constexpr double FuelledWithinLitres = 0.5;
-
-	/**
 	 * How a departing aircraft left, from the FIGURES, not the job's state (batch 3 review I1): a job still
 	 * being served when the player pressed Depart is part-fuelled, though it never went Unserviceable.
-	 * Wanted <= 0 or delivered within FuelledWithinLitres of it: Fuelled; nothing delivered: Unfuelled;
-	 * otherwise PartFuelled.
+	 * Wanted <= 0 or delivered within FFuelRolePolicy::FuelledWithinLitres of it: Fuelled; nothing delivered:
+	 * Unfuelled; otherwise PartFuelled. THE POLICY'S FIGURE, the one FinishServe calls a job Done by (DoneWithin), so
+	 * the outcome and the fee use the same number - or a Done job 0.4 L short would read part-fuelled and be paid for
+	 * twice (#443: it was a constant here beside two literals in the policy and two in the bid).
 	 */
 	static EFuelOutcome FuelOutcomeOf(double Delivered, double Wanted);
 
@@ -495,9 +540,16 @@ public:
 	ServiceBid::FResult BidForTest(const UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock,
 		int32 VehicleId, int32 JobId) const;
 
-	/** See FleetRevision. Public since the offer verdict is dated by it (UFlightBoard::VerdictFor). */
+	/** See FleetRevision: every vehicle transition and every membership change. What the re-bid keys on. */
 	uint32 GetFleetRevision() const { return FleetRevision; }
 	uint32 GetFleetRevisionForTest() const { return GetFleetRevision(); }
+
+	/**
+	 * See FleetCompositionRevision: only who is in the fleet. What the offer verdict's bFuelServable is dated by
+	 * (UFlightBoard::VerdictFor), because CouldServe reads which vehicles exist and where they live and nothing of
+	 * their state - so a truck arriving, serving or refilling does not re-plan every pending offer.
+	 */
+	uint32 GetFleetCompositionRevision() const { return FleetCompositionRevision; }
 
 	/**
 	 * How much better, in GAME seconds, a re-bid must be before a queued job moves to another
@@ -526,11 +578,15 @@ public:
 	 */
 	FServiceJob& AddJobForTest(int32 AircraftId, EServiceJobState State, EServiceRefusal Why, uint32 RefusedAtRevision);
 
-	/** The role's policy. Fuel is registered at construction; a test may register another. */
+	/** The role's policy - Fuel's, registered at construction; null for a role with none. See the class comment for
+	 *  what else a second role would have to reach. */
 	const IServiceRolePolicy* PolicyFor(EServiceRole Role) const;
-	void RegisterPolicyForTest(TSharedRef<IServiceRolePolicy> Policy);
 
 private:
+	/** FServiceFleet writes the fleet's containers and both membership counters: it is this board's membership door,
+	 *  and the vehicles, jobs and counters it moves are private here on purpose (Check-Architecture rule 43). */
+	friend class FServiceFleet;
+
 	/**
 	 * Send every aircraft whose turnaround has run out and whose jobs are finished.
 	 *
@@ -542,11 +598,11 @@ private:
 
 	/**
 	 * The placeholder fleet brought in line with the depots (spec §3.4): a live depot seen for the
-	 * first time gets Trucks x FleetTypes() vehicles, Idle at home and full; a vehicle whose depot is
-	 * gone is withdrawn (its agent retired, its jobs back to the board) and credited its resale value
-	 * to Ledger, dated by Clock; a vehicle whose agent vanished under it (retired by somebody else) is
-	 * put back Idle at home by LoseAgent, every job it held re-opened - THE NET under OnAgentPhase's Gone
-	 * branch, which is how the board normally hears of it.
+	 * first time gets Trucks x FleetTypes() vehicles, Idle at home and full (FServiceFleet::SeedStarterFleets); a
+	 * vehicle whose depot is gone is withdrawn (its agent retired, its jobs back to the board, then
+	 * FServiceFleet::Withdraw(DepotRemoved) credits its resale value and announces it); a vehicle whose agent vanished
+	 * under it (retired by somebody else) is put back Idle at home by LoseAgent, every job it held re-opened - THE
+	 * NET under OnAgentPhase's Gone branch, which is how the board normally hears of it.
 	 */
 	void SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
@@ -621,13 +677,6 @@ private:
 	FServiceVehicleLifecycle Lifecycle(FServiceVehicle& Vehicle) { return FServiceVehicleLifecycle(Vehicle, FleetRevision); }
 
 	/**
-	 * THE ONE CREATION SITE for a vehicle that joins the fleet - the placeholder's seeded one and the player's
-	 * bought one were two hand copies (and AddVehicleForTest a third). Idle at Home, full, with the next id;
-	 * bumps FleetRevision. The returned reference is good until the next add or removal.
-	 */
-	FServiceVehicle& NewVehicle(const FServiceVehicleType& Type, FEntityInstanceId Home);
-
-	/**
 	 * Take Vehicle's agent off the road: the vehicle unhooks from it FIRST (LeaveRoad, Idle at home), then the
 	 * agent is retired. THAT ORDER IS THE POINT: RetireAgent broadcasts Gone, the fixtures deliver it inside the
 	 * call, and OnAgentPhase treats a Gone for a vehicle's agent as the agent being lost from under it - which
@@ -689,14 +738,26 @@ private:
 		FGuidelineNodeId Hydrant;
 	};
 
-	/** One vehicle kind at one depot, a candidate for a job - a real vehicle, or (CouldServe) one the
-	 *  placeholder fleet would give it. */
+	/** One real vehicle, a candidate for a job: its depot, its kind and its id. */
 	struct FCandidate
 	{
 		FEntityInstanceId Depot;
 		FName TypeCode;
 		int32 VehicleId = 0;
 	};
+
+	/**
+	 * THE CANDIDATE FILTER, written once (#443: it was three copies in the two bid passes and CouldServe): the vehicles
+	 * of Role that may bid for a job. Every one, less
+	 *  - a STRANDED vehicle, when Traffic says who is: it prices itself as "home soon" (ToFacility with no plan left, so no
+	 *    drive remaining), wins, and holds the job for a trip it will never make - the wedge OnAgentPhase's Stranded branch
+	 *    releases jobs from. CouldServe passes null Traffic: it is asked before the aircraft exists, with no agent to be
+	 *    stranded, and answers for the fleet as it stands;
+	 *  - Except (a vehicle id, 0 for none): the re-bid asks for the ALTERNATIVES to the vehicle that holds the job.
+	 * READS REAL VEHICLES ONLY: the starter fleet is seeded through the fleet's door before any of this runs.
+	 * ENFORCED BY: AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid
+	 */
+	TArray<FCandidate> CandidatesFor(EServiceRole Role, const UGroundTraffic* Traffic, int32 Except = 0) const;
 
 	/**
 	 * WAS ChooseDepot's classification, per candidate instead of per depot, and without "busy": a busy
@@ -726,8 +787,9 @@ private:
 	/**
 	 * Every Queued job re-bid against every other vehicle that may take it, and moved when one now
 	 * beats its current finish by RebidMarginSeconds (spec §2.5). Underway and Serving never move -
-	 * committed is committed. Runs only when FleetRevision or the guideline revision moved since the
-	 * last pass: nothing changed, nothing re-bid (#190's rule).
+	 * committed is committed. Runs only when FleetRevision (the TRANSITION counter: a re-bid wants every change of a
+	 * vehicle's state, not only of the fleet's composition) or the guideline revision moved since the last pass:
+	 * nothing changed, nothing re-bid (#190's rule).
 	 */
 	void RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
@@ -780,13 +842,15 @@ private:
 	 * Depots whose STARTER fleet has been seeded, so a depot is seeded once and a vehicle that is out
 	 * does not get a twin at home. SAVED since 2026-09-29 (facility-upgrades spec): a starter fleet the
 	 * player sold must stay sold across a load, and a transient set came back empty and re-seeded it.
+	 * Written only by FServiceFleet (seeding, a test's staging, a load) - rule 43.
 	 * ENFORCED BY: AirportOps.Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad
 	 */
 	UPROPERTY() TSet<FEntityInstanceId> SeededDepots;
 
 	/** Terminal -> Open for one refused job. The ONE body of "ask again", shared by the guideline-revision
-	 *  pass in Step and AddPurchasedVehicle (ruling C2: two hand copies drift); each caller logs its own reason. */
-	static void ReopenRefusedJob(FServiceJob& Job);
+	 *  pass in Step and FServiceFleet::Add (ruling C2: two hand copies drift); each caller logs its own reason. A
+	 *  change to the jobs with no vehicle transition behind it, so it moves RevisionCount itself. */
+	void ReopenRefusedJob(FServiceJob& Job);
 
 	int32 NextJobId = 1;
 	UPROPERTY() int32 NextVehicleId = 1;
@@ -799,18 +863,29 @@ private:
 	TSet<int32> DispatchRefusedWarned;
 
 	/**
-	 * Bumped whenever a vehicle is added or withdrawn AND on every state change of a vehicle - each
+	 * Bumped whenever a vehicle is added or withdrawn (FServiceFleet) AND on every state change of a vehicle - each
 	 * FServiceVehicleLifecycle transition moves it (issue #428): dispatched, arrived, serving, deciding, heading
 	 * home, off the road, refilling, reset by a load. Before #428 about half of those sites did.
 	 * The fleet's half of "has anything changed that a re-bid could answer differently" (stage 2);
-	 * the airport's half is URoadNetwork::GetGuidelineRevision. TWO READERS WANT DIFFERENT THINGS OF IT - the
-	 * re-bid (RebidQueued) wants every transition, UFlightBoard::VerdictFor only a change of composition - and
-	 * splitting it is #443's, not done here.
+	 * the airport's half is URoadNetwork::GetGuidelineRevision. THE TRANSITION COUNTER: what RebidQueued keys on, and
+	 * what Revision sums. Its other reader wanted less of it - UFlightBoard::VerdictFor needs only a change of
+	 * COMPOSITION, which is FleetCompositionRevision (#443 split them); keying an offer's whole verdict on this one
+	 * re-planned every pending offer's arrival whenever a truck arrived or finished a refill.
 	 *
 	 * A SESSION CLOCK, NOT STATE, the same as URoadNetwork::GuidelineRevision: not a UPROPERTY, and it
 	 * does not need to be one.
 	 */
 	uint32 FleetRevision = 0;
+
+	/**
+	 * Bumped only when WHO IS IN THE FLEET changes: a vehicle added or withdrawn (FServiceFleet, whatever the origin),
+	 * the fleet cleared or replaced by a load. A vehicle's state, agent, job and cargo are not composition, and
+	 * CouldServe reads none of them - only which vehicles exist, of what kind, at which depot (verified in #454's review).
+	 * The offer verdict's bFuelServable is dated by it; every composition change also moves FleetRevision, so the re-bid
+	 * still hears of it. A session clock, like the one above.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.VehicleTransitionsDoNotReplanOffers, AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet
+	 */
+	uint32 FleetCompositionRevision = 0;
 
 	/** See GetBidCallCountForTest. */
 	mutable int32 BidCallCountForTest = 0;
@@ -821,7 +896,7 @@ private:
 	/** See DepartedLastStep. Transient: one Step's answer. */
 	TArray<int32> LastStepDeparted;
 
-	/** See Revision. A session counter, not saved. */
+	/** See Revision: the changes that move no vehicle. A session counter, not saved. */
 	uint32 RevisionCount = 0;
 
 	/** True while any of the turnaround's jobs is neither Done nor Unserviceable. One rule, read by

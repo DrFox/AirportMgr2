@@ -32,14 +32,17 @@ const FEntityInstance* UFacilityPurchases::FacilityAt(const URoadNetwork& Networ
 	return Instance != nullptr && Instance->bAlive && Instance->IsDepot() ? Instance : nullptr;
 }
 
-int32 UFacilityPurchases::VehicleSlotsOf(const FEntityInstance& Depot) const
+int32 UFacilityPurchases::VehicleSlotsOf(FEntityInstanceId Id, const FEntityInstance& Depot) const
 {
+	// THE SEATED MODULES, not the owned list (#443): a shed the plot could not seat grants no bay. Every kind with an
+	// offer, seated count times its slots - the sum the owned walk made one module at a time.
+	const FDepotCapability Capability = FDepotCapability::Of(Id, Depot, ReservedSlotsOf);
 	int32 Slots = 0;
-	for (const EDepotModule Module : Depot.Modules)
+	for (int32 Kind = 0; Kind < FDepotCapability::KindCount; ++Kind)
 	{
-		if (const FModuleOffer* Offer = ModuleOffers.Find(Module))
+		if (const FModuleOffer* Offer = ModuleOffers.Find(static_cast<EDepotModule>(Kind)))
 		{
-			Slots += Offer->VehicleSlots;
+			Slots += Capability.Seated[Kind] * Offer->VehicleSlots;
 		}
 	}
 	return Slots;
@@ -77,14 +80,13 @@ FText UFacilityPurchases::Money(double Amount) const
 
 FText UFacilityPurchases::VehicleName(FName TypeCode) const
 {
-	const FFuelVehicleSpec* Spec = JobBoard != nullptr ? JobBoard->VehicleSpecs.Find(TypeCode) : nullptr;
-	return Spec != nullptr && !Spec->DisplayName.IsEmpty() ? Spec->DisplayName : FText::FromName(TypeCode);
+	return JobBoard != nullptr ? JobBoard->Fleet().NameOf(TypeCode) : FText::FromName(TypeCode);
 }
 
 double UFacilityPurchases::RefundOf(FName TypeCode) const
 {
-	const FFuelVehicleSpec* Spec = JobBoard != nullptr ? JobBoard->VehicleSpecs.Find(TypeCode) : nullptr;
-	return Spec != nullptr ? Spec->ResaleValue() : 0.0;
+	// THE FLEET'S OWN READ, so the card's "Sell" label and the credit the sale posts are one number.
+	return JobBoard != nullptr ? JobBoard->Fleet().ResaleOf(TypeCode) : 0.0;
 }
 
 void UFacilityPurchases::LogRefused(int32 Depot, const FString& What, EPurchaseRefusal Why) const
@@ -125,16 +127,16 @@ EPurchaseRefusal UFacilityPurchases::JudgeVehicle(const FEntityInstance* Facilit
 	{
 		return EPurchaseRefusal::NotAFacility;
 	}
-	const FFuelVehicleSpec* Spec = JobBoard->VehicleSpecs.Find(TypeCode);
-	if (Spec == nullptr)
+	if (!JobBoard->VehicleSpecs.Contains(TypeCode))
 	{
 		return EPurchaseRefusal::UnknownType;
 	}
-	if (JobBoard->VehiclesAt(Entity) >= VehicleSlotsOf(*Facility))
+	if (JobBoard->VehiclesAt(Entity) >= VehicleSlotsOf(Entity, *Facility))
 	{
 		return EPurchaseRefusal::NoFreeBay;
 	}
-	return CanPay(Spec->Price) ? EPurchaseRefusal::None : EPurchaseRefusal::CannotAfford;
+	// THE FLEET'S PRICE, the one the charge and the ledger line post - see FServiceFleet::PriceOf.
+	return CanPay(JobBoard->Fleet().PriceOf(TypeCode)) ? EPurchaseRefusal::None : EPurchaseRefusal::CannotAfford;
 }
 
 EPurchaseRefusal UFacilityPurchases::JudgeSale(int32 VehicleId) const
@@ -155,7 +157,7 @@ FFacilityQuote UFacilityPurchases::Quote(const URoadNetwork& Network, FEntityIns
 		return Out;
 	}
 	Out.Refusal = EPurchaseRefusal::None;
-	Out.Bays = VehicleSlotsOf(*Facility);
+	Out.Bays = VehicleSlotsOf(Entity, *Facility);
 	Out.Vehicles = JobBoard->VehiclesAt(Entity);
 
 	// SORTED, so the card's rows and a menu's line indices do not move between two asks.
@@ -186,11 +188,11 @@ FFacilityQuote UFacilityPurchases::Quote(const URoadNetwork& Network, FEntityIns
 		FVehicleOfferQuote& Row = Out.VehicleOffers.AddDefaulted_GetRef();
 		Row.TypeCode = TypeCode;
 		Row.Name = VehicleName(TypeCode);
-		Row.Price = Spec.Price;
+		Row.Price = JobBoard->Fleet().PriceOf(TypeCode);
 		Row.UpkeepPerDay = Spec.UpkeepPerDay;
 		Row.CapacityLitres = Spec.CapacityLitres;
 		Row.Refusal = JudgeVehicle(Facility, Entity, TypeCode);
-		Row.Label = FText::Format(LOCTEXT("VehicleLabel", "{0} {1} \u00B7 {2} L"), Row.Name, Money(Spec.Price),
+		Row.Label = FText::Format(LOCTEXT("VehicleLabel", "{0} {1} \u00B7 {2} L"), Row.Name, Money(Row.Price),
 			FText::AsNumber(FMath::RoundToInt(Spec.CapacityLitres)));
 	}
 
@@ -265,8 +267,10 @@ FPurchaseResult UFacilityPurchases::BuyVehicle(const URoadNetwork& Network, FEnt
 		LogRefused(Entity.Index, TypeCode.ToString(), Result.Refusal);
 		return Result;
 	}
-	const double Price = JobBoard->VehicleSpecs[TypeCode].Price;
-	Result.VehicleId = JobBoard->AddPurchasedVehicle(TypeCode, Entity);
+	// THE FLEET'S DOOR does the rest - the charge to Fleet, the FleetChanged event, the re-open of refused jobs - so a
+	// purchase, a seeded vehicle and a withdrawn one owe the same things (#443). This judged it; that makes it so.
+	const double Price = JobBoard->Fleet().PriceOf(TypeCode);
+	Result.VehicleId = JobBoard->Fleet().Add(TypeCode, Entity, EFleetOrigin::Bought, NowOrZero());
 	if (Result.VehicleId == 0)
 	{
 		Result.Refusal = EPurchaseRefusal::NotAFacility;
@@ -274,16 +278,8 @@ FPurchaseResult UFacilityPurchases::BuyVehicle(const URoadNetwork& Network, FEnt
 		return Result;
 	}
 	Result.Amount = Price;
-	if (Ledger != nullptr)
-	{
-		Ledger->Post(NowOrZero(), ELedgerCategory::Fleet, -Price, FText::Format(LOCTEXT("BoughtVehicle", "Bought {0}"), VehicleName(TypeCode)));
-	}
 	UE_LOG(LogAirportOps, Log, TEXT("Purchase: depot %d bought %s for %.0f (%d/%d bays)"),
-		Entity.Index, *TypeCode.ToString(), Price, JobBoard->VehiclesAt(Entity), VehicleSlotsOf(*Facility));
-	if (Bus != nullptr)
-	{
-		Bus->Publish(FFleetChangedEvent{ Entity.Index, Result.VehicleId, TypeCode, EFleetChange::Bought, Price });
-	}
+		Entity.Index, *TypeCode.ToString(), Price, JobBoard->VehiclesAt(Entity), VehicleSlotsOf(Entity, *Facility));
 	return Result;
 }
 
@@ -298,21 +294,19 @@ FPurchaseResult UFacilityPurchases::SellVehicle(int32 VehicleId)
 		LogRefused(Depot, FString::Printf(TEXT("sell vehicle %d"), VehicleId), Result.Refusal);
 		return Result;
 	}
-	// COPIED BEFORE THE REMOVE, which invalidates Vehicle.
-	const FName TypeCode = Vehicle->TypeCode;
-	const double Refund = RefundOf(TypeCode);
-	JobBoard->RemoveVehicle(VehicleId);
+	// THE REFUND, READ BEFORE THE REMOVE (which invalidates Vehicle): the fleet's door credits this same figure, posts the
+	// Fleet line and publishes FleetChanged{Sold}.
+	const double Refund = RefundOf(Vehicle->TypeCode);
+	if (!JobBoard->Fleet().Withdraw(VehicleId, EFleetReason::Sold, NowOrZero()))
+	{
+		// JudgeSale just said it could go; the door asks the same question (CanRemoveVehicle), so this is a race with
+		// nothing between the two calls - said as busy rather than assumed away.
+		Result.Refusal = EPurchaseRefusal::VehicleBusy;
+		LogRefused(Depot, FString::Printf(TEXT("sell vehicle %d"), VehicleId), Result.Refusal);
+		return Result;
+	}
 	Result.Amount = Refund;
-	if (Ledger != nullptr)
-	{
-		Ledger->Post(NowOrZero(), ELedgerCategory::Fleet, Refund,
-			FText::Format(LOCTEXT("SoldVehicle", "Sold {0} #{1}"), VehicleName(TypeCode), FText::AsNumber(VehicleId)));
-	}
 	UE_LOG(LogAirportOps, Log, TEXT("Purchase: depot %d sold vehicle %d for %.0f"), Depot, VehicleId, Refund);
-	if (Bus != nullptr)
-	{
-		Bus->Publish(FFleetChangedEvent{ Depot, VehicleId, TypeCode, EFleetChange::Sold, Refund });
-	}
 	return Result;
 }
 

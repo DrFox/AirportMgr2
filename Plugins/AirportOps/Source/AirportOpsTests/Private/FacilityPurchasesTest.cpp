@@ -63,6 +63,7 @@ namespace
 		FOpsEventBus Bus;
 		FEntityInstanceId Depot;
 		int32 ReservedSheds = 3;
+		int32 ReservedPumps = 1;
 		int32 ApplyCalls = 0;
 
 		explicit FFacilityFixture(double Balance = 500000.0)
@@ -74,6 +75,10 @@ namespace
 			Ledger = NewObject<ULedger>(GetTransientPackage());
 			Ledger->Clock = Clock;
 			Ledger->Open(Balance);
+			// THE BOARD'S OWN LEDGER AND BUS, which the fleet's door posts to and publishes on (#443): a vehicle's charge, its
+			// credit and its FleetChanged are the door's, no longer the shop's. UOpsRuntime wires the same two beside the shop's.
+			Board->Ledger = Ledger;
+			Board->Bus = &Bus;
 			Shop = NewObject<UFacilityPurchases>(GetTransientPackage());
 			Shop->ModuleOffers = GetDefault<UScenario>()->ModuleOffers;
 			Shop->JobBoard = Board;
@@ -82,7 +87,7 @@ namespace
 			Shop->Bus = &Bus;
 			Shop->ReservedSlotsOf = [this](FEntityInstanceId, const FEntityInstance&, EDepotModule Module)
 			{
-				return Module == EDepotModule::Shed ? ReservedSheds : 1;
+				return Module == EDepotModule::Shed ? ReservedSheds : Module == EDepotModule::Pump ? ReservedPumps : 1;
 			};
 			Shop->ApplyModulePurchase = [this](FEntityInstanceId Id, EDepotModule Module)
 			{
@@ -120,11 +125,11 @@ bool FFacilitySlotsTest::RunTest(const FString&)
 {
 	// CAPACITY IS DERIVED, NEVER STORED (spec §2): the offers' VehicleSlots over the owned modules.
 	FFacilityFixture F;
-	TestEqual(TEXT("the start kit's one shed is one bay"), F.Shop->VehicleSlotsOf(*F.Net->GetEntity(F.Depot)), 1);
+	TestEqual(TEXT("the start kit's one shed is one bay"), F.Shop->VehicleSlotsOf(F.Depot, *F.Net->GetEntity(F.Depot)), 1);
 	F.Net->AddEntityModule(F.Depot, EDepotModule::Tank);
-	TestEqual(TEXT("a tank grants nothing - it has no offer"), F.Shop->VehicleSlotsOf(*F.Net->GetEntity(F.Depot)), 1);
+	TestEqual(TEXT("a tank grants nothing - it has no offer"), F.Shop->VehicleSlotsOf(F.Depot, *F.Net->GetEntity(F.Depot)), 1);
 	F.Net->AddEntityModule(F.Depot, EDepotModule::Shed);
-	TestEqual(TEXT("a second shed is a second bay"), F.Shop->VehicleSlotsOf(*F.Net->GetEntity(F.Depot)), 2);
+	TestEqual(TEXT("a second shed is a second bay"), F.Shop->VehicleSlotsOf(F.Depot, *F.Net->GetEntity(F.Depot)), 2);
 	TestEqual(TEXT("and the quote reads the same count"), F.Shop->Quote(*F.Net, F.Depot).Bays, 2);
 	TestEqual(TEXT("a new depot has no vehicles (R3)"), F.Shop->Quote(*F.Net, F.Depot).Vehicles, 0);
 	return true;
@@ -268,6 +273,93 @@ bool FFacilityDepotRemovedCreditsTest::RunTest(const FString&)
 		static_cast<int32>(F.Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Fleet));
 	F.Board->Step(*Traffic, *F.Net, *F.Clock);
 	TestEqual(TEXT("and only once - the next sync finds nothing to credit"), F.Ledger->Entries().Num(), EntriesBefore + 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityDepotRemovedPublishesTest, "AirportOps.Model.Fleet.DepotRemovalPublishesFleetChanged",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityDepotRemovedPublishesTest::RunTest(const FString&)
+{
+	// #443: A REMOVED DEPOT'S VEHICLES LEFT THE FLEET WITH THEIR CREDIT POSTED BY THE JOB BOARD AND NO EVENT, so a FleetChanged
+	// subscriber - the feed's "Bowser #3 credited, depot removed" - heard of purchases and sales and missed this. The
+	// fleet's door announces every way out.
+	FFacilityFixture F;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	TArray<FFleetChangedEvent> Seen;
+	F.Bus.BeginWiring();
+	F.Bus.Subscribe<FFleetChangedEvent>(EOpsTier::Presentation, TEXT("test"), [&Seen](const FFleetChangedEvent& E) { Seen.Add(E); });
+	F.Bus.EndWiring();
+	const FPurchaseResult Bought = F.Shop->BuyVehicle(*F.Net, F.Depot, TEXT("FUEL"));
+	if (!TestTrue(TEXT("setup: a vehicle is bought"), Bought.Succeeded())) { return false; }
+	F.Bus.Drain();
+	if (!TestEqual(TEXT("setup: the purchase was announced, from the door and not twice"), Seen.Num(), 1)) { return false; }
+	TestEqual(TEXT("setup: as Bought"), static_cast<int32>(Seen[0].Change), static_cast<int32>(EFleetChange::Bought));
+	Seen.Reset();
+
+	F.Net->RemoveEntity(F.Depot);
+	F.Board->Step(*Traffic, *F.Net, *F.Clock);
+	F.Bus.Drain();
+	if (!TestEqual(TEXT("the removal published exactly one FleetChanged"), Seen.Num(), 1)) { return false; }
+	TestEqual(TEXT("saying the vehicle was Withdrawn"), static_cast<int32>(Seen[0].Change), static_cast<int32>(EFleetChange::Withdrawn));
+	TestEqual(TEXT("which vehicle"), Seen[0].VehicleId, Bought.VehicleId);
+	TestEqual(TEXT("of what kind"), Seen[0].TypeCode, FName(TEXT("FUEL")));
+	TestEqual(TEXT("from which depot"), Seen[0].Depot, F.Depot.Index);
+	TestEqual(TEXT("and what it was credited"), Seen[0].Amount, 45000.0, 1e-9);
+	Seen.Reset();
+	F.Board->Step(*Traffic, *F.Net, *F.Clock);
+	F.Bus.Drain();
+	TestEqual(TEXT("and only once - the next Step finds nothing to withdraw"), Seen.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityUnseatedTest, "AirportOps.Model.Facility.UnseatedModulesGrantNeitherBaysNorPumps",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityUnseatedTest::RunTest(const FString&)
+{
+	// #443, RULED 2026-09-30 (#266): "a player should not be able to purchase upgrades that don't fit on the plot; the
+	// modules that count are only the ones that are placed." FEntityInstance::Modules is what the player OWNS; the plot
+	// seats min(owned, ceiling) of each kind and the presenter drops the rest. A module it could not seat grants no bay
+	// and no pump - the depot card used to quote "2 bays" for a plot that stood one shed. The ceiling is the fixture's
+	// hook, standing for UOpsRuntime::ReservedSlotsOf, and the board reads the SAME one (as Attach wires it).
+	FFacilityFixture F;
+	F.Board->ModuleCeilingOf = F.Shop->ReservedSlotsOf;
+	auto Depot = [&F]() -> const FEntityInstance& { return *F.Net->GetEntity(F.Depot); };
+	TestEqual(TEXT("control: the start kit's shed is seated, so one bay"), F.Shop->VehicleSlotsOf(F.Depot, Depot()), 1);
+	TestTrue(TEXT("control: and its pump is seated, so the depot can fuel"), F.Board->HasWorkingPump(F.Depot, Depot()));
+	TestEqual(TEXT("control: one pump"), F.Board->PumpsAt(F.Depot, Depot()), 1);
+
+	// THE PLOT CANNOT SEAT THE SHED: owned, and granting nothing.
+	F.ReservedSheds = 0;
+	TestEqual(TEXT("an owned shed the plot cannot seat grants no bay"), F.Shop->VehicleSlotsOf(F.Depot, Depot()), 0);
+	TestEqual(TEXT("and the quote says so"), F.Shop->Quote(*F.Net, F.Depot).Bays, 0);
+	TestEqual(TEXT("so the vehicle purchase is refused for want of a bay - and the command agrees with the quote"),
+		static_cast<int32>(F.Shop->BuyVehicle(*F.Net, F.Depot, TEXT("FUEL")).Refusal), static_cast<int32>(EPurchaseRefusal::NoFreeBay));
+
+	// THE PLOT CANNOT SEAT THE PUMP: the depot cannot fuel.
+	F.ReservedSheds = 3;
+	F.ReservedPumps = 0;
+	TestFalse(TEXT("an owned pump the plot cannot seat is no pump"), F.Board->HasWorkingPump(F.Depot, Depot()));
+	TestEqual(TEXT("and the refill divisor stays floored at one"), F.Board->PumpsAt(F.Depot, Depot()), 1);
+
+	// OVER-OWNED: more sheds owned than the plot holds. Seated up to the ceiling; the rest grant nothing, and buying another is
+	// refused (NoSlotReserved), so nothing bought is ever left unseated.
+	F.ReservedPumps = 1;
+	F.ReservedSheds = 2;
+	F.Net->AddEntityModule(F.Depot, EDepotModule::Shed);
+	F.Net->AddEntityModule(F.Depot, EDepotModule::Shed);
+	TestEqual(TEXT("three sheds owned, two seated: two bays"), F.Shop->VehicleSlotsOf(F.Depot, Depot()), 2);
+	TestEqual(TEXT("a fourth shed is refused - it would not be seated"),
+		static_cast<int32>(F.Shop->BuyModule(*F.Net, F.Depot, EDepotModule::Shed).Refusal), static_cast<int32>(EPurchaseRefusal::NoSlotReserved));
+
+	// AND THE QUOTE IS THE COMMAND for what the plot can seat: at owned == ceiling the card lights nothing.
+	for (const FModuleOfferQuote& Offer : F.Shop->Quote(*F.Net, F.Depot).Modules)
+	{
+		if (Offer.Module == EDepotModule::Shed)
+		{
+			TestEqual(TEXT("the shed's button is disabled for the same reason"),
+				static_cast<int32>(Offer.Refusal), static_cast<int32>(EPurchaseRefusal::NoSlotReserved));
+		}
+	}
 	return true;
 }
 

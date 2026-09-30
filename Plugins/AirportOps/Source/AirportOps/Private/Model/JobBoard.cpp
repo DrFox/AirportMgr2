@@ -43,39 +43,38 @@ UJobBoard::UJobBoard()
 
 void UJobBoard::OnBeforeRestore()
 {
-	++RevisionCount;   // See Revision: every public mutator.
+	++RevisionCount;   // See Revision: a load clears the jobs and turnarounds (the fleet's own clear moves FleetRevision).
 	Jobs.Reset();
 	Turnarounds.Reset();
-	Vehicles.Reset();
-	// CLEARED, THEN RESTORED FROM THE BLOB (it is saved): a snapshot without it re-seeds each depot once, which is the old behaviour.
-	SeededDepots.Reset();
-	++FleetRevision;
+	// THE FLEET AND THE SEEN-DEPOT SET, through the door that owns them: cleared, then restored from the blob (it is
+	// saved), and a snapshot without one re-seeds each depot once, which is the old behaviour.
+	Fleet().Clear();
 }
 
 void UJobBoard::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
-	if (Ar.IsLoading())
-	{
-		++RevisionCount;   // See Revision: a restore is a change.
-	}
-	if (!Ar.IsLoading() || Vehicles.Num() == 0)
+	if (!Ar.IsLoading())
 	{
 		return;
 	}
+	// A LOAD'S OWN LINE (#458's rule 41 asks every persistent object with a Revision to bump on IsLoading): the vehicles
+	// were replaced - Restored moves FleetRevision as well, so this is the redundant half, kept because a load is a change
+	// whatever the archive held and the rule reads the declaration, not which counter the body moves.
+	++RevisionCount;
 	for (FServiceVehicle& Vehicle : Vehicles)
 	{
 		// EVERY VEHICLE IDLE AT HOME with nothing held - agents, and the jobs of aircraft that are not restored,
 		// are things a load clears. The lifecycle moves FleetRevision (once per vehicle).
 		Lifecycle(Vehicle).ResetForRestore();
-		// ITS DEPOT HAS BEEN SEEN: the placeholder must not add a second fleet beside a restored one.
-		// ENFORCED BY: AirportOps.Fuel.RestoredFleetIsNotReseeded
-		if (Vehicle.Home.IsSet())
-		{
-			SeededDepots.Add(Vehicle.Home);
-		}
 	}
-	UE_LOG(LogAirportOps, Log, TEXT("Restore: %d vehicle(s) idle at home"), Vehicles.Num());
+	// THE ARCHIVE REPLACED THE VEHICLES - even with none: each restored vehicle's depot has been seen (the placeholder must
+	// not add a second fleet beside a restored one), and the composition has changed, which the fleet's door records.
+	Fleet().Restored();
+	if (Vehicles.Num() > 0)
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Restore: %d vehicle(s) idle at home"), Vehicles.Num());
+	}
 }
 
 const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
@@ -106,7 +105,8 @@ const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
 
 void UJobBoard::ResolveVehicles(TFunctionRef<FVehicle(EIcaoCode)> Resolve)
 {
-	++RevisionCount;   // See Revision: every public mutator.
+	// NO BUMP (#443, "changes, not calls"): it fills the letter table, which no job, vehicle or turnaround holds and no
+	// Describe reads - the vehicle line names a TypeCode, not its chassis. It used to bump as "every public mutator".
 	for (int32 Index = 0; Index < LetterCount; ++Index)
 	{
 		VehiclesByLetter[Index] = Resolve(static_cast<EIcaoCode>(Index));
@@ -184,40 +184,12 @@ FFuelVehicleSpec UJobBoard::SpecFor(FName TypeCode) const
 	return FallbackSpec;
 }
 
-bool UJobBoard::HasWorkingPump(const FEntityInstance& Depot)
-{
-	// NO MODULES IS NOT "NO PUMP". A depot placed without a plot - every depot in every save written
-	// before plots existed, and every one a test places through the old signature - fuels exactly as it
-	// always did. Answering false here would break the fuel loop for all of them at once, which is how
-	// a feature nobody asked about stops an existing one.
-	if (Depot.Modules.Num() == 0)
-	{
-		return true;
-	}
-	for (const EDepotModule Module : Depot.Modules)
-	{
-		if (Module == EDepotModule::Pump)
-		{
-			return true;
-		}
-	}
-	return false;
-}
-
-int32 UJobBoard::PumpsAt(const FEntityInstance& Depot)
-{
-	int32 Pumps = 0;
-	for (const EDepotModule Module : Depot.Modules)
-	{
-		if (Module == EDepotModule::Pump)
-		{
-			++Pumps;
-		}
-	}
-	// A plotless depot counts as one pump - see HasWorkingPump for why its empty module list is not a
-	// claim about pumps.
-	return FMath::Max(Pumps, 1);
-}
+// HasWorkingPump AND PumpsAt ARE FDepotCapability'S NOW (#443, ruled 2026-09-30). They were a walk of the OWNED module
+// list here, beside a second rule for bays in UFacilityPurchases and a third in the depot census, so a module the presenter
+// could not seat still granted a pump. The legacy reasoning moved with the rule: NO MODULES IS NOT "NO PUMP". A depot
+// placed without a plot - every depot in every save written before plots existed, and every one a test places through
+// the old signature - fuels exactly as it always did, and answering false for it would break the fuel loop for all of
+// them at once, which is how a feature nobody asked about stops an existing one. A plotless depot counts as one pump.
 
 void UJobBoard::PostServiceFee(double Now, double Litres)
 {
@@ -240,11 +212,6 @@ const IServiceRolePolicy* UJobBoard::PolicyFor(EServiceRole Role) const
 	FuelPolicy->RefillLitresPerMinutePerPump = RefillLitresPerMinutePerPump;
 	const TSharedRef<IServiceRolePolicy>* Found = Policies.Find(Role);
 	return Found != nullptr ? &Found->Get() : nullptr;
-}
-
-void UJobBoard::RegisterPolicyForTest(TSharedRef<IServiceRolePolicy> Policy)
-{
-	Policies.Add(Policy->Role(), Policy);
 }
 
 FServiceJob* UJobBoard::FindJob(int32 JobId)
@@ -331,59 +298,17 @@ int32 UJobBoard::RefillingForTest() const
 
 FServiceVehicle& UJobBoard::AddVehicleForTest(FName TypeCode, FEntityInstanceId Home, EServiceVehicleState State, double Cargo)
 {
-	++RevisionCount;   // See Revision: every public mutator.
-	FServiceVehicle& Vehicle = Vehicles.Add_GetRef(FServiceVehicleLifecycle::Create(NextVehicleId++, TypeCode, EServiceRole::Fuel, Home, Cargo));
-	FServiceVehicleLifecycle::SeedStateForTest(Vehicle, State);
-	if (Home.IsSet())
-	{
-		SeededDepots.Add(Home);
-	}
-	++FleetRevision;
-	return Vehicle;
-}
-
-FServiceVehicle& UJobBoard::NewVehicle(const FServiceVehicleType& Type, FEntityInstanceId Home)
-{
-	FServiceVehicle& Vehicle = Vehicles.Add_GetRef(
-		FServiceVehicleLifecycle::Create(NextVehicleId++, Type.TypeCode, Type.Role, Home, FFuelRolePolicy::CapacityOf(Type)));
-	++FleetRevision;
-	return Vehicle;
+	// THROUGH THE FLEET'S HANDLE, so a staged vehicle is made by the same creation site as a bought one: the door moves
+	// both counters, and Revision (which sums FleetRevision) with them.
+	return Fleet().AddForTest(TypeCode, Home, State, Cargo);
 }
 
 void UJobBoard::ReopenRefusedJob(FServiceJob& Job)
 {
+	// A CHANGE TO A JOB WITH NO VEHICLE TRANSITION BEHIND IT, so it moves RevisionCount itself (see Revision).
+	++RevisionCount;
 	Job.State = EServiceJobState::Open;
 	Job.Why = EServiceRefusal::None;
-}
-
-int32 UJobBoard::AddPurchasedVehicle(FName TypeCode, FEntityInstanceId Home)
-{
-	if (!Home.IsSet() || TypeCode.IsNone())
-	{
-		UE_LOG(LogAirportOps, Warning, TEXT("Fleet: purchase of '%s' for depot %d refused - no depot or no type"),
-			*TypeCode.ToString(), Home.Index);
-		return 0;
-	}
-	const FServiceVehicleType Type = TypeFor(TypeCode);
-	FServiceVehicle& Vehicle = NewVehicle(Type, Home);
-	const int32 Id = Vehicle.Id;
-	++RevisionCount;   // See Revision: every public mutator.
-
-	// A NEW VEHICLE IS A CHANGE A REFUSED JOB CAN ANSWER DIFFERENTLY - see the header. Re-opened, not bid
-	// here: the next Step bids it, in its one sequence (the bus's FleetChanged wakes that pass).
-	// ENFORCED BY: AirportOps.Present.Facility.PurchaseWakesTheBoard
-	int32 Reopened = 0;
-	for (FServiceJob& Job : Jobs)
-	{
-		if (Job.State == EServiceJobState::Unserviceable && Job.Role == Type.Role)
-		{
-			ReopenRefusedJob(Job);
-			++Reopened;
-		}
-	}
-	UE_LOG(LogAirportOps, Log, TEXT("Fleet: depot %d gains bought vehicle %d %s (%.0f L at %.0f L/min); %d refused job(s) ask again"),
-		Home.Index, Id, *TypeCode.ToString(), Vehicle.Cargo, Type.RatePerMinute, Reopened);
-	return Id;
 }
 
 bool UJobBoard::CanRemoveVehicle(int32 VehicleId) const
@@ -391,21 +316,6 @@ bool UJobBoard::CanRemoveVehicle(int32 VehicleId) const
 	const FServiceVehicle* Vehicle = FindVehicle(VehicleId);
 	return Vehicle != nullptr && Vehicle->State == EServiceVehicleState::Idle && Vehicle->AgentId == 0
 		&& Vehicle->CurrentJob == 0 && Vehicle->Queue.Num() == 0;
-}
-
-bool UJobBoard::RemoveVehicle(int32 VehicleId)
-{
-	if (!CanRemoveVehicle(VehicleId))
-	{
-		return false;
-	}
-	const int32 Index = Vehicles.IndexOfByPredicate([VehicleId](const FServiceVehicle& V) { return V.Id == VehicleId; });
-	UE_LOG(LogAirportOps, Log, TEXT("Fleet: vehicle %d %s leaves depot %d"),
-		VehicleId, *Vehicles[Index].TypeCode.ToString(), Vehicles[Index].Home.Index);
-	Vehicles.RemoveAt(Index);
-	++FleetRevision;
-	++RevisionCount;   // See Revision: every public mutator.
-	return true;
 }
 
 int32 UJobBoard::VehiclesAt(FEntityInstanceId Depot) const
@@ -465,6 +375,7 @@ FGuidelineNodeId UJobBoard::HomePose(const URoadNetwork& Network, const FService
 
 void UJobBoard::Reopen(FServiceJob& Job)
 {
+	++RevisionCount;   // See Revision: a job changed, whether or not a vehicle transition follows.
 	Job.State = EServiceJobState::Open;
 	Job.VehicleId = 0;
 	Job.TripQuantity = 0.0;
@@ -517,7 +428,8 @@ int32 UJobBoard::LoseAgent(FServiceVehicle& Vehicle)
 bool UJobBoard::RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const USimClock& Clock)
 {
-	++RevisionCount;   // See Revision: every public mutator.
+	// NO BUMP ON ENTRY (#443): a recall of an agent that drives no vehicle of this board changes nothing. One that does
+	// releases its jobs (Reopen) and moves the vehicle (a transition), and both move Revision where they happen.
 	const FServiceVehicle* Found = AgentId != 0 ? VehicleForAgent(AgentId) : nullptr;
 	FServiceVehicle* Vehicle = Found != nullptr ? FindVehicleMutable(Found->Id) : nullptr;
 	if (Vehicle == nullptr)
@@ -542,34 +454,10 @@ bool UJobBoard::RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic
 
 void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
-	// NEW DEPOTS GET THEIR PLACEHOLDER FLEET (spec §3.4): Trucks of every kind in FleetTypes, Idle and
-	// full. Once per depot, so a vehicle that is out never gets a twin at home.
-	const TArray<FEntityInstance>& Entities = Network.GetEntities();
-	for (int32 Index = 0; Index < Entities.Num(); ++Index)
-	{
-		const FEntityInstance& Depot = Entities[Index];
-		if (!Depot.bAlive || Depot.PoseRole != EServiceRole::Fuel || Depot.Trucks <= 0)
-		{
-			continue;
-		}
-		const FEntityInstanceId DepotId = Network.EntityIdAt(Index);
-		if (SeededDepots.Contains(DepotId))
-		{
-			continue;
-		}
-		SeededDepots.Add(DepotId);
-		for (int32 Count = 0; Count < Depot.Trucks; ++Count)
-		{
-			for (const FName TypeCode : FleetTypes())
-			{
-				const FServiceVehicleType Type = TypeFor(TypeCode);
-				FServiceVehicle& Vehicle = NewVehicle(Type, DepotId);
-				UE_LOG(LogAirportOps, Log, TEXT("Fleet: depot %d gains vehicle %d %s (%.0f L at %.0f L/min)"),
-					DepotId.Index, Vehicle.Id, *TypeCode.ToString(), Vehicle.Cargo, Type.RatePerMinute);
-			}
-		}
-		++FleetRevision;
-	}
+	// NEW DEPOTS GET THEIR PLACEHOLDER FLEET (spec §3.4): Trucks of every kind in FleetTypes, Idle and full - through the
+	// fleet's door (#443), so a seeded vehicle is announced and re-opens refused jobs like any other, and CouldServe can
+	// read real vehicles instead of predicting these.
+	Fleet().SeedStarterFleets(Network, Clock.Now());
 
 	// VEHICLES WHOSE DEPOT IS GONE are withdrawn, and their jobs go back to the board - which will say
 	// "no fuel depot" if that was the only one, the reason the player needs.
@@ -602,23 +490,17 @@ void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 		}
 		UE_LOG(LogAirportOps, Log, TEXT("Fleet: depot %d removed; vehicle %d %s withdrawn, %d job(s) back to the board"),
 			Vehicle.Home.Index, Vehicle.Id, *Vehicle.TypeCode.ToString(), Reopened);
-		// PAID FOR, AS A SALE WOULD BE (ruled 2026-09-30): the player bought it, and removing its depot
-		// - a bulldoze, an undo of the placement - is not a reason to lose its value. Resale, not the
-		// price: a vehicle that leaves for money leaves at one rate (FFuelVehicleSpec::ResaleValue).
-		// Undo never touches this (R8): a re-placed depot does not buy the vehicle back.
-		// ENFORCED BY: AirportOps.Model.Facility.DepotRemovalCreditsItsVehicles
-		const FFuelVehicleSpec Spec = SpecFor(Vehicle.TypeCode);
-		const double Credit = Spec.ResaleValue();
-		if (Ledger != nullptr && Credit > 0.0)
+		// THE FLEET'S DOOR takes it from here: it credits the vehicle's resale value as a sale would be, announces the
+		// withdrawal and removes it (ruled 2026-09-30). The job board used to post that money itself, in its own wording,
+		// and tell nobody. Withdraw unhooks nothing - the jobs and the agent went just above, which is this function's.
+		// ENFORCED BY: AirportOps.Model.Facility.DepotRemovalCreditsItsVehicles, AirportOps.Model.Fleet.DepotRemovalPublishesFleetChanged
+		const int32 WithdrawnId = Vehicle.Id;
+		if (!Fleet().Withdraw(WithdrawnId, EFleetReason::DepotRemoved, Clock.Now()))
 		{
-			const FText Name = Spec.DisplayName.IsEmpty() ? FText::FromName(Vehicle.TypeCode) : Spec.DisplayName;
-			Ledger->Post(Clock.Now(), ELedgerCategory::Fleet, Credit,
-				FText::Format(NSLOCTEXT("Ledger", "DepotRemovedVehicle", "{0} #{1} - depot removed"), Name, FText::AsNumber(Vehicle.Id)));
-			UE_LOG(LogAirportOps, Log, TEXT("Purchase: depot %d removed; vehicle %d %s credited %.0f"),
-				Vehicle.Home.Index, Vehicle.Id, *Vehicle.TypeCode.ToString(), Credit);
+			// NOT EXPECTED - the vehicle was just read off this array - but a vehicle left behind would be credited again
+			// by every later Step, so it is said rather than assumed away.
+			UE_LOG(LogAirportOps, Warning, TEXT("Fleet: vehicle %d of a removed depot could not be withdrawn"), WithdrawnId);
 		}
-		Vehicles.RemoveAt(Index);
-		++FleetRevision;
 	}
 }
 
@@ -627,7 +509,7 @@ void UJobBoard::BeginFacility(FServiceVehicle& Vehicle, const URoadNetwork& Netw
 	const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
 	const FEntityInstance* Home = Network.GetEntity(Vehicle.Home);
 	const double Seconds = Policy != nullptr && Home != nullptr
-		? Policy->FacilitySeconds(Vehicle.Cargo, TypeFor(Vehicle.TypeCode), PumpsAt(*Home)) : 0.0;
+		? Policy->FacilitySeconds(Vehicle.Cargo, TypeFor(Vehicle.TypeCode), PumpsAt(Vehicle.Home, *Home)) : 0.0;
 	Lifecycle(Vehicle).BeginFacility(Clock.Now() + Seconds);
 	if (Seconds > 0.0)
 	{
@@ -677,6 +559,7 @@ void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, con
 				break;
 			}
 			Vehicle.Queue.RemoveAt(0);
+			++RevisionCount;   // See Revision: a queue trimmed is a change no transition reports.
 		}
 
 		const bool bAtHome = Vehicle.AgentId == 0;
@@ -796,6 +679,9 @@ void UJobBoard::FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock)
 		return;
 	}
 	const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
+	// THE POLICY'S "DONE WITHIN" - the figure the bid priced the trips by and the vehicle's NextStep judges by, so the job
+	// is called Done by the number the promise was made with (#443). Fuel's own, with no policy to ask.
+	const double DoneWithin = Policy != nullptr ? Policy->DoneWithin() : FFuelRolePolicy::FuelledWithinLitres;
 	Job->QuantityDelivered += Job->TripQuantity;
 	Job->QuantityOwed = FMath::Max(Job->QuantityOwed - Job->TripQuantity, 0.0);
 	++Job->Trips;
@@ -806,7 +692,7 @@ void UJobBoard::FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock)
 	Job->TripQuantity = 0.0;
 	Job->VehicleId = 0;
 
-	if (Job->QuantityOwed > FuelledWithinLitres)
+	if (Job->QuantityOwed > DoneWithin)
 	{
 		// MORE THAN ONE TANKFUL (spec 2026-09-28-fuel-litres): the REMAINDER goes back to the board
 		// (user's ruling 5) and is bid afresh - this vehicle, having priced its own refill, or a bowser
@@ -895,7 +781,7 @@ void UJobBoard::OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Age
 
 EFuelOutcome UJobBoard::FuelOutcomeOf(double Delivered, double Wanted)
 {
-	if (Wanted <= 0.0 || Wanted - Delivered <= FuelledWithinLitres)
+	if (Wanted <= 0.0 || Wanted - Delivered <= FFuelRolePolicy::FuelledWithinLitres)
 	{
 		return EFuelOutcome::Fuelled;
 	}
@@ -935,6 +821,7 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 	const TArray<int32> JobIds = Turnaround->JobIds;
 	const int32 StandIndex = Turnaround->Stand.Index;
 	const FEntityInstanceId StandId = Turnaround->Stand;
+	++RevisionCount;   // See Revision: the turnaround and its jobs are about to go.
 
 	// THE TURNAROUND'S END, read BEFORE the jobs go (batch 3 review I1) - the one site, see the header.
 	if (bDeparted)
@@ -985,7 +872,11 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To)
 {
-	++RevisionCount;   // See Revision: every public mutator.
+	// NO BUMP ON ENTRY (#443): this hears every phase change of every agent in the airport, and most are none of the
+	// board's business. What changes the board moves Revision where it happens: DropAircraft (an aircraft's turnaround and
+	// jobs go), the lifecycle transitions and Reopen (a vehicle's agent parked, lost or stranded), and the turnaround
+	// opened below.
+	// ENFORCED BY: AirportOps.Fuel.RevisionHoldsStillWhenNothingChanged (a foreign agent's phase), AirportOps.Fuel.RevisionMovesOnEveryChange
 	// AN AIRCRAFT LEAVING ITS STAND, first: it departs, or is retired, or is deleted under the player's
 	// hand. Its turnaround and jobs go, and any vehicle out for it moves on - its next job, or home.
 	if (From == EAgentPhase::Parked && To != EAgentPhase::Parked && TurnaroundFor(AgentId) != nullptr)
@@ -1106,6 +997,7 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 		return;
 	}
 
+	++RevisionCount;   // See Revision: a turnaround (and below, usually a job) opens.
 	FTurnaround& Turnaround = Turnarounds.AddDefaulted_GetRef();
 	Turnaround.AircraftId = AgentId;
 	Turnaround.Stand = Stand;
@@ -1176,7 +1068,9 @@ double UJobBoard::NextDeadline(double Now) const
 bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	++StepCount;
-	++RevisionCount;   // See Revision: every public mutator.
+	// NO BUMP ON ENTRY (#443): a Step with nothing to do changed nothing, and the inspector's card, keyed on Revision,
+	// should not be rebuilt for it. Everything a Step changes moves Revision at the change (a vehicle's transition or the
+	// fleet's membership, a job assigned, refused, re-opened or dropped, a queue trimmed, a re-bid that ran).
 	LastStepDeparted.Reset();
 	SyncFleet(Traffic, Network, Clock);
 

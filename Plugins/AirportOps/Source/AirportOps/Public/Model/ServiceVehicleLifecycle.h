@@ -46,7 +46,7 @@ public:
 	/**
 	 * A vehicle as it is born: Idle at Home, no agent, no job, an empty queue, carrying Cargo. THE ONE CREATION
 	 * SITE (the seeded and the bought vehicle were two hand copies that could drift, and AddVehicleForTest a
-	 * third); UJobBoard::NewVehicle gives it its id, its role and its full tank.
+	 * third); FServiceFleet::Create gives it its id, its role and its full tank.
 	 */
 	static FServiceVehicle Create(int32 Id, FName TypeCode, EServiceRole Role, FEntityInstanceId Home, double Cargo);
 

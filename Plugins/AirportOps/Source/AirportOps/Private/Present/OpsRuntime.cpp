@@ -552,10 +552,23 @@ void UOpsRuntime::WireBus()
 	// own (§6 deviation 4: nothing would bind one; the inspector re-reads the quote anyway).
 	Bus.Subscribe<FFleetChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FFleetChangedEvent& E)
 	{
-		const FFuelVehicleSpec Spec = JobBoard->SpecFor(E.TypeCode);
-		const FString Name = Spec.DisplayName.IsEmpty() ? E.TypeCode.ToString() : Spec.DisplayName.ToString();
+		// A SEEDED VEHICLE IS NOT NEWS: the player did nothing and nothing was paid. A WITHDRAWN one is (#443): its depot
+		// went and the fleet's door credited it, and the feed should say where that money came from.
+		if (E.Change == EFleetChange::Seeded)
+		{
+			return;
+		}
+		const FString Name = JobBoard->Fleet().NameOf(E.TypeCode).ToString();
+		const FString Money = Pricing->Format(E.Amount).ToString();
+		if (E.Change == EFleetChange::Withdrawn)
+		{
+			Events->NotifyNotification(E.Amount > 0.0
+				? FString::Printf(TEXT("Depot removed \u2014 %s credited %s"), *Name, *Money)
+				: FString::Printf(TEXT("Depot removed \u2014 %s withdrawn"), *Name));
+			return;
+		}
 		Events->NotifyNotification(FString::Printf(TEXT("%s %s \u2014 %s"),
-			E.Change == EFleetChange::Bought ? TEXT("Bought") : TEXT("Sold"), *Name, *Pricing->Format(E.Amount).ToString()));
+			E.Change == EFleetChange::Bought ? TEXT("Bought") : TEXT("Sold"), *Name, *Money));
 	});
 	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FFacilityUpgradedEvent& E)
 	{
@@ -830,6 +843,9 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	{
 		return ReservedSlotsOf(Id, Depot, Module);
 	};
+	// THE BOARD SEATS A DEPOT'S MODULES AGAINST THE SAME CEILING (#443, ruled 2026-09-30): its pumps are the placed ones,
+	// as the shop's bays are. Copied from the shop's, so the two cannot read two plots.
+	JobBoard->ModuleCeilingOf = FacilityPurchases->ReservedSlotsOf;
 	{
 		TWeakObjectPtr<ARoadNetworkActor> WeakActor = Target;
 		FacilityPurchases->ApplyModulePurchase = [WeakActor](FEntityInstanceId Id, EDepotModule Module)
@@ -1039,6 +1055,7 @@ void UOpsRuntime::Detach()
 	// THE PURCHASE HOOKS GO WITH THE ACTOR, the dispatcher's reason: a hook that still answered after a
 	// detach would build into a field this runtime no longer drives.
 	FacilityPurchases->ReservedSlotsOf = nullptr;
+	JobBoard->ModuleCeilingOf = nullptr;
 	FacilityPurchases->ApplyModulePurchase = nullptr;
 	ReservationMemo.Reset();
 	ReservationMemoNetwork.Reset();

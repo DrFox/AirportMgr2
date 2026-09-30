@@ -239,4 +239,29 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFleetRuntimeSeedsTest, "AirportOps.Present.Fleet.AttachSeedsTheStarterFleetOnTheFirstDrain",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFleetRuntimeSeedsTest::RunTest(const FString& Parameters)
+{
+	// THE COMPOSITION BEHIND CouldServe'S "REAL VEHICLES ONLY" (#443): the starter fleet is no longer predicted beside its
+	// seeding, so the seeding has to have happened before an offer is read. Attach marks every pass dirty, and the first
+	// drain runs the job board's - which seeds a placed starter depot through the fleet's door. Unwired, CouldServe would
+	// say "no fuel" for a starter depot until some unrelated event woke the board.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+	const FEntityInstanceId Depot = Actor->Network->PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(12000.0, 0.0), 0.0, 0.0,
+		DepotDef->PoseRole, 1);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	Runtime->Tick(0.0);
+	TestTrue(TEXT("the first drain seeded the starter depot's fleet"), Runtime->GetJobBoard()->VehiclesAt(Depot) > 0);
+	return true;
+}
+
 #endif

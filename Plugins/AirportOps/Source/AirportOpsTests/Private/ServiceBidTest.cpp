@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Model/JobBoard.h"
 #include "Model/ServiceBid.h"
 #include "Model/ServiceRolePolicy.h"
 #include "Model/ServiceVehicle.h"
@@ -60,11 +61,30 @@ namespace ServiceBidTest
 	public:
 		virtual EServiceRole Role() const override { return EServiceRole::Baggage; }
 		virtual bool NeedsPumpAtHome() const override { return false; }
+		// THE FUEL FIGURE, so this test's arithmetic reads as it always did: a count of bags has no slack of its own to
+		// argue, and the tolerance test below is the one that varies it.
+		virtual double DoneWithin() const override { return 0.5; }
 		virtual EServiceStep NextStep(double, const FServiceVehicleType&, double) const override { return EServiceStep::ViaFacility; }
 		virtual double TripQuantity(double, const FServiceVehicleType& Type, double Owed) const override { return FMath::Min(Type.Capacity, Owed); }
 		virtual double ServeSeconds(const FServiceVehicleType&, double) const override { return 300.0; }
 		virtual double CargoAfterServe(double, double) const override { return 0.0; }
 		virtual double FacilitySeconds(double, const FServiceVehicleType&, int32) const override { return 60.0; }
+		virtual double CargoAfterFacility(double, const FServiceVehicleType& Type) const override { return Type.Capacity; }
+	};
+
+	/** A role whose "done" has a wide slack (50 units) - what proves the bid reads the POLICY's DoneWithin, not a number
+	 *  of its own. Goes straight to every job with a full load. */
+	class FSlackPolicy final : public IServiceRolePolicy
+	{
+	public:
+		virtual EServiceRole Role() const override { return EServiceRole::Baggage; }
+		virtual bool NeedsPumpAtHome() const override { return false; }
+		virtual double DoneWithin() const override { return 50.0; }
+		virtual EServiceStep NextStep(double, const FServiceVehicleType&, double) const override { return EServiceStep::Direct; }
+		virtual double TripQuantity(double, const FServiceVehicleType& Type, double Owed) const override { return FMath::Min(Type.Capacity, Owed); }
+		virtual double ServeSeconds(const FServiceVehicleType&, double) const override { return 10.0; }
+		virtual double CargoAfterServe(double Cargo, double Quantity) const override { return FMath::Max(Cargo - Quantity, 0.0); }
+		virtual double FacilitySeconds(double, const FServiceVehicleType&, int32) const override { return 0.0; }
 		virtual double CargoAfterFacility(double, const FServiceVehicleType& Type) const override { return Type.Capacity; }
 	};
 }
@@ -196,6 +216,53 @@ bool FServiceBidTransferPolicyTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a hall visit before each"), Bid.FacilityVisits, 3);
 	TestEqual(TEXT("each trip: to the hall, 60 s there, to the stand, 300 s serving"),
 		Bid.Finish, 3.0 * (Drive + 60.0 + Drive + 300.0), 0.01);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FServiceBidToleranceTest, "AirportOps.Service.Policy.OneToleranceForBidAndVehicle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceBidToleranceTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceBidTest;
+	// #443: THE HALF-LITRE "FUELLED" SLACK WAS TYPED FIVE TIMES IN THREE FILES, and changing one made the bid price a
+	// different number of trips than the truck makes. It is the policy's DoneWithin now, and each reader is pinned to it:
+	// the vehicle's NextStep, the bid's simulation, the job's outcome.
+	FFuelRolePolicy Policy;
+	const FServiceVehicleType TowType = Tow();
+	TestEqual(TEXT("the policy answers the one figure"), Policy.DoneWithin(), FFuelRolePolicy::FuelledWithinLitres, 1e-12);
+	const double Slack = Policy.DoneWithin();
+
+	// THE VEHICLE: a tank within the slack of covering the job goes direct, one beyond it refills first; a tank within the
+	// slack of full is full.
+	TestEqual(TEXT("a tank exactly the slack short of the job covers it"),
+		static_cast<int32>(Policy.NextStep(600.0 - Slack, TowType, 600.0)), static_cast<int32>(EServiceStep::Direct));
+	TestEqual(TEXT("a tank a hair more short of it refills first"),
+		static_cast<int32>(Policy.NextStep(600.0 - Slack - 0.01, TowType, 600.0)), static_cast<int32>(EServiceStep::ViaFacility));
+	TestEqual(TEXT("a tank exactly the slack short of full is full: direct even for a job no tank covers"),
+		static_cast<int32>(Policy.NextStep(1000.0 - Slack, TowType, 4000.0)), static_cast<int32>(EServiceStep::Direct));
+	TestEqual(TEXT("a hair less is not"),
+		static_cast<int32>(Policy.NextStep(1000.0 - Slack - 0.01, TowType, 4000.0)), static_cast<int32>(EServiceStep::ViaFacility));
+
+	// THE JOB'S OUTCOME, decided by the same figure with no policy in hand (a departing aircraft).
+	TestEqual(TEXT("delivered exactly the slack short of wanted is fuelled"),
+		static_cast<int32>(UJobBoard::FuelOutcomeOf(1000.0 - Slack, 1000.0)), static_cast<int32>(EFuelOutcome::Fuelled));
+	TestEqual(TEXT("a hair more short is part-fuelled"),
+		static_cast<int32>(UJobBoard::FuelOutcomeOf(1000.0 - Slack - 0.01, 1000.0)), static_cast<int32>(EFuelOutcome::PartFuelled));
+
+	// THE BID reads the POLICY'S figure and not a number of its own: a role whose slack is 50 calls a 30-unit remainder done,
+	// so a 60-unit job in 30-unit trips is ONE trip - with the old literal half-unit it was two.
+	FSlackPolicy Coarse;
+	FServiceVehicleType Cart;
+	Cart.TypeCode = TEXT("CART");
+	Cart.Role = EServiceRole::Baggage;
+	Cart.Capacity = 30.0;
+	Cart.RatePerMinute = 1.0;
+	ServiceBid::FInput In = Input(Cart, Coarse);
+	In.Appended = { StandA, 60.0 };
+	TestEqual(TEXT("a 60 job in 30 trips, done within 50: one trip"), ServiceBid::Finish(In).Trips, 1);
+	In.Appended = { StandA, 30.0 };
+	TestEqual(TEXT("a 30 job, already done within 50: no trip at all"), ServiceBid::Finish(In).Trips, 0);
 	return true;
 }
 

@@ -40,6 +40,17 @@ public:
 	/** Whether a home depot with no pump module can serve this role at all (fuel: no). */
 	virtual bool NeedsPumpAtHome() const = 0;
 
+	/**
+	 * How much a job may be short and still be DONE, in the role's unit (fuel: litres). ONE FIGURE for every reader:
+	 * the vehicle's NextStep (a tank this close to covering the job goes straight there), the bid's simulation (a job
+	 * this close to done is done, and a trip this small delivered nothing) and the board's FinishServe (the job is
+	 * called Done within it). They were three copies of a half-litre typed five times (#443), and a change to one made
+	 * the bid price a different number of trips than the truck made. It lives on the POLICY because what "done" means
+	 * is the role's: a stock of litres has slack a count of bags does not.
+	 * ENFORCED BY: Check-Architecture rule 44 (fuelled-tolerance-once), AirportOps.Service.Policy.OneToleranceForBidAndVehicle
+	 */
+	virtual double DoneWithin() const = 0;
+
 	/** Straight to a job still owed Owed, carrying Cargo - or via the facility first. */
 	virtual EServiceStep NextStep(double Cargo, const FServiceVehicleType& Type, double Owed) const = 0;
 
@@ -69,8 +80,16 @@ public:
 	/** Litres per GAME minute per pump module a depot refills a returning vehicle at. */
 	double RefillLitresPerMinutePerPump = 500.0;
 
+	/**
+	 * Half a litre: a tank 0.2 L short of the job is not worth a trip to the depot, a tank that reads 999.8 of 1000 is full,
+	 * a job 0.4 L short is fuelled. A STATIC so the two things that judge a job with no policy in hand
+	 * (UJobBoard::FuelOutcomeOf, a departing aircraft's outcome) read the same number DoneWithin answers.
+	 */
+	static constexpr double FuelledWithinLitres = 0.5;
+
 	virtual EServiceRole Role() const override { return EServiceRole::Fuel; }
 	virtual bool NeedsPumpAtHome() const override { return true; }
+	virtual double DoneWithin() const override { return FuelledWithinLitres; }
 
 	/**
 	 * Direct when the tank covers what is owed - OR IS FULL. A job bigger than the tank takes more

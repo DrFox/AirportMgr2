@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Build/AnchorLink.h"
+#include "Build/DepotKit.h"
 #include "Content/AirportOpsSettings.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
@@ -436,6 +437,43 @@ bool FFacilityRollbackResolvesTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityCapabilitySeamTest, "AirportOps.Present.Facility.CapabilityReadsTheRuntimesPlotSolve",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityCapabilitySeamTest::RunTest(const FString&)
+{
+	// THE COMPOSITION FOR #443's CAPABILITY: the shop and the board read what a depot's SEATED modules give it through the
+	// runtime's one plot solve. A depot placed through the player's gesture with far more pumps and sheds than its plot can
+	// hold - the presenter drops the rest - must quote the bays the plot SEATS and count the pumps it SEATS. Unwired (the
+	// hooks left null), each falls back to the owned list and reports all fifty.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	TArray<EDepotModule> Owned;
+	for (int32 I = 0; I < 50; ++I) { Owned.Add(EDepotModule::Shed); Owned.Add(EDepotModule::Pump); }
+	const TArray<FVector2D> Plot = FacilityWiredWidePlot();
+	const int32 Index = Actor->PlaceEntityInPlot(Plot, Plot[0], Plot[1], Owned, EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("setup: the depot is placed"), Index != INDEX_NONE)) { return false; }
+	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(Index);
+	const FEntityInstance& Placed = *Actor->Network->GetEntity(Depot);
+
+	// THE ORACLE IS THE PLOT SOLVE ITSELF, asked here directly: what the presenter draws from.
+	const TArray<PlotYard::FKitSpec> Specs = Actor->ResolveDepotKits();
+	const TOptional<PlotYard::FReservation> Reserved = DepotKit::ReservationOf(Placed, Specs);
+	if (!TestTrue(TEXT("setup: the plot solves"), Reserved.IsSet())) { return false; }
+	const int32 SeatedSheds = Reserved->CeilingFor(static_cast<int32>(EDepotModule::Shed));
+	const int32 SeatedPumps = Reserved->CeilingFor(static_cast<int32>(EDepotModule::Pump));
+	if (!TestTrue(TEXT("setup: the plot holds fewer than fifty of each"), SeatedSheds < 50 && SeatedPumps < 50 && SeatedSheds > 0 && SeatedPumps > 0)) { return false; }
+	const FFacilityQuote Quote = Runtime->QuoteFacility(Depot);
+	TestEqual(TEXT("the card quotes the bays the plot seats - one per seated shed"), Quote.Bays, SeatedSheds);
+	TestEqual(TEXT("and the board counts the pumps it seats, not the fifty owned"),
+		Runtime->GetJobBoard()->PumpsAt(Depot, Placed), SeatedPumps);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityDetachClearsHooksTest, "AirportOps.Present.Facility.DetachClearsTheHooks",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FFacilityDetachClearsHooksTest::RunTest(const FString&)
@@ -448,8 +486,12 @@ bool FFacilityDetachClearsHooksTest::RunTest(const FString&)
 	const FEntityInstanceId Depot = FacilityWiredDepot(TestWorld, Runtime);
 	if (!TestTrue(TEXT("setup: the depot is placed"), Depot.IsSet())) { return false; }
 	UFacilityPurchases* Shop = Runtime->GetFacilityPurchases();
+	TestTrue(TEXT("setup: the board reads the same ceiling, copied from the shop's at attach (#443)"),
+		static_cast<bool>(Runtime->GetJobBoard()->ModuleCeilingOf));
 
 	Runtime->Attach(nullptr);
+	TestFalse(TEXT("the board's ceiling is cleared with the shop's - a hook left set would seat modules against a dead plot"),
+		static_cast<bool>(Runtime->GetJobBoard()->ModuleCeilingOf));
 	TestFalse(TEXT("the ceiling hook is cleared"), static_cast<bool>(Shop->ReservedSlotsOf));
 	TestFalse(TEXT("the module hook is cleared"), static_cast<bool>(Shop->ApplyModulePurchase));
 	const FFacilityQuote Q = Shop->Quote(*TestWorld.Actor->Network, Depot);

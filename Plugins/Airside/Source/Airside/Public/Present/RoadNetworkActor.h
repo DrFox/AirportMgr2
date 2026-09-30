@@ -1068,6 +1068,13 @@ private:
 	 */
 	TMap<TObjectKey<URoadProfile>, FVehicle> ResolvedTierDesignVehiclesCache;
 
+	/**
+	 * ResolveDepotKits, cached with the above: it is a GetContent() call, and MakeSurfaceSettings hands the table to the
+	 * presenter's depot census (DepotKit::ReportIncomplete, #443) on every rebuild, so resolving it fresh each time would
+	 * be the per-rebuild content lookup the cache exists to remove (issue #190). Not a UPROPERTY: plain data.
+	 */
+	TArray<PlotYard::FKitSpec> ResolvedDepotKitsCache;
+
 	/** Resolves SurfaceMaterial/ApronMaterial/RubberMaterial/GhostMaterial/the three runway
 	 *  materials into the cache above if, and only if, bResolvedContentDirty - see the
 	 *  cache's own comment. Called from MakeSurfaceSettings, which reads the cache after. */
