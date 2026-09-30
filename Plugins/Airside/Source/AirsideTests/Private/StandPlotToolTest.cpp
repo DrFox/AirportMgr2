@@ -1628,15 +1628,16 @@ namespace StandPlotToolFixture
  * changed by issue #439): the pavement is priced by the money half, which is asked fresh, so a
  * row change cannot leave the readout showing the previous pavement's "cannot afford". No site
  * gate reads the pavement, so the site half is NOT re-asked - counted through
- * GetRefusalCountForTest, the probe StagedPlotToolTest counts the memo by. The name is the old
- * one, kept because RefusalFor's own comment names it: what is re-asked is the refusal's money half.
+ * GetRefusalCountForTest, the probe StagedPlotToolTest counts the memo by. (Named
+ * SurfaceChangeReasksRefusal before #439, when the whole refusal was re-asked; renamed for what it
+ * now asserts.)
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FStandPlotSurfaceChangeReasksRefusalTest,
-	"Airside.Tool.StandPlot.SurfaceChangeReasksRefusal",
+	FStandPlotSurfaceChangeRepricesWithoutReaskingSiteTest,
+	"Airside.Tool.StandPlot.SurfaceChangeRepricesWithoutReaskingSite",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FStandPlotSurfaceChangeReasksRefusalTest::RunTest(const FString& Parameters)
+bool FStandPlotSurfaceChangeRepricesWithoutReaskingSiteTest::RunTest(const FString& Parameters)
 {
 	using namespace StandPlotToolFixture;
 

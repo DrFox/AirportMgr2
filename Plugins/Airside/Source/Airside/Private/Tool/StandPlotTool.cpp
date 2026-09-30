@@ -237,17 +237,15 @@ FString FStandPlotTool::RefusalFor(const FToolContext& Context, TConstArrayView<
 		return FString();
 	}
 
-	// THE SITE HALF, REMEMBERED. Its key is everything it reads: the outline (Matches), the graph
-	// (a different object after an undo) and the target's edit epoch (moved by every edit of that
-	// graph, entities included - a stand placed into this outline is exactly such an edit). The
-	// pavement is NOT in it - see RefusalFor's own comment.
-	const URoadNetwork* Network = Context.Target->GetNetwork();
+	// THE SITE HALF, REMEMBERED. Its key is everything it reads: the outline (Matches) and the
+	// target's edit epoch (moved by every edit of the model, entities included - a stand placed into
+	// this outline is exactly such an edit - and by an undo's graph swap). The pavement is NOT in it -
+	// see RefusalFor's own comment.
 	const uint32 Epoch = Context.Target->GetEditEpoch();
-	const bool bHit = SiteMemo.Matches(Shown)
-		&& SiteMemo.Payload.Network == Network && SiteMemo.Payload.Epoch == Epoch;
+	const bool bHit = SiteMemo.Matches(Shown) && SiteMemo.Payload.Epoch == Epoch;
 	if (!bHit)
 	{
-		SiteMemo.Store(Shown, FSitePayload{ Network, Epoch, Context.Target->WhyStandSiteRefused(Shown) });
+		SiteMemo.Store(Shown, FSitePayload{ Epoch, Context.Target->WhyStandSiteRefused(Shown) });
 
 		// FOR TESTS ONLY, and only on the path that actually paid for the ask - see
 		// GetRefusalCountForTest.
@@ -259,7 +257,7 @@ FString FStandPlotTool::RefusalFor(const FToolContext& Context, TConstArrayView<
 	}
 
 	// THE MONEY HALF, FRESH EVERY CALL - the purse moves with no edit for an epoch to count, so
-	// this is the half no key can cover. It is one quote and a compare, cheaper than the key.
+	// this is the half no key on the model can cover.
 	return Context.Target->WhyStandUnaffordable(Shown, Pavement);
 }
 

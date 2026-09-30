@@ -134,11 +134,15 @@ public:
 	 * edit of the model, so nothing else a cache could watch sees it, and a stamp that only some
 	 * mutations bump (ULedger::Revision, which a load leaves alone - issue #426) would miss the rest.
 	 *
-	 * A VALUE, NOT A COUNTER: equal balances mean equal answers from CanAfford, whichever route
-	 * they were reached by, and a restored save that lands on a different balance differs by
-	 * construction. PURE, so an implementer answers it rather than inheriting a constant that
-	 * would freeze every cache keyed on it.
-	 * ENFORCED BY: AirportMgr.Actions.ReadoutCacheSeesThePurse
+	 * A VALUE, NOT A COUNTER: for one quote, equal balances give equal CanAfford answers whichever
+	 * route they were reached by, and a restored save that lands on a different balance differs by
+	 * construction. THAT HOLDS ONLY WHILE THE PRICE OF A QUOTE DEPENDS ON THE QUOTE ALONE, which is
+	 * true today because UPricing::PriceOfBuild is the identity; the M4 modifier seam (research,
+	 * contracts) will end it, and the day it does this key must grow to name what the price also
+	 * reads. PURE, so an implementer answers it rather than inheriting a constant that would freeze
+	 * every cache keyed on it.
+	 * ENFORCED BY: AirportMgr.Actions.ReadoutCacheSeesThePurse (the key sees the balance),
+	 * AirportOps.Model.PriceOfBuildIsTheIdentityWhileBalanceKeysCaches (the tripwire on the price)
 	 */
 	virtual double Balance() const = 0;
 

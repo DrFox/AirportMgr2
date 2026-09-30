@@ -283,7 +283,7 @@ protected:
 	 * fresh anchor needs no call of its own. Empty by default: a tool with no shape-keyed memory
 	 * has nothing to drop.
 	 *
-	 * NOT WHAT KEEPS A MEMO CORRECT - its key does that (see FStandPlotTool::SiteRefusalFor). This
+	 * NOT WHAT KEEPS A MEMO CORRECT - its key does that (see FStandPlotTool::RefusalFor). This
 	 * bounds how long a wrong answer could live if a key ever missed an input, and stops one
 	 * gesture's payload being reachable from the next.
 	 * ENFORCED BY: Airside.Tool.StandPlot.GestureBoundariesDropTheRefusalMemo

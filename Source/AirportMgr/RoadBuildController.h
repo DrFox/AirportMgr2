@@ -903,11 +903,22 @@ private:
 		 *
 		 * THE BALANCE VALUE, not ULedger::Revision: a revision moves only on the mutations that
 		 * remember to bump it (issue #426: a load does not), while equal balances give equal
-		 * CanAfford answers by construction. Read through the interface (IBuildPurse::Balance), so
-		 * this class still names no ledger.
+		 * CanAfford answers for as long as pricing is the identity - see IBuildPurse::Balance for
+		 * what ends that. Read through the interface, so this class still names no ledger.
 		 * ENFORCED BY: AirportMgr.Actions.ReadoutCacheSeesThePurse
 		 */
 		TOptional<double> PurseBalance;
+
+		/**
+		 * THE TARGET'S EDIT EPOCH (IRoadEditTarget::GetEditEpoch) - issue #439's orchestrator addition.
+		 * The other thing that moves under a still cursor: a stand placed or removed by anything but
+		 * a call this controller makes (the ops runtime, a scripted edit) changes what a tool would
+		 * say about the ground it is over, and the controller invalidates the cache only at the calls
+		 * IT makes. One call and an integer compare. Zero for a null target. Like the epoch itself, it
+		 * does not see a save-game load - IRoadEditTarget::GetEditEpoch, issue #426.
+		 * ENFORCED BY: AirportMgr.Actions.ReadoutCacheSeesThePurse (an edit under an unmoved cursor)
+		 */
+		uint32 EditEpoch = 0;
 
 		bool operator==(const FToolReadoutKey& Other) const
 		{
@@ -920,7 +931,8 @@ private:
 				&& GuidePoint == Other.GuidePoint
 				&& EditHandles == Other.EditHandles
 				&& Grid.SameGrid(Other.Grid)
-				&& PurseBalance == Other.PurseBalance;
+				&& PurseBalance == Other.PurseBalance
+				&& EditEpoch == Other.EditEpoch;
 		}
 	};
 

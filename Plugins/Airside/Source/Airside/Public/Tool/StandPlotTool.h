@@ -198,23 +198,25 @@ private:
 	 * see the purse (a Confirm-stage shape kept "cannot afford" after the landing fees arrived, so
 	 * Build stayed greyed) nor the model (a "" outlived a stand placed into the outline). Each half
 	 * now carries the key its inputs need - the site half the outline and the target's edit epoch,
-	 * the money half none, because one quote and a compare cost less than a key that could miss
-	 * the balance moving on its own.
+	 * the money half none: the balance moves through no edit, so no key on the model could see it,
+	 * and CanAfford is already asked every frame by the ghost (IBuildPurse::CanAfford's own doc).
 	 *
 	 * THE SAME MEMO SHAPE AS FPlotPlaceTool::ReservationFor, through the base's TOutlineMemo
 	 * (issue #302) - see that class's own comment on why the {bValid, Outline[4]} half is
 	 * shared rather than copied a second time. The extra keys are this payload's, as the depot's
 	 * Layout is. PAVEMENT IS NOT ONE, though it was until #439: no site gate reads it, and the
 	 * money half that does is asked fresh, so a Surface pick re-prices without re-asking the site.
-	 * ENFORCED BY: Airside.Tool.StandPlot.SurfaceChangeReasksRefusal
+	 * ENFORCED BY: Airside.Tool.StandPlot.SurfaceChangeRepricesWithoutReaskingSite
 	 */
 	FString RefusalFor(const FToolContext& Context, TConstArrayView<FVector2D> Shown) const;
 
-	/** The memo's payload: the site refusal, and the model it was asked against - the graph
-	 *  (an undo swaps it wholesale) and the target's epoch (every edit of it moves that). */
+	/** The memo's payload: the site refusal, and the target's edit epoch it was asked at. THE
+	 *  EPOCH ALONE, no network pointer beside it: an undo, a redo and a clear swap the graph through
+	 *  AdoptNetwork, which notifies, so the epoch moves on every swap this tool can meet (a save-game
+	 *  load is the exception, and it deserialises in place - the same pointer - see GetEditEpoch).
+	 *  ENFORCED BY: Airside.Present.EditEpoch.MovesOnEveryEditDoor (an undo and a clear) */
 	struct FSitePayload
 	{
-		const URoadNetwork* Network = nullptr;
 		uint32 Epoch = 0;
 		FString Why;
 	};

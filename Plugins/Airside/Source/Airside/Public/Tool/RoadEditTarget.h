@@ -283,9 +283,8 @@ public:
 
 	/**
 	 * The MONEY half of WhyUpgradeRefused: "cannot afford ..." when the purse cannot pay the
-	 * difference between the new ground and the old, else empty. ONE QUOTE AND A COMPARE, asked
-	 * FRESH by every caller and never memoised - the balance moves through no edit of the model
-	 * (see WhyStandUnaffordable). EMPTY when there is nothing to price: a dead slot, a width or
+	 * difference between the new ground and the old, else empty. Asked FRESH by every caller and
+	 * never memoised - the balance moves through no edit of the model (see WhyStandUnaffordable). EMPTY when there is nothing to price: a dead slot, a width or
 	 * kind that does not resolve (the site half's to refuse), or an upgrade that changes nothing.
 	 */
 	virtual FString WhyUpgradeUnaffordable(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const = 0;
@@ -503,15 +502,16 @@ public:
 	 * through the interior, a clearance strip. Empty means the ground would take a stand.
 	 *
 	 * THE HALF A CALLER MAY MEMOISE, against GetEditEpoch: it is a function of the outline and
-	 * the model, and the epoch moves on every edit of the model. No Pavement parameter, because
+	 * the model, and the epoch moves on every edit of the model that notifies (see its exception).
+	 * No Pavement parameter, because
 	 * no gate in it reads one - every pavement passes or fails the site alike.
 	 */
 	virtual FString WhyStandSiteRefused(TArrayView<const FVector2D> Outline) const = 0;
 
 	/**
 	 * The MONEY half of WhyStandRefused: "cannot afford ..." when the purse cannot pay for a stand
-	 * on this Outline in this Pavement, else empty. ONE QUOTE AND A COMPARE, so cheap enough to
-	 * ask every frame - and it MUST be asked fresh, never memoised: the balance moves on its own
+	 * on this Outline in this Pavement, else empty. The ghost already asks CanAfford every frame
+	 * (IBuildPurse::CanAfford's own doc) - and this MUST be asked fresh, never memoised: the balance moves on its own
 	 * (landing fees, other purchases, refunds) through no edit of the model, so GetEditEpoch cannot
 	 * see it. Issue #439 was a memo that could not.
 	 *
@@ -523,9 +523,15 @@ public:
 	virtual FString WhyStandUnaffordable(TArrayView<const FVector2D> Outline, EPavement Pavement) const = 0;
 
 	/**
-	 * A counter that moves on EVERY edit of the model - node, segment, apron, entity, undo, redo,
-	 * a network swapped in or cleared - and on nothing else. What a memo of an answer that reads
-	 * the model keys on, beside the outline it was asked about.
+	 * A counter that moves on every edit of the model that goes through the facade - node, segment,
+	 * apron, entity, undo, redo, a network swapped in or cleared - and on nothing else. What a memo
+	 * of an answer that reads the model keys on, beside the outline it was asked about.
+	 *
+	 * EXCEPT A SAVE-GAME LOAD, per issue #426's trace (open, and no test here pins it):
+	 * the ops runtime's LoadFromSlot deserialises into the live network in place with no NotifyChanged,
+	 * so the epoch does not move (and the network pointer is the same, so no second key would catch
+	 * it either). A memo held across a load can be stale until the next edit or gesture boundary;
+	 * the load's own protocol is #426's to write, not this counter's to paper over.
 	 *
 	 * WHY NOT URoadNetwork::GetEditRevision, which is the counter a memo would reach for: it is
 	 * scoped to nodes and segments, so PlaceEntity and RemoveEntity - a stand placed into the

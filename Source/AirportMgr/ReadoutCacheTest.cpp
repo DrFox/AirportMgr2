@@ -29,7 +29,9 @@ namespace ReadoutCacheTestFixture
 
 		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Funds; }
 		virtual double Balance() const override { return Funds; }
-		virtual int32 Charge(const FBuildQuote& Quote) override { Funds -= Quote.BaseAmount(); return 1; }
+		/** DOES NOT DEBIT: the test sets Funds by hand, and a placement that moved the balance would
+		 *  make the edit-epoch case below pass on the PURSE key and prove nothing about the epoch. */
+		virtual int32 Charge(const FBuildQuote&) override { return 1; }
 		virtual void Reverse(int32) override {}
 		virtual void Credit(const FBuildQuote& Quote) override { Funds += Quote.BaseAmount(); }
 		virtual FText Describe(const FBuildQuote& Quote) const override { return FText::AsNumber(Quote.BaseAmount()); }
@@ -204,6 +206,31 @@ bool FReadoutCacheSeesThePurseTest::RunTest(const FString& Parameters)
 	C->CollectToolReadoutForTest();
 	TestEqual(TEXT("a drained purse rebuilds it again"), C->GetToolReadoutRevision(), Built + 2);
 	TestFalse(TEXT("and Build greys"), C->GetToolReadout().bCommittable);
+
+	// AN EDIT UNDER AN UNMOVED CURSOR, THE PURSE UNTOUCHED (the edit epoch's key). Funded again, the
+	// readout lights; then a stand lands on the pinned ground through the target - not through this
+	// controller, so nothing here invalidates the cache by hand - and the very next collection must
+	// re-ask the tool, which now refuses. The fixture's Charge does not debit, so the balance is
+	// exactly what it was: the epoch is the only thing in the key that moved.
+	Purse.Funds = 1.0e12;
+	C->CollectToolReadoutForTest();
+	const int32 Lit = C->GetToolReadoutRevision();
+	if (!TestTrue(TEXT("funded again: Build is committable"), C->GetToolReadout().bCommittable)) { return false; }
+	C->CollectToolReadoutForTest();
+	TestEqual(TEXT("the control: the same cursor, purse and model rebuild nothing"),
+		C->GetToolReadoutRevision(), Lit);
+
+	TArray<FVector2D> Outline;
+	Tool->Rect(ClickAt(*Actor, AnchorCursor), Outline);
+	if (!TestTrue(TEXT("a stand is placed onto the pinned outline"),
+		Edit->PlaceStandInPlot(Outline, Outline[0], Outline[1], EPavement::Grass) != INDEX_NONE)) { return false; }
+	TestEqual(TEXT("premise: the balance is exactly what it was, so only the epoch can have moved"),
+		Purse.Funds, 1.0e12);
+	C->CollectToolReadoutForTest();
+	TestEqual(TEXT("a stand placed under a still cursor rebuilds the readout"), C->GetToolReadoutRevision(), Lit + 1);
+	TestFalse(TEXT("and Build greys over the overlap"), C->GetToolReadout().bCommittable);
+	TestTrue(TEXT("naming it"), C->GetToolReadout().Warnings.ContainsByPredicate(
+		[](const FString& W) { return W.Contains(TEXT("overlaps")); }));
 	return true;
 }
 

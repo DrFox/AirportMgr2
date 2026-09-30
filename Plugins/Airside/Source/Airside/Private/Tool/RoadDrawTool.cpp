@@ -1000,7 +1000,7 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 	}
 
 	// THE MONEY HALF, FRESH EVERY CALL, hit or miss above - the purse moves through no edit for the
-	// key to see. One quote and a compare; asked only when the site half let the upgrade through
+	// key to see. Asked only when the site half let the upgrade through
 	// (a refused site says so whatever the purse holds, as the composition orders it), and empty
 	// for an upgrade that changes nothing, so "already so" survives an empty purse.
 	// An unaffordable upgrade OVERRIDES the memoised label - the site text, effects and all, is

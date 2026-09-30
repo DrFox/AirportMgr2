@@ -1554,14 +1554,17 @@ ARoadBuildController::FToolReadoutKey ARoadBuildController::MakeReadoutKey(
 	Key.EditHandles = Context.EditHandles;
 	Key.Grid = Context.GridFrame;
 
-	// THE PURSE'S BALANCE - see FToolReadoutKey::PurseBalance. Read every call, which is one
-	// virtual call and a compare a frame: the cheap end of what the cache exists to save.
+	// THE PURSE'S BALANCE AND THE TARGET'S EDIT EPOCH - see FToolReadoutKey::PurseBalance and
+	// ::EditEpoch. Both read on every call, so the key is one list of everything a readout depends on
+	// rather than a key plus a second list of events (the runway cache's OnChanged binding is that
+	// shape) that must be kept in agreement with it - CLAUDE.md's "lists that must agree are ONE list".
 	if (Context.Target != nullptr)
 	{
 		if (const IBuildPurse* Purse = Context.Target->GetPurse())
 		{
 			Key.PurseBalance = Purse->Balance();
 		}
+		Key.EditEpoch = Context.Target->GetEditEpoch();
 	}
 	return Key;
 }

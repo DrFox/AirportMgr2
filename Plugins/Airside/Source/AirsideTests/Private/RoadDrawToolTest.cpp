@@ -1121,10 +1121,28 @@ bool FRoadDrawToolUpgradeHoverFollowsThePurseTest::RunTest(const FString& Parame
 	Purse.Funds = 1.0e12;
 	const TArray<FVector2D> Box = { { -6000.0, 5000.0 }, { -1000.0, 5000.0 }, { -1000.0, 9000.0 }, { -6000.0, 9000.0 } };
 	IRoadEditTarget* Edit = Actor;
-	if (!TestTrue(TEXT("a stand is placed beside the taxiway"),
-		Edit->PlaceStandInPlot(Box, Box[0], Box[1], EPavement::Tarmac) != INDEX_NONE)) { return false; }
+	const int32 First = Edit->PlaceStandInPlot(Box, Box[0], Box[1], EPavement::Tarmac);
+	if (!TestTrue(TEXT("a stand is placed beside the taxiway"), First != INDEX_NONE)) { return false; }
 	Hover();
-	TestTrue(TEXT("an edit of the model rebuilds it"), Tool.GetHoverBuildCountForTest() > Built);
+	const int32 AfterFirst = Tool.GetHoverBuildCountForTest();
+	TestTrue(TEXT("an edit of the model rebuilds it"), AfterFirst > Built);
+
+	// THE EPOCH KEY ON ITS OWN. The stand above raised the entity count, which the older key
+	// fields (entity count, EditRevision) already catch, so it pins nothing about the epoch. A stand
+	// removed and another placed in its recycled slot leaves BOTH of those exactly where they were:
+	// only the epoch says the model changed. The premises are asserted, or this measures nothing.
+	const int32 EntitiesBefore = Actor->Network->GetEntities().Num();
+	const uint32 RevisionBefore = Actor->Network->GetEditRevision();
+	if (!TestTrue(TEXT("the first stand is removed"), Edit->DeleteEntity(First))) { return false; }
+	if (!TestTrue(TEXT("and a replacement is placed"),
+		Edit->PlaceStandInPlot(Box, Box[0], Box[1], EPavement::Tarmac) != INDEX_NONE)) { return false; }
+	if (!TestEqual(TEXT("premise: the replacement took the recycled slot, so the entity count is unchanged"),
+		Actor->Network->GetEntities().Num(), EntitiesBefore)) { return false; }
+	if (!TestEqual(TEXT("premise: no node or segment moved, so EditRevision is unchanged"),
+		Actor->Network->GetEditRevision(), RevisionBefore)) { return false; }
+	Hover();
+	TestTrue(TEXT("and the hover is rebuilt anyway - the epoch alone is what told it"),
+		Tool.GetHoverBuildCountForTest() > AfterFirst);
 	return true;
 }
 
