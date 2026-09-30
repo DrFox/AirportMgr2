@@ -113,6 +113,12 @@ enum class ELapseReason : uint8
  * A UObject AND NOT A STRUCT, because UListView::SetListItems takes UObject* and the inbox
  * binds one viewmodel per row; a struct would need an adapter object per row anyway, and
  * then there would be two things to keep in step.
+ *
+ * THAT REASON HAS GONE (#425): the list binds UOfferViewModel rows (OfferInboxWidget, 2026-09-30), not this. What keeps it a
+ * UObject is that every reader holds a flight by POINTER - the viewmodels' weak pointers, the inspector's lookup, the
+ * board's ById/ByAgent - and a struct in the board's arrays would move whenever they grew. Nor does the save need a
+ * struct: UFlightBoard::Serialize writes each flight's own tagged properties BY VALUE, so a UPROPERTY added here is
+ * saved with no edit there. NEVER A POINTER TO A RUNTIME OBJECT among them: OpsSave would write it as a path.
  */
 UCLASS()
 class AIRPORTOPS_API UFlight : public UObject

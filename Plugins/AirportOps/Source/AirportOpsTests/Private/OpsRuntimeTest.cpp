@@ -787,4 +787,48 @@ bool FOpsRuntimeMidFlightClosedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * #425 THROUGH LoadFromSlot ITSELF - the composition over AirportOps.Model.FlightSave.RestoresByValue: the runtime's
+ * board comes back from its own slot with the SAVED flight as a new object, and keeps the allocator and ledger its
+ * constructor wired (both used to be saved as paths, which only ever resolved within one session).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeLoadRestoresFlightsByValueTest,
+	"AirportOps.Present.RuntimeLoad.FlightsRestoreByValue",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeLoadRestoresFlightsByValueTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->ClearNetwork();   // a network to save: a fresh actor makes one lazily, and SaveToSlot refuses without one
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	UFlightBoard* Board = Runtime->GetFlightBoard();
+	UStandAllocator* Allocator = Board->Allocator;
+
+	UFlight* Offer = NewObject<UFlight>(GetTransientPackage());
+	Offer->Airframe.Wingspan = 3400.0;
+	Offer->Callsign = TEXT("PIN 7");
+	Offer->OfferWindowSeconds = 1.0e6;
+	Offer->OfferSecondsLeft = 1.0e6;
+	Board->AddOffer(*Runtime->GetClock(), Offer);
+	const int32 Id = Offer->Id;
+
+	const FString Slot = TEXT("AirportOpsTest_FlightsByValue");
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+	Board->Decline(*Runtime->GetClock(), *Offer);
+	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
+
+	UFlight* Restored = Board->FindByIdForTest(Id);
+	if (!TestNotNull(TEXT("the offer came back"), Restored)) { return false; }
+	TestTrue(TEXT("as a new object, not the one declined after the save"), Restored != Offer);
+	TestEqual(TEXT("in the phase the save had - Offered"), Restored->Phase, EFlightPhase::Offered);
+	TestEqual(TEXT("in the inbox"), Board->Offers().Num(), 1);
+	TestTrue(TEXT("the board keeps the runtime's own allocator"), Board->Allocator.Get() == Allocator && Allocator != nullptr);
+	TestTrue(TEXT("and the runtime's own ledger"), Board->Ledger.Get() == Runtime->GetLedger() && Runtime->GetLedger() != nullptr);
+	return true;
+}
+
 #endif

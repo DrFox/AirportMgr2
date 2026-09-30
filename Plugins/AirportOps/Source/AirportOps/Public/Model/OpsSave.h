@@ -91,6 +91,11 @@ struct AIRPORTOPS_API FOpsSnapshot
 	GENERATED_BODY()
 
 	/**
+	 * 6: the flight board's flights are saved BY VALUE (UFlightBoard::Serialize, #425), and no IOpsPersistent saves a
+	 * pointer to a runtime object - every such UPROPERTY is Transient (Tools/Check-Architecture.ps1 rule 37). A v5-or-
+	 * earlier "Flights" blob holds only object PATHS to its flights, which no later session can resolve: it loads with no
+	 * flights, and says so (a Warning from the board). Not migrated: there were no player saves on 2026-09-30.
+	 *
 	 * 5: the offer generator is saved (its "Offers" blob - stream, per-airline totals, drop
 	 * count) and offers count down in REAL seconds (UFlight::OfferSecondsLeft) rather than
 	 * expiring at a game time. Offer fields from before it are not migrated: there were no
@@ -116,7 +121,7 @@ struct AIRPORTOPS_API FOpsSnapshot
 	 * 2 since flights. A v1 snapshot is a game from before the flight board and loads with
 	 * an empty inbox rather than being refused - an old save must still open.
 	 */
-	UPROPERTY() int32 Version = 5;
+	UPROPERTY() int32 Version = 6;
 
 	UPROPERTY() TMap<FName, FOpsBlob> Blobs;
 
@@ -159,6 +164,10 @@ public:
  * Object references (profiles, definitions) go through FObjectAndNameAsStringProxyArchive
  * as path names and are re-found by path on load, which is what content assets support and
  * transient objects do not. Views are never saved; Present/ rebuilds from the model.
+ *
+ * SO A POINTER TO A RUNTIME OBJECT IS NEVER SAVED (#425): wiring between model objects is Transient
+ * (Tools/Check-Architecture.ps1 rule 37), and a runtime object that IS state - a flight - is written by
+ * value by its owner (UFlightBoard::Serialize). Before that, the flight board's blob held paths alone.
  */
 namespace OpsSave
 {

@@ -1694,6 +1694,57 @@ foreach ($key in $passAllowed.Keys) {
 }
 $ranRules.Add('pass-dirtied-through-funnel')
 
+# --- 37. A PERSISTENT OBJECT SAVES NO POINTER TO A RUNTIME OBJECT -------------------------------
+# Issue #425: OpsSave writes every non-Transient UPROPERTY of an IOpsPersistent through FObjectAndNameAsStringProxyArchive,
+# which writes a UObject reference as its PATH and re-finds it by path on load. For a content asset that is right; for a
+# runtime object it is an address no later session can resolve. The flight board's flights and its six wiring pointers
+# all came back null in a new process - silently, because null is a working state for every one of them (no Allocator:
+# every accept refused) - and the Transient exception had been applied at one site (UOfferGenerator::Airport) by hand.
+# So, in a class whose base list names IOpsPersistent, a UPROPERTY whose declaration holds an object pointer
+# (TObjectPtr<, TWeakObjectPtr<, a raw T*, bare or in a container) must be UPROPERTY(Transient ...) or be listed in
+# $persistentRefAllowed as Class::Member - CONTENT ASSETS ONLY. A runtime object that IS state is saved by value by its
+# owner (UFlightBoard::Serialize), not by pointer. NOT SEEN, deliberately: a pointer inside a saved USTRUCT member
+# (FEntityInstance::Definition is content, rebound on load by RebindStandDefinitions), and a class that inherits
+# IOpsPersistent through another class. The rule fails, rather than checking nothing, if it finds no persistent class
+# or an allow-list entry that matches no declaration.
+$persistentRefAllowed = @()   # 'UClass::Member' - content assets only; empty on 2026-09-30
+$persistentClassCount = 0
+$persistentAllowedSeen = @{}
+foreach ($file in Get-Sources (Join-Path $ops 'Public') @('.h')) {
+    $lines = Get-Content -LiteralPath $file.FullName
+    $inClass = ''
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        $classMatch = [regex]::Match($line, '^\s*class\s+(?:\w+_API\s+)?(\w+)\s*:[^{;]*\bpublic\s+IOpsPersistent\b')
+        if ($classMatch.Success) { $inClass = $classMatch.Groups[1].Value; $persistentClassCount++; continue }
+        if ($inClass -eq '') { continue }
+        # The class's own closing brace is the one at column 0; a nested struct's is indented.
+        if ($line -match '^};') { $inClass = ''; continue }
+        $prop = [regex]::Match($line, '^\s*UPROPERTY\s*\(([^)]*)\)(.*)$')
+        if (-not $prop.Success) { continue }
+        $spec = $prop.Groups[1].Value
+        # The declaration: the rest of this line, or the next line when the macro stands alone; // comments cut off.
+        $decl = $prop.Groups[2].Value
+        if ($decl.Trim() -eq '' -and $i + 1 -lt $lines.Count) { $decl = $lines[$i + 1] }
+        $decl = ($decl -replace '//.*$', '').Trim()
+        if ($decl -notmatch 'TObjectPtr<|TWeakObjectPtr<|\b[A-Z]\w*\s*\*') { continue }
+        if ($spec -match '\bTransient\b') { continue }
+        $member = [regex]::Match($decl, '(\w+)\s*(?:\[[^\]]*\])?\s*(?:=[^;]*)?;').Groups[1].Value
+        $key = "$($inClass)::$member"
+        if ($persistentRefAllowed -contains $key) { $persistentAllowedSeen[$key] = $true; continue }
+        $failures.Add("persistent-refs-transient: $($file.Name):$($i + 1) $key is a saved object pointer on an IOpsPersistent - OpsSave writes it as a PATH, which a later session resolves to null (#425). Mark it UPROPERTY(Transient) and wire it in UOpsRuntime's constructor; save runtime state by value; allow-list content assets only")
+    }
+}
+if ($persistentClassCount -eq 0) {
+    $failures.Add("persistent-refs-transient: found no class deriving IOpsPersistent under $ops\Public - it moved; update rule 37, do not let it check nothing")
+}
+foreach ($allowed in $persistentRefAllowed) {
+    if (-not $persistentAllowedSeen.ContainsKey($allowed)) {
+        $failures.Add("persistent-refs-transient: allow-list entry $allowed matches no saved pointer - it moved or went; update rule 37")
+    }
+}
+$ranRules.Add('persistent-refs-transient')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

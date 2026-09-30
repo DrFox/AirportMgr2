@@ -1,7 +1,11 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Model/FlightBoard.h"
+#include "Model/JobBoard.h"
+#include "Model/Ledger.h"
 #include "Model/OfferGenerator.h"
+#include "Model/Pricing.h"
+#include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
 #include "Present/OpsRuntime.h"
 
@@ -31,6 +35,19 @@ bool FFlightBoardIsComposedByTheRuntimeTest::RunTest(const FString& Parameters)
 		Board->Allocator.Get());
 	TestEqual(TEXT("the board's generator is the runtime's, not a second one"),
 		Board->Generator.Get(), Runtime->GetOfferGenerator());
+
+	// THE MONEY, WIRED HERE TOO (#425), not first at Attach: each of these is Transient now - a save must not carry a
+	// path to another session's subobject - so nothing but the constructor ever sets them, and a runtime that has
+	// never attached must already have them.
+	TestTrue(TEXT("the board banks into the runtime's ledger at its prices"),
+		Board->Ledger.Get() == Runtime->GetLedger() && Board->Pricing.Get() == Runtime->GetPricing() && Runtime->GetLedger() != nullptr);
+	TestTrue(TEXT("and asks the runtime's job board about fuel"), Board->Fuel.Get() == Runtime->GetJobBoard());
+	TestTrue(TEXT("the generator prices offers at the runtime's prices"),
+		Runtime->GetOfferGenerator() != nullptr && Runtime->GetOfferGenerator()->Pricing.Get() == Runtime->GetPricing());
+	TestTrue(TEXT("the ledger dates entries by the runtime's clock at its prices"),
+		Runtime->GetLedger()->Clock.Get() == Runtime->GetClock() && Runtime->GetLedger()->Pricing.Get() == Runtime->GetPricing());
+	TestTrue(TEXT("the job board banks fuel into the runtime's ledger at its prices"),
+		Runtime->GetJobBoard()->Ledger.Get() == Runtime->GetLedger() && Runtime->GetJobBoard()->Pricing.Get() == Runtime->GetPricing());
 
 	// Unattached, there is no actor to dispatch into, and the board must not pretend there
 	// is: a flight coming due here logs that the board is not attached rather than vanishing.
