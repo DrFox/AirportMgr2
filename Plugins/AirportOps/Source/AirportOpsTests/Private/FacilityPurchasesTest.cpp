@@ -654,6 +654,17 @@ bool FFacilityNoStandAdmitsTest::RunTest(const FString&)
 		static_cast<int32>(GiantRow->Refusal), static_cast<int32>(EPurchaseRefusal::NoStandAdmits));
 	TestEqual(TEXT("while the bowser, which a stand letter was built for, is still for sale"),
 		static_cast<int32>(BowserRow->Refusal), static_cast<int32>(EPurchaseRefusal::None));
+	// NO SHIPPED KIND IS GREYED FOR EVER: every row of the scenario's own catalogue is admitted by some stand letter, so the
+	// shop never shows a player a kind it will not sell them. A row added to the scenario that no letter's design vehicle
+	// fits (the articulated rig, #478's example) fails HERE - give a stand a design vehicle it fits, or do not ship it.
+	for (const FVehicleOfferQuote& Row : Quote.VehicleOffers)
+	{
+		if (Row.TypeCode != Giant)
+		{
+			TestNotEqual(FString::Printf(TEXT("the shipped kind %s is admitted by some stand"), *Row.TypeCode.ToString()),
+				static_cast<int32>(Row.Refusal), static_cast<int32>(EPurchaseRefusal::NoStandAdmits));
+		}
+	}
 	TestTrue(TEXT("the reason has words the inspector's purchase rows show (they render RefusalText for any refusal)"),
 		!UFacilityPurchases::RefusalText(GiantRow->Refusal).IsEmpty());
 
