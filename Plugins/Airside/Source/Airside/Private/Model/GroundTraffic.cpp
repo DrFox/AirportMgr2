@@ -10,7 +10,6 @@
 #include "Model/AirsideCapability.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/DeparturePlanner.h"
-#include "Model/ExhaustiveSwitch.h"
 #include "Model/PushbackPlanner.h"
 #include "Model/PushbackRun.h"
 #include "Model/RoadNetwork.h"
@@ -560,36 +559,16 @@ void UGroundTraffic::TakeGoal(FRoadAgent& Agent, int32 AgentId, const URoadNetwo
 	++OccupancyRevisionCount;
 }
 
-// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error: a fourth goal is a build error in the switch below; checked 2026-09-30 by a stray enumerator: the build failed here)
-AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 void UGroundTraffic::ChangeRoute(FRoadAgent& Agent, const FRouteChange& Change, const URoadNetwork* Network)
 {
-	// THE AGENT'S HALF MOVES NO GOAL: for a Move it is handed the change with the goal KEPT, and TakeGoal, after it,
-	// sets the new one from the plan with its claim. The bracket is in this order - release, change, take - because
-	// ReleaseGoal reads the goal the agent had and TakeGoal the plan it now has.
-	bool bMoves = false;
-	switch (Change.Goal)
-	{
-	case ERouteGoal::Keep:
-	case ERouteGoal::Repoint:
-		break;
-	case ERouteGoal::Move:
-		bMoves = true;
-		break;
-	}
-	FRouteChange AgentHalf = Change;
-	if (bMoves)
-	{
-		ReleaseGoal(Agent, Agent.Id);
-		AgentHalf.Goal = ERouteGoal::Keep;
-	}
-	Agent.ApplyRouteChange(AgentHalf, Occupancy);
-	if (bMoves)
-	{
-		TakeGoal(Agent, Agent.Id, Network, Change.Plan);
-	}
+	// THE AGENT'S HALF MOVES NO GOAL - it cannot be asked to (ERouteGoal has no Move) - so it is handed Keep, and
+	// TakeGoal, after it, sets the new goal from the plan with its claim. The bracket is in this order - release,
+	// change, take - because ReleaseGoal reads the goal the agent had and TakeGoal the plan it now has.
+	// ENFORCED BY: Airside.Model.Traffic.StandClaim (old stand released, new one held, at the redirect)
+	ReleaseGoal(Agent, Agent.Id);
+	Agent.ApplyRouteChange(Change, ERouteGoal::Keep, Occupancy);
+	TakeGoal(Agent, Agent.Id, Network, Change.Plan);
 }
-AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 bool UGroundTraffic::ExtendRoute(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Tail,
 	double KeepBehind, double* OutDropped)
@@ -781,7 +760,7 @@ bool UGroundTraffic::RerouteAgent(int32 AgentId, const URoadNetwork* Network, in
 	// All of it one Splice through ChangeRoute (issue #429), the change ReplanAt makes with its goal kept.
 	// ENFORCED BY: Airside.Model.RouteChange.SpliceEndsTheWait
 	const double WasRemaining = Live.Length - Agent.Follower.Travelled;
-	ChangeRoute(Agent, FRouteChange::Splice(Spliced, ERouteGoal::Move), Network);
+	ChangeRoute(Agent, FRouteChange::Splice(Spliced), Network);
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d re-routed after step %d: %.0f uu to go, was %.0f"),
 		AgentId, KeepSteps - 1, Spliced.Length - Agent.Follower.Travelled, WasRemaining);
 	return true;
@@ -909,8 +888,7 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// Class is NOT re-derived: a van redirected is still a van. StartTaxi rewrites the
 	// follower and the airframe and nothing else, so the identity fields survive it; only
 	// the goal moves, because that is the whole of what a redirect changes - TakeGoal.
-	ChangeRoute(Agent, FRouteChange::Restart(Plan, ERouteRelease::Reservations, ERouteGoal::Move,
-		InitialTravelled, KeptHeading), Network);
+	ChangeRoute(Agent, FRouteChange::Restart(Plan, ERouteRelease::Reservations, InitialTravelled, KeptHeading), Network);
 
 	// POSED NOW, NOT LEFT FOR THE NEXT TICK (#107 item 3) - the same reason DispatchAgent runs
 	// a zero-second Advance before Admit. UGroundTraffic::Advance early-returns on a paused
@@ -1663,8 +1641,8 @@ void UGroundTraffic::ReplanHeldTaxiOuts(const URoadNetwork& Network)
 		else
 		{
 			Agent.EndTaxiOutHold();
-			ChangeRoute(Agent, FRouteChange::Restart(Route, ERouteRelease::ReservationsAndGuidelines, ERouteGoal::Move,
-				0.0, Agent.LastMotion.Heading), &Network);
+			ChangeRoute(Agent, FRouteChange::Restart(Route, ERouteRelease::ReservationsAndGuidelines, 0.0,
+				Agent.LastMotion.Heading), &Network);
 		}
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: way to the runway planned again from where it %s (%.0f uu join): %s"),
 			Agent.Id, Agent.Phase == EAgentPhase::Manoeuvring ? TEXT("was pushed back to") : TEXT("held on the taxiway"),

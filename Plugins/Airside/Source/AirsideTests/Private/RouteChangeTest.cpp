@@ -188,6 +188,7 @@ bool FRouteChangeSpliceEndsTheWaitTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("reroute: the line ahead is let go"), HeldBy(*Traffic, Van).Reserved, 0);
 	TestEqual(TEXT("reroute: the ground under it is kept"), HeldBy(*Traffic, Van).OccupiedGuidelines, VanBefore.OccupiedGuidelines);
 	TestEqual(TEXT("reroute: the goal moved to D"), V->GoalNode, F.D);
+	TestEqual(TEXT("reroute: and the follower drives there - its plan ends at D"), V->Follower.Plan.Steps.Last().To, F.D);
 	TestEqual(TEXT("reroute: Travelled survives the splice - it is on the same line"), V->Follower.Travelled, VanWas);
 	TestEqual(TEXT("reroute: still Taxiing"), V->Phase, EAgentPhase::Taxiing);
 	Traffic->RetireAgent(Van);
@@ -244,6 +245,7 @@ bool FRouteChangeExtendKeepsTheWaitTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("nothing is let go: every reservation still describes its route"), HeldBy(*Traffic, Plane).Reserved, Before.Reserved);
 	TestEqual(TEXT("nor the ground under it"), HeldBy(*Traffic, Plane).OccupiedGuidelines, Before.OccupiedGuidelines);
 	TestEqual(TEXT("the goal moved to the extended end"), P->GoalNode, F.E);
+	TestEqual(TEXT("and the follower drives on to it - its plan ends at E"), P->Follower.Plan.Steps.Last().To, F.E);
 	return true;
 }
 
@@ -261,6 +263,12 @@ bool FRouteChangeTruncateKeepsTheWaitTest::RunTest(const FString& Parameters)
 	// is on the same line), the goal is re-pointed at the new end, and the stall clock is NOT reset - the rebuild
 	// re-arbitrates everybody in its own claim pass straight after, and a reset clock would be the one thing that
 	// pass did not put back. Unchanged by the seam.
+	//
+	// THE CUT IS MADE IN PLACE, so the step count and the goal read right whether or not the follower was told:
+	// what only the Truncate's Replace changes is the SPEED PROFILE, and that is what is asserted - braking to rest
+	// at B, the new end, where the old profile ran on through B at taxi speed towards C. And the rebuild's own claim
+	// pass, which ERouteMotion::Truncate and ERouteGoal::Repoint rely on (#482 restructures OnGraphRebuilt's caller):
+	// the staged refusal is gone and the ground is claimed again once OnGraphRebuilt returns.
 	const FFork F = Build();
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Plane = Traffic->DispatchAgent(F.Net, TestGraph::Probe(*F.Net, F.A, F.C, ETraversalClass::Aircraft),
@@ -279,7 +287,13 @@ bool FRouteChangeTruncateKeepsTheWaitTest::RunTest(const FString& Parameters)
 
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
 	TestEqual(TEXT("truncated to its first step"), P->Follower.Plan.Steps.Num(), 1);
+	TestEqual(TEXT("which ends at B"), P->Follower.Plan.Steps.Last().To, F.B);
+	TestTrue(FString::Printf(TEXT("the speed profile was rebuilt for the cut route: it brakes to rest at B (limit %.0f uu/s there)"),
+		P->Follower.Profile.LimitAt(P->Follower.Plan.Length)),
+		P->Follower.Profile.LimitAt(P->Follower.Plan.Length) < 1.0);
 	TestEqual(TEXT("the goal re-pointed at the new end, B"), P->GoalNode, F.B);
+	TestEqual(TEXT("the rebuild's own claim pass re-arbitrated it: the staged refusal is gone"), P->GetWaitingOn(), 0);
+	TestTrue(TEXT("and claimed the ground it stands on again"), HeldBy(*Traffic, Plane).OccupiedGuidelines > 0);
 	TestEqual(TEXT("the stall clock is left for the rebuild's own claim pass: not reset"), P->GetStalledSeconds(), StagedStall);
 	TestEqual(TEXT("its speed survives - the same line"), P->Follower.Speed, SpeedWas);
 	TestEqual(TEXT("and so does Travelled"), P->Follower.Travelled, TravelledWas);
@@ -318,16 +332,20 @@ bool FRouteChangeRejoinEndsTheWaitTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("nobody is waited on"), P->GetWaitingOn(), 0);
 	TestEqual(TEXT("its goal is D"), P->GoalNode, F.D);
 	// NOT ASSERTED HERE: the claims a Rejoin lets go. A stranded agent already gave its guideline claims back when
-	// it was stranded, so a count here would pass whatever the rescue did; the old goal's claim going is pinned by
-	// Airside.Model.Traffic.RescueStranded.NewGoal, and what each motion lets go, on a table holding all three kinds
-	// of claim, by Airside.Model.RouteChange.ReleaseByMotion.
+	// it was stranded, so a count here would pass whatever the rescue did. The old goal's claim going is
+	// ChangeRoute's bracket, which Airside.Model.Traffic.StandClaim pins through RedirectAgent (old stand released,
+	// new one held - C and D here are plain nodes, which no goal claim is raised on, so a check on C would pass
+	// whatever happened); what each motion lets go, on a table holding all three kinds of claim, by
+	// Airside.Model.RouteChange.ReleaseByMotion.
 	return true;
 }
 
 // =======================================================================================
 // THE SEAM ITSELF, below the entry points: FRoadAgent::ApplyRouteChange on a bare agent and a bare table, so each
-// choice a FRouteChange names is measured on its own - including the ones no entry point above can show (a stranded
-// agent has no guideline claims left to let go; a rebuild re-arbitrates straight after a truncation).
+// choice a FRouteChange names is measured on its own - including the ones no entry point above can show: what a
+// Rejoin lets go (a stranded agent has none left), and a truncation's wait and follower (the rebuild re-arbitrates
+// straight after it, and cuts the plan in place). Every row also asserts the follower took the NEW plan - its end
+// and a speed profile braking to rest there - so a motion that stopped calling Replace / Start turns its row red.
 namespace RouteChangeTest
 {
 	/** A taxiing agent on A -> C with a claim of each kind and a staged wait. See ReleaseByMotion. */
@@ -386,44 +404,53 @@ bool FRouteChangeReleaseByMotionTest::RunTest(const FString& Parameters)
 	const FRoadSegmentId Strip = F.Net->AddStraightSegment(RA, RB, TestProfiles::Runway());
 	const FRoutePlan Live = TestGraph::Probe(*F.Net, F.A, F.C, ETraversalClass::Aircraft);
 	const FRoutePlan ToD = TestGraph::Probe(*F.Net, F.A, F.D, ETraversalClass::Aircraft);
-	if (!TestTrue(TEXT("two routes to change between"), Live.IsValid() && ToD.IsValid())) { return false; }
+	// A TRUNCATION'S PLAN IS A PREFIX OF THE LIVE ONE, as the rebuild cuts it: A -> B of A -> B -> C. Its end is mid
+	// line of the old route, so only a rebuilt profile brakes there - the old one runs through B at taxi speed.
+	const FRoutePlan ToB = TestGraph::Probe(*F.Net, F.A, F.B, ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("three routes to change between"), Live.IsValid() && ToD.IsValid() && ToB.IsValid())) { return false; }
 
 	struct FRow
 	{
 		const TCHAR* Name;
 		FRouteChange Change;
+		ERouteGoal Goal;
 		const TCHAR* Survive;
 		bool bWaitStands;
-		FGuidelineNodeId Goal;
+		FGuidelineNodeId GoalAfter;
+		FGuidelineNodeId PlanEnd;
 	};
-	FRouteChange ExtendKept = FRouteChange::Extend(ToD, 0.0);
-	ExtendKept.Goal = ERouteGoal::Keep;   // Extend's own factory MOVES the goal, which the agent alone refuses.
 	const FRow Rows[] = {
-		{ TEXT("Extend"), ExtendKept, TEXT("ground ahead strip"), true, F.C },
-		{ TEXT("Truncate"), FRouteChange::Truncate(ToD), TEXT("ground ahead strip"), true, F.D },
-		{ TEXT("Splice"), FRouteChange::Splice(ToD, ERouteGoal::Keep), TEXT("ground strip"), false, F.C },
-		{ TEXT("Restart, reservations"), FRouteChange::Restart(ToD, ERouteRelease::Reservations, ERouteGoal::Keep, 0.0, TOptional<double>()),
-			TEXT("ground strip"), false, F.C },
-		{ TEXT("Restart, reservations and guidelines"), FRouteChange::Restart(ToD, ERouteRelease::ReservationsAndGuidelines, ERouteGoal::Repoint, 0.0, TOptional<double>()),
-			TEXT("strip"), false, F.D },
-		{ TEXT("Rejoin"), FRouteChange::Rejoin(ToD, ERouteGoal::Repoint, 0.0, FVector2D(10.0, 0.0)), TEXT("strip"), false, F.D },
+		{ TEXT("Extend"), FRouteChange::Extend(ToD, 0.0), ERouteGoal::Keep, TEXT("ground ahead strip"), true, F.C, F.D },
+		{ TEXT("Truncate"), FRouteChange::Truncate(ToB), ERouteGoal::Repoint, TEXT("ground ahead strip"), true, F.B, F.B },
+		{ TEXT("Splice"), FRouteChange::Splice(ToD), ERouteGoal::Keep, TEXT("ground strip"), false, F.C, F.D },
+		{ TEXT("Restart, reservations"), FRouteChange::Restart(ToD, ERouteRelease::Reservations, 0.0, TOptional<double>()),
+			ERouteGoal::Keep, TEXT("ground strip"), false, F.C, F.D },
+		{ TEXT("Restart, reservations and guidelines"), FRouteChange::Restart(ToD, ERouteRelease::ReservationsAndGuidelines, 0.0, TOptional<double>()),
+			ERouteGoal::Repoint, TEXT("strip"), false, F.D, F.D },
+		{ TEXT("Rejoin"), FRouteChange::Rejoin(ToD, 0.0, FVector2D(10.0, 0.0)), ERouteGoal::Repoint, TEXT("strip"), false, F.D, F.D },
 	};
 	for (const FRow& Row : Rows)
 	{
 		FBareAgent Bare;
 		Stage(Bare, F, Live, Strip);
-		if (!TestTrue(FString::Printf(TEXT("%s: applied"), Row.Name), Bare.Agent.ApplyRouteChange(Row.Change, Bare.Occupancy)))
+		const double BEnd = ToB.Length;
+		if (!TestTrue(FString::Printf(TEXT("%s: precondition - the live profile runs through B at speed (%.0f uu/s)"), Row.Name,
+			Bare.Agent.Follower.Profile.LimitAt(BEnd)), Bare.Agent.Follower.Profile.LimitAt(BEnd) > 100.0))
 		{
 			continue;
 		}
+		Bare.Agent.ApplyRouteChange(Row.Change, Row.Goal, Bare.Occupancy);
 		TestEqual(FString::Printf(TEXT("%s: lets go of the right claims"), Row.Name), Survivors(Bare, F), FString(Row.Survive));
 		TestEqual(FString::Printf(TEXT("%s: the wait %s"), Row.Name, Row.bWaitStands ? TEXT("stands") : TEXT("is over")),
 			Bare.Agent.GetWaitingOn(), Row.bWaitStands ? PhantomBlocker : 0);
 		TestEqual(FString::Printf(TEXT("%s: the stall clock %s"), Row.Name, Row.bWaitStands ? TEXT("runs on") : TEXT("restarts")),
 			Bare.Agent.GetStalledSeconds(), Row.bWaitStands ? StagedStall : 0.0);
-		TestEqual(FString::Printf(TEXT("%s: the goal"), Row.Name), Bare.Agent.GoalNode, Row.Goal);
-		TestEqual(FString::Printf(TEXT("%s: the follower took the new plan"), Row.Name),
-			Bare.Agent.Follower.Plan.Steps.Num(), ToD.Steps.Num());
+		TestEqual(FString::Printf(TEXT("%s: the goal"), Row.Name), Bare.Agent.GoalNode, Row.GoalAfter);
+		TestEqual(FString::Printf(TEXT("%s: the follower took the new plan - it ends where the new one does"), Row.Name),
+			Bare.Agent.Follower.Plan.Steps.Last().To, Row.PlanEnd);
+		const double EndLimit = Bare.Agent.Follower.Profile.LimitAt(Bare.Agent.Follower.Plan.Length);
+		TestTrue(FString::Printf(TEXT("%s: and its speed profile was built for it - braking to rest at that end (%.0f uu/s)"),
+			Row.Name, EndLimit), EndLimit < 1.0);
 		TestEqual(FString::Printf(TEXT("%s: taxiing"), Row.Name), Bare.Agent.Phase, EAgentPhase::Taxiing);
 	}
 
@@ -438,14 +465,14 @@ bool FRouteChangeReleaseByMotionTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("rolling"), Speed > 0.0 && Travelled > 0.0)) { return false; }
 	{
 		FBareAgent Splice = Rolling;
-		Splice.Agent.ApplyRouteChange(FRouteChange::Splice(ToD, ERouteGoal::Keep), Splice.Occupancy);
+		Splice.Agent.ApplyRouteChange(FRouteChange::Splice(ToD), ERouteGoal::Keep, Splice.Occupancy);
 		TestEqual(TEXT("Splice: Travelled survives - the same line up to the splice"), Splice.Agent.Follower.Travelled, Travelled);
 		TestEqual(TEXT("Splice: and the speed"), Splice.Agent.Follower.Speed, Speed);
 	}
 	{
 		FBareAgent Rejoin = Rolling;
 		const FVector2D At(Rolling.Agent.LastMotion.Position.X, 5.0);
-		Rejoin.Agent.ApplyRouteChange(FRouteChange::Rejoin(ToD, ERouteGoal::Keep, 42.0, At), Rejoin.Occupancy);
+		Rejoin.Agent.ApplyRouteChange(FRouteChange::Rejoin(ToD, 42.0, At), ERouteGoal::Keep, Rejoin.Occupancy);
 		TestEqual(TEXT("Rejoin: the speed is kept - still rolling"), Rejoin.Agent.Follower.Speed, Speed);
 		TestEqual(TEXT("Rejoin: seated At"), Rejoin.Agent.LastMotion.Position, At);
 		TestEqual(TEXT("Rejoin: Travelled along the new line's first step"), Rejoin.Agent.Follower.Travelled, 42.0);
@@ -454,8 +481,8 @@ bool FRouteChangeReleaseByMotionTest::RunTest(const FString& Parameters)
 	{
 		FBareAgent Restart = Rolling;
 		const double Heading = 1.25;
-		Restart.Agent.ApplyRouteChange(FRouteChange::Restart(ToD, ERouteRelease::Reservations, ERouteGoal::Keep, 0.0, Heading),
-			Restart.Occupancy);
+		Restart.Agent.ApplyRouteChange(FRouteChange::Restart(ToD, ERouteRelease::Reservations, 0.0, Heading),
+			ERouteGoal::Keep, Restart.Occupancy);
 		TestEqual(TEXT("Restart: from rest"), Restart.Agent.Follower.Speed, 0.0);
 		TestEqual(TEXT("Restart: the kept heading is posed"), Restart.Agent.LastMotion.Heading, Heading);
 		TestEqual(TEXT("Restart: where it stood"), Restart.Agent.LastMotion.Position, Rolling.Agent.LastMotion.Position);
@@ -464,35 +491,8 @@ bool FRouteChangeReleaseByMotionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// ---------------------------------------------------------------------------------------
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRouteChangeAgentAloneRefusesAGoalMoveTest,
-	"Airside.Model.RouteChange.AgentAloneRefusesAGoalMove",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FRouteChangeAgentAloneRefusesAGoalMoveTest::RunTest(const FString& Parameters)
-{
-	using namespace RouteChangeTest;
-	// A GOAL THAT MOVES HAS CLAIMS ONLY THE TRAFFIC CAN MOVE - the old goal's, the stand-freed flag, the new goal's
-	// departure arming and claim (UGroundTraffic::ReleaseGoal / TakeGoal). The agent alone refuses the change whole,
-	// before anything is written, and says so as an Error: a goal moved without its claim is a stand held for ever by
-	// an agent going somewhere else. Not an ensure - a test must never raise one on purpose.
-	const FFork F = Build();
-	const FRoadNodeId RA = F.Net->AddNode(FVector2D(-20000.0, -5000.0));
-	const FRoadNodeId RB = F.Net->AddNode(FVector2D(20000.0, -5000.0));
-	const FRoadSegmentId Strip = F.Net->AddStraightSegment(RA, RB, TestProfiles::Runway());
-	const FRoutePlan Live = TestGraph::Probe(*F.Net, F.A, F.C, ETraversalClass::Aircraft);
-	const FRoutePlan ToD = TestGraph::Probe(*F.Net, F.A, F.D, ETraversalClass::Aircraft);
-	FBareAgent Bare;
-	Stage(Bare, F, Live, Strip);
-
-	AddExpectedError(TEXT("MOVES its goal was applied to the agent alone"), EAutomationExpectedErrorFlags::Contains, 1);
-	TestFalse(TEXT("refused"), Bare.Agent.ApplyRouteChange(FRouteChange::Splice(ToD, ERouteGoal::Move), Bare.Occupancy));
-	TestEqual(TEXT("the follower still has its own route"), Bare.Agent.Follower.Plan.Steps.Num(), Live.Steps.Num());
-	TestEqual(TEXT("the goal is untouched"), Bare.Agent.GoalNode, F.C);
-	TestEqual(TEXT("no claim was let go"), Survivors(Bare, F), FString(TEXT("ground ahead strip")));
-	TestEqual(TEXT("and the wait stands"), Bare.Agent.GetStalledSeconds(), StagedStall);
-	return true;
-}
+// NO "AGENT ALONE REFUSES A GOAL MOVE" TEST ANY MORE (#429 review): ERouteGoal has no Move, so the agent cannot be
+// handed one - the state that test staged, and the Error it expected, are not representable. A goal that moves is
+// UGroundTraffic::ChangeRoute, pinned through its callers above and by Airside.Model.Traffic.StandClaim.
 
 #endif

@@ -841,13 +841,15 @@ private:
 	void TakeGoal(FRoadAgent& Agent, int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
 
 	/**
-	 * THE ROUTE CHANGE (issue #429; Model/RouteChange.h): FRoadAgent::ApplyRouteChange - the follower, the claims it
-	 * gives back, the wait, the engine and the pose - and, for a Change whose goal MOVES, the goal's claim around it:
-	 * ReleaseGoal before, TakeGoal after. Every operation here that hands a live agent a new plan (RedirectAgent,
-	 * ExtendRoute, RerouteAgent, RescueStranded, ReplanHeldTaxiOuts) is a guard over this call and nothing else; the
-	 * replan mechanism (FPlanReResolver), which has no UGroundTraffic, calls the agent's half directly and keeps or
-	 * re-points the goal. Network is TakeGoal's, for the departure arming and the claim.
-	 * ENFORCED BY: Airside.Model.RouteChange.* (each entry point's aftermath, at this level, with real agents)
+	 * THE ROUTE CHANGE WHOSE GOAL MOVES (issue #429; Model/RouteChange.h): FRoadAgent::ApplyRouteChange - the
+	 * follower, the claims it gives back, the wait, the engine and the pose, its goal Kept - bracketed by the goal's
+	 * claim: ReleaseGoal before, TakeGoal after (release before take: ReleaseGoal reads the goal the agent had, TakeGoal
+	 * the plan it now has). Every operation here that hands a live agent a new plan (RedirectAgent, ExtendRoute,
+	 * RerouteAgent, RescueStranded, ReplanHeldTaxiOuts) is a guard over this call and nothing else; the replan
+	 * mechanism (FPlanReResolver), which has no UGroundTraffic and whose goal does not move, calls the agent's half
+	 * directly and keeps or re-points it. Network is TakeGoal's, for the departure arming and the claim.
+	 * ENFORCED BY: Airside.Model.RouteChange.* (each entry point's aftermath, at this level, with real agents),
+	 * Airside.Model.Traffic.StandClaim (the old stand released and the new one held at the redirect)
 	 */
 	void ChangeRoute(FRoadAgent& Agent, const FRouteChange& Change, const URoadNetwork* Network);
 

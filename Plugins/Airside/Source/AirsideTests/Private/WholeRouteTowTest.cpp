@@ -870,6 +870,15 @@ bool FLiveTowSeedTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a start that does not resolve reads as zero, as both hand-built callers did"),
 		Agent.LiveTowSeedAtRest(nullptr)->Travelled, 0.0);
 
+	// REJOINING (RejoinNearby's seed, #429 review): judged AT THE FOLLOWER'S SPEED, because RejoinTaxi carries that
+	// speed on for all three rejoin callers - it used to judge from rest, which only the drive-side flip ever drove.
+	const TOptional<FTowSeed> Joining = Agent.LiveTowSeedJoining(42.0);
+	if (!TestTrue(TEXT("joining: seeded"), Joining.IsSet())) { return false; }
+	TestTrue(TEXT("joining: at speed - the case under test is not rest"), Joining->Speed > 0.0);
+	TestEqual(TEXT("joining: the follower's speed, which RejoinTaxi keeps"), Joining->Speed, Agent.Follower.Speed);
+	TestEqual(TEXT("joining: Travelled is where on the new plan's first step the cab is seated"), Joining->Travelled, 42.0);
+	TestEqual(TEXT("joining: the same pose"), Joining->Heading, Live->Heading);
+
 	FRoadAgent Bowser;
 	Bowser.StartDrive(North, UAirsideSettings::ResolveDefaultVehicle());
 	TestFalse(TEXT("a rigid vehicle has no seed"), Bowser.LiveTowSeed().IsSet());

@@ -503,8 +503,10 @@ void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled, TO
 	// the bundle is whatever the caller (StartTaxi, StartDrive, or a redirect keeping its own)
 	// has already put in place, and Chassis() reads the right one of the two.
 	Phase = EAgentPhase::Taxiing;
-	// InitialTravelled is non-zero for one caller: a vehicle rejoining its lane MID-EDGE after a
-	// drive-side flip (FPlanReResolver), which starts part-way along the plan's first step.
+	// InitialTravelled is non-zero for one caller: RedirectAgent's TOW seated part-way along the new
+	// line (a cab whose trailer axle stands on a bay end, its steered axle a chain's length up the
+	// exit), through ApplyRouteChange's Restart. It was the drive-side flip's rejoin until issue #429
+	// made the flip a Rejoin (RejoinTaxi), which starts part-way along by its own argument.
 	Follower.Start(Plan, Chassis(), 0.0, InitialHeading, InitialTravelled);
 
 	bEngineRunning = true;
@@ -575,19 +577,12 @@ void FRoadAgent::EndTaxiOutHold()
 
 // ONE FUNCTION, SWITCHED ON EVERY ONE OF THE THREE ENUMS WITH NO default: - a fourth motion, release or goal is a
 // build error at each switch below, which is what makes "every route change has every step decided" a contract.
-// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over this function; checked 2026-09-30 by a stray enumerator in each of the three enums: the build failed at all four switches)
+// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over this function; checked 2026-09-30 by a stray enumerator in each of the three enums: the build failed at all four switches, re-checked after ERouteGoal lost Move)
 AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
-bool FRoadAgent::ApplyRouteChange(const FRouteChange& Change, FTrafficOccupancy& Occupancy)
+void FRoadAgent::ApplyRouteChange(const FRouteChange& Change, ERouteGoal Goal, FTrafficOccupancy& Occupancy)
 {
-	// REFUSED BEFORE ANYTHING IS WRITTEN - see the declaration. A goal that moves has claims only the traffic can
-	// move; an Error, not an ensure, because a test pins the refusal and a test must never raise an ensure.
-	if (Change.Goal == ERouteGoal::Move)
-	{
-		UE_LOG(LogAirsideTraffic, Error,
-			TEXT("Agent %d: a route change that MOVES its goal was applied to the agent alone - the goal's claims are UGroundTraffic::ChangeRoute's; nothing changed"),
-			Id);
-		return false;
-	}
+	// NO REFUSAL: a goal that moves is not a value of ERouteGoal (see there), so there is nothing here that could be
+	// asked and not honoured. It was a Move refused with an Error and a false every caller discarded (#429 review).
 	const FRoutePlan& Plan = Change.Plan;
 
 	// 1. THE FOLLOWER TAKES THE PLAN, with the pose and the engine the motion keeps.
@@ -674,11 +669,13 @@ bool FRoadAgent::ApplyRouteChange(const FRouteChange& Change, FTrafficOccupancy&
 		break;
 	}
 
-	// 3. THE WAIT IS OVER BY CONSTRUCTION for every motion but an extension - the thing it was waiting for is not on
-	// its route any more - so the arbitration fields say so at once rather than a tick later, and the stall clock
-	// resets with them, or the deadlock pass would count the old wait against the new route (a redirected waiter
-	// carried its seconds on until issue #429, and read as a stalled cycle member on its first refusal).
-	// ENFORCED BY: Airside.Model.RouteChange.RestartEndsTheWait, Airside.Model.RouteChange.ExtendKeepsTheWait
+	// 3. THE WAIT IS OVER BY CONSTRUCTION for every motion but an extension or a truncation (see ERouteMotion for why
+	// those two keep it) - the thing it was waiting for is not on its route any more - so the arbitration fields say
+	// so at once rather than a tick later, and the stall clock resets with them, or the deadlock pass would count the
+	// old wait against the new route (a redirected waiter carried its seconds on until issue #429, and read as a
+	// stalled cycle member on its first refusal).
+	// ENFORCED BY: Airside.Model.RouteChange.ReleaseByMotion, Airside.Model.RouteChange.RestartEndsTheWait,
+	// Airside.Model.RouteChange.ExtendKeepsTheWait
 	switch (Change.Motion)
 	{
 	case ERouteMotion::Extend:
@@ -692,17 +689,15 @@ bool FRoadAgent::ApplyRouteChange(const FRouteChange& Change, FTrafficOccupancy&
 		break;
 	}
 
-	// 4. THE GOAL, kept or re-pointed. A Move was refused at the top.
-	switch (Change.Goal)
+	// 4. THE GOAL, kept or re-pointed. A goal that MOVES is UGroundTraffic::ChangeRoute's, around this call.
+	switch (Goal)
 	{
 	case ERouteGoal::Keep:
-	case ERouteGoal::Move:
 		break;
 	case ERouteGoal::Repoint:
 		SetGoalFrom(Plan);
 		break;
 	}
-	return true;
 }
 AIRSIDE_EXHAUSTIVE_SWITCH_END
 
@@ -742,6 +737,19 @@ TOptional<FTowSeed> FRoadAgent::LiveTowSeedAtRest(const FGuidelineNode* RouteSta
 		// HOW FAR ALONG THE ROUTE THE STEERED AXLE ALREADY IS - zero at a service point, where it
 		// parked on the node the route starts from.
 		Seed->Travelled = RouteStart != nullptr ? FVector2D::Distance(RouteStart->Position, Steered) : 0.0;
+	}
+	return Seed;
+}
+
+TOptional<FTowSeed> FRoadAgent::LiveTowSeedJoining(double TravelledOnNewPlan) const
+{
+	TOptional<FTowSeed> Seed = LiveTowSeed();
+	if (Seed.IsSet())
+	{
+		// THE REJOIN STARTS PART-WAY ALONG ITS FIRST STEP, AT THE FOLLOWER'S SPEED (RejoinTaxi keeps it), so that is
+		// where and how its tow is judged - the chain as it is, not laid straight. LiveTowSeed's Speed already is the
+		// follower's; only where along the NEW plan the cab sits changes. See the declaration for why not from rest.
+		Seed->Travelled = TravelledOnNewPlan;
 	}
 	return Seed;
 }

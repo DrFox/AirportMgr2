@@ -10,8 +10,9 @@ struct FRoutePlan;
 // to let go, whether the wait was over, whether the engine and the pose carried on, how the goal moved. Each picked a different
 // subset, and the ops plugin and the game module composed a tenth and eleventh of their own from the agent's
 // internals. The subsets are now NAMED here, and ONE function applies them in one order: FRoadAgent::ApplyRouteChange
-// (the follower, the claims it gives back, the wait, the engine, the pose) under UGroundTraffic::ChangeRoute (the goal
-// and its claim, which only the traffic can move). A new caller picks values; it does not get to pick steps.
+// (the follower, the claims it gives back, the wait, the engine, the pose, a goal kept or re-pointed) under
+// UGroundTraffic::ChangeRoute (a goal that MOVES, and its claim, which only the traffic can move). A new caller picks
+// values; it does not get to pick steps.
 //
 // NOT A UENUM, any of them: nothing stores a route change - it is built on a caller's stack for one call - so there is
 // nothing for UHT to reflect, and a UENUM would drag the generated header into every includer for no reader.
@@ -33,6 +34,8 @@ enum class ERouteMotion : uint8
 	 * Extend's aftermath - nothing let go, the wait left standing - and for the rebuild's reason: it drops every
 	 * guideline claim and re-arbitrates every agent in its own claim pass straight after, so a release or a cleared
 	 * wait here would be undone before anything read it, and a reset stall clock would be the one thing that was not.
+	 * ENFORCED BY: Airside.Model.RouteChange.TruncateKeepsTheWait (after OnGraphRebuilt the staged refusal is gone and
+	 * the ground is claimed again), Airside.Model.Traffic.PushGroundFreed.RebuildKeepsTaxiingBlocker
 	 */
 	Truncate,
 
@@ -86,7 +89,16 @@ enum class ERouteRelease : uint8
 	ReservationsAndGuidelines,
 };
 
-/** How the goal follows the new plan. */
+/**
+ * How the goal follows the new plan WHEN IT DOES NOT MOVE - the two things the agent can do to its own goal, and the
+ * only two FRoadAgent::ApplyRouteChange takes.
+ *
+ * NO Move HERE, ON PURPOSE (#429 review). A goal that moves has a claim that moves with it - the old goal's let go and
+ * a stand wait cleared (UGroundTraffic::ReleaseGoal), the new goal's departure armed and its claim raised (TakeGoal) -
+ * and those are the traffic's. A Move value here would be a state the agent alone could be handed and could not honour;
+ * it was, refused at run time with an Error, and every caller then discarded the bool that said so. Moving a goal IS
+ * UGroundTraffic::ChangeRoute, so it has no value to pass.
+ */
 enum class ERouteGoal : uint8
 {
 	/** GoalNode untouched: the new plan ends where the old one did (ReplanAt searches to the agent's own goal). */
@@ -94,23 +106,16 @@ enum class ERouteGoal : uint8
 
 	/**
 	 * GoalNode RE-POINTED at the new plan's end (FRoadAgent::SetGoalFrom), with no claim let go or taken: the same
-	 * place, possibly under a new handle. A rebuild's rejoin - the rebuild drops every guideline claim and re-makes
-	 * them all in its own claim pass, so a claim moved here would be moved twice.
+	 * place, possibly under a new handle. A rebuild's rejoin and truncation - the rebuild drops every guideline claim
+	 * and re-makes them all in its own claim pass, so a claim moved here would be moved twice.
+	 * ENFORCED BY: Airside.Model.RouteChange.TruncateKeepsTheWait (the ground claimed again after OnGraphRebuilt)
 	 */
 	Repoint,
-
-	/**
-	 * THE GOAL MOVES: the old goal's claim and any stand wait let go (UGroundTraffic::ReleaseGoal), then the new goal,
-	 * its departure arming and its claim (TakeGoal). ONLY UGroundTraffic::ChangeRoute can do this - the claim and the
-	 * stand-freed flag are the traffic's - so FRoadAgent::ApplyRouteChange REFUSES it (an Error, nothing changed)
-	 * rather than moving the goal without its claim.
-	 * ENFORCED BY: Airside.Model.RouteChange.AgentAloneRefusesAGoalMove
-	 */
-	Move,
 };
 
 /**
- * One route change: the plan, how the follower takes it, what it lets go and how the goal follows. Built by the
+ * One route change: the plan, how the follower takes it and what it lets go. NOT the goal - that is the call's: kept or
+ * re-pointed by FRoadAgent::ApplyRouteChange (ERouteGoal), moved by UGroundTraffic::ChangeRoute. Built by the
  * factories below, one per motion, so a call site names the motion and the choices that motion leaves open, and has no
  * way to pass a field the motion does not read (a Rejoin's At to a splice, a Restart's heading to a rejoin).
  *
@@ -122,7 +127,6 @@ struct FRouteChange
 	const FRoutePlan& Plan;
 	ERouteMotion Motion;
 	ERouteRelease Release;
-	ERouteGoal Goal;
 
 	/**
 	 * Restart and Rejoin: how far along Plan the agent starts. Extend: the DRIVEN HISTORY trimmed off the front of the
@@ -137,40 +141,40 @@ struct FRouteChange
 	/** Restart: the heading the pose keeps (see ERouteMotion::Restart); unset falls back to the line's. */
 	TOptional<double> KeptHeading;
 
-	/** Every old step kept; the goal moves to the extended end. DroppedHistory: see Travelled. */
+	/** Every old step kept. DroppedHistory: see Travelled. ExtendRoute moves the goal to the extended end. */
 	static FRouteChange Extend(const FRoutePlan& InPlan, double DroppedHistory)
 	{
-		FRouteChange Change{InPlan, ERouteMotion::Extend, ERouteRelease::None, ERouteGoal::Move};
+		FRouteChange Change{InPlan, ERouteMotion::Extend, ERouteRelease::None};
 		Change.Travelled = DroppedHistory;
 		return Change;
 	}
 
-	/** The route cut to a prefix of itself, in place; the goal re-pointed at the new end. See ERouteMotion::Truncate. */
+	/** The route cut to a prefix of itself, in place. See ERouteMotion::Truncate; the rebuild re-points the goal. */
 	static FRouteChange Truncate(const FRoutePlan& InPlan)
 	{
-		return FRouteChange{InPlan, ERouteMotion::Truncate, ERouteRelease::None, ERouteGoal::Repoint};
+		return FRouteChange{InPlan, ERouteMotion::Truncate, ERouteRelease::None};
 	}
 
 	/** The steps ahead of a node replaced; the reservations for them let go. */
-	static FRouteChange Splice(const FRoutePlan& InPlan, ERouteGoal InGoal)
+	static FRouteChange Splice(const FRoutePlan& InPlan)
 	{
-		return FRouteChange{InPlan, ERouteMotion::Splice, ERouteRelease::Reservations, InGoal};
+		return FRouteChange{InPlan, ERouteMotion::Splice, ERouteRelease::Reservations};
 	}
 
 	/** From rest along InPlan. Release is the caller's: see ERouteRelease for which restart lets go of what. */
-	static FRouteChange Restart(const FRoutePlan& InPlan, ERouteRelease InRelease, ERouteGoal InGoal,
-		double InitialTravelled, TOptional<double> InKeptHeading)
+	static FRouteChange Restart(const FRoutePlan& InPlan, ERouteRelease InRelease, double InitialTravelled,
+		TOptional<double> InKeptHeading)
 	{
-		FRouteChange Change{InPlan, ERouteMotion::Restart, InRelease, InGoal};
+		FRouteChange Change{InPlan, ERouteMotion::Restart, InRelease};
 		Change.Travelled = InitialTravelled;
 		Change.KeptHeading = InKeptHeading;
 		return Change;
 	}
 
 	/** Onto InPlan at InAt, InitialTravelled along its first step, still rolling; every guideline claim let go. */
-	static FRouteChange Rejoin(const FRoutePlan& InPlan, ERouteGoal InGoal, double InitialTravelled, const FVector2D& InAt)
+	static FRouteChange Rejoin(const FRoutePlan& InPlan, double InitialTravelled, const FVector2D& InAt)
 	{
-		FRouteChange Change{InPlan, ERouteMotion::Rejoin, ERouteRelease::ReservationsAndGuidelines, InGoal};
+		FRouteChange Change{InPlan, ERouteMotion::Rejoin, ERouteRelease::ReservationsAndGuidelines};
 		Change.Travelled = InitialTravelled;
 		Change.At = InAt;
 		return Change;

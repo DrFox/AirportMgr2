@@ -22,8 +22,10 @@
 class UGroundTraffic;
 struct FClaimPass;
 // Forward declared, as parameter types only: ApplyRouteChange (Model/RouteChange.h - its callers include it) and
-// LiveTowSeedAtRest (Model/RoadGuideline.h). Neither is read by anything inline in this header.
+// LiveTowSeedAtRest (Model/RoadGuideline.h). Neither is read by anything inline in this header. An enum class with
+// an explicit underlying type forward-declares as a by-value parameter type (TrafficRules.h's precedent, #175).
 struct FRouteChange;
+enum class ERouteGoal : uint8;
 struct FGuidelineNode;
 
 /**
@@ -678,7 +680,7 @@ public:
 	 * RerouteAgent and FPlanReResolver::QueryFor here, UJobBoard::DriveVehicleTo in AirportOps and FRigYard::PlanTo
 	 * in the game module - and they had drifted: one read the follower's heading where the rest had been "aligned
 	 * 2026-09-27" by hand to LastMotion's, two left the fold unchecked. A change to how a tow is judged is made here.
-	 * ENFORCED BY: Check-Architecture rule 4 ('FTowSeed built' row) and rule 51 (no FTowSeed in AirportOps or the game module)
+	 * ENFORCED BY: Check-Architecture rule 4 ('FTowSeed built' row) and rule 53 (no FTowSeed in AirportOps or the game module)
 	 *
 	 * UNSET WHEN THERE IS NO LIVE CHAIN TO JUDGE FROM: anything without a trailer, a chain not laid one axle per link,
 	 * or a folded one - a jack-knifed tow is going nowhere, and a seed from its fold would judge a truck that cannot
@@ -696,6 +698,16 @@ public:
 	 * ENFORCED BY: Airside.Model.Tow.LiveTowSeed
 	 */
 	TOptional<FTowSeed> LiveTowSeedAtRest(const FGuidelineNode* RouteStart) const;
+
+	/**
+	 * LiveTowSeed for a tow about to REJOIN other pavement (a rebuild's rejoin, the drive-side flip, the player's
+	 * rescue - FPlanReResolver's RejoinNearby): Travelled is how far along the new plan's first step the cab is seated,
+	 * and the speed is the follower's, because RejoinTaxi carries it on - the judge drives what the agent will. It
+	 * judged from REST until the #429 review, on "from rest (RestartTaxi below)": true of the drive-side flip alone,
+	 * and that flip rejoins at speed now too.
+	 * ENFORCED BY: Airside.Model.Tow.LiveTowSeed; Check-Architecture rule 4 ('FTowSeed shaped by hand' row)
+	 */
+	TOptional<FTowSeed> LiveTowSeedJoining(double TravelledOnNewPlan) const;
 
 	/**
 	 * The plan this agent is walking, how far along it, and how fast - from whichever struct
@@ -1219,21 +1231,22 @@ public:
 	/**
 	 * THE ROUTE CHANGE, the agent's half of it (issue #429; see Model/RouteChange.h): the follower takes Change.Plan
 	 * the way Change.Motion says, the claims Change.Release names are let go from Occupancy, the wait ends unless the
-	 * motion is an Extend (arbitration cleared, stall clock reset), the engine and pose carry on as the motion says,
-	 * and the goal is kept or re-pointed. IN THAT ORDER, ONCE, for every caller - where nine operations each used to
-	 * spell their own subset.
+	 * motion is an Extend or a Truncate (arbitration cleared, stall clock reset), the engine and pose carry on as the
+	 * motion says, and the goal is kept or re-pointed as Goal says. IN THAT ORDER, ONCE, for every caller - where nine
+	 * operations each used to spell their own subset.
+	 * ENFORCED BY: Airside.Model.RouteChange.ReleaseByMotion (one row per motion)
 	 *
 	 * THE ONE DOOR to RestartTaxi, RejoinTaxi and the follower's Replace for a live agent, which is why the first two
 	 * are private below: a caller that could reach them would be a tenth aftermath.
 	 * ENFORCED BY: C++ access (RestartTaxi, RejoinTaxi); Check-Architecture rule 4 ('Follower.Replace' row)
 	 *
-	 * FALSE, NOTHING CHANGED, AND AN ERROR LOGGED for a Change whose goal MOVES: the old goal's claim, the stand-freed
-	 * flag and the new goal's departure arming and claim are UGroundTraffic's, and a goal moved here without them is
-	 * a stand claimed for ever by an agent going elsewhere. UGroundTraffic::ChangeRoute brackets this call with them.
-	 * Callers without a UGroundTraffic - FPlanReResolver's replan and the rebuild's rejoins - keep or re-point.
-	 * ENFORCED BY: Airside.Model.RouteChange.AgentAloneRefusesAGoalMove
+	 * A GOAL THAT MOVES IS NOT ASKABLE HERE: ERouteGoal has no Move. Its claims (the old goal's, the stand-freed flag,
+	 * the new goal's departure arming and claim) are UGroundTraffic's, so UGroundTraffic::ChangeRoute brackets this
+	 * call with them and passes Keep. Callers without a UGroundTraffic - FPlanReResolver's replan and the rebuild's
+	 * rejoins and truncation - keep or re-point. NOTHING TO REFUSE, SO NOTHING TO RETURN (#429 review): this was a
+	 * bool, false for a Move handed to the agent alone, and all five callers discarded it.
 	 */
-	bool ApplyRouteChange(const FRouteChange& Change, FTrafficOccupancy& Occupancy);
+	void ApplyRouteChange(const FRouteChange& Change, ERouteGoal Goal, FTrafficOccupancy& Occupancy);
 
 	/**
 	 * Sends a parked aeroplane off its stand: Phase becomes Manoeuvring. False, and leaves

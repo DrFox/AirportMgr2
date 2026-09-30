@@ -885,7 +885,8 @@ $AllowedCallers = @(
         # THE AGENT'S HALF OF THE SEAM (#429) has two production callers: UGroundTraffic::ChangeRoute (GroundTraffic.cpp),
         # which brackets it with the goal's claims, and FPlanReResolver (GroundTrafficRebuild.cpp), which has no
         # UGroundTraffic and only keeps or re-points a goal. A third caller is a route change that skips the traffic's
-        # goal bracket - and a Move handed to it alone is refused at run time (Airside.Model.RouteChange.AgentAloneRefusesAGoalMove).
+        # goal bracket - one that cannot MOVE the goal, since ERouteGoal has no Move (#429 review), but can still skip
+        # the ChangeRoute its operation should have been.
         Name        = 'FRoadAgent::ApplyRouteChange'
         Pattern     = '\bApplyRouteChange\s*\('
         ProdAllowed = @('Public\Model\RoadAgent.h', 'Private\Model\RoadAgent.cpp', 'Private\Model\GroundTraffic.cpp', 'Private\Model\GroundTrafficRebuild.cpp')
@@ -897,12 +898,26 @@ $AllowedCallers = @(
         # the seed by hand and had drifted (one heading from the follower where the rest read LastMotion; two with no
         # fold check). VehicleFit's own NextSeed is the section-to-section seed INSIDE JudgePlan - the judge carrying
         # its chain across a reverse, not a caller seeding it. Declarations and pointer/reference parameters
-        # (`const FTowSeed* Seed`) do not match: only a local constructed, a braced temporary, or an Emplace.
+        # (`const FTowSeed* Seed`) do not match: only a local constructed, a temporary - braced or `FTowSeed()` (#429
+        # review) - or an Emplace.
         Name        = 'FTowSeed built'
-        Pattern     = '\bFTowSeed\s+\w+\s*[;={(]|\bFTowSeed\s*\{|\bTowSeed\.Emplace\s*\('
+        Pattern     = '\bFTowSeed\s+\w+\s*[;={(]|\bFTowSeed\s*[({]|\bTowSeed\.Emplace\s*\('
         ProdAllowed = @('Private\Model\RoadAgent.cpp', 'Private\Model\VehicleFit.cpp')
         TestExempt  = $true
         ProdReason  = 'seed a tow''s judgement from FRoadAgent::LiveTowSeed (or LiveTowSeedAtRest for a parked tow) - a second builder is how the five copies drifted (#429, #313)'
+    },
+    @{
+        # A QUERY'S SEED IS SHAPED BY ITS BUILDER, NOT AFTER IT (#429 review). RejoinNearby took the live seed and wrote
+        # `TowSeed->Speed = 0.0` over it - "from rest (RestartTaxi below)" - which was true of one caller of three and
+        # then of none, while the agent it judged rejoined at speed. Where along a new plan the cab starts and how fast
+        # it is going are LiveTowSeedAtRest's and LiveTowSeedJoining's to say; a field written into a query's seed by
+        # hand is a sixth builder. (ExtendRoute's `Seed->Travelled -= Dropped` on its own local re-bases the seed to
+        # the TRIMMED plan it judges - a plan offset, not a guess at the pose - and is not a query's seed.)
+        Name        = 'FTowSeed shaped by hand'
+        Pattern     = '\bTowSeed\s*->\s*\w+\s*[-+*/]?=(?!=)|\bTowSeed\.GetValue\(\)\.\w+\s*[-+*/]?=(?!=)'
+        ProdAllowed = @('Private\Model\RoadAgent.cpp')
+        TestExempt  = $true
+        ProdReason  = 'take the seed whole from FRoadAgent::LiveTowSeed / LiveTowSeedAtRest / LiveTowSeedJoining - a field written into it afterwards is a second opinion on where and how fast the tow is (#429)'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -991,7 +1006,12 @@ $ranRules.Add('hand-built handles')
 # write does not allow its siblings.
 # The chain OPENS WITH A MEMBER, as the one-level pattern's did: `PrevAgent[Slot] =` is an int array
 # whose name ends in Agent, not an agent's field.
-$agentFieldPattern = '(Agent|Agents\[[A-Za-z0-9_]+\])(?<chain>\.\w+(\.\w+|\[[^\]]*\])*)\s*=[^=]'
+# AND THROUGH A POINTER, AND COMPOUND (#429 review): `Agent->Phase =` is the same write through an
+# FRoadAgent*, and `Agent.Follower.Travelled -= Dropped` - the very shape RebaseTravelled exists to
+# name - was an assignment the plain `=` could not see (`-=`, `+=`, `*=`, `/=`, `%=`, `|=`, `&=`,
+# `^=`). `(?!=)` after the `=` keeps `==` out; `<=`, `>=` and `!=` never match, because nothing
+# before their `=` is a member name or one of the compound operators.
+$agentFieldPattern = '(Agent|Agents\[[A-Za-z0-9_]+\])(?<chain>(\.|->)\w+(\.\w+|\[[^\]]*\])*)\s*[-+*/%|&^]?=(?!=)'
 # THE ONE DELIBERATE REMAINDER (issue #295): Class stays PUBLIC on FRoadAgent (see its own
 # comment in RoadAgent.h) and is set directly at its two birth sites, both in
 # GroundTraffic.cpp (DispatchArrival, AdmitDispatched). Allow-listed BY FILE AND FIELD NAME,
@@ -1010,7 +1030,11 @@ $agentFieldAllowlist = @{ 'GroundTraffic.cpp' = @('Class', 'Follower.Plan.Result
 # ApplyRouteChange) - and only as often as it does today: the three plan selections in
 # OnGraphRebuilt and ReResolvePlan's "is this the follower's plan" comparison. A fifth is a new
 # writer, and the cap says so rather than the file being waved through.
-$agentPlanAddressPattern = '&\w+\.(Follower|Pushback)\.Plan\b'
+# ANY ROOT, AN INDEX OR A POINTER (#429 review): `&Agents[i].Follower.Plan` and `&Truck->Follower.Plan`
+# take the same address. The `&` must be a unary one - not the second of `&&`, and not a binary `&`
+# after an operand (an identifier, `)` or `]`, spaces allowed): `Phase == Taxiing && Truck->Follower.Plan`
+# reads the plan, it does not take its address.
+$agentPlanAddressPattern = '(?<![\w\)\]&]\s*)&(?!&)\s*\w+(\[[^\]]*\])?(\.|->)(Follower|Pushback)\.Plan\b'
 $agentPlanAddressAllowed = @{ 'GroundTrafficRebuild.cpp' = 4 }
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.cpp')) {
@@ -1021,7 +1045,7 @@ foreach ($tree in $trees) {
             # A WHY comment naming the banned shape (this rule's own fix does, at
             # GroundTrafficRebuild.cpp) is not the shape itself - same exemption as rule 5.
             if ($h.Line.Trim().StartsWith('//')) { continue }
-            $field = [regex]::Match($h.Line, $agentFieldPattern).Groups['chain'].Value.TrimStart('.')
+            $field = [regex]::Match($h.Line, $agentFieldPattern).Groups['chain'].Value -replace '^(\.|->)', ''
             $allowedFields = $agentFieldAllowlist[$file.Name]
             if ($allowedFields -and ($allowedFields -contains $field)) { continue }
             $failures.Add("agent-field-write: $($file.FullName):$($h.LineNumber) writes FRoadAgent's $field by hand outside RoadAgent.cpp; add or use its mutator: $($h.Line.Trim())")
