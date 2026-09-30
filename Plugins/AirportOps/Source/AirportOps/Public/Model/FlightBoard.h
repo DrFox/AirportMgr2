@@ -52,6 +52,21 @@ struct FOfferVerdict
 };
 
 /**
+ * What one UFlightBoard::TickQueue did - read by UOpsRuntime's "ArrivalQueue" pass, which decides from it whether to
+ * look again (bRetry), whether the safety net stays armed (Waiting) and whether a safety run found work nobody's event
+ * covered (Cleared). Plain C++: a pass result, not state.
+ */
+struct FQueueTick
+{
+	/** Flights holding when the tick began, cleared one included. Counted paused too: holding is not paused. */
+	int32 Waiting = 0;
+	/** The flight cleared to land this tick, or null - at most one (ONE CLEARANCE A FRAME, see TickQueue). */
+	UFlight* Cleared = nullptr;
+	/** The sequencer chose a flight and the dispatch refused it - a same-frame race, retried next frame. */
+	bool bRetry = false;
+};
+
+/**
  * Every live flight, and the ONLY thing that dispatches an arrival.
  *
  * ONE DOOR. The inbox and key 7 both come through here, because two doors onto arrival is
@@ -416,13 +431,15 @@ public:
 
 	/**
 	 * Clear at most one holding flight whose runway is free - UArrivalSequencer picks which -
-	 * and dispatch it. Nothing while paused. Called every frame from UOpsRuntime::Tick.
+	 * and dispatch it. Nothing while paused. Run by UOpsRuntime's "ArrivalQueue" bus pass when an
+	 * event dirties it (ops batch 3 §5) - no longer every frame from UOpsRuntime::Tick.
 	 *
 	 * A REFUSED DISPATCH STAYS QUEUED with its stand re-held (see DispatchNow): the flight that
-	 * used to be lost at a busy ETA is now always landed eventually.
+	 * used to be lost at a busy ETA is now always landed eventually - FQueueTick::bRetry asks the
+	 * pass to look again next frame.
 	 * ENFORCED BY: AirportOps.Model.ArrivalQueue.DueWhileBusyWaitsThenLands
 	 */
-	void TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
+	FQueueTick TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
 	/** How many times TickQueue has run. For the runtime-wiring test. */
 	int32 TickQueueCallsForTest() const { return TickQueueCalls; }

@@ -81,6 +81,15 @@ public:
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnArrivalRefused, EArrivalRefusal);
 	FOnArrivalRefused OnArrivalRefused;
 
+	/** A runway's strip freed - relayed from UGroundTraffic::OnRunwayFreed, which see. AirportOps binds here
+	 *  for OnAgentPhaseChanged's reason: the airport is reached through the actor, not down into Model/. */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnRunwayFreed, FRoadSegmentId /*Seed*/);
+	FOnRunwayFreed OnRunwayFreed;
+
+	/** Stand pose nodes freed - relayed from UGroundTraffic::OnStandsFreed, which see. */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnStandsFreed, const TArray<FGuidelineNodeId>& /*PoseNodes*/);
+	FOnStandsFreed OnStandsFreed;
+
 	/** The agents themselves, for a caller that wants the model rather than the view. */
 	UGroundTraffic* GetModel() const { return Model; }
 
@@ -273,6 +282,8 @@ private:
 
 	void OnModelPhaseChanged(int32 AgentId, EAgentPhase From, EAgentPhase To);
 	void OnModelArrivalRefused(EArrivalRefusal Why);
+	void OnModelRunwayFreed(FRoadSegmentId Seed);
+	void OnModelStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes);
 
 	void SpawnView(int32 AgentId);
 	void DestroyView(int32 AgentId);

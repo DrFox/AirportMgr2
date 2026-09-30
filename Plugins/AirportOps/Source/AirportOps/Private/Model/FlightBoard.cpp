@@ -228,6 +228,14 @@ void UFlightBoard::Enqueue(UFlight& Flight, double Since)
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: #%d in queue"),
 		Flight.Id, *Flight.Callsign, Queue().Find(&Flight) + 1);
 	++RevisionCount;
+	// THE QUEUE PASS'S WAKE-UP (ops batch 3 §5): the queue is no longer ticked every frame, so a flight joining it
+	// says so. Here, the one site every Inbound flight passes through while the game runs; a load's re-queue is
+	// covered by the load's MarkAllDirty instead.
+	// ENFORCED BY: AirportOps.Model.FlightBoard.EnqueuePublishesInbound
+	if (Bus != nullptr)
+	{
+		Bus->Publish(FFlightInboundEvent{ Flight.Id, Flight.AirlineId });
+	}
 }
 
 TArray<UFlight*> UFlightBoard::Queue() const
@@ -278,27 +286,33 @@ EArrivalRefusal UFlightBoard::ClearanceFor(const UGroundTraffic& Traffic, const 
 	return Why;
 }
 
-void UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+FQueueTick UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	++TickQueueCalls;
-	if (Clock.IsPaused())
-	{
-		return;
-	}
+	FQueueTick Result;
+	// COUNTED BEFORE THE PAUSE TEST: a paused queue is still a queue, and the pass arms its safety net from this.
 	const TArray<UFlight*> Waiting = Queue();
-	if (Waiting.Num() == 0)
+	Result.Waiting = Waiting.Num();
+	if (Clock.IsPaused() || Waiting.Num() == 0)
 	{
-		return;
+		return Result;
 	}
 
 	// A HOLDING FLIGHT WITH NO STAND TAKES ONE BACK the moment one is free (review I1): the
 	// stand is what makes an accept safe, and a holder without one could land on a stand the
 	// next accept was promised. Reserve is a stand walk, no route search.
+	//
+	// A DEAD STAND COUNTS AS NONE (PR C's follow-up, done in PR D): Reapply keeps a deleted stand on the flight as
+	// HeldStandLost's evidence, and a load that found no free stand leaves it there - so an Inbound flight naming a
+	// gone stand must take one back here, the first time a stand frees, exactly as OnGraphRebuilt's load-time pass
+	// does. Reserve overwrites the dead Stand, which clears the alert by the same test.
+	// ENFORCED BY: AirportOps.Model.ArrivalQueue.DeadStandReservesWhenOneFrees
 	if (Allocator != nullptr)
 	{
 		for (UFlight* Each : Waiting)
 		{
-			if (!Each->Stand.IsSet() && Allocator->Reserve(Traffic, Network, *Each))
+			if ((!Each->Stand.IsSet() || UStandAllocator::HeldStandIsGone(*Each, Network))
+				&& Allocator->Reserve(Traffic, Network, *Each))
 			{
 				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: stand %d held again"),
 					Each->Id, *Each->Callsign, Each->Stand.Index);
@@ -318,17 +332,25 @@ void UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Networ
 		: (CanClear(*Waiting[0]) ? Waiting[0] : nullptr);
 	if (Next == nullptr)
 	{
-		return;
+		return Result;
 	}
 	// ONE CLEARANCE A FRAME: the aircraft just cleared claims the runway on its first tick, and
-	// a second clearance this frame would be decided before that claim exists.
+	// a second clearance this frame would be decided before that claim exists. The pass may run
+	// twice in one drain, so UOpsRuntime::RunArrivalQueue keeps the rule across its rounds.
+	// ENFORCED BY: AirportOps.Present.ArrivalQueue.SecondRunwayNextFrame
 	const double Held = Clock.Now() - Next->HoldingSince;
 	if (DispatchNow(Traffic, Network, *Next))
 	{
 		Clearances.Remove(Next->Id);
 		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) cleared to land after %.0f s holding"),
 			Next->Id, *Next->Callsign, FMath::Max(Held, 0.0));
+		Result.Cleared = Next;
 	}
+	else
+	{
+		Result.bRetry = true;
+	}
+	return Result;
 }
 
 bool UFlightBoard::DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight)

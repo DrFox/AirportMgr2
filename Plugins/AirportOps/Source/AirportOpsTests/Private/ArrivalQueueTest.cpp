@@ -315,4 +315,32 @@ bool FQueueReholdTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueDeadStandTest, "AirportOps.Model.ArrivalQueue.DeadStandReservesWhenOneFrees",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueDeadStandTest::RunTest(const FString& Parameters)
+{
+	// PR C'S FOLLOW-UP: a holding flight whose stand was DELETED keeps the dead Stand (HeldStandLost's evidence), so
+	// "no stand" alone never re-reserved it - it waited on a stand that will never come back. A dead stand is no stand.
+	FQueueRig Rig(2);
+	Rig.HoldRunway();
+	UFlight* Holding = Rig.Accepted(1.0);
+	UFlight* Later = Rig.Accepted(100000.0);
+	if (!TestTrue(TEXT("both accepted, one stand each"), Holding != nullptr && Later != nullptr
+		&& Holding->Stand.IsSet() && Later->Stand.IsSet() && Holding->Stand != Later->Stand)) { return false; }
+	Rig.Clock->Advance(2.0);
+	if (!TestEqual(TEXT("the first is holding"), Holding->Phase, EFlightPhase::Inbound)) { return false; }
+
+	const FEntityInstanceId Dead = Holding->Stand;
+	Rig.Airport.Net->RemoveEntity(Dead);
+	TestTrue(TEXT("its stand is gone"), UStandAllocator::HeldStandIsGone(*Holding, *Rig.Airport.Net));
+	Rig.Tick();
+	TestEqual(TEXT("no stand is free, so it keeps the dead one"), Holding->Stand, Dead);
+
+	Rig.Traffic->ReleaseHold(Later->HolderId());
+	Rig.Tick();
+	TestEqual(TEXT("a stand frees: the holding flight takes it"), Holding->Stand, Later->Stand);
+	TestTrue(TEXT("and holds it"), Rig.StandHeldFor(*Holding));
+	return true;
+}
+
 #endif

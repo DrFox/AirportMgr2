@@ -341,6 +341,38 @@ void UOpsRuntime::WireBus()
 		}
 	});
 
+	// THE ARRIVAL QUEUE, as a pass (ops batch 3 §5) - see RunArrivalQueue. After the job board's pass and before the
+	// alerts', so a dispatch and the alerts that read it land in the same round. Every dirtier below is an event that
+	// can let a holding flight land; each goes through DirtyArrivalQueue, which is how a safety run knows it was not
+	// asked for. AFTER THE CLOCK in Tick, still: a flight that came due this frame publishes FlightInbound from the
+	// clock's callback, so it is holding and can be cleared this frame if its runway is free.
+	// ENFORCED BY: AirportOps.Present.ArrivalQueue.EachEventDirtiesIt
+	Bus.RegisterPass(TEXT("ArrivalQueue"), [this]() { RunArrivalQueue(); });
+	// A RUNWAY OR A STAND FREED: what a holding flight waits for (Airside's diff, bridged in Attach).
+	Bus.Subscribe<FRunwayFreedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FRunwayFreedEvent&) { DirtyArrivalQueue(); });
+	Bus.Subscribe<FStandsFreedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FStandsFreedEvent&) { DirtyArrivalQueue(); });
+	// AN ACCEPT: a zero-lead accept (key 7's AcceptImmediate) is due at once, and the queue re-reserves.
+	Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FOfferAcceptedEvent&) { DirtyArrivalQueue(); });
+	// A FLIGHT JOINS THE QUEUE - its ETA came (UFlightBoard::Enqueue).
+	Bus.Subscribe<FFlightInboundEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FFlightInboundEvent&) { DirtyArrivalQueue(); });
+	// THE PLAYER BUILT OR DELETED something: a new stand, exit or runway may be the one a flight was refused for.
+	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FNetworkChangedEvent&) { DirtyArrivalQueue(); });
+	// A REOPEN admits the queue again (a closure cancels it through the flight board's handler above).
+	Bus.Subscribe<FAirportStatusChangedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FAirportStatusChangedEvent&) { DirtyArrivalQueue(); });
+	// A RESUME: TickQueue clears nobody while paused, and a pass run then has consumed its dirt - so the speed change
+	// that un-pauses is itself a dirtier. Not in the spec's list; its omission would hold the queue until the net.
+	// ENFORCED BY: AirportOps.Present.ArrivalQueue.EachEventDirtiesIt ("a resume")
+	Bus.Subscribe<FSpeedChangedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FSpeedChangedEvent&) { DirtyArrivalQueue(); });
+	// THE NEW AGENT'S ARRIVING, the other half of ONE CLEARANCE A FRAME: after a dispatch the pass does not re-dirty
+	// itself; this does, and RunArrivalQueue defers it to the next frame - so a second runway gets its flight then.
+	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FAgentPhaseEvent& E)
+	{
+		if (E.To == EAgentPhase::Arriving)
+		{
+			DirtyArrivalQueue();
+		}
+	});
+
 	// A REOPEN FORGETS EVERY AIRLINE'S VERDICT (review M1): while closed no airline was judged, so a verdict from
 	// before the closure is stale - the player may have built what it wanted. Sim, so the alerts pass this change
 	// dirties reads the forgotten state; the next offer minute judges afresh.
@@ -512,6 +544,80 @@ void UOpsRuntime::OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why)
 		Pricing->Format(Ledger->Balance()).ToString() });
 }
 
+void UOpsRuntime::DirtyArrivalQueue()
+{
+	bQueueCovered = true;
+	Bus.MarkDirty(TEXT("ArrivalQueue"));
+}
+
+void UOpsRuntime::RunArrivalQueue()
+{
+	UGroundTraffic* Model = LiveModel();
+	if (Model == nullptr)
+	{
+		return;
+	}
+	// ONE CLEARANCE A FRAME, ACROSS ROUNDS: the Arriving event of the flight just cleared is dispatched in this same
+	// drain's next round and dirties the pass again; a second clearance now would be decided in the frame the first
+	// was, which TickQueue's own rule exists to prevent. Deferred, not dropped - and bQueueCovered is left set, so
+	// the deferred run is still one an event asked for.
+	if (QueueClearedFrame == DrainFrame)
+	{
+		Bus.MarkDirtyNextDrain(TEXT("ArrivalQueue"));
+		return;
+	}
+	const bool bSafetyOnly = bQueueSafetyDue && !bQueueCovered;
+	bQueueSafetyDue = false;
+	bQueueCovered = false;
+
+	const FQueueTick Result = FlightBoard->TickQueue(*Model, *Target->Network, *Clock);
+	if (Result.Cleared != nullptr)
+	{
+		QueueClearedFrame = DrainFrame;
+		if (bSafetyOnly)
+		{
+			// THE DEFECT, NAMED: nothing published said this flight could land, yet it could. Whatever freed its
+			// runway or stand needs an event (or a DirtyArrivalQueue) of its own.
+			UE_LOG(LogOpsBus, Warning, TEXT("safety pass dispatched flight %d (%s) - no event covered it"),
+				Result.Cleared->Id, *Result.Cleared->Callsign);
+		}
+	}
+	if (Result.bRetry)
+	{
+		// A DISPATCH REFUSED in a same-frame race (UFlightBoard::DispatchNow): retried next frame, never dropped.
+		Bus.MarkDirtyNextDrain(TEXT("ArrivalQueue"));
+	}
+	ArmQueueSafetyNet(Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
+}
+
+void UOpsRuntime::ArmQueueSafetyNet(bool bWaiting)
+{
+	if (bWaiting && QueueSafetyHandle == INDEX_NONE)
+	{
+		QueueSafetyHandle = Clock->Every(QueueSafetySeconds, [this]()
+		{
+			bQueueSafetyDue = true;
+			Bus.MarkDirty(TEXT("ArrivalQueue"));
+		});
+	}
+	else if (!bWaiting && QueueSafetyHandle != INDEX_NONE)
+	{
+		Clock->Cancel(QueueSafetyHandle);
+		QueueSafetyHandle = INDEX_NONE;
+	}
+}
+
+void UOpsRuntime::OnRunwayFreed(FRoadSegmentId Seed)
+{
+	// PUBLISHED, NOT HANDLED - OnAgentPhase's reason: this runs inside UGroundTraffic's Advance.
+	Bus.Publish(FRunwayFreedEvent{ Seed });
+}
+
+void UOpsRuntime::OnStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes)
+{
+	Bus.Publish(FStandsFreedEvent{ PoseNodes });
+}
+
 void UOpsRuntime::ArmJobBoardDeadline()
 {
 	if (JobBoardDeadlineHandle != INDEX_NONE)
@@ -545,6 +651,11 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	UAirsideTraffic* Traffic = Target->GetTraffic();
 	PhaseHandle = Traffic->OnAgentPhaseChanged.AddUObject(this, &UOpsRuntime::OnAgentPhase);
 	RefusalHandle = Traffic->OnArrivalRefused.AddUObject(this, &UOpsRuntime::OnArrivalRefused);
+	// AIRSIDE'S DERIVED FREEDOM (ops batch 3 §5) - Airside never learns ops exists; it fires native delegates and
+	// this bridges them, like the two above.
+	// ENFORCED BY: AirportOps.Present.Bus.FreedIsBridged
+	RunwayFreedHandle = Traffic->OnRunwayFreed.AddUObject(this, &UOpsRuntime::OnRunwayFreed);
+	StandsFreedHandle = Traffic->OnStandsFreed.AddUObject(this, &UOpsRuntime::OnStandsFreed);
 
 	// Content is resolved ONCE, here, and applied to the clock and the ledger.
 	if (Catalog->Num() == 0)
@@ -745,6 +856,9 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	}
 
 	ApplySpeed(Clock->GetSpeed());
+	// EVERY PASS ONCE after an attach, as after a load (spec 2026-09-29 §4): nothing that is true of the airport now
+	// arrived as an event. The first NetworkChanged used to be the only catch-up; this says so where the attach is.
+	Bus.MarkAllDirty();
 	UE_LOG(LogAirportOps, Log, TEXT("OpsRuntime attached to %s"), *Target->GetName());
 }
 
@@ -785,6 +899,8 @@ void UOpsRuntime::Detach()
 	{
 		Target->GetTraffic()->OnAgentPhaseChanged.Remove(PhaseHandle);
 		Target->GetTraffic()->OnArrivalRefused.Remove(RefusalHandle);
+		Target->GetTraffic()->OnRunwayFreed.Remove(RunwayFreedHandle);
+		Target->GetTraffic()->OnStandsFreed.Remove(StandsFreedHandle);
 	}
 	if (UpkeepHandle != INDEX_NONE)
 	{
@@ -802,6 +918,7 @@ void UOpsRuntime::Detach()
 		Clock->Cancel(JobBoardDeadlineHandle);
 		JobBoardDeadlineHandle = INDEX_NONE;
 	}
+	ArmQueueSafetyNet(false);
 	SeenNetwork.Reset();
 	// THE BUS POINTERS GO WITH THE ATTACH: the bus is this runtime's, and a subobject left pointing at it
 	// after a detach is a publish into whatever comes next (stage 3 review). Every one Attach set.
@@ -850,7 +967,8 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 
 	// ONE DRAIN, after the clock: the queue holds Airside's events from the motion tick in publish
 	// order, then anything the clock just fired - so a flight that came due this frame is handled
-	// this frame (spec 2026-09-29 §1).
+	// this frame (spec 2026-09-29 §1). Counted, for the arrival queue's ONE CLEARANCE A FRAME.
+	++DrainFrame;
 	Bus.Drain();
 
 	if (Target != nullptr)
@@ -878,9 +996,9 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 				// UFlightBoard::TickOffers. It checks the pause itself.
 				FlightBoard->TickOffers(*Model, *Target->Network, *Clock, RealDeltaSeconds);
 
-				// AFTER the clock advanced, so a flight that came due this frame is already
-				// holding and can be cleared this frame if its runway is free.
-				FlightBoard->TickQueue(*Model, *Target->Network, *Clock);
+				// NO FlightBoard->TickQueue HERE since ops batch 3 PR D: it is the bus's "ArrivalQueue" pass, run by
+				// the drain above when an event dirties it - see WireBus and RunArrivalQueue.
+				// ENFORCED BY: Check-Architecture rule 33 (queue-is-a-pass), AirportOps.Present.ArrivalQueue.QuietQueueRunsNothing
 			}
 		}
 	}
@@ -1196,9 +1314,15 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	}
 	// THE REPEATERS TOO, from the loaded Now - see RearmRepeatingSchedules (review I1).
 	RearmRepeatingSchedules();
+	// AND THE QUEUE'S SAFETY NET, for the same reason: its entry was booked against the pre-load clock. Cancelled;
+	// the MarkAllDirty below runs the pass, which re-arms it if the loaded queue holds anyone.
+	ArmQueueSafetyNet(false);
 
 	// EVERY PASS ONCE after a load - the one catch-up, since nothing that happened before the load
 	// is an event any more (spec 2026-09-29 §4). No passes exist until stage 3; the rule is here first.
+	// THE ARRIVAL QUEUE'S among them: a flight #404 re-queued (DemoteRestoredMidFlight) joins the queue
+	// with no FlightInbound of its own, and is dispatched by this run.
+	// ENFORCED BY: AirportOps.Present.ArrivalQueue.EachEventDirtiesIt ("a load")
 	Bus.MarkAllDirty();
 
 	ApplySpeed(Clock->GetSpeed());
