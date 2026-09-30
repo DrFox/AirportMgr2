@@ -98,6 +98,9 @@ struct AIRSIDE_API FRunwayMarkingBuilder
 	 * every stylised airport gets wrong.
 	 */
 	static constexpr double RubberAcrossFraction = 0.55;
+	/** UV1.X on a rubber vertex laid on GRASS; paved rubber keeps AddQuad's 0. M_RunwayRubber
+	 *  steps at 0.5, so the value is a tag, not a blend. */
+	static constexpr float GrassRubberTag = 1.f;
 
 	// --- Grass: 0.6 m markers every 60 m along both edges, 3 m squares at the corners.
 	static constexpr double GrassMarker = 60.0;
@@ -123,7 +126,7 @@ struct AIRSIDE_API FRunwayMarkingBuilder
 		FRunwayMarkingCensus* Census = nullptr);
 
 	/**
-	 * Append the tyre rubber of every paved runway in Network to Out, in the road plane at
+	 * Append the tyre rubber of every runway in Network to Out, in the road plane at
 	 * Z. Returns how many patches were laid; Census, when given, has RubberPatches set.
 	 *
 	 * A SEPARATE BUFFER FROM Build, and that is not an implementation detail. The rubber is
@@ -142,8 +145,8 @@ struct AIRSIDE_API FRunwayMarkingBuilder
 	 * marking is specified and half of one is not it. Rubber has no standard and no
 	 * specified length; a short runway does not have less rubber, it has a shorter patch.
 	 *
-	 * Grass strips get none: rubber on grass is a rut, not a stain, and that is a different
-	 * feature.
+	 * Grass strips get the same bands, with UV1.X = GrassRubberTag on every vertex: on grass
+	 * the mark is worn earth, not a stain, and the material draws it so. Paved bands keep 0.
 	 */
 	static int32 BuildRubber(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out,
 		FRunwayMarkingCensus* Census = nullptr);

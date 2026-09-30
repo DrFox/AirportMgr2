@@ -382,16 +382,28 @@ int32 FRunwayMarkingBuilder::BuildRubber(const URoadNetwork& Network, double Z,
 	ForEachRunway(Network, [&](const FRunwayFrame& Frame, const FRunwayFrame& Far, const FRunwayFacts& Facts)
 	{
 		++Runways;
-		if (Facts.Surface == EPavement::Grass)
-		{
-			return;
-		}
 
 		// NOT gated on the approach class, unlike the aiming point and the touchdown zone.
 		// Those are paint, and paint is specified per class; rubber is deposited by whatever
 		// lands, and a visual runway is landed on exactly as hard as a precision one.
+		const int32 FirstVertex = Out.Positions.Num();
 		C.RubberPatches += RubberBands(Out, Z, Frame);
 		C.RubberPatches += RubberBands(Out, Z, Far);
+
+		// GRASS IS TAGGED, not skipped (2026-09-30; it used to return early). A grass strip's
+		// touchdown zone is worn to earth the way a paved one is blackened, and the bands are
+		// the same shape because the wheels land in the same place. What differs is only the
+		// colour of the mark, which is the material's call: UV1.X = 1 says "turf", 0 "paved".
+		// A tag and not a second component, because M_RunwayRubber is translucent and one
+		// material over every surface is the reason it is (build_rubber_material.py).
+		// ENFORCED BY: Airside.Build.RunwayRubber.GrassIsTagged
+		if (Facts.Surface == EPavement::Grass)
+		{
+			for (int32 Index = FirstVertex; Index < Out.UV1.Num(); ++Index)
+			{
+				Out.UV1[Index].X = GrassRubberTag;
+			}
+		}
 	});
 	return Runways;
 }

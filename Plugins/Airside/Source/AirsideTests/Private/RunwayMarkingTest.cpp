@@ -474,16 +474,17 @@ bool FRunwayRubberTest::RunTest(const FString& Parameters)
 }
 
 /**
- * A grass strip has no rubber: rubber on grass is a rut, which is a different feature.
+ * A grass strip gets the SAME bands as a paved one, every vertex tagged UV1.X =
+ * GrassRubberTag so M_RunwayRubber draws worn earth there instead of a black stain.
+ * (Until 2026-09-30 grass got none, and this test asserted that absence.)
  *
- * WITH A CONTROL, because the obvious form of this test passes on a builder that lays no
- * rubber at all - it did exactly that against the stub this was written before. Asserting
- * an absence proves nothing unless the same call is shown to produce a presence when the
- * one thing under test changes.
+ * WITH A CONTROL: the tag is only proven to mean "grass" if the identical paved runway lays
+ * the same number of bands and leaves every one of them at 0. A builder that tagged every
+ * rubber vertex would pass the grass half alone.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRunwayRubberGrassTest,
-	"Airside.Build.RunwayRubber.NotOnGrass",
+	"Airside.Build.RunwayRubber.GrassIsTagged",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FRunwayRubberGrassTest::RunTest(const FString& Parameters)
@@ -492,16 +493,27 @@ bool FRunwayRubberGrassTest::RunTest(const FString& Parameters)
 	FRoadMeshBuffers Rubber;
 	FRunwayMarkingCensus Census;
 	B::BuildRubber(*Grass, 0.0, Rubber, &Census);
-	TestEqual(TEXT("no rubber on a grass strip"), Census.RubberPatches, 0);
-	TestEqual(TEXT("and no geometry at all"), Rubber.Positions.Num(), 0);
+	TestEqual(TEXT("a grass strip is worn where it is landed on: two bands at each end"), Census.RubberPatches, 4);
+	TestTrue(TEXT("with geometry"), Rubber.Positions.Num() > 0);
+	int32 Untagged = 0;
+	for (const FVector2f& UV : Rubber.UV1)
+	{
+		Untagged += UV.X == B::GrassRubberTag ? 0 : 1;
+	}
+	TestEqual(TEXT("every grass rubber vertex carries the turf tag"), Untagged, 0);
 
 	// THE CONTROL. Identical runway, tarmac instead of grass.
 	URoadNetwork* Paved = MakeRunwayNetwork(200000.0, 4500.0, Facts(EPavement::Tarmac, ERunwayApproach::Visual));
 	FRoadMeshBuffers PavedRubber;
 	FRunwayMarkingCensus PavedCensus;
 	B::BuildRubber(*Paved, 0.0, PavedRubber, &PavedCensus);
-	TestTrue(TEXT("the same runway paved DOES get rubber, so the surface is what suppressed it"),
-		PavedCensus.RubberPatches > 0);
+	TestEqual(TEXT("the same runway paved lays the same bands"), PavedCensus.RubberPatches, Census.RubberPatches);
+	int32 Tagged = 0;
+	for (const FVector2f& UV : PavedRubber.UV1)
+	{
+		Tagged += UV.X == 0.f ? 0 : 1;
+	}
+	TestEqual(TEXT("and tags none of them, so the surface is what set the tag"), Tagged, 0);
 	return true;
 }
 
