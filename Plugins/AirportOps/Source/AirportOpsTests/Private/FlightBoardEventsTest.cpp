@@ -12,6 +12,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "OpsTransitionTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -75,13 +76,13 @@ namespace
 			Flight->AcceptedAt = AcceptedAt;
 			Flight->ContractSeconds = ContractSeconds;
 			Board->AddOffer(*Clock, Flight);
-			Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Arriving, EAgentPhase::Taxiing);
-			Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Taxiing, EAgentPhase::Parked);
-			Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Parked, EAgentPhase::Manoeuvring);
-			Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing);
+			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Arriving, EAgentPhase::Taxiing, EAgentEvent::Vacated));
+			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
+			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Parked, EAgentPhase::Manoeuvring, EAgentEvent::DepartOrdered));
+			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
 			// THE CLOCK AT TAKE-OFF, set only now: AirborneAt is taken on the Departing change.
 			Clock->StartAtHour(Now / 3600.0);
-			Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Taxiing, EAgentPhase::Departing);
+			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentEvent::LinedUp));
 			return Flight;
 		}
 	};

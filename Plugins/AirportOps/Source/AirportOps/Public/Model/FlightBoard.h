@@ -20,6 +20,7 @@ class FOpsEventBus;
 class UPricing;
 class USimClock;
 enum class EAgentPhase : uint8;
+struct FAgentTransition;
 enum class ECancelReason : uint8;
 
 /**
@@ -374,7 +375,7 @@ public:
 	 * The flight whose aeroplane the player is about to despawn ends CANCELLED, into history -
 	 * spec 2026-09-29-unstick-agent. CALLED BEFORE UGroundTraffic::RetireAgent, never after: this
 	 * unhooks the agent, so the Gone that follows finds no flight and cannot book it Departed
-	 * (FlightPhaseFromAgent reads Gone as a departure, which for a retired aeroplane is a lie).
+	 * (FlightPhaseFromTransition books Retired as a departure, which for a retired aeroplane is a lie).
 	 * No money moves: fees already posted stay posted. False when the agent flies no flight.
 	 * ENFORCED BY: AirportOps.Model.AgentRescue.AircraftDespawnCancelsFlight
 	 */
@@ -470,9 +471,12 @@ public:
 	 * say when it happened would break the roll-up and the determinism test both. The sibling
 	 * UJobBoard::OnAgentPhase already takes one, so this is the neighbouring shape rather
 	 * than a second way of getting at the time.
+	 *
+	 * NO TRAFFIC MODEL since #436: the flight's phase follows the transition's Cause (FlightPhaseFromTransition) and
+	 * the stand it parked on is its GoalAtEvent. It used to take the model to read the live agent - Phase, GoalNode,
+	 * bDepartureArmed - a drain after the change, and an unused parameter is an invitation to read it again.
 	 */
-	void OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwork& Network,
-		const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To);
+	void OnAgentPhase(const URoadNetwork& Network, const USimClock& Clock, const FAgentTransition& Transition);
 
 	/**
 	 * Re-make every Accepted and Inbound flight's stand hold (UStandAllocator::Reapply), HoldLast's after all the

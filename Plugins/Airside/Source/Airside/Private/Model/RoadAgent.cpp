@@ -660,6 +660,14 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		{
 			LastMotion = DescribeMotion(At, Heading, Altitude, Pitch);
 			OutMotion = LastMotion;
+			// THE WHEELS MET THE RUNWAY ON THIS CALL - a moment, the phase stays Arriving (#446). Reported here, the
+			// call it happened on, because FLandingRun::bTouchedDown is cleared on the next: a reader after a frame
+			// of several substeps found it cleared and the smoke never came.
+			// ENFORCED BY: Airside.Present.TouchdownShownOncePerLanding
+			if (Arrival.bTouchedDown)
+			{
+				OutEvent = EAgentEvent::TouchedDown;
+			}
 			return true;
 		}
 
@@ -794,7 +802,11 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// PULLED OUT TO TryArmReverseLeg (issue #174 - Advance was 462 lines, and the scan
 		// plus both its outcomes were the largest single piece). See that declaration for
 		// what "handled the frame" means and why the scan itself is not cached here.
-		if (Phase == EAgentPhase::Taxiing && TryArmReverseLeg(At, Heading, OutMotion))
+		//
+		// NOT ON A CALL THAT ALREADY HANDED OVER (#436): OutEvent names one handover, and the vacate or the push's end
+		// has just made it - see the Follower.HasArrived() block below for the same rule and its reason.
+		if (OutEvent == EAgentEvent::None && Phase == EAgentPhase::Taxiing
+			&& TryArmReverseLeg(At, Heading, OutMotion, OutEvent))
 		{
 			return true;
 		}
@@ -828,7 +840,14 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			OutMotion = LastMotion;
 		}
 
-		if (Follower.HasArrived())
+		// ONE HANDOVER PER CALL (#436). A vacate or a push's end that fell through into this arm has already made this
+		// call's handover and named it in OutEvent; the arrival below is a SECOND, and made here it went out under the
+		// first one's name - a vacate onto a taxi-in a rebuild had killed went Arriving -> Stranded reporting Vacated,
+		// so the listener was told of a taxi that never ran. It waits for the next Advance call instead - the next
+		// SUBSTEP, not the next frame - with the agent where the follower left it on this one (a dead plan did not move
+		// it; a live one this short parks one substep late, stood still).
+		// ENFORCED BY: Airside.Model.RoadAgent.EveryPhaseChangeNamesItsEvent
+		if (OutEvent == EAgentEvent::None && Follower.HasArrived())
 		{
 			// HOLDING FOR A NEW WAY TO THE RUNWAY - see bTaxiOutStale. Neither a take-off nor a
 			// park: UGroundTraffic::ReplanHeldTaxiOuts restarts the taxi from here when it can.
@@ -893,6 +912,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 				// stand re-offer redirects it.
 				// ENFORCED BY: Airside.Model.Traffic.StrandedIsNotParked
 				Phase = EAgentPhase::Stranded;
+				OutEvent = EAgentEvent::Stranded;
 				Follower.Speed = 0.0;
 				LastMotion = DescribeMotion(FollowAt, FollowHeading);
 				OutMotion = LastMotion;
@@ -949,6 +969,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		if (Follower.Plan.Result == ERouteResult::Unreachable)
 		{
 			Phase = EAgentPhase::Stranded;
+			OutEvent = EAgentEvent::Stranded;
 			ResumeStep = INDEX_NONE;
 			Follower.Speed = 0.0;
 			// The run's own speed too: DescribeMotion answers Stranded with zero, but a reader of the run itself
@@ -1020,6 +1041,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		}
 
 		Phase = EAgentPhase::Taxiing;
+		OutEvent = EAgentEvent::BackedOut;
 		Follower.Start(Remainder, Chassis(), 0.0, LastMotion.Heading);
 
 		// AND ONE WHEELBASE IN, because the two phases measure DIFFERENT AXLES along their
@@ -1207,7 +1229,7 @@ bool FRoadAgent::ReverseSpanSteps(int32& OutFirst, int32& OutLast) const
 	return Count > 0 && OutFirst >= 0 && Follower.Plan.Steps.IsValidIndex(OutLast);
 }
 
-bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMotion& OutMotion)
+bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMotion& OutMotion, EAgentEvent& OutEvent)
 {
 	int32 From = INDEX_NONE;
 	int32 To = INDEX_NONE;
@@ -1254,7 +1276,7 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 	// A VEHICLE WITH A TRAILER backs through TowReverse instead - solved from where its chain IS.
 	if (Vehicle.HasTrailer())
 	{
-		return TryArmTowReverse(Span, To, At, Heading, OutMotion);
+		return TryArmTowReverse(Span, To, At, Heading, OutMotion, OutEvent);
 	}
 
 	if (Reverse.Start(Span, Chassis(), ReverseSpeed))
@@ -1263,6 +1285,7 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 		// Follower.Plan is what it is read from.
 		ResumeStep = Follower.Plan.Steps.IsValidIndex(To + 1) ? To + 1 : INDEX_NONE;
 		Phase = EAgentPhase::Reversing;
+		OutEvent = EAgentEvent::BackingIn;
 		// A WAIT AT THE SPAN'S START ENDS HERE, so the next one is said again (see the gate above).
 		LastReverseRefusal.Reset();
 
@@ -1325,7 +1348,7 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 }
 
 bool FRoadAgent::TryArmTowReverse(const FRoutePlan& Span, int32 To, const FVector2D& At, double Heading,
-	FAgentMotion& OutMotion)
+	FAgentMotion& OutMotion, EAgentEvent& OutEvent)
 {
 	FString Reason;
 	TowReverse.Start(Span, Vehicle, At, Heading, TowAxles, ReverseSpeed, &Reason);
@@ -1351,6 +1374,7 @@ bool FRoadAgent::TryArmTowReverse(const FRoutePlan& Span, int32 To, const FVecto
 	{
 		ResumeStep = Follower.Plan.Steps.IsValidIndex(To + 1) ? To + 1 : INDEX_NONE;
 		Phase = EAgentPhase::Reversing;
+		OutEvent = EAgentEvent::BackingIn;
 		// Zeroed for the reason the rigid arm gives: DescribeMotion must not read taxi speed.
 		Follower.Speed = 0.0;
 		LastReverseRefusal.Reset();

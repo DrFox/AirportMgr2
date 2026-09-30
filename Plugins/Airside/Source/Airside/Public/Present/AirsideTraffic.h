@@ -72,8 +72,12 @@ public:
 	 * RELAYED from UGroundTraffic::OnAgentPhaseChanged. AirportOps binds HERE, not to the
 	 * model: the game module reaches the airport through the actor, and a subscriber that
 	 * had to walk down into Model/ would be reaching past the composition root.
+	 *
+	 * THE MODEL'S OWN SIGNATURE, the whole FAgentTransition (#436): the relay passes the value on and adds nothing,
+	 * so the Cause the model built reaches ops unchanged - a relay that re-packed it would be the second place a
+	 * transition is described.
 	 */
-	DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnAgentPhaseChanged, int32 /*AgentId*/, EAgentPhase /*From*/, EAgentPhase /*To*/);
+	using FOnAgentPhaseChanged = UGroundTraffic::FOnAgentPhaseChanged;
 	FOnAgentPhaseChanged OnAgentPhaseChanged;
 
 	/** Fired when DispatchArrival refuses, with the planner's reason. Relayed from the model,
@@ -237,6 +241,13 @@ public:
 	FVector2D LastAgentPositionForTest() const;
 
 	/**
+	 * Touchdowns this presenter has shown since it was made: one per landing, counted whether or not a smoke
+	 * component is set (a world-free test has none). Read across frames of several substeps by
+	 * Airside.Present.TouchdownShownOncePerLanding (#446) - the landing whose smoke a per-frame poll lost.
+	 */
+	int32 TouchdownsShownForTest() const { return TouchdownsShown; }
+
+	/**
 	 * Turns a jittering real frame delta into the even step the display will present. Moved
 	 * here from ARoadNetworkActor by issue #80 - see FFrameDeltaSmoother's own header for the
 	 * algorithm, the WHY, and the two 2026-09-13 fixes. The only caller is
@@ -284,7 +295,13 @@ private:
 	 *  already is - a fresh UAirsideTraffic gets a freshly zeroed one for free. */
 	FFrameDeltaSmoother DeltaSmoother;
 
-	void OnModelPhaseChanged(int32 AgentId, EAgentPhase From, EAgentPhase To);
+	/** See TouchdownsShownForTest. A session counter: not saved, not a UPROPERTY. */
+	int32 TouchdownsShown = 0;
+
+	void OnModelPhaseChanged(const FAgentTransition& Transition);
+
+	/** One touchdown moment's smoke, at the pose the moment carries - see UGroundTraffic::GetMomentsThisAdvance. */
+	void ShowTouchdown(const FAgentTransition& Moment);
 	void OnModelArrivalRefused(EArrivalRefusal Why);
 	void OnModelRunwayFreed(FRoadSegmentId Seed);
 	void OnModelStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes);

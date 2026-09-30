@@ -129,7 +129,7 @@ enum class EAgentEvent : uint8
 	Vacated,
 	/** Taxiing -> Departing: reached the threshold with a departure armed, rolling. */
 	LinedUp,
-	/** Taxiing -> Parked: the taxi is over, the turnaround starts. */
+	/** Taxiing (or Reversing) -> Parked: the taxi is over, the turnaround starts. */
 	Parked,
 	/** Manoeuvring -> Taxiing: off the stand and aligned, the taxi out starts. */
 	PushedBack,
@@ -137,7 +137,64 @@ enum class EAgentEvent : uint8
 	Airborne,
 	/** Departing -> Gone: the climb cleared. See this enum's own comment on why it is here
 	 *  despite Advance's `return false` already saying so. */
-	Gone
+	Gone,
+
+	// ---- #436: APPENDED, so no value above moves. The rest of Advance's handovers first, then the causes a
+	// UGroundTraffic OPERATION gives the transition it makes - one enum for both, because the outward
+	// FAgentTransition carries one Cause whichever of the two made it, and a consumer switches on it once.
+
+	/** Taxiing or Reversing -> Stranded: the route died under it (a rebuild's Strand). Not Parked - issue #396. */
+	Stranded,
+	/** Taxiing -> Reversing: a service vehicle reached a reverse leg and armed it (FRoadAgent::TryArmReverseLeg). */
+	BackingIn,
+	/** Reversing -> Taxiing: the reverse leg is played out and the taxi resumes on what is left of the route. */
+	BackedOut,
+	/**
+	 * Still Arriving: the wheels met the runway (FLandingRun::bTouchedDown). A MOMENT, like Airborne - no phase moves -
+	 * so UGroundTraffic collects it per Advance (GetMomentsThisAdvance) rather than broadcasting it as a phase change.
+	 * #446: the flag is an edge one substep long, and the presenter's once-a-frame read lost it at x4 and up.
+	 */
+	TouchedDown,
+	/** Gone -> the phase it was born in: UGroundTraffic admitted a new agent (a dispatch or an arrival). */
+	Dispatched,
+	/** A new route from UGroundTraffic::RedirectAgent, for no reason more specific than a caller's choice. */
+	Redirected,
+	/** UGroundTraffic::ReofferStands sent an aircraft waiting for a stand to one that freed - still its taxi IN. */
+	ReOffered,
+	/** The player's Unstick moved a stuck agent: UGroundTraffic::RescueStranded, or a redirect on the player's behalf. */
+	Rescued,
+	/** UGroundTraffic::DepartAgent sent a parked aircraft off for a runway - a push, or straight out: its taxi OUT. */
+	DepartOrdered,
+	/** UGroundTraffic::RetireAgent removed the agent: a despawn, or a vehicle sent home for good. Not a departure. */
+	Retired,
+	/** UGroundTraffic::ClearAgents removed every agent (a load, a cleared network). Not a departure either. */
+	Cleared
+};
+
+/**
+ * ONE AGENT'S TRANSITION, as UGroundTraffic announces it (OnAgentPhaseChanged) - the facts its publisher decided on,
+ * built where the transition was made (#436).
+ *
+ * WHY THE CAUSE TRAVELS: ops hears this a drain later (the bus), and the agent has moved on by then. Before this the
+ * event was (Id, From, To) and every consumer re-read the LIVE agent to recover why - three reads in UFlightBoard to
+ * tell a taxi in from a taxi out, bDepartureArmed read live in UJobBoard - each correct only while nothing moved in
+ * between. Cause and GoalAtEvent are true of the moment the transition was made, however late it is read.
+ *
+ * NOT A USTRUCT: it never meets reflection - a native delegate's argument and a value on the ops bus.
+ */
+struct FAgentTransition
+{
+	int32 AgentId = INDEX_NONE;
+	EAgentPhase From = EAgentPhase::Gone;
+	EAgentPhase To = EAgentPhase::Gone;
+	/** Why. None only for an announcement nothing named - which UGroundTraffic logs as the defect it is. */
+	EAgentEvent Cause = EAgentEvent::None;
+	/** The agent's GoalNode when the transition was made: for Parked the node it parked ON, for a redirect its new goal. */
+	FGuidelineNodeId GoalAtEvent;
+	/** Where it stood then, road plane, and which way it faced - the pose a moment is drawn at (touchdown smoke), since
+	 *  by the end of a frame of several substeps the agent is somewhere else. */
+	FVector2D At = FVector2D::ZeroVector;
+	double Heading = 0.0;
 };
 
 /**
@@ -1225,6 +1282,16 @@ public:
 	 * what happened instead of diffing Phase (or, for the climb, a takeoff sub-phase nothing
 	 * outside this function used to have a name for) before and after the call itself.
 	 *
+	 * SINCE #436 THE REST TOO: Taxiing or Reversing -> Stranded, Taxiing -> Reversing (BackingIn), Reversing ->
+	 * Taxiing (BackedOut), and the touchdown - so EVERY phase change this call makes has an event, and UGroundTraffic
+	 * builds the outward FAgentTransition's Cause from it.
+	 *
+	 * AT MOST ONE HANDOVER PER CALL, because OutEvent names one. The vacate and the push's end fall through into the
+	 * taxi so the frame's dt is driven, and the taxi's own handovers (a reverse leg's arm, arriving) used to run in
+	 * that same call: a vacate onto a taxi-in a rebuild had killed went Arriving -> Stranded reporting Vacated. The
+	 * taxi's handovers now wait for the next call (the next substep), with the agent where the follower left it.
+	 * ENFORCED BY: Airside.Model.RoadAgent.EveryPhaseChangeNamesItsEvent
+	 *
 	 * Returns true with a motion to show; false only once Phase == Gone, which is also the
 	 * caller's signal to destroy the view and drop the agent - see ARoadNetworkActor::Tick.
 	 * OutEvent is EAgentEvent::Gone on that same call, redundantly with the return value - see
@@ -1332,13 +1399,17 @@ private:
 	 * a NextReverseLegStep computed once in Start/on a plan change; folding that in here
 	 * too would make one issue's diff answer for another's measurement. This is the
 	 * extraction only - see the PR for #174.
+	 *
+	 * OutEvent is EAgentEvent::BackingIn on the call that armed the reverse (#436) and untouched otherwise - the one
+	 * handover Advance used to make with no event, so ops heard a bare Taxiing -> Reversing it had no cause for.
 	 */
-	bool TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMotion& OutMotion);
+	bool TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMotion& OutMotion, EAgentEvent& OutEvent);
 
 	/**
 	 * TryArmReverseLeg's arm for a vehicle with a trailer (spec 2026-09-26 §2): solves the span
 	 * from the chain as it stands, refuses a solution whose end misses the remainder's line, and
-	 * otherwise enters Reversing posed on this frame. Same return contract as TryArmReverseLeg.
+	 * otherwise enters Reversing posed on this frame. Same return contract as TryArmReverseLeg, OutEvent included.
 	 */
-	bool TryArmTowReverse(const FRoutePlan& Span, int32 To, const FVector2D& At, double Heading, FAgentMotion& OutMotion);
+	bool TryArmTowReverse(const FRoutePlan& Span, int32 To, const FVector2D& At, double Heading, FAgentMotion& OutMotion,
+		EAgentEvent& OutEvent);
 };

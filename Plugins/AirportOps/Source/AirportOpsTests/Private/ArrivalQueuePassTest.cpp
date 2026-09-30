@@ -18,6 +18,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
+#include "OpsTransitionTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -227,8 +228,8 @@ bool FArrivalQueueDirtiersTest::RunTest(const FString&)
 	TestEqual(TEXT("the network changed"), RunsFor([&Bus]() { Bus.Publish(FNetworkChangedEvent{}); }), 1);
 	TestEqual(TEXT("the airport's status changed"), RunsFor([&Bus]() { Bus.Publish(FAirportStatusChangedEvent{}); }), 1);
 	TestEqual(TEXT("a resume (the speed changed)"), RunsFor([&Bus]() { Bus.Publish(FSpeedChangedEvent{}); }), 1);
-	TestEqual(TEXT("a new arrival's Arriving"), RunsFor([&Bus]() { Bus.Publish(FAgentPhaseEvent{ 4242, EAgentPhase::Gone, EAgentPhase::Arriving }); }), 1);
-	TestEqual(TEXT("any other phase change: no run"), RunsFor([&Bus]() { Bus.Publish(FAgentPhaseEvent{ 4242, EAgentPhase::Taxiing, EAgentPhase::Parked }); }), 0);
+	TestEqual(TEXT("a new arrival's Arriving"), RunsFor([&Bus]() { Bus.Publish(FAgentPhaseEvent{ OpsTestTransition(4242, EAgentPhase::Gone, EAgentPhase::Arriving, EAgentEvent::Dispatched) }); }), 1);
+	TestEqual(TEXT("any other phase change: no run"), RunsFor([&Bus]() { Bus.Publish(FAgentPhaseEvent{ OpsTestTransition(4242, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked) }); }), 0);
 
 	// A LOAD: nothing before it is an event any more, so MarkAllDirty runs it.
 	const FString Slot = TEXT("AirportOpsTest_QueuePassLoad");

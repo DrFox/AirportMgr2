@@ -5,6 +5,7 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/OpsEventBus.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
@@ -23,12 +24,15 @@ namespace
 {
 	/**
 	 * FTestAirport's runway, exit, taxiway and TWO stands, an aircraft taxiing from the exit to the
-	 * first, and the flight board relayed exactly as UOpsRuntime::OnAgentPhase relays it - so a test
-	 * that retires the aeroplane sees the Gone the board would hear. World-free.
+	 * first, and the flight board relayed exactly as UOpsRuntime::OnAgentPhase relays it - published
+	 * into a bus inside the broadcast and heard when Advance drains it (#436), so a test that retires
+	 * the aeroplane sees the Gone the board would hear, when it would hear it. World-free.
 	 */
 	struct FRescueField
 	{
 		FTestAirport Airport;
+		/** The phase changes' bus - see Build. By value: the field is a test local and never copied. */
+		FOpsEventBus Bus;
 		UGroundTraffic* Traffic = nullptr;
 		USimClock* Clock = nullptr;
 		UFlightBoard* Board = nullptr;
@@ -68,13 +72,20 @@ namespace
 			Flight->Phase = EFlightPhase::TaxiIn;
 			Board->AddOffer(*Clock, Flight);
 
+			// PUBLISHED, THEN DRAINED - what UOpsRuntime does (#436). This relay used to call the board inside the
+			// traffic's broadcast, an ordering production never has.
 			UFlightBoard* Bound = Board;
 			URoadNetwork* Graph = Airport.Net;
-			UGroundTraffic* Model = Traffic;
 			USimClock* Time = Clock;
-			Traffic->OnAgentPhaseChanged.AddLambda([Bound, Graph, Model, Time](int32 Id, EAgentPhase From, EAgentPhase To)
+			Bus.BeginWiring();
+			Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [Bound, Graph, Time](const FAgentPhaseEvent& E)
 			{
-				Bound->OnAgentPhase(*Model, *Graph, *Time, Id, From, To);
+				Bound->OnAgentPhase(*Graph, *Time, E);
+			});
+			Bus.EndWiring();
+			Traffic->OnAgentPhaseChanged.AddLambda([this](const FAgentTransition& Transition)
+			{
+				Bus.Publish(FAgentPhaseEvent{ Transition });
 			});
 			return Plane > 0;
 		}
@@ -84,6 +95,7 @@ namespace
 			for (double T = 0.0; T < Seconds; T += 0.05)
 			{
 				Traffic->Advance(0.05, Airport.Net);
+				Bus.Drain();
 			}
 		}
 
@@ -99,8 +111,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAgentRescueAircraftDespawnCancelsFlightTest::RunTest(const FString& Parameters)
 {
-	// A DESPAWNED AEROPLANE DID NOT DEPART. FlightPhaseFromAgent reads Gone as Departed - right for
-	// one that flew off the runway, a lie for one the player deleted on a taxiway - so the flight is
+	// A DESPAWNED AEROPLANE DID NOT DEPART. FlightPhaseFromTransition books a Retired as Departed, as it books the
+	// Gone off the climb - right for one that flew off the runway, a lie for one the player deleted on a taxiway - so the flight is
 	// Cancelled first and unhooked, and the Gone that follows moves nothing.
 	FRescueField Field;
 	if (!TestTrue(TEXT("an aircraft taxiing in, flying a flight"), Field.Build())) { return false; }

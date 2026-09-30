@@ -56,7 +56,7 @@ bool FAgentRedirectTest::RunTest(const FString& Parameters)
 	UAirsideTraffic* Traffic = Actor->GetTraffic();
 	TArray<TPair<EAgentPhase, EAgentPhase>> Transitions;
 	Traffic->OnAgentPhaseChanged.AddLambda(
-		[&Transitions](int32, EAgentPhase From, EAgentPhase To) { Transitions.Emplace(From, To); });
+		[&Transitions](const FAgentTransition& T) { Transitions.Emplace(T.From, T.To); });
 
 	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
 	if (!TestTrue(TEXT("outbound dispatch accepted"), Actor->DispatchAgent(Outbound, Airframe))) { return false; }

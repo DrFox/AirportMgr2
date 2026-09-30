@@ -6,6 +6,7 @@
 
 #include "Model/TrafficRules.h"
 
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/Airframe.h"   // EPushbackNeed itself: reached only transitively before, which a unity blob
                                // hid until 2026-09-26, when an adaptive build compiled this file alone
 #include "Model/RoadEntity.h"
@@ -40,13 +41,15 @@ double FTrafficRules::GapFor(ETraversalClass Class) const
 	return FMath::Max(Gap, FootprintFor(Class) * 0.5 + 1.0);
 }
 
+// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (checked 2026-09-30 by a stray enumerator: the build failed here)
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 double FTrafficRules::PushSpeedFor(EPushbackNeed Need) const
 {
 	// A SWITCH AND NOT A TERNARY CHAIN, deliberately, and unlike the two functions above -
 	// which have two cases and a documented "everything else" rule. This is the one place
 	// that must agree with EPushbackNeed, so a value added to that enum has to produce a
-	// compiler warning here rather than fall quietly into an else and push an A320 at a hand
-	// tug's pace. The codebase's "lists that must agree are ONE list", applied to arithmetic.
+	// BUILD ERROR here (C4062, raised around this function - see ExhaustiveSwitch.h) rather than fall quietly into an
+	// else and push an A320 at a hand tug's pace. The codebase's "lists that must agree are ONE list", applied to arithmetic.
 	switch (Need)
 	{
 	case EPushbackNeed::SelfManoeuvre: return SelfManoeuvrePushSpeed;
@@ -58,3 +61,4 @@ double FTrafficRules::PushSpeedFor(EPushbackNeed Need) const
 	// FAirframe::PushbackNeed's own default: slowest is never unsafe.
 	return HandTugPushSpeed;
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END

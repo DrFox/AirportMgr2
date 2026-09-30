@@ -1561,8 +1561,9 @@ bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, 
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d rescued: %.0f uu sideways, %.0f uu to node %d"),
 		AgentId, Sideways, Rejoined.Length - Travelled, Agent.GoalNode.Index);
-	// LAST, and nothing read from Agent after it: a listener may retire the agent synchronously
-	// (see ReleaseGoal's comment on UJobBoard::OnAgentPhase).
-	OnAgentPhaseChanged.Broadcast(AgentId, EAgentPhase::Stranded, EAgentPhase::Taxiing);
+	// LAST, and nothing read from Agent after it: a synchronous listener may retire the agent (the
+	// re-entrancy contract UGroundTraffic::AdvanceOnce states). Rescued, the player's Unstick (#436):
+	// the flight board keeps the taxi it was in, in whichever direction that was.
+	Announce(TransitionOf(Agent, EAgentPhase::Stranded, EAgentEvent::Rescued));
 	return true;
 }

@@ -920,4 +920,238 @@ bool FAgentReverseHandoverTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+// EVERY PHASE CHANGE INSIDE Advance NAMES ITS EVENT (#436). UGroundTraffic builds the outward FAgentTransition from
+// the event Advance reports, so a handover with no event - Stranded, the reverse leg's arm and its end - reached ops
+// as a bare (From, To) pair that consumers re-derived a cause for from live agent state, a drain late. And a phase
+// change the event does not NAME is the other half of the same fault: the Vacated that fell straight through into a
+// Stranded reported Vacated with the agent Stranded. Every phase is driven here, and every Advance that moved the
+// phase is checked: an event, and the one whose own phase the agent is now in.
+namespace RoadAgentEventPin
+{
+	/** The phase an event leaves the agent in - unset for a moment that moves no phase, and for None. */
+	TOptional<EAgentPhase> PhaseAfter(EAgentEvent Event)
+	{
+		switch (Event)
+		{
+		case EAgentEvent::Vacated:    return EAgentPhase::Taxiing;
+		case EAgentEvent::LinedUp:    return EAgentPhase::Departing;
+		case EAgentEvent::Parked:     return EAgentPhase::Parked;
+		case EAgentEvent::PushedBack: return EAgentPhase::Taxiing;
+		case EAgentEvent::Gone:       return EAgentPhase::Gone;
+		case EAgentEvent::Stranded:   return EAgentPhase::Stranded;
+		case EAgentEvent::BackingIn:  return EAgentPhase::Reversing;
+		case EAgentEvent::BackedOut:  return EAgentPhase::Taxiing;
+		default:                      return TOptional<EAgentPhase>();
+		}
+	}
+
+	/**
+	 * The phases an event may be made FROM. PhaseAfter checks the end a handover names; this checks its start, and it is
+	 * the half that sees two handovers made in one call: the second overwrites OutEvent, so the event names the END
+	 * phase correctly and the START - the first handover's - wrongly (a vacate that fell through into a strand reports
+	 * Stranded from Arriving). Empty for None and the moments.
+	 */
+	TArray<EAgentPhase> PhasesBefore(EAgentEvent Event)
+	{
+		switch (Event)
+		{
+		case EAgentEvent::Vacated:    return { EAgentPhase::Arriving };
+		case EAgentEvent::LinedUp:    return { EAgentPhase::Taxiing };
+		case EAgentEvent::Parked:     return { EAgentPhase::Taxiing, EAgentPhase::Reversing };
+		case EAgentEvent::PushedBack: return { EAgentPhase::Manoeuvring };
+		case EAgentEvent::Gone:       return { EAgentPhase::Departing };
+		case EAgentEvent::Stranded:   return { EAgentPhase::Taxiing, EAgentPhase::Reversing };
+		case EAgentEvent::BackingIn:  return { EAgentPhase::Taxiing };
+		case EAgentEvent::BackedOut:  return { EAgentPhase::Reversing };
+		default:                      return {};
+		}
+	}
+
+	/** Advances one agent and checks every Advance; remembers each phase it saw. */
+	struct FWatch
+	{
+		FAutomationTestBase& Test;
+		const TCHAR* Scenario;
+		TSet<EAgentPhase>& Seen;
+		int32 Bad = 0;
+		/** How many times each event was reported - the moments (TouchedDown, Airborne) are counted here. */
+		TMap<EAgentEvent, int32> Heard;
+
+		bool Step(FRoadAgent& Agent, double Dt)
+		{
+			const EAgentPhase Before = Agent.Phase;
+			FAgentMotion Motion;
+			EAgentEvent Event = EAgentEvent::None;
+			const bool bLives = Agent.Advance(Dt, Motion, Event);
+			if (Event != EAgentEvent::None)
+			{
+				++Heard.FindOrAdd(Event);
+			}
+			Seen.Add(Before);
+			Seen.Add(Agent.Phase);
+			if (Agent.Phase != Before)
+			{
+				// BOTH ENDS: the event must name the phase the agent is in now AND be one that can be made from where it was.
+				const TOptional<EAgentPhase> Named = PhaseAfter(Event);
+				const bool bEndsRight = Named.IsSet() && Named.GetValue() == Agent.Phase;
+				const bool bStartsRight = PhasesBefore(Event).Contains(Before);
+				if (!(bEndsRight && bStartsRight) && Bad++ < 3)
+				{
+					Test.AddError(FString::Printf(TEXT("%s: %s -> %s inside one Advance reported %s"), Scenario,
+						*UEnum::GetValueAsString(Before), *UEnum::GetValueAsString(Agent.Phase),
+						*UEnum::GetValueAsString(Event)));
+				}
+			}
+			return bLives;
+		}
+
+		/** Steps until Phase is Want (true) or Cap frames pass (false). */
+		bool Until(FRoadAgent& Agent, EAgentPhase Want, double Dt = 1.0 / 60.0, int32 Cap = 40000)
+		{
+			for (int32 Frame = 0; Frame < Cap && Agent.Phase != Want; ++Frame)
+			{
+				if (!Step(Agent, Dt))
+				{
+					break;
+				}
+			}
+			return Agent.Phase == Want;
+		}
+	};
+
+	FRunwayEnd EastRunway(double Length)
+	{
+		FRunwayEnd End;
+		End.Threshold = FVector2D(0.0, 0.0);
+		End.Direction = FVector2D(1.0, 0.0);
+		End.Length = Length;
+		return End;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadAgentEveryPhaseChangeNamesItsEventTest,
+	"Airside.Model.RoadAgent.EveryPhaseChangeNamesItsEvent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadAgentEveryPhaseChangeNamesItsEventTest::RunTest(const FString& Parameters)
+{
+	using namespace RoadAgentEventPin;
+	TSet<EAgentPhase> Seen;
+	const FAirframe Piper = TestAirframes::Piper();
+	const double RunwayLength = FLandingRun::RequiredLandingDistance(Piper.Chassis.Ground, Piper.Climb, Piper.Approach)
+		* FLandingRun::LandingMargin * 1.5;
+	const double VacateAt = RunwayLength * 0.5;
+
+	// 1. LAND, VACATE, TAXI IN, PARK.
+	{
+		FWatch W{ *this, TEXT("arrival"), Seen };
+		FRoadAgent Agent;
+		const FRoutePlan TaxiIn = StraightPlan(FVector2D(VacateAt, -1000.0), FVector2D(VacateAt, -6000.0));
+		TestTrue(TEXT("arrival: armed"), Agent.StartArrival(EastRunway(RunwayLength), Piper, VacateAt, TaxiIn));
+		TestTrue(TEXT("arrival: parks"), W.Until(Agent, EAgentPhase::Parked));
+		// THE TOUCHDOWN IS A MOMENT, reported once on the Advance it happened on (#446) - no phase moves with it.
+		TestEqual(TEXT("arrival: the touchdown is reported exactly once"), W.Heard.FindRef(EAgentEvent::TouchedDown), 1);
+	}
+
+	// 2. VACATE ONTO A TAXI-IN A REBUILD KILLED: Taxiing (Vacated), THEN Stranded - two handovers, two Advances.
+	{
+		FWatch W{ *this, TEXT("vacate onto a dead taxi-in"), Seen };
+		FRoadAgent Agent;
+		FRoutePlan Dead = StraightPlan(FVector2D(VacateAt, -1000.0), FVector2D(VacateAt, -6000.0));
+		Dead.Result = ERouteResult::Unreachable;
+		TestTrue(TEXT("dead taxi-in: armed"), Agent.StartArrival(EastRunway(RunwayLength), Piper, VacateAt, Dead));
+		TestTrue(TEXT("dead taxi-in: strands"), W.Until(Agent, EAgentPhase::Stranded));
+	}
+
+	// 3. TAXI OUT TO A RUNWAY: LinedUp, the climb, Gone.
+	{
+		FWatch W{ *this, TEXT("departure"), Seen };
+		FRoadAgent Agent;
+		Agent.StartTaxi(StraightPlan(FVector2D(-20000.0, 0.0), FVector2D(0.0, 0.0)), Piper);
+		Agent.ArmDeparture(EastRunway(100000.0));
+		TestTrue(TEXT("departure: departs"), W.Until(Agent, EAgentPhase::Departing));
+		TestTrue(TEXT("departure: is gone"), W.Until(Agent, EAgentPhase::Gone));
+		TestEqual(TEXT("departure: the climb is reported exactly once"), W.Heard.FindRef(EAgentEvent::Airborne), 1);
+	}
+
+	// 4. PUSH BACK (StartPushback is the one handover made outside Advance - UGroundTraffic::DepartAgent announces it),
+	//    then the taxi out, then parked at its end.
+	{
+		FWatch W{ *this, TEXT("pushback"), Seen };
+		FRoutePlan Push;
+		Push.Result = ERouteResult::Found;
+		Push.Polyline = { {10000.0, 5000.0}, {10000.0, 1000.0}, {18000.0, 1000.0} };
+		Push.Length = GuidelineGeom::PolylineLength(Push.Polyline);
+		FRouteStep LeadIn;
+		LeadIn.EndDistance = 4000.0;
+		FRouteStep Arm;
+		Arm.EndDistance = Push.Length;
+		Push.Steps = { LeadIn, Arm };
+		const FRoutePlan Out = StraightPlan(FVector2D(18000.0, 1000.0), FVector2D(12000.0, 1000.0));
+		FRoadAgent Agent;
+		Agent.Phase = EAgentPhase::Parked;
+		TestTrue(TEXT("pushback: armed"), Agent.StartPushback(Push, Out, Piper, 150.0, 30.0, 0.0));
+		TestTrue(TEXT("pushback: taxis out"), W.Until(Agent, EAgentPhase::Taxiing));
+		TestTrue(TEXT("pushback: parks at the end"), W.Until(Agent, EAgentPhase::Parked));
+	}
+
+	// 5. A TRUCK'S REVERSE LEG: armed (Taxiing -> Reversing), ended (-> Taxiing), then parked; and a reverse that is the
+	//    route's last step, which parks from Reversing; and one whose plan dies under it, which strands.
+	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	if (TestTrue(TEXT("the service vehicle steers on measured axles"), Truck.HasAxles()))
+	{
+		FVector2D ArcEnd;
+		double ArcEndHeading = 0.0;
+		const FRoutePlan Through = ReverseThenDriveOnPlan(Truck.TightestReversibleRadius() * 1.5, 3000.0, ArcEnd, ArcEndHeading);
+		FRoutePlan BackOnly = Through;
+		BackOnly.Steps.SetNum(1);
+		BackOnly.Polyline.SetNum(BackOnly.Steps[0].EndVertex + 1);
+		BackOnly.Length = BackOnly.Steps[0].EndDistance;
+		FVehicle Vehicle;
+		Vehicle.Chassis = Truck;
+		FTrafficRules Rules;
+		Rules.ServiceReverseSpeed = 400.0;
+
+		const TCHAR* Names[] = { TEXT("reverse then drive on"), TEXT("reverse to the end"), TEXT("reverse on a dead plan") };
+		for (int32 Case = 0; Case < 3; ++Case)
+		{
+			FWatch W{ *this, Names[Case], Seen };
+			FRoadAgent Agent;
+			Agent.StartDrive(Case == 1 ? BackOnly : Through, Vehicle);
+			Agent.StampRules(Rules, 10.0);
+			TestTrue(*FString::Printf(TEXT("%s: reverses"), Names[Case]), W.Until(Agent, EAgentPhase::Reversing));
+			if (Case == 2)
+			{
+				Agent.Follower.Plan.Result = ERouteResult::Unreachable;
+				TestTrue(TEXT("reverse on a dead plan: strands"), W.Until(Agent, EAgentPhase::Stranded));
+				continue;
+			}
+			TestTrue(*FString::Printf(TEXT("%s: parks"), Names[Case]), W.Until(Agent, EAgentPhase::Parked));
+		}
+	}
+
+	// 6. A TAXI WHOSE PLAN DIES UNDER IT strands.
+	{
+		FWatch W{ *this, TEXT("taxi on a dead plan"), Seen };
+		FRoadAgent Agent;
+		Agent.StartTaxi(StraightPlan(FVector2D(0.0, 0.0), FVector2D(20000.0, 0.0)), Piper);
+		for (int32 Frame = 0; Frame < 30; ++Frame)
+		{
+			W.Step(Agent, 1.0 / 60.0);
+		}
+		Agent.Follower.Plan.Result = ERouteResult::Unreachable;
+		TestTrue(TEXT("taxi on a dead plan: strands"), W.Until(Agent, EAgentPhase::Stranded));
+	}
+
+	// NOT VACUOUS: a phase this test never entered is a handover it never checked.
+	for (const EAgentPhase Phase : { EAgentPhase::Arriving, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentPhase::Parked,
+		EAgentPhase::Manoeuvring, EAgentPhase::Reversing, EAgentPhase::Gone, EAgentPhase::Stranded })
+	{
+		TestTrue(*FString::Printf(TEXT("the drive reached %s"), *UEnum::GetValueAsString(Phase)), Seen.Contains(Phase));
+	}
+	return true;
+}
+
 #endif

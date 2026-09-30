@@ -12,6 +12,7 @@
 #include "Model/StandAllocator.h"
 #include "Profiles/RoadProfile.h"
 #include "Testing/AirsideTestGraph.h"
+#include "OpsTransitionTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -209,13 +210,13 @@ bool FFlightBoardFollowsTheAgentTest::RunTest(const FString& Parameters)
 	Flight->Phase = EFlightPhase::Landing;
 	Board->AddOffer(*Clock, Flight);
 
-	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Arriving, EAgentPhase::Taxiing);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Arriving, EAgentPhase::Taxiing, EAgentEvent::Vacated));
 	TestEqual(TEXT("taxiing before the stand is TaxiIn"), Flight->Phase, EFlightPhase::TaxiIn);
 
-	// PARKED IS THE TURNAROUND ONLY AT A STAND (#405, spec 2026-09-29-ops-batch3 §4) - and agent 5 is no agent this
-	// traffic model has, so it is at no stand. Parked at a real one is AirportOps.Model.Bus.FallbackParkStaysTaxiIn's
+	// PARKED IS THE TURNAROUND ONLY AT A STAND (#405, spec 2026-09-29-ops-batch3 §4) - and this Parked names no node
+	// (GoalAtEvent unset, #436), so it is at no stand. Parked at a real one is AirportOps.Model.Bus.FallbackParkStaysTaxiIn's
 	// last step; this fixture has no aeroplane to put there.
-	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Taxiing, EAgentPhase::Parked);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
 	TestEqual(TEXT("parked at no stand is still the taxi in"), Flight->Phase, EFlightPhase::TaxiIn);
 
 	// THE REAL SEQUENCE NOW GOES THROUGH THE MANOEUVRE. An aeroplane is pushed off its stand
@@ -223,25 +224,25 @@ bool FFlightBoardFollowsTheAgentTest::RunTest(const FString& Parameters)
 	// to TaxiOut - and this step is also what makes the NEXT assertion mean something: with the
 	// Parked above moving nothing (#405), it is Manoeuvring, not Turnaround, that the taxi reads
 	// as OUT.
-	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Parked, EAgentPhase::Manoeuvring);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Parked, EAgentPhase::Manoeuvring, EAgentEvent::DepartOrdered));
 	TestEqual(TEXT("coming off the stand is the manoeuvre"),
 		Flight->Phase, EFlightPhase::Manoeuvring);
 
 	// THE POINT OF THE TEST: the same agent phase, the other answer. Taxiing is the agent's
 	// phase both into the stand and out of it, and only the flight's own progress tells them
 	// apart - which is why EFlightPhase's declaration order is load-bearing.
-	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
 	TestEqual(TEXT("taxiing after the turnaround is TaxiOut"), Flight->Phase, EFlightPhase::TaxiOut);
 
-	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Taxiing, EAgentPhase::Departing);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentEvent::LinedUp));
 	TestEqual(TEXT("departing"), Flight->Phase, EFlightPhase::Departing);
 
-	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Departing, EAgentPhase::Gone);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Departing, EAgentPhase::Gone, EAgentEvent::Gone));
 	TestEqual(TEXT("gone is departed"), Flight->Phase, EFlightPhase::Departed);
 	TestEqual(TEXT("and the agent handle is given back"), Flight->AgentId, INDEX_NONE);
 
 	// An agent nobody owns - a fuel truck - must move no flight at all.
-	Board->OnAgentPhase(*Traffic, *Net, *Clock, 99, EAgentPhase::Taxiing, EAgentPhase::Parked);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(99, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
 	TestEqual(TEXT("a truck's phase change moves no flight"), Flight->Phase, EFlightPhase::Departed);
 	return true;
 }
@@ -548,8 +549,8 @@ bool FFlightBoardIndexMatchesTheLinearScanTest::RunTest(const FString& Parameter
 				Flight->AgentId = AgentId;
 				Flight->Phase = EFlightPhase::Departing;
 				Board->AddOffer(*Clock, Flight);
-				Board->OnAgentPhase(*Traffic, *Net, *Clock, AgentId,
-					EAgentPhase::Departing, EAgentPhase::Gone);
+				Board->OnAgentPhase(*Net, *Clock,
+					OpsTestTransition(AgentId, EAgentPhase::Departing, EAgentPhase::Gone, EAgentEvent::Gone));
 			}
 			break;
 		}

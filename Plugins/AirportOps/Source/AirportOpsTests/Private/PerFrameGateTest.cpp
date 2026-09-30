@@ -14,6 +14,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestWorld.h"
+#include "OpsTransitionTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -142,7 +143,7 @@ bool FJobBoardRevisionStillTest::RunTest(const FString&)
 	const uint32 Start = Board->Revision();
 	Board->Step(*Traffic, *Net, *Clock);
 	TestEqual(TEXT("a Step with nothing to do changes nothing"), Board->Revision(), Start);
-	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Gone, EAgentPhase::Taxiing);
+	Board->OnAgentPhase(*Traffic, *Net, *Clock, OpsTestTransition(5, EAgentPhase::Gone, EAgentPhase::Taxiing, EAgentEvent::Dispatched));
 	TestEqual(TEXT("an agent's phase that is none of the board's business changes nothing"), Board->Revision(), Start);
 	TestFalse(TEXT("a recall of an agent that drives no vehicle here reports it"),
 		Board->RecallVehicleOfAgent(5, /*bRetire*/ false, *Traffic, *Net, *Clock));

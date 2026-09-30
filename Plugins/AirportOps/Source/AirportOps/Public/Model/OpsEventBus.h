@@ -44,12 +44,14 @@ enum class EOpsTier : uint8
 // without a Describe() does not compile: the bus's describer visits every type in FOpsEvent.
 // ENFORCED BY: AirportOps.Model.Bus.EveryEventDescribesItself
 
-/** Airside's agent phase change, bridged by UOpsRuntime. */
-struct AIRPORTOPS_API FAgentPhaseEvent
+/**
+ * Airside's agent phase change, bridged by UOpsRuntime: the FAgentTransition itself (#436), Cause and GoalAtEvent
+ * included, so a handler a drain later reads what was true when the change was MADE rather than asking the live
+ * agent. DERIVED, not wrapped or copied field by field: the event IS the transition - one struct per thing - and
+ * a copy of its fields here is where a new one would be dropped on the way across.
+ */
+struct AIRPORTOPS_API FAgentPhaseEvent : FAgentTransition
 {
-	int32 AgentId = INDEX_NONE;
-	EAgentPhase From = EAgentPhase::Gone;
-	EAgentPhase To = EAgentPhase::Gone;
 	static const TCHAR* EventName() { return TEXT("AgentPhase"); }
 	FString Describe() const;
 };

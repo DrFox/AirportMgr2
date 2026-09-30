@@ -104,6 +104,11 @@ struct AIRSIDE_API FLandingRun
 	 * serialised as true would fire again the instant a game was loaded, and whatever is
 	 * hung off it - a puff of tyre smoke, a sound, a fee - would happen a second time under
 	 * an aircraft already halfway down the runway.
+	 *
+	 * READ ON THE CALL THAT SET IT, by FRoadAgent::Advance, which reports it as EAgentEvent::TouchedDown - and that
+	 * event is what anything hangs off (#446). An edge one Advance long is lost to a reader once a FRAME: the traffic
+	 * model runs several Advances a frame at x4 and up, and UAirsideTraffic's own read showed a quarter of the smoke.
+	 * ENFORCED BY: Check-Architecture rule 4 (allowed callers, 'FLandingRun::bTouchedDown read')
 	 */
 	bool bTouchedDown = false;
 

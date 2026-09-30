@@ -17,6 +17,7 @@
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 #include "Testing/AirsideTestGraph.h"
+#include "OpsTransitionTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -217,15 +218,15 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	Bus.BeginWiring();
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [&](const FAgentPhaseEvent& E)
 	{
-		LiveBoard->OnAgentPhase(*Traffic, *Net, *LiveClock, E.AgentId, E.From, E.To);
+		LiveBoard->OnAgentPhase(*Net, *LiveClock, E);
 	});
 	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightAirborneEvent&) { ++Scored; });
 	Bus.Subscribe<FFlightCancelledEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightCancelledEvent&) { ++Scored; });
 	Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FTurnaroundEndedEvent&) { ++Scored; });
 	Bus.EndWiring();
-	Traffic->OnAgentPhaseChanged.AddLambda([&Bus](int32 Id, EAgentPhase From, EAgentPhase To)
+	Traffic->OnAgentPhaseChanged.AddLambda([&Bus](const FAgentTransition& Transition)
 	{
-		Bus.Publish(FAgentPhaseEvent{ Id, From, To });
+		Bus.Publish(FAgentPhaseEvent{ Transition });
 	});
 	Board->Bus = &Bus;
 
@@ -481,8 +482,8 @@ bool FFlightUnchargedLandingTest::RunTest(const FString& Parameters)
 	Rig.Board->TickQueue(*Traffic, *Net, *Rig.Clock);
 	if (!TestEqual(TEXT("it lands again"), Flight->Phase, EFlightPhase::Landing)) { return false; }
 	// THE ARRIVING THE BUS WOULD DELIVER, twice: the second is the "more than one phase maps to Landing" case.
-	Rig.Board->OnAgentPhase(*Traffic, *Net, *Rig.Clock, Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving);
-	Rig.Board->OnAgentPhase(*Traffic, *Net, *Rig.Clock, Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving);
+	Rig.Board->OnAgentPhase(*Net, *Rig.Clock, OpsTestTransition(Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving, EAgentEvent::Dispatched));
+	Rig.Board->OnAgentPhase(*Net, *Rig.Clock, OpsTestTransition(Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving, EAgentEvent::Dispatched));
 	const int32 Rows = Ledger->Entries().FilterByPredicate([](const FLedgerEntry& E) { return E.Category == ELedgerCategory::LandingFee; }).Num();
 	TestEqual(TEXT("saved uncharged, it is charged exactly once when it lands"), Rows, 1);
 	return true;

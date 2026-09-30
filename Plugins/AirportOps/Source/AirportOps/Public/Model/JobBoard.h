@@ -22,6 +22,8 @@
 class USimClock;
 #include "JobBoard.generated.h"
 
+struct FAgentTransition;
+
 class UGroundTraffic;
 class URoadNetwork;
 class ULedger;
@@ -281,9 +283,13 @@ public:
 	 * reaching Parked is that vehicle ARRIVING, which moves the vehicle's own state; an aircraft
 	 * LEAVING Parked drops its turnaround and jobs and moves any vehicle out for them on; a vehicle's
 	 * agent going Gone is that vehicle LOSING its agent (LoseAgent), and a Stranded one releases its jobs.
+	 *
+	 * MAPS THE TRANSITION'S CAUSE, not (From, To) plus the live agent (#436): it is heard a drain late, so what
+	 * decides is what was true when the change was made - DepartOrdered, not bDepartureArmed read now; GoalAtEvent,
+	 * not the GoalNode the agent may have been redirected to since.
 	 */
 	void OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock,
-		int32 AgentId, EAgentPhase From, EAgentPhase To);
+		const FAgentTransition& Transition);
 
 	/**
 	 * The money, or null in a test that does not care. Set by UOpsRuntime's constructor, in the same
@@ -623,8 +629,8 @@ private:
 	 */
 	void StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
-	/** A vehicle's agent reached Parked. */
-	void OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Agent, UGroundTraffic& Traffic,
+	/** A vehicle's agent reached Parked, on ParkedOn - the transition's GoalAtEvent, not the live GoalNode (#436). */
+	void OnVehicleArrived(FServiceVehicle& Vehicle, FGuidelineNodeId ParkedOn, UGroundTraffic& Traffic,
 		const URoadNetwork& Network, const USimClock& Clock);
 
 	/**
