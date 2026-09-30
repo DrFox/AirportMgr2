@@ -1136,6 +1136,7 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 {
 	++StepCount;
 	++RevisionCount;   // See Revision: every public mutator.
+	LastStepDeparted.Reset();
 	SyncFleet(Traffic, Network, Clock);
 
 	// TIMED STEPS THAT ARE DUE: a trip's pumping, a refill. GAME TIME - a pause stops both. The vehicle
@@ -1231,15 +1232,24 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 				|| (Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob == 0);
 		});
 	const bool bJobOpen = Jobs.ContainsByPredicate([](const FServiceJob& Job) { return Job.State == EServiceJobState::Open; });
-	// ONLY A DUE TURNAROUND NOTHING IS SERVING - one DepartAgent refused (a busy runway). One still being
-	// served is not polled: its jobs finish inside a Step (FinishServe, AssignOpenJobs) or a phase handler
-	// (DropAircraft), and DepartTheReady runs after both, so it leaves on the step that finishes it
-	// (stage 3 review #3 - a late fuel job used to run a whole Step every frame for minutes).
-	const bool bDepartureWaiting = Turnarounds.ContainsByPredicate([this, Now](const FTurnaround& Turnaround)
+	// NO "DEPARTURE WAITING" (ops push-ground-freed, 2026-09-30). A due turnaround nothing is serving, refused by
+	// DepartAgent, used to make this whole Step run every frame. PR D measured what it waits on: never a runway
+	// (PlanAny ranks a held runway, it does not refuse one) - PushbackBlocked, which Airside's push watch now
+	// announces (FPushGroundFreedEvent), or a layout refusal only a graph edit changes (FNetworkChangedEvent). Both
+	// dirty this pass (UOpsRuntime::WireBus). One still being served was never polled: its jobs finish inside a Step
+	// (FinishServe, AssignOpenJobs) or a phase handler (DropAircraft), and DepartTheReady runs after both, so it
+	// leaves on the step that finishes it (stage 3 review #3). One not yet due is the deadline's (NextDeadline).
+	// ENFORCED BY: AirportOps.Present.PushGroundFreed.NoPushbackRouteIsQuiet, AirportOps.Present.PushGroundFreed.DepartsTheFrameAfter
+	return bVehicleWaiting || bJobOpen;
+}
+
+bool UJobBoard::HasRefusedDeparture(double Now) const
+{
+	return Turnarounds.ContainsByPredicate([this, Now](const FTurnaround& Turnaround)
 		{
-			return Now >= Turnaround.TurnaroundEndsAt && !IsBeingServed(Turnaround);
+			return Now >= Turnaround.TurnaroundEndsAt && !IsBeingServed(Turnaround)
+				&& Turnaround.LastDepartureRefusal != EDepartureRefusal::None;
 		});
-	return bVehicleWaiting || bJobOpen || bDepartureWaiting;
 }
 
 void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
@@ -1289,9 +1299,10 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		const EDepartureRefusal Refusal = Traffic.DepartAgent(AircraftId, Network);
 		if (Refusal != EDepartureRefusal::None)
 		{
-			// LOGGED ON A CHANGE OF REASON, not every tick. A runway the player has left occupied
-			// refuses this for as long as they leave it, and a line a tick would bury every other line
-			// in the file. Re-found because DepartAgent may have moved the array.
+			// LOGGED ON A CHANGE OF REASON, not every retry. A taxiway the player has left busy, or a
+			// stand with no arm to push onto, refuses this for as long as they leave it, and the safety
+			// net retries every 30 s besides the events (Step's header). Re-found because DepartAgent
+			// may have moved the array.
 			if (FTurnaround* Still = FindTurnaround(AircraftId); Still != nullptr && Still->LastDepartureRefusal != Refusal)
 			{
 				Still->LastDepartureRefusal = Refusal;
@@ -1310,6 +1321,7 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		// fuel paid for - PAID IN DropAircraft since batch 3, when the phase change DepartAgent announced
 		// reaches OnAgentPhase; this line only says so in the log.
 		// ENFORCED BY: AirportOps.Fuel.PartFuelledPaysForWhatItGot
+		LastStepDeparted.Add(AircraftId);
 		const bool bPartFuelled = bUnfuelled && Delivered > 0.0;
 		UE_LOG(LogAirportOps, Log, TEXT("Fuel: aircraft %d departs stand %d%s"), AircraftId, Stand,
 			bPartFuelled

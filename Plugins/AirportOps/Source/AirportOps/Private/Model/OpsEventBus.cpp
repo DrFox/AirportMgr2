@@ -155,6 +155,11 @@ FString FStandsFreedEvent::Describe() const
 	return FString::Printf(TEXT("%d stand(s), pose node(s) %s"), PoseNodes.Num(), *Poses);
 }
 
+FString FPushGroundFreedEvent::Describe() const
+{
+	return FString::Printf(TEXT("aircraft %d"), AgentId);
+}
+
 FString FFlightInboundEvent::Describe() const
 {
 	return FString::Printf(TEXT("flight %d, airline %s"), FlightId, *AirlineId.ToString());

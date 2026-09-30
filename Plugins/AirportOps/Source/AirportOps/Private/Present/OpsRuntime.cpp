@@ -132,7 +132,7 @@ FUnstickVerdict UOpsRuntime::Unstick(int32 AgentId, EUnstickAction Action)
 	// A PLAYER COMMAND THAT MAY HAVE CHANGED THE JOB BOARD (jobs released, a vehicle recalled): its
 	// pass runs on events (stage 3), and every rescue path today also raises a phase event - but a
 	// command is not an event, so it says so itself rather than leaning on that.
-	Bus.MarkDirty(TEXT("JobBoard"));
+	DirtyJobBoard();
 	return Verdict;
 }
 
@@ -300,23 +300,31 @@ void UOpsRuntime::WireBus()
 		}
 		// ANY PHASE CHANGE may be the board's business - an aircraft parked, a vehicle arrived or lost
 		// its agent - and deciding which here would be a second copy of OnAgentPhase's own rules.
-		Bus.MarkDirty(TEXT("JobBoard"));
+		DirtyJobBoard();
 	});
-	// THE PLAYER DREW SOMETHING: a new depot seeds its fleet, a refused job may be servable now.
+	// THE PLAYER DREW SOMETHING: a new depot seeds its fleet, a refused job may be servable now, and so may a refused
+	// departure - a runway, a route or the push arm it had none of. Every refusal but PushbackBlocked waits on this.
+	// ENFORCED BY: AirportOps.Present.PushGroundFreed.NoPushbackRouteIsQuiet ("drawing the arm")
 	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
-		[this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
+		[this](const FNetworkChangedEvent&) { DirtyJobBoard(); });
 	// A VEHICLE BOUGHT OR SOLD, A MODULE BOUGHT: the board's candidates changed, and a job waiting on an
 	// empty depot meets the new vehicle on this drain's pass - nothing polls (facility-upgrades spec §3).
+	// Through DirtyJobBoard like every other JobBoard dirtier (rule 36), so the pass keeps one door.
 	// ENFORCED BY: AirportOps.Present.Facility.PurchaseWakesTheBoard
 	Bus.Subscribe<FFleetChangedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
-		[this](const FFleetChangedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
+		[this](const FFleetChangedEvent&) { DirtyJobBoard(); });
 	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
-		[this](const FFacilityUpgradedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
+		[this](const FFacilityUpgradedEvent&) { DirtyJobBoard(); });
+	// A PUSH NO LONGER BLOCKED (Airside's push watch, bridged in Attach): the refused departure it names can go now.
+	// What bDepartureWaiting used to find by re-running the whole Step every frame (ops push-ground-freed).
+	// ENFORCED BY: AirportOps.Present.PushGroundFreed.DepartsTheFrameAfter
+	Bus.Subscribe<FPushGroundFreedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
+		[this](const FPushGroundFreedEvent&) { DirtyJobBoard(); });
 
 	// THE JOB BOARD'S WHOLE SEQUENCE, as one pass (stage 3 - see UJobBoard::Step for why it stays one
-	// sequence). It runs when something above marked it, when its deadline comes due, or - while it
-	// says something is unresolved - once each frame, which is exactly what Tick used to do always.
-	// ENFORCED BY: AirportOps.Present.Bus.QuietBoardDoesNoWork
+	// sequence). It runs when something above marked it, when its deadline comes due, while it says a vehicle or
+	// job is unresolved - once each frame - and on the safety net while a due turnaround's departure is refused.
+	// ENFORCED BY: AirportOps.Present.Bus.QuietBoardDoesNoWork, AirportOps.Present.PushGroundFreed.NoPushbackRouteIsQuiet
 	Bus.RegisterPass(TEXT("JobBoard"), [this]()
 	{
 		UGroundTraffic* Model = LiveModel();
@@ -324,14 +332,31 @@ void UOpsRuntime::WireBus()
 		{
 			return;
 		}
+		// A RUN ONLY THE NET ASKED FOR - RunArrivalQueue's rule, for the other half of the net.
+		const bool bSafetyOnly = bJobBoardSafetyDue && !bJobBoardCovered;
+		bJobBoardSafetyDue = false;
+		bJobBoardCovered = false;
 		const bool bUnresolved = JobBoard->Step(*Model, *Target->Network, *Clock);
+		if (bSafetyOnly)
+		{
+			for (const int32 AircraftId : JobBoard->DepartedLastStep())
+			{
+				// THE DEFECT, NAMED: nothing published said this aircraft could go, yet it could. Whatever freed its
+				// push ground, runway or route needs an event of its own.
+				UE_LOG(LogOpsBus, Warning, TEXT("safety pass departed aircraft %d - no event covered it"), AircraftId);
+			}
+		}
 		ArmJobBoardDeadline();
 		// A STEP MAY HAVE MADE A JOB UNSERVICEABLE, or servable again - the alerts pass reads the result.
 		Bus.MarkDirty(TEXT("Alerts"));
 		if (bUnresolved)
 		{
+			// COVERED: the retry is the tail of a run something asked for - RunArrivalQueue's bRetry reason.
+			bJobBoardCovered = true;
 			Bus.MarkDirtyNextDrain(TEXT("JobBoard"));
 		}
+		// ENFORCED BY: AirportOps.Present.PushGroundFreed.NetArmedAndCancelled
+		WantDepartureSafetyNet(JobBoard->HasRefusedDeparture(Clock->Now()));
 	});
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAgentPhaseEvent& E)
 	{
@@ -594,31 +619,71 @@ void UOpsRuntime::RunArrivalQueue()
 	// find the same answer. Reopening is an AirportStatusChanged, which dirties this pass (WireBus), and the run that
 	// follows re-arms it if anyone is still holding.
 	// ENFORCED BY: AirportOps.Present.ArrivalQueue.ClosedAirportDispatchesNothing ("no safety net ticks")
-	ArmQueueSafetyNet(!Result.bClosed && Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
+	WantQueueSafetyNet(!Result.bClosed && Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
 }
 
-void UOpsRuntime::ArmQueueSafetyNet(bool bWaiting)
+void UOpsRuntime::ArmSafetyNet()
 {
-	if (bWaiting && QueueSafetyHandle == INDEX_NONE)
+	const bool bWanted = bQueueNetWanted || bDepartureNetWanted;
+	if (bWanted && SafetyNetHandle == INDEX_NONE)
 	{
-		QueueSafetyHandle = Clock->Every(QueueSafetySeconds, [this]()
+		SafetyNetHandle = Clock->Every(SafetyNetSeconds, [this]()
 		{
-			bQueueSafetyDue = true;
-			Bus.MarkDirty(TEXT("ArrivalQueue"));
+			// EACH HALF RUNS ITS OWN PASS, and only while it is wanted - the other half's waiting is no reason to run it.
+			if (bQueueNetWanted)
+			{
+				bQueueSafetyDue = true;
+				Bus.MarkDirty(TEXT("ArrivalQueue"));
+			}
+			if (bDepartureNetWanted)
+			{
+				bJobBoardSafetyDue = true;
+				Bus.MarkDirty(TEXT("JobBoard"));
+			}
 		});
 	}
-	else if (!bWaiting)
+	else if (!bWanted && SafetyNetHandle != INDEX_NONE)
 	{
-		if (QueueSafetyHandle != INDEX_NONE)
-		{
-			Clock->Cancel(QueueSafetyHandle);
-			QueueSafetyHandle = INDEX_NONE;
-		}
+		Clock->Cancel(SafetyNetHandle);
+		SafetyNetHandle = INDEX_NONE;
+	}
+}
+
+void UOpsRuntime::WantQueueSafetyNet(bool bWaiting)
+{
+	bQueueNetWanted = bWaiting;
+	if (!bWaiting)
+	{
 		// BOTH FLAGS GO WITH THE NET (review M1): a safety-due or a covered left over from a disarmed net - a load,
 		// a detach, an emptied queue - would misattribute the next run, one way or the other.
 		bQueueSafetyDue = false;
 		bQueueCovered = false;
 	}
+	ArmSafetyNet();
+}
+
+void UOpsRuntime::WantDepartureSafetyNet(bool bWaiting)
+{
+	bDepartureNetWanted = bWaiting;
+	if (!bWaiting)
+	{
+		// THE SAME RULE, for the job board's pair.
+		bJobBoardSafetyDue = false;
+		bJobBoardCovered = false;
+	}
+	ArmSafetyNet();
+}
+
+void UOpsRuntime::CancelSafetyNet()
+{
+	WantQueueSafetyNet(false);
+	WantDepartureSafetyNet(false);
+}
+
+void UOpsRuntime::DirtyJobBoard()
+{
+	bJobBoardCovered = true;
+	Bus.MarkDirty(TEXT("JobBoard"));
 }
 
 void UOpsRuntime::OnRunwayFreed(FRoadSegmentId Seed)
@@ -630,6 +695,12 @@ void UOpsRuntime::OnRunwayFreed(FRoadSegmentId Seed)
 void UOpsRuntime::OnStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes)
 {
 	Bus.Publish(FStandsFreedEvent{ PoseNodes });
+}
+
+void UOpsRuntime::OnPushGroundFreed(int32 AgentId)
+{
+	// PUBLISHED, NOT HANDLED - OnRunwayFreed's reason: this runs inside UGroundTraffic's Advance (or a release).
+	Bus.Publish(FPushGroundFreedEvent{ AgentId });
 }
 
 void UOpsRuntime::ArmJobBoardDeadline()
@@ -645,7 +716,7 @@ void UOpsRuntime::ArmJobBoardDeadline()
 		JobBoardDeadlineHandle = Clock->At(Next, [this]()
 		{
 			JobBoardDeadlineHandle = INDEX_NONE;
-			Bus.MarkDirty(TEXT("JobBoard"));
+			DirtyJobBoard();
 		});
 	}
 }
@@ -670,6 +741,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// ENFORCED BY: Check-Architecture rule 1b (cross-plugin) for "never learns"; AirportOps.Present.Bus.FreedIsBridged for the bridge
 	RunwayFreedHandle = Traffic->OnRunwayFreed.AddUObject(this, &UOpsRuntime::OnRunwayFreed);
 	StandsFreedHandle = Traffic->OnStandsFreed.AddUObject(this, &UOpsRuntime::OnStandsFreed);
+	// ENFORCED BY: AirportOps.Present.Bus.PushGroundFreedIsBridged
+	PushGroundFreedHandle = Traffic->OnPushGroundFreed.AddUObject(this, &UOpsRuntime::OnPushGroundFreed);
 
 	// Content is resolved ONCE, here, and applied to the clock and the ledger.
 	if (Catalog->Num() == 0)
@@ -915,6 +988,7 @@ void UOpsRuntime::Detach()
 		Target->GetTraffic()->OnArrivalRefused.Remove(RefusalHandle);
 		Target->GetTraffic()->OnRunwayFreed.Remove(RunwayFreedHandle);
 		Target->GetTraffic()->OnStandsFreed.Remove(StandsFreedHandle);
+		Target->GetTraffic()->OnPushGroundFreed.Remove(PushGroundFreedHandle);
 	}
 	if (UpkeepHandle != INDEX_NONE)
 	{
@@ -932,7 +1006,7 @@ void UOpsRuntime::Detach()
 		Clock->Cancel(JobBoardDeadlineHandle);
 		JobBoardDeadlineHandle = INDEX_NONE;
 	}
-	ArmQueueSafetyNet(false);
+	CancelSafetyNet();
 	SeenNetwork.Reset();
 	// THE BUS POINTERS GO WITH THE ATTACH: the bus is this runtime's, and a subobject left pointing at it
 	// after a detach is a publish into whatever comes next (stage 3 review). Every one Attach set.
@@ -1335,9 +1409,9 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	}
 	// THE REPEATERS TOO, from the loaded Now - see RearmRepeatingSchedules (review I1).
 	RearmRepeatingSchedules();
-	// AND THE QUEUE'S SAFETY NET, for the same reason: its entry was booked against the pre-load clock. Cancelled;
-	// the MarkAllDirty below runs the pass, which re-arms it if the loaded queue holds anyone.
-	ArmQueueSafetyNet(false);
+	// AND THE SAFETY NET, both halves, for the same reason: its entry was booked against the pre-load clock. Cancelled;
+	// the MarkAllDirty below runs both passes, which re-arm it if the loaded queue holds anyone or a departure waits.
+	CancelSafetyNet();
 
 	// EVERY PASS ONCE after a load - the one catch-up, since nothing that happened before the load
 	// is an event any more (spec 2026-09-29 §4). No passes exist until stage 3; the rule is here first.

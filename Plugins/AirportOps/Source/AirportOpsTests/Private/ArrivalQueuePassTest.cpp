@@ -198,7 +198,7 @@ bool FArrivalQueueQuietTest::RunTest(const FString&)
 		Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
 	}
 	TestEqual(TEXT("ten quiet seconds with nobody holding run the queue not once"), Rig.QueueRuns(), Settled);
-	TestFalse(TEXT("and arm no safety net"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	TestFalse(TEXT("and arm no safety net"), Rig.Runtime->IsSafetyNetArmedForTest());
 	return true;
 }
 
@@ -331,20 +331,20 @@ bool FArrivalQueueSafetyNetTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("accepted"), Flight)) { return false; }
 	for (int32 Tick = 0; Tick < 10; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
 	TestEqual(TEXT("the runway is held: the flight holds"), Flight->Phase, EFlightPhase::Inbound);
-	TestTrue(TEXT("and the net is armed while it does"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	TestTrue(TEXT("and the net is armed while it does"), Rig.Runtime->IsSafetyNetArmedForTest());
 
 	Rig.Model->OccupancyForTest().ReleaseAll(99);
 	int32 Frames = 0;
 	for (; Frames < 30 * 45 && Flight->Phase == EFlightPhase::Inbound; ++Frames) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
 	TestEqual(TEXT("the net landed it"), Flight->Phase, EFlightPhase::Landing);
 	TestTrue(FString::Printf(TEXT("within one net interval (%d frames)"), Frames),
-		Frames <= FMath::CeilToInt(UOpsRuntime::QueueSafetySeconds / ArrivalQueuePassTest::Frame) + 2);
+		Frames <= FMath::CeilToInt(UOpsRuntime::SafetyNetSeconds / ArrivalQueuePassTest::Frame) + 2);
 	if (TestEqual(TEXT("and said so, once"), Spy.Lines.Num(), 1))
 	{
 		TestTrue(TEXT("naming the flight"), Spy.Lines[0].Contains(FString::Printf(TEXT("flight %d"), Flight->Id)));
 	}
 	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
-	TestFalse(TEXT("an empty queue disarms it"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	TestFalse(TEXT("an empty queue disarms it"), Rig.Runtime->IsSafetyNetArmedForTest());
 	return true;
 }
 
@@ -460,9 +460,9 @@ bool FArrivalQueueRetryCoveredTest::RunTest(const FString&)
 	for (int32 Tick = 0; Tick < 10 && Due < 0.0; ++Tick)
 	{
 		Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
-		if (Rig.Runtime->IsQueueSafetyNetArmedForTest())
+		if (Rig.Runtime->IsSafetyNetArmedForTest())
 		{
-			Due = Rig.Runtime->GetClock()->Now() + UOpsRuntime::QueueSafetySeconds;
+			Due = Rig.Runtime->GetClock()->Now() + UOpsRuntime::SafetyNetSeconds;
 		}
 	}
 	if (!TestTrue(TEXT("the net is armed while it holds"), Due > 0.0)) { return false; }
@@ -514,17 +514,17 @@ bool FArrivalQueueNetCancelTest::RunTest(const FString&)
 	ArrivalQueuePassTest::HoldStrip(*Rig.Model, *Rig.Net, Field.ThresholdSegment, 99);
 	if (!TestNotNull(TEXT("accepted"), Rig.Accept(Field.Threshold))) { return false; }
 	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
-	if (!TestTrue(TEXT("armed while it holds"), Rig.Runtime->IsQueueSafetyNetArmedForTest())) { return false; }
+	if (!TestTrue(TEXT("armed while it holds"), Rig.Runtime->IsSafetyNetArmedForTest())) { return false; }
 	const FString Slot = TEXT("AirportOpsTest_QueueNetCancel");
 	if (!TestTrue(TEXT("saved"), Rig.Runtime->SaveToSlot(Slot))) { return false; }
 	if (!TestTrue(TEXT("loaded"), Rig.Runtime->LoadFromSlot(Slot))) { return false; }
-	TestFalse(TEXT("a load cancels the net"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	TestFalse(TEXT("a load cancels the net"), Rig.Runtime->IsSafetyNetArmedForTest());
 	// THE LOAD CLEARED THE TABLE (ClearAgents), the fake holder with it; held again so the restored flight still waits.
 	ArrivalQueuePassTest::HoldStrip(*Rig.Model, *Rig.Net, Field.ThresholdSegment, 99);
 	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
-	TestTrue(TEXT("and the load's pass re-arms it on the loaded clock"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	TestTrue(TEXT("and the load's pass re-arms it on the loaded clock"), Rig.Runtime->IsSafetyNetArmedForTest());
 	Rig.Runtime->Attach(nullptr);
-	TestFalse(TEXT("a detach cancels it"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	TestFalse(TEXT("a detach cancels it"), Rig.Runtime->IsSafetyNetArmedForTest());
 	return true;
 }
 
@@ -555,7 +555,7 @@ bool FArrivalQueueClosedTest::RunTest(const FString&)
 	Rig.Runtime->TogglePause();
 	Rig.Runtime->GetBus().Publish(FFlightInboundEvent{ Holding->Id, Holding->AirlineId });
 	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
-	TestFalse(TEXT("paused and closed: no safety net either"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	TestFalse(TEXT("paused and closed: no safety net either"), Rig.Runtime->IsSafetyNetArmedForTest());
 	Rig.Runtime->TogglePause();
 
 	const int32 RunsBefore = Rig.QueueRuns();
@@ -568,7 +568,7 @@ bool FArrivalQueueClosedTest::RunTest(const FString&)
 	TestTrue(TEXT("the pass ran - it was asked"), Rig.QueueRuns() > RunsBefore);
 	TestEqual(TEXT("closed: the holding flight is not cleared to land"), Holding->Phase, EFlightPhase::Inbound);
 	TestEqual(TEXT("and no aircraft was dispatched"), Rig.Model->GetAgentCount(), 0);
-	TestFalse(TEXT("and no safety net ticks for a queue that cannot move"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	TestFalse(TEXT("and no safety net ticks for a queue that cannot move"), Rig.Runtime->IsSafetyNetArmedForTest());
 
 	Rig.Runtime->SetAirportClosed(false);
 	for (int32 Tick = 0; Tick < 10 && Holding->Phase == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }

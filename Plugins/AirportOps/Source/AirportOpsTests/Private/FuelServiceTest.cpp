@@ -3034,4 +3034,144 @@ bool FFuelRetiredAircraftTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// UJobBoard::Step's OTHER "unresolved" reason, bVehicleWaiting (ops push-ground-freed item 5, 2026-09-30): its three
+// parts, each staged, each asked whether it can re-run Step every frame. Step returning true is what makes the ops
+// JobBoard pass re-dirty itself for the next frame, so a part that stays true is a per-frame poll. None did: these
+// are guards, not fixes. Counted by calling Step itself, the pass's own question, one frame at a time.
+
+namespace FuelServiceTest
+{
+	/** How many of Frames steps (traffic, clock, then Step - the runtime's order) reported something unresolved. */
+	int32 QuietUnresolvedSteps(FFuelFixture& Fixture, int32 Frames)
+	{
+		constexpr double Frame = 1.0 / 30.0;
+		int32 Unresolved = 0;
+		for (int32 Index = 0; Index < Frames; ++Index)
+		{
+			Fixture.Traffic->Advance(Frame, Fixture.Net);
+			Fixture.Clock->Advance(Frame);
+			Unresolved += Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock) ? 1 : 0;
+		}
+		return Unresolved;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelQuietTimedStepDueTest, "AirportOps.Fuel.QuietBoard.TimedStepDue",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelQuietTimedStepDueTest::RunTest(const FString& Parameters)
+{
+	// A TIMED STEP ALREADY DUE - a refill booked to end now (BeginFacility with nothing to refill). The next Step's due
+	// loop finishes it, so it is unresolved for at most that one Step, never again.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+	FServiceVehicle& Vehicle = Fixture.Service->AddVehicleForTest(Bowser, Fixture.Depot, EServiceVehicleState::AtFacility, 0.0);
+	Vehicle.StepStartedAt = Fixture.Clock->Now();
+	Vehicle.StepEndsAt = Fixture.Clock->Now();
+	const int32 VehicleId = Vehicle.Id;
+
+	const int32 Unresolved = FuelServiceTest::QuietUnresolvedSteps(Fixture, 300);
+	TestTrue(FString::Printf(TEXT("a due refill is unresolved for at most one Step, not every frame (%d of 300)"), Unresolved), Unresolved <= 1);
+	const FServiceVehicle* After = Fixture.Service->FindVehicle(VehicleId);
+	TestTrue(TEXT("and the vehicle is Idle at home, refilled"), After != nullptr && After->State == EServiceVehicleState::Idle);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelQuietIdleWithAQueueTest, "AirportOps.Fuel.QuietBoard.IdleWithAQueue",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelQuietIdleWithAQueueTest::RunTest(const FString& Parameters)
+{
+	// IDLE AT HOME WITH A QUEUE IT CANNOT START - a job whose stand it can never reach (it names none). StartNext
+	// could leave it so and re-run every frame; it does not: the job goes back to the board, which judges it
+	// unserviceable, and the vehicle stays Idle with an empty queue. The one per-frame retry StartNext keeps - "refused
+	// at home WITH A ROUTE THERE" - needs a found route DispatchAgent will not drive (under two points, or zero long),
+	// which no stand and depot pair produces (a start that is its goal is SameNode, not Found): not stageable here.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+	FServiceVehicle& Vehicle = Fixture.Service->AddVehicleForTest(Bowser, Fixture.Depot, EServiceVehicleState::Idle,
+		Fixture.Service->TypeFor(Bowser).Capacity);
+	const int32 VehicleId = Vehicle.Id;
+	FServiceJob& Job = Fixture.Service->AddJobForTest(901, EServiceJobState::Queued, EServiceRefusal::None, 0);
+	Job.QuantityOwed = 100.0;
+	Job.VehicleId = VehicleId;
+	const int32 JobId = Job.Id;
+	const_cast<FServiceVehicle*>(Fixture.Service->FindVehicle(VehicleId))->Queue.Add(JobId);
+
+	const int32 Unresolved = FuelServiceTest::QuietUnresolvedSteps(Fixture, 300);
+	TestTrue(FString::Printf(TEXT("an unstartable queue settles within two Steps, not every frame (%d of 300)"), Unresolved), Unresolved <= 2);
+	const FServiceVehicle* After = Fixture.Service->FindVehicle(VehicleId);
+	TestTrue(TEXT("the vehicle is Idle with nothing queued"), After != nullptr && After->State == EServiceVehicleState::Idle && After->Queue.Num() == 0);
+	const FServiceJob* Left = Fixture.Service->GetJobs().FindByPredicate([JobId](const FServiceJob& Each) { return Each.Id == JobId; });
+	TestTrue(TEXT("and the job is the board's, refused - not Open for ever"), Left != nullptr && Left->State == EServiceJobState::Unserviceable);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelQuietServingWithNoJobTest, "AirportOps.Fuel.QuietBoard.ServingWithNoJob",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelQuietServingWithNoJobTest::RunTest(const FString& Parameters)
+{
+	// PARKED AT A STAND WITH NO DECISION - the final review #1 backstop's state, made directly: a bowser serving an
+	// aircraft has its job finished under it. StartNext sends it home on the next Step (queue empty, not at home), so
+	// the backstop fires once. Only an open PREREQUISITE could hold it there, and nothing populates
+	// FServiceJob::Prerequisites outside a test (2026-09-30) - fuel is the only role.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+	Fixture.Service->DefaultFleetTypes = { Bowser };
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	int32 VehicleId = 0;
+	if (!TestTrue(TEXT("the bowser starts serving"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Fixture.Service->GetVehicles().FindByPredicate(
+				[](const FServiceVehicle& Each) { return Each.State == EServiceVehicleState::Serving && Each.CurrentJob != 0; });
+			VehicleId = V != nullptr ? V->Id : 0;
+			return VehicleId != 0;
+		}, 240.0))) { return false; }
+
+	FServiceVehicle* Serving = const_cast<FServiceVehicle*>(Fixture.Service->FindVehicle(VehicleId));
+	const int32 ServingJob = Serving->CurrentJob;
+	if (FServiceJob* Job = const_cast<FServiceJob*>(Fixture.Service->GetJobs().FindByPredicate([ServingJob](const FServiceJob& Each) { return Each.Id == ServingJob; })))
+	{
+		Job->State = EServiceJobState::Done;
+		Job->QuantityOwed = 0.0;
+	}
+	Serving->CurrentJob = 0;
+
+	const int32 Unresolved = FuelServiceTest::QuietUnresolvedSteps(Fixture, 300);
+	TestTrue(FString::Printf(TEXT("a jobless vehicle at a stand is unresolved for at most one Step (%d of 300)"), Unresolved), Unresolved <= 1);
+	const FServiceVehicle* After = Fixture.Service->FindVehicle(VehicleId);
+	TestTrue(TEXT("and it has gone for home"), After != nullptr && After->State != EServiceVehicleState::Serving);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelQuietNoVehiclesTest, "AirportOps.Fuel.QuietBoard.NoVehiclesRefusal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelQuietNoVehiclesTest::RunTest(const FString& Parameters)
+{
+	// #417's NoVehicles REFUSAL, beside the three parts above: a demand at a depot with nothing in it is refused
+	// terminally (Unserviceable) and waits for the purchase that re-opens it (AddPurchasedVehicle, woken by the bus's
+	// FleetChanged) - it must not keep the JobBoard pass re-dirtying itself every frame until the player buys.
+	FFuelFixture Fixture;
+	Fixture.bEmptyDepot = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
+	Fixture.Advance(0.2);
+	if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
+	if (!TestEqual(TEXT("refused for the missing vehicle"),
+		static_cast<int32>(Fixture.Service->GetJobs()[0].Why), static_cast<int32>(EServiceRefusal::NoVehicles))) { return false; }
+	const int32 Unresolved = FuelServiceTest::QuietUnresolvedSteps(Fixture, 300);
+	TestTrue(FString::Printf(TEXT("a depot with no vehicles leaves the board quiet (%d of 300 Steps unresolved)"), Unresolved), Unresolved <= 1);
+	return true;
+}
+
 #endif
