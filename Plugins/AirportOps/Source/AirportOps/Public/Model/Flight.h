@@ -119,6 +119,7 @@ enum class ELapseReason : uint8
  * board's ById/ByAgent - and a struct in the board's arrays would move whenever they grew. Nor does the save need a
  * struct: UFlightBoard::Serialize writes each flight's own tagged properties BY VALUE, so a UPROPERTY added here is
  * saved with no edit there. NEVER A POINTER TO A RUNTIME OBJECT among them: OpsSave would write it as a path.
+ * ENFORCED BY: Check-Architecture rule 37 (persistent-refs-transient, UFlight in $savedByValueClasses)
  */
 UCLASS()
 class AIRPORTOPS_API UFlight : public UObject

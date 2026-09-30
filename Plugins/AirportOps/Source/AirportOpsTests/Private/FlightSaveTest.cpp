@@ -14,6 +14,8 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "Serialization/MemoryWriter.h"
+#include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 #include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -754,6 +756,48 @@ bool FFlightSaveRestoreRetiresReplacedFlightsTest::RunTest(const FString& Parame
 	TestTrue(TEXT("the inbox lists the restored object"), Board->Offers().Num() == 1 && Board->Offers()[0] == Restored);
 	TestFalse(TEXT("a reader still holding the pre-load flight reads null, not the pre-load state"), Reader.IsValid());
 	TestNotEqual(TEXT("the revision moved, so every viewmodel keyed on it re-reads the board"), Board->Revision(), RevisionBefore);
+	return true;
+}
+
+/**
+ * #452 REVIEW: the pre-v6 path. A blob from before #425 is the board's tags and nothing after them - its flights were
+ * paths, which the Transient arrays' tags are now skipped for. It restores NO flights and says so; and the load still
+ * retires the board's own pre-load flights and moves Revision, so nothing keeps showing them as if they had loaded.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightSavePreV6BlobRestoresNoFlightsTest,
+	"AirportOps.Model.FlightSave.PreV6BlobRestoresNoFlights",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightSavePreV6BlobRestoresNoFlightsTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	UFlightBoard* Board = SaveTestBoard();
+	UFlight* PreLoad = ByValueOffer(*Board, *Clock, TEXT("PIN 5"));
+	const int32 Id = PreLoad->Id;
+	const TWeakObjectPtr<UFlight> Reader = PreLoad;
+
+	// A PRE-v6 BLOB, written as OpsSave::SerializeObject wrote one then: the same archive, the tagged pass ALONE -
+	// UObject::Serialize, not the board's override, so no by-value section follows the tags.
+	TArray<uint8> Bytes;
+	{
+		FMemoryWriter Writer(Bytes, /*bIsPersistent*/ true);
+		FObjectAndNameAsStringProxyArchive Ar(Writer, /*bInLoadIfFindFails*/ false);
+		Board->UObject::Serialize(Ar);
+	}
+	if (!TestTrue(TEXT("the tags alone serialised to something"), Bytes.Num() > 0)) { return false; }
+
+	const uint32 RevisionBefore = Board->Revision();
+	AddExpectedMessagePlain(TEXT("no flights by value"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	OpsSave::DeserializeObject(*Board, Bytes);
+
+	TestEqual(TEXT("no offer is restored - a pre-v6 blob holds none by value"), Board->Offers().Num(), 0);
+	TestEqual(TEXT("nothing live either"), Board->Live().Num(), 0);
+	TestEqual(TEXT("nor in History"), Board->GetHistoryCountForTest(), 0);
+	TestEqual(TEXT("and none counted as pending"), Board->PendingOfferCount(), 0);
+	TestNull(TEXT("the pre-load flight is no longer found by id"), Board->FindByIdForTest(Id));
+	TestFalse(TEXT("and a reader still holding it reads null - retired, not left showing"), Reader.IsValid());
+	TestNotEqual(TEXT("the revision moved, so every viewmodel re-reads the now-empty board"), Board->Revision(), RevisionBefore);
 	return true;
 }
 

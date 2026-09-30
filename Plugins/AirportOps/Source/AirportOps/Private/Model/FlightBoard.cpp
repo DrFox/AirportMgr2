@@ -50,6 +50,14 @@ namespace FlightBoardSave
 			{
 				UFlight* Flight = NewObject<UFlight>(&Board);
 				Flight->Serialize(Ar);
+				// HALF-READ IS NOT RESTORED: the archive failed inside this flight, so its fields are part saved values,
+				// part defaults - an offer with no id, or an accepted flight with no stand. Dropped, and so not counted in
+				// the corrupt-blob Error, which reports only the flights read whole (#452 review).
+				if (Ar.IsError())
+				{
+					Flight->MarkAsGarbage();
+					break;
+				}
 				List.Add(Flight);
 			}
 			return;
@@ -125,7 +133,7 @@ void UFlightBoard::Serialize(FArchive& Ar)
 		{
 			// SAID, NOT SWALLOWED: OpsSave::Restore reports success regardless, and a board short of flights is
 			// otherwise indistinguishable from one that had fewer.
-			UE_LOG(LogAirportOps, Error, TEXT("Restore: the Flights blob is corrupt - kept the %d flight(s) read before it failed"),
+			UE_LOG(LogAirportOps, Error, TEXT("Restore: the Flights blob is corrupt - kept the %d flight(s) read whole before it failed"),
 				Flights.Num() + History.Num());
 		}
 	}

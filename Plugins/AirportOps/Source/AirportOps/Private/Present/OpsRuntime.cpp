@@ -43,8 +43,8 @@ UOpsRuntime::UOpsRuntime()
 	OfferGenerator = CreateDefaultSubobject<UOfferGenerator>(TEXT("OfferGenerator"));
 	FlightBoard->Generator = OfferGenerator;
 
-	// The money, and the same forwarding shape: this class gains two pointers and a line in
-	// Attach, and every decision about what things cost lives in UPricing, not here.
+	// The money, and the same forwarding shape: this class gains two pointers and the wiring
+	// below, and every decision about what things cost lives in UPricing, not here.
 	Ledger = CreateDefaultSubobject<ULedger>(TEXT("Ledger"));
 	Pricing = CreateDefaultSubobject<UPricing>(TEXT("Pricing"));
 
