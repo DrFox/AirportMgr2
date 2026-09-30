@@ -142,6 +142,13 @@ public:
 
 	const TArray<FOpsAlert>& GetAlerts() const { return Alerts; }
 
+	/**
+	 * What a deadlock asks of the player - "the layout needs another way round". ONE SOURCE for the
+	 * Deadlock alert and the inspector's deadlock line (2026-09-30), so the two say the same fix.
+	 * ENFORCED BY: AirportMgr.Inspector.HoldAndDeadlockLines (card and recomputed alert both carry it)
+	 */
+	static FText DeadlockRemedy();
+
 	/** How many times Recompute has run - for the pass's composition tests. */
 	int32 RecomputeCountForTest() const { return RecomputeCount; }
 

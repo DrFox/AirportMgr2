@@ -64,19 +64,58 @@ namespace InspectFacts
 		}
 	}
 
+	namespace
+	{
+		/**
+		 * StatusOf's precedence, with the hold line composed from Hold and BlockerName and
+		 * bOutIsHold saying whether it won. ONE BODY for the public StatusOf and DescribeAgent -
+		 * the latter knows the runway and the blocker's class, the former neither - so the
+		 * order is written once (see FAgentFacts::bStatusIsHold).
+		 */
+		FString StatusWithHold(const FRoadAgent& Agent, const FAgentHold& Hold, const FString& BlockerName, bool& bOutIsHold)
+		{
+			bOutIsHold = false;
+			if (Agent.bAwaitingStand)
+			{
+				return TEXT("No stand - waiting");
+			}
+			if (Agent.bDepartureArmed && Agent.Phase == EAgentPhase::Taxiing)
+			{
+				return TEXT("Departure armed");
+			}
+			if (Hold.IsSet())
+			{
+				bOutIsHold = true;
+				// NO DURATION: the stall clock is movement time and Airside has no game clock to turn
+				// it into the card's units - see HoldLine. The inspector re-says it with one.
+				return HoldLine(Hold, BlockerName, FString());
+			}
+			// NO RECURSION BACK: StatusOf only calls here when one of the three branches above will
+			// return - awaiting a stand, armed, or waiting (HoldOf sets the hold from GetWaitingOn,
+			// the very test StatusOf made). The check() pins that the fall-through cannot re-enter.
+			check(!Agent.bAwaitingStand && !(Agent.bDepartureArmed && Agent.Phase == EAgentPhase::Taxiing) && Agent.GetWaitingOn() == 0);
+			return StatusOf(Agent);
+		}
+
+		/** "aircraft 7" / "vehicle 7" - the blocker as Airside can name it: no registrations here. */
+		FString BlockerNoun(const UGroundTraffic* Traffic, int32 BlockerId)
+		{
+			const FRoadAgent* Blocker = Traffic != nullptr ? Traffic->FindAgent(BlockerId) : nullptr;
+			return Blocker != nullptr && Blocker->Class != ETraversalClass::Aircraft
+				? FString::Printf(TEXT("vehicle %d"), BlockerId)
+				: FString::Printf(TEXT("aircraft %d"), BlockerId);
+		}
+	}
+
 	FString StatusOf(const FRoadAgent& Agent)
 	{
-		if (Agent.bAwaitingStand)
+		if (Agent.bAwaitingStand || (Agent.bDepartureArmed && Agent.Phase == EAgentPhase::Taxiing) || Agent.GetWaitingOn() != 0)
 		{
-			return TEXT("No stand - waiting");
-		}
-		if (Agent.bDepartureArmed && Agent.Phase == EAgentPhase::Taxiing)
-		{
-			return TEXT("Departure armed");
-		}
-		if (Agent.GetWaitingOn() != 0)
-		{
-			return FString::Printf(TEXT("Holding for aircraft %d"), Agent.GetWaitingOn());
+			// THE THREE THAT OUTRANK MOTION go through StatusWithHold's one ordering; a bare agent
+			// has no network to name a runway by and no traffic to class its blocker.
+			bool bIsHold = false;
+			const FAgentHold Hold = HoldOf(Agent, nullptr);
+			return StatusWithHold(Agent, Hold, BlockerNoun(nullptr, Hold.WaitingOn), bIsHold);
 		}
 		if (Agent.IsCrossing())
 		{
@@ -110,9 +149,7 @@ namespace InspectFacts
 			return false;
 		}
 		Out.Id = Agent->Id;
-		Out.TypeName = !Agent->TypeCode().IsNone()
-			? Agent->TypeCode().ToString()
-			: FString(Agent->Class == ETraversalClass::Aircraft ? TEXT("Aircraft") : TEXT("Vehicle"));
+		Out.TypeName = TypeNameOf(*Agent);
 		Out.Phase = Agent->Phase;
 		// Model heading is radians yaw from +X (east), anticlockwise. Compass is degrees from
 		// north, clockwise: 90 - yaw, wrapped.
@@ -121,7 +158,31 @@ namespace InspectFacts
 		Out.GroundSpeed = Agent->LastMotion.GroundSpeed;
 		Out.Altitude = Agent->LastMotion.Altitude;
 		Out.Destination = DestinationOf(*Agent, Network);
-		Out.Status = StatusOf(*Agent);
+		Out.Hold = HoldOf(*Agent, Network);
+		Out.Status = StatusWithHold(*Agent, Out.Hold, BlockerNoun(&Traffic, Out.Hold.WaitingOn), Out.bStatusIsHold);
+
+		// THE RING, from the alert's own list (UGroundTraffic::CurrentDeadlocks), so the card and
+		// the Deadlock alert cannot disagree. Asked only of a waiter - every cycle member waits on
+		// the next, so a mover is never in one - which keeps the walk off the common frame. That
+		// walk is linear in agents (one out-edge each; ~20 agents on 2026-09-30).
+		// ENFORCED BY: Airside.Model.InspectFacts.HoldAndDeadlockPartners
+		Out.DeadlockedWith.Reset();
+		if (Out.Hold.IsSet())
+		{
+			TArray<TArray<int32>> Cycles;
+			Traffic.CurrentDeadlocks(Cycles);
+			for (const TArray<int32>& Cycle : Cycles)
+			{
+				if (Cycle.Contains(Agent->Id))
+				{
+					for (const int32 Member : Cycle)
+					{
+						if (Member != Agent->Id) { Out.DeadlockedWith.Add(Member); }
+					}
+					break;
+				}
+			}
+		}
 		Out.bEngineRunning = Agent->bEngineRunning;
 		Out.bCanDepart = Agent->Phase == EAgentPhase::Parked;
 		if (const FAirframe* Aircraft = Agent->AsAircraft())
@@ -129,6 +190,84 @@ namespace InspectFacts
 			Out.Pushback = PushbackText(Aircraft->PushbackNeed);
 		}
 		return true;
+	}
+
+	FAgentHold HoldOf(const FRoadAgent& Agent, const URoadNetwork* Network)
+	{
+		FAgentHold Hold;
+		Hold.WaitingOn = Agent.GetWaitingOn();
+		if (Hold.WaitingOn == 0)
+		{
+			return Hold;
+		}
+		Hold.StalledSeconds = Agent.GetStalledSeconds();
+		// READ WHENEVER WaitingOn IS SET, although BlockedResource's own comment calls it
+		// meaningless with BlockedStep -1: Refuse writes the resource and the blocker together
+		// (issue #174), so a set WaitingOn always came with the resource that refused it.
+		const FTrafficResource& Resource = Agent.GetBlockedResource();
+		switch (Resource.Kind)
+		{
+		case ETrafficResourceKind::Surface:
+		{
+			Hold.At = EHoldAt::Runway;
+			// THE RUNWAY CARD'S OWN PAIR (DescribeRunway), so "holding short of 09/27" names the
+			// strip exactly as clicking it would - not a second designator derivation here.
+			FRunwayCardFacts Card;
+			if (Network != nullptr && Resource.Surface.IsSet()
+				&& DescribeRunway(*Network, Resource.Surface.Index, Card))
+			{
+				Hold.RunwayPair = Card.Pair;
+			}
+			break;
+		}
+		case ETrafficResourceKind::Edge:
+			Hold.At = EHoldAt::Behind;
+			break;
+		case ETrafficResourceKind::Node:
+		default:
+			Hold.At = EHoldAt::Crossing;
+			break;
+		}
+		return Hold;
+	}
+
+	FString HoldLine(const FAgentHold& Hold, const FString& BlockerName, const FString& Duration)
+	{
+		if (!Hold.IsSet())
+		{
+			return FString();
+		}
+		// FString::Format over NSLOCTEXT, not Printf - the aircraft card's own reason (issue #192):
+		// UE 5.8's Printf wants a literal format, and these words are translatable.
+		FString Line;
+		switch (Hold.At)
+		{
+		case EHoldAt::Runway:
+			Line = Hold.RunwayPair.IsEmpty()
+				? FString::Format(*NSLOCTEXT("Airside", "HoldRunwayBare", "Holding short of runway for {0}").ToString(), { BlockerName })
+				: FString::Format(*NSLOCTEXT("Airside", "HoldRunway", "Holding short of runway {0} for {1}").ToString(),
+					{ Hold.RunwayPair, BlockerName });
+			break;
+		case EHoldAt::Behind:
+			Line = FString::Format(*NSLOCTEXT("Airside", "HoldBehind", "Waiting behind {0}").ToString(), { BlockerName });
+			break;
+		case EHoldAt::Crossing:
+		case EHoldAt::None:
+		default:
+			// NONE READS AS A CROSSING: HoldOf only leaves it None for an unset hold, returned above;
+			// a node is also what a default FTrafficResource is.
+			Line = FString::Format(*NSLOCTEXT("Airside", "HoldCrossing", "Waiting at crossing for {0}").ToString(), { BlockerName });
+			break;
+		}
+		// The turnaround line's separator (UArrivalRowViewModel::DescribeTurnaround), so the card reads as one voice.
+		return Duration.IsEmpty() ? Line : Line + TEXT(" · ") + Duration;
+	}
+
+	FString TypeNameOf(const FRoadAgent& Agent)
+	{
+		return !Agent.TypeCode().IsNone()
+			? Agent.TypeCode().ToString()
+			: FString(Agent.Class == ETraversalClass::Aircraft ? TEXT("Aircraft") : TEXT("Vehicle"));
 	}
 
 	FString PushbackText(EPushbackNeed Need)

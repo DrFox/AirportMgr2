@@ -33,6 +33,11 @@ namespace
 	}
 }
 
+FText UOpsAlerts::DeadlockRemedy()
+{
+	return NSLOCTEXT("OpsAlerts", "DeadlockRemedy", "the layout needs another way round");
+}
+
 void UOpsAlerts::Reset()
 {
 	Alerts.Reset();
@@ -161,8 +166,8 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 			}
 			const int32 Lowest = FMath::Min(Cycle);
 			FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::Deadlock, Lowest, NAME_None,
-				FText::Format(NSLOCTEXT("OpsAlerts", "Deadlock", "{0} aircraft deadlocked - the layout needs another way round"),
-					FText::AsNumber(Cycle.Num()))));
+				FText::Format(NSLOCTEXT("OpsAlerts", "Deadlock", "{0} aircraft deadlocked - {1}"),
+					FText::AsNumber(Cycle.Num()), DeadlockRemedy())));
 			if (const FRoadAgent* Agent = Sources.Traffic->FindAgent(Lowest))
 			{
 				OpsAlertFocusAgent(Alert, *Agent);

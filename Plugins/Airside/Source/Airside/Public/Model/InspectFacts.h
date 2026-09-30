@@ -9,6 +9,47 @@ class UGroundTraffic;
 class URoadNetwork;
 
 /**
+ * WHAT an agent is held at, in the card's terms - the refused FTrafficResource's kind. Its own
+ * enum rather than ETrafficResourceKind itself: the card words a Node as "a crossing" and an
+ * Edge as "behind", and a panel that switched on the arbiter's enum would have to learn that
+ * a holding-position node is expanded to a runway Surface before it reaches here.
+ */
+enum class EHoldAt : uint8
+{
+	None,
+	/** A runway segment - the strip is occupied. */
+	Runway,
+	/** A guideline edge - a queue: someone is ahead on the lane. */
+	Behind,
+	/** A guideline node - a junction or crossing someone else holds. */
+	Crossing,
+};
+
+/**
+ * Why an agent is stopped, RAW: whom it waits for (an agent ID - Airside knows no
+ * registrations), what it is held at and for how long. The game module names the blocker and
+ * composes the sentence through InspectFacts::HoldLine, so the words have one source whichever
+ * layer supplies the name.
+ */
+struct FAgentHold
+{
+	/** FRoadAgent::GetWaitingOn - 0 when nothing refuses it. */
+	int32 WaitingOn = 0;
+	EHoldAt At = EHoldAt::None;
+	/** "09/27" when At is Runway and a network was given to name the strip; empty otherwise. */
+	FString RunwayPair;
+	/**
+	 * FRoadAgent::GetStalledSeconds - how long it has stood waiting, in MOVEMENT seconds: real
+	 * time x the speed multiplier, what agents run on (USimClock's header). NOT game time - the
+	 * clock also compresses the day (~72x at the default daylight rate), and a reader showing
+	 * this beside game-time figures must convert it (UInspectorWidget::GameSecondsOfStall).
+	 */
+	double StalledSeconds = 0.0;
+
+	bool IsSet() const { return WaitingOn != 0; }
+};
+
+/**
  * What the inspector shows for an aircraft. PLAIN STRUCTS, not USTRUCTs: built every frame
  * for one panel, never saved, never Blueprint-bound - the Blueprint restyle binds to text
  * blocks the C++ widget fills, not to these.
@@ -60,6 +101,24 @@ struct FAgentFacts
 	 * does not know what a flight or a contract is. The seam this struct's header promised UFlight.
 	 */
 	FString Turnaround;
+
+	/** What it is waiting for, if anything - the Unstick card's "held at what, for whom, how long". */
+	FAgentHold Hold;
+
+	/**
+	 * Status IS the hold line - StatusOf's precedence chose it over "No stand" and "Departure
+	 * armed" - so a layer that can name the blocker may re-say it (InspectFacts::HoldLine).
+	 * A flag rather than the game module re-deriving the precedence: two copies of that order
+	 * would drift the first time a status was added above the hold.
+	 */
+	bool bStatusIsHold = false;
+
+	/**
+	 * The OTHER members of the all-aircraft wait cycle this agent is in, empty when none. From
+	 * UGroundTraffic::CurrentDeadlocks - the very list the ops Deadlock alert reads - so the card
+	 * and the alert cannot disagree about whether this aircraft is deadlocked.
+	 */
+	TArray<int32> DeadlockedWith;
 };
 
 struct FStandFacts
@@ -168,7 +227,8 @@ namespace InspectFacts
 	AIRSIDE_API bool DescribeStand(const UGroundTraffic* Traffic, const URoadNetwork& Network, int32 EntityIndex, FStandFacts& Out);
 
 	/**
-	 * One line, first match wins: No stand - waiting; Departure armed; Holding for aircraft N; Crossing runway;
+	 * One line, first match wins: No stand - waiting; Departure armed; the hold line (HoldLine,
+	 * the blocker named "aircraft N" - DescribeAgent names a vehicle, the game module a flight); Crossing runway;
 	 * Shutting down (Ns); Parked; On final / Landing roll; Rolling / Climbing; Taxiing.
 	 * A STRING, not an enum: presentation of several orthogonal model facts, and nothing
 	 * branches on it.
@@ -189,6 +249,34 @@ namespace InspectFacts
 	 * ENFORCED BY: Airside.Model.InspectFacts.Taxiway
 	 */
 	AIRSIDE_API bool DescribeTaxiway(const URoadNetwork& Network, int32 SegmentIndex, FTaxiwayCardFacts& Out);
+
+	/**
+	 * What Agent waits for, raw. Network may be null: the runway pair is then left empty and
+	 * HoldLine says "runway" without one.
+	 */
+	AIRSIDE_API FAgentHold HoldOf(const FRoadAgent& Agent, const URoadNetwork* Network);
+
+	/**
+	 * THE hold sentence - "Holding short of runway 09/27 for G-HDVK · 12 min", "Waiting behind
+	 * G-HDVK · 1 h 36 min", "Waiting at crossing for G-HDVK" - with the blocker called BlockerName
+	 * and " · Duration" appended when Duration is not empty. Empty when Hold is not set. The one
+	 * wording StatusOf and the inspector share.
+	 *
+	 * DURATION IS THE CALLER'S WORDS, IN GAME TIME (ruled 2026-09-30): Hold.StalledSeconds is
+	 * movement time, and only a layer with the game clock can say how much GAME time that was - so
+	 * Airside, which has none, passes nothing and the inspector passes its game-time duration in
+	 * the turnaround line's own format. A figure formatted here would be in the wrong unit.
+	 * ENFORCED BY: Airside.Model.InspectFacts.HoldLine; AirportMgr.Inspector.HoldAndDeadlockLines
+	 * (a known stall at a known day rate reads as the expected game minutes)
+	 */
+	AIRSIDE_API FString HoldLine(const FAgentHold& Hold, const FString& BlockerName, const FString& Duration);
+
+	/**
+	 * FAgentFacts::TypeName's rule for any agent - the airframe or vehicle type code, else the
+	 * traversal class. Public so the inspector names a blocker ("FUEL #7") by the rule its own
+	 * card title uses, without describing the blocker whole.
+	 */
+	AIRSIDE_API FString TypeNameOf(const FRoadAgent& Agent);
 
 	/** The card's pushback words for a need. */
 	AIRSIDE_API FString PushbackText(EPushbackNeed Need);
