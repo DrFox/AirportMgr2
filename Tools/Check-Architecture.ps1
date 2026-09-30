@@ -1473,6 +1473,41 @@ foreach ($file in $facadeFiles) {
 }
 $ranRules.Add('refusal-is-announced')
 
+# --- 33. THE ARRIVAL QUEUE IS A PASS ------------------------------------------------------------
+# Ops batch 3 PR D (spec 2026-09-29-ops-batch3 §5): UFlightBoard::TickQueue used to be called from
+# UOpsRuntime::Tick every frame, asking the runway live because nothing announced a taxiing crossing
+# clearing. Airside now derives OnRunwayFreed, and the queue is the bus's "ArrivalQueue" pass. A
+# second production caller of TickQueue( - back in Tick, or anywhere else - is the per-frame poll
+# returning beside the pass, and the quiet airport's zero-cost with it. The one legal caller is
+# UOpsRuntime::RunArrivalQueue; tests call it directly on a bare board and are exempt.
+$queuePassFile = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps\Private\Present\OpsRuntime.cpp'
+if (-not (Test-Path $queuePassFile)) {
+    $failures.Add("queue-is-a-pass: $queuePassFile is named by rule 33 but does not exist - update the rule")
+}
+else {
+    $queueRunner = Select-String -Path $queuePassFile -Pattern 'void UOpsRuntime::RunArrivalQueue\(\)'
+    if ($null -eq $queueRunner) {
+        $failures.Add("queue-is-a-pass: UOpsRuntime::RunArrivalQueue not found in $queuePassFile - update rule 33")
+    }
+}
+foreach ($queueTree in @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'), (Join-Path $Root 'Source\AirportMgr'))) {
+    foreach ($file in Get-Sources $queueTree @('.cpp')) {
+        if ($file.Name -like '*Test.cpp') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        # WHICH FUNCTION each call sits in: the nearest preceding definition line at column 0.
+        $current = ''
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            if ($line -match '^[A-Za-z].*\b(\w+::\w+)\(') { $current = $Matches[1] }
+            if ($line -match '^\s*(//|\*)') { continue }
+            if ($line -match '(->|\.)TickQueue\(' -and $current -ne 'UOpsRuntime::RunArrivalQueue') {
+                $failures.Add("queue-is-a-pass: $($file.Name):$($i + 1) calls TickQueue( from $current - the queue runs only as the ArrivalQueue pass (UOpsRuntime::RunArrivalQueue)")
+            }
+        }
+    }
+}
+$ranRules.Add('queue-is-a-pass')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two
