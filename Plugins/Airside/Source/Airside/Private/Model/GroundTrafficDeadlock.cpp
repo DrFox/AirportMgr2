@@ -161,9 +161,15 @@ void FDeadlockResolver::FindCycles(TConstArrayView<FRoadAgent> Agents, const FTr
 
 	// ONE EDGE PER STALLED WAITER. StalledSeconds only accrues while an agent is Taxiing,
 	// stopped and naming a blocker (see FRoadAgent::Advance's caller in AdvanceOnce), and
-	// FClaimPass::Run clears WaitingOn the moment an agent stops taxiing - so a parked or
-	// retired agent cannot contribute an edge, and a cycle through one is not representable
-	// rather than merely unlikely.
+	// FClaimPass::Run clears WaitingOn for an agent that is off a route (the arm that gives it
+	// HoldRunwayOnly) - so a parked or retired agent cannot contribute an edge, and a cycle
+	// through one is not representable rather than merely unlikely.
+	//
+	// A REVERSING AGENT IS NOT OFF A ROUTE since issue #434, so that second half no longer keeps
+	// it out of the wait map: a refused reverse names its blocker like any other wait. Whether it
+	// can be a stalled waiter here, and what the resolver may then do with a member it cannot
+	// replan, is #455. The outcome two vehicles reach at a span's end without either is pinned by
+	// Airside.Model.Traffic.ReversingTruckAndVanMeetingAtTheSpanEnd.
 	//
 	// MEMBER, NOT A LOCAL (issue #190) - now Scratch, the caller's: see FCycleScratch. Reset here,
 	// not left with whatever the last call found.

@@ -367,6 +367,37 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			// stop dead on the runway exit.
 			Plan = &Agent.TaxiInPlan;
 		}
+		else if (Agent.Phase == EAgentPhase::Reversing
+			&& Agent.Follower.Plan.Steps.IsValidIndex(Agent.GetResumeStep()))
+		{
+			// A VEHICLE BACKING OUT HAS A ROUTE TO COME BACK TO (issue #434). Follower.Plan is the
+			// whole route and the follower is parked on it while the reverse plays, so the taxi arm
+			// above cannot take it: FromStep would be the span under the truck and the arm would
+			// treat it as driving. What the rebuild has to keep live is what the truck drives NEXT -
+			// the steps from ResumeStep on, cut out as the remainder the moment it has backed out
+			// (RoadAgent's reverse handover). An edit during a reverse otherwise left it driving,
+			// after backing out, a route of freed handles to a freed goal: claims that matched
+			// nothing, invisible to arbitration, until the next edit.
+			//
+			// FROM ResumeStep, NOT FROM THE SPAN'S START, and that is a decision rather than a
+			// shortcut. The span is played from FReverseRun's own snapshot of it, which nothing here
+			// touches; re-resolving it as well would let a failure inside it replan or truncate the
+			// route from under the STEP INDEX the handover cuts the remainder by, and the truck
+			// would pick up somewhere it is not. What that costs, accepted 2026-09-30: the span's
+			// own steps keep the handles they had, so a rebuild that freed them leaves this truck's
+			// hold on the span pointing at nothing until it has backed out - the state it was in
+			// for the whole leg before this change, for the rest of one leg rather than the whole
+			// of it. The remainder, the goal and every claim after the back-out are live.
+			//
+			// WHAT A FAILURE HERE DOES, stated because it differs by where it lands: a step after the
+			// span that will not re-resolve is replanned or TRUNCATED, and the truck then parks at the
+			// span's end on a live goal (Airside.Model.Traffic.RebuildDuringReverseTruncatesTheRemainder);
+			// but when the span's own END node is freed with no live node at its position, Strand
+			// marks the route dead while the agent stays Reversing, and that case is not handled
+			// here - see that test's comment, and #455.
+			Plan = &Agent.Follower.Plan;
+			FromStep = Agent.GetResumeStep();
+		}
 
 		// A PARKED AGENT'S GOAL IS WHERE IT STANDS, and the rebuild may have freed that node -
 		// every derived one was. Re-pointed by position, or every later search from it (a
@@ -382,6 +413,23 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			if (Here.IsSet())
 			{
 				Agent.SetGoal(Here);
+			}
+		}
+
+		// A REVERSE THAT ENDS THE ROUTE has no remainder to re-resolve (no arm above), but its goal
+		// is the span's end node, freed like any other derived one, and it is where the vehicle
+		// will park (issue #434): re-pointed by position, as a parked agent's is, from the end of
+		// the route it is backing along.
+		// ENFORCED BY: Airside.Model.Traffic.RebuildDuringAReverseThatEndsTheRoute
+		if (Agent.Phase == EAgentPhase::Reversing && Plan == nullptr
+			&& Agent.Follower.Plan.Polyline.Num() > 0
+			&& Network.GetGuidelineNode(Agent.GoalNode) == nullptr)
+		{
+			const FGuidelineNodeId Ends = RouteSearch::FindNearestNode(
+				Network, Agent.Follower.Plan.Polyline.Last(), Agent.Class, Rules.ResolveRadius, &NodeIndex);
+			if (Ends.IsSet())
+			{
+				Agent.SetGoal(Ends);
 			}
 		}
 
@@ -799,7 +847,17 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// rebuilding the SPEED PROFILE. FPushbackRun has no profile - it is a trapezoid to
 	// PushDistance - so there is nothing to rebuild, and HasArrived's clamp to Plan.Length
 	// covers the one thing a truncation can do to it.
-	const bool bDriving = (&Plan == &Agent.Follower.Plan);
+	//
+	// NOR IS A REVERSING VEHICLE'S ROUTE (issue #434), although the plan IS the follower's: the
+	// follower is not stepped while FReverseRun / FTowReverseRun play the span back, so what
+	// bDriving gates has no meaning for it - no rejoin onto the pavement under it and no
+	// drive-side-flip restart (RejoinTaxi and RestartTaxi both put the agent back in Taxiing, which
+	// would end the reverse mid-leg), no stranding in place of a step it is not on, and no Replace
+	// (Follower.Start at the handover rebuilds the profile and the reverse-leg list from the
+	// remainder anyway). It is re-resolved as a route NOT YET DRIVEN, the case the taxi-in plan is.
+	// ENFORCED BY: Airside.Model.Traffic.RebuildDuringReverseTruncatesTheRemainder (a step after the span fails
+	// to re-resolve; without the Taxiing conjunct that step's failure strands or rejoins the reverse away)
+	const bool bDriving = (&Plan == &Agent.Follower.Plan) && Agent.Phase == EAgentPhase::Taxiing;
 
 	auto Strand = [&Agent, &Plan, bDriving, &Occupancy](const TCHAR* Why)
 	{

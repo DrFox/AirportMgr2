@@ -313,8 +313,15 @@ double FClaimPass::CentreOf(const FRoadAgent& Agent)
 	// AND THE DISTANCE COMES FROM WHICHEVER STRUCT IS DRIVING - see FRoadAgent::
 	// DistanceAlongPlan. Agent.Follower.Travelled on a manoeuvring agent is where the taxi IN
 	// ended, which measured 99 000 uu against a real 1 500 the first time it was asked.
+	//
+	// A REVERSE FLIPS IT FOR THE SAME REASON (issue #434). A vehicle backing along its plan has the
+	// body's forward pointing AGAINST the plan, so the steered axle - which DistanceAlongPlan
+	// reports, see FRoadAgent::ReverseProgress - is the TRAILING one of the two axles in plan
+	// distance and the body centre, aft of it, is further along.
+	// ENFORCED BY: Airside.Model.ClaimCentre (a reversing body's centre, measured from its fixed axle)
 	const double Ahead = Agent.Chassis().BodyCentreX - Agent.Chassis().SteerAxleX;
-	const double Sign = Agent.Phase == EAgentPhase::Manoeuvring ? -1.0 : 1.0;
+	const bool bBodyBacks = Agent.Phase == EAgentPhase::Manoeuvring || Agent.Phase == EAgentPhase::Reversing;
+	const double Sign = bBodyBacks ? -1.0 : 1.0;
 	return Agent.DistanceAlongPlan() + Sign * Ahead;
 }
 
@@ -379,6 +386,21 @@ FClaimPass::FClaimWindow FClaimPass::WindowFor(const FRoadAgent& Agent) const
 	if (Agent.Phase == EAgentPhase::Manoeuvring)
 	{
 		Head = FMath::Max(Head, Agent.Pushback.Plan.Length + F * 0.5 + G);
+	}
+
+	// A REVERSE HOLDS ITS WHOLE SPAN FOR THE SAME REASON (issue #434), and it is the same kind of
+	// manoeuvre: a vehicle backing along a bay's reverse leg has no second way off it, so a head-on
+	// there has nobody to replan out of it and is a jam the resolver cannot break. Until this branch
+	// it held nothing at all - IsOnRoute left the phase out, so every pass gave it HoldRunwayOnly -
+	// and a push was cleared into a truck backing over the same ground
+	// (Airside.Model.Traffic.PushRefusedIntoABackingTruck).
+	//
+	// TO THE SPAN'S END, NOT THE ROUTE'S. What the vehicle drives after backing out is an ordinary
+	// taxi and claims as one from the tick it starts. The half footprint and the gap are added as
+	// for the push and the ordinary head above - see the alternative rejected there.
+	else if (Agent.Phase == EAgentPhase::Reversing)
+	{
+		Head = FMath::Max(Head, Agent.ReverseSpanEnd() + F * 0.5 + G);
 	}
 	const int32 Current = UGroundTraffic::CurrentStep(Plan, T);
 
@@ -1769,6 +1791,10 @@ void FClaimPass::Run(FRoadAgent& Agent, const URoadNetwork& Network)
 	// with an aeroplane on it, and something could be cleared down the line it is being
 	// pushed along. That is the same hole spec 3.4's crossing rule exists to close, in a
 	// phase where the aeroplane is barely moving and entirely unable to get out of the way.
+	//
+	// SO IS A REVERSE (issue #434): a truck backing along a bay's reverse leg is standing on that
+	// leg, and this arm read "not on a route" for it from 2026-09-17 - every claim dropped, the stop
+	// distance unbounded - until IsOnRoute named the phase.
 	if (!Agent.IsOnRoute())
 	{
 		HoldRunwayOnly(Agent, Network);
