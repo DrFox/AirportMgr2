@@ -119,8 +119,10 @@ public:
 	 *
 	 * HERE, ON THE FLEET'S DOOR, because the catalogue is what the door's other readers read - PriceOf, ResaleOf and
 	 * NameOf - and the join is where a scenario row's resale value is asked for (FFuelVehicleSpec::ResaleValue, which
-	 * rule 43 keeps in this file). NO BUMP of either fleet counter: no vehicle joined or left, and a catalogue is resolved
-	 * at attach, before any vehicle exists.
+	 * rule 43 keeps in this file). NO BUMP of either fleet counter: no vehicle joined or left. A catalogue is resolved at
+	 * attach, before any vehicle exists, and again after every load (UOpsRuntime::ApplyScenarioFigures, #449), onto the
+	 * vehicles the restore brought back - their kinds are the save's codes, and one a retune dropped reads TypeFor's no-row
+	 * answer, as an unknown code always has.
 	 * ENFORCED BY: AirportOps.Fleet.EveryBuyableTypeHasAChassis, AirportOps.Fleet.CatalogueDropsARowWithNoChassis
 	 */
 	int32 ResolveCatalogue(const TMap<FName, FFuelVehicleSpec>& Rows, const TArray<FName>& Starter,

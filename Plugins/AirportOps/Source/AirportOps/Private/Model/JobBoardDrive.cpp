@@ -183,9 +183,8 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 		// committed to the leg and should go round the queue that is there rather than into the back of
 		// it. The flicker argument covers a WINNER being re-picked every tick, which a committed route
 		// is not.
-		Query.WithCongestion(Traffic.GetOccupancy(), TruckId, Traffic.Rules.CongestionWeight);
+		Query.WithRules(Traffic.Rules, Traffic.GetOccupancy(), TruckId);
 		Query.WithVehicle(OwnVehicle);
-		Query.RunwayPenalty = Traffic.Rules.RunwayPenalty;
 		return Query;
 	};
 

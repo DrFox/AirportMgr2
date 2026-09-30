@@ -797,6 +797,30 @@ void UOpsRuntime::ArmJobBoardDeadline()
 	}
 }
 
+void UOpsRuntime::ApplyScenarioFigures(const UScenario& Scenario)
+{
+	// THE ROSTER'S RULING, FOR EVERY RECEIVER (#449): a design figure is the scenario's, and a save made before a retune
+	// must not carry the old one forward. Every field written here is Transient on its receiver, and this runs at
+	// Attach AND after every load - so a load keeps the game (clock time, vehicles, balance, flights) and takes the
+	// design from today's asset. It was six copies at Attach into four saved receivers beside one Transient one (the
+	// roster's): a retune plus a load priced the depot card's modules from the scenario and its vehicles from the save.
+	// The designer figures set from the same asset in the same breath, so none of them is the one somebody forgot to copy.
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.DesignFiguresAreTheScenarios (the re-apply), AirportOps.Model.Save.DesignFiguresAreNotSaved (nothing saved)
+	Clock->RealSecondsDaylight = Scenario.RealSecondsDaylight;
+	Clock->RealSecondsNight = Scenario.RealSecondsNight;
+	Clock->DawnHour = Scenario.DawnHour;
+	Clock->DuskHour = Scenario.DuskHour;
+	// THE VEHICLE CATALOGUE (#430) is joined here, not copied: each row's figures meet Content's chassis for its code
+	// once, and a row with no chassis is dropped with a Warning, instead of TypeFor re-assembling it per call from this
+	// map and the stand-letter table. HERE, THE ONE CALL SITE, since #449: Transient like every figure in this function,
+	// so a load resolves it again from today's scenario - the depot card's vehicles and modules priced by one asset.
+	ResolveVehicleCatalogue(*JobBoard, Scenario);
+	JobBoard->RefillLitresPerMinutePerPump = Scenario.DepotRefillLitresPerMinutePerPump;
+	FacilityPurchases->ModuleOffers = Scenario.ModuleOffers;
+	OfferGenerator->MaxPendingOffers = Scenario.MaxPendingOffers;
+	Airlines->Tuning = Scenario.AirlineSatisfaction;
+}
+
 void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 {
 	Detach();
@@ -829,25 +853,16 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// rather than skipped. See ResolveDefaultScenario.
 	if (const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario(*Catalog))
 	{
-		Clock->RealSecondsDaylight = Scenario->RealSecondsDaylight;
-		Clock->RealSecondsNight = Scenario->RealSecondsNight;
-		Clock->DawnHour = Scenario->DawnHour;
-		Clock->DuskHour = Scenario->DuskHour;
+		// THE DESIGN FIGURES, through ApplyScenarioFigures, which a load runs again (#449) - clock day, the vehicle
+		// catalogue and starter fleet, refill, module offers, inbox cap, airline tuning. BEFORE StartAtHour, which reads
+		// the day's shape.
+		ApplyScenarioFigures(*Scenario);
 
 		// BEFORE THE OFFER SCHEDULE BELOW, and that ordering is load-bearing: Every() books
 		// its first firing at Now() + Interval, so moving the clock after scheduling would
 		// leave the first offer due at a time that no longer means what it did.
 		Clock->StartAtHour(Scenario->StartHour);
 
-		// The designer figures set from the same asset in the same breath, so none of them
-		// is the one somebody forgot to copy. THE VEHICLE CATALOGUE (#430) is joined here, not copied: each row's
-		// figures meet Content's chassis for its code once, and a row with no chassis is dropped with a Warning,
-		// instead of TypeFor re-assembling it per call from this map and the stand-letter table.
-		ResolveVehicleCatalogue(*JobBoard, *Scenario);
-		JobBoard->RefillLitresPerMinutePerPump = Scenario->DepotRefillLitresPerMinutePerPump;
-		FacilityPurchases->ModuleOffers = Scenario->ModuleOffers;
-		OfferGenerator->MaxPendingOffers = Scenario->MaxPendingOffers;
-		Airlines->Tuning = Scenario->AirlineSatisfaction;
 		// A NEW GAME, like the ledger's Open below: an airport attached afresh starts every airline at
 		// the tuning's start. A load overwrites it from the snapshot moments later.
 		Airlines->ResetForNewGame();
@@ -1240,9 +1255,9 @@ void UOpsRuntime::PostDailyUpkeep()
 	// more than a Clock->Every(...) line: BuildCost::DailyUpkeep lives in Build/, which
 	// Model/ - where the posting and the skip-if-zero rule now live, see ULedger::
 	// PostDailyUpkeep - may not include (Check-Architecture rule 1).
-	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
+	// THE APRON'S RATE through Content/'s one resolver (#449), not the settings CDO read raw.
 	const double Base = BuildCost::DailyUpkeep(*Target->Network,
-		Settings != nullptr ? Settings->ApronUpkeepPerSquareMetrePerDay : 0.0);
+		UAirsideSettings::ResolveApronRates().UpkeepPerSquareMetrePerDay);
 	// THE FACILITIES' SHARE, from the one service that knows what a module and a vehicle cost to keep
 	// (facility-upgrades spec R6), as lines of their own so the finance screen can say where it went.
 	const FFacilityUpkeep Facilities = FacilityPurchases->DailyUpkeep(*Target->Network);
@@ -1470,6 +1485,14 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	{
 		return false;
 	}
+	// THE DESIGN FIGURES ARE TODAY'S SCENARIO'S, NOT THE SAVE'S (#449) - Transient on every receiver, so the restore
+	// left them as they were, and this says so explicitly rather than trusting that nothing between changed them. Before
+	// SeedAirlines, which seeds new rows at the tuning's start.
+	if (const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario(*Catalog))
+	{
+		ApplyScenarioFigures(*Scenario);
+	}
+
 	// A SNAPSHOT FROM BEFORE THE "Airlines" BLOB restores no rows (OnBeforeRestore cleared them);
 	// every catalog airline comes back at the tuning's start.
 	SeedAirlines();

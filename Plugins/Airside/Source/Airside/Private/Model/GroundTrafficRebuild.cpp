@@ -134,12 +134,10 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 	// THE COST TERM IS THE POINT OF REPLANNING, not the ban. The ban removes the one edge
 	// the caller knows is hopeless; the congestion cost is what stops the new route from
 	// being the next queue along, which a plain shortest path would walk straight into.
-	Query.WithCongestion(Occupancy, Agent.Id, Rules.CongestionWeight);
-
-	// AND THE PENALTY FROM THE SAME RULES. Both replan errands allow a FREE runway end
-	// (Held, not All), so the multiplier is what keeps one a last resort rather than a
-	// shortcut. Read off the instance, so a level that tuned it is obeyed.
-	Query.RunwayPenalty = Rules.RunwayPenalty;
+	// AND THE PENALTY FROM THE SAME RULES, in the same call (WithRules, #449). Both replan errands allow a FREE runway
+	// end (Held, not All), so the multiplier is what keeps one a last resort rather than a shortcut. Read off the
+	// instance, so a level that tuned it is obeyed.
+	Query.WithRules(Rules, Occupancy, Agent.Id);
 
 	// A COPY, because SpliceReplan writes in place and this function promises the agent keeps
 	// the plan it had until BOTH the search and the splice have succeeded - see the guard
@@ -910,7 +908,9 @@ namespace
 		{
 			FRouteQuery Query = FPlanReResolver::QueryFor(ERouteErrand::RebuildReResolve,
 				Candidate.From, Goal, Agent);
-			Query.WithCongestion(Context.Occupancy, Agent.Id, Context.Rules.CongestionWeight);
+			// THE RULES IN FORCE, runway penalty included (#449): this took the congestion weight alone, so a level's
+			// tuned RunwayPenalty was obeyed everywhere except the rejoin every split, flip and Unstick takes.
+			Query.WithRules(Context.Rules, Context.Occupancy, Agent.Id);
 			// THE REJOIN STARTS PART-WAY ALONG ITS FIRST STEP, from rest (RestartTaxi below), so
 			// that is where its tow is judged from - the chain as it is, not laid straight.
 			if (Query.TowSeed.IsSet())
@@ -1341,8 +1341,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// The congestion term, as ReplanAt takes it: the guidelines that survived the rebuild
 		// by handle - every hand-drawn one - still carry real queues, and a re-routed arrival
 		// should be steered round them rather than into the back of one.
-		Query.WithCongestion(Occupancy, Agent.Id, Rules.CongestionWeight);
-		Query.RunwayPenalty = Rules.RunwayPenalty;
+		Query.WithRules(Rules, Occupancy, Agent.Id);
 
 		if (SpliceReplan(Network, Query, Failed, Plan))
 		{

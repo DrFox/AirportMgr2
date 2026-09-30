@@ -63,18 +63,23 @@ public:
 
 	/**
 	 * Real seconds the daylight hours (DawnHour to DuskHour) take at x1, and the night hours
-	 * (DuskHour to DawnHour). Tunables, set from the scenario by UOpsRuntime; the defaults
-	 * here are only what a bare NewObject gets. SAVED, like every figure on this object.
+	 * (DuskHour to DawnHour). Tunables, set from the scenario by UOpsRuntime::ApplyScenarioFigures;
+	 * the defaults here are only what a bare NewObject gets.
+	 *
+	 * TRANSIENT, NOT SAVED (#449) - UAirlineRoster::Tuning's ruling: a design figure is the scenario's,
+	 * and a save made before a retune must not carry the old one forward. It WAS saved "like every
+	 * figure on this object"; Now and the speed still are, being the game's rather than the design's.
+	 * ENFORCED BY: AirportOps.Model.Save.DesignFiguresAreNotSaved (not saved), AirportOps.Present.RuntimeLoad.DesignFiguresAreTheScenarios (re-applied)
 	 *
 	 * REPLACED RealSecondsPerGameDay (spec 2026-09-28): one figure for the whole day made the
 	 * night as slow as the morning peak. SetUniformDay gives the old single-rate behaviour.
 	 */
-	UPROPERTY() double RealSecondsDaylight = 2400.0;
-	UPROPERTY() double RealSecondsNight = 480.0;
+	UPROPERTY(Transient) double RealSecondsDaylight = 2400.0;
+	UPROPERTY(Transient) double RealSecondsNight = 480.0;
 
-	/** Hours of day, 0-24, at which daylight starts and ends. Dawn < Dusk. */
-	UPROPERTY() double DawnHour = 6.0;
-	UPROPERTY() double DuskHour = 20.0;
+	/** Hours of day, 0-24, at which daylight starts and ends. Dawn < Dusk. Transient - see above. */
+	UPROPERTY(Transient) double DawnHour = 6.0;
+	UPROPERTY(Transient) double DuskHour = 20.0;
 
 	/** Split RealSecondsPerDay across the two bands so the rate is the same all day - the
 	 *  old single-figure clock, which most tests want so their arithmetic reads plainly. */

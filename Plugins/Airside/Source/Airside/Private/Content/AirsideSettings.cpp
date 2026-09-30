@@ -93,12 +93,24 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 	// law where every UAircraftType defaults to RollingSteer, a steered final turn, no body centre
 	// and no TypeCode. Taxi and fit tests measured a vehicle no flight in the game is. Every
 	// FAirframe field added from now on arrives here through Airframe() with nothing to remember.
-	// Built per call: the callers are a Land with no chosen type and test fixtures, not a frame loop.
+	// Built per call: the callers are a Land with no chosen type and test fixtures, not a frame loop - 1 production
+	// caller (OpsRuntime.cpp LandNear), 2026-09-30.
 	// ENFORCED BY: Airside.Content.DefaultAirframeIsTheMeridiansOwn (every property), Check-Architecture
 	// rule 4 ('PiperMeridian fallback' - no PiperMeridian*() call in this file)
 	UAircraftType* Meridian = NewObject<UAircraftType>(GetTransientPackage());
 	UAircraftType::BuildPiperMeridian(Meridian);
 	return Meridian->Airframe();
+}
+
+UAirsideSettings::FApronRates UAirsideSettings::ResolveApronRates()
+{
+	FApronRates Out;
+	if (const UAirsideSettings* Settings = GetDefault<UAirsideSettings>())
+	{
+		Out.CostPerSquareMetre = Settings->ApronCostPerSquareMetre;
+		Out.UpkeepPerSquareMetrePerDay = Settings->ApronUpkeepPerSquareMetrePerDay;
+	}
+	return Out;
 }
 
 int32 UAirsideSettings::ResolveLargestServiceVehicleCallCountForTest = 0;

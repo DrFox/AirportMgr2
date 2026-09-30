@@ -145,6 +145,22 @@ public:
 	 */
 	static FAirframe ResolveDefaultAirframe();
 
+	/** The apron's two rates, as ResolveApronRates hands them out. Plain C++: an answer, not state. */
+	struct FApronRates
+	{
+		double CostPerSquareMetre = 0.0;
+		double UpkeepPerSquareMetrePerDay = 0.0;
+	};
+
+	/**
+	 * What a square metre of apron costs to lay and to keep - ApronCostPerSquareMetre and
+	 * ApronUpkeepPerSquareMetrePerDay, read in ONE place (#449). They were read raw off this class's CDO in two
+	 * plugins (the facade's apron quote, the runtime's daily upkeep), outside the Resolve* door every other content
+	 * default goes through. Zeros with no settings object, which is what both readers did by hand.
+	 * ENFORCED BY: Check-Architecture rule 4 ('GetDefault<UAirsideSettings> outside Content/')
+	 */
+	static FApronRates ResolveApronRates();
+
 	/**
 	 * The performance a SERVICE VEHICLE moves with - the one place a truck's figures live.
 	 *

@@ -132,7 +132,7 @@ FVehicle UJobBoard::DesignVehicleFor(const FEntityInstance& Stand) const
 
 FServiceVehicleType UJobBoard::TypeFor(FName TypeCode) const
 {
-	// THE CATALOGUE'S ROW, joined once at attach (#430). It WAS joined here on every call: the chassis from the first
+	// THE CATALOGUE'S ROW, joined at attach and after every load (#430, #449). It WAS joined here on every call: the chassis from the first
 	// stand letter that sent the code ("the table is the catalogue until the fleet is bought", spec §3.4 - and the fleet
 	// is bought since #417) and the figures from the scenario map, so a kind no letter was designed for came back with a
 	// zero chassis, and a test that widened a letter's vehicle widened this one.

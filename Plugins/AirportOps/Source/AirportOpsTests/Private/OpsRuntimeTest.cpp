@@ -2,6 +2,11 @@
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Model/Pricing.h"
+#include "Misc/ScopeExit.h"
+#include "Model/OpsDefinition.h"
+#include "Model/VehicleCodes.h"
+#include "Content/AirportOpsSettings.h"
 #include "Model/TaxiwayStrip.h"
 #include "Model/OfferGenerator.h"
 #include "Model/ArrivalSequencer.h"
@@ -894,6 +899,72 @@ bool FOpsRuntimeLoadRestoresFlightsByValueTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("in the inbox"), Board->Offers().Num(), 1);
 	TestTrue(TEXT("the board keeps the runtime's own allocator"), Board->Allocator.Get() == Allocator && Allocator != nullptr);
 	TestTrue(TEXT("and the runtime's own ledger"), Board->Ledger.Get() == Runtime->GetLedger() && Runtime->GetLedger() != nullptr);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeDesignFiguresAreTheScenariosTest,
+	"AirportOps.Present.RuntimeLoad.DesignFiguresAreTheScenarios",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeDesignFiguresAreTheScenariosTest::RunTest(const FString& Parameters)
+{
+	// #449's PIN: SAVE, RETUNE THE SCENARIO, LOAD - every receiver holds the SCENARIO'S figure. They were saved UPROPERTYs
+	// on four receivers (the clock, the job board, the offer generator, pricing's own) beside the roster's Transient
+	// tuning, so a retune reached a new game and never a loaded one - and the depot card priced its modules from the
+	// scenario and its vehicles from the save. The retune is made on the scenario asset itself, and put back.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 0.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	UScenario* Scenario = const_cast<UScenario*>(UAirportOpsSettings::ResolveDefaultScenario(*Runtime->GetCatalog()));
+	if (!TestNotNull(TEXT("a scenario"), Scenario)) { return false; }
+	const FName Bowser = AirsideVehicleCodes::Fuel;
+	if (!TestTrue(TEXT("the scenario sells a bowser"), Scenario->FuelVehicles.Contains(Bowser))) { return false; }
+
+	const double Daylight = Scenario->RealSecondsDaylight;
+	const double Dusk = Scenario->DuskHour;
+	const double Refill = Scenario->DepotRefillLitresPerMinutePerPump;
+	const double BowserPrice = Scenario->FuelVehicles[Bowser].Price;
+	const int32 Cap = Scenario->MaxPendingOffers;
+	const FAirlineSatisfactionTuning Tuning = Scenario->AirlineSatisfaction;
+	ON_SCOPE_EXIT
+	{
+		Scenario->RealSecondsDaylight = Daylight;
+		Scenario->DuskHour = Dusk;
+		Scenario->DepotRefillLitresPerMinutePerPump = Refill;
+		Scenario->FuelVehicles[Bowser].Price = BowserPrice;
+		Scenario->MaxPendingOffers = Cap;
+		Scenario->AirlineSatisfaction = Tuning;
+	};
+	TestEqual(TEXT("CONTROL: attached, the clock runs the scenario's day"), Runtime->GetClock()->RealSecondsDaylight, Daylight, 1e-9);
+	TestTrue(TEXT("CONTROL: the catalogue has a bowser row"), Runtime->GetJobBoard()->GetCatalogue().Contains(Bowser));
+	TestEqual(TEXT("CONTROL: and prices it at the scenario's figure"), Runtime->GetJobBoard()->Fleet().PriceOf(Bowser), BowserPrice, 1e-9);
+
+	const FString Slot = TEXT("AirportOpsTest_DesignFigures");
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+
+	// THE RETUNE, between the save and the load - a designer's edit to the asset.
+	Scenario->RealSecondsDaylight = Daylight + 600.0;
+	Scenario->DuskHour = Dusk - 1.0;
+	Scenario->DepotRefillLitresPerMinutePerPump = Refill + 111.0;
+	Scenario->FuelVehicles[Bowser].Price = BowserPrice + 1234.0;
+	Scenario->MaxPendingOffers = Cap + 3;
+	Scenario->AirlineSatisfaction.Start = Tuning.Start * 0.5;
+
+	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	TestEqual(TEXT("the clock's day is the scenario's"), Runtime->GetClock()->RealSecondsDaylight, Daylight + 600.0, 1e-9);
+	TestEqual(TEXT("and its dusk"), Runtime->GetClock()->DuskHour, Dusk - 1.0, 1e-9);
+	TestEqual(TEXT("the refill rate is the scenario's"), Runtime->GetJobBoard()->RefillLitresPerMinutePerPump, Refill + 111.0, 1e-9);
+	// THE CATALOGUE THE DEPOT CARD PRICES FROM (#430's, Transient): the issue's headline defect, and the one load pin for
+	// the catalogue being resolved again after a load rather than only at attach.
+	TestTrue(TEXT("the catalogue still has a bowser row after the load"), Runtime->GetJobBoard()->GetCatalogue().Contains(Bowser));
+	TestEqual(TEXT("the bowser's price is the scenario's - the depot card's vehicles agree with its modules"),
+		Runtime->GetJobBoard()->Fleet().PriceOf(Bowser), BowserPrice + 1234.0, 1e-9);
+	TestEqual(TEXT("the inbox cap is the scenario's"), Runtime->GetOfferGenerator()->MaxPendingOffers, Cap + 3);
+	TestEqual(TEXT("and the airline tuning, as it always was"), Runtime->GetAirlines()->Tuning.Start, Tuning.Start * 0.5, 1e-9);
 	return true;
 }
 

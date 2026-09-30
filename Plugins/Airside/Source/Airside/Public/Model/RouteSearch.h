@@ -209,6 +209,7 @@ namespace RouteSearch
 }
 
 struct FTrafficOccupancy;
+struct FTrafficRules;
 
 /** What is being routed, and what it is allowed to use. */
 USTRUCT()
@@ -378,8 +379,20 @@ struct AIRSIDE_API FRouteQuery
 		return *this;
 	}
 
-	/** Chainable: the congestion cost term, set together because CongestionWeight is
-	 *  meaningless without Occupancy and QueryingAgent is meaningless without both. */
+	/**
+	 * Chainable: THE RULES IN FORCE - RunwayPenalty and CongestionWeight read off FTrafficRules, and the congestion
+	 * term's table and asker with them. THE ONE COPY of the rules into a query (#449): six sites typed the two figures
+	 * across by hand, and the one that forgot RunwayPenalty - the rejoin every split, flip and player Unstick takes -
+	 * ignored a level's tuned penalty while every other route obeyed it. Defined in the .cpp, so this header need not
+	 * include TrafficRules.h.
+	 * ENFORCED BY: Airside.Model.RoutePolicy.WithRulesCarriesTheRules, Check-Architecture rule 4 ('route query cost
+	 * figure copied' - no RunwayPenalty/CongestionWeight assignment or WithCongestion outside RouteSearch/TrafficRules)
+	 */
+	FRouteQuery& WithRules(const FTrafficRules& Rules, const FTrafficOccupancy& InOccupancy, int32 InQueryingAgent);
+
+	/** Chainable: the congestion cost term with an EXPLICIT weight - a test's, which states the figure it measures.
+	 *  Production reads the rules through WithRules instead, which carries the runway penalty with the weight. Set
+	 *  together because CongestionWeight is meaningless without Occupancy and QueryingAgent without both. */
 	FRouteQuery& WithCongestion(const FTrafficOccupancy& InOccupancy, int32 InQueryingAgent, double InCongestionWeight)
 	{
 		Occupancy = &InOccupancy;

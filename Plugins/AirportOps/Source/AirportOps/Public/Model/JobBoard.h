@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/OpsDefinition.h"
+#include "Model/OpsDesignDefaults.h"
 #include "Model/Airframe.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/DepotCapability.h"
@@ -136,7 +137,8 @@ public:
 
 	/**
 	 * THE VEHICLE CATALOGUE (#430): one resolved row per KIND - its chassis from Content, its tank, flow, name and money
-	 * from the scenario - joined once, at attach, by FServiceFleet::ResolveCatalogue, and read through TypeFor.
+	 * from the scenario - joined at attach and after every load, by UOpsRuntime::ApplyScenarioFigures through
+	 * FServiceFleet::ResolveCatalogue (#449), and read through TypeFor.
 	 *
 	 * REPLACED VehicleSpecs (each fuel vehicle's tank and flow by TypeCode, copied from UScenario::FuelVehicles at attach,
 	 * spec 2026-09-28-fuel-litres) and FallbackSpec (the trailer's figures, which a code with no entry used to get). TypeFor
@@ -144,7 +146,7 @@ public:
 	 * designed for came back with a zero chassis and passed every fit gate. EMPTY in a bare NewObject: a fixture resolves
 	 * it the way Attach does (UOpsRuntime::ResolveVehicleCatalogue).
 	 *
-	 * TRANSIENT, as VehiclesByLetter is: a content default resolved every attach. VehicleSpecs was saved, so a load put the
+	 * TRANSIENT, as VehiclesByLetter is: a content default resolved every attach and every load. VehicleSpecs was saved, so a load put the
 	 * figures the save was written under back over the ones the attach had just resolved.
 	 */
 	const TMap<FName, FServiceVehicleType>& GetCatalogue() const { return Catalogue; }
@@ -164,9 +166,16 @@ public:
 	 */
 	UPROPERTY(Transient) TArray<FName> StarterFleet;
 
-	/** Litres per GAME minute per pump module a depot refills a returning vehicle at. Handed to the
-	 *  fuel policy every time it is asked, so a test's or the scenario's value is always the one used. */
-	UPROPERTY() double RefillLitresPerMinutePerPump = 500.0;
+	/**
+	 * Litres per GAME minute per pump module a depot refills a returning vehicle at. Handed to the
+	 * fuel policy every time it is asked, so a test's or the scenario's value is always the one used.
+	 *
+	 * TRANSIENT (#449), with the catalogue above: the scenario's, never the save's, written by
+	 * UOpsRuntime::ApplyScenarioFigures at attach and after every load. Saved, a retune reached a new game and
+	 * never a loaded one.
+	 * ENFORCED BY: AirportOps.Model.Save.DesignFiguresAreNotSaved (not saved), AirportOps.Present.RuntimeLoad.DesignFiguresAreTheScenarios (re-applied)
+	 */
+	UPROPERTY(Transient) double RefillLitresPerMinutePerPump = OpsDesignDefaults::RefillLitresPerMinutePerPump;
 
 	/**
 	 * The litres a parked aircraft asks for - the flight's own FuelLitres, drawn at its offer.
@@ -176,8 +185,9 @@ public:
 	 */
 	TFunction<double(int32 AgentId, const FAirframe& Airframe)> LitresOwedFor;
 
-	/** The one fallback load: 70% of the tank - the middle of the offer's 50-90% draw. */
-	static double DefaultLitres(const FAirframe& Airframe) { return FMath::Max(Airframe.FuelCapacityLitres, 0.0) * 0.7; }
+	/** The one fallback load: the middle of the offer's draw (OpsDesignDefaults::FuelLoadDefault) - derived from the
+	 *  draw's own bounds since #449, where it was a 0.7 typed beside them. */
+	static double DefaultLitres(const FAirframe& Airframe) { return FMath::Max(Airframe.FuelCapacityLitres, 0.0) * OpsDesignDefaults::FuelLoadDefault; }
 
 	/**
 	 * How many modules of a kind a depot's plot can hold - the ceiling FDepotCapability seats the owned modules against.

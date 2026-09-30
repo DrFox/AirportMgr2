@@ -5,6 +5,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficOccupancy.h"
+#include "Model/TrafficRules.h"
 #include "Model/Vehicle.h"
 #include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
@@ -658,6 +659,13 @@ namespace
 		Refused.RejectedBy = First;
 		return Refused;
 	}
+}
+
+FRouteQuery& FRouteQuery::WithRules(const FTrafficRules& Rules, const FTrafficOccupancy& InOccupancy, int32 InQueryingAgent)
+{
+	// BOTH FIGURES, ALWAYS - see the header: the site that took the weight and not the penalty is why this exists.
+	RunwayPenalty = Rules.RunwayPenalty;
+	return WithCongestion(InOccupancy, InQueryingAgent, Rules.CongestionWeight);
 }
 
 FRouteQuery FRouteQuery::For(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,

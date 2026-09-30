@@ -64,7 +64,7 @@ POSTS = [
     ("SM_Fence_Post", os.path.join(MODELS, "chainlink", "export", "SM_Fence_Post.fbx"), 3.0, "fence_line_post"),
     ("SM_Fence_CornerPost", os.path.join(MODELS, "chainlink", "export", "SM_Fence_CornerPost.fbx"), 4.5, "fence_heavy_post"),
 ]
-POST_HEIGHT_UU = 245.0
+POST_HEIGHT_UU = 245.0   # the C++ contract is FFenceKit::PostHeightUu (Content/FenceKit.h) - change both (#449)
 TOLERANCE_UU = 0.5
 
 TEX_ALBEDO = ("T_Chainlink", os.path.join(MODELS, "textures", "chainlink.png"))

@@ -309,6 +309,7 @@ public:
 	 * hand until #449 - it builds a transient type with BuildPiperMeridian and reads Airframe()
 	 * now, so the only production reader is BuildPiperMeridian. Still separate so a physics-only
 	 * test (TestAirframes::Piper) can take the Meridian's figures without a whole type.
+	 * ENFORCED BY: Check-Architecture rule 4 ('PiperMeridian fallback' - production calls in AircraftType.h/.cpp only)
 	 */
 	static FGroundPerformance PiperMeridianGround();
 

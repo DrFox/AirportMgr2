@@ -4,6 +4,7 @@
 #include "Engine/DataAsset.h"
 #include "Model/RoadEntity.h"
 #include "Model/VehicleCodes.h"
+#include "Model/OpsDesignDefaults.h"
 #include "OpsDefinition.generated.h"
 
 /**
@@ -29,7 +30,7 @@ public:
  * What one KIND of fuel vehicle carries, how fast it pumps, and what it costs to own - keyed by
  * FVehicle::TypeCode.
  *
- * THE AUTHORED HALF OF A CATALOGUE ROW (#430): FServiceFleet::ResolveCatalogue joins it, once at attach, to the chassis
+ * THE AUTHORED HALF OF A CATALOGUE ROW (#430): FServiceFleet::ResolveCatalogue joins it, at attach and after every load, to the chassis
  * Content builds for the same code, into the FServiceVehicleType everything else reads. A row whose code has no chassis
  * is dropped there, with a Warning - it used to become a zero-size vehicle that passed every fit gate.
  *
@@ -110,7 +111,7 @@ struct AIRPORTOPS_API FModuleOffer
 
 /**
  * What moves an airline's satisfaction, and how much it moves its offers. Spec 2026-09-29-ops-event-bus
- * §3. Copied into UAirlineRoster at attach.
+ * §3. Into UAirlineRoster, applied at attach and after every load by UOpsRuntime::ApplyScenarioFigures (#449).
  *
  * FIRST GUESSES, UNJUDGED (2026-09-29): nobody has played with them yet. Tune once seen in play.
  */
@@ -171,7 +172,7 @@ public:
 
 	/**
 	 * Real seconds the daylight hours (DawnHour..DuskHour) take at x1, and the night hours.
-	 * Copied into USimClock by UOpsRuntime at attach.
+	 * Into USimClock, applied at attach and after every load by UOpsRuntime::ApplyScenarioFigures (#449).
 	 *
 	 * TWO FIGURES, NOT ONE (spec 2026-09-28): the night is a lull - the flying club is quiet
 	 * and the scheduled carrier trickles - and a lull the player has to sit through at a busy
@@ -199,7 +200,8 @@ public:
 	double StartHour = 9.0;
 
 	/**
-	 * Each fuel vehicle's tank and flow rate, by FVehicle::TypeCode. Joined at attach to the chassis
+	 * Each fuel vehicle's tank and flow rate, by FVehicle::TypeCode. Joined - at attach and after every load, by
+	 * UOpsRuntime::ApplyScenarioFigures (#449) - to the chassis
 	 * Content builds for each code, into the job board's catalogue (FServiceFleet::ResolveCatalogue);
 	 * a row whose code has no chassis is dropped there, with a Warning. KEYED BY AirsideVehicleCodes,
 	 * never a literal: the code is the join, and it is typed once (Model/VehicleCodes.h). First guesses from the user (2026-09-28): the utility tow's 1,000 L trailer at
@@ -222,7 +224,7 @@ public:
 	 * AN EXPLICIT LIST (#430). It was "every distinct TypeCode in the stand-letter design-vehicle table", so changing
 	 * which vehicle a stand LETTER was designed for silently changed which kinds a starter depot was seeded with - two
 	 * questions answered by one table. The two codes here are what that table held on 2026-09-30 (A/B the tow, C-F the
-	 * bowser), in its order. A code with no catalogue row is dropped at attach, with a Warning.
+	 * bowser), in its order. A code with no catalogue row is dropped where the catalogue is joined, with a Warning.
 	 * ENFORCED BY: AirportOps.Fleet.CatalogueDropsARowWithNoChassis (the starter list is filtered to the catalogue)
 	 */
 	UPROPERTY(EditAnywhere, Category = "Scenario")
@@ -230,11 +232,11 @@ public:
 
 	/** How fast a depot refills a returning vehicle, litres per GAME minute per pump module. */
 	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "1.0"))
-	double DepotRefillLitresPerMinutePerPump = 500.0;
+	double DepotRefillLitresPerMinutePerPump = OpsDesignDefaults::RefillLitresPerMinutePerPump;
 
 	/**
-	 * The depot modules the player can buy, and what each grants. Copied into UFacilityPurchases at
-	 * attach. THE SHED ONLY this slice (spec 2026-09-29-facility-upgrades §1: pumps and tanks are out of
+	 * The depot modules the player can buy, and what each grants. Into UFacilityPurchases, applied at attach
+	 * and after every load by UOpsRuntime::ApplyScenarioFigures (#449). THE SHED ONLY this slice (spec 2026-09-29-facility-upgrades §1: pumps and tanks are out of
 	 * scope) - a module with no row here is not for sale, and its buy is refused UnknownType.
 	 * ENFORCED BY: AirportOps.Present.Facility.AttachCopiesTheOffers (the copy),
 	 * AirportOps.Model.Facility.RefusalsChargeAndPublishNothing ("UnknownType module (no offer)")
@@ -245,10 +247,10 @@ public:
 
 	/**
 	 * How many offers the inbox holds before new ones are dropped (spec 2026-09-28 ruling 6).
-	 * Copied into UOfferGenerator at attach. The ATC tower may raise it later.
+	 * Into UOfferGenerator, applied at attach and after every load by UOpsRuntime::ApplyScenarioFigures (#449). The ATC tower may raise it later.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "1"))
-	int32 MaxPendingOffers = 8;
+	int32 MaxPendingOffers = OpsDesignDefaults::MaxPendingOffers;
 
 	/** What moves an airline's satisfaction - see FAirlineSatisfactionTuning. */
 	UPROPERTY(EditAnywhere, Category = "Airlines")

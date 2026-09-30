@@ -6,6 +6,8 @@
 #include "Model/FlightBoard.h"
 #include "Model/JobBoard.h"
 #include "Model/OpsSave.h"
+#include "Model/Pricing.h"
+#include "Model/OfferGenerator.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Profiles/RoadProfile.h"
@@ -64,8 +66,13 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("game time survives"), RestoredClock->Now(), SavedNow, 1e-9);
 	TestEqual(TEXT("speed survives"), RestoredClock->GetSpeed(), ESimSpeed::X4);
-	TestEqual(TEXT("daylight length survives"), RestoredClock->RealSecondsDaylight, 350.0, 1e-9);
-	TestEqual(TEXT("night length survives"), RestoredClock->RealSecondsNight, 250.0, 1e-9);
+	// THE DAY'S SHAPE IS NOT THE SAVE'S (#449, reversing what this asserted): day and night lengths are the scenario's
+	// design figures, Transient on the clock and re-applied by UOpsRuntime::ApplyScenarioFigures after a load - the
+	// roster's ruling, so a retune reaches an old save. The restored clock keeps its own; the save's 350/250 are gone.
+	// ENFORCED BY (the runtime half): AirportOps.Present.RuntimeLoad.DesignFiguresAreTheScenarios
+	TestEqual(TEXT("daylight length is the receiving clock's, not the save's"), RestoredClock->RealSecondsDaylight,
+		GetDefault<USimClock>()->RealSecondsDaylight, 1e-9);
+	TestEqual(TEXT("and so is the night's"), RestoredClock->RealSecondsNight, GetDefault<USimClock>()->RealSecondsNight, 1e-9);
 
 	const FAirsideCapability Cap = AirsideCapability::Summarise(*Restored);
 	TestEqual(TEXT("the runway is still a runway after load - the profile reference resolved"), Cap.Runways.Num(), 1);
@@ -476,6 +483,84 @@ bool FOpsSaveFallbackProfileAsDefaultTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("any other reference is written as before - the runway's profile round-trips"), LoadedStrip->Profile == Other);
 	TestTrue(TEXT("and the saving network is untouched - the save wrote, it did not edit"),
 		Net->GetSegment(Laid)->Profile == Fallback && Net->DefaultProfile == Fallback);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsSaveDesignFiguresAreNotSavedTest,
+	"AirportOps.Model.Save.DesignFiguresAreNotSaved",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsSaveDesignFiguresAreNotSavedTest::RunTest(const FString& Parameters)
+{
+	// #449: THE GAME IS SAVED, THE DESIGN IS NOT. Each receiver written with its design figures moved and read into a
+	// fresh one: the design comes back as the class's default, and the one game figure beside it on each object comes
+	// back as saved (the CONTROL - a blob that restored nothing would pass the rest). The runtime's re-apply cannot mask
+	// this: no runtime is involved, so a saved design figure reads here as the save's value.
+	auto RoundTrip = [](UObject& From, UObject& Into)
+	{
+		TArray<uint8> Bytes;
+		OpsSave::SerializeObject(From, Bytes);
+		OpsSave::DeserializeObject(Into, Bytes);
+	};
+
+	{
+		// THE PLAYER'S LEVER is the pricing's game figure; elasticity, refund, fuel price and currency are the design.
+		UPricing* Saved = NewObject<UPricing>(GetTransientPackage());
+		const UPricing* Defaults = GetDefault<UPricing>();
+		Saved->LandingFeeMultiplier = 1.3;
+		Saved->Elasticity = Defaults->Elasticity + 0.25;
+		Saved->RefundFraction = Defaults->RefundFraction + 0.25;
+		Saved->FuelPricePerLitre = Defaults->FuelPricePerLitre + 1.0;
+		Saved->CurrencySymbol = TEXT("X");
+		UPricing* Loaded = NewObject<UPricing>(GetTransientPackage());
+		RoundTrip(*Saved, *Loaded);
+		TestEqual(TEXT("CONTROL: the player's lever came back"), Loaded->LandingFeeMultiplier, 1.3, 1e-12);
+		TestEqual(TEXT("the elasticity is the design's, not the save's"), Loaded->Elasticity, Defaults->Elasticity, 1e-12);
+		TestEqual(TEXT("so is the refund"), Loaded->RefundFraction, Defaults->RefundFraction, 1e-12);
+		TestEqual(TEXT("and the fuel price"), Loaded->FuelPricePerLitre, Defaults->FuelPricePerLitre, 1e-12);
+		TestEqual(TEXT("and the currency"), Loaded->CurrencySymbol, Defaults->CurrencySymbol);
+	}
+	{
+		// THE CLOCK: Now is the game; the day's shape is the design.
+		USimClock* Saved = NewObject<USimClock>(GetTransientPackage());
+		const USimClock* Defaults = GetDefault<USimClock>();
+		Saved->SetSpeed(ESimSpeed::X1);
+		Saved->Advance(123.0);
+		Saved->DawnHour = Defaults->DawnHour + 1.0;
+		Saved->DuskHour = Defaults->DuskHour - 1.0;
+		Saved->RealSecondsDaylight = Defaults->RealSecondsDaylight + 100.0;
+		Saved->RealSecondsNight = Defaults->RealSecondsNight + 100.0;
+		const double SavedNow = Saved->Now();
+		USimClock* Loaded = NewObject<USimClock>(GetTransientPackage());
+		RoundTrip(*Saved, *Loaded);
+		TestTrue(TEXT("CONTROL: the clock ran"), SavedNow > 0.0);
+		TestEqual(TEXT("CONTROL: game time came back"), Loaded->Now(), SavedNow, 1e-9);
+		TestEqual(TEXT("dawn is the design's, not the save's"), Loaded->DawnHour, Defaults->DawnHour, 1e-12);
+		TestEqual(TEXT("so is dusk"), Loaded->DuskHour, Defaults->DuskHour, 1e-12);
+		TestEqual(TEXT("and the day's length"), Loaded->RealSecondsDaylight, Defaults->RealSecondsDaylight, 1e-12);
+		TestEqual(TEXT("and the night's"), Loaded->RealSecondsNight, Defaults->RealSecondsNight, 1e-12);
+	}
+	{
+		// THE JOB BOARD: its refill rate is the design (the catalogue is Transient too, and resolved, not a figure).
+		UJobBoard* Saved = NewObject<UJobBoard>(GetTransientPackage());
+		Saved->RefillLitresPerMinutePerPump = GetDefault<UJobBoard>()->RefillLitresPerMinutePerPump + 111.0;
+		UJobBoard* Loaded = NewObject<UJobBoard>(GetTransientPackage());
+		RoundTrip(*Saved, *Loaded);
+		TestEqual(TEXT("the refill rate is the design's, not the save's"), Loaded->RefillLitresPerMinutePerPump,
+			GetDefault<UJobBoard>()->RefillLitresPerMinutePerPump, 1e-12);
+	}
+	{
+		// THE OFFER GENERATOR: the dropped-offer count is the game; the inbox cap is the design.
+		UOfferGenerator* Saved = NewObject<UOfferGenerator>(GetTransientPackage());
+		Saved->DroppedOffers = 5;
+		Saved->MaxPendingOffers = GetDefault<UOfferGenerator>()->MaxPendingOffers + 3;
+		UOfferGenerator* Loaded = NewObject<UOfferGenerator>(GetTransientPackage());
+		RoundTrip(*Saved, *Loaded);
+		TestEqual(TEXT("CONTROL: the dropped offers came back"), Loaded->DroppedOffers, 5);
+		TestEqual(TEXT("the inbox cap is the design's, not the save's"), Loaded->MaxPendingOffers,
+			GetDefault<UOfferGenerator>()->MaxPendingOffers);
+	}
 	return true;
 }
 

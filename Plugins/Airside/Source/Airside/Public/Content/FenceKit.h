@@ -30,4 +30,19 @@ struct FFenceKit
 	 * never fades must never be culled either.
 	 */
 	double PostFadeEndUu = 0.0;
+
+	/**
+	 * THE CHAINLINK KIT'S ASSET CONTRACT, uu - the kit README's figures, typed ONCE (#449). They were typed in
+	 * PlotPresenter.cpp (fabric 240, post 245) and again as FenceLayout::FSpec::TileUu (240), with nothing to say the two
+	 * 240s were one decision. They are: chainlink.png's V range IS the fabric height, so the fabric must tile along the
+	 * run at that same length or the diamonds stop being square - hence TileUu is DEFINED as FabricHeightUu, and
+	 * changing it means regenerating the texture. Tools/Python/build_fence_content.py measures PostHeightUu off the
+	 * mesh at import (a Python copy this header cannot see; it names this struct).
+	 * ENFORCED BY: the static_assert in PlotPresenter.cpp (FenceLayout's Solve/-side default is the kit's)
+	 */
+	static constexpr double PostHeightUu = 245.0;
+	static constexpr double FabricHeightUu = 240.0;
+	static constexpr double LinePostDiameterUu = 6.0;
+	static constexpr double HeavyPostDiameterUu = 9.0;
+	static constexpr double TileUu = FabricHeightUu;
 };
