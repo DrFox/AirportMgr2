@@ -14,6 +14,7 @@
 
 class URoadNetwork;
 enum class EDepartureRefusal : uint8;
+struct FDepartureAsk;
 
 // FTrafficRules, FPlanReResolver AND FDeadlockResolver MOVED OFF THIS HEADER (issue #175) to
 // Model/TrafficRules.h, Model/PlanReResolver.h and Model/DeadlockResolver.h - each included
@@ -126,6 +127,24 @@ public:
 	 */
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnStandsFreed, const TArray<FGuidelineNodeId>& /*PoseNodes*/);
 	FOnStandsFreed OnStandsFreed;
+
+	/**
+	 * A parked aircraft DepartAgent refused PushbackBlocked would not be refused that now - fired once, and the
+	 * aircraft dropped from the watch, at the end of the DiffFreedom that saw it. Relayed by UAirsideTraffic.
+	 *
+	 * DERIVED WITH DepartAgent's OWN DECISION (AskDeparture), not raised where ground is released: the push
+	 * ground frees through the per-tick claim pass (a taxiing aircraft moving on), which has no event and moves
+	 * no OccupancyRevision - PR D's finding about the one refusal the job board used to poll every frame for.
+	 * "Would not be refused that" includes a replan that now goes straight out, or is refused for another
+	 * reason: the caller asks again and hears the new answer, which costs one ask; missing it strands the
+	 * aircraft. An aircraft retired or no longer Parked leaves the watch silently.
+	 * ENFORCED BY: Airside.Model.Traffic.PushGroundFreed.TaxiingBlockerClears
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnPushGroundFreed, int32 /*AgentId*/);
+	FOnPushGroundFreed OnPushGroundFreed;
+
+	/** How many parked aircraft are on the push watch (see OnPushGroundFreed). */
+	int32 PushWatchCountForTest() const { return PushWatch.Num(); }
 
 	// NO RunwayFreedCount (removed in ops batch 3 PR E's review, 2026-09-30): PR D added it for PR E's two pollers,
 	// and neither reads a held runway - a held taxi out's replan is only RANKED by one (see ReplanHeldTaxiOuts'
@@ -278,6 +297,9 @@ public:
 	 * NotParked: a taxiing aircraft has a plan, an arriving one is not on the ground, a
 	 * departing one is already going. Composed from PlanAny and RedirectAgent so there is
 	 * one arming path (ArmDepartureIfRunway) and one engine restart (StartTaxi).
+	 *
+	 * A PushbackBlocked refusal also puts the aircraft on the push watch - see OnPushGroundFreed. Any other
+	 * answer takes it off.
 	 */
 	EDepartureRefusal DepartAgent(int32 AgentId, const URoadNetwork& Network);
 
@@ -869,7 +891,7 @@ private:
 	uint32 OccupancyRevisionCount = 0;
 
 	/**
-	 * The freed diff - OnRunwayFreed and OnStandsFreed. Runs at the end of Advance (after the substeps, so a
+	 * The freed diff - OnRunwayFreed, OnStandsFreed and OnPushGroundFreed. Runs at the end of Advance (after the substeps, so a
 	 * release and a re-hold inside one frame fire nothing - nobody could have acted between them) and at the
 	 * end of OnGraphRebuilt, bRebuilt true: a rebuild re-reads the runways at once, and whatever vanished is
 	 * not held now, so it is freed - a deleted runway is no longer busy.
@@ -911,6 +933,52 @@ private:
 	 * by pose so the baseline names the thing a flight holds, not a graph handle.
 	 */
 	TMap<FEntityInstanceId, FGuidelineNodeId> HeldStands;
+
+	/** Re-reads RunwaySeeds when the network object or its topology moved, or bForce (a rebuild). */
+	void RefreshRunwaySeeds(const URoadNetwork& Network, bool bForce);
+
+	/** The strips IsChainHeld says are held now, over RunwaySeeds - the set DiffFreedom diffs, and the push
+	 *  watch's record of what PlanAny ranked by. */
+	TSet<FRoadSegmentId> RunwaysHeldNow(const URoadNetwork& Network) const;
+
+	/**
+	 * THE PLANNING HALF OF DepartAgent, with no log line and no side effect: PlanAny, the straight-out test, the
+	 * push plan and the push-ground question, in DepartAgent's order. Defined in GroundTraffic.cpp beside it -
+	 * the return type holds FPushbackPlan, a Private header's type, so it is only declared here. DepartAgent
+	 * logs and acts on its answer; the push watch re-asks it. ONE copy of the decision, so the watch cannot
+	 * call a push free that DepartAgent would refuse, or the reverse.
+	 */
+	FDepartureAsk AskDeparture(const FRoadAgent& Agent, const FAirframe& Aircraft, const URoadNetwork& Network) const;
+
+	/**
+	 * One aircraft DepartAgent refused PushbackBlocked: the push route it asked about, and every input its
+	 * planning read besides the route's own ground - the network object and both revisions (topology, facts,
+	 * AreGuidelinesBehindRoad) and the strips held when PlanAny ranked them. While they all hold, the plan is
+	 * the same plan and only IsPushGroundFree(PushRoute) can change; when any moves, AskDeparture is asked
+	 * whole. The parked aircraft's own inputs (goal node, airframe, class, heading) do not move while Parked.
+	 */
+	struct FPushWatch
+	{
+		FRoutePlan PushRoute;
+		/** Identity only, never dereferenced; weak for DiffNetwork's reason. */
+		TWeakObjectPtr<const URoadNetwork> Network;
+		uint32 EditRevision = 0;
+		uint32 GuidelineRevision = 0;
+		TSet<FRoadSegmentId> RunwaysHeld;
+	};
+
+	/**
+	 * THE PUSH WATCH, by agent id - see OnPushGroundFreed. NOT SAVED: agents are not saved, and neither is
+	 * anything that names one. A REBUILD RE-DERIVES IT rather than clearing it: the rebuild moves the guideline
+	 * revision, so DiffFreedom asks every entry whole. Clearing would leave the aircraft's wake-up to a caller
+	 * retrying on its own NetworkChanged - a contract with a plugin this one must not know exists.
+	 *
+	 * Cost, per DiffFreedom: one IsPushGroundFree per entry - an IsAnyHeld over 2 resources per push step, and a
+	 * push is 2-4 steps - plus a revision compare and a set compare of 0-2 strips. Entries: 0-2 in every test
+	 * field (2026-09-30); a replan (PlanAny, a route search per departing runway) only
+	 * when the key moves.
+	 */
+	TMap<int32, FPushWatch> PushWatch;
 
 	/** See StandHoldChangeCount. A session counter, not saved. */
 	uint32 StandHoldChanges = 0;

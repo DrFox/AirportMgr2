@@ -889,8 +889,98 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	return true;
 }
 
+/**
+ * What AskDeparture found: DepartAgent's decision before it logs or acts. Why is the refusal DepartAgent returns for
+ * it - None for a departure it would start, straight out or by a push whose ground is free.
+ */
+struct FDepartureAsk
+{
+	FDeparturePlan Plan;
+	/** The measured angle between the route's first tangent and the parked heading - DepartAgent's log line. */
+	double OffDegrees = 180.0;
+	bool bStraightOut = false;
+	/** Planned only when the departure is valid and not straight out. */
+	FPushbackPlan Push;
+	EDepartureRefusal Why = EDepartureRefusal::None;
+};
+
+FDepartureAsk UGroundTraffic::AskDeparture(const FRoadAgent& Agent, const FAirframe& Aircraft,
+	const URoadNetwork& Network) const
+{
+	FDepartureAsk Ask;
+
+	// From where it PARKED - its goal node - not from its polyline position: the search is
+	// over the graph and the pose node is the graph's name for this stand.
+	// WITH THE OCCUPANCY, so a free runway beats a busy one (2026-09-29, samples/2runways.png).
+	Ask.Plan = DeparturePlanner::PlanAny(Network, Agent.GoalNode, Aircraft, Agent.Class, &Occupancy);
+	if (!Ask.Plan.IsValid())
+	{
+		Ask.Why = Ask.Plan.Why;
+		return Ask;
+	}
+
+	// CAN IT SIMPLY DRIVE OUT? A MEASUREMENT OF THE GROUND AHEAD, not a flag on the stand -
+	// which is why one question answers a taxi-through stand, a taxiway a player happened to
+	// draw past a stand, and a graph rebuilt since this aeroplane parked.
+	//
+	// AGAINST LastMotion.Heading, which is where the aeroplane is actually pointing. The
+	// stand's authored heading was the rejected alternative: it is the same number today, but
+	// it describes the STAND, and an aeroplane that ended its taxi a few degrees off would
+	// then be measured against something it is not aligned with.
+	FVector2D StartAt = FVector2D::ZeroVector;
+	double OutTangent = 0.0;
+	const bool bHaveTangent =
+		GuidelineGeom::PointAtDistance(Ask.Plan.Route.Polyline, 0.0, StartAt, OutTangent);
+
+	// 180 WHEN THE POLYLINE CANNOT SAY - honouring the return rather than reading an
+	// uninitialised double. A route with no direction is not a route that leads straight out.
+	Ask.OffDegrees = bHaveTangent
+		? FMath::Abs(FMath::RadiansToDegrees(
+			FMath::UnwindRadians(OutTangent - Agent.LastMotion.Heading)))
+		: 180.0;
+	if (bHaveTangent && Ask.OffDegrees <= Rules.StraightOutDegrees)
+	{
+		Ask.bStraightOut = true;
+		return Ask;
+	}
+
+	// THE PUSH GETS A ROUTE OF ITS OWN - see PushbackPlanner, and see FPushbackRun's header
+	// for what walking a prefix of the DEPARTURE route did instead. It reverses onto the arm
+	// of the junction the departure does not take, so that driving forward afterwards carries
+	// the aeroplane through the junction and away; and because it finishes somewhere the
+	// departure route never visits, the taxi out is planned from there in the same breath.
+	//
+	// CLEAR BY A FOOTPRINT AND A GAP, which is what this model already means by "clear of"
+	// everywhere else - FClaimPass's window is built from the same pair. Not a new figure: how
+	// far past a junction an aeroplane must finish is the same question as how much room it
+	// takes up, and inventing a second answer is how the two drift.
+	Ask.Push = PushbackPlanner::Plan(Network, Agent.GoalNode, Ask.Plan,
+		Aircraft, Agent.Class,
+		Rules.FootprintFor(Agent.Class) + Rules.GapFor(Agent.Class));
+	if (!Ask.Push.IsValid())
+	{
+		Ask.Why = EDepartureRefusal::NoPushbackRoute;
+		return Ask;
+	}
+
+	// PUSHBACK CLEARANCE: granted whole, or withheld. A manoeuvring agent cannot replan -
+	// there is no alternative way off a stand - so if the deadlock resolver ever picked one it
+	// would have no move to make. Granting the whole push up front makes it atomic and removes
+	// it as a deadlock source, and it is what ground control actually does: clearance is
+	// granted or withheld, never half-granted.
+	if (!IsPushGroundFree(Agent.Id, Ask.Push.PushRoute, Ask.Push.PushRoute.Length))
+	{
+		Ask.Why = EDepartureRefusal::PushbackBlocked;
+	}
+	return Ask;
+}
+
 EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork& Network)
 {
+	// OFF THE PUSH WATCH WHATEVER THIS ANSWERS - a PushbackBlocked below puts it back with the route it was refused on.
+	// Every other answer is either a departure under way or a refusal the watch does not wait on.
+	PushWatch.Remove(AgentId);
+
 	const int32 Index = FindIndex(AgentId);
 	if (Index == INDEX_NONE || Agents[Index].Phase != EAgentPhase::Parked)
 	{
@@ -915,10 +1005,10 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		return EDepartureRefusal::NoRoute;
 	}
 
-	// From where it PARKED - its goal node - not from its polyline position: the search is
-	// over the graph and the pose node is the graph's name for this stand.
-	// WITH THE OCCUPANCY, so a free runway beats a busy one (2026-09-29, samples/2runways.png).
-	const FDeparturePlan Plan = DeparturePlanner::PlanAny(Network, Agent.GoalNode, *Aircraft, Agent.Class, &Occupancy);
+	// THE DECISION, planned once - see AskDeparture, which the push watch asks too. What follows logs and acts on it,
+	// in the order the decision was made.
+	const FDepartureAsk Ask = AskDeparture(Agent, *Aircraft, Network);
+	const FDeparturePlan& Plan = Ask.Plan;
 	// SAID ON A CHANGE, not per call - see LastDepartVerdict. A success is always said, and
 	// clears the gate so a later refusal of the same aircraft is said again.
 	const FString Verdict = DeparturePlanner::Describe(Plan);
@@ -933,27 +1023,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		return Plan.Why;
 	}
 
-	// CAN IT SIMPLY DRIVE OUT? A MEASUREMENT OF THE GROUND AHEAD, not a flag on the stand -
-	// which is why one question answers a taxi-through stand, a taxiway a player happened to
-	// draw past a stand, and a graph rebuilt since this aeroplane parked.
-	//
-	// AGAINST LastMotion.Heading, which is where the aeroplane is actually pointing. The
-	// stand's authored heading was the rejected alternative: it is the same number today, but
-	// it describes the STAND, and an aeroplane that ended its taxi a few degrees off would
-	// then be measured against something it is not aligned with.
-	FVector2D StartAt = FVector2D::ZeroVector;
-	double OutTangent = 0.0;
-	const bool bHaveTangent =
-		GuidelineGeom::PointAtDistance(Plan.Route.Polyline, 0.0, StartAt, OutTangent);
-
-	// 180 WHEN THE POLYLINE CANNOT SAY - honouring the return rather than reading an
-	// uninitialised double. A route with no direction is not a route that leads straight out.
-	const double OffDegrees = bHaveTangent
-		? FMath::Abs(FMath::RadiansToDegrees(
-			FMath::UnwindRadians(OutTangent - Agent.LastMotion.Heading)))
-		: 180.0;
-
-	if (bHaveTangent && OffDegrees <= Rules.StraightOutDegrees)
+	if (Ask.bStraightOut)
 	{
 		// THE MEASURED ANGLE IS IN THE LINE. When a player asks why an aeroplane did not push
 		// back, the angle that was measured IS the answer, and guessing it back out of the
@@ -961,25 +1031,12 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		// spend log lines on.
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Agent %d departs straight out of its stand (%.0f deg off the parked heading)"),
-			AgentId, OffDegrees);
+			AgentId, Ask.OffDegrees);
 		return RedirectAgent(AgentId, &Network, Plan.Route)
 			? EDepartureRefusal::None : EDepartureRefusal::NoRoute;
 	}
 
-	// THE PUSH GETS A ROUTE OF ITS OWN - see PushbackPlanner, and see FPushbackRun's header
-	// for what walking a prefix of the DEPARTURE route did instead. It reverses onto the arm
-	// of the junction the departure does not take, so that driving forward afterwards carries
-	// the aeroplane through the junction and away; and because it finishes somewhere the
-	// departure route never visits, the taxi out is planned from there in the same breath.
-	//
-	// CLEAR BY A FOOTPRINT AND A GAP, which is what this model already means by "clear of"
-	// everywhere else - FClaimPass's window is built from the same pair. Not a new figure: how
-	// far past a junction an aeroplane must finish is the same question as how much room it
-	// takes up, and inventing a second answer is how the two drift.
-	const FPushbackPlan Push = PushbackPlanner::Plan(Network, Agent.GoalNode, Plan,
-		*Aircraft, Agent.Class,
-		Rules.FootprintFor(Agent.Class) + Rules.GapFor(Agent.Class));
-
+	const FPushbackPlan& Push = Ask.Push;
 	UE_LOG(LogAirsideTraffic, Log, TEXT("DepartAgent %d: %s"), AgentId,
 		*PushbackPlanner::Describe(Push));
 
@@ -995,19 +1052,25 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		return EDepartureRefusal::NoPushbackRoute;
 	}
 
-	// PUSHBACK CLEARANCE: granted whole, or withheld. A manoeuvring agent cannot replan -
-	// there is no alternative way off a stand - so if the deadlock resolver ever picked one it
-	// would have no move to make. Granting the whole push up front makes it atomic and removes
-	// it as a deadlock source, and it is what ground control actually does: clearance is
-	// granted or withheld, never half-granted.
-	if (!IsPushGroundFree(AgentId, Push.PushRoute, Push.PushRoute.Length))
+	if (Ask.Why == EDepartureRefusal::PushbackBlocked)
 	{
 		// AT Log AND NOT Warning: a taxiway the player has left busy refuses this for as long
-		// as they leave it, and it clears itself. UJobBoard::DepartTheReady already
-		// throttles its own line to a CHANGE of reason, which keeps this from filling the file.
+		// as they leave it, and it clears itself. It is asked again only when the push watch
+		// below says the answer changed (or the caller's own trigger fires), so this is a line
+		// per wake, not per tick; UJobBoard::DepartTheReady throttles its own to a change of reason.
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Agent %d cannot push back yet: %.0f uu of ground is not free."),
 			AgentId, Push.PushRoute.Length);
+		// ON THE WATCH, with what the refusal was planned from - see FPushWatch. The strips read NOW, the instant PlanAny
+		// ranked them, not DiffFreedom's baseline from the last tick.
+		// ENFORCED BY: Airside.Model.Traffic.PushGroundFreed.TaxiingBlockerClears, .RunwayFlipReplans
+		RefreshRunwaySeeds(Network, /*bForce*/ false);
+		FPushWatch& Watch = PushWatch.Add(AgentId);
+		Watch.PushRoute = Push.PushRoute;
+		Watch.Network = &Network;
+		Watch.EditRevision = Network.GetEditRevision();
+		Watch.GuidelineRevision = Network.GetGuidelineRevision();
+		Watch.RunwaysHeld = RunwaysHeldNow(Network);
 		return EDepartureRefusal::PushbackBlocked;
 	}
 
@@ -1209,11 +1272,11 @@ void UGroundTraffic::DiffNow()
 	}
 }
 
-void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
+void UGroundTraffic::RefreshRunwaySeeds(const URoadNetwork& Network, bool bForce)
 {
 	// THE STRIPS, re-read only when the topology can have moved - see RunwaySeeds. A rebuild always re-reads:
 	// it is where a runway vanishes, and the seed list must stop naming it before the diff below asks.
-	if (bRebuilt || RunwaySeedsNetwork != &Network || RunwaySeedsRevision != Network.GetEditRevision())
+	if (bForce || RunwaySeedsNetwork != &Network || RunwaySeedsRevision != Network.GetEditRevision())
 	{
 		RunwaySeeds.Reset();
 		for (const FRunwaySummary& Runway : AirsideCapability::SummariseRunways(Network))
@@ -1223,10 +1286,12 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 		RunwaySeedsNetwork = &Network;
 		RunwaySeedsRevision = Network.GetEditRevision();
 	}
+}
 
-	DiffNetwork = &Network;
-
-	// HELD NOW, by the queue's own predicate - see OnRunwayFreed.
+TSet<FRoadSegmentId> UGroundTraffic::RunwaysHeldNow(const URoadNetwork& Network) const
+{
+	// HELD NOW, by the queue's own predicate - see OnRunwayFreed. PlanAny ranks by the same question
+	// (IsAnyHeld over the strip's RunwaySurfaces), which is why the push watch keys on this set.
 	TSet<FRoadSegmentId> RunwaysNow;
 	for (const FRoadSegmentId Seed : RunwaySeeds)
 	{
@@ -1235,6 +1300,16 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 			RunwaysNow.Add(Seed);
 		}
 	}
+	return RunwaysNow;
+}
+
+void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
+{
+	RefreshRunwaySeeds(Network, bRebuilt);
+
+	DiffNetwork = &Network;
+
+	TSet<FRoadSegmentId> RunwaysNow = RunwaysHeldNow(Network);
 	// FREED IS "IN THE BASELINE, NOT HELD NOW" - which also covers a strip that is gone. A seed the rebuild
 	// renamed for a strip still held reads as freed once: a spurious freed costs a listener one look, a missed
 	// one strands an arrival queue, so the diff errs that way.
@@ -1276,6 +1351,50 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 	}
 	HeldStands = MoveTemp(StandsNow);
 
+	// THE PUSH WATCH - see PushWatch. Each entry is asked what DepartAgent would ask: its stored route while every
+	// input to the plan holds, AskDeparture whole when one moved - or on a rebuild, which re-derives rather than clears.
+	TArray<int32> FreedPushes;
+	for (TMap<int32, FPushWatch>::TIterator It = PushWatch.CreateIterator(); It; ++It)
+	{
+		const FRoadAgent* Agent = FindAgent(It.Key());
+		const FAirframe* Aircraft = Agent != nullptr ? Agent->AsAircraft() : nullptr;
+		if (Agent == nullptr || Aircraft == nullptr || Agent->Phase != EAgentPhase::Parked)
+		{
+			// GONE OR MOVED ON - retired, or departed by another door (the inspector's Depart): nothing to wake.
+			It.RemoveCurrent();
+			continue;
+		}
+		FPushWatch& Watch = It.Value();
+		const bool bSamePlan = !bRebuilt
+			&& Watch.Network.Get() == &Network
+			&& Watch.EditRevision == Network.GetEditRevision()
+			&& Watch.GuidelineRevision == Network.GetGuidelineRevision()
+			&& Watch.RunwaysHeld.Num() == HeldRunways.Num() && Watch.RunwaysHeld.Includes(HeldRunways);
+		bool bStillBlocked = false;
+		if (bSamePlan)
+		{
+			bStillBlocked = !IsPushGroundFree(It.Key(), Watch.PushRoute, Watch.PushRoute.Length);
+		}
+		else
+		{
+			const FDepartureAsk Ask = AskDeparture(*Agent, *Aircraft, Network);
+			bStillBlocked = Ask.Why == EDepartureRefusal::PushbackBlocked;
+			if (bStillBlocked)
+			{
+				Watch.PushRoute = Ask.Push.PushRoute;
+				Watch.Network = &Network;
+				Watch.EditRevision = Network.GetEditRevision();
+				Watch.GuidelineRevision = Network.GetGuidelineRevision();
+				Watch.RunwaysHeld = HeldRunways;
+			}
+		}
+		if (!bStillBlocked)
+		{
+			FreedPushes.Add(It.Key());
+			It.RemoveCurrent();
+		}
+	}
+
 	// BASELINES FIRST, BROADCASTS AFTER: a listener that asks this model anything sees the state the diff saw.
 	for (const FRoadSegmentId Seed : FreedRunways)
 	{
@@ -1286,6 +1405,12 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 	{
 		UE_LOG(LogAirsideTraffic, Log, TEXT("%d stand(s) freed%s"), FreedStands.Num(), bRebuilt ? TEXT(" by a rebuild") : TEXT(""));
 		OnStandsFreed.Broadcast(FreedStands);
+	}
+	for (const int32 AgentId : FreedPushes)
+	{
+		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d is no longer blocked on its push ground%s"), AgentId,
+			bRebuilt ? TEXT(" (after a rebuild)") : TEXT(""));
+		OnPushGroundFreed.Broadcast(AgentId);
 	}
 }
 
