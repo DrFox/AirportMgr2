@@ -382,7 +382,7 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 
 		// THE LOAD-TIME REPAIRS, the same function a save game's load runs (#426) - see
 		// RepairLoadedNetwork for each one and why it has to come before the rebuild.
-		RepairLoadedNetwork();
+		RepairLoadedNetwork(ELoadedFrom::Level);
 
 		RebuildMesh();
 	}
@@ -536,7 +536,7 @@ int32 ARoadNetworkActor::RebindStandDefinitions()
 	return StandDefinitions->RebindStandDefinitions(Network);
 }
 
-int32 ARoadNetworkActor::RepairLoadedNetwork()
+int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 {
 	if (Network == nullptr)
 	{
@@ -574,8 +574,11 @@ int32 ARoadNetworkActor::RepairLoadedNetwork()
 	// THE ONE SAVED REFERENCE NO LATER SESSION RESOLVES TO THE RIGHT OBJECT - see
 	// URoadNetwork::RepointTransientDefaultProfile. ResolveProfile() because it is what RebuildMesh
 	// then hands the network as DefaultProfile (URoadSurfacePresenter::Rebuild, before its solve), so
-	// a re-pointed road and a road that never had a profile of its own end on the same object.
-	const int32 Forgotten = Network->RepointTransientDefaultProfile(ResolveProfile());
+	// a re-pointed road and a road that never had a profile of its own end on the same object. A SAVE
+	// GAME'S LOAD ONLY - see ELoadedFrom and the header for why the level path must not pin.
+	// ENFORCED BY: Airside.Present.RepairRepointsOnlyASaveGame
+	const int32 Forgotten = From == ELoadedFrom::SaveGame
+		? Network->RepointTransientDefaultProfile(ResolveProfile()) : 0;
 
 	// ONE LINE WHEN A LOAD REPAIRED ANYTHING, so "did it" is one grep - the questions the
 	// comments above answer by reasoning, answered by measurement. Silent when nothing needed

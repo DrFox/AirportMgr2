@@ -736,7 +736,7 @@ void UFlightBoard::OnBeforeRestore()
 	}
 }
 
-void UFlightBoard::RestoreAfterLoad(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock,
+void UFlightBoard::RestoreAfterLoad(UGroundTraffic* Traffic, const URoadNetwork& Network, USimClock& Clock,
 	bool bAirportAdmits)
 {
 	// THE ORDER IS THE HEADER'S, step for step - see RestoreAfterLoad there for why each is where it is.
@@ -757,9 +757,16 @@ void UFlightBoard::RestoreAfterLoad(UGroundTraffic& Traffic, const URoadNetwork&
 	// 3 AND 4, IN THIS ORDER, and both are needed. The network's rebuild regenerated the guideline graph, which takes
 	// every node claim with it (FTrafficOccupancy::ReleaseGuidelineClaims), so the restored flights' stand holds have
 	// to be re-made against the new nodes BEFORE anything can allocate - the genuine holds first, the re-queued last.
-	// Then the arrivals go back on the clock, whose queue was never saved.
-	OnGraphRebuilt(Traffic, Network, Requeued);
-	RearmSchedules(Traffic, Network, Clock);
+	// Then the arrivals go back on the clock, whose queue was never saved. BOTH NEED THE TRAFFIC MODEL - the holds are
+	// claims on it and the arrivals dispatch into it - so with none they are skipped, and said so.
+	if (Traffic == nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Load: no traffic model - %d flight(s) demoted or cancelled, but no stand re-held and no arrival re-armed"),
+			Requeued.Num() + Cancelled);
+		return;
+	}
+	OnGraphRebuilt(*Traffic, Network, Requeued);
+	RearmSchedules(*Traffic, Network, Clock);
 
 	UE_LOG(LogAirportOps, Log, TEXT("Load: flights restored - %d re-queued, %d cancelled at a closed airport, %d live"),
 		Requeued.Num(), Cancelled, Flights.Num());

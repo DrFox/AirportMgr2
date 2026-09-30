@@ -556,6 +556,17 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Model\OpsSave.h', 'Private\Model\OpsSave.cpp', 'Private\Present\OpsRuntime.cpp')
         TestExempt  = $true
         ProdReason  = 'load through UOpsRuntime::LoadFromSlot, which restores inside URoadEditFacade::RestoreInPlace'
+    },
+    @{
+        # THE NETWORK-REPLACING DOORS THAT ANNOUNCE ON URoadEditFacade::OnReplaced (#426), by their production callers.
+        # URoadBuildEdMode does NOT listen to OnReplaced because none of these reaches an editor world (its own
+        # header says so); a caller added under AirsideEditor would replace the network under the editor mode's
+        # tool with nobody listening - bind the mode to OnReplaced first, then add the file here.
+        Name        = 'network replacement doors'
+        Pattern     = '\b(ClearNetwork|RestoreInPlace)\s*\('
+        ProdAllowed = @('Public\Present\RoadEditFacade.h', 'Private\Present\RoadEditFacade.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp', 'Public\Present\RoadNetworkActor.h', 'Private\Present\RoadNetworkActor.cpp', 'Source\AirportMgr\RoadBuildController.cpp', 'Private\Present\OpsRuntime.cpp')
+        TestExempt  = $true
+        ProdReason  = 'a new caller of a network-replacing door must be a driver that listens to URoadEditFacade::OnReplaced (the editor mode does not) - see RoadBuildEdMode.h'
     }
 )
 foreach ($row in $AllowedCallers) {

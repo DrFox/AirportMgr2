@@ -69,6 +69,18 @@ enum class EDepartureRefusal : uint8;
 // Content/AirsideContent.h in the .cpp.
 
 /**
+ * Which load a network arrived by, for ARoadNetworkActor::RepairLoadedNetwork (#426). The two differ in one repair only:
+ * how an object reference to the TRANSIENT package came back. A LEVEL's save writes it as null and a PIE duplicate keeps
+ * the live pointer - both already right; a SAVE GAME's proxy archive writes a path and re-finds it, which may be another
+ * object. Plain, not a UENUM: a C++ parameter only (CLAUDE.md, UHT and plain enums).
+ */
+enum class ELoadedFrom : uint8
+{
+	Level,
+	SaveGame
+};
+
+/**
  * Owns a road network and renders it as one batched dynamic mesh - the level-resident
  * COMPOSITION ROOT for the three objects issue #32 split out of what used to be a single
  * 1977 + 858 line class: URoadSurfacePresenter (the mesh, the aprons, the ghost preview),
@@ -89,6 +101,7 @@ enum class EDepartureRefusal : uint8;
  * UpdateGhost/HideGhost/RebuildMesh going to the presenter and DispatchAgent to traffic; see
  * each forwarder's own one-line comment for which.
  */
+
 UCLASS()
 class AIRSIDE_API ARoadNetworkActor : public AActor, public IRoadEditTarget
 {
@@ -1265,7 +1278,11 @@ public:
 	 *   definitions - a D/E/F stand's is a runtime object no later session has (RebindStandDefinitions);
 	 *   anchors - a definition re-authored since the save (UEntityDefinition::RefreshResolvedAnchors);
 	 *   the default profile - URoadNetwork::RepointTransientDefaultProfile, the one reference the network blob holds
-	 *     that a later session cannot resolve to the right object.
+	 *     that a later session cannot resolve to the right object. SAVE GAME ONLY (From): on the level path a
+	 *     transient reference is already null (level save) or the live object (PIE duplicate), and re-pointing there
+	 *     would PIN fallback-laid roads to whatever the actor's Profile is at that moment - an editor re-registration
+	 *     after the Profile is set would save them as that asset, where a level has always let them follow
+	 *     DefaultProfile.
 	 *
 	 * ONE FUNCTION BECAUSE TWO LISTS DRIFTED: the load's own comment claimed "THE LOAD-TIME REPAIRS A LEVEL GETS" and ran
 	 * two of the four, so a depot re-authored since the save kept stale anchors and PoseRole. Returns how many things
@@ -1273,7 +1290,7 @@ public:
 	 * ENFORCED BY: Check-Architecture rule 4 (allowed callers: RefreshResolvedAnchors, RebindStandDefinitions and
 	 * EnsureStandOutlines only here), AirportOps.Present.RuntimeLoad.RunsEveryLoadRepair
 	 */
-	int32 RepairLoadedNetwork();
+	int32 RepairLoadedNetwork(ELoadedFrom From);
 
 	/**
 	 * What the fuel depot tool places: the authored value if there is one, else the

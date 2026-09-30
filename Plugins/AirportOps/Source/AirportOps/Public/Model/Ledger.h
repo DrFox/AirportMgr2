@@ -184,6 +184,14 @@ public:
 	 */
 	virtual void Serialize(FArchive& Ar) override;
 
+	/**
+	 * BEFORE ANY RESTORE, blob or none (#426, UFlightBoard::OnBeforeRestore's shape): the rows go and the balance is
+	 * re-folded from StartingBalance - this session's opening money - so a snapshot with NO "Ledger" blob (from before
+	 * the ledger) does not keep the replaced session's money. With a blob, Serialize overwrites all of it next.
+	 * ENFORCED BY: AirportOps.Model.Save.NoLedgerBlobResetsTheMoney
+	 */
+	virtual void OnBeforeRestore() override;
+
 	const TArray<FLedgerEntry>& Entries() const { return Rows; }
 
 	/** Fold entries older than Now minus MaxDays days into one BroughtForward entry. */

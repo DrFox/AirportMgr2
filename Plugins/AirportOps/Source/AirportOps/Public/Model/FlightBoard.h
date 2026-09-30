@@ -446,10 +446,14 @@ public:
 	 *
 	 * bAirportAdmits is the airport's status after the load's silent re-derivation (UAirport::Reseat) - a bool, not
 	 * the UAirport, so this board still does not learn the airport (see AdmitsArrivals).
+	 *
+	 * Traffic MAY BE NULL (an actor with no traffic model): steps 1 and 2 still run - they need no model, and before
+	 * this function the load ran them regardless - and steps 3 and 4, which hold stands on it and dispatch to it, are
+	 * skipped with a Warning.
 	 * ENFORCED BY: AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires, AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires,
 	 * AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, Check-Architecture rule 4 (steps 1 and 2 have no caller outside this board)
 	 */
-	void RestoreAfterLoad(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock, bool bAirportAdmits);
+	void RestoreAfterLoad(UGroundTraffic* Traffic, const URoadNetwork& Network, USimClock& Clock, bool bAirportAdmits);
 
 	/**
 	 * #404: a load's flights whose aeroplanes were not saved. Landing/TaxiIn go round again - Inbound, HoldingSince

@@ -1332,6 +1332,14 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 		UE_LOG(LogAirportOps, Warning, TEXT("Load refused: no network attached"));
 		return false;
 	}
+	// THE DOOR THE LOAD GOES THROUGH (RestoreInPlace, below), asked BEFORE anything is torn down: a refusal after
+	// ClearAgents, Bus.Discard and Alerts->Reset would have emptied the airport and loaded nothing into it.
+	URoadEditFacade* Facade = Target->GetEditFacade();
+	if (Facade == nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Load refused: the network has no edit facade to restore through"));
+		return false;
+	}
 	FOpsSnapshot Snapshot;
 	if (!OpsSave::ReadSlot(SlotName, Snapshot))
 	{
@@ -1361,12 +1369,6 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// to be the sequence itself, spelled out here: two of the four repairs, a RebuildMesh no listener heard, and no
 	// announcement - see RestoreInPlace for the order and why.
 	// ENFORCED BY: AirportMgr.Actions.LoadRetiresTheToolAndCaches, AirportOps.Present.RuntimeLoad.RunsEveryLoadRepair
-	URoadEditFacade* Facade = Target->GetEditFacade();
-	if (Facade == nullptr)
-	{
-		UE_LOG(LogAirportOps, Warning, TEXT("Load refused: the network has no edit facade to restore through"));
-		return false;
-	}
 	const TArray<IOpsPersistent*> Loaded = Persistents();
 	const bool bRestored = Facade->RestoreInPlace([&Snapshot, &Loaded](URoadNetwork& Live)
 	{
@@ -1395,17 +1397,9 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// holds are made against.
 	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires, AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport,
 	// AirportOps.Present.Airport.ClosedLoadCancelsTheUnarrived
-	if (UGroundTraffic* Model = Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr)
-	{
-		FlightBoard->RestoreAfterLoad(*Model, *Target->Network, *Clock, Airport->Status() == EAirportStatus::Open);
-	}
-	else
-	{
-		// SAID, NOT SKIPPED IN SILENCE: with no traffic model there is nothing to hold a stand on or dispatch to, and a
-		// flight restored mid-flight would sit in its phase for ever.
-		UE_LOG(LogAirportOps, Warning, TEXT("Load: no traffic model on %s - flights restored but not re-held or re-armed"),
-			*Target->GetName());
-	}
+	// A NULL TRAFFIC MODEL still demotes and cancels (steps 1-2 need no model); the board says what it skipped.
+	UGroundTraffic* Model = Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr;
+	FlightBoard->RestoreAfterLoad(Model, *Target->Network, *Clock, Airport->Status() == EAirportStatus::Open);
 	// THE REPEATERS TOO, from the loaded Now - see RearmRepeatingSchedules (review I1).
 	RearmRepeatingSchedules();
 	// AND THE SAFETY NET, both halves, for the same reason: its entry was booked against the pre-load clock. Cancelled;

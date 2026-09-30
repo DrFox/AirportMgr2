@@ -301,16 +301,12 @@ void URoadBuildEditorTool::Shutdown(EToolShutdownType ShutdownType)
 
 void URoadBuildEditorTool::DeactivateOnUndo()
 {
-	// Same guard and same call as Shutdown's own deactivate block above - see this method's
-	// header comment for why a mid-drag transaction is deliberately NOT handled here too.
-	if (IBuildTool* Tool = Sess().GetActiveTool(); Tool != nullptr && Target != nullptr)
-	{
-		Tool->OnDeactivate(MakeHoverContext());
-	}
-
-	// The undo/redo that got here changed the graph by definition - the editor twin of
-	// ARoadBuildController::OnUndo/OnRedo's own invalidation.
-	Sess().InvalidateFrameContextCache();
+	// THE SESSION'S OWN ANSWER TO A REPLACED NETWORK (FBuildSession::OnNetworkReplaced, #426) - the
+	// same call PIE's ARoadBuildController::OnNetworkReplaced makes when the facade announces an undo,
+	// rather than a hand copy of it: the active tool deactivated, the frame context retired. ADOPTED, as
+	// an undo is: the transactor restored this graph's own slots, so the selection keeps its index. See
+	// this method's header comment for why a mid-drag transaction is deliberately NOT handled here too.
+	Sess().OnNetworkReplaced(MakeHoverContext(), ENetworkReplace::Adopted);
 }
 
 ARoadNetworkActor* URoadBuildEditorTool::ResolveTarget() const

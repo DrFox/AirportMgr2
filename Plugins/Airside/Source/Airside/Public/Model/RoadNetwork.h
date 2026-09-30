@@ -265,7 +265,8 @@ public:
 	/**
 	 * A LOADED network whose DefaultProfile is a TRANSIENT-PACKAGE object other than Default: DefaultProfile, and every
 	 * live segment naming that same object, are pointed at Default - the loading actor's own default. Returns how many
-	 * segments moved. Called by ARoadNetworkActor::RepairLoadedNetwork only.
+	 * segments moved, and bumps EditRevision when that is any: a road's profile is its geometry. Called by
+	 * ARoadNetworkActor::RepairLoadedNetwork only, and there for a save game's load only (ELoadedFrom).
 	 *
 	 * WHY (#425 review, audited for #426): a default-width taxiway is laid with ARoadNetworkActor::ResolveProfile's
 	 * fallback, made in the transient package, and DefaultProfile names the same object. A LEVEL save writes such a

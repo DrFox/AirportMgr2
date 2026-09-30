@@ -517,7 +517,8 @@ bool FRoadBuildEditorToolSetupCarriesModifiersTest::RunTest(const FString& Param
 
 /**
  * ITEM (d) OF ISSUE #191/#92-#93: PIE calls Tool->OnDeactivate on Undo/Redo/Clear
- * (ARoadBuildController::OnUndo/OnRedo/OnClearNetwork) because the tool may be part-way
+ * (ARoadBuildController::OnNetworkReplaced, answering the facade's OnReplaced, since #426;
+ * OnUndo/OnRedo/OnClearNetwork by hand before it) because the tool may be part-way
  * through a chain built on a graph node the undo/redo just changed. This mode had NO
  * FEditorUndoClient at all before now (`grep PostEditUndo|FEditorUndoClient|PostUndo` found
  * zero hits), so FRoadDrawTool kept chaining from a node an editor Ctrl+Z had already removed.

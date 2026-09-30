@@ -1566,13 +1566,18 @@ int32 URoadNetwork::RepointTransientDefaultProfile(URoadProfile* Default)
 	int32 Repointed = 0;
 	for (FRoadSegment& Segment : Segments)
 	{
-		// BY IDENTITY WITH THE SAVED DEFAULT - see the header. No EditRevision bump: the load that called this has
-		// already moved it (Serialize).
+		// BY IDENTITY WITH THE SAVED DEFAULT - see the header.
 		if (Segment.bAlive && Segment.Profile == Saved)
 		{
 			Segment.Profile = Default;
 			++Repointed;
 		}
+	}
+	// A NEW PROFILE IS NEW GEOMETRY (SetSegmentProfile's rule), so a cache keyed on EditRevision must hear it - the
+	// save game's Serialize has moved the clock already, but this must not depend on its caller having done so.
+	if (Repointed > 0)
+	{
+		++EditRevision;
 	}
 	DefaultProfile = Default;
 	return Repointed;

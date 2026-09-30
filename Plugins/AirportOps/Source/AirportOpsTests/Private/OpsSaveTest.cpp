@@ -336,6 +336,8 @@ bool FOpsSaveRestoreMovesRevisionsTest::RunTest(const FString& Parameters)
 	UPricing* Pricing = NewObject<UPricing>();
 	URoadNetwork* Net = NewObject<URoadNetwork>();
 	Net->AddNode(FVector2D(0.0, 0.0));
+	// THE GUIDELINES DERIVED FROM THIS ROAD, as a rebuild leaves them - the load below must not un-derive them.
+	Net->MarkGuidelinesDerived();
 
 	Ledger->Post(0.0, ELedgerCategory::LandingFee, 500.0, FText::FromString(TEXT("saved fee")));
 	const double SavedBalance = Ledger->Balance();
@@ -345,8 +347,13 @@ bool FOpsSaveRestoreMovesRevisionsTest::RunTest(const FString& Parameters)
 	// AFTER THE SAVE: money and an edit the load must take back, and the numbers a view would remember.
 	Ledger->Post(0.0, ELedgerCategory::LandingFee, 250.0, FText::FromString(TEXT("unsaved fee")));
 	Net->AddNode(FVector2D(5000.0, 0.0));
+	// THE CONTROL: an edit DOES leave the guidelines behind the road, so the check after the load can go red.
+	if (!TestTrue(TEXT("an edit leaves the guidelines behind the road - or the check after the load measures nothing"),
+		Net->AreGuidelinesBehindRoad())) { return false; }
+	Net->MarkGuidelinesDerived();
 	const int32 LedgerSeen = Ledger->Revision();
 	const uint32 EditSeen = Net->GetEditRevision();
+	const uint32 GuidelineSeen = Net->GetGuidelineRevision();
 
 	if (!TestTrue(TEXT("restore succeeds"),
 		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*Clock, *Board, *Fuel, *Ledger, *Pricing), *Net))) { return false; }
@@ -357,6 +364,38 @@ bool FOpsSaveRestoreMovesRevisionsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the network is the saved one"), Net->GetNodes().Num(), 1);
 	TestTrue(TEXT("and its EditRevision moved - a cache keyed on it (the deletion plan, the ghost) would otherwise "
 		"answer for the pre-load graph"), Net->GetEditRevision() != EditSeen);
+	TestTrue(TEXT("and its GuidelineRevision moved - the guideline arrays were replaced with the road, and a table derived "
+		"from them (FNodeReachCache, the pose-node index, the ops runtime's network poll) must hear it"),
+		Net->GetGuidelineRevision() != GuidelineSeen);
+	TestFalse(TEXT("but the guidelines are NOT behind the road: the two arrived together, and a load that said otherwise "
+		"would refuse every plan until a rebuild - which an editor undo never runs"), Net->AreGuidelinesBehindRoad());
+	return true;
+}
+
+/**
+ * #426, THE LEDGER'S HALF OF (b): a snapshot with NO "Ledger" blob (from before the ledger) restores no money - so the
+ * replaced session's must not survive it. UFlightBoard's and UJobBoard's OnBeforeRestore reason.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsSaveNoLedgerBlobResetsMoneyTest,
+	"AirportOps.Model.Save.NoLedgerBlobResetsTheMoney",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsSaveNoLedgerBlobResetsMoneyTest::RunTest(const FString& Parameters)
+{
+	ULedger* Ledger = NewObject<ULedger>();
+	Ledger->Open(1000.0);
+	Ledger->Post(0.0, ELedgerCategory::LandingFee, 500.0, FText::FromString(TEXT("the replaced session's fee")));
+	const int32 Seen = Ledger->Revision();
+
+	FOpsSnapshot NoLedger;
+	NoLedger.Version = 6;
+	if (!TestTrue(TEXT("restore succeeds"), OpsSave::Restore(NoLedger, OpsSaveTest::Persistents(*NewObject<USimClock>(),
+		*NewObject<UFlightBoard>(), *NewObject<UJobBoard>(), *Ledger, *NewObject<UPricing>()), *NewObject<URoadNetwork>()))) { return false; }
+
+	TestEqual(TEXT("no ledger blob, no rows: the replaced session's fee is gone"), Ledger->Entries().Num(), 0);
+	TestEqual(TEXT("and the balance is this session's opening money, not the replaced session's"), Ledger->Balance(), 1000.0, 1e-9);
+	TestTrue(TEXT("and the revision moved, so the bar re-reads it"), Ledger->Revision() != Seen);
 	return true;
 }
 

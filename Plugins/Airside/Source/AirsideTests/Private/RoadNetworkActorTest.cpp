@@ -5,6 +5,7 @@
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Model/RoadNetwork.h"
+#include "Testing/AirsideTestGraph.h"
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
@@ -748,6 +749,59 @@ bool FReplacementIsAnnouncedTest::RunTest(const FString& Parameters)
 	Heard.Reset();
 	TestFalse(TEXT("nothing left to undo"), Actor->Undo());
 	TestEqual(TEXT("and an undo that did nothing announces nothing"), Heard.Num(), 0);
+	return true;
+}
+
+/**
+ * THE PROFILE REPAIR IS A SAVE GAME'S ONLY (#426 review). A save game's proxy archive re-finds a transient default by
+ * PATH, possibly as another object, and the load re-points the roads naming it at this actor's own default. A LEVEL
+ * load must not: there the reference is already null (a level save) or the live object (a PIE duplicate), and
+ * re-pointing would pin fallback-laid roads to whatever the actor's Profile is at that moment - an editor
+ * re-registration after the Profile is set would save them as that asset. And a re-point is new geometry, so it moves
+ * EditRevision whoever calls it; a content-asset default is left alone.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRepairRepointsOnlyASaveGameTest,
+	"Airside.Present.RepairRepointsOnlyASaveGame",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRepairRepointsOnlyASaveGameTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a target actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 0.0));
+	URoadNetwork* Net = Actor->Network;
+	if (!TestNotNull(TEXT("the first edit made a network"), Net)) { return false; }
+
+	// AS A SAVE GAME'S LOAD LEAVES IT: the saved default, and a road naming it, re-found as a transient object that is
+	// not this actor's own.
+	URoadProfile* Foreign = TestProfiles::Taxiway();
+	URoadProfile* Mine = Actor->ResolveProfile();
+	if (!TestTrue(TEXT("the foreign profile is transient and not this actor's - or nothing below is measured"),
+		Foreign != nullptr && Foreign != Mine && Foreign->IsIn(GetTransientPackage()))) { return false; }
+	const FRoadSegmentId Road = Net->AddStraightSegment(Net->AddNode(FVector2D(0.0, 20000.0)),
+		Net->AddNode(FVector2D(20000.0, 20000.0)), Foreign);
+	Net->DefaultProfile = Foreign;
+
+	Actor->RepairLoadedNetwork(ELoadedFrom::Level);
+	TestTrue(TEXT("the LEVEL path leaves the road on its profile - no pinning"), Net->GetSegment(Road)->Profile == Foreign);
+	TestTrue(TEXT("and the default too"), Net->DefaultProfile == Foreign);
+
+	const uint32 Revision = Net->GetEditRevision();
+	Actor->RepairLoadedNetwork(ELoadedFrom::SaveGame);
+	TestTrue(TEXT("the SAVE GAME path re-points the road at this actor's default"), Net->GetSegment(Road)->Profile == Mine);
+	TestTrue(TEXT("and the default with it"), Net->DefaultProfile == Mine);
+	TestTrue(TEXT("and moves EditRevision - a new profile is new geometry"), Net->GetEditRevision() != Revision);
+
+	// A CONTENT-ASSET DEFAULT resolves to itself in every session: nothing to repair.
+	URoadProfile* Asset = NewObject<URoadProfile>(CreatePackage(TEXT("/Temp/AirsideRepointTest")));
+	const FRoadSegmentId Authored = Net->AddStraightSegment(Net->AddNode(FVector2D(0.0, 40000.0)),
+		Net->AddNode(FVector2D(20000.0, 40000.0)), Asset);
+	Net->DefaultProfile = Asset;
+	TestEqual(TEXT("a content default re-points nothing"), Net->RepointTransientDefaultProfile(Mine), 0);
+	TestTrue(TEXT("and the road keeps it"), Net->GetSegment(Authored)->Profile == Asset);
 	return true;
 }
 

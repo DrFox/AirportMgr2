@@ -577,7 +577,9 @@ void UBuildBarWidget::RefreshBalance()
 		return;
 	}
 
-	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	// UseForTest's runtime when a test handed one in - WithContext's rule, so the balance a test reads is the one this
+	// tick computed from the ledger it set up, not "no ledger" from a world with no game instance. In play, unset.
+	const UOpsRuntime* Runtime = TestRuntime.IsValid() ? TestRuntime.Get() : UOpsRuntimeSubsystem::Get(GetWorld());
 	const ULedger* Ledger = Runtime != nullptr ? Runtime->GetLedger() : nullptr;
 	const UPricing* Pricing = Runtime != nullptr ? Runtime->GetPricing() : nullptr;
 	if (Ledger == nullptr || Pricing == nullptr)
@@ -695,6 +697,11 @@ float UBuildBarWidget::BarReservedHeightForTest(float AvailableWidth) const
 		return static_cast<float>(Slate->GetDesiredSize().Y);
 	}
 	return BarSlot->GetOffsets().Bottom;
+}
+
+FText UBuildBarWidget::BalanceTextForTest() const
+{
+	return BalanceText != nullptr ? BalanceText->GetText() : FText::GetEmpty();
 }
 
 void UBuildBarWidget::UseForTest(ARoadBuildController* C, UOpsRuntime* Runtime)

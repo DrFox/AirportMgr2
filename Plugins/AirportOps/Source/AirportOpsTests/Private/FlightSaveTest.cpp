@@ -397,7 +397,7 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	LiveClock = RestoredClock;
 	// THE REST OF THE LOAD, IN THE BOARD'S OWN ORDER, as LoadFromSlot calls it once the network is adopted: dated by the
 	// restored clock, at an airport that admits arrivals.
-	Restored->RestoreAfterLoad(*Traffic, *Net, *RestoredClock, /*bAirportAdmits*/ true);
+	Restored->RestoreAfterLoad(Traffic, *Net, *RestoredClock, /*bAirportAdmits*/ true);
 
 	UFlight* Again = Restored->FindByIdForTest(Taxiing->Id);
 	UFlight* Retired = Restored->FindByIdForTest(OnStand->Id);
@@ -428,6 +428,36 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("as a new aeroplane"), Again->AgentId != INDEX_NONE && Traffic->FindAgent(Again->AgentId) != nullptr);
 	Bus.Drain();
 	TestEqual(TEXT("its second landing charges nothing - the fee was charged once"), LandingFees(), 1);
+	return true;
+}
+
+/**
+ * #426 review: WITH NO TRAFFIC MODEL, a load still demotes and cancels. Steps 1-2 of UFlightBoard::RestoreAfterLoad need
+ * no model - and UOpsRuntime::LoadFromSlot ran them regardless before the board owned the order - so only the re-hold
+ * and re-arm, which are claims on and dispatches into the model, are skipped.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightRestoreWithoutTrafficTest,
+	"AirportOps.Model.FlightSave.RestoreWithoutTrafficStillDemotes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightRestoreWithoutTrafficTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	UFlightBoard* Board = SaveTestBoard();
+	// PLANTED AS A RESTORE WOULD FIND THEM: a phase, and for the one on its stand an agent id.
+	UFlight* OnStand = NewObject<UFlight>(GetTransientPackage());
+	Board->AddOffer(*Clock, OnStand);
+	OnStand->AgentId = 4242;
+	OnStand->Phase = EFlightPhase::Turnaround;
+	UFlight* Accepted = NewObject<UFlight>(GetTransientPackage());
+	Board->AddOffer(*Clock, Accepted);
+	Accepted->Phase = EFlightPhase::Accepted;
+
+	Board->RestoreAfterLoad(nullptr, *NewObject<URoadNetwork>(GetTransientPackage()), *Clock, /*bAirportAdmits*/ false);
+	TestEqual(TEXT("step 1 ran with no model: the flight on its stand retired as departed"), OnStand->Phase, EFlightPhase::Departed);
+	TestEqual(TEXT("step 2 ran with no model: the accepted flight at a closed airport was cancelled"), Accepted->Phase,
+		EFlightPhase::Cancelled);
 	return true;
 }
 

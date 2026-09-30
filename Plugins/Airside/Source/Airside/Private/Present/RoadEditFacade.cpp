@@ -435,7 +435,7 @@ bool URoadEditFacade::RestoreInPlace(TFunctionRef<bool(URoadNetwork&)> Deseriali
 	const bool bRestored = Deserialise(*Owner.Network);
 	if (bRestored)
 	{
-		Owner.RepairLoadedNetwork();
+		Owner.RepairLoadedNetwork(ELoadedFrom::SaveGame);
 		// THROUGH THE FACADE'S OWN DOOR (issue #191) - the undo stack is this class's to manage.
 		ClearHistory();
 	}

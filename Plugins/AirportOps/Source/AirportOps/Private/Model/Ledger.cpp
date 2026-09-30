@@ -15,6 +15,16 @@ void ULedger::Serialize(FArchive& Ar)
 	}
 }
 
+void ULedger::OnBeforeRestore()
+{
+	// Open's body without its log line or its StartingBalance write: a restore is not a new game, and the opening
+	// balance stays this session's (the scenario's) unless the blob that follows brings the saved one.
+	Rows.Reset();
+	NextId = 1;
+	Recache();
+	++RevisionCount;   // See Revision: a restore is a change.
+}
+
 void ULedger::Open(double InStartingBalance)
 {
 	StartingBalance = InStartingBalance;
