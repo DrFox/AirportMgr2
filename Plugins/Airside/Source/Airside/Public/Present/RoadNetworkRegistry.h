@@ -8,6 +8,16 @@
 class ARoadNetworkActor;
 
 /**
+ * Which way a world's airport moved, for URoadNetworkRegistry::OnAirportChanged. A PHASE, SO ONE ENUM (CLAUDE.md), not a
+ * nullable pointer standing for "left". Plain, not a UENUM: it travels on a native delegate only (EChangeKind's reason).
+ */
+enum class EAirportRegistration : uint8
+{
+	Arrived,
+	Left
+};
+
+/**
  * WHICH ACTOR IS THIS WORLD'S AIRPORT - one answer, owned here (#446).
  *
  * Until #446 four lookups answered it with two different rules: ARoadNetworkActor::Find and ops'
@@ -17,7 +27,7 @@ class ARoadNetworkActor;
  * ops ran the other, and the depots vanished - three answers, none of them wrong by its own rule.
  *
  * THE ACTOR REGISTERS ITSELF (ARoadNetworkActor::PostRegisterAllComponents) and gives the slot back
- * (EndPlay, UnregisterAllComponents). Nobody searches: a lookup is a read of the slot, and a listener
+ * when it GOES (EndPlay, or UnregisterAllComponents while being destroyed - never on a reregister). Nobody searches: a lookup is a read of the slot, and a listener
  * hears OnAirportChanged instead of polling for the answer to move.
  *
  * NEVER A GUESS BETWEEN TWO - the buildings actor's rule, made the registry's. A SECOND actor asking
@@ -42,10 +52,13 @@ public:
 	static ARoadNetworkActor* Find(const UWorld* World);
 
 	/**
-	 * Claims World's slot for Actor. True when Actor holds it afterwards - already did, or took an
-	 * empty one. False, with an Error naming both, when another live actor holds it.
+	 * Claims World's slot for Actor: takes an empty one, or finds Actor already holds it (its components
+	 * reregistered). Another live actor holding it REFUSES Actor, with an Error naming both.
+	 * VOID, NOT A bool (#446 review): the one caller had nothing to do with a refusal the Error has
+	 * already reported, and a returned bool nobody reads is the discarded-result shape CLAUDE.md bans.
+	 * Who holds the slot is Find's answer, which is what a test of the refusal reads.
 	 */
-	bool Register(ARoadNetworkActor& Actor);
+	void Register(ARoadNetworkActor& Actor);
 
 	/** Gives the slot back if Actor holds it; anything else is a no-op (a refused actor, a second call). */
 	void Unregister(ARoadNetworkActor& Actor);
@@ -54,14 +67,17 @@ public:
 	ARoadNetworkActor* GetAirport() const { return Registered.Get(); }
 
 	/**
-	 * A world's airport arrived (the actor) or left (nullptr). STATIC, one list for every world, because
-	 * its main listener outlives worlds: the ops runtime's subsystem is a GAME INSTANCE one, alive before
-	 * the PIE world's actors register and after they go, and a per-world delegate would need it to find
-	 * each new world's registry before that world's airport registers - the race the spawn hook existed
-	 * for. A listener filters by World. Fired AFTER the slot changes, so a listener's own Find agrees.
-	 * ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemReattaches
+	 * A world's airport arrived or left - the actor EITHER WAY, and which way as a phase. STATIC, one list
+	 * for every world, because its main listener outlives worlds: the ops runtime's subsystem is a GAME
+	 * INSTANCE one, alive before the PIE world's actors register and after they go, and a per-world
+	 * delegate would need it to find each new world's registry before that world's airport registers - the
+	 * race the spawn hook existed for. A listener filters by World. Fired AFTER the slot changes, so a
+	 * listener's own Find agrees.
+	 * THE LEAVER IS NAMED (#446 review): it was a null "left", so a listener could not tell the airport it
+	 * holds leaving from any other; ops now detaches only when the leaver is its own target.
+	 * ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemReattaches, AirportOps.Present.OpsRuntimeSubsystemSurvivesAReregister
 	 */
-	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnAirportChanged, UWorld& /*World*/, ARoadNetworkActor* /*AirportOrNull*/);
+	DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnAirportChanged, UWorld& /*World*/, ARoadNetworkActor& /*Airport*/, EAirportRegistration /*Change*/);
 	static FOnAirportChanged& OnAirportChanged();
 
 private:

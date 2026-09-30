@@ -9,14 +9,17 @@ ARoadNetworkActor* URoadNetworkRegistry::Find(const UWorld* World)
 	return Registry != nullptr ? Registry->GetAirport() : nullptr;
 }
 
-bool URoadNetworkRegistry::Register(ARoadNetworkActor& Actor)
+void URoadNetworkRegistry::Register(ARoadNetworkActor& Actor)
 {
 	ARoadNetworkActor* Holder = Registered.Get();
 	if (Holder == &Actor)
 	{
-		// A REREGISTER (a Details edit, an editor undo) runs PostRegisterAllComponents again - the same
-		// actor, not a second one, and no change anyone should hear about.
-		return true;
+		// ALREADY HOLDS IT: every reregister of its components (a Details edit, an editor undo, a construction-script
+		// rerun) runs PostRegisterAllComponents again. The actor never gave the slot back - it leaves only when it goes
+		// (ARoadNetworkActor::EndPlay, or its UnregisterAllComponents while being destroyed) - so this is the same
+		// actor asking again, not a second one, and no change anyone should hear about.
+		// ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemSurvivesAReregister
+		return;
 	}
 	if (Holder != nullptr)
 	{
@@ -25,16 +28,15 @@ bool URoadNetworkRegistry::Register(ARoadNetworkActor& Actor)
 			TEXT("Airport registry: %s refused in %s - %s is already this world's airport. One ARoadNetworkActor per ")
 			TEXT("level: the build tools, ops and the buildings all use %s; delete the other."),
 			*Actor.GetName(), *GetNameSafe(GetWorld()), *Holder->GetName(), *Holder->GetName());
-		return false;
+		return;
 	}
 	Registered = &Actor;
 	// The line to grep for "which airport is ops running": one per world per arrival.
 	UE_LOG(LogAirside, Log, TEXT("Airport registry: %s is %s's airport"), *Actor.GetName(), *GetNameSafe(GetWorld()));
 	if (UWorld* World = GetWorld())
 	{
-		OnAirportChanged().Broadcast(*World, &Actor);
+		OnAirportChanged().Broadcast(*World, Actor, EAirportRegistration::Arrived);
 	}
-	return true;
 }
 
 void URoadNetworkRegistry::Unregister(ARoadNetworkActor& Actor)
@@ -47,7 +49,7 @@ void URoadNetworkRegistry::Unregister(ARoadNetworkActor& Actor)
 	UE_LOG(LogAirside, Log, TEXT("Airport registry: %s left %s"), *Actor.GetName(), *GetNameSafe(GetWorld()));
 	if (UWorld* World = GetWorld())
 	{
-		OnAirportChanged().Broadcast(*World, nullptr);
+		OnAirportChanged().Broadcast(*World, Actor, EAirportRegistration::Left);
 	}
 }
 

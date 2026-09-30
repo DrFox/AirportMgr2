@@ -60,6 +60,8 @@ struct FAirframe; // #300: DispatchAgent takes it by reference and forwards it o
  * GuidelineRevision. The model moves that clock for a fact itself now (URoadNetwork::
  * NoteFactChanged), which is what makes this kind SAFE: optimising an edit down to Facts cannot
  * silently stale a cache that reads what it wrote.
+ * NOT AirsideDerivation::EDeriveScope::Facts, which shares the word and nothing else: that scope is the taxiway
+ * restriction's quiet what-if on a copy; this kind derives through EDeriveScope::Surface (RebuildFactsOnly).
  * ENFORCED BY: AirportOps.Model.Offers.Generate.RunwayFlipAsksAgain, AirportOps.Service.Rebid.RunwayFlipRebids,
  * Airside.Present.Facility.ModulePurchaseRelightsWithoutRederiving
  *

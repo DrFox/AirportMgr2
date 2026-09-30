@@ -143,7 +143,10 @@ void AAirsideBuildingsActor::PostRegisterAllComponents()
 		Road = URoadNetworkRegistry::Find(GetWorld());
 		if (Road == nullptr)
 		{
-			UE_LOG(LogAirside, Warning,
+			// LOG, NOT WARNING (#446 review): actors register in level order, so on any PIE start or load where this
+			// actor precedes the road it lands here and binds moments later, when the road registers. BeginPlay warns
+			// if that never happened - the case that is a real mistake.
+			UE_LOG(LogAirside, Log,
 				TEXT("Buildings: no road network registered in %s yet - drawing nothing until one registers. ")
 				TEXT("Set RoadNetwork on %s to draw for a particular one."),
 				*GetNameSafe(GetWorld()), *GetName());
@@ -154,7 +157,9 @@ void AAirsideBuildingsActor::PostRegisterAllComponents()
 	BindTo(Road);
 }
 
-void AAirsideBuildingsActor::OnAirportChanged(UWorld& World, ARoadNetworkActor* Airport)
+// A MISSING CASE BELOW IS A BUILD ERROR - see ExhaustiveSwitch.h: a third way for an airport to move must say what the plots do.
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+void AAirsideBuildingsActor::OnAirportChanged(UWorld& World, ARoadNetworkActor& Airport, EAirportRegistration Change)
 {
 	// ANOTHER WORLD'S AIRPORT is not ours - the editor world's and a PIE world's share this one list. A NAMED
 	// RoadNetwork is followed by nothing else: the level said which one, and the registry does not overrule it.
@@ -162,11 +167,35 @@ void AAirsideBuildingsActor::OnAirportChanged(UWorld& World, ARoadNetworkActor* 
 	{
 		return;
 	}
-	if (Airport == Bound.Get())
+	switch (Change)
 	{
+	case EAirportRegistration::Arrived:
+		if (&Airport != Bound.Get())
+		{
+			BindTo(&Airport);
+		}
+		return;
+	case EAirportRegistration::Left:
+		// ONLY THE ONE WE DRAW FOR: the leaver is named, so a refused second actor going cannot clear our plots.
+		if (&Airport == Bound.Get())
+		{
+			BindTo(nullptr);
+		}
 		return;
 	}
-	BindTo(Airport);
+}
+AIRSIDE_EXHAUSTIVE_SWITCH_END
+
+void AAirsideBuildingsActor::BeginPlay()
+{
+	Super::BeginPlay();
+	// THE WARNING PostRegisterAllComponents no longer gives: by BeginPlay every actor in the level has registered, so an
+	// unbound buildings actor now really has no road network to draw for, and no depot will show.
+	if (!Bound.IsValid())
+	{
+		UE_LOG(LogAirside, Warning, TEXT("Buildings: %s has no road network to draw for in %s - no depot will show."),
+			*GetName(), *GetNameSafe(GetWorld()));
+	}
 }
 
 void AAirsideBuildingsActor::UnregisterAllComponents(bool bForReregister)

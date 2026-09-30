@@ -165,16 +165,22 @@ public:
 	 * direction named: BeginPlay never runs in the editor world (URoadBuildEdMode's) nor in the test
 	 * fixture's, and the buildings actor binds from ITS PostRegisterAllComponents, which in PIE runs
 	 * before any BeginPlay - a registry filled at BeginPlay would be empty whenever those asked.
-	 * EndPlay and UnregisterAllComponents give the slot back.
+	 * EndPlay, and UnregisterAllComponents while the actor is being destroyed, give the slot back.
 	 */
 	virtual void PostRegisterAllComponents() override;
 
 	/**
 	 * Unregisters from URoadNetworkRegistry (#446) - ops hears it and DETACHES, a real Detach rather
-	 * than the per-tick IsValid it used to notice a PIE stop by. Both, not one: EndPlay is the game
-	 * world's teardown and a destroyed actor's; UnregisterAllComponents(false) is the editor world's
-	 * (a deleted actor, a level unloaded), where EndPlay never runs. A reregister (a Details edit) is
-	 * not a departure and keeps the slot. Unregistering twice is harmless.
+	 * than the per-tick IsValid it used to notice a PIE stop by. THE AIRPORT LEAVES ONLY WHEN THE ACTOR
+	 * GOES: EndPlay (the game world's teardown, a destroyed actor's), and UnregisterAllComponents ONLY
+	 * WHILE IsActorBeingDestroyed() - the editor world's delete, where EndPlay never runs (UWorld::
+	 * DestroyActor marks the actor before it unregisters). NOT on bForReregister alone: the engine's
+	 * Details-edit path (AActor::PreEditChange / PostEditChangeProperty, Simulate-In-Editor included)
+	 * unregisters with bForReregister FALSE and then reregisters, and reading that as a departure had ops
+	 * detach and re-attach - a new game - on a property edit (#446 review). A level unloaded in the
+	 * editor world leaves no departure event: nothing in a world listens but that world's own buildings,
+	 * which go with it, and the registry's pointer is weak. Unregistering twice is harmless.
+	 * ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemSurvivesAReregister, AirportOps.Present.OpsRuntimeSubsystemReattaches
 	 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void UnregisterAllComponents(bool bForReregister = false) override;

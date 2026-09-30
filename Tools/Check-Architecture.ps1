@@ -3035,8 +3035,9 @@ $ranRules.Add('network-change-announced')
 # driver built into one, ops ran the other, and the depots vanished. URoadNetworkRegistry (a UWorldSubsystem the actor
 # registers with) is the one answer now, and refuses a second actor with an Error. So in production code (the test
 # modules and *Test.cpp are exempt: a test may count actors on purpose):
-# (a) no TActorIterator<ARoadNetworkActor>, TActorRange<ARoadNetworkActor> or GetAllActorsOfClass(..ARoadNetworkActor..)
-#     anywhere - ARoadNetworkActor::Find forwards to the registry;
+# (a) no TActorIterator/TActorRange/TObjectIterator/TObjectRange<ARoadNetworkActor>, and no UGameplayStatics
+#     GetActorOfClass / GetAllActorsOfClass(WithTag) naming ARoadNetworkActor, anywhere - ARoadNetworkActor::Find
+#     forwards to the registry (the object and gameplay-statics forms added in #446's review: each is a scan too);
 # (b) no AddOnActorSpawnedHandler under AirportOps - the spawn hook ops used to find the airport by;
 # (c) the registry exists and its refusal is an Error, so the rule cannot pass with the one answer gone.
 $registryFile = Join-Path $plugin 'Private\Present\RoadNetworkRegistry.cpp'
@@ -3053,7 +3054,7 @@ foreach ($lookupTree in @($plugin, $editor, $ops, (Join-Path $Root 'Source\Airpo
         $inBlock = $false
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
-            if ($code -match '\bTActor(?:Iterator|Range)\s*<\s*ARoadNetworkActor\s*>' -or $code -match '\bGetAllActorsOfClass\s*\([^;]*ARoadNetworkActor') {
+            if ($code -match '\bT(?:Actor|Object)(?:Iterator|Range)\s*<\s*ARoadNetworkActor\s*>' -or $code -match '\bGet(?:All)?Actors?OfClass\w*\s*\([^;]*ARoadNetworkActor') {
                 $failures.Add("one-airport-lookup: $($file.Name):$($i + 1) searches the world for an ARoadNetworkActor - ask URoadNetworkRegistry (ARoadNetworkActor::Find), the one answer, which refuses a second airport loudly (#446)")
             }
             if ($file.FullName.StartsWith($ops) -and $code -match '\bAddOnActorSpawnedHandler\s*\(') {

@@ -8,6 +8,7 @@
 class ARoadNetworkActor;
 class UOpsRuntime;
 class UWorld;
+enum class EAirportRegistration : uint8;
 
 /**
  * Gives UOpsRuntime a lifetime in play. A GAME INSTANCE subsystem because it must outlive a
@@ -55,8 +56,12 @@ private:
 	FDelegateHandle AirportHandle;
 
 	/**
-	 * An airport arrived in (Airport) or left (null) World. Only a world THIS game instance owns - the
-	 * list is shared by every world, the editor's included. Arrival attaches, departure detaches.
+	 * Airport arrived in or left World. Only a world THIS game instance owns - the list is shared by every
+	 * world, the editor's included. An arrival attaches - UNLESS Airport is already the target, since an
+	 * Attach is a new game (clock, ledger, airlines, alerts) and must never run for the airport being
+	 * played. A departure detaches ONLY WHEN Airport is the target (#446 review: defence in depth
+	 * behind ARoadNetworkActor's own rule that a reregister is no departure).
+	 * ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemSurvivesAReregister
 	 */
-	void OnAirportChanged(UWorld& World, ARoadNetworkActor* Airport);
+	void OnAirportChanged(UWorld& World, ARoadNetworkActor& Airport, EAirportRegistration Change);
 };

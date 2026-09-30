@@ -38,28 +38,43 @@ void UOpsRuntimeSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-void UOpsRuntimeSubsystem::OnAirportChanged(UWorld& World, ARoadNetworkActor* Airport)
+// A MISSING CASE BELOW IS A BUILD ERROR - see ExhaustiveSwitch.h: a third way for an airport to move must say what ops does.
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+void UOpsRuntimeSubsystem::OnAirportChanged(UWorld& World, ARoadNetworkActor& Airport, EAirportRegistration Change)
 {
 	// OURS ONLY: the editor world's airport, and another PIE instance's, announce on the same list.
 	if (Runtime == nullptr || World.GetGameInstance() != GetGameInstance())
 	{
 		return;
 	}
-	if (Airport != nullptr)
+	switch (Change)
 	{
-		// Attach detaches whatever was attached first - a level change hands the same game instance a new world.
-		Runtime->Attach(Airport);
+	case EAirportRegistration::Arrived:
+		// THE AIRPORT BEING PLAYED IS NOT A NEW ONE. Attach is a new game - the clock restarts, the ledger reopens,
+		// airlines and alerts reset - so a re-announcement of the target (a registry that ever read a reregister as
+		// leave-then-arrive) must cost nothing. Any OTHER airport attaches; Attach detaches the old one first, and a
+		// level change hands the same game instance a new world.
+		if (Runtime->GetTarget() == &Airport)
+		{
+			return;
+		}
+		Runtime->Attach(&Airport);
+		return;
+	case EAirportRegistration::Left:
+		// THE AIRPORT LEFT (a PIE stop, a level unload, the actor destroyed): a real Detach, while its traffic and
+		// facade still exist to unbind from - see ARoadNetworkActor::EndPlay. Until #446 nothing unbound: a per-tick
+		// IsValid noticed the target had gone and re-attached to whatever came next. ONLY OUR TARGET'S departure:
+		// a refused second actor never held the slot, and another airport leaving is not ours leaving.
+		if (Runtime->GetTarget() != &Airport)
+		{
+			return;
+		}
+		UE_LOG(LogAirportOps, Log, TEXT("OpsRuntime detached: %s left %s"), *Airport.GetName(), *World.GetName());
+		Runtime->Detach();
 		return;
 	}
-	// THE AIRPORT LEFT (a PIE stop, a level unload, the actor destroyed): a real Detach, while its traffic and
-	// facade still exist to unbind from - see ARoadNetworkActor::EndPlay. Until #446 nothing unbound: a per-tick
-	// IsValid noticed the target had gone and re-attached to whatever came next.
-	if (Runtime->GetTarget() != nullptr)
-	{
-		UE_LOG(LogAirportOps, Log, TEXT("OpsRuntime detached: %s left %s"), *Runtime->GetTarget()->GetName(), *World.GetName());
-		Runtime->Detach();
-	}
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 void UOpsRuntimeSubsystem::Tick(float DeltaTime)
 {

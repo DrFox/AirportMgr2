@@ -3,9 +3,12 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "Model/Ledger.h"
+#include "Model/SimClock.h"
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
+#include "Present/RoadNetworkRegistry.h"
 #include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -163,6 +166,69 @@ bool FOpsRuntimeSubsystemOtherWorldTest::RunTest(const FString& Parameters)
 
 	Elsewhere.Actor->Destroy();
 	TestEqual(TEXT("and another world's airport LEAVING does not detach us"), Sub->GetRuntime()->GetTarget(), Ours);
+	return true;
+}
+
+/**
+ * A REREGISTER IS NOT A DEPARTURE (#446 review). The engine unregisters an actor's components with bForReregister FALSE
+ * and then reregisters them - AActor::PreEditChange/PostEditChangeProperty on a Details edit in Simulate-In-Editor
+ * (ActorEditor.cpp), a construction-script rerun - and the airport is still there throughout. An Attach is a NEW GAME
+ * (the clock restarts, the ledger reopens, airlines and alerts reset), so a registry that read the unregister as the
+ * airport leaving, and the reregister as a new one arriving, restarted the player's game on a property edit.
+ * Measured on what a restart would lose - the game time and the balance - and on the registry's own "left" line.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeSubsystemReregisterTest,
+	"AirportOps.Present.OpsRuntimeSubsystemSurvivesAReregister",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeSubsystemReregisterTest::RunTest(const FString& Parameters)
+{
+	FOpsSubsystemTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World))
+	{
+		return false;
+	}
+	UOpsRuntimeSubsystem* Sub = TestWorld.GameInstance->GetSubsystem<UOpsRuntimeSubsystem>();
+	if (!TestNotNull(TEXT("the subsystem exists on a real game instance"), Sub))
+	{
+		return false;
+	}
+	ARoadNetworkActor* Airport = TestWorld.World->SpawnActor<ARoadNetworkActor>();
+	if (!TestNotNull(TEXT("an airport"), Airport))
+	{
+		return false;
+	}
+	UOpsRuntime* Runtime = Sub->GetRuntime();
+	if (!TestEqual(TEXT("setup: ops attached to it"), Runtime->GetTarget(), Airport))
+	{
+		return false;
+	}
+
+	// A GAME IN PROGRESS: time has passed and money has moved, so a restart would show on both.
+	Sub->Tick(5.0f);
+	Runtime->GetLedger()->PostDailyUpkeep(1234.0, Runtime->GetClock()->Now());
+	const double Now = Runtime->GetClock()->Now();
+	const double Balance = Runtime->GetLedger()->Balance();
+
+	FLogLineSpy Spy(FName(TEXT("LogAirside")));
+	GLog->AddOutputDevice(&Spy);
+	// THE ENGINE'S SHAPE, not UnregisterAllComponents(true): the Details-edit path passes false, then reregisters.
+	Airport->UnregisterAllComponents();
+	Airport->ReregisterAllComponents();
+	GLog->RemoveOutputDevice(&Spy);
+
+	TestEqual(TEXT("ops is still attached to the same airport"), Runtime->GetTarget(), Airport);
+	TestEqual(TEXT("the game time did not restart - no re-attach ran"), Runtime->GetClock()->Now(), Now, 1e-9);
+	TestEqual(TEXT("the ledger did not reopen"), Runtime->GetLedger()->Balance(), Balance, 1e-9);
+	TestEqual(TEXT("and the registry never said the airport left"),
+		Spy.CapturedLines.FilterByPredicate([](const FString& Line) { return Line.Contains(TEXT("Airport registry")) && Line.Contains(TEXT(" left ")); }).Num(), 0);
+
+	// DEFENCE IN DEPTH: even an arrival re-announced for the airport being played restarts nothing - the subsystem
+	// treats "attach to what is attached" as a no-op, because an Attach is a new game.
+	URoadNetworkRegistry::OnAirportChanged().Broadcast(*TestWorld.World, *Airport, EAirportRegistration::Arrived);
+	TestEqual(TEXT("a re-announced arrival of the target is no re-attach: the game time holds"), Runtime->GetClock()->Now(), Now, 1e-9);
+	TestEqual(TEXT("and so does the balance"), Runtime->GetLedger()->Balance(), Balance, 1e-9);
 	return true;
 }
 

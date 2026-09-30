@@ -142,9 +142,11 @@ class IBuildPurse;
  *     not through NotifyChanged, and stays an explicit "rebuild now" - the escape hatch for a
  *     caller that must read derived state mid-batch, at the cost of one rebuild. The
  *     pending kind survives it, so the close still rebuilds.
- *   - EVERY OnChanged LISTENER SEES THE FOLDED NOTIFY, not only the actor:
- *     ARoadBuildController's runway cache is invalidated once, at the close, which is
- *     correct because nothing can read it between two lines of one synchronous call.
+ *   - EVERY LISTENER DOWNSTREAM SEES THE FOLDED NOTIFY, not only the actor: the actor rebuilds
+ *     once, at the close, and announces that one rebuild on ARoadNetworkActor::OnNetworkChanged
+ *     (#446) - so ARoadBuildController's runway cache, which listens there now rather than on
+ *     OnChanged, is invalidated once too, which is correct because nothing can read it between
+ *     two lines of one synchronous call.
  */
 UCLASS()
 class AIRSIDE_API URoadEditFacade : public UObject, public IRoadEditTarget
@@ -412,8 +414,9 @@ public:
 	 *   Deserialise(live network);
 	 *   ARoadNetworkActor::RepairLoadedNetwork - the repairs a level load gets, which a save game does not;
 	 *   ClearHistory - the undo stack holds Mementos of the airport just replaced on purpose;
-	 *   AdoptNetwork(the same object) - ghost hidden, OnChanged(Topology), so the mesh, the guideline graph and every
-	 *     OnChanged listener (the controller's HasRunway cache) see the loaded airport;
+	 *   AdoptNetwork(the same object) - ghost hidden, OnChanged(Topology), so the mesh and the guideline graph are
+	 *     rebuilt and ARoadNetworkActor::OnNetworkChanged (#446) tells every listener - the controller's HasRunway
+	 *     cache, the buildings, ops' FNetworkChangedEvent - about the loaded airport, once;
 	 *   OnReplaced(Adopted) - the drivers retire their caches.
 	 *
 	 * BEFORE THIS the load was AirportOps' LoadFromSlot's own hand-ordered sequence - two of the four repairs, a

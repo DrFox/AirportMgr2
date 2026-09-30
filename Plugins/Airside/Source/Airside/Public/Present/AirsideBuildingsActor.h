@@ -14,6 +14,7 @@ class URoadNetwork;
 // OPAQUE, NOT INCLUDED: Tool/RoadEditTarget.h pulls in a dozen Model/ headers for one enum two private
 // handlers take. A scoped enum with its underlying type is complete from this line alone.
 enum class EChangeKind : uint8;
+enum class EAirportRegistration : uint8;
 
 /**
  * Everything that stands ON the airport rather than being part of its surface: plotted
@@ -93,6 +94,10 @@ public:
 
 	virtual void PostInitProperties() override;
 	virtual void PostRegisterAllComponents() override;
+
+	/** Warns when, with every actor in the level registered, there is still no road network to draw for - the
+	 *  real mistake PostRegisterAllComponents cannot tell from "the road registers next" (#446 review). */
+	virtual void BeginPlay() override;
 	virtual void UnregisterAllComponents(bool bForReregister = false) override;
 
 	/**
@@ -112,9 +117,9 @@ private:
 	/** OnNetworkChanged's handler (#446): Topology and Facts redraw the plots, the other kinds move none. */
 	void OnNetworkChanged(EChangeKind Kind, const URoadNetwork& Network);
 
-	/** URoadNetworkRegistry::OnAirportChanged's handler: bind to this world's airport as it arrives or
-	 *  leaves, while RoadNetwork is unset. */
-	void OnAirportChanged(UWorld& World, ARoadNetworkActor* Airport);
+	/** URoadNetworkRegistry::OnAirportChanged's handler: bind to this world's airport as it arrives, let go of
+	 *  it as it leaves, while RoadNetwork is unset. */
+	void OnAirportChanged(UWorld& World, ARoadNetworkActor& Airport, EAirportRegistration Change);
 
 	/** The registry binding - see PostRegisterAllComponents. Removed on a real unregister. */
 	FDelegateHandle RegistryHandle;

@@ -391,6 +391,8 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 
 		// THE WORLD'S AIRPORT, AFTER THE REBUILD (#446) - see the header for why here and not BeginPlay.
 		// A world with no registry (an editor preview) has nobody to tell.
+		// A REFUSAL (a second actor in the world) is the registry's to report - it logs an Error naming both -
+		// and changes nothing here: this actor still draws and edits, and nothing looks it up.
 		if (URoadNetworkRegistry* Registry = GetWorld() != nullptr ? GetWorld()->GetSubsystem<URoadNetworkRegistry>() : nullptr)
 		{
 			Registry->Register(*this);
@@ -422,9 +424,10 @@ void ARoadNetworkActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void ARoadNetworkActor::UnregisterAllComponents(bool bForReregister)
 {
-	// A REREGISTER IS NOT A DEPARTURE: PostRegisterAllComponents follows it and would register again -
-	// and a listener would detach and re-attach ops, discarding its event queue, for a Details edit.
-	if (!bForReregister)
+	// A DEPARTURE ONLY WHILE BEING DESTROYED - the editor world's delete, which never EndPlays. NOT merely
+	// !bForReregister: a Details edit unregisters with bForReregister false and then reregisters (see the
+	// header), and reading that as the airport leaving had ops detach and re-attach - a new game - on an edit.
+	if (IsActorBeingDestroyed())
 	{
 		if (URoadNetworkRegistry* Registry = GetWorld() != nullptr ? GetWorld()->GetSubsystem<URoadNetworkRegistry>() : nullptr)
 		{

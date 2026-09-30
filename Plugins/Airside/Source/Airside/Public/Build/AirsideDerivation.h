@@ -74,6 +74,9 @@ namespace AirsideDerivation
 		 * asked what WOULD happen; a `Restriction:` line from it would describe a road nobody built.
 		 * No solve and no graph: nothing a what-if asks reads either, and the guideline builder has
 		 * no quiet mode to run it in.
+		 * NOT EChangeKind::Facts (#446), which shares the word and nothing else: that is a rebuild KIND (a runway's
+		 * facts or a depot's modules changed) and derives through the Surface scope; this is the restriction-only
+		 * what-if. Neither is the other's scope.
 		 */
 		Facts,
 
