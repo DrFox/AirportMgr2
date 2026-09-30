@@ -807,6 +807,16 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Model\ServiceFleet.cpp')
         TestExempt  = $true
         ProdReason  = "name a vehicle kind through FServiceFleet::NameOf, the one place its DisplayName falls back to its code"
+    },
+    @{
+        # THE CATALOGUE'S TEST DOOR (#430, the #475 review). UJobBoard::CatalogueRowForTest hands out a mutable row so a
+        # fixture can widen a body or empty a tank; a production caller would be a second writer of the catalogue beside
+        # FServiceFleet::ResolveCatalogue, past rule 43's container patterns (it writes through a reference).
+        Name        = 'UJobBoard::CatalogueRowForTest'
+        Pattern     = '\bCatalogueRowForTest\s*\('
+        ProdAllowed = @('Public\Model\JobBoard.h')
+        TestExempt  = $true
+        ProdReason  = "a catalogue row is written by FServiceFleet::ResolveCatalogue alone; read one through UJobBoard::TypeFor or GetCatalogue"
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -2420,10 +2430,15 @@ if ($TestNamesOut -ne '') {
 #      FServiceFleet::ResolveCatalogue (the scenario's FFuelVehicleSpec is read at that join alone). So (c) also reads the
 #      row's shapes - `TypeFor(...).Price`, a `Catalogue`/`GetCatalogue()` row's Price or ResaleValue, a `Kind`/`Type`
 #      local's - and ResaleValue as a FIELD as well as a call. And (a) counts the catalogue and its StarterFleet as the
-#      fleet's containers: ServiceFleet.cpp's ResolveCatalogue is their one production writer.
+#      fleet's containers: ServiceFleet.cpp's ResolveCatalogue is their one production writer. (a) READS ASSIGNMENT TOO
+#      (#475 review): `Board->StarterFleet = {...}`, `Catalogue[X] = ...` and `Catalogue.FindOrAdd(X) = ...` all passed a
+#      method-call-only pattern, and StarterFleet is a public UPROPERTY. A DECLARATION is not a write - UScenario's
+#      `TArray<FName> StarterFleet = {...}` default - so a name preceded by a type (a word or a template's `>`, then
+#      whitespace; `->` is not a type) is skipped. Mutation-checked 2026-09-30: each of the three shapes, and a bare
+#      `StarterFleet = Other;` in a member body, fails; the scenario's default and `Board.StarterFleet;` reads pass.
 # The rule fails, rather than checking nothing, when ServiceFleet.cpp is gone or no longer matches either shape.
 $fleetDoorFile = Join-Path $ops 'Private\Model\ServiceFleet.cpp'
-$fleetContainerWrite = '\b(?:Vehicles|SeededDepots|Catalogue|StarterFleet)\s*(?:\.|->)\s*(?:Add|AddUnique|AddDefaulted|Emplace|Insert|Append|Remove|RemoveAt|RemoveAll|RemoveSwap|Reset|Empty)\w*\s*\(|(?:\+\+\s*NextVehicleId\b|\bNextVehicleId\s*(?:\+\+|\+=))'
+$fleetContainerWrite = '\b(?:Vehicles|SeededDepots|Catalogue|StarterFleet)\s*(?:\.|->)\s*(?:Add|AddUnique|AddDefaulted|Emplace|Insert|Append|Remove|RemoveAt|RemoveAll|RemoveSwap|Reset|Empty|FindOrAdd)\w*\s*\(|(?:\+\+\s*NextVehicleId\b|\bNextVehicleId\s*(?:\+\+|\+=))|(?<!(?:\w|(?<!-)>)\s{1,40})\b(?:Catalogue|StarterFleet)\s*(?:\[[^\]]*\])?\s*=(?!=)'
 $fleetMoneyPost      = '\bELedgerCategory::Fleet\b'
 $fleetPriceRead      = 'Specs?(?:[A-Z]\w*)?(?:\[[^\]]*\])?(?:\.|->)Price\b|\bSpecFor\([^)]*\)\.Price\b|(?:\.|->)ResaleValue\b|\bTypeFor\s*\([^)]*\)\s*\.\s*Price\b|\b(?:Get)?Catalogue\b[^;]*?(?:\.|->)\s*Price\b|\b(?:Kind|Type)\s*(?:\.|->)\s*Price\b'
 $fleetDoorContainerWrites = 0

@@ -300,7 +300,10 @@ bool FFacilitySellForwardsTest::RunTest(const FString&)
 	const int32 Fleet = Board->VehiclesAt(Depot);
 	const double Balance = Runtime->GetLedger()->Balance();
 	// THE SCENARIO'S OWN ROW, not the catalogue's resolved ResaleValue: the credit is checked against the authored rule.
-	const FFuelVehicleSpec Spec = GetDefault<UScenario>()->FuelVehicles.FindChecked(TEXT("FUEL"));
+	// The RUNTIME's scenario - the one Attach resolved the catalogue from - not the class default.
+	const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario(*Runtime->GetCatalog());
+	if (!TestNotNull(TEXT("the runtime's scenario"), Scenario)) { return false; }
+	const FFuelVehicleSpec Spec = Scenario->FuelVehicles.FindChecked(TEXT("FUEL"));
 
 	const FPurchaseResult Sold = Runtime->SellVehicle(Bought.VehicleId);
 	TestTrue(TEXT("the idle vehicle sells through the forwarder"), Sold.Succeeded());

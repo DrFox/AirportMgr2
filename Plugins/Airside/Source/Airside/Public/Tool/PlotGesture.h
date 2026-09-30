@@ -29,7 +29,8 @@ namespace PlotGesture
 	 * SHARED WITH THE STAND TOOL, which loses nothing it could build: every stand letter's floor width is wider than 20 m
 	 * (Code A reads as B's, a 24 m span plus its clearances - IcaoCode::StandWidthForLetter), and above the floor the two
 	 * lattices agree, 20 + k x 5 m either way.
-	 * ENFORCED BY: Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix (every frontage the gesture can draw accepts a plot)
+	 * ENFORCED BY: Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix (every frontage the gesture can draw accepts a plot),
+	 * Airside.Tool.StandPlot.TooSmallNotCommittable (the smallest stand letter's floor width is no narrower than this)
 	 */
 	inline constexpr double MinFrontageUu = 2000.0;
 

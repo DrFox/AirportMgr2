@@ -366,15 +366,32 @@ bool FFleetCatalogueDropsNoChassisTest::RunTest(const FString&)
 	UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
 	TMap<FName, FFuelVehicleSpec> Rows = GetDefault<UScenario>()->FuelVehicles;
 	const FName Hovercraft(TEXT("HOVERCRAFT"));
+	const FName Skateboard(TEXT("SKATEBOARD"));
 	const FName Bowser(AirsideVehicleCodes::Fuel);
 	Rows.Add(Hovercraft, FFuelVehicleSpec(500.0, 50.0, 1000.0, 10.0, INVTEXT("Hovercraft")));
+	Rows.Add(Skateboard, FFuelVehicleSpec(500.0, 50.0, 1000.0, 10.0, INVTEXT("Skateboard")));
 
+	// TWO WAYS TO HAVE NO CHASSIS, each its own branch of the join's check: Content builds nothing for the code (a None
+	// vehicle - the hovercraft), or it answers a vehicle that names the code and has no axles (the skateboard, which the
+	// resolver below hands back by hand: no Content resolver builds one today, and a zero wheelbase routes and fits as
+	// nothing does).
 	AddExpectedMessagePlain(TEXT("scenario vehicle row 'HOVERCRAFT' has no chassis"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	AddExpectedMessagePlain(TEXT("scenario vehicle row 'SKATEBOARD' has no chassis"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	AddExpectedMessagePlain(TEXT("starter fleet kind 'HOVERCRAFT' has no catalogue row"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	const int32 Kept = Board->Fleet().ResolveCatalogue(Rows, { Hovercraft, Bowser },
-		[](FName Code) { return UAirsideSettings::ResolveVehicle(Code); });
-	TestEqual(TEXT("every row with a chassis is kept, and only those"), Kept, Rows.Num() - 1);
+		[Skateboard](FName Code)
+		{
+			if (Code == Skateboard)
+			{
+				FVehicle Axleless;
+				Axleless.TypeCode = Code;
+				return Axleless;
+			}
+			return UAirsideSettings::ResolveVehicle(Code);
+		});
+	TestEqual(TEXT("every row with a chassis is kept, and only those"), Kept, Rows.Num() - 2);
 	TestFalse(TEXT("the chassis-less row is not in the catalogue - so it is not for sale"), Board->GetCatalogue().Contains(Hovercraft));
+	TestFalse(TEXT("nor is the row whose chassis names its code and has no axles"), Board->GetCatalogue().Contains(Skateboard));
 	TestEqual(TEXT("the starter list keeps the kinds that exist, in its own order"), Board->StarterFleet, TArray<FName>{ Bowser });
 	const FServiceVehicleType* Row = Board->GetCatalogue().Find(Bowser);
 	if (!TestNotNull(TEXT("the bowser's row"), Row)) { return false; }

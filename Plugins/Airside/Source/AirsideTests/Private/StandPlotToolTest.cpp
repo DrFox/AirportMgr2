@@ -418,6 +418,11 @@ bool FStandPlotTooSmallNotCommittableTest::RunTest(const FString& Parameters)
 
 	// 20 x 15 m: the narrowest entrance the steps allow (the shared floor, 20 m since the owner
 	// ruling of 2026-09-30; 15 m before), and far short of Code A's depth.
+	// THE FLOOR COST NO BUILDABLE STAND: raised for the depot, it is shared with this tool, and the
+	// raise is free here only while the smallest stand letter's floor width is at least as wide.
+	TestTrue(*FString::Printf(TEXT("the smallest stand letter's floor width (%.0f) is no narrower than the gesture's floor (%.0f)"),
+		IcaoCode::StandWidthForLetter(IcaoCode::SmallestStandLetter()), PlotGesture::MinFrontageUu),
+		IcaoCode::StandWidthForLetter(IcaoCode::SmallestStandLetter()) >= PlotGesture::MinFrontageUu);
 	FStandPlotTool Tool;
 	if (!TestTrue(TEXT("a 20 x 15 m stand still locks - no letter is a refusal, not an error"),
 		DrawStand(Tool, Actor, PlotGesture::MinFrontageUu, 1500.0)))

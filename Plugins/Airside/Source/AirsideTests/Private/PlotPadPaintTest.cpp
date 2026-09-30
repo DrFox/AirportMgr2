@@ -21,7 +21,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPolygonInsetTest::RunTest(const FString& Parameters)
 {
-	// A 15 x 8 m plot - the smallest drawable depot frontage - inset by the 1 m hazard band.
+	// A 15 x 8 m plot - narrower than any depot the tool draws since the 20 m floor (owner ruling
+	// 2026-09-30), and a plain rectangle is all the inset needs - inset by the 1 m hazard band.
 	const TArray<FVector2D> Ccw = { FVector2D(0.0, 0.0), FVector2D(1500.0, 0.0),
 	                                FVector2D(1500.0, 800.0), FVector2D(0.0, 800.0) };
 	TArray<FVector2D> Inner;

@@ -369,8 +369,8 @@ bool FPlotFrontageSnapsInFiveMetreStepsTest::RunTest(const FString& Parameters)
 		return Quad.Num() >= 2 ? FVector2D::Distance(Quad[0], Quad[1]) : 0.0;
 	};
 
-	// ROUNDED, NOT TRUNCATED, and not left at 17. Rounding is the difference between a grid
-	// that feels magnetic and one that feels grudging.
+	// ROUNDED, NOT TRUNCATED: 22 m rounds down and 23 m up, where truncation would leave both at
+	// 20. Rounding is the difference between a grid that feels magnetic and one that feels grudging.
 	TestEqual(TEXT("a 22 m drag locks at 20 m"), FrontageFor(2200.0), 2000.0);
 	TestEqual(TEXT("a 23 m drag locks at 25 m"), FrontageFor(2300.0), 2500.0);
 
