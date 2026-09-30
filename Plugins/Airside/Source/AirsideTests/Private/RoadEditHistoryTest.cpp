@@ -245,8 +245,14 @@ bool FEditScopeRollbackTest::RunTest(const FString& Parameters)
 		}
 
 		const uint32 EditRevisionBefore = Net->GetEditRevision();
+		const int32 SnapshotsBefore = FRoadEditScope::SnapshotsTakenForTest();
 		{
 			FRoadEditScope Edit(History, Net, TEXT("refused after it wrote"));
+			// WHO TOOK THE COPY: a scope with a history rides the history's pending snapshot and takes
+			// none of its own; one without takes exactly one. Two copies per game-world edit would be
+			// the waste LocalSnapshot's comment says it is not.
+			TestEqual(FString::Printf(TEXT("%s: copies the scope itself took"), *Way),
+				FRoadEditScope::SnapshotsTakenForTest() - SnapshotsBefore, bWithHistory ? 0 : 1);
 			WriteThenRefuse(*Net);
 			TestTrue(FString::Printf(TEXT("%s: the scope reports it rolled back"), *Way), Edit.Rollback());
 		}
@@ -289,6 +295,9 @@ bool FEditScopeRollbackEdgesTest::RunTest(const FString& Parameters)
 		FRoadEditScope Edit(History, Net, TEXT("twice"));
 		WriteThenRefuse(*Net);
 		TestTrue(TEXT("the first Rollback restores"), Edit.Rollback());
+		// A SCOPE WITH A NETWORK THAT CANNOT RESTORE SAYS SO IN THE LOG: every call site is a bare
+		// `Edit.Rollback();` that cannot act on the answer, so the failure has to be visible in the log.
+		AddExpectedError(TEXT("Rollback of 'twice' refused"), EAutomationExpectedErrorFlags::Contains, 1);
 		TestFalse(TEXT("the second has no edit left to roll back"), Edit.Rollback());
 	}
 	{
@@ -335,6 +344,22 @@ bool FRestoreFromClocksTest::RunTest(const FString& Parameters)
 	const uint32 EditAfterFirst = Net->GetEditRevision();
 	Net->RestoreFrom(*Snapshot);
 	TestTrue(TEXT("a second restore moves the road clock again"), Net->GetEditRevision() > EditAfterFirst);
+
+	// A DERIVED NETWORK IS STAMPED CURRENT and goes behind again on its next edit, as it should ...
+	TestFalse(TEXT("a derived network is not behind after the restore"), Net->AreGuidelinesBehindRoad());
+	Net->AddNode(FVector2D(777.0, 777.0));
+	TestTrue(TEXT("and is behind once it is edited again - the stamp is real"), Net->AreGuidelinesBehindRoad());
+
+	// ... BUT A NEVER-DERIVED ONE STAYS NEVER-DERIVED: a hand-authored graph has no road to be behind, and a
+	// restore that stamped it would make the planners refuse it after its next edit.
+	URoadNetwork* Authored = NewObject<URoadNetwork>(GetTransientPackage());
+	FRoadCrossingFixture::Lay(*Authored, /*bFarSide*/ true);
+	URoadNetwork* AuthoredSnapshot = DuplicateObject<URoadNetwork>(Authored, GetTransientPackage());
+	WriteThenRefuse(*Authored);
+	Authored->RestoreFrom(*AuthoredSnapshot);
+	Authored->AddNode(FVector2D(777.0, 777.0));
+	TestFalse(TEXT("a never-derived network is still never behind after a restore and an edit"),
+		Authored->AreGuidelinesBehindRoad());
 	return true;
 }
 

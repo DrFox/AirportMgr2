@@ -6,6 +6,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadEditFacade.h"
+#include "Present/RoadEditHistory.h"
 #include "Present/RoadNetworkActor.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
@@ -1566,6 +1567,48 @@ bool FEditorDragRollsBackToDragStartTest::RunTest(const FString& Parameters)
 	const TArray<FString> Differing = NetworkIdentity::DifferingProperties(*Actor->Network, *Before, NetworkIdentity::RederivedOnNotify());
 	TestEqual(FString::Printf(TEXT("and the model is BITWISE what it was before the drag (bar the guideline graph the notify re-derives; differs in: %s)"),
 		*FString::Join(Differing, TEXT(", "))), Differing.Num(), 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Issue #437 follow-up: A DRAG COSTS ONE COPY OF THE NETWORK, NOT ONE PER FRAME. FRoadEditScope's
+// comment says nothing edits per frame through a scope, and that a drag is given one rollback point
+// by BeginInteractiveEdit - because a copy is ~4 ms per 1000 nodes (2026-09-30), a quarter of a 60 Hz
+// frame, and a per-frame copy in the editor world would make every drag frame pay it. K frames, one
+// copy; and a bare call outside a drag takes its own, so the point is genuinely per edit.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditorDragTakesOneSnapshotTest,
+	"Airside.Present.EditorDragTakesOneSnapshot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditorDragTakesOneSnapshotTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld SnapWorld(/*bSpawnActor*/ true, EWorldType::Editor);
+	if (!TestNotNull(TEXT("a world"), SnapWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = SnapWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(20000.0, 0.0));
+	if (!TestTrue(TEXT("a long road connects"), Actor->ConnectNodes(A, B))) { return false; }
+
+	constexpr int32 Frames = 20;
+	const int32 Before = FRoadEditScope::SnapshotsTakenForTest();
+	Actor->BeginInteractiveEdit(TEXT("drag node"));
+	int32 Moved = 0;
+	for (int32 Frame = 1; Frame <= Frames; ++Frame)
+	{
+		Moved += Actor->MoveNode(B, FVector2D(20000.0, 100.0 * Frame)) ? 1 : 0;
+	}
+	Actor->EndInteractiveEdit(/*bKeep*/ true);
+	TestEqual(TEXT("control: every frame landed - or the count below says nothing about frames"), Moved, Frames);
+	TestEqual(FString::Printf(TEXT("%d drag frames took exactly ONE copy of the network"), Frames),
+		FRoadEditScope::SnapshotsTakenForTest() - Before, 1);
+
+	// A BARE MOVE, no drag open, takes its own point - one per call, which is what an edit costs.
+	const int32 BeforeBare = FRoadEditScope::SnapshotsTakenForTest();
+	TestTrue(TEXT("a bare move lands"), Actor->MoveNode(B, FVector2D(20000.0, 5000.0)));
+	TestEqual(TEXT("and takes one copy of its own"), FRoadEditScope::SnapshotsTakenForTest() - BeforeBare, 1);
 	return true;
 }
 

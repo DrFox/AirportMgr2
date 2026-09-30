@@ -465,12 +465,16 @@ void URoadNetwork::RestoreFrom(const URoadNetwork& Snapshot)
 	// DuplicateObject clone). See this method's header comment on why the clocks go forward.
 	const uint32 LiveEditRevision = EditRevision;
 	const uint32 LiveGuidelineRevision = GuidelineRevision;
+	const bool bLiveWasDerived = GuidelinesDerivedAt != MAX_uint32;
 
 	CopyFrom(Snapshot);
 
 	EditRevision = FMath::Max(LiveEditRevision, Snapshot.EditRevision) + 1;
 	GuidelineRevision = FMath::Max(LiveGuidelineRevision, Snapshot.GuidelineRevision) + 1;
-	GuidelinesDerivedAt = EditRevision;
+	// NEVER-DERIVED STAYS NEVER-DERIVED: AreGuidelinesBehindRoad is false for MAX_uint32 because a
+	// hand-authored graph has no road to be behind, and a stamp here would flip that the moment the
+	// next node is added and the planners would refuse the graph.
+	GuidelinesDerivedAt = bLiveWasDerived ? EditRevision : MAX_uint32;
 
 	// PoseNodeIndex memoises Entities against GuidelineRevision, which has just moved, so it would
 	// rebuild on its own; cleared as well so nothing depends on that being noticed.

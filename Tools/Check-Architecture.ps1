@@ -567,6 +567,18 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Present\RoadEditFacade.h', 'Private\Present\RoadEditFacade.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp', 'Public\Present\RoadNetworkActor.h', 'Private\Present\RoadNetworkActor.cpp', 'Source\AirportMgr\RoadBuildController.cpp', 'Private\Present\OpsRuntime.cpp')
         TestExempt  = $true
         ProdReason  = 'a new caller of a network-replacing door must be a driver that listens to URoadEditFacade::OnReplaced (the editor mode does not) - see RoadBuildEdMode.h'
+    },
+    @{
+        # AN EDIT SCOPE IS OPENED BY THE FACADE'S MUTATORS ONLY (#437, #460's review). Rule 40 checks that a
+        # refusal inside one rolls back, but it reads RoadEditFacade*.cpp alone: a scope opened anywhere else is a
+        # write to the network that skips CommitAndNotify's commit-and-notify pairing AND rule 40, and would
+        # pass both unseen. Pattern is a DECLARATION (a type, a name, then an open paren or brace), so a
+        # reference parameter or the ctor's own definition does not match. RoadEditHistory.* is where it is defined.
+        Name        = 'FRoadEditScope (declared outside the facade)'
+        Pattern     = '\bFRoadEditScope\s+\w+\s*[({]'
+        ProdAllowed = @('Private\Present\RoadEditFacade.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp', 'Private\Present\RoadEditHistory.cpp', 'Public\Present\RoadEditHistory.h')
+        TestExempt  = $true
+        ProdReason  = 'edit through a URoadEditFacade mutator (CommitAndNotify / CommitPurchase / CommitDisposal), so the edit is committed, notified and - on a refusal - rolled back; extend this row and rule 40 if a new file must open a scope'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -1965,42 +1977,56 @@ $ranRules.Add('runway-kind-enumeration')
 # shipped: a refused drop-to-merge stayed merged and was committed into the level by the editor's drag transaction, and
 # model refusal rules were re-typed above the scope so that no refusal had to happen inside one. The scope can roll
 # back now (Rollback(), in both worlds), and this is the shape that keeps it used: in URoadEditFacade's translation
-# units, every `return false;` / `return INDEX_NONE;` that follows an `FRoadEditScope <name>(` inside its block calls
-# `<name>.Rollback()` within the 12 code lines before it. Uniform on purpose, not "only the ones that wrote": whether a
-# refusal wrote something is exactly what the next mutator to grow a second write will get wrong, and a restore on a
-# refusal that wrote nothing is a copy, not a bug. A `return true;` is not a refusal - a no-op that succeeded returns
-# uncommitted on purpose and is left alone. Fails if it finds no scope or no Rollback() at all, so it cannot pass by
-# reading nothing.
+# units, every `return false;` / `return INDEX_NONE;` that follows an `FRoadEditScope <name>(` inside its block has a
+# `<name>.Rollback()` in the SAME BRACE BLOCK before it, or in a block that encloses it (one still open where the
+# return is). Block-aware, not a window of N lines (the first cut of this rule was 12 physical lines): a Rollback in
+# an earlier `if (!A) { <name>.Rollback(); return false; }` sits within any window of the next `if (!B) { return
+# false; }` and let it through, and a Rollback in a block that has closed does not run on the path to the return.
+# Uniform on purpose, not "only the ones that wrote": whether a refusal wrote something is exactly what the next
+# mutator to grow a second write will get wrong, and a restore on a refusal that wrote nothing is a copy, not a bug. A
+# `return true;` is not a refusal - a no-op that succeeded returns uncommitted on purpose and is left alone. A lambda
+# body returning false after a scope opens would read as a refusal of the enclosing function; none exists (2026-09-30)
+# and the rule would say so. Fails if it finds no scope or no Rollback() at all, so it cannot pass by reading nothing.
 $rollbackScopeCount = 0
 $rollbackCallCount = 0
 foreach ($file in Get-Sources (Join-Path $plugin 'Private\Present') @('.cpp')) {
     if ($file.Name -notlike 'RoadEditFacade*.cpp') { continue }
     $lines = Get-Content -LiteralPath $file.FullName
-    $codeLines = New-Object 'System.Collections.Generic.List[string]'
     $inBlock = $false
-    foreach ($line in $lines) { $codeLines.Add((Strip-ArchCode $line ([ref]$inBlock))) }
-    $depth = 0
-    $open = New-Object System.Collections.ArrayList   # @{ Name; Depth; Line }
-    for ($i = 0; $i -lt $codeLines.Count; $i++) {
-        $code = $codeLines[$i]
-        $rollbackCallCount += ([regex]::Matches($code, '\.Rollback\s*\(')).Count
-        $declared = [regex]::Match($code, '\bFRoadEditScope\s+(\w+)\s*\(')
-        if ($declared.Success) {
-            [void]$open.Add(@{ Name = $declared.Groups[1].Value; Depth = $depth; Line = $i })
-            $rollbackScopeCount++
-        }
-        elseif ($code -match '\breturn\s+(?:false|INDEX_NONE)\s*;') {
-            foreach ($scope in $open) {
-                $from = [Math]::Max($scope.Line + 1, $i - 12)
-                $window = ($codeLines[$from..($i - 1)] -join "`n")
-                if ($i -le $scope.Line -or $window -notmatch ("\b" + [regex]::Escape($scope.Name) + "\.Rollback\s*\(")) {
-                    $failures.Add("scope-refusal-rolls-back: $($file.Name):$($i + 1) refuses after $($scope.Name) opened (line $($scope.Line + 1)) without $($scope.Name).Rollback() in the 12 lines before it - an uncommitted scope restores nothing, so whatever the body wrote stays with no undo step (#437)")
+    $blocks = New-Object System.Collections.ArrayList   # one hashtable per open brace: scope names rolled back in it
+    $open = New-Object System.Collections.ArrayList     # @{ Name; Depth; Line } - Depth is the brace depth it opened at
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        # TOKENS IN SOURCE ORDER, so `{ Edit.Rollback(); return false; }` on one line reads as it runs.
+        foreach ($token in [regex]::Matches($code, '\{|\}|\bFRoadEditScope\s+(\w+)\s*[({]|\b(\w+)\.Rollback\s*\(|\breturn\s+(?:false|INDEX_NONE)\s*;')) {
+            $text = $token.Value
+            if ($text -eq '{') { [void]$blocks.Add(@{}) }
+            elseif ($text -eq '}') {
+                if ($blocks.Count -gt 0) { $blocks.RemoveAt($blocks.Count - 1) }
+                for ($k = $open.Count - 1; $k -ge 0; $k--) {
+                    if ($blocks.Count -lt $open[$k].Depth) { $open.RemoveAt($k) }
                 }
             }
-        }
-        $depth += ([regex]::Matches($code, '\{')).Count - ([regex]::Matches($code, '\}')).Count
-        for ($k = $open.Count - 1; $k -ge 0; $k--) {
-            if ($depth -lt $open[$k].Depth) { $open.RemoveAt($k) }
+            elseif ($text -match '^FRoadEditScope') {
+                [void]$open.Add(@{ Name = $token.Groups[1].Value; Depth = $blocks.Count; Line = $i })
+                $rollbackScopeCount++
+            }
+            elseif ($text -match '\.Rollback') {
+                $rollbackCallCount++
+                if ($blocks.Count -gt 0) { $blocks[$blocks.Count - 1][$token.Groups[2].Value] = $true }
+            }
+            else {
+                foreach ($scope in $open) {
+                    $rolled = $false
+                    # From the block the scope was declared in, inward to where the return sits.
+                    for ($d = [Math]::Max($scope.Depth - 1, 0); $d -lt $blocks.Count; $d++) {
+                        if ($blocks[$d].ContainsKey($scope.Name)) { $rolled = $true; break }
+                    }
+                    if (-not $rolled) {
+                        $failures.Add("scope-refusal-rolls-back: $($file.Name):$($i + 1) refuses after $($scope.Name) opened (line $($scope.Line + 1)) without $($scope.Name).Rollback() in its own or an enclosing brace block - an uncommitted scope restores nothing, so whatever the body wrote stays with no undo step (#437)")
+                    }
+                }
+            }
         }
     }
 }

@@ -247,14 +247,24 @@ public:
 	 * The edit failed after it wrote: put the network back to how it was when this scope began,
 	 * bitwise, IN PLACE (URoadNetwork::RestoreFrom), and push no undo step. True when it did.
 	 *
-	 * NO NOTIFY, deliberately: a plain scope has broadcast nothing before its commit, so no
-	 * cache has seen the failed edit and none is stale - and the revision clocks RestoreFrom
-	 * moves forward make sure nothing stamped DURING the edit can mistake the restored state
-	 * for its own. (A drag is different, it notified per frame - see
+	 * NO FACADE NOTIFY, deliberately: a plain scope has broadcast nothing before its commit, so
+	 * GetEditEpoch does not move and nothing that memoises against it has seen the failed edit.
+	 * THE REVISION CLOCKS ARE THE VISIBLE PART. RestoreFrom moves EditRevision and
+	 * GuidelineRevision forward - it must, so nothing stamped DURING the edit can mistake the
+	 * restored state for its own - and a POLLED reader sees that as a change: the ops layer
+	 * publishes NetworkChanged, the job board re-bids, and the route and admission caches flush.
+	 * A refused edit is therefore a cache flush plus a NetworkChanged, not nothing; that is the
+	 * price of the clocks never repeating. (A drag is different: it notified per frame - see
 	 * URoadEditFacade::RollBackOpenEdit, which does notify.)
 	 *
 	 * Ends the edit: afterwards the destructor has nothing to commit or abandon. False, changing
 	 * nothing, for an inert scope or a second call after the history's edit ended.
+	 *
+	 * FALSE FROM A SCOPE THAT HAS A NETWORK IS LOGGED AS AN ERROR (LogRoadMesh). Every call site
+	 * is a bare `Edit.Rollback();` on a refusal path that cannot act on the answer, so a scope
+	 * that could not restore - its edit already ended, nothing to restore from - is a failure
+	 * only the log can carry. An inert scope had nothing to edit and stays silent.
+	 * ENFORCED BY: Airside.Present.EditScopeRollbackEdges
 	 */
 	bool Rollback();
 
@@ -262,8 +272,14 @@ public:
 	 * A copy of Net a rollback can restore from. A scope's local snapshot and the facade's
 	 * editor-world drag point both take theirs from here, so a restore point means one thing
 	 * however it was taken. Owned by the transient package, never the level.
+	 * ENFORCED BY: Airside.Present.EditorDragTakesOneSnapshot (the drag's point is counted here),
+	 * Airside.Present.EditScopeRollsBackBitwise (so is a history-less scope's)
 	 */
 	static URoadNetwork* SnapshotForRollback(const URoadNetwork& Net);
+
+	/** How many snapshots SnapshotForRollback has taken this session - for the tests that pin
+	 *  how many copies an edit costs. Game thread only, like every edit. */
+	static int32 SnapshotsTakenForTest() { return SnapshotsTaken; }
 
 private:
 	URoadEditHistory* History = nullptr;
@@ -274,9 +290,16 @@ private:
 	 * edit (its snapshot is the history's pending one). A strong pointer because the scope is
 	 * plain C++ - a raw one is collectable the moment anything triggers a collection mid-edit -
 	 * and it lives on the stack, so it is released on the game thread that took it.
+	 * ENFORCED BY: Airside.Present.EditScopeRollsBackBitwise (a scope with a history takes no
+	 * SnapshotForRollback copy, one without takes exactly one)
 	 */
 	TStrongObjectPtr<URoadNetwork> LocalSnapshot;
 
+	/** What the scope was opened for - only so a failed Rollback can say which edit it was. */
+	FString Label;
+
 	bool bCommitted = false;
 	bool bBegan = false;
+
+	static int32 SnapshotsTaken;
 };

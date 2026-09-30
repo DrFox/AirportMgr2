@@ -700,9 +700,11 @@ namespace
 		if (bAsDrag)
 		{
 			Actor->BeginInteractiveEdit(TEXT("drag node"));
-			// The drag's own frames come first; whether the strip judge lets this one land does not
-			// matter, the revert is to the drag's start either way.
-			Actor->MoveNode(R, FVector2D(420.0, 380.0));
+			// The drag's own frame comes first, and it must LAND or the row proves nothing about the drag's
+			// start: the revert is to where the drag began, not to where this call found the node. It
+			// lands 31 m out from the taxiway, clear of the strip the road's laid position sits inside (the
+			// first cut moved 1.2 m and was refused - 14.1 m inside the strip - so the row was vacuous).
+			T.TestTrue(TEXT("control: the drag frame moves the node"), Actor->MoveNode(R, FVector2D(300.0, 3400.0)));
 		}
 		T.TestFalse(TEXT("folding the road's end into the taxiway at 20 degrees is refused"), Actor->MergeNodes(TNode, R));
 		if (bAsDrag)
