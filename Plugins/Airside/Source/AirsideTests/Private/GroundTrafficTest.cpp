@@ -546,13 +546,15 @@ bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 
 	// MEASURED AND LOGGED, so a failure is read off the numbers rather than re-derived from
 	// the assertion text. The bar is the end of step 0, at 17000 uu of route distance.
+	// THE BODY CENTRE, NOT Follower.Travelled (#449): route distance is the nose gear's, and the claims are measured from the centre FClaimPass::CentreOf puts BodyCentreX - SteerAxleX from it - 316 uu aft on the Meridian. The default airframe was a hand copy with no footprint until #449, so the two coincided and this read one for the other.
+	const double CentreAt = FClaimPass::CentreOf(*P);
 	UE_LOG(LogAirsideTests, Log,
 		TEXT("HoldingPosition measured: centre %.1f uu, nose %.1f uu (bar 17000), speed %.4f, waiting on %d, blocked step %d"),
-		P->Follower.Travelled, P->Follower.Travelled + Traffic->Rules.AircraftFootprint * 0.5,
+		CentreAt, CentreAt + Traffic->Rules.AircraftFootprint * 0.5,
 		P->Follower.Speed, P->GetWaitingOn(), P->GetBlockedStep());
 
 	TestTrue(TEXT("stopped"), P->Follower.Speed < 1e-6);
-	const double NoseAt = P->Follower.Travelled + Traffic->Rules.AircraftFootprint * 0.5;
+	const double NoseAt = CentreAt + Traffic->Rules.AircraftFootprint * 0.5;
 	TestTrue(FString::Printf(TEXT("nose within 50 uu of the hold bar and not past it (nose %.0f, bar 17000)"), NoseAt),
 		NoseAt <= 17000.0 + 1.0 && NoseAt >= 17000.0 - 50.0);
 	TestEqual(TEXT("waiting on the runway's holder"), P->GetWaitingOn(), 99);
@@ -905,7 +907,8 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	{
 		const FRoadAgent* Q = Traffic->FindAgent(Plane);
 		if (Q == nullptr) { return false; }
-		const double Travelled = Q->Follower.Travelled;
+		// THE BODY CENTRE, NOT Follower.Travelled (#449): route distance is the nose gear's, and the claims are measured from the centre FClaimPass::CentreOf puts BodyCentreX - SteerAxleX from it - 316 uu aft on the Meridian. The default airframe was a hand copy with no footprint until #449, so the two coincided and this read one for the other.
+		const double Travelled = FClaimPass::CentreOf(*Q);
 		const bool bHeld = Traffic->GetOccupancy().IsHeld(Strip, 0);
 
 		if (Travelled < 10000.0 && !bHeld) { bFreeBeforeTheBar = true; }
@@ -975,13 +978,13 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 
 		// Well past the tail's clearance of the FAR BAR (23500, itself 3000 uu clear of the
 		// strip) and far short of the next route node (40000), so the two candidate release
-		// rules cannot both pass the assertions below.
+		// rules cannot both pass the assertions below. (Travelled holds the CENTRE - see above.)
 		return Travelled < 25000.0;
 	});
 
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
 	UE_LOG(LogAirsideTests, Log,
-		TEXT("CrossingHoldsRunway measured: hold began at route %.0f uu, ended at %.0f uu ")
+		TEXT("CrossingHoldsRunway measured (body centre): hold began at route %.0f uu, ended at %.0f uu ")
 		TEXT("(near bar 17000, centreline 20000, tail clear 22250, far bar 23000, next node 40000); ")
 		TEXT("stopped at %.0f; crossing ended at %.0f; reserved-not-occupied on the strip for ")
 		TEXT("%d ticks, first at %.0f"),
@@ -1125,15 +1128,17 @@ bool FTrafficRunwayEdgeClaimTest::RunTest(const FString& Parameters)
 	});
 
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
+	// THE BODY CENTRE, NOT Follower.Travelled (#449): route distance is the nose gear's, and the claims are measured from the centre FClaimPass::CentreOf puts BodyCentreX - SteerAxleX from it - 316 uu aft on the Meridian. The default airframe was a hand copy with no footprint until #449, so the two coincided and this read one for the other.
+	const double CentreAt = FClaimPass::CentreOf(*P);
 	UE_LOG(LogAirsideTests, Log,
-		TEXT("RunwayEdgeClaim measured: stopped at route %.0f uu (want 18500 = the runway edge's ")
+		TEXT("RunwayEdgeClaim measured: centre stopped at route %.0f uu (want 18500 = the runway edge's ")
 		TEXT("start 20000 less the gap 1500), waiting on %d, blocked step %d"),
-		P->Follower.Travelled, P->GetWaitingOn(), P->GetBlockedStep());
+		CentreAt, P->GetWaitingOn(), P->GetBlockedStep());
 
 	TestTrue(TEXT("stopped"), P->Follower.Speed < 1e-6);
 	TestTrue(FString::Printf(TEXT("a gap short of where the runway edge BEGINS, not inside it (%.0f, want 18500)"),
-		P->Follower.Travelled),
-		FMath::Abs(P->Follower.Travelled - 18500.0) < 50.0);
+		CentreAt),
+		FMath::Abs(CentreAt - 18500.0) < 50.0);
 	TestEqual(TEXT("blocked on the step whose edge lies on the runway"), P->GetBlockedStep(), 1);
 	TestEqual(TEXT("waiting on the holder of the OTHER segment of the same chain"), P->GetWaitingOn(), 99);
 
@@ -1621,7 +1626,8 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 		if (Q == nullptr) { return false; }
 		const double T = SeenByTheArbiter;
 		const bool bHeld = Traffic->GetOccupancy().IsHeld(Strip, 0);
-		SeenByTheArbiter = Q->Follower.Travelled;
+		// THE BODY CENTRE, NOT Follower.Travelled (#449): route distance is the nose gear's, and the claims are measured from the centre FClaimPass::CentreOf puts BodyCentreX - SteerAxleX from it - 316 uu aft on the Meridian. The default airframe was a hand copy with no footprint until #449, so the two coincided and this read one for the other.
+		SeenByTheArbiter = FClaimPass::CentreOf(*Q);
 
 		// More than one window (braking distance + gap, about 4000 uu) short of the bar:
 		// nothing has any business holding the strip yet.

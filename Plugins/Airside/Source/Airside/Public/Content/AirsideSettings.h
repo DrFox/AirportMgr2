@@ -132,8 +132,9 @@ public:
 	static void ResetGetContentCallCountForTest() { GetContentCallCountForTest = 0; }
 
 	/**
-	 * The airframe a route wears when there is no design aircraft to ask - THE ONE place
-	 * UAircraftType::PiperMeridian*() may still be called from production code.
+	 * The airframe a route wears when there is no design aircraft to ask. With no content
+	 * DefaultAircraft it is the Meridian read the way any asset is read - BuildPiperMeridian
+	 * then UAircraftType::Airframe(), one mapping (#449) - not a hand-assembled FAirframe.
 	 *
 	 * Issue #30: those four functions used to be called directly at seven sites (RouteTool's
 	 * three *For helpers, RoadBuildController::LandAircraftNearViewFocus's four), each one a place the

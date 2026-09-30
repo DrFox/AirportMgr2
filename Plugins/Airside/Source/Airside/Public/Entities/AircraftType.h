@@ -305,10 +305,10 @@ public:
 	/**
 	 * The Meridian's ground performance on its own, without needing a UAircraftType.
 	 *
-	 * Exists because the FALLBACK needs it: a route that starts on a plain taxiway node has
-	 * no design aircraft to ask, and the aircraft on screen is a Piper regardless. Making
-	 * the caller build a transient asset to learn three numbers would have put those three
-	 * numbers at the call site instead, which is how a figure ends up written twice.
+	 * Written for the content-less FALLBACK airframe, which assembled an FAirframe from these by
+	 * hand until #449 - it builds a transient type with BuildPiperMeridian and reads Airframe()
+	 * now, so the only production reader is BuildPiperMeridian. Still separate so a physics-only
+	 * test (TestAirframes::Piper) can take the Meridian's figures without a whole type.
 	 */
 	static FGroundPerformance PiperMeridianGround();
 
@@ -324,16 +324,15 @@ public:
 	/**
 	 * The Meridian's wingspan on its own, without needing a UAircraftType.
 	 *
-	 * Same reason PiperMeridianGround exists: UAirsideSettings::ResolveDefaultAirframe's
-	 * fallback builds an FAirframe with no UAircraftType to read Footprint.Wingspan from,
-	 * and this is the one place the 1311.0 figure is written down, so the fallback and
-	 * BuildPiperMeridian's own footprint cannot drift apart the way two copies would.
+	 * Same reason PiperMeridianGround exists. This is the one place the 1311.0 figure is written
+	 * down; BuildPiperMeridian's footprint reads it, and so (through Airframe()) does the
+	 * content-less default airframe since #449.
 	 */
 	static double PiperMeridianWingspan();
 
 	/**
-	 * The Meridian's tank, litres - for the fallback airframe, which has no asset to read
-	 * FuelCapacityLitres from, and for BuildPiperMeridian. One place, for PiperMeridianWingspan's
+	 * The Meridian's tank, litres - for BuildPiperMeridian, and through it (BuildPiperMeridian ->
+	 * Airframe(), #449) the content-less default airframe. One place, for PiperMeridianWingspan's
 	 * reason: a fallback with no tank would ask for no fuel, and every automation test that runs
 	 * without a content set would then see no truck at all.
 	 * ENFORCED BY: Airside.Content.FuelCapacitiesAuthored (asserts DA_Aircraft_Plane7 agrees)

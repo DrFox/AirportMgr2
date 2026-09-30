@@ -362,9 +362,13 @@ $ranRules.Add('doc comments')
 # what it accepts today.
 $AllowedCallers = @(
     @{
+        # NOT AirsideSettings.cpp SINCE #449: the content-less default airframe was a hand copy of UAircraftType::
+        # Airframe() assembled from these figures, and had drifted from it (8 of 20 fields, the wrong steer law). It is
+        # BuildPiperMeridian -> Airframe() now, which this pattern does not match - a PiperMeridian*() call there again
+        # would be the hand copy coming back.
         Name        = 'PiperMeridian fallback'
         Pattern     = '(?<![A-Za-z])PiperMeridian\w*\s*\('
-        ProdAllowed = @('Public\Entities\AircraftType.h', 'Private\Entities\AircraftType.cpp', 'Private\Content\AirsideSettings.cpp')
+        ProdAllowed = @('Public\Entities\AircraftType.h', 'Private\Entities\AircraftType.cpp')
         TestAllowed = @('Private\AirsideTestFixtures.cpp')
         ProdReason  = 'go through UAirsideSettings::ResolveDefaultAirframe'
         TestReason  = 'go through TestAirframes::Piper() (AirsideTestFixtures.h)'

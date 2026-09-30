@@ -78,7 +78,20 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 	// What one tick may change, with half again for the frame the handover spends twice.
 	const double SpeedStepAllowed = FMath::Max3(Airframe.Chassis.Ground.Landing.Decel, Airframe.Chassis.Ground.Taxi.Accel,
 		Airframe.Chassis.Ground.Taxi.Decel) * Dt * 1.5 + 1.0;
-	const double HeadingStepAllowed = FMath::DegreesToRadians(Airframe.Chassis.Ground.MaxTurnRateDegPerSec) * Dt * 1.5 + 1.0e-4;
+	// WHAT ONE TICK MAY TURN IS THE STEER LAW'S (#449). A pivoting airframe turns at MaxTurnRateDegPerSec flat; a
+	// rolling-steer one at v sin(lock) / L about its steered axle, and v tan(lock) / L on the final turn, which pivots
+	// about the fixed axle (TightestReversibleRadius's reason) - so tan, the larger, bounds both. The default airframe
+	// was a hand copy with no wheelbase until #449 and pivoted; the Meridian it is now rolls. Restated here rather than
+	// read off the chassis helpers, for TightestFollowableRadius's reason. Per tick, at the speed measured then.
+	const bool bRolls = Airframe.Chassis.EffectiveSteerLaw() == ESteerLaw::RollingSteer;
+	const double LockTan = FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(Airframe.Chassis.Ground.MaxSteerDegrees, 0.0, 89.0)));
+	auto HeadingStepAllowedAt = [&](double AtSpeed)
+	{
+		const double Rate = bRolls ? AtSpeed * LockTan / FMath::Max(Airframe.Chassis.Wheelbase(), 1.0)
+			: FMath::DegreesToRadians(Airframe.Chassis.Ground.MaxTurnRateDegPerSec);
+		return Rate * Dt * 1.5 + 1.0e-4;
+	};
+	double HeadingStepAllowed = HeadingStepAllowedAt(0.0);
 
 	bool bHadGround = false;
 	FVector2D PrevAt = FVector2D::ZeroVector;
@@ -108,7 +121,12 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 			const double SpeedStep = FMath::Abs(Speed - PrevSpeed);
 			const double HeadingStep = FMath::Abs(FMath::UnwindRadians(M.Heading - PrevHeading));
 			if (SpeedStep > WorstSpeedStep) { WorstSpeedStep = SpeedStep; WorstSpeedAt = Ticks * Dt; }
-			if (HeadingStep > WorstHeadingStep) { WorstHeadingStep = HeadingStep; WorstHeadingAt = Ticks * Dt; }
+			// THE WORST AGAINST ITS OWN TICK'S BOUND, the faster of the two speeds either side of the step.
+			const double AllowedHere = HeadingStepAllowedAt(FMath::Max(Speed, PrevSpeed));
+			if (HeadingStep - AllowedHere > WorstHeadingStep - HeadingStepAllowed || WorstHeadingStep == 0.0)
+			{
+				WorstHeadingStep = HeadingStep; WorstHeadingAt = Ticks * Dt; HeadingStepAllowed = AllowedHere;
+			}
 		}
 		// THE HANDOVER, tick by tick, so a failure is read off the numbers: the frame the
 		// phase flips and the two either side of it.

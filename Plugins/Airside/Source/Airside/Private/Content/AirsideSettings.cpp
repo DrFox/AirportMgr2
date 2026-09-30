@@ -83,35 +83,22 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 
 	// TODO(#30): author DA_PiperMeridian and set UAirsideContent::DefaultAircraft. Until an
 	// asset exists to point it at, this is the fallback every project runs on - including
-	// every automation test, which configures no content set at all.
-	FAirframe Piper;
-	Piper.Chassis.Ground = UAircraftType::PiperMeridianGround();
-	Piper.Climb = UAircraftType::PiperMeridianClimb();
-	Piper.Approach = UAircraftType::PiperMeridianApproach();
-	Piper.Engine = UAircraftType::PiperMeridianEngine();
-
-	// Must agree with the content branch's Default->Airframe(), which reads
-	// Footprint.Wingspan - a route search costs a turn by Wingspan (RouteSearch::Find), so
-	// a fallback that left this at the FAirframe default (0.0) would let the SAME aircraft
-	// take a turn too tight for its own wing depending purely on whether content happened
-	// to be loaded.
-	Piper.Wingspan = UAircraftType::PiperMeridianWingspan();
-	// AND THE TANK, for the same "must agree with the content branch" reason - a fallback with
-	// none would ask for no fuel (spec 2026-09-28-fuel-litres).
-	Piper.FuelCapacityLitres = UAircraftType::PiperMeridianFuelCapacityLitres();
-
-	// Same rule as Wingspan: the content branch reads Type->Requirements, so the fallback
-	// must carry the Piper's too, or admission would judge the same aircraft by 0 m field
-	// lengths (no claim) with content unloaded and by 800 m with it loaded.
-	Piper.Requirements = UAircraftType::PiperMeridianRequirements();
-
-	// Same rule as Wingspan and Requirements: the content branch reads Type->MinimumPavement
-	// (now BuildPiperMeridian's, not PiperMeridianRequirements' - it moved off the runway
-	// struct 2026-09-27), so the fallback must carry the Piper's too, or admission would judge
-	// the same aircraft off a grass strip with content unloaded and by whatever a differently
-	// authored default said with it loaded.
-	Piper.MinimumPavement = EPavement::Grass;
-	return Piper;
+	// every automation test, which configures no content set at all (and DA_AirsideContent
+	// names no DefaultAircraft either, 2026-09-30).
+	//
+	// THE CONTENT BRANCH'S OWN MAPPING, on a transient type (#449): BuildPiperMeridian writes the
+	// asset's figures and Airframe() reads them, exactly as it reads a DefaultAircraft asset. This
+	// was a hand copy of Airframe() - 8 of its 20 fields under four "must agree with the content
+	// branch" comments - and the copy had drifted: no wheelbase, the FChassis default Pivot steer
+	// law where every UAircraftType defaults to RollingSteer, a steered final turn, no body centre
+	// and no TypeCode. Taxi and fit tests measured a vehicle no flight in the game is. Every
+	// FAirframe field added from now on arrives here through Airframe() with nothing to remember.
+	// Built per call: the callers are a Land with no chosen type and test fixtures, not a frame loop.
+	// ENFORCED BY: Airside.Content.DefaultAirframeIsTheMeridiansOwn (every property), Check-Architecture
+	// rule 4 ('PiperMeridian fallback' - no PiperMeridian*() call in this file)
+	UAircraftType* Meridian = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::BuildPiperMeridian(Meridian);
+	return Meridian->Airframe();
 }
 
 int32 UAirsideSettings::ResolveLargestServiceVehicleCallCountForTest = 0;
