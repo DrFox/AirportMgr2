@@ -687,7 +687,47 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 	// neither confirmed nor ruled out from the log, because nothing here logged a phase. Changes
 	// only - OnAgentPhase hears every agent phase, and most move a flight nowhere.
 	const EFlightPhase WasPhase = Flight->Phase;
-	Flight->Phase = FlightPhaseFromAgent(To, Flight->Phase);
+
+	// WHERE THE AEROPLANE IS NOW, read live off the agent - the event is a fact about the past (the bus delivers
+	// it a step late), exactly as UJobBoard::OnAgentPhase reads it. A STAND is the pose of an IsStand() entity;
+	// the fallback junction a stand-less arrival waits on (UGroundTraffic::ReResolvePlan) is no entity's pose.
+	const FRoadAgent* Agent = Traffic.FindAgent(AgentId);
+	const bool bStillParked = Agent != nullptr && Agent->Phase == EAgentPhase::Parked;
+	FEntityInstanceId GoalStand;
+	if (Agent != nullptr)
+	{
+		const int32 Index = Network.FindEntityIndexByPoseNode(Agent->GoalNode);
+		if (Index != INDEX_NONE && Network.GetEntities()[Index].IsStand())
+		{
+			GoalStand = Network.EntityIdAt(Index);
+		}
+	}
+
+	EFlightPhase Next = FlightPhaseFromAgent(To, WasPhase);
+	if (WasPhase < EFlightPhase::Turnaround)
+	{
+		if (To == EAgentPhase::Parked && !(bStillParked && GoalStand.IsSet()))
+		{
+			// #405: A TURNAROUND IS TIME ON A STAND. Parked on the fallback junction - or a Parked the agent has
+			// already left (ReofferStands redirected it in the same frame) - the flight is still taxiing in, so the
+			// re-offer's Parked -> Taxiing reads TaxiIn below rather than TaxiOut. No parking clock, no turnaround:
+			// UJobBoard::OnAgentPhase opens none there either, by the same stand lookup.
+			// ENFORCED BY: AirportOps.Model.Bus.FallbackParkStaysTaxiIn
+			Next = WasPhase;
+			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): its aircraft (agent %d) stopped short of a stand; still %s"),
+				Flight->Id, *Flight->Callsign, AgentId, *UEnum::GetValueAsString(WasPhase));
+		}
+		else if (To == EAgentPhase::Taxiing && From == EAgentPhase::Parked && !GoalStand.IsSet())
+		{
+			// THE MIRROR: leaving the junction for somewhere that is NOT a stand is a departure - the inspector's
+			// Depart driving straight out (UGroundTraffic::DepartAgent's RedirectAgent branch). FlightPhaseFromAgent
+			// reads "never reached Turnaround" as the taxi in; without this, that departure would read TaxiIn. A
+			// redirect to a stand keeps TaxiIn; a pushback enters Manoeuvring, which maps absolutely.
+			// ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut
+			Next = EFlightPhase::TaxiOut;
+		}
+	}
+	Flight->Phase = Next;
 	if (Flight->Phase != WasPhase)
 	{
 		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): %s -> %s (agent %d %s -> %s)"),
@@ -710,14 +750,9 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 		// The agent's own GoalNode is the authority, exactly as UJobBoard reads it - and, as there,
 		// only while the agent is STILL parked: the bus delivers this a step late, and an aircraft
 		// redirected since has a GoalNode that is its next stand, not this one (UJobBoard::OnAgentPhase).
-		const FRoadAgent* Agent = Traffic.FindAgent(AgentId);
-		if (Agent != nullptr && Agent->Phase == EAgentPhase::Parked)
+		if (bStillParked && GoalStand.IsSet())
 		{
-			const int32 Index = Network.FindEntityIndexByPoseNode(Agent->GoalNode);
-			if (Index != INDEX_NONE)
-			{
-				Flight->Stand = Network.EntityIdAt(Index);
-			}
+			Flight->Stand = GoalStand;
 		}
 	}
 

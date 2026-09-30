@@ -15,6 +15,9 @@ EFlightPhase FlightPhaseFromAgent(EAgentPhase To, EFlightPhase Current)
 		return Current >= EFlightPhase::Turnaround ? EFlightPhase::TaxiOut : EFlightPhase::TaxiIn;
 
 	case EAgentPhase::Parked:
+		// AT A STAND - which this function cannot see. UFlightBoard::OnAgentPhase asks the agent and keeps a
+		// flight parked on the fallback junction in its taxi (#405); this is the answer once it has.
+		// ENFORCED BY: AirportOps.Model.Bus.FallbackParkStaysTaxiIn
 		return EFlightPhase::Turnaround;
 
 	case EAgentPhase::Manoeuvring:
