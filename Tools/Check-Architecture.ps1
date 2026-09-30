@@ -1625,17 +1625,30 @@ $ranRules.Add('facts-through-facade')
 # a run only the safety net asked for by a COVERED flag, which their funnels set - UOpsRuntime::DirtyJobBoard and
 # UOpsRuntime::DirtyArrivalQueue. A raw Bus.MarkDirty(TEXT("JobBoard")) anywhere else leaves the flag down, and a real
 # event's run is then logged as the net finding a missing event - a false Warning, or (worse, once the Warning is
-# trusted) a missing event hidden among false ones. So MarkDirty( naming either pass may appear only in its funnel and in
-# UOpsRuntime::ArmSafetyNet, the net's own clock entry. MarkDirtyNextDrain (a pass's own retry, which sets the flag
-# itself) and MarkAllDirty (a load's catch-up, with the net cancelled) are other calls and not matched. Comments are
-# stripped (rule 34's helper); the pass name is read from the raw line, since that helper blanks string literals.
-$passFunnels = @{ 'JobBoard' = 'UOpsRuntime::DirtyJobBoard'; 'ArrivalQueue' = 'UOpsRuntime::DirtyArrivalQueue' }
+# trusted) a missing event hidden among false ones.
+# So any MarkDirty* call (MarkDirty, MarkDirtyNextDrain, whatever is added next) whose STATEMENT names either pass in
+# quotes - TEXT("JobBoard"), FName("JobBoard"), a bare "JobBoard", on one line or split across several - may appear only
+# at the sites listed in $passAllowed, by function: MarkDirty in the pass's funnel and in UOpsRuntime::ArmSafetyNet (the
+# net's own clock entry); MarkDirtyNextDrain where it is today (the JobBoard pass's unresolved retry, registered in
+# WireBus; RunArrivalQueue's one-a-frame deferral and dispatch retry). MarkAllDirty (a load's catch-up, net cancelled)
+# does not match \bMarkDirty.
+# HARDENED in the scoped re-review (M-3): statements are joined across lines and cut at ; { and } - so a subscription's
+# own pass key (Subscribe<...>(Tier, TEXT("JobBoard"), ...) {) is not read as the call in its body; // comments are
+# stripped outside string literals, and a line inside a /* */ block uses rule 34's stripper; an allowed site that is no
+# longer found fails the rule, as does a missing funnel, rather than letting it check nothing.
+$passAllowed = @{
+    'MarkDirty|JobBoard'              = @('UOpsRuntime::DirtyJobBoard', 'UOpsRuntime::ArmSafetyNet')
+    'MarkDirty|ArrivalQueue'          = @('UOpsRuntime::DirtyArrivalQueue', 'UOpsRuntime::ArmSafetyNet')
+    'MarkDirtyNextDrain|JobBoard'     = @('UOpsRuntime::WireBus')
+    'MarkDirtyNextDrain|ArrivalQueue' = @('UOpsRuntime::RunArrivalQueue')
+}
 $passOwner = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps\Private\Present\OpsRuntime.cpp'
-foreach ($funnel in $passFunnels.Values + @('UOpsRuntime::ArmSafetyNet')) {
+foreach ($funnel in @('UOpsRuntime::DirtyJobBoard', 'UOpsRuntime::DirtyArrivalQueue', 'UOpsRuntime::ArmSafetyNet')) {
     if (-not (Test-Path $passOwner) -or $null -eq (Select-String -Path $passOwner -SimpleMatch -Pattern "void $funnel(")) {
         $failures.Add("pass-dirtied-through-funnel: $funnel not found in $passOwner - update rule 36, do not let it check nothing")
     }
 }
+$passSeen = @{}
 $passTrees = @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'), (Join-Path $Root 'Source\AirportMgr'))
 foreach ($passTree in $passTrees) {
     foreach ($file in Get-Sources $passTree @('.cpp', '.h')) {
@@ -1643,21 +1656,40 @@ foreach ($passTree in $passTrees) {
         $lines = Get-Content -LiteralPath $file.FullName
         $current = ''
         $inBlock = $false
+        $statement = ''
+        $statementLine = 0
+        $statementFunction = ''
         for ($i = 0; $i -lt $lines.Count; $i++) {
-            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
-            if ($code.Trim() -eq '') { continue }
-            $definition = Get-ArchDefinition $code
-            if ($null -ne $definition) { $current = $definition }
-            if ($code -notmatch '\bMarkDirty\s*\(') { continue }
-            $raw = $lines[$i] -replace '//.*$', ''
-            foreach ($pass in $passFunnels.Keys) {
-                if ($raw -match ('\bMarkDirty\s*\(\s*TEXT\s*\(\s*"' + $pass + '"\s*\)')) {
-                    if ($current -ne $passFunnels[$pass] -and $current -ne 'UOpsRuntime::ArmSafetyNet') {
-                        $failures.Add("pass-dirtied-through-funnel: $($file.Name):$($i + 1) marks the $pass pass dirty from $current - go through $($passFunnels[$pass]), which sets the covered flag the safety net reads")
+            $wasInBlock = $inBlock
+            $stripped = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($stripped.Trim() -ne '') {
+                $definition = Get-ArchDefinition $stripped
+                if ($null -ne $definition) { $current = $definition }
+            }
+            # STRINGS KEPT: the pass name is a literal. // outside a literal ends the code; a block comment's line
+            # (rare in this code) falls back to the stripper, literals blanked.
+            $code = if ($wasInBlock -or $inBlock) { $stripped } else { $lines[$i] -replace '^((?:[^"/]|"(?:[^"\\]|\\.)*"|/(?!/))*)//.*$', '$1' }
+            foreach ($piece in ($code -split '(?<=[;{}])')) {
+                if ($statement.Trim() -eq '') { $statementLine = $i + 1; $statementFunction = $current }
+                $statement += ' ' + $piece
+                if ($piece -notmatch '[;{}]\s*$') { continue }
+                $call = [regex]::Match($statement, '\b(MarkDirty\w*)\s*\(')
+                if ($call.Success) {
+                    foreach ($pass in @('JobBoard', 'ArrivalQueue')) {
+                        if ($statement -notmatch ('"' + $pass + '"')) { continue }
+                        $key = "$($call.Groups[1].Value)|$pass"
+                        if ($passAllowed.ContainsKey($key) -and ($passAllowed[$key] -contains $statementFunction)) { $passSeen[$key] = $true; continue }
+                        $failures.Add("pass-dirtied-through-funnel: $($file.Name):$statementLine calls $($call.Groups[1].Value) for the $pass pass from $statementFunction - dirty it through its funnel (UOpsRuntime::Dirty$pass), which sets the covered flag the safety net reads")
                     }
                 }
+                $statement = ''
             }
         }
+    }
+}
+foreach ($key in $passAllowed.Keys) {
+    if (-not $passSeen.ContainsKey($key)) {
+        $failures.Add("pass-dirtied-through-funnel: no $($key -replace '\|', ' for the ') pass found at its allowed site(s) - it moved; update rule 36")
     }
 }
 $ranRules.Add('pass-dirtied-through-funnel')

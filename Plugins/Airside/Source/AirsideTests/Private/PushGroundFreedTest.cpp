@@ -233,9 +233,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPushGroundFreedRebuildTest, "Airside.Model.Tra
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FPushGroundFreedRebuildTest::RunTest(const FString&)
 {
-	// A BLOCKER THE REBUILD KEEPS: an aircraft PARKED on E. A rebuild drops every guideline claim and re-makes only the
-	// agents' goals (GroundTrafficRebuild.cpp, ReleaseGuidelineClaims then ClaimGoalNode) - so a taxiing body or a
-	// hold on E would read free for the rebuild's own diff, and a parked goal does not.
+	// A BLOCKER THAT OUTLIVES THE REBUILD, so the watch it keeps can be seen to still work after: an aircraft PARKED on E,
+	// retired afterwards. (A hold on E would not do: a rebuild keeps only stand holds, and E is no stand. A taxiing
+	// blocker is RebuildKeepsTaxiingBlocker's case, which the rebuild's claim pass now keeps too.)
 	FPushField Field;
 	Field.Build(false);
 	const int32 Parked = Field.Park(Field.B, Field.A);

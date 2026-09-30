@@ -385,9 +385,12 @@ public:
 	 * ticks. Dropping those claims would show a crossing, a roll-out or a line-up as a free
 	 * runway for as long as it took the player to click: the window Task 7 closed.
 	 *
-	 * Everyone re-claims their guidelines on the next tick, which is safe because Advance
-	 * arbitrates BEFORE it moves anything - there is no frame in which an agent drives on a
-	 * table it has not claimed in.
+	 * EVERY CLAIM IS RE-MADE AT ONCE, not on the next tick: OnGraphRebuilt ends by running the
+	 * tick's own claim pass (Arbitrate) with no motion, before its freed diff. "The next tick"
+	 * was not soon enough - DepartAgent and the ops drain read this table between ticks, and
+	 * a paused game has no next tick (push-ground-freed review I1): a taxiing body missing from
+	 * the table read as free ground, and a push was granted into it.
+	 * ENFORCED BY: Airside.Model.Traffic.PushGroundFreed.RebuildKeepsTaxiingBlocker
 	 *
 	 * AIRCRAFT TOO, unlike dispatch-time routing (spec §4): a route fixed at clearance is
 	 * still a route over pavement, and pavement the player has just deleted is not something
@@ -972,9 +975,9 @@ private:
 	 * anything that names one. A REBUILD RE-DERIVES IT rather than clearing it: the rebuild moves the guideline
 	 * revision, so DiffFreedom asks every entry whole. Clearing would leave the aircraft's wake-up to a caller
 	 * retrying on its own NetworkChanged - a contract with a plugin this one must not know exists. The re-derive
-	 * reads a WHOLE table: OnGraphRebuilt re-runs the tick's claim pass (Arbitrate) before its diff, so a taxiing
-	 * body on the push ground is there to be seen - it used to be missing until the next Advance, which read the
-	 * ground free and woke the aircraft into it (review I1).
+	 * reads a WHOLE table: OnGraphRebuilt re-runs the tick's claim pass (Arbitrate) before its diff, so every
+	 * non-stranded body on the push ground is there to be seen - a taxiing one used to be missing until the next
+	 * Advance, and the watch read the ground free and woke the aircraft into it (review I1).
 	 * ENFORCED BY: Airside.Model.Traffic.PushGroundFreed.RebuildRederives, Airside.Model.Traffic.PushGroundFreed.RebuildKeepsTaxiingBlocker
 	 *
 	 * Cost, per DiffFreedom: one IsPushGroundFree per entry - an IsAnyHeld over 2 resources per push step, and a

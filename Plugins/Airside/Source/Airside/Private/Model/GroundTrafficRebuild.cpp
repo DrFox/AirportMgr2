@@ -518,8 +518,13 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// NetworkChanged) granted a push into it, and the freed diff below reported a stand free with an aircraft still on
 	// it. Arbitrate is the claim pass AdvanceOnce runs first, by rank with its one re-pass - ONE claim routine, not a
 	// copy of it here; it moves nobody, and the next tick's pass re-runs it over the same table, which is what every
-	// tick does anyway. AFTER the holds, as a tick finds them.
-	// ENFORCED BY: Airside.Model.Traffic.PushGroundFreed.RebuildKeepsTaxiingBlocker, Airside.Model.Traffic.RunwayFreed.RebuildKeepsLeavingStandHeld
+	// tick does anyway. AFTER the holds, as a tick finds them. A STRANDED body is not re-claimed by it (the claim pass
+	// gives a stranded agent only its surface, which the release above kept) - every non-stranded one is.
+	// NOISE, ACCEPTED (review M-2): the pass logs its hold/resume verdicts as a tick does, so a paused edit can add one
+	// "stops"/"resumes" pair per agent whose verdict the rebuild changed.
+	// ENFORCED BY: Airside.Model.Traffic.PushGroundFreed.RebuildKeepsTaxiingBlocker, Airside.Model.Traffic.RunwayFreed.RebuildKeepsLeavingStandHeld,
+	// Airside.Model.Traffic.RunwayFreed.RebuildKeepsCrossingHeld, AirportOps.Present.PushGroundFreed.PausedEditDepartsNothing - the last
+	// calls OnGraphRebuilt on the model directly: that the actor's edit path reaches this function is not proven by it.
 	Arbitrate(Network);
 	bStandsMayHaveFreed = true;
 
