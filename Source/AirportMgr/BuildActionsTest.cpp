@@ -235,7 +235,7 @@ bool FGuideGridIsInTheRegistryTest::RunTest(const FString& Parameters)
 		{ SnapGuide::ERelation::LevelWith,   TEXT("snap.levelwith")   },
 		// THE ID IS NOT THE ENUM'S NAME, and this is the one row where they differ: the button
 		// reads "Direction" because the row offers a direction AND its perpendicular AND the
-		// world axes. See BuildActions.cpp, and ERelation::Parallel's own comment.
+		// world axes. See SnapToggleRegistry.cpp, and ERelation::Parallel's own comment.
 		{ SnapGuide::ERelation::Parallel,    TEXT("snap.direction")   },
 		{ SnapGuide::ERelation::Collinear,   TEXT("snap.collinear")   },
 		{ SnapGuide::ERelation::AngledFrom,  TEXT("snap.angledfrom")  },
@@ -890,6 +890,33 @@ bool FSnapRowsComeFromTheRegistryTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world with an airport"), TestWorld.Actor)) { return false; }
 	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+
+	// NO AIRPORT FIRST (BuildActions.cpp's snap loop; #468's review): before SetTargetForTest this
+	// controller has no target. A row stays ENABLED (inert, not illegal - ApplySnapToggle logs the
+	// no-op), is NOT lit, and a caption row reads its fixed Name rather than claiming a state no
+	// airport holds - the one behaviour #440 changed on purpose ("Grid: world" used to show here).
+	const FSnapGuideSettings Untouched = TestWorld.Actor->GuideSources;
+	{
+		const FBuildActionContext NoAirport(*C);
+		TestNull(TEXT("control: the controller has no airport yet"), NoAirport.Target);
+		for (const FSnapToggleRegistration& Toggle : Registry)
+		{
+			const FString Id = Toggle.Id.ToString();
+			const FBuildAction* Row = FindAction(Toggle.Id);
+			if (!TestNotNull(*FString::Printf(TEXT("%s has a bar row"), *Id), Row)) { continue; }
+			TestTrue(*FString::Printf(TEXT("%s: no airport, still enabled"), *Id), Row->IsEnabled(NoAirport));
+			TestFalse(*FString::Printf(TEXT("%s: no airport, not lit"), *Id), Row->IsActive(NoAirport));
+			if (Row->DynamicLabel)
+			{
+				TestEqual(*FString::Printf(TEXT("%s: no airport, the caption is the fixed name"), *Id),
+					Row->DynamicLabel(NoAirport).ToString(), Toggle.Name.ToString());
+			}
+			TestTrue(*FString::Printf(TEXT("%s: no airport, it still runs (and logs the no-op)"), *Id), Row->TryRun(*C, TEXT("Test")));
+		}
+	}
+	TestTrue(TEXT("with no airport, no toggle reached the level's settings"),
+		FSnapGuideSettings::StaticStruct()->CompareScriptStruct(&Untouched, &TestWorld.Actor->GuideSources, PPF_None));
+
 	C->SetTargetForTest(TestWorld.Actor);
 
 	UScriptStruct* SettingsStruct = FSnapGuideSettings::StaticStruct();

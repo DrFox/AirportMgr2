@@ -762,7 +762,7 @@ bool FRoadBuildEdModeVariantPickTest::RunTest(const FString& Parameters)
 
 /**
  * THE VARIANT ROWS ARE IN THE MODE PANEL (issue #440): FModeToolkit::GetInlineContent is what the
- * mode panel puts under the palettes (RebuildModeToolPalette hands it to InlineContentHolder), so
+ * mode panel puts under the palettes (FModeToolkit::UpdatePrimaryModePanel hands it to InlineContentHolder), so
  * the panel is asserted in WHAT THAT CONSUMER READS - the toolkit's own GetInlineContent - not in a
  * list this module keeps. The stock GetInlineContent would dereference details views Init never
  * built here; this also pins that the override does not.
@@ -850,6 +850,67 @@ bool FRoadBuildEdModeSnapCommandsTest::RunTest(const FString& Parameters)
 			CommandList->GetCheckState(SnapCommands[Index].ToSharedRef())
 				== (Toggle.IsActive(TestWorld.Actor->GuideSources) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked));
 	}
+	return true;
+}
+
+/**
+ * THE EDIT BUTTON GREYS WHERE PIE'S DOES (#468's review of #440's CanExecute seam): the editor's
+ * verb commands are mapped with FCanExecuteAction from URoadBuildEdMode::IsVerbEnabled, which
+ * reads BuildVerbRegistry()'s IsEnabled - false while the lit tool exposes no edit handles. Asked
+ * through the TOOLKIT'S OWN COMMAND LIST, the one a palette click and M both reach, so an unwired
+ * CanExecute (the always-enabled FCanExecuteAction() it replaced) fails the first assertion.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEdModeVerbCanExecuteTest,
+	"Airside.Editor.EditVerbGreysWithNoHandles",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEdModeVerbCanExecuteTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("the command set is registered"), FRoadBuildEdModeCommands::IsRegistered()))
+	{
+		return false;
+	}
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world with an airport"), TestWorld.Actor))
+	{
+		return false;
+	}
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	Mode->WorldOverrideForTest = TestWorld.World;
+	Mode->CreateToolkit();
+	Mode->BindCommands();
+	const TSharedPtr<FUICommandList> CommandList = Mode->ToolkitCommandsForTest();
+	if (!TestTrue(TEXT("CreateToolkit made a real command list"), CommandList.IsValid()))
+	{
+		return false;
+	}
+
+	const int32 EditVerb = BuildVerbRegistry().IndexOfByPredicate(
+		[](const FBuildVerbRegistration& Verb) { return Verb.Id == FName(TEXT("EditMode")); });
+	const TArray<TSharedPtr<FUICommandInfo>> VerbCommands = FRoadBuildEdModeCommands::Get().VerbCommandsInOrder();
+	if (!TestTrue(TEXT("the Edit verb has an editor command"), VerbCommands.IsValidIndex(EditVerb)))
+	{
+		return false;
+	}
+	const TSharedRef<const FUICommandInfo> Edit = VerbCommands[EditVerb].ToSharedRef();
+
+	int32 Taxiway = INDEX_NONE;
+	for (int32 Index = 0; Index < ToolRegistry().Num(); ++Index)
+	{
+		Taxiway = ToolRegistry()[Index].Key == EKeys::One ? Index : Taxiway;
+	}
+	if (!TestTrue(TEXT("control: the session opens on Select, which has no edit handles"),
+			Mode->GetSession().GetActiveToolIndex() == 0 && ToolRegistry()[0].EditHandles == EEditHandleKind::None)
+		|| !TestTrue(TEXT("control: the taxiway tool on 1 has edit handles"),
+			Taxiway != INDEX_NONE && ToolRegistry()[Taxiway].EditHandles != EEditHandleKind::None))
+	{
+		return false;
+	}
+
+	TestFalse(TEXT("Edit is greyed while the lit tool (Select) has no handles"), CommandList->CanExecuteAction(Edit));
+	Mode->GetSession().SelectTool(Taxiway, Mode->MakeReselectContext());
+	TestTrue(TEXT("and enabled once the lit tool (Taxiway) has them"), CommandList->CanExecuteAction(Edit));
 	return true;
 }
 

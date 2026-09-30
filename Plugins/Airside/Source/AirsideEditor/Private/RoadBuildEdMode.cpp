@@ -145,7 +145,11 @@ namespace
 						{
 							if (URoadBuildEdMode* Owner = Mode.Get())
 							{
-								Owner->SelectActiveVariant(AxisIndex, OptionIndex);
+								// THE ANSWER IS DISCARDED ON PURPOSE: taken or refused, the tool's own
+								// log line already says which, and the lit state is re-read from the
+								// rows on the next tick either way - nothing for a click handler to do
+								// with it that the next poll does not.
+								(void)Owner->SelectActiveVariant(AxisIndex, OptionIndex);
 							}
 						})
 						[
@@ -221,7 +225,7 @@ namespace
 
 		/**
 		 * THE VARIANT ROWS, ABOVE WHAT FModeToolkit SHOWS HERE BY DEFAULT (issue #440): the mode
-		 * panel puts this under the palettes (FModeToolkit::RebuildModeToolPalette hands it to
+		 * panel puts this under the palettes (FModeToolkit::UpdatePrimaryModePanel hands it to
 		 * InlineContentHolder), which is where PIE's bar puts its variant row - under the tools.
 		 * The stock details views follow once Init has built them; they are null before it, and
 		 * the stock GetInlineContent would dereference them.
@@ -618,9 +622,10 @@ void URoadBuildEdMode::ApplySnapToggle(int32 Index)
 	UE_LOG(LogAirsideEditor, Log, TEXT("Snap toggle %s -> %s"), *Toggle.Id.ToString(),
 		*DescribeSnapToggle(Toggle, Airport->GuideSources));
 
-	// A switched guide changes what the cursor snaps to without moving it, so the next frame's
-	// context must be rebuilt rather than served from the cache.
-	Session.InvalidateFrameContextCache();
+	// NO FRAME-CACHE INVALIDATION HERE, and none is missing: the next frame's key carries the
+	// airport's GuideSources (URoadEditFacade::MakeTunables -> FBuildSessionTunables::operator==),
+	// so a switched guide rebuilds the context under a still cursor by itself - PIE's door relies on
+	// the same comparison (#468's review found a first cut invalidating here on a wrong premise).
 }
 
 bool URoadBuildEdMode::IsSnapToggleOn(int32 Index) const

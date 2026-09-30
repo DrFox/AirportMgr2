@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Framework/Commands/InputBindingManager.h"
 #include "InputCoreTypes.h"
 #include "Misc/AutomationTest.h"
 #include "RoadBuildEdMode.h"
@@ -158,7 +159,9 @@ bool FRoadBuildEdModeVerbCommandsTest::RunTest(const FString& Parameters)
  * this shape, the stock toolkit names none) draws nothing here too.
  *
  * WRITTEN RED FIRST (2026-09-30), against one Tools palette: "Remove is reachable" and "Insert is
- * reachable" failed, and so did every keyless snap toggle's line.
+ * reachable" failed, and so did every keyless snap toggle's line. RED AGAIN once it enumerated the
+ * binding context: a scratch keyless command registered in RegisterCommands and put in no list or
+ * palette failed both the control count and its own "is reachable" line, and was then removed.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadBuildEdModeEveryCommandReachableTest,
@@ -193,13 +196,20 @@ bool FRoadBuildEdModeEveryCommandReachableTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("the toolkit asks for every palette the command set declares"),
 		Drawn.Num(), FRoadBuildEdModeCommands::Palettes().Num());
 
+	// EVERY COMMAND THE BINDING CONTEXT HOLDS, from the input binding manager - not a list typed
+	// here (#468's review). A hand-built list is the #304 shape one more time: a UI_COMMAND added to
+	// RegisterCommands and appended to no palette and no list would pass a test that only walks the
+	// lists it was told about. The context is what the editor itself registers and binds keys from.
 	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
 	TArray<TSharedPtr<FUICommandInfo>> Every;
-	Every.Append(Commands.ToolCommandsInOrder());
-	Every.Append(Commands.VerbCommandsInOrder());
-	Every.Add(Commands.Build);
-	Every.Add(Commands.CancelGesture);
-	Every.Append(Commands.SnapCommandsInOrder());
+	FInputBindingManager::Get().GetCommandInfosFromContext(Commands.GetContextName(), Every);
+
+	// CONTROL: the lists this class hands out cover the same commands, so a count that moves means a
+	// command registered with no accessor - which the loop below then shows is also undrawn.
+	const int32 Listed = Commands.ToolCommandsInOrder().Num() + Commands.VerbCommandsInOrder().Num()
+		+ 2 /* Build, CancelGesture */ + Commands.SnapCommandsInOrder().Num();
+	TestEqual(TEXT("control: the binding context holds exactly the commands this class's lists name"),
+		Every.Num(), Listed);
 	TestEqual(TEXT("control: every snap toggle has a command to walk"),
 		Commands.SnapCommandsInOrder().Num(), SnapToggleRegistry().Num());
 

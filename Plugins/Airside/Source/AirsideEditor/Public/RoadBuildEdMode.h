@@ -141,7 +141,7 @@ public:
 	 * caller, the controller, so in the editor Upgrade mode was unreachable (SelectVariant is the
 	 * only writer of FRoadDrawTool's Mode, and OnReselect never steps it) and a stand's pavement
 	 * was whatever a PIE session last wrote to the preferences ini.
-	 * ENFORCED BY: Check-Architecture rule 46 (session-api-both-drivers) - the editor must call every
+	 * ENFORCED BY: Check-Architecture rule 47 (session-api-both-drivers) - the editor must call every
 	 * FBuildSession mutator the controller calls, SelectActiveVariant included.
 	 *
 	 * THE TARGET AND NOTHING ELSE, found and never created - ARoadBuildController::

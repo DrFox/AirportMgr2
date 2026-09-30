@@ -2386,38 +2386,62 @@ if ((Test-Path $replannableFile) -and (Test-Path $replannableRebuildFile)) {
 }
 $ranRules.Add('replannable-predicate')
 
-# --- 46. EVERY SESSION MUTATOR PIE REACHES, THE EDITOR MODE REACHES ---------------------------
+# --- 47. EVERY SESSION CALL PIE MAKES, THE EDITOR MODE MAKES -----------------------------------
 # Issue #440, the fifth instance of one shape (#33, #185, #304, then the variant rows and the sticky verbs): the two
 # drivers, ARoadBuildController (PIE) and URoadBuildEdMode (editor), are meant to reach every tool control, and a
 # control added to one reached the other only if someone remembered. Rules 26 and 27 pinned it ONE FEATURE AT A TIME,
 # so each new driver-facing surface was a fresh chance to miss the editor - FBuildSession::SelectActiveVariant had one
 # production caller, the controller, for the whole life of the variant rows. This is the per-SEAM form: every
-# NON-CONST FBuildSession method the controller calls as `Session.X(` must be called as `Session.X(` or `Sess().X(`
-# in a production file under AirsideEditor\Private. A CALL, not a mention: `URoadBuildEdMode::CancelActiveGesture` is
-# a method NAMED like the session's and calls something else, so "named" would have passed it by coincidence.
-# Const methods are reads (a driver may legitimately read less), and the class is parsed from BuildSession.h at brace
-# depth 0, so a call inside an inline body is not mistaken for a declaration.
-# THE DEVIATIONS ARE ROWS, each naming what the editor calls INSTEAD and why, and each checked in both directions:
-# the replacement must appear, and a row whose mutator the controller no longer calls is stale and fails.
+# FBuildSession method the controller calls as `Session.X(` must be called as `Session.X(`, `Sess().X(` or
+# `GetSession().X(` in a production file under AirsideEditor\Private. A CALL, not a mention:
+# `URoadBuildEdMode::CancelActiveGesture` is a method NAMED like the session's and calls something else.
+# DEFAULT-DENY, NOT "NON-CONST ONLY" (#468's review): const is not a read on this class. Select(Kind, Id) const writes
+# the mutable Selection, RecordPlaneHit const writes LastPlaneHitValue, MakeContext const moves the held grid frame -
+# the first cut of this rule skipped all three. So every call counts, and a driver may skip one only through a table:
+#   $sessionReads - pure reads the editor has no use for. Each must be declared const at class scope (every overload)
+#     and still be called by the controller; a non-const or stale entry fails.
+#   $editorSessionDoors - what the editor calls INSTEAD, and why; or, for a PIE-only control, the premise that makes it
+#     PIE-only, as a pattern that must stay ABSENT from the editor. Checked both ways: the replacement must appear (or
+#     the absent pattern must stay absent), and a row whose method the controller no longer calls is stale and fails.
+# The class is parsed from BuildSession.h at brace depth 0, so a call inside an inline body is not read as a declaration.
 # Rules 26 and 27 STAY (2026-09-30): 26 asserts GridOverlay::Describe, which is not a session call at all, in
 # RoadBuildHUD.cpp, which is not the controller; 27 asserts the ARGUMENT (an FConfigToolPreferences store), which a
 # call-name check cannot see - an editor session handed a different store would pass this rule and fail 27.
 $sessionHeader = Join-Path $plugin 'Public\Tool\BuildSession.h'
 $sessionController = Join-Path $Root 'Source\AirportMgr\RoadBuildController.cpp'
+$sessionReads = @(
+    @{ Method = 'ResolveSnap';                 Reason = "the HUD's snap readout (ARoadBuildController::ResolveSnap); the editor resolves snaps inside GetFrameContext" },
+    @{ Method = 'MakeContextCallCountForTest'; Reason = "a test counter getter, forwarded for PlayerTickBuildsOneContext" }
+)
 $editorSessionDoors = @(
     @{
-        Mutator = 'ToggleGestureMode'
+        Method  = 'ToggleGestureMode'
         Instead = '\bBuildVerbRegistry\s*\('
         Reason  = "the controller's own Session.ToggleGestureMode is its test door (ClickModifierTest); both drivers' production path is a BuildVerbRegistry() entry's Apply, which the editor reaches through URoadBuildEdMode::ApplyVerb"
     },
     @{
-        Mutator = 'CancelActiveGesture'
+        Method  = 'CancelActiveGesture'
         Instead = '->\s*OnCancel\s*\('
         Reason  = "deliberate: each editor tool instance is pinned to one palette entry, so the editor's Escape ends the gesture (IBuildTool::OnCancel) and never returns to Select - see URoadBuildEditorTool::CancelGesture"
+    },
+    @{
+        Method  = 'GetGestureMode'
+        Instead = '\bBuildVerbRegistry\s*\('
+        Reason  = "the editor reads the sticky mode through a BuildVerbRegistry() entry's IsActive (URoadBuildEdMode::IsVerbActive), which calls it - the lit palette toggle PIE's bar row is the twin of"
+    },
+    @{
+        Method  = 'MakeContext'
+        Instead = '(?:\bSession|\bSess\(\)|\bGetSession\(\))\s*\.\s*GetFrameContext\s*\('
+        Reason  = "the editor builds every context through GetFrameContext, which runs MakeContext on a key miss; PIE's click path bypasses that cache on purpose (issue #303) - a real divergence, pinned here so it stays deliberate"
+    },
+    @{
+        Method  = 'Select'
+        Absent  = '\bAlert\w*'
+        Reason  = "PIE-only: the alert panel's Go (ARoadBuildController::SelectAndFocus) selects the alert's subject, and the editor mode has no alerts - when AirsideEditor names an alert, it needs this call too"
     }
 )
 if (-not (Test-Path $sessionHeader) -or -not (Test-Path $sessionController)) {
-    $failures.Add("session-api-both-drivers: $sessionHeader or $sessionController is missing - rule 46 names files that moved; update it, do not let it check nothing")
+    $failures.Add("session-api-both-drivers: $sessionHeader or $sessionController is missing - rule 47 names files that moved; update it, do not let it check nothing")
 } else {
     # FBuildSession's body at brace depth 0 - declarations only; inline bodies and nested structs blanked.
     $inBlock = $false
@@ -2440,7 +2464,7 @@ if (-not (Test-Path $sessionHeader) -or -not (Test-Path $sessionController)) {
         $sessionDecls = $depth0.ToString()
     }
     if ($sessionDecls -eq '') {
-        $failures.Add("session-api-both-drivers: found no 'class AIRSIDE_API FBuildSession {' in $sessionHeader - it moved; update rule 46")
+        $failures.Add("session-api-both-drivers: found no 'class AIRSIDE_API FBuildSession {' in $sessionHeader - it moved; update rule 47")
     }
 
     $controllerLines = Get-Content -LiteralPath $sessionController
@@ -2452,30 +2476,8 @@ if (-not (Test-Path $sessionHeader) -or -not (Test-Path $sessionController)) {
             if (-not $controllerCalls.Contains($m.Groups[1].Value)) { $controllerCalls[$m.Groups[1].Value] = $i + 1 }
         }
     }
-
-    $sessionMutators = [ordered]@{}
-    foreach ($name in $controllerCalls.Keys) {
-        $decls = [regex]::Matches($sessionDecls, "\b$name\s*\(")
-        if ($decls.Count -eq 0) {
-            if ($sessionDecls -ne '') {
-                $failures.Add("session-api-both-drivers: RoadBuildController.cpp:$($controllerCalls[$name]) calls Session.$name but FBuildSession declares no $name at class scope - rule 46 cannot classify it; update the rule")
-            }
-            continue
-        }
-        foreach ($decl in $decls) {
-            # To the matching ')', then: is the next token `const`? Any non-const overload makes it a mutator.
-            $parens = 0
-            $p = $decl.Index + $decl.Length - 1
-            for (; $p -lt $sessionDecls.Length; $p++) {
-                if ($sessionDecls[$p] -eq '(') { $parens++ }
-                elseif ($sessionDecls[$p] -eq ')') { $parens--; if ($parens -eq 0) { break } }
-            }
-            $after = $sessionDecls.Substring([Math]::Min($p + 1, $sessionDecls.Length))
-            if ($after -notmatch '^\s*const\b') { $sessionMutators[$name] = $controllerCalls[$name] }
-        }
-    }
-    if ($sessionMutators.Count -eq 0) {
-        $failures.Add("session-api-both-drivers: found no non-const FBuildSession call in $sessionController - the controller's session moved or the parse broke; rule 46 must not check nothing")
+    if ($controllerCalls.Count -eq 0) {
+        $failures.Add("session-api-both-drivers: found no Session.X( call in $sessionController - the controller's session moved; rule 47 must not check nothing")
     }
 
     $editorCode = New-Object System.Text.StringBuilder
@@ -2486,21 +2488,50 @@ if (-not (Test-Path $sessionHeader) -or -not (Test-Path $sessionController)) {
     }
     $editorText = $editorCode.ToString()
 
-    foreach ($name in $sessionMutators.Keys) {
-        $door = $editorSessionDoors | Where-Object { $_.Mutator -eq $name } | Select-Object -First 1
-        if ($null -ne $door) {
-            if ($editorText -notmatch $door.Instead) {
-                $failures.Add("session-api-both-drivers: rule 46's row for $name says the editor reaches it through /$($door.Instead)/ instead ($($door.Reason)), and nothing under AirsideEditor\Private matches that any more")
+    foreach ($name in $controllerCalls.Keys) {
+        $decls = [regex]::Matches($sessionDecls, "\b$name\s*\(")
+        if ($decls.Count -eq 0) {
+            if ($sessionDecls -ne '') {
+                $failures.Add("session-api-both-drivers: RoadBuildController.cpp:$($controllerCalls[$name]) calls Session.$name but FBuildSession declares no $name at class scope - rule 47 cannot place it; update the rule")
             }
             continue
         }
-        if ($editorText -notmatch "(?:\bSession|\bSess\(\))\s*\.\s*$name\s*\(") {
-            $failures.Add("session-api-both-drivers: RoadBuildController.cpp:$($sessionMutators[$name]) calls Session.$name, and no production file under AirsideEditor\Private calls Session.$name or Sess().$name - PIE can reach this control and the editor mode cannot (#440). Give the editor its door, or add a row to rule 46 saying what it calls instead and why")
+
+        $read = $sessionReads | Where-Object { $_.Method -eq $name } | Select-Object -First 1
+        if ($null -ne $read) {
+            # A READ IS ALL-CONST: to the matching ')' of every declaration, then the next token must be `const`.
+            foreach ($decl in $decls) {
+                $parens = 0
+                $p = $decl.Index + $decl.Length - 1
+                for (; $p -lt $sessionDecls.Length; $p++) {
+                    if ($sessionDecls[$p] -eq '(') { $parens++ }
+                    elseif ($sessionDecls[$p] -eq ')') { $parens--; if ($parens -eq 0) { break } }
+                }
+                if ($sessionDecls.Substring([Math]::Min($p + 1, $sessionDecls.Length)) -notmatch '^\s*const\b') {
+                    $failures.Add("session-api-both-drivers: rule 47 lists $name as a read ($($read.Reason)), but FBuildSession declares a non-const $name - a writer cannot be skipped as a read")
+                }
+            }
+            continue
+        }
+
+        $door = $editorSessionDoors | Where-Object { $_.Method -eq $name } | Select-Object -First 1
+        if ($null -ne $door) {
+            if ($door.ContainsKey('Instead') -and $editorText -notmatch $door.Instead) {
+                $failures.Add("session-api-both-drivers: rule 47's row for $name says the editor reaches it through /$($door.Instead)/ instead ($($door.Reason)), and nothing under AirsideEditor\Private matches that any more")
+            }
+            if ($door.ContainsKey('Absent') -and $editorText -match $door.Absent) {
+                $failures.Add("session-api-both-drivers: rule 47's row for $name is PIE-only because /$($door.Absent)/ is absent from the editor ($($door.Reason)) - AirsideEditor\Private now matches it, so the premise is gone: call Session.$name there too, or re-justify the row")
+            }
+            continue
+        }
+
+        if ($editorText -notmatch "(?:\bSession|\bSess\(\)|\bGetSession\(\))\s*\.\s*$name\s*\(") {
+            $failures.Add("session-api-both-drivers: RoadBuildController.cpp:$($controllerCalls[$name]) calls Session.$name, and no production file under AirsideEditor\Private calls it on its session - PIE can reach this and the editor mode cannot (#440). Give the editor its call, or add a row to rule 47 (a read, or what it calls instead) saying why")
         }
     }
-    foreach ($door in $editorSessionDoors) {
-        if (-not $sessionMutators.Contains($door.Mutator)) {
-            $failures.Add("session-api-both-drivers: rule 46 has a row for $($door.Mutator), which RoadBuildController.cpp no longer calls on its session - delete the row, do not let the table rot")
+    foreach ($row in @($sessionReads) + @($editorSessionDoors)) {
+        if (-not $controllerCalls.Contains($row.Method)) {
+            $failures.Add("session-api-both-drivers: rule 47 has a row for $($row.Method), which RoadBuildController.cpp no longer calls on its session - delete the row, do not let the table rot")
         }
     }
 }

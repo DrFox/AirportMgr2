@@ -85,10 +85,15 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 
 	// ONE PER SnapToggleRegistry() ENTRY (issue #440), the same loop a third time. TOGGLEBUTTON for
 	// the verbs' reason: a guide switch is state the palette shows lit. The Grid button CYCLES
-	// rather than flips, and is lit while any step is on - the PIE bar's own reading of it; its
-	// caption cannot follow the step here (a palette button's label is the command's, fixed at
-	// registration), so the step it moved to is in the log line URoadBuildEdMode::ApplySnapToggle
-	// writes. The registry's Key comes along, so H is the grid's orientation in both drivers.
+	// rather than flips, and is lit while any step is on - the PIE bar's own reading of it.
+	//
+	// ITS CAPTION DOES NOT FOLLOW THE STEP HERE, by choice (#468's review): FToolBarBuilder::
+	// AddToolBarButton does take a label override, but only a BuildToolPalette of this module's own
+	// would pass one - and the stock FModeToolkit::BuildToolPalette is the consumer
+	// Airside.Editor.EveryCommandIsReachable measures. Overriding it to caption one button would
+	// swap the engine's consumer for ours under the pin. The step it moved to is in the log line
+	// URoadBuildEdMode::ApplySnapToggle writes, and the Grid button's check says whether it is on.
+	// The registry's Key comes along, so H is the grid's orientation in both drivers.
 	for (const FSnapToggleRegistration& Toggle : SnapToggleRegistry())
 	{
 		TSharedPtr<FUICommandInfo> Command;
