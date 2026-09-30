@@ -77,17 +77,19 @@ bool FPlotPlacementCarriesOutlineTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FTrucksDerivedFromShedsTest,
-	"Airside.Entities.TrucksDerivedFromSheds",
+	FStarterTrucksAreStatedTest,
+	"Airside.Entities.StarterTrucksAreStated",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FTrucksDerivedFromShedsTest::RunTest(const FString& Parameters)
+bool FStarterTrucksAreStatedTest::RunTest(const FString& Parameters)
 {
+	// TRUCKS IS THE STARTER FLEET A PLACEMENT COMES WITH (facility-upgrades spec §6), never derived
+	// from the sheds any more: sheds are BAYS the player fills by buying vehicles (R2, R3).
 	URoadNetwork* Net = NewObject<URoadNetwork>();
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
 
-	auto PlaceWith = [&](const TArray<EDepotModule>& Modules, double X)
+	auto PlaceWith = [&](const TArray<EDepotModule>& Modules, int32 Trucks, double X)
 	{
 		FEntityPlacement Placement;
 		Placement.Definition = Depot;
@@ -96,39 +98,54 @@ bool FTrucksDerivedFromShedsTest::RunTest(const FString& Parameters)
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = ThreeBayPlot(X);
 		Placement.Modules = Modules;
+		Placement.Trucks = Trucks;
 		return Net->GetEntity(Net->PlaceEntity(Placement));
 	};
 
-	// Two sheds is two trucks. The number UJobBoard seeds each depot's placeholder fleet from, so this
-	// is the one module whose effect is real today.
 	{
-		const FEntityInstance* Two = PlaceWith(
-			{ EDepotModule::Shed, EDepotModule::Shed, EDepotModule::Tank }, 0.0);
-		if (!TestNotNull(TEXT("two sheds placed"), Two)) { return false; }
-		TestEqual(TEXT("two sheds is two trucks"), Two->Trucks, 2);
+		const FEntityInstance* TwoSheds = PlaceWith({ EDepotModule::Shed, EDepotModule::Shed, EDepotModule::Tank }, 0, 0.0);
+		if (!TestNotNull(TEXT("two sheds placed"), TwoSheds)) { return false; }
+		TestEqual(TEXT("two sheds stated with no starter trucks start with none - sheds are bays, not vehicles"), TwoSheds->Trucks, 0);
 	}
-
-	// No shed is no trucks - allowed, because a part-built depot is a legitimate state and
-	// the census warns rather than forbidding. It must not silently become one.
 	{
-		const FEntityInstance* None = PlaceWith(
-			{ EDepotModule::Tank, EDepotModule::Pump }, 5000.0);
-		if (!TestNotNull(TEXT("a shedless depot still places"), None)) { return false; }
-		TestEqual(TEXT("no shed is no trucks, not a default of one"), None->Trucks, 0);
+		const FEntityInstance* Stated = PlaceWith({ EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump }, 2, 5000.0);
+		if (!TestNotNull(TEXT("a plotted depot with a stated starter fleet places"), Stated)) { return false; }
+		TestEqual(TEXT("keeps the count it was given, whatever its modules"), Stated->Trucks, 2);
 	}
-
-	// A PLOTLESS caller still states its own count outright, because it has no modules to
-	// derive one from. The two paths are exclusive by construction, which is the whole
-	// reason FEntityPlacement::Trucks and Modules can coexist without disagreeing.
 	{
 		const FEntityInstance* Plain = Net->GetEntity(Net->PlaceEntity(
 			Depot, Depot->Anchors, FVector2D(9000.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 3));
 		if (!TestNotNull(TEXT("a plotless depot places"), Plain)) { return false; }
-		TestEqual(TEXT("and keeps the count it was given"), Plain->Trucks, 3);
+		TestEqual(TEXT("and a plotless caller keeps its count too"), Plain->Trucks, 3);
 	}
-
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlayerDepotStartsWithNoTrucksTest,
+	"Airside.Present.PlayerDepotStartsWithNoTrucks",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlayerDepotStartsWithNoTrucksTest::RunTest(const FString& Parameters)
+{
+	// R3, AT THE GESTURE'S OWN DOOR: the depot the player draws has its kit and no vehicles, whatever
+	// the definition's starter count says.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	TestEqual(TEXT("setup: the definition states a starter truck"), Actor->FuelDepotDefinition->Trucks, 1);
+
+	const TArray<FVector2D> Plot = { FVector2D(0.0, 0.0), FVector2D(2000.0, 0.0), FVector2D(2000.0, 2400.0), FVector2D(0.0, 2400.0) };
+	const int32 Index = Actor->PlaceEntityInPlot(Plot, Plot[0], Plot[1],
+		{ EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump }, EPlaceableEntity::FuelDepot);
+	if (!TestNotEqual(TEXT("the plot is placed"), Index, int32(INDEX_NONE))) { return false; }
+	const FEntityInstance& Placed = Actor->Network->GetEntities()[Index];
+	TestEqual(TEXT("with no starter trucks (R3)"), Placed.Trucks, 0);
+	TestEqual(TEXT("and its whole start kit"), Placed.Modules.Num(), 3);
+	return true;
+}
+
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FPlotOutlineIsAlwaysCounterClockwiseTest,

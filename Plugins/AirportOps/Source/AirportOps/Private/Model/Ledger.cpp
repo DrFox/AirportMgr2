@@ -121,9 +121,18 @@ void ULedger::RollUp(double Now)
 
 void ULedger::PostDailyUpkeep(double Base, double Now)
 {
-	if (Base > 0.0)
+	const FUpkeepLine Line{ Base, NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep") };
+	PostDailyUpkeep(MakeArrayView(&Line, 1), Now);
+}
+
+void ULedger::PostDailyUpkeep(TConstArrayView<FUpkeepLine> Lines, double Now)
+{
+	for (const FUpkeepLine& Line : Lines)
 	{
-		Post(Now, ELedgerCategory::Upkeep, -Base, NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep"));
+		if (Line.Amount > 0.0)
+		{
+			Post(Now, ELedgerCategory::Upkeep, -Line.Amount, Line.What);
+		}
 	}
 
 	// UNCONDITIONAL - see this method's own header comment for why a Base of zero used to
@@ -172,8 +181,11 @@ double ULedger::PriceOf(const FBuildQuote& Quote) const
 
 bool ULedger::CanAfford(const FBuildQuote& Quote) const
 {
-	const double Price = PriceOf(Quote);
+	return CanPay(PriceOf(Quote));
+}
 
+bool ULedger::CanPay(double Price) const
+{
 	// A FREE EDIT IS ALWAYS ALLOWED, even under water, and the check has to come first: with a
 	// balance of -1000, "0 <= -1000" is false, so a plain comparison would refuse to split a
 	// segment or name a runway for a player who cannot pay their upkeep. Locking PLACEMENT is

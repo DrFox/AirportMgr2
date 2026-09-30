@@ -104,7 +104,15 @@ enum class EServiceRefusal : uint8
 	 * and a player widening one would fix nothing.
 	 * ENFORCED BY: AirportOps.Fuel.VehicleTooLargeRefused
 	 */
-	VehicleTooLarge
+	VehicleTooLarge,
+
+	/**
+	 * Depots are on a road but not one of them has a vehicle (facility-upgrades spec R3: a new depot
+	 * starts empty). ITS OWN REFUSAL AND NOT NoRoute: "no road from depot" about an empty depot on a
+	 * road sends the player to fix a road that is fine. APPENDED so no other value moves.
+	 * ENFORCED BY: AirportOps.Fuel.EmptyDepotSaysNoVehicles
+	 */
+	NoVehicles
 };
 
 /**

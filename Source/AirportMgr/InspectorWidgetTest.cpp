@@ -9,12 +9,16 @@
 #include "Content/AirsideSettings.h"
 #include "InspectorWidget.h"
 #include "Misc/AutomationTest.h"
+#include "Model/FacilityPurchases.h"
 #include "Model/InspectFacts.h"
+#include "Model/JobBoard.h"
+#include "Model/Ledger.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
+#include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestGraph.h"
@@ -725,6 +729,220 @@ bool FUiMenuButtonConfirmTest::RunTest(const FString& Parameters)
 	Menu->Choose(0);
 	TestEqual(TEXT("a plain line chooses on one click"), Menu->ChosenCountForTest(), 2);
 	TestEqual(TEXT("that line"), Menu->LastChosenForTest(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorFacilityCardTest,
+	"AirportMgr.Inspector.FacilityCardRendersTheQuote",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorFacilityCardTest::RunTest(const FString& Parameters)
+{
+	// THE CARD RENDERS ONLY THE QUOTE (spec §4): every caption, enabled state and reason below comes from
+	// the struct handed in - nothing is computed here, so a button cannot disagree with the rules.
+	FAirsideTestWorld Bare(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), Bare.World)) { return false; }
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(Bare.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+	TestNotNull(TEXT("the code-built card has a buy-module button"), Panel->BuyModuleButton.Get());
+	TestNotNull(TEXT("and a buy-vehicle menu"), Panel->BuyVehicleMenu.Get());
+
+	FFacilityQuote Quote;
+	Quote.Refusal = EPurchaseRefusal::None;
+	Quote.Bays = 1;
+	Quote.Vehicles = 1;
+	FModuleOfferQuote& Shed = Quote.Modules.AddDefaulted_GetRef();
+	Shed.Module = EDepotModule::Shed;
+	Shed.Name = FText::FromString(TEXT("Shed"));
+	Shed.PluralName = FText::FromString(TEXT("Sheds"));
+	Shed.Owned = 1;
+	Shed.Reserved = 3;
+	Shed.Refusal = EPurchaseRefusal::CannotAfford;
+	Shed.Label = FText::FromString(TEXT("Buy Shed 40,000"));
+	for (const TCHAR* Code : { TEXT("FUEL"), TEXT("UTILITY") })
+	{
+		FVehicleOfferQuote& Offer = Quote.VehicleOffers.AddDefaulted_GetRef();
+		Offer.TypeCode = Code;
+		Offer.Refusal = EPurchaseRefusal::NoFreeBay;
+		Offer.Label = FText::FromString(Code);
+	}
+	FFleetRowQuote& Row = Quote.Fleet.AddDefaulted_GetRef();
+	Row.VehicleId = 7;
+	Row.Line = TEXT("FUEL #7 · to stand 2 · 10,000 L");
+	Row.Refusal = EPurchaseRefusal::VehicleBusy;
+	Row.SellLabel = FText::FromString(TEXT("Sell 45,000"));
+
+	Panel->ShowFacilityQuote(Quote);
+	TestTrue(TEXT("a facility's rows are shown"), Panel->AreFacilityRowsShownForTest());
+	TestEqual(TEXT("the shed line counts owned against reserved"), Panel->ShedsTextForTest(), FString(TEXT("Sheds 1 / 3 space")));
+	TestFalse(TEXT("an unaffordable shed is a disabled button"), Panel->IsBuyModuleEnabledForTest());
+	TestTrue(TEXT("whose caption says why"), Panel->BuyModuleCaptionForTest().Contains(UFacilityPurchases::RefusalText(EPurchaseRefusal::CannotAfford).ToString()));
+	TestEqual(TEXT("the vehicle line counts vehicles against bays"), Panel->VehiclesTextForTest(), FString(TEXT("Vehicles 1 / 1 bays")));
+	const TArray<FUiMenuItem> Items = Panel->BuyVehicleItemsForTest();
+	if (TestEqual(TEXT("one menu line per vehicle offer"), Items.Num(), 2))
+	{
+		TestFalse(TEXT("a full depot greys every line"), Items[0].bEnabled);
+		TestTrue(TEXT("with the refusal as its reason"), Items[0].Why.EqualTo(UFacilityPurchases::RefusalText(EPurchaseRefusal::NoFreeBay)));
+	}
+	TestEqual(TEXT("one fleet row per vehicle"), Panel->FleetRowCountForTest(), 1);
+	TestFalse(TEXT("a busy vehicle's Sell is disabled"), Panel->IsSellEnabledForTest(0));
+
+	Panel->ShowFacilityQuote(FFacilityQuote());
+	TestFalse(TEXT("a card that is no facility shows no purchase rows"), Panel->AreFacilityRowsShownForTest());
+
+	FFacilityQuote Empty = Quote;
+	Empty.Vehicles = 0;
+	TestEqual(TEXT("an empty depot on a road says what to do"),
+		UInspectorWidget::DepotStatus(Empty, /*bReachable=*/true, TEXT("No jobs")), FString(TEXT("No vehicles \u2014 buy one")));
+	TestEqual(TEXT("off the road, the road is the fix it names"),
+		UInspectorWidget::DepotStatus(Empty, /*bReachable=*/false, TEXT("Cannot dispatch")), FString(TEXT("Cannot dispatch")));
+	TestEqual(TEXT("with a vehicle, the backlog stands"),
+		UInspectorWidget::DepotStatus(Quote, /*bReachable=*/true, TEXT("No jobs")), FString(TEXT("No jobs")));
+	return true;
+}
+
+namespace
+{
+	/**
+	 * THE DEPOT CARD, WIRED END TO END: an attached runtime, the player's plotted depot (one shed, no
+	 * trucks - R3) on FacilityWiredTest's 50 x 24 m plot that reserves a second shed, a controller pointed
+	 * at both with the depot selected, and a panel. Prefixed for the unity build.
+	 */
+	struct FInspectorDepotRig
+	{
+		FAirsideTestWorld World;
+		UOpsRuntime* Runtime = nullptr;
+		ARoadBuildController* Controller = nullptr;
+		UInspectorWidget* Panel = nullptr;
+		FEntityInstanceId Depot;
+		FSelection DepotSelection;
+
+		bool Build()
+		{
+			ARoadNetworkActor* Actor = World.Actor;
+			if (Actor == nullptr) { return false; }
+			Actor->PlaceNode(FVector2D(0.0, 40000.0));
+			Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+			Runtime = NewObject<UOpsRuntime>();
+			Runtime->Attach(Actor);
+			const TArray<FVector2D> Plot = { FVector2D(0.0, 0.0), FVector2D(5000.0, 0.0), FVector2D(5000.0, 2400.0), FVector2D(0.0, 2400.0) };
+			const int32 Index = Actor->PlaceEntityInPlot(Plot, Plot[0], Plot[1],
+				{ EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump }, EPlaceableEntity::FuelDepot);
+			if (Index == INDEX_NONE) { return false; }
+			Depot = Actor->Network->EntityIdAt(Index);
+			Controller = World.World->SpawnActor<ARoadBuildController>();
+			if (Controller == nullptr) { return false; }
+			// REGISTERED as play registers it: a headless world defers PostInitializeComponents, so the spawn
+			// alone leaves GetFirstPlayerController null and the panel (UAirportMgrPanelWidget::Controller)
+			// would find no controller - measured 2026-09-30, the card drew no purchase rows.
+			World.World->AddController(Controller);
+			Controller->SetTargetForTest(Actor);
+			Controller->SetOpsRuntimeForTest(Runtime);
+			DepotSelection.Kind = ESelectionKind::Stand;
+			DepotSelection.Id = Index;
+			Controller->SelectForTest(DepotSelection);
+			Panel = CreateWidget<UInspectorWidget>(World.World, UInspectorWidget::StaticClass());
+			return Panel != nullptr;
+		}
+
+		void Refresh() { Panel->Refresh(World.Actor, Controller->GetSelection()); }
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorDepotCardBuysTest,
+	"AirportMgr.Inspector.DepotCardBuysThroughTheController",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorDepotCardBuysTest::RunTest(const FString& Parameters)
+{
+	// THE CARD'S BUY CLICKS REACH THE RULES: menu line -> ChooseVehicleToBuy -> selection.buy_vehicle's
+	// TryRun -> UOpsRuntime::BuyVehicle, and Buy Shed -> selection.buy_module -> BuyModule. Each hop is a
+	// seam a rename or an unbound delegate would cut with every widget test still green.
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	TestTrue(TEXT("the controller names the selected depot"), Rig.Controller->SelectedFacility() == Rig.Depot);
+	const UJobBoard* Board = Rig.Runtime->GetJobBoard();
+	const ULedger* Ledger = Rig.Runtime->GetLedger();
+	if (!TestNotNull(TEXT("a job board"), Board) || !TestNotNull(TEXT("a ledger"), Ledger)) { return false; }
+
+	Rig.Refresh();
+	TestTrue(TEXT("the depot's card is shown"), Rig.Panel->IsShownForTest());
+	TestTrue(TEXT("with its purchase rows - the panel reached the controller's runtime"), Rig.Panel->AreFacilityRowsShownForTest());
+	const FFacilityQuote Before = Rig.Runtime->QuoteFacility(Rig.Depot);
+	if (!TestTrue(TEXT("setup: an empty depot with a free bay and an affordable vehicle"),
+		Before.Vehicles == 0 && Before.VehicleOffers.Num() > 0 && Before.VehicleOffers[0].Refusal == EPurchaseRefusal::None)) { return false; }
+	if (!TestTrue(TEXT("setup: a second shed is reserved and affordable"),
+		Before.Modules.Num() == 1 && Before.Modules[0].Refusal == EPurchaseRefusal::None)) { return false; }
+	TestEqual(TEXT("the card's menu offers what the quote offers"), Rig.Panel->BuyVehicleItemsForTest().Num(), Before.VehicleOffers.Num());
+
+	const double Balance = Ledger->Balance();
+	Rig.Panel->ChooseBuyVehicleForTest(0);
+	TestEqual(TEXT("choosing the first line bought one vehicle at the depot"), Board->VehiclesAt(Rig.Depot), 1);
+	TestEqual(TEXT("and charged its price"), Ledger->Balance(), Balance - Before.VehicleOffers[0].Price, 0.01);
+
+	Rig.Refresh();
+	Rig.Panel->ClickBuyModuleForTest();
+	const FFacilityQuote After = Rig.Runtime->QuoteFacility(Rig.Depot);
+	TestEqual(TEXT("Buy Shed bought the second shed through the controller"), After.Modules.Num() > 0 ? After.Modules[0].Owned : 0, 2);
+	TestEqual(TEXT("and the depot has a second bay"), After.Bays, 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorSellTakesTwoClicksTest,
+	"AirportMgr.Inspector.SellTakesTwoClicks",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorSellTakesTwoClicksTest::RunTest(const FString& Parameters)
+{
+	// A SALE CANNOT BE UNDONE, so the first click only ARMS it and the caption asks again (memory:
+	// destructive gestures need a deliberate mode). Clicking away disarms: an armed sale surviving a
+	// change of card would be a one-click sale the next time the depot is picked.
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	const UJobBoard* Board = Rig.Runtime->GetJobBoard();
+	const ULedger* Ledger = Rig.Runtime->GetLedger();
+	if (!TestNotNull(TEXT("a job board"), Board) || !TestNotNull(TEXT("a ledger"), Ledger)) { return false; }
+	const FFacilityQuote Offers = Rig.Runtime->QuoteFacility(Rig.Depot);
+	if (!TestTrue(TEXT("setup: a vehicle on offer"), Offers.VehicleOffers.Num() > 0)) { return false; }
+	const FPurchaseResult Bought = Rig.Runtime->BuyVehicle(Rig.Depot, Offers.VehicleOffers[0].TypeCode);
+	if (!TestTrue(TEXT("setup: one vehicle bought"), Bought.Succeeded())) { return false; }
+	const int32 Vehicle = Bought.VehicleId;
+
+	Rig.Refresh();
+	const FFacilityQuote Quote = Rig.Runtime->QuoteFacility(Rig.Depot);
+	if (!TestTrue(TEXT("setup: the idle vehicle can be sold"), Quote.Fleet.Num() == 1 && Quote.Fleet[0].Refusal == EPurchaseRefusal::None)) { return false; }
+	if (!TestEqual(TEXT("setup: one fleet row"), Rig.Panel->FleetRowCountForTest(), 1)) { return false; }
+	const double Refund = Quote.Fleet[0].Refund;
+	const double Balance = Ledger->Balance();
+
+	// FIRST CLICK: armed, nothing sold.
+	Rig.Panel->ClickSellForTest(0);
+	TestEqual(TEXT("the first click arms this vehicle on the controller"), Rig.Controller->GetArmedSellVehicle(), Vehicle);
+	TestNotNull(TEXT("the vehicle is still there"), Board->FindVehicle(Vehicle));
+	TestEqual(TEXT("and no money moved"), Ledger->Balance(), Balance, 0.01);
+	Rig.Refresh();
+	TestTrue(TEXT("the caption asks again"), Rig.Panel->SellCaptionForTest(0).Contains(TEXT("click again")));
+
+	// CLICK AWAY AND BACK: disarmed.
+	Rig.Controller->SelectForTest(FSelection());
+	Rig.Refresh();
+	TestEqual(TEXT("clearing the selection disarms the sale"), Rig.Controller->GetArmedSellVehicle(), 0);
+	Rig.Controller->SelectForTest(Rig.DepotSelection);
+	Rig.Refresh();
+	TestFalse(TEXT("back on the depot, the caption no longer asks again"), Rig.Panel->SellCaptionForTest(0).Contains(TEXT("click again")));
+	Rig.Panel->ClickSellForTest(0);
+	TestNotNull(TEXT("so the next click only arms again - still not sold"), Board->FindVehicle(Vehicle));
+	TestEqual(TEXT("armed once more"), Rig.Controller->GetArmedSellVehicle(), Vehicle);
+
+	// SECOND CLICK: sold.
+	Rig.Refresh();
+	Rig.Panel->ClickSellForTest(0);
+	TestNull(TEXT("the second click sells it"), Board->FindVehicle(Vehicle));
+	TestEqual(TEXT("crediting the resale"), Ledger->Balance(), Balance + Refund, 0.01);
+	TestEqual(TEXT("and the controller is disarmed"), Rig.Controller->GetArmedSellVehicle(), 0);
 	return true;
 }
 

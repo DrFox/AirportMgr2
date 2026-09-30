@@ -4,6 +4,7 @@
 #include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "Tool/Selection.h"
+#include "Model/FacilityPurchases.h"
 #include "UI/UiMenuButton.h"
 #include "InspectorWidget.generated.h"
 
@@ -11,6 +12,9 @@ class ARoadBuildController;
 class ARoadNetworkActor;
 class UBuildBarWidget;
 class UButton;
+class UInspectorWidget;
+class UOpsRuntime;
+class UPanelWidget;
 class UUiButton;
 class UTextBlock;
 class UUIStyle;
@@ -74,6 +78,26 @@ struct FInspectorKey
 };
 
 /**
+ * One fleet row's Sell click - UBuildBarEntry's reason: a dynamic delegate binds only to a UFUNCTION on a
+ * UObject. The first click ARMS (the caption asks again), the second sells: selling cannot be undone
+ * (memory: destructive gestures need a deliberate mode).
+ */
+UCLASS()
+class AIRPORTMGR_API UInspectorFleetRow : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY() int32 VehicleId = 0;
+	UPROPERTY() TObjectPtr<UTextBlock> Line;
+	UPROPERTY() TObjectPtr<UUiButton> SellButton;
+	UPROPERTY() TWeakObjectPtr<UInspectorWidget> Owner;
+	bool bArmed = false;
+
+	UFUNCTION() void HandleSell();
+};
+
+/**
  * The inspector: what the selected aircraft or stand is doing, and the verbs for it.
  *
  * The same recipe as UBuildBarWidget: a C++ base that builds a working panel with no asset,
@@ -110,6 +134,46 @@ public:
 	/** An agent card's escape hatch - selection.unstick, a popup of UAgentRescue's three actions
 	 *  (spec 2026-09-29-unstick-agent). */
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiMenuButton> UnstickMenu;
+
+	/**
+	 * THE DEPOT CARD'S PURCHASE ROWS (facility-upgrades spec §4), all filled from ShowFacilityQuote. The C++
+	 * base builds them asset-free; a Blueprint restyles through these names.
+	 */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> ShedsRow;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> ShedsText;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> BuyModuleButton;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> VehiclesRow;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> VehiclesText;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiMenuButton> BuyVehicleMenu;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> FleetList;
+
+	/**
+	 * Render the purchase rows from Quote and NOTHING ELSE - the spec's rule that the card cannot disagree
+	 * with the rules. A quote that is no facility collapses them. Public so a headless test (no runtime,
+	 * no controller) can drive it; Refresh calls it every tick with the selected depot's quote.
+	 * ENFORCED BY: AirportMgr.Inspector.FacilityCardRendersTheQuote
+	 */
+	void ShowFacilityQuote(const FFacilityQuote& Quote);
+
+	/** The depot status line: "No vehicles — buy one" for an empty depot on a road, else Current. */
+	static FString DepotStatus(const FFacilityQuote& Quote, bool bReachable, const FString& Current);
+
+	/** A fleet row's click - see UInspectorFleetRow. */
+	void OnFleetSell(UInspectorFleetRow& Row);
+
+	bool AreFacilityRowsShownForTest() const;
+	FString ShedsTextForTest() const;
+	FString VehiclesTextForTest() const;
+	bool IsBuyModuleEnabledForTest() const;
+	FString BuyModuleCaptionForTest() const;
+	TArray<FUiMenuItem> BuyVehicleItemsForTest() const { return BuyVehicleItems(); }
+	int32 FleetRowCountForTest() const { return FleetRows.Num(); }
+	bool IsSellEnabledForTest(int32 Row) const;
+	/** The card's clicks, raised through each widget's OWN delegate so an unbound button fails the test. */
+	void ClickSellForTest(int32 Row);
+	FString SellCaptionForTest(int32 Row) const;
+	void ClickBuyModuleForTest();
+	void ChooseBuyVehicleForTest(int32 Line);
 
 	/**
 	 * How long an agent must have stood behind something before the Unstick button lights up, s.
@@ -213,6 +277,29 @@ private:
 	int32 RunwayUseActionIndex = INDEX_NONE;
 	/** By id, RunwayActionIndex's rule. Its row only opens the popup - see ARoadBuildController::RequestUnstickMenu. */
 	int32 UnstickActionIndex = INDEX_NONE;
+	/** By id, RunwayActionIndex's rule - and caught BEFORE the positional Depart/Follow pair, or a new
+	 *  Selection row would shift it. */
+	int32 BuyModuleActionIndex = INDEX_NONE;
+	int32 BuyVehicleActionIndex = INDEX_NONE;
+	int32 SellVehicleActionIndex = INDEX_NONE;
+
+	/** The quote the rows were last drawn from - the buy menu's lines are asked of it as it opens. */
+	FFacilityQuote LastQuote;
+	/** The fleet's vehicle ids last drawn; the rows are rebuilt only when this changes. */
+	FString LastFleetKey;
+	/** The type codes the open buy menu lists, by line - HandleBuyVehicleChosen reads the line's code. */
+	mutable TArray<FName> ShownVehicleCodes;
+	UPROPERTY() TArray<TObjectPtr<UInspectorFleetRow>> FleetRows;
+
+	TArray<FUiMenuItem> BuyVehicleItems() const;
+	void RebuildFleetRows();
+	/** Unarm every fleet row and the controller's armed sale - a new card, a deselect or a rebuild. */
+	void DisarmSale();
+	/** The runtime the card quotes: the controller's (ARoadBuildController::GetOpsRuntime), else the
+	 *  game instance's. */
+	const UOpsRuntime* OpsRuntime() const;
+	UFUNCTION() void HandleBuyModule();
+	UFUNCTION() void HandleBuyVehicleChosen(int32 Index);
 
 	/** The controller's request count last acted on - see ARoadBuildController::RequestUnstickMenu. */
 	int32 SeenUnstickRequests = 0;

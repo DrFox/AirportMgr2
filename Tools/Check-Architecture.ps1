@@ -413,6 +413,17 @@ $AllowedCallers = @(
         ProdReason  = 'go through ARoadNetworkActor::ResolveDepotKits (issue #181) - PlotPlaceTool.cpp and PlotPresenter.cpp both deliberately stopped calling this themselves'
     },
     @{
+        # ONE SOLVE PER PLACED PLOT (facility-upgrades spec, 2026-09-29): the presenter's lit/ghosted bays
+        # and the purchase rules' free slot read DepotKit::ReservationOf. A new production caller of
+        # PlotLayoutFor is a second solve that can disagree - the Buy shed that lights nothing.
+        # The tool and the facade solve an UNPLACED outline (the ghost, the commit), not a placed plot.
+        Name        = 'PlotLayoutFor'
+        Pattern     = '\bPlotLayoutFor\s*\('
+        ProdAllowed = @('Public\Build\PlotLayoutStrategy.h', 'Private\Build\PlotLayoutStrategy.cpp', 'Private\Build\DepotKit.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp', 'Private\Tool\PlotPlaceTool.cpp')
+        TestExempt  = $true
+        ProdReason  = 'a placed plot is solved by DepotKit::ReservationOf; an unplaced outline by URoadEditFacade::ReserveForPlot or FPlotPlaceTool'
+    },
+    @{
         Name        = 'RoadHeal::PlanNodeDeletion'
         Pattern     = 'RoadHeal::PlanNodeDeletion\s*\('
         ProdAllowed = @('Public\Tool\RoadHeal.h', 'Private\Tool\RoadHeal.cpp', 'Private\Present\RoadEditFacade.cpp')

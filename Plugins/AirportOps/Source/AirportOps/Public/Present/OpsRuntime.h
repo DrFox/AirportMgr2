@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/AgentRescue.h"
+#include "Model/FacilityPurchases.h"
 #include "Model/OfferGenerator.h"
 #include "Model/OpsEventBus.h"
 #include "Model/SimClock.h"
@@ -85,6 +86,23 @@ public:
 
 	/** The inspector's Unstick. See UAgentRescue - this runtime owns it and hands it the two boards. */
 	UAgentRescue* GetAgentRescue() const { return AgentRescue; }
+
+	/**
+	 * Sheds and vehicles bought and sold. See UFacilityPurchases - this runtime owns it and wires its two
+	 * world hooks at Attach (cleared at Detach).
+	 * ENFORCED BY: AirportOps.Present.Facility.ShedPurchaseRelightsASlot, AirportOps.Present.Facility.QuoteSolvesOncePerDepot
+	 */
+	UFacilityPurchases* GetFacilityPurchases() const { return FacilityPurchases; }
+
+	/**
+	 * FORWARDERS to UFacilityPurchases with this runtime's network - the one the driver does not hold, as
+	 * CanUnstick supplies it. Refused NotAFacility when unattached. Logic lives in UFacilityPurchases.
+	 * ENFORCED BY: AirportOps.Present.Facility.PurchaseWakesTheBoard, AirportOps.Present.Facility.AttachCopiesTheOffers
+	 */
+	FFacilityQuote QuoteFacility(FEntityInstanceId Entity) const;
+	FPurchaseResult BuyModule(FEntityInstanceId Entity, EDepotModule Module);
+	FPurchaseResult BuyVehicle(FEntityInstanceId Entity, FName TypeCode);
+	FPurchaseResult SellVehicle(int32 VehicleId);
 
 	/**
 	 * FORWARDERS to UAgentRescue with this runtime's traffic, network and clock - the three the driver
@@ -176,6 +194,9 @@ public:
 	/** How many times OfferTick has run. For the load re-arm test. */
 	int32 OfferTicksForTest() const { return OfferTicks; }
 
+	/** How many plot solves ReservedSlotsOf has run - see its memo. */
+	int32 ReservationSolvesForTest() const { return ReservationSolves; }
+
 	/**
 	 * Every airline with its fleet resolved to airframes, built once at Attach. What the
 	 * generator ticks over and what the inbox's demand strip samples - one list, so the strip
@@ -203,6 +224,21 @@ private:
 	UPROPERTY() TObjectPtr<ULedger> Ledger;
 	UPROPERTY() TObjectPtr<UPricing> Pricing;
 	UPROPERTY() TObjectPtr<UAgentRescue> AgentRescue;
+	UPROPERTY() TObjectPtr<UFacilityPurchases> FacilityPurchases;
+
+	/**
+	 * UFacilityPurchases::ReservedSlotsOf's production answer: DepotKit::ReservationOf's ceiling over the
+	 * actor's one kit table, MEMOISED per (network object, depot) - the inspector re-quotes every tick and
+	 * the ceiling is a plot solve. Modules do not change what a plot holds, and no mutator moves or re-plots
+	 * a live depot today (2026-09-30), so the only invalidations are a different network (clear, load, undo
+	 * replace the object) and Detach. A FUTURE depot move / re-plot mutator must drop that depot's entry
+	 * here, or the card keeps quoting the old plot's ceiling.
+	 * ENFORCED BY: AirportOps.Present.Facility.QuoteSolvesOncePerDepot, AirportOps.Present.Facility.NewNetworkResolvesTheCeiling
+	 */
+	int32 ReservedSlotsOf(FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module);
+	TWeakObjectPtr<const URoadNetwork> ReservationMemoNetwork;
+	TMap<FEntityInstanceId, TArray<int32>> ReservationMemo;
+	int32 ReservationSolves = 0;
 
 	UPROPERTY() TObjectPtr<UAirlineRoster> Airlines;
 	UPROPERTY() TObjectPtr<UOpsAlerts> Alerts;

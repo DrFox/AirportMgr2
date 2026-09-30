@@ -638,8 +638,7 @@ public:
 	 * guideline the pose's lead-in may join - see FEntityInstance::PoseRole. Defaulted to
 	 * Aircraft so every caller written before the fuel slice keeps meaning what it meant.
 	 *
-	 * Trucks is the third and last such capture - see FEntityInstance::Trucks for why a
-	 * fourth would become a struct instead.
+	 * Trucks is the starter fleet - see FEntityInstance::Trucks.
 	 *
 	 * CodeCEnvelope DEFAULTS TO THE FLOOR (#292 review finding): a stand placed with no
 	 * drawn plot always gets a CODE C box (see GiveStandOutlineIfMissing), so this is the
@@ -826,6 +825,15 @@ public:
 	 * because it is the one place both layers are known at once.
 	 */
 	bool SetEntityPoseRole(FEntityInstanceId Entity, EServiceRole PoseRole);
+
+	/**
+	 * Append Module to a live DEPOT's Modules - the one write a module purchase makes (facility-upgrades
+	 * spec §3). False, nothing changed, for a dead or unset handle or a non-depot. A pure data write: no
+	 * rebuild, no undo, no money - URoadEditFacade::AddEntityModule is the door that adds those. No
+	 * EditRevision bump: that clock is scoped to nodes and segments (see GetEditRevision).
+	 * ENFORCED BY: Airside.Model.EntityModules.AddAppendsToADepot
+	 */
+	bool AddEntityModule(FEntityInstanceId Entity, EDepotModule Module);
 
 	/**
 	 * Re-point an entity at Definition. False for a dead entity.

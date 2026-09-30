@@ -264,3 +264,23 @@ void AAirsideBuildingsActor::Rebuild(const URoadNetwork& Network)
 	Plots->RebuildFrom(Network, Road->ResolveDepotKits(), UAirsideSettings::ResolveFenceKit(),
 		UAirsideSettings::ResolveDepotLooks());
 }
+
+void AAirsideBuildingsActor::ShowPlotGhosts(bool bVisible, FEntityInstanceId Only)
+{
+	if (Plots == nullptr)
+	{
+		return;
+	}
+	Plots->SetGhostsVisible(bVisible);
+	if (!Plots->SetGhostScope(Only))
+	{
+		return;
+	}
+	const FString Whose = Only.IsSet() ? FString::Printf(TEXT("depot %d only"), Only.Index) : FString(TEXT("every plot"));
+	UE_LOG(LogAirside, Log, TEXT("Plots: ghost bays drawn for %s"), *Whose);
+	ARoadNetworkActor* Road = Bound.Get();
+	if (Road != nullptr && Road->Network != nullptr)
+	{
+		Rebuild(*Road->Network);
+	}
+}

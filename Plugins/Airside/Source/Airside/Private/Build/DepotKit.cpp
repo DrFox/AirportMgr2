@@ -1,7 +1,9 @@
 #include "Build/DepotKit.h"
 
 #include "AirsideLog.h"
+#include "Build/PlotLayoutStrategy.h"
 #include "Content/AirsideContent.h"
+#include "Entities/EntityDefinition.h"
 #include "Entities/PlotModuleKit.h"
 #include "Model/RoadNetwork.h"
 
@@ -181,4 +183,66 @@ void DepotKit::ReportIncomplete(const URoadNetwork& Network)
 				Entity.Position.X, Entity.Position.Y);
 		}
 	}
+}
+
+bool DepotKit::RecoverFrontage(const FEntityInstance& Entity, FVector2D& OutA, FVector2D& OutB)
+{
+	// Which edge of the plot is its frontage, recovered from the entity alone.
+	//
+	// EXACT, NOT A GUESS, and not a second search either. URoadEditFacade::PlaceEntityInPlot
+	// puts the pose at the MIDPOINT of the frontage edge, so the edge whose midpoint equals
+	// Position is that edge by construction - this reads back a value rather than deriving a
+	// new opinion.
+	//
+	// ASKING FAnchorLink AGAIN WAS REJECTED. It would search the live graph, so a road laid
+	// or deleted after the depot was built could move the frontage, and every shed in the
+	// yard would jump to a new edge without the player touching the depot. Where the thing
+	// faces was decided when it was placed, and it stays decided.
+	double BestDistance = TNumericLimits<double>::Max();
+	int32 BestEdge = INDEX_NONE;
+
+	for (int32 I = 0; I < Entity.Outline.Num(); ++I)
+	{
+		const FVector2D& A = Entity.Outline[I];
+		const FVector2D& B = Entity.Outline[(I + 1) % Entity.Outline.Num()];
+		const double Distance = FVector2D::Distance((A + B) * 0.5, Entity.Position);
+		if (Distance < BestDistance)
+		{
+			BestDistance = Distance;
+			BestEdge = I;
+		}
+	}
+
+	if (BestEdge == INDEX_NONE)
+	{
+		return false;
+	}
+
+	OutA = Entity.Outline[BestEdge];
+	OutB = Entity.Outline[(BestEdge + 1) % Entity.Outline.Num()];
+	return true;
+}
+
+TOptional<PlotYard::FReservation> DepotKit::ReservationOf(const FEntityInstance& Depot,
+	TArrayView<const PlotYard::FKitSpec> Specs)
+{
+	if (!Depot.bAlive || !Depot.IsDepot() || !Depot.IsPlotted())
+	{
+		return {};
+	}
+	FVector2D FrontageA = FVector2D::ZeroVector;
+	FVector2D FrontageB = FVector2D::ZeroVector;
+	if (!RecoverFrontage(Depot, FrontageA, FrontageB))
+	{
+		return {};
+	}
+	// Depot.Outline OUTLIVES THE SOLVE - FPlotSite::Outline is a view (its own comment).
+	FPlotSite Site;
+	Site.Outline = Depot.Outline;
+	Site.FrontageA = FrontageA;
+	Site.FrontageB = FrontageB;
+	Site.Gate = Depot.Position;
+	Site.Seed = DepotYardSeed(Depot.Position);
+	const EPlotLayout Layout = Depot.Definition != nullptr ? Depot.Definition->Layout : EPlotLayout::Scatter;
+	return PlotLayoutFor(Layout)->Solve(Site, Specs);
 }

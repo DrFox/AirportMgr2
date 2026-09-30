@@ -124,8 +124,9 @@ const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
 	const uint32 BoardNow = Revision();
 	const uint32 GuidelineNow = Network.GetGuidelineRevision();
 	const uint32 OccupancyNow = Traffic.OccupancyRevision();
+	const uint32 FleetNow = Fuel != nullptr ? Fuel->GetFleetRevision() : 0;
 	if (!Verdict.bValid || Verdict.BoardAt != BoardNow || Verdict.GuidelineAt != GuidelineNow
-		|| Verdict.OccupancyAt != OccupancyNow)
+		|| Verdict.OccupancyAt != OccupancyNow || Verdict.FleetAt != FleetNow)
 	{
 		// THE REAL PLAN, with the live occupancy. The greyed-out reason is the sentence the
 		// arrival itself would print, because it is the same refusal.
@@ -134,6 +135,7 @@ const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
 		Verdict.BoardAt = BoardNow;
 		Verdict.GuidelineAt = GuidelineNow;
 		Verdict.OccupancyAt = OccupancyNow;
+		Verdict.FleetAt = FleetNow;
 		Verdict.bValid = true;
 	}
 	return Verdict;

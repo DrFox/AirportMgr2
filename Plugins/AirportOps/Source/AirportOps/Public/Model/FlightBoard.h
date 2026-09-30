@@ -24,13 +24,13 @@ enum class EAgentPhase : uint8;
 /**
  * Whether an offer can be accepted right now, and whether the airport can serve it.
  *
- * CACHED ON THREE REVISIONS (issue #169, moved from UOfferViewModel 2026-09-28): Why is a
+ * CACHED ON FOUR REVISIONS (issue #169, moved from UOfferViewModel 2026-09-28): Why is a
  * full ArrivalPlanner::Plan - a route search over every stand, then every runway exit - so it
  * is recomputed only when something it depends on has moved: the board itself
  * (UFlightBoard::Revision - added/accepted/declined/expired), the guideline graph
  * (URoadNetwork::GetGuidelineRevision - an edit changed the taxiways), or occupancy
- * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or cleared).
- * Three integer compares replace the search on every frame where none of them moved.
+ * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or cleared), or the fleet (UJobBoard::GetFleetRevision - a vehicle bought or sold).
+ * Four integer compares replace the search on every frame where none of them moved.
  */
 struct FOfferVerdict
 {
@@ -44,6 +44,9 @@ struct FOfferVerdict
 	uint32 BoardAt = 0;
 	uint32 GuidelineAt = 0;
 	uint32 OccupancyAt = 0;
+	/** UJobBoard::GetFleetRevision when judged - a vehicle bought or sold changes bFuelServable
+	 *  (facility-upgrades spec). ENFORCED BY: AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet */
+	uint32 FleetAt = 0;
 	bool bValid = false;
 };
 

@@ -326,12 +326,9 @@ public:
 	UPROPERTY(EditAnywhere) FVector2D FootprintExtent = FVector2D::ZeroVector;
 
 	/**
-	 * How many vehicles this installation can have out at once.
-	 *
-	 * Read only from a definition whose PoseRole is a service role; 0 on a stand, where it
-	 * means nothing. SCAFFOLDING, named as such by the fuel-service spec (§0.1): M3's
-	 * UJobBoard bids by ETA over a real fleet, and this becomes the fleet's SIZE rather than
-	 * a number a service counts its own dispatches against.
+	 * The STARTER vehicles of each kind a PLOTLESS placement of this definition comes with - see
+	 * FEntityInstance::Trucks. A depot the player draws ignores it and starts empty (facility spec R3).
+	 * 0 on a stand, where it means nothing.
 	 */
 	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) int32 Trucks = 0;
 
