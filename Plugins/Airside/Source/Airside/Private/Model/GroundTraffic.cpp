@@ -1279,7 +1279,6 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 	// BASELINES FIRST, BROADCASTS AFTER: a listener that asks this model anything sees the state the diff saw.
 	for (const FRoadSegmentId Seed : FreedRunways)
 	{
-		++RunwayFreedTotal;
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Runway (seed %d) freed%s"), Seed.Index, bRebuilt ? TEXT(" by a rebuild") : TEXT(""));
 		OnRunwayFreed.Broadcast(Seed);
 	}
@@ -1309,15 +1308,17 @@ void UGroundTraffic::ReplanHeldTaxiOuts(const URoadNetwork& Network)
 	// route are the guideline graph and the agent's pose, which does not move while it holds; PlanAny's runways,
 	// their modes and in-use ends are runway facts, which in play change only through the facade, whose Topology
 	// rebuild re-makes every derived edge and so moves GetGuidelineRevision; a drag leaves the guidelines behind the
-	// road, and this returns above until it is dropped. NOT OCCUPANCY - the spec keyed it on RunwayFreedCount too, on
+	// road, and this returns above until it is dropped. NOT OCCUPANCY - the spec keyed it on a runway-freed count too, on
 	// the premise that PlanAny refuses behind a busy runway; it does not: occupancy only RANKS a held runway below a
 	// free one, and both departure errands are EOccupancyUse::Never. A key input that cannot change the answer would
 	// only buy retries that fail.
 	// ENFORCED BY: Airside.Model.Traffic.HeldTaxiOut.BusyRunwayIsNoRefusal (a held strip is still planned to);
-	// AirportMgr.Inspector.Cache.RunwaySeesItsFacts (a facts change through the facade moves the guideline revision)
+	// AirportMgr.Inspector.Cache.RunwaySeesItsFacts (a facts change through the facade moves the guideline revision);
+	// Check-Architecture rule 35 (facts-through-facade: nothing outside the facade and Testing/ writes a runway's facts)
 	//
 	// A NEW NETWORK OBJECT forgets every refusal: its revisions count from its own zero, and one could match an old
 	// refusal's number by coincidence.
+	// ENFORCED BY: Airside.Model.Traffic.HeldTaxiOut.ANewNetworkAsksAgain
 	if (TaxiOutGateNetwork.Get() != &Network)
 	{
 		for (FRoadAgent& Each : Agents)

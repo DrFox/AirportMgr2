@@ -125,7 +125,7 @@ public:
  *    a drag included) and runway facts, entities, the stored restriction letters and the guideline graph. In play
  *    those four change only through the facade, whose Topology notify rebuilds the guideline graph - every derived
  *    edge removed and re-made - so GuidelineRevision moves for each. The network OBJECT too: a clear or a load is a
- *    new one, counting from its own zero.
+ *    new one, counting from its own zero - held as a weak pointer, whose serial a recycled address cannot match.
  *  - a STAND also reads who holds its pose node and whether that agent is parked: OccupancyRevision (goal claims,
  *    holds, every phase change) and UGroundTraffic::StandHoldChangeCount (a body on or off the pose, which moves no
  *    revision). Runway and taxiway cards read no occupancy, so they leave these zero and a moving airport does not
@@ -136,21 +136,25 @@ public:
  *    and "No vehicles" (UOpsRuntime::QuoteFacility - the balance, the fleet, the sheds) are NOT keyed: they are
  *    asked every tick and laid over the kept card, since the balance moves with no revision this key holds.
  * ENFORCED BY: AirportMgr.Inspector.Cache.* - one test per revision and the minute, each red when its field is left
- * out of == (2026-09-30). The three object pointers are not pinned: no test holds every revision equal across two objects.
+ * out of == (2026-09-30); Check-Architecture rule 35 (facts-through-facade) for "only through the facade". The three
+ * object identities are not pinned here: no card test holds every revision equal across two objects (the Land key's and
+ * the held taxi out's are, AirportMgr.UI.LandChoicesKeyNamesTheNetwork and Airside.Model.Traffic.HeldTaxiOut.ANewNetworkAsksAgain).
  */
 struct FInspectorCardKey
 {
 	ESelectionKind Kind = ESelectionKind::None;
 	int32 Id = INDEX_NONE;
-	const void* Network = nullptr;
+	/** Identity only, never dereferenced: FWeakObjectPtr compares index AND serial, so a new object at a freed
+	 *  address is not the old one (a raw pointer could be), and it needs no complete type in this header. */
+	FWeakObjectPtr Network;
 	uint32 EditRevision = 0;
 	uint32 GuidelineRevision = 0;
 	/** A stand's only - see the class comment. */
-	const void* Traffic = nullptr;
+	FWeakObjectPtr Traffic;
 	uint32 OccupancyRevision = 0;
 	uint32 StandHolds = 0;
 	/** A depot's only - see the class comment. */
-	const void* JobBoard = nullptr;
+	FWeakObjectPtr JobBoard;
 	uint32 JobRevision = 0;
 	int64 Minute = 0;
 

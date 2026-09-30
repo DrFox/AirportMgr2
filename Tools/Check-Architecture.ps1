@@ -1523,9 +1523,39 @@ $ranRules.Add('queue-is-a-pass')
 # correct while NOTHING ELSE writes the scale: a second writer (a per-frame one back in Tick, or a
 # reset elsewhere) is either the poll returning or a scale the next speed change never hears of.
 # The one legal caller is UOpsRuntime::ApplySpeed; the setter's own definition and tests are
-# exempt. Same shape and function tracking as rule 33.
+# exempt. A DIRECT WRITE of the member (SimTimeScale =, +=, ...) anywhere but the setter's own line
+# and the member's declaration is the same second writer, bypassing the setter, and fails too.
+# HARDENED in PR E's review: "which function am I in" is re-read at column-0 definitions AND at
+# indented ones (a type, a name, "(" and no ";" - a free function in an anonymous namespace, a
+# class's inline member) and at every `namespace`, so nothing after ApplySpeed inherits its
+# exemption; string literals and /* */ comments are stripped before matching, so neither a log line
+# naming the setter nor a commented-out call counts; AirsideEditor is scanned as well.
+function Strip-ArchCode([string] $Line, [ref] $InBlock) {
+    $code = $Line
+    if ($InBlock.Value) {
+        $end = $code.IndexOf('*/')
+        if ($end -lt 0) { return '' }
+        $code = $code.Substring($end + 2)
+        $InBlock.Value = $false
+    }
+    $code = $code -replace '"(?:[^"\\]|\\.)*"', '""'
+    $code = $code -replace '/\*.*?\*/', ''
+    # WHICHEVER OPENS FIRST: a // comment that mentions /* (a path glob, say) is a line comment, not a block.
+    $start = $code.IndexOf('/*')
+    $lineComment = $code.IndexOf('//')
+    if ($start -ge 0 -and ($lineComment -lt 0 -or $start -lt $lineComment)) { $code = $code.Substring(0, $start); $InBlock.Value = $true; return $code }
+    return ($code -replace '//.*$', '')
+}
+function Get-ArchDefinition([string] $Code) {
+    if ($Code -match '^\s*namespace\b') { return 'namespace' }
+    if ($Code -match '^[A-Za-z_][\w:<>,\*& ]*?\b((?:\w+::)?~?\w+)\s*\(') { return $Matches[1] }
+    if ($Code -match '^\s+(?!(?:return|if|else|for|while|switch|case|do|new|delete|throw|co_return)\b)[A-Za-z_][\w:<>,\*&]*(?:\s+[\w:<>,\*&]+)*\s+[\*&]?((?:\w+::)?~?\w+)\s*\([^;]*$') {
+        return $Matches[1]
+    }
+    return $null
+}
 $scaleTrees = @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'), (Join-Path $Root 'Source\AirportMgr'),
-    (Join-Path $Root 'Plugins\Airside\Source\Airside'))
+    (Join-Path $Root 'Plugins\Airside\Source\Airside'), (Join-Path $Root 'Plugins\Airside\Source\AirsideEditor'))
 $scaleOwner = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps\Private\Present\OpsRuntime.cpp'
 if (-not (Test-Path $scaleOwner) -or $null -eq (Select-String -Path $scaleOwner -Pattern 'void UOpsRuntime::ApplySpeed\(')) {
     $failures.Add("scale-on-change: UOpsRuntime::ApplySpeed not found in $scaleOwner - update rule 34, do not let it check nothing")
@@ -1535,20 +1565,60 @@ foreach ($scaleTree in $scaleTrees) {
         if ($file.Name -like '*Test.cpp') { continue }
         $lines = Get-Content -LiteralPath $file.FullName
         $current = ''
+        $inBlock = $false
         for ($i = 0; $i -lt $lines.Count; $i++) {
-            $line = $lines[$i]
-            if ($line -match '^\s*(\*|/\*)') { continue }
-            $code = ($line -replace '//.*$', '')
-            if ($code -match '^[A-Za-z_][\w:<>,\*& ]*?\b((?:\w+::)?~?\w+)\s*\(') { $current = $Matches[1] }
-            $isDefinition = $code -match '\bvoid\s+SetSimTimeScale\s*\('
-            $isCall = (-not $isDefinition) -and ($code -match '\bSetSimTimeScale\s*\(' -or $code -match '&\s*\w+::SetSimTimeScale\b')
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code.Trim() -eq '') { continue }
+            $definition = Get-ArchDefinition $code
+            if ($null -ne $definition) { $current = $definition }
+            $isSetter = $code -match '\bvoid\s+SetSimTimeScale\s*\('
+            $isCall = (-not $isSetter) -and ($code -match '\bSetSimTimeScale\s*\(' -or $code -match '&\s*\w+::SetSimTimeScale\b')
             if ($isCall -and $current -ne 'UOpsRuntime::ApplySpeed') {
                 $failures.Add("scale-on-change: $($file.Name):$($i + 1) calls SetSimTimeScale( from $current - the actor's scale is set only by UOpsRuntime::ApplySpeed, where the speed changes")
+            }
+            $isWrite = (-not $isSetter) -and ($code -notmatch '\bdouble\s+SimTimeScale\b') -and ($code -match '\bSimTimeScale\s*[-+*/]?=(?!=)')
+            if ($isWrite) {
+                $failures.Add("scale-on-change: $($file.Name):$($i + 1) writes SimTimeScale directly - only SetSimTimeScale does, and only UOpsRuntime::ApplySpeed calls it")
             }
         }
     }
 }
 $ranRules.Add('scale-on-change')
+
+# --- 35. RUNWAY FACTS GO THROUGH THE FACADE -----------------------------------------------------
+# Ops batch 3 PR E's review (I1): URoadNetwork::SetRunwayFacts moves no revision - not EditRevision,
+# not GuidelineRevision. Three gates key on GetGuidelineRevision to see a runway's facts change (the
+# held taxi out's replan, FInspectorCardKey, FLandChoicesKey), and they see it only because every
+# production write goes through URoadEditFacade, whose Topology rebuild re-makes the guideline graph.
+# A write that skipped the facade would leave all three stale, silently. So the NETWORK's setter may
+# be called only from RoadEditFacade*.cpp and Testing/ (and the test modules, which are not scanned);
+# the facade's own SetRunwayFacts(int32, ...) - reached as Facade-> or through IRoadEditTarget as
+# Target-> - is the door everything else uses. Declarations and definitions are exempt; comments and
+# string literals are stripped first (rule 34's helpers).
+$factsTrees = @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'), (Join-Path $Root 'Source\AirportMgr'),
+    (Join-Path $Root 'Plugins\Airside\Source\Airside'), (Join-Path $Root 'Plugins\Airside\Source\AirsideEditor'))
+$factsFacade = @(Get-ChildItem -Path (Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Present') -Filter 'RoadEditFacade*.cpp' -ErrorAction SilentlyContinue)
+if ($factsFacade.Count -eq 0 -or $null -eq ($factsFacade | Select-String -Pattern 'bool URoadEditFacade::SetRunwayFacts\(')) {
+    $failures.Add("facts-through-facade: URoadEditFacade::SetRunwayFacts not found - update rule 35, do not let it check nothing")
+}
+foreach ($factsTree in $factsTrees) {
+    foreach ($file in Get-Sources $factsTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like 'RoadEditFacade*.cpp') { continue }
+        if ($file.FullName -match '[\\/]Testing[\\/]') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code -notmatch '\bSetRunwayFacts\s*\(') { continue }
+            if ($code -match '\bbool\s+(?:\w+::)?SetRunwayFacts\s*\(') { continue }
+            $legal = $code -match '\b(?:Facade|Target)\s*->\s*SetRunwayFacts\s*\('
+            if (-not $legal) {
+                $failures.Add("facts-through-facade: $($file.Name):$($i + 1) calls SetRunwayFacts( on something other than the facade or an edit target - a network write moves no revision, and the guideline-keyed gates would never see it; go through URoadEditFacade::SetRunwayFacts")
+            }
+        }
+    }
+}
+$ranRules.Add('facts-through-facade')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

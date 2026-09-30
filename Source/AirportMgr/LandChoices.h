@@ -14,15 +14,18 @@ class URoadNetwork;
  *    changes nothing; a pan onto another does.
  *  - that runway's length (segments and nodes: EditRevision, a drag included) and facts (surface, approach, use:
  *    through the facade, whose Topology notify rebuilds the guideline graph - GuidelineRevision).
- *  - the network object: a clear or a load is a new one, counting from zero.
- * NOT the occupancy, and not RunwayFreedCount, which the spec named: Build asks what the runway ADMITS, never whether
+ *  - the network object: a clear or a load is a new one, counting from zero - a weak pointer, so a recycled address
+ *    is not mistaken for the old network.
+ * NOT the occupancy, and not a runway-freed count, which the spec named: Build asks what the runway ADMITS, never whether
  * it is busy. NOT the airport status (PR B): the status greys aircraft.land's button, not these rows.
- * ENFORCED BY: AirportMgr.UI.LandPanelBuildsOnlyOnChange (one step per input, each red when its field is left out of ==;
- * the network object's step is not - a new network also moves both revisions)
+ * ENFORCED BY: AirportMgr.UI.LandPanelBuildsOnlyOnChange (one step per revision and the seed, each red when its field
+ * is left out of ==); AirportMgr.UI.LandChoicesKeyNamesTheNetwork (two networks, equal revisions); Check-Architecture
+ * rule 35 (facts-through-facade) for "through the facade".
  */
 struct FLandChoicesKey
 {
-	const URoadNetwork* Network = nullptr;
+	/** Identity only - see FInspectorCardKey::Network for why weak and untyped. */
+	FWeakObjectPtr Network;
 	uint32 EditRevision = 0;
 	uint32 GuidelineRevision = 0;
 	bool bHasRunway = false;
