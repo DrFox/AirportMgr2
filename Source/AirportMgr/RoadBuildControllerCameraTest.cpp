@@ -1,6 +1,9 @@
 #include "CoreMinimal.h"
 #include "BuildCameraComponent.h"
 #include "BuildHudLayer.h"
+#include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
+#include "EngineUtils.h"
 #include "Misc/AutomationTest.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
@@ -186,6 +189,66 @@ bool FBuildCameraPlayerScalesTest::RunTest(const FString& Parameters)
 	Zoomed->ZoomBy(1.0);
 	Zoomed->UpdateView(1.0f, 0.0, 0.0, 0.0, 0.0, Target);   // lag 0: the view lands on its target
 	TestEqual(TEXT("at zoom speed 2x one notch zooms by twice the step"), Zoomed->ActiveRig().Distance, Expected.Distance, 1e-6);
+	return true;
+}
+
+/**
+ * THE MINIATURE FOCUS REACHES THE CAMERA, and follows the zoom.
+ *
+ * FMiniatureFocus is proven world-free (AirportMgr.Sky.MiniatureFocus.*); that proves nothing
+ * about whether UBuildCameraComponent calls it. Dropping the ApplyMiniatureFocus call from
+ * UpdateFreeView would pass every isolated test and ship a lens focused where the camera was
+ * spawned - sharp at the start zoom, wrong everywhere else. So: spawn, zoom, tick, and read
+ * the spawned camera's own post-process settings.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildControllerMiniatureFocusTest,
+	"AirportMgr.Camera.MiniatureFocusFollowsTheZoom",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildControllerMiniatureFocusTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	UWorld* World = TestWorld.World;
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+
+	ARoadBuildController* C = World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	UBuildCameraComponent* CameraComp = C->FindComponentByClass<UBuildCameraComponent>();
+	ARoadNetworkActor* Target = TestWorld.Actor;
+	if (!TestNotNull(TEXT("camera component"), CameraComp) || !TestNotNull(TEXT("target"), Target)) { return false; }
+
+	CameraComp->bMiniatureFocus = true;
+	CameraComp->CreateBuildCamera(*C, *Target);
+
+	// Found by iteration rather than a test-only accessor: FAirsideTestWorld spawns no other
+	// camera, so exactly one is the build camera.
+	ACameraActor* Camera = nullptr;
+	for (TActorIterator<ACameraActor> It(World); It; ++It)
+	{
+		Camera = *It;
+	}
+	if (!TestNotNull(TEXT("the build camera was spawned"), Camera)) { return false; }
+	const FPostProcessSettings& Settings = Camera->GetCameraComponent()->PostProcessSettings;
+
+	C->ZoomIn();
+	CameraComp->UpdateView(1.0f, 0.0, 0.0, 0.0, 0.0, Target);
+	TestTrue(TEXT("the focal distance is overridden"), Settings.bOverride_DepthOfFieldFocalDistance);
+	TestEqual(TEXT("focused on the look-at point after the zoom"),
+		static_cast<double>(Settings.DepthOfFieldFocalDistance), CameraComp->ActiveRig().Distance, 1.0);
+	const float SensorNear = Settings.DepthOfFieldSensorWidth;
+
+	C->ZoomOut();
+	C->ZoomOut();
+	CameraComp->UpdateView(1.0f, 0.0, 0.0, 0.0, 0.0, Target);
+	TestTrue(TEXT("zooming out widens the sensor, holding the blur fraction"),
+		Settings.DepthOfFieldSensorWidth > SensorNear);
+
+	// Off must CLEAR the overrides, so a level post-process volume decides again rather than
+	// the last frame's lens sticking.
+	CameraComp->bMiniatureFocus = false;
+	CameraComp->UpdateView(1.0f, 0.0, 0.0, 0.0, 0.0, Target);
+	TestFalse(TEXT("off clears the focal distance override"), Settings.bOverride_DepthOfFieldFocalDistance);
 	return true;
 }
 

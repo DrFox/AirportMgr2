@@ -82,6 +82,44 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "20.0", ClampMax = "150.0"))
 	double FieldOfView = 75.0;
 
+	// --- Miniature focus ------------------------------------------------------------------
+	//
+	// Spec section 4.1's depth-of-field hint: things far behind the look-at point go faintly
+	// soft, the way a photograph of a model does. See FMiniatureFocus for why it scales with
+	// the zoom rather than using a fixed lens.
+
+	/**
+	 * ON while it is being judged (2026-09-30). The spec says off by default and "comes out
+	 * first if it fights" - flip this, not the code, if the screenshots say so.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus")
+	bool bMiniatureFocus = true;
+
+	/**
+	 * Blur of a point at infinity as a fraction of the frame width. See FMiniatureFocus.
+	 *
+	 * 0.01, judged in PIE 2026-09-30. At 0.01 with no fade, a close shallow view
+	 * (samples/blur.png) blurred the aircraft just past the focus and smeared the foreground;
+	 * that is fixed by the close-zoom fade (MiniatureNoBlurDistance) and by capping near blur
+	 * with r.DOF.Kernel.MaxForegroundRadius in DefaultEngine.ini - NOT by weakening this.
+	 * 0.003 was tried in between and was invisible from the steep far camera ("there doesn't
+	 * seem to be any on it again").
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "0.0", ClampMax = "0.1"))
+	double MiniatureBlurAtInfinity = 0.01;
+
+	/** Aperture; shapes the bokeh only. */
+	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "1.0", ClampMax = "32.0"))
+	double MiniatureFStop = 4.0;
+
+	/** Focus distance, uu, at and inside which there is no blur at all. See FMiniatureFocus. */
+	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "0.0"))
+	double MiniatureNoBlurDistance = 3000.0;
+
+	/** Focus distance, uu, from which the blur is at full strength. */
+	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "0.0"))
+	double MiniatureFullBlurDistance = 8000.0;
+
 	// --- Watch camera -------------------------------------------------------------------
 	//
 	// A second camera MODE rather than a second camera: the build rig is a top-down thing
@@ -267,4 +305,10 @@ private:
 
 	/** The agent the watch camera rides. */
 	int32 WatchAgentId = 0;
+
+	/**
+	 * Focus the camera's DOF on the active rig's look-at point. Called after every camera
+	 * move, in both rigs, so the focus never lags a zoom by a frame.
+	 */
+	void ApplyMiniatureFocus();
 };

@@ -231,6 +231,10 @@ Unbounded (`bUnbound = true`). **The highest-value change in this spec.**
 - **Motion blur off.** A panning top-down camera plus motion blur is nausea.
 - Grade: global saturation x1.05; shadows tinted slightly blue. The blue shadow tint fakes
   sky bounce and is what stops the olive greens reading muddy.
+- **White balance 5600 K (added 2026-09-30).** With none, the 5800 K sun turned neutral
+  concrete tan and every apron read as dirt. Swept 6000/5600/5200 on the build view; 5600
+  puts the apron's red-minus-blue at the palette's own +11. Values and the sweep live in
+  `build_environment.py`.
 - Ambient occlusion left modest - Lumen already provides occlusion, and screen-space AO on
   top double-darkens contacts.
 - **Depth of field: a tunable, and OFF by default. Added 2026-09-19.** Section 1's diorama
@@ -252,6 +256,12 @@ Unbounded (`bUnbound = true`). **The highest-value change in this spec.**
   hundred metres of one another exactly as a display model would. That was adopted as a
   sim-time argument; it pays a second time here. DOF is the garnish on a dish already
   seasoned, so it goes in last and comes out first if it fights.
+
+  **Tried 2026-09-30, on while judged.** `FMiniatureFocus` scales the virtual sensor with
+  the rig's focus distance so blur at infinity is a fixed fraction of the frame (default
+  0.01) at every zoom - a fixed lens blurred nothing at 150 m. Tunables are on
+  `UBuildCameraComponent` (`bMiniatureFocus`, `MiniatureBlurAtInfinity`); the spec's
+  default-off still holds as the fallback if it fights.
 
 `Config/DefaultEngine.ini` already sets local exposure highlight/shadow contrast to 0.8.
 Those stay.
@@ -281,9 +291,11 @@ and a lit lower hemisphere on top of it double-counts.
 
 ### 4.4 ExponentialHeightFog
 
-Dialled well down. SkyAtmosphere's aerial perspective already provides distance haze; the
-stock fog is grey and flattens the scene. Volumetric fog stays off - it mostly buys god
-rays, at a cost.
+~~Dialled well down.~~ **Revised 2026-09-30:** at 0.005 nothing hazed, and from a low
+camera the 3 km landscape ended in a hard edge over a purple band. Now density 0.15,
+falloff 0.35, start distance 600 m (so nothing in build range is hazed), plus a pale blue
+inscattering colour. The live sweep that chose it is in `build_environment.py`. Volumetric
+fog stays off - it mostly buys god rays, at a cost.
 
 ### 4.5 VolumetricCloud
 

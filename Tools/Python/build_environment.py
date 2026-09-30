@@ -24,6 +24,10 @@ off disk would prove nothing.
 import unreal
 
 LEVEL = "/Game/Maps/M_Test"
+# M_Test_Small and M_Test_2Runways are copies of M_Test's environment. They are NOT run
+# through this script (its floor deletion and PPV rebuild would do more than a copy needs);
+# the 2026-09-30 white balance and fog were set on each by hand over MCP to the values
+# below. A change here must be carried to them the same way, or the maps drift.
 
 # The locked exposure, in EV100, or None to leave auto-exposure alone.
 #
@@ -100,10 +104,40 @@ CLOUD_DENSITY = 0.012
 # edited - every project on this engine install shares it.
 CLOUD_MATERIAL_PATH = "/Game/Environment/MI_Clouds"
 
-# SkyAtmosphere's aerial perspective already gives distance haze; the stock fog is grey
-# and flattens everything behind it.
-FOG_DENSITY = 0.005
-FOG_HEIGHT_FALLOFF = 0.2
+# THE FOG'S JOB IS THE HORIZON, NOT THE AIRPORT. At 0.005 (the first value, chosen because
+# the stock grey fog flattened the near scene) nothing hazed at all: from a low camera the
+# 3 km landscape ended in a hard edge over a purple band of planet-below-the-horizon.
+# Tuned live 2026-09-30 against a -18 degree shot from 60 m and the -70 degree build view:
+#
+#   density 0.03, falloff 0.2           - no visible haze; the edge still hard
+#   density 0.10, falloff 0.1           - edge gone, but the SKY fogged to slate, clouds lost
+#   density 0.10, falloff 1.0           - fog confined so low it vanished over the ground
+#   density 0.15, falloff 0.35 (chosen) - edge melts into pale blue haze, clouds kept
+#
+# StartDistance 600 m keeps everything within the build camera's reach crisp: haze reads as
+# distance, and at the airport it would only read as murk. The inscattering colour is ADDED
+# to the sky-atmosphere-lit fog (the engine default is black, ExponentialHeightFogComponent
+# .cpp:76) - without it the band below the horizon stayed purple rather than pale blue.
+FOG_DENSITY = 0.15
+FOG_HEIGHT_FALLOFF = 0.35
+FOG_START_DISTANCE = 60000.0
+FOG_INSCATTERING = (0.15, 0.2, 0.3)
+
+# White balance, in kelvin. 6500 is neutral; lower cools the image.
+#
+# THE WARM CAST WAS THE GRADE, NOT THE MATERIALS. Under a 5800 K sun and no white balance,
+# neutral concrete rendered tan and every apron read as dirt (2026-09-27, apron #6D6457,
+# red minus blue +22). Swept live 2026-09-30 on the build view:
+#
+#   6000 - apron r-b +23, asphalt -1    (still tan)
+#   5600 - apron r-b +11, asphalt -9    (matches the palette: concrete #9C9B91 is +11,
+#                                        taxiway asphalt #454D50 is -11)
+#   5200 - apron r-b  -3, asphalt -19   (concrete goes lilac, grass loses its olive)
+#
+# 5600 rather than the sun's own 5800 because the blue sky light pulls the other way less
+# than the sun pushes. The sun still warms toward dusk against this fixed balance, which is
+# the point: dusk should look warmer than noon.
+WHITE_TEMP_KELVIN = 5600.0
 
 
 def say(msg):
@@ -160,7 +194,10 @@ def set_fog(fog):
     comp = fog.get_component_by_class(unreal.ExponentialHeightFogComponent)
     comp.set_editor_property("fog_density", FOG_DENSITY)
     comp.set_editor_property("fog_height_falloff", FOG_HEIGHT_FALLOFF)
-    say("fog dialled down to density %.4f" % FOG_DENSITY)
+    comp.set_editor_property("start_distance", FOG_START_DISTANCE)
+    comp.set_editor_property("fog_inscattering_luminance", unreal.LinearColor(*FOG_INSCATTERING, 1.0))
+    say("fog: density %.3f, falloff %.2f, from %.0f m" % (FOG_DENSITY, FOG_HEIGHT_FALLOFF,
+                                                          FOG_START_DISTANCE / 100.0))
 
 
 def add_post_process():
@@ -190,6 +227,9 @@ def add_post_process():
 
     s.set_editor_property("override_bloom_intensity", True)
     s.set_editor_property("bloom_intensity", 0.4)
+
+    s.set_editor_property("override_white_temp", True)
+    s.set_editor_property("white_temp", WHITE_TEMP_KELVIN)
 
     # Stylised means clean. A panning top-down camera plus motion blur is nausea.
     s.set_editor_property("override_motion_blur_amount", True)
@@ -279,7 +319,8 @@ def verify():
     s = ppv.get_editor_property("settings")
     checks = [("motion_blur_amount", 0.0),
               ("vignette_intensity", 0.0),
-              ("bloom_intensity", 0.4)]
+              ("bloom_intensity", 0.4),
+              ("white_temp", WHITE_TEMP_KELVIN)]
     if LOCK_EXPOSURE_EV100 is not None:
         checks += [("auto_exposure_min_brightness", LOCK_EXPOSURE_EV100),
                    ("auto_exposure_max_brightness", LOCK_EXPOSURE_EV100)]
@@ -330,6 +371,19 @@ def verify():
             ok = False
         else:
             say("PASS sky light real_time_capture on")
+
+    fog = find_one(unreal.ExponentialHeightFog)
+    if fog is not None:
+        comp = fog.get_component_by_class(unreal.ExponentialHeightFogComponent)
+        for prop, expected in (("fog_density", FOG_DENSITY),
+                               ("fog_height_falloff", FOG_HEIGHT_FALLOFF),
+                               ("start_distance", FOG_START_DISTANCE)):
+            got = comp.get_editor_property(prop)
+            if abs(got - expected) > 1e-4:
+                fail("fog %s is %r, expected %r" % (prop, got, expected))
+                ok = False
+            else:
+                say("PASS fog %s = %r" % (prop, got))
 
     clouds = [a for a in actors().get_all_level_actors() if isinstance(a, unreal.VolumetricCloud)]
     if clouds:

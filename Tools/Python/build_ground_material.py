@@ -86,7 +86,12 @@ the weights extracted and the colours lerped by hand rather than a LandscapeLaye
 It is deferred because the first pass paints GrassMown everywhere and has no edges yet -
 it becomes necessary the moment dirt is painted at a hangar door.
 """
+import os
+import sys
 import unreal
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import airside_matnodes as nodes
 
 OUT_DIR = "/Game/Environment"
 MAT_NAME = "M_Ground"
@@ -520,7 +525,26 @@ def build_material():
     tinted = lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -200, 400)
     lib.connect_material_expressions(covered, "", tinted, "A")
     lib.connect_material_expressions(variation, "", tinted, "B")
-    lib.connect_material_property(tinted, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    # --- Close-up speckle, the same as the grass strips' (2026-09-30) ------------------
+    # Once the strips got it, the field beside them became the smoother surface up close.
+    # nodes.close_speckle with nodes.GRASS_SPECKLE's numbers - the same function and the same
+    # world-position pattern as M_RoadSurface, so strip and field speckle continuously across
+    # the edge. Parameters, so MI_Ground can tune them live; defaults are the shared values.
+    speckle = nodes.close_speckle(
+        lib, mat, texture,
+        scalar(lib, mat, "SpeckleSize", nodes.GRASS_SPECKLE["SpeckleSize"], -1900, -900),
+        scalar(lib, mat, "SpeckleAmount", nodes.GRASS_SPECKLE["SpeckleAmount"], -1900, -820),
+        scalar(lib, mat, "SpeckleFadeStart", nodes.GRASS_SPECKLE["SpeckleFadeStart"], -1900, -1100),
+        scalar(lib, mat, "SpeckleFadeEnd", nodes.GRASS_SPECKLE["SpeckleFadeEnd"], -1900, -1020),
+        -1800, -900)
+    speckled = lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -100, 400)
+    lib.connect_material_expressions(tinted, "", speckled, "A")
+    lib.connect_material_expressions(speckle, "", speckled, "B")
+    lib.connect_material_property(speckled, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    lib.connect_material_property(
+        scalar(lib, mat, "Specular", nodes.GRASS_SPECULAR, -150, 1100), "",
+        unreal.MaterialProperty.MP_SPECULAR)
 
     # --- Roughness --------------------------------------------------------------------
     #

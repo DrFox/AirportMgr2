@@ -229,4 +229,58 @@ bool FBuildCameraRigHorizonTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildCameraRigCloseZoomTest,
+	"Airside.View.BuildCameraRig.FinalTiltTakesFewNotches",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildCameraRigCloseZoomTest::RunTest(const FString& Parameters)
+{
+	const FCameraRigLimits Limits;
+	const double Step = 0.15; // UBuildCameraComponent::ZoomStep's default
+
+	// THE COMPLAINT, AS A COUNT. From 2772 uu (~14 m up, 31 degrees) to eye level took
+	// eleven notches at an even 15% step (log, 2026-09-30). The close zone must make it few.
+	FBuildCameraRig Rig;
+	Rig.Reset(Limits);
+	Rig.Distance = 2772.0;
+	int32 Notches = 0;
+	while (Rig.Distance > Limits.MinDistance && Notches < 100)
+	{
+		Rig.Zoom(Step, -1.0);
+		++Notches;
+	}
+	TestTrue(*FString::Printf(TEXT("2772 uu to MinDistance in %d notches, at most 6"), Notches), Notches <= 6);
+
+	// Outside the close zone nothing changed: the rest of the zoom keeps its feel.
+	FBuildCameraRig Far;
+	Far.Reset(Limits);
+	Far.Distance = 20000.0;
+	Far.Zoom(Step, -1.0);
+	TestEqual(TEXT("a notch far out is still one plain step"), Far.Distance, 20000.0 / 1.15, 1e-6);
+
+	// A multi-notch call equals the same notches delivered one at a time, across the boundary.
+	FBuildCameraRig OneCall, OneByOne;
+	OneCall.Reset(Limits);
+	OneByOne.Reset(Limits);
+	OneCall.Distance = OneByOne.Distance = 4000.0;
+	OneCall.Zoom(Step, -4.0);
+	for (int32 I = 0; I < 4; ++I)
+	{
+		OneByOne.Zoom(Step, -1.0);
+	}
+	TestEqual(TEXT("four notches in one call land where four single notches do"),
+		OneCall.Distance, OneByOne.Distance, 1e-6);
+
+	// Zero switches it off - the watch rig relies on that.
+	FCameraRigLimits Off = Limits;
+	Off.CloseZoomDistance = 0.0;
+	FBuildCameraRig Plain;
+	Plain.Reset(Off);
+	Plain.Distance = 2000.0;
+	Plain.Zoom(Step, -1.0);
+	TestEqual(TEXT("CloseZoomDistance 0 is a plain step"), Plain.Distance, 2000.0 / 1.15, 1e-6);
+	return true;
+}
+
 #endif

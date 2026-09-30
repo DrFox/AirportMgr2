@@ -3,6 +3,7 @@
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "MiniatureFocus.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
@@ -26,6 +27,9 @@ UBuildCameraComponent::UBuildCameraComponent()
 	WatchLimits.MaxPitch = 60.0;
 	WatchLimits.StartDistance = 1550.0;
 	WatchLimits.StartYaw = -75.0;
+	// The close-zoom speed-up is for the build view's run down to the horizon; the watch
+	// camera's whole range is close, and it zoomed at one even step before this existed.
+	WatchLimits.CloseZoomDistance = 0.0;
 }
 
 void UBuildCameraComponent::CreateBuildCamera(APlayerController& Owner, const ARoadNetworkActor& Target)
@@ -68,6 +72,10 @@ void UBuildCameraComponent::CreateBuildCamera(APlayerController& Owner, double S
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Build camera: %.0f uu out at %.1f degrees. Pitch follows the zoom, %.0f to %.0f degrees."),
 		CurrentView.Distance, CurrentView.PitchDegrees(), ViewLimits.MinPitch, ViewLimits.MaxPitch);
+	UE_LOG(LogRoadBuild, Log,
+		TEXT("Miniature focus %s: blur at infinity %.3f of the frame, f/%.1f."),
+		bMiniatureFocus ? TEXT("ON") : TEXT("off"), MiniatureBlurAtInfinity, MiniatureFStop);
+	ApplyMiniatureFocus();
 }
 
 void UBuildCameraComponent::UpdateView(float DeltaTime, double Right, double Forward, double Turn, double TurnPixels,
@@ -101,6 +109,7 @@ void UBuildCameraComponent::UpdateView(float DeltaTime, double Right, double For
 			const FBuildCameraRig World = WatchCurrent.InFrame(FVector2D(At), Agent->GetActorRotation().Yaw);
 			BuildCamera->SetActorLocationAndRotation(
 				World.CameraLocation(At.Z + WatchFocusHeight), World.CameraRotation());
+			ApplyMiniatureFocus();
 			return;
 		}
 
@@ -131,6 +140,42 @@ void UBuildCameraComponent::UpdateFreeView(float DeltaTime, double Right, double
 
 	BuildCamera->SetActorLocationAndRotation(
 		CurrentView.CameraLocation(SurfaceZ), CurrentView.CameraRotation());
+	ApplyMiniatureFocus();
+}
+
+void UBuildCameraComponent::ApplyMiniatureFocus()
+{
+	if (BuildCamera == nullptr)
+	{
+		return;
+	}
+
+	FPostProcessSettings& Settings = BuildCamera->GetCameraComponent()->PostProcessSettings;
+
+	FMiniatureFocus Focus;
+	Focus.BlurAtInfinity = MiniatureBlurAtInfinity;
+	Focus.FStop = MiniatureFStop;
+	Focus.NoBlurDistanceUu = MiniatureNoBlurDistance;
+	Focus.FullBlurDistanceUu = MiniatureFullBlurDistance;
+
+	// ActiveRig().Distance IS the camera-to-look-at distance in both rigs - CameraLocation
+	// backs off the focus by exactly Distance along the view direction - so no trace is
+	// needed to find what the player is looking at.
+	const double FocusUu = ActiveRig().Distance;
+	const double Sensor = bMiniatureFocus ? Focus.SensorWidthMm(FocusUu, FieldOfView) : 0.0;
+
+	// A zero sensor means off (or a degenerate input): clear the overrides, so the level's
+	// post-process volume decides, rather than leaving the last frame's lens in place.
+	const bool bOn = Sensor > 0.0;
+	Settings.bOverride_DepthOfFieldFocalDistance = bOn;
+	Settings.bOverride_DepthOfFieldSensorWidth = bOn;
+	Settings.bOverride_DepthOfFieldFstop = bOn;
+	if (bOn)
+	{
+		Settings.DepthOfFieldFocalDistance = static_cast<float>(FocusUu);
+		Settings.DepthOfFieldSensorWidth = static_cast<float>(Sensor);
+		Settings.DepthOfFieldFstop = static_cast<float>(MiniatureFStop);
+	}
 }
 
 void UBuildCameraComponent::SetPlayerSpeedScales(double Pan, double Zoom)
