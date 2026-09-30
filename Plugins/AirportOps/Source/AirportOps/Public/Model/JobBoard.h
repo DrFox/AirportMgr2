@@ -537,9 +537,10 @@ private:
 	 * The aircraft left its stand: its turnaround and jobs go, and vehicles out for them move on.
 	 *
 	 * bDeparted - it left for a departing phase (pushed back, taxied), not Gone or Stranded - makes this
-	 * THE ONE PLACE A TURNAROUND ENDS (batch 3 review I1): the part-fuelled fee is posted and
-	 * FTurnaroundEndedEvent published HERE, whoever sent it - DepartTheReady, or the inspector's Depart
-	 * calling UGroundTraffic::DepartAgent directly, which never passes through DepartTheReady. A retire
+	 * where a TURNED-AROUND aircraft's turnaround ends (batch 3 review I1): it calls EndTurnaround, the one
+	 * publisher of FTurnaroundEndedEvent and poster of the part-fuelled fee, whoever sent it - DepartTheReady,
+	 * or the inspector's Depart calling UGroundTraffic::DepartAgent directly, which never passes through
+	 * DepartTheReady. EndTurnaround's other caller is OnAgentPhase, for a departure never turned around. A retire
 	 * (Unstick's despawn) is not a departure: PR B scores it as a cancelled flight.
 	 * ENFORCED BY: AirportOps.Fuel.ManualDepartEndsTurnaroundOnce, AirportOps.Fuel.RetiredAircraftEndsNoTurnaround
 	 */
@@ -553,6 +554,14 @@ private:
 	 * ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut ("one TurnaroundEnded"), AirportOps.Fuel.ManualDepartEndsTurnaroundOnce
 	 */
 	void EndTurnaround(int32 AircraftId, FEntityInstanceId Stand, double Delivered, double Wanted, const USimClock& Clock);
+
+	/**
+	 * The litres AgentId's flight is owed: LitresOwedFor (the offer's FuelLitres), else DefaultLitres. ONE READ for both
+	 * sites that ask - a turnaround's fuel job and a departure never turned around (whole-stack re-review m1) - so the
+	 * two cannot be owed different amounts.
+	 * ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut ("owed what the flight was owed")
+	 */
+	double LitresWanted(int32 AgentId, const FAirframe& Airframe) const;
 
 	/** A trip's pumping is over: quantities move, the job is Done or re-opened with its remainder. */
 	void FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock);

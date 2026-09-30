@@ -878,6 +878,11 @@ EFuelOutcome UJobBoard::FuelOutcomeOf(double Delivered, double Wanted)
 	return Delivered <= 0.0 ? EFuelOutcome::Unfuelled : EFuelOutcome::PartFuelled;
 }
 
+double UJobBoard::LitresWanted(int32 AgentId, const FAirframe& Airframe) const
+{
+	return FMath::Max(LitresOwedFor ? LitresOwedFor(AgentId, Airframe) : DefaultLitres(Airframe), 0.0);
+}
+
 void UJobBoard::EndTurnaround(int32 AircraftId, FEntityInstanceId Stand, double Delivered, double Wanted, const USimClock& Clock)
 {
 	const EFuelOutcome Outcome = FuelOutcomeOf(Delivered, Wanted);
@@ -983,9 +988,9 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 		const FAirframe* Airframe = Leaving != nullptr ? Leaving->AsAircraft() : nullptr;
 		if (Airframe != nullptr && Leaving->bDepartureArmed)
 		{
-			const double Wanted = FMath::Max(LitresOwedFor ? LitresOwedFor(AgentId, *Airframe) : DefaultLitres(*Airframe), 0.0);
-			UE_LOG(LogAirportOps, Log, TEXT("Fuel: aircraft %d departed without a turnaround - unfuelled, %.0f L owed"),
-				AgentId, Wanted);
+			const double Wanted = LitresWanted(AgentId, *Airframe);
+			UE_LOG(LogAirportOps, Log, TEXT("Fuel: aircraft %d departed without a turnaround - %s, %.0f L owed"),
+				AgentId, *UEnum::GetValueAsString(FuelOutcomeOf(0.0, Wanted)), Wanted);
 			EndTurnaround(AgentId, FEntityInstanceId(), 0.0, Wanted, Clock);
 		}
 		return;
@@ -1068,7 +1073,7 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	Turnaround.TurnaroundEndsAt = Clock.Now() + Aircraft->TurnaroundSeconds;
 
 	// THE LOAD, from the flight's own offer (LitresOwedFor), or the one fallback.
-	const double Litres = FMath::Max(LitresOwedFor ? LitresOwedFor(AgentId, *Aircraft) : DefaultLitres(*Aircraft), 0.0);
+	const double Litres = LitresWanted(AgentId, *Aircraft);
 	if (Litres <= 0.0)
 	{
 		// WANTS NOTHING, BUT STILL TURNS ROUND: a turnaround with no job, which DepartTheReady sends at
@@ -1274,8 +1279,9 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		const int32 Stand = Turnaround->Stand.Index;
 
 		// NOTHING IS PUBLISHED OR PAID HERE (batch 3 review I1): a departure DepartAgent accepts changes the
-		// aircraft's phase, OnAgentPhase drops the turnaround, and DropAircraft - the one site the inspector's
-		// manual Depart reaches too - posts the part-fuelled fee and publishes FTurnaroundEndedEvent. A refusal
+		// aircraft's phase, OnAgentPhase drops the turnaround, and DropAircraft - which the inspector's manual Depart
+		// reaches too - calls EndTurnaround, the one publisher of FTurnaroundEndedEvent and poster of the
+		// part-fuelled fee (its other caller is OnAgentPhase, for a departure never turned around). A refusal
 		// changes no phase, so it ends nothing, however often it is retried.
 		// ENFORCED BY: AirportOps.Fuel.RefusedDepartureEndsNoTurnaround
 		const EDepartureRefusal Refusal = Traffic.DepartAgent(AircraftId, Network);

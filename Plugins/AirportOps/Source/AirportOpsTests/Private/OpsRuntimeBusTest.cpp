@@ -869,6 +869,10 @@ bool FDepartFromFallbackTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("and parks on the fallback junction"), Rig.ParkOnFallback())) { return false; }
 	const int32 Before = Rig.Seen.Num();
 	const double Satisfaction = Rig.Airlines->Find(TEXT("FallbackTestAirline"))->Satisfaction;
+	// THE FLIGHT'S OWN FIGURE, as the runtime wires it (UOpsRuntime::Attach: the offer's FuelLitres) - and one no
+	// default could produce, so a site that fell back to DefaultLitres reads wrong (whole-stack re-review m1).
+	constexpr double OfferedLitres = 1234.0;
+	Rig.Jobs->LitresOwedFor = [](int32, const FAirframe&) { return OfferedLitres; };
 	const FRoadAgent* Parked = Rig.Aircraft();
 	const FDeparturePlan Plan = DeparturePlanner::PlanAny(*Rig.Field.Net, Parked->GoalNode, *Parked->AsAircraft(), Parked->Class,
 		&Rig.Traffic->GetOccupancy());
@@ -886,10 +890,11 @@ bool FDepartFromFallbackTest::RunTest(const FString&)
 	TestEqual(TEXT("and it goes"), Rig.Flight->Phase, EFlightPhase::Departing);
 
 	// NEVER TURNED AROUND, SO NEVER FUELLED (whole-stack review M4, ruling 2026-09-30): it leaves Unfuelled, owed what
-	// its flight was offered at (UJobBoard::DefaultLitres here - the board has no LitresOwedFor wired), and its airline
-	// scores the shortfall - once, as a real turnaround's would be.
-	const double Owed = UJobBoard::DefaultLitres(Rig.Flight->Airframe);
-	if (!TestTrue(TEXT("the flight was owed fuel - or this measures nothing"), Owed > 0.0)) { return false; }
+	// its flight was offered at (LitresOwedFor, wired above), and its airline scores the shortfall - once, as a real
+	// turnaround's would be.
+	const double Owed = OfferedLitres;
+	if (!TestNotEqual(TEXT("the offered figure is not the default - or this cannot tell them apart"),
+		Owed, UJobBoard::DefaultLitres(Rig.Flight->Airframe))) { return false; }
 	if (TestEqual(TEXT("one TurnaroundEnded for the departure"), Rig.Ended.Num(), 1))
 	{
 		TestEqual(TEXT("Unfuelled"), Rig.Ended[0].Outcome, EFuelOutcome::Unfuelled);

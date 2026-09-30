@@ -265,9 +265,11 @@ struct AIRPORTOPS_API FOfferAcceptedEvent
 };
 
 /**
- * An aircraft left its stand for a departing phase - published by UJobBoard::DropAircraft, the ONE site, when
- * the aircraft's Parked -> departing phase change reaches the job board: whoever sent it, DepartTheReady or
- * the inspector's manual Depart (batch 3 review I1). A refused departure changes no phase, so ends nothing;
+ * An aircraft left for a departing phase - published by UJobBoard::EndTurnaround, the ONE publisher, when the
+ * aircraft's Parked -> departing phase change reaches the job board. Two callers: DropAircraft for an aircraft that
+ * was turned around, whoever sent it - DepartTheReady or the inspector's manual Depart (batch 3 review I1) - and
+ * OnAgentPhase for one that departed without ever being turned around, which leaves Unfuelled (whole-stack review
+ * M4). A refused departure changes no phase, so ends nothing;
  * a retire (Gone) is not a departure. Outcome is derived from the litres (UJobBoard::FuelOutcomeOf).
  *
  * NAMES THE AGENT, NOT THE FLIGHT: the job board does not know flights, and must not learn them. The

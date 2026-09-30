@@ -287,12 +287,16 @@ bool FOfferInboxStatusHeightTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("an inbox"), Widget)) { return false; }
 	const TSharedRef<SWidget> Slate = Widget->TakeWidget();
 	auto Height = [&Slate]() { Slate->SlatePrepass(1.0f); return Slate->GetDesiredSize().Y; };
+	// FRESH, BEFORE ANY STATUS (whole-stack re-review m5): the card as built is the open card, and must be that height
+	// too - ShowAirportStatus's first call is a no-op for Open, so only the build itself can collapse the box.
+	const float Fresh = Height();
 	Widget->ShowAirportStatus(EAirportStatus::ClosedByPlayer);
 	const float Closed = Height();
 	Widget->ShowAirportStatus(EAirportStatus::Open);
 	const float Open = Height();
 	if (!TestTrue(FString::Printf(TEXT("the card has a height to measure (%.1f)"), Open), Open > 0.0f)) { return false; }
 	TestEqual(TEXT("open and closed, the card is the same height"), Open, Closed, 0.01f);
+	TestEqual(TEXT("and fresh from the build, the same again"), Fresh, Closed, 0.01f);
 	return true;
 }
 

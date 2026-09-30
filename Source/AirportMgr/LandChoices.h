@@ -23,7 +23,8 @@ class URoadNetwork;
  *    is not Open every row is a click the game would refuse, and Build greys them all. It used to grey only the bar's
  *    Land button, leaving an open panel offering clicks the game then refused.
  * ENFORCED BY: AirportMgr.UI.LandPanelBuildsOnlyOnChange (one step per revision and the seed, each red when its field
- * is left out of ==); AirportMgr.UI.LandChoicesKeyNamesTheNetwork (two networks, equal revisions); Check-Architecture
+ * is left out of ==); AirportMgr.UI.LandChoicesKeyNamesTheNetwork (two networks, equal revisions);
+ * AirportMgr.UI.LandPanelGreysWhileClosed (the status, alone); Check-Architecture
  * rule 35 (facts-through-facade) for "through the facade".
  */
 struct FLandChoicesKey
