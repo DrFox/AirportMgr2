@@ -10,7 +10,7 @@
 
 FText FHoldingPointTool::GetDisplayName() const
 {
-	// The SAME string the registry carries - Airside.Tool.BuildSession asserts the two
+	// The SAME string the registry carries - Airside.Tool.BuildSession.RegistryAndSession asserts the two
 	// agree, and the editor mode logs an error if its command label disagrees with either.
 	return LOCTEXT("HoldingPosition", "Holding point");
 }

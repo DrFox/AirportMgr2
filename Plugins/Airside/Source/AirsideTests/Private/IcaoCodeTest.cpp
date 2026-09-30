@@ -5,9 +5,14 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+// A LEAF NAME, not the bare "Airside.Solve.IcaoCode" this used to be: UE 5.8's automation tree turns a bare name
+// into a GROUP node the moment a dotted child registers and silently drops its own RunTest. The bare name never ran
+// after EnvelopeFloorOrderedByLetter (#351, 2026-09-26) registered under it - 14 assertions dark for four days until
+// the 2026-09-30 test-suite review found the run count short. Check-Architecture rule 42 (test-name-prefix) now fails
+// on the shape; see memory unreal-automation-test-tree-drops-bare-parent.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FIcaoCodeTest,
-	"Airside.Solve.IcaoCode",
+	"Airside.Solve.IcaoCode.LetterBands",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FIcaoCodeTest::RunTest(const FString& Parameters)

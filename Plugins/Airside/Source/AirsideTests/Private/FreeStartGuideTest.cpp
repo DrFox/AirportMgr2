@@ -208,7 +208,7 @@ bool FFreeStartToolsDrawTheirGuideTest::RunTest(const FString& Parameters)
 	// THE THREE CLASSES, not the four registry entries: Taxiway and Road are one FRoadDrawTool
 	// under two entries, so drawing is the same code twice. (Four classes until 2026-09-23,
 	// when the stand became a drawn plot anchored on a taxiway and left the free start - see
-	// Airside.Tool.BuildSession item 5.) Both are still walked, because the
+	// Airside.Tool.BuildSession.RegistryAndSession item 5.) Both are still walked, because the
 	// entry is what the player picks and an entry wired to the wrong constructor would show
 	// here and nowhere else.
 	for (const TCHAR* Id : { TEXT("Taxiway"), TEXT("Road"), TEXT("Apron"), TEXT("Runway") })

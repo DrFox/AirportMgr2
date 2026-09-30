@@ -25,7 +25,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 	// any thread that only reads.
 	//
 	// Name repeats each tool's own GetDisplayName() text rather than inventing a second
-	// label for the same thing - Airside.Tool.BuildSession asserts the two cannot drift,
+	// label for the same thing - Airside.Tool.BuildSession.RegistryAndSession asserts the two cannot drift,
 	// which is exactly the class of bug this table exists to make impossible elsewhere.
 	static const FToolRegistration Registry[] =
 	{

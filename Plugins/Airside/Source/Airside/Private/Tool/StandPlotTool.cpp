@@ -55,7 +55,7 @@ namespace StandPlotGuide
 
 FText FStandPlotTool::GetDisplayName() const
 {
-	// Must match the registry's own Name for key 3 - Airside.Tool.BuildSession asserts the
+	// Must match the registry's own Name for key 3 - Airside.Tool.BuildSession.RegistryAndSession asserts the
 	// two cannot drift.
 	return LOCTEXT("StandTool", "Stand");
 }
