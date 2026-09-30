@@ -117,7 +117,10 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 bool FDeadlockResolver::CanReplanAtBlockedStep(const FRoadAgent& Agent, const URoadNetwork* Network,
 	const FTrafficRules& Rules, FNodeReachCache& Reach) const
 {
-	if (Agent.Phase != EAgentPhase::Taxiing
+	// IsReplannable, THE ONE PREDICATE (#455) - see it for why a push and a reverse are not candidates, and for the
+	// alert (AlertCycles) that has to agree with this. Speed stays the follower's: a replannable agent is a Taxiing
+	// one, whose speed IS Follower.Speed.
+	if (!Agent.IsReplannable()
 		|| Agent.Follower.Speed >= KINDA_SMALL_NUMBER
 		|| Agent.GetBlockedStep() < 0)
 	{
@@ -159,17 +162,21 @@ void FDeadlockResolver::FindCycles(TConstArrayView<FRoadAgent> Agents, const FTr
 {
 	OutCycles.Reset();
 
-	// ONE EDGE PER STALLED WAITER. StalledSeconds only accrues while an agent is Taxiing,
-	// stopped and naming a blocker (see FRoadAgent::Advance's caller in AdvanceOnce), and
+	// ONE EDGE PER STALLED WAITER. StalledSeconds only accrues while an agent is ON A ROUTE,
+	// stopped and naming a blocker (FRoadAgent::IsStoppedAndWaiting, read by AdvanceOnce), and
 	// FClaimPass::Run clears WaitingOn for an agent that is off a route (the arm that gives it
 	// HoldRunwayOnly) - so a parked or retired agent cannot contribute an edge, and a cycle
 	// through one is not representable rather than merely unlikely.
 	//
-	// A REVERSING AGENT IS NOT OFF A ROUTE since issue #434, so that second half no longer keeps
-	// it out of the wait map: a refused reverse names its blocker like any other wait. Whether it
-	// can be a stalled waiter here, and what the resolver may then do with a member it cannot
-	// replan, is #455. The outcome two vehicles reach at a span's end without either is pinned by
-	// Airside.Model.Traffic.ReversingTruckAndVanMeetingAtTheSpanEnd.
+	// A ROUTE IS A TAXI, A PUSH OR A REVERSE (#455): a refused reversing truck or pushed aeroplane
+	// is an edge here like any waiter, so a cycle THROUGH one is representable - it can be waited
+	// on, and it is reported (AlertCycles). What the resolver may then do with a member it cannot
+	// replan is nothing: CanReplanAtBlockedStep asks IsReplannable, so such a member is never a
+	// candidate and the cycle is broken, if at all, by another member turning. This comment used
+	// to say the first half was the whole story; it was not since #434, when a reverse stopped
+	// being off a route. The outcome two vehicles reach at a span's end without either turning is
+	// pinned by Airside.Model.Traffic.ReversingTruckAndVanMeetingAtTheSpanEnd.
+	// ENFORCED BY: Airside.Model.Traffic.ReversingTruckStallsWhenItsSpanIsRefused (the clock runs for a reverse)
 	//
 	// MEMBER, NOT A LOCAL (issue #190) - now Scratch, the caller's: see FCycleScratch. Reset here,
 	// not left with whatever the last call found.
@@ -250,20 +257,32 @@ void FDeadlockResolver::FindCycles(TConstArrayView<FRoadAgent> Agents, const FTr
 	}
 }
 
-void FDeadlockResolver::AllAircraftCycles(TConstArrayView<FRoadAgent> Agents, const TMap<int32, int32>& AgentIndex,
+void FDeadlockResolver::AlertCycles(TConstArrayView<FRoadAgent> Agents, const TMap<int32, int32>& AgentIndex,
 	const FTrafficRules& Rules, TArray<TArray<int32>>& OutCycles)
 {
 	FCycleScratch Scratch;
 	FindCycles(Agents, Rules, Scratch, OutCycles);
-	// THE SAME TEST AS Resolve's bAllAircraft, and for its reason: a cycle a van or a truck is in can be
-	// broken by the vehicle going round; one made only of aircraft is a LAYOUT the player must fix. A
-	// member nobody can find is not an aircraft - a lookup miss must not promote a cycle to an alert.
+	// A CYCLE A TAXIING VAN OR TRUCK IS IN can be broken by the vehicle going round; one nobody in can be turned
+	// out of is a LAYOUT the player must fix - Resolve's bAllAircraft is the same idea in its narrower, aircraft-only
+	// wording, kept for the severity of its log lines. THE TEST WAS "every member is an aircraft" until #455, and it
+	// was wrong for a member that is not one and cannot go round either: a truck backing along a bay's leg and an
+	// aeroplane being pushed have no second line (IsReplannable is the one place that says so), and a cycle through
+	// one dropped out of the alert for being made of vehicles. A member nobody can find still makes the cycle no
+	// alert - a lookup miss must not promote a cycle to one.
+	// ENFORCED BY: Airside.Model.Traffic.Deadlock.CycleThroughAReversingTruckIsAnAlert,
+	// Airside.Model.Traffic.Deadlock.MixedCycleIsNotAnAlert (a taxiing van still is turnable)
 	OutCycles.RemoveAll([&Agents, &AgentIndex](const TArray<int32>& Cycle)
 		{
 			return Cycle.ContainsByPredicate([&Agents, &AgentIndex](int32 Id)
 				{
 					const int32* At = AgentIndex.Find(Id);
-					return At == nullptr || !Agents.IsValidIndex(*At) || Agents[*At].Class != ETraversalClass::Aircraft;
+					if (At == nullptr || !Agents.IsValidIndex(*At))
+					{
+						return true;
+					}
+					const FRoadAgent& Member = Agents[*At];
+					// A member that CAN be turned - not an aircraft, and replannable - is the way out.
+					return Member.Class != ETraversalClass::Aircraft && Member.IsReplannable();
 				});
 		});
 }
@@ -525,5 +544,5 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 
 void UGroundTraffic::CurrentDeadlocks(TArray<TArray<int32>>& Out) const
 {
-	FDeadlockResolver::AllAircraftCycles(Agents, AgentIndex, Rules, Out);
+	FDeadlockResolver::AlertCycles(Agents, AgentIndex, Rules, Out);
 }

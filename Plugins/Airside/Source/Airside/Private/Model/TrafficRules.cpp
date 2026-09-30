@@ -20,7 +20,22 @@ double FTrafficRules::FootprintFor(ETraversalClass Class) const
 
 double FTrafficRules::GapFor(ETraversalClass Class) const
 {
-	return Class == ETraversalClass::Aircraft ? AircraftGap : VehicleGap;
+	const double Gap = Class == ETraversalClass::Aircraft ? AircraftGap : VehicleGap;
+
+	// NEVER LESS THAN HALF THE FOOTPRINT, whatever the two knobs say (#455). A vehicle refused a node stops this far
+	// short of it, measured from its CENTRE (FClaimPass::StopWithinFor), and the claim it then makes on the node turns
+	// OCCUPIED once the centre is within half a footprint of it (FClaimPass, the end-node claim: `|End - T| < F/2`).
+	// A gap under that stops the refused vehicle INSIDE the zone where its own claim is an occupancy, and the table -
+	// where a body standing on a node is never moved - hands it the node another vehicle reserved first. VehicleGap
+	// was 300 against half a VehicleFootprint of 334.75, and the footprint is authored from the mesh (it has been 500,
+	// 620, 850 and 669.5), so a bigger default would only have waited for the next re-measure to be wrong again: the
+	// floor holds for any figure either knob takes, and is the one place that says so.
+	//
+	// THE ONE UNIT MORE is the strict `<` in that test: a gap of exactly half the footprint stops the centre ON the
+	// threshold, where floating point may fall either side of it.
+	// ENFORCED BY: Airside.Model.Traffic.ReservedNodeKeepsItsReserver (the refused van waits outside the zone),
+	// Airside.Model.Traffic.RulesGapClearsHalfTheFootprint (the floor, for any tuning)
+	return FMath::Max(Gap, FootprintFor(Class) * 0.5 + 1.0);
 }
 
 double FTrafficRules::PushSpeedFor(EPushbackNeed Need) const

@@ -54,16 +54,29 @@ struct AIRSIDE_API FDeadlockResolver
 	 * own comments). OutCycles is reset first.
 	 *
 	 * ONE DEFINITION, used by Resolve (which acts on each cycle) and by UGroundTraffic::CurrentDeadlocks
-	 * (which reports the all-aircraft ones to the player), so the two cannot disagree about what a jam is.
+	 * (which reports the ones nobody can turn out of to the player), so the two cannot disagree about what a jam is.
+	 * A REVERSING OR PUSHING MEMBER IS ONE (#455): a stopped, refused agent on any route accrues the stall clock
+	 * (FRoadAgent::IsStoppedAndWaiting), so it is an edge here like any waiter's - it can be waited ON, and it is
+	 * never a candidate for a replan (CanReplanAtBlockedStep asks IsReplannable).
 	 * ENFORCED BY: Airside.Model.Traffic.DeadlockResolverStandalone (Resolve acting on these cycles),
-	 * Airside.Model.Traffic.Deadlock.MixedCycleIsNotAnAlert (the alert's filter over the same cycles)
+	 * Airside.Model.Traffic.Deadlock.MixedCycleIsNotAnAlert (the alert's filter over the same cycles),
+	 * Airside.Model.Traffic.Deadlock.CycleThroughAReversingTruckIsAnAlert
 	 */
 	static void FindCycles(TConstArrayView<FRoadAgent> Agents, const FTrafficRules& Rules, FCycleScratch& Scratch,
 		TArray<TArray<int32>>& OutCycles);
 
-	/** FindCycles, keeping only cycles every member of which is found and is an aircraft - Resolve's own
-	 *  bAllAircraft test. What the ops Deadlock alert shows. */
-	static void AllAircraftCycles(TConstArrayView<FRoadAgent> Agents, const TMap<int32, int32>& AgentIndex,
+	/**
+	 * FindCycles, keeping only the cycles NOBODY IN CAN BE TURNED OUT OF: every member found, and each either an
+	 * aircraft or not replannable (FRoadAgent::IsReplannable). What the ops Deadlock alert shows.
+	 *
+	 * WAS AllAircraftCycles, and the rename is the correction (#455). "A cycle a van is in can be broken by the van
+	 * going round; one made only of aircraft is a LAYOUT the player must fix" - true of a TAXIING van, and false of
+	 * a truck backing along a bay's leg or an aeroplane being pushed, which have no second line to go round by. A
+	 * cycle through one of those is as much the player's to fix as an aircraft-only one, and the old filter dropped
+	 * it because its member was not an aircraft. A member nobody can find still makes the cycle no alert: a lookup
+	 * miss must not promote a cycle to one.
+	 */
+	static void AlertCycles(TConstArrayView<FRoadAgent> Agents, const TMap<int32, int32>& AgentIndex,
 		const FTrafficRules& Rules, TArray<TArray<int32>>& OutCycles);
 
 	/**

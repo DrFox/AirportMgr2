@@ -52,7 +52,14 @@ struct AIRSIDE_API FTrafficRules
 	 */
 	UPROPERTY(EditAnywhere) double VehicleFootprint = 669.5;
 
-	/** Clear line kept ahead of the nose, beyond the braking distance, uu. */
+	/**
+	 * Clear line kept ahead of the nose, beyond the braking distance, uu.
+	 *
+	 * READ THROUGH GapFor, NEVER RAW: it floors the figure at half the class's footprint (#455), because a vehicle
+	 * refused a node stops a gap short of it and must stop OUTSIDE the zone where its own claim becomes an occupancy.
+	 * VehicleGap's 300 is under half of VehicleFootprint's 669.5, so for a vehicle the floor - 335.75 - is what is
+	 * in force; the field is left as authored so a level that tuned it still shows what it set.
+	 */
 	UPROPERTY(EditAnywhere) double AircraftGap = 1500.0;
 	UPROPERTY(EditAnywhere) double VehicleGap = 300.0;
 

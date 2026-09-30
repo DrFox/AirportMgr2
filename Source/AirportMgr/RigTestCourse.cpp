@@ -519,6 +519,15 @@ void ARigTestCourse::TickRunner(FRigCourseRunner& Runner, double DeltaSeconds)
 
 	// THE MARKERS PASSED THIS TICK - more than one if a tick carried it past a short leg. A
 	// waypoint is a distance along the route, not a stop: nothing here slows the agent down.
+	//
+	// DistanceAlongPlan IS THE CAB'S DISTANCE ONLY WHILE THE AGENT DRIVES (#455). For a REVERSING tow it
+	// reads the trailer's leading axle - up to a chain length AHEAD of the cab, and moving - so a marker
+	// inside a reverse span would fire before the cab arrived. Nothing here can meet that: this course has
+	// no reverse legs (the warning above says so if the layout ever gets one), and the yard, whose rigs do
+	// back, keeps no markers and never reads the value. Should the course gain a reverse leg, key these
+	// markers on the cab (the steered axle, Follower.Travelled plus what the run has backed) rather than on
+	// this figure; and the one place a moving window is drawn from it (RigTestCourseTest's Measure) with them.
+	// ENFORCED BY: AirportMgr.RigCourse.OneLoopHeadless (no leg entered Reversing; no leg's bReversed)
 	Runner.Elapsed += DeltaSeconds;
 	const double Travelled = Agent->DistanceAlongPlan();
 	while (Runner.Markers.Num() > 0 && Travelled >= Runner.Markers[0].EndDistance - 1.0)

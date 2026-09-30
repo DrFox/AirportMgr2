@@ -203,6 +203,12 @@ int32 UGroundTraffic::AdmitDispatched(FRoadAgent&& Agent, const URoadNetwork* Ne
 	// Posed before its first tick: a zero-second Advance asks where the taxi starts without
 	// moving it, so LastMotion is a full pose - heading included - by the time the view is
 	// spawned off the Admit broadcast below. StartTaxi's fallback covers a plan too short.
+	//
+	// GATED FIRST (#455): a route that OPENS with a reverse leg arms it in this very Advance, before any claim
+	// pass has run for the agent, so without the gate a dispatch into held ground began the reverse and sat
+	// mid-span. See GateReverseLeg for the three sites.
+	// ENFORCED BY: Airside.Model.Traffic.ReverseFromDispatchWaitsForHeldGround
+	GateReverseLeg(Agent);
 	FAgentMotion Motion;
 	EAgentEvent Event;
 	Agent.Advance(0.0, Motion, Event);
@@ -886,6 +892,12 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// UAirsideTraffic::Advance poses the view off exactly this field every tick, paused ones
 	// included, so a player redirecting while paused would see the aeroplane facing east with
 	// a stopped propeller until play resumed, whichever way the new route actually points.
+	//
+	// GATED FIRST (#455), and this is THE case: every stand service cycle's route home opens with the reverse
+	// leg, so this zero-second Advance is where a service truck arms its back-out - with no claim pass run
+	// yet, and so no notion that another vehicle already holds the leg's ground. See GateReverseLeg.
+	// ENFORCED BY: Airside.Model.Traffic.ReverseFromRedirectWaitsForHeldGround
+	GateReverseLeg(Agent);
 	FAgentMotion Motion;
 	EAgentEvent Event;
 	Agent.Advance(0.0, Motion, Event);
@@ -1149,6 +1161,48 @@ bool UGroundTraffic::IsPushGroundFree(int32 AgentId, const FRoutePlan& Plan,
 	// its own lead-in, and refusing a push because the aeroplane is where it already is would
 	// refuse every push there has ever been.
 	return !Occupancy.IsAnyHeld(Wanted, AgentId, /*bCountOwnOccupied*/ false);
+}
+
+void UGroundTraffic::GateReverseLeg(FRoadAgent& Agent) const
+{
+	// A NO-OP FOR EVERYONE NOT AT A REVERSE SPAN'S START, and that is nearly every agent on nearly every frame:
+	// PendingReverseSpan answers from the follower's precomputed list of reverse steps (an empty-array check when the
+	// route has none) and only cuts the span out of the route when the agent is standing at it.
+	int32 First = INDEX_NONE;
+	int32 Last = INDEX_NONE;
+	FRoutePlan Span;
+	if (!Agent.PendingReverseSpan(First, Last, Span))
+	{
+		return;
+	}
+
+	// THE WHOLE SPAN, in route order, the same resources IsPushGroundFree asks for (every edge and its end node) and
+	// for the same reason - a reverse is granted whole or withheld. NOT IsPushGroundFree ITSELF, because that answers
+	// yes or no and a refusal has to say WHAT held it and WHO: the wait-for graph's edge, the inspector's "waiting
+	// on" line and the deadlock resolver all read the pair, and a bare bool would leave the agent standing still
+	// for no reason anything could report. The first held resource is the one named, as the claim pass names the
+	// first refusal in route order.
+	//
+	// THE AGENT'S OWN CLAIMS ARE NOT HELD AGAINST IT (Id excluded): the truck is standing on the node the span
+	// leaves, and what it reserved for this very leg is its own. At a dispatch its Id is 0, which no claim carries,
+	// so nothing is excluded and nothing it holds yet is in the way.
+	for (int32 Index = 0; Index < Span.Steps.Num(); ++Index)
+	{
+		const FRouteStep& Step = Span.Steps[Index];
+		const FTrafficResource Wanted[2] = { FTrafficResource::OfEdge(Step.Edge), FTrafficResource::OfNode(Step.To) };
+		for (const FTrafficResource& Resource : Wanted)
+		{
+			int32 Holder = 0;
+			if (Occupancy.IsHeld(Resource, Agent.Id, &Holder))
+			{
+				// StopWithin 0: it is at the start of the span and goes no further until it is free - the arbiter
+				// saying what the follower's own stop line at the span's start (FollowAndTow) already does.
+				// ENFORCED BY: Airside.Model.Traffic.ReverseWaitsForHeldGround (it has not moved when it is let go)
+				Agent.Refuse(First + Index, Resource, 0.0, Holder);
+				return;
+			}
+		}
+	}
 }
 
 bool UGroundTraffic::RetireAgent(int32 AgentId)
@@ -1602,6 +1656,10 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 		const EAgentPhase Before = Agent.Phase;
 		const int32 Id = Agent.Id;
 
+		// A REVERSE MAY ARM IN THIS ADVANCE, and only into free ground: asked AFTER Arbitrate, so the table it reads
+		// is this tick's, and BEFORE the move. See GateReverseLeg.
+		// ENFORCED BY: Airside.Model.Traffic.ReverseWaitsForHeldGround
+		GateReverseLeg(Agent);
 		FAgentMotion Motion;
 		EAgentEvent Event;
 		if (!Agent.Advance(DeltaSeconds, Motion, Event))
@@ -1705,6 +1763,19 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			{
 				Pass->ClaimGoalNode(Agent, *Network);
 			}
+			// A WAITING AIRCRAFT THAT HAS JUST STOPPED IS OFFERED A STAND ONCE MORE (#455). ReofferStands consumes
+			// bStandsMayHaveFreed whether or not it placed anybody, and a Taxiing waiter whose extension it could not
+			// make (the tail did not join, or the plan died between the search and the splice) was told "keeps
+			// waiting, asked again when something frees" - but the stand it was offered is still free, so nothing
+			// frees, and the aircraft arrived at the end of its truncated route and sat there for good beside a free
+			// stand. Its own stop is the retry the issue names: it is standing at GoalNode now, so the verb is
+			// RedirectAgent (a Parked waiter's), which has no jump to make - and an aircraft that finds nothing costs
+			// one pass, not one per frame.
+			// ENFORCED BY: Airside.Model.Traffic.ReofferRefusedExtensionRetriesWhenItStops
+			if (Agent.bAwaitingStand)
+			{
+				bStandsMayHaveFreed = true;
+			}
 			break;
 
 		case EAgentEvent::Airborne:
@@ -1747,8 +1818,12 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 		// together are what FDeadlockResolver::Resolve means by a waiter, and the clock
 		// resets the moment any of them stops holding, so a junction wait that clears on its
 		// own leaves nothing behind.
-		if (Agent.Phase == EAgentPhase::Taxiing && Agent.GetWaitingOn() != 0
-			&& Agent.Follower.Speed < KINDA_SMALL_NUMBER)
+		//
+		// FOR ANY AGENT ON A ROUTE, AT ITS SPEED ALONG THE PLAN (#455) - IsStoppedAndWaiting says why. This
+		// used to be "Taxiing and Follower.Speed", so a refused reversing truck (whose follower is parked and
+		// reads zero the whole leg) or pushed aeroplane never accrued and no jam through one could be seen.
+		// ENFORCED BY: Airside.Model.Traffic.ReversingTruckStallsWhenItsSpanIsRefused
+		if (Agent.IsStoppedAndWaiting())
 		{
 			Agent.AccrueStall(DeltaSeconds);
 		}
@@ -1833,7 +1908,8 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 		//
 		// NEVER RedirectAgent AS THE FALLBACK when the extension is refused (a tail that does not
 		// join, a plan that died between the search and here): that is the teleport again, in the
-		// one case nothing has measured. It keeps waiting, and the next freed stand asks again.
+		// one case nothing has measured. It keeps waiting, and the next freed stand asks again - or its own stop
+		// at the end of the route does (AdvanceOnce's Parked case, #455), which is what asks it if no stand frees.
 		const bool bMoving = Agent->Phase == EAgentPhase::Taxiing;
 		const bool bSent = bMoving ? ExtendRoute(Id, &Network, Route) : RedirectAgent(Id, &Network, Route);
 		if (!bSent && bMoving)

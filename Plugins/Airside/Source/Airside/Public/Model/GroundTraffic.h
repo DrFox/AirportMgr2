@@ -519,8 +519,9 @@ public:
 	uint32 OccupancyRevision() const { return OccupancyRevisionCount; }
 
 	/**
-	 * Every all-aircraft wait cycle right now, as member agent ids - FDeadlockResolver::AllAircraftCycles over
-	 * this model's agents. For the ops Deadlock alert: the resolver logs these, and a log line is not
+	 * Every wait cycle nobody in can be turned out of, right now, as member agent ids - FDeadlockResolver::AlertCycles
+	 * over this model's agents: every member an aircraft or an agent that cannot be replanned (a reversing truck, a
+	 * pushed aeroplane - #455). For the ops Deadlock alert: the resolver logs these, and a log line is not
 	 * something a player sees. Out is reset first.
 	 */
 	void CurrentDeadlocks(TArray<TArray<int32>>& Out) const;
@@ -875,6 +876,27 @@ private:
 	bool IsPushGroundFree(int32 AgentId, const FRoutePlan& Plan, double PushDistance) const;
 
 	/**
+	 * A REVERSE LEG'S CLEARANCE, the twin of IsPushGroundFree and asked the same way (#455): before an agent that is
+	 * standing at the start of a reverse span may arm it, is every edge and node of that span free of everyone else?
+	 * When something holds any of it the agent is REFUSED at the span (Refuse, naming the holder), and
+	 * FRoadAgent::TryArmReverseLeg reads that refusal and waits at the service point instead of arming: the reverse
+	 * WAITS, it does not start into held ground and sit mid-span.
+	 *
+	 * WHY THE SAME RULE AS THE PUSH: a reverse is the other manoeuvre with no second way out (the bay's leg is the
+	 * only line), and #453 made the claim pass hold its whole span once it is Reversing. Held from the first frame
+	 * but not gated, a reverse into ground somebody else held began, was refused a few metres on, and stopped in
+	 * the span - across the very lane it was meant to clear.
+	 *
+	 * CALLED BEFORE EVERY Advance THAT CAN ARM A REVERSE, and there are three: the tick's (AdvanceOnce), a dispatch's
+	 * zero-second pose (AdmitDispatched) and a redirect's (RedirectAgent) - the last two are how every stand
+	 * service cycle's route home, which OPENS with its reverse leg, has always armed, before any claim pass has run.
+	 * A NO-OP for every agent not at a span's start, so the common frame pays one cursor check.
+	 * ENFORCED BY: Airside.Model.Traffic.ReverseWaitsForHeldGround (the tick), Airside.Model.Traffic.
+	 * ReverseFromDispatchWaitsForHeldGround, Airside.Model.Traffic.ReverseFromRedirectWaitsForHeldGround
+	 */
+	void GateReverseLeg(FRoadAgent& Agent) const;
+
+	/**
 	 * Offers every waiting aircraft (bAwaitingStand) the best free stand reachable from where
 	 * its route ends, by the verb its phase calls for (below). Runs at the end of Advance when
 	 * bStandsMayHaveFreed; one pass, then the flag clears whether or not anyone was placed.
@@ -886,7 +908,9 @@ private:
 	 * new route's first point, which for a moving waiter is the far end of the route ahead of it -
 	 * a teleport. So RedirectAgent is only for a waiter that is standing at that point already:
 	 * Parked on the fallback junction, or Stranded. A Taxiing waiter whose extension is refused
-	 * keeps waiting and is asked again the next time something frees; it is never redirected.
+	 * keeps waiting and is asked again the next time something frees - or when it stops at the end
+	 * of its route (#455), which is what asks it again if nothing else does; it is never redirected
+	 * while it is moving.
 	 * ENFORCED BY: Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump (the extension),
 	 * Airside.Model.Traffic.ReofferRefusedExtensionKeepsWaiting (the refusal)
 	 */

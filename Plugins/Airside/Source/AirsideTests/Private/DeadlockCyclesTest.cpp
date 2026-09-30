@@ -52,7 +52,7 @@ bool FDeadlockCyclesAllAircraftTest::RunTest(const FString&)
 	const TArray<FRoadAgent> Agents = DeadlockCyclesAgents({ 2, 1, 1 }, 10.0);
 	FTrafficRules Rules;
 	TArray<TArray<int32>> Cycles;
-	FDeadlockResolver::AllAircraftCycles(Agents, DeadlockCyclesIndex(Agents), Rules, Cycles);
+	FDeadlockResolver::AlertCycles(Agents, DeadlockCyclesIndex(Agents), Rules, Cycles);
 	if (!TestEqual(TEXT("one all-aircraft cycle"), Cycles.Num(), 1)) { return false; }
 	TArray<int32> Members = Cycles[0];
 	Members.Sort();
@@ -73,7 +73,7 @@ bool FDeadlockCyclesMixedTest::RunTest(const FString&)
 	FDeadlockResolver::FindCycles(Agents, Rules, Scratch, Every);
 	TestEqual(TEXT("the walk still finds the cycle - a van can go round, so the resolver acts on it"), Every.Num(), 1);
 	TArray<TArray<int32>> Alerts;
-	FDeadlockResolver::AllAircraftCycles(Agents, DeadlockCyclesIndex(Agents), Rules, Alerts);
+	FDeadlockResolver::AlertCycles(Agents, DeadlockCyclesIndex(Agents), Rules, Alerts);
 	TestEqual(TEXT("but only an ALL-aircraft cycle is a layout problem for the player"), Alerts.Num(), 0);
 	return true;
 }
@@ -85,7 +85,7 @@ bool FDeadlockCyclesThresholdTest::RunTest(const FString&)
 	FTrafficRules Rules;
 	const TArray<FRoadAgent> Agents = DeadlockCyclesAgents({ 2, 1 }, Rules.StallSeconds * 0.5);
 	TArray<TArray<int32>> Cycles;
-	FDeadlockResolver::AllAircraftCycles(Agents, DeadlockCyclesIndex(Agents), Rules, Cycles);
+	FDeadlockResolver::AlertCycles(Agents, DeadlockCyclesIndex(Agents), Rules, Cycles);
 	TestEqual(TEXT("two aircraft that have waited less than StallSeconds are traffic, not a jam"), Cycles.Num(), 0);
 	return true;
 }
@@ -113,6 +113,61 @@ bool FDeadlockCyclesTrafficTest::RunTest(const FString&)
 	Cycles.AddDefaulted();   // a stale entry must be cleared, not appended to
 	Traffic->CurrentDeadlocks(Cycles);
 	TestEqual(TEXT("an empty traffic model reports no deadlock, and the out array is reset"), Cycles.Num(), 0);
+	return true;
+}
+
+// A CYCLE NOBODY IN CAN BE TURNED OUT OF IS AN ALERT, WHATEVER ITS MEMBERS ARE (issue #455, item 1).
+//
+// The alert used to be "every member is an aircraft", on the reasoning that a van in a cycle can go round. A truck
+// backing along a bay's leg and an aeroplane being pushed off a stand cannot: they have no second line. A cycle through
+// one is as much the player's to fix as an aircraft-only one, and the old filter dropped it for being made of vehicles.
+// The controls are the cases that must stay quiet: a TAXIING van (replannable, so the resolver acts and the player need
+// not) and a member nobody can find.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeadlockCyclesReversingTruckTest, "Airside.Model.Traffic.Deadlock.CycleThroughAReversingTruckIsAnAlert",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDeadlockCyclesReversingTruckTest::RunTest(const FString&)
+{
+	FTrafficRules Rules;
+	auto AlertsFor = [&Rules](TArray<FRoadAgent>& Agents)
+	{
+		TArray<TArray<int32>> Alerts;
+		FDeadlockResolver::AlertCycles(Agents, DeadlockCyclesIndex(Agents), Rules, Alerts);
+		return Alerts.Num();
+	};
+
+	// A reversing truck (1) and an aircraft (2), each waiting on the other.
+	TArray<FRoadAgent> WithAircraft = DeadlockCyclesAgents({ 2, 1 }, 10.0);
+	WithAircraft[0].Class = ETraversalClass::GroundVehicle;
+	WithAircraft[0].Phase = EAgentPhase::Reversing;
+	TestEqual(TEXT("a reversing truck and an aircraft waiting on each other are an alert (red while only all-aircraft cycles were)"),
+		AlertsFor(WithAircraft), 1);
+
+	// The same truck against a TAXIING van: the van can go round, so the resolver has a move and the player need not.
+	TArray<FRoadAgent> WithVan = DeadlockCyclesAgents({ 2, 1 }, 10.0);
+	WithVan[0].Class = ETraversalClass::GroundVehicle;
+	WithVan[0].Phase = EAgentPhase::Reversing;
+	WithVan[1].Class = ETraversalClass::GroundVehicle;
+	TestEqual(TEXT("a reversing truck and a taxiing van are not: the van can turn"), AlertsFor(WithVan), 0);
+
+	// Neither can: a truck backing and an aeroplane being pushed.
+	TArray<FRoadAgent> BothFixed = DeadlockCyclesAgents({ 2, 1 }, 10.0);
+	BothFixed[0].Class = ETraversalClass::GroundVehicle;
+	BothFixed[0].Phase = EAgentPhase::Reversing;
+	BothFixed[1].Phase = EAgentPhase::Manoeuvring;
+	TestEqual(TEXT("a reversing truck and a pushed aeroplane are: nobody in the ring has a second line"), AlertsFor(BothFixed), 1);
+
+	// THE SAME TRUCK, TAXIING, is the existing mixed case and stays no alert.
+	TArray<FRoadAgent> Taxiing = DeadlockCyclesAgents({ 2, 1 }, 10.0);
+	Taxiing[0].Class = ETraversalClass::GroundVehicle;
+	TestEqual(TEXT("control: the same truck taxiing is a van that can go round, as MixedCycleIsNotAnAlert has it"), AlertsFor(Taxiing), 0);
+
+	// AND ONE THE LOOKUP CANNOT FIND is still no alert: a miss must not promote a cycle.
+	TArray<FRoadAgent> Lost = DeadlockCyclesAgents({ 2, 1 }, 10.0);
+	Lost[0].Class = ETraversalClass::GroundVehicle;
+	Lost[0].Phase = EAgentPhase::Reversing;
+	TArray<TArray<int32>> LostAlerts;
+	FDeadlockResolver::AlertCycles(Lost, TMap<int32, int32>(), Rules, LostAlerts);
+	TestEqual(TEXT("control: with no id-to-agent map no member is found, so nothing is an alert"), LostAlerts.Num(), 0);
 	return true;
 }
 

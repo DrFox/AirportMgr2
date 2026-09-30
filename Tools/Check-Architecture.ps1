@@ -2312,6 +2312,50 @@ foreach ($viewReader in @(@((Join-Path $ops 'Public\Model\JobBoard.h'), 'JobBoar
 }
 $ranRules.Add('capability-from-the-view')
 
+# --- 46. WHO THE RESOLVER MAY TURN IS ONE PREDICATE: FRoadAgent::IsReplannable ------------------
+# Issue #455: "may this agent be sent along another route" was spelled `Phase == Taxiing` at three sites - ReplanAt's
+# guard, FDeadlockResolver::CanReplanAtBlockedStep and the alert's filter - and only the first two were ever written
+# that way. The third said "is an aircraft", so a cycle through a truck backing along a bay's leg (which cannot go
+# round) dropped out of the alert for being made of vehicles. Now one predicate; the resolver's file must not spell
+# the phase itself, and both consumers must still ask it. Comments and string literals are stripped first (rule 34's
+# stripper), so a WHY comment can name the banned spelling.
+# WHAT NO REGEX SEES: a `switch (Agent.Phase)` that names Taxiing and answers the same question by another route -
+# pinned by Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (the replannable column) and
+# Airside.Model.Traffic.Deadlock.CycleThroughAReversingTruckIsAnAlert (the alert asks what the resolver asks).
+$replannableFile = Join-Path $plugin 'Private\Model\GroundTrafficDeadlock.cpp'
+$replannableRebuildFile = Join-Path $plugin 'Private\Model\GroundTrafficRebuild.cpp'
+foreach ($path in @($replannableFile, $replannableRebuildFile)) {
+    if (-not (Test-Path $path)) {
+        $failures.Add("replannable-predicate: $path is named by rule 46 but does not exist - update the rule, do not let it check nothing")
+    }
+}
+if ((Test-Path $replannableFile) -and (Test-Path $replannableRebuildFile)) {
+    $asks = 0
+    $lines = Get-Content -LiteralPath $replannableFile
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code -match 'Phase\s*[!=]=\s*EAgentPhase::Taxiing') {
+            $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf):$($i + 1) spells the phase itself; ask FRoadAgent::IsReplannable, the one place that says who may be turned (#455): $($code.Trim())")
+        }
+        if ($code -match '\bIsReplannable\s*\(') { $asks++ }
+    }
+    if ($asks -lt 2) {
+        $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf) asks IsReplannable $asks time(s), not the 2 it must (CanReplanAtBlockedStep and AlertCycles) - one has its own copy of the rule again, or rule 46 is stale (#455)")
+    }
+    $replanGuard = $false
+    $lines = Get-Content -LiteralPath $replannableRebuildFile
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code -match '\bIsReplannable\s*\(') { $replanGuard = $true }
+    }
+    if (-not $replanGuard) {
+        $failures.Add("replannable-predicate: $(Split-Path $replannableRebuildFile -Leaf) no longer asks IsReplannable (ReplanAt's guard) - it has its own copy of the rule again, or rule 46 is stale (#455)")
+    }
+}
+$ranRules.Add('replannable-predicate')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two
