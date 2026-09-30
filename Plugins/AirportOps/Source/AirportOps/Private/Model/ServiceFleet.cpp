@@ -3,28 +3,92 @@
 #include "AirportOpsLog.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
+#include "Model/OpsDefinition.h"
 #include "Model/OpsEventBus.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 
 #define LOCTEXT_NAMESPACE "ServiceFleet"
 
-FText FServiceFleet::NameOf(FName TypeCode) const
+FText FServiceFleet::NameOf(const UJobBoard& Board, FName TypeCode)
 {
-	// THE ROW'S OWN NAME, else its code. The one resolver: UFacilityPurchases's labels and UOpsRuntime's toast ask here, so
-	// the card, the feed and the ledger name a vehicle the same way.
-	const FFuelVehicleSpec* Spec = Board.VehicleSpecs.Find(TypeCode);
-	return Spec != nullptr && !Spec->DisplayName.IsEmpty() ? Spec->DisplayName : FText::FromName(TypeCode);
+	// THE ROW'S OWN NAME, else its code. The one resolver: UFacilityPurchases's labels, UOpsRuntime's toast, the depot
+	// card's fleet rows, the vehicle card and the stranded alert ask here, so the card, the feed and the ledger name a
+	// vehicle the same way. The catalogue row, not the scenario map: the row is what the vehicle IS (#430).
+	const FServiceVehicleType* Row = Board.Catalogue.Find(TypeCode);
+	return Row != nullptr && !Row->DisplayName.IsEmpty() ? Row->DisplayName : FText::FromName(TypeCode);
 }
 
 double FServiceFleet::PriceOf(FName TypeCode) const
 {
-	return Board.SpecFor(TypeCode).Price;
+	// NO ROW, NO PRICE - and no purchase: UFacilityPurchases refuses a code the catalogue lacks (UnknownType) before it
+	// asks, and Add refuses one too. The old fallback row answered the same 0.
+	const FServiceVehicleType* Row = Board.Catalogue.Find(TypeCode);
+	return Row != nullptr ? Row->Price : 0.0;
 }
 
 double FServiceFleet::ResaleOf(FName TypeCode) const
 {
-	return Board.SpecFor(TypeCode).ResaleValue();
+	const FServiceVehicleType* Row = Board.Catalogue.Find(TypeCode);
+	return Row != nullptr ? Row->ResaleValue : 0.0;
+}
+
+int32 FServiceFleet::ResolveCatalogue(const TMap<FName, FFuelVehicleSpec>& Rows, const TArray<FName>& Starter,
+	TFunctionRef<FVehicle(FName)> ResolveChassis)
+{
+	// REPLACED, NOT MERGED: a re-attach resolves the scenario afresh, and a row the new scenario dropped must go with it.
+	Board.Catalogue.Reset();
+	for (const TPair<FName, FFuelVehicleSpec>& Scenario : Rows)
+	{
+		const FName TypeCode = Scenario.Key;
+		const FVehicle Chassis = ResolveChassis(TypeCode);
+		// NO CHASSIS, NO KIND. Content answers None for a code it builds nothing for; a zero wheelbase is a chassis with
+		// no axles, which routes and fits as nothing does. Either used to become a zero-size vehicle every fit gate passed.
+		if (TypeCode.IsNone() || Chassis.TypeCode.IsNone() || !Chassis.Chassis.HasAxles())
+		{
+			UE_LOG(LogAirportOps, Warning,
+				TEXT("Fleet: scenario vehicle row '%s' has no chassis in Content (UAirsideSettings::ResolveVehicle) - dropped; it cannot be bought or seeded"),
+				*TypeCode.ToString());
+			continue;
+		}
+		const FFuelVehicleSpec& Figures = Scenario.Value;
+		FServiceVehicleType& Row = Board.Catalogue.Add(TypeCode);
+		Row.TypeCode = TypeCode;
+		// FUEL, WRITTEN AS FUEL: the board is fuel's until a second role is scheduled (#443 option a, UJobBoard's header).
+		Row.Role = EServiceRole::Fuel;
+		Row.Vehicle = Chassis;
+		Row.Capacity = Figures.CapacityLitres;
+		Row.RatePerMinute = Figures.FlowLitresPerMinute;
+		Row.DisplayName = Figures.DisplayName;
+		Row.Price = Figures.Price;
+		Row.UpkeepPerDay = Figures.UpkeepPerDay;
+		// THE ONE RESALE RULE, asked once, here (FFuelVehicleSpec::ResaleValue): ResaleOf reads the answer.
+		Row.ResaleValue = Figures.ResaleValue();
+	}
+
+	// THE STARTER FLEET IS THE SCENARIO'S LIST, KEPT TO KINDS THAT EXIST: a starter code with no row would be refused by Add
+	// once per depot, every seeding; refused here once instead.
+	Board.StarterFleet.Reset();
+	for (const FName TypeCode : Starter)
+	{
+		if (Board.Catalogue.Contains(TypeCode))
+		{
+			Board.StarterFleet.AddUnique(TypeCode);
+		}
+		else
+		{
+			UE_LOG(LogAirportOps, Warning, TEXT("Fleet: starter fleet kind '%s' has no catalogue row - dropped from the starter fleet"),
+				*TypeCode.ToString());
+		}
+	}
+
+	TArray<FName> Codes;
+	Board.Catalogue.GenerateKeyArray(Codes);
+	Codes.Sort(FNameLexicalLess());
+	UE_LOG(LogAirportOps, Log, TEXT("Fleet: catalogue of %d kind(s) [%s] from %d scenario row(s); starter fleet [%s]"),
+		Codes.Num(), *FString::JoinBy(Codes, TEXT(", "), [](FName Code) { return Code.ToString(); }), Rows.Num(),
+		*FString::JoinBy(Board.StarterFleet, TEXT(", "), [](FName Code) { return Code.ToString(); }));
+	return Board.Catalogue.Num();
 }
 
 FServiceVehicle& FServiceFleet::Create(FName TypeCode, EServiceRole Role, FEntityInstanceId Home, double Cargo)
@@ -39,9 +103,11 @@ FServiceVehicle& FServiceFleet::Create(FName TypeCode, EServiceRole Role, FEntit
 
 int32 FServiceFleet::Add(FName TypeCode, FEntityInstanceId Home, EFleetOrigin Origin, double Now)
 {
-	if (!Home.IsSet() || TypeCode.IsNone())
+	// A KIND THE CATALOGUE LACKS IS REFUSED (#430), like a None one: its row would have no chassis, and the vehicle would
+	// be a zero-size one every fit gate passed. UFacilityPurchases refuses it first (UnknownType); this is the door's own.
+	if (!Home.IsSet() || TypeCode.IsNone() || !Board.Catalogue.Contains(TypeCode))
 	{
-		UE_LOG(LogAirportOps, Warning, TEXT("Fleet: adding '%s' for depot %d refused - no depot or no type"),
+		UE_LOG(LogAirportOps, Warning, TEXT("Fleet: adding '%s' for depot %d refused - no depot, no type, or no catalogue row"),
 			*TypeCode.ToString(), Home.Index);
 		return 0;
 	}
@@ -141,10 +207,12 @@ bool FServiceFleet::Withdraw(int32 VehicleId, EFleetReason Reason, double Now)
 
 int32 FServiceFleet::SeedStarterFleets(const URoadNetwork& Network, double Now)
 {
-	// NEW DEPOTS GET THEIR PLACEHOLDER FLEET (spec §3.4): Trucks of every kind in FleetTypes, Idle and full. Once per
-	// depot, so a vehicle that is out never gets a twin at home. FleetTypes read once: it copies the letter table.
+	// NEW DEPOTS GET THEIR PLACEHOLDER FLEET (spec §3.4): Trucks of every kind in StarterFleet, Idle and full. Once per
+	// depot, so a vehicle that is out never gets a twin at home. StarterFleet read once, by copy: Add can publish, and a
+	// subscriber is not promised to leave the board's list alone. (FleetTypes() was read once because it copied the
+	// letter table; it is the scenario's own list since #430.)
 	int32 Added = 0;
-	const TArray<FName> Types = Board.FleetTypes();
+	const TArray<FName> Types = Board.StarterFleet;
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{

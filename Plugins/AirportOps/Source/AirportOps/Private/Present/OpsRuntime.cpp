@@ -294,6 +294,12 @@ FVehicle UOpsRuntime::StandDesignVehicleOf(const FEntityInstance& Stand)
 	return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UJobBoard::LetterOfStand(Stand));
 }
 
+void UOpsRuntime::ResolveVehicleCatalogue(UJobBoard& Board, const UScenario& Scenario)
+{
+	Board.Fleet().ResolveCatalogue(Scenario.FuelVehicles, Scenario.StarterFleet,
+		[](FName TypeCode) { return UAirsideSettings::ResolveVehicle(TypeCode); });
+}
+
 UGroundTraffic* UOpsRuntime::LiveModel() const
 {
 	if (Target == nullptr || Target->Network == nullptr || Target->GetTraffic() == nullptr)
@@ -581,7 +587,7 @@ void UOpsRuntime::WireBus()
 		{
 			return;
 		}
-		const FString Name = JobBoard->Fleet().NameOf(E.TypeCode).ToString();
+		const FString Name = FServiceFleet::NameOf(*JobBoard, E.TypeCode).ToString();
 		const FString Money = Pricing->Format(E.Amount).ToString();
 		if (E.Change == EFleetChange::Withdrawn)
 		{
@@ -834,8 +840,10 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		Clock->StartAtHour(Scenario->StartHour);
 
 		// The designer figures set from the same asset in the same breath, so none of them
-		// is the one somebody forgot to copy.
-		JobBoard->VehicleSpecs = Scenario->FuelVehicles;
+		// is the one somebody forgot to copy. THE VEHICLE CATALOGUE (#430) is joined here, not copied: each row's
+		// figures meet Content's chassis for its code once, and a row with no chassis is dropped with a Warning,
+		// instead of TypeFor re-assembling it per call from this map and the stand-letter table.
+		ResolveVehicleCatalogue(*JobBoard, *Scenario);
 		JobBoard->RefillLitresPerMinutePerPump = Scenario->DepotRefillLitresPerMinutePerPump;
 		FacilityPurchases->ModuleOffers = Scenario->ModuleOffers;
 		OfferGenerator->MaxPendingOffers = Scenario->MaxPendingOffers;
@@ -862,7 +870,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// gets resolved, and Model/ has no business reaching Content/ for it. One table and not one
 	// truck since 2026-09-26 (far-side-entry spec): A and B stands are sized for the utility tow,
 	// C to F for the fuel truck, so a single vehicle would send a truck onto an A stand's lane
-	// that only the tow was proven to drive.
+	// that only the tow was proven to drive. THE DESIGN VEHICLE ONLY since #430: the table was also
+	// the vehicle catalogue, and the catalogue is ResolveVehicleCatalogue's now (above).
 	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand
 	JobBoard->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
 	// AND WHAT EACH STAND WAS BUILT FOR, read off its own definition when the guard asks - see

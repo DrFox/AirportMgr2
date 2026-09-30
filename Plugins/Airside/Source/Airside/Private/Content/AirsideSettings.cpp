@@ -8,25 +8,23 @@
 #include "Materials/MaterialParameterCollection.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
+#include "Model/VehicleCodes.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
 
-// ONE CONSTANT PER ARTICULATED VEHICLE, for FVehicle::TypeCode - what the inspector, and the
-// dispatch log (AirsideTraffic.cpp), say this vehicle is. NAMED, not anonymous, because the
-// module is a unity build.
+// ONE CONSTANT PER VEHICLE KIND, for FVehicle::TypeCode - what the inspector, and the
+// dispatch log (AirsideTraffic.cpp), say this vehicle is. MOVED TO Model/VehicleCodes.h (#430):
+// they were file-local here (RIG and UTILITY) and typed as a bare literal below (FUEL), while
+// AirportOps typed FUEL and UTILITY again as the keys of the scenario's figures - two modules
+// agreeing on a string with nothing holding them together.
 //
-// NO LONGER A LOOK-UP KEY (#308). UAirsideSettings::ResolveVehicleViewFor used to branch on
+// NO LONGER A LOOK-UP LADDER (#308). UAirsideSettings::ResolveVehicleViewFor used to branch on
 // this to choose ResolveRigView/ResolveUtilityTowView - a TypeCode ladder that grew by one
 // branch per vehicle added to dispatch. It now loads FVehicle::Mesh directly, which
-// ResolveRigVehicle/ResolveUtilityTowVehicle below fill themselves; these two constants are
-// left purely for the inspector's and the log's sake.
+// ResolveRigVehicle/ResolveUtilityTowVehicle below fill themselves. The codes ARE a key again
+// since #430, but for the catalogue's join and through a table (ResolveVehicle), never a branch.
 // ENFORCED BY: Check-Architecture's no-vehiclecode-compare rule (AirsideVehicleCodes:: banned
 // on either side of ==/!= anywhere - the ladder shape, not merely this one former call site).
-namespace AirsideVehicleCodes
-{
-	static const TCHAR* const Rig = TEXT("RIG");
-	static const TCHAR* const UtilityTow = TEXT("UTILITY");
-}
 
 // File-local, matching every other category in this module.
 DEFINE_LOG_CATEGORY_STATIC(LogAirsideContent, Log, All);
@@ -435,9 +433,29 @@ FVehicle UAirsideSettings::ResolveDefaultVehicle()
 	//
 	// What the inspector SAYS this is - see FVehicle::TypeCode. FUEL rather than VAN
 	// because the panel names the job the player can see, and this slice has exactly one.
-	Van.TypeCode = TEXT("FUEL");
+	Van.TypeCode = AirsideVehicleCodes::Fuel;
 
 	return Van;
+}
+
+FVehicle UAirsideSettings::ResolveVehicle(FName TypeCode)
+{
+	// EVERY CHASSIS THIS CLASS BUILDS, each naming its own code - a table, so a new kind is a row here and never a
+	// branch on the code (rule 21). Resolved per ask: the catalogue asks once per scenario row at attach, and each
+	// resolver is a handful of assignments plus soft pointers nothing loads here.
+	using FResolveFn = FVehicle (*)();
+	static const FResolveFn Kinds[] = { &ResolveDefaultVehicle, &ResolveUtilityTowVehicle, &ResolveRigVehicle };
+	for (const FResolveFn Resolve : Kinds)
+	{
+		FVehicle Vehicle = Resolve();
+		if (!TypeCode.IsNone() && Vehicle.TypeCode == TypeCode)
+		{
+			return Vehicle;
+		}
+	}
+	// NO CHASSIS: the default FVehicle says so by its None code and zero wheelbase, and the caller - the catalogue -
+	// warns and drops the row. Not logged here: a caller asking "is there one" is not an error.
+	return FVehicle();
 }
 
 FResolvedAgentView UAirsideSettings::ResolveAgentView(const FAirframe& Airframe)

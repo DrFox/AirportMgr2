@@ -1,6 +1,9 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
+#include "Model/VehicleCodes.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Present/OpsRuntime.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
@@ -24,7 +27,7 @@ namespace
 	UJobBoard* FleetBoardWithSpecs()
 	{
 		UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
-		Board->VehicleSpecs = GetDefault<UScenario>()->FuelVehicles;
+		UOpsRuntime::ResolveVehicleCatalogue(*Board, *GetDefault<UScenario>());   // as Attach does (#430)
 		return Board;
 	}
 
@@ -117,7 +120,7 @@ bool FFleetSoldStaysSoldTest::RunTest(const FString&)
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
 	UJobBoard* Board = FleetBoardWithSpecs();
-	Board->DefaultFleetTypes = { TEXT("FUEL") };
+	Board->StarterFleet = { TEXT("FUEL") };
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	Net->PlaceEntity(Depot, Depot->Anchors, FVector2D(0.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 1);
 
@@ -290,7 +293,7 @@ bool FFleetSeedingPublishesTest::RunTest(const FString&)
 	Ledger->Open(1000.0);
 	UJobBoard* Board = FleetBoardWithSpecs();
 	Board->Ledger = Ledger;
-	Board->DefaultFleetTypes = { TEXT("FUEL"), TEXT("UTILITY") };
+	Board->StarterFleet = { TEXT("FUEL"), TEXT("UTILITY") };
 	FOpsEventBus Bus;
 	TArray<FFleetChangedEvent> Seen;
 	Bus.BeginWiring();
@@ -329,7 +332,7 @@ bool FFleetSeedingReopensTest::RunTest(const FString&)
 	// changes", and a starter fleet appearing under it is that change as much as a bought bowser is.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	UJobBoard* Board = FleetBoardWithSpecs();
-	Board->DefaultFleetTypes = { TEXT("FUEL") };
+	Board->StarterFleet = { TEXT("FUEL") };
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	Net->PlaceEntity(Depot, Depot->Anchors, FVector2D(0.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 1);
 	const int32 JobId = Board->AddJobForTest(41, EServiceJobState::Unserviceable, EServiceRefusal::NoVehicles, Net->GetGuidelineRevision()).Id;
@@ -349,6 +352,47 @@ bool FFleetSeedingReopensTest::RunTest(const FString&)
 		static_cast<int32>(After->State), static_cast<int32>(EServiceJobState::Unserviceable));
 	TestEqual(TEXT("for the road it has none of - NoRoad - not for the vehicle that now exists"),
 		static_cast<int32>(After->Why), static_cast<int32>(EServiceRefusal::NoRoad));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFleetCatalogueDropsNoChassisTest, "AirportOps.Fleet.CatalogueDropsARowWithNoChassis",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFleetCatalogueDropsNoChassisTest::RunTest(const FString&)
+{
+	// THE JOIN'S REFUSAL (#430). A scenario row whose code Content builds no chassis for used to be offered, bought and
+	// seeded, and then TypeFor gave it a zero chassis that VehicleFit::NoLargerThan passed on every stand, dispatched at
+	// the default speed and drawn with the default mesh - and nothing warned. Now the resolve drops it with a Warning, and
+	// every door behind it (the starter list, the fleet's Add, TypeFor) refuses the code by name.
+	UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
+	TMap<FName, FFuelVehicleSpec> Rows = GetDefault<UScenario>()->FuelVehicles;
+	const FName Hovercraft(TEXT("HOVERCRAFT"));
+	const FName Bowser(AirsideVehicleCodes::Fuel);
+	Rows.Add(Hovercraft, FFuelVehicleSpec(500.0, 50.0, 1000.0, 10.0, INVTEXT("Hovercraft")));
+
+	AddExpectedMessagePlain(TEXT("scenario vehicle row 'HOVERCRAFT' has no chassis"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	AddExpectedMessagePlain(TEXT("starter fleet kind 'HOVERCRAFT' has no catalogue row"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	const int32 Kept = Board->Fleet().ResolveCatalogue(Rows, { Hovercraft, Bowser },
+		[](FName Code) { return UAirsideSettings::ResolveVehicle(Code); });
+	TestEqual(TEXT("every row with a chassis is kept, and only those"), Kept, Rows.Num() - 1);
+	TestFalse(TEXT("the chassis-less row is not in the catalogue - so it is not for sale"), Board->GetCatalogue().Contains(Hovercraft));
+	TestEqual(TEXT("the starter list keeps the kinds that exist, in its own order"), Board->StarterFleet, TArray<FName>{ Bowser });
+	const FServiceVehicleType* Row = Board->GetCatalogue().Find(Bowser);
+	if (!TestNotNull(TEXT("the bowser's row"), Row)) { return false; }
+	TestTrue(TEXT("its chassis is Content's for its code"), Row->Vehicle.TypeCode == Bowser && Row->Vehicle.Chassis.HasAxles());
+	TestEqual(TEXT("its tank is the scenario's"), Row->Capacity, Rows[Bowser].CapacityLitres);
+	TestEqual(TEXT("its price is the scenario's"), Row->Price, Rows[Bowser].Price);
+	TestEqual(TEXT("its resale is the scenario's one rule, asked at the join"), Row->ResaleValue, Rows[Bowser].ResaleValue());
+
+	AddExpectedMessagePlain(TEXT("adding 'HOVERCRAFT' for depot"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	TestEqual(TEXT("the fleet's door refuses a kind with no row"),
+		Board->Fleet().Add(Hovercraft, FleetTestDepotId(), EFleetOrigin::Bought, 0.0), 0);
+
+	// ONCE PER CODE: a second ask says nothing new (the expected count is exact).
+	AddExpectedMessagePlain(TEXT("vehicle kind HOVERCRAFT has no catalogue row"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	const FServiceVehicleType Unknown = Board->TypeFor(Hovercraft);
+	TestTrue(TEXT("TypeFor answers a None row for it - which the bid skips - not a zero-size vehicle named HOVERCRAFT"),
+		Unknown.TypeCode.IsNone() && !Unknown.Vehicle.Chassis.HasAxles());
+	TestTrue(TEXT("and again, silently"), Board->TypeFor(Hovercraft).TypeCode.IsNone());
 	return true;
 }
 

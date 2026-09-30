@@ -81,8 +81,13 @@ enum class EServiceVehicleState : uint8
  * the bowser and the articulated tanker are three rows under the one fuel policy, differing in
  * these figures and in nothing else.
  *
- * RESOLVED, NOT AUTHORED, here: the chassis comes from UAirsideSettings through UOpsRuntime::Attach
- * (this module's Model/ may not reach Content/), the capacity and rate from UScenario::FuelVehicles.
+ * RESOLVED, NOT AUTHORED, here: the chassis comes from UAirsideSettings::ResolveVehicle through UOpsRuntime::Attach
+ * (this module's Model/ may not reach Content/), the capacity, rate, name and money from UScenario::FuelVehicles.
+ * JOINED ONCE, BY ONE FUNCTION (#430): FServiceFleet::ResolveCatalogue builds every row UJobBoard::TypeFor answers.
+ * It used to be re-assembled on every TypeFor call from the scenario map and a scan of the stand-letter table, and a
+ * kind no letter was designed for got a zero chassis. The money and the name are HERE, not re-read from the scenario
+ * row, so a kind is one struct (CLAUDE.md "one struct per thing"); FServiceFleet's PriceOf, ResaleOf and NameOf are
+ * their readers.
  */
 USTRUCT()
 struct AIRPORTOPS_API FServiceVehicleType
@@ -95,11 +100,29 @@ struct AIRPORTOPS_API FServiceVehicleType
 	/** How it moves and how big it is - what the route is searched for and the stand is fitted to. */
 	UPROPERTY() FVehicle Vehicle;
 
-	/** What it carries when full, in the role's unit (litres for fuel). Floored at 1 by the policy. */
+	/**
+	 * What it carries when full, in the role's unit (litres for fuel). READ THROUGH FFuelRolePolicy::CapacityOf ALONE,
+	 * which floors it at 1 (#430: the bid wrote a job's tank from this unfloored while the stand floored it).
+	 * ENFORCED BY: Check-Architecture rule 4's 'vehicle row capacity' row, AirportOps.Fuel.ZeroCapacitySpecStillFinishes
+	 */
 	UPROPERTY() double Capacity = 1.0;
 
 	/** How fast it serves, units per GAME minute (fuel: its pump's flow). Floored at 1 by the policy. */
 	UPROPERTY() double RatePerMinute = 1.0;
+
+	/** The scenario's DisplayName for the kind, as authored - EMPTY is allowed, and FServiceFleet::NameOf is the one
+	 *  reader that falls back to the code, so the card, the alert and the ledger cannot fall back differently. */
+	UPROPERTY() FText DisplayName;
+
+	/** What buying one costs. Read through FServiceFleet::PriceOf alone (Check-Architecture rule 43). */
+	UPROPERTY() double Price = 0.0;
+
+	/** What owning one costs a game day - part of the daily "Fleet upkeep" entry (UFacilityPurchases::DailyUpkeep). */
+	UPROPERTY() double UpkeepPerDay = 0.0;
+
+	/** What one is worth back, resolved from FFuelVehicleSpec::ResaleValue at the join. Read through
+	 *  FServiceFleet::ResaleOf alone (Check-Architecture rule 43). */
+	UPROPERTY() double ResaleValue = 0.0;
 };
 
 /**

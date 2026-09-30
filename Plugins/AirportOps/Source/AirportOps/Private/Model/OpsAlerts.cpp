@@ -99,8 +99,9 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 				if (Vehicle.AgentId != 0 && UJobBoard::IsStranded(Vehicle, *Sources.Traffic))
 				{
 					FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::VehicleStranded, Vehicle.Id, NAME_None,
-						FText::Format(NSLOCTEXT("OpsAlerts", "VehicleStranded", "{0} {1} is stranded - unstick it"),
-							FText::FromName(Vehicle.TypeCode), FText::AsNumber(Vehicle.Id))));
+						// THE KIND'S NAME, as the card and the ledger say it (#430) - "Bowser #7", not "FUEL 7".
+						FText::Format(NSLOCTEXT("OpsAlerts", "VehicleStranded", "{0} #{1} is stranded - unstick it"),
+							FServiceFleet::NameOf(*Sources.Jobs, Vehicle.TypeCode), FText::AsNumber(Vehicle.Id))));
 					if (const FRoadAgent* Agent = Sources.Traffic->FindAgent(Vehicle.AgentId))
 					{
 						OpsAlertFocusAgent(Alert, *Agent);

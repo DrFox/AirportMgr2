@@ -107,7 +107,7 @@ const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
 void UJobBoard::ResolveVehicles(TFunctionRef<FVehicle(EIcaoCode)> Resolve)
 {
 	// NO BUMP (#443, "changes, not calls"): it fills the letter table, which no job, vehicle or turnaround holds and no
-	// Describe reads - the vehicle line names a TypeCode, not its chassis. It used to bump as "every public mutator".
+	// Describe reads - the vehicle line names a kind, not its chassis. It used to bump as "every public mutator".
 	for (int32 Index = 0; Index < LetterCount; ++Index)
 	{
 		VehiclesByLetter[Index] = Resolve(static_cast<EIcaoCode>(Index));
@@ -130,59 +130,26 @@ FVehicle UJobBoard::DesignVehicleFor(const FEntityInstance& Stand) const
 	return DesignVehicleOf ? DesignVehicleOf(Stand) : VehicleFor(Stand);
 }
 
-TArray<FName> UJobBoard::FleetTypes() const
-{
-	if (DefaultFleetTypes.Num() > 0)
-	{
-		return DefaultFleetTypes;
-	}
-	TArray<FName> Types;
-	for (const FVehicle& Vehicle : VehiclesByLetter)
-	{
-		if (!Vehicle.TypeCode.IsNone())
-		{
-			Types.AddUnique(Vehicle.TypeCode);
-		}
-	}
-	return Types;
-}
-
 FServiceVehicleType UJobBoard::TypeFor(FName TypeCode) const
 {
-	FServiceVehicleType Type;
-	Type.TypeCode = TypeCode;
-	Type.Role = EServiceRole::Fuel;
-	// THE FIRST LETTER THAT SENDS IT, by declaration order - the table is the catalogue until the
-	// fleet is bought (spec §3.4), and a test that widens a letter's vehicle widens this one.
-	for (const FVehicle& Vehicle : VehiclesByLetter)
+	// THE CATALOGUE'S ROW, joined once at attach (#430). It WAS joined here on every call: the chassis from the first
+	// stand letter that sent the code ("the table is the catalogue until the fleet is bought", spec §3.4 - and the fleet
+	// is bought since #417) and the figures from the scenario map, so a kind no letter was designed for came back with a
+	// zero chassis, and a test that widened a letter's vehicle widened this one.
+	if (const FServiceVehicleType* Row = Catalogue.Find(TypeCode))
 	{
-		if (Vehicle.TypeCode == TypeCode)
-		{
-			Type.Vehicle = Vehicle;
-			break;
-		}
+		return *Row;
 	}
-	const FFuelVehicleSpec Spec = SpecFor(TypeCode);
-	Type.Capacity = Spec.CapacityLitres;
-	Type.RatePerMinute = Spec.FlowLitresPerMinute;
-	return Type;
-}
-
-FFuelVehicleSpec UJobBoard::SpecFor(FName TypeCode) const
-{
-	if (const FFuelVehicleSpec* Found = VehicleSpecs.Find(TypeCode))
+	// NO ROW: a None code and an empty chassis, which the bid's candidate filter skips, rather than the trailer's figures on
+	// a zero-size vehicle that every fit gate passed. ONCE PER CODE, where the designer will look - and not for a bare board
+	// whose catalogue nobody resolved, which is a fixture's business, as the old fallback's warning was not either.
+	if (Catalogue.Num() > 0 && !WarnedTypes.Contains(TypeCode))
 	{
-		return *Found;
+		WarnedTypes.Add(TypeCode);
+		UE_LOG(LogAirportOps, Warning, TEXT("Fleet: vehicle kind %s has no catalogue row (no scenario figures, or no chassis); it serves nothing"),
+			*TypeCode.ToString());
 	}
-	// ONCE PER CODE: a vehicle nobody gave fuel figures to still fuels, at the trailer's rate, and says
-	// so where the designer will look.
-	if (VehicleSpecs.Num() > 0 && !WarnedSpecs.Contains(TypeCode))
-	{
-		WarnedSpecs.Add(TypeCode);
-		UE_LOG(LogAirportOps, Warning, TEXT("Fuel: vehicle %s has no fuel figures; using %.0f L at %.0f L/min"),
-			*TypeCode.ToString(), FallbackSpec.CapacityLitres, FallbackSpec.FlowLitresPerMinute);
-	}
-	return FallbackSpec;
+	return FServiceVehicleType();
 }
 
 // HasWorkingPump AND PumpsAt ARE FDepotCapability'S NOW (#443, ruled 2026-09-30). They were a walk of the OWNED module
@@ -332,7 +299,8 @@ int32 UJobBoard::VehiclesAt(FEntityInstanceId Depot) const
 FString UJobBoard::VehicleLine(const FServiceVehicle& Vehicle) const
 {
 	const FString Dot = TEXT(" · ");
-	return FString::Printf(TEXT("%s #%d"), *Vehicle.TypeCode.ToString(), Vehicle.Id) + Dot + VehicleDoing(Vehicle)
+	// THE KIND'S NAME, the one the shop sold it under (#430) - not its code: the card listed "FUEL #7" beside a "Bowser".
+	return FString::Printf(TEXT("%s #%d"), *FServiceFleet::NameOf(*this, Vehicle.TypeCode).ToString(), Vehicle.Id) + Dot + VehicleDoing(Vehicle)
 		+ Dot + FText::AsNumber(FMath::RoundToInt(Vehicle.Cargo)).ToString() + TEXT(" L");
 }
 
@@ -455,7 +423,7 @@ bool UJobBoard::RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic
 
 void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
-	// NEW DEPOTS GET THEIR PLACEHOLDER FLEET (spec §3.4): Trucks of every kind in FleetTypes, Idle and full - through the
+	// NEW DEPOTS GET THEIR PLACEHOLDER FLEET (spec §3.4): Trucks of every kind in StarterFleet, Idle and full - through the
 	// fleet's door (#443), so a seeded vehicle is announced and re-opens refused jobs like any other, and CouldServe can
 	// read real vehicles instead of predicting these.
 	Fleet().SeedStarterFleets(Network, Clock.Now());
@@ -1368,7 +1336,7 @@ FString UJobBoard::DescribeVehicle(const FServiceVehicle& Vehicle) const
 	const FString Dot = TEXT(" · ");
 	const FString Cargo = FText::AsNumber(FMath::RoundToInt(Vehicle.Cargo)).ToString() + TEXT(" L");
 	const FString Queued = Vehicle.Queue.Num() > 0 ? Dot + FString::Printf(TEXT("%d queued"), Vehicle.Queue.Num()) : FString();
-	return Vehicle.TypeCode.ToString() + Dot + VehicleDoing(Vehicle) + Dot + Cargo + Queued;
+	return FServiceFleet::NameOf(*this, Vehicle.TypeCode).ToString() + Dot + VehicleDoing(Vehicle) + Dot + Cargo + Queued;
 }
 
 FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) const

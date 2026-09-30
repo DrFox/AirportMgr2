@@ -772,6 +772,41 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Model\LandingRun.h', 'Private\Model\LandingRun.cpp', 'Private\Model\RoadAgent.cpp')
         TestExempt  = $true
         ProdReason  = 'hang it off EAgentEvent::TouchedDown (UGroundTraffic::GetMomentsThisAdvance) - the flag is an edge one substep long, and a per-frame read loses it at x4 and up (#446)'
+    },
+    @{
+        # ONE SPELLING OF EACH VEHICLE KIND'S CODE (#430). The code is the join between a scenario's figures (AirportOps)
+        # and Content's chassis (Airside), and it was typed in both modules - "FUEL" in AirsideSettings.cpp and
+        # OpsDefinition.h, "UTILITY" in both - so a row that matched no chassis became a zero-size vehicle. Model/VehicleCodes.h
+        # holds the three constants; everything else names AirsideVehicleCodes::. CASE-SENSITIVE ((?-i): Select-String is
+        # not) and the whole quoted token, so "Fuel: ..." log text and "FUEL #7" in a doc comment are not codes.
+        Name        = 'vehicle kind codes'
+        Pattern     = '(?-i)"(?:FUEL|UTILITY|RIG)"'
+        ProdAllowed = @('Public\Model\VehicleCodes.h')
+        TestExempt  = $true
+        ProdReason  = 'name the kind through AirsideVehicleCodes (Model/VehicleCodes.h) - the code is the join between a scenario row and its chassis, typed once'
+    },
+    @{
+        # ONE CAPACITY RULE (#430, the #443 A13 note). A job's TankLitres was written from the row's raw Capacity at the bid
+        # and the re-bid, and from FFuelRolePolicy::CapacityOf (floored at a litre) at the stand, so a zero-tank kind's card
+        # read 0 L until the truck arrived. The row's Capacity is WRITTEN at the join (ServiceFleet.cpp) and READ by
+        # CapacityOf alone (ServiceRolePolicy.cpp); everything else asks CapacityOf. CASE-SENSITIVE, a member access only:
+        # FAirframe::FuelCapacityLitres and the quote's CapacityLitres are other names.
+        Name        = 'vehicle row capacity'
+        Pattern     = '(?-i)(?:\.|->)\s*Capacity\b'
+        ProdAllowed = @('Private\Model\ServiceRolePolicy.cpp', 'Private\Model\ServiceFleet.cpp')
+        TestExempt  = $true
+        ProdReason  = "read a kind's tank through FFuelRolePolicy::CapacityOf, the one rule (floored at a litre) the bid, the stand and the shop's label share"
+    },
+    @{
+        # ONE NAME FALLBACK (#430, and #461 before it). "The row's DisplayName, else its code" was typed three times, and
+        # the depot card, the vehicle card and the stranded alert skipped it and printed the raw code - "FUEL #7" beside
+        # the "Bowser" the shop sold. FServiceFleet::NameOf is the one resolver. BROAD ON PURPOSE: no production file
+        # has another DisplayName.IsEmpty() today; a second KIND of named thing that needs one is a new row here, said.
+        Name        = 'vehicle display-name fallback'
+        Pattern     = 'DisplayName\s*\.\s*IsEmpty\s*\('
+        ProdAllowed = @('Private\Model\ServiceFleet.cpp')
+        TestExempt  = $true
+        ProdReason  = "name a vehicle kind through FServiceFleet::NameOf, the one place its DisplayName falls back to its code"
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -1400,8 +1435,11 @@ $ranRules.Add('no-new-fortest-forwarders')
 # UAirsideSettings::ResolveVehicleViewFor branched "if (Vehicle.TypeCode ==
 # FName(AirsideVehicleCodes::Rig)) return ResolveRigView(); ..." - the TypeCode ladder #308
 # deleted. The constants stay (FVehicle::TypeCode still names what the inspector and the
-# dispatch log say a vehicle is), but the banner comment above their declaration in
-# AirsideSettings.cpp claims "NO LONGER A LOOK-UP KEY" with nothing mechanical behind it.
+# dispatch log say a vehicle is), but the banner comment above their declaration - in
+# AirsideSettings.cpp until #430 moved them to Model/VehicleCodes.h - claims "NO LONGER A LOOK-UP
+# LADDER" with nothing mechanical behind it. #430 made the code the catalogue's JOIN KEY
+# (UAirsideSettings::ResolveVehicle), through a table of resolvers that each name their own
+# vehicle - a lookup by the vehicle's own TypeCode, never a comparison with a constant.
 # Comparing AirsideVehicleCodes:: against anything with ==/!= IS the ladder shape coming back,
 # so it is banned outright rather than merely discouraged - a vehicle's look must come from its
 # own FVehicle::Mesh/Tow[].Mesh (see ResolveVehicleViewFor's own comment), never from a branch
@@ -2378,11 +2416,16 @@ if ($TestNamesOut -ne '') {
 #      CAMEL-CASE SUFFIX ONLY (#469 review): -match read `InspectorRow.Price` as "spec...Price", and `Spec\w*` read
 #      `SpecialOffer.Price` as a spec; the name must now be `Spec`/`Specs` alone or followed by a capital (`SpecIt`,
 #      `VehicleSpecs`). Mutation-checked: both of those pass, the three shapes above still fail.
+#      THE ROW MOVED (#430): the price and resale value live on the catalogue's FServiceVehicleType now, joined once by
+#      FServiceFleet::ResolveCatalogue (the scenario's FFuelVehicleSpec is read at that join alone). So (c) also reads the
+#      row's shapes - `TypeFor(...).Price`, a `Catalogue`/`GetCatalogue()` row's Price or ResaleValue, a `Kind`/`Type`
+#      local's - and ResaleValue as a FIELD as well as a call. And (a) counts the catalogue and its StarterFleet as the
+#      fleet's containers: ServiceFleet.cpp's ResolveCatalogue is their one production writer.
 # The rule fails, rather than checking nothing, when ServiceFleet.cpp is gone or no longer matches either shape.
 $fleetDoorFile = Join-Path $ops 'Private\Model\ServiceFleet.cpp'
-$fleetContainerWrite = '\b(?:Vehicles|SeededDepots)\s*(?:\.|->)\s*(?:Add|AddUnique|AddDefaulted|Emplace|Insert|Append|Remove|RemoveAt|RemoveAll|RemoveSwap|Reset|Empty)\w*\s*\(|(?:\+\+\s*NextVehicleId\b|\bNextVehicleId\s*(?:\+\+|\+=))'
+$fleetContainerWrite = '\b(?:Vehicles|SeededDepots|Catalogue|StarterFleet)\s*(?:\.|->)\s*(?:Add|AddUnique|AddDefaulted|Emplace|Insert|Append|Remove|RemoveAt|RemoveAll|RemoveSwap|Reset|Empty)\w*\s*\(|(?:\+\+\s*NextVehicleId\b|\bNextVehicleId\s*(?:\+\+|\+=))'
 $fleetMoneyPost      = '\bELedgerCategory::Fleet\b'
-$fleetPriceRead      = 'Specs?(?:[A-Z]\w*)?(?:\[[^\]]*\])?(?:\.|->)Price\b|\bSpecFor\([^)]*\)\.Price\b|(?:\.|->)ResaleValue\s*\('
+$fleetPriceRead      = 'Specs?(?:[A-Z]\w*)?(?:\[[^\]]*\])?(?:\.|->)Price\b|\bSpecFor\([^)]*\)\.Price\b|(?:\.|->)ResaleValue\b|\bTypeFor\s*\([^)]*\)\s*\.\s*Price\b|\b(?:Get)?Catalogue\b[^;]*?(?:\.|->)\s*Price\b|\b(?:Kind|Type)\s*(?:\.|->)\s*Price\b'
 $fleetDoorContainerWrites = 0
 $fleetDoorMoneyPosts = 0
 if (-not (Test-Path $fleetDoorFile)) {

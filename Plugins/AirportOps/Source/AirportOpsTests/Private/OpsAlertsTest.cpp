@@ -10,6 +10,8 @@
 #include "Model/Ledger.h"
 #include "Model/OfferGenerator.h"
 #include "Model/OpsAlerts.h"
+#include "Model/OpsDefinition.h"
+#include "Present/OpsRuntime.h"
 #include "Model/OpsEventBus.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadGuideline.h"
@@ -173,12 +175,19 @@ bool FOpsAlertsVehicleTest::RunTest(const FString&)
 {
 	FAlertsField F;
 	if (!TestTrue(TEXT("an agent to strand"), F.Build())) { return false; }
+	// THE GAME'S CATALOGUE, so the alert can name the kind (#430): it said "FUEL 7 is stranded" of a "Bowser".
+	UOpsRuntime::ResolveVehicleCatalogue(*F.Jobs, *GetDefault<UScenario>());
 	FServiceVehicle& Truck = F.Jobs->AddVehicleForTest(TEXT("FUEL"), FEntityInstanceId(), EServiceVehicleState::ToJob, 1000.0);
 	Truck.AgentId = F.Plane;   // the rule reads only the agent's phase - any stranded agent will do
+	const int32 TruckId = Truck.Id;
 	FGroundTrafficTestAccess(*F.Traffic).Strand(F.Plane);
 	F.Traffic->Advance(0.2, F.Airport.Net);
 	F.Recompute();
 	TestEqual(TEXT("a service vehicle whose agent is stranded raises its own alert"), F.RaisedOf(EAlertKind::VehicleStranded), 1);
+	const FOpsAlert* Alert = F.Alerts->GetAlerts().FindByPredicate([](const FOpsAlert& Each) { return Each.Key.Kind == EAlertKind::VehicleStranded; });
+	if (!TestNotNull(TEXT("the alert is held"), Alert)) { return false; }
+	TestEqual(TEXT("and names the kind as the card and the ledger do"), Alert->Text.ToString(),
+		FString::Printf(TEXT("Bowser #%d is stranded - unstick it"), TruckId));
 	return true;
 }
 

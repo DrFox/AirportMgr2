@@ -127,7 +127,9 @@ EPurchaseRefusal UFacilityPurchases::JudgeVehicle(const FEntityInstance* Facilit
 	{
 		return EPurchaseRefusal::NotAFacility;
 	}
-	if (!JobBoard->VehicleSpecs.Contains(TypeCode))
+	// A KIND THE CATALOGUE LACKS IS NOT FOR SALE (#430): a scenario row whose code has no chassis was dropped at attach,
+	// and offering it would sell a vehicle the door refuses to make.
+	if (!JobBoard->GetCatalogue().Contains(TypeCode))
 	{
 		return EPurchaseRefusal::UnknownType;
 	}
@@ -179,21 +181,24 @@ FFacilityQuote UFacilityPurchases::Quote(const URoadNetwork& Network, FEntityIns
 		Row.Label = FText::Format(LOCTEXT("ModuleLabel", "Buy {0} {1}"), Offer.DisplayName, Money(Offer.Price));
 	}
 
+	// FOR SALE = THE CATALOGUE (#430), not the scenario map: a row with no chassis was dropped at attach.
 	TArray<FName> Types;
-	JobBoard->VehicleSpecs.GenerateKeyArray(Types);
+	JobBoard->GetCatalogue().GenerateKeyArray(Types);
 	Types.Sort(FNameLexicalLess());
 	for (const FName TypeCode : Types)
 	{
-		const FFuelVehicleSpec& Spec = JobBoard->VehicleSpecs[TypeCode];
+		const FServiceVehicleType& Kind = JobBoard->GetCatalogue()[TypeCode];
 		FVehicleOfferQuote& Row = Out.VehicleOffers.AddDefaulted_GetRef();
 		Row.TypeCode = TypeCode;
 		Row.Name = VehicleName(TypeCode);
 		Row.Price = JobBoard->Fleet().PriceOf(TypeCode);
-		Row.UpkeepPerDay = Spec.UpkeepPerDay;
-		Row.CapacityLitres = Spec.CapacityLitres;
+		Row.UpkeepPerDay = Kind.UpkeepPerDay;
+		// THE TANK THE VEHICLE WILL CARRY, by the one capacity rule (FFuelRolePolicy::CapacityOf, floored) - the figure
+		// the bid and the stand write on a job, so the label cannot promise a different tank.
+		Row.CapacityLitres = FFuelRolePolicy::CapacityOf(Kind);
 		Row.Refusal = JudgeVehicle(Facility, Entity, TypeCode);
 		Row.Label = FText::Format(LOCTEXT("VehicleLabel", "{0} {1} \u00B7 {2} L"), Row.Name, Money(Row.Price),
-			FText::AsNumber(FMath::RoundToInt(Spec.CapacityLitres)));
+			FText::AsNumber(FMath::RoundToInt(Row.CapacityLitres)));
 	}
 
 	for (const FServiceVehicle& Vehicle : JobBoard->GetVehicles())
@@ -408,7 +413,7 @@ FFacilityUpkeep UFacilityPurchases::DailyUpkeep(const URoadNetwork& Network) con
 	{
 		for (const FServiceVehicle& Vehicle : JobBoard->GetVehicles())
 		{
-			Out.Fleet += JobBoard->SpecFor(Vehicle.TypeCode).UpkeepPerDay;
+			Out.Fleet += JobBoard->TypeFor(Vehicle.TypeCode).UpkeepPerDay;
 		}
 	}
 	return Out;
