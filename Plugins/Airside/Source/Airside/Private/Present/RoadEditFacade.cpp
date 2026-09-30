@@ -9,6 +9,7 @@
 #include "Build/BuildCost.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Content/AirsideSettings.h"
+#include "Misc/ScopeExit.h"
 #include "Model/BuildPurse.h"
 
 #include "AirsideLog.h"
@@ -92,6 +93,11 @@ void URoadEditFacade::ClearHistory()
 	{
 		History->Clear();
 	}
+
+	// THE EDITOR WORLD'S ROLLBACK POINT GOES WITH IT: it is the history-less twin of the pending
+	// snapshot Clear() just abandoned, and for the same reason - a load is a new baseline, and
+	// restoring a point taken before one would put the old airport back over the loaded one.
+	EditorRollbackPoint = nullptr;
 }
 
 const URoadNetwork* URoadEditFacade::GetNetwork() const
@@ -372,6 +378,38 @@ void URoadEditFacade::AdoptNetwork(URoadNetwork& NewNetwork)
 	NotifyChanged();
 }
 
+bool URoadEditFacade::RollBackOpenEdit(URoadEditHistory* Use)
+{
+	URoadNetwork* Live = Actor().Network;
+	if (Live == nullptr)
+	{
+		return false;
+	}
+
+	if (Use != nullptr)
+	{
+		if (!Use->RollbackEdit(*Live))
+		{
+			return false;
+		}
+	}
+	else if (EditorRollbackPoint != nullptr)
+	{
+		Live->RestoreFrom(*EditorRollbackPoint);
+	}
+	else
+	{
+		return false;
+	}
+
+	// THE NETWORK IS THE SAME OBJECT, so this assigns it to itself - AdoptNetwork is called for
+	// its OTHER two jobs, which a restore needs exactly as a swap does: hide a ghost that may be
+	// describing a node the restore has just taken away, and tell everything derived that the
+	// graph changed shape. Not a second copy of that tail (issue #299 spent a change removing four).
+	AdoptNetwork(*Live);
+	return true;
+}
+
 bool URoadEditFacade::ApplyInteractiveMutation(const TCHAR* Label,
 	TFunctionRef<bool(URoadNetwork&)> Mutate, bool bChangesGraphShape,
 	TFunctionRef<bool(const URoadNetwork&)> Verify)
@@ -388,13 +426,31 @@ bool URoadEditFacade::ApplyInteractiveMutation(const TCHAR* Label,
 		Use->BeginEdit(*Owner.Network, Label);
 	}
 
+	// THE SAME QUESTION, FOR A WORLD WITH NO HISTORY (issue #437): is there an open edit to join,
+	// or does this call own one? The drag's rollback point answers it - BeginInteractiveEdit took
+	// it - and a bare call with none open takes its own and lets it go on every way out, so a
+	// Verify failure always has a state to go back to. Never taken in a game world: there the
+	// history's pending snapshot is the same thing, and a second copy would be pure waste.
+	const bool bOwnsPoint = Use == nullptr && EditorRollbackPoint == nullptr;
+	if (bOwnsPoint)
+	{
+		EditorRollbackPoint = FRoadEditScope::SnapshotForRollback(*Owner.Network);
+	}
+	ON_SCOPE_EXIT
+	{
+		if (bOwnsPoint)
+		{
+			EditorRollbackPoint = nullptr;
+		}
+	};
+
 	const bool bMutated = Mutate(*Owner.Network);
 	if (!bMutated)
 	{
 		if (bOwnsEdit)
 		{
 			// Nothing was touched, so ABANDON is right here and Revert would be wrong - see
-			// URoadEditHistory::RevertEdit on the distinction.
+			// URoadEditHistory::RollbackEdit on the distinction.
 			Use->AbandonEdit();
 		}
 		return false;
@@ -402,15 +458,14 @@ bool URoadEditFacade::ApplyInteractiveMutation(const TCHAR* Label,
 
 	if (!Verify(*Owner.Network))
 	{
-		// REVERTED, NOT ABANDONED, and unconditional on Use != nullptr rather than gated on
-		// bOwnsEdit - see this method's own header comment for why a Verify failure cannot
-		// simply be refused.
-		if (Use != nullptr)
+		// REVERTED, NOT ABANDONED, and in EVERY world rather than gated on there being a history
+		// or on bOwnsEdit - see this method's own header comment for why a Verify failure cannot
+		// simply be refused, and for the editor world this used to leave merged.
+		if (!RollBackOpenEdit(Use))
 		{
-			if (URoadNetwork* Reverted = Use->RevertEdit())
-			{
-				AdoptNetwork(*Reverted);
-			}
+			UE_LOG(LogRoadMesh, Error,
+				TEXT("'%s' failed its Verify and there was no open edit to roll back to - the network "
+					 "keeps the change, which nothing else will undo"), Label);
 		}
 		return false;
 	}
@@ -447,6 +502,9 @@ int32 URoadEditFacade::PlaceNode(FVector2D Where)
 	const FRoadNodeId Node = Net.AddNode(Where);
 	if (!Node.IsSet())
 	{
+		// Every refusal after a scope opens rolls it back (Check-Architecture rule 40, issue #437):
+		// whether this one wrote anything is the question the next edit to this function gets wrong.
+		Edit.Rollback();
 		UE_LOG(LogRoadMesh, Warning, TEXT("PlaceNode refused at (%f, %f)"), Where.X, Where.Y);
 		return INDEX_NONE;
 	}
@@ -704,9 +762,11 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	}
 
 	// PRICED AND REFUSED BEFORE THE SCOPE, not at commit. An FRoadEditScope that is not
-	// committed discards its undo snapshot but does NOT roll the network back, so a refusal
-	// after AddStraightSegment would leave the taxiway built and unpaid for - see
-	// CommitPurchase's own comment.
+	// committed discards its undo snapshot but does NOT roll the network back by itself, so a
+	// refusal after AddStraightSegment that forgot Rollback() would leave the taxiway built and
+	// unpaid for - see CommitPurchase's own comment. This one is priced first regardless: it is
+	// the refusal a player can hit and be told about, the one the preview has already shown, and
+	// one known before the first write costs no snapshot and no restore.
 	const FBuildQuote Quote = BuildCost::ForSegment(*Chosen,
 		FVector2D::Distance(Owner.Network->GetNodes()[From.Index].Position,
 			Owner.Network->GetNodes()[To.Index].Position), Surface);
@@ -728,6 +788,7 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	const FRoadSegmentId Segment = Owner.Network->AddStraightSegment(From, To, Chosen);
 	if (!Segment.IsSet())
 	{
+		Edit.Rollback();   // rule 40 - see PlaceNode
 		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectNodes refused: %d -> %d"), FromIndex, ToIndex);
 		return false;
 	}
@@ -798,6 +859,9 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	const FRoadNodeId B = Owner.Network->AddNode(To);
 	if (!A.IsSet() || !B.IsSet())
 	{
+		// A REFUSAL AFTER A WRITE: the first AddNode may have landed. Before a scope could roll
+		// back this left a bare node behind with no undo step to reach it (issue #437).
+		Edit.Rollback();
 		return false;
 	}
 
@@ -806,6 +870,8 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	const FRoadSegmentId Segment = Owner.Network->AddStraightSegment(A, B, RunwayProfile);
 	if (!Segment.IsSet())
 	{
+		// Both nodes are in by now; the rollback takes them out - see above.
+		Edit.Rollback();
 		return false;
 	}
 
@@ -833,8 +899,9 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& InF
 	FRoadSegmentId Segment;
 	if (!MakeLiveSegmentId(SegmentIndex, Segment) || !Network->IsRunwaySegment(Segment))
 	{
-		// Refused BEFORE the snapshot, like every other guard on this seam - see
-		// SetIntermediateHoldingPosition for why a refusal inside the scope is not a rollback.
+		// Refused BEFORE the snapshot, like every other guard on this seam: an uncommitted scope
+		// does not roll back on its own (Rollback() is explicit), and a refusal that can be known
+		// first costs no snapshot and no restore.
 		return false;
 	}
 	// InUse 0 means "keep the strip's" (URoadNetwork::SetRunwayFacts) - resolved HERE too, so a
@@ -1071,15 +1138,20 @@ bool URoadEditFacade::UpgradeSegment(int32 SegmentIndex, ERoadKind Kind, int32 W
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("upgrade segment"));
 	// HONOURED, not discarded (review fix 5, CLAUDE.md's out-parameter rule): WhyUpgradeRefused
 	// asked both setters' refusals already, so either failing here is a new refusal it does not
-	// know about. An uncommitted scope rolls nothing back, so the profile is put back by hand.
+	// know about. An uncommitted scope rolls nothing back by itself, so the scope is told to: the
+	// width the first write landed comes back with the whole model, bitwise, rather than by a
+	// second write of the old profile (issue #437 - that hand unwind needed a const_cast to say
+	// "the old profile" and could only ever undo the one field its author remembered).
+	// ENFORCED BY: Airside.Present.UpgradeSecondWriteRefusedRollsBack
 	if (!Network->SetSegmentProfile(Id, New))
 	{
+		Edit.Rollback();
 		UE_LOG(LogRoadMesh, Warning, TEXT("UpgradeSegment refused: segment %d would not take %s"), SegmentIndex, *New->GetName());
 		return false;
 	}
 	if (!Network->SetSegmentSurface(Id, Surface))
 	{
-		Network->SetSegmentProfile(Id, const_cast<URoadProfile*>(Old));
+		Edit.Rollback();
 		UE_LOG(LogRoadMesh, Warning, TEXT("UpgradeSegment refused: segment %d would not take %s"), SegmentIndex, Pavement::Name(Surface));
 		return false;
 	}
@@ -1189,9 +1261,11 @@ int32 URoadEditFacade::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 	const FGuidelineEdgeId Added = Network->AddGuidelineEdge(MoveTemp(Edge));
 	if (!Added.IsSet())
 	{
-		// Nothing mutated - AddGuidelineEdge refuses without touching the graph, so leaving
-		// the scope uncommitted here costs nothing to abandon. ~FRoadEditScope calls
-		// AbandonEdit.
+		// Whether AddGuidelineEdge writes before it refuses is not this function's business:
+		// Rollback is called regardless (rule 40, issue #437 - see PlaceNode), because "does this
+		// refusal write?" is the question the next edit to this function gets wrong. The scope
+		// then has nothing left for ~FRoadEditScope to abandon.
+		Edit.Rollback();
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("ConnectGuidelines refused: node %d -> node %d, AddGuidelineEdge declined"),
 			FromNodeIndex, ToNodeIndex);
@@ -1243,8 +1317,8 @@ bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 bool URoadEditFacade::SetDriveSide(EDriveSide Side)
 {
 	URoadNetwork* Network = Actor().Network;
-	// Refused BEFORE the scope, for the reason SetIntermediateHoldingPosition gives: there is
-	// no rollback, and a no-op inside a scope would push an undo step that does nothing.
+	// Refused BEFORE the scope: a no-op that committed inside one would push an undo step that
+	// does nothing, and a refusal known first costs no snapshot and no restore.
 	if (Network == nullptr || Network->GetDriveSide() == Side)
 	{
 		return false;
@@ -1270,8 +1344,8 @@ bool URoadEditFacade::SetDriveSide(EDriveSide Side)
 bool URoadEditFacade::AddEntityModule(FEntityInstanceId Entity, EDepotModule Module)
 {
 	URoadNetwork* Network = Actor().Network;
-	// REFUSED BEFORE THE SCOPE, SetDriveSide's reason: there is no rollback, and a refused write inside a
-	// scope would push an undo step that does nothing.
+	// REFUSED BEFORE THE SCOPE, SetDriveSide's reason: a refusal known first costs no snapshot and no
+	// restore, and a refused write that committed would push an undo step that does nothing.
 	const FEntityInstance* Instance = Network != nullptr ? Network->GetEntity(Entity) : nullptr;
 	if (Instance == nullptr || !Instance->bAlive || !Instance->IsDepot())
 	{
@@ -1316,52 +1390,31 @@ bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 		return false;
 	}
 
-	// HOISTED ABOVE THE SCOPE, so every refusal really does happen before the snapshot.
-	// URoadNetwork::SetIntermediateHoldingPosition refuses a runway-holding position, and
-	// checking it only in there would mean the one guard most likely to fire fired INSIDE
-	// the edit.
-	//
-	// THERE IS NO ROLLBACK, so do not read the backstop below as one. ~FRoadEditScope calls
-	// AbandonEdit, which DISCARDS the pending snapshot and leaves the live graph exactly as
-	// the body left it - the stacks are untouched, the model is not restored. Returning
-	// false from inside a scope is safe here only because the model refuses WITHOUT
-	// MUTATING, so there is nothing to put back. A future mutation followed by a return
-	// false inside a scope would leave a changed graph with no undo entry for it, which is
-	// a corruption no later undo can reach - hence the guard living out here.
-	// A road's taxiway-crossing stop line is refused by the same model rule, for the same reason.
-	if (Nodes[NodeIndex].HoldingPosition == EHoldingPositionKind::TaxiwayCrossing)
-	{
-		UE_LOG(LogRoadMesh, Warning,
-			TEXT("SetIntermediateHoldingPosition refused before the snapshot at guideline node %d: "
-				 "it is a road's stop line at a taxiway crossing, derived and not the player's"),
-			NodeIndex);
-		return false;
-	}
-	if (Nodes[NodeIndex].HoldingPosition == EHoldingPositionKind::Runway)
-	{
-		UE_LOG(LogRoadMesh, Warning,
-			TEXT("SetIntermediateHoldingPosition refused before the snapshot at guideline node %d: "
-				 "it is a runway-holding position, derived from the runway and not the player's"),
-			NodeIndex);
-		return false;
-	}
-	// What the node says now, read BEFORE the mutation, so a no-op can be recognised after
-	// it. A click that clears an already-clear position changes nothing, and committing it
-	// would give the player an undo step that visibly does nothing and has to be pressed
-	// twice to get past - see URoadEditHistory's "Edit lifecycle" comment.
+	// WHAT THE NODE SAYS NOW, read BEFORE the mutation, so a no-op can be recognised after it. A
+	// click that clears an already-clear position changes nothing, and committing it would give
+	// the player an undo step that visibly does nothing and has to be pressed twice to get past -
+	// see URoadEditHistory's "Edit lifecycle" comment. Also what a refusal names below: the kind
+	// is the reason.
 	const EHoldingPositionKind Before = Nodes[NodeIndex].HoldingPosition;
-	// After the guards, which refuse without mutating - a rejected position costs no snapshot.
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("holding point"));
+
+	// THE MODEL'S OWN REFUSAL, asked once, HERE (issue #437). This function used to re-type
+	// URoadNetwork::SetIntermediateHoldingPosition's two rules - a runway-holding position and a
+	// road's taxiway-crossing stop line are derived on every build, not the player's - above the
+	// scope, because a scope could not roll back and a refusal inside one had to be one that had
+	// written nothing: "a future mutation followed by a return false inside a scope would leave a
+	// changed graph with no undo entry for it". Two copies of a model rule in the facade is how
+	// the next kind of derived position gets refused in the model and honoured here. The scope can
+	// roll back now, so whatever the model wrote before it said no goes back with the rest.
+	// ENFORCED BY: Airside.Present.DerivedHoldingRefusedThroughFacade
 	if (!Network->SetIntermediateHoldingPosition(Node, bSet))
 	{
-		// The BACKSTOP, and reaching it means a guard above missed something - the node
-		// liveness check and the runway-kind check together are meant to cover every
-		// refusal the model can make. Distinct text from the hoisted guard's, so the log
-		// says WHICH of the two fired rather than leaving the reader to guess.
+		Edit.Rollback();
 		UE_LOG(LogRoadMesh, Warning,
-			TEXT("SetIntermediateHoldingPosition refused inside the edit at guideline node %d (set %d) - "
-				 "the hoisted guard should have caught this"),
-			NodeIndex, bSet);
+			TEXT("SetIntermediateHoldingPosition refused at guideline node %d (set %d): it is a derived "
+				 "holding position (kind %d) - a runway's, or a road's stop line at a taxiway crossing - "
+				 "and not the player's"),
+			NodeIndex, bSet, static_cast<int32>(Before));
 		return false;
 	}
 	if (Network->GetGuidelineNodes()[NodeIndex].HoldingPosition == Before)
@@ -1431,6 +1484,7 @@ int32 URoadEditFacade::SplitSegment(int32 SegmentIndex, FVector2D At)
 	const FRoadNodeId Middle = Owner.Network->SplitSegment(Doomed, At);
 	if (!Middle.IsSet())
 	{
+		Edit.Rollback();   // rule 40 - see PlaceNode
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("SplitSegment refused: segment %d at (%f, %f)"), SegmentIndex, At.X, At.Y);
 		return INDEX_NONE;
@@ -1459,6 +1513,15 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 	if (Network != nullptr && Use != nullptr && !Use->IsEditing())
 	{
 		Use->BeginEdit(*Network, Label);
+	}
+	else if (Network != nullptr && Use == nullptr && !bInteractiveEditOpen)
+	{
+		// THE HISTORY-LESS WORLD'S SNAPSHOT (issue #437): the state a Verify failure in the middle
+		// of this drag - a drop-to-merge the solver cannot corner - has to come back to. Taken here,
+		// once, rather than per frame: a drag is one edit, and its frames must not each copy the
+		// network. NOT taken again when a drag is already open, the way the branch above keeps the
+		// pending snapshot of an edit that is still going.
+		EditorRollbackPoint = FRoadEditScope::SnapshotForRollback(*Network);
 	}
 
 	// WHAT THE PAVEMENT WAS WORTH BEFORE THE DRAG. Without this the cost model has a hole big
@@ -1491,6 +1554,11 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 		return;
 	}
 	bInteractiveEditOpen = false;
+
+	// THE DRAG IS OVER, kept or not, so nothing may restore to its start any more: let the point go
+	// (issue #437). Before the branches below, none of which reads it - the cannot-afford revert is
+	// a game-world one and restores from the history's pending snapshot.
+	EditorRollbackPoint = nullptr;
 
 	URoadEditHistory* History = Actor().History;
 	const bool bHasHistoryEdit = History != nullptr && History->IsEditing();
@@ -1553,13 +1621,10 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 			// REVERTED, NOT ABANDONED. The node has already moved on every frame of the drag, so
 			// dropping the snapshot would leave the longer taxiway standing and unpaid for. This is
 			// the one edit that has to be undone rather than merely refused - see
-			// URoadEditHistory::RevertEdit. AdoptNetwork (#299) is the same "swap the live network
-			// and catch the ghost up" tail Travel and ApplyInteractiveMutation's own Verify-failure
-			// branch use.
-			if (URoadNetwork* Reverted = History->RevertEdit())
-			{
-				AdoptNetwork(*Reverted);
-			}
+			// URoadEditHistory::RollbackEdit. RollBackOpenEdit (issue #437) is the same "put the
+			// network back and catch the ghost up" door ApplyInteractiveMutation's own
+			// Verify-failure branch uses, through AdoptNetwork (#299)'s tail.
+			RollBackOpenEdit(History);
 			UE_LOG(LogRoadMesh, Log,
 				TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount());
 			return;
@@ -1632,10 +1697,11 @@ bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVect
 	// inside, and the surface builder has no answer for one - so a corner dragged across
 	// its own polygon has to be refused rather than fixed up afterwards.
 	//
-	// AND REFUSED OUT HERE, ABOVE THE SCOPE, for the reason SetIntermediateHoldingPosition
-	// records at length: ~FRoadEditScope abandons the snapshot and restores nothing, so a
-	// mutation followed by a `return false` inside a scope leaves a changed graph with no
-	// undo entry to reach it.
+	// AND REFUSED OUT HERE, BEFORE ApplyInteractiveMutation OPENS ANYTHING: this write has no
+	// Verify of its own to revert on, so a refusal that can be known first is the whole judgement,
+	// and there is nothing to roll back to. (Before issue #437 the reason was harder: an
+	// abandoned edit restored nothing, so a mutation followed by a `return false` left a changed
+	// graph with no undo entry to reach it.)
 	//
 	// THROUGH RoadGeom::IsSimplePolygon, the same test FApronDrawTool closes an outline
 	// against - one answer to "is this a valid apron", not a second opinion.
@@ -2121,6 +2187,7 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 	// The cascade is the model's: a segment whose endpoint is gone has no geometry.
 	else if (!Owner.Network->RemoveNode(Node))
 	{
+		Edit.Rollback();   // rule 40 - see PlaceNode
 		UE_LOG(LogRoadMesh, Warning, TEXT("DeleteNode refused: node %d would not remove"), NodeIndex);
 		return false;
 	}
@@ -2207,6 +2274,7 @@ bool URoadEditFacade::DeleteSegment(int32 SegmentIndex)
 
 	if (!Owner.Network->RemoveSegment(Segment))
 	{
+		Edit.Rollback();   // rule 40 - see PlaceNode
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("DeleteSegment refused: segment %d would not remove"), SegmentIndex);
 		return false;

@@ -9,6 +9,7 @@
 #include "Solve/GuidelineGeom.h"
 #include "Solve/JunctionSolver.h"
 #include "Solve/RoadGeom.h"
+#include "NetworkIdentity.h"
 #include "StandFixture.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -951,6 +952,44 @@ bool FTaxiwayRestrictionTest::RunTest(const FString&)
 			TaxiwayRestriction::RestrictionOf(*Net, West).IsSet());
 		TestFalse(TEXT("nor the other piece of the same taxiway"), TaxiwayRestriction::RestrictionOf(*Net, East).IsSet());
 	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Issue #318 (item: "CopyFrom is a hand-maintained list of every UPROPERTY, and no test pins its
+// completeness"), made load-bearing by issue #437: URoadNetwork::RestoreFrom - the way an edit that
+// must be undone gets the network back - is built on CopyFrom, so a field CopyFrom forgets is a
+// field a rolled-back edit leaves half-restored. Reflection walks every UPROPERTY, so the class
+// growing a member cannot pass by not being on a list; see NetworkIdentity.h.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCopyFromCoversEveryPropertyTest,
+	"Airside.Model.CopyFromCoversEveryProperty",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCopyFromCoversEveryPropertyTest::RunTest(const FString& Parameters)
+{
+	// A FLOOR ON THE WALK: a class whose properties stopped being reflected would compare nothing
+	// and pass. URoadNetwork holds 18 UPROPERTYs as this is written (2026-09-30); the floor is
+	// looser so the next field needs no edit here.
+	const int32 Properties = NetworkIdentity::PropertyCount();
+	if (!TestTrue(FString::Printf(TEXT("the walk found the network's properties (%d)"), Properties), Properties >= 16)) { return false; }
+
+	URoadNetwork* Source = NewObject<URoadNetwork>(GetTransientPackage());
+	const TArray<FString> NoRule = NetworkIdentity::MakeEveryPropertyNonDefault(*Source);
+	if (!TestEqual(FString::Printf(TEXT("every property is of a kind the mutator can move - extend "
+		"NetworkIdentity.h for: %s"), *FString::Join(NoRule, TEXT(", "))), NoRule.Num(), 0)) { return false; }
+
+	// THE CONTROL: a fresh network differs from Source in EVERY property. Without this a property
+	// the mutator left at its default would be "copied" trivially, and the assertion below would
+	// pass on a copy that never touched it.
+	URoadNetwork* Fresh = NewObject<URoadNetwork>(GetTransientPackage());
+	TestEqual(TEXT("control: Source differs from a fresh network in every property"),
+		NetworkIdentity::DifferingProperties(*Source, *Fresh).Num(), Properties);
+
+	Fresh->CopyFrom(*Source);
+	const TArray<FString> Missed = NetworkIdentity::DifferingProperties(*Source, *Fresh);
+	TestEqual(FString::Printf(TEXT("CopyFrom carries every UPROPERTY across (missed: %s)"),
+		*FString::Join(Missed, TEXT(", "))), Missed.Num(), 0);
 	return true;
 }
 

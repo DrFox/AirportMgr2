@@ -386,7 +386,7 @@ public:
 	 * instead would move the target, which is the opposite of what the gesture says.
 	 *
 	 * REFUSES AND REVERTS rather than leaving two nodes at one position: see
-	 * URoadEditFacade::MergeNodes, and URoadEditHistory::RevertEdit on why refusing after
+	 * URoadEditFacade::MergeNodes, and URoadEditHistory::RollbackEdit on why refusing after
 	 * the fact needs undoing rather than abandoning.
 	 */
 	virtual bool MergeNodes(int32 KeepIndex, int32 AbsorbIndex) = 0;
@@ -398,7 +398,7 @@ public:
 	 * derived rebuild when the OUTERMOST batch closes. Counted, so batches nest. Call through
 	 * FRoadRebuildBatch below, never by hand - a Begin whose End an early return skipped
 	 * would defer every rebuild in the level forever. See URoadEditFacade's class comment for
-	 * the semantics, and how a batch meets drags, undo, MergeNodes and RevertEdit.
+	 * the semantics, and how a batch meets drags, undo, MergeNodes and RollBackOpenEdit.
 	 *
 	 * PURE, not a no-op default the way GetPurse is: a target that silently ignored a batch
 	 * would still be CORRECT (it just rebuilds N times), which is exactly why nobody would

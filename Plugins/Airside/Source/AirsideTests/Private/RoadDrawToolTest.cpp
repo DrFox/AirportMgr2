@@ -14,6 +14,7 @@
 #include "Tool/ModeAxis.h"
 #include "Model/TaxiwayRestriction.h"
 #include "Solve/IcaoCode.h"
+#include "NetworkIdentity.h"
 #include "StandFixture.h"
 #include "Model/InspectFacts.h"
 #include "Model/StandAdmission.h"
@@ -657,7 +658,70 @@ bool FMoveNodeJudgesItsOwnArmsTest::RunTest(const FString& Parameters)
  * A MERGE REFUSES WHAT THE STRIP REFUSES (final review 3). The edit tool merges on drop whenever
  * the drag snapped to a node, whatever MoveNode answered - so the merge itself asks the judge,
  * of every arm it moved, in its own Verify: one evaluator, and the edit reverts whole.
+ *
+ * RUN IN BOTH WORLDS, AND BOTH WAYS (issue #437). The revert used to exist only where an undo
+ * history did - a game world - so the same refused merge in the EDITOR world (no history: the
+ * transaction system owns undo) stayed merged, and the editor's drag transaction then committed
+ * it into the level. This test only ever ran in the game world, which is why nothing said so.
+ * bAsDrag is the way FEditTool::OnDragEnd calls it: inside an open interactive edit, after the
+ * dragged node has moved, so the revert has to reach the state the DRAG began in, not merely the
+ * state this call found.
  */
+namespace
+{
+	bool RunMergeRefusedIntoStrip(FAutomationTestBase& T, EWorldType::Type WorldType, bool bAsDrag)
+	{
+		FAirsideTestWorld MergeWorld(/*bSpawnActor*/ true, WorldType);
+		if (!T.TestNotNull(TEXT("a world"), MergeWorld.World)) { return false; }
+		ARoadNetworkActor* Actor = MergeWorld.Actor;
+		if (!T.TestNotNull(TEXT("an actor"), Actor)) { return false; }
+		Actor->ClearNetwork();
+
+		// A taxiway ending at T, and a road whose end R sits beside T so that, folded into T, it
+		// leaves T 20 degrees off the taxiway's arm - along its strip.
+		const int32 W = Actor->PlaceNode(FVector2D(-20000.0, 0.0));
+		const int32 TNode = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		Actor->ConnectNodes(W, TNode, ERoadKind::Taxiway, INDEX_NONE);
+		const FVector2D Along(FMath::Cos(FMath::DegreesToRadians(160.0)), FMath::Sin(FMath::DegreesToRadians(160.0)));
+		const int32 Far = Actor->PlaceNode(Along * 10000.0);
+		const int32 R = Actor->PlaceNode(FVector2D(300.0, 300.0));
+		// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): the road already sits in the strip;
+		// what is judged here is the merge - see TestTool::ConnectUnjudged.
+		if (!T.TestTrue(TEXT("the road is laid"), TestTool::ConnectUnjudged(*Actor, Far, R, ERoadKind::ServiceRoad))) { return false; }
+
+		// THE WHOLE MODEL AS IT STANDS, kept to compare bitwise: node count, positions and the
+		// segment list are all in it, and so is whatever a half-undone edit would leave behind.
+		URoadNetwork* Before = DuplicateObject<URoadNetwork>(Actor->Network, GetTransientPackage());
+		const int32 SegmentsBefore = LiveSegments(Actor);
+		const int32 NodesBefore = Actor->Network->GetNodes().Num();
+		const FVector2D TAt = Actor->Network->GetNodes()[TNode].Position;
+		const FVector2D RAt = Actor->Network->GetNodes()[R].Position;
+
+		if (bAsDrag)
+		{
+			Actor->BeginInteractiveEdit(TEXT("drag node"));
+			// The drag's own frames come first; whether the strip judge lets this one land does not
+			// matter, the revert is to the drag's start either way.
+			Actor->MoveNode(R, FVector2D(420.0, 380.0));
+		}
+		T.TestFalse(TEXT("folding the road's end into the taxiway at 20 degrees is refused"), Actor->MergeNodes(TNode, R));
+		if (bAsDrag)
+		{
+			Actor->EndInteractiveEdit(/*bKeep*/ true);
+		}
+
+		T.TestNotNull(TEXT("the road's end survives - the edit reverted whole"), Actor->Network->GetNode(Actor->Network->NodeIdAt(R)));
+		T.TestEqual(TEXT("and nothing was re-pointed"), LiveSegments(Actor), SegmentsBefore);
+		T.TestEqual(TEXT("no node was absorbed"), Actor->Network->GetNodes().Num(), NodesBefore);
+		T.TestEqual(TEXT("the taxiway's end is where it was"), Actor->Network->GetNodes()[TNode].Position, TAt);
+		T.TestEqual(TEXT("and the road's end is where the edit began"), Actor->Network->GetNodes()[R].Position, RAt);
+		const TArray<FString> Differing = NetworkIdentity::DifferingProperties(*Actor->Network, *Before, NetworkIdentity::RederivedOnNotify());
+		T.TestEqual(FString::Printf(TEXT("the model is BITWISE what it was (bar the guideline graph the notify re-derives; differs in: %s)"),
+			*FString::Join(Differing, TEXT(", "))), Differing.Num(), 0);
+		return true;
+	}
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMergeRefusedIntoStripTest,
 	"Airside.Present.MergeRefusedIntoStrip",
@@ -665,28 +729,22 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FMergeRefusedIntoStripTest::RunTest(const FString& Parameters)
 {
-	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	Actor->ClearNetwork();
+	return RunMergeRefusedIntoStrip(*this, EWorldType::Game, /*bAsDrag*/ false)
+		&& RunMergeRefusedIntoStrip(*this, EWorldType::Game, /*bAsDrag*/ true);
+}
 
-	// A taxiway ending at T, and a road whose end R sits beside T so that, folded into T, it
-	// leaves T 20 degrees off the taxiway's arm - along its strip.
-	const int32 W = Actor->PlaceNode(FVector2D(-20000.0, 0.0));
-	const int32 T = Actor->PlaceNode(FVector2D(0.0, 0.0));
-	Actor->ConnectNodes(W, T, ERoadKind::Taxiway, INDEX_NONE);
-	const FVector2D Along(FMath::Cos(FMath::DegreesToRadians(160.0)), FMath::Sin(FMath::DegreesToRadians(160.0)));
-	const int32 Far = Actor->PlaceNode(Along * 10000.0);
-	const int32 R = Actor->PlaceNode(FVector2D(300.0, 300.0));
-	// A LAYOUT THAT PREDATES THE STRIP (stage 3, 2026-09-29): the road already sits in the strip;
-	// what is judged here is the merge - see TestTool::ConnectUnjudged.
-	if (!TestTrue(TEXT("the road is laid"), TestTool::ConnectUnjudged(*Actor, Far, R, ERoadKind::ServiceRoad))) { return false; }
+/** THE SAME REFUSAL IN THE EDITOR WORLD (issue #437) - no history, so no revert unless the merge
+ *  carries its own way back. RED before URoadNetwork::RestoreFrom was wired into
+ *  ApplyInteractiveMutation: the node stayed absorbed and the drag transaction committed it. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMergeRefusedIntoStripEditorWorldTest,
+	"Airside.Present.MergeRefusedIntoStripInEditorWorld",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-	const int32 SegmentsBefore = LiveSegments(Actor);
-	TestFalse(TEXT("folding the road's end into the taxiway at 20 degrees is refused"), Actor->MergeNodes(T, R));
-	TestNotNull(TEXT("the road's end survives - the edit reverted whole"), Actor->Network->GetNode(Actor->Network->NodeIdAt(R)));
-	TestEqual(TEXT("and nothing was re-pointed"), LiveSegments(Actor), SegmentsBefore);
-	return true;
+bool FMergeRefusedIntoStripEditorWorldTest::RunTest(const FString& Parameters)
+{
+	return RunMergeRefusedIntoStrip(*this, EWorldType::Editor, /*bAsDrag*/ false)
+		&& RunMergeRefusedIntoStrip(*this, EWorldType::Editor, /*bAsDrag*/ true);
 }
 
 /**

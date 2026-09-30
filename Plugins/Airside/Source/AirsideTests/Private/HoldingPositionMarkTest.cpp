@@ -3,6 +3,10 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "NetworkIdentity.h"
+#include "Present/RoadEditFacade.h"
+#include "Present/RoadEditHistory.h"
+#include "Present/RoadNetworkActor.h"
 #include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 
@@ -235,6 +239,89 @@ bool FIntermediateHoldAtStripEdgeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("still one mark, on the end - where it is realised moved, what it names did not"),
 		Net->GetHoldingPositionMarks().Num(), 1);
 	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Issue #437: THE FACADE NO LONGER RE-TYPES THE MODEL'S TWO REFUSALS. URoadEditFacade::
+// SetIntermediateHoldingPosition used to check "runway-holding" and "a road's stop line at a taxiway
+// crossing" itself, ABOVE its edit scope, because a scope could not roll back and a refusal inside
+// one had to be a refusal that had written nothing. The scope can roll back now, so the facade asks
+// the model once and undoes whatever it wrote on a no. This is the pin for what the two hoisted
+// checks did: a derived position refuses the player, from either world, changing nothing and
+// leaving no undo step - and one that IS the player's still lands, so the refusals are not simply a
+// dead path.
+namespace
+{
+	/** The first live guideline node carrying Kind, or unset. */
+	FGuidelineNodeId FirstHoldingOfKind(const URoadNetwork& Net, EHoldingPositionKind Kind)
+	{
+		const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			if (Nodes[Index].bAlive && Nodes[Index].HoldingPosition == Kind)
+			{
+				return Net.GuidelineNodeIdAt(Index);
+			}
+		}
+		return FGuidelineNodeId();
+	}
+
+	bool RunDerivedHoldingRefusedThroughTheFacade(FAutomationTestBase& T, EWorldType::Type WorldType)
+	{
+		FAirsideTestWorld World(/*bSpawnActor*/ true, WorldType);
+		if (!T.TestNotNull(TEXT("a world"), World.Actor)) { return false; }
+		ARoadNetworkActor* Actor = World.Actor;
+
+		// One case per derived kind: the runway's, and a road's stop line at a taxiway crossing.
+		for (const EHoldingPositionKind Derived : { EHoldingPositionKind::Runway, EHoldingPositionKind::TaxiwayCrossing })
+		{
+			Actor->ClearNetwork();
+			URoadNetwork& Net = *Actor->Network;
+			if (Derived == EHoldingPositionKind::Runway)
+			{
+				//   T ======= E ======= F        runway;  E - X taxiway: its E end is runway-holding
+				URoadProfile* Runway = TestProfiles::Runway();
+				URoadProfile* Taxiway = TestProfiles::Taxiway();
+				const FRoadNodeId Threshold = Net.AddNode(FVector2D(0.0, 0.0));
+				const FRoadNodeId E = Net.AddNode(FVector2D(60000.0, 0.0));
+				const FRoadNodeId Far = Net.AddNode(FVector2D(100000.0, 0.0));
+				Net.AddStraightSegment(Threshold, E, Runway);
+				Net.AddStraightSegment(E, Far, Runway);
+				const FRoadNodeId X = Net.AddNode(FVector2D(60000.0, -20000.0));
+				Net.AddStraightSegment(E, X, Taxiway);
+				TestGraph::Rebuild(Net);
+			}
+			else
+			{
+				FRoadCrossingFixture::Lay(Net, /*bFarSide*/ true);
+				TestGraph::Derive(Net);
+			}
+			const FGuidelineNodeId Node = FirstHoldingOfKind(Net, Derived);
+			if (!T.TestTrue(FString::Printf(TEXT("the layout has a derived holding position (kind %d)"), static_cast<int32>(Derived)),
+				Node.IsSet())) { return false; }
+
+			URoadNetwork* Before = DuplicateObject<URoadNetwork>(&Net, GetTransientPackage());
+			const int32 DepthBefore = Actor->History != nullptr ? Actor->History->UndoDepth() : 0;
+			T.TestFalse(TEXT("the player cannot set over a derived position"), Actor->SetIntermediateHoldingPosition(Node.Index, true));
+			T.TestFalse(TEXT("nor clear it"), Actor->SetIntermediateHoldingPosition(Node.Index, false));
+			const TArray<FString> Differing = NetworkIdentity::DifferingProperties(*Actor->Network, *Before);
+			T.TestEqual(FString::Printf(TEXT("the model is BITWISE what it was (differs in: %s)"),
+				*FString::Join(Differing, TEXT(", "))), Differing.Num(), 0);
+			T.TestEqual(TEXT("and no undo step was pushed"), Actor->History != nullptr ? Actor->History->UndoDepth() : 0, DepthBefore);
+		}
+		return true;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDerivedHoldingRefusedThroughFacadeTest,
+	"Airside.Present.DerivedHoldingRefusedThroughFacade",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDerivedHoldingRefusedThroughFacadeTest::RunTest(const FString& Parameters)
+{
+	return RunDerivedHoldingRefusedThroughTheFacade(*this, EWorldType::Game)
+		&& RunDerivedHoldingRefusedThroughTheFacade(*this, EWorldType::Editor);
 }
 
 #endif

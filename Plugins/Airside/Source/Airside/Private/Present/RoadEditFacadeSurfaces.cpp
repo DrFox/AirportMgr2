@@ -48,7 +48,7 @@ bool URoadEditFacade::Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoad
 
 	// Adopted outright rather than copied: the history has already let go of it. See
 	// AdoptNetwork's own header comment (#299) for the hide-ghost-and-notify tail this shares
-	// with the two RevertEdit sites and ClearNetwork.
+	// with RollBackOpenEdit and ClearNetwork.
 	AdoptNetwork(*Restored);
 	return true;
 }
@@ -166,6 +166,10 @@ int32 URoadEditFacade::AddApron(const TArray<FVector2D>& Outline)
 	const FApronId Added = Net.AddApron(MoveTemp(Surface));
 	if (!Added.IsSet())
 	{
+		// Every refusal after a scope opens rolls it back (Check-Architecture rule 40, issue
+		// #437; see URoadEditFacade::PlaceNode): whether this one wrote anything is the question
+		// the next edit to this function gets wrong.
+		Edit.Rollback();
 		UE_LOG(LogRoadMesh, Warning, TEXT("AddApron refused by the model"));
 		return INDEX_NONE;
 	}
@@ -187,6 +191,7 @@ bool URoadEditFacade::DeleteSlot(bool bDoomed, const TCHAR* Label,
 
 	if (!Remove(*Network))
 	{
+		Edit.Rollback();   // rule 40 - see AddApron
 		return false;
 	}
 
@@ -272,7 +277,7 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 	}
 
 	// Priced from the definition and refused before anything is placed - see ConnectNodes for
-	// why an abandoned scope is not a rollback.
+	// why a refusal that can be known first is made first.
 	const FBuildQuote Quote = BuildCost::ForEntity(*Definition);
 	if (!AffordOrRefuse(Quote))
 	{
@@ -303,6 +308,7 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 		UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::C));
 	if (!Placed.IsSet())
 	{
+		Edit.Rollback();   // rule 40 - see AddApron
 		return INDEX_NONE;
 	}
 
@@ -548,6 +554,7 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	const FEntityInstanceId Placed = Net.PlaceEntity(Placement);
 	if (!Placed.IsSet())
 	{
+		Edit.Rollback();   // rule 40 - see AddApron
 		return INDEX_NONE;
 	}
 
@@ -936,6 +943,7 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("PlaceStandInPlot refused: URoadNetwork::PlaceEntity refused an accepted "
 				 "Code %s stand - report this as a bug."), IcaoCode::ToLetter(*Letter));
+		Edit.Rollback();   // rule 40 - see AddApron
 		return INDEX_NONE;
 	}
 
@@ -1056,8 +1064,8 @@ void URoadEditFacade::ClearNetwork()
 
 	// A fresh network rather than a drain: node removal bumps generations and prunes
 	// incident lists, and none of that bookkeeping is worth doing on the way to empty.
-	// AdoptNetwork (#299) is the same swap-and-notify tail Travel and the two RevertEdit
-	// sites use; HideGhost above already ran once, and AdoptNetwork's own call is harmless
+	// AdoptNetwork (#299) is the same swap-and-notify tail Travel and RollBackOpenEdit
+	// use; HideGhost above already ran once, and AdoptNetwork's own call is harmless
 	// repeated.
 	AdoptNetwork(*NewObject<URoadNetwork>(&Owner));
 }

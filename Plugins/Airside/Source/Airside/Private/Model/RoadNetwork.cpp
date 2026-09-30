@@ -452,6 +452,30 @@ void URoadNetwork::CopyFrom(const URoadNetwork& Source)
 	// a level-loaded segment (profile lost to the transient package, see DefaultProfile's
 	// own comment) needed the fallback.
 	DefaultProfile = Source.DefaultProfile;
+
+	// LEFT OUT UNTIL ISSUE #318's completeness test walked the class: NextStandNumber only ever
+	// advances, so a copy that kept its own would let a restored network re-issue a number a
+	// deleted stand had already worn - see the field's comment on why numbers are never reissued.
+	NextStandNumber = Source.NextStandNumber;
+}
+
+void URoadNetwork::RestoreFrom(const URoadNetwork& Snapshot)
+{
+	// READ BEFORE CopyFrom OVERWRITES GuidelineRevision with the snapshot's (zero, for a
+	// DuplicateObject clone). See this method's header comment on why the clocks go forward.
+	const uint32 LiveEditRevision = EditRevision;
+	const uint32 LiveGuidelineRevision = GuidelineRevision;
+
+	CopyFrom(Snapshot);
+
+	EditRevision = FMath::Max(LiveEditRevision, Snapshot.EditRevision) + 1;
+	GuidelineRevision = FMath::Max(LiveGuidelineRevision, Snapshot.GuidelineRevision) + 1;
+	GuidelinesDerivedAt = EditRevision;
+
+	// PoseNodeIndex memoises Entities against GuidelineRevision, which has just moved, so it would
+	// rebuild on its own; cleared as well so nothing depends on that being noticed.
+	PoseNodeIndex.Reset();
+	PoseNodeIndexRevision = MAX_uint32;
 }
 
 const FRoadNode* URoadNetwork::GetNode(FRoadNodeId Node) const

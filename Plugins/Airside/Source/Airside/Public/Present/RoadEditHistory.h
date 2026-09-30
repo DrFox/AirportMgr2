@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/BuildPurse.h"
 #include "UObject/Object.h"
+#include "UObject/StrongObjectPtr.h"
 #include "RoadEditHistory.generated.h"
 
 class URoadNetwork;
@@ -102,15 +103,23 @@ public:
 	void AbandonEdit();
 
 	/**
-	 * The edit must be UNDONE: hand back the state it started from, and clear the pending edit.
+	 * The edit must be UNDONE: put Live back to the state it started from, IN PLACE, and clear
+	 * the pending edit. False when no edit was in progress, touching nothing.
 	 *
 	 * NOT AbandonEdit, WHICH REVERTS NOTHING. Abandon drops the snapshot and leaves the model
 	 * exactly as the edit left it - right for a mutator that refuses before touching anything,
 	 * and wrong for an interactive drag, which has already moved the node on every frame it
-	 * was held. The caller adopts the returned network the way Undo's caller does; null when
-	 * no edit was in progress.
+	 * was held. The caller notifies afterwards (URoadEditFacade::RollBackOpenEdit does): this
+	 * restores the model and nothing that derives from it.
+	 *
+	 * IN PLACE, where it used to hand the snapshot back for the caller to adopt (RevertEdit,
+	 * replaced for issue #437): the two ways of getting a network back - this, and the local
+	 * snapshot a history-less scope holds - are now ONE, URoadNetwork::RestoreFrom, so a
+	 * restore in the editor world and a restore in a game world cannot disagree about which
+	 * fields come back or how the revision clocks move. The stacks are untouched: a rolled-back
+	 * edit is not an undo step, because as far as the player is concerned it never happened.
 	 */
-	URoadNetwork* RevertEdit();
+	bool RollbackEdit(URoadNetwork& Live);
 
 	/**
 	 * Record what the edit in progress paid, so undoing past it can put the money back.
@@ -207,11 +216,25 @@ private:
  *
  * Must not nest: the inner scope would snapshot a half-finished graph. Nothing nests today
  * and an ensure fires if that changes.
+ *
+ * A SCOPE THAT IS NOT COMMITTED STILL ROLLS NOTHING BACK ON ITS OWN - Rollback() is the explicit
+ * way to say "this edit failed after it wrote". That is deliberate (RoadEditHistoryTest pins it):
+ * an uncommitted scope is also what a no-op that succeeded looks like, and an implicit restore
+ * would spend a whole-network copy and move every revision clock on each of those.
+ *
+ * ROLLBACK DOES NOT DEPEND ON THE UNDO HISTORY (issue #437). The snapshot a scope takes for undo
+ * only exists where there is a history - a game world - and the editor world has none by design
+ * (the transaction system owns undo). The scope used to be a Memento with no restore, so
+ * "refused after it wrote" was unrepresentable there, and every mutator that could hit it
+ * copied the model's own refusal rules ABOVE the scope instead. Now a scope with no history
+ * takes a local snapshot of its own, so Rollback() works in both worlds and a mutator may ask the
+ * model once and undo on a no.
  */
 class AIRSIDE_API FRoadEditScope
 {
 public:
-	FRoadEditScope(URoadEditHistory* InHistory, const URoadNetwork* InNetwork, const TCHAR* InLabel);
+	/** Network is non-const because Rollback writes it. A null Network makes the scope inert. */
+	FRoadEditScope(URoadEditHistory* InHistory, URoadNetwork* InNetwork, const TCHAR* InLabel);
 	~FRoadEditScope();
 
 	FRoadEditScope(const FRoadEditScope&) = delete;
@@ -220,8 +243,40 @@ public:
 	/** Call on the success path, and only there. */
 	void Commit() { bCommitted = true; }
 
+	/**
+	 * The edit failed after it wrote: put the network back to how it was when this scope began,
+	 * bitwise, IN PLACE (URoadNetwork::RestoreFrom), and push no undo step. True when it did.
+	 *
+	 * NO NOTIFY, deliberately: a plain scope has broadcast nothing before its commit, so no
+	 * cache has seen the failed edit and none is stale - and the revision clocks RestoreFrom
+	 * moves forward make sure nothing stamped DURING the edit can mistake the restored state
+	 * for its own. (A drag is different, it notified per frame - see
+	 * URoadEditFacade::RollBackOpenEdit, which does notify.)
+	 *
+	 * Ends the edit: afterwards the destructor has nothing to commit or abandon. False, changing
+	 * nothing, for an inert scope or a second call after the history's edit ended.
+	 */
+	bool Rollback();
+
+	/**
+	 * A copy of Net a rollback can restore from. A scope's local snapshot and the facade's
+	 * editor-world drag point both take theirs from here, so a restore point means one thing
+	 * however it was taken. Owned by the transient package, never the level.
+	 */
+	static URoadNetwork* SnapshotForRollback(const URoadNetwork& Net);
+
 private:
 	URoadEditHistory* History = nullptr;
+	URoadNetwork* Network = nullptr;
+
+	/**
+	 * Held only when there is NO history, so a game world does not copy the network twice per
+	 * edit (its snapshot is the history's pending one). A strong pointer because the scope is
+	 * plain C++ - a raw one is collectable the moment anything triggers a collection mid-edit -
+	 * and it lives on the stack, so it is released on the game thread that took it.
+	 */
+	TStrongObjectPtr<URoadNetwork> LocalSnapshot;
+
 	bool bCommitted = false;
 	bool bBegan = false;
 };

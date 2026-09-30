@@ -169,8 +169,40 @@ public:
 	 * so this is for a SCRATCH object already constructed for the purpose, never a
 	 * replacement for DuplicateObject where the whole UObject identity matters (undo's
 	 * snapshot, for one, still uses DuplicateObject deliberately).
+	 *
+	 * EVERY UPROPERTY, ENFORCED BY: Airside.Model.CopyFromCoversEveryProperty, which walks the
+	 * class by reflection (issue #318; it caught NextStandNumber, which this list had left out
+	 * since the field was added). The SESSION clocks - EditRevision, GuidelinesDerivedAt, the
+	 * warn-once set, the test counters - are deliberately NOT copied: they are not state, and what
+	 * a copy should read for them depends on what the caller is doing (the ghost wants none; a
+	 * restore wants them moved FORWARD - see RestoreFrom). GuidelineRevision is the one clock that
+	 * IS copied, kept for the ghost's identity-checked caches.
 	 */
 	void CopyFrom(const URoadNetwork& Source);
+
+	/**
+	 * Put this network back to the state Snapshot holds, IN PLACE - the way a refused or failed
+	 * edit undoes itself (issue #437: FRoadEditScope::Rollback, and the interactive Verify path
+	 * in URoadEditFacade).
+	 *
+	 * IN PLACE, NOT A SWAPPED-IN COPY, for three reasons. The network object is what the level
+	 * saves and what the editor's transaction Modify()s at the start of a drag: a replacement
+	 * would sit outside both, and the transaction would record a change to an object nothing
+	 * points at. Identity caches keyed on `&Network` stay meaningful. And a pointer held across
+	 * the edit is not silently orphaned.
+	 *
+	 * THE CLOCKS MOVE FORWARD, never back to Snapshot's. A snapshot is a DuplicateObject clone, so
+	 * its non-UPROPERTY clocks read zero, and a cache that stamped itself at revision R while the
+	 * failed edit was applied must not find R again after the restore (issue #318's "revision
+	 * clocks restart at zero on every undo", closed for this path). EditRevision and
+	 * GuidelineRevision become one past the highest value either side ever showed.
+	 * GuidelinesDerivedAt is stamped current: the restored guideline graph and the restored roads
+	 * are a consistent pair - they were copied together - so AreGuidelinesBehindRoad reads false,
+	 * and the caller's Topology notify re-derives regardless.
+	 *
+	 * Built on CopyFrom, so it is exactly as complete as that is - see its own comment.
+	 */
+	void RestoreFrom(const URoadNetwork& Snapshot);
 
 	const FRoadNode*    GetNode(FRoadNodeId Node) const;
 	const FRoadSegment* GetSegment(FRoadSegmentId Segment) const;
