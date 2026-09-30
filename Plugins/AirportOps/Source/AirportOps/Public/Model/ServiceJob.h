@@ -241,8 +241,10 @@ struct AIRPORTOPS_API FTurnaround
 	UPROPERTY() double TurnaroundEndsAt = 0.0;
 
 	/**
-	 * The last reason a departure was refused, so the retry does not log every tick. A departure can
-	 * be refused for as long as the player leaves a runway occupied, and this runs every tick.
+	 * The last reason a departure was refused, so a retry logs only a CHANGE of reason. A departure can be
+	 * refused for as long as the player leaves a taxiway busy or a stand without a push arm; it is retried
+	 * on an event (UJobBoard::Step's header), and every 30 s by the ops safety net while
+	 * UJobBoard::HasRefusedDeparture finds this set.
 	 */
 	UPROPERTY() EDepartureRefusal LastDepartureRefusal = EDepartureRefusal::None;
 

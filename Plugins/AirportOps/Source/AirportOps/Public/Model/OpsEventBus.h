@@ -342,6 +342,19 @@ struct AIRPORTOPS_API FStandsFreedEvent
 };
 
 /**
+ * A parked aircraft's pushback is no longer blocked by other traffic - Airside's UGroundTraffic::OnPushGroundFreed,
+ * bridged like FRunwayFreedEvent. DERIVED by Airside's push watch, which re-asks DepartAgent's own question for every
+ * aircraft it refused PushbackBlocked: the job board's refused departure waits on this, not on a per-frame retry.
+ * ENFORCED BY: AirportOps.Present.Bus.PushGroundFreedIsBridged, AirportOps.Present.PushGroundFreed.DepartsTheFrameAfter
+ */
+struct AIRPORTOPS_API FPushGroundFreedEvent
+{
+	int32 AgentId = 0;
+	static const TCHAR* EventName() { return TEXT("PushGroundFreed"); }
+	FString Describe() const;
+};
+
+/**
  * A flight came due and joined the arrival queue - UFlightBoard::Enqueue, its one site (a Clock.At callback, or the
  * load's RearmSchedules for one already overdue). The queue pass hears it; before PR D the queue was ticked every
  * frame and needed no word.
@@ -365,7 +378,7 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
 	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent, FRunwayFreedEvent, FStandsFreedEvent,
-	FFlightInboundEvent>;
+	FFlightInboundEvent, FPushGroundFreedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

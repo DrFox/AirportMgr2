@@ -213,16 +213,16 @@ public:
 	 *  no times (ops batch 3 PR E). Counted here, the one production caller, not on the actor. */
 	int32 TimeScaleSetsForTest() const { return TimeScaleSets; }
 
-	/** Whether the arrival queue's safety net (QueueSafetyHandle) is booked on the clock. */
-	bool IsQueueSafetyNetArmedForTest() const { return QueueSafetyHandle != INDEX_NONE; }
+	/** Whether the safety net (SafetyNetHandle) is booked on the clock - for either half. */
+	bool IsSafetyNetArmedForTest() const { return SafetyNetHandle != INDEX_NONE; }
 
 	/**
-	 * Game seconds between the arrival queue's safety runs - see RunArrivalQueue. 30 (ops event bus spec §2): long
+	 * Game seconds between the safety net's runs - see ArmSafetyNet. 30 (ops event bus spec §2): long
 	 * enough that a stranded flight is a visible defect rather than a smooth fallback, short enough that one never
 	 * holds for minutes in play. At x1 on the default scenario (2400 real s of daylight for 14 h, 480 of night for 10 h)
 	 * 30 game s is about 1.4 real s by day and 0.4 by night (2026-09-30).
 	 */
-	static constexpr double QueueSafetySeconds = 30.0;
+	static constexpr double SafetyNetSeconds = 30.0;
 
 	/**
 	 * Every airline with its fleet resolved to airframes, built once at Attach. What the
@@ -309,6 +309,11 @@ private:
 	int32 JobBoardDeadlineHandle = INDEX_NONE;
 	void ArmJobBoardDeadline();
 
+	/** Marks the JobBoard pass dirty FOR AN EVENT, a deadline or a command - every dirtier comes through here, so the
+	 *  pass can tell a run something asked for (bJobBoardCovered) from a run only the safety net asked for. The
+	 *  arrival queue's DirtyArrivalQueue, for the other pass. */
+	void DirtyJobBoard();
+
 	/**
 	 * THE ARRIVAL QUEUE'S PASS (ops batch 3 §5), in place of the per-frame UFlightBoard::TickQueue call: run when an
 	 * event that can let a holding flight land dirties it - a runway or stand freed, an accept, a flight joining the
@@ -326,19 +331,35 @@ private:
 	void DirtyArrivalQueue();
 
 	/**
-	 * THE SAFETY NET (ops event bus spec §2): while flights hold, Clock.Every(QueueSafetySeconds) runs the pass
-	 * anyway. If THAT run - one no event asked for - clears a flight, an event that should have covered it is missing,
-	 * and it says so as a Warning, which a test fails on. A missing event becomes a named defect, not a stuck airport.
-	 * Armed and cancelled by the pass itself from FQueueTick::Waiting; a paused clock fires nothing. Removed once
-	 * quiet in play.
-	 * ENFORCED BY: AirportOps.Present.ArrivalQueue.SafetyNetCatchesAMissedEvent, AirportOps.Present.ArrivalQueue.CrossingClearDispatchesNextFrame
+	 * THE SAFETY NET (ops event bus spec §2), for two passes: while flights hold (the arrival queue's half) or a due
+	 * turnaround's departure is refused (the job board's half, ops push-ground-freed 2026-09-30), Clock.Every(
+	 * SafetyNetSeconds) runs each wanting pass anyway. If THAT run - one no event asked for - clears a flight or gets an
+	 * aircraft away, an event that should have covered it is missing, and it says so as a Warning, which a test fails
+	 * on. A missing event becomes a named defect, not a stuck airport. Each half is wanted or not by its own pass after
+	 * every run (FQueueTick::Waiting, UJobBoard::HasRefusedDeparture); a paused clock fires nothing. Removed once quiet
+	 * in play.
+	 *
+	 * ONE CLOCK ENTRY, NOT ONE PER PASS: the halves share the period and the places that must cancel them (a load, a
+	 * detach), and a second handle is a second thing to forget at each.
+	 * ENFORCED BY: AirportOps.Present.ArrivalQueue.SafetyNetCatchesAMissedEvent, AirportOps.Present.PushGroundFreed.SafetyNetDepartsAMissedOne
 	 */
-	void ArmQueueSafetyNet(bool bWaiting);
-	int32 QueueSafetyHandle = INDEX_NONE;
+	void ArmSafetyNet();
+	/** The arrival queue's half. Unwanted, its flags go with it (review M1): a stale one would misattribute a run. */
+	void WantQueueSafetyNet(bool bWaiting);
+	/** The job board's half, the same rule. */
+	void WantDepartureSafetyNet(bool bWaiting);
+	/** Both halves off - a load (its clock is another) or a detach (no airport to guard). */
+	void CancelSafetyNet();
+	int32 SafetyNetHandle = INDEX_NONE;
+	bool bQueueNetWanted = false;
+	bool bDepartureNetWanted = false;
 	/** Set by the net's clock entry; read and cleared by the next run of the pass. */
 	bool bQueueSafetyDue = false;
 	/** Set by DirtyArrivalQueue; read and cleared by the next run of the pass. */
 	bool bQueueCovered = false;
+	/** The job board's pair of the two above: set by the net's entry, and by DirtyJobBoard. */
+	bool bJobBoardSafetyDue = false;
+	bool bJobBoardCovered = false;
 
 	/** Counts UOpsRuntime::Tick's drains - "this frame" for ONE CLEARANCE A FRAME. QueueClearedFrame is the frame the
 	 *  pass last cleared a flight in. Session counters, never saved. */
@@ -350,6 +371,10 @@ private:
 	FDelegateHandle StandsFreedHandle;
 	void OnRunwayFreed(FRoadSegmentId Seed);
 	void OnStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes);
+
+	/** Airside's derived OnPushGroundFreed, bridged the same way - bound in Attach, removed in Detach. */
+	FDelegateHandle PushGroundFreedHandle;
+	void OnPushGroundFreed(int32 AgentId);
 
 	/**
 	 * What FNetworkChangedEvent compares against - see UOpsRuntime::Tick. Not saved: a load swaps the

@@ -275,10 +275,17 @@ public:
 	 *
 	 * RETURNS TRUE WHEN SOMETHING IS LEFT UNRESOLVED and must be looked at again next frame: a vehicle
 	 * whose dispatch was refused, one parked at a stand with no decision (the final review #1
-	 * backstop), a job still Open (a re-offered one is bid on the NEXT pass - see the body), or a due
-	 * turnaround that could not leave. False means nothing here changes until an event or a deadline
-	 * says so - which is what lets the ops bus run this as a pass rather than every frame (spec
-	 * 2026-09-29-ops-event-bus section 2; UOpsRuntime::WireBus's "JobBoard" pass).
+	 * backstop), or a job still Open (a re-offered one is bid on the NEXT pass - see the body). False
+	 * means nothing here changes until an event or a deadline says so - which is what lets the ops bus
+	 * run this as a pass rather than every frame (spec 2026-09-29-ops-event-bus section 2;
+	 * UOpsRuntime::WireBus's "JobBoard" pass).
+	 *
+	 * A DUE TURNAROUND THAT COULD NOT LEAVE IS NOT UNRESOLVED (ops push-ground-freed, 2026-09-30): it used
+	 * to re-run this whole Step every frame for as long as it was refused. Its retries now come from what
+	 * can change the answer - PushGroundFreed for PushbackBlocked (Airside's push watch), NetworkChanged
+	 * for every other refusal (a runway, an arm or a route the player draws) - and the ops safety net
+	 * while HasRefusedDeparture says one is waiting.
+	 * ENFORCED BY: AirportOps.Present.PushGroundFreed.NoPushbackRouteIsQuiet
 	 *
 	 * ONE SEQUENCE, KEPT WHOLE, on purpose: each step's place in it is argued in its own comment, and
 	 * splitting it across event handlers would re-derive that order in several places.
@@ -297,6 +304,19 @@ public:
 
 	/** How many Steps have run - for the test that a quiet airport runs none. */
 	int32 StepCountForTest() const { return StepCount; }
+
+	/**
+	 * The aircraft the last Step's DepartTheReady got away, cleared as each Step begins. The ops runtime reads it
+	 * after a run the safety net alone asked for, to name the departure no event covered.
+	 */
+	const TArray<int32>& DepartedLastStep() const { return LastStepDeparted; }
+
+	/**
+	 * Is any turnaround due, not being served, and refused its departure by the last try? What keeps the ops
+	 * safety net armed for departures: such an aircraft is retried only by an event now (see Step), and the net
+	 * is for the one whose event never came. DERIVED from the board, asked after every Step.
+	 */
+	bool HasRefusedDeparture(double Now) const;
 
 	/**
 	 * Moves with every mutator of Jobs, Vehicles and Turnarounds - private, so every public door to them: Step,
@@ -737,11 +757,14 @@ private:
 	/** See StepCountForTest. A session counter, not saved. */
 	int32 StepCount = 0;
 
+	/** See DepartedLastStep. Transient: one Step's answer. */
+	TArray<int32> LastStepDeparted;
+
 	/** See Revision. A session counter, not saved. */
 	uint32 RevisionCount = 0;
 
 	/** True while any of the turnaround's jobs is neither Done nor Unserviceable. One rule, read by
-	 *  DepartTheReady and by Step's "is a departure waiting?" - so the two cannot disagree. */
+	 *  DepartTheReady and by HasRefusedDeparture - so the two cannot disagree. */
 	bool IsBeingServed(const FTurnaround& Turnaround) const;
 
 	/**

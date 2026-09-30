@@ -90,6 +90,10 @@ public:
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnStandsFreed, const TArray<FGuidelineNodeId>& /*PoseNodes*/);
 	FOnStandsFreed OnStandsFreed;
 
+	/** A parked aircraft's push no longer blocked - relayed from UGroundTraffic::OnPushGroundFreed, which see. */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnPushGroundFreed, int32 /*AgentId*/);
+	FOnPushGroundFreed OnPushGroundFreed;
+
 	/** The agents themselves, for a caller that wants the model rather than the view. */
 	UGroundTraffic* GetModel() const { return Model; }
 
@@ -284,6 +288,7 @@ private:
 	void OnModelArrivalRefused(EArrivalRefusal Why);
 	void OnModelRunwayFreed(FRoadSegmentId Seed);
 	void OnModelStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes);
+	void OnModelPushGroundFreed(int32 AgentId);
 
 	void SpawnView(int32 AgentId);
 	void DestroyView(int32 AgentId);
