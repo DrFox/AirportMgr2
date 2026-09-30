@@ -171,13 +171,15 @@ bool FPlotOutlineIsAlwaysCounterClockwiseTest::RunTest(const FString& Parameters
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 
 	// Clockwise: the rectangle the gesture commits, walked the other way round.
+	// 20 m x 14 m SINCE #266: a plot must seat the mix it starts with, and under the real kits no
+	// frontage under 20 m seats a shed (Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix).
 	const TArray<FVector2D> Clockwise = {
-		FVector2D(0.0, 0.0), FVector2D(0.0, 1200.0),
-		FVector2D(1200.0, 1200.0), FVector2D(1200.0, 0.0) };
+		FVector2D(0.0, 0.0), FVector2D(0.0, 1400.0),
+		FVector2D(2000.0, 1400.0), FVector2D(2000.0, 0.0) };
 
-	// The frontage in THAT winding order: the y = 0 edge runs from (1200,0) to (0,0).
+	// The frontage in THAT winding order: the y = 0 edge runs from (2000,0) to (0,0).
 	IRoadEditTarget* Target = Actor;
-	Target->PlaceEntityInPlot(Clockwise, FVector2D(1200.0, 0.0), FVector2D(0.0, 0.0),
+	Target->PlaceEntityInPlot(Clockwise, FVector2D(2000.0, 0.0), FVector2D(0.0, 0.0),
 		{ EDepotModule::Shed }, EPlaceableEntity::FuelDepot);
 
 	const TArray<FEntityInstance>& Entities = Actor->Network->GetEntities();

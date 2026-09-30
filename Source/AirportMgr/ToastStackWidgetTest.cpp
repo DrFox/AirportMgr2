@@ -364,6 +364,14 @@ bool FToastsFromOpsAlertsTest::RunTest(const FString& Parameters)
 
 	Events->OnLandRefused.Broadcast(EArrivalRefusal::NoRunway);
 	TestEqual(TEXT("and so is a refused key 7"), Stack->Centre()->Entries().Num(), 5);
+
+	// #266: THE REPAIR'S LINE through its own delegate - unbound, the modules would be removed and refunded in silence.
+	Events->NotifyWarning(TEXT("No room on its plot - 2 Sheds removed, 80,000 refunded"));
+	if (TestEqual(TEXT("a warning notification is a toast"), Stack->Centre()->Entries().Num(), 6))
+	{
+		TestEqual(TEXT("as a Warning, where a plain notification is Info"), Stack->Centre()->Entries()[5].Severity, ENotificationSeverity::Warning);
+		TestTrue(TEXT("in the publisher's words"), Stack->Centre()->Entries()[5].Text.ToString().Contains(TEXT("2 Sheds removed")));
+	}
 	return true;
 }
 

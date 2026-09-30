@@ -119,4 +119,77 @@ bool FFacilityModuleFacadeTest::RunTest(const FString&)
 	return true;
 }
 
+/**
+ * THE REPAIR'S DATA WRITE (#266): up to Count of one kind, the LAST owned first, and nothing else moves. The start kit is
+ * the list's head, so a repair takes bought modules before the kit a depot was drawn with.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEntityModulesRemoveTest, "Airside.Model.EntityModules.RemoveTakesTheLastOfAKind",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FEntityModulesRemoveTest::RunTest(const FString&)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>();
+	const TArray<FVector2D> Plot = FacilityModuleWidePlot();
+	const FEntityInstanceId Depot = Net->PlaceEntity(FacilityModulePlacement(UEntityDefinition::MakeFuelDepotTransient(), Plot));
+	Net->AddEntityModule(Depot, EDepotModule::Shed);
+	Net->AddEntityModule(Depot, EDepotModule::Tank);
+	Net->AddEntityModule(Depot, EDepotModule::Shed);
+
+	TestEqual(TEXT("two of the three sheds go"), Net->RemoveEntityModules(Depot, EDepotModule::Shed, 2), 2);
+	const FEntityInstance* After = Net->GetEntity(Depot);
+	if (!TestNotNull(TEXT("the depot is still there"), After)) { return false; }
+	const TArray<EDepotModule> Expected = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump, EDepotModule::Tank };
+	TestTrue(TEXT("the LAST two - the start kit's shed stays, and every other module keeps its place"), After->Modules == Expected);
+	TestEqual(TEXT("asked for more than it owns, it removes what there is"), Net->RemoveEntityModules(Depot, EDepotModule::Pump, 5), 1);
+	TestEqual(TEXT("a count below one removes nothing"), Net->RemoveEntityModules(Depot, EDepotModule::Tank, 0), 0);
+	TestEqual(TEXT("so both tanks are still there"), Net->GetEntity(Depot)->Modules.Num(), 3);
+
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(20000.0, 0.0), 0.0, 0.0, StandDef->PoseRole, 0);
+	TestEqual(TEXT("a stand has no modules to remove"), Net->RemoveEntityModules(Stand, EDepotModule::Shed, 1), 0);
+	TestEqual(TEXT("an unset handle removes nothing"), Net->RemoveEntityModules(FEntityInstanceId(), EDepotModule::Shed, 1), 0);
+	Net->RemoveEntity(Depot);
+	TestEqual(TEXT("a removed depot removes nothing"), Net->RemoveEntityModules(Depot, EDepotModule::Tank, 1), 0);
+	return true;
+}
+
+/**
+ * THE REPAIR'S DOOR (#266): URoadEditFacade::RemoveUnseatedModules rebuilds the yard - the presenter's drop count goes to
+ * zero - and leaves nothing to undo: a snapshot from before it would bring the unplaced sheds back (and the refund would
+ * be paid again). Refused, changing nothing, while a drag is open. The over-owned depot is made the way only an old save
+ * or a content change can make one now: modules written straight into the model past the plot's ceiling.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityUnseatedRemovalTest, "Airside.Present.Facility.UnseatedRemovalRelightsAndLeavesNoUndo",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityUnseatedRemovalTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	const TArray<FVector2D> Plot = FacilityModuleWidePlot();
+	const int32 Index = Actor->PlaceEntityInPlot(Plot, Plot[0], Plot[1], DepotKit::StarterModules(), EPlaceableEntity::FuelDepot);
+	if (!TestNotEqual(TEXT("setup: the depot is placed"), Index, int32(INDEX_NONE))) { return false; }
+	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(Index);
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	for (int32 I = 0; I < 20; ++I) { Actor->Network->AddEntityModule(Depot, EDepotModule::Shed); }
+	Actor->RebuildMesh();
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	const int32 Dropped = Plots->GetDroppedCount();
+	if (!TestTrue(TEXT("setup: the plot drops some of the twenty-one sheds"), Dropped > 0)) { return false; }
+	if (!TestTrue(TEXT("setup: placing it is an undo step"), Facade->CanUndo())) { return false; }
+
+	Facade->BeginInteractiveEdit(TEXT("drag"));
+	TestEqual(TEXT("with a drag open the door removes nothing"), Facade->RemoveUnseatedModules(Depot, EDepotModule::Shed, Dropped), 0);
+	TestEqual(TEXT("and the depot still owns every shed"), Plots->GetDroppedCount(), Dropped);
+	Facade->EndInteractiveEdit(false);
+	TestTrue(TEXT("nor did it touch the history"), Facade->CanUndo());
+
+	TestEqual(TEXT("the door removes exactly the unseated sheds"), Facade->RemoveUnseatedModules(Depot, EDepotModule::Shed, Dropped), Dropped);
+	TestEqual(TEXT("the Topology rebuild reached the presenter: nothing is dropped now"), Plots->GetDroppedCount(), 0);
+	TestFalse(TEXT("and there is nothing to undo - a repair is a checkpoint, not a step"), Facade->CanUndo());
+	TestFalse(TEXT("nor to redo"), Facade->CanRedo());
+	TestEqual(TEXT("a non-depot is refused at the door"), Facade->RemoveUnseatedModules(FEntityInstanceId(), EDepotModule::Shed, 1), 0);
+	return true;
+}
+
 #endif

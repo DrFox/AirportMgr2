@@ -85,6 +85,7 @@ void UToastStackWidget::EnsureSlots(const UUIStyle* Style)
 void UToastStackWidget::BindTo(UOpsEvents& Events)
 {
 	Events.OnNotification.AddUniqueDynamic(this, &UToastStackWidget::OnNotification);
+	Events.OnWarning.AddUniqueDynamic(this, &UToastStackWidget::OnWarning);
 	Events.OnArrivalRefused.AddUniqueDynamic(this, &UToastStackWidget::OnArrivalRefused);
 	Events.OnAlertRaised.AddUniqueDynamic(this, &UToastStackWidget::OnAlertRaised);
 	Events.OnAlertCleared.AddUniqueDynamic(this, &UToastStackWidget::OnAlertCleared);
@@ -146,6 +147,16 @@ void UToastStackWidget::OnNotification(const FString& Text)
 	if (Notifications != nullptr)
 	{
 		Notifications->PostFeed(FText::FromString(Text));
+	}
+}
+
+void UToastStackWidget::OnWarning(const FString& Text)
+{
+	// OnNotification's line at the Warning severity: the game did something to the player's airport they did not ask for
+	// (#266's repair - modules with no room removed and refunded), and they may want to redraw the plot.
+	if (Notifications != nullptr)
+	{
+		Notifications->PostFeed(FText::FromString(Text), ENotificationSeverity::Warning);
 	}
 }
 

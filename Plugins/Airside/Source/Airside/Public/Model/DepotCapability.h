@@ -29,11 +29,14 @@ using FModuleCeilingFn = TFunction<int32(FEntityInstanceId Id, const FEntityInst
  * not see. This is the one view all three read.
  *
  * A PURCHASE CANNOT OVER-BUY: UFacilityPurchases refuses (NoSlotReserved) once owned reaches the ceiling, so a bought
- * module is seated by construction. What CAN be unseated is the start kit a plot was placed with - #266's remaining item,
- * which this does not touch: a starter mix bigger than the plot holds is seated only up to the ceiling here, and the
- * rest grants nothing.
+ * module is seated by construction. NOR CAN A PLACEMENT (#266, ruled 2026-09-30): the plot tool and PlaceEntityInPlot refuse
+ * a plot that cannot seat its starter mix (DepotKit::WhyUnseated, this Seat over the mix). What is left - a depot owning
+ * more than its plot seats after a kit, layout or frontage-recovery change, or from an old save - is REMOVED AND REFUNDED
+ * by UFacilityPurchases::RemoveUnseated on attach, load and every network change ("there must never be unplaced
+ * modules"). Until that pass runs the rest grants nothing, as before.
  * ENFORCED BY: Airside.Present.PlotPresenterDrawsExactlyTheSeatedModules (the presenter's lit count is Seat's),
- * AirportOps.Model.Facility.UnseatedModulesGrantNeitherBaysNorPumps, Check-Architecture rule 45 (capability-from-the-view)
+ * AirportOps.Model.Facility.UnseatedModulesGrantNeitherBaysNorPumps, Check-Architecture rule 45 (capability-from-the-view,
+ * which scans the presenter too since #266)
  *
  * THE LEGACY EXEMPTION, NAMED: a depot with NO ground drawn (no outline) AND no module list (placed without a plot - every
  * depot in a save from before plots, and every test depot placed through the plain signature) fuels as it always did. That
@@ -41,7 +44,10 @@ using FModuleCeilingFn = TFunction<int32(FEntityInstanceId Id, const FEntityInst
  * bays, which is unchanged - a starter fleet is seeded whatever it holds, and a bay is only ever asked when the player
  * BUYS. BOTH CONDITIONS, deliberately: a PLOTTED depot with an empty kit is not legacy (its plot seats nothing, so it has no
  * pump - what "only placed modules count" means), and an unplotted depot WITH modules is a test's stand-in for a modular
- * depot whose list is the truth (no pump in it is no pump).
+ * depot whose list is the truth (no pump in it is no pump). NO PRODUCTION PATH MAKES ONE: PlaceEntityInPlot always draws an
+ * outline, the plain PlaceEntity signature places no modules, and a purchase into a plotless depot is refused (JudgeModule:
+ * the ceiling hook answers 0 for no plot).
+ * ENFORCED BY: AirportOps.Present.Facility.PurchaseCeilingIsThePresentersSeatForEveryKind ("a plotless depot's shed is refused")
  */
 struct FDepotCapability
 {
@@ -83,12 +89,25 @@ struct FDepotCapability
 	 */
 	int32 Pumps() const { return bLegacyPlotless ? 1 : FMath::Max(SeatedOf(EDepotModule::Pump), 1); }
 
+	/** Owned modules of Module the plot does NOT seat - what the presenter drops and the repair removes; 0 out of range. */
+	int32 UnseatedOf(EDepotModule Module) const { return OwnedOf(Module) - SeatedOf(Module); }
+
 	/** Seat Depot's owned modules against CeilingOf - how many of a kind its plot can hold. */
 	static FDepotCapability Seat(const FEntityInstance& Depot, TFunctionRef<int32(EDepotModule)> CeilingOf)
 	{
+		return Seat(Depot.Modules, HasPlot(Depot), CeilingOf);
+	}
+
+	/**
+	 * Seat a module LIST against CeilingOf, bHasPlot saying whether it stands on drawn ground. THE ONE SEAT: the entity
+	 * overload above forwards here, and so does the placement's refusal (DepotKit::WhyUnseated), whose starter mix is not
+	 * an entity yet - so "placed" is decided once, whether the modules are owned or only about to be (#266).
+	 */
+	static FDepotCapability Seat(TConstArrayView<EDepotModule> Modules, bool bHasPlot, TFunctionRef<int32(EDepotModule)> CeilingOf)
+	{
 		FDepotCapability Out;
-		Out.bLegacyPlotless = Depot.Modules.Num() == 0 && !HasPlot(Depot);
-		for (const EDepotModule Module : Depot.Modules)
+		Out.bLegacyPlotless = Modules.Num() == 0 && !bHasPlot;
+		for (const EDepotModule Module : Modules)
 		{
 			const int32 Kind = static_cast<int32>(Module);
 			if (Kind >= 0 && Kind < KindCount)

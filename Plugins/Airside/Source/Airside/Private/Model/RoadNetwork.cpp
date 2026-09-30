@@ -2104,3 +2104,24 @@ bool URoadNetwork::AddEntityModule(FEntityInstanceId Entity, EDepotModule Module
 	Instance->Modules.Add(Module);
 	return true;
 }
+
+int32 URoadNetwork::RemoveEntityModules(FEntityInstanceId Entity, EDepotModule Module, int32 Count)
+{
+	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr || !Instance->bAlive || !Instance->IsDepot())
+	{
+		return 0;
+	}
+	// FROM THE END, so the modules bought last go first and the start kit is the last of a kind to leave - the order the
+	// list was written in, unwound. Which one goes changes nothing drawn: the presenter lights a run from its count.
+	int32 Removed = 0;
+	for (int32 Index = Instance->Modules.Num() - 1; Index >= 0 && Removed < Count; --Index)
+	{
+		if (Instance->Modules[Index] == Module)
+		{
+			Instance->Modules.RemoveAt(Index);
+			++Removed;
+		}
+	}
+	return Removed;
+}

@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Build/DepotKit.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "Model/BuildPurse.h"
@@ -920,17 +921,40 @@ namespace
 		if (!T.TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 		Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 
+		// 20 m x 14 m SINCE #266: a plot must seat the mix it starts with, and under the real kits no
+		// frontage under 20 m seats a shed (Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix).
 		const TArray<FVector2D> Outline = {
-			FVector2D(0.0, 0.0), FVector2D(1200.0, 0.0),
-			FVector2D(1200.0, 1200.0), FVector2D(0.0, 1200.0) };
+			FVector2D(0.0, 0.0), FVector2D(2000.0, 0.0),
+			FVector2D(2000.0, 1400.0), FVector2D(0.0, 1400.0) };
 
 		const int32 RebuildsBefore = Actor->RebuildCountForTest();
 		const int32 TopologyBefore = Actor->TopologyRebuildCountForTest();
 		T.TestTrue(TEXT("a depot plot is placed"),
-			Actor->PlaceEntityInPlot(Outline, FVector2D(0.0, 0.0), FVector2D(1200.0, 0.0),
+			Actor->PlaceEntityInPlot(Outline, FVector2D(0.0, 0.0), FVector2D(2000.0, 0.0),
 				{ EDepotModule::Shed }, EPlaceableEntity::FuelDepot) != INDEX_NONE);
 		T.TestEqual(TEXT("PlaceEntityInPlot notifies exactly once"), Actor->RebuildCountForTest(), RebuildsBefore + 1);
 		T.TestEqual(TEXT("as Topology"), Actor->TopologyRebuildCountForTest(), TopologyBefore + 1);
+		return true;
+	}
+
+	bool Case_PlaceEntityInPlotUnseated(FAutomationTestBase& T)
+	{
+		// #266'S REFUSAL, NOT THE EMPTY RESERVATION: 20 m x 12 m reserves a tank and a pump but no shed under the real kits,
+		// so the starter mix cannot all stand - refused before the quote and before the scope, so nothing rebuilds.
+		FAirsideTestWorld World;
+		ARoadNetworkActor* Actor = World.Actor;
+		if (!T.TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+		Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+
+		const TArray<FVector2D> Short = {
+			FVector2D(0.0, 0.0), FVector2D(2000.0, 0.0),
+			FVector2D(2000.0, 1200.0), FVector2D(0.0, 1200.0) };
+
+		const int32 RebuildsBefore = Actor->RebuildCountForTest();
+		T.TestTrue(TEXT("a plot that cannot seat its starter mix is refused"),
+			Actor->PlaceEntityInPlot(Short, FVector2D(0.0, 0.0), FVector2D(2000.0, 0.0),
+				DepotKit::StarterModules(), EPlaceableEntity::FuelDepot) == INDEX_NONE);
+		T.TestEqual(TEXT("and nothing rebuilt for the refusal"), Actor->RebuildCountForTest(), RebuildsBefore);
 		return true;
 	}
 
@@ -1277,6 +1301,7 @@ namespace
 			{ TEXT("PlaceEntity.Refused"), &Case_PlaceEntityRefused },
 			{ TEXT("PlaceEntityInPlot.Success"), &Case_PlaceEntityInPlotSuccess },
 			{ TEXT("PlaceEntityInPlot.Refused"), &Case_PlaceEntityInPlotRefused },
+			{ TEXT("PlaceEntityInPlot.Unseated"), &Case_PlaceEntityInPlotUnseated },
 			{ TEXT("DeleteEntity.Success"), &Case_DeleteEntitySuccess },
 			{ TEXT("DeleteEntity.Refused"), &Case_DeleteEntityRefused },
 			{ TEXT("ConnectGuidelines.Success"), &Case_ConnectGuidelinesSuccess },

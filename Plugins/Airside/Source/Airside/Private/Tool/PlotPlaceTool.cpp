@@ -384,6 +384,10 @@ void FPlotPlaceTool::DescribeReadout(const FToolContext& Context, TConstArrayVie
 	// THE OUTLINE'S REFUSALS, the facade's own evaluator (strip stage 3) - the same call
 	// PlaceEntityInPlot makes first, so Build cannot light over a plot inside a strip.
 	const FString Why = Context.Target != nullptr ? Context.Target->WhyPlotRefused(Shown) : FString();
+	// A PLOT TOO SMALL FOR THE MIX IT WOULD START WITH (#266), over the reservation this readout already solved - the call
+	// PlaceEntityInPlot makes at commit with its own ReserveForPlot, the same solve. Refused, never shrunk and never built
+	// with modules the player paid for and nothing to stand them on (owner, 2026-09-30).
+	const FString Unseated = DepotKit::WhyUnseated(Reservation, Modules);
 
 	if (IsConfirmed())
 	{
@@ -407,6 +411,11 @@ void FPlotPlaceTool::DescribeReadout(const FToolContext& Context, TConstArrayVie
 			// now the ghost itself.
 			Sink.Warning(TEXT("This plot holds nothing"));
 		}
+		else if (!Unseated.IsEmpty())
+		{
+			// Capitalised for the bar; the words are DepotKit::WhyUnseated's, which the facade logs at commit.
+			Sink.Warning(Unseated.Left(1).ToUpper() + Unseated.Mid(1));
+		}
 		else if (bLastCommitRefused)
 		{
 			// See bLastCommitRefused's own comment on why this should be unreachable and is
@@ -415,7 +424,7 @@ void FPlotPlaceTool::DescribeReadout(const FToolContext& Context, TConstArrayVie
 		}
 	}
 
-	Sink.Committable(IsConfirmed() && bHasDefinition && Why.IsEmpty() && Total > 0);
+	Sink.Committable(IsConfirmed() && bHasDefinition && Why.IsEmpty() && Total > 0 && Unseated.IsEmpty());
 }
 
 #undef LOCTEXT_NAMESPACE

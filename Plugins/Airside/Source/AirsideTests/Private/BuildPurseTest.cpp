@@ -427,15 +427,17 @@ bool FGhostPricesTheRoadTest::RunTest(const FString& Parameters)
 
 namespace
 {
-	/** A 12 m x 12 m plot, wound clockwise, with the road-facing edge stated in that same
+	/** A 20 m x 14 m plot, wound clockwise, with the road-facing edge stated in that same
 	 *  winding order - the exact fixture PlotPlacementTest's
-	 *  FPlotOutlineIsAlwaysCounterClockwiseTest already proves places a depot successfully. */
+	 *  FPlotOutlineIsAlwaysCounterClockwiseTest already proves places a depot successfully.
+	 *  12 m x 12 m until #266: a plot must now seat what it starts with, and a 12 m frontage
+	 *  seats no shed under the real kits. */
 	struct FPricedDepotPlot
 	{
 		TArray<FVector2D> Outline = {
-			FVector2D(0.0, 0.0), FVector2D(0.0, 1200.0),
-			FVector2D(1200.0, 1200.0), FVector2D(1200.0, 0.0) };
-		FVector2D FrontageA = FVector2D(1200.0, 0.0);
+			FVector2D(0.0, 0.0), FVector2D(0.0, 1400.0),
+			FVector2D(2000.0, 1400.0), FVector2D(2000.0, 0.0) };
+		FVector2D FrontageA = FVector2D(2000.0, 0.0);
 		FVector2D FrontageB = FVector2D(0.0, 0.0);
 	};
 }
@@ -478,12 +480,12 @@ bool FBuildPurseChargesForPlottedDepotTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// 5000 FOR THE ENTITY (Depot->PlacementCost) PLUS THE PAD: a 12 m x 12 m plot, 144 m2 at
+	// 5000 FOR THE ENTITY (Depot->PlacementCost) PLUS THE PAD: a 20 m x 14 m plot, 280 m2 at
 	// UAirsideSettings::ApronCostPerSquareMetre's default of 15/m2 - the same rate AddApron
 	// charges, summed rather than invented, exactly as the issue asked.
 	TestEqual(TEXT("charged the entity's placement cost plus the pad's apron rate x area - not "
 		"free, and not the entity alone"),
-		Purse.Charges[0], 5000.0 + 144.0 * 15.0, 1e-6);
+		Purse.Charges[0], 5000.0 + 280.0 * 15.0, 1e-6);
 
 	return true;
 }

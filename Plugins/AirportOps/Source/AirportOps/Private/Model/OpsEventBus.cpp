@@ -113,6 +113,11 @@ FString FFacilityUpgradedEvent::Describe() const
 	return FString::Printf(TEXT("depot %d, %s, %.0f"), Entity, *UEnum::GetValueAsString(Module), Amount);
 }
 
+FString FModulesRefundedEvent::Describe() const
+{
+	return FString::Printf(TEXT("depot %d, %d x %s removed, refunded %.0f"), Entity, Count, *UEnum::GetValueAsString(Module), Amount);
+}
+
 FString FFleetChangedEvent::Describe() const
 {
 	const TCHAR* Verb = TEXT("?");

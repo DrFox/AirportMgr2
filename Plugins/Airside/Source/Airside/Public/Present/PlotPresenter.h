@@ -122,6 +122,12 @@ public:
 	 * ZERO NOW, AND KEPT ANYWAY. Reserve returns only what it placed, so a drop is a bug
 	 * rather than a refusal - and an invariant with no accessor is an invariant nobody can
 	 * assert. See Airside.Present.PlotPresenterGhostsUnboughtSlots.
+	 *
+	 * OWNED MINUS SEATED since #266 - FDepotCapability::UnseatedOf, summed. Nothing places a
+	 * depot that drops (the plot tool refuses one that cannot seat its starter mix, a purchase
+	 * one past the ceiling), so a non-zero count is a depot whose plot SHRANK under it - a kit,
+	 * layout or frontage-recovery change, or an old save - and each such plot says so in its
+	 * own Warning line, until the ops runtime's repair removes and refunds the excess.
 	 */
 	int32 GetDroppedCount() const { return Dropped; }
 

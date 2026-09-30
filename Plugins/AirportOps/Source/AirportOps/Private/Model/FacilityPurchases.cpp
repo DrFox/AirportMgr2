@@ -310,6 +310,83 @@ FPurchaseResult UFacilityPurchases::SellVehicle(int32 VehicleId)
 	return Result;
 }
 
+int32 UFacilityPurchases::RemoveUnseated(const URoadNetwork& Network)
+{
+	// DECIDED FIRST, WRITTEN AFTER: each removal rebuilds the airport through the facade, and a walk of the entity list
+	// that wrote as it went would be reading a list its own writes were rebuilding around it.
+	struct FExcess
+	{
+		FEntityInstanceId Depot;
+		FVector2D At = FVector2D::ZeroVector;
+		EDepotModule Module = EDepotModule::Shed;
+		int32 Owned = 0;
+		int32 Seated = 0;
+	};
+	TArray<FExcess> Excess;
+	const TArray<FEntityInstance>& Entities = Network.GetEntities();
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		const FEntityInstance& Entity = Entities[Index];
+		if (!Entity.bAlive || !Entity.IsDepot())
+		{
+			continue;
+		}
+		// THE SEAT THE PRESENTER DRAWS AND THE PURCHASE JUDGES (FDepotCapability::Of over ReservedSlotsOf): a plotless depot,
+		// or no ceiling hook, takes its owned list as seated and has nothing to remove.
+		const FEntityInstanceId Id = Network.EntityIdAt(Index);
+		const FDepotCapability Capability = FDepotCapability::Of(Id, Entity, ReservedSlotsOf);
+		for (int32 Kind = 0; Kind < FDepotCapability::KindCount; ++Kind)
+		{
+			const EDepotModule Module = static_cast<EDepotModule>(Kind);
+			if (Capability.UnseatedOf(Module) > 0)
+			{
+				Excess.Add({ Id, Entity.Position, Module, Capability.OwnedOf(Module), Capability.SeatedOf(Module) });
+			}
+		}
+	}
+	if (Excess.Num() > 0 && !ApplyModuleRemoval)
+	{
+		// SAID, NOT GUESSED AROUND: with no door to the network nothing can be removed, and a refund alone would be money
+		// for nothing. The presenter's per-plot Warning is still there to name each depot.
+		UE_LOG(LogAirportOps, Warning, TEXT("Repair: %d depot kind(s) own modules their plot cannot seat, and there is no removal hook (UOpsRuntime not attached)"),
+			Excess.Num());
+		return 0;
+	}
+
+	int32 RemovedTotal = 0;
+	for (const FExcess& Each : Excess)
+	{
+		const FString What = StaticEnum<EDepotModule>()->GetNameStringByValue(static_cast<int64>(Each.Module));
+		const int32 Removed = ApplyModuleRemoval(Each.Depot, Each.Module, Each.Owned - Each.Seated);
+		if (Removed <= 0)
+		{
+			// THE FACADE REFUSED (a drag is open): nothing went, so nothing is paid. The next network change asks again.
+			UE_LOG(LogAirportOps, Log, TEXT("Repair: depot %d's %d unseated %s not removed yet - the network refused the write"),
+				Each.Depot.Index, Each.Owned - Each.Seated, *What);
+			continue;
+		}
+		RemovedTotal += Removed;
+		// THE OFFER'S PRICE, per module - see RemoveUnseated's header for why, and why a kind with no offer refunds nothing.
+		const FModuleOffer* Offer = ModuleOffers.Find(Each.Module);
+		const double Refund = Offer != nullptr ? Offer->Price * Removed : 0.0;
+		if (Ledger != nullptr && Refund > 0.0)
+		{
+			Ledger->Post(NowOrZero(), ELedgerCategory::Refund, Refund,
+				FText::Format(LOCTEXT("RefundedModules", "Refunded {0} x {1} (no room on its plot)"),
+					FText::AsNumber(Removed), Offer->DisplayName));
+		}
+		UE_LOG(LogAirportOps, Warning,
+			TEXT("Repair: depot %d at (%.0f, %.0f) owned %d %s but its plot seats %d - removed %d, refunded %.0f%s"),
+			Each.Depot.Index, Each.At.X, Each.At.Y, Each.Owned, *What, Each.Seated, Removed, Refund,
+			Offer != nullptr ? TEXT("") : TEXT(" (not sold alone: it came with the plot)"));
+		if (Bus != nullptr)
+		{
+			Bus->Publish(FModulesRefundedEvent{ Each.Depot.Index, Each.Module, Removed, Refund });
+		}
+	}
+	return RemovedTotal;
+}
+
 FFacilityUpkeep UFacilityPurchases::DailyUpkeep(const URoadNetwork& Network) const
 {
 	FFacilityUpkeep Out;

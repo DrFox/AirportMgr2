@@ -623,6 +623,18 @@ $AllowedCallers = @(
         TestAllowed = @('Private\TrafficForwardersTest.cpp')
         ProdReason  = 'ask Rules.GapFor(Class), which floors the gap at half the footprint (#455) - the raw field is the authored figure, not the one in force'
         TestReason  = 'ask Rules.GapFor(Class) - the raw field is the authored figure, not the one in force (#455); only TrafficForwardersTest reads it, to assert the knob reaches the model'
+    },
+    @{
+        # A DEPOT'S MODULES LEAVE THROUGH ONE DOOR (#266): the unplaced-module repair, whose removal and refund are one act.
+        # URoadNetwork::RemoveEntityModules is the data write, URoadEditFacade::RemoveUnseatedModules the door that rebuilds
+        # and checkpoints undo, and UOpsRuntime's ApplyModuleRemoval hook its one production caller - so a module removed is
+        # always a module UFacilityPurchases::RemoveUnseated refunded. A second caller would take modules the player paid
+        # for with no refund, no Warning and no toast.
+        Name        = 'module removal'
+        Pattern     = '\b(RemoveEntityModules|RemoveUnseatedModules)\s*\('
+        ProdAllowed = @('Public\Model\RoadNetwork.h', 'Private\Model\RoadNetwork.cpp', 'Public\Present\RoadEditFacade.h', 'Private\Present\RoadEditFacade.cpp', 'Private\Present\OpsRuntime.cpp')
+        TestExempt  = $true
+        ProdReason  = 'remove a module only through UFacilityPurchases::RemoveUnseated (the ApplyModuleRemoval hook UOpsRuntime wires to the facade), which refunds it, logs it and toasts it'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -2208,7 +2220,7 @@ if ($TestNamesOut -ne '') {
 # where the JOB BOARD posted fleet money itself with its own wording and published nothing, so a FleetChanged subscriber
 # missed half the changes. FServiceFleet (Private/Model/ServiceFleet.cpp) is now the one owner of Add and Withdraw and of
 # the three things every change owes: its Fleet ledger line, its FFleetChangedEvent, and (on an add) the re-opening of the
-# jobs a missing vehicle had refused. TWO SHAPES, each a hit outside that file (comments and string literals stripped,
+# jobs a missing vehicle had refused. THREE SHAPES, each a hit outside that file (comments and string literals stripped,
 # rule 34's helper), in production code (AirportOps and the game module; tests stage fleets by hand on purpose):
 #   a. A write of the fleet's containers - Vehicles / SeededDepots / NextVehicleId - by ANY member call. A board function
 #      that adds or removes a vehicle without the door skips the ledger, the event and the re-open, which is the disease.
@@ -2216,12 +2228,16 @@ if ($TestNamesOut -ne '') {
 #      category is posted only from the door, so a second poster with its own wording cannot come back.
 #   c. In a .cpp, a vehicle row's Price or ResaleValue read directly (`Spec->Price`, `Spec.Price`, `.ResaleValue(`): the price
 #      the card quotes, the purchase judges and charges and the ledger posts is FServiceFleet::PriceOf/ResaleOf, read once,
-#      so the three cannot drift (#461 review found three direct reads beside "THE ONE READ").
+#      so the three cannot drift (#461 review found three direct reads beside "THE ONE READ"). WIDENED (#266, the #461
+#      final review): it matched the variable NAME `Spec` alone, so `VehicleSpecs[Type].Price`, `SpecIt->Price` and
+#      `JobBoard->SpecFor(Type).Price` all read the row past it. Now any `Spec`/`Specs`-prefixed name, subscripted or not,
+#      and a SpecFor(...) call's result. Mutation-checked 2026-09-30: each of those three shapes typed into
+#      FacilityPurchases.cpp fails this rule, and the unwidened pattern passed all three.
 # The rule fails, rather than checking nothing, when ServiceFleet.cpp is gone or no longer matches either shape.
 $fleetDoorFile = Join-Path $ops 'Private\Model\ServiceFleet.cpp'
 $fleetContainerWrite = '\b(?:Vehicles|SeededDepots)\s*(?:\.|->)\s*(?:Add|AddUnique|AddDefaulted|Emplace|Insert|Append|Remove|RemoveAt|RemoveAll|RemoveSwap|Reset|Empty)\w*\s*\(|(?:\+\+\s*NextVehicleId\b|\bNextVehicleId\s*(?:\+\+|\+=))'
 $fleetMoneyPost      = '\bELedgerCategory::Fleet\b'
-$fleetPriceRead      = '\bSpec(?:\.|->)Price\b|(?:\.|->)ResaleValue\s*\('
+$fleetPriceRead      = 'Specs?\w*(?:\[[^\]]*\])?(?:\.|->)Price\b|\bSpecFor\([^)]*\)\.Price\b|(?:\.|->)ResaleValue\s*\('
 $fleetDoorContainerWrites = 0
 $fleetDoorMoneyPosts = 0
 if (-not (Test-Path $fleetDoorFile)) {
@@ -2300,9 +2316,11 @@ $ranRules.Add('fuelled-tolerance-once')
 $capabilityDir = Join-Path $ops 'Private\Model'
 $capabilityFiles = @('JobBoard.cpp', 'JobBoardBid.cpp', 'JobBoardDrive.cpp', 'ServiceFleet.cpp', 'FacilityPurchases.cpp')
 # THE CENSUS TOO (#461 review): DepotKit::ReportIncomplete reads owned counts and the legacy test through the view, and
-# is scanned with no allowance. The plot presenter is NOT: it still counts the owned list itself, to light the bays it
-# draws - its own use of the owned list (moving it onto Seat is #266's).
-$capabilityPaths = @($capabilityFiles | ForEach-Object { Join-Path $capabilityDir $_ }) + @(Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Build\DepotKit.cpp')
+# is scanned with no allowance. AND THE PLOT PRESENTER since #266: it lights the bays it draws from FDepotCapability::Seat
+# against its reservation, where it used to clamp the owned list run by run - a second implementation of "placed" that
+# agreed with Seat only by arithmetic. Scanned with no allowance, and required to name the view.
+$presenterPath = Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Present\PlotPresenter.cpp'
+$capabilityPaths = @($capabilityFiles | ForEach-Object { Join-Path $capabilityDir $_ }) + @((Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Build\DepotKit.cpp'), $presenterPath)
 $capabilityOwnedReaders = @('UFacilityPurchases::OwnedOf', 'UFacilityPurchases::DailyUpkeep')
 $capabilityModulesRead = '\b(?:Depot|Facility|Entity|Home|Instance)\w*(?:\[[^\]]*\])?(?:\.|->)Modules\b'
 foreach ($capabilityPath in $capabilityPaths) {
@@ -2324,7 +2342,7 @@ foreach ($capabilityPath in $capabilityPaths) {
         }
     }
 }
-foreach ($viewReader in @(@((Join-Path $ops 'Public\Model\JobBoard.h'), 'JobBoard.h'), @((Join-Path $ops 'Private\Model\FacilityPurchases.cpp'), 'FacilityPurchases.cpp'), @((Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Build\DepotKit.cpp'), 'DepotKit.cpp'))) {
+foreach ($viewReader in @(@((Join-Path $ops 'Public\Model\JobBoard.h'), 'JobBoard.h'), @((Join-Path $ops 'Private\Model\FacilityPurchases.cpp'), 'FacilityPurchases.cpp'), @((Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Build\DepotKit.cpp'), 'DepotKit.cpp'), @($presenterPath, 'PlotPresenter.cpp'))) {
     $viewPath = $viewReader[0]
     if ((Test-Path $viewPath) -and $null -eq (Select-String -Path $viewPath -Pattern 'FDepotCapability' -Quiet)) {
         $failures.Add("capability-from-the-view: $($viewReader[1]) no longer names FDepotCapability - it reads what a depot's modules give it some other way; update rule 45 or restore the view")

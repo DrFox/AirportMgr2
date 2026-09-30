@@ -50,6 +50,13 @@ public:
 	UPROPERTY(BlueprintAssignable) FOpsSpeedChanged      OnSpeedChanged;
 	UPROPERTY(BlueprintAssignable) FOpsNotification      OnNotification;
 
+	/**
+	 * A line for the toast stack that the player may want to act on - OnNotification's words at the Warning severity
+	 * (#266: unplaced modules removed and refunded). A DELEGATE OF ITS OWN rather than a severity on OnNotification: the
+	 * severity enum is the game module's (ENotificationSeverity), which AirportOps may not see.
+	 */
+	UPROPERTY(BlueprintAssignable) FOpsNotification      OnWarning;
+
 	/** A standing problem started / stopped (spec 2026-09-29-ops-alerts). The toast and the alert window. */
 	UPROPERTY(BlueprintAssignable) FOpsAlertRaised       OnAlertRaised;
 	UPROPERTY(BlueprintAssignable) FOpsAlertCleared      OnAlertCleared;
@@ -73,4 +80,5 @@ public:
 	void NotifyArrivalRefused(EArrivalRefusal Why);
 	void NotifySpeedChanged(ESimSpeed Speed);
 	void NotifyNotification(const FString& Text);
+	void NotifyWarning(const FString& Text);
 };

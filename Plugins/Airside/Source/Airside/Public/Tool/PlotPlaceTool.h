@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Build/DepotKit.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Solve/PlotYard.h"
@@ -91,6 +92,10 @@ public:
 	 * IT NO LONGER STEERS THE PREVIEW. Under reservation the ghost and the readout come from
 	 * the ground the player is dragging out, not from a mix handed in here, so this decides
 	 * only which bays are lit the moment the depot is built.
+	 *
+	 * AND WHETHER IT MAY BE BUILT AT ALL (#266): a plot that cannot seat this mix is refused -
+	 * the readout warns and greys Build, the facade's commit refuses - rather than built with
+	 * modules the player paid for and nothing to stand them on (DepotKit::WhyUnseated).
 	 */
 	void SetModules(const TArray<EDepotModule>& InModules) { Modules = InModules; }
 
@@ -203,7 +208,7 @@ private:
 
 	EPlaceableEntity Kind = EPlaceableEntity::FuelDepot;
 
-	/** One of each is the concept sheet's depot, and the smallest one that actually works. */
-	TArray<EDepotModule> Modules = {
-		EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+	/** One of each is the concept sheet's depot, and the smallest one that actually works - DepotKit::StarterModules, the
+	 *  one list the content test seats too. DescribeReadout refuses a plot that cannot seat it (#266). */
+	TArray<EDepotModule> Modules = DepotKit::StarterModules();
 };

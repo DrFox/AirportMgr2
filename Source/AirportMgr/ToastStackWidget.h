@@ -167,6 +167,8 @@ private:
 	/** Both are FEED: they happened, they are worth knowing, and they need no decision. */
 	UFUNCTION() void OnNotification(const FString& Text);
 	UFUNCTION() void OnArrivalRefused(EArrivalRefusal Why);
+	/** UOpsEvents::OnWarning: OnNotification's words at ENotificationSeverity::Warning - something the player may act on. */
+	UFUNCTION() void OnWarning(const FString& Text);
 
 	/** Ops alerts (spec 2026-09-29-ops-alerts §3): a standing problem starting is a Warning; its clearing
 	 *  is silent except for Overdrawn, whose end ("back in credit") is news. */

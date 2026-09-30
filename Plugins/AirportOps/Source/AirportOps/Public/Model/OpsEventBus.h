@@ -158,6 +158,22 @@ struct AIRPORTOPS_API FFacilityUpgradedEvent
 };
 
 /**
+ * Modules a depot's plot could not seat were removed and refunded (#266) - UFacilityPurchases::RemoveUnseated, the repair.
+ * One per depot and kind. Entity is the depot's INDEX; Count how many went; Amount what was credited (0 for a kind the shop
+ * does not sell). ITS OWN EVENT, not an FFacilityUpgradedEvent with a direction: nothing the player did caused it, and the
+ * toast it becomes is a Warning, where a purchase's is a receipt.
+ */
+struct AIRPORTOPS_API FModulesRefundedEvent
+{
+	int32 Entity = INDEX_NONE;
+	EDepotModule Module = EDepotModule::Shed;
+	int32 Count = 0;
+	double Amount = 0.0;
+	static const TCHAR* EventName() { return TEXT("ModulesRefunded"); }
+	FString Describe() const;
+};
+
+/**
  * How a vehicle joined or left a depot's fleet - one value per way in and out, so a subscriber sees EVERY change and not
  * only the ones the player paid for (#443: seeding and a depot's removal published nothing, so "Bowser #3 credited, depot
  * removed" could never reach the feed). A plain enum - this header has no .generated.h for a UENUM (memory: UHT cannot
@@ -395,7 +411,7 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
 	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent, FRunwayFreedEvent, FStandsFreedEvent,
-	FFlightInboundEvent, FPushGroundFreedEvent>;
+	FFlightInboundEvent, FPushGroundFreedEvent, FModulesRefundedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

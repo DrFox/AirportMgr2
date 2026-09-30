@@ -2,8 +2,10 @@
 #include "AirsideTestFixtures.h"
 #include "Build/DepotKit.h"
 #include "Build/PlotLayoutStrategy.h"
+#include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
+#include "Model/DepotCapability.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
@@ -470,15 +472,17 @@ bool FPlotStagesAdvanceTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the first click anchors and asks for the frontage"),
 		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Frontage));
 
-	Tool.OnClick(PlotAt(Actor, FVector2D(1200.0, 200.0)));
+	// 20 m OF FRONTAGE SINCE #266, and square: a plot must seat the starter mix, and no frontage
+	// under 20 m seats a shed under the real kits (Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix).
+	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 200.0)));
 	TestEqual(TEXT("the second pins the frontage and asks for a back corner"),
 		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::CornerA));
 
-	Tool.OnClick(PlotAt(Actor, FVector2D(600.0, 1600.0)));
+	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 2000.0)));
 	TestEqual(TEXT("the third pins that corner and asks for the last"),
 		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::CornerB));
 
-	Tool.OnClick(PlotAt(Actor, FVector2D(0.0, 1500.0)));
+	Tool.OnClick(PlotAt(Actor, FVector2D(0.0, 2000.0)));
 	TestEqual(TEXT("the fourth pins the last corner and asks for confirmation"),
 		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Confirm));
 
@@ -614,9 +618,11 @@ bool FPlotAnchorsSnapToTheFrontageStepTest::RunTest(const FString& Parameters)
 	// Without this a plot starts at an arbitrary offset and two depots on one road can never
 	// sit flush - which is what the snap dots promise the player.
 	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
-	DrawPlot(Tool, Actor, FVector2D(517.0, 200.0), FVector2D(1717.0, 200.0),
-		FVector2D(1100.0, 2200.0));
-	Tool.OnCommit(PlotAt(Actor, FVector2D(1100.0, 2200.0)));
+	// 20 m OF FRONTAGE SINCE #266, and square: a plot must seat the starter mix, and no frontage
+	// under 20 m seats a shed under the real kits (Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix).
+	DrawPlot(Tool, Actor, FVector2D(517.0, 200.0), FVector2D(2517.0, 200.0),
+		FVector2D(2517.0, 2200.0));
+	Tool.OnCommit(PlotAt(Actor, FVector2D(1500.0, 2200.0)));
 
 	if (!TestEqual(TEXT("a depot is built"), LiveEntities(Actor), 1)) { return false; }
 
@@ -719,9 +725,11 @@ bool FPlotClearsTheCarriagewayTest::RunTest(const FString& Parameters)
 
 	// Drawn on the +Y side: cursor north of the road at every stage.
 	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
-	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(1200.0, 200.0),
-		FVector2D(600.0, 1600.0));
-	Tool.OnCommit(PlotAt(Actor, FVector2D(600.0, 1600.0)));
+	// 20 m OF FRONTAGE SINCE #266, and square: a plot must seat the starter mix, and no frontage
+	// under 20 m seats a shed under the real kits (Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix).
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(2000.0, 200.0),
+		FVector2D(2000.0, 2000.0));
+	Tool.OnCommit(PlotAt(Actor, FVector2D(1000.0, 2000.0)));
 
 	const FEntityInstance* Placed = nullptr;
 	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
@@ -747,9 +755,9 @@ bool FPlotClearsTheCarriagewayTest::RunTest(const FString& Parameters)
 	Actor->ClearNetwork();
 	LayServiceRoad(Actor, 0.0);
 	FPlotPlaceTool South(EPlaceableEntity::FuelDepot);
-	DrawPlot(South, Actor, FVector2D(0.0, -200.0), FVector2D(1200.0, -200.0),
-		FVector2D(600.0, -2200.0));
-	South.OnCommit(PlotAt(Actor, FVector2D(600.0, -2200.0)));
+	DrawPlot(South, Actor, FVector2D(0.0, -200.0), FVector2D(2000.0, -200.0),
+		FVector2D(2000.0, -2200.0));
+	South.OnCommit(PlotAt(Actor, FVector2D(1000.0, -2200.0)));
 
 	const FEntityInstance* Below = nullptr;
 	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
@@ -1211,11 +1219,13 @@ bool FPlotReadoutMatchesPreviewTest::RunTest(const FString& Parameters)
 	// Three bays wide, and DEEP ENOUGH TO HOLD SOMETHING. It was 6 m deep and held nothing
 	// once PlotFit::BayDepthUu went to 12 m - a plot that holds nothing warns, which is what
 	// the warning assertion below is about.
-	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(1200.0, 200.0),
-		FVector2D(600.0, 2000.0));
+	// 20 m OF FRONTAGE SINCE #266, and square: a plot must seat the starter mix, and no frontage
+	// under 20 m seats a shed under the real kits (Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix).
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(2000.0, 200.0),
+		FVector2D(2000.0, 2000.0));
 
 	FToolReadoutCollector Collector;
-	Tool.BuildReadout(PlotAt(Actor, FVector2D(600.0, 2000.0)), Collector);
+	Tool.BuildReadout(PlotAt(Actor, FVector2D(2000.0, 2000.0)), Collector);
 
 	TestTrue(TEXT("confirm is committable"), Collector.Readout.bCommittable);
 
@@ -1226,8 +1236,8 @@ bool FPlotReadoutMatchesPreviewTest::RunTest(const FString& Parameters)
 	// THE NUMBER THE PLAYER READS IS THE WIDTH THAT WAS DRAGGED. That agreement is the whole
 	// reason facts are emitted from a const per-frame call beside the preview rather than
 	// held as state the bar polls.
-	TestEqual(TEXT("three bays, the width that was dragged"),
-		Bays->Value, FString(TEXT("15 m")));
+	TestEqual(TEXT("the width that was dragged"),
+		Bays->Value, FString(TEXT("20 m")));
 
 	// A FULL PLOT NO LONGER WARNS. "No room to grow" fired whenever a depot had no spare bay,
 	// which under reservation is the NORMAL end state of a well-drawn plot - the warning
@@ -1888,8 +1898,10 @@ bool FDepotTruckTurnsOutWithinItsLockTest::RunTest(const FString& Parameters)
 	// 20 x 14 m north of the road - the smallest plot that holds one of each (see
 	// FuelYardFitsTheConceptSheet).
 	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
-	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(2000.0, 200.0), FVector2D(1000.0, 1600.0));
-	Tool.OnCommit(PlotAt(Actor, FVector2D(1000.0, 1600.0)));
+	// SQUARE SINCE #266: the back corner at (1000, 1600) drew a trapezoid whose narrowed back held no shed, and a plot that
+	// cannot seat its starter mix is refused now. Deep enough, from the kerb, for the 14 m the comment above names.
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(2000.0, 200.0), FVector2D(2000.0, 2000.0));
+	Tool.OnCommit(PlotAt(Actor, FVector2D(1000.0, 2000.0)));
 	Actor->RebuildMesh();
 
 	const FEntityInstance* Depot = nullptr;
@@ -2025,6 +2037,195 @@ bool FPlotPlaceRefusedInsideStripTest::RunTest(const FString& Parameters)
 		Tool.OnCommit(Confirming);
 		TestEqual(TEXT("and builds"), LiveEntities(Actor), 1);
 	}
+	return true;
+}
+
+/**
+ * #266: A PLOT TOO SMALL FOR ITS STARTER MIX IS REFUSED, by the preview and by the commit alike (owner, 2026-09-30:
+ * "refusing too small a plot is the correct option" - no shrinking the mix, no charging for modules that get dropped).
+ *
+ * 20 m x 12 m reserves a tank and a pump but NO SHED under DA_FuelDepot's kits (measured 2026-09-30: every depth from 11
+ * to 13 m at a 20 m frontage reserves 0/1/1). Before this the readout lit Build over it, the facade built it and the
+ * presenter dropped the shed the player had been sold - the 550 m2 PIE report. 20 m x 14 m seats all three: the control.
+ * THE 12/15 x 8 m TIER 1 PLOT (#263's ThreeBayPlotAt) reserves nothing at all, so the tool already refused it ("This plot
+ * holds nothing"); its "0 built, 3 dropped" came from placing it through the model, which is the repair's case, not this.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPlaceRefusesUnseatedStarterTest,
+	"Airside.Tool.PlotPlace.RefusesAPlotThatCannotSeatTheStarterMix",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPlaceRefusesUnseatedStarterTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+	const TArray<EDepotModule> Starter = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+
+	// Draws a Frontage x Depth plot off the road with the tool, to Confirm.
+	const auto Draw = [this, Actor](FPlotPlaceTool& Tool, double Frontage, double Depth, FVector2D& OutAnchor)
+	{
+		Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+		TArray<FVector2D> Anchored;
+		Tool.Quad(PlotAt(Actor, FVector2D(0.0, 200.0)), Anchored);
+		if (Anchored.Num() < 1) { return false; }
+		OutAnchor = Anchored[0];
+		Tool.OnClick(PlotAt(Actor, OutAnchor + FVector2D(Frontage, 0.0)));
+		Tool.OnClick(PlotAt(Actor, OutAnchor + FVector2D(Frontage, Depth)));
+		Tool.OnClick(PlotAt(Actor, OutAnchor + FVector2D(0.0, Depth)));
+		return Tool.GetStage() == EPlotStage::Confirm;
+	};
+	// THE TOOL'S OWN SOLVE, asked here for the premise: the same site FPlotPlaceTool::ReservationFor builds.
+	const auto Reserve = [Actor](const TArray<FVector2D>& Outline)
+	{
+		FPlotSite Site;
+		Site.Outline = Outline;
+		Site.FrontageA = Outline[0];
+		Site.FrontageB = Outline[1];
+		Site.Gate = (Outline[0] + Outline[1]) * 0.5;
+		Site.Seed = DepotYardSeed(Site.Gate);
+		return PlotLayoutFor(EPlotLayout::FuelYardBands)->Solve(Site, Actor->ResolveDepotKits());
+	};
+	const auto Box = [](const FVector2D& Anchor, double Frontage, double Depth)
+	{
+		return TArray<FVector2D>{ Anchor, Anchor + FVector2D(Frontage, 0.0), Anchor + FVector2D(Frontage, Depth), Anchor + FVector2D(0.0, Depth) };
+	};
+
+	// 20 m x 12 m: room for a tank and a pump, none for the shed.
+	{
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		FVector2D Anchor;
+		if (!TestTrue(TEXT("the 20 m x 12 m plot is drawn to Confirm"), Draw(Tool, 2000.0, 1200.0, Anchor))) { return false; }
+		const TArray<FVector2D> Outline = Box(Anchor, 2000.0, 1200.0);
+		const PlotYard::FReservation Reservation = Reserve(Outline);
+		if (!TestTrue(TEXT("the premise: it reserves something but no shed - or this proves nothing"),
+			Reservation.Stands.Num() > 0 && Reservation.CeilingFor(static_cast<int32>(EDepotModule::Shed)) == 0)) { return false; }
+
+		const FToolContext Confirming = PlotAt(Actor, Anchor + FVector2D(0.0, 1200.0));
+		FToolReadoutCollector Collector;
+		Tool.BuildReadout(Confirming, Collector);
+		const FString Said = FString::Join(Collector.Readout.Warnings, TEXT(" | "));
+		TestTrue(FString::Printf(TEXT("the readout names the starter modules it cannot seat (%s)"), *Said),
+			Said.Contains(TEXT("starter")) && Said.Contains(TEXT("Sheds 0 of 1")));
+		TestFalse(TEXT("and Build is not committable"), Collector.Readout.bCommittable);
+		Tool.OnCommit(Confirming);
+		TestEqual(TEXT("the tool builds nothing"), LiveEntities(Actor), 0);
+		TestEqual(TEXT("and PlaceEntityInPlot refuses the same plot with the same mix - the commit's own refusal"),
+			Actor->PlaceEntityInPlot(Outline, Outline[0], Outline[1], Starter, EPlaceableEntity::FuelDepot), INDEX_NONE);
+		TestEqual(TEXT("nothing was built"), LiveEntities(Actor), 0);
+	}
+
+	// 20 m x 14 m: the control - one of each seats, so it builds and the presenter drops nothing.
+	{
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		FVector2D Anchor;
+		if (!TestTrue(TEXT("the 20 m x 14 m plot is drawn to Confirm"), Draw(Tool, 2000.0, 1400.0, Anchor))) { return false; }
+		const FToolContext Confirming = PlotAt(Actor, Anchor + FVector2D(0.0, 1400.0));
+		FToolReadoutCollector Collector;
+		Tool.BuildReadout(Confirming, Collector);
+		TestTrue(FString::Printf(TEXT("control: a plot that seats the mix is committable (%s)"), *FString::Join(Collector.Readout.Warnings, TEXT(" | "))),
+			Collector.Readout.bCommittable);
+		Tool.OnCommit(Confirming);
+		TestEqual(TEXT("and builds"), LiveEntities(Actor), 1);
+		const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+		if (!TestNotNull(TEXT("a plot presenter"), Plots)) { return false; }
+		TestEqual(TEXT("with its whole starter mix standing"), Plots->GetModuleCount(), Starter.Num());
+		TestEqual(TEXT("and nothing dropped"), Plots->GetDroppedCount(), 0);
+	}
+	return true;
+}
+
+/**
+ * #266, THE CONTENT HALF: the smallest plot the tool accepts, with the REAL content - DA_FuelDepot's layout, the authored
+ * kits' footprints, runs and aprons - seats the whole starter mix, and the presenter stands all of it. One fuel depot
+ * definition exists (EPlaceableEntity::FuelDepot, resolved as the game resolves it), so "each definition" is that one.
+ *
+ * WHY IT IS NOT A TAUTOLOGY: acceptance is judged on the plot the TOOL describes (its outline's first edge as frontage, the
+ * midpoint as gate and seed), while the presenter re-derives the yard from the BUILT entity (the frontage recovered from the
+ * pose). A kit whose apron or cap put the two solves out of step, or a recovery that picked another edge, would accept a
+ * plot the presenter then under-seats - the #266 report, from content rather than code. And it fails if the kits grow until
+ * no plot up to 40 x 40 m can start a depot at all.
+ *
+ * Swept at every frontage the gesture can draw (PlotGesture::MinFrontageUu in FrontageStepUu steps) to 40 m, each at the
+ * shallowest accepted depth in 1 m steps, through PlaceEntityInPlot - the commit the tool's Build makes, asking the same
+ * DepotKit::WhyUnseated the readout asks. Measured 2026-09-30: nothing at 15 m (no shed ever fits), 20 x 14 m the smallest.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSmallestAcceptedPlotSeatsStarterTest,
+	"Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSmallestAcceptedPlotSeatsStarterTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+
+	// THE REAL CONTENT, or this measures the grey-box table: the kits the actor resolves come from the content set, and the
+	// definition is the one the game resolves with nothing set on the actor.
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (!TestNotNull(TEXT("the content set loads"), Content)) { return false; }
+	if (!TestTrue(TEXT("and authors a shed kit - else the sweep would measure grey boxes"), Content->DepotKits.Contains(EDepotModule::Shed))) { return false; }
+	Actor->FuelDepotDefinition = nullptr;
+	const UEntityDefinition* Definition = Actor->ResolveEntityDefinition(EPlaceableEntity::FuelDepot);
+	if (!TestNotNull(TEXT("the fuel depot definition resolves from content"), Definition)) { return false; }
+	const TArray<EDepotModule> Starter = DepotKit::StarterModules();
+	const TArray<PlotYard::FKitSpec> Specs = Actor->ResolveDepotKits();
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	if (!TestNotNull(TEXT("a plot presenter"), Plots)) { return false; }
+
+	int32 Accepted = 0;
+	double SmallestArea = TNumericLimits<double>::Max();
+	FString Smallest;
+	double X = 0.0;
+	for (double Frontage = PlotGesture::MinFrontageUu; Frontage <= 4000.0; Frontage += PlotGesture::FrontageStepUu)
+	{
+		for (double Depth = 100.0; Depth <= 4000.0; Depth += 100.0)
+		{
+			const TArray<FVector2D> Outline = { FVector2D(X, 0.0), FVector2D(X + Frontage, 0.0),
+				FVector2D(X + Frontage, Depth), FVector2D(X, Depth) };
+			const int32 Index = Actor->PlaceEntityInPlot(Outline, Outline[0], Outline[1], Starter, EPlaceableEntity::FuelDepot);
+			if (Index == INDEX_NONE)
+			{
+				continue;
+			}
+			++Accepted;
+			const FString Size = FString::Printf(TEXT("%.0f x %.0f m"), Frontage / 100.0, Depth / 100.0);
+			const FEntityInstance* Built = Actor->Network->GetEntity(Actor->Network->EntityIdAt(Index));
+			if (!TestNotNull(TEXT("the accepted plot is built"), Built)) { return false; }
+			const TOptional<PlotYard::FReservation> Reserved = DepotKit::ReservationOf(*Built, Specs);
+			if (!TestTrue(*FString::Printf(TEXT("%s: the built depot's plot solves"), *Size), Reserved.IsSet())) { return false; }
+			const FDepotCapability Seated = FDepotCapability::Seat(*Built,
+				[&Reserved](EDepotModule Module) { return Reserved->CeilingFor(static_cast<int32>(Module)); });
+			for (int32 Kind = 0; Kind < FDepotCapability::KindCount; ++Kind)
+			{
+				const EDepotModule Module = static_cast<EDepotModule>(Kind);
+				TestEqual(*FString::Printf(TEXT("%s, the smallest accepted at this frontage: every starter %s seats"), *Size, *DepotKitLabel(Module)),
+					Seated.SeatedOf(Module), Seated.OwnedOf(Module));
+			}
+			TestEqual(*FString::Printf(TEXT("%s: the presenter stands every starter module of every accepted plot"), *Size),
+				Plots->GetModuleCount(), Accepted * Starter.Num());
+			TestEqual(*FString::Printf(TEXT("%s: and drops none"), *Size), Plots->GetDroppedCount(), 0);
+			if (Frontage * Depth < SmallestArea)
+			{
+				SmallestArea = Frontage * Depth;
+				Smallest = Size;
+			}
+			break;
+		}
+		X += 6000.0;
+	}
+	if (!TestTrue(TEXT("some plot up to 40 x 40 m starts a depot - else the kits outgrew every plot the tool can draw"), Accepted > 0)) { return false; }
+	AddInfo(FString::Printf(TEXT("%s (%s kits): the smallest plot the tool accepts is %s; %d frontage(s) of %d accept one"),
+		*GetNameSafe(Definition), *GetNameSafe(Content), *Smallest, Accepted,
+		static_cast<int32>((4000.0 - PlotGesture::MinFrontageUu) / PlotGesture::FrontageStepUu) + 1));
 	return true;
 }
 

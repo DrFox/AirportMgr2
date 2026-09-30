@@ -261,6 +261,24 @@ public:
 	 * ENFORCED BY: Airside.Present.Facility.ModulePurchaseRelightsAndClearsUndo
 	 */
 	bool AddEntityModule(FEntityInstanceId Entity, EDepotModule Module);
+
+	/**
+	 * Remove up to Count of Module from a depot whose plot cannot seat them - the repair's write (#266, owner 2026-09-30:
+	 * "there must never be unplaced modules"), and its only one. Returns how many went; 0, nothing changed, for a
+	 * non-depot or while a drag is open (AddEntityModule's reason: the history clear below would strand the drag).
+	 *
+	 * A REPAIR, NOT A PLAYER'S EDIT, so it pushes NO undo step - undoing it would put back a module nothing can stand, which
+	 * is the state being repaired. And it CLEARS the history, AddEntityModule's reason from the other side: undo is a
+	 * whole-network Memento, and restoring a snapshot from before this would bring the unplaced modules back and keep the
+	 * refund, which the repair would then pay a second time. A Topology rebuild, so the presenter's drop count and the
+	 * yard agree at once.
+	 *
+	 * NOT ON IRoadEditTarget (no tool removes a module) and NOT PRICED here: the refund is UFacilityPurchases', posted
+	 * after this returns - the ops runtime's removal hook is the one production caller.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'module removal', Airside.Present.Facility.UnseatedRemovalRelightsAndLeavesNoUndo,
+	 * AirportOps.Present.Facility.RepairRemovesAndRefundsUnseated
+	 */
+	int32 RemoveUnseatedModules(FEntityInstanceId Entity, EDepotModule Module, int32 Count);
 	virtual int32 SplitSegment(int32 SegmentIndex, FVector2D At) override;
 	virtual bool DeleteNode(int32 NodeIndex) override;
 	virtual bool DeleteSegment(int32 SegmentIndex) override;
