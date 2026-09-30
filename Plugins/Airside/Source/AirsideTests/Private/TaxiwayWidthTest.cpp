@@ -1,6 +1,8 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
+#include "NetworkIdentity.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadDrawTool.h"
 #include "Model/RoadNetwork.h"
@@ -329,6 +331,106 @@ bool FUpgradeSegmentTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and charges nothing"), Purse.Charges.Num(), Charged);
 	}
 	return true;
+}
+
+namespace
+{
+	/** Says yes to everything, and runs a callback while it is being ASKED - the one moment between
+	 *  WhyUpgradeRefused's last word and UpgradeSegment's first write. Prefixed against the unity build. */
+	class FMidCheckPurse : public IBuildPurse
+	{
+	public:
+		mutable TFunction<void()> DuringAffordCheck;
+		TArray<double> Charges;
+		virtual bool CanAfford(const FBuildQuote&) const override { if (DuringAffordCheck) { DuringAffordCheck(); } return true; }
+		virtual double Balance() const override { return 1.0e9; }
+		virtual int32 Charge(const FBuildQuote& Quote) override { Charges.Add(Quote.BaseAmount()); return Charges.Num(); }
+		virtual void Reverse(int32) override {}
+		virtual void Credit(const FBuildQuote&) override {}
+		virtual FText Describe(const FBuildQuote& Quote) const override { return FText::AsNumber(Quote.BaseAmount()); }
+	};
+
+	/**
+	 * THE SECOND WRITE OF AN UPGRADE REFUSES, AFTER THE FIRST HAS LANDED (issue #437).
+	 *
+	 * UpgradeSegment asks both setters' refusals up front (WhyUpgradeRefused), so a well-formed call
+	 * never meets the failure its two writes still guard against - which is the very reason the guard
+	 * had no test and was a hand unwind through a const_cast. To reach it, the purse the facade asks
+	 * whether it can afford the upgrade takes the width's offer of tarmac back while it is being asked:
+	 * the site half has passed, the write has not happened, and SetSegmentSurface then refuses what the
+	 * first write's profile no longer offers. The width write has by then put the segment on the F
+	 * profile; the whole model must come back to C tarmac, bitwise, with no undo step and no charge.
+	 * TARMAC TO TARMAC, WIDER: the price is a real one (a free quote skips the purse's CanAfford, and
+	 * the callback would never run).
+	 */
+	bool RunUpgradeSecondWriteRefused(FAutomationTestBase& T, EWorldType::Type WorldType)
+	{
+		FMidCheckPurse Purse; // before the world - the facade holds a raw pointer to it
+		FAirsideTestWorld World(/*bSpawnActor*/ true, WorldType);
+		if (!T.TestNotNull(TEXT("a world"), World.Actor)) { return false; }
+		ARoadNetworkActor* Actor = World.Actor;
+		Actor->GetEditFacade()->SetPurse(&Purse);
+		ON_SCOPE_EXIT { Actor->GetEditFacade()->SetPurse(nullptr); };
+
+		const int32 C = UpgradeWidthIndexFor(*Actor, EIcaoCode::C);
+		const int32 F = UpgradeWidthIndexFor(*Actor, EIcaoCode::F);
+		if (!T.TestTrue(TEXT("the content set has a C and an F taxiway width"), C != INDEX_NONE && F != INDEX_NONE)) { return false; }
+		const URoadProfile* ProfileC = Actor->ResolveWidthProfile(ERoadKind::Taxiway, C);
+		URoadProfile* ProfileF = const_cast<URoadProfile*>(Actor->ResolveWidthProfile(ERoadKind::Taxiway, F));
+		if (!T.TestTrue(TEXT("both profiles resolve"), ProfileC != nullptr && ProfileF != nullptr)) { return false; }
+
+		const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 B = Actor->PlaceNode(FVector2D(20000.0, 0.0));
+		if (!T.TestTrue(TEXT("a Code C tarmac taxiway laid"), Actor->ConnectNodes(A, B, ERoadKind::Taxiway, C, EPavement::Tarmac))) { return false; }
+		const int32 Seg = Actor->Network->GetSegments().Num() - 1;
+		if (!T.TestTrue(TEXT("control: F offers tarmac, so the site half passes"),
+			Actor->WhyUpgradeSiteRefused(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac).IsEmpty())) { return false; }
+
+		// THE CONTENT PROFILE IS SHARED BY EVERY TEST IN THE PROCESS: put its list back on every path out.
+		const TArray<EPavement> OfferedBefore = ProfileF->AllowedPavements;
+		ON_SCOPE_EXIT { ProfileF->AllowedPavements = OfferedBefore; };
+		Purse.DuringAffordCheck = [ProfileF]() { ProfileF->AllowedPavements = { EPavement::Grass }; };
+
+		URoadNetwork* Before = DuplicateObject<URoadNetwork>(Actor->Network, GetTransientPackage());
+		const int32 DepthBefore = Actor->History != nullptr ? Actor->History->UndoDepth() : 0;
+		const int32 ChargesBefore = Purse.Charges.Num();
+		const uint32 EpochBefore = Actor->GetEditEpoch();
+
+		T.TestFalse(TEXT("the upgrade is refused when its second write is"), Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac));
+
+		const FRoadSegment& Piece = Actor->Network->GetSegments()[Seg];
+		T.TestTrue(TEXT("the segment is back on C's profile - the width write was undone"), Piece.Profile.Get() == ProfileC);
+		T.TestEqual(TEXT("and on tarmac"), static_cast<int32>(Piece.Surface), static_cast<int32>(EPavement::Tarmac));
+		const TArray<FString> Differing = NetworkIdentity::DifferingProperties(*Actor->Network, *Before);
+		T.TestEqual(FString::Printf(TEXT("the model is BITWISE what it was (differs in: %s)"),
+			*FString::Join(Differing, TEXT(", "))), Differing.Num(), 0);
+		T.TestEqual(TEXT("no undo step was pushed"), Actor->History != nullptr ? Actor->History->UndoDepth() : 0, DepthBefore);
+		T.TestEqual(TEXT("and nothing was charged"), Purse.Charges.Num(), ChargesBefore);
+		T.TestEqual(TEXT("GetEditEpoch did not move: a plain scope's rollback notifies nothing, because nothing "
+			"outside it ever saw the failed edit - the revision clocks RestoreFrom moved forward cover what did"),
+			Actor->GetEditEpoch(), EpochBefore);
+		return true;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUpgradeSecondWriteRefusedTest,
+	"Airside.Present.UpgradeSecondWriteRefusedRollsBack",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUpgradeSecondWriteRefusedTest::RunTest(const FString& Parameters)
+{
+	return RunUpgradeSecondWriteRefused(*this, EWorldType::Game);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUpgradeSecondWriteRefusedEditorWorldTest,
+	"Airside.Present.UpgradeSecondWriteRefusedRollsBackInEditorWorld",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUpgradeSecondWriteRefusedEditorWorldTest::RunTest(const FString& Parameters)
+{
+	return RunUpgradeSecondWriteRefused(*this, EWorldType::Editor);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(

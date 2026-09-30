@@ -92,23 +92,21 @@ void URoadEditHistory::AbandonEdit()
 	PendingQuote = FBuildQuote();
 }
 
-URoadNetwork* URoadEditHistory::RevertEdit()
+bool URoadEditHistory::RollbackEdit(URoadNetwork& Live)
 {
 	if (PendingSnapshot == nullptr)
 	{
-		return nullptr;
+		return false;
 	}
 
-	// Handed over outright, exactly as Undo does: this history stops referencing it, so nothing
-	// later mutates a graph the stacks still believe in. The stacks themselves are untouched -
-	// a reverted edit is not an undo step, because as far as the player is concerned it never
-	// happened.
-	URoadNetwork* Reverted = PendingSnapshot;
-	PendingSnapshot = nullptr;
-	PendingLabel.Reset();
-	PendingCharge = INDEX_NONE;
-	PendingQuote = FBuildQuote();
-	return Reverted;
+	// RestoreFrom, not a hand-back of the snapshot as RevertEdit used to do: see this method's
+	// header comment. It copies OUT of the pending snapshot, which AbandonEdit then lets go - the
+	// stacks are untouched, because a rolled-back edit is not an undo step as far as the player
+	// is concerned (it never happened), and the pending charge goes with it (a refused edit was
+	// never charged - see AbandonEdit on why a surviving id would attach itself to the NEXT edit).
+	Live.RestoreFrom(*PendingSnapshot);
+	AbandonEdit();
+	return true;
 }
 
 URoadNetwork* URoadEditHistory::Undo(const URoadNetwork& Current)
@@ -178,13 +176,28 @@ void URoadEditHistory::Clear()
 	RedoStack.Reset();
 }
 
-FRoadEditScope::FRoadEditScope(URoadEditHistory* InHistory, const URoadNetwork* InNetwork, const TCHAR* InLabel)
+FRoadEditScope::FRoadEditScope(URoadEditHistory* InHistory, URoadNetwork* InNetwork, const TCHAR* InLabel)
 	: History(InHistory)
+	, Network(InNetwork)
 {
-	if (History != nullptr && InNetwork != nullptr)
+	if (Network == nullptr)
 	{
-		History->BeginEdit(*InNetwork, FString(InLabel));
+		return;
+	}
+
+	if (History != nullptr)
+	{
+		History->BeginEdit(*Network, FString(InLabel));
 		bBegan = true;
+	}
+	else
+	{
+		// THE EDITOR WORLD (or any caller with no history): undo is the transaction system's, but
+		// rollback is nobody's unless the scope holds its own way back. Costs one copy of the
+		// network per edit - the same order as a game world's undo snapshot, and nothing edits
+		// per frame through here (a drag goes through ApplyInteractiveMutation, which is given
+		// its point once per drag).
+		LocalSnapshot = TStrongObjectPtr<URoadNetwork>(SnapshotForRollback(*Network));
 	}
 }
 
@@ -203,4 +216,36 @@ FRoadEditScope::~FRoadEditScope()
 	{
 		History->AbandonEdit();
 	}
+}
+
+bool FRoadEditScope::Rollback()
+{
+	if (Network == nullptr)
+	{
+		return false;
+	}
+
+	if (History != nullptr)
+	{
+		if (!bBegan)
+		{
+			return false;
+		}
+		// THE HISTORY'S PENDING SNAPSHOT IS THE WAY BACK, and RollbackEdit ends the edit with it -
+		// so bBegan drops first, and the destructor neither commits nor abandons a second time.
+		bBegan = false;
+		return History->RollbackEdit(*Network);
+	}
+
+	if (!LocalSnapshot.IsValid())
+	{
+		return false;
+	}
+	Network->RestoreFrom(*LocalSnapshot);
+	return true;
+}
+
+URoadNetwork* FRoadEditScope::SnapshotForRollback(const URoadNetwork& Net)
+{
+	return DuplicateObject<URoadNetwork>(&Net, GetTransientPackage());
 }

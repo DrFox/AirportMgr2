@@ -24,7 +24,10 @@ class IBuildPurse;
  * TObjectPtr<URoadNetwork> that only a UObject's reflection keeps safe to return by pointer -
  * a plain C++ class hanging on to one across a frame would be invisible to the collector.
  * Held Transient by the actor for the same reason: it carries no fields of its own that a
- * save would ever need to persist.
+ * save would ever need to persist. (It does hold a GC-traced field now, EditorRollbackPoint -
+ * a Transient scratch copy an editor-world drag restores from, issue #437 - which is why that
+ * field is a UPROPERTY here rather than the strong pointer a plain scope uses: a UObject is
+ * destroyed by the collector, and a strong pointer's release does not belong there.)
  *
  * THIS FACADE IS A SUBOBJECT OF ARoadNetworkActor AND NEVER EXISTS WITHOUT ONE - it is not
  * usable standalone, and that is deliberate rather than an oversight. DOES NOT OWN Network
@@ -124,8 +127,9 @@ class IBuildPurse;
  *     catch-up is untouched, because bGeometryChangedDuringEdit is still set where it was.
  *   - MergeNodes' ALWAYS-Topology RULE HOLDS: it is the KIND a merge records, and
  *     CombineChangeKinds never weakens a Topology.
- *   - RevertEdit / AdoptNetwork / Undo / Redo / ClearNetwork IN A BATCH: the network is
- *     swapped at once (the model is never deferred), the notify is folded like any other,
+ *   - RollBackOpenEdit / AdoptNetwork / Undo / Redo / ClearNetwork IN A BATCH: the network is
+ *     swapped (RollBackOpenEdit: restored in place) at once (the model is never deferred), the
+ *     notify is folded like any other,
  *     and the close rebuilds from whatever Network is THEN - derived state is a function of
  *     the current network alone, never of the path to it.
  *   - DERIVED STATE IS STALE UNTIL THE CLOSE. ConnectGuidelines, DisconnectGuideline and
@@ -475,8 +479,14 @@ public:
 	 *
 	 * Moved verbatim from ARoadNetworkActor - see its own old comment, preserved here: in an
 	 * editor world the transaction system already serialises the network on Modify() and
-	 * restores it on Ctrl+Z, so this returns null there and FRoadEditScope becomes a no-op; at
+	 * restores it on Ctrl+Z, so this returns null there and FRoadEditScope records no UNDO step; at
 	 * runtime, where there is no transaction system, it returns the history.
+	 *
+	 * NULL MEANS "NO UNDO HISTORY", NOT "NO ROLLBACK" (issue #437). This used to be the switch a
+	 * failed edit's revert hung on, so in the editor world - exactly where a refused drop-to-merge
+	 * was then committed into the level by the drag transaction - nothing could be reverted. A
+	 * scope with no history holds a local snapshot instead (FRoadEditScope), and an interactive
+	 * edit keeps EditorRollbackPoint; both restore through URoadNetwork::RestoreFrom.
 	 */
 	URoadEditHistory* HistoryForEdit();
 
@@ -553,8 +563,10 @@ private:
 	 *
 	 * THE CHARGE HAPPENS AT COMMIT, BUT THE REFUSAL MUST HAPPEN BEFORE THE MUTATION. An
 	 * FRoadEditScope that is not committed discards its undo SNAPSHOT; it does NOT roll the
-	 * network back. So a caller that let the edit happen and then found it could not pay would
-	 * leave the segment built, unpaid for, and with no undo step for it. Every charged mutator
+	 * network back by itself (Rollback() is explicit, issue #437). So a caller that let the edit
+	 * happen and then found it could not pay would leave the segment built, unpaid for, and with
+	 * no undo step for it unless it remembered to roll back - and the player was shown the price
+	 * before the click, so the refusal belongs where the preview made it. Every charged mutator
 	 * therefore calls CanAfford among its guards, before it opens the scope.
 	 *
 	 * The charge id is recorded on the pending undo snapshot before the scope's destructor
@@ -595,10 +607,12 @@ private:
 	 * THE COMMON TAIL of every place this facade throws the live network away and takes a
 	 * REPLACEMENT rather than mutating it in place - spelled four times before issue #299 (a
 	 * regression of #103's own Travel, which only Undo/Redo ever joined): Travel itself
-	 * (Undo/Redo, adopting a Memento), the two RevertEdit sites (EndInteractiveEdit's
+	 * (Undo/Redo, adopting a Memento), the two revert sites (EndInteractiveEdit's
 	 * cannot-afford branch and ApplyInteractiveMutation's Verify-failure branch, each undoing a
 	 * whole open edit at once because AbandonEdit only drops the snapshot and does not put
-	 * anything back), and ClearNetwork (adopting a fresh, empty one). Byte for byte:
+	 * anything back - both now through RollBackOpenEdit below, which restores IN PLACE and
+	 * reaches this with the network it already has, the assignment a no-op and the ghost hide
+	 * and notify the point), and ClearNetwork (adopting a fresh, empty one). Byte for byte:
 	 * `Owner.Network = X; HideGhost(); NotifyChanged();`.
 	 *
 	 * HIDES THE GHOST because the preview may be describing a node that no longer exists in the
@@ -610,6 +624,24 @@ private:
 	 * wholesale, which is the largest shape change there is.
 	 */
 	void AdoptNetwork(URoadNetwork& NewNetwork);
+
+	/**
+	 * Put the live network back to the state the OPEN edit began in, and catch everything that
+	 * derives from it up - the revert door (issue #437) for a failed interactive edit
+	 * (ApplyInteractiveMutation's Verify) and an unaffordable drag (EndInteractiveEdit) alike.
+	 *
+	 * WORLD-BLIND, which is the point. Use is the history's pending edit when there is a history
+	 * (a game world); otherwise the restore comes from EditorRollbackPoint, the copy taken when
+	 * the drag began. Both restore IN PLACE through URoadNetwork::RestoreFrom, so the object the
+	 * editor's transaction Modify()d is the one that comes back, and the two worlds cannot
+	 * disagree about which fields do or how the revision clocks move.
+	 *
+	 * NOTIFIES (through AdoptNetwork, with the network it already has) where FRoadEditScope::
+	 * Rollback does not: a drag has already told the presenter about every frame it moved, so the
+	 * pavement on screen is the failed edit's and only a Topology notify puts the restored one
+	 * back. False, notifying nothing and changing nothing, when there is nothing to restore from.
+	 */
+	bool RollBackOpenEdit(URoadEditHistory* Use);
 
 	/**
 	 * THE COMMON SHAPE MoveNode, MoveApronCorner and MergeNodes drifted into three copies of
@@ -624,7 +656,7 @@ private:
 	 * EndInteractiveEdit, which bracket a drag across many calls to this.
 	 *
 	 * MUTATE RETURNING FALSE MEANS NOTHING WAS TOUCHED, so ABANDON is right and Revert would be
-	 * wrong - see URoadEditHistory::RevertEdit on the distinction. No notify either: a refusal
+	 * wrong - see URoadEditHistory::RollbackEdit on the distinction. No notify either: a refusal
 	 * changes nothing to rebuild for.
 	 *
 	 * VERIFY EXISTS FOR MergeNodes ALONE TODAY: MoveNode and MoveApronCorner judge their move
@@ -633,11 +665,20 @@ private:
 	 * RoadPlacement::NodeCornersFit reads a node's CURRENT arms, which do not exist as one set
 	 * until the merge has happened - so its Verify runs AFTER Mutate and, on a false answer,
 	 * REVERTS RATHER THAN REFUSES: AbandonEdit would leave the merged (and now un-cornerable)
-	 * graph standing with no undo step for it, where RevertEdit hands back the state the WHOLE
+	 * graph standing with no undo step for it, where RollBackOpenEdit restores the state the WHOLE
 	 * open edit started from - not merely this call's own slice of it, which is right when this
 	 * call joined a drag already in progress (drop-to-merge does exactly that). The revert is
-	 * unconditional on Use != nullptr, NOT gated on bOwnsEdit, for the same reason: a merge
-	 * that joined someone else's edit must still be able to unwind the whole thing.
+	 * not gated on bOwnsEdit, for the same reason: a merge that joined someone else's edit must
+	 * still be able to unwind the whole thing.
+	 *
+	 * AND NOT GATED ON THERE BEING A HISTORY (issue #437). It was - `Use != nullptr` - so in the
+	 * editor world, where HistoryForEdit() is null by design, a merge whose Verify failed stayed
+	 * merged: MergeNodes logged "the whole edit is reverted", nothing was, and the editor's drag
+	 * transaction then committed the result into the level. EditorRollbackPoint is what a
+	 * history-less world restores from - the copy taken when the drag began, or, for a bare call
+	 * (no drag open), one this call takes itself and lets go on the way out.
+	 * ENFORCED BY: Airside.Present.MergeRefusedIntoStripInEditorWorld,
+	 * Airside.Present.MergeCornerRefusalInEditorWorld.
 	 *
 	 * bChangesGraphShape SELECTS WHICH NOTIFY A SUCCESS GETS, and the two answers disagree on
 	 * purpose:
@@ -743,7 +784,7 @@ private:
 	 *     without a single successful move): firing a Topology notify anyway would be a full
 	 *     rebuild that never happened before #165, for no reason.
 	 * NOT read on the CanAfford-revert branch inside bKeep=true - that branch already
-	 * notifies Topology itself via RevertEdit, unconditionally, because a reverted drag always
+	 * notifies Topology itself via RollBackOpenEdit, unconditionally, because a reverted drag always
 	 * changed something (the charge check only runs after a real move).
 	 */
 	bool bGeometryChangedDuringEdit = false;
@@ -766,6 +807,22 @@ private:
 	 * EndInteractiveEdit bracket, so the split applies wherever a drag does.
 	 */
 	bool bInteractiveEditOpen = false;
+
+	/**
+	 * THE STATE THE OPEN INTERACTIVE EDIT BEGAN IN, in a world with no undo history (issue #437) -
+	 * what RollBackOpenEdit restores from when HistoryForEdit() is null. Taken by
+	 * BeginInteractiveEdit for the span of a drag; ApplyInteractiveMutation takes its own, and lets
+	 * it go on the way out, for a bare call made with no drag open. Null in a game world, where the
+	 * history's pending snapshot is the same thing, and between drags.
+	 *
+	 * A UPROPERTY, TRANSIENT: a snapshot referenced only by a raw pointer is collectable
+	 * mid-drag, and one the level SAVED would write a transient-package object into the .umap.
+	 * Its outer is the transient package (FRoadEditScope::SnapshotForRollback), not this facade,
+	 * for the same reason. ClearHistory drops it: a load is a new baseline, and a point taken
+	 * before one would restore the OLD airport over the loaded one.
+	 */
+	UPROPERTY(Transient)
+	TObjectPtr<URoadNetwork> EditorRollbackPoint;
 
 	/**
 	 * How many rebuild batches are open - see the class comment's REBUILD BATCHES. A COUNT,

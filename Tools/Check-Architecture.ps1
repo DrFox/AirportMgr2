@@ -1907,6 +1907,60 @@ foreach ($consumer in $runwayKindConsumers) {
 }
 $ranRules.Add('runway-kind-enumeration')
 
+# --- 40. A REFUSAL AFTER AN EDIT SCOPE OPENS ROLLS THE SCOPE BACK ----------------------------
+# Issue #437: FRoadEditScope was a Memento with no restore - an uncommitted scope drops its undo snapshot and leaves the
+# graph as the body left it - so a mutator that wrote and THEN refused left a changed graph with no undo entry, and the
+# only revert in the facade hung on there being an undo history, which the editor world does not have. Two consequences
+# shipped: a refused drop-to-merge stayed merged and was committed into the level by the editor's drag transaction, and
+# model refusal rules were re-typed above the scope so that no refusal had to happen inside one. The scope can roll
+# back now (Rollback(), in both worlds), and this is the shape that keeps it used: in URoadEditFacade's translation
+# units, every `return false;` / `return INDEX_NONE;` that follows an `FRoadEditScope <name>(` inside its block calls
+# `<name>.Rollback()` within the 12 code lines before it. Uniform on purpose, not "only the ones that wrote": whether a
+# refusal wrote something is exactly what the next mutator to grow a second write will get wrong, and a restore on a
+# refusal that wrote nothing is a copy, not a bug. A `return true;` is not a refusal - a no-op that succeeded returns
+# uncommitted on purpose and is left alone. Fails if it finds no scope or no Rollback() at all, so it cannot pass by
+# reading nothing.
+$rollbackScopeCount = 0
+$rollbackCallCount = 0
+foreach ($file in Get-Sources (Join-Path $plugin 'Private\Present') @('.cpp')) {
+    if ($file.Name -notlike 'RoadEditFacade*.cpp') { continue }
+    $lines = Get-Content -LiteralPath $file.FullName
+    $codeLines = New-Object 'System.Collections.Generic.List[string]'
+    $inBlock = $false
+    foreach ($line in $lines) { $codeLines.Add((Strip-ArchCode $line ([ref]$inBlock))) }
+    $depth = 0
+    $open = New-Object System.Collections.ArrayList   # @{ Name; Depth; Line }
+    for ($i = 0; $i -lt $codeLines.Count; $i++) {
+        $code = $codeLines[$i]
+        $rollbackCallCount += ([regex]::Matches($code, '\.Rollback\s*\(')).Count
+        $declared = [regex]::Match($code, '\bFRoadEditScope\s+(\w+)\s*\(')
+        if ($declared.Success) {
+            [void]$open.Add(@{ Name = $declared.Groups[1].Value; Depth = $depth; Line = $i })
+            $rollbackScopeCount++
+        }
+        elseif ($code -match '\breturn\s+(?:false|INDEX_NONE)\s*;') {
+            foreach ($scope in $open) {
+                $from = [Math]::Max($scope.Line + 1, $i - 12)
+                $window = ($codeLines[$from..($i - 1)] -join "`n")
+                if ($i -le $scope.Line -or $window -notmatch ("\b" + [regex]::Escape($scope.Name) + "\.Rollback\s*\(")) {
+                    $failures.Add("scope-refusal-rolls-back: $($file.Name):$($i + 1) refuses after $($scope.Name) opened (line $($scope.Line + 1)) without $($scope.Name).Rollback() in the 12 lines before it - an uncommitted scope restores nothing, so whatever the body wrote stays with no undo step (#437)")
+                }
+            }
+        }
+        $depth += ([regex]::Matches($code, '\{')).Count - ([regex]::Matches($code, '\}')).Count
+        for ($k = $open.Count - 1; $k -ge 0; $k--) {
+            if ($depth -lt $open[$k].Depth) { $open.RemoveAt($k) }
+        }
+    }
+}
+if ($rollbackScopeCount -eq 0) {
+    $failures.Add("scope-refusal-rolls-back: found no FRoadEditScope under Private\Present\RoadEditFacade*.cpp - it moved; update rule 40, do not let it check nothing")
+}
+if ($rollbackCallCount -eq 0) {
+    $failures.Add("scope-refusal-rolls-back: found no .Rollback( call under Private\Present\RoadEditFacade*.cpp - the rule would pass on code that never rolls back; update rule 40")
+}
+$ranRules.Add('scope-refusal-rolls-back')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

@@ -12,6 +12,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Entities/EntityDefinition.h"
+#include "NetworkIdentity.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadSnap.h"
 
@@ -1193,7 +1194,7 @@ namespace
 			Actor->TopologyRebuildCountForTest(), TopologyBefore + 1);
 
 		// AND THE REASON THE BRANCH EXISTS: the node is back where the drag started, not left
-		// out at 200 m unpaid for (RevertEdit, not merely refused - BuildPurseDragRevertsWhenBroke
+		// out at 200 m unpaid for (RollBackOpenEdit, not merely refused - BuildPurseDragRevertsWhenBroke
 		// Test in BuildPurseTest.cpp measures the same thing from the purse's side).
 		T.TestEqual(TEXT("the node reverted to where the drag began"),
 			Actor->GetNetwork()->GetNodes()[B].Position.X, 1000.0, 1e-6);
@@ -1447,6 +1448,124 @@ bool FAdoptNetworkHidesGhostTest::RunTest(const FString& Parameters)
 			Actor->RebuildCountForTest(), RebuildsBefore + 1);
 	}
 
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Issue #437: THE CORNER-FIT MERGE REFUSAL IN THE EDITOR WORLD. FAdoptNetworkHidesGhostTest's last
+// block above runs the refusal on a bare NewObject actor - no world, so HistoryForEdit() hands back
+// a history and the revert has something to hand back. In the EDITOR world it does not (the
+// transaction system owns undo), the revert had nothing to restore from, and the merge that
+// "reverts whole" stayed merged and was committed by the editor's drag transaction. Same layout,
+// same claims - model bitwise unchanged, ghost hidden, exactly one notify - in the world that had
+// none of them. The state is restored IN PLACE: the editor's transaction Modify()s this network
+// object at the start of a drag, so a swapped-in copy would sit outside what it records.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMergeCornerRefusalEditorWorldTest,
+	"Airside.Present.MergeCornerRefusalInEditorWorld",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMergeCornerRefusalEditorWorldTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld MergeWorld(/*bSpawnActor*/ true, EWorldType::Editor);
+	if (!TestNotNull(TEXT("a world"), MergeWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = MergeWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	TestNull(TEXT("control: this is a world with no undo history to revert from"),
+		Actor->GetEditFacade()->HistoryForEdit());
+
+	// KEEP GETS A SHORT ARM; ABSORB'S ARM LANDS AT A TINY ANGLE FROM IT - see the same layout's
+	// comment in FAdoptNetworkHidesGhostTest: too sharp for any half-width to depend on.
+	const int32 Keep = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 Far1 = Actor->PlaceNode(FVector2D(100.0, 0.0));
+	if (!TestTrue(TEXT("Keep's arm connects"), Actor->ConnectNodes(Keep, Far1))) { return false; }
+	const int32 Absorb = Actor->PlaceNode(FVector2D(5.0, 5.0));
+	const int32 Far2 = Actor->PlaceNode(FVector2D(100.0, 1.0));
+	// OVER KEEP'S ARM BY DESIGN, so inside its clearance strip - unjudged (TestTool::ConnectUnjudged).
+	if (!TestTrue(TEXT("Absorb's arm connects"), TestTool::ConnectUnjudged(*Actor, Absorb, Far2))) { return false; }
+
+	FRoadSnapResult Snap;
+	Snap.Kind = ERoadSnapKind::Free;
+	Snap.Position = FVector2D(50.0, 50.0);
+	Actor->UpdateGhost(Keep, Snap, /*bValid*/ true, ERoadKind::ServiceRoad, INDEX_NONE);
+	if (!TestTrue(TEXT("the ghost shows before the merge"), Actor->GetPresenter()->IsGhostVisibleForTest())) { return false; }
+
+	URoadNetwork* const LiveBefore = Actor->Network;
+	URoadNetwork* Before = DuplicateObject<URoadNetwork>(Actor->Network, GetTransientPackage());
+	const int32 NodesBefore = Actor->Network->GetNodes().Num();
+	const FVector2D KeepAt = Actor->Network->GetNodes()[Keep].Position;
+	const FVector2D AbsorbAt = Actor->Network->GetNodes()[Absorb].Position;
+	const int32 RebuildsBefore = Actor->RebuildCountForTest();
+	const uint32 EpochBefore = Actor->GetEditEpoch();
+
+	TestFalse(TEXT("the merge makes a corner the solver cannot trim, so it reverts"), Actor->MergeNodes(Keep, Absorb));
+
+	TestEqual(TEXT("no node was absorbed"), Actor->Network->GetNodes().Num(), NodesBefore);
+	TestNotNull(TEXT("the absorbed node is still live"), Actor->Network->GetNode(Actor->Network->NodeIdAt(Absorb)));
+	TestEqual(TEXT("Keep is where it was"), Actor->Network->GetNodes()[Keep].Position, KeepAt);
+	TestEqual(TEXT("and so is the node that was to be absorbed"), Actor->Network->GetNodes()[Absorb].Position, AbsorbAt);
+	const TArray<FString> Differing = NetworkIdentity::DifferingProperties(*Actor->Network, *Before, NetworkIdentity::RederivedOnNotify());
+	TestEqual(FString::Printf(TEXT("the model is BITWISE what it was (bar the guideline graph the notify re-derives; differs in: %s)"),
+		*FString::Join(Differing, TEXT(", "))), Differing.Num(), 0);
+	TestTrue(TEXT("restored in place: the network object the editor's transaction Modify()d is the live one"),
+		Actor->Network == LiveBefore);
+	TestFalse(TEXT("the revert hid the ghost, as AdoptNetwork does"), Actor->GetPresenter()->IsGhostVisibleForTest());
+	TestEqual(TEXT("and notified exactly once"), Actor->RebuildCountForTest(), RebuildsBefore + 1);
+	TestTrue(TEXT("and GetEditEpoch moved: a drag's frames had already told every memoiser about the "
+		"state the revert took away, so a restore that left the epoch alone would leave their answers stale"),
+		Actor->GetEditEpoch() > EpochBefore);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Issue #437: AN EDITOR-WORLD DRAG'S REVERT REACHES THE DRAG'S START, not merely the state the merge
+// found. The drop-to-merge case is a drag: the node moved on every frame the player held it, and the
+// game world's revert already put the WHOLE open edit back (its pending snapshot was taken when the
+// drag began). The editor world's equivalent is EditorRollbackPoint, taken by BeginInteractiveEdit -
+// this is the test that fails if that one line is unwired, which the bare-call rows of the merge tests
+// above cannot see (a bare call takes its own point at the merge, and would restore to the same place).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditorDragRollsBackToDragStartTest,
+	"Airside.Present.EditorDragRollbackReachesDragStart",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditorDragRollsBackToDragStartTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld DragWorld(/*bSpawnActor*/ true, EWorldType::Editor);
+	if (!TestNotNull(TEXT("a world"), DragWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = DragWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+
+	// The corner-fit layout of the test above: folding Absorb into Keep leaves two arms at a
+	// fraction of a degree, which no half-width can trim.
+	const int32 Keep = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 Far1 = Actor->PlaceNode(FVector2D(100.0, 0.0));
+	if (!TestTrue(TEXT("Keep's arm connects"), Actor->ConnectNodes(Keep, Far1))) { return false; }
+	const int32 Absorb = Actor->PlaceNode(FVector2D(5.0, 5.0));
+	const int32 Far2 = Actor->PlaceNode(FVector2D(100.0, 1.0));
+	if (!TestTrue(TEXT("Absorb's arm connects"), TestTool::ConnectUnjudged(*Actor, Absorb, Far2))) { return false; }
+
+	URoadNetwork* Before = DuplicateObject<URoadNetwork>(Actor->Network, GetTransientPackage());
+	const FVector2D DragStart = Actor->Network->GetNodes()[Absorb].Position;
+
+	Actor->BeginInteractiveEdit(TEXT("drag node"));
+	// A DRAG FRAME, WRITTEN STRAIGHT TO THE MODEL: MoveNode's own judges (the minimum segment length,
+	// the corner fit) refuse every move in a layout this small, and what is measured here is where the
+	// revert LANDS, not whether the frame was legal. The write is after the point BeginInteractiveEdit
+	// took, which is all a frame is to the rollback.
+	const FVector2D Moved(20.0, 4.0);
+	Actor->Network->SetNodePosition(Actor->Network->NodeIdAt(Absorb), Moved);
+	if (!TestEqual(TEXT("control: the frame moved the node - or this proves nothing about the drag's start"),
+		Actor->Network->GetNodes()[Absorb].Position, Moved)) { Actor->EndInteractiveEdit(true); return false; }
+
+	TestFalse(TEXT("the drop merges into a corner the solver cannot trim, so it reverts"), Actor->MergeNodes(Keep, Absorb));
+	Actor->EndInteractiveEdit(/*bKeep*/ true);
+
+	TestEqual(TEXT("the dragged node is back where the DRAG began, not where the last frame left it"),
+		Actor->Network->GetNodes()[Absorb].Position, DragStart);
+	const TArray<FString> Differing = NetworkIdentity::DifferingProperties(*Actor->Network, *Before, NetworkIdentity::RederivedOnNotify());
+	TestEqual(FString::Printf(TEXT("and the model is BITWISE what it was before the drag (bar the guideline graph the notify re-derives; differs in: %s)"),
+		*FString::Join(Differing, TEXT(", "))), Differing.Num(), 0);
 	return true;
 }
 
