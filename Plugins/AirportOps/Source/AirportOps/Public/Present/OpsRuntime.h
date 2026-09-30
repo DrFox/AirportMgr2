@@ -20,6 +20,7 @@ class UGroundTraffic;
 class UOpsCatalog;
 class UOpsEvents;
 class UJobBoard;
+class UScenario;
 class UFlightBoard;
 class UOfferGenerator;
 class ULedger;
@@ -140,6 +141,15 @@ public:
 	 * forwarder, not logic - the reading lives in Content/.
 	 */
 	static FVehicle StandDesignVehicleOf(const FEntityInstance& Stand);
+
+	/**
+	 * Board's vehicle catalogue and starter fleet, resolved from Scenario's rows and Content's chassis
+	 * (UAirsideSettings::ResolveVehicle) through FServiceFleet::ResolveCatalogue (#430). THE ONE RESOLVE Attach runs and
+	 * the one the world-free fixtures run, so a test's catalogue is the game's - the same reason StandDesignVehicleOf is
+	 * a static here. A forwarder, not logic: the join is the fleet's, the chassis Content's.
+	 * ENFORCED BY: AirportOps.Fleet.EveryBuyableTypeHasAChassis (walks the attached runtime's catalogue)
+	 */
+	static void ResolveVehicleCatalogue(UJobBoard& Board, const UScenario& Scenario);
 
 	/** Binds to the actor's traffic delegates. Safe to call again with a new actor (unbinds the old). */
 	void Attach(ARoadNetworkActor* Actor);

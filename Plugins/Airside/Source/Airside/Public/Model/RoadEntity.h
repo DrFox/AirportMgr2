@@ -294,7 +294,7 @@ struct AIRSIDE_API FEntityInstance
 	UPROPERTY() EServiceRole PoseRole = EServiceRole::Aircraft;
 
 	/**
-	 * The STARTER vehicles this installation came with - of each kind in UJobBoard::FleetTypes -
+	 * The STARTER vehicles this installation came with - of each kind in UJobBoard::StarterFleet -
 	 * turned into real vehicles once by UJobBoard's placeholder seeding. 0 on a stand, and 0 on a
 	 * depot the player drew (facility-upgrades spec R3): the player BUYS its fleet. Kept, rather than
 	 * retired as that spec first said (§6), because plotless and test depots still start with one.

@@ -88,8 +88,9 @@ struct FDepotBacklog
  * (PolicyFor: NextStep, TripQuantity, ServeSeconds, FacilitySeconds, DoneWithin), and a vehicle and a job each carry a
  * Role. What is FUEL, written as fuel, and would have to be routed through the catalogue row and the policy before
  * another role could join (#443's option b, NOT built: a second role to design against decides its shape):
- *  - the catalogue: TypeFor gives every row Role = Fuel and reads its figures from FFuelVehicleSpec;
- *  - the tank: FFuelRolePolicy::CapacityOf is called as a static (FServiceFleet::Add, the refill log, a job's TankLitres);
+ *  - the catalogue: FServiceFleet::ResolveCatalogue gives every row Role = Fuel and reads its figures from FFuelVehicleSpec;
+ *  - the tank: FFuelRolePolicy::CapacityOf is called as a static (FServiceFleet::Add, the refill log, a job's TankLitres at
+ *    the bid, the re-bid and the stand, and the shop's quote);
  *  - the jobs: OnAgentPhase creates a Fuel job for a parked aircraft and no other kind, the fee is Pricing->FuelFee
  *    (PostServiceFee), and the outcome enum (EFuelOutcome) and its rule (FuelOutcomeOf) are fuel's;
  *  - the depot: a fuel depot is an entity whose PoseRole is Fuel and whose pumps are its EDepotModule::Pump modules
@@ -134,21 +135,38 @@ public:
 	virtual void Serialize(FArchive& Ar) override;
 
 	/**
-	 * Each fuel vehicle's tank and flow, by FVehicle::TypeCode - copied from UScenario::FuelVehicles
-	 * at attach (spec 2026-09-28-fuel-litres). Empty in a bare NewObject; SpecFor then answers
-	 * FallbackSpec.
+	 * THE VEHICLE CATALOGUE (#430): one resolved row per KIND - its chassis from Content, its tank, flow, name and money
+	 * from the scenario - joined once, at attach, by FServiceFleet::ResolveCatalogue, and read through TypeFor.
+	 *
+	 * REPLACED VehicleSpecs (each fuel vehicle's tank and flow by TypeCode, copied from UScenario::FuelVehicles at attach,
+	 * spec 2026-09-28-fuel-litres) and FallbackSpec (the trailer's figures, which a code with no entry used to get). TypeFor
+	 * re-assembled a row on every call from VehicleSpecs and a scan of the stand-letter table, so a kind no letter was
+	 * designed for came back with a zero chassis and passed every fit gate. EMPTY in a bare NewObject: a fixture resolves
+	 * it the way Attach does (UOpsRuntime::ResolveVehicleCatalogue).
+	 *
+	 * TRANSIENT, as VehiclesByLetter is: a content default resolved every attach. VehicleSpecs was saved, so a load put the
+	 * figures the save was written under back over the ones the attach had just resolved.
 	 */
-	UPROPERTY() TMap<FName, FFuelVehicleSpec> VehicleSpecs;
+	const TMap<FName, FServiceVehicleType>& GetCatalogue() const { return Catalogue; }
 
-	/** What a vehicle with no entry in VehicleSpecs carries: the trailer's figures. */
-	UPROPERTY() FFuelVehicleSpec FallbackSpec = FFuelVehicleSpec(1000.0, 75.0);
+	/** A catalogue row a test re-shapes (widens its body, empties its tank) - the row must exist. */
+	FServiceVehicleType& CatalogueRowForTest(FName TypeCode) { return Catalogue.FindChecked(TypeCode); }
+
+	/**
+	 * The kinds of vehicle a STARTER fleet gives a depot (spec §3.4): UScenario::StarterFleet, filtered to the catalogue
+	 * by FServiceFleet::ResolveCatalogue. A depot with Trucks = N gets N of each, once; the player's depot has Trucks 0
+	 * and buys its fleet instead (UFacilityPurchases, facility-upgrades spec). A test that needs "the depot's only
+	 * vehicle is the bowser" says so here rather than contriving a table.
+	 *
+	 * REPLACED FleetTypes() and its override DefaultFleetTypes (#430): with no override it was every distinct TypeCode
+	 * in the stand-letter table, so changing the vehicle a stand LETTER was designed for silently changed which kinds a
+	 * starter depot was seeded with. Transient for the catalogue's reason.
+	 */
+	UPROPERTY(Transient) TArray<FName> StarterFleet;
 
 	/** Litres per GAME minute per pump module a depot refills a returning vehicle at. Handed to the
 	 *  fuel policy every time it is asked, so a test's or the scenario's value is always the one used. */
 	UPROPERTY() double RefillLitresPerMinutePerPump = 500.0;
-
-	/** VehicleSpecs[TypeCode], or FallbackSpec - with a Warning once per unknown code. */
-	FFuelVehicleSpec SpecFor(FName TypeCode) const;
 
 	/**
 	 * The litres a parked aircraft asks for - the flight's own FuelLitres, drawn at its offer.
@@ -193,15 +211,18 @@ public:
 
 	/**
 	 * Fill every letter's table entry from Resolve. UOpsRuntime::Attach fills it with
-	 * UAirsideSettings::ResolveStandDesignVehicle, next to VehicleSpecs above; nothing on the dispatch
+	 * UAirsideSettings::ResolveStandDesignVehicle, beside the catalogue above; nothing on the dispatch
 	 * path resolves content, and cannot: this is Model/, and reaching Content/ was the only
 	 * Model->Content edge in either plugin (#104). A TFunctionRef rather than the resolve itself for
 	 * the same reason, and so the world-free fixture fills the table through the one loop too.
 	 *
-	 * WHAT THE TABLE IS FOR NOW: the vehicle CATALOGUE (every distinct TypeCode in it is a kind of
-	 * vehicle a depot can have - see FleetTypes and TypeFor) and the design-vehicle fallback for a
-	 * stand whose definition carries none. It no longer decides which vehicle a stand is SENT: the
-	 * bid does, among the vehicles the depots actually have.
+	 * WHAT THE TABLE IS FOR NOW: the design-vehicle fallback for a stand whose definition carries
+	 * none - the per-letter DESIGN vehicle, and nothing else (#430). It WAS also the vehicle catalogue
+	 * (every distinct TypeCode in it was a kind a depot could have, and TypeFor took a kind's chassis
+	 * from the first letter that sent it), so a kind no letter was designed for had no chassis at all,
+	 * and changing a letter's design vehicle changed the starter fleet. The catalogue is its own map
+	 * now (GetCatalogue). It no longer decides which vehicle a stand is SENT either: the bid does,
+	 * among the vehicles the depots actually have.
 	 * ENFORCED BY: Check-Architecture's include-direction rule (Model/ may not include Content/),
 	 * and AirportOps.Fuel.RuntimeResolvesPerStand (red if Attach leaves one vehicle for all).
 	 */
@@ -242,17 +263,15 @@ public:
 	static const TCHAR* RefusalText(EServiceRefusal Why);
 
 	/**
-	 * The kinds of vehicle a STARTER fleet gives a depot (spec §3.4): DefaultFleetTypes if set, else every
-	 * distinct TypeCode in the letter table. A depot with Trucks = N gets N of each, once; the player's
-	 * depot has Trucks 0 and buys its fleet instead (UFacilityPurchases, facility-upgrades spec).
+	 * The catalogue's row for TypeCode (#430): its chassis from Content, its figures from the scenario, joined once by
+	 * FServiceFleet::ResolveCatalogue - no longer re-assembled per call from the letter table and the scenario map.
+	 *
+	 * A CODE WITH NO ROW - a vehicle restored under a scenario that has since dropped its kind, or a test's hand-made
+	 * one; FServiceFleet::Add refuses to make such a vehicle - answers a row whose TypeCode is None and whose chassis is
+	 * empty, with a Warning once per code. The bid's candidate filter skips it (Judge), so it serves nothing rather than
+	 * fitting a zero-size vehicle through every gate, which is what the old per-call join did.
+	 * ENFORCED BY: AirportOps.Fleet.CatalogueDropsARowWithNoChassis, AirportOps.Fleet.UnknownKindServesNothing
 	 */
-	TArray<FName> FleetTypes() const;
-
-	/** Override for FleetTypes. Empty in production. A test that needs "the depot's only vehicle is
-	 *  the bowser" says so here rather than contriving a table. */
-	UPROPERTY() TArray<FName> DefaultFleetTypes;
-
-	/** The resolved row for TypeCode: its chassis from the letter table, its figures from SpecFor. */
 	FServiceVehicleType TypeFor(FName TypeCode) const;
 
 	/**
@@ -466,7 +485,8 @@ public:
 	/** Vehicles whose Home is Depot - counted off the vehicles, never stored on the depot. */
 	int32 VehiclesAt(FEntityInstanceId Depot) const;
 
-	/** "FUEL #7 · at depot 1 · 10,000 L" - the one line the depot card's backlog and its fleet rows share. */
+	/** "Bowser #7 · at depot 1 · 10,000 L" - the one line the depot card's backlog and its fleet rows share. The kind's
+	 *  NAME, through FServiceFleet::NameOf (#430): the card listed "FUEL #7" beside the "Bowser" it sold. */
 	FString VehicleLine(const FServiceVehicle& Vehicle) const;
 
 	/** A turnaround with a deadline and one job, bypassing OnAgentPhase - for the backlog's lateness. */
@@ -604,7 +624,7 @@ private:
 
 	/**
 	 * The placeholder fleet brought in line with the depots (spec §3.4): a live depot seen for the
-	 * first time gets Trucks x FleetTypes() vehicles, Idle at home and full (FServiceFleet::SeedStarterFleets); a
+	 * first time gets Trucks x StarterFleet vehicles, Idle at home and full (FServiceFleet::SeedStarterFleets); a
 	 * vehicle whose depot is gone is withdrawn (its agent retired, its jobs back to the board, then
 	 * FServiceFleet::Withdraw(DepotRemoved) credits its resale value and announces it); a vehicle whose agent vanished
 	 * under it (retired by somebody else) is put back Idle at home by LoseAgent, every job it held re-opened - THE
@@ -713,7 +733,8 @@ private:
 	bool DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, bool bToFacility,
 		UGroundTraffic& Traffic, const URoadNetwork& Network);
 
-	/** The vehicle card's line - its kind, what it is doing, what it carries, what is queued. */
+	/** The vehicle card's line - its kind's NAME (FServiceFleet::NameOf, #430), what it is doing, what it carries, what
+	 *  is queued. */
 	FString DescribeVehicle(const FServiceVehicle& Vehicle) const;
 
 	/** "to stand 3", "at depot 1" - the one phrase the vehicle card and the depot card share, so the
@@ -861,8 +882,11 @@ private:
 	int32 NextJobId = 1;
 	UPROPERTY() int32 NextVehicleId = 1;
 
-	/** Unknown vehicle codes already warned about - see SpecFor. */
-	mutable TSet<FName> WarnedSpecs;
+	/** Unknown vehicle codes already warned about - see TypeFor. */
+	mutable TSet<FName> WarnedTypes;
+
+	/** See GetCatalogue. Written by FServiceFleet::ResolveCatalogue alone (Check-Architecture rule 43). */
+	UPROPERTY(Transient) TMap<FName, FServiceVehicleType> Catalogue;
 
 	/** Vehicles whose refused dispatch has been warned about, until one of theirs works - see
 	 *  DriveVehicleTo. */

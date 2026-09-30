@@ -1,6 +1,8 @@
 #include "CoreMinimal.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Present/OpsRuntime.h"
+#include "Model/OpsDefinition.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/ScopeExit.h"
 #include "Model/Flight.h"
@@ -60,6 +62,9 @@ bool FJobBoardRevisionTest::RunTest(const FString&)
 	// EVERY PUBLIC MUTATOR, since the state is private: the inspector keys the depot card and the fuel line on this
 	// number, and a door that changed the board without it would leave either one stale on screen.
 	UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
+	// A CATALOGUE, so the purchase below has a kind to buy (#430: the door refuses a code with no row). Resolving it moves
+	// no revision - no vehicle joined - which is why it is before Last is read.
+	UOpsRuntime::ResolveVehicleCatalogue(*Board, *GetDefault<UScenario>());
 	uint32 Last = Board->Revision();
 	auto Moved = [&](const TCHAR* What)
 	{

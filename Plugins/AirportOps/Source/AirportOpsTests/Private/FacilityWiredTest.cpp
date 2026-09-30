@@ -11,6 +11,7 @@
 #include "Model/Ledger.h"
 #include "Model/OpsDefinition.h"
 #include "Model/OpsEvents.h"
+#include "Model/VehicleCodes.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -298,7 +299,11 @@ bool FFacilitySellForwardsTest::RunTest(const FString&)
 	UJobBoard* Board = Runtime->GetJobBoard();
 	const int32 Fleet = Board->VehiclesAt(Depot);
 	const double Balance = Runtime->GetLedger()->Balance();
-	const FFuelVehicleSpec Spec = Board->SpecFor(TEXT("FUEL"));
+	// THE SCENARIO'S OWN ROW, not the catalogue's resolved ResaleValue: the credit is checked against the authored rule.
+	// The RUNTIME's scenario - the one Attach resolved the catalogue from - not the class default.
+	const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario(*Runtime->GetCatalog());
+	if (!TestNotNull(TEXT("the runtime's scenario"), Scenario)) { return false; }
+	const FFuelVehicleSpec Spec = Scenario->FuelVehicles.FindChecked(TEXT("FUEL"));
 
 	const FPurchaseResult Sold = Runtime->SellVehicle(Bought.VehicleId);
 	TestTrue(TEXT("the idle vehicle sells through the forwarder"), Sold.Succeeded());
@@ -721,6 +726,47 @@ bool FFacilityRepairAfterLoadTest::RunTest(const FString&)
 	TestEqual(TEXT("refunded once, on top of the restored balance"), Ledger->Balance(), Saved + (21 - Seats) * 40000.0, 1e-6);
 	TestEqual(TEXT("on one Refund line - the loaded ledger had none"), FacilityWiredRefunds(*Ledger), 1);
 	TestEqual(TEXT("and the presenter drops nothing"), TestWorld.Buildings->GetPlotPresenter()->GetDroppedCount(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFleetEveryBuyableTypeHasAChassisTest, "AirportOps.Fleet.EveryBuyableTypeHasAChassis",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFleetEveryBuyableTypeHasAChassisTest::RunTest(const FString&)
+{
+	// #430'S PIN. A buyable type is a scenario row, and every one must reach the RUNTIME's catalogue - the one Attach
+	// resolved - with a chassis: a code, and axles. RED BEFORE THE FIX with a rig row (below): the chassis came from the
+	// first stand letter that sent the code, and no letter sends the rig, so TypeFor answered a zero wheelbase.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario(*Runtime->GetCatalog());
+	if (!TestNotNull(TEXT("the runtime's scenario"), Scenario)) { return false; }
+	TestTrue(TEXT("the scenario sells at least one kind - a pin over nothing measures nothing"), Scenario->FuelVehicles.Num() > 0);
+	for (const TPair<FName, FFuelVehicleSpec>& Row : Scenario->FuelVehicles)
+	{
+		const FServiceVehicleType* Kind = Runtime->GetJobBoard()->GetCatalogue().Find(Row.Key);
+		if (!TestNotNull(FString::Printf(TEXT("scenario row %s is in the runtime's catalogue"), *Row.Key.ToString()), Kind)) { continue; }
+		TestFalse(FString::Printf(TEXT("%s has a chassis TypeCode"), *Row.Key.ToString()), Kind->Vehicle.TypeCode.IsNone());
+		TestTrue(FString::Printf(TEXT("%s has a wheelbase"), *Row.Key.ToString()), Kind->Vehicle.Chassis.Wheelbase() > 0.0);
+	}
+
+	// A TANKER LATER IS A DATA ROW (facility-upgrades spec R4), through the same resolve the runtime ran: the rig, which
+	// Content builds and no stand letter was designed for, is a whole vehicle - its code, its axles and its trailer.
+	UScenario* WithTanker = NewObject<UScenario>(GetTransientPackage());
+	WithTanker->FuelVehicles = Scenario->FuelVehicles;
+	WithTanker->FuelVehicles.Add(FName(AirsideVehicleCodes::Rig), FFuelVehicleSpec(30000.0, 500.0, 150000.0, 800.0, INVTEXT("Tanker")));
+	UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
+	UOpsRuntime::ResolveVehicleCatalogue(*Board, *WithTanker);
+	for (const TPair<FName, FFuelVehicleSpec>& Row : WithTanker->FuelVehicles)
+	{
+		const FServiceVehicleType Kind = Board->TypeFor(Row.Key);
+		TestFalse(FString::Printf(TEXT("%s resolves to a chassis with a TypeCode"), *Row.Key.ToString()), Kind.Vehicle.TypeCode.IsNone());
+		TestTrue(FString::Printf(TEXT("%s resolves to a chassis with a wheelbase"), *Row.Key.ToString()), Kind.Vehicle.Chassis.Wheelbase() > 0.0);
+	}
+	TestTrue(TEXT("the rig row is the rig: it tows its tank"), Board->TypeFor(AirsideVehicleCodes::Rig).Vehicle.Tow.Num() > 0);
 	return true;
 }
 

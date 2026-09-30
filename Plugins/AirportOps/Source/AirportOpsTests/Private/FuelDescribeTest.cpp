@@ -2,6 +2,8 @@
 #include "Misc/AutomationTest.h"
 #include "Model/Airframe.h"
 #include "Model/JobBoard.h"
+#include "Model/OpsDefinition.h"
+#include "Present/OpsRuntime.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -93,6 +95,8 @@ bool FFuelDescribeVehicleTest::RunTest(const FString& Parameters)
 	// the state it owns, what it carries, how much work is queued behind the current job. Through the
 	// same DescribeAgent the aircraft card uses, so the inspector needs no second seam.
 	UJobBoard* Service = NewObject<UJobBoard>();
+	// THE GAME'S CATALOGUE, so the card names the kind the shop sold (#430) - it printed the raw code.
+	UOpsRuntime::ResolveVehicleCatalogue(*Service, *GetDefault<UScenario>());
 	FEntityInstanceId Depot;
 	Depot.Index = 4;
 	FServiceJob& Job = Service->AddJobForTest(1, EServiceJobState::Underway, EServiceRefusal::None, 0);
@@ -103,17 +107,17 @@ bool FFuelDescribeVehicleTest::RunTest(const FString& Parameters)
 	Vehicle.CurrentJob = JobId;
 	Vehicle.Queue = { 99 };
 	TestEqual(TEXT("driving to a job"), Service->DescribeAgent(7, 0.0),
-		FString(TEXT("FUEL · to stand 2 · 9,700 L · 1 queued")));
+		FString(TEXT("Bowser · to stand 2 · 9,700 L · 1 queued")));
 
 	Vehicle.State = EServiceVehicleState::Serving;
 	Vehicle.Queue.Reset();
 	TestEqual(TEXT("serving, nothing behind it"), Service->DescribeAgent(7, 0.0),
-		FString(TEXT("FUEL · fuelling at stand 2 · 9,700 L")));
+		FString(TEXT("Bowser · fuelling at stand 2 · 9,700 L")));
 
 	Vehicle.State = EServiceVehicleState::ToFacility;
 	Vehicle.CurrentJob = 0;
 	TestEqual(TEXT("going home"), Service->DescribeAgent(7, 0.0),
-		FString(TEXT("FUEL · to depot 4 · 9,700 L")));
+		FString(TEXT("Bowser · to depot 4 · 9,700 L")));
 	return true;
 }
 
@@ -126,6 +130,8 @@ bool FFuelDescribeDepotBacklogTest::RunTest(const FString& Parameters)
 	// turnaround ends, i.e. make an aircraft wait. The bowser has a job under way and one queued that
 	// will be four minutes late; the tow is idle.
 	UJobBoard* Service = NewObject<UJobBoard>();
+	// THE GAME'S CATALOGUE, so each vehicle's line names its kind as the shop sold it (#430) - it printed the raw code.
+	UOpsRuntime::ResolveVehicleCatalogue(*Service, *GetDefault<UScenario>());
 	FEntityInstanceId Depot;
 	Depot.Index = 1;
 	const double Now = 1000.0;
@@ -167,7 +173,7 @@ bool FFuelDescribeDepotBacklogTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the summary: how many, when it clears, how many late"), Backlog.Summary,
 		FString(TEXT("2 jobs · clears in 21 min · 1 late")));
 	TestEqual(TEXT("and where the backlog sits: each vehicle, then its jobs in order"), Backlog.Detail,
-		FString::Printf(TEXT("FUEL #%d · to stand 3 · 9,700 L\n  stand 3 · 300 L · +6 min\n  stand 5 · 1,200 L · +21 min · late 4 min\nUTILITY #%d · at depot 1 · 1,000 L"),
+		FString::Printf(TEXT("Bowser #%d · to stand 3 · 9,700 L\n  stand 3 · 300 L · +6 min\n  stand 5 · 1,200 L · +21 min · late 4 min\nUtility tow #%d · at depot 1 · 1,000 L"),
 			BowserId, TowId));
 	TestEqual(TEXT("the counts behind the text"), Backlog.Jobs, 2);
 	TestEqual(TEXT("one late"), Backlog.LateJobs, 1);

@@ -19,8 +19,20 @@ struct IToolPreviewSink;
  */
 namespace PlotGesture
 {
-	/** 15 m. A yard narrower than this is not a yard - see the 2026-09-16 gesture spec. */
-	inline constexpr double MinFrontageUu = 1500.0;
+	/**
+	 * 20 m. A yard narrower than this is not a yard - see the 2026-09-16 gesture spec.
+	 *
+	 * RAISED FROM 15 m (owner ruling 2026-09-30: minimum depot frontage 20 m). #469 measured that no plot with 15-19 m of
+	 * frontage, at any depth up to 30 m, seats the shed (Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix; the
+	 * smallest accepted is 20 x 14 m), so the gesture offered widths the seat check would always refuse. The DEPTH rule is
+	 * unchanged: a too-shallow plot is still drawable and refused by the seat check, with its readout.
+	 * SHARED WITH THE STAND TOOL, which loses nothing it could build: every stand letter's floor width is wider than 20 m
+	 * (Code A reads as B's, a 24 m span plus its clearances - IcaoCode::StandWidthForLetter), and above the floor the two
+	 * lattices agree, 20 + k x 5 m either way.
+	 * ENFORCED BY: Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix (every frontage the gesture can draw accepts a plot),
+	 * Airside.Tool.StandPlot.TooSmallNotCommittable (the smallest stand letter's floor width is no narrower than this)
+	 */
+	inline constexpr double MinFrontageUu = 2000.0;
 
 	/**
 	 * 5 m. The step above the minimum.

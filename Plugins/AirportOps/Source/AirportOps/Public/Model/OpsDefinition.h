@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "Model/RoadEntity.h"
+#include "Model/VehicleCodes.h"
 #include "OpsDefinition.generated.h"
 
 /**
@@ -28,6 +29,10 @@ public:
  * What one KIND of fuel vehicle carries, how fast it pumps, and what it costs to own - keyed by
  * FVehicle::TypeCode.
  *
+ * THE AUTHORED HALF OF A CATALOGUE ROW (#430): FServiceFleet::ResolveCatalogue joins it, once at attach, to the chassis
+ * Content builds for the same code, into the FServiceVehicleType everything else reads. A row whose code has no chassis
+ * is dropped there, with a Warning - it used to become a zero-size vehicle that passed every fit gate.
+ *
  * IN AirportOps, NOT ON FVehicle: Airside knows how a vehicle MOVES and must never learn what it
  * is FOR (UJobBoard's header). Spec 2026-09-28-fuel-litres section 1; prices from spec
  * 2026-09-29-facility-upgrades §2, where "a tanker later is a data row" (R4) is this struct.
@@ -48,7 +53,7 @@ struct AIRPORTOPS_API FFuelVehicleSpec
 	/** How fast it pumps into an aircraft, litres per GAME minute. */
 	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "1.0")) double FlowLitresPerMinute = 75.0;
 
-	/** What the depot card calls it - "Bowser". Empty falls back to the TypeCode. */
+	/** What the depot card calls it - "Bowser". Empty falls back to the TypeCode, in FServiceFleet::NameOf alone. */
 	UPROPERTY(EditAnywhere, Category = "Fleet") FText DisplayName;
 
 	/** What buying one costs, charged to ELedgerCategory::Fleet. 0 is free, not "not for sale". */
@@ -63,7 +68,9 @@ struct AIRPORTOPS_API FFuelVehicleSpec
 	/**
 	 * What one is worth back: Price x ResaleFraction. ONE RULE for the two ways a vehicle leaves for
 	 * money - UFacilityPurchases::RefundOf (a sale) and UJobBoard::SyncFleet (its depot removed) - so
-	 * the card's "Sell" label and a bulldozer's credit cannot drift apart.
+	 * the card's "Sell" label and a bulldozer's credit cannot drift apart. Asked ONCE since #430, by
+	 * FServiceFleet::ResolveCatalogue, into the row's ResaleValue that FServiceFleet::ResaleOf reads.
+	 * ENFORCED BY: Check-Architecture rule 43 (fleet-one-door: .ResaleValue read in ServiceFleet.cpp alone)
 	 */
 	double ResaleValue() const { return Price * ResaleFraction; }
 };
@@ -192,8 +199,10 @@ public:
 	double StartHour = 9.0;
 
 	/**
-	 * Each fuel vehicle's tank and flow rate, by FVehicle::TypeCode. Copied into UJobBoard at
-	 * attach. First guesses from the user (2026-09-28): the utility tow's 1,000 L trailer at
+	 * Each fuel vehicle's tank and flow rate, by FVehicle::TypeCode. Joined at attach to the chassis
+	 * Content builds for each code, into the job board's catalogue (FServiceFleet::ResolveCatalogue);
+	 * a row whose code has no chassis is dropped there, with a Warning. KEYED BY AirsideVehicleCodes,
+	 * never a literal: the code is the join, and it is typed once (Model/VehicleCodes.h). First guesses from the user (2026-09-28): the utility tow's 1,000 L trailer at
 	 * 75 L/min, the bowser 10,000 L at 200 L/min; the articulated tanker (30,000 L, 500 L/min)
 	 * joins with the depot fleet.
 	 *
@@ -203,8 +212,21 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Scenario")
 	TMap<FName, FFuelVehicleSpec> FuelVehicles = {
-		{ FName(TEXT("UTILITY")), FFuelVehicleSpec(1000.0, 75.0, 25000.0, 150.0, NSLOCTEXT("Scenario", "UtilityTow", "Utility tow")) },
-		{ FName(TEXT("FUEL")), FFuelVehicleSpec(10000.0, 200.0, 90000.0, 500.0, NSLOCTEXT("Scenario", "Bowser", "Bowser")) } };
+		{ FName(AirsideVehicleCodes::UtilityTow), FFuelVehicleSpec(1000.0, 75.0, 25000.0, 150.0, NSLOCTEXT("Scenario", "UtilityTow", "Utility tow")) },
+		{ FName(AirsideVehicleCodes::Fuel), FFuelVehicleSpec(10000.0, 200.0, 90000.0, 500.0, NSLOCTEXT("Scenario", "Bowser", "Bowser")) } };
+
+	/**
+	 * The kinds of vehicle a STARTER depot begins with (spec 2026-09-28-service-vehicle-lifecycle §3.4): a depot placed
+	 * with Trucks = N gets N of each, once. The player's depot has Trucks 0 and buys its fleet instead.
+	 *
+	 * AN EXPLICIT LIST (#430). It was "every distinct TypeCode in the stand-letter design-vehicle table", so changing
+	 * which vehicle a stand LETTER was designed for silently changed which kinds a starter depot was seeded with - two
+	 * questions answered by one table. The two codes here are what that table held on 2026-09-30 (A/B the tow, C-F the
+	 * bowser), in its order. A code with no catalogue row is dropped at attach, with a Warning.
+	 * ENFORCED BY: AirportOps.Fleet.CatalogueDropsARowWithNoChassis (the starter list is filtered to the catalogue)
+	 */
+	UPROPERTY(EditAnywhere, Category = "Scenario")
+	TArray<FName> StarterFleet = { FName(AirsideVehicleCodes::UtilityTow), FName(AirsideVehicleCodes::Fuel) };
 
 	/** How fast a depot refills a returning vehicle, litres per GAME minute per pump module. */
 	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "1.0"))

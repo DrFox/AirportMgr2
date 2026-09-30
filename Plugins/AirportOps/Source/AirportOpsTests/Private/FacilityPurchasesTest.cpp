@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Present/OpsRuntime.h"
 #include "Model/FacilityPurchases.h"
 #include "Model/GroundTraffic.h"
 #include "Model/JobBoard.h"
@@ -70,7 +71,7 @@ namespace
 		{
 			Net = NewObject<URoadNetwork>(GetTransientPackage());
 			Board = NewObject<UJobBoard>(GetTransientPackage());
-			Board->VehicleSpecs = GetDefault<UScenario>()->FuelVehicles;
+			UOpsRuntime::ResolveVehicleCatalogue(*Board, *GetDefault<UScenario>());   // as Attach does (#430)
 			Clock = NewObject<USimClock>(GetTransientPackage());
 			Ledger = NewObject<ULedger>(GetTransientPackage());
 			Ledger->Clock = Clock;
@@ -478,7 +479,7 @@ bool FFacilityNameFallbackTest::RunTest(const FString&)
 	// A DESIGNER ROW WITH NO NAME still labels its button (FFuelVehicleSpec::DisplayName is optional data):
 	// the type code stands in, rather than a blank "  90,000 . 10,000 L" nobody can read.
 	FFacilityFixture F;
-	F.Board->VehicleSpecs.FindChecked(TEXT("FUEL")).DisplayName = FText::GetEmpty();
+	F.Board->CatalogueRowForTest(TEXT("FUEL")).DisplayName = FText::GetEmpty();
 	const FFacilityQuote Q = F.Shop->Quote(*F.Net, F.Depot);
 	const FVehicleOfferQuote* Row = Q.VehicleOffers.FindByPredicate([](const FVehicleOfferQuote& Each) { return Each.TypeCode == TEXT("FUEL"); });
 	if (!TestNotNull(TEXT("the bowser is offered"), Row)) { return false; }

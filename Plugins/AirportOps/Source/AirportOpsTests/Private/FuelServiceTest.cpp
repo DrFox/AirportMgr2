@@ -254,6 +254,15 @@ namespace
 		bool AdvanceUntil(TFunctionRef<bool()> Predicate, double MaxSeconds);
 
 		/**
+		 * Every catalogue kind given the same figures (#430) - its tank, pump AND money, all of Figures, through the one
+		 * join (FServiceFleet::ResolveCatalogue) with every scenario row replaced by Figures. WAS "reset VehicleSpecs and
+		 * set FallbackSpec", which gave every code the fallback's figures, a zero price among them; a code with no
+		 * catalogue row serves nothing now, so a test that wants every vehicle alike says so on each row. Keeps the
+		 * starter list. Before the first Step: a seeded vehicle starts full of this tank.
+		 */
+		void EveryKindCarries(const FFuelVehicleSpec& Figures);
+
+		/**
 		 * The furthest any agent's body moved between two consecutive steps of this fixture, and
 		 * which agent, and when.
 		 *
@@ -408,11 +417,11 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	Service->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
 	Service->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
 
-	// THE SCENARIO'S FIGURES FOR EVERY KIND, as UOpsRuntime::Attach copies them: the depot's
-	// placeholder fleet has a tow AND a bowser (spec 2026-09-28-service-vehicle-lifecycle §3.4), and
-	// which of them wins a bid turns on their tanks and pumps. A test that wants every vehicle alike
-	// resets this and sets FallbackSpec, as the litres tests do.
-	Service->VehicleSpecs = GetDefault<UScenario>()->FuelVehicles;
+	// THE SCENARIO'S CATALOGUE, resolved as UOpsRuntime::Attach resolves it (#430) - the same static, so the fixture's
+	// kinds are the game's: the depot's placeholder fleet has a tow AND a bowser (spec
+	// 2026-09-28-service-vehicle-lifecycle §3.4), and which of them wins a bid turns on their tanks and pumps. A test
+	// that wants every vehicle alike says so with EveryKindCarries, as the litres tests do.
+	UOpsRuntime::ResolveVehicleCatalogue(*Service, *GetDefault<UScenario>());
 
 	// A 300 L JOB for every aircraft this fixture parks, unless a test says otherwise
 	// (spec 2026-09-28-fuel-litres): the fixture's airframe is hand-assembled content default
@@ -766,6 +775,17 @@ void FFuelFixture::WatchForJumps()
 	}
 }
 
+void FFuelFixture::EveryKindCarries(const FFuelVehicleSpec& Figures)
+{
+	TMap<FName, FFuelVehicleSpec> Rows = GetDefault<UScenario>()->FuelVehicles;
+	for (TPair<FName, FFuelVehicleSpec>& Row : Rows)
+	{
+		Row.Value = Figures;
+	}
+	const TArray<FName> Starter = Service->StarterFleet;
+	Service->Fleet().ResolveCatalogue(Rows, Starter, [](FName Code) { return UAirsideSettings::ResolveVehicle(Code); });
+}
+
 bool FFuelFixture::AdvanceUntil(TFunctionRef<bool()> Predicate, double MaxSeconds)
 {
 	constexpr double Step = 1.0 / 30.0;
@@ -826,10 +846,10 @@ bool FFuelServiceTest::RunTest(const FString& Parameters)
 	// at the vehicle's flow rate, timed on USimClock - the clock the turnaround contract is in.
 	const double PumpStarted = Fixture.Clock->Now();
 	const double PumpGameSeconds = Fixture.Service->GetJobs()[0].TripEndsAt - PumpStarted;
-	const FFuelVehicleSpec Spec = Fixture.Service->SpecFor(Fixture.Traffic->FindAgent(TruckId)->AsVehicle()->TypeCode);
+	const FServiceVehicleType Kind = Fixture.Service->TypeFor(Fixture.Traffic->FindAgent(TruckId)->AsVehicle()->TypeCode);
 	// WITHIN ONE FRAME: AdvanceUntil stops the frame AFTER pumping began, and a frame at the
 	// fixture's 72x is 2.4 game seconds.
-	TestEqual(TEXT("the pump runs litres / flow minutes"), PumpGameSeconds, 300.0 / Spec.FlowLitresPerMinute * 60.0,
+	TestEqual(TEXT("the pump runs litres / flow minutes"), PumpGameSeconds, 300.0 / Kind.RatePerMinute * 60.0,
 		Fixture.Clock->TimeScale() / 30.0 + 0.1);
 	const double RealToPump = PumpGameSeconds / Fixture.Clock->TimeScale();
 	Fixture.Advance(RealToPump - 0.5);
@@ -910,16 +930,17 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 	{
 		FFuelFixture Fixture;
 		Fixture.Build(/*bWithRoad=*/true);
-		// THE LETTER SENDS the 20 m body, and the stand is read as BUILT for it too, so the
+		// THE BOWSER'S CATALOGUE ROW is the 20 m body (#430: a kind's chassis is its row's, no longer
+		// the first letter that sends it), and the stand is read as BUILT for it too, so the
 		// VehicleTooLarge guard (sent larger than built-for) does not answer first - this case is
 		// about the road.
-		FVehicle& Sent = Fixture.Service->VehiclesFor(EIcaoCode::C);
+		FVehicle& Sent = Fixture.Service->CatalogueRowForTest(Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode).Vehicle;
 		Sent.BodyWidth = 2000.0;
 		const FVehicle Wide = Sent;
 		Fixture.Service->DesignVehicleOf = [Wide](const FEntityInstance&) { return Wide; };
 		// AND THE DEPOT HAS ONLY THAT VEHICLE. The placeholder fleet would also give it the utility
 		// tow, which fits these roads and would simply be sent - true, and not this case.
-		Fixture.Service->DefaultFleetTypes = { Wide.TypeCode };
+		Fixture.Service->StarterFleet = { Wide.TypeCode };
 		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
 		Fixture.Advance(0.2);
 
@@ -1970,7 +1991,7 @@ bool FFuelVehicleTooLargeRefusedTest::RunTest(const FString& Parameters)
 	Fixture.Service->VehiclesFor(EIcaoCode::B) = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
 	// THE DEPOT'S ONLY VEHICLE IS THE TRUCK (a fleet since 2026-09-28): the placeholder fleet would
 	// also give it the tow, which the B stand was built for and would simply be sent.
-	Fixture.Service->DefaultFleetTypes = { UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode };
+	Fixture.Service->StarterFleet = { UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode };
 	TestEqual(TEXT("the B stand's definition says it was built for the tow"),
 		Fixture.Service->DesignVehicleFor(*Fixture.Net->GetEntity(Fixture.Stand)).TypeCode,
 		UAirsideSettings::ResolveUtilityTowVehicle().TypeCode);
@@ -2271,8 +2292,7 @@ bool FFuelBigLoadTakesTripsTest::RunTest(const FString& Parameters)
 	Fixture.FixtureLitres = 2500.0;
 	Fixture.Build(/*bWithRoad=*/true);
 	// EVERY VEHICLE A 1000 L TANK AT A QUICK 600 L/MIN, so three trips fit the test's patience.
-	Fixture.Service->FallbackSpec = FFuelVehicleSpec{ 1000.0, 600.0 };
-	Fixture.Service->VehicleSpecs.Reset();
+	Fixture.EveryKindCarries(FFuelVehicleSpec(1000.0, 600.0));
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
 
 	bool bSawRefill = false;
@@ -2372,8 +2392,7 @@ bool FFuelPartFuelledTest::RunTest(const FString& Parameters)
 	Fixture.TurnaroundSeconds = 60.0;
 	Fixture.bWithRunway = true;
 	Fixture.Build(/*bWithRoad=*/true);
-	Fixture.Service->FallbackSpec = FFuelVehicleSpec(1000.0, 600.0);
-	Fixture.Service->VehicleSpecs.Reset();
+	Fixture.EveryKindCarries(FFuelVehicleSpec(1000.0, 600.0));
 	ULedger* Ledger = NewObject<ULedger>();
 	Ledger->Open(0.0);
 	Fixture.Service->Ledger = Ledger;
@@ -2426,10 +2445,16 @@ bool FFuelZeroCapacitySpecTest::RunTest(const FString& Parameters)
 	FFuelFixture Fixture;
 	Fixture.FixtureLitres = 3.0;
 	Fixture.Build(/*bWithRoad=*/true);
-	Fixture.Service->FallbackSpec = FFuelVehicleSpec(0.0, 600.0);
-	Fixture.Service->VehicleSpecs.Reset();
+	Fixture.EveryKindCarries(FFuelVehicleSpec(0.0, 600.0));
 	Fixture.Service->RefillLitresPerMinutePerPump = 100000.0;
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	// ONE CAPACITY RULE (#430, the #443 A13 note): the bid wrote the job's tank unfloored and the stand floored it, so the
+	// card read 0 L between the two. Asked at the bid, before the stand can overwrite it.
+	if (!TestTrue(TEXT("the job is bid"), Fixture.AdvanceUntil([&Fixture]
+	{
+		return Fixture.Service->GetJobs().Num() == 1 && Fixture.Service->GetJobs()[0].VehicleId != 0;
+	}, 60.0))) { return false; }
+	TestEqual(TEXT("the bid's tank is the policy's floored one, as the stand's is"), Fixture.Service->GetJobs()[0].TankLitres, 1.0);
 	TestTrue(TEXT("a zero-tank vehicle still finishes the job"), Fixture.AdvanceUntil([&Fixture]
 	{
 		return Fixture.Service->GetJobs().Num() == 1
@@ -2464,8 +2489,9 @@ namespace FuelServiceTest
 		const FName Bowser = Fixture.Service->VehiclesFor(Letter.Get(EIcaoCode::C)).TypeCode;
 		// THE BOWSER ALONE, and a 2 L/min pump: 300 L is 150 game minutes, two real minutes at the
 		// fixture's 72x - longer than the second aircraft's taxi in.
-		Fixture.Service->DefaultFleetTypes = { Bowser };
-		Fixture.Service->VehicleSpecs.Add(Bowser, FFuelVehicleSpec(BowserCapacity, 2.0));
+		Fixture.Service->StarterFleet = { Bowser };
+		Fixture.Service->CatalogueRowForTest(Bowser).Capacity = BowserCapacity;
+		Fixture.Service->CatalogueRowForTest(Bowser).RatePerMinute = 2.0;
 
 		const int32 First = Fixture.ParkAircraft();
 		const int32 Second = First != 0 ? Fixture.ParkAircraftAt(Fixture.StandPose2) : 0;
@@ -2612,7 +2638,7 @@ bool FFuelUnreachableQueueSendsItHomeTest::RunTest(const FString& Parameters)
 	FFuelFixture Fixture;
 	Fixture.Build(/*bWithRoad=*/true);
 	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
-	Fixture.Service->DefaultFleetTypes = { Bowser };
+	Fixture.Service->StarterFleet = { Bowser };
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
 
 	int32 VehicleId = 0;
@@ -2688,9 +2714,10 @@ bool FFuelTowRecalledWhileReversingTest::RunTest(const FString& Parameters)
 	Fixture.StandLetter = EIcaoCode::B;
 	Fixture.Build(/*bWithRoad=*/true);
 	const FName Tow = Fixture.Service->VehiclesFor(EIcaoCode::B).TypeCode;
-	Fixture.Service->DefaultFleetTypes = { Tow };
+	Fixture.Service->StarterFleet = { Tow };
 	// A BIG TANK so it chains, and a slow pump so the second aircraft is on stand before the first is done.
-	Fixture.Service->VehicleSpecs.Add(Tow, FFuelVehicleSpec(10000.0, 2.0));
+	Fixture.Service->CatalogueRowForTest(Tow).Capacity = 10000.0;
+	Fixture.Service->CatalogueRowForTest(Tow).RatePerMinute = 2.0;
 
 	FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
 	GLog->AddOutputDevice(&Spy);
@@ -3124,8 +3151,7 @@ bool FFuelManualDepartTest::RunTest(const FString& Parameters)
 	Fixture.TurnaroundSeconds = 3600.0;   // LONG: nothing but the manual depart below may send it
 	Fixture.bWithRunway = true;
 	Fixture.Build(/*bWithRoad=*/true);
-	Fixture.Service->FallbackSpec = FFuelVehicleSpec(1000.0, 600.0);
-	Fixture.Service->VehicleSpecs.Reset();
+	Fixture.EveryKindCarries(FFuelVehicleSpec(1000.0, 600.0));
 	ULedger* Ledger = NewObject<ULedger>();
 	Ledger->Open(0.0);
 	Fixture.Service->Ledger = Ledger;
@@ -3276,7 +3302,7 @@ bool FFuelQuietServeEndSettlesTest::RunTest(const FString& Parameters)
 	FFuelFixture Fixture;
 	Fixture.Build(/*bWithRoad=*/true);
 	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
-	Fixture.Service->DefaultFleetTypes = { Bowser };
+	Fixture.Service->StarterFleet = { Bowser };
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
 	int32 VehicleId = 0;
 	if (!TestTrue(TEXT("the bowser starts serving"), Fixture.AdvanceUntil([&]
@@ -3378,8 +3404,9 @@ namespace FuelServiceTest
 			Fixture.bSecondStand = true;
 			Fixture.Build(/*bWithRoad=*/true);
 			const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
-			Fixture.Service->DefaultFleetTypes = { Bowser };
-			Fixture.Service->VehicleSpecs.Add(Bowser, FFuelVehicleSpec(10000.0, 2.0));
+			Fixture.Service->StarterFleet = { Bowser };
+			Fixture.Service->CatalogueRowForTest(Bowser).Capacity = 10000.0;
+			Fixture.Service->CatalogueRowForTest(Bowser).RatePerMinute = 2.0;
 			const int32 First = Fixture.ParkAircraft();
 			const int32 Second = First != 0 ? Fixture.ParkAircraftAt(Fixture.StandPose2) : 0;
 			if (!Test.TestTrue(TEXT("both aircraft parked"), First != 0 && Second != 0))
@@ -3675,7 +3702,7 @@ bool FFuelLifecycleBlockedHeadJobTest::RunTest(const FString& Parameters)
 	Fixture.bSecondStand = true;
 	Fixture.Build(/*bWithRoad=*/true);
 	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
-	Fixture.Service->DefaultFleetTypes = { Bowser };
+	Fixture.Service->StarterFleet = { Bowser };
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
 	int32 VehicleId = 0;
 	if (!TestTrue(TEXT("the bowser starts serving"), Fixture.AdvanceUntil([&]
@@ -3816,7 +3843,7 @@ bool FFuelLifecycleStepEndSettlesTest::RunTest(const FString& Parameters)
 	FFuelFixture Fixture;
 	Fixture.Build(/*bWithRoad=*/true);
 	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
-	Fixture.Service->DefaultFleetTypes = { Bowser };
+	Fixture.Service->StarterFleet = { Bowser };
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
 	int32 VehicleId = 0;
 	if (!TestTrue(TEXT("the bowser starts serving"), Fixture.AdvanceUntil([&]
@@ -3862,7 +3889,7 @@ bool FServiceBidDecidingPricesTest::RunTest(const FString& Parameters)
 	Fixture.Build(/*bWithRoad=*/true);
 	UJobBoard& Board = *Fixture.Service;
 	const FName Bowser = Board.VehiclesFor(EIcaoCode::C).TypeCode;
-	Board.DefaultFleetTypes = { Bowser };
+	Board.StarterFleet = { Bowser };
 	Board.DriveSecondsOverride = [](FGuidelineNodeId From, FGuidelineNodeId To, FName) { return From == To ? 0.0 : 180.0; };
 	if (!TestTrue(TEXT("an aircraft parked at the second stand"), Fixture.ParkAircraftAt(Fixture.StandPose2) != 0)) { return false; }
 	int32 ParkedId = 0;
@@ -3897,6 +3924,31 @@ bool FServiceBidDecidingPricesTest::RunTest(const FString& Parameters)
 		FromDepot.Finish - FromStand.Finish, 180.0, 1e-6);
 	TestTrue(TEXT("so the Deciding vehicle wins the bid, which is what lets the vehicle that just pumped win its own remainder"),
 		FromStand.Finish < FromDepot.Finish);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFleetUnknownKindServesNothingTest, "AirportOps.Fleet.UnknownKindServesNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFleetUnknownKindServesNothingTest::RunTest(const FString& Parameters)
+{
+	// A VEHICLE WHOSE KIND HAS NO CATALOGUE ROW BIDS ON NOTHING (#430). The fleet's door never makes one, but a vehicle
+	// restored under a scenario that has since dropped its kind is one, and so is a test's hand. Before the catalogue,
+	// TypeFor gave it an empty chassis - which VehicleFit::NoLargerThan passes on every stand, because it compares zeros
+	// - and the trailer's figures, so it won the job. The candidate filter (Judge) skips it now.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.Service->StarterFleet.Reset();   // the depot's only vehicle is the unknown one
+	AddExpectedMessagePlain(TEXT("vehicle kind HOVERCRAFT has no catalogue row"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	const int32 Hovercraft = Fixture.Service->AddVehicleForTest(TEXT("HOVERCRAFT"), Fixture.Depot, EServiceVehicleState::Idle, 1000.0).Id;
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	Fixture.Advance(2.0);
+	if (!TestEqual(TEXT("parking made one job"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
+	TestNotEqual(TEXT("the unknown kind was not given the job"), Fixture.Service->GetJobs()[0].VehicleId, Hovercraft);
+	const FServiceVehicle* Vehicle = Fixture.Service->FindVehicle(Hovercraft);
+	if (!TestNotNull(TEXT("the vehicle is still on the board"), Vehicle)) { return false; }
+	TestEqual(TEXT("and it never left home"), static_cast<int32>(Vehicle->State), static_cast<int32>(EServiceVehicleState::Idle));
 	return true;
 }
 

@@ -4,6 +4,7 @@
 #include "Model/RoadHandles.h"
 #include "Model/ServiceVehicle.h"
 
+struct FFuelVehicleSpec;
 class UJobBoard;
 class URoadNetwork;
 
@@ -65,8 +66,9 @@ public:
 	explicit FServiceFleet(UJobBoard& InBoard) : Board(InBoard) {}
 
 	/**
-	 * A vehicle of TypeCode joins Home's fleet: Idle at Home and full, its row resolved through UJobBoard::TypeFor. Returns
-	 * the new id, or 0 (logged) for an unset Home or a None type. Bought charges the type's price to Fleet; Seeded is free.
+	 * A vehicle of TypeCode joins Home's fleet: Idle at Home and full, its row read through UJobBoard::TypeFor. Returns
+	 * the new id, or 0 (logged) for an unset Home, a None type or a type the catalogue has no row for (#430: such a
+	 * vehicle used to be made with a zero chassis). Bought charges the type's price to Fleet; Seeded is free.
 	 * Publishes FleetChanged{Bought or Seeded} and re-opens every refused job of its role.
 	 * ENFORCED BY: AirportOps.Model.Fleet.PurchasedVehicleIsIdleAndFull, .PurchaseReopensRefusedJobs, .SeedingPublishesFleetChanged
 	 */
@@ -94,9 +96,35 @@ public:
 	 *  bulldozer's credit cannot drift apart. */
 	double ResaleOf(FName TypeCode) const;
 
-	/** The name a ledger line, a card label and a toast use for TypeCode: the row's DisplayName, else the code. THE ONE
-	 *  RESOLVER of that rule (it was typed three times: here, UFacilityPurchases::VehicleName and the runtime's toast). */
-	FText NameOf(FName TypeCode) const;
+	/** The name a ledger line, a card label, a toast, the depot card's fleet rows, the vehicle card and the stranded alert
+	 *  use for TypeCode: the catalogue row's DisplayName, else the code. THE ONE RESOLVER of that rule (it was typed three
+	 *  times: here, UFacilityPurchases::VehicleName and the runtime's toast; and the card and the alert printed the raw
+	 *  code, #430). STATIC ON A CONST BOARD so the const readers - UJobBoard::VehicleLine and DescribeVehicle, and
+	 *  OpsAlerts, which holds a const board - ask the same function the door does, not a second copy of it.
+	 *  ENFORCED BY: Check-Architecture rule 4's 'vehicle display-name fallback' row (DisplayName.IsEmpty() in
+	 *  ServiceFleet.cpp alone); AirportOps.Fuel.Describe.DepotBacklog, AirportOps.Model.Alerts.VehicleStrandedRaises */
+	static FText NameOf(const UJobBoard& Board, FName TypeCode);
+	FText NameOf(FName TypeCode) const { return NameOf(Board, TypeCode); }
+
+	/**
+	 * THE VEHICLE CATALOGUE, RESOLVED (#430): one FServiceVehicleType per scenario row, its figures from Rows and its
+	 * chassis from ResolveChassis(code) - UAirsideSettings::ResolveVehicle in production, handed in because this is
+	 * Model/ and may not reach Content/ (the way UJobBoard::ResolveVehicles is). Replaces the board's whole catalogue and
+	 * its StarterFleet, which is Starter filtered to the rows that survived. Returns how many rows it kept.
+	 *
+	 * A ROW WITH NO CHASSIS IS DROPPED, WITH A WARNING - a None code or a zero wheelbase from the resolver. Before this, a
+	 * buyable type no stand letter was designed for became a zero-size vehicle that passed every fit gate
+	 * (VehicleFit::NoLargerThan compares zeros), dispatched at the default speed and drew with the default mesh, and
+	 * nothing warned. A starter code with no row is dropped with a Warning too.
+	 *
+	 * HERE, ON THE FLEET'S DOOR, because the catalogue is what the door's other readers read - PriceOf, ResaleOf and
+	 * NameOf - and the join is where a scenario row's resale value is asked for (FFuelVehicleSpec::ResaleValue, which
+	 * rule 43 keeps in this file). NO BUMP of either fleet counter: no vehicle joined or left, and a catalogue is resolved
+	 * at attach, before any vehicle exists.
+	 * ENFORCED BY: AirportOps.Fleet.EveryBuyableTypeHasAChassis, AirportOps.Fleet.CatalogueDropsARowWithNoChassis
+	 */
+	int32 ResolveCatalogue(const TMap<FName, FFuelVehicleSpec>& Rows, const TArray<FName>& Starter,
+		TFunctionRef<FVehicle(FName)> ResolveChassis);
 
 private:
 	// THE DOOR'S OWN SURFACE, callable by the board alone (#461 review): a load's clear and restore, the test adder and
@@ -108,7 +136,7 @@ private:
 	friend class UJobBoard;
 
 	/**
-	 * Every live fuel depot not seen before that has Trucks > 0 gets Trucks x UJobBoard::FleetTypes() vehicles through Add
+	 * Every live fuel depot not seen before that has Trucks > 0 gets Trucks x UJobBoard::StarterFleet vehicles through Add
 	 * (Seeded), and is marked seen so a vehicle that is out never gets a twin at home and a sold starter fleet stays sold.
 	 * Returns how many vehicles it added. WAS the first half of SyncFleet's own loop, which built its vehicles by hand.
 	 * ENFORCED BY: AirportOps.Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad, AirportOps.Fuel.RestoredFleetIsNotReseeded

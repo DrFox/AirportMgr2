@@ -141,6 +141,15 @@ TArray<UJobBoard::FCandidate> UJobBoard::Judge(const URoadNetwork& Network, ESer
 		// and nothing else. PER VEHICLE - a typed fleet makes the vehicle a fact about this candidate,
 		// and a depot with a bowser AND a tow is too large for an A stand only through its bowser.
 		const FServiceVehicleType Type = TypeFor(Candidate.TypeCode);
+		// A KIND WITH NO CATALOGUE ROW IS NO CANDIDATE (#430): its chassis is empty, and an empty chassis is NoLargerThan
+		// every stand (it compares zeros) and routes at the default speed - the zero-size vehicle a buyable type with no
+		// stand letter used to become. TypeFor has warned; FServiceFleet::Add never makes one, so only a vehicle restored
+		// under a scenario that dropped its kind, or a test's hand, gets here.
+		// ENFORCED BY: AirportOps.Fleet.UnknownKindServesNothing, AirportOps.Fleet.CatalogueDropsARowWithNoChassis (Add)
+		if (Type.TypeCode.IsNone())
+		{
+			continue;
+		}
 		if (!VehicleFit::NoLargerThan(Type.Vehicle, Design))
 		{
 			Out.bAnyTooLarge = true;
@@ -511,7 +520,9 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		}
 
 		Assign(*Best, Job, BestFinish);
-		Job.TankLitres = TypeFor(Best->TypeCode).Capacity;
+		// THE POLICY'S TANK, FLOORED - the one the stand writes (#430, the #443 A13 note). This read the row's raw
+		// Capacity, so a zero-tank kind's card said 0 L from the bid until the truck reached the stand.
+		Job.TankLitres = FFuelRolePolicy::CapacityOf(TypeFor(Best->TypeCode));
 		UE_LOG(LogAirportOps, Log,
 			TEXT("Bid: job %d (fuel %.0f L, aircraft %d, stand %d) -> vehicle %d %s finish +%.1f game min (next: %s)"),
 			Job.Id, Job.QuantityOwed, Job.AircraftId, Job.Stand.Index, Best->Id, *Best->TypeCode.ToString(),
@@ -602,7 +613,7 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 
 		Holder->Queue.RemoveAt(Position);
 		Assign(*Best, *Job, BestFinish);
-		Job->TankLitres = TypeFor(Best->TypeCode).Capacity;
+		Job->TankLitres = FFuelRolePolicy::CapacityOf(TypeFor(Best->TypeCode));   // the one tank rule - see the bid's
 		UE_LOG(LogAirportOps, Log, TEXT("Rebid: job %d (aircraft %d, stand %d) vehicle %d -> %d, +%.1f -> +%.1f game min"),
 			Job->Id, Job->AircraftId, Job->Stand.Index, Holder->Id, Best->Id,
 			(CurrentFinish - Clock.Now()) / 60.0, (BestFinish - Clock.Now()) / 60.0);

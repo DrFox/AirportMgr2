@@ -174,6 +174,20 @@ public:
 	static FVehicle ResolveRigVehicle();
 
 	/**
+	 * THE CHASSIS FOR A VEHICLE KIND, by its code (#430) - what the ops layer's vehicle catalogue joins a scenario's
+	 * figures to, once at attach (this plugin never names that layer - rule 1b). Every chassis this class builds
+	 * whose TypeCode is TypeCode; a default FVehicle (TypeCode None, zero wheelbase) for a code Content has no chassis
+	 * for, which the catalogue refuses with a Warning rather than fitting a zero-size vehicle through every gate.
+	 *
+	 * ONE RESOLVER, the one #287 turns asset-backed: today it picks among the code-built ResolveDefaultVehicle,
+	 * ResolveUtilityTowVehicle and ResolveRigVehicle; the day each has a UVehicleType asset, this looks the asset up
+	 * by Code and nothing that calls it changes. A TABLE OF RESOLVERS, NOT A LADDER ON THE CODE (rule 21, #308): each
+	 * resolver names its own vehicle, and a new kind is a row in the table.
+	 * ENFORCED BY: AirportOps.Fleet.EveryBuyableTypeHasAChassis (every scenario row, and a rig row, resolve to axles)
+	 */
+	static FVehicle ResolveVehicle(FName TypeCode);
+
+	/**
 	 * The biggest thing that may drive on a service road, which is what the road's corners
 	 * are sized for.
 	 *
