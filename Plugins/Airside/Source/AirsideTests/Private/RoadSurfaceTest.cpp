@@ -4,6 +4,7 @@
 #include "Build/RoadLaneMarkingBuilder.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Build/StandMarkingBuilder.h"
 #include "Components/DynamicMeshComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
@@ -693,6 +694,126 @@ bool FRsStandPadSlotsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the grass pad draws with the road layer's own grass material - one table, not two"),
 		Apron->GetMaterial(PadId), RoadMaterials[RoadGrass]);
 	TestEqual(TEXT("and slot 0 is still the apron material"), Apron->GetMaterial(0), ApronMat);
+	return true;
+}
+
+/**
+ * A grass stand's worn route follows its LEAD-IN and ends at the stop mark (2026-09-30).
+ * M_RoadSurface draws the track from UV1.X as a lateral and fades it by saturate(1 - UV2.X);
+ * a pad used to write UV1.X = 0 everywhere, so the whole stand took the track as a solid pad.
+ *
+ * MEASURED WHERE THE MATERIAL SAMPLES IT - interpolated across the triangle under a probe
+ * point, not at the pad's four corners - because the claim is that per-vertex values need no
+ * interior vertices. And the lateral is measured against FStandMarkingBuilder::FrameFor, the
+ * frame the painted lead-in is drawn in, so the track cannot drift off the paint.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRsStandPadTrackTest,
+	"Airside.Build.StandPadTrackFollowsLeadIn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRsStandPadTrackTest::RunTest(const FString& Parameters)
+{
+	URoadMaterialSet* Set = URoadMaterialSet::MakeTransient({
+		TEXT("Apron"),
+		URoadMaterialSet::RunwaySlotName(EPavement::Grass),
+		URoadMaterialSet::RunwaySlotName(EPavement::Tarmac),
+		URoadMaterialSet::RunwaySlotName(EPavement::Concrete) });
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Def = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
+
+	// Grass stand: x in [0, 5000], y in [0, 3950], facing +Y, stop mark at (2500, 3000).
+	const FVector2D Stop(2500.0, 3000.0);
+	const FEntityInstanceId GrassId = ServiceLinkFixture::PlaceStand(*Net, *Def, Stop, UE_HALF_PI);
+	{
+		FRoadNetworkTestAccess Access(*Net);
+		Access.SetEntityOutlineForTest(GrassId, { {0,0}, {5000,0}, {5000,3950}, {0,3950} });
+		Access.SetEntityPavementForTest(GrassId, EPavement::Grass);
+	}
+	// A tarmac stand far off, and a bare apron sharing the grass pad's x = 5000 edge.
+	const FEntityInstanceId TarmacId = ServiceLinkFixture::PlaceStand(*Net, *Def, FVector2D(22500.0, 3000.0), UE_HALF_PI);
+	{
+		FRoadNetworkTestAccess Access(*Net);
+		Access.SetEntityOutlineForTest(TarmacId, { {20000,0}, {25000,0}, {25000,3950}, {20000,3950} });
+	}
+	FApronSurface Bare;
+	Bare.Outline = { {5000,0}, {9000,0}, {9000,3950}, {5000,3950} };
+	Net->AddApron(MoveTemp(Bare));
+
+	FRoadMeshBuilder Builder(10.0, 512.0, Set);
+	if (!TestEqual(TEXT("two pads and an apron are built"), Builder.AddNetworkAprons(*Net), 3)) { return false; }
+	const FRoadMeshBuffers& B = Builder.GetBuffers();
+
+	const FEntityInstance* Grass = nullptr;
+	for (const FEntityInstance& Entity : Net->GetEntities())
+	{
+		if (Entity.bAlive && Entity.Pavement == EPavement::Grass) { Grass = &Entity; }
+	}
+	FStandPaintFrame Frame;
+	if (!TestNotNull(TEXT("the grass stand"), Grass)
+		|| !TestTrue(TEXT("and its paint frame"), FStandMarkingBuilder::FrameFor(*Grass, FLetterEnvelopeTable::Floor(), Frame)))
+	{
+		return false;
+	}
+
+	// What the material sees at P: UV1.X and UV2.X interpolated over the triangle containing P,
+	// among the triangles whose centroid lies in [XMin, XMax).
+	auto Sample = [&](const FVector2D& P, double XMin, double XMax, FVector2D& Out) -> bool
+	{
+		for (int32 T = 0; T * 3 + 2 < B.Indices.Num(); ++T)
+		{
+			const int32 I[3] = { B.Indices[T * 3], B.Indices[T * 3 + 1], B.Indices[T * 3 + 2] };
+			FVector2D V[3];
+			for (int32 K = 0; K < 3; ++K) { V[K] = FVector2D(B.Positions[I[K]].X, B.Positions[I[K]].Y); }
+			const double Cx = (V[0].X + V[1].X + V[2].X) / 3.0;
+			if (Cx < XMin || Cx >= XMax) { continue; }
+			const double Den = (V[1].Y - V[2].Y) * (V[0].X - V[2].X) + (V[2].X - V[1].X) * (V[0].Y - V[2].Y);
+			if (FMath::Abs(Den) < UE_SMALL_NUMBER) { continue; }
+			const double W0 = ((V[1].Y - V[2].Y) * (P.X - V[2].X) + (V[2].X - V[1].X) * (P.Y - V[2].Y)) / Den;
+			const double W1 = ((V[2].Y - V[0].Y) * (P.X - V[2].X) + (V[0].X - V[2].X) * (P.Y - V[2].Y)) / Den;
+			const double W2 = 1.0 - W0 - W1;
+			if (W0 < -1e-9 || W1 < -1e-9 || W2 < -1e-9) { continue; }
+			Out.X = W0 * B.UV1[I[0]].X + W1 * B.UV1[I[1]].X + W2 * B.UV1[I[2]].X;
+			Out.Y = W0 * B.UV2[I[0]].X + W1 * B.UV2[I[1]].X + W2 * B.UV2[I[2]].X;
+			return true;
+		}
+		return false;
+	};
+	auto Fade = [](double Uv2X) { return FMath::Clamp(1.0 - Uv2X, 0.0, 1.0); };
+
+	for (const FVector2D& P : { FVector2D(2500, 500), FVector2D(700, 1200), FVector2D(4600, 3700), FVector2D(3100, 2900) })
+	{
+		FVector2D S = FVector2D::ZeroVector;
+		if (!TestTrue(FString::Printf(TEXT("a pad triangle covers (%.0f, %.0f)"), P.X, P.Y), Sample(P, 0.0, 5000.0, S))) { return false; }
+		TestEqual(FString::Printf(TEXT("the lateral at (%.0f, %.0f) is the painted lead-in's frame y - the track cannot leave the paint"), P.X, P.Y),
+			S.X, Frame.ToLocal(P).Y, 0.5);
+	}
+
+	// Initialised: MSVC cannot see that the && below fills all three before any is read (C4701).
+	FVector2D OnAxisEarly = FVector2D::ZeroVector, AtStop = FVector2D::ZeroVector, PastStop = FVector2D::ZeroVector;
+	if (!TestTrue(TEXT("the pad covers the lead-in, the stop and beyond"),
+		Sample(FVector2D(2500, 1000), 0.0, 5000.0, OnAxisEarly)
+		&& Sample(Stop, 0.0, 5000.0, AtStop)
+		&& Sample(FVector2D(2500, 3800), 0.0, 5000.0, PastStop)))
+	{
+		return false;
+	}
+	TestEqual(TEXT("up the lead-in, well short of the stop, the track is at full strength"), Fade(OnAxisEarly.Y), 1.0, 1e-4);
+	TestEqual(TEXT("and on the lead-in the lateral is zero - the middle of the track"), OnAxisEarly.X, 0.0, 0.5);
+	TestEqual(TEXT("at the stop mark it has faded to nothing - the nose wheel stops there"), Fade(AtStop.Y), 0.0, 1e-4);
+	TestEqual(TEXT("and beyond it there is none"), Fade(PastStop.Y), 0.0, 1e-4);
+
+	FVector2D Tarmac = FVector2D::ZeroVector, Apron = FVector2D::ZeroVector;
+	if (TestTrue(TEXT("the tarmac pad is sampled"), Sample(FVector2D(22500, 1000), 20000.0, 25000.0, Tarmac)))
+	{
+		TestEqual(TEXT("a tarmac pad keeps UV1.X = the concrete paint tag M_ApronConcrete reads"), Tarmac.X, 0.0, 1e-6);
+		TestEqual(TEXT("and no fade ramp"), Tarmac.Y, 0.0, 1e-6);
+	}
+	if (TestTrue(TEXT("the apron is sampled"), Sample(FVector2D(5100, 100), 5000.0, 9000.0, Apron)))
+	{
+		TestEqual(TEXT("the neighbouring apron's shared corners are not welded to the pad's lateral"), Apron.X, 0.0, 1e-6);
+		TestEqual(TEXT("nor to its fade"), Apron.Y, 0.0, 1e-6);
+	}
 	return true;
 }
 

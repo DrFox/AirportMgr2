@@ -38,7 +38,10 @@ MAT_DIR = "/Game/Materials"
 PARENT = "%s/M_RoadSurface" % MAT_DIR
 CONTENT = "/Game/DA_AirsideContent"
 
-# name -> (palette colour, content property).
+# name -> (palette colour, wear colour, RunwayMaterials slot). The slot is
+# Pavement::MaterialSlot's: Grass 0, Tarmac 1, Concrete 2 (Reinforced aliases 2). The three
+# runway_*_material properties this used to set are _DEPRECATED since #137 (migrated into
+# RunwayMaterials on PostLoad), and the script failed at its last step until 2026-09-30.
 #
 # COLOURS, NOT TINTS, since 2026-09-19. These used to be multipliers on a photoreal asphalt
 # albedo - 1.0 left it alone, 1.9 lifted it to concrete, 0.55/0.80/0.35 pushed it toward
@@ -65,8 +68,8 @@ CONTENT = "/Game/DA_AirsideContent"
 # Each wear tone is its base at about 1.09x luminance in the SAME hue family - the ratio
 # settled after the pavement's first wear tones read as wet patches. See build_road_material.
 INSTANCES = [
-    ("M_RunwayTarmac",   palette.RUNWAY_ASPHALT, "#51585D", "runway_tarmac_material"),
-    ("M_RunwayConcrete", palette.APRON_CONCRETE, "#949389", "runway_concrete_material"),
+    ("M_RunwayTarmac",   palette.RUNWAY_ASPHALT, "#51585D", 1),
+    ("M_RunwayConcrete", palette.APRON_CONCRETE, "#949389", 2),
     # NOT the sampled olive #7D8E47 the ground layers use. That is a terrain colour at hue
     # 74 degrees, and the FIELD around this strip is currently drawn in the 2026-09-19
     # greens at hue 97 - so an olive strip on a green field reads as a different material
@@ -76,9 +79,39 @@ INSTANCES = [
     #
     # It therefore MOVES IF THE FIELD TONES MOVE. They are on trial (spec 1.1), and if the
     # sampled olives win, this becomes an olive too.
-    ("M_RunwayGrass",    "#7BA363",              "#80A967", "runway_grass_material"),
+    #
+    # WEAR IS A BROWNER GREEN, NOT A PALER ONE, since 2026-09-30. The pavement rule above
+    # (same hue, 1.09x) is right for tarmac, where a hue-shifted patch reads as dirt. Turf
+    # wears toward earth, so its wear tone leans brown - but stays green, and low contrast:
+    # a first try with light-brown earth patches read as camouflage ("too much contrast").
+    # The visible wear is the ROUTE (TrackWear, below) and the touchdown ruts (rubber mesh).
+    #
+    # #87A363 since 2026-09-30, tuned by the user in the editor: the base with only red raised,
+    # a far smaller step than the first #8C955A, which still read as too big a change ("the
+    # green to brown is still not subtle enough"). The track at TrackWear 5 carries the wear.
+    ("M_RunwayGrass",    "#7BA363",              "#87A363", 0),
 ]
 
+# Scalar overrides per instance, on top of the parent's defaults. Only grass has any.
+SCALARS = {
+    "M_RunwayGrass": {
+        # A drift, not patches: a wide window over broad noise, so the browner tone is
+        # everywhere a little rather than somewhere a lot. Judged 2026-09-30.
+        "WearSize": 25.0,
+        "WearContrastLo": 0.25,
+        "WearContrastHi": 0.80,
+        "GrainAmount": 0.12,
+        # The worn route down the middle - see build_road_material's TRACK_*. One tone of
+        # wear: the track goes to WearColour, never past it, so it cannot become a stripe.
+        # 5, not 0.85: tuned in the editor 2026-09-30 ("looks great at 5 on the runway and
+        # taxiway"). Far past 1 on purpose - the track saturates to WearColour over most of its
+        # feather, so it reads as a band; with WearColour this close to the base, the band is
+        # what is visible at all.
+        "TrackWear": 5.0,
+        "TrackHalfWidth": 300.0,
+        "TrackFeather": 400.0,
+    },
+}
 
 def build_instance(name, hexcode, wear_hex, parent):
     tools = unreal.AssetToolsHelpers.get_asset_tools()
@@ -108,6 +141,8 @@ def build_instance(name, hexcode, wear_hex, parent):
         instance, "BaseColour", palette.linear_color(hexcode))
     lib.set_material_instance_vector_parameter_value(
         instance, "WearColour", palette.linear_color(wear_hex))
+    for param, value in SCALARS.get(name, {}).items():
+        lib.set_material_instance_scalar_parameter_value(instance, param, value)
     lib.update_material_instance(instance)
     unreal.EditorAssetLibrary.save_asset(path)
 
@@ -120,6 +155,9 @@ def build_instance(name, hexcode, wear_hex, parent):
     unreal.log("MARKER: %s parent=%s CentrelineWidth=%.1f BaseColour=%s (%.3f, %.3f, %.3f) WearColour=%s (%.3f, %.3f, %.3f)"
                % (path, parent.get_name(), width, hexcode, colour.r, colour.g, colour.b,
                   wear_hex, wear.r, wear.g, wear.b))
+    for param in SCALARS.get(name, {}):
+        unreal.log("MARKER: %s %s=%.3f" % (
+            path, param, lib.get_material_instance_scalar_parameter_value(instance, param)))
     return instance
 
 
@@ -128,12 +166,16 @@ def point_content_at(instances):
     if content is None:
         unreal.log_error("MARKER: %s not found - content set not updated" % CONTENT)
         return
-    for (name, _hexcode, _wear, prop), instance in zip(INSTANCES, instances):
+    slots = list(content.get_editor_property("runway_materials"))
+    while len(slots) < 3:
+        slots.append(None)
+    for (name, _hexcode, _wear, slot), instance in zip(INSTANCES, instances):
         if instance is None:
             continue
-        content.set_editor_property(prop, instance)
-        unreal.log("MARKER: %s.%s = %s" % (CONTENT, prop, name))
-    unreal.EditorAssetLibrary.save_asset(CONTENT)
+        slots[slot] = instance
+        unreal.log("MARKER: %s.RunwayMaterials[%d] = %s" % (CONTENT, slot, name))
+    content.set_editor_property("runway_materials", slots)
+    unreal.EditorAssetLibrary.save_asset(CONTENT, only_if_is_dirty=False)
 
 
 parent = unreal.EditorAssetLibrary.load_asset(PARENT)

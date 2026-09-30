@@ -68,6 +68,13 @@ RUBBER_COLOUR = "#1A1614"
 # stay legible - that is the whole reason the rubber is drawn below them.
 RUBBER_STRENGTH = 0.55
 
+# ON GRASS (2026-09-30), tagged by FRunwayMarkingBuilder::BuildRubber with UV1.X = 1: worn
+# earth, not burnt rubber. A dark warm brown, darkened into the turf the way the black
+# darkens tarmac - translucent over green, it reads as a browned wheel track rather than a
+# hole. Weaker than the paved stain, since a lighter mark over a mid-tone shows further.
+GRASS_TRACK_COLOUR = "#5A4630"
+GRASS_TRACK_STRENGTH = 0.45
+
 # How much of the band's own UV is spent fading. 0.35 means the middle 30% is at full
 # strength and everything outside ramps away - a stain with no edge anywhere.
 EDGE_SOFTNESS = 0.35
@@ -141,7 +148,26 @@ def build_material():
     material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
 
     # --- The stain's colour --------------------------------------------------------------
-    colour = nodes.vector(lib, material, "RubberColour", RUBBER_COLOUR, -700, -400)
+    # step(0.5, UV1.X): 1 on grass, 0 on pavement. A step at the midpoint, not the raw tag,
+    # so an interpolated value can never produce a half-rubber, half-earth third colour.
+    uv1 = lib.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -1300, -700)
+    uv1.set_editor_property("coordinate_index", 1)
+    tag = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -1150, -700)
+    tag.set_editor_property("r", True)
+    tag.set_editor_property("g", False)
+    tag.set_editor_property("b", False)
+    tag.set_editor_property("a", False)
+    lib.connect_material_expressions(uv1, "", tag, "")
+    is_grass = lib.create_material_expression(material, unreal.MaterialExpressionStep, -1000, -700)
+    is_grass.set_editor_property("const_y", 0.5)
+    lib.connect_material_expressions(tag, "", is_grass, "X")
+
+    rubber_colour = nodes.vector(lib, material, "RubberColour", RUBBER_COLOUR, -1000, -500)
+    grass_colour = nodes.vector(lib, material, "GrassTrackColour", GRASS_TRACK_COLOUR, -1000, -350)
+    colour = lib.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -700, -400)
+    lib.connect_material_expressions(rubber_colour, "", colour, "A")
+    lib.connect_material_expressions(grass_colour, "", colour, "B")
+    lib.connect_material_expressions(is_grass, "", colour, "Alpha")
     lib.connect_material_property(colour, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
     # --- The mask ------------------------------------------------------------------------
@@ -176,7 +202,12 @@ def build_material():
     blotch_amount.set_editor_property("const_b", 1.0)
     lib.connect_material_expressions(blotch, "", blotch_amount, "Alpha")
 
-    strength = nodes.scalar(lib, material, "RubberStrength", RUBBER_STRENGTH, -1100, 420)
+    paved_strength = nodes.scalar(lib, material, "RubberStrength", RUBBER_STRENGTH, -1300, 380)
+    grass_strength = nodes.scalar(lib, material, "GrassTrackStrength", GRASS_TRACK_STRENGTH, -1300, 460)
+    strength = lib.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -1100, 420)
+    lib.connect_material_expressions(paved_strength, "", strength, "A")
+    lib.connect_material_expressions(grass_strength, "", strength, "B")
+    lib.connect_material_expressions(is_grass, "", strength, "Alpha")
 
     masked = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -800, 300)
     lib.connect_material_expressions(edge, "", masked, "A")

@@ -21,11 +21,19 @@ struct FRoadMeshBuffers
 	 *
 	 * ON AN APRON, X is instead a paint tag (FRoadMeshBuilder::EApronPaint) and Y is zero:
 	 * a polygon has no centreline, and M_ApronConcrete reads X as which paint it is.
+	 *
+	 * EXCEPT A STAND PAD IN A RUNWAY-FAMILY SLOT (2026-09-30): there X is the lateral across the
+	 * stand's lead-in, since the pad is drawn in an M_RoadSurface instance that reads X as a
+	 * lateral, not in M_ApronConcrete. See FRoadMeshBuilder::AddNetworkAprons.
 	 */
 	TArray<FVector2f> UV1;
 
 	/**
 	 * Masks, NOT colour. X = junction blend. Y is reserved and always 1.
+	 *
+	 * X IS NOT CLAMPED on a runway-family stand pad (2026-09-30): it is 1 at the stop mark and
+	 * falls below 0 toward the entrance, an affine ramp that interpolates exactly, and
+	 * M_RoadSurface saturates 1 - X. See FRoadMeshBuilder::AddNetworkAprons.
 	 *
 	 * Y briefly carried a ground blend driving a shoulder fade into the terrain. That was
 	 * removed: an airport's surfaces meet at hard material lines - concrete slab, asphalt

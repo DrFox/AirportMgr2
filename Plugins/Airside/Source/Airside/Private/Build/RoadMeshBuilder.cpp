@@ -10,9 +10,17 @@
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/PolygonInset.h"
+#include "Solve/RoadGeom.h"
 
 namespace
 {
+	/**
+	 * How far short of a stand's stop mark its worn route has faded to nothing, uu. 4 m: the
+	 * grass taxiway track's own feather (build_road_material.py TRACK_FEATHER, 400), so the
+	 * track ends as softly as it edges. Judged by eye, not measured - 2026-09-30.
+	 */
+	constexpr double StandTrackFadeUu = 400.0;
+
 	/** Maps -0.0 to 0.0; every other value passes through unchanged. */
 	double NormalizeSignedZero(double Value)
 	{
@@ -838,6 +846,47 @@ int32 FRoadMeshBuilder::AddNetworkAprons(const URoadNetwork& Network)
 		}
 		++Count;
 		const FName Slot = PadSlotFor(Entity);
+		// A STAND ON A RUNWAY-FAMILY PAD CARRIES ITS LEAD-IN AS A LATERAL (2026-09-30), so
+		// M_RoadSurface's worn route (TrackWear) runs up the middle of a grass stand as it does
+		// down a grass taxiway. Before this the pad wrote UV1.X = the paint tag, 0, which that
+		// material reads as "on the centreline" at every point: the whole pad took the track.
+		//
+		// UV1.X = signed distance across the lead-in; UV2.X = how far into the fade before the
+		// stop mark, in StandTrackFadeUu, NEGATIVE short of it. Both are affine in position, so
+		// per-vertex values interpolate exactly over any triangle - no interior vertices needed,
+		// because the lead-in is straight (FStandMarkingBuilder paints it as one rectangle).
+		// M_RoadSurface saturates 1 - UV2.X, so the track is full until StandTrackFadeUu short
+		// of the stop and gone at it: the nose wheel stops there and nothing drives beyond.
+		//
+		// The axis is the pose's line - through Position along Heading - which is the line
+		// FStandMarkingBuilder::FrameFor centres the painted lead-in on (EntranceMid is Position
+		// moved along Facing). Not FrameFor itself: it needs the letter envelope table, which
+		// Build/ receives only from the presenter, and the axis does not depend on it.
+		// ENFORCED BY: Airside.Build.StandPadTrackFollowsLeadIn measures lateral against FrameFor.
+		//
+		// ONLY a runway-family slot. Slot NAME_None is M_ApronConcrete, which reads UV1.X as the
+		// paint tag - a lateral there would repaint a tarmac stand. And its OWN builder, appended
+		// unwelded like the depot's slab: a pad corner welded to a neighbour's (another stand, an
+		// apron) holds ONE UV1, first writer wins, and would hand this lateral to that surface.
+		if (Entity.IsStand() && Entity.IsPlotted() && Slot != NAME_None)
+		{
+			FRoadMeshBuilder PadBuilder(ZHeight, TexelsPerUnit, Materials);
+			PadBuilder.AddApron(Entity.Outline, Slot);
+			UnresolvedApronSlots += PadBuilder.GetUnresolvedApronSlots();
+			const int32 FirstVertex = Buffers.Positions.Num();
+			Buffers.Append(PadBuilder.GetBuffers());
+			const FVector2D Facing(FMath::Cos(Entity.Heading), FMath::Sin(Entity.Heading));
+			const FVector2D Right = RoadGeom::PerpCCW(Facing);
+			for (int32 Index = FirstVertex; Index < Buffers.Positions.Num(); ++Index)
+			{
+				const FVector2D Offset = FVector2D(Buffers.Positions[Index].X, Buffers.Positions[Index].Y) - Entity.Position;
+				const double Across = FVector2D::DotProduct(Offset, Right);
+				const double Along = FVector2D::DotProduct(Offset, Facing);
+				Buffers.UV1[Index] = FVector2f(static_cast<float>(Across), 0.0f);
+				Buffers.UV2[Index].X = static_cast<float>(1.0 + Along / StandTrackFadeUu);
+			}
+			continue;
+		}
 		if (!Entity.IsDepot())
 		{
 			AddApron(Entity.Outline, Slot);

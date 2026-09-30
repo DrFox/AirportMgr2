@@ -107,6 +107,18 @@ GRAIN_AMOUNT = 0.10
 # broad specular sheen band under a soft sun with Lumen.
 ROUGHNESS_BASE = 0.82
 
+# The WORN ROUTE (2026-09-30): wear pulled toward the centreline, where every wheel runs.
+# OFF in the parent (TrackWear 0) and on every paved instance - tarmac shows its use as
+# rubber, a separate mesh (FRunwayMarkingBuilder::BuildRubber). Only grass sets it: turf
+# shows use as a browned track down the middle of a strip or a taxiway, and a noise that
+# ignores the centreline cannot say "this is where they drive".
+#
+# Half-width and feather in uu, measured on UV1.X (lateral offset). The feather is wide on
+# purpose - a track with an edge reads as a painted stripe, not as wear.
+TRACK_WEAR = 0.0
+TRACK_HALF_WIDTH = 300.0
+TRACK_FEATHER = 400.0
+
 
 def fail(msg):
     unreal.log_error("MARKER: FAIL " + str(msg))
@@ -155,7 +167,13 @@ def build_material():
         material, unreal.MaterialExpressionLinearInterpolate, -1500, -600)
     lib.connect_material_expressions(base_colour, "", weathered, "A")
     lib.connect_material_expressions(wear_colour, "", weathered, "B")
-    lib.connect_material_expressions(wear, "", weathered, "Alpha")
+    # max(patch wear, route wear): the route is wired in below, once UV1's lateral and the
+    # junction fade exist. max, not add - where the two overlap the turf is worn once, and
+    # a sum would saturate the track to WearColour wherever a patch crossed it.
+    wear_total = lib.create_material_expression(
+        material, unreal.MaterialExpressionMax, -1600, -400)
+    lib.connect_material_expressions(wear, "", wear_total, "A")
+    lib.connect_material_expressions(wear_total, "", weathered, "Alpha")
 
     grain_size = nodes.scalar(lib, material, "GrainSize", GRAIN_SIZE, -3000, -100)
     grain_amount = nodes.scalar(lib, material, "GrainAmount", GRAIN_AMOUNT, -3000, -20)
@@ -260,14 +278,64 @@ def build_material():
     junction_blend.set_editor_property("a", False)
     lib.connect_material_expressions(uv2, "", junction_blend, "")
 
+    fade_raw = lib.create_material_expression(
+        material, unreal.MaterialExpressionOneMinus, -700, 1100)
+    lib.connect_material_expressions(junction_blend, "", fade_raw, "")
+    # SATURATED since 2026-09-30, for the stand pad. A road's UV2.X is a blend in 0..1 and
+    # this changes nothing there; a grass stand's is an affine ramp that is 1 at the stop mark
+    # and goes NEGATIVE toward the entrance (FRoadMeshBuilder::AddNetworkAprons), because
+    # only an unclamped ramp interpolates exactly across the pad's few large triangles.
+    # Unsaturated, 1 - X would multiply the worn route by up to the pad's depth in fades.
     fade = lib.create_material_expression(
-        material, unreal.MaterialExpressionOneMinus, -600, 1100)
-    lib.connect_material_expressions(junction_blend, "", fade, "")
+        material, unreal.MaterialExpressionSaturate, -600, 1100)
+    lib.connect_material_expressions(fade_raw, "", fade, "")
 
     marking_amount = lib.create_material_expression(
         material, unreal.MaterialExpressionMultiply, -400, 900)
     lib.connect_material_expressions(centre_mask, "", marking_amount, "A")
     lib.connect_material_expressions(fade, "", marking_amount, "B")
+
+    # --- The worn route: TRACK_* above ---------------------------------------------------
+    # track = TrackWear * saturate((TrackHalfWidth - |lateral|) / TrackFeather)
+    #         * lerp(0.5, 1, wear_noise) * (1 - junction blend)
+    #
+    # Broken by the SAME noise as the patches, so the track is thicker where the turf is
+    # already tired rather than a clean ribbon. Faded by the junction blend like the
+    # markings: a junction polygon's UV1 is not a lateral offset, and without the fade an
+    # all-grass junction would take full track wear as a solid brown pad.
+    track_amount = nodes.scalar(lib, material, "TrackWear", TRACK_WEAR, -1000, 1500)
+    track_half = nodes.scalar(lib, material, "TrackHalfWidth", TRACK_HALF_WIDTH, -1000, 1400)
+    track_feather = nodes.scalar(lib, material, "TrackFeather", TRACK_FEATHER, -1000, 1600)
+    track_inside = lib.create_material_expression(
+        material, unreal.MaterialExpressionSubtract, -800, 1400)
+    lib.connect_material_expressions(track_half, "", track_inside, "A")
+    lib.connect_material_expressions(abs_lateral, "", track_inside, "B")
+    track_ramp = lib.create_material_expression(
+        material, unreal.MaterialExpressionDivide, -650, 1400)
+    lib.connect_material_expressions(track_inside, "", track_ramp, "A")
+    lib.connect_material_expressions(track_feather, "", track_ramp, "B")
+    track_mask = lib.create_material_expression(
+        material, unreal.MaterialExpressionSaturate, -520, 1400)
+    lib.connect_material_expressions(track_ramp, "", track_mask, "")
+    track_break = lib.create_material_expression(
+        material, unreal.MaterialExpressionLinearInterpolate, -650, 1550)
+    track_break.set_editor_property("const_a", 0.5)
+    track_break.set_editor_property("const_b", 1.0)
+    lib.connect_material_expressions(wear_noise, "", track_break, "Alpha")
+    track_broken = lib.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -400, 1400)
+    lib.connect_material_expressions(track_mask, "", track_broken, "A")
+    lib.connect_material_expressions(track_break, "", track_broken, "B")
+    track_scaled = lib.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -300, 1500)
+    lib.connect_material_expressions(track_broken, "", track_scaled, "A")
+    lib.connect_material_expressions(track_amount, "", track_scaled, "B")
+    track = lib.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -200, 1400)
+    lib.connect_material_expressions(track_scaled, "", track, "A")
+    lib.connect_material_expressions(fade, "", track, "B")
+    if not lib.connect_material_expressions(track, "", wear_total, "B"):
+        fail("could not wire the worn route into the wear max")
 
     marking_colour = lib.create_material_expression(
         material, unreal.MaterialExpressionVectorParameter, -400, 1250)
