@@ -65,11 +65,31 @@ void UArrivalsPanelWidget::Refresh()
 		// The editor mode has no game instance and so no runtime - a play-mode panel, like the inbox.
 		return;
 	}
-	Arrivals->Refresh(*Runtime->GetFlightBoard(), *Runtime->GetClock());
+	// THE ROW SET AND THE COUNT, folded or not: the count must still read on a folded window's title bar. The sentences and the paint are
+	// for a body somebody can see - a folded window is still ticked by the host (RunPanelTick), and used to compose and paint every row
+	// of every tick for a body nobody could see (#446).
+	// ENFORCED BY: AirportMgr.UI.Arrivals.FoldedPanelComposesNothing
+	Arrivals->SyncRows(*Runtime->GetFlightBoard());
+	if (IsFolded())
+	{
+		PaintBadge();
+		return;
+	}
+	Arrivals->RefreshText(*Runtime->GetClock());
 	if (PanelStyle != nullptr)
 	{
 		PaintRows(*PanelStyle);
 	}
+}
+
+void UArrivalsPanelWidget::PaintBadge()
+{
+	if (Arrivals == nullptr || Arrivals->GetCount() == BadgedCount)
+	{
+		return;
+	}
+	BadgedCount = Arrivals->GetCount();
+	SetWindowBadge(BadgedCount == 0 ? NSLOCTEXT("AirportMgr", "ArrivalsNone", "none") : FText::AsNumber(BadgedCount));
 }
 
 void UArrivalsPanelWidget::PaintRows(const UUIStyle& Style)
@@ -79,7 +99,7 @@ void UArrivalsPanelWidget::PaintRows(const UUIStyle& Style)
 		return;
 	}
 	const TArray<UArrivalRowViewModel*> Rows = Arrivals->GetRows();
-	SetWindowBadge(Rows.Num() == 0 ? NSLOCTEXT("AirportMgr", "ArrivalsNone", "none") : FText::AsNumber(Rows.Num()));
+	PaintBadge();
 
 	// REBUILT WHEN THE COUNT CHANGES, like the offer cards: a rebuild every frame would churn the
 	// widget tree for text that only moves by the minute.
@@ -89,6 +109,7 @@ void UArrivalsPanelWidget::PaintRows(const UUIStyle& Style)
 		Titles.Reset();
 		Statuses.Reset();
 		Details.Reset();
+		PaintedRevisions.Reset();
 		for (int32 Index = 0; Index < Rows.Num(); ++Index)
 		{
 			// A WELL ROW, the offer cards' own surface (UUiRow) - so the two windows read as one family.
@@ -119,16 +140,21 @@ void UArrivalsPanelWidget::PaintRows(const UUIStyle& Style)
 			Titles.Add(Title);
 			Statuses.Add(Status);
 			Details.Add(Detail);
+			PaintedRevisions.Add(0);
 		}
 	}
 
 	for (int32 Index = 0; Index < Rows.Num() && Index < Titles.Num(); ++Index)
 	{
 		const UArrivalRowViewModel* Row = Rows[Index];
-		if (Row == nullptr)
+		// A SLOT WHOSE ROW HAS NOT RECOMPOSED since it last painted has nothing new to show (the stamp is unique across rows, so a different
+		// row landing in the slot repaints it). 0 is "never painted", and a row that has never composed stamps 0 too - and is skipped, correctly.
+		if (Row == nullptr || PaintedRevisions[Index] == Row->GetRevision())
 		{
 			continue;
 		}
+		PaintedRevisions[Index] = Row->GetRevision();
+		++RowPaints;
 		Titles[Index]->SetText(Row->GetTitle());
 		Statuses[Index]->SetText(Row->GetStatus());
 		// HOLDING IN ACCENT: the one state the player can do something about (a free runway). The ROW says it is holding - this used to

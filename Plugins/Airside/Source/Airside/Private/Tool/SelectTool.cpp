@@ -159,44 +159,43 @@ void FSelectTool::OnClick(const FToolContext& Context)
 		UE_LOG(LogAirside, Warning, TEXT("Select: click with no selection to write to - the driver built a context without one."));
 		return;
 	}
-	FSelection& Sel = *Context.Selection;
+	// WRITTEN THROUGH THE CONTEXT'S DOOR (#446), once, with the slot's generation recorded by MakeSelection: a click that lands on what is
+	// already selected is not a change and announces nothing.
+	const URoadNetwork* Network = Context.Network();
 
 	if (Context.HoverAgent != 0)
 	{
-		Sel.Kind = ESelectionKind::Aircraft;
-		Sel.Id = Context.HoverAgent;
+		Context.SetSelection(MakeSelection(Network, ESelectionKind::Aircraft, Context.HoverAgent));
 	}
 	else if (Context.Target != nullptr)
 	{
 		const int32 Stand = Context.Target->FindEntityAt(Context.Cursor, Context.SnapRadius);
 		if (Stand != INDEX_NONE)
 		{
-			Sel.Kind = ESelectionKind::Stand;
-			Sel.Id = Stand;
+			Context.SetSelection(MakeSelection(Network, ESelectionKind::Stand, Stand));
 		}
 		else if (const FRoadSegmentId Runway = Context.Network() != nullptr
 			? RunwayQuery::RunwaySegmentAt(*Context.Network(), Context.Cursor) : FRoadSegmentId(); Runway.IsSet())
 		{
 			// LAST, after aircraft and stand: a runway is under most of the airport's clicks
 			// that matter, and an aircraft rolling on it must still be the thing picked.
-			Sel.Kind = ESelectionKind::Runway;
-			Sel.Id = Runway.Index;
+			Context.SetSelection(MakeSelection(Network, ESelectionKind::Runway, Runway.Index));
 		}
 		else if (const FRoadSegmentId Taxiway = Context.Network() != nullptr
 			? TaxiwaySegmentAt(*Context.Network(), Context.Cursor) : FRoadSegmentId(); Taxiway.IsSet())
 		{
 			// LAST OF ALL (strip stage 6): a taxiway is under most of an airport's clicks, and a
 			// stand, a runway or an aircraft on it must still be the thing picked.
-			Sel.Kind = ESelectionKind::Taxiway;
-			Sel.Id = Taxiway.Index;
+			Context.SetSelection(MakeSelection(Network, ESelectionKind::Taxiway, Taxiway.Index));
 		}
 		else
 		{
 			// A click on nothing deselects, as it does in every Cities-style game: the
 			// panel closing is how the player knows the click registered.
-			Sel.Clear();
+			Context.ClearSelection();
 		}
 	}
+	const FSelection& Sel = *Context.Selection;
 	UE_LOG(LogAirside, Log, TEXT("Select: %s %d"),
 		Sel.Kind == ESelectionKind::Aircraft ? TEXT("aircraft") : Sel.Kind == ESelectionKind::Stand ? TEXT("stand")
 			: Sel.Kind == ESelectionKind::Runway ? TEXT("runway segment")
@@ -207,10 +206,7 @@ void FSelectTool::OnClick(const FToolContext& Context)
 void FSelectTool::OnCancel(const FToolContext& Context)
 {
 	SelectionRef = Context.Selection;
-	if (Context.Selection != nullptr)
-	{
-		Context.Selection->Clear();
-	}
+	Context.ClearSelection();
 }
 
 void FSelectTool::Tick(const FToolContext& Context)
@@ -223,12 +219,69 @@ void FSelectTool::Tick(const FToolContext& Context)
 	// Polled, not subscribed: a tool has no delegate lifetime to manage, and this runs
 	// every frame anyway for the preview. A selected aircraft that has flown away or a
 	// stand that was deleted under another tool must not leave the panel showing a ghost.
+	// STALE BEFORE GONE (#446): a slot whose item was removed and whose index was reused is ALIVE, so PositionOf finds it and the
+	// selection would quietly retarget; the generation recorded at the pick is what tells the two items apart.
 	FVector2D Unused;
-	if (!PositionOf(Context, Context.Selection->Kind, Context.Selection->Id, Unused))
+	if (IsStale(Context.Network(), *Context.Selection) || !PositionOf(Context, Context.Selection->Kind, Context.Selection->Id, Unused))
 	{
 		UE_LOG(LogAirside, Log, TEXT("Select: selection %d no longer exists; cleared."), Context.Selection->Id);
-		Context.Selection->Clear();
+		Context.ClearSelection();
 	}
+}
+
+FSelection FSelectTool::MakeSelection(const URoadNetwork* Network, ESelectionKind Kind, int32 Id)
+{
+	FSelection Out;
+	Out.Kind = Kind;
+	Out.Id = Kind == ESelectionKind::None ? 0 : Id;
+	if (Network == nullptr)
+	{
+		return Out;
+	}
+	switch (Kind)
+	{
+	case ESelectionKind::Stand:
+		Out.Generation = Network->EntityIdAt(Id).Generation;
+		break;
+	case ESelectionKind::Runway:
+	case ESelectionKind::Taxiway:
+		Out.Generation = Network->SegmentIdAt(Id).Generation;
+		break;
+	default:
+		break;
+	}
+	return Out;
+}
+
+bool FSelectTool::IsStale(const URoadNetwork* Network, const FSelection& Selection)
+{
+	if (Network == nullptr)
+	{
+		return false;
+	}
+	int32 LiveGeneration = 0;
+	bool bLive = false;
+	switch (Selection.Kind)
+	{
+	case ESelectionKind::Stand:
+	{
+		const FEntityInstanceId Id = Network->EntityIdAt(Selection.Id);
+		bLive = Id.IsSet();
+		LiveGeneration = Id.Generation;
+		break;
+	}
+	case ESelectionKind::Runway:
+	case ESelectionKind::Taxiway:
+	{
+		const FRoadSegmentId Id = Network->SegmentIdAt(Selection.Id);
+		bLive = Id.IsSet();
+		LiveGeneration = Id.Generation;
+		break;
+	}
+	default:
+		return false;
+	}
+	return !bLive || (Selection.Generation != 0 && Selection.Generation != LiveGeneration);
 }
 
 void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const

@@ -243,6 +243,13 @@ namespace InspectFacts
 	AIRSIDE_API bool DescribeRunway(const URoadNetwork& Network, int32 SegmentIndex, FRunwayCardFacts& Out);
 
 	/**
+	 * How many times DescribeRunway has run in this process, for a test to read a DELTA across an operation (#446: the bar ran it four times a
+	 * tick with a runway selected - IsEnabled and DynamicLabel, for two rows - and the pin is that a tick runs it once). Counted at the describe
+	 * itself, not at any one caller, so a caller that bypasses the per-frame cache is seen whoever it is.
+	 */
+	AIRSIDE_API int32 DescribeRunwayCountForTest();
+
+	/**
 	 * False when SegmentIndex is not a live taxiway (TaxiwayStrip::HasStrip). RestrictedTo reads
 	 * the STORED restriction (TaxiwayRestriction::EffectiveLetterOf) - what routing uses, so the
 	 * card says what the planners do; RestrictedBy re-asks RestrictionOf for the obstruction.

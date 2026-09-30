@@ -226,6 +226,22 @@ struct FToolContext
 	FSelection* Selection = nullptr;
 
 	/**
+	 * Who hears the selection change - FBuildSession::OnSelectionChanged, which MakeContext points here. Null in a test that hands a
+	 * bare FSelection: the write still lands, with nobody to tell.
+	 */
+	FOnSelectionChanged* OnSelectionChanged = nullptr;
+
+	/**
+	 * THE DOOR A TOOL WRITES THE SELECTION THROUGH (#446): `Selection->Kind = X` from a tool would change it without announcing, which
+	 * is how the inspector came to diff it every tick. True when the selection changed; a re-select of what is selected is not a change
+	 * and announces nothing. const: the context is handed to tools by const reference, and what it points at is the session's.
+	 */
+	bool SetSelection(const FSelection& Wanted) const { return SelectionDoor::Write(Selection, OnSelectionChanged, Wanted); }
+
+	/** SetSelection of nothing. */
+	bool ClearSelection() const { return SetSelection(FSelection()); }
+
+	/**
 	 * Fill the cursor and the snap together, from the raw plane hit.
 	 *
 	 * Exists so the two cannot be conflated by a driver writing the assignments itself.

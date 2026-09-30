@@ -62,6 +62,14 @@ public:
 	UPROPERTY() TObjectPtr<UTextBlock> RefusalText;
 	UPROPERTY() TObjectPtr<UUiButton> AcceptButton;
 
+	/**
+	 * What this row last PAINTED, so a tick with nothing new to say sets nothing (#446): the stamp of the view-model row's last change
+	 * (UOfferViewModel::GetRevision - unique across rows, so a different row landing in this slot repaints it), and the countdown's whole
+	 * seconds. 0 and INDEX_NONE: never painted.
+	 */
+	UPROPERTY() int32 PaintedRevision = 0;
+	UPROPERTY() int32 PaintedSeconds = INDEX_NONE;
+
 	UFUNCTION() void HandleAccept();
 	UFUNCTION() void HandleDecline();
 };
@@ -137,6 +145,13 @@ public:
 	void PaintRowsForTest() { PaintRows(); }
 	/** The count beside the heading, as it reads now. */
 	FString BadgeForTest() const;
+
+	/**
+	 * How many times PaintRows has COMPOSED text - the badge, a row's sentences, a countdown - in total. The widget's half of the fold pin
+	 * (the view model's is UOfferInboxViewModel::ComposeCountForTest): a delta across ticks, which is 0 for a folded window and for an unfolded
+	 * one with nothing new to say.
+	 */
+	int32 ComposeCountForTest() const { return Composes; }
 
 	/**
 	 * Resample the demand strip IF ITS INPUTS MOVED - the fee's demand factor, each airline's own factor
@@ -215,6 +230,15 @@ private:
 	/** ShowAirportStatus's last answer, so a still tick sets nothing (SetText and SetVisibility have no early-out). */
 	bool bShowingClosed = false;
 
+	/** The pending count and cap the badge last showed (-1: none yet), so a still tick formats nothing - see PaintBadge. */
+	int32 BadgedPending = -1;
+	int32 BadgedCapacity = -1;
+	/** See ComposeCountForTest. */
+	int32 Composes = 0;
+
+	/** The badge on the window's title bar and beside the heading - all a FOLDED window still shows. Composed only when the count or the cap moved. */
+	void PaintBadge();
+
 	/** Samples for the strip, set by Refresh from the runtime's airlines. Empty = no strip. */
 	TArray<double> DemandSamples;
 	/** Which strip slot "now" falls in, or INDEX_NONE. */
@@ -230,6 +254,9 @@ private:
 	int32 DemandSampleCount = 0;
 
 	void PaintDemand(const UUIStyle& Style);
+
+	/** One row's sentences and verdict-driven state - what a row's view-model change repaints. Not its countdown: that is per tick, in PaintRows. */
+	void PaintRowTexts(const UUIStyle& Style, const UOfferViewModel& Row, UOfferRowEntry& Entry);
 
 	void EnsureSlots(const UUIStyle* Style);
 	void PaintRows();

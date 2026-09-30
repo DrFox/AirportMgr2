@@ -4,9 +4,14 @@
 
 #define LOCTEXT_NAMESPACE "GameTimeText"
 
+int32 GameTimeText::WholeMinutes(double Seconds)
+{
+	return FMath::Max(0, FMath::RoundToInt(Seconds / 60.0));
+}
+
 FText GameTimeText::Duration(double Seconds)
 {
-	const int32 Minutes = FMath::Max(0, FMath::RoundToInt(Seconds / 60.0));
+	const int32 Minutes = WholeMinutes(Seconds);
 	if (Minutes < 60)
 	{
 		return FText::Format(LOCTEXT("DurationMin", "{0} min"), FText::AsNumber(Minutes));

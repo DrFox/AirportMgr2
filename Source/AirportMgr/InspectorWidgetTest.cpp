@@ -542,19 +542,27 @@ bool FInspectorUnknownKindWarnsOnceTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
 	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	// A SELECTION IS "ANOTHER" WHEN THE SESSION SAYS SO (#446): the panel no longer compares the selection it is handed with the last one, so
+	// the selection is changed where it is owned - the controller's session - and the controller forwards the change to the HUD layer's inspector.
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHud())) { return false; }
+	C->SetTargetForTest(TestWorld.Actor);
+	C->GetHud()->Inspector = Panel;
 	FSelection Sel;
 	Sel.Kind = static_cast<ESelectionKind>(200);   // no such kind - what an appended one looked like before its card
 	Sel.Id = 1;
+	C->SelectForTest(Sel);
 
 	FInspectorWarningSpy Spy;
 	GLog->AddOutputDevice(&Spy);
 	for (int32 Tick = 0; Tick < 5; ++Tick)
 	{
-		Panel->Refresh(TestWorld.Actor, Sel, nullptr);
+		Panel->Refresh(TestWorld.Actor, C->GetSelection(), nullptr);
 	}
 	Sel.Id = 2;
-	Panel->Refresh(TestWorld.Actor, Sel, nullptr);
-	Panel->Refresh(TestWorld.Actor, Sel, nullptr);
+	C->SelectForTest(Sel);
+	Panel->Refresh(TestWorld.Actor, C->GetSelection(), nullptr);
+	Panel->Refresh(TestWorld.Actor, C->GetSelection(), nullptr);
 	GLog->RemoveOutputDevice(&Spy);
 
 	TestFalse(TEXT("the panel hides"), Panel->IsShownForTest());
@@ -1019,6 +1027,9 @@ namespace
 			DepotSelection.Id = Index;
 			Controller->SelectForTest(DepotSelection);
 			Panel = CreateWidget<UInspectorWidget>(World.World, UInspectorWidget::StaticClass());
+			// THE HUD LAYER'S INSPECTOR, as play has it: the controller forwards a selection change to it (#446), so a card's armed sale is
+			// disarmed by the EVENT and not by the panel noticing the selection it was handed differs from the last.
+			if (Panel != nullptr && Controller->GetHud() != nullptr) { Controller->GetHud()->Inspector = Panel; }
 			return Panel != nullptr;
 		}
 
@@ -1108,8 +1119,10 @@ bool FInspectorSellTakesTwoClicksTest::RunTest(const FString& Parameters)
 	// clear it (#448 review: nothing pinned it once the controller stopped holding the id).
 	FSelection Other = Rig.DepotSelection;
 	Other.Id += 1;
-	Rig.Panel->Refresh(Rig.World.Actor, Other);
+	Rig.Controller->SelectForTest(Other);
+	Rig.Refresh();
 	TestFalse(TEXT("a different selection disarms the sale"), Rig.Panel->FacilityRows->IsArmedForTest(0));
+	Rig.Controller->SelectForTest(Rig.DepotSelection);
 	Rig.Refresh();
 	Rig.Panel->FacilityRows->ClickSellForTest(0);
 	if (!TestTrue(TEXT("setup: back on the depot and armed again"), Rig.Panel->FacilityRows->IsArmedForTest(0))) { return false; }
@@ -1330,6 +1343,128 @@ bool FInspectorDepotQuoteFollowsBalanceTest::RunTest(const FString& Parameters)
 	Rig.Refresh();
 	TestEqual(TEXT("the money moving asks once more - the ledger's revision is in the card's key"), Rig.Panel->QuoteCountForTest(), Quoted + 1);
 	TestFalse(TEXT("and Buy greys the tick the money is gone"), Rig.Panel->FacilityRows->IsBuyModuleEnabledForTest());
+	return true;
+}
+
+/**
+ * #446 PIN: THE UNSTICK ROW OPENS THE POPUP WITH NO TICK IN BETWEEN. The row's Execute used to bump a counter on the controller that the
+ * inspector compared with the last it had seen, every tick, while the same controller reached its other panels by a direct call. It is a call
+ * through the HUD layer that owns the inspector now. Driven through the row itself (not the inspector's method), with the panel wired as the
+ * HUD's; no NativeTick and no Refresh runs between the row and the read. A headless anchor cannot open, so what is read is the count of
+ * times the panel asked it to - which a tick-dependent path leaves at zero until the tick.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorUnstickRowOpensTheMenuTest,
+	"AirportMgr.Inspector.UnstickRowOpensTheMenuWithoutATick",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorUnstickRowOpensTheMenuTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(20000.0, 0.0), false);
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A; Edge.B = B;
+		Edge.Control = FVector2D(10000.0, 0.0);
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.bDerived = false;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHud())) { return false; }
+	C->SetTargetForTest(Actor);
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel) || !TestNotNull(TEXT("with its Unstick popup"), Panel->UnstickMenu.Get())) { return false; }
+	C->GetHud()->Inspector = Panel;
+
+	const FBuildAction* Row = BuildActions().FindByPredicate([](const FBuildAction& Each) { return Each.Id == FName(TEXT("selection.unstick")); });
+	if (!TestNotNull(TEXT("the registry has the unstick row"), Row)) { return false; }
+	FBuildActionContext Ctx(*C);
+	TestTrue(TEXT("the context carries the HUD layer the row reaches the inspector through"), Ctx.Hud == C->GetHud());
+
+	// NOTHING SELECTED: the popup has no agent card to open on, so the request is spent - and is not kept for the next card.
+	Row->Execute(Ctx);
+	TestEqual(TEXT("with nothing shown the row opens nothing"), Panel->UnstickOpenCountForTest(), 0);
+
+	FSelection Sel;
+	Sel.Kind = ESelectionKind::Aircraft;
+	Sel.Id = Id;
+	C->SelectForTest(Sel);
+	Panel->Refresh(Actor, C->GetSelection());
+	if (!TestTrue(TEXT("setup: the aircraft's card is shown"), Panel->IsShownForTest())) { return false; }
+	TestEqual(TEXT("and the request made before it was not kept for it"), Panel->UnstickOpenCountForTest(), 0);
+
+	Row->Execute(Ctx);
+	TestEqual(TEXT("the row opens the popup the moment it runs: no tick, no refresh between them"), Panel->UnstickOpenCountForTest(), 1);
+	Row->Execute(Ctx);
+	TestEqual(TEXT("and each press asks once"), Panel->UnstickOpenCountForTest(), 2);
+
+	// A CONTEXT WITH NO HUD (a controller with none) does nothing rather than crash.
+	C->GetHud()->Inspector = nullptr;
+	Row->Execute(Ctx);
+	TestEqual(TEXT("no inspector, nothing to open"), Panel->UnstickOpenCountForTest(), 2);
+	return true;
+}
+
+/**
+ * #446 PIN: SELECTION CHANGES ARE ANNOUNCED, ONCE PER REAL CHANGE, AND REACH THE INSPECTOR. The panel used to compare (Kind, Id) with the last
+ * it had seen, every tick, to disarm a sale and close its popups. The session announces it now and the controller forwards it, so this is the
+ * seam test: a re-select of what is selected announces nothing and leaves an armed sale armed; another card disarms it, once; nothing selected
+ * disarms it too. The count is the SESSION'S (the controller's own session, the one the real wiring hangs off), and the effect is read off the
+ * panel's purchase rows - a forwarder left unwired would count correctly and disarm nothing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorSelectionEventTest,
+	"AirportMgr.Inspector.SelectionEventReachesTheInspector",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorSelectionEventTest::RunTest(const FString& Parameters)
+{
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	const FFacilityQuote Offers = Rig.Runtime->QuoteFacility(Rig.Depot);
+	if (!TestTrue(TEXT("setup: a vehicle on offer"), Offers.VehicleOffers.Num() > 0)) { return false; }
+	if (!TestTrue(TEXT("setup: one vehicle bought"), Rig.Runtime->BuyVehicle(Rig.Depot, Offers.VehicleOffers[0].TypeCode).Succeeded())) { return false; }
+	Rig.Refresh();
+	if (!TestEqual(TEXT("setup: one fleet row"), Rig.Panel->FacilityRows->FleetRowCountForTest(), 1)) { return false; }
+
+	int32 Heard = 0;
+	Rig.Controller->GetSession().OnSelectionChanged().AddLambda([&Heard](const FSelection&, const FSelection&) { ++Heard; });
+	Rig.Panel->FacilityRows->ClickSellForTest(0);
+	if (!TestTrue(TEXT("setup: the sale is armed"), Rig.Panel->FacilityRows->IsArmedForTest(0))) { return false; }
+
+	// THE SAME SELECTION AGAIN: not a change, so nothing is announced and nothing armed is forgotten.
+	Rig.Controller->SelectForTest(Rig.DepotSelection);
+	TestEqual(TEXT("re-selecting what is selected announces nothing"), Heard, 0);
+	TestTrue(TEXT("and leaves an armed sale armed"), Rig.Panel->FacilityRows->IsArmedForTest(0));
+
+	// ANOTHER CARD: one announcement, and the inspector disarms.
+	FSelection Other = Rig.DepotSelection;
+	Other.Id += 1;
+	Rig.Controller->SelectForTest(Other);
+	TestEqual(TEXT("a different selection is announced once"), Heard, 1);
+	TestFalse(TEXT("and reaches the inspector, which disarms the sale"), Rig.Panel->FacilityRows->IsArmedForTest(0));
+
+	// NOTHING SELECTED: a change too, and it disarms a sale armed on the card that has just gone.
+	Rig.Controller->SelectForTest(Rig.DepotSelection);
+	Rig.Refresh();
+	Rig.Panel->FacilityRows->ClickSellForTest(0);
+	if (!TestTrue(TEXT("setup: armed again on the depot"), Rig.Panel->FacilityRows->IsArmedForTest(0))) { return false; }
+	const int32 HeardBefore = Heard;
+	Rig.Controller->SelectForTest(FSelection());
+	TestEqual(TEXT("clearing the selection is announced once"), Heard, HeardBefore + 1);
+	TestFalse(TEXT("and disarms the sale"), Rig.Panel->FacilityRows->IsArmedForTest(0));
+	Rig.Controller->SelectForTest(FSelection());
+	TestEqual(TEXT("clearing nothing announces nothing"), Heard, HeardBefore + 1);
 	return true;
 }
 

@@ -139,3 +139,11 @@ int32 UBuildHudLayer::AlertCount() const
 {
 	return AlertsPanel != nullptr ? AlertsPanel->AlertCount() : 0;
 }
+
+void UBuildHudLayer::OpenUnstickMenu()
+{
+	if (Inspector != nullptr)
+	{
+		Inspector->OpenUnstickMenu();
+	}
+}

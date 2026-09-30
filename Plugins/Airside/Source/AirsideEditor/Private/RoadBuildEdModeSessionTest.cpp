@@ -914,4 +914,39 @@ bool FRoadBuildEdModeVerbCanExecuteTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * #446, PARITY (rule 47's shape): FBuildSession::OnSelectionChanged is announced by the SESSION, so the editor mode fires it for a selection
+ * its tools make exactly as PIE's controller does - but only if the contexts the EDITOR's tools are handed carry the door. A context with the
+ * selection pointer and no announcement would let an editor tool change the selection silently, in one driver only. The editor builds every
+ * tool context through its shared session's GetFrameContext (URoadBuildEditorTool::MakeContextAt - Check-Architecture rule 47's MakeContext row
+ * holds that), so this asks that very call of the MODE'S session and writes through what it returns.
+ * ENFORCED BY: Check-Architecture rule 47 (the editor keeps building its contexts through GetFrameContext)
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditorSelectionAnnouncesTest,
+	"Airside.Editor.SelectionChangeIsAnnouncedLikePie",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditorSelectionAnnouncesTest::RunTest(const FString& Parameters)
+{
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an ed mode"), Mode)) { return false; }
+
+	int32 Heard = 0;
+	Mode->GetSession().OnSelectionChanged().AddLambda([&Heard](const FSelection&, const FSelection&) { ++Heard; });
+
+	const FToolContext Context = Mode->GetSession().GetFrameContext(nullptr, FVector2D::ZeroVector, FBuildSessionTunables(), FBuildInputState());
+	TestTrue(TEXT("the context the editor's tools get carries the session's announcement"),
+		Context.OnSelectionChanged == &Mode->GetSession().OnSelectionChanged());
+	FSelection Wanted;
+	Wanted.Kind = ESelectionKind::Aircraft;
+	Wanted.Id = 4;
+	TestTrue(TEXT("a selection written through it is a change"), Context.SetSelection(Wanted));
+	TestEqual(TEXT("and the editor mode's session announces it once, as PIE's does"), Heard, 1);
+	TestEqual(TEXT("into the session's own selection"), Mode->GetSession().GetSelection().Id, 4);
+	TestFalse(TEXT("the same selection again is not a change"), Context.SetSelection(Wanted));
+	TestEqual(TEXT("and is not announced"), Heard, 1);
+	return true;
+}
+
 #endif

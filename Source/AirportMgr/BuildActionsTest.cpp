@@ -14,6 +14,7 @@
 #include "Model/Airport.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/InspectFacts.h"
+#include "Model/OpsAlerts.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RunwayFacts.h"
 #include "Entities/EntityDefinition.h"
@@ -1285,6 +1286,111 @@ bool FSnapRowsComeFromTheRegistryTest::RunTest(const FString& Parameters)
 		TestTrue(*FString::Printf(TEXT("%s is lit from the airport's own settings"), *Id),
 			Row->IsActive(Ctx) == Toggle.IsActive(TestWorld.Actor->GuideSources));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRunwayRowsDescribeOncePerFrameTest, "AirportMgr.Actions.RunwayRowsDescribeOncePerFrame",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayRowsDescribeOncePerFrameTest::RunTest(const FString& Parameters)
+{
+	// #446 PIN: with a runway selected the bar asked InspectFacts::DescribeRunway four times a tick - IsEnabled and DynamicLabel, for the two
+	// runway rows (the flip and the mode). The controller answers all four from ONE describe per frame now (SelectedRunwayFactsThisFrame).
+	// Driven through the REAL bar tick (RefreshStateForTest, the function a frame runs), and counted at DescribeRunway itself, so a row that
+	// bypassed the cache would be seen whoever it is.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	FTestAirport::Build(UAirsideSettings::ResolveDefaultAirframe(), FTestAirportOptions(), Actor->Network);
+	URoadNetwork& Net = *Actor->Network;
+	int32 Segment = INDEX_NONE;
+	for (int32 Index = 0; Index < Net.GetSegments().Num() && Segment == INDEX_NONE; ++Index)
+	{
+		const FRoadSegmentId Id = Net.SegmentIdAt(Index);
+		Segment = Id.IsSet() && Net.IsRunwaySegment(Id) ? Index : INDEX_NONE;
+	}
+	if (!TestTrue(TEXT("setup: a runway segment"), Segment != INDEX_NONE)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	C->InitInputSystem();
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("the bar"), Bar)) { return false; }
+
+	FSelection Selected;
+	Selected.Kind = ESelectionKind::Runway;
+	Selected.Id = Segment;
+	C->SelectForTest(Selected);
+
+	++GFrameCounter;   // a frame of its own: the per-frame cache is keyed on the engine's frame counter, which a headless test never advances
+	const int32 Start = InspectFacts::DescribeRunwayCountForTest();
+	Bar->RefreshStateForTest(*C);
+	TestEqual(TEXT("one bar tick with a runway selected describes it ONCE, not once per IsEnabled and DynamicLabel of two rows"),
+		InspectFacts::DescribeRunwayCountForTest() - Start, 1);
+	Bar->RefreshStateForTest(*C);
+	TestEqual(TEXT("a second tick in the same frame describes nothing more"), InspectFacts::DescribeRunwayCountForTest() - Start, 1);
+	++GFrameCounter;
+	Bar->RefreshStateForTest(*C);
+	TestEqual(TEXT("the next frame describes again, once - the answer is per frame, not for ever"), InspectFacts::DescribeRunwayCountForTest() - Start, 2);
+
+	// NO RUNWAY SELECTED: nothing to describe, however many rows ask.
+	C->SelectForTest(FSelection());
+	++GFrameCounter;
+	Bar->RefreshStateForTest(*C);
+	TestEqual(TEXT("with nothing selected the bar describes no runway"), InspectFacts::DescribeRunwayCountForTest() - Start, 2);
+
+	// A FLIP RETIRES THE FRAME'S ANSWER: the verb changes the network, the next reader in the SAME frame must see the flip - or the second
+	// runway verb would act on the end that was in use before the first.
+	C->SelectForTest(Selected);
+	++GFrameCounter;
+	FRunwayCardFacts Before;
+	if (!TestTrue(TEXT("setup: the selected runway describes"), C->SelectedRunwayFactsThisFrame(Before))) { return false; }
+	const FBuildAction* Flip = FindAction(FName(TEXT("selection.runway_in_use")));
+	if (!TestNotNull(TEXT("the flip row"), Flip)) { return false; }
+	TestTrue(TEXT("the flip runs"), Flip->TryRun(*C, TEXT("Test")));
+	FRunwayCardFacts After;
+	if (!TestTrue(TEXT("and the runway still describes"), C->SelectedRunwayFactsThisFrame(After))) { return false; }
+	TestEqual(TEXT("the next reader in the same frame sees the flipped end, not the answer from before it"), After.InUse, Before.Other);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUndoDropsASelectionTest, "AirportMgr.Actions.UndoDropsASelectionOfThePlacementItRemoved",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUndoDropsASelectionTest::RunTest(const FString& Parameters)
+{
+	// #446 PIN: select a stand, undo its placement, and the selection clears rather than retargeting. The selection is a slot INDEX; undoing the
+	// placement takes the slot, and a stand placed next is issued the same index - so until the select tool's next Tick (a frame later) the
+	// selection named the newcomer. Through the real seam: the actor's Undo announces a replaced network, the controller hands it to the session
+	// (OnNetworkReplaced), and the session drops a selection the network no longer holds - with NO Tick in between.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+	IRoadEditTarget* Edit = Actor;
+	const int32 Stand = Edit->PlaceStand(FVector2D(0.0, 0.0), 0.0);
+	if (!TestTrue(TEXT("setup: a stand placed"), Stand != INDEX_NONE)) { return false; }
+	if (!TestTrue(TEXT("setup: and the placement is undoable"), Actor->CanUndo())) { return false; }
+
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	FAlertFocus Focus;
+	Focus.Kind = EAlertFocusKind::Entity;
+	Focus.Id = Stand;
+	Focus.Point = FVector2D::ZeroVector;
+	if (!TestTrue(TEXT("setup: the stand is selected, as an alert's Go selects it"), C->SelectAndFocus(Focus))) { return false; }
+	if (!TestEqual(TEXT("setup: the selection names the stand"), C->GetSelection().Kind, ESelectionKind::Stand)) { return false; }
+	TestTrue(TEXT("and records its slot's generation"), C->GetSelection().Generation != 0);
+
+	if (!TestTrue(TEXT("the undo runs"), Actor->Undo())) { return false; }
+	TestFalse(TEXT("undoing the placement drops the selection on the spot - no tick - rather than waiting to be retargeted"), C->GetSelection().IsSet());
+
+	const int32 Again = Edit->PlaceStand(FVector2D(9000.0, 0.0), 0.0);
+	TestTrue(TEXT("a stand placed next is issued the slot the undone one had - the very index a stale selection would have named"), Again == Stand);
+	TestFalse(TEXT("and is not the selection"), C->GetSelection().IsSet());
 	return true;
 }
 

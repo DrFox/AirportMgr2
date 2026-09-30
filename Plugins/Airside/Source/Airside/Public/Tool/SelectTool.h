@@ -37,6 +37,21 @@ public:
 	 */
 	virtual bool IsIdle() const override { return SelectionRef == nullptr || !SelectionRef->IsSet(); }
 
+	/**
+	 * The selection naming Kind's slot Id ON Network, with the slot's GENERATION recorded (FSelection::Generation): what the Select tool and
+	 * FBuildSession::Select (given a network) make their selections with, so the identity travels with the index. An aircraft, or a null
+	 * network, records none.
+	 */
+	static FSelection MakeSelection(const URoadNetwork* Network, ESelectionKind Kind, int32 Id);
+
+	/**
+	 * Whether Selection no longer names what it named when it was made: a slot-index kind whose slot is dead, or alive with another
+	 * generation (removed, and something else placed in the slot). A selection with no recorded generation (0) is judged by the slot being
+	 * alive alone. Aircraft and None are never stale here - an agent's id is never reused, and whether one has gone is PositionOf's question.
+	 * ENFORCED BY: Airside.Tool.SelectTool.ReusedSlotIsStale
+	 */
+	static bool IsStale(const URoadNetwork* Network, const FSelection& Selection);
+
 private:
 	/**
 	 * The session's own selection - FToolContext::Selection, which always points at

@@ -1,10 +1,12 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Entities/EntityDefinition.h"
+#include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Solve/IcaoCode.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/BuildSession.h"
+#include "Tool/SelectTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/SnapGuideChain.h"
 
@@ -303,6 +305,176 @@ bool FBuildSessionSelectToolIndexTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and leaves the tool lit - it is not a put-down"), Session.GetActiveToolIndex(), 1);
 	Session.CancelActiveGesture(FToolContext());
 	TestEqual(TEXT("the right-click cancel of an idle build tool returns to Select"), Session.GetActiveToolIndex(), FBuildSession::SelectToolIndex);
+	return true;
+}
+
+namespace
+{
+	/** Counts what FBuildSession::OnSelectionChanged says, and keeps the last Old and New. Prefixed for the unity build. */
+	struct FSessionSelectionSpy
+	{
+		int32 Count = 0;
+		FSelection Old;
+		FSelection New;
+
+		void Listen(FBuildSession& Session)
+		{
+			Session.OnSelectionChanged().AddLambda([this](const FSelection& InOld, const FSelection& InNew)
+			{
+				++Count;
+				Old = InOld;
+				New = InNew;
+			});
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildSessionSelectionChangedTest,
+	"Airside.Tool.BuildSession.SelectionChangedFiresOncePerChange",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildSessionSelectionChangedTest::RunTest(const FString& Parameters)
+{
+	// #446 PIN: the inspector learned of a selection change by comparing (Kind, Id) with the last it had seen, every tick. The session announces
+	// it now - ONCE per real change, from EVERY writer, and never for a re-select of what is already selected. Each writer is exercised: a
+	// code select, the same select again, a deselect, a tool's click and cancel through the CONTEXT'S door, a build tool being lit, and a replaced network.
+	FBuildSession Session;
+	FSessionSelectionSpy Spy;
+	Spy.Listen(Session);
+
+	Session.Select(ESelectionKind::Stand, 3);
+	TestEqual(TEXT("selecting from code is one change"), Spy.Count, 1);
+	TestEqual(TEXT("it says what it was - nothing"), Spy.Old.Kind, ESelectionKind::None);
+	TestEqual(TEXT("and what it is - the stand"), Spy.New.Kind, ESelectionKind::Stand);
+	TestEqual(TEXT("with its id"), Spy.New.Id, 3);
+
+	Session.Select(ESelectionKind::Stand, 3);
+	TestEqual(TEXT("selecting what is ALREADY selected is not a change"), Spy.Count, 1);
+
+	Session.Select(ESelectionKind::Stand, 4);
+	TestEqual(TEXT("another stand is a change"), Spy.Count, 2);
+	TestEqual(TEXT("which names the one it replaced"), Spy.Old.Id, 3);
+
+	Session.Select(ESelectionKind::Runway, 4);
+	TestEqual(TEXT("the same id under another KIND is a change (the kind decides what the number means)"), Spy.Count, 3);
+
+	Session.Select(ESelectionKind::None, 9);
+	TestEqual(TEXT("deselecting is a change"), Spy.Count, 4);
+	TestEqual(TEXT("and nothing carries no id, however the caller spelled it"), Session.GetSelection().Id, 0);
+	Session.Select(ESelectionKind::None, 0);
+	TestEqual(TEXT("deselecting nothing is not"), Spy.Count, 4);
+
+	// THE TOOLS WRITE THROUGH THE CONTEXT MakeContext HANDS THEM: an unwired door would write the selection and announce nothing - the
+	// very silence this seam replaces - with every assertion above still green.
+	const FToolContext Context = Session.MakeContext(nullptr, FVector2D::ZeroVector, FBuildSessionTunables());
+	TestTrue(TEXT("the context's door is the session's own announcement"), Context.OnSelectionChanged == &Session.OnSelectionChanged());
+	FSelectTool Select;
+	FToolContext Click = Context;
+	Click.HoverAgent = 7;
+	Select.OnClick(Click);
+	TestEqual(TEXT("a click on an aircraft is a change"), Spy.Count, 5);
+	TestEqual(TEXT("to that aircraft"), Spy.New.Id, 7);
+	Select.OnClick(Click);
+	TestEqual(TEXT("a second click on the same aircraft is not"), Spy.Count, 5);
+	Select.OnCancel(Context);
+	TestEqual(TEXT("the tool's cancel deselects, once"), Spy.Count, 6);
+	Select.OnCancel(Context);
+	TestEqual(TEXT("and cancelling with nothing selected announces nothing"), Spy.Count, 6);
+
+	// LIGHTING A BUILD TOOL CLOSES THE SELECTION (FBuildSession::SelectTool) - a write the tools do not make.
+	Session.Select(ESelectionKind::Aircraft, 2);
+	TestEqual(TEXT("setup: selected again"), Spy.Count, 7);
+	Session.SelectTool(1);
+	TestEqual(TEXT("lighting a build tool deselects, and says so"), Spy.Count, 8);
+	TestFalse(TEXT("the selection is gone"), Session.GetSelection().IsSet());
+
+	// A NETWORK WITH NO HISTORY IN COMMON clears it (Discarding); an undo's Adopted leaves a selection its network still holds.
+	Session.Select(ESelectionKind::Aircraft, 2);
+	Session.OnNetworkReplaced(Context, ENetworkReplace::Adopted);
+	TestTrue(TEXT("an aircraft's selection survives an Adopted replacement - an agent id is not a slot"), Session.GetSelection().IsSet());
+	Session.OnNetworkReplaced(Context, ENetworkReplace::Discarding);
+	TestFalse(TEXT("a Discarding replacement clears it"), Session.GetSelection().IsSet());
+	TestEqual(TEXT("once"), Spy.Count, 10);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildSessionContextsShareTheDoorTest,
+	"Airside.Tool.BuildSession.EveryContextCarriesTheSelectionDoor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildSessionContextsShareTheDoorTest::RunTest(const FString& Parameters)
+{
+	// BOTH DRIVERS BUILD THEIR CONTEXTS THROUGH THE SESSION (PIE's MakeToolContext, the editor's GetFrameContext), so the door rides on every one
+	// of them - the cached frame context included. A context that carried the selection pointer and not the announcement would let a
+	// tool change the selection silently, in one driver only (#446, and rule 47's shape: the drivers must not differ).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	FBuildSession Session;
+	FSessionSelectionSpy Spy;
+	Spy.Listen(Session);
+
+	const FBuildSessionTunables Tunables;
+	const FBuildInputState Input;
+	const FToolContext Frame = Session.GetFrameContext(TestWorld.Actor, FVector2D(10.0, 20.0), Tunables, Input);
+	TestTrue(TEXT("a frame context carries the session's selection"), Frame.Selection == &Session.GetSelection());
+	TestTrue(TEXT("and its announcement"), Frame.OnSelectionChanged == &Session.OnSelectionChanged());
+	TestTrue(TEXT("a write through it is heard"), Frame.SetSelection(FSelectTool::MakeSelection(TestWorld.Actor->GetNetwork(), ESelectionKind::Aircraft, 5)));
+	TestEqual(TEXT("once"), Spy.Count, 1);
+
+	const FToolContext Fresh = Session.MakeContext(TestWorld.Actor, FVector2D::ZeroVector, Tunables, Input);
+	TestTrue(TEXT("a fresh context carries it too"), Fresh.OnSelectionChanged == &Session.OnSelectionChanged());
+
+	// A TEST'S OWN CONTEXT, with a bare FSelection and no session, still writes - and has nobody to tell.
+	FSelection Bare;
+	FToolContext Loose;
+	Loose.Selection = &Bare;
+	TestTrue(TEXT("a context with no announcement still writes the selection"), Loose.SetSelection(FSelectTool::MakeSelection(nullptr, ESelectionKind::Aircraft, 6)));
+	TestEqual(TEXT("into the FSelection it points at"), Bare.Id, 6);
+	FToolContext Nowhere;
+	TestFalse(TEXT("and one with no selection at all writes nothing"), Nowhere.SetSelection(FSelectTool::MakeSelection(nullptr, ESelectionKind::Aircraft, 6)));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildSessionStaleSelectionDropTest,
+	"Airside.Tool.BuildSession.AdoptedNetworkDropsAStaleSelection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildSessionStaleSelectionDropTest::RunTest(const FString& Parameters)
+{
+	// #446 PIN: select a stand, undo its placement, and the selection clears rather than retargeting. The undo is a Memento restore of the
+	// network - here RestoreFrom a snapshot taken before the stand existed, which is exactly what an undo of the placement does - and the
+	// session's answer to it is OnNetworkReplaced(Adopted). Before #446 that phase left the selection alone and the select tool's NEXT
+	// Tick cleared it, so a stand placed into the freed slot before that tick was the selection.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	URoadNetwork& Net = *Actor->Network;
+	URoadNetwork* Before = DuplicateObject<URoadNetwork>(&Net, GetTransientPackage());
+	if (!TestNotNull(TEXT("a snapshot of the network before the placement"), Before)) { return false; }
+
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(5000.0, 0.0), 0.0);
+	if (!TestTrue(TEXT("setup: a stand placed"), Stand.IsSet())) { return false; }
+
+	FBuildSession Session;
+	FSessionSelectionSpy Spy;
+	Spy.Listen(Session);
+	Session.Select(ESelectionKind::Stand, Stand.Index, &Net);
+	if (!TestEqual(TEXT("setup: the stand is selected, with its slot's generation"), Session.GetSelection().Generation, Stand.Generation)) { return false; }
+	const FToolContext Context = Session.MakeContext(Actor, FVector2D::ZeroVector, FBuildSessionTunables());
+
+	Session.OnNetworkReplaced(Context, ENetworkReplace::Adopted);
+	TestTrue(TEXT("an Adopted replacement that touched nothing selected leaves the selection"), Session.GetSelection().IsSet());
+	TestEqual(TEXT("and announces nothing"), Spy.Count, 1);
+
+	Net.RestoreFrom(*Before);
+	Session.OnNetworkReplaced(Context, ENetworkReplace::Adopted);
+	TestFalse(TEXT("the undo of the placement took the stand's slot: the selection is dropped, NOT retargeted"), Session.GetSelection().IsSet());
+	TestEqual(TEXT("and dropped once, announced"), Spy.Count, 2);
 	return true;
 }
 

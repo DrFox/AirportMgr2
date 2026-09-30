@@ -11,51 +11,104 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 
+namespace
+{
+	/** The stamp each row change takes - see UOfferViewModel::GetRevision. Prefixed for the unity build. */
+	int32 GOfferRowStamp = 0;
+}
+
 FText UOfferViewModel::DescribeContract(double LeadTimeSeconds, double ContractSeconds)
 {
 	return FText::Format(NSLOCTEXT("AirportMgr", "OfferContract", "lands in {0} \u00B7 airborne within {1}"),
 		GameTimeText::Duration(LeadTimeSeconds), GameTimeText::Duration(ContractSeconds));
 }
 
-FText UOfferViewModel::DescribeSatisfaction(const FAirlineStanding* Standing)
+FOfferMoodKey UOfferViewModel::MoodKeyOf(const FAirlineStanding* Standing)
 {
+	FOfferMoodKey Out;
 	if (Standing == nullptr)
+	{
+		return Out;
+	}
+	Out.bStanding = true;
+	Out.Percent = FMath::RoundToInt(Standing->Satisfaction * 100.0);
+	Out.bRecent = Standing->Recent.Num() > 0;
+	if (Out.bRecent)
+	{
+		// THE NEWEST CHANGE ONLY: the row has room for one reason, and the latest is the one the player
+		// can still connect to something they just did.
+		const FAirlineSatisfactionChange& Latest = Standing->Recent.Last();
+		Out.bUp = Latest.Delta >= 0.0;
+		Out.Cause = Latest.Cause;
+	}
+	return Out;
+}
+
+FText UOfferViewModel::DescribeMood(const FOfferMoodKey& Mood)
+{
+	if (!Mood.bStanding)
 	{
 		return FText::GetEmpty();
 	}
-	const FText Percent = FText::Format(NSLOCTEXT("AirportMgr", "OfferSatisfactionPct", "{0}%"),
-		FText::AsNumber(FMath::RoundToInt(Standing->Satisfaction * 100.0)));
-	if (Standing->Recent.Num() == 0)
+	const FText Percent = FText::Format(NSLOCTEXT("AirportMgr", "OfferSatisfactionPct", "{0}%"), FText::AsNumber(Mood.Percent));
+	if (!Mood.bRecent)
 	{
 		return Percent;
 	}
-	// THE NEWEST CHANGE ONLY: the row has room for one reason, and the latest is the one the player
-	// can still connect to something they just did.
-	const FAirlineSatisfactionChange& Latest = Standing->Recent.Last();
 	return FText::Format(NSLOCTEXT("AirportMgr", "OfferSatisfaction", "{0} {1} {2}"), Percent,
-		FText::FromString(Latest.Delta >= 0.0 ? TEXT("\u25B2") : TEXT("\u25BC")), FText::FromString(Latest.Cause));
+		FText::FromString(Mood.bUp ? TEXT("\u25B2") : TEXT("\u25BC")), FText::FromString(Mood.Cause));
 }
 
-void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& Traffic,
+FText UOfferViewModel::DescribeSatisfaction(const FAirlineStanding* Standing)
+{
+	return DescribeMood(MoodKeyOf(Standing));
+}
+
+bool UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const USimClock& Clock, const UAirlineRoster* Airlines)
 {
 	const UFlight* Live = Flight.Get();
 	if (Live == nullptr)
 	{
-		return;
+		return false;
 	}
-	Satisfaction = DescribeSatisfaction(Airlines != nullptr ? Airlines->Find(Live->AirlineId) : nullptr);
+	bool bChanged = false;
 
-	Callsign = FText::FromString(Live->Callsign);
-	Airline = Live->AirlineName;
-	TypeName = Live->TypeName;
-	Fee = Board.Pricing != nullptr ? Board.Pricing->Format(Live->LandingFee) : FText::GetEmpty();
-	Contract = DescribeContract(Live->LeadTimeSeconds, Live->ContractSeconds);
-	bNeedsTug = Live->Airframe.PushbackNeed == EPushbackNeed::VehicleTug;
-	// THE SIZE OF THE JOB, before the accept (spec 2026-09-28-fuel-litres).
-	FuelText = Live->FuelLitres > 0.0
-		? FText::Format(NSLOCTEXT("AirportMgr", "OfferFuelLitres", "Fuel {0} L"), FText::AsNumber(FMath::RoundToInt(Live->FuelLitres)))
-		: FText::GetEmpty();
+	// HOW THE AIRLINE FEELS, composed when the mood moved (a few times a game day), not every tick.
+	const FOfferMoodKey Mood = MoodKeyOf(Airlines != nullptr ? Airlines->Find(Live->AirlineId) : nullptr);
+	if (!bMoodValid || !(Mood == MoodKey))
+	{
+		Satisfaction = DescribeMood(Mood);
+		MoodKey = Mood;
+		bMoodValid = true;
+		bChanged = true;
+	}
+
+	// WHAT THE FLIGHT FIXED AT THE OFFER - who, what it pays, what it wants, the contract: composed once, and again only if a figure or the
+	// pricing that words the fee moved.
+	FOfferFixedKey Fixed;
+	Fixed.Flight = Live;
+	Fixed.Pricing = Board.Pricing;
+	Fixed.LeadTimeSeconds = Live->LeadTimeSeconds;
+	Fixed.ContractSeconds = Live->ContractSeconds;
+	Fixed.LandingFee = Live->LandingFee;
+	Fixed.FuelLitres = Live->FuelLitres;
+	if (!bFixedValid || !(Fixed == FixedKey))
+	{
+		Callsign = FText::FromString(Live->Callsign);
+		Airline = Live->AirlineName;
+		TypeName = Live->TypeName;
+		Fee = Board.Pricing != nullptr ? Board.Pricing->Format(Live->LandingFee) : FText::GetEmpty();
+		Contract = DescribeContract(Live->LeadTimeSeconds, Live->ContractSeconds);
+		bNeedsTug = Live->Airframe.PushbackNeed == EPushbackNeed::VehicleTug;
+		// THE SIZE OF THE JOB, before the accept (spec 2026-09-28-fuel-litres).
+		FuelText = Live->FuelLitres > 0.0
+			? FText::Format(NSLOCTEXT("AirportMgr", "OfferFuelLitres", "Fuel {0} L"), FText::AsNumber(FMath::RoundToInt(Live->FuelLitres)))
+			: FText::GetEmpty();
+		FixedKey = Fixed;
+		bFixedValid = true;
+		bChanged = true;
+	}
 
 	// ROUNDED UP: "0 s" while there is still time to click reads as a lie.
 	SecondsLeft = FMath::CeilToInt(FMath::Max(Live->OfferSecondsLeft, 0.0));
@@ -70,15 +123,30 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 	// THE QUOTE THE ACCEPT WILL ASK (#431): the cached verdict, then the airport's gate - so the button is lit exactly
 	// when UFlightBoard::TryAccept would take the click, and a closed airport greys it with its reason.
 	const FArrivalQuote Quote = Board.QuoteFor(Traffic, Network, *Live);
-	bAcceptable = Quote.IsAccepted();
-	bFuelServable = Verdict.bFuelServable;
+	const bool bNowAcceptable = Quote.IsAccepted();
 	// THE PLAN'S OWN SENTENCE (#456 review), carried on the verdict - not the reason-only overload, which reads "not
 	// admitted to that runway" for an arrivals-only field whose real reason is that nothing can take the departure.
 	// The plan names the stand letter to build, the figures and the admission itself.
-	Refusal = bAcceptable ? FText::GetEmpty() : FText::FromString(Quote.Sentence);
-	AcceptLabel = bFuelServable
-		? NSLOCTEXT("AirportMgr", "OfferAccept", "Accept")
-		: NSLOCTEXT("AirportMgr", "OfferAcceptNoFuel", "Accept (no fuel)");
+	const FString WantedSentence = bNowAcceptable ? FString() : Quote.Sentence;
+	// THE VERDICT'S THREE OUTPUTS, rewritten when any of them moved: the text is built from the plan's sentence and the caption from the
+	// fuel flag, so neither is rebuilt for a verdict that is the one it already holds.
+	if (!bVerdictValid || bNowAcceptable != bAcceptable || Verdict.bFuelServable != bFuelServable || WantedSentence != RefusalSentence)
+	{
+		bAcceptable = bNowAcceptable;
+		bFuelServable = Verdict.bFuelServable;
+		RefusalSentence = WantedSentence;
+		Refusal = bAcceptable ? FText::GetEmpty() : FText::FromString(Quote.Sentence);
+		AcceptLabel = bFuelServable
+			? NSLOCTEXT("AirportMgr", "OfferAccept", "Accept")
+			: NSLOCTEXT("AirportMgr", "OfferAcceptNoFuel", "Accept (no fuel)");
+		bVerdictValid = true;
+		bChanged = true;
+	}
+	if (bChanged)
+	{
+		Revision = ++GOfferRowStamp;
+	}
+	return bChanged;
 }
 
 TArray<double> UOfferInboxViewModel::SampleDemand(TArrayView<const FAirlineOffers> Airlines,
@@ -97,6 +165,13 @@ TArray<double> UOfferInboxViewModel::SampleDemand(TArrayView<const FAirlineOffer
 }
 
 void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraffic,
+	const URoadNetwork& InNetwork, const USimClock& InClock, const UAirlineRoster* InAirlines)
+{
+	SyncRows(InBoard, InTraffic, InNetwork, InClock, InAirlines);
+	RefreshRows(InBoard, InTraffic, InNetwork, InClock, InAirlines);
+}
+
+void UOfferInboxViewModel::SyncRows(UFlightBoard& InBoard, UGroundTraffic& InTraffic,
 	const URoadNetwork& InNetwork, const USimClock& InClock, const UAirlineRoster* InAirlines)
 {
 	Airlines = InAirlines;
@@ -146,20 +221,24 @@ void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraf
 		bRowsValid = true;
 	}
 
-	for (TObjectPtr<UOfferViewModel>& Row : Rows)
-	{
-		if (Row != nullptr)
-		{
-			Row->Refresh(InBoard, InTraffic, InNetwork, InClock, InAirlines);
-		}
-	}
-
 	// A PLAIN ASSIGNMENT (issue #191 dropped UE_MVVM_SET_PROPERTY_VALUE here): the count used
 	// to be set through the macro so a Blueprint binding would hear about it, but nothing
 	// ever bound this field - OfferInboxWidget::PaintRows reads GetPendingCount() directly
 	// every refresh, which is what actually keeps the badge current.
 	PendingCount = Rows.Num();
 	Capacity = InBoard.Generator != nullptr ? InBoard.Generator->MaxPendingOffers : 0;
+}
+
+void UOfferInboxViewModel::RefreshRows(UFlightBoard& InBoard, UGroundTraffic& InTraffic,
+	const URoadNetwork& InNetwork, const USimClock& InClock, const UAirlineRoster* InAirlines)
+{
+	for (TObjectPtr<UOfferViewModel>& Row : Rows)
+	{
+		if (Row != nullptr && Row->Refresh(InBoard, InTraffic, InNetwork, InClock, InAirlines))
+		{
+			++Composes;
+		}
+	}
 }
 
 TArray<UOfferViewModel*> UOfferInboxViewModel::GetOffers() const

@@ -1,4 +1,6 @@
 #include "CoreMinimal.h"
+#include "UI/UiWindow.h"
+#include "UI/UiWindowHost.h"
 #include "Present/OpsRuntime.h"
 #include "Model/Airport.h"
 #include "ArrivalViewModels.h"
@@ -299,6 +301,90 @@ bool FOfferInboxStatusHeightTest::RunTest(const FString& Parameters)
 	if (!TestTrue(FString::Printf(TEXT("the card has a height to measure (%.1f)"), Open), Open > 0.0f)) { return false; }
 	TestEqual(TEXT("open and closed, the card is the same height"), Open, Closed, 0.01f);
 	TestEqual(TEXT("and fresh from the build, the same again"), Fresh, Closed, 0.01f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferInboxFoldedComposesNothingTest, "AirportMgr.UI.OfferInbox.FoldedPanelComposesNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferInboxFoldedComposesNothingTest::RunTest(const FString& Parameters)
+{
+	// #446 PIN, the Offers half: each row composed about a dozen FText::Format every tick - who is asking, the fee, the contract, the fuel, the
+	// mood, the countdown - folded or not. Now a row composes when an input of its sentences moved, and a folded window composes NOTHING while the
+	// count still reaches its title bar. The change that is made while folded is the landing fee: a row input the fixed sentences are keyed on,
+	// so an unfolded panel WOULD recompose it; unfolding is the control that proves the counters can see a compose.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	UFlightBoard* Board = Runtime->GetFlightBoard();
+	USimClock* Clock = Runtime->GetClock();
+	if (!TestTrue(TEXT("setup: the runtime has a board and a clock"), Board != nullptr && Clock != nullptr)) { return false; }
+
+	TArray<UFlight*> Offers;
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		UFlight* Offer = NewObject<UFlight>(GetTransientPackage());
+		Offer->Callsign = FString::Printf(TEXT("CU %d"), Index + 1);
+		Offer->Airframe.Wingspan = 3400.0;
+		Offer->LeadTimeSeconds = 600.0;
+		Offer->ContractSeconds = 3600.0;
+		Offer->LandingFee = 100.0 * (Index + 1);
+		Offer->OfferWindowSeconds = 60.0;
+		Offer->OfferSecondsLeft = 60.0;
+		Offer->AirlineName = FText::FromString(TEXT("Meridian"));
+		Offer->TypeName = FText::FromString(TEXT("A320"));
+		Board->AddOffer(*Clock, Offer);
+		Offers.Add(Offer);
+	}
+
+	UUiWindowHost* Host = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
+	UOfferInboxWidget* Widget = CreateWidget<UOfferInboxWidget>(TestWorld.World, UOfferInboxWidget::StaticClass());
+	if (!TestTrue(TEXT("setup: a host and the inbox"), Host != nullptr && Widget != nullptr)) { return false; }
+	Host->SetViewSizeForTest(FVector2D(1920.0, 1080.0));
+	UUiWindow* Window = Host->AddWindow(*Widget);
+	if (!TestNotNull(TEXT("setup: the inbox is hosted in a window"), Window)) { return false; }
+	TestFalse(TEXT("it opens unfolded"), Widget->IsFolded());
+
+	auto Composed = [Widget]() { return Widget->GetInbox()->ComposeCountForTest() + Widget->ComposeCountForTest(); };
+
+	Widget->RefreshWith(*Runtime, *Actor);
+	TestEqual(TEXT("the first tick composes every row once"), Widget->GetInbox()->ComposeCountForTest(), 3);
+	TestTrue(TEXT("and paints: the badge, each row, each countdown"), Widget->ComposeCountForTest() >= 1 + 3 + 3);
+	const int32 Settled = Composed();
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Widget->RefreshWith(*Runtime, *Actor); }
+	TestEqual(TEXT("unfolded and idle, a tick composes nothing - the keyed rows hold"), Composed(), Settled);
+
+	// FOLDED, WITH A ROW INPUT MOVING.
+	Host->SetCollapsed(TEXT("offers"), true);
+	if (!TestTrue(TEXT("setup: the window is folded and the panel knows"), Widget->IsFolded())) { return false; }
+	Offers[1]->LandingFee = 4200.0;
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Widget->RefreshWith(*Runtime, *Actor); }
+	TestEqual(TEXT("FOLDED, a tick composes nothing, even with a fee that an unfolded row would re-word"), Composed(), Settled);
+
+	// THE COUNT STILL READS ON THE TITLE BAR.
+	UFlight* Fourth = NewObject<UFlight>(GetTransientPackage());
+	Fourth->Airframe.Wingspan = 3400.0;
+	Fourth->LeadTimeSeconds = 600.0;
+	Fourth->OfferWindowSeconds = 60.0;
+	Fourth->OfferSecondsLeft = 60.0;
+	Board->AddOffer(*Clock, Fourth);
+	const int32 BadgeBefore = Widget->ComposeCountForTest();
+	Widget->RefreshWith(*Runtime, *Actor);
+	TestEqual(TEXT("an offer that arrives while folded reaches the title bar's count"), Window->BadgeForTest(), FString(TEXT("4/8")));
+	const int32 BadgeCompose = Widget->ComposeCountForTest() - BadgeBefore;
+	TestEqual(TEXT("which cost the one badge format and nothing else"), BadgeCompose, 1);
+	TestEqual(TEXT("and the rows are still not composed"), Composed() - BadgeCompose, Settled);
+
+	// UNFOLDED AGAIN: the control.
+	Host->SetCollapsed(TEXT("offers"), false);
+	Widget->RefreshWith(*Runtime, *Actor);
+	TestTrue(TEXT("unfolded, the inbox composes what it skipped"), Composed() > Settled);
+	TestEqual(TEXT("one card a row"), Widget->RowWidgetCountForTest(), 4);
+	const int32 Caught = Composed();
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Widget->RefreshWith(*Runtime, *Actor); }
+	TestEqual(TEXT("then an idle tick is quiet again"), Composed(), Caught);
 	return true;
 }
 
