@@ -23,6 +23,7 @@ double FServiceFleet::PriceOf(FName TypeCode) const
 {
 	// NO ROW, NO PRICE - and no purchase: UFacilityPurchases refuses a code the catalogue lacks (UnknownType) before it
 	// asks, and Add refuses one too. The old fallback row answered the same 0.
+	// ENFORCED BY: AirportOps.Model.Facility.RefusalsChargeAndPublishNothing ("UnknownType vehicle"), AirportOps.Fleet.CatalogueDropsARowWithNoChassis
 	const FServiceVehicleType* Row = Board.Catalogue.Find(TypeCode);
 	return Row != nullptr ? Row->Price : 0.0;
 }

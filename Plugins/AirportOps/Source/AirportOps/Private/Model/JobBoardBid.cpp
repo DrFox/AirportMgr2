@@ -145,6 +145,7 @@ TArray<UJobBoard::FCandidate> UJobBoard::Judge(const URoadNetwork& Network, ESer
 		// every stand (it compares zeros) and routes at the default speed - the zero-size vehicle a buyable type with no
 		// stand letter used to become. TypeFor has warned; FServiceFleet::Add never makes one, so only a vehicle restored
 		// under a scenario that dropped its kind, or a test's hand, gets here.
+		// ENFORCED BY: AirportOps.Fleet.UnknownKindServesNothing, AirportOps.Fleet.CatalogueDropsARowWithNoChassis (Add)
 		if (Type.TypeCode.IsNone())
 		{
 			continue;

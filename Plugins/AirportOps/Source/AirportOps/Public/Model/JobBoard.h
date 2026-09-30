@@ -270,7 +270,7 @@ public:
 	 * one; FServiceFleet::Add refuses to make such a vehicle - answers a row whose TypeCode is None and whose chassis is
 	 * empty, with a Warning once per code. The bid's candidate filter skips it (Judge), so it serves nothing rather than
 	 * fitting a zero-size vehicle through every gate, which is what the old per-call join did.
-	 * ENFORCED BY: AirportOps.Fleet.CatalogueDropsARowWithNoChassis
+	 * ENFORCED BY: AirportOps.Fleet.CatalogueDropsARowWithNoChassis, AirportOps.Fleet.UnknownKindServesNothing
 	 */
 	FServiceVehicleType TypeFor(FName TypeCode) const;
 
