@@ -96,3 +96,26 @@ after the FlightBoard in `Persistents()` -> each red in the named test.
 
 Full suite, no filter; UE_LOG / comment-line counts of touched files against the baseline; Check-Architecture
 verdict and rule-12 warning count. Unverified in PIE: both fixes (spec §8 lists no PIE check for C).
+
+## Execution notes (2026-09-30)
+
+- Full suite: `1516 test(s) run, 0 failed, 0 crashed` (baseline 1512; +4). Check-Architecture PASS, rule-12 warnings 111 (unchanged).
+- UE_LOG / comment lines, base `e498d559` -> now: FlightBoard.cpp 19/205 -> 23/235; FlightBoard.h 0/364 -> 0/379;
+  OpsRuntime.cpp 24/304 -> 24/311; Flight.cpp 0/10 -> 0/13. No file fell.
+- Red first: FallbackParkStaysTaxiIn ("parked on the fallback junction it is still taxiing in", "the redirect reads
+  TaxiIn", ParkedAt 75 not 0); MidFlightGoesRoundOrRetires and MidFlightRequeuesOrRetires ("Inbound" not equal,
+  AgentId 1 / 4101 not -1, HoldingSince 0, "Departed" not equal).
+- Mutations (each red, restored with cp + touch, rebuilt green): Parked gate -> FallbackParkStaysTaxiIn; Taxiing
+  rule -> DepartFromFallbackReadsTaxiOut ("the taxi away from the junction reads TaxiOut"); re-queue branch -> both
+  #404 tests; retire branch -> both; `FlightBoard->RestoreClock = Clock` -> MidFlightRequeuesOrRetires (0 not
+  32421); Clock after FlightBoard in `Persistents()` -> MidFlightRequeuesOrRetires (32526, the pre-load clock).
+- DepartFromFallbackReadsTaxiOut stages DepartAgent's straight-out branch (RedirectAgent onto PlanAny's route):
+  on FTestAirport the junction-parked heading points away, DepartAgent takes the pushback branch and is refused (no
+  arm). Its first draft read only Seen (phase CHANGES) and passed under the mutation; it now reads the phase right
+  after the move.
+- Existing test changed by the spec: `AirportOps.Model.FlightBoard.FollowsTheAgentPhases` - its agent 5 is no agent
+  of its traffic model, so Parked no longer reads Turnaround there; it asserts TaxiIn, and the at-a-stand case is
+  FallbackParkStaysTaxiIn's last step.
+- The `Persistents()` comment claimed OnBeforeRestore ran for every object before any blob was deserialised; OpsSave.cpp's
+  loop does RestoreBlob + OnAfterRestore per object. Rewritten there. `IOpsPersistent::OnBeforeRestore`'s header
+  (OpsSave.h) makes the same false claim; left, not in this PR's files.
