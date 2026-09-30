@@ -69,6 +69,8 @@ namespace ArrivalQueuePassTest
 			{
 				return false;
 			}
+			// A NETWORK, which a fresh actor lacks until its first edit - and the runtime's Tick reaches the model
+			// only through one (the old RuntimeTicksTheQueue's reason). Far from any field Build lays.
 			World.Actor->PlaceNode(FVector2D(0.0, 90000.0));
 			Net = World.Actor->Network;
 			if (Net == nullptr)
@@ -376,6 +378,152 @@ bool FArrivalQueueTwoRunwaysTest::RunTest(const FString&)
 	TestTrue(TEXT("on different runways"), A != nullptr && B != nullptr && A->RunwayHeld.Num() > 0 && B->RunwayHeld.Num() > 0
 		&& A->RunwayHeld[0] != B->RunwayHeld[0]);
 	TestEqual(TEXT("with no safety Warning"), Spy.Lines.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueEditKeepsHoldTest, "AirportOps.Present.RuntimeEdit.KeepsAcceptedStandHold",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueEditKeepsHoldTest::RunTest(const FString&)
+{
+	// REVIEW I1: any edit in play rebuilt the guideline graph, which released every Node claim - the accepted flights'
+	// stand holds with the agents' - and nothing but a load re-held them. So the next offer was accepted onto a stand a
+	// flight was already promised: one stand, two flights.
+	FRig Rig;
+	FTestAirport Field;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&](URoadNetwork& Net) { Field = FTestAirport::Build(Rig.Airframe, FTestAirportOptions(), &Net); }))) { return false; }
+	UFlight* First = Rig.Accept(Field.Threshold, 3600.0);
+	if (!TestNotNull(TEXT("the first flight is accepted onto the only stand"), First)) { return false; }
+	const FGuidelineNodeId Pose = Field.Pose(Field.Stands[0]);
+	TestEqual(TEXT("held under its own holder"), Rig.Model->HolderOfNode(Pose), First->HolderId());
+
+	// A TOPOLOGY EDIT THROUGH THE ACTOR - a road drawn well away from the field - and the rebuild it runs.
+	ARoadNetworkActor* Actor = Rig.World.Actor;
+	const int32 A = Actor->PlaceNode(FVector2D(-60000.0, 60000.0));
+	const int32 B = Actor->PlaceNode(FVector2D(-30000.0, 60000.0));
+	TestTrue(TEXT("a road drawn"), Actor->ConnectNodes(A, B));
+	Actor->RebuildMesh();
+	for (int32 Tick = 0; Tick < 3; ++Tick)
+	{
+		Rig.Model->Advance(ArrivalQueuePassTest::Frame, Rig.Net);
+		Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+	}
+
+	TestEqual(TEXT("after the edit the stand is still held, by the same flight"), Rig.Model->HolderOfNode(Pose), First->HolderId());
+	TestNull(TEXT("so a second offer is refused, not handed the promised stand"), Rig.Accept(Field.Threshold, 3600.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueRetireTest, "AirportOps.Present.ArrivalQueue.RetireFreesWithoutAdvance",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueRetireTest::RunTest(const FString&)
+{
+	// REVIEW M1: a runway released OUTSIDE Advance - the player's Unstick retiring the aircraft on it - waited for the
+	// next Advance's diff, so with none (paused motion, or simply this frame's order) the safety net landed the flight
+	// and warned "no event covered it", falsely. RetireAgent diffs at once now.
+	FSafetyWarningSpy Spy;
+	FRig Rig;
+	FTestAirport Field;
+	FTestAirportOptions Options;
+	Options.StandCount = 2;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&](URoadNetwork& Net) { Field = FTestAirport::Build(Rig.Airframe, Options, &Net); }))) { return false; }
+	const int32 Blocker = Rig.Model->DispatchArrival(*Rig.Net, Field.Threshold, Rig.Airframe, 1.0);
+	if (!TestTrue(TEXT("an arrival holds the runway"), Blocker > 0)) { return false; }
+	Rig.Model->Advance(ArrivalQueuePassTest::Frame, Rig.Net);
+
+	UFlight* Flight = Rig.Accept(Field.Threshold);
+	if (!TestNotNull(TEXT("a flight accepted onto the other stand"), Flight)) { return false; }
+	for (int32 Tick = 0; Tick < 10; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	if (!TestEqual(TEXT("the runway is held: it holds"), Flight->Phase, EFlightPhase::Inbound)) { return false; }
+
+	Rig.Model->RetireAgent(Blocker);
+	for (int32 Tick = 0; Tick < 30 * 45 && Flight->Phase == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	TestEqual(TEXT("cleared to land"), Flight->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("by the retire's own event: no safety Warning"), Spy.Lines.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueRetryCoveredTest, "AirportOps.Present.ArrivalQueue.RetryStaysCovered",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueRetryCoveredTest::RunTest(const FString&)
+{
+	// REVIEW M1: a dispatch refused in a race is retried next frame - a run an event asked for. If the net fires on the
+	// frame the retry finally succeeds, that run is still covered, and must not warn.
+	FSafetyWarningSpy Spy;
+	FRig Rig;
+	FTestAirport Field;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&](URoadNetwork& Net) { Field = FTestAirport::Build(Rig.Airframe, FTestAirportOptions(), &Net); }))) { return false; }
+	ArrivalQueuePassTest::HoldStrip(*Rig.Model, *Rig.Net, Field.ThresholdSegment, 99);
+	UFlight* Flight = Rig.Accept(Field.Threshold);
+	if (!TestNotNull(TEXT("accepted"), Flight)) { return false; }
+	double Due = -1.0;
+	for (int32 Tick = 0; Tick < 10 && Due < 0.0; ++Tick)
+	{
+		Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+		if (Rig.Runtime->IsQueueSafetyNetArmedForTest())
+		{
+			Due = Rig.Runtime->GetClock()->Now() + UOpsRuntime::QueueSafetySeconds;
+		}
+	}
+	if (!TestTrue(TEXT("the net is armed while it holds"), Due > 0.0)) { return false; }
+
+	// THE RACE, staged: every dispatch refused until the net's first firing, then the real one.
+	UFlightBoard* Board = Rig.Runtime->GetFlightBoard();
+	const TFunction<bool(const FVector2D&, const FAirframe&)> Real = Board->Dispatcher;
+	USimClock* Clock = Rig.Runtime->GetClock();
+	Board->Dispatcher = [Real, Clock, Due](const FVector2D& Near, const FAirframe& Frame)
+	{
+		return Clock->Now() >= Due && Real(Near, Frame);
+	};
+	Rig.Model->OccupancyForTest().ReleaseAll(99);
+	Rig.Runtime->GetBus().Publish(FRunwayFreedEvent{});   // the event that covers it
+	for (int32 Tick = 0; Tick < 30 * 45 && Flight->Phase == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	TestEqual(TEXT("landed once the race cleared"), Flight->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("a retry of a covered run is covered: no safety Warning"), Spy.Lines.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueCatchUpTest, "AirportOps.Present.ArrivalQueue.AttachAndLoadMarkItDirty",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueCatchUpTest::RunTest(const FString&)
+{
+	// REVIEW M4: both catch-ups pinned where they happen - read straight after the call, before any Tick, since the
+	// first Tick's NetworkChanged would run the pass anyway and hide either one missing.
+	FRig Rig;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&Rig](URoadNetwork& Net) { FTestAirport::Build(Rig.Airframe, FTestAirportOptions(), &Net); }))) { return false; }
+	TestTrue(TEXT("an attach marks the queue pass dirty"), Rig.Runtime->GetBus().IsDirtyForTest(TEXT("ArrivalQueue")));
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	TestFalse(TEXT("settled"), Rig.Runtime->GetBus().IsDirtyForTest(TEXT("ArrivalQueue")));
+	const FString Slot = TEXT("AirportOpsTest_QueueCatchUp");
+	if (!TestTrue(TEXT("saved"), Rig.Runtime->SaveToSlot(Slot))) { return false; }
+	Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+	if (!TestTrue(TEXT("loaded"), Rig.Runtime->LoadFromSlot(Slot))) { return false; }
+	TestTrue(TEXT("a load marks the queue pass dirty"), Rig.Runtime->GetBus().IsDirtyForTest(TEXT("ArrivalQueue")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueNetCancelTest, "AirportOps.Present.ArrivalQueue.NetCancelledOnLoadAndDetach",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueNetCancelTest::RunTest(const FString&)
+{
+	// REVIEW M4: the net's clock entry is booked against the clock it was armed on - a load's clock is another, and a
+	// detached runtime has no queue to guard.
+	FRig Rig;
+	FTestAirport Field;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&](URoadNetwork& Net) { Field = FTestAirport::Build(Rig.Airframe, FTestAirportOptions(), &Net); }))) { return false; }
+	ArrivalQueuePassTest::HoldStrip(*Rig.Model, *Rig.Net, Field.ThresholdSegment, 99);
+	if (!TestNotNull(TEXT("accepted"), Rig.Accept(Field.Threshold))) { return false; }
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	if (!TestTrue(TEXT("armed while it holds"), Rig.Runtime->IsQueueSafetyNetArmedForTest())) { return false; }
+	const FString Slot = TEXT("AirportOpsTest_QueueNetCancel");
+	if (!TestTrue(TEXT("saved"), Rig.Runtime->SaveToSlot(Slot))) { return false; }
+	if (!TestTrue(TEXT("loaded"), Rig.Runtime->LoadFromSlot(Slot))) { return false; }
+	TestFalse(TEXT("a load cancels the net"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	// THE LOAD CLEARED THE TABLE (ClearAgents), the fake holder with it; held again so the restored flight still waits.
+	ArrivalQueuePassTest::HoldStrip(*Rig.Model, *Rig.Net, Field.ThresholdSegment, 99);
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	TestTrue(TEXT("and the load's pass re-arms it on the loaded clock"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	Rig.Runtime->Attach(nullptr);
+	TestFalse(TEXT("a detach cancels it"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
 	return true;
 }
 

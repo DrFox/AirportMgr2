@@ -584,7 +584,10 @@ void UOpsRuntime::RunArrivalQueue()
 	}
 	if (Result.bRetry)
 	{
-		// A DISPATCH REFUSED in a same-frame race (UFlightBoard::DispatchNow): retried next frame, never dropped.
+		// A DISPATCH REFUSED in a same-frame race (UFlightBoard::DispatchNow): retried next frame, never dropped -
+		// and COVERED (review M1): the retry is the tail of a run something asked for, not the net's own find.
+		// ENFORCED BY: AirportOps.Present.ArrivalQueue.RetryStaysCovered
+		bQueueCovered = true;
 		Bus.MarkDirtyNextDrain(TEXT("ArrivalQueue"));
 	}
 	ArmQueueSafetyNet(Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
@@ -600,10 +603,17 @@ void UOpsRuntime::ArmQueueSafetyNet(bool bWaiting)
 			Bus.MarkDirty(TEXT("ArrivalQueue"));
 		});
 	}
-	else if (!bWaiting && QueueSafetyHandle != INDEX_NONE)
+	else if (!bWaiting)
 	{
-		Clock->Cancel(QueueSafetyHandle);
-		QueueSafetyHandle = INDEX_NONE;
+		if (QueueSafetyHandle != INDEX_NONE)
+		{
+			Clock->Cancel(QueueSafetyHandle);
+			QueueSafetyHandle = INDEX_NONE;
+		}
+		// BOTH FLAGS GO WITH THE NET (review M1): a safety-due or a covered left over from a disarmed net - a load,
+		// a detach, an emptied queue - would misattribute the next run, one way or the other.
+		bQueueSafetyDue = false;
+		bQueueCovered = false;
 	}
 }
 
@@ -653,7 +663,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	RefusalHandle = Traffic->OnArrivalRefused.AddUObject(this, &UOpsRuntime::OnArrivalRefused);
 	// AIRSIDE'S DERIVED FREEDOM (ops batch 3 §5) - Airside never learns ops exists; it fires native delegates and
 	// this bridges them, like the two above.
-	// ENFORCED BY: AirportOps.Present.Bus.FreedIsBridged
+	// ENFORCED BY: Check-Architecture rule 1b (cross-plugin) for "never learns"; AirportOps.Present.Bus.FreedIsBridged for the bridge
 	RunwayFreedHandle = Traffic->OnRunwayFreed.AddUObject(this, &UOpsRuntime::OnRunwayFreed);
 	StandsFreedHandle = Traffic->OnStandsFreed.AddUObject(this, &UOpsRuntime::OnStandsFreed);
 

@@ -145,14 +145,18 @@ bool FStandAllocatorSurvivesRebuildTest::RunTest(const FString& Parameters)
 	UFlight* Flight = FlightNeeding(3400.0, 1);
 	TestTrue(TEXT("reserved before the edit"), Allocator->Reserve(*Traffic, *Network, *Flight));
 
-	// GroundTrafficRebuild drops EVERY node claim - "a set of resources ceasing to exist" -
-	// so without Reapply the player editing a taxiway silently un-reserves every stand and
-	// the next flight is handed one that is already spoken for.
+	// GroundTrafficRebuild drops EVERY node claim - "a set of resources ceasing to exist" - and
+	// until PR D's review (I1) only a LOAD re-held the flights' stands through Reapply, so the
+	// player editing a taxiway silently un-reserved every stand and the next flight was handed
+	// one already spoken for. The traffic model now re-holds its own reservations through its
+	// own rebuild, by stand entity; Reapply stays the load's path and must agree with it.
 	Traffic->OnGraphRebuilt(*Network);
-	TestFalse(TEXT("the rebuild really did drop the hold, or this test proves nothing"),
-		Traffic->IsStandHeld(Network->GetEntity(Flight->Stand)->PoseNode, 0));
+	TestEqual(TEXT("the rebuild itself keeps the hold, under the flight's holder"),
+		Traffic->HolderOfNode(Network->GetEntity(Flight->Stand)->PoseNode), Flight->HolderId());
 
 	Allocator->Reapply(*Traffic, *Network, {Flight});
+	TestEqual(TEXT("and a Reapply on top (the load's path) leaves it the flight's"),
+		Traffic->HolderOfNode(Network->GetEntity(Flight->Stand)->PoseNode), Flight->HolderId());
 
 	UFlight* Rival = FlightNeeding(3400.0, 2);
 	TestFalse(TEXT("the reservation keeps a rival off the stand after a rebuild"),

@@ -315,6 +315,33 @@ bool FQueueReholdTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueChurnFreedStandTest, "AirportOps.Model.ArrivalQueue.StandFreedByChurnIsNotStale",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueChurnFreedStandTest::RunTest(const FString& Parameters)
+{
+	// THE CLEARANCE CACHE'S KNOCK-ON (PR D review): ClearanceFor caches NoFreeStand against OccupancyRevision, and a
+	// stand freed by claim churn - a body rolling off the pose node - moves no revision. The pass then runs on the
+	// StandsFreed event. It must not read the stale refusal: the stand-less flight's re-reserve (HoldStand, which does
+	// bump the revision) comes first and invalidates it. Pinned: a HoldStand without its bump turns this red.
+	FQueueRig Rig;
+	UFlight* Flight = Holding(Rig, QueueAirframe().Wingspan, 1.0);
+	const FGuidelineNodeId Pose = Rig.Airport.Net->GetEntity(Rig.Airport.Stands[0])->PoseNode;
+	Rig.Traffic->OccupancyForTest().Assert(FTrafficClaim::Make(77, FTrafficResource::OfNode(Pose), /*bOccupied*/ true, 2));
+	Rig.Traffic->Advance(0.05, Rig.Airport.Net);
+	const uint32 Revision = Rig.Traffic->OccupancyRevision();
+	Rig.Tick();
+	TestEqual(TEXT("a body on the only stand: nothing cleared"), Rig.Dispatched, 0);
+	TestFalse(TEXT("and no stand held"), Flight->Stand.IsSet());
+
+	Rig.Traffic->OccupancyForTest().ReleaseAll(77);
+	Rig.Traffic->Advance(0.05, Rig.Airport.Net);
+	TestEqual(TEXT("the body rolled off with no revision bump - the cache's blind spot"), Rig.Traffic->OccupancyRevision(), Revision);
+	Rig.Tick();
+	TestTrue(TEXT("the pass takes the stand"), Flight->Stand.IsSet());
+	TestEqual(TEXT("and clears the flight - not the cached NoFreeStand"), Rig.Dispatched, 1);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueDeadStandTest, "AirportOps.Model.ArrivalQueue.DeadStandReservesWhenOneFrees",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FQueueDeadStandTest::RunTest(const FString& Parameters)

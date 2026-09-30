@@ -470,6 +470,12 @@ public:
 
 	int32 QueuedCount() const { return Queue.Num(); }
 
+	/** Whether Pass is marked to run in the next round - for a test pinning who marks it (an attach, a load). */
+	bool IsDirtyForTest(FName Pass) const
+	{
+		return Passes.ContainsByPredicate([Pass](const FPass& Each) { return Each.Name == Pass && Each.bDirty; });
+	}
+
 private:
 	struct FHandler
 	{
