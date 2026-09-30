@@ -14,6 +14,7 @@ class UUiButton;
 class ULandAircraftPanelWidget;
 class UTextBlock;
 class UUIStyle;
+class UOpsRuntime;
 class UVerticalBox;
 
 /**
@@ -44,7 +45,8 @@ public:
  * reading numbers because nothing could put an A380 on the runway to be watched.
  *
  * GREYED ROWS ARE CLICKS THE GAME WOULD REFUSE, judged by LandChoices::Build against the
- * runway a landing from the view focus would use - never a second opinion about admission.
+ * runway a landing from the view focus would use - never a second opinion about admission - and
+ * against the airport's status: while it is not open, every row (whole-stack review M1).
  *
  * C++ BASE, BLUEPRINT OPTIONAL, the rule every panel here follows: the code builds a plain
  * card when no asset supplies one. A Widget Blueprint may supply RowColumn and TitleText.
@@ -80,9 +82,16 @@ public:
 	 */
 	void Refresh();
 
-	/** Refresh against a given driver - Refresh passes Controller(), null in a headless world
-	 *  (see ClickRowForTest), so a test hands its own controller in. */
-	void RefreshFor(const ARoadBuildController* C);
+	/** Refresh against a given driver and ops runtime - Refresh passes Controller() and the ops subsystem's, both
+	 *  null in a headless world (see ClickRowForTest), so a test hands its own in. No runtime (the editor mode) is not
+	 *  a closure: the airport reads as open. */
+	void RefreshFor(const ARoadBuildController* C, const UOpsRuntime* Runtime = nullptr);
+
+	/** Row Index's button is enabled - it is a click the game would take. */
+	bool IsRowEnabledForTest(int32 Index) const;
+
+	/** What row Index last showed as its refusal, empty when admitted. */
+	FString RowRefusalForTest(int32 Index) const { return PaintedRefusals.IsValidIndex(Index) ? PaintedRefusals[Index] : FString(); }
 
 	/** How many times Refresh actually asked LandChoices::Build - FLandChoicesKey's gate's counter. */
 	int32 BuildCountForTest() const { return BuildCalls; }

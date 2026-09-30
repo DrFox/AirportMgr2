@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/Airport.h"
 
 class UAircraftType;
 class URoadNetwork;
@@ -17,7 +18,10 @@ class URoadNetwork;
  *  - the network object: a clear or a load is a new one, counting from zero - a weak pointer, so a recycled address
  *    is not mistaken for the old network.
  * NOT the occupancy, and not a runway-freed count, which the spec named: Build asks what the runway ADMITS, never whether
- * it is busy. NOT the airport status (PR B): the status greys aircraft.land's button, not these rows.
+ * it is busy.
+ *  - THE AIRPORT'S STATUS (whole-stack review M1): a closed airport admits no arrivals (PR B ruling I1), so while it
+ *    is not Open every row is a click the game would refuse, and Build greys them all. It used to grey only the bar's
+ *    Land button, leaving an open panel offering clicks the game then refused.
  * ENFORCED BY: AirportMgr.UI.LandPanelBuildsOnlyOnChange (one step per revision and the seed, each red when its field
  * is left out of ==); AirportMgr.UI.LandChoicesKeyNamesTheNetwork (two networks, equal revisions); Check-Architecture
  * rule 35 (facts-through-facade) for "through the facade".
@@ -30,11 +34,12 @@ struct FLandChoicesKey
 	uint32 GuidelineRevision = 0;
 	bool bHasRunway = false;
 	int32 Seed = INDEX_NONE;
+	EAirportStatus Status = EAirportStatus::Open;
 
 	bool operator==(const FLandChoicesKey& Other) const
 	{
 		return Network == Other.Network && EditRevision == Other.EditRevision && GuidelineRevision == Other.GuidelineRevision
-			&& bHasRunway == Other.bHasRunway && Seed == Other.Seed;
+			&& bHasRunway == Other.bHasRunway && Seed == Other.Seed && Status == Other.Status;
 	}
 	bool operator!=(const FLandChoicesKey& Other) const { return !(*this == Other); }
 };
@@ -87,8 +92,9 @@ namespace LandChoices
 	 * Null Network, or none with a runway, refuses everything with a reason.
 	 */
 	AIRPORTMGR_API TArray<FLandChoice> Build(const URoadNetwork* Network, const FVector2D& Near,
-		const TArray<UAircraftType*>& Types);
+		const TArray<UAircraftType*>& Types, EAirportStatus Status = EAirportStatus::Open);
 
 	/** What Build(Network, Near, ...) would read, now - see FLandChoicesKey. One NearestRunwayThreshold. */
-	AIRPORTMGR_API FLandChoicesKey KeyFor(const URoadNetwork* Network, const FVector2D& Near);
+	AIRPORTMGR_API FLandChoicesKey KeyFor(const URoadNetwork* Network, const FVector2D& Near,
+		EAirportStatus Status = EAirportStatus::Open);
 }

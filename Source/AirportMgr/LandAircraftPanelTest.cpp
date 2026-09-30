@@ -14,6 +14,8 @@
 #include "Model/RunwayFacts.h"
 #include "Content/AirsideSettings.h"
 #include "Present/RoadNetworkActor.h"
+#include "Present/OpsRuntime.h"
+#include "Model/Airport.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -354,6 +356,56 @@ bool FLandChoicesKeyNamesTheNetworkTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the same runway seed on each"), A.bHasRunway && B.bHasRunway && A.Seed == B.Seed);
 	TestTrue(TEXT("and still two keys: the network is on it"), A != B);
 	TestTrue(TEXT("one network is one key"), A == LandChoices::KeyFor(First.Net, Near));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelGreysWhileClosedTest,
+	"AirportMgr.UI.LandPanelGreysWhileClosed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelGreysWhileClosedTest::RunTest(const FString& Parameters)
+{
+	// A CLOSED AIRPORT ADMITS NO ARRIVALS, the debug Land included (PR B ruling I1) - so every row is a click the game
+	// would refuse, and PaintRows's rule (a greyed row is exactly that) greys them all (whole-stack review M1). The
+	// status is on FLandChoicesKey, so the close is seen with nothing else moving.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe(), Actor->Network);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	Runtime->Tick(0.0);
+	if (!TestEqual(TEXT("open"), Runtime->GetAirport()->Status(), EAirportStatus::Open)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	FAlertFocus Focus;
+	Focus.Kind = EAlertFocusKind::Point;
+	Focus.Point = FVector2D(1000.0, 0.0);
+	C->SelectAndFocus(Focus);
+	ULandAircraftPanelWidget* Panel =
+		CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	auto Enabled = [Panel]()
+	{
+		int32 Count = 0;
+		for (int32 Row = 0; Row < Panel->RowWidgetCountForTest(); ++Row) { Count += Panel->IsRowEnabledForTest(Row) ? 1 : 0; }
+		return Count;
+	};
+
+	Panel->RefreshFor(C, Runtime);
+	if (!TestTrue(FString::Printf(TEXT("open: some type can land (%d of %d rows)"), Enabled(), Panel->RowWidgetCountForTest()), Enabled() > 0)) { return false; }
+	const int32 Built = Panel->BuildCountForTest();
+	Runtime->SetAirportClosed(true);
+	Panel->RefreshFor(C, Runtime);
+	TestEqual(TEXT("the close alone re-judges the rows"), Panel->BuildCountForTest(), Built + 1);
+	TestEqual(TEXT("closed: every row greyed"), Enabled(), 0);
+	TestTrue(FString::Printf(TEXT("and each says why ('%s')"), *Panel->RowRefusalForTest(0)), Panel->RowRefusalForTest(0).Contains(TEXT("closed")));
+	Runtime->SetAirportClosed(false);
+	Panel->RefreshFor(C, Runtime);
+	TestTrue(TEXT("reopened: they are back"), Enabled() > 0);
 	return true;
 }
 
