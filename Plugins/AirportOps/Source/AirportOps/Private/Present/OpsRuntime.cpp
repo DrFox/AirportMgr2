@@ -1320,9 +1320,8 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 
 	// EVERY PASS ONCE after a load - the one catch-up, since nothing that happened before the load
 	// is an event any more (spec 2026-09-29 §4). No passes exist until stage 3; the rule is here first.
-	// THE ARRIVAL QUEUE'S among them: a flight #404 re-queued (DemoteRestoredMidFlight) joins the queue
-	// with no FlightInbound of its own, and is dispatched by this run.
-	// ENFORCED BY: AirportOps.Present.ArrivalQueue.EachEventDirtiesIt ("a load")
+	// THE ARRIVAL QUEUE'S among them: DemoteRestoredMidFlight (#404) sets a flight Inbound directly rather
+	// than through UFlightBoard::Enqueue, so it publishes no FlightInbound, and this run is what dispatches it.
 	Bus.MarkAllDirty();
 
 	ApplySpeed(Clock->GetSpeed());

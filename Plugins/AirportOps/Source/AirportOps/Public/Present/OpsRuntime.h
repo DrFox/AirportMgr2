@@ -215,7 +215,8 @@ public:
 	/**
 	 * Game seconds between the arrival queue's safety runs - see RunArrivalQueue. 30 (ops event bus spec §2): long
 	 * enough that a stranded flight is a visible defect rather than a smooth fallback, short enough that one never
-	 * holds for minutes in play. At the default day length 30 game s is about half a real second (2026-09-30).
+	 * holds for minutes in play. At x1 on the default scenario (2400 real s of daylight for 14 h, 480 of night for 10 h)
+	 * 30 game s is about 1.4 real s by day and 0.4 by night (2026-09-30).
 	 */
 	static constexpr double QueueSafetySeconds = 30.0;
 
