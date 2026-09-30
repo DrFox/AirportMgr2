@@ -1100,6 +1100,9 @@ bool UGroundTraffic::RetireAgent(int32 AgentId)
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d retired"), AgentId);
 	OnAgentPhaseChanged.Broadcast(AgentId, Before, EAgentPhase::Gone);
 	++OccupancyRevisionCount;   // #169: ReleaseAll, above, may have freed a stand or a runway.
+	// AND SAYS WHICH, NOW - see DiffFreedom (review M1). After the broadcast, like the revision bump.
+	// ENFORCED BY: Airside.Model.Traffic.RunwayFreed.DespawnOnRunway, AirportOps.Present.ArrivalQueue.RetireFreesWithoutAdvance
+	DiffNow();
 	return true;
 }
 
@@ -1118,6 +1121,8 @@ void UGroundTraffic::ClearAgents()
 	// #169: AFTER Clear(), not folded into the loop above - the loop only announces; this is
 	// the point every claim actually goes.
 	++OccupancyRevisionCount;
+	// ENFORCED BY: Airside.Model.Traffic.RunwayFreed.ClearAgents
+	DiffNow();
 }
 
 bool UGroundTraffic::HoldStand(int32 HolderId, FGuidelineNodeId PoseNode)
@@ -1147,6 +1152,9 @@ void UGroundTraffic::ReleaseHold(int32 HolderId)
 	// #169: unconditional - releasing a hold nobody made is harmless (see ReleaseReservations's
 	// own comment) and a caller that just wants to be sure has no cheaper way to ask.
 	++OccupancyRevisionCount;
+	// A DECLINE, A CANCEL OR A DISPATCH gives a hold back between ticks - said now (review M1).
+	// ENFORCED BY: Airside.Model.Traffic.RunwayFreed.StandsDiff ("the release itself fires")
+	DiffNow();
 }
 
 bool UGroundTraffic::IsStandHeld(FGuidelineNodeId PoseNode, int32 ExcludingHolder) const
@@ -1193,6 +1201,14 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 	}
 }
 
+void UGroundTraffic::DiffNow()
+{
+	if (const URoadNetwork* Network = DiffNetwork.Get())
+	{
+		DiffFreedom(*Network, /*bRebuilt*/ false);
+	}
+}
+
 void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 {
 	// THE STRIPS, re-read only when the topology can have moved - see RunwaySeeds. A rebuild always re-reads:
@@ -1208,8 +1224,10 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 		RunwaySeedsRevision = Network.GetEditRevision();
 	}
 
+	DiffNetwork = &Network;
+
 	// HELD NOW, by the queue's own predicate - see OnRunwayFreed.
-	TArray<FRoadSegmentId> RunwaysNow;
+	TSet<FRoadSegmentId> RunwaysNow;
 	for (const FRoadSegmentId Seed : RunwaySeeds)
 	{
 		if (ArrivalPlanner::IsChainHeld(Network, Seed, &Occupancy))
@@ -1231,21 +1249,23 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 	HeldRunways = MoveTemp(RunwaysNow);
 
 	// THE STANDS, the same shape: IsStandCandidate is the one filter ChooseStand and UStandAllocator use, and
-	// IsStandHeld is what they ask of it.
-	TArray<FGuidelineNodeId> StandsNow;
-	for (const FEntityInstance& Stand : Network.GetEntities())
+	// IsStandHeld is what they ask of it. Keyed by entity - see HeldStands.
+	TMap<FEntityInstanceId, FGuidelineNodeId> StandsNow;
+	const TArray<FEntityInstance>& Entities = Network.GetEntities();
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
+		const FEntityInstance& Stand = Entities[Index];
 		if (Stand.IsStandCandidate() && IsStandHeld(Stand.PoseNode, 0))
 		{
-			StandsNow.Add(Stand.PoseNode);
+			StandsNow.Add(Network.EntityIdAt(Index), Stand.PoseNode);
 		}
 	}
 	TArray<FGuidelineNodeId> FreedStands;
-	for (const FGuidelineNodeId Pose : HeldStands)
+	for (const TPair<FEntityInstanceId, FGuidelineNodeId>& Was : HeldStands)
 	{
-		if (!StandsNow.Contains(Pose))
+		if (!StandsNow.Contains(Was.Key))
 		{
-			FreedStands.Add(Pose);
+			FreedStands.Add(Was.Value);
 		}
 	}
 	HeldStands = MoveTemp(StandsNow);

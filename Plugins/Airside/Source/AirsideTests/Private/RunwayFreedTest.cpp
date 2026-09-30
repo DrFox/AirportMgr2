@@ -175,8 +175,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRunwayFreedDespawnTest, "Airside.Model.Traffic
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FRunwayFreedDespawnTest::RunTest(const FString&)
 {
-	// THE PLAYER'S UNSTICK: an aircraft retired standing on the strip. RetireAgent drops its claims; the next
-	// Advance's diff says so.
+	// THE PLAYER'S UNSTICK: an aircraft retired standing on the strip. RetireAgent drops its claims and diffs AT
+	// ONCE (review M1): a release outside Advance used to wait for the next Advance, and a paused game has none - the
+	// queue's safety net then landed the flight with a false "no event covered it".
 	FCrossing C;
 	if (!TestTrue(TEXT("dispatched across the strip"), C.Build())) { return false; }
 	FRecorder Seen;
@@ -188,9 +189,25 @@ bool FRunwayFreedDespawnTest::RunTest(const FString&)
 		}))) { return false; }
 	TestEqual(TEXT("held: nothing yet"), Seen.Runways.Num(), 0);
 	C.Traffic->RetireAgent(C.Plane);
-	C.Traffic->Advance(0.05, C.Net);
-	TestEqual(TEXT("the despawn frees the strip on the next Advance"), Seen.Runways.Num(), 1);
+	TestEqual(TEXT("the despawn frees the strip at once, with no Advance"), Seen.Runways.Num(), 1);
 	TestEqual(TEXT("counted"), C.Traffic->RunwayFreedCount(), 1);
+	C.Traffic->Advance(0.05, C.Net);
+	TestEqual(TEXT("and the next Advance does not say it again"), Seen.Runways.Num(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRunwayFreedClearAgentsTest, "Airside.Model.Traffic.RunwayFreed.ClearAgents",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FRunwayFreedClearAgentsTest::RunTest(const FString&)
+{
+	// EVERY AGENT CLEARED (a load) empties the table outside Advance - the same "diff at once" as RetireAgent.
+	FCrossing C;
+	if (!TestTrue(TEXT("dispatched across the strip"), C.Build())) { return false; }
+	FRecorder Seen;
+	Seen.Bind(*C.Traffic);
+	if (!TestTrue(TEXT("the crossing takes the strip"), C.TickUntil(120.0, [&C]() { return C.Held(); }))) { return false; }
+	C.Traffic->ClearAgents();
+	TestEqual(TEXT("ClearAgents frees the strip at once"), Seen.Runways.Num(), 1);
 	return true;
 }
 
@@ -232,9 +249,9 @@ bool FRunwayFreedStandsTest::RunTest(const FString&)
 	for (int32 Tick = 0; Tick < 5; ++Tick) { Traffic->Advance(0.05, Net); }
 	TestEqual(TEXT("nothing while it is held"), Seen.Stands.Num(), 0);
 	Traffic->ReleaseHold(-7);
-	TestEqual(TEXT("the release alone fires nothing - the Advance's diff does"), Seen.Stands.Num(), 0);
-	Traffic->Advance(0.05, Net);
-	if (TestEqual(TEXT("released: one broadcast"), Seen.Stands.Num(), 1))
+	// AT ONCE, not on the next Advance (review M1): a hold given back by a decline or a cancel is released between
+	// ticks, and a paused game has no next Advance.
+	if (TestEqual(TEXT("the release itself fires: one broadcast"), Seen.Stands.Num(), 1))
 	{
 		TestTrue(TEXT("naming stand 0 alone"), Seen.Stands[0].Num() == 1 && Seen.Stands[0][0] == Pose(0));
 	}
@@ -251,23 +268,62 @@ bool FRunwayFreedStandsTest::RunTest(const FString&)
 	TestTrue(TEXT("its goal holds stand 1"), Traffic->IsStandHeld(Pose(1), 0));
 	TestEqual(TEXT("and nothing fires for a stand taken"), Seen.Stands.Num(), 1);
 	Traffic->RetireAgent(Plane);
-	Traffic->Advance(0.05, Net);
-	if (TestEqual(TEXT("the agent gone: stand 1 freed"), Seen.Stands.Num(), 2))
+	if (TestEqual(TEXT("the agent gone: stand 1 freed at once"), Seen.Stands.Num(), 2))
 	{
 		TestTrue(TEXT("stand 1 alone"), Seen.Stands[1].Num() == 1 && Seen.Stands[1][0] == Pose(1));
 	}
 
-	// A HELD STAND DELETED: the rebuild reports it at once.
+	// A HELD STAND DELETED, BOTH HELD (review I2): the rebuild reports the deleted one - and ONLY it. Before the
+	// rebuild kept its own holds (review I1) every hold read as freed here, so "contains stand 0" measured nothing.
 	const FGuidelineNodeId Old = Pose(0);
+	const FGuidelineNodeId Kept = Pose(1);
 	TestTrue(TEXT("stand 0 held again"), Traffic->HoldStand(-8, Old));
+	TestTrue(TEXT("and stand 1"), Traffic->HoldStand(-9, Kept));
 	Traffic->Advance(0.05, Net);
+	const int32 Before = Seen.Stands.Num();
 	Net->RemoveEntity(Field.Stands[0]);
 	TestGraph::Rebuild(*Net);
 	Traffic->OnGraphRebuilt(*Net);
-	if (TestEqual(TEXT("the rebuild reports the deleted stand freed"), Seen.Stands.Num(), 3))
+	if (TestEqual(TEXT("the rebuild reports one broadcast"), Seen.Stands.Num(), Before + 1))
 	{
-		TestTrue(TEXT("by the pose it had"), Seen.Stands[2].Contains(Old));
+		TestTrue(TEXT("naming the deleted stand 0 alone - stand 1's hold survived the rebuild"),
+			Seen.Stands.Last().Num() == 1 && Seen.Stands.Last()[0] == Old);
 	}
+	TestEqual(TEXT("stand 1 is still held by its flight"), Traffic->HolderOfNode(Kept), -9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRunwayFreedRebuildKeepsHoldsTest, "Airside.Model.Traffic.RebuildKeepsStandHolds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FRunwayFreedRebuildKeepsHoldsTest::RunTest(const FString&)
+{
+	// REVIEW I1: a guideline rebuild released every Node claim - flight holds with the agents' - and only a load ever
+	// re-held them, so any edit in play left accepted flights' stands open to the next accept. The traffic model made
+	// these reservations and now keeps them through its own rebuild, re-held on the same stand ENTITY.
+	FTestAirportOptions Options;
+	Options.StandCount = 2;
+	const FTestAirport Field = FTestAirport::Build(TestAirframes::Piper(), Options);
+	URoadNetwork* Net = Field.Net;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	FRecorder Seen;
+	Seen.Bind(*Traffic);
+	TestTrue(TEXT("stand 0 held for a flight"), Traffic->HoldStand(-7, Field.Pose(Field.Stands[0])));
+	TestTrue(TEXT("stand 1 held for another"), Traffic->HoldStand(-8, Field.Pose(Field.Stands[1])));
+	Traffic->Advance(0.05, Net);
+
+	TestGraph::Rebuild(*Net);
+	Traffic->OnGraphRebuilt(*Net);
+	TestEqual(TEXT("after the rebuild stand 0 is still held, by its own holder"), Traffic->HolderOfNode(Field.Pose(Field.Stands[0])), -7);
+	TestEqual(TEXT("and stand 1 by its"), Traffic->HolderOfNode(Field.Pose(Field.Stands[1])), -8);
+	TestEqual(TEXT("so nothing is reported freed"), Seen.Stands.Num(), 0);
+
+	// A HOLD WHOSE STAND IS GONE is dropped: nothing to re-hold, and the flight's dead Stand is HeldStandLost's evidence.
+	Net->RemoveEntity(Field.Stands[0]);
+	TestGraph::Rebuild(*Net);
+	Traffic->OnGraphRebuilt(*Net);
+	TestFalse(TEXT("the deleted stand's holder holds nothing"),
+		Traffic->GetOccupancy().GetClaims().ContainsByPredicate([](const FTrafficClaim& C) { return C.AgentId == -7; }));
+	TestEqual(TEXT("the other hold still stands"), Traffic->HolderOfNode(Field.Pose(Field.Stands[1])), -8);
 	return true;
 }
 

@@ -861,12 +861,23 @@ private:
 	 * end of OnGraphRebuilt, bRebuilt true: a rebuild re-reads the runways at once, and whatever vanished is
 	 * not held now, so it is freed - a deleted runway is no longer busy.
 	 *
+	 * AND AT THE END OF EVERY RELEASE OUTSIDE ADVANCE - RetireAgent, ReleaseHold, ClearAgents (PR D review M1),
+	 * through DiffNow: a freed runway or stand waiting for the next Advance is an event that never comes while
+	 * the motion is paused, and the arrival queue's safety net then lands the flight with a false Warning.
+	 *
 	 * A DIFF RATHER THAN A POLL BY EACH LISTENER: the question is asked once here, where the table lives, and
 	 * AirportOps hears a change instead of asking every runway every frame. Cost: one IsChainHeld per runway
-	 * and one IsStandHeld per stand per Advance - 2 runways and 30 stands on the largest test field
-	 * (FTestAirport::BuildScale, 2026-09-30).
+	 * and one IsStandHeld per stand, plus a set/map lookup each for the baseline, per call - 2 runways and 30
+	 * stands on the largest test field (FTestAirport::BuildScale, 2026-09-30).
 	 */
 	void DiffFreedom(const URoadNetwork& Network, bool bRebuilt);
+
+	/** DiffFreedom on the network the last one read (DiffNetwork), for a release made between ticks with no
+	 *  network to hand. Nothing if there has been no diff yet, or that network is gone. */
+	void DiffNow();
+
+	/** The network DiffFreedom last read. WEAK: a level change can take it away between two calls. */
+	TWeakObjectPtr<const URoadNetwork> DiffNetwork;
 
 	/**
 	 * Every runway's seed, one per strip (AirsideCapability::SummariseRunways), as of RunwaySeedsRevision on
@@ -879,10 +890,14 @@ private:
 	const URoadNetwork* RunwaySeedsNetwork = nullptr;
 
 	/** The strips held at the last DiffFreedom - the baseline the next one compares against. */
-	TArray<FRoadSegmentId> HeldRunways;
+	TSet<FRoadSegmentId> HeldRunways;
 
-	/** The stand pose nodes held at the last DiffFreedom. */
-	TArray<FGuidelineNodeId> HeldStands;
+	/**
+	 * The stands held at the last DiffFreedom, BY ENTITY (review M2), each with the pose node it had then - the
+	 * pose OnStandsFreed reports, which for a deleted stand no longer exists anywhere else. By entity rather than
+	 * by pose so the baseline names the thing a flight holds, not a graph handle.
+	 */
+	TMap<FEntityInstanceId, FGuidelineNodeId> HeldStands;
 
 	/** See RunwayFreedCount. A session counter, not saved. */
 	int32 RunwayFreedTotal = 0;

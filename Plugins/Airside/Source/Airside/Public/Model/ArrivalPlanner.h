@@ -270,11 +270,11 @@ namespace ArrivalPlanner
 		const FTrafficOccupancy* Occupancy);
 
 	/**
-	 * Is any segment of Seed's strip held - by anyone, a reservation included. False with no occupancy. The ONE
-	 * predicate behind IsRunwayBusy, Plan's free-before-held ranking and UGroundTraffic's OnRunwayFreed diff
-	 * (ops batch 3 §5): public since 2026-09-30 so the diff calls this function rather than a copy of it, and
-	 * "freed" can only mean "what the queue asks just turned false".
-	 * ENFORCED BY: Airside.Model.Traffic.RunwayFreed.CrossingClears (the diff and this agree on every tick)
+	 * Is any segment of Seed's strip held - by anyone, a reservation included. False with no occupancy. Asked by
+	 * IsRunwayBusy, by Plan's free-before-held ranking and by UGroundTraffic's OnRunwayFreed diff (ops batch 3
+	 * §5): public since 2026-09-30 so the diff can call this function rather than carry a copy of it, and "freed"
+	 * means "what the queue asks just turned false". The tests measure the diff against this function's answer
+	 * tick by tick (Airside.Model.Traffic.RunwayFreed.*); no test can see a second copy that happens to agree.
 	 */
 	AIRSIDE_API bool IsChainHeld(const URoadNetwork& Network, FRoadSegmentId Seed, const FTrafficOccupancy* Occupancy);
 
