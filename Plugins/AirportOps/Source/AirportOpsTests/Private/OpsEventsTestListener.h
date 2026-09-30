@@ -19,16 +19,12 @@ class UOpsEventsTestListener : public UObject
 public:
 	TArray<FString> Seen;
 
-	UFUNCTION() void OnPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
-	{
-		Seen.Add(FString::Printf(TEXT("phase:%d:%d->%d"), AgentId, static_cast<int32>(From), static_cast<int32>(To)));
-	}
 	UFUNCTION() void OnRefused(EArrivalRefusal Why) { Seen.Add(FString::Printf(TEXT("refused:%d"), static_cast<int32>(Why))); }
-	UFUNCTION() void OnSpeed(ESimSpeed Speed) { Seen.Add(FString::Printf(TEXT("speed:%d"), static_cast<int32>(Speed))); }
 	UFUNCTION() void OnNote(const FString& Text) { Seen.Add(TEXT("note:") + Text); }
 	UFUNCTION() void OnAlertRaised(const FOpsAlert& Alert) { Seen.Add(TEXT("alert+:") + UEnum::GetValueAsString(Alert.Key.Kind)); }
 	UFUNCTION() void OnAlertsReset() { Seen.Add(TEXT("reset")); }
 	UFUNCTION() void OnAlertCleared(const FOpsAlertKey& Key) { Seen.Add(TEXT("alert-:") + UEnum::GetValueAsString(Key.Kind)); }
+	UFUNCTION() void OnAlertChanged(const FOpsAlertKey& Key) { Seen.Add(TEXT("alert~:") + UEnum::GetValueAsString(Key.Kind)); }
 	UFUNCTION() void OnBuildRefused(const FString& What, const FString& Price, const FString& Balance) { Seen.Add(TEXT("refused:") + What); }
 	UFUNCTION() void OnLandRefused(EArrivalRefusal Why, const FString& Sentence)
 	{
@@ -54,6 +50,21 @@ public:
 		if (SaveOnNote != nullptr && Text == TEXT("autosave"))
 		{
 			bSavedFromHandler = SaveOnNote->SaveToSlot(SaveSlot);
+		}
+	}
+
+	/** The load's twin (#445, AirportOps.Present.Bus.LoadFromAHandlerIsRefused): a Presentation handler that LOADS when told to. The
+	 *  result is what LoadFromSlot answered from inside the drain - false is the guard. */
+	UPROPERTY() TObjectPtr<UOpsRuntime> LoadOnNote;
+	FString LoadSlot;
+	bool bLoadAnswered = false;
+	bool bLoadedFromHandler = false;
+	UFUNCTION() void OnNoteLoad(const FString& Text)
+	{
+		if (LoadOnNote != nullptr && Text == TEXT("autoload"))
+		{
+			bLoadAnswered = true;
+			bLoadedFromHandler = LoadOnNote->LoadFromSlot(LoadSlot);
 		}
 	}
 };

@@ -895,12 +895,13 @@ $AllowedCallers = @(
         # AN AGENT'S TRANSITION IS BROADCAST FROM ONE DOOR (#436). UGroundTraffic broadcast OnAgentPhaseChanged from eight
         # sites, one of them a Before/After diff, each passing (Id, From, To) and dropping WHY - so ops re-derived the
         # cause from the live agent a drain late. Now every site builds an FAgentTransition and hands it to
-        # UGroundTraffic::Announce; rule 48 holds GroundTraffic.cpp to the one call inside it. The two other files are
-        # RELAYS of a delegate of the same name: UAirsideTraffic passes the model's transition on whole, and UOpsEvents
-        # is the ops bus's Blueprint face. Tests are exempt: OpsRuntimeBusTest stages a transition on the relay directly.
+        # UGroundTraffic::Announce; rule 48 holds GroundTraffic.cpp to the one call inside it. The other file is a
+        # RELAY of a delegate of the same name: UAirsideTraffic passes the model's transition on whole. (UOpsEvents was a third, the
+        # ops bus's Blueprint face, until #445 cut its phase delegate - nothing listened.) Tests are exempt: OpsRuntimeBusTest stages
+        # a transition on the relay directly.
         Name        = 'OnAgentPhaseChanged.Broadcast'
         Pattern     = '\bOnAgentPhaseChanged\.Broadcast\s*\('
-        ProdAllowed = @('Private\Model\GroundTraffic.cpp', 'Private\Present\AirsideTraffic.cpp', 'Private\Model\OpsEvents.cpp')
+        ProdAllowed = @('Private\Model\GroundTraffic.cpp', 'Private\Present\AirsideTraffic.cpp')
         TestExempt  = $true
         ProdReason  = 'build an FAgentTransition where the change is made and hand it to UGroundTraffic::Announce, the one broadcast (#436)'
     },
@@ -910,7 +911,7 @@ $AllowedCallers = @(
         # what GroundTraffic.cpp's re-entrancy comment now says. A third binder is a listener that may act mid-Advance
         # again (UJobBoard used to); it must publish, or the comment and the contract it describes must change with it.
         Name        = 'OnAgentPhaseChanged bound'
-        Pattern     = '\bOnAgentPhaseChanged\.Add(UObject|Lambda|Raw|SP)\s*\('
+        Pattern     = '\bOnAgentPhaseChanged\.Add(UObject|Lambda|WeakLambda|Raw|SP)\s*\('
         ProdAllowed = @('Private\Present\AirsideTraffic.cpp', 'Private\Present\OpsRuntime.cpp')
         TestExempt  = $true
         ProdReason  = 'bind through UOpsRuntime (it publishes into the ops bus; handlers run a drain later) - a production listener that acts inside the broadcast re-enters UGroundTraffic mid-Advance (#436, #193)'
@@ -1193,6 +1194,16 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Model\InspectFacts.h', 'Private\Model\InspectFacts.cpp', 'Source\AirportMgr\InspectorNetworkCards.cpp', 'Source\AirportMgr\RoadBuildController.cpp')
         TestExempt  = $true
         ProdReason  = "ask ARoadBuildController::SelectedRunwayFactsThisFrame - one describe a frame for every bar row that needs the selected runway's facts (#446); the runway card's own call is InspectorNetworkCards.cpp's, gated by its key"
+    },
+    @{
+        # THE BUS POINTERS ARE POINTED AND TAKEN BACK IN ONE LOOP EACH (#445): UOpsRuntime::Publishers() is the list, Attach writes every
+        # slot and Detach clears every slot. A `*Publisher.Slot =` anywhere else is a second writer - a publisher pointed at a bus the runtime
+        # does not know it gave it to, and never taken back. (Rule 71 counts the list against the classes that declare a Bus field.)
+        Name        = 'UOpsRuntime publisher slot written'
+        Pattern     = '\*\s*\w+\.Slot\s*=(?!=)'
+        ProdAllowed = @('Private\Present\OpsRuntime.cpp')
+        TestExempt  = $true
+        ProdReason  = 'point a publisher at the bus by adding it to UOpsRuntime::Publishers(); Attach and Detach are the only writers of its slots (#445)'
     }
 )
 # EACH FILE'S COMMENT-STRIPPED LINES, made once and only for a file some row's raw pattern hits (Strip-ArchComments, with the helpers at the top).
@@ -2224,7 +2235,7 @@ if (-not (Test-Path $queuePassFile)) {
     $failures.Add("queue-is-a-pass: $queuePassFile is named by rule 33 but does not exist - update the rule")
 }
 else {
-    $queueRunner = Select-String -Path $queuePassFile -Pattern 'void UOpsRuntime::RunArrivalQueue\(\)'
+    $queueRunner = Select-String -Path $queuePassFile -Pattern 'void UOpsRuntime::RunArrivalQueue\('
     if ($null -eq $queueRunner) {
         $failures.Add("queue-is-a-pass: UOpsRuntime::RunArrivalQueue not found in $queuePassFile - update rule 33")
     }
@@ -2359,79 +2370,13 @@ foreach ($factsTree in $factsTrees) {
 }
 $ranRules.Add('facts-through-facade')
 
-# --- 36. A PASS IS DIRTIED THROUGH ITS FUNNEL ---------------------------------------------------
-# Ops push-ground-freed review (I2, 2026-09-30): the JobBoard and ArrivalQueue passes tell a run an event asked for from
-# a run only the safety net asked for by a COVERED flag, which their funnels set - UOpsRuntime::DirtyJobBoard and
-# UOpsRuntime::DirtyArrivalQueue. A raw Bus.MarkDirty(TEXT("JobBoard")) anywhere else leaves the flag down, and a real
-# event's run is then logged as the net finding a missing event - a false Warning, or (worse, once the Warning is
-# trusted) a missing event hidden among false ones.
-# So any MarkDirty* call (MarkDirty, MarkDirtyNextDrain, whatever is added next) whose STATEMENT names either pass in
-# quotes - TEXT("JobBoard"), FName("JobBoard"), a bare "JobBoard", on one line or split across several - may appear only
-# at the sites listed in $passAllowed, by function: MarkDirty in the pass's funnel and in UOpsRuntime::ArmSafetyNet (the
-# net's own clock entry); MarkDirtyNextDrain where it is today (the JobBoard pass's unresolved retry, registered in
-# WireBus; RunArrivalQueue's one-a-frame deferral and dispatch retry). MarkAllDirty (a load's catch-up, net cancelled)
-# does not match \bMarkDirty.
-# HARDENED in the scoped re-review (M-3): statements are joined across lines and cut at ; { and } - so a subscription's
-# own pass key (Subscribe<...>(Tier, TEXT("JobBoard"), ...) {) is not read as the call in its body; // comments are
-# stripped outside string literals, and a line inside a /* */ block uses rule 34's stripper; an allowed site that is no
-# longer found fails the rule, as does a missing funnel, rather than letting it check nothing.
-$passAllowed = @{
-    'MarkDirty|JobBoard'              = @('UOpsRuntime::DirtyJobBoard', 'UOpsRuntime::ArmSafetyNet')
-    'MarkDirty|ArrivalQueue'          = @('UOpsRuntime::DirtyArrivalQueue', 'UOpsRuntime::ArmSafetyNet')
-    'MarkDirtyNextDrain|JobBoard'     = @('UOpsRuntime::WireBus')
-    'MarkDirtyNextDrain|ArrivalQueue' = @('UOpsRuntime::RunArrivalQueue')
-}
-$passOwner = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps\Private\Present\OpsRuntime.cpp'
-foreach ($funnel in @('UOpsRuntime::DirtyJobBoard', 'UOpsRuntime::DirtyArrivalQueue', 'UOpsRuntime::ArmSafetyNet')) {
-    if (-not (Test-Path $passOwner) -or $null -eq (Select-String -Path $passOwner -SimpleMatch -Pattern "void $funnel(")) {
-        $failures.Add("pass-dirtied-through-funnel: $funnel not found in $passOwner - update rule 36, do not let it check nothing")
-    }
-}
-$passSeen = @{}
-$passTrees = @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'), (Join-Path $Root 'Source\AirportMgr'))
-foreach ($passTree in $passTrees) {
-    foreach ($file in Get-Sources $passTree @('.cpp', '.h')) {
-        if ($file.Name -like '*Test.cpp') { continue }
-        $lines = Get-Content -LiteralPath $file.FullName
-        $current = ''
-        $inBlock = $false
-        $statement = ''
-        $statementLine = 0
-        $statementFunction = ''
-        for ($i = 0; $i -lt $lines.Count; $i++) {
-            $wasInBlock = $inBlock
-            $stripped = Strip-ArchCode $lines[$i] ([ref]$inBlock)
-            if ($stripped.Trim() -ne '') {
-                $definition = Get-ArchDefinition $stripped
-                if ($null -ne $definition) { $current = $definition }
-            }
-            # STRINGS KEPT: the pass name is a literal. // outside a literal ends the code; a block comment's line
-            # (rare in this code) falls back to the stripper, literals blanked.
-            $code = if ($wasInBlock -or $inBlock) { $stripped } else { $lines[$i] -replace '^((?:[^"/]|"(?:[^"\\]|\\.)*"|/(?!/))*)//.*$', '$1' }
-            foreach ($piece in ($code -split '(?<=[;{}])')) {
-                if ($statement.Trim() -eq '') { $statementLine = $i + 1; $statementFunction = $current }
-                $statement += ' ' + $piece
-                if ($piece -notmatch '[;{}]\s*$') { continue }
-                $call = [regex]::Match($statement, '\b(MarkDirty\w*)\s*\(')
-                if ($call.Success) {
-                    foreach ($pass in @('JobBoard', 'ArrivalQueue')) {
-                        if ($statement -notmatch ('"' + $pass + '"')) { continue }
-                        $key = "$($call.Groups[1].Value)|$pass"
-                        if ($passAllowed.ContainsKey($key) -and ($passAllowed[$key] -contains $statementFunction)) { $passSeen[$key] = $true; continue }
-                        $failures.Add("pass-dirtied-through-funnel: $($file.Name):$statementLine calls $($call.Groups[1].Value) for the $pass pass from $statementFunction - dirty it through its funnel (UOpsRuntime::Dirty$pass), which sets the covered flag the safety net reads")
-                    }
-                }
-                $statement = ''
-            }
-        }
-    }
-}
-foreach ($key in $passAllowed.Keys) {
-    if (-not $passSeen.ContainsKey($key)) {
-        $failures.Add("pass-dirtied-through-funnel: no $($key -replace '\|', ' for the ') pass found at its allowed site(s) - it moved; update rule 36")
-    }
-}
-$ranRules.Add('pass-dirtied-through-funnel')
+# --- 36. RETIRED (#445) - see rule 59 ---------------------------------------------------------
+# It held the funnels UOpsRuntime::DirtyJobBoard / DirtyArrivalQueue / ArmSafetyNet, which existed only to set a hand-kept "covered" flag the two
+# net-watched passes read to tell a run an event asked for from a run only the safety net asked for. That fact is the bus's now
+# (EPassCause, carried by FPassRun) and the net is FOpsSafetyNet's, so there is no flag and no funnel to keep used: a raw
+# MarkDirty(TEXT("JobBoard")) IS the event cause. What the old rule protected - a real event's run being misread as the net's - can now be
+# done wrong one way only, by minting EPassCause::SafetyNet outside the net, which rule 59 holds. The number is left here so a comment that
+# names "rule 36" finds this.
 
 # --- 37. A PERSISTENT OBJECT SAVES NO POINTER TO A RUNTIME OBJECT -------------------------------
 # Issue #425: OpsSave writes every non-Transient UPROPERTY of an IOpsPersistent through FObjectAndNameAsStringProxyArchive,
@@ -3393,7 +3338,7 @@ else {
     if ($bridgeText -notmatch 'void\s+UOpsRuntime::OnNetworkChanged\s*\(') {
         $failures.Add("network-change-announced: UOpsRuntime::OnNetworkChanged not found in OpsRuntime.cpp - the bridge moved or went; update rule 51, do not let it check nothing")
     }
-    if ($bridgeText -notmatch 'OnNetworkChanged\.AddUObject\s*\(\s*this\s*,\s*&UOpsRuntime::OnNetworkChanged\s*\)') {
+    if ($bridgeText -notmatch 'OnNetworkChanged\.AddUObject\s*\(\s*(?:this|&Runtime)\s*,\s*&UOpsRuntime::OnNetworkChanged\s*\)') {
         $failures.Add("network-change-announced: OpsRuntime.cpp never binds Target->OnNetworkChanged to UOpsRuntime::OnNetworkChanged - the bridge is unwired, and ops would hear no network change at all (#446)")
     }
     $lines = Get-Content -LiteralPath $bridgeFile
@@ -4405,6 +4350,150 @@ else {
     }
 }
 $ranRules.Add('actor-public-members-called')
+
+# --- 59. THE SAFETY-NET CAUSE IS MINTED BY THE NET ALONE, AND THE PASS BOOKKEEPING STAYS OUT OF THE ROOT -------
+# #445, REPLACING rule 36. The job board's and the arrival queue's passes told a run an event asked for from a run only the net asked for by a
+# hand-set pair of flags on UOpsRuntime (covered / safety due) plus a wanted bool, a funnel function each and a frame counter for
+# one-clearance-a-frame - about nine fields the class's own contract ("GROWS BY FORWARDING") called false, which review corrected three times.
+# The bus carries the cause for EVERY pass now (MarkDirty(Pass, EPassCause), FPassRun) and FOpsSafetyNet owns the net, so the one way left to
+# get it wrong is to mark a pass as the net's from somewhere that is not the net: the run would then be suspect for finding work, and a
+# real event's run would be logged as a missing event. So:
+#   a. EPassCause::SafetyNet is named in code only by OpsEventBus.h/.cpp (the enum and its default) and OpsSafetyNet.cpp (Fire) in production;
+#      tests may name it (they stage a net run).
+#   b. UOpsRuntime.h/.cpp declare no pass-why bookkeeping again: no `b...SafetyDue` / `b...Covered` / `b...NetWanted` / `...ClearedFrame`
+#      field, no DrainFrame, no DirtyJobBoard/DirtyArrivalQueue funnel. A fourth net-watched pass is one Want() call on the net.
+# WHAT NO REGEX SEES: a caller that builds the cause from a variable or a cast (`static_cast<EPassCause>(0)`) - the enum is three values and
+# the test AirportOps.Model.Bus.PassRunCarriesItsCause pins what each means. The rule FAILS rather than checking nothing when the net no
+# longer names the cause.
+$causeAllowed = @('Public\Model\OpsEventBus.h', 'Private\Model\OpsEventBus.cpp', 'Private\Model\OpsSafetyNet.cpp')
+$causeMinter = Join-Path $ops 'Private\Model\OpsSafetyNet.cpp'
+$causeMinterSeen = $false
+foreach ($causeTree in @($ops, (Join-Path $Root 'Source\AirportMgr'))) {
+    foreach ($file in Get-Sources $causeTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h') { continue }
+        $causeOk = $false
+        foreach ($allowedFile in $causeAllowed) { if (Test-AllowedPathSuffix $file $allowedFile) { $causeOk = $true } }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code -notmatch '\bEPassCause::SafetyNet\b') { continue }
+            if ($causeOk) {
+                if ($file.FullName -eq $causeMinter) { $causeMinterSeen = $true }
+                continue
+            }
+            $failures.Add("safety-cause-minted-by-the-net: $($file.Name):$($i + 1) names EPassCause::SafetyNet - only FOpsSafetyNet marks a pass as the net's; an event's run marked so is reported as a missing event (#445): $($code.Trim())")
+        }
+    }
+}
+if (-not (Test-Path $causeMinter)) {
+    $failures.Add("safety-cause-minted-by-the-net: $causeMinter is named by rule 59 but does not exist - update the rule, do not let it check nothing")
+}
+elseif (-not $causeMinterSeen) {
+    $failures.Add("safety-cause-minted-by-the-net: OpsSafetyNet.cpp no longer names EPassCause::SafetyNet - the net moved or was renamed; update rule 59, do not let it check nothing")
+}
+foreach ($rootFile in @((Join-Path $ops 'Public\Present\OpsRuntime.h'), (Join-Path $ops 'Private\Present\OpsRuntime.cpp'))) {
+    if (-not (Test-Path $rootFile)) {
+        $failures.Add("safety-cause-minted-by-the-net: $rootFile is named by rule 59 but does not exist - update the rule")
+        continue
+    }
+    $lines = Get-Content -LiteralPath $rootFile
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code -match '\b(?:bool|uint64)\s+b?\w*(?:SafetyDue|Covered|NetWanted|ClearedFrame)\b|\bDrainFrame\b|\bDirty(?:JobBoard|ArrivalQueue)\s*\(') {
+            $failures.Add("safety-cause-minted-by-the-net: $([System.IO.Path]::GetFileName($rootFile)):$($i + 1) brings pass bookkeeping back onto the composition root - the cause is the bus's (FPassRun), the net is FOpsSafetyNet's, one-clearance-a-frame is the flight board's (#445): $($code.Trim())")
+        }
+    }
+}
+$ranRules.Add('safety-cause-minted-by-the-net')
+
+# --- 71. EVERY OBJECT HOLDING A RAW BUS POINTER IS LISTED IN UOpsRuntime::Publishers ------------------------------
+# #445: the list of objects holding `FOpsEventBus* Bus` was kept by hand in three places - Attach, Detach and the Detach test - and they
+# already disagreed (UFacilityPurchases was set in the constructor, never cleared, and in none of them). It is ONE list now, like
+# Persistents(): UOpsRuntime::Publishers(), which Attach and Detach loop over and the test walks. What a loop cannot see is a class that
+# declares the field and is left off the list, so this counts: every `FOpsEventBus* Bus = nullptr;` field in a header under AirportOps
+# Public/ is one entry in Publishers() (FOpsSafetyNet's own binding is not a publisher - it marks passes, it publishes nothing - and is
+# skipped by file). And the hand-kept shape does not come back: no `X->Bus = &Bus;` line in OpsRuntime.cpp.
+# WHAT NO REGEX SEES: a publisher that reaches the bus another way (a captured `Bus` reference, a getter) - there are none today, and the
+# header says to add a field and a list entry. The rule FAILS rather than checking nothing when Publishers() or a declaration is gone.
+$publisherFile = Join-Path $ops 'Private\Present\OpsRuntime.cpp'
+$publisherDeclared = 0
+$publisherDeclaredIn = @()
+foreach ($file in Get-Sources (Join-Path $ops 'Public') @('.h')) {
+    if ($file.Name -eq 'OpsSafetyNet.h') { continue }
+    $lines = Get-Content -LiteralPath $file.FullName
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code -match '\bFOpsEventBus\s*\*\s*Bus\s*=\s*nullptr\s*;') {
+            $publisherDeclared++
+            $publisherDeclaredIn += "$($file.Name):$($i + 1)"
+        }
+    }
+}
+if (-not (Test-Path $publisherFile)) {
+    $failures.Add("every-bus-publisher-is-listed: $publisherFile is named by rule 71 but does not exist - update the rule")
+}
+else {
+    $lines = Get-Content -LiteralPath $publisherFile
+    $inBlock = $false
+    $inList = $false
+    $listFound = $false
+    $publisherListed = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($lines[$i] -match '^TArray<UOpsRuntime::FOpsBusPublisher>\s+UOpsRuntime::Publishers\s*\(') { $inList = $true; $listFound = $true }
+        elseif ($inList -and $lines[$i] -match '^\}') { $inList = $false }
+        elseif ($inList -and $code -match '\bOut\.Add\(\s*\{') { $publisherListed++ }
+        if ($code -match '\b\w+\s*->\s*Bus\s*=\s*&\s*Bus\s*;') {
+            $failures.Add("every-bus-publisher-is-listed: OpsRuntime.cpp:$($i + 1) points a publisher at the bus by hand - add it to UOpsRuntime::Publishers(), which Attach and Detach loop over (#445): $($code.Trim())")
+        }
+    }
+    if (-not $listFound) {
+        $failures.Add("every-bus-publisher-is-listed: UOpsRuntime::Publishers() not found in OpsRuntime.cpp - the list moved; update rule 71, do not let it check nothing")
+    }
+    elseif ($publisherDeclared -eq 0) {
+        $failures.Add("every-bus-publisher-is-listed: found no 'FOpsEventBus* Bus = nullptr;' field under AirportOps Public/ - the declaration's shape changed; update rule 71, do not let it check nothing")
+    }
+    elseif ($publisherDeclared -ne $publisherListed) {
+        $failures.Add("every-bus-publisher-is-listed: $publisherDeclared class(es) declare an FOpsEventBus* Bus ($($publisherDeclaredIn -join ', ')) but UOpsRuntime::Publishers() lists $publisherListed - a publisher left off the list is never pointed at the bus, or never taken back (#445)")
+    }
+}
+$ranRules.Add('every-bus-publisher-is-listed')
+
+# --- 72. A SAVE AND A LOAD ASK THE BUS WHETHER IT IS DRAINING ------------------------------------------------------
+# #445: SaveToSlot guards a call from inside a drain (a Blueprint autosave on a notification would re-enter Drain and assert); LoadFromSlot had no
+# guard, and from a Presentation handler it would Discard the queue while Drain still held its moved-out batch - the rest of it, events naming the
+# agents of the airport being replaced, dispatched against the restored boards. Both bodies must ask Bus.IsDraining(); the test
+# AirportOps.Present.Bus.LoadFromAHandlerIsRefused measures what the load does when it is. WHAT NO REGEX SEES: a guard that asks and does the
+# wrong thing - that is the test's. The rule FAILS rather than checking nothing when either body is gone.
+$reentryFile = Join-Path $ops 'Private\Present\OpsRuntime.cpp'
+if (Test-Path $reentryFile) {
+    $reentryLines = Get-Content -LiteralPath $reentryFile
+    foreach ($entry in @('SaveToSlot', 'LoadFromSlot')) {
+        $inBody = $false
+        $found = $false
+        $asks = $false
+        $inBlock = $false
+        for ($i = 0; $i -lt $reentryLines.Count; $i++) {
+            $code = Strip-ArchCode $reentryLines[$i] ([ref]$inBlock)
+            if ($reentryLines[$i] -match "^bool\s+UOpsRuntime::$entry\s*\(") { $inBody = $true; $found = $true }
+            elseif ($inBody -and $reentryLines[$i] -match '^\}') { $inBody = $false }
+            elseif ($inBody -and $code -match '\bBus\s*\.\s*IsDraining\s*\(') { $asks = $true }
+        }
+        if (-not $found) {
+            $failures.Add("bus-reentry-guarded: UOpsRuntime::$entry not found in OpsRuntime.cpp - update rule 72, do not let it check nothing")
+        }
+        elseif (-not $asks) {
+            $failures.Add("bus-reentry-guarded: UOpsRuntime::$entry never asks Bus.IsDraining() - called from a Presentation handler it would re-enter the drain or discard its batch (#445)")
+        }
+    }
+}
+else {
+    $failures.Add("bus-reentry-guarded: $reentryFile is named by rule 72 but does not exist - update the rule")
+}
+$ranRules.Add('bus-reentry-guarded')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

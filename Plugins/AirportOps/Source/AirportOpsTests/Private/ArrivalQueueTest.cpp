@@ -155,6 +155,46 @@ bool FQueueJoinOrderTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueOnePerFrameRuleTest, "AirportOps.Model.FlightBoard.OneClearanceAFrameIsTheQueuesRule",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueOnePerFrameRuleTest::RunTest(const FString& Parameters)
+{
+	// #445: ONE CLEARANCE A FRAME was the runtime's - a frame counter and a "cleared in frame N" on UOpsRuntime - though the rule is the queue's:
+	// the aircraft just cleared claims the runway on its first motion tick, so a second clearance in the frame of the first is decided before
+	// that claim exists. The board keeps it now (BeginQueueFrame), and says bDeferred to the second ask.
+	FQueueRig Rig(/*Stands*/ 2);
+	UFlight* First = Rig.Accepted(10.0);
+	UFlight* Second = Rig.Accepted(20.0);
+	Rig.HoldRunway();
+	Rig.Clock->Advance(21.0);
+	Rig.FreeRunway();
+	if (!TestEqual(TEXT("PRECONDITION: both are holding"), Rig.Board->Queue().Num(), 2)) { return false; }
+
+	Rig.Board->BeginQueueFrame();
+	const FQueueTick Cleared = Rig.Board->TickQueue(*Rig.Traffic, *Rig.Airport.Net, *Rig.Clock);
+	TestTrue(TEXT("the first ask of the frame clears the first to join"), Cleared.Cleared == First && !Cleared.bDeferred);
+	const FQueueTick Again = Rig.Board->TickQueue(*Rig.Traffic, *Rig.Airport.Net, *Rig.Clock);
+	TestTrue(TEXT("a second ask in the SAME frame is deferred, not decided"), Again.bDeferred && Again.Cleared == nullptr);
+	TestEqual(TEXT("and the second flight still waits"), Second->GetPhase(), EFlightPhase::Inbound);
+	TestEqual(TEXT("with one dispatch in total"), Rig.Dispatched, 1);
+
+	Rig.Board->BeginQueueFrame();
+	const FQueueTick Next = Rig.Board->TickQueue(*Rig.Traffic, *Rig.Airport.Net, *Rig.Clock);
+	TestTrue(TEXT("the next frame clears the second"), Next.Cleared == Second && !Next.bDeferred);
+
+	// A BOARD NOBODY FRAMES sets its own pace (a world-free test driving TickQueue by hand), and is not refused for ever after one clearance.
+	FQueueRig Loose(/*Stands*/ 2);
+	UFlight* A = Loose.Accepted(10.0);
+	UFlight* B = Loose.Accepted(20.0);
+	Loose.HoldRunway();
+	Loose.Clock->Advance(21.0);
+	Loose.FreeRunway();
+	const FQueueTick One = Loose.Board->TickQueue(*Loose.Traffic, *Loose.Airport.Net, *Loose.Clock);
+	const FQueueTick Two = Loose.Board->TickQueue(*Loose.Traffic, *Loose.Airport.Net, *Loose.Clock);
+	TestTrue(TEXT("CONTROL: with no frame begun, nothing is deferred"), One.Cleared == A && Two.Cleared == B && !Two.bDeferred);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueFreeRunwayJumpsTest, "AirportOps.Model.ArrivalQueue.FreeRunwayJumpsTheQueue",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FQueueFreeRunwayJumpsTest::RunTest(const FString& Parameters)

@@ -75,7 +75,10 @@ bool FFleetPurchaseReopensTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("the job is still on the board"), After)) { return false; }
 	TestEqual(TEXT("and open again, for the next pass to bid"),
 		static_cast<int32>(After->State), static_cast<int32>(EServiceJobState::Open));
-	TestEqual(TEXT("with its old reason cleared"), static_cast<int32>(After->Why), static_cast<int32>(EServiceRefusal::None));
+	// THE REASON IS KEPT (#445), no longer cleared: Open with a reason is "refused, asking again" - what keeps the alert about the job standing for the
+	// frame before the next bid answers it (Assign clears it; a second refusal writes its own).
+	TestEqual(TEXT("with its old reason kept, for the alert to stand on until the next bid"), static_cast<int32>(After->Why), static_cast<int32>(EServiceRefusal::NoVehicles));
+	TestTrue(TEXT("and still read as refused"), After->IsStillRefused());
 	return true;
 }
 

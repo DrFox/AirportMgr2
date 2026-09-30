@@ -57,9 +57,11 @@ namespace
 		return Runtime;
 	}
 
-	int32 RuntimeBusTestPhaseCount(const UOpsEventsTestListener& Listener)
+	/** How many agent-phase events the runtime's drains have dispatched. The bus's own count (#445): UOpsEvents has no phase face to hang a
+	 *  listener on - it had none that anything bound, and was cut - so a test of the bus's delivery reads the bus. */
+	int32 RuntimeBusTestPhaseCount(UOpsRuntime& Runtime)
 	{
-		return Listener.Seen.FilterByPredicate([](const FString& S) { return S.StartsWith(TEXT("phase:")); }).Num();
+		return Runtime.GetBus().DispatchedCountOf<FAgentPhaseEvent>();
 	}
 }
 
@@ -82,23 +84,24 @@ bool FOpsRuntimeBusSubscribedTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBusPhaseTest, "AirportOps.Present.Bus.PhaseReachesUiOnNextStep",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBusPhaseTest, "AirportOps.Present.Bus.PhaseIsQueuedThenDispatchedOnNextStep",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOpsRuntimeBusPhaseTest::RunTest(const FString&)
 {
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
-	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
-	Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(Listener, &UOpsEventsTestListener::OnPhase);
+	Runtime->Tick(0.0);
+	const int32 Queued = Runtime->GetBus().QueuedCount();
+	const int32 Before = RuntimeBusTestPhaseCount(*Runtime);
 
 	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(OpsTestTransition(42, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
-	TestEqual(TEXT("nothing runs inside Airside's broadcast - it is queued (#193)"), RuntimeBusTestPhaseCount(*Listener), 0);
+	TestEqual(TEXT("nothing runs inside Airside's broadcast - it is queued (#193)"), RuntimeBusTestPhaseCount(*Runtime), Before);
+	TestEqual(TEXT("one event waits in the queue"), Runtime->GetBus().QueuedCount(), Queued + 1);
 
 	Runtime->Tick(0.0);
-	const FString Expected = FString::Printf(TEXT("phase:42:%d->%d"),
-		static_cast<int32>(EAgentPhase::Taxiing), static_cast<int32>(EAgentPhase::Parked));
-	TestTrue(TEXT("the next ops step delivers it to the Presentation tier, arguments intact"), Listener->Seen.Contains(Expected));
+	TestEqual(TEXT("the next ops step dispatches it - to the Sim tier's handlers"), RuntimeBusTestPhaseCount(*Runtime), Before + 1);
+	TestEqual(TEXT("and the queue is empty again"), Runtime->GetBus().QueuedCount(), Queued);
 	return true;
 }
 
@@ -106,17 +109,61 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBusReattachTest, "AirportOps.Present
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOpsRuntimeBusReattachTest::RunTest(const FString&)
 {
+	// EVERY SEAM A SECOND ATTACH COULD DOUBLE (#445, generalised from the phase bridge alone): the subscription map - WireBus resets and
+	// re-makes it - and each Airside delegate the runtime bridges onto the bus. A doubled bridge publishes twice per broadcast; a
+	// doubled subscription is a name twice in SubscribersOf. Both are read for EVERY event and EVERY delegate, so a bridge added
+	// without its Detach line, or a WireBus that stopped resetting, goes red by name.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
-	Runtime->Attach(TestWorld.Actor);
-	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
-	Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(Listener, &UOpsEventsTestListener::OnPhase);
+	FOpsEventBus& Bus = Runtime->GetBus();
+	const TArray<const TCHAR*> Names = FOpsEventBus::EventNames();
+	TArray<TArray<FName>> Wired;
+	for (int32 Index = 0; Index < Names.Num(); ++Index) { Wired.Add(Bus.SubscribersOf(Index)); }
 
-	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(OpsTestTransition(7, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
-	Runtime->Tick(0.0);
-	TestEqual(TEXT("a second Attach re-wires rather than stacking a second set of handlers"),
-		RuntimeBusTestPhaseCount(*Listener), 1);
+	Runtime->Attach(TestWorld.Actor);
+	Runtime->Tick(0.0);   // the attach's catch-up runs, so nothing below is measured against it
+	for (int32 Index = 0; Index < Names.Num(); ++Index)
+	{
+		TestEqual(FString::Printf(TEXT("a second Attach re-wires %s rather than stacking a second set of handlers"), Names[Index]),
+			Bus.SubscribersOf(Index), Wired[Index]);
+	}
+
+	UAirsideTraffic* Traffic = TestWorld.Actor->GetTraffic();
+	if (!TestNotNull(TEXT("the actor's traffic"), Traffic)) { return false; }
+	// EACH DELEGATE BROADCAST ONCE, and the bus dispatches exactly one event for it: the bridge is bound once, not once per attach.
+	int32 Phases = 0, Refusals = 0, Runways = 0, Stands = 0, Pushes = 0, Changes = 0, Builds = 0;
+	auto Sync = [&]()
+	{
+		Phases = Bus.DispatchedCountOf<FAgentPhaseEvent>();
+		Refusals = Bus.DispatchedCountOf<FArrivalRefusedEvent>();
+		Runways = Bus.DispatchedCountOf<FRunwayFreedEvent>();
+		Stands = Bus.DispatchedCountOf<FStandsFreedEvent>();
+		Pushes = Bus.DispatchedCountOf<FPushGroundFreedEvent>();
+		Changes = Bus.DispatchedCountOf<FNetworkChangedEvent>();
+		Builds = Bus.DispatchedCountOf<FBuildRefusedEvent>();
+	};
+	// A counter read AFTER the tick, so each lambda re-syncs around its own broadcast.
+	auto Check = [&](const TCHAR* What, int32& Counter, TFunctionRef<void()> Broadcast)
+	{
+		Sync();
+		const int32 Before = Counter;
+		Broadcast();
+		Runtime->Tick(0.0);
+		Sync();
+		TestEqual(FString::Printf(TEXT("%s: one broadcast, one event, after two attaches"), What), Counter - Before, 1);
+	};
+	Check(TEXT("the phase bridge"), Phases, [&]() { Traffic->OnAgentPhaseChanged.Broadcast(OpsTestTransition(7, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked)); });
+	Check(TEXT("the arrival-refused bridge"), Refusals, [&]() { Traffic->OnArrivalRefused.Broadcast(EArrivalRefusal::NoRunway); });
+	Check(TEXT("the runway-freed bridge"), Runways, [&]() { Traffic->OnRunwayFreed.Broadcast(FRoadSegmentId()); });
+	Check(TEXT("the stands-freed bridge"), Stands, [&]() { Traffic->OnStandsFreed.Broadcast(TArray<FGuidelineNodeId>{ FGuidelineNodeId() }); });
+	Check(TEXT("the push-ground-freed bridge"), Pushes, [&]() { Traffic->OnPushGroundFreed.Broadcast(3); });
+	Check(TEXT("the network-changed bridge"), Changes, [&]() { TestWorld.Actor->OnNetworkChanged.Broadcast(EChangeKind::Topology, *TestWorld.Actor->Network); });
+	URoadEditFacade* Facade = TestWorld.Actor->GetEditFacade();
+	if (TestNotNull(TEXT("the actor's facade"), Facade))
+	{
+		Check(TEXT("the build-refused bridge"), Builds, [&]() { Facade->OnRefused.Broadcast(FBuildQuote(), EBuildRefusal::CannotAfford); });
+	}
 	return true;
 }
 
@@ -130,13 +177,12 @@ bool FOpsRuntimeBusLoadTest::RunTest(const FString&)
 	const FString Slot = TEXT("AirportOpsTest_BusLoad");
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 
-	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
-	Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(Listener, &UOpsEventsTestListener::OnPhase);
+	const int32 Before = RuntimeBusTestPhaseCount(*Runtime);
 	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Gone, EAgentEvent::Retired));
 	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("an event queued before a load never reaches anyone: it names an agent that no longer exists"),
-		RuntimeBusTestPhaseCount(*Listener), 0);
+		RuntimeBusTestPhaseCount(*Runtime), Before);
 	return true;
 }
 
@@ -147,15 +193,15 @@ bool FOpsRuntimeBusStaleAgentTest::RunTest(const FString&)
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
-	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
-	Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(Listener, &UOpsEventsTestListener::OnPhase);
+	Runtime->Tick(0.0);
+	const int32 Before = RuntimeBusTestPhaseCount(*Runtime);
 
 	// A handler runs a frame after the event was raised, so the agent it names may be gone -
-	// here it never existed. Both boards must shrug, and the UI still hears it.
+	// here it never existed. Both boards must shrug, and the bus still delivers it.
 	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(OpsTestTransition(999999, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
 	Runtime->Tick(0.0);
-	TestEqual(TEXT("a phase for an agent that is already gone is survived and still reaches the UI"),
-		RuntimeBusTestPhaseCount(*Listener), 1);
+	TestEqual(TEXT("a phase for an agent that is already gone is survived and still dispatched"),
+		RuntimeBusTestPhaseCount(*Runtime), Before + 1);
 	return true;
 }
 
@@ -166,15 +212,15 @@ bool FOpsRuntimeBusDetachTest::RunTest(const FString&)
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
-	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
-	Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(Listener, &UOpsEventsTestListener::OnPhase);
+	Runtime->Tick(0.0);
+	const int32 Before = RuntimeBusTestPhaseCount(*Runtime);
 
 	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(OpsTestTransition(3, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
 	Runtime->Attach(nullptr);
 	Runtime->Attach(TestWorld.Actor);
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("an event queued before a detach is the old actor's - a new level numbers agents from 1 again"),
-		RuntimeBusTestPhaseCount(*Listener), 0);
+		RuntimeBusTestPhaseCount(*Runtime), Before);
 	return true;
 }
 
@@ -613,19 +659,93 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeDetachUnhooksTest, "AirportOps.Prese
 bool FOpsRuntimeDetachUnhooksTest::RunTest(const FString&)
 {
 	// EVERY SUBOBJECT ATTACH GAVE THE BUS, TAKEN BACK (review M7): a publisher left pointing at the bus after a
-	// detach publishes into whatever comes next - the stage 3 review's reason, which the roster had escaped.
+	// detach publishes into whatever comes next - the stage 3 review's reason, which the roster had escaped. THE LIST IS
+	// UOpsRuntime::Publishers() (#445), the one Attach and Detach loop over - this test walked its own six by hand, and the seventh
+	// (UFacilityPurchases) was in none of them: Check-Architecture rule 71 holds that the list names every class with a Bus field.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
-	TestTrue(TEXT("attached, the roster publishes onto the runtime's bus"), Runtime->GetAirlines()->Bus == &Runtime->GetBus());
+	const TArray<UOpsRuntime::FOpsBusPublisher> Publishers = Runtime->Publishers();
+	if (!TestTrue(TEXT("the runtime lists its publishers"), Publishers.Num() > 0)) { return false; }
+	for (const UOpsRuntime::FOpsBusPublisher& Each : Publishers)
+	{
+		TestTrue(FString::Printf(TEXT("attached, the %s publishes onto the runtime's bus"), Each.Name), *Each.Slot == &Runtime->GetBus());
+	}
+	// THE TWO THE OLD HAND LISTS LEFT OUT, by name: a list that iterates cannot see a member missing from it.
+	TestTrue(TEXT("the facility purchases are on the list (the constructor set theirs, and nothing ever cleared it)"),
+		Publishers.ContainsByPredicate([Runtime](const UOpsRuntime::FOpsBusPublisher& Each) { return Each.Slot == &Runtime->GetFacilityPurchases()->Bus; }));
+	TestTrue(TEXT("and the offer generator, which announces an airline's verdict"),
+		Publishers.ContainsByPredicate([Runtime](const UOpsRuntime::FOpsBusPublisher& Each) { return Each.Slot == &Runtime->GetOfferGenerator()->Bus; }));
+
 	AddExpectedMessagePlain(TEXT("OpsRuntime attached to nothing"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	Runtime->Attach(nullptr);
-	TestNull(TEXT("the flight board's bus is cleared"), Runtime->GetFlightBoard()->Bus);
-	TestNull(TEXT("the job board's"), Runtime->GetJobBoard()->Bus);
-	TestNull(TEXT("the ledger's"), Runtime->GetLedger()->Bus);
-	TestNull(TEXT("the alerts'"), Runtime->GetAlerts()->Bus);
-	TestNull(TEXT("the airline roster's"), Runtime->GetAirlines()->Bus);
-	TestNull(TEXT("and the airport's"), Runtime->GetAirport()->Bus);
+	for (const UOpsRuntime::FOpsBusPublisher& Each : Runtime->Publishers())
+	{
+		TestNull(*FString::Printf(TEXT("the %s's bus is cleared by a detach"), Each.Name), *Each.Slot);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeLoadFromHandlerTest, "AirportOps.Present.Bus.LoadFromAHandlerIsRefused",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeLoadFromHandlerTest::RunTest(const FString&)
+{
+	// SaveFromAHandler's twin (#445): a Blueprint bound to a UOpsEvents delegate may LOAD from inside the drain, which would Discard the
+	// queue while Drain still held its moved-out batch - the rest of it, events naming the agents of the airport being replaced, then
+	// dispatched against the restored boards. Refused, said, and the rest of the batch still delivered.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	const FString Slot = TEXT("AirportOpsTest_BusLoadFromHandler");
+	if (!TestTrue(TEXT("setup: a save to load"), Runtime->SaveToSlot(Slot))) { return false; }
+	Runtime->Tick(0.0);
+
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Listener->LoadOnNote = Runtime;
+	Listener->LoadSlot = Slot;
+	Runtime->GetEvents()->OnNotification.AddDynamic(Listener, &UOpsEventsTestListener::OnNoteLoad);
+	const int32 PhasesBefore = RuntimeBusTestPhaseCount(*Runtime);
+
+	// THE LOAD'S TRIGGER, THEN AN EVENT BEHIND IT in the same batch - the one a discard would have dropped.
+	Runtime->GetBus().Publish(FNotificationEvent{ TEXT("autoload") });
+	Runtime->GetBus().Publish(FAgentPhaseEvent{ OpsTestTransition(11, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked) });
+	AddExpectedMessagePlain(TEXT("refused: called from inside an ops event handler"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	Runtime->Tick(0.0);
+
+	TestTrue(TEXT("the handler ran and asked for a load"), Listener->bLoadAnswered);
+	TestFalse(TEXT("LoadFromSlot refused it from inside the drain"), Listener->bLoadedFromHandler);
+	TestEqual(TEXT("and the rest of the batch was still dispatched, not handed to restored boards"),
+		RuntimeBusTestPhaseCount(*Runtime), PhasesBefore + 1);
+	TestTrue(TEXT("CONTROL: the same load from outside a drain works"), Runtime->LoadFromSlot(Slot));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeWiringOrderTest, "AirportOps.Present.Bus.WiringOrderIsDeclared",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeWiringOrderTest::RunTest(const FString&)
+{
+	// THE ORDERINGS THAT CARRY CORRECTNESS, READ OFF THE RUNTIME (#445), by name. They were line order in WireBus: the job board's pass
+	// before the arrival queue's before the alerts' (the FlightCannotLand alert reads the clearance the queue pass computes, in the same
+	// round), and the job board's handler of a phase event before the flight board's ("the service first"). A reordered line was a
+	// silent change. The passes declare what they run After; this pins the result, and the Sim subscribers of the one event every
+	// board hears.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	const FOpsEventBus& Bus = Runtime->GetBus();
+	const TArray<FName> Expected = { TEXT("FleetSeed"), TEXT("ModuleRepair"), TEXT("JobBoard"), TEXT("ArrivalQueue"), TEXT("Alerts") };
+	TestEqual(TEXT("the passes run in this order: seeding and repair, then the boards, then what reads them"), Bus.PassOrder(), Expected);
+	TestEqual(TEXT("the job board runs After the fleet seeding and the module repair, which put vehicles and pumps under it"),
+		Bus.PassesAfter(TEXT("JobBoard")), TArray<FName>({ TEXT("FleetSeed"), TEXT("ModuleRepair") }));
+	TestEqual(TEXT("the arrival queue runs After the job board"), Bus.PassesAfter(TEXT("ArrivalQueue")), TArray<FName>({ TEXT("JobBoard") }));
+	TestEqual(TEXT("the alerts run After both boards' passes, so a clearance and the alert it makes land in one round"),
+		Bus.PassesAfter(TEXT("Alerts")), TArray<FName>({ TEXT("JobBoard"), TEXT("ArrivalQueue") }));
+
+	// THE SUBSCRIBERS OF THE EVENT EVERY BOARD HEARS, in the order they run - tiers first (Sim, then Reaction), registration within a tier.
+	// No Presentation subscriber: the phase's UOpsEvents face was cut (#445), nothing listened.
+	const TArray<FName> Phase = { TEXT("JobBoard"), TEXT("FlightBoard"), TEXT("ArrivalQueue"), TEXT("Alerts") };
+	TestEqual(TEXT("an agent-phase event is handled by the job board, then the flight board, then the arrival queue (Sim), then the alerts (Reaction)"),
+		Bus.SubscribersOf(FOpsEvent::IndexOfType<FAgentPhaseEvent>()), Phase);
 	return true;
 }
 
@@ -1206,6 +1326,111 @@ bool FRuntimeLoadFallbackNewProcessTest::RunTest(const FString&)
 	TestEqual(TEXT("both taxiways came back"), Live, 2);
 	TestEqual(TEXT("and every one's profile is live and this actor's own default"), OnTheDefault, Live);
 	TestTrue(TEXT("DefaultProfile is live - re-resolved from the loading actor"), Actor->Network->DefaultProfile == Actor->ResolveProfile());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeRoadDrawnNoFlickerTest, "AirportOps.Present.Alerts.UnserviceableJobSurvivesARoadDrawn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeRoadDrawnNoFlickerTest::RunTest(const FString&)
+{
+	// #445's PIN, through the runtime's own passes: raise an unserviceable job, commit an UNRELATED road, tick three frames. Zero clear/raise
+	// pairs, and one raise (= one toast: the toast stack toasts every raise that is not a load's re-raise) in total. The road moves the
+	// guideline revision, the job board's pass re-offers the refused job (Open for the frame before its bid), and the alerts pass - which
+	// runs after it in the same round - used to see no Unserviceable job, clear the alert, and raise it again the frame after.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	URoadNetwork* Net = TestWorld.Actor->Network;
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnAlertRaised.AddDynamic(Listener, &UOpsEventsTestListener::OnAlertRaised);
+	Runtime->GetEvents()->OnAlertCleared.AddDynamic(Listener, &UOpsEventsTestListener::OnAlertCleared);
+	Runtime->Tick(0.0);
+
+	FServiceJob& Job = Runtime->GetJobBoard()->AddJobForTest(5, EServiceJobState::Unserviceable, EServiceRefusal::NoDepot, Net->GetGuidelineRevision());
+	Job.Stand.Index = 0;
+	Runtime->GetBus().MarkDirty(TEXT("Alerts"));   // what the job board's pass does when a step refuses a job
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+	const FString Raised = TEXT("alert+:") + UEnum::GetValueAsString(EAlertKind::JobUnserviceable);
+	const FString Cleared = TEXT("alert-:") + UEnum::GetValueAsString(EAlertKind::JobUnserviceable);
+	if (!TestEqual(TEXT("PRECONDITION: the refused job is alerted, once"), Listener->CountOf(Raised), 1)) { return false; }
+
+	// AN UNRELATED ROAD, committed far from anything: the network changes, the guideline revision with it.
+	const uint32 RevisionBefore = Net->GetGuidelineRevision();
+	const int32 C = TestWorld.Actor->PlaceNode(FVector2D(0.0, 50000.0));
+	const int32 D = TestWorld.Actor->PlaceNode(FVector2D(20000.0, 50000.0));
+	TestWorld.Actor->ConnectNodes(C, D);
+	if (!TestTrue(TEXT("PRECONDITION: the road moved the guideline revision, so the refusal is stale and the job is re-offered"),
+		Net->GetGuidelineRevision() != RevisionBefore)) { return false; }
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+
+	TestEqual(TEXT("three frames after the road: no clear"), Listener->CountOf(Cleared), 0);
+	TestEqual(TEXT("and no second raise - one toast in total"), Listener->CountOf(Raised), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeQuietMinutesTest, "AirportOps.Present.Alerts.QuietMinutesRunNoAlertsPass",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeQuietMinutesTest::RunTest(const FString&)
+{
+	// #446: the offer minute used to dirty the alerts pass every game minute - ~40 times a real second at x32 - as the catch-all for the two
+	// conditions with no event of their own. An airport with nothing moving costs the pass nothing now: ten quiet game minutes run it not once.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+	const int32 Settled = Runtime->GetAlerts()->RecomputeCountForTest();
+	const int32 OfferTicks = Runtime->OfferTicksForTest();
+	const double OneMinute = UOfferGenerator::TickSeconds / Runtime->GetClock()->TimeScale() * 1.01;
+	for (int32 Minute = 0; Minute < 10; ++Minute) { Runtime->Tick(OneMinute); }
+	TestTrue(TEXT("PRECONDITION: the offer minute ran meanwhile - the old catch-all's trigger"), Runtime->OfferTicksForTest() >= OfferTicks + 9);
+	TestEqual(TEXT("and ten quiet game minutes ran the alerts pass not once"), Runtime->GetAlerts()->RecomputeCountForTest(), Settled);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeDeadlockLookTest, "AirportOps.Present.Alerts.DeadlockLookIsAClockEntryNotAnOfferMinuteTick",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeDeadlockLookTest::RunTest(const FString&)
+{
+	// #446: a deadlock matures when agents have been stalled past FTrafficRules::StallSeconds - no phase change, no edit. With something on
+	// the ground the alerts pass looks again once per stall period, from a clock entry booked by the pass itself; with nothing on the ground
+	// there is no entry. (The offer minute that used to do this is gone: QuietMinutesRunNoAlertsPass.)
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 60000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	URoadNetwork& Net = *Actor->Network;
+	FGuidelineNodeId A, B;
+	RuntimeE2ELayLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0), A, B);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+	const int32 Empty = Runtime->GetAlerts()->RecomputeCountForTest();
+	Runtime->Tick(60.0);   // 30 game minutes at x1 by day - no midnight, so no upkeep post to dirty the pass
+	TestEqual(TEXT("an airport with nothing on the ground is not looked at on a clock"), Runtime->GetAlerts()->RecomputeCountForTest(), Empty);
+
+	const FRoutePlan Plan = TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("a route"), Plan.IsValid())) { return false; }
+	if (!TestTrue(TEXT("an aircraft is dispatched"), Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Aircraft = Actor->GetTraffic()->GetNewestAgentId();
+	Runtime->Tick(0.0);   // its phase event dirties the pass, and the run books the look
+	const int32 OnGround = Runtime->GetAlerts()->RecomputeCountForTest();
+	UGroundTraffic* Model = Actor->GetTraffic()->GetModel();
+	const double Period = Runtime->GetClock()->GameSecondsOfMovement(Model->Rules.StallSeconds);
+	const double RealForAPeriod = Period / Runtime->GetClock()->TimeScale();
+
+	Runtime->Tick(RealForAPeriod * 0.5);
+	TestEqual(TEXT("half a stall period on: not yet"), Runtime->GetAlerts()->RecomputeCountForTest(), OnGround);
+	Runtime->Tick(RealForAPeriod * 0.75);
+	TestEqual(TEXT("a stall period on: the alerts pass looked once - a clock entry, not an offer minute"), Runtime->GetAlerts()->RecomputeCountForTest(), OnGround + 1);
+	Runtime->Tick(RealForAPeriod * 1.01);
+	TestEqual(TEXT("and the look re-books itself while the aircraft is there"), Runtime->GetAlerts()->RecomputeCountForTest(), OnGround + 2);
+
+	Model->RetireAgent(Aircraft);
+	Runtime->Tick(0.0);
+	const int32 Gone = Runtime->GetAlerts()->RecomputeCountForTest();
+	Runtime->Tick(RealForAPeriod * 10.0);
+	TestEqual(TEXT("the aircraft gone, the look is not booked again"), Runtime->GetAlerts()->RecomputeCountForTest(), Gone);
 	return true;
 }
 

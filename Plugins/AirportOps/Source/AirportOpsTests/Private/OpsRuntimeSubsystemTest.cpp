@@ -125,6 +125,37 @@ bool FOpsRuntimeSubsystemReattachTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * A GAME INSTANCE THAT SHUTS DOWN WITH ITS AIRPORT STILL ATTACHED (#445): Deinitialize drops the registry's handle - the one that detaches
+ * on the airport's Left announcement - so a runtime that simply went would leave the facade's raw IBuildPurse* pointing at its ledger and the
+ * actor's delegates bound to it. Deinitialize detaches, through the same Detach the announcement uses.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeSubsystemDeinitializeTest,
+	"AirportOps.Present.OpsRuntimeSubsystemDetachesOnDeinitialize",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeSubsystemDeinitializeTest::RunTest(const FString& Parameters)
+{
+	FOpsSubsystemTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UOpsRuntimeSubsystem* Sub = TestWorld.GameInstance->GetSubsystem<UOpsRuntimeSubsystem>();
+	if (!TestNotNull(TEXT("the subsystem"), Sub) || !TestNotNull(TEXT("with a runtime"), Sub->GetRuntime())) { return false; }
+	ARoadNetworkActor* Airport = TestWorld.World->SpawnActor<ARoadNetworkActor>();
+	if (!TestNotNull(TEXT("an airport"), Airport)) { return false; }
+	UOpsRuntime* Runtime = Sub->GetRuntime();
+	if (!TestEqual(TEXT("setup: attached to it"), Runtime->GetTarget(), Airport)) { return false; }
+	TestTrue(TEXT("setup: its ledger publishes onto the runtime's bus"), Runtime->GetLedger()->Bus == &Runtime->GetBus());
+
+	Sub->Deinitialize();
+	TestNull(TEXT("deinitialised with the airport still there, the runtime is detached from it"), Runtime->GetTarget());
+	for (const UOpsRuntime::FOpsBusPublisher& Each : Runtime->Publishers())
+	{
+		TestNull(*FString::Printf(TEXT("and the %s no longer points at the bus"), Each.Name), *Each.Slot);
+	}
+	return true;
+}
+
+/**
  * THE REGISTRY'S LIST IS EVERY WORLD'S (#446) - one static delegate, because this game-instance subsystem outlives
  * worlds - so the subsystem filters: an airport registered in a world this game instance does not own (the editor
  * world, another PIE instance's) must not attach ops. Replaces AirportOps.Present.OpsRuntimeSubsystemIdleCostsNoScan,

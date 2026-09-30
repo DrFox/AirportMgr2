@@ -166,6 +166,15 @@ public:
 	/** How many times Recompute has run - for the pass's composition tests. */
 	int32 RecomputeCountForTest() const { return RecomputeCount; }
 
+	/**
+	 * A TEST'S MODEL (#445): stands Alert in the list, replacing the one with its key, and nothing else - no sources, no bus, no event.
+	 * The alerts window reads this list and not a copy of its own, so a window test needs a model to hold what it is told was raised; the
+	 * test then broadcasts the UOpsEvents delegate it is checking the window against, as the runtime would.
+	 * UnstageForTest is the clear's half.
+	 */
+	void StageForTest(const FOpsAlert& Alert);
+	void UnstageForTest(const FOpsAlertKey& Key);
+
 private:
 	UPROPERTY(Transient) TArray<FOpsAlert> Alerts;
 	int32 RecomputeCount = 0;

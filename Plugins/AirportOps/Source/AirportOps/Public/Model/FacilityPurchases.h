@@ -141,19 +141,22 @@ public:
 	 *  Transient, the ruling every design figure follows (#449) - this class is not saved at all, so it only says so. */
 	UPROPERTY(Transient) TMap<EDepotModule, FModuleOffer> ModuleOffers;
 
-	/** Set by UOpsRuntime's constructor, like UAgentRescue's boards. Null refuses everything NotAFacility. */
-	UPROPERTY() TObjectPtr<UJobBoard> JobBoard = nullptr;
+	/** Set by UOpsRuntime's constructor, like UAgentRescue's boards. Null refuses everything NotAFacility.
+	 *  THE FOUR WIRING POINTERS ARE TRANSIENT (#445), the ruling #425 gave every constant wiring between the runtime's own subobjects: this
+	 *  class is not saved, so it changes nothing today - but a pointer that is not Transient is the one a future save would carry as a
+	 *  path to a subobject that exists only in the game that made it. */
+	UPROPERTY(Transient) TObjectPtr<UJobBoard> JobBoard = nullptr;
 
 	/** The money. Null in a test that does not care: then everything is free, IBuildPurse's rule. THE JUDGEMENT reads
 	 *  it (CanPay) and a MODULE purchase posts to it; a vehicle's charge and credit are posted by the fleet's door, from
 	 *  UJobBoard::Ledger - which UOpsRuntime wires to this same ledger. */
-	UPROPERTY() TObjectPtr<ULedger> Ledger = nullptr;
+	UPROPERTY(Transient) TObjectPtr<ULedger> Ledger = nullptr;
 
 	/** Formats prices for the labels; null formats plain numbers. */
-	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+	UPROPERTY(Transient) TObjectPtr<UPricing> Pricing = nullptr;
 
 	/** Dates the ledger entries; null dates them 0, ULedger::NowOrZero's rule. */
-	UPROPERTY() TObjectPtr<USimClock> Clock = nullptr;
+	UPROPERTY(Transient) TObjectPtr<USimClock> Clock = nullptr;
 
 	/** Published to on success only: FFacilityUpgradedEvent. Owned by UOpsRuntime, like UAirlineRoster::Bus. A vehicle's
 	 *  FleetChanged is the fleet door's (UJobBoard::Bus). */

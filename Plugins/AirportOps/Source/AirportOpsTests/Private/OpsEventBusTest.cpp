@@ -1,6 +1,8 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Model/OpsEventBus.h"
+#include "Model/OpsSafetyNet.h"
+#include "Model/SimClock.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -72,7 +74,7 @@ bool FOpsEventBusPassCoalesceTest::RunTest(const FString&)
 	FOpsEventBus Bus;
 	int32 Runs = 0;
 	Bus.BeginWiring();
-	Bus.RegisterPass(TEXT("Assign"), [&Runs]() { ++Runs; });
+	Bus.RegisterPass(TEXT("Assign"), [&Runs](const FPassRun&) { ++Runs; });
 	Bus.Subscribe<FNotificationEvent>(EOpsTier::Sim, TEXT("board"),
 		[&Bus](const FNotificationEvent&) { Bus.MarkDirty(TEXT("Assign")); });
 	Bus.EndWiring();
@@ -185,7 +187,7 @@ bool FOpsEventBusNextDrainTest::RunTest(const FString&)
 	int32 Runs = 0;
 	Bus.BeginWiring();
 	// A retry: a pass that has not resolved its work asks to be looked at again NEXT frame.
-	Bus.RegisterPass(TEXT("Retry"), [&Bus, &Runs]() { ++Runs; Bus.MarkDirtyNextDrain(TEXT("Retry")); });
+	Bus.RegisterPass(TEXT("Retry"), [&Bus, &Runs](const FPassRun&) { ++Runs; Bus.MarkDirtyNextDrain(TEXT("Retry")); });
 	Bus.EndWiring();
 	Bus.MarkAllDirty();
 	Bus.Drain();
@@ -193,6 +195,129 @@ bool FOpsEventBusNextDrainTest::RunTest(const FString&)
 	Bus.Drain();
 	Bus.Drain();
 	TestEqual(TEXT("and exactly once per drain after it, for as long as it keeps asking"), Runs, 3);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsEventBusPassOrderTest, "AirportOps.Model.Bus.PassesRunInDeclaredOrder",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsEventBusPassOrderTest::RunTest(const FString&)
+{
+	// #445: pass order was registration-line order in WireBus. A pass now DECLARES what it runs After, and EndWiring orders by it - so the
+	// order does not depend on which line came first, and is readable (PassOrder) by a test.
+	FOpsEventBus Bus;
+	TArray<FName> Ran;
+	Bus.BeginWiring();
+	// REGISTERED BACKWARDS: C needs B, B needs A, and nothing is listed in the order it must run.
+	Bus.RegisterPass(TEXT("C"), [&Ran](const FPassRun&) { Ran.Add(TEXT("C")); }, { TEXT("B") });
+	Bus.RegisterPass(TEXT("Free"), [&Ran](const FPassRun&) { Ran.Add(TEXT("Free")); });
+	Bus.RegisterPass(TEXT("B"), [&Ran](const FPassRun&) { Ran.Add(TEXT("B")); }, { TEXT("A") });
+	Bus.RegisterPass(TEXT("A"), [&Ran](const FPassRun&) { Ran.Add(TEXT("A")); });
+	Bus.EndWiring();
+	// STABLE: the first pass with nothing pending keeps its registration place, so the declared chain moves only what it must.
+	TestEqual(TEXT("the passes are ordered by what they declare, registration order breaking ties"),
+		Bus.PassOrder(), TArray<FName>({ TEXT("Free"), TEXT("A"), TEXT("B"), TEXT("C") }));
+	TestEqual(TEXT("a pass's declared dependencies are readable"), Bus.PassesAfter(TEXT("C")), TArray<FName>({ TEXT("B") }));
+	Bus.MarkAllDirty();
+	Bus.Drain();
+	TestEqual(TEXT("and they RUN in that order in a drain"), Ran, TArray<FName>({ TEXT("Free"), TEXT("A"), TEXT("B"), TEXT("C") }));
+
+	// A DEPENDENCY NOBODY REGISTERED, AND A CYCLE, are said at wire time (an Error a test sees), not silently mis-ordered.
+	FOpsEventBus Broken;
+	Broken.BeginWiring();
+	Broken.RegisterPass(TEXT("Lost"), [](const FPassRun&) {}, { TEXT("Nobody") });
+	Broken.RegisterPass(TEXT("P"), [](const FPassRun&) {}, { TEXT("Q") });
+	Broken.RegisterPass(TEXT("Q"), [](const FPassRun&) {}, { TEXT("P") });
+	AddExpectedError(TEXT("cannot be ordered"), EAutomationExpectedErrorFlags::Contains, 3);
+	Broken.EndWiring();
+	TestEqual(TEXT("an unorderable pass is still kept - the airport runs while the defect is read"), Broken.PassOrder().Num(), 3);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsEventBusCauseTest, "AirportOps.Model.Bus.PassRunCarriesItsCause",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsEventBusCauseTest::RunTest(const FString&)
+{
+	// #445: the job board's and the arrival queue's passes told "an event asked" from "only the net asked" by two hand-set flags each. The bus
+	// carries it for EVERY pass: the strongest cause that marked it since it last ran.
+	FOpsEventBus Bus;
+	TArray<EPassCause> Causes;
+	Bus.BeginWiring();
+	Bus.RegisterPass(TEXT("P"), [&Causes](const FPassRun& Run) { Causes.Add(Run.Cause); });
+	Bus.EndWiring();
+
+	Bus.MarkDirty(TEXT("P"), EPassCause::SafetyNet);
+	Bus.Drain();
+	Bus.MarkDirty(TEXT("P"), EPassCause::SafetyNet);
+	Bus.MarkDirty(TEXT("P"));
+	Bus.Drain();
+	Bus.MarkDirtyNextDrain(TEXT("P"));
+	Bus.Drain();
+	Bus.MarkAllDirty();
+	Bus.Drain();
+	Bus.MarkDirty(TEXT("P"), EPassCause::SafetyNet);
+	Bus.Drain();
+	TestEqual(TEXT("one run per marking"), Causes.Num(), 5);
+	if (Causes.Num() == 5)
+	{
+		TestEqual(TEXT("marked by the net alone: a safety run"), Causes[0], EPassCause::SafetyNet);
+		TestEqual(TEXT("marked by the net and then an event in one drain: the event's - something asked, finding work is no defect"), Causes[1], EPassCause::Event);
+		TestEqual(TEXT("a retry's own cause"), Causes[2], EPassCause::Retry);
+		TestEqual(TEXT("a catch-up (MarkAllDirty) is an event's - the game asked"), Causes[3], EPassCause::Event);
+		TestEqual(TEXT("and the cause does not outlive its run: the net alone again is a safety run"), Causes[4], EPassCause::SafetyNet);
+	}
+	FPassRun Net{ EPassCause::SafetyNet };
+	FPassRun Asked{ EPassCause::Retry };
+	TestTrue(TEXT("only the net's cause is 'safety only'"), Net.IsSafetyOnly() && !Asked.IsSafetyOnly());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsEventBusThirdNetPassTest, "AirportOps.Model.Bus.ThirdNetWatchedPassNeedsNoRuntimeField",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsEventBusThirdNetPassTest::RunTest(const FString&)
+{
+	// #445's PIN: a pass that polls something no event announces costs one Want() call - no handle, no wanted/due/covered flags, no funnel, no
+	// lint rule - because the "why did it run" is the bus's and the "is it still waiting" is the net's. A world-free bus, clock and net, and
+	// a THIRD watched pass, with nothing added to UOpsRuntime.
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	Clock->SetUniformDay(USimClock::SecondsPerDay);   // one game second per real second
+	FOpsEventBus Bus;
+	FOpsSafetyNet Net;
+	Net.Bind(Bus, *Clock, 30.0);
+	TMap<FName, TArray<EPassCause>> Runs;
+	Bus.BeginWiring();
+	for (const TCHAR* Name : { TEXT("Queue"), TEXT("Board"), TEXT("Third") })
+	{
+		const FName Pass = Name;
+		Bus.RegisterPass(Pass, [&Runs, Pass](const FPassRun& Run) { Runs.FindOrAdd(Pass).Add(Run.Cause); });
+	}
+	Bus.EndWiring();
+
+	TestFalse(TEXT("nothing wants the net: nothing is booked"), Net.IsArmed());
+	Net.Want(TEXT("Third"), true);
+	TestTrue(TEXT("the third pass wants it: one clock entry is booked"), Net.IsArmed());
+	Net.Want(TEXT("Board"), true);
+	Clock->Advance(31.0);
+	Bus.Drain();
+	TestEqual(TEXT("the net marked the pass that wants it, as the net"), Runs.FindOrAdd(TEXT("Third")), TArray<EPassCause>({ EPassCause::SafetyNet }));
+	TestEqual(TEXT("and the other that wants it"), Runs.FindOrAdd(TEXT("Board")), TArray<EPassCause>({ EPassCause::SafetyNet }));
+	TestEqual(TEXT("and not the one that does not"), Runs.FindOrAdd(TEXT("Queue")).Num(), 0);
+
+	Bus.MarkDirty(TEXT("Third"));
+	Bus.Drain();
+	TestEqual(TEXT("an event's run of the same pass is not the net's"), Runs.FindOrAdd(TEXT("Third")).Last(), EPassCause::Event);
+
+	Net.Want(TEXT("Third"), false);
+	TestTrue(TEXT("while another still wants it the one entry stays booked - not one per pass"), Net.IsArmed());
+	Net.Want(TEXT("Board"), false);
+	TestFalse(TEXT("nobody wants it: cancelled"), Net.IsArmed());
+	const int32 Before = Runs.FindOrAdd(TEXT("Third")).Num();
+	Clock->Advance(100.0);
+	Bus.Drain();
+	TestEqual(TEXT("and no pass is run for nothing afterwards"), Runs.FindOrAdd(TEXT("Third")).Num(), Before);
+
+	Net.Want(TEXT("Third"), true);
+	Net.CancelAll();
+	TestFalse(TEXT("CancelAll (a load, a detach) drops every want and the entry"), Net.IsArmed() || Net.IsWantedBy(TEXT("Third")));
 	return true;
 }
 

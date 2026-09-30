@@ -46,6 +46,8 @@ namespace
 		FOpsEventBus Bus;
 		TArray<FOpsAlert> Raised;
 		TArray<FOpsAlertKey> Cleared;
+		/** Every FAlertChangedEvent (#445): the keys of standing alerts whose words moved. */
+		TArray<FOpsAlertKey> Changed;
 		/** The airport status the recompute reads; null reads as open, as in a runtime before attach. */
 		const UAirport* Status = nullptr;
 		UFlight* Flight = nullptr;
@@ -70,6 +72,7 @@ namespace
 			Bus.BeginWiring();
 			Bus.Subscribe<FAlertRaisedEvent>(EOpsTier::Presentation, TEXT("test"), [this](const FAlertRaisedEvent& E) { Raised.Add(E.Alert); });
 			Bus.Subscribe<FAlertClearedEvent>(EOpsTier::Presentation, TEXT("test"), [this](const FAlertClearedEvent& E) { Cleared.Add(E.Key); });
+			Bus.Subscribe<FAlertChangedEvent>(EOpsTier::Presentation, TEXT("test"), [this](const FAlertChangedEvent& E) { Changed.Add(E.Key); });
 			// THE FLIGHT BOARD HEARS THE TRAFFIC'S PHASES on this bus, as UOpsRuntime wires it (Sim tier).
 			Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAgentPhaseEvent& E)
 			{
@@ -127,6 +130,10 @@ namespace
 		int32 ClearedOf(EAlertKind Kind) const
 		{
 			return Cleared.FilterByPredicate([Kind](const FOpsAlertKey& K) { return K.Kind == Kind; }).Num();
+		}
+		int32 ChangedOf(EAlertKind Kind) const
+		{
+			return Changed.FilterByPredicate([Kind](const FOpsAlertKey& K) { return K.Kind == Kind; }).Num();
 		}
 	};
 }
@@ -212,7 +219,11 @@ bool FOpsAlertsJobTest::RunTest(const FString&)
 	{
 		if (Each.Id == JobId)
 		{
-			const_cast<FServiceJob&>(Each).State = EServiceJobState::Open;   // the player built a depot
+			// THE PLAYER BUILT A DEPOT and a vehicle took the job: Queued, its reason cleared by UJobBoard::Assign. NOT merely Open with the
+			// reason still on it - that is "refused, asking again" (FServiceJob::IsStillRefused, #445), which keeps the alert.
+			FServiceJob& Taken = const_cast<FServiceJob&>(Each);
+			Taken.State = EServiceJobState::Queued;
+			Taken.Why = EServiceRefusal::None;
 		}
 	}
 	F.Recompute();
@@ -525,6 +536,194 @@ bool FOpsAlertsDeadlockTruckTest::RunTest(const FString&)
 	TestTrue(*FString::Printf(TEXT("and the truck as a vehicle, not a second aircraft ('%s')"), *Text),
 		Text.Contains(TEXT("1 vehicle")) && !Text.Contains(TEXT("2 aircraft")));
 	TestTrue(TEXT("and gives the remedy the inspector's card gives"), Text.Contains(UOpsAlerts::DeadlockRemedy().ToString()));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsReofferTest, "AirportOps.Model.Alerts.RefusedJobReofferedDoesNotFlicker",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsReofferTest::RunTest(const FString&)
+{
+	// #445's FIRST PIN, through the job board's own Step: a refused job is re-offered AFTER the bids (UJobBoard::Step), so for the frame between
+	// the re-offer and the next bid it is Open - and the alerts pass, reading "Unserviceable" alone, cleared the alert and raised it again on
+	// the next frame with a fresh toast and a reset RaisedAt: once per road drawn while trying to connect a depot. The owner (FServiceJob::
+	// IsStillRefused) says it is still refused now.
+	FAlertsField F;
+	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
+	FServiceJob& Job = F.Jobs->AddJobForTest(F.Plane, EServiceJobState::Unserviceable, EServiceRefusal::NoDepot, F.Airport.Net->GetGuidelineRevision() + 1);
+	Job.Stand = F.Airport.Stands[0];
+	const int32 JobId = Job.Id;
+	F.Recompute();
+	if (!TestEqual(TEXT("PRECONDITION: the refused job is alerted once"), F.RaisedOf(EAlertKind::JobUnserviceable), 1)) { return false; }
+	const double RaisedAt = F.Alerts->GetAlerts().FindByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::JobUnserviceable; })->RaisedAt;
+
+	// THE ROAD THE PLAYER DREW: the step re-offers the job (its refusal was made at a revision the airport is no longer at).
+	F.Jobs->Step(*F.Traffic, *F.Airport.Net, *F.Clock);
+	const FServiceJob* Reoffered = F.Jobs->GetJobs().FindByPredicate([JobId](const FServiceJob& Each) { return Each.Id == JobId; });
+	if (!TestTrue(TEXT("PRECONDITION: the step left it Open - re-offered, its bid pending"), Reoffered != nullptr && Reoffered->State == EServiceJobState::Open)) { return false; }
+	F.Recompute();
+	TestEqual(TEXT("re-offered and not yet bid, the alert is NOT cleared - refused, asking again is still refused"), F.ClearedOf(EAlertKind::JobUnserviceable), 0);
+
+	// THE NEXT FRAMES: the bid refuses it again (no depot), and the alert goes on standing.
+	F.Jobs->Step(*F.Traffic, *F.Airport.Net, *F.Clock);
+	F.Recompute();
+	F.Recompute();
+	TestEqual(TEXT("three frames on: no clear"), F.ClearedOf(EAlertKind::JobUnserviceable), 0);
+	TestEqual(TEXT("and no second raise - so no second toast"), F.RaisedOf(EAlertKind::JobUnserviceable), 1);
+	const FOpsAlert* Held = F.Alerts->GetAlerts().FindByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::JobUnserviceable; });
+	if (TestNotNull(TEXT("still held"), Held))
+	{
+		TestEqual(TEXT("with its first RaisedAt, not reset by the road"), Held->RaisedAt, RaisedAt);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsChangedReasonTest, "AirportOps.Model.Alerts.ChangedReasonIsAnnounced",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsChangedReasonTest::RunTest(const FString&)
+{
+	// #445's SECOND PIN, the model's half: a STANDING alert whose reason changes refreshed its text and published nothing, so a UI that kept
+	// a copy of the list kept the old reason. Now the model says so - an event naming the key, no raise (no toast), RaisedAt kept - and the
+	// text the model holds is the new one.
+	FAlertsField F;
+	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
+	FServiceJob& Job = F.Jobs->AddJobForTest(F.Plane, EServiceJobState::Unserviceable, EServiceRefusal::NoDepot, F.Airport.Net->GetGuidelineRevision());
+	Job.Stand = F.Airport.Stands[0];
+	const int32 JobId = Job.Id;
+	F.Recompute();
+	if (!TestEqual(TEXT("PRECONDITION: raised with reason A"), F.RaisedOf(EAlertKind::JobUnserviceable), 1)) { return false; }
+	TestTrue(TEXT("saying it (A)"), F.Alerts->GetAlerts()[0].Text.ToString().Contains(UJobBoard::RefusalText(EServiceRefusal::NoDepot)));
+	TestEqual(TEXT("an unchanged recompute announces no change"), F.ChangedOf(EAlertKind::JobUnserviceable), 0);
+	F.Recompute();
+	TestEqual(TEXT("not even on the second look"), F.ChangedOf(EAlertKind::JobUnserviceable), 0);
+
+	// THE REASON CHANGES - the player built a depot, and what is missing is now its pump.
+	for (const FServiceJob& Each : F.Jobs->GetJobs())
+	{
+		if (Each.Id == JobId) { const_cast<FServiceJob&>(Each).Why = EServiceRefusal::NoPump; }
+	}
+	F.Recompute();
+	TestEqual(TEXT("the change is announced once, naming the alert"), F.ChangedOf(EAlertKind::JobUnserviceable), 1);
+	TestEqual(TEXT("it is not a raise - no second toast"), F.RaisedOf(EAlertKind::JobUnserviceable), 1);
+	TestEqual(TEXT("and not a clear"), F.ClearedOf(EAlertKind::JobUnserviceable), 0);
+	if (TestEqual(TEXT("the model holds one alert"), F.Alerts->GetAlerts().Num(), 1))
+	{
+		const FString Text = F.Alerts->GetAlerts()[0].Text.ToString();
+		TestTrue(TEXT("saying the NEW reason (B)"), Text.Contains(UJobBoard::RefusalText(EServiceRefusal::NoPump)));
+		TestFalse(TEXT("and not the old"), Text.Contains(UJobBoard::RefusalText(EServiceRefusal::NoDepot)));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsNodeDragTest, "AirportOps.Present.Alerts.AlertSurvivesANodeDrag",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsNodeDragTest::RunTest(const FString&)
+{
+	// #445 / #484 REVIEW: mid-drag the planner answers GraphBeingEdited (a transient refusal - it clears when the player lets go), and the
+	// queue pass stored it over the standing permanent verdict, so UnlandableWhy read None for the length of the drag: the FlightCannotLand
+	// alert cleared, and the drop raised it again with a fresh toast. A transient "being edited" must not clear a standing alert.
+	FAlertsField F;
+	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
+	UFlight* Coming = NewObject<UFlight>(GetTransientPackage());
+	Coming->Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	Coming->Callsign = TEXT("CU 900");
+	Coming->OfferWindowSeconds = 60.0;
+	Coming->OfferSecondsLeft = 60.0;
+	Coming->LeadTimeSeconds = 1.0;
+	Coming->RunwayPreference = F.Airport.Threshold;
+	F.Board->AddOffer(*F.Clock, Coming);
+	F.Board->Dispatcher = [](const FVector2D&, const FAirframe&) { return false; };
+	if (!TestTrue(TEXT("accepted while the airport could take it"), F.Board->Accept(*F.Traffic, *F.Airport.Net, *F.Clock, *Coming))) { return false; }
+	F.Clock->Advance(1.0);
+	for (int32 Index = F.Airport.Net->GetSegments().Num() - 1; Index >= 0; --Index)
+	{
+		const FRoadSegment& Segment = F.Airport.Net->GetSegments()[Index];
+		if (Segment.Profile != nullptr && !Segment.Profile->bContinuousThroughJunctions)
+		{
+			F.Airport.Net->RemoveSegment(F.Airport.Net->SegmentIdAt(Index));
+		}
+	}
+	TestGraph::Derive(*F.Airport.Net);
+	F.Board->TickQueue(*F.Traffic, *F.Airport.Net, *F.Clock);
+	F.Recompute();
+	if (!TestEqual(TEXT("PRECONDITION: the holding flight that can never land is alerted"), F.RaisedOf(EAlertKind::FlightCannotLand), 1)) { return false; }
+
+	// THE PLAYER PICKS A NODE UP: the road's clocks move and the graph is behind it. The queue pass runs meanwhile - an aircraft retiring
+	// moves the occupancy revision, so the cached clearance is asked afresh, and the planner says GraphBeingEdited.
+	F.Airport.Net->AddNode(FVector2D(-150000.0, 150000.0));
+	if (!TestTrue(TEXT("PRECONDITION: the guideline graph is behind the road"), F.Airport.Net->AreGuidelinesBehindRoad())) { return false; }
+	const uint32 OccupancyBefore = F.Traffic->OccupancyRevision();
+	F.Traffic->RetireAgent(F.Plane);
+	if (!TestTrue(TEXT("PRECONDITION: the occupancy moved, so the clearance is not served from its cache"), F.Traffic->OccupancyRevision() != OccupancyBefore)) { return false; }
+	F.Board->TickQueue(*F.Traffic, *F.Airport.Net, *F.Clock);
+	F.Recompute();
+	TestEqual(TEXT("mid-drag the alert does not clear"), F.ClearedOf(EAlertKind::FlightCannotLand), 0);
+	TestEqual(TEXT("and the model still holds it"),
+		F.Alerts->GetAlerts().FilterByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FlightCannotLand; }).Num(), 1);
+
+	// THE DROP: the graph is derived again, and the queue judges the flight afresh - still permanent.
+	TestGraph::Derive(*F.Airport.Net);
+	F.Board->TickQueue(*F.Traffic, *F.Airport.Net, *F.Clock);
+	F.Recompute();
+	TestEqual(TEXT("across the whole drag and its drop: no clear"), F.ClearedOf(EAlertKind::FlightCannotLand), 0);
+	TestEqual(TEXT("and no second raise - one toast in total"), F.RaisedOf(EAlertKind::FlightCannotLand), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsAcceptedUnlandableTest, "AirportOps.Model.Alerts.AcceptedFlightThatCanNeverLandIsAlertedBeforeItsEta",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsAcceptedUnlandableTest::RunTest(const FString&)
+{
+	// #445 (found in the #484 review): only a HOLDING flight was judged, so an accepted one whose airport had been changed so it can never
+	// land said nothing until its ETA brought it into the queue - minutes of game time after the player did it. The queue pass judges
+	// accepted flights too, against the same IsPermanentRefusal.
+	FAlertsField F;
+	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
+	UFlight* Coming = NewObject<UFlight>(GetTransientPackage());
+	Coming->Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	Coming->Callsign = TEXT("CU 901");
+	Coming->OfferWindowSeconds = 60.0;
+	Coming->OfferSecondsLeft = 60.0;
+	Coming->LeadTimeSeconds = 1.0e7;   // its ETA is nowhere near
+	Coming->RunwayPreference = F.Airport.Threshold;
+	F.Board->AddOffer(*F.Clock, Coming);
+	if (!TestTrue(TEXT("accepted while the airport could take it"), F.Board->Accept(*F.Traffic, *F.Airport.Net, *F.Clock, *Coming))) { return false; }
+	F.Board->TickQueue(*F.Traffic, *F.Airport.Net, *F.Clock);
+	F.Recompute();
+	TestEqual(TEXT("CONTROL: an accepted flight the airport CAN take raises no such alert"), F.RaisedOf(EAlertKind::FlightCannotLand), 0);
+
+	for (int32 Index = F.Airport.Net->GetSegments().Num() - 1; Index >= 0; --Index)
+	{
+		const FRoadSegment& Segment = F.Airport.Net->GetSegments()[Index];
+		if (Segment.Profile != nullptr && !Segment.Profile->bContinuousThroughJunctions)
+		{
+			F.Airport.Net->RemoveSegment(F.Airport.Net->SegmentIdAt(Index));
+		}
+	}
+	TestGraph::Derive(*F.Airport.Net);
+	F.Board->TickQueue(*F.Traffic, *F.Airport.Net, *F.Clock);   // the queue pass, which an edit's NetworkChanged dirties
+	if (!TestEqual(TEXT("PRECONDITION: still Accepted - its ETA has not come"), Coming->GetPhase(), EFlightPhase::Accepted)) { return false; }
+	TestTrue(TEXT("PRECONDITION: its plan is now refused for a reason only the player can clear"),
+		ArrivalPlanner::IsPermanentRefusal(F.Board->UnlandableWhy(*Coming, *F.Airport.Net)));
+	F.Recompute();
+	if (!TestEqual(TEXT("the accepted flight that can never land is alerted before it is due"), F.RaisedOf(EAlertKind::FlightCannotLand), 1)) { return false; }
+	const FOpsAlert* Alert = F.Alerts->GetAlerts().FindByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FlightCannotLand; });
+	if (!TestNotNull(TEXT("held"), Alert)) { return false; }
+	TestTrue(TEXT("keyed by the flight, named by its callsign"), Alert->Key.Id == Coming->Id && Alert->Text.ToString().Contains(TEXT("CU 901")));
+	TestFalse(TEXT("and not called 'holding' - it has not come yet"), Alert->Text.ToString().Contains(TEXT("holding")));
+	TestTrue(TEXT("and saying what to do"), Alert->Text.ToString().Contains(TEXT("cancel")));
+
+	// ITS ETA COMES: the same alert, in the words for a flight that is holding - a change of words, not a second raise.
+	F.Clock->Advance(1.0e7 + 1.0);
+	F.Board->TickQueue(*F.Traffic, *F.Airport.Net, *F.Clock);
+	F.Recompute();
+	TestEqual(TEXT("the flight is holding now"), Coming->GetPhase(), EFlightPhase::Inbound);
+	TestEqual(TEXT("still one raise in total"), F.RaisedOf(EAlertKind::FlightCannotLand), 1);
+	TestEqual(TEXT("never cleared between"), F.ClearedOf(EAlertKind::FlightCannotLand), 0);
+	TestEqual(TEXT("its new words announced as a change"), F.ChangedOf(EAlertKind::FlightCannotLand), 1);
+
+	if (!TestTrue(TEXT("the player cancels it"), F.Board->CancelByPlayer(*F.Traffic, *F.Clock, Coming->Id))) { return false; }
+	F.Recompute();
+	TestEqual(TEXT("and the alert clears"), F.ClearedOf(EAlertKind::FlightCannotLand), 1);
 	return true;
 }
 

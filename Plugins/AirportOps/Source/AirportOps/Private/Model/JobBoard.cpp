@@ -313,8 +313,11 @@ void UJobBoard::ReopenRefusedJob(FServiceJob& Job)
 {
 	// A CHANGE TO A JOB WITH NO VEHICLE TRANSITION BEHIND IT, so it moves RevisionCount itself (see Revision).
 	++RevisionCount;
+	// THE REASON IS KEPT (#445), not cleared: Open-with-a-reason is "refused, asking again" (FServiceJob::IsStillRefused), which is
+	// what keeps the alert about it standing through the frame the next bid is pending. The bid that follows either lands (Assign
+	// clears it) or refuses again (and writes its own). What read the reason only while Unserviceable - the card's fuel line - still
+	// does, so an Open job shows as Open.
 	Job.State = EServiceJobState::Open;
-	Job.Why = EServiceRefusal::None;
 }
 
 bool UJobBoard::CanRemoveVehicle(int32 VehicleId) const

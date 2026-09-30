@@ -121,38 +121,22 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 				Runtime->GetFlightBoard()->RunwayPreference, ExpectedFocus);
 		}
 
-		UOpsEventsTestListener* L = NewObject<UOpsEventsTestListener>();
-		Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(L, &UOpsEventsTestListener::OnPhase);
-		Runtime->GetEvents()->OnSpeedChanged.AddDynamic(L, &UOpsEventsTestListener::OnSpeed);
+		// THE BUS'S OWN DISPATCH COUNT, now that UOpsEvents has no phase or speed face to hang a listener on (#445).
+		const int32 PhasesBefore = Runtime->GetBus().DispatchedCountOf<FAgentPhaseEvent>();
+		const int32 SpeedsBefore = Runtime->GetBus().DispatchedCountOf<FSpeedChangedEvent>();
 
 		Actor->DispatchAgent(Outbound, UAirsideSettings::ResolveDefaultAirframe());
 		// THE BUS DELIVERS ON THE NEXT OPS STEP, not inside Airside's broadcast (spec 2026-09-29
 		// ops-event-bus §1) - a zero-length step drains it without moving the clock.
 		Runtime->Tick(0.0);
 
-		// BUILT FROM THE ENUM, not spelled ":4->1". This literal broke the day
-		// EAgentPhase::Manoeuvring was added between Parked and Gone and moved Gone from 4 to
-		// 5 - a failure that said nothing whatever about whether a spawn reaches the ops bus,
-		// which is the only thing this assertion is for. It is the exact maintenance cost the
-		// speed-ladder comment forty lines below argues against, and this line had not taken
-		// the lesson.
-		//
-		// NOT to be confused with OpsEventsTest's spelled-out ordinals, which are a
-		// DELIBERATE canary: that test exists to fail when the wire format changes. This one
-		// does not.
-		const FString SpawnSuffix = FString::Printf(TEXT(":%d->%d"),
-			static_cast<int32>(EAgentPhase::Gone), static_cast<int32>(EAgentPhase::Taxiing));
-
-		TestTrue(TEXT("a spawn on the Airside traffic reaches the ops bus as Gone -> Taxiing"),
-			L->Seen.ContainsByPredicate([&SpawnSuffix](const FString& S)
-				{ return S.StartsWith(TEXT("phase:")) && S.EndsWith(SpawnSuffix); }));
+		TestTrue(TEXT("a spawn on the Airside traffic reaches the ops bus as an agent-phase event (Gone -> Taxiing)"),
+			Runtime->GetBus().DispatchedCountOf<FAgentPhaseEvent>() > PhasesBefore);
 
 		Runtime->StepSpeed(+1);
 		Runtime->Tick(0.0);   // the bus delivers on the next ops step - see the spawn above
-		if (TestTrue(TEXT("stepping speed announces something"), L->Seen.Num() > 0))
-		{
-			TestEqual(TEXT("stepping speed announces the new speed"), L->Seen.Last(), FString(TEXT("speed:2")));
-		}
+		TestEqual(TEXT("stepping speed announces it, once"), Runtime->GetBus().DispatchedCountOf<FSpeedChangedEvent>(), SpeedsBefore + 1);
+		TestEqual(TEXT("and the clock holds the new rung"), Runtime->GetClock()->GetSpeed(), ESimSpeed::X2);
 		TestEqual(TEXT("and pushes the multiplier into the actor"), Actor->GetSimTimeScale(), 2.0, 1e-12);
 
 		Runtime->TogglePause();

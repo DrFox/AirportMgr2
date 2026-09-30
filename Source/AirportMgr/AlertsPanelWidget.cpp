@@ -61,11 +61,9 @@ void UAlertsPanelWidget::BuildOnce(const UUIStyle& Style)
 	// only changes, so an alert raised before this panel existed would never reach it (stage 2 review).
 	if (UOpsRuntime* Runtime = OpsRuntime())
 	{
-		BindTo(*Runtime->GetEvents());
-		for (const FOpsAlert& Alert : Runtime->GetAlerts()->GetAlerts())
-		{
-			OnAlertRaised(Alert);
-		}
+		// NO CATCH-UP LOOP any more (#445): the model already holds whatever was raised before this panel existed, and the first paint
+		// reads it - the loop existed because a mirror only heard changes.
+		BindTo(*Runtime->GetEvents(), *Runtime->GetAlerts());
 	}
 	else
 	{
@@ -74,37 +72,43 @@ void UAlertsPanelWidget::BuildOnce(const UUIStyle& Style)
 	}
 }
 
-void UAlertsPanelWidget::BindTo(UOpsEvents& Events)
+void UAlertsPanelWidget::BindTo(UOpsEvents& Events, const UOpsAlerts& InModel)
 {
+	Model = &InModel;
 	Events.OnAlertRaised.AddUniqueDynamic(this, &UAlertsPanelWidget::OnAlertRaised);
 	Events.OnAlertCleared.AddUniqueDynamic(this, &UAlertsPanelWidget::OnAlertCleared);
+	Events.OnAlertChanged.AddUniqueDynamic(this, &UAlertsPanelWidget::OnAlertChanged);
 	Events.OnAlertsReset.AddUniqueDynamic(this, &UAlertsPanelWidget::OnAlertsReset);
+	bRowsDirty = true;
 }
 
+const TArray<FOpsAlert>& UAlertsPanelWidget::GetAlerts() const
+{
+	static const TArray<FOpsAlert> None;
+	const UOpsAlerts* Live = Model.Get();
+	return Live != nullptr ? Live->GetAlerts() : None;
+}
+
+// THE FOUR EVENTS ONLY INVALIDATE (#445). They used to upsert into, remove from and empty a copy of the list; the copy is gone, and what
+// the rows show is the model's at the moment they are painted. A raise after a load, a change of words and a clear are the same thing
+// to this window: the set or its text moved, look again.
 void UAlertsPanelWidget::OnAlertRaised(const FOpsAlert& Alert)
 {
-	// UPSERT BY KEY: a re-raise after a load names a problem already listed (if the reset was missed, or
-	// arrives after), and must refresh its row, not add a second.
-	if (FOpsAlert* Existing = Alerts.FindByPredicate([&Alert](const FOpsAlert& A) { return A.Key == Alert.Key; }))
-	{
-		*Existing = Alert;
-	}
-	else
-	{
-		Alerts.Add(Alert);
-	}
 	bRowsDirty = true;
 }
 
 void UAlertsPanelWidget::OnAlertCleared(const FOpsAlertKey& Key)
 {
-	Alerts.RemoveAll([&Key](const FOpsAlert& A) { return A.Key == Key; });
+	bRowsDirty = true;
+}
+
+void UAlertsPanelWidget::OnAlertChanged(const FOpsAlertKey& Key)
+{
 	bRowsDirty = true;
 }
 
 void UAlertsPanelWidget::OnAlertsReset()
 {
-	Alerts.Reset();
 	bRowsDirty = true;
 }
 
@@ -137,12 +141,13 @@ void UAlertsPanelWidget::TickPanel(float DeltaTime)
 
 bool UAlertsPanelWidget::Go(int32 Index, ARoadBuildController& Controller)
 {
+	const TArray<FOpsAlert>& Alerts = GetAlerts();
 	return Alerts.IsValidIndex(Index) && GoTo(Alerts[Index].Key, Controller);
 }
 
 bool UAlertsPanelWidget::GoTo(const FOpsAlertKey& Key, ARoadBuildController& Controller)
 {
-	const FOpsAlert* Found = Alerts.FindByPredicate([&Key](const FOpsAlert& A) { return A.Key == Key; });
+	const FOpsAlert* Found = GetAlerts().FindByPredicate([&Key](const FOpsAlert& A) { return A.Key == Key; });
 	if (Found == nullptr)
 	{
 		return false;
@@ -206,7 +211,7 @@ bool UAlertsPanelWidget::ClickCancelForTest(const FOpsAlertKey& Key)
 
 bool UAlertsPanelWidget::CancelFlightOf(const FOpsAlertKey& Key, UOpsRuntime& Runtime)
 {
-	const FOpsAlert* Found = Alerts.FindByPredicate([&Key](const FOpsAlert& A) { return A.Key == Key; });
+	const FOpsAlert* Found = GetAlerts().FindByPredicate([&Key](const FOpsAlert& A) { return A.Key == Key; });
 	if (Found == nullptr || Found->Key.Kind != EAlertKind::FlightCannotLand)
 	{
 		UE_LOG(LogRoadBuild, Log, TEXT("Alerts: cancel of %s %d refused: %s"), *UEnum::GetValueAsString(Key.Kind), Key.Id,
@@ -226,6 +231,8 @@ void UAlertsPanelWidget::PaintRows()
 	const UUIStyle& Style = *PanelStyle;
 	RowColumn->ClearChildren();
 	Entries.Reset();
+	// READ HERE, FROM THE MODEL, every paint (#445) - the rows are a view of it, not of a list this window kept.
+	const TArray<FOpsAlert>& Alerts = GetAlerts();
 	if (Alerts.Num() == 0)
 	{
 		UTextBlock* None = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());

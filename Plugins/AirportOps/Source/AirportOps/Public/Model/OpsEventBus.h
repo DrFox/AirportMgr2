@@ -38,6 +38,36 @@ enum class EOpsTier : uint8
 	Presentation
 };
 
+/**
+ * WHY A PASS IS BEING MARKED DIRTY (#445) - the fact the job board's and the arrival queue's passes each used to keep as a
+ * hand-set pair of flags on UOpsRuntime (a "covered" one their event funnel set and a "safety due" one the net set), so a
+ * run the net alone asked for could be told from one something asked for: the net finding work NO EVENT covered is a missing
+ * event, and it says so as a Warning. The bus keeps it for EVERY pass now, so a third net-watched pass costs no field.
+ *
+ * THE ORDINAL IS THE PRECEDENCE: a pass marked by the net and then by an event in the same drain is an Event run - something
+ * asked for it, so finding work is no defect. Retry is an event's own "look again next frame" (MarkDirtyNextDrain) and counts
+ * as asked-for: the retry is the tail of a run something asked for.
+ * ENFORCED BY: AirportOps.Model.Bus.PassRunCarriesItsCause, Check-Architecture rule 59 (safety-cause-minted-by-the-net)
+ */
+enum class EPassCause : uint8
+{
+	/** Only FOpsSafetyNet's clock entry asked. The one cause a run is suspect for. */
+	SafetyNet,
+	/** The pass asked to be looked at again next frame. */
+	Retry,
+	/** An event, a command, a deadline, an attach or a load's catch-up asked - the default. */
+	Event
+};
+
+/** What a pass is told when it runs: the strongest cause that marked it since it last ran. */
+struct FPassRun
+{
+	EPassCause Cause = EPassCause::Event;
+
+	/** True when nothing but the safety net asked for this run - a run that does work is then a defect to name. */
+	bool IsSafetyOnly() const { return Cause == EPassCause::SafetyNet; }
+};
+
 // THE EVENTS. Small value structs - ids and figures, never a UObject pointer that may be dead by
 // the time the queue drains (spec §4 "stale ids"). Each names itself for the log and the wiring test,
 // and DESCRIBES itself - its fields, for the log line FOpsEventBus writes when it is published. An event
@@ -237,6 +267,22 @@ struct AIRPORTOPS_API FAlertClearedEvent
 	FString Describe() const;
 };
 
+/**
+ * A STANDING problem's words changed while the problem stayed true (#445): "runway too short" became "no stand big enough" for
+ * the same airline, "No fuel for stand 3: no depot" became "...: no pump". UOpsAlerts used to refresh the text and the focus
+ * and publish NOTHING, so a UI that mirrored the list kept the old reason - and told the player to build the wrong thing. The
+ * event INVALIDATES; the model is the truth: the alerts window re-reads UOpsAlerts::GetAlerts() when it hears this, and it
+ * names only the key. NOT a raise - no toast, and RaisedAt is untouched. A MOVING FOCUS (an aircraft that creeps) is not a
+ * change: a row's Go reads the model when it is clicked.
+ * ENFORCED BY: AirportOps.Model.Alerts.ChangedReasonIsAnnounced
+ */
+struct AIRPORTOPS_API FAlertChangedEvent
+{
+	FOpsAlertKey Key;
+	static const TCHAR* EventName() { return TEXT("AlertChanged"); }
+	FString Describe() const;
+};
+
 /** Every alert was forgotten (UOpsAlerts::Reset - a load or an attach): a UI list empties, and the raises
  *  that follow are re-raises (FOpsAlert::bReRaised). */
 struct AIRPORTOPS_API FAlertsResetEvent
@@ -411,6 +457,23 @@ struct AIRPORTOPS_API FFlightInboundEvent
 };
 
 /**
+ * An airline's verdict on the airport changed (#446, #445): it could come and cannot, could not and can, or still cannot and
+ * the reason moved (a runway lengthened, and what stops it is now a stand). Published by UOfferGenerator::TickMinute - the one
+ * place the verdict is made - the moment it differs from what was last announced. The alerts pass hears it and looks again:
+ * it used to look every offer minute whether or not anything had moved, which at x32 is about every frame.
+ * ENFORCED BY: AirportOps.Model.Offers.AdmissionChangeIsAnnounced
+ */
+struct AIRPORTOPS_API FAirlineAdmissionChangedEvent
+{
+	FName AirlineId;
+	bool bCouldCome = true;
+	/** The refusal's own sentence while it cannot come, else empty. */
+	FString Reason;
+	static const TCHAR* EventName() { return TEXT("AirlineAdmissionChanged"); }
+	FString Describe() const;
+};
+
+/**
  * EVERY EVENT THERE IS, as one closed list. Subscribe<T> and Publish<T> are compile-checked
  * against it, and the wiring test walks it - "lists that must agree are ONE list".
  * FInstancedStruct was rejected: an open set has no answer to "which events exist?".
@@ -420,7 +483,7 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
 	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent, FRunwayFreedEvent, FStandsFreedEvent,
-	FFlightInboundEvent, FPushGroundFreedEvent, FModulesRefundedEvent>;
+	FFlightInboundEvent, FPushGroundFreedEvent, FModulesRefundedEvent, FAlertChangedEvent, FAirlineAdmissionChangedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec
@@ -476,10 +539,25 @@ public:
 		LogSubscription(Who, Tier, T::EventName());
 	}
 
-	/** A coalesced bulk step, run once after a round in which it was marked dirty. Order of
-	 *  registration is the order dirty passes run. */
-	void RegisterPass(FName Name, TFunction<void()> Run);
-	void MarkDirty(FName Pass);
+	/**
+	 * A coalesced bulk step, run once after a round in which it was marked dirty, and told WHY (FPassRun).
+	 *
+	 * AFTER IS THE ORDER, DECLARED (#445): the passes whose result Run reads, or whose work it must see finished. It used to
+	 * be registration-line order in UOpsRuntime::WireBus - JobBoard before ArrivalQueue before Alerts, which the same-round
+	 * FlightCannotLand alert depends on - a correctness rule held by where a line sat, and pinned by nothing. EndWiring now
+	 * orders the passes by After (a stable topological sort: registration order breaks ties), and an After naming a pass
+	 * nobody registered, or a cycle, is an Error at wire time, where a test can see it. PassOrder() says the result.
+	 *
+	 * WHAT AN ORDER MEANS, which was undocumented: a pass that marks a LATER pass dirty from its Run gets that pass run in the
+	 * SAME round (the round's pass walk has not reached it yet); one that marks an EARLIER pass dirty waits a round, and a
+	 * round costs one of MaxRounds. So a dependency is declared on the pass that READS, and a chain that needs the reader
+	 * first is a chain that spends rounds.
+	 * ENFORCED BY: AirportOps.Model.Bus.PassesRunInDeclaredOrder, AirportOps.Present.Bus.WiringOrderIsDeclared
+	 */
+	void RegisterPass(FName Name, TFunction<void(const FPassRun&)> Run, std::initializer_list<FName> After = {});
+
+	/** Dirty for this round, asked for by Cause (an event, by default - a caller that is not the safety net says nothing). */
+	void MarkDirty(FName Pass, EPassCause Cause = EPassCause::Event);
 	void MarkAllDirty();
 
 	/**
@@ -488,7 +566,13 @@ public:
 	 * (a departure the runway refused) wants exactly one more look per frame until it resolves.
 	 * ENFORCED BY: AirportOps.Model.Bus.NextDrainIsNextFrame
 	 */
-	void MarkDirtyNextDrain(FName Pass);
+	void MarkDirtyNextDrain(FName Pass, EPassCause Cause = EPassCause::Retry);
+
+	/** The passes in the order they run - what After and registration made of it. For the wiring test and the wire-time log. */
+	TArray<FName> PassOrder() const;
+
+	/** The passes Pass declared it runs After - empty for an unknown pass. For the wiring test. */
+	TArray<FName> PassesAfter(FName Pass) const;
 
 	/**
 	 * Queue Event, and log it with its fields - "Bus: + OfferExpired {flight 12, airline Cumbria,
@@ -527,6 +611,14 @@ public:
 
 	int32 QueuedCount() const { return Queue.Num(); }
 
+	/**
+	 * How many events of type T the drains have dispatched (handlers run for) - not published: an event a load or a detach
+	 * discards is published and never dispatched. The observation post for a test of the bus's own delivery now that
+	 * UOpsEvents has no per-event face for every type to hang a listener on (#445: OnAgentPhaseChanged was cut for having none).
+	 */
+	template <typename T>
+	int32 DispatchedCountOf() const { return DispatchedCounts[FOpsEvent::IndexOfType<T>()]; }
+
 	/** Whether Pass is marked to run in the next round - for a test pinning who marks it (an attach, a load). */
 	bool IsDirtyForTest(FName Pass) const
 	{
@@ -542,20 +634,27 @@ private:
 	struct FPass
 	{
 		FName Name;
-		TFunction<void()> Run;
+		TFunction<void(const FPassRun&)> Run;
+		TArray<FName> After;
 		bool bDirty = false;
-		/** See MarkDirtyNextDrain. Promoted to bDirty at the start of the next Drain. */
+		/** The strongest cause that marked it since it last ran - SafetyNet (the weakest) while clean. */
+		EPassCause Cause = EPassCause::SafetyNet;
+		/** See MarkDirtyNextDrain. Promoted to bDirty at the start of the next Drain, with NextCause. */
 		bool bDirtyNextDrain = false;
+		EPassCause NextCause = EPassCause::Retry;
 	};
 
 	static constexpr int32 NumTiers = 3;
 	TArray<FHandler> Handlers[NumTypes][NumTiers];
 	TArray<FPass> Passes;
 	TArray<FOpsEvent> Queue;
+	int32 DispatchedCounts[NumTypes] = {};
 	bool bWiring = false;
 	bool bDraining = false;
 
 	static const TCHAR* NameOf(const FOpsEvent& Event);
 	static void LogSubscription(FName Who, EOpsTier Tier, const TCHAR* Event);
 	bool AnyDirty() const;
+	/** EndWiring's ordering: Passes by After, stable. Errors name an unknown dependency or a cycle. */
+	void OrderPasses();
 };

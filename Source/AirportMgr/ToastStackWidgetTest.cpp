@@ -4,8 +4,15 @@
 #include "NotificationCentre.h"
 #include "Testing/AirsideTestWorld.h"
 #include "ToastStackWidget.h"
+#include "AlertsPanelWidget.h"
+#include "Content/AirsideSettings.h"
+#include "Model/JobBoard.h"
 #include "Model/OpsAlerts.h"
 #include "Model/OpsEvents.h"
+#include "OpsRuntimeResolver.h"
+#include "Present/OpsRuntime.h"
+#include "Present/RoadNetworkActor.h"
+#include "Model/RoadNetwork.h"
 #include "UIStyle.h"
 #include "Styling/SlateBrush.h"
 
@@ -380,6 +387,89 @@ bool FToastsFromOpsAlertsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("as a Warning, where a plain notification is Info"), Stack->Centre()->Entries()[6].Severity, ENotificationSeverity::Warning);
 		TestTrue(TEXT("in the publisher's words"), Stack->Centre()->Entries()[6].Text.ToString().Contains(TEXT("2 Sheds removed")));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FToastsOnceAcrossARoadTest,
+	"AirportMgr.UI.ToastsAnUnserviceableJobOnceWhateverRoadsAreDrawn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FToastsOnceAcrossARoadTest::RunTest(const FString& Parameters)
+{
+	// #445's PIN, at the toast: "raise an unserviceable job, commit an unrelated road, tick 3 frames - one toast total". The real runtime's passes, the
+	// real stack bound to its events. A refused job was re-offered after the bids, the alert cleared for the frame between and was raised again with a
+	// fresh Warning toast: one per road drawn while trying to connect a depot.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	const int32 A = TestWorld.Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = TestWorld.Actor->PlaceNode(FVector2D(20000.0, 0.0));
+	TestWorld.Actor->ConnectNodes(A, B);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	UToastStackWidget* Stack = MakeStack(TestWorld.World);
+	if (!TestNotNull(TEXT("a toast stack"), Stack)) { return false; }
+	Stack->BindTo(*Runtime->GetEvents());
+	Runtime->Tick(0.0);
+
+	URoadNetwork* Net = TestWorld.Actor->Network;
+	FServiceJob& Job = Runtime->GetJobBoard()->AddJobForTest(5, EServiceJobState::Unserviceable, EServiceRefusal::NoDepot, Net->GetGuidelineRevision());
+	Job.Stand.Index = 0;
+	Runtime->GetBus().MarkDirty(TEXT("Alerts"));
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+	auto FuelToasts = [Stack]()
+	{
+		int32 Count = 0;
+		for (const auto& Each : Stack->Centre()->Entries())
+		{
+			Count += Each.Text.ToString().Contains(TEXT("No fuel for stand")) ? 1 : 0;
+		}
+		return Count;
+	};
+	if (!TestEqual(TEXT("PRECONDITION: the refused job is one toast"), FuelToasts(), 1)) { return false; }
+
+	const int32 C = TestWorld.Actor->PlaceNode(FVector2D(0.0, 50000.0));
+	const int32 D = TestWorld.Actor->PlaceNode(FVector2D(20000.0, 50000.0));
+	TestWorld.Actor->ConnectNodes(C, D);
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+	TestEqual(TEXT("an unrelated road and three frames later, still one toast in total"), FuelToasts(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryOpsEventDelegateHasAListenerTest,
+	"AirportMgr.UI.EveryOpsEventDelegateHasAListener",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryOpsEventDelegateHasAListenerTest::RunTest(const FString& Parameters)
+{
+	// #445 (the shape of closed #169): UOpsEvents::OnAgentPhaseChanged and OnSpeedChanged had NO listener - nothing bound them outside a test, there
+	// are no widget Blueprints that do (a byte-grep of Content for "OpsEvents" is empty), and the wiring test counted a forwarder and a log line as a
+	// consumer. The COMPOSED UI - the widgets that turn the runtime's events into what the player sees, built as play builds them, against a runtime -
+	// is asked, by REFLECTION over every delegate UOpsEvents declares, whether each has a listener. A delegate added without a widget that binds it
+	// is red by name.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 0.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, Runtime);
+	ON_SCOPE_EXIT { OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, nullptr); };
+
+	// EACH WIDGET BINDS THROUGH ITS OWN BuildOnce, which asks the world's resolver for the runtime - the path play takes.
+	UToastStackWidget* Toasts = MakeStack(TestWorld.World);
+	UAlertsPanelWidget* Alerts = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
+	if (!TestTrue(TEXT("the widgets that listen are built"), Toasts != nullptr && Alerts != nullptr)) { return false; }
+
+	UOpsEvents* Events = Runtime->GetEvents();
+	int32 Seen = 0;
+	for (TFieldIterator<FMulticastDelegateProperty> It(UOpsEvents::StaticClass()); It; ++It)
+	{
+		const FMulticastScriptDelegate* Delegate = It->GetMulticastDelegate(It->ContainerPtrToValuePtr<void>(Events));
+		TestTrue(*FString::Printf(TEXT("UOpsEvents::%s has a listener in the composed UI"), *It->GetName()), Delegate != nullptr && Delegate->IsBound());
+		++Seen;
+	}
+	TestTrue(TEXT("the reflection found the delegates at all"), Seen > 0);
 	return true;
 }
 
