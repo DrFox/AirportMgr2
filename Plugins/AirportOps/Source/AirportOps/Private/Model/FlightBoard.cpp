@@ -324,6 +324,9 @@ FArrivalQuote UFlightBoard::Gated(FArrivalQuote Quote) const
 {
 	// AFTER THE PLAN: a runway-less field is the plan's NoRunway, worded as the plan words it. A plan's yes at an airport
 	// the player has closed is the gate's - ruling I1, a closed airport admits no arrivals, the debug one included.
+	// NotAdmitted BECAUSE EArrivalRefusal HAS NO CLOSURE VALUE (it is the planner's, in Airside, which knows no airport):
+	// the nearest reason, with the real one in Sentence. A reader of Why alone must not word it - DescribeRefusal(
+	// NotAdmitted) says "not admitted to that runway" - which is why every listener carries the Sentence.
 	if (Quote.IsAccepted() && AdmitsArrivals && !AdmitsArrivals())
 	{
 		Quote.Why = EArrivalRefusal::NotAdmitted;
@@ -360,6 +363,7 @@ FArrivalQuote UFlightBoard::TryAccept(UGroundTraffic& Traffic, const URoadNetwor
 	UFlight& Flight)
 {
 	// REFUSED BEFORE THE PLAN, each worded and logged - a caller's bug or a fixture's, never a player's (see the header).
+	// NotAdmitted for Gated's reason: EArrivalRefusal has no value for these, so the Sentence carries the real one.
 	const auto Refuse = [&Flight](const TCHAR* Why)
 	{
 		UE_LOG(LogAirportOps, Log, TEXT("Flight %d not accepted: %s"), Flight.Id, Why);

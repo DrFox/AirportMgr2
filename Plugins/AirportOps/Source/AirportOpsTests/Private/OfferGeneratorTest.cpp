@@ -627,7 +627,7 @@ bool FOfferArrivalsOnlyTest::RunTest(const FString& Parameters)
 
 	const uint32 Before = Field->GetGuidelineRevision();
 	Facts.Use = ERunwayUse::Mixed;
-	Field->SetRunwayFacts(Runway, Facts);
+	if (!TestTrue(TEXT("the runway takes its use back"), Field->SetRunwayFacts(Runway, Facts))) { return false; }
 	TestGraph::Derive(*Field);
 	FAnchorLink::Build(*Field, UAirsideSettings::ResolveLargestServiceVehicle());
 	TestNotEqual(TEXT("(the flip moves the guideline revision the admission cache is keyed on)"), Field->GetGuidelineRevision(), Before);

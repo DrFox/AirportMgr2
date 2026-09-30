@@ -317,6 +317,8 @@ void ARoadBuildController::LandAircraftNearViewFocus(const UAircraftType* Type)
 	// NO RUNTIME, NO LANDING - SAID (#431). A direct DispatchArrival sat here "for the editor mode", which never creates
 	// this controller; in PIE the runtime is a game-instance subsystem that always exists, so the fallback ran only in
 	// headless tests - and it bypassed the board and the closure rule, a fourth door onto arrival.
+	// ENFORCED BY: see LandAircraftNearViewFocus's header (module graph, OpsRuntimeSubsystemReattaches);
+	// AirportMgr.Actions.LandWithNoRuntimeLandsNothing (nothing dispatched)
 	UE_LOG(LogRoadBuild, Warning, TEXT("Land refused: no ops runtime - an arrival needs the flight board"));
 }
 

@@ -437,6 +437,9 @@ public:
 	 * "the editor mode", ran only in headless tests - the editor mode never creates this
 	 * controller, and in PIE the runtime is a game-instance subsystem that always exists - and it
 	 * bypassed the board and the closure rule, a fourth door onto arrival.
+	 * ENFORCED BY: the module graph (AirsideEditor.Build.cs has no AirportMgr dependency, so the
+	 * editor mode cannot name this class); AirportOps.Present.OpsRuntimeSubsystemReattaches (the
+	 * subsystem and its runtime exist on a real game instance)
 	 *
 	 * Type is the Land panel's choice (2026-09-27); null lands the content default. Called
 	 * from the panel's rows, no longer from key 7, which opens the panel.

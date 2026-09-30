@@ -371,13 +371,14 @@ $AllowedCallers = @(
     },
     @{
         # CONFIRMED BY GREP FOR #255: production callers today are AirsideSettings.cpp
-        # (itself), RoadBuildController.cpp and OpsRuntime.cpp. Unlike Piper, tests call this
+        # (itself) and OpsRuntime.cpp - RoadBuildController.cpp's went with its board-less Land
+        # fallback (#431), and a new one there would be that fallback returning. Unlike Piper, tests call this
         # directly from a couple dozen files on purpose - it IS the canonical "give me a
         # plane" accessor test fixtures are supposed to use - so tests are blanket-exempt
         # rather than narrowed to one fixture file.
         Name        = 'UAirsideSettings::ResolveDefaultAirframe'
         Pattern     = 'UAirsideSettings::ResolveDefaultAirframe\s*\('
-        ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp', 'Source\AirportMgr\RoadBuildController.cpp', 'Private\Present\OpsRuntime.cpp')
+        ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp', 'Private\Present\OpsRuntime.cpp')
         TestExempt  = $true
         ProdReason  = 'a new production caller resolves the default airframe a second way instead of taking it from context - route it through one of the rows above or extend this row and say why'
     },
@@ -674,6 +675,18 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Profiles\RoadProfile.h', 'Private\Present\RoadNetworkActor.cpp')
         TestExempt  = $true
         ProdReason  = 'only ARoadNetworkActor::ResolveProfile marks its fallback - see URoadProfile::bActorFallback'
+    },
+    @{
+        # AN ACCEPT HOLDS THE STAND ITS PLAN CHOSE (#431): UFlightBoard::TryAccept -> UStandAllocator::Hold. Reserve picks
+        # the smallest fitting stand with NO reach check, and is left to the board's own re-holds (a flight whose hold was
+        # lost - the queue, a graph rebuild, a load), a gap tracked as #471. A caller anywhere else would bring back the
+        # hold on a stand nothing can taxi to. The pattern is a Reserve call with three or more arguments: TArray::Reserve
+        # takes one.
+        Name        = 'UStandAllocator::Reserve (reach-blind hold)'
+        Pattern     = '(\.|->)Reserve\s*\(\s*\*?\w+\s*,\s*\*?\w+\s*,'
+        ProdAllowed = @('Private\Model\FlightBoard.cpp')
+        TestExempt  = $true
+        ProdReason  = 'accept through UFlightBoard::TryAccept, which holds the stand its plan taxis to (UStandAllocator::Hold) - Reserve is reach-blind (#471)'
     }
 )
 foreach ($row in $AllowedCallers) {

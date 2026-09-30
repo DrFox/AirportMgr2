@@ -343,8 +343,10 @@ namespace RunwayQuery
 	{
 		// NO PROXIMITY TEST, and that is the difference between the two. RunwayExtentAt answers
 		// "is this point ON a runway", which a departure asks of the place its taxi ended and
-		// which must say no for the rest of the airport. This answers "which runway would you
-		// land on", which is asked of a click that is deliberately nowhere near one.
+		// which must say no for the rest of the airport. This answers "which runway is nearest
+		// this point", asked of a point deliberately nowhere near one. NOT "which runway would you
+		// land on" (it said so until #432): the planner lands on whichever runway takes the
+		// arrival (#412) - ask ArrivalPlanner::Plan, or FirstLandingRunway for the one it asks first.
 		return RunwayExtentInternal(Network, Near, false, OutEnd);
 	}
 

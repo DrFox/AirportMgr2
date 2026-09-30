@@ -340,7 +340,9 @@ public:
 	 * the one it could.
 	 *
 	 * A refusal before the plan - not an offer, no stand allocator, no airframe - is NotAdmitted with a sentence saying
-	 * which, and logged: a caller's bug or a fixture's, never a player's.
+	 * which, and logged: a caller's bug or a fixture's, never a player's. So is the gate's closure. NotAdmitted because
+	 * EArrivalRefusal (the planner's enum, in Airside) has no value for either: it is the nearest reason, and the quote's
+	 * Sentence carries the real one - a reader of Why alone must not word it.
 	 * ENFORCED BY: AirportOps.Model.FlightBoard.AcceptHoldsTheReachableStand, AirportOps.Present.LandWithNoRouteHoldsNothing
 	 */
 	FArrivalQuote TryAccept(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock, UFlight& Flight);
@@ -353,6 +355,7 @@ public:
 	 * VerdictFor's plan answer, then the airport's gate - what TryAccept asks, and the inbox row shows. The gate is NOT in
 	 * the cached verdict: the lapse classifier reads the verdict alone, and a flight that lapses while the player has
 	 * closed the airport was ignored, not unacceptable.
+	 * ENFORCED BY: AirportOps.Model.Offers.Countdown.LapseReadsThePlanNotTheGate
 	 */
 	FArrivalQuote QuoteFor(const UGroundTraffic& Traffic, const URoadNetwork& Network, const UFlight& Flight) const;
 

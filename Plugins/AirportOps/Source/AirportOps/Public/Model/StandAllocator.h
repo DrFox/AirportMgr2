@@ -24,7 +24,8 @@ class URoadNetwork;
  *
  * AN ACCEPT HOLDS THE PLAN'S STAND (#431), through Hold: UFlightBoard::TryAccept passes the stand
  * the accept's own plan taxis to, which is reachable. Reserve's smallest fit is REACH-BLIND and is
- * left to the queue's re-holds (a flight whose hold was lost), a known gap named in #431's PR.
+ * left to UFlightBoard's re-holds (a flight whose hold was lost) - a known gap, #471.
+ * ENFORCED BY: Check-Architecture rule 4 ('UStandAllocator::Reserve (reach-blind hold)' - FlightBoard.cpp only)
  */
 UCLASS()
 class AIRPORTOPS_API UStandAllocator : public UObject
