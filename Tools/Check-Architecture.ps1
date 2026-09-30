@@ -1857,7 +1857,8 @@ $ranRules.Add('vehicle-lifecycle-one-writer')
 # again" half walked EVERY runway and filtered nothing - so on a field of arrivals-only strips it admitted jets
 # that could land and never depart, and the stand stayed blocked for ever. The filter, the end in use and the
 # ranking are now RunwayQuery::ArrivalRunways / DepartureRunways / RankRunway, and the three consumers ask them.
-# In those three files, a walk of AirsideCapability's summary, a read of ERunwayUse (RunwayUse::) or a question put
+# In those three files, a walk of AirsideCapability's summary, a read of ERunwayUse (RunwayUse:: or the enum itself - \b cannot fall
+# between the E and the R, so RunwayUse:: alone misses `== ERunwayUse::ArrivalsOnly`) or a question put
 # to the occupancy (IsAnyHeld) is the second definition returning. It also fails when a consumer stops calling its
 # enumerator or ranking (the ban alone would pass a file that enumerates nothing) and when a file the rule names is
 # gone. Comments and string literals are stripped first (rule 34's stripper), so a WHY comment can name the bans.
@@ -1873,7 +1874,7 @@ $runwayKindConsumers = @(
 $runwayKindBanned = @(
     @{ Pattern = '\bAirsideCapability::Summarise\w*\s*\(|\bSummariseRunways\s*\(';
        Why = 'walks every runway; ask RunwayQuery::ArrivalRunways / DepartureRunways for the ones this traffic may use' },
-    @{ Pattern = '\bRunwayUse::';
+    @{ Pattern = '\bERunwayUse\b|\bRunwayUse::';
        Why = 'reads ERunwayUse itself; the use filter and the dedicated rule live in RunwayQuery (ArrivalRunways / DepartureRunways / RankRunway)' },
     @{ Pattern = '(\.|->)IsAnyHeld\s*\(';
        Why = 'asks the occupancy about a strip itself; RunwayQuery::IsChainHeld / RankRunway is the one reading of "held"' }

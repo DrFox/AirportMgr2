@@ -119,7 +119,7 @@ namespace RunwayAdmission
 	 * most nearly able to; or NoDepartureRunway when the field has runways and none takes
 	 * departures (#433: it used to ask every runway, an arrivals-only one included, and
 	 * admitted aircraft that landed and could never leave their stand).
-	 * ENFORCED BY: Check-Architecture.ps1 rule 39 (this file must call DepartureRunways and never walk the runways itself).
+	 * ENFORCED BY: Check-Architecture.ps1 rule 39 (RunwayAdmission.cpp must call DepartureRunways and may not walk the runways or read a use setting itself).
 	 *
 	 * WHY IT EXISTS (2026-09-27): once field lengths became the model's roll x 1.1, landing asked
 	 * less than take-off for most types, and an SR22 landed on a 404 m strip it could never

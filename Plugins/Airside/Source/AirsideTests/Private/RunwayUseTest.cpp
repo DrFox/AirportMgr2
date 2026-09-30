@@ -235,6 +235,14 @@ bool FRunwayUseLandsOnlyWhatCanLeaveTest::RunTest(const FString& Parameters)
 			const FString Pair = FString::Printf(TEXT("A %s, B %s"), RunwayUse::Name(UseA), RunwayUse::Name(UseB));
 			const FArrivalPlan Land = ArrivalPlanner::Plan(*F.Net, Focus, Airframe);
 			const FDeparturePlan Leave = DeparturePlanner::PlanAny(*F.Net, F.Pose(0), Airframe, ETraversalClass::Aircraft);
+			const bool bAnyLands = RunwayUse::Lands(UseA) || RunwayUse::Lands(UseB);
+			const bool bAnyDeparts = RunwayUse::Departs(UseA) || RunwayUse::Departs(UseB);
+			// BOTH DIRECTIONS: an arrival that plans must be able to leave (the stranding bug), and one that
+			// can land AND leave must plan - a one-way check passes a planner that refuses every arrival. The
+			// Piper on this fixture plans whenever a runway takes each kind, so the pair's settings alone
+			// decide it.
+			TestEqual(FString::Printf(TEXT("%s: an arrival plans exactly when some runway lands it and some takes it out again (%s)"),
+				*Pair, *ArrivalPlanner::DescribeRefusal(Land)), Land.IsValid(), bAnyLands && bAnyDeparts);
 			if (Land.IsValid())
 			{
 				++Lands;
@@ -245,7 +253,7 @@ bool FRunwayUseLandsOnlyWhatCanLeaveTest::RunTest(const FString& Parameters)
 			{
 				TestEqual(FString::Printf(TEXT("%s: refused with the admission's reason, not a route (%s)"), *Pair,
 					*ArrivalPlanner::DescribeRefusal(Land)), Land.Why,
-					RunwayUse::Lands(UseA) || RunwayUse::Lands(UseB) ? EArrivalRefusal::NotAdmitted : EArrivalRefusal::NoArrivalRunway);
+					bAnyLands ? EArrivalRefusal::NotAdmitted : EArrivalRefusal::NoArrivalRunway);
 			}
 		}
 	}

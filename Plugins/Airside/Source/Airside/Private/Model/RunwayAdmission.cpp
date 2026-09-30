@@ -111,11 +111,13 @@ namespace RunwayAdmission
 
 		// Every runway that TAKES DEPARTURES, not just the landing one and not every runway - see the header.
 		// The list is RunwayQuery::DepartureRunways, the enumeration DeparturePlanner::PlanAny walks and the one
-		// place a use setting is read: this loop used to walk every strip AirsideCapability found, an
-		// arrivals-only one included, so a departure it counted on such a strip was one nothing would ever plan
-		// and the aircraft landed and stayed on its stand (#433). A copy of that filter here would be the same
-		// bug the next time a rule is added to one side only.
-		// ENFORCED BY: Airside.Model.RunwayUse.EveryModePairLandsOnlyWhatCanLeave (every mode pair, against PlanAny).
+		// place CheckArrival and the planners read a use setting (the inspector, the card and the build bar read
+		// it for display and editing, which is not a planning decision): this loop used to walk every strip
+		// AirsideCapability found, an arrivals-only one included, so a departure it counted on such a strip was
+		// one nothing would ever plan and the aircraft landed and stayed on its stand (#433). A copy of that
+		// filter here would be the same bug the next time a rule is added to one side only.
+		// ENFORCED BY: Check-Architecture.ps1 rule 39 (this file may not read a use setting or walk the runways
+		// itself); Airside.Model.RunwayUse.EveryModePairLandsOnlyWhatCanLeave (every mode pair, against PlanAny).
 		int32 RunwayCount = 0;
 		const TArray<FRunwayEnd> Leaving = RunwayQuery::DepartureRunways(Network, &RunwayCount);
 		FRunwayAdmission Longest;
