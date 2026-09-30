@@ -7,6 +7,7 @@
 #include "AirportMgrPanelWidget.generated.h"
 
 class ARoadBuildController;
+class UOpsRuntime;
 class UPanelWidget;
 class UUIStyle;
 class UUiWindowHost;
@@ -126,6 +127,16 @@ protected:
 	 * panel still builds, and whatever polls this simply has nothing to ask.
 	 */
 	ARoadBuildController* Controller() const;
+
+	/**
+	 * The ops runtime this panel's world plays - OpsRuntimeResolver::Resolve, the game module's ONE door to it (#448), so a panel
+	 * ENFORCED BY: Check-Architecture rule 52 (the subsystem is called from the resolver alone)
+	 *
+	 * asks "which runtime?" the way the action context and the controller's own verbs do, and a test that stood a runtime in for
+	 * the world (OpsRuntimeResolver::SetOverrideForTest) reaches every panel at once. Null for none: the editor mode, or a
+	 * headless world with no override.
+	 */
+	UOpsRuntime* OpsRuntime() const;
 
 	/**
 	 * A root VerticalBox named ContentName, returned for the subclass to fill, when the asset gave

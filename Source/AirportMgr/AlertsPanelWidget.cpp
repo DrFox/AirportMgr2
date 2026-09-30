@@ -1,6 +1,7 @@
 #include "AlertsPanelWidget.h"
 
 #include "Blueprint/WidgetTree.h"
+#include "BuildHudLayer.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
@@ -11,7 +12,6 @@
 #include "Components/VerticalBoxSlot.h"
 #include "Model/OpsEvents.h"
 #include "Present/OpsRuntime.h"
-#include "Present/OpsRuntimeSubsystem.h"
 #include "RoadBuildController.h"
 #include "RoadBuildLog.h"
 #include "UI/UiButton.h"
@@ -48,7 +48,7 @@ void UAlertsPanelWidget::BuildOnce(const UUIStyle& Style)
 
 	// THE RUNTIME'S EVENTS, as the toast stack binds them - AND WHAT IT ALREADY HOLDS: the model publishes
 	// only changes, so an alert raised before this panel existed would never reach it (stage 2 review).
-	if (UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
+	if (UOpsRuntime* Runtime = OpsRuntime())
 	{
 		BindTo(*Runtime->GetEvents());
 		for (const FOpsAlert& Alert : Runtime->GetAlerts()->GetAlerts())
@@ -153,9 +153,10 @@ bool UAlertsPanelWidget::GoTo(const FOpsAlertKey& Key, ARoadBuildController& Con
 		// place - its row says what to build, and the offer window is already on screen.
 		if (Alert.Key.Kind == EAlertKind::Overdrawn)
 		{
-			if (!Controller.IsLedgerShowing())
+			UBuildHudLayer* Hud = Controller.GetHud();
+			if (Hud != nullptr && !Hud->IsWindowShowing(EHudWindow::Ledger))
 			{
-				Controller.ToggleLedger();
+				Hud->ToggleWindow(EHudWindow::Ledger);
 			}
 			return true;
 		}

@@ -23,9 +23,9 @@
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Present/OpsRuntime.h"
-#include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "RoadBuildLog.h"
 #include "UI/UiButton.h"
 #include "UIStyle.h"
 
@@ -200,8 +200,7 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	{
 		// WEAK - UnstickMenu's reason (BuildOnce).
 		TWeakObjectPtr<UInspectorWidget> WeakSelf(this);
-		FacilityRows->ControllerSource = [WeakSelf]() { return WeakSelf.IsValid() ? WeakSelf->Controller() : nullptr; };
-		FacilityRows->RunActionSource = [WeakSelf](int32 ActionIndex) { if (WeakSelf.IsValid()) { WeakSelf->RunAction(ActionIndex); } };
+		FacilityRows->RunActionSource = [WeakSelf](int32 ActionIndex, const FBuildActionArg& Arg) { if (WeakSelf.IsValid()) { WeakSelf->RunActionWith(ActionIndex, Arg); } };
 		FacilityRows->Build(*Style);
 	}
 }
@@ -289,7 +288,7 @@ void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetwor
 	{
 		// NOTHING SELECTED DISARMS TOO - a sale armed and then clicked away from must not survive to the
 		// next time this depot is picked.
-		if (LastSelection.IsSet()) { DisarmSale(); }
+		if (LastSelection.IsSet() && FacilityRows != nullptr) { FacilityRows->DisarmSale(); }
 		SetShown(false);
 		bDepartEnabled = false;
 		LastSelection = FSelection();
@@ -344,18 +343,10 @@ void UInspectorWidget::OnNewSelection(const FSelection& Selection)
 	// A POPUP FOR THE OLD AGENT closes with its card: its lines were asked of that agent, and a
 	// confirm armed for one aeroplane must not despawn the next one clicked.
 	if (UnstickMenu != nullptr) { UnstickMenu->Close(); }
-	// The purchase rows' own (its buy menu closes, its fleet rows rebuild, any armed sale goes) - and with no rows, the
-	// controller's armed sale all the same.
+	// The purchase rows' own (its buy menu closes, its fleet rows rebuild, any armed sale goes). AN INSPECTOR WITH NO ROWS has nothing
+	// armed to forget: the armed sale lives in the rows alone now (#448) - the controller held an id too until the id travelled with
+	// the run, and this used to reach past the rows to clear it.
 	if (FacilityRows != nullptr) { FacilityRows->OnNewCard(); }
-	else { DisarmSale(); }
-}
-
-void UInspectorWidget::DisarmSale()
-{
-	// THE CONTROLLER'S ARMED SALE DOES NOT LIVE IN THE ROWS: an inspector whose asset placed no UInspectorFacilityRows has no row
-	// to ask, and a sale armed on a depot and then clicked away from must still not survive to the next time it is picked.
-	if (FacilityRows != nullptr) { FacilityRows->DisarmSale(); return; }
-	if (ARoadBuildController* C = Controller()) { C->ArmSellVehicle(0); }
 }
 
 void UInspectorWidget::HideCard()
@@ -475,6 +466,11 @@ void UInspectorWidget::PaintVerbs(const FInspectorCardView& View, const FSelecti
 
 void UInspectorWidget::RunAction(int32 ActionIndex)
 {
+	RunActionWith(ActionIndex, FBuildActionArg());
+}
+
+void UInspectorWidget::RunActionWith(int32 ActionIndex, const FBuildActionArg& Arg)
+{
 	ARoadBuildController* C = Controller();
 	if (C == nullptr)
 	{
@@ -489,7 +485,8 @@ void UInspectorWidget::RunAction(int32 ActionIndex)
 		UE_LOG(LogInspector, Warning, TEXT("Inspector click %d ignored: no such action"), ActionIndex);
 		return;
 	}
-	Actions[ActionIndex].TryRun(*C, TEXT("Inspector"));
+	// TryRunWith for every run, an empty Arg included: a plain click is a run with no argument.
+	Actions[ActionIndex].TryRunWith(*C, Arg, TEXT("Inspector"));
 }
 
 TArray<FUiMenuItem> UInspectorWidget::UnstickItems() const
@@ -501,13 +498,21 @@ TArray<FUiMenuItem> UInspectorWidget::UnstickItems() const
 		return Out;
 	}
 	const UGroundTraffic* Traffic = C->GetTarget() != nullptr ? C->GetTarget()->GetGroundTraffic() : nullptr;
-	const FRoadAgent* Agent = Traffic != nullptr ? Traffic->FindAgent(C->GetSelection().Id) : nullptr;
+	const FSelection& Selected = C->GetSelection();
+	const FRoadAgent* Agent = Traffic != nullptr ? Traffic->FindAgent(Selected.Id) : nullptr;
 	const bool bVehicle = Agent != nullptr && Agent->AsVehicle() != nullptr;
+	// THE RUNTIME'S OWN VERDICT, asked of it with the selected agent (spec 2026-09-29-unstick-agent): the lines here and the action they
+	// run are the one decision UAgentRescue makes, and this reads it from the runtime directly - not through a controller forwarder, which
+	// existed only to hand the runtime a selection (#448). REFUSED "Nothing selected" with no agent selected or no runtime (a headless
+	// test's world has none unless it stood one in).
+	const UOpsRuntime* Runtime = OpsRuntime();
 
 	// ENUM ORDER, one line per action - see UnstickItems' header.
 	auto Line = [&](EUnstickAction Action, const FText& Label)
 	{
-		const FUnstickVerdict Verdict = C->CanUnstickSelected(Action);
+		const FUnstickVerdict Verdict = Runtime != nullptr && Selected.Kind == ESelectionKind::Aircraft
+			? Runtime->CanUnstick(Selected.Id, Action)
+			: FUnstickVerdict::No(NSLOCTEXT("AirportMgr", "UnstickNothing", "Nothing selected"));
 		FUiMenuItem& Item = Out.AddDefaulted_GetRef();
 		Item.Label = Label;
 		Item.bEnabled = Verdict.bAllowed;
@@ -531,7 +536,18 @@ void UInspectorWidget::HandleUnstickChosen(int32 Index)
 		UE_LOG(LogInspector, Warning, TEXT("Unstick line %d ignored: no controller or no such action"), Index);
 		return;
 	}
-	C->UnstickSelected(static_cast<EUnstickAction>(Index));
+	// THE RUNTIME'S Unstick, with the selected agent - the verb bound to its owner (#448), as the lines above ask its CanUnstick.
+	const EUnstickAction Action = static_cast<EUnstickAction>(Index);
+	const FSelection& Selected = C->GetSelection();
+	UOpsRuntime* Runtime = OpsRuntime();
+	if (Selected.Kind != ESelectionKind::Aircraft || Runtime == nullptr)
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Unstick %s: no agent selected, or no ops runtime."), *UEnum::GetValueAsString(Action));
+		return;
+	}
+	// UAgentRescue logs the "Unstick: agent N ... -> done|refused" line; this one says the click arrived.
+	UE_LOG(LogRoadBuild, Log, TEXT("Unstick %s: agent %d"), *UEnum::GetValueAsString(Action), Selected.Id);
+	Runtime->Unstick(Selected.Id, Action);
 }
 
 bool UInspectorWidget::ShowWaitedFor(ARoadBuildController& InController)
@@ -593,13 +609,6 @@ void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
 void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 void UInspectorWidget::HandleRunway() { RunAction(RunwayActionIndex); }
 void UInspectorWidget::HandleRunwayUse() { RunAction(RunwayUseActionIndex); }
-
-const UOpsRuntime* UInspectorWidget::OpsRuntime() const
-{
-	// THE CONTROLLER'S, so the card reads the runtime its verbs act on; the subsystem when there is none.
-	if (const ARoadBuildController* C = Controller()) { return C->GetOpsRuntime(); }
-	return UOpsRuntimeSubsystem::Get(GetWorld());
-}
 
 bool UInspectorWidget::IsShownForTest() const { return IsShown(); }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }

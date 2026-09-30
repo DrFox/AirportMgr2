@@ -25,7 +25,7 @@ namespace GridSnapChainFixture
 
 		FToolContext At(const FVector2D& Where, bool bSuspend = false) const
 		{
-			return Session.MakeContext(TestWorld.Actor, Where, Tunables, false, false, bSuspend);
+			return Session.MakeContext(TestWorld.Actor, Where, Tunables, FBuildInputState{ .bSuspendGuides = bSuspend });
 		}
 	};
 
@@ -166,9 +166,9 @@ bool FGridSnapTunablesCompareStepTest::RunTest(const FString& Parameters)
 	// Through the cache itself, which is the consumer of that equality.
 	GridSnapChainFixture::FGridSession S;
 	if (!TestTrue(TEXT("taxiway, off"), GridSnapChainFixture::Begin(S, TEXT("Taxiway"), EGridStep::Off))) { return false; }
-	const FVector2D First = S.Session.GetFrameContext(S.TestWorld.Actor, GridSnapChainFixture::InTheOpen, S.Tunables, false, false, false).GuidedCursor();
+	const FVector2D First = S.Session.GetFrameContext(S.TestWorld.Actor, GridSnapChainFixture::InTheOpen, S.Tunables).GuidedCursor();
 	S.Tunables.GuideSources.GridStep = EGridStep::FiveMetres;
-	const FVector2D Second = S.Session.GetFrameContext(S.TestWorld.Actor, GridSnapChainFixture::InTheOpen, S.Tunables, false, false, false).GuidedCursor();
+	const FVector2D Second = S.Session.GetFrameContext(S.TestWorld.Actor, GridSnapChainFixture::InTheOpen, S.Tunables).GuidedCursor();
 	TestEqual(TEXT("off: the raw cursor"), First, GridSnapChainFixture::InTheOpen);
 	TestEqual(TEXT("same cursor, new step: the cache did not replay the old frame"), Second, FVector2D(4000.0, 3500.0));
 	return true;

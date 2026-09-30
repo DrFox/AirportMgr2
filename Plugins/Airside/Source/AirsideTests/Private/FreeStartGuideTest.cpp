@@ -77,7 +77,7 @@ namespace
 
 		FToolContext At(const FVector2D& Where) const
 		{
-			return Session.MakeContext(TestWorld.Actor, Where, Tunables, false, false);
+			return Session.MakeContext(TestWorld.Actor, Where, Tunables);
 		}
 	};
 
@@ -330,7 +330,7 @@ bool FFreeStartClickLandsOnTheGuideTest::RunTest(const FString& Parameters)
 		// threshold is the tool's own pending geometry and not another guide's.
 		FFreeStartSink Sink;
 		const FToolContext Second = Start.Session.MakeContext(
-			Start.TestWorld.Actor, FVector2D(9000.0, 9000.0), Start.Tunables, false, false, true);
+			Start.TestWorld.Actor, FVector2D(9000.0, 9000.0), Start.Tunables, FBuildInputState{ .bSuspendGuides = true });
 		Start.Tool->BuildPreview(Second, Sink);
 
 		const bool bFromThreshold = Sink.Lines.ContainsByPredicate(

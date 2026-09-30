@@ -342,7 +342,7 @@ namespace PlotEdgeGuideTest
 
 		FToolContext At(const FVector2D& Where) const
 		{
-			return Session.MakeContext(TestWorld.Actor, Where, Tunables, false, false);
+			return Session.MakeContext(TestWorld.Actor, Where, Tunables);
 		}
 	};
 

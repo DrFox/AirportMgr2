@@ -206,7 +206,7 @@ void URoadBuildEditorTool::Setup()
 	// Session is constructed with all six registry tools already - see FBuildSession's
 	// constructor - so selecting this instance's one is a switch, not a make.
 	//
-	// bRemoveHeld/bInsertHeld CARRIED, not left at their false defaults (issue #191/#92-#93):
+	// HeldInput's remove/insert CARRIED, not left at their false defaults (issue #191/#92-#93):
 	// ARoadBuildController::SelectTool always builds its context through MakeToolContext(),
 	// which reads live Shift/Ctrl regardless of whether the press switches tools or reselects
 	// the one already active, so a runway picked up while Ctrl is still held from removing a
@@ -219,8 +219,8 @@ void URoadBuildEditorTool::Setup()
 	// hand-writing false here is what stops that path being a second place a default is typed.
 	FToolContext SelectContext;
 	SelectContext.Target = Target;
-	SelectContext.bRemoveModifier = bRemoveHeld;
-	SelectContext.bInsertModifier = bInsertHeld;
+	SelectContext.bRemoveModifier = HeldInput.bRemoveModifier;
+	SelectContext.bInsertModifier = HeldInput.bInsertModifier;
 	Sess().SelectTool(ToolIndex, SelectContext);
 
 	// GHOST BAYS FOLLOW THE LIT TOOL, asked of the session like the node rings in Render. At
@@ -401,14 +401,14 @@ FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
 	// up to three times over for one cursor position before this. A key MISS - the cursor moved,
 	// the view zoomed, the lit tool changed - still rebuilds exactly as MakeContext always did;
 	// see FBuildSession::GetFrameContext.
-	return Sess().GetFrameContext(Target, Plane, Tunables, bRemoveHeld, bInsertHeld, bSuspendHeld);
+	return Sess().GetFrameContext(Target, Plane, Tunables, HeldInput);
 }
 
 void URoadBuildEditorTool::OnUpdateModifierState(int ModifierID, bool bIsOn)
 {
-	if (ModifierID == RemoveModifierId) { bRemoveHeld = bIsOn; }
-	if (ModifierID == InsertModifierId) { bInsertHeld = bIsOn; }
-	if (ModifierID == SuspendModifierId) { bSuspendHeld = bIsOn; }
+	if (ModifierID == RemoveModifierId) { HeldInput.bRemoveModifier = bIsOn; }
+	if (ModifierID == InsertModifierId) { HeldInput.bInsertModifier = bIsOn; }
+	if (ModifierID == SuspendModifierId) { HeldInput.bSuspendGuides = bIsOn; }
 }
 
 FInputRayHit URoadBuildEditorTool::CanBeginClickDragSequence(const FInputDeviceRay& PressPos)

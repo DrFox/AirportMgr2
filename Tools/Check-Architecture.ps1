@@ -2798,6 +2798,11 @@ $editorSessionDoors = @(
         Reason  = "the editor builds every context through GetFrameContext, which runs MakeContext on a key miss; PIE's click path bypasses that cache on purpose (issue #303) - a real divergence, pinned here so it stays deliberate"
     },
     @{
+        Method  = 'CancelStage'
+        Absent  = '\bUiWindowHost\b|\bSettingsPanel\b|\bIsModalOpen\b'
+        Reason  = "PIE-only: opening the Settings window drops a drag in flight (ARoadBuildController::DropGestureForModal) and abandons only the tool's stage; the editor mode has no modal window of its own - when AirsideEditor names a window host or a modal, it needs this call too (#448)"
+    },
+    @{
         Method  = 'Select'
         Absent  = '\bAlert\w*'
         Reason  = "PIE-only: the alert panel's Go (ARoadBuildController::SelectAndFocus) selects the alert's subject, and the editor mode has no alerts - when AirsideEditor names an alert, it needs this call too"
@@ -3235,6 +3240,205 @@ foreach ($key in $routeInternalsAllowed.Keys) {
     }
 }
 $ranRules.Add('route-internals')
+
+# --- 54. THE CONTROLLER'S PUBLIC SURFACE IS A CLOSED LIST, AND IT INCLUDES NO AIRPORTOPS MODEL (#448) ---------
+# ARoadBuildController was split by #94 into input, session and target, plus forwarding - and grew back: 398/815 lines at the split,
+# 952/1662 by 2026-09-30, about 105 public methods, four of AirportOps' Model/ headers' types in its signatures. Every inspector and ops
+# feature since (#387, #408, #412, #413, #417) added methods here, because FBuildActionContext gave a verb no selection and no argument and so
+# forced each selection verb back through a forwarder on the one object that held the session. The context carries both now, the HUD layer
+# owns the window toggle, and the runtime has one resolver - and THIS is what holds the shape, by its symptom (the rule 20 shape, for the
+# controller instead of the actor): (a) the header includes no AirportOps Model/ header - the controller is game-framework glue over
+# Airside's model, and the ops layer is reached through the context's Runtime (OpsRuntimeResolver); (b) the public method names are exactly the
+# allow-list below. A NEW public method fails: a verb on a selection binds in BuildActions.cpp, a window toggles through UBuildHudLayer, a read
+# goes to the thing that owns it. A LISTED name the header no longer declares ALSO fails: the list is a ratchet and is meant to SHRINK, not to
+# be edited upward to match whatever the header declares today - which is the regression #94 and this issue were.
+# DOES NOT SEE: a method added to a SUBOBJECT the controller owns (the camera, the HUD layer) - those have their own headers. A public name
+# declared through a macro. A method reached through `friend`. Declarations only are read: bodies are blanked at brace depth 1.
+$controllerHeader = Join-Path $Root 'Source\AirportMgr\RoadBuildController.h'
+$controllerPublicAllowList = @(
+    'ApplySnapToggle',
+    'ApplyVerb',
+    'ARoadBuildController',
+    'CanRedo',
+    'CanUndo',
+    'CollectToolReadoutForTest',
+    'CursorOnRoadPlane',
+    'DepotForSelection',
+    'EndPlayForTest',
+    'GetActiveTool',
+    'GetActiveToolIndex',
+    'GetActiveVariantAxes',
+    'GetFrameContext',
+    'GetGestureMode',
+    'GetHud',
+    'GetLastLandRequestForTest',
+    'GetSelection',
+    'GetSession',
+    'GetTarget',
+    'GetToolReadout',
+    'GetToolReadoutRevision',
+    'GetUnstickMenuRequests',
+    'GetViewFocus',
+    'HasAgent',
+    'HasNetworkContent',
+    'HasRunway',
+    'HasRunwayRecomputeCountForTest',
+    'IsGuidelineOverlayOn',
+    'IsModalOpen',
+    'IsPaused',
+    'IsPrimaryPressedForTest',
+    'IsSettingsShowing',
+    'IsWatchingAgent',
+    'KeyWaitsForModal',
+    'LandAircraftNearViewFocus',
+    'MakeContextCallCountForTest',
+    'MakeToolContext',
+    'MakeVariantContext',
+    'MovePrimaryForTest',
+    'OnActionKeyForTest',
+    'OnBuild',
+    'OnClearNetwork',
+    'OnRedo',
+    'OnToggleGuidelines',
+    'OnUndo',
+    'PlayerTickForTest',
+    'PressPrimaryForTest',
+    'QuickLoad',
+    'QuickSave',
+    'RequestUnstickMenu',
+    'ResolveSnap',
+    'RevealedDepotFor',
+    'SelectActiveVariant',
+    'SelectAndFocus',
+    'SelectedAgentFactsThisFrame',
+    'SelectForTest',
+    'SelectTool',
+    'SetBuildingsForTest',
+    'SetTargetForTest',
+    'StepSpeed',
+    'ToggleGestureMode',
+    'TogglePause',
+    'ToggleSettings',
+    'ToggleWatchAgent',
+    'WantsRoadNodesDrawn',
+    'ZoomIn',
+    'ZoomOut'
+)
+if (-not (Test-Path $controllerHeader) -or -not (Test-Path (Join-Path $ops 'Public\Model'))) {
+    $failures.Add("controller-stays-thin: $controllerHeader or AirportOps' Public\Model is missing - rule 54 names paths that moved; update it, do not let it check nothing")
+} else {
+    $opsModelHeaders = @(Get-ChildItem -Path (Join-Path $ops 'Public\Model') -Filter '*.h' -File | ForEach-Object { $_.Name })
+    $controllerLines = Get-Content -LiteralPath $controllerHeader
+    $inBlock = $false
+    $controllerParts = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $controllerLines.Count; $i++) {
+        $code = Strip-ArchCode $controllerLines[$i] ([ref]$inBlock)
+        $controllerParts.Add($code)
+    }
+    for ($i = 0; $i -lt $controllerLines.Count; $i++) {
+        if ($controllerLines[$i] -match '^\s*#\s*include\s+"Model/([\w/]+\.h)"') {
+            $included = ($Matches[1] -split '/')[-1]
+            if ($opsModelHeaders -contains $included) {
+                $failures.Add("controller-stays-thin: RoadBuildController.h:$($i + 1) includes AirportOps' Model/$included - the controller is glue over Airside's model; reach the ops layer through FBuildActionContext::Runtime (OpsRuntimeResolver), and keep a verb's types in BuildActions.cpp (#448)")
+            }
+        }
+    }
+    $controllerCode = $controllerParts -join "`n"
+    $controllerOpen = [regex]::Match($controllerCode, '\bclass\s+AIRPORTMGR_API\s+ARoadBuildController\b[^;{]*\{')
+    if (-not $controllerOpen.Success) {
+        $failures.Add("controller-stays-thin: found no 'class AIRPORTMGR_API ARoadBuildController {' in $controllerHeader - it moved; update rule 54")
+    } else {
+        $flat = New-Object System.Text.StringBuilder
+        $depth = 1
+        $controllerBody = $controllerCode.Substring($controllerOpen.Index + $controllerOpen.Length)
+        for ($p = 0; $p -lt $controllerBody.Length -and $depth -gt 0; $p++) {
+            $ch = $controllerBody[$p]
+            if ($ch -eq '{') { $depth++; [void]$flat.Append(' ') }
+            elseif ($ch -eq '}') { $depth--; [void]$flat.Append(' ') }
+            elseif ($depth -eq 1) { [void]$flat.Append($ch) }
+            else { [void]$flat.Append(' ') }
+        }
+        $publicNames = New-Object System.Collections.Generic.SortedSet[string]
+        $segments = [regex]::Split($flat.ToString(), '\b(public|protected|private)\s*:')
+        for ($s = 1; $s -lt $segments.Count; $s += 2) {
+            if ($segments[$s] -ne 'public') { continue }
+            foreach ($m in [regex]::Matches($segments[$s + 1], '(?<![\w:.>])(~?[A-Za-z_]\w*)\s*\(')) {
+                $name = $m.Groups[1].Value
+                if (@('UPROPERTY', 'UFUNCTION', 'UCLASS', 'USTRUCT', 'GENERATED_BODY', 'meta', 'static_assert', 'TEXT') -contains $name) { continue }
+                [void]$publicNames.Add($name)
+            }
+        }
+        if ($publicNames.Count -eq 0) {
+            $failures.Add("controller-stays-thin: read no public method from $controllerHeader - the parse stopped seeing the class; rule 54 must not check nothing")
+        }
+        foreach ($name in $publicNames) {
+            if ($controllerPublicAllowList -notcontains $name) {
+                $failures.Add("controller-stays-thin: RoadBuildController.h declares a public $name( that is not in rule 54's allow-list (#448) - a selection verb binds in BuildActions.cpp (FBuildActionContext::Selection, ::Arg), a window toggles through UBuildHudLayer::ToggleWindow, the runtime comes from OpsRuntimeResolver. Growing the list to fit is the regression this rule exists to stop")
+            }
+        }
+        foreach ($name in $controllerPublicAllowList) {
+            if (-not $publicNames.Contains($name)) {
+                $failures.Add("controller-stays-thin: rule 54 lists $name( but RoadBuildController.h no longer declares it public - delete the entry, so the list ratchets down with the header")
+            }
+        }
+    }
+}
+$ranRules.Add('controller-stays-thin')
+
+# --- 55. THE OPS RUNTIME HAS ONE DOOR IN THE GAME MODULE (#448) -----------------------------------------------
+# UOpsRuntimeSubsystem::Get( was called from nine widgets, the action context and the controller, beside a controller-held test override, a bar
+# runtime of its own and five bypasses of the override - so a headless test that handed one place a runtime left the rest with none. It is called
+# from OpsRuntimeResolver.cpp alone now; everything else asks OpsRuntimeResolver::Resolve (or a panel's OpsRuntime(), which does). Comments and
+# string literals are stripped (rule 34's stripper), so a WHY comment can name the subsystem. And the half that stops it checking nothing: the
+# resolver must still make the call.
+# DOES NOT SEE: the subsystem reached by another spelling (GetGameInstance()->GetSubsystem<UOpsRuntimeSubsystem>()) - a call that does not name
+# `UOpsRuntimeSubsystem::Get(`. AirportMgr.Actions.OneResolverForTheOpsRuntime is the runtime half (an override reaches the context and the bar).
+$resolverFile = Join-Path $Root 'Source\AirportMgr\OpsRuntimeResolver.cpp'
+if (-not (Test-Path $resolverFile)) {
+    $failures.Add("ops-runtime-one-door: $resolverFile is named by rule 55 but does not exist - update the rule, do not let it check nothing")
+} else {
+    $resolverCalls = 0
+    foreach ($file in Get-Sources (Join-Path $Root 'Source\AirportMgr') @('.cpp', '.h')) {
+        $isResolver = $file.FullName -eq $resolverFile
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code -match '\bUOpsRuntimeSubsystem\s*::\s*Get\s*\(') {
+                if ($isResolver) { $resolverCalls++ }
+                else { $failures.Add("ops-runtime-one-door: $($file.Name):$($i + 1) calls UOpsRuntimeSubsystem::Get( - the game module asks OpsRuntimeResolver::Resolve (a panel: OpsRuntime()), so one answer reaches the context, the bar, the inspector and a test's stand-in (#448): $($code.Trim())") }
+            }
+        }
+    }
+    if ($resolverCalls -lt 1) {
+        $failures.Add("ops-runtime-one-door: OpsRuntimeResolver.cpp no longer calls UOpsRuntimeSubsystem::Get( - the door moved, or rule 55 is stale (#448)")
+    }
+}
+$ranRules.Add('ops-runtime-one-door')
+
+# --- 56. THE CONTROLLER READS THE HELD KEYS ONCE (#448) -------------------------------------------------------
+# MakeToolContext and PlayerTick's frame context each typed the same five-line block of positional bools - Ctrl, Shift, Alt, the hover pick -
+# a thousand lines apart, and inserting Alt ahead of the hover agent once turned the agent id into a bool there. ReadInputState reads them into
+# the session's FBuildInputState, once, and both callers take it. THE SYMPTOM HELD: the Shift read appears exactly once in the file - a second
+# copy of the block would put a second one beside it. Comments and strings are stripped (rule 34's stripper). And exactly ONE, not "at most":
+# zero means the read moved and this rule checks nothing.
+# DOES NOT SEE: a held key read through another call (IsInputKeyDown(FKey(...)), WasInputKeyJustPressed) - the pin is the shape the bug had.
+$inputReadFile = Join-Path $Root 'Source\AirportMgr\RoadBuildController.cpp'
+if (-not (Test-Path $inputReadFile)) {
+    $failures.Add("input-read-once: $inputReadFile is named by rule 56 but does not exist - update the rule, do not let it check nothing")
+} else {
+    $shiftReads = 0
+    $inputLines = Get-Content -LiteralPath $inputReadFile
+    $inBlock = $false
+    for ($i = 0; $i -lt $inputLines.Count; $i++) {
+        $code = Strip-ArchCode $inputLines[$i] ([ref]$inBlock)
+        $shiftReads += ([regex]::Matches($code, 'IsInputKeyDown\s*\(\s*EKeys::LeftShift\s*\)')).Count
+    }
+    if ($shiftReads -ne 1) {
+        $failures.Add("input-read-once: RoadBuildController.cpp reads IsInputKeyDown(EKeys::LeftShift) $shiftReads time(s), not once - the held keys are read in ReadInputState and handed on as an FBuildInputState, never retyped at a second site (#448)")
+    }
+}
+$ranRules.Add('input-read-once')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

@@ -3,11 +3,43 @@
 #include "CoreMinimal.h"
 #include "Solve/GuideArbiter.h"
 #include "InputCoreTypes.h"
+#include "Tool/Selection.h"
 #include "UI/UiMenuButton.h"
 
 class ARoadBuildController;
 class ARoadNetworkActor;
+class UBuildHudLayer;
 class UOpsRuntime;
+
+/**
+ * THE ARGUMENT OF A PARAMETERISED VERB (#448): what a button cannot say by being pressed - WHICH vehicle to sell, WHICH kind to
+ * buy. It travels with the run (FBuildAction::TryRunWith) into the row's IsEnabled and Execute through FBuildActionContext::Arg,
+ * so the thing that chose it holds it and nothing else does.
+ *
+ * It was SIDE-CHANNEL STATE on the controller instead: the inspector wrote ChosenVehicleType / ArmedSellVehicle one line before
+ * it ran the row, and the row read them back. A second caller of the row (a hotkey, a test) then ran with whatever was last
+ * armed or chosen - a sale of a vehicle nobody had just clicked - and "which vehicle is armed" lived in two places, the row's
+ * bArmed and the controller's id, kept in step by hand.
+ *
+ * TWO FIELDS, NOT A VARIANT: a verb takes one of them and a row names which, so a union would only add a tag to get wrong.
+ * Empty (Code None, Id 0) is "no argument", and a verb that needs one is disabled for it: ids start at 1.
+ * ENFORCED BY: AirportMgr.Actions.SellTakesItsVehicleFromTheRow, AirportMgr.Actions.ParameterisedVerbsRefuseNoArgument
+ */
+struct FBuildActionArg
+{
+	/** A kind's code - selection.buy_vehicle's vehicle type. */
+	FName Code;
+	/** An id - selection.sell_vehicle's vehicle. */
+	int32 Id = 0;
+
+	bool IsSet() const { return !Code.IsNone() || Id != 0; }
+
+	static FBuildActionArg OfCode(FName InCode) { FBuildActionArg Arg; Arg.Code = InCode; return Arg; }
+	static FBuildActionArg OfId(int32 InId) { FBuildActionArg Arg; Arg.Id = InId; return Arg; }
+
+	/** For the run's log line: "code FUEL", "id 7", or empty. */
+	FString Describe() const;
+};
 
 /**
  * What an FBuildAction's Execute/IsActive/IsEnabled actually needs, rather than the bare
@@ -30,10 +62,22 @@ class UOpsRuntime;
 struct FBuildActionContext
 {
 	ARoadBuildController& Controller;
-	/** The attached OpsRuntime, or null in a world with no game instance (a headless test). */
+	/** The world's ops runtime (OpsRuntimeResolver::Resolve - the ONE door to it; ENFORCED BY: Check-Architecture rule 52), or null in a world with none (a headless test). */
 	UOpsRuntime* Runtime = nullptr;
 	/** The road actor being built into, or null when the level has none. */
 	ARoadNetworkActor* Target = nullptr;
+	/** The HUD's windows - the ledger, the alerts, Land and Settings toggle through it (UBuildHudLayer::ToggleWindow), not through
+	 *  a controller Toggle/IsShowing pair each. Null only for a controller with none. */
+	UBuildHudLayer* Hud = nullptr;
+	/**
+	 * What is selected NOW, the session's own, by reference (#448). A selection verb binds to the thing it acts on - the road
+	 * actor, the runtime - and reads WHICH one from here, where it used to go through a controller forwarder that existed only
+	 * to read the controller's session. A reference, not a copy: the context is built per poll, and a copy would be a second
+	 * selection for that one call to disagree with the tool about.
+	 */
+	const FSelection& Selection;
+	/** The row's argument - set by FBuildAction::TryRunWith, empty for a plain run. See FBuildActionArg. */
+	FBuildActionArg Arg;
 
 	/**
 	 * EXPLICIT (issue #309, reversing #191's own ruling): the implicit conversion that ruling
@@ -148,6 +192,16 @@ struct FBuildAction
 	 * this method already did inline before issue #191 gave that lookup a name.
 	 */
 	bool TryRun(ARoadBuildController& C, const TCHAR* Via) const;
+
+	/**
+	 * TryRun with an ARGUMENT - the door for a parameterised verb (selection.buy_vehicle's kind, selection.sell_vehicle's
+	 * vehicle), beside TryChoose's for a menu's line (#448). The argument is in the context before IsEnabled runs, so the gate
+	 * and the verb judge the same one, and the log line carries it ("Inspector: selection.sell_vehicle id 7").
+	 * TryRun is this with no argument.
+	 */
+	bool TryRunWith(ARoadBuildController& C, const FBuildActionArg& Arg, const TCHAR* Via) const;
+	/** The same, given a context already built - a test's, with a runtime handed in. Sets Context.Arg. */
+	bool TryRunWith(FBuildActionContext& Context, const FBuildActionArg& Arg, const TCHAR* Via) const;
 
 	/** TryRun's door for a menu verb's chosen Line: the same IsEnabled gate and the same one log line
 	 *  ("<Via>: <Id> line <n>"), then Choose. False when disabled or not a menu verb. */

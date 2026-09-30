@@ -24,7 +24,6 @@
 #include "OfferViewModels.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntime.h"
-#include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
 #include "UI/UiButton.h"
@@ -196,7 +195,7 @@ void UOfferInboxWidget::Refresh(ARoadNetworkActor* Target)
 		return;
 	}
 
-	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	UOpsRuntime* Runtime = OpsRuntime();
 	UGroundTraffic* Traffic = Target->GetGroundTraffic();
 	if (Runtime == nullptr || Traffic == nullptr || Runtime->GetFlightBoard() == nullptr
 		|| Runtime->GetClock() == nullptr)

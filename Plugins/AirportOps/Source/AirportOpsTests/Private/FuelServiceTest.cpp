@@ -3175,7 +3175,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFuelManualDepartTest::RunTest(const FString& Parameters)
 {
-	// THE INSPECTOR'S DEPART (batch 3 review I1): RoadBuildController::DepartSelected calls
+	// THE INSPECTOR'S DEPART (batch 3 review I1): the depart verb (BuildActions.cpp's BuildActionVerbs::Depart) calls
 	// UGroundTraffic::DepartAgent on a parked aircraft directly, never through DepartTheReady - so a
 	// publisher there missed it, and so did the part-fuelled fee: send an aircraft off mid-fuelling and
 	// the airline never heard and the fuel was never paid for. The ONE site is the drop of the turnaround

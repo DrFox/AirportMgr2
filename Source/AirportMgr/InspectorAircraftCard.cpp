@@ -40,7 +40,19 @@ double FAircraftCard::GameSecondsOfStall(double StalledSeconds, const USimClock&
 	return StalledSeconds * Clock.GameSecondsPerRealSecond(Clock.TimeOfDay());
 }
 
-FString FAircraftCard::NameOfAgent(const UFlightBoard* Flights, const UGroundTraffic* Traffic, int32 AgentId)
+FString FAircraftCard::NameOfVehicle(const UJobBoard* Jobs, int32 AgentId)
+{
+	const FServiceVehicle* Vehicle = Jobs != nullptr ? Jobs->VehicleForAgent(AgentId) : nullptr;
+	if (Vehicle == nullptr)
+	{
+		return FString();
+	}
+	// THE KIND'S NAME AND THE VEHICLE'S OWN ID - what the depot card's fleet rows and the vehicle's fuel line say - not the type code
+	// and the agent id the title printed ("FUEL  #37") before #478. FServiceFleet::NameOf is the one resolver of the name (#430).
+	return FString::Printf(TEXT("%s #%d"), *FServiceFleet::NameOf(*Jobs, Vehicle->TypeCode).ToString(), Vehicle->Id);
+}
+
+FString FAircraftCard::NameOfAgent(const UFlightBoard* Flights, const UGroundTraffic* Traffic, const UJobBoard* Jobs, int32 AgentId)
 {
 	if (Flights != nullptr)
 	{
@@ -48,6 +60,12 @@ FString FAircraftCard::NameOfAgent(const UFlightBoard* Flights, const UGroundTra
 		{
 			return Flight->Callsign;
 		}
+	}
+	// A SERVICE VEHICLE, before the type-and-agent-id fallback: the fallback is for what no vehicle owns, and a bowser that is
+	// named "FUEL #37" on a hold line while its own card says "Bowser #2" is two names for one thing.
+	if (const FString Vehicle = NameOfVehicle(Jobs, AgentId); !Vehicle.IsEmpty())
+	{
+		return Vehicle;
 	}
 	if (const FRoadAgent* Agent = Traffic != nullptr ? Traffic->FindAgent(AgentId) : nullptr)
 	{
@@ -102,6 +120,7 @@ FAircraftDisplay FAircraftCard::DisplayOf(const FAgentFacts& F, const FAircraftN
 	D.Turnaround = F.Turnaround;
 	D.Registration = Names.Registration;
 	D.Airline = Names.Airline;
+	D.Vehicle = Names.Vehicle;
 	D.Blocker = Names.Blocker;
 	D.Partners = Names.Partners;
 	D.Waited = Names.Waited;
@@ -121,6 +140,11 @@ void FAircraftCard::Compose(const FAircraftDisplay& D, FInspectorCardView& Out)
 		Out.Title = D.Airline.IsEmpty()
 			? FString::Format(TEXT("{0} · {1}"), { D.Registration, D.TypeName })
 			: FString::Format(TEXT("{0} · {1} · {2}"), { D.Registration, D.TypeName, D.Airline });
+	}
+	else if (!D.Vehicle.IsEmpty())
+	{
+		// A SERVICE VEHICLE: its kind's name and its vehicle id, "Bowser #7" (#478) - no flight owns it, so no registration leads.
+		Out.Title = D.Vehicle;
 	}
 	else
 	{
@@ -217,6 +241,8 @@ const FInspectorCardView* FAircraftCard::Describe(const FInspectorCardInput& In)
 	}
 	const UGroundTraffic* Traffic = Target.GetGroundTraffic();
 	const UOpsRuntime* Runtime = In.Runtime;
+	// THE JOB BOARD, for the fuel line below and for naming a vehicle (NameOfAgent): a hold or a ring names the bowser it waits on.
+	const UJobBoard* Jobs = Runtime != nullptr ? Runtime->GetJobBoard() : nullptr;
 
 	// THE FUEL LINE, from the layer that knows what fuel is. Reached through the ops
 	// subsystem rather than through Target, because the airport actor is Airside's and
@@ -236,7 +262,7 @@ const FInspectorCardView* FAircraftCard::Describe(const FInspectorCardInput& In)
 	if (Runtime != nullptr)
 	{
 		const double Now = Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0;
-		if (const UJobBoard* Fuel = Runtime->GetJobBoard())
+		if (const UJobBoard* Fuel = Jobs)
 		{
 			if (bFuelLineLive || FuelLineBoard.Get() != Fuel || FuelLineRevision != Fuel->Revision() || FuelLineAgent != F.Id)
 			{
@@ -270,6 +296,12 @@ const FInspectorCardView* FAircraftCard::Describe(const FInspectorCardInput& In)
 		Names.Registration = OwnFlight->Callsign;
 		Names.Airline = OwnFlight->AirlineName.ToString();
 	}
+	else
+	{
+		// NO FLIGHT OWNS IT: it may be a service vehicle's agent (#478), titled by its vehicle - asked only then, so an aircraft with a
+		// flight (the common card) pays no fleet walk. A plain lookup over the fleet, every tick, for the one selected agent.
+		Names.Vehicle = NameOfVehicle(Jobs, F.Id);
+	}
 	// UNCACHED, and on purpose: whom it waits for and the ring re-derive from this tick's facts
 	// (F.Hold, F.DeadlockedWith - InspectFacts::DescribeAgent, every tick), and they are FAircraftDisplay
 	// fields, so a changed blocker or ring recomposes the card with no flight or job board revision
@@ -277,12 +309,12 @@ const FInspectorCardView* FAircraftCard::Describe(const FInspectorCardInput& In)
 	// ENFORCED BY: AirportMgr.Inspector.Cache.WaitingOnRefreshesTheCard
 	if (F.Hold.IsSet())
 	{
-		Names.Blocker = NameOfAgent(In.Flights, Traffic, F.Hold.WaitingOn);
+		Names.Blocker = NameOfAgent(In.Flights, Traffic, Jobs, F.Hold.WaitingOn);
 	}
 	TArray<FString> PartnerNames;
 	for (const int32 Partner : F.DeadlockedWith)
 	{
-		PartnerNames.Add(NameOfAgent(In.Flights, Traffic, Partner));
+		PartnerNames.Add(NameOfAgent(In.Flights, Traffic, Jobs, Partner));
 	}
 	Names.Partners = FString::Join(PartnerNames, TEXT(", "));
 	// HOW LONG, IN GAME TIME and the turnaround line's words (ruled 2026-09-30): the stall clock

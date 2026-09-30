@@ -362,7 +362,7 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 
 	// A build tool is modal over the airport, not over a thing in it: the selection closes
 	// with the panel when one opens, and does not come back when it is cancelled.
-	if (Index != 0)
+	if (Index != SelectToolIndex)
 	{
 		Selection.Clear();
 	}
@@ -382,8 +382,7 @@ bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FRoadSnapQuer
 }
 
 FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
-	const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
-	bool bSuspendGuides, int32 HoverAgent) const
+	const FBuildSessionTunables& Tunables, const FBuildInputState& Input) const
 {
 	// COUNTED FIRST, unconditionally: see MakeContextCallCountForTest's own comment. This is
 	// the one function every MakeToolContext call on either driver funnels through, which is
@@ -393,7 +392,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 
 	FToolContext Context;
 	Context.Target = Target;
-	Context.HoverAgent = HoverAgent;
+	Context.HoverAgent = Input.HoverAgent;
 	Context.Selection = &Selection;
 	Context.Limits = Tunables.Limits;
 	Context.Envelopes = Tunables.Envelopes;
@@ -403,9 +402,9 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// the same thing to a tool, and either lights the same button - the arrangement
 	// ARoadBuildController::MakeToolContext used to make with its own EClickModifier, moved
 	// here when the modes became one enum so the editor mode gets it too.
-	Context.bRemoveModifier = bRemoveModifier || Mode == EGestureMode::Remove;
-	Context.bInsertModifier = bInsertModifier || Mode == EGestureMode::Insert;
-	Context.bSuspendGuides = bSuspendGuides;
+	Context.bRemoveModifier = Input.bRemoveModifier || Mode == EGestureMode::Remove;
+	Context.bInsertModifier = Input.bInsertModifier || Mode == EGestureMode::Insert;
+	Context.bSuspendGuides = Input.bSuspendGuides;
 
 	// WHERE FToolRegistration::EditHandles IS CONSUMED - the one reader, so the tool table
 	// stays the one place that mapping is written. The LIT tool decides, not the edit tool:
@@ -462,7 +461,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// it to stop.
 	const IBuildTool* Tool = GetActiveTool();
 	bool bGuideChainRan = false;
-	if (!bSuspendGuides && Tool != nullptr && Network != nullptr
+	if (!Input.bSuspendGuides && Tool != nullptr && Network != nullptr
 		&& Tool->DescribeGuideAnchor(Network, Target, Anchor))
 	{
 		// A FREE START SWINGS AROUND THE CURSOR, and this is the only place that can say so: the
@@ -482,7 +481,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 		Guide = GuideChain.Resolve(*Network, Anchor, PlaneHit, LastGuide, Tunables.GuideSources);
 		bGuideChainRan = true;
 	}
-	else if (!bSuspendGuides && Tool != nullptr && Network == nullptr
+	else if (!Input.bSuspendGuides && Tool != nullptr && Network == nullptr
 		&& Tool->DescribeGuideAnchor(nullptr, Target, Anchor))
 	{
 		// AN AIRPORT WITH NO NETWORK YET - it is created on the first edit (URoadEditFacade::
@@ -499,7 +498,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// actually landing on.
 	// ENFORCED BY: Airside.Tool.GridSnap.SuspendAndSelectHaveNoGrid
 	const double StepUu = Tunables.GuideSources.GridStepUu();
-	if (!bSuspendGuides && Tool != nullptr && (bGuideChainRan || Tool->SnapsToGrid()) && StepUu > 0.0)
+	if (!Input.bSuspendGuides && Tool != nullptr && (bGuideChainRan || Tool->SnapsToGrid()) && StepUu > 0.0)
 	{
 		// WHICH WAY THE GRID LIES - grid-follows-snap design section 2. HERE, AFTER THE CHAIN, and
 		// the reason Resolve no longer applies the grid itself: the frame depends on which guide
@@ -552,18 +551,14 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 }
 
 const FToolContext& FBuildSession::GetFrameContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
-	const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
-	bool bSuspendGuides, int32 HoverAgent) const
+	const FBuildSessionTunables& Tunables, const FBuildInputState& Input) const
 {
 	FFrameContextKey NewKey;
 	NewKey.Target = Target;
 	NewKey.Tool = GetActiveTool();
 	NewKey.PlaneHit = PlaneHit;
 	NewKey.Tunables = Tunables;
-	NewKey.bRemoveModifier = bRemoveModifier;
-	NewKey.bInsertModifier = bInsertModifier;
-	NewKey.bSuspendGuides = bSuspendGuides;
-	NewKey.HoverAgent = HoverAgent;
+	NewKey.Input = Input;
 
 	if (bHasFrameContextCache && NewKey == LastFrameContextKey)
 	{
@@ -573,8 +568,7 @@ const FToolContext& FBuildSession::GetFrameContext(IRoadEditTarget* Target, cons
 		return CachedFrameContext;
 	}
 
-	CachedFrameContext = MakeContext(Target, PlaneHit, Tunables, bRemoveModifier, bInsertModifier,
-		bSuspendGuides, HoverAgent);
+	CachedFrameContext = MakeContext(Target, PlaneHit, Tunables, Input);
 	LastFrameContextKey = NewKey;
 	bHasFrameContextCache = true;
 	return CachedFrameContext;
@@ -582,28 +576,33 @@ const FToolContext& FBuildSession::GetFrameContext(IRoadEditTarget* Target, cons
 
 void FBuildSession::CancelActiveGesture(const FToolContext& Context)
 {
-	IBuildTool* Tool = GetActiveTool();
-	if (Tool == nullptr)
+	if (GetActiveTool() == nullptr || CancelStage(Context))
 	{
-		return;
-	}
-	if (!Tool->IsIdle())
-	{
-		Tool->OnCancel(Context);
-
-		// OnCancel abandons the tool's own stage - not visible to GetFrameContext's key, the
-		// same reason ARoadBuildController::OnCancelGesture pairs this call with
-		// InvalidateToolReadoutCache.
-		InvalidateFrameContextCache();
 		return;
 	}
 	// Idle, and not in Select: cancel means "put the tool down". Two cancels from mid-gesture
 	// reach Select; one from an idle build tool does. In Select itself an idle cancel is a
 	// no-op rather than a toggle to anything.
-	if (ActiveTool != 0)
+	if (ActiveTool != SelectToolIndex)
 	{
-		SelectTool(0, Context);
+		SelectTool(SelectToolIndex, Context);
 	}
+}
+
+bool FBuildSession::CancelStage(const FToolContext& Context)
+{
+	IBuildTool* Tool = GetActiveTool();
+	if (Tool == nullptr || Tool->IsIdle())
+	{
+		return false;
+	}
+	Tool->OnCancel(Context);
+
+	// OnCancel abandons the tool's own stage - not visible to GetFrameContext's key, the
+	// same reason ARoadBuildController::OnCancelGesture pairs this call with
+	// InvalidateToolReadoutCache.
+	InvalidateFrameContextCache();
+	return true;
 }
 
 void FBuildSession::OnNetworkReplaced(const FToolContext& Context, ENetworkReplace Phase)

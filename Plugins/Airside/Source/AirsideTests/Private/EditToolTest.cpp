@@ -75,7 +75,7 @@ bool FEditModeSuppressesTheBuildToolTest::RunTest(const FString& Parameters)
 
 	FBuildSessionTunables Tunables;
 	const FToolContext Context =
-		Session.MakeContext(Actor, FVector2D(1000.0, 1000.0), Tunables, false, false);
+		Session.MakeContext(Actor, FVector2D(1000.0, 1000.0), Tunables);
 
 	IBuildTool* Active = Session.GetActiveTool();
 	if (!TestNotNull(TEXT("a tool is active in Edit"), Active)) { return false; }
@@ -92,7 +92,7 @@ bool FEditModeSuppressesTheBuildToolTest::RunTest(const FString& Parameters)
 	// tool that was broken all along - the control the rule needs to mean anything.
 	Session.SetGestureMode(EGestureMode::Build);
 	Session.GetActiveTool()->OnClick(
-		Session.MakeContext(Actor, FVector2D(1000.0, 1000.0), Tunables, false, false));
+		Session.MakeContext(Actor, FVector2D(1000.0, 1000.0), Tunables));
 	TestEqual(TEXT("the identical click in Build lays a node"),
 		Actor->GetNetwork()->GetNodes().Num(), 1);
 	return true;
@@ -164,7 +164,7 @@ bool FEditHandlesReachTheContextTest::RunTest(const FString& Parameters)
 	Session.SelectTool(1);                       // Taxiway
 	Session.SetGestureMode(EGestureMode::Edit);
 	TestTrue(TEXT("the lit tool's handle kind reaches the context"),
-		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables, false, false).EditHandles
+		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables).EditHandles
 			== EEditHandleKind::AirsideNode);
 
 	// THE LIT TOOL FILTERS, so a different tool lit means different handles. Edit is re-entered
@@ -172,14 +172,14 @@ bool FEditHandlesReachTheContextTest::RunTest(const FString& Parameters)
 	Session.SelectTool(2);                       // Apron
 	Session.SetGestureMode(EGestureMode::Edit);
 	TestTrue(TEXT("switching the lit tool switches the handle kind"),
-		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables, false, false).EditHandles
+		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables).EditHandles
 			== EEditHandleKind::ApronCorner);
 
 	// AND NONE OUTSIDE EDIT, so nothing downstream can act on a handle kind while the build
 	// tool is the one running.
 	Session.SetGestureMode(EGestureMode::Build);
 	TestTrue(TEXT("no handles are offered while the mode is Build"),
-		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables, false, false).EditHandles
+		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables).EditHandles
 			== EEditHandleKind::None);
 	return true;
 }
@@ -282,12 +282,12 @@ bool FEditModeDragSnapsExactlyToANodeTest::RunTest(const FString& Parameters)
 	FBuildSessionTunables Tunables;
 
 	IBuildTool* Tool = Session.GetActiveTool();
-	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, false, false));
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables));
 
 	// Just SHORT of C - inside its snap reach but not on it. A CLICK here would land on C
 	// exactly; the whole point of this feature is that the drag now does the same.
 	const FVector2D NearC = CPosition - FVector2D(0.0, 90.0);
-	Tool->OnDrag(Session.MakeContext(Actor, NearC, Tunables, false, false));
+	Tool->OnDrag(Session.MakeContext(Actor, NearC, Tunables));
 
 	const FVector2D Landed = Actor->GetNetwork()->GetNodes()[A].Position;
 
@@ -303,7 +303,7 @@ bool FEditModeDragSnapsExactlyToANodeTest::RunTest(const FString& Parameters)
 	// pass the assertion above the moment the node happened to start there.
 	TestTrue(TEXT("and it is not simply where it started"), Landed.Y != 0.0);
 
-	Tool->OnDragEnd(Session.MakeContext(Actor, NearC, Tunables, false, false));
+	Tool->OnDragEnd(Session.MakeContext(Actor, NearC, Tunables));
 	return true;
 }
 
@@ -328,9 +328,9 @@ bool FRoadDrawToolNoLongerDragsNodesTest::RunTest(const FString& Parameters)
 	FBuildSessionTunables Tunables;
 
 	IBuildTool* Tool = Session.GetActiveTool();
-	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, false, false));
-	Tool->OnDrag(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables, false, false));
-	Tool->OnDragEnd(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables, false, false));
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables));
+	Tool->OnDrag(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables));
+	Tool->OnDragEnd(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables));
 
 	// THE MISCLICK, PINNED. Any press that travelled over a node used to reshape the road,
 	// with no way to decline it. Editing is deliberate now, so a drag under a build tool
@@ -343,9 +343,9 @@ bool FRoadDrawToolNoLongerDragsNodesTest::RunTest(const FString& Parameters)
 	// mode rather than a drag that is broken everywhere.
 	Session.SetGestureMode(EGestureMode::Edit);
 	IBuildTool* Editing = Session.GetActiveTool();
-	Editing->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, false, false));
-	Editing->OnDrag(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables, false, false));
-	Editing->OnDragEnd(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables, false, false));
+	Editing->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables));
+	Editing->OnDrag(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables));
+	Editing->OnDragEnd(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables));
 
 	const FVector2D Moved = Actor->GetNetwork()->GetNodes()[A].Position;
 	TestTrue(TEXT("the same drag in Edit does move it"),
@@ -384,7 +384,7 @@ bool FEditHandlesAreDrawnForTheLitToolTest::RunTest(const FString& Parameters)
 	{
 		FEditToolSink Sink;
 		Session.GetActiveTool()->BuildPreview(
-			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables, false, false), Sink);
+			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables), Sink);
 		TestEqual(TEXT("the taxiway's two nodes are drawn as handles, and the service road's "
 					   "are not"), Sink.CountMarkers(EPreviewStyle::Handle), 2);
 	}
@@ -394,7 +394,7 @@ bool FEditHandlesAreDrawnForTheLitToolTest::RunTest(const FString& Parameters)
 	{
 		FEditToolSink Sink;
 		Session.GetActiveTool()->BuildPreview(
-			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables, false, false), Sink);
+			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables), Sink);
 		TestEqual(TEXT("switching the lit tool switches which nodes are grabbable"),
 			Sink.CountMarkers(EPreviewStyle::Handle), 2);
 	}
@@ -404,7 +404,7 @@ bool FEditHandlesAreDrawnForTheLitToolTest::RunTest(const FString& Parameters)
 	{
 		FEditToolSink Sink;
 		Session.GetActiveTool()->BuildPreview(
-			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables, false, false), Sink);
+			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables), Sink);
 		TestEqual(TEXT("no handles are drawn while the mode is Build"),
 			Sink.CountMarkers(EPreviewStyle::Handle), 0);
 	}
@@ -437,13 +437,13 @@ bool FEditModeDragOffersGuidesTest::RunTest(const FString& Parameters)
 	FBuildSessionTunables Tunables;
 
 	IBuildTool* Tool = Session.GetActiveTool();
-	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, false, false));
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables));
 	if (!TestTrue(TEXT("the drag started"), !Tool->IsIdle())) { return false; }
 
 	// Drag A to very nearly level with the landmark row, and far enough from every node that
 	// no snap claims it - a guide, not a snap, is what is under test.
 	const FVector2D NearRow(0.0, 15000.0 - 60.0);
-	const FToolContext Context = Session.MakeContext(Actor, NearRow, Tunables, false, false);
+	const FToolContext Context = Session.MakeContext(Actor, NearRow, Tunables);
 
 	TestTrue(TEXT("a guide resolves for a drag, which it never did while the drag described "
 				  "no anchor at all"),
@@ -461,7 +461,7 @@ bool FEditModeDragOffersGuidesTest::RunTest(const FString& Parameters)
 
 	// AND THE GUIDE DIES WITH THE GESTURE. A winner left behind would be inherited by the
 	// next drag and then held through the hysteresis rule itself.
-	const FToolContext After = Session.MakeContext(Actor, NearRow, Tunables, false, false);
+	const FToolContext After = Session.MakeContext(Actor, NearRow, Tunables);
 	TestFalse(TEXT("no guide is offered once nothing is in hand"), After.Guide.bActive);
 	return true;
 }
@@ -507,11 +507,11 @@ bool FEditModeDropOnNodeMergesTest::RunTest(const FString& Parameters)
 	FBuildSessionTunables Tunables;
 
 	IBuildTool* Tool = Session.GetActiveTool();
-	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, false, false));
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables));
 
 	const FVector2D OnC = CPosition - FVector2D(40.0, 0.0);
-	Tool->OnDrag(Session.MakeContext(Actor, OnC, Tunables, false, false));
-	Tool->OnDragEnd(Session.MakeContext(Actor, OnC, Tunables, false, false));
+	Tool->OnDrag(Session.MakeContext(Actor, OnC, Tunables));
+	Tool->OnDragEnd(Session.MakeContext(Actor, OnC, Tunables));
 
 	TestEqual(TEXT("dropping one node on another leaves one node where there were two"),
 		LiveNodes(), 3);
@@ -754,7 +754,7 @@ bool FEditModeDragsAnApronCornerTest::RunTest(const FString& Parameters)
 	{
 		FEditToolSink Sink;
 		Session.GetActiveTool()->BuildPreview(
-			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables, false, false), Sink);
+			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables), Sink);
 		TestEqual(TEXT("the Apron tool offers the outline's four corners and none of the "
 					   "road's nodes"), Sink.CountMarkers(EPreviewStyle::Handle), 4);
 	}
@@ -762,11 +762,11 @@ bool FEditModeDragsAnApronCornerTest::RunTest(const FString& Parameters)
 	// AN APRON CORNER IS NOT IN THE ROAD GRAPH, so the snap chain would never mention it -
 	// the pick is by distance. Grabbing one and dragging it must still move it.
 	IBuildTool* Tool = Session.GetActiveTool();
-	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(10000.0, 10000.0), Tunables, false, false));
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(10000.0, 10000.0), Tunables));
 	if (!TestFalse(TEXT("a corner really was grabbed"), Tool->IsIdle())) { return false; }
 
-	Tool->OnDrag(Session.MakeContext(Actor, FVector2D(13000.0, 11000.0), Tunables, false, false));
-	Tool->OnDragEnd(Session.MakeContext(Actor, FVector2D(13000.0, 11000.0), Tunables, false, false));
+	Tool->OnDrag(Session.MakeContext(Actor, FVector2D(13000.0, 11000.0), Tunables));
+	Tool->OnDragEnd(Session.MakeContext(Actor, FVector2D(13000.0, 11000.0), Tunables));
 
 	const FApronSurface* Live = Actor->GetNetwork()->GetApron(Actor->GetNetwork()->ApronIdAt(Apron));
 	if (!TestNotNull(TEXT("the apron lives"), Live)) { return false; }
@@ -808,14 +808,14 @@ bool FEditModeCtrlClickRemovesANodeTest::RunTest(const FString& Parameters)
 	// A PLAIN CLICK DOES NOTHING - the control. Without it, a removal that fired on every
 	// click would pass the assertion below and destroy the mode's whole premise.
 	Session.GetActiveTool()->OnClick(
-		Session.MakeContext(Actor, FVector2D(9000.0, 0.0), Tunables, /*bRemove*/ false, false));
+		Session.MakeContext(Actor, FVector2D(9000.0, 0.0), Tunables));
 	TestNotNull(TEXT("a plain click in Edit removes nothing"),
 		Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(B)));
 
 	// CTRL+CLICK TAKES IT. The held key still means Remove inside Edit, though Remove is a
 	// sticky mode Edit excludes - the two are different gestures, and MakeContext ORs them.
 	Session.GetActiveTool()->OnClick(
-		Session.MakeContext(Actor, FVector2D(9000.0, 0.0), Tunables, /*bRemove*/ true, false));
+		Session.MakeContext(Actor, FVector2D(9000.0, 0.0), Tunables, FBuildInputState{ .bRemoveModifier = true }));
 
 	TestNull(TEXT("ctrl+click removes the node under the cursor"),
 		Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(B)));
@@ -853,7 +853,7 @@ bool FEditModeRemovalRespectsTheHandleFilterTest::RunTest(const FString& Paramet
 	Session.SelectTool(1);                       // Taxiway
 	Session.SetGestureMode(EGestureMode::Edit);
 	Session.GetActiveTool()->OnClick(
-		Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, /*bRemove*/ true, false));
+		Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, FBuildInputState{ .bRemoveModifier = true }));
 	TestNotNull(TEXT("a node the lit tool exposes no handle for is not removable"),
 		Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(S0)));
 
@@ -862,7 +862,7 @@ bool FEditModeRemovalRespectsTheHandleFilterTest::RunTest(const FString& Paramet
 	Session.SelectTool(7);                       // Road
 	Session.SetGestureMode(EGestureMode::Edit);
 	Session.GetActiveTool()->OnClick(
-		Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, /*bRemove*/ true, false));
+		Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, FBuildInputState{ .bRemoveModifier = true }));
 	TestNull(TEXT("but the tool that does expose it can remove it"),
 		Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(S0)));
 	return true;
@@ -895,7 +895,7 @@ bool FEditModeDrawsTheRemovalItWouldMakeTest::RunTest(const FString& Parameters)
 	// place.
 	FEditToolSink Sink;
 	Session.GetActiveTool()->BuildPreview(
-		Session.MakeContext(Actor, FVector2D(9000.0, 0.0), Tunables, /*bRemove*/ true, false), Sink);
+		Session.MakeContext(Actor, FVector2D(9000.0, 0.0), Tunables, FBuildInputState{ .bRemoveModifier = true }), Sink);
 
 	TestTrue(TEXT("what the ctrl+click would take is drawn as doomed"),
 		Sink.CountMarkers(EPreviewStyle::Doomed) > 0);

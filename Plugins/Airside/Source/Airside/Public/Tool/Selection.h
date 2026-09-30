@@ -40,9 +40,11 @@ enum class ESelectionKind : uint8
 };
 
 /**
- * Lives on FBuildSession, WRITTEN ONLY by FSelectTool (through FToolContext::Selection), read
- * by the inspector panel and the HUD. Plain struct, not a USTRUCT: it is runtime UI state
- * that never reaches disk or Blueprint.
+ * Lives on FBuildSession and is read by the inspector panel and the HUD. It has SEVERAL WRITERS, and this comment named one
+ * (FSelectTool) until #448, by which time that had been false for weeks: the Select tool picks and clears it
+ * through FToolContext::Selection; the session itself clears it when another tool is lit or a network is replaced, and sets it
+ * from code (FBuildSession::Select - an alert's Go). A reader must not assume which of them wrote what it sees. Plain struct,
+ * not a USTRUCT: it is runtime UI state that never reaches disk or Blueprint.
  */
 struct FSelection
 {
