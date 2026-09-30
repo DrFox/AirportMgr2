@@ -248,4 +248,153 @@ bool FTrafficCrossingHeadOnKeepsRunwayFreeTest::RunTest(const FString& Parameter
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+namespace
+{
+	/** What one run of the off-the-cycle head-on ended with. */
+	struct FCrossingExitHeadOnOutcome
+	{
+		bool bStaged = false;
+		bool bAParked = false;
+		bool bBParked = false;
+		int32 Lines = 0;
+		int32 LastResolved = 0;
+		int32 A = 0;
+		int32 B = 0;
+	};
+
+	/**
+	 * THE PIE PING-PONG'S SHAPE (2026-09-30): a crosser A on the strip, a waiter B on the far bar,
+	 * and each needing what the other holds. Staged with A ALREADY ON THE STRIP, as a just-vacated
+	 * arrival is (HeadOnReplansRoundBarHolder stages it the same way): the exit rule keeps a
+	 * crossing that STARTS at a bar from being released into this, but an aircraft that vacates
+	 * onto a crossing never passed one.
+	 *
+	 *        N1                      B (dispatched first): N1 -> J -> F1 -> X1 -> H1 -> S1
+	 *         |                      A: Z -> X1 -> F1 -> J -> N1, from the strip
+	 *         J  (0, 3800)  <---- inside B's body; the BAIT X1 -> Q -> J reaches it round the side
+	 *         |  \
+	 *        F1 --\---------- F2    bars (y = 3000)
+	 *   Z -- X1 ---- Q ====== X2 =  X1, Q and Z at y = CrossY, on the strip (half width 2250)
+	 *        H1               H2    bars (y = -3000)
+	 *         |               |
+	 *        S1 ------------- S2
+	 *
+	 * B's WAY ROUND: F1 -> F2 -> X2 -> H2 -> S2 -> S1, touching nothing A stands on. At CrossY 0
+	 * A's refusal at F1 stops it inside X1 -> F1, where it cannot turn, so B is the one asked.
+	 *
+	 * A SECOND VARIANT WAS TRIED AND DROPPED (2026-09-30): CrossY 2000 makes A a candidate, and its
+	 * turn X1 -> Q -> J ends on B's body - the shape a "refuse replans that run into the cycle"
+	 * rule was written for. It passed with and without that rule (A's tail is off the strip long
+	 * before J, so B crosses and J is free), i.e. it measured nothing, and the rule went with it.
+	 */
+	FCrossingExitHeadOnOutcome CrossingExitHeadOnOffTheCycle(UObject* Outer, double CrossY)
+	{
+		FCrossingExitHeadOnOutcome Out;
+		URoadNetwork* Net = NewObject<URoadNetwork>(Outer);
+		URoadProfile* Runway = TestProfiles::Runway();
+		const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
+		const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
+		const FRoadSegmentId Strip = Net->AddStraightSegment(RA, RB, Runway);
+
+		const FGuidelineNodeId S1 = TestGraph::Node(*Net, 0.0, -20000.0);
+		const FGuidelineNodeId H1 = TestGraph::Node(*Net, 0.0, -3000.0);
+		const FGuidelineNodeId Z = TestGraph::Node(*Net, -4000.0, CrossY);
+		const FGuidelineNodeId X1 = TestGraph::Node(*Net, 0.0, CrossY);
+		const FGuidelineNodeId F1 = TestGraph::Node(*Net, 0.0, 3000.0);
+		const FGuidelineNodeId J = TestGraph::Node(*Net, 0.0, 3800.0);
+		const FGuidelineNodeId N1 = TestGraph::Node(*Net, 0.0, 20000.0);
+		const FGuidelineNodeId Q = TestGraph::Node(*Net, 6000.0, CrossY);
+		const FGuidelineNodeId F2 = TestGraph::Node(*Net, 20000.0, 3000.0);
+		const FGuidelineNodeId X2 = TestGraph::Node(*Net, 20000.0, 0.0);
+		const FGuidelineNodeId H2 = TestGraph::Node(*Net, 20000.0, -3000.0);
+		const FGuidelineNodeId S2 = TestGraph::Node(*Net, 20000.0, -20000.0);
+		TestGraph::Join(*Net, S1, H1);
+		TestGraph::Join(*Net, H1, X1);
+		TestGraph::Join(*Net, Z, X1);
+		TestGraph::Join(*Net, X1, F1);
+		TestGraph::Join(*Net, F1, J);
+		TestGraph::Join(*Net, J, N1);
+		TestGraph::Join(*Net, X1, Q);
+		TestGraph::Join(*Net, Q, J);
+		TestGraph::Join(*Net, F1, F2);
+		TestGraph::Join(*Net, F2, X2);
+		TestGraph::Join(*Net, X2, H2);
+		TestGraph::Join(*Net, H2, S2);
+		TestGraph::Join(*Net, S2, S1);
+		for (const FGuidelineNodeId Bar : { H1, F1, H2, F2 })
+		{
+			Net->SetRunwayHoldingPositionForTest(Bar, Strip);
+		}
+
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(Outer);
+		const FAirframe Airframe = TestAirframes::GroundOnly();
+		CrossingExitHoldStrip(*Traffic, Strip);
+		Out.B = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, N1, S1, ETraversalClass::Aircraft),
+			Airframe, ETraversalClass::Aircraft, 1.0);
+		if (Out.B <= 0) { return Out; }
+
+		// B REACHES F1 AND HOLDS SHORT - the runway is held.
+		double StoppedFor = 0.0;
+		TickUntil(*Traffic, *Net, 60.0, [&](int32)
+		{
+			const FRoadAgent* QB = Traffic->FindAgent(Out.B);
+			StoppedFor = (QB->Follower.Speed < 1.0 && QB->Follower.Travelled > 15000.0) ? StoppedFor + 0.05 : 0.0;
+			return StoppedFor < 1.0;
+		});
+		if (StoppedFor < 1.0) { return Out; }
+
+		// THE LANDING'S HANDOVER: the runway's holder becomes A, standing on the centreline at Z.
+		Traffic->OccupancyForTest().ReleaseAll(CrossingExitRunwayHolder);
+		Out.A = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, Z, N1, ETraversalClass::Aircraft),
+			Airframe, ETraversalClass::Aircraft, 1.0);
+		if (Out.A <= 0 || !FGroundTrafficTestAccess(*Traffic).BeginCrossing(Out.A, Strip)) { return Out; }
+		Out.bStaged = true;
+
+		const int32 LinesBefore = Traffic->GetDeadlockLogLinesForTest();
+		TickUntil(*Traffic, *Net, 400.0, [&](int32)
+		{
+			return Traffic->FindAgent(Out.A)->Phase != EAgentPhase::Parked || Traffic->FindAgent(Out.B)->Phase != EAgentPhase::Parked;
+		});
+
+		const FRoadAgent* QA = Traffic->FindAgent(Out.A);
+		const FRoadAgent* QB = Traffic->FindAgent(Out.B);
+		Out.bAParked = QA->Phase == EAgentPhase::Parked;
+		Out.bBParked = QB->Phase == EAgentPhase::Parked;
+		Out.Lines = Traffic->GetDeadlockLogLinesForTest() - LinesBefore;
+		Out.LastResolved = Traffic->GetLastResolvedAgentForTest();
+		UE_LOG(LogAirsideTests, Log,
+			TEXT("CrossingHeadOnReplansOffTheCycle (cross at y %.0f) measured: A %s at %.0f uu of %.0f, B %s at %.0f uu of %.0f; ")
+			TEXT("deadlock lines %d, last resolved agent %d (A=%d, B=%d)"),
+			CrossY, Out.bAParked ? TEXT("parked") : TEXT("NOT parked"), QA->Follower.Travelled, QA->Follower.Plan.Length,
+			Out.bBParked ? TEXT("parked") : TEXT("NOT parked"), QB->Follower.Travelled, QB->Follower.Plan.Length,
+			Out.Lines, Out.LastResolved, Out.A, Out.B);
+		return Out;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficCrossingHeadOnReplansOffTheCycleTest,
+	"Airside.Model.Traffic.CrossingHeadOnReplansOffTheCycle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficCrossingHeadOnReplansOffTheCycleTest::RunTest(const FString& Parameters)
+{
+	// THE WAITER TURNING AWAY FROM ITS BAR. A cannot turn here (it stops inside X1 -> F1), so B is
+	// the only candidate, and its way round leaves F1 eastward - away from the runway. The bar at
+	// F1 still reserved the runway for any route through the node, so B's replan was held at the
+	// very bar it was turning away from, the cycle re-formed, B was replanned BACK onto the
+	// crossing, and so on every retry window: measured before the fix, 76 deadlock lines in
+	// 400 s, B replanned back and forth between its two routes, neither aircraft reaching its goal -
+	// the PIE log's own alternation, and its flapping alert.
+	const FCrossingExitHeadOnOutcome Out = CrossingExitHeadOnOffTheCycle(GetTransientPackage(), 0.0);
+	if (!TestTrue(TEXT("staged: B holding at F1, A crossing at Z"), Out.bStaged)) { return false; }
+	TestTrue(TEXT("A left the strip and reached N1 once B had gone"), Out.bAParked);
+	TestTrue(TEXT("B went round by crossing 2 and reached S1"), Out.bBParked);
+	TestEqual(TEXT("ONE resolution: a replan held at the bar it turns away from re-forms the cycle and logs again"),
+		Out.Lines, 1);
+	TestEqual(TEXT("and it was B's - A's only way off the strip runs through B's body"), Out.LastResolved, Out.B);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

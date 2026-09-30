@@ -1215,8 +1215,22 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 				// for the same seed every time.
 				const TArray<FRoadSegmentId>& Chain = Chains.GetOrSeed(Network, Node->HoldingPositionFor);
 
+				// ONLY A BAR THIS ROUTE CROSSES AT (2026-09-30): the step leaving it must lead onto the
+				// strip. A route that reaches a bar node and turns AWAY - along a taxiway joining there,
+				// or off the far bar of a crossing it has already made - is not going onto the runway,
+				// and reserving it held the agent at the bar for a strip it never meant to enter. That
+				// is how a deadlock replan that sent a waiter the other way round (F1 -> F2 in
+				// Airside.Model.Traffic.CrossingHeadOnReplansOffTheCycle) was refused at the very bar
+				// it was turning away from, re-formed the cycle, and was replanned back, every window.
+				// A route that ENDS at a bar crosses nothing either. The crossing's own occupancy
+				// (step 0) is untouched: it is the body, not the bar. ENFORCED BY: that test.
+				const bool bEntersStrip = StepLeadsOntoStrip(Network, Plan, Index + 1, Chain);
 				for (const FRoadSegmentId Segment : Chain)
 				{
+					if (!bEntersStrip)
+					{
+						break;
+					}
 					FWantedClaim Bar;
 					Bar.Claim.AgentId = Agent.Id;
 					Bar.Claim.Resource = FTrafficResource::OfSurface(Segment);
@@ -1239,7 +1253,10 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 					// agent is already ON this strip, holding it occupied, so there is
 					// nothing for a bar to protect it from and everything for the bar's
 					// reservation to spoil. Airside.Model.Traffic.CrossingHoldsRunway
-					// measures it with a bar on each side of the runway.
+					// measures it with a bar on each side of the runway. SINCE bEntersStrip
+					// (2026-09-30) that far bar raises nothing - its next step leads away - so
+					// this skip now guards a route that re-enters the strip it is still
+					// crossing; kept because the downgrade it prevents is the same.
 					if (WantedOccupied(Bar.Claim.Resource))
 					{
 						continue;
