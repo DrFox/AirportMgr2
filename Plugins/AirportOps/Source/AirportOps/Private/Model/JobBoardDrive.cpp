@@ -266,9 +266,9 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 		return false;
 
 	case ESendOutcome::NotSendable:
-		// ON A RUNWAY OR GONE - a phase a service vehicle is not in (it never lands or takes off, and a gone agent is
-		// not found above). Refused and SAID rather than promised: true would leave the vehicle heading for a goal
-		// nothing is taking it to.
+		// NOTHING MAY SEND IT ANYWHERE NOW (a phase SendAgentTo has no move for). Refused and SAID rather than
+		// promised: true would leave the vehicle heading for a goal nothing is taking it to, and the line names the
+		// phase so the case explains itself if it is ever met.
 		UE_LOG(LogAirportOps, Warning, TEXT("Fuel: truck %d is in no state to be sent anywhere (%s); not sent for %s"),
 			TruckId, *UEnum::GetValueAsString(WasPhase), Where);
 		return false;

@@ -407,7 +407,8 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		// Depart, a stand re-offer) would start at a dead handle and fail for ever. The stand
 		// pose node itself is authored and survives, so this changes nothing for an aircraft
 		// parked on a stand.
-		// AND A STRANDED ONE'S (#396), which a waiting taxi-in re-offer searches from.
+		// AND A STRANDED ONE'S (#396): a player's Unstick or a later search may start from it. (The stand re-offer no
+		// longer does for a stranded waiter - it searches from where the waiter stands; UGroundTraffic::ReofferStand.)
 		if ((Agent.Phase == EAgentPhase::Parked || Agent.Phase == EAgentPhase::Stranded)
 			&& Network.GetGuidelineNode(Agent.GoalNode) == nullptr)
 		{
@@ -1001,8 +1002,10 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		//
 		// FINAL FOR THE SIMULATION, NOT FOR THE PLAYER (2026-09-29): the inspector's Unstick
 		// (UGroundTraffic::RescueStranded) is the player choosing that place - a hop onto the
-		// nearest line within RescueRejoinRadius - or retiring it. Nothing AUTOMATIC re-resolves
-		// a stranded agent still, for the reason above.
+		// nearest line within RescueRejoinRadius - or retiring it. No REBUILD re-resolves a stranded
+		// agent still, for the reason above. The one automatic rescue is a stranded aircraft WAITING
+		// FOR A STAND when one frees (UGroundTraffic::ReofferStand, #429 review): the same hop the
+		// player's Unstick makes, because its only other move was a restart at a node it may not be at.
 		//
 		// AND IT NAMES THE RUNWAY WHEN THERE IS ONE. An agent stranded mid-crossing holds
 		// that strip until the player retires it, which is a runway out of service with no
@@ -1016,9 +1019,9 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 			Agent.Id, Why, *Held);
 
 		// A STRANDED TAXI-IN STILL HAS A PLACE: the exit node the landing hands over at, which
-		// Plan.Start was re-pointed to when it could be. The re-offer (ReofferStands) searches
-		// from GoalNode, so a dead handle here would leave a waiting aircraft waiting for ever.
-		// Spec 2026-09-07-stand-occupancy §5, amended.
+		// Plan.Start was re-pointed to when it could be - a live goal for anything that asks it.
+		// (The stand re-offer searches a stranded waiter's stand from where it stands, not from
+		// here, since #429's review.) Spec 2026-09-07-stand-occupancy §5, amended.
 		if (!bDriving && Agent.bAwaitingStand && Plan.Start.IsSet())
 		{
 			Agent.SetGoal(Plan.Start);
@@ -1512,7 +1515,7 @@ bool FPlanReResolver::ReResolveSpan(FRoadAgent& Agent, FRoutePlan& Plan, int32 F
 	return true;
 }
 
-bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, FGuidelineNodeId Goal)
+bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, FGuidelineNodeId Goal, EAgentEvent Cause)
 {
 	// HERE, BESIDE THE REBUILD, because RejoinNearby is this file's and the rescue is its third
 	// caller: the same projection onto an edge running the agent's way, the same route that must
@@ -1566,7 +1569,8 @@ bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, 
 		AgentId, Sideways, Rejoined.Length - Travelled, Agent.GoalNode.Index);
 	// LAST, and nothing read from Agent after it: a synchronous listener may retire the agent (the
 	// re-entrancy contract UGroundTraffic::AdvanceOnce states). Rescued, the player's Unstick (#436):
-	// the flight board keeps the taxi it was in, in whichever direction that was.
-	Announce(TransitionOf(Agent, EAgentPhase::Stranded, EAgentEvent::Rescued));
+	// the flight board keeps the taxi it was in, in whichever direction that was. ReOffered for the
+	// stand re-offer's rescue of a stranded waiter (#429 review): its taxi IN, whatever its stand does.
+	Announce(TransitionOf(Agent, EAgentPhase::Stranded, Cause));
 	return true;
 }

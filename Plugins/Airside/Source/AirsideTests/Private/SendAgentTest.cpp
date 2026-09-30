@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/DeadlockResolver.h"
 #include "Model/GroundTraffic.h"
@@ -381,6 +382,89 @@ bool FSendAgentByPhaseTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("an unknown agent is sent nowhere"),
 		NewObject<UGroundTraffic>(GetTransientPackage())->SendAgentTo(9999, F.E, FRouteQuery::For(ERouteErrand::VehicleToJob,
 			FGuidelineNodeId(), F.E, 0.0, ETraversalClass::GroundVehicle), *F.Net).Outcome, ESendOutcome::NotSendable);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSendAgentUngatedFoldIsNotDrivenTest,
+	"Airside.Model.Traffic.SendAgentTo.UngatedFoldIsNotDriven",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSendAgentUngatedFoldIsNotDrivenTest::RunTest(const FString& Parameters)
+{
+	// THE FOLD JUDGE, THROUGH THE COMPOSITION (#429 review). A tow parked at the mouth of a dead-end balloon - three
+	// same-hand quarter turns, which fold the rig (AirportOps.Ops.FuelTowNeverDrivenHomeIntoAFold measures the road
+	// itself, by calling the rule directly) - is sent on with ENarrowRoad::DriveAnyway. The gated search refuses the
+	// road; the ungated retry finds it; and SendFromRest must judge that ungated route whole and NOT drive it: NoRoute,
+	// the fold named for the caller. Without the judge the rig is redirected into its own jack-knife - the fuel tests
+	// cannot see that, their fixture tows fold nothing. Two quarters (a U) is the control: the same call drives it.
+	using namespace SendAgentTest;
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	for (const int32 Quarters : { 3, 2 })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		auto Node = [Net](const FVector2D& At) { return Net->AddGuidelineNode(At, /*bDerived=*/false); };
+		auto Join = [Net](FGuidelineNodeId A, FGuidelineNodeId B, const FVector2D& Control)
+		{
+			FGuidelineEdge Edge;
+			Edge.A = A;
+			Edge.B = B;
+			Edge.Control = Control;
+			Edge.AllowedTraffic = FTrafficMask::All();
+			Edge.Direction = EGuidelineDir::AToB;
+			Edge.bDerived = false;
+			Net->AddGuidelineEdge(MoveTemp(Edge));
+		};
+		// FuelServiceTest's balloon (830 uu quarters), with a lead-in the rig parks at the end of.
+		const double Leg = 830.0;
+		const FGuidelineNodeId Pre = Node(FVector2D(-8000.0, 0.0));
+		const FGuidelineNodeId Start = Node(FVector2D(-4000.0, 0.0));
+		Join(Pre, Start, FVector2D(-6000.0, 0.0));
+		FGuidelineNodeId From = Node(FVector2D::ZeroVector);
+		Join(Start, From, FVector2D(-2000.0, 0.0));
+		FVector2D At = FVector2D::ZeroVector;
+		FVector2D Heading(1.0, 0.0);
+		for (int32 Quarter = 0; Quarter < Quarters; ++Quarter)
+		{
+			const FVector2D Side(-Heading.Y, Heading.X);
+			const FVector2D Control = At + Heading * Leg;
+			At = Control + Side * Leg;
+			Heading = Side;
+			const FGuidelineNodeId To = Node(At);
+			Join(From, To, Control);
+			From = To;
+		}
+		const FGuidelineNodeId Goal = Node(At + Heading * 4000.0);
+		Join(From, Goal, At + Heading * 2000.0);
+
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Id = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, Pre, Start, ETraversalClass::GroundVehicle), Rig,
+			ETraversalClass::GroundVehicle, 0.0);
+		const bool bParked = RunUntil(*Traffic, *Net, 120.0,
+			[&]() { const FRoadAgent* A = Traffic->FindAgent(Id); return A != nullptr && A->Phase == EAgentPhase::Parked; });
+		if (!TestTrue(*FString::Printf(TEXT("%d quarters: the rig is parked at the balloon's mouth"), Quarters), Id > 0 && bParked)) { continue; }
+
+		FRouteQuery Leg0 = FRouteQuery::For(ERouteErrand::VehicleToJob, FGuidelineNodeId(), Goal, 0.0, ETraversalClass::GroundVehicle);
+		Leg0.WithRules(Traffic->Rules, Traffic->GetOccupancy(), Id);
+		Leg0.WithVehicle(Rig);
+		const FSendAgentResult Sent = Traffic->SendAgentTo(Id, Goal, Leg0, *Net, ENarrowRoad::DriveAnyway);
+		AddInfo(FString::Printf(TEXT("%d quarters: outcome %d, narrow %s (%s), fold '%s'"), Quarters, static_cast<int32>(Sent.Outcome),
+			Sent.bNarrow ? TEXT("yes") : TEXT("no"), *Sent.NarrowWhy, *Sent.FoldWhy));
+		const FRoadAgent* Agent = Traffic->FindAgent(Id);
+		if (Quarters == 3)
+		{
+			TestTrue(TEXT("the gate refused the balloon, so it was searched again ungated"), Sent.bNarrow);
+			TestEqual(TEXT("and the ungated route, which folds the rig, is NOT driven"), Sent.Outcome, ESendOutcome::NoRoute);
+			TestTrue(TEXT("the fold is named for the caller's line"), Sent.FoldWhy.StartsWith(TEXT("trailer folds at guideline node")));
+			TestTrue(TEXT("and the rig stays parked where it was"), Agent != nullptr && Agent->Phase == EAgentPhase::Parked);
+		}
+		else
+		{
+			TestEqual(TEXT("control: a road its trailer holds is driven"), Sent.Outcome, ESendOutcome::Redirected);
+			TestTrue(TEXT("with no fold named"), Sent.FoldWhy.IsEmpty());
+		}
+	}
 	return true;
 }
 

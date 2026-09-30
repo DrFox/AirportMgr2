@@ -4426,6 +4426,101 @@ bool FTrafficReofferRefusedExtensionKeepsWaitingTest::RunTest(const FString& Par
 
 // ---------------------------------------------------------------------------------------
 /**
+ * A STRANDED WAITER IS OFFERED ITS STAND FROM WHERE IT STANDS, NEVER RESTARTED AT ITS GOAL NODE (#429 review).
+ *
+ * TWO REBUILDS. The first removes the arrival's stand while the only other one is held: no free stand, so its
+ * route is truncated to a LIVE node ahead (W) and it taxis on, waiting. The second deletes the very edge it is
+ * driving: stranded in place, still waiting - and its goal is still W, live, which a rebuild re-points only when it is
+ * dead. Then the other stand frees. The re-offer used to treat a stranded waiter as one standing at its goal node (a
+ * taxi-in stranded at its exit, #396) and redirect it from rest there: RedirectAgent restarts an aircraft at the new
+ * route's first point, so it appeared at W in one frame - #435's teleport by another door. It is now given a stand
+ * the way the player's Unstick gives one (chosen from the node ahead of where it stands, reached by RescueStranded's
+ * hop onto pavement within RescueRejoinRadius), or it keeps waiting where it is.
+ *
+ * ASSERTED: no frame moves it further than a rescue's hop allows, and it is never put at W.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficReofferStrandedWaiterDoesNotJumpTest,
+	"Airside.Model.Traffic.ReofferStrandedWaiterDoesNotJump",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficReofferStrandedWaiterDoesNotJumpTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Piper = TestAirframes::Piper();
+	FTestAirport Air = FTestAirport::Build(Piper, { .StandCount = 2 });
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = Traffic->DispatchArrival(*Air.Net, Air.Threshold, Piper, 1.0);
+	if (!TestTrue(TEXT("the arrival is dispatched"), Id > 0)) { return false; }
+	Traffic->Advance(0.05, Air.Net);
+	const FGuidelineNodeId Goal0 = Traffic->FindAgent(Id)->GoalNode;
+	const FEntityInstanceId Target = (Goal0 == Air.Pose(Air.Stands[0])) ? Air.Stands[0] : Air.Stands[1];
+	const FEntityInstanceId Spare = (Target == Air.Stands[0]) ? Air.Stands[1] : Air.Stands[0];
+
+	// THE SPARE IS HELD, NOT REMOVED - an ops reservation, given back later without re-deriving the graph, which
+	// would free W's handle and hide the case (a dead goal is re-pointed at where the aircraft stands).
+	constexpr int32 Holder = 4242;
+	if (!TestTrue(TEXT("the spare stand is held"), Traffic->HoldStand(Holder, Air.Pose(Spare)))) { return false; }
+
+	// REBUILD ONE: its stand goes, the other is held - truncated to a live node ahead, and waiting.
+	Air.Net->RemoveEntity(Target);
+	TestGraph::Rebuild(*Air.Net);
+	Traffic->OnGraphRebuilt(*Air.Net);
+	if (!TestTrue(TEXT("it lands and taxis on, waiting for a stand"), RunUntil(*Traffic, *Air.Net, 600.0,
+		[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Taxiing && P->bAwaitingStand; })))
+	{
+		return false;
+	}
+	const FRoadAgent* Waiter = Traffic->FindAgent(Id);
+	const FGuidelineNodeId W = Waiter->GoalNode;
+	const FGuidelineNode* WNode = Air.Net->GetGuidelineNode(W);
+	if (!TestNotNull(TEXT("its goal, the end of its truncated route, is live"), WNode)) { return false; }
+	const FVector2D WAt = WNode->Position;
+
+	// REBUILD TWO: the edge it is driving is deleted, the graph otherwise as it was - stranded in place. The hold is
+	// given back in the same breath, so the re-offer this rebuild schedules finds the spare free.
+	const int32 OnStep = UGroundTraffic::CurrentStep(Waiter->Follower.Plan, Waiter->Follower.Travelled);
+	const FGuidelineEdgeId Under = Waiter->Follower.Plan.Steps[OnStep].Edge;
+	const double Dt = 0.05;
+	const double PerFrame = Piper.Chassis.Ground.Taxi.SpeedCap * Dt + 1.0;
+	// RescueRejoinRadius (GroundTrafficRebuild.cpp, 15 m): how far a rescue may hop an agent onto pavement.
+	constexpr double RescueHop = 1500.0;
+	const double ToGoal = FVector2D::Distance(Waiter->LastMotion.Position, WAt);
+	AddInfo(FString::Printf(TEXT("on step %d, %.0f uu short of W"), OnStep, ToGoal));
+	if (!TestTrue(*FString::Printf(TEXT("W is further than a rescue's hop (%.0f uu): a restart there would show"), ToGoal),
+		ToGoal > RescueHop + 2.0 * PerFrame)) { return false; }
+	if (!TestTrue(TEXT("the edge under it is deleted"), Air.Net->RemoveGuidelineEdge(Under))) { return false; }
+	Traffic->ReleaseHold(Holder);
+	Traffic->OnGraphRebuilt(*Air.Net);
+	// STRANDED IN PLACE: the rebuild marks its route dead (the phase follows on the next tick, whose re-offer then runs
+	// in the same Advance - so the summary is the witness, not a Stranded phase seen between ticks).
+	if (!TestEqual(TEXT("precondition: the second rebuild stranded it in place"), Traffic->GetLastRebuildSummaryForTest().Stranded, 1)) { return false; }
+	if (!TestTrue(TEXT("precondition: still waiting, its goal still W"), Traffic->FindAgent(Id)->bAwaitingStand && Traffic->FindAgent(Id)->GoalNode == W)) { return false; }
+
+	FVector2D Last = Traffic->FindAgent(Id)->LastMotion.Position;
+	double MaxStep = 0.0;
+	double ClosestToW = TNumericLimits<double>::Max();
+	for (int32 Tick = 0; Tick < 60; ++Tick)
+	{
+		Traffic->Advance(Dt, Air.Net);
+		const FRoadAgent* P = Traffic->FindAgent(Id);
+		if (P == nullptr) { break; }
+		MaxStep = FMath::Max(MaxStep, FVector2D::Distance(Last, P->LastMotion.Position));
+		ClosestToW = FMath::Min(ClosestToW, FVector2D::Distance(P->LastMotion.Position, WAt));
+		Last = P->LastMotion.Position;
+	}
+	const FRoadAgent* After = Traffic->FindAgent(Id);
+	if (!TestNotNull(TEXT("the aircraft is still there"), After)) { return false; }
+	AddInfo(FString::Printf(TEXT("after the re-offer: %s, waiting %s, worst frame %.0f uu, closest to W %.0f uu"),
+		*UEnum::GetValueAsString(After->Phase), After->bAwaitingStand ? TEXT("yes") : TEXT("no"), MaxStep, ClosestToW));
+	TestTrue(*FString::Printf(TEXT("no frame moved it further than a rescue's hop (worst %.0f uu, budget %.0f)"), MaxStep, RescueHop + PerFrame),
+		MaxStep <= RescueHop + PerFrame);
+	TestTrue(*FString::Printf(TEXT("and it was never put at W, the goal node it was not at (closest %.0f uu)"), ClosestToW),
+		ClosestToW > RescueHop);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
  * A REBUILD MID-REVERSE THAT KILLS THE ROUTE AFTER THE SPAN LEAVES THE REVERSE ALONE, AND THE TRUCK PARKS AT
  * THE SPAN'S END (issue #434, review of #453).
  *

@@ -8,8 +8,8 @@
 // choice of WHICH change: AirportOps' UJobBoard::DriveVehicleTo read the truck's Follower.Plan and Travelled to find
 // the node ahead, picked RerouteAgent, a rescue or "let it finish" by phase and seeded the tow's judgement by hand;
 // ReofferStands chose its verb by phase again (#435); and the player's Unstick copied the deadlock resolver's ban.
-// Those choices are UGroundTraffic's now - SendAgentTo, ReplanAroundBlocker, ReplanFromNextNode, ReofferStand and
-// RescueToStand - and a caller is told what happened in one of these small enums, which it maps to its own state and
+// Those choices are UGroundTraffic's now - SendAgentTo, ReplanAroundBlocker, ReplanFromNextNode and ReofferStand - and
+// a caller is told what happened in one of these small enums, which it maps to its own state and
 // its own words with an EXHAUSTIVE switch (Model/ExhaustiveSwitch.h): a new outcome is a build error at every caller,
 // not a silent default. JobBoard.h's boundary is the reason for the split: "Airside knows how a thing MOVES and must
 // never learn what it is FOR" - so nothing here knows a depot, a job or a flight, and every UE_LOG line that names one
@@ -26,9 +26,9 @@ enum class ESendOutcome : uint8
 	/** Turned ON THE MOVE, never stopped: a vehicle spliced at a node ahead (RerouteAgent), an aircraft's route extended
 	 *  from where it ends (ExtendRoute). FSendAgentResult::TurnAt is the node the new route leaves the old one at. */
 	Turned,
-	/** Sent from where it STANDS - parked, or a waiter stranded where its wait began - by RedirectAgent. */
+	/** Sent from where it STANDS - parked, at its goal node - by RedirectAgent. */
 	Redirected,
-	/** Stranded, and hopped onto pavement near it with a route to the goal (RescueStranded). */
+	/** Stranded, and hopped onto pavement near where it stands, with a route to the goal (RescueStranded). */
 	Rescued,
 	/** Still on its route and no turn ahead held: it arrives at its old goal first, and the caller sends it on from
 	 *  there. Nothing changed. */
@@ -46,11 +46,11 @@ enum class ESendOutcome : uint8
 };
 
 /**
- * Whether a route that exists only with the VEHICLE GATE OFF may be driven. A route the gate refuses as too narrow is,
- * with DriveAnyway, searched again ungated and driven - a body a little wide for a corner scuffs a kerb - UNLESS it
+ * Whether a route that exists only with the VEHICLE GATE OFF may be driven. With DriveAnyway, a search the gate refuses
+ * as too narrow is repeated ungated and the route driven - a body a little wide for a corner scuffs a kerb - UNLESS it
  * folds the tow (VehicleFit::MayDriveUngated): a trailer past square is a jack-knife, stopped dead holding the road.
- * WHO MAY is the caller's to say, not Airside's: AirportOps drives a truck HOME that way (retiring it at a stand costs a
- * truck on every such job) and never to a job (the job goes back to the board, where a vehicle that fits wins it).
+ * That is the whole of the mechanism. WHEN a caller should accept a scuffed kerb is its own policy, and Airside holds
+ * none: see the caller (today UJobBoard::DriveVehicleTo, JobBoardDrive.cpp, and its reason).
  */
 enum class ENarrowRoad : uint8
 {
@@ -68,15 +68,15 @@ struct FSendAgentResult
 
 	/**
 	 * Set when a gated search was refused as TOO NARROW and ENarrowRoad::DriveAnyway searched it again ungated - ONCE per
-	 * call however many turn nodes were tried, as the caller's line is said once per recall. NarrowWhy is what refused it
-	 * (FFitVerdict::Describe) and NarrowEdge where: the player's cue to widen that road. Whether the ungated route was
+	 * call however many turn nodes were tried, so a caller that says it says it once. NarrowWhy is what refused it
+	 * (FFitVerdict::Describe) and NarrowEdge where: the road too narrow for the vehicle. Whether the ungated route was
 	 * then driven is Outcome's to say.
 	 */
 	bool bNarrow = false;
 	FString NarrowWhy;
 	FGuidelineEdgeId NarrowEdge;
 
-	/** NoRoute only: the ungated route home was found and does not hold the tow - VehicleFit::MayDriveUngated's reason.
+	/** NoRoute only: an ungated route was found and does not hold the tow - VehicleFit::MayDriveUngated's reason.
 	 *  Empty when there was simply no route. */
 	FString FoldWhy;
 };
@@ -105,14 +105,14 @@ enum class ENextNodeReplan : uint8
 	NoBetterRoute
 };
 
-/** What UGroundTraffic::ReofferStand / RescueToStand did for one aircraft. */
+/** What UGroundTraffic::ReofferStand did for one aircraft. */
 enum class EStandOffer : uint8
 {
 	/** A free stand was chosen and the aircraft is on its way to it (FStandOffer::Send says by which verb). */
 	Sent,
 	/** No free stand it fits is reachable from where the search started. Nothing changed. */
 	NoFreeStand,
-	/** RescueToStand only: no pavement close enough to start the search from, or to rejoin toward the stand. */
+	/** A stranded aircraft only: no pavement close enough to start the search from, or to rejoin toward the stand. */
 	NoPavement,
 	/** A stand was chosen and the aircraft could not be sent to it (FStandOffer::Send says why). Nothing changed. */
 	NotSent

@@ -38,8 +38,8 @@ struct FUnstickVerdict
  *
  * IN AirportOps, NOT Airside, because two of the three actions are about what an agent is FOR: a
  * vehicle's jobs (UJobBoard) and an aircraft's flight (UFlightBoard). The movement underneath is all
- * UGroundTraffic's - ReplanAroundBlocker, ReplanFromNextNode, RescueStranded, ReofferStand, RescueToStand,
- * RetireAgent - and nothing here moves an agent itself, or reads its route to decide how (#429): each of
+ * UGroundTraffic's - ReplanAroundBlocker, ReplanFromNextNode, RescueStranded, ReofferStand, RetireAgent -
+ * and nothing here moves an agent itself, or reads its route to decide how (#429): each of
  * those answers with an outcome, and what is left here is the SENTENCE the player reads for each.
  * ENFORCED BY: Check-Architecture rule 53 (route-internals: no Follower.Plan, ReplanAt, GetBlockedStep in
  * AirportOps). A subobject of UOpsRuntime, which grows by forwarding: a pointer and a line.

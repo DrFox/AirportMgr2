@@ -83,7 +83,7 @@ struct FGraphRebuildSummary
  *                                not mechanism) plus FPlanReResolver - ReplanAt,
  *                                ReResolvePlan, SpliceReplan (§4, §6), which both
  *                                OnGraphRebuilt and FDeadlockResolver call into;
- *   - GroundTrafficSend.cpp      SendAgentTo, ReofferStand, RescueToStand and RemainingDriveSeconds
+ *   - GroundTrafficSend.cpp      SendAgentTo, ReofferStand and RemainingDriveSeconds
  *                                (issue #429): the operations that CHOOSE which route change an
  *                                agent gets by its phase, so no caller outside this class does.
  *
@@ -445,20 +445,25 @@ public:
 
 	/**
 	 * Puts a STRANDED agent back on the pavement - the player's Unstick (spec
-	 * 2026-09-29-unstick-agent), never the simulation's: a stranding stays final for everything
-	 * automatic (see ReResolvePlan's Strand).
+	 * 2026-09-29-unstick-agent), a stranded service vehicle sent on (SendAgentTo), and a stranded
+	 * aircraft WAITING FOR A STAND when one frees (ReofferStand, #429 review). Otherwise a stranding
+	 * stays final for the simulation (see ReResolvePlan's Strand): a rebuild never rescues. The
+	 * re-offer rescues because its only other move - a restart at the waiter's goal node - is a
+	 * teleport when the waiter was stranded short of it.
 	 *
 	 * Hops the agent onto the nearest point, within RescueRejoinRadius (15 m), of a live edge
 	 * running the way it faces with a route to Goal - its OWN goal when Goal is unset - and taxis
 	 * on from there with its speed and heading kept (FRoadAgent::RejoinTaxi). The goal moves
 	 * through ReleaseGoal/TakeGoal like every other goal change, so the old goal's claim lets go.
-	 * Broadcasts Stranded -> Taxiing.
+	 * Broadcasts Stranded -> Taxiing with Cause: Rescued for the player's and a vehicle's, ReOffered for
+	 * the stand re-offer's (the flight board keeps its taxi in either way).
 	 *
 	 * FALSE AND NOTHING CHANGED for an unknown id, an agent that is not Stranded (a moving one is
 	 * ReplanAt's), a Goal that is no live node, or no such pavement within the radius.
 	 * ENFORCED BY: Airside.Model.Traffic.RescueStranded.Rejoins, .Refuses, .NewGoal
 	 */
-	bool RescueStranded(int32 AgentId, const URoadNetwork& Network, FGuidelineNodeId Goal);
+	bool RescueStranded(int32 AgentId, const URoadNetwork& Network, FGuidelineNodeId Goal,
+		EAgentEvent Cause = EAgentEvent::Rescued);
 
 	/**
 	 * SENDS AN AGENT TO Goal FROM WHATEVER IT IS DOING NOW (issue #429) - and chooses HOW by its phase, which is the
@@ -473,16 +478,19 @@ public:
 	 *   - TAXIING, an AIRCRAFT: its route extended from where it ends (ExtendRoute: a stand re-offer's taxi-in, speed
 	 *     and heading carried on). RerouteAgent refuses aircraft - their runway and departure arming are RedirectAgent's
 	 *     and ReplanAt's - so nothing turns one mid-route. Refused: FinishesLeg.
-	 *   - PARKED, or STRANDED WHILE AWAITING A STAND (standing where its wait began - #396): Redirected from rest at its
-	 *     goal node, a tow's judgement seeded from where it stands (FRoadAgent::LiveTowSeedAtRest).
-	 *   - STRANDED otherwise: Rescued onto pavement near it (RescueStranded), or NoPavement.
+	 *   - PARKED: Redirected from rest at its goal node - where a parked agent stands - a tow's judgement seeded from
+	 *     there (FRoadAgent::LiveTowSeedAtRest).
+	 *   - STRANDED: Rescued onto pavement near where it stands (RescueStranded), or NoPavement. Never a restart at its
+	 *     goal node: a stranded agent need not be there (a second rebuild strands a waiter short of the node its first
+	 *     truncation left it - Airside.Model.Traffic.ReofferStrandedWaiterDoesNotJump).
 	 *   - REVERSING, MANOEUVRING, or taxiing on a route that is not drivable: FinishesMotion.
 	 *   - ARRIVING, DEPARTING, GONE, or no such agent: NotSendable.
 	 *
 	 * ENarrowRoad::DriveAnyway: a search the vehicle gate refuses TooNarrow is repeated ungated (and said, once, in
 	 * FSendAgentResult::bNarrow); from rest, an ungated route that folds the tow is not driven (VehicleFit::
 	 * MayDriveUngated), and on the move RerouteAgent's own whole-route judge refuses it. Cause is what a Redirected
-	 * phase change is announced with (RedirectAgent's parameter).
+	 * phase change is announced with (RedirectAgent's parameter); a rescue is announced Rescued.
+	 * ENFORCED BY (the fold, through this call): Airside.Model.Traffic.SendAgentTo.UngatedFoldIsNotDriven
 	 *
 	 * NOTHING HERE IS ABOUT PURPOSE: which goal, whether a narrow road is worth driving, what to do with a vehicle
 	 * nothing can move - those are the caller's, told by the outcome.
@@ -495,26 +503,21 @@ public:
 		const URoadNetwork& Network, ENarrowRoad Narrow = ENarrowRoad::Refuse, EAgentEvent Cause = EAgentEvent::Redirected);
 
 	/**
-	 * ONE WAITING AIRCRAFT OFFERED A STAND (issue #429) - ReofferStands' move for each waiter, and the player's Unstick
-	 * "find a stand" for one parked waiting for one: the best free stand it fits reachable from its goal node (where it
-	 * waits, or where its route ends - ArrivalPlanner::ChooseStand, the one stand choice), and then SendAgentTo with a
-	 * taxi-in query, which picks the verb by phase (a moving waiter extended in place, a standing one redirected).
-	 * Cause is what a redirect is announced with: ReOffered for the pass, Rescued for the player's.
-	 * ENFORCED BY: Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump,
-	 * Airside.Model.Traffic.ReofferRefusedExtensionKeepsWaiting
+	 * ONE AIRCRAFT OFFERED A STAND (issue #429) - ReofferStands' move for each waiter, and the player's Unstick "find a
+	 * stand" (Cause Rescued; ReOffered for the pass). By where it can start from:
+	 *   - PARKED OR TAXIING: the best free stand it fits reachable from its GOAL NODE - where a parked one stands, where
+	 *     a moving one's route ends - (ArrivalPlanner::ChooseStand, by ArrivalPlanner::TaxiInQuery), then SendAgentTo
+	 *     with that same query, which picks the verb by phase (a moving one extended in place, a standing one
+	 *     redirected).
+	 *   - STRANDED: NOT from its goal node, which it need not be at - a second rebuild strands a waiter short of the node
+	 *     its first truncation left it, and that node stays live - and which may be the stand that went. The stand is
+	 *     chosen from the node ahead on its dead route when that node still exists (the way it was facing, off any
+	 *     runway it was leaving), else the nearest within 50 m, and reached by RescueStranded's hop onto pavement near
+	 *     where it stands; NoPavement when there is none, and it keeps waiting where it is.
+	 * ENFORCED BY: Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump, .ReofferRefusedExtensionKeepsWaiting,
+	 * .ReofferStrandedWaiterDoesNotJump, AirportOps.Model.AgentRescue.AircraftFindStand
 	 */
 	FStandOffer ReofferStand(int32 AgentId, const URoadNetwork& Network, EAgentEvent Cause = EAgentEvent::ReOffered);
-
-	/**
-	 * THE PLAYER'S "FIND A STAND" FOR A STRANDED AIRCRAFT (issue #429, from AirportOps' UAgentRescue): the stand is CHOSEN
-	 * from a node near it - the node ahead on its dead route when that node still exists (the way it was facing, off any
-	 * runway it was leaving), else the nearest within StandSearchRadius - and DRIVEN to by RescueStranded from whatever
-	 * pavement it hops onto. Always the rescue, never ReofferStand's restart from its goal node: that node may be the
-	 * stand that went, which is how an aircraft comes to be stranded awaiting one. Sent, NoFreeStand (said in the log,
-	 * with the node searched from), or NoPavement.
-	 * ENFORCED BY: AirportOps.Model.AgentRescue.AircraftFindStand
-	 */
-	FStandOffer RescueToStand(int32 AgentId, const URoadNetwork& Network);
 
 	/**
 	 * Removes an agent immediately, announcing <phase> -> Gone. For a service vehicle that
@@ -1066,7 +1069,9 @@ private:
 	 * heading and distance driven all carry on. RedirectAgent restarts an aircraft from REST at the
 	 * new route's first point, which for a moving waiter is the far end of the route ahead of it -
 	 * a teleport. So RedirectAgent is only for a waiter that is standing at that point already:
-	 * Parked on the fallback junction, or Stranded. A Taxiing waiter whose extension is refused
+	 * Parked on the fallback junction. A STRANDED one is not necessarily there (a second rebuild
+	 * can strand it short of the node its first one truncated it to) and is rescued from where it
+	 * stands instead (#429 review). A Taxiing waiter whose extension is refused
 	 * keeps waiting and is asked again the next time something frees - or when it stops at the end
 	 * of its route (#455), which is what asks it again if nothing else does; it is never redirected
 	 * while it is moving.

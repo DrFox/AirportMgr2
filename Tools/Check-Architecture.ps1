@@ -124,12 +124,12 @@
           caller that fills a query by hand and skips For() gets the permissive
           ERunwayAvoidance::None for every errand, silently: six test helpers and 48 call
           sites did this before #312. Test modules are explicitly IN SCOPE, unlike rules 5/6 -
-          a test's query reaches the same RunSearch a production one does. Five sites are
+          a test's query reaches the same RunSearch a production one does. Four sites are
           allow-listed by (File, Var), each checked by hand (FuelService.cpp's two went to
-          FRouteQuery::For in the JobBoard move, 2026-09-28):
-          ArrivalPlanner.cpp/RoadEditFacadeSurfaces.cpp already set AvoidRunways correctly
-          by hand (the last two because FindToGoals takes a Goals ARRAY, so neither For() nor
-          Probe() fits); RoutePolicyTest.cpp deliberately builds a no-errand query to test its
+          FRouteQuery::For in the JobBoard move, 2026-09-28; ArrivalPlanner.cpp's went to
+          ArrivalPlanner::TaxiInQuery, For() with no goal, in #429's review):
+          RoadEditFacadeSurfaces.cpp already sets AvoidRunways correctly
+          by hand (FindToGoals takes a Goals ARRAY); RoutePolicyTest.cpp deliberately builds a no-errand query to test its
           own refusal; RouteSearchTest.cpp has the same FindToGoals shape as ArrivalPlanner.cpp;
           RouteStepDistanceTest.cpp's FRouteRunwayAvoidanceTest sweeps AvoidRunways BY HAND,
           decoupled from Policy, to test ERunwayAvoidance itself. The allow-list also fails if
@@ -990,12 +990,25 @@ $AllowedCallers = @(
         # stalled waiter past a bound, IsStuck adds Stranded - all three in RoadAgent.h. "Stuck" was spelled three ways
         # in two modules (the accrual rule, the resolver's waiter test, the Unstick button's `stall >= Seconds`), and the
         # copies disagreed on the bound and on whether a blocker had to be named. The stall clock COMPARED to a bound
-        # anywhere else is a fourth spelling. Reading it as a value (InspectFacts' Hold.StalledSeconds) is not.
+        # anywhere else is a fourth spelling, and so is InspectFacts' copy of it (Hold.StalledSeconds) compared: reading
+        # either as a value, to show it, is not. Either operand order, and any root - `Agents[I].` included (#429 review).
         Name        = 'stall clock compared'
-        Pattern     = 'GetStalledSeconds\s*\(\s*\)\s*[<>]|(?<![-<>])[<>]=?\s*[\w.>-]*GetStalledSeconds\s*\('
+        Pattern     = 'GetStalledSeconds\s*\(\s*\)\s*[<>]|(?<![-<>])[<>]=?\s*[\w.\[\]>-]*GetStalledSeconds\s*\(|\bHold\.StalledSeconds\s*[<>]|(?<![-<>])[<>]=?\s*[\w.\[\]>-]*Hold\.StalledSeconds\b'
         ProdAllowed = @('Public\Model\RoadAgent.h')
         TestExempt  = $true
         ProdReason  = 'ask FRoadAgent::IsStuck (or HasStalledFor for a wait-for edge) - the one definition of stuck, whose bound and blocker test the copies had drifted from (#429)'
+    },
+    @{
+        # ONE TAXI-IN QUERY (#429 review): ArrivalPlanner::ChooseStand chooses a stand by it and UGroundTraffic::
+        # ReofferStand drives the waiter there by a route SendAgentTo searches with it. They were built twice, by hand
+        # and by For(); if the two drift, a stand is chosen that the drive's search cannot reach, and the waiter is
+        # offered it and refused every pass. ArrivalPlanner::TaxiInQuery is the one builder - the errand named anywhere
+        # else in production is a second one. The policy table (RoutePolicy.cpp) names it to say what it means.
+        Name        = 'taxi-in query built'
+        Pattern     = '\bERouteErrand::ArrivalTaxiIn\b'
+        ProdAllowed = @('Private\Model\ArrivalPlanner.cpp', 'Private\Model\RoutePolicy.cpp')
+        TestExempt  = $true
+        ProdReason  = 'take the taxi-in query from ArrivalPlanner::TaxiInQuery, the one the stand choice searches with (#429 review)'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -1706,8 +1719,9 @@ $ranRules.Add('no-vehiclecode-compare')
 #
 # THE ALLOW-LIST, one entry per (File, VarName), matching rule 6's "file AND field name" shape
 # rather than exempting a whole file: each remaining site was checked by hand (issue #312's PR)
-# and either already sets AvoidRunways correctly (ArrivalPlanner.cpp - FuelService.cpp's two moved
-# to FRouteQuery::For when it became JobBoard*.cpp, 2026-09-28 -
+# and either already sets AvoidRunways correctly (FuelService.cpp's two moved to FRouteQuery::For
+# when it became JobBoard*.cpp, 2026-09-28, and ArrivalPlanner.cpp's to ArrivalPlanner::TaxiInQuery
+# in #429's review - For() takes an unset goal as readily as a set one -
 # RoadEditFacadeSurfaces.cpp, RouteSearchTest.cpp - the last two because FindToGoals takes a
 # GOALS ARRAY, not the one Goal either For() or Probe() needs) or deliberately builds an
 # incomplete or hand-swept query to test the refusal/sweep itself (RoutePolicyTest.cpp's
@@ -1717,7 +1731,6 @@ $ranRules.Add('no-vehiclecode-compare')
 # `FRouteQuery Var;` in one of these files, or a second one of an already-listed (File, Var),
 # still fails - the allow-list is not a whole-file exemption.
 $routeQueryAllowList = @(
-    @{ File = 'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'; Var = 'Query'; Count = 1 }
     @{ File = 'Plugins\Airside\Source\Airside\Private\Present\RoadEditFacadeSurfaces.cpp'; Var = 'Query'; Count = 1 }
     @{ File = 'Plugins\Airside\Source\AirsideTests\Private\RoutePolicyTest.cpp'; Var = 'Q'; Count = 2 }
     @{ File = 'Plugins\Airside\Source\AirsideTests\Private\RouteSearchTest.cpp'; Var = 'Query'; Count = 1 }

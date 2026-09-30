@@ -775,8 +775,10 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	}
 	FRoadAgent& Agent = Agents[Index];
 	const EAgentPhase Before = Agent.Phase;
-	// STRANDED TOO: a stranded taxi-in waits at its exit for a stand (ReofferStands), and this is
-	// how the re-offer sends it there - it used to be Parked at that moment (issue #396).
+	// STRANDED TOO (issue #396: a stranded taxi-in used to be Parked at that moment, and was redirected from here). A
+	// restart puts it at the plan's FIRST point, which is a teleport unless it stands there - so the stand re-offer
+	// RESCUES a stranded waiter from where it stands instead (UGroundTraffic::ReofferStand, #429 review), and a caller
+	// redirecting one must know it is at the new route's start.
 	if (Before != EAgentPhase::Parked && Before != EAgentPhase::Taxiing && Before != EAgentPhase::Stranded)
 	{
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("RedirectAgent %d refused: agent is %s"),
@@ -1962,8 +1964,10 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 		// jumped to the end of the route it had not driven (9271 uu on the first frame, measured 2026-09-30 on
 		// Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump). ExtendRoute splices the tail onto the live plan with
 		// Travelled, Speed and Heading kept, and its precondition - the tail starts where the live plan ends - is the
-		// very thing that made the route. A PARKED OR STRANDED waiter is standing at GoalNode, so the restart is where
-		// it already is, and RedirectAgent is the only verb that gets a stopped aircraft going: they keep it.
+		// very thing that made the route. A PARKED waiter is standing at GoalNode, so the restart is where it already is,
+		// and RedirectAgent is the only verb that gets a stopped aircraft going: it keeps it. A STRANDED one need not be
+		// at GoalNode - a second rebuild can strand it short of the node its first truncation left it - so it is
+		// offered its stand from where it stands and rescued there (#429 review; ReofferStrandedWaiterDoesNotJump).
 		//
 		// ReOffered, NOT Redirected: the flight board keeps it in its taxi IN whatever its stand does next (review M1).
 		const FStandOffer Offer = ReofferStand(Id, Network, EAgentEvent::ReOffered);
@@ -1972,7 +1976,10 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 		// here) is never redirected instead - that is the teleport again, in the one case nothing has measured. It keeps
 		// waiting, and the next freed stand asks again - or its own stop at the end of the route does (AdvanceOnce's
 		// Parked case, #455), which is what asks it if no stand frees.
-		if (Offer.Outcome == EStandOffer::NotSent && Offer.Send.Outcome == ESendOutcome::FinishesLeg)
+		// FinishesMotion TOO: a taxiing waiter whose route is not drivable any more keeps waiting as well, and said so
+		// before #429 (ExtendRoute refused it with this line); SendAgentTo answers it FinishesMotion now.
+		if (Offer.Outcome == EStandOffer::NotSent
+			&& (Offer.Send.Outcome == ESendOutcome::FinishesLeg || Offer.Send.Outcome == ESendOutcome::FinishesMotion))
 		{
 			UE_LOG(LogAirsideTraffic, Log,
 				TEXT("Agent %d: a stand freed at node %d, but its route could not be extended from where it ends; it keeps waiting"),

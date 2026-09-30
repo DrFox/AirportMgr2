@@ -4130,10 +4130,9 @@ bool FServiceBidOutVehicleRemainingDriveTest::RunTest(const FString& Parameters)
 	const ServiceBid::FResult Second = Board.BidForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, OutId, JobId);
 	if (!TestTrue(TEXT("both bids reach the job"), First.bReachable && Second.bReachable)) { return false; }
 
-	// GAME SECONDS PER MOVEMENT SECOND, the bid's own conversion (BidFor's GamePerMovement).
-	const double GamePerMovement = Fixture.Clock->GameSecondsPerRealSecond(Fixture.Clock->TimeOfDay());
+	// IN GAME SECONDS by the clock's one conversion (USimClock::GameSecondsOfMovement, #447), the bid's own.
 	const double ClockMoved = SecondAt - FirstAt;
-	const double Driven = (FirstLeft - SecondLeft) * GamePerMovement;
+	const double Driven = Fixture.Clock->GameSecondsOfMovement(FirstLeft - SecondLeft);
 	AddInfo(FString::Printf(TEXT("clock moved %.3f s, drove %.3f s of its leg; finish %.3f then %.3f"),
 		ClockMoved, Driven, First.Finish, Second.Finish));
 	if (!TestTrue(TEXT("the vehicle made a real part of its leg in between"), Driven > 0.2 * ClockMoved)) { return false; }

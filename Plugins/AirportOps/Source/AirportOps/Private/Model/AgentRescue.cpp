@@ -13,7 +13,7 @@
 namespace
 {
 	// THE STAND SEARCH'S RADIUS (StandSearchRadius) went to Airside with the search itself (#429): it is
-	// UGroundTraffic::RescueToStand's figure now, beside the reason it is 50 m.
+	// UGroundTraffic::ReofferStand's figure now (its stranded row), beside the reason it is 50 m.
 
 	FText PhaseRefusal(EAgentPhase Phase)
 	{
@@ -200,16 +200,12 @@ FUnstickVerdict UAgentRescue::FindStand(UGroundTraffic& Traffic, const URoadNetw
 		return FUnstickVerdict::No(LOCTEXT("NoAirframe", "Not an aircraft"));
 	}
 
-	// PARKED WAITING FOR A STAND: exactly UGroundTraffic::ReofferStands' move, asked now instead of when a stand next
-	// frees - ReofferStand, the one waiter's move (#429): from the node it waits on, and a redirect from rest where it
-	// stands. RESCUED, the player's own reason (#436): the flight board keeps the taxi in it was in.
-	//
-	// STRANDED: UGroundTraffic::RescueToStand - the stand CHOSEN from a node near it (the node ahead on its dead route,
-	// else the nearest) and DRIVEN to by the rescue from wherever it hops onto. Not ReofferStand's restart from its
-	// goal node, which for a stranded aeroplane may be the stand that went.
-	const FStandOffer Offer = Agent.Phase == EAgentPhase::Parked
-		? Traffic.ReofferStand(Agent.Id, Network, EAgentEvent::Rescued)
-		: Traffic.RescueToStand(Agent.Id, Network);
+	// EXACTLY UGroundTraffic::ReofferStands' MOVE, asked now instead of when a stand next frees - ReofferStand, the one
+	// waiter's move (#429), whose phase decides how: PARKED waiting for a stand, from the node it waits on and a redirect
+	// from rest where it stands; STRANDED, a stand chosen from the node ahead on its dead route (else the nearest) and a
+	// rescue from wherever it hops onto - never a restart at its goal node, which it need not be at. RESCUED, the
+	// player's own reason (#436): the flight board keeps the taxi in it was in.
+	const FStandOffer Offer = Traffic.ReofferStand(Agent.Id, Network, EAgentEvent::Rescued);
 	switch (Offer.Outcome)
 	{
 	case EStandOffer::Sent:
