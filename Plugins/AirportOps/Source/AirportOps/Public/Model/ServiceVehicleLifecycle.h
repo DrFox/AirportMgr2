@@ -30,7 +30,7 @@
  * THE INVARIANT, per state (the table on EServiceVehicleState): Violation reports a row that does not hold, and
  * every transition ends by asserting it. Deciding is the one transient state: it never survives a Step.
  *
- * ENFORCED BY: Check-Architecture rule 37 (vehicle-lifecycle-one-writer) - no other production file writes the
+ * ENFORCED BY: Check-Architecture rule 38 (vehicle-lifecycle-one-writer) - no other production file writes the
  * three fields; AirportOps.Model.Lifecycle.* (each transition's move, bump and invariant) and FFuelFixture's
  * per-Step check (every vehicle a fuel test drives).
  */

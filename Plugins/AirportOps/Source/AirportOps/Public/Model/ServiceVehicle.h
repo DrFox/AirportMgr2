@@ -129,7 +129,7 @@ struct AIRPORTOPS_API FServiceVehicle
 	/**
 	 * WRITTEN ONLY BY FServiceVehicleLifecycle - with AgentId and CurrentJob, the three fields whose combination
 	 * is the state's invariant (see the table on EServiceVehicleState). Public because a USTRUCT's fields are
-	 * how UHT and every reader see it; Check-Architecture rule 37 is what keeps the writers to one file.
+	 * how UHT and every reader see it; Check-Architecture rule 38 is what keeps the writers to one file.
 	 */
 	UPROPERTY() EServiceVehicleState State = EServiceVehicleState::Idle;
 

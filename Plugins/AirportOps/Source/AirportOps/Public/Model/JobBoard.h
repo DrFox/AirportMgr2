@@ -616,7 +616,7 @@ private:
 	/**
 	 * THE HANDLE for Vehicle's transitions, bound to this board's FleetRevision: every write of a vehicle's State,
 	 * AgentId and CurrentJob goes through it (FServiceVehicleLifecycle), and it bumps FleetRevision itself.
-	 * ENFORCED BY: Check-Architecture rule 37 (vehicle-lifecycle-one-writer)
+	 * ENFORCED BY: Check-Architecture rule 38 (vehicle-lifecycle-one-writer)
 	 */
 	FServiceVehicleLifecycle Lifecycle(FServiceVehicle& Vehicle) { return FServiceVehicleLifecycle(Vehicle, FleetRevision); }
 
