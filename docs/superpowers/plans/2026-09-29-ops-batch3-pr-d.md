@@ -134,3 +134,41 @@ void UOpsRuntime::RunArrivalQueue()
    no stands broadcast, each dirtier, no Attach bind, no one-a-frame deferral (SecondRunwayNextFrame), no dead-stand
    branch.
 8. **Full suite**, counts, report.
+
+## Execution notes (2026-09-30)
+
+Full suite: `1534 test(s) run, 0 failed, 0 crashed` (+12: 5 Airside, 8 ops, minus `AirportOps.Present.RuntimeTicksTheQueue`,
+which pinned the per-frame call and is replaced by `QuietQueueRunsNothing`). Check-Architecture PASS with rule 33, rule-12
+warnings 111 (unchanged).
+
+Red lines before implementation: all five `Airside.Model.Traffic.RunwayFreed.*` ("the tick the crossing clears fires once"
+expected 1, got 0, etc.); `FreedIsBridged` ("a freed runway is published onto the bus" 3, got 2); `EveryEventHasASubscriber`
+(RunwayFreed/StandsFreed/FlightInbound). The pass tests were written with the pass; their reds are the mutations below.
+
+Mutations (each red, restored with cp + touch, rebuilt green):
+
+| Mutation | Red |
+|---|---|
+| runway diff broadcast never reached | RunwayFreed.TakeOff/CrossingClears/DespawnOnRunway/DeletedRunway; `CrossingClearDispatchesNextFrame` ("released 304, cleared 898"; "no safety Warning" expected 0, got 1) |
+| stands diff broadcast never reached | RunwayFreed.StandsDiff |
+| all eight dirtiers emptied | `EachEventDirtiesIt`, one named line each; `CrossingClearDispatchesNextFrame`; `SecondRunwayNextFrame` |
+| Attach bridge removed | `FreedIsBridged` |
+| one-a-frame deferral removed | `SecondRunwayNextFrame` ("one frame after" expected 1, got 0) |
+| dead-stand branch removed | `DeadStandReservesWhenOneFrees` |
+| Enqueue publish removed | `EnqueuePublishesInbound` |
+| safety Warning removed | `SafetyNetCatchesAMissedEvent` ("said so, once" expected 1, got 0) |
+| pass re-dirties itself every frame (the old poll) | `QuietQueueRunsNothing` (expected 5, got 305), `EachEventDirtiesIt` ("nothing: no run") |
+| TickQueue call back in Tick | rule 33 `queue-is-a-pass` FAIL |
+
+Not pinned: the load's `MarkAllDirty` for the queue (the load's own NetworkChanged also runs it, so no test can tell them
+apart); the safety net's cancel on load/detach.
+
+Findings for the orchestrator:
+
+- **Item 6 stopped** (see Premises): `DepartTheReady` never waits on a runway; its one self-clearing refusal is
+  `PushbackBlocked`, which no event covers. Per-frame retry kept; no RunwayFreed -> JobBoard dirtier; the safety net covers
+  the queue only.
+- **An in-play guideline rebuild drops every accepted flight's stand hold.** `FTrafficOccupancy::ReleaseGuidelineClaims`
+  releases Node claims of any holder, flight holds included, and `UFlightBoard::OnGraphRebuilt` (Reapply) runs only from
+  `LoadFromSlot`. The stands diff now reports those holds freed, truthfully. Pre-existing; not fixed here.
+- **SpeedChanged dirties the queue** (not in the spec's list): a pass run while paused consumes its dirt.
