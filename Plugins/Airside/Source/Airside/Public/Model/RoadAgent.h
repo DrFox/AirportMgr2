@@ -386,6 +386,13 @@ public:
 	/** The hold's "no route yet" line has been said - one line for a hold that lasts minutes. */
 	bool bTaxiOutHoldSaid = false;
 
+	/**
+	 * The guideline revision a replan from this hold was last REFUSED at - UGroundTraffic::ReplanHeldTaxiOuts
+	 * asks again only once the graph has moved past it (ops batch 3 PR E). Unset: never refused, ask. Reset
+	 * wherever bTaxiOutHoldSaid is, so a new hold always asks at once. Session state, not saved.
+	 */
+	TOptional<uint32> TaxiOutRefusedAt;
+
 	/** The taxi out cannot be driven from where the push ends - see bTaxiOutStale. Its hold
 	 *  line is to be said afresh. The rebuild calls this for a stranded taxi out. */
 	void MarkTaxiOutStale();
@@ -395,6 +402,12 @@ public:
 
 	/** The hold's "no route yet" line has been said - see bTaxiOutHoldSaid. */
 	void MarkTaxiOutHoldSaid() { bTaxiOutHoldSaid = true; }
+
+	/** A replan from this hold was refused on this guideline revision - see TaxiOutRefusedAt. */
+	void MarkTaxiOutRefusedAt(uint32 GuidelineRevision) { TaxiOutRefusedAt = GuidelineRevision; }
+
+	/** Forget the refusal - a new network object, whose revisions are not comparable. See TaxiOutRefusedAt. */
+	void ForgetTaxiOutRefusal() { TaxiOutRefusedAt.Reset(); }
 
 	/** A new taxi out, restarted from where a TAXIING aeroplane holds - the taxi-complete
 	 *  guard's hold (RoadAgent.cpp). Keeps its pose, heading and engine spool. */

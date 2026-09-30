@@ -129,9 +129,23 @@ public:
 
 	/**
 	 * How many times OnRunwayFreed has fired this session. A plain counter, like OccupancyRevision: a poller
-	 * (ops batch 3 PR E's gate) asks "has a runway freed since the number I remember".
+	 * asks "has a runway freed since the number I remember". PR E planned two such pollers and found neither
+	 * reads a held runway (2026-09-30): a held taxi out's replan is only RANKED by one (ReplanHeldTaxiOuts'
+	 * gate), and the Land panel reads no occupancy. Kept: it is the diff's own count, and costs an int.
 	 */
 	int32 RunwayFreedCount() const { return RunwayFreedTotal; }
+
+	/**
+	 * How many DiffFreedom calls have found the set of held stands CHANGED - one gained or lost, either way. The
+	 * stand card's key (ops batch 3 PR E): OccupancyRevision covers goal claims, holds and phase changes, but a
+	 * body the per-tick claim pass puts on a pose node, or takes off it, moves no revision; OnStandsFreed sees
+	 * only the losing half. A plain session counter, like RunwayFreedCount.
+	 * ENFORCED BY: Airside.Model.Traffic.StandHolds.ChurnIsCounted
+	 */
+	uint32 StandHoldChangeCount() const { return StandHoldChanges; }
+
+	/** How many times ReplanHeldTaxiOuts has actually tried to plan a held taxi out - its gate's counter. */
+	int32 TaxiOutReplanAttemptsForTest() const { return TaxiOutReplanAttempts; }
 
 	/**
 	 * The figures this tick arbitrates in. NOT the knob a designer turns.
@@ -798,9 +812,11 @@ private:
 	 * FRoadAgent::bTaxiOutStale) is given one: DeparturePlanner::PlanAny from the live node
 	 * nearest where it stands, joined to it by a short leg so it DRIVES there rather than
 	 * appearing there, and re-armed from the new route's end. None found: it keeps holding,
-	 * said once, and is asked again every tick - so the player's fix releases it, the user's
-	 * ruling for this case (2026-09-27). Not while the graph is mid-edit: the route must be on
-	 * the lines the player is about to see.
+	 * said once, and is asked again when the guideline graph moves - the player's fix is an
+	 * edit, and every edit moves it - so the fix releases it, the user's ruling for this case
+	 * (2026-09-27). It was asked every tick until ops batch 3 PR E; see the .cpp for why the
+	 * graph's revision is every input of a refusal. Not while the graph is mid-edit: the route
+	 * must be on the lines the player is about to see.
 	 */
 	void ReplanHeldTaxiOuts(const URoadNetwork& Network);
 
@@ -901,6 +917,20 @@ private:
 
 	/** See RunwayFreedCount. A session counter, not saved. */
 	int32 RunwayFreedTotal = 0;
+
+	/** See StandHoldChangeCount. A session counter, not saved. */
+	uint32 StandHoldChanges = 0;
+
+	/** See TaxiOutReplanAttemptsForTest. */
+	int32 TaxiOutReplanAttempts = 0;
+
+	/**
+	 * The network ReplanHeldTaxiOuts last gated against. A revision numbers ONE network's edits, and a new network
+	 * object (ClearNetwork, a load) starts its own count - so a refusal remembered on the old one is forgotten when
+	 * this changes, rather than matched by coincidence against the new one's number. Identity only, never
+	 * dereferenced; weak for the same reason DiffNetwork is.
+	 */
+	TWeakObjectPtr<const URoadNetwork> TaxiOutGateNetwork;
 
 	// ResolveDeadlocks, CanReplanAtBlockedStep, EReResolve, ReResolvePlan and SpliceReplan ALL
 	// MOVED to FDeadlockResolver / FPlanReResolver (issue #84) - both declared above, near

@@ -1268,6 +1268,12 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 			FreedStands.Add(Was.Value);
 		}
 	}
+	// ANY CHANGE TO THE HELD SET, either way - see StandHoldChangeCount. With nothing freed, the set now holds every
+	// old member, so a different size can only be a stand gained.
+	if (FreedStands.Num() > 0 || StandsNow.Num() != HeldStands.Num())
+	{
+		++StandHoldChanges;
+	}
 	HeldStands = MoveTemp(StandsNow);
 
 	// BASELINES FIRST, BROADCASTS AFTER: a listener that asks this model anything sees the state the diff saw.
@@ -1295,6 +1301,33 @@ void UGroundTraffic::ReplanHeldTaxiOuts(const URoadNetwork& Network)
 	// not for an aeroplane the edit left in a field - that one holds until a line reaches it.
 	constexpr double TaxiOutJoinRadiusUu = 3000.0;
 
+	// ASKED ONCE PER GRAPH, NOT EVERY SUBSTEP (ops batch 3 PR E): a refused hold remembers the guideline revision it
+	// was refused at (FRoadAgent::TaxiOutRefusedAt) and is asked again only once the graph has moved past it. It was
+	// FindNearestNode + PlanAny every substep for as long as it held - minutes, if the player never fixed it.
+	//
+	// THE GRAPH ALONE, and why that is every input of the refusal (checked 2026-09-30): the nearest node and the
+	// route are the guideline graph and the agent's pose, which does not move while it holds; PlanAny's runways,
+	// their modes and in-use ends are runway facts, which in play change only through the facade, whose Topology
+	// rebuild re-makes every derived edge and so moves GetGuidelineRevision; a drag leaves the guidelines behind the
+	// road, and this returns above until it is dropped. NOT OCCUPANCY - the spec keyed it on RunwayFreedCount too, on
+	// the premise that PlanAny refuses behind a busy runway; it does not: occupancy only RANKS a held runway below a
+	// free one, and both departure errands are EOccupancyUse::Never. A key input that cannot change the answer would
+	// only buy retries that fail.
+	// ENFORCED BY: Airside.Model.Traffic.HeldTaxiOut.BusyRunwayIsNoRefusal (a held strip is still planned to);
+	// AirportMgr.Inspector.Cache.RunwaySeesItsFacts (a facts change through the facade moves the guideline revision)
+	//
+	// A NEW NETWORK OBJECT forgets every refusal: its revisions count from its own zero, and one could match an old
+	// refusal's number by coincidence.
+	if (TaxiOutGateNetwork.Get() != &Network)
+	{
+		for (FRoadAgent& Each : Agents)
+		{
+			Each.ForgetTaxiOutRefusal();
+		}
+		TaxiOutGateNetwork = &Network;
+	}
+	const uint32 GraphNow = Network.GetGuidelineRevision();
+
 	for (FRoadAgent& Agent : Agents)
 	{
 		if (!Agent.IsHoldingForTaxiOut())
@@ -1306,6 +1339,11 @@ void UGroundTraffic::ReplanHeldTaxiOuts(const URoadNetwork& Network)
 		{
 			continue;
 		}
+		if (Agent.TaxiOutRefusedAt.IsSet() && Agent.TaxiOutRefusedAt.GetValue() == GraphNow)
+		{
+			continue;
+		}
+		++TaxiOutReplanAttempts;   // See TaxiOutReplanAttemptsForTest.
 		const FVector2D Here = Agent.LastMotion.Position;
 		const FGuidelineNodeId From = RouteSearch::FindNearestNode(Network, Here, Agent.Class, TaxiOutJoinRadiusUu);
 		FDeparturePlan Plan;
@@ -1323,6 +1361,7 @@ void UGroundTraffic::ReplanHeldTaxiOuts(const URoadNetwork& Network)
 					From.IsSet() ? *DeparturePlanner::Describe(Plan) : TEXT("no taxi line within 30 m"));
 				Agent.MarkTaxiOutHoldSaid();
 			}
+			Agent.MarkTaxiOutRefusedAt(GraphNow);
 			continue;
 		}
 
