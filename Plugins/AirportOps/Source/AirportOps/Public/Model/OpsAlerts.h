@@ -148,7 +148,8 @@ public:
 	const TArray<FOpsAlert>& GetAlerts() const { return Alerts; }
 
 	/**
-	 * What a deadlock asks of the player - "the layout needs another way round". ONE SOURCE for the
+	 * What a deadlock asks of the player - "the layout needs another way round or out" (or: a truck backing out of a
+	 * bay has no way round, only out - #455). ONE SOURCE for the
 	 * Deadlock alert and the inspector's deadlock line (2026-09-30), so the two say the same fix.
 	 * ENFORCED BY: AirportMgr.Inspector.HoldAndDeadlockLines (card and recomputed alert both carry it)
 	 */

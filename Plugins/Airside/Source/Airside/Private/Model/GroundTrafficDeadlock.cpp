@@ -135,6 +135,19 @@ bool FDeadlockResolver::CanReplanAtBlockedStep(const FRoadAgent& Agent, const UR
 		return false;
 	}
 
+	// A REFUSAL AT A REVERSE LEG'S STEP IS NOT A TURN (#455), and this is the guard that makes it so. A truck
+	// refused the ground of the reverse leg it is about to arm (UGroundTraffic::GateReverseLeg) is Taxiing, stopped,
+	// with BlockedStep on that reverse step and ToNode ~0 - it passes every test below - and the leg is the only line
+	// off the service point: a replan spliced there does not go round the block, it sends a service truck forward out
+	// of a bay it is meant to leave backwards (ReplanAt has no reverse-leg handling; it treats the step as any other).
+	// Such a truck is waited out, as a reversing or pushed member is. DECIDED, NOT MERELY LEFT: the alternative,
+	// pinning what a forward replan out of a bay does, would bless it.
+	// ENFORCED BY: Airside.Model.Traffic.Deadlock.ResolverDoesNotReplanATruckOutOfItsBay
+	if (Plan.Steps[Agent.GetBlockedStep()].bReverseLeg)
+	{
+		return false;
+	}
+
 	// AT THE NODE THE REFUSED STEP LEAVES FROM, which is where the alternatives are. Negative
 	// means the agent is INSIDE the edge it was refused, and taking another edge out of that
 	// node would mean reversing - out of M2 by spec §1. The upper bound is where the agent is
@@ -350,8 +363,18 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 		// below would have chosen gives up its reservations instead. It keeps the ground its
 		// body is on (ReleaseReservations, not ReleaseAll - see that function), and re-claims
 		// on its next pass, by which time the other member has taken what it needed: the
-		// yielder is the lowest-ranked, highest-id member, and Arbitrate asks higher ranks
-		// first and lower ids first, so the others always claim before it does.
+		// yielder is the lowest-ranked, highest-id REPLANNABLE member, and Arbitrate asks higher
+		// ranks first and lower ids first, so the others always claim before it does.
+		//
+		// ONLY A REPLANNABLE MEMBER MAY YIELD (#455). A reversing truck holds its whole span and a
+		// pushed aeroplane its whole push as reservations from the first frame, precisely so that
+		// the manoeuvre is "granted whole" and cannot be stopped half way; ReleaseReservations on
+		// one of them drops exactly that hold, and the next pass would have to win it back against
+		// whoever the yield just let in. Since #455 such a member CAN be in a cycle (it accrues the
+		// stall clock), and being the lowest rank it is the one an unfiltered order picks. A cycle
+		// with no replannable member is not yielded at all: it falls through to the replan path
+		// below, finds no candidate and says so, on the retry cadence, like any jam nobody can turn.
+		// ENFORCED BY: Airside.Model.Traffic.Deadlock.ReservationYieldSkipsAReversingAndAPushedMember
 		//
 		// GUARDED BY YieldedAt: a cycle that re-forms within a retry window of yielding is
 		// one a yield could not settle - the other member is also refused something a third
@@ -367,10 +390,18 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 			// into releasing anything.
 			bAllReservations = bAllReservations && Blocking != nullptr && !Blocking->bOccupied;
 		}
-		const double* LastYield = YieldedAt.Find(Key);
-		if (bAllReservations && (LastYield == nullptr || *LastYield < SimSeconds - Rules.RetrySeconds))
+		TArray<int32> ByYieldOrder;
+		for (const int32 Id : Cycle)
 		{
-			TArray<int32> ByYieldOrder = Cycle;
+			const FRoadAgent* Member = FindAgentIn(Agents, AgentIndex, Id);
+			if (Member != nullptr && Member->IsReplannable())
+			{
+				ByYieldOrder.Add(Id);
+			}
+		}
+		const double* LastYield = YieldedAt.Find(Key);
+		if (bAllReservations && ByYieldOrder.Num() > 0 && (LastYield == nullptr || *LastYield < SimSeconds - Rules.RetrySeconds))
+		{
 			ByYieldOrder.Sort([&Agents, &AgentIndex](const int32 A, const int32 B)
 			{
 				const int32 RankA = RankOf(Agents, AgentIndex, A);

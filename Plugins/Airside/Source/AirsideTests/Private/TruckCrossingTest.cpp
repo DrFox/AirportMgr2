@@ -1138,7 +1138,7 @@ bool FVanHoldsRoomUntilClearTest::RunTest(const FString& Parameters)
 	const double ConflictY = Net->GetGuidelineNode(Plan.Steps[LastConflict].To)->Position.Y;
 	const double FarEndY = Net->GetGuidelineNode(Plan.Steps[LastConflict + 1].To)->Position.Y;
 	const FGuidelineEdgeId FarLane = Plan.Steps[LastConflict + 2].Edge;
-	const double Room = Rules.VehicleFootprint + Rules.VehicleGap;
+	const double Room = Rules.VehicleFootprint + Rules.GapFor(ETraversalClass::GroundVehicle);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Van = Traffic->DispatchAgent(Net, Plan, TestAirframes::Van(), ETraversalClass::GroundVehicle, 0.0);

@@ -24,7 +24,9 @@ double FTrafficRules::GapFor(ETraversalClass Class) const
 
 	// NEVER LESS THAN HALF THE FOOTPRINT, whatever the two knobs say (#455). A vehicle refused a node stops this far
 	// short of it, measured from its CENTRE (FClaimPass::StopWithinFor), and the claim it then makes on the node turns
-	// OCCUPIED once the centre is within half a footprint of it (FClaimPass, the end-node claim: `|End - T| < F/2`).
+	// OCCUPIED once the centre is within half a footprint of it, plus the node's reach (FClaimPass, the end-node
+	// claim: `|End - T| < F * 0.5 + ExcessTo` - and StopWithinFor stops the centre ExcessTo further back by the same
+	// reach, so the reach cancels and a gap of half the footprint is exactly on the threshold).
 	// A gap under that stops the refused vehicle INSIDE the zone where its own claim is an occupancy, and the table -
 	// where a body standing on a node is never moved - hands it the node another vehicle reserved first. VehicleGap
 	// was 300 against half a VehicleFootprint of 334.75, and the footprint is authored from the mesh (it has been 500,

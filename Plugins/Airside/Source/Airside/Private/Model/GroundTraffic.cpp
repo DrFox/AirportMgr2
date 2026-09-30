@@ -455,7 +455,8 @@ bool UGroundTraffic::SetGoalForTest(int32 AgentId, FGuidelineNodeId Goal)
 	return true;
 }
 
-bool UGroundTraffic::ScriptWaitForTest(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds)
+bool UGroundTraffic::ScriptWaitForTest(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds,
+	int32 BlockedStep)
 {
 	const int32 Index = FindIndex(AgentId);
 	if (Index == INDEX_NONE)
@@ -463,9 +464,10 @@ bool UGroundTraffic::ScriptWaitForTest(int32 AgentId, const FTrafficResource& Re
 		return false;
 	}
 	// Through Refuse and the stall clock's own doors, as the claim pass and AdvanceOnce write them.
-	// Step INDEX_NONE and an unlimited stop: only the blocker, the resource and the clock are staged.
+	// Step BlockedStep (INDEX_NONE unless a test names one) and an unlimited stop: only the blocker, the resource and
+	// the clock are staged.
 	FRoadAgent& Agent = Agents[Index];
-	Agent.Refuse(INDEX_NONE, Resource, TNumericLimits<double>::Max(), BlockerId);
+	Agent.Refuse(BlockedStep, Resource, TNumericLimits<double>::Max(), BlockerId);
 	Agent.ResetStall();
 	Agent.AccrueStall(StalledSeconds);
 	return true;
@@ -896,7 +898,14 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// GATED FIRST (#455), and this is THE case: every stand service cycle's route home opens with the reverse
 	// leg, so this zero-second Advance is where a service truck arms its back-out - with no claim pass run
 	// yet, and so no notion that another vehicle already holds the leg's ground. See GateReverseLeg.
-	// ENFORCED BY: Airside.Model.Traffic.ReverseFromRedirectWaitsForHeldGround
+	//
+	// ARBITRATION CLEARED FIRST: the agent may be an existing one still carrying a refusal from the route it is being
+	// taken off (a Taxiing agent redirected mid-wait), and TryArmReverseLeg reads the refusal the gate leaves. The
+	// new route starts from rest and asks the table afresh, so the old answer means nothing to it. (AdmitDispatched
+	// needs none: its agent has never been arbitrated.)
+	// ENFORCED BY: Airside.Model.Traffic.ReverseFromRedirectWaitsForHeldGround,
+	// Airside.Model.Traffic.ReverseIgnoresARefusalElsewhereOnTheRoute
+	Agent.ClearArbitration();
 	GateReverseLeg(Agent);
 	FAgentMotion Motion;
 	EAgentEvent Event;

@@ -1218,9 +1218,13 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 	}
 
 	// THE GROUND MUST BE FREE BEFORE THE REVERSE BEGINS (#455). UGroundTraffic::GateReverseLeg has just asked the
-	// table about the whole span and, if anyone else holds any of it, REFUSED this agent there - so WaitingOn is the
-	// one signal this reads, the same one the claim pass leaves for the ground in front of a taxi.
-	// ENFORCED BY: Airside.Model.Traffic.ReverseWaitsForHeldGround (held ground: still Taxiing, waiting on the holder)
+	// table about the whole span and, if anyone else holds any of it, REFUSED this agent there - so a refusal AT A STEP
+	// OF THE SPAN is the signal this reads (WaitingOn naming the holder, BlockedStep in [From, To]), the same one the
+	// claim pass leaves for the ground in front of a taxi. KEYED ON THE STEP, not on WaitingOn alone: a refusal
+	// somewhere else on the route - or one left over from a route the agent has since been redirected off - says
+	// nothing about this span's ground, and must neither hold the arm nor name a holder that is not the one in the way.
+	// ENFORCED BY: Airside.Model.Traffic.ReverseWaitsForHeldGround (held ground: still Taxiing, waiting on the holder),
+	// Airside.Model.Traffic.ReverseIgnoresARefusalElsewhereOnTheRoute (a refusal off the span does not hold it)
 	//
 	// The vehicle stays TAXIING where it stands, at the span's start, and asks again next frame: it does not arm a
 	// reverse that would begin into held ground, be refused a few metres on and sit in the span across the lane it
@@ -1231,7 +1235,7 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 	// SAID ONCE PER HOLDER, through the same LastReverseRefusal a tow's refusal is said through, so a wait that lasts
 	// a minute is a line and not a thousand. Follower.Speed is zeroed and the pose held for the reason the refused
 	// arm below gives: what the panel reads must be a vehicle standing still.
-	if (WaitingOn != 0)
+	if (WaitingOn != 0 && BlockedStep >= From && BlockedStep <= To)
 	{
 		const FString Why = FString::Printf(TEXT("the ground it backs over is held by agent %d"), WaitingOn);
 		// NOT SAID BEFORE THE AGENT HAS AN ID (a dispatch's own pose, Id 0): the line would name "agent 0", and

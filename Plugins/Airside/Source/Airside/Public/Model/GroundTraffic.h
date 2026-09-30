@@ -519,9 +519,10 @@ public:
 	uint32 OccupancyRevision() const { return OccupancyRevisionCount; }
 
 	/**
-	 * Every wait cycle nobody in can be turned out of, right now, as member agent ids - FDeadlockResolver::AlertCycles
-	 * over this model's agents: every member an aircraft or an agent that cannot be replanned (a reversing truck, a
-	 * pushed aeroplane - #455). For the ops Deadlock alert: the resolver logs these, and a log line is not
+	 * Every wait cycle with no member the resolver could send round by another route, right now, as member agent ids -
+	 * FDeadlockResolver::AlertCycles over this model's agents: each member is an aircraft (replannable or not) or an
+	 * agent that cannot be replanned (a reversing truck, a pushed aeroplane - #455); a cycle with a Taxiing van in it is
+	 * dropped. For the ops Deadlock alert: the resolver logs these, and a log line is not
 	 * something a player sees. Out is reset first.
 	 */
 	void CurrentDeadlocks(TArray<TArray<int32>>& Out) const;
@@ -1083,9 +1084,13 @@ private:
 	 * the state one claim pass plus that long a wait would leave. So a test can stage a wait, or a
 	 * two-aircraft deadlock ring, without the geometry that would jam two aircraft for real (and
 	 * the resolver that would then replan them). The next Advance's claim pass overwrites it.
+	 * BlockedStep is the plan step the refusal names - INDEX_NONE by default, where only the blocker, the resource and the
+	 * clock are staged; a test that needs a refusal AT a step (a stale one left on a route the agent is taken off - #455)
+	 * names it.
 	 * False for an unknown agent. Not public - see FGroundTrafficTestAccess (#104).
 	 */
-	bool ScriptWaitForTest(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds);
+	bool ScriptWaitForTest(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds,
+		int32 BlockedStep = INDEX_NONE);
 
 	/**
 	 * Points AgentId's GoalNode at Goal without touching its plan, so the goal no longer names
@@ -1133,9 +1138,10 @@ struct FGroundTrafficTestAccess
 	bool SetVehicle(int32 AgentId, const FVehicle& Vehicle) { return Traffic.SetVehicleForTest(AgentId, Vehicle); }
 
 	/** See UGroundTraffic::ScriptWaitForTest's own comment. */
-	bool ScriptWait(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds)
+	bool ScriptWait(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds,
+		int32 BlockedStep = INDEX_NONE)
 	{
-		return Traffic.ScriptWaitForTest(AgentId, Resource, BlockerId, StalledSeconds);
+		return Traffic.ScriptWaitForTest(AgentId, Resource, BlockerId, StalledSeconds, BlockedStep);
 	}
 
 	/** See UGroundTraffic::BeginCrossingForTest's own comment. */

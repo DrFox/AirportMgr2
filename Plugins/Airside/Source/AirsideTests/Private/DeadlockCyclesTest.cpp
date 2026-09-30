@@ -3,6 +3,7 @@
 #include "Model/DeadlockResolver.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
+#include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -168,6 +169,109 @@ bool FDeadlockCyclesReversingTruckTest::RunTest(const FString&)
 	TArray<TArray<int32>> LostAlerts;
 	FDeadlockResolver::AlertCycles(Lost, TMap<int32, int32>(), Rules, LostAlerts);
 	TestEqual(TEXT("control: with no id-to-agent map no member is found, so nothing is an alert"), LostAlerts.Num(), 0);
+	return true;
+}
+
+// A RESERVATION CYCLE IS YIELDED BY A REPLANNABLE MEMBER ONLY (issue #455, review of #466).
+//
+// When every refusal in a cycle is against a reservation, the lowest-ranked, highest-id member gives up its
+// reservations instead of anyone being replanned. Since #455 a reversing truck and a pushed aeroplane can be in such a
+// cycle - and they hold their whole span or push as reservations from the first frame precisely so the manoeuvre is
+// granted whole, so being made to let go of them is what the hold exists to prevent. The truck, a vehicle, ranks
+// below the aeroplane and takes the highest id here: an unfiltered order picks it.
+//
+// STAGED BARE, as DeadlockResolverStandalone stages a ring. Van (1, taxiing), pushed aeroplane (2), reversing truck (3),
+// each reserving a node the previous one waits on. The van is the ONLY replannable member: it must be the one to yield,
+// and the other two must keep the reservation each holds. Then a ring of the truck and the aeroplane alone: nobody can
+// yield, so nobody does - the cycle is left, seen once, on the retry cadence.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeadlockYieldSkipsFixedMembersTest, "Airside.Model.Traffic.Deadlock.ReservationYieldSkipsAReversingAndAPushedMember",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDeadlockYieldSkipsFixedMembersTest::RunTest(const FString&)
+{
+	FGuidelineNodeId NodeA;
+	NodeA.Index = 1;
+	FGuidelineNodeId NodeB;
+	NodeB.Index = 2;
+	FGuidelineNodeId NodeC;
+	NodeC.Index = 3;
+
+	auto Reserve = [](FTrafficOccupancy& Occupancy, int32 Agent, FGuidelineNodeId Node)
+	{
+		FTrafficClaim Claim;
+		Claim.AgentId = Agent;
+		Claim.Resource = FTrafficResource::OfNode(Node);
+		Claim.bOccupied = false;
+		FTrafficClaim Blocker;
+		Occupancy.TryClaim(Claim, Blocker);
+	};
+	auto Wait = [](FRoadAgent& Agent, int32 Id, FGuidelineNodeId On, int32 Blocker)
+	{
+		Agent.Id = Id;
+		Agent.Refuse(INDEX_NONE, FTrafficResource::OfNode(On), TNumericLimits<double>::Max(), Blocker);
+		Agent.AccrueStall(10.0);
+	};
+	auto Index = [](const TArray<FRoadAgent>& Agents)
+	{
+		TMap<int32, int32> Out;
+		for (int32 At = 0; At < Agents.Num(); ++At) { Out.Add(Agents[At].Id, At); }
+		return Out;
+	};
+
+	FTrafficRules Rules;
+	FNodeReachCache Reach;
+	FRunwayChainCache Chains;
+	FPlanReResolver PlanReResolver;
+	URoadNetwork* Network = NewObject<URoadNetwork>();
+
+	// THREE: van (1) waits on A, held by the aeroplane (2); the aeroplane waits on B, held by the truck (3); the truck
+	// waits on C, held by the van.
+	{
+		FTrafficOccupancy Occupancy;
+		Reserve(Occupancy, 2, NodeA);
+		Reserve(Occupancy, 3, NodeB);
+		Reserve(Occupancy, 1, NodeC);
+		TArray<FRoadAgent> Agents;
+		Agents.SetNum(3);
+		Agents[0].Class = ETraversalClass::GroundVehicle;
+		Wait(Agents[0], 1, NodeA, 2);
+		Agents[1].Phase = EAgentPhase::Manoeuvring;
+		Wait(Agents[1], 2, NodeB, 3);
+		Agents[2].Class = ETraversalClass::GroundVehicle;
+		Agents[2].Phase = EAgentPhase::Reversing;
+		Wait(Agents[2], 3, NodeC, 1);
+
+		FDeadlockResolver Resolver;
+		Resolver.Resolve(Agents, Index(Agents), FTrafficContext{ *Network, Rules, Occupancy, Reach, Chains, 100.0 }, PlanReResolver);
+		TestEqual(TEXT("one cycle, settled by a yield"), Resolver.Yields, 1);
+		TestEqual(TEXT("the VAN yields - the one replannable member (red while the truck, the lowest rank and highest id, was picked)"),
+			Resolver.LastYieldedAgent, 1);
+		TestFalse(TEXT("the van's reservation is gone"), Occupancy.FindClaim(1, FTrafficResource::OfNode(NodeC)) != nullptr);
+		TestTrue(TEXT("the pushed aeroplane keeps the reservation it holds - its push is granted whole"),
+			Occupancy.FindClaim(2, FTrafficResource::OfNode(NodeA)) != nullptr);
+		TestTrue(TEXT("and the reversing truck keeps its span"), Occupancy.FindClaim(3, FTrafficResource::OfNode(NodeB)) != nullptr);
+	}
+
+	// TWO: the truck and the aeroplane alone. Nobody may yield.
+	{
+		FTrafficOccupancy Occupancy;
+		Reserve(Occupancy, 2, NodeA);
+		Reserve(Occupancy, 3, NodeB);
+		TArray<FRoadAgent> Agents;
+		Agents.SetNum(2);
+		Agents[0].Phase = EAgentPhase::Manoeuvring;
+		Wait(Agents[0], 2, NodeB, 3);
+		Agents[1].Class = ETraversalClass::GroundVehicle;
+		Agents[1].Phase = EAgentPhase::Reversing;
+		Wait(Agents[1], 3, NodeA, 2);
+
+		FDeadlockResolver Resolver;
+		Resolver.Resolve(Agents, Index(Agents), FTrafficContext{ *Network, Rules, Occupancy, Reach, Chains, 100.0 }, PlanReResolver);
+		TestEqual(TEXT("a ring of a pushed aeroplane and a reversing truck is not yielded: nobody in it may let go"), Resolver.Yields, 0);
+		TestEqual(TEXT("it is seen"), Resolver.CyclesSeen.Num(), 1);
+		TestTrue(TEXT("and both keep what they hold"),
+			Occupancy.FindClaim(2, FTrafficResource::OfNode(NodeA)) != nullptr
+			&& Occupancy.FindClaim(3, FTrafficResource::OfNode(NodeB)) != nullptr);
+	}
 	return true;
 }
 

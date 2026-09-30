@@ -606,6 +606,21 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Model\RoadNetwork.cpp', 'Private\Debug\RoadRebuildCensus.cpp', 'Private\Tool\RoadHeal.cpp')
         TestExempt  = $true
         ProdReason  = "read a segment's profile through URoadNetwork::ProfileFor - a null one is legal and means the network's default (#459)"
+    },
+    @{
+        # A CLASS'S GAP IS READ THROUGH FTrafficRules::GapFor, NEVER RAW (#455). GapFor floors it at half the footprint
+        # (a refused vehicle must stop outside the zone where its own claim turns occupied), so a raw read of
+        # VehicleGap/AircraftGap is the authored figure and not the one in force - the yardstick two tests were
+        # measuring with, 36 uu short, until this row. The pattern is a READ: an assignment (`.VehicleGap = 777.0`, the
+        # header's own default) is not, and a comment line is skipped by the loop. TrafficForwardersTest is the one test
+        # allowed to read it - it asserts the knob REACHES the model, which is a statement about the field itself -
+        # and the GapFor floor's own unit test lives there for the same reason.
+        Name        = 'FTrafficRules Vehicle/AircraftGap (raw read)'
+        Pattern     = '\b(Vehicle|Aircraft)Gap\b(?!\s*=[^=])'
+        ProdAllowed = @('Public\Model\TrafficRules.h', 'Private\Model\TrafficRules.cpp')
+        TestAllowed = @('Private\TrafficForwardersTest.cpp')
+        ProdReason  = 'ask Rules.GapFor(Class), which floors the gap at half the footprint (#455) - the raw field is the authored figure, not the one in force'
+        TestReason  = 'ask Rules.GapFor(Class) - the raw field is the authored figure, not the one in force (#455); only TrafficForwardersTest reads it, to assert the knob reaches the model'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -2317,7 +2332,8 @@ $ranRules.Add('capability-from-the-view')
 # guard, FDeadlockResolver::CanReplanAtBlockedStep and the alert's filter - and only the first two were ever written
 # that way. The third said "is an aircraft", so a cycle through a truck backing along a bay's leg (which cannot go
 # round) dropped out of the alert for being made of vehicles. Now one predicate; the resolver's file must not spell
-# the phase itself, and both consumers must still ask it. Comments and string literals are stripped first (rule 34's
+# the phase itself, and its three askers (the candidate test, the alert's filter and the yield's candidate list) and
+# ReplanAt's guard must still ask it. Comments and string literals are stripped first (rule 34's
 # stripper), so a WHY comment can name the banned spelling.
 # WHAT NO REGEX SEES: a `switch (Agent.Phase)` that names Taxiing and answers the same question by another route -
 # pinned by Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (the replannable column) and
@@ -2340,8 +2356,8 @@ if ((Test-Path $replannableFile) -and (Test-Path $replannableRebuildFile)) {
         }
         if ($code -match '\bIsReplannable\s*\(') { $asks++ }
     }
-    if ($asks -lt 2) {
-        $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf) asks IsReplannable $asks time(s), not the 2 it must (CanReplanAtBlockedStep and AlertCycles) - one has its own copy of the rule again, or rule 46 is stale (#455)")
+    if ($asks -lt 3) {
+        $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf) asks IsReplannable $asks time(s), not the 3 it must (CanReplanAtBlockedStep, AlertCycles and the yield's candidate list) - one has its own copy of the rule again, or rule 46 is stale (#455)")
     }
     $replanGuard = $false
     $lines = Get-Content -LiteralPath $replannableRebuildFile

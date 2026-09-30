@@ -741,10 +741,13 @@ public:
 	 * which is why UGroundTraffic::DepartAgent grants a push whole and the claim pass holds a reverse's whole span:
 	 * a jam they are part of can be WAITED OUT, never turned round (#455).
 	 *
-	 * ONE PREDICATE FOR THE THREE PLACES THAT ASK, which used to spell it "Phase == Taxiing" each: ReplanAt's guard,
-	 * FDeadlockResolver::CanReplanAtBlockedStep, and FDeadlockResolver::AlertCycles - the last of which reports
-	 * a cycle to the player exactly when nobody in it can be turned, so if the three disagreed the alert would
-	 * promise a way out the resolver does not have (or hide a jam it cannot break).
+	 * ONE PREDICATE FOR THE PLACES THAT ASK: ReplanAt's guard and FDeadlockResolver::CanReplanAtBlockedStep spelled it
+	 * `Phase == Taxiing`, and FDeadlockResolver::AlertCycles spelled it "is an aircraft" - the two answers only
+	 * looked alike while every agent on a route was a taxi. The yield's candidate list asks it too (a reversing truck
+	 * or pushed aeroplane must not give up the hold that makes its manoeuvre whole). AlertCycles drops a cycle that has
+	 * a replannable non-aircraft member and keeps the rest, so if the askers disagreed the alert would promise a way
+	 * out the resolver does not have (or hide a jam it cannot break).
+	 * ENFORCED BY: Check-Architecture.ps1 rule 46 (the resolver's file spells no `Phase == Taxiing`)
 	 * ENFORCED BY: Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (the replannable column names every phase)
 	 */
 	bool IsReplannable() const { return Phase == EAgentPhase::Taxiing; }

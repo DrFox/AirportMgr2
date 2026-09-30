@@ -448,7 +448,17 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			int32 SpanLast = INDEX_NONE;
 			if (Agent.ReverseSpanSteps(SpanFirst, SpanLast))
 			{
-				PlanReResolver.ReResolveSpan(Agent, Agent.Follower.Plan, SpanFirst, SpanLast, Context, NodeIndex);
+				// THE RESULT IS NOT ACTED ON, deliberately: false means a span step did not re-resolve (a split
+				// under the span, the ground otherwise moved), and ReResolveSpan has already logged which and
+				// left that step - and the ones after it - on the handles they had. It is not fatal because the
+				// alternatives are worse: stranding stops a truck mid-leg for a bookkeeping miss on ground that
+				// is usually still there, and a replan would move the route from under the handover's step
+				// index. A span whose END node is gone, with a remainder to drive, is the case that IS fatal, and
+				// it is not reported here: the remainder's ReResolvePlan below finds no node at the span's end
+				// and Strands, which the reversing agent acts on (FRoadAgent::Advance). A reverse that ends the
+				// route has no remainder to strand it and parks at the old end. Not in the summary's counts
+				// either - they are one per agent, and the agent is counted once, by that call.
+				(void)PlanReResolver.ReResolveSpan(Agent, Agent.Follower.Plan, SpanFirst, SpanLast, Context, NodeIndex);
 			}
 		}
 
@@ -1122,7 +1132,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	}
 
 	// THE TWIN AND EDGE-BETWEEN RULES ARE FILE-LEVEL FUNCTIONS NOW (#455), moved with their comments above
-	// ResolveHandlesInSpan, which re-points a reversing agent's span by the very same rules; these two are
+	// ReResolveSpan, which re-points a reversing agent's span by the very same rules; these two are
 	// the walk's own names for them, so the loop below reads as it always did.
 	auto TwinsOf = [&Network](FGuidelineNodeId Node, TArray<FGuidelineNodeId, TInlineAllocator<4>>& Out)
 	{
