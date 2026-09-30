@@ -102,9 +102,10 @@ bool FFlightNeverParkedPaysNothingTest::RunTest(const FString& Parameters)
 
 	UFlight* Flight = CodeCFlight();
 
-	// NEVER PARKED - ParkedAt is still zero. A flight restored mid-air, or one put on the field
-	// by the debug land key, reaches TaxiOut without having parked; billing it from the epoch
-	// would hand the player a fee larger than the airport.
+	// NEVER PARKED - ParkedAt is still zero. An aeroplane departed from the fallback junction it
+	// waited on (#405), or one put on the field by the debug land key, reaches TaxiOut without
+	// having parked at a stand; billing it from the epoch would hand the player a fee larger than
+	// the airport. (A flight restored mid-air no longer can - a load re-queues it, #404.)
 	Board->PostParkingFee(50000.0, *Flight);
 
 	TestEqual(TEXT("a flight that never parked pays no parking"), Ledger->Balance(), 0.0, 1e-9);

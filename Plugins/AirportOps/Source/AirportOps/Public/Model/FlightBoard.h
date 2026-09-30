@@ -359,8 +359,26 @@ public:
 	void OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To);
 
-	/** Re-make every accepted flight's stand hold. See UStandAllocator::Reapply. */
-	void OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network);
+	/**
+	 * Re-make every Accepted and Inbound flight's stand hold (UStandAllocator::Reapply), HoldLast's after all the
+	 * others; then an Inbound flight left with no stand reserves one. HoldLast is the load's re-queued flights
+	 * (DemoteRestoredMidFlight) - empty for an ordinary rebuild.
+	 */
+	void OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network, const TArray<UFlight*>& HoldLast = TArray<UFlight*>());
+
+	/**
+	 * #404: a load's flights whose aeroplanes were not saved. Landing/TaxiIn go round again - Inbound, HoldingSince
+	 * Now, at the back of the queue; Turnaround..Departing retire as Departed, unscored. AgentId cleared either way.
+	 * Returns the re-queued flights. Called by UOpsRuntime::LoadFromSlot straight after OpsSave::Restore, beside the
+	 * ClearAgents that makes them stale - not from OnAfterRestore (review ruling M5).
+	 */
+	TArray<UFlight*> DemoteRestoredMidFlight(double Now);
+
+	/**
+	 * Review ruling I2: the re-queued flights of a load at an airport that is not open can never land - Cancelled,
+	 * to History, UNSCORED (nothing published). Acts on those still Inbound. Returns how many.
+	 */
+	int32 CancelRequeued(const TArray<UFlight*>& Requeued, double Now);
 
 	/**
 	 * Re-arm the clock for every Accepted flight's arrival.

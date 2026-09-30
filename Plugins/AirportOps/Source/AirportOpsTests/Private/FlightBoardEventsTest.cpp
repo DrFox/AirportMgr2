@@ -60,7 +60,9 @@ namespace
 			return Flight;
 		}
 
-		/** A flight already on the ground as agent 5, driven through the real phase sequence to Departing. */
+		/** A flight already on the ground as agent 5, driven through the phase sequence to Departing. Agent 5 is no
+		 *  agent of this traffic model, so its Parked is at no stand and moves the flight nowhere (#405); the
+		 *  manoeuvre and the taxi out after it are what reach Departing. */
 		UFlight* DepartAt(double Now, double AcceptedAt, double ContractSeconds)
 		{
 			UFlight* Flight = NewObject<UFlight>(GetTransientPackage());

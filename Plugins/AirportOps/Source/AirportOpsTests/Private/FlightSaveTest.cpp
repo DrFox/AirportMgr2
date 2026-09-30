@@ -1,6 +1,9 @@
 #include "CoreMinimal.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Content/AirsideSettings.h"
+#include "Model/Ledger.h"
+#include "Model/OpsEventBus.h"
 #include "OpsSaveTestHelpers.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -282,6 +285,285 @@ bool FFlightBoardHistorySplitMigratesAnOldSaveTest::RunTest(const FString& Param
 		TestEqual(TEXT("still Declined, not silently reset by the sweep"),
 			RestoredDeclined->Phase, EFlightPhase::Declined);
 	}
+	return true;
+}
+
+/**
+ * #404 (spec 2026-09-29-ops-batch3 §4): agents are not saved - UOpsRuntime::LoadFromSlot clears them - so a flight
+ * saved past Inbound came back pointing at an agent that no longer existed, and sat in its phase for ever. The
+ * arrivals side goes round again (Inbound, stand re-held, at the back of the queue); the ground side retires as
+ * departed, unscored. The load sequence is LoadFromSlot's own, by hand: clear agents, discard the queue, restore,
+ * re-apply holds, re-arm, tick - and the flight must LAND AGAIN, its fee charged once across the whole of it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightMidFlightGoesRoundTest,
+	"AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	const FTestAirport Field = FTestAirport::Build(Airframe);
+	URoadNetwork* Net = Field.Net;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
+	Ledger->Clock = Clock;
+	UFlightBoard* Board = SaveTestBoard();
+	Board->Ledger = Ledger;
+	Board->Dispatcher = [Traffic, Net](const FVector2D& Near, const FAirframe& Frame)
+	{
+		return Traffic->DispatchArrival(*Net, Near, Frame, 1.0) != 0;
+	};
+
+	// THE BOARD AND CLOCK THE BUS HANDS PHASES TO - swapped for the restored pair at the load, as the runtime's
+	// subscription reaches whatever board it owns.
+	UFlightBoard* LiveBoard = Board;
+	USimClock* LiveClock = Clock;
+	FOpsEventBus Bus;
+	int32 Scored = 0;   // anything the airline roster would score
+	Bus.BeginWiring();
+	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [&](const FAgentPhaseEvent& E)
+	{
+		LiveBoard->OnAgentPhase(*Traffic, *Net, *LiveClock, E.AgentId, E.From, E.To);
+	});
+	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightAirborneEvent&) { ++Scored; });
+	Bus.Subscribe<FFlightCancelledEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightCancelledEvent&) { ++Scored; });
+	Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FTurnaroundEndedEvent&) { ++Scored; });
+	Bus.EndWiring();
+	Traffic->OnAgentPhaseChanged.AddLambda([&Bus](int32 Id, EAgentPhase From, EAgentPhase To)
+	{
+		Bus.Publish(FAgentPhaseEvent{ Id, From, To });
+	});
+	Board->Bus = &Bus;
+
+	const auto LandingFees = [Ledger]()
+	{
+		return Ledger->Entries().FilterByPredicate([](const FLedgerEntry& E) { return E.Category == ELedgerCategory::LandingFee; }).Num();
+	};
+
+	// A: LANDED FOR REAL, charged, and taxiing in when the game is saved.
+	UFlight* Taxiing = NewObject<UFlight>(GetTransientPackage());
+	Taxiing->Airframe = Airframe;
+	Taxiing->ApproachFocus = Field.Threshold;
+	Taxiing->LandingFee = 1200.0;
+	Board->AddOffer(*Clock, Taxiing);
+	if (!TestTrue(TEXT("accepted"), Board->Accept(*Traffic, *Net, *Clock, *Taxiing))) { return false; }
+	Clock->Advance(1.0);
+	Board->TickQueue(*Traffic, *Net, *Clock);
+	Bus.Drain();
+	const int32 OldAgent = Taxiing->AgentId;
+	if (!TestEqual(TEXT("dispatched"), Taxiing->Phase, EFlightPhase::Landing)) { return false; }
+	for (int32 Step = 0; Step < 20 * 600 && Taxiing->Phase != EFlightPhase::TaxiIn; ++Step)
+	{
+		Traffic->Advance(0.05, Net);
+		Bus.Drain();
+	}
+	if (!TestEqual(TEXT("taxiing in when saved"), Taxiing->Phase, EFlightPhase::TaxiIn)) { return false; }
+	if (!TestEqual(TEXT("its landing fee charged once already"), LandingFees(), 1)) { return false; }
+	if (!TestTrue(TEXT("with the stand it was accepted onto"), Taxiing->Stand.IsSet())) { return false; }
+
+	// B: ON ITS STAND when saved - planted, as a restore would find it: a phase and an agent id.
+	UFlight* OnStand = NewObject<UFlight>(GetTransientPackage());
+	OnStand->Airframe = Airframe;
+	OnStand->AirlineId = TEXT("SaveTestAirline");
+	OnStand->AgentId = 4242;
+	OnStand->Phase = EFlightPhase::Turnaround;
+	Board->AddOffer(*Clock, OnStand);
+
+	UJobBoard* Fuel = NewObject<UJobBoard>(GetTransientPackage());
+	FOpsSnapshot Snapshot;
+	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, Snapshot);
+	const double SavedAt = Clock->Now();
+
+	// THE LOAD, as UOpsRuntime::LoadFromSlot runs it.
+	Traffic->ClearAgents();
+	Bus.Discard();
+	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
+	USimClock* RestoredClock = NewObject<USimClock>(GetTransientPackage());
+	UFlightBoard* Restored = SaveTestBoard();
+	UJobBoard* RestoredFuel = NewObject<UJobBoard>(GetTransientPackage());
+	Restored->Ledger = Ledger;
+	Restored->Bus = &Bus;
+	Restored->Dispatcher = Board->Dispatcher;
+	if (!TestTrue(TEXT("restore succeeds"),
+		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*RestoredClock, *Restored, *RestoredFuel), *RestoredNet))) { return false; }
+	LiveBoard = Restored;
+	LiveClock = RestoredClock;
+	// BESIDE THE ClearAgents, as LoadFromSlot calls it (review ruling M5): dated by the restored clock.
+	const TArray<UFlight*> Requeued = Restored->DemoteRestoredMidFlight(RestoredClock->Now());
+
+	UFlight* Again = Restored->FindByIdForTest(Taxiing->Id);
+	UFlight* Retired = Restored->FindByIdForTest(OnStand->Id);
+	if (!TestNotNull(TEXT("the taxiing flight came back"), Again) || !TestNotNull(TEXT("and the one on its stand"), Retired)) { return false; }
+	TestEqual(TEXT("taxiing in when saved: it goes round again - Inbound"), Again->Phase, EFlightPhase::Inbound);
+	TestTrue(TEXT("and is handed back as re-queued"), Requeued.Num() == 1 && Requeued[0] == Again);
+	TestEqual(TEXT("with no agent - its aeroplane was not saved"), Again->AgentId, static_cast<int32>(INDEX_NONE));
+	TestNull(TEXT("and nothing found by the dead agent id"), Restored->FlightForAgent(OldAgent));
+	TestEqual(TEXT("joining the queue now, at the loaded time"), Again->HoldingSince, SavedAt, 1e-9);
+	TestTrue(TEXT("its landing fee still marked paid"), Again->bLandingFeePaid);
+	TestEqual(TEXT("on its stand when saved: retired as departed"), Retired->Phase, EFlightPhase::Departed);
+	TestEqual(TEXT("with no agent"), Retired->AgentId, static_cast<int32>(INDEX_NONE));
+	TestFalse(TEXT("out of the live list"), Restored->Live().Contains(Retired));
+	TestNull(TEXT("and nothing found by its dead agent id"), Restored->FlightForAgent(4242));
+	TestEqual(TEXT("dated the load"), Retired->TerminatedAt, SavedAt, 1e-9);
+	Bus.Drain();
+	TestEqual(TEXT("nothing the roster would score was published - the save system is not the player's fault"), Scored, 0);
+
+	// THE REST OF THE LOAD: holds re-made, arrivals re-armed - then the queue must clear it.
+	Restored->OnGraphRebuilt(*Traffic, *Net, Requeued);
+	const FEntityInstance* Stand = Net->GetEntity(Again->Stand);
+	TestTrue(TEXT("its stand is held again, under its own holder id"), Stand != nullptr
+		&& Traffic->IsStandHeld(Stand->PoseNode, 0) && !Traffic->IsStandHeld(Stand->PoseNode, Again->HolderId()));
+	Restored->RearmSchedules(*Traffic, *Net, *RestoredClock);
+	TestEqual(TEXT("re-arming leaves it holding"), Again->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("at the time it joined"), Again->HoldingSince, SavedAt, 1e-9);
+	RestoredClock->Advance(1.0);
+	Restored->TickQueue(*Traffic, *Net, *RestoredClock);
+	TestEqual(TEXT("and it is cleared to land again"), Again->Phase, EFlightPhase::Landing);
+	TestTrue(TEXT("as a new aeroplane"), Again->AgentId != INDEX_NONE && Traffic->FindAgent(Again->AgentId) != nullptr);
+	Bus.Drain();
+	TestEqual(TEXT("its second landing charges nothing - the fee was charged once"), LandingFees(), 1);
+	return true;
+}
+
+namespace
+{
+	/** A two-stand FTestAirport and the pieces a re-queue test drives. Prefixed: the test module is a unity build. */
+	struct FRequeueRig
+	{
+		FAirframe Airframe;
+		FTestAirport Field;
+		UGroundTraffic* Traffic = nullptr;
+		USimClock* Clock = nullptr;
+		UFlightBoard* Board = nullptr;
+
+		FRequeueRig()
+		{
+			Airframe = UAirsideSettings::ResolveDefaultAirframe();
+			FTestAirportOptions Options;
+			Options.StandCount = 2;
+			Field = FTestAirport::Build(Airframe, Options);
+			Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+			Clock = NewObject<USimClock>(GetTransientPackage());
+			Board = SaveTestBoard();
+		}
+
+		/** A flight as a restore finds one saved mid-taxi: a phase, a dead agent id, the stand it was accepted onto. */
+		UFlight* Restored(EFlightPhase Phase, int32 DeadAgent, FEntityInstanceId Stand)
+		{
+			UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+			Flight->Airframe = Airframe;
+			Flight->ApproachFocus = Field.Threshold;
+			Flight->AgentId = DeadAgent;
+			Flight->Phase = Phase;
+			Flight->Stand = Stand;
+			Board->AddOffer(*Clock, Flight);
+			return Flight;
+		}
+
+		/** Held, and by this flight alone: IsStandHeld excluding its own holder id says nobody else. */
+		bool HeldBy(const UFlight& Flight) const
+		{
+			const FEntityInstance* Stand = Field.Net->GetEntity(Flight.Stand);
+			return Stand != nullptr && Traffic->IsStandHeld(Stand->PoseNode, 0) && !Traffic->IsStandHeld(Stand->PoseNode, Flight.HolderId());
+		}
+	};
+}
+
+/**
+ * REVIEW I1: a re-queued flight names the stand it was ACCEPTED onto, which it gave up at its dispatch - and which
+ * another flight may have been accepted onto since. The load re-holds that promise first; the re-queued flight is
+ * refused it, gives it up, and reserves the free one during the load. FIRST IN Flights on purpose, so a re-hold
+ * that followed the list would reach it first.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightRequeueKeepsAcceptedStandTest,
+	"AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightRequeueKeepsAcceptedStandTest::RunTest(const FString& Parameters)
+{
+	FRequeueRig Rig;
+	UFlight* Requeue = Rig.Restored(EFlightPhase::TaxiIn, 77, FEntityInstanceId());
+	UFlight* Promised = NewObject<UFlight>(GetTransientPackage());
+	Promised->Airframe = Rig.Airframe;
+	Promised->ApproachFocus = Rig.Field.Threshold;
+	Promised->LeadTimeSeconds = 1.0e7;
+	Rig.Board->AddOffer(*Rig.Clock, Promised);
+	if (!TestTrue(TEXT("the other flight is accepted onto a stand"), Rig.Board->Accept(*Rig.Traffic, *Rig.Field.Net, *Rig.Clock, *Promised))) { return false; }
+	const FEntityInstanceId PromisedStand = Promised->Stand;
+	// THE SHAPE: the taxiing flight's accepted stand is the one promised since. A load's rebuilt graph holds nothing.
+	Requeue->Stand = PromisedStand;
+	Rig.Traffic->ReleaseHold(Promised->HolderId());
+
+	const TArray<UFlight*> Requeued = Rig.Board->DemoteRestoredMidFlight(Rig.Clock->Now());
+	Rig.Board->OnGraphRebuilt(*Rig.Traffic, *Rig.Field.Net, Requeued);
+
+	TestTrue(TEXT("the accepted flight keeps the stand it was promised"), Promised->Stand == PromisedStand && Rig.HeldBy(*Promised));
+	TestTrue(TEXT("the re-queued flight gave it up"), Requeue->Stand != PromisedStand);
+	TestTrue(TEXT("and holds the free stand, during the load, under its own id"), Requeue->Stand.IsSet() && Rig.HeldBy(*Requeue));
+	return true;
+}
+
+/** REVIEW I1, the dead-stand case: the stand a re-queued flight was accepted onto was deleted before the save. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightRequeueOffDeadStandTest,
+	"AirportOps.Model.FlightSave.RequeueOffADeadStandReserves",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightRequeueOffDeadStandTest::RunTest(const FString& Parameters)
+{
+	FRequeueRig Rig;
+	const FEntityInstanceId Dead = Rig.Field.Stands[0];
+	const FEntityInstanceId Alive = Rig.Field.Stands[1];
+	UFlight* Requeue = Rig.Restored(EFlightPhase::Landing, 78, Dead);
+	Rig.Field.Net->RemoveEntity(Dead);
+	TestGraph::Rebuild(*Rig.Field.Net);
+
+	AddExpectedMessagePlain(TEXT("which is gone from the graph"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	const TArray<UFlight*> Requeued = Rig.Board->DemoteRestoredMidFlight(Rig.Clock->Now());
+	Rig.Board->OnGraphRebuilt(*Rig.Traffic, *Rig.Field.Net, Requeued);
+	TestTrue(TEXT("its dead stand is replaced, not kept as a hold on nothing"), Requeue->Stand != Dead);
+	TestTrue(TEXT("and the live one is reserved for it during the load"), Requeue->Stand == Alive && Rig.HeldBy(*Requeue));
+	return true;
+}
+
+/**
+ * REVIEW M6: bLandingFeePaid is LEFT AS SAVED by the re-queue, not forced true. A flight saved Landing before its
+ * Arriving was heard was never charged; forcing the flag would lose its fee for ever. It lands again: charged once.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightUnchargedLandingTest,
+	"AirportOps.Model.FlightSave.UnchargedLandingIsChargedOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightUnchargedLandingTest::RunTest(const FString& Parameters)
+{
+	FRequeueRig Rig;
+	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
+	Ledger->Clock = Rig.Clock;
+	Rig.Board->Ledger = Ledger;
+	UGroundTraffic* Traffic = Rig.Traffic;
+	URoadNetwork* Net = Rig.Field.Net;
+	Rig.Board->Dispatcher = [Traffic, Net](const FVector2D& Near, const FAirframe& Frame)
+	{
+		return Traffic->DispatchArrival(*Net, Near, Frame, 1.0) != 0;
+	};
+	UFlight* Flight = Rig.Restored(EFlightPhase::Landing, 88, Rig.Field.Stands[0]);
+	Flight->LandingFee = 500.0;
+	Flight->bLandingFeePaid = false;
+
+	const TArray<UFlight*> Requeued = Rig.Board->DemoteRestoredMidFlight(Rig.Clock->Now());
+	Rig.Board->OnGraphRebuilt(*Traffic, *Net, Requeued);
+	Rig.Clock->Advance(1.0);
+	Rig.Board->TickQueue(*Traffic, *Net, *Rig.Clock);
+	if (!TestEqual(TEXT("it lands again"), Flight->Phase, EFlightPhase::Landing)) { return false; }
+	// THE ARRIVING THE BUS WOULD DELIVER, twice: the second is the "more than one phase maps to Landing" case.
+	Rig.Board->OnAgentPhase(*Traffic, *Net, *Rig.Clock, Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving);
+	Rig.Board->OnAgentPhase(*Traffic, *Net, *Rig.Clock, Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving);
+	const int32 Rows = Ledger->Entries().FilterByPredicate([](const FLedgerEntry& E) { return E.Category == ELedgerCategory::LandingFee; }).Num();
+	TestEqual(TEXT("saved uncharged, it is charged exactly once when it lands"), Rows, 1);
 	return true;
 }
 

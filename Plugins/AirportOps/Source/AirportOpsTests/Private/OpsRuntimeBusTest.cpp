@@ -8,6 +8,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/AirlineDefinition.h"
 #include "Model/AirlineRoster.h"
+#include "Model/DeparturePlanner.h"
 #include "Model/Airport.h"
 #include "Model/JobBoard.h"
 #include "Model/OfferGenerator.h"
@@ -670,6 +671,264 @@ bool FOpsRuntimeUnfuelledDepartureTest::RunTest(const FString&)
 	if (!TestEqual(TEXT("and its airline heard one thing"), Row->Recent.Num(), 1)) { return false; }
 	TestEqual(TEXT("that it left unfuelled - the depot-less field could not serve it"), Row->Recent[0].Cause, FString(TEXT("left unfuelled")));
 	TestEqual(TEXT("costing the whole shortfall penalty"), Row->Recent[0].Delta, -Runtime->GetAirlines()->Tuning.ShortfallPenalty, 1e-9);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// #405 (spec 2026-09-29-ops-batch3 §4): a flight enters Turnaround only when its aeroplane parks AT A STAND.
+
+namespace
+{
+	/**
+	 * Airside.Model.Traffic.StandRetarget's scenario with the two boards listening: a two-stand field, a flight
+	 * dispatched through the board, both boards on a bus fed by OnAgentPhaseChanged and drained after each
+	 * Advance - so the Parked event arrives a step late, as it does in production. Prefixed: unity build.
+	 */
+	struct FFallbackParkRig
+	{
+		FTestAirport Field;
+		UGroundTraffic* Traffic = nullptr;
+		USimClock* Clock = nullptr;
+		UFlightBoard* Board = nullptr;
+		UJobBoard* Jobs = nullptr;
+		FOpsEventBus Bus;
+		TArray<FTurnaroundEndedEvent> Ended;
+		UFlight* Flight = nullptr;
+		int32 Agent = 0;
+		/** Every flight phase the board showed, one entry per drain that changed it. */
+		TArray<EFlightPhase> Seen;
+
+		FFallbackParkRig()
+		{
+			const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+			FTestAirportOptions Options;
+			Options.StandCount = 2;
+			Field = FTestAirport::Build(Airframe, Options);
+			Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+			Clock = NewObject<USimClock>(GetTransientPackage());
+			Board = NewObject<UFlightBoard>(GetTransientPackage());
+			Board->Allocator = NewObject<UStandAllocator>(GetTransientPackage());
+			Jobs = NewObject<UJobBoard>(GetTransientPackage());
+			Jobs->Bus = &Bus;
+			URoadNetwork* Net = Field.Net;
+			UGroundTraffic* Model = Traffic;
+			Board->Dispatcher = [Model, Net](const FVector2D& Near, const FAirframe& Frame)
+			{
+				return Model->DispatchArrival(*Net, Near, Frame, 1.0) != 0;
+			};
+			// JOB BOARD FIRST, the order WireBus subscribes them in.
+			Bus.BeginWiring();
+			Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("JobBoard"), [this](const FAgentPhaseEvent& E)
+			{
+				Jobs->OnAgentPhase(*Traffic, *Field.Net, *Clock, E.AgentId, E.From, E.To);
+			});
+			Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAgentPhaseEvent& E)
+			{
+				Board->OnAgentPhase(*Traffic, *Field.Net, *Clock, E.AgentId, E.From, E.To);
+			});
+			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("test"), [this](const FTurnaroundEndedEvent& E) { Ended.Add(E); });
+			Bus.EndWiring();
+			Traffic->OnAgentPhaseChanged.AddLambda([this](int32 Id, EAgentPhase From, EAgentPhase To)
+			{
+				Bus.Publish(FAgentPhaseEvent{ Id, From, To });
+			});
+
+			Flight = NewObject<UFlight>(GetTransientPackage());
+			Flight->Airframe = Airframe;
+			Flight->ApproachFocus = Field.Threshold;
+			Board->AddOffer(*Clock, Flight);
+		}
+
+		/** Accepted, cleared and dispatched; false if any step refused. */
+		bool Land()
+		{
+			if (!Board->Accept(*Traffic, *Field.Net, *Clock, *Flight))
+			{
+				return false;
+			}
+			Clock->Advance(1.0);
+			Board->TickQueue(*Traffic, *Field.Net, *Clock);
+			Agent = Flight->AgentId;
+			Drain();
+			return Flight->Phase == EFlightPhase::Landing && Agent != INDEX_NONE;
+		}
+
+		void Drain()
+		{
+			Bus.Drain();
+			if (Seen.Num() == 0 || Seen.Last() != Flight->Phase)
+			{
+				Seen.Add(Flight->Phase);
+			}
+		}
+
+		const FRoadAgent* Aircraft() const { return Traffic->FindAgent(Agent); }
+
+		/** Advance and drain until Pred or Seconds of sim time; then one more drain for the late event. !bDrain leaves
+		 *  every event queued - the frame a same-frame redirect happens in. */
+		template <typename P>
+		bool RunUntil(double Seconds, P Pred, bool bDrain = true)
+		{
+			for (double T = 0.0; T < Seconds; T += 0.05)
+			{
+				Traffic->Advance(0.05, Field.Net);
+				if (bDrain)
+				{
+					Drain();
+				}
+				if (Pred())
+				{
+					if (bDrain)
+					{
+						Drain();
+					}
+					return true;
+				}
+			}
+			return false;
+		}
+
+		/** Both stands deleted mid-arrival, then parked where it waits: the fallback junction. !bDrain: the Parked
+		 *  (and the taxi before it) left unheard. */
+		bool ParkOnFallback(bool bDrain = true)
+		{
+			Traffic->Advance(0.05, Field.Net);
+			Drain();
+			for (const FEntityInstanceId Stand : Field.Stands)
+			{
+				Field.Net->RemoveEntity(Stand);
+			}
+			TestGraph::Rebuild(*Field.Net);
+			Traffic->OnGraphRebuilt(*Field.Net);
+			Drain();
+			const FRoadAgent* P = Aircraft();
+			return P != nullptr && P->bAwaitingStand
+				&& RunUntil(600.0, [this]() { const FRoadAgent* A = Aircraft(); return A != nullptr && A->Phase == EAgentPhase::Parked; }, bDrain);
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFallbackParkStaysTaxiInTest, "AirportOps.Model.Bus.FallbackParkStaysTaxiIn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFallbackParkStaysTaxiInTest::RunTest(const FString&)
+{
+	// #405: parked on the fallback junction (no stand left), the flight read Turnaround, so the re-offer's
+	// redirect (Parked -> Taxiing) read TaxiOut on its way IN. It is still taxiing in until it reaches a stand.
+	FFallbackParkRig Rig;
+	if (!TestTrue(TEXT("the flight lands"), Rig.Land())) { return false; }
+	if (!TestTrue(TEXT("and parks on the fallback junction, both stands gone"), Rig.ParkOnFallback())) { return false; }
+	TestEqual(TEXT("parked on the fallback junction it is still taxiing in"), Rig.Flight->Phase, EFlightPhase::TaxiIn);
+	TestNull(TEXT("no turnaround opens at a junction"), Rig.Jobs->TurnaroundFor(Rig.Agent));
+	TestEqual(TEXT("and its parking clock has not started"), Rig.Flight->ParkedAt, 0.0);
+
+	// A STAND IS BUILT: the rebuild re-offers it and the aeroplane goes.
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId NewStand = Rig.Field.Net->PlaceEntity(StandDef, StandDef->Anchors, Rig.Field.ExitAt + FVector2D(9000.0, -10000.0), 0.0);
+	TestGraph::Rebuild(*Rig.Field.Net);
+	Rig.Traffic->OnGraphRebuilt(*Rig.Field.Net);
+	Rig.Traffic->Advance(0.05, Rig.Field.Net);   // the re-offer runs at the end of a tick
+	Rig.Drain();
+	if (!TestEqual(TEXT("redirected: taxiing again"), Rig.Aircraft()->Phase, EAgentPhase::Taxiing)) { return false; }
+	TestEqual(TEXT("the redirect reads TaxiIn - on its way in, not out"), Rig.Flight->Phase, EFlightPhase::TaxiIn);
+	TestEqual(TEXT("and no TurnaroundEnded was published for the junction"), Rig.Ended.Num(), 0);
+
+	if (!TestTrue(TEXT("it parks at the new stand"), Rig.RunUntil(600.0, [&Rig, NewStand]()
+		{ const FRoadAgent* A = Rig.Aircraft(); return A != nullptr && A->Phase == EAgentPhase::Parked && A->GoalNode == Rig.Field.Pose(NewStand); })))
+	{
+		return false;
+	}
+	TestEqual(TEXT("AT A STAND it is the turnaround"), Rig.Flight->Phase, EFlightPhase::Turnaround);
+	TestTrue(TEXT("and its parking clock starts there"), Rig.Flight->ParkedAt > 0.0);
+	TestTrue(TEXT("on the stand it actually reached"), Rig.Flight->Stand == NewStand);
+	TestNotNull(TEXT("and the job board opened its turnaround there"), Rig.Jobs->TurnaroundFor(Rig.Agent));
+	TestFalse(TEXT("TaxiOut was never shown on the way in"), Rig.Seen.Contains(EFlightPhase::TaxiOut));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDepartFromFallbackTest, "AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDepartFromFallbackTest::RunTest(const FString&)
+{
+	// THE MIRROR OF #405's FIX: an aeroplane parked on the fallback junction never reached Turnaround, and the
+	// inspector's Depart (bCanDepart is "Parked") sends it off from there. Its taxi is OUT, though the flight never
+	// passed Turnaround - which is the one fact the TaxiIn/TaxiOut choice used to read.
+	//
+	// DepartAgent's STRAIGHT-OUT BRANCH, staged: that branch is RedirectAgent onto DeparturePlanner::PlanAny's route
+	// from the goal node. On this fixture the parked heading points away from the runway, so DepartAgent itself
+	// takes the pushback branch (refused here: no arm) - and a pushback enters Manoeuvring, which maps absolutely
+	// and needs no rule. The straight-out move is the one whose Parked -> Taxiing the board must read as OUT.
+	FFallbackParkRig Rig;
+	if (!TestTrue(TEXT("the flight lands"), Rig.Land())) { return false; }
+	if (!TestTrue(TEXT("and parks on the fallback junction"), Rig.ParkOnFallback())) { return false; }
+	const int32 Before = Rig.Seen.Num();
+	const FRoadAgent* Parked = Rig.Aircraft();
+	const FDeparturePlan Plan = DeparturePlanner::PlanAny(*Rig.Field.Net, Parked->GoalNode, *Parked->AsAircraft(), Parked->Class,
+		&Rig.Traffic->GetOccupancy());
+	if (!TestTrue(TEXT("a departure plans from the junction"), Plan.IsValid())) { return false; }
+	if (!TestTrue(TEXT("and it drives straight out onto it"), Rig.Traffic->RedirectAgent(Rig.Agent, Rig.Field.Net, Plan.Route))) { return false; }
+	Rig.Drain();
+	// READ STRAIGHT AFTER THE MOVE, not only from Seen: Seen records CHANGES, and a flight left reading TaxiIn
+	// (the phase it waited in) would add nothing to it.
+	TestEqual(TEXT("the taxi away from the junction reads TaxiOut"), Rig.Flight->Phase, EFlightPhase::TaxiOut);
+	Rig.RunUntil(600.0, [&Rig]() { return Rig.Flight->Phase == EFlightPhase::Departing; });
+	const TArray<EFlightPhase> After(Rig.Seen.GetData() + Before, Rig.Seen.Num() - Before);
+	AddInfo(FString::Printf(TEXT("phases after the depart: %s"),
+		*FString::JoinBy(After, TEXT(", "), [](EFlightPhase P) { return UEnum::GetValueAsString(P); })));
+	TestFalse(TEXT("departing from the junction never reads TaxiIn"), After.Contains(EFlightPhase::TaxiIn));
+	TestEqual(TEXT("and it goes"), Rig.Flight->Phase, EFlightPhase::Departing);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSameFrameRedirectTest, "AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FSameFrameRedirectTest::RunTest(const FString&)
+{
+	// REVIEW M7: the Parked event is heard a step late, and ReofferStands may have redirected the aeroplane to a
+	// freed stand before it is - so its goal IS a stand while it is taxiing. The flight must not enter Turnaround
+	// from that stale Parked: StillParked is the half of the rule FallbackParkStaysTaxiIn cannot reach.
+	FFallbackParkRig Rig;
+	if (!TestTrue(TEXT("the flight lands"), Rig.Land())) { return false; }
+	if (!TestTrue(TEXT("and parks on the fallback junction, its Parked not yet heard"), Rig.ParkOnFallback(/*bDrain=*/false))) { return false; }
+
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	Rig.Field.Net->PlaceEntity(StandDef, StandDef->Anchors, Rig.Field.ExitAt + FVector2D(9000.0, -10000.0), 0.0);
+	TestGraph::Rebuild(*Rig.Field.Net);
+	Rig.Traffic->OnGraphRebuilt(*Rig.Field.Net);
+	Rig.Traffic->Advance(0.05, Rig.Field.Net);   // the re-offer, in the frame the Parked was queued in
+	if (!TestEqual(TEXT("redirected before the Parked is heard"), Rig.Aircraft()->Phase, EAgentPhase::Taxiing)) { return false; }
+	if (!TestTrue(TEXT("its goal is the new stand - what a stale Parked would read"), StandAtGoal(*Rig.Field.Net, *Rig.Aircraft()).IsSet())) { return false; }
+	Rig.Drain();
+	TestEqual(TEXT("a stale Parked moves no flight into Turnaround"), Rig.Flight->Phase, EFlightPhase::TaxiIn);
+	TestFalse(TEXT("Turnaround was never shown"), Rig.Seen.Contains(EFlightPhase::Turnaround));
+	TestNull(TEXT("and no turnaround opened"), Rig.Jobs->TurnaroundFor(Rig.Agent));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRedirectStandGoesTest, "AirportOps.Model.Bus.RedirectStaysTaxiInWhenItsStandGoes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FRedirectStandGoesTest::RunTest(const FString&)
+{
+	// REVIEW M1: the re-offer redirects the aeroplane to a new stand, and that stand is deleted before the Parked ->
+	// Taxiing is heard. Its goal is then no stand - which a "goal is not a stand, so it is departing" rule read as
+	// TaxiOut. It is not armed for a departure; it is still taxiing in.
+	FFallbackParkRig Rig;
+	if (!TestTrue(TEXT("the flight lands"), Rig.Land())) { return false; }
+	if (!TestTrue(TEXT("and parks on the fallback junction"), Rig.ParkOnFallback())) { return false; }
+
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId NewStand = Rig.Field.Net->PlaceEntity(StandDef, StandDef->Anchors, Rig.Field.ExitAt + FVector2D(9000.0, -10000.0), 0.0);
+	TestGraph::Rebuild(*Rig.Field.Net);
+	Rig.Traffic->OnGraphRebuilt(*Rig.Field.Net);
+	Rig.Traffic->Advance(0.05, Rig.Field.Net);   // the re-offer; its Parked -> Taxiing is queued, not heard
+	if (!TestEqual(TEXT("redirected"), Rig.Aircraft()->Phase, EAgentPhase::Taxiing)) { return false; }
+	Rig.Field.Net->RemoveEntity(NewStand);
+	TestGraph::Rebuild(*Rig.Field.Net);
+	Rig.Traffic->OnGraphRebuilt(*Rig.Field.Net);
+	if (!TestFalse(TEXT("its goal is no stand when the event is heard, or this proves nothing"), StandAtGoal(*Rig.Field.Net, *Rig.Aircraft()).IsSet())) { return false; }
+	TestFalse(TEXT("and it is not armed for a departure"), Rig.Aircraft()->bDepartureArmed);
+	Rig.Drain();
+	TestEqual(TEXT("a redirect whose stand went is still the taxi in"), Rig.Flight->Phase, EFlightPhase::TaxiIn);
+	TestFalse(TEXT("TaxiOut was never shown"), Rig.Seen.Contains(EFlightPhase::TaxiOut));
 	return true;
 }
 

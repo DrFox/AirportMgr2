@@ -1,6 +1,13 @@
 #include "Model/Flight.h"
 
 #include "Model/RoadAgent.h"
+#include "Model/RoadNetwork.h"
+
+FEntityInstanceId StandAtGoal(const URoadNetwork& Network, const FRoadAgent& Agent)
+{
+	const int32 Index = Network.FindEntityIndexByPoseNode(Agent.GoalNode);
+	return Index != INDEX_NONE && Network.GetEntities()[Index].IsStand() ? Network.EntityIdAt(Index) : FEntityInstanceId();
+}
 
 EFlightPhase FlightPhaseFromAgent(EAgentPhase To, EFlightPhase Current)
 {
@@ -15,6 +22,9 @@ EFlightPhase FlightPhaseFromAgent(EAgentPhase To, EFlightPhase Current)
 		return Current >= EFlightPhase::Turnaround ? EFlightPhase::TaxiOut : EFlightPhase::TaxiIn;
 
 	case EAgentPhase::Parked:
+		// AT A STAND - which this function cannot see. UFlightBoard::OnAgentPhase asks the agent and keeps a
+		// flight parked on the fallback junction in its taxi (#405); this is the answer once it has.
+		// ENFORCED BY: AirportOps.Model.Bus.FallbackParkStaysTaxiIn
 		return EFlightPhase::Turnaround;
 
 	case EAgentPhase::Manoeuvring:

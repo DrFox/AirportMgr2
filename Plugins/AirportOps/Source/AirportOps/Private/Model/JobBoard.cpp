@@ -1,5 +1,6 @@
 #include "Model/JobBoard.h"
 
+#include "Model/Flight.h"
 #include "Model/Ledger.h"
 #include "Model/OpsEventBus.h"
 #include "Model/Pricing.h"
@@ -15,13 +16,6 @@
 
 namespace JobBoardText
 {
-	/** The live entity a guideline node is the POSE of, or unset. */
-	FEntityInstanceId EntityAtPose(const URoadNetwork& Network, FGuidelineNodeId Node)
-	{
-		const int32 Index = Network.FindEntityIndexByPoseNode(Node);
-		return Index != INDEX_NONE ? Network.EntityIdAt(Index) : FEntityInstanceId();
-	}
-
 	const TCHAR* StateName(EServiceVehicleState State)
 	{
 		switch (State)
@@ -1010,16 +1004,16 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 
 	// AN AIRCRAFT THAT HAS PARKED. Its goal must be a STAND's pose - an aircraft parked on a taxiway
 	// junction (the stand-death fallback) is at no stand and demands nothing, which falls out of this
-	// same lookup rather than needing a rule of its own. AsAircraft AS WELL AS Class: the turnaround
+	// same lookup rather than needing a rule of its own - StandAtGoal, the one UFlightBoard asks too, so the flight
+	// enters Turnaround exactly where a turnaround opens (review M8). AsAircraft AS WELL AS Class: the turnaround
 	// below is an aeroplane's figure, and only an agent started with an FAirframe carries one.
 	const FAirframe* Aircraft = Agent->AsAircraft();
 	if (Agent->Class != ETraversalClass::Aircraft || Aircraft == nullptr || TurnaroundFor(AgentId) != nullptr)
 	{
 		return;
 	}
-	const FEntityInstanceId Stand = JobBoardText::EntityAtPose(Network, Agent->GoalNode);
-	const FEntityInstance* Instance = Network.GetEntity(Stand);
-	if (Instance == nullptr || Instance->PoseRole != EServiceRole::Aircraft)
+	const FEntityInstanceId Stand = StandAtGoal(Network, *Agent);
+	if (!Stand.IsSet())
 	{
 		return;
 	}
