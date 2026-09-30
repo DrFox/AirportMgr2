@@ -1,10 +1,10 @@
 #include "Model/ArrivalPlanner.h"
 
 #include "AirsideLog.h"
-#include "Model/AirsideCapability.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
+#include "Model/RunwayQuery.h"
 #include "Model/StandAdmission.h"
 #include "Model/TaxiwayRestriction.h"
 #include "Model/TrafficOccupancy.h"
@@ -389,9 +389,9 @@ namespace ArrivalPlanner
 
 	bool IsChainHeld(const URoadNetwork& Network, FRoadSegmentId Seed, const FTrafficOccupancy* Occupancy)
 	{
-		// No agent of our own to be occupying anything: nothing has been dispatched yet, so
-		// bCountOwnOccupied is false - see FTrafficOccupancy::IsAnyHeld.
-		return Occupancy != nullptr && Occupancy->IsAnyHeld(Network.RunwaySurfaces(Seed), 0, false);
+		// MOVED to RunwayQuery::IsChainHeld (#433), where the departure planner's ranking asks it too; this name
+		// stays for the OnRunwayFreed diff and the tests, and is the same function, not a copy.
+		return RunwayQuery::IsChainHeld(Network, Seed, Occupancy);
 	}
 
 	namespace
@@ -401,24 +401,13 @@ namespace ArrivalPlanner
 		 * END IN USE, nearest Near first. Nearest-first because the old rule was "the runway nearest
 		 * the focus" and it still decides which refusal is reported when none will do.
 		 *
-		 * InUseRunwayAt, not the summary's own End: the planners choose ends through the in-use
-		 * resolver only (Check-Architecture rule 28). A point just inside the summary's threshold,
-		 * DeparturePlanner::PlanAny's own probe and reason.
+		 * RunwayQuery::ArrivalRunways does the filtering and the in-use resolution (Check-Architecture
+		 * rule 28) - the same enumeration DepartureRunways gives the departure planner and CheckArrival's
+		 * "can it leave again" half, so the three cannot disagree (#433); only the ORDER is this planner's.
 		 */
 		TArray<FRunwayEnd> LandingRunways(const URoadNetwork& Network, const FVector2D& Near, int32& OutRunwayCount)
 		{
-			TArray<FRunwayEnd> Out;
-			const TArray<FRunwaySummary> Runways = AirsideCapability::SummariseRunways(Network);
-			OutRunwayCount = Runways.Num();
-			for (const FRunwaySummary& R : Runways)
-			{
-				FRunwayEnd End;
-				if (Network.InUseRunwayAt(R.End.Threshold + R.End.Direction * 10.0, End)
-					&& RunwayUse::Lands(Network.RunwayFactsFor(End.Seed).Use))
-				{
-					Out.Add(End);
-				}
-			}
+			TArray<FRunwayEnd> Out = RunwayQuery::ArrivalRunways(Network, &OutRunwayCount);
 			auto Distance = [&Near](const FRunwayEnd& E)
 			{
 				return FMath::Min(FVector2D::Distance(Near, E.Threshold), FVector2D::Distance(Near, E.FarEnd()));
@@ -705,7 +694,7 @@ namespace ArrivalPlanner
 		//    and stands a strip reaches IS the answer, and there were 2 runways on the busiest
 		//    field on 2026-09-29.
 		FArrivalPlan Best;
-		bool bBestHeld = false;
+		FRunwayRank BestRank;
 		const FArrivalPlan* Transient = nullptr;
 		TArray<FArrivalPlan> Tried;
 		Tried.Reserve(Candidates.Num());
@@ -716,18 +705,14 @@ namespace ArrivalPlanner
 			{
 				continue;
 			}
-			const bool bHeld = IsChainHeld(Network, End.Seed, Occupancy);
-			const bool bDedicated = RunwayUse::Resolve(Network.RunwayFactsFor(End.Seed).Use) == ERunwayUse::ArrivalsOnly;
-			const bool bBestDedicated = Best.IsValid()
-				&& RunwayUse::Resolve(Network.RunwayFactsFor(Best.End.Seed).Use) == ERunwayUse::ArrivalsOnly;
-			const bool bBetter = !Best.IsValid()
-				|| (bHeld != bBestHeld ? !bHeld
-				: bDedicated != bBestDedicated ? bDedicated
-				: Each.TaxiIn.Length < Best.TaxiIn.Length);
-			if (bBetter)
+			// FREE, THEN DEDICATED, THEN SHORTEST - FRunwayRank, the comparison DeparturePlanner::PlanAny
+			// makes too, from one function so a criterion cannot be added to one side only (#433).
+			// ENFORCED BY: Check-Architecture.ps1 rule 39 (both planners must call RunwayQuery::RankRunway).
+			const FRunwayRank Rank = RunwayQuery::RankRunway(Network, End, ERunwayTraffic::Arrival, Occupancy, Each.TaxiIn.Length);
+			if (!Best.IsValid() || Rank.Beats(BestRank))
 			{
 				Best = Each;
-				bBestHeld = bHeld;
+				BestRank = Rank;
 			}
 		}
 		if (Best.IsValid())

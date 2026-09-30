@@ -1,10 +1,10 @@
 #include "Model/DeparturePlanner.h"
 
-#include "Model/AirsideCapability.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
+#include "Model/RunwayQuery.h"
 #include "Model/TakeoffRun.h"
 #include "Model/TrafficOccupancy.h"
 
@@ -141,9 +141,13 @@ namespace DeparturePlanner
 	FDeparturePlan PlanAny(const URoadNetwork& Network, FGuidelineNodeId Start,
 		const FAirframe& Airframe, ETraversalClass Class, const FTrafficOccupancy* Occupancy)
 	{
-		// The capability summary already enumerates chains once each, by threshold pair;
-		// re-deriving that walk here would be a second enumerator to keep in step.
-		const FAirsideCapability Cap = AirsideCapability::Summarise(Network);
+		// EVERY RUNWAY THAT TAKES DEPARTURES, each at its end in use: RunwayQuery::DepartureRunways, the
+		// enumeration RunwayAdmission::CheckArrival's "can it leave again" half asks too (#433). It used to be
+		// AirsideCapability::Summarise here and a use filter typed below, which CheckArrival did not have - so an
+		// arrivals-only field admitted aircraft this function then refused for ever. RunwayCount is every runway,
+		// whatever its use: what makes "none takes departures" the player's setting rather than a missing runway.
+		int32 RunwayCount = 0;
+		const TArray<FRunwayEnd> Runways = RunwayQuery::DepartureRunways(Network, &RunwayCount);
 
 		// NOT ON A GRAPH MID-EDIT - see EDepartureRefusal::GraphBeingEdited. PlanAny, not Plan:
 		// it is the entry DepartAgent uses, and refusing per runway would report the last
@@ -158,54 +162,40 @@ namespace DeparturePlanner
 		FDeparturePlan Best;
 		Best.Why = EDepartureRefusal::NoRunway;
 		bool bHaveRefusal = false;
-		bool bBestHeld = false;
-		bool bBestDedicated = false;
-		int32 Departing = 0;
+		FRunwayRank BestRank;
 
-		for (const FRunwaySummary& R : Cap.Runways)
+		// A RUNWAY SET TO ARRIVALS ONLY is not in Runways at all - the player's segregation, not a refusal to
+		// report per strip.
+		for (const FRunwayEnd& Runway : Runways)
 		{
-			// A RUNWAY SET TO ARRIVALS ONLY is not tried at all - the player's segregation, not a
-			// refusal to report per strip. Read off the seed: every member carries the strip's facts.
-			const ERunwayUse Use = RunwayUse::Resolve(Network.RunwayFactsFor(R.End.Seed).Use);
-			if (!RunwayUse::Departs(Use))
-			{
-				continue;
-			}
-			++Departing;
 			// ONE POINT PER RUNWAY, just inside an end: RunwayExtentAt's proximity gate is against
 			// the nearest segment end, so a midpoint on a long segment is "not on a runway". It
 			// used to be a point inside EACH end, which is how a departure came to take off from
 			// whichever end was nearer its stand; Plan now resolves the end in use itself, so
 			// both probes would plan the same departure twice.
+			const FVector2D OnRunway = Runway.Threshold + Runway.Direction * 10.0;
+			const FDeparturePlan Candidate = Plan(Network, Start, OnRunway, Airframe, Class);
+			if (Candidate.IsValid())
 			{
-				const FVector2D OnRunway = R.End.Threshold + R.End.Direction * 10.0;
-				const FDeparturePlan Candidate = Plan(Network, Start, OnRunway, Airframe, Class);
-				if (Candidate.IsValid())
-				{
-					// FREE, THEN DEDICATED, THEN SHORTEST - see the header. Held is asked of the
-					// whole strip, the claim a departure makes at its handover (GroundTraffic).
-					const bool bHeld = Occupancy != nullptr
-						&& Occupancy->IsAnyHeld(Network.RunwaySurfaces(Candidate.End.Seed), 0, false);
-					const bool bDedicated = Use == ERunwayUse::DeparturesOnly;
-					const bool bBetter = !Best.IsValid()
-						|| (bHeld != bBestHeld ? !bHeld
-						: bDedicated != bBestDedicated ? bDedicated
-						: Candidate.Route.Length < Best.Route.Length);
-					if (bBetter)
-					{
-						Best = Candidate;
-						bBestHeld = bHeld;
-						bBestDedicated = bDedicated;
-					}
-				}
-				else if (!Best.IsValid() && !bHaveRefusal)
+				// FREE, THEN DEDICATED, THEN SHORTEST - FRunwayRank, the comparison ArrivalPlanner::Plan makes
+				// too (#433). Held is asked of the whole strip, the claim a departure makes at its handover
+				// (GroundTraffic).
+				// ENFORCED BY: Check-Architecture.ps1 rule 39 (both planners must call RunwayQuery::RankRunway).
+				const FRunwayRank Rank = RunwayQuery::RankRunway(Network, Candidate.End, ERunwayTraffic::Departure,
+					Occupancy, Candidate.Route.Length);
+				if (!Best.IsValid() || Rank.Beats(BestRank))
 				{
 					Best = Candidate;
-					bHaveRefusal = true;
+					BestRank = Rank;
 				}
 			}
+			else if (!Best.IsValid() && !bHaveRefusal)
+			{
+				Best = Candidate;
+				bHaveRefusal = true;
+			}
 		}
-		if (Departing == 0 && Cap.Runways.Num() > 0)
+		if (Runways.IsEmpty() && RunwayCount > 0)
 		{
 			Best.Why = EDepartureRefusal::NoDepartureRunway;
 		}

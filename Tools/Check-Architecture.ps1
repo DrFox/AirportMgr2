@@ -1851,6 +1851,62 @@ foreach ($lifecycleTree in $lifecycleTrees) {
 }
 $ranRules.Add('vehicle-lifecycle-one-writer')
 
+# --- 39. WHICH RUNWAYS A KIND OF TRAFFIC MAY USE IS ONE ENUMERATION -----------------------------
+# Issue #433: ArrivalPlanner and DeparturePlanner each filtered the runways by ERunwayUse and ranked what was left
+# (free, then dedicated, then shortest) in their own code, and RunwayAdmission::CheckArrival's "can it depart
+# again" half walked EVERY runway and filtered nothing - so on a field of arrivals-only strips it admitted jets
+# that could land and never depart, and the stand stayed blocked for ever. The filter, the end in use and the
+# ranking are now RunwayQuery::ArrivalRunways / DepartureRunways / RankRunway, and the three consumers ask them.
+# In those three files, a walk of AirsideCapability's summary, a read of ERunwayUse (RunwayUse:: or the enum itself - \b cannot fall
+# between the E and the R, so RunwayUse:: alone misses `== ERunwayUse::ArrivalsOnly`) or a question put
+# to the occupancy (IsAnyHeld) is the second definition returning. It also fails when a consumer stops calling its
+# enumerator or ranking (the ban alone would pass a file that enumerates nothing) and when a file the rule names is
+# gone. Comments and string literals are stripped first (rule 34's stripper), so a WHY comment can name the bans.
+# NOT BANNED, deliberately: UGroundTraffic's runway-seed list (every runway, whatever its use, is what it wants)
+# and UAirport::HasRunway / ARoadBuildController::HasRunway (is there a runway at all - not whether one takes a kind).
+# WHAT NO REGEX SEES: a consumer that calls the enumerator and then re-filters its answer with a use test spelled
+# some other way. That is pinned by Airside.Model.RunwayUse.EveryModePairLandsOnlyWhatCanLeave.
+$runwayKindConsumers = @(
+    @{ Path = (Join-Path $plugin 'Private\Model\ArrivalPlanner.cpp');   Calls = @('ArrivalRunways', 'RankRunway') },
+    @{ Path = (Join-Path $plugin 'Private\Model\DeparturePlanner.cpp'); Calls = @('DepartureRunways', 'RankRunway') },
+    @{ Path = (Join-Path $plugin 'Private\Model\RunwayAdmission.cpp');  Calls = @('DepartureRunways') }
+)
+$runwayKindBanned = @(
+    @{ Pattern = '\bAirsideCapability::Summarise\w*\s*\(|\bSummariseRunways\s*\(';
+       Why = 'walks every runway; ask RunwayQuery::ArrivalRunways / DepartureRunways for the ones this traffic may use' },
+    @{ Pattern = '\bERunwayUse\b|\bRunwayUse::';
+       Why = 'reads ERunwayUse itself; the use filter and the dedicated rule live in RunwayQuery (ArrivalRunways / DepartureRunways / RankRunway)' },
+    @{ Pattern = '(\.|->)IsAnyHeld\s*\(';
+       Why = 'asks the occupancy about a strip itself; RunwayQuery::IsChainHeld / RankRunway is the one reading of "held"' }
+)
+foreach ($consumer in $runwayKindConsumers) {
+    $consumerName = Split-Path $consumer.Path -Leaf
+    if (-not (Test-Path $consumer.Path)) {
+        $failures.Add("runway-kind-enumeration: $($consumer.Path) is named by rule 39 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    $seenCalls = @{}
+    $lines = Get-Content -LiteralPath $consumer.Path
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        foreach ($banned in $runwayKindBanned) {
+            if ($code -match $banned.Pattern) {
+                $failures.Add("runway-kind-enumeration: $($consumerName):$($i + 1) $($banned.Why) (#433): $($code.Trim())")
+            }
+        }
+        foreach ($call in $consumer.Calls) {
+            if ($code -match ('\bRunwayQuery::' + $call + '\s*\(')) { $seenCalls[$call] = $true }
+        }
+    }
+    foreach ($call in $consumer.Calls) {
+        if (-not $seenCalls.ContainsKey($call)) {
+            $failures.Add("runway-kind-enumeration: $consumerName no longer calls RunwayQuery::$call( - it has its own copy again, or rule 39 is stale (#433)")
+        }
+    }
+}
+$ranRules.Add('runway-kind-enumeration')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

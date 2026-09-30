@@ -21,6 +21,12 @@ enum class ERunwayRefusal : uint8
 	TooShort,
 	/** The wingspan exceeds what the strip's width admits. */
 	TooNarrow,
+	/**
+	 * Arrival verdicts only, never from Judge (#433): every runway is set to arrivals only, so nothing on the
+	 * field could take the landing aircraft's departure. About the FIELD's setting, not any one strip's figures,
+	 * so it carries none. Last, because the order above is the order Judge checks its refusals in.
+	 */
+	NoDepartureRunway,
 };
 
 /**
@@ -57,7 +63,8 @@ struct AIRSIDE_API FRunwayAdmission
 	/**
 	 * The verdict is about LEAVING: an arrival whose landing fits, refused because no runway
 	 * takes its departure - see CheckArrival. RunwayLength and FieldLength are then the
-	 * longest runway's and the take-off figure. False for every Check.
+	 * longest DEPARTURE runway's and the take-off figure - or none, for NoDepartureRunway.
+	 * False for every Check.
 	 */
 	UPROPERTY() bool bForDeparture = false;
 
@@ -104,10 +111,15 @@ namespace RunwayAdmission
 	 * May this aircraft ARRIVE here: land on LandingSeed, and later leave from SOME runway.
 	 *
 	 * THE LANDING FIRST, on its own runway, and its refusal is returned as it is. Then the
-	 * departure, against every runway on the network, because DeparturePlanner::PlanAny
-	 * skips a refused runway - so a short landing strip beside a long departure one is an
-	 * airport the type can use. Refused when none takes it, with bForDeparture set and the
-	 * LONGEST runway's verdict, the one most nearly able to.
+	 * departure, against every runway that TAKES DEPARTURES (RunwayQuery::DepartureRunways -
+	 * the same enumeration DeparturePlanner::PlanAny walks, so the two cannot disagree about
+	 * where a departure may go), because PlanAny skips a refused runway - so a short landing
+	 * strip beside a long departure one is an airport the type can use. Refused when none
+	 * takes it, with bForDeparture set and the LONGEST departure runway's verdict, the one
+	 * most nearly able to; or NoDepartureRunway when the field has runways and none takes
+	 * departures (#433: it used to ask every runway, an arrivals-only one included, and
+	 * admitted aircraft that landed and could never leave their stand).
+	 * ENFORCED BY: Check-Architecture.ps1 rule 39 (RunwayAdmission.cpp must call DepartureRunways and may not walk the runways or read a use setting itself).
 	 *
 	 * WHY IT EXISTS (2026-09-27): once field lengths became the model's roll x 1.1, landing asked
 	 * less than take-off for most types, and an SR22 landed on a 404 m strip it could never

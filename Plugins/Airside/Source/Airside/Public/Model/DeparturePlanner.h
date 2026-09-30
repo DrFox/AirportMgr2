@@ -128,10 +128,13 @@ namespace DeparturePlanner
 		const FVector2D& OnRunway, const FAirframe& Airframe, ETraversalClass Class);
 
 	/**
-	 * Plan a departure from Start onto the best runway that takes departures (ERunwayUse): a
-	 * FREE one before a held one (Occupancy, when given), one SET to departures before a mixed
-	 * one, then the shortest admitted taxi (2026-09-29 - shortest alone sent every departure to
-	 * the runway nearest the apron, samples/2runways.png). Each runway is tried once, from its
+	 * Plan a departure from Start onto the best runway that takes departures (RunwayQuery::
+	 * DepartureRunways - the enumeration RunwayAdmission::CheckArrival asks too, ENFORCED BY
+	 * Check-Architecture.ps1 rule 39): a FREE one
+	 * before a held one (Occupancy, when given), one SET to departures before a mixed one, then
+	 * the shortest admitted taxi (FRunwayRank, the comparison ArrivalPlanner::Plan shares -
+	 * 2026-09-29: shortest alone sent every departure to the runway nearest the apron,
+	 * samples/2runways.png). Each runway is tried once, from its
 	 * end in use - never its other end, however much shorter that taxi would be
 	 * (samples/deadlock.png). When none is valid the first refusal is returned, so the log can
 	 * say "grass strip, needs tarmac" rather than "no runway". The inspector's Depart button;

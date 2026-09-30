@@ -1,6 +1,12 @@
 #include "Model/RunwayQuery.h"
 
+// AirsideCapability for SummariseRunways, the one definition of "one runway" (a strip split by exits is one): the
+// enumerators below filter its list rather than walk the segments a second time. It reads the network through
+// URoadNetwork::RunwayExtentAt, which forwards here, so the two .cpp files call each other - across translation
+// units only, never by include.
+#include "Model/AirsideCapability.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TrafficOccupancy.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/RunwayDesignator.h"
 
@@ -443,6 +449,73 @@ namespace RunwayQuery
 		}
 		OutEnd = InUseEnd(Network, Found);
 		return true;
+	}
+
+	namespace
+	{
+		/** Does a strip set to Use take Traffic? RunwayUse::Lands / Departs are the one reading of ERunwayUse - an unset use is Mixed. */
+		bool TakesTraffic(ERunwayUse Use, ERunwayTraffic Traffic)
+		{
+			return Traffic == ERunwayTraffic::Arrival ? RunwayUse::Lands(Use) : RunwayUse::Departs(Use);
+		}
+
+		/** ArrivalRunways and DepartureRunways, which differ only in the kind of traffic their use filter asks about. */
+		TArray<FRunwayEnd> TrafficRunways(const URoadNetwork& Network, ERunwayTraffic Traffic, int32* OutRunwayCount)
+		{
+			// The summary already enumerates chains once each, by threshold pair; re-deriving that walk here
+			// would be a second definition of "one runway" to keep in step with it.
+			const TArray<FRunwaySummary> Runways = AirsideCapability::SummariseRunways(Network);
+			if (OutRunwayCount != nullptr)
+			{
+				*OutRunwayCount = Runways.Num();
+			}
+			TArray<FRunwayEnd> Out;
+			for (const FRunwaySummary& R : Runways)
+			{
+				// ONE POINT PER RUNWAY, just inside an end: RunwayExtentAt's proximity gate is against the nearest
+				// segment end, so a midpoint on a long segment is "not on a runway". It used to be a point inside
+				// EACH end, which is how a departure came to take off from whichever end was nearer its stand;
+				// InUseRunwayAt resolves the end in use itself, so both probes would answer the same end twice.
+				// The use is read off the resolved end's seed: every member of a strip carries the strip's facts.
+				FRunwayEnd End;
+				if (InUseRunwayAt(Network, R.End.Threshold + R.End.Direction * 10.0, End)
+					&& TakesTraffic(RunwayFactsFor(Network, End.Seed).Use, Traffic))
+				{
+					Out.Add(End);
+				}
+			}
+			return Out;
+		}
+	}
+
+	TArray<FRunwayEnd> ArrivalRunways(const URoadNetwork& Network, int32* OutRunwayCount)
+	{
+		return TrafficRunways(Network, ERunwayTraffic::Arrival, OutRunwayCount);
+	}
+
+	TArray<FRunwayEnd> DepartureRunways(const URoadNetwork& Network, int32* OutRunwayCount)
+	{
+		return TrafficRunways(Network, ERunwayTraffic::Departure, OutRunwayCount);
+	}
+
+	bool IsChainHeld(const URoadNetwork& Network, FRoadSegmentId Seed, const FTrafficOccupancy* Occupancy)
+	{
+		// No agent of our own to be occupying anything: nothing has been dispatched yet, so
+		// bCountOwnOccupied is false - see FTrafficOccupancy::IsAnyHeld.
+		return Occupancy != nullptr && Occupancy->IsAnyHeld(Network.RunwaySurfaces(Seed), 0, false);
+	}
+
+	FRunwayRank RankRunway(const URoadNetwork& Network, const FRunwayEnd& End, ERunwayTraffic Traffic,
+		const FTrafficOccupancy* Occupancy, double TaxiLength)
+	{
+		FRunwayRank Out;
+		// Held is asked of the WHOLE strip, the claim a movement makes at its handover (GroundTraffic).
+		Out.bHeld = IsChainHeld(Network, End.Seed, Occupancy);
+		// Dedicated is exactly this kind's setting: Resolve first, so an unset use (Mixed) is never dedicated.
+		const ERunwayUse Dedicated = Traffic == ERunwayTraffic::Arrival ? ERunwayUse::ArrivalsOnly : ERunwayUse::DeparturesOnly;
+		Out.bDedicated = RunwayUse::Resolve(RunwayFactsFor(Network, End.Seed).Use) == Dedicated;
+		Out.Taxi = TaxiLength;
+		return Out;
 	}
 
 	TArray<FGuidelineNodeId> RunwayExitNodes(const URoadNetwork& Network, FRoadSegmentId Seed,

@@ -1,9 +1,9 @@
 #include "Model/RunwayAdmission.h"
 
 #include "Model/Airframe.h"
-#include "Model/AirsideCapability.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RunwayQuery.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
 
@@ -109,14 +109,22 @@ namespace RunwayAdmission
 			return Landing;
 		}
 
-		// Every runway, not just the landing one - see the header. The list is
-		// AirsideCapability's, the one definition of "one runway" (a strip split by exits is
-		// one), not a second walk of the segments here.
+		// Every runway that TAKES DEPARTURES, not just the landing one and not every runway - see the header.
+		// The list is RunwayQuery::DepartureRunways, the enumeration DeparturePlanner::PlanAny walks and the one
+		// place CheckArrival and the planners read a use setting (the inspector, the card and the build bar read
+		// it for display and editing, which is not a planning decision): this loop used to walk every strip
+		// AirsideCapability found, an arrivals-only one included, so a departure it counted on such a strip was
+		// one nothing would ever plan and the aircraft landed and stayed on its stand (#433). A copy of that
+		// filter here would be the same bug the next time a rule is added to one side only.
+		// ENFORCED BY: Check-Architecture.ps1 rule 39 (this file may not read a use setting or walk the runways
+		// itself); Airside.Model.RunwayUse.EveryModePairLandsOnlyWhatCanLeave (every mode pair, against PlanAny).
+		int32 RunwayCount = 0;
+		const TArray<FRunwayEnd> Leaving = RunwayQuery::DepartureRunways(Network, &RunwayCount);
 		FRunwayAdmission Longest;
 		bool bAny = false;
-		for (const FRunwaySummary& Runway : AirsideCapability::SummariseRunways(Network))
+		for (const FRunwayEnd& Runway : Leaving)
 		{
-			const FRunwayAdmission Departure = Check(Network, Runway.End.Seed, Airframe, /*bLanding=*/false);
+			const FRunwayAdmission Departure = Check(Network, Runway.Seed, Airframe, /*bLanding=*/false);
 			if (Departure.IsAdmitted())
 			{
 				return Landing;
@@ -127,10 +135,19 @@ namespace RunwayAdmission
 				bAny = true;
 			}
 		}
-		// Unreachable with a runway to land on, which is itself a runway - kept rather than
-		// asserted, so a network the summary cannot see still answers with the landing.
 		if (!bAny)
 		{
+			// RUNWAYS, BUT NONE TAKES A DEPARTURE: every one is set to arrivals only - the player's setting,
+			// said as such (Describe), with no strip's figures because no strip was judged.
+			if (RunwayCount > 0)
+			{
+				FRunwayAdmission NoDeparture;
+				NoDeparture.Why = ERunwayRefusal::NoDepartureRunway;
+				NoDeparture.bForDeparture = true;
+				return NoDeparture;
+			}
+			// No runway at all is unreachable with a runway to land on, which is itself a runway - kept
+			// rather than asserted, so a network the summary cannot see still answers with the landing.
 			return Landing;
 		}
 		Longest.bForDeparture = true;
@@ -165,6 +182,9 @@ namespace RunwayAdmission
 		case ERunwayRefusal::TooNarrow:
 			return FString::Printf(TEXT("the runway admits a %.0f uu wingspan; this aircraft's is %.0f"),
 				Admission.MaxWingspan, Admission.Wingspan);
+
+		case ERunwayRefusal::NoDepartureRunway:
+			return TEXT("every runway is set to arrivals only - set one to departures or mixed");
 
 		case ERunwayRefusal::None:
 		default:
