@@ -167,13 +167,15 @@ public:
 	 * part-drawn - the graph an undo or redo just changed may no longer hold the node or
 	 * segment it was chaining from.
 	 *
-	 * ISSUE #191/#92-#93: ARoadBuildController::OnUndo/OnRedo have always called
-	 * Tool->OnDeactivate for exactly this reason; this mode had no FEditorUndoClient at all
-	 * until now (URoadBuildEdMode::PostUndo/PostRedo call this), so an editor Ctrl+Z that
-	 * removed a node FRoadDrawTool was chaining from left it still holding one. Same shape as
-	 * Shutdown's own deactivate block above, kept separate rather than shared: Shutdown also
-	 * owns a mid-drag transaction this call has no business touching (GEditor's own undo
-	 * transaction is what got the mode here, not a drag this instance is mid-way through).
+	 * ISSUE #191/#92-#93: PIE has always put its tool down on an undo for exactly this reason -
+	 * ARoadBuildController::OnUndo/OnRedo by hand until #426, its OnNetworkReplaced on the facade's
+	 * announcement since; this mode had no FEditorUndoClient at all until #191
+	 * (URoadBuildEdMode::PostUndo/PostRedo call this), so an editor Ctrl+Z that removed a node
+	 * FRoadDrawTool was chaining from left it still holding one. THROUGH
+	 * FBuildSession::OnNetworkReplaced since #426, the one answer both drivers give, not a copy of
+	 * it. Kept apart from Shutdown's own deactivate block above: Shutdown also owns a mid-drag
+	 * transaction this call has no business touching (GEditor's own undo transaction is what got
+	 * the mode here, not a drag this instance is mid-way through).
 	 */
 	void DeactivateOnUndo();
 

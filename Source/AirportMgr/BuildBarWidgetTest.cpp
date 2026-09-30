@@ -409,4 +409,41 @@ bool FBarMenuVerbReachesRuntimeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * #426 PIN 2: THE BAR'S BALANCE AFTER A LOAD. The readout is gated on ULedger::Revision (RefreshBalance's THE GATE), and a
+ * load restored the balance with no Post - so the bar kept showing the replaced session's money until the next fee.
+ * Post, save, post, load: the text the bar shows must be the saved balance, on the first tick after the load.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarBalanceFollowsALoadTest, "AirportMgr.Actions.BarBalanceFollowsALoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FBarBalanceFollowsALoadTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 0.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("the bar"), Bar)) { return false; }
+	Bar->UseForTest(nullptr, Runtime);
+
+	ULedger* Ledger = Runtime->GetLedger();
+	Ledger->Post(0.0, ELedgerCategory::LandingFee, 1200.0, FText::FromString(TEXT("saved fee")));
+	const FString Saved = Runtime->GetPricing()->Format(Ledger->Balance()).ToString();
+	const FString Slot = TEXT("AirportMgrTest_BarBalanceLoad");
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+
+	Ledger->Post(0.0, ELedgerCategory::LandingFee, 900.0, FText::FromString(TEXT("unsaved fee")));
+	Bar->RefreshBalanceForTest();
+	const FString Unsaved = Runtime->GetPricing()->Format(Ledger->Balance()).ToString();
+	if (!TestTrue(TEXT("the bar shows the unsaved balance before the load - or the check below measures nothing"),
+		Bar->BalanceTextForTest().ToString().StartsWith(Unsaved) && Unsaved != Saved)) { return false; }
+
+	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	Bar->RefreshBalanceForTest();
+	TestTrue(TEXT("the first bar tick after the load shows the SAVED balance - the revision gate opened"),
+		Bar->BalanceTextForTest().ToString().StartsWith(Saved));
+	return true;
+}
+
 #endif

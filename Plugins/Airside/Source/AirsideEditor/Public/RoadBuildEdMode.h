@@ -133,9 +133,13 @@ public:
 
 	// --- FEditorUndoClient ---------------------------------------------------------------
 	//
-	// PIE calls Tool->OnDeactivate on Undo/Redo/Clear (ARoadBuildController::OnUndo/OnRedo/
-	// OnClearNetwork) because the tool may be part-way through a chain built on a graph node
-	// the undo/redo just changed underneath it. This mode had NO EQUIVALENT AT ALL until issue
+	// PIE calls Tool->OnDeactivate on Undo/Redo/Clear/load (the facade's OnReplaced, answered by
+	// ARoadBuildController::OnNetworkReplaced since #426 - OnUndo/OnRedo/OnClearNetwork by hand
+	// before it) because the tool may be part-way through a chain built on a graph node
+	// the undo/redo just changed underneath it. THIS MODE DOES NOT LISTEN TO OnReplaced: in an
+	// editor world the facade has no history (HistoryForEdit), no runtime loads, and nothing
+	// here calls ClearNetwork - GEditor's transactor below is the one replacement it meets.
+	// ENFORCED BY: Check-Architecture rule 4 (allowed callers of ClearNetwork/RestoreInPlace - none in AirsideEditor) This mode had NO EQUIVALENT AT ALL until issue
 	// #191/#92-#93 (`grep PostEditUndo|FEditorUndoClient|PostUndo` found zero hits) - so an
 	// editor Ctrl+Z that removed a node FRoadDrawTool was chaining from left the tool still
 	// holding it, silently. Registered in Enter(), unregistered in Exit() - GEditor's undo

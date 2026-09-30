@@ -5,6 +5,10 @@
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Model/RoadNetwork.h"
+#include "Testing/AirsideTestGraph.h"
+#include "Serialization/MemoryReader.h"
+#include "Serialization/MemoryWriter.h"
+#include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 #include "Model/RoadSlotMap.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
@@ -614,6 +618,190 @@ bool FProfileResolutionIsOneRuleTest::RunTest(const FString& Parameters)
 		AddInfo(TEXT("No taxiway widths in the content set; index resolution not checked"));
 	}
 
+	return true;
+}
+
+namespace
+{
+	/** The network's bytes through the archive a save game uses (OpsSave::SerializeObject - AirportOps, which this
+	 *  module may not include). Replaced prefix: the test module is a unity build. */
+	TArray<uint8> ReplacedNetworkBytes(URoadNetwork& Network)
+	{
+		TArray<uint8> Bytes;
+		FMemoryWriter Writer(Bytes, /*bIsPersistent*/ true);
+		FObjectAndNameAsStringProxyArchive Ar(Writer, /*bInLoadIfFindFails*/ false);
+		Network.Serialize(Ar);
+		return Bytes;
+	}
+
+	/** And back INTO the same object, the way a save-game load restores - see ReplacedNetworkBytes. */
+	void ReplacedNetworkRestore(URoadNetwork& Network, const TArray<uint8>& Bytes)
+	{
+		FMemoryReader Reader(Bytes, /*bIsPersistent*/ true);
+		FObjectAndNameAsStringProxyArchive Ar(Reader, /*bInLoadIfFindFails*/ true);
+		Network.Serialize(Ar);
+	}
+}
+
+/**
+ * #426 ROW 4: A CACHE KEYED ON EditRevision FORGETS A RESTORE. The deletion plan is cached on (node index, EditRevision)
+ * with no network identity, and EditRevision is a plain field - so a load that deserialised INTO the live network left it
+ * where the last edit put it, and a hovered node's heal plan was the pre-load graph's. Restored here to a graph where the
+ * same slot is a DEAD END, not a through node, so a stale answer is a wrong one, not merely an old one.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeletionPlanForgetsARestoreTest,
+	"Airside.Present.DeletionPlanForgetsARestore",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDeletionPlanForgetsARestoreTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a target actor"), Actor)) { return false; }
+
+	// THE SAVED GRAPH: A - Middle, a dead end at Middle.
+	const int32 PlanA = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 Middle = Actor->PlaceNode(FVector2D(3000.0, 0.0));
+	TestTrue(TEXT("saved fixture connects A-Middle"), Actor->ConnectNodes(PlanA, Middle));
+	const TArray<uint8> Saved = ReplacedNetworkBytes(*Actor->Network);
+
+	// THE SESSION'S GRAPH: Middle becomes a through node, and its plan is asked (and cached).
+	const int32 PlanB = Actor->PlaceNode(FVector2D(6000.0, 0.0));
+	TestTrue(TEXT("session fixture connects Middle-B"), Actor->ConnectNodes(Middle, PlanB));
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	const FRoadDeletionPlan Session = Actor->PlanNodeDeletion(Middle);
+	const int32 Computed = Facade->DeletionPlanComputeCountForTest();
+	if (!TestTrue(TEXT("the through node's plan rejoins its two ends - the dead end's has nothing to rejoin"),
+		Session.bValid && Session.Anchor.IsSet())) { return false; }
+
+	ReplacedNetworkRestore(*Actor->Network, Saved);
+	const FRoadDeletionPlan Loaded = Actor->PlanNodeDeletion(Middle);
+	TestEqual(TEXT("the ask after a restore is a MISS: the graph it was cached for is gone"),
+		Facade->DeletionPlanComputeCountForTest(), Computed + 1);
+	TestFalse(TEXT("and the fresh plan is the dead end's, which rejoins nothing"), Loaded.Anchor.IsSet());
+	return true;
+}
+
+/**
+ * THE SEAM #426 ADDS: URoadEditFacade::OnReplaced, and which door says which phase. A driver puts its tool down on this
+ * and nothing else now - ARoadBuildController's own OnUndo/OnRedo/OnClearNetwork no longer do - so a door that stopped
+ * announcing would leave a chain holding slot indices into a graph that is gone, silently. And the ORDER is the point
+ * for a restore: Discarding must be heard while the old graph is still live, before the deserialise.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FReplacementIsAnnouncedTest,
+	"Airside.Present.ReplacementIsAnnounced",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FReplacementIsAnnouncedTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a target actor"), Actor)) { return false; }
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("an edit facade"), Facade)) { return false; }
+
+	TArray<ENetworkReplace> Heard;
+	const FDelegateHandle Handle = Facade->OnReplaced.AddLambda([&Heard](ENetworkReplace Phase) { Heard.Add(Phase); });
+	ON_SCOPE_EXIT { Facade->OnReplaced.Remove(Handle); };
+	const TArray<ENetworkReplace> AdoptedOnly = { ENetworkReplace::Adopted };
+	const TArray<ENetworkReplace> BothPhases = { ENetworkReplace::Discarding, ENetworkReplace::Adopted };
+
+	Actor->PlaceNode(FVector2D(0.0, 0.0));
+	TestEqual(TEXT("an edit is not a replacement"), Heard.Num(), 0);
+
+	TestTrue(TEXT("an undo travels"), Actor->Undo());
+	TestTrue(TEXT("and announces Adopted alone - an abandon before it would commit into the travel"), Heard == AdoptedOnly);
+	Heard.Reset();
+	TestTrue(TEXT("a redo travels"), Actor->Redo());
+	TestTrue(TEXT("and announces Adopted alone"), Heard == AdoptedOnly);
+
+	Heard.Reset();
+	Actor->ClearNetwork();
+	TestTrue(TEXT("a clear announces Discarding, then Adopted"), Heard == BothPhases);
+
+	Actor->PlaceNode(FVector2D(5000.0, 0.0));
+	const TArray<uint8> Saved = ReplacedNetworkBytes(*Actor->Network);
+	Heard.Reset();
+	const uint32 EpochBeforeRestore = Actor->GetEditEpoch();
+	int32 HeardAtDeserialise = INDEX_NONE;
+	const bool bRestored = Facade->RestoreInPlace([&Heard, &HeardAtDeserialise, &Saved](URoadNetwork& Live)
+	{
+		HeardAtDeserialise = Heard.Num();
+		ReplacedNetworkRestore(Live, Saved);
+		return true;
+	});
+	TestTrue(TEXT("a restore in place succeeds"), bRestored);
+	TestEqual(TEXT("and Discarding was heard BEFORE the deserialise, while the old graph was live"), HeardAtDeserialise, 1);
+	TestTrue(TEXT("then Adopted"), Heard == BothPhases);
+	TestFalse(TEXT("and the restore cleared the undo history - its Mementos are of the airport replaced"), Actor->CanUndo());
+	// #451's epoch - what a tool memoises its refusals against - moves on a load for free, because the load adopts
+	// through NotifyChanged like every other edit door rather than rebuilding around it.
+	TestTrue(TEXT("and moved the edit epoch a tool memoises against"), Actor->GetEditEpoch() != EpochBeforeRestore);
+
+	Heard.Reset();
+	TestFalse(TEXT("a failed restore reports it"), Facade->RestoreInPlace([](URoadNetwork&) { return false; }));
+	TestTrue(TEXT("and still ends what it began: a listener that heard Discarding hears Adopted"), Heard == BothPhases);
+
+	Heard.Reset();
+	TestFalse(TEXT("nothing left to undo"), Actor->Undo());
+	TestEqual(TEXT("and an undo that did nothing announces nothing"), Heard.Num(), 0);
+	return true;
+}
+
+/**
+ * THE PROFILE REPAIR IS A SAVE GAME'S ONLY (#426 review). A save game's proxy archive re-finds a transient default by
+ * PATH, possibly as another object, and the load re-points the roads naming it at this actor's own default. A LEVEL
+ * load must not: there the reference is already null (a level save) or the live object (a PIE duplicate), and
+ * re-pointing would pin fallback-laid roads to whatever the actor's Profile is at that moment - an editor
+ * re-registration after the Profile is set would save them as that asset. And a re-point is new geometry, so it moves
+ * EditRevision whoever calls it; a content-asset default is left alone.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRepairRepointsOnlyASaveGameTest,
+	"Airside.Present.RepairRepointsOnlyASaveGame",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRepairRepointsOnlyASaveGameTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a target actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 0.0));
+	URoadNetwork* Net = Actor->Network;
+	if (!TestNotNull(TEXT("the first edit made a network"), Net)) { return false; }
+
+	// AS A SAVE GAME'S LOAD LEAVES IT: the saved default, and a road naming it, re-found as a transient object that is
+	// not this actor's own.
+	URoadProfile* Foreign = TestProfiles::Taxiway();
+	URoadProfile* Mine = Actor->ResolveProfile();
+	if (!TestTrue(TEXT("the foreign profile is transient and not this actor's - or nothing below is measured"),
+		Foreign != nullptr && Foreign != Mine && Foreign->IsIn(GetTransientPackage()))) { return false; }
+	const FRoadSegmentId Road = Net->AddStraightSegment(Net->AddNode(FVector2D(0.0, 20000.0)),
+		Net->AddNode(FVector2D(20000.0, 20000.0)), Foreign);
+	Net->DefaultProfile = Foreign;
+
+	Actor->RepairLoadedNetwork(ELoadedFrom::Level);
+	TestTrue(TEXT("the LEVEL path leaves the road on its profile - no pinning"), Net->GetSegment(Road)->Profile == Foreign);
+	TestTrue(TEXT("and the default too"), Net->DefaultProfile == Foreign);
+
+	const uint32 Revision = Net->GetEditRevision();
+	Actor->RepairLoadedNetwork(ELoadedFrom::SaveGame);
+	TestTrue(TEXT("the SAVE GAME path re-points the road at this actor's default"), Net->GetSegment(Road)->Profile == Mine);
+	TestTrue(TEXT("and the default with it"), Net->DefaultProfile == Mine);
+	TestTrue(TEXT("and moves EditRevision - a new profile is new geometry"), Net->GetEditRevision() != Revision);
+
+	// A CONTENT-ASSET DEFAULT resolves to itself in every session: nothing to repair.
+	URoadProfile* Asset = NewObject<URoadProfile>(CreatePackage(TEXT("/Temp/AirsideRepointTest")));
+	const FRoadSegmentId Authored = Net->AddStraightSegment(Net->AddNode(FVector2D(0.0, 40000.0)),
+		Net->AddNode(FVector2D(20000.0, 40000.0)), Asset);
+	Net->DefaultProfile = Asset;
+	TestEqual(TEXT("a content default re-points nothing"), Net->RepointTransientDefaultProfile(Mine), 0);
+	TestTrue(TEXT("and the road keeps it"), Net->GetSegment(Authored)->Profile == Asset);
 	return true;
 }
 

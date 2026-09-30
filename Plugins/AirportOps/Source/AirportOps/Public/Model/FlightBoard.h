@@ -109,6 +109,14 @@ public:
 	virtual void OnAfterRestore(int32 SnapshotVersion) override;
 
 	/**
+	 * RETIRES EVERY FLIGHT BEFORE ANY RESTORE, blob or none (#426 (b)). Serialize retires the flights a load replaces,
+	 * but OpsSave only calls it when the snapshot HAS a "Flights" blob; one without (a v1 save, from before the board)
+	 * restores no flights, and must not leave the replaced session's in the inbox. UJobBoard::OnBeforeRestore's reason.
+	 * ENFORCED BY: AirportOps.Model.Save.NoFlightsBlobRetiresTheBoard
+	 */
+	virtual void OnBeforeRestore() override;
+
+	/**
 	 * THE FLIGHTS, BY VALUE (#425). Flights and History are Transient, so the tagged-property pass skips them, and this
 	 * writes each flight's own tagged properties inline after the board's; a load re-creates every one as a NEW UFlight
 	 * owned by this board. The "Flights" blob used to hold only their PATHS - OpsSave's proxy archive writes an object
@@ -418,10 +426,42 @@ public:
 	void OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network, const TArray<UFlight*>& HoldLast = TArray<UFlight*>());
 
 	/**
+	 * THE FLIGHT HALF OF A LOAD, IN ITS ONE ORDER (issue #426). Four steps, each correct only in its position, which
+	 * UOpsRuntime::LoadFromSlot used to call one by one and AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires
+	 * re-typed by hand:
+	 *
+	 *   1. DemoteRestoredMidFlight - agents are never saved, so a flight saved landing goes round and one on the ground
+	 *      retires. FIRST: every later step reads the phases it leaves.
+	 *   2. CancelUnarrivedAtLoad, when !bAirportAdmits - BEFORE the holds and the re-arm, so no stand is held and no
+	 *      arrival armed for a flight that can never land; which is also why it may skip CancelUnarrived's release and
+	 *      disarm - there is nothing yet to release. Unscored and unpublished (rulings I2/I1): see its own comment.
+	 *   3. OnGraphRebuilt(re-queued last) - the genuine holds first, then the re-queued flights' (review I1). AFTER the
+	 *      network's rebuild, which took every claim with it - so this is called once the load's AdoptNetwork has run.
+	 *   4. RearmSchedules - the clock's queue was never saved.
+	 *
+	 * NOT THROUGH CancelUnarrived FOR STEP 2, though the issue asked for "the same transitions as live play": the live
+	 * cancel publishes FFlightCancelledEvent, which the airline roster scores, and withdraws offers - both ruled against
+	 * for a load (the closure's own cancellations were scored when it happened). The re-queue of step 1 DOES go through
+	 * Enqueue, the live door into the queue, so it announces itself as any arrival joining the queue does.
+	 *
+	 * bAirportAdmits is the airport's status after the load's silent re-derivation (UAirport::Reseat) - a bool, not
+	 * the UAirport, so this board still does not learn the airport (see AdmitsArrivals).
+	 *
+	 * Traffic MAY BE NULL (an actor with no traffic model): steps 1 and 2 still run - they need no model, and before
+	 * this function the load ran them regardless - and steps 3 and 4, which hold stands on it and dispatch to it, are
+	 * skipped with a Warning.
+	 * ENFORCED BY: AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires, AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires,
+	 * AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, Check-Architecture rule 4 (steps 1 and 2 have no caller outside this board)
+	 */
+	void RestoreAfterLoad(UGroundTraffic* Traffic, const URoadNetwork& Network, USimClock& Clock, bool bAirportAdmits);
+
+	/**
 	 * #404: a load's flights whose aeroplanes were not saved. Landing/TaxiIn go round again - Inbound, HoldingSince
-	 * Now, at the back of the queue; Turnaround..Departing retire as Departed, unscored. AgentId cleared either way.
-	 * Returns the re-queued flights. Called by UOpsRuntime::LoadFromSlot straight after OpsSave::Restore, beside the
-	 * ClearAgents that makes them stale - not from OnAfterRestore (review ruling M5).
+	 * Now, at the back of the queue (through Enqueue); Turnaround..Departing retire as Departed, unscored. AgentId
+	 * cleared either way. Returns the re-queued flights. Step 1 of RestoreAfterLoad - not from OnAfterRestore (review
+	 * ruling M5), which is handed no clock and runs for every restore, agents cleared or not. Public for the tests that
+	 * pin one step's rule on its own; production calls it through RestoreAfterLoad only.
+	 * ENFORCED BY: Check-Architecture rule 4 (allowed callers)
 	 */
 	TArray<UFlight*> DemoteRestoredMidFlight(double Now);
 
@@ -431,6 +471,8 @@ public:
 	 * published): whatever closed the airport happened before the save, and its own cancellations were scored then.
 	 * Was CancelRequeued, the re-queued flights only (PR C review ruling I2); widened by the whole-stack review (I1),
 	 * which found an Accepted flight saved at a closed airport still due to land after the load. Returns how many.
+	 * Step 2 of RestoreAfterLoad; public for DemoteRestoredMidFlight's reason.
+	 * ENFORCED BY: Check-Architecture rule 4 (allowed callers)
 	 */
 	int32 CancelUnarrivedAtLoad(double Now);
 
@@ -626,6 +668,13 @@ private:
 	 * re-armed clock callbacks can find anything by id.
 	 */
 	void RebuildIndices();
+
+	/**
+	 * Every flight in Flights and History marked garbage and dropped - a load's replacement, see Serialize for why
+	 * RETIRED and not merely forgotten. One body for its two callers, Serialize's load and OnBeforeRestore, so the no-
+	 * blob case (#426 (b)) retires exactly what a blob's load does. Returns how many.
+	 */
+	int32 RetireEveryFlight();
 
 	/** O(1) via ByAgent/ById. CONST because a lookup does not change what the board holds -
 	 *  which also lets FindByAgentForTest/FindByIdForTest above call them on a const board. */

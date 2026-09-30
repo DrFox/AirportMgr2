@@ -1531,6 +1531,63 @@ void URoadNetwork::PostLoad()
 	EnsureStandNumbers();
 }
 
+void URoadNetwork::Serialize(FArchive& Ar)
+{
+	Super::Serialize(Ar);
+
+	// ONLY A REAL LOAD: a reference collector or a memory count also comes through Serialize and changes nothing.
+	// NOR A DUPLICATE (PPF_Duplicate): FDuplicateDataReader loads too, but DuplicateObject makes a NEW object - an undo
+	// Memento, a rollback point, a PIE copy - whose clocks start at zero with nothing derived from it alive to fool, and
+	// URoadNetwork::RestoreFrom's clock rule (#437) reads a snapshot's clocks as exactly that. Bumping here made every
+	// Memento read 1, and a snapshot's clock a lie about what it had seen.
+	// ENFORCED BY: Airside.Model.RestoreFromMovesClocksForward ("control: a duplicate starts its clocks at zero")
+	if (!Ar.IsLoading() || Ar.IsObjectReferenceCollector() || Ar.IsCountingMemory() || (Ar.GetPortFlags() & PPF_Duplicate) != 0)
+	{
+		return;
+	}
+
+	// THE CLOCKS MOVE, THE "DERIVED FROM" STAMP MOVES WITH THEM - see the header. The road and the guideline graph
+	// just arrived together, so whether the one was derived from the other is exactly what it was before the load;
+	// a load must not make AreGuidelinesBehindRoad say yes on its own (an editor undo rebuilds nothing after it).
+	const bool bWasDerived = GuidelinesDerivedAt == EditRevision;
+	++EditRevision;
+	++GuidelineRevision;
+	if (bWasDerived)
+	{
+		GuidelinesDerivedAt = EditRevision;
+	}
+}
+
+int32 URoadNetwork::RepointTransientDefaultProfile(URoadProfile* Default)
+{
+	// ONLY WHEN THE SAVED DEFAULT WAS A TRANSIENT OBJECT, AND NOT ALREADY THIS ACTOR'S - see the header. A content-asset
+	// default resolves to itself in every session, and a segment naming it keeps it; the same session's same actor
+	// re-finds its own fallback, which is already right.
+	URoadProfile* Saved = DefaultProfile;
+	if (Default == nullptr || Saved == nullptr || Saved == Default || !Saved->IsIn(GetTransientPackage()))
+	{
+		return 0;
+	}
+	int32 Repointed = 0;
+	for (FRoadSegment& Segment : Segments)
+	{
+		// BY IDENTITY WITH THE SAVED DEFAULT - see the header.
+		if (Segment.bAlive && Segment.Profile == Saved)
+		{
+			Segment.Profile = Default;
+			++Repointed;
+		}
+	}
+	// A NEW PROFILE IS NEW GEOMETRY (SetSegmentProfile's rule), so a cache keyed on EditRevision must hear it - the
+	// save game's Serialize has moved the clock already, but this must not depend on its caller having done so.
+	if (Repointed > 0)
+	{
+		++EditRevision;
+	}
+	DefaultProfile = Default;
+	return Repointed;
+}
+
 bool URoadNetwork::GiveStandOutlineIfMissing(FEntityInstance& Instance, const FLetterEnvelope& CodeCEnvelope)
 {
 	if (!Instance.IsStand() || Instance.Outline.Num() >= 3)

@@ -81,6 +81,30 @@ inline EChangeKind CombineChangeKinds(EChangeKind A, EChangeKind B)
 }
 
 /**
+ * Where a WHOLESALE REPLACEMENT of the live network is, for URoadEditFacade::OnReplaced (#426). A replacement is the
+ * one change a tool's part-drawn state cannot survive: a tool remembers SLOT INDICES, and a replacement it did not ask
+ * for gives those indices to different things. Undo, Redo, ClearNetwork and a save-game load (RestoreInPlace) are one.
+ *
+ * DISCARDING: the live network is about to be thrown away for one that shares NO HISTORY with it - ClearNetwork and a
+ * load, never Undo/Redo. Fired while the old graph is still live, because that is the last moment a tool can abandon
+ * against the graph its indices name: FRoadChainingState::OnCancel deletes the bare node its chain made, BY INDEX, and
+ * run after a load it would delete whatever bare node the loaded airport keeps in that slot.
+ *
+ * ADOPTED: the replacement is live and rebuilt - fired by all four, after OnChanged. Undo and Redo fire ONLY this: the
+ * history has already moved when Travel runs, so an abandon before it would commit an edit into the middle of the
+ * travel (a new undo step, and the redo stack cleared under the step being redone); and a Memento keeps its graph's
+ * slots, so a tool abandoning after an undo acts on the slots it knew.
+ *
+ * A PHASE, SO ONE ENUM (CLAUDE.md): a listener binds once and switches, rather than pairing two delegates by hand.
+ * Plain, not a UENUM, for EChangeKind's reason above: it travels on a native delegate only.
+ */
+enum class ENetworkReplace : uint8
+{
+	Discarding,
+	Adopted
+};
+
+/**
  * The facade a tool edits through, seen only as the calls a tool makes.
  *
  * Pattern: Facade (ARoadNetworkActor) exposed to Strategy (the IBuildTool family) through

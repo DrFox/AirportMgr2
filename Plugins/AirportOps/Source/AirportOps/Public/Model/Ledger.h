@@ -171,8 +171,26 @@ public:
 	 * nothing had happened would be the expensive kind of correct. The same idiom
 	 * URoadNetwork::GetGuidelineRevision uses, and for the same reason: the cheapest question
 	 * a poller can ask is "has anything changed since the number I remember".
+	 *
+	 * AND BY EVERY LOAD (Serialize, issue #426): a load restores the rows and the balance with no Post, so the bar and
+	 * the ledger panel - both gated on this - showed the pre-load money until the next fee.
 	 */
 	int32 Revision() const { return RevisionCount; }
+
+	/**
+	 * A RESTORE IS A CHANGE: the tagged pass, then RevisionCount bumped on a load - UJobBoard::Serialize's idiom, and
+	 * for its reason: OpsSave::DeserializeObject restores this object without any other hook a view could notice.
+	 * ENFORCED BY: AirportOps.Model.Save.RestoreMovesTheRevisions, Check-Architecture rule 41 (persistent-revision-bumps-on-load)
+	 */
+	virtual void Serialize(FArchive& Ar) override;
+
+	/**
+	 * BEFORE ANY RESTORE, blob or none (#426, UFlightBoard::OnBeforeRestore's shape): the rows go and the balance is
+	 * re-folded from StartingBalance - this session's opening money - so a snapshot with NO "Ledger" blob (from before
+	 * the ledger) does not keep the replaced session's money. With a blob, Serialize overwrites all of it next.
+	 * ENFORCED BY: AirportOps.Model.Save.NoLedgerBlobResetsTheMoney
+	 */
+	virtual void OnBeforeRestore() override;
 
 	const TArray<FLedgerEntry>& Entries() const { return Rows; }
 

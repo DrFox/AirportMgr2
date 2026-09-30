@@ -207,6 +207,11 @@ public:
 	 *  UInspectorWidget's own SetTextCallCountForTest uses. */
 	int32 SetTextCallCountForTest() const { return SetTextCalls; }
 
+	/** The balance readout's tick on its own, and what it shows - RefreshStateForTest's precedent. The runtime is
+	 *  UseForTest's when one was handed in: a test world has no game instance for the subsystem to answer from. */
+	void RefreshBalanceForTest() { RefreshBalance(); }
+	FText BalanceTextForTest() const;
+
 	/**
 	 * The size the section row needs when it is only allowed to be AvailableWidth wide.
 	 *

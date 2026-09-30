@@ -185,6 +185,26 @@ public:
 	FOnNetworkChanged OnChanged;
 
 	/**
+	 * Fired when the live network is REPLACED WHOLESALE by a change no tool asked for - Undo, Redo, ClearNetwork and a
+	 * save-game load (RestoreInPlace) - so a driver deactivates its tool and retires its caches ONCE, in one listener,
+	 * rather than beside each of those calls (issue #426). See ENetworkReplace for the two phases and which doors fire
+	 * which. OnChanged still fires for all four, and still carries the rebuild - this is the extra fact OnChanged
+	 * cannot say: that every slot index a listener holds now names something else.
+	 *
+	 * NOT FROM RollBackOpenEdit (EndInteractiveEdit's cannot-afford branch, ApplyInteractiveMutation's Verify failure,
+	 * #437): a rollback restores the very graph the open edit began on, IN PLACE, so the dragging tool's indices still
+	 * hold - and it reaches here from INSIDE that tool's own call, where deactivating the tool would end the drag
+	 * re-entrantly.
+	 *
+	 * BEFORE THIS, each door had its own hand-paired response in ARoadBuildController (OnUndo, OnRedo, OnClearNetwork),
+	 * a load had none, and an undo from anywhere else - the settings dialog's Revert - had none either.
+	 * ENFORCED BY: Airside.Present.ReplacementIsAnnounced, AirportMgr.Actions.LoadRetiresTheToolAndCaches,
+	 * AirportMgr.Actions.UndoFromAnywhereRetiresTheTool
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnNetworkReplaced, ENetworkReplace);
+	FOnNetworkReplaced OnReplaced;
+
+	/**
 	 * Fired when a mutator REFUSES A BUILD AT COMMIT for a reason no tool showed first - today only
 	 * "cannot afford" (EBuildRefusal). The quote says what, and the purse can price it. The layer that
 	 * owns the purse turns this into something the player sees; Airside itself has no UI to say it on.
@@ -366,6 +386,31 @@ public:
 	void ClearNetwork();
 
 	/**
+	 * THE DOOR FOR A SAVE-GAME LOAD (issue #426). Deserialise writes the saved airport INTO the live network - a load
+	 * restores in place, so everything holding the network object keeps holding it - and this does everything around
+	 * that which a replacement owes, in the one order:
+	 *
+	 *   OnReplaced(Discarding) - the tool abandons against the graph its indices still name;
+	 *   Deserialise(live network);
+	 *   ARoadNetworkActor::RepairLoadedNetwork - the repairs a level load gets, which a save game does not;
+	 *   ClearHistory - the undo stack holds Mementos of the airport just replaced on purpose;
+	 *   AdoptNetwork(the same object) - ghost hidden, OnChanged(Topology), so the mesh, the guideline graph and every
+	 *     OnChanged listener (the controller's HasRunway cache) see the loaded airport;
+	 *   OnReplaced(Adopted) - the drivers retire their caches.
+	 *
+	 * BEFORE THIS the load was AirportOps' LoadFromSlot's own hand-ordered sequence - two of the four repairs, a
+	 * RebuildMesh that bypassed OnChanged, and no announcement - the fifth spelling of "adopt a network" (#299 closed
+	 * four). A CALLBACK, not a Begin/End pair a caller could leave half-open: the OpsSave::Restore that Deserialise
+	 * wraps lives in AirportOps, which Airside may not include.
+	 *
+	 * A FAILED Deserialise skips the repairs and the history clear - nothing was loaded to repair, and the player keeps
+	 * their undo - but still rebuilds and still announces Adopted: the tool was already put down, and a listener that
+	 * heard Discarding must always hear its end. Returns what Deserialise returned.
+	 * ENFORCED BY: Airside.Present.ReplacementIsAnnounced, AirportOps.Present.RuntimeLoad.RunsEveryLoadRepair
+	 */
+	bool RestoreInPlace(TFunctionRef<bool(URoadNetwork&)> Deserialise);
+
+	/**
 	 * Snap and placement tunables, for a driver-supplied view scale, as one bundle - see
 	 * FBuildSessionTunables. Moved off ARoadNetworkActor by issue #298: it COMPOSES
 	 * PlacementLimits/Snap/GuideSources (level-authored tunables this facade already reads
@@ -533,6 +578,15 @@ private:
 	void NotifyChanged(EChangeKind Kind = EChangeKind::Topology);
 
 	/**
+	 * THE single OnReplaced.Broadcast() call site, NotifyChanged's shape for the replacement notice. Called by Undo and
+	 * Redo (Adopted, after the purse has moved - see Undo/Redo), ClearNetwork and RestoreInPlace (both phases). NOT
+	 * FOLDED BY A REBUILD BATCH: a batch defers the REBUILD, and a listener's response to a replacement - putting a tool
+	 * down - is not a rebuild, and must happen at the phase it is told, not at a close some lines later.
+	 * ENFORCED BY: Airside.Present.ReplacementIsAnnounced
+	 */
+	void AnnounceReplaced(ENetworkReplace Phase);
+
+	/**
 	 * THE FREE DOOR. Edit.Commit() plus NotifyChanged(Kind), in one call so a mutator that
 	 * commits an edit cannot forget to notify - which is exactly how ten of these went silent
 	 * before issue #77 (see the class comment). Takes the scope by reference rather than being
@@ -614,6 +668,11 @@ private:
 	 * reaches this with the network it already has, the assignment a no-op and the ghost hide
 	 * and notify the point), and ClearNetwork (adopting a fresh, empty one). Byte for byte:
 	 * `Owner.Network = X; HideGhost(); NotifyChanged();`.
+	 *
+	 * AND A LOAD, the fifth spelling (#426): RestoreInPlace adopts the SAME object it just deserialised into. The
+	 * pointer write is then a no-op and the rest is exactly the tail a load owes - which is the point: a load was the
+	 * one replacement that went round this door, calling RebuildMesh directly, so no OnChanged listener heard it.
+	 * Announcing the replacement (OnReplaced) is NOT part of this tail: RollBackOpenEdit must not - see OnReplaced.
 	 *
 	 * HIDES THE GHOST because the preview may be describing a node that no longer exists in the
 	 * replacement, and its cache (IsGhostCacheHit) compares only the cursor and the start node -

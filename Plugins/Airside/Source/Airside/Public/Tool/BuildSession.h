@@ -552,6 +552,22 @@ public:
 	void CancelActiveGesture(const FToolContext& Context);
 
 	/**
+	 * WHAT A REPLACED NETWORK RETIRES IN A SESSION - a driver's handler for URoadEditFacade::OnReplaced calls this and
+	 * nothing else about the tool (issue #426). ON THE SESSION, not in either driver, for the reason EGestureMode is:
+	 * two private copies of one decision are how the drivers disagree.
+	 *
+	 *   BOTH PHASES deactivate the active tool. The second deactivate of a Discarding/Adopted pair finds the tool idle
+	 *     and does nothing - every IBuildTool's OnDeactivate resets to idle and cancels only what is part-drawn - so
+	 *     Undo/Redo, which fire Adopted alone, still put the tool down.
+	 *   DISCARDING clears the selection: the network coming has no history in common with this one, so a stand or
+	 *     segment INDEX would silently name something else. Not on an undo: a Memento keeps its slots, and the select
+	 *     tool's own Tick already clears a selection whose subject the undo removed.
+	 *   ADOPTED retires the frame-context cache, whose key (target, tool, cursor, tunables) a replacement moves none of.
+	 * ENFORCED BY: AirportMgr.Actions.LoadRetiresTheToolAndCaches, AirportMgr.Actions.UndoFromAnywhereRetiresTheTool
+	 */
+	void OnNetworkReplaced(const FToolContext& Context, ENetworkReplace Phase);
+
+	/**
 	 * Remember a road-plane position a driver's ray/plane test actually resolved.
 	 *
 	 * The one home for what used to be two separate copies - `ARoadBuildController::

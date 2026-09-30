@@ -115,8 +115,10 @@ bool OpsSave::Restore(const FOpsSnapshot& In, TArrayView<IOpsPersistent* const> 
 		}
 	}
 
-	// A v1 snapshot has no Flights blob at all, and the loop above leaves the board alone -
-	// which is the right answer: a game saved before the board existed had no flights.
+	// A v1 snapshot has no Flights blob at all, and the loop above restores no flights for it -
+	// which is the right answer: a game saved before the board existed had no flights. The
+	// board's OnBeforeRestore retires the REPLACED session's (#426 (b)); this loop used to leave
+	// them in place, which only looked right when loading into an empty board.
 	UE_LOG(LogAirportOps, Log,
 		TEXT("Restored snapshot v%d: %d nodes, %d persistent object(s)"),
 		In.Version, Network.GetNodes().Num(), Persistents.Num());

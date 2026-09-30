@@ -397,8 +397,9 @@ void URoadBuildEdMode::PostRedo(bool bSuccess)
 
 void URoadBuildEdMode::DeactivateActiveToolOnUndo(bool bSuccess)
 {
-	// MIRRORS ARoadBuildController::OnUndo/OnRedo's OWN GUARD: those only call OnDeactivate
-	// once Target->Undo()/Redo() has actually returned true - "nothing happened" gets a log
+	// MIRRORS PIE's OWN GUARD: URoadEditFacade::Undo/Redo announce the replacement (and so
+	// ARoadBuildController::OnNetworkReplaced deactivates) only once the travel has actually
+	// succeeded - "nothing happened" gets a log
 	// line and nothing else. bSuccess here answers the same question for GEditor's transactor
 	// (see FEditorUndoClient::PostUndo's own doc comment), so a failed undo/redo leaves the
 	// active tool alone rather than abandoning a part-drawn chain over a transaction that

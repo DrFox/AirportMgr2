@@ -516,6 +516,57 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Solve\IcaoCode.h', 'Private\Solve\IcaoCode.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp')
         TestExempt  = $true
         ProdReason  = 'refuse a too-small stand through URoadEditFacade::WhyStandRefused, the one size gate'
+    },
+    @{
+        # ONE REPAIR FUNCTION FOR BOTH LOADS (#426). The save-game load ran two of the four load-time repairs a level
+        # gets, under a comment claiming it ran them all; ARoadNetworkActor::RepairLoadedNetwork is the one list now,
+        # called by PostRegisterAllComponents and by URoadEditFacade::RestoreInPlace. A repair called from a second
+        # production site is a second list that will drift from the first. EnsureStand* are also URoadNetwork::PostLoad's
+        # own pair (RoadNetwork.cpp, the definition file), which a level's asset load runs first.
+        Name        = 'load-time repairs'
+        Pattern     = '\b(RefreshResolvedAnchors|EnsureStandOutlines|EnsureStandNumbers|RepointTransientDefaultProfile)\s*\('
+        ProdAllowed = @('Public\Entities\EntityDefinition.h', 'Private\Entities\EntityDefinition.cpp', 'Public\Model\RoadNetwork.h', 'Private\Model\RoadNetwork.cpp', 'Private\Present\RoadNetworkActor.cpp')
+        TestExempt  = $true
+        ProdReason  = 'a load-time repair runs from ARoadNetworkActor::RepairLoadedNetwork only - add it there, not beside a load'
+    },
+    @{
+        # The definition rebind is the fourth repair; its own row because it forwards through a second class
+        # (UStandDefinitionCache), whose files are allowed for the forward and nothing else.
+        Name        = 'RebindStandDefinitions'
+        Pattern     = '\bRebindStandDefinitions\s*\('
+        ProdAllowed = @('Public\Present\StandDefinitionCache.h', 'Private\Present\StandDefinitionCache.cpp', 'Public\Present\RoadNetworkActor.h', 'Private\Present\RoadNetworkActor.cpp')
+        TestExempt  = $true
+        ProdReason  = 'rebind stand definitions from ARoadNetworkActor::RepairLoadedNetwork only (#426)'
+    },
+    @{
+        # THE FLIGHT HALF OF A LOAD IN ITS ONE ORDER (#426): UFlightBoard::RestoreAfterLoad. Steps 1 and 2 are public
+        # for the tests that pin one step's rule; a production caller outside the board is the order re-typed again.
+        Name        = 'UFlightBoard load steps'
+        Pattern     = '\b(DemoteRestoredMidFlight|CancelUnarrivedAtLoad)\s*\('
+        ProdAllowed = @('Public\Model\FlightBoard.h', 'Private\Model\FlightBoard.cpp')
+        TestExempt  = $true
+        ProdReason  = 'call UFlightBoard::RestoreAfterLoad, which owns the order these steps are each correct only in'
+    },
+    @{
+        # ONE DOOR FOR A LOAD (#426): OpsSave::Restore writes INTO the live network, and only the facade's
+        # RestoreInPlace announces that, repairs it and adopts it. UOpsRuntime::LoadFromSlot's lambda is the one
+        # production restore; a second one is a load no driver hears about.
+        Name        = 'OpsSave::Restore'
+        Pattern     = 'OpsSave::Restore\s*\('
+        ProdAllowed = @('Public\Model\OpsSave.h', 'Private\Model\OpsSave.cpp', 'Private\Present\OpsRuntime.cpp')
+        TestExempt  = $true
+        ProdReason  = 'load through UOpsRuntime::LoadFromSlot, which restores inside URoadEditFacade::RestoreInPlace'
+    },
+    @{
+        # THE NETWORK-REPLACING DOORS THAT ANNOUNCE ON URoadEditFacade::OnReplaced (#426), by their production callers.
+        # URoadBuildEdMode does NOT listen to OnReplaced because none of these reaches an editor world (its own
+        # header says so); a caller added under AirsideEditor would replace the network under the editor mode's
+        # tool with nobody listening - bind the mode to OnReplaced first, then add the file here.
+        Name        = 'network replacement doors'
+        Pattern     = '\b(ClearNetwork|RestoreInPlace)\s*\('
+        ProdAllowed = @('Public\Present\RoadEditFacade.h', 'Private\Present\RoadEditFacade.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp', 'Public\Present\RoadNetworkActor.h', 'Private\Present\RoadNetworkActor.cpp', 'Source\AirportMgr\RoadBuildController.cpp', 'Private\Present\OpsRuntime.cpp')
+        TestExempt  = $true
+        ProdReason  = 'a new caller of a network-replacing door must be a driver that listens to URoadEditFacade::OnReplaced (the editor mode does not) - see RoadBuildEdMode.h'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -1960,6 +2011,44 @@ if ($rollbackCallCount -eq 0) {
     $failures.Add("scope-refusal-rolls-back: found no .Rollback( call under Private\Present\RoadEditFacade*.cpp - the rule would pass on code that never rolls back; update rule 40")
 }
 $ranRules.Add('scope-refusal-rolls-back')
+
+# --- 41. A PERSISTENT OBJECT WITH A REVISION BUMPS IT ON A LOAD --------------------------------
+# Issue #426: a save game deserialises INTO the live objects, so a view gated on an object's Revision() sees the same
+# object and asks the same counter - and ULedger's never moved on a load, so the bar's balance and the ledger rows kept
+# the pre-load money until the next fee. UJobBoard and UFlightBoard each bumped in their own Serialize, a rule nothing
+# stated. So: a class under $ops\Public whose base list names IOpsPersistent and which declares a Revision() accessor
+# must declare `void Serialize(FArchive& Ar) override` (whose body bumps on IsLoading - pinned by
+# AirportOps.Model.Save.RestoreMovesTheRevisions for the ledger, FlightSave.RestoreRetiresReplacedFlights for the board).
+# It reads the declaration, not the body: a Serialize that forgets to bump is the tests' to catch. Fails if it finds no
+# persistent class with a revision at all - it moved, and must not check nothing.
+$revisionOwners = @{}
+$revisionSerializers = @{}
+foreach ($file in Get-Sources (Join-Path $ops 'Public') @('.h')) {
+    $lines = Get-Content -LiteralPath $file.FullName
+    $inClass = ''
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        $classMatch = [regex]::Match($code, '^\s*class\s+(?:\w+_API\s+)?(\w+)\s*:([^{;]*)')
+        if ($classMatch.Success) {
+            $inClass = if ($classMatch.Groups[2].Value -match '\bpublic\s+IOpsPersistent\b') { $classMatch.Groups[1].Value } else { '' }
+            continue
+        }
+        if ($inClass -eq '') { continue }
+        if ($code -match '^};') { $inClass = ''; continue }
+        if ($code -match '\bRevision\s*\(\s*\)\s*const\b') { $revisionOwners[$inClass] = "$($file.Name):$($i + 1)" }
+        if ($code -match '\bvoid\s+Serialize\s*\(\s*FArchive\s*&\s*\w*\s*\)\s*override\b') { $revisionSerializers[$inClass] = $true }
+    }
+}
+if ($revisionOwners.Count -eq 0) {
+    $failures.Add("persistent-revision-bumps-on-load: found no IOpsPersistent class with a Revision() under $ops\Public - it moved; update rule 41, do not let it check nothing")
+}
+foreach ($owner in $revisionOwners.Keys) {
+    if (-not $revisionSerializers.ContainsKey($owner)) {
+        $failures.Add("persistent-revision-bumps-on-load: $($revisionOwners[$owner]) $owner is saved (IOpsPersistent) and has a Revision() a view is gated on, but no Serialize override - a load restores it with no Post-like call, so the view keeps the pre-load answer (#426). Override Serialize and bump on Ar.IsLoading(), as UJobBoard, UFlightBoard and ULedger do")
+    }
+}
+$ranRules.Add('persistent-revision-bumps-on-load')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

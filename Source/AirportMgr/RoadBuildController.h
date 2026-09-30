@@ -282,7 +282,7 @@ public:
 
 	/** Points this instance at InTarget without going through BeginPlay's level search - same
 	 *  precedent as PlayerTickForTest, for a test that has no level to search. */
-	void SetTargetForTest(ARoadNetworkActor* InTarget) { Target = InTarget; BindRunwayCacheInvalidation(); }
+	void SetTargetForTest(ARoadNetworkActor* InTarget) { Target = InTarget; BindFacadeListeners(); }
 
 	/** The buildings actor BeginPlay would have found beside Target - SetTargetForTest's
 	 *  precedent, so a test can watch PlayerTick push ghost visibility at it. */
@@ -673,9 +673,11 @@ private:
 
 	/**
 	 * Forces the next CollectToolReadout to rebuild regardless of FToolReadoutKey - issue #190.
-	 * Also retires FBuildSession's own frame-context cache (issue #303) - the SAME nine call
-	 * sites this method already has cover exactly what that cache cannot see either: a click, a
-	 * drag step, a commit, a cancel, an undo or redo, a network cleared out from under the tool.
+	 * Also retires FBuildSession's own frame-context cache (issue #303) - the SAME call sites
+	 * this method already has (nine on 2026-09-30) cover exactly what that cache cannot see
+	 * either: a click, a drag step, a commit, a cancel, and a network replaced out from under the
+	 * tool - an undo, a redo, a clear or a load, all through the ONE site OnNetworkReplaced since
+	 * #426 (three hand-paired sites before it, and none for a load).
 	 * One list, not two grown side by side to agree by hand - see FBuildSession::
 	 * InvalidateFrameContextCache for the risk of a future site missing one of the two clears.
 	 *
@@ -825,25 +827,37 @@ private:
 	/** See GetLastLandRequestForTest. Weak: a content asset, owned by nothing here. */
 	TWeakObjectPtr<const UAircraftType> LastLandRequest;
 
-	/** Which facade bRunwayCacheValid is bound to - see BindRunwayCacheInvalidation. Compared
+	/** Which facade the listeners below are bound to - see BindFacadeListeners. Compared
 	 *  by pointer so a Target swap (BeginPlay found a different actor than SetTargetForTest
 	 *  last pointed at, or vice versa in a test) re-subscribes rather than trusting a stale
 	 *  binding to a facade that no longer belongs to Target. */
 	TWeakObjectPtr<URoadEditFacade> BoundRunwayCacheFacade;
 
 	/**
-	 * Subscribes to Target's facade's OnChanged so a runway PLACED or REMOVED invalidates
-	 * bRunwayCacheValid - called from both BeginPlay and SetTargetForTest, the two places
-	 * Target is assigned. A no-op (beyond invalidating the cache) when Target is null or its
-	 * facade is already the one bound.
+	 * Subscribes to Target's facade: OnChanged, so a runway PLACED or REMOVED invalidates
+	 * bRunwayCacheValid, and OnReplaced (#426), so a network replaced by anything - an undo from
+	 * the settings dialog, a load from a menu - puts the tool down and retires the caches here.
+	 * Called from both BeginPlay and SetTargetForTest, the two places Target is assigned. A
+	 * no-op (beyond invalidating the cache) when Target is null or its facade is already the one
+	 * bound; the old facade's bindings are removed, so a swapped-away target cannot put this
+	 * driver's tool down. Was BindRunwayCacheInvalidation, when the runway cache was all it bound.
 	 */
-	void BindRunwayCacheInvalidation();
+	void BindFacadeListeners();
 
 	/** Target's facade's OnChanged handler. GEOMETRY MOVES NOTHING RUNWAY-SHAPED - a dragged
 	 *  node cannot create, delete or reclassify a segment - so only Topology can make
 	 *  HasRunway's cached answer wrong; see EChangeKind's own comment (Tool/RoadEditTarget.h)
-	 *  for the exact split. */
+	 *  for the exact split. A replaced network notifies Topology too (AdoptNetwork), which is
+	 *  how a load reaches this cache. */
 	void OnNetworkChangedInvalidateRunwayCache(EChangeKind Kind);
+
+	/**
+	 * Target's facade's OnReplaced handler - THE ONE PLACE this driver answers a replaced network (issue #426), where
+	 * OnUndo, OnRedo and OnClearNetwork each used to deactivate the tool and invalidate the readout by hand and a load
+	 * did neither. The session decides what a replacement retires (FBuildSession::OnNetworkReplaced); the readout cache
+	 * is this driver's own, retired on Adopted with the frame context.
+	 */
+	void OnNetworkReplaced(ENetworkReplace Phase);
 
 	/**
 	 * This frame's SelectedAgentFacts, computed by SelectedAgentFactsThisFrame at most once

@@ -1194,7 +1194,8 @@ TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
 	// own SaveBlobName, and no object's restore reads a neighbour's. OpsSave::Restore runs each
 	// object's OnBeforeRestore, blob and OnAfterRestore in turn (not every OnBeforeRestore first,
 	// as this comment used to say); anything that needs two restored systems at once - the
-	// loaded clock's Now for #404's re-queue - runs in LoadFromSlot, after Restore, instead.
+	// loaded clock's Now for #404's re-queue - runs after Restore instead, in UFlightBoard::RestoreAfterLoad, which
+	// LoadFromSlot calls once the network is adopted (#426).
 	TArray<IOpsPersistent*> Out;
 	Out.Add(Clock);
 	Out.Add(JobBoard);
@@ -1331,6 +1332,14 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 		UE_LOG(LogAirportOps, Warning, TEXT("Load refused: no network attached"));
 		return false;
 	}
+	// THE DOOR THE LOAD GOES THROUGH (RestoreInPlace, below), asked BEFORE anything is torn down: a refusal after
+	// ClearAgents, Bus.Discard and Alerts->Reset would have emptied the airport and loaded nothing into it.
+	URoadEditFacade* Facade = Target->GetEditFacade();
+	if (Facade == nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Load refused: the network has no edit facade to restore through"));
+		return false;
+	}
 	FOpsSnapshot Snapshot;
 	if (!OpsSave::ReadSlot(SlotName, Snapshot))
 	{
@@ -1351,68 +1360,46 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// the MarkAllDirty below re-raises whatever is true of the loaded one.
 	// ENFORCED BY: AirportOps.Present.Alerts.PassRaisesThroughTheRuntime
 	Alerts->Reset();
+	// THROUGH URoadEditFacade::RestoreInPlace, the facade's door for a load (issue #426). It announces the
+	// replacement (both drivers put the tool down and retire their caches), runs the deserialise below, then EVERY
+	// load-time repair a level gets from PostLoad and PostRegisterAllComponents - which a save game does not get,
+	// OpsSave::Restore being Serialize alone (final review C2) - clears the undo history (its Mementos are of the
+	// airport just replaced on purpose), and adopts the result through OnChanged, so the mesh, the guideline graph and
+	// every OnChanged listener (the controller's HasRunway cache, which gates Land) see the loaded airport. This used
+	// to be the sequence itself, spelled out here: two of the four repairs, a RebuildMesh no listener heard, and no
+	// announcement - see RestoreInPlace for the order and why.
+	// ENFORCED BY: AirportMgr.Actions.LoadRetiresTheToolAndCaches, AirportOps.Present.RuntimeLoad.RunsEveryLoadRepair
 	const TArray<IOpsPersistent*> Loaded = Persistents();
-	if (!OpsSave::Restore(Snapshot, Loaded, *Target->Network))
+	const bool bRestored = Facade->RestoreInPlace([&Snapshot, &Loaded](URoadNetwork& Live)
+	{
+		return OpsSave::Restore(Snapshot, Loaded, Live);
+	});
+	if (!bRestored)
 	{
 		return false;
 	}
-	// #404, BESIDE ITS CAUSE (review ruling M5): the ClearAgents above threw away every aeroplane, so a flight saved
-	// landing or taxiing in goes round again and one on the ground retires as departed - dated by the LOADED clock,
-	// restored just now. Before OnGraphRebuilt below, which holds the re-queued flights' stands (after the genuine
-	// holds), and before RearmSchedules, which touches Accepted flights only and so leaves the re-queue alone.
-	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires
-	const TArray<UFlight*> Requeued = FlightBoard->DemoteRestoredMidFlight(Clock->Now());
 	// A SNAPSHOT FROM BEFORE THE "Airlines" BLOB restores no rows (OnBeforeRestore cleared them);
 	// every catalog airline comes back at the tuning's start.
 	SeedAirlines();
-	// THE LOAD-TIME REPAIRS A LEVEL GETS FROM PostLoad AND PostRegisterAllComponents, which a
-	// save game does not get - OpsSave::Restore is Serialize alone (final review C2).
-	// Outlines first: a stand saved before stands had them gets its Code C box, and only a
-	// stand with an outline has a letter to rebind by. Then every stand's definition, which
-	// for D/E/F is a path to an object this session never built.
-	Target->Network->EnsureStandOutlines();
-	Target->RebindStandDefinitions();
-	// THROUGH THE FACADE, not Target->History->Clear() directly (issue #191): the history is
-	// URoadEditFacade's undo state to manage, and reaching past it from another plugin's
-	// composition root is exactly the layering slip the facade's ClearHistory doc comment
-	// names. The undo stack holds Mementos of the PRE-load network; an undo now would revert
-	// the player to an airport they just replaced on purpose. A load is a new baseline.
-	if (URoadEditFacade* Facade = Target->GetEditFacade())
-	{
-		Facade->ClearHistory();
-	}
-	// Present rebuilds from model: the mesh and the derived guideline graph are both
-	// produced by the presenter's Rebuild, which is what RebuildMesh runs.
-	Target->RebuildMesh();
 
 	// THE STATUS RE-DERIVED FROM THE LOADED INTENT AND NETWORK, WITH NO EVENT (spec 2026-09-29-ops-batch3 §3): a
 	// published change would reach the flight board's handler and re-run the closure's cancellation - scored, and
 	// over every unarrived flight - when everything the closure cancelled was cancelled when this was saved. The
-	// generator and the alerts read the result.
+	// generator and the alerts read the result - and so does the flight restore below, which cancels, silently and
+	// UNSCORED, what a closed airport can no longer land: the airline did not lose those to the closure but to the save.
 	// ENFORCED BY: AirportOps.Present.Airport.LoadRederivesSilently
 	Airport->Reseat(*Target->Network);
 
-	// THE ONE THING A LOAD DOES HAVE TO CANCEL (review ruling I2): the flights the demotion above put back in the
-	// queue were on the ground when the closure happened, so the closure left them - and at an airport that is not
-	// open they can never land again. Cancelled HERE, silently and UNSCORED (CancelUnarrivedAtLoad publishes
-	// nothing), not by the event above: the airline did not lose them to the closure but to the save. AND EVERY
-	// OTHER FLIGHT STILL TO ARRIVE (whole-stack review I1): an Accepted flight saved at the closed airport - which the
-	// closure's own cancel never met - was due to land after the load. Before RearmSchedules, so none is armed.
-	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, AirportOps.Present.Airport.ClosedLoadCancelsTheUnarrived
-	if (Airport->Status() != EAirportStatus::Open)
-	{
-		FlightBoard->CancelUnarrivedAtLoad(Clock->Now());
-	}
-
-	// IN THIS ORDER, and both are needed. RebuildMesh regenerates the guideline graph, which
-	// takes every node claim with it (FTrafficOccupancy::ReleaseGuidelineClaims), so the
-	// restored flights' stand holds have to be re-made against the new nodes BEFORE anything
-	// can allocate. Then the arrivals go back on the clock, whose queue was never saved.
-	if (UGroundTraffic* Model = Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr)
-	{
-		FlightBoard->OnGraphRebuilt(*Model, *Target->Network, Requeued);
-		FlightBoard->RearmSchedules(*Model, *Target->Network, *Clock);
-	}
+	// THE FLIGHT HALF OF THE LOAD, in its one order - demote what was mid-flight (#404: agents are never saved),
+	// cancel what a closed airport can no longer land, re-hold the stands (the rebuild took every claim), re-arm the
+	// arrivals. UFlightBoard owns that order now (issue #426): it was four calls here, each correct only in its position,
+	// and FlightSaveTest re-typed them by hand. After the facade's adopt above, which rebuilt the guideline graph the
+	// holds are made against.
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires, AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport,
+	// AirportOps.Present.Airport.ClosedLoadCancelsTheUnarrived
+	// A NULL TRAFFIC MODEL still demotes and cancels (steps 1-2 need no model); the board says what it skipped.
+	UGroundTraffic* Model = Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr;
+	FlightBoard->RestoreAfterLoad(Model, *Target->Network, *Clock, Airport->Status() == EAirportStatus::Open);
 	// THE REPEATERS TOO, from the loaded Now - see RearmRepeatingSchedules (review I1).
 	RearmRepeatingSchedules();
 	// AND THE SAFETY NET, both halves, for the same reason: its entry was booked against the pre-load clock. Cancelled;
@@ -1421,8 +1408,9 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 
 	// EVERY PASS ONCE after a load - the one catch-up, since nothing that happened before the load
 	// is an event any more (spec 2026-09-29 §4). No passes exist until stage 3; the rule is here first.
-	// THE ARRIVAL QUEUE'S among them: DemoteRestoredMidFlight (#404) sets a flight Inbound directly rather
-	// than through UFlightBoard::Enqueue, so it publishes no FlightInbound, and this run is what dispatches it.
+	// THE ARRIVAL QUEUE'S among them. DemoteRestoredMidFlight (#404) set a flight Inbound directly until #426, so this
+	// run was all that dispatched a re-queued flight; it goes through UFlightBoard::Enqueue now, whose FlightInbound
+	// wakes the pass too - this stays the catch-up for everything that is true of the loaded airport and was never an event.
 	Bus.MarkAllDirty();
 
 	ApplySpeed(Clock->GetSpeed());
