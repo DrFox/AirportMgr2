@@ -3152,4 +3152,26 @@ bool FFuelQuietServingWithNoJobTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelQuietNoVehiclesTest, "AirportOps.Fuel.QuietBoard.NoVehiclesRefusal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelQuietNoVehiclesTest::RunTest(const FString& Parameters)
+{
+	// #417's NoVehicles REFUSAL, beside the three parts above: a demand at a depot with nothing in it is refused
+	// terminally (Unserviceable) and waits for the purchase that re-opens it (AddPurchasedVehicle, woken by the bus's
+	// FleetChanged) - it must not keep the JobBoard pass re-dirtying itself every frame until the player buys.
+	FFuelFixture Fixture;
+	Fixture.bEmptyDepot = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
+	Fixture.Advance(0.2);
+	if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
+	if (!TestEqual(TEXT("refused for the missing vehicle"),
+		static_cast<int32>(Fixture.Service->GetJobs()[0].Why), static_cast<int32>(EServiceRefusal::NoVehicles))) { return false; }
+	const int32 Unresolved = FuelServiceTest::QuietUnresolvedSteps(Fixture, 300);
+	TestTrue(FString::Printf(TEXT("a depot with no vehicles leaves the board quiet (%d of 300 Steps unresolved)"), Unresolved), Unresolved <= 1);
+	return true;
+}
+
 #endif
